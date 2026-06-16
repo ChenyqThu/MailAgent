@@ -45,6 +45,7 @@ import { useEmailFilter, type EmailView } from '@shared/state/email-filter'
 import { useMailbox } from '@shared/state/mailbox'
 import { useNavCollapsed } from '@shared/state/nav-shell'
 import { openKeyboardHelp } from '@shared/state/keyboard-help'
+import { openNewCompose } from '@shared/state/compose-new'
 import { deriveAccount } from '@shared/lib/account'
 
 import { AccountSwitcherPopover } from './AccountSwitcherPopover'
@@ -413,6 +414,24 @@ export function Sidebar(): React.ReactElement {
           }}
         />
       )}
+
+      {/* ── 写邮件 · accent 填充主 CTA ──────────────────────────────────
+          账户头与 MAILBOXES 之间的独立按钮 (非 section header, 不破 §2.11
+          三段铁律)。展开: 全宽带文本; 收起: 由 authored CSS .app-nav-compose-btn
+          收成居中纯 icon 方钮 (文本 span 由 §2.11 收起通杀自动隐藏; icon 放大 /
+          居中本容器自管, §2.11 的 nav/bottom svg 规则不覆盖这里)。 */}
+      <div className="app-nav-compose px-2 pt-2.5 pb-0.5 shrink-0">
+        <button
+          type="button"
+          onClick={openNewCompose}
+          className="app-nav-compose-btn w-full flex items-center gap-2 rounded-lg px-3 py-2 text-body font-medium transition-[filter] duration-fast"
+          title={collapsed ? t('nav.composeNew') : undefined}
+          aria-label={t('nav.composeNew')}
+        >
+          <SquarePen size={16} strokeWidth={2} className="shrink-0" />
+          <span className="flex-1 text-left">{t('nav.composeNew')}</span>
+        </button>
+      </div>
 
       {/* ── Body · 3 groups (MAILBOXES / AI AGENTS / VIEW) ─────────────── */}
       <div className="flex-1 overflow-y-auto scrollbar-thin py-2.5">

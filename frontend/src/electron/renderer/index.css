@@ -1251,6 +1251,36 @@ body::before {
   display: none;
 }
 
+/* 写邮件 accent 主 CTA — 账户头与 MAILBOXES 之间的独立按钮 (非 section header,
+ * 不破 §2.11 三段铁律)。展开态: 全宽 accent 填充带文本; 收起态: 56px rail 上的
+ * 居中纯 icon 方钮。文本 span 收起态由上面 §2.11 通杀 (button > span:not(
+ * .app-nav-keep)) 自动隐藏; icon 放大 + 按钮居中由本段自管 —— §2.11 的 nav /
+ * bottom svg 放大与居中规则只覆盖 nav / .app-nav-bottom, 不含本容器。
+ * Authored CSS class (load-bearing per §2.11), Tailwind 不可见、purge 不掉。 */
+.app-nav-compose-btn {
+  background: rgb(var(--c-accent));
+  color: rgb(var(--c-accent-fg));
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.08);
+}
+.app-nav-compose-btn:hover {
+  filter: brightness(1.08);
+}
+.app-nav-compose-btn:active {
+  filter: brightness(0.96);
+}
+.app-nav[data-collapsed='true'] .app-nav-compose-btn {
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  margin: 0 auto;
+  padding: 0;
+  border-radius: 0.625rem;
+}
+.app-nav[data-collapsed='true'] .app-nav-compose-btn > svg {
+  width: 19px !important;
+  height: 19px !important;
+}
+
 /* 收起态数字角标 — 展开态隐藏 (数字由行右侧 CountRight/TotalCount 承担),
  * 收起态绝对定位到 icon 右上角 (NavRow button 自带 relative)。位置推导:
  * 56px rail, icon 19px 居中 → icon 右缘距按钮右 ~18px; right:7px 让角标

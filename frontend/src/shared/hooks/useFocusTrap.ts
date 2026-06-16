@@ -56,7 +56,15 @@ export function useFocusTrap({ open, fallbackRef }: UseFocusTrapOpts): UseFocusT
   useEffect(() => {
     if (!open) return
     const root = dialogRef.current
-    const first = root?.querySelector<HTMLElement>(FOCUSABLE_SELECTOR)
+    // 跳过 disabled / tabindex=-1 (与下方 handleTab 的过滤一致): 首个 selector 命中
+    // 可能是 disabled 控件 (如 compose-new 打开时收件人为空→发送按钮 disabled),
+    // 对它 .focus() 无效会让焦点留在 dialog 外、onKeyDown 收不到 Tab。取首个真正
+    // 可聚焦元素, 无则落 fallback。
+    const first = root
+      ? Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).find(
+          (el) => !(el as HTMLButtonElement).disabled && el.tabIndex !== -1
+        )
+      : undefined
     if (first) {
       first.focus()
     } else {

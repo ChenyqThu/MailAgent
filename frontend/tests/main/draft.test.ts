@@ -11,7 +11,7 @@ import { describe, expect, test } from 'vitest'
 
 import { __testing } from '../../src/electron/main/handlers/draft'
 
-const { buildDraftCommand, parseScriptOutput, classifyScriptError } = __testing
+const { buildDraftCommand, parseScriptOutput, classifyScriptError, validateComposeOpts } = __testing
 
 describe('buildDraftCommand', () => {
   test('without account → no --account flag', () => {
@@ -129,5 +129,30 @@ describe('classifyScriptError', () => {
     })
     expect(c.code).toBe('E_APPLESCRIPT')
     expect(c.message).toContain('--to and --subject')
+  })
+})
+
+// 写新邮件 (mode='new'): 无源邮件, 哨兵 internalId=-1。adapter 层 (validateComposeOpts)
+// 须对 mode='new' 放宽非负校验, 否则 -1 在到达 serve-api 前就被拒 (codex review HIGH)。
+describe('validateComposeOpts', () => {
+  test("mode='new' allows sentinel internalId=-1", () => {
+    const r = validateComposeOpts(
+      { internalId: -1, mode: 'new', to: ['x@y.com'] } as never,
+      'email:draft'
+    )
+    // 通过 → 返回 opts 本身 (无 ok 字段); 失败 → {ok:false,...}。
+    expect('ok' in r).toBe(false)
+    expect((r as { internalId: number }).internalId).toBe(-1)
+  })
+
+  test('non-new mode rejects negative internalId', () => {
+    const r = validateComposeOpts({ internalId: -1, mode: 'reply' } as never, 'email:draft')
+    expect((r as { ok: boolean }).ok).toBe(false)
+    expect((r as { code: string }).code).toBe('E_INVALID_ARG')
+  })
+
+  test("mode='new' still rejects non-integer internalId", () => {
+    const r = validateComposeOpts({ internalId: 1.5, mode: 'new' } as never, 'email:draft')
+    expect((r as { ok: boolean }).ok).toBe(false)
   })
 })

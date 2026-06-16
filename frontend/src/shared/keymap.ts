@@ -75,6 +75,17 @@ export const SHORTCUTS: ReadonlyArray<ShortcutDef> = [
     labelKey: 'shortcutHelp.binding.shortcutHelp',
     wired: true
   },
+  {
+    // ⌘N 写新邮件 — global scope (任意页面可开居中模态, 与全局侧边栏「写邮件」
+    // 按钮一致)。editable 上下文 (chat / 主题输入框) 由 useShortcut 默认 short-circuit,
+    // 打字不误触。(原 chat scope 的 newChat 也曾占 ⌘N 但从未接线, 已移除避免重复。)
+    id: 'composeNew',
+    spec: 'cmd+n',
+    display: '⌘N',
+    scope: 'global',
+    labelKey: 'shortcutHelp.binding.composeNew',
+    wired: true
+  },
   // ── Inbox ─────────────────────────────────────────────────────────────
   // `wired` flags track "has a real handler producing the documented behavior
   // today", NOT design intent. Wired: J / K row nav (useEmailKeyboardNav) +
@@ -192,14 +203,6 @@ export const SHORTCUTS: ReadonlyArray<ShortcutDef> = [
     scope: 'chat',
     labelKey: 'shortcutHelp.binding.sendChat',
     wired: true
-  },
-  {
-    id: 'newChat',
-    spec: 'cmd+n',
-    display: '⌘N',
-    scope: 'chat',
-    labelKey: 'shortcutHelp.binding.newChat',
-    wired: false
   },
   // ── Island (L2 Island Hybrid future) ─────────────────────────────────
   {

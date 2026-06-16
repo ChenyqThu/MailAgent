@@ -303,11 +303,14 @@ function validateComposeOpts(
   opts: ComposeDraftOpts | undefined,
   channel: string
 ): WriteEnvelope<never> | ComposeDraftOpts {
-  if (!opts || !Number.isInteger(opts.internalId) || opts.internalId < 0) {
+  // mode='new' (写新邮件): 无源邮件, 前端传哨兵 internalId=-1 → 放宽非负校验
+  // (serve-api _prepare_draft 对 mode='new' 不依赖源 record)。其余模式必须非负。
+  const isNew = opts?.mode === 'new'
+  if (!opts || !Number.isInteger(opts.internalId) || (opts.internalId < 0 && !isNew)) {
     return {
       ok: false,
       code: 'E_INVALID_ARG',
-      message: `${channel}: expected non-negative integer internalId`
+      message: `${channel}: expected ${isNew ? 'integer' : 'non-negative integer'} internalId`
     }
   }
   if (!VALID_MODES.has(opts.mode)) {

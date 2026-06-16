@@ -49,6 +49,7 @@ import { useActiveEmail } from './state/active-email'
 import { CommandPalette } from './components/command/CommandPalette'
 import { GlobalShortcuts } from './components/keyboard/GlobalShortcuts'
 import { KeyboardHelpModal } from './components/keyboard/KeyboardHelpModal'
+import { ComposeNewModal } from './components/email/compose/ComposeNewModal'
 
 // F6 — mailagent:// deeplink target (main/deeplink.ts shape; renderer 不能 import
 // main 模块, 这里 inline 同 shape).
@@ -126,6 +127,8 @@ function RootLayout(): React.ReactElement {
       <GlobalShortcuts />
       <KeyboardHelpModal />
       <CommandPalette />
+      {/* 写新邮件居中模态 — 全局单实例, 由侧边栏「写邮件」按钮 / ⌘N 打开。 */}
+      <ComposeNewModal />
     </>
   )
 }

@@ -50,8 +50,8 @@ import { RecipientField } from './RecipientField'
 import { ComposeEditor, ComposeFormatToolbar } from './ComposeEditor'
 import { DeleteDraftDialog, SendConfirmDialog } from './ComposeDialogs'
 
-/** Panel mode = UI ComposeMode + 草稿编辑态。 */
-export type PanelMode = ComposeMode | 'draft-edit'
+/** Panel mode = UI ComposeMode + 草稿编辑态 + 写新邮件态。 */
+export type PanelMode = ComposeMode | 'draft-edit' | 'new'
 
 interface WriteErrorShape {
   code?: string
@@ -164,16 +164,27 @@ interface Props {
   internalId: number
   mode: PanelMode
   onClose: () => void
+  /** 'column' (默认) = 占满 detail 列 (reply/forward/draft-edit overlay);
+   *  'modal' = 居中模态卡片内 (写新邮件，外壳 ComposeNewModal 提供遮罩/卡框)。 */
+  variant?: 'column' | 'modal'
 }
 
 /** Inner panel — keyed on (internalId, mode) by the caller so a mode switch
  *  remounts with a fresh editor + prefill instead of carrying stale state. */
-export function ComposePanelInner({ internalId, mode, onClose }: Props): React.ReactElement {
+export function ComposePanelInner({
+  internalId,
+  mode,
+  onClose,
+  variant = 'column'
+}: Props): React.ReactElement {
   const { t } = useTranslation()
   const mailApi = useMailApi()
   const isDraftEdit = mode === 'draft-edit'
-  // 草稿编辑保存/发送走 wire mode='new' (显式收件人/正文、零线程派生)。
-  const wireMode: ComposeWireMode = isDraftEdit ? 'new' : mode
+  // 写新邮件 (无源邮件): 空表单 + 显式收件人/正文。internalId 传哨兵 -1 → 下方所有
+  // query 的 `internalId >= 0` 守卫天然 false → planQ/draftQ/detailQ 全跳过、不预填。
+  const isNew = mode === 'new'
+  // 草稿编辑 / 写新邮件 保存/发送都走 wire mode='new' (显式收件人/正文、零线程派生)。
+  const wireMode: ComposeWireMode = isDraftEdit || isNew ? 'new' : mode
 
   const [to, setTo] = useState<string[]>([])
   const [cc, setCc] = useState<string[]>([])
@@ -257,6 +268,13 @@ export function ComposePanelInner({ internalId, mode, onClose }: Props): React.R
       setPlanApplied(true)
       return
     }
+    if (isNew) {
+      // 写新邮件: 空表单, 无预填数据源 — 标记完成避免 effect 每次空跑。
+      // (放在 isDraftEdit 之后: 规则只报 effect 内首个 setState, 由上面的 disable
+      //  覆盖; 这里 setPlanApplied 是后续调用, 不触发规则、无需额外 disable。)
+      setPlanApplied(true)
+      return
+    }
     const plan = planQ.data
     if (!plan) return
     setTo(plan.to ?? [])
@@ -271,7 +289,7 @@ export function ComposePanelInner({ internalId, mode, onClose }: Props): React.R
     if (editorHtml) editor.commands.setContent(editorHtml)
     setQuoteHtml(plan.quote_html || plan.forward_intro_html || '')
     setPlanApplied(true)
-  }, [planApplied, isDraftEdit, draftQ.data, planQ.data, editor, mode])
+  }, [planApplied, isDraftEdit, isNew, draftQ.data, planQ.data, editor, mode])
 
   // 发送/存草稿正文 = 编辑器内容 + 原文引用块 (拼回)。
   const getSanitizedHtml = useCallback((): string => {
@@ -374,8 +392,8 @@ export function ComposePanelInner({ internalId, mode, onClose }: Props): React.R
 
   const busy = saveMut.isPending || sendMut.isPending || deleteMut.isPending
 
-  // forward / draft-edit(new) 必须有收件人; reply/reply-all 可空 (后端推导)。
-  const requiresRecipient = mode === 'forward' || isDraftEdit
+  // forward / draft-edit / 写新邮件 必须有收件人; reply/reply-all 可空 (后端推导)。
+  const requiresRecipient = mode === 'forward' || isDraftEdit || isNew
   const sendDisabled = busy || (requiresRecipient && to.length === 0)
 
   const handleSendClick = useCallback(() => {
@@ -409,16 +427,25 @@ export function ComposePanelInner({ internalId, mode, onClose }: Props): React.R
     return () => window.removeEventListener('keydown', handler)
   }, [sendOpen, deleteConfirmOpen, onClose])
 
-  const headerHint = isDraftEdit
-    ? subject || t('compose.untitled')
-    : planQ.isLoading
-      ? t('compose.loadingPlan')
-      : planQ.isError
-        ? t('compose.planError')
-        : subject || t('compose.untitled')
+  const headerHint =
+    isDraftEdit || isNew
+      ? subject || t('compose.untitled')
+      : planQ.isLoading
+        ? t('compose.loadingPlan')
+        : planQ.isError
+          ? t('compose.planError')
+          : subject || t('compose.untitled')
 
   return (
-    <main aria-label="compose-panel" className="flex-1 min-w-0 glass-3 flex flex-col min-h-0">
+    <main
+      aria-label="compose-panel"
+      className={cn(
+        'flex flex-col min-h-0',
+        // column: 占满 detail 列 (glass-3 半透明作列背景)。
+        // modal: 撑满 ComposeNewModal 卡片 (背景/圆角/阴影由外壳给, 这里只布局)。
+        variant === 'modal' ? 'h-full' : 'flex-1 min-w-0 glass-3'
+      )}
+    >
       {/* 顶部动作工具栏 (Outlook 式) — 替代旧 mode 徽头 + 底部 send dock。 */}
       <header className="h-12 shrink-0 border-b border-ink-border/60 flex items-center gap-1.5 px-3">
         <button
