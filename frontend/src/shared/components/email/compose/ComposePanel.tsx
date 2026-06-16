@@ -13,7 +13,8 @@
 //   - 保存草稿 → email.draft (IMAP APPEND, re-entrant) — 仅 reply/forward。
 //   - 发送 → SendConfirmDialog → email.send (SMTP, irreversible); draft-edit 发送成功后
 //     删掉原草稿 (替换语义)。
-//   - 放弃 → reply/forward: DiscardDialog (dirty 时) → close; draft-edit: deleteDraft → close。
+//   - 放弃/删除 → reply/forward「丢弃」: 临时内容未持久化 → 直接关闭, 不确认;
+//     draft-edit「删除」: 改 DB 不可逆 → DeleteDraftDialog 二次确认 → deleteDraft。
 
 import { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -47,7 +48,7 @@ import type {
 import { EmailBodyFrame } from '../EmailBodyFrame'
 import { RecipientField } from './RecipientField'
 import { ComposeEditor, ComposeFormatToolbar } from './ComposeEditor'
-import { DiscardDialog, SendConfirmDialog } from './ComposeDialogs'
+import { DeleteDraftDialog, SendConfirmDialog } from './ComposeDialogs'
 
 /** Panel mode = UI ComposeMode + 草稿编辑态。 */
 export type PanelMode = ComposeMode | 'draft-edit'
@@ -181,22 +182,18 @@ export function ComposePanelInner({ internalId, mode, onClose }: Props): React.R
   const [importance, setImportance] = useState<ComposeImportance>('normal')
   const [ccVisible, setCcVisible] = useState(false)
   const [bccVisible, setBccVisible] = useState(false)
-  const [dirty, setDirty] = useState(false)
   const [sendOpen, setSendOpen] = useState(false)
-  const [discardOpen, setDiscardOpen] = useState(false)
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
   const [planAttachments, setPlanAttachments] = useState(0)
   // 原文引用块 (reply/forward) — 与编辑器分离: 不灌进 TipTap (整条线程 HTML 几十~几百 KB 会卡 +
   // 被 ProseMirror 重排), 单独用阅读区同款安全 iframe 渲染, 发送/存草稿时拼回正文。默认收起。
   const [quoteHtml, setQuoteHtml] = useState('')
   const [quoteOpen, setQuoteOpen] = useState(false)
 
-  const markDirty = useCallback(() => setDirty(true), [])
-
   const editor = useEditor({
     extensions: [StarterKit.configure({ link: { openOnClick: false } })],
     content: '',
-    immediatelyRender: false,
-    onUpdate: markDirty
+    immediatelyRender: false
   })
 
   // Owner email (From, read-only) + 签名 — same query key as Sidebar / drawers.
@@ -288,8 +285,7 @@ export function ComposePanelInner({ internalId, mode, onClose }: Props): React.R
     if (!editor || !signature) return
     const html = /[<>]/.test(signature) ? signature : signature.replace(/\n/g, '<br>')
     editor.chain().focus().insertContent(html).run()
-    markDirty()
-  }, [editor, signature, markDirty])
+  }, [editor, signature])
 
   const queryClient = useQueryClient()
   const invalidateLists = useCallback(() => {
@@ -315,7 +311,6 @@ export function ComposePanelInner({ internalId, mode, onClose }: Props): React.R
     mutationFn: () => mailApi.email.draft(composePayload()),
     onSuccess: () => {
       toastSuccess(t('compose.toast.draftOk'))
-      setDirty(false)
       invalidateLists()
       onClose()
     },
@@ -336,7 +331,6 @@ export function ComposePanelInner({ internalId, mode, onClose }: Props): React.R
     onSuccess: async () => {
       toastSuccess(t('compose.toast.sendOk'))
       setSendOpen(false)
-      setDirty(false)
       // draft-edit 发送成功后删掉原草稿 (替换语义: 发出的是 mode='new' 独立邮件, 原草稿仍在)。
       if (isDraftEdit) {
         try {
@@ -392,38 +386,28 @@ export function ComposePanelInner({ internalId, mode, onClose }: Props): React.R
     setSendOpen(true)
   }, [requiresRecipient, to.length, t])
 
-  const requestClose = useCallback(() => {
-    if (dirty) {
-      setDiscardOpen(true)
+  // 顶部「放弃/删除」: reply/forward 的「丢弃」= 临时撰写内容, 未持久化任何东西 →
+  // 直接关闭, 不二次确认 (避免刚打开就被 setContent 标 dirty 还要确认)。draft-edit 的
+  // 「删除」= 改 DB (IMAP \\Deleted + 本地行清理), 不可逆 → 走 DeleteDraftDialog 二次确认。
+  const handleDiscard = useCallback(() => {
+    if (isDraftEdit) {
+      setDeleteConfirmOpen(true)
       return
     }
     onClose()
-  }, [dirty, onClose])
+  }, [isDraftEdit, onClose])
 
-  // 顶部「放弃」: draft-edit → 删除草稿; reply/forward → 关闭 (dirty 时确认)。
-  const handleDiscard = useCallback(() => {
-    if (isDraftEdit) {
-      deleteMut.mutate()
-      return
-    }
-    requestClose()
-  }, [isDraftEdit, deleteMut, requestClose])
-
-  // ESC: draft-edit → 直接关闭 (回列表, 不删草稿); reply/forward → requestClose (dirty 确认)。
+  // ESC: 两态都直接关闭 (draft-edit 回列表不删草稿; reply/forward 丢弃不确认)。
   useEffect(() => {
     const handler = (e: KeyboardEvent): void => {
       if (e.key !== 'Escape') return
-      if (sendOpen || discardOpen) return
+      if (sendOpen || deleteConfirmOpen) return
       e.preventDefault()
-      if (isDraftEdit) {
-        onClose()
-      } else {
-        requestClose()
-      }
+      onClose()
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [sendOpen, discardOpen, isDraftEdit, onClose, requestClose])
+  }, [sendOpen, deleteConfirmOpen, onClose])
 
   const headerHint = isDraftEdit
     ? subject || t('compose.untitled')
@@ -541,10 +525,7 @@ export function ComposePanelInner({ internalId, mode, onClose }: Props): React.R
             label={t('compose.to')}
             values={to}
             placeholder={t('compose.toPlaceholder')}
-            onChange={(next) => {
-              setTo(next)
-              markDirty()
-            }}
+            onChange={(next) => setTo(next)}
             selfEmail={selfEmail}
           />
           {(!ccVisible || !bccVisible) && (
@@ -577,10 +558,7 @@ export function ComposePanelInner({ internalId, mode, onClose }: Props): React.R
             label={t('compose.cc')}
             values={cc}
             placeholder={t('compose.ccPlaceholder')}
-            onChange={(next) => {
-              setCc(next)
-              markDirty()
-            }}
+            onChange={(next) => setCc(next)}
             selfEmail={selfEmail}
           />
         )}
@@ -589,10 +567,7 @@ export function ComposePanelInner({ internalId, mode, onClose }: Props): React.R
             label={t('compose.bcc')}
             values={bcc}
             placeholder={t('compose.bccPlaceholder')}
-            onChange={(next) => {
-              setBcc(next)
-              markDirty()
-            }}
+            onChange={(next) => setBcc(next)}
             selfEmail={selfEmail}
           />
         )}
@@ -603,19 +578,10 @@ export function ComposePanelInner({ internalId, mode, onClose }: Props): React.R
             className="text-aux font-medium"
             value={subject}
             placeholder={t('compose.subjectPlaceholder')}
-            onChange={(e) => {
-              setSubject(e.target.value)
-              markDirty()
-            }}
+            onChange={(e) => setSubject(e.target.value)}
             aria-label={t('compose.subject')}
           />
-          <ImportanceSelect
-            value={importance}
-            onChange={(v) => {
-              setImportance(v)
-              markDirty()
-            }}
-          />
+          <ImportanceSelect value={importance} onChange={(v) => setImportance(v)} />
         </div>
       </div>
 
@@ -668,13 +634,11 @@ export function ComposePanelInner({ internalId, mode, onClose }: Props): React.R
         onConfirm={() => sendMut.mutate()}
         onCancel={() => setSendOpen(false)}
       />
-      <DiscardDialog
-        open={discardOpen}
-        onConfirm={() => {
-          setDiscardOpen(false)
-          onClose()
-        }}
-        onCancel={() => setDiscardOpen(false)}
+      <DeleteDraftDialog
+        open={deleteConfirmOpen}
+        pending={deleteMut.isPending}
+        onConfirm={() => deleteMut.mutate()}
+        onCancel={() => setDeleteConfirmOpen(false)}
       />
     </main>
   )

@@ -107,13 +107,21 @@ export function SendConfirmDialog({
   )
 }
 
-interface DiscardProps {
+interface DeleteDraftProps {
   open: boolean
+  pending: boolean
   onConfirm: () => void
   onCancel: () => void
 }
 
-export function DiscardDialog({ open, onConfirm, onCancel }: DiscardProps): React.ReactElement {
+/** 草稿删除二次确认 — 删草稿改 DB (IMAP \Deleted + 本地行清理), 不可逆。reply/forward
+ *  的「丢弃」是临时撰写内容、未持久化, 直接关闭不走此弹窗。 */
+export function DeleteDraftDialog({
+  open,
+  pending,
+  onConfirm,
+  onCancel
+}: DeleteDraftProps): React.ReactElement {
   const { t } = useTranslation()
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onCancel()}>
@@ -129,20 +137,25 @@ export function DiscardDialog({ open, onConfirm, onCancel }: DiscardProps): Reac
               <Trash2 size={20} strokeWidth={1.9} />
             </div>
             <div className="min-w-0">
-              <DialogTitle>{t('compose.discardConfirm.title')}</DialogTitle>
+              <DialogTitle>{t('compose.deleteConfirm.title')}</DialogTitle>
               <DialogDescription className="mt-1.5 leading-relaxed">
-                {t('compose.discardConfirm.body')}
+                {t('compose.deleteConfirm.body')}
               </DialogDescription>
             </div>
           </div>
         </DialogHeader>
         <DialogFooter>
-          <button type="button" className="gbtn gbtn-bare" onClick={onCancel}>
+          <button type="button" className="gbtn gbtn-bare" onClick={onCancel} disabled={pending}>
             {t('compose.cancel')}
           </button>
-          <button type="button" className="gbtn gbtn-danger-solid" onClick={onConfirm}>
+          <button
+            type="button"
+            className="gbtn gbtn-danger-solid"
+            onClick={onConfirm}
+            disabled={pending}
+          >
             <Trash2 size={13} strokeWidth={2} />
-            {t('compose.discardConfirm.confirm')}
+            {t('compose.deleteConfirm.confirm')}
           </button>
         </DialogFooter>
       </DialogContent>

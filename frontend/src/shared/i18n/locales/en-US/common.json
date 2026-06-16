@@ -165,6 +165,11 @@
       "body": "Unsaved changes will be lost and cannot be recovered.",
       "confirm": "Discard"
     },
+    "deleteConfirm": {
+      "title": "Delete draft?",
+      "body": "This draft will be permanently removed from Drafts and cannot be recovered.",
+      "confirm": "Delete"
+    },
     "toast": {
       "draftOk": "Draft saved to Drafts",
       "sendOk": "Email sent",

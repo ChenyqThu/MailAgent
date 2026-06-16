@@ -134,6 +134,17 @@ describe('ComposePanel — pre-fill + send flow', () => {
     expect(mockDraft.mock.calls[0][0]).toMatchObject({ internalId: 42, mode: 'reply' })
   })
 
+  test('丢弃 (reply) 直接关闭, 不弹二次确认 (临时内容未持久化)', async () => {
+    act(() => useComposeStore.getState().openCompose(42, 'reply'))
+    renderWithClient(<ComposePanel />)
+    await waitFor(() => expect(screen.getByText('alice@acme.com')).toBeTruthy())
+    // 预填的 setContent 会把编辑器标 dirty, 但 reply 丢弃不应再弹确认弹窗。
+    fireEvent.click(screen.getByRole('button', { name: /^丢弃$/ }))
+    expect(screen.queryByRole('dialog')).toBeNull()
+    // closeCompose → 面板渲染 null
+    await waitFor(() => expect(document.querySelector('[aria-label="compose-panel"]')).toBeNull())
+  })
+
   test('quote_html: 引用块折叠 toggle 渲染 + 发送正文拼回引用 (不灌进编辑器)', async () => {
     // 大邮件引用块从 TipTap 分离: 编辑器只载 reply_html (建议), 引用块折叠展示 + 发送时
     // 拼回 → bodyHtml 同时含建议与引用。默认收起 → EmailBodyFrame 不挂载 (无需 mock get)。

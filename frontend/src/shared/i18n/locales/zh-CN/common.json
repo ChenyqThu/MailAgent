@@ -165,6 +165,11 @@
       "body": "未保存的更改将丢失且无法恢复。",
       "confirm": "丢弃"
     },
+    "deleteConfirm": {
+      "title": "删除草稿？",
+      "body": "草稿将从草稿箱永久删除，无法恢复。",
+      "confirm": "删除"
+    },
     "toast": {
       "draftOk": "草稿已保存到草稿箱",
       "sendOk": "邮件已发送",
