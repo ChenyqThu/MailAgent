@@ -125,11 +125,13 @@ export function ComposeEditor({ editor }: { editor: Editor | null }): React.Reac
   const { t } = useTranslation()
   return (
     <div className="flex-1 overflow-y-auto scrollbar-thin">
-      <div className="relative max-w-[760px] mx-auto px-10 pt-7 pb-12">
+      {/* 正文用满宽 + 24px 内边距 (旧 px-10=40px + max-w-760 居中导致大段留白, 观感
+          像"缩进很多"); 去掉宽度上限让正文铺满 compose 列, 与 Outlook 撰写区一致。 */}
+      <div className="relative px-6 pt-6 pb-10">
         {editor?.isEmpty && (
           <div
             aria-hidden
-            className="pointer-events-none absolute left-10 top-7 text-body text-ink-fg-3"
+            className="pointer-events-none absolute left-6 top-6 text-body text-ink-fg-3"
           >
             {t('compose.editor.bodyPlaceholder')}
           </div>

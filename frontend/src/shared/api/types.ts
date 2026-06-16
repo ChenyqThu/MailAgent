@@ -236,14 +236,23 @@ export interface UpdateFlagOpts {
 
 export type ComposeMode = 'reply' | 'reply-all' | 'forward'
 
+/** 邮件重要性 — 写进发出邮件的 Importance / X-Priority MIME 头。'normal' / 缺省 = 不写头。 */
+export type ComposeImportance = 'high' | 'normal' | 'low'
+
+/** wire mode 比 UI ComposeMode 多一个 'new' —— 草稿编辑(draft-edit)保存/发送时用,
+ *  后端走显式收件人/正文、零回复线程派生 (src/api/routers/email.py VALID_COMPOSE_MODES)。 */
+export type ComposeWireMode = ComposeMode | 'new'
+
 export interface ComposeDraftOpts {
   internalId: number
-  mode: ComposeMode
+  mode: ComposeWireMode
   to?: string[]
   cc?: string[]
   bcc?: string[]
   subject?: string
   bodyHtml?: string
+  /** 重要性 (高/普通/低)；'normal'/缺省时后端不写 Importance 头。 */
+  importance?: ComposeImportance
 }
 
 /** Send 与 draft 同形 (内部 IPC handler 给 send 追加 --yes)。 */
@@ -981,6 +990,9 @@ export interface PersistentSettings {
   /** Owner's email — sourced from repo-root `.env` USER_EMAIL on every
    *  settings:get read. Read-only; the renderer doesn't write this. */
   userEmail: string | null
+  /** 邮件签名 (HTML/纯文本)。compose 工具栏「签名」按钮在光标处插入。
+   *  null/空 = 未设置。SettingsPanel 的签名编辑框写入。 */
+  signature: string | null
 }
 
 export interface PingResult {

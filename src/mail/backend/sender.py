@@ -79,6 +79,17 @@ def build_outgoing_mime(cfg: "Config", draft: DraftRequest) -> bytes:
 
     msg["User-Agent"] = "MailAgent/dual-backend/davmail"
 
+    # 重要性头 (Outlook/Exchange 业界标准三组头). normal/None/其它一律不写.
+    importance = (draft.importance or "").strip().lower()
+    if importance == "high":
+        msg["Importance"] = "High"
+        msg["X-Priority"] = "1"
+        msg["X-MSMail-Priority"] = "High"
+    elif importance == "low":
+        msg["Importance"] = "Low"
+        msg["X-Priority"] = "5"
+        msg["X-MSMail-Priority"] = "Low"
+
     # 正文组装: forward 把引用块追加在用户正文之后.
     body_text = draft.reply_text or "(empty body)"
     body_html = draft.reply_html

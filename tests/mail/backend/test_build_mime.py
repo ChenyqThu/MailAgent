@@ -95,3 +95,53 @@ def test_malformed_attachment_entry_skipped():
     m = _parse(d)
     names = [p.get_filename() for p in m.walk() if p.get_filename()]
     assert names == []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# importance 头 (Importance + X-Priority + X-MSMail-Priority 三组业界标准头)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_importance_high_writes_all_three_headers():
+    d = DraftRequest(mode="reply", to=["a@b.com"], subject="Re: hi",
+                     reply_text="x", importance="high")
+    m = _parse(d)
+    assert m.get("Importance") == "High"
+    assert m.get("X-Priority") == "1"
+    assert m.get("X-MSMail-Priority") == "High"
+
+
+def test_importance_low_writes_all_three_headers():
+    d = DraftRequest(mode="reply", to=["a@b.com"], subject="Re: hi",
+                     reply_text="x", importance="low")
+    m = _parse(d)
+    assert m.get("Importance") == "Low"
+    assert m.get("X-Priority") == "5"
+    assert m.get("X-MSMail-Priority") == "Low"
+
+
+def test_importance_normal_writes_no_headers():
+    d = DraftRequest(mode="reply", to=["a@b.com"], subject="Re: hi",
+                     reply_text="x", importance="normal")
+    m = _parse(d)
+    assert m.get("Importance") is None
+    assert m.get("X-Priority") is None
+    assert m.get("X-MSMail-Priority") is None
+
+
+def test_importance_none_writes_no_headers():
+    d = DraftRequest(mode="reply", to=["a@b.com"], subject="Re: hi",
+                     reply_text="x")
+    m = _parse(d)
+    assert m.get("Importance") is None
+    assert m.get("X-Priority") is None
+    assert m.get("X-MSMail-Priority") is None
+
+
+def test_importance_case_insensitive():
+    # "HIGH" / 带空格 大小写不敏感 — 仍写 High 头
+    d = DraftRequest(mode="reply", to=["a@b.com"], subject="Re: hi",
+                     reply_text="x", importance="  HIGH  ")
+    m = _parse(d)
+    assert m.get("Importance") == "High"
+    assert m.get("X-Priority") == "1"

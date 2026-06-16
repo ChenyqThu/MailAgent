@@ -222,6 +222,69 @@ def test_compose_to_override_bypasses_derivation():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 纯函数: _compose_reply_draft new 模式 (草稿编辑) + importance 透传
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_compose_new_uses_explicit_fields_no_threading():
+    # new 模式: 显式 to/cc/subject 原样 (无 Re:/Fwd: 前缀), 零线程派生
+    draft = _compose_reply_draft(
+        _record(subject="orig subject"), internal_id=7, mode="new",
+        reply_text="body", reply_html="<p>body</p>", extra_to=None, extra_cc=None,
+        to_override="x@y.com, z@y.com", cc_override="cc@y.com",
+        subject_override="My subject", importance="high",
+    )
+    assert draft.mode == "new"
+    assert draft.to == ["x@y.com", "z@y.com"]
+    assert draft.cc == ["cc@y.com"]
+    assert draft.subject == "My subject"  # 不加 Re:/Fwd:
+    assert draft.in_reply_to is None
+    assert draft.references is None
+    assert draft.internal_id_for_threading is None
+    assert draft.importance == "high"  # 透传
+
+
+def test_compose_new_dedups_recipients():
+    draft = _compose_reply_draft(
+        _record(), internal_id=7, mode="new",
+        reply_text="body", reply_html=None, extra_to=None, extra_cc=None,
+        to_override="a@y.com, a@y.com, b@y.com", cc_override="c@y.com, c@y.com",
+        bcc="d@y.com, d@y.com", subject_override="S",
+    )
+    assert draft.to == ["a@y.com", "b@y.com"]
+    assert draft.cc == ["c@y.com"]
+    assert draft.bcc == ["d@y.com"]
+
+
+def test_compose_new_empty_subject_defaults():
+    draft = _compose_reply_draft(
+        _record(), internal_id=7, mode="new",
+        reply_text="body", reply_html=None, extra_to=None, extra_cc=None,
+        to_override="a@y.com", subject_override="",
+    )
+    assert draft.subject == "(no subject)"
+
+
+def test_compose_importance_passthrough_reply():
+    # reply 模式也透传 importance
+    draft = _compose_reply_draft(
+        _record(), internal_id=1, mode="reply",
+        reply_text="ok", reply_html=None, extra_to=None, extra_cc=None,
+        importance="low",
+    )
+    assert draft.importance == "low"
+
+
+def test_compose_importance_passthrough_forward():
+    draft = _compose_reply_draft(
+        _record(), internal_id=5, mode="forward",
+        reply_text="fyi", reply_html=None, extra_to="x@y.com", extra_cc=None,
+        importance="high",
+    )
+    assert draft.importance == "high"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # integration (CliRunner + seeded_db + seed llm_processing.labels_json)
 # ─────────────────────────────────────────────────────────────────────────────
 

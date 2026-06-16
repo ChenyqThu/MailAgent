@@ -33,7 +33,7 @@ import { EmailBodyFrame } from './EmailBodyFrame'
 import { EmailToolbar, type TranslateStatus } from './EmailToolbar'
 import { AttachmentList } from './AttachmentList'
 import { AIFieldsBlock } from '../ai/AIFieldsBlock'
-import { ComposePanel } from './compose/ComposePanel'
+import { ComposePanel, ComposePanelInner } from './compose/ComposePanel'
 import { closeCompose, useComposeStore } from '@shared/state/compose'
 import type { ComposeMode } from '@shared/api/types'
 
@@ -668,6 +668,21 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
   }
 
   const email = detailQ.data
+
+  // 草稿点开即编辑 — 草稿不走只读详情 + 收件箱工具栏, 直接进可编辑 compose
+  // (From 只读 / To·主题·正文可编辑, 顶部 发送/放弃[删除草稿])。所有 hook 已在上方
+  // 执行, 此处条件 return 合法。key 让切换不同草稿时重挂 (fresh editor + 重新回填)。
+  if (['草稿箱', '草稿', 'Drafts'].includes(email.mailbox ?? '')) {
+    return (
+      <ComposePanelInner
+        key={`draft-${email.internal_id}`}
+        internalId={email.internal_id}
+        mode="draft-edit"
+        onClose={() => setActive(null)}
+      />
+    )
+  }
+
   const fromParsed = parseSender(email.sender)
   const fromName = email.sender_name || fromParsed.name
   const fromAddr = fromParsed.email || email.sender

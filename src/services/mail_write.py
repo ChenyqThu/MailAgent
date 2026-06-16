@@ -152,6 +152,7 @@ class ComposeRequest:
     cc: Optional[str] = None  # 完整抄送覆盖 (--cc)
     bcc: Optional[str] = None  # 密送 (--bcc)
     subject: Optional[str] = None  # 完整主题覆盖 (--subject)
+    importance: Optional[str] = None  # 重要性 high/normal/low (写 MIME Importance 头)
 
 
 @dataclass
@@ -244,6 +245,7 @@ def _compose_reply_draft(
     forward_intro_html: Optional[str] = None,
     attachments: Optional[list] = None,
     self_email: Optional[str] = None,
+    importance: Optional[str] = None,
 ):
     """从原邮件 metadata + reply 内容构造 DraftRequest.
 
@@ -267,6 +269,22 @@ def _compose_reply_draft(
     bcc_list = list(dict.fromkeys(_split_addrs(bcc or "")))
     orig_subj = record.get("subject", "") or ""
 
+    if mode == "new":
+        # 独立新邮件 (草稿编辑): 显式收件人/主题/正文, 零线程派生 (无 Re:/Fwd: 前缀,
+        # 不设 in_reply_to/references), 不依赖 record (internal_id 是草稿自己).
+        to_list = list(dict.fromkeys(_split_addrs(to_override or "")))
+        cc_list = list(dict.fromkeys(_split_addrs(cc_override or "")))
+        subject = subject_override if subject_override is not None else "(no subject)"
+        return DraftRequest(
+            mode="new",
+            internal_id_for_threading=None,
+            to=to_list, cc=cc_list, bcc=bcc_list,
+            subject=subject or "(no subject)",
+            reply_text=reply_text or "(rich text body)",
+            reply_html=reply_html,
+            importance=importance,
+        )
+
     if mode == "forward":
         if to_override is not None:
             to_list = list(dict.fromkeys(_split_addrs(to_override)))
@@ -287,6 +305,7 @@ def _compose_reply_draft(
             forward_intro_text=forward_intro_text,
             forward_intro_html=forward_intro_html,
             attachments=attachments or [],
+            importance=importance,
         )
 
     if to_override is not None:
@@ -335,6 +354,7 @@ def _compose_reply_draft(
         reply_html=reply_html,
         in_reply_to=in_reply_to,
         references=references,
+        importance=importance,
     )
 
 
@@ -1207,6 +1227,7 @@ class MailWriteService:
             forward_intro_html=forward_intro_html,
             attachments=attachments,
             self_email=self._ctx.config.user_email,
+            importance=request.importance,
         )
         return draft, warnings, quote
 

@@ -168,11 +168,28 @@
     "toast": {
       "draftOk": "Draft saved to Drafts",
       "sendOk": "Email sent",
-      "toRequired": "Add at least one recipient"
+      "toRequired": "Add at least one recipient",
+      "draftFailAuth": "Draft save failed: unauthorized",
+      "draftFailArg": "Draft save failed: invalid argument",
+      "draftFailGeneric": "Draft save failed",
+      "sendFailAuth": "Send failed: unauthorized",
+      "sendFailArg": "Send failed: invalid argument",
+      "sendFailGeneric": "Send failed",
+      "draftDeleted": "Draft deleted",
+      "draftDeleteFail": "Failed to delete draft"
     },
     "modeReply": "Reply",
     "modeReplyAll": "Reply all",
     "modeForward": "Forward",
+    "modeDraftEdit": "Edit draft",
+    "deleteDraft": "Delete",
+    "signature": "Signature",
+    "signatureInsert": "Insert signature at cursor",
+    "signatureEmpty": "No signature set (configure in Settings → Accounts)",
+    "importance": "Importance",
+    "importanceHigh": "High",
+    "importanceNormal": "Normal",
+    "importanceLow": "Low",
     "quote": {
       "reply": "Quoted message",
       "forward": "Forwarded content"
@@ -1116,6 +1133,13 @@
           "label": "Sent name",
           "helper": "AppleScript label, default 已发送邮件"
         }
+      },
+      "signature": {
+        "title": "Email signature",
+        "helper": "Click the Signature button in the compose toolbar to insert at the cursor. Plain text or HTML.",
+        "placeholder": "e.g.\nLucien Chen\nOmada Networks",
+        "saved": "Signature saved",
+        "saveFail": "Failed to save signature"
       },
       "page": {
         "eyebrow": "ACCOUNTS",

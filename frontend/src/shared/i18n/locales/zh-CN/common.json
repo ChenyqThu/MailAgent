@@ -168,11 +168,28 @@
     "toast": {
       "draftOk": "草稿已保存到草稿箱",
       "sendOk": "邮件已发送",
-      "toRequired": "请至少填写一个收件人"
+      "toRequired": "请至少填写一个收件人",
+      "draftFailAuth": "草稿保存失败：未授权",
+      "draftFailArg": "草稿保存失败：参数无效",
+      "draftFailGeneric": "草稿保存失败",
+      "sendFailAuth": "发送失败：未授权",
+      "sendFailArg": "发送失败：参数无效",
+      "sendFailGeneric": "发送失败",
+      "draftDeleted": "草稿已删除",
+      "draftDeleteFail": "草稿删除失败"
     },
     "modeReply": "回复",
     "modeReplyAll": "回复所有",
     "modeForward": "转发",
+    "modeDraftEdit": "编辑草稿",
+    "deleteDraft": "删除",
+    "signature": "签名",
+    "signatureInsert": "在光标处插入签名",
+    "signatureEmpty": "未设置签名（在 设置 → 账户 中配置）",
+    "importance": "重要性",
+    "importanceHigh": "高",
+    "importanceNormal": "普通",
+    "importanceLow": "低",
     "quote": {
       "reply": "引用原文",
       "forward": "转发内容"
@@ -1116,6 +1133,13 @@
           "label": "发件箱名",
           "helper": "AppleScript 用,默认 已发送邮件"
         }
+      },
+      "signature": {
+        "title": "邮件签名",
+        "helper": "撰写邮件时点工具栏「签名」按钮，在光标处插入。支持纯文本或 HTML。",
+        "placeholder": "例如：\nLucien Chen\nOmada Networks",
+        "saved": "签名已保存",
+        "saveFail": "签名保存失败"
       },
       "page": {
         "eyebrow": "ACCOUNTS",

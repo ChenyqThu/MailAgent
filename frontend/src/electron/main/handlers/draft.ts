@@ -296,7 +296,8 @@ export async function createDraft(opts: CreateDraftOpts): Promise<CreateDraftRes
 // --body-html-file 那套整段删 (A4 已让 serve-api 直收字符串)。mirror
 // HttpApi.email.draft/.send/.draftPlan (raw-data 视角)。
 
-const VALID_MODES: ReadonlySet<string> = new Set<ComposeMode>(['reply', 'reply-all', 'forward'])
+// 'new' = 草稿编辑(draft-edit)的 wire mode — 显式收件人/正文、零线程派生。
+const VALID_MODES: ReadonlySet<string> = new Set<string>(['reply', 'reply-all', 'forward', 'new'])
 
 function validateComposeOpts(
   opts: ComposeDraftOpts | undefined,
@@ -313,7 +314,7 @@ function validateComposeOpts(
     return {
       ok: false,
       code: 'E_INVALID_ARG',
-      message: `${channel}: mode must be reply|reply-all|forward, got ${String(opts.mode)}`
+      message: `${channel}: mode must be reply|reply-all|forward|new, got ${String(opts.mode)}`
     }
   }
   return opts
@@ -407,7 +408,9 @@ export function registerDraftHandlers(): void {
         'email:draftPlan'
       )
       if (!('mode' in valid)) return valid
-      return envelopeFromCli(runDraftPlan(valid))
+      // draftPlan 只用于 reply/reply-all/forward (opts.mode = 窄 ComposeMode), 不会是 'new';
+      // valid.mode 是宽 ComposeWireMode (共享 validateComposeOpts), 故回传 opts 的窄类型。
+      return envelopeFromCli(runDraftPlan({ internalId: opts.internalId, mode: opts.mode }))
     }
   )
 }

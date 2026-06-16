@@ -159,6 +159,10 @@ class DraftRequest:
     # reply* 一般为空. davmail builder 用 multipart/mixed 嵌套 alternative + 各 attachment.
     attachments: list[tuple[str, bytes, str]] = field(default_factory=list)
 
+    # 邮件重要性 (high / normal / low, 大小写不敏感). high/low 写 Importance + X-Priority +
+    # X-MSMail-Priority 三组业界标准头 (Outlook/Exchange 都认); normal/None/其它 不写头.
+    importance: Optional[str] = None
+
 
 @dataclass
 class DraftAppendResult:

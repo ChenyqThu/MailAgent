@@ -1,35 +1,56 @@
-// Compose panel — reply / reply-all / forward composer overlaying the detail
-// column. Visuals follow mockup-compose.html + mockup-draft-composer.html
-// (glass-3 surface, .folder-field-row recipients, TipTap body, format toolbar,
-// send dock with the one coral CTA = 发送). No right AI rail this iteration.
+// Compose panel — 撰写 / 回复 / 回复所有 / 转发 / 草稿编辑 composer。
+// 布局参考 Outlook: 顶部动作工具栏 (发送/放弃/[保存草稿]/签名) + From(只读)/To/
+// Cc·Bcc/Subject(右侧 重要性) 表头 + 格式工具栏 + 正文 + 原文引用块。
 //
-// Lifecycle:
-//   - opened via useComposeStore (toolbar split-button / future keymap)
-//   - on open, `email.draftPlan` (dry-run) pre-fills to/cc/bcc/subject + the
-//     TipTap body (reply: LLM reply_suggestion HTML; forward: quoted-original
-//     HTML). The plan is the single pre-fill source-of-truth.
-//   - 保存草稿 → email.draft (IMAP APPEND, re-entrant)
-//   - 发送 → SendConfirmDialog → email.send (SMTP, irreversible)
-//   - 丢弃 / ESC → DiscardDialog (only if dirty) → close
+// 三种数据源:
+//   - reply / reply-all / forward → `email.draftPlan` (dry-run) 预填收件人 + TipTap
+//     正文 (reply 建议 / forward 留空) + 折叠引用块。
+//   - draft-edit (草稿点开即编辑) → `email.get` 取 to/cc/subject + `email.body(html)`
+//     取正文灌进 TipTap; 顶部仅 发送/放弃(删除草稿); From 只读; 无引用块。wire mode='new'
+//     (显式收件人/正文、零线程派生)。
+//
+// 写操作:
+//   - 保存草稿 → email.draft (IMAP APPEND, re-entrant) — 仅 reply/forward。
+//   - 发送 → SendConfirmDialog → email.send (SMTP, irreversible); draft-edit 发送成功后
+//     删掉原草稿 (替换语义)。
+//   - 放弃 → reply/forward: DiscardDialog (dirty 时) → close; draft-edit: deleteDraft → close。
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEditor } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import DOMPurify from 'dompurify'
-import { ChevronRight, Loader2, RotateCcw, Send, Trash2, X } from 'lucide-react'
+import {
+  ChevronDown,
+  ChevronRight,
+  Flag,
+  Loader2,
+  PenLine,
+  RotateCcw,
+  Send,
+  Trash2
+} from 'lucide-react'
 
+import { cn } from '@shared/lib/cn'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { toastError, toastSuccess } from '@shared/state/toast'
 import { useComposeStore } from '@shared/state/compose'
 import { sanitizeEmailHtml } from '@shared/lib/emailSanitize'
-import type { ComposeMode, DraftPlanResult } from '@shared/api/types'
+import type {
+  ComposeImportance,
+  ComposeMode,
+  ComposeWireMode,
+  DraftPlanResult
+} from '@shared/api/types'
 
 import { EmailBodyFrame } from '../EmailBodyFrame'
 import { RecipientField } from './RecipientField'
 import { ComposeEditor, ComposeFormatToolbar } from './ComposeEditor'
 import { DiscardDialog, SendConfirmDialog } from './ComposeDialogs'
+
+/** Panel mode = UI ComposeMode + 草稿编辑态。 */
+export type PanelMode = ComposeMode | 'draft-edit'
 
 interface WriteErrorShape {
   code?: string
@@ -43,40 +64,129 @@ function asWriteError(err: unknown): WriteErrorShape {
   return { message: String(err) }
 }
 
-function modeLabelKey(mode: ComposeMode): string {
-  return mode === 'reply'
-    ? 'compose.modeReply'
-    : mode === 'reply-all'
-      ? 'compose.modeReplyAll'
-      : 'compose.modeForward'
+/** "name" <a@x>, b@y; c@z → ['a@x','b@y','c@z'] —— 草稿回填 to_addr/cc_addr 提纯。 */
+function parseAddrList(raw?: string | null): string[] {
+  if (!raw) return []
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const part of raw.split(/[,;]/)) {
+    const m = part.match(/<([^>]+)>/)
+    const addr = (m ? m[1] : part).trim()
+    if (!addr) continue
+    const lower = addr.toLowerCase()
+    if (seen.has(lower)) continue
+    seen.add(lower)
+    out.push(addr)
+  }
+  return out
+}
+
+const IMPORTANCE_OPTS: ReadonlyArray<{ value: ComposeImportance; key: string }> = [
+  { value: 'high', key: 'compose.importanceHigh' },
+  { value: 'normal', key: 'compose.importanceNormal' },
+  { value: 'low', key: 'compose.importanceLow' }
+]
+
+/** 重要性下拉 — 主题行右侧 (Outlook 同位)。high 用 warn 色旗标, low 灰旗, normal 朴素。 */
+function ImportanceSelect({
+  value,
+  onChange
+}: {
+  value: ComposeImportance
+  onChange: (v: ComposeImportance) => void
+}): React.ReactElement {
+  const { t } = useTranslation()
+  const [open, setOpen] = useState(false)
+  const tone = value === 'high' ? 'text-warn' : value === 'low' ? 'text-ink-fg-3' : 'text-ink-fg-2'
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        onBlur={() => window.setTimeout(() => setOpen(false), 120)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        title={t('compose.importance')}
+        className={cn(
+          'inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-meta font-mono',
+          'hover:bg-ink-3/60 transition-colors duration-fast',
+          tone
+        )}
+      >
+        <Flag size={12} strokeWidth={2} fill={value === 'high' ? 'currentColor' : 'none'} />
+        {t(IMPORTANCE_OPTS.find((o) => o.value === value)?.key ?? 'compose.importanceNormal')}
+        <ChevronDown size={11} strokeWidth={2} />
+      </button>
+      {open && (
+        <ul
+          role="listbox"
+          className="absolute right-0 top-full mt-1 z-50 w-28 rounded-lg border border-ink-border bg-ink-2 shadow-md py-1"
+        >
+          {IMPORTANCE_OPTS.map((o) => (
+            <li key={o.value} role="option" aria-selected={o.value === value}>
+              <button
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => {
+                  onChange(o.value)
+                  setOpen(false)
+                }}
+                className={cn(
+                  'w-full text-left px-2.5 py-1.5 flex items-center gap-2 text-meta',
+                  'transition-colors duration-fast hover:bg-ink-3',
+                  o.value === value ? 'text-ink-fg' : 'text-ink-fg-2'
+                )}
+              >
+                <Flag
+                  size={12}
+                  strokeWidth={2}
+                  className={
+                    o.value === 'high'
+                      ? 'text-warn'
+                      : o.value === 'low'
+                        ? 'text-ink-fg-3'
+                        : 'text-ink-fg-2'
+                  }
+                  fill={o.value === 'high' ? 'currentColor' : 'none'}
+                />
+                {t(o.key)}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
 }
 
 interface Props {
   internalId: number
-  mode: ComposeMode
+  mode: PanelMode
   onClose: () => void
 }
 
-/** Inner panel — keyed on (internalId, mode) by the wrapper so a mode switch
- *  remounts with a fresh editor + plan fetch instead of carrying stale state. */
-function ComposePanelInner({ internalId, mode, onClose }: Props): React.ReactElement {
+/** Inner panel — keyed on (internalId, mode) by the caller so a mode switch
+ *  remounts with a fresh editor + prefill instead of carrying stale state. */
+export function ComposePanelInner({ internalId, mode, onClose }: Props): React.ReactElement {
   const { t } = useTranslation()
   const mailApi = useMailApi()
+  const isDraftEdit = mode === 'draft-edit'
+  // 草稿编辑保存/发送走 wire mode='new' (显式收件人/正文、零线程派生)。
+  const wireMode: ComposeWireMode = isDraftEdit ? 'new' : mode
 
   const [to, setTo] = useState<string[]>([])
   const [cc, setCc] = useState<string[]>([])
   const [bcc, setBcc] = useState<string[]>([])
   const [subject, setSubject] = useState('')
+  const [importance, setImportance] = useState<ComposeImportance>('normal')
   const [ccVisible, setCcVisible] = useState(false)
   const [bccVisible, setBccVisible] = useState(false)
   const [dirty, setDirty] = useState(false)
   const [sendOpen, setSendOpen] = useState(false)
   const [discardOpen, setDiscardOpen] = useState(false)
   const [planAttachments, setPlanAttachments] = useState(0)
-  // 原文引用块 —— 与编辑器分离: 不灌进 TipTap (整条线程 HTML 几十~几百 KB 会卡 + 被
-  // ProseMirror 重排), 单独用阅读区同款安全 iframe 渲染, 发送/存草稿时拼回正文。默认收起
-  // (懒加载: detailQ 的 enabled: internalId >= 0 && quoteOpen 在收起时不触发请求, compose
-  // 秒开; 发送/存草稿拼回正文用 quoteHtml state, 不依赖 quoteOpen, 收起不影响发送内容)。
+  // 原文引用块 (reply/forward) — 与编辑器分离: 不灌进 TipTap (整条线程 HTML 几十~几百 KB 会卡 +
+  // 被 ProseMirror 重排), 单独用阅读区同款安全 iframe 渲染, 发送/存草稿时拼回正文。默认收起。
   const [quoteHtml, setQuoteHtml] = useState('')
   const [quoteOpen, setQuoteOpen] = useState(false)
 
@@ -85,51 +195,73 @@ function ComposePanelInner({ internalId, mode, onClose }: Props): React.ReactEle
   const editor = useEditor({
     extensions: [StarterKit.configure({ link: { openOnClick: false } })],
     content: '',
-    // Electron renderer is pure CSR; disable immediatelyRender to avoid the
-    // TipTap v3 SSR/StrictMode double-mount warning (same as DraftEditor).
     immediatelyRender: false,
     onUpdate: markDirty
   })
 
-  // Owner email (From, read-only) — same query key as Sidebar / drawers.
+  // Owner email (From, read-only) + 签名 — same query key as Sidebar / drawers.
   const settingsQ = useQuery({
     queryKey: ['settings'],
     queryFn: () => mailApi.settings.get(),
     staleTime: 60_000
   })
   const selfEmail = settingsQ.data?.userEmail ?? null
+  const signature = settingsQ.data?.signature ?? null
 
-  // Pre-fill plan (email draft --dry-run). Runs once per (internalId, mode).
+  // 预填数据源 ① reply/forward: draftPlan (dry-run)。
   const planQ = useQuery<DraftPlanResult>({
     queryKey: ['compose', 'plan', internalId, mode],
-    queryFn: () => mailApi.email.draftPlan({ internalId, mode }),
-    enabled: internalId >= 0,
+    queryFn: () => mailApi.email.draftPlan({ internalId, mode: mode as ComposeMode }),
+    enabled: internalId >= 0 && !isDraftEdit,
     staleTime: Infinity,
     retry: false
   })
-  // draftPlan 失败时把错误码提出来渲染成可见 banner + 重试 (而非静默空面板) —— 失败时
-  // 收件人/正文都预填不上, 用户只看到空白无从判断, 必须显式告知。
   const planError = planQ.isError ? asWriteError(planQ.error) : null
 
-  // 引用块展开时才拉原邮件 detail (拿 attachments 让 EmailBodyFrame 正确解析内联图)。
-  // 与 EmailDetail 同 queryKey → 多数情况命中缓存不重复请求; 收起时不拉 = compose 秒开。
+  // 预填数据源 ② draft-edit: email.get (to/cc/subject/importance) + email.body html (正文)。
+  const draftQ = useQuery({
+    queryKey: ['compose', 'draft-edit', internalId],
+    queryFn: async () => {
+      const [detail, body] = await Promise.all([
+        mailApi.email.get(internalId),
+        mailApi.email.body(internalId, { format: 'html' })
+      ])
+      return { detail, html: body?.content ?? '' }
+    },
+    enabled: internalId >= 0 && isDraftEdit,
+    staleTime: Infinity,
+    retry: false
+  })
+
+  // 引用块展开时才拉原邮件 detail (reply/forward only)。
   const detailQ = useQuery({
     queryKey: ['email', internalId],
     queryFn: () => mailApi.email.get(internalId),
-    enabled: internalId >= 0 && quoteOpen,
+    enabled: internalId >= 0 && !isDraftEdit && quoteOpen,
     staleTime: 60_000
   })
   const quoteAttachments = detailQ.data?.attachments ?? []
 
-  // Apply the plan once when it lands. Setting editor content + recipients is
-  // a render-driven side effect (IPC → editor command), so it lives in an
-  // effect, guarded so user edits afterward aren't clobbered by a refetch.
+  // 一次性预填 (planApplied guard); editor.commands.setContent 是命令式副作用须留 effect。
   const [planApplied, setPlanApplied] = useState(false)
   useEffect(() => {
-    if (planApplied) return
+    if (planApplied || !editor) return
+    if (isDraftEdit) {
+      const d = draftQ.data
+      if (!d) return
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- 草稿数据落地时一次性回填表单 + editor.setContent 命令式副作用。React Compiler 迁移债。
+      setTo(parseAddrList(d.detail?.to_addr))
+      const ccArr = parseAddrList(d.detail?.cc_addr)
+      setCc(ccArr)
+      if (ccArr.length > 0) setCcVisible(true)
+      setSubject(d.detail?.subject ?? '')
+      setImportance(d.detail?.is_important ? 'high' : 'normal')
+      if (d.html) editor.commands.setContent(d.html)
+      setPlanApplied(true)
+      return
+    }
     const plan = planQ.data
-    if (!plan || !editor) return
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- plan 落地时一次性填表单（planApplied guard）+ editor.commands.setContent 命令式副作用。后者本须留 effect（IPC→editor 命令非 render 安全）。React Compiler 迁移债。
+    if (!plan) return
     setTo(plan.to ?? [])
     setCc(plan.cc ?? [])
     setBcc(plan.bcc ?? [])
@@ -137,44 +269,54 @@ function ComposePanelInner({ internalId, mode, onClose }: Props): React.ReactEle
     if ((plan.cc ?? []).length > 0) setCcVisible(true)
     if ((plan.bcc ?? []).length > 0) setBccVisible(true)
     setPlanAttachments(plan.attachments ?? 0)
-    // 编辑器只载 AI 建议; forward 留空让用户写转发语 (reply 建议是对发件人的回复, 转发场景
-    // 无意义)。原文引用块单独折叠展示, 不进 TipTap —— 修复大邮件加载慢 + 引用格式被重排。
+    // 编辑器只载 AI 建议; forward 留空让用户写转发语。原文引用块单独折叠展示, 不进 TipTap。
     const editorHtml = mode === 'forward' ? '' : plan.reply_html || ''
     if (editorHtml) editor.commands.setContent(editorHtml)
     setQuoteHtml(plan.quote_html || plan.forward_intro_html || '')
     setPlanApplied(true)
-  }, [planApplied, planQ.data, editor, mode])
+  }, [planApplied, isDraftEdit, draftQ.data, planQ.data, editor, mode])
 
-  // 发送/存草稿正文 = 编辑器内容 + 原文引用块 (拼回)。后端收到 --body-html-file 走
-  // explicit_body, 不再重建引用块 (避免重复)。引用块是原邮件 HTML, 单独 sanitize。
+  // 发送/存草稿正文 = 编辑器内容 + 原文引用块 (拼回)。
   const getSanitizedHtml = useCallback((): string => {
-    // editor 输出来自 TipTap (schema 受限), 默认 sanitize 足够; 引用块是不可信原邮件 HTML,
-    // 用与阅读区同一套硬化配置 (sanitizeEmailHtml) → 保证「折叠预览所见 = 实际发送」。
     const body = DOMPurify.sanitize(editor?.getHTML() ?? '')
     const quote = quoteHtml ? sanitizeEmailHtml(quoteHtml) : ''
     return body + quote
   }, [editor, quoteHtml])
 
+  // 签名插入 — 在光标处插入 settings.signature (HTML 原样, 纯文本换行转 <br>)。
+  const insertSignature = useCallback(() => {
+    if (!editor || !signature) return
+    const html = /[<>]/.test(signature) ? signature : signature.replace(/\n/g, '<br>')
+    editor.chain().focus().insertContent(html).run()
+    markDirty()
+  }, [editor, signature, markDirty])
+
   const queryClient = useQueryClient()
+  const invalidateLists = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: ['emails'] })
+    void queryClient.invalidateQueries({ queryKey: ['mailboxes'] })
+  }, [queryClient])
+
+  const composePayload = useCallback(
+    () => ({
+      internalId,
+      mode: wireMode,
+      to,
+      cc,
+      bcc,
+      subject,
+      bodyHtml: getSanitizedHtml(),
+      importance
+    }),
+    [internalId, wireMode, to, cc, bcc, subject, getSanitizedHtml, importance]
+  )
+
   const saveMut = useMutation({
-    mutationFn: () =>
-      mailApi.email.draft({
-        internalId,
-        mode,
-        to,
-        cc,
-        bcc,
-        subject,
-        bodyHtml: getSanitizedHtml()
-      }),
+    mutationFn: () => mailApi.email.draft(composePayload()),
     onSuccess: () => {
       toastSuccess(t('compose.toast.draftOk'))
       setDirty(false)
-      // 草稿即时落库 (compose_draft → email_metadata) 后立刻刷新列表/badge,
-      // 保存即出现在草稿箱 — 不等 SSE/轮询 (api-process 的 SSE 经 Redis,
-      // REDIS_URL 未配时发不出, 前端自刷最可靠)。
-      void queryClient.invalidateQueries({ queryKey: ['emails'] })
-      void queryClient.invalidateQueries({ queryKey: ['mailboxes'] })
+      invalidateLists()
       onClose()
     },
     onError: (err: unknown) => {
@@ -190,20 +332,20 @@ function ComposePanelInner({ internalId, mode, onClose }: Props): React.ReactEle
   })
 
   const sendMut = useMutation({
-    mutationFn: () =>
-      mailApi.email.send({
-        internalId,
-        mode,
-        to,
-        cc,
-        bcc,
-        subject,
-        bodyHtml: getSanitizedHtml()
-      }),
-    onSuccess: () => {
+    mutationFn: () => mailApi.email.send(composePayload()),
+    onSuccess: async () => {
       toastSuccess(t('compose.toast.sendOk'))
       setSendOpen(false)
       setDirty(false)
+      // draft-edit 发送成功后删掉原草稿 (替换语义: 发出的是 mode='new' 独立邮件, 原草稿仍在)。
+      if (isDraftEdit) {
+        try {
+          await mailApi.email.deleteDraft(internalId)
+        } catch {
+          /* 草稿删除失败不阻断: 邮件已发出, 残留草稿用户可手动删 */
+        }
+        invalidateLists()
+      }
       onClose()
     },
     onError: (err: unknown) => {
@@ -219,19 +361,36 @@ function ComposePanelInner({ internalId, mode, onClose }: Props): React.ReactEle
     }
   })
 
-  const busy = saveMut.isPending || sendMut.isPending
+  // 草稿编辑「放弃」= 删除草稿 (IMAP \\Deleted + 本地行清理)。
+  const deleteMut = useMutation({
+    mutationFn: () => mailApi.email.deleteDraft(internalId),
+    onSuccess: () => {
+      toastSuccess(t('compose.toast.draftDeleted'))
+      invalidateLists()
+      onClose()
+    },
+    onError: (err: unknown) => {
+      const e = asWriteError(err)
+      toastError(
+        t('compose.toast.draftDeleteFail'),
+        e.code ? `${e.code} · ${e.message}` : e.message
+      )
+    }
+  })
 
-  // forward requires at least one recipient (CLI E_INVALID_ARG otherwise);
-  // reply/reply-all derive theirs, so an empty To is allowed there.
-  const sendDisabled = busy || (mode === 'forward' && to.length === 0)
+  const busy = saveMut.isPending || sendMut.isPending || deleteMut.isPending
+
+  // forward / draft-edit(new) 必须有收件人; reply/reply-all 可空 (后端推导)。
+  const requiresRecipient = mode === 'forward' || isDraftEdit
+  const sendDisabled = busy || (requiresRecipient && to.length === 0)
 
   const handleSendClick = useCallback(() => {
-    if (mode === 'forward' && to.length === 0) {
+    if (requiresRecipient && to.length === 0) {
       toastError(t('compose.toast.toRequired'))
       return
     }
     setSendOpen(true)
-  }, [mode, to.length, t])
+  }, [requiresRecipient, to.length, t])
 
   const requestClose = useCallback(() => {
     if (dirty) {
@@ -241,50 +400,107 @@ function ComposePanelInner({ internalId, mode, onClose }: Props): React.ReactEle
     onClose()
   }, [dirty, onClose])
 
-  // ESC closes (or asks to discard) unless a dialog is already up.
+  // 顶部「放弃」: draft-edit → 删除草稿; reply/forward → 关闭 (dirty 时确认)。
+  const handleDiscard = useCallback(() => {
+    if (isDraftEdit) {
+      deleteMut.mutate()
+      return
+    }
+    requestClose()
+  }, [isDraftEdit, deleteMut, requestClose])
+
+  // ESC: draft-edit → 直接关闭 (回列表, 不删草稿); reply/forward → requestClose (dirty 确认)。
   useEffect(() => {
     const handler = (e: KeyboardEvent): void => {
       if (e.key !== 'Escape') return
       if (sendOpen || discardOpen) return
       e.preventDefault()
-      requestClose()
+      if (isDraftEdit) {
+        onClose()
+      } else {
+        requestClose()
+      }
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [sendOpen, discardOpen, requestClose])
+  }, [sendOpen, discardOpen, isDraftEdit, onClose, requestClose])
 
-  const subjectChars = useMemo(() => subject.length, [subject])
+  const headerHint = isDraftEdit
+    ? subject || t('compose.untitled')
+    : planQ.isLoading
+      ? t('compose.loadingPlan')
+      : planQ.isError
+        ? t('compose.planError')
+        : subject || t('compose.untitled')
 
   return (
     <main aria-label="compose-panel" className="flex-1 min-w-0 glass-3 flex flex-col min-h-0">
-      {/* mode 徽头 */}
-      <header className="h-12 shrink-0 border-b border-ink-border/60 flex items-center gap-2.5 px-4">
-        <span className="text-micro font-mono uppercase tracking-wider px-2 py-1 rounded text-coral bg-coral/[0.12] border border-coral/30">
-          {t(modeLabelKey(mode))}
-        </span>
-        <span className="text-meta text-ink-fg-2 truncate">
-          {planQ.isLoading
-            ? t('compose.loadingPlan')
-            : planQ.isError
-              ? t('compose.planError')
-              : subject || t('compose.untitled')}
-        </span>
-        <div className="ml-auto">
+      {/* 顶部动作工具栏 (Outlook 式) — 替代旧 mode 徽头 + 底部 send dock。 */}
+      <header className="h-12 shrink-0 border-b border-ink-border/60 flex items-center gap-1.5 px-3">
+        <button
+          type="button"
+          onClick={handleSendClick}
+          disabled={sendDisabled}
+          className="gbtn gbtn-primary"
+          style={{ height: '34px' }}
+        >
+          {sendMut.isPending ? (
+            <Loader2 size={13} strokeWidth={2} className="animate-spin" />
+          ) : (
+            <Send size={13} strokeWidth={2} />
+          )}
+          {t('compose.send')}
+        </button>
+        <button
+          type="button"
+          onClick={handleDiscard}
+          disabled={busy}
+          className="gbtn gbtn-bare"
+          style={{ height: '34px' }}
+          title={isDraftEdit ? t('compose.deleteDraft') : `${t('compose.discard')} · Esc`}
+        >
+          {deleteMut.isPending ? (
+            <Loader2 size={13} strokeWidth={2} className="animate-spin" />
+          ) : (
+            <Trash2 size={13} strokeWidth={2} />
+          )}
+          {isDraftEdit ? t('compose.deleteDraft') : t('compose.discard')}
+        </button>
+        {!isDraftEdit && (
           <button
             type="button"
-            onClick={requestClose}
-            aria-label={t('compose.close')}
-            title={`${t('compose.close')} · Esc`}
-            className="w-7 h-7 rounded grid place-items-center text-ink-fg-2 hover:text-ink-fg hover:bg-ink-3 transition-colors duration-fast"
+            onClick={() => saveMut.mutate()}
+            disabled={busy}
+            className="gbtn"
+            style={{ height: '34px' }}
           >
-            <X size={14} strokeWidth={2} />
+            {saveMut.isPending ? (
+              <Loader2 size={13} strokeWidth={2} className="animate-spin" />
+            ) : null}
+            {t('compose.saveDraft')}
           </button>
+        )}
+        <span className="w-px h-5 bg-ink-border-soft mx-1" aria-hidden />
+        <button
+          type="button"
+          onClick={insertSignature}
+          disabled={!signature || busy}
+          className="gbtn gbtn-bare"
+          style={{ height: '34px' }}
+          title={signature ? t('compose.signatureInsert') : t('compose.signatureEmpty')}
+        >
+          <PenLine size={13} strokeWidth={2} />
+          {t('compose.signature')}
+        </button>
+        <div className="ml-auto flex items-center gap-2 min-w-0">
+          <span className="text-meta text-ink-fg-2 truncate max-w-[220px]" title={headerHint}>
+            {headerHint}
+          </span>
         </div>
       </header>
 
-      {/* draftPlan 失败 banner — 失败时收件人/正文都预填不上, 必须显式告知错误码 +
-          给重试, 否则用户只看到空面板无从判断 (静默 isError 缺陷修复)。 */}
-      {planQ.isError && (
+      {/* draftPlan 失败 banner (reply/forward only) — 失败时收件人/正文都预填不上, 显式告知 + 重试。 */}
+      {!isDraftEdit && planQ.isError && (
         <div className="border-b border-ink-border/60 shrink-0 px-4 py-3 flex items-start gap-3 bg-fail/10">
           <div className="flex-1 text-aux text-fail">
             <div className="font-medium">{t('compose.planError')}</div>
@@ -305,9 +521,8 @@ function ComposePanelInner({ internalId, mode, onClose }: Props): React.ReactEle
         </div>
       )}
 
-      {/* recipients block */}
+      {/* 收件人表头 — From(只读) / To / Cc·Bcc / Subject(右侧 重要性) */}
       <div className="border-b border-ink-border/60 shrink-0">
-        {/* From — read-only owner account */}
         <div className="folder-field-row">
           <span className="field-label">{t('compose.from')}</span>
           <div className="flex items-center gap-2 min-w-0">
@@ -332,7 +547,6 @@ function ComposePanelInner({ internalId, mode, onClose }: Props): React.ReactEle
             }}
             selfEmail={selfEmail}
           />
-          {/* Cc / Bcc reveal buttons (mockup right-aligned toggles) */}
           {(!ccVisible || !bccVisible) && (
             <div className="absolute right-3 top-2 flex items-center gap-1 text-meta font-mono text-ink-fg-2">
               {!ccVisible && (
@@ -395,23 +609,24 @@ function ComposePanelInner({ internalId, mode, onClose }: Props): React.ReactEle
             }}
             aria-label={t('compose.subject')}
           />
-          <span className="text-meta font-mono text-ink-fg-2">
-            {t('compose.chars', { n: subjectChars })}
-          </span>
+          <ImportanceSelect
+            value={importance}
+            onChange={(v) => {
+              setImportance(v)
+              markDirty()
+            }}
+          />
         </div>
       </div>
 
-      {/* editor body */}
-      <ComposeEditor editor={editor} />
-
-      {/* format toolbar */}
+      {/* 格式工具栏 (主题与正文之间, Outlook 同位) */}
       {editor && <ComposeFormatToolbar editor={editor} />}
 
-      {/* 原文引用块 — 与编辑器分离, 阅读区同款安全 iframe 渲染 (格式零重排), 发送时拼回。
-          toggle 条复用格式工具栏同款 (border-t + bg-ink-2/40 + px-3 py-2); 展开内容套既有
-          inset 卡片 (border-ink-border-soft rounded-md bg-ink-2/40, 同 ThreadSidebar) +
-          内边距, 文本不再贴边。 */}
-      {quoteHtml && (
+      {/* 正文 */}
+      <ComposeEditor editor={editor} />
+
+      {/* 原文引用块 (reply/forward only) — 阅读区同款安全 iframe, 发送时拼回。 */}
+      {!isDraftEdit && quoteHtml && (
         <div className="border-t border-ink-border/60 bg-ink-2/40 shrink-0 min-h-0 flex flex-col">
           <button
             type="button"
@@ -436,51 +651,12 @@ function ComposePanelInner({ internalId, mode, onClose }: Props): React.ReactEle
         </div>
       )}
 
-      {/* send dock — 发送 (coral CTA) + 保存草稿 + 丢弃 */}
-      <div className="border-t border-ink-border/60 bg-ink-2/40 px-3 py-2.5 flex items-center gap-2 shrink-0">
-        <button
-          type="button"
-          onClick={handleSendClick}
-          disabled={sendDisabled}
-          className="gbtn gbtn-primary"
-          style={{ height: '34px' }}
-        >
-          {sendMut.isPending ? (
-            <Loader2 size={13} strokeWidth={2} className="animate-spin" />
-          ) : (
-            <Send size={13} strokeWidth={2} />
-          )}
-          {t('compose.send')}
-        </button>
-        <span className="w-px h-5 bg-ink-border-soft mx-1" aria-hidden />
-        <button
-          type="button"
-          onClick={() => saveMut.mutate()}
-          disabled={busy}
-          className="gbtn"
-          style={{ height: '34px' }}
-        >
-          {saveMut.isPending ? (
-            <Loader2 size={13} strokeWidth={2} className="animate-spin" />
-          ) : null}
-          {t('compose.saveDraft')}
-        </button>
-        <button
-          type="button"
-          onClick={requestClose}
-          disabled={busy}
-          className="gbtn gbtn-bare"
-          style={{ height: '34px' }}
-        >
-          <Trash2 size={13} strokeWidth={2} />
-          {t('compose.discard')}
-        </button>
-        {planAttachments > 0 && (
-          <span className="ml-auto text-meta font-mono text-ink-fg-2">
-            {t('compose.attachmentsNote', { n: planAttachments })}
-          </span>
-        )}
-      </div>
+      {/* 附件提示 (reply/forward 原邮件附件不重传) */}
+      {!isDraftEdit && planAttachments > 0 && (
+        <div className="border-t border-ink-border/60 bg-ink-2/40 px-3 py-2 shrink-0 text-meta font-mono text-ink-fg-2">
+          {t('compose.attachmentsNote', { n: planAttachments })}
+        </div>
+      )}
 
       <SendConfirmDialog
         open={sendOpen}
@@ -504,8 +680,8 @@ function ComposePanelInner({ internalId, mode, onClose }: Props): React.ReactEle
   )
 }
 
-/** Store-driven wrapper. Renders null when closed; remounts the inner panel
- *  on (internalId, mode) change so a mode switch resets editor + plan. */
+/** Store-driven wrapper (reply / reply-all / forward overlay). 草稿编辑态由 EmailDetail
+ *  直接渲染 ComposePanelInner (mode='draft-edit'), 不走此 store。 */
 export function ComposePanel(): React.ReactElement | null {
   const open = useComposeStore((s) => s.open)
   const internalId = useComposeStore((s) => s.internalId)

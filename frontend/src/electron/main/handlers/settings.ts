@@ -70,6 +70,8 @@ export interface PersistentSettings {
    *  every settings:get read (NOT user-writable). The Sidebar's
    *  `deriveAccount(userEmail)` derives the badge + monogram from this. */
   userEmail: string | null
+  /** 邮件签名 (HTML/纯文本) — compose 工具栏「签名」按钮在光标处插入。user-writable。 */
+  signature: string | null
 }
 
 const DEFAULTS: PersistentSettings = {
@@ -80,7 +82,8 @@ const DEFAULTS: PersistentSettings = {
   notionAgentName: null,
   customApiEndpoint: null,
   autoDownloadUpdates: true,
-  userEmail: null
+  userEmail: null,
+  signature: null
 }
 
 /** Sprint 11 V1.4 — read USER_EMAIL from the repo-root `.env`. The file is
@@ -161,6 +164,9 @@ function sanitize(raw: Partial<PersistentSettings>): Partial<PersistentSettings>
   // non-boolean truthy/falsy value.
   if (typeof raw.autoDownloadUpdates === 'boolean') {
     out.autoDownloadUpdates = raw.autoDownloadUpdates
+  }
+  if (typeof raw.signature === 'string' || raw.signature === null) {
+    out.signature = raw.signature
   }
   return out
 }

@@ -896,11 +896,11 @@ async def move_email(
 # ``--body-html-file`` —— A4 净简化); DraftPlanResult 保持 snake_case (reply_html /
 # forward_intro_html / reply_source), **勿 camelCase** (历史 bug)。
 
-VALID_COMPOSE_MODES = {"reply", "reply-all", "forward"}
+VALID_COMPOSE_MODES = {"reply", "reply-all", "forward", "new"}
 
 
 def _validate_compose_mode(mode: Any) -> str:
-    """校验 compose mode ∈ {reply, reply-all, forward}; 缺省 reply-all。"""
+    """校验 compose mode ∈ {reply, reply-all, forward, new}; 缺省 reply-all。"""
     if mode is None:
         return "reply-all"
     m = str(mode)
@@ -934,6 +934,7 @@ def _compose_request_from_body(internal_id: int, opts: dict[str, Any]):
         bcc=_join(opts.get("bcc")),
         subject=subject if isinstance(subject, str) else None,
         body_html=body_html if isinstance(body_html, str) and body_html else None,
+        importance=opts.get("importance") if isinstance(opts.get("importance"), str) else None,
     )
 
 

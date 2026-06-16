@@ -210,46 +210,56 @@ export function RecipientField({
   return (
     <div className="folder-field-row">
       <span className="field-label">{label}</span>
-      <div className="relative flex items-center gap-1.5 flex-wrap min-w-0">
-        {values.map((addr, i) => (
-          <span key={`${addr}-${i}`} className="recipient-chip">
-            <span className="rc-av">{chipInitials(addr)}</span>
-            <span className="break-all">{addr}</span>
-            <button
-              type="button"
-              className="rc-close"
-              aria-label={`remove ${addr}`}
-              onClick={() => removeAt(i)}
-            >
-              <X size={11} strokeWidth={2.2} />
-            </button>
-          </span>
-        ))}
-        <input
-          ref={inputRef}
-          value={input}
-          placeholder={values.length === 0 ? placeholder : ''}
-          onChange={(e) => {
-            setInput(e.target.value)
-            setDismissed(false)
+      {/* 外层 relative 仅作 dropdown 锚点 (无 overflow, 不裁剪补全列表)。 */}
+      <div className="relative min-w-0">
+        {/* chip 区: 超约 3 行后内部滚动 (旧 flex-wrap 无上限 → 多收件人把整行无限撑高,
+            挤压正文空间)。点击空白聚焦末尾输入, 方便直接续打新地址。 */}
+        <div
+          className="flex items-center gap-1.5 flex-wrap max-h-[74px] overflow-y-auto scrollbar-thin"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) inputRef.current?.focus()
           }}
-          onKeyDown={handleKey}
-          onFocus={() => setFocused(true)}
-          onBlur={() => {
-            setFocused(false)
-            commit()
-          }}
-          aria-label={label}
-          role="combobox"
-          aria-expanded={dropdownOpen}
-          aria-controls={dropdownOpen ? listboxId : undefined}
-          aria-activedescendant={
-            dropdownOpen && suggestions[highlightedIndex]
-              ? `${listboxId}-${suggestions[highlightedIndex].email}`
-              : undefined
-          }
-          autoComplete="off"
-        />
+        >
+          {values.map((addr, i) => (
+            <span key={`${addr}-${i}`} className="recipient-chip">
+              <span className="rc-av">{chipInitials(addr)}</span>
+              <span className="break-all">{addr}</span>
+              <button
+                type="button"
+                className="rc-close"
+                aria-label={`remove ${addr}`}
+                onClick={() => removeAt(i)}
+              >
+                <X size={11} strokeWidth={2.2} />
+              </button>
+            </span>
+          ))}
+          <input
+            ref={inputRef}
+            value={input}
+            placeholder={values.length === 0 ? placeholder : ''}
+            onChange={(e) => {
+              setInput(e.target.value)
+              setDismissed(false)
+            }}
+            onKeyDown={handleKey}
+            onFocus={() => setFocused(true)}
+            onBlur={() => {
+              setFocused(false)
+              commit()
+            }}
+            aria-label={label}
+            role="combobox"
+            aria-expanded={dropdownOpen}
+            aria-controls={dropdownOpen ? listboxId : undefined}
+            aria-activedescendant={
+              dropdownOpen && suggestions[highlightedIndex]
+                ? `${listboxId}-${suggestions[highlightedIndex].email}`
+                : undefined
+            }
+            autoComplete="off"
+          />
+        </div>
         {dropdownOpen && (
           <ul
             id={listboxId}
