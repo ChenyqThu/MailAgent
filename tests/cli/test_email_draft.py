@@ -427,6 +427,19 @@ def test_draft_real_create_invokes_append_draft(cli_runner, seeded_db, monkeypat
     assert draft.reply_html and "Sounds good" in draft.reply_html
     assert "写道" in draft.reply_html  # reply_html 也含引用
 
+    # 正文立即落 email_body SSoT (草稿秒开即可读, 不等 watcher 按 imap_uid 回捞 body) —
+    # _mirror_draft_locally 用 draft.reply_html 直写 email_body, fetched_source='compose'。
+    import sqlite3
+
+    conn = sqlite3.connect(str(seeded_db))
+    row = conn.execute(
+        "SELECT body_html FROM email_body WHERE fetched_source='compose' "
+        "ORDER BY internal_id DESC LIMIT 1"
+    ).fetchone()
+    conn.close()
+    assert row is not None, "compose 镜像草稿正文应立即写入 email_body"
+    assert "Sounds good" in row[0]
+
 
 def test_draft_reply_mode_only_sender(cli_runner, seeded_db, monkeypatch):
     _bypass_auth(monkeypatch)

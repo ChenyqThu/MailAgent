@@ -1352,6 +1352,34 @@ class MailWriteService:
                 f"[compose] draft mirrored locally internal_id={internal_id} "
                 f"uid={result.appended_uid}"
             )
+            # 正文立即落 email_body SSoT —— 正文是本地撰写的 (draft.reply_html, 前端
+            # getSanitizedHtml 已含引用), 直接写本地, 草稿保存后秒开即可读。否则要等
+            # watcher 下个 poll 按 imap_uid 从 davmail Drafts 回捞 body (davmail 对
+            # Drafts folder 有 STATUS 缓存, 实测迟到 1-2 分钟 → 用户秒开看到空正文)。
+            # 独立 try: 正文写失败不影响 metadata 镜像; watcher refetch 覆盖为规范版。
+            try:
+                html = draft.reply_html or ""
+                if html:
+                    from src.converter.html_to_markdown import html_to_markdown
+                    from src.repository.email_repository import BodyPayload
+
+                    try:
+                        md = html_to_markdown(html) or (draft.reply_text or "")
+                    except Exception:  # noqa: BLE001 — markdown 仅供 FTS, 失败退化纯文本
+                        md = draft.reply_text or ""
+                    self._ctx.email_repo.commit_email_with_body(
+                        internal_id,
+                        BodyPayload(
+                            html=html,
+                            markdown=md,
+                            body_format="html",
+                            fetched_source="compose",
+                        ),
+                        [],
+                        message_id=result.message_id,
+                    )
+            except Exception as e:  # noqa: BLE001 — 正文镜像失败由 watcher refetch 兜底
+                logger.warning(f"[compose] draft body mirror failed (watcher 兜底): {e}")
         except Exception as e:  # noqa: BLE001 — 镜像失败不影响草稿创建成功语义
             logger.warning(f"[compose] draft local mirror failed (reconcile 兜底): {e}")
 
