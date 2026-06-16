@@ -1196,8 +1196,9 @@ class DavMailBackend(IMailBackend):
             if sent_uidnext > 0:
                 # sent_uidnext = 下一个将分配的 UID; marker = 已导入最大 UID。
                 # uidnext > marker+1 说明 Sent 有未导入的新发件。首次 marker=0 →
-                # 必触发 (走日期下限回填)。
-                sent_marker = self._max_sent_imap_uid()
+                # 必触发 (走日期下限回填)。marker 同样按 uidnext 钳制, 否则幽灵高 UID
+                # 会让估算恒为 0 → 纯发件变化 (无 INBOX 变化) 时漏触发。
+                sent_marker = self._max_sent_imap_uid(below=sent_uidnext)
                 sent_new = max(0, sent_uidnext - (sent_marker + 1))
         # --- 自定义文件夹 (SYNC_FOLDERS): STATUS(UIDNEXT UIDVALIDITY) 轻量探测变化 ---
         # 仅用于触发 has_new; 真正取数 + marker 推进在 get_new_emails 内。每文件夹独立 try,
@@ -1667,19 +1668,33 @@ class DavMailBackend(IMailBackend):
         except Exception as e:
             logger.warning(f"[davmail-backend] _set_drafts_uidnext({uidnext}) failed: {e}")
 
-    def _max_sent_imap_uid(self) -> int:
+    def _max_sent_imap_uid(self, below: Optional[int] = None) -> int:
         """SQLite 里 mailbox='发件箱' 已导入的最大 IMAP UID (任意 backend_origin)。
 
         首次同步 (存量全是 AppleScript 行, imap_uid 为 NULL) 返回 0 → 调用方退化日期下限。
         merge protection 把存量行补上 imap_uid 后, 此 marker 即转为真实增量游标。
+
+        ``below`` 给定 (>0) 时只统计 ``imap_uid < below`` 的行。用途: 把当前 Sent
+        UIDNEXT 之上的「幽灵高 UID」排除在游标外 —— davmail 换号/缓存重置后, 旧空间或
+        跨文件夹污染遗留的死号 (如自发邮件被错盖 INBOX-range UID) 会把 MAX 顶到一个当前
+        文件夹根本不存在的值, 导致 ``UID marker+1:*`` 永远落空。davmail UIDVALIDITY 恒为 1
+        探测不到 UID 空间变化, 故用 ``< UIDNEXT`` 做防呆钳制 (uidnext 是下一个待分配 UID,
+        合法当前邮件 uid 必 < uidnext, 钳制永不误排)。
         """
         try:
             conn = sqlite3.connect(str(self.sync_store.db_path), timeout=10.0)
             try:
-                row = conn.execute(
-                    "SELECT MAX(imap_uid) FROM email_metadata "
-                    "WHERE mailbox = '发件箱' AND imap_uid IS NOT NULL"
-                ).fetchone()
+                if below is not None and below > 0:
+                    row = conn.execute(
+                        "SELECT MAX(imap_uid) FROM email_metadata "
+                        "WHERE mailbox = '发件箱' AND imap_uid IS NOT NULL AND imap_uid < ?",
+                        (int(below),),
+                    ).fetchone()
+                else:
+                    row = conn.execute(
+                        "SELECT MAX(imap_uid) FROM email_metadata "
+                        "WHERE mailbox = '发件箱' AND imap_uid IS NOT NULL"
+                    ).fetchone()
                 return int(row[0]) if row and row[0] is not None else 0
             finally:
                 conn.close()
@@ -1696,8 +1711,19 @@ class DavMailBackend(IMailBackend):
             return "01-Jan-2026"
 
     def _sent_search_criteria(self) -> tuple[str, str]:
-        """发件箱增量 search criteria: 有 marker 走 UID 增量, 否则日期下限回填。"""
-        marker = self._max_sent_imap_uid()
+        """发件箱增量 search criteria: 有 marker 走 UID 增量, 否则日期下限回填。
+
+        marker 按当前 Sent UIDNEXT 钳制 (排除换号/跨文件夹污染遗留的幽灵高 UID);
+        钳制后归零 (当前 UID 空间内尚无已导入行, 如首次或换号后) → 日期下限重拉,
+        message_id dedup 防重。
+        """
+        uidnext = self._folder_uidnext(self.sent_folder) if self.sent_folder else 0
+        if uidnext <= 0:
+            # UIDNEXT 探测失败 (STATUS 失败 / 会话降级) → 不信任 DB 裸 marker: 它可能是换号
+            # 遗留的幽灵高 UID, 一旦走 UID marker+1:* 又会恒空 (复现冻结)。退化日期下限重拉
+            # (message_id dedup 防重); 下个周期 uidnext 恢复后即转回钳制增量, 自愈。
+            return ("SENTSINCE", self._imap_date_floor())
+        marker = self._max_sent_imap_uid(below=uidnext)
         if marker > 0:
             return ("UID", f"{marker + 1}:*")
         return ("SENTSINCE", self._imap_date_floor())

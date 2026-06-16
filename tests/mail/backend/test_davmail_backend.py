@@ -492,6 +492,8 @@ def test_sent_search_criteria_date_floor_then_uid(monkeypatch):
     """首次 (无 davmail 发件箱行) 走 SENTSINCE 日期下限; 有 marker 后走 UID 增量."""
     backend = _make_backend()
     backend.cfg.sync_start_date = "2026-03-15"
+    backend.sent_folder = "Sent"
+    backend._folder_uidnext = MagicMock(return_value=99999)  # uidnext 正常 → 走钳制增量
     # 首次: marker=0 → SENTSINCE 日期下限
     backend._max_sent_imap_uid = MagicMock(return_value=0)
     key, arg = backend._sent_search_criteria()
@@ -502,6 +504,70 @@ def test_sent_search_criteria_date_floor_then_uid(monkeypatch):
     key, arg = backend._sent_search_criteria()
     assert key == "UID"
     assert arg == "4201:*"
+
+
+def test_sent_search_criteria_falls_back_to_date_floor_when_uidnext_probe_fails():
+    """review LOW#1: UIDNEXT 探测失败 (返回 0) 时不信任 DB 裸 marker (可能是幽灵高 UID),
+    退化日期下限重拉, 而非走 UID marker+1:* 复现冻结。"""
+    backend = _make_backend()
+    backend.cfg.sync_start_date = "2026-03-15"
+    backend.sent_folder = "Sent"
+    backend._folder_uidnext = MagicMock(return_value=0)  # STATUS 失败 / 会话降级
+    # 即便 DB 裸 marker 是幽灵高 UID (151421), uidnext<=0 也不走 UID 增量。
+    backend._max_sent_imap_uid = MagicMock(return_value=151421)
+    key, arg = backend._sent_search_criteria()
+    assert key == "SENTSINCE"
+    assert arg == "15-Mar-2026"
+
+
+def test_sent_search_criteria_clamps_marker_to_uidnext():
+    """回归 (切号后发件箱冻结根因): DB 残留超出当前 Sent UIDNEXT 的幽灵高 UID 时,
+    游标按 uidnext 钳制 → UID 增量从合法最大值续接, 而非从死号 (永远落空) 起算。
+
+    真机现象: 切号后单封自发邮件被错盖 INBOX-range UID (151421), 把 MAX(imap_uid)
+    顶死 → UID 151422:* 恒空 → 发件箱 06-09 冻结一周。
+    """
+    backend = _make_backend()
+    backend.sent_folder = "Sent"
+    backend._folder_uidnext = MagicMock(return_value=19180)
+    captured = {}
+
+    def fake_max(below=None):
+        captured["below"] = below
+        # 模拟 SQL 钳制效果: below 给定 → 排除幽灵 151421, 返回合法最大 19107。
+        return 19107 if below else 151421
+
+    backend._max_sent_imap_uid = fake_max
+    key, arg = backend._sent_search_criteria()
+    assert captured["below"] == 19180          # 传入当前 uidnext 做钳制
+    assert (key, arg) == ("UID", "19108:*")    # 从合法 19107 续接, 而非死号 151422
+
+
+def test_max_sent_imap_uid_below_excludes_ghost_high_uid(tmp_path):
+    """_max_sent_imap_uid(below=uidnext) 实库验证: 排除超出当前 UID 空间的幽灵高 UID,
+    只统计当前 mailbox 行。不钳制时被幽灵顶死 (复现 bug), 钳制后取合法最大值。
+    """
+    import sqlite3
+
+    db = tmp_path / "sent_marker.db"
+    conn = sqlite3.connect(str(db))
+    conn.execute("CREATE TABLE email_metadata (imap_uid INTEGER, mailbox TEXT)")
+    conn.executemany(
+        "INSERT INTO email_metadata (imap_uid, mailbox) VALUES (?, ?)",
+        [
+            (19100, "发件箱"),
+            (19107, "发件箱"),
+            (151421, "发件箱"),   # 幽灵高 UID (切号遗留, 当前 Sent 空间不存在)
+            (50000, "收件箱"),     # 别的 mailbox 不计入
+            (None, "发件箱"),      # AppleScript 存量行 imap_uid NULL 不计入
+        ],
+    )
+    conn.commit()
+    conn.close()
+    backend = _make_backend()
+    backend.sync_store.db_path = str(db)
+    assert backend._max_sent_imap_uid() == 151421            # 不钳制 = 被幽灵顶死 (bug)
+    assert backend._max_sent_imap_uid(below=19180) == 19107  # 钳制 = 合法最大值 (fix)
 
 
 def test_get_new_emails_scans_sent_folder_when_enabled(monkeypatch):
