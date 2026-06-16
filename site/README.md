@@ -1,6 +1,6 @@
 # MailAgent 官网（site/）
 
-MailAgent 的**公开官网** —— 营销 Landing + 双语「101」使用指南。独立的 Astro 6 + Starlight 项目，与 `frontend/`（electron app）、Python 后端并列，同在 `main`。**与 `mail.chenge.ink/app`（CF Access 鉴权后的产品 app）是两套独立部署**：本站要部署成**不在 Access 后**的公开 Cloudflare Pages 项目。
+MailAgent 的**公开官网** —— 营销 Landing + 双语「101」使用指南。独立的 Astro 6 + Starlight 项目，与 `frontend/`（electron app）、Python 后端并列，同在 `main`。**与 `mail.chenge.ink/app`（CF Access 鉴权后的产品 app）是两套独立部署**：本站**已上线**为**不在 Access 后**的公开 Cloudflare Pages 项目 `mailagent-site` —— **[mailagent.chenge.ink](https://mailagent.chenge.ink)**。
 
 ## 技术栈
 
@@ -47,7 +47,18 @@ src/
 
 ## 部署（Cloudflare Pages）
 
-静态输出（`output: 'static'`）。CF Pages 项目：构建命令 `cd site && pnpm install && pnpm build`，输出目录 `site/dist`；或 `wrangler pages deploy site/dist`。域名待定（占位 `mailagent.pages.dev`，见 PRD 开放问题 Q1）。
+✅ **已上线**：**[mailagent.chenge.ink](https://mailagent.chenge.ink)**（亦可 `mailagent-site.pages.dev`）。
+
+静态输出（`output: 'static'`）。CF Pages 项目 **`mailagent-site`**（生产分支 `main`，公开、不在 CF Access 后）。发布 = 重建 dist 后直传：
+
+```bash
+cd site && pnpm build
+npx wrangler pages deploy site/dist --project-name=mailagent-site
+```
+
+- 🔴 `wrangler pages deploy` 在无 TTY 的 shell 里**拒用 OAuth**（报 non-interactive）—— 需交互终端跑，或设 `CLOUDFLARE_API_TOKEN`。
+- CF 部署/域名 token 存 `~/.config/cloudflare/mailagent-site.env`（**repo 外，勿入库**）。
+- 自定义域 = proxied CNAME `mailagent.chenge.ink → mailagent-site.pages.dev`；DNS/域名操作走 custom API token（`Account·Pages:Edit` + `Zone·DNS:Edit` + `Zone:Read`，CF 的 OAuth token 不被 REST API 接受）。
 
 ## 设计与规划
 

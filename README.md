@@ -4,7 +4,8 @@
 
 > 📐 **架构总览** → [`ARCHITECTURE.md`](./ARCHITECTURE.md) ｜ 🧭 **从旧版本升级** → [`MIGRATION.md`](./MIGRATION.md) ｜ 🤖 **Agent 项目指南** → [`CLAUDE.md`](./CLAUDE.md)
 
-> 🌐 **公开官网（营销 Landing + 双语 101 使用指南）** → [`site/`](./site/)（Astro + Starlight，独立部署到 Cloudflare Pages；`cd site && pnpm install && pnpm dev`）。营销页用真实 React mock 替代截图；101 文档 markdown 驱动、中英双语。设计/规划见 [`.trellis/tasks/06-15-landing-page-101-redesign/`](./.trellis/tasks/06-15-landing-page-101-redesign/)。
+> 🌐 **公开官网（已上线）** → **[mailagent.chenge.ink](https://mailagent.chenge.ink)** ｜ 📖 用户 101：[使用指南](https://mailagent.chenge.ink/101/overview/) ｜ 🤖 Agent 101：[Agent 指南](https://mailagent.chenge.ink/agent/overview/)。
+> 源码在 [`site/`](./site/)（Astro + Starlight，部署到 Cloudflare Pages 项目 `mailagent-site`；本地开发 `cd site && pnpm install && pnpm dev`）。营销页用真实 React mock 替代截图；101 文档 markdown 驱动、中英双语。
 
 > **正在用两周前的版本？** 这两周做了几个大改动（DavMail 双后端、Electron 前端、KOS 知识库对接、数据库 v3→v17）。
 > 直接把 [`MIGRATION.md`](./MIGRATION.md) 交给你的 Claude Code agent，它会带你逐步迁移并标出需要你拍板的决策点。

@@ -7,9 +7,12 @@ import sitemap from '@astrojs/sitemap'
 
 // https://astro.build/config
 export default defineConfig({
-  // Production domain — bound 2026-06-15 via a dedicated cloudflared tunnel
-  // (mailagent-site → local static serve of dist). Drives sitemap/canonical/
-  // hreflang/OG absolute URLs. If later moved to CF Pages, keep this value.
+  // Production domain. The site is deployed to Cloudflare Pages (project
+  // `mailagent-site`, production branch `main`); mailagent.chenge.ink is a
+  // proxied CNAME → mailagent-site.pages.dev (custom domain on the Pages
+  // project, NOT behind CF Access). Drives sitemap/canonical/hreflang/OG
+  // absolute URLs — keep this value. Publish with:
+  //   npx wrangler pages deploy site/dist --project-name=mailagent-site
   site: 'https://mailagent.chenge.ink',
   // SSG: per-locale static HTML, served by any static host (Cloudflare Pages).
   output: 'static',
