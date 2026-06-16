@@ -265,6 +265,18 @@ def test_compose_new_empty_subject_defaults():
     assert draft.subject == "(no subject)"
 
 
+def test_compose_new_empty_body_no_placeholder():
+    # 写新邮件空正文: reply_text 不塞 "(rich text body)" 占位 (空就是空, plain part
+    # 真空由 sender.py "(empty body)" 兜底)。codex re-review MEDIUM 修复回归。
+    draft = _compose_reply_draft(
+        _record(), internal_id=7, mode="new",
+        reply_text="", reply_html=None, extra_to=None, extra_cc=None,
+        to_override="a@y.com", subject_override="S",
+    )
+    assert draft.reply_text == ""
+    assert "rich text body" not in (draft.reply_text or "")
+
+
 def test_compose_importance_passthrough_reply():
     # reply 模式也透传 importance
     draft = _compose_reply_draft(
@@ -605,3 +617,84 @@ def test_draft_reply_body_html_no_duplicate_quote(cli_runner, seeded_db, monkeyp
         assert (draft.reply_html or "").count("写道") == 1
     finally:
         os.unlink(path)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# service 层: 写新邮件 (mode='new' + 无源邮件) — _prepare_draft record 松绑
+#
+# 写新邮件没有源邮件: 前端传哨兵 internal_id=-1 (无对应 email_metadata 行) +
+# mode='new'。_prepare_draft 对 mode='new' 放宽 record 强制 (sync_store.get(-1)=
+# None → {}), 走 explicit_body 分支零线程派生。CLI `email draft` 不暴露 'new'
+# (它是前端 wire mode, 走 serve-api in-process), 故直测 MailWriteService。
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _service_ctx(db_path):
+    from src.cli.config import load_cli_config
+    from src.services.context import ServiceContext
+
+    cfg = load_cli_config(flag_overrides={"sync_store_db_path": str(db_path)})
+    return ServiceContext(cfg)
+
+
+def _write_actor():
+    from src.services.guards import Actor
+
+    return Actor(kind="cli", authenticated=True, label="cli")
+
+
+def test_compose_plan_new_mode_missing_record_ok(seeded_db):
+    # compose_plan (dry-run 预填): internal_id=-1 无对应行 + mode='new' 不抛 NotFound,
+    # 收件人/主题来自显式字段, 零线程派生 (in_reply_to None)。
+    from src.services.mail_write import ComposeRequest, MailWriteService
+
+    plan = MailWriteService(_service_ctx(seeded_db)).compose_plan(
+        ComposeRequest(
+            internal_id=-1,
+            mode="new",
+            to="x@y.com, z@y.com",
+            subject="My new mail",
+            body_html="<p>hello</p>",
+        )
+    )
+    assert plan["mode"] == "new"
+    assert plan["to"] == ["x@y.com", "z@y.com"]
+    assert plan["subject"] == "My new mail"
+    assert plan["in_reply_to"] is None
+
+
+def test_compose_draft_new_mode_missing_record_appends(seeded_db, monkeypatch):
+    # compose_draft 真创建: mode='new' + 哨兵 internal_id=-1 不抛 NotFound,
+    # backend.append_draft 被调, DraftRequest 零线程派生。
+    from src.services.mail_write import ComposeRequest, MailWriteService
+
+    fake_backend = _FakeBackend()
+    _patch_backend(monkeypatch, fake_backend)
+    result = MailWriteService(_service_ctx(seeded_db)).compose_draft(
+        ComposeRequest(
+            internal_id=-1,
+            mode="new",
+            to="x@y.com",
+            subject="Hi",
+            body_html="<p>body</p>",
+        ),
+        actor=_write_actor(),
+    )
+    assert result.mode == "new"
+    assert len(fake_backend.appended) == 1
+    draft = fake_backend.appended[0]
+    assert draft.mode == "new"
+    assert draft.to == ["x@y.com"]
+    assert draft.internal_id_for_threading is None
+    assert draft.in_reply_to is None
+
+
+def test_compose_plan_non_new_missing_record_still_raises(seeded_db):
+    # 对照: 松绑只针对 mode='new' — 非 new 模式 + 缺失 record 仍抛 NotFound。
+    from src.services.errors import ServiceNotFoundError
+    from src.services.mail_write import ComposeRequest, MailWriteService
+
+    with pytest.raises(ServiceNotFoundError):
+        MailWriteService(_service_ctx(seeded_db)).compose_plan(
+            ComposeRequest(internal_id=-1, mode="reply", to="x@y.com")
+        )

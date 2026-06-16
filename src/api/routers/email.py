@@ -939,9 +939,19 @@ def _compose_request_from_body(internal_id: int, opts: dict[str, Any]):
 
 
 def _require_compose_internal_id(opts: dict[str, Any]) -> int:
-    """从 body 取 ``internalId`` (non-negative int), 校验早于 service 构造。"""
+    """从 body 取 ``internalId``, 校验早于 service 构造。
+
+    mode='new' (写新邮件): 无源邮件, 前端传哨兵 internalId=-1 → 放宽非负校验
+    (service ``_prepare_draft`` 对 mode='new' 不依赖源 record)。其余模式必须非负
+    (源邮件 ROWID, 用于线程派生 / 引用块 / 附件)。
+    """
     internal_id = opts.get("internalId")
-    if not isinstance(internal_id, int) or isinstance(internal_id, bool) or internal_id < 0:
+    is_new = opts.get("mode") == "new"
+    if (
+        not isinstance(internal_id, int)
+        or isinstance(internal_id, bool)
+        or (internal_id < 0 and not is_new)
+    ):
         raise APIError(
             "E_INVALID_ARG",
             f"internalId (non-negative int) required, got {internal_id!r}",

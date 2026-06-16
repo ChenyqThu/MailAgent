@@ -280,7 +280,10 @@ def _compose_reply_draft(
             internal_id_for_threading=None,
             to=to_list, cc=cc_list, bcc=bcc_list,
             subject=subject or "(no subject)",
-            reply_text=reply_text or "(rich text body)",
+            # 写新邮件正文来自用户显式输入 — 空就是空, 不塞 "(rich text body)" 占位
+            # (那是"有富文本但 plain 提取失败"的提示, 真空正文用它会误导 plain-text
+            #  客户端)。sender.py 对真空 plain part 另有 "(empty body)" 兜底。
+            reply_text=reply_text or "",
             reply_html=reply_html,
             importance=importance,
         )
@@ -1159,8 +1162,12 @@ class MailWriteService:
         """
         internal_id = request.internal_id
         mode = request.mode
-        record = self._ctx.sync_store.get(internal_id)
-        if not record:
+        record = self._ctx.sync_store.get(internal_id) or {}
+        # mode='new' (写全新邮件 / 草稿编辑发送) 不依赖源邮件 record — 显式收件人 /
+        # 正文、零线程派生 (走下方 explicit_body 分支)。写全新邮件传哨兵 internal_id
+        # (=-1, 无对应行), record={} 即可。其余模式 (reply/reply-all/forward) 必须有
+        # 源邮件 record 才能推导收件人 / 引用块 / 附件。
+        if not record and mode != "new":
             raise ServiceNotFoundError(
                 f"Email metadata not found for internal_id={internal_id}"
             )
@@ -1180,8 +1187,10 @@ class MailWriteService:
         else:
             reply_md = self._fetch_reply_suggestion_md(internal_id)
             # allow_missing_reply: dry-run 预填放宽 — 没建议也要能预填收件人 (正文留空)。
-            # 真实 draft/send 仍要求有正文来源, 避免误发空回复。
-            if not reply_md and mode != "forward" and not allow_missing_reply:
+            # 真实 draft/send 仍要求有正文来源, 避免误发空回复。mode='new' (写新邮件)
+            # 例外: 无源邮件谈不上 reply_suggestion, 允许空正文 (用户可只写主题/收件人;
+            # 下方 _compose_reply_draft new 分支给 reply_text 兜底)。
+            if not reply_md and mode not in ("forward", "new") and not allow_missing_reply:
                 raise ServiceNotFoundError(
                     f"Email {internal_id} 无 reply_suggestion (SQLite labels_json 空)",
                     hint="先 mailagent llm run <id> 生成回复建议, 或用 --body-file 传正文",

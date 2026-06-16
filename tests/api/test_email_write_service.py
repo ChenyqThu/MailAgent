@@ -545,6 +545,30 @@ def test_compose_draft_camel_keys_not_leaked(client, svc_spy):
     assert req.body_html == "<p>x</p>"
 
 
+def test_compose_draft_new_mode_allows_sentinel_internal_id(client, svc_spy):
+    # 写新邮件: 哨兵 internalId=-1 + mode='new' 不被 _require_compose_internal_id 拒
+    # (adapter 层放宽), 透传到 service。回归 codex review HIGH (adapter 校验先于 service)。
+    r = client.post(
+        "/api/email/draft",
+        json={
+            "internalId": -1, "mode": "new",
+            "to": ["x@example.com"], "subject": "New mail", "bodyHtml": "<p>hi</p>",
+        },
+    )
+    assert r.status_code == 200, r.text
+    method, req, _ = _last(svc_spy)
+    assert method == "compose_draft"
+    assert req.internal_id == -1
+    assert req.mode == "new"
+    assert req.to == "x@example.com"
+
+
+def test_compose_draft_non_new_rejects_sentinel_internal_id(client):
+    # 对照: 放宽只针对 mode='new' — 非 new 模式 + 负 internalId 仍被 adapter 拒, 不到 service。
+    r = client.post("/api/email/draft", json={"internalId": -1, "mode": "reply"})
+    assert r.json()["error"]["code"] == "E_INVALID_ARG"
+
+
 def test_compose_draft_missing_internal_id_400(client, svc_spy):
     r = client.post("/api/email/draft", json={"mode": "reply"})
     assert r.status_code == 400
