@@ -49,14 +49,18 @@ export function ComposeNewModal(): React.ReactElement | null {
         onClick={close}
         className="absolute inset-0 bg-black/40"
       />
-      {/* 卡片 — 固定高度让正文 editor (flex-1) 有确定空间撑满 + 滚动。 */}
+      {/* 卡片 — 真浮层材质走 .glass-pop (20px backdrop-blur + 86% 不透明基底 +
+          border + pop-shadow; data-surface='solid' 档自动实底不透明)。glass-3 等
+          面板类【无 backdrop-filter】(靠主窗口 body::before 全局玻璃层), 浮在暗遮罩
+          上会直接透出遮罩、文本发灰 —— 浮层必须用 glass-pop。固定高度让正文 editor
+          (flex-1) 有确定空间撑满 + 滚动。 */}
       <div
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-label={t('nav.composeNew')}
         onKeyDown={(e) => handleTab(e)}
-        className="relative w-[720px] max-w-[92vw] h-[min(760px,86vh)] flex flex-col rounded-2xl border border-ink-border/60 glass-3 shadow-[0_8px_24px_rgba(0,0,0,0.35)] overflow-hidden"
+        className="relative w-[720px] max-w-[92vw] h-[min(760px,86vh)] flex flex-col rounded-2xl glass-pop overflow-hidden"
       >
         <ComposePanelInner
           key="new"
