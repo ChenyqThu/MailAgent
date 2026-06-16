@@ -6,7 +6,7 @@
  *
  * Kept small and dependency-light — only nanostores + the shared store module.
  */
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useStore } from '@nanostores/react'
 import { $theme, $accent, $lang, ACCENTS, wireThemeToDom, type Accent } from '../../../lib/theme'
 import { localizePath, type Locale } from '../../../lib/i18n'
@@ -25,6 +25,24 @@ interface Props {
 export default function ThemeAccentLang({ locale }: Props) {
   const theme = useStore($theme)
   const accent = useStore($accent)
+
+  // The theme/accent stores read localStorage on the CLIENT, but Astro renders
+  // this island to static HTML with the stores' DEFAULTS ('dark' / 'coral').
+  // Deriving the active pill straight from the store would therefore mismatch
+  // on hydration (server marks Dark/coral active, client knows the persisted
+  // choice) — React logs a hydration error and leaves the wrong pill lit until a
+  // later re-render. Gate the store-derived active state behind `hydrated`: the
+  // first client render matches the server defaults (no mismatch), then this
+  // effect flips it to the real persisted value. Page colors are already correct
+  // pre-paint via the no-flash snippet, so only the small pill reconciles.
+  // (The language switch is mismatch-free already — it uses the build-time
+  // `locale` prop, not a store.)
+  const [hydrated, setHydrated] = useState(false)
+  useEffect(() => {
+    setHydrated(true)
+  }, [])
+  const activeTheme = hydrated ? theme : 'dark'
+  const activeAccent = hydrated ? accent : 'coral'
 
   // Reflect store → DOM on mount (the no-flash snippet already set initial attrs).
   useEffect(() => wireThemeToDom(), [])
@@ -55,7 +73,7 @@ export default function ThemeAccentLang({ locale }: Props) {
             type="button"
             className={`adot adot--${a}`}
             role="radio"
-            aria-checked={accent === a}
+            aria-checked={activeAccent === a}
             aria-label={a}
             title={a[0].toUpperCase() + a.slice(1)}
             onClick={() => $accent.set(a as Accent)}
@@ -67,8 +85,8 @@ export default function ThemeAccentLang({ locale }: Props) {
       <div className="switch switch--theme" role="group" aria-label="Theme">
         <button
           type="button"
-          className={theme === 'dark' ? 'on' : ''}
-          aria-pressed={theme === 'dark'}
+          className={activeTheme === 'dark' ? 'on' : ''}
+          aria-pressed={activeTheme === 'dark'}
           title="Dark"
           onClick={() => $theme.set('dark')}
         >
@@ -78,8 +96,8 @@ export default function ThemeAccentLang({ locale }: Props) {
         </button>
         <button
           type="button"
-          className={theme === 'light' ? 'on' : ''}
-          aria-pressed={theme === 'light'}
+          className={activeTheme === 'light' ? 'on' : ''}
+          aria-pressed={activeTheme === 'light'}
           title="Light"
           onClick={() => $theme.set('light')}
         >

@@ -31,19 +31,30 @@ export default defineConfig({
         SiteTitle: './src/components/docs/DocsSiteTitle.astro',
         Sidebar: './src/components/docs/DocsSidebar.astro',
       },
-      // Make /docs/* follow the landing's theme, dark-first. The landing owns
-      // `data-theme` via the nanostore $theme (localStorage 'ma_theme', default
-      // 'dark'); Starlight is otherwise independent (own 'starlight-theme' key,
-      // defaults to 'auto' → follows OS). This inline head script runs before
-      // paint: it reads ma_theme (unset/anything but 'light' → 'dark'), applies
-      // it to <html data-theme>, and seeds Starlight's own key so its theme
-      // toggle shows the right state and its ThemeProvider agrees. One-way
-      // landing→docs sync (in-docs toggle still works as an override). Placed
-      // first in `head` so it precedes Starlight's own ThemeProvider script.
+      // Make /docs/* follow the landing's theme, dark-first, with the SAME
+      // light/dark state shared BIDIRECTIONALLY between landing and docs.
+      //
+      // Two stores exist: the landing owns `data-theme` via the nanostore
+      // $theme (localStorage 'ma_theme', default 'dark'); Starlight has its own
+      // 'starlight-theme' key. Treating them as ONE source of truth needs sync
+      // BOTH ways — a one-way landing→docs seed alone drifts, because the
+      // in-docs Starlight theme select writes only 'starlight-theme', so on the
+      // next navigation the seed clobbers that choice back to the stale
+      // 'ma_theme' (symptom: picker shows one theme while the page renders the
+      // other).
+      //
+      // This inline head script (runs before paint, before Starlight's own
+      // ThemeProvider, so its closure + picker reconcile to our value):
+      //   1. SEED: read ma_theme (unset/anything but 'light' → 'dark'), apply to
+      //      <html data-theme>, mirror into 'starlight-theme' so Starlight agrees.
+      //   2. WRITE-BACK: a MutationObserver mirrors any later data-theme change
+      //      (i.e. the in-docs theme select) back into 'ma_theme', so the choice
+      //      persists across navigation and propagates to the landing. The guard
+      //      skips redundant writes; documentElement already exists in <head>.
       head: [
         {
           tag: 'script',
-          content: `(function(){try{var t=localStorage.getItem('ma_theme');var theme=(t==='light')?'light':'dark';document.documentElement.dataset.theme=theme;localStorage.setItem('starlight-theme',theme);}catch(e){document.documentElement.dataset.theme='dark';}})();`,
+          content: `(function(){try{var K='ma_theme',S='starlight-theme';var t=localStorage.getItem(K);var theme=(t==='light')?'light':'dark';var r=document.documentElement;r.dataset.theme=theme;localStorage.setItem(S,theme);new MutationObserver(function(){var c=r.dataset.theme==='light'?'light':'dark';if(localStorage.getItem(K)!==c)localStorage.setItem(K,c);}).observe(r,{attributes:true,attributeFilter:['data-theme']});}catch(e){document.documentElement.dataset.theme='dark';}})();`,
         },
       ],
       // zh-CN is the default locale (root, no /zh/ prefix); en lives under /en/.

@@ -153,3 +153,27 @@
   display: none;
   content: '';
 }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Theme / language <Select> — restore the inline padding Tailwind nukes.
+
+   Starlight's Select.astro puts the room-making `select { padding-inline }`
+   (which clears space for the absolutely-positioned label-icon at the start
+   and the caret at the end) inside @layer starlight.core. Tailwind preflight's
+   UNLAYERED `select { padding: 0; margin: 0 }` beats ALL layered rules
+   (unlayered always wins over layered in the cascade), so the select loses its
+   inline padding and the icon + caret overlap the option text ("Light" →
+   "L̲ight", "English" → "E̲nglish"). Same root cause as the sidebar-summary
+   marker fix above. Restore Starlight's exact metrics with an UNLAYERED rule
+   (this stylesheet sits outside @layer, so it wins over both preflight and the
+   layered Starlight rule). Scoped to the two chrome selects — docs prose has no
+   <select>, and the landing (its own layout) never loads docs.css. Values
+   mirror Select.astro: padding-block .625rem; inline-start = icon .875rem +
+   pad .5rem + .25rem = 1.625rem; inline-end = caret 1.25rem + .5rem + .25rem =
+   2rem; margin-inline = -.5rem. ─────────────────────────────────────────── */
+starlight-theme-select select,
+starlight-lang-select select {
+  padding-block: 0.625rem;
+  padding-inline: 1.625rem 2rem;
+  margin-inline: -0.5rem;
+}
