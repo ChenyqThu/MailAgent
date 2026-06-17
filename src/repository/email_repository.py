@@ -379,6 +379,133 @@ _RRF_FETCH_MIN_EXTRA = 50
 _RRF_FETCH_MAX = 1000
 
 
+# ============================================================
+# T7: CJK trigram 查询计划器 (flag-gated)
+# ============================================================
+#
+# 设计来源: .trellis/tasks/06-17-dsl-parse-warnings/research/codex-t7-tokenizer.md 方案②。
+# 对每个「裸全文 term」(无列限定 / 非短语) 按 CJK 占比 + CJK 长度分路由:
+#   - 无 CJK (纯英文/数字/符号)  → unicode (主表 email_body_fts MATCH + smart_query_transform)
+#   - CJK >= 3 字                → trigram_match (email_body_fts_trigram MATCH)
+#   - CJK = 2 字                 → trigram_like (trigram 表 body/subject/sender LIKE '%词%')
+#   - CJK = 1 字                → too_short (不查 + warning cjk_too_short:<词>)
+#   - 中英混合 (CJK + Latin 同 term) → mixed (英文段 unicode 候选 ∩ 中文段 trigram 候选)
+# 多 term 之间 AND (rowid 交集)。实测硬约束: trigram MATCH < 3 Unicode 字符无召回,
+# 故 1/2 字中文不能走 MATCH。
+
+
+def _count_cjk_chars(value: str) -> int:
+    return sum(1 for c in value if _is_cjk_char(c))
+
+
+def _split_cjk_segments(value: str) -> list[tuple[bool, str]]:
+    """按 CJK / 非 CJK 边界切 segment, 返回 [(is_cjk, segment), ...]."""
+    segments: list[tuple[bool, str]] = []
+    current_cjk: Optional[bool] = None
+    current = ""
+    for c in value:
+        c_cjk = _is_cjk_char(c)
+        if current_cjk is None:
+            current_cjk = c_cjk
+            current = c
+        elif c_cjk == current_cjk:
+            current += c
+        else:
+            segments.append((current_cjk, current))
+            current = c
+            current_cjk = c_cjk
+    if current and current_cjk is not None:
+        segments.append((current_cjk, current))
+    return segments
+
+
+@dataclass
+class _CjkSegmentRoute:
+    """单个 CJK segment 的路由 (trigram_match / trigram_like / too_short)."""
+    value: str
+    route: str  # 'trigram_match' | 'trigram_like' | 'too_short'
+
+
+@dataclass
+class _TermRoute:
+    """一个裸全文 term 的路由计划。
+
+    ``route``:
+        'unicode'       —— 纯非 CJK term, 走主表 unicode61 (unicode_expr 为 smart_query_transform 结果)
+        'trigram'       —— 含 CJK term, 由 cjk_segments + latin_segments 组合
+        'too_short'     —— 整 term 只有 1 个 CJK 字 (无别的内容), 拦截 + warning
+    """
+    original: str
+    route: str
+    unicode_expr: str = ""                       # route='unicode' 时的 FTS5 expr
+    latin_segments: list[str] = field(default_factory=list)   # 混合 term 里的拉丁段 (走 unicode61)
+    cjk_segments: list[_CjkSegmentRoute] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+
+
+def _route_text_term(value: str) -> _TermRoute:
+    """把一个裸全文 term 分类成 _TermRoute (T7 路由核心, Python/TS 双端镜像逻辑)。"""
+    cjk_count = _count_cjk_chars(value)
+    if cjk_count == 0:
+        return _TermRoute(
+            original=value,
+            route="unicode",
+            unicode_expr=smart_query_transform(value),
+        )
+
+    segments = _split_cjk_segments(value)
+    latin_segments: list[str] = []
+    cjk_segments: list[_CjkSegmentRoute] = []
+    warnings: list[str] = []
+    for is_cjk, seg in segments:
+        if not is_cjk:
+            if seg.strip():
+                latin_segments.append(seg)
+            continue
+        seg_len = len(seg)
+        if seg_len >= 3:
+            cjk_segments.append(_CjkSegmentRoute(seg, "trigram_match"))
+        elif seg_len == 2:
+            cjk_segments.append(_CjkSegmentRoute(seg, "trigram_like"))
+        else:  # seg_len == 1
+            cjk_segments.append(_CjkSegmentRoute(seg, "too_short"))
+            warnings.append(f"cjk_too_short:{seg}")
+
+    # 整 term 只有 1 个 CJK 字 (无拉丁段, 无其它可查 CJK 段) → 拦截整 term
+    queryable_cjk = [s for s in cjk_segments if s.route != "too_short"]
+    if not latin_segments and not queryable_cjk:
+        return _TermRoute(original=value, route="too_short", warnings=warnings)
+
+    return _TermRoute(
+        original=value,
+        route="trigram",
+        latin_segments=latin_segments,
+        cjk_segments=queryable_cjk,
+        warnings=warnings,
+    )
+
+
+def build_search_plan(terms: list[str]) -> tuple[list[_TermRoute], list[str]]:
+    """把裸全文 term 列表编译成路由计划 + 收集 warning。
+
+    返回 ``(routes, warnings)``。``routes`` 只含可查 term (route in
+    {'unicode','trigram'}); 'too_short' term 被丢弃但其 warning 进 warnings。
+    供 Python (本方法) + 前端 TS (build_search_plan 等价) 共用同一份分类语义,
+    由行为夹具 (trigram:true case) 锁住。
+    """
+    routes: list[_TermRoute] = []
+    warnings: list[str] = []
+    for term in terms:
+        if not term:
+            continue
+        route = _route_text_term(term)
+        warnings.extend(route.warnings)
+        if route.route == "too_short":
+            continue
+        routes.append(route)
+    return routes, warnings
+
+
 def _normalize_contact_name(value: Optional[str]) -> Optional[str]:
     trimmed = (value or "").strip().strip("\"'")
     return trimmed or None
@@ -454,15 +581,37 @@ class EmailRepository:
         self,
         db_path: str = "data/sync_store.db",
         attachment_store: Optional[AttachmentStore] = None,
+        *,
+        trigram_enabled: Optional[bool] = None,
     ):
         self.db_path = Path(db_path)
         self.attachment_store = attachment_store or AttachmentStore()
+        # T7: CJK trigram 路由开关。None → 懒读 config.search_trigram_enabled
+        # (默认 False; 读 config 失败/缺 env → False, 保证测试 / CLI 无 .env 也能起)。
+        # 显式传 True/False → 测试 / caller 直控 (per-case trigram fixture 用)。
+        self._trigram_enabled_override = trigram_enabled
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self.db_path), timeout=30.0)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys=ON")  # CASCADE / SET NULL
         return conn
+
+    @property
+    def trigram_enabled(self) -> bool:
+        """T7 CJK trigram 路由是否启用。
+
+        构造时显式传了 ``trigram_enabled=`` → 直用；否则懒读
+        ``config.search_trigram_enabled``（默认 False；读 config 失败 / 缺必填 env
+        → 退回 False，保证无 .env 的测试 / CLI 上下文不炸）。
+        """
+        if self._trigram_enabled_override is not None:
+            return self._trigram_enabled_override
+        try:
+            from src.config import config as _config
+            return bool(getattr(_config, "search_trigram_enabled", False))
+        except Exception:
+            return False
 
     # ============================================================
     # READ
@@ -1029,6 +1178,21 @@ class EmailRepository:
             tz_offset_minutes=tz_offset_minutes,
         )
         if parsed.is_plain_passthrough:
+            # T7: flag=True 且裸全文 query 含 CJK → 走 trigram 路由 (CJK 子串增强)。
+            # flag=False 或纯非 CJK → 落入下面老 unicode61 fast-path (逐字节零回归)。
+            if self.trigram_enabled and _count_cjk_chars(query) > 0:
+                trigram_result = self._search_email_bodies_trigram(
+                    query,
+                    parsed=parsed,
+                    limit=limit,
+                    mailbox=mailbox,
+                    since_date=since_date,
+                    until_date=until_date,
+                    now=now,
+                    tz_offset_minutes=tz_offset_minutes,
+                )
+                if trigram_result is not None:
+                    return trigram_result
             transformed = smart_query_transform(query)
             structured_filters, structured_warnings = build_structured_filter_predicates(
                 mailbox=mailbox,
@@ -1115,6 +1279,287 @@ class EmailRepository:
         params.append(limit)
 
         return self._execute_email_search(sql, params, query)
+
+    # ============================================================
+    # T7: CJK trigram 路由执行 (仅 flag=True + 裸全文含 CJK 的 plain fast-path)
+    # ============================================================
+
+    def _search_email_bodies_trigram(
+        self,
+        query: str,
+        *,
+        parsed: ParsedSearchQuery,
+        limit: int,
+        mailbox: Optional[str],
+        since_date: Optional[str],
+        until_date: Optional[str],
+        now: Optional[str],
+        tz_offset_minutes: Optional[int],
+    ) -> Optional[EmailSearchResult]:
+        """裸全文 query 的 CJK trigram 路由 (T7)。
+
+        - 每个 term 按 ``build_search_plan`` 路由 (unicode / trigram_match /
+          trigram_like / too_short)。
+        - 每个 term 产出有序候选 internal_id 列表; term 之间 AND (rowid 交集)。
+        - 用 P1 的 RRF (``1/(_RRF_K + row_number)``) 把各 term 列表的 rank 融合,
+          ORDER BY score DESC, date DESC。
+        - 返回 None 表示「不接管, 回退老 unicode fast-path」(例如全部 term 都 too_short
+          但仍有 1 字拦截 warning 要透传 → 仍返回空结果 result 而非 None)。
+
+        英文 / 列级 FTS / 附件融合不在此路径 (那些走 parsed / 老 fast-path), 故 T5/T6 不受影响。
+        """
+        terms = query.split()
+        routes, plan_warnings = build_search_plan(terms)
+
+        structured_filters, structured_warnings = build_structured_filter_predicates(
+            mailbox=mailbox,
+            since_date=since_date,
+            until_date=until_date,
+            now=now,
+            tz_offset_minutes=tz_offset_minutes,
+        )
+        warnings = [*parsed.warnings, *plan_warnings, *structured_warnings]
+
+        # 全部 term 被拦截 (例如纯单字 CJK query '我') → 不查, 返回空 + warning。
+        if not routes:
+            return EmailSearchResult([], query, warnings)
+
+        conn = self._connect()
+        try:
+            # 每个 term 一个有序候选 internal_id 列表 (rank 用 list 内位置算 RRF)。
+            per_term_ids: list[list[int]] = []
+            for route in routes:
+                ids = self._trigram_term_candidate_ids(conn, route, query_for_log=query)
+                if not ids:
+                    # 任一 term 无候选 → AND 交集为空, 直接空结果 (warning 仍透传)。
+                    return EmailSearchResult([], query, warnings)
+                per_term_ids.append(ids)
+
+            # AND 交集 (rowid 必须出现在每个 term 的候选集里)。
+            common: set[int] = set(per_term_ids[0])
+            for ids in per_term_ids[1:]:
+                common &= set(ids)
+            if not common:
+                return EmailSearchResult([], query, warnings)
+
+            # 应用 metadata 过滤 (mailbox / date) — 复用结构化谓词, 在 email_metadata 上过滤。
+            allowed = self._filter_ids_by_metadata(conn, common, structured_filters)
+            if not allowed:
+                return EmailSearchResult([], query, warnings)
+
+            # RRF 融合: 每个 term 列表里命中的 id 贡献 1/(k + rank)。
+            rrf_scores: dict[int, float] = {}
+            for ids in per_term_ids:
+                rank = 0
+                for iid in ids:
+                    if iid not in allowed:
+                        continue
+                    rank += 1
+                    rrf_scores[iid] = rrf_scores.get(iid, 0.0) + 1.0 / (_RRF_K + rank)
+
+            hits = self._build_trigram_hits(conn, rrf_scores, limit)
+            return EmailSearchResult(hits, query, warnings)
+        finally:
+            conn.close()
+
+    def _trigram_term_candidate_ids(
+        self,
+        conn: sqlite3.Connection,
+        route: _TermRoute,
+        *,
+        query_for_log: str,
+    ) -> list[int]:
+        """单个 term 的有序候选 internal_id 列表。
+
+        - route='unicode': 主表 email_body_fts MATCH (unicode_expr), bm25 升序。
+        - route='trigram': latin 段走 email_body_fts MATCH; 每个 CJK 段走 trigram 表
+          (>=3 MATCH / =2 LIKE)。同 term 多段 AND (交集)。返回交集后的有序列表
+          (以第一个可排序候选源的顺序为准, 缺失 bm25 的 LIKE 段按 internal_id DESC 兜底)。
+        """
+        if route.route == "unicode":
+            return self._fts_match_ids(
+                conn, "email_body_fts", route.unicode_expr, query_for_log=query_for_log
+            )
+
+        # trigram term: 收集各段候选, 段间 AND。
+        segment_lists: list[list[int]] = []
+        for latin in route.latin_segments:
+            expr = smart_query_transform(latin)
+            segment_lists.append(
+                self._fts_match_ids(
+                    conn, "email_body_fts", expr, query_for_log=query_for_log
+                )
+            )
+        for seg in route.cjk_segments:
+            if seg.route == "trigram_match":
+                segment_lists.append(
+                    self._fts_match_ids(
+                        conn,
+                        "email_body_fts_trigram",
+                        seg.value,
+                        query_for_log=query_for_log,
+                    )
+                )
+            elif seg.route == "trigram_like":
+                segment_lists.append(
+                    self._trigram_like_ids(conn, seg.value, query_for_log=query_for_log)
+                )
+
+        if not segment_lists:
+            return []
+        # 段间 AND: 以第一个段的顺序为基准, 仅保留出现在所有段的 id。
+        common = set(segment_lists[0])
+        for lst in segment_lists[1:]:
+            common &= set(lst)
+        if not common:
+            return []
+        return [iid for iid in segment_lists[0] if iid in common]
+
+    def _fts_match_ids(
+        self,
+        conn: sqlite3.Connection,
+        table: str,
+        fts_expr: str,
+        *,
+        query_for_log: str,
+    ) -> list[int]:
+        """对 FTS5 表 (email_body_fts / email_body_fts_trigram) MATCH, 返回 bm25 升序 rowid。"""
+        if not fts_expr:
+            return []
+        sql = (
+            f"SELECT rowid FROM {table} WHERE {table} MATCH ? "
+            f"ORDER BY bm25({table}) ASC"
+        )
+        try:
+            rows = conn.execute(sql, (fts_expr,)).fetchall()
+        except sqlite3.OperationalError as e:
+            logger.warning(
+                f"search_email_bodies(trigram): invalid {table} MATCH "
+                f"{fts_expr!r} (query={query_for_log!r}): {e}"
+            )
+            return []
+        return [int(r["rowid"]) for r in rows]
+
+    def _trigram_like_ids(
+        self,
+        conn: sqlite3.Connection,
+        value: str,
+        *,
+        query_for_log: str,
+    ) -> list[int]:
+        """2 字 CJK: trigram 表 body/subject/sender LIKE '%词%' 兜底 (MATCH <3 无召回)。
+
+        无 bm25, 按启发式排序: subject 命中 > sender 命中 > body 命中, 同档按 rowid DESC。
+        返回的列表顺序即作为该段的 rank 来源。
+        """
+        like = f"%{value}%"
+        sql = """
+            SELECT rowid,
+                   CASE
+                       WHEN subject LIKE ? THEN 0
+                       WHEN sender  LIKE ? THEN 1
+                       ELSE 2
+                   END AS boost
+              FROM email_body_fts_trigram
+             WHERE body_markdown LIKE ? OR subject LIKE ? OR sender LIKE ?
+             ORDER BY boost ASC, rowid DESC
+        """
+        try:
+            rows = conn.execute(sql, (like, like, like, like, like)).fetchall()
+        except sqlite3.OperationalError as e:
+            logger.warning(
+                f"search_email_bodies(trigram): LIKE fallback failed for "
+                f"{value!r} (query={query_for_log!r}): {e}"
+            )
+            return []
+        return [int(r["rowid"]) for r in rows]
+
+    @staticmethod
+    def _filter_ids_by_metadata(
+        conn: sqlite3.Connection,
+        ids: set[int],
+        predicates: list[FilterPredicate],
+    ) -> set[int]:
+        """在 email_metadata 上对候选 id 套结构化谓词 (mailbox / date), 返回允许集。"""
+        if not ids:
+            return set()
+        if not predicates:
+            return set(ids)
+        id_list = list(ids)
+        placeholders = ",".join("?" for _ in id_list)
+        sql = (
+            f"SELECT m.internal_id FROM email_metadata m "
+            f"WHERE m.internal_id IN ({placeholders})"
+        )
+        params: list = list(id_list)
+        for predicate in predicates:
+            sql += f" AND ({predicate.sql})"
+            params.extend(predicate.params)
+        rows = conn.execute(sql, params).fetchall()
+        return {int(r["internal_id"]) for r in rows}
+
+    def _build_trigram_hits(
+        self,
+        conn: sqlite3.Connection,
+        rrf_scores: dict[int, float],
+        limit: int,
+    ) -> list[EmailSearchHit]:
+        """按 RRF 分数 + date 排序取 top-N, 查 metadata 拼 EmailSearchHit。
+
+        ``rank`` = ``-rrf_score`` (越小越相关), 与 P1 _merge_search_rows_by_rrf 出口语义一致。
+        snippet 留空 (trigram 路径不产 snippet; 前端按 body 兜底渲染)。
+        """
+        if not rrf_scores:
+            return []
+        id_list = list(rrf_scores.keys())
+        placeholders = ",".join("?" for _ in id_list)
+        rows = conn.execute(
+            f"""SELECT internal_id,
+                       COALESCE(subject, '') AS subject,
+                       COALESCE(sender, '')  AS sender,
+                       date_received, mailbox, notion_page_id
+                  FROM email_metadata
+                 WHERE internal_id IN ({placeholders})""",
+            id_list,
+        ).fetchall()
+        meta_by_id = {int(r["internal_id"]): r for r in rows}
+
+        ordered = sorted(
+            rrf_scores.items(),
+            key=lambda kv: (
+                kv[1],
+                self._date_sort_value(
+                    meta_by_id[kv[0]]["date_received"] if kv[0] in meta_by_id else None,
+                    oldest=False,
+                ),
+            ),
+            reverse=True,
+        )
+
+        hits: list[EmailSearchHit] = []
+        for iid, score in ordered[:limit]:
+            r = meta_by_id.get(iid)
+            if r is None:
+                continue
+            page_id = r["notion_page_id"]
+            notion_url = (
+                f"https://www.notion.so/{page_id.replace('-', '')}"
+                if page_id else None
+            )
+            hits.append(EmailSearchHit(
+                internal_id=iid,
+                subject=r["subject"],
+                sender=r["sender"],
+                date_received=r["date_received"],
+                mailbox=r["mailbox"],
+                snippet="",
+                rank=-float(score),
+                notion_page_id=page_id,
+                notion_url=notion_url,
+                source="body",
+                filename=None,
+            ))
+        return hits
 
     def _search_email_bodies_parsed(
         self,

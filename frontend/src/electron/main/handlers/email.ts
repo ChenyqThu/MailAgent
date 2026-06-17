@@ -20,10 +20,13 @@ import {
   parseLabels
 } from '@shared/lib/ai_mapping'
 import {
+  buildSearchPlan,
   buildStructuredFilterPredicates,
+  countCjkChars,
   parseSearchQuery,
   type FilterPredicate,
   type ParsedSearchQuery,
+  type TermRoute,
   type TextTerm
 } from '@shared/lib/search_query_parser'
 import type { AIFields, EnrichedEmailMeta, MailboxSummary, SearchResult } from '@shared/api/types'
@@ -76,6 +79,14 @@ export interface SearchOpts {
   /** Cross-language fixture injection; production omits both fields. */
   now?: string
   tzOffsetMinutes?: number
+  /**
+   * T7 CJK trigram 路由开关 (镜像 Python EmailRepository(trigram_enabled=))。
+   * 仅 smart 模式 + plain-passthrough + query 含 CJK 时才接管 (走并行 trigram 表),
+   * 否则落老 unicode61 路径 (P1 行为零回归)。
+   * 默认从 process.env.SEARCH_TRIGRAM_ENABLED 读 (与后端同源 flag);
+   * 夹具 runner 按 per-case 显式传入。
+   */
+  trigramEnabled?: boolean
 }
 
 // ── PR-2a: FTS5 query smart transform — CJK-aware natural-language → FTS5 ──
@@ -794,6 +805,223 @@ export function getEmailBodyFtsCount(): number {
   return row?.n ?? 0
 }
 
+// ============================================================
+// T7: CJK trigram 路由执行 (仅 trigram flag + smart plain-passthrough + 含 CJK)
+// 镜像 Python _search_email_bodies_trigram 全套。英文 / 列级 FTS / 附件融合不在此
+// 路径 (那些走老 fast-path), 故 P1 行为零回归。
+// ============================================================
+
+// 对 FTS5 表 (email_body_fts / email_body_fts_trigram) MATCH, 返回 bm25 升序 rowid。
+// 镜像 Python _fts_match_ids。
+function trigramFtsMatchIds(db: Database, table: string, ftsExpr: string): number[] {
+  if (!ftsExpr) return []
+  const sql = `SELECT rowid FROM ${table} WHERE ${table} MATCH ? ORDER BY bm25(${table}) ASC`
+  try {
+    const rows = prep(db, sql).all(ftsExpr) as Array<{ rowid: number }>
+    return rows.map((r) => r.rowid)
+  } catch (err) {
+    console.warn(`[email:search] invalid ${table} MATCH`, ftsExpr, err)
+    return []
+  }
+}
+
+// 2 字 CJK: trigram 表 body/subject/sender LIKE '%词%' 兜底 (MATCH <3 无召回)。
+// 无 bm25, 启发式排序: subject 命中 > sender 命中 > body 命中, 同档按 rowid DESC。
+// 镜像 Python _trigram_like_ids。
+function trigramLikeIds(db: Database, value: string): number[] {
+  const like = `%${value}%`
+  const sql = `
+    SELECT rowid,
+           CASE
+               WHEN subject LIKE ? THEN 0
+               WHEN sender  LIKE ? THEN 1
+               ELSE 2
+           END AS boost
+      FROM email_body_fts_trigram
+     WHERE body_markdown LIKE ? OR subject LIKE ? OR sender LIKE ?
+     ORDER BY boost ASC, rowid DESC`
+  try {
+    const rows = prep(db, sql).all(like, like, like, like, like) as Array<{ rowid: number }>
+    return rows.map((r) => r.rowid)
+  } catch (err) {
+    console.warn('[email:search] trigram LIKE fallback failed', value, err)
+    return []
+  }
+}
+
+// 单个 term 的有序候选 internal_id 列表 (镜像 Python _trigram_term_candidate_ids)。
+// - route='unicode': 主表 email_body_fts MATCH (unicodeExpr), bm25 升序。
+// - route='trigram': latin 段走 email_body_fts MATCH; CJK 段走 trigram 表 (>=3 MATCH / =2 LIKE)。
+//   同 term 多段 AND (交集), 以首段顺序为基准。
+function trigramTermCandidateIds(
+  db: Database,
+  route: TermRoute,
+  smartTransform: (q: string) => string
+): number[] {
+  if (route.route === 'unicode') {
+    return trigramFtsMatchIds(db, 'email_body_fts', route.unicodeExpr)
+  }
+
+  // trigram term: 收集各段候选, 段间 AND。
+  const segmentLists: number[][] = []
+  for (const latin of route.latinSegments) {
+    segmentLists.push(trigramFtsMatchIds(db, 'email_body_fts', smartTransform(latin)))
+  }
+  for (const seg of route.cjkSegments) {
+    if (seg.route === 'trigram_match') {
+      segmentLists.push(trigramFtsMatchIds(db, 'email_body_fts_trigram', seg.value))
+    } else if (seg.route === 'trigram_like') {
+      segmentLists.push(trigramLikeIds(db, seg.value))
+    }
+  }
+
+  if (segmentLists.length === 0) return []
+  // 段间 AND: 以第一个段的顺序为基准, 仅保留出现在所有段的 id。
+  let common = new Set(segmentLists[0]!)
+  for (const lst of segmentLists.slice(1)) {
+    const next = new Set(lst)
+    common = new Set([...common].filter((iid) => next.has(iid)))
+  }
+  if (common.size === 0) return []
+  return segmentLists[0]!.filter((iid) => common.has(iid))
+}
+
+// 在 email_metadata 上对候选 id 套结构化谓词 (mailbox / date), 返回允许集。
+// 镜像 Python _filter_ids_by_metadata。
+function trigramFilterIdsByMetadata(
+  db: Database,
+  ids: Set<number>,
+  predicates: FilterPredicate[]
+): Set<number> {
+  if (ids.size === 0) return new Set()
+  if (predicates.length === 0) return new Set(ids)
+  const idList = [...ids]
+  const placeholders = idList.map(() => '?').join(',')
+  let sql = `SELECT m.internal_id FROM email_metadata m WHERE m.internal_id IN (${placeholders})`
+  const params: unknown[] = [...idList]
+  for (const predicate of predicates) {
+    sql += ` AND (${predicate.sql})`
+    params.push(...predicate.params)
+  }
+  const rows = prep(db, sql).all(...params) as Array<{ internal_id: number }>
+  return new Set(rows.map((r) => r.internal_id))
+}
+
+// 按 RRF 分数 + date 排序取 top-N, 查 metadata 拼 hit。
+// rank = -rrf_score (越小越相关), snippet 留空。镜像 Python _build_trigram_hits。
+function buildTrigramHits(
+  db: Database,
+  rrfScores: Map<number, number>,
+  limit: number
+): EmailSearch_SearchHit[] {
+  if (rrfScores.size === 0) return []
+  const idList = [...rrfScores.keys()]
+  const placeholders = idList.map(() => '?').join(',')
+  const rows = prep(
+    db,
+    `SELECT internal_id,
+            COALESCE(subject, '') AS subject,
+            COALESCE(sender, '')  AS sender,
+            date_received, mailbox, notion_page_id
+       FROM email_metadata
+      WHERE internal_id IN (${placeholders})`
+  ).all(...idList) as Array<{
+    internal_id: number
+    subject: string
+    sender: string
+    date_received: string | null
+    mailbox: string | null
+    notion_page_id: string | null
+  }>
+  const metaById = new Map(rows.map((r) => [r.internal_id, r]))
+
+  // Python sort key = (rrf_score, dateSortValue(oldest=False)), reverse=True →
+  // rrf_score DESC, 再 date DESC。缺 metadata 行的 date 视为 -inf (排末尾)。
+  const ordered = [...rrfScores.entries()].sort((a, b) => {
+    if (a[1] !== b[1]) return b[1] - a[1]
+    const ad = dateSortValue(metaById.get(a[0])?.date_received, false)
+    const bd = dateSortValue(metaById.get(b[0])?.date_received, false)
+    return bd - ad
+  })
+
+  const hits: EmailSearch_SearchHit[] = []
+  for (const [iid, score] of ordered.slice(0, limit)) {
+    const r = metaById.get(iid)
+    if (r === undefined) continue
+    hits.push(
+      shapeSearchHit({
+        internal_id: iid,
+        subject: r.subject,
+        sender: r.sender,
+        date_received: r.date_received,
+        mailbox: r.mailbox,
+        rank: -score,
+        snippet: '',
+        notion_page_id: r.notion_page_id,
+        priority_raw: null,
+        lang_raw: null,
+        source: 'body',
+        filename: null
+      })
+    )
+  }
+  return hits
+}
+
+/**
+ * 裸全文 query 的 CJK trigram 路由 (镜像 Python _search_email_bodies_trigram)。
+ * 返回 null = 不接管, 回退老 unicode fast-path; 返回 hits (含空数组) = 接管。
+ * 与 Python 一致: routes 为空 (全部 term too_short) → 返回空结果 (非 null), warning 透传。
+ */
+function searchEmailBodiesTrigram(
+  db: Database,
+  query: string,
+  structuredPredicates: FilterPredicate[],
+  parseWarnings: string[],
+  limit: number
+): EmailSearch_SearchHit[] {
+  const terms = query.split(/\s+/).filter((t) => t.length > 0)
+  const { routes, warnings: planWarnings } = buildSearchPlan(terms, smartQueryTransform)
+  // plan warning 透传 (cjk_too_short:<词> 等)。parseWarnings 由 caller 维护 (含结构化)。
+  parseWarnings.push(...planWarnings)
+
+  // 全部 term 被拦截 (例如纯单字 CJK query '我') → 不查, 返回空 + warning。
+  if (routes.length === 0) return []
+
+  // 每个 term 一个有序候选 internal_id 列表 (rank 用 list 内位置算 RRF)。
+  const perTermIds: number[][] = []
+  for (const route of routes) {
+    const ids = trigramTermCandidateIds(db, route, smartQueryTransform)
+    if (ids.length === 0) return [] // 任一 term 无候选 → AND 交集为空。
+    perTermIds.push(ids)
+  }
+
+  // AND 交集 (rowid 必须出现在每个 term 的候选集里)。
+  let common = new Set(perTermIds[0]!)
+  for (const ids of perTermIds.slice(1)) {
+    const next = new Set(ids)
+    common = new Set([...common].filter((iid) => next.has(iid)))
+  }
+  if (common.size === 0) return []
+
+  // metadata 过滤 (mailbox / date)。
+  const allowed = trigramFilterIdsByMetadata(db, common, structuredPredicates)
+  if (allowed.size === 0) return []
+
+  // RRF 融合: 每个 term 列表里命中的 id 贡献 1/(k + rank)。
+  const rrfScores = new Map<number, number>()
+  for (const ids of perTermIds) {
+    let rank = 0
+    for (const iid of ids) {
+      if (!allowed.has(iid)) continue
+      rank += 1
+      rrfScores.set(iid, (rrfScores.get(iid) ?? 0) + 1.0 / (RRF_K + rank))
+    }
+  }
+
+  return buildTrigramHits(db, rrfScores, limit)
+}
+
 export function searchEmails(opts: SearchOpts): SearchResult {
   const total_indexed = getEmailBodyFtsCount()
   if (!opts.query || opts.query.trim().length === 0) {
@@ -1086,7 +1314,14 @@ export function searchEmails(opts: SearchOpts): SearchResult {
     })
     parseWarnings.unshift(...parsed.warnings)
 
-    if (parsed.is_plain_passthrough) {
+    // T7: flag=True 且 smart plain-passthrough query 含 CJK → 走 trigram 路由 (CJK 子串增强)。
+    // flag=False 或纯非 CJK → 落入下面老 unicode61 fast-path (逐字节零回归)。
+    // 镜像 Python search_email_bodies_with_meta 里 plain_passthrough 分支的 trigram 接入。
+    const trigramEnabled = opts.trigramEnabled ?? process.env.SEARCH_TRIGRAM_ENABLED === 'true'
+    if (parsed.is_plain_passthrough && trigramEnabled && countCjkChars(opts.query) > 0) {
+      // trigram 路由接管 (含空结果): plan warning 透传, transformed_query 留原 query。
+      items = searchEmailBodiesTrigram(db, opts.query, structured.predicates, parseWarnings, limit)
+    } else if (parsed.is_plain_passthrough) {
       // smart plain-passthrough：附件维度复用 transformed（镜像 Python smart 入口
       // _search_email_bodies_fused(body=transformed, attachment=transformed)）。
       transformedQuery = smartQueryTransform(opts.query)

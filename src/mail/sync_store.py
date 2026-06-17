@@ -224,7 +224,17 @@ class SyncStore:
     # v23 (P6 folder_sync cleanup, 2026-06): DROP folder_email + folder_email_fts +
     #                folder_sync_state 三表 + FTS 触发器 (旧 FolderSyncWorker 展示链路实测从未
     #                工作)。多文件夹同步走 email_metadata 主链路 (v22)。幂等 DROP IF EXISTS。
-    DB_VERSION = 23  # v23: DROP 旧 folder_sync 三表 (展示链路死代码清理)
+    # v24 (T7 CJK trigram, 2026-06): 新增并行 contentful FTS5 表 email_body_fts_trigram
+    #                (tokenize='trigram') + 4 个 trigger (insert/delete/update on email_body
+    #                + meta_update on email_metadata) + 幂等回填。主表 email_body_fts
+    #                (porter unicode61) 不动 → 英文零回归。trigram 表给中文子串搜索:
+    #                CJK >=3 字走 MATCH, =2 字走 trigram 表 LIKE 兜底 (MATCH <3 字符无召回)。
+    #                灰度开关 SEARCH_TRIGRAM_ENABLED 默认 False — flag=False 时搜索仍走主表
+    #                unicode61 + smart_query_transform (逐字节零回归), flag=True 才启用 CJK 路由。
+    #                幂等: CREATE ... IF NOT EXISTS + 回填 WHERE NOT EXISTS, 重跑不重复/不报错。
+    #                回滚: 关 flag 即回 unicode 路径; 彻底回退见下方 v24 迁移块注释 (DROP 4 trigger
+    #                + DROP email_body_fts_trigram, 主表不动)。
+    DB_VERSION = 24  # v24: 并行 trigram 表 (CJK 中文子串搜索, flag-gated)
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -1210,6 +1220,102 @@ class SyncStore:
         cursor.execute("DROP TABLE IF EXISTS folder_email_fts")
         cursor.execute("DROP TABLE IF EXISTS folder_email")
         cursor.execute("DROP TABLE IF EXISTS folder_sync_state")
+
+        # === v24: email_body_fts_trigram (T7 CJK 中文子串搜索, 并行 trigram 表) ===
+        # 设计来源: .trellis/tasks/06-17-dsl-parse-warnings/research/codex-t7-tokenizer.md 方案②。
+        # 主表 email_body_fts (porter unicode61) 不动 → 英文零回归; 这里新增并行 contentful
+        # FTS5 表用 tokenize='trigram' 解决中文非前缀子串搜索 (unicode61 把连续 CJK 串当单一
+        # token, '产品' 漏掉 '产品评审')。实测硬约束: trigram MATCH <3 个 Unicode 字符无召回
+        # (2 字中文必须走 trigram 表 LIKE 兜底; 见研究报告实跑表)。
+        #
+        # contentful (非 contentless): 因为 2 字中文要靠 LIKE 兜底, 而 contentless 无法读列值,
+        # LIKE 不可用 → 必须存原文副本。索引比 unicode61 大 (~2-3 倍), 7 万行可接受。
+        # rowid = internal_id, 与 email_body / email_metadata 互查。
+        #
+        # 幂等: CREATE VIRTUAL TABLE IF NOT EXISTS (对新库 init 也建表) + 4 trigger IF NOT EXISTS
+        # + 回填 WHERE NOT EXISTS (current_version < 24 gate, 重跑不重复插)。
+        #
+        # 回滚 (彻底回退 v24): 先关 SEARCH_TRIGRAM_ENABLED flag (查询立即回 unicode 路径), 必要时:
+        #   DROP TRIGGER IF EXISTS email_body_fts_trigram_insert;
+        #   DROP TRIGGER IF EXISTS email_body_fts_trigram_delete;
+        #   DROP TRIGGER IF EXISTS email_body_fts_trigram_update;
+        #   DROP TRIGGER IF EXISTS email_body_fts_trigram_meta_update;
+        #   DROP TABLE IF EXISTS email_body_fts_trigram;
+        # 主表 email_body_fts 不动 → 回滚低风险, 英文/已有路径不受影响。
+        cursor.execute("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS email_body_fts_trigram USING fts5(
+                body_markdown,
+                subject,
+                sender,
+                tokenize='trigram'
+            )
+        """)
+        # insert/update/delete on email_body: 与主表 email_body_fts trigger 1:1 镜像
+        # (subject/sender 从 email_metadata join 取, 双写流程 metadata 先 commit)。
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS email_body_fts_trigram_insert
+            AFTER INSERT ON email_body BEGIN
+                INSERT INTO email_body_fts_trigram(rowid, body_markdown, subject, sender)
+                SELECT NEW.internal_id,
+                       COALESCE(NEW.body_markdown, ''),
+                       COALESCE((SELECT subject FROM email_metadata WHERE internal_id = NEW.internal_id), ''),
+                       COALESCE((SELECT sender  FROM email_metadata WHERE internal_id = NEW.internal_id), '');
+            END
+        """)
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS email_body_fts_trigram_delete
+            AFTER DELETE ON email_body BEGIN
+                DELETE FROM email_body_fts_trigram WHERE rowid = OLD.internal_id;
+            END
+        """)
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS email_body_fts_trigram_update
+            AFTER UPDATE ON email_body BEGIN
+                DELETE FROM email_body_fts_trigram WHERE rowid = OLD.internal_id;
+                INSERT INTO email_body_fts_trigram(rowid, body_markdown, subject, sender)
+                SELECT NEW.internal_id,
+                       COALESCE(NEW.body_markdown, ''),
+                       COALESCE((SELECT subject FROM email_metadata WHERE internal_id = NEW.internal_id), ''),
+                       COALESCE((SELECT sender  FROM email_metadata WHERE internal_id = NEW.internal_id), '');
+            END
+        """)
+        # meta_update: 主表 email_body_fts 的历史隐患 (subject/sender 后改 → FTS stale) 在
+        # trigram 表一并修。仅当该 internal_id 已有 body 行时才 re-sync (无 body → 无 FTS 行)。
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS email_body_fts_trigram_meta_update
+            AFTER UPDATE OF subject, sender ON email_metadata
+            WHEN EXISTS (SELECT 1 FROM email_body WHERE internal_id = NEW.internal_id)
+            BEGIN
+                DELETE FROM email_body_fts_trigram WHERE rowid = NEW.internal_id;
+                INSERT INTO email_body_fts_trigram(rowid, body_markdown, subject, sender)
+                SELECT NEW.internal_id,
+                       COALESCE(b.body_markdown, ''),
+                       COALESCE(NEW.subject, ''),
+                       COALESCE(NEW.sender, '')
+                  FROM email_body b WHERE b.internal_id = NEW.internal_id;
+            END
+        """)
+        # 首次回填: 把已有 email_body 行推入 trigram FTS (幂等, WHERE NOT EXISTS 防重)。
+        # 大库 7 万行可能耗时, 带计数日志 (参考 v5 reindex 风格)。
+        if current_version < 24:
+            cursor.execute("""
+                INSERT INTO email_body_fts_trigram(rowid, body_markdown, subject, sender)
+                SELECT b.internal_id,
+                       COALESCE(b.body_markdown, ''),
+                       COALESCE(m.subject, ''),
+                       COALESCE(m.sender, '')
+                  FROM email_body b
+                  JOIN email_metadata m ON m.internal_id = b.internal_id
+                 WHERE NOT EXISTS (
+                       SELECT 1 FROM email_body_fts_trigram WHERE rowid = b.internal_id
+                 )
+            """)
+            reindexed = cursor.rowcount or 0
+            if reindexed:
+                logger.info(
+                    f"v24 trigram FTS5 reindex: {reindexed} email_body rows indexed "
+                    f"(email_body_fts_trigram)"
+                )
 
         # 更新数据库版本
         cursor.execute("""

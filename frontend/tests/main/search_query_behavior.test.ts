@@ -46,6 +46,8 @@ interface FixtureCase {
   expect_warnings: number
   expect_transformed_query?: string
   expect_hits?: Array<{ internal_id: number; source: string; filename: string | null }>
+  // T7: per-case CJK trigram 路由开关 (镜像 Python 构造器 trigram_enabled 参数)。
+  trigram?: boolean
 }
 
 interface Fixture {
@@ -83,6 +85,13 @@ function buildDb(): Database.Database {
       subject,
       sender,
       tokenize='porter unicode61 remove_diacritics 2'
+    );
+
+    CREATE VIRTUAL TABLE email_body_fts_trigram USING fts5(
+      body_markdown,
+      subject,
+      sender,
+      tokenize='trigram'
     );
 
     CREATE TABLE email_attachment (
@@ -123,6 +132,11 @@ function buildDb(): Database.Database {
     INSERT INTO email_body_fts (rowid, body_markdown, subject, sender)
     VALUES (?, ?, ?, ?)
   `)
+  // 镜像 email_body_fts_trigram_insert trigger: 并行 trigram 表 (T7)。
+  const insertFtsTrigram = db.prepare(`
+    INSERT INTO email_body_fts_trigram (rowid, body_markdown, subject, sender)
+    VALUES (?, ?, ?, ?)
+  `)
   const insertAttachment = db.prepare(`
     INSERT INTO email_attachment (internal_id, filename, is_inline)
     VALUES (?, ?, ?)
@@ -155,6 +169,7 @@ function buildDb(): Database.Database {
       null
     )
     insertFts.run(email.internal_id, email.body_markdown, email.subject, email.sender)
+    insertFtsTrigram.run(email.internal_id, email.body_markdown, email.subject, email.sender)
     for (const attachment of email.attachments ?? []) {
       const info = insertAttachment.run(
         email.internal_id,
@@ -191,7 +206,10 @@ describe('search query behavior fixture', () => {
       since: item.params?.since_date,
       until: item.params?.until_date,
       now: fixture.now,
-      tzOffsetMinutes: fixture.tz_offset_minutes
+      tzOffsetMinutes: fixture.tz_offset_minutes,
+      // per-case `trigram: true` 显式打开 CJK trigram 路由 (DB v24 + SEARCH_TRIGRAM_ENABLED)；
+      // 其余 case 默认 false = 零回归守卫 (走 unicode61 + smartQueryTransform 原路径)。
+      trigramEnabled: item.trigram ?? false
     })
     const ids = result.items.map((hit) => hit.internal_id)
 

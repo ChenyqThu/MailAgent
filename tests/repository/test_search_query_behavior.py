@@ -42,6 +42,13 @@ CREATE VIRTUAL TABLE email_body_fts USING fts5(
     tokenize='porter unicode61 remove_diacritics 2'
 );
 
+CREATE VIRTUAL TABLE email_body_fts_trigram USING fts5(
+    body_markdown,
+    subject,
+    sender,
+    tokenize='trigram'
+);
+
 CREATE TABLE email_attachment (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     internal_id INTEGER NOT NULL,
@@ -110,6 +117,17 @@ def behavior_db(tmp_path: Path) -> Path:
                     email["sender"],
                 ),
             )
+            # 镜像 email_body_fts_trigram_insert trigger: 并行 trigram 表 (T7)。
+            conn.execute(
+                """INSERT INTO email_body_fts_trigram (rowid, body_markdown, subject, sender)
+                   VALUES (?, ?, ?, ?)""",
+                (
+                    email["internal_id"],
+                    email["body_markdown"],
+                    email["subject"],
+                    email["sender"],
+                ),
+            )
             for attachment in email.get("attachments", []):
                 cur = conn.execute(
                     """INSERT INTO email_attachment
@@ -151,7 +169,12 @@ def behavior_db(tmp_path: Path) -> Path:
 
 @pytest.mark.parametrize("case", FIXTURE["cases"], ids=lambda case: case["name"])
 def test_search_query_behavior_fixture(case: dict[str, Any], behavior_db: Path):
-    repo = EmailRepository(db_path=str(behavior_db))
+    # per-case `trigram: true` 显式打开 CJK trigram 路由 (DB v24 + SEARCH_TRIGRAM_ENABLED)；
+    # 其余 case 默认 False = 零回归守卫 (走 unicode61 + smart_query_transform 原路径)。
+    repo = EmailRepository(
+        db_path=str(behavior_db),
+        trigram_enabled=bool(case.get("trigram", False)),
+    )
     params = case.get("params", {})
 
     result = repo.search_email_bodies_with_meta(

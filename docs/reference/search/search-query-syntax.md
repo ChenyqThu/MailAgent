@@ -221,6 +221,44 @@ date-only 的 `until <= '2026-06-01'` 还会漏掉当天全部邮件。因此：
 - 不给既有 `subject:` / `from:` 叠加 FTS boost；它们继续是 LIKE 硬过滤。需要列级相关度时使用新增 `subject~:` / `sender~:`。
 - `to:/cc:` 不进 FTS 索引（LIKE 够用；未来如需全文搜收件人再做 FTS schema migration）。
 - 附件融合只在 smart 正向全文路径启用；`mode='raw'` 保持正文 FTS5 逃生门。列级 FTS term 在附件分支作为 `email_body_fts` 门控，只有列级 term、没有裸全文词时不查询附件正文。
-- jieba / trigram 中文分词（见 T7 trigram 并行表方案，单独阶段实现）。当前 `unicode61` + prefix smart 对中文非前缀子串仍有限制，例如 `body:产品` 不保证命中正文 token `本周产品评审...`。
+- jieba 词典级中文分词（更重，双运行时一致性风险；trigram 已覆盖子串搜索，见 §9）。**裸全文中文子串**已由 §9 trigram 路由解决（flag-gated）；但**列级 FTS** `body:` / `subject~:` / `sender~:` 仍走 `unicode61`，对中文非前缀子串仍有限制（例如 `body:产品` 不保证命中正文 token `本周产品评审...`）。
 - 保存搜索/搜索历史（前端后续迭代）。
 - 纯过滤查询是 metadata 全表扫描（7 万行 ~30-60ms 可接受；变慢再加索引/物化）。
+
+## 9. CJK 中文分词（T7 并行 trigram 表，flag-gated）
+
+**问题**：主表 `email_body_fts` 用 `porter unicode61` tokenizer，把连续 CJK 串当成**单一 token**（`本周产品评审` 是 1 个 token），所以裸查 `产品` 仅命中含独立 `产品` token 的 doc，漏掉 `产品评审`。`smart_query_transform` 的字符级 `产* AND 品*` fallback 能部分缓解，但中间子串（如 `评审定` 命中 `本周产品评审定...`）仍漏。
+
+**方案**（②并行 trigram 表，设计源 `.trellis/tasks/06-17-dsl-parse-warnings/research/codex-t7-tokenizer.md`）：
+
+- **主表 `email_body_fts`（unicode61）不动** → 英文 / 已有路径**逐字节零回归**。
+- 新增并行 **contentful** FTS5 表 `email_body_fts_trigram`（`tokenize='trigram'`，DB v24），由 4 个 trigger（insert/delete/update on `email_body` + meta_update on `email_metadata`）自动同步。contentful（非 contentless）是因为 2 字中文要靠 `LIKE` 兜底，需读列值。
+- **灰度开关 `SEARCH_TRIGRAM_ENABLED`（默认 `False`）**：关闭时搜索逐字节同现状（unicode61 + smart transform）；`True` 才启用 CJK 路由。
+
+### 9.1 路由规则（仅 flag=True + 裸全文 query 含 CJK 时生效）
+
+对每个**裸全文 term**（无列限定 / 非短语；走 `is_plain_passthrough` fast-path）按 CJK 长度分路由：
+
+| term 形态 | 路由 | 说明 |
+|---|---|---|
+| 无 CJK（纯英文/数字/符号） | unicode | 主表 `email_body_fts MATCH` + `smart_query_transform`（不变）|
+| CJK ≥ 3 字 | trigram MATCH | `email_body_fts_trigram MATCH`（实测 ≥3 字才有召回）|
+| CJK = 2 字 | trigram LIKE | trigram 表 `body/subject/sender LIKE '%词%'` 兜底（MATCH <3 字符无召回）|
+| CJK = 1 字 | 拦截 | 不查该 term，push warning `cjk_too_short:<字>`（单字全表扫描噪声太高）|
+| 中英混合（CJK + Latin 同 term） | 拆段 | 拉丁段走 unicode61 候选、CJK 段走 trigram 候选，段间 **rowid 交集** |
+
+- **多 term 之间 AND**（rowid 交集）。中英混合多 term（如 `redis 超时`）严禁整串丢 trigram——实测会忽略 2 字中文约束误命中只含英文的行。
+- **rank 融合**：复用 P1 RRF 基础设施（`_RRF_K=60`）。每个 term 候选列表按命中顺序计 `1/(60 + row_number)`，多 term 求和，`ORDER BY score DESC, date DESC`。
+- **2 字 LIKE 无 bm25** → 启发式排序：`subject` 命中 > `sender` 命中 > `body` 命中，同档按 rowid DESC。
+
+### 9.2 已知约束
+
+- **1 字中文不查**（warning `cjk_too_short`）；前端可据此提示"请输入至少 2 个字"。
+- **2 字 LIKE 无相关度**（bm25 在 trigram 表 LIKE 查询下返回 0），靠列位置启发式排序。
+- **英文不回归**：英文 term 始终走 unicode61（保留 porter stemming + remove_diacritics）；trigram 路由只接管含 CJK 的裸全文 query。
+- **列级 FTS / 附件融合不变**：`body:` / `subject~:` / `sender~:`（T6）与附件正文融合（T5）继续走 parsed 路径（unicode61），不受 trigram 影响。trigram 路由只增强 plain fast-path 的裸全文 term。
+- **回滚**：关 `SEARCH_TRIGRAM_ENABLED` 即回 unicode 路径；彻底回退见 `sync_store.py` v24 迁移块注释（DROP 4 trigger + DROP `email_body_fts_trigram`，主表不动）。
+
+### 9.3 跨语言一致性
+
+行为夹具（§6）新增 `trigram: true` per-case 开关——标记的 case 把 `SEARCH_TRIGRAM_ENABLED` 置 True 跑，其余 case 默认 False 作零回归守卫。Python runner 建 `email_body_fts_trigram` 表灌数据；前端 TS runner（better-sqlite3，trigram tokenizer 已验证支持）须建同表 + 实现 `build_search_plan` 等价路由，读同一份 JSON 锁行为。

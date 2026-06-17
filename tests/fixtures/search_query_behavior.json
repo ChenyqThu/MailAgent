@@ -782,6 +782,91 @@
       "query": "from: sort:date",
       "expect_ids": [],
       "expect_warnings": 1
+    },
+    {
+      "name": "trigram_cjk_three_char_match",
+      "query": "产品评审",
+      "trigram": true,
+      "expect_ids": [
+        1,
+        3
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "trigram_cjk_middle_substring",
+      "query": "评审定",
+      "trigram": true,
+      "expect_ids": [
+        3
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "trigram_cjk_two_char_like_product",
+      "query": "产品",
+      "trigram": true,
+      "expect_ids": [
+        3,
+        1
+      ],
+      "order": "exact",
+      "expect_warnings": 0
+    },
+    {
+      "name": "trigram_cjk_two_char_like_review",
+      "query": "评审",
+      "trigram": true,
+      "expect_ids": [
+        1,
+        3
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "trigram_cjk_two_char_like_subject_only",
+      "query": "本周",
+      "trigram": true,
+      "expect_ids": [
+        3
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "trigram_cjk_single_char_intercept",
+      "query": "我",
+      "trigram": true,
+      "expect_ids": [],
+      "expect_warnings": 1
+    },
+    {
+      "name": "trigram_mixed_cjk_english_and_intersection",
+      "query": "redis 产品评审",
+      "trigram": true,
+      "expect_ids": [
+        1
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "trigram_cjk_two_char_no_regression_flag_off",
+      "query": "产品",
+      "expect_ids": [
+        1,
+        3
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "trigram_english_no_regression_flag_on",
+      "query": "redis timeout",
+      "trigram": true,
+      "expect_ids": [
+        1,
+        4
+      ],
+      "expect_warnings": 0,
+      "expect_transformed_query": "redis AND timeout"
     }
   ]
 }
