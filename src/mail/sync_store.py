@@ -234,7 +234,23 @@ class SyncStore:
     #                幂等: CREATE ... IF NOT EXISTS + 回填 WHERE NOT EXISTS, 重跑不重复/不报错。
     #                回滚: 关 flag 即回 unicode 路径; 彻底回退见下方 v24 迁移块注释 (DROP 4 trigger
     #                + DROP email_body_fts_trigram, 主表不动)。
-    DB_VERSION = 24  # v24: 并行 trigram 表 (CJK 中文子串搜索, flag-gated)
+    # v25 (T8 收件人全文化, 2026-06): 新增并行 contentful FTS5 表 email_recipient_fts
+    #                (to_addr, cc_addr, sender_name; tokenize='porter unicode61
+    #                remove_diacritics 2') + 3 个 trigger (insert / update_of /
+    #                delete on email_metadata) + 幂等回填。数据源是 email_metadata 三列 (与
+    #                body_fts 来自 email_body 不同, 故 trigger 直接挂 email_metadata)。
+    #                新增 to~:/cc~:/from~: 三个显式 FTS 列语法才查这张表 (裸词搜索一行不碰它,
+    #                天然零回归 —— ②保守语义)。主表 email_body_fts 不动。无 flag (纯新增 opt-in 语法)。
+    #                幂等: CREATE ... IF NOT EXISTS + 3 trigger IF NOT EXISTS + 回填
+    #                WHERE NOT EXISTS (current_version < 25 gate)。
+    #                回滚 (彻底回退 v25): 三个新语法只在 parser 显式列名出现时生效, 不影响裸词;
+    #                必要时:
+    #                  DROP TRIGGER IF EXISTS email_recipient_fts_insert;
+    #                  DROP TRIGGER IF EXISTS email_recipient_fts_update;
+    #                  DROP TRIGGER IF EXISTS email_recipient_fts_delete;
+    #                  DROP TABLE IF EXISTS email_recipient_fts;
+    #                主表 email_body_fts / email_body_fts_trigram 不动 → 回滚低风险。
+    DB_VERSION = 25  # v25: 并行收件人 FTS 表 (to~:/cc~:/from~: 显式列语法, 无 flag)
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -1315,6 +1331,88 @@ class SyncStore:
                 logger.info(
                     f"v24 trigram FTS5 reindex: {reindexed} email_body rows indexed "
                     f"(email_body_fts_trigram)"
+                )
+
+        # === v25: email_recipient_fts (T8 收件人全文化, 并行 contentful FTS5 表) ===
+        # 设计来源: .trellis/tasks/06-17-dsl-parse-warnings 方案②保守。
+        # 主表 email_body_fts (body/subject/sender) 不动 → 裸词搜索逐字节零回归
+        # (裸词天然不碰收件人列, 正是②保守语义)。这里新增并行 contentful FTS5 表索引
+        # email_metadata 的 to_addr / cc_addr / sender_name 三列, 仅由新增的显式 FTS 列
+        # 语法 to~:/cc~:/from~: 查询。无 flag (纯新增 opt-in 语法, 不改任何现有行为)。
+        #
+        # 数据源是 email_metadata (to_addr/cc_addr/sender_name 都在 email_metadata 列),
+        # 与 body_fts (来自 email_body) 不同 → trigger 直接挂 email_metadata:
+        #   - AFTER INSERT: 新邮件行写入 → 同步进 recipient_fts。
+        #   - AFTER UPDATE OF to_addr,cc_addr,sender_name: 仅这三列变更才 DELETE+INSERT 重同步。
+        #   - AFTER DELETE: 邮件行删除 → 清 recipient_fts。
+        # contentful (非 contentless): 与 body_fts/trigram 表一致, 自带数据副本支持 snippet/排名。
+        # rowid = internal_id, 与 email_metadata 互查。
+        #
+        # 幂等: CREATE VIRTUAL TABLE IF NOT EXISTS + 3 trigger IF NOT EXISTS + 回填
+        # WHERE NOT EXISTS (current_version < 25 gate, 重跑不重复插)。
+        #
+        # 回滚 (彻底回退 v25): 三个新语法只在 parser 显式列名出现时生效, 不影响裸词; 必要时:
+        #   DROP TRIGGER IF EXISTS email_recipient_fts_insert;
+        #   DROP TRIGGER IF EXISTS email_recipient_fts_update;
+        #   DROP TRIGGER IF EXISTS email_recipient_fts_delete;
+        #   DROP TABLE IF EXISTS email_recipient_fts;
+        # 主表 email_body_fts / email_body_fts_trigram 不动 → 回滚低风险。
+        cursor.execute("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS email_recipient_fts USING fts5(
+                to_addr,
+                cc_addr,
+                sender_name,
+                tokenize='porter unicode61 remove_diacritics 2'
+            )
+        """)
+        # insert/update_of/delete on email_metadata (数据源直接是 email_metadata 三列)。
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS email_recipient_fts_insert
+            AFTER INSERT ON email_metadata BEGIN
+                INSERT INTO email_recipient_fts(rowid, to_addr, cc_addr, sender_name)
+                VALUES (NEW.internal_id,
+                        COALESCE(NEW.to_addr, ''),
+                        COALESCE(NEW.cc_addr, ''),
+                        COALESCE(NEW.sender_name, ''));
+            END
+        """)
+        # 仅 to_addr/cc_addr/sender_name 三列变更才重同步 (其余列更新不触发, 省开销)。
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS email_recipient_fts_update
+            AFTER UPDATE OF to_addr, cc_addr, sender_name ON email_metadata BEGIN
+                DELETE FROM email_recipient_fts WHERE rowid = OLD.internal_id;
+                INSERT INTO email_recipient_fts(rowid, to_addr, cc_addr, sender_name)
+                VALUES (NEW.internal_id,
+                        COALESCE(NEW.to_addr, ''),
+                        COALESCE(NEW.cc_addr, ''),
+                        COALESCE(NEW.sender_name, ''));
+            END
+        """)
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS email_recipient_fts_delete
+            AFTER DELETE ON email_metadata BEGIN
+                DELETE FROM email_recipient_fts WHERE rowid = OLD.internal_id;
+            END
+        """)
+        # 首次回填: 把已有 email_metadata 行推入 recipient FTS (幂等, WHERE NOT EXISTS 防重)。
+        # 大库 7 万行可能耗时, 带计数日志 (参考 v24 reindex 风格)。
+        if current_version < 25:
+            cursor.execute("""
+                INSERT INTO email_recipient_fts(rowid, to_addr, cc_addr, sender_name)
+                SELECT m.internal_id,
+                       COALESCE(m.to_addr, ''),
+                       COALESCE(m.cc_addr, ''),
+                       COALESCE(m.sender_name, '')
+                  FROM email_metadata m
+                 WHERE NOT EXISTS (
+                       SELECT 1 FROM email_recipient_fts WHERE rowid = m.internal_id
+                 )
+            """)
+            reindexed = cursor.rowcount or 0
+            if reindexed:
+                logger.info(
+                    f"v25 recipient FTS5 reindex: {reindexed} email_metadata rows "
+                    f"indexed (email_recipient_fts)"
                 )
 
         # 更新数据库版本

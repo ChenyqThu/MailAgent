@@ -107,7 +107,7 @@
       "subject": "Draft proposal",
       "sender": "erin@example.com",
       "sender_name": "Erin",
-      "to_addr": "product@example.com",
+      "to_addr": "product@example.com; zephyrqa@example.com",
       "cc_addr": "",
       "date_received": "2026-06-12T15:00:00+08:00",
       "mailbox": "草稿箱",
@@ -867,6 +867,61 @@
       ],
       "expect_warnings": 0,
       "expect_transformed_query": "redis AND timeout"
+    },
+    {
+      "name": "recipient_to_tilde_basic",
+      "query": "to~:bob",
+      "expect_ids": [
+        1
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "recipient_cc_tilde_basic",
+      "query": "cc~:carol",
+      "expect_ids": [
+        2
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "recipient_from_tilde_sender_name",
+      "query": "from~:Mallory",
+      "expect_ids": [
+        7
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "recipient_to_tilde_and_body_term",
+      "query": "cache to~:zephyrqa",
+      "expect_ids": [
+        6
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "recipient_bare_word_does_not_match_recipient_only_token",
+      "query": "zephyrqa",
+      "expect_ids": [],
+      "expect_warnings": 0
+    },
+    {
+      "name": "recipient_to_tilde_matches_recipient_only_token",
+      "query": "to~:zephyrqa",
+      "expect_ids": [
+        6
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "recipient_negative_to_tilde_filters_out",
+      "query": "redis -from~:Mallory",
+      "expect_ids": [
+        1,
+        4
+      ],
+      "expect_warnings": 0
     }
   ]
 }

@@ -1574,6 +1574,10 @@ class EmailRepository:
     ) -> tuple[list[EmailSearchHit], str]:
         fts_expr = self._build_positive_fts_expr(parsed)
         neg_fts_expr = self._build_negative_fts_expr(parsed)
+        # T8: 收件人列 term (to~:/cc~:/from~:) 编译成 email_recipient_fts 的 IN-子查询谓词。
+        recipient_predicates = self._build_recipient_predicates(parsed)
+        # 排名用的正向收件人 MATCH 表达式 (recipient-only 路径用)。
+        positive_recipient_expr = self._build_positive_recipient_fts_expr(parsed)
         filters, structured_warnings = build_structured_filter_predicates(
             mailbox=mailbox,
             since_date=since_date,
@@ -1587,6 +1591,7 @@ class EmailRepository:
             *parsed.filters,
             *self._compile_or_filter_groups(parsed.or_filter_groups),
             *filters,
+            *recipient_predicates,
         ]
         predicates.extend(
             FilterPredicate(f"NOT ({predicate.sql})", predicate.params)
@@ -1610,6 +1615,40 @@ class EmailRepository:
                 query_for_log=fts_expr,
             )
             return hits, fts_expr
+        elif positive_recipient_expr and parsed.sort not in ("date", "oldest"):
+            # T8 recipient-only 路径: 无正文裸词/列词, 但有正向收件人列 term → 直接查
+            # email_recipient_fts MATCH 取 bm25 排名 (recipient 命中相关度)。
+            # sort:date / sort:oldest 仍走下面纯过滤分支按时间排 (与 body 路径语义一致)。
+            # 排名用的那条正向收件人谓词不再重复进 metadata filter (避免双查)，
+            # 但其余 recipient 谓词 (负向 / 多余正向组) + 结构化谓词仍作 AND 过滤。
+            other_predicates = [
+                *parsed.filters,
+                *self._compile_or_filter_groups(parsed.or_filter_groups),
+                *filters,
+            ]
+            other_predicates.extend(
+                FilterPredicate(f"NOT ({predicate.sql})", predicate.params)
+                for predicate in parsed.neg_filters
+            )
+            # 负向收件人 term 仍要 AND 过滤掉。
+            for term in parsed.neg_fts_terms:
+                if not self._is_recipient_term(term):
+                    continue
+                neg_expr = self._recipient_match_expr(term)
+                if neg_expr:
+                    other_predicates.append(FilterPredicate(
+                        "m.internal_id NOT IN (SELECT rowid FROM email_recipient_fts "
+                        "WHERE email_recipient_fts MATCH ?)",
+                        (neg_expr,),
+                    ))
+            hits = self._search_recipient_fts_ranked(
+                recipient_fts_expr=positive_recipient_expr,
+                metadata_predicates=other_predicates,
+                neg_body_fts_expr=neg_fts_expr,
+                limit=limit,
+                query_for_log=positive_recipient_expr,
+            )
+            return hits, positive_recipient_expr
         else:
             sql = """
                 SELECT m.internal_id,
@@ -1987,20 +2026,165 @@ class EmailRepository:
             dt = dt.replace(tzinfo=timezone.utc)
         return dt.timestamp()
 
+    @staticmethod
+    def _is_recipient_term(term: TextTerm) -> bool:
+        """T8: term 是否限定到收件人表 (email_recipient_fts) 列。"""
+        return term.column_table == "recipient"
+
     def _build_positive_fts_expr(self, parsed: ParsedSearchQuery) -> str:
+        # T8: 收件人列 term (to~:/cc~:/from~:) 不进 email_body_fts MATCH —— 它们走
+        # email_recipient_fts 的 IN-子查询 AND 过滤 (见 _build_recipient_predicates)。
         parts: list[str] = []
-        parts.extend(self._text_term_to_fts(term) for term in parsed.fts_terms)
         parts.extend(
-            self._build_fts_or_group(group)
-            for group in parsed.fts_or_groups
+            self._text_term_to_fts(term)
+            for term in parsed.fts_terms
+            if not self._is_recipient_term(term)
         )
+        for group in parsed.fts_or_groups:
+            if any(self._is_recipient_term(term) for term in group):
+                # OR 组里混入收件人列 term → 整组归 recipient 编译, 不进 body MATCH。
+                continue
+            parts.append(self._build_fts_or_group(group))
         parts = [p for p in parts if p]
         return " AND ".join(parts)
 
     def _build_negative_fts_expr(self, parsed: ParsedSearchQuery) -> str:
-        parts = [self._text_term_to_fts(term) for term in parsed.neg_fts_terms]
+        parts = [
+            self._text_term_to_fts(term)
+            for term in parsed.neg_fts_terms
+            if not self._is_recipient_term(term)
+        ]
         parts = [p for p in parts if p]
         return " OR ".join(f"({part})" for part in parts)
+
+    def _recipient_match_expr(self, term: TextTerm) -> str:
+        """单个收件人列 term 编译成 email_recipient_fts 的 MATCH 片段 `<col>:<expr>`。"""
+        expr = self._text_term_to_fts_payload(term)
+        if not expr or not term.column:
+            return ""
+        return f"{term.column} : {expr}"
+
+    def _build_recipient_predicates(
+        self, parsed: ParsedSearchQuery
+    ) -> list[FilterPredicate]:
+        """T8: 把收件人列 term 编译成 email_recipient_fts 的 IN-子查询 AND 谓词。
+
+        - 正向 term / 全 recipient 的 OR 组 → ``m.internal_id IN (SELECT rowid ...)``。
+        - 负向 term → ``m.internal_id NOT IN (...)`` (多负向收件人 term 各自一条 NOT IN)。
+        - graceful degrade: recipient_fts 表缺失 (旧库未迁移) 时由 caller 的 try/except
+          吞掉该谓词 → 该 term 不约束结果 (不崩)。
+        """
+        predicates: list[FilterPredicate] = []
+
+        # 正向单 term。
+        for term in parsed.fts_terms:
+            if not self._is_recipient_term(term):
+                continue
+            expr = self._recipient_match_expr(term)
+            if not expr:
+                continue
+            predicates.append(FilterPredicate(
+                "m.internal_id IN (SELECT rowid FROM email_recipient_fts "
+                "WHERE email_recipient_fts MATCH ?)",
+                (expr,),
+            ))
+
+        # 正向 OR 组 (全为收件人列 term)：组内 OR 进同一个 MATCH 表达式。
+        for group in parsed.fts_or_groups:
+            if not any(self._is_recipient_term(term) for term in group):
+                continue
+            exprs = [self._recipient_match_expr(term) for term in group]
+            exprs = [e for e in exprs if e]
+            if not exprs:
+                continue
+            match_expr = " OR ".join(f"({e})" for e in exprs)
+            predicates.append(FilterPredicate(
+                "m.internal_id IN (SELECT rowid FROM email_recipient_fts "
+                "WHERE email_recipient_fts MATCH ?)",
+                (match_expr,),
+            ))
+
+        # 负向 term。
+        for term in parsed.neg_fts_terms:
+            if not self._is_recipient_term(term):
+                continue
+            expr = self._recipient_match_expr(term)
+            if not expr:
+                continue
+            predicates.append(FilterPredicate(
+                "m.internal_id NOT IN (SELECT rowid FROM email_recipient_fts "
+                "WHERE email_recipient_fts MATCH ?)",
+                (expr,),
+            ))
+
+        return predicates
+
+    def _build_positive_recipient_fts_expr(self, parsed: ParsedSearchQuery) -> str:
+        """把所有正向收件人列 term 合成一条 email_recipient_fts MATCH 表达式 (AND 连接)。
+
+        供 recipient-only 路径直接对 email_recipient_fts MATCH 取 bm25 排名。
+        单 term → `<col>:<expr>`；全 recipient 的 OR 组 → `((c1:e1) OR (c2:e2))`。
+        无正向收件人 term → 空串 (caller 不走 recipient-only 路径)。
+        """
+        parts: list[str] = []
+        for term in parsed.fts_terms:
+            if not self._is_recipient_term(term):
+                continue
+            expr = self._recipient_match_expr(term)
+            if expr:
+                parts.append(f"({expr})")
+        for group in parsed.fts_or_groups:
+            if not any(self._is_recipient_term(term) for term in group):
+                continue
+            exprs = [self._recipient_match_expr(term) for term in group]
+            exprs = [e for e in exprs if e]
+            if exprs:
+                parts.append("(" + " OR ".join(f"({e})" for e in exprs) + ")")
+        return " AND ".join(parts)
+
+    def _search_recipient_fts_ranked(
+        self,
+        *,
+        recipient_fts_expr: str,
+        metadata_predicates: list[FilterPredicate],
+        neg_body_fts_expr: str,
+        limit: int,
+        query_for_log: str,
+    ) -> list[EmailSearchHit]:
+        """T8 recipient-only 排名路径: FROM email_recipient_fts MATCH + JOIN metadata。
+
+        bm25 升序 (最相关在前) + date_received DESC tie-break。snippet 留空
+        (收件人命中不产正文 snippet, 前端按 body 兜底)。graceful degrade:
+        recipient_fts 表缺失 (旧库未迁移) → OperationalError 被接住 → 返回 []。
+        """
+        if not recipient_fts_expr or limit <= 0:
+            return []
+        sql = """
+            SELECT m.internal_id,
+                   COALESCE(m.subject, '')        AS subject,
+                   COALESCE(m.sender, '')         AS sender,
+                   m.date_received,
+                   m.mailbox,
+                   m.notion_page_id,
+                   ''                             AS snippet,
+                   bm25(email_recipient_fts)      AS rank
+              FROM email_recipient_fts
+              JOIN email_metadata m ON m.internal_id = email_recipient_fts.rowid
+             WHERE email_recipient_fts MATCH ?
+        """
+        params: list = [recipient_fts_expr]
+        for predicate in metadata_predicates:
+            sql += f" AND ({predicate.sql})"
+            params.extend(predicate.params)
+        if neg_body_fts_expr:
+            sql += (
+                " AND m.internal_id NOT IN ("
+                "SELECT rowid FROM email_body_fts WHERE email_body_fts MATCH ?)"
+            )
+            params.append(neg_body_fts_expr)
+        sql += " ORDER BY rank, datetime(m.date_received) DESC LIMIT ?"
+        params.append(limit)
+        return self._execute_email_search(sql, params, query_for_log)
 
     def _build_attachment_positive_fts_expr(self, parsed: ParsedSearchQuery) -> str:
         parts: list[str] = []
@@ -2016,15 +2200,22 @@ class EmailRepository:
         return " AND ".join(parts)
 
     def _build_attachment_body_gate_expr(self, parsed: ParsedSearchQuery) -> str:
-        """Column-limited positive FTS terms become body-FTS gates for attachment hits."""
+        """Column-limited positive FTS terms become body-FTS gates for attachment hits.
+
+        T8: 收件人列 term (email_recipient_fts) 不是 body 列 → 排除出 body gate
+        (它们在 metadata_predicates 里以独立 IN-子查询约束附件命中)。
+        """
         parts: list[str] = []
         parts.extend(
             self._text_term_to_fts(term)
             for term in parsed.fts_terms
-            if term.column is not None
+            if term.column is not None and not self._is_recipient_term(term)
         )
         for group in parsed.fts_or_groups:
-            if all(term.column is not None for term in group):
+            if group and all(
+                term.column is not None and not self._is_recipient_term(term)
+                for term in group
+            ):
                 parts.append(self._build_fts_or_group(group))
         parts = [p for p in parts if p]
         return " AND ".join(parts)

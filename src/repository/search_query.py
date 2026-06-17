@@ -15,12 +15,20 @@ from typing import Any, Literal, Optional
 
 @dataclass(frozen=True)
 class TextTerm:
-    """一个全文检索 unit。"""
+    """一个全文检索 unit。
+
+    ``column`` 标记该 term 限定到哪个 FTS5 列。``column_table`` 标记该列属于哪张
+    FTS5 表（T6 的 body:/subject~:/sender~: 属 ``email_body_fts``；T8 的
+    to~:/cc~:/from~: 属 ``email_recipient_fts`` 并行表）。裸全文 term 两者都为 None。
+    """
 
     value: str
     is_phrase: bool = False
     force_quoted: bool = False
-    column: Optional[Literal["body_markdown", "subject", "sender"]] = None
+    column: Optional[
+        Literal["body_markdown", "subject", "sender", "to_addr", "cc_addr", "sender_name"]
+    ] = None
+    column_table: Optional[Literal["body", "recipient"]] = None
 
 
 @dataclass(frozen=True)
@@ -82,10 +90,20 @@ _FIELD_ALIASES: dict[str, str] = {
     "priority": "priority",
 }
 
+# T6: email_body_fts 列级 FTS 语法（body/subject/sender 同一张主表）。
 _FTS_COLUMN_ALIASES: dict[str, Literal["body_markdown", "subject", "sender"]] = {
     "body": "body_markdown",
     "subject~": "subject",
     "sender~": "sender",
+}
+
+# T8: email_recipient_fts 并行表的列级 FTS 语法（收件人全文化, ②保守）。
+# to~:/cc~:/from~: 查 email_recipient_fts（与 T6 的 body:/subject~:/sender~: 不同表），
+# 与既有 to:/cc:/from: 的 LIKE 硬过滤并存、语义不变。
+_FTS_RECIPIENT_COLUMN_ALIASES: dict[str, Literal["to_addr", "cc_addr", "sender_name"]] = {
+    "to~": "to_addr",
+    "cc~": "cc_addr",
+    "from~": "sender_name",
 }
 
 _MAILBOX_ALIASES: dict[str, str] = {
@@ -253,6 +271,7 @@ def _is_registered_field_token(token: str) -> bool:
     return (
         _FIELD_ALIASES.get(name) is not None
         or _FTS_COLUMN_ALIASES.get(name) is not None
+        or _FTS_RECIPIENT_COLUMN_ALIASES.get(name) is not None
         or name == "sort"
     )
 
@@ -293,10 +312,12 @@ def _merge_dangling_fields(tokens: list[str]) -> list[str]:
         if (
             match is not None
             and match.group(2) == ""  # 冒号后空值
-            # 已注册字段、列级 FTS 字段或 sort（排序指令也享受冒号后空格容错）
+            # 已注册字段、列级 FTS 字段（含收件人 to~:/cc~:/from~:）或 sort
+            # （排序指令也享受冒号后空格容错）
             and (
                 _FIELD_ALIASES.get(name) is not None
                 or _FTS_COLUMN_ALIASES.get(name) is not None
+                or _FTS_RECIPIENT_COLUMN_ALIASES.get(name) is not None
                 or name == "sort"
             )
             and i + 1 < n  # 有下一个 token
@@ -330,16 +351,25 @@ def _classify_token(
     if field_match:
         field_name = field_match.group(1).lower()
         raw_value = field_match.group(2)
+        # T6 主表列 (email_body_fts) 与 T8 收件人表列 (email_recipient_fts) 分属两张 FTS5 表。
         fts_column = _FTS_COLUMN_ALIASES.get(field_name)
-        if fts_column is not None:
+        recipient_column = _FTS_RECIPIENT_COLUMN_ALIASES.get(field_name)
+        if fts_column is not None or recipient_column is not None:
             saw_syntax = True
             value = _strip_outer_quotes(raw_value)
             if value == "":
                 warnings.append(f"empty_value:{field_name}")
                 return None, saw_syntax
+            column = fts_column if fts_column is not None else recipient_column
+            column_table = "body" if fts_column is not None else "recipient"
             return _Unit(
                 "text",
-                TextTerm(value, is_phrase=_is_quoted(raw_value), column=fts_column),
+                TextTerm(
+                    value,
+                    is_phrase=_is_quoted(raw_value),
+                    column=column,
+                    column_table=column_table,
+                ),
                 negated=negated,
             ), saw_syntax
 

@@ -39,6 +39,9 @@ serve-api `GET /api/email/search?q=`、CLI `mailagent email search`、chat tools
 | `body:` | — | `email_body_fts.body_markdown` | FTS5 column filter；值复用 smart transform，参与 bm25/RRF；不替代裸词全文 |
 | `subject~:` | — | `email_body_fts.subject` | FTS5 column filter；与既有 `subject:` LIKE 并存，`subject:` 语义不变 |
 | `sender~:` | — | `email_body_fts.sender` | FTS5 column filter；与既有 `from:` LIKE 并存，`from:` 语义不变 |
+| `to~:` | — | `email_recipient_fts.to_addr` | FTS5 column filter（**并行收件人表**，非 `email_body_fts`）；与既有 `to:` LIKE 并存，`to:` 语义不变 |
+| `cc~:` | — | `email_recipient_fts.cc_addr` | FTS5 column filter（并行收件人表）；与既有 `cc:` LIKE 并存，`cc:` 语义不变 |
+| `from~:` | — | `email_recipient_fts.sender_name` | FTS5 column filter（并行收件人表，仅 `sender_name`）；与既有 `from:` LIKE（`sender`/`sender_name`）并存，`from:` 语义不变 |
 
 通用规则：
 - 字段名 **大小写不敏感**（`From:` = `from:`）；值保持原样（LIKE 本身 ASCII 大小写不敏感）。
@@ -50,8 +53,21 @@ serve-api `GET /api/email/search?q=`、CLI `mailagent email search`、chat tools
 ### 2.2 文本词 / 短语（全文检索）
 
 - 裸词 → FTS5 MATCH（`email_body_fts`：body_markdown + subject + sender 三列），多词 **AND**。
-- `body:` / `subject~:` / `sender~:` → 同样是全文 unit，但编译成 FTS5 column filter
-  （如 `subject : redis`）；它们是新增语法，不改变 `subject:` / `from:` 的 LIKE 过滤语义。
+  **裸词不含收件人**（to_addr / cc_addr / sender_name）—— `email_body_fts` 不索引收件人列，
+  收件人专属内容只能用下面的 `to~:` / `cc~:` / `from~:` 显式查（②保守语义：裸词搜索一行不碰
+  并行收件人表，故存量裸词查询逐字节零回归）。
+- `body:` / `subject~:` / `sender~:` → 同样是全文 unit，但编译成 `email_body_fts` 的 FTS5
+  column filter（如 `subject : redis`）；它们是新增语法，不改变 `subject:` / `from:` 的 LIKE 过滤语义。
+- `to~:` / `cc~:` / `from~:` → 收件人全文化（T8）。编译成**并行表** `email_recipient_fts`
+  （索引 email_metadata 的 to_addr / cc_addr / sender_name 三列）的 MATCH 子查询，作为
+  `m.internal_id IN (SELECT rowid FROM email_recipient_fts WHERE email_recipient_fts MATCH '<col>:<expr>')`
+  AND 过滤谓词；与正文裸词组合时，正文词走 `email_body_fts` 排名、收件人词作 AND 过滤；
+  只有收件人词、无正文裸词时直接对 `email_recipient_fts` MATCH 取 bm25 排名。它们与既有
+  `to:` / `cc:` / `from:` 的 LIKE 硬过滤并存、互不改变。**与 `to:`/`cc:` LIKE 的区别**：
+  `to:` 是 substring LIKE（`to_addr LIKE '%v%'`），`to~:` 走 FTS5 token 匹配（按
+  `@` / `.` 切分的 token，参与相关度），二者各取所需。
+- graceful degrade：`email_recipient_fts` 表缺失（旧库未迁移到 v25）→ MATCH 子查询抛
+  `OperationalError` 被搜索路径 try/except 接住，不崩（该查询返回空，flag-free 升级后表恒在）。
 - 纯 alnum/CJK 的 token → 复用现有 CJK smart transform（`smart_query_transform` / `smartQueryTransform`），行为不变。
 - `"exact phrase"` → FTS5 短语 query（原样带引号传入 MATCH）。
 - 文本 token 含 FTS5 特殊字符（`* ( ) : . @ -` 等非 alnum/CJK 字符）→ **双引号包裹转义**后进 MATCH（内部 `"` 翻倍转义），避免被 FTS5 误解析为语法。例：`foo:bar`（未知字段）→ MATCH 片段 `"foo:bar"`。
@@ -82,7 +98,7 @@ query 原样下放 FTS5 MATCH（现状行为，高级 FTS5 语法 NEAR/列过滤
 
 1. `mode='raw'` → 直通，结束。
 2. tokenize：按空白切分，但**引号内的空白不切**（支持 `from:"a b"` 与 `"a b"`；未闭合引号 → 该引号视为普通字符 + warning）。
-3. **字段容错合并（merge pass）**：若某 token 是孤立的已注册 `field:`（含 `sort:` 与 `body:` / `subject~:` / `sender~:`，冒号后空值），且其后紧跟一个**非字段过滤器、非 `OR`** 的 token（可为引号词），则合并为 `field:<下一个 token>`（保留前导 `-` 否定）。例：`from: echo`→`from:echo`、`-from: echo`→`-from:echo`、`from: "Zhang San"`→`from:"Zhang San"`。**不合并**（保持丢弃 + `empty_value` warning）：孤立 `field:` 在末尾、下一个是字段过滤器（如 `from: from:bob`、`from: -is:read`、`from: sort:date`）、下一个是 `OR`。注：值含空格仍需引号——只吞紧跟的一个 token（`from: a b` → `from:a` + 文本 `b`）。
+3. **字段容错合并（merge pass）**：若某 token 是孤立的已注册 `field:`（含 `sort:` 与 `body:` / `subject~:` / `sender~:` / `to~:` / `cc~:` / `from~:`，冒号后空值），且其后紧跟一个**非字段过滤器、非 `OR`** 的 token（可为引号词），则合并为 `field:<下一个 token>`（保留前导 `-` 否定）。例：`from: echo`→`from:echo`、`-from: echo`→`-from:echo`、`from: "Zhang San"`→`from:"Zhang San"`。**不合并**（保持丢弃 + `empty_value` warning）：孤立 `field:` 在末尾、下一个是字段过滤器（如 `from: from:bob`、`from: -is:read`、`from: sort:date`）、下一个是 `OR`。注：值含空格仍需引号——只吞紧跟的一个 token（`from: a b` → `from:a` + 文本 `b`）。
 4. 逐 token 分类：否定前缀 → 字段匹配（`^([A-Za-z_]+~?):(.*)$` 且字段名在注册表）→ 短语 → 文本词。
 5. OR 结合（§2.4），产出结构化查询：`{ fts_terms[], fts_or_groups[], neg_fts_terms[], filters[], or_filter_groups[], neg_filters[], warnings[] }`。
 6. **零语法 fast-path（回归红线）**：若解析结果不含任何字段过滤器、否定、OR 重组（即纯文本词/短语），必须走**与现状完全相同**的代码路径：整串 query 交给 smart transform（含其对 quote/wildcard/operator 的 raw-passthrough 判断）。保证存量查询行为逐字节不变。
@@ -199,7 +215,7 @@ date-only 的 `until <= '2026-06-01'` 还会漏掉当天全部邮件。因此：
 
 - Python：pytest runner 建 in-memory SQLite（最小 schema：email_metadata + email_body_fts(contentful, rowid=internal_id) + email_attachment + email_attachment_text + email_attachment_fts），灌 emails；`attachments[].text_content` 存在时写入 `email_attachment_text` 并索引到 `email_attachment_fts`，逐 case 跑 search、断言。
 - TS：vitest runner 用 better-sqlite3 `:memory:` 同样建表灌数据跑断言，**读同一份 JSON 文件**（相对路径 `../../tests/fixtures/...`）。
-- 夹具必须覆盖：每个字段至少 1 例、别名、引号值、否定（字段/文本/纯否定）、OR（字段同类/文本同类/跨类降级）、未知字段降级文本、空值丢弃、date-only 边界（当天含）、时区混存数据的日期过滤、newer_than 相对日期、纯过滤排序、列级 FTS（`body:` / `subject~:` / `sender~:`）、附件正文融合（only attachment / body+attachment / metadata filter 传播）、零语法 fast-path 行为不变（与现状对照例）、CJK smart 不回归、与结构化参数 merge。
+- 夹具必须覆盖：每个字段至少 1 例、别名、引号值、否定（字段/文本/纯否定）、OR（字段同类/文本同类/跨类降级）、未知字段降级文本、空值丢弃、date-only 边界（当天含）、时区混存数据的日期过滤、newer_than 相对日期、纯过滤排序、列级 FTS（`body:` / `subject~:` / `sender~:`）、收件人 FTS（`to~:` / `cc~:` / `from~:` 命中 + 收件人词 + 正文词 AND + **裸词不命中收件人专属 token** 守卫 + 负向收件人），附件正文融合（only attachment / body+attachment / metadata filter 传播）、零语法 fast-path 行为不变（与现状对照例）、CJK smart 不回归、与结构化参数 merge。
 
 ## 7. 示例
 
@@ -219,7 +235,8 @@ date-only 的 `until <= '2026-06-01'` 还会漏掉当天全部邮件。因此：
 
 - 括号分组、跨类 OR。
 - 不给既有 `subject:` / `from:` 叠加 FTS boost；它们继续是 LIKE 硬过滤。需要列级相关度时使用新增 `subject~:` / `sender~:`。
-- `to:/cc:` 不进 FTS 索引（LIKE 够用；未来如需全文搜收件人再做 FTS schema migration）。
+- `to:` / `cc:` / `from:` 的 **LIKE 硬过滤**不叠加 FTS boost（仍是 substring LIKE）；需要收件人
+  全文/相关度时用 T8 新增的 `to~:` / `cc~:` / `from~:`（并行 `email_recipient_fts` 表，见 §10）。
 - 附件融合只在 smart 正向全文路径启用；`mode='raw'` 保持正文 FTS5 逃生门。列级 FTS term 在附件分支作为 `email_body_fts` 门控，只有列级 term、没有裸全文词时不查询附件正文。
 - jieba 词典级中文分词（更重，双运行时一致性风险；trigram 已覆盖子串搜索，见 §9）。**裸全文中文子串**已由 §9 trigram 路由解决（flag-gated）；但**列级 FTS** `body:` / `subject~:` / `sender~:` 仍走 `unicode61`，对中文非前缀子串仍有限制（例如 `body:产品` 不保证命中正文 token `本周产品评审...`）。
 - 保存搜索/搜索历史（前端后续迭代）。
@@ -262,3 +279,52 @@ date-only 的 `until <= '2026-06-01'` 还会漏掉当天全部邮件。因此：
 ### 9.3 跨语言一致性
 
 行为夹具（§6）新增 `trigram: true` per-case 开关——标记的 case 把 `SEARCH_TRIGRAM_ENABLED` 置 True 跑，其余 case 默认 False 作零回归守卫。Python runner 建 `email_body_fts_trigram` 表灌数据；前端 TS runner（better-sqlite3，trigram tokenizer 已验证支持）须建同表 + 实现 `build_search_plan` 等价路由，读同一份 JSON 锁行为。
+
+## 10. 收件人全文化（T8 并行 recipient 表，无 flag）
+
+**问题**：旧版 `to:` / `cc:` 只走 substring LIKE（`to_addr LIKE '%v%'`），收件人不进任何 FTS 索引，
+无法参与相关度，也没有 token 级匹配；`email_body_fts` 又**只索引 body/subject/sender 三列**，
+裸词搜索天然不含收件人。
+
+**方案（②保守 + 并行 contentful 表，DB v25）**：
+
+- **主表 `email_body_fts` 一行不动** → 裸词搜索逐字节零回归（②保守语义：裸词不碰收件人）。
+- 新增并行 **contentful** FTS5 表 `email_recipient_fts`（`to_addr`, `cc_addr`, `sender_name`；
+  `tokenize='porter unicode61 remove_diacritics 2'`，rowid=internal_id）。**数据源是
+  `email_metadata` 三列**（与 `email_body_fts` 来自 `email_body` 不同），由 3 个 trigger
+  自动同步：`AFTER INSERT` / `AFTER UPDATE OF to_addr,cc_addr,sender_name` / `AFTER DELETE`
+  on `email_metadata`。
+- **无 flag**：纯新增 `to~:` / `cc~:` / `from~:` 显式 FTS 列语法，opt-in，不改任何现有行为。
+  `to:` / `cc:` / `from:` 的 LIKE 过滤完全不变。
+
+### 10.1 编译规则
+
+- 正向单 term → `m.internal_id IN (SELECT rowid FROM email_recipient_fts WHERE email_recipient_fts MATCH '<col>:<expr>')` 作 AND 过滤谓词。
+- 正向且全为收件人列的 OR 组 → 组内 `(c1:e1) OR (c2:e2)` 合进同一条 MATCH 子查询。
+- 负向 term（`-to~:x`）→ `m.internal_id NOT IN (SELECT rowid FROM email_recipient_fts WHERE ... MATCH ...)`。
+- query 同时有正文裸词 → 正文 term 走 `email_body_fts` MATCH 排名，收件人 term 作 IN-子查询 AND 过滤。
+- query **只有**收件人列 term（无正文裸词、无 `sort:date`/`oldest`）→ 直接 `FROM email_recipient_fts MATCH` 取 `bm25` 排名。
+- 与 T5 附件融合 / T7 trigram / T6 主表列级互不冲突（收件人是独立的新增列 + 独立表）。
+- graceful degrade：`email_recipient_fts` 表缺失（旧库未迁移到 v25）→ MATCH 子查询抛
+  `OperationalError`，被搜索路径 try/except 接住，不崩。
+
+### 10.2 与 `to:`/`cc:`/`from:` LIKE 的区别
+
+| 语法 | 编译 | 匹配 |
+|---|---|---|
+| `to:bob` | `to_addr LIKE '%bob%'` | substring，不参与相关度 |
+| `to~:bob` | `email_recipient_fts MATCH 'to_addr:bob'` | FTS5 token（按 `@`/`.` 切分），参与 bm25 排名 |
+| `from:alice` | `(sender LIKE '%alice%' OR sender_name LIKE '%alice%')` | substring，邮箱地址 + 显示名 |
+| `from~:alice` | `email_recipient_fts MATCH 'sender_name:alice'` | FTS5 token，仅显示名 `sender_name` |
+
+### 10.3 回滚
+
+三个新语法只在 parser 显式列名出现时生效，不影响裸词；彻底回退见 `sync_store.py` v25 迁移块注释
+（DROP 3 trigger + DROP `email_recipient_fts`，主表 `email_body_fts` / `email_body_fts_trigram` 不动）。
+
+### 10.4 跨语言一致性
+
+行为夹具（§6）的收件人 case **无 per-case 开关**（无 flag，恒生效）。Python runner 建
+`email_recipient_fts` 表并镜像 insert trigger 从 fixture email 的 to_addr / cc_addr / sender_name
+灌数据；前端 TS runner 须建同表 + 实现等价编译（`to~:`/`cc~:`/`from~:` + 表维度），读同一份 JSON 锁行为。
+前端镜像还需：`TextTerm` 加表维度（哪张表的哪列）、`EXPECTED_DB_VERSION` 抬到 25。

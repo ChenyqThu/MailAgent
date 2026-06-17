@@ -94,6 +94,13 @@ function buildDb(): Database.Database {
       tokenize='trigram'
     );
 
+    CREATE VIRTUAL TABLE email_recipient_fts USING fts5(
+      to_addr,
+      cc_addr,
+      sender_name,
+      tokenize='porter unicode61 remove_diacritics 2'
+    );
+
     CREATE TABLE email_attachment (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       internal_id INTEGER NOT NULL,
@@ -137,6 +144,12 @@ function buildDb(): Database.Database {
     INSERT INTO email_body_fts_trigram (rowid, body_markdown, subject, sender)
     VALUES (?, ?, ?, ?)
   `)
+  // 镜像 email_recipient_fts_insert trigger: 并行收件人表 (T8)，数据来自 email_metadata
+  // 的 to_addr / cc_addr / sender_name，rowid = internal_id。
+  const insertRecipientFts = db.prepare(`
+    INSERT INTO email_recipient_fts (rowid, to_addr, cc_addr, sender_name)
+    VALUES (?, ?, ?, ?)
+  `)
   const insertAttachment = db.prepare(`
     INSERT INTO email_attachment (internal_id, filename, is_inline)
     VALUES (?, ?, ?)
@@ -170,6 +183,13 @@ function buildDb(): Database.Database {
     )
     insertFts.run(email.internal_id, email.body_markdown, email.subject, email.sender)
     insertFtsTrigram.run(email.internal_id, email.body_markdown, email.subject, email.sender)
+    // 镜像 trigger 的 COALESCE(NEW.col, '') —— sender_name 可空。
+    insertRecipientFts.run(
+      email.internal_id,
+      email.to_addr ?? '',
+      email.cc_addr ?? '',
+      email.sender_name ?? ''
+    )
     for (const attachment of email.attachments ?? []) {
       const info = insertAttachment.run(
         email.internal_id,

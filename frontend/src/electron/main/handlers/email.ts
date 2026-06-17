@@ -425,17 +425,114 @@ function buildFtsOrGroup(group: TextTerm[]): string {
   return `(${parts.map((part) => `(${part})`).join(' OR ')})`
 }
 
+// T8: term 是否限定到收件人表 (email_recipient_fts) 列。镜像 Python _is_recipient_term。
+function isRecipientTerm(term: TextTerm): boolean {
+  return term.columnTable === 'recipient'
+}
+
+// 单个收件人列 term 编译成 email_recipient_fts 的 MATCH 片段 `<col> : <expr>`。
+// 注意用 payload（无列前缀）再手动拼列名，镜像 Python _recipient_match_expr
+// （走 _text_term_to_fts_payload 而非 _text_term_to_fts）。
+function recipientMatchExpr(term: TextTerm): string {
+  const expr = textTermToFtsPayload(term)
+  if (!expr || !term.column) return ''
+  return `${term.column} : ${expr}`
+}
+
 function buildPositiveFtsExpr(parsed: ParsedSearchQuery): string {
-  const parts = [
-    ...parsed.fts_terms.map(textTermToFts),
-    ...parsed.fts_or_groups.map(buildFtsOrGroup)
-  ].filter((part) => part.length > 0)
-  return parts.join(' AND ')
+  // T8: 收件人列 term 不进 email_body_fts MATCH —— 它们走 email_recipient_fts 的
+  // IN-子查询 AND 过滤 (见 buildRecipientPredicates)。镜像 Python _build_positive_fts_expr。
+  const parts: string[] = []
+  for (const term of parsed.fts_terms) {
+    if (isRecipientTerm(term)) continue
+    parts.push(textTermToFts(term))
+  }
+  for (const group of parsed.fts_or_groups) {
+    // OR 组里混入收件人列 term → 整组归 recipient 编译, 不进 body MATCH。
+    if (group.some((term) => isRecipientTerm(term))) continue
+    parts.push(buildFtsOrGroup(group))
+  }
+  return parts.filter((part) => part.length > 0).join(' AND ')
 }
 
 function buildNegativeFtsExpr(parsed: ParsedSearchQuery): string {
-  const parts = parsed.neg_fts_terms.map(textTermToFts).filter((part) => part.length > 0)
+  const parts = parsed.neg_fts_terms
+    .filter((term) => !isRecipientTerm(term))
+    .map(textTermToFts)
+    .filter((part) => part.length > 0)
   return parts.map((part) => `(${part})`).join(' OR ')
+}
+
+// T8: 把收件人列 term 编译成 email_recipient_fts 的 IN-子查询 AND 谓词。
+// - 正向 term / 全 recipient 的 OR 组 → m.internal_id IN (SELECT rowid ...)。
+// - 负向 term → m.internal_id NOT IN (...) (每个负向收件人 term 各自一条 NOT IN)。
+// graceful degrade: recipient_fts 表缺失 (旧库未迁移) → caller 的 try/catch 吞掉
+// 该谓词 → 该 term 不约束结果 (不崩, 与 P1 附件 try/catch 同手法)。
+// 镜像 Python _build_recipient_predicates。
+function buildRecipientPredicates(parsed: ParsedSearchQuery): FilterPredicate[] {
+  const predicates: FilterPredicate[] = []
+
+  // 正向单 term。
+  for (const term of parsed.fts_terms) {
+    if (!isRecipientTerm(term)) continue
+    const expr = recipientMatchExpr(term)
+    if (!expr) continue
+    predicates.push({
+      sql:
+        'm.internal_id IN (SELECT rowid FROM email_recipient_fts ' +
+        'WHERE email_recipient_fts MATCH ?)',
+      params: [expr]
+    })
+  }
+
+  // 正向 OR 组 (全为收件人列 term)：组内 OR 进同一个 MATCH 表达式。
+  for (const group of parsed.fts_or_groups) {
+    if (!group.some((term) => isRecipientTerm(term))) continue
+    const exprs = group.map(recipientMatchExpr).filter((e) => e.length > 0)
+    if (exprs.length === 0) continue
+    const matchExpr = exprs.map((e) => `(${e})`).join(' OR ')
+    predicates.push({
+      sql:
+        'm.internal_id IN (SELECT rowid FROM email_recipient_fts ' +
+        'WHERE email_recipient_fts MATCH ?)',
+      params: [matchExpr]
+    })
+  }
+
+  // 负向 term。
+  for (const term of parsed.neg_fts_terms) {
+    if (!isRecipientTerm(term)) continue
+    const expr = recipientMatchExpr(term)
+    if (!expr) continue
+    predicates.push({
+      sql:
+        'm.internal_id NOT IN (SELECT rowid FROM email_recipient_fts ' +
+        'WHERE email_recipient_fts MATCH ?)',
+      params: [expr]
+    })
+  }
+
+  return predicates
+}
+
+// 把所有正向收件人列 term 合成一条 email_recipient_fts MATCH 表达式 (AND 连接)。
+// 供 recipient-only 路径直接对 email_recipient_fts MATCH 取 bm25 排名。
+// 单 term → (`<col> : <expr>`)；全 recipient 的 OR 组 → ((c1:e1) OR (c2:e2))。
+// 无正向收件人 term → 空串 (caller 不走 recipient-only 路径)。
+// 镜像 Python _build_positive_recipient_fts_expr。
+function buildPositiveRecipientFtsExpr(parsed: ParsedSearchQuery): string {
+  const parts: string[] = []
+  for (const term of parsed.fts_terms) {
+    if (!isRecipientTerm(term)) continue
+    const expr = recipientMatchExpr(term)
+    if (expr) parts.push(`(${expr})`)
+  }
+  for (const group of parsed.fts_or_groups) {
+    if (!group.some((term) => isRecipientTerm(term))) continue
+    const exprs = group.map(recipientMatchExpr).filter((e) => e.length > 0)
+    if (exprs.length > 0) parts.push('(' + exprs.map((e) => `(${e})`).join(' OR ') + ')')
+  }
+  return parts.join(' AND ')
 }
 
 // T5 附件融合：附件 FTS 表只索引 text_content（无 subject/sender 列），故附件分支
@@ -453,14 +550,18 @@ function buildAttachmentPositiveFtsExpr(parsed: ParsedSearchQuery): string {
 }
 
 // 列级正向词在附件分支没有对应列，转而作为 email_body_fts 门控（body gate）。
+// T8: 收件人列 term (email_recipient_fts) 不是 body 列 → 排除出 body gate
+// (它们在 metadata_predicates 里以独立 IN-子查询约束附件命中)。
 // 镜像 Python _build_attachment_body_gate_expr。
 function buildAttachmentBodyGateExpr(parsed: ParsedSearchQuery): string {
   const parts: string[] = []
   for (const term of parsed.fts_terms) {
-    if (term.column != null) parts.push(textTermToFts(term))
+    if (term.column != null && !isRecipientTerm(term)) parts.push(textTermToFts(term))
   }
   for (const group of parsed.fts_or_groups) {
-    if (group.every((term) => term.column != null)) parts.push(buildFtsOrGroup(group))
+    if (group.length > 0 && group.every((term) => term.column != null && !isRecipientTerm(term))) {
+      parts.push(buildFtsOrGroup(group))
+    }
   }
   return parts.filter((part) => part.length > 0).join(' AND ')
 }
@@ -1103,6 +1204,66 @@ export function searchEmails(opts: SearchOpts): SearchResult {
     }
   }
 
+  // T8 recipient-only 排名路径: FROM email_recipient_fts MATCH + JOIN metadata。
+  // bm25 升序 (最相关在前) + date_received DESC tie-break。snippet 留空 (收件人命中
+  // 不产正文 snippet, 前端按 body 兜底)。graceful degrade: email_recipient_fts 表缺失
+  // (旧库未迁移) → MATCH 抛 → try/catch 接住 → 返回 [] (与 P1 附件 try/catch 同手法)。
+  // 镜像 Python _search_recipient_fts_ranked。
+  const runRecipientFtsRanked = (
+    recipientFtsExpr: string,
+    metadataPredicates: FilterPredicate[],
+    negBodyFtsExpr: string
+  ): EmailSearch_SearchHit[] => {
+    if (!recipientFtsExpr || limit <= 0) return []
+    let sql = `
+    SELECT
+      m.internal_id           AS internal_id,
+      COALESCE(m.subject, '') AS subject,
+      COALESCE(m.sender, '')  AS sender,
+      m.date_received         AS date_received,
+      m.mailbox               AS mailbox,
+      m.notion_page_id        AS notion_page_id,
+      ''                      AS snippet,
+      bm25(email_recipient_fts) AS rank
+    FROM email_recipient_fts
+    JOIN email_metadata m ON m.internal_id = email_recipient_fts.rowid
+    WHERE email_recipient_fts MATCH ?`
+    const params: unknown[] = [recipientFtsExpr]
+    for (const predicate of metadataPredicates) {
+      sql += ` AND (${predicate.sql})`
+      params.push(...predicate.params)
+    }
+    if (negBodyFtsExpr) {
+      sql +=
+        ' AND m.internal_id NOT IN (' +
+        'SELECT rowid FROM email_body_fts WHERE email_body_fts MATCH ?)'
+      params.push(negBodyFtsExpr)
+    }
+    // sort:date / sort:oldest 不会进这条路径 (caller 已判 sort∉{date,oldest})；
+    // 这里恒按 bm25 相关度排，date DESC tie-break。镜像 Python ORDER BY rank, date DESC。
+    sql += ' ORDER BY rank ASC, datetime(m.date_received) DESC LIMIT ?'
+    params.push(limit)
+    try {
+      const rows = prep(db, sql).all(...params) as SearchRow[]
+      return rows.map((row) =>
+        shapeSearchHit({
+          ...row,
+          priority_raw: null,
+          lang_raw: null,
+          source: 'body',
+          filename: null
+        })
+      )
+    } catch (err) {
+      console.warn(
+        '[email:search] recipient FTS unavailable or invalid query',
+        recipientFtsExpr,
+        err
+      )
+      return []
+    }
+  }
+
   const runMetadataSearch = (
     filters: FilterPredicate[],
     negFtsExpr?: string,
@@ -1329,21 +1490,29 @@ export function searchEmails(opts: SearchOpts): SearchResult {
     } else {
       const ftsExpr = buildPositiveFtsExpr(parsed)
       const negFtsExpr = buildNegativeFtsExpr(parsed)
+      // T8: 收件人列 term (to~:/cc~:/from~:) 编译成 email_recipient_fts 的 IN-子查询谓词;
+      // 正向排名表达式给 recipient-only 路径用。镜像 Python recipient_predicates /
+      // positive_recipient_expr。
+      const recipientPredicates = buildRecipientPredicates(parsed)
+      const positiveRecipientExpr = buildPositiveRecipientFtsExpr(parsed)
+      const negFiltersCompiled: FilterPredicate[] = parsed.neg_filters.map((predicate) => ({
+        sql: `NOT (${predicate.sql})`,
+        params: predicate.params
+      }))
       const filters: FilterPredicate[] = [
         ...parsed.filters,
         ...compileOrFilterGroups(parsed.or_filter_groups),
         ...structured.predicates,
-        ...parsed.neg_filters.map((predicate) => ({
-          sql: `NOT (${predicate.sql})`,
-          params: predicate.params
-        }))
+        ...recipientPredicates,
+        ...negFiltersCompiled
       ]
 
       if (!ftsExpr && !negFtsExpr && filters.length === 0) {
         items = []
       } else if (ftsExpr) {
         // 有正向全文词 → fused（body + attachment）。附件正向 expr 只含裸词，
-        // 列级词转为 body gate；neg 双路。镜像 Python fts 分支。
+        // 列级词转为 body gate；neg 双路。recipient 列词以 IN-子查询谓词进 filters。
+        // 镜像 Python fts 分支。
         transformedQuery = ftsExpr
         items = runFusedSearch(
           ftsExpr,
@@ -1354,6 +1523,32 @@ export function searchEmails(opts: SearchOpts): SearchResult {
           buildAttachmentBodyGateExpr(parsed),
           parsed.sort
         )
+      } else if (positiveRecipientExpr && parsed.sort !== 'date' && parsed.sort !== 'oldest') {
+        // T8 recipient-only 路径: 无正文裸词/列词, 但有正向收件人列 term → 直接查
+        // email_recipient_fts MATCH 取 bm25 排名 (recipient 命中相关度)。
+        // sort:date / sort:oldest 仍走下面纯过滤分支按时间排 (与 body 路径语义一致)。
+        // 排名用的那条正向收件人谓词不再重复进 metadata filter (避免双查)，但其余结构化
+        // 谓词 + 负向收件人 term 仍作 AND 过滤。镜像 Python elif positive_recipient_expr 分支。
+        const otherPredicates: FilterPredicate[] = [
+          ...parsed.filters,
+          ...compileOrFilterGroups(parsed.or_filter_groups),
+          ...structured.predicates,
+          ...negFiltersCompiled
+        ]
+        // 负向收件人 term 仍要 AND 过滤掉。
+        for (const term of parsed.neg_fts_terms) {
+          if (!isRecipientTerm(term)) continue
+          const negExpr = recipientMatchExpr(term)
+          if (!negExpr) continue
+          otherPredicates.push({
+            sql:
+              'm.internal_id NOT IN (SELECT rowid FROM email_recipient_fts ' +
+              'WHERE email_recipient_fts MATCH ?)',
+            params: [negExpr]
+          })
+        }
+        transformedQuery = positiveRecipientExpr
+        items = runRecipientFtsRanked(positiveRecipientExpr, otherPredicates, negFtsExpr)
       } else {
         items = runMetadataSearch(filters, negFtsExpr, parsed.sort)
       }

@@ -2,7 +2,11 @@ export interface TextTerm {
   value: string
   is_phrase?: boolean
   force_quoted?: boolean
-  column?: 'body_markdown' | 'subject' | 'sender'
+  // column 标记该 term 限定到哪个 FTS5 列。columnTable 标记该列属于哪张 FTS5 表
+  // （T6 的 body/subject/sender 属 email_body_fts；T8 的 to_addr/cc_addr/sender_name
+  // 属并行表 email_recipient_fts）。裸全文 term 两者都为 undefined。镜像 Python TextTerm。
+  column?: 'body_markdown' | 'subject' | 'sender' | 'to_addr' | 'cc_addr' | 'sender_name'
+  columnTable?: 'body' | 'recipient'
 }
 
 export interface FilterPredicate {
@@ -69,6 +73,15 @@ const FTS_COLUMN_ALIASES: Record<string, 'body_markdown' | 'subject' | 'sender'>
   body: 'body_markdown',
   'subject~': 'subject',
   'sender~': 'sender'
+}
+
+// T8: email_recipient_fts 并行表的列级 FTS 语法（收件人全文化, ②保守）。
+// to~:/cc~:/from~: 查 email_recipient_fts（与 T6 的 body:/subject~:/sender~: 不同表），
+// 与既有 to:/cc:/from: 的 LIKE 硬过滤并存、语义不变。镜像 Python _FTS_RECIPIENT_COLUMN_ALIASES。
+const FTS_RECIPIENT_COLUMN_ALIASES: Record<string, 'to_addr' | 'cc_addr' | 'sender_name'> = {
+  'to~': 'to_addr',
+  'cc~': 'cc_addr',
+  'from~': 'sender_name'
 }
 
 const MAILBOX_ALIASES: Record<string, string> = {
@@ -142,7 +155,10 @@ function isRegisteredFieldToken(token: string): boolean {
   if (match === null) return false
   const name = match[1]!.toLowerCase()
   return (
-    FIELD_ALIASES[name] !== undefined || FTS_COLUMN_ALIASES[name] !== undefined || name === 'sort'
+    FIELD_ALIASES[name] !== undefined ||
+    FTS_COLUMN_ALIASES[name] !== undefined ||
+    FTS_RECIPIENT_COLUMN_ALIASES[name] !== undefined ||
+    name === 'sort'
   )
 }
 
@@ -182,9 +198,11 @@ function mergeDanglingFields(tokens: string[]): string[] {
     if (
       match !== null &&
       match[2] === '' &&
-      // 已注册字段、列级 FTS 字段或 sort（排序指令也享受冒号后空格容错）
+      // 已注册字段、列级 FTS 字段（含收件人 to~:/cc~:/from~:）或 sort
+      // （排序指令也享受冒号后空格容错）
       (FIELD_ALIASES[name] !== undefined ||
         FTS_COLUMN_ALIASES[name] !== undefined ||
+        FTS_RECIPIENT_COLUMN_ALIASES[name] !== undefined ||
         name === 'sort') &&
       i + 1 < tokens.length &&
       tokens[i + 1] !== 'OR' &&
@@ -289,7 +307,10 @@ export function queryHasRegisteredSearchSyntax(query: string): boolean {
     if (!match) return false
     const name = match[1]!.toLowerCase()
     return (
-      FIELD_ALIASES[name] !== undefined || FTS_COLUMN_ALIASES[name] !== undefined || name === 'sort'
+      FIELD_ALIASES[name] !== undefined ||
+      FTS_COLUMN_ALIASES[name] !== undefined ||
+      FTS_RECIPIENT_COLUMN_ALIASES[name] !== undefined ||
+      name === 'sort'
     )
   })
 }
@@ -327,20 +348,24 @@ function classifyToken(
   if (fieldMatch) {
     const fieldName = fieldMatch[1]!.toLowerCase()
     const rawValue = fieldMatch[2] ?? ''
-    // T6 列级 FTS：在 FIELD_ALIASES 之前命中 FTS 列分支，编译成全文 text unit
-    // （带 column），不是 LIKE filter。镜像 Python _classify_token 的 fts_column 分支。
+    // T6 列级 FTS（email_body_fts）+ T8 收件人列 FTS（email_recipient_fts 并行表）：
+    // 在 FIELD_ALIASES 之前命中 FTS 列分支，编译成全文 text unit（带 column + columnTable），
+    // 不是 LIKE filter。镜像 Python _classify_token 的 fts_column / recipient_column 分支。
     const ftsColumn = FTS_COLUMN_ALIASES[fieldName]
-    if (ftsColumn !== undefined) {
+    const recipientColumn = FTS_RECIPIENT_COLUMN_ALIASES[fieldName]
+    if (ftsColumn !== undefined || recipientColumn !== undefined) {
       sawSyntax = true
       const value = stripOuterQuotes(rawValue)
       if (value === '') {
         warnings.push(`empty_value:${fieldName}`)
         return { unit: null, sawSyntax }
       }
+      const column = ftsColumn !== undefined ? ftsColumn : recipientColumn!
+      const columnTable: 'body' | 'recipient' = ftsColumn !== undefined ? 'body' : 'recipient'
       return {
         unit: {
           kind: 'text',
-          value: { value, is_phrase: isQuoted(rawValue), column: ftsColumn },
+          value: { value, is_phrase: isQuoted(rawValue), column, columnTable },
           negated
         },
         sawSyntax

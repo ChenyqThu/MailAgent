@@ -49,6 +49,13 @@ CREATE VIRTUAL TABLE email_body_fts_trigram USING fts5(
     tokenize='trigram'
 );
 
+CREATE VIRTUAL TABLE email_recipient_fts USING fts5(
+    to_addr,
+    cc_addr,
+    sender_name,
+    tokenize='porter unicode61 remove_diacritics 2'
+);
+
 CREATE TABLE email_attachment (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     internal_id INTEGER NOT NULL,
@@ -126,6 +133,18 @@ def behavior_db(tmp_path: Path) -> Path:
                     email["body_markdown"],
                     email["subject"],
                     email["sender"],
+                ),
+            )
+            # 镜像 email_recipient_fts_insert trigger: 并行收件人表 (T8)，
+            # 数据来自 email_metadata 的 to_addr / cc_addr / sender_name。
+            conn.execute(
+                """INSERT INTO email_recipient_fts (rowid, to_addr, cc_addr, sender_name)
+                   VALUES (?, ?, ?, ?)""",
+                (
+                    email["internal_id"],
+                    email["to_addr"],
+                    email["cc_addr"],
+                    email["sender_name"],
                 ),
             )
             for attachment in email.get("attachments", []):
