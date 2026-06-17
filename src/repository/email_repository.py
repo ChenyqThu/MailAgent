@@ -14,7 +14,7 @@ import sqlite3
 import time
 import re
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -159,9 +159,11 @@ class EmailSearchHit:
     date_received: Optional[str]
     mailbox: Optional[str]
     snippet: str            # FTS5 snippet() 高亮片段（默认 <mark>...</mark>）
-    rank: float             # bm25 分数（越小越相关，FTS5 约定）
+    rank: float             # bm25 或 -RRF 分数（越小越相关）
     notion_page_id: Optional[str] = None
     notion_url: Optional[str] = None
+    source: str = "body"
+    filename: Optional[str] = None
 
 
 @dataclass
@@ -371,6 +373,10 @@ def smart_query_transform(query: str) -> str:
 _CONTACT_CACHE_TTL_SECONDS = 10 * 60
 _CONTACT_SUGGEST_CACHE: dict[str, tuple[float, list[ContactSuggestion]]] = {}
 _EMAIL_RE = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE)
+_RRF_K = 60.0
+_RRF_FETCH_MULTIPLIER = 4
+_RRF_FETCH_MIN_EXTRA = 50
+_RRF_FETCH_MAX = 1000
 
 
 def _normalize_contact_name(value: Optional[str]) -> Optional[str]:
@@ -1036,10 +1042,16 @@ class EmailRepository:
                     f"search_email_bodies_smart: query={query!r} → "
                     f"transformed={transformed!r}"
                 )
-            hits = self._search_email_bodies_raw(
-                transformed,
+            hits = self._search_email_bodies_fused(
+                body_fts_expr=transformed,
+                attachment_fts_expr=transformed,
+                metadata_predicates=structured_filters,
+                neg_body_fts_expr="",
+                neg_attachment_fts_expr="",
+                attachment_body_gate_expr="",
+                sort=None,
                 limit=limit,
-                extra_filters=structured_filters,
+                query_for_log=transformed,
             )
             return EmailSearchResult(
                 hits,
@@ -1141,21 +1153,18 @@ class EmailRepository:
 
         params: list = []
         if fts_expr:
-            sql = """
-                SELECT m.internal_id,
-                       COALESCE(m.subject, '')        AS subject,
-                       COALESCE(m.sender, '')         AS sender,
-                       m.date_received,
-                       m.mailbox,
-                       m.notion_page_id,
-                       snippet(email_body_fts, 0, '<mark>', '</mark>', '...', 16) AS snippet,
-                       bm25(email_body_fts, 1.0, 5.0, 2.0) AS rank
-                  FROM email_body_fts
-                  JOIN email_metadata m ON m.internal_id = email_body_fts.rowid
-                 WHERE email_body_fts MATCH ?
-            """
-            params.append(fts_expr)
-            order_by = " ORDER BY rank, datetime(m.date_received) DESC LIMIT ?"
+            hits = self._search_email_bodies_fused(
+                body_fts_expr=fts_expr,
+                attachment_fts_expr=self._build_attachment_positive_fts_expr(parsed),
+                metadata_predicates=predicates,
+                neg_body_fts_expr=neg_fts_expr,
+                neg_attachment_fts_expr=self._build_attachment_negative_fts_expr(parsed),
+                attachment_body_gate_expr=self._build_attachment_body_gate_expr(parsed),
+                sort=parsed.sort,
+                limit=limit,
+                query_for_log=fts_expr,
+            )
+            return hits, fts_expr
         else:
             sql = """
                 SELECT m.internal_id,
@@ -1228,10 +1237,310 @@ class EmailRepository:
                     rank=float(r["rank"]),
                     notion_page_id=page_id,
                     notion_url=notion_url,
+                    source="body",
+                    filename=None,
                 ))
             return hits
         finally:
             conn.close()
+
+    def _search_email_bodies_fused(
+        self,
+        *,
+        body_fts_expr: str,
+        attachment_fts_expr: str,
+        metadata_predicates: list[FilterPredicate],
+        neg_body_fts_expr: str,
+        neg_attachment_fts_expr: str,
+        attachment_body_gate_expr: str,
+        sort: Optional[str],
+        limit: int,
+        query_for_log: str,
+    ) -> list[EmailSearchHit]:
+        """Search body + attachment FTS and merge by email-level RRF.
+
+        ``rank`` on the returned ``EmailSearchHit`` is ``-rrf_score`` so existing
+        callers that treat lower scores as more relevant keep the same ordering
+        intuition even though the underlying score is no longer raw bm25.
+        """
+        if not body_fts_expr or limit <= 0:
+            return []
+
+        candidate_limit = self._rrf_candidate_limit(limit)
+        conn = self._connect()
+        try:
+            body_rows = self._fetch_body_fts_rows(
+                conn,
+                fts_expr=body_fts_expr,
+                metadata_predicates=metadata_predicates,
+                neg_body_fts_expr=neg_body_fts_expr,
+                sort=sort,
+                limit=candidate_limit,
+                query_for_log=query_for_log,
+            )
+            attachment_rows: list[sqlite3.Row] = []
+            if attachment_fts_expr:
+                attachment_rows = self._fetch_attachment_fts_rows(
+                    conn,
+                    fts_expr=attachment_fts_expr,
+                    metadata_predicates=metadata_predicates,
+                    neg_body_fts_expr=neg_body_fts_expr,
+                    neg_attachment_fts_expr=neg_attachment_fts_expr,
+                    body_gate_fts_expr=attachment_body_gate_expr,
+                    sort=sort,
+                    limit=candidate_limit,
+                    query_for_log=attachment_fts_expr,
+                )
+            return self._merge_search_rows_by_rrf(body_rows, attachment_rows, sort, limit)
+        finally:
+            conn.close()
+
+    @staticmethod
+    def _rrf_candidate_limit(limit: int) -> int:
+        return min(
+            max(limit * _RRF_FETCH_MULTIPLIER, limit + _RRF_FETCH_MIN_EXTRA),
+            _RRF_FETCH_MAX,
+        )
+
+    @staticmethod
+    def _fts_branch_order_by(sort: Optional[str]) -> str:
+        if sort == "date":
+            return "datetime(m.date_received) DESC"
+        if sort == "oldest":
+            return "datetime(m.date_received) ASC"
+        return "rank ASC, datetime(m.date_received) DESC"
+
+    @staticmethod
+    def _append_metadata_predicates(
+        sql: str,
+        params: list,
+        predicates: list[FilterPredicate],
+    ) -> str:
+        for predicate in predicates:
+            sql += f" AND ({predicate.sql})"
+            params.extend(predicate.params)
+        return sql
+
+    def _fetch_body_fts_rows(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        fts_expr: str,
+        metadata_predicates: list[FilterPredicate],
+        neg_body_fts_expr: str,
+        sort: Optional[str],
+        limit: int,
+        query_for_log: str,
+    ) -> list[sqlite3.Row]:
+        sql = """
+            SELECT m.internal_id,
+                   COALESCE(m.subject, '')        AS subject,
+                   COALESCE(m.sender, '')         AS sender,
+                   m.date_received,
+                   m.mailbox,
+                   m.notion_page_id,
+                   snippet(email_body_fts, 0, '<mark>', '</mark>', '...', 16) AS snippet,
+                   bm25(email_body_fts, 1.0, 5.0, 2.0) AS rank,
+                   'body' AS source,
+                   NULL AS filename
+              FROM email_body_fts
+              JOIN email_metadata m ON m.internal_id = email_body_fts.rowid
+             WHERE email_body_fts MATCH ?
+        """
+        params: list = [fts_expr]
+        sql = self._append_metadata_predicates(sql, params, metadata_predicates)
+        if neg_body_fts_expr:
+            sql += (
+                " AND m.internal_id NOT IN ("
+                "SELECT rowid FROM email_body_fts WHERE email_body_fts MATCH ?)"
+            )
+            params.append(neg_body_fts_expr)
+        sql += f" ORDER BY {self._fts_branch_order_by(sort)} LIMIT ?"
+        params.append(limit)
+        try:
+            return conn.execute(sql, params).fetchall()
+        except sqlite3.OperationalError as e:
+            logger.warning(
+                f"search_email_bodies: invalid body FTS5 query {query_for_log!r}: {e}"
+            )
+            return []
+
+    def _fetch_attachment_fts_rows(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        fts_expr: str,
+        metadata_predicates: list[FilterPredicate],
+        neg_body_fts_expr: str,
+        neg_attachment_fts_expr: str,
+        body_gate_fts_expr: str,
+        sort: Optional[str],
+        limit: int,
+        query_for_log: str,
+    ) -> list[sqlite3.Row]:
+        sql = """
+            SELECT m.internal_id,
+                   COALESCE(m.subject, '')        AS subject,
+                   COALESCE(m.sender, '')         AS sender,
+                   m.date_received,
+                   m.mailbox,
+                   m.notion_page_id,
+                   snippet(email_attachment_fts, 0, '<mark>', '</mark>', '...', 16) AS snippet,
+                   bm25(email_attachment_fts) AS rank,
+                   'attachment' AS source,
+                   COALESCE(a.filename, '') AS filename
+              FROM email_attachment_fts
+              JOIN email_attachment a ON a.id = email_attachment_fts.rowid
+              JOIN email_metadata m ON m.internal_id = a.internal_id
+             WHERE email_attachment_fts MATCH ?
+        """
+        params: list = [fts_expr]
+        sql = self._append_metadata_predicates(sql, params, metadata_predicates)
+        if body_gate_fts_expr:
+            sql += (
+                " AND m.internal_id IN ("
+                "SELECT rowid FROM email_body_fts WHERE email_body_fts MATCH ?)"
+            )
+            params.append(body_gate_fts_expr)
+        if neg_body_fts_expr:
+            sql += (
+                " AND m.internal_id NOT IN ("
+                "SELECT rowid FROM email_body_fts WHERE email_body_fts MATCH ?)"
+            )
+            params.append(neg_body_fts_expr)
+        if neg_attachment_fts_expr:
+            sql += (
+                " AND a.id NOT IN ("
+                "SELECT rowid FROM email_attachment_fts WHERE email_attachment_fts MATCH ?)"
+            )
+            params.append(neg_attachment_fts_expr)
+        sql += f" ORDER BY {self._fts_branch_order_by(sort)} LIMIT ?"
+        params.append(limit)
+        try:
+            return conn.execute(sql, params).fetchall()
+        except sqlite3.OperationalError as e:
+            logger.warning(
+                f"search_email_bodies: attachment FTS unavailable or invalid "
+                f"query {query_for_log!r}: {e}"
+            )
+            return []
+
+    def _merge_search_rows_by_rrf(
+        self,
+        body_rows: list[sqlite3.Row],
+        attachment_rows: list[sqlite3.Row],
+        sort: Optional[str],
+        limit: int,
+    ) -> list[EmailSearchHit]:
+        combined: dict[int, dict] = {}
+        seen_body: set[int] = set()
+        seen_attachment: set[int] = set()
+
+        for row in body_rows:
+            internal_id = int(row["internal_id"])
+            if internal_id in seen_body:
+                continue
+            seen_body.add(internal_id)
+            combined[internal_id] = self._row_to_search_candidate(
+                row,
+                source="body",
+                rrf_score=1.0 / (_RRF_K + len(seen_body)),
+            )
+
+        for row in attachment_rows:
+            internal_id = int(row["internal_id"])
+            if internal_id in seen_attachment:
+                continue
+            seen_attachment.add(internal_id)
+            rrf_score = 1.0 / (_RRF_K + len(seen_attachment))
+            if internal_id in combined:
+                combined[internal_id]["rrf_score"] += rrf_score
+                continue
+            combined[internal_id] = self._row_to_search_candidate(
+                row,
+                source="attachment",
+                rrf_score=rrf_score,
+            )
+
+        candidates = list(combined.values())
+        if sort == "date":
+            candidates.sort(
+                key=lambda item: (
+                    self._date_sort_value(item["date_received"], oldest=False),
+                    item["rrf_score"],
+                ),
+                reverse=True,
+            )
+        elif sort == "oldest":
+            candidates.sort(
+                key=lambda item: (
+                    self._date_sort_value(item["date_received"], oldest=True),
+                    -item["rrf_score"],
+                )
+            )
+        else:
+            candidates.sort(
+                key=lambda item: (
+                    item["rrf_score"],
+                    self._date_sort_value(item["date_received"], oldest=False),
+                ),
+                reverse=True,
+            )
+
+        return [
+            EmailSearchHit(
+                internal_id=item["internal_id"],
+                subject=item["subject"],
+                sender=item["sender"],
+                date_received=item["date_received"],
+                mailbox=item["mailbox"],
+                snippet=item["snippet"],
+                rank=-float(item["rrf_score"]),
+                notion_page_id=item["notion_page_id"],
+                notion_url=item["notion_url"],
+                source=item["source"],
+                filename=item["filename"],
+            )
+            for item in candidates[:limit]
+        ]
+
+    @staticmethod
+    def _row_to_search_candidate(
+        row: sqlite3.Row,
+        *,
+        source: str,
+        rrf_score: float,
+    ) -> dict:
+        page_id = row["notion_page_id"]
+        notion_url = (
+            f"https://www.notion.so/{page_id.replace('-', '')}"
+            if page_id else None
+        )
+        return {
+            "internal_id": int(row["internal_id"]),
+            "subject": row["subject"],
+            "sender": row["sender"],
+            "date_received": row["date_received"],
+            "mailbox": row["mailbox"],
+            "snippet": row["snippet"] or "",
+            "notion_page_id": page_id,
+            "notion_url": notion_url,
+            "source": source,
+            "filename": row["filename"] if source == "attachment" else None,
+            "rrf_score": rrf_score,
+        }
+
+    @staticmethod
+    def _date_sort_value(value: Optional[str], *, oldest: bool) -> float:
+        if not value:
+            return float("inf") if oldest else float("-inf")
+        try:
+            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return float("inf") if oldest else float("-inf")
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
 
     def _build_positive_fts_expr(self, parsed: ParsedSearchQuery) -> str:
         parts: list[str] = []
@@ -1248,6 +1557,42 @@ class EmailRepository:
         parts = [p for p in parts if p]
         return " OR ".join(f"({part})" for part in parts)
 
+    def _build_attachment_positive_fts_expr(self, parsed: ParsedSearchQuery) -> str:
+        parts: list[str] = []
+        parts.extend(
+            self._text_term_to_fts_payload(term)
+            for term in parsed.fts_terms
+            if term.column is None
+        )
+        for group in parsed.fts_or_groups:
+            if all(term.column is None for term in group):
+                parts.append(self._build_fts_or_group(group))
+        parts = [p for p in parts if p]
+        return " AND ".join(parts)
+
+    def _build_attachment_body_gate_expr(self, parsed: ParsedSearchQuery) -> str:
+        """Column-limited positive FTS terms become body-FTS gates for attachment hits."""
+        parts: list[str] = []
+        parts.extend(
+            self._text_term_to_fts(term)
+            for term in parsed.fts_terms
+            if term.column is not None
+        )
+        for group in parsed.fts_or_groups:
+            if all(term.column is not None for term in group):
+                parts.append(self._build_fts_or_group(group))
+        parts = [p for p in parts if p]
+        return " AND ".join(parts)
+
+    def _build_attachment_negative_fts_expr(self, parsed: ParsedSearchQuery) -> str:
+        parts = [
+            self._text_term_to_fts_payload(term)
+            for term in parsed.neg_fts_terms
+            if term.column is None
+        ]
+        parts = [p for p in parts if p]
+        return " OR ".join(f"({part})" for part in parts)
+
     def _build_fts_or_group(self, group: list[TextTerm]) -> str:
         parts = [self._text_term_to_fts(term) for term in group]
         parts = [p for p in parts if p]
@@ -1256,6 +1601,12 @@ class EmailRepository:
         return "(" + " OR ".join(f"({part})" for part in parts) + ")"
 
     def _text_term_to_fts(self, term: TextTerm) -> str:
+        expr = self._text_term_to_fts_payload(term)
+        if term.column and expr:
+            return f"{term.column} : {expr}"
+        return expr
+
+    def _text_term_to_fts_payload(self, term: TextTerm) -> str:
         if term.is_phrase or term.force_quoted or not _is_simple_natural_query(term.value):
             return self._quote_fts_value(term.value)
         return smart_query_transform(term.value)

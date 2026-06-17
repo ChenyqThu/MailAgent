@@ -20,7 +20,7 @@ serve-api `GET /api/email/search?q=`、CLI `mailagent email search`、chat tools
 
 ### 2.1 字段过滤器 `field:value`
 
-| 字段 | 别名 | 编译目标（email_metadata 列） | 匹配方式 |
+| 字段 | 别名 | 编译目标 | 匹配方式 |
 |---|---|---|---|
 | `from:` | — | `sender` / `sender_name` | `(sender LIKE '%v%' OR sender_name LIKE '%v%')` |
 | `to:` | — | `to_addr` | `LIKE '%v%'` |
@@ -36,6 +36,9 @@ serve-api `GET /api/email/search?q=`、CLI `mailagent email search`、chat tools
 | `has:` | — | 附件 | `attachment`→`EXISTS (SELECT 1 FROM email_attachment a WHERE a.internal_id = m.internal_id AND COALESCE(a.is_inline,0)=0)` |
 | `priority:` | — | `ai_priority` | 别名映射后 `LIKE '%映射词%'`：urgent/紧急→紧急、important/重要→重要、normal/一般→一般、low/低→低（DB 实际值带 emoji 前缀如 `🔴 紧急`，故用 LIKE）。未知值→原值 LIKE |
 | `sort:` | — | （排序指令，非过滤谓词） | `relevance` / `date`（别名 `newest`）/ `oldest`，详见 §4.4。不产生 WHERE 谓词，只覆盖 ORDER BY；首个有效值生效，非法值 → `unknown_value:sort:<v>` warning |
+| `body:` | — | `email_body_fts.body_markdown` | FTS5 column filter；值复用 smart transform，参与 bm25/RRF；不替代裸词全文 |
+| `subject~:` | — | `email_body_fts.subject` | FTS5 column filter；与既有 `subject:` LIKE 并存，`subject:` 语义不变 |
+| `sender~:` | — | `email_body_fts.sender` | FTS5 column filter；与既有 `from:` LIKE 并存，`from:` 语义不变 |
 
 通用规则：
 - 字段名 **大小写不敏感**（`From:` = `from:`）；值保持原样（LIKE 本身 ASCII 大小写不敏感）。
@@ -47,6 +50,8 @@ serve-api `GET /api/email/search?q=`、CLI `mailagent email search`、chat tools
 ### 2.2 文本词 / 短语（全文检索）
 
 - 裸词 → FTS5 MATCH（`email_body_fts`：body_markdown + subject + sender 三列），多词 **AND**。
+- `body:` / `subject~:` / `sender~:` → 同样是全文 unit，但编译成 FTS5 column filter
+  （如 `subject : redis`）；它们是新增语法，不改变 `subject:` / `from:` 的 LIKE 过滤语义。
 - 纯 alnum/CJK 的 token → 复用现有 CJK smart transform（`smart_query_transform` / `smartQueryTransform`），行为不变。
 - `"exact phrase"` → FTS5 短语 query（原样带引号传入 MATCH）。
 - 文本 token 含 FTS5 特殊字符（`* ( ) : . @ -` 等非 alnum/CJK 字符）→ **双引号包裹转义**后进 MATCH（内部 `"` 翻倍转义），避免被 FTS5 误解析为语法。例：`foo:bar`（未知字段）→ MATCH 片段 `"foo:bar"`。
@@ -77,8 +82,8 @@ query 原样下放 FTS5 MATCH（现状行为，高级 FTS5 语法 NEAR/列过滤
 
 1. `mode='raw'` → 直通，结束。
 2. tokenize：按空白切分，但**引号内的空白不切**（支持 `from:"a b"` 与 `"a b"`；未闭合引号 → 该引号视为普通字符 + warning）。
-3. **字段容错合并（merge pass）**：若某 token 是孤立的已注册 `field:`（冒号后空值），且其后紧跟一个**非字段过滤器、非 `OR`** 的 token（可为引号词），则合并为 `field:<下一个 token>`（保留前导 `-` 否定）。例：`from: echo`→`from:echo`、`-from: echo`→`-from:echo`、`from: "Zhang San"`→`from:"Zhang San"`。**不合并**（保持丢弃 + `empty_value` warning）：孤立 `field:` 在末尾、下一个是字段过滤器（如 `from: from:bob`、`from: -is:read`）、下一个是 `OR`。注：值含空格仍需引号——只吞紧跟的一个 token（`from: a b` → `from:a` + 文本 `b`）。
-4. 逐 token 分类：否定前缀 → 字段匹配（`^([A-Za-z_]+):(.*)$` 且字段名在注册表）→ 短语 → 文本词。
+3. **字段容错合并（merge pass）**：若某 token 是孤立的已注册 `field:`（含 `sort:` 与 `body:` / `subject~:` / `sender~:`，冒号后空值），且其后紧跟一个**非字段过滤器、非 `OR`** 的 token（可为引号词），则合并为 `field:<下一个 token>`（保留前导 `-` 否定）。例：`from: echo`→`from:echo`、`-from: echo`→`-from:echo`、`from: "Zhang San"`→`from:"Zhang San"`。**不合并**（保持丢弃 + `empty_value` warning）：孤立 `field:` 在末尾、下一个是字段过滤器（如 `from: from:bob`、`from: -is:read`、`from: sort:date`）、下一个是 `OR`。注：值含空格仍需引号——只吞紧跟的一个 token（`from: a b` → `from:a` + 文本 `b`）。
+4. 逐 token 分类：否定前缀 → 字段匹配（`^([A-Za-z_]+~?):(.*)$` 且字段名在注册表）→ 短语 → 文本词。
 5. OR 结合（§2.4），产出结构化查询：`{ fts_terms[], fts_or_groups[], neg_fts_terms[], filters[], or_filter_groups[], neg_filters[], warnings[] }`。
 6. **零语法 fast-path（回归红线）**：若解析结果不含任何字段过滤器、否定、OR 重组（即纯文本词/短语），必须走**与现状完全相同**的代码路径：整串 query 交给 smart transform（含其对 quote/wildcard/operator 的 raw-passthrough 判断）。保证存量查询行为逐字节不变。
 
@@ -100,7 +105,36 @@ SELECT m.internal_id, m.subject, m.sender, m.date_received, m.mailbox,
  LIMIT :limit
 ```
 
-`:fts_expr` = 各正向文本 unit 的 smart/短语/转义片段以 AND/OR 连接。
+`:fts_expr` = 各正向文本 unit 的 smart/短语/转义片段以 AND/OR 连接；列级 unit 编译成
+FTS5 column filter（如 `body_markdown : redis`、`subject : "weekly report"`）。
+
+T5 起，smart 模式的正向全文查询还会并行查附件正文：
+
+```sql
+SELECT m.internal_id, m.subject, m.sender, m.date_received, m.mailbox,
+       a.filename,
+       snippet(email_attachment_fts, 0, '<mark>', '</mark>', '…', N) AS snippet,
+       bm25(email_attachment_fts) AS rank
+  FROM email_attachment_fts
+  JOIN email_attachment a ON a.id = email_attachment_fts.rowid
+  JOIN email_metadata m ON m.internal_id = a.internal_id
+ WHERE email_attachment_fts MATCH :attachment_fts_expr
+   [AND <same metadata filters as body search>]
+   [AND m.internal_id IN (SELECT rowid FROM email_body_fts WHERE email_body_fts MATCH :body_gate_expr)]
+   [AND m.internal_id NOT IN (SELECT rowid FROM email_body_fts WHERE email_body_fts MATCH :neg_body_expr)]
+   [AND a.id NOT IN (SELECT rowid FROM email_attachment_fts WHERE email_attachment_fts MATCH :neg_attachment_expr)]
+ ORDER BY rank ASC, datetime(m.date_received) DESC
+ LIMIT :candidate_limit
+```
+
+- `:attachment_fts_expr` 只包含附件表可解释的未限定列全文词；`body:` / `subject~:` / `sender~:` 作为
+  `:body_gate_expr` 在 `email_body_fts` 上门控附件命中。只有列级词、没有裸全文词时，不启用附件维度。
+- 两个候选列表分别按相关度取 candidate window 后做 RRF 融合（`k=60`）：
+  `score = Σ 1 / (60 + row_number)`。同一邮件正文和附件都命中时按 `internal_id` 去重，
+  `source='body'`、保留正文 snippet，但 RRF 分数叠加；仅附件命中时 `source='attachment'`，
+  `filename` 填附件名，snippet 来自 `email_attachment_fts.snippet()`。
+- 对外 `rank` 在融合路径中返回 **负 RRF 分数**，继续保持“数值越小越相关”的旧排序直觉。
+- `mode='raw'` 仍只查 `email_body_fts`，作为高级 FTS5 语法逃生门。
 
 ### 4.2 纯过滤（无正向文本词）
 
@@ -130,13 +164,15 @@ date-only 的 `until <= '2026-06-01'` 还会漏掉当天全部邮件。因此：
 
 ### 4.4 排序
 
-默认：有正向文本词 → `bm25(email_body_fts, body=1.0, subject=5.0, sender=2.0) ASC`（相关性，标题/发件人命中加权，T1）+ `datetime(date_received) DESC` tie-break；纯过滤 → `datetime(date_received) DESC`（最新优先）。
+默认：有正向文本词 → smart 模式按正文候选 + 附件候选的 RRF 融合分降序（对外 `rank=-rrf_score`），同分时 `datetime(date_received) DESC`；raw 模式仍按 `bm25(email_body_fts, body=1.0, subject=5.0, sender=2.0) ASC` + `datetime(date_received) DESC`；纯过滤 → `datetime(date_received) DESC`（最新优先）。
 
-`sort:` 覆盖（T2）：`sort:relevance`（相关性；纯过滤无 rank 时 fallback 时间倒序）、`sort:date`（别名 `sort:newest`，时间倒序）、`sort:oldest`（时间正序）。`sort:` 只改 ORDER BY、不产生过滤谓词；首个有效 `sort:` 生效，非法值 → `unknown_value:sort:<v>` warning 并回退默认。
+`sort:` 覆盖（T2）：`sort:relevance`（相关性/RRF；纯过滤无 rank 时 fallback 时间倒序）、`sort:date`（别名 `sort:newest`，时间倒序）、`sort:oldest`（时间正序）。`sort:date` / `sort:oldest` 会忽略 RRF 排序，仅把正文/附件去重后的邮件按时间排。`sort:` 只改 ORDER BY、不产生过滤谓词；首个有效 `sort:` 生效，非法值 → `unknown_value:sort:<v>` warning 并回退默认。
 
 ## 5. 结果与警告
 
-- 返回结构（EmailSearchHit / SearchHit / API items）**字段不变**。
+- 返回结构（EmailSearchHit / SearchHit / API items）新增可选字段：
+  - `source: 'body' | 'attachment'`，默认 `'body'`；表示当前 snippet 来自正文还是附件正文。
+  - `filename: string | null`，仅 `source='attachment'` 时填附件名，正文命中为 `null`。
 - `SearchResult` / CLI meta / API meta 新增**可选** `parse_warnings: string[]`（additive，不破坏 wire 契约；无 warning 时省略）。
 - FTS5 运行期语法错误维持现状：log warning + 返回空列表。parser 自身**永不抛异常**——任何畸形输入最坏退化为文本搜索。
 
@@ -152,16 +188,18 @@ date-only 的 `until <= '2026-06-01'` 还会漏掉当天全部邮件。因此：
                 "to_addr": "…", "cc_addr": "…", "date_received": "…", "mailbox": "收件箱",
                 "is_read": 0, "is_flagged": 0, "is_pinned": 0, "is_important": 0,
                 "ai_priority": "🔴 紧急", "body_markdown": "…",
-                "attachments": [{ "filename": "a.pdf", "is_inline": 0 }] } ],
+                "attachments": [{ "filename": "a.pdf", "is_inline": 0,
+                                  "text_content": "optional extracted attachment text" }] } ],
   "cases": [ { "name": "field_from_basic", "query": "from:alice",
                "expect_ids": [1, 3], "order": "set",          // set=集合比对（默认）, exact=顺序比对
-               "expect_warnings": 0 } ]
+               "expect_warnings": 0,
+               "expect_hits": [{ "internal_id": 1, "source": "body", "filename": null }] } ]
 }
 ```
 
-- Python：pytest runner 建 in-memory SQLite（最小 schema：email_metadata + email_body_fts(contentful, rowid=internal_id) + email_attachment），灌 emails，逐 case 跑 search、断言。
+- Python：pytest runner 建 in-memory SQLite（最小 schema：email_metadata + email_body_fts(contentful, rowid=internal_id) + email_attachment + email_attachment_text + email_attachment_fts），灌 emails；`attachments[].text_content` 存在时写入 `email_attachment_text` 并索引到 `email_attachment_fts`，逐 case 跑 search、断言。
 - TS：vitest runner 用 better-sqlite3 `:memory:` 同样建表灌数据跑断言，**读同一份 JSON 文件**（相对路径 `../../tests/fixtures/...`）。
-- 夹具必须覆盖：每个字段至少 1 例、别名、引号值、否定（字段/文本/纯否定）、OR（字段同类/文本同类/跨类降级）、未知字段降级文本、空值丢弃、date-only 边界（当天含）、时区混存数据的日期过滤、newer_than 相对日期、纯过滤排序、零语法 fast-path 行为不变（与现状对照例）、CJK smart 不回归、与结构化参数 merge。
+- 夹具必须覆盖：每个字段至少 1 例、别名、引号值、否定（字段/文本/纯否定）、OR（字段同类/文本同类/跨类降级）、未知字段降级文本、空值丢弃、date-only 边界（当天含）、时区混存数据的日期过滤、newer_than 相对日期、纯过滤排序、列级 FTS（`body:` / `subject~:` / `sender~:`）、附件正文融合（only attachment / body+attachment / metadata filter 传播）、零语法 fast-path 行为不变（与现状对照例）、CJK smart 不回归、与结构化参数 merge。
 
 ## 7. 示例
 
@@ -174,10 +212,15 @@ date-only 的 `until <= '2026-06-01'` 还会漏掉当天全部邮件。因此：
 | `in:收件箱 is:flagged priority:urgent` | 收件箱中旗标且 AI 判定紧急（纯过滤，按日期倒序） |
 | `redis OR timeout -is:read` | 全文 redis 或 timeout，且未读 |
 | `date:2026-06-01 from:tp-link.com` | 本地时区 6 月 1 日当天、发件域含 tp-link.com |
+| `subject~:Redis timeout` | subject FTS 命中 Redis，且正文/标题/发件人或附件正文命中 timeout |
+| `contract from:alice` | 正文或附件正文含 contract，且邮件发件人满足 alice |
 
 ## 8. 局限与未来扩展（v1 明确不做）
 
-- 括号分组、跨类 OR、字段级 FTS（subject 走 LIKE 不走 FTS 列过滤）。
+- 括号分组、跨类 OR。
+- 不给既有 `subject:` / `from:` 叠加 FTS boost；它们继续是 LIKE 硬过滤。需要列级相关度时使用新增 `subject~:` / `sender~:`。
 - `to:/cc:` 不进 FTS 索引（LIKE 够用；未来如需全文搜收件人再做 FTS schema migration）。
-- jieba 中文分词（见 T7 trigram 并行表方案，单独阶段实现）、保存搜索/搜索历史（前端后续迭代）。
+- 附件融合只在 smart 正向全文路径启用；`mode='raw'` 保持正文 FTS5 逃生门。列级 FTS term 在附件分支作为 `email_body_fts` 门控，只有列级 term、没有裸全文词时不查询附件正文。
+- jieba / trigram 中文分词（见 T7 trigram 并行表方案，单独阶段实现）。当前 `unicode61` + prefix smart 对中文非前缀子串仍有限制，例如 `body:产品` 不保证命中正文 token `本周产品评审...`。
+- 保存搜索/搜索历史（前端后续迭代）。
 - 纯过滤查询是 metadata 全表扫描（7 万行 ~30-60ms 可接受；变慢再加索引/物化）。

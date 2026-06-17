@@ -32,7 +32,7 @@ interface FixtureEmail {
   is_important: number
   ai_priority: string | null
   body_markdown: string
-  attachments?: Array<{ filename: string; is_inline: number }>
+  attachments?: Array<{ filename: string; is_inline: number; text_content?: string }>
 }
 
 interface FixtureCase {
@@ -45,6 +45,7 @@ interface FixtureCase {
   order?: 'set' | 'exact'
   expect_warnings: number
   expect_transformed_query?: string
+  expect_hits?: Array<{ internal_id: number; source: string; filename: string | null }>
 }
 
 interface Fixture {
@@ -91,6 +92,21 @@ function buildDb(): Database.Database {
       is_inline INTEGER DEFAULT 0
     );
 
+    CREATE TABLE email_attachment_text (
+      attachment_id INTEGER PRIMARY KEY,
+      text_content TEXT,
+      text_size_bytes INTEGER NOT NULL DEFAULT 0,
+      extractor TEXT NOT NULL,
+      status TEXT NOT NULL,
+      created_at REAL NOT NULL,
+      updated_at REAL NOT NULL
+    );
+
+    CREATE VIRTUAL TABLE email_attachment_fts USING fts5(
+      text_content,
+      tokenize='porter unicode61 remove_diacritics 2'
+    );
+
     CREATE TABLE llm_processing (
       internal_id INTEGER PRIMARY KEY,
       labels_json TEXT
@@ -110,6 +126,15 @@ function buildDb(): Database.Database {
   const insertAttachment = db.prepare(`
     INSERT INTO email_attachment (internal_id, filename, is_inline)
     VALUES (?, ?, ?)
+  `)
+  const insertAttachmentText = db.prepare(`
+    INSERT INTO email_attachment_text
+      (attachment_id, text_content, text_size_bytes, extractor, status, created_at, updated_at)
+    VALUES (?, ?, ?, 'fixture', 'extracted', ?, ?)
+  `)
+  const insertAttachmentFts = db.prepare(`
+    INSERT INTO email_attachment_fts (rowid, text_content)
+    VALUES (?, ?)
   `)
 
   for (const email of fixture.emails) {
@@ -131,7 +156,18 @@ function buildDb(): Database.Database {
     )
     insertFts.run(email.internal_id, email.body_markdown, email.subject, email.sender)
     for (const attachment of email.attachments ?? []) {
-      insertAttachment.run(email.internal_id, attachment.filename, attachment.is_inline)
+      const info = insertAttachment.run(
+        email.internal_id,
+        attachment.filename,
+        attachment.is_inline
+      )
+      const text = attachment.text_content
+      if (text) {
+        const attachmentId = Number(info.lastInsertRowid)
+        const now = Date.now() / 1000
+        insertAttachmentText.run(attachmentId, text, Buffer.byteLength(text, 'utf8'), now, now)
+        insertAttachmentFts.run(attachmentId, text)
+      }
     }
   }
   return db
@@ -168,6 +204,14 @@ describe('search query behavior fixture', () => {
     expect(result.parse_warnings?.length ?? 0).toBe(item.expect_warnings)
     if (item.expect_transformed_query !== undefined) {
       expect(result.transformed_query).toBe(item.expect_transformed_query)
+    }
+    if (item.expect_hits !== undefined) {
+      const actualHits = result.items.map((hit) => ({
+        internal_id: hit.internal_id,
+        source: hit.source ?? 'body',
+        filename: hit.filename ?? null
+      }))
+      expect(actualHits.slice(0, item.expect_hits.length)).toEqual(item.expect_hits)
     }
   })
 })

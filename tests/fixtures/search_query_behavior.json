@@ -16,11 +16,12 @@
       "is_pinned": 1,
       "is_important": 1,
       "ai_priority": "🔴 紧急",
-      "body_markdown": "redis timeout incident 产品评审 alpha",
+      "body_markdown": "redis timeout incident 产品评审 alpha fusionrank",
       "attachments": [
         {
           "filename": "report.pdf",
-          "is_inline": 0
+          "is_inline": 0,
+          "text_content": "fusionrank appendix body duplicate"
         },
         {
           "filename": "logo.png",
@@ -136,7 +137,8 @@
       "attachments": [
         {
           "filename": "evidence.txt",
-          "is_inline": 0
+          "is_inline": 0,
+          "text_content": "contractneedle fusionrank confidential attachment evidence"
         }
       ]
     },
@@ -211,7 +213,7 @@
     {
       "internal_id": 12,
       "subject": "Literal foo colon",
-      "sender": "henry@example.com",
+      "sender": "中文发送者@example.com",
       "sender_name": "Henry",
       "to_addr": "dev@example.com",
       "cc_addr": "",
@@ -562,6 +564,110 @@
         1,
         3
       ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "fts_column_body_english",
+      "query": "body:timeout",
+      "expect_ids": [
+        1,
+        4,
+        8
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "fts_column_body_cjk",
+      "query": "body:本周",
+      "expect_ids": [
+        3
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "fts_column_subject_tilde_english",
+      "query": "subject~:Redis",
+      "expect_ids": [
+        1
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "fts_column_subject_tilde_cjk",
+      "query": "subject~:产品",
+      "expect_ids": [
+        3
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "fts_column_sender_tilde_english",
+      "query": "sender~:alice",
+      "expect_ids": [
+        1,
+        8
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "fts_column_sender_tilde_cjk",
+      "query": "sender~:中文",
+      "expect_ids": [
+        12
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "fts_column_subject_like_contrast",
+      "query": "subject:Redis",
+      "expect_ids": [
+        1
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "fts_attachment_only",
+      "query": "contractneedle",
+      "expect_ids": [
+        7
+      ],
+      "expect_warnings": 0,
+      "expect_transformed_query": "contractneedle",
+      "expect_hits": [
+        {
+          "internal_id": 7,
+          "source": "attachment",
+          "filename": "evidence.txt"
+        }
+      ]
+    },
+    {
+      "name": "fts_body_and_attachment_rrf_prefers_body",
+      "query": "fusionrank",
+      "expect_ids": [
+        1,
+        7
+      ],
+      "order": "exact",
+      "expect_warnings": 0,
+      "expect_transformed_query": "fusionrank",
+      "expect_hits": [
+        {
+          "internal_id": 1,
+          "source": "body",
+          "filename": null
+        },
+        {
+          "internal_id": 7,
+          "source": "attachment",
+          "filename": "evidence.txt"
+        }
+      ]
+    },
+    {
+      "name": "fts_attachment_filtered_by_from",
+      "query": "contractneedle from:alice",
+      "expect_ids": [],
       "expect_warnings": 0
     },
     {

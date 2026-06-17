@@ -228,6 +228,10 @@ interface SearchRow {
   // hasn't classified the email yet (e.g. fresh mail, or LLM gave up).
   priority_raw: string | null
   lang_raw: string | null
+  // T5 附件融合：fused 路径 SELECT 出命中来源 + 附件名；body-only / metadata
+  // 路径的 SELECT 不含这两列，row 上为 undefined → shapeSearchHit 兜底 'body'/null。
+  source?: string | null
+  filename?: string | null
 }
 
 // ---- shaping helpers --------------------------------------------------------
@@ -278,15 +282,126 @@ function shapeSearchHit(row: SearchRow): EmailSearch_SearchHit {
     notion_page_id: row.notion_page_id,
     notion_url: notionUrl(row.notion_page_id),
     ai_priority: mapPriority(row.priority_raw),
-    lang: mapLanguage(row.lang_raw)
+    lang: mapLanguage(row.lang_raw),
+    source: row.source === 'attachment' ? 'attachment' : 'body',
+    filename: row.source === 'attachment' ? (row.filename ?? null) : null
   }
+}
+
+// T5 RRF 融合常量 — 镜像 Python _RRF_K / _RRF_FETCH_*。
+const RRF_K = 60.0
+const RRF_FETCH_MULTIPLIER = 4
+const RRF_FETCH_MIN_EXTRA = 50
+const RRF_FETCH_MAX = 1000
+
+interface FusedCandidate {
+  row: SearchRow
+  rrf_score: number
+}
+
+// 镜像 Python _date_sort_value：无值/解析失败给 ±inf（oldest 用 +inf 排末尾，
+// 否则 -inf），否则 ISO→秒。Python / SQLite datetime() 把无时区的 naive 时间当
+// UTC；而 V8 的 Date.parse 对 naive 时间按本地时区解释 —— 两端必须一致，否则
+// sort:date/oldest 融合排序对存量混存时区数据边缘错位。修法：无时区信息
+// （结尾无 Z / 无 ±HH:MM offset）→ 视为 UTC（空格转 T 后补 Z）；有时区信息 → 原样解析。
+function dateSortValue(value: string | null | undefined, oldest: boolean): number {
+  if (!value) return oldest ? Infinity : -Infinity
+  const trimmed = value.trim()
+  // 时区信息：结尾 Z，或结尾 ±HH:MM / ±HHMM offset。
+  const hasTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/.test(trimmed)
+  const normalized = hasTimezone ? trimmed : `${trimmed.replace(' ', 'T')}Z`
+  const ms = Date.parse(normalized)
+  if (Number.isNaN(ms)) return oldest ? Infinity : -Infinity
+  return ms / 1000
+}
+
+// 镜像 Python _merge_search_rows_by_rrf：按 internal_id 去重，body 候选
+// rrf=1/(60+n)、attachment 候选 rrf=1/(60+n)；同邮件 body+attachment 命中时
+// rrf 叠加且保留 body 的 source/snippet/filename（attachment 命中已存在时 continue）。
+// 最终 rank=-rrf_score，按 sort 排序后截断到 limit。
+function mergeSearchRowsByRrf(
+  bodyRows: SearchRow[],
+  attachmentRows: SearchRow[],
+  sort: string | undefined,
+  limit: number
+): EmailSearch_SearchHit[] {
+  const combined = new Map<number, FusedCandidate>()
+  const seenBody = new Set<number>()
+  const seenAttachment = new Set<number>()
+
+  for (const row of bodyRows) {
+    const internalId = row.internal_id
+    if (seenBody.has(internalId)) continue
+    seenBody.add(internalId)
+    combined.set(internalId, {
+      row: { ...row, source: 'body', filename: null, snippet: row.snippet ?? '' },
+      rrf_score: 1.0 / (RRF_K + seenBody.size)
+    })
+  }
+
+  for (const row of attachmentRows) {
+    const internalId = row.internal_id
+    if (seenAttachment.has(internalId)) continue
+    seenAttachment.add(internalId)
+    const rrf = 1.0 / (RRF_K + seenAttachment.size)
+    const existing = combined.get(internalId)
+    if (existing) {
+      existing.rrf_score += rrf
+      continue
+    }
+    combined.set(internalId, {
+      row: {
+        ...row,
+        source: 'attachment',
+        filename: row.filename ?? null,
+        snippet: row.snippet ?? ''
+      },
+      rrf_score: rrf
+    })
+  }
+
+  const candidates = [...combined.values()]
+  if (sort === 'date') {
+    candidates.sort((a, b) => {
+      const ad = dateSortValue(a.row.date_received, false)
+      const bd = dateSortValue(b.row.date_received, false)
+      if (ad !== bd) return bd - ad
+      return b.rrf_score - a.rrf_score
+    })
+  } else if (sort === 'oldest') {
+    candidates.sort((a, b) => {
+      const ad = dateSortValue(a.row.date_received, true)
+      const bd = dateSortValue(b.row.date_received, true)
+      if (ad !== bd) return ad - bd
+      return b.rrf_score - a.rrf_score
+    })
+  } else {
+    candidates.sort((a, b) => {
+      if (a.rrf_score !== b.rrf_score) return b.rrf_score - a.rrf_score
+      const ad = dateSortValue(a.row.date_received, false)
+      const bd = dateSortValue(b.row.date_received, false)
+      return bd - ad
+    })
+  }
+
+  return candidates
+    .slice(0, limit)
+    .map((item) => shapeSearchHit({ ...item.row, rank: -item.rrf_score }))
 }
 
 function quoteFtsValue(value: string): string {
   return `"${value.replace(/"/g, '""')}"`
 }
 
+// T6 列级 FTS：列存在时把 payload 包成 FTS5 column filter（`subject : redis`）。
+// 镜像 Python _text_term_to_fts / _text_term_to_fts_payload。
 function textTermToFts(term: TextTerm): string {
+  const expr = textTermToFtsPayload(term)
+  if (term.column && expr) return `${term.column} : ${expr}`
+  return expr
+}
+
+function textTermToFtsPayload(term: TextTerm): string {
   if (term.is_phrase || term.force_quoted || !isSimpleNaturalQuery(term.value)) {
     return quoteFtsValue(term.value)
   }
@@ -310,6 +425,45 @@ function buildPositiveFtsExpr(parsed: ParsedSearchQuery): string {
 function buildNegativeFtsExpr(parsed: ParsedSearchQuery): string {
   const parts = parsed.neg_fts_terms.map(textTermToFts).filter((part) => part.length > 0)
   return parts.map((part) => `(${part})`).join(' OR ')
+}
+
+// T5 附件融合：附件 FTS 表只索引 text_content（无 subject/sender 列），故附件分支
+// 只用未限定列的裸全文词（column===null）构造 MATCH；AND 连接。
+// 镜像 Python _build_attachment_positive_fts_expr。
+function buildAttachmentPositiveFtsExpr(parsed: ParsedSearchQuery): string {
+  const parts: string[] = []
+  for (const term of parsed.fts_terms) {
+    if (term.column == null) parts.push(textTermToFtsPayload(term))
+  }
+  for (const group of parsed.fts_or_groups) {
+    if (group.every((term) => term.column == null)) parts.push(buildFtsOrGroup(group))
+  }
+  return parts.filter((part) => part.length > 0).join(' AND ')
+}
+
+// 列级正向词在附件分支没有对应列，转而作为 email_body_fts 门控（body gate）。
+// 镜像 Python _build_attachment_body_gate_expr。
+function buildAttachmentBodyGateExpr(parsed: ParsedSearchQuery): string {
+  const parts: string[] = []
+  for (const term of parsed.fts_terms) {
+    if (term.column != null) parts.push(textTermToFts(term))
+  }
+  for (const group of parsed.fts_or_groups) {
+    if (group.every((term) => term.column != null)) parts.push(buildFtsOrGroup(group))
+  }
+  return parts.filter((part) => part.length > 0).join(' AND ')
+}
+
+// 镜像 Python _build_attachment_negative_fts_expr（只用裸词，OR 连接）。
+function buildAttachmentNegativeFtsExpr(parsed: ParsedSearchQuery): string {
+  const parts: string[] = []
+  for (const term of parsed.neg_fts_terms) {
+    if (term.column == null) parts.push(textTermToFtsPayload(term))
+  }
+  return parts
+    .filter((part) => part.length > 0)
+    .map((part) => `(${part})`)
+    .join(' OR ')
 }
 
 function compileOrFilterGroups(groups: FilterPredicate[][]): FilterPredicate[] {
@@ -771,6 +925,155 @@ export function searchEmails(opts: SearchOpts): SearchResult {
     }
   }
 
+  // ---- T5 附件融合搜索（镜像 Python _search_email_bodies_fused 全套）----------
+  // body FTS + attachment FTS 两路候选各取 candidate window，按 email 级 RRF
+  // (k=60) 融合去重。对外 rank=-rrf_score 保持「越小越相关」直觉。
+
+  const ftsBranchOrderBy = (sort?: string): string => {
+    if (sort === 'date') return 'datetime(m.date_received) DESC'
+    if (sort === 'oldest') return 'datetime(m.date_received) ASC'
+    return 'rank ASC, datetime(m.date_received) DESC'
+  }
+
+  const fetchBodyFtsRows = (
+    ftsExpr: string,
+    filters: FilterPredicate[],
+    negBodyFtsExpr: string,
+    sort: string | undefined,
+    candidateLimit: number
+  ): SearchRow[] => {
+    let sql = `
+    SELECT
+      m.internal_id           AS internal_id,
+      m.subject               AS subject,
+      m.sender                AS sender,
+      m.date_received         AS date_received,
+      m.mailbox               AS mailbox,
+      bm25(email_body_fts, 1.0, 5.0, 2.0) AS rank,
+      snippet(email_body_fts, 0, '<mark>', '</mark>', '…', 24) AS snippet,
+      m.notion_page_id        AS notion_page_id,
+      'body'                  AS source,
+      NULL                    AS filename,
+      COALESCE(m.ai_priority,
+        CASE WHEN json_valid(l.labels_json) THEN json_extract(l.labels_json, '$.priority') END
+      ) AS priority_raw,
+      CASE WHEN json_valid(l.labels_json) THEN json_extract(l.labels_json, '$.language') END AS lang_raw
+    FROM email_body_fts
+    JOIN email_metadata m ON m.internal_id = email_body_fts.rowid
+    LEFT JOIN llm_processing l ON l.internal_id = m.internal_id
+    WHERE email_body_fts MATCH ?`
+    const params: unknown[] = [ftsExpr]
+    for (const predicate of filters) {
+      sql += ` AND (${predicate.sql})`
+      params.push(...predicate.params)
+    }
+    if (negBodyFtsExpr) {
+      sql +=
+        ' AND m.internal_id NOT IN (' +
+        'SELECT rowid FROM email_body_fts WHERE email_body_fts MATCH ?)'
+      params.push(negBodyFtsExpr)
+    }
+    sql += ` ORDER BY ${ftsBranchOrderBy(sort)} LIMIT ?`
+    params.push(candidateLimit)
+    try {
+      return prep(db, sql).all(...params) as SearchRow[]
+    } catch (err) {
+      console.warn('[email:search] invalid body FTS5 query', ftsExpr, err)
+      return []
+    }
+  }
+
+  const fetchAttachmentFtsRows = (
+    ftsExpr: string,
+    filters: FilterPredicate[],
+    bodyGateFtsExpr: string,
+    negBodyFtsExpr: string,
+    negAttachmentFtsExpr: string,
+    sort: string | undefined,
+    candidateLimit: number
+  ): SearchRow[] => {
+    let sql = `
+    SELECT
+      m.internal_id           AS internal_id,
+      m.subject               AS subject,
+      m.sender                AS sender,
+      m.date_received         AS date_received,
+      m.mailbox               AS mailbox,
+      bm25(email_attachment_fts) AS rank,
+      snippet(email_attachment_fts, 0, '<mark>', '</mark>', '…', 24) AS snippet,
+      m.notion_page_id        AS notion_page_id,
+      'attachment'            AS source,
+      COALESCE(a.filename, '') AS filename,
+      COALESCE(m.ai_priority,
+        CASE WHEN json_valid(l.labels_json) THEN json_extract(l.labels_json, '$.priority') END
+      ) AS priority_raw,
+      CASE WHEN json_valid(l.labels_json) THEN json_extract(l.labels_json, '$.language') END AS lang_raw
+    FROM email_attachment_fts
+    JOIN email_attachment a ON a.id = email_attachment_fts.rowid
+    JOIN email_metadata m ON m.internal_id = a.internal_id
+    LEFT JOIN llm_processing l ON l.internal_id = m.internal_id
+    WHERE email_attachment_fts MATCH ?`
+    const params: unknown[] = [ftsExpr]
+    for (const predicate of filters) {
+      sql += ` AND (${predicate.sql})`
+      params.push(...predicate.params)
+    }
+    if (bodyGateFtsExpr) {
+      sql +=
+        ' AND m.internal_id IN (' + 'SELECT rowid FROM email_body_fts WHERE email_body_fts MATCH ?)'
+      params.push(bodyGateFtsExpr)
+    }
+    if (negBodyFtsExpr) {
+      sql +=
+        ' AND m.internal_id NOT IN (' +
+        'SELECT rowid FROM email_body_fts WHERE email_body_fts MATCH ?)'
+      params.push(negBodyFtsExpr)
+    }
+    if (negAttachmentFtsExpr) {
+      sql +=
+        ' AND a.id NOT IN (' +
+        'SELECT rowid FROM email_attachment_fts WHERE email_attachment_fts MATCH ?)'
+      params.push(negAttachmentFtsExpr)
+    }
+    sql += ` ORDER BY ${ftsBranchOrderBy(sort)} LIMIT ?`
+    params.push(candidateLimit)
+    try {
+      return prep(db, sql).all(...params) as SearchRow[]
+    } catch (err) {
+      console.warn('[email:search] attachment FTS unavailable or invalid query', ftsExpr, err)
+      return []
+    }
+  }
+
+  const runFusedSearch = (
+    bodyFtsExpr: string,
+    attachmentFtsExpr: string,
+    filters: FilterPredicate[],
+    negBodyFtsExpr: string,
+    negAttachmentFtsExpr: string,
+    attachmentBodyGateExpr: string,
+    sort?: string
+  ): EmailSearch_SearchHit[] => {
+    if (!bodyFtsExpr || limit <= 0) return []
+    const candidateLimit = Math.min(
+      Math.max(limit * RRF_FETCH_MULTIPLIER, limit + RRF_FETCH_MIN_EXTRA),
+      RRF_FETCH_MAX
+    )
+    const bodyRows = fetchBodyFtsRows(bodyFtsExpr, filters, negBodyFtsExpr, sort, candidateLimit)
+    const attachmentRows = attachmentFtsExpr
+      ? fetchAttachmentFtsRows(
+          attachmentFtsExpr,
+          filters,
+          attachmentBodyGateExpr,
+          negBodyFtsExpr,
+          negAttachmentFtsExpr,
+          sort,
+          candidateLimit
+        )
+      : []
+    return mergeSearchRowsByRrf(bodyRows, attachmentRows, sort, limit)
+  }
+
   let items: EmailSearch_SearchHit[]
   let transformedQuery = opts.query
 
@@ -784,8 +1087,10 @@ export function searchEmails(opts: SearchOpts): SearchResult {
     parseWarnings.unshift(...parsed.warnings)
 
     if (parsed.is_plain_passthrough) {
+      // smart plain-passthrough：附件维度复用 transformed（镜像 Python smart 入口
+      // _search_email_bodies_fused(body=transformed, attachment=transformed)）。
       transformedQuery = smartQueryTransform(opts.query)
-      items = runFtsSearch(transformedQuery, structured.predicates)
+      items = runFusedSearch(transformedQuery, transformedQuery, structured.predicates, '', '', '')
     } else {
       const ftsExpr = buildPositiveFtsExpr(parsed)
       const negFtsExpr = buildNegativeFtsExpr(parsed)
@@ -802,8 +1107,18 @@ export function searchEmails(opts: SearchOpts): SearchResult {
       if (!ftsExpr && !negFtsExpr && filters.length === 0) {
         items = []
       } else if (ftsExpr) {
+        // 有正向全文词 → fused（body + attachment）。附件正向 expr 只含裸词，
+        // 列级词转为 body gate；neg 双路。镜像 Python fts 分支。
         transformedQuery = ftsExpr
-        items = runFtsSearch(ftsExpr, filters, negFtsExpr, parsed.sort)
+        items = runFusedSearch(
+          ftsExpr,
+          buildAttachmentPositiveFtsExpr(parsed),
+          filters,
+          negFtsExpr,
+          buildAttachmentNegativeFtsExpr(parsed),
+          buildAttachmentBodyGateExpr(parsed),
+          parsed.sort
+        )
       } else {
         items = runMetadataSearch(filters, negFtsExpr, parsed.sort)
       }

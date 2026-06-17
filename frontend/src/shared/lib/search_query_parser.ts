@@ -2,6 +2,7 @@ export interface TextTerm {
   value: string
   is_phrase?: boolean
   force_quoted?: boolean
+  column?: 'body_markdown' | 'subject' | 'sender'
 }
 
 export interface FilterPredicate {
@@ -35,7 +36,7 @@ interface ParseOptions {
   tzOffsetMinutes?: number | null
 }
 
-const FIELD_RE = /^([A-Za-z_]+):(.*)$/
+const FIELD_RE = /^([A-Za-z_]+~?):(.*)$/
 const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/
 const DATE_TIME_RE =
   /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(?:([Zz])|([+-])(\d{2}):?(\d{2}))?$/
@@ -59,6 +60,15 @@ const FIELD_ALIASES: Record<string, string> = {
   is: 'is',
   has: 'has',
   priority: 'priority'
+}
+
+// T6 列级 FTS：把 `body:` / `subject~:` / `sender~:` 映射到 email_body_fts 列名。
+// `subject~:` / `sender~:` 用 ~ 后缀与既有 `subject:` / `from:` LIKE 过滤区分；
+// `body:` 无对应 LIKE 字段故不带 ~。镜像 Python _FTS_COLUMN_ALIASES。
+const FTS_COLUMN_ALIASES: Record<string, 'body_markdown' | 'subject' | 'sender'> = {
+  body: 'body_markdown',
+  'subject~': 'subject',
+  'sender~': 'sender'
 }
 
 const MAILBOX_ALIASES: Record<string, string> = {
@@ -131,7 +141,9 @@ function isRegisteredFieldToken(token: string): boolean {
   const match = FIELD_RE.exec(body)
   if (match === null) return false
   const name = match[1]!.toLowerCase()
-  return FIELD_ALIASES[name] !== undefined || name === 'sort'
+  return (
+    FIELD_ALIASES[name] !== undefined || FTS_COLUMN_ALIASES[name] !== undefined || name === 'sort'
+  )
 }
 
 /** T2: 识别 `sort:` 排序覆盖 token。返回 matched + 规范化值（null=非法值，已记 warning）。 */
@@ -170,8 +182,10 @@ function mergeDanglingFields(tokens: string[]): string[] {
     if (
       match !== null &&
       match[2] === '' &&
-      // 已注册字段或 sort（排序指令也享受冒号后空格容错）
-      (FIELD_ALIASES[name] !== undefined || name === 'sort') &&
+      // 已注册字段、列级 FTS 字段或 sort（排序指令也享受冒号后空格容错）
+      (FIELD_ALIASES[name] !== undefined ||
+        FTS_COLUMN_ALIASES[name] !== undefined ||
+        name === 'sort') &&
       i + 1 < tokens.length &&
       tokens[i + 1] !== 'OR' &&
       !isRegisteredFieldToken(tokens[i + 1]!)
@@ -274,7 +288,9 @@ export function queryHasRegisteredSearchSyntax(query: string): boolean {
     const match = FIELD_RE.exec(body)
     if (!match) return false
     const name = match[1]!.toLowerCase()
-    return FIELD_ALIASES[name] !== undefined || name === 'sort'
+    return (
+      FIELD_ALIASES[name] !== undefined || FTS_COLUMN_ALIASES[name] !== undefined || name === 'sort'
+    )
   })
 }
 
@@ -311,6 +327,25 @@ function classifyToken(
   if (fieldMatch) {
     const fieldName = fieldMatch[1]!.toLowerCase()
     const rawValue = fieldMatch[2] ?? ''
+    // T6 列级 FTS：在 FIELD_ALIASES 之前命中 FTS 列分支，编译成全文 text unit
+    // （带 column），不是 LIKE filter。镜像 Python _classify_token 的 fts_column 分支。
+    const ftsColumn = FTS_COLUMN_ALIASES[fieldName]
+    if (ftsColumn !== undefined) {
+      sawSyntax = true
+      const value = stripOuterQuotes(rawValue)
+      if (value === '') {
+        warnings.push(`empty_value:${fieldName}`)
+        return { unit: null, sawSyntax }
+      }
+      return {
+        unit: {
+          kind: 'text',
+          value: { value, is_phrase: isQuoted(rawValue), column: ftsColumn },
+          negated
+        },
+        sawSyntax
+      }
+    }
     const canonical = FIELD_ALIASES[fieldName]
     if (!canonical) {
       return {

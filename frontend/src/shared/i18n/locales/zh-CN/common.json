@@ -371,6 +371,8 @@
     "email": {
       "countLabel": "{n} / {total}",
       "untitled": "(无主题)",
+      "fromAttachment": "命中附件 {filename}",
+      "unnamedAttachment": "未命名附件",
       "emptyTitle": "未找到匹配的邮件",
       "emptyHint": "试试更短的关键词，或换个说法",
       "syntaxLabel": "按字段精确搜索",

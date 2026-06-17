@@ -20,6 +20,7 @@ class TextTerm:
     value: str
     is_phrase: bool = False
     force_quoted: bool = False
+    column: Optional[Literal["body_markdown", "subject", "sender"]] = None
 
 
 @dataclass(frozen=True)
@@ -57,7 +58,7 @@ class _Unit:
     negated: bool = False
 
 
-_FIELD_RE = re.compile(r"^([A-Za-z_]+):(.*)$")
+_FIELD_RE = re.compile(r"^([A-Za-z_]+~?):(.*)$")
 _DATE_ONLY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _RELATIVE_RE = re.compile(r"^([1-9]\d*)([dwmy])$", re.IGNORECASE)
 
@@ -79,6 +80,12 @@ _FIELD_ALIASES: dict[str, str] = {
     "is": "is",
     "has": "has",
     "priority": "priority",
+}
+
+_FTS_COLUMN_ALIASES: dict[str, Literal["body_markdown", "subject", "sender"]] = {
+    "body": "body_markdown",
+    "subject~": "subject",
+    "sender~": "sender",
 }
 
 _MAILBOX_ALIASES: dict[str, str] = {
@@ -243,7 +250,11 @@ def _is_registered_field_token(token: str) -> bool:
     if match is None:
         return False
     name = match.group(1).lower()
-    return _FIELD_ALIASES.get(name) is not None or name == "sort"
+    return (
+        _FIELD_ALIASES.get(name) is not None
+        or _FTS_COLUMN_ALIASES.get(name) is not None
+        or name == "sort"
+    )
 
 
 def _parse_sort_token(token: str, warnings: list[str]) -> tuple[bool, Optional[str]]:
@@ -282,8 +293,12 @@ def _merge_dangling_fields(tokens: list[str]) -> list[str]:
         if (
             match is not None
             and match.group(2) == ""  # 冒号后空值
-            # 已注册字段或 sort（排序指令也享受冒号后空格容错）
-            and (_FIELD_ALIASES.get(name) is not None or name == "sort")
+            # 已注册字段、列级 FTS 字段或 sort（排序指令也享受冒号后空格容错）
+            and (
+                _FIELD_ALIASES.get(name) is not None
+                or _FTS_COLUMN_ALIASES.get(name) is not None
+                or name == "sort"
+            )
             and i + 1 < n  # 有下一个 token
             and tokens[i + 1] != "OR"
             and not _is_registered_field_token(tokens[i + 1])
@@ -315,6 +330,19 @@ def _classify_token(
     if field_match:
         field_name = field_match.group(1).lower()
         raw_value = field_match.group(2)
+        fts_column = _FTS_COLUMN_ALIASES.get(field_name)
+        if fts_column is not None:
+            saw_syntax = True
+            value = _strip_outer_quotes(raw_value)
+            if value == "":
+                warnings.append(f"empty_value:{field_name}")
+                return None, saw_syntax
+            return _Unit(
+                "text",
+                TextTerm(value, is_phrase=_is_quoted(raw_value), column=fts_column),
+                negated=negated,
+            ), saw_syntax
+
         canonical = _FIELD_ALIASES.get(field_name)
         if canonical is None:
             return _Unit(
@@ -592,4 +620,3 @@ def _strip_outer_quotes(value: str) -> str:
     if _is_quoted(value):
         return value[1:-1]
     return value
-

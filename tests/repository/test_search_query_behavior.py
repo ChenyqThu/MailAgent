@@ -49,6 +49,21 @@ CREATE TABLE email_attachment (
     is_inline INTEGER DEFAULT 0,
     created_at REAL NOT NULL
 );
+
+CREATE TABLE email_attachment_text (
+    attachment_id INTEGER PRIMARY KEY,
+    text_content TEXT,
+    text_size_bytes INTEGER NOT NULL DEFAULT 0,
+    extractor TEXT NOT NULL,
+    status TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL
+);
+
+CREATE VIRTUAL TABLE email_attachment_fts USING fts5(
+    text_content,
+    tokenize='porter unicode61 remove_diacritics 2'
+);
 """
 
 
@@ -96,7 +111,7 @@ def behavior_db(tmp_path: Path) -> Path:
                 ),
             )
             for attachment in email.get("attachments", []):
-                conn.execute(
+                cur = conn.execute(
                     """INSERT INTO email_attachment
                        (internal_id, filename, is_inline, created_at)
                        VALUES (?, ?, ?, ?)""",
@@ -107,6 +122,27 @@ def behavior_db(tmp_path: Path) -> Path:
                         now,
                     ),
                 )
+                text_content = attachment.get("text_content")
+                if text_content:
+                    attachment_id = cur.lastrowid
+                    conn.execute(
+                        """INSERT INTO email_attachment_text
+                           (attachment_id, text_content, text_size_bytes, extractor,
+                            status, created_at, updated_at)
+                           VALUES (?, ?, ?, 'fixture', 'extracted', ?, ?)""",
+                        (
+                            attachment_id,
+                            text_content,
+                            len(text_content.encode("utf-8")),
+                            now,
+                            now,
+                        ),
+                    )
+                    conn.execute(
+                        """INSERT INTO email_attachment_fts (rowid, text_content)
+                           VALUES (?, ?)""",
+                        (attachment_id, text_content),
+                    )
         conn.commit()
     finally:
         conn.close()
@@ -138,3 +174,13 @@ def test_search_query_behavior_fixture(case: dict[str, Any], behavior_db: Path):
     assert len(result.parse_warnings) == case["expect_warnings"]
     if "expect_transformed_query" in case:
         assert result.transformed_query == case["expect_transformed_query"]
+    if "expect_hits" in case:
+        actual_hits = [
+            {
+                "internal_id": hit.internal_id,
+                "source": hit.source,
+                "filename": hit.filename,
+            }
+            for hit in result.hits
+        ]
+        assert actual_hits[: len(case["expect_hits"])] == case["expect_hits"]

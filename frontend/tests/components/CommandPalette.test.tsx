@@ -251,6 +251,91 @@ describe('CommandPalette — email hits + AI Actions', () => {
     expect(document.querySelector('mark')).toBeTruthy()
   })
 
+  test('attachment-source hit renders paperclip badge + filename (P1b)', async () => {
+    const attachmentHit = {
+      internal_id: 201,
+      subject: 'Contract bundle',
+      sender: 'Bob <bob@example.com>',
+      date_received: '2026-05-14T09:00:00+08:00',
+      mailbox: '收件箱',
+      rank: -0.5,
+      snippet: 'the <mark>contract</mark> clause lives in the appendix',
+      notion_page_id: null,
+      notion_url: null,
+      ai_priority: null,
+      lang: null,
+      source: 'attachment' as const,
+      filename: 'evidence.txt'
+    }
+    mockSearch.mockResolvedValue({ items: [attachmentHit], total_indexed: 1247 })
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    openPalette()
+    renderPalette()
+    await waitFor(() => screen.getByRole('combobox'))
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'contract' } })
+    await vi.advanceTimersByTimeAsync(300)
+    await waitFor(() => screen.getByText('Email'))
+    // 附件徽标显示文件名 — source='attachment' 时才渲染。
+    expect(screen.getByText('evidence.txt')).toBeTruthy()
+    // 徽标容器本身渲染 (aria-label = i18n palette.email.fromAttachment, zh-CN):
+    // 证明的是「附件来源徽标」而非任意文本碰巧含文件名。回形针 <svg> 在内。
+    const badge = screen.getByLabelText('命中附件 evidence.txt')
+    expect(badge).toBeTruthy()
+    expect(badge.querySelector('svg')).toBeTruthy()
+  })
+
+  test('body-source hit does NOT render an attachment filename badge (P1b)', async () => {
+    mockSearch.mockResolvedValue({ items: SAMPLE_HITS, total_indexed: 1247 })
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    openPalette()
+    renderPalette()
+    await waitFor(() => screen.getByRole('combobox'))
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'redis' } })
+    await vi.advanceTimersByTimeAsync(300)
+    await waitFor(() => screen.getByText(/timeout debug session/))
+    // SAMPLE_HITS 都是 body 命中 (无 source 字段) → 无附件名徽标。
+    expect(screen.queryByText('evidence.txt')).toBeNull()
+  })
+
+  test('renders many hits (>8) inside a scrollable listbox (P1b: more results + scroll)', async () => {
+    // P1b 把 MAX_EMAIL_HITS 8→50。验证: 30 条命中全部进 DOM (旧上限 8 会截断),
+    // 且结果容器是 overflow-y-auto (多结果在列表内滚动而非撑爆 pane)。
+    const many = Array.from({ length: 30 }, (_, i) => ({
+      internal_id: 1000 + i,
+      subject: `bulk match row ${i}`,
+      sender: `User${i} <user${i}@example.com>`,
+      date_received: '2026-05-15T09:00:00+08:00',
+      mailbox: '收件箱',
+      rank: -1 - i * 0.01,
+      snippet: `row ${i} <mark>bulk</mark> body`,
+      notion_page_id: null,
+      notion_url: null,
+      ai_priority: null,
+      lang: null
+    }))
+    mockSearch.mockResolvedValue({ items: many, total_indexed: 1247 })
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    openPalette()
+    renderPalette()
+    await waitFor(() => screen.getByRole('combobox'))
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'bulk' } })
+    await vi.advanceTimersByTimeAsync(300)
+    await waitFor(() => screen.getByText('Email'))
+    // subject 经 highlightTerms 把 query 词 `bulk` 包成 <mark>, 文本节点被拆分;
+    // 匹配后缀 `match row N` (落在单个文本节点) 而非整串。第 1 与第 30 条都在
+    // DOM → 没有被旧的 8 条上限截断。
+    await waitFor(() => screen.getByText(/match row 0$/))
+    expect(screen.getByText(/match row 29$/)).toBeTruthy()
+    // 结果列表是可滚动容器。
+    const listbox = document.getElementById('palette-listbox')
+    expect(listbox?.className).toContain('overflow-y-auto')
+    // 邮件命中行数 = 30 (data-flat-idx 行里属于 email 组的)。
+    const emailRows = Array.from(
+      document.querySelectorAll('[role="option"][data-flat-idx]')
+    ).filter((r) => /match row \d/.test(r.textContent ?? ''))
+    expect(emailRows.length).toBe(30)
+  })
+
   test('0 hits → empty tile + AI Actions hidden', async () => {
     mockSearch.mockResolvedValue({ items: [], total_indexed: 1247 })
     vi.useFakeTimers({ shouldAdvanceTime: true })

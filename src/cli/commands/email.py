@@ -441,6 +441,8 @@ def email_search(
             "rank": hit.rank,
             "notion_page_id": hit.notion_page_id,
             "notion_url": hit.notion_url,
+            "source": hit.source,
+            "filename": hit.filename,
         }
         if not no_snippet:
             item["snippet"] = hit.snippet

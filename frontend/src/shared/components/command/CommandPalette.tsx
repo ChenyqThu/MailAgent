@@ -55,6 +55,7 @@ import {
   History,
   Loader2,
   Mail,
+  Paperclip,
   RotateCcw,
   AlertTriangle,
   Search as SearchIcon,
@@ -79,7 +80,11 @@ import type { AIPriority, MailboxSummary, SearchHit, SearchResult } from '@share
 
 // ─── Tunables ──────────────────────────────────────────────────────────
 
-const MAX_EMAIL_HITS = 8
+// P1b: 8 → 50。用户要「更多搜索结果 + 滚动查看」。pane 有 max-height 钳制
+// (index.css .palette-pane) + 结果 <ul> overflow-y-auto, 多结果在列表内滚动而非
+// 撑爆; 键盘导航走 scrollIntoView 保选中项可见。50 = search IPC limit 与列表
+// 展示的单一截断点 (searchEmails clamp 上限 200, 50 在范围内), 不设无界。
+const MAX_EMAIL_HITS = 50
 const MAX_JUMP_MAILBOXES = 3
 const DEBOUNCE_MS = 250
 const CJK_RATIO_THRESHOLD = 0.4
@@ -1079,6 +1084,23 @@ function EmailHitRow({
             __html: subjectHtml || hit.subject || t('palette.email.untitled')
           }}
         />
+        {hit.source === 'attachment' && (
+          // 附件命中徽标 — snippet 此时来自附件正文 (P1b)。回形针图标 + 文件名,
+          // 复刻 priority chip 的尺寸/圆角/边框, 用设计系统 token (禁 raw hex)。
+          <span
+            className="mt-1 inline-flex max-w-full items-center gap-1 rounded-[3px] border border-ink-border bg-ink-fg/[0.06] px-1 py-px text-[10px] leading-none text-ink-fg-2"
+            title={hit.filename ?? undefined}
+            aria-label={t('palette.email.fromAttachment', {
+              filename: hit.filename || t('palette.email.unnamedAttachment'),
+              defaultValue: '命中附件 {filename}'
+            })}
+          >
+            <Paperclip size={10} strokeWidth={2} className="shrink-0" aria-hidden />
+            <span className="truncate font-mono">
+              {hit.filename || t('palette.email.unnamedAttachment')}
+            </span>
+          </span>
+        )}
         {snippetHtml && (
           <div
             className="text-meta text-ink-fg-2 mt-1 line-clamp-2 [&_mark]:bg-coral/15 [&_mark]:text-ink-fg-1 [&_mark]:rounded [&_mark]:px-0.5"

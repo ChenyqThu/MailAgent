@@ -379,6 +379,8 @@ async def search_emails(
             "snippet": hit.snippet,
             "notion_page_id": hit.notion_page_id,
             "notion_url": hit.notion_url,
+            "source": hit.source,
+            "filename": hit.filename,
         }
         for hit in hits
     ]

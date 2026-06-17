@@ -1287,6 +1287,8 @@ class EventHandlers:
                     "rank": h.rank,
                     "notion_page_id": h.notion_page_id,
                     "notion_url": h.notion_url,
+                    "source": h.source,
+                    "filename": h.filename,
                 }
                 for h in hits
             ],
