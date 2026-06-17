@@ -1083,7 +1083,7 @@ class EmailRepository:
                    m.mailbox,
                    m.notion_page_id,
                    snippet(email_body_fts, 0, '<mark>', '</mark>', '...', 16) AS snippet,
-                   bm25(email_body_fts)           AS rank
+                   bm25(email_body_fts, 1.0, 5.0, 2.0) AS rank
               FROM email_body_fts
               JOIN email_metadata m ON m.internal_id = email_body_fts.rowid
              WHERE email_body_fts MATCH ?
@@ -1099,7 +1099,7 @@ class EmailRepository:
         for predicate in filters:
             sql += f" AND ({predicate.sql})"
             params.extend(predicate.params)
-        sql += " ORDER BY rank LIMIT ?"
+        sql += " ORDER BY rank, datetime(m.date_received) DESC LIMIT ?"
         params.append(limit)
 
         return self._execute_email_search(sql, params, query)
@@ -1149,13 +1149,13 @@ class EmailRepository:
                        m.mailbox,
                        m.notion_page_id,
                        snippet(email_body_fts, 0, '<mark>', '</mark>', '...', 16) AS snippet,
-                       bm25(email_body_fts)           AS rank
+                       bm25(email_body_fts, 1.0, 5.0, 2.0) AS rank
                   FROM email_body_fts
                   JOIN email_metadata m ON m.internal_id = email_body_fts.rowid
                  WHERE email_body_fts MATCH ?
             """
             params.append(fts_expr)
-            order_by = " ORDER BY rank LIMIT ?"
+            order_by = " ORDER BY rank, datetime(m.date_received) DESC LIMIT ?"
         else:
             sql = """
                 SELECT m.internal_id,
@@ -1180,6 +1180,13 @@ class EmailRepository:
                 "SELECT rowid FROM email_body_fts WHERE email_body_fts MATCH ?)"
             )
             params.append(neg_fts_expr)
+        # T2: sort 覆盖。默认 order_by 已按"有 fts→相关度 / 纯过滤→时间倒序"设定。
+        if parsed.sort == "date":
+            order_by = " ORDER BY datetime(m.date_received) DESC LIMIT ?"
+        elif parsed.sort == "oldest":
+            order_by = " ORDER BY datetime(m.date_received) ASC LIMIT ?"
+        elif parsed.sort == "relevance" and not fts_expr:
+            order_by = " ORDER BY datetime(m.date_received) DESC LIMIT ?"
         sql += order_by
         params.append(limit)
 

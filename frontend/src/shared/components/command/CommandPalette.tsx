@@ -35,9 +35,8 @@
 //
 // FTS5 + Chinese:
 //   - debounced 250ms via useDebouncedValue
-//   - normalizeFtsQuery (shared util) appends `*` to trailing CJK token
-//     so `产品` matches `本周产品评审` — fixes the pre-rewrite palette bug
-//     where this normalisation lived only inside SearchPage.
+//   - raw query passed to backend smart mode (T3); CJK transform unified
+//     server-side so the palette and CLI/API share one search path.
 //
 // Open behaviour:
 //   Each closed→open transition starts from an empty query — the palette is
@@ -57,6 +56,7 @@ import {
   Loader2,
   Mail,
   RotateCcw,
+  AlertTriangle,
   Search as SearchIcon,
   Sparkle,
   X
@@ -72,7 +72,6 @@ import { useEmailFilter, type EmailView } from '@shared/state/email-filter'
 import { showAIChatPanel } from '@shared/state/ai-chat-panel'
 import { closeCommandPalette, useCommandPalette } from '@shared/state/command-palette'
 import { toastError, toastSuccess } from '@shared/state/toast'
-import { normalizeFtsQuery } from '@shared/lib/search_query'
 import { extractTerms, highlightTerms } from '@shared/lib/highlight_terms'
 import { parseSender } from '@shared/lib/mail_parse'
 import { formatRelativeTime } from '@shared/format'
@@ -258,7 +257,8 @@ export function CommandPalette(): React.ReactElement | null {
   }, [open])
 
   const debouncedRaw = useDebouncedValue(query, DEBOUNCE_MS)
-  const normalised = useMemo(() => normalizeFtsQuery(debouncedRaw), [debouncedRaw])
+  // T3: CJK transform 统一到后端 smart 模式，前端只 trim（消除前端/后端双 normalizer 分叉）。
+  const normalised = useMemo(() => debouncedRaw.trim(), [debouncedRaw])
   const queryTerms = useMemo(() => extractTerms(debouncedRaw), [debouncedRaw])
   const lang = detectLang(query)
   const langLabel = lang === 'zh' ? t('palette.lang.zh') : t('palette.lang.en')
@@ -300,6 +300,36 @@ export function CommandPalette(): React.ReactElement | null {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: 同上, `?? []` 空档新数组无害, React Compiler 迁移时统一收。
   const hits: SearchHit[] = searchQ.data?.items ?? []
   const totalIndexed = searchQ.data?.total_indexed ?? null
+  // keepPreviousData 会在新 query 在途时沿用上个 query 的 data；placeholder 期间
+  // 不显示 stale warning（避免从非法→合法 query 时提示滞后一拍）。
+  const parseWarnings: string[] = searchQ.isPlaceholderData
+    ? []
+    : (searchQ.data?.parse_warnings ?? [])
+  // parse_warnings code → 友好提示文案（i18next-icu 单括号插值）。
+  const formatWarning = (code: string): string => {
+    const [head, a, b] = code.split(':')
+    switch (head) {
+      case 'empty_value':
+        return t('palette.warn.emptyValue', { field: a ?? '' })
+      case 'unknown_value':
+        return t('palette.warn.unknownValue', { field: a ?? '', value: b ?? '' })
+      case 'invalid_date':
+      case 'invalid_relative_date':
+        return t('palette.warn.invalidDate', { field: a ?? '', value: b ?? '' })
+      case 'unsupported_or':
+        return a === 'negated' ? t('palette.warn.negatedOr') : t('palette.warn.crossClassOr')
+      case 'unclosed_quote':
+        return t('palette.warn.unclosedQuote')
+      case 'dangling_or':
+        return t('palette.warn.danglingOr')
+      case 'empty_text':
+        return t('palette.warn.emptyText')
+      case 'parse_error':
+        return t('palette.warn.parseError')
+      default:
+        return t('palette.warn.generic')
+    }
+  }
   const isSearching = searchQ.isFetching && normalised.length > 0
 
   // ──────────────────────────────────────────────────────────────────
@@ -680,6 +710,16 @@ export function CommandPalette(): React.ReactElement | null {
             </button>
           )}
         </div>
+
+        {/* Parse warnings — 字段语法被忽略/降级时给可见反馈（T0） */}
+        {hasQuery && parseWarnings.length > 0 && (
+          <div className="px-4 py-1.5 flex items-start gap-1.5 border-b border-ink-border-soft text-micro text-ink-fg-2 shrink-0">
+            <AlertTriangle size={12} strokeWidth={2} className="mt-px shrink-0 text-amber-500" />
+            <span className="leading-snug">
+              {parseWarnings.map((w) => formatWarning(w)).join('；')}
+            </span>
+          </div>
+        )}
 
         {/* Result body */}
         <ul

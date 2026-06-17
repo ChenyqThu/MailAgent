@@ -7,7 +7,7 @@
 //   1. Rendering — 3 group headers (Jump / Email / AI Actions) appear in
 //      the right shape; empty / loading variants land on the right
 //      empty-tile copy.
-//   2. Query path — normalizeFtsQuery is wired (CJK '产品' → '产品*');
+//   2. Query path — raw query passed to backend verbatim (CJK transform unified server-side, T3);
 //      FTS5 operators bypass wildcard injection.
 //   3. Keyboard nav — ↑↓ flat-index, Tab/Shift-Tab group hop, Enter run,
 //      Esc dismiss.
@@ -200,7 +200,7 @@ describe('CommandPalette — query normalisation', () => {
     )
   })
 
-  test('CJK query gets `*` suffix on last token', async () => {
+  test('CJK query is passed through verbatim (backend unifies transform, T3)', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     openPalette()
     renderPalette()
@@ -208,7 +208,7 @@ describe('CommandPalette — query normalisation', () => {
     fireEvent.change(screen.getByRole('combobox'), { target: { value: '产品' } })
     await vi.advanceTimersByTimeAsync(300)
     await waitFor(() =>
-      expect(mockSearch).toHaveBeenCalledWith(expect.objectContaining({ query: '产品*' }))
+      expect(mockSearch).toHaveBeenCalledWith(expect.objectContaining({ query: '产品' }))
     )
   })
 

@@ -47,6 +47,7 @@ class ParsedSearchQuery:
     neg_filters: list[FilterPredicate] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     is_plain_passthrough: bool = False
+    sort: Optional[str] = None  # T2: 'relevance' | 'date' | 'oldest'（None=默认排序）
 
 
 @dataclass(frozen=True)
@@ -90,10 +91,12 @@ _MAILBOX_ALIASES: dict[str, str] = {
 _IS_FILTERS: dict[str, FilterPredicate] = {
     "read": FilterPredicate("COALESCE(m.is_read, 0) = ?", (1,)),
     "unread": FilterPredicate("COALESCE(m.is_read, 0) = ?", (0,)),
-    "flagged": FilterPredicate("COALESCE(m.is_flagged, 0) = ?", (1,)),
+    # T4: 正向用 `m.col = 1` 命中 partial index（WHERE col=1）；反向/unread 保留
+    # COALESCE 以兼容 NULL（NULL 视作未标记/未读）。
+    "flagged": FilterPredicate("m.is_flagged = ?", (1,)),
     "unflagged": FilterPredicate("COALESCE(m.is_flagged, 0) = ?", (0,)),
-    "pinned": FilterPredicate("COALESCE(m.is_pinned, 0) = ?", (1,)),
-    "important": FilterPredicate("COALESCE(m.is_important, 0) = ?", (1,)),
+    "pinned": FilterPredicate("m.is_pinned = ?", (1,)),
+    "important": FilterPredicate("m.is_important = ?", (1,)),
 }
 
 _PRIORITY_ALIASES: dict[str, str] = {
@@ -105,6 +108,13 @@ _PRIORITY_ALIASES: dict[str, str] = {
     "一般": "一般",
     "low": "低",
     "低": "低",
+}
+
+_SORT_ALIASES: dict[str, str] = {
+    "relevance": "relevance",
+    "date": "date",
+    "newest": "date",
+    "oldest": "oldest",
 }
 
 
@@ -124,6 +134,7 @@ def parse_search_query(
         local_tz = _local_timezone(tz_offset_minutes)
         now_dt = _coerce_now(now, local_tz)
         tokens, warnings = _tokenize(original_query)
+        tokens = _merge_dangling_fields(tokens)
         parsed = ParsedSearchQuery(original_query=original_query, warnings=warnings)
         if not tokens:
             parsed.is_plain_passthrough = True
@@ -135,6 +146,12 @@ def parse_search_query(
             if token == "OR":
                 elements.append("OR")
                 saw_syntax = True
+                continue
+            matched_sort, sort_value = _parse_sort_token(token, parsed.warnings)
+            if matched_sort:
+                saw_syntax = True
+                if sort_value is not None and parsed.sort is None:
+                    parsed.sort = sort_value
                 continue
             unit, token_saw_syntax = _classify_token(
                 token,
@@ -217,6 +234,66 @@ def _tokenize(query: str) -> tuple[list[str], list[str]]:
         warnings.append("unclosed_quote")
         return query.split(), warnings
     return tokens, warnings
+
+
+def _is_registered_field_token(token: str) -> bool:
+    """token 去掉可选前导 ``-`` 后是否为已注册字段过滤器（含空值，如 ``from:``）或 ``sort:``。"""
+    body = token[1:] if token.startswith("-") and len(token) > 1 else token
+    match = _FIELD_RE.match(body)
+    if match is None:
+        return False
+    name = match.group(1).lower()
+    return _FIELD_ALIASES.get(name) is not None or name == "sort"
+
+
+def _parse_sort_token(token: str, warnings: list[str]) -> tuple[bool, Optional[str]]:
+    """识别 ``sort:`` 排序覆盖 token（T2）。返回 (是否 sort token, 规范化值或 None)。
+
+    ``sort:relevance|date|oldest``（``newest`` = ``date`` 别名）。非法值 → warning
+    且 ``sort`` 不生效（仍 consume 该 token）。
+    """
+    match = _FIELD_RE.match(token)
+    if match is None or match.group(1).lower() != "sort":
+        return False, None
+    raw = _strip_outer_quotes(match.group(2)).strip().lower()
+    canonical = _SORT_ALIASES.get(raw)
+    if canonical is None:
+        warnings.append(f"unknown_value:sort:{raw}" if raw else "empty_value:sort")
+        return True, None
+    return True, canonical
+
+
+def _merge_dangling_fields(tokens: list[str]) -> list[str]:
+    """T0 容错：把孤立的 ``field:``（冒号后空值）与紧跟的下一个文本 token 合并。
+
+    ``from: echo`` → ``from:echo``、``-from: echo`` → ``-from:echo``、
+    ``from: "Zhang San"`` → ``from:"Zhang San"``。下列情况**不合并**（保持现状
+    丢弃 + ``empty_value`` warning）：孤立 ``field:`` 在末尾、下一个 token 是
+    另一个字段过滤器、或下一个 token 是孤立 ``OR``。
+    """
+    merged: list[str] = []
+    i = 0
+    n = len(tokens)
+    while i < n:
+        tok = tokens[i]
+        body = tok[1:] if tok.startswith("-") and len(tok) > 1 else tok
+        match = _FIELD_RE.match(body)
+        name = match.group(1).lower() if match is not None else ""
+        if (
+            match is not None
+            and match.group(2) == ""  # 冒号后空值
+            # 已注册字段或 sort（排序指令也享受冒号后空格容错）
+            and (_FIELD_ALIASES.get(name) is not None or name == "sort")
+            and i + 1 < n  # 有下一个 token
+            and tokens[i + 1] != "OR"
+            and not _is_registered_field_token(tokens[i + 1])
+        ):
+            merged.append(tok + tokens[i + 1])
+            i += 2
+            continue
+        merged.append(tok)
+        i += 1
+    return merged
 
 
 def _classify_token(

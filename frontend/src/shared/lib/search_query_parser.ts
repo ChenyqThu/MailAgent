@@ -19,6 +19,7 @@ export interface ParsedSearchQuery {
   neg_filters: FilterPredicate[]
   warnings: string[]
   is_plain_passthrough: boolean
+  sort?: 'relevance' | 'date' | 'oldest'
 }
 
 interface Unit {
@@ -78,13 +79,21 @@ const PRIORITY_ALIASES: Record<string, string> = {
   低: '低'
 }
 
+const SORT_ALIASES: Record<string, string> = {
+  relevance: 'relevance',
+  date: 'date',
+  newest: 'date',
+  oldest: 'oldest'
+}
+
 const IS_FILTERS: Record<string, FilterPredicate> = {
   read: { sql: 'COALESCE(m.is_read, 0) = ?', params: [1] },
   unread: { sql: 'COALESCE(m.is_read, 0) = ?', params: [0] },
-  flagged: { sql: 'COALESCE(m.is_flagged, 0) = ?', params: [1] },
+  // T4: 正向用 `m.col = 1` 命中 partial index；反向/unread 保留 COALESCE 兼容 NULL。
+  flagged: { sql: 'm.is_flagged = ?', params: [1] },
   unflagged: { sql: 'COALESCE(m.is_flagged, 0) = ?', params: [0] },
-  pinned: { sql: 'COALESCE(m.is_pinned, 0) = ?', params: [1] },
-  important: { sql: 'COALESCE(m.is_important, 0) = ?', params: [1] }
+  pinned: { sql: 'm.is_pinned = ?', params: [1] },
+  important: { sql: 'm.is_important = ?', params: [1] }
 }
 
 export function tokenizeSearchQuery(query: string): { tokens: string[]; warnings: string[] } {
@@ -117,12 +126,73 @@ export function tokenizeSearchQuery(query: string): { tokens: string[]; warnings
   return { tokens, warnings }
 }
 
+function isRegisteredFieldToken(token: string): boolean {
+  const body = token.startsWith('-') && token.length > 1 ? token.slice(1) : token
+  const match = FIELD_RE.exec(body)
+  if (match === null) return false
+  const name = match[1]!.toLowerCase()
+  return FIELD_ALIASES[name] !== undefined || name === 'sort'
+}
+
+/** T2: 识别 `sort:` 排序覆盖 token。返回 matched + 规范化值（null=非法值，已记 warning）。 */
+function parseSortToken(
+  token: string,
+  warnings: string[]
+): { matched: boolean; value: string | null } {
+  const match = FIELD_RE.exec(token)
+  if (match === null || match[1]!.toLowerCase() !== 'sort') return { matched: false, value: null }
+  const raw = stripOuterQuotes(match[2] ?? '')
+    .trim()
+    .toLowerCase()
+  const canonical = SORT_ALIASES[raw]
+  if (!canonical) {
+    warnings.push(raw ? `unknown_value:sort:${raw}` : 'empty_value:sort')
+    return { matched: true, value: null }
+  }
+  return { matched: true, value: canonical }
+}
+
+/**
+ * T0 容错：把孤立的 `field:`（冒号后空值）与紧跟的下一个文本 token 合并。
+ * `from: echo` → `from:echo`、`-from: echo` → `-from:echo`、
+ * `from: "Zhang San"` → `from:"Zhang San"`。下列情况不合并（保持现状丢弃 +
+ * `empty_value` warning）：孤立 `field:` 在末尾、下一个 token 是另一个字段过滤器、
+ * 或下一个 token 是孤立 `OR`。
+ */
+function mergeDanglingFields(tokens: string[]): string[] {
+  const merged: string[] = []
+  let i = 0
+  while (i < tokens.length) {
+    const tok = tokens[i]!
+    const body = tok.startsWith('-') && tok.length > 1 ? tok.slice(1) : tok
+    const match = FIELD_RE.exec(body)
+    const name = match !== null ? match[1]!.toLowerCase() : ''
+    if (
+      match !== null &&
+      match[2] === '' &&
+      // 已注册字段或 sort（排序指令也享受冒号后空格容错）
+      (FIELD_ALIASES[name] !== undefined || name === 'sort') &&
+      i + 1 < tokens.length &&
+      tokens[i + 1] !== 'OR' &&
+      !isRegisteredFieldToken(tokens[i + 1]!)
+    ) {
+      merged.push(tok + tokens[i + 1]!)
+      i += 2
+      continue
+    }
+    merged.push(tok)
+    i += 1
+  }
+  return merged
+}
+
 export function parseSearchQuery(query: string, opts: ParseOptions = {}): ParsedSearchQuery {
   const originalQuery = query ?? ''
   try {
     const localOffset = localTimezoneOffset(opts.tzOffsetMinutes)
     const now = coerceNow(opts.now, localOffset)
-    const { tokens, warnings } = tokenizeSearchQuery(originalQuery)
+    const { tokens: rawTokens, warnings } = tokenizeSearchQuery(originalQuery)
+    const tokens = mergeDanglingFields(rawTokens)
     const parsed = emptyParsed(originalQuery, warnings)
     if (tokens.length === 0) {
       parsed.is_plain_passthrough = true
@@ -135,6 +205,14 @@ export function parseSearchQuery(query: string, opts: ParseOptions = {}): Parsed
       if (token === 'OR') {
         elements.push('OR')
         sawSyntax = true
+        continue
+      }
+      const sortResult = parseSortToken(token, parsed.warnings)
+      if (sortResult.matched) {
+        sawSyntax = true
+        if (sortResult.value !== null && parsed.sort === undefined) {
+          parsed.sort = sortResult.value as 'relevance' | 'date' | 'oldest'
+        }
         continue
       }
       const { unit, sawSyntax: tokenSawSyntax } = classifyToken(
@@ -195,7 +273,8 @@ export function queryHasRegisteredSearchSyntax(query: string): boolean {
     const body = token.startsWith('-') && token.length > 1 ? token.slice(1) : token
     const match = FIELD_RE.exec(body)
     if (!match) return false
-    return FIELD_ALIASES[match[1]!.toLowerCase()] !== undefined
+    const name = match[1]!.toLowerCase()
+    return FIELD_ALIASES[name] !== undefined || name === 'sort'
   })
 }
 

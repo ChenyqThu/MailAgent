@@ -35,6 +35,7 @@ serve-api `GET /api/email/search?q=`、CLI `mailagent email search`、chat tools
 | `is:` | — | 布尔列 | `read`→is_read=1、`unread`→is_read=0、`flagged`→is_flagged=1、`unflagged`→is_flagged=0、`pinned`→is_pinned=1、`important`→is_important=1 |
 | `has:` | — | 附件 | `attachment`→`EXISTS (SELECT 1 FROM email_attachment a WHERE a.internal_id = m.internal_id AND COALESCE(a.is_inline,0)=0)` |
 | `priority:` | — | `ai_priority` | 别名映射后 `LIKE '%映射词%'`：urgent/紧急→紧急、important/重要→重要、normal/一般→一般、low/低→低（DB 实际值带 emoji 前缀如 `🔴 紧急`，故用 LIKE）。未知值→原值 LIKE |
+| `sort:` | — | （排序指令，非过滤谓词） | `relevance` / `date`（别名 `newest`）/ `oldest`，详见 §4.4。不产生 WHERE 谓词，只覆盖 ORDER BY；首个有效值生效，非法值 → `unknown_value:sort:<v>` warning |
 
 通用规则：
 - 字段名 **大小写不敏感**（`From:` = `from:`）；值保持原样（LIKE 本身 ASCII 大小写不敏感）。
@@ -76,9 +77,10 @@ query 原样下放 FTS5 MATCH（现状行为，高级 FTS5 语法 NEAR/列过滤
 
 1. `mode='raw'` → 直通，结束。
 2. tokenize：按空白切分，但**引号内的空白不切**（支持 `from:"a b"` 与 `"a b"`；未闭合引号 → 该引号视为普通字符 + warning）。
-3. 逐 token 分类：否定前缀 → 字段匹配（`^([A-Za-z_]+):(.*)$` 且字段名在注册表）→ 短语 → 文本词。
-4. OR 结合（§2.4），产出结构化查询：`{ fts_terms[], fts_or_groups[], neg_fts_terms[], filters[], or_filter_groups[], neg_filters[], warnings[] }`。
-5. **零语法 fast-path（回归红线）**：若解析结果不含任何字段过滤器、否定、OR 重组（即纯文本词/短语），必须走**与现状完全相同**的代码路径：整串 query 交给 smart transform（含其对 quote/wildcard/operator 的 raw-passthrough 判断）。保证存量查询行为逐字节不变。
+3. **字段容错合并（merge pass）**：若某 token 是孤立的已注册 `field:`（冒号后空值），且其后紧跟一个**非字段过滤器、非 `OR`** 的 token（可为引号词），则合并为 `field:<下一个 token>`（保留前导 `-` 否定）。例：`from: echo`→`from:echo`、`-from: echo`→`-from:echo`、`from: "Zhang San"`→`from:"Zhang San"`。**不合并**（保持丢弃 + `empty_value` warning）：孤立 `field:` 在末尾、下一个是字段过滤器（如 `from: from:bob`、`from: -is:read`）、下一个是 `OR`。注：值含空格仍需引号——只吞紧跟的一个 token（`from: a b` → `from:a` + 文本 `b`）。
+4. 逐 token 分类：否定前缀 → 字段匹配（`^([A-Za-z_]+):(.*)$` 且字段名在注册表）→ 短语 → 文本词。
+5. OR 结合（§2.4），产出结构化查询：`{ fts_terms[], fts_or_groups[], neg_fts_terms[], filters[], or_filter_groups[], neg_filters[], warnings[] }`。
+6. **零语法 fast-path（回归红线）**：若解析结果不含任何字段过滤器、否定、OR 重组（即纯文本词/短语），必须走**与现状完全相同**的代码路径：整串 query 交给 smart transform（含其对 quote/wildcard/operator 的 raw-passthrough 判断）。保证存量查询行为逐字节不变。
 
 ## 4. SQL 编译
 
@@ -87,14 +89,14 @@ query 原样下放 FTS5 MATCH（现状行为，高级 FTS5 语法 NEAR/列过滤
 ```sql
 SELECT m.internal_id, m.subject, m.sender, m.date_received, m.mailbox,
        snippet(email_body_fts, 0, '<mark>', '</mark>', '…', N) AS snippet,
-       bm25(email_body_fts) AS rank
+       bm25(email_body_fts, 1.0, 5.0, 2.0) AS rank   -- T1: body/subject/sender 列权重
        [, 平台各自的附加列]
   FROM email_body_fts
   JOIN email_metadata m ON m.internal_id = email_body_fts.rowid
  WHERE email_body_fts MATCH :fts_expr
    [AND <filters...>]
    [AND m.internal_id NOT IN (SELECT rowid FROM email_body_fts WHERE email_body_fts MATCH :neg_expr)]
- ORDER BY rank ASC
+ ORDER BY rank ASC, datetime(m.date_received) DESC   -- T1: 相关度 + 时间 tie-break（sort: 可覆盖，见 §4.4）
  LIMIT :limit
 ```
 
@@ -128,7 +130,9 @@ date-only 的 `until <= '2026-06-01'` 还会漏掉当天全部邮件。因此：
 
 ### 4.4 排序
 
-有正向文本词 → `bm25 ASC`（相关性）；纯过滤 → `datetime(date_received) DESC`（最新优先）。
+默认：有正向文本词 → `bm25(email_body_fts, body=1.0, subject=5.0, sender=2.0) ASC`（相关性，标题/发件人命中加权，T1）+ `datetime(date_received) DESC` tie-break；纯过滤 → `datetime(date_received) DESC`（最新优先）。
+
+`sort:` 覆盖（T2）：`sort:relevance`（相关性；纯过滤无 rank 时 fallback 时间倒序）、`sort:date`（别名 `sort:newest`，时间倒序）、`sort:oldest`（时间正序）。`sort:` 只改 ORDER BY、不产生过滤谓词；首个有效 `sort:` 生效，非法值 → `unknown_value:sort:<v>` warning 并回退默认。
 
 ## 5. 结果与警告
 
@@ -175,5 +179,5 @@ date-only 的 `until <= '2026-06-01'` 还会漏掉当天全部邮件。因此：
 
 - 括号分组、跨类 OR、字段级 FTS（subject 走 LIKE 不走 FTS 列过滤）。
 - `to:/cc:` 不进 FTS 索引（LIKE 够用；未来如需全文搜收件人再做 FTS schema migration）。
-- jieba 中文分词、`sort:` 排序覆盖参数、保存搜索/搜索历史（前端后续迭代）。
+- jieba 中文分词（见 T7 trigram 并行表方案，单独阶段实现）、保存搜索/搜索历史（前端后续迭代）。
 - 纯过滤查询是 metadata 全表扫描（7 万行 ~30-60ms 可接受；变慢再加索引/物化）。

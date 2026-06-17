@@ -20,7 +20,6 @@ import { cn } from '@shared/lib/cn'
 import { DUR } from '@shared/lib/gsap'
 import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 import { useMailApi } from '@shared/hooks/useMailApi'
-import { normalizeFtsQuery } from '@shared/lib/search_query'
 import type { SearchHit, SearchResult } from '@shared/api/types'
 
 interface MentionPopoverProps {
@@ -102,7 +101,8 @@ export function MentionPopover({
     }
   }, [open, onClose, containerRef])
 
-  const normalised = normalizeFtsQuery(debounced)
+  // T3: CJK transform 统一到后端 smart 模式，前端只 trim。
+  const normalised = debounced.trim()
   const searchQ = useQuery<SearchResult>({
     queryKey: ['mention', 'search', normalised],
     queryFn: () => mailApi.email.search({ query: normalised, limit: 10 }),

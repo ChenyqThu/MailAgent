@@ -670,7 +670,8 @@ export function searchEmails(opts: SearchOpts): SearchResult {
   const runFtsSearch = (
     effectiveQuery: string,
     filters: FilterPredicate[],
-    negFtsExpr?: string
+    negFtsExpr?: string,
+    sort?: string
   ): EmailSearch_SearchHit[] => {
     let sql = `
     SELECT
@@ -679,7 +680,7 @@ export function searchEmails(opts: SearchOpts): SearchResult {
       m.sender                AS sender,
       m.date_received         AS date_received,
       m.mailbox               AS mailbox,
-      bm25(email_body_fts)    AS rank,
+      bm25(email_body_fts, 1.0, 5.0, 2.0) AS rank,
       snippet(email_body_fts, 0, '<mark>', '</mark>', '…', 24) AS snippet,
       m.notion_page_id        AS notion_page_id,
       COALESCE(m.ai_priority,
@@ -701,8 +702,14 @@ export function searchEmails(opts: SearchOpts): SearchResult {
         'SELECT rowid FROM email_body_fts WHERE email_body_fts MATCH ?)'
       params.push(negFtsExpr)
     }
+    const orderBy =
+      sort === 'date'
+        ? 'ORDER BY datetime(m.date_received) DESC'
+        : sort === 'oldest'
+          ? 'ORDER BY datetime(m.date_received) ASC'
+          : 'ORDER BY rank ASC, datetime(m.date_received) DESC'
     sql += `
-    ORDER BY rank ASC
+    ${orderBy}
     LIMIT ?`
     params.push(limit)
     try {
@@ -716,7 +723,8 @@ export function searchEmails(opts: SearchOpts): SearchResult {
 
   const runMetadataSearch = (
     filters: FilterPredicate[],
-    negFtsExpr?: string
+    negFtsExpr?: string,
+    sort?: string
   ): EmailSearch_SearchHit[] => {
     let sql = `
     SELECT
@@ -746,8 +754,12 @@ export function searchEmails(opts: SearchOpts): SearchResult {
         'SELECT rowid FROM email_body_fts WHERE email_body_fts MATCH ?)'
       params.push(negFtsExpr)
     }
+    const orderBy =
+      sort === 'oldest'
+        ? 'ORDER BY datetime(m.date_received) ASC'
+        : 'ORDER BY datetime(m.date_received) DESC'
     sql += `
-    ORDER BY datetime(m.date_received) DESC
+    ${orderBy}
     LIMIT ?`
     params.push(limit)
     try {
@@ -791,9 +803,9 @@ export function searchEmails(opts: SearchOpts): SearchResult {
         items = []
       } else if (ftsExpr) {
         transformedQuery = ftsExpr
-        items = runFtsSearch(ftsExpr, filters, negFtsExpr)
+        items = runFtsSearch(ftsExpr, filters, negFtsExpr, parsed.sort)
       } else {
-        items = runMetadataSearch(filters, negFtsExpr)
+        items = runMetadataSearch(filters, negFtsExpr, parsed.sort)
       }
     }
   }

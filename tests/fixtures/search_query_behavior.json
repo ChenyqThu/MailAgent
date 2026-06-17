@@ -484,6 +484,41 @@
       "expect_warnings": 1
     },
     {
+      "name": "field_from_space_merge",
+      "query": "from: alice",
+      "expect_ids": [
+        1,
+        8
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "field_from_space_merge_quoted",
+      "query": "from: \"Alice Zhang\"",
+      "expect_ids": [
+        1,
+        8
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "field_negative_space_merge",
+      "query": "redis -from: noreply",
+      "expect_ids": [
+        1,
+        7
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "field_space_no_merge_next_field",
+      "query": "from: from:bob",
+      "expect_ids": [
+        2
+      ],
+      "expect_warnings": 1
+    },
+    {
       "name": "unknown_is_value_warning",
       "query": "is:archived",
       "expect_ids": [],
@@ -552,6 +587,95 @@
       ],
       "expect_warnings": 1,
       "expect_transformed_query": "redis"
+    },
+    {
+      "name": "field_sort_oldest",
+      "query": "from:alice sort:oldest",
+      "expect_ids": [
+        1,
+        8
+      ],
+      "order": "exact",
+      "expect_warnings": 0
+    },
+    {
+      "name": "field_sort_date_desc",
+      "query": "from:alice sort:date",
+      "expect_ids": [
+        8,
+        1
+      ],
+      "order": "exact",
+      "expect_warnings": 0
+    },
+    {
+      "name": "field_sort_unknown_warn",
+      "query": "from:alice sort:foo",
+      "expect_ids": [
+        1,
+        8
+      ],
+      "expect_warnings": 1
+    },
+    {
+      "name": "fts_sort_date",
+      "query": "redis sort:date",
+      "expect_ids": [
+        7,
+        4,
+        1
+      ],
+      "order": "exact",
+      "expect_warnings": 0
+    },
+    {
+      "name": "fts_sort_oldest",
+      "query": "redis sort:oldest",
+      "expect_ids": [
+        1,
+        4,
+        7
+      ],
+      "order": "exact",
+      "expect_warnings": 0
+    },
+    {
+      "name": "fts_sort_relevance",
+      "query": "redis sort:relevance",
+      "expect_ids": [
+        1,
+        4,
+        7
+      ],
+      "order": "exact",
+      "expect_warnings": 0
+    },
+    {
+      "name": "sort_space_merge_fts",
+      "query": "redis sort: date",
+      "expect_ids": [
+        7,
+        4,
+        1
+      ],
+      "order": "exact",
+      "expect_warnings": 0
+    },
+    {
+      "name": "sort_space_merge_filter",
+      "query": "from:alice sort: oldest",
+      "expect_ids": [
+        1,
+        8
+      ],
+      "order": "exact",
+      "expect_warnings": 0
+    },
+    {
+      "name": "sort_space_no_merge_next_field",
+      "query": "from: sort:date",
+      "expect_ids": [],
+      "expect_warnings": 1
     }
   ]
 }

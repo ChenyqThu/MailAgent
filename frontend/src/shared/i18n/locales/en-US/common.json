@@ -372,7 +372,7 @@
       "countLabel": "{n} / {total}",
       "untitled": "(no subject)",
       "emptyTitle": "No matching emails",
-      "emptyHint": "Try a shorter query, or append * for Chinese terms (e.g. 产品*)",
+      "emptyHint": "Try a shorter query or different wording",
       "syntaxLabel": "Search by field",
       "syntaxFrom": "sender",
       "syntaxAfter": "after date",
@@ -404,6 +404,18 @@
     },
     "footer": {
       "fts5Healthy": "FTS5"
+    },
+    "warn": {
+      "emptyValue": "\"{field}:\" has no value — ignored (put the value right after the colon, no space)",
+      "unknownValue": "\"{field}:{value}\" is not a valid value — ignored",
+      "invalidDate": "\"{field}:{value}\" is not a recognizable date — ignored",
+      "crossClassOr": "OR across a field and a keyword is not supported yet — treated as AND",
+      "negatedOr": "OR with a negated term is not supported — treated as AND",
+      "unclosedQuote": "Unclosed quote — treated as plain text",
+      "danglingOr": "OR is missing an operand — ignored",
+      "emptyText": "Empty quotes ignored",
+      "parseError": "Query failed to parse — ran as a plain search",
+      "generic": "Part of the query was ignored"
     }
   },
   "sidebar": {
