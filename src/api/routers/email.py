@@ -19,6 +19,8 @@ update-flag)。
   POST /api/email/{internal_id}/archive — service MailWriteService.archive (davmail-only)
   POST /api/email/{internal_id}/draft-plan — service MailWriteService.compose_plan (DraftPlanResult)
   POST /api/email/{internal_id}/pin     — service MailWriteService.set_pin (pin toggle)
+  POST /api/email/{internal_id}/reply-suggestion — service MailWriteService.set_reply_suggestion
+  POST /api/email/{internal_id}/ai-fields — service MailWriteService.set_ai_fields (AI 分类)
 
 设计纪律 (实现规格 + sibling 已写的 envelope/schemas):
   - 读端点 ``data`` 形状 = CLI 同名命令 emit 的 ``data`` (复用
@@ -928,6 +930,7 @@ def _compose_request_from_body(internal_id: int, opts: dict[str, Any]):
 
     subject = opts.get("subject")
     body_html = opts.get("bodyHtml")
+    body_text = opts.get("bodyText")
     return ComposeRequest(
         internal_id=internal_id,
         mode=_validate_compose_mode(opts.get("mode")),
@@ -936,6 +939,11 @@ def _compose_request_from_body(internal_id: int, opts: dict[str, Any]):
         bcc=_join(opts.get("bcc")),
         subject=subject if isinstance(subject, str) else None,
         body_html=body_html if isinstance(body_html, str) and body_html else None,
+        body_text=body_text if isinstance(body_text, str) and body_text else None,
+        # quoteOriginal=True → 即便传显式正文也在其下拼原文引用 (chat email_draft_reply /
+        # 正文 Craft: 只给纯回复正文, 服务端拼引用)。缺省 False → 既有 compose 语义不变
+        # (前端已把引用预填进 bodyHtml)。
+        quote_original=bool(opts.get("quoteOriginal", False)),
         importance=opts.get("importance") if isinstance(opts.get("importance"), str) else None,
     )
 
@@ -969,7 +977,9 @@ async def compose_draft(
 ):
     """把 compose 内容写进 Drafts folder (IMAP APPEND, A4: in-process MailWriteService)。
 
-    body (ComposeDraftOpts): {internalId, mode, to?, cc?, bcc?, subject?, bodyHtml?}。
+    body (ComposeDraftOpts): {internalId, mode, to?, cc?, bcc?, subject?, bodyHtml?, bodyText?, quoteOriginal?}。
+    quoteOriginal=True: 即便传显式正文 (bodyText/bodyHtml) 也在其下拼原文引用 (reply/
+    reply-all) — 用于"只给纯回复正文、服务端拼引用"的调用方 (正文 Craft / chat 工具)。
     bodyHtml (TipTap getHTML()) 直接传字符串 (不再落临时文件)。davmail-only
     (append_draft 走 IMAP); 非 davmail → service 报错透传。data = DraftResult。
     """
@@ -1144,4 +1154,115 @@ async def pin_email(
     except ServiceError as exc:
         _raise_from_service_error(exc)
 
+    return success_envelope(data, request=request, source="cli")
+
+
+# ===========================================================================
+# POST /api/email/{internal_id}/reply-suggestion — 写 reply_suggestion_md (SSoT)
+# ===========================================================================
+
+
+@router.post("/{internal_id:int}/reply-suggestion", dependencies=[Depends(verify_cf_access)])
+async def set_reply_suggestion(
+    request: Request,
+    internal_id: int,
+    body: Optional[dict[str, Any]] = None,
+):
+    """写邮件回复建议 markdown 到 SQLite ``llm_processing.labels_json`` (SSoT)。
+
+    body: {replySuggestionMd: str}。SQLite 是 reply_suggestion 的 SSoT (LLM 生成 +
+    前端 chat / 用户改动回灌); compose 取建议时读同一字段。**不做** pm2 检测
+    (mail-sync 不读写该字段)。404 当 internal_id 无对应邮件。
+    data = {internal_id, reply_suggestion_md, chars}。
+    """
+    opts = body or {}
+    reply_md = opts.get("replySuggestionMd")
+    if not isinstance(reply_md, str) or not reply_md.strip():
+        raise APIError(
+            "E_INVALID_ARG",
+            f"replySuggestionMd (non-empty string) required, got {reply_md!r}",
+            source="cli",
+        )
+
+    svc = MailWriteService(get_service_ctx())
+    try:
+        result = await asyncio.to_thread(
+            svc.set_reply_suggestion,
+            internal_id,
+            reply_md,
+            actor=Actor(kind="http", authenticated=True, label="cf-access"),
+        )
+    except ServiceError as exc:
+        _raise_from_service_error(exc)
+
+    data = {
+        "internal_id": result.internal_id,
+        "reply_suggestion_md": result.reply_suggestion_md,
+        "chars": result.chars,
+    }
+    return success_envelope(data, request=request, source="cli")
+
+
+# ===========================================================================
+# POST /api/email/{internal_id}/ai-fields — 写 AI Action / Priority / Review Status
+# ===========================================================================
+
+
+@router.post("/{internal_id:int}/ai-fields", dependencies=[Depends(verify_cf_access)])
+async def set_ai_fields(
+    request: Request,
+    internal_id: int,
+    body: Optional[dict[str, Any]] = None,
+):
+    """覆盖邮件的 AI 分类字段 (AI Action / Priority / Review Status) 到 SQLite SSoT。
+
+    body (camelCase): {aiAction?, aiPriority?, aiReviewStatus?}。至少一项非空。合法枚举
+    严格取自 src/llm_agent/schema.py (aiAction 按邮件 mailbox 收/发件箱分; aiPriority ∈
+    PRIORITY_ENUM; aiReviewStatus ∈ {reviewed, pending})。非法值 → 400; 缺邮件 → 404。
+    **不做** pm2 检测。data = {internal_id, ai_action, ai_priority, ai_review_status}
+    (实际落库值, 未传字段为 null)。
+    """
+    opts = body or {}
+    action = opts.get("aiAction")
+    priority = opts.get("aiPriority")
+    review_status = opts.get("aiReviewStatus")
+
+    # 类型校验 (非空时必须是 str) — 早于 service 构造, 与 reply-suggestion 同款。
+    for name, val in (
+        ("aiAction", action),
+        ("aiPriority", priority),
+        ("aiReviewStatus", review_status),
+    ):
+        if val is not None and not isinstance(val, str):
+            raise APIError(
+                "E_INVALID_ARG",
+                f"{name} must be a string when provided, got {val!r}",
+                source="cli",
+            )
+    if action is None and priority is None and review_status is None:
+        raise APIError(
+            "E_INVALID_ARG",
+            "at least one of aiAction / aiPriority / aiReviewStatus required",
+            source="cli",
+        )
+
+    svc = MailWriteService(get_service_ctx())
+    try:
+        result = await asyncio.to_thread(
+            svc.set_ai_fields,
+            internal_id,
+            action=action,
+            priority=priority,
+            review_status=review_status,
+            actor=Actor(kind="http", authenticated=True, label="cf-access"),
+        )
+    except ServiceError as exc:
+        _raise_from_service_error(exc)
+
+    data = {
+        "internal_id": result.internal_id,
+        "ai_action": result.action,
+        "ai_priority": result.priority,
+        "ai_review_status": result.review_status,
+    }
     return success_envelope(data, request=request, source="cli")

@@ -698,3 +698,54 @@ def test_compose_plan_non_new_missing_record_still_raises(seeded_db):
         MailWriteService(_service_ctx(seeded_db)).compose_plan(
             ComposeRequest(internal_id=-1, mode="reply", to="x@y.com")
         )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# service 层: quote_original — 显式正文也强制下拼原文引用 (B1/B2: 正文 Craft /
+# chat email_draft_reply 调用方只给纯回复正文, 语义=插在原文引用之上)。reply-all
+# 收件人仍按原邮件推导 (不传 to/cc → 排除自己)。seeded_db email 12345 的
+# body_html='<p>body html</p>' / body_markdown 含 'body markdown'。
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_compose_draft_quote_original_appends_quote_below_body(seeded_db, monkeypatch):
+    # quote_original=True + 显式 body_text + reply-all → 草稿 = 纯回复正文 + 下方原文引用;
+    # 收件人按原邮件推导 (排除自己)。
+    from src.services.mail_write import ComposeRequest, MailWriteService
+
+    fake_backend = _FakeBackend()
+    _patch_backend(monkeypatch, fake_backend)
+    MailWriteService(_service_ctx(seeded_db)).compose_draft(
+        ComposeRequest(
+            internal_id=12345, mode="reply-all",
+            body_text="我的纯回复内容", quote_original=True,
+        ),
+        actor=_write_actor(),
+    )
+    draft = fake_backend.appended[0]
+    html = draft.reply_html or ""
+    assert "我的纯回复内容" in html        # 用户回复在
+    assert "写道" in html                  # 原文引用头被拼上
+    assert "body html" in html             # 原文正文 (body_html) 被引用进来
+    assert draft.to                        # reply-all 推导出收件人 (非空)
+
+
+def test_compose_draft_default_no_quote_original_keeps_body_only(seeded_db, monkeypatch):
+    # 对照 (回归): quote_original 缺省 False → 显式正文不被追加引用 (既有前端 compose
+    # 语义: 引用已预填进 body, 服务端不再二次拼接)。
+    from src.services.mail_write import ComposeRequest, MailWriteService
+
+    fake_backend = _FakeBackend()
+    _patch_backend(monkeypatch, fake_backend)
+    MailWriteService(_service_ctx(seeded_db)).compose_draft(
+        ComposeRequest(
+            internal_id=12345, mode="reply-all",
+            body_text="我的纯回复内容",  # quote_original 缺省 False
+        ),
+        actor=_write_actor(),
+    )
+    draft = fake_backend.appended[0]
+    html = draft.reply_html or ""
+    assert "我的纯回复内容" in html        # 回复正文在
+    assert "写道" not in html              # 无引用追加
+    assert "body html" not in html         # 原文未被拼入

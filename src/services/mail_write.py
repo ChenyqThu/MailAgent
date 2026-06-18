@@ -128,6 +128,30 @@ class PinResult:
     changed: bool
 
 
+@dataclass
+class ReplySuggestionResult:
+    """``set_reply_suggestion`` 执行结果 — 写 llm_processing.labels_json.reply_suggestion_md。"""
+
+    internal_id: int
+    reply_suggestion_md: str
+    chars: int
+
+
+@dataclass
+class AiFieldsResult:
+    """``set_ai_fields`` 执行结果 — 覆盖 AI Action / Priority / Review Status。
+
+    字段为**实际落库**值: ``action`` / ``priority`` = labels_json 写入的中文枚举
+    (未传则 None); ``review_status`` = 前端 enum ('reviewed'/'pending', 未传则 None),
+    映自 ``llm_processing.status`` (success↔reviewed)。调用方据此回报「上报值 == SSoT 值」。
+    """
+
+    internal_id: int
+    action: Optional[str]
+    priority: Optional[str]
+    review_status: Optional[str]
+
+
 # forward 附件总大小上限 (编码前). base64 膨胀 ~33%, Exchange 常见上限 25-35MB.
 _MAX_FORWARD_ATTACH_BYTES = 20 * 1024 * 1024
 
@@ -153,6 +177,12 @@ class ComposeRequest:
     bcc: Optional[str] = None  # 密送 (--bcc)
     subject: Optional[str] = None  # 完整主题覆盖 (--subject)
     importance: Optional[str] = None  # 重要性 high/normal/low (写 MIME Importance 头)
+    # quote_original: 显式正文 (body_text/body_html) 也强制在下方附原邮件引用
+    # (reply/reply-all) 或转发引用 (forward)。默认 False 保持既有语义: 前端 TipTap
+    # 已把引用预填进 editor 后随 body_html 传回, 服务端不能再拼 (否则重复)。
+    # True 用于"只给回复正文、由服务端拼引用"的调用方 (chat email_draft_reply 工具:
+    # body_markdown 是纯回复内容, 语义=插在 quoted source 之上)。
+    quote_original: bool = False
 
 
 @dataclass
@@ -1090,6 +1120,141 @@ class MailWriteService:
         )
 
     # ------------------------------------------------------------
+    # reply_suggestion (写 llm_processing.labels_json.reply_suggestion_md, SSoT)
+    # ------------------------------------------------------------
+
+    def set_reply_suggestion(
+        self, internal_id: int, reply_md: str, *, actor: Actor
+    ) -> ReplySuggestionResult:
+        """写邮件的回复建议 markdown 到 SQLite ``llm_processing.labels_json``。
+
+        SQLite 是 reply_suggestion 的 SSoT (LLM 生成 + 用户/前端 chat 改动回灌)。前端
+        chat 工具 ``email_set_reply_suggestion`` 经此让用户(经 AI)改建议。范式同
+        ``set_pin``: meta 不存在 → ``ServiceNotFoundError``; require_write_auth 在业务
+        校验之后。**不做** pm2 检测 (mail-sync 不读写 reply_suggestion_md → 无并发损坏)。
+        ``compose`` 取建议时读同一字段 (``_fetch_reply_suggestion_md``)。
+        """
+        from src.llm_agent.store import LLMProcessingStore
+
+        meta = self._ctx.email_repo.get_metadata(internal_id)
+        if meta is None:
+            raise ServiceNotFoundError(
+                f"Email with internal_id={internal_id} not found",
+                hint="Use 'mailagent email list' to find available IDs",
+            )
+
+        require_write_auth(actor)
+
+        store = LLMProcessingStore(self._ctx.config.sync_store_db_path)
+        # set_reply_suggestion 返回**实际落库**的字符串 (可能被裁短) — 用它构造结果,
+        # 保证「上报值 == SSoT 值」(否则 Craft 预填 / LLM next-turn 上下文与上报内容不一致)。
+        stored_md = store.set_reply_suggestion(internal_id, reply_md)
+        return ReplySuggestionResult(
+            internal_id=internal_id,
+            reply_suggestion_md=stored_md,
+            chars=len(stored_md),
+        )
+
+    # ------------------------------------------------------------
+    # ai_fields (覆盖 AI Action / Priority / Review Status, SSoT)
+    # ------------------------------------------------------------
+
+    # 合法 review_status (前端 enum)。'reviewed'→llm_processing.status='success';
+    # 'pending'→'pending' (与 email_views.py::_map_review_status 反向对齐)。
+    _REVIEW_STATUS_ENUM = ("reviewed", "pending")
+
+    def set_ai_fields(
+        self,
+        internal_id: int,
+        *,
+        action: Optional[str] = None,
+        priority: Optional[str] = None,
+        review_status: Optional[str] = None,
+        actor: Actor,
+    ) -> AiFieldsResult:
+        """覆盖单封邮件的 AI 分类字段 (AI Action / Priority / Review Status) 到 SQLite SSoT。
+
+        前端 chat 工具 ``email_set_ai_fields`` 经此让用户(经 AI)覆盖 LLM 原分类。范式同
+        ``set_pin`` / ``set_reply_suggestion``: meta 不存在 → ``ServiceNotFoundError``;
+        require_write_auth 在业务校验之后。**不做** pm2 检测 (mail-sync 不在用户改分类时
+        并发写这些字段 — labels_json/status 由 LLM worker 写, 但那是同一封不同时机, 与
+        reply_suggestion 同类风险面，沿用其无 pm2 决策)。
+
+        合法枚举**严格取自 ``src/llm_agent/schema.py``** (写字段值, 不改 schema 定义):
+          - ``priority`` ∈ PRIORITY_ENUM (🔴 紧急 / 🟡 重要 / 🟢 一般 / ⚪ 低)
+          - ``action`` ∈ mailbox-specific ACTION_TYPE (收件箱用 ACTION_TYPE_INBOX,
+            发件箱用 ACTION_TYPE_SENT — 经 ``is_valid_action_type`` 按邮件 mailbox 判)
+          - ``review_status`` ∈ {'reviewed', 'pending'} (映射到 llm_processing.status)
+        任一非法 → ``ServiceInvalidArgError``; 三者全 None → ``ServiceInvalidArgError``
+        ('至少一项非空')。
+
+        写位置 (经 LLMProcessingStore.set_ai_fields, 与既有读链一一对应):
+        labels_json.action_type/priority (+ 镜像主表列 ai_action/ai_priority) + status 列。
+        返回**实际落库**值, 保证「上报值 == SSoT 值」。
+        """
+        from src.llm_agent.schema import PRIORITY_ENUM, is_valid_action_type
+
+        meta = self._ctx.email_repo.get_metadata(internal_id)
+        if meta is None:
+            raise ServiceNotFoundError(
+                f"Email with internal_id={internal_id} not found",
+                hint="Use 'mailagent email list' to find available IDs",
+            )
+
+        # 至少一项非空 (空写没有意义 — 与 email_flag「至少一个 flag 字段」对齐)。
+        if action is None and priority is None and review_status is None:
+            raise ServiceInvalidArgError(
+                "at least one of action / priority / review_status must be set"
+            )
+
+        # 枚举校验 — 严格匹配 schema.py 合法值 (写字段值, 不改 schema 定义)。
+        if priority is not None and priority not in PRIORITY_ENUM:
+            raise ServiceInvalidArgError(
+                f"invalid priority {priority!r}; allowed: {list(PRIORITY_ENUM)}"
+            )
+        if action is not None and not is_valid_action_type(action, meta.mailbox or ""):
+            # mailbox-specific: 收件箱 ↔ 发件箱 枚举不同 (is_valid_action_type 按 mailbox 判)。
+            from src.llm_agent.schema import ACTION_TYPE_INBOX, ACTION_TYPE_SENT
+
+            allowed = (
+                ACTION_TYPE_SENT if (meta.mailbox or "") == "发件箱" else ACTION_TYPE_INBOX
+            )
+            raise ServiceInvalidArgError(
+                f"invalid action {action!r} for mailbox {meta.mailbox!r}; "
+                f"allowed: {list(allowed)}"
+            )
+        if review_status is not None and review_status not in self._REVIEW_STATUS_ENUM:
+            raise ServiceInvalidArgError(
+                f"invalid review_status {review_status!r}; "
+                f"allowed: {list(self._REVIEW_STATUS_ENUM)}"
+            )
+
+        require_write_auth(actor)
+
+        from src.llm_agent.store import LLMProcessingStore
+
+        store = LLMProcessingStore(self._ctx.config.sync_store_db_path)
+        stored = store.set_ai_fields(
+            internal_id,
+            action=action,
+            priority=priority,
+            review_status=review_status,
+        )
+        # store 把 status 列回映成前端 enum: success→reviewed / 其它→pending (与读链一致)。
+        stored_review = stored.get("review_status")
+        review_out = (
+            None
+            if stored_review is None
+            else ("reviewed" if stored_review == "success" else "pending")
+        )
+        return AiFieldsResult(
+            internal_id=internal_id,
+            action=stored.get("action_type"),
+            priority=stored.get("priority"),
+            review_status=review_out,
+        )
+
+    # ------------------------------------------------------------
     # compose (draft / send / draft-plan) — backend.append_draft / send_email
     # ------------------------------------------------------------
 
@@ -1204,10 +1369,15 @@ class MailWriteService:
         attachments: list = []
         warnings: list[str] = []
         quote: Optional[dict] = None  # split_quote=True 时单独返回引用块, 不并进正文
+        # 是否构造原文引用块: 无显式正文 (前端 compose 走 draft-plan 预填引用进 editor)
+        # 默认构造; 有显式正文默认跳过 (body 已含预填引用, 再拼会重复)。例外:
+        # quote_original=True 的调用方 (chat email_draft_reply / 正文 Craft 按钮: body 是
+        # 纯回复内容、未含引用) 即便有显式正文也强制构造并下拼到正文之下。
+        build_quote = (not explicit_body) or request.quote_original
         if mode == "forward":
             # 附件总是 server-side 重新收集 — 前端无法传字节, 必须按 internal_id 重读。
             attachments, warnings = self._collect_forward_attachments(internal_id)
-            if not explicit_body:
+            if build_quote:
                 body_md = self._ctx.email_repo.get_body_markdown(internal_id) or ""
                 body_html = self._ctx.email_repo.get_body_html(internal_id)
                 fi_text, fi_html = _build_forward_intro(record, body_md, body_html)
@@ -1215,7 +1385,7 @@ class MailWriteService:
                     quote = {"text": fi_text, "html": fi_html}
                 else:
                     forward_intro_text, forward_intro_html = fi_text, fi_html
-        elif not explicit_body:  # reply / reply-all
+        elif mode in ("reply", "reply-all") and build_quote:  # reply / reply-all
             orig_md = self._ctx.email_repo.get_body_markdown(internal_id) or ""
             orig_html = self._ctx.email_repo.get_body_html(internal_id)
             if orig_md or orig_html:

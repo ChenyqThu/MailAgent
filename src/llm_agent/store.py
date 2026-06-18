@@ -13,7 +13,6 @@ import time
 from dataclasses import asdict
 from typing import Any, Dict, List, Optional
 
-from loguru import logger
 
 from src.config import config as cfg
 
@@ -361,6 +360,159 @@ class LLMProcessingStore:
                     (ai_priority, ai_action, now, internal_id),
                 )
             c.commit()
+
+    def set_reply_suggestion(self, internal_id: int, reply_md: str) -> str:
+        """合并 ``reply_suggestion_md`` 进 ``labels_json`` (SSoT) — 不动其它 AI 字段。
+
+        前端 chat / 用户手动编辑回复建议时调。读现有 labels_json (无则空 dict),
+        写入 / 覆盖 ``reply_suggestion_md`` 键, 重新序列化落库。row 不存在时新建一行
+        (status='success', 仅 labels_json — 没跑过 LLM 也允许手动写建议)。
+
+        与 ``mark_success`` 一致的 JSON valid 守卫: 超长字段裁剪 + 8000 字节兜底
+        (极端 CJK 仍超时整段裁掉)。
+
+        Returns:
+            **实际落库**的 ``reply_suggestion_md`` 字符串 (可能被 ``_truncate_long_fields``
+            或 8000-byte 兜底裁短)。调用方据此回报 chars / 构造结果, 保证「上报值 == SSoT 值」
+            (否则 Craft 预填 / LLM next-turn 上下文会与上报内容不一致)。
+        """
+        now = time.time()
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT labels_json FROM llm_processing WHERE internal_id = ?",
+                (internal_id,),
+            ).fetchone()
+            labels: Dict[str, Any] = {}
+            if row and row["labels_json"]:
+                try:
+                    parsed = json.loads(row["labels_json"])
+                    if isinstance(parsed, dict):
+                        labels = parsed
+                except (json.JSONDecodeError, TypeError):
+                    labels = {}
+            labels["reply_suggestion_md"] = reply_md
+            labels = _truncate_long_fields(labels, max_field_chars=3500)
+            labels_json = json.dumps(labels, ensure_ascii=False)
+            if len(labels_json) > 8000:
+                # 二次保险: 极端 CJK 仍超限 → 把刚写的 reply_suggestion_md 裁到安全长度。
+                labels["reply_suggestion_md"] = reply_md[:3500] + "…[truncated]"
+                labels_json = json.dumps(labels, ensure_ascii=False)
+            c.execute(
+                """
+                INSERT INTO llm_processing
+                    (internal_id, status, retry_count, labels_json, created_at, updated_at)
+                VALUES (?, 'success', 0, ?, ?, ?)
+                ON CONFLICT(internal_id) DO UPDATE SET
+                    labels_json=excluded.labels_json,
+                    updated_at=excluded.updated_at
+                """,
+                (internal_id, labels_json, now, now),
+            )
+            c.commit()
+        # 返回实际落库值 (经 _truncate_long_fields / 8000-byte 兜底裁剪后的最终字符串)。
+        return labels["reply_suggestion_md"]
+
+    def set_ai_fields(
+        self,
+        internal_id: int,
+        *,
+        action: Optional[str] = None,
+        priority: Optional[str] = None,
+        review_status: Optional[str] = None,
+    ) -> Dict[str, Optional[str]]:
+        """覆盖单封邮件的 AI 分类字段 (action_type / priority / review status) — SSoT。
+
+        前端 chat 工具 ``email_set_ai_fields`` 让用户(经 AI)覆盖 LLM 原分类时调。范式同
+        ``set_reply_suggestion``: 读现有 labels_json (无则空 dict), **只**写传入的非 None
+        字段, 不动其它 AI 字段 (ai_summary / reply_suggestion_md / category / language …)。
+
+        三字段落库位置 (与 email_views.py 读链一一对应):
+          - ``action``  → labels_json.action_type + 镜像 email_metadata.ai_action (v14 主表列)
+          - ``priority``→ labels_json.priority    + 镜像 email_metadata.ai_priority (v14 主表列)
+          - ``review_status`` → llm_processing.status: 'reviewed'→'success' /
+            'pending'→'pending' (``_map_review_status`` 反向: success→reviewed,
+            failed/gave_up/pending→pending)。**不传则保留旧 status** (没跑过 LLM 的新行默认
+            'success', 让既有读链把它当 reviewed —— 与 ``set_reply_suggestion`` 一致)。
+
+        合法枚举校验由调用方 (MailWriteService.set_ai_fields) 在 service 层做; 本方法只负责
+        持久化 + JSON valid 守卫 (同 ``set_reply_suggestion``: 超长字段裁剪)。
+
+        Returns:
+            实际落库的 ``{"action_type", "priority", "review_status"}`` (review_status 是
+            映射后的 ``status`` 列值 'success'/'pending', 上报供调用方据读链回报)。
+        """
+        now = time.time()
+        # review_status (前端 enum) → llm_processing.status 列值。None = 不动 status。
+        status_col: Optional[str] = None
+        if review_status is not None:
+            status_col = "success" if review_status == "reviewed" else "pending"
+
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT labels_json, status FROM llm_processing WHERE internal_id = ?",
+                (internal_id,),
+            ).fetchone()
+            labels: Dict[str, Any] = {}
+            if row and row["labels_json"]:
+                try:
+                    parsed = json.loads(row["labels_json"])
+                    if isinstance(parsed, dict):
+                        labels = parsed
+                except (json.JSONDecodeError, TypeError):
+                    labels = {}
+            if action is not None:
+                labels["action_type"] = action
+            if priority is not None:
+                labels["priority"] = priority
+            labels = _truncate_long_fields(labels, max_field_chars=3500)
+            labels_json = json.dumps(labels, ensure_ascii=False)
+            if len(labels_json) > 8000:
+                # 二次保险 (同 set_reply_suggestion): 极端 CJK 仍超限 → 裁 reply_suggestion_md。
+                if isinstance(labels.get("reply_suggestion_md"), str):
+                    labels["reply_suggestion_md"] = (
+                        labels["reply_suggestion_md"][:3500] + "…[truncated]"
+                    )
+                    labels_json = json.dumps(labels, ensure_ascii=False)
+
+            # status 列: 传了 review_status 用映射值; 否则保留旧值, 旧行不存在则默认
+            # 'success' (与 set_reply_suggestion 新建行一致 — 手动写也算已 reviewed)。
+            effective_status = (
+                status_col
+                if status_col is not None
+                else ((row["status"] if row else None) or "success")
+            )
+            c.execute(
+                """
+                INSERT INTO llm_processing
+                    (internal_id, status, retry_count, labels_json, created_at, updated_at)
+                VALUES (?, ?, 0, ?, ?, ?)
+                ON CONFLICT(internal_id) DO UPDATE SET
+                    status=excluded.status,
+                    labels_json=excluded.labels_json,
+                    updated_at=excluded.updated_at
+                """,
+                (internal_id, effective_status, labels_json, now, now),
+            )
+            # v14 双写主表列 (同 mark_success / upsert_external_labels): 只动传入的字段。
+            mirror_priority = priority if priority is not None else None
+            mirror_action = action if action is not None else None
+            if mirror_priority is not None or mirror_action is not None:
+                c.execute(
+                    """
+                    UPDATE email_metadata
+                       SET ai_priority = COALESCE(?, ai_priority),
+                           ai_action = COALESCE(?, ai_action),
+                           updated_at = ?
+                     WHERE internal_id = ?
+                    """,
+                    (mirror_priority, mirror_action, now, internal_id),
+                )
+            c.commit()
+        return {
+            "action_type": labels.get("action_type") if action is not None else None,
+            "priority": labels.get("priority") if priority is not None else None,
+            "review_status": status_col,
+        }
 
     def mark_failed(
         self, internal_id: int, error: str, max_retries: int

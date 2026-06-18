@@ -136,6 +136,240 @@ def test_set_flags_requires_authenticated_actor(cli_env, seeded_db):
 
 
 # ============================================================
+# set_reply_suggestion — 写 llm_processing.labels_json.reply_suggestion_md
+# ============================================================
+
+
+def test_set_reply_suggestion_writes_and_roundtrips(cli_env, seeded_db):
+    """写建议后 SQLite labels_json.reply_suggestion_md 持久化 + compose 取建议读到同值。"""
+    from src.services.mail_write import MailWriteService
+
+    svc = MailWriteService(_service_ctx(seeded_db))
+    md = "Hi Alice,\n\nThanks.\n\n----\nBest,\nLucien"
+    res = svc.set_reply_suggestion(12345, md, actor=_cli_actor())
+    assert res.internal_id == 12345
+    assert res.reply_suggestion_md == md
+    assert res.chars == len(md)
+    # SSoT roundtrip: compose 取建议读同一字段（_fetch_reply_suggestion_md strip 后比对）。
+    assert svc._fetch_reply_suggestion_md(12345) == md.strip()
+
+
+def test_set_reply_suggestion_overwrites_existing(cli_env, seeded_db):
+    """二次写覆盖（不残留旧值）。"""
+    from src.services.mail_write import MailWriteService
+
+    svc = MailWriteService(_service_ctx(seeded_db))
+    svc.set_reply_suggestion(12345, "first", actor=_cli_actor())
+    svc.set_reply_suggestion(12345, "second", actor=_cli_actor())
+    assert svc._fetch_reply_suggestion_md(12345) == "second"
+
+
+def test_set_reply_suggestion_truncated_result_matches_ssot(cli_env, seeded_db):
+    """超长 reply (> _truncate_long_fields 3500 字段上限) 被裁短时，返回值/chars 用**实际落库值**
+    而非全量输入 —— 保证「上报值 == SSoT 值」(MEDIUM-1: 否则 Craft 预填 / LLM 上下文与上报不符)。"""
+    from src.services.mail_write import MailWriteService
+
+    svc = MailWriteService(_service_ctx(seeded_db))
+    long_md = "x" * 4000  # > 3500 → _truncate_long_fields 截到 3500 + "…[truncated]"
+    res = svc.set_reply_suggestion(12345, long_md, actor=_cli_actor())
+    # 落库值被裁短 → 比输入短，且带 truncated marker。
+    assert res.reply_suggestion_md.endswith("…[truncated]")
+    assert len(res.reply_suggestion_md) < len(long_md)
+    assert res.chars == len(res.reply_suggestion_md)  # chars 跟实际落库值一致
+    # SSoT roundtrip: compose 取建议读到的就是返回的(裁短)值。
+    assert svc._fetch_reply_suggestion_md(12345) == res.reply_suggestion_md.strip()
+
+
+def test_set_reply_suggestion_not_found_raises(cli_env, seeded_db):
+    from src.services.errors import ServiceNotFoundError
+    from src.services.mail_write import MailWriteService
+
+    with pytest.raises(ServiceNotFoundError):
+        MailWriteService(_service_ctx(seeded_db)).set_reply_suggestion(
+            99999, "x", actor=_cli_actor()
+        )
+
+
+def test_set_reply_suggestion_requires_authenticated_actor(cli_env, seeded_db):
+    from src.services.errors import ServiceAuthError
+    from src.services.guards import Actor
+    from src.services.mail_write import MailWriteService
+
+    with pytest.raises(ServiceAuthError):
+        MailWriteService(_service_ctx(seeded_db)).set_reply_suggestion(
+            12345, "x", actor=Actor(kind="cli", authenticated=False)
+        )
+
+
+# ============================================================
+# set_ai_fields — 覆盖 AI Action / Priority / Review Status (写 SSoT, 经读链回读一致)
+# ============================================================
+#
+# roundtrip 校验经**真实读链** (src/api/routers/email_views.py 的 _map_* + ai_fields
+# 端点逻辑): _map_priority 读 labels_json.priority; ai_action 透传 labels_json.action_type;
+# _map_review_status 读 llm_processing.status (success→reviewed)。保证 service 写的值
+# 能被既有 enriched/ai-fields 读链正确解析显示。
+
+
+def _read_ai_fields(db_path, internal_id):
+    """模拟 ai-fields 读端点: 读 llm_processing + 经 _map_* helper 映成前端 AIFields 子集。
+
+    返回 {priority(slug), action(中文), review_status} —— 与 email_views.py::_shape_ai_fields
+    同源逻辑 (labels_json.priority/action_type + status → review_status)。
+    """
+    import json
+    import sqlite3
+
+    from src.api.routers.email_views import _map_priority, _map_review_status
+
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute(
+            "SELECT labels_json, status FROM llm_processing WHERE internal_id = ?",
+            (internal_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    labels = {}
+    if row and row["labels_json"]:
+        parsed = json.loads(row["labels_json"])
+        if isinstance(parsed, dict):
+            labels = parsed
+    return {
+        "priority": _map_priority(labels.get("priority")),
+        "action": labels.get("action_type"),
+        "review_status": _map_review_status(row["status"] if row else None),
+    }
+
+
+def test_set_ai_fields_writes_and_roundtrips_via_readchain(cli_env, seeded_db):
+    """写三字段后, 经真实读链 (_map_priority / action_type / _map_review_status) 读回一致。"""
+    from src.services.mail_write import MailWriteService
+
+    svc = MailWriteService(_service_ctx(seeded_db))
+    # seeded_db 的 12345 是收件箱 → action 取 ACTION_TYPE_INBOX。
+    res = svc.set_ai_fields(
+        12345, action="需要回复", priority="🟡 重要", review_status="reviewed",
+        actor=_cli_actor(),
+    )
+    assert res.internal_id == 12345
+    assert res.action == "需要回复"
+    assert res.priority == "🟡 重要"
+    assert res.review_status == "reviewed"
+    # 读链回读: priority slug 'important' / action 中文透传 / review 'reviewed'。
+    read = _read_ai_fields(seeded_db, 12345)
+    assert read["priority"] == "important"
+    assert read["action"] == "需要回复"
+    assert read["review_status"] == "reviewed"
+
+
+def test_set_ai_fields_pending_maps_status(cli_env, seeded_db):
+    """review_status='pending' → llm_processing.status='pending' → 读链回 'pending'。"""
+    from src.services.mail_write import MailWriteService
+
+    svc = MailWriteService(_service_ctx(seeded_db))
+    svc.set_ai_fields(12345, review_status="pending", actor=_cli_actor())
+    assert _read_ai_fields(seeded_db, 12345)["review_status"] == "pending"
+
+
+def test_set_ai_fields_partial_only_touches_given(cli_env, seeded_db):
+    """只传 priority 不动 action; 再只传 action 不覆盖已写 priority (labels merge)。"""
+    from src.services.mail_write import MailWriteService
+
+    svc = MailWriteService(_service_ctx(seeded_db))
+    svc.set_ai_fields(12345, priority="🔴 紧急", actor=_cli_actor())
+    read1 = _read_ai_fields(seeded_db, 12345)
+    assert read1["priority"] == "critical"
+    assert read1["action"] is None  # 没传 → 不写
+    svc.set_ai_fields(12345, action="需要决策", actor=_cli_actor())
+    read2 = _read_ai_fields(seeded_db, 12345)
+    assert read2["action"] == "需要决策"
+    assert read2["priority"] == "critical"  # 仍在 (merge 不覆盖)
+
+
+def test_set_ai_fields_mirrors_main_columns(cli_env, seeded_db):
+    """双写 email_metadata.ai_priority / ai_action 主表列 (v14, 前端走索引)。"""
+    import sqlite3
+
+    from src.services.mail_write import MailWriteService
+
+    MailWriteService(_service_ctx(seeded_db)).set_ai_fields(
+        12345, action="需要会议", priority="🟢 一般", actor=_cli_actor()
+    )
+    conn = sqlite3.connect(str(seeded_db))
+    try:
+        row = conn.execute(
+            "SELECT ai_priority, ai_action FROM email_metadata WHERE internal_id = ?",
+            (12345,),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row[0] == "🟢 一般"
+    assert row[1] == "需要会议"
+
+
+def test_set_ai_fields_rejects_invalid_priority(cli_env, seeded_db):
+    from src.services.errors import ServiceInvalidArgError
+    from src.services.mail_write import MailWriteService
+
+    with pytest.raises(ServiceInvalidArgError):
+        MailWriteService(_service_ctx(seeded_db)).set_ai_fields(
+            12345, priority="HIGH", actor=_cli_actor()
+        )
+
+
+def test_set_ai_fields_rejects_sent_action_for_inbox(cli_env, seeded_db):
+    """发件箱专属 action ('等待响应') 用在收件箱邮件上 → 非法 (mailbox-specific 校验)。"""
+    from src.services.errors import ServiceInvalidArgError
+    from src.services.mail_write import MailWriteService
+
+    with pytest.raises(ServiceInvalidArgError):
+        MailWriteService(_service_ctx(seeded_db)).set_ai_fields(
+            12345, action="等待响应", actor=_cli_actor()  # 收件箱不可选 SENT 枚举
+        )
+
+
+def test_set_ai_fields_rejects_invalid_review_status(cli_env, seeded_db):
+    from src.services.errors import ServiceInvalidArgError
+    from src.services.mail_write import MailWriteService
+
+    with pytest.raises(ServiceInvalidArgError):
+        MailWriteService(_service_ctx(seeded_db)).set_ai_fields(
+            12345, review_status="done", actor=_cli_actor()
+        )
+
+
+def test_set_ai_fields_requires_at_least_one(cli_env, seeded_db):
+    from src.services.errors import ServiceInvalidArgError
+    from src.services.mail_write import MailWriteService
+
+    with pytest.raises(ServiceInvalidArgError):
+        MailWriteService(_service_ctx(seeded_db)).set_ai_fields(12345, actor=_cli_actor())
+
+
+def test_set_ai_fields_not_found_raises(cli_env, seeded_db):
+    from src.services.errors import ServiceNotFoundError
+    from src.services.mail_write import MailWriteService
+
+    with pytest.raises(ServiceNotFoundError):
+        MailWriteService(_service_ctx(seeded_db)).set_ai_fields(
+            99999, priority="🟡 重要", actor=_cli_actor()
+        )
+
+
+def test_set_ai_fields_requires_authenticated_actor(cli_env, seeded_db):
+    from src.services.errors import ServiceAuthError
+    from src.services.guards import Actor
+    from src.services.mail_write import MailWriteService
+
+    with pytest.raises(ServiceAuthError):
+        MailWriteService(_service_ctx(seeded_db)).set_ai_fields(
+            12345, priority="🟡 重要", actor=Actor(kind="cli", authenticated=False)
+        )
+
+
+# ============================================================
 # resync — golden 字面量
 # ============================================================
 
