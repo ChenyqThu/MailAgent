@@ -943,6 +943,67 @@
         4
       ],
       "expect_warnings": 0
+    },
+    {
+      "name": "p5_parsed_from_cjk_substring_trigram_on",
+      "query": "from:carol 评审",
+      "trigram": true,
+      "expect_ids": [
+        3
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "p5_parsed_from_cjk_substring_trigram_off_regression",
+      "query": "from:carol 评审",
+      "trigram": false,
+      "expect_ids": [],
+      "expect_warnings": 0
+    },
+    {
+      "name": "p5_parsed_flagged_cjk_substring_trigram_on",
+      "query": "is:flagged 评审",
+      "trigram": true,
+      "expect_ids": [
+        1
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "p5_parsed_neg_cjk_trigram_on",
+      "query": "from:alice -评审",
+      "trigram": true,
+      "expect_ids": [
+        8
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "p5_parsed_single_cjk_intercept_trigram_on",
+      "query": "from:carol 我",
+      "trigram": true,
+      "expect_ids": [
+        3
+      ],
+      "expect_warnings": 1
+    },
+    {
+      "name": "p5_parsed_mixed_cjk_english_trigram_on",
+      "query": "from:alice redis评审",
+      "trigram": true,
+      "expect_ids": [
+        1
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "p5_parsed_subject_column_unchanged_trigram_on",
+      "query": "from:carol subject:评审",
+      "trigram": true,
+      "expect_ids": [
+        3
+      ],
+      "expect_warnings": 0
     }
   ]
 }

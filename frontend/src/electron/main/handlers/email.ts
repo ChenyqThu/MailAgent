@@ -25,6 +25,7 @@ import {
   buildTrigramSnippetExpr,
   countCjkChars,
   parseSearchQuery,
+  routeTextTerm,
   type FilterPredicate,
   type ParsedSearchQuery,
   type TermRoute,
@@ -440,25 +441,36 @@ function recipientMatchExpr(term: TextTerm): string {
   return `${term.column} : ${expr}`
 }
 
-function buildPositiveFtsExpr(parsed: ParsedSearchQuery): string {
+// 该 term 是否要排出 email_body_fts MATCH expr: 收件人列 term 永远排除; P5 trigram
+// 启用时裸 CJK 词也排除 (改走 trigram IN-子查询)。flag=false → 仅排收件人 (零回归)。
+// 镜像 Python _exclude_from_body_match。
+function excludeFromBodyMatch(term: TextTerm, trigramEnabled: boolean): boolean {
+  if (isRecipientTerm(term)) return true
+  if (trigramEnabled && termHasCjk(term)) return true
+  return false
+}
+
+function buildPositiveFtsExpr(parsed: ParsedSearchQuery, trigramEnabled = false): string {
   // T8: 收件人列 term 不进 email_body_fts MATCH —— 它们走 email_recipient_fts 的
-  // IN-子查询 AND 过滤 (见 buildRecipientPredicates)。镜像 Python _build_positive_fts_expr。
+  // IN-子查询 AND 过滤 (见 buildRecipientPredicates)。P5: trigram 启用时裸 CJK 词也排除
+  // (走 trigram IN-子查询)。镜像 Python _build_positive_fts_expr。
   const parts: string[] = []
   for (const term of parsed.fts_terms) {
-    if (isRecipientTerm(term)) continue
+    if (excludeFromBodyMatch(term, trigramEnabled)) continue
     parts.push(textTermToFts(term))
   }
   for (const group of parsed.fts_or_groups) {
     // OR 组里混入收件人列 term → 整组归 recipient 编译, 不进 body MATCH。
     if (group.some((term) => isRecipientTerm(term))) continue
+    // P5: OR 组暂不路由 trigram (规格已注明限制) → 含 CJK 的 OR 组照旧走 unicode61。
     parts.push(buildFtsOrGroup(group))
   }
   return parts.filter((part) => part.length > 0).join(' AND ')
 }
 
-function buildNegativeFtsExpr(parsed: ParsedSearchQuery): string {
+function buildNegativeFtsExpr(parsed: ParsedSearchQuery, trigramEnabled = false): string {
   const parts = parsed.neg_fts_terms
-    .filter((term) => !isRecipientTerm(term))
+    .filter((term) => !excludeFromBodyMatch(term, trigramEnabled))
     .map(textTermToFts)
     .filter((part) => part.length > 0)
   return parts.map((part) => `(${part})`).join(' OR ')
@@ -514,6 +526,92 @@ function buildRecipientPredicates(parsed: ParsedSearchQuery): FilterPredicate[] 
   }
 
   return predicates
+}
+
+// ============================================================
+// P5: parsed 路径里「正向/负向裸全文 CJK 词」也走 trigram (flag-gated)
+// 镜像 Python _is_bare_fulltext_term / _term_has_cjk / _cjk_term_in_predicate /
+// _build_cjk_trigram_predicates / _collect_cjk_term_warnings / _exclude_from_body_match。
+//
+// T7 之前只在 plain_passthrough query 启用 trigram; 一旦 query 带字段就走 parsed
+// 路径, 裸 CJK 词退回 unicode61 前缀 MATCH, 匹配不到 CJK 串内部子串。修复: trigram
+// 启用时把裸 CJK 词改成 trigram 表 IN/NOT-IN 子查询谓词 (与 from:/is:/date AND),
+// 并把它们从 body MATCH expr 排除。flag=false → 不启用, parsed 路径逐字节不变 (零回归)。
+// ============================================================
+
+// 裸全文 term: 既非 T6 列词 (columnTable='body') 也非 T8 收件人词。
+function isBareFulltextTerm(term: TextTerm): boolean {
+  return term.column == null && term.columnTable == null
+}
+
+function termHasCjk(term: TextTerm): boolean {
+  return isBareFulltextTerm(term) && countCjkChars(term.value) > 0
+}
+
+// 把一个裸 CJK term 编译成 IN / NOT IN 子查询谓词 (term 内多段 AND)。段路由复用
+// routeTextTerm (与 plain trigram 路径同一份分类语义)。无可查段 (整词 1 字 CJK) →
+// 返回 null (caller 跳过)。镜像 Python _cjk_term_in_predicate。
+function cjkTermInPredicate(term: TextTerm, negate: boolean): FilterPredicate | null {
+  const route = routeTextTerm(term.value, smartQueryTransform)
+  if (route.route === 'too_short') return null
+
+  const inKw = negate ? 'NOT IN' : 'IN'
+  const sqlParts: string[] = []
+  const params: unknown[] = []
+  for (const latin of route.latinSegments) {
+    const expr = smartQueryTransform(latin)
+    if (!expr) continue
+    sqlParts.push(
+      `m.internal_id ${inKw} (SELECT rowid FROM email_body_fts ` + `WHERE email_body_fts MATCH ?)`
+    )
+    params.push(expr)
+  }
+  for (const seg of route.cjkSegments) {
+    if (seg.route === 'trigram_match') {
+      sqlParts.push(
+        `m.internal_id ${inKw} (SELECT rowid FROM email_body_fts_trigram ` +
+          `WHERE email_body_fts_trigram MATCH ?)`
+      )
+      params.push(seg.value)
+    } else if (seg.route === 'trigram_like') {
+      const like = `%${seg.value}%`
+      sqlParts.push(
+        `m.internal_id ${inKw} (SELECT rowid FROM email_body_fts_trigram ` +
+          `WHERE body_markdown LIKE ? OR subject LIKE ? OR sender LIKE ?)`
+      )
+      params.push(like, like, like)
+    }
+  }
+  if (sqlParts.length === 0) return null
+  return { sql: sqlParts.join(' AND '), params }
+}
+
+// trigram 启用时, 把 parsed 路径的独立裸 CJK 词编译成 trigram IN/NOT-IN 谓词。
+// OR 组含 CJK 暂不在此路由 (规格已注明限制)。镜像 Python _build_cjk_trigram_predicates。
+function buildCjkTrigramPredicates(parsed: ParsedSearchQuery): FilterPredicate[] {
+  const predicates: FilterPredicate[] = []
+  for (const term of parsed.fts_terms) {
+    if (!termHasCjk(term)) continue
+    const pred = cjkTermInPredicate(term, false)
+    if (pred) predicates.push(pred)
+  }
+  for (const term of parsed.neg_fts_terms) {
+    if (!termHasCjk(term)) continue
+    const pred = cjkTermInPredicate(term, true)
+    if (pred) predicates.push(pred)
+  }
+  return predicates
+}
+
+// 收集 parsed 路径裸 CJK 词的 1 字拦截 warning (cjk_too_short:<字>)。
+// 镜像 Python _collect_cjk_term_warnings。
+function collectCjkTermWarnings(parsed: ParsedSearchQuery): string[] {
+  const warnings: string[] = []
+  for (const term of [...parsed.fts_terms, ...parsed.neg_fts_terms]) {
+    if (!termHasCjk(term)) continue
+    warnings.push(...routeTextTerm(term.value, smartQueryTransform).warnings)
+  }
+  return warnings
 }
 
 // 把所有正向收件人列 term 合成一条 email_recipient_fts MATCH 表达式 (AND 连接)。
@@ -1538,12 +1636,17 @@ export function searchEmails(opts: SearchOpts): SearchResult {
       transformedQuery = smartQueryTransform(opts.query)
       items = runFusedSearch(transformedQuery, transformedQuery, structured.predicates, '', '', '')
     } else {
-      const ftsExpr = buildPositiveFtsExpr(parsed)
-      const negFtsExpr = buildNegativeFtsExpr(parsed)
+      const ftsExpr = buildPositiveFtsExpr(parsed, trigramEnabled)
+      const negFtsExpr = buildNegativeFtsExpr(parsed, trigramEnabled)
       // T8: 收件人列 term (to~:/cc~:/from~:) 编译成 email_recipient_fts 的 IN-子查询谓词;
       // 正向排名表达式给 recipient-only 路径用。镜像 Python recipient_predicates /
       // positive_recipient_expr。
       const recipientPredicates = buildRecipientPredicates(parsed)
+      // P5: trigram 启用时, parsed 路径里的裸 CJK 词编译成 trigram IN/NOT-IN 谓词
+      // (与 from:/is:/date AND); 同步收 1 字 CJK 拦截 warning。flag=false → 空。
+      // 镜像 Python _build_cjk_trigram_predicates / _collect_cjk_term_warnings。
+      const cjkTrigramPredicates = trigramEnabled ? buildCjkTrigramPredicates(parsed) : []
+      if (trigramEnabled) parseWarnings.push(...collectCjkTermWarnings(parsed))
       const positiveRecipientExpr = buildPositiveRecipientFtsExpr(parsed)
       const negFiltersCompiled: FilterPredicate[] = parsed.neg_filters.map((predicate) => ({
         sql: `NOT (${predicate.sql})`,
@@ -1554,6 +1657,7 @@ export function searchEmails(opts: SearchOpts): SearchResult {
         ...compileOrFilterGroups(parsed.or_filter_groups),
         ...structured.predicates,
         ...recipientPredicates,
+        ...cjkTrigramPredicates,
         ...negFiltersCompiled
       ]
 
@@ -1583,6 +1687,8 @@ export function searchEmails(opts: SearchOpts): SearchResult {
           ...parsed.filters,
           ...compileOrFilterGroups(parsed.or_filter_groups),
           ...structured.predicates,
+          // P5: 收件人排名路径里裸 CJK 词的 trigram 约束仍要 AND (如 to~:alice 评审)。
+          ...cjkTrigramPredicates,
           ...negFiltersCompiled
         ]
         // 负向收件人 term 仍要 AND 过滤掉。
