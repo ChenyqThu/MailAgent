@@ -540,7 +540,7 @@
     },
     "backend": {
       "notionAgent": "Notion Agent",
-      "customApi": "Custom AI",
+      "customApi": "Custom Agent",
       "selectorLabel": "Backend",
       "agentSuffix": "· Jarvis",
       "modelsLabel": "Models",
@@ -2078,6 +2078,31 @@
       "continue": "Continue in inbox",
       "selectHint": "Select a conversation on the left",
       "emptyTranscript": "No messages in this conversation yet"
+    },
+    "search": {
+      "section": "Search Agents",
+      "sectionHint": "Powers the command palette AI search. Ask in natural language; it searches your mail.",
+      "newAgent": "New Search Agent",
+      "newAgentHint": "Custom prompt, model & tools",
+      "noAgent": "No search agent yet — click New above.",
+      "configTitle": "Search Agent · {title}",
+      "newTitle": "New Search Agent",
+      "titleLabel": "Name",
+      "titlePlaceholder": "e.g. Mail search assistant",
+      "promptLabel": "Search Prompt",
+      "promptHint": "Empty = built-in default",
+      "promptPlaceholder": "Empty = built-in search persona; type to override",
+      "tools": "Tools",
+      "toolsHint": "Tools this search agent can call (MVP: full-text search only)",
+      "tool": {
+        "email_search_fulltext": "Email full-text search"
+      },
+      "create": "Create",
+      "delete": "Delete",
+      "deleteConfirm": "Delete this search agent?",
+      "deleteCancel": "Cancel",
+      "errConflict": "That id already exists — pick another name.",
+      "errGeneric": "Operation failed, please retry."
     }
   },
   "common": {

@@ -540,7 +540,7 @@
     },
     "backend": {
       "notionAgent": "Notion Agent",
-      "customApi": "Custom AI",
+      "customApi": "Custom Agent",
       "selectorLabel": "Backend",
       "agentSuffix": "· Jarvis",
       "modelsLabel": "模型",
@@ -2078,6 +2078,31 @@
       "continue": "在收件箱继续",
       "selectHint": "选择左侧一个会话查看",
       "emptyTranscript": "这个会话还没有消息"
+    },
+    "search": {
+      "section": "搜索 Agent",
+      "sectionHint": "命令面板 AI 搜索入口用的智能体。用自然语言搜邮件，自动转检索。",
+      "newAgent": "新建搜索 Agent",
+      "newAgentHint": "自定义提示词、模型与工具",
+      "noAgent": "暂无搜索 Agent，点上方新建。",
+      "configTitle": "搜索 Agent · {title}",
+      "newTitle": "新建搜索 Agent",
+      "titleLabel": "名称",
+      "titlePlaceholder": "如 邮件搜索助手",
+      "promptLabel": "搜索 Prompt",
+      "promptHint": "留空 = 用内置默认",
+      "promptPlaceholder": "留空 = 用内置默认搜索 persona；在此输入可完全覆写",
+      "tools": "工具",
+      "toolsHint": "搜索 Agent 可调用的工具（MVP 仅全文搜索）",
+      "tool": {
+        "email_search_fulltext": "邮件全文搜索"
+      },
+      "create": "创建",
+      "delete": "删除",
+      "deleteConfirm": "确认删除此搜索 Agent？",
+      "deleteCancel": "取消",
+      "errConflict": "该 id 已存在，请换一个名称。",
+      "errGeneric": "操作失败，请重试。"
     }
   },
   "common": {

@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import type {
   ReportAgentConfig,
+  ReportAgentCreateInput,
   ReportCadence,
   ReportConfigPatch,
   ReportDetail,
@@ -76,6 +77,39 @@ export function useDeleteReport(): {
     mutationFn: (reportId: string) => api.report.delete(reportId),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: LIST_KEY })
+    }
+  })
+  return { remove: (id) => mut.mutateAsync(id), isDeleting: mut.isPending }
+}
+
+/** F4b — 新建一行 agent（search agent 用，type='search'）。成功后 invalidate
+ *  getConfig 查询，让 AgentsTab 列表 + 命令面板 runSearchAgent 取到新行。 */
+export function useCreateAgent(): {
+  create: (input: ReportAgentCreateInput) => Promise<ReportAgentConfig>
+  isCreating: boolean
+} {
+  const api = useMailApi()
+  const qc = useQueryClient()
+  const mut = useMutation({
+    mutationFn: (input: ReportAgentCreateInput) => api.report.createAgent(input),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: CONFIG_KEY })
+    }
+  })
+  return { create: (input) => mut.mutateAsync(input), isCreating: mut.isPending }
+}
+
+/** F4b — 删除一行 agent（search agent 用）。成功后 invalidate getConfig 查询。 */
+export function useDeleteAgent(): {
+  remove: (agentId: string) => Promise<{ deleted: string }>
+  isDeleting: boolean
+} {
+  const api = useMailApi()
+  const qc = useQueryClient()
+  const mut = useMutation({
+    mutationFn: (agentId: string) => api.report.deleteAgent(agentId),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: CONFIG_KEY })
     }
   })
   return { remove: (id) => mut.mutateAsync(id), isDeleting: mut.isPending }
