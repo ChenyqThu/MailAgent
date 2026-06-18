@@ -89,18 +89,18 @@ mac:
     NSAppleEventsUsageDescription: MailAgent uses Mail.app and Notion automation events to create draft replies and open email pages.
 dmg:
   artifactName: ${name}-${version}-${arch}.${ext}
-  # DMG 安装窗口布局：左边 .app，右边 Applications 链接。背景图不画 — 走
-  # electron-builder 默认深色棋盘背景，足够清晰。Sprint 8 ad-hoc 签名 + DMG
-  # 安装即可,不做 background.png 装饰（V1.5 polish 时再加）。
+  # DMG 安装窗口布局：左边 .app，右边 Applications 链接（与拖拽箭头方向一致）。
+  # 背景图不画 — 走 electron-builder 默认深色棋盘背景，足够清晰。Sprint 8 ad-hoc
+  # 签名 + DMG 安装即可,不做 background.png 装饰（V1.5 polish 时再加）。
   window:
     width: 540
     height: 380
   contents:
-    - x: 140
+    - x: 400
       y: 200
       type: link
       path: /Applications
-    - x: 400
+    - x: 140
       y: 200
       type: file
 npmRebuild: false
