@@ -226,3 +226,15 @@ def test_search_query_behavior_fixture(case: dict[str, Any], behavior_db: Path):
             for hit in result.hits
         ]
         assert actual_hits[: len(case["expect_hits"])] == case["expect_hits"]
+
+    snippet_by_id = {hit.internal_id: hit.snippet for hit in result.hits}
+    # P4a: trigram 路径补 snippet (高亮 + fallback) —— 这些 id 的 snippet 必须非空。
+    for iid in case.get("expect_snippet_nonempty", []):
+        assert snippet_by_id.get(iid, "") != "", (
+            f"{case['name']}: id={iid} snippet 不应为空"
+        )
+    # P4a: 高亮命中的具体子串 (含 <mark>) 必须出现在 snippet 里。
+    for iid, needle in case.get("expect_snippet_contains", {}).items():
+        assert needle in snippet_by_id.get(int(iid), ""), (
+            f"{case['name']}: id={iid} snippet 应含 {needle!r}, 实得 {snippet_by_id.get(int(iid))!r}"
+        )

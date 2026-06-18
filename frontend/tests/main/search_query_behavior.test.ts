@@ -48,6 +48,9 @@ interface FixtureCase {
   expect_hits?: Array<{ internal_id: number; source: string; filename: string | null }>
   // T7: per-case CJK trigram 路由开关 (镜像 Python 构造器 trigram_enabled 参数)。
   trigram?: boolean
+  // P4a: trigram 路径补 snippet 断言 (镜像 Python)。
+  expect_snippet_nonempty?: number[]
+  expect_snippet_contains?: Record<string, string>
 }
 
 interface Fixture {
@@ -250,6 +253,16 @@ describe('search query behavior fixture', () => {
         filename: hit.filename ?? null
       }))
       expect(actualHits.slice(0, item.expect_hits.length)).toEqual(item.expect_hits)
+    }
+
+    const snippetById = new Map(result.items.map((hit) => [hit.internal_id, hit.snippet ?? '']))
+    // P4a: trigram 路径补 snippet (高亮 + fallback) —— 这些 id 的 snippet 必须非空。
+    for (const iid of item.expect_snippet_nonempty ?? []) {
+      expect(snippetById.get(iid) ?? '').not.toBe('')
+    }
+    // P4a: 高亮命中的具体子串 (含 <mark>) 必须出现在 snippet 里。
+    for (const [iid, needle] of Object.entries(item.expect_snippet_contains ?? {})) {
+      expect(snippetById.get(Number(iid)) ?? '').toContain(needle)
     }
   })
 })

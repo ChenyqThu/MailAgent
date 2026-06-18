@@ -60,6 +60,7 @@ import {
   AlertTriangle,
   Search as SearchIcon,
   Sparkle,
+  Sparkles,
   X
 } from 'lucide-react'
 
@@ -228,6 +229,11 @@ export function CommandPalette(): React.ReactElement | null {
   const [highlight, setHighlight] = useState(0)
   const [lastLatencyMs, setLastLatencyMs] = useState<number | null>(null)
   const [actionRunning, setActionRunning] = useState<string | null>(null)
+  // P4b — AI 自然语言检索: loading 标记 + 解析结果 banner（成功显 DSL / 失败显
+  // error 码）。banner 与搜索框解耦——用户可在 setQuery(dsl) 后继续编辑搜索框微调。
+  const [aiLoading, setAiLoading] = useState(false)
+  const [aiBanner, setAiBanner] = useState<{ kind: 'parsed'; dsl: string } | null>(null)
+  const [aiError, setAiError] = useState<string | null>(null)
   // Adjust-on-prop-change pattern (react.dev): reset query + highlight when
   // the palette transitions closed→open. Always start from an empty query so
   // each open is a fresh search (no stale last-session prefill).
@@ -239,6 +245,9 @@ export function CommandPalette(): React.ReactElement | null {
       setHighlight(0)
       setLastLatencyMs(null)
       setActionRunning(null)
+      setAiLoading(false)
+      setAiBanner(null)
+      setAiError(null)
     }
   }
 
@@ -341,6 +350,53 @@ export function CommandPalette(): React.ReactElement | null {
   // JUMP items — mailbox-matches + open-AI-panel + admin shortcut
   // ──────────────────────────────────────────────────────────────────
 
+  // ──────────────────────────────────────────────────────────────────
+  // P4b — AI 自然语言检索: 当前输入 → LLM → DSL → 填回搜索框 + banner
+  // ──────────────────────────────────────────────────────────────────
+
+  // error 码 → 友好文案（i18next-icu 单括号插值）。未知码回退 generic。
+  const formatAiError = useCallback(
+    (code: string): string => {
+      switch (code) {
+        case 'E_NO_LLM_KEY':
+          return t('palette.ai.errNoKey')
+        case 'E_EMPTY':
+          return t('palette.ai.errEmpty')
+        case 'E_UNSUPPORTED':
+          return t('palette.ai.errUnsupported')
+        default:
+          return t('palette.ai.errGeneric')
+      }
+    },
+    [t]
+  )
+
+  const runAiUnderstand = useCallback(async (): Promise<void> => {
+    const nl = query.trim()
+    if (nl.length === 0 || aiLoading) return
+    setAiLoading(true)
+    setAiError(null)
+    setAiBanner(null)
+    try {
+      const res = await mailApi.email.nlToDsl(nl)
+      if (res.error || !res.dsl) {
+        setAiError(formatAiError(res.error ?? 'E_NO_OUTPUT'))
+        return
+      }
+      // 填回搜索框 → 触发既有搜索路径；banner 提示解析结果（可关 / 直接编辑微调）。
+      setQuery(res.dsl)
+      setAiBanner({ kind: 'parsed', dsl: res.dsl })
+      setHighlight(0)
+    } catch (err) {
+      // nlToDsl 设计上不 reject；兜底仍处理（IPC 异常等）。
+      setAiError(
+        formatAiError(err instanceof Error ? ((err as Error & { code?: string }).code ?? '') : '')
+      )
+    } finally {
+      setAiLoading(false)
+    }
+  }, [query, aiLoading, mailApi, formatAiError])
+
   interface JumpRow {
     id: string
     icon: React.ReactNode
@@ -352,6 +408,45 @@ export function CommandPalette(): React.ReactElement | null {
   const jumpItems: JumpRow[] = useMemo(() => {
     const out: JumpRow[] = []
     const q = debouncedRaw.trim()
+
+    // P4b — AI 理解入口（仅当输入框有内容时）。放在 jump 组首位 → ⌘K 输入 → ⏎
+    // 即可触发 AI 翻译（自然填进 flat-index 键盘导航）。label 用 live `query`
+    // 实时回显当前输入。
+    const liveQuery = query.trim()
+    if (liveQuery.length > 0) {
+      out.push({
+        id: 'ai:understand',
+        icon: aiLoading ? (
+          <Loader2
+            size={14}
+            strokeWidth={1.75}
+            className="animate-spin motion-reduce:animate-none"
+            aria-hidden
+          />
+        ) : (
+          <Sparkles size={14} strokeWidth={1.75} />
+        ),
+        label: (
+          <span className="text-body flex-1 truncate">
+            <span className="text-ink-fg font-medium">
+              {aiLoading
+                ? t('palette.ai.loading')
+                : t('palette.ai.understand', { query: liveQuery })}
+            </span>
+            {!aiLoading && (
+              <>
+                <span className="text-ink-fg-3 mx-1">·</span>
+                <span className="text-ink-fg-2">{t('palette.ai.understandHint')}</span>
+              </>
+            )}
+          </span>
+        ),
+        run: () => {
+          void runAiUnderstand()
+        }
+      })
+    }
+
     const baseList =
       q.length === 0
         ? mailboxes.slice(0, MAX_JUMP_MAILBOXES)
@@ -422,7 +517,17 @@ export function CommandPalette(): React.ReactElement | null {
       }
     })
     return out
-  }, [debouncedRaw, hits, mailboxes, navigate, setActiveMailbox, t])
+  }, [
+    debouncedRaw,
+    query,
+    aiLoading,
+    runAiUnderstand,
+    hits,
+    mailboxes,
+    navigate,
+    setActiveMailbox,
+    t
+  ])
 
   // ──────────────────────────────────────────────────────────────────
   // AI ACTIONS — wired markAllRead + reRunAi; summarize disabled with Soon
@@ -683,7 +788,11 @@ export function CommandPalette(): React.ReactElement | null {
             type="text"
             role="combobox"
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => {
+              setQuery(e.target.value)
+              // 用户手动改输入 → 清掉上一次 AI 失败提示（成功 banner 留着供对照微调）。
+              if (aiError) setAiError(null)
+            }}
             placeholder={t('palette.placeholder')}
             autoComplete="off"
             spellCheck={false}
@@ -723,6 +832,42 @@ export function CommandPalette(): React.ReactElement | null {
             <span className="leading-snug">
               {parseWarnings.map((w) => formatWarning(w)).join('；')}
             </span>
+          </div>
+        )}
+
+        {/* P4b — AI 解析结果 banner（成功显 DSL，可关 / 直接编辑搜索框微调）。 */}
+        {aiBanner && (
+          <div className="px-4 py-1.5 flex items-start gap-1.5 border-b border-ink-border-soft text-micro shrink-0">
+            <Sparkles size={12} strokeWidth={2} className="mt-px shrink-0 text-coral" aria-hidden />
+            <span className="leading-snug text-ink-fg-1 flex-1 min-w-0 break-words">
+              {t('palette.ai.parsedAs', { dsl: aiBanner.dsl })}
+            </span>
+            <button
+              type="button"
+              onClick={() => setAiBanner(null)}
+              title={t('palette.ai.dismiss')}
+              aria-label={t('palette.ai.dismiss')}
+              className="text-ink-fg-2 hover:text-ink-fg p-0.5 rounded hover:bg-ink-fg/[0.08] transition shrink-0"
+            >
+              <X size={12} strokeWidth={2} />
+            </button>
+          </div>
+        )}
+
+        {/* P4b — AI 解析失败 banner（无 key / web 不支持 / LLM 报错）。 */}
+        {aiError && (
+          <div className="px-4 py-1.5 flex items-start gap-1.5 border-b border-ink-border-soft text-micro text-ink-fg-2 shrink-0">
+            <AlertTriangle size={12} strokeWidth={2} className="mt-px shrink-0 text-amber-500" />
+            <span className="leading-snug flex-1 min-w-0">{aiError}</span>
+            <button
+              type="button"
+              onClick={() => setAiError(null)}
+              title={t('palette.ai.dismiss')}
+              aria-label={t('palette.ai.dismiss')}
+              className="text-ink-fg-2 hover:text-ink-fg p-0.5 rounded hover:bg-ink-fg/[0.08] transition shrink-0"
+            >
+              <X size={12} strokeWidth={2} />
+            </button>
           </div>
         )}
 

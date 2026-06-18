@@ -93,6 +93,7 @@ import type {
   LlmUpstreamModelsData,
   MailApi,
   MailboxSummary,
+  NlToDslResult,
   NotionWriteApi,
   PersistentSettings,
   PingResult,
@@ -323,6 +324,11 @@ class ElectronEmailApi implements EmailApi {
       opts ?? {}
     )) as WriteEnvelope<JobEnqueueResult>
     return unwrap(env)
+  }
+  async nlToDsl(nl: string): Promise<NlToDslResult> {
+    // P4b — main 侧 handlers/nl_search.ts 永不 reject (失败以 {dsl:'', error}
+    // 返回), 故这里直接透传, 无 envelope/unwrap。
+    return (await invoker()('email:nlToDsl', nl)) as NlToDslResult
   }
 }
 

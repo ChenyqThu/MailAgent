@@ -17,12 +17,13 @@ import {
 import { detectUserState } from './onboarding/detect'
 import { registerOnboardingHandlers } from './handlers/onboarding'
 import { MAIN_WINDOW, ONBOARDING_WINDOW } from './lib/window-config'
-import { registerEmailHandlers } from './handlers/email'
+import { registerEmailHandlers, warmSearchFtsCache } from './handlers/email'
 import { registerContactHandlers } from './handlers/contacts'
 import { registerFolderHandlers } from './handlers/folder'
 import { registerReportHandlers } from './handlers/report'
 import { registerAttachmentHandlers } from './handlers/attachment'
 import { registerTranslateHandlers, abortAllTranslations } from './handlers/translate'
+import { registerNlSearchHandlers } from './handlers/nl_search'
 import { registerChatLocalBridge } from './chat_local_bridge'
 import { getChatDb } from './chat_db'
 import { registerWriteOpsHandlers } from './handlers/write_ops'
@@ -345,6 +346,8 @@ app.whenReady().then(async () => {
   registerReportHandlers()
   registerAttachmentHandlers()
   registerTranslateHandlers()
+  // P4b — AI 自然语言检索: 自然语言 → DSL (单次 LLM 调用, 不碰 P4a 搜索逻辑)。
+  registerNlSearchHandlers()
   // V2.1 阶段 3c-4 cutover — chat 引擎全部下沉 renderer（ElectronApi.chat = ChatRuntime 经
   // loopback serve-api，3c-3）。main 不再持 chat IPC handler / dispatcher / 本地 backend
   // （custom-api + notion-agent 由 serve-api 接管）。仅保留 ai_chat.db schema bootstrap：
@@ -449,6 +452,11 @@ app.whenReady().then(async () => {
         )
       }
       createWindow()
+      // P4a perf: DB 就绪 (waitReady 已确认 serve 迁到 EXPECTED_DB_VERSION → FTS 表齐全) 后,
+      // setImmediate fire-and-forget 预热 trigram/recipient 两表的页缓存, 消除 2 字 CJK 首查
+      // 冷盘 ~1.4s。setImmediate 让本 tick 先把 createWindow 跑完 (不延后首帧), warm 自带
+      // try/catch + warmed flag, 失败/未就绪静默。仅 configured 分支 (此时后端确定就绪)。
+      if (ready) setImmediate(() => warmSearchFtsCache())
     } else {
       registerBackendQuitHook() // 只挂退出钩子, 不 start
       console.log(`[startup] 用户状态=${state}, 进入 onboarding 配置向导。`)

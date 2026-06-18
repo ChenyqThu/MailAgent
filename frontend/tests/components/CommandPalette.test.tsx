@@ -30,6 +30,7 @@ const {
   mockListMailboxes,
   mockFlag,
   mockLlmRun,
+  mockNlToDsl,
   mockSetActive,
   mockSetMailbox,
   mockNavigate
@@ -38,6 +39,7 @@ const {
   mockListMailboxes: vi.fn(),
   mockFlag: vi.fn(),
   mockLlmRun: vi.fn(),
+  mockNlToDsl: vi.fn(),
   mockSetActive: vi.fn(),
   mockSetMailbox: vi.fn(),
   mockNavigate: vi.fn()
@@ -49,6 +51,7 @@ vi.mock('@shared/hooks/useMailApi', () => ({
       search: mockSearch,
       listMailboxes: mockListMailboxes,
       flag: mockFlag,
+      nlToDsl: mockNlToDsl,
       list: vi.fn(),
       listEnriched: vi.fn(),
       listByThread: vi.fn(),
@@ -154,6 +157,8 @@ beforeEach(() => {
   ])
   // Default — empty results so blank-state tests see no hits / no actions.
   mockSearch.mockResolvedValue({ items: [], total_indexed: 1247 })
+  // P4b — AI nl→dsl default success (tests override per-case).
+  mockNlToDsl.mockResolvedValue({ dsl: 'from:echo newer_than:7d 新人培训' })
 })
 
 afterEach(() => {
@@ -479,5 +484,54 @@ describe('CommandPalette — open behaviour', () => {
       const input = screen.getByRole('combobox') as HTMLInputElement
       expect(input.value).toBe('')
     })
+  })
+})
+
+describe('CommandPalette — AI nl→dsl (P4b)', () => {
+  test('no AI row when query is empty; appears once user types', async () => {
+    openPalette()
+    renderPalette()
+    await waitFor(() => screen.getByRole('combobox'))
+    // Blank query → no AI understand row.
+    expect(screen.queryByText(/AI 理解/)).toBeNull()
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'redis' } })
+    // AI row label echoes the live query (zh: ✨ AI 理解「redis」).
+    await waitFor(() => screen.getByText(/AI 理解「redis」/))
+  })
+
+  test('clicking AI row calls nlToDsl, fills the box with the DSL + shows banner', async () => {
+    mockNlToDsl.mockResolvedValueOnce({ dsl: 'from:echo newer_than:7d 新人培训' })
+    openPalette()
+    renderPalette()
+    await waitFor(() => screen.getByRole('combobox'))
+    fireEvent.change(screen.getByRole('combobox'), {
+      target: { value: '找一下 echo 这几天给我发的关于新人培训的邮件' }
+    })
+    const row = await waitFor(() => screen.getByText(/AI 理解/))
+    fireEvent.click(row)
+    await waitFor(() =>
+      expect(mockNlToDsl).toHaveBeenCalledWith('找一下 echo 这几天给我发的关于新人培训的邮件')
+    )
+    // DSL filled back into the search box.
+    await waitFor(() => {
+      const input = screen.getByRole('combobox') as HTMLInputElement
+      expect(input.value).toBe('from:echo newer_than:7d 新人培训')
+    })
+    // Banner shows the parsed DSL.
+    await waitFor(() => screen.getByText(/AI 解析为:/))
+  })
+
+  test('nlToDsl error (no key) surfaces a friendly banner, box unchanged', async () => {
+    mockNlToDsl.mockResolvedValueOnce({ dsl: '', error: 'E_NO_LLM_KEY' })
+    openPalette()
+    renderPalette()
+    await waitFor(() => screen.getByRole('combobox'))
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: '上周的合同' } })
+    const row = await waitFor(() => screen.getByText(/AI 理解/))
+    fireEvent.click(row)
+    await waitFor(() => screen.getByText(/请先在设置中配置 LLM/))
+    // Search box keeps the user's original natural-language input on error.
+    const input = screen.getByRole('combobox') as HTMLInputElement
+    expect(input.value).toBe('上周的合同')
   })
 })

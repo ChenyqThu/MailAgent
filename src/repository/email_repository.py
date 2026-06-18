@@ -485,6 +485,37 @@ def _route_text_term(value: str) -> _TermRoute:
     )
 
 
+def _quote_fts_token(token: str) -> str:
+    """把一个 token 包成 FTS5 短语字面量 ``"token"`` (内部双引号转义为 ``""``)。"""
+    return '"' + token.replace('"', '""') + '"'
+
+
+def build_trigram_snippet_expr(routes: list[_TermRoute]) -> str:
+    """从路由计划构造「snippet 匹配表达式」(供 email_body_fts_trigram MATCH 高亮)。
+
+    trigram 分词器要求 token >= 3 字符才有召回, 故只收:
+      - latin 段 (英文/数字, 来自 unicode term 的 original 或 trigram term 的 latin_segments),
+        按 ``[A-Za-z0-9]+`` 抽词后取 len>=3 的。
+      - CJK 段中 route=='trigram_match' (>=3 字) 的整段。
+    2 字 CJK (trigram_like) 与 1 字 CJK 不进表达式 (MATCH<3 无效)。
+    各 token 包成 FTS5 短语并以 ``OR`` 连接; 全部不可 MATCH → 返回 ''。
+    Python/TS 双端逐行镜像, 由行为夹具锁。
+    """
+    tokens: list[str] = []
+    for route in routes:
+        if route.route == "unicode":
+            tokens.extend(t for t in re.findall(r"[A-Za-z0-9]+", route.original) if len(t) >= 3)
+        elif route.route == "trigram":
+            for latin in route.latin_segments:
+                tokens.extend(t for t in re.findall(r"[A-Za-z0-9]+", latin) if len(t) >= 3)
+            for seg in route.cjk_segments:
+                if seg.route == "trigram_match":
+                    tokens.append(seg.value)
+    if not tokens:
+        return ""
+    return " OR ".join(_quote_fts_token(t) for t in tokens)
+
+
 def build_search_plan(terms: list[str]) -> tuple[list[_TermRoute], list[str]]:
     """把裸全文 term 列表编译成路由计划 + 收集 warning。
 
@@ -1357,7 +1388,7 @@ class EmailRepository:
                     rank += 1
                     rrf_scores[iid] = rrf_scores.get(iid, 0.0) + 1.0 / (_RRF_K + rank)
 
-            hits = self._build_trigram_hits(conn, rrf_scores, limit)
+            hits = self._build_trigram_hits(conn, rrf_scores, limit, routes)
             return EmailSearchResult(hits, query, warnings)
         finally:
             conn.close()
@@ -1503,11 +1534,15 @@ class EmailRepository:
         conn: sqlite3.Connection,
         rrf_scores: dict[int, float],
         limit: int,
+        routes: list[_TermRoute],
     ) -> list[EmailSearchHit]:
         """按 RRF 分数 + date 排序取 top-N, 查 metadata 拼 EmailSearchHit。
 
         ``rank`` = ``-rrf_score`` (越小越相关), 与 P1 _merge_search_rows_by_rrf 出口语义一致。
-        snippet 留空 (trigram 路径不产 snippet; 前端按 body 兜底渲染)。
+        snippet: 对最终 top-N 用「snippet 表达式」(build_trigram_snippet_expr) 在
+        email_body_fts_trigram 上跑 snippet() 高亮命中词; 该表达式为空 (纯 2/1 字 CJK)
+        或某 row 不被表达式 MATCH (只 2 字 LIKE 命中) → fallback 取 body_markdown 前
+        ~80 字符无高亮摘要, 保证 snippet 不恒空。Python/TS 双端逐行镜像。
         """
         if not rrf_scores:
             return []
@@ -1535,12 +1570,13 @@ class EmailRepository:
             ),
             reverse=True,
         )
+        top = [(iid, score) for iid, score in ordered[:limit] if iid in meta_by_id]
+        top_ids = [iid for iid, _ in top]
+        snippet_by_id = self._build_trigram_snippets(conn, top_ids, routes)
 
         hits: list[EmailSearchHit] = []
-        for iid, score in ordered[:limit]:
-            r = meta_by_id.get(iid)
-            if r is None:
-                continue
+        for iid, score in top:
+            r = meta_by_id[iid]
             page_id = r["notion_page_id"]
             notion_url = (
                 f"https://www.notion.so/{page_id.replace('-', '')}"
@@ -1552,7 +1588,7 @@ class EmailRepository:
                 sender=r["sender"],
                 date_received=r["date_received"],
                 mailbox=r["mailbox"],
-                snippet="",
+                snippet=snippet_by_id.get(iid, ""),
                 rank=-float(score),
                 notion_page_id=page_id,
                 notion_url=notion_url,
@@ -1560,6 +1596,57 @@ class EmailRepository:
                 filename=None,
             ))
         return hits
+
+    def _build_trigram_snippets(
+        self,
+        conn: sqlite3.Connection,
+        top_ids: list[int],
+        routes: list[_TermRoute],
+    ) -> dict[int, str]:
+        """给 top-N trigram 命中生成 snippet (高亮 + fallback)。
+
+        ① 若 snippet 表达式非空: 在 email_body_fts_trigram MATCH 该表达式 + rowid IN top,
+           取 snippet() 高亮片段 (含 <mark>) 映射回 id。
+        ② 表达式为空, 或某 id 未被 ① 命中 (只 2 字 LIKE 命中) → fallback: 取 body_markdown
+           前 ~80 字符无高亮摘要。
+        snippet() 只能在带 MATCH 的查询里用; fallback 摘要不经 snippet()。
+        """
+        if not top_ids:
+            return {}
+        result: dict[int, str] = {}
+        expr = build_trigram_snippet_expr(routes)
+        if expr:
+            placeholders = ",".join("?" for _ in top_ids)
+            sql = (
+                f"SELECT rowid, "
+                f"snippet(email_body_fts_trigram, 0, '<mark>', '</mark>', '…', 24) AS snippet "
+                f"FROM email_body_fts_trigram "
+                f"WHERE rowid IN ({placeholders}) AND email_body_fts_trigram MATCH ?"
+            )
+            try:
+                rows = conn.execute(sql, (*top_ids, expr)).fetchall()
+                for r in rows:
+                    text = r["snippet"]
+                    if text:
+                        result[int(r["rowid"])] = text
+            except sqlite3.OperationalError as e:
+                logger.warning(
+                    f"search_email_bodies(trigram): snippet MATCH failed "
+                    f"({expr!r}): {e}"
+                )
+
+        missing = [iid for iid in top_ids if iid not in result]
+        if missing:
+            placeholders = ",".join("?" for _ in missing)
+            rows = conn.execute(
+                f"SELECT rowid, body_markdown FROM email_body_fts_trigram "
+                f"WHERE rowid IN ({placeholders})",
+                missing,
+            ).fetchall()
+            for r in rows:
+                body = r["body_markdown"] or ""
+                result[int(r["rowid"])] = body[:80]
+        return result
 
     def _search_email_bodies_parsed(
         self,

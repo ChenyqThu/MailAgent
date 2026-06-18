@@ -406,6 +406,22 @@ export interface EmailApi {
    *  视图 (Archive 副本留在 Exchange 端; 若 Archive 在 SYNC_FOLDERS 白名单则走主链路可见)。
    *  返回 CLI data 块 {success, from_mailbox, to_mailbox, notion_updated} 或抛 Error&{code}。 */
   archive(internalId: number): Promise<unknown>
+  /** P4b — AI 自然语言检索: 一句自然语言 → 搜索 DSL (单次 LLM 调用, main 进程,
+   *  不碰 P4a 搜索逻辑)。结果由调用方填回搜索框跑既有搜索。永不 reject —— 失败
+   *  以 {dsl:'', error} 形态返回 (E_NO_LLM_KEY / E_EMPTY / E_UPSTREAM / E_QUOTA /
+   *  E_TIMEOUT / E_NO_OUTPUT), 前端据 error 码给友好提示。web 端无 LLM key/端点,
+   *  返回 E_UNSUPPORTED。 */
+  nlToDsl(nl: string): Promise<NlToDslResult>
+}
+
+/** P4b — `email.nlToDsl` 的返回形状 (镜像 main 侧 handlers/nl_search.ts)。 */
+export interface NlToDslResult {
+  /** 翻译出的 DSL; error 非空时为 ''。 */
+  dsl: string
+  /** 结构化错误码; 成功时省略。 */
+  error?: string
+  /** 人类可读的兜底信息 (i18n 以 error 码为准, message 仅 debug)。 */
+  message?: string
 }
 
 // ---- D2b — async_jobs 长任务子系统 (C1 后端 POST /api/jobs + GET /api/jobs/{id}) --

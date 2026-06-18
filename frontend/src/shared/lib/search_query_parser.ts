@@ -839,3 +839,37 @@ export function buildSearchPlan(
   }
   return { routes, warnings }
 }
+
+/** 把一个 token 包成 FTS5 短语字面量 `"token"` (内部双引号转义为 `""`)。镜像 Python _quote_fts_token。 */
+function quoteFtsToken(token: string): string {
+  return '"' + token.replace(/"/g, '""') + '"'
+}
+
+/**
+ * 从路由计划构造「snippet 匹配表达式」(供 email_body_fts_trigram MATCH 高亮)。
+ * 镜像 Python build_trigram_snippet_expr。
+ *
+ * trigram 分词器要求 token >= 3 字符才有召回, 故只收:
+ *   - latin 段 (英文/数字, 来自 unicode term 的 original 或 trigram term 的 latinSegments),
+ *     按 `[A-Za-z0-9]+` 抽词后取 length>=3 的。
+ *   - CJK 段中 route==='trigram_match' (>=3 字) 的整段。
+ * 2 字 CJK (trigram_like) 与 1 字 CJK 不进表达式 (MATCH<3 无效)。
+ * 各 token 包成 FTS5 短语并以 `OR` 连接; 全部不可 MATCH → 返回 ''。
+ */
+export function buildTrigramSnippetExpr(routes: TermRoute[]): string {
+  const tokens: string[] = []
+  for (const route of routes) {
+    if (route.route === 'unicode') {
+      tokens.push(...(route.original.match(/[A-Za-z0-9]+/g) ?? []).filter((t) => t.length >= 3))
+    } else if (route.route === 'trigram') {
+      for (const latin of route.latinSegments) {
+        tokens.push(...(latin.match(/[A-Za-z0-9]+/g) ?? []).filter((t) => t.length >= 3))
+      }
+      for (const seg of route.cjkSegments) {
+        if (seg.route === 'trigram_match') tokens.push(seg.value)
+      }
+    }
+  }
+  if (tokens.length === 0) return ''
+  return tokens.map(quoteFtsToken).join(' OR ')
+}

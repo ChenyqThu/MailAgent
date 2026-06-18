@@ -791,7 +791,15 @@
         1,
         3
       ],
-      "expect_warnings": 0
+      "expect_warnings": 0,
+      "expect_snippet_nonempty": [
+        1,
+        3
+      ],
+      "expect_snippet_contains": {
+        "3": "<mark>产品评审</mark>",
+        "1": "<mark>产品评</mark>"
+      }
     },
     {
       "name": "trigram_cjk_middle_substring",
@@ -800,7 +808,10 @@
       "expect_ids": [
         3
       ],
-      "expect_warnings": 0
+      "expect_warnings": 0,
+      "expect_snippet_contains": {
+        "3": "<mark>评审定</mark>"
+      }
     },
     {
       "name": "trigram_cjk_two_char_like_product",
@@ -821,7 +832,11 @@
         1,
         3
       ],
-      "expect_warnings": 0
+      "expect_warnings": 0,
+      "expect_snippet_nonempty": [
+        1,
+        3
+      ]
     },
     {
       "name": "trigram_cjk_two_char_like_subject_only",
@@ -846,7 +861,13 @@
       "expect_ids": [
         1
       ],
-      "expect_warnings": 0
+      "expect_warnings": 0,
+      "expect_snippet_nonempty": [
+        1
+      ],
+      "expect_snippet_contains": {
+        "1": "<mark>redis</mark>"
+      }
     },
     {
       "name": "trigram_cjk_two_char_no_regression_flag_off",

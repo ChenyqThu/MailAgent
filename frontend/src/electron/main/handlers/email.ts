@@ -22,6 +22,7 @@ import {
 import {
   buildSearchPlan,
   buildStructuredFilterPredicates,
+  buildTrigramSnippetExpr,
   countCjkChars,
   parseSearchQuery,
   type FilterPredicate,
@@ -1008,12 +1009,59 @@ function trigramFilterIdsByMetadata(
   return new Set(rows.map((r) => r.internal_id))
 }
 
+// 给 top-N trigram 命中生成 snippet (高亮 + fallback)。镜像 Python _build_trigram_snippets。
+// ① snippet 表达式非空 → email_body_fts_trigram MATCH + rowid IN top 取 snippet() 高亮片段。
+// ② 表达式为空, 或某 id 未被 ① 命中 (只 2 字 LIKE 命中) → fallback: body_markdown 前 ~80 字符。
+// snippet() 只能在带 MATCH 的查询里用; fallback 摘要不经 snippet()。
+function buildTrigramSnippets(
+  db: Database,
+  topIds: number[],
+  routes: TermRoute[]
+): Map<number, string> {
+  const result = new Map<number, string>()
+  if (topIds.length === 0) return result
+  const expr = buildTrigramSnippetExpr(routes)
+  if (expr) {
+    const placeholders = topIds.map(() => '?').join(',')
+    const sql = `SELECT rowid,
+                        snippet(email_body_fts_trigram, 0, '<mark>', '</mark>', '…', 24) AS snippet
+                   FROM email_body_fts_trigram
+                  WHERE rowid IN (${placeholders}) AND email_body_fts_trigram MATCH ?`
+    try {
+      const rows = prep(db, sql).all(...topIds, expr) as Array<{
+        rowid: number
+        snippet: string | null
+      }>
+      for (const r of rows) {
+        if (r.snippet) result.set(r.rowid, r.snippet)
+      }
+    } catch (err) {
+      console.warn('[email:search] trigram snippet MATCH failed', expr, err)
+    }
+  }
+
+  const missing = topIds.filter((iid) => !result.has(iid))
+  if (missing.length > 0) {
+    const placeholders = missing.map(() => '?').join(',')
+    const rows = prep(
+      db,
+      `SELECT rowid, body_markdown FROM email_body_fts_trigram WHERE rowid IN (${placeholders})`
+    ).all(...missing) as Array<{ rowid: number; body_markdown: string | null }>
+    for (const r of rows) {
+      result.set(r.rowid, (r.body_markdown ?? '').slice(0, 80))
+    }
+  }
+  return result
+}
+
 // 按 RRF 分数 + date 排序取 top-N, 查 metadata 拼 hit。
-// rank = -rrf_score (越小越相关), snippet 留空。镜像 Python _build_trigram_hits。
+// rank = -rrf_score (越小越相关), snippet 由 buildTrigramSnippets 生成 (高亮 + fallback)。
+// 镜像 Python _build_trigram_hits。
 function buildTrigramHits(
   db: Database,
   rrfScores: Map<number, number>,
-  limit: number
+  limit: number,
+  routes: TermRoute[]
 ): EmailSearch_SearchHit[] {
   if (rrfScores.size === 0) return []
   const idList = [...rrfScores.keys()]
@@ -1044,11 +1092,13 @@ function buildTrigramHits(
     const bd = dateSortValue(metaById.get(b[0])?.date_received, false)
     return bd - ad
   })
+  const top = ordered.slice(0, limit).filter(([iid]) => metaById.has(iid))
+  const topIds = top.map(([iid]) => iid)
+  const snippetById = buildTrigramSnippets(db, topIds, routes)
 
   const hits: EmailSearch_SearchHit[] = []
-  for (const [iid, score] of ordered.slice(0, limit)) {
-    const r = metaById.get(iid)
-    if (r === undefined) continue
+  for (const [iid, score] of top) {
+    const r = metaById.get(iid)!
     hits.push(
       shapeSearchHit({
         internal_id: iid,
@@ -1057,7 +1107,7 @@ function buildTrigramHits(
         date_received: r.date_received,
         mailbox: r.mailbox,
         rank: -score,
-        snippet: '',
+        snippet: snippetById.get(iid) ?? '',
         notion_page_id: r.notion_page_id,
         priority_raw: null,
         lang_raw: null,
@@ -1120,7 +1170,7 @@ function searchEmailBodiesTrigram(
     }
   }
 
-  return buildTrigramHits(db, rrfScores, limit)
+  return buildTrigramHits(db, rrfScores, limit, routes)
 }
 
 export function searchEmails(opts: SearchOpts): SearchResult {
@@ -1826,6 +1876,40 @@ export function listPinnedEmailIds(): number[] {
 }
 
 // ---- IPC wiring -------------------------------------------------------------
+
+// ============================================================
+// P4a perf: trigram / recipient FTS 冷启动预热
+// ============================================================
+// 问题: 2 字 CJK (如 "立项") 走 email_body_fts_trigram 的 body_markdown/subject/sender
+// LIKE '%词%' = 全表扫 (~7700 行)。冷缓存首查实测 ~1.4s, 热 ~0.3s。≥3 字 MATCH / 英文
+// 都 <0.01s, 唯独 2 字 LIKE 受冷页拖累。
+// 缓解: DB 就绪后异步跑一次轻量全扫, 把 trigram + recipient 两表的 body/列页读进 OS/SQLite
+// 页缓存, 让用户首次 2 字 CJK 查询不撞冷盘。匹配不到的 sentinel 词 (zzwarm) → 0 行返回但
+// 仍触页。module 级 warmed flag 守只跑一次; 失败静默 (try/catch)。**绝不阻塞** —— index.ts
+// 用 setImmediate fire-and-forget 调用, 不在开窗/首帧关键路径上 await。
+let _ftsWarmed = false
+
+export function warmSearchFtsCache(): void {
+  if (_ftsWarmed) return
+  _ftsWarmed = true
+  try {
+    const db = getDb()
+    // sentinel 匹配不到任何行, 但 LIKE '%...%' 仍强制全表扫 → 触页进缓存。
+    prep(
+      db,
+      `SELECT count(*) AS n FROM email_body_fts_trigram
+        WHERE body_markdown LIKE '% zzwarm%' OR subject LIKE '% zzwarm%' OR sender LIKE '% zzwarm%'`
+    ).get()
+    prep(
+      db,
+      `SELECT count(*) AS n FROM email_recipient_fts
+        WHERE to_addr LIKE '% zzwarm%' OR cc_addr LIKE '% zzwarm%' OR sender_name LIKE '% zzwarm%'`
+    ).get()
+  } catch (err) {
+    // 表缺失 (旧库未迁) / db 未就绪 / 任何异常 → 静默跳过, 预热是纯增益不该影响功能。
+    console.warn('[email:search] FTS warm skipped', err)
+  }
+}
 
 export function registerEmailHandlers(): void {
   ipcMain.handle('email:list', (_evt, opts: ListOpts = {}) => listEmails(opts ?? {}))

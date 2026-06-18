@@ -67,6 +67,7 @@ import type {
   LlmUpstreamModelsData,
   MailApi,
   MailboxSummary,
+  NlToDslResult,
   NotionAgentConfig,
   NotionAgentListItem,
   PersistentSettings,
@@ -338,6 +339,16 @@ export class HttpApi implements MailApi {
             skip_parent_lookup: opts?.skipParentLookup ?? false
           }
         }
+      }),
+
+    // P4b — AI 自然语言检索: web SPA 进程内无 LLM key/端点 (key 在 main 进程的
+    // keychain/.env, 远程 serve-api 也不暴露该桥)。返回结构化 E_UNSUPPORTED 而非
+    // reject, 让 CommandPalette 走同一条 banner 提示路径 (与无 key 一致体验)。
+    nlToDsl: (_nl: string): Promise<NlToDslResult> =>
+      Promise.resolve({
+        dsl: '',
+        error: 'E_UNSUPPORTED',
+        message: 'AI search is only available in the desktop app'
       })
   }
 

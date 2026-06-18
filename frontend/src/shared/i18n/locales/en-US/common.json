@@ -396,6 +396,17 @@
       "doneToast": "Processed {n, plural, one {# email} other {# emails}}",
       "errToast": "Action failed"
     },
+    "ai": {
+      "understand": "✨ AI understand “{query}”",
+      "understandHint": "Let AI turn this into search syntax",
+      "loading": "AI parsing…",
+      "parsedAs": "AI parsed as: {dsl}",
+      "dismiss": "Dismiss",
+      "errNoKey": "Configure an LLM in Settings to use AI search",
+      "errEmpty": "No searchable intent found — try rephrasing",
+      "errUnsupported": "AI search is only available in the desktop app",
+      "errGeneric": "AI parsing failed — try again or use search syntax directly"
+    },
     "kbd": {
       "navigate": "navigate",
       "selectGroup": "select group",

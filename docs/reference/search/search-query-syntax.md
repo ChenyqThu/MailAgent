@@ -280,6 +280,22 @@ date-only 的 `until <= '2026-06-01'` 还会漏掉当天全部邮件。因此：
 
 行为夹具（§6）新增 `trigram: true` per-case 开关——标记的 case 把 `SEARCH_TRIGRAM_ENABLED` 置 True 跑，其余 case 默认 False 作零回归守卫。Python runner 建 `email_body_fts_trigram` 表灌数据；前端 TS runner（better-sqlite3，trigram tokenizer 已验证支持）须建同表 + 实现 `build_search_plan` 等价路由，读同一份 JSON 锁行为。
 
+### 9.4 trigram 路径 snippet 高亮（P4a）
+
+trigram 路径早期把 hit 的 `snippet` 设成 `''`（前端只剩 subject 高亮）。中英混合搜索（如 `central 立项`）只显示中文 subject，看不到英文词命中的正文片段，用户误判英文没参与。**P4a 给 trigram 结果补 snippet**（`build_trigram_snippet_expr` / `buildTrigramSnippetExpr`，Python/TS 逐行镜像，夹具锁）：
+
+- 构造「snippet 匹配表达式」= 所有 **trigram-MATCH-able 词**的 OR：
+  - latin 段（unicode term 的 `original` + trigram term 的 `latin_segments`，按 `[A-Za-z0-9]+` 抽词取 len≥3）
+  - CJK 段中 `route=='trigram_match'`（≥3 字）的整段。
+  - **2 字 CJK（`trigram_like`）和 1 字 CJK 不进表达式**（trigram MATCH <3 字符无效）。每个 token 包成 FTS5 短语 `"..."` 以 `OR` 连接。
+- 表达式非空 → 对 top-N id 跑 `snippet(email_body_fts_trigram, 0, '<mark>', '</mark>', '…', 24) ... WHERE rowid IN (...) AND email_body_fts_trigram MATCH '<expr>'`，把高亮片段映射回 hit（高亮命中的 `central`/`产品评审` 等）。`snippet()` 只能在带 MATCH 的查询里用。
+- 表达式为空（纯 2/1 字 CJK 查询）或某 row 不被表达式 MATCH（只 2 字 LIKE 命中）→ **fallback**：取 `body_markdown` 前 ~80 字符做无高亮摘要（不经 `snippet()`），保证 snippet 不再恒空。
+- 前端复用既有 DOMPurify 渲染（snippet 含 `<mark>`，`CommandPalette` 已 sanitize 注入）。
+
+### 9.5 冷启动预热（P4a perf，仅 Electron 主进程）
+
+2 字 CJK（如 `立项`）走 `email_body_fts_trigram` 的 `body_markdown/subject/sender LIKE '%词%'` = 全表扫（~7700 行）；冷缓存首查实测 ~1.4s、热 ~0.3s（≥3 字 MATCH / 英文都 <0.01s）。**缓解**：主进程在 `waitReady()` 确认 serve 迁到 `EXPECTED_DB_VERSION`（FTS 表齐全）后，`index.ts` 用 `setImmediate` fire-and-forget 调 `warmSearchFtsCache()`（`handlers/email.ts`），对 `email_body_fts_trigram` + `email_recipient_fts` 各跑一次匹配不到的 sentinel（`LIKE '% zzwarm%'`）全扫触页进缓存。module 级 `_ftsWarmed` flag 守只跑一次；`try/catch` 失败静默；`setImmediate` 让 `createWindow` 先跑完，**不阻塞开窗/首帧**。
+
 ## 10. 收件人全文化（T8 并行 recipient 表，无 flag）
 
 **问题**：旧版 `to:` / `cc:` 只走 substring LIKE（`to_addr LIKE '%v%'`），收件人不进任何 FTS 索引，
