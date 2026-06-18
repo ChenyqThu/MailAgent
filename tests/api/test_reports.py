@@ -251,6 +251,25 @@ def test_report_agent_tools_json_empty_default(report_client: TestClient) -> Non
 
 
 # ---------------------------------------------------------------------------
+# delete agent (DELETE /report-agents/{id})
+# ---------------------------------------------------------------------------
+
+
+def test_delete_agent(report_client: TestClient) -> None:
+    """DELETE /report-agents/{id} → {deleted}；删后 getConfig 404。"""
+    r = report_client.delete(f"/api/report-agents/{_AGENT_ID}")
+    assert r.status_code == 200
+    assert r.json()["data"]["deleted"] == _AGENT_ID
+    assert report_client.get(f"/api/report-agents?agentId={_AGENT_ID}").status_code == 404
+
+
+def test_delete_agent_404(report_client: TestClient) -> None:
+    r = report_client.delete("/api/report-agents/ghost")
+    assert r.status_code == 404
+    assert r.json()["error"]["code"] == "E_NOT_FOUND"
+
+
+# ---------------------------------------------------------------------------
 # runNow（mock run_report_once，不烧 token）
 # ---------------------------------------------------------------------------
 

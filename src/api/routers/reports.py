@@ -145,6 +145,15 @@ async def set_config(request: Request, agent_id: str, body: Optional[dict[str, A
     )
 
 
+@router.delete("/report-agents/{agent_id}", dependencies=[Depends(verify_cf_access)])
+async def delete_agent(request: Request, agent_id: str):
+    """删一行 agent 配置（写）。镜像 IPC report:deleteAgent → {deleted}。404 当不存在。"""
+    store = get_report_store()
+    if not store.delete_agent(agent_id):
+        raise APIError("E_NOT_FOUND", f"report_agent {agent_id!r} not found", source="sqlite")
+    return success_envelope({"deleted": agent_id}, request=request, source="sqlite")
+
+
 @router.post("/report-agents/{agent_id}/run", dependencies=[Depends(verify_cf_access)])
 async def run_now(request: Request, agent_id: str, body: Optional[dict[str, Any]] = None):
     """立即生成一份报告（写，跑 LLM）。镜像 report:runNow → ReportRunResult。body 可含 {cadence}。

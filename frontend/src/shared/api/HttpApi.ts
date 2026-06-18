@@ -23,6 +23,7 @@
 import type {
   ReportApi,
   ReportAgentConfig,
+  ReportAgentCreateInput,
   ReportCadence,
   ReportConfigPatch,
   ReportDetail,
@@ -752,6 +753,21 @@ export class HttpApi implements MailApi {
       }),
     delete: async (reportId: string): Promise<void> => {
       await this.req('DELETE', `/reports/${encodeURIComponent(reportId)}`)
-    }
+    },
+    createAgent: (input: ReportAgentCreateInput): Promise<ReportAgentConfig> =>
+      this.req<ReportAgentConfig>('POST', '/report-agents', {
+        // serve-api create_agent 读 tools_json（数组）key；input.tools 映射过去。
+        body: {
+          id: input.id,
+          type: input.type ?? 'search',
+          title: input.title,
+          enabled: input.enabled,
+          model: input.model,
+          prompt: input.prompt,
+          tools_json: input.tools
+        }
+      }),
+    deleteAgent: (agentId: string): Promise<{ deleted: string }> =>
+      this.req<{ deleted: string }>('DELETE', `/report-agents/${encodeURIComponent(agentId)}`)
   }
 }

@@ -1,12 +1,14 @@
 // Sprint 20 — 报告 Agent (/agents 页) IPC。
 //
-// 两类通道，分别走两条路径（与 folder.ts 同款混合策略）：
-//   • report:list / report:get / getConfig — **直读 sync_store.db**（better-sqlite3,
-//     readonly, 热路径、无 LLM）。getConfig 在 TS 复刻 _resolve_agent 的加工（schedule
-//     解析 / bool 还原 / model 默认 / prompt is_default flag），避开 CLI fork 的 ~秒级
-//     Python 冷启 —— 前端热路径不该 fork CLI（CLI 是给 agent 用的）。
-//   • report:setConfig / runNow / delete — 经 `mailagent report` CLI fork（写需 ReportStore
-//     白名单 + auth；runNow 跑 LLM）。低频，fork 开销可接受。
+// 三类通道，分别走不同路径（与 folder.ts 同款混合策略）：
+//   • report:list / report:get — **直读 sync_store.db**（better-sqlite3, readonly,
+//     热路径、无 LLM）—— 前端热路径不该 fork CLI（CLI 是给 agent 用的）。
+//   • report:getConfig — 走 daemonRequest(serve-api in-process wire.resolve_agent，~ms)；
+//     serve-api 不可达兜底直读 SQLite（TS 复刻 _resolve_agent：schedule 解析 / bool 还原 /
+//     model 默认 / prompt is_default flag）。避开 CLI fork 的 ~秒级 Python 冷启。
+//   • report:setConfig / runNow / delete / createAgent / deleteAgent — 经
+//     `mailagent report` CLI fork（写需 ReportStore 白名单 + auth；runNow 跑 LLM）。
+//     低频，fork 开销可接受。
 // 表 schema 归 Python SyncStore._init_database (DB v19) owns。
 //
 // 列名严格对齐 src/reports/store.py 的 report / report_agent 表。
@@ -18,6 +20,7 @@ import { daemonRequest } from '../daemon_api'
 import { envelopeFromCli, type WriteEnvelope } from '../lib/envelope'
 import type {
   ReportAgentConfig,
+  ReportAgentCreateInput,
   ReportConfigPatch,
   ReportCounts,
   ReportDetail,
@@ -228,6 +231,41 @@ export function registerReportHandlers(): void {
       }
       return envelopeFromCli<{ deleted: string }>(
         callCli(['report', 'delete', reportId], { needsAuth: true })
+      )
+    }
+  )
+
+  // ── report:createAgent — 新建一行 agent 配置（写, needs auth；type='report'|'search'）。
+  ipcMain.handle(
+    'report:createAgent',
+    async (_evt, input: unknown): Promise<WriteEnvelope<ReportAgentConfig>> => {
+      const raw = (input ?? {}) as ReportAgentCreateInput
+      const id = typeof raw.id === 'string' ? raw.id : ''
+      if (!id) {
+        return { ok: false, code: 'E_INVALID_ARG', message: 'id required' }
+      }
+      const args = ['report', 'agent-create', '--id', id]
+      // 默认 search（本 IPC 主用例=Custom Agent 搜索；store/serve-api 默认 report，
+      // 刻意按传输端区分，勿对齐）。
+      args.push('--type', raw.type ?? 'search')
+      if (typeof raw.title === 'string') args.push('--title', raw.title)
+      args.push(raw.enabled === false ? '--no-enabled' : '--enabled')
+      if (raw.model != null) args.push('--model', raw.model)
+      if (raw.prompt != null) args.push('--prompt', raw.prompt)
+      if (Array.isArray(raw.tools)) args.push('--tools-json', JSON.stringify(raw.tools))
+      return envelopeFromCli<ReportAgentConfig>(callCli(args, { needsAuth: true }))
+    }
+  )
+
+  // ── report:deleteAgent — 删一行 agent 配置（写, needs auth）。
+  ipcMain.handle(
+    'report:deleteAgent',
+    async (_evt, agentId: unknown): Promise<WriteEnvelope<{ deleted: string }>> => {
+      if (typeof agentId !== 'string' || !agentId) {
+        return { ok: false, code: 'E_INVALID_ARG', message: 'agentId required' }
+      }
+      return envelopeFromCli<{ deleted: string }>(
+        callCli(['report', 'agent-delete', '--agent', agentId], { needsAuth: true })
       )
     }
   )

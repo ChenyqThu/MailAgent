@@ -2063,6 +2063,22 @@ export interface ReportConfigPatch {
   trigger_mode?: 'rolling_24h' | 'natural_day'
   timezone?: string
   body_full_priorities?: string[]
+  /** agent 可用工具白名单（wire.config_patch_to_db 写 tools_json 列）。 */
+  tools?: string[]
+}
+
+/** report:createAgent — 新建一行 agent（type 多态）。 */
+export interface ReportAgentCreateInput {
+  /** 新 agent id（必填，冲突 → E_INVALID_ARG）。 */
+  id: string
+  /** 默认 'search'（agentic 搜索）。 */
+  type?: 'search' | 'report'
+  title?: string
+  enabled?: boolean
+  model?: string | null
+  prompt?: string | null
+  /** 工具白名单（落库 tools_json）。 */
+  tools?: string[]
 }
 
 export interface ReportRunResult {
@@ -2091,6 +2107,10 @@ export interface ReportApi {
   runNow(agentId: string, opts?: { cadence?: ReportCadence }): Promise<ReportRunResult>
   /** 删除一份报告（写, needs auth）。 */
   delete(reportId: string): Promise<void>
+  /** 新建一行 agent 配置（写, needs auth；type='search'|'report'）。返回解析后的配置。 */
+  createAgent(input: ReportAgentCreateInput): Promise<ReportAgentConfig>
+  /** 删除一行 agent 配置（写, needs auth）。 */
+  deleteAgent(agentId: string): Promise<{ deleted: string }>
 }
 
 export interface MailApi {

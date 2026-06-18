@@ -37,6 +37,7 @@ import type {
   NotionAgentListItem,
   ReportApi,
   ReportAgentConfig,
+  ReportAgentCreateInput,
   ReportCadence,
   ReportConfigPatch,
   ReportDetail,
@@ -807,6 +808,16 @@ class ElectronReportApi implements ReportApi {
   async delete(reportId: string): Promise<void> {
     const env = (await invoker()('report:delete', reportId)) as WriteEnvelope<{ deleted: string }>
     unwrap(env)
+  }
+  async createAgent(input: ReportAgentCreateInput): Promise<ReportAgentConfig> {
+    const env = (await invoker()('report:createAgent', input)) as WriteEnvelope<ReportAgentConfig>
+    return unwrap(env)
+  }
+  async deleteAgent(agentId: string): Promise<{ deleted: string }> {
+    const env = (await invoker()('report:deleteAgent', agentId)) as WriteEnvelope<{
+      deleted: string
+    }>
+    return unwrap(env)
   }
 }
 

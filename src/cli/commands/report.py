@@ -6,6 +6,8 @@ Subcommands:
 - ``get <report_id>`` — 单份报告详情（读，含 blocks + counts 解析）。
 - ``config-get [--agent <id>]`` — agent 配置（读，prompt 缺省回填默认 + schedule 解析）。
 - ``config-set --agent <id> --patch <json>`` — 部分更新 agent 配置（写, needs auth）。
+- ``agent-create --id <id> [...]`` — 新建一行 agent（写, needs auth；type='report'|'search'）。
+- ``agent-delete --agent <id>`` — 删一行 agent 配置（写, needs auth）。
 
 业务逻辑全在 ``src/reports/``（store/worker/prompts）；本模块只做
 (parse args → call → emit)。读形状投影（resolve_agent / parse_counts / report 投影）
@@ -231,3 +233,80 @@ def report_config_set(
         raise emit_cli_error(cli, CliNotFoundError(f"report_agent {agent_id!r} not found"))
     updated = store.update_agent(agent_id, db_patch)
     emit(cli, wire.resolve_agent(updated) if updated else {})
+
+
+# ============================================================
+# agent-create — 新建一行 agent（写）
+# ============================================================
+@app.command("agent-create")
+def report_agent_create(
+    ctx: typer.Context,
+    agent_id: str = typer.Option(..., "--id", help="新 agent 的 id（必填，冲突报错）"),
+    agent_type: str = typer.Option("search", "--type", help="report | search"),
+    title: Optional[str] = typer.Option(None, "--title"),
+    enabled: bool = typer.Option(True, "--enabled/--no-enabled", help="是否启用"),
+    model: Optional[str] = typer.Option(None, "--model"),
+    prompt: Optional[str] = typer.Option(None, "--prompt"),
+    tools_json: Optional[str] = typer.Option(
+        None, "--tools-json", help="工具白名单（JSON 数组串，如 '[\"email_search_fulltext\"]'）"
+    ),
+    output: Optional[str] = typer.Option(None, "-o", "--output"),
+) -> None:
+    """新建一行 agent（type 多态）。id 冲突 → E_INVALID_ARG；成功 → resolve_agent 投影。"""
+    cli: "CliContext" = ctx.obj
+    _apply_local_output(ctx, output)
+    try:
+        cli.require_auth()
+    except CliError as e:
+        raise emit_cli_error(cli, e)
+
+    if agent_type not in ("report", "search"):
+        raise emit_cli_error(
+            cli, CliInvalidArgError("--type must be report | search")
+        )
+
+    # --tools-json 必须是合法 JSON 数组串（直接落库 tools_json 列）。
+    if tools_json is not None:
+        try:
+            parsed = json.loads(tools_json)
+            if not isinstance(parsed, list):
+                raise ValueError("must be a JSON array")
+        except (json.JSONDecodeError, ValueError) as e:
+            raise emit_cli_error(cli, CliInvalidArgError(f"--tools-json invalid JSON: {e}"))
+
+    store = _store(cli)
+    try:
+        created = store.create_agent(
+            agent_id,
+            type=agent_type,
+            title=title,
+            enabled=enabled,
+            model=model,
+            prompt=prompt,
+            tools_json=tools_json,
+        )
+    except ValueError as e:
+        raise emit_cli_error(cli, CliInvalidArgError(str(e)))
+    emit(cli, wire.resolve_agent(created))
+
+
+# ============================================================
+# agent-delete — 删一行 agent 配置（写）
+# ============================================================
+@app.command("agent-delete")
+def report_agent_delete(
+    ctx: typer.Context,
+    agent_id: str = typer.Option(..., "--agent", help="要删的 report_agent.id"),
+    output: Optional[str] = typer.Option(None, "-o", "--output"),
+) -> None:
+    """删一行 agent 配置。不存在 → E_NOT_FOUND；成功 → {deleted}。"""
+    cli: "CliContext" = ctx.obj
+    _apply_local_output(ctx, output)
+    try:
+        cli.require_auth()
+    except CliError as e:
+        raise emit_cli_error(cli, e)
+    store = _store(cli)
+    if not store.delete_agent(agent_id):
+        raise emit_cli_error(cli, CliNotFoundError(f"report_agent {agent_id!r} not found"))
+    emit(cli, {"deleted": agent_id})
