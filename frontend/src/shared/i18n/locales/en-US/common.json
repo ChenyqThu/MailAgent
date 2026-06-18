@@ -92,7 +92,8 @@
       "crafting": "Crafting…",
       "copy": "Copy",
       "copied": "Copied",
-      "editedTag": "edited"
+      "editedTag": "edited",
+      "saveFail": "Couldn't save to server — edit kept locally"
     }
   },
   "toolbar": {
@@ -158,7 +159,8 @@
       "title": "Send to {n} recipient(s)?",
       "body": "This email will be sent for real via SMTP and cannot be recalled.",
       "confirm": "Confirm send",
-      "attachments": "Includes {n} attachment(s)"
+      "attachments": "Includes {n} attachment(s)",
+      "moreRecipients": "+{n} more"
     },
     "discardConfirm": {
       "title": "Discard this email?",
@@ -515,6 +517,7 @@
     "history": "History",
     "historyHint": "Toggle session history · ⇧⌥H",
     "closePanel": "Hide panel · ⌘L",
+    "resizePanel": "Drag to resize panel",
     "popout": {
       "button": "Open in window · ⇧⌥W",
       "close": "Close window"
@@ -636,7 +639,7 @@
       "regenerate": "Regenerate",
       "openInWindow": "Open in window",
       "toast": {
-        "sendOk": "Draft opened in Mail.app",
+        "sendOk": "Draft created",
         "sendFailGeneric": "Draft creation failed",
         "sendFailAuto": "macOS automation denied — open Settings → Privacy → Automation",
         "sendFailMail": "Mail.app refused — make sure Mail is open",
@@ -1173,6 +1176,65 @@
         "sentName": {
           "label": "Sent name",
           "helper": "AppleScript label, default 已发送邮件"
+        }
+      },
+      "source": {
+        "title": "Mail source",
+        "helper": "Choose how MailAgent reads and writes your mail. Switching sources needs a backend restart; the connection fields below belong to the selected source.",
+        "ariaLabel": "Mail source",
+        "applescript": "Mail.app",
+        "davmail": "DavMail",
+        "saveFail": "Failed to switch mail source",
+        "pickLabel": "Mail source:"
+      },
+      "davmail": {
+        "userEmail": {
+          "label": "IMAP/SMTP login",
+          "helper": "DavMail uses this as the IMAP/SMTP login (= USER_EMAIL)"
+        },
+        "pocMode": {
+          "label": "Use PoC default key",
+          "helper": "On uses the built-in shared key (DAVMAIL_POC_MODE=true); off requires a cipher key."
+        },
+        "cipherKey": {
+          "label": "Cipher key",
+          "helper": "DavMail OAuth cipher key, written to .env (not the system keychain)."
+        },
+        "advanced": {
+          "title": "Advanced connection",
+          "helper": "davmail bridge host / ports; defaults 127.0.0.1 / 1143 / 1025 / 1080."
+        },
+        "host": {
+          "label": "DavMail host",
+          "helper": "davmail bridge listen address, default 127.0.0.1."
+        },
+        "imapPort": {
+          "label": "IMAP port",
+          "helper": "Default 1143."
+        },
+        "smtpPort": {
+          "label": "SMTP port",
+          "helper": "Default 1025."
+        },
+        "caldavPort": {
+          "label": "CalDAV port",
+          "helper": "Used for calendar sync, default 1080."
+        },
+        "draftsFolder": {
+          "label": "Drafts folder name",
+          "helper": "Leave empty to auto-detect; only set if the server Drafts name is non-standard."
+        },
+        "archiveSent": {
+          "label": "Archive sent to Sent",
+          "helper": "When on, mail sent via SMTP is written to the Sent folder."
+        },
+        "sentFolder": {
+          "label": "Sent folder name",
+          "helper": "Leave empty to auto-detect; only set when \"Archive sent\" is on and the server name is non-standard."
+        },
+        "draftsSync": {
+          "label": "Drafts sync",
+          "helper": "Sync the Exchange Drafts folder into your local list (local only — no Notion / AI / Feishu)."
         }
       },
       "signature": {
@@ -1887,7 +1949,7 @@
       "title": "Version v{version} is ready",
       "restartCta": "Restart & update",
       "dismiss": "Later",
-      "availableTitle": "Version v{version} is available",
+      "availableTitle": "New version v{version} released",
       "openCta": "Download"
     }
   },

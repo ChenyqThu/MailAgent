@@ -92,7 +92,8 @@
       "crafting": "创建中…",
       "copy": "复制",
       "copied": "已复制",
-      "editedTag": "已编辑"
+      "editedTag": "已编辑",
+      "saveFail": "保存到服务器失败，本次编辑仅本地生效"
     }
   },
   "toolbar": {
@@ -158,7 +159,8 @@
       "title": "确认发送给 {n} 位收件人？",
       "body": "这封邮件将通过 SMTP 真实发出，发送后无法撤回。",
       "confirm": "确认发送",
-      "attachments": "含 {n} 个附件"
+      "attachments": "含 {n} 个附件",
+      "moreRecipients": "+{n} 位"
     },
     "discardConfirm": {
       "title": "丢弃这封邮件？",
@@ -515,6 +517,7 @@
     "history": "会话历史",
     "historyHint": "切换历史会话 · ⇧⌥H",
     "closePanel": "收起面板 · ⌘L",
+    "resizePanel": "拖动调整面板宽度",
     "popout": {
       "button": "在独立窗口打开 · ⇧⌥W",
       "close": "关闭窗口"
@@ -636,7 +639,7 @@
       "regenerate": "重生成",
       "openInWindow": "在新窗口打开",
       "toast": {
-        "sendOk": "草稿已在 Mail.app 中打开",
+        "sendOk": "草稿已创建",
         "sendFailGeneric": "草稿创建失败",
         "sendFailAuto": "macOS 自动化权限被拒 — 请到 设置 → 隐私 → 自动化 开启",
         "sendFailMail": "Mail.app 拒绝调用 — 请确认 Mail 已打开",
@@ -1173,6 +1176,65 @@
         "sentName": {
           "label": "发件箱名",
           "helper": "AppleScript 用,默认 已发送邮件"
+        }
+      },
+      "source": {
+        "title": "邮件源",
+        "helper": "选择 MailAgent 如何读写你的邮件。切换源需重启后端生效，连接字段也都属于所选源。",
+        "ariaLabel": "邮件源",
+        "applescript": "Mail.app",
+        "davmail": "DavMail",
+        "saveFail": "切换邮件源失败",
+        "pickLabel": "邮件源选择:"
+      },
+      "davmail": {
+        "userEmail": {
+          "label": "IMAP/SMTP 登录名",
+          "helper": "DavMail 用它作 IMAP/SMTP 登录名（= USER_EMAIL）"
+        },
+        "pocMode": {
+          "label": "使用 PoC 默认密钥",
+          "helper": "开启则用内置共享密钥（DAVMAIL_POC_MODE=true）；关闭需手填 cipher key。"
+        },
+        "cipherKey": {
+          "label": "Cipher Key",
+          "helper": "DavMail OAuth cipher 密钥，写入 .env（不进系统钥匙串）。"
+        },
+        "advanced": {
+          "title": "高级连接",
+          "helper": "davmail 桥 host / 端口；默认 127.0.0.1 / 1143 / 1025 / 1080。"
+        },
+        "host": {
+          "label": "DavMail Host",
+          "helper": "davmail 桥监听地址，默认 127.0.0.1。"
+        },
+        "imapPort": {
+          "label": "IMAP 端口",
+          "helper": "默认 1143。"
+        },
+        "smtpPort": {
+          "label": "SMTP 端口",
+          "helper": "默认 1025。"
+        },
+        "caldavPort": {
+          "label": "CalDAV 端口",
+          "helper": "日历同步用，默认 1080。"
+        },
+        "draftsFolder": {
+          "label": "草稿箱文件夹名",
+          "helper": "留空自动探测；仅服务器草稿箱名非标准时才需手填。"
+        },
+        "archiveSent": {
+          "label": "发送后归档到已发送",
+          "helper": "开启后通过 SMTP 发出的邮件会写入已发送文件夹。"
+        },
+        "sentFolder": {
+          "label": "已发送文件夹名",
+          "helper": "留空自动探测；仅在「发送后归档」开启且服务器名非标准时才需手填。"
+        },
+        "draftsSync": {
+          "label": "草稿箱同步",
+          "helper": "把 Exchange 草稿箱同步进本地列表（仅本地，不进 Notion / AI / 飞书）。"
         }
       },
       "signature": {
@@ -1887,7 +1949,7 @@
       "title": "新版本 v{version} 已就绪",
       "restartCta": "重启并更新",
       "dismiss": "稍后",
-      "availableTitle": "发现新版本 v{version}",
+      "availableTitle": "新版本 v{version} 已发布",
       "openCta": "前往下载"
     }
   },
