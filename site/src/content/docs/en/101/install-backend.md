@@ -124,37 +124,17 @@ The full set of optional configuration (Feishu, Redis, AI gateway, individual fe
 MailAgent switches between two mailbox-access paths with a single line of config:
 
 ```bash
-MAILAGENT_BACKEND=applescript   # code default; or change to davmail
+MAILAGENT_BACKEND=applescript   # code default; corporate Exchange users should change to davmail
 ```
 
 | Backend | How it connects to the mailbox | Who it's for | Speed |
 |---|---|---|---|
-| **applescript** | Drives the built-in macOS Mail.app directly | Already have your mailbox set up in Mail.app and want the least hassle | ~1 second per email |
-| **davmail** | Bridges corporate Exchange via DavMail (IMAP / SMTP / CalDAV) | Corporate Exchange / Microsoft 365 users who want it faster and more stable | ~236 ms per email |
+| **davmail** (recommended) | Bridges corporate Exchange via DavMail (IMAP / SMTP / CalDAV) | Corporate Exchange / Microsoft 365 users who want it faster and more stable, with rich-text replies + multi-folder + direct calendar reads | ~236 ms per email |
+| **applescript** | Drives the built-in macOS Mail.app directly | A zero-extra-component, ready-to-go fallback | ~1 second per email |
 
-**Getting it working with AppleScript first** is the simplest: as long as your mailbox is already signed in within Mail.app, no extra components are needed. Once you're comfortable, consider switching to DavMail.
+**Corporate Exchange / Microsoft 365 users should use DavMail**—faster and more stable, and it genuinely unlocks rich-text Reply All, multi-folder sync, and direct CalDAV calendar reads. The full steps for installation, authentication (including impersonating the Outlook client_id), confirming it runs, and daemonizing it are on the dedicated page **[Connect Your Corporate Mailbox via DavMail](/en/101/davmail-setup/)**.
 
-### If you want to use DavMail
-
-DavMail is a standalone Java bridge program that translates Exchange into standard email protocols. Beyond the line above, you also need to add:
-
-```bash
-MAILAGENT_BACKEND=davmail
-DAVMAIL_USER=your@company.com          # usually the same as USER_EMAIL
-DAVMAIL_CIPHER_KEY=xxx                 # must match the cipher key in your local davmail.properties
-# DAVMAIL_IMAP_PORT=1143               # must match davmail.properties
-# DAVMAIL_SMTP_PORT=1025
-# DAVMAIL_ROOT=/absolute/path/MailAgent/davmail-poc   # absolute path required for the packaged App
-```
-
-The DavMail process is typically kept resident with PM2 under the name `davmail-poc`. `DAVMAIL_CIPHER_KEY` must match the cipher key in your local `davmail.properties` exactly, or the credentials cannot be decrypted.
-
-:::danger[Two hard constraints of DavMail you must know]
-1. **EWS shutdown**: DavMail 6.7 currently relies on Microsoft's EWS protocol, which will be **shut down on 2026-10-01**. By then you will need to switch to DavMail's Graph mode or apply for the Graph API. See the [migration roadmap §5.1](https://github.com/ChenyqThu/MailAgent/blob/main/docs/reference/architecture/roadmap-post-cutover.md).
-2. **Compliance approval**: DavMail's current connection method, which impersonates a client, is evaluation-grade (a PoC); before going to production it needs to go through your company's IT approval.
-
-The AppleScript path is unaffected by these two and is the always-available fallback.
-:::
+Just want the fastest start, with your mailbox already signed in within Mail.app? Keep the `applescript` default—no extra components needed, and it's always available as a fallback.
 
 ## Step 5: Grant macOS permissions and start the service
 

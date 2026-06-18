@@ -96,6 +96,7 @@ export default defineConfig({
             items: [
               { slug: '101/overview' },
               { slug: '101/install-backend' },
+              { slug: '101/davmail-setup' },
               { slug: '101/initial-sync' },
               { slug: '101/install-app' },
               { slug: '101/onboarding' },

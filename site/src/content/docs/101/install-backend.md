@@ -124,37 +124,17 @@ mailagent debug mail-structure
 MailAgent 用一行配置在两条邮箱接入路径间切换：
 
 ```bash
-MAILAGENT_BACKEND=applescript   # 代码默认；或改成 davmail
+MAILAGENT_BACKEND=applescript   # 代码默认；企业 Exchange 用户建议改成 davmail
 ```
 
 | 后端 | 怎么连邮箱 | 适合谁 | 速度 |
 |---|---|---|---|
-| **applescript** | 直接驱动 macOS 自带 Mail.app | 已经在 Mail.app 里配好邮箱、想最省事 | 单封约 1 秒 |
-| **davmail** | 通过 DavMail 桥接企业 Exchange（IMAP / SMTP / CalDAV） | 企业 Exchange / Microsoft 365 用户，要更快更稳 | 单封约 236 毫秒 |
+| **davmail**（推荐） | 通过 DavMail 桥接企业 Exchange（IMAP / SMTP / CalDAV） | 企业 Exchange / Microsoft 365 用户，要更快更稳、富文本回复 + 多文件夹 + 日历直读 | 单封约 236 毫秒 |
+| **applescript** | 直接驱动 macOS 自带 Mail.app | 想零额外组件、随装随用的兜底 | 单封约 1 秒 |
 
-**先用 AppleScript 跑通**最简单：只要 Mail.app 里已经登录了邮箱，无需额外组件。等熟悉之后再考虑切 DavMail。
+**企业 Exchange / Microsoft 365 用户推荐用 DavMail**——更快更稳，且把富文本回复全部、多文件夹同步、CalDAV 日历直读这些能力真正打通。安装、认证（含伪装 Outlook client_id）、确认运行与守护进程的完整步骤见专页 **[用 DavMail 接入企业邮箱](/101/davmail-setup/)**。
 
-### 如果你要用 DavMail
-
-DavMail 是一个独立的 Java 桥接程序，把 Exchange 翻译成标准邮件协议。除了上面那行，还要补：
-
-```bash
-MAILAGENT_BACKEND=davmail
-DAVMAIL_USER=your@company.com          # 通常同 USER_EMAIL
-DAVMAIL_CIPHER_KEY=xxx                 # 与本机 davmail.properties 的 cipher key 一致
-# DAVMAIL_IMAP_PORT=1143               # 与 davmail.properties 一致
-# DAVMAIL_SMTP_PORT=1025
-# DAVMAIL_ROOT=/绝对路径/MailAgent/davmail-poc   # 打包 App 必填绝对路径
-```
-
-DavMail 进程一般用 PM2 以 `davmail-poc` 之名常驻。`DAVMAIL_CIPHER_KEY` 必须和本机 `davmail.properties` 里的 cipher key 完全一致，否则解不开凭据。
-
-:::danger[DavMail 的两条硬约束，务必知道]
-1. **EWS 关停**：DavMail 6.7 当前依赖微软的 EWS 协议，该协议将于 **2026-10-01 关停**。届时需要切到 DavMail 的 Graph 模式或申请 Graph API。详见[迁移路线图 §5.1](https://github.com/ChenyqThu/MailAgent/blob/main/docs/reference/architecture/roadmap-post-cutover.md)。
-2. **合规审批**：DavMail 当前以伪装客户端方式接入是评估性质（PoC），上生产前需走公司 IT 审批。
-
-AppleScript 路径不受这两条影响，是始终可用的兜底。
-:::
+只想最快跑起来、邮箱又已在 Mail.app 里登录好？保持 `applescript` 默认即可，无需任何额外组件，且随时可作兜底。
 
 ## 第 5 步：授予 macOS 权限，并启动服务
 
