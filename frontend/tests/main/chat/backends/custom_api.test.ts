@@ -32,6 +32,7 @@ function cfg(opts?: Partial<ChatModelConfig>): ChatModelConfig {
   return {
     defaultModel: 'claude-sonnet-4-6',
     kosConsumerEnabled: false,
+    kosConfigured: false,
     kosL1HotBlockEnabled: false,
     userContext: null,
     ...opts
@@ -142,11 +143,12 @@ describe('buildSystemBlocks — PR-2f L1 hot block', () => {
     expect(blocks[0]?.text).toContain('... (truncated)')
   })
 
-  test('kosConsumerEnabled gates the KOS guidance block in the stable prefix', () => {
-    // 3b-1：buildKosGuidanceBlock 由 cfg.kosConsumerEnabled 控（取代旧 isKosConsumerEnabled()）。
-    const on = buildSystemBlocks(null, cfg({ kosConsumerEnabled: true }), noDigest)
+  test('kosConfigured gates the KOS guidance block in the stable prefix', () => {
+    // v0.8.4 gate 收紧：buildKosGuidanceBlock 由 cfg.kosConfigured（启用 AND 凭据对接）控，
+    // 取代旧的 kosConsumerEnabled gate（见 platform.ts ChatModelConfig 注释，custom_api.ts:288）。
+    const on = buildSystemBlocks(null, cfg({ kosConfigured: true }), noDigest)
     expect(on[0]?.text).toContain('KOS knowledge brain')
-    const off = buildSystemBlocks(null, cfg({ kosConsumerEnabled: false }), noDigest)
+    const off = buildSystemBlocks(null, cfg({ kosConfigured: false }), noDigest)
     expect(off[0]?.text).not.toContain('KOS knowledge brain')
   })
 })
@@ -808,7 +810,7 @@ describe('buildStableSystemPrompt — userContext injection (第二波 Bug B)', 
   test('userContext + KOS guidance coexist in the stable prefix', () => {
     const text = buildStableSystemPrompt(
       null,
-      cfg({ userContext: CONTEXT, kosConsumerEnabled: true }),
+      cfg({ userContext: CONTEXT, kosConfigured: true }),
       noDigest
     )
     expect(text).toContain('# Reference context')

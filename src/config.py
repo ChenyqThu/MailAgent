@@ -461,16 +461,21 @@ class Config(BaseSettings):
             "Notion API (v4 R-02 灰度期开关; historic backfill 完成后可关)。"
         ),
     )
-    # T7: CJK 中文分词 (并行 trigram 表) 灰度开关
+    # T7: CJK 中文分词 (并行 trigram 表)
+    # Phase A G-A6 (2026-06): 默认翻 True —— 中文为主用户的默认痛点 (裸搜「产品」命中不了
+    # 「本周产品评审」内部) 是 review 头号缺口 (NS-1/PLANNED-B)。FTS5 trigram 内置零依赖、
+    # 桌面规模成本可控 (R5 行业裁定支持默认 ON)。需 DB v24 迁移已建表 (本仓 DB v26 已含)。
+    # 回滚: 置 False 即逐字节回到 trigram 引入前的 unicode61 fast-path。
     search_trigram_enabled: bool = Field(
-        default=False, env="SEARCH_TRIGRAM_ENABLED",
+        default=True, env="SEARCH_TRIGRAM_ENABLED",
         description=(
             "是否启用 CJK 中文子串搜索 (DB v24 并行 trigram 表 email_body_fts_trigram)。"
-            "默认 False —— 关闭时搜索行为与现状逐字节一致 (走 email_body_fts unicode61 + "
-            "smart_query_transform 字符级 AND fallback)。开启后裸全文 query 的中文 term 走 "
-            "trigram 路由: >=3 字 MATCH / =2 字 trigram 表 LIKE 兜底 / 1 字拦截 + warning; "
-            "中英混合按 term 拆 (英文 unicode61 候选 ∩ 中文 trigram 候选)。英文/列级 FTS/附件融合"
-            "不受影响。需先跑 DB v24 迁移建表 (CREATE ... IF NOT EXISTS + 幂等回填)。"
+            "Phase A 起默认 True —— 中文子串召回是中文为主用户的默认期望。置 False 时搜索行为"
+            "与 trigram 引入前逐字节一致 (走 email_body_fts unicode61 + smart_query_transform "
+            "字符级 AND fallback)。开启后裸全文 query 的中文 term 走 trigram 路由: >=3 字 MATCH "
+            "/ =2 字 trigram 表 LIKE 兜底 / 1 字拦截 + warning; 中英混合按 term 拆 (英文 "
+            "unicode61 候选 ∩ 中文 trigram 候选)。英文/列级 FTS/附件融合不受影响。需先跑 DB "
+            "v24 迁移建表 (CREATE ... IF NOT EXISTS + 幂等回填)。"
         ),
     )
 

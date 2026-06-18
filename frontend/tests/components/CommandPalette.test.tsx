@@ -20,7 +20,7 @@
 // + a RouterProvider stub (useNavigate is the only router API we touch).
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 import { useCommandPalette } from '@shared/state/command-palette'
@@ -703,5 +703,185 @@ describe('CommandPalette — agentic search (F3)', () => {
     // User edits the box → AI Search group is torn down (plain FTS takes over).
     fireEvent.change(screen.getByRole('combobox'), { target: { value: '新人培训 x' } })
     await waitFor(() => expect(screen.queryByText('AI Search')).toBeNull())
+  })
+
+  // ── G-A7 ② — AI empty state (ok:true, 0 hits) ────────────────────────
+  test('ok:true with 0 hits renders an explicit AI empty tile (not silently gone)', async () => {
+    mockRunSearchAgent.mockResolvedValueOnce({ ok: true, hits: [], summary: null })
+    openPalette()
+    renderPalette()
+    await waitFor(() => screen.getByRole('combobox'))
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: '不存在的主题' } })
+    const row = await waitFor(() => screen.getByText(/AI 理解/))
+    fireEvent.click(row)
+    // AI Search group stays mounted + shows the honest "found nothing" tile.
+    await waitFor(() => screen.getByText('AI Search'))
+    await waitFor(() => screen.getByText('AI 没找到相关邮件'))
+    // No error banner — agent honestly returned ok with 0 hits.
+    expect(screen.queryByText(/AI 检索失败/)).toBeNull()
+  })
+
+  test('ok:true with 0 hits but a summary shows the summary alongside the empty tile', async () => {
+    mockRunSearchAgent.mockResolvedValueOnce({
+      ok: true,
+      hits: [],
+      summary: '没有找到符合条件的邮件，建议放宽时间范围'
+    })
+    openPalette()
+    renderPalette()
+    await waitFor(() => screen.getByRole('combobox'))
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: '上季度的发票' } })
+    const row = await waitFor(() => screen.getByText(/AI 理解/))
+    fireEvent.click(row)
+    await waitFor(() => screen.getByText(/AI：没有找到符合条件的邮件/))
+    expect(screen.getByText('AI 没找到相关邮件')).toBeTruthy()
+  })
+
+  // ── G-A7 ③ — onPhase drives the progress phrase group ────────────────
+  test('runSearchAgent is called with an onPhase callback; phase flips the phrase group', async () => {
+    let resolveRun!: (v: unknown) => void
+    let phaseCb: ((p: 'searching' | 'summarizing') => void) | undefined
+    mockRunSearchAgent.mockImplementationOnce((input: { onPhase?: typeof phaseCb }) => {
+      phaseCb = input.onPhase
+      return new Promise((res) => {
+        resolveRun = res
+      })
+    })
+    openPalette()
+    renderPalette()
+    await waitFor(() => screen.getByRole('combobox'))
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: '新人培训' } })
+    const row = await waitFor(() => screen.getByText(/AI 理解/))
+    fireEvent.click(row)
+    // onPhase was threaded through.
+    expect(typeof phaseCb).toBe('function')
+    // Default phase 'searching' → first searchingPhrases entry (zh).
+    await waitFor(() => screen.getByText('正在理解你的问题…'))
+    // Agent reports it moved to summarizing → phrase group switches.
+    await act(async () => {
+      phaseCb!('summarizing')
+    })
+    await waitFor(() => screen.getByText('筛选最相关的…'))
+    resolveRun({ ok: true, hits: AI_HITS, summary: '找到 1 封' })
+    await waitFor(() => expect(screen.queryByText('筛选最相关的…')).toBeNull())
+  })
+
+  // ── G-A7 ④ — ⌘Enter triggers AI; plain Enter never does ──────────────
+  test('⌘Enter triggers AI search for a non-empty query', async () => {
+    mockRunSearchAgent.mockResolvedValueOnce({ ok: true, hits: AI_HITS, summary: '找到 1 封' })
+    openPalette()
+    renderPalette()
+    const dialog = await waitFor(() => screen.getByRole('dialog'))
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: '新人培训' } })
+    await waitFor(() => screen.getByText(/AI 理解/))
+    fireEvent.keyDown(dialog, { key: 'Enter', metaKey: true })
+    await waitFor(() =>
+      expect(mockRunSearchAgent).toHaveBeenCalledWith(
+        expect.objectContaining({ query: '新人培训' })
+      )
+    )
+  })
+
+  test('plain Enter on the AI entry row never starts AI — opens the best FTS hit instead', async () => {
+    mockSearch.mockResolvedValue({ items: SAMPLE_HITS, total_indexed: 1247 })
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    openPalette()
+    renderPalette()
+    const dialog = await waitFor(() => screen.getByRole('dialog'))
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'redis' } })
+    await vi.advanceTimersByTimeAsync(300)
+    // AI entry row is highlighted (jump row 0). Email FTS hits are also present.
+    await waitFor(() => screen.getByText(/AI 理解/))
+    await waitFor(() => screen.getByText(/timeout debug session/))
+    fireEvent.keyDown(dialog, { key: 'Enter' })
+    // AI is NOT started; instead the best (first) FTS hit opens.
+    expect(mockRunSearchAgent).not.toHaveBeenCalled()
+    expect(mockSetActive).toHaveBeenCalledWith(101, { navTarget: true })
+    expect(useCommandPalette.getState().open).toBe(false)
+  })
+
+  test('plain Enter on the AI entry row with no FTS hits is a no-op (no AI, stays open)', async () => {
+    mockSearch.mockResolvedValue({ items: [], total_indexed: 1247 })
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    openPalette()
+    renderPalette()
+    const dialog = await waitFor(() => screen.getByRole('dialog'))
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'zzznothing' } })
+    await vi.advanceTimersByTimeAsync(300)
+    await waitFor(() => screen.getByText(/AI 理解/))
+    fireEvent.keyDown(dialog, { key: 'Enter' })
+    expect(mockRunSearchAgent).not.toHaveBeenCalled()
+    expect(mockSetActive).not.toHaveBeenCalled()
+    expect(useCommandPalette.getState().open).toBe(true)
+  })
+
+  // ── G-A7 ⑤ — AI/FTS de-dup ───────────────────────────────────────────
+  test('AI hits are not duplicated in the FTS Email group (same internal_id filtered)', async () => {
+    // FTS returns 301 (overlaps the AI hit) + 999 (unique). After AI hits land,
+    // the Email group must show only 999 — 301 lives in the AI group.
+    const overlap = {
+      internal_id: 301,
+      subject: '新人培训安排 fts copy',
+      sender: 'Echo <echo@example.com>',
+      date_received: '2026-06-15T09:00:00+08:00',
+      mailbox: '收件箱',
+      rank: -2.1,
+      snippet: 'fts <mark>新人培训</mark> body',
+      notion_page_id: null,
+      notion_url: null,
+      ai_priority: null,
+      lang: null
+    }
+    const unique = {
+      internal_id: 999,
+      subject: 'unique fts only row',
+      sender: 'Zed <zed@example.com>',
+      date_received: '2026-06-15T09:00:00+08:00',
+      mailbox: '收件箱',
+      rank: -1.0,
+      snippet: 'only <mark>新人培训</mark> here',
+      notion_page_id: null,
+      notion_url: null,
+      ai_priority: null,
+      lang: null
+    }
+    mockSearch.mockResolvedValue({ items: [overlap, unique], total_indexed: 1247 })
+    mockRunSearchAgent.mockResolvedValueOnce({ ok: true, hits: AI_HITS, summary: '找到 1 封' })
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    openPalette()
+    renderPalette()
+    await waitFor(() => screen.getByRole('combobox'))
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: '新人培训' } })
+    await vi.advanceTimersByTimeAsync(300)
+    const row = await waitFor(() => screen.getByText(/AI 理解/))
+    fireEvent.click(row)
+    await waitFor(() => screen.getByText('AI Search'))
+    // The unique FTS-only row stays.
+    await waitFor(() => screen.getByText(/unique fts only row/))
+    // The overlapping 301 subject (fts copy) appears exactly once (AI group only),
+    // never as the duplicate "fts copy" Email-group row.
+    expect(screen.queryByText(/新人培训安排 fts copy/)).toBeNull()
+  })
+
+  // ── G-A7 ⑥ — convert AI result back to plain search ──────────────────
+  test('"view in plain search" tears down the AI group and lets FTS take over', async () => {
+    mockSearch.mockResolvedValue({ items: SAMPLE_HITS, total_indexed: 1247 })
+    mockRunSearchAgent.mockResolvedValueOnce({ ok: true, hits: AI_HITS, summary: '找到 1 封' })
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    openPalette()
+    renderPalette()
+    await waitFor(() => screen.getByRole('combobox'))
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: '新人培训' } })
+    await vi.advanceTimersByTimeAsync(300)
+    const row = await waitFor(() => screen.getByText(/AI 理解/))
+    fireEvent.click(row)
+    await waitFor(() => screen.getByText('AI Search'))
+    // Click the "view in plain search" exit.
+    const exit = await waitFor(() => screen.getByText('在普通搜索中查看'))
+    fireEvent.click(exit)
+    // AI group gone; query stays in the box (FTS continues with it).
+    await waitFor(() => expect(screen.queryByText('AI Search')).toBeNull())
+    const input = screen.getByRole('combobox') as HTMLInputElement
+    expect(input.value).toBe('新人培训')
   })
 })

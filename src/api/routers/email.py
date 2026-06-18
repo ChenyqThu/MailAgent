@@ -389,10 +389,17 @@ async def search_emails(
 
     mode = "raw" if raw else "smart"
     total_indexed = _count_fts_indexed(repo)
-    # data = 前端 SearchResult 形状 (items + total_indexed + transformed_query? + mode)。
+    # Phase A G-A2: 本次命中数 (= len(items), ≤ limit) + 是否还有更多 (repo limit+1 探针)。
+    # total_matches 取代 total_indexed (语料总量) 作搜索 agent 的自我收敛信号。
+    total_matches = len(items)
+    has_more = search_result.has_more
+    # data = 前端 SearchResult 形状 (items + total_indexed + total_matches + has_more +
+    # transformed_query? + mode)。
     data: dict[str, Any] = {
         "items": items,
         "total_indexed": total_indexed,
+        "total_matches": total_matches,
+        "has_more": has_more,
         "mode": mode,
     }
     transformed_changed = (not raw) and transformed_query != q
@@ -408,6 +415,7 @@ async def search_emails(
         "limit": limit,
         "count": len(items),
         "total_indexed": total_indexed,
+        "has_more": has_more,
     }
     if transformed_changed:
         meta_extra["transformed_query"] = transformed_query

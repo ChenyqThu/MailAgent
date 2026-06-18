@@ -127,3 +127,65 @@ class TestAgentDelete:
             db_path=seeded_db,
         )
         assert result.exit_code == 4, result.output
+
+
+# ============================================================
+# report run — type 守卫
+# ============================================================
+class TestReportRun:
+    """report run 对 type='search' agent 拒绝，对 type='report' agent 正常（mock LLM）。"""
+
+    def _seed_search_agent(self, db_path, agent_id: str = "email_search_agent") -> None:
+        import sqlite3
+        import time
+
+        conn = sqlite3.connect(str(db_path))
+        conn.execute(
+            "INSERT OR REPLACE INTO report_agent "
+            "(id, type, enabled, title, schedule_json, prompt, model, kos_enrich, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            (agent_id, "search", 1, "Search Agent", "{}", None, None, 0, time.time()),
+        )
+        conn.commit()
+        conn.close()
+
+    def test_run_search_agent_rejected(
+        self, cli_runner, cli_env, seeded_db, _unauth_writes_on
+    ):
+        """type='search' agent 调 report run → exit 2 / E_INVALID_ARG。"""
+        self._seed_search_agent(seeded_db)
+        result = _invoke(
+            cli_runner, "run", "--agent", "email_search_agent", "-o", "json",
+            db_path=seeded_db,
+        )
+        assert result.exit_code == 2, result.output
+        body = _extract(result.output)
+        assert body["error"]["code"] == "E_INVALID_ARG"
+        assert "report-only" in body["error"]["message"]
+
+    def test_run_report_agent_passes_guard(
+        self, cli_runner, cli_env, seeded_db, _unauth_writes_on, monkeypatch
+    ):
+        """type='report' agent 不被守卫拦截（mock asyncio.run 不触发 LLM/config）。"""
+        from src.reports.store import ReportStore
+
+        rid = "daily_email_digest:daily:2026-06-04"
+
+        def _fake_asyncio_run(coro):  # noqa: ANN001
+            coro.close()  # 关闭协程避免 ResourceWarning
+            store = ReportStore(str(seeded_db))
+            store.create_report(
+                report_id=rid, agent_id="daily_email_digest", cadence="daily",
+                report_date="2026-06-04", window_start="x", window_end="y",
+            )
+            store.finish_report(rid, status="ready", headline="CLI guard OK")
+            return rid
+
+        monkeypatch.setattr("src.cli.commands.report.asyncio.run", _fake_asyncio_run)
+        result = _invoke(
+            cli_runner, "run", "--agent", "daily_email_digest", "-o", "json",
+            db_path=seeded_db,
+        )
+        assert result.exit_code == 0, result.output
+        data = _extract(result.output)["data"]
+        assert data["status"] == "ready"

@@ -72,9 +72,25 @@ import { showAIChatPanel } from '@shared/state/ai-chat-panel'
 import { closeCommandPalette, useCommandPalette } from '@shared/state/command-palette'
 import { toastError, toastSuccess } from '@shared/state/toast'
 import { extractTerms } from '@shared/lib/highlight_terms'
-import type { MailboxSummary, SearchHit, SearchResult } from '@shared/api/types'
+import type { MailboxSummary, SearchAgentPhase, SearchHit, SearchResult } from '@shared/api/types'
 import { EmailHitRow } from './EmailHitRow'
 import { PaletteThinkingPhrases } from './PaletteThinkingPhrases'
+
+// G-A7 ① — 远程 web build 上 runSearchAgent 必返 E_UNSUPPORTED（LLM key 在桌面）。
+// 用项目一致的 VITE_BUILD_TARGET 信号（见 factory.ts / StatusBar.tsx / EnvField.tsx）
+// gate 掉注定失败的 AI 入口行，web 不展示。
+//
+// 读取链复刻 vite 自身的 env 来源：build 时 vite 从 process.env 的 VITE_* 注入
+// import.meta.env，故生产取 import.meta.env（已注入），回退 process.env（vitest 下
+// import.meta.env 不可达，单测经 vi.stubEnv('VITE_BUILD_TARGET','web') 走此腿）。
+function resolveBuildTarget(): string | undefined {
+  const metaTarget = (import.meta as unknown as { env?: { VITE_BUILD_TARGET?: string } }).env
+    ?.VITE_BUILD_TARGET
+  if (metaTarget) return metaTarget
+  if (typeof process !== 'undefined') return process.env?.VITE_BUILD_TARGET
+  return undefined
+}
+const IS_WEB = resolveBuildTarget() === 'web'
 
 // ─── Tunables ──────────────────────────────────────────────────────────
 
@@ -224,6 +240,11 @@ export function CommandPalette(): React.ReactElement | null {
   const [aiHits, setAiHits] = useState<SearchHit[]>([])
   const [aiSummary, setAiSummary] = useState<string | null>(null)
   const [aiError, setAiError] = useState<string | null>(null)
+  // G-A7 ② — agent 诚实返回 0 命中（ok:true, hits=[]）时仍要渲染明确空态。aiCompleted
+  //   跟踪「AI 搜索已跑完一次」，区别于「未搜索」（false）与 abort/error（仍 false）。
+  // G-A7 ③ — aiPhase 反映 runSearchAgent onPhase 真实阶段：检索中 → 整理中。
+  const [aiCompleted, setAiCompleted] = useState(false)
+  const [aiPhase, setAiPhase] = useState<SearchAgentPhase>('searching')
   // 当前在途 search agent 的 AbortController：输入变化 / 再次触发 / 关闭面板 → abort。
   const aiAbortRef = useRef<AbortController | null>(null)
   // Adjust-on-prop-change pattern (react.dev): reset query + highlight when
@@ -241,6 +262,8 @@ export function CommandPalette(): React.ReactElement | null {
       setAiHits([])
       setAiSummary(null)
       setAiError(null)
+      setAiCompleted(false)
+      setAiPhase('searching')
     }
   }
 
@@ -399,18 +422,27 @@ export function CommandPalette(): React.ReactElement | null {
     setAiHits([])
     setAiSummary(null)
     setAiError(null)
+    setAiCompleted(false)
+    setAiPhase('searching')
     setHighlight(0)
     try {
       const res = await mailApi.chat.runSearchAgent({
         query: nl,
         mailbox: activeMailbox || undefined,
-        signal: ac.signal
+        signal: ac.signal,
+        // G-A7 ③ — 真实阶段驱动进行态 UI（检索中 → 整理中）。旧 run 被 abort 后
+        // 不再写 phase（避免 stale phase 覆盖新 run 的进行态）。
+        onPhase: (p) => {
+          if (!ac.signal.aborted) setAiPhase(p)
+        }
       })
       // 被关闭面板/输入变化 abort 掉的旧 run → 静默丢弃（不覆盖新状态）。
       if (ac.signal.aborted) return
       if (res.ok) {
         setAiHits(res.hits)
         setAiSummary(res.summary)
+        // G-A7 ② — 标记完成，让 0 命中也能渲染明确空态（区别于「未搜索」）。
+        setAiCompleted(true)
         return
       }
       // fallbackDsl → 填回输入框走普通搜索 + 轻提示（不弹错误 banner）。
@@ -434,11 +466,32 @@ export function CommandPalette(): React.ReactElement | null {
     }
   }, [query, aiSearching, mailApi, activeMailbox, formatAiError, t])
 
+  // G-A7 ⑥ — AI 结果 → 普通搜索出口：清掉 AI 态让纯 FTS 接管（query 保留在输入框，
+  //   EMAIL 组用同一 query 召回全部命中）。abort 在途（防边角 race）。ref 访问放
+  //   callback 体（事件触发时执行，非 render 路径）。
+  const switchToPlainSearch = useCallback((): void => {
+    if (aiAbortRef.current) {
+      aiAbortRef.current.abort()
+      aiAbortRef.current = null
+    }
+    setAiSearching(false)
+    setAiHits([])
+    setAiSummary(null)
+    setAiError(null)
+    setAiCompleted(false)
+    setAiPhase('searching')
+    setHighlight(0)
+    inputRef.current?.focus()
+  }, [])
+
   interface JumpRow {
     id: string
     icon: React.ReactNode
     label: React.ReactNode
     aside?: React.ReactNode
+    // G-A7 ④ — AI 检索入口行。普通 Enter 命中此行不再启动多秒 AI（改打开首条 FTS
+    //   命中 / no-op）；只有 ⌘Enter 或鼠标点击才触发 runAiSearch。kbd 提示显 ⌘⏎。
+    isAiEntry?: boolean
     run(): void
   }
 
@@ -446,11 +499,13 @@ export function CommandPalette(): React.ReactElement | null {
     const out: JumpRow[] = []
     const q = debouncedRaw.trim()
 
-    // F3 — AI 检索入口（仅当输入框有内容时）。放在 jump 组首位 → ⌘K 输入 → ⏎
+    // F3 — AI 检索入口（仅当输入框有内容时）。放在 jump 组首位 → ⌘K 输入 → ⌘⏎
     // 即可触发 agentic 搜索（自然填进 flat-index 键盘导航）。label 用 live `query`
     // 实时回显当前输入。
+    // G-A7 ① — 远程 web 上 runSearchAgent 必返 E_UNSUPPORTED（LLM key 在桌面），不
+    //   push 注定失败的入口行。
     const liveQuery = query.trim()
-    if (liveQuery.length > 0) {
+    if (liveQuery.length > 0 && !IS_WEB) {
       // run 内 runAiSearch 仅写/管理 aiAbortRef（在途 AbortController），且只在
       // Enter/click 事件触发时执行、绝不在 render 期跑；规则保守地把「render 输出里
       // 嵌了碰 ref 的函数」也标。真重构需把 AbortController 提 reducer/state，会每
@@ -458,6 +513,7 @@ export function CommandPalette(): React.ReactElement | null {
       // eslint-disable-next-line react-hooks/refs
       out.push({
         id: 'ai:understand',
+        isAiEntry: true,
         icon: aiSearching ? (
           <Loader2
             size={14}
@@ -569,6 +625,15 @@ export function CommandPalette(): React.ReactElement | null {
     t
   ])
 
+  // G-A7 ⑤ — AI/FTS 双组去重：AI 命中存在时，EMAIL(FTS) 组过滤掉已在 aiHits 出现
+  //   的 internal_id（避免同一封邮件两组各显一次）。无 AI 命中时 === hits（零行为变化）。
+  //   flat 键盘索引 + data-flat-idx offset 全部基于 dedupedHits 重算。
+  const dedupedHits: SearchHit[] = useMemo(() => {
+    if (aiHits.length === 0) return hits
+    const aiIds = new Set(aiHits.map((h) => h.internal_id))
+    return hits.filter((h) => !aiIds.has(h.internal_id))
+  }, [hits, aiHits])
+
   // ──────────────────────────────────────────────────────────────────
   // AI ACTIONS — wired markAllRead + reRunAi; summarize disabled with Soon
   // ──────────────────────────────────────────────────────────────────
@@ -585,15 +650,15 @@ export function CommandPalette(): React.ReactElement | null {
   }
 
   const actionItems: ActionRow[] = useMemo(() => {
-    if (hits.length === 0) return []
-    const ids = hits.map((h) => h.internal_id)
+    if (dedupedHits.length === 0) return []
+    const ids = dedupedHits.map((h) => h.internal_id)
     return [
       {
         id: 'action:markAllRead',
         iconTone: 'ok',
         icon: <Check size={14} strokeWidth={1.75} />,
         label: t('palette.actions.markAllRead'),
-        meta: t('palette.actions.markAllReadMeta', { n: hits.length }),
+        meta: t('palette.actions.markAllReadMeta', { n: dedupedHits.length }),
         async run() {
           setActionRunning('action:markAllRead')
           try {
@@ -602,7 +667,7 @@ export function CommandPalette(): React.ReactElement | null {
               isRead: true,
               allowConcurrent: true
             })
-            toastSuccess(t('palette.actions.doneToast', { n: hits.length }))
+            toastSuccess(t('palette.actions.doneToast', { n: dedupedHits.length }))
             await queryClient.invalidateQueries({ queryKey: ['emails'] })
             closeCommandPalette()
           } catch (err) {
@@ -618,20 +683,20 @@ export function CommandPalette(): React.ReactElement | null {
         iconTone: 'info',
         icon: <RotateCcw size={14} strokeWidth={1.75} />,
         label: t('palette.actions.reRunAi'),
-        meta: t('palette.actions.reRunAiMeta', { n: hits.length }),
+        meta: t('palette.actions.reRunAiMeta', { n: dedupedHits.length }),
         async run() {
           setActionRunning('action:reRunAi')
           try {
             const settled = await Promise.allSettled(
-              hits.map((h) => mailApi.llm.run(h.internal_id, { force: true }))
+              dedupedHits.map((h) => mailApi.llm.run(h.internal_id, { force: true }))
             )
             const ok = settled.filter((r) => r.status === 'fulfilled').length
-            if (ok < hits.length) {
+            if (ok < dedupedHits.length) {
               const firstErr = settled.find((r) => r.status === 'rejected') as
                 | PromiseRejectedResult
                 | undefined
               const msg = firstErr ? String(firstErr.reason) : ''
-              toastError(t('palette.actions.errToast'), `${ok}/${hits.length} · ${msg}`)
+              toastError(t('palette.actions.errToast'), `${ok}/${dedupedHits.length} · ${msg}`)
             } else {
               toastSuccess(t('palette.actions.doneToast', { n: ok }))
             }
@@ -650,7 +715,7 @@ export function CommandPalette(): React.ReactElement | null {
         iconTone: 'coral',
         icon: <Sparkle size={14} strokeWidth={1.75} />,
         label: t('palette.actions.summarize'),
-        meta: t('palette.actions.summarizeMeta', { n: hits.length }),
+        meta: t('palette.actions.summarizeMeta', { n: dedupedHits.length }),
         disabled: true,
         soon: true,
         async run() {
@@ -658,7 +723,7 @@ export function CommandPalette(): React.ReactElement | null {
         }
       }
     ]
-  }, [hits, mailApi, queryClient, t])
+  }, [dedupedHits, mailApi, queryClient, t])
 
   // ──────────────────────────────────────────────────────────────────
   // Flat index for ↑↓ + Tab keyboard navigation
@@ -668,19 +733,26 @@ export function CommandPalette(): React.ReactElement | null {
     group: Group
     indexInGroup: number
     disabled?: boolean
+    // G-A7 ④ — 标记 AI 检索入口 flat entry，让普通 Enter 分流（不启动 AI）。
+    isAiEntry?: boolean
     run(): void | Promise<void>
   }
 
   const flat: FlatEntry[] = useMemo(() => {
     const out: FlatEntry[] = []
-    jumpItems.forEach((j, i) => out.push({ group: 'jump', indexInGroup: i, run: j.run }))
+    jumpItems.forEach((j, i) =>
+      out.push({ group: 'jump', indexInGroup: i, isAiEntry: j.isAiEntry, run: j.run })
+    )
     // AI agentic hits: same activate closure as EMAIL hits; the AI summary row
     // and the in-flight phrase row are NOT entries (non-interactive).
     aiHits.forEach((h, i) => out.push({ group: 'ai', indexInGroup: i, run: () => activateHit(h) }))
     // Search hit may live in a mailbox the user isn't currently viewing.
     // activateHit syncs view + mailbox so EmailList scrolls to + highlights
     // the row instead of silently jumping the EmailDetail pane.
-    hits.forEach((h, i) => out.push({ group: 'email', indexInGroup: i, run: () => activateHit(h) }))
+    // dedupedHits — AI 命中已显示的 internal_id 不在 EMAIL 组重复（G-A7 ⑤）。
+    dedupedHits.forEach((h, i) =>
+      out.push({ group: 'email', indexInGroup: i, run: () => activateHit(h) })
+    )
     actionItems.forEach((a, i) =>
       out.push({
         group: 'actions',
@@ -690,7 +762,7 @@ export function CommandPalette(): React.ReactElement | null {
       })
     )
     return out
-  }, [jumpItems, aiHits, hits, actionItems, activateHit])
+  }, [jumpItems, aiHits, dedupedHits, actionItems, activateHit])
 
   // Clamp highlight in render (no extra paint cycle).
   if (flat.length > 0 && highlight >= flat.length) {
@@ -741,8 +813,23 @@ export function CommandPalette(): React.ReactElement | null {
       }
       if (e.key === 'Enter') {
         e.preventDefault()
+        // G-A7 ④ — 桌面 ⌘Enter = 触发 AI 搜索（query 非空）。全局快捷，无论当前高亮
+        //   在哪一行；优先于普通 Enter。web 上 AI 不可用 → 不拦截，fall through 到
+        //   普通 Enter（基线「⌘Enter = Enter 别名」语义，跑高亮行；web 无 AI 入口行
+        //   故落点恒为真实可执行行，绝不退化成 no-op）。
+        if (e.metaKey && !IS_WEB && query.trim().length > 0) {
+          void runAiSearch()
+          return
+        }
         const entry = flat[highlight]
-        if (entry && !entry.disabled) void entry.run()
+        if (!entry || entry.disabled) return
+        // 普通 Enter 落在 AI 入口行 → 永不启动多秒 AI。改打开「最佳 FTS 命中」
+        //   （首条 email 命中）；无 email 命中则 no-op，保护「打开最佳命中」肌肉记忆。
+        if (entry.isAiEntry) {
+          if (dedupedHits.length > 0) activateHit(dedupedHits[0])
+          return
+        }
+        void entry.run()
         return
       }
       if (e.key === 'Tab') {
@@ -754,7 +841,7 @@ export function CommandPalette(): React.ReactElement | null {
         jumpToGroupBoundary(!e.shiftKey)
       }
     },
-    [flat, handleTab, highlight, jumpToGroupBoundary]
+    [flat, handleTab, highlight, jumpToGroupBoundary, query, runAiSearch, dedupedHits, activateHit]
   )
 
   // Scroll highlighted option into view (keyboard nav past viewport).
@@ -768,12 +855,17 @@ export function CommandPalette(): React.ReactElement | null {
 
   if (!shouldRender) return null
 
-  const hasHits = hits.length > 0
+  // EMAIL 组以 dedupedHits 为准（AI 命中已在 AI 组显示，G-A7 ⑤）。
+  const hasHits = dedupedHits.length > 0
   const hasQuery = normalised.length > 0
+  // AI 命中存在且去重后 EMAIL 组为空 → 整组不渲染（命中全在 AI 组，避免误导「未找到」空态）。
+  const showEmailGroup = hasQuery && (dedupedHits.length > 0 || aiHits.length === 0)
+  // G-A7 ② — AI 搜索跑完一次且 0 命中（agent 诚实说没找到）→ 渲染明确空态。
+  const showAiEmpty = aiCompleted && !aiSearching && aiHits.length === 0
   const countLabel =
     totalIndexed === null
-      ? `${hits.length}`
-      : t('palette.email.countLabel', { n: hits.length, total: totalIndexed })
+      ? `${dedupedHits.length}`
+      : t('palette.email.countLabel', { n: dedupedHits.length, total: totalIndexed })
 
   // Pre-compute flat index offsets for each group so renderer can stamp
   // data-flat-idx without recomputing during the map. Order matches the flat
@@ -784,7 +876,7 @@ export function CommandPalette(): React.ReactElement | null {
   const aiStartIdx = cursor
   cursor += aiHits.length
   const emailStartIdx = cursor
-  cursor += hits.length
+  cursor += dedupedHits.length
   const actionStartIdx = cursor
 
   return createPortal(
@@ -829,6 +921,9 @@ export function CommandPalette(): React.ReactElement | null {
               if (aiHits.length > 0) setAiHits([])
               if (aiSummary !== null) setAiSummary(null)
               if (aiError) setAiError(null)
+              // G-A7 ② — 编辑 query 也清「AI 跑完」标记，否则 0 命中空态会黏住。
+              if (aiCompleted) setAiCompleted(false)
+              setAiPhase('searching')
             }}
             placeholder={t('palette.placeholder')}
             autoComplete="off"
@@ -851,7 +946,9 @@ export function CommandPalette(): React.ReactElement | null {
               type="button"
               onClick={() => {
                 setQuery('')
-                inputRef.current?.focus()
+                // 清空 query 一并清 AI 态（abort 在途 + 清命中/完成标记 + focus），
+                // 否则 AI 组会在空 query 下黏住（G-A7 ②）。
+                switchToPlainSearch()
               }}
               title="Clear"
               aria-label="Clear search"
@@ -920,11 +1017,15 @@ export function CommandPalette(): React.ReactElement | null {
                       </span>
                       {j.label}
                       {j.aside && <span className="shrink-0 mr-2">{j.aside}</span>}
+                      {/* G-A7 ④ — AI 入口行显 ⌘⏎ AI 搜索（普通 ⏎ 改打开首条命中），
+                          其余 jump 行保持 ⏎ 打开。 */}
                       <span className="pal-hint items-center gap-1.5 text-micro font-mono text-ink-fg-2 shrink-0">
                         <kbd className="text-micro font-mono px-1 py-px rounded bg-ink-fg/[0.06] border border-ink-border text-ink-fg-1 leading-none">
-                          ⏎
+                          {j.isAiEntry ? '⌘⏎' : '⏎'}
                         </kbd>
-                        <span>{t('palette.kbd.open')}</span>
+                        <span>
+                          {j.isAiEntry ? t('palette.kbd.aiSearch') : t('palette.kbd.open')}
+                        </span>
                       </span>
                     </li>
                   )
@@ -933,10 +1034,11 @@ export function CommandPalette(): React.ReactElement | null {
             </>
           )}
 
-          {/* AI SEARCH group — agentic 检索进行态 + summary + 真实命中行。在途时顶部
-              渲染一行 phrase+shimmer（不展开过程）；命中用同款 EmailHitRow（纳入 flat
-              键盘索引）；summary 行 + phrase 行不进 flat 索引（非交互）。 */}
-          {(aiSearching || aiHits.length > 0) && (
+          {/* AI SEARCH group — agentic 检索进行态 + summary + 真实命中行 / 空态。在途时
+              顶部渲染一行 phrase+shimmer（不展开过程，phase 驱动短语组 G-A7 ③）；命中
+              用同款 EmailHitRow（纳入 flat 键盘索引）；summary 行 / phrase 行 / 空态 tile
+              / 转普通搜索行均不进 flat 索引（非交互或自管点击）。 */}
+          {(aiSearching || aiHits.length > 0 || showAiEmpty) && (
             <>
               <GroupHeader
                 title="AI Search"
@@ -950,7 +1052,8 @@ export function CommandPalette(): React.ReactElement | null {
                     className="shrink-0 text-coral"
                     aria-hidden
                   />
-                  <PaletteThinkingPhrases />
+                  {/* G-A7 ③ — phase 驱动短语组（检索中 → 整理中）。 */}
+                  <PaletteThinkingPhrases phase={aiPhase} />
                 </div>
               )}
               {!aiSearching && aiSummary && (
@@ -985,13 +1088,38 @@ export function CommandPalette(): React.ReactElement | null {
                   })}
                 </div>
               )}
+              {/* G-A7 ② — AI 跑完且 0 命中（agent 诚实说没找到）→ 明确空态 tile。
+                  有 summary 时已在上方渲染（summary 解释了为何没找到）。 */}
+              {showAiEmpty && (
+                <div className="px-5 pb-1">
+                  <div className="empty-tile">
+                    <Sparkles size={18} strokeWidth={1.75} className="text-ink-fg-3" aria-hidden />
+                    <div className="text-aux text-ink-fg-1">{t('palette.ai.emptyTitle')}</div>
+                    <div className="text-meta text-ink-fg-3">{t('palette.ai.emptyHint')}</div>
+                  </div>
+                </div>
+              )}
+              {/* G-A7 ⑥ — 转普通搜索出口：清掉 AI 态让纯 FTS 接管（query 保留在输入框）。
+                  仅 AI 跑完（有命中或空态）时出现，非 flat 索引（鼠标点击 = 明确意图）。 */}
+              {(aiHits.length > 0 || showAiEmpty) && (
+                <div className="px-5 pt-0.5 pb-1">
+                  <button
+                    type="button"
+                    onClick={switchToPlainSearch}
+                    className="text-micro text-ink-fg-2 hover:text-ink-fg inline-flex items-center gap-1 transition"
+                  >
+                    <SearchIcon size={11} strokeWidth={2} className="shrink-0" aria-hidden />
+                    <span>{t('palette.ai.viewInPlain')}</span>
+                  </button>
+                </div>
+              )}
             </>
           )}
 
           {/* EMAIL group — rendered whenever the user typed something so
               the empty-tile has a home. Aside shows live latency + FTS5
               health dot. */}
-          {hasQuery && (
+          {showEmailGroup && (
             <>
               <GroupHeader
                 title="Email"
@@ -1026,7 +1154,7 @@ export function CommandPalette(): React.ReactElement | null {
               />
               {hasHits ? (
                 <div className="px-3 space-y-px">
-                  {hits.map((h, i) => {
+                  {dedupedHits.map((h, i) => {
                     const idx = emailStartIdx + i
                     const selected = idx === highlight
                     return (
@@ -1176,7 +1304,11 @@ export function CommandPalette(): React.ReactElement | null {
           <FooterDot />
           <KbdHint keys="⏎" label={t('palette.kbd.open')} />
           <FooterDot />
-          <KbdHint keys="⌘⏎" label={t('palette.kbd.newWindow')} />
+          {/* G-A7 ④ — 桌面 ⌘⏎ = AI 搜索（web 无 LLM key → 保留新窗口占位提示）。 */}
+          <KbdHint
+            keys="⌘⏎"
+            label={IS_WEB ? t('palette.kbd.newWindow') : t('palette.kbd.aiSearch')}
+          />
           <FooterDot />
           <KbdHint keys="esc" label={t('palette.kbd.dismiss')} />
 

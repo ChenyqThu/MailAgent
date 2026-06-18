@@ -305,6 +305,60 @@ def test_run_now_404(report_client: TestClient) -> None:
     assert report_client.post("/api/report-agents/ghost/run", json={}).status_code == 404
 
 
+def test_run_now_search_agent_rejected(
+    report_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """type='search' agent 调 run_now → 400 E_INVALID_ARG，不写 report 行。"""
+    import sqlite3 as _sqlite3
+    import time as _time
+
+    _SEARCH_ID = "email_search_agent"
+    conn = _sqlite3.connect(str(report_db))
+    conn.execute(
+        "INSERT OR REPLACE INTO report_agent "
+        "(id, type, enabled, title, schedule_json, prompt, model, kos_enrich, updated_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?)",
+        (_SEARCH_ID, "search", 1, "Search Agent", "{}", None, None, 0, _time.time()),
+    )
+    conn.commit()
+    conn.close()
+
+    store = ReportStore(str(report_db))
+    monkeypatch.setattr("src.api.routers.reports.get_report_store", lambda: store)
+    with TestClient(app, raise_server_exceptions=False) as c:
+        r = c.post(f"/api/report-agents/{_SEARCH_ID}/run", json={})
+    assert r.status_code == 400
+    body = r.json()
+    assert body["error"]["code"] == "E_INVALID_ARG"
+    assert "report-only" in body["error"]["message"]
+    # 确认没有写入 report 行
+    assert store.get_report(f"{_SEARCH_ID}:daily:2026-06-01") is None
+
+
+def test_run_now_report_agent_still_works(
+    report_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """type='report' agent 不受守卫影响，_run_report_once_sync mock 返回 ready 报告。"""
+    rid = "guard_check:daily:2026-06-03"
+
+    store = ReportStore(str(report_db))
+
+    def _fake_sync(s, db_path, agent):  # noqa: ANN001
+        store.create_report(
+            report_id=rid, agent_id=agent["id"], cadence="daily",
+            report_date="2026-06-03", window_start="x", window_end="y",
+        )
+        store.finish_report(rid, status="ready", headline="OK")
+        return rid
+
+    monkeypatch.setattr("src.api.routers.reports.get_report_store", lambda: store)
+    monkeypatch.setattr("src.api.routers.reports._run_report_once_sync", _fake_sync)
+    with TestClient(app, raise_server_exceptions=False) as c:
+        r = c.post(f"/api/report-agents/{_AGENT_ID}/run", json={})
+    assert r.status_code == 200
+    assert r.json()["data"]["status"] == "ready"
+
+
 # ---------------------------------------------------------------------------
 # wire 边界归一化 + 422 envelope（codex review finding 1/2）
 # ---------------------------------------------------------------------------

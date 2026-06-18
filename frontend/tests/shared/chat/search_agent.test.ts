@@ -414,3 +414,116 @@ describe('runSearchAgent — 永不 throw', () => {
     expect(res.hits.map((h) => h.internal_id)).toEqual([1])
   })
 })
+
+// ── G-A1 渐进式精读：read 工具已注册并可被 harness 派发 ────────────────────────
+
+describe('runSearchAgent — G-A1 渐进式精读 read 工具', () => {
+  test('backend 调 email_body → harness 派发到 platform.getEmailBody（工具已注册）', async () => {
+    const { reads } = makeReads({ searchItems: [hit(1, 'A')] })
+    const bodySpy = reads.email.body as ReturnType<typeof vi.fn>
+    backendScript = [
+      [
+        { type: 'tool_use', toolUseId: 'ts', name: 'email_search_fulltext', input: { query: 'q' } },
+        { type: 'done', finalContent: '', model: null, stopReason: 'tool_use' }
+      ],
+      [
+        // 渐进式精读：snippet 不够 → 读正文确认（email_body 若未注册，harness 会回 unknown
+        // tool error，bodySpy 永不被调）。
+        { type: 'tool_use', toolUseId: 'tb', name: 'email_body', input: { internal_id: 1 } },
+        { type: 'done', finalContent: '', model: null, stopReason: 'tool_use' }
+      ],
+      [
+        {
+          type: 'tool_use',
+          toolUseId: 'tp',
+          name: 'present_results',
+          input: { matched_internal_ids: [1], summary: 'confirmed via body' }
+        },
+        { type: 'done', finalContent: '', model: null, stopReason: 'tool_use' }
+      ]
+    ]
+    const res = await runSearchAgent(makeDeps(reads), { query: 'q' })
+    expect(res.ok).toBe(true)
+    expect(bodySpy).toHaveBeenCalled() // email_body 被派发 = 工具已注册（否则 unknown tool）
+    expect(res.hits.map((h) => h.internal_id)).toEqual([1])
+  })
+})
+
+// ── G-A3 非顺从模型：harness 自然结束无 present_results → 候选池 best-effort ─────
+
+describe('runSearchAgent — G-A3 候选池 best-effort 兜底', () => {
+  test('end_turn 无 present_results 但池有命中 → 回 best-effort（不调 nlToDsl）', async () => {
+    const { reads, nlSpy } = makeReads({
+      searchItems: [hit(1, 'A'), hit(2, 'B')],
+      nlToDsl: async () => ({ dsl: 'from:x' })
+    })
+    backendScript = [
+      [
+        { type: 'tool_use', toolUseId: 'ts', name: 'email_search_fulltext', input: { query: 'q' } },
+        { type: 'done', finalContent: '', model: null, stopReason: 'tool_use' }
+      ],
+      // 模型搜了一次拿到池，但下一轮直接 end_turn 没调 present_results（非顺从）。
+      [{ type: 'done', finalContent: '随便说点啥', model: null, stopReason: 'end_turn' }]
+    ]
+    const res = await runSearchAgent(makeDeps(reads), { query: 'q' })
+    expect(res.ok).toBe(true)
+    expect(res.hits.map((h) => h.internal_id)).toEqual([1, 2]) // 池保序
+    expect(res.summary).toBeNull()
+    expect(nlSpy).not.toHaveBeenCalled() // best-effort 短路在 nlToDsl 之前
+  })
+
+  test('池空（从未搜到）→ 仍走 nlToDsl 兜底', async () => {
+    const { reads, nlSpy } = makeReads({ nlToDsl: async () => ({ dsl: 'from:y' }) })
+    backendScript = [[{ type: 'done', finalContent: '', model: null, stopReason: 'end_turn' }]]
+    const res = await runSearchAgent(makeDeps(reads), { query: 'q' })
+    expect(res.ok).toBe(false)
+    expect(res.fallbackDsl).toBe('from:y')
+    expect(nlSpy).toHaveBeenCalledTimes(1)
+  })
+})
+
+// ── G-A4 mailbox 硬过滤：最终命中按 input.mailbox 后置硬过滤 ────────────────────
+
+describe('runSearchAgent — G-A4 mailbox 硬过滤', () => {
+  function hitIn(internal_id: number, mailbox: string): SearchHit {
+    return { ...hit(internal_id, `S${internal_id}`), mailbox } as SearchHit
+  }
+
+  test('present_results 含跨文件夹 id → 非 input.mailbox 的命中被硬过滤掉', async () => {
+    const { reads } = makeReads({ searchItems: [hitIn(1, '收件箱'), hitIn(2, '存档')] })
+    backendScript = [
+      [
+        { type: 'tool_use', toolUseId: 'ts', name: 'email_search_fulltext', input: { query: 'q' } },
+        { type: 'done', finalContent: '', model: null, stopReason: 'tool_use' }
+      ],
+      [
+        {
+          type: 'tool_use',
+          toolUseId: 'tp',
+          name: 'present_results',
+          // 模型忽略 mailbox 限定，返回了两个文件夹的命中。
+          input: { matched_internal_ids: [1, 2], summary: 's' }
+        },
+        { type: 'done', finalContent: '', model: null, stopReason: 'tool_use' }
+      ]
+    ]
+    const res = await runSearchAgent(makeDeps(reads), { query: 'q', mailbox: '存档' })
+    expect(res.ok).toBe(true)
+    // 硬过滤：只留 mailbox==='存档' 的 #2。
+    expect(res.hits.map((h) => h.internal_id)).toEqual([2])
+  })
+
+  test('best-effort 兜底也套 mailbox 硬过滤', async () => {
+    const { reads } = makeReads({ searchItems: [hitIn(1, '收件箱'), hitIn(2, '存档')] })
+    backendScript = [
+      [
+        { type: 'tool_use', toolUseId: 'ts', name: 'email_search_fulltext', input: { query: 'q' } },
+        { type: 'done', finalContent: '', model: null, stopReason: 'tool_use' }
+      ],
+      [{ type: 'done', finalContent: '', model: null, stopReason: 'end_turn' }]
+    ]
+    const res = await runSearchAgent(makeDeps(reads), { query: 'q', mailbox: '存档' })
+    expect(res.ok).toBe(true)
+    expect(res.hits.map((h) => h.internal_id)).toEqual([2])
+  })
+})

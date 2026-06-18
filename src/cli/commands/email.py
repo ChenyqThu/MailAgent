@@ -454,6 +454,9 @@ def email_search(
         "total_hits": len(data),
         "limit": limit,
         "count": len(data),
+        # Phase A G-A2: 是否还有超出 limit 的命中 (repo limit+1 探针)。total_hits 已是本次
+        # 返回数 (= 前端 total_matches 语义)，这里只补 has_more 让 CLI 消费者也能自我收敛。
+        "has_more": search_result.has_more,
     }
     if not raw and transformed_query != query:
         meta_extra["transformed_query"] = transformed_query

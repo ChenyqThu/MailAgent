@@ -190,6 +190,10 @@ date-only 的 `until <= '2026-06-01'` 还会漏掉当天全部邮件。因此：
   - `source: 'body' | 'attachment'`，默认 `'body'`；表示当前 snippet 来自正文还是附件正文。
   - `filename: string | null`，仅 `source='attachment'` 时填附件名，正文命中为 `null`。
 - `SearchResult` / CLI meta / API meta 新增**可选** `parse_warnings: string[]`（additive，不破坏 wire 契约；无 warning 时省略）。
+- **自我收敛信号（Phase A G-A2，additive）**：
+  - `total_matches: number`（前端 `SearchResult` / serve-api `data` / pydantic `SearchResult`）= **本次查询命中数**（= `items.length`，≤ 请求 `limit`）。**不是**语料总量 `total_indexed`——后者继续用于命令面板 footer「N of total_indexed」，但不再作为 agentic 搜索的命中信号喂给模型。CLI envelope 沿用既有 `meta.total_hits`（同语义，未重命名）。
+  - `has_more: boolean`（`SearchResult` / serve-api `data` + `meta` / CLI `meta` / pydantic）= 是否还有超出本次 `limit` 的命中。由 `search_email_bodies_with_meta` / 前端 `searchEmails` 的 **`limit + 1` 探针**精确判定（多取 1 条检测溢出，再裁回 `limit`；返回的 `items` 与不探针时的 top-`limit` **逐条一致**，零结果回归）。
+  - 用途：搜索 agent 据 `has_more`/工具 `hint` 自我收敛——命中太多就加 `from:/after:/subject:` 等 filter 缩小，0 命中就放宽重试。两端（Python 引擎 + TS 引擎）同步实现。
 - FTS5 运行期语法错误维持现状：log warning + 返回空列表。parser 自身**永不抛异常**——任何畸形输入最坏退化为文本搜索。
 
 ## 6. 跨语言一致性（行为夹具）

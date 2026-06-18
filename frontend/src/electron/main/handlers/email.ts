@@ -87,8 +87,9 @@ export interface SearchOpts {
    * T7 CJK trigram 路由开关 (镜像 Python EmailRepository(trigram_enabled=))。
    * 仅 smart 模式 + plain-passthrough + query 含 CJK 时才接管 (走并行 trigram 表),
    * 否则落老 unicode61 路径 (P1 行为零回归)。
-   * 默认从 process.env.SEARCH_TRIGRAM_ENABLED 读 (与后端同源 flag);
-   * 夹具 runner 按 per-case 显式传入。
+   * 默认从 process.env.SEARCH_TRIGRAM_ENABLED 读 (与后端同源 flag); Phase A G-A6 起后端
+   * config 默认 True → TS 同步: env 未设视为 ON, 仅显式 'false' 关 (保持桌面人工搜索与
+   * 后端 / agent 搜索的中文子串行为一致, 消除 DUP-2 分叉)。夹具 runner 按 per-case 显式传入。
    */
   trigramEnabled?: boolean
 }
@@ -1250,11 +1251,15 @@ function searchEmailBodiesTrigram(
 export function searchEmails(opts: SearchOpts): SearchResult {
   const total_indexed = getEmailBodyFtsCount()
   if (!opts.query || opts.query.trim().length === 0) {
-    return { items: [], total_indexed }
+    return { items: [], total_indexed, total_matches: 0, has_more: false }
   }
   const mode: 'smart' | 'raw' = opts.mode ?? 'smart'
   const db = getDb()
-  const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200)
+  // Phase A G-A2: displayLimit = 调用方要的展示条数; limit = displayLimit + 1 探针 —— 所有
+  // 检索路径按 probe 取多 1 条, 最终 (见 result 组装) 裁回 displayLimit 并据是否多出精确置
+  // has_more。镜像 Python search_email_bodies_with_meta 的 limit+1 探针 (零结果回归)。
+  const displayLimit = Math.min(Math.max(opts.limit ?? 50, 1), 200)
+  const limit = displayLimit + 1
 
   const structured = buildStructuredFilterPredicates({
     mailbox: opts.mailbox,
@@ -1602,7 +1607,8 @@ export function searchEmails(opts: SearchOpts): SearchResult {
     // T7: flag=True 且 smart plain-passthrough query 含 CJK → 走 trigram 路由 (CJK 子串增强)。
     // flag=False 或纯非 CJK → 落入下面老 unicode61 fast-path (逐字节零回归)。
     // 镜像 Python search_email_bodies_with_meta 里 plain_passthrough 分支的 trigram 接入。
-    const trigramEnabled = opts.trigramEnabled ?? process.env.SEARCH_TRIGRAM_ENABLED === 'true'
+    // Phase A G-A6: 与后端 config 默认 True 同步 —— env 未设 = ON, 仅显式 'false' 关。
+    const trigramEnabled = opts.trigramEnabled ?? process.env.SEARCH_TRIGRAM_ENABLED !== 'false'
     if (parsed.is_plain_passthrough && trigramEnabled && countCjkChars(opts.query) > 0) {
       // trigram 路由接管 (含空结果): plan warning 透传, transformed_query 留原 query。
       items = searchEmailBodiesTrigram(db, opts.query, structured.predicates, parseWarnings, limit)
@@ -1687,7 +1693,17 @@ export function searchEmails(opts: SearchOpts): SearchResult {
     }
   }
 
-  const result: SearchResult = { items, total_indexed, mode }
+  // Phase A G-A2: probe 多取 1 条 → 精确 has_more; 裁回 displayLimit (top-displayLimit 与
+  // 不探针时逐条一致); total_matches = 本次返回数 (取代把语料总量 total_indexed 当命中数)。
+  const has_more = items.length > displayLimit
+  if (has_more) items = items.slice(0, displayLimit)
+  const result: SearchResult = {
+    items,
+    total_indexed,
+    total_matches: items.length,
+    has_more,
+    mode
+  }
   if (mode === 'smart' || transformedQuery !== opts.query) {
     result.transformed_query = transformedQuery
   }

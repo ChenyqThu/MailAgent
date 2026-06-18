@@ -35,6 +35,36 @@ function asBool(x: unknown): boolean | undefined {
 
 const BODY_MAX_CHARS = 12000
 
+/**
+ * Phase A G-A2 — 教学式截断/空结果引导（给搜索 agent 自我收敛用）。
+ *
+ * 行业最佳实践（Anthropic「writing tools for agents」/ Claude Code）：工具结果绝不静默
+ * 截断，要「教 agent 下一步」。空结果引导放宽、溢出引导缩小，并提示用 email_body 精读
+ * top 几条确认。bilingual（中文为主用户 + 英文模型都可读）。
+ */
+export function buildSearchHint(returned: number, hasMore: boolean): string {
+  if (returned === 0) {
+    return (
+      '0 命中：放宽关键词、去掉一个 filter（from:/after:/in: 等）、或换同义词，重试一次；' +
+      '仍空则如实回报「没找到」，不要编造。 ' +
+      '/ No matches: broaden keywords, drop one filter, or try a synonym and retry once; ' +
+      'if still empty, report honestly that nothing was found.'
+    )
+  }
+  if (hasMore) {
+    return (
+      `已返回 top ${returned} 条，还有更多命中：用 from:/after:/before:/subject:/in: 等 ` +
+      'filter 缩小范围，或用 email_body 读 top 几条正文确认相关性后再 present_results。 ' +
+      `/ Returned the top ${returned}; more matches exist — narrow with filters or open the ` +
+      'top results via email_body to confirm before present_results.'
+    )
+  }
+  return (
+    `本次查询共 ${returned} 条，已全部返回。 ` +
+    `/ All ${returned} match(es) for this query were returned.`
+  )
+}
+
 /** Build the 7 email read tools bound to the injected platform. */
 export function createEmailTools(platform: ChatToolPlatform): ToolDef[] {
   // ── 1. email_search — metadata-filter search (subject/sender/date/flags) ──
@@ -277,7 +307,24 @@ export function createEmailTools(platform: ChatToolPlatform): ToolDef[] {
           until: asStr(i.until),
           limit: asInt(i.limit, 20, 1, 50)
         })
-        return ok(result, start)
+        // Phase A G-A2: agent-facing 投影 —— 用「本次命中数 total_matches + has_more +
+        // 教学 hint」取代误导的 total_indexed（语料总量）。items 保留完整 SearchHit（候选池
+        // 防幻觉交集 + UI 渲染都靠它），仅在 result 元信息层收敛。
+        const items = result.items ?? []
+        const totalMatches = result.total_matches ?? items.length
+        const hasMore = result.has_more ?? false
+        return ok(
+          {
+            items,
+            total_matches: totalMatches,
+            has_more: hasMore,
+            hint: buildSearchHint(items.length, hasMore),
+            transformed_query: result.transformed_query,
+            parse_warnings: result.parse_warnings,
+            mode: result.mode
+          },
+          start
+        )
       } catch (e) {
         return err('E_INTERNAL', e instanceof Error ? e.message : String(e), start)
       }

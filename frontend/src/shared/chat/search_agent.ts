@@ -37,10 +37,36 @@ export interface SearchAgentDeps {
 
 export const DEFAULT_SEARCH_AGENT_PROMPT =
   '你是邮件搜索助手。用户给自然语言，你用 email_search_fulltext（支持 ' +
-  'from:/to:/subject:/is:/has:/after:/before: + 引号短语 + -否定 + 大写 OR + ' +
-  '中文子串）检索；可多次调整 query 检索；最后必须且仅一次调用 present_results，' +
-  'matched_internal_ids 只填真实命中的 internal_id（来自工具返回，严禁编造），' +
-  'summary 一句话说明找到了什么。今天是 {today}，用户邮箱 {me}。'
+  'from:/to:/subject:/in:/is:/has:/after:/before: + 引号短语 + -否定 + 大写 OR + ' +
+  '中文子串）检索。\n' +
+  '- 渐进式精读：snippet 不足以判断时，用 email_body 读「最相关的前 2-3 封」正文确认' +
+  '（不要逐封全读，省预算）；需要元数据/附件名用 email_get，需要看整条会话用 ' +
+  'email_list_thread。\n' +
+  '- 自我收敛：看工具结果的 has_more / hint —— 命中太多就加 from:/after:/subject: 等 ' +
+  'filter 缩小；0 命中就放宽关键词或去掉一个 filter 重试一次；仍空则如实说没找到，不要编造。\n' +
+  '- 最后必须且仅一次调用 present_results：matched_internal_ids 只填真实命中的 ' +
+  'internal_id（来自工具返回，严禁编造），summary 一句话说明找到了什么。\n' +
+  '今天是 {today}，用户邮箱 {me}。'
+
+// ── G-A5：搜索 agent 预算（独立于 chat，调紧）─────────────────────────────────
+//
+// 搜索 agent 典型流程 = 检索 → 读 top 2-3 封正文 → present_results（≤ ~5 轮），比通用
+// chat 短得多。接入 read 工具后必须防「逐封超读」爆预算。这两个上限以 min 与 chat 运行配置
+// 取交（chat 配置更小则保留更小），在 createHeadlessInfraPlatform.resolveConfig 套用。
+const SEARCH_AGENT_MAX_ITER = 6
+const SEARCH_AGENT_MAX_COST_USD = 0.3
+
+// ── G-A3：非顺从模型从候选池回 best-effort 命中的上限 ─────────────────────────
+const SEARCH_BESTEFFORT_MAX = 20
+
+// ── G-A1：搜索 agent 工具集（渐进式精读）──────────────────────────────────────
+// 检索 + 按需读正文/元数据/整条会话。createEmailTools 返 6 个，这里只取 4 个读工具。
+const SEARCH_AGENT_TOOL_NAMES = new Set<string>([
+  'email_search_fulltext',
+  'email_body',
+  'email_get',
+  'email_list_thread'
+])
 
 // ── present_results ToolDef（§3.1，silent/meta/ipc）───────────────────────
 //
@@ -107,8 +133,16 @@ function createHeadlessInfraPlatform(base: HttpChatPlatform): ChatInfraPlatform 
     // 搜索 agent 不锚定单封邮件 → 无 email context（裸 query 驱动）。
     // (runHarness 不调用，仅为接口完整性)
     loadEmailContext: () => Promise.resolve(null),
-    // 委托 base 拿真实运行配置（maxIter/maxCostUsd/harnessEnabled/kosL1）。
-    resolveConfig: (): Promise<ChatRuntimeConfig> => base.resolveConfig(),
+    // 委托 base 拿真实运行配置（harnessEnabled/kosL1），但 G-A5 把 maxIter/maxCostUsd
+    // 独立于 chat 调紧（取 min —— chat 配置更小则保留更小），防接入 read 工具后逐封超读爆预算。
+    resolveConfig: async (): Promise<ChatRuntimeConfig> => {
+      const cfg = await base.resolveConfig()
+      return {
+        ...cfg,
+        maxIter: Math.min(cfg.maxIter, SEARCH_AGENT_MAX_ITER),
+        maxCostUsd: Math.min(cfg.maxCostUsd, SEARCH_AGENT_MAX_COST_USD)
+      }
+    },
     // L1 hot block 默认 OFF + 无单封邮件上下文 → no-op。
     prefetchSenderDigest: () => {}
   }
@@ -168,6 +202,9 @@ async function runSearchAgentInner(
   input: SearchAgentInput
 ): Promise<SearchAgentResult> {
   const { reads, baseUrl } = deps
+  // G-A4: input.mailbox 归一化一次（trim）—— prompt 注入文案 + 最终硬过滤共用同一值，避免
+  // 「prompt 用原值、过滤用 trim 值」漂移（含前后空格时两者不一致）。
+  const wantMailbox = input.mailbox?.trim()
 
   // a. 读 search agent 配置：type==='search' && enabled → model/prompt（tools MVP 固定）。
   let model: string | null = null
@@ -195,11 +232,11 @@ async function runSearchAgentInner(
   const me = (await resolveUserEmail(reads)) ?? '(unknown)'
   let systemPrompt = prompt.replaceAll('{today}', today).replaceAll('{me}', me)
 
-  // input.mailbox 非空 → 追加文件夹限定上下文（让「指定 mailbox 搜索」真正生效）。
-  if (input.mailbox && input.mailbox.length > 0) {
+  // wantMailbox 非空 → 追加文件夹限定上下文（让「指定 mailbox 搜索」真正生效）。
+  if (wantMailbox) {
     systemPrompt +=
-      `\n用户希望限定在「${input.mailbox}」文件夹检索，` +
-      `请在 query 里用 in:「${input.mailbox}」或对应字段。`
+      `\n用户希望限定在「${wantMailbox}」文件夹检索，` +
+      `请在 query 里用 in:「${wantMailbox}」或对应字段。`
   }
 
   // b. 构造：base platform（tools + llmFetch 共用）+ headless infra（no-op persist）+
@@ -209,9 +246,12 @@ async function runSearchAgentInner(
   const backend = createCustomApiBackend(base)
 
   const registry = createToolRegistry()
-  // 仅取 email_search_fulltext（createEmailTools 返 6 工具，按 name 挑一个）。
-  const searchTool = createEmailTools(base).find((t) => t.name === 'email_search_fulltext')
-  if (searchTool) registry.register(searchTool)
+  // G-A1 渐进式精读：注册 email_search_fulltext（检索）+ email_body/email_get/
+  // email_list_thread（按需读正文/元数据/整条会话确认相关性）。其余 createEmailTools 工具
+  // （email_search 元数据搜 / email_get_ai_fields）搜索 agent 不需要，不注册。
+  for (const tool of createEmailTools(base)) {
+    if (SEARCH_AGENT_TOOL_NAMES.has(tool.name)) registry.register(tool)
+  }
   registry.register(presentResultsTool)
 
   // c. 假 history（system prompt 作首条 user 上下文前缀 + 用户 query）；sessionId/
@@ -300,17 +340,24 @@ async function runSearchAgentInner(
     if (input.signal) input.signal.removeEventListener('abort', onExternalAbort)
   }
 
-  // f. 终局组装：见到 present_results → 候选池 ∩ matched_internal_ids（保序、防幻觉）。
+  // G-A4 mailbox 硬过滤：wantMailbox（归一化于函数顶部）非空 → 最终命中按文件夹后置硬过滤。
+  // prompt 散文只是建议、模型可能忽略；这里保证「指定 mailbox 搜索」真正生效，不跨文件夹漏出。
+  const filterByMailbox = (candidates: SearchHit[]): SearchHit[] =>
+    wantMailbox ? candidates.filter((h) => h.mailbox === wantMailbox) : candidates
+
+  // f. 终局组装：见到 present_results → 候选池 ∩ matched_internal_ids（保序、防幻觉）→ mailbox 硬过滤。
   if (presented) {
     const p: PresentResultsPayload = presented
     const validIds = p.matchedIds.filter((id) => pool.has(id))
-    const hits = validIds.map((id) => pool.get(id)).filter((h): h is SearchHit => h !== undefined)
+    const hits = filterByMailbox(
+      validIds.map((id) => pool.get(id)).filter((h): h is SearchHit => h !== undefined)
+    )
     return { ok: true, hits, summary: p.summary }
   }
 
-  // f-bis. 预取消短路：入口已 aborted（且 harness 因此未产出 present_results）→ 直接返
-  //   E_ABORTED，不落 fallback 再发一次 nlToDsl（浪费往返）。仅在被取消时短路，正常无
-  //   present_results 仍走 nlToDsl 兜底。
+  // f-bis. 用户主动取消（external signal abort）→ 直接返 E_ABORTED，不落 best-effort /
+  //   nlToDsl（用户不想要结果，浪费往返）。注意 present_results 触发的内部 abort 已在 f
+  //   处理（presented 非空），故此处 aborted 必是外部取消。
   if (ac.signal.aborted && !presented) {
     return {
       ok: false,
@@ -320,9 +367,18 @@ async function runSearchAgentInner(
     }
   }
 
-  // g. fallback：harness done/error 而从未见 present_results → nlToDsl 兜底。
-  //    harness 已 emit 明确错误（无 key / 配额 / 超时 / 后端崩）→ 优先透传该错误码，
-  //    但仍尝试 nlToDsl 给 fallbackDsl（让前端能填回输入框降级搜索）。
+  // f-ter. G-A3 非顺从模型兜底：harness 自然结束（end_turn / 无 tool_use / 超预算
+  //   E_MAX_ITER / E_COST_BUDGET）却没调 present_results，但候选池里已有真实命中 → 回
+  //   best-effort（pool 保序 = 首次检索 rank 序、mailbox 硬过滤、截断 top N），不再把真实
+  //   命中丢掉只回空手 nlToDsl。summary 为 null（模型没总结）。
+  const bestEffort = filterByMailbox([...pool.values()]).slice(0, SEARCH_BESTEFFORT_MAX)
+  if (bestEffort.length > 0) {
+    return { ok: true, hits: bestEffort, summary: null }
+  }
+
+  // g. fallback：候选池也空（或被 mailbox 滤空）→ nlToDsl 兜底。harness 已 emit 明确错误
+  //    （无 key / 配额 / 超时 / 后端崩）→ 优先透传该错误码，但仍尝试 nlToDsl 给 fallbackDsl
+  //    （让前端能填回输入框降级搜索）。
   return await fallbackToNlToDsl(reads, input.query, harnessError)
 }
 
