@@ -613,7 +613,8 @@ function loopbackChatBaseUrl(): string {
  *  `window:openChatPopout` IPC（runtime 透明，web 无此第二窗口场景）。 */
 function createElectronChatRuntime(): ChatApi {
   const baseUrl = loopbackChatBaseUrl()
-  const runtime = createChatRuntime({ reads: new HttpApi(baseUrl), baseUrl })
+  // F2 — 桌面启用 headless agentic 搜索（runSearchAgent）：LLM key + serve-api 都在本机。
+  const runtime = createChatRuntime({ reads: new HttpApi(baseUrl), baseUrl, searchAgent: true })
   return {
     ...runtime,
     openPopout(emailId: number): void {

@@ -470,6 +470,8 @@ export class HttpApi implements MailApi {
   private _chat?: ChatApi
   get chat(): ChatApi {
     if (!this._chat) {
+      // F2 — 远程 web 不传 searchAgent（= false）→ runSearchAgent 返 E_UNSUPPORTED（LLM key
+      // 在桌面，agentic 搜索远程 scope 外）。桌面经 createElectronChatRuntime 传 searchAgent:true。
       this._chat = createChatRuntime({ reads: this, baseUrl: this.baseUrl })
     }
     return this._chat
