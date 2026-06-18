@@ -26,6 +26,7 @@ from src.repository.search_query import (
     ParsedSearchQuery,
     TextTerm,
     build_structured_filter_predicates,
+    escape_like_value,
     parse_search_query,
 )
 
@@ -384,46 +385,21 @@ _RRF_FETCH_MAX = 1000
 # ============================================================
 #
 # 设计来源: .trellis/tasks/06-17-dsl-parse-warnings/research/codex-t7-tokenizer.md 方案②。
-# 对每个「裸全文 term」(无列限定 / 非短语) 按 CJK 占比 + CJK 长度分路由:
+# 对每个「裸全文 term」(无列限定 / 非短语; term 已按空格切分, 无内部空格) 按
+# 「是否含 CJK + 整 term 字符长度」分路由:
 #   - 无 CJK (纯英文/数字/符号)  → unicode (主表 email_body_fts MATCH + smart_query_transform)
-#   - CJK >= 3 字                → trigram_match (email_body_fts_trigram MATCH)
-#   - CJK = 2 字                 → trigram_like (trigram 表 body/subject/sender LIKE '%词%')
-#   - CJK = 1 字                → too_short (不查 + warning cjk_too_short:<词>)
-#   - 中英混合 (CJK + Latin 同 term) → mixed (英文段 unicode 候选 ∩ 中文段 trigram 候选)
-# 多 term 之间 AND (rowid 交集)。实测硬约束: trigram MATCH < 3 Unicode 字符无召回,
+#   - 含 CJK 且整 term >= 3 字    → trigram, mode='match' (email_body_fts_trigram MATCH 整串短语)
+#   - 含 CJK 且整 term = 2 字     → trigram, mode='like' (trigram 表 body/subject/sender LIKE '%整串%')
+#   - 含 CJK 且整 term = 1 字     → too_short (不查 + warning cjk_too_short:<词>)
+# 多 term (空格分隔) 之间 AND (rowid 交集)。实测硬约束: trigram MATCH < 3 Unicode 字符无召回,
 # 故 1/2 字中文不能走 MATCH。
+# 历史 bug 修复: 含 CJK 的连续 term **整体** 走 trigram 子串检索 (不再拆 CJK/latin 段各自
+# MATCH 后 AND 交集) —— 嵌在连续 token 中间的 latin 段 (如 "研发项目deadline汇报" 里的
+# deadline) unicode61 召回为 0, 旧拆段 AND 会让整 term 搜不到。
 
 
 def _count_cjk_chars(value: str) -> int:
     return sum(1 for c in value if _is_cjk_char(c))
-
-
-def _split_cjk_segments(value: str) -> list[tuple[bool, str]]:
-    """按 CJK / 非 CJK 边界切 segment, 返回 [(is_cjk, segment), ...]."""
-    segments: list[tuple[bool, str]] = []
-    current_cjk: Optional[bool] = None
-    current = ""
-    for c in value:
-        c_cjk = _is_cjk_char(c)
-        if current_cjk is None:
-            current_cjk = c_cjk
-            current = c
-        elif c_cjk == current_cjk:
-            current += c
-        else:
-            segments.append((current_cjk, current))
-            current = c
-            current_cjk = c_cjk
-    if current and current_cjk is not None:
-        segments.append((current_cjk, current))
-    return segments
-
-
-@dataclass
-class _CjkSegmentRoute:
-    """单个 CJK segment 的路由 (trigram_match / trigram_like / too_short)."""
-    value: str
-    route: str  # 'trigram_match' | 'trigram_like' | 'too_short'
 
 
 @dataclass
@@ -431,20 +407,31 @@ class _TermRoute:
     """一个裸全文 term 的路由计划。
 
     ``route``:
-        'unicode'       —— 纯非 CJK term, 走主表 unicode61 (unicode_expr 为 smart_query_transform 结果)
-        'trigram'       —— 含 CJK term, 由 cjk_segments + latin_segments 组合
-        'too_short'     —— 整 term 只有 1 个 CJK 字 (无别的内容), 拦截 + warning
+        'unicode'   —— 纯非 CJK term, 走主表 unicode61 (``unicode_expr`` 为 smart_query_transform 结果)
+        'trigram'   —— 含 CJK 的 term, **整 term** 走并行 trigram 表子串检索 (不再拆段 AND):
+                          ``trigram_mode='match'`` (整 term >=3 字, MATCH 整串短语)
+                          ``trigram_mode='like'``  (整 term =2 字, LIKE '%整串%')
+        'too_short' —— 整 term 只有 1 个 CJK 字 (无别的内容), 拦截 + warning
+
+    历史 bug 修复: 旧实现把含 CJK 的连续 term 按 CJK/非 CJK 边界拆段, latin 段走
+    unicode61 主表 MATCH、CJK 段走 trigram, 段间 AND 交集。但 unicode61 只能整词/前缀
+    匹配, 嵌在连续 token 中间的 latin 段 (如 ``研发项目deadline汇报`` 里的 ``deadline``)
+    召回为 0 → AND 交集空 → 整 term 搜不到。整 term 走 trigram 子串检索可正确命中连续串。
     """
     original: str
     route: str
-    unicode_expr: str = ""                       # route='unicode' 时的 FTS5 expr
-    latin_segments: list[str] = field(default_factory=list)   # 混合 term 里的拉丁段 (走 unicode61)
-    cjk_segments: list[_CjkSegmentRoute] = field(default_factory=list)
+    unicode_expr: str = ""              # route='unicode' 时的 FTS5 expr
+    trigram_core: str = ""             # route='trigram' 时的整 term 字面量
+    trigram_mode: str = ""            # route='trigram' 时: 'match' (>=3) | 'like' (=2)
     warnings: list[str] = field(default_factory=list)
 
 
 def _route_text_term(value: str) -> _TermRoute:
-    """把一个裸全文 term 分类成 _TermRoute (T7 路由核心, Python/TS 双端镜像逻辑)。"""
+    """把一个裸全文 term 分类成 _TermRoute (T7 路由核心, Python/TS 双端镜像逻辑)。
+
+    term 已按空格切分, 无内部空格。无 CJK → unicode61; 含 CJK → **整 term** 走 trigram
+    子串检索 (不再拆段), 按整 term 字符长度路由: >=3 MATCH 整串 / =2 LIKE / =1 拦截。
+    """
     cjk_count = _count_cjk_chars(value)
     if cjk_count == 0:
         return _TermRoute(
@@ -453,35 +440,21 @@ def _route_text_term(value: str) -> _TermRoute:
             unicode_expr=smart_query_transform(value),
         )
 
-    segments = _split_cjk_segments(value)
-    latin_segments: list[str] = []
-    cjk_segments: list[_CjkSegmentRoute] = []
-    warnings: list[str] = []
-    for is_cjk, seg in segments:
-        if not is_cjk:
-            if seg.strip():
-                latin_segments.append(seg)
-            continue
-        seg_len = len(seg)
-        if seg_len >= 3:
-            cjk_segments.append(_CjkSegmentRoute(seg, "trigram_match"))
-        elif seg_len == 2:
-            cjk_segments.append(_CjkSegmentRoute(seg, "trigram_like"))
-        else:  # seg_len == 1
-            cjk_segments.append(_CjkSegmentRoute(seg, "too_short"))
-            warnings.append(f"cjk_too_short:{seg}")
-
-    # 整 term 只有 1 个 CJK 字 (无拉丁段, 无其它可查 CJK 段) → 拦截整 term
-    queryable_cjk = [s for s in cjk_segments if s.route != "too_short"]
-    if not latin_segments and not queryable_cjk:
-        return _TermRoute(original=value, route="too_short", warnings=warnings)
-
+    core = value
+    core_len = len(core)
+    if core_len >= 3:
+        return _TermRoute(
+            original=value, route="trigram", trigram_core=core, trigram_mode="match"
+        )
+    if core_len == 2:
+        return _TermRoute(
+            original=value, route="trigram", trigram_core=core, trigram_mode="like"
+        )
+    # core_len == 1: 单个 CJK 字, 全表扫描噪声太高 → 拦截 + warning
     return _TermRoute(
         original=value,
-        route="trigram",
-        latin_segments=latin_segments,
-        cjk_segments=queryable_cjk,
-        warnings=warnings,
+        route="too_short",
+        warnings=[f"cjk_too_short:{core}"],
     )
 
 
@@ -494,10 +467,10 @@ def build_trigram_snippet_expr(routes: list[_TermRoute]) -> str:
     """从路由计划构造「snippet 匹配表达式」(供 email_body_fts_trigram MATCH 高亮)。
 
     trigram 分词器要求 token >= 3 字符才有召回, 故只收:
-      - latin 段 (英文/数字, 来自 unicode term 的 original 或 trigram term 的 latin_segments),
-        按 ``[A-Za-z0-9]+`` 抽词后取 len>=3 的。
-      - CJK 段中 route=='trigram_match' (>=3 字) 的整段。
-    2 字 CJK (trigram_like) 与 1 字 CJK 不进表达式 (MATCH<3 无效)。
+      - unicode term: 其 ``original`` 里按 ``[A-Za-z0-9]+`` 抽词后取 len>=3 的。
+      - trigram term 且 ``trigram_mode=='match'`` (整 term >=3 字): 收整 term ``trigram_core``。
+    2 字 CJK (trigram_mode='like') 与 1 字 CJK 不进表达式 (MATCH<3 无效)。
+    含 CJK 的整串 (如 ``研发项目deadline汇报``) 整体进表达式 → snippet 高亮整个连续命中串。
     各 token 包成 FTS5 短语并以 ``OR`` 连接; 全部不可 MATCH → 返回 ''。
     Python/TS 双端逐行镜像, 由行为夹具锁。
     """
@@ -505,12 +478,8 @@ def build_trigram_snippet_expr(routes: list[_TermRoute]) -> str:
     for route in routes:
         if route.route == "unicode":
             tokens.extend(t for t in re.findall(r"[A-Za-z0-9]+", route.original) if len(t) >= 3)
-        elif route.route == "trigram":
-            for latin in route.latin_segments:
-                tokens.extend(t for t in re.findall(r"[A-Za-z0-9]+", latin) if len(t) >= 3)
-            for seg in route.cjk_segments:
-                if seg.route == "trigram_match":
-                    tokens.append(seg.value)
+        elif route.route == "trigram" and route.trigram_mode == "match":
+            tokens.append(route.trigram_core)
     if not tokens:
         return ""
     return " OR ".join(_quote_fts_token(t) for t in tokens)
@@ -1329,8 +1298,8 @@ class EmailRepository:
     ) -> Optional[EmailSearchResult]:
         """裸全文 query 的 CJK trigram 路由 (T7)。
 
-        - 每个 term 按 ``build_search_plan`` 路由 (unicode / trigram_match /
-          trigram_like / too_short)。
+        - 每个 term 按 ``build_search_plan`` 路由 (unicode / trigram[mode=match|like] /
+          too_short); 含 CJK 的整 term 整体走 trigram 子串 (不拆段)。
         - 每个 term 产出有序候选 internal_id 列表; term 之间 AND (rowid 交集)。
         - 用 P1 的 RRF (``1/(_RRF_K + row_number)``) 把各 term 列表的 rank 融合,
           ORDER BY score DESC, date DESC。
@@ -1403,48 +1372,25 @@ class EmailRepository:
         """单个 term 的有序候选 internal_id 列表。
 
         - route='unicode': 主表 email_body_fts MATCH (unicode_expr), bm25 升序。
-        - route='trigram': latin 段走 email_body_fts MATCH; 每个 CJK 段走 trigram 表
-          (>=3 MATCH / =2 LIKE)。同 term 多段 AND (交集)。返回交集后的有序列表
-          (以第一个可排序候选源的顺序为准, 缺失 bm25 的 LIKE 段按 internal_id DESC 兜底)。
+        - route='trigram' mode='match': **整 term** 走并行 trigram 表 MATCH 整串短语
+          (含符号/混合时必须 quote 成短语, 否则触发 FTS5 语法错误; 纯中文也安全), bm25 升序。
+        - route='trigram' mode='like': 整 term (2 字 CJK) 走 trigram 表 LIKE '%整串%' 兜底。
         """
         if route.route == "unicode":
             return self._fts_match_ids(
                 conn, "email_body_fts", route.unicode_expr, query_for_log=query_for_log
             )
 
-        # trigram term: 收集各段候选, 段间 AND。
-        segment_lists: list[list[int]] = []
-        for latin in route.latin_segments:
-            expr = smart_query_transform(latin)
-            segment_lists.append(
-                self._fts_match_ids(
-                    conn, "email_body_fts", expr, query_for_log=query_for_log
-                )
+        # trigram term: 整 term 走并行 trigram 表子串检索 (不再拆段 AND)。
+        if route.trigram_mode == "match":
+            return self._fts_match_ids(
+                conn,
+                "email_body_fts_trigram",
+                _quote_fts_token(route.trigram_core),
+                query_for_log=query_for_log,
             )
-        for seg in route.cjk_segments:
-            if seg.route == "trigram_match":
-                segment_lists.append(
-                    self._fts_match_ids(
-                        conn,
-                        "email_body_fts_trigram",
-                        seg.value,
-                        query_for_log=query_for_log,
-                    )
-                )
-            elif seg.route == "trigram_like":
-                segment_lists.append(
-                    self._trigram_like_ids(conn, seg.value, query_for_log=query_for_log)
-                )
-
-        if not segment_lists:
-            return []
-        # 段间 AND: 以第一个段的顺序为基准, 仅保留出现在所有段的 id。
-        common = set(segment_lists[0])
-        for lst in segment_lists[1:]:
-            common &= set(lst)
-        if not common:
-            return []
-        return [iid for iid in segment_lists[0] if iid in common]
+        # trigram_mode == 'like' (2 字 CJK)
+        return self._trigram_like_ids(conn, route.trigram_core, query_for_log=query_for_log)
 
     def _fts_match_ids(
         self,
@@ -1483,16 +1429,18 @@ class EmailRepository:
         无 bm25, 按启发式排序: subject 命中 > sender 命中 > body 命中, 同档按 rowid DESC。
         返回的列表顺序即作为该段的 rank 来源。
         """
-        like = f"%{value}%"
+        like = f"%{escape_like_value(value)}%"
         sql = """
             SELECT rowid,
                    CASE
-                       WHEN subject LIKE ? THEN 0
-                       WHEN sender  LIKE ? THEN 1
+                       WHEN subject LIKE ? ESCAPE '\\' THEN 0
+                       WHEN sender  LIKE ? ESCAPE '\\' THEN 1
                        ELSE 2
                    END AS boost
               FROM email_body_fts_trigram
-             WHERE body_markdown LIKE ? OR subject LIKE ? OR sender LIKE ?
+             WHERE body_markdown LIKE ? ESCAPE '\\'
+                OR subject LIKE ? ESCAPE '\\'
+                OR sender LIKE ? ESCAPE '\\'
              ORDER BY boost ASC, rowid DESC
         """
         try:
@@ -2152,53 +2100,35 @@ class EmailRepository:
     def _cjk_term_in_predicate(
         self, term: TextTerm, *, negate: bool
     ) -> Optional[FilterPredicate]:
-        """把一个裸 CJK term 编译成 IN / NOT IN 子查询谓词 (term 内多段 AND)。
+        """把一个裸 CJK term 编译成 IN / NOT IN 子查询谓词 (整 term 走 trigram 子串)。
 
-        段路由复用 ``_route_text_term`` (与 plain trigram 路径同一份分类语义):
-          - CJK 段 >=3 → ``email_body_fts_trigram MATCH '<seg>'``
-          - CJK 段 =2  → trigram 表 ``(body_markdown/subject/sender LIKE '%seg%')``
-          - latin 段   → ``email_body_fts MATCH '<smart_transform(seg)>'``
-          - CJK 段 =1  → 跳过 (其 warning 已由 caller 收集)
-        term 内多段 → 多条 IN 子查询 AND (保证混合词 "redis培训" 各段都满足);
-        负向 → 每个段对称 NOT IN (de Morgan: NOT(A AND B) 非诉求, 与 plain 路径
-        AND 语义一致, 负向 CJK 词要求每段都不命中, 取 AND-of-NOT-IN)。
-        无可查段 (整词 1 字 CJK) → 返回 None (caller 跳过)。
+        路由复用 ``_route_text_term`` (与 plain trigram 路径同一份分类语义):
+          - trigram_mode='match' (整 term >=3 字) → ``email_body_fts_trigram MATCH '<整串短语>'``
+          - trigram_mode='like'  (整 term =2 字)  → trigram 表 ``(body/subject/sender LIKE '%整串%')``
+          - too_short (整词 1 字 CJK) → 返回 None (caller 跳过, warning 已由 caller 收集)
+        整串子串检索, 不再拆段 (与历史 bug 修复一致: 混合词 ``redis培训`` 作为连续串整体匹配)。
+        负向 → 对称 NOT IN。
         """
         route = _route_text_term(term.value)
         if route.route == "too_short":
             return None
 
         in_kw = "NOT IN" if negate else "IN"
-        sql_parts: list[str] = []
-        params: list = []
-        for latin in route.latin_segments:
-            expr = smart_query_transform(latin)
-            if not expr:
-                continue
-            sql_parts.append(
-                f"m.internal_id {in_kw} (SELECT rowid FROM email_body_fts "
-                f"WHERE email_body_fts MATCH ?)"
+        if route.trigram_mode == "match":
+            return FilterPredicate(
+                f"m.internal_id {in_kw} (SELECT rowid FROM email_body_fts_trigram "
+                f"WHERE email_body_fts_trigram MATCH ?)",
+                (_quote_fts_token(route.trigram_core),),
             )
-            params.append(expr)
-        for seg in route.cjk_segments:
-            if seg.route == "trigram_match":
-                sql_parts.append(
-                    f"m.internal_id {in_kw} (SELECT rowid FROM email_body_fts_trigram "
-                    f"WHERE email_body_fts_trigram MATCH ?)"
-                )
-                params.append(seg.value)
-            elif seg.route == "trigram_like":
-                like = f"%{seg.value}%"
-                sql_parts.append(
-                    f"m.internal_id {in_kw} (SELECT rowid FROM email_body_fts_trigram "
-                    f"WHERE body_markdown LIKE ? OR subject LIKE ? OR sender LIKE ?)"
-                )
-                params.extend([like, like, like])
-        if not sql_parts:
-            return None
-        # 正向: 各段 AND (每段都要命中)。负向: 各段 NOT IN 也 AND (每段都不命中),
-        # 与 plain trigram 路径「段间 AND 交集」语义一致。
-        return FilterPredicate(" AND ".join(sql_parts), tuple(params))
+        # trigram_mode == 'like' (2 字 CJK)
+        like = f"%{escape_like_value(route.trigram_core)}%"
+        return FilterPredicate(
+            f"m.internal_id {in_kw} (SELECT rowid FROM email_body_fts_trigram "
+            f"WHERE body_markdown LIKE ? ESCAPE '\\' "
+            f"OR subject LIKE ? ESCAPE '\\' "
+            f"OR sender LIKE ? ESCAPE '\\')",
+            (like, like, like),
+        )
 
     def _build_cjk_trigram_predicates(
         self, parsed: ParsedSearchQuery

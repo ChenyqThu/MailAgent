@@ -254,17 +254,23 @@ date-only 的 `until <= '2026-06-01'` 还会漏掉当天全部邮件。因此：
 
 ### 9.1 路由规则（仅 flag=True + 裸全文 query 含 CJK 时生效）
 
-对每个**裸全文 term**（无列限定 / 非短语；走 `is_plain_passthrough` fast-path）按 CJK 长度分路由：
+对每个**裸全文 term**（无列限定 / 非短语；走 `is_plain_passthrough` fast-path；term 已按空格切分、无内部空格）按「是否含 CJK + **整 term 字符长度**」分路由：
 
 | term 形态 | 路由 | 说明 |
 |---|---|---|
 | 无 CJK（纯英文/数字/符号） | unicode | 主表 `email_body_fts MATCH` + `smart_query_transform`（不变）|
-| CJK ≥ 3 字 | trigram MATCH | `email_body_fts_trigram MATCH`（实测 ≥3 字才有召回）|
-| CJK = 2 字 | trigram LIKE | trigram 表 `body/subject/sender LIKE '%词%'` 兜底（MATCH <3 字符无召回）|
-| CJK = 1 字 | 拦截 | 不查该 term，push warning `cjk_too_short:<字>`（单字全表扫描噪声太高）|
-| 中英混合（CJK + Latin 同 term） | 拆段 | 拉丁段走 unicode61 候选、CJK 段走 trigram 候选，段间 **rowid 交集** |
+| 含 CJK 且整 term ≥ 3 字 | trigram MATCH（整串） | `email_body_fts_trigram MATCH '<整串短语>'`（整 term 用 `_quote_fts_token` 包成 FTS5 短语，含符号/中英混合也安全）|
+| 含 CJK 且整 term = 2 字 | trigram LIKE（整串） | trigram 表 `body/subject/sender LIKE '%整串%'` 兜底（MATCH <3 字符无召回）|
+| 含 CJK 且整 term = 1 字 | 拦截 | 不查该 term，push warning `cjk_too_short:<字>`（单字全表扫描噪声太高）|
 
-- **多 term 之间 AND**（rowid 交集）。中英混合多 term（如 `redis 超时`）严禁整串丢 trigram——实测会忽略 2 字中文约束误命中只含英文的行。
+- **含 CJK 的连续 term 整体走 trigram 子串检索**（**不再拆 CJK/Latin 段各自 MATCH 后 AND 交集**）。
+  历史 bug：旧实现把连续 term（如 `研发项目deadline汇报`）按 CJK/非 CJK 边界拆段，latin 段
+  `deadline` 走 unicode61 主表 MATCH——但 unicode61 只能整词/前缀匹配，嵌在连续 token 中间的
+  `deadline` 召回为 0 → 段间 AND 交集空 → 整 term 搜不到（用户实测「拆短了反而搜得到」即此）。
+  整 term 走 trigram 子串后，连续串 `研发项目deadline汇报` / `【项目进度】` / `central立项` 都能正确命中。
+- **多 term 之间 AND**（rowid 交集）：term 由空格切分，仍逐 term 路由后求交集（如 `redis 产品评审` =
+  `redis`(unicode) ∩ `产品评审`(trigram MATCH)）。**无内部空格的连续混合串是单个 term，整体走 trigram**，
+  不再被拆成 latin/CJK 子段。
 - **rank 融合**：复用 P1 RRF 基础设施（`_RRF_K=60`）。每个 term 候选列表按命中顺序计 `1/(60 + row_number)`，多 term 求和，`ORDER BY score DESC, date DESC`。
 - **2 字 LIKE 无 bm25** → 启发式排序：`subject` 命中 > `sender` 命中 > `body` 命中，同档按 rowid DESC。
 
@@ -285,10 +291,11 @@ date-only 的 `until <= '2026-06-01'` 还会漏掉当天全部邮件。因此：
 trigram 路径早期把 hit 的 `snippet` 设成 `''`（前端只剩 subject 高亮）。中英混合搜索（如 `central 立项`）只显示中文 subject，看不到英文词命中的正文片段，用户误判英文没参与。**P4a 给 trigram 结果补 snippet**（`build_trigram_snippet_expr` / `buildTrigramSnippetExpr`，Python/TS 逐行镜像，夹具锁）：
 
 - 构造「snippet 匹配表达式」= 所有 **trigram-MATCH-able 词**的 OR：
-  - latin 段（unicode term 的 `original` + trigram term 的 `latin_segments`，按 `[A-Za-z0-9]+` 抽词取 len≥3）
-  - CJK 段中 `route=='trigram_match'`（≥3 字）的整段。
-  - **2 字 CJK（`trigram_like`）和 1 字 CJK 不进表达式**（trigram MATCH <3 字符无效）。每个 token 包成 FTS5 短语 `"..."` 以 `OR` 连接。
-- 表达式非空 → 对 top-N id 跑 `snippet(email_body_fts_trigram, 0, '<mark>', '</mark>', '…', 24) ... WHERE rowid IN (...) AND email_body_fts_trigram MATCH '<expr>'`，把高亮片段映射回 hit（高亮命中的 `central`/`产品评审` 等）。`snippet()` 只能在带 MATCH 的查询里用。
+  - unicode term：其 `original` 按 `[A-Za-z0-9]+` 抽词取 len≥3 的。
+  - trigram term 且 `trigram_mode=='match'`（整 term ≥3 字）：收**整 term** `trigram_core`（连续混合串
+    如 `研发项目deadline汇报` / `central立项` 整体进表达式 → snippet 高亮整段连续命中串）。
+  - **2 字 CJK（`trigram_mode=='like'`）和 1 字 CJK 不进表达式**（trigram MATCH <3 字符无效）。每个 token 包成 FTS5 短语 `"..."` 以 `OR` 连接。
+- 表达式非空 → 对 top-N id 跑 `snippet(email_body_fts_trigram, 0, '<mark>', '</mark>', '…', 24) ... WHERE rowid IN (...) AND email_body_fts_trigram MATCH '<expr>'`，把高亮片段映射回 hit（高亮命中的 `【项目进度】`/`研发项目deadline汇报`/`产品评审` 等）。`snippet()` 只能在带 MATCH 的查询里用。
 - 表达式为空（纯 2/1 字 CJK 查询）或某 row 不被表达式 MATCH（只 2 字 LIKE 命中）→ **fallback**：取 `body_markdown` 前 ~80 字符做无高亮摘要（不经 `snippet()`），保证 snippet 不再恒空。
 - 前端复用既有 DOMPurify 渲染（snippet 含 `<mark>`，`CommandPalette` 已 sanitize 注入）。
 

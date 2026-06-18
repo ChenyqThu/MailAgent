@@ -673,14 +673,16 @@ function stripOuterQuotes(value: string): string {
 // ============================================================
 //
 // 设计来源: .trellis/tasks/06-17-dsl-parse-warnings/research/codex-t7-tokenizer.md 方案②。
-// 对每个「裸全文 term」按 CJK 占比 + CJK 长度分路由 (与 email_repository.py 的
-// _count_cjk_chars / _split_cjk_segments / _route_text_term / build_search_plan 逐字节对齐):
-//   - 无 CJK (纯英文/数字/符号)  → unicode (主表 email_body_fts MATCH + smartQueryTransform)
-//   - CJK >= 3 字                → trigram_match (email_body_fts_trigram MATCH)
-//   - CJK = 2 字                 → trigram_like (trigram 表 body/subject/sender LIKE '%词%')
-//   - CJK = 1 字                → too_short (不查 + warning cjk_too_short:<词>)
-//   - 中英混合 (CJK + Latin 同 term) → mixed (英文段 unicode 候选 ∩ 中文段 trigram 候选)
+// 对每个「裸全文 term」按是否含 CJK + 整 term 长度分路由 (与 email_repository.py 的
+// _count_cjk_chars / _route_text_term / build_search_plan 逐字节对齐):
+//   - 无 CJK (纯英文/数字/符号) → unicode (主表 email_body_fts MATCH + smartQueryTransform)
+//   - 含 CJK 且整 term >= 3 字   → trigram, mode='match' (email_body_fts_trigram MATCH 整串短语)
+//   - 含 CJK 且整 term = 2 字    → trigram, mode='like' (trigram 表 body/subject/sender LIKE '%整串%')
+//   - 含 CJK 且整 term = 1 字    → too_short (不查 + warning cjk_too_short:<词>)
 // 实测硬约束: trigram MATCH < 3 Unicode 字符无召回, 故 1/2 字中文不能走 MATCH。
+// 历史 bug 修复: 含 CJK 的连续 term **整体** 走 trigram 子串检索 (不再拆 CJK/latin 段
+// 各自 MATCH 后 AND 交集) —— 嵌在连续 token 中间的 latin 段 (如 "研发项目deadline汇报"
+// 里的 deadline) unicode61 召回为 0 会导致整 term 搜不到。
 
 // isCjkChar 必须与 Python _is_cjk_char (email_repository.py) + email.ts isCjkChar 同范围。
 function isCjkCharPlan(c: string): boolean {
@@ -704,44 +706,14 @@ export function countCjkChars(value: string): number {
   return n
 }
 
-/** 按 CJK / 非 CJK 边界切 segment, 返回 [{isCjk, segment}, ...] (镜像 Python _split_cjk_segments)。 */
-export function splitCjkSegments(value: string): Array<{ isCjk: boolean; segment: string }> {
-  const segments: Array<{ isCjk: boolean; segment: string }> = []
-  let currentCjk: boolean | null = null
-  let current = ''
-  for (const c of value) {
-    const cCjk = isCjkCharPlan(c)
-    if (currentCjk === null) {
-      currentCjk = cCjk
-      current = c
-    } else if (cCjk === currentCjk) {
-      current += c
-    } else {
-      segments.push({ isCjk: currentCjk, segment: current })
-      current = c
-      currentCjk = cCjk
-    }
-  }
-  if (current && currentCjk !== null) {
-    segments.push({ isCjk: currentCjk, segment: current })
-  }
-  return segments
-}
-
-export type CjkSegmentRouteKind = 'trigram_match' | 'trigram_like' | 'too_short'
-
-/** 单个 CJK segment 的路由 (镜像 Python _CjkSegmentRoute)。 */
-export interface CjkSegmentRoute {
-  value: string
-  route: CjkSegmentRouteKind
-}
-
 export type TermRouteKind = 'unicode' | 'trigram' | 'too_short'
+
+export type TrigramMode = 'match' | 'like' | ''
 
 /**
  * 一个裸全文 term 的路由计划 (镜像 Python _TermRoute)。
- *   'unicode'   —— 纯非 CJK term, unicode_expr 为 smartQueryTransform 结果。
- *   'trigram'   —— 含 CJK term, 由 cjkSegments + latinSegments 组合。
+ *   'unicode'   —— 纯非 CJK term, unicodeExpr 为 smartQueryTransform 结果。
+ *   'trigram'   —— 含 CJK term, **整 term** 走 trigram 子串检索 (trigramCore + trigramMode)。
  *   'too_short' —— 整 term 只有 1 个 CJK 字 (无别的内容), 拦截 + warning。
  */
 export interface TermRoute {
@@ -749,14 +721,17 @@ export interface TermRoute {
   route: TermRouteKind
   /** route='unicode' 时的 FTS5 expr (smartQueryTransform 结果)。 */
   unicodeExpr: string
-  /** 混合 term 里的拉丁段 (走 unicode61)。 */
-  latinSegments: string[]
-  cjkSegments: CjkSegmentRoute[]
+  /** route='trigram' 时的整 term 字面量。 */
+  trigramCore: string
+  /** route='trigram' 时: 'match' (整 term >=3 字) | 'like' (整 term =2 字)。 */
+  trigramMode: TrigramMode
   warnings: string[]
 }
 
 /**
  * 把一个裸全文 term 分类成 TermRoute (T7 路由核心, 镜像 Python _route_text_term)。
+ * term 已按空格切分, 无内部空格。无 CJK → unicode61; 含 CJK → 整 term 走 trigram 子串
+ * 检索 (不再拆段), 按整 term 字符长度路由: >=3 MATCH 整串 / =2 LIKE / =1 拦截。
  * smartQueryTransform 由 caller 注入 (定义在 email.ts, 与 Python 同算法)。
  */
 export function routeTextTerm(
@@ -769,53 +744,42 @@ export function routeTextTerm(
       original: value,
       route: 'unicode',
       unicodeExpr: smartQueryTransform(value),
-      latinSegments: [],
-      cjkSegments: [],
+      trigramCore: '',
+      trigramMode: '',
       warnings: []
     }
   }
 
-  const segments = splitCjkSegments(value)
-  const latinSegments: string[] = []
-  const cjkSegments: CjkSegmentRoute[] = []
-  const warnings: string[] = []
-  for (const { isCjk, segment } of segments) {
-    if (!isCjk) {
-      if (segment.trim()) latinSegments.push(segment)
-      continue
-    }
-    const segLen = [...segment].length
-    if (segLen >= 3) {
-      cjkSegments.push({ value: segment, route: 'trigram_match' })
-    } else if (segLen === 2) {
-      cjkSegments.push({ value: segment, route: 'trigram_like' })
-    } else {
-      // segLen === 1
-      cjkSegments.push({ value: segment, route: 'too_short' })
-      warnings.push(`cjk_too_short:${segment}`)
-    }
-  }
-
-  // 整 term 只有 1 个 CJK 字 (无拉丁段, 无其它可查 CJK 段) → 拦截整 term。
-  const queryableCjk = cjkSegments.filter((s) => s.route !== 'too_short')
-  if (latinSegments.length === 0 && queryableCjk.length === 0) {
+  const core = value
+  const coreLen = [...core].length
+  if (coreLen >= 3) {
     return {
       original: value,
-      route: 'too_short',
+      route: 'trigram',
       unicodeExpr: '',
-      latinSegments: [],
-      cjkSegments: [],
-      warnings
+      trigramCore: core,
+      trigramMode: 'match',
+      warnings: []
     }
   }
-
+  if (coreLen === 2) {
+    return {
+      original: value,
+      route: 'trigram',
+      unicodeExpr: '',
+      trigramCore: core,
+      trigramMode: 'like',
+      warnings: []
+    }
+  }
+  // coreLen === 1: 单个 CJK 字, 全表扫描噪声太高 → 拦截 + warning。
   return {
     original: value,
-    route: 'trigram',
+    route: 'too_short',
     unicodeExpr: '',
-    latinSegments,
-    cjkSegments: queryableCjk,
-    warnings
+    trigramCore: '',
+    trigramMode: '',
+    warnings: [`cjk_too_short:${core}`]
   }
 }
 
@@ -841,7 +805,7 @@ export function buildSearchPlan(
 }
 
 /** 把一个 token 包成 FTS5 短语字面量 `"token"` (内部双引号转义为 `""`)。镜像 Python _quote_fts_token。 */
-function quoteFtsToken(token: string): string {
+export function quoteFtsToken(token: string): string {
   return '"' + token.replace(/"/g, '""') + '"'
 }
 
@@ -850,10 +814,10 @@ function quoteFtsToken(token: string): string {
  * 镜像 Python build_trigram_snippet_expr。
  *
  * trigram 分词器要求 token >= 3 字符才有召回, 故只收:
- *   - latin 段 (英文/数字, 来自 unicode term 的 original 或 trigram term 的 latinSegments),
- *     按 `[A-Za-z0-9]+` 抽词后取 length>=3 的。
- *   - CJK 段中 route==='trigram_match' (>=3 字) 的整段。
- * 2 字 CJK (trigram_like) 与 1 字 CJK 不进表达式 (MATCH<3 无效)。
+ *   - unicode term: 其 original 里按 `[A-Za-z0-9]+` 抽词后取 length>=3 的。
+ *   - trigram term 且 trigramMode==='match' (整 term >=3 字): 收整 term trigramCore。
+ * 2 字 CJK (trigramMode='like') 与 1 字 CJK 不进表达式 (MATCH<3 无效)。
+ * 含 CJK 的整串整体进表达式 → snippet 高亮整个连续命中串。
  * 各 token 包成 FTS5 短语并以 `OR` 连接; 全部不可 MATCH → 返回 ''。
  */
 export function buildTrigramSnippetExpr(routes: TermRoute[]): string {
@@ -861,13 +825,8 @@ export function buildTrigramSnippetExpr(routes: TermRoute[]): string {
   for (const route of routes) {
     if (route.route === 'unicode') {
       tokens.push(...(route.original.match(/[A-Za-z0-9]+/g) ?? []).filter((t) => t.length >= 3))
-    } else if (route.route === 'trigram') {
-      for (const latin of route.latinSegments) {
-        tokens.push(...(latin.match(/[A-Za-z0-9]+/g) ?? []).filter((t) => t.length >= 3))
-      }
-      for (const seg of route.cjkSegments) {
-        if (seg.route === 'trigram_match') tokens.push(seg.value)
-      }
+    } else if (route.route === 'trigram' && route.trigramMode === 'match') {
+      tokens.push(route.trigramCore)
     }
   }
   if (tokens.length === 0) return ''

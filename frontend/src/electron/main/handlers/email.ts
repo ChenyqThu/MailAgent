@@ -24,7 +24,9 @@ import {
   buildStructuredFilterPredicates,
   buildTrigramSnippetExpr,
   countCjkChars,
+  escapeLikeValue,
   parseSearchQuery,
+  quoteFtsToken,
   routeTextTerm,
   type FilterPredicate,
   type ParsedSearchQuery,
@@ -548,42 +550,33 @@ function termHasCjk(term: TextTerm): boolean {
   return isBareFulltextTerm(term) && countCjkChars(term.value) > 0
 }
 
-// 把一个裸 CJK term 编译成 IN / NOT IN 子查询谓词 (term 内多段 AND)。段路由复用
-// routeTextTerm (与 plain trigram 路径同一份分类语义)。无可查段 (整词 1 字 CJK) →
-// 返回 null (caller 跳过)。镜像 Python _cjk_term_in_predicate。
+// 把一个裸 CJK term 编译成 IN / NOT IN 子查询谓词 (整 term 走 trigram 子串)。路由复用
+// routeTextTerm (与 plain trigram 路径同一份分类语义)。trigram_mode='match' (整 term >=3
+// 字) → MATCH 整串短语; ='like' (整 term =2 字) → trigram 表 LIKE '%整串%'; too_short
+// (整词 1 字 CJK) → 返回 null (caller 跳过)。镜像 Python _cjk_term_in_predicate。
 function cjkTermInPredicate(term: TextTerm, negate: boolean): FilterPredicate | null {
   const route = routeTextTerm(term.value, smartQueryTransform)
   if (route.route === 'too_short') return null
 
   const inKw = negate ? 'NOT IN' : 'IN'
-  const sqlParts: string[] = []
-  const params: unknown[] = []
-  for (const latin of route.latinSegments) {
-    const expr = smartQueryTransform(latin)
-    if (!expr) continue
-    sqlParts.push(
-      `m.internal_id ${inKw} (SELECT rowid FROM email_body_fts ` + `WHERE email_body_fts MATCH ?)`
-    )
-    params.push(expr)
-  }
-  for (const seg of route.cjkSegments) {
-    if (seg.route === 'trigram_match') {
-      sqlParts.push(
+  if (route.trigramMode === 'match') {
+    return {
+      sql:
         `m.internal_id ${inKw} (SELECT rowid FROM email_body_fts_trigram ` +
-          `WHERE email_body_fts_trigram MATCH ?)`
-      )
-      params.push(seg.value)
-    } else if (seg.route === 'trigram_like') {
-      const like = `%${seg.value}%`
-      sqlParts.push(
-        `m.internal_id ${inKw} (SELECT rowid FROM email_body_fts_trigram ` +
-          `WHERE body_markdown LIKE ? OR subject LIKE ? OR sender LIKE ?)`
-      )
-      params.push(like, like, like)
+        `WHERE email_body_fts_trigram MATCH ?)`,
+      params: [quoteFtsToken(route.trigramCore)]
     }
   }
-  if (sqlParts.length === 0) return null
-  return { sql: sqlParts.join(' AND '), params }
+  // trigramMode === 'like' (2 字 CJK)
+  const like = `%${escapeLikeValue(route.trigramCore)}%`
+  return {
+    sql:
+      `m.internal_id ${inKw} (SELECT rowid FROM email_body_fts_trigram ` +
+      `WHERE body_markdown LIKE ? ESCAPE '\\' ` +
+      `OR subject LIKE ? ESCAPE '\\' ` +
+      `OR sender LIKE ? ESCAPE '\\')`,
+    params: [like, like, like]
+  }
 }
 
 // trigram 启用时, 把 parsed 路径的独立裸 CJK 词编译成 trigram IN/NOT-IN 谓词。
@@ -1029,16 +1022,18 @@ function trigramFtsMatchIds(db: Database, table: string, ftsExpr: string): numbe
 // 无 bm25, 启发式排序: subject 命中 > sender 命中 > body 命中, 同档按 rowid DESC。
 // 镜像 Python _trigram_like_ids。
 function trigramLikeIds(db: Database, value: string): number[] {
-  const like = `%${value}%`
+  const like = `%${escapeLikeValue(value)}%`
   const sql = `
     SELECT rowid,
            CASE
-               WHEN subject LIKE ? THEN 0
-               WHEN sender  LIKE ? THEN 1
+               WHEN subject LIKE ? ESCAPE '\\' THEN 0
+               WHEN sender  LIKE ? ESCAPE '\\' THEN 1
                ELSE 2
            END AS boost
       FROM email_body_fts_trigram
-     WHERE body_markdown LIKE ? OR subject LIKE ? OR sender LIKE ?
+     WHERE body_markdown LIKE ? ESCAPE '\\'
+        OR subject LIKE ? ESCAPE '\\'
+        OR sender LIKE ? ESCAPE '\\'
      ORDER BY boost ASC, rowid DESC`
   try {
     const rows = prep(db, sql).all(like, like, like, like, like) as Array<{ rowid: number }>
@@ -1051,39 +1046,20 @@ function trigramLikeIds(db: Database, value: string): number[] {
 
 // 单个 term 的有序候选 internal_id 列表 (镜像 Python _trigram_term_candidate_ids)。
 // - route='unicode': 主表 email_body_fts MATCH (unicodeExpr), bm25 升序。
-// - route='trigram': latin 段走 email_body_fts MATCH; CJK 段走 trigram 表 (>=3 MATCH / =2 LIKE)。
-//   同 term 多段 AND (交集), 以首段顺序为基准。
-function trigramTermCandidateIds(
-  db: Database,
-  route: TermRoute,
-  smartTransform: (q: string) => string
-): number[] {
+// - route='trigram' mode='match': **整 term** 走并行 trigram 表 MATCH 整串短语
+//   (含符号/混合必须 quote 成短语, 纯中文也安全), bm25 升序。
+// - route='trigram' mode='like': 整 term (2 字 CJK) 走 trigram 表 LIKE '%整串%' 兜底。
+function trigramTermCandidateIds(db: Database, route: TermRoute): number[] {
   if (route.route === 'unicode') {
     return trigramFtsMatchIds(db, 'email_body_fts', route.unicodeExpr)
   }
 
-  // trigram term: 收集各段候选, 段间 AND。
-  const segmentLists: number[][] = []
-  for (const latin of route.latinSegments) {
-    segmentLists.push(trigramFtsMatchIds(db, 'email_body_fts', smartTransform(latin)))
+  // trigram term: 整 term 走并行 trigram 表子串检索 (不再拆段 AND)。
+  if (route.trigramMode === 'match') {
+    return trigramFtsMatchIds(db, 'email_body_fts_trigram', quoteFtsToken(route.trigramCore))
   }
-  for (const seg of route.cjkSegments) {
-    if (seg.route === 'trigram_match') {
-      segmentLists.push(trigramFtsMatchIds(db, 'email_body_fts_trigram', seg.value))
-    } else if (seg.route === 'trigram_like') {
-      segmentLists.push(trigramLikeIds(db, seg.value))
-    }
-  }
-
-  if (segmentLists.length === 0) return []
-  // 段间 AND: 以第一个段的顺序为基准, 仅保留出现在所有段的 id。
-  let common = new Set(segmentLists[0]!)
-  for (const lst of segmentLists.slice(1)) {
-    const next = new Set(lst)
-    common = new Set([...common].filter((iid) => next.has(iid)))
-  }
-  if (common.size === 0) return []
-  return segmentLists[0]!.filter((iid) => common.has(iid))
+  // trigramMode === 'like' (2 字 CJK)
+  return trigramLikeIds(db, route.trigramCore)
 }
 
 // 在 email_metadata 上对候选 id 套结构化谓词 (mailbox / date), 返回允许集。
@@ -1240,7 +1216,7 @@ function searchEmailBodiesTrigram(
   // 每个 term 一个有序候选 internal_id 列表 (rank 用 list 内位置算 RRF)。
   const perTermIds: number[][] = []
   for (const route of routes) {
-    const ids = trigramTermCandidateIds(db, route, smartQueryTransform)
+    const ids = trigramTermCandidateIds(db, route)
     if (ids.length === 0) return [] // 任一 term 无候选 → AND 交集为空。
     perTermIds.push(ids)
   }

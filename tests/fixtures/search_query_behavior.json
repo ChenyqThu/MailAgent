@@ -226,6 +226,40 @@
       "ai_priority": "🟢 一般",
       "body_markdown": "literal foo:bar token for unknown field fallback",
       "attachments": []
+    },
+    {
+      "internal_id": 13,
+      "subject": "研发项目deadline汇报",
+      "sender": "ivan@example.com",
+      "sender_name": "Ivan Dev",
+      "to_addr": "dev2@example.com",
+      "cc_addr": "",
+      "date_received": "2026-06-04T10:00:00+08:00",
+      "mailbox": "存档",
+      "is_read": 1,
+      "is_flagged": 0,
+      "is_pinned": 0,
+      "is_important": 0,
+      "ai_priority": "🟢 一般",
+      "body_markdown": "【项目进度】研发项目deadline汇报已完成，central立项进展顺利。",
+      "attachments": []
+    },
+    {
+      "internal_id": 14,
+      "subject": "下划线字面守卫",
+      "sender": "gizmo@example.com",
+      "sender_name": "Gizmo",
+      "to_addr": "nobody@example.com",
+      "cc_addr": "",
+      "date_received": "2026-06-03T10:00:00+08:00",
+      "mailbox": "存档",
+      "is_read": 1,
+      "is_flagged": 0,
+      "is_pinned": 0,
+      "is_important": 0,
+      "ai_priority": "🟢 一般",
+      "body_markdown": "字面下划线 项_ 后缀通配守卫样本。",
+      "attachments": []
     }
   ],
   "cases": [
@@ -421,7 +455,9 @@
         8,
         6,
         10,
+        13,
         12,
+        14,
         11,
         3,
         2,
@@ -988,11 +1024,11 @@
       "expect_warnings": 1
     },
     {
-      "name": "p5_parsed_mixed_cjk_english_trigram_on",
-      "query": "from:alice redis评审",
+      "name": "p5_parsed_mixed_cjk_english_whole_term_trigram_on",
+      "query": "from:ivan central立项",
       "trigram": true,
       "expect_ids": [
-        1
+        13
       ],
       "expect_warnings": 0
     },
@@ -1002,6 +1038,60 @@
       "trigram": true,
       "expect_ids": [
         3
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "trigram_mixed_cjk_english_whole_term_contiguous",
+      "query": "研发项目deadline汇报",
+      "trigram": true,
+      "expect_ids": [
+        13
+      ],
+      "expect_warnings": 0,
+      "expect_snippet_nonempty": [
+        13
+      ],
+      "expect_snippet_contains": {
+        "13": "<mark>研发项目deadline汇报</mark>"
+      }
+    },
+    {
+      "name": "trigram_bracketed_cjk_whole_term",
+      "query": "【项目进度】",
+      "trigram": true,
+      "expect_ids": [
+        13
+      ],
+      "expect_warnings": 0,
+      "expect_snippet_nonempty": [
+        13
+      ],
+      "expect_snippet_contains": {
+        "13": "<mark>【项目进度】</mark>"
+      }
+    },
+    {
+      "name": "trigram_mixed_cjk_english_whole_term_no_space_no_split",
+      "query": "central立项",
+      "trigram": true,
+      "expect_ids": [
+        13
+      ],
+      "expect_warnings": 0,
+      "expect_snippet_nonempty": [
+        13
+      ],
+      "expect_snippet_contains": {
+        "13": "<mark>central立项</mark>"
+      }
+    },
+    {
+      "name": "trigram_cjk_two_char_like_escapes_underscore",
+      "query": "项_",
+      "trigram": true,
+      "expect_ids": [
+        14
       ],
       "expect_warnings": 0
     }
