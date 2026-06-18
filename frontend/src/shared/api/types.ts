@@ -55,6 +55,14 @@ export type ResyncResult = MailagentEmailResync['data']
 export interface SearchResult {
   items: SearchHit[]
   total_indexed: number
+  /**
+   * Phase A G-A2 — 本次查询命中数（= `items.length`，≤ 请求 limit）。**不是** 语料总量
+   * `total_indexed`。配合 `has_more` 给 agentic 搜索自我收敛信号（太多→缩小 query）。
+   * serve-api（桌面 AI 搜索经 loopback）与 TS 引擎（桌面人工搜索）两端都填。
+   */
+  total_matches?: number
+  /** Phase A G-A2 — 是否还有超出本次 limit 的命中（后端 limit+1 探针精确判定）。 */
+  has_more?: boolean
   transformed_query?: string
   parse_warnings?: string[]
   mode?: 'smart' | 'raw'

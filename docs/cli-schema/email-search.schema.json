@@ -23,6 +23,10 @@
               "type": ["integer", "null"],
               "minimum": 0,
               "description": "FTS5 indexed row count — drives palette footer 'N of total_indexed'"
+            },
+            "has_more": {
+              "type": ["boolean", "null"],
+              "description": "Phase A G-A2: whether matches exist beyond the returned limit (repo limit+1 probe). total_hits is the count returned this query; has_more lets agentic search self-converge (too many → narrow the query)."
             }
           }
         }

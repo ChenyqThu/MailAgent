@@ -184,6 +184,11 @@ class SearchResult(BaseModel):
 
     items: list[SearchHit]
     total_indexed: int = Field(..., ge=0)
+    # Phase A G-A2: 本次查询命中数 (= len(items), ≤ limit) + 是否还有更多。取代把语料总量
+    # total_indexed 当「命中数」喂给搜索 agent 的误导 —— agent 据 has_more 自我收敛 (太多→
+    # 加 filter 缩小)。has_more 由 repo 的 limit+1 探针精确判定。
+    total_matches: int = Field(0, ge=0)
+    has_more: bool = False
     transformed_query: Optional[str] = None
     mode: Optional[Literal["smart", "raw"]] = None
     parse_warnings: Optional[list[str]] = None

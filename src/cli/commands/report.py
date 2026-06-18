@@ -76,6 +76,14 @@ def report_run(
     agent = store.get_agent(agent_id)
     if agent is None:
         raise emit_cli_error(cli, CliNotFoundError(f"report_agent {agent_id!r} not found"))
+    if agent.get("type", "report") != "report":
+        raise emit_cli_error(
+            cli,
+            CliInvalidArgError(
+                f"agent {agent_id!r} is type {agent.get('type')!r}, not a report agent;"
+                " manual run is report-only"
+            ),
+        )
 
     # --cadence 覆盖：在副本里改 schedule_json 的 cadence（不落库）。
     if cadence is not None:

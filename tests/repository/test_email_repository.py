@@ -792,10 +792,16 @@ class TestSearchEmailBodiesSmart:
     def test_smart_passthrough_for_explicit_fts_syntax(
         self, repo: EmailRepository, fresh_db: Path
     ):
-        """含 FTS5 语法 → smart 不动 query, 跟 raw 等价."""
+        """含 FTS5 语法 → smart 不动 query, 跟 raw 等价（非 trigram smart 路径的 passthrough 契约）.
+
+        G-A6 起 SEARCH_TRIGRAM_ENABLED 默认 True → 裸 CJK plain query（含 '产品*'）会先被
+        trigram 子串路由接管（v0.11.0 既有 flag 行为，非本期引入；路由是否该跳过显式 '*' 属
+        Phase B 引擎内部范畴）。本测试验证的是「非 trigram smart 路径显式 FTS 语法原样透传 =
+        raw」这一契约，故 smart 侧显式用 trigram-off repo 还原该路径。"""
         self._seed_cjk(repo, fresh_db)
         raw_hits = repo.search_email_bodies("产品*", limit=10)
-        smart_hits = repo.search_email_bodies_smart("产品*", limit=10)
+        nontrigram_repo = EmailRepository(db_path=str(fresh_db), trigram_enabled=False)
+        smart_hits = nontrigram_repo.search_email_bodies_smart("产品*", limit=10)
         assert [h.internal_id for h in smart_hits] == [h.internal_id for h in raw_hits]
 
     def test_smart_multi_cjk_token_and(self, repo: EmailRepository, fresh_db: Path):

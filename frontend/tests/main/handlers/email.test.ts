@@ -210,7 +210,8 @@ describe('searchEmails (FTS5)', () => {
   })
 
   test('CJK prefix-wildcard hit (DESIGN.md note: unicode61 needs * for plain CN)', () => {
-    const hits = handlers.searchEmails({ query: '产品*', limit: 10 }).items
+    // G-A6 起 trigram 默认 ON；本测试专测 unicode61 prefix-wildcard 路径，故显式 pin off。
+    const hits = handlers.searchEmails({ query: '产品*', limit: 10, trigramEnabled: false }).items
     expect(hits.length).toBeGreaterThanOrEqual(1)
     expect(hits[0]?.internal_id).toBe(102)
   })
@@ -243,7 +244,8 @@ describe('searchEmails (FTS5)', () => {
     expect(r101?.ai_priority).toBe('critical')
     expect(r101?.lang).toBe('en')
 
-    const r102 = handlers.searchEmails({ query: '产品*', limit: 5 }).items[0]
+    // G-A6 trigram 默认 ON；此处测 unicode61 路径上的 priority/lang join，pin off。
+    const r102 = handlers.searchEmails({ query: '产品*', limit: 5, trigramEnabled: false }).items[0]
     expect(r102?.ai_priority).toBe('important')
     expect(r102?.lang).toBe('zh')
   })
@@ -348,7 +350,9 @@ describe('searchEmails smart mode (PR-2a)', () => {
   test('smart mode default: natural CJK keyword goes through transform', () => {
     // 102 的 subject = '产品 OKR' (从 fixture seed) → '产品*' prefix match
     // smart '产品' → '(产品* OR (产* AND 品*))' → 主表 hit
-    const r = handlers.searchEmails({ query: '产品' })
+    // G-A6 trigram 默认 ON 会把裸 CJK '产品' 路由到 trigram 表；本测试专测 unicode61
+    // smart_query_transform 路径，故 pin trigramEnabled:false。
+    const r = handlers.searchEmails({ query: '产品', trigramEnabled: false })
     expect(r.items.length).toBeGreaterThanOrEqual(1)
     expect(r.mode).toBe('smart')
     expect(r.transformed_query).toBe('(产品* OR (产* AND 品*))')

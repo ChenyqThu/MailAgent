@@ -169,11 +169,20 @@ class EmailSearchHit:
 
 @dataclass
 class EmailSearchResult:
-    """带搜索 meta 的结果，用于 CLI/API/event 透传 parser warning。"""
+    """带搜索 meta 的结果，用于 CLI/API/event 透传 parser warning。
+
+    ``has_more`` (Phase A G-A2): 是否还有超出本次 ``limit`` 的命中。由
+    ``search_email_bodies_with_meta`` 用 ``limit + 1`` 探针精确判定 —— 探针多取 1 条
+    检测溢出，再裁回 ``limit``（返回的 ``hits`` 与裁剪前 top-``limit`` 逐条一致，零结果
+    回归）。配合 agent-facing 的「本次命中数 = len(hits) + has_more」自我收敛信号，取代
+    无意义的 total_indexed（语料总量）。``total_matches`` 不在此 dataclass 上单列（恒等于
+    ``len(hits)``，由 CLI/serve-api 出口按需投影）。
+    """
 
     hits: list[EmailSearchHit]
     transformed_query: str
     parse_warnings: list[str] = field(default_factory=list)
+    has_more: bool = False
 
 
 @dataclass
@@ -602,8 +611,8 @@ class EmailRepository:
         """T7 CJK trigram 路由是否启用。
 
         构造时显式传了 ``trigram_enabled=`` → 直用；否则懒读
-        ``config.search_trigram_enabled``（默认 False；读 config 失败 / 缺必填 env
-        → 退回 False，保证无 .env 的测试 / CLI 上下文不炸）。
+        ``config.search_trigram_enabled``（Phase A G-A6 起默认 True；读 config 失败 /
+        缺必填 env → 退回 False，保证无 .env 的测试 / CLI 上下文不炸）。
         """
         if self._trigram_enabled_override is not None:
             return self._trigram_enabled_override
@@ -1156,6 +1165,11 @@ class EmailRepository:
         if limit <= 0:
             return EmailSearchResult([], query, [])
 
+        # Phase A G-A2: limit+1 探针 → 精确 has_more。每条执行路径都按 probe 取，
+        # 再统一过 _finalize_search 裁回 limit + 置 has_more（返回 hits 与裁剪前
+        # top-limit 逐条一致，零结果回归 —— 多取 1 条只为检测溢出）。
+        probe = limit + 1
+
         normalized_mode = (mode or "smart").lower()
         if normalized_mode == "raw":
             structured_filters, structured_warnings = build_structured_filter_predicates(
@@ -1167,10 +1181,10 @@ class EmailRepository:
             )
             hits = self._search_email_bodies_raw(
                 query,
-                limit=limit,
+                limit=probe,
                 extra_filters=structured_filters,
             )
-            return EmailSearchResult(hits, query, structured_warnings)
+            return self._finalize_search(hits, query, structured_warnings, limit)
 
         parsed = parse_search_query(
             query,
@@ -1184,7 +1198,7 @@ class EmailRepository:
                 trigram_result = self._search_email_bodies_trigram(
                     query,
                     parsed=parsed,
-                    limit=limit,
+                    limit=probe,
                     mailbox=mailbox,
                     since_date=since_date,
                     until_date=until_date,
@@ -1192,7 +1206,12 @@ class EmailRepository:
                     tz_offset_minutes=tz_offset_minutes,
                 )
                 if trigram_result is not None:
-                    return trigram_result
+                    return self._finalize_search(
+                        trigram_result.hits,
+                        trigram_result.transformed_query,
+                        trigram_result.parse_warnings,
+                        limit,
+                    )
             transformed = smart_query_transform(query)
             structured_filters, structured_warnings = build_structured_filter_predicates(
                 mailbox=mailbox,
@@ -1214,25 +1233,46 @@ class EmailRepository:
                 neg_attachment_fts_expr="",
                 attachment_body_gate_expr="",
                 sort=None,
-                limit=limit,
+                limit=probe,
                 query_for_log=transformed,
             )
-            return EmailSearchResult(
+            return self._finalize_search(
                 hits,
                 transformed,
                 [*parsed.warnings, *structured_warnings],
+                limit,
             )
 
         hits, transformed = self._search_email_bodies_parsed(
             parsed,
-            limit=limit,
+            limit=probe,
             mailbox=mailbox,
             since_date=since_date,
             until_date=until_date,
             now=now,
             tz_offset_minutes=tz_offset_minutes,
         )
-        return EmailSearchResult(hits, transformed, parsed.warnings)
+        return self._finalize_search(hits, transformed, parsed.warnings, limit)
+
+    @staticmethod
+    def _finalize_search(
+        hits: list["EmailSearchHit"],
+        transformed_query: str,
+        warnings: list[str],
+        limit: int,
+    ) -> EmailSearchResult:
+        """Phase A G-A2: 把 limit+1 探针结果裁回 limit 并置 has_more。
+
+        ``hits`` 是按 ``limit + 1`` 取的候选；``len(hits) > limit`` 即代表还有更多命中
+        （精确 has_more）。裁剪后的 ``hits`` 与不探针时的 top-``limit`` 逐条一致。
+        """
+        has_more = len(hits) > limit
+        return EmailSearchResult(
+            hits[:limit] if has_more else hits,
+            transformed_query,
+            warnings,
+            has_more=has_more,
+        )
 
     def _search_email_bodies_raw(
         self,

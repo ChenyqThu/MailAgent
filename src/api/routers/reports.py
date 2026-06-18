@@ -172,6 +172,13 @@ async def run_now(request: Request, agent_id: str, body: Optional[dict[str, Any]
     agent = store.get_agent(agent_id)
     if agent is None:
         raise APIError("E_NOT_FOUND", f"report_agent {agent_id!r} not found", source="sqlite")
+    if agent.get("type", "report") != "report":
+        raise APIError(
+            "E_INVALID_ARG",
+            f"agent {agent_id!r} is type {agent.get('type')!r}, not a report agent;"
+            " manual run is report-only",
+            source="sqlite",
+        )
 
     # --cadence 覆盖：在副本里改 schedule_json 的 cadence（不落库），对齐 CLI report run。
     if cadence is not None:

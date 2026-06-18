@@ -401,11 +401,16 @@
       "understandHint": "Let AI search and gather the relevant emails",
       "searchingPhrases": [
         "Understanding your question…",
-        "Searching relevant emails…",
+        "Searching relevant emails…"
+      ],
+      "summarizingPhrases": [
         "Filtering the most relevant…",
         "Organizing results…"
       ],
       "summary": "AI: {text}",
+      "emptyTitle": "AI found no related emails",
+      "emptyHint": "Try rephrasing, or use search syntax directly",
+      "viewInPlain": "View in plain search",
       "dismiss": "Dismiss",
       "fellBack": "AI unavailable — switched to plain search",
       "errNoKey": "Configure an LLM in Settings to use AI search",
@@ -421,6 +426,7 @@
       "selectGroup": "select group",
       "open": "open",
       "newWindow": "new window",
+      "aiSearch": "AI search",
       "dismiss": "dismiss",
       "run": "run"
     },

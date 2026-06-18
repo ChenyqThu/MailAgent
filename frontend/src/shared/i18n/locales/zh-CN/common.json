@@ -401,11 +401,16 @@
       "understandHint": "让 AI 帮你检索并梳理相关邮件",
       "searchingPhrases": [
         "正在理解你的问题…",
-        "检索相关邮件…",
+        "检索相关邮件…"
+      ],
+      "summarizingPhrases": [
         "筛选最相关的…",
         "整理结果…"
       ],
       "summary": "AI：{text}",
+      "emptyTitle": "AI 没找到相关邮件",
+      "emptyHint": "换个说法，或直接用搜索语法",
+      "viewInPlain": "在普通搜索中查看",
       "dismiss": "关闭提示",
       "fellBack": "AI 暂不可用，已转为普通搜索",
       "errNoKey": "请先在设置中配置 LLM 才能使用 AI 检索",
@@ -421,6 +426,7 @@
       "selectGroup": "切换分组",
       "open": "打开",
       "newWindow": "新窗口打开",
+      "aiSearch": "AI 搜索",
       "dismiss": "关闭",
       "run": "运行"
     },
