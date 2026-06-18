@@ -250,7 +250,14 @@ class SyncStore:
     #                  DROP TRIGGER IF EXISTS email_recipient_fts_delete;
     #                  DROP TABLE IF EXISTS email_recipient_fts;
     #                主表 email_body_fts / email_body_fts_trigram 不动 → 回滚低风险。
-    DB_VERSION = 25  # v25: 并行收件人 FTS 表 (to~:/cc~:/from~: 显式列语法, 无 flag)
+    # v26 (agentic 搜索 = 特化 Custom Agent, 2026-06): 复用 report_agent 表 (type 多态),
+    #                INSERT OR IGNORE 播种一行 type='search' 的搜索 agent (id='email_search_agent',
+    #                enabled=1, model/prompt NULL → 运行时回退默认, tools_json='["email_search_fulltext"]')。
+    #                **无 DDL** —— model/prompt/tools_json 列 v18 起就有。幂等: INSERT OR IGNORE
+    #                重跑不重复; 无 version gate, 靠 INSERT OR IGNORE 幂等 (与既有 report-agent seed 同模式)。
+    #                回滚 (回退 v26): DELETE FROM report_agent WHERE id='email_search_agent';
+    #                必要时降 db_version 即可 (无表结构变更, 删行无副作用)。
+    DB_VERSION = 26  # v26: 播种 type='search' Custom Agent 行 (复用 report_agent, 无 DDL)
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -1414,6 +1421,28 @@ class SyncStore:
                     f"v25 recipient FTS5 reindex: {reindexed} email_metadata rows "
                     f"indexed (email_recipient_fts)"
                 )
+
+        # === v26: agentic 搜索 = 特化 Custom Agent (复用 report_agent 表, 无 DDL) ===
+        # 设计来源: .trellis/tasks/06-17-dsl-parse-warnings/agentic-search-impl-plan.md §3.3。
+        # 把"搜索"做成一个特化 Custom Agent: 复用 report_agent 表的 type 多态 + model/prompt/
+        # tools_json 列 (v18 起全在), 播种一行 type='search' 的搜索 agent。无新表/新列 → 纯 seed。
+        #
+        # 种子语义: id='email_search_agent', type='search', enabled=1, model=NULL (运行时回退
+        # getLlmModel), prompt=NULL (运行时回退内置默认搜索 prompt), tools_json 给 MVP 唯一工具
+        # email_search_fulltext (已含 DSL+FTS+中文 trigram+收件人 T5-T8), title='邮件搜索'。
+        # report 专属列 (schedule/window/kos_enrich/…) 留 NULL/DEFAULT, search agent 不需要。
+        #
+        # 幂等: INSERT OR IGNORE (id PK 冲突即跳过), 重跑无副作用; 旧库已有此行 → 跳过, 不覆盖
+        # 用户改过的 model/prompt/tools。
+        #
+        # 回滚 (回退 v26): DELETE FROM report_agent WHERE id='email_search_agent'; 必要时降
+        # db_version。无表结构变更, 删行无副作用 (主表/其他 agent 不动)。
+        cursor.execute(
+            "INSERT OR IGNORE INTO report_agent "
+            "(id, type, enabled, title, model, prompt, tools_json, updated_at) "
+            "VALUES ('email_search_agent', 'search', 1, '邮件搜索', NULL, NULL, ?, ?)",
+            ('["email_search_fulltext"]', time.time()),
+        )
 
         # 更新数据库版本
         cursor.execute("""

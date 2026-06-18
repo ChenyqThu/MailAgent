@@ -1996,6 +1996,9 @@ export interface ReportAgentConfig {
   prompt: string
   prompt_is_default: boolean
   model: string
+  /** agent 可用工具白名单（wire 把 DB 的 JSON 字符串 parse 成数组）；search agent =
+   *  ['email_search_fulltext']，report agent 历史上为空。NULL/非法 → 按 type 回退默认。 */
+  tools_json?: string[] | null
   kos_enrich: boolean
   /** daily 触发模式：rolling_24h（往前推 window_hours）| natural_day（指定时区昨天整天）。 */
   trigger_mode: 'rolling_24h' | 'natural_day'

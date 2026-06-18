@@ -183,6 +183,74 @@ def test_set_config_404(report_client: TestClient) -> None:
 
 
 # ---------------------------------------------------------------------------
+# create agent (POST /report-agents) + tools_json 投影
+# ---------------------------------------------------------------------------
+
+
+def test_create_search_agent(report_client: TestClient) -> None:
+    """POST /report-agents 建 type='search' agent → resolve_agent 带 tools_json 数组。"""
+    r = report_client.post(
+        "/api/report-agents",
+        json={
+            "id": "my_search",
+            "type": "search",
+            "title": "My Search",
+            "enabled": True,
+            "tools_json": ["email_search_fulltext"],
+        },
+    )
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data["id"] == "my_search"
+    assert data["type"] == "search"
+    assert data["enabled"] is True
+    assert data["title"] == "My Search"
+    assert data["tools_json"] == ["email_search_fulltext"]
+
+
+def test_create_agent_conflict_409(report_client: TestClient) -> None:
+    """id 已存在 → 409 E_CONFLICT。"""
+    r = report_client.post("/api/report-agents", json={"id": _AGENT_ID, "type": "report"})
+    assert r.status_code == 409
+    assert r.json()["error"]["code"] == "E_CONFLICT"
+
+
+def test_create_agent_missing_id(report_client: TestClient) -> None:
+    r = report_client.post("/api/report-agents", json={"type": "search"})
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "E_INVALID_ARG"
+
+
+def test_create_agent_invalid_type(report_client: TestClient) -> None:
+    """非法 type（白名单外）→ E_INVALID_ARG（4xx），不写脏行。"""
+    r = report_client.post("/api/report-agents", json={"id": "bad", "type": "garbage"})
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "E_INVALID_ARG"
+
+
+def test_seeded_search_agent_tools_projection(report_client: TestClient) -> None:
+    """种子 search agent (tools_json NULL by seed → 实际 JSON 串) 经 wire 投影成数组。
+    search 行 prompt/model 不泄漏 report 默认（type 门控）。"""
+    r = report_client.get("/api/report-agents?agentId=email_search_agent")
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data["type"] == "search"
+    assert data["tools_json"] == ["email_search_fulltext"]
+    # search 行 prompt/model NULL → 投影空串（不回退 report 的 get_default_prompt / DEFAULT_REPORT_MODEL）
+    assert data["prompt"] == ""
+    assert data["model"] == ""
+
+
+def test_report_agent_tools_json_empty_default(report_client: TestClient) -> None:
+    """report agent (tools_json NULL) → 空 list 默认（不破坏 report 投影）。"""
+    r = report_client.get(f"/api/report-agents?agentId={_AGENT_ID}")
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data["type"] == "report"
+    assert data["tools_json"] == []
+
+
+# ---------------------------------------------------------------------------
 # runNow（mock run_report_once，不烧 token）
 # ---------------------------------------------------------------------------
 

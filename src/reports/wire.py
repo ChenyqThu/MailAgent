@@ -54,16 +54,28 @@ def resolve_agent(agent: Dict[str, Any]) -> Dict[str, Any]:
             body_full_priorities = []
     except (json.JSONDecodeError, TypeError):
         body_full_priorities = []
+    agent_type = agent.get("type", "report")
+    # tools_json → list（DB 存 JSON 串）。NULL/非法：type='search' 回退默认搜索工具,
+    # 其余（report）回退空 list（report agent 历史上 tools_json 全 NULL, 不破坏其投影）。
+    _tools_default = ["email_search_fulltext"] if agent_type == "search" else []
+    try:
+        tools_json = json.loads(agent.get("tools_json") or "null")
+        if not isinstance(tools_json, list):
+            tools_json = _tools_default
+    except (json.JSONDecodeError, TypeError):
+        tools_json = _tools_default
     return {
         "id": agent.get("id"),
-        "type": agent.get("type", "report"),
+        "type": agent_type,
         "enabled": bool(agent.get("enabled")),
         "title": agent.get("title") or "",
         "schedule": schedule,
         "window_hours": agent.get("window_hours"),
-        "prompt": prompt or get_default_prompt(cadence),
+        "prompt": prompt or (get_default_prompt(cadence) if agent_type == "report" else ""),
         "prompt_is_default": not prompt,
-        "model": (agent.get("model") or "").strip() or DEFAULT_REPORT_MODEL,
+        "model": (agent.get("model") or "").strip()
+        or (DEFAULT_REPORT_MODEL if agent_type == "report" else ""),
+        "tools_json": tools_json,
         "kos_enrich": bool(agent.get("kos_enrich")),
         # clamp（对齐 TS _toAgentConfig：仅 natural_day 认，其余/坏值回落 rolling_24h）。
         "trigger_mode": (
