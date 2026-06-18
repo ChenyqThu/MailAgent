@@ -74,6 +74,7 @@ import { toastError, toastSuccess } from '@shared/state/toast'
 import { extractTerms } from '@shared/lib/highlight_terms'
 import type { MailboxSummary, SearchHit, SearchResult } from '@shared/api/types'
 import { EmailHitRow } from './EmailHitRow'
+import { PaletteThinkingPhrases } from './PaletteThinkingPhrases'
 
 // ─── Tunables ──────────────────────────────────────────────────────────
 
@@ -98,7 +99,7 @@ const SEARCH_SYNTAX_HINTS: ReadonlyArray<{ token: string; labelKey: string }> = 
   { token: 'is:unread', labelKey: 'palette.email.syntaxUnread' }
 ]
 
-type Group = 'jump' | 'email' | 'actions'
+type Group = 'jump' | 'ai' | 'email' | 'actions'
 
 // ─── Tiny helpers ──────────────────────────────────────────────────────
 
@@ -194,15 +195,37 @@ export function CommandPalette(): React.ReactElement | null {
     return 'all'
   }, [])
 
+  // Open a search hit (shared by EMAIL FTS hits + AI agentic hits): sync the
+  // EmailList view + mailbox so the row is actually surfaced, mark it as a nav
+  // target so EmailList's active-reset exempts it, then navigate('/').
+  const activateHit = useCallback(
+    (hit: SearchHit): void => {
+      const targetView = viewForMailbox(hit.mailbox)
+      closeCommandPalette()
+      setView(targetView)
+      if (hit.mailbox) setActiveMailbox(hit.mailbox)
+      setActiveEmail(hit.internal_id, { navTarget: true })
+      void navigate({ to: '/', search: { view: targetView } })
+    },
+    [viewForMailbox, setView, setActiveMailbox, setActiveEmail, navigate]
+  )
+
   const [query, setQuery] = useState('')
   const [highlight, setHighlight] = useState(0)
   const [lastLatencyMs, setLastLatencyMs] = useState<number | null>(null)
   const [actionRunning, setActionRunning] = useState<string | null>(null)
-  // P4b — AI 自然语言检索: loading 标记 + 解析结果 banner（成功显 DSL / 失败显
-  // error 码）。banner 与搜索框解耦——用户可在 setQuery(dsl) 后继续编辑搜索框微调。
-  const [aiLoading, setAiLoading] = useState(false)
-  const [aiBanner, setAiBanner] = useState<{ kind: 'parsed'; dsl: string } | null>(null)
+  // F3 — agentic 搜索: 用户在 AI 入口行触发 → runSearchAgent 跑一次性 search agent。
+  //   aiSearching: 进行态（结果区顶部渲染 PaletteThinkingPhrases 一行短语流光）。
+  //   aiHits:      命中真实带 snippet 的 SearchHit（候选池 ∩ matched_internal_ids）。
+  //   aiSummary:   present_results.summary，渲染成一条 AI summary 行（非交互）。
+  //   aiError:     友好错误文案（无 key / 超时 / 配额 / agent 出错…）；E_ABORTED 静默。
+  // fallbackDsl 不入 state——直接 setQuery(fallbackDsl) 填回输入框走普通搜索 + 轻提示。
+  const [aiSearching, setAiSearching] = useState(false)
+  const [aiHits, setAiHits] = useState<SearchHit[]>([])
+  const [aiSummary, setAiSummary] = useState<string | null>(null)
   const [aiError, setAiError] = useState<string | null>(null)
+  // 当前在途 search agent 的 AbortController：输入变化 / 再次触发 / 关闭面板 → abort。
+  const aiAbortRef = useRef<AbortController | null>(null)
   // Adjust-on-prop-change pattern (react.dev): reset query + highlight when
   // the palette transitions closed→open. Always start from an empty query so
   // each open is a fresh search (no stale last-session prefill).
@@ -214,11 +237,22 @@ export function CommandPalette(): React.ReactElement | null {
       setHighlight(0)
       setLastLatencyMs(null)
       setActionRunning(null)
-      setAiLoading(false)
-      setAiBanner(null)
+      setAiSearching(false)
+      setAiHits([])
+      setAiSummary(null)
       setAiError(null)
     }
   }
+
+  // 关闭面板时 abort 在途 search agent（避免后台 run 在面板关后继续 + setState）。
+  // ref 访问放 effect 而非 render 路径（react-hooks/refs）。
+  useEffect(() => {
+    if (open) return
+    if (aiAbortRef.current) {
+      aiAbortRef.current.abort()
+      aiAbortRef.current = null
+    }
+  }, [open])
 
   const inputRef = useRef<HTMLInputElement>(null)
   const veilRef = useRef<HTMLDivElement>(null)
@@ -320,8 +354,10 @@ export function CommandPalette(): React.ReactElement | null {
   // ──────────────────────────────────────────────────────────────────
 
   // ──────────────────────────────────────────────────────────────────
-  // P4b — AI 自然语言检索: 当前输入 → LLM → DSL → 填回搜索框 + banner
+  // F3 — agentic 搜索: AI 入口行 → runSearchAgent → 进行态 + 命中行 + summary
   // ──────────────────────────────────────────────────────────────────
+
+  const activeMailbox = useMailbox((s) => s.active)
 
   // error 码 → 友好文案（i18next-icu 单括号插值）。未知码回退 generic。
   const formatAiError = useCallback(
@@ -330,9 +366,20 @@ export function CommandPalette(): React.ReactElement | null {
         case 'E_NO_LLM_KEY':
           return t('palette.ai.errNoKey')
         case 'E_EMPTY':
+        case 'E_NO_OUTPUT':
           return t('palette.ai.errEmpty')
         case 'E_UNSUPPORTED':
           return t('palette.ai.errUnsupported')
+        case 'E_TIMEOUT':
+          return t('palette.ai.errTimeout')
+        case 'E_QUOTA':
+          return t('palette.ai.errQuota')
+        case 'E_AGENT':
+        case 'E_BACKEND_CRASH':
+        case 'E_UPSTREAM':
+        case 'E_COST_BUDGET':
+        case 'E_MAX_ITER':
+          return t('palette.ai.errAgent')
         default:
           return t('palette.ai.errGeneric')
       }
@@ -340,31 +387,52 @@ export function CommandPalette(): React.ReactElement | null {
     [t]
   )
 
-  const runAiUnderstand = useCallback(async (): Promise<void> => {
+  const runAiSearch = useCallback(async (): Promise<void> => {
     const nl = query.trim()
-    if (nl.length === 0 || aiLoading) return
-    setAiLoading(true)
+    // 并发由 aiSearching gate 拦住（在途时再点不会重入）；故无需读旧 ref，只新建 +
+    // 写入 ref 供 onChange / 关闭 effect 外部 abort。staleness 一律用 ac.signal.aborted
+    // 判断（外部 abort 会置位），不读 ref.current —— 避开 render 输出嵌 ref-reader 的坑。
+    if (nl.length === 0 || aiSearching) return
+    const ac = new AbortController()
+    aiAbortRef.current = ac
+    setAiSearching(true)
+    setAiHits([])
+    setAiSummary(null)
     setAiError(null)
-    setAiBanner(null)
+    setHighlight(0)
     try {
-      const res = await mailApi.email.nlToDsl(nl)
-      if (res.error || !res.dsl) {
-        setAiError(formatAiError(res.error ?? 'E_NO_OUTPUT'))
+      const res = await mailApi.chat.runSearchAgent({
+        query: nl,
+        mailbox: activeMailbox || undefined,
+        signal: ac.signal
+      })
+      // 被关闭面板/输入变化 abort 掉的旧 run → 静默丢弃（不覆盖新状态）。
+      if (ac.signal.aborted) return
+      if (res.ok) {
+        setAiHits(res.hits)
+        setAiSummary(res.summary)
         return
       }
-      // 填回搜索框 → 触发既有搜索路径；banner 提示解析结果（可关 / 直接编辑微调）。
-      setQuery(res.dsl)
-      setAiBanner({ kind: 'parsed', dsl: res.dsl })
-      setHighlight(0)
+      // fallbackDsl → 填回输入框走普通搜索 + 轻提示（不弹错误 banner）。
+      if (res.fallbackDsl) {
+        setQuery(res.fallbackDsl)
+        toastSuccess(t('palette.ai.fellBack'))
+        return
+      }
+      const code = res.error?.code ?? ''
+      // E_ABORTED 静默（用户主动取消）。
+      if (code === 'E_ABORTED') return
+      setAiError(formatAiError(code))
     } catch (err) {
-      // nlToDsl 设计上不 reject；兜底仍处理（IPC 异常等）。
+      // runSearchAgent 设计上不 throw；兜底仍处理（意外异常）。
+      if (ac.signal.aborted) return
       setAiError(
         formatAiError(err instanceof Error ? ((err as Error & { code?: string }).code ?? '') : '')
       )
     } finally {
-      setAiLoading(false)
+      if (!ac.signal.aborted) setAiSearching(false)
     }
-  }, [query, aiLoading, mailApi, formatAiError])
+  }, [query, aiSearching, mailApi, activeMailbox, formatAiError, t])
 
   interface JumpRow {
     id: string
@@ -378,14 +446,19 @@ export function CommandPalette(): React.ReactElement | null {
     const out: JumpRow[] = []
     const q = debouncedRaw.trim()
 
-    // P4b — AI 理解入口（仅当输入框有内容时）。放在 jump 组首位 → ⌘K 输入 → ⏎
-    // 即可触发 AI 翻译（自然填进 flat-index 键盘导航）。label 用 live `query`
+    // F3 — AI 检索入口（仅当输入框有内容时）。放在 jump 组首位 → ⌘K 输入 → ⏎
+    // 即可触发 agentic 搜索（自然填进 flat-index 键盘导航）。label 用 live `query`
     // 实时回显当前输入。
     const liveQuery = query.trim()
     if (liveQuery.length > 0) {
+      // run 内 runAiSearch 仅写/管理 aiAbortRef（在途 AbortController），且只在
+      // Enter/click 事件触发时执行、绝不在 render 期跑；规则保守地把「render 输出里
+      // 嵌了碰 ref 的函数」也标。真重构需把 AbortController 提 reducer/state，会每
+      // 触发都 re-render。React Compiler 迁移债。
+      // eslint-disable-next-line react-hooks/refs
       out.push({
         id: 'ai:understand',
-        icon: aiLoading ? (
+        icon: aiSearching ? (
           <Loader2
             size={14}
             strokeWidth={1.75}
@@ -398,11 +471,9 @@ export function CommandPalette(): React.ReactElement | null {
         label: (
           <span className="text-body flex-1 truncate">
             <span className="text-ink-fg font-medium">
-              {aiLoading
-                ? t('palette.ai.loading')
-                : t('palette.ai.understand', { query: liveQuery })}
+              {t('palette.ai.understand', { query: liveQuery })}
             </span>
-            {!aiLoading && (
+            {!aiSearching && (
               <>
                 <span className="text-ink-fg-3 mx-1">·</span>
                 <span className="text-ink-fg-2">{t('palette.ai.understandHint')}</span>
@@ -411,7 +482,7 @@ export function CommandPalette(): React.ReactElement | null {
           </span>
         ),
         run: () => {
-          void runAiUnderstand()
+          void runAiSearch()
         }
       })
     }
@@ -489,8 +560,8 @@ export function CommandPalette(): React.ReactElement | null {
   }, [
     debouncedRaw,
     query,
-    aiLoading,
-    runAiUnderstand,
+    aiSearching,
+    runAiSearch,
     hits,
     mailboxes,
     navigate,
@@ -603,26 +674,13 @@ export function CommandPalette(): React.ReactElement | null {
   const flat: FlatEntry[] = useMemo(() => {
     const out: FlatEntry[] = []
     jumpItems.forEach((j, i) => out.push({ group: 'jump', indexInGroup: i, run: j.run }))
-    hits.forEach((h, i) =>
-      out.push({
-        group: 'email',
-        indexInGroup: i,
-        run: () => {
-          // Search hit may live in a mailbox the user isn't currently
-          // viewing. Sync view + mailbox so EmailList actually scrolls
-          // to + highlights the row instead of silently jumping the
-          // EmailDetail pane while the list shows nothing selected.
-          const targetView = viewForMailbox(h.mailbox)
-          closeCommandPalette()
-          setView(targetView)
-          if (h.mailbox) setActiveMailbox(h.mailbox)
-          // navTarget: 跳转目标可能不在 EmailList 当前(分页/邮箱)列表里;
-          // 标记后 EmailList 的 active-reset 会豁免它, 否则会被重置成列表第一封。
-          setActiveEmail(h.internal_id, { navTarget: true })
-          void navigate({ to: '/', search: { view: targetView } })
-        }
-      })
-    )
+    // AI agentic hits: same activate closure as EMAIL hits; the AI summary row
+    // and the in-flight phrase row are NOT entries (non-interactive).
+    aiHits.forEach((h, i) => out.push({ group: 'ai', indexInGroup: i, run: () => activateHit(h) }))
+    // Search hit may live in a mailbox the user isn't currently viewing.
+    // activateHit syncs view + mailbox so EmailList scrolls to + highlights
+    // the row instead of silently jumping the EmailDetail pane.
+    hits.forEach((h, i) => out.push({ group: 'email', indexInGroup: i, run: () => activateHit(h) }))
     actionItems.forEach((a, i) =>
       out.push({
         group: 'actions',
@@ -632,8 +690,7 @@ export function CommandPalette(): React.ReactElement | null {
       })
     )
     return out
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: setActiveMailbox/setView 是 zustand 稳定 setter、viewForMailbox 是模块级纯函数, 列入只添噪声。
-  }, [jumpItems, hits, actionItems, navigate, setActiveEmail])
+  }, [jumpItems, aiHits, hits, actionItems, activateHit])
 
   // Clamp highlight in render (no extra paint cycle).
   if (flat.length > 0 && highlight >= flat.length) {
@@ -649,7 +706,7 @@ export function CommandPalette(): React.ReactElement | null {
   const jumpToGroupBoundary = useCallback(
     (forward: boolean) => {
       if (flat.length === 0) return
-      const order: Group[] = ['jump', 'email', 'actions']
+      const order: Group[] = ['jump', 'ai', 'email', 'actions']
       const present = order.filter((g) => flat.some((f) => f.group === g))
       if (present.length <= 1) return
       const curGroup = flat[highlight]?.group ?? present[0]
@@ -719,10 +776,13 @@ export function CommandPalette(): React.ReactElement | null {
       : t('palette.email.countLabel', { n: hits.length, total: totalIndexed })
 
   // Pre-compute flat index offsets for each group so renderer can stamp
-  // data-flat-idx without recomputing during the map.
+  // data-flat-idx without recomputing during the map. Order matches the flat
+  // index builder: jump → ai → email → actions.
   let cursor = 0
   const jumpStartIdx = cursor
   cursor += jumpItems.length
+  const aiStartIdx = cursor
+  cursor += aiHits.length
   const emailStartIdx = cursor
   cursor += hits.length
   const actionStartIdx = cursor
@@ -759,7 +819,15 @@ export function CommandPalette(): React.ReactElement | null {
             value={query}
             onChange={(e) => {
               setQuery(e.target.value)
-              // 用户手动改输入 → 清掉上一次 AI 失败提示（成功 banner 留着供对照微调）。
+              // 用户手动改输入 → abort 在途 AI 检索 + 清掉上一次 AI 结果/进行态/错误，
+              // 让普通 FTS 搜索干净接管（避免 stale agentic 命中行残留）。
+              if (aiAbortRef.current) {
+                aiAbortRef.current.abort()
+                aiAbortRef.current = null
+              }
+              if (aiSearching) setAiSearching(false)
+              if (aiHits.length > 0) setAiHits([])
+              if (aiSummary !== null) setAiSummary(null)
               if (aiError) setAiError(null)
             }}
             placeholder={t('palette.placeholder')}
@@ -804,26 +872,7 @@ export function CommandPalette(): React.ReactElement | null {
           </div>
         )}
 
-        {/* P4b — AI 解析结果 banner（成功显 DSL，可关 / 直接编辑搜索框微调）。 */}
-        {aiBanner && (
-          <div className="px-4 py-1.5 flex items-start gap-1.5 border-b border-ink-border-soft text-micro shrink-0">
-            <Sparkles size={12} strokeWidth={2} className="mt-px shrink-0 text-coral" aria-hidden />
-            <span className="leading-snug text-ink-fg-1 flex-1 min-w-0 break-words">
-              {t('palette.ai.parsedAs', { dsl: aiBanner.dsl })}
-            </span>
-            <button
-              type="button"
-              onClick={() => setAiBanner(null)}
-              title={t('palette.ai.dismiss')}
-              aria-label={t('palette.ai.dismiss')}
-              className="text-ink-fg-2 hover:text-ink-fg p-0.5 rounded hover:bg-ink-fg/[0.08] transition shrink-0"
-            >
-              <X size={12} strokeWidth={2} />
-            </button>
-          </div>
-        )}
-
-        {/* P4b — AI 解析失败 banner（无 key / web 不支持 / LLM 报错）。 */}
+        {/* F3 — AI 检索失败 banner（无 key / 超时 / 配额 / agent 出错 / web 不支持）。 */}
         {aiError && (
           <div className="px-4 py-1.5 flex items-start gap-1.5 border-b border-ink-border-soft text-micro text-ink-fg-2 shrink-0">
             <AlertTriangle size={12} strokeWidth={2} className="mt-px shrink-0 text-amber-500" />
@@ -884,6 +933,61 @@ export function CommandPalette(): React.ReactElement | null {
             </>
           )}
 
+          {/* AI SEARCH group — agentic 检索进行态 + summary + 真实命中行。在途时顶部
+              渲染一行 phrase+shimmer（不展开过程）；命中用同款 EmailHitRow（纳入 flat
+              键盘索引）；summary 行 + phrase 行不进 flat 索引（非交互）。 */}
+          {(aiSearching || aiHits.length > 0) && (
+            <>
+              <GroupHeader
+                title="AI Search"
+                countLabel={aiHits.length > 0 ? String(aiHits.length) : undefined}
+              />
+              {aiSearching && (
+                <div className="px-5 py-1.5 flex items-center gap-2 text-aux text-ink-fg-2">
+                  <Sparkles
+                    size={14}
+                    strokeWidth={1.75}
+                    className="shrink-0 text-coral"
+                    aria-hidden
+                  />
+                  <PaletteThinkingPhrases />
+                </div>
+              )}
+              {!aiSearching && aiSummary && (
+                <div className="px-5 py-1.5 flex items-start gap-2 text-aux text-ink-fg-1">
+                  <Sparkles
+                    size={14}
+                    strokeWidth={1.75}
+                    className="mt-px shrink-0 text-coral"
+                    aria-hidden
+                  />
+                  <span className="leading-snug min-w-0 break-words">
+                    {t('palette.ai.summary', { text: aiSummary })}
+                  </span>
+                </div>
+              )}
+              {aiHits.length > 0 && (
+                <div className="px-3 space-y-px">
+                  {aiHits.map((h, i) => {
+                    const idx = aiStartIdx + i
+                    const selected = idx === highlight
+                    return (
+                      <EmailHitRow
+                        key={`ai-${h.internal_id}`}
+                        hit={h}
+                        flatIdx={idx}
+                        selected={selected}
+                        setHighlight={setHighlight}
+                        queryTerms={queryTerms}
+                        onActivate={() => activateHit(h)}
+                      />
+                    )
+                  })}
+                </div>
+              )}
+            </>
+          )}
+
           {/* EMAIL group — rendered whenever the user typed something so
               the empty-tile has a home. Aside shows live latency + FTS5
               health dot. */}
@@ -933,16 +1037,7 @@ export function CommandPalette(): React.ReactElement | null {
                         selected={selected}
                         setHighlight={setHighlight}
                         queryTerms={queryTerms}
-                        onActivate={() => {
-                          const targetView = viewForMailbox(h.mailbox)
-                          closeCommandPalette()
-                          setView(targetView)
-                          if (h.mailbox) setActiveMailbox(h.mailbox)
-                          // navTarget: 跳转目标可能不在 EmailList 当前(分页/邮箱)列表里;
-                          // 标记后 EmailList 的 active-reset 会豁免它, 否则会被重置成列表第一封。
-                          setActiveEmail(h.internal_id, { navTarget: true })
-                          void navigate({ to: '/', search: { view: targetView } })
-                        }}
+                        onActivate={() => activateHit(h)}
                       />
                     )
                   })}

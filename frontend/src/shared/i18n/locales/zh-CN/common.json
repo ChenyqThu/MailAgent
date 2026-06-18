@@ -398,14 +398,23 @@
     },
     "ai": {
       "understand": "AI 理解「{query}」",
-      "understandHint": "用 AI 把这句话翻成搜索语法",
-      "loading": "AI 解析中…",
-      "parsedAs": "AI 解析为: {dsl}",
+      "understandHint": "让 AI 帮你检索并梳理相关邮件",
+      "searchingPhrases": [
+        "正在理解你的问题…",
+        "检索相关邮件…",
+        "筛选最相关的…",
+        "整理结果…"
+      ],
+      "summary": "AI：{text}",
       "dismiss": "关闭提示",
+      "fellBack": "AI 暂不可用，已转为普通搜索",
       "errNoKey": "请先在设置中配置 LLM 才能使用 AI 检索",
       "errEmpty": "没识别出可搜索的意图，换个说法试试",
       "errUnsupported": "AI 检索仅在桌面 App 中可用",
-      "errGeneric": "AI 解析失败，请稍后重试或直接用搜索语法"
+      "errTimeout": "AI 检索超时，请稍后重试或直接用搜索语法",
+      "errQuota": "AI 配额已用尽，请稍后重试或直接用搜索语法",
+      "errAgent": "AI 检索出错，请稍后重试或直接用搜索语法",
+      "errGeneric": "AI 检索失败，请稍后重试或直接用搜索语法"
     },
     "kbd": {
       "navigate": "上下移动",

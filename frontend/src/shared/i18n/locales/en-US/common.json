@@ -398,14 +398,23 @@
     },
     "ai": {
       "understand": "AI understand “{query}”",
-      "understandHint": "Let AI turn this into search syntax",
-      "loading": "AI parsing…",
-      "parsedAs": "AI parsed as: {dsl}",
+      "understandHint": "Let AI search and gather the relevant emails",
+      "searchingPhrases": [
+        "Understanding your question…",
+        "Searching relevant emails…",
+        "Filtering the most relevant…",
+        "Organizing results…"
+      ],
+      "summary": "AI: {text}",
       "dismiss": "Dismiss",
+      "fellBack": "AI unavailable — switched to plain search",
       "errNoKey": "Configure an LLM in Settings to use AI search",
       "errEmpty": "No searchable intent found — try rephrasing",
       "errUnsupported": "AI search is only available in the desktop app",
-      "errGeneric": "AI parsing failed — try again or use search syntax directly"
+      "errTimeout": "AI search timed out — try again or use search syntax directly",
+      "errQuota": "AI quota exhausted — try again or use search syntax directly",
+      "errAgent": "AI search error — try again or use search syntax directly",
+      "errGeneric": "AI search failed — try again or use search syntax directly"
     },
     "kbd": {
       "navigate": "navigate",
