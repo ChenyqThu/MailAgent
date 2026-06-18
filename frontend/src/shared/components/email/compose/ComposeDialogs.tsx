@@ -6,6 +6,7 @@
 // #modal-discard: accent icon badge + recipient chips + SMTP warning (send);
 // danger icon + unsaved-loss warning (discard).
 
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Send, Trash2 } from 'lucide-react'
 
@@ -48,10 +49,19 @@ export function SendConfirmDialog({
   const { t } = useTranslation()
   const allRecipients = [...to, ...cc, ...bcc]
   const recipientCount = allRecipients.length
+  // 收件人多时分两段展示：默认只渲染前 VISIBLE 个 chip + 「+N more」按钮，
+  // 点击后展开全部。配合 DialogContent 的 max-h-[85vh] + 中段 overflow-y-auto，
+  // 任意数量收件人都不会把 footer 的 Send 按钮挤出视口。
+  const [showAll, setShowAll] = useState(false)
+  const VISIBLE = 8
+  const visibleRecipients = showAll ? allRecipients : allRecipients.slice(0, VISIBLE)
+  const hiddenCount = recipientCount - VISIBLE
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onCancel()}>
-      <DialogContent className="max-w-[460px]">
+      {/* grid-rows-[auto_1fr_auto] 依赖恰好 3 个直接 grid 子 (header / 滚动区 /
+          footer)；将来在 DialogContent 下再加第 4 个直接子会破坏行映射、重新溢出。 */}
+      <DialogContent className="max-w-[460px] max-h-[85vh] grid-rows-[auto_1fr_auto]">
         <DialogHeader>
           <div className="flex items-start gap-4">
             <div
@@ -71,22 +81,31 @@ export function SendConfirmDialog({
           </div>
         </DialogHeader>
 
-        {recipientCount > 0 && (
-          <div className="flex flex-wrap gap-1.5 pl-[58px]">
-            {allRecipients.map((addr, i) => (
-              <span key={`${addr}-${i}`} className="recipient-chip">
-                <span className="rc-av">{chipInitials(addr)}</span>
-                <span className="break-all">{addr}</span>
-              </span>
-            ))}
-          </div>
-        )}
+        {/* 中段 (1fr 行) 可滚动：min-h-0 让 grid 子项允许收缩到内容以下,
+            overflow-y-auto 在收件人超量时给 chip 区滚动条而非撑高弹窗。 */}
+        <div className="min-h-0 overflow-y-auto">
+          {recipientCount > 0 && (
+            <div className="flex flex-wrap gap-1.5 pl-[58px]">
+              {visibleRecipients.map((addr, i) => (
+                <span key={`${addr}-${i}`} className="recipient-chip">
+                  <span className="rc-av">{chipInitials(addr)}</span>
+                  <span className="break-all">{addr}</span>
+                </span>
+              ))}
+              {recipientCount > VISIBLE && !showAll && (
+                <button type="button" className="recipient-chip" onClick={() => setShowAll(true)}>
+                  {t('compose.sendConfirm.moreRecipients', { n: hiddenCount })}
+                </button>
+              )}
+            </div>
+          )}
 
-        {attachments > 0 && (
-          <div className="pl-[58px] text-meta font-mono text-ink-fg-2">
-            {t('compose.sendConfirm.attachments', { n: attachments })}
-          </div>
-        )}
+          {attachments > 0 && (
+            <div className="pl-[58px] mt-1.5 text-meta font-mono text-ink-fg-2">
+              {t('compose.sendConfirm.attachments', { n: attachments })}
+            </div>
+          )}
+        </div>
 
         <DialogFooter>
           <button type="button" className="gbtn gbtn-bare" onClick={onCancel} disabled={pending}>

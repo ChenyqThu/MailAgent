@@ -27,8 +27,23 @@ function makePlatform(over: Partial<ChatToolPlatform> = {}): ChatToolPlatform {
     searchEmailsFulltext: async () => ({ items: [], total_indexed: 0 }),
     listAttachments: async () => [],
     searchAttachments: async () => ({ items: [], total_indexed: 0 }),
+    listFolders: async () => [],
     flagEmail: async () => ({}),
     draftReply: async () => ({ internalId: 0, mailbox: null, accountName: null, draftId: '' }),
+    setReplySuggestion: async () => ({ internalId: 0, replySuggestionMd: '', chars: 0 }),
+    setAiFields: async () => ({
+      internalId: 0,
+      aiAction: null,
+      aiPriority: null,
+      aiReviewStatus: null
+    }),
+    setPin: async () => ({}),
+    moveEmail: async () => ({}),
+    resyncEmail: async () => ({}),
+    archiveEmail: async () => ({}),
+    listReports: async () => [],
+    getReport: async () => null,
+    runReport: async () => ({ report_id: '', status: 'ready', headline: '' }),
     kosConfig: () => ({ configured: true, timeDecayEnabled: false }),
     kosCallTool: async () => null,
     saveToKos: async () => ({ slug: '', status: 'unknown', contentBytes: 0 }),
@@ -368,17 +383,17 @@ describe('createBuiltinTools KOS gate', () => {
     const names = tools.map((t) => t.name)
     expect(names).not.toContain('kos_query')
     expect(names).not.toContain('kos_digest')
-    expect(tools).toHaveLength(11)
+    expect(tools).toHaveLength(20)
   })
 
-  test('configured=true — KOS tools registered alongside default 11 (→ 20)', () => {
+  test('configured=true — KOS tools registered alongside default 20 (→ 29)', () => {
     const tools = createBuiltinTools(
       makePlatform({ kosConfig: () => ({ configured: true, timeDecayEnabled: false }) })
     )
     const names = tools.map((t) => t.name).sort()
     expect(names).toContain('kos_query')
     expect(names).toContain('kos_put_page')
-    expect(tools).toHaveLength(20) // 11 default + 9 KOS
+    expect(tools).toHaveLength(29) // 20 default + 9 KOS
   })
 
   test('configured=true: KOS tools live in category=meta only', () => {

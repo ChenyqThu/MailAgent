@@ -40,6 +40,9 @@ interface SegmentedControlProps<T extends string> {
   fluid?: boolean
   /** sm = h-7（默认，报告 cadence 基准）· md = h-8（chat BackendSelector）。 */
   size?: 'sm' | 'md'
+  /** 'accent' → 选中段 coral 实底 + 白字加粗（强调用，如账户页「邮件源选择」，
+   *  默认 wash 胶囊在玻璃上太淡看不出选中）；'default'（默认）→ 玻璃 wash 胶囊。 */
+  tone?: 'default' | 'accent'
   className?: string
 }
 
@@ -50,6 +53,7 @@ export function SegmentedControl<T extends string>({
   ariaLabel,
   fluid = false,
   size = 'sm',
+  tone = 'default',
   className
 }: SegmentedControlProps<T>): React.ReactElement {
   const reduceMotion = useReducedMotion()
@@ -104,7 +108,12 @@ export function SegmentedControl<T extends string>({
   }, [])
 
   return (
-    <div ref={trackRef} role="tablist" aria-label={ariaLabel} className={cn('seg', className)}>
+    <div
+      ref={trackRef}
+      role="tablist"
+      aria-label={ariaLabel}
+      className={cn('seg', tone === 'accent' && 'seg-accent', className)}
+    >
       <span
         aria-hidden
         className={cn(

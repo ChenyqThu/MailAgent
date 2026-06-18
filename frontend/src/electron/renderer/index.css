@@ -4786,6 +4786,24 @@ body:not([data-batch-mode='true']) .email-row .cb {
   color: rgb(var(--ink-fg));
 }
 
+/* F3c — 强调变体 (账户页「邮件源选择」)。默认 wash 胶囊在玻璃材质下太淡，用户
+ * 看不出选中态；accent 把指示器换成 coral 实底 + 选中段白字、所有段文字加粗。
+ * 仅 .seg-accent 作用域，不影响其它 SegmentedControl。indicator 的暗/亮规则各
+ * 加一条，特异性都要压过 :root[data-theme='light'] .seg .seg-indicator (0,4,0)。 */
+.seg.seg-accent button {
+  font-weight: 600;
+}
+.seg.seg-accent .seg-indicator {
+  background: rgb(var(--c-accent));
+  box-shadow: 0 1px 3px rgb(var(--c-accent) / 0.4);
+}
+:root[data-theme='light'] .seg.seg-accent .seg-indicator {
+  background: rgb(var(--c-accent));
+}
+.seg.seg-accent button.seg-active {
+  color: #fff;
+}
+
 /* 输入类控件底色 — 亮色保持 off-white 实底 (融合), 深色切半透墨色
  * (实底 ink-2 在玻璃主题下是死黑块, dogfood round 3 用户反馈)。 */
 .input-surface {

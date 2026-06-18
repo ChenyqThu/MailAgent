@@ -55,9 +55,9 @@ export function BackendSelector({ value, onChange, agentName }: Props): React.Re
     }
   }
 
-  // Label = ok dot + text（dot 的 active/inactive 色跟随当前 kind）。文字保持
-  // text-micro(11px)：task 06-08-chat r3→r5 的字号来回最终定在 11，不随统一
-  // 组件的 12px 基准走。
+  // Label = ok dot + text（dot 的 active/inactive 色跟随当前 kind）。文字用
+  // text-aux(14px)：从 micro(11px) 提到 aux（跳过 meta 12px），用户反馈切换
+  // 按钮文字偏小。whitespace-nowrap 防止字号变大后短标签在窄侧栏里折行。
   const kindLabel = (kind: ChatBackendKind): React.ReactNode => (
     <>
       <span
@@ -66,7 +66,7 @@ export function BackendSelector({ value, onChange, agentName }: Props): React.Re
           value.kind === kind ? 'bg-ok' : 'bg-ink-fg-3'
         )}
       />
-      <span className="text-micro">
+      <span className="text-aux whitespace-nowrap">
         {kind === 'notion-agent' ? t('chat.backend.notionAgent') : t('chat.backend.customApi')}
       </span>
     </>

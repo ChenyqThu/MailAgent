@@ -86,6 +86,33 @@ function makeHttpApi(): MailApi {
     },
     attachment: {
       list: vi.fn().mockResolvedValue([{ id: 7 }])
+    },
+    report: {
+      list: vi.fn().mockResolvedValue([{ id: 'daily:daily:2026-06-01' }]),
+      get: vi.fn().mockResolvedValue({ id: 'daily:daily:2026-06-01', doc: { version: 1 } }),
+      runNow: vi.fn().mockResolvedValue({ report_id: 'daily:daily:2026-06-02', status: 'ready' })
+    },
+    folder: {
+      discover: vi.fn().mockResolvedValue({
+        folders: [
+          {
+            imap_name: 'Archive',
+            display_name: 'Archive',
+            special_use: '\\Archive',
+            is_system: true,
+            is_synced: false
+          },
+          {
+            imap_name: '&XfJT0ZAB-',
+            display_name: '项目',
+            special_use: null,
+            is_system: false,
+            is_synced: true
+          }
+        ],
+        tree: [],
+        whitelist: ['&XfJT0ZAB-']
+      })
     }
   } as unknown as MailApi
 }
@@ -652,9 +679,175 @@ describe('HttpChatPlatform tool board — 委托 httpApi + 端点', () => {
     expect(r).toEqual({ updated_ids: [1] })
   })
 
-  test('draftReply → reject E_NOT_IMPLEMENTED（host-local，远程推迟）', async () => {
+  test('draftReply → POST /email/draft (reply-all + quoteOriginal, 不传 to/cc) → 投影 ChatToolDraftResult', async () => {
+    fetchMock.mockResolvedValue(
+      envelopeResponse({
+        internal_id: 1,
+        success: true,
+        drafts_folder: 'Drafts',
+        method: 'reply_all_internal_id'
+      })
+    )
     const p = new HttpChatPlatform(makeHttpApi(), '/api')
-    await expect(p.draftReply(1, 'body')).rejects.toMatchObject({ code: 'E_NOT_IMPLEMENTED' })
+    const r = await p.draftReply(1, 'Hi Alice')
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('/api/email/draft')
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(init.body)).toEqual({
+      internalId: 1,
+      mode: 'reply-all',
+      bodyText: 'Hi Alice',
+      quoteOriginal: true
+    })
+    expect(r).toEqual({
+      internalId: 1,
+      mailbox: 'Drafts',
+      accountName: null,
+      draftId: 'reply_all_internal_id'
+    })
+  })
+
+  test('setReplySuggestion → POST /email/{id}/reply-suggestion → 投影 ReplySuggestionData', async () => {
+    fetchMock.mockResolvedValue(
+      envelopeResponse({ internal_id: 5, reply_suggestion_md: 'Hi there', chars: 8 })
+    )
+    const p = new HttpChatPlatform(makeHttpApi(), '/api')
+    const r = await p.setReplySuggestion(5, 'Hi there')
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('/api/email/5/reply-suggestion')
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(init.body)).toEqual({ replySuggestionMd: 'Hi there' })
+    expect(r).toEqual({ internalId: 5, replySuggestionMd: 'Hi there', chars: 8 })
+  })
+
+  test('setAiFields → POST /email/{id}/ai-fields → camelCase body + 投影 AiFieldsData', async () => {
+    fetchMock.mockResolvedValue(
+      envelopeResponse({
+        internal_id: 5,
+        ai_action: '需要回复',
+        ai_priority: '🟡 重要',
+        ai_review_status: 'reviewed'
+      })
+    )
+    const p = new HttpChatPlatform(makeHttpApi(), '/api')
+    const r = await p.setAiFields(5, {
+      aiAction: '需要回复',
+      aiPriority: '🟡 重要',
+      aiReviewStatus: 'reviewed'
+    })
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('/api/email/5/ai-fields')
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(init.body)).toEqual({
+      aiAction: '需要回复',
+      aiPriority: '🟡 重要',
+      aiReviewStatus: 'reviewed'
+    })
+    expect(r).toEqual({
+      internalId: 5,
+      aiAction: '需要回复',
+      aiPriority: '🟡 重要',
+      aiReviewStatus: 'reviewed'
+    })
+  })
+
+  test('setAiFields → only includes provided fields in the request body', async () => {
+    fetchMock.mockResolvedValue(
+      envelopeResponse({
+        internal_id: 5,
+        ai_action: null,
+        ai_priority: '🔴 紧急',
+        ai_review_status: null
+      })
+    )
+    const p = new HttpChatPlatform(makeHttpApi(), '/api')
+    const r = await p.setAiFields(5, { aiPriority: '🔴 紧急' })
+    const [, init] = fetchMock.mock.calls[0]
+    // 未传字段不进 body（不发空 string，serve-api 不会误把它当清空）。
+    expect(JSON.parse(init.body)).toEqual({ aiPriority: '🔴 紧急' })
+    expect(r).toEqual({
+      internalId: 5,
+      aiAction: null,
+      aiPriority: '🔴 紧急',
+      aiReviewStatus: null
+    })
+  })
+
+  test('setPin → POST /email/{id}/pin {pinned}', async () => {
+    fetchMock.mockResolvedValue(
+      envelopeResponse({ internal_id: 5, is_pinned: true, changed: true })
+    )
+    const p = new HttpChatPlatform(makeHttpApi(), '/api')
+    const r = await p.setPin(5, true)
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('/api/email/5/pin')
+    expect(JSON.parse(init.body)).toEqual({ pinned: true })
+    expect(r).toEqual({ internal_id: 5, is_pinned: true, changed: true })
+  })
+
+  test('moveEmail → POST /email/{id}/move {dstImapName}', async () => {
+    fetchMock.mockResolvedValue(
+      envelopeResponse({ internal_id: 5, to_mailbox: 'Jira', notion_updated: true })
+    )
+    const p = new HttpChatPlatform(makeHttpApi(), '/api')
+    await p.moveEmail(5, 'Jira')
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('/api/email/5/move')
+    expect(JSON.parse(init.body)).toEqual({ dstImapName: 'Jira' })
+  })
+
+  test('resyncEmail → POST /email/{id}/resync', async () => {
+    fetchMock.mockResolvedValue(
+      envelopeResponse({ internal_id: 5, action: 'create', new_page_id: 'pg' })
+    )
+    const p = new HttpChatPlatform(makeHttpApi(), '/api')
+    await p.resyncEmail(5)
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/email/5/resync')
+    expect(fetchMock.mock.calls[0][1].method).toBe('POST')
+  })
+
+  test('archiveEmail → POST /email/{id}/archive', async () => {
+    fetchMock.mockResolvedValue(
+      envelopeResponse({
+        internal_id: 5,
+        from_mailbox: '收件箱',
+        to_mailbox: '存档',
+        notion_updated: true
+      })
+    )
+    const p = new HttpChatPlatform(makeHttpApi(), '/api')
+    await p.archiveEmail(5)
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/email/5/archive')
+  })
+
+  test('listReports / getReport / runReport 委托 httpApi.report.*', async () => {
+    const api = makeHttpApi()
+    const p = new HttpChatPlatform(api, '/api')
+    expect(await p.listReports({ cadence: 'daily', limit: 10 })).toEqual([
+      { id: 'daily:daily:2026-06-01' }
+    ])
+    expect(api.report.list).toHaveBeenCalledWith({ cadence: 'daily', limit: 10 })
+
+    await p.getReport('daily:daily:2026-06-01')
+    expect(api.report.get).toHaveBeenCalledWith('daily:daily:2026-06-01')
+
+    await p.runReport('daily', 'weekly')
+    expect(api.report.runNow).toHaveBeenCalledWith('daily', { cadence: 'weekly' })
+
+    // 无 cadence → 不传 opts（用 agent 默认）。
+    await p.runReport('daily')
+    expect(api.report.runNow).toHaveBeenCalledWith('daily', undefined)
+  })
+
+  test('listFolders 委托 httpApi.folder.discover(counts=false) + 投影 imap/display', async () => {
+    const api = makeHttpApi()
+    const p = new HttpChatPlatform(api, '/api')
+    const folders = await p.listFolders()
+    expect(api.folder.discover).toHaveBeenCalledWith({ counts: false })
+    expect(folders).toEqual([
+      { imap_name: 'Archive', display_name: 'Archive', special_use: '\\Archive', is_synced: false },
+      { imap_name: '&XfJT0ZAB-', display_name: '项目', special_use: null, is_synced: true }
+    ])
   })
 
   test('kosCallTool → POST /chat/kos-call {name,args}', async () => {
@@ -708,6 +901,7 @@ describe('HttpChatPlatform config 快照', () => {
     expect(p.modelConfig()).toEqual({
       defaultModel: 'claude-sonnet-4-6',
       kosConsumerEnabled: false,
+      kosConfigured: false,
       kosL1HotBlockEnabled: false,
       userContext: null
     })
@@ -743,14 +937,14 @@ describe('HttpChatPlatform config 快照', () => {
 // ── createBuiltinTools 集成 + createHttpNotionAgentBackend ───────────────────
 
 describe('HttpChatPlatform 工具板满足 createBuiltinTools', () => {
-  test('kosConfigured=false → 11 工具（无 KOS）', () => {
+  test('kosConfigured=false → 20 工具（无 KOS）', () => {
     const p = new HttpChatPlatform(makeHttpApi(), '/api')
-    expect(createBuiltinTools(p).length).toBe(11)
+    expect(createBuiltinTools(p).length).toBe(20)
   })
 
-  test('kosConfigured=true → 20 工具（+9 KOS）', () => {
+  test('kosConfigured=true → 29 工具（+9 KOS）', () => {
     const p = new HttpChatPlatform(makeHttpApi(), '/api', { kosConfigured: true })
-    expect(createBuiltinTools(p).length).toBe(20)
+    expect(createBuiltinTools(p).length).toBe(29)
   })
 })
 

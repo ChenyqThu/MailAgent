@@ -48,6 +48,8 @@ import type {
   ContactSuggestion,
   CreateDraftOpts,
   CreateDraftResult,
+  SetReplySuggestionOpts,
+  SetReplySuggestionResult,
   DraftPlanOpts,
   DraftPlanResult,
   SendEmailOpts,
@@ -268,6 +270,13 @@ class ElectronEmailApi implements EmailApi {
   }
   async createDraft(opts: CreateDraftOpts): Promise<CreateDraftResult> {
     const env = (await invoker()('email:createDraft', opts)) as WriteEnvelope<CreateDraftResult>
+    return unwrap(env)
+  }
+  async setReplySuggestion(opts: SetReplySuggestionOpts): Promise<SetReplySuggestionResult> {
+    const env = (await invoker()(
+      'email:setReplySuggestion',
+      opts
+    )) as WriteEnvelope<SetReplySuggestionResult>
     return unwrap(env)
   }
   async draft(opts: ComposeDraftOpts): Promise<unknown> {

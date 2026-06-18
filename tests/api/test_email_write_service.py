@@ -26,11 +26,13 @@ from src.services.errors import (
 )
 from src.services.llm_service import LlmRunResult
 from src.services.mail_write import (
+    AiFieldsResult,
     ArchiveResult,
     ComposeDraftResult,
     ComposeSendResult,
     FlagResult,
     PinResult,
+    ReplySuggestionResult,
     ResyncResult,
 )
 
@@ -136,6 +138,33 @@ class _SvcSpy:
         if _SvcSpy._raise is not None:
             raise _SvcSpy._raise
         return PinResult(internal_id=internal_id, is_pinned=pinned, changed=True)
+
+    # --- reply_suggestion ---
+    def set_reply_suggestion(self, internal_id, reply_md, *, actor):
+        self.calls.append((
+            "set_reply_suggestion", internal_id,
+            {"reply_md": reply_md, "actor": actor},
+        ))
+        if _SvcSpy._raise is not None:
+            raise _SvcSpy._raise
+        return ReplySuggestionResult(
+            internal_id=internal_id, reply_suggestion_md=reply_md, chars=len(reply_md)
+        )
+
+    # --- ai_fields ---
+    def set_ai_fields(self, internal_id, *, action=None, priority=None,
+                      review_status=None, actor):
+        self.calls.append((
+            "set_ai_fields", internal_id,
+            {"action": action, "priority": priority,
+             "review_status": review_status, "actor": actor},
+        ))
+        if _SvcSpy._raise is not None:
+            raise _SvcSpy._raise
+        return AiFieldsResult(
+            internal_id=internal_id, action=action, priority=priority,
+            review_status=review_status,
+        )
 
     # --- compose (A4): target = ComposeRequest (router 透传后的入参对象) ---
     def compose_plan(self, request):
@@ -483,6 +512,115 @@ def test_pin_requires_bool_400(client, svc_spy):
 def test_pin_not_found_maps_to_404(client, svc_spy):
     _SvcSpy._raise = ServiceNotFoundError("Email with internal_id=42 not found")
     r = client.post("/api/email/42/pin", json={"pinned": True})
+    assert r.status_code == 404
+    assert r.json()["error"]["code"] == "E_NOT_FOUND"
+
+
+# ===========================================================================
+# POST /api/email/{id}/reply-suggestion — in-process set_reply_suggestion
+# ===========================================================================
+
+
+def test_reply_suggestion_passes_args_and_envelope(client, svc_spy):
+    r = client.post(
+        f"/api/email/{EMAIL_ID}/reply-suggestion",
+        json={"replySuggestionMd": "Hi there\n\n----\nBest"},
+    )
+    assert r.status_code == 200
+    method, iid, kw = _last(svc_spy)
+    assert method == "set_reply_suggestion"
+    assert iid == EMAIL_ID
+    assert kw["reply_md"] == "Hi there\n\n----\nBest"
+    assert kw["actor"].authenticated is True
+    # reply_suggestion 不做 pm2 检测 → 无 allow_concurrent。
+    assert "allow_concurrent" not in kw
+    data = r.json()["data"]
+    assert data["internal_id"] == EMAIL_ID
+    assert data["reply_suggestion_md"] == "Hi there\n\n----\nBest"
+    assert data["chars"] == len("Hi there\n\n----\nBest")
+
+
+def test_reply_suggestion_requires_nonempty_400(client, svc_spy):
+    for bad in ({}, {"replySuggestionMd": ""}, {"replySuggestionMd": "   "}, {"replySuggestionMd": 5}):
+        r = client.post(f"/api/email/{EMAIL_ID}/reply-suggestion", json=bad)
+        assert r.status_code == 400
+        assert r.json()["error"]["code"] == "E_INVALID_ARG"
+    assert svc_spy.instances == []  # 校验早于 service 构造
+
+
+def test_reply_suggestion_not_found_maps_to_404(client, svc_spy):
+    _SvcSpy._raise = ServiceNotFoundError("Email with internal_id=42 not found")
+    r = client.post("/api/email/42/reply-suggestion", json={"replySuggestionMd": "x"})
+    assert r.status_code == 404
+    assert r.json()["error"]["code"] == "E_NOT_FOUND"
+
+
+# ===========================================================================
+# POST /api/email/{id}/ai-fields — in-process set_ai_fields
+# ===========================================================================
+
+
+def test_ai_fields_passes_camel_args_and_envelope(client, svc_spy):
+    r = client.post(
+        f"/api/email/{EMAIL_ID}/ai-fields",
+        json={
+            "aiAction": "需要回复",
+            "aiPriority": "🟡 重要",
+            "aiReviewStatus": "reviewed",
+        },
+    )
+    assert r.status_code == 200
+    method, iid, kw = _last(svc_spy)
+    assert method == "set_ai_fields"
+    assert iid == EMAIL_ID
+    # camelCase body → service kwargs (action / priority / review_status)。
+    assert kw["action"] == "需要回复"
+    assert kw["priority"] == "🟡 重要"
+    assert kw["review_status"] == "reviewed"
+    assert kw["actor"].authenticated is True
+    # ai_fields 不做 pm2 检测 → 无 allow_concurrent。
+    assert "allow_concurrent" not in kw
+    data = r.json()["data"]
+    assert data["internal_id"] == EMAIL_ID
+    assert data["ai_action"] == "需要回复"
+    assert data["ai_priority"] == "🟡 重要"
+    assert data["ai_review_status"] == "reviewed"
+
+
+def test_ai_fields_partial_only_one(client, svc_spy):
+    r = client.post(f"/api/email/{EMAIL_ID}/ai-fields", json={"aiPriority": "🔴 紧急"})
+    assert r.status_code == 200
+    _, _, kw = _last(svc_spy)
+    assert kw["priority"] == "🔴 紧急"
+    assert kw["action"] is None
+    assert kw["review_status"] is None
+
+
+def test_ai_fields_requires_at_least_one_400(client, svc_spy):
+    r = client.post(f"/api/email/{EMAIL_ID}/ai-fields", json={})
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "E_INVALID_ARG"
+    assert svc_spy.instances == []  # 校验早于 service 构造
+
+
+def test_ai_fields_rejects_non_string_400(client, svc_spy):
+    r = client.post(f"/api/email/{EMAIL_ID}/ai-fields", json={"aiPriority": 5})
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "E_INVALID_ARG"
+    assert svc_spy.instances == []
+
+
+def test_ai_fields_invalid_enum_maps_to_400(client, svc_spy):
+    # service raises ServiceInvalidArgError (非法枚举) → 400。
+    _SvcSpy._raise = ServiceInvalidArgError("invalid priority 'HIGH'")
+    r = client.post(f"/api/email/{EMAIL_ID}/ai-fields", json={"aiPriority": "HIGH"})
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "E_INVALID_ARG"
+
+
+def test_ai_fields_not_found_maps_to_404(client, svc_spy):
+    _SvcSpy._raise = ServiceNotFoundError("Email with internal_id=42 not found")
+    r = client.post("/api/email/42/ai-fields", json={"aiPriority": "🟡 重要"})
     assert r.status_code == 404
     assert r.json()["error"]["code"] == "E_NOT_FOUND"
 

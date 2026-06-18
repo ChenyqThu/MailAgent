@@ -1,7 +1,8 @@
 // V2.1 阶段 3 — 3b-4：Email read tools（从 electron `chat/tools/builtin/email.ts` 下沉 shared）。
 //
-// Six silent-tier read tools the LLM uses to discover and inspect mail without
-// side effects. 纯逻辑（input 校验 + shape massage + email_body 截断）下沉单一真源；
+// Seven silent-tier read tools the LLM uses to discover and inspect mail without
+// side effects (incl. email_list_folders, which resolves folder names for email_move).
+// 纯逻辑（input 校验 + shape massage + email_body 截断）下沉单一真源；
 // 后端原语经注入的 ChatToolPlatform 访问（electron 直调 handlers/email；http fetch
 // serve-api）。createEmailTools(platform) 闭包持 toolPlatform，取代 module-global const。
 
@@ -64,7 +65,7 @@ export function buildSearchHint(returned: number, hasMore: boolean): string {
   )
 }
 
-/** Build the 6 email read tools bound to the injected platform. */
+/** Build the 7 email read tools bound to the injected platform. */
 export function createEmailTools(platform: ChatToolPlatform): ToolDef[] {
   // ── 1. email_search — metadata-filter search (subject/sender/date/flags) ──
   const emailSearch: ToolDef = {
@@ -365,5 +366,46 @@ export function createEmailTools(platform: ChatToolPlatform): ToolDef[] {
     }
   }
 
-  return [emailSearch, emailGet, emailBody, emailListThread, emailSearchFulltext, emailGetAiFields]
+  // ── 7. email_list_folders — list mailbox folders (for email_move) ───────
+  const emailListFolders: ToolDef = {
+    name: 'email_list_folders',
+    description:
+      'List the available mailbox folders, each with its raw imap_name and human display_name. ' +
+      'Call this BEFORE email_move to resolve a folder the user named ("move it to 项目" / "file ' +
+      'under Archive") into the exact imap_name email_move needs — custom / non-ASCII folder names ' +
+      'are encoded (modified-UTF7) and cannot be guessed. Returns special_use (Archive/Sent/…) and ' +
+      'is_synced per folder. davmail-only: returns an error on the AppleScript backend.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+      required: []
+    },
+    confirmationTier: 'silent',
+    category: 'read',
+    surface: 'ipc',
+    // IMAP LIST round-trip via serve-api (counts disabled) — wider than a pure SQLite read.
+    timeoutMs: 10_000,
+    handler: async (_input, _ctx): Promise<ToolResult> => {
+      const start = Date.now()
+      try {
+        const folders = await platform.listFolders()
+        return ok({ count: folders.length, folders }, start)
+      } catch (e) {
+        // davmail-only / IMAP unreachable → surface the error so the LLM knows
+        // move-by-folder isn't available on this backend (don't fabricate names).
+        const code = (e as { code?: string }).code ?? 'E_INTERNAL'
+        return err(code, e instanceof Error ? e.message : String(e), start)
+      }
+    }
+  }
+
+  return [
+    emailSearch,
+    emailGet,
+    emailBody,
+    emailListThread,
+    emailSearchFulltext,
+    emailGetAiFields,
+    emailListFolders
+  ]
 }

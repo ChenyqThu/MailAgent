@@ -51,9 +51,9 @@ import { readSettings } from './settings'
  *  seconds of unblocked UI before the network handshake fires. */
 const AUTO_CHECK_DELAY_MS = 10_000
 
-/** feat/auto-update gap C — periodic re-check cadence (6h). Armed only when
- *  the master flag is on AND we're in the non-dev bound branch. */
-const AUTO_RECHECK_INTERVAL_MS = 21_600_000
+/** 新版本检测提醒 — 周期复查间隔 (48h)。无条件 arm (检测+提醒不需签名);
+ *  仅自动下载/安装仍由 master flag (AUTO_UPDATE_ENABLED) gate。 */
+const AUTO_RECHECK_INTERVAL_MS = 172_800_000
 
 /** feat/auto-update — master flag (AUTO_UPDATE_ENABLED), parsed in
  *  registerUpdaterHandlers via the chat/config.ts idiom. Module-level so the
@@ -442,20 +442,19 @@ export function registerUpdaterHandlers(opts?: {
     setTimeout(() => {
       void check()
     }, AUTO_CHECK_DELAY_MS)
-    // feat/auto-update gap C — periodic re-check, armed ONLY when the master
-    // flag is on. Cleared on before-quit (and __resetForTesting) so no timer
-    // leaks. The existing startup check above stays unconditional.
-    if (masterFlagEnabled) {
-      _recheckInterval = setInterval(() => {
-        void check()
-      }, AUTO_RECHECK_INTERVAL_MS)
-      app.on('before-quit', () => {
-        if (_recheckInterval) {
-          clearInterval(_recheckInterval)
-          _recheckInterval = null
-        }
-      })
-    }
+    // 新版本检测提醒 (check-only): 周期复查无条件 arm — 不再 gate AUTO_UPDATE_ENABLED。
+    // 检测+提醒不需签名 (ad-hoc 也要每 48h 提醒); 仅自动下载/安装仍由 master flag
+    // gate (maybeAutoDownload 内, 故复查发现新版只会 state='available' 弹提醒、不下载)。
+    // 启动 check 本就无条件, 这里补长开 app 的周期复查。before-quit 清理防 timer 泄漏。
+    _recheckInterval = setInterval(() => {
+      void check()
+    }, AUTO_RECHECK_INTERVAL_MS)
+    app.on('before-quit', () => {
+      if (_recheckInterval) {
+        clearInterval(_recheckInterval)
+        _recheckInterval = null
+      }
+    })
   }
 }
 

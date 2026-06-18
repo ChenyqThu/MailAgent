@@ -50,6 +50,9 @@ export const MANAGED_ENV_KEYS = [
   'DAVMAIL_ARCHIVE_SENT',
   'DAVMAIL_POLL_INTERVAL_SEC',
   'DAVMAIL_CALDAV_PORT',
+  // Drafts sync toggle (davmail-only) — AccountsTab davmail 面板的草稿箱同步开关。
+  // config.py drafts_sync_enabled Field (默认 true), 普通 boolean key 非 secret。
+  'DRAFTS_SYNC_ENABLED',
 
   // — Sync (PR D SyncTab)
   'SYNC_DATE_MODE',

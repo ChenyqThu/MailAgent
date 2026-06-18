@@ -1,25 +1,24 @@
-// Mail.app reply-draft IPC handler.
+// Reply-draft IPC handler (`email:createDraft` — 正文 Craft 按钮).
 //
-// `email:createDraft` opens a Mail.app **reply-all** draft pre-filled with the
-// caller's markdown body, copy-pastes it via NSPasteboard so rich text
-// survives, then ⌘S to save into Drafts and ⌘W to close — the same pipeline
-// the backend uses for `handle_create_draft` (see `src/events/handlers.py`).
-// We do NOT compose AppleScript inline anymore: the previous frontend-only
-// path called `set content of draftMsg` which only takes plaintext, losing
-// every list / bold / link the LLM produced. Delegating to
-// `scripts/create_reply_draft.sh` gives us the same UX as a Notion webhook
-// trigger (reply-all + clipboard paste + save).
+// 主路径 (MAILAGENT_BACKEND==='davmail', 生产默认): 转发本机 serve-api
+// `POST /email/draft`，传纯回复正文 + quoteOriginal、不传 to/cc → 服务端按原邮件
+// 推导 **reply-all** 收件人 + 在正文下方拼引用原文，davmail IMAP APPEND 写进 Drafts。
+// 与 chat `email_draft_reply` 工具同契约 (见 shared/chat/http_platform.ts)。
 //
-// Why a shell script and not pure TS:
+// Emergency fallback (MAILAGENT_BACKEND==='applescript'): `createDraftViaAppleScript`
+// 经 `scripts/create_reply_draft.sh` 在 Mail.app 里开 reply-all 草稿并 clipboard
+// 粘贴正文 (NSPasteboard 保富文本 → ⌘S 存 Drafts)。
+//
+// Why a shell script (fallback) and not pure TS:
 //   1. `scripts/html_clipboard.py` already converts markdown → HTML +
 //      writes NSPasteboardTypeHTML via PyObjC; rewriting that in JS would
 //      duplicate a lot of `AppKit` interop;
 //   2. the shell script's System Events `keystroke "v"` retry/verify loop
 //      survives Mail.app focus drift better than a one-shot osascript.
 //
-// Permissions: macOS prompts for Automation access on first run ("Allow
-// MailAgent to control Mail.app"). The user MUST accept the prompt for
-// any subsequent createDraft to work — we surface this as
+// Permissions (fallback only): macOS prompts for Automation access on first run
+// ("Allow MailAgent to control Mail.app"). The user MUST accept the prompt for
+// any subsequent AppleScript createDraft to work — we surface this as
 // `E_AUTOMATION_DENIED` so the renderer can guide them through System
 // Settings → Privacy → Automation.
 
@@ -32,7 +31,13 @@ import { getDb } from '../db'
 import { resolveBundledResourcesRoot } from '../cli_runner'
 import { daemonRequest } from '../daemon_api'
 import { envelopeFromCli, type WriteEnvelope } from '../lib/envelope'
-import type { ComposeDraftOpts, ComposeMode, DraftPlanOpts, SendEmailOpts } from '@shared/api/types'
+import type {
+  ComposeDraftOpts,
+  ComposeMode,
+  DraftPlanOpts,
+  SendEmailOpts,
+  SetReplySuggestionOpts
+} from '@shared/api/types'
 
 // ---- request / response shapes ---------------------------------------------
 
@@ -198,6 +203,28 @@ export function classifyScriptError(payload: { stderr: string; scriptError: stri
   return { code: 'E_APPLESCRIPT', message: 'create_reply_draft.sh failed: unknown error' }
 }
 
+/** Backend selector — mirrors the Python `MAILAGENT_BACKEND` switch (default
+ *  applescript; production = davmail post Sprint 16 cutover). davmail 主路径走
+ *  serve-api `/email/draft`；applescript 模式才回退到 Mail.app GUI 注入。 */
+function isDavmailBackend(): boolean {
+  return (process.env['MAILAGENT_BACKEND'] ?? 'applescript').toLowerCase() === 'davmail'
+}
+
+/** POST /email/draft 返回的 DraftResult data 块的相关字段（createDraft 投影为
+ *  CreateDraftResult）。其余字段（success/appended_uid/to_count/…）此处不读。 */
+interface DraftEndpointData {
+  internal_id: number
+  drafts_folder?: string | null
+  method?: string | null
+}
+
+/** 正文 Craft 按钮的草稿创建（`email:createDraft` IPC）。
+ *
+ *  davmail 主路径：转发本机 serve-api `POST /email/draft`，传纯回复正文 + quoteOriginal、
+ *  不传 to/cc → 服务端按原邮件推导 reply-all 收件人 + 在正文下方拼引用原文（davmail IMAP
+ *  APPEND）。等效于点顶部「回复所有 + 带原文引用」，与 chat email_draft_reply 工具同契约。
+ *
+ *  applescript 模式（emergency fallback）：保留旧 `create_reply_draft.sh` GUI 注入路径。 */
 export async function createDraft(opts: CreateDraftOpts): Promise<CreateDraftResult> {
   if (!Number.isInteger(opts.internalId) || opts.internalId < 0) {
     throw Object.assign(new Error('createDraft: internalId must be non-negative integer'), {
@@ -213,6 +240,34 @@ export async function createDraft(opts: CreateDraftOpts): Promise<CreateDraftRes
       code: 'E_INVALID_ARG'
     })
   }
+
+  // davmail 主路径 — 转发 serve-api（不传 to/cc → 服务端推导 reply-all + 拼引用原文）。
+  if (isDavmailBackend()) {
+    const data = (await runComposeDraft({
+      internalId: opts.internalId,
+      mode: 'reply-all',
+      bodyText: replyText,
+      quoteOriginal: true
+    })) as DraftEndpointData
+    return {
+      internalId: data.internal_id,
+      mailbox: data.drafts_folder ?? null,
+      accountName: null,
+      draftId: data.method ?? 'reply_all'
+    }
+  }
+
+  // applescript fallback — Mail.app GUI 注入（reply-all + clipboard paste + ⌘S）。
+  return createDraftViaAppleScript(opts, replyText)
+}
+
+/** Emergency fallback：`MAILAGENT_BACKEND==='applescript'` 时经 `create_reply_draft.sh`
+ *  在 Mail.app 里开 reply-all 草稿并 clipboard 粘贴正文（保留富文本）。replyText 已由
+ *  调用方裁剪/校验非空。 */
+async function createDraftViaAppleScript(
+  opts: CreateDraftOpts,
+  replyText: string
+): Promise<CreateDraftResult> {
   const row = lookupMailbox(opts.internalId)
   if (!row) {
     throw Object.assign(
@@ -347,6 +402,14 @@ export function runDraftPlan(opts: { internalId: number; mode: ComposeMode }): P
   })
 }
 
+// F1 — persist a user-edited reply suggestion to the SSoT (serve-api
+// POST /email/{id}/reply-suggestion, body camelCase {replySuggestionMd}).
+export function runSetReplySuggestion(internalId: number, replyMd: string): Promise<unknown> {
+  return daemonRequest('POST', `/email/${internalId}/reply-suggestion`, {
+    body: { replySuggestionMd: replyMd }
+  })
+}
+
 // ---- IPC wiring ------------------------------------------------------------
 
 export function registerDraftHandlers(): void {
@@ -364,6 +427,28 @@ export function registerDraftHandlers(): void {
         const message = err instanceof Error ? err.message : String(err)
         return { ok: false, code, message }
       }
+    }
+  )
+
+  // F1 — persist a user-edited reply suggestion to the SSoT (forwards to
+  // serve-api POST /email/{id}/reply-suggestion via daemon w/ local token).
+  // The composer's draftPlan reads the same reply_suggestion_md, so the top
+  // reply/reply-all prefill picks up the edit after the renderer invalidates
+  // the compose plan cache.
+  ipcMain.handle(
+    'email:setReplySuggestion',
+    async (_evt, opts: SetReplySuggestionOpts): Promise<WriteEnvelope<unknown>> => {
+      if (!opts || !Number.isInteger(opts.internalId) || opts.internalId < 0) {
+        return {
+          ok: false,
+          code: 'E_INVALID_ARG',
+          message: `bad internalId ${String(opts?.internalId)}`
+        }
+      }
+      if (typeof opts.body !== 'string') {
+        return { ok: false, code: 'E_INVALID_ARG', message: 'body (reply markdown) required' }
+      }
+      return envelopeFromCli(runSetReplySuggestion(opts.internalId, opts.body))
     }
   )
 

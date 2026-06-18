@@ -411,15 +411,15 @@ describe('updater: auto-download on update-available (gap A)', () => {
 })
 
 describe('updater: periodic re-check interval (gap C)', () => {
-  test('flag ON → setInterval armed at 6h; before-quit clears it', () => {
+  test('flag ON → setInterval armed at 48h; before-quit clears it', () => {
     vi.useFakeTimers()
     const setIntervalSpy = vi.spyOn(global, 'setInterval')
     const clearIntervalSpy = vi.spyOn(global, 'clearInterval')
     process.env.AUTO_UPDATE_ENABLED = 'true'
     const { stub } = makeStubUpdater()
     registerUpdaterHandlers({ updater: stub })
-    // Armed exactly once with the 6h cadence.
-    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 21_600_000)
+    // 新版本检测提醒: 周期复查无条件 arm @ 48h (check-only, 不再 gate flag)。
+    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 172_800_000)
     // before-quit listener was registered via app.on; invoke it.
     const beforeQuit = mockAppOn.mock.calls.find((c) => c[0] === 'before-quit')?.[1] as
       | (() => void)
@@ -429,15 +429,16 @@ describe('updater: periodic re-check interval (gap C)', () => {
     expect(clearIntervalSpy).toHaveBeenCalled()
   })
 
-  test('flag OFF → setInterval NOT armed (no periodic re-check)', () => {
+  test('flag OFF → setInterval STILL armed at 48h (check-only 不受 AUTO_UPDATE_ENABLED gate)', () => {
     vi.useFakeTimers()
     const setIntervalSpy = vi.spyOn(global, 'setInterval')
-    // AUTO_UPDATE_ENABLED unset → flag off.
+    // AUTO_UPDATE_ENABLED unset → flag off。但检测+提醒不需签名, 周期复查仍 arm;
+    // 仅自动下载/安装受 flag gate (maybeAutoDownload), 这里只 check 不下载。
     const { stub } = makeStubUpdater()
     registerUpdaterHandlers({ updater: stub })
-    expect(setIntervalSpy).not.toHaveBeenCalled()
-    // ...and app.on('before-quit') is not wired for the recheck cleanup.
-    expect(mockAppOn.mock.calls.find((c) => c[0] === 'before-quit')).toBeUndefined()
+    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 172_800_000)
+    // ...and app.on('before-quit') IS wired for the recheck cleanup.
+    expect(mockAppOn.mock.calls.find((c) => c[0] === 'before-quit')).toBeDefined()
   })
 
   test('__resetForTesting clears a pending interval (no timer leak)', () => {

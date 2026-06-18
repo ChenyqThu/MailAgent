@@ -25,8 +25,34 @@ import { EmailDetail } from '../email/EmailDetail'
 import { AIChatPanel } from '../chat'
 
 // Lane C — AIChatPanel 整列挤压出入场宽度（DESIGN.md §4.1 layout-anim 许可：
-// 非列表 / 单实例 / 低频，width tween 可接受）。保持 mockup 的 360px 右栏契约。
-const AI_PANEL_WIDTH = 360
+// 非列表 / 单实例 / 低频，width tween 可接受）。360 = mockup 默认右栏宽，F3a 起
+// 改为用户可拖拽调整 + localStorage 记忆，clamp 到 [MIN, MAX]。
+const AI_PANEL_WIDTH_DEFAULT = 360
+const AI_PANEL_WIDTH_MIN = 320
+const AI_PANEL_WIDTH_MAX = 720
+
+// F3a — 面板宽度偏好持久化（key + try-catch 范式同 AIChatPanel.tsx
+// readBackendKindPref/writeBackendKindPref：localStorage 在 sandbox/隐私模式
+// 可能拒访问，失败回退默认 / 静默丢弃）。
+const PANEL_WIDTH_PREF = 'mailagent.chat.panelWidth'
+function clampPanelWidth(px: number): number {
+  return Math.min(AI_PANEL_WIDTH_MAX, Math.max(AI_PANEL_WIDTH_MIN, px))
+}
+function readPanelWidthPref(): number {
+  try {
+    const raw = Number(localStorage.getItem(PANEL_WIDTH_PREF))
+    return Number.isFinite(raw) && raw > 0 ? clampPanelWidth(raw) : AI_PANEL_WIDTH_DEFAULT
+  } catch {
+    return AI_PANEL_WIDTH_DEFAULT
+  }
+}
+function writePanelWidthPref(px: number): void {
+  try {
+    localStorage.setItem(PANEL_WIDTH_PREF, String(px))
+  } catch {
+    /* localStorage 在 sandbox / privacy 模式可能拒写; 偏好丢失无伤大雅 */
+  }
+}
 
 export function InboxLayout(): React.ReactElement {
   const activeId = useActiveEmail((s) => s.activeInternalId)
@@ -67,6 +93,9 @@ export function InboxLayout(): React.ReactElement {
   // 零后台 IPC。
   const reduceMotion = useReducedMotion()
   const wrapperRef = useRef<HTMLDivElement>(null)
+  // F3a — 挤压列模式下面板宽度由用户拖左边缘调整, 取代写死的 360 作为 GSAP 的
+  // "打开"目标; reload 后从 localStorage 恢复。drawer (belowXl) 不用此值。
+  const [panelWidth, setPanelWidth] = useState(readPanelWidthPref)
   // keep-mounted latch: 初值 = 当前可见态（启动即可见时无一帧延迟），首次可见后
   // 永久 true（绝不回 false → 保留 chat state / 滚动）。effect 接首次 false→true
   // 的转变（首次打开晚一帧挂载, 主理人已接受）。
@@ -89,7 +118,10 @@ export function InboxLayout(): React.ReactElement {
         gsap.set(wrapper, { clearProps: 'width' })
         return
       }
-      const target = aiPanelVisible ? AI_PANEL_WIDTH : 0
+      // F3a — "打开"目标 = 用户选定宽度 (panelWidth), 关闭仍 = 0。拖拽中 mousemove
+      // 直接写 wrapper.style.width 实时跟手, mouseup 写回 panelWidth state → 这里
+      // 收敛 (target 已等于当前 inline width, 无可见跳变)。
+      const target = aiPanelVisible ? panelWidth : 0
       if (reduceMotion) {
         // reduced-motion：直接切到目标 width，不播动画。
         gsap.set(wrapper, { width: target })
@@ -107,8 +139,72 @@ export function InboxLayout(): React.ReactElement {
         }
       })
     },
-    { dependencies: [aiPanelVisible, reduceMotion, belowXl] }
+    { dependencies: [aiPanelVisible, reduceMotion, belowXl, panelWidth] }
   )
+
+  // F3a — 拖左边缘调宽 (仅 ≥xl 挤压列；<xl drawer 不挂手柄)。mousedown 记录起点,
+  // mousemove 直接写 wrapper.style.width 实时跟手 (面板在右侧 → 向左拖变宽，故
+  // newWidth = startWidth - Δx)，clamp 到 [MIN, MAX]; mouseup 写回 state +
+  // localStorage 并解绑。拖拽中加 select-none / col-resize cursor 到 body 防选中。
+  //
+  // 泄漏防护 (review MEDIUM-1)：active drag 的 teardown (解绑两个 document
+  // listener + 复原两个 body style) 存进 ref，onUp 复用它，且 unmount effect
+  // 卸载时跑同一份 —— 否则拖拽中组件卸载 / handle 因 aiPanelVisible·belowXl·
+  // mountPanel 翻转被移除会漏掉 onUp，留下游离 listener + body 永久卡
+  // col-resize / user-select:none。
+  const dragTeardownRef = useRef<(() => void) | null>(null)
+  const startResize = (e: React.MouseEvent): void => {
+    const wrapper = wrapperRef.current
+    if (!wrapper) return
+    e.preventDefault()
+    // 干净接管 inline width (review LOW)：杀掉可能在播的 open/close tween,
+    // 避免开面板 220ms 内抓手柄时 GSAP 与 drag 抢 width。
+    gsap.killTweensOf(wrapper)
+    const startX = e.clientX
+    const startWidth = wrapper.getBoundingClientRect().width
+    let nextWidth = startWidth
+    const prevCursor = document.body.style.cursor
+    const prevUserSelect = document.body.style.userSelect
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+
+    const onMove = (ev: MouseEvent): void => {
+      nextWidth = clampPanelWidth(startWidth - (ev.clientX - startX))
+      // 拖拽期间直接写 inline width 跟手, 不走 React state (避免每帧 re-render)。
+      wrapper.style.width = `${nextWidth}px`
+    }
+    const teardown = (): void => {
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+      document.body.style.cursor = prevCursor
+      document.body.style.userSelect = prevUserSelect
+      dragTeardownRef.current = null
+    }
+    const onUp = (): void => {
+      teardown()
+      setPanelWidth(nextWidth)
+      writePanelWidthPref(nextWidth)
+    }
+    dragTeardownRef.current = teardown
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }
+  // unmount 时跑掉残留的 drag teardown (拖拽中卸载兜底)。
+  useEffect(() => () => dragTeardownRef.current?.(), [])
+
+  // F3a 键盘可达 (review a11y)：handle 已 role="separator"，补 ArrowLeft/Right
+  // ±16px 调宽 + clamp + 持久化，让非鼠标用户也能调。
+  const resizeByKey = (e: React.KeyboardEvent): void => {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
+    e.preventDefault()
+    // 面板在右侧：ArrowLeft 向左 = 变宽，ArrowRight 向右 = 变窄 (与拖拽方向一致)。
+    const delta = e.key === 'ArrowLeft' ? 16 : -16
+    setPanelWidth((w) => {
+      const next = clampPanelWidth(w + delta)
+      writePanelWidthPref(next)
+      return next
+    })
+  }
   // Sprint 7 review (opus Nit) — removed local `useShortcut('cmd+k', goSearch)`
   // because `GlobalShortcuts` (mounted in App.tsx) now owns ⌘K → command
   // palette. The palette includes a "Go · Search" navigation entry, so the
@@ -157,11 +253,31 @@ export function InboxLayout(): React.ReactElement {
                   'transition-transform duration-base ease-standard motion-reduce:transition-none',
                   aiPanelVisible ? 'translate-x-0' : 'translate-x-full pointer-events-none'
                 )
-              : 'overflow-hidden shrink-0'
+              : 'relative overflow-hidden shrink-0'
           )}
           style={belowXl ? undefined : { width: 0 }}
         >
-          {mountPanel && <AIChatPanel />}
+          {/* F3a — 左边缘拖拽手柄 (仅 ≥xl 挤压列 + 面板打开时挂)。细条 w-1,
+              col-resize cursor, z-50 盖在面板内容之上接 mousedown。drawer
+              模式 (belowXl) 不挂 — 抽屉宽度固定不可拖。 */}
+          {!belowXl && aiPanelVisible && (
+            <div
+              role="separator"
+              aria-orientation="vertical"
+              aria-label={t('chat.resizePanel')}
+              aria-valuenow={panelWidth}
+              aria-valuemin={AI_PANEL_WIDTH_MIN}
+              aria-valuemax={AI_PANEL_WIDTH_MAX}
+              tabIndex={0}
+              onMouseDown={startResize}
+              onKeyDown={resizeByKey}
+              className={cn(
+                'absolute left-0 top-0 bottom-0 w-1 z-50 cursor-col-resize hover:bg-coral/30',
+                'focus:outline-none focus-visible:bg-coral/50'
+              )}
+            />
+          )}
+          {mountPanel && <AIChatPanel fillWrapper={!belowXl} />}
         </div>
       </div>
       {/* Sprint 17 — 旧 Sprint 5 fixed BatchActionBar 移除. floating bar

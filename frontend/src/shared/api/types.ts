@@ -213,6 +213,21 @@ export interface CreateDraftResult {
   draftId: string
 }
 
+export interface SetReplySuggestionOpts {
+  internalId: number
+  /** Full reply markdown to persist as the new reply_suggestion_md (SSoT).
+   *  Replaces the prior stored suggestion. The composer's draftPlan reads the
+   *  same field, so persisting a user edit makes the top reply/reply-all
+   *  prefill pick it up (F1). */
+  body: string
+}
+
+export interface SetReplySuggestionResult {
+  internal_id: number
+  reply_suggestion_md: string
+  chars: number
+}
+
 export interface LlmRunOpts {
   dryRun?: boolean
   /** Overwrite existing AI fields. Without this the CLI no-ops when labels exist. */
@@ -259,6 +274,13 @@ export interface ComposeDraftOpts {
   bcc?: string[]
   subject?: string
   bodyHtml?: string
+  /** 纯文本/markdown 正文 (serve-api `_compose_request_from_body` 读 `bodyText`)。
+   *  "只给纯回复正文、服务端推导收件人 + 拼引用原文" 的调用方 (正文 Craft / chat
+   *  email_draft_reply 工具) 走这条：传 bodyText + quoteOriginal、不传 to/cc。 */
+  bodyText?: string
+  /** quoteOriginal=true → 即便传了显式正文也在其下方拼引用原文 (reply/reply-all)。
+   *  正文 Craft / chat email_draft_reply 用 (等效顶部「回复所有 + 带原文引用」)。 */
+  quoteOriginal?: boolean
   /** 重要性 (高/普通/低)；'normal'/缺省时后端不写 Importance 头。 */
   importance?: ComposeImportance
 }
@@ -369,6 +391,12 @@ export interface EmailApi {
   /** Sprint 5 — open Mail.app reply window (AppleScript). User edits +
    *  sends in Mail.app; we don't relay the send. */
   createDraft(opts: CreateDraftOpts): Promise<CreateDraftResult>
+  /** F1 — persist a user-edited reply suggestion back to the SQLite SSoT
+   *  (POST /email/{id}/reply-suggestion → set_reply_suggestion). The composer's
+   *  draftPlan reads the same reply_suggestion_md, so after saving + invalidating
+   *  the compose plan cache the top reply/reply-all buttons prefill the edited
+   *  body instead of the AI original. Throws Error & { code } on failure. */
+  setReplySuggestion(opts: SetReplySuggestionOpts): Promise<SetReplySuggestionResult>
   /** Compose — write a reply/reply-all/forward draft into Drafts (IMAP
    *  APPEND via `mailagent email draft`). Returns the CLI `data` block
    *  (drafts_folder / appended_uid / method / …). Throws Error & { code }

@@ -111,4 +111,23 @@ describe('SegmentedControl', () => {
       expect(tab.classList.contains('h-8')).toBe(true)
     }
   })
+
+  test('tone="accent" adds seg-accent to the track; default omits it', () => {
+    // F3c — accent variant 给账户页「邮件源选择」用 coral 实底强调 (CSS 作用域在
+    // .seg.seg-accent)。默认不带该类, 不影响其它 SegmentedControl。
+    const { container, rerender } = renderSeg()
+    expect(container.querySelector('[role="tablist"]')!.classList.contains('seg-accent')).toBe(
+      false
+    )
+    rerender(
+      <SegmentedControl<Cadence>
+        value="all"
+        onChange={() => {}}
+        options={OPTIONS}
+        ariaLabel="Cadence"
+        tone="accent"
+      />
+    )
+    expect(container.querySelector('[role="tablist"]')!.classList.contains('seg-accent')).toBe(true)
+  })
 })

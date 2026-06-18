@@ -1,20 +1,22 @@
-// Auto-update §6 (gap B) — proactive "新版本已就绪" floating card.
+// Auto-update — proactive 新版本浮层卡片. 两种模式:
+//   installMode (已签名 + 自动更新开, status.enabled && state==='downloaded'):
+//     "新版本已就绪" → 应用内「重启并更新」(quitAndInstall)。
+//   notifyMode (ad-hoc / 未签名, !status.enabled && state==='available'):
+//     "新版本 vX 已发布" → 「前往下载」跳 GitHub Releases 手动覆盖装
+//     (ad-hoc quitAndInstall 装不上更新, 故只通知 + 开浏览器)。
+// 其它状态 (idle / checking / downloading / error / dev-disabled) → null
+// (Settings 内仍展示)。dismiss 按版本号 keyed, 关掉本会话不再弹, 重启若仍落后再弹。
 //
-// Mounts once at App root next to <ToastContainer/> (router-agnostic, must be
-// globally visible — not only inside Settings). Surfaces ONLY when the updater
-// is actually usable AND a build is staged:
-//   status.enabled === true   (master flag on + not dev-disabled + bound)
-//   status.state === 'downloaded'
-// Anything else → renders null (idle / checking / downloading / error /
-// dev-disabled / flag-off all stay silent here; Settings still shows them).
+// Mounts once at App root next to <ToastContainer/> (router-agnostic, 必须全局
+// 可见, 不只在 Settings 内)。
 //
-// 视觉沿用 RestartBanner 的语言 (coral 竖条 + 玻璃底 + CTA text-white + dismiss
-// X), 但位置改 fixed 右下角浮层 —— 因为它是一个全局 informative 卡片, 不是
-// settings 内部锚顶的 sticky banner. ToastContainer 占 `fixed top-titlebar
-// right-4` (右上), 这里取右下角避免碰撞, 且不挤压页面布局 (no layout shift).
+// 视觉沿用 RestartBanner 语言 (coral 竖条 + 玻璃底 + CTA text-white + dismiss X)。
+// 位置 fixed 右上角 (top-titlebar right-4, 用户要求常驻右上)。ToastContainer 同占
+// 右上 (z-50), 本卡 z-40 在其下 —— 短暂 toast 可临时盖住, 散后即露 (本卡持久仅手动
+// 关、toast 瞬态, 可接受的权衡)。不挤压页面布局 (no layout shift)。
 //
-// Motion (跟 Toast.tsx 一致): 入场 = slide-up + autoAlpha (DUR.base), reduced-
-// motion 直接清掉 inline style 不做 tween。
+// Motion: 入场 = slide-down (y:-12) + autoAlpha (DUR.base, 顶部锚自上而下滑入),
+// reduced-motion 直接清掉 inline style 不做 tween。
 
 import { useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -67,7 +69,7 @@ export function UpdateReadyBanner(): React.ReactElement | null {
         gsap.set(el, { clearProps: 'opacity,visibility,transform' })
         return
       }
-      gsap.from(el, { autoAlpha: 0, y: 12, duration: DUR.base, clearProps: 'transform' })
+      gsap.from(el, { autoAlpha: 0, y: -12, duration: DUR.base, clearProps: 'transform' })
     },
     { dependencies: [visible && !dismissed, reduce], scope: rootRef }
   )
@@ -79,10 +81,11 @@ export function UpdateReadyBanner(): React.ReactElement | null {
       ref={rootRef}
       role="status"
       aria-live="polite"
-      // 右下角浮层: fixed bottom-right, 高 z 但低于 toast(z-50) 避免抢占;
-      // pointer-events 默认 auto (要可点 CTA / dismiss)。不占文档流 → 无布局位移。
+      // 右上角常驻浮层 (用户要求): fixed top-right (titlebar 下方), z-40 低于
+      // toast(z-50) — 短暂 toast 可临时盖其上, 本卡常驻仅手动关。pointer-events
+      // 默认 auto (要可点 CTA / dismiss)。不占文档流 → 无布局位移。
       className={cn(
-        'fixed bottom-4 right-4 z-40 w-[320px]',
+        'fixed top-titlebar right-4 mt-2 z-40 w-[320px]',
         'flex items-center gap-3 overflow-hidden rounded-md',
         'bg-ink-3/[0.92] backdrop-blur-2xl backdrop-saturate-150',
         'border border-ink-border-soft',
@@ -100,7 +103,7 @@ export function UpdateReadyBanner(): React.ReactElement | null {
               version: status.latestVersion ?? ''
             })
           : t('updater.banner.availableTitle', {
-              defaultValue: `发现新版本 v${status.latestVersion ?? ''}`,
+              defaultValue: `新版本 v${status.latestVersion ?? ''} 已发布`,
               version: status.latestVersion ?? ''
             })}
       </div>

@@ -47,7 +47,10 @@ class FeishuNotifier:
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession()
+            # trust_env=True → 尊重 HTTPS_PROXY/HTTP_PROXY/ALL_PROXY/NO_PROXY
+            # (主机网络对 open.feishu.cn 的 TLS 被 reset 时可经环境代理出网);
+            # 无 proxy 环境变量时行为与裸 ClientSession() 完全一致。
+            self._session = aiohttp.ClientSession(trust_env=True)
         return self._session
 
     async def close(self):
@@ -434,7 +437,9 @@ class FeishuNotifier:
 
     async def _send_via_webhook(self, card: Dict, subject: str) -> bool:
         """Webhook fallback"""
-        import hmac, hashlib, base64
+        import hmac
+        import hashlib
+        import base64
         payload = {"msg_type": "interactive", "card": card}
         if self.webhook_secret:
             timestamp = int(time.time())

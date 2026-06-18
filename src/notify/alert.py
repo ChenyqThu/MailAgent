@@ -55,7 +55,10 @@ class FeishuAlertNotifier:
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession()
+            # trust_env=True → 尊重 HTTPS_PROXY/HTTP_PROXY/ALL_PROXY/NO_PROXY
+            # (主机网络对飞书 webhook 的 TLS 被 reset 时可经环境代理出网);
+            # 无 proxy 环境变量时行为与裸 ClientSession() 完全一致。
+            self._session = aiohttp.ClientSession(trust_env=True)
         return self._session
 
     async def close(self):
@@ -191,7 +194,6 @@ class FeishuAlertNotifier:
         }
 
     async def _send(self, card: Dict) -> bool:
-        import json
 
         payload: Dict = {"msg_type": "interactive", "card": card}
 
@@ -233,7 +235,7 @@ class FeishuAlertNotifier:
         await self.send_alert(
             level="info",
             title="服务已启动",
-            content=f"MailAgent 邮件同步服务已启动运行。",
+            content="MailAgent 邮件同步服务已启动运行。",
             source="main",
             details={
                 "监听邮箱": ", ".join(mailboxes),

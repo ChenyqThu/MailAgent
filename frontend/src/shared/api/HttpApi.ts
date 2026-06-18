@@ -47,6 +47,8 @@ import type {
   DeadLetterItem,
   DeadLetterListOpts,
   DraftPlanOpts,
+  SetReplySuggestionOpts,
+  SetReplySuggestionResult,
   DraftPlanResult,
   EmailBody,
   EmailDetail,
@@ -248,6 +250,14 @@ export class HttpApi implements MailApi {
     // Sprint 5 §2.2 — Mail.app AppleScript-only draft window. Web uses
     // email.draft instead (no osascript on the remote tab); keep stub.
     createDraft: () => notImplemented('email.createDraft'),
+
+    // F1 — persist a user-edited reply suggestion to the SSoT. davmail-only
+    // write; serve-api requires write auth (a remote CF-cookie tab may lack it →
+    // the caller catches and keeps the local committed edit for the session).
+    setReplySuggestion: (opts: SetReplySuggestionOpts): Promise<SetReplySuggestionResult> =>
+      this.req<SetReplySuggestionResult>('POST', `/email/${opts.internalId}/reply-suggestion`, {
+        body: { replySuggestionMd: opts.body }
+      }),
 
     draft: (opts: ComposeDraftOpts): Promise<unknown> =>
       // davmail-only. internalId + bodyHtml in BODY (server writes a tmp

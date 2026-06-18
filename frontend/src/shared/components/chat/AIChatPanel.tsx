@@ -115,9 +115,16 @@ interface AIChatPanelProps {
    *  inbox to return to from a popout window) and the close hover
    *  switches to a "close window" semantic via window.close(). */
   fullScreen?: boolean
+  /** F3a — in the ≥xl squeeze-column layout the wrapper owns the
+   *  (user-resizable) width; the panel just fills it (w-full). The <xl
+   *  drawer overlay keeps the panel's own fixed width (no wrapper width). */
+  fillWrapper?: boolean
 }
 
-export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): React.ReactElement {
+export function AIChatPanel({
+  fullScreen = false,
+  fillWrapper = false
+}: AIChatPanelProps = {}): React.ReactElement {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const mailApi = useMailApi()
@@ -689,8 +696,14 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
         // 主题 v2 — .ai-bg (渐变+blur) 退役, AI 面板走 .glass-panel tier overlay
         'border-l border-ink-border glass-panel flex flex-col min-h-0',
         // Sprint 14 PR E — popout fills the whole window; inbox use
-        // case keeps the 360px right-rail fixed-width contract.
-        fullScreen ? 'flex-1 w-full border-l-0' : 'w-[360px] max-w-[92vw] shrink-0'
+        // case keeps the right-rail fixed-width contract. F3a — when the
+        // ≥xl squeeze wrapper owns a (resizable) width, fill it (w-full);
+        // the <xl drawer keeps the panel's own fixed 360px width.
+        fullScreen
+          ? 'flex-1 w-full border-l-0'
+          : fillWrapper
+            ? 'w-full shrink-0'
+            : 'w-[360px] max-w-[92vw] shrink-0'
       )}
     >
       {/* ── Header bar (40px) — title + New / History / Popout / Close ──

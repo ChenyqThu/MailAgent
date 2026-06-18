@@ -45,7 +45,13 @@ import type {
   EmailList_EmailListItem,
   MailagentEmailBody
 } from '../types/cli.gen'
-import type { AIFields, SearchResult } from '../api/types'
+import type {
+  AIFields,
+  ReportDetail,
+  ReportListItem,
+  ReportRunResult,
+  SearchResult
+} from '../api/types'
 
 // ─── 基础设施板：持久化端口（ai_chat.db 写读）────────────────────────────
 //
@@ -211,12 +217,48 @@ export interface ChatToolFlagPatch {
   processingStatus?: string
 }
 
+/** report_list 工具构造的过滤 opts（GET /api/reports query 子集）。 */
+export interface ChatToolReportListOpts {
+  cadence?: 'daily' | 'weekly' | 'monthly'
+  agentId?: string
+  limit?: number
+}
+
+/** email_list_folders 工具返回的单个文件夹（imap_name = raw modified-UTF7，move 用；
+ *  display_name = 解码后中文/展示名）。从 folder discover 的 FolderInfo 投影而来。 */
+export interface ChatToolFolderItem {
+  imap_name: string
+  display_name: string
+  special_use: string | null
+  is_synced: boolean
+}
+
 /** email_draft_reply 工具读的 createDraft 结果形状（main CreateDraftResult 镜像；shared 自有）。 */
 export interface ChatToolDraftResult {
   internalId: number
   mailbox: string | null
   accountName: string | null
   draftId: string
+}
+
+/** email_set_reply_suggestion 工具读的 set_reply_suggestion 结果形状（serve-api
+ *  POST /email/{id}/reply-suggestion 的 data 块；shared 自有，不引 Electron 类型）。 */
+export interface ReplySuggestionData {
+  internalId: number
+  replySuggestionMd: string
+  chars: number
+}
+
+/** email_set_ai_fields 工具读的 set_ai_fields 结果形状（serve-api POST /email/{id}/ai-fields
+ *  的 data 块；snake_case → camelCase 投影；未传字段为 null = 实际落库值）。 */
+export interface AiFieldsData {
+  internalId: number
+  /** 实际落库的 AI Action（中文枚举，labels_json.action_type；未传则 null）。 */
+  aiAction: string | null
+  /** 实际落库的 AI Priority（中文枚举，labels_json.priority；未传则 null）。 */
+  aiPriority: string | null
+  /** 实际落库的 AI Review Status（'reviewed'/'pending'，映自 llm_processing.status；未传则 null）。 */
+  aiReviewStatus: string | null
 }
 
 /** kos 工具注册 + rerank gate 的配置快照（同步）。configured = 注册 gate
@@ -255,12 +297,50 @@ export interface ChatToolPlatform {
   searchEmailsFulltext(opts: ChatToolSearchOpts): Promise<SearchResult>
   listAttachments(internalId: number): Promise<AttachmentList_AttachmentItem[]>
   searchAttachments(opts: ChatToolSearchOpts): Promise<unknown>
+  /** 列出 Exchange 文件夹（imap_name + display_name）供 email_move 把"移到 X"解析成
+   *  raw IMAP 名（自定义中文文件夹的 modified-UTF7 名 LLM 猜不出）。davmail-only —
+   *  非 davmail 后端 serve-api 抛 → 工具 graceful 上报错误。委托 httpApi.folder.discover
+   *  （counts=false 避开慢的逐文件夹 STATUS）。 */
+  listFolders(): Promise<ChatToolFolderItem[]>
   // ── 写原语（preview/edit 工具）─────────────────────────────────────────────
   /** flag/archive 经此（electron+http 都→serve-api，runEmailFlag 已 D1 统一，零 parity）。
    *  返回 daemon FlagResult（{updated_ids?,outbox_entries?}），工具内 as 投影。 */
   flagEmail(internalId: number, patch: ChatToolFlagPatch): Promise<unknown>
-  /** 回复草稿（electron: AppleScript createDraft；http: throw E_NOT_IMPLEMENTED，fork 3 远程推迟）。 */
+  /** 回复草稿 → POST /email/draft（bodyText + quoteOriginal、不传 to/cc → 服务端推导
+   *  reply-all 收件人 + 拼引用原文，davmail IMAP APPEND）。electron renderer / 远程 browser
+   *  均走 HttpChatPlatform 实现（不再走 Mail.app AppleScript）。 */
   draftReply(internalId: number, bodyMarkdown: string): Promise<ChatToolDraftResult>
+  /** 写邮件回复建议 markdown 到 SQLite SSoT（llm_processing.labels_json.reply_suggestion_md）。
+   *  electron+http 都 → serve-api POST /email/{id}/reply-suggestion（MailWriteService
+   *  .set_reply_suggestion）。compose 取建议时读同一字段，故改了建议后 reply/Craft 即用新值。 */
+  setReplySuggestion(internalId: number, replyMarkdown: string): Promise<ReplySuggestionData>
+  /** 覆盖邮件 AI 分类字段（AI Action / Priority / Review Status）到 SQLite SSoT。electron+http
+   *  都 → serve-api POST /email/{id}/ai-fields（MailWriteService.set_ai_fields，写
+   *  labels_json.action_type/priority + 镜像主表列 + llm_processing.status）。至少一项非空；
+   *  非法枚举值 serve-api 拒（合法值取自 src/llm_agent/schema.py）。返回实际落库值。 */
+  setAiFields(
+    internalId: number,
+    fields: { aiAction?: string; aiPriority?: string; aiReviewStatus?: string }
+  ): Promise<AiFieldsData>
+  /** 置顶 / 取消置顶 → POST /email/{id}/pin（MailWriteService.set_pin）。返回 {internal_id,
+   *  is_pinned, changed}（工具内 as 投影）。 */
+  setPin(internalId: number, pinned: boolean): Promise<unknown>
+  /** 移动邮件到任意文件夹 → POST /email/{id}/move（davmail IMAP MOVE，MailWriteService
+   *  .move_to_folder）。dstImapName = IMAP 原始名（modified-UTF7）。返回 MoveResult data。 */
+  moveEmail(internalId: number, dstImapName: string): Promise<unknown>
+  /** 重传单封到 Notion → POST /email/{id}/resync（MailWriteService.resync）。返回 ResyncResult data。 */
+  resyncEmail(internalId: number): Promise<unknown>
+  /** 归档邮件 → POST /email/{id}/archive（davmail IMAP move→Archive + Mailbox→存档，
+   *  MailWriteService.archive）。返回 ArchiveResult data。 */
+  archiveEmail(internalId: number): Promise<unknown>
+  // ── 报告（report_list/get silent；report_run preview/edit）──────────────────
+  /** 报告列表 → GET /api/reports（不含 blocks）。委托 httpApi.report.list。 */
+  listReports(opts: ChatToolReportListOpts): Promise<ReportListItem[]>
+  /** 单份报告详情（含 doc）→ GET /api/reports/{id}。委托 httpApi.report.get。不存在 null。 */
+  getReport(reportId: string): Promise<ReportDetail | null>
+  /** 立即生成一份报告（跑 LLM，数十秒）→ POST /api/report-agents/{id}/run。委托
+   *  httpApi.report.runNow。 */
+  runReport(agentId: string, cadence?: 'daily' | 'weekly' | 'monthly'): Promise<ReportRunResult>
   // ── KOS（9 工具，gated by kosConfig().configured）───────────────────────────
   /** kos 注册 + rerank gate 的同步配置快照。 */
   kosConfig(): ChatToolKosConfig
