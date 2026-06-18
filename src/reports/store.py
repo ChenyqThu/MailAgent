@@ -75,6 +75,45 @@ class ReportStore:
             conn.commit()
         return self.get_agent(agent_id)
 
+    def create_agent(
+        self,
+        agent_id: str,
+        *,
+        type: str = "report",
+        title: Optional[str] = None,
+        enabled: bool = False,
+        model: Optional[str] = None,
+        prompt: Optional[str] = None,
+        tools_json: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """新建一行 agent（type 多态：'report' / 'search' / …）。返回 get_agent(id)。
+
+        冲突语义：id 已存在 → 抛 ``ValueError``（明确报错，区别于 update 的幂等）。
+        显式创建意图下静默吞掉冲突会掩盖 UI 重复建同名 agent 的 bug，故选硬报错。
+        report 专属列（schedule/window/kos_enrich/…）这里不写（留 NULL/DEFAULT），由
+        update_agent 后续按需补；search agent 不需要这些列。
+        """
+        if self.get_agent(agent_id) is not None:
+            raise ValueError(f"report_agent {agent_id!r} already exists")
+        with self._connection() as conn:
+            conn.execute(
+                "INSERT INTO report_agent (id, type, enabled, title, model, prompt, "
+                "tools_json, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    agent_id, type, 1 if enabled else 0, title, model, prompt,
+                    tools_json, time.time(),
+                ),
+            )
+            conn.commit()
+        return self.get_agent(agent_id) or {}
+
+    def delete_agent(self, agent_id: str) -> bool:
+        """删一行 agent。返回是否真的删到（不存在 → False）。"""
+        with self._connection() as conn:
+            cur = conn.execute("DELETE FROM report_agent WHERE id = ?", (agent_id,))
+            conn.commit()
+            return cur.rowcount > 0
+
     # ==================== report 产物 ====================
 
     def create_report(

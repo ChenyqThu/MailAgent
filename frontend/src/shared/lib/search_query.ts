@@ -20,6 +20,9 @@ const CJK_RE = /[一-鿿㐀-䶿豈-﫿]/
 const FTS5_OP_RE = /\b(AND|OR|NOT|NEAR)\b/i
 const HAS_WILDCARD_RE = /[*"]/
 
+// T3 起 UI 调用链不再使用此函数——CJK 前缀通配已统一到后端 smart 模式
+// (smartQueryTransform)，消除前端/后端双 normalizer 分叉。保留供单测与潜在复用；
+// 新代码勿在 UI 搜索入口调用。
 export function normalizeFtsQuery(raw: string): string {
   const trimmed = raw.trim()
   if (trimmed.length === 0) return ''

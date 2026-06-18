@@ -42,7 +42,7 @@
         "mailbox": {"type": ["string", "null"]},
         "rank": {
           "type": "number",
-          "description": "bm25 score - 越小越相关 (FTS5 约定)"
+          "description": "Relevance rank. Body-only/raw uses bm25 (smaller = more relevant); smart body+attachment fusion uses negative RRF score (smaller = more relevant)."
         },
         "snippet": {
           "type": ["string", "null"],
@@ -50,6 +50,16 @@
         },
         "notion_page_id": {"type": ["string", "null"]},
         "notion_url": {"type": ["string", "null"]},
+        "source": {
+          "type": "string",
+          "enum": ["body", "attachment"],
+          "default": "body",
+          "description": "Where the winning snippet came from. 'attachment' means filename is populated."
+        },
+        "filename": {
+          "type": ["string", "null"],
+          "description": "Attachment filename for source='attachment'; null for body hits."
+        },
         "ai_priority": {
           "type": ["string", "null"],
           "enum": ["critical", "urgent", "important", "normal", "low", null],

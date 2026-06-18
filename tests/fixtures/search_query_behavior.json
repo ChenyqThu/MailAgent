@@ -16,11 +16,12 @@
       "is_pinned": 1,
       "is_important": 1,
       "ai_priority": "🔴 紧急",
-      "body_markdown": "redis timeout incident 产品评审 alpha",
+      "body_markdown": "redis timeout incident 产品评审 alpha fusionrank",
       "attachments": [
         {
           "filename": "report.pdf",
-          "is_inline": 0
+          "is_inline": 0,
+          "text_content": "fusionrank appendix body duplicate"
         },
         {
           "filename": "logo.png",
@@ -106,7 +107,7 @@
       "subject": "Draft proposal",
       "sender": "erin@example.com",
       "sender_name": "Erin",
-      "to_addr": "product@example.com",
+      "to_addr": "product@example.com; zephyrqa@example.com",
       "cc_addr": "",
       "date_received": "2026-06-12T15:00:00+08:00",
       "mailbox": "草稿箱",
@@ -136,7 +137,8 @@
       "attachments": [
         {
           "filename": "evidence.txt",
-          "is_inline": 0
+          "is_inline": 0,
+          "text_content": "contractneedle fusionrank confidential attachment evidence"
         }
       ]
     },
@@ -211,7 +213,7 @@
     {
       "internal_id": 12,
       "subject": "Literal foo colon",
-      "sender": "henry@example.com",
+      "sender": "中文发送者@example.com",
       "sender_name": "Henry",
       "to_addr": "dev@example.com",
       "cc_addr": "",
@@ -223,6 +225,40 @@
       "is_important": 0,
       "ai_priority": "🟢 一般",
       "body_markdown": "literal foo:bar token for unknown field fallback",
+      "attachments": []
+    },
+    {
+      "internal_id": 13,
+      "subject": "研发项目deadline汇报",
+      "sender": "ivan@example.com",
+      "sender_name": "Ivan Dev",
+      "to_addr": "dev2@example.com",
+      "cc_addr": "",
+      "date_received": "2026-06-04T10:00:00+08:00",
+      "mailbox": "存档",
+      "is_read": 1,
+      "is_flagged": 0,
+      "is_pinned": 0,
+      "is_important": 0,
+      "ai_priority": "🟢 一般",
+      "body_markdown": "【项目进度】研发项目deadline汇报已完成，central立项进展顺利。",
+      "attachments": []
+    },
+    {
+      "internal_id": 14,
+      "subject": "下划线字面守卫",
+      "sender": "gizmo@example.com",
+      "sender_name": "Gizmo",
+      "to_addr": "nobody@example.com",
+      "cc_addr": "",
+      "date_received": "2026-06-03T10:00:00+08:00",
+      "mailbox": "存档",
+      "is_read": 1,
+      "is_flagged": 0,
+      "is_pinned": 0,
+      "is_important": 0,
+      "ai_priority": "🟢 一般",
+      "body_markdown": "字面下划线 项_ 后缀通配守卫样本。",
       "attachments": []
     }
   ],
@@ -419,7 +455,9 @@
         8,
         6,
         10,
+        13,
         12,
+        14,
         11,
         3,
         2,
@@ -484,6 +522,41 @@
       "expect_warnings": 1
     },
     {
+      "name": "field_from_space_merge",
+      "query": "from: alice",
+      "expect_ids": [
+        1,
+        8
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "field_from_space_merge_quoted",
+      "query": "from: \"Alice Zhang\"",
+      "expect_ids": [
+        1,
+        8
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "field_negative_space_merge",
+      "query": "redis -from: noreply",
+      "expect_ids": [
+        1,
+        7
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "field_space_no_merge_next_field",
+      "query": "from: from:bob",
+      "expect_ids": [
+        2
+      ],
+      "expect_warnings": 1
+    },
+    {
       "name": "unknown_is_value_warning",
       "query": "is:archived",
       "expect_ids": [],
@@ -530,6 +603,110 @@
       "expect_warnings": 0
     },
     {
+      "name": "fts_column_body_english",
+      "query": "body:timeout",
+      "expect_ids": [
+        1,
+        4,
+        8
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "fts_column_body_cjk",
+      "query": "body:本周",
+      "expect_ids": [
+        3
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "fts_column_subject_tilde_english",
+      "query": "subject~:Redis",
+      "expect_ids": [
+        1
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "fts_column_subject_tilde_cjk",
+      "query": "subject~:产品",
+      "expect_ids": [
+        3
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "fts_column_sender_tilde_english",
+      "query": "sender~:alice",
+      "expect_ids": [
+        1,
+        8
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "fts_column_sender_tilde_cjk",
+      "query": "sender~:中文",
+      "expect_ids": [
+        12
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "fts_column_subject_like_contrast",
+      "query": "subject:Redis",
+      "expect_ids": [
+        1
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "fts_attachment_only",
+      "query": "contractneedle",
+      "expect_ids": [
+        7
+      ],
+      "expect_warnings": 0,
+      "expect_transformed_query": "contractneedle",
+      "expect_hits": [
+        {
+          "internal_id": 7,
+          "source": "attachment",
+          "filename": "evidence.txt"
+        }
+      ]
+    },
+    {
+      "name": "fts_body_and_attachment_rrf_prefers_body",
+      "query": "fusionrank",
+      "expect_ids": [
+        1,
+        7
+      ],
+      "order": "exact",
+      "expect_warnings": 0,
+      "expect_transformed_query": "fusionrank",
+      "expect_hits": [
+        {
+          "internal_id": 1,
+          "source": "body",
+          "filename": null
+        },
+        {
+          "internal_id": 7,
+          "source": "attachment",
+          "filename": "evidence.txt"
+        }
+      ]
+    },
+    {
+      "name": "fts_attachment_filtered_by_from",
+      "query": "contractneedle from:alice",
+      "expect_ids": [],
+      "expect_warnings": 0
+    },
+    {
       "name": "structured_params_merge",
       "query": "timeout",
       "params": {
@@ -552,6 +729,371 @@
       ],
       "expect_warnings": 1,
       "expect_transformed_query": "redis"
+    },
+    {
+      "name": "field_sort_oldest",
+      "query": "from:alice sort:oldest",
+      "expect_ids": [
+        1,
+        8
+      ],
+      "order": "exact",
+      "expect_warnings": 0
+    },
+    {
+      "name": "field_sort_date_desc",
+      "query": "from:alice sort:date",
+      "expect_ids": [
+        8,
+        1
+      ],
+      "order": "exact",
+      "expect_warnings": 0
+    },
+    {
+      "name": "field_sort_unknown_warn",
+      "query": "from:alice sort:foo",
+      "expect_ids": [
+        1,
+        8
+      ],
+      "expect_warnings": 1
+    },
+    {
+      "name": "fts_sort_date",
+      "query": "redis sort:date",
+      "expect_ids": [
+        7,
+        4,
+        1
+      ],
+      "order": "exact",
+      "expect_warnings": 0
+    },
+    {
+      "name": "fts_sort_oldest",
+      "query": "redis sort:oldest",
+      "expect_ids": [
+        1,
+        4,
+        7
+      ],
+      "order": "exact",
+      "expect_warnings": 0
+    },
+    {
+      "name": "fts_sort_relevance",
+      "query": "redis sort:relevance",
+      "expect_ids": [
+        1,
+        4,
+        7
+      ],
+      "order": "exact",
+      "expect_warnings": 0
+    },
+    {
+      "name": "sort_space_merge_fts",
+      "query": "redis sort: date",
+      "expect_ids": [
+        7,
+        4,
+        1
+      ],
+      "order": "exact",
+      "expect_warnings": 0
+    },
+    {
+      "name": "sort_space_merge_filter",
+      "query": "from:alice sort: oldest",
+      "expect_ids": [
+        1,
+        8
+      ],
+      "order": "exact",
+      "expect_warnings": 0
+    },
+    {
+      "name": "sort_space_no_merge_next_field",
+      "query": "from: sort:date",
+      "expect_ids": [],
+      "expect_warnings": 1
+    },
+    {
+      "name": "trigram_cjk_three_char_match",
+      "query": "产品评审",
+      "trigram": true,
+      "expect_ids": [
+        1,
+        3
+      ],
+      "expect_warnings": 0,
+      "expect_snippet_nonempty": [
+        1,
+        3
+      ],
+      "expect_snippet_contains": {
+        "3": "<mark>产品评审</mark>",
+        "1": "<mark>产品评</mark>"
+      }
+    },
+    {
+      "name": "trigram_cjk_middle_substring",
+      "query": "评审定",
+      "trigram": true,
+      "expect_ids": [
+        3
+      ],
+      "expect_warnings": 0,
+      "expect_snippet_contains": {
+        "3": "<mark>评审定</mark>"
+      }
+    },
+    {
+      "name": "trigram_cjk_two_char_like_product",
+      "query": "产品",
+      "trigram": true,
+      "expect_ids": [
+        3,
+        1
+      ],
+      "order": "exact",
+      "expect_warnings": 0
+    },
+    {
+      "name": "trigram_cjk_two_char_like_review",
+      "query": "评审",
+      "trigram": true,
+      "expect_ids": [
+        1,
+        3
+      ],
+      "expect_warnings": 0,
+      "expect_snippet_nonempty": [
+        1,
+        3
+      ]
+    },
+    {
+      "name": "trigram_cjk_two_char_like_subject_only",
+      "query": "本周",
+      "trigram": true,
+      "expect_ids": [
+        3
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "trigram_cjk_single_char_intercept",
+      "query": "我",
+      "trigram": true,
+      "expect_ids": [],
+      "expect_warnings": 1
+    },
+    {
+      "name": "trigram_mixed_cjk_english_and_intersection",
+      "query": "redis 产品评审",
+      "trigram": true,
+      "expect_ids": [
+        1
+      ],
+      "expect_warnings": 0,
+      "expect_snippet_nonempty": [
+        1
+      ],
+      "expect_snippet_contains": {
+        "1": "<mark>redis</mark>"
+      }
+    },
+    {
+      "name": "trigram_cjk_two_char_no_regression_flag_off",
+      "query": "产品",
+      "expect_ids": [
+        1,
+        3
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "trigram_english_no_regression_flag_on",
+      "query": "redis timeout",
+      "trigram": true,
+      "expect_ids": [
+        1,
+        4
+      ],
+      "expect_warnings": 0,
+      "expect_transformed_query": "redis AND timeout"
+    },
+    {
+      "name": "recipient_to_tilde_basic",
+      "query": "to~:bob",
+      "expect_ids": [
+        1
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "recipient_cc_tilde_basic",
+      "query": "cc~:carol",
+      "expect_ids": [
+        2
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "recipient_from_tilde_sender_name",
+      "query": "from~:Mallory",
+      "expect_ids": [
+        7
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "recipient_to_tilde_and_body_term",
+      "query": "cache to~:zephyrqa",
+      "expect_ids": [
+        6
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "recipient_bare_word_does_not_match_recipient_only_token",
+      "query": "zephyrqa",
+      "expect_ids": [],
+      "expect_warnings": 0
+    },
+    {
+      "name": "recipient_to_tilde_matches_recipient_only_token",
+      "query": "to~:zephyrqa",
+      "expect_ids": [
+        6
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "recipient_negative_to_tilde_filters_out",
+      "query": "redis -from~:Mallory",
+      "expect_ids": [
+        1,
+        4
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "p5_parsed_from_cjk_substring_trigram_on",
+      "query": "from:carol 评审",
+      "trigram": true,
+      "expect_ids": [
+        3
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "p5_parsed_from_cjk_substring_trigram_off_regression",
+      "query": "from:carol 评审",
+      "trigram": false,
+      "expect_ids": [],
+      "expect_warnings": 0
+    },
+    {
+      "name": "p5_parsed_flagged_cjk_substring_trigram_on",
+      "query": "is:flagged 评审",
+      "trigram": true,
+      "expect_ids": [
+        1
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "p5_parsed_neg_cjk_trigram_on",
+      "query": "from:alice -评审",
+      "trigram": true,
+      "expect_ids": [
+        8
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "p5_parsed_single_cjk_intercept_trigram_on",
+      "query": "from:carol 我",
+      "trigram": true,
+      "expect_ids": [
+        3
+      ],
+      "expect_warnings": 1
+    },
+    {
+      "name": "p5_parsed_mixed_cjk_english_whole_term_trigram_on",
+      "query": "from:ivan central立项",
+      "trigram": true,
+      "expect_ids": [
+        13
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "p5_parsed_subject_column_unchanged_trigram_on",
+      "query": "from:carol subject:评审",
+      "trigram": true,
+      "expect_ids": [
+        3
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "trigram_mixed_cjk_english_whole_term_contiguous",
+      "query": "研发项目deadline汇报",
+      "trigram": true,
+      "expect_ids": [
+        13
+      ],
+      "expect_warnings": 0,
+      "expect_snippet_nonempty": [
+        13
+      ],
+      "expect_snippet_contains": {
+        "13": "<mark>研发项目deadline汇报</mark>"
+      }
+    },
+    {
+      "name": "trigram_bracketed_cjk_whole_term",
+      "query": "【项目进度】",
+      "trigram": true,
+      "expect_ids": [
+        13
+      ],
+      "expect_warnings": 0,
+      "expect_snippet_nonempty": [
+        13
+      ],
+      "expect_snippet_contains": {
+        "13": "<mark>【项目进度】</mark>"
+      }
+    },
+    {
+      "name": "trigram_mixed_cjk_english_whole_term_no_space_no_split",
+      "query": "central立项",
+      "trigram": true,
+      "expect_ids": [
+        13
+      ],
+      "expect_warnings": 0,
+      "expect_snippet_nonempty": [
+        13
+      ],
+      "expect_snippet_contains": {
+        "13": "<mark>central立项</mark>"
+      }
+    },
+    {
+      "name": "trigram_cjk_two_char_like_escapes_underscore",
+      "query": "项_",
+      "trigram": true,
+      "expect_ids": [
+        14
+      ],
+      "expect_warnings": 0
     }
   ]
 }

@@ -7,7 +7,7 @@
 //   1. Rendering — 3 group headers (Jump / Email / AI Actions) appear in
 //      the right shape; empty / loading variants land on the right
 //      empty-tile copy.
-//   2. Query path — normalizeFtsQuery is wired (CJK '产品' → '产品*');
+//   2. Query path — raw query passed to backend verbatim (CJK transform unified server-side, T3);
 //      FTS5 operators bypass wildcard injection.
 //   3. Keyboard nav — ↑↓ flat-index, Tab/Shift-Tab group hop, Enter run,
 //      Esc dismiss.
@@ -30,6 +30,8 @@ const {
   mockListMailboxes,
   mockFlag,
   mockLlmRun,
+  mockNlToDsl,
+  mockRunSearchAgent,
   mockSetActive,
   mockSetMailbox,
   mockNavigate
@@ -38,6 +40,8 @@ const {
   mockListMailboxes: vi.fn(),
   mockFlag: vi.fn(),
   mockLlmRun: vi.fn(),
+  mockNlToDsl: vi.fn(),
+  mockRunSearchAgent: vi.fn(),
   mockSetActive: vi.fn(),
   mockSetMailbox: vi.fn(),
   mockNavigate: vi.fn()
@@ -49,6 +53,7 @@ vi.mock('@shared/hooks/useMailApi', () => ({
       search: mockSearch,
       listMailboxes: mockListMailboxes,
       flag: mockFlag,
+      nlToDsl: mockNlToDsl,
       list: vi.fn(),
       listEnriched: vi.fn(),
       listByThread: vi.fn(),
@@ -62,7 +67,8 @@ vi.mock('@shared/hooks/useMailApi', () => ({
     },
     llm: { run: mockLlmRun, stats: vi.fn(), selftest: vi.fn() },
     attachment: { list: vi.fn(), localPath: vi.fn(), readDataUrl: vi.fn() },
-    ai: { translate: vi.fn(), abortTranslate: vi.fn() }
+    ai: { translate: vi.fn(), abortTranslate: vi.fn() },
+    chat: { runSearchAgent: mockRunSearchAgent }
   })
 }))
 
@@ -90,6 +96,17 @@ vi.mock('@shared/state/mailbox', async () => {
 
 vi.mock('@tanstack/react-router', () => ({
   useNavigate: () => mockNavigate
+}))
+
+// F3 — mock toast so the fallbackDsl path's friendly toast is assertable
+// without rendering the toast host. Other toast call sites are unaffected.
+const { mockToastSuccess, mockToastError } = vi.hoisted(() => ({
+  mockToastSuccess: vi.fn(),
+  mockToastError: vi.fn()
+}))
+vi.mock('@shared/state/toast', () => ({
+  toastSuccess: mockToastSuccess,
+  toastError: mockToastError
 }))
 
 import i18n from '@shared/i18n'
@@ -154,6 +171,8 @@ beforeEach(() => {
   ])
   // Default — empty results so blank-state tests see no hits / no actions.
   mockSearch.mockResolvedValue({ items: [], total_indexed: 1247 })
+  // F3 — agentic search default success (tests override per-case).
+  mockRunSearchAgent.mockResolvedValue({ ok: true, hits: [], summary: null })
 })
 
 afterEach(() => {
@@ -200,7 +219,7 @@ describe('CommandPalette — query normalisation', () => {
     )
   })
 
-  test('CJK query gets `*` suffix on last token', async () => {
+  test('CJK query is passed through verbatim (backend unifies transform, T3)', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     openPalette()
     renderPalette()
@@ -208,7 +227,7 @@ describe('CommandPalette — query normalisation', () => {
     fireEvent.change(screen.getByRole('combobox'), { target: { value: '产品' } })
     await vi.advanceTimersByTimeAsync(300)
     await waitFor(() =>
-      expect(mockSearch).toHaveBeenCalledWith(expect.objectContaining({ query: '产品*' }))
+      expect(mockSearch).toHaveBeenCalledWith(expect.objectContaining({ query: '产品' }))
     )
   })
 
@@ -249,6 +268,91 @@ describe('CommandPalette — email hits + AI Actions', () => {
     expect(screen.getAllByText('EN').length).toBeGreaterThan(0)
     // Snippet <mark> survives the DOMPurify pass.
     expect(document.querySelector('mark')).toBeTruthy()
+  })
+
+  test('attachment-source hit renders paperclip badge + filename (P1b)', async () => {
+    const attachmentHit = {
+      internal_id: 201,
+      subject: 'Contract bundle',
+      sender: 'Bob <bob@example.com>',
+      date_received: '2026-05-14T09:00:00+08:00',
+      mailbox: '收件箱',
+      rank: -0.5,
+      snippet: 'the <mark>contract</mark> clause lives in the appendix',
+      notion_page_id: null,
+      notion_url: null,
+      ai_priority: null,
+      lang: null,
+      source: 'attachment' as const,
+      filename: 'evidence.txt'
+    }
+    mockSearch.mockResolvedValue({ items: [attachmentHit], total_indexed: 1247 })
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    openPalette()
+    renderPalette()
+    await waitFor(() => screen.getByRole('combobox'))
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'contract' } })
+    await vi.advanceTimersByTimeAsync(300)
+    await waitFor(() => screen.getByText('Email'))
+    // 附件徽标显示文件名 — source='attachment' 时才渲染。
+    expect(screen.getByText('evidence.txt')).toBeTruthy()
+    // 徽标容器本身渲染 (aria-label = i18n palette.email.fromAttachment, zh-CN):
+    // 证明的是「附件来源徽标」而非任意文本碰巧含文件名。回形针 <svg> 在内。
+    const badge = screen.getByLabelText('命中附件 evidence.txt')
+    expect(badge).toBeTruthy()
+    expect(badge.querySelector('svg')).toBeTruthy()
+  })
+
+  test('body-source hit does NOT render an attachment filename badge (P1b)', async () => {
+    mockSearch.mockResolvedValue({ items: SAMPLE_HITS, total_indexed: 1247 })
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    openPalette()
+    renderPalette()
+    await waitFor(() => screen.getByRole('combobox'))
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'redis' } })
+    await vi.advanceTimersByTimeAsync(300)
+    await waitFor(() => screen.getByText(/timeout debug session/))
+    // SAMPLE_HITS 都是 body 命中 (无 source 字段) → 无附件名徽标。
+    expect(screen.queryByText('evidence.txt')).toBeNull()
+  })
+
+  test('renders many hits (>8) inside a scrollable listbox (P1b: more results + scroll)', async () => {
+    // P1b 把 MAX_EMAIL_HITS 8→50。验证: 30 条命中全部进 DOM (旧上限 8 会截断),
+    // 且结果容器是 overflow-y-auto (多结果在列表内滚动而非撑爆 pane)。
+    const many = Array.from({ length: 30 }, (_, i) => ({
+      internal_id: 1000 + i,
+      subject: `bulk match row ${i}`,
+      sender: `User${i} <user${i}@example.com>`,
+      date_received: '2026-05-15T09:00:00+08:00',
+      mailbox: '收件箱',
+      rank: -1 - i * 0.01,
+      snippet: `row ${i} <mark>bulk</mark> body`,
+      notion_page_id: null,
+      notion_url: null,
+      ai_priority: null,
+      lang: null
+    }))
+    mockSearch.mockResolvedValue({ items: many, total_indexed: 1247 })
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    openPalette()
+    renderPalette()
+    await waitFor(() => screen.getByRole('combobox'))
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'bulk' } })
+    await vi.advanceTimersByTimeAsync(300)
+    await waitFor(() => screen.getByText('Email'))
+    // subject 经 highlightTerms 把 query 词 `bulk` 包成 <mark>, 文本节点被拆分;
+    // 匹配后缀 `match row N` (落在单个文本节点) 而非整串。第 1 与第 30 条都在
+    // DOM → 没有被旧的 8 条上限截断。
+    await waitFor(() => screen.getByText(/match row 0$/))
+    expect(screen.getByText(/match row 29$/)).toBeTruthy()
+    // 结果列表是可滚动容器。
+    const listbox = document.getElementById('palette-listbox')
+    expect(listbox?.className).toContain('overflow-y-auto')
+    // 邮件命中行数 = 30 (data-flat-idx 行里属于 email 组的)。
+    const emailRows = Array.from(
+      document.querySelectorAll('[role="option"][data-flat-idx]')
+    ).filter((r) => /match row \d/.test(r.textContent ?? ''))
+    expect(emailRows.length).toBe(30)
   })
 
   test('0 hits → empty tile + AI Actions hidden', async () => {
@@ -394,5 +498,210 @@ describe('CommandPalette — open behaviour', () => {
       const input = screen.getByRole('combobox') as HTMLInputElement
       expect(input.value).toBe('')
     })
+  })
+})
+
+describe('CommandPalette — agentic search (F3)', () => {
+  const AI_HITS = [
+    {
+      internal_id: 301,
+      subject: '新人培训安排',
+      sender: 'Echo <echo@example.com>',
+      date_received: '2026-06-15T09:00:00+08:00',
+      mailbox: '收件箱',
+      rank: -2.1,
+      snippet: '本周的<mark>新人培训</mark>定在周三',
+      notion_page_id: null,
+      notion_url: null,
+      ai_priority: 'important' as const,
+      lang: 'zh' as const
+    }
+  ]
+
+  test('no AI row when query is empty; appears once user types', async () => {
+    openPalette()
+    renderPalette()
+    await waitFor(() => screen.getByRole('combobox'))
+    expect(screen.queryByText(/AI 理解/)).toBeNull()
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'redis' } })
+    await waitFor(() => screen.getByText(/AI 理解「redis」/))
+  })
+
+  test('clicking AI row calls runSearchAgent with live query + active mailbox', async () => {
+    mockRunSearchAgent.mockResolvedValueOnce({ ok: true, hits: AI_HITS, summary: '找到 1 封' })
+    openPalette()
+    renderPalette()
+    await waitFor(() => screen.getByRole('combobox'))
+    fireEvent.change(screen.getByRole('combobox'), {
+      target: { value: 'echo 这几天发我的关于新人培训的邮件' }
+    })
+    const row = await waitFor(() => screen.getByText(/AI 理解/))
+    fireEvent.click(row)
+    await waitFor(() =>
+      expect(mockRunSearchAgent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          query: 'echo 这几天发我的关于新人培训的邮件',
+          mailbox: '收件箱'
+        })
+      )
+    )
+    // An AbortSignal is threaded through for cancellation.
+    expect(mockRunSearchAgent.mock.calls[0][0].signal).toBeInstanceOf(AbortSignal)
+  })
+
+  test('in-flight run renders the AI Search group + progress phrase row', async () => {
+    let resolveRun!: (v: unknown) => void
+    mockRunSearchAgent.mockReturnValueOnce(
+      new Promise((res) => {
+        resolveRun = res
+      })
+    )
+    openPalette()
+    renderPalette()
+    await waitFor(() => screen.getByRole('combobox'))
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: '新人培训' } })
+    const row = await waitFor(() => screen.getByText(/AI 理解/))
+    fireEvent.click(row)
+    // AI Search group header + a non-empty phrase (PaletteThinkingPhrases) appear.
+    await waitFor(() => screen.getByText('AI Search'))
+    // First cycle phrase from palette.ai.searchingPhrases (zh) renders.
+    await waitFor(() => screen.getByText('正在理解你的问题…'))
+    resolveRun({ ok: true, hits: AI_HITS, summary: '找到 1 封' })
+    await waitFor(() => expect(screen.queryByText('正在理解你的问题…')).toBeNull())
+  })
+
+  test('ok:true renders AI summary row + EmailHitRow hits', async () => {
+    mockRunSearchAgent.mockResolvedValueOnce({
+      ok: true,
+      hits: AI_HITS,
+      summary: '找到 1 封关于新人培训的邮件'
+    })
+    openPalette()
+    renderPalette()
+    await waitFor(() => screen.getByRole('combobox'))
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: '新人培训' } })
+    const row = await waitFor(() => screen.getByText(/AI 理解/))
+    fireEvent.click(row)
+    // AI summary row (palette.ai.summary → "AI：{text}").
+    await waitFor(() => screen.getByText(/AI：找到 1 封关于新人培训的邮件/))
+    // The agentic hit renders as a regular EmailHitRow (sender shows, snippet <mark>).
+    await waitFor(() => screen.getByText(/周三/))
+    expect(document.querySelector('mark')).toBeTruthy()
+  })
+
+  test('keyboard Enter on a selected AI hit opens it (joins flat index)', async () => {
+    mockRunSearchAgent.mockResolvedValueOnce({ ok: true, hits: AI_HITS, summary: '找到 1 封' })
+    openPalette()
+    renderPalette()
+    await waitFor(() => screen.getByRole('combobox'))
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: '新人培训' } })
+    const row = await waitFor(() => screen.getByText(/AI 理解/))
+    fireEvent.click(row)
+    await waitFor(() => screen.getByText(/周三/))
+    // Locate the AI hit option row and click it (it's wired into the flat
+    // index with the same activate closure as EMAIL hits).
+    const rows = document.querySelectorAll('[role="option"][data-flat-idx]')
+    const aiRow = Array.from(rows).find((r) => r.textContent?.includes('周三')) as
+      | HTMLElement
+      | undefined
+    expect(aiRow).toBeTruthy()
+    fireEvent.click(aiRow!)
+    expect(mockSetActive).toHaveBeenCalledWith(301, { navTarget: true })
+    expect(mockNavigate).toHaveBeenCalledWith({ to: '/', search: { view: 'inbox' } })
+    expect(useCommandPalette.getState().open).toBe(false)
+  })
+
+  test('fallbackDsl fills the box + shows a fellBack toast (no error banner)', async () => {
+    mockRunSearchAgent.mockResolvedValueOnce({
+      ok: false,
+      hits: [],
+      summary: null,
+      error: { code: 'E_NO_OUTPUT', message: 'no present_results' },
+      fallbackDsl: 'from:echo newer_than:7d 新人培训'
+    })
+    openPalette()
+    renderPalette()
+    await waitFor(() => screen.getByRole('combobox'))
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: '新人培训' } })
+    const row = await waitFor(() => screen.getByText(/AI 理解/))
+    fireEvent.click(row)
+    await waitFor(() => {
+      const input = screen.getByRole('combobox') as HTMLInputElement
+      expect(input.value).toBe('from:echo newer_than:7d 新人培训')
+    })
+    expect(mockToastSuccess).toHaveBeenCalledWith('AI 暂不可用，已转为普通搜索')
+    // No error banner in the fallback path.
+    expect(screen.queryByText(/AI 检索失败/)).toBeNull()
+  })
+
+  test('error code (no key) surfaces a friendly banner, box unchanged', async () => {
+    mockRunSearchAgent.mockResolvedValueOnce({
+      ok: false,
+      hits: [],
+      summary: null,
+      error: { code: 'E_NO_LLM_KEY', message: 'no key' }
+    })
+    openPalette()
+    renderPalette()
+    await waitFor(() => screen.getByRole('combobox'))
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: '上周的合同' } })
+    const row = await waitFor(() => screen.getByText(/AI 理解/))
+    fireEvent.click(row)
+    await waitFor(() => screen.getByText(/请先在设置中配置 LLM/))
+    const input = screen.getByRole('combobox') as HTMLInputElement
+    expect(input.value).toBe('上周的合同')
+  })
+
+  test.each([
+    ['E_TIMEOUT', /AI 检索超时/],
+    ['E_QUOTA', /AI 配额已用尽/],
+    ['E_AGENT', /AI 检索出错/]
+  ])('error code %s maps to its friendly banner', async (code, re) => {
+    mockRunSearchAgent.mockResolvedValueOnce({
+      ok: false,
+      hits: [],
+      summary: null,
+      error: { code, message: code }
+    })
+    openPalette()
+    renderPalette()
+    await waitFor(() => screen.getByRole('combobox'))
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'x' } })
+    const row = await waitFor(() => screen.getByText(/AI 理解/))
+    fireEvent.click(row)
+    await waitFor(() => screen.getByText(re))
+  })
+
+  test('E_ABORTED is silent — no banner, no toast', async () => {
+    mockRunSearchAgent.mockResolvedValueOnce({
+      ok: false,
+      hits: [],
+      summary: null,
+      error: { code: 'E_ABORTED', message: 'aborted' }
+    })
+    openPalette()
+    renderPalette()
+    await waitFor(() => screen.getByRole('combobox'))
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'x' } })
+    const row = await waitFor(() => screen.getByText(/AI 理解/))
+    fireEvent.click(row)
+    // Give the resolved promise a tick to flush.
+    await waitFor(() => expect(mockRunSearchAgent).toHaveBeenCalled())
+    expect(screen.queryByText(/AI 检索/)).toBeNull()
+    expect(mockToastSuccess).not.toHaveBeenCalled()
+  })
+
+  test('editing the query after AI hits clears the AI Search group', async () => {
+    mockRunSearchAgent.mockResolvedValueOnce({ ok: true, hits: AI_HITS, summary: '找到 1 封' })
+    openPalette()
+    renderPalette()
+    await waitFor(() => screen.getByRole('combobox'))
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: '新人培训' } })
+    const row = await waitFor(() => screen.getByText(/AI 理解/))
+    fireEvent.click(row)
+    await waitFor(() => screen.getByText('AI Search'))
+    // User edits the box → AI Search group is torn down (plain FTS takes over).
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: '新人培训 x' } })
+    await waitFor(() => expect(screen.queryByText('AI Search')).toBeNull())
   })
 })

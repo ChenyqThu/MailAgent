@@ -40,10 +40,12 @@ import {
 } from './dispatcher'
 import { ChatStreamEmitter } from './emitter'
 import { HttpChatPlatform, type HttpPlatformConfig } from './http_platform'
+import { runSearchAgent } from './search_agent'
 import { createBuiltinTools } from './tools/builtin'
 import { resolveConfirmation } from './tools/confirmation'
 import { createToolRegistry } from './tools/registry'
 import type { ChatBackend } from './types'
+import type { SearchAgentInput, SearchAgentResult } from '../api/types'
 
 export interface ChatRuntimeDeps {
   /** HttpChatPlatform 工具读委托（reads.email / reads.attachment）。web = HttpApi 自身；
@@ -52,6 +54,10 @@ export interface ChatRuntimeDeps {
   reads: MailApi
   /** persist / llm-proxy / notion-agent / kos / chat 读 fetch 基址（同 HttpApi baseUrl）。 */
   baseUrl: string
+  /** F2 — 是否启用 headless agentic 搜索（runSearchAgent）。桌面（ElectronApi）= true；
+   *  远程 web（HttpApi）= false（默认）→ runSearchAgent 直接返 E_UNSUPPORTED（LLM key
+   *  在桌面，远程 scope 外）。 */
+  searchAgent?: boolean
 }
 
 /** lazy 构造的 chat 引擎。需 await GET /chat/config 预取快照 → 首次跑写方法前由
@@ -119,6 +125,7 @@ function validateEditOpts(opts: ChatEditOpts): void {
 
 export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
   const { reads, baseUrl } = deps
+  const searchAgentEnabled = deps.searchAgent ?? false
 
   // 构造期即建 emitter + sink：onStream 在首次 start 前就被 useEmailChat effect 订阅，
   // dispatcher 的 StreamSink.send → emitter.emit → React 同步收到（无 IPC、无序列化）。
@@ -131,27 +138,47 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
   // 不可达 → 不永久 wedge）。
   let enginePromise: Promise<ChatEngine> | null = null
 
-  async function buildEngine(): Promise<ChatEngine> {
-    // 预取 serve-api chat 运行配置快照（D-3c-3：配置以 serve-api 为准，避免本地改过的 env
-    // 被 DEFAULT_HTTP_CONFIG 硬编码默认覆盖漂移）。端点 data 形状 = HttpPlatformConfig
-    // （camelCase 全字段，恒等覆盖）→ 直接传构造器。预取失败（端点不可达 / 鉴权失败）→
-    // 用 DEFAULT_HTTP_CONFIG（harness ON / sonnet / KOS·L1 OFF）：chat 仍可跑，仅 9 个 KOS
-    // 工具不注册（kosConfigured 默认 false，远程安全降级）。
-    let snapshot: Partial<HttpPlatformConfig> = {}
+  // /chat/config 快照 memoize（runtime 作用域单例）：buildEngine（chat 引擎）与
+  // runSearchAgent（F2）共用同一 promise，整 runtime 生命周期只拉一次（不再每次搜索重 fetch）。
+  // 失败不缓存 → 下次重取（同 enginePromise 的重试语义）。
+  let snapshotPromise: Promise<Partial<HttpPlatformConfig>> | null = null
+
+  /** 预取 serve-api chat 运行配置快照（D-3c-3：配置以 serve-api 为准，避免本地改过的 env
+   *  被 DEFAULT_HTTP_CONFIG 硬编码默认覆盖漂移）。端点 data 形状 = HttpPlatformConfig
+   *  （camelCase 全字段，恒等覆盖）。预取失败（端点不可达 / 鉴权失败 / 10s 超时）→ {}
+   *  （HttpChatPlatform 用 DEFAULT_HTTP_CONFIG 补全：harness ON / sonnet / KOS·L1 OFF）。
+   *  F2：runSearchAgent 复用同一快照（同构造的 platform 运行配置一致）。 */
+  async function fetchConfigSnapshotOnce(): Promise<Partial<HttpPlatformConfig>> {
     // 10s abort 兜底 (dogfood round 3): /chat/config 背后的 Notion context 加载
     // 慢时 (冷缓存/网络差) 此 await 是 chat panel 整体卡死点 — 后端已限 8s,
     // 这里再兜一层防旧版后端/远程链路慢, 超时同失败路径落 DEFAULT 继续构造。
     const ctrl = new AbortController()
     const prefetchTimer = setTimeout(() => ctrl.abort(), 10_000)
     try {
-      snapshot = await request<HttpPlatformConfig>(baseUrl, 'GET', '/chat/config', {
+      return await request<HttpPlatformConfig>(baseUrl, 'GET', '/chat/config', {
         signal: ctrl.signal
       })
     } catch (err) {
       console.warn('[chat] runtime config prefetch failed, using DEFAULT_HTTP_CONFIG', err)
+      return {}
     } finally {
       clearTimeout(prefetchTimer)
     }
+  }
+
+  /** memoize 包装：首次 await 后缓存 promise；失败不缓存（清掉让下次重取）。 */
+  function fetchConfigSnapshot(): Promise<Partial<HttpPlatformConfig>> {
+    if (!snapshotPromise) {
+      snapshotPromise = fetchConfigSnapshotOnce().catch((err) => {
+        snapshotPromise = null // 预取失败不缓存 → 下次重取。
+        throw err
+      })
+    }
+    return snapshotPromise
+  }
+
+  async function buildEngine(): Promise<ChatEngine> {
+    const snapshot = await fetchConfigSnapshot()
     const platform = new HttpChatPlatform(reads, baseUrl, snapshot)
 
     // 工具 registry 注入式（取代 module-global）：createBuiltinTools(platform) 据
@@ -375,6 +402,26 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
       // emitter 用 chat/types.ChatStreamEnvelope，ChatApi.onStream 用 api/types 同形 envelope
       // （结构等价，仅 interface 名不同）→ 结构化兼容，直接订阅。
       return emitter.subscribe(handler)
+    },
+
+    async runSearchAgent(input: SearchAgentInput): Promise<SearchAgentResult> {
+      // 能力 gate：远程 web（HttpApi 不传 searchAgent）= false → E_UNSUPPORTED（LLM key
+      // 在桌面，远程 scope 外）。桌面（ElectronApi）传 searchAgent:true 启用。
+      if (!searchAgentEnabled) {
+        return {
+          ok: false,
+          hits: [],
+          summary: null,
+          error: {
+            code: 'E_UNSUPPORTED',
+            message: 'agentic search is desktop-only (LLM key lives on the host)'
+          }
+        }
+      }
+      // 复用 chat 引擎的同一份 /chat/config 快照（运行配置一致）。预取失败 → {} →
+      // search_agent 内 HttpChatPlatform 补 DEFAULT_HTTP_CONFIG。runSearchAgent 永不 throw。
+      const config = await fetchConfigSnapshot()
+      return runSearchAgent({ reads, baseUrl, config }, input)
     }
   }
 }

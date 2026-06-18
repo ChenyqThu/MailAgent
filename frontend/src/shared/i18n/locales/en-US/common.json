@@ -371,8 +371,10 @@
     "email": {
       "countLabel": "{n} / {total}",
       "untitled": "(no subject)",
+      "fromAttachment": "Matched in attachment {filename}",
+      "unnamedAttachment": "Unnamed attachment",
       "emptyTitle": "No matching emails",
-      "emptyHint": "Try a shorter query, or append * for Chinese terms (e.g. 产品*)",
+      "emptyHint": "Try a shorter query or different wording",
       "syntaxLabel": "Search by field",
       "syntaxFrom": "sender",
       "syntaxAfter": "after date",
@@ -394,6 +396,26 @@
       "doneToast": "Processed {n, plural, one {# email} other {# emails}}",
       "errToast": "Action failed"
     },
+    "ai": {
+      "understand": "AI understand “{query}”",
+      "understandHint": "Let AI search and gather the relevant emails",
+      "searchingPhrases": [
+        "Understanding your question…",
+        "Searching relevant emails…",
+        "Filtering the most relevant…",
+        "Organizing results…"
+      ],
+      "summary": "AI: {text}",
+      "dismiss": "Dismiss",
+      "fellBack": "AI unavailable — switched to plain search",
+      "errNoKey": "Configure an LLM in Settings to use AI search",
+      "errEmpty": "No searchable intent found — try rephrasing",
+      "errUnsupported": "AI search is only available in the desktop app",
+      "errTimeout": "AI search timed out — try again or use search syntax directly",
+      "errQuota": "AI quota exhausted — try again or use search syntax directly",
+      "errAgent": "AI search error — try again or use search syntax directly",
+      "errGeneric": "AI search failed — try again or use search syntax directly"
+    },
     "kbd": {
       "navigate": "navigate",
       "selectGroup": "select group",
@@ -404,6 +426,18 @@
     },
     "footer": {
       "fts5Healthy": "FTS5"
+    },
+    "warn": {
+      "emptyValue": "\"{field}:\" has no value — ignored (put the value right after the colon, no space)",
+      "unknownValue": "\"{field}:{value}\" is not a valid value — ignored",
+      "invalidDate": "\"{field}:{value}\" is not a recognizable date — ignored",
+      "crossClassOr": "OR across a field and a keyword is not supported yet — treated as AND",
+      "negatedOr": "OR with a negated term is not supported — treated as AND",
+      "unclosedQuote": "Unclosed quote — treated as plain text",
+      "danglingOr": "OR is missing an operand — ignored",
+      "emptyText": "Empty quotes ignored",
+      "parseError": "Query failed to parse — ran as a plain search",
+      "generic": "Part of the query was ignored"
     }
   },
   "sidebar": {
@@ -506,7 +540,7 @@
     },
     "backend": {
       "notionAgent": "Notion Agent",
-      "customApi": "Custom AI",
+      "customApi": "Custom Agent",
       "selectorLabel": "Backend",
       "agentSuffix": "· Jarvis",
       "modelsLabel": "Models",
@@ -2044,6 +2078,31 @@
       "continue": "Continue in inbox",
       "selectHint": "Select a conversation on the left",
       "emptyTranscript": "No messages in this conversation yet"
+    },
+    "search": {
+      "section": "Search Agents",
+      "sectionHint": "Powers the command palette AI search. Ask in natural language; it searches your mail.",
+      "newAgent": "New Search Agent",
+      "newAgentHint": "Custom prompt, model & tools",
+      "noAgent": "No search agent yet — click New above.",
+      "configTitle": "Search Agent · {title}",
+      "newTitle": "New Search Agent",
+      "titleLabel": "Name",
+      "titlePlaceholder": "e.g. Mail search assistant",
+      "promptLabel": "Search Prompt",
+      "promptHint": "Empty = built-in default",
+      "promptPlaceholder": "Empty = built-in search persona; type to override",
+      "tools": "Tools",
+      "toolsHint": "Tools this search agent can call (MVP: full-text search only)",
+      "tool": {
+        "email_search_fulltext": "Email full-text search"
+      },
+      "create": "Create",
+      "delete": "Delete",
+      "deleteConfirm": "Delete this search agent?",
+      "deleteCancel": "Cancel",
+      "errConflict": "That id already exists — pick another name.",
+      "errGeneric": "Operation failed, please retry."
     }
   },
   "common": {

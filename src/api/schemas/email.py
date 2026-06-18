@@ -152,7 +152,8 @@ class EmailBody(BaseModel):
 class SearchHit(BaseModel):
     """One FTS5 hit (email-search.schema.json search_hit). Alias: `SearchHit`.
 
-    `rank` is bm25 (smaller = more relevant). `snippet` carries <mark> highlight.
+    `rank` is bm25 for raw/body-only paths or negative RRF for smart fused
+    body+attachment paths (smaller = more relevant). `snippet` carries <mark> highlight.
     `ai_priority` / `lang` come from a LEFT JOIN on llm_processing and may be
     null when unclassified.
     """
@@ -168,6 +169,8 @@ class SearchHit(BaseModel):
     notion_url: Optional[str] = None
     ai_priority: Optional[AIPriority] = None
     lang: Optional[Lang] = None
+    source: Literal["body", "attachment"] = "body"
+    filename: Optional[str] = None
 
 
 class SearchResult(BaseModel):

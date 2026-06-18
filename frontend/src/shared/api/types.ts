@@ -406,6 +406,22 @@ export interface EmailApi {
    *  视图 (Archive 副本留在 Exchange 端; 若 Archive 在 SYNC_FOLDERS 白名单则走主链路可见)。
    *  返回 CLI data 块 {success, from_mailbox, to_mailbox, notion_updated} 或抛 Error&{code}。 */
   archive(internalId: number): Promise<unknown>
+  /** P4b — AI 自然语言检索: 一句自然语言 → 搜索 DSL (单次 LLM 调用, main 进程,
+   *  不碰 P4a 搜索逻辑)。结果由调用方填回搜索框跑既有搜索。永不 reject —— 失败
+   *  以 {dsl:'', error} 形态返回 (E_NO_LLM_KEY / E_EMPTY / E_UPSTREAM / E_QUOTA /
+   *  E_TIMEOUT / E_NO_OUTPUT), 前端据 error 码给友好提示。web 端无 LLM key/端点,
+   *  返回 E_UNSUPPORTED。 */
+  nlToDsl(nl: string): Promise<NlToDslResult>
+}
+
+/** P4b — `email.nlToDsl` 的返回形状 (镜像 main 侧 handlers/nl_search.ts)。 */
+export interface NlToDslResult {
+  /** 翻译出的 DSL; error 非空时为 ''。 */
+  dsl: string
+  /** 结构化错误码; 成功时省略。 */
+  error?: string
+  /** 人类可读的兜底信息 (i18n 以 error 码为准, message 仅 debug)。 */
+  message?: string
 }
 
 // ---- D2b — async_jobs 长任务子系统 (C1 后端 POST /api/jobs + GET /api/jobs/{id}) --
@@ -1454,6 +1470,47 @@ export interface ChatApi {
   listToolCalls(messageId: number): Promise<ChatToolCall[]>
   /** Subscribe to backend stream events. Returns an unsubscribe function. */
   onStream(handler: (envelope: ChatStreamEnvelope) => void): () => void
+  /**
+   * F2 — headless agentic 搜索：一句自然语言 → 跑一次性 search agent（复用 chat
+   * harness 跑 tool_use loop，工具集 [email_search_fulltext, present_results]），
+   * **不进 chat 会话、不落 chat 库**。agent 末步调 present_results 声明命中 +
+   * 摘要；wrapper 用「候选池 ∩ matched_internal_ids」得到真实带 snippet 的
+   * SearchHit（防幻觉编造 id）。永不 throw —— 失败以 {ok:false, error} 返回
+   * （E_NO_LLM_KEY / E_TIMEOUT / E_QUOTA / E_NO_OUTPUT / E_AGENT）；agent 无有效
+   * 输出时附 fallbackDsl（nlToDsl 兜底，前端填回输入框走普通搜索）。远程 web
+   * （HttpApi）不支持（LLM key 在桌面）→ E_UNSUPPORTED。
+   */
+  runSearchAgent(input: SearchAgentInput): Promise<SearchAgentResult>
+}
+
+// ---- F2 — agentic 搜索（runSearchAgent）契约 ------------------------------
+//
+// 与 shared/chat/search_agent.ts 同形（types.ts 是 ChatApi 的契约面，re-export
+// 这两个类型 + phase 给消费方）。SSoT 实现在 search_agent.ts。
+
+export type SearchAgentPhase = 'searching' | 'summarizing'
+
+export interface SearchAgentInput {
+  /** 用户自然语言查询。 */
+  query: string
+  /** 可选 mailbox 限定（透传给 prompt 作上下文提示）。 */
+  mailbox?: string
+  /** 外部取消信号（与内部 AbortController 联动）。 */
+  signal?: AbortSignal
+  /** 可选阶段回调：第一个 email_search_fulltext → 'searching'；present_results → 'summarizing'。 */
+  onPhase?: (phase: SearchAgentPhase) => void
+}
+
+export interface SearchAgentResult {
+  ok: boolean
+  /** 候选池 ∩ matched_internal_ids，保序、带 snippet。 */
+  hits: SearchHit[]
+  /** present_results.summary；无输出时 null。 */
+  summary: string | null
+  /** 结构化错误码；ok=true 时省略。 */
+  error?: { code: string; message: string }
+  /** agent 无有效输出时，nlToDsl 兜底产物（前端可填回输入框走普通搜索）。 */
+  fallbackDsl?: string
 }
 
 // ---- Sprint 9 §2.3 — Island bridge surface --------------------------------
@@ -1980,6 +2037,9 @@ export interface ReportAgentConfig {
   prompt: string
   prompt_is_default: boolean
   model: string
+  /** agent 可用工具白名单（wire 把 DB 的 JSON 字符串 parse 成数组）；search agent =
+   *  ['email_search_fulltext']，report agent 历史上为空。NULL/非法 → 按 type 回退默认。 */
+  tools_json?: string[] | null
   kos_enrich: boolean
   /** daily 触发模式：rolling_24h（往前推 window_hours）| natural_day（指定时区昨天整天）。 */
   trigger_mode: 'rolling_24h' | 'natural_day'
@@ -2003,6 +2063,22 @@ export interface ReportConfigPatch {
   trigger_mode?: 'rolling_24h' | 'natural_day'
   timezone?: string
   body_full_priorities?: string[]
+  /** agent 可用工具白名单（wire.config_patch_to_db 写 tools_json 列）。 */
+  tools?: string[]
+}
+
+/** report:createAgent — 新建一行 agent（type 多态）。 */
+export interface ReportAgentCreateInput {
+  /** 新 agent id（必填，冲突 → E_INVALID_ARG）。 */
+  id: string
+  /** 默认 'search'（agentic 搜索）。 */
+  type?: 'search' | 'report'
+  title?: string
+  enabled?: boolean
+  model?: string | null
+  prompt?: string | null
+  /** 工具白名单（落库 tools_json）。 */
+  tools?: string[]
 }
 
 export interface ReportRunResult {
@@ -2031,6 +2107,10 @@ export interface ReportApi {
   runNow(agentId: string, opts?: { cadence?: ReportCadence }): Promise<ReportRunResult>
   /** 删除一份报告（写, needs auth）。 */
   delete(reportId: string): Promise<void>
+  /** 新建一行 agent 配置（写, needs auth；type='search'|'report'）。返回解析后的配置。 */
+  createAgent(input: ReportAgentCreateInput): Promise<ReportAgentConfig>
+  /** 删除一行 agent 配置（写, needs auth）。 */
+  deleteAgent(agentId: string): Promise<{ deleted: string }>
 }
 
 export interface MailApi {

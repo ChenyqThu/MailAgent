@@ -826,6 +826,45 @@ class TestSearchEmailBodiesSmart:
         hits_sent = repo.search_email_bodies_smart("产品", limit=10, mailbox="发件箱")
         assert hits_sent == []
 
+    def test_smart_search_includes_attachment_only_hit(
+        self, repo: EmailRepository, fresh_db: Path
+    ):
+        """public smart 入口也应走正文+附件融合，而不是只查 body FTS."""
+        _insert_metadata_full(
+            fresh_db,
+            702,
+            subject="Attachment fixture",
+            sender="alice@example.com",
+            mailbox="收件箱",
+        )
+        id_map = repo.commit_email_with_body(
+            702,
+            BodyPayload(
+                html="",
+                markdown="body without the target token",
+                body_format="html",
+            ),
+            [
+                AttachmentPayload(
+                    filename="contract.pdf",
+                    content=b"%PDF-1.4 fixture",
+                    content_type="application/pdf",
+                ),
+            ],
+        )
+        repo.commit_attachment_text(
+            id_map["contract.pdf"],
+            text="contractneedle appears only inside attachment text",
+            extractor="fixture",
+        )
+
+        hits = repo.search_email_bodies_smart("contractneedle", limit=10)
+
+        hit = next((item for item in hits if item.internal_id == 702), None)
+        assert hit is not None
+        assert hit.source == "attachment"
+        assert hit.filename == "contract.pdf"
+
 
 class TestGetMetadata:
     def test_returns_none_when_missing(self, repo: EmailRepository):

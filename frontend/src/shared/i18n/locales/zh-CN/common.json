@@ -371,8 +371,10 @@
     "email": {
       "countLabel": "{n} / {total}",
       "untitled": "(无主题)",
+      "fromAttachment": "命中附件 {filename}",
+      "unnamedAttachment": "未命名附件",
       "emptyTitle": "未找到匹配的邮件",
-      "emptyHint": "试试更短的关键词，或中文加 * 后缀(如 产品*)",
+      "emptyHint": "试试更短的关键词，或换个说法",
       "syntaxLabel": "按字段精确搜索",
       "syntaxFrom": "发件人",
       "syntaxAfter": "此日期后",
@@ -394,6 +396,26 @@
       "doneToast": "{n, plural, other {# 封}} 已处理",
       "errToast": "动作失败"
     },
+    "ai": {
+      "understand": "AI 理解「{query}」",
+      "understandHint": "让 AI 帮你检索并梳理相关邮件",
+      "searchingPhrases": [
+        "正在理解你的问题…",
+        "检索相关邮件…",
+        "筛选最相关的…",
+        "整理结果…"
+      ],
+      "summary": "AI：{text}",
+      "dismiss": "关闭提示",
+      "fellBack": "AI 暂不可用，已转为普通搜索",
+      "errNoKey": "请先在设置中配置 LLM 才能使用 AI 检索",
+      "errEmpty": "没识别出可搜索的意图，换个说法试试",
+      "errUnsupported": "AI 检索仅在桌面 App 中可用",
+      "errTimeout": "AI 检索超时，请稍后重试或直接用搜索语法",
+      "errQuota": "AI 配额已用尽，请稍后重试或直接用搜索语法",
+      "errAgent": "AI 检索出错，请稍后重试或直接用搜索语法",
+      "errGeneric": "AI 检索失败，请稍后重试或直接用搜索语法"
+    },
     "kbd": {
       "navigate": "上下移动",
       "selectGroup": "切换分组",
@@ -404,6 +426,18 @@
     },
     "footer": {
       "fts5Healthy": "FTS5"
+    },
+    "warn": {
+      "emptyValue": "「{field}:」后缺少值，已忽略（冒号后请紧跟值、勿加空格）",
+      "unknownValue": "「{field}:{value}」不是有效值，已忽略",
+      "invalidDate": "「{field}:{value}」日期无法识别，已忽略",
+      "crossClassOr": "OR 暂不支持字段与关键词混用，已按 AND 处理",
+      "negatedOr": "OR 不支持否定项，已按 AND 处理",
+      "unclosedQuote": "引号未闭合，已按普通文本处理",
+      "danglingOr": "OR 缺少操作数，已忽略",
+      "emptyText": "空引号已忽略",
+      "parseError": "查询解析失败，已按普通搜索处理",
+      "generic": "查询有部分内容已忽略"
     }
   },
   "sidebar": {
@@ -506,7 +540,7 @@
     },
     "backend": {
       "notionAgent": "Notion Agent",
-      "customApi": "Custom AI",
+      "customApi": "Custom Agent",
       "selectorLabel": "Backend",
       "agentSuffix": "· Jarvis",
       "modelsLabel": "模型",
@@ -2044,6 +2078,31 @@
       "continue": "在收件箱继续",
       "selectHint": "选择左侧一个会话查看",
       "emptyTranscript": "这个会话还没有消息"
+    },
+    "search": {
+      "section": "搜索 Agent",
+      "sectionHint": "命令面板 AI 搜索入口用的智能体。用自然语言搜邮件，自动转检索。",
+      "newAgent": "新建搜索 Agent",
+      "newAgentHint": "自定义提示词、模型与工具",
+      "noAgent": "暂无搜索 Agent，点上方新建。",
+      "configTitle": "搜索 Agent · {title}",
+      "newTitle": "新建搜索 Agent",
+      "titleLabel": "名称",
+      "titlePlaceholder": "如 邮件搜索助手",
+      "promptLabel": "搜索 Prompt",
+      "promptHint": "留空 = 用内置默认",
+      "promptPlaceholder": "留空 = 用内置默认搜索 persona；在此输入可完全覆写",
+      "tools": "工具",
+      "toolsHint": "搜索 Agent 可调用的工具（MVP 仅全文搜索）",
+      "tool": {
+        "email_search_fulltext": "邮件全文搜索"
+      },
+      "create": "创建",
+      "delete": "删除",
+      "deleteConfirm": "确认删除此搜索 Agent？",
+      "deleteCancel": "取消",
+      "errConflict": "该 id 已存在，请换一个名称。",
+      "errGeneric": "操作失败，请重试。"
     }
   },
   "common": {

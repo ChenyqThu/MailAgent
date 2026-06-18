@@ -2,6 +2,11 @@ export interface TextTerm {
   value: string
   is_phrase?: boolean
   force_quoted?: boolean
+  // column 标记该 term 限定到哪个 FTS5 列。columnTable 标记该列属于哪张 FTS5 表
+  // （T6 的 body/subject/sender 属 email_body_fts；T8 的 to_addr/cc_addr/sender_name
+  // 属并行表 email_recipient_fts）。裸全文 term 两者都为 undefined。镜像 Python TextTerm。
+  column?: 'body_markdown' | 'subject' | 'sender' | 'to_addr' | 'cc_addr' | 'sender_name'
+  columnTable?: 'body' | 'recipient'
 }
 
 export interface FilterPredicate {
@@ -19,6 +24,7 @@ export interface ParsedSearchQuery {
   neg_filters: FilterPredicate[]
   warnings: string[]
   is_plain_passthrough: boolean
+  sort?: 'relevance' | 'date' | 'oldest'
 }
 
 interface Unit {
@@ -34,7 +40,7 @@ interface ParseOptions {
   tzOffsetMinutes?: number | null
 }
 
-const FIELD_RE = /^([A-Za-z_]+):(.*)$/
+const FIELD_RE = /^([A-Za-z_]+~?):(.*)$/
 const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/
 const DATE_TIME_RE =
   /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(?:([Zz])|([+-])(\d{2}):?(\d{2}))?$/
@@ -60,6 +66,24 @@ const FIELD_ALIASES: Record<string, string> = {
   priority: 'priority'
 }
 
+// T6 列级 FTS：把 `body:` / `subject~:` / `sender~:` 映射到 email_body_fts 列名。
+// `subject~:` / `sender~:` 用 ~ 后缀与既有 `subject:` / `from:` LIKE 过滤区分；
+// `body:` 无对应 LIKE 字段故不带 ~。镜像 Python _FTS_COLUMN_ALIASES。
+const FTS_COLUMN_ALIASES: Record<string, 'body_markdown' | 'subject' | 'sender'> = {
+  body: 'body_markdown',
+  'subject~': 'subject',
+  'sender~': 'sender'
+}
+
+// T8: email_recipient_fts 并行表的列级 FTS 语法（收件人全文化, ②保守）。
+// to~:/cc~:/from~: 查 email_recipient_fts（与 T6 的 body:/subject~:/sender~: 不同表），
+// 与既有 to:/cc:/from: 的 LIKE 硬过滤并存、语义不变。镜像 Python _FTS_RECIPIENT_COLUMN_ALIASES。
+const FTS_RECIPIENT_COLUMN_ALIASES: Record<string, 'to_addr' | 'cc_addr' | 'sender_name'> = {
+  'to~': 'to_addr',
+  'cc~': 'cc_addr',
+  'from~': 'sender_name'
+}
+
 const MAILBOX_ALIASES: Record<string, string> = {
   inbox: '收件箱',
   sent: '发件箱',
@@ -78,13 +102,21 @@ const PRIORITY_ALIASES: Record<string, string> = {
   低: '低'
 }
 
+const SORT_ALIASES: Record<string, string> = {
+  relevance: 'relevance',
+  date: 'date',
+  newest: 'date',
+  oldest: 'oldest'
+}
+
 const IS_FILTERS: Record<string, FilterPredicate> = {
   read: { sql: 'COALESCE(m.is_read, 0) = ?', params: [1] },
   unread: { sql: 'COALESCE(m.is_read, 0) = ?', params: [0] },
-  flagged: { sql: 'COALESCE(m.is_flagged, 0) = ?', params: [1] },
+  // T4: 正向用 `m.col = 1` 命中 partial index；反向/unread 保留 COALESCE 兼容 NULL。
+  flagged: { sql: 'm.is_flagged = ?', params: [1] },
   unflagged: { sql: 'COALESCE(m.is_flagged, 0) = ?', params: [0] },
-  pinned: { sql: 'COALESCE(m.is_pinned, 0) = ?', params: [1] },
-  important: { sql: 'COALESCE(m.is_important, 0) = ?', params: [1] }
+  pinned: { sql: 'm.is_pinned = ?', params: [1] },
+  important: { sql: 'm.is_important = ?', params: [1] }
 }
 
 export function tokenizeSearchQuery(query: string): { tokens: string[]; warnings: string[] } {
@@ -117,12 +149,82 @@ export function tokenizeSearchQuery(query: string): { tokens: string[]; warnings
   return { tokens, warnings }
 }
 
+function isRegisteredFieldToken(token: string): boolean {
+  const body = token.startsWith('-') && token.length > 1 ? token.slice(1) : token
+  const match = FIELD_RE.exec(body)
+  if (match === null) return false
+  const name = match[1]!.toLowerCase()
+  return (
+    FIELD_ALIASES[name] !== undefined ||
+    FTS_COLUMN_ALIASES[name] !== undefined ||
+    FTS_RECIPIENT_COLUMN_ALIASES[name] !== undefined ||
+    name === 'sort'
+  )
+}
+
+/** T2: 识别 `sort:` 排序覆盖 token。返回 matched + 规范化值（null=非法值，已记 warning）。 */
+function parseSortToken(
+  token: string,
+  warnings: string[]
+): { matched: boolean; value: string | null } {
+  const match = FIELD_RE.exec(token)
+  if (match === null || match[1]!.toLowerCase() !== 'sort') return { matched: false, value: null }
+  const raw = stripOuterQuotes(match[2] ?? '')
+    .trim()
+    .toLowerCase()
+  const canonical = SORT_ALIASES[raw]
+  if (!canonical) {
+    warnings.push(raw ? `unknown_value:sort:${raw}` : 'empty_value:sort')
+    return { matched: true, value: null }
+  }
+  return { matched: true, value: canonical }
+}
+
+/**
+ * T0 容错：把孤立的 `field:`（冒号后空值）与紧跟的下一个文本 token 合并。
+ * `from: echo` → `from:echo`、`-from: echo` → `-from:echo`、
+ * `from: "Zhang San"` → `from:"Zhang San"`。下列情况不合并（保持现状丢弃 +
+ * `empty_value` warning）：孤立 `field:` 在末尾、下一个 token 是另一个字段过滤器、
+ * 或下一个 token 是孤立 `OR`。
+ */
+function mergeDanglingFields(tokens: string[]): string[] {
+  const merged: string[] = []
+  let i = 0
+  while (i < tokens.length) {
+    const tok = tokens[i]!
+    const body = tok.startsWith('-') && tok.length > 1 ? tok.slice(1) : tok
+    const match = FIELD_RE.exec(body)
+    const name = match !== null ? match[1]!.toLowerCase() : ''
+    if (
+      match !== null &&
+      match[2] === '' &&
+      // 已注册字段、列级 FTS 字段（含收件人 to~:/cc~:/from~:）或 sort
+      // （排序指令也享受冒号后空格容错）
+      (FIELD_ALIASES[name] !== undefined ||
+        FTS_COLUMN_ALIASES[name] !== undefined ||
+        FTS_RECIPIENT_COLUMN_ALIASES[name] !== undefined ||
+        name === 'sort') &&
+      i + 1 < tokens.length &&
+      tokens[i + 1] !== 'OR' &&
+      !isRegisteredFieldToken(tokens[i + 1]!)
+    ) {
+      merged.push(tok + tokens[i + 1]!)
+      i += 2
+      continue
+    }
+    merged.push(tok)
+    i += 1
+  }
+  return merged
+}
+
 export function parseSearchQuery(query: string, opts: ParseOptions = {}): ParsedSearchQuery {
   const originalQuery = query ?? ''
   try {
     const localOffset = localTimezoneOffset(opts.tzOffsetMinutes)
     const now = coerceNow(opts.now, localOffset)
-    const { tokens, warnings } = tokenizeSearchQuery(originalQuery)
+    const { tokens: rawTokens, warnings } = tokenizeSearchQuery(originalQuery)
+    const tokens = mergeDanglingFields(rawTokens)
     const parsed = emptyParsed(originalQuery, warnings)
     if (tokens.length === 0) {
       parsed.is_plain_passthrough = true
@@ -135,6 +237,14 @@ export function parseSearchQuery(query: string, opts: ParseOptions = {}): Parsed
       if (token === 'OR') {
         elements.push('OR')
         sawSyntax = true
+        continue
+      }
+      const sortResult = parseSortToken(token, parsed.warnings)
+      if (sortResult.matched) {
+        sawSyntax = true
+        if (sortResult.value !== null && parsed.sort === undefined) {
+          parsed.sort = sortResult.value as 'relevance' | 'date' | 'oldest'
+        }
         continue
       }
       const { unit, sawSyntax: tokenSawSyntax } = classifyToken(
@@ -195,7 +305,13 @@ export function queryHasRegisteredSearchSyntax(query: string): boolean {
     const body = token.startsWith('-') && token.length > 1 ? token.slice(1) : token
     const match = FIELD_RE.exec(body)
     if (!match) return false
-    return FIELD_ALIASES[match[1]!.toLowerCase()] !== undefined
+    const name = match[1]!.toLowerCase()
+    return (
+      FIELD_ALIASES[name] !== undefined ||
+      FTS_COLUMN_ALIASES[name] !== undefined ||
+      FTS_RECIPIENT_COLUMN_ALIASES[name] !== undefined ||
+      name === 'sort'
+    )
   })
 }
 
@@ -232,6 +348,29 @@ function classifyToken(
   if (fieldMatch) {
     const fieldName = fieldMatch[1]!.toLowerCase()
     const rawValue = fieldMatch[2] ?? ''
+    // T6 列级 FTS（email_body_fts）+ T8 收件人列 FTS（email_recipient_fts 并行表）：
+    // 在 FIELD_ALIASES 之前命中 FTS 列分支，编译成全文 text unit（带 column + columnTable），
+    // 不是 LIKE filter。镜像 Python _classify_token 的 fts_column / recipient_column 分支。
+    const ftsColumn = FTS_COLUMN_ALIASES[fieldName]
+    const recipientColumn = FTS_RECIPIENT_COLUMN_ALIASES[fieldName]
+    if (ftsColumn !== undefined || recipientColumn !== undefined) {
+      sawSyntax = true
+      const value = stripOuterQuotes(rawValue)
+      if (value === '') {
+        warnings.push(`empty_value:${fieldName}`)
+        return { unit: null, sawSyntax }
+      }
+      const column = ftsColumn !== undefined ? ftsColumn : recipientColumn!
+      const columnTable: 'body' | 'recipient' = ftsColumn !== undefined ? 'body' : 'recipient'
+      return {
+        unit: {
+          kind: 'text',
+          value: { value, is_phrase: isQuoted(rawValue), column, columnTable },
+          negated
+        },
+        sawSyntax
+      }
+    }
     const canonical = FIELD_ALIASES[fieldName]
     if (!canonical) {
       return {
@@ -527,4 +666,169 @@ function isQuoted(value: string): boolean {
 
 function stripOuterQuotes(value: string): string {
   return isQuoted(value) ? value.slice(1, -1) : value
+}
+
+// ============================================================
+// T7: CJK trigram 查询计划器 (flag-gated, 镜像 Python build_search_plan)
+// ============================================================
+//
+// 设计来源: .trellis/tasks/06-17-dsl-parse-warnings/research/codex-t7-tokenizer.md 方案②。
+// 对每个「裸全文 term」按是否含 CJK + 整 term 长度分路由 (与 email_repository.py 的
+// _count_cjk_chars / _route_text_term / build_search_plan 逐字节对齐):
+//   - 无 CJK (纯英文/数字/符号) → unicode (主表 email_body_fts MATCH + smartQueryTransform)
+//   - 含 CJK 且整 term >= 3 字   → trigram, mode='match' (email_body_fts_trigram MATCH 整串短语)
+//   - 含 CJK 且整 term = 2 字    → trigram, mode='like' (trigram 表 body/subject/sender LIKE '%整串%')
+//   - 含 CJK 且整 term = 1 字    → too_short (不查 + warning cjk_too_short:<词>)
+// 实测硬约束: trigram MATCH < 3 Unicode 字符无召回, 故 1/2 字中文不能走 MATCH。
+// 历史 bug 修复: 含 CJK 的连续 term **整体** 走 trigram 子串检索 (不再拆 CJK/latin 段
+// 各自 MATCH 后 AND 交集) —— 嵌在连续 token 中间的 latin 段 (如 "研发项目deadline汇报"
+// 里的 deadline) unicode61 召回为 0 会导致整 term 搜不到。
+
+// isCjkChar 必须与 Python _is_cjk_char (email_repository.py) + email.ts isCjkChar 同范围。
+function isCjkCharPlan(c: string): boolean {
+  if (!c) return false
+  const cp = c.codePointAt(0)
+  if (cp === undefined) return false
+  if (cp >= 0x4e00 && cp <= 0x9fff) return true // CJK Unified Ideographs
+  if (cp >= 0x3400 && cp <= 0x4dbf) return true // CJK Extension A
+  if (cp >= 0x20000 && cp <= 0x2fa1f) return true // CJK Extension B-F
+  if (cp >= 0x3040 && cp <= 0x30ff) return true // Hiragana / Katakana
+  if (cp >= 0xac00 && cp <= 0xd7af) return true // Hangul Syllables
+  return false
+}
+
+/** 统计字符串里 CJK 字符数 (镜像 Python _count_cjk_chars)。按码点遍历。 */
+export function countCjkChars(value: string): number {
+  let n = 0
+  for (const c of value) {
+    if (isCjkCharPlan(c)) n += 1
+  }
+  return n
+}
+
+export type TermRouteKind = 'unicode' | 'trigram' | 'too_short'
+
+export type TrigramMode = 'match' | 'like' | ''
+
+/**
+ * 一个裸全文 term 的路由计划 (镜像 Python _TermRoute)。
+ *   'unicode'   —— 纯非 CJK term, unicodeExpr 为 smartQueryTransform 结果。
+ *   'trigram'   —— 含 CJK term, **整 term** 走 trigram 子串检索 (trigramCore + trigramMode)。
+ *   'too_short' —— 整 term 只有 1 个 CJK 字 (无别的内容), 拦截 + warning。
+ */
+export interface TermRoute {
+  original: string
+  route: TermRouteKind
+  /** route='unicode' 时的 FTS5 expr (smartQueryTransform 结果)。 */
+  unicodeExpr: string
+  /** route='trigram' 时的整 term 字面量。 */
+  trigramCore: string
+  /** route='trigram' 时: 'match' (整 term >=3 字) | 'like' (整 term =2 字)。 */
+  trigramMode: TrigramMode
+  warnings: string[]
+}
+
+/**
+ * 把一个裸全文 term 分类成 TermRoute (T7 路由核心, 镜像 Python _route_text_term)。
+ * term 已按空格切分, 无内部空格。无 CJK → unicode61; 含 CJK → 整 term 走 trigram 子串
+ * 检索 (不再拆段), 按整 term 字符长度路由: >=3 MATCH 整串 / =2 LIKE / =1 拦截。
+ * smartQueryTransform 由 caller 注入 (定义在 email.ts, 与 Python 同算法)。
+ */
+export function routeTextTerm(
+  value: string,
+  smartQueryTransform: (q: string) => string
+): TermRoute {
+  const cjkCount = countCjkChars(value)
+  if (cjkCount === 0) {
+    return {
+      original: value,
+      route: 'unicode',
+      unicodeExpr: smartQueryTransform(value),
+      trigramCore: '',
+      trigramMode: '',
+      warnings: []
+    }
+  }
+
+  const core = value
+  const coreLen = [...core].length
+  if (coreLen >= 3) {
+    return {
+      original: value,
+      route: 'trigram',
+      unicodeExpr: '',
+      trigramCore: core,
+      trigramMode: 'match',
+      warnings: []
+    }
+  }
+  if (coreLen === 2) {
+    return {
+      original: value,
+      route: 'trigram',
+      unicodeExpr: '',
+      trigramCore: core,
+      trigramMode: 'like',
+      warnings: []
+    }
+  }
+  // coreLen === 1: 单个 CJK 字, 全表扫描噪声太高 → 拦截 + warning。
+  return {
+    original: value,
+    route: 'too_short',
+    unicodeExpr: '',
+    trigramCore: '',
+    trigramMode: '',
+    warnings: [`cjk_too_short:${core}`]
+  }
+}
+
+/**
+ * 把裸全文 term 列表编译成路由计划 + 收集 warning (镜像 Python build_search_plan)。
+ * 返回 { routes, warnings }。routes 只含可查 term (route in {'unicode','trigram'});
+ * 'too_short' term 被丢弃但其 warning 进 warnings。
+ */
+export function buildSearchPlan(
+  terms: string[],
+  smartQueryTransform: (q: string) => string
+): { routes: TermRoute[]; warnings: string[] } {
+  const routes: TermRoute[] = []
+  const warnings: string[] = []
+  for (const term of terms) {
+    if (!term) continue
+    const route = routeTextTerm(term, smartQueryTransform)
+    warnings.push(...route.warnings)
+    if (route.route === 'too_short') continue
+    routes.push(route)
+  }
+  return { routes, warnings }
+}
+
+/** 把一个 token 包成 FTS5 短语字面量 `"token"` (内部双引号转义为 `""`)。镜像 Python _quote_fts_token。 */
+export function quoteFtsToken(token: string): string {
+  return '"' + token.replace(/"/g, '""') + '"'
+}
+
+/**
+ * 从路由计划构造「snippet 匹配表达式」(供 email_body_fts_trigram MATCH 高亮)。
+ * 镜像 Python build_trigram_snippet_expr。
+ *
+ * trigram 分词器要求 token >= 3 字符才有召回, 故只收:
+ *   - unicode term: 其 original 里按 `[A-Za-z0-9]+` 抽词后取 length>=3 的。
+ *   - trigram term 且 trigramMode==='match' (整 term >=3 字): 收整 term trigramCore。
+ * 2 字 CJK (trigramMode='like') 与 1 字 CJK 不进表达式 (MATCH<3 无效)。
+ * 含 CJK 的整串整体进表达式 → snippet 高亮整个连续命中串。
+ * 各 token 包成 FTS5 短语并以 `OR` 连接; 全部不可 MATCH → 返回 ''。
+ */
+export function buildTrigramSnippetExpr(routes: TermRoute[]): string {
+  const tokens: string[] = []
+  for (const route of routes) {
+    if (route.route === 'unicode') {
+      tokens.push(...(route.original.match(/[A-Za-z0-9]+/g) ?? []).filter((t) => t.length >= 3))
+    } else if (route.route === 'trigram' && route.trigramMode === 'match') {
+      tokens.push(route.trigramCore)
+    }
+  }
+  if (tokens.length === 0) return ''
+  return tokens.map(quoteFtsToken).join(' OR ')
 }

@@ -37,6 +37,7 @@ import type {
   NotionAgentListItem,
   ReportApi,
   ReportAgentConfig,
+  ReportAgentCreateInput,
   ReportCadence,
   ReportConfigPatch,
   ReportDetail,
@@ -93,6 +94,7 @@ import type {
   LlmUpstreamModelsData,
   MailApi,
   MailboxSummary,
+  NlToDslResult,
   NotionWriteApi,
   PersistentSettings,
   PingResult,
@@ -323,6 +325,11 @@ class ElectronEmailApi implements EmailApi {
       opts ?? {}
     )) as WriteEnvelope<JobEnqueueResult>
     return unwrap(env)
+  }
+  async nlToDsl(nl: string): Promise<NlToDslResult> {
+    // P4b — main 侧 handlers/nl_search.ts 永不 reject (失败以 {dsl:'', error}
+    // 返回), 故这里直接透传, 无 envelope/unwrap。
+    return (await invoker()('email:nlToDsl', nl)) as NlToDslResult
   }
 }
 
@@ -607,7 +614,8 @@ function loopbackChatBaseUrl(): string {
  *  `window:openChatPopout` IPC（runtime 透明，web 无此第二窗口场景）。 */
 function createElectronChatRuntime(): ChatApi {
   const baseUrl = loopbackChatBaseUrl()
-  const runtime = createChatRuntime({ reads: new HttpApi(baseUrl), baseUrl })
+  // F2 — 桌面启用 headless agentic 搜索（runSearchAgent）：LLM key + serve-api 都在本机。
+  const runtime = createChatRuntime({ reads: new HttpApi(baseUrl), baseUrl, searchAgent: true })
   return {
     ...runtime,
     openPopout(emailId: number): void {
@@ -800,6 +808,16 @@ class ElectronReportApi implements ReportApi {
   async delete(reportId: string): Promise<void> {
     const env = (await invoker()('report:delete', reportId)) as WriteEnvelope<{ deleted: string }>
     unwrap(env)
+  }
+  async createAgent(input: ReportAgentCreateInput): Promise<ReportAgentConfig> {
+    const env = (await invoker()('report:createAgent', input)) as WriteEnvelope<ReportAgentConfig>
+    return unwrap(env)
+  }
+  async deleteAgent(agentId: string): Promise<{ deleted: string }> {
+    const env = (await invoker()('report:deleteAgent', agentId)) as WriteEnvelope<{
+      deleted: string
+    }>
+    return unwrap(env)
   }
 }
 

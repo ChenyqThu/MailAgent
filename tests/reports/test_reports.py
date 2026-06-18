@@ -232,6 +232,83 @@ class TestStore:
         assert upd["enabled"] == 1 and upd["prompt"] == "P"
         assert upd["id"] == "daily_email_digest"  # 主键不被 patch
 
+    def test_search_agent_seed_v26(self, db: Path):
+        """v26 migration 播种 type='search' 行：enabled=1, model/prompt NULL,
+        tools_json=['email_search_fulltext']。"""
+        store = ReportStore(str(db))
+        a = store.get_agent("email_search_agent")
+        assert a is not None
+        assert a["type"] == "search"
+        assert a["enabled"] == 1
+        assert a["title"] == "邮件搜索"
+        assert a["model"] is None and a["prompt"] is None
+        assert json.loads(a["tools_json"]) == ["email_search_fulltext"]
+
+    def test_search_agent_resolve_no_report_defaults(self, db: Path):
+        """seeded search agent 经 wire.resolve_agent 投影：prompt/model 不泄漏 report 默认
+        （type 门控），tools_json 投影成数组。"""
+        from src.reports import wire
+
+        store = ReportStore(str(db))
+        out = wire.resolve_agent(store.get_agent("email_search_agent"))
+        assert out["type"] == "search"
+        assert out["prompt"] == ""  # 不回退 get_default_prompt
+        assert out["model"] == ""  # 不回退 DEFAULT_REPORT_MODEL
+        assert out["tools_json"] == ["email_search_fulltext"]
+
+    def test_report_agent_resolve_keeps_defaults(self, db: Path):
+        """report 路径逐字节不变：prompt/model NULL → 仍回填 report 默认（非空）。"""
+        from src.reports import wire
+        from src.reports.summarizer import DEFAULT_REPORT_MODEL
+
+        store = ReportStore(str(db))
+        store.create_agent("plain_report", type="report", title="R")
+        out = wire.resolve_agent(store.get_agent("plain_report"))
+        assert out["type"] == "report"
+        assert isinstance(out["prompt"], str) and len(out["prompt"]) > 0
+        assert out["model"] == DEFAULT_REPORT_MODEL
+
+    def test_search_agent_seed_idempotent(self, db: Path):
+        """重跑 _init_database (migration) 不重复播种 + 不覆盖用户改过的字段。"""
+        import sqlite3 as _sq
+
+        store = ReportStore(str(db))
+        # 用户改 model + 禁用
+        store.update_agent("email_search_agent", {"model": "gpt-5.5", "enabled": 0})
+        # 重跑迁移（同库 init）
+        SyncStore(str(db))
+        # 仍只一行 + 用户改动未被 INSERT OR IGNORE 覆盖
+        conn = _sq.connect(str(db))
+        n = conn.execute(
+            "SELECT COUNT(*) FROM report_agent WHERE id = 'email_search_agent'"
+        ).fetchone()[0]
+        ver = conn.execute("SELECT value FROM sync_state WHERE key='db_version'").fetchone()[0]
+        conn.close()
+        assert n == 1
+        assert int(ver) == 26
+        a = store.get_agent("email_search_agent")
+        assert a["model"] == "gpt-5.5" and a["enabled"] == 0  # 用户改动保留
+
+    def test_create_agent_and_conflict(self, db: Path):
+        store = ReportStore(str(db))
+        a = store.create_agent(
+            "custom_search", type="search", title="My Search", enabled=True,
+            model=None, prompt=None, tools_json='["email_search_fulltext"]',
+        )
+        assert a["id"] == "custom_search" and a["type"] == "search"
+        assert a["enabled"] == 1 and a["title"] == "My Search"
+        assert json.loads(a["tools_json"]) == ["email_search_fulltext"]
+        # 冲突 → ValueError
+        with pytest.raises(ValueError):
+            store.create_agent("custom_search", type="search")
+
+    def test_delete_agent(self, db: Path):
+        store = ReportStore(str(db))
+        store.create_agent("tmp_search", type="search", title="T")
+        assert store.delete_agent("tmp_search") is True
+        assert store.get_agent("tmp_search") is None
+        assert store.delete_agent("tmp_search") is False  # 已不存在
+
     def test_report_crud_and_list_excludes_blocks(self, db: Path):
         store = ReportStore(str(db))
         rid = "daily_email_digest:daily:2026-06-02"

@@ -42,12 +42,41 @@ CREATE VIRTUAL TABLE email_body_fts USING fts5(
     tokenize='porter unicode61 remove_diacritics 2'
 );
 
+CREATE VIRTUAL TABLE email_body_fts_trigram USING fts5(
+    body_markdown,
+    subject,
+    sender,
+    tokenize='trigram'
+);
+
+CREATE VIRTUAL TABLE email_recipient_fts USING fts5(
+    to_addr,
+    cc_addr,
+    sender_name,
+    tokenize='porter unicode61 remove_diacritics 2'
+);
+
 CREATE TABLE email_attachment (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     internal_id INTEGER NOT NULL,
     filename TEXT NOT NULL,
     is_inline INTEGER DEFAULT 0,
     created_at REAL NOT NULL
+);
+
+CREATE TABLE email_attachment_text (
+    attachment_id INTEGER PRIMARY KEY,
+    text_content TEXT,
+    text_size_bytes INTEGER NOT NULL DEFAULT 0,
+    extractor TEXT NOT NULL,
+    status TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL
+);
+
+CREATE VIRTUAL TABLE email_attachment_fts USING fts5(
+    text_content,
+    tokenize='porter unicode61 remove_diacritics 2'
 );
 """
 
@@ -95,8 +124,31 @@ def behavior_db(tmp_path: Path) -> Path:
                     email["sender"],
                 ),
             )
+            # 镜像 email_body_fts_trigram_insert trigger: 并行 trigram 表 (T7)。
+            conn.execute(
+                """INSERT INTO email_body_fts_trigram (rowid, body_markdown, subject, sender)
+                   VALUES (?, ?, ?, ?)""",
+                (
+                    email["internal_id"],
+                    email["body_markdown"],
+                    email["subject"],
+                    email["sender"],
+                ),
+            )
+            # 镜像 email_recipient_fts_insert trigger: 并行收件人表 (T8)，
+            # 数据来自 email_metadata 的 to_addr / cc_addr / sender_name。
+            conn.execute(
+                """INSERT INTO email_recipient_fts (rowid, to_addr, cc_addr, sender_name)
+                   VALUES (?, ?, ?, ?)""",
+                (
+                    email["internal_id"],
+                    email["to_addr"],
+                    email["cc_addr"],
+                    email["sender_name"],
+                ),
+            )
             for attachment in email.get("attachments", []):
-                conn.execute(
+                cur = conn.execute(
                     """INSERT INTO email_attachment
                        (internal_id, filename, is_inline, created_at)
                        VALUES (?, ?, ?, ?)""",
@@ -107,6 +159,27 @@ def behavior_db(tmp_path: Path) -> Path:
                         now,
                     ),
                 )
+                text_content = attachment.get("text_content")
+                if text_content:
+                    attachment_id = cur.lastrowid
+                    conn.execute(
+                        """INSERT INTO email_attachment_text
+                           (attachment_id, text_content, text_size_bytes, extractor,
+                            status, created_at, updated_at)
+                           VALUES (?, ?, ?, 'fixture', 'extracted', ?, ?)""",
+                        (
+                            attachment_id,
+                            text_content,
+                            len(text_content.encode("utf-8")),
+                            now,
+                            now,
+                        ),
+                    )
+                    conn.execute(
+                        """INSERT INTO email_attachment_fts (rowid, text_content)
+                           VALUES (?, ?)""",
+                        (attachment_id, text_content),
+                    )
         conn.commit()
     finally:
         conn.close()
@@ -115,7 +188,12 @@ def behavior_db(tmp_path: Path) -> Path:
 
 @pytest.mark.parametrize("case", FIXTURE["cases"], ids=lambda case: case["name"])
 def test_search_query_behavior_fixture(case: dict[str, Any], behavior_db: Path):
-    repo = EmailRepository(db_path=str(behavior_db))
+    # per-case `trigram: true` 显式打开 CJK trigram 路由 (DB v24 + SEARCH_TRIGRAM_ENABLED)；
+    # 其余 case 默认 False = 零回归守卫 (走 unicode61 + smart_query_transform 原路径)。
+    repo = EmailRepository(
+        db_path=str(behavior_db),
+        trigram_enabled=bool(case.get("trigram", False)),
+    )
     params = case.get("params", {})
 
     result = repo.search_email_bodies_with_meta(
@@ -138,3 +216,25 @@ def test_search_query_behavior_fixture(case: dict[str, Any], behavior_db: Path):
     assert len(result.parse_warnings) == case["expect_warnings"]
     if "expect_transformed_query" in case:
         assert result.transformed_query == case["expect_transformed_query"]
+    if "expect_hits" in case:
+        actual_hits = [
+            {
+                "internal_id": hit.internal_id,
+                "source": hit.source,
+                "filename": hit.filename,
+            }
+            for hit in result.hits
+        ]
+        assert actual_hits[: len(case["expect_hits"])] == case["expect_hits"]
+
+    snippet_by_id = {hit.internal_id: hit.snippet for hit in result.hits}
+    # P4a: trigram 路径补 snippet (高亮 + fallback) —— 这些 id 的 snippet 必须非空。
+    for iid in case.get("expect_snippet_nonempty", []):
+        assert snippet_by_id.get(iid, "") != "", (
+            f"{case['name']}: id={iid} snippet 不应为空"
+        )
+    # P4a: 高亮命中的具体子串 (含 <mark>) 必须出现在 snippet 里。
+    for iid, needle in case.get("expect_snippet_contains", {}).items():
+        assert needle in snippet_by_id.get(int(iid), ""), (
+            f"{case['name']}: id={iid} snippet 应含 {needle!r}, 实得 {snippet_by_id.get(int(iid))!r}"
+        )

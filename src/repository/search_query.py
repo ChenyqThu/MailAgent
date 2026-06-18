@@ -15,11 +15,20 @@ from typing import Any, Literal, Optional
 
 @dataclass(frozen=True)
 class TextTerm:
-    """一个全文检索 unit。"""
+    """一个全文检索 unit。
+
+    ``column`` 标记该 term 限定到哪个 FTS5 列。``column_table`` 标记该列属于哪张
+    FTS5 表（T6 的 body:/subject~:/sender~: 属 ``email_body_fts``；T8 的
+    to~:/cc~:/from~: 属 ``email_recipient_fts`` 并行表）。裸全文 term 两者都为 None。
+    """
 
     value: str
     is_phrase: bool = False
     force_quoted: bool = False
+    column: Optional[
+        Literal["body_markdown", "subject", "sender", "to_addr", "cc_addr", "sender_name"]
+    ] = None
+    column_table: Optional[Literal["body", "recipient"]] = None
 
 
 @dataclass(frozen=True)
@@ -47,6 +56,7 @@ class ParsedSearchQuery:
     neg_filters: list[FilterPredicate] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     is_plain_passthrough: bool = False
+    sort: Optional[str] = None  # T2: 'relevance' | 'date' | 'oldest'（None=默认排序）
 
 
 @dataclass(frozen=True)
@@ -56,7 +66,7 @@ class _Unit:
     negated: bool = False
 
 
-_FIELD_RE = re.compile(r"^([A-Za-z_]+):(.*)$")
+_FIELD_RE = re.compile(r"^([A-Za-z_]+~?):(.*)$")
 _DATE_ONLY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _RELATIVE_RE = re.compile(r"^([1-9]\d*)([dwmy])$", re.IGNORECASE)
 
@@ -80,6 +90,22 @@ _FIELD_ALIASES: dict[str, str] = {
     "priority": "priority",
 }
 
+# T6: email_body_fts 列级 FTS 语法（body/subject/sender 同一张主表）。
+_FTS_COLUMN_ALIASES: dict[str, Literal["body_markdown", "subject", "sender"]] = {
+    "body": "body_markdown",
+    "subject~": "subject",
+    "sender~": "sender",
+}
+
+# T8: email_recipient_fts 并行表的列级 FTS 语法（收件人全文化, ②保守）。
+# to~:/cc~:/from~: 查 email_recipient_fts（与 T6 的 body:/subject~:/sender~: 不同表），
+# 与既有 to:/cc:/from: 的 LIKE 硬过滤并存、语义不变。
+_FTS_RECIPIENT_COLUMN_ALIASES: dict[str, Literal["to_addr", "cc_addr", "sender_name"]] = {
+    "to~": "to_addr",
+    "cc~": "cc_addr",
+    "from~": "sender_name",
+}
+
 _MAILBOX_ALIASES: dict[str, str] = {
     "inbox": "收件箱",
     "sent": "发件箱",
@@ -90,10 +116,12 @@ _MAILBOX_ALIASES: dict[str, str] = {
 _IS_FILTERS: dict[str, FilterPredicate] = {
     "read": FilterPredicate("COALESCE(m.is_read, 0) = ?", (1,)),
     "unread": FilterPredicate("COALESCE(m.is_read, 0) = ?", (0,)),
-    "flagged": FilterPredicate("COALESCE(m.is_flagged, 0) = ?", (1,)),
+    # T4: 正向用 `m.col = 1` 命中 partial index（WHERE col=1）；反向/unread 保留
+    # COALESCE 以兼容 NULL（NULL 视作未标记/未读）。
+    "flagged": FilterPredicate("m.is_flagged = ?", (1,)),
     "unflagged": FilterPredicate("COALESCE(m.is_flagged, 0) = ?", (0,)),
-    "pinned": FilterPredicate("COALESCE(m.is_pinned, 0) = ?", (1,)),
-    "important": FilterPredicate("COALESCE(m.is_important, 0) = ?", (1,)),
+    "pinned": FilterPredicate("m.is_pinned = ?", (1,)),
+    "important": FilterPredicate("m.is_important = ?", (1,)),
 }
 
 _PRIORITY_ALIASES: dict[str, str] = {
@@ -105,6 +133,13 @@ _PRIORITY_ALIASES: dict[str, str] = {
     "一般": "一般",
     "low": "低",
     "低": "低",
+}
+
+_SORT_ALIASES: dict[str, str] = {
+    "relevance": "relevance",
+    "date": "date",
+    "newest": "date",
+    "oldest": "oldest",
 }
 
 
@@ -124,6 +159,7 @@ def parse_search_query(
         local_tz = _local_timezone(tz_offset_minutes)
         now_dt = _coerce_now(now, local_tz)
         tokens, warnings = _tokenize(original_query)
+        tokens = _merge_dangling_fields(tokens)
         parsed = ParsedSearchQuery(original_query=original_query, warnings=warnings)
         if not tokens:
             parsed.is_plain_passthrough = True
@@ -135,6 +171,12 @@ def parse_search_query(
             if token == "OR":
                 elements.append("OR")
                 saw_syntax = True
+                continue
+            matched_sort, sort_value = _parse_sort_token(token, parsed.warnings)
+            if matched_sort:
+                saw_syntax = True
+                if sort_value is not None and parsed.sort is None:
+                    parsed.sort = sort_value
                 continue
             unit, token_saw_syntax = _classify_token(
                 token,
@@ -219,6 +261,77 @@ def _tokenize(query: str) -> tuple[list[str], list[str]]:
     return tokens, warnings
 
 
+def _is_registered_field_token(token: str) -> bool:
+    """token 去掉可选前导 ``-`` 后是否为已注册字段过滤器（含空值，如 ``from:``）或 ``sort:``。"""
+    body = token[1:] if token.startswith("-") and len(token) > 1 else token
+    match = _FIELD_RE.match(body)
+    if match is None:
+        return False
+    name = match.group(1).lower()
+    return (
+        _FIELD_ALIASES.get(name) is not None
+        or _FTS_COLUMN_ALIASES.get(name) is not None
+        or _FTS_RECIPIENT_COLUMN_ALIASES.get(name) is not None
+        or name == "sort"
+    )
+
+
+def _parse_sort_token(token: str, warnings: list[str]) -> tuple[bool, Optional[str]]:
+    """识别 ``sort:`` 排序覆盖 token（T2）。返回 (是否 sort token, 规范化值或 None)。
+
+    ``sort:relevance|date|oldest``（``newest`` = ``date`` 别名）。非法值 → warning
+    且 ``sort`` 不生效（仍 consume 该 token）。
+    """
+    match = _FIELD_RE.match(token)
+    if match is None or match.group(1).lower() != "sort":
+        return False, None
+    raw = _strip_outer_quotes(match.group(2)).strip().lower()
+    canonical = _SORT_ALIASES.get(raw)
+    if canonical is None:
+        warnings.append(f"unknown_value:sort:{raw}" if raw else "empty_value:sort")
+        return True, None
+    return True, canonical
+
+
+def _merge_dangling_fields(tokens: list[str]) -> list[str]:
+    """T0 容错：把孤立的 ``field:``（冒号后空值）与紧跟的下一个文本 token 合并。
+
+    ``from: echo`` → ``from:echo``、``-from: echo`` → ``-from:echo``、
+    ``from: "Zhang San"`` → ``from:"Zhang San"``。下列情况**不合并**（保持现状
+    丢弃 + ``empty_value`` warning）：孤立 ``field:`` 在末尾、下一个 token 是
+    另一个字段过滤器、或下一个 token 是孤立 ``OR``。
+    """
+    merged: list[str] = []
+    i = 0
+    n = len(tokens)
+    while i < n:
+        tok = tokens[i]
+        body = tok[1:] if tok.startswith("-") and len(tok) > 1 else tok
+        match = _FIELD_RE.match(body)
+        name = match.group(1).lower() if match is not None else ""
+        if (
+            match is not None
+            and match.group(2) == ""  # 冒号后空值
+            # 已注册字段、列级 FTS 字段（含收件人 to~:/cc~:/from~:）或 sort
+            # （排序指令也享受冒号后空格容错）
+            and (
+                _FIELD_ALIASES.get(name) is not None
+                or _FTS_COLUMN_ALIASES.get(name) is not None
+                or _FTS_RECIPIENT_COLUMN_ALIASES.get(name) is not None
+                or name == "sort"
+            )
+            and i + 1 < n  # 有下一个 token
+            and tokens[i + 1] != "OR"
+            and not _is_registered_field_token(tokens[i + 1])
+        ):
+            merged.append(tok + tokens[i + 1])
+            i += 2
+            continue
+        merged.append(tok)
+        i += 1
+    return merged
+
+
 def _classify_token(
     token: str,
     *,
@@ -238,6 +351,28 @@ def _classify_token(
     if field_match:
         field_name = field_match.group(1).lower()
         raw_value = field_match.group(2)
+        # T6 主表列 (email_body_fts) 与 T8 收件人表列 (email_recipient_fts) 分属两张 FTS5 表。
+        fts_column = _FTS_COLUMN_ALIASES.get(field_name)
+        recipient_column = _FTS_RECIPIENT_COLUMN_ALIASES.get(field_name)
+        if fts_column is not None or recipient_column is not None:
+            saw_syntax = True
+            value = _strip_outer_quotes(raw_value)
+            if value == "":
+                warnings.append(f"empty_value:{field_name}")
+                return None, saw_syntax
+            column = fts_column if fts_column is not None else recipient_column
+            column_table = "body" if fts_column is not None else "recipient"
+            return _Unit(
+                "text",
+                TextTerm(
+                    value,
+                    is_phrase=_is_quoted(raw_value),
+                    column=column,
+                    column_table=column_table,
+                ),
+                negated=negated,
+            ), saw_syntax
+
         canonical = _FIELD_ALIASES.get(field_name)
         if canonical is None:
             return _Unit(
@@ -515,4 +650,3 @@ def _strip_outer_quotes(value: str) -> str:
     if _is_quoted(value):
         return value[1:-1]
     return value
-

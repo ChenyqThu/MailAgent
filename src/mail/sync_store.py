@@ -224,7 +224,40 @@ class SyncStore:
     # v23 (P6 folder_sync cleanup, 2026-06): DROP folder_email + folder_email_fts +
     #                folder_sync_state 三表 + FTS 触发器 (旧 FolderSyncWorker 展示链路实测从未
     #                工作)。多文件夹同步走 email_metadata 主链路 (v22)。幂等 DROP IF EXISTS。
-    DB_VERSION = 23  # v23: DROP 旧 folder_sync 三表 (展示链路死代码清理)
+    # v24 (T7 CJK trigram, 2026-06): 新增并行 contentful FTS5 表 email_body_fts_trigram
+    #                (tokenize='trigram') + 4 个 trigger (insert/delete/update on email_body
+    #                + meta_update on email_metadata) + 幂等回填。主表 email_body_fts
+    #                (porter unicode61) 不动 → 英文零回归。trigram 表给中文子串搜索:
+    #                CJK >=3 字走 MATCH, =2 字走 trigram 表 LIKE 兜底 (MATCH <3 字符无召回)。
+    #                灰度开关 SEARCH_TRIGRAM_ENABLED 默认 False — flag=False 时搜索仍走主表
+    #                unicode61 + smart_query_transform (逐字节零回归), flag=True 才启用 CJK 路由。
+    #                幂等: CREATE ... IF NOT EXISTS + 回填 WHERE NOT EXISTS, 重跑不重复/不报错。
+    #                回滚: 关 flag 即回 unicode 路径; 彻底回退见下方 v24 迁移块注释 (DROP 4 trigger
+    #                + DROP email_body_fts_trigram, 主表不动)。
+    # v25 (T8 收件人全文化, 2026-06): 新增并行 contentful FTS5 表 email_recipient_fts
+    #                (to_addr, cc_addr, sender_name; tokenize='porter unicode61
+    #                remove_diacritics 2') + 3 个 trigger (insert / update_of /
+    #                delete on email_metadata) + 幂等回填。数据源是 email_metadata 三列 (与
+    #                body_fts 来自 email_body 不同, 故 trigger 直接挂 email_metadata)。
+    #                新增 to~:/cc~:/from~: 三个显式 FTS 列语法才查这张表 (裸词搜索一行不碰它,
+    #                天然零回归 —— ②保守语义)。主表 email_body_fts 不动。无 flag (纯新增 opt-in 语法)。
+    #                幂等: CREATE ... IF NOT EXISTS + 3 trigger IF NOT EXISTS + 回填
+    #                WHERE NOT EXISTS (current_version < 25 gate)。
+    #                回滚 (彻底回退 v25): 三个新语法只在 parser 显式列名出现时生效, 不影响裸词;
+    #                必要时:
+    #                  DROP TRIGGER IF EXISTS email_recipient_fts_insert;
+    #                  DROP TRIGGER IF EXISTS email_recipient_fts_update;
+    #                  DROP TRIGGER IF EXISTS email_recipient_fts_delete;
+    #                  DROP TABLE IF EXISTS email_recipient_fts;
+    #                主表 email_body_fts / email_body_fts_trigram 不动 → 回滚低风险。
+    # v26 (agentic 搜索 = 特化 Custom Agent, 2026-06): 复用 report_agent 表 (type 多态),
+    #                INSERT OR IGNORE 播种一行 type='search' 的搜索 agent (id='email_search_agent',
+    #                enabled=1, model/prompt NULL → 运行时回退默认, tools_json='["email_search_fulltext"]')。
+    #                **无 DDL** —— model/prompt/tools_json 列 v18 起就有。幂等: INSERT OR IGNORE
+    #                重跑不重复; 无 version gate, 靠 INSERT OR IGNORE 幂等 (与既有 report-agent seed 同模式)。
+    #                回滚 (回退 v26): DELETE FROM report_agent WHERE id='email_search_agent';
+    #                必要时降 db_version 即可 (无表结构变更, 删行无副作用)。
+    DB_VERSION = 26  # v26: 播种 type='search' Custom Agent 行 (复用 report_agent, 无 DDL)
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -1210,6 +1243,206 @@ class SyncStore:
         cursor.execute("DROP TABLE IF EXISTS folder_email_fts")
         cursor.execute("DROP TABLE IF EXISTS folder_email")
         cursor.execute("DROP TABLE IF EXISTS folder_sync_state")
+
+        # === v24: email_body_fts_trigram (T7 CJK 中文子串搜索, 并行 trigram 表) ===
+        # 设计来源: .trellis/tasks/06-17-dsl-parse-warnings/research/codex-t7-tokenizer.md 方案②。
+        # 主表 email_body_fts (porter unicode61) 不动 → 英文零回归; 这里新增并行 contentful
+        # FTS5 表用 tokenize='trigram' 解决中文非前缀子串搜索 (unicode61 把连续 CJK 串当单一
+        # token, '产品' 漏掉 '产品评审')。实测硬约束: trigram MATCH <3 个 Unicode 字符无召回
+        # (2 字中文必须走 trigram 表 LIKE 兜底; 见研究报告实跑表)。
+        #
+        # contentful (非 contentless): 因为 2 字中文要靠 LIKE 兜底, 而 contentless 无法读列值,
+        # LIKE 不可用 → 必须存原文副本。索引比 unicode61 大 (~2-3 倍), 7 万行可接受。
+        # rowid = internal_id, 与 email_body / email_metadata 互查。
+        #
+        # 幂等: CREATE VIRTUAL TABLE IF NOT EXISTS (对新库 init 也建表) + 4 trigger IF NOT EXISTS
+        # + 回填 WHERE NOT EXISTS (current_version < 24 gate, 重跑不重复插)。
+        #
+        # 回滚 (彻底回退 v24): 先关 SEARCH_TRIGRAM_ENABLED flag (查询立即回 unicode 路径), 必要时:
+        #   DROP TRIGGER IF EXISTS email_body_fts_trigram_insert;
+        #   DROP TRIGGER IF EXISTS email_body_fts_trigram_delete;
+        #   DROP TRIGGER IF EXISTS email_body_fts_trigram_update;
+        #   DROP TRIGGER IF EXISTS email_body_fts_trigram_meta_update;
+        #   DROP TABLE IF EXISTS email_body_fts_trigram;
+        # 主表 email_body_fts 不动 → 回滚低风险, 英文/已有路径不受影响。
+        cursor.execute("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS email_body_fts_trigram USING fts5(
+                body_markdown,
+                subject,
+                sender,
+                tokenize='trigram'
+            )
+        """)
+        # insert/update/delete on email_body: 与主表 email_body_fts trigger 1:1 镜像
+        # (subject/sender 从 email_metadata join 取, 双写流程 metadata 先 commit)。
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS email_body_fts_trigram_insert
+            AFTER INSERT ON email_body BEGIN
+                INSERT INTO email_body_fts_trigram(rowid, body_markdown, subject, sender)
+                SELECT NEW.internal_id,
+                       COALESCE(NEW.body_markdown, ''),
+                       COALESCE((SELECT subject FROM email_metadata WHERE internal_id = NEW.internal_id), ''),
+                       COALESCE((SELECT sender  FROM email_metadata WHERE internal_id = NEW.internal_id), '');
+            END
+        """)
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS email_body_fts_trigram_delete
+            AFTER DELETE ON email_body BEGIN
+                DELETE FROM email_body_fts_trigram WHERE rowid = OLD.internal_id;
+            END
+        """)
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS email_body_fts_trigram_update
+            AFTER UPDATE ON email_body BEGIN
+                DELETE FROM email_body_fts_trigram WHERE rowid = OLD.internal_id;
+                INSERT INTO email_body_fts_trigram(rowid, body_markdown, subject, sender)
+                SELECT NEW.internal_id,
+                       COALESCE(NEW.body_markdown, ''),
+                       COALESCE((SELECT subject FROM email_metadata WHERE internal_id = NEW.internal_id), ''),
+                       COALESCE((SELECT sender  FROM email_metadata WHERE internal_id = NEW.internal_id), '');
+            END
+        """)
+        # meta_update: 主表 email_body_fts 的历史隐患 (subject/sender 后改 → FTS stale) 在
+        # trigram 表一并修。仅当该 internal_id 已有 body 行时才 re-sync (无 body → 无 FTS 行)。
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS email_body_fts_trigram_meta_update
+            AFTER UPDATE OF subject, sender ON email_metadata
+            WHEN EXISTS (SELECT 1 FROM email_body WHERE internal_id = NEW.internal_id)
+            BEGIN
+                DELETE FROM email_body_fts_trigram WHERE rowid = NEW.internal_id;
+                INSERT INTO email_body_fts_trigram(rowid, body_markdown, subject, sender)
+                SELECT NEW.internal_id,
+                       COALESCE(b.body_markdown, ''),
+                       COALESCE(NEW.subject, ''),
+                       COALESCE(NEW.sender, '')
+                  FROM email_body b WHERE b.internal_id = NEW.internal_id;
+            END
+        """)
+        # 首次回填: 把已有 email_body 行推入 trigram FTS (幂等, WHERE NOT EXISTS 防重)。
+        # 大库 7 万行可能耗时, 带计数日志 (参考 v5 reindex 风格)。
+        if current_version < 24:
+            cursor.execute("""
+                INSERT INTO email_body_fts_trigram(rowid, body_markdown, subject, sender)
+                SELECT b.internal_id,
+                       COALESCE(b.body_markdown, ''),
+                       COALESCE(m.subject, ''),
+                       COALESCE(m.sender, '')
+                  FROM email_body b
+                  JOIN email_metadata m ON m.internal_id = b.internal_id
+                 WHERE NOT EXISTS (
+                       SELECT 1 FROM email_body_fts_trigram WHERE rowid = b.internal_id
+                 )
+            """)
+            reindexed = cursor.rowcount or 0
+            if reindexed:
+                logger.info(
+                    f"v24 trigram FTS5 reindex: {reindexed} email_body rows indexed "
+                    f"(email_body_fts_trigram)"
+                )
+
+        # === v25: email_recipient_fts (T8 收件人全文化, 并行 contentful FTS5 表) ===
+        # 设计来源: .trellis/tasks/06-17-dsl-parse-warnings 方案②保守。
+        # 主表 email_body_fts (body/subject/sender) 不动 → 裸词搜索逐字节零回归
+        # (裸词天然不碰收件人列, 正是②保守语义)。这里新增并行 contentful FTS5 表索引
+        # email_metadata 的 to_addr / cc_addr / sender_name 三列, 仅由新增的显式 FTS 列
+        # 语法 to~:/cc~:/from~: 查询。无 flag (纯新增 opt-in 语法, 不改任何现有行为)。
+        #
+        # 数据源是 email_metadata (to_addr/cc_addr/sender_name 都在 email_metadata 列),
+        # 与 body_fts (来自 email_body) 不同 → trigger 直接挂 email_metadata:
+        #   - AFTER INSERT: 新邮件行写入 → 同步进 recipient_fts。
+        #   - AFTER UPDATE OF to_addr,cc_addr,sender_name: 仅这三列变更才 DELETE+INSERT 重同步。
+        #   - AFTER DELETE: 邮件行删除 → 清 recipient_fts。
+        # contentful (非 contentless): 与 body_fts/trigram 表一致, 自带数据副本支持 snippet/排名。
+        # rowid = internal_id, 与 email_metadata 互查。
+        #
+        # 幂等: CREATE VIRTUAL TABLE IF NOT EXISTS + 3 trigger IF NOT EXISTS + 回填
+        # WHERE NOT EXISTS (current_version < 25 gate, 重跑不重复插)。
+        #
+        # 回滚 (彻底回退 v25): 三个新语法只在 parser 显式列名出现时生效, 不影响裸词; 必要时:
+        #   DROP TRIGGER IF EXISTS email_recipient_fts_insert;
+        #   DROP TRIGGER IF EXISTS email_recipient_fts_update;
+        #   DROP TRIGGER IF EXISTS email_recipient_fts_delete;
+        #   DROP TABLE IF EXISTS email_recipient_fts;
+        # 主表 email_body_fts / email_body_fts_trigram 不动 → 回滚低风险。
+        cursor.execute("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS email_recipient_fts USING fts5(
+                to_addr,
+                cc_addr,
+                sender_name,
+                tokenize='porter unicode61 remove_diacritics 2'
+            )
+        """)
+        # insert/update_of/delete on email_metadata (数据源直接是 email_metadata 三列)。
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS email_recipient_fts_insert
+            AFTER INSERT ON email_metadata BEGIN
+                INSERT INTO email_recipient_fts(rowid, to_addr, cc_addr, sender_name)
+                VALUES (NEW.internal_id,
+                        COALESCE(NEW.to_addr, ''),
+                        COALESCE(NEW.cc_addr, ''),
+                        COALESCE(NEW.sender_name, ''));
+            END
+        """)
+        # 仅 to_addr/cc_addr/sender_name 三列变更才重同步 (其余列更新不触发, 省开销)。
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS email_recipient_fts_update
+            AFTER UPDATE OF to_addr, cc_addr, sender_name ON email_metadata BEGIN
+                DELETE FROM email_recipient_fts WHERE rowid = OLD.internal_id;
+                INSERT INTO email_recipient_fts(rowid, to_addr, cc_addr, sender_name)
+                VALUES (NEW.internal_id,
+                        COALESCE(NEW.to_addr, ''),
+                        COALESCE(NEW.cc_addr, ''),
+                        COALESCE(NEW.sender_name, ''));
+            END
+        """)
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS email_recipient_fts_delete
+            AFTER DELETE ON email_metadata BEGIN
+                DELETE FROM email_recipient_fts WHERE rowid = OLD.internal_id;
+            END
+        """)
+        # 首次回填: 把已有 email_metadata 行推入 recipient FTS (幂等, WHERE NOT EXISTS 防重)。
+        # 大库 7 万行可能耗时, 带计数日志 (参考 v24 reindex 风格)。
+        if current_version < 25:
+            cursor.execute("""
+                INSERT INTO email_recipient_fts(rowid, to_addr, cc_addr, sender_name)
+                SELECT m.internal_id,
+                       COALESCE(m.to_addr, ''),
+                       COALESCE(m.cc_addr, ''),
+                       COALESCE(m.sender_name, '')
+                  FROM email_metadata m
+                 WHERE NOT EXISTS (
+                       SELECT 1 FROM email_recipient_fts WHERE rowid = m.internal_id
+                 )
+            """)
+            reindexed = cursor.rowcount or 0
+            if reindexed:
+                logger.info(
+                    f"v25 recipient FTS5 reindex: {reindexed} email_metadata rows "
+                    f"indexed (email_recipient_fts)"
+                )
+
+        # === v26: agentic 搜索 = 特化 Custom Agent (复用 report_agent 表, 无 DDL) ===
+        # 设计来源: .trellis/tasks/06-17-dsl-parse-warnings/agentic-search-impl-plan.md §3.3。
+        # 把"搜索"做成一个特化 Custom Agent: 复用 report_agent 表的 type 多态 + model/prompt/
+        # tools_json 列 (v18 起全在), 播种一行 type='search' 的搜索 agent。无新表/新列 → 纯 seed。
+        #
+        # 种子语义: id='email_search_agent', type='search', enabled=1, model=NULL (运行时回退
+        # getLlmModel), prompt=NULL (运行时回退内置默认搜索 prompt), tools_json 给 MVP 唯一工具
+        # email_search_fulltext (已含 DSL+FTS+中文 trigram+收件人 T5-T8), title='邮件搜索'。
+        # report 专属列 (schedule/window/kos_enrich/…) 留 NULL/DEFAULT, search agent 不需要。
+        #
+        # 幂等: INSERT OR IGNORE (id PK 冲突即跳过), 重跑无副作用; 旧库已有此行 → 跳过, 不覆盖
+        # 用户改过的 model/prompt/tools。
+        #
+        # 回滚 (回退 v26): DELETE FROM report_agent WHERE id='email_search_agent'; 必要时降
+        # db_version。无表结构变更, 删行无副作用 (主表/其他 agent 不动)。
+        cursor.execute(
+            "INSERT OR IGNORE INTO report_agent "
+            "(id, type, enabled, title, model, prompt, tools_json, updated_at) "
+            "VALUES ('email_search_agent', 'search', 1, '邮件搜索', NULL, NULL, ?, ?)",
+            ('["email_search_fulltext"]', time.time()),
+        )
 
         # 更新数据库版本
         cursor.execute("""

@@ -93,6 +93,40 @@ async def get_config(
     )
 
 
+@router.post("/report-agents", dependencies=[Depends(verify_cf_access)])
+async def create_agent(request: Request, body: Optional[dict[str, Any]] = None):
+    """新建一个 agent（写）。type 多态（'report' / 'search'）。body =
+    {id, type?, title?, enabled?, model?, prompt?, tools_json?}（tools_json 为数组）→
+    ReportAgentConfig。id 冲突 → 409 E_CONFLICT。"""
+    raw = body or {}
+    agent_id = str(raw.get("id") or "").strip()
+    if not agent_id:
+        raise APIError("E_INVALID_ARG", "id is required", source="sqlite")
+    agent_type = str(raw.get("type") or "report")
+    if agent_type not in ("report", "search"):
+        raise APIError(
+            "E_INVALID_ARG", f"type must be report|search, got {agent_type!r}", source="sqlite"
+        )
+    tools = raw.get("tools_json")
+    tools_json = (
+        json.dumps(tools, ensure_ascii=False) if isinstance(tools, list) else None
+    )
+    store = get_report_store()
+    try:
+        agent = store.create_agent(
+            agent_id,
+            type=agent_type,
+            title=raw.get("title"),
+            enabled=bool(raw.get("enabled", False)),
+            model=raw.get("model"),
+            prompt=raw.get("prompt"),
+            tools_json=tools_json,
+        )
+    except ValueError as exc:
+        raise APIError("E_CONFLICT", str(exc), http_status=409, source="sqlite")
+    return success_envelope(wire.resolve_agent(agent), request=request, source="sqlite")
+
+
 @router.put("/report-agents/{agent_id}", dependencies=[Depends(verify_cf_access)])
 async def set_config(request: Request, agent_id: str, body: Optional[dict[str, Any]] = None):
     """部分更新 agent 配置（写）。镜像 report:setConfig。body = friendly patch
@@ -109,6 +143,15 @@ async def set_config(request: Request, agent_id: str, body: Optional[dict[str, A
     return success_envelope(
         wire.resolve_agent(updated) if updated else {}, request=request, source="sqlite"
     )
+
+
+@router.delete("/report-agents/{agent_id}", dependencies=[Depends(verify_cf_access)])
+async def delete_agent(request: Request, agent_id: str):
+    """删一行 agent 配置（写）。镜像 IPC report:deleteAgent → {deleted}。404 当不存在。"""
+    store = get_report_store()
+    if not store.delete_agent(agent_id):
+        raise APIError("E_NOT_FOUND", f"report_agent {agent_id!r} not found", source="sqlite")
+    return success_envelope({"deleted": agent_id}, request=request, source="sqlite")
 
 
 @router.post("/report-agents/{agent_id}/run", dependencies=[Depends(verify_cf_access)])

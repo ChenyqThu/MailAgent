@@ -23,6 +23,7 @@
 import type {
   ReportApi,
   ReportAgentConfig,
+  ReportAgentCreateInput,
   ReportCadence,
   ReportConfigPatch,
   ReportDetail,
@@ -67,6 +68,7 @@ import type {
   LlmUpstreamModelsData,
   MailApi,
   MailboxSummary,
+  NlToDslResult,
   NotionAgentConfig,
   NotionAgentListItem,
   PersistentSettings,
@@ -338,6 +340,16 @@ export class HttpApi implements MailApi {
             skip_parent_lookup: opts?.skipParentLookup ?? false
           }
         }
+      }),
+
+    // P4b — AI 自然语言检索: web SPA 进程内无 LLM key/端点 (key 在 main 进程的
+    // keychain/.env, 远程 serve-api 也不暴露该桥)。返回结构化 E_UNSUPPORTED 而非
+    // reject, 让 CommandPalette 走同一条 banner 提示路径 (与无 key 一致体验)。
+    nlToDsl: (_nl: string): Promise<NlToDslResult> =>
+      Promise.resolve({
+        dsl: '',
+        error: 'E_UNSUPPORTED',
+        message: 'AI search is only available in the desktop app'
       })
   }
 
@@ -459,6 +471,8 @@ export class HttpApi implements MailApi {
   private _chat?: ChatApi
   get chat(): ChatApi {
     if (!this._chat) {
+      // F2 — 远程 web 不传 searchAgent（= false）→ runSearchAgent 返 E_UNSUPPORTED（LLM key
+      // 在桌面，agentic 搜索远程 scope 外）。桌面经 createElectronChatRuntime 传 searchAgent:true。
       this._chat = createChatRuntime({ reads: this, baseUrl: this.baseUrl })
     }
     return this._chat
@@ -739,6 +753,21 @@ export class HttpApi implements MailApi {
       }),
     delete: async (reportId: string): Promise<void> => {
       await this.req('DELETE', `/reports/${encodeURIComponent(reportId)}`)
-    }
+    },
+    createAgent: (input: ReportAgentCreateInput): Promise<ReportAgentConfig> =>
+      this.req<ReportAgentConfig>('POST', '/report-agents', {
+        // serve-api create_agent 读 tools_json（数组）key；input.tools 映射过去。
+        body: {
+          id: input.id,
+          type: input.type ?? 'search',
+          title: input.title,
+          enabled: input.enabled,
+          model: input.model,
+          prompt: input.prompt,
+          tools_json: input.tools
+        }
+      }),
+    deleteAgent: (agentId: string): Promise<{ deleted: string }> =>
+      this.req<{ deleted: string }>('DELETE', `/report-agents/${encodeURIComponent(agentId)}`)
   }
 }

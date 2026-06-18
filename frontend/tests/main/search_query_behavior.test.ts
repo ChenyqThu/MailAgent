@@ -32,7 +32,7 @@ interface FixtureEmail {
   is_important: number
   ai_priority: string | null
   body_markdown: string
-  attachments?: Array<{ filename: string; is_inline: number }>
+  attachments?: Array<{ filename: string; is_inline: number; text_content?: string }>
 }
 
 interface FixtureCase {
@@ -45,6 +45,12 @@ interface FixtureCase {
   order?: 'set' | 'exact'
   expect_warnings: number
   expect_transformed_query?: string
+  expect_hits?: Array<{ internal_id: number; source: string; filename: string | null }>
+  // T7: per-case CJK trigram 路由开关 (镜像 Python 构造器 trigram_enabled 参数)。
+  trigram?: boolean
+  // P4a: trigram 路径补 snippet 断言 (镜像 Python)。
+  expect_snippet_nonempty?: number[]
+  expect_snippet_contains?: Record<string, string>
 }
 
 interface Fixture {
@@ -84,11 +90,40 @@ function buildDb(): Database.Database {
       tokenize='porter unicode61 remove_diacritics 2'
     );
 
+    CREATE VIRTUAL TABLE email_body_fts_trigram USING fts5(
+      body_markdown,
+      subject,
+      sender,
+      tokenize='trigram'
+    );
+
+    CREATE VIRTUAL TABLE email_recipient_fts USING fts5(
+      to_addr,
+      cc_addr,
+      sender_name,
+      tokenize='porter unicode61 remove_diacritics 2'
+    );
+
     CREATE TABLE email_attachment (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       internal_id INTEGER NOT NULL,
       filename TEXT NOT NULL,
       is_inline INTEGER DEFAULT 0
+    );
+
+    CREATE TABLE email_attachment_text (
+      attachment_id INTEGER PRIMARY KEY,
+      text_content TEXT,
+      text_size_bytes INTEGER NOT NULL DEFAULT 0,
+      extractor TEXT NOT NULL,
+      status TEXT NOT NULL,
+      created_at REAL NOT NULL,
+      updated_at REAL NOT NULL
+    );
+
+    CREATE VIRTUAL TABLE email_attachment_fts USING fts5(
+      text_content,
+      tokenize='porter unicode61 remove_diacritics 2'
     );
 
     CREATE TABLE llm_processing (
@@ -107,9 +142,29 @@ function buildDb(): Database.Database {
     INSERT INTO email_body_fts (rowid, body_markdown, subject, sender)
     VALUES (?, ?, ?, ?)
   `)
+  // 镜像 email_body_fts_trigram_insert trigger: 并行 trigram 表 (T7)。
+  const insertFtsTrigram = db.prepare(`
+    INSERT INTO email_body_fts_trigram (rowid, body_markdown, subject, sender)
+    VALUES (?, ?, ?, ?)
+  `)
+  // 镜像 email_recipient_fts_insert trigger: 并行收件人表 (T8)，数据来自 email_metadata
+  // 的 to_addr / cc_addr / sender_name，rowid = internal_id。
+  const insertRecipientFts = db.prepare(`
+    INSERT INTO email_recipient_fts (rowid, to_addr, cc_addr, sender_name)
+    VALUES (?, ?, ?, ?)
+  `)
   const insertAttachment = db.prepare(`
     INSERT INTO email_attachment (internal_id, filename, is_inline)
     VALUES (?, ?, ?)
+  `)
+  const insertAttachmentText = db.prepare(`
+    INSERT INTO email_attachment_text
+      (attachment_id, text_content, text_size_bytes, extractor, status, created_at, updated_at)
+    VALUES (?, ?, ?, 'fixture', 'extracted', ?, ?)
+  `)
+  const insertAttachmentFts = db.prepare(`
+    INSERT INTO email_attachment_fts (rowid, text_content)
+    VALUES (?, ?)
   `)
 
   for (const email of fixture.emails) {
@@ -130,8 +185,27 @@ function buildDb(): Database.Database {
       null
     )
     insertFts.run(email.internal_id, email.body_markdown, email.subject, email.sender)
+    insertFtsTrigram.run(email.internal_id, email.body_markdown, email.subject, email.sender)
+    // 镜像 trigger 的 COALESCE(NEW.col, '') —— sender_name 可空。
+    insertRecipientFts.run(
+      email.internal_id,
+      email.to_addr ?? '',
+      email.cc_addr ?? '',
+      email.sender_name ?? ''
+    )
     for (const attachment of email.attachments ?? []) {
-      insertAttachment.run(email.internal_id, attachment.filename, attachment.is_inline)
+      const info = insertAttachment.run(
+        email.internal_id,
+        attachment.filename,
+        attachment.is_inline
+      )
+      const text = attachment.text_content
+      if (text) {
+        const attachmentId = Number(info.lastInsertRowid)
+        const now = Date.now() / 1000
+        insertAttachmentText.run(attachmentId, text, Buffer.byteLength(text, 'utf8'), now, now)
+        insertAttachmentFts.run(attachmentId, text)
+      }
     }
   }
   return db
@@ -155,7 +229,10 @@ describe('search query behavior fixture', () => {
       since: item.params?.since_date,
       until: item.params?.until_date,
       now: fixture.now,
-      tzOffsetMinutes: fixture.tz_offset_minutes
+      tzOffsetMinutes: fixture.tz_offset_minutes,
+      // per-case `trigram: true` 显式打开 CJK trigram 路由 (DB v24 + SEARCH_TRIGRAM_ENABLED)；
+      // 其余 case 默认 false = 零回归守卫 (走 unicode61 + smartQueryTransform 原路径)。
+      trigramEnabled: item.trigram ?? false
     })
     const ids = result.items.map((hit) => hit.internal_id)
 
@@ -168,6 +245,24 @@ describe('search query behavior fixture', () => {
     expect(result.parse_warnings?.length ?? 0).toBe(item.expect_warnings)
     if (item.expect_transformed_query !== undefined) {
       expect(result.transformed_query).toBe(item.expect_transformed_query)
+    }
+    if (item.expect_hits !== undefined) {
+      const actualHits = result.items.map((hit) => ({
+        internal_id: hit.internal_id,
+        source: hit.source ?? 'body',
+        filename: hit.filename ?? null
+      }))
+      expect(actualHits.slice(0, item.expect_hits.length)).toEqual(item.expect_hits)
+    }
+
+    const snippetById = new Map(result.items.map((hit) => [hit.internal_id, hit.snippet ?? '']))
+    // P4a: trigram 路径补 snippet (高亮 + fallback) —— 这些 id 的 snippet 必须非空。
+    for (const iid of item.expect_snippet_nonempty ?? []) {
+      expect(snippetById.get(iid) ?? '').not.toBe('')
+    }
+    // P4a: 高亮命中的具体子串 (含 <mark>) 必须出现在 snippet 里。
+    for (const [iid, needle] of Object.entries(item.expect_snippet_contains ?? {})) {
+      expect(snippetById.get(Number(iid)) ?? '').toContain(needle)
     }
   })
 })
