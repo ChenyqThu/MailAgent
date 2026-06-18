@@ -30,6 +30,7 @@
 
 import { Fragment, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useQueryClient } from '@tanstack/react-query'
 import {
   AlertTriangle,
   BadgeCheck,
@@ -120,6 +121,7 @@ function ReplyDraftHero({
 }): React.ReactElement {
   const { t } = useTranslation()
   const mailApi = useMailApi()
+  const queryClient = useQueryClient()
   const [copied, setCopied] = useState(false)
   // Default collapsed — Reply Suggestion is one strip among many on the
   // email detail; user opens it explicitly when they want to act on it.
@@ -127,20 +129,28 @@ function ReplyDraftHero({
   const [editing, setEditing] = useState(false)
   const [editedBody, setEditedBody] = useState(markdown)
   const [crafting, setCrafting] = useState(false)
+  // True while the saveEdit persist round-trip is in flight (disables Save).
+  const [saving, setSaving] = useState(false)
+  // True once the user Saved (committed) an edit. A committed edit is "owned"
+  // by the user and must NOT be clobbered when `markdown` later changes (AI
+  // re-run / prop churn) — otherwise Craft/Copy would silently revert to the
+  // LLM's initial body even though the user explicitly kept theirs (F1).
+  const [committed, setCommitted] = useState(false)
 
-  // Reset edited body when a fresh AI reply overwrites markdown — but only
-  // when the user is NOT actively editing, so an in-progress edit survives
-  // a no-op rerender. Mirrors the DraftPreviewCard pattern in chat/MessageList.
+  // Adopt a fresh AI reply only when the user has NOT taken ownership of the
+  // body — i.e. not actively editing AND no committed edit. With an in-progress
+  // edit we keep the textarea (no-op rerender survives); with a committed edit
+  // we keep the user's version (their edit wins until they Cancel/discard).
   const [lastMarkdown, setLastMarkdown] = useState(markdown)
   if (markdown !== lastMarkdown) {
     setLastMarkdown(markdown)
-    if (!editing) setEditedBody(markdown)
+    if (!editing && !committed) setEditedBody(markdown)
   }
 
-  // Effective body for Copy / Craft. We treat any divergence from the
-  // original `markdown` as a user edit and stick with it; reverting is
-  // available via "Cancel" while editing or by clearing the textarea.
-  const effectiveBody = editedBody !== markdown ? editedBody : markdown
+  // Effective body for Copy / Craft. A committed edit always wins; otherwise
+  // any divergence from `markdown` is treated as the live edit. Reverting is
+  // available via "Cancel" while editing (which also clears `committed`).
+  const effectiveBody = committed || editedBody !== markdown ? editedBody : markdown
 
   const copy = async (): Promise<void> => {
     try {
@@ -176,12 +186,40 @@ function ReplyDraftHero({
     }
   }
 
+  // Cancel discards the edit and hands ownership back to `markdown` (so a
+  // later AI re-run can refresh the suggestion again).
   const cancelEdit = (): void => {
     setEditing(false)
+    setCommitted(false)
     setEditedBody(markdown)
   }
-  const saveEdit = (): void => {
+  // Save commits the edit: it becomes the user-owned body that survives later
+  // `markdown` changes (the reset guard skips clobbering while `committed`), and
+  // is persisted back to the SQLite SSoT. The top reply / reply-all buttons
+  // prefill from the backend draftPlan, which reads the same reply_suggestion_md
+  // field — so persisting here + invalidating the warmed compose plans is what
+  // makes those buttons use the edited body instead of the AI original (F1).
+  // Local commit happens first (optimistic) so Copy/Craft + the (edited) tag
+  // reflect the edit immediately even if the persist is slow or fails.
+  const saveEdit = async (): Promise<void> => {
     setEditing(false)
+    setCommitted(true)
+    setSaving(true)
+    try {
+      await mailApi.email.setReplySuggestion({ internalId, body: editedBody })
+      await queryClient.invalidateQueries({ queryKey: ['compose', 'plan', internalId] })
+    } catch (err) {
+      const e = err as { code?: string; message?: string }
+      const detail = e.code ? `${e.code} · ${e.message ?? ''}` : (e.message ?? String(err))
+      toastError(
+        t('ai.replySuggestion.saveFail', {
+          defaultValue: '保存到服务器失败（本次编辑仅本地生效）'
+        }),
+        detail
+      )
+    } finally {
+      setSaving(false)
+    }
   }
   const startEdit = (): void => {
     setEditedBody(effectiveBody)
@@ -238,7 +276,7 @@ function ReplyDraftHero({
             style={{ letterSpacing: '0.08em' }}
           >
             Reply Suggestion
-            {editedBody !== markdown && (
+            {(committed || editedBody !== markdown) && (
               <span className="ml-1 text-ink-fg-2 normal-case">
                 · {t('ai.replySuggestion.editedTag')}
               </span>
@@ -252,7 +290,12 @@ function ReplyDraftHero({
                 <button type="button" onClick={cancelEdit} className={actionBtn}>
                   {t('ai.replySuggestion.cancel')}
                 </button>
-                <button type="button" onClick={saveEdit} className={actionBtn}>
+                <button
+                  type="button"
+                  onClick={() => void saveEdit()}
+                  disabled={saving}
+                  className={actionBtn}
+                >
                   <ClipboardCheck size={12} strokeWidth={2.25} />
                   {t('ai.replySuggestion.save')}
                 </button>

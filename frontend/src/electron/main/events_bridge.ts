@@ -76,7 +76,11 @@ function broadcast(channel: string, payload: unknown): void {
 
 function setState(next: EventsConnectionState, error: string | null = null): void {
   _state = next
-  if (error !== null) _lastError = error
+  // B6 — 连上即清除上一次的错误。否则 reconnect 成功后 _lastError 残留 (下面的
+  // `error !== null` 守卫让 setState('connected', null) 不清旧错), UI (RealtimeStorageTab
+  // / StatusBar) 一直显示「fetch failed」不消失。connected 是唯一的成功态。
+  if (next === 'connected') _lastError = null
+  else if (error !== null) _lastError = error
   broadcast('events:status', currentStatus())
 }
 
@@ -158,9 +162,8 @@ async function streamLoop(myAttemptId: number): Promise<void> {
       throw new Error(`HTTP ${resp.status} ${resp.statusText}`)
     }
 
-    setState('connected', null)
+    setState('connected', null) // setState 在 next==='connected' 时已清 _lastError (B6)
     _backoffIdx = 0 // 成功连上后重置退避
-    _lastError = null
 
     const reader = resp.body.getReader()
     const decoder = new TextDecoder('utf-8')

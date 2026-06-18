@@ -144,10 +144,40 @@ export const testChatPlatform: ChatInfraPlatform & ChatToolPlatform = {
   async searchAttachments() {
     return toolNotExercised()
   },
+  async listFolders() {
+    return toolNotExercised()
+  },
   async flagEmail() {
     return toolNotExercised()
   },
   async draftReply() {
+    return toolNotExercised()
+  },
+  async setReplySuggestion() {
+    return toolNotExercised()
+  },
+  async setAiFields() {
+    return toolNotExercised()
+  },
+  async listReports() {
+    return toolNotExercised()
+  },
+  async getReport() {
+    return toolNotExercised()
+  },
+  async runReport() {
+    return toolNotExercised()
+  },
+  async setPin() {
+    return toolNotExercised()
+  },
+  async moveEmail() {
+    return toolNotExercised()
+  },
+  async resyncEmail() {
+    return toolNotExercised()
+  },
+  async archiveEmail() {
     return toolNotExercised()
   },
   async kosCallTool() {

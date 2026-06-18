@@ -10,12 +10,13 @@ import {
   createBuiltinTools,
   createEmailTools,
   createAttachmentTools,
-  createWriteTools
+  createWriteTools,
+  createReportTools
 } from '../../../../src/shared/chat/tools/builtin'
 import type { ChatToolPlatform } from '../../../../src/shared/chat/platform'
 
 /** Stub platform — catalog shape 测试只读 ToolDef 元数据（不调 handler），方法 stub 即可；
- *  kosConfig().configured 决定 createBuiltinTools 是否含 9 KOS 工具（默认 false = 11 工具）。 */
+ *  kosConfig().configured 决定 createBuiltinTools 是否含 9 KOS 工具（默认 false = 18 工具）。 */
 function makePlatform(over: Partial<ChatToolPlatform> = {}): ChatToolPlatform {
   return {
     listEmails: async () => [],
@@ -26,8 +27,23 @@ function makePlatform(over: Partial<ChatToolPlatform> = {}): ChatToolPlatform {
     searchEmailsFulltext: async () => ({ items: [], total_indexed: 0 }),
     listAttachments: async () => [],
     searchAttachments: async () => ({ items: [], total_indexed: 0 }),
+    listFolders: async () => [],
     flagEmail: async () => ({}),
     draftReply: async () => ({ internalId: 0, mailbox: null, accountName: null, draftId: '' }),
+    setReplySuggestion: async () => ({ internalId: 0, replySuggestionMd: '', chars: 0 }),
+    setAiFields: async () => ({
+      internalId: 0,
+      aiAction: null,
+      aiPriority: null,
+      aiReviewStatus: null
+    }),
+    setPin: async () => ({}),
+    moveEmail: async () => ({}),
+    resyncEmail: async () => ({}),
+    archiveEmail: async () => ({}),
+    listReports: async () => [],
+    getReport: async () => null,
+    runReport: async () => ({ report_id: '', status: 'ready', headline: '' }),
     kosConfig: () => ({ configured: false, timeDecayEnabled: false }),
     kosCallTool: async () => null,
     saveToKos: async () => ({ slug: '', status: 'unknown', contentBytes: 0 }),
@@ -39,15 +55,17 @@ const platform = makePlatform()
 const allEmailTools = createEmailTools(platform)
 const allAttachmentTools = createAttachmentTools(platform)
 const allWriteTools = createWriteTools(platform)
+const allReportTools = createReportTools(platform)
 
 describe('builtin tool catalog — M1', () => {
-  test('email tools: exactly 6 tools, all silent-tier read', () => {
-    expect(allEmailTools).toHaveLength(6)
+  test('email tools: exactly 7 tools, all silent-tier read (incl. email_list_folders)', () => {
+    expect(allEmailTools).toHaveLength(7)
     for (const t of allEmailTools) {
       expect(t.category).toBe('read')
       expect(t.confirmationTier).toBe('silent')
       expect(t.surface).toBe('ipc')
     }
+    expect(allEmailTools.map((t) => t.name)).toContain('email_list_folders')
   })
 
   test('attachment tools: 2 (PR-2b adds email_search_attachments on top of M1 attachment_list)', () => {
@@ -56,10 +74,21 @@ describe('builtin tool catalog — M1', () => {
     expect(names).toEqual(['attachment_list', 'email_search_attachments'])
   })
 
-  test('write tools: exactly 3 (email_flag / email_archive / email_draft_reply)', () => {
-    expect(allWriteTools).toHaveLength(3)
+  test('write tools: exactly 8 (flag/archive/draft_reply/set_reply_suggestion/set_ai_fields/pin/move/resync)', () => {
+    expect(allWriteTools).toHaveLength(8)
     const writeNames = allWriteTools.map((t) => t.name).sort()
-    expect(writeNames).toEqual(['email_archive', 'email_draft_reply', 'email_flag'])
+    expect(writeNames).toEqual(
+      [
+        'email_archive',
+        'email_draft_reply',
+        'email_flag',
+        'email_move',
+        'email_pin',
+        'email_resync',
+        'email_set_ai_fields',
+        'email_set_reply_suggestion'
+      ].sort()
+    )
     for (const t of allWriteTools) {
       expect(t.category).toBe('write')
       expect(t.surface).toBe('ipc')
@@ -68,18 +97,39 @@ describe('builtin tool catalog — M1', () => {
     }
   })
 
-  test('email_draft_reply specifically uses tier=edit (user MAY change body before draft creation)', () => {
-    const draft = allWriteTools.find((t) => t.name === 'email_draft_reply')
-    expect(draft?.confirmationTier).toBe('edit')
+  test('report tools: exactly 3 (report_list / report_get read + report_run write)', () => {
+    expect(allReportTools).toHaveLength(3)
+    const names = allReportTools.map((t) => t.name).sort()
+    expect(names).toEqual(['report_get', 'report_list', 'report_run'])
+    expect(allReportTools.find((t) => t.name === 'report_list')?.confirmationTier).toBe('silent')
+    expect(allReportTools.find((t) => t.name === 'report_get')?.confirmationTier).toBe('silent')
+    expect(allReportTools.find((t) => t.name === 'report_run')?.confirmationTier).toBe('edit')
+    expect(allReportTools.find((t) => t.name === 'report_run')?.category).toBe('write')
   })
 
-  test('email_flag / email_archive use tier=preview (reversible, no edit needed)', () => {
-    expect(allWriteTools.find((t) => t.name === 'email_flag')?.confirmationTier).toBe('preview')
-    expect(allWriteTools.find((t) => t.name === 'email_archive')?.confirmationTier).toBe('preview')
+  test('edit-tier writes (draft_reply / set_reply_suggestion / set_ai_fields) — user MAY change before write', () => {
+    expect(allWriteTools.find((t) => t.name === 'email_draft_reply')?.confirmationTier).toBe('edit')
+    expect(
+      allWriteTools.find((t) => t.name === 'email_set_reply_suggestion')?.confirmationTier
+    ).toBe('edit')
+    expect(allWriteTools.find((t) => t.name === 'email_set_ai_fields')?.confirmationTier).toBe(
+      'edit'
+    )
+  })
+
+  test('preview-tier writes (flag / archive / pin / move / resync) are reversible', () => {
+    for (const name of ['email_flag', 'email_archive', 'email_pin', 'email_move', 'email_resync']) {
+      expect(allWriteTools.find((t) => t.name === name)?.confirmationTier).toBe('preview')
+    }
   })
 
   test('all builtin names are stable + snake_case', () => {
-    const names = [...allEmailTools, ...allAttachmentTools, ...allWriteTools].map((t) => t.name)
+    const names = [
+      ...allEmailTools,
+      ...allAttachmentTools,
+      ...allWriteTools,
+      ...allReportTools
+    ].map((t) => t.name)
     expect(names.sort()).toEqual(
       [
         'attachment_list',
@@ -89,10 +139,19 @@ describe('builtin tool catalog — M1', () => {
         'email_flag',
         'email_get',
         'email_get_ai_fields',
+        'email_list_folders',
         'email_list_thread',
+        'email_move',
+        'email_pin',
+        'email_resync',
         'email_search',
         'email_search_attachments', // PR-2b
-        'email_search_fulltext'
+        'email_search_fulltext',
+        'email_set_ai_fields',
+        'email_set_reply_suggestion',
+        'report_get',
+        'report_list',
+        'report_run'
       ].sort()
     )
     for (const n of names) {
@@ -101,13 +160,23 @@ describe('builtin tool catalog — M1', () => {
   })
 
   test('every tool has actionable LLM-facing description (≥ 30 chars)', () => {
-    for (const t of [...allEmailTools, ...allAttachmentTools, ...allWriteTools]) {
+    for (const t of [
+      ...allEmailTools,
+      ...allAttachmentTools,
+      ...allWriteTools,
+      ...allReportTools
+    ]) {
       expect(t.description.length).toBeGreaterThanOrEqual(30)
     }
   })
 
   test('every tool has type=object inputSchema with explicit required array', () => {
-    for (const t of [...allEmailTools, ...allAttachmentTools, ...allWriteTools]) {
+    for (const t of [
+      ...allEmailTools,
+      ...allAttachmentTools,
+      ...allWriteTools,
+      ...allReportTools
+    ]) {
       const s = t.inputSchema as { type?: string; required?: unknown }
       expect(s.type).toBe('object')
       expect(Array.isArray(s.required)).toBe(true)
@@ -115,7 +184,7 @@ describe('builtin tool catalog — M1', () => {
   })
 
   test('each tool requires its primary id (internal_id / thread_id / query)', () => {
-    const tools = [...allEmailTools, ...allAttachmentTools, ...allWriteTools]
+    const tools = [...allEmailTools, ...allAttachmentTools, ...allWriteTools, ...allReportTools]
     const requirements: Record<string, string[]> = {
       email_search: [], // optional filters
       email_get: ['internal_id'],
@@ -124,11 +193,21 @@ describe('builtin tool catalog — M1', () => {
       email_search_fulltext: ['query'],
       email_search_attachments: ['query'], // PR-2b
       email_get_ai_fields: ['internal_id'],
+      email_list_folders: [], // no args — lists all folders
       attachment_list: ['internal_id'],
-      // write tools require internal_id + (for draft) body_markdown.
+      // write tools require internal_id + per-tool extra args.
       email_flag: ['internal_id'],
       email_archive: ['internal_id'],
-      email_draft_reply: ['internal_id', 'body_markdown']
+      email_draft_reply: ['internal_id', 'body_markdown'],
+      email_set_reply_suggestion: ['internal_id', 'reply_suggestion_md'],
+      email_set_ai_fields: ['internal_id'], // at-least-one validated in handler, not schema-required
+      email_pin: ['internal_id', 'pinned'],
+      email_move: ['internal_id', 'dst_imap_name'],
+      email_resync: ['internal_id'],
+      // report tools
+      report_list: [], // optional filters
+      report_get: ['report_id'],
+      report_run: ['agent_id']
     }
     for (const t of tools) {
       const expected = requirements[t.name]
@@ -139,7 +218,7 @@ describe('builtin tool catalog — M1', () => {
 })
 
 describe('createBuiltinTools — boot wiring', () => {
-  test('builds all 11 default tools (KOS off) into a fresh registry (8 read + 3 write)', () => {
+  test('builds all 20 default tools (KOS off) into a fresh registry (11 read + 9 write)', () => {
     const r = createToolRegistry()
     for (const t of createBuiltinTools(makePlatform())) r.register(t)
     expect(r.names().sort()).toEqual(
@@ -151,10 +230,19 @@ describe('createBuiltinTools — boot wiring', () => {
         'email_flag',
         'email_get',
         'email_get_ai_fields',
+        'email_list_folders',
         'email_list_thread',
+        'email_move',
+        'email_pin',
+        'email_resync',
         'email_search',
         'email_search_attachments', // PR-2b
-        'email_search_fulltext'
+        'email_search_fulltext',
+        'email_set_ai_fields',
+        'email_set_reply_suggestion',
+        'report_get',
+        'report_list',
+        'report_run'
       ].sort()
     )
   })
@@ -163,7 +251,7 @@ describe('createBuiltinTools — boot wiring', () => {
     const r = createToolRegistry()
     for (const t of createBuiltinTools(makePlatform())) r.register(t)
     const schema = r.toAnthropicSchema()
-    expect(schema).toHaveLength(11) // PR-2b: 10 → 11
+    expect(schema).toHaveLength(20)
     for (const t of schema) {
       expect(t.name).toBeTruthy()
       expect(t.description).toBeTruthy()
@@ -175,19 +263,22 @@ describe('createBuiltinTools — boot wiring', () => {
     const r = createToolRegistry()
     for (const t of createBuiltinTools(makePlatform())) r.register(t)
     const readOnly = r.toAnthropicSchema({ categories: ['read'] })
-    expect(readOnly).toHaveLength(8) // PR-2b: 7 → 8
+    // 9 email/attachment read (incl. email_list_folders) + report_list + report_get = 11
+    expect(readOnly).toHaveLength(11)
     for (const t of readOnly) {
-      expect(t.name).not.toMatch(/_flag|_archive|_draft_reply/)
+      expect(t.name).not.toMatch(
+        /_flag|_archive|_draft_reply|_pin|email_move|_resync|_set_reply|_set_ai_fields|report_run/
+      )
     }
   })
 
-  test('KOS gate — kosConfig().configured=true adds the 9 KOS tools (11 → 20)', () => {
+  test('KOS gate — kosConfig().configured=true adds the 9 KOS tools (20 → 29)', () => {
     const off = createBuiltinTools(makePlatform())
-    expect(off).toHaveLength(11)
+    expect(off).toHaveLength(20)
     const on = createBuiltinTools(
       makePlatform({ kosConfig: () => ({ configured: true, timeDecayEnabled: false }) })
     )
-    expect(on).toHaveLength(20) // 11 default + 9 KOS
+    expect(on).toHaveLength(29) // 20 default + 9 KOS
     const names = on.map((t) => t.name)
     expect(names).toContain('kos_query')
     expect(names).toContain('kos_put_page')

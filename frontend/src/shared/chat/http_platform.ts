@@ -22,11 +22,20 @@
 //   NotionAgent.notionAgentStream → POST /api/chat/notion-agent（3b-2，asyncio spawn）+ parseSse。
 //   Tool 8 读 → 委托 httpApi.email.* / attachment.list（api/types = cli.gen 别名/超集，零投影）
 //     + searchAttachments → GET /attachment/search；flagEmail → httpApi.email.flag；
-//     draftReply → throw E_NOT_IMPLEMENTED（host-local，fork 3 远程推迟）；kosCallTool/saveToKos
-//     → POST /api/chat/kos-call · /save-to-kos（3b-4）。
+//     draftReply → POST /email/draft（bodyText + quoteOriginal、不传 to/cc → 服务端推导
+//     reply-all 收件人 + 拼引用原文，davmail IMAP APPEND；远程也能建草稿）；kosCallTool/
+//     saveToKos → POST /api/chat/kos-call · /save-to-kos（3b-4）。
 
 import { request, type QueryValue } from '../api/http_client'
-import type { AIFields, MailApi, SearchResult } from '../api/types'
+import type {
+  AIFields,
+  FolderInfo,
+  MailApi,
+  ReportDetail,
+  ReportListItem,
+  ReportRunResult,
+  SearchResult
+} from '../api/types'
 import type {
   AttachmentList_AttachmentItem,
   EmailGet_EmailRecord,
@@ -44,6 +53,7 @@ import type {
   UpdateToolCallPatch
 } from './model'
 import type {
+  AiFieldsData,
   ChatInfraPlatform,
   ChatModelConfig,
   ChatModelPlatform,
@@ -52,11 +62,14 @@ import type {
   ChatRuntimeConfig,
   ChatToolDraftResult,
   ChatToolFlagPatch,
+  ChatToolFolderItem,
   ChatToolKosConfig,
   ChatToolListEmailsOpts,
   ChatToolPlatform,
+  ChatToolReportListOpts,
   ChatToolSearchOpts,
   LlmFetchRequest,
+  ReplySuggestionData,
   SaveConversationInput,
   SaveConversationResult
 } from './platform'
@@ -125,6 +138,14 @@ export const DEFAULT_HTTP_CONFIG: HttpPlatformConfig = {
 interface StreamDebounceEntry {
   latest: string
   timer: ReturnType<typeof setTimeout> | null
+}
+
+/** POST /email/draft 返回的 DraftResult data 块的相关字段（draftReply 投影为
+ *  ChatToolDraftResult）。其余字段（success/appended_uid/to_count/…）工具不读，省略。 */
+interface DraftEndpointData {
+  internal_id: number
+  drafts_folder?: string | null
+  method?: string | null
 }
 
 /** notion-agent SSE 块（`data: {json}` 行）→ ChatStreamEvent。serve-api sse_encode 把
@@ -533,18 +554,121 @@ export class HttpChatPlatform
     })
   }
 
+  // 列文件夹 → httpApi.folder.discover（GET /api/folder/discover，counts=false 避开慢的
+  // 逐文件夹 STATUS）。投影 FolderInfo → ChatToolFolderItem（只留 email_move 解析需要的
+  // imap_name / display_name + special_use / is_synced）。davmail-only：非 davmail 时
+  // serve-api 抛 → 自然 throw（工具 catch 上报错误，LLM 知道这后端不支持 move-by-folder）。
+  async listFolders(): Promise<ChatToolFolderItem[]> {
+    const result = await this.httpApi.folder.discover({ counts: false })
+    return result.folders.map((f: FolderInfo) => ({
+      imap_name: f.imap_name,
+      display_name: f.display_name,
+      special_use: f.special_use,
+      is_synced: f.is_synced ?? false
+    }))
+  }
+
   flagEmail(internalId: number, patch: ChatToolFlagPatch): Promise<unknown> {
     // electron + http 都 → 本机/远程 serve-api outbox SSoT（D1 统一 daemon 转发，零 parity）。
     return this.httpApi.email.flag(internalId, patch)
   }
 
-  // 回复草稿 = Mail.app AppleScript（host-local）→ 远程无场景，throw E_NOT_IMPLEMENTED（fork 3）。
-  draftReply(_internalId: number, _bodyMarkdown: string): Promise<ChatToolDraftResult> {
-    const err = new Error(
-      'email_draft_reply is host-local (Mail.app AppleScript) — not available on remote'
-    ) as Error & { code: string }
-    err.code = 'E_NOT_IMPLEMENTED'
-    return Promise.reject(err)
+  // 回复草稿 → POST /email/draft（davmail IMAP APPEND）。传 bodyText + quoteOriginal、
+  // 不传 to/cc → serve-api 按原邮件推导 reply-all 收件人 + 在正文下拼引用原文（等效顶部
+  // 「回复所有 + 带原文引用」）。远程/本机 renderer 均走此（不再依赖 Mail.app AppleScript）。
+  async draftReply(internalId: number, bodyMarkdown: string): Promise<ChatToolDraftResult> {
+    const data = await this._req<DraftEndpointData>('POST', '/email/draft', {
+      body: { internalId, mode: 'reply-all', bodyText: bodyMarkdown, quoteOriginal: true }
+    })
+    return {
+      internalId: data.internal_id,
+      // serve-api 无 Mail.app account 概念；drafts_folder 是草稿落地的文件夹（mailbox 类比）。
+      mailbox: data.drafts_folder ?? null,
+      accountName: null,
+      // method = 草稿创建方式（如 reply_all_internal_id），与 AppleScript 路径的 draftId 同语义。
+      draftId: data.method ?? 'reply_all'
+    }
+  }
+
+  // 写回复建议 → POST /email/{id}/reply-suggestion（MailWriteService.set_reply_suggestion
+  // 写 llm_processing.labels_json.reply_suggestion_md SSoT）。serve-api data 块是 snake_case
+  // {internal_id, reply_suggestion_md, chars} → 投影 camelCase ReplySuggestionData。
+  async setReplySuggestion(
+    internalId: number,
+    replyMarkdown: string
+  ): Promise<ReplySuggestionData> {
+    const data = await this._req<{
+      internal_id: number
+      reply_suggestion_md: string
+      chars: number
+    }>('POST', `/email/${internalId}/reply-suggestion`, {
+      body: { replySuggestionMd: replyMarkdown }
+    })
+    return {
+      internalId: data.internal_id,
+      replySuggestionMd: data.reply_suggestion_md,
+      chars: data.chars
+    }
+  }
+
+  // 覆盖 AI 分类字段 → POST /email/{id}/ai-fields（MailWriteService.set_ai_fields 写
+  // labels_json.action_type/priority + 镜像主表列 + llm_processing.status）。camelCase 投影
+  // {aiAction?,aiPriority?,aiReviewStatus?} → body（同名 camelCase）；serve-api data 块是
+  // snake_case {internal_id, ai_action, ai_priority, ai_review_status} → 投影 AiFieldsData。
+  async setAiFields(
+    internalId: number,
+    fields: { aiAction?: string; aiPriority?: string; aiReviewStatus?: string }
+  ): Promise<AiFieldsData> {
+    const body: Record<string, string> = {}
+    if (fields.aiAction !== undefined) body.aiAction = fields.aiAction
+    if (fields.aiPriority !== undefined) body.aiPriority = fields.aiPriority
+    if (fields.aiReviewStatus !== undefined) body.aiReviewStatus = fields.aiReviewStatus
+    const data = await this._req<{
+      internal_id: number
+      ai_action: string | null
+      ai_priority: string | null
+      ai_review_status: string | null
+    }>('POST', `/email/${internalId}/ai-fields`, { body })
+    return {
+      internalId: data.internal_id,
+      aiAction: data.ai_action,
+      aiPriority: data.ai_priority,
+      aiReviewStatus: data.ai_review_status
+    }
+  }
+
+  // 置顶 / 取消置顶 → POST /email/{id}/pin（MailWriteService.set_pin）。结果工具直接 as
+  // 投影 → unknown 足够（不读字段塞回 LLM）。
+  setPin(internalId: number, pinned: boolean): Promise<unknown> {
+    return this._req<unknown>('POST', `/email/${internalId}/pin`, { body: { pinned } })
+  }
+
+  // 移动到任意文件夹 → POST /email/{id}/move（davmail IMAP MOVE，MailWriteService.move_to_folder）。
+  moveEmail(internalId: number, dstImapName: string): Promise<unknown> {
+    return this._req<unknown>('POST', `/email/${internalId}/move`, { body: { dstImapName } })
+  }
+
+  // 重传到 Notion → POST /email/{id}/resync（MailWriteService.resync）。
+  resyncEmail(internalId: number): Promise<unknown> {
+    return this._req<unknown>('POST', `/email/${internalId}/resync`, { body: {} })
+  }
+
+  // 归档 → POST /email/{id}/archive（davmail IMAP move→Archive，MailWriteService.archive）。
+  archiveEmail(internalId: number): Promise<unknown> {
+    return this._req<unknown>('POST', `/email/${internalId}/archive`, { body: {} })
+  }
+
+  // ── 报告：读委托 httpApi.report.*（serve-api /api/reports 端点已就绪）──────────
+  listReports(opts: ChatToolReportListOpts): Promise<ReportListItem[]> {
+    return this.httpApi.report.list(opts)
+  }
+
+  getReport(reportId: string): Promise<ReportDetail | null> {
+    return this.httpApi.report.get(reportId)
+  }
+
+  runReport(agentId: string, cadence?: 'daily' | 'weekly' | 'monthly'): Promise<ReportRunResult> {
+    return this.httpApi.report.runNow(agentId, cadence ? { cadence } : undefined)
   }
 
   kosConfig(): ChatToolKosConfig {
