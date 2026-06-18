@@ -397,7 +397,7 @@
       "errToast": "Action failed"
     },
     "ai": {
-      "understand": "✨ AI understand “{query}”",
+      "understand": "AI understand “{query}”",
       "understandHint": "Let AI turn this into search syntax",
       "loading": "AI parsing…",
       "parsedAs": "AI parsed as: {dsl}",

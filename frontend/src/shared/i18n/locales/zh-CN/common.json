@@ -397,7 +397,7 @@
       "errToast": "动作失败"
     },
     "ai": {
-      "understand": "✨ AI 理解「{query}」",
+      "understand": "AI 理解「{query}」",
       "understandHint": "用 AI 把这句话翻成搜索语法",
       "loading": "AI 解析中…",
       "parsedAs": "AI 解析为: {dsl}",
