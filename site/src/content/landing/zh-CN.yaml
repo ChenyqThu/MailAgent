@@ -66,9 +66,9 @@ features:
     - kicker: Action
       title: 下一步动作建议
       body: 「需要决策」「等待拍板」「可归档」——AI 不只告诉你这封讲什么，还告诉你该拿它怎么办。
-    - kicker: Full-text · FTS5
-      title: 全文搜索，瞬时命中
-      body: 本地 FTS5 索引 9,000+ 封邮件，⌘K 起手，毫秒级返回。KOS 不可达时也能优雅降级。
+    - kicker: Full-text · AI 搜索
+      title: 搜得到，也搜得准
+      body: 本地 FTS5 索引正文与附件文字，⌘K 起手毫秒级返回；Gmail 风格字段过滤、中文子串命中，搜不到就一句话交给 AI 智能搜索——人工与 AI 同一引擎，结果一致。
 
 aiFields:
   eyebrow: AI Fields

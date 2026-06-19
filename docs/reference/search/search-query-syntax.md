@@ -1,8 +1,10 @@
 # 邮件搜索查询语法规格（Search Query DSL v1）
 
-> 本文档是 Python（`src/repository/`）与 TypeScript（`frontend/src/`）两份搜索实现的**共同契约**。
-> 两端必须通过同一份行为夹具 `tests/fixtures/search_query_behavior.json` 的全部用例。
-> 改语法 = 先改本文档 + 夹具，再同步两端实现。
+> **架构现状（2026-06，Phase A+B 后 / v0.12.0）**：搜索已**收敛为单一 Python 引擎 CORE#1**（`src/repository/email_repository.py` + `src/repository/search_query.py`）。
+> 旧 TypeScript 引擎 CORE#2（`frontend/src/.../search_query_parser.ts`）在 Phase B（G-B1a）**整体删除**；桌面 ⌘K 命令面板经 **loopback serve-api**（`127.0.0.1:8200` → `GET /api/email/search`，token 由 chat_local_bridge webRequest 注入）打到同一 Python 核——
+> 因此**人工搜索与 AI agentic 搜索结果结构性恒一致**（同引擎，而非靠夹具对齐两份实现）。agentic 搜索（自然语言 → DSL → 引擎）的 harness 见 [`llm-agent/agent-harness-kos.md`](../llm-agent/agent-harness-kos.md)。
+> 本文档是该单一引擎的**权威规格**。行为锚 = `tests/repository/test_search_query_behavior.py`（读 `tests/fixtures/search_query_behavior.json`；旧 TS vitest runner 已随 CORE#2 删除）。
+> 改语法 = 先改本文档 + 夹具，再改引擎。
 
 ## 1. 目标
 
@@ -94,7 +96,7 @@ serve-api `GET /api/email/search?q=`、CLI `mailagent email search`、chat tools
 `mode='raw'`（CLI `--raw` / API `raw=true` / SearchOpts `mode:'raw'`）→ **跳过全部语法解析**，
 query 原样下放 FTS5 MATCH（现状行为，高级 FTS5 语法 NEAR/列过滤走这里）。
 
-## 3. 解析流程（两端一致）
+## 3. 解析流程（单核）
 
 1. `mode='raw'` → 直通，结束。
 2. tokenize：按空白切分，但**引号内的空白不切**（支持 `from:"a b"` 与 `"a b"`；未闭合引号 → 该引号视为普通字符 + warning）。
@@ -193,10 +195,13 @@ date-only 的 `until <= '2026-06-01'` 还会漏掉当天全部邮件。因此：
 - **自我收敛信号（Phase A G-A2，additive）**：
   - `total_matches: number`（前端 `SearchResult` / serve-api `data` / pydantic `SearchResult`）= **本次查询命中数**（= `items.length`，≤ 请求 `limit`）。**不是**语料总量 `total_indexed`——后者继续用于命令面板 footer「N of total_indexed」，但不再作为 agentic 搜索的命中信号喂给模型。CLI envelope 沿用既有 `meta.total_hits`（同语义，未重命名）。
   - `has_more: boolean`（`SearchResult` / serve-api `data` + `meta` / CLI `meta` / pydantic）= 是否还有超出本次 `limit` 的命中。由 `search_email_bodies_with_meta` / 前端 `searchEmails` 的 **`limit + 1` 探针**精确判定（多取 1 条检测溢出，再裁回 `limit`；返回的 `items` 与不探针时的 top-`limit` **逐条一致**，零结果回归）。
-  - 用途：搜索 agent 据 `has_more`/工具 `hint` 自我收敛——命中太多就加 `from:/after:/subject:` 等 filter 缩小，0 命中就放宽重试。两端（Python 引擎 + TS 引擎）同步实现。
+  - 用途：搜索 agent 据 `has_more`/工具 `hint` 自我收敛——命中太多就加 `from:/after:/subject:` 等 filter 缩小，0 命中就放宽重试。由单核 CORE#1 实现，人工搜索与 agentic 搜索共用同一信号（Phase B 收敛后无需双端对齐）。
+- **AI 命中投影（Phase B MED-2）**：返回结构补 `ai_priority` / `lang`（5 条执行路径统一经 `_ai_fields_select_join` 投影，旧库无列时 schema-probe 降级），让命令面板渲染优先级 chip + 语言 pip，桌面经 loopback 后与本地直查逐字段一致。
 - FTS5 运行期语法错误维持现状：log warning + 返回空列表。parser 自身**永不抛异常**——任何畸形输入最坏退化为文本搜索。
 
-## 6. 跨语言一致性（行为夹具）
+## 6. 行为夹具（单核回归锚）
+
+> Phase B 收敛单核后，本节从「跨语言（Python↔TS）一致性」降级为**单核回归锚**——TS 引擎已删除，夹具只锚定 Python CORE#1 的行为不漂移。
 
 `tests/fixtures/search_query_behavior.json`（repo 根，唯一真源）：
 
@@ -218,7 +223,7 @@ date-only 的 `until <= '2026-06-01'` 还会漏掉当天全部邮件。因此：
 ```
 
 - Python：pytest runner 建 in-memory SQLite（最小 schema：email_metadata + email_body_fts(contentful, rowid=internal_id) + email_attachment + email_attachment_text + email_attachment_fts），灌 emails；`attachments[].text_content` 存在时写入 `email_attachment_text` 并索引到 `email_attachment_fts`，逐 case 跑 search、断言。
-- TS：vitest runner 用 better-sqlite3 `:memory:` 同样建表灌数据跑断言，**读同一份 JSON 文件**（相对路径 `../../tests/fixtures/...`）。
+- TS：~~vitest runner~~ **Phase B（G-B1a）已删除**——桌面 ⌘K 经 loopback serve-api 复用 Python 引擎，无独立 TS 检索代码，故无需 TS 夹具 runner。夹具现仅由 Python runner 消费。
 - 夹具必须覆盖：每个字段至少 1 例、别名、引号值、否定（字段/文本/纯否定）、OR（字段同类/文本同类/跨类降级）、未知字段降级文本、空值丢弃、date-only 边界（当天含）、时区混存数据的日期过滤、newer_than 相对日期、纯过滤排序、列级 FTS（`body:` / `subject~:` / `sender~:`）、收件人 FTS（`to~:` / `cc~:` / `from~:` 命中 + 收件人词 + 正文词 AND + **裸词不命中收件人专属 token** 守卫 + 负向收件人），附件正文融合（only attachment / body+attachment / metadata filter 传播）、零语法 fast-path 行为不变（与现状对照例）、CJK smart 不回归、与结构化参数 merge。
 
 ## 7. 示例
@@ -243,7 +248,7 @@ date-only 的 `until <= '2026-06-01'` 还会漏掉当天全部邮件。因此：
   全文/相关度时用 T8 新增的 `to~:` / `cc~:` / `from~:`（并行 `email_recipient_fts` 表，见 §10）。
 - 附件融合只在 smart 正向全文路径启用；`mode='raw'` 保持正文 FTS5 逃生门。列级 FTS term 在附件分支作为 `email_body_fts` 门控，只有列级 term、没有裸全文词时不查询附件正文。
 - jieba 词典级中文分词（更重，双运行时一致性风险；trigram 已覆盖子串搜索，见 §9）。**裸全文中文子串**已由 §9 trigram 路由解决（flag-gated）；但**列级 FTS** `body:` / `subject~:` / `sender~:` 仍走 `unicode61`，对中文非前缀子串仍有限制（例如 `body:产品` 不保证命中正文 token `本周产品评审...`）。
-- 保存搜索/搜索历史（前端后续迭代）。
+- ~~保存搜索/搜索历史~~ **已在 Phase B（G-B3）落地**：⌘K 命令面板 localStorage 搜索历史（去重/上限 8）+ 收藏搜索 CRUD + facet chips（`is:unread` / `has:attachment`，引号感知 token toggle），见 `frontend/src/shared/state/search-history.ts` + `frontend/src/shared/lib/dsl_token.ts`。
 - 纯过滤查询是 metadata 全表扫描（7 万行 ~30-60ms 可接受；变慢再加索引/物化）。
 
 ## 9. CJK 中文分词（T7 并行 trigram 表，flag-gated）
@@ -254,7 +259,7 @@ date-only 的 `until <= '2026-06-01'` 还会漏掉当天全部邮件。因此：
 
 - **主表 `email_body_fts`（unicode61）不动** → 英文 / 已有路径**逐字节零回归**。
 - 新增并行 **contentful** FTS5 表 `email_body_fts_trigram`（`tokenize='trigram'`，DB v24），由 4 个 trigger（insert/delete/update on `email_body` + meta_update on `email_metadata`）自动同步。contentful（非 contentless）是因为 2 字中文要靠 `LIKE` 兜底，需读列值。
-- **灰度开关 `SEARCH_TRIGRAM_ENABLED`（默认 `False`）**：关闭时搜索逐字节同现状（unicode61 + smart transform）；`True` 才启用 CJK 路由。
+- **开关 `SEARCH_TRIGRAM_ENABLED`（Phase A 起默认 `True`）**：开启时裸全文 CJK query 走 trigram 子串路由（§9.1）；设 `False` 则搜索逐字节退回旧路径（unicode61 + smart transform）。
 
 ### 9.1 路由规则（仅 flag=True + 裸全文 query 含 CJK 时生效）
 

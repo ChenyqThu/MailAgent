@@ -75,11 +75,13 @@ features:
       body: >-
         "Needs a decision," "awaiting sign-off," "archive" — it tells you not
         just what an email says, but what to do with it.
-    - kicker: Full-text · FTS5
-      title: Instant full-text search
+    - kicker: Full-text · AI search
+      title: Find it — and find it precisely
       body: >-
-        A local FTS5 index over 9,000+ emails. Hit ⌘K for millisecond results —
-        and a graceful fallback when KOS is offline.
+        A local FTS5 index over email bodies and attachment text. Hit ⌘K for
+        millisecond results, Gmail-style field filters and Chinese substring
+        matching — and when keywords fall short, hand it to AI search in plain
+        language. Manual and AI share one engine, so the results match.
 
 aiFields:
   eyebrow: AI Fields

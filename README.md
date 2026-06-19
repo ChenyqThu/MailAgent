@@ -21,7 +21,8 @@
 | **会议邀请识别** | 邮件中的 .ics | 自动解析会议邀请创建日程 | 常驻 |
 | **双向状态同步** | Mail.app ↔ SQLite ↔ Notion | 已读/旗标/处理状态双向同步（Sprint15 起走 outbox） | 常驻 |
 | **AI 分类处理** | Notion Automation 或本地 LLM | Notion Email Agent 或本地 Anthropic 兼容 LLM（见 [docs/reference/llm-agent/LLM_AGENT_SETUP.md](./docs/reference/llm-agent/LLM_AGENT_SETUP.md)） | 可选 |
-| **全文搜索** | SQLite FTS5 | 邮件正文 + 附件文本化（PDF/docx/pptx/xlsx）全文检索，中文 smart wrapper | 随 v4 |
+| **全文搜索** | SQLite FTS5（多模式） | ⌘K 命令面板：正文 + 附件文本化（PDF/docx/pptx/xlsx）全文检索，Gmail 风格字段 DSL（from/subject/is/has/日期…），中文 trigram 子串，收件人 FTS，RRF 融合排序 | 随 v4 |
+| **AI 智能搜索** | Custom Agent（复用 chat harness） | 自然语言提问 → agent 多轮检索 + 候选池防幻觉收敛；与人工搜索**同一引擎**（单核 CORE#1，桌面经 loopback serve-api） | 可选 |
 | **MailAgent Web（前端）** | Electron 桌面 App | 收件箱 / 详情 / AI 多轮 chat / 回复转发撰写 / 一键翻译 / 灵动岛 / 设置 | 单独安装 |
 | **KOS 知识库对接** | Jarvis KOS v2 (gbrain) | 邮件推 `/ingest` 入知识图谱 + chat 跨域检索 | 关 |
 | **灵动岛通知** | ping-island.app | AI 智能通知 + ack 中心（推送 + 一键操作） | 需装 app |
