@@ -646,6 +646,124 @@ class TestSearchEmailBodies:
         assert not any(h.internal_id == 600 for h in repo.search_email_bodies("uniqueterm6", limit=10))
 
 
+class TestSearchHitAiFields:
+    """MED-2: 搜索命中补投影 ai_priority(raw) + lang(raw)。
+
+    收敛单核后桌面命令面板搜索经 serve-api Python 核 → 旧 TS 投影的优先级 chip / lang pip
+    曾丢失。这里锁住: ① email_metadata.ai_priority(v14 列) raw 串落到 hit.ai_priority;
+    ② llm_processing.labels_json.language raw 串落到 hit.lang; ③ 无 llm_processing 表
+    (SyncStore-only schema) graceful degrade lang=None 不崩。映射成 wire enum 在 serve-api
+    出口 (test_envelope_and_email 覆盖), 这里只验 raw 串透传到 dataclass。
+    """
+
+    def _create_llm_processing(self, db: Path) -> None:
+        from src.llm_agent.store import LLMProcessingStore
+
+        LLMProcessingStore(str(db))  # 触发建 llm_processing 表
+
+    def test_ai_priority_raw_projected_from_main_col(
+        self, repo: EmailRepository, fresh_db: Path
+    ):
+        # 无 llm_processing 表 (SyncStore-only) → priority 从主表列, lang None。
+        _insert_metadata_full(
+            fresh_db, 700,
+            subject="Priority hit", sender="p@example.com", mailbox="收件箱",
+        )
+        repo.commit_email_with_body(
+            700,
+            BodyPayload(html="<p>x</p>", markdown="prioneedle body content",
+                        body_format="html"),
+            [],
+        )
+        conn = sqlite3.connect(str(fresh_db))
+        conn.execute(
+            "UPDATE email_metadata SET ai_priority = ? WHERE internal_id = ?",
+            ("🔴 紧急", 700),
+        )
+        conn.commit()
+        conn.close()
+
+        hits = repo.search_email_bodies("prioneedle", limit=10)
+        hit = next(h for h in hits if h.internal_id == 700)
+        assert hit.ai_priority == "🔴 紧急"  # raw 串 (serve-api 出口映射成 'critical')
+        assert hit.lang is None  # 无 llm_processing → lang 降级
+
+    def test_lang_raw_projected_from_labels_json(
+        self, repo: EmailRepository, fresh_db: Path
+    ):
+        self._create_llm_processing(fresh_db)
+        _insert_metadata_full(
+            fresh_db, 710,
+            subject="Lang hit", sender="l@example.com", mailbox="收件箱",
+        )
+        repo.commit_email_with_body(
+            710,
+            BodyPayload(html="<p>x</p>", markdown="langneedle body content",
+                        body_format="html"),
+            [],
+        )
+        conn = sqlite3.connect(str(fresh_db))
+        conn.execute(
+            "INSERT INTO llm_processing (internal_id, status, labels_json) "
+            "VALUES (?, 'success', ?)",
+            (710, '{"language": "English", "priority": "🟡 重要"}'),
+        )
+        conn.commit()
+        conn.close()
+
+        # 实例级 memo 已缓存「无 llm_processing」→ 用新 repo 实例重新探测。
+        repo2 = EmailRepository(db_path=str(fresh_db),
+                                attachment_store=repo.attachment_store)
+        hits = repo2.search_email_bodies("langneedle", limit=10)
+        hit = next(h for h in hits if h.internal_id == 710)
+        assert hit.lang == "English"  # raw 串 (serve-api 出口映射成 'en')
+        assert hit.ai_priority == "🟡 重要"  # labels_json fallback (主表列空)
+
+
+class TestFilterIdsByMetadataChunking:
+    """NS-3: 候选 id 集 IN(...) 分块 (>900) 不超 SQLite 参数上限 + 不丢任何 id (全召回)。
+
+    trigram 路径 per-term 全召回 (不截断) → 候选集可能数万 → IN(<all ids>) 会
+    OperationalError ('too many SQL variables')。_filter_ids_by_metadata 分块 union。
+    """
+
+    def test_chunked_filter_no_predicates_returns_all(
+        self, repo: EmailRepository, fresh_db: Path
+    ):
+        conn = repo._connect()
+        try:
+            ids = set(range(1, 2001))  # 2000 > 900*2 → 多块
+            assert repo._filter_ids_by_metadata(conn, ids, []) == ids
+        finally:
+            conn.close()
+
+    def test_chunked_filter_with_predicate_keeps_all_matches(
+        self, repo: EmailRepository, fresh_db: Path
+    ):
+        from src.repository.search_query import build_structured_filter_predicates
+
+        conn = repo._connect()
+        try:
+            now = time.time()
+            for i in range(1, 1501):  # 1500 > 900 → 触发分块
+                conn.execute(
+                    "INSERT INTO email_metadata (internal_id, sync_status, mailbox, "
+                    "subject, sender, date_received, created_at, updated_at) "
+                    "VALUES (?, 'synced', ?, ?, ?, ?, ?, ?)",
+                    (i, "收件箱" if i % 2 == 0 else "发件箱", f"sub{i}",
+                     "s@x.com", "2026-05-15T10:00:00+08:00", now, now),
+                )
+            conn.commit()
+            ids = set(range(1, 1501))
+            filters, _ = build_structured_filter_predicates(mailbox="收件箱")
+            allowed = repo._filter_ids_by_metadata(conn, ids, filters)
+            # 收件箱 = 偶数 internal_id = 750 封, 跨块全召回, 一个不丢。
+            assert len(allowed) == 750
+            assert all(i % 2 == 0 for i in allowed)
+        finally:
+            conn.close()
+
+
 # ============================================================
 # PR-2a: smart_query_transform + search_email_bodies_smart
 # ============================================================

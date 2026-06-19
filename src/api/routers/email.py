@@ -40,6 +40,7 @@ update-flag)。
 from __future__ import annotations
 
 import asyncio
+import time as _time
 from typing import TYPE_CHECKING, Any, Optional
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -97,23 +98,42 @@ def _parse_include(include: str) -> set[str]:
     return parts
 
 
+# G-B1a P2: total_indexed 进程级 TTL 缓存 (修每请求 ~35ms COUNT 税)。
+# FTS5 contentful COUNT(*) 非 O(1)，每 /search 请求跑一次 ≈35ms；TS 进程内核
+# 路径缓存 ~1ms。收敛单核后桌面搜索改走本端点 ⇒ 按键延迟敏感，故缓存。
+# 语料数变化慢，30s 陈旧对 footer 数字无害 (同 TS 缓存语义)；读取竞态只会多算
+# 一次 COUNT，良性。
+_COUNT_CACHE: dict[str, "float | int | None"] = {"value": None, "ts": 0.0}
+_COUNT_TTL_S = 30.0
+
+
 def _count_fts_indexed(repo: "EmailRepository") -> int:
-    """`SELECT count(*) FROM email_body_fts` — SearchResult.total_indexed 用。
+    """`SELECT count(*) FROM email_body_fts` — SearchResult.total_indexed 用 (TTL 缓存)。
 
     repo 无现成 helper (实现规格 gotcha #3), 用 repo._connect() 起一个短命连接
     (与 repo 内部所有读一致: per-call open/close, WAL 下与 mail-sync writer 并发安全)。
     FTS5 表缺失 / 异常时回 0, 不让搜索因 count 失败而 500。
+    结果进程级缓存 30s (P2): 同 query 高频按键不重复跑昂贵的 contentful COUNT。
     """
     import sqlite3
+
+    now = _time.monotonic()
+    cached = _COUNT_CACHE["value"]
+    if cached is not None and (now - float(_COUNT_CACHE["ts"] or 0.0)) < _COUNT_TTL_S:
+        return int(cached)
 
     conn = repo._connect()
     try:
         row = conn.execute("SELECT count(*) AS c FROM email_body_fts").fetchone()
-        return int(row["c"]) if row else 0
+        val = int(row["c"]) if row else 0
     except sqlite3.OperationalError:
-        return 0
+        val = 0
     finally:
         conn.close()
+
+    _COUNT_CACHE["value"] = val
+    _COUNT_CACHE["ts"] = now
+    return val
 
 
 # ---------------------------------------------------------------------------
@@ -339,11 +359,11 @@ async def get_email_body(
 async def search_emails(
     request: Request,
     repo: "EmailRepository" = Depends(get_repository),
-    q: str = Query(..., description="自然语言关键词，或 from:/subject:/after:/has:attachment 等查询语法"),
+    q: str = Query("", description="自然语言关键词，或 from:/subject:/after:/has:attachment 等查询语法 (空=仅取 footer)"),
     mailbox: Optional[str] = Query(None),
     since: Optional[str] = Query(None, description="YYYY-MM-DD"),
     until: Optional[str] = Query(None, description="YYYY-MM-DD"),
-    limit: int = Query(50, ge=1, le=SEARCH_LIMIT_MAX),
+    limit: int = Query(50, ge=0, le=SEARCH_LIMIT_MAX),
     raw: bool = Query(False, description="true=直传 FTS5; false(默认)=查询语法 + CJK smart"),
 ):
     """FTS5 全文搜索邮件正文 + subject + sender。
@@ -355,13 +375,44 @@ async def search_emails(
     transformed_query?, parse_warnings?} (镜像 CLI `email search` meta)。
     FTS 语法错误 → 空命中 (repo 内部吞掉)。
 
+    G-B1a P1 (收敛单核, footer parity): 桌面搜索框改走本端点后, 空 query / limit==0
+    是「仅取 total_indexed 填 footer」的合法路径 (CommandPalette 空查询发
+    ``{query:'', limit:0}``)。空 q 或 limit==0 → 早返回 footer-only 形状
+    (items:[], total_indexed, total_matches:0, has_more:False), 不跑检索 / 不发
+    transformed_query / parse_warnings, 与 TS 空路径一致。
+
     A5 (故意偏离 cli-schema): 本端点 ``data`` 是 SearchResult **对象** (含 total_indexed
     等), **非** CLI `email search` emit 的命中数组 —— 因前端 types.ts EmailApi.search
     返回 SearchResult。未来的 schema-conformance 测试勿据 cli-schema 数组形误报本端点。
     """
+    mode = "raw" if raw else "smart"
+
+    # G-B1a P1: 空 query / limit==0 → footer-only 早返回 (不跑检索)。
+    if not q.strip() or limit == 0:
+        total_indexed = _count_fts_indexed(repo)
+        data: dict[str, Any] = {
+            "items": [],
+            "total_indexed": total_indexed,
+            "total_matches": 0,
+            "has_more": False,
+            "mode": mode,
+        }
+        meta_extra: dict[str, Any] = {
+            "query": q,
+            "mode": mode,
+            "total_hits": 0,
+            "limit": limit,
+            "count": 0,
+            "total_indexed": total_indexed,
+            "has_more": False,
+        }
+        return success_envelope(
+            data, request=request, source="sqlite", meta_extra=meta_extra
+        )
+
     search_result = repo.search_email_bodies_with_meta(
         q,
-        mode="raw" if raw else "smart",
+        mode=mode,
         limit=limit,
         mailbox=mailbox,
         since_date=since,
@@ -369,6 +420,10 @@ async def search_emails(
     )
     hits = search_result.hits
     transformed_query = search_result.transformed_query
+
+    # MED-2: 复用 email_views 的 priority/language 映射 (镜像 ai_mapping.ts), 不另造枚举。
+    # 函数内 import 破 email ↔ email_views 模块级循环 (两者都被 app 批量 import)。
+    from src.api.routers.email_views import _map_language, _map_priority
 
     items = [
         {
@@ -383,11 +438,15 @@ async def search_emails(
             "notion_url": hit.notion_url,
             "source": hit.source,
             "filename": hit.filename,
+            # MED-2: raw priority/lang 串 → wire enum (镜像 ai_mapping.ts / 旧 TS 搜索)。
+            # 复用 email_views 的 _map_priority/_map_language, 不另造枚举。命令面板
+            # EmailHitRow 据此渲染优先级 chip + lang pip。
+            "ai_priority": _map_priority(hit.ai_priority),
+            "lang": _map_language(hit.lang),
         }
         for hit in hits
     ]
 
-    mode = "raw" if raw else "smart"
     total_indexed = _count_fts_indexed(repo)
     # Phase A G-A2: 本次命中数 (= len(items), ≤ limit) + 是否还有更多 (repo limit+1 探针)。
     # total_matches 取代 total_indexed (语料总量) 作搜索 agent 的自我收敛信号。
@@ -395,7 +454,7 @@ async def search_emails(
     has_more = search_result.has_more
     # data = 前端 SearchResult 形状 (items + total_indexed + total_matches + has_more +
     # transformed_query? + mode)。
-    data: dict[str, Any] = {
+    data = {
         "items": items,
         "total_indexed": total_indexed,
         "total_matches": total_matches,
@@ -408,7 +467,7 @@ async def search_emails(
     if search_result.parse_warnings:
         data["parse_warnings"] = search_result.parse_warnings
 
-    meta_extra: dict[str, Any] = {
+    meta_extra = {
         "query": q,
         "mode": mode,
         "total_hits": len(items),

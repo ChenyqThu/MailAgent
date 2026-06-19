@@ -240,3 +240,33 @@ describe('HttpApi — 远程 config 写方法仍 notImplemented (reject, 不 fet
     expect(fetchMock).not.toHaveBeenCalled()
   })
 })
+
+// MED-1: HttpApi.email.search 必须把 SearchOpts.mode 映射成 serve-api 的 raw 参数,
+// 否则 mailApi.email.search({mode:'raw'}) 会被当 smart (DSL 解析), 丢失 raw 逃生门。
+describe('HttpApi — email.search mode→raw 映射', () => {
+  const api = new HttpApi('/api')
+
+  test("mode:'raw' → query 带 raw=true", async () => {
+    fetchMock.mockResolvedValue(
+      envelopeResponse({ items: [], total_indexed: 0, total_matches: 0, has_more: false })
+    )
+    await api.email.search({ query: 'redis', mode: 'raw' })
+    expect(calledUrl()).toContain('raw=true')
+  })
+
+  test("mode:'smart' → 不带 raw 参数 (默认 smart)", async () => {
+    fetchMock.mockResolvedValue(
+      envelopeResponse({ items: [], total_indexed: 0, total_matches: 0, has_more: false })
+    )
+    await api.email.search({ query: 'redis', mode: 'smart' })
+    expect(calledUrl()).not.toContain('raw=')
+  })
+
+  test('未传 mode → 不带 raw 参数', async () => {
+    fetchMock.mockResolvedValue(
+      envelopeResponse({ items: [], total_indexed: 0, total_matches: 0, has_more: false })
+    )
+    await api.email.search({ query: 'redis' })
+    expect(calledUrl()).not.toContain('raw=')
+  })
+})

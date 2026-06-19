@@ -423,6 +423,21 @@
       "errAgent": "AI search error — try again or use search syntax directly",
       "errGeneric": "AI search failed — try again or use search syntax directly"
     },
+    "facet": {
+      "unread": "Unread",
+      "hasAttachment": "Has attachment"
+    },
+    "history": {
+      "title": "Recent searches",
+      "clear": "Clear",
+      "remove": "Remove from history"
+    },
+    "saved": {
+      "title": "Saved searches",
+      "save": "Save search",
+      "savedToast": "Search saved",
+      "remove": "Remove saved search"
+    },
     "kbd": {
       "navigate": "navigate",
       "selectGroup": "select group",

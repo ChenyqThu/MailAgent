@@ -297,10 +297,37 @@ def test_email_search_invalid_fts_syntax_empty_not_500(client):
     assert r.json()["data"]["items"] == []
 
 
-def test_email_search_missing_q_422(client):
-    # q is a required Query param → FastAPI 422.
+def test_email_search_empty_q_footer_only(client):
+    # G-B1a P1: q is optional (default "") — empty/missing q is the legal footer-only
+    # path (CommandPalette sends {query:'', limit:0} to populate total_indexed).
+    # No retrieval runs; shape = {items:[], total_indexed, total_matches:0, has_more:False}.
     r = client.get("/api/email/search")
-    assert r.status_code == 422
+    assert r.status_code == 200
+    body = r.json()
+    _assert_success_envelope(body)
+    data = body["data"]
+    assert data["items"] == []
+    assert data["total_matches"] == 0
+    assert data["has_more"] is False
+    assert data["total_indexed"] >= 1
+    assert data["mode"] == "smart"
+    # footer-only path never emits transformed_query / parse_warnings.
+    assert "transformed_query" not in data
+    assert "parse_warnings" not in data
+    meta = body["meta"]
+    assert meta["total_hits"] == 0
+    assert meta["count"] == 0
+
+
+def test_email_search_limit_zero_footer_only(client):
+    # limit==0 (ge=0 allowed) → footer-only even with a non-empty query.
+    r = client.get("/api/email/search", params={"q": "redis", "limit": 0})
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data["items"] == []
+    assert data["total_matches"] == 0
+    assert data["has_more"] is False
+    assert data["total_indexed"] >= 1
 
 
 # ---------------------------------------------------------------------------

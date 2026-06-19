@@ -215,13 +215,16 @@ export class HttpApi implements MailApi {
     search: (opts: SearchOpts): Promise<SearchResult> =>
       // NOTE: param is `q` (not `query`), and `since/until` (not sinceDate/
       // untilDate) on this endpoint. Returns the SearchResult shape directly.
+      // `mode:'raw'` → serve-api `raw=true` (跳过 DSL 解析, 直传 FTS5); `smart`/
+      // 未传 → 省略 raw (默认 smart)。req query builder 丢 undefined。
       this.req<SearchResult>('GET', '/email/search', {
         query: {
           q: opts.query,
           mailbox: opts.mailbox,
           since: opts.since,
           until: opts.until,
-          limit: opts.limit
+          limit: opts.limit,
+          raw: opts.mode === 'raw' ? true : undefined
         }
       }),
 

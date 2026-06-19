@@ -545,6 +545,26 @@ class SyncStore:
                        COALESCE((SELECT sender  FROM email_metadata WHERE internal_id = NEW.internal_id), '');
             END
         """)
+        # NS-5: 主表 email_body_fts 历史隐患 —— subject/sender 改在 email_metadata 上时
+        # 主表 FTS 不更新 → 按 subject/sender 搜可能命中陈旧值。补 meta_update trigger
+        # (与 email_body_fts_trigram_meta_update 对齐)。无条件 CREATE IF NOT EXISTS,
+        # 每次 init 幂等创建, 无需 bump DB_VERSION。仅当该 internal_id 已有 body 行时才
+        # re-sync (无 body → 无 FTS 行)。不做全量回填 (既有 stale 行罕见且 pre-existing,
+        # 不值 7 万行 re-sync)。
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS email_body_fts_meta_update
+            AFTER UPDATE OF subject, sender ON email_metadata
+            WHEN EXISTS (SELECT 1 FROM email_body WHERE internal_id = NEW.internal_id)
+            BEGIN
+                DELETE FROM email_body_fts WHERE rowid = NEW.internal_id;
+                INSERT INTO email_body_fts(rowid, body_markdown, subject, sender)
+                SELECT NEW.internal_id,
+                       COALESCE(b.body_markdown, ''),
+                       COALESCE(NEW.subject, ''),
+                       COALESCE(NEW.sender, '')
+                  FROM email_body b WHERE b.internal_id = NEW.internal_id;
+            END
+        """)
 
         # 首次启用 reindex：把已有 email_body 行推入 FTS（migration 友好，
         # 已存在行不会重复写：用 NOT EXISTS 防重，幂等）

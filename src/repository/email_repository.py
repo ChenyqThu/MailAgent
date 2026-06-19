@@ -13,6 +13,7 @@ from __future__ import annotations
 import sqlite3
 import time
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -165,6 +166,11 @@ class EmailSearchHit:
     notion_url: Optional[str] = None
     source: str = "body"
     filename: Optional[str] = None
+    # MED-2: 命令面板 EmailHitRow 渲染优先级 chip + lang pip 用。**raw 串**
+    # (emoji-中文 priority / 'English' 等) —— serve-api 出口经 _map_priority /
+    # _map_language 映射成 wire enum (与旧 TS ai_mapping.ts 一致)；CLI 不投影。
+    ai_priority: Optional[str] = None
+    lang: Optional[str] = None
 
 
 @dataclass
@@ -387,6 +393,10 @@ _RRF_K = 60.0
 _RRF_FETCH_MULTIPLIER = 4
 _RRF_FETCH_MIN_EXTRA = 50
 _RRF_FETCH_MAX = 1000
+# NS-3: 候选 id 集 IN(...) 的分块大小。trigram 路径全召回 per-term 候选 (大语料 2-3 字
+# 中文可命中数万行), 之后 IN(<all ids>) 套 metadata 过滤 / 拼 hit; 超 SQLite 默认参数
+# 上限 (999) 会 OperationalError。分块 (≤900 / 批) union 结果, 不丢任何 id (全召回保持)。
+_IN_CHUNK_SIZE = 900
 
 
 # ============================================================
@@ -599,6 +609,11 @@ class EmailRepository:
         # (默认 False; 读 config 失败/缺 env → False, 保证测试 / CLI 无 .env 也能起)。
         # 显式传 True/False → 测试 / caller 直控 (per-case trigram fixture 用)。
         self._trigram_enabled_override = trigram_enabled
+        # MED-2: AI 投影 schema 探测的实例级 memo (旧/裸/测试库可能无 llm_processing 表 /
+        # email_metadata.ai_priority v14 列)。schema 进程内静态 (迁移在 init 时已跑完) →
+        # 首次探测后缓存, 免每次搜索重查 sqlite_master / pragma。
+        self._has_llm_processing: Optional[bool] = None
+        self._has_ai_priority_col: Optional[bool] = None
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self.db_path), timeout=30.0)
@@ -1299,9 +1314,9 @@ class EmailRepository:
                    m.mailbox,
                    m.notion_page_id,
                    snippet(email_body_fts, 0, '<mark>', '</mark>', '...', 16) AS snippet,
-                   bm25(email_body_fts, 1.0, 5.0, 2.0) AS rank
+                   bm25(email_body_fts, 1.0, 5.0, 2.0) AS rank__AI_SELECT__
               FROM email_body_fts
-              JOIN email_metadata m ON m.internal_id = email_body_fts.rowid
+              JOIN email_metadata m ON m.internal_id = email_body_fts.rowid__AI_JOIN__
              WHERE email_body_fts MATCH ?
         """
         params: list = [query]
@@ -1369,7 +1384,9 @@ class EmailRepository:
             # 每个 term 一个有序候选 internal_id 列表 (rank 用 list 内位置算 RRF)。
             per_term_ids: list[list[int]] = []
             for route in routes:
-                ids = self._trigram_term_candidate_ids(conn, route, query_for_log=query)
+                ids = self._trigram_term_candidate_ids(
+                    conn, route, query_for_log=query
+                )
                 if not ids:
                     # 任一 term 无候选 → AND 交集为空, 直接空结果 (warning 仍透传)。
                     return EmailSearchResult([], query, warnings)
@@ -1415,10 +1432,18 @@ class EmailRepository:
         - route='trigram' mode='match': **整 term** 走并行 trigram 表 MATCH 整串短语
           (含符号/混合时必须 quote 成短语, 否则触发 FTS5 语法错误; 纯中文也安全), bm25 升序。
         - route='trigram' mode='like': 整 term (2 字 CJK) 走 trigram 表 LIKE '%整串%' 兜底。
+
+        候选**不截断**: 多 term 之间是 AND (rowid 交集), per-term 先截断再交集会丢真命中
+        (大库两宽泛词 top-N 窗口可能无交集, 但更后面有共同命中) → 每 term 全召回。
+        NS-3 的「IN() 撑爆参数上限」崩溃风险改在 ``_filter_ids_by_metadata`` 分块解决
+        (见该方法), 不丢任何 id。
         """
         if route.route == "unicode":
             return self._fts_match_ids(
-                conn, "email_body_fts", route.unicode_expr, query_for_log=query_for_log
+                conn,
+                "email_body_fts",
+                route.unicode_expr,
+                query_for_log=query_for_log,
             )
 
         # trigram term: 整 term 走并行 trigram 表子串检索 (不再拆段 AND)。
@@ -1430,7 +1455,9 @@ class EmailRepository:
                 query_for_log=query_for_log,
             )
         # trigram_mode == 'like' (2 字 CJK)
-        return self._trigram_like_ids(conn, route.trigram_core, query_for_log=query_for_log)
+        return self._trigram_like_ids(
+            conn, route.trigram_core, query_for_log=query_for_log
+        )
 
     def _fts_match_ids(
         self,
@@ -1468,6 +1495,10 @@ class EmailRepository:
 
         无 bm25, 按启发式排序: subject 命中 > sender 命中 > body 命中, 同档按 rowid DESC。
         返回的列表顺序即作为该段的 rank 来源。
+
+        候选**不截断** (见 ``_trigram_term_candidate_ids`` doc): 多 term AND 交集前不能
+        先截断。NS-4 的 2 字 CJK LIKE 全表扫是 pre-existing perf (warmup 已缓解桌面),
+        非本次修复范围; NS-3 崩溃风险在 ``_filter_ids_by_metadata`` 分块解决。
         """
         like = f"%{escape_like_value(value)}%"
         sql = """
@@ -1494,28 +1525,106 @@ class EmailRepository:
         return [int(r["rowid"]) for r in rows]
 
     @staticmethod
+    def _chunk_ids(ids: list[int], size: int = _IN_CHUNK_SIZE) -> Iterator[list[int]]:
+        """把 id 列表切成 ≤size 的批 (NS-3: 防 IN(...) 超 SQLite 参数上限)。"""
+        for i in range(0, len(ids), size):
+            yield ids[i : i + size]
+
+    def _llm_processing_available(self, conn: sqlite3.Connection) -> bool:
+        """``llm_processing`` 表是否存在 (旧/裸/测试库可能无 → 投影降级)。实例级 memo。"""
+        if self._has_llm_processing is None:
+            row = conn.execute(
+                "SELECT 1 FROM sqlite_master "
+                "WHERE type='table' AND name='llm_processing'"
+            ).fetchone()
+            self._has_llm_processing = row is not None
+        return self._has_llm_processing
+
+    def _ai_priority_col_available(self, conn: sqlite3.Connection) -> bool:
+        """``email_metadata.ai_priority`` (v14 列) 是否存在 (裸/旧库可能无)。实例级 memo。"""
+        if self._has_ai_priority_col is None:
+            cols = {
+                r["name"]
+                for r in conn.execute("PRAGMA table_info(email_metadata)").fetchall()
+            }
+            self._has_ai_priority_col = "ai_priority" in cols
+        return self._has_ai_priority_col
+
+    def _ai_fields_select_join(
+        self, conn: sqlite3.Connection, *, meta_alias: str
+    ) -> tuple[str, str]:
+        """MED-2: 搜索命中补 ai_priority + lang 投影 (镜像旧 TS 搜索 / email_views 收编)。
+
+        返回 ``(extra_select_sql, join_sql)``:
+        - ``priority_raw`` = ``COALESCE(<m>.ai_priority, labels_json.$.priority)`` (v14 主表列
+          优先, fallback labels_json), 与 email_views::list_emails_enriched 同语义。
+        - ``lang_raw`` = ``labels_json.$.language`` (json_valid 守卫, 否则 malformed JSON 整
+          query 崩)。
+        raw 串 (emoji-中文 / 'English' 等) 在 serve-api 出口经 _map_priority/_map_language
+        映射成 wire enum (与旧 TS ai_mapping.ts mapPriority/mapLanguage 一致)。
+        ``llm_processing`` 表缺失 (旧/测试库) → 不 JOIN, priority_raw 退化为主表列 (或 NULL),
+        lang_raw NULL。
+        """
+        has_llm = self._llm_processing_available(conn)
+        has_ai_priority = self._ai_priority_col_available(conn)
+        if has_llm:
+            lang_expr = (
+                "CASE WHEN json_valid(l.labels_json) "
+                "THEN json_extract(l.labels_json, '$.language') END"
+            )
+            labels_priority = (
+                "CASE WHEN json_valid(l.labels_json) "
+                "THEN json_extract(l.labels_json, '$.priority') END"
+            )
+            join_sql = (
+                f" LEFT JOIN llm_processing l "
+                f"ON l.internal_id = {meta_alias}.internal_id"
+            )
+        else:
+            lang_expr = "NULL"
+            labels_priority = "NULL"
+            join_sql = ""
+        # 与 email_views::list_emails_enriched 同语义: 有 v14 主表列 → COALESCE fallback
+        # labels_json; 无该列 (裸/旧库) → 仅 labels_priority (或 NULL)。
+        if has_ai_priority:
+            priority_expr = f"COALESCE({meta_alias}.ai_priority, {labels_priority})"
+        else:
+            priority_expr = labels_priority
+        extra_select = (
+            f", {priority_expr} AS priority_raw, {lang_expr} AS lang_raw"
+        )
+        return extra_select, join_sql
+
+    @classmethod
     def _filter_ids_by_metadata(
+        cls,
         conn: sqlite3.Connection,
         ids: set[int],
         predicates: list[FilterPredicate],
     ) -> set[int]:
-        """在 email_metadata 上对候选 id 套结构化谓词 (mailbox / date), 返回允许集。"""
+        """在 email_metadata 上对候选 id 套结构化谓词 (mailbox / date), 返回允许集。
+
+        NS-3: 候选集可能数万 (trigram 全召回), ``IN(<all ids>)`` 会超 SQLite 参数上限崩溃。
+        改分块 (``_IN_CHUNK_SIZE``/批) union 结果 —— 不丢任何 id (全召回保持), 仅多跑几条
+        小查询。谓词参数每批重复绑定 (谓词无 id, 量小)。
+        """
         if not ids:
             return set()
         if not predicates:
             return set(ids)
-        id_list = list(ids)
-        placeholders = ",".join("?" for _ in id_list)
-        sql = (
-            f"SELECT m.internal_id FROM email_metadata m "
-            f"WHERE m.internal_id IN ({placeholders})"
-        )
-        params: list = list(id_list)
-        for predicate in predicates:
-            sql += f" AND ({predicate.sql})"
-            params.extend(predicate.params)
-        rows = conn.execute(sql, params).fetchall()
-        return {int(r["internal_id"]) for r in rows}
+        predicate_sql = "".join(f" AND ({p.sql})" for p in predicates)
+        predicate_params: list = [param for p in predicates for param in p.params]
+        allowed: set[int] = set()
+        for chunk in cls._chunk_ids(list(ids)):
+            placeholders = ",".join("?" for _ in chunk)
+            sql = (
+                f"SELECT m.internal_id FROM email_metadata m "
+                f"WHERE m.internal_id IN ({placeholders})"
+                f"{predicate_sql}"
+            )
+            rows = conn.execute(sql, [*chunk, *predicate_params]).fetchall()
+            allowed.update(int(r["internal_id"]) for r in rows)
+        return allowed
 
     def _build_trigram_hits(
         self,
@@ -1535,17 +1644,25 @@ class EmailRepository:
         if not rrf_scores:
             return []
         id_list = list(rrf_scores.keys())
-        placeholders = ",".join("?" for _ in id_list)
-        rows = conn.execute(
-            f"""SELECT internal_id,
-                       COALESCE(subject, '') AS subject,
-                       COALESCE(sender, '')  AS sender,
-                       date_received, mailbox, notion_page_id
-                  FROM email_metadata
-                 WHERE internal_id IN ({placeholders})""",
-            id_list,
-        ).fetchall()
-        meta_by_id = {int(r["internal_id"]): r for r in rows}
+        # MED-2: 补 ai_priority + lang 投影 (命令面板 EmailHitRow 渲染优先级 chip + lang pip)。
+        ai_select, ai_join = self._ai_fields_select_join(conn, meta_alias="m")
+        meta_by_id: dict[int, sqlite3.Row] = {}
+        # NS-3: 候选可能数万 (trigram 全召回) → IN(...) 分块, 不丢 id。
+        for chunk in self._chunk_ids(id_list):
+            placeholders = ",".join("?" for _ in chunk)
+            rows = conn.execute(
+                f"""SELECT m.internal_id AS internal_id,
+                           COALESCE(m.subject, '') AS subject,
+                           COALESCE(m.sender, '')  AS sender,
+                           m.date_received AS date_received,
+                           m.mailbox AS mailbox,
+                           m.notion_page_id AS notion_page_id{ai_select}
+                      FROM email_metadata m{ai_join}
+                     WHERE m.internal_id IN ({placeholders})""",
+                chunk,
+            ).fetchall()
+            for r in rows:
+                meta_by_id[int(r["internal_id"])] = r
 
         ordered = sorted(
             rrf_scores.items(),
@@ -1582,8 +1699,18 @@ class EmailRepository:
                 notion_url=notion_url,
                 source="body",
                 filename=None,
+                ai_priority=self._row_value(r, "priority_raw"),
+                lang=self._row_value(r, "lang_raw"),
             ))
         return hits
+
+    @staticmethod
+    def _row_value(row: sqlite3.Row, key: str) -> Optional[str]:
+        """读 Row 的可选列 (投影降级时列可能不存在) → None 而非 KeyError。"""
+        try:
+            return row[key]
+        except (IndexError, KeyError):
+            return None
 
     def _build_trigram_snippets(
         self,
@@ -1742,8 +1869,8 @@ class EmailRepository:
                        m.mailbox,
                        m.notion_page_id,
                        ''                             AS snippet,
-                       0.0                            AS rank
-                  FROM email_metadata m
+                       0.0                            AS rank__AI_SELECT__
+                  FROM email_metadata m__AI_JOIN__
                  WHERE 1 = 1
             """
             order_by = " ORDER BY datetime(m.date_received) DESC LIMIT ?"
@@ -1777,10 +1904,19 @@ class EmailRepository:
         params: list,
         query_for_log: str,
     ) -> list[EmailSearchHit]:
+        """跑 parsed / recipient-ranked 路径的 SELECT, 拼 EmailSearchHit。
+
+        SQL 含 ``__AI_SELECT__`` / ``__AI_JOIN__`` 占位符 (MED-2): 开连接后据 llm_processing
+        是否存在替换成 priority_raw/lang_raw 投影 + LEFT JOIN (meta_alias='m')。
+        """
         conn = self._connect()
         try:
+            ai_select, ai_join = self._ai_fields_select_join(conn, meta_alias="m")
+            final_sql = sql.replace("__AI_SELECT__", ai_select).replace(
+                "__AI_JOIN__", ai_join
+            )
             try:
-                rows = conn.execute(sql, params).fetchall()
+                rows = conn.execute(final_sql, params).fetchall()
             except sqlite3.OperationalError as e:
                 # FTS5 query 语法错误（unbalanced quote / lone operator 等）
                 logger.warning(
@@ -1807,6 +1943,8 @@ class EmailRepository:
                     notion_url=notion_url,
                     source="body",
                     filename=None,
+                    ai_priority=self._row_value(r, "priority_raw"),
+                    lang=self._row_value(r, "lang_raw"),
                 ))
             return hits
         finally:
@@ -1900,7 +2038,8 @@ class EmailRepository:
         limit: int,
         query_for_log: str,
     ) -> list[sqlite3.Row]:
-        sql = """
+        ai_select, ai_join = self._ai_fields_select_join(conn, meta_alias="m")
+        sql = f"""
             SELECT m.internal_id,
                    COALESCE(m.subject, '')        AS subject,
                    COALESCE(m.sender, '')         AS sender,
@@ -1910,9 +2049,9 @@ class EmailRepository:
                    snippet(email_body_fts, 0, '<mark>', '</mark>', '...', 16) AS snippet,
                    bm25(email_body_fts, 1.0, 5.0, 2.0) AS rank,
                    'body' AS source,
-                   NULL AS filename
+                   NULL AS filename{ai_select}
               FROM email_body_fts
-              JOIN email_metadata m ON m.internal_id = email_body_fts.rowid
+              JOIN email_metadata m ON m.internal_id = email_body_fts.rowid{ai_join}
              WHERE email_body_fts MATCH ?
         """
         params: list = [fts_expr]
@@ -1946,7 +2085,8 @@ class EmailRepository:
         limit: int,
         query_for_log: str,
     ) -> list[sqlite3.Row]:
-        sql = """
+        ai_select, ai_join = self._ai_fields_select_join(conn, meta_alias="m")
+        sql = f"""
             SELECT m.internal_id,
                    COALESCE(m.subject, '')        AS subject,
                    COALESCE(m.sender, '')         AS sender,
@@ -1956,10 +2096,10 @@ class EmailRepository:
                    snippet(email_attachment_fts, 0, '<mark>', '</mark>', '...', 16) AS snippet,
                    bm25(email_attachment_fts) AS rank,
                    'attachment' AS source,
-                   COALESCE(a.filename, '') AS filename
+                   COALESCE(a.filename, '') AS filename{ai_select}
               FROM email_attachment_fts
               JOIN email_attachment a ON a.id = email_attachment_fts.rowid
-              JOIN email_metadata m ON m.internal_id = a.internal_id
+              JOIN email_metadata m ON m.internal_id = a.internal_id{ai_join}
              WHERE email_attachment_fts MATCH ?
         """
         params: list = [fts_expr]
@@ -2068,6 +2208,8 @@ class EmailRepository:
                 notion_url=item["notion_url"],
                 source=item["source"],
                 filename=item["filename"],
+                ai_priority=item.get("ai_priority"),
+                lang=item.get("lang"),
             )
             for item in candidates[:limit]
         ]
@@ -2096,6 +2238,10 @@ class EmailRepository:
             "source": source,
             "filename": row["filename"] if source == "attachment" else None,
             "rrf_score": rrf_score,
+            # MED-2: priority_raw/lang_raw 来自 email_metadata join (body/attachment 同邮件
+            # 一致), serve-api 出口映射成 wire enum。
+            "ai_priority": EmailRepository._row_value(row, "priority_raw"),
+            "lang": EmailRepository._row_value(row, "lang_raw"),
         }
 
     @staticmethod
@@ -2362,9 +2508,9 @@ class EmailRepository:
                    m.mailbox,
                    m.notion_page_id,
                    ''                             AS snippet,
-                   bm25(email_recipient_fts)      AS rank
+                   bm25(email_recipient_fts)      AS rank__AI_SELECT__
               FROM email_recipient_fts
-              JOIN email_metadata m ON m.internal_id = email_recipient_fts.rowid
+              JOIN email_metadata m ON m.internal_id = email_recipient_fts.rowid__AI_JOIN__
              WHERE email_recipient_fts MATCH ?
         """
         params: list = [recipient_fts_expr]
@@ -2691,15 +2837,19 @@ class EmailRepository:
              WHERE email_attachment_fts MATCH ?
         """
         params: list = [query]
-        if mailbox:
-            sql += " AND m.mailbox = ?"
-            params.append(mailbox)
-        if since_date:
-            sql += " AND m.date_received >= ?"
-            params.append(since_date)
-        if until_date:
-            sql += " AND m.date_received <= ?"
-            params.append(until_date)
+        # NS-6: 附件路径的 mailbox/date 过滤复用 body 主搜索的统一谓词构造
+        # (build_structured_filter_predicates) → since/until 走与 DSL 相同的 tz 归一
+        # `datetime(m.date_received) >= datetime(?)` (until 带 end-of-day 语义), 让
+        # `has:attachment redis` (fused 路径) 与直接附件搜索对同一 since/until 给一致边界,
+        # 不再裸 ISO 字符串比较 (旧实现时区混存数据边界错位)。
+        filters, _ = build_structured_filter_predicates(
+            mailbox=mailbox,
+            since_date=since_date,
+            until_date=until_date,
+        )
+        for predicate in filters:
+            sql += f" AND ({predicate.sql})"
+            params.extend(predicate.params)
         sql += " ORDER BY rank LIMIT ?"
         params.append(limit)
 

@@ -423,6 +423,21 @@
       "errAgent": "AI 检索出错，请稍后重试或直接用搜索语法",
       "errGeneric": "AI 检索失败，请稍后重试或直接用搜索语法"
     },
+    "facet": {
+      "unread": "未读",
+      "hasAttachment": "有附件"
+    },
+    "history": {
+      "title": "最近搜索",
+      "clear": "清空",
+      "remove": "从历史移除"
+    },
+    "saved": {
+      "title": "已收藏",
+      "save": "收藏此搜索",
+      "savedToast": "已收藏搜索",
+      "remove": "删除收藏"
+    },
     "kbd": {
       "navigate": "上下移动",
       "selectGroup": "切换分组",

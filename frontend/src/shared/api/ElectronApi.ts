@@ -227,6 +227,16 @@ function unwrap<T>(env: WriteEnvelope<T>): T {
 }
 
 class ElectronEmailApi implements EmailApi {
+  // Phase B G-B1a — 桌面搜索框收敛单核：search 不再走 IPC `email:search`（已删的
+  // TS CORE#2），改委托 lazy loopback HttpApi 的 `.email.search`（serve-api Python
+  // CORE#1）。这样桌面人工搜索与 chat/agentic 搜索同走一套引擎，结果恒一致。
+  // token + CORS 由 main `chat_local_bridge` 的 webRequest 透明注入；`new HttpApi
+  // (loopback)` 的 lazy `.chat` getter 永不构造（破循环，见 HttpApi.chat 注释）。
+  private _searchApi?: HttpApi
+  private searchApi(): HttpApi {
+    if (!this._searchApi) this._searchApi = new HttpApi(loopbackBaseUrl())
+    return this._searchApi
+  }
   async list(opts: ListOpts): Promise<EmailMeta[]> {
     return (await invoker()('email:list', opts)) as EmailMeta[]
   }
@@ -255,7 +265,7 @@ class ElectronEmailApi implements EmailApi {
     return (await invoker()('email:aiFields', internalId)) as AIFields | null
   }
   async search(opts: SearchOpts): Promise<SearchResult> {
-    return (await invoker()('email:search', opts)) as SearchResult
+    return this.searchApi().email.search(opts)
   }
   async contactSuggest(
     q: string,

@@ -76,7 +76,6 @@ let ajv: Ajv2020
 let validateList: ValidateFunction
 let validateGet: ValidateFunction
 let validateBody: ValidateFunction
-let validateSearch: ValidateFunction
 let validateAttachmentList: ValidateFunction
 
 beforeAll(() => {
@@ -85,7 +84,6 @@ beforeAll(() => {
   validateList = compileFor(ajv, 'email-list.schema.json')
   validateGet = compileFor(ajv, 'email-get.schema.json')
   validateBody = compileFor(ajv, 'email-body.schema.json')
-  validateSearch = compileFor(ajv, 'email-search.schema.json')
   validateAttachmentList = compileFor(ajv, 'attachment-list.schema.json')
 })
 
@@ -194,192 +192,10 @@ describe('getEmailBody', () => {
   })
 })
 
-describe('searchEmails (FTS5)', () => {
-  // Sprint 16 — searchEmails 返回 SearchResult { items, total_indexed };
-  // 之前直接返 SearchHit[]; 测试用 .items 拿数组保持原断言形状.
-  test('English word hit', () => {
-    const result = handlers.searchEmails({ query: 'redis', limit: 10 })
-    const hits = result.items
-    expect(hits).toHaveLength(1)
-    expect(hits[0]?.internal_id).toBe(101)
-    expect(hits[0]?.snippet ?? '').toContain('<mark>')
-    const wrapped = wrap(hits, { query: 'redis', total_hits: hits.length, limit: 10 })
-    const ok = validateSearch(wrapped)
-    if (!ok) console.error('search schema errors:', validateSearch.errors)
-    expect(ok).toBe(true)
-  })
-
-  test('CJK prefix-wildcard hit (DESIGN.md note: unicode61 needs * for plain CN)', () => {
-    // G-A6 起 trigram 默认 ON；本测试专测 unicode61 prefix-wildcard 路径，故显式 pin off。
-    const hits = handlers.searchEmails({ query: '产品*', limit: 10, trigramEnabled: false }).items
-    expect(hits.length).toBeGreaterThanOrEqual(1)
-    expect(hits[0]?.internal_id).toBe(102)
-  })
-
-  test('mailbox filter narrows results', () => {
-    const all = handlers.searchEmails({ query: 'notion', limit: 10 }).items
-    const sent = handlers.searchEmails({ query: 'notion', mailbox: '发件箱', limit: 10 }).items
-    expect(sent.length).toBeLessThanOrEqual(all.length)
-  })
-
-  test('empty query short-circuits to {items:[], total_indexed:N}', () => {
-    const r = handlers.searchEmails({ query: '   ', limit: 10 })
-    expect(r.items).toEqual([])
-    expect(typeof r.total_indexed).toBe('number')
-  })
-
-  test('rank is monotonically non-decreasing (smaller = better per bm25)', () => {
-    const hits = handlers.searchEmails({ query: 'redis OR 产品*', limit: 10 }).items
-    for (let i = 1; i < hits.length; i++) {
-      expect(hits[i]!.rank).toBeGreaterThanOrEqual(hits[i - 1]!.rank)
-    }
-  })
-
-  test('hits carry ai_priority + lang from llm_processing LEFT JOIN', () => {
-    // Sprint 16 search-module — hits expose mapped priority + language so
-    // the palette EmailHitRow can render priority chip + lang-pip without
-    // a follow-up IPC. Email 101 in the fixture has "🔴 紧急" → critical
-    // and English body. Email 102 has "🟡 重要" → important + Chinese.
-    const r101 = handlers.searchEmails({ query: 'redis', limit: 5 }).items[0]
-    expect(r101?.ai_priority).toBe('critical')
-    expect(r101?.lang).toBe('en')
-
-    // G-A6 trigram 默认 ON；此处测 unicode61 路径上的 priority/lang join，pin off。
-    const r102 = handlers.searchEmails({ query: '产品*', limit: 5, trigramEnabled: false }).items[0]
-    expect(r102?.ai_priority).toBe('important')
-    expect(r102?.lang).toBe('zh')
-  })
-
-  test('total_indexed reflects email_body_fts row count and survives empty query', () => {
-    // The fixture inserts body rows for emails 101 + 102 (103/201 are body-less).
-    const blank = handlers.searchEmails({ query: '', limit: 0 })
-    const withHits = handlers.searchEmails({ query: 'redis', limit: 5 })
-    expect(blank.total_indexed).toBeGreaterThan(0)
-    expect(withHits.total_indexed).toBe(blank.total_indexed)
-  })
-})
-
 describe('attachment shape', () => {
   test('the attachments[] inside email:get matches attachment-list schema', () => {
     const rec = handlers.getEmail(101)!
     expect(validateAttachmentList(wrap(rec.attachments))).toBe(true)
-  })
-})
-
-// ============================================================
-// PR-2a: smartQueryTransform + searchEmails smart mode
-// ============================================================
-describe('smartQueryTransform (PR-2a)', () => {
-  // 跟 src/repository/email_repository.py:smart_query_transform 算法对齐;
-  // 改其中一边请同步另一边, 否则 chat tool 跟 CLI / webhook 行为分叉.
-  const t = handlers.smartQueryTransform
-
-  test('empty / whitespace returns as-is', () => {
-    expect(t('')).toBe('')
-    expect(t('   ')).toBe('   ')
-  })
-
-  test('single CJK char gets * prefix', () => {
-    expect(t('产')).toBe('产*')
-    expect(t('会')).toBe('会*')
-  })
-
-  test('multi-char CJK gets prefix-or-char-and fallback', () => {
-    expect(t('产品')).toBe('(产品* OR (产* AND 品*))')
-    expect(t('本周产品评审')).toBe(
-      '(本周产品评审* OR (本* AND 周* AND 产* AND 品* AND 评* AND 审*))'
-    )
-  })
-
-  test('pure latin token unchanged', () => {
-    expect(t('redis')).toBe('redis')
-  })
-
-  test('multi latin tokens use AND', () => {
-    expect(t('redis timeout')).toBe('redis AND timeout')
-    expect(t('project plan review')).toBe('project AND plan AND review')
-  })
-
-  test('mixed latin and CJK tokens', () => {
-    expect(t('redis 超时')).toBe('redis AND (超时* OR (超* AND 时*))')
-  })
-
-  test('mixed char within one token', () => {
-    expect(t('Redis超时')).toBe('(Redis AND (超时* OR (超* AND 时*)))')
-  })
-
-  test('phrase with quotes returns raw', () => {
-    expect(t('"redis timeout"')).toBe('"redis timeout"')
-  })
-
-  test('wildcard returns raw', () => {
-    expect(t('redis*')).toBe('redis*')
-    expect(t('产品*')).toBe('产品*')
-  })
-
-  test('explicit operators return raw', () => {
-    expect(t('redis AND timeout')).toBe('redis AND timeout')
-    expect(t('redis OR cache')).toBe('redis OR cache')
-    expect(t('redis NOT timeout')).toBe('redis NOT timeout')
-  })
-
-  test('punctuation returns raw', () => {
-    expect(t('redis-timeout')).toBe('redis-timeout')
-    expect(t('user@example.com')).toBe('user@example.com')
-    expect(t('(redis)')).toBe('(redis)')
-    expect(t('body:redis')).toBe('body:redis')
-  })
-
-  test('hiragana treated as CJK', () => {
-    const result = t('ひらがな')
-    expect(result.startsWith('(ひらがな*')).toBe(true)
-    expect(result).toContain('ひ*')
-    expect(result).toContain('ら*')
-  })
-
-  test('hangul treated as CJK', () => {
-    expect(t('안녕')).toBe('(안녕* OR (안* AND 녕*))')
-  })
-
-  test('whitespace normalized', () => {
-    expect(t('  redis    timeout  ')).toBe('redis AND timeout')
-  })
-})
-
-describe('searchEmails smart mode (PR-2a)', () => {
-  test('smart mode default: natural CJK keyword goes through transform', () => {
-    // 102 的 subject = '产品 OKR' (从 fixture seed) → '产品*' prefix match
-    // smart '产品' → '(产品* OR (产* AND 品*))' → 主表 hit
-    // G-A6 trigram 默认 ON 会把裸 CJK '产品' 路由到 trigram 表；本测试专测 unicode61
-    // smart_query_transform 路径，故 pin trigramEnabled:false。
-    const r = handlers.searchEmails({ query: '产品', trigramEnabled: false })
-    expect(r.items.length).toBeGreaterThanOrEqual(1)
-    expect(r.mode).toBe('smart')
-    expect(r.transformed_query).toBe('(产品* OR (产* AND 品*))')
-  })
-
-  test('raw mode bypasses transform', () => {
-    const r = handlers.searchEmails({ query: '产品', mode: 'raw' })
-    expect(r.mode).toBe('raw')
-    expect(r.transformed_query).toBeUndefined()
-  })
-
-  test('explicit FTS5 syntax passes through unchanged in smart mode', () => {
-    const r = handlers.searchEmails({ query: '产品*' })
-    expect(r.mode).toBe('smart')
-    // 含 wildcard → smartQueryTransform passthrough 不改写查询;
-    // 新 search DSL 契约 (PR #28): smart 模式 transformed_query 恒回填 effective query,
-    // 即便等于原查询 (旧 PR-2a 契约是 passthrough 时 undefined, 已被 #28 取代)。
-    expect(r.transformed_query).toBe('产品*')
-  })
-
-  test('smart mode equivalence with raw for plain latin', () => {
-    const smart = handlers.searchEmails({ query: 'redis' })
-    const raw = handlers.searchEmails({ query: 'redis', mode: 'raw' })
-    expect(smart.items.map((i) => i.internal_id)).toEqual(raw.items.map((i) => i.internal_id))
-    // 单 token latin → transform 不改写查询 (smart 与 raw 命中等价);
-    // 新 search DSL 契约 (PR #28): smart 模式仍恒回填 effective query (raw 模式才不回填)。
-    expect(smart.transformed_query).toBe('redis')
   })
 })
 

@@ -49,7 +49,10 @@ import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-quer
 import { useNavigate } from '@tanstack/react-router'
 import {
   BarChart3,
+  Bookmark,
+  BookmarkPlus,
   Check,
+  Clock,
   Folder,
   History,
   Loader2,
@@ -58,6 +61,7 @@ import {
   Search as SearchIcon,
   Sparkle,
   Sparkles,
+  Trash2,
   X
 } from 'lucide-react'
 
@@ -70,8 +74,10 @@ import { useActiveEmail } from '@shared/state/active-email'
 import { useEmailFilter, type EmailView } from '@shared/state/email-filter'
 import { showAIChatPanel } from '@shared/state/ai-chat-panel'
 import { closeCommandPalette, useCommandPalette } from '@shared/state/command-palette'
+import { useSearchHistory } from '@shared/state/search-history'
 import { toastError, toastSuccess } from '@shared/state/toast'
 import { extractTerms } from '@shared/lib/highlight_terms'
+import { hasDslToken, toggleDslToken } from '@shared/lib/dsl_token'
 import type { MailboxSummary, SearchAgentPhase, SearchHit, SearchResult } from '@shared/api/types'
 import { EmailHitRow } from './EmailHitRow'
 import { PaletteThinkingPhrases } from './PaletteThinkingPhrases'
@@ -113,6 +119,15 @@ const SEARCH_SYNTAX_HINTS: ReadonlyArray<{ token: string; labelKey: string }> = 
   { token: 'after:', labelKey: 'palette.email.syntaxAfter' },
   { token: 'has:attachment', labelKey: 'palette.email.syntaxHas' },
   { token: 'is:unread', labelKey: 'palette.email.syntaxUnread' }
+]
+
+// G-B3 — facet chips: clickable DSL tokens that toggle in/out of the query.
+// `is:unread` / `has:attachment` surface DSL the palette otherwise hides behind
+// the static cheat-sheet. (Per-mailbox `in:` chips intentionally omitted — see
+// the facetChips useMemo comment.)
+const FIXED_FACETS: ReadonlyArray<{ token: string; labelKey: string }> = [
+  { token: 'is:unread', labelKey: 'palette.facet.unread' },
+  { token: 'has:attachment', labelKey: 'palette.facet.hasAttachment' }
 ]
 
 type Group = 'jump' | 'ai' | 'email' | 'actions'
@@ -199,6 +214,15 @@ export function CommandPalette(): React.ReactElement | null {
   const setActiveMailbox = useMailbox((s) => s.setActive)
   const setActiveEmail = useActiveEmail((s) => s.setActive)
   const setView = useEmailFilter((s) => s.setView)
+
+  // G-B3 — search history + saved searches (localStorage-backed).
+  const history = useSearchHistory((s) => s.history)
+  const savedSearches = useSearchHistory((s) => s.saved)
+  const pushHistory = useSearchHistory((s) => s.pushHistory)
+  const removeHistory = useSearchHistory((s) => s.removeHistory)
+  const clearHistory = useSearchHistory((s) => s.clearHistory)
+  const addSaved = useSearchHistory((s) => s.addSaved)
+  const removeSaved = useSearchHistory((s) => s.removeSaved)
 
   // Pick the EmailList view that will surface a hit's mailbox so the
   // row is actually visible after we navigate('/'). '收件箱' / '发件箱'
@@ -372,6 +396,18 @@ export function CommandPalette(): React.ReactElement | null {
   }
   const isSearching = searchQ.isFetching && normalised.length > 0
 
+  // G-B3 — record history on a *settled* successful search (not every keystroke):
+  // debounce → normalised → searchQ resolves (non-placeholder) → push once. This
+  // captures the queries the user actually let run, de-duped + capped in the store.
+  useEffect(() => {
+    if (!open) return
+    if (normalised.length === 0) return
+    if (!searchQ.isSuccess || searchQ.isPlaceholderData) return
+    pushHistory(normalised)
+    // Only re-run when the settled query string changes (success transition).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, normalised, searchQ.isSuccess, searchQ.isPlaceholderData])
+
   // ──────────────────────────────────────────────────────────────────
   // JUMP items — mailbox-matches + open-AI-panel + admin shortcut
   // ──────────────────────────────────────────────────────────────────
@@ -483,6 +519,33 @@ export function CommandPalette(): React.ReactElement | null {
     setHighlight(0)
     inputRef.current?.focus()
   }, [])
+
+  // G-B3 — facet chip click: toggle the DSL token in/out of the live query.
+  // Pure string op (toggleDslToken) then setQuery; keeps focus in the input so
+  // the user can keep typing. Not part of the flat keyboard index (mouse-only),
+  // so the jump→ai→email→actions Enter contract is untouched.
+  const toggleFacet = useCallback((token: string): void => {
+    setQuery((q) => toggleDslToken(q, token))
+    inputRef.current?.focus()
+  }, [])
+
+  // G-B3 — pin the current query as a saved search (MVP: query is its own name).
+  const saveCurrentSearch = useCallback((): void => {
+    const q = query.trim()
+    if (q.length === 0) return
+    addSaved(q, q)
+    toastSuccess(t('palette.saved.savedToast'))
+  }, [query, addSaved, t])
+
+  // G-B3 — run a history/saved entry: drop it into the input and let plain FTS
+  // take over (clears any in-flight AI state so the empty-tile picks → results).
+  const runStoredQuery = useCallback(
+    (q: string): void => {
+      switchToPlainSearch()
+      setQuery(q)
+    },
+    [switchToPlainSearch]
+  )
 
   interface JumpRow {
     id: string
@@ -633,6 +696,25 @@ export function CommandPalette(): React.ReactElement | null {
     const aiIds = new Set(aiHits.map((h) => h.internal_id))
     return hits.filter((h) => !aiIds.has(h.internal_id))
   }, [hits, aiHits])
+
+  // ──────────────────────────────────────────────────────────────────
+  // G-B3 — facet chips: is:unread / has:attachment (DSL tokens the palette
+  //   otherwise hides behind the static cheat-sheet). active = the live query
+  //   already contains the token (toggle removes it). Per-mailbox `in:` chips
+  //   are intentionally NOT rendered: mailbox scoping is already served by the
+  //   auto-applied active mailbox (search passes `mailbox: activeMailbox`) and
+  //   the interactive mailbox jump rows — a duplicate `in:` chip would collide
+  //   with those rows (same label) for no added capability.
+  // ──────────────────────────────────────────────────────────────────
+  const facetChips: ReadonlyArray<{ token: string; label: string; active: boolean }> = useMemo(
+    () =>
+      FIXED_FACETS.map((f) => ({
+        token: f.token,
+        label: t(f.labelKey),
+        active: hasDslToken(query, f.token)
+      })),
+    [query, t]
+  )
 
   // ──────────────────────────────────────────────────────────────────
   // AI ACTIONS — wired markAllRead + reRunAi; summarize disabled with Soon
@@ -959,6 +1041,43 @@ export function CommandPalette(): React.ReactElement | null {
           )}
         </div>
 
+        {/* G-B3 — facet chips row: click toggles a DSL token in/out of the query.
+            Mouse-only (NOT in the flat keyboard index) so the jump→ai→email→
+            actions Enter contract is unchanged. The "save this search" control
+            appears once the query is non-empty (MVP: query is its own name). */}
+        {facetChips.length > 0 && (
+          <div className="px-4 py-1.5 flex items-center gap-1.5 flex-wrap border-b border-ink-border-soft shrink-0">
+            {facetChips.map((c) => (
+              <button
+                key={c.token}
+                type="button"
+                onClick={() => toggleFacet(c.token)}
+                aria-pressed={c.active}
+                className={cn(
+                  'text-micro px-2 py-0.5 rounded-full border transition shrink-0',
+                  c.active
+                    ? 'bg-coral/[0.14] border-coral/40 text-coral'
+                    : 'bg-ink-fg/[0.04] border-ink-border-soft text-ink-fg-2 hover:text-ink-fg hover:bg-ink-fg/[0.08]'
+                )}
+              >
+                {c.label}
+              </button>
+            ))}
+            {hasQuery && (
+              <button
+                type="button"
+                onClick={saveCurrentSearch}
+                title={t('palette.saved.save')}
+                aria-label={t('palette.saved.save')}
+                className="ml-auto inline-flex items-center gap-1 text-micro text-ink-fg-2 hover:text-ink-fg transition shrink-0"
+              >
+                <BookmarkPlus size={12} strokeWidth={2} className="shrink-0" aria-hidden />
+                <span>{t('palette.saved.save')}</span>
+              </button>
+            )}
+          </div>
+        )}
+
         {/* Parse warnings — 字段语法被忽略/降级时给可见反馈（T0） */}
         {hasQuery && parseWarnings.length > 0 && (
           <div className="px-4 py-1.5 flex items-start gap-1.5 border-b border-ink-border-soft text-micro text-ink-fg-2 shrink-0">
@@ -1031,6 +1150,90 @@ export function CommandPalette(): React.ReactElement | null {
                   )
                 })}
               </div>
+            </>
+          )}
+
+          {/* G-B3 — empty-state recall: when the query box is empty, surface
+              recent searches + saved searches (clickable → setQuery). Falls
+              back to the static syntax legend when both are empty. These rows
+              are mouse-only (NOT in the flat keyboard index) to keep the
+              jump→ai→email→actions Enter contract intact. */}
+          {!hasQuery && (history.length > 0 || savedSearches.length > 0) && (
+            <>
+              {history.length > 0 && (
+                <>
+                  <GroupHeader
+                    title="Recent"
+                    countLabel={String(history.length)}
+                    aside={
+                      <button
+                        type="button"
+                        onClick={clearHistory}
+                        className="text-micro text-ink-fg-3 hover:text-ink-fg transition normal-case tracking-normal"
+                      >
+                        {t('palette.history.clear')}
+                      </button>
+                    }
+                  />
+                  <div className="px-3 space-y-px">
+                    {history.map((h) => (
+                      <div
+                        key={`hist-${h}`}
+                        className="pal-row group"
+                        onClick={() => runStoredQuery(h)}
+                      >
+                        <span className="w-5 h-5 grid place-items-center text-ink-fg-2 shrink-0">
+                          <Clock size={14} strokeWidth={1.75} />
+                        </span>
+                        <span className="text-body flex-1 truncate text-ink-fg-1">{h}</span>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            removeHistory(h)
+                          }}
+                          title={t('palette.history.remove')}
+                          aria-label={t('palette.history.remove')}
+                          className="opacity-0 group-hover:opacity-100 text-ink-fg-3 hover:text-ink-fg p-1 rounded hover:bg-ink-fg/[0.08] transition shrink-0"
+                        >
+                          <X size={12} strokeWidth={2} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+              {savedSearches.length > 0 && (
+                <>
+                  <GroupHeader title="Saved" countLabel={String(savedSearches.length)} />
+                  <div className="px-3 space-y-px">
+                    {savedSearches.map((s) => (
+                      <div
+                        key={`saved-${s.id}`}
+                        className="pal-row group"
+                        onClick={() => runStoredQuery(s.query)}
+                      >
+                        <span className="w-5 h-5 grid place-items-center text-ink-fg-2 shrink-0">
+                          <Bookmark size={14} strokeWidth={1.75} />
+                        </span>
+                        <span className="text-body flex-1 truncate text-ink-fg-1">{s.name}</span>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            removeSaved(s.id)
+                          }}
+                          title={t('palette.saved.remove')}
+                          aria-label={t('palette.saved.remove')}
+                          className="opacity-0 group-hover:opacity-100 text-ink-fg-3 hover:text-ink-fg p-1 rounded hover:bg-ink-fg/[0.08] transition shrink-0"
+                        >
+                          <Trash2 size={12} strokeWidth={2} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
             </>
           )}
 
