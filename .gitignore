@@ -79,8 +79,9 @@ data/notion_ds_cache.json
 frontend/ai_chat.db
 frontend/ai_chat.db-shm
 frontend/ai_chat.db-wal
-# electron-vite build 误落根目录的 main bundle 产物（正常应在 out/main/）
+# electron-vite/rollup build 误落根目录的 bundle 产物（正常应在 out/main|out/renderer/）
 frontend/index.js
+frontend/index-*.js
 # 编辑器配置
 .cursor/
 # 验证截图 + 误创建的 .app 残骸目录
