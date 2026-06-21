@@ -332,7 +332,6 @@
       "translate": "Translate this email",
       "toggleBatchSelect": "Toggle batch select",
       "openAiPanel": "Open AI panel",
-      "switchBackend": "Switch AI backend",
       "sendChat": "Send AI message",
       "newChat": "New AI conversation",
       "toggleIsland": "Toggle Dynamic Island",
