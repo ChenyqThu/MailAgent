@@ -1045,6 +1045,23 @@
         "popEventCount": "{n} events"
       }
     },
+    "shortcut": {
+      "title": "Keyboard shortcuts",
+      "subtitle": "G-prefixed shortcuts switch views (press G then view key within 800 ms)",
+      "dayView": "Day view",
+      "weekView": "Week view",
+      "monthView": "Month view",
+      "agendaView": "Agenda view",
+      "prevNext": "Previous / Next",
+      "today": "Go to today",
+      "sync": "Sync",
+      "close": "Close drawer / modal",
+      "help": "Open / close this help"
+    }
+  },
+  "settings": {
+    "title": "Settings",
+    "appearance": "Appearance",
     "skills": {
       "title": "Skills",
       "desc": "Capabilities the Custom AI can use. Disabling a skill removes its tools and its prompt guidance from the next conversation.",
@@ -1073,23 +1090,6 @@
       "deleteError": "Could not delete memory",
       "loadError": "Could not load memory"
     },
-    "shortcut": {
-      "title": "Keyboard shortcuts",
-      "subtitle": "G-prefixed shortcuts switch views (press G then view key within 800 ms)",
-      "dayView": "Day view",
-      "weekView": "Week view",
-      "monthView": "Month view",
-      "agendaView": "Agenda view",
-      "prevNext": "Previous / Next",
-      "today": "Go to today",
-      "sync": "Sync",
-      "close": "Close drawer / modal",
-      "help": "Open / close this help"
-    }
-  },
-  "settings": {
-    "title": "Settings",
-    "appearance": "Appearance",
     "themeMode": "Theme",
     "themeModeHint": "Light / Follow system / Dark",
     "theme": {

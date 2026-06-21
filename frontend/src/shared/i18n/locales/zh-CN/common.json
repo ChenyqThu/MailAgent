@@ -1045,6 +1045,23 @@
         "popEventCount": "{n} 个事件"
       }
     },
+    "shortcut": {
+      "title": "键盘快捷键",
+      "subtitle": "G 开头为视图跳转 (先按 G 再按视图键, 800ms 内有效)",
+      "dayView": "日视图",
+      "weekView": "周视图",
+      "monthView": "月视图",
+      "agendaView": "Agenda 视图",
+      "prevNext": "上一段 / 下一段",
+      "today": "跳到今天",
+      "sync": "同步",
+      "close": "关闭抽屉 / 弹层",
+      "help": "打开 / 关闭本帮助"
+    }
+  },
+  "settings": {
+    "title": "设置",
+    "appearance": "外观",
     "skills": {
       "title": "技能",
       "desc": "Custom AI 可使用的能力。关闭某个技能后，它的工具与提示词指引都不会注入下一次对话。",
@@ -1073,23 +1090,6 @@
       "deleteError": "无法删除记忆",
       "loadError": "无法加载记忆"
     },
-    "shortcut": {
-      "title": "键盘快捷键",
-      "subtitle": "G 开头为视图跳转 (先按 G 再按视图键, 800ms 内有效)",
-      "dayView": "日视图",
-      "weekView": "周视图",
-      "monthView": "月视图",
-      "agendaView": "Agenda 视图",
-      "prevNext": "上一段 / 下一段",
-      "today": "跳到今天",
-      "sync": "同步",
-      "close": "关闭抽屉 / 弹层",
-      "help": "打开 / 关闭本帮助"
-    }
-  },
-  "settings": {
-    "title": "设置",
-    "appearance": "外观",
     "themeMode": "主题模式",
     "themeModeHint": "Light / 跟随系统 / Dark",
     "theme": {
