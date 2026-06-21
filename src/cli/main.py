@@ -33,6 +33,7 @@ def _print_version(value: bool) -> None:
 # 子命令模块在此延迟 import，避免 typer App 解析 --help / --version 时
 # 强制载入整个 src.notion / sqlite 链 (CLI 启动更快 + 测试更容易隔离)。
 from src.cli.commands import admin as _admin_module  # noqa: E402
+from src.cli.commands import api_key as _api_key_module  # noqa: E402
 from src.cli.commands import attachment as _attachment_module  # noqa: E402
 from src.cli.commands import backfill as _backfill_module  # noqa: E402
 from src.cli.commands import email as _email_module  # noqa: E402
@@ -86,6 +87,10 @@ app.add_typer(
 app.add_typer(
     _report_module.app, name="report",
     help="报告 Agent run / list / get / config-get / config-set (/agents 页 IPC 后端)",
+)
+app.add_typer(
+    _api_key_module.app, name="api-key",
+    help="scoped Bearer agent key: create / list / revoke / rotate (headless agent 接入)",
 )
 
 
