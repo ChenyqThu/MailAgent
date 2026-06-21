@@ -285,6 +285,7 @@ def test_chat_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
         "userContext": "",
         "memorySummary": "",
         "enabledModels": [],
+        "manifestMode": False,
     }
 
 

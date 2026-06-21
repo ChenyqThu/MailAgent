@@ -43,7 +43,9 @@ import { HttpChatPlatform, type HttpPlatformConfig } from './http_platform'
 import { runSearchAgent } from './search_agent'
 import { createBuiltinTools } from './tools/builtin'
 import { resolveConfirmation } from './tools/confirmation'
-import { createToolRegistry } from './tools/registry'
+import { createToolRegistry, type ToolDef } from './tools/registry'
+import { replaceWithManifestReadTools, type SkillToolInvoker } from './tools/manifest'
+import { fetchSkillManifest } from './tools/manifest_client'
 import type { ChatBackend } from './types'
 import type { SearchAgentInput, SearchAgentResult } from '../api/types'
 
@@ -189,14 +191,52 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
     return snapshotPromise
   }
 
+  // P2b — read tools we cut over to the Skill manifest (generic invoke) when
+  // MAILAGENT_CHAT_MANIFEST_MODE is on. Everything else (write / KOS / memory /
+  // notion) keeps its builtin typed path.
+  const CUTOVER_READ_TOOLS = new Set(['email_search', 'email_get', 'report_list', 'report_get'])
+
+  /** Build the harness tool catalog. Default = the builtin catalog (zero
+   *  regression). manifestMode on: replace the cutover read tools with
+   *  manifest-driven generic-invoke versions, keeping every other builtin tool.
+   *  Manifest unreachable → full builtin (fallback, architecture §3.2). */
+  async function buildToolDefs(
+    platform: HttpChatPlatform,
+    snapshot: Partial<HttpPlatformConfig>
+  ): Promise<ToolDef[]> {
+    const builtin = createBuiltinTools(platform)
+    if (!snapshot.manifestMode) return builtin
+    const manifest = await fetchSkillManifest(baseUrl)
+    if (!manifest) {
+      console.warn('[chat] manifest mode on but manifest unreachable — using builtin catalog')
+      return builtin
+    }
+    const invoke: SkillToolInvoker = async (skill, tool, input) => {
+      const start = Date.now()
+      try {
+        const output = await platform.invokeSkillTool(skill, tool, input)
+        return { ok: true, output, durationMs: Date.now() - start }
+      } catch (e) {
+        return {
+          ok: false,
+          code: (e as { code?: string }).code ?? 'E_SKILL_INVOKE',
+          message: e instanceof Error ? e.message : String(e),
+          durationMs: Date.now() - start
+        }
+      }
+    }
+    return replaceWithManifestReadTools(builtin, manifest, invoke, CUTOVER_READ_TOOLS)
+  }
+
   async function buildEngine(): Promise<ChatEngine> {
     const snapshot = await fetchConfigSnapshot()
     const platform = new HttpChatPlatform(reads, baseUrl, snapshot)
 
     // 工具 registry 注入式（取代 module-global）：createBuiltinTools(platform) 据
-    // platform.kosConfig().configured（= 预取的 kosConfigured）gate 9 个 KOS 工具注册。
+    // platform.kosConfig().configured（= 预取的 kosConfigured）gate 9 个 KOS 工具注册；
+    // P2b：manifestMode on 时 buildToolDefs 把 cutover read 工具换成 manifest generic-invoke。
     const registry = createToolRegistry()
-    for (const tool of createBuiltinTools(platform)) registry.register(tool)
+    for (const tool of await buildToolDefs(platform, snapshot)) registry.register(tool)
 
     // backend factory 注入 platform：custom-api 复用既有 factory；notion-agent = http backend
     // 薄包 platform.notionAgentStream（与 electron execa 同形供 harness 消费）。

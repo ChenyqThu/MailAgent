@@ -155,6 +155,24 @@ export function mapManifestToToolDefs(
   return out
 }
 
+// ── cutover (P2b) ───────────────────────────────────────────────────────────
+
+/** P2b — replace selected builtin tools with their manifest-driven generic-invoke
+ *  versions. Returns the builtin catalog MINUS the cutover tools, PLUS the manifest
+ *  versions of exactly those cutover tools that the manifest actually exposes. Every
+ *  non-cutover builtin tool (write / KOS / memory / notion) is preserved untouched.
+ *  Pure (no I/O) so the runtime's manifest-mode wiring is unit-testable. */
+export function replaceWithManifestReadTools(
+  builtin: ToolDef[],
+  manifest: SkillManifest,
+  invoke: SkillToolInvoker,
+  cutover: ReadonlySet<string>
+): ToolDef[] {
+  const manifestTools = mapManifestToToolDefs(manifest, invoke).filter((t) => cutover.has(t.name))
+  const cut = new Set(manifestTools.map((t) => t.name))
+  return [...builtin.filter((t) => !cut.has(t.name)), ...manifestTools]
+}
+
 // ── shadow parity ─────────────────────────────────────────────────────────────
 
 export interface ParityToolDiff {

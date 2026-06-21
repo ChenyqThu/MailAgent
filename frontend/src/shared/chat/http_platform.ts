@@ -120,6 +120,10 @@ export interface HttpPlatformConfig {
   /** dynamic-models — LLM_ENABLED_MODELS from serve-api /chat/config (dotenv_values
    *  hot-read). Empty array = not configured → consumers fall back to FALLBACK_MODELS. */
   enabledModels: string[]
+  /** P2b — MAILAGENT_CHAT_MANIFEST_MODE. When true, the harness builds its read
+   *  tools from the Skill manifest (generic invoke) instead of the builtin catalog,
+   *  with builtin fallback. Default false (zero regression). */
+  manifestMode: boolean
 }
 
 /** 远程默认快照（对齐 electron chat/config.ts 默认：harness ON / timeDecay ON / 其余
@@ -138,7 +142,9 @@ export const DEFAULT_HTTP_CONFIG: HttpPlatformConfig = {
   // P2f — no memory summary until /chat/config supplies it.
   memorySummary: '',
   // dynamic-models — empty until /chat/config supplies it; consumers fall back to FALLBACK_MODELS.
-  enabledModels: []
+  enabledModels: [],
+  // P2b — manifest-driven tools off by default (builtin catalog = today's behaviour).
+  manifestMode: false
 }
 
 /** per-messageId 的 streamContent debounce 状态。`latest` = 最近一次累积全量正文
@@ -728,5 +734,13 @@ export class HttpChatPlatform
   // ── notion_agent_chat tool（P2g）→ serve-api /chat/notion-agent-once ────────
   notionAgentChat(input: NotionAgentChatInput): Promise<NotionAgentChatResult> {
     return this._req<NotionAgentChatResult>('POST', '/chat/notion-agent-once', { body: input })
+  }
+
+  // ── generic Skill invoke（P2b）→ serve-api POST /api/skills/invoke ──────────
+  // baseUrl carries the `/api` prefix, so the path is `/skills/invoke`. request()
+  // unwraps the envelope `data` (the skill result) + throws Error&{code} on a
+  // SkillError (the manifest tool handler maps that to a ToolResult).
+  invokeSkillTool(skill: string, tool: string, input: unknown): Promise<unknown> {
+    return this._req<unknown>('POST', '/skills/invoke', { body: { skill, tool, input } })
   }
 }

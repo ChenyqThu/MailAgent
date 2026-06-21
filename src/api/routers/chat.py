@@ -276,6 +276,8 @@ async def chat_config(request: Request):
     kos_consumer = _hot_bool(env_vals, "MAILAGENT_KOS_CONSUMER_ENABLED", cfg.kos_consumer_enabled)
     kos_l1_hot = _hot_bool(env_vals, "MAILAGENT_KOS_L1_HOT_BLOCK_ENABLED", cfg.kos_l1_hot_block_enabled)
     kos_time_decay = _hot_bool(env_vals, "MAILAGENT_KOS_TIME_DECAY_ENABLED", cfg.kos_time_decay_enabled)
+    # P2b — manifest-driven read tools (off by default → builtin catalog, zero regression).
+    manifest_mode = _hot_bool(env_vals, "MAILAGENT_CHAT_MANIFEST_MODE", False)
     # 🔴「只在启用 AND 对接 KOS 时才注入工具」。kosConsumerEnabled = 纯开关；kosConfigured
     # = 开关 AND OAuth 凭据齐全（endpoint + client_id + secret 三者非空，对齐 _kos_available）。
     # renderer createBuiltinTools 据 kosConfigured 决定是否注册 9 个 KOS 工具 —— 开关开着却
@@ -311,6 +313,7 @@ async def chat_config(request: Request):
             "userContext": user_context,
             "memorySummary": memory_summary,
             "enabledModels": enabled_models,
+            "manifestMode": manifest_mode,
         },
         request=request,
         source="config",

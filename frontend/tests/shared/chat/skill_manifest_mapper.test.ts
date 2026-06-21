@@ -15,6 +15,7 @@ import {
   mapConfirmationTier,
   mapManifestToToolDefs,
   mapManifestToolToToolDef,
+  replaceWithManifestReadTools,
   shadowParity,
   type ManifestToolDef,
   type SkillManifest
@@ -228,5 +229,95 @@ describe('manifest mapper — shadow parity vs the real builtin catalog', () => 
     // Builtin-only tools (e.g. KOS-independent fulltext variant) surface as
     // onlyBuiltin — proving the shadow report flags the not-yet-skill-ified gap.
     expect(r.onlyBuiltin.length).toBeGreaterThan(0)
+  })
+})
+
+describe('manifest cutover — replaceWithManifestReadTools (P2b)', () => {
+  const builtinTool = (
+    name: string,
+    handler: ToolDef['handler'] = async () => ({ ok: true, output: 'builtin', durationMs: 0 })
+  ): ToolDef => ({
+    name,
+    description: '',
+    inputSchema: {},
+    confirmationTier: 'silent',
+    category: 'read',
+    surface: 'ipc',
+    handler
+  })
+
+  function emailManifest(toolNames: ManifestToolDef[]): SkillManifest {
+    return {
+      generated_at: 'x',
+      server_version: '3',
+      capabilities: {},
+      skills: [
+        {
+          name: 'email',
+          version: '1',
+          title: '',
+          description: '',
+          default_enabled: true,
+          availability: { available: true },
+          prompt_fragment: '',
+          docs_path: '',
+          tools: toolNames
+        }
+      ]
+    }
+  }
+
+  test('replaces cutover read tools with manifest invoke versions, keeps the rest', async () => {
+    const builtin = [
+      builtinTool('email_search'),
+      builtinTool('email_get'),
+      builtinTool('email_flag'),
+      builtinTool('kos_query')
+    ]
+    const manifest = emailManifest([
+      manifestTool({ name: 'email_search' }),
+      manifestTool({ name: 'email_get' }),
+      manifestTool({ name: 'email_send', side_effect: 'send' })
+    ])
+    const invoke = vi.fn(async () => ({ ok: true as const, output: 'manifest', durationMs: 0 }))
+    const merged = replaceWithManifestReadTools(
+      builtin,
+      manifest,
+      invoke,
+      new Set(['email_search', 'email_get'])
+    )
+    // email_flag + kos_query preserved; email_search/email_get replaced; email_send
+    // NOT added (not in the cutover set).
+    expect(merged.map((t) => t.name).sort()).toEqual([
+      'email_flag',
+      'email_get',
+      'email_search',
+      'kos_query'
+    ])
+    // the replaced email_search dispatches to the manifest generic invoke.
+    const replaced = merged.find((t) => t.name === 'email_search')!
+    expect(await replaced.handler({ query: 'q' }, ctx)).toMatchObject({ output: 'manifest' })
+    expect(invoke).toHaveBeenCalledWith('email', 'email_search', { query: 'q' }, ctx)
+    // a preserved builtin still runs its builtin handler.
+    expect(await merged.find((t) => t.name === 'email_flag')!.handler({}, ctx)).toMatchObject({
+      output: 'builtin'
+    })
+  })
+
+  test('a cutover tool the manifest does not expose stays builtin', async () => {
+    const builtin = [builtinTool('email_search'), builtinTool('report_list')]
+    const manifest = emailManifest([manifestTool({ name: 'email_search' })])
+    const invoke = vi.fn(async () => ({ ok: true as const, output: 'm', durationMs: 0 }))
+    // cutover wants report_list too, but the manifest doesn't have it → it stays builtin.
+    const merged = replaceWithManifestReadTools(
+      builtin,
+      manifest,
+      invoke,
+      new Set(['email_search', 'report_list'])
+    )
+    expect(merged).toHaveLength(2)
+    expect(await merged.find((t) => t.name === 'report_list')!.handler({}, ctx)).toMatchObject({
+      output: 'builtin'
+    })
   })
 })

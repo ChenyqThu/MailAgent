@@ -388,4 +388,11 @@ export interface ChatToolPlatform {
    *  thread_id for continuity. Reuses the serial gate / idle timeout. The old
    *  streaming notion-agent backend + backend_kind stay (Phase 3 retires the UI). */
   notionAgentChat(input: NotionAgentChatInput): Promise<NotionAgentChatResult>
+  // ── generic Skill invoke（P2b）→ serve-api POST /api/skills/invoke ──────────
+  /** Invoke a Skill tool through the authoritative Python registry (the same face
+   *  MCP / external agents use). Returns the envelope's `data`; throws Error&{code}
+   *  on a SkillError. Used by manifest-driven tools when MAILAGENT_CHAT_MANIFEST_MODE
+   *  is on, so a read tool runs against the single source of truth. The local/CF
+   *  auth the chat runtime already carries is an owner principal → full scopes. */
+  invokeSkillTool(skill: string, tool: string, input: unknown): Promise<unknown>
 }

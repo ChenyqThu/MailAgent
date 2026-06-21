@@ -885,6 +885,71 @@ describe('HttpChatPlatform tool board — 委托 httpApi + 端点', () => {
     expect(url).toBe('/api/chat/save-to-kos')
     expect(JSON.parse(init.body)).toEqual({ messageId: 9 })
   })
+
+  // P2f memory WAL http wrappers
+  test('listMemory → GET /chat/memory?scope=', async () => {
+    fetchMock.mockResolvedValue(envelopeResponse([]))
+    const p = new HttpChatPlatform(makeHttpApi(), '/api')
+    await p.listMemory('user')
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/chat/memory?scope=user')
+    expect(fetchMock.mock.calls[0][1].method).toBe('GET')
+  })
+
+  test('writeMemory → POST /chat/memory {scope,key,valueJson}', async () => {
+    fetchMock.mockResolvedValue(
+      envelopeResponse({
+        scope: 'user',
+        key: 'k',
+        value_json: '"v"',
+        source_wiki_path: null,
+        created_at: 1,
+        updated_at: 1
+      })
+    )
+    const p = new HttpChatPlatform(makeHttpApi(), '/api')
+    await p.writeMemory({ scope: 'user', key: 'k', valueJson: '"v"' })
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('/api/chat/memory')
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(init.body)).toEqual({ scope: 'user', key: 'k', valueJson: '"v"' })
+  })
+
+  test('deleteMemory → DELETE /chat/memory?scope&key → number', async () => {
+    fetchMock.mockResolvedValue(envelopeResponse({ deleted: 1 }))
+    const p = new HttpChatPlatform(makeHttpApi(), '/api')
+    expect(await p.deleteMemory('user', 'k')).toBe(1)
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/chat/memory?scope=user&key=k')
+    expect(fetchMock.mock.calls[0][1].method).toBe('DELETE')
+  })
+
+  // P2g notion_agent_chat http wrapper
+  test('notionAgentChat → POST /chat/notion-agent-once', async () => {
+    fetchMock.mockResolvedValue(
+      envelopeResponse({ text: 'a', threadId: 't', status: 'ok', metadata: null })
+    )
+    const p = new HttpChatPlatform(makeHttpApi(), '/api')
+    const r = await p.notionAgentChat({ message: 'q', threadId: 't' })
+    expect(r).toEqual({ text: 'a', threadId: 't', status: 'ok', metadata: null })
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('/api/chat/notion-agent-once')
+    expect(JSON.parse(init.body)).toEqual({ message: 'q', threadId: 't' })
+  })
+
+  // P2b generic Skill invoke http wrapper
+  test('invokeSkillTool → POST /skills/invoke {skill,tool,input}', async () => {
+    fetchMock.mockResolvedValue(envelopeResponse({ count: 0, items: [] }))
+    const p = new HttpChatPlatform(makeHttpApi(), '/api')
+    const out = await p.invokeSkillTool('email', 'email_search', { query: 'q' })
+    expect(out).toEqual({ count: 0, items: [] })
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('/api/skills/invoke')
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(init.body)).toEqual({
+      skill: 'email',
+      tool: 'email_search',
+      input: { query: 'q' }
+    })
+  })
 })
 
 // ── config 快照 ─────────────────────────────────────────────────────────────

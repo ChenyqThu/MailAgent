@@ -202,5 +202,9 @@ export const testChatPlatform: ChatInfraPlatform & ChatToolPlatform = {
   // P2g notion_agent_chat stub — scripted backends never emit tool_use → never invoked.
   async notionAgentChat() {
     return toolNotExercised()
+  },
+  // P2b generic Skill invoke stub — manifest mode off in these tests → never called.
+  async invokeSkillTool() {
+    return toolNotExercised()
   }
 }
