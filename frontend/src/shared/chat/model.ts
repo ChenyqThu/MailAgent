@@ -15,6 +15,13 @@ export type BackendKind = 'notion-agent' | 'custom-api'
 export type MessageRole = 'user' | 'assistant' | 'system' | 'tool'
 export type MessageStatus = 'pending' | 'streaming' | 'complete' | 'error' | 'aborted'
 
+// task 06-18-custom-ai-harness-agent Phase 2 (P2c) — chat session anchor.
+//   'email'   = anchored to a specific inbox email (email_id NOT NULL, anchor_id = email_id).
+//   'general' = a context-free agent session (Cmd+O in P3); email_id IS NULL, anchor_id IS NULL.
+// The ai_chat_sessions v7 migration adds a table CHECK coupling anchor_type ↔ email_id/anchor_id
+// so a sentinel like email_id=0 is impossible by construction (architecture.md §1.4 / DR-5).
+export type AnchorType = 'email' | 'general'
+
 // Sprint 19 — agent harness audit. Each LLM-proposed tool call gets one row
 // in `chat_tool_call`. See docs/reference/llm-agent/agent-harness-design.md §4.5.
 export type ToolCallStatus =
@@ -28,7 +35,14 @@ export type ConfirmationTier = 'silent' | 'preview' | 'edit'
 
 export interface ChatSession {
   id: number
-  email_id: number
+  // P2c — nullable since v7: email sessions carry the internal_id, general
+  // sessions carry null. Read sites that only ever handle the per-email sidebar
+  // (anchor_type='email') still see a number; cross-anchor consumers must null-check.
+  email_id: number | null
+  // P2c — anchor model (v7). Pre-v7 rows backfill to anchor_type='email',
+  // anchor_id=email_id. 'general' rows have both email_id and anchor_id NULL.
+  anchor_type: AnchorType
+  anchor_id: number | null
   backend_kind: BackendKind
   backend_model: string | null
   backend_agent_page_id: string | null
@@ -77,7 +91,13 @@ export interface ChatMessage {
 }
 
 export interface OpenSessionInput {
-  emailId: number
+  // P2c — anchor-aware session open. Back-compat: existing callers pass
+  // `{ emailId }` (anchorType defaults to 'email'); general sessions pass
+  // `{ anchorType: 'general' }` and omit emailId. NEVER pass emailId=0 as a
+  // general sentinel — the v7 CHECK rejects it.
+  anchorType?: AnchorType
+  /** Required when anchorType is 'email' (the default); ignored for 'general'. */
+  emailId?: number | null
   backendKind: BackendKind
   backendModel?: string | null
   backendAgentPageId?: string | null

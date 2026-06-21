@@ -240,6 +240,10 @@ function TranscriptPane({
     session.email_subject?.trim() || session.first_user_message?.trim() || t('sessions.untitled')
 
   const continueInInbox = (): void => {
+    // P2c — general (email_id=null, anchor_type='general') sessions aren't anchored
+    // to an inbox email, so "continue in inbox" doesn't apply (Cmd+O reopens them
+    // in P3). Email sessions navigate to their owning email as before.
+    if (session.email_id == null) return
     setActiveEmail(session.email_id, { navTarget: true })
     // 交付文档 §3.1 — pass the session's backend kind so the panel opens on the
     // matching agent (per-kind session scoping).

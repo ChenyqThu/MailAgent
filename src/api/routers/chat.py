@@ -157,6 +157,18 @@ async def list_sessions(request: Request, email_id: int = Query(..., alias="emai
     )
 
 
+# 路由顺序：静态 /sessions/general 须在动态 /sessions/{id:int} 之前（``:int`` 已挡住非 int，
+# 此处仍显式置前作双保险）。
+@router.get("/sessions/general", dependencies=[Depends(verify_cf_access)])
+async def list_general_sessions(request: Request):
+    """P2c — general（无邮件 context）sessions（按 updated_at 倒序）。镜像 listGeneralSessions
+    → ChatSession[]。general session 绝不漏进某封邮件 sidebar（与 /sessions?emailId= 分开）。"""
+    sessions = get_chat_db().list_general_sessions()
+    return success_envelope(
+        sessions, request=request, source="sqlite", meta_extra={"count": len(sessions)}
+    )
+
+
 @router.get("/sessions/{session_id:int}/messages", dependencies=[Depends(verify_cf_access)])
 async def list_messages(request: Request, session_id: int):
     """某 session 的全部消息（按 created_at/id 升序）。镜像 chat:listMessages → ChatMessage[]。"""
@@ -420,49 +432,64 @@ async def notion_agent(request: Request):
 # ``:int`` 转换器已挡住非 int（"new"/"all" 不匹配 {id:int}），此处顺序兼顾可读性。
 
 
-@router.post("/sessions", dependencies=[Depends(verify_cf_access)])
-async def open_session(request: Request, body: Optional[Dict[str, Any]] = None):
-    """getOrCreateSession：复用既有 (emailId,backendKind,pageId) session 或新建。
-    镜像 chat:getOrCreateSession → ChatSession。body = OpenSessionInput（camelCase）。"""
-    opts = body or {}
+# P2c — anchor-aware session 入参校验。email（默认）→ emailId 必须非负 int；general → 无
+# emailId（**绝不**接受 emailId sentinel，下沉到 db._resolve_anchor 也 defense-in-depth）。
+def _validate_session_opts(opts: Dict[str, Any], route: str) -> tuple[str, Optional[int], str]:
+    anchor_type = opts.get("anchorType") or "email"
+    if anchor_type not in ("email", "general"):
+        raise APIError(
+            "E_INVALID_ARG",
+            f"{route} requires anchorType in {{email, general}}",
+            source="sqlite",
+        )
     email_id = opts.get("emailId")
+    if anchor_type == "email":
+        if not isinstance(email_id, int) or isinstance(email_id, bool) or email_id < 0:
+            raise APIError(
+                "E_INVALID_ARG",
+                f"{route} email anchor requires emailId:int (non-negative)",
+                source="sqlite",
+            )
+    else:
+        email_id = None  # general session 无 emailId（CHECK 强制 email_id IS NULL）
     backend_kind = opts.get("backendKind")
-    if not isinstance(email_id, int) or isinstance(email_id, bool):
-        raise APIError("E_INVALID_ARG", "sessions requires emailId:int", source="sqlite")
     if backend_kind not in ("notion-agent", "custom-api"):
         raise APIError(
             "E_INVALID_ARG",
-            "sessions requires backendKind in {notion-agent, custom-api}",
+            f"{route} requires backendKind in {{notion-agent, custom-api}}",
             source="sqlite",
         )
+    return anchor_type, email_id, backend_kind
+
+
+@router.post("/sessions", dependencies=[Depends(verify_cf_access)])
+async def open_session(request: Request, body: Optional[Dict[str, Any]] = None):
+    """getOrCreateSession：复用既有 session 或新建。镜像 chat:getOrCreateSession → ChatSession。
+    body = OpenSessionInput（camelCase；P2c 加 anchorType: 'email'|'general'，缺省 'email'）。"""
+    opts = body or {}
+    anchor_type, email_id, backend_kind = _validate_session_opts(opts, "sessions")
     session = get_chat_db().get_or_create_session(
         email_id=email_id,
         backend_kind=backend_kind,
         backend_model=opts.get("backendModel"),
         backend_agent_page_id=opts.get("backendAgentPageId"),
+        anchor_type=anchor_type,
     )
     return success_envelope(session, request=request, source="sqlite")
 
 
 @router.post("/sessions/new", dependencies=[Depends(verify_cf_access)])
 async def new_session(request: Request, body: Optional[Dict[str, Any]] = None):
-    """createNewSession：无条件 INSERT 新 session（绕过复用）。镜像 chat:newSession → ChatSession。"""
+    """createNewSession：无条件 INSERT 新 session（绕过复用）。镜像 chat:newSession → ChatSession。
+    P2c：支持 anchorType（general session 无 emailId）。"""
     opts = body or {}
-    email_id = opts.get("emailId")
-    backend_kind = opts.get("backendKind")
-    if not isinstance(email_id, int) or isinstance(email_id, bool):
-        raise APIError("E_INVALID_ARG", "sessions/new requires emailId:int", source="sqlite")
-    if backend_kind not in ("notion-agent", "custom-api"):
-        raise APIError(
-            "E_INVALID_ARG",
-            "sessions/new requires backendKind in {notion-agent, custom-api}",
-            source="sqlite",
-        )
+    anchor_type, email_id, backend_kind = _validate_session_opts(opts, "sessions/new")
     session = get_chat_db().create_new_session(
         email_id=email_id,
         backend_kind=backend_kind,
         backend_model=opts.get("backendModel"),
         backend_agent_page_id=opts.get("backendAgentPageId"),
+        anchor_type=anchor_type,
     )
     return success_envelope(session, request=request, source="sqlite")
 

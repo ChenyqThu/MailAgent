@@ -65,6 +65,9 @@ export function SessionsPage(): React.ReactElement {
   }, [all, query, filter])
 
   const openSession = (item: ChatSessionListItem): void => {
+    // P2c — general (email_id=null) sessions have no owning email to jump to
+    // (Cmd+O reopens them in P3); skip the inbox navigation for them.
+    if (item.email_id == null) return
     // navTarget: the email may live in any mailbox / not be paged into the
     // current list — exempt it from EmailList's active-reset (same as the
     // CommandPalette search-jump path).

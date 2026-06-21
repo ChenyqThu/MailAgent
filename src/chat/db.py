@@ -1,6 +1,9 @@
 """ai_chat.db 读 + 写访问 —— serve-api 远程 chat 端点（V2.1 阶段 2 读 + 阶段 3 3b-3 写）。
 
-ai_chat.db = 前端 owned schema（``frontend/src/electron/main/chat_db.ts``，CHAT_DB_VERSION 4）。
+ai_chat.db = 前端 owned schema（``frontend/src/electron/main/chat_db.ts``，CHAT_DB_VERSION 7）。
+v7（P2c）= chat session anchor：``email_id`` 改 nullable + 加 ``anchor_type``/``anchor_id`` 列
+（table CHECK 强制 email→两者非空 / general→两者 NULL，禁 emailId=0 sentinel）。本文件只 mirror
+读写既有列、**绝不建表/改 schema**（schema 归 chat_db.ts ``migrate``）。
 读函数（阶段 2）+ 写函数（3b-3）SQL **逐字镜像** chat_db.ts 对应函数，行形状对齐前端
 ``ChatSession`` / ``ChatSessionSummary`` / ``ChatMessage`` / ``ChatToolCall``（``model.ts``）：
   - 读：``listSessionsForEmail`` / ``listAllSessions`` / ``listMessages`` / ``listToolCallsForMessage``。
@@ -36,6 +39,24 @@ from typing import Any, Dict, List, Optional
 def _now_ms() -> int:
     """epoch 毫秒（对齐 chat_db.ts ``Date.now()``，所有写的 created_at/updated_at 用它）。"""
     return int(time.time() * 1000)
+
+
+def _resolve_anchor(
+    anchor_type: str, email_id: Optional[int]
+) -> tuple[str, Optional[int], Optional[int]]:
+    """P2c — 把 (anchor_type, email_id) 解析成 (anchor_type, email_id, anchor_id)。镜像
+    chat_db.ts ``resolveAnchor``：email（默认）→ email_id 必须非负 int、anchor_id=email_id；
+    general → 两者 NULL（**绝不**接受 emailId sentinel）。非法 email anchor 抛 ValueError
+    （router 已前置校验，这里是 defense-in-depth，免得插入违反 v7 CHECK 的行）。"""
+    if anchor_type == "general":
+        return "general", None, None
+    if anchor_type != "email":
+        raise ValueError(f"anchor_type must be 'email' or 'general', got {anchor_type!r}")
+    if not isinstance(email_id, int) or isinstance(email_id, bool) or email_id < 0:
+        raise ValueError(
+            f"anchor_type='email' requires a non-negative integer emailId, got {email_id!r}"
+        )
+    return "email", email_id, email_id
 
 
 # UpdateMessagePatch / UpdateToolCallPatch（camelCase wire key → 列名）映射，**字段顺序逐字
@@ -145,13 +166,21 @@ class ChatDb:
             (email_id,),
         )
 
+    def list_general_sessions(self) -> List[Dict[str, Any]]:
+        """P2c — general（无邮件 context）sessions（按 updated_at 倒序）。镜像
+        listGeneralSessions → ChatSession[]。与 list_sessions_for_email 分开，general session
+        绝不漏进某封邮件的 sidebar。"""
+        return self._read_all(
+            "SELECT * FROM ai_chat_sessions WHERE anchor_type = 'general' ORDER BY updated_at DESC",
+        )
+
     def list_all_sessions(self, limit: int = 300) -> List[Dict[str, Any]]:
         """跨邮件 session 历史（含 first_user_message 预览 + message_count，排除无消息 session）。
         镜像 listAllSessions → ChatSessionSummary[]。"""
         return self._read_all(
             """SELECT
-                 s.id, s.email_id, s.backend_kind, s.backend_model, s.backend_agent_page_id,
-                 s.created_at, s.updated_at,
+                 s.id, s.email_id, s.anchor_type, s.anchor_id, s.backend_kind, s.backend_model,
+                 s.backend_agent_page_id, s.created_at, s.updated_at,
                  (SELECT substr(m.content, 1, 500) FROM ai_chat_messages m
                     WHERE m.session_id = s.id AND m.role = 'user'
                     ORDER BY m.created_at ASC LIMIT 1) AS first_user_message,
@@ -186,29 +215,42 @@ class ChatDb:
 
     def get_or_create_session(
         self,
-        email_id: int,
-        backend_kind: str,
+        email_id: Optional[int] = None,
+        backend_kind: str = "custom-api",
         backend_model: Optional[str] = None,
         backend_agent_page_id: Optional[str] = None,
+        *,
+        anchor_type: str = "email",
     ) -> Dict[str, Any]:
-        """复用既有 (email,kind,pageId) session 或新建。镜像 chat_db.ts getOrCreateSession。
+        """复用既有 session 或新建。镜像 chat_db.ts getOrCreateSession（P2c anchor-aware）。
 
-        pageId 为 None 时走 ``IS NULL`` 分支（SQLite 把 UNIQUE NULL 当永远互异，不能只靠
-        UNIQUE 查）。命中且 backendModel 变了 → 刷新 model + updated_at（用户切 BackendSelector）。
+        email（默认）→ 按 email_id 查复用（pre-v7 逐字节不变，邮件 sidebar 零回归）；general →
+        按 anchor_type='general' AND email_id IS NULL 查、复用最近一条（无 anchor_id 去重，"latest"
+        即契约；显式新建走 create_new_session）。pageId 为 None 时走 ``IS NULL`` 分支（SQLite 把
+        UNIQUE NULL 当永远互异）。命中且 backendModel 变了 → 刷新 model + updated_at。
         """
+        anchor_type, email_id, anchor_id = _resolve_anchor(anchor_type, email_id)
         now = _now_ms()
+        page_clause = (
+            "backend_agent_page_id IS NULL"
+            if backend_agent_page_id is None
+            else "backend_agent_page_id = ?"
+        )
+        page_params: tuple = () if backend_agent_page_id is None else (backend_agent_page_id,)
         with self._write_connection() as conn:
-            if backend_agent_page_id is None:
+            if anchor_type == "email":
                 existing = conn.execute(
-                    "SELECT * FROM ai_chat_sessions "
-                    "WHERE email_id = ? AND backend_kind = ? AND backend_agent_page_id IS NULL",
-                    (email_id, backend_kind),
+                    f"SELECT * FROM ai_chat_sessions "
+                    f"WHERE email_id = ? AND backend_kind = ? AND {page_clause}",
+                    (email_id, backend_kind, *page_params),
                 ).fetchone()
             else:
                 existing = conn.execute(
-                    "SELECT * FROM ai_chat_sessions "
-                    "WHERE email_id = ? AND backend_kind = ? AND backend_agent_page_id = ?",
-                    (email_id, backend_kind, backend_agent_page_id),
+                    f"SELECT * FROM ai_chat_sessions "
+                    f"WHERE anchor_type = 'general' AND email_id IS NULL "
+                    f"AND backend_kind = ? AND {page_clause} "
+                    f"ORDER BY updated_at DESC LIMIT 1",
+                    (backend_kind, *page_params),
                 ).fetchone()
 
             if existing is not None:
@@ -222,13 +264,17 @@ class ChatDb:
 
             cur = conn.execute(
                 "INSERT INTO ai_chat_sessions "
-                "(email_id, backend_kind, backend_model, backend_agent_page_id, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (email_id, backend_kind, backend_model, backend_agent_page_id, now, now),
+                "(email_id, anchor_type, anchor_id, backend_kind, backend_model, "
+                "backend_agent_page_id, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (email_id, anchor_type, anchor_id, backend_kind, backend_model,
+                 backend_agent_page_id, now, now),
             )
             return {
                 "id": int(cur.lastrowid),
                 "email_id": email_id,
+                "anchor_type": anchor_type,
+                "anchor_id": anchor_id,
                 "backend_kind": backend_kind,
                 "backend_model": backend_model,
                 "backend_agent_page_id": backend_agent_page_id,
@@ -238,24 +284,31 @@ class ChatDb:
 
     def create_new_session(
         self,
-        email_id: int,
-        backend_kind: str,
+        email_id: Optional[int] = None,
+        backend_kind: str = "custom-api",
         backend_model: Optional[str] = None,
         backend_agent_page_id: Optional[str] = None,
+        *,
+        anchor_type: str = "email",
     ) -> Dict[str, Any]:
         """无条件 INSERT 新 session（绕过复用查找）。镜像 chat_db.ts createNewSession
-        （「+ 新建会话」显式意图，v4 drop UNIQUE 后多 session/邮件合法）。"""
+        （「+ 新建会话」显式意图，v4 drop UNIQUE 后多 session/邮件合法；P2c anchor-aware）。"""
+        anchor_type, email_id, anchor_id = _resolve_anchor(anchor_type, email_id)
         now = _now_ms()
         with self._write_connection() as conn:
             cur = conn.execute(
                 "INSERT INTO ai_chat_sessions "
-                "(email_id, backend_kind, backend_model, backend_agent_page_id, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (email_id, backend_kind, backend_model, backend_agent_page_id, now, now),
+                "(email_id, anchor_type, anchor_id, backend_kind, backend_model, "
+                "backend_agent_page_id, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (email_id, anchor_type, anchor_id, backend_kind, backend_model,
+                 backend_agent_page_id, now, now),
             )
             return {
                 "id": int(cur.lastrowid),
                 "email_id": email_id,
+                "anchor_type": anchor_type,
+                "anchor_id": anchor_id,
                 "backend_kind": backend_kind,
                 "backend_model": backend_model,
                 "backend_agent_page_id": backend_agent_page_id,

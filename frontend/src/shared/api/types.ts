@@ -1203,9 +1203,18 @@ export interface ChatMessage {
   updated_at: number
 }
 
+// P2c (task 06-18-custom-ai-harness-agent) — session anchor. 'email' rows carry
+// email_id (= anchor_id); 'general' (context-free, Cmd+O) rows have both NULL.
+// Mirror of model.ts AnchorType — kept inline so api/types stays the boundary
+// surface without importing chat internals.
+export type ChatAnchorType = 'email' | 'general'
+
 export interface ChatSession {
   id: number
-  email_id: number
+  // P2c — nullable since ai_chat.db v7: general sessions have no owning email.
+  email_id: number | null
+  anchor_type: ChatAnchorType
+  anchor_id: number | null
   backend_kind: ChatBackendKind
   backend_model: string | null
   backend_agent_page_id: string | null

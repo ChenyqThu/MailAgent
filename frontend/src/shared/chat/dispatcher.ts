@@ -359,7 +359,11 @@ export function createChatDispatcher(deps: ChatDispatcherDeps): ChatDispatcher {
     _inflight.set(input.sessionId, ac)
 
     const backend = deps.getBackend(input.backendKind)
-    const emailContext = await deps.platform.loadEmailContext(session.email_id)
+    // P2c — email_id is nullable since v7 (general anchor → null). Email sessions
+    // still load their inline email context; general sessions get null (no single
+    // email to inline). Edit re-stream keeps the session's original anchor.
+    const emailContext =
+      session.email_id != null ? await deps.platform.loadEmailContext(session.email_id) : null
     const history = await deps.platform.persist.listLastNMessages(
       input.sessionId,
       HISTORY_WINDOW_SIZE

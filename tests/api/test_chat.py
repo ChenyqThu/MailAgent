@@ -21,15 +21,25 @@ from src.chat.db import ChatDb
 from src.kos.client import KOSError  # kos-call 端点 KOSError→502 测试用
 
 # ai_chat.db schema（端点 SELECT 字段，对齐 chat_db.ts v4）。
+# P2c — mirror chat_db.ts v7 (anchor): email_id nullable + anchor_type/anchor_id
+# + coupling CHECK. The test fixture must track the real schema or db.py's anchor
+# SELECT/INSERT (s.anchor_type / INSERT anchor columns) would fail against it.
 _AI_CHAT_DDL = """
 CREATE TABLE ai_chat_sessions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    email_id INTEGER NOT NULL,
+    email_id INTEGER,
+    anchor_type TEXT NOT NULL DEFAULT 'email' CHECK (anchor_type IN ('email','general')),
+    anchor_id INTEGER,
     backend_kind TEXT NOT NULL,
     backend_model TEXT,
     backend_agent_page_id TEXT,
     created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL
+    updated_at INTEGER NOT NULL,
+    CHECK (
+        (anchor_type = 'email' AND anchor_id IS NOT NULL AND email_id IS NOT NULL)
+        OR
+        (anchor_type = 'general' AND anchor_id IS NULL AND email_id IS NULL)
+    )
 );
 CREATE TABLE ai_chat_messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -65,9 +75,9 @@ def ai_chat_db(tmp_path: Path) -> Path:
     conn = sqlite3.connect(str(db))
     conn.executescript(_AI_CHAT_DDL)
     conn.execute(
-        "INSERT INTO ai_chat_sessions (id, email_id, backend_kind, backend_model, "
-        "backend_agent_page_id, created_at, updated_at) VALUES (?,?,?,?,?,?,?)",
-        (SESSION_ID, EMAIL_ID, "custom-api", "claude-sonnet-4-6", None, now, now),
+        "INSERT INTO ai_chat_sessions (id, email_id, anchor_type, anchor_id, backend_kind, "
+        "backend_model, backend_agent_page_id, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+        (SESSION_ID, EMAIL_ID, "email", EMAIL_ID, "custom-api", "claude-sonnet-4-6", None, now, now),
     )
     conn.execute(
         "INSERT INTO ai_chat_messages (id, session_id, role, content, status, created_at, "

@@ -118,7 +118,9 @@ describe('chat_db — path + schema bootstrap', () => {
     // newSession() can INSERT a fresh row instead of resurrecting old.
     // task 06-08-chat Bug 2: bumped to 5 — chat_tool_call.content_offset.
     // task 06-08-chat 需求 5: bumped to 6 — ai_chat_messages.thinking.
-    expect(ver.value).toBe('6')
+    // P2c (06-18-custom-ai-harness-agent): bumped to 7 — session anchor
+    // (email_id nullable + anchor_type/anchor_id + coupling CHECK).
+    expect(ver.value).toBe('7')
   })
 
   test('fresh DB schema includes the v2 metadata column', () => {
@@ -147,7 +149,7 @@ describe('chat_db — path + schema bootstrap', () => {
     const ver = db.prepare("SELECT value FROM chat_db_meta WHERE key = 'schema_version'").get() as {
       value: string
     }
-    expect(ver.value).toBe('6')
+    expect(ver.value).toBe('7')
   })
 
   test('v1-version DB ALTERs in the metadata column on first open (forward migration)', () => {
@@ -200,7 +202,7 @@ describe('chat_db — path + schema bootstrap', () => {
     }
     // Sprint 19 (PR-1a → bug-fix): v1 DB jumped to v4; task 06-08-chat Bug 2
     // bumped to v5; 需求 5 bumped to v6 → a v1 DB now climbs the whole ladder to v6.
-    expect(ver.value).toBe('6')
+    expect(ver.value).toBe('7')
     const cols = db.prepare('PRAGMA table_info(ai_chat_messages)').all() as Array<{ name: string }>
     expect(cols.map((c) => c.name)).toContain('metadata')
     // v6 column present after climbing from v1.
@@ -251,7 +253,7 @@ describe('chat_db — path + schema bootstrap', () => {
           value: string
         }
       ).value
-    ).toBe('6')
+    ).toBe('7')
     // Simulate the crash window: roll the meta back to v3 while the physical
     // schema (content_offset + thinking columns, v4 table shape) stays at v6.
     db.prepare("UPDATE chat_db_meta SET value = '3' WHERE key = 'schema_version'").run()
@@ -263,7 +265,7 @@ describe('chat_db — path + schema bootstrap', () => {
     const ver = reopened
       .prepare("SELECT value FROM chat_db_meta WHERE key='schema_version'")
       .get() as { value: string }
-    expect(ver.value).toBe('6')
+    expect(ver.value).toBe('7')
     // Columns are still present exactly once (no duplication, no loss).
     const msgCols = reopened.prepare('PRAGMA table_info(ai_chat_messages)').all() as Array<{
       name: string
@@ -946,7 +948,7 @@ describe('chat_db — v3 → v4 migration (drop UNIQUE on ai_chat_sessions)', ()
     const ver = db.prepare("SELECT value FROM chat_db_meta WHERE key = 'schema_version'").get() as {
       value: string
     }
-    expect(ver.value).toBe('6')
+    expect(ver.value).toBe('7')
     // UNIQUE gone — CREATE TABLE SQL no longer contains UNIQUE clause on
     // (email_id, backend_kind, backend_agent_page_id).
     const tableSql = (
@@ -972,10 +974,13 @@ describe('chat_db — v3 → v4 migration (drop UNIQUE on ai_chat_sessions)', ()
     expect(msgs[0].content).toBe('pre-migration chat')
     // After UNIQUE drop, second INSERT with same (email, backend, NULL)
     // is now allowed — this is what enables newSession() multi-session.
+    // P2c — post-v7 the table has the anchor coupling CHECK; an email row must
+    // carry anchor_type='email' + anchor_id (= email_id), else IntegrityError.
     db.prepare(
       `INSERT INTO ai_chat_sessions
-         (email_id, backend_kind, backend_model, backend_agent_page_id, created_at, updated_at)
-       VALUES (500, 'custom-api', 'sonnet', NULL, 2000, 2000)`
+         (email_id, anchor_type, anchor_id, backend_kind, backend_model,
+          backend_agent_page_id, created_at, updated_at)
+       VALUES (500, 'email', 500, 'custom-api', 'sonnet', NULL, 2000, 2000)`
     ).run()
     const after = (
       db.prepare('SELECT COUNT(*) as c FROM ai_chat_sessions WHERE email_id = 500').get() as {
@@ -1086,7 +1091,7 @@ describe('chat_db — v4 → v5 migration (chat_tool_call.content_offset)', () =
       value: string
     }
     // v4 DB now climbs the whole ladder to v6 (content_offset added at v5).
-    expect(ver.value).toBe('6')
+    expect(ver.value).toBe('7')
     // Column present, pre-existing row reads NULL (degrade path in renderer).
     const cols = db.prepare('PRAGMA table_info(chat_tool_call)').all() as Array<{ name: string }>
     expect(cols.map((c) => c.name)).toContain('content_offset')
@@ -1148,7 +1153,7 @@ describe('chat_db — v5 → v6 migration (ai_chat_messages.thinking)', () => {
     const ver = db.prepare("SELECT value FROM chat_db_meta WHERE key = 'schema_version'").get() as {
       value: string
     }
-    expect(ver.value).toBe('6')
+    expect(ver.value).toBe('7')
     // Column present, pre-existing row reads NULL (no thinking block in renderer).
     const cols = db.prepare('PRAGMA table_info(ai_chat_messages)').all() as Array<{ name: string }>
     expect(cols.map((c) => c.name)).toContain('thinking')

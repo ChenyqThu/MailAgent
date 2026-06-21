@@ -21,7 +21,7 @@
 // renderer doesn't try to resume the dropped stream on next mount.
 
 import Database from 'better-sqlite3'
-import { existsSync, mkdirSync, renameSync } from 'fs'
+import { copyFileSync, existsSync, mkdirSync, renameSync } from 'fs'
 import { homedir } from 'os'
 import { dirname, join } from 'path'
 
@@ -33,6 +33,7 @@ import { resolveDataRoot } from './db'
 // 本文件函数签名使用；re-export 保既有 importer（dispatcher / harness /
 // kos_save / registry / handlers/chat）的 `from '../chat_db'` 路径不变。
 import type {
+  AnchorType,
   AppendMessageInput,
   AppendToolCallInput,
   BackendKind,
@@ -50,6 +51,7 @@ import type {
 } from '@shared/chat/model'
 
 export type {
+  AnchorType,
   AppendMessageInput,
   AppendToolCallInput,
   BackendKind,
@@ -68,7 +70,11 @@ export type {
 
 // ── path resolution ─────────────────────────────────────────────────────
 
-const CHAT_DB_VERSION = 6
+// v7 (P2c, task 06-18-custom-ai-harness-agent) — chat session anchor: email_id
+// becomes nullable, anchor_type/anchor_id added with a coupling CHECK so general
+// (context-free) sessions never need an email_id sentinel. 🔴 bump 时同步刷新
+// src/chat/db.py 头注释的 CHAT_DB_VERSION（mirror，不建表）。
+const CHAT_DB_VERSION = 7
 
 export function resolveChatDbPath(): string {
   const fromEnv = process.env['AI_CHAT_DB_PATH']
@@ -114,6 +120,28 @@ function migrateLegacyChatDbIfNeeded(targetPath: string): void {
 function hasColumn(db: Database.Database, table: string, column: string): boolean {
   const cols = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>
   return cols.some((c) => c.name === column)
+}
+
+/** P2c — one-time .pre-v7.bak snapshot before the destructive v6→v7 rebuild.
+ *  Best-effort: any failure is logged and swallowed (the rebuild itself is
+ *  atomic + the version gate above guards a downgrade, so the backup is
+ *  belt-and-suspenders, not a correctness dependency). Skips :memory: / unnamed
+ *  DBs. Checkpoint-truncates the WAL first so the copied main file is
+ *  self-contained (un-checkpointed pages would otherwise live only in -wal).
+ *  Never overwrites an existing .pre-v7.bak — a prior partial-upgrade snapshot
+ *  is more valuable than the current possibly-half-migrated state. */
+function backupChatDbBeforeV7(db: Database.Database): void {
+  const path = db.name
+  if (!path || path === ':memory:') return
+  const backupPath = path + '.pre-v7.bak'
+  if (existsSync(backupPath)) return
+  try {
+    db.pragma('wal_checkpoint(TRUNCATE)')
+    copyFileSync(path, backupPath)
+    console.log(`[chat_db] pre-v7 backup written to ${backupPath}`)
+  } catch (err) {
+    console.error('[chat_db] pre-v7 backup failed (continuing; rebuild is atomic)', err)
+  }
 }
 
 function migrate(db: Database.Database): void {
@@ -416,6 +444,88 @@ function migrate(db: Database.Database): void {
       throw err
     }
   }
+
+  // v6 → v7 — task 06-18-custom-ai-harness-agent (P2c) chat session anchor.
+  // Rebuild ai_chat_sessions so `email_id` becomes NULLABLE and add
+  // anchor_type/anchor_id with a coupling CHECK. This lets "general"
+  // (context-free, Cmd+O) agent sessions live in the same table WITHOUT an
+  // email_id=0 sentinel (a sentinel would pollute every `WHERE email_id=` query
+  // + the per-email sidebar). All pre-v7 rows backfill to anchor_type='email',
+  // anchor_id=email_id, so the email-mode listSessionsForEmail / sidebar path is
+  // byte-for-byte unchanged.
+  //
+  // Same 12-step rebuild discipline as v3→v4: DROP TABLE ai_chat_sessions needs
+  // PRAGMA foreign_keys=OFF — otherwise the implicit per-row DELETE cascades
+  // through ai_chat_messages's ON DELETE CASCADE FK and wipes the message log.
+  // Runs out-of-transaction, opens its own transaction for the atomic swap, then
+  // re-enables FK + runs foreign_key_check. A one-time .pre-v7.bak file snapshot
+  // is taken first (best-effort; the swap is atomic + the version gate guards a
+  // downgrade, so the backup is belt-and-suspenders).
+  //
+  // Idempotency guard (same discipline as the v5/v6 hasColumn guards): the
+  // rebuild's meta write is INSIDE its transaction, so a natural crash can't
+  // leave "physical v7 + meta v6". But the artificial "meta rolled back" re-entry
+  // (crash-resilience test) would otherwise re-run the destructive rebuild and
+  // clobber any general row to anchor_type='email' (→ CHECK violation). When the
+  // anchor_type column already exists the rebuild already happened — just advance
+  // meta, don't rebuild.
+  if (current < 7 && hasColumn(db, 'ai_chat_sessions', 'anchor_type')) {
+    db.prepare(
+      "INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', '7')"
+    ).run()
+  } else if (current < 7) {
+    backupChatDbBeforeV7(db)
+    db.pragma('foreign_keys = OFF')
+    try {
+      db.exec('BEGIN IMMEDIATE')
+      try {
+        db.exec(`
+          CREATE TABLE ai_chat_sessions_v7 (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email_id INTEGER,
+            anchor_type TEXT NOT NULL DEFAULT 'email'
+              CHECK (anchor_type IN ('email', 'general')),
+            anchor_id INTEGER,
+            backend_kind TEXT NOT NULL CHECK (backend_kind IN ('notion-agent', 'custom-api')),
+            backend_model TEXT,
+            backend_agent_page_id TEXT,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            CHECK (
+              (anchor_type = 'email' AND anchor_id IS NOT NULL AND email_id IS NOT NULL)
+              OR
+              (anchor_type = 'general' AND anchor_id IS NULL AND email_id IS NULL)
+            )
+          );
+          INSERT INTO ai_chat_sessions_v7
+            (id, email_id, anchor_type, anchor_id, backend_kind, backend_model,
+             backend_agent_page_id, created_at, updated_at)
+            SELECT id, email_id, 'email', email_id, backend_kind, backend_model,
+                   backend_agent_page_id, created_at, updated_at
+            FROM ai_chat_sessions;
+          DROP TABLE ai_chat_sessions;
+          ALTER TABLE ai_chat_sessions_v7 RENAME TO ai_chat_sessions;
+          DROP INDEX IF EXISTS idx_sessions_email;
+          CREATE INDEX idx_sessions_email ON ai_chat_sessions(email_id, updated_at DESC);
+          CREATE INDEX idx_sessions_anchor
+            ON ai_chat_sessions(anchor_type, anchor_id, updated_at DESC);
+        `)
+        db.prepare(
+          "INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', '7')"
+        ).run()
+        db.exec('COMMIT')
+      } catch (err) {
+        db.exec('ROLLBACK')
+        throw err
+      }
+      const violations = db.prepare('PRAGMA foreign_key_check').all() as unknown[]
+      if (violations.length > 0) {
+        throw new Error(`chat_db v6→v7 migration left FK violations: ${JSON.stringify(violations)}`)
+      }
+    } finally {
+      db.pragma('foreign_keys = ON')
+    }
+  }
 }
 
 // ── singleton ───────────────────────────────────────────────────────────
@@ -449,30 +559,67 @@ export function closeChatDb(): void {
 
 // ── sessions ────────────────────────────────────────────────────────────
 
+/** P2c — resolve an OpenSessionInput to its concrete anchor columns. Email
+ *  (the default): email_id is a required non-negative int and anchor_id mirrors
+ *  it. General: both NULL — NEVER accept an emailId here (no sentinel). Throws
+ *  E_INVALID_ARG-shaped Error for a missing/invalid email anchor so the caller
+ *  doesn't silently insert a row that the v7 CHECK would reject. */
+function resolveAnchor(input: OpenSessionInput): {
+  anchorType: AnchorType
+  emailId: number | null
+  anchorId: number | null
+} {
+  const anchorType: AnchorType = input.anchorType ?? 'email'
+  if (anchorType === 'general') {
+    return { anchorType: 'general', emailId: null, anchorId: null }
+  }
+  const emailId = input.emailId
+  if (typeof emailId !== 'number' || !Number.isInteger(emailId) || emailId < 0) {
+    throw new Error(
+      `getOrCreateSession: anchor_type='email' requires a non-negative integer emailId, got ${String(emailId)}`
+    )
+  }
+  return { anchorType: 'email', emailId, anchorId: emailId }
+}
+
 export function getOrCreateSession(input: OpenSessionInput): ChatSession {
   const db = getChatDb()
   const now = Date.now()
   const backendAgentPageId = input.backendAgentPageId ?? null
   const backendModel = input.backendModel ?? null
+  const { anchorType, emailId, anchorId } = resolveAnchor(input)
 
   // SQLite treats UNIQUE NULL columns as always-distinct, so we can't lean
   // on `UNIQUE(email_id, backend_kind, backend_agent_page_id)` alone when
   // backend_agent_page_id is null. Branch by null to keep the lookup well-defined.
-  const select =
-    backendAgentPageId === null
-      ? db.prepare(
-          `SELECT * FROM ai_chat_sessions
-            WHERE email_id = ? AND backend_kind = ? AND backend_agent_page_id IS NULL`
-        )
-      : db.prepare(
-          `SELECT * FROM ai_chat_sessions
-            WHERE email_id = ? AND backend_kind = ? AND backend_agent_page_id = ?`
-        )
-  const existing = (
-    backendAgentPageId === null
-      ? select.get(input.emailId, input.backendKind)
-      : select.get(input.emailId, input.backendKind, backendAgentPageId)
-  ) as ChatSession | undefined
+  const pageClause =
+    backendAgentPageId === null ? 'backend_agent_page_id IS NULL' : 'backend_agent_page_id = ?'
+  const pageParams = backendAgentPageId === null ? [] : [backendAgentPageId]
+
+  // Reuse lookup. Email: keyed on email_id — byte-identical to pre-v7 (email_id
+  // is non-null only for email rows per the CHECK, so this naturally excludes
+  // general rows; zero regression for the per-email sidebar). General: keyed on
+  // anchor_type + email_id IS NULL, reusing the most-recently-touched general
+  // session (no anchor_id to dedupe on → "latest" is the contract; an explicit
+  // fresh general session goes through createNewSession).
+  let existing: ChatSession | undefined
+  if (anchorType === 'email') {
+    existing = db
+      .prepare(
+        `SELECT * FROM ai_chat_sessions
+          WHERE email_id = ? AND backend_kind = ? AND ${pageClause}`
+      )
+      .get(emailId, input.backendKind, ...pageParams) as ChatSession | undefined
+  } else {
+    existing = db
+      .prepare(
+        `SELECT * FROM ai_chat_sessions
+          WHERE anchor_type = 'general' AND email_id IS NULL
+            AND backend_kind = ? AND ${pageClause}
+          ORDER BY updated_at DESC LIMIT 1`
+      )
+      .get(input.backendKind, ...pageParams) as ChatSession | undefined
+  }
 
   if (existing) {
     // The conversation's effective model can change between turns (user
@@ -491,14 +638,26 @@ export function getOrCreateSession(input: OpenSessionInput): ChatSession {
   const result = db
     .prepare(
       `INSERT INTO ai_chat_sessions
-        (email_id, backend_kind, backend_model, backend_agent_page_id, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?)`
+        (email_id, anchor_type, anchor_id, backend_kind, backend_model,
+         backend_agent_page_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     )
-    .run(input.emailId, input.backendKind, backendModel, backendAgentPageId, now, now)
+    .run(
+      emailId,
+      anchorType,
+      anchorId,
+      input.backendKind,
+      backendModel,
+      backendAgentPageId,
+      now,
+      now
+    )
 
   return {
     id: Number(result.lastInsertRowid),
-    email_id: input.emailId,
+    email_id: emailId,
+    anchor_type: anchorType,
+    anchor_id: anchorId,
     backend_kind: input.backendKind,
     backend_model: backendModel,
     backend_agent_page_id: backendAgentPageId,
@@ -529,16 +688,29 @@ export function createNewSession(input: OpenSessionInput): ChatSession {
   const now = Date.now()
   const backendAgentPageId = input.backendAgentPageId ?? null
   const backendModel = input.backendModel ?? null
+  const { anchorType, emailId, anchorId } = resolveAnchor(input)
   const result = db
     .prepare(
       `INSERT INTO ai_chat_sessions
-        (email_id, backend_kind, backend_model, backend_agent_page_id, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?)`
+        (email_id, anchor_type, anchor_id, backend_kind, backend_model,
+         backend_agent_page_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     )
-    .run(input.emailId, input.backendKind, backendModel, backendAgentPageId, now, now)
+    .run(
+      emailId,
+      anchorType,
+      anchorId,
+      input.backendKind,
+      backendModel,
+      backendAgentPageId,
+      now,
+      now
+    )
   return {
     id: Number(result.lastInsertRowid),
-    email_id: input.emailId,
+    email_id: emailId,
+    anchor_type: anchorType,
+    anchor_id: anchorId,
     backend_kind: input.backendKind,
     backend_model: backendModel,
     backend_agent_page_id: backendAgentPageId,
@@ -553,6 +725,18 @@ export function listSessionsForEmail(emailId: number): ChatSession[] {
     .all(emailId) as ChatSession[]
 }
 
+/** P2c — list general (context-free) sessions, newest-first. The per-email
+ *  sidebar uses listSessionsForEmail (anchor_type='email' via email_id=?); this
+ *  is its general-anchor counterpart for the Cmd+O surface (P3). Kept separate
+ *  so a general session never leaks into a specific email's sidebar. */
+export function listGeneralSessions(): ChatSession[] {
+  return getChatDb()
+    .prepare(
+      "SELECT * FROM ai_chat_sessions WHERE anchor_type = 'general' ORDER BY updated_at DESC"
+    )
+    .all() as ChatSession[]
+}
+
 // Cross-email session history for the global "AI 会话历史" page. Sessions with
 // no messages at all (a "+ 新建会话" click the user never sent into) are
 // excluded — they'd be noise in a history list. The first-user-message
@@ -564,8 +748,8 @@ export function listAllSessions(limit = 300): ChatSessionSummary[] {
   return getChatDb()
     .prepare(
       `SELECT
-         s.id, s.email_id, s.backend_kind, s.backend_model, s.backend_agent_page_id,
-         s.created_at, s.updated_at,
+         s.id, s.email_id, s.anchor_type, s.anchor_id, s.backend_kind, s.backend_model,
+         s.backend_agent_page_id, s.created_at, s.updated_at,
          (SELECT substr(m.content, 1, 500) FROM ai_chat_messages m
             WHERE m.session_id = s.id AND m.role = 'user'
             ORDER BY m.created_at ASC LIMIT 1) AS first_user_message,
