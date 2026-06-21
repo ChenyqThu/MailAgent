@@ -36,19 +36,15 @@ import { ContextChips } from './ContextChips'
 import { MessageList, type DraftHandlers, type UserHandlers } from './MessageList'
 import { QuickActions } from './QuickActions'
 
-// Chat backend kind is a lightweight UI preference (which backend the
-// composer talks to), persisted to localStorage so a remount / app restart
-// keeps the user's last choice. Defaults to notion-agent — the bound Custom
-// Agent in account.json is the primary surface and is usually already
-// authed; custom-api needs an extra API key. The actual agent binding +
-// auth live in the CLI's account.json (read via notionAgent.getConfig).
+// Chat backend kind preference. task 06-18-custom-ai-harness cleanup —
+// notion-agent is retired as a *new-session* backend: new email-mode chats are
+// ALWAYS custom-api. Old `backend_kind='notion-agent'` sessions still load
+// (read-only) via their persisted backend_kind, but the user can no longer
+// create or switch to one, so this always resolves to custom-api — the stored
+// value (incl. an old 'notion-agent' from before the retirement) is ignored.
 const BACKEND_KIND_PREF = 'mailagent.chat.backendKind'
 function readBackendKindPref(): ChatBackendKind {
-  try {
-    return localStorage.getItem(BACKEND_KIND_PREF) === 'custom-api' ? 'custom-api' : 'notion-agent'
-  } catch {
-    return 'notion-agent'
-  }
+  return 'custom-api'
 }
 function writeBackendKindPref(kind: ChatBackendKind): void {
   try {
@@ -655,16 +651,10 @@ export function AIChatPanel({
     await chat.confirmTool(headConfirmation.toolUseId, false)
   }, [chat, headConfirmation])
 
-  // ⌥⇧B — toggle backend kind. Sprint 11 V1.4 moved from bare ⌥B because
-  // the global nav-shell collapse claimed that keystroke per DESIGN.md
-  // §2.11. Backend cycling is rare enough that the extra modifier is fine.
-  useShortcut('alt+shift+b', () =>
-    selectBackend(
-      backend.kind === 'notion-agent'
-        ? { kind: 'custom-api', model: backend.model ?? readModelPref(), agentPageId: null }
-        : { kind: 'notion-agent', model: null, agentPageId: null }
-    )
-  )
+  // ⌥⇧B (toggle backend kind) retired with the notion-agent backend selector
+  // (task 06-18-custom-ai-harness cleanup): custom-api is the only selectable
+  // backend, so there is nothing to toggle — and a hotkey must never silently
+  // flip a read-only notion-agent history session to custom-api.
 
   // Sprint 14 PR A — ⇧⌥H toggles the session history sidebar. Picked the
   // same Alt-modifier family as ⇧⌥B (backend) so the panel's "Alt = AI
@@ -688,6 +678,10 @@ export function AIChatPanel({
   const retryActionKlass = useCjkMonoSwap('text-meta font-mono')
 
   const backendName = backendShortLabel(backend, agentName)
+  // task 06-18-custom-ai-harness cleanup — an old notion-agent session loaded
+  // read-only (the backend is retired as a selectable choice; new chats are
+  // custom-api). Drives the read-only render branch below.
+  const isRetiredNotion = backend.kind === 'notion-agent'
 
   return (
     <aside
@@ -860,15 +854,29 @@ export function AIChatPanel({
           width. Pairs with the MessageList root's own min-w-0. */}
       <div className="flex-1 flex min-h-0">
         <div className="flex-1 flex flex-col min-h-0 min-w-0">
-          <BackendSelector value={backend} onChange={selectBackend} agentName={agentName} />
-          <ContextChips
-            hasEmailBody={activeInternalId !== null}
-            aiFieldsCount={aiFieldsCount}
-            threadCount={threadCount}
-            notionProjectCount={0}
-          />
+          <BackendSelector value={backend} agentName={agentName} />
+          {!isRetiredNotion && (
+            <ContextChips
+              hasEmailBody={activeInternalId !== null}
+              aiFieldsCount={aiFieldsCount}
+              threadCount={threadCount}
+              notionProjectCount={0}
+            />
+          )}
 
-          {!backendConfigured ? (
+          {isRetiredNotion ? (
+            // task 06-18-custom-ai-harness cleanup — old notion-agent session
+            // loads read-only: NO mutating handlers (edit / retry / draft /
+            // tool-confirm), no QuickActions, no Composer. To use Notion now,
+            // start a custom-api chat and let the agent call notion_agent_chat.
+            chat.messages.length === 0 ? (
+              <div className="flex-1 flex items-center justify-center px-6 text-aux text-ink-fg-2 text-center">
+                {t('chat.empty.noMessages')}
+              </div>
+            ) : (
+              <MessageList messages={chat.messages} streamingMessageId={null} />
+            )
+          ) : !backendConfigured ? (
             <BackendOnboarding
               kind={backend.kind}
               onOpenSettings={() => void navigate({ to: '/settings', search: { tab: 'ai' } })}

@@ -584,6 +584,7 @@
     },
     "backend": {
       "notionAgent": "Notion Agent",
+      "retiredNotice": "已迁移为工具 · 仅供查看",
       "customApi": "Custom Agent",
       "selectorLabel": "Backend",
       "agentSuffix": "· Jarvis",

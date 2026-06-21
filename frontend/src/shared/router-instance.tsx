@@ -32,7 +32,6 @@ import {
 
 import { AdminLayout } from './components/layout/AdminLayout'
 import { AgentsLayout } from './components/layout/AgentsLayout'
-import { NotionAgentLayout } from './components/layout/NotionAgentLayout'
 import { CalendarLayout } from './components/layout/CalendarLayout'
 import { InboxLayout } from './components/layout/InboxLayout'
 import { LlmDashboardLayout } from './components/layout/LlmDashboardLayout'
@@ -182,12 +181,6 @@ const sessionsRoute = createRoute({
 // /agents — Custom AI Agents 区（Agents / 报告 / Chats）。?tab= 控制激活 tab，
 // 侧栏「Custom AI」「AI 会话历史」直接深链。validateSearch 把未知 tab 归到 agents。
 const AGENTS_TABS = ['agents', 'reports', 'chats'] as const
-// Notion Agent 区（仅 chats，notion-agent scoped）。参考 Custom AI 但暂无 agents/报告。
-const notionAgentRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/notion-agent',
-  component: NotionAgentLayout
-})
 
 const agentsRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -313,7 +306,6 @@ export const router = createRouter({
     inboxRoute,
     sessionsRoute,
     agentsRoute,
-    notionAgentRoute,
     adminRoute.addChildren([adminIndexRoute, adminLlmRoute, adminKanbanRoute, adminCalendarRoute]),
     settingsRoute
   ]),

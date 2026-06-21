@@ -31,7 +31,6 @@ import {
   Mail,
   Send,
   Settings,
-  Sparkles,
   SquarePen,
   Star,
   Sliders
@@ -215,16 +214,6 @@ function TotalCount({ count }: { count: number }): React.ReactElement | null {
   )
 }
 
-/** Notion Agent online indicator. The `.app-nav-keep` class keeps the dot
- *  visible in collapsed mode (the one color anchor in the icon-only rail). */
-function OnlineDot({ online }: { online: boolean }): React.ReactElement {
-  return (
-    <span
-      className={cn('app-nav-keep w-1.5 h-1.5 rounded-full', online ? 'bg-ok' : 'bg-ink-fg-3')}
-    />
-  )
-}
-
 const MAILBOX_ICON: Record<EmailView, React.ReactNode> = {
   inbox: <Inbox size={15} strokeWidth={1.75} />,
   outbox: <Send size={15} strokeWidth={1.75} />,
@@ -271,7 +260,6 @@ export function Sidebar(): React.ReactElement {
   // Falls back to notionAgentName if .env doesn't have USER_EMAIL.
   const accountEmail = settings?.userEmail ?? settings?.notionAgentName ?? null
   const account = deriveAccount(accountEmail)
-  const notionAgentOnline = (settings?.notionAgentPageId ?? null) !== null
 
   // Aggregate counts for virtual rows (flagged / all-mail).
   const inboxRow = mailboxes.find((m) => m.mailbox === '收件箱')
@@ -523,16 +511,6 @@ export function Sidebar(): React.ReactElement {
           </h2>
         </div>
         <nav className="px-2 space-y-px">
-          {/* Notion Agent — Sprint 20 起进 /notion-agent（仅 chats，notion-agent
-              scoped 的会话历史）。未来加 Notion Agent 的 agents/报告时升级成多 tab。 */}
-          <NavRow
-            icon={<Sparkles size={15} strokeWidth={1.75} />}
-            label={t('chat.backend.notionAgent')}
-            title={collapsed ? t('chat.backend.notionAgent') : undefined}
-            selected={pathname === '/notion-agent'}
-            onClick={() => navigate({ to: '/notion-agent' })}
-            right={<OnlineDot online={notionAgentOnline} />}
-          />
           {/* Custom AI — /agents hub（Agents / 报告 / Chats=custom-api scoped）。
               整个 /agents 都属 Custom AI。（邮件上下文「问 AI」仍开 AIChatPanel。） */}
           <NavRow
