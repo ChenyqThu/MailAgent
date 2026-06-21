@@ -31,6 +31,7 @@ import { EnvField } from '../parts/EnvField'
 import { EnvSecretField } from '../parts/EnvSecretField'
 import { PromptEditorDialog } from '../parts/PromptEditorDialog'
 import { NotionAgentSection } from './NotionAgentSection'
+import { CustomAiSection } from '../CustomAiSection'
 
 export function AiTab(): React.ReactElement {
   const { t } = useTranslation()
@@ -503,6 +504,8 @@ export function AiTab(): React.ReactElement {
           ]}
         />
       </Section>
+
+      <CustomAiSection />
 
       <PromptEditorDialog
         slot={editorSlot}
