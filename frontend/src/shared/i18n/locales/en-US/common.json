@@ -320,6 +320,7 @@
       "settings": "Open settings",
       "shortcutHelp": "Show keyboard help",
       "composeNew": "Compose new email",
+      "generalAgent": "Open General Agent",
       "nextEmail": "Next email",
       "prevEmail": "Previous email",
       "reply": "AI draft reply",
@@ -365,6 +366,8 @@
       "matchedSuffix": "{n, plural, one {# match} other {# matches}} for \"{query}\""
     },
     "jump": {
+      "generalAgent": "General Agent",
+      "generalAgentMeta": "Custom AI · ⌘O",
       "aiHistory": "AI conversations",
       "aiHistoryMeta": "Open AI panel",
       "admin": "Admin kanban",
@@ -527,6 +530,23 @@
     "noMatchTitle": "No matching sessions",
     "noMatchHint": "Try a different keyword or switch the backend filter",
     "deleted": "Session deleted"
+  },
+  "generalAgent": {
+    "title": "General Agent",
+    "newChat": "New conversation",
+    "history": "Conversation history",
+    "close": "Close",
+    "dismiss": "Dismiss",
+    "confirmFailed": "Confirmation failed",
+    "empty": {
+      "title": "Ask the Custom AI anything",
+      "hint": "Search mail, run reports, check the calendar, query Notion, or save a preference — this conversation isn't tied to a single email."
+    },
+    "onboarding": {
+      "title": "Custom AI isn't configured yet",
+      "hint": "Add an LLM API key in Settings → AI to use the General Agent.",
+      "openSettings": "Open Settings"
+    }
   },
   "chat": {
     "title": "AI Assistant",
@@ -1024,6 +1044,32 @@
         "today": "Today",
         "popEventCount": "{n} events"
       }
+    },
+    "skills": {
+      "title": "Skills",
+      "desc": "Capabilities the Custom AI can use. Disabling a skill removes its tools and its prompt guidance from the next conversation.",
+      "enabled": "Enabled",
+      "unavailable": "Unavailable: {reason}",
+      "toolCount": "{n, plural, one {# tool} other {# tools}}",
+      "scopes": "Scopes",
+      "empty": "No skills available (the skill manifest could not be loaded).",
+      "loading": "Loading skills…"
+    },
+    "memory": {
+      "title": "Memory",
+      "desc": "Durable facts the Custom AI remembers about you. Edits and deletions take effect on the next conversation.",
+      "empty": "No memory yet. The agent saves facts here as you confirm them.",
+      "edit": "Edit",
+      "save": "Save",
+      "cancel": "Cancel",
+      "delete": "Delete",
+      "deleteConfirm": "Confirm?",
+      "source": "Source: {source}",
+      "updated": "Updated",
+      "savedToast": "Memory updated",
+      "deletedToast": "Memory deleted",
+      "emptyValue": "Value cannot be empty",
+      "loadError": "Could not load memory"
     },
     "shortcut": {
       "title": "Keyboard shortcuts",

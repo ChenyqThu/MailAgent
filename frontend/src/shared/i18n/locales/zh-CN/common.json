@@ -320,6 +320,7 @@
       "settings": "打开设置",
       "shortcutHelp": "显示快捷键帮助",
       "composeNew": "写新邮件",
+      "generalAgent": "打开通用 Agent",
       "nextEmail": "下一封邮件",
       "prevEmail": "上一封邮件",
       "reply": "AI 起草回复",
@@ -365,6 +366,8 @@
       "matchedSuffix": "含 \"{query}\" 的 {n, plural, one {# 封} other {# 封}}"
     },
     "jump": {
+      "generalAgent": "通用 Agent",
+      "generalAgentMeta": "Custom AI · ⌘O",
       "aiHistory": "AI 会话",
       "aiHistoryMeta": "打开 AI 面板",
       "admin": "看板 Admin",
@@ -527,6 +530,23 @@
     "noMatchTitle": "没有匹配的会话",
     "noMatchHint": "换个关键词，或切换后端筛选",
     "deleted": "已删除会话"
+  },
+  "generalAgent": {
+    "title": "通用 Agent",
+    "newChat": "新建对话",
+    "history": "对话历史",
+    "close": "关闭",
+    "dismiss": "忽略",
+    "confirmFailed": "确认失败",
+    "empty": {
+      "title": "向 Custom AI 提问任何事",
+      "hint": "搜索邮件、跑报告、查日历、问 Notion，或记下一条偏好——这个对话不绑定任何单封邮件。"
+    },
+    "onboarding": {
+      "title": "Custom AI 尚未配置",
+      "hint": "在「设置 → AI」里填入 LLM API Key 即可使用通用 Agent。",
+      "openSettings": "打开设置"
+    }
   },
   "chat": {
     "title": "AI 助手",
@@ -1024,6 +1044,32 @@
         "today": "今天",
         "popEventCount": "{n} 个事件"
       }
+    },
+    "skills": {
+      "title": "技能",
+      "desc": "Custom AI 可使用的能力。关闭某个技能后，它的工具与提示词指引都不会注入下一次对话。",
+      "enabled": "已启用",
+      "unavailable": "不可用：{reason}",
+      "toolCount": "{n} 个工具",
+      "scopes": "权限范围",
+      "empty": "暂无可用技能（技能清单加载失败）。",
+      "loading": "正在加载技能…"
+    },
+    "memory": {
+      "title": "记忆",
+      "desc": "Custom AI 长期记住的关于你的事实。编辑或删除会在下一次对话生效。",
+      "empty": "暂无记忆。当你确认后，agent 会把事实存在这里。",
+      "edit": "编辑",
+      "save": "保存",
+      "cancel": "取消",
+      "delete": "删除",
+      "deleteConfirm": "确认？",
+      "source": "来源：{source}",
+      "updated": "更新于",
+      "savedToast": "记忆已更新",
+      "deletedToast": "记忆已删除",
+      "emptyValue": "内容不能为空",
+      "loadError": "无法加载记忆"
     },
     "shortcut": {
       "title": "键盘快捷键",
