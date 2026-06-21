@@ -267,6 +267,16 @@ function buildStableSystemPrompt(
       '# Read silently; never echo back.\n\n' +
       cfg.userContext
   }
+  // P2f — durable memory summary overlay, AFTER userContext. Both are stable per
+  // session (fetched once via /chat/config) → stay in the cacheable prefix.
+  // null / "" → skip (no memory yet). The model updates it via memory_write.
+  if (cfg.memorySummary && cfg.memorySummary.length > 0) {
+    text +=
+      '\n\n# Saved memory (durable facts about the user)\n' +
+      '# Read silently; use these to avoid re-asking. When the user states a new durable\n' +
+      '# preference, persist it via memory_write (the user confirms).\n\n' +
+      cfg.memorySummary
+  }
   // KOS 可用（启用 AND 对接，= kosConfigured）时注入使用指南（静态、可缓存；与 allKosTools
   // 注册同 gate —— 开关开着但凭据未对接时都不注入，避免 prompt 叫 AI 用未注册的工具）。
   if (cfg.kosConfigured) {

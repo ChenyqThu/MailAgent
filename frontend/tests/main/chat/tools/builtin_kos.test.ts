@@ -383,20 +383,20 @@ describe('createBuiltinTools KOS gate', () => {
     const names = tools.map((t) => t.name)
     expect(names).not.toContain('kos_query')
     expect(names).not.toContain('kos_digest')
-    expect(tools).toHaveLength(20)
+    expect(tools).toHaveLength(24) // 11 read + 9 write + 4 memory (P2f), no KOS
   })
 
-  test('configured=true — KOS tools registered alongside default 20 (→ 29)', () => {
+  test('configured=true — KOS tools registered alongside default 24 (→ 33)', () => {
     const tools = createBuiltinTools(
       makePlatform({ kosConfig: () => ({ configured: true, timeDecayEnabled: false }) })
     )
     const names = tools.map((t) => t.name).sort()
     expect(names).toContain('kos_query')
     expect(names).toContain('kos_put_page')
-    expect(tools).toHaveLength(29) // 20 default + 9 KOS
+    expect(tools).toHaveLength(33) // 24 default (incl. 4 memory) + 9 KOS
   })
 
-  test('configured=true: KOS tools live in category=meta only', () => {
+  test('configured=true: category=meta holds the KOS tools + the 4 memory tools', () => {
     const tools = createBuiltinTools(
       makePlatform({ kosConfig: () => ({ configured: true, timeDecayEnabled: false }) })
     )
@@ -404,6 +404,10 @@ describe('createBuiltinTools KOS gate', () => {
       .filter((t) => t.category === 'meta')
       .map((t) => t.name)
       .sort()
-    expect(metaNames).toEqual(ALL_KOS_NAMES)
+    // P2f — memory tools are also category 'meta' (agent-meta), alongside KOS.
+    const MEMORY_NAMES = ['memory_delete', 'memory_get', 'memory_list', 'memory_write']
+    expect(metaNames).toEqual([...ALL_KOS_NAMES, ...MEMORY_NAMES].sort())
+    // every KOS tool is still meta-categorized (the original invariant).
+    expect(metaNames.filter((n) => n.startsWith('kos_'))).toEqual(ALL_KOS_NAMES)
   })
 })

@@ -90,6 +90,28 @@ export interface ChatMessage {
   updated_at: number
 }
 
+// P2f (task 06-18-custom-ai-harness-agent Phase 2) — agent memory WAL. One row
+// per (scope, key) in ai_chat.db.agent_memory_kv. scope namespaces the fact:
+// 'user' = long-term preferences / writing style / mail-handling principles;
+// 'skill:<name>' = skill-specific preference. value_json is the serialized fact;
+// source_* traces where it came from (session/message/tool) for auditability.
+export interface AgentMemoryEntry {
+  scope: string
+  key: string
+  value_json: string
+  source_wiki_path: string | null
+  created_at: number
+  updated_at: number
+}
+
+export interface WriteMemoryInput {
+  scope: string
+  key: string
+  valueJson: string
+  /** Optional provenance pointer (e.g. wiki path / "session:<id>/msg:<id>"). */
+  sourceWikiPath?: string | null
+}
+
 export interface OpenSessionInput {
   // P2c — anchor-aware session open. Back-compat: existing callers pass
   // `{ emailId }` (anchorType defaults to 'email'); general sessions pass

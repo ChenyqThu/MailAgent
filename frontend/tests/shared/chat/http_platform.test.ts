@@ -903,7 +903,8 @@ describe('HttpChatPlatform config 快照', () => {
       kosConsumerEnabled: false,
       kosConfigured: false,
       kosL1HotBlockEnabled: false,
-      userContext: null
+      userContext: null,
+      memorySummary: null
     })
     expect(p.kosConfig()).toEqual({ configured: false, timeDecayEnabled: true })
   })
@@ -937,14 +938,14 @@ describe('HttpChatPlatform config 快照', () => {
 // ── createBuiltinTools 集成 + createHttpNotionAgentBackend ───────────────────
 
 describe('HttpChatPlatform 工具板满足 createBuiltinTools', () => {
-  test('kosConfigured=false → 20 工具（无 KOS）', () => {
+  test('kosConfigured=false → 24 工具（无 KOS；含 4 memory）', () => {
     const p = new HttpChatPlatform(makeHttpApi(), '/api')
-    expect(createBuiltinTools(p).length).toBe(20)
+    expect(createBuiltinTools(p).length).toBe(24)
   })
 
-  test('kosConfigured=true → 29 工具（+9 KOS）', () => {
+  test('kosConfigured=true → 33 工具（+9 KOS）', () => {
     const p = new HttpChatPlatform(makeHttpApi(), '/api', { kosConfigured: true })
-    expect(createBuiltinTools(p).length).toBe(29)
+    expect(createBuiltinTools(p).length).toBe(33)
   })
 })
 

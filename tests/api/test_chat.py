@@ -267,8 +267,9 @@ def _config_client(
 
 
 def test_chat_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
-    """默认快照：9 字段 camelCase 齐全 + 值对齐 electron 默认 + DEFAULT_HTTP_CONFIG。
-    userContext 默认 ""（未配置 LLM_CONTEXT_PAGE_ID / ContextLoader 返回空）。"""
+    """默认快照：10 字段 camelCase 齐全 + 值对齐 electron 默认 + DEFAULT_HTTP_CONFIG。
+    userContext 默认 ""（未配置 LLM_CONTEXT_PAGE_ID / ContextLoader 返回空）；
+    memorySummary 默认 ""（P2f，无 memory 行）。"""
     with _config_client(monkeypatch, _ChatConfigStub()) as c:
         r = c.get("/api/chat/config")
     assert r.status_code == 200
@@ -282,6 +283,7 @@ def test_chat_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
         "kosConfigured": False,
         "kosTimeDecayEnabled": True,
         "userContext": "",
+        "memorySummary": "",
         "enabledModels": [],
     }
 

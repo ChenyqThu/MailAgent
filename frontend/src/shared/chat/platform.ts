@@ -29,13 +29,15 @@
 // docs/reference/remote-chat-report/v2.1-stage3-chat-platform-design.md §3。
 
 import type {
+  AgentMemoryEntry,
   AppendMessageInput,
   AppendToolCallInput,
   ChatMessage,
   ChatSession,
   OpenSessionInput,
   UpdateMessagePatch,
-  UpdateToolCallPatch
+  UpdateToolCallPatch,
+  WriteMemoryInput
 } from './model'
 import type { ChatStreamEvent, ChatStreamRequest, EmailContext } from './types'
 // 工具板读原语返回类型 = 既有 cli.gen / api 形状（均 shared 零 Electron，不变式 1）。
@@ -150,6 +152,10 @@ export interface ChatModelConfig {
    *  failed; graceful). Sourced from serve-api GET /chat/config (ContextLoader,
    *  TTL-cached). notion-agent carries its own Notion context → not injected. */
   userContext: string | null
+  /** P2f — compact user-scope memory summary, injected into the stable system
+   *  prefix AFTER userContext (both are cacheable "user profile" overlays). From
+   *  serve-api /chat/config (ChatDb.memory_summary). null / "" → not injected. */
+  memorySummary: string | null
 }
 
 export interface ChatModelPlatform {
@@ -348,4 +354,14 @@ export interface ChatToolPlatform {
   kosCallTool(name: string, args: Record<string, unknown>): Promise<unknown>
   /** 手动保存对话到 KOS（electron: saveConversationToKos；http: serve-api /save-to-kos）。 */
   saveToKos(input: SaveConversationInput): Promise<SaveConversationResult>
+  // ── memory WAL（P2f，agent_memory_kv）→ serve-api /chat/memory ──────────────
+  /** list memory entries (optional scope filter, newest-first). */
+  listMemory(scope?: string): Promise<AgentMemoryEntry[]>
+  /** single entry or null ("never recorded"). */
+  getMemory(scope: string, key: string): Promise<AgentMemoryEntry | null>
+  /** UPSERT a memory entry. The memory_write tool gates this behind a preview
+   *  confirmation (silent memory writes are a known risk — architecture §3.5). */
+  writeMemory(input: WriteMemoryInput): Promise<AgentMemoryEntry>
+  /** delete a memory entry → rows removed (0 if absent). */
+  deleteMemory(scope: string, key: string): Promise<number>
 }

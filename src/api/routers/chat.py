@@ -291,6 +291,12 @@ async def chat_config(request: Request):
         _kos_cred(k) for k in ("KOS_MCP_BASE", "KOS_OAUTH_CLIENT_ID", "KOS_OAUTH_CLIENT_SECRET")
     )
     kos_configured = kos_consumer and kos_creds
+    # P2f — compact user-scope memory summary injected into the custom-api stable
+    # system prefix (after userContext). Best-effort: db missing / empty → "".
+    try:
+        memory_summary = get_chat_db().memory_summary()
+    except Exception:  # noqa: BLE001 — memory is best-effort; never fail /config
+        memory_summary = ""
     return success_envelope(
         {
             "maxIter": max_iter,
@@ -302,6 +308,7 @@ async def chat_config(request: Request):
             "kosConfigured": kos_configured,
             "kosTimeDecayEnabled": kos_time_decay,
             "userContext": user_context,
+            "memorySummary": memory_summary,
             "enabledModels": enabled_models,
         },
         request=request,
@@ -771,3 +778,51 @@ async def save_to_kos(request: Request, body: Optional[Dict[str, Any]] = None):
             status = 502
         raise APIError(e.code, str(e), http_status=status)
     return success_envelope(result, request=request, source="kos")
+
+
+# ── agent_memory_kv 端点（P2f — Custom AI memory WAL）─────────────────────────
+#
+# memory_* 工具（ChatToolPlatform）→ 这些端点 → ChatDb.agent_memory_kv。scope/key 任意字符串
+# （'skill:foo' / 含特殊字符）→ 用 query param 而非 path 段避免 URL 编码歧义。envelope（非 SSE）。
+# schema 归前端 chat_db.ts owns（agent_memory_kv v3 建），serve-api 只写既有表。
+
+
+@router.get("/memory", dependencies=[Depends(verify_cf_access)])
+async def list_memory(request: Request, scope: Optional[str] = Query(None)):
+    """列 memory 条目（可选 scope 过滤，按 updated_at 倒序）。镜像 chat_db listMemoryEntries。"""
+    rows = get_chat_db().list_memory_entries(scope)
+    return success_envelope(rows, request=request, source="sqlite", meta_extra={"count": len(rows)})
+
+
+@router.get("/memory/entry", dependencies=[Depends(verify_cf_access)])
+async def get_memory(request: Request, scope: str = Query(...), key: str = Query(...)):
+    """单条 memory（data=row|null，不 404 —— null 是正常「没记过此 key」结果）。"""
+    row = get_chat_db().get_memory_entry(scope, key)
+    return success_envelope(row, request=request, source="sqlite")
+
+
+@router.post("/memory", dependencies=[Depends(verify_cf_access)])
+async def upsert_memory(request: Request, body: Optional[Dict[str, Any]] = None):
+    """UPSERT 一条 memory。body = {scope, key, valueJson, sourceWikiPath?}（camelCase）。"""
+    opts = body or {}
+    scope = opts.get("scope")
+    key = opts.get("key")
+    value_json = opts.get("valueJson")
+    if not isinstance(scope, str) or not scope:
+        raise APIError("E_INVALID_ARG", "memory requires scope:str", source="sqlite")
+    if not isinstance(key, str) or not key:
+        raise APIError("E_INVALID_ARG", "memory requires key:str", source="sqlite")
+    if not isinstance(value_json, str):
+        raise APIError("E_INVALID_ARG", "memory requires valueJson:str", source="sqlite")
+    source = opts.get("sourceWikiPath")
+    if source is not None and not isinstance(source, str):
+        raise APIError("E_INVALID_ARG", "memory sourceWikiPath must be a string", source="sqlite")
+    row = get_chat_db().upsert_memory_entry(scope, key, value_json, source)
+    return success_envelope(row, request=request, source="sqlite")
+
+
+@router.delete("/memory", dependencies=[Depends(verify_cf_access)])
+async def delete_memory(request: Request, scope: str = Query(...), key: str = Query(...)):
+    """删一条 memory → {deleted: count}。删不存在的 (scope,key) 也返 {deleted:0}（幂等）。"""
+    count = get_chat_db().delete_memory_entry(scope, key)
+    return success_envelope({"deleted": count}, request=request, source="sqlite")

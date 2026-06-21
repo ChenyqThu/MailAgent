@@ -33,6 +33,7 @@ import { resolveDataRoot } from './db'
 // 本文件函数签名使用；re-export 保既有 importer（dispatcher / harness /
 // kos_save / registry / handlers/chat）的 `from '../chat_db'` 路径不变。
 import type {
+  AgentMemoryEntry,
   AnchorType,
   AppendMessageInput,
   AppendToolCallInput,
@@ -51,6 +52,7 @@ import type {
 } from '@shared/chat/model'
 
 export type {
+  AgentMemoryEntry,
   AnchorType,
   AppendMessageInput,
   AppendToolCallInput,
@@ -1095,4 +1097,57 @@ export function getToolCallByUseId(messageId: number, toolUseId: string): ChatTo
     .prepare('SELECT * FROM chat_tool_call WHERE message_id = ? AND tool_use_id = ?')
     .get(messageId, toolUseId) as ChatToolCall | undefined
   return row ?? null
+}
+
+// ── agent_memory_kv (P2f — Custom AI memory WAL) ──────────────────────────
+// The table landed in v3 (idle until now). One row per (scope, key); scope
+// namespaces the fact ('user' / 'skill:<name>'). value_json is the serialized
+// fact. These power the memory_* tools + the system-prompt memory summary.
+
+/** List memory entries, newest-first. Optional scope filter. */
+export function listMemoryEntries(scope?: string): AgentMemoryEntry[] {
+  const db = getChatDb()
+  if (scope) {
+    return db
+      .prepare('SELECT * FROM agent_memory_kv WHERE scope = ? ORDER BY updated_at DESC')
+      .all(scope) as AgentMemoryEntry[]
+  }
+  return db
+    .prepare('SELECT * FROM agent_memory_kv ORDER BY updated_at DESC')
+    .all() as AgentMemoryEntry[]
+}
+
+export function getMemoryEntry(scope: string, key: string): AgentMemoryEntry | null {
+  const row = getChatDb()
+    .prepare('SELECT * FROM agent_memory_kv WHERE scope = ? AND key = ?')
+    .get(scope, key) as AgentMemoryEntry | undefined
+  return row ?? null
+}
+
+/** UPSERT a memory entry (PRIMARY KEY (scope,key)). created_at is preserved on
+ *  update (only value_json / source_wiki_path / updated_at change). */
+export function upsertMemoryEntry(input: {
+  scope: string
+  key: string
+  valueJson: string
+  sourceWikiPath?: string | null
+}): AgentMemoryEntry {
+  const db = getChatDb()
+  const now = Date.now()
+  db.prepare(
+    `INSERT INTO agent_memory_kv (scope, key, value_json, source_wiki_path, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(scope, key) DO UPDATE SET
+       value_json = excluded.value_json,
+       source_wiki_path = excluded.source_wiki_path,
+       updated_at = excluded.updated_at`
+  ).run(input.scope, input.key, input.valueJson, input.sourceWikiPath ?? null, now, now)
+  // Non-null: we just inserted/updated this exact (scope,key).
+  return getMemoryEntry(input.scope, input.key) as AgentMemoryEntry
+}
+
+export function deleteMemoryEntry(scope: string, key: string): number {
+  return getChatDb()
+    .prepare('DELETE FROM agent_memory_kv WHERE scope = ? AND key = ?')
+    .run(scope, key).changes
 }

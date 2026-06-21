@@ -43,6 +43,7 @@ import type {
   MailagentEmailBody
 } from '../types/cli.gen'
 import type {
+  AgentMemoryEntry,
   AppendMessageInput,
   AppendToolCallInput,
   ChatMessage,
@@ -50,7 +51,8 @@ import type {
   ChatToolCall,
   OpenSessionInput,
   UpdateMessagePatch,
-  UpdateToolCallPatch
+  UpdateToolCallPatch,
+  WriteMemoryInput
 } from './model'
 import type {
   AiFieldsData,
@@ -110,6 +112,9 @@ export interface HttpPlatformConfig {
    *  TTL-cached）。注入 custom-api system prompt（buildStableSystemPrompt）。远程默认
    *  ""（不注入；端点未返回该字段 / 未配置 LLM_CONTEXT_PAGE_ID → 降级空串）。 */
   userContext: string
+  /** P2f — compact user-scope memory summary from serve-api /chat/config
+   *  (ChatDb.memory_summary). "" → not injected. */
+  memorySummary: string
   /** dynamic-models — LLM_ENABLED_MODELS from serve-api /chat/config (dotenv_values
    *  hot-read). Empty array = not configured → consumers fall back to FALLBACK_MODELS. */
   enabledModels: string[]
@@ -128,6 +133,8 @@ export const DEFAULT_HTTP_CONFIG: HttpPlatformConfig = {
   kosTimeDecayEnabled: true,
   // task 06-08-chat 第二波 Bug B — no user context until /chat/config supplies it.
   userContext: '',
+  // P2f — no memory summary until /chat/config supplies it.
+  memorySummary: '',
   // dynamic-models — empty until /chat/config supplies it; consumers fall back to FALLBACK_MODELS.
   enabledModels: []
 }
@@ -435,7 +442,9 @@ export class HttpChatPlatform
       kosL1HotBlockEnabled: this.config.kosL1HotBlockEnabled,
       // task 06-08-chat 第二波 Bug B — "" → null (not injected). custom_api
       // buildStableSystemPrompt only injects when non-null + non-empty.
-      userContext: this.config.userContext.length > 0 ? this.config.userContext : null
+      userContext: this.config.userContext.length > 0 ? this.config.userContext : null,
+      // P2f — "" → null (custom_api injects only when non-null + non-empty).
+      memorySummary: this.config.memorySummary.length > 0 ? this.config.memorySummary : null
     }
   }
 
@@ -687,5 +696,30 @@ export class HttpChatPlatform
 
   saveToKos(input: SaveConversationInput): Promise<SaveConversationResult> {
     return this._req<SaveConversationResult>('POST', '/chat/save-to-kos', { body: input })
+  }
+
+  // ── memory WAL（P2f）→ serve-api /chat/memory ─────────────────────────────
+  listMemory(scope?: string): Promise<AgentMemoryEntry[]> {
+    return this._req<AgentMemoryEntry[]>(
+      'GET',
+      '/chat/memory',
+      scope ? { query: { scope } } : undefined
+    )
+  }
+
+  getMemory(scope: string, key: string): Promise<AgentMemoryEntry | null> {
+    return this._req<AgentMemoryEntry | null>('GET', '/chat/memory/entry', {
+      query: { scope, key }
+    })
+  }
+
+  writeMemory(input: WriteMemoryInput): Promise<AgentMemoryEntry> {
+    return this._req<AgentMemoryEntry>('POST', '/chat/memory', { body: input })
+  }
+
+  deleteMemory(scope: string, key: string): Promise<number> {
+    return this._req<{ deleted: number }>('DELETE', '/chat/memory', {
+      query: { scope, key }
+    }).then((r) => r.deleted)
   }
 }

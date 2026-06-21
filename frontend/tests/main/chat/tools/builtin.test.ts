@@ -218,7 +218,7 @@ describe('builtin tool catalog — M1', () => {
 })
 
 describe('createBuiltinTools — boot wiring', () => {
-  test('builds all 20 default tools (KOS off) into a fresh registry (11 read + 9 write)', () => {
+  test('builds all 24 default tools (KOS off) into a fresh registry (11 read + 9 write + 4 memory)', () => {
     const r = createToolRegistry()
     for (const t of createBuiltinTools(makePlatform())) r.register(t)
     expect(r.names().sort()).toEqual(
@@ -242,7 +242,12 @@ describe('createBuiltinTools — boot wiring', () => {
         'email_set_reply_suggestion',
         'report_get',
         'report_list',
-        'report_run'
+        'report_run',
+        // P2f memory WAL
+        'memory_list',
+        'memory_get',
+        'memory_write',
+        'memory_delete'
       ].sort()
     )
   })
@@ -251,7 +256,7 @@ describe('createBuiltinTools — boot wiring', () => {
     const r = createToolRegistry()
     for (const t of createBuiltinTools(makePlatform())) r.register(t)
     const schema = r.toAnthropicSchema()
-    expect(schema).toHaveLength(20)
+    expect(schema).toHaveLength(24)
     for (const t of schema) {
       expect(t.name).toBeTruthy()
       expect(t.description).toBeTruthy()
@@ -272,13 +277,13 @@ describe('createBuiltinTools — boot wiring', () => {
     }
   })
 
-  test('KOS gate — kosConfig().configured=true adds the 9 KOS tools (20 → 29)', () => {
+  test('KOS gate — kosConfig().configured=true adds the 9 KOS tools (24 → 33)', () => {
     const off = createBuiltinTools(makePlatform())
-    expect(off).toHaveLength(20)
+    expect(off).toHaveLength(24)
     const on = createBuiltinTools(
       makePlatform({ kosConfig: () => ({ configured: true, timeDecayEnabled: false }) })
     )
-    expect(on).toHaveLength(29) // 20 default + 9 KOS
+    expect(on).toHaveLength(33) // 24 default (incl. 4 memory) + 9 KOS
     const names = on.map((t) => t.name)
     expect(names).toContain('kos_query')
     expect(names).toContain('kos_put_page')

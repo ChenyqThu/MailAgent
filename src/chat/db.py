@@ -29,6 +29,7 @@ graceful」处理：生产里前端 ``getChatDb()`` 在任何 renderer harness �
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import time
@@ -531,3 +532,81 @@ class ChatDb:
             "SELECT * FROM chat_tool_call WHERE message_id = ? AND tool_use_id = ?",
             (message_id, tool_use_id),
         )
+
+    # ── agent_memory_kv（P2f — Custom AI memory WAL）───────────────────────
+
+    def list_memory_entries(self, scope: Optional[str] = None) -> List[Dict[str, Any]]:
+        """memory 条目（按 updated_at 倒序），可选 scope 过滤。镜像 chat_db.ts listMemoryEntries。"""
+        if scope:
+            return self._read_all(
+                "SELECT * FROM agent_memory_kv WHERE scope = ? ORDER BY updated_at DESC", (scope,)
+            )
+        return self._read_all("SELECT * FROM agent_memory_kv ORDER BY updated_at DESC")
+
+    def get_memory_entry(self, scope: str, key: str) -> Optional[Dict[str, Any]]:
+        """单条 memory or None。镜像 chat_db.ts getMemoryEntry。"""
+        return self._read_one(
+            "SELECT * FROM agent_memory_kv WHERE scope = ? AND key = ?", (scope, key)
+        )
+
+    def upsert_memory_entry(
+        self,
+        scope: str,
+        key: str,
+        value_json: str,
+        source_wiki_path: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """UPSERT 一条 memory（PK (scope,key)）。created_at 更新时保留（仅改 value/source/updated）。
+        镜像 chat_db.ts upsertMemoryEntry。schema 归前端 owns（agent_memory_kv 由 chat_db.ts v3
+        建），serve-api 只写既有表。"""
+        now = _now_ms()
+        with self._write_connection() as conn:
+            conn.execute(
+                "INSERT INTO agent_memory_kv "
+                "(scope, key, value_json, source_wiki_path, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(scope, key) DO UPDATE SET "
+                "value_json = excluded.value_json, source_wiki_path = excluded.source_wiki_path, "
+                "updated_at = excluded.updated_at",
+                (scope, key, value_json, source_wiki_path, now, now),
+            )
+            row = conn.execute(
+                "SELECT * FROM agent_memory_kv WHERE scope = ? AND key = ?", (scope, key)
+            ).fetchone()
+            return dict(row)
+
+    def delete_memory_entry(self, scope: str, key: str) -> int:
+        """删一条 memory → 删除行数。镜像 chat_db.ts deleteMemoryEntry。"""
+        with self._write_connection() as conn:
+            cur = conn.execute(
+                "DELETE FROM agent_memory_kv WHERE scope = ? AND key = ?", (scope, key)
+            )
+            return cur.rowcount
+
+    def memory_summary(
+        self, scope: str = "user", limit: int = 20, max_chars: int = 2000
+    ) -> str:
+        """紧凑 memory 摘要供 system prompt 注入（限长防污染上下文）。scope 默认 'user'，取最近
+        limit 条 `- key: value`（value_json 解出标量则直接用，否则 compact JSON），整体截断 max_chars。
+        库不存在 / 表空 → ''（graceful，不阻断 /chat/config）。"""
+        rows = self.list_memory_entries(scope)[:limit]
+        if not rows:
+            return ""
+        lines: List[str] = []
+        for r in rows:
+            raw = r.get("value_json")
+            val: Any = raw
+            try:
+                parsed = json.loads(raw) if isinstance(raw, str) else raw
+                val = (
+                    parsed
+                    if isinstance(parsed, (str, int, float, bool))
+                    else json.dumps(parsed, ensure_ascii=False)
+                )
+            except (ValueError, TypeError):
+                val = raw
+            lines.append(f"- {r['key']}: {val}")
+        text = "\n".join(lines)
+        if len(text) > max_chars:
+            text = text[:max_chars] + "\n… (truncated)"
+        return text
