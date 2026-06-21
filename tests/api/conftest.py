@@ -401,3 +401,75 @@ def cal_folder_client(cal_folder_db: Path) -> Iterator[TestClient]:
     with TestClient(app, raise_server_exceptions=False) as c:
         yield c
     app.dependency_overrides.pop(get_settings, None)
+
+
+# ===========================================================================
+# Phase 1 — Skill / Bearer-key fixtures (06-18-custom-ai-harness-agent)
+# ---------------------------------------------------------------------------
+# skills router invoke 经 FastAPI deps 注入 SkillContext (get_repository /
+# get_report_store / get_settings) —— 与 email/reports 路由一致，dependency_overrides
+# 指向临时 DB。report 表由真 SyncStore migration 建（ReportStore 自身不建表）。
+# ===========================================================================
+
+
+@pytest.fixture()
+def skill_report_db(tmp_path_factory: pytest.TempPathFactory) -> str:
+    """真 SyncStore 建全表（含 report_agent / report）+ 播一个 report agent + 一份 ready 报告。"""
+    db = tmp_path_factory.mktemp("skillrep") / "store.db"
+    from src.mail.sync_store import SyncStore
+    from src.reports.store import ReportStore
+
+    SyncStore(str(db))  # 建全部表（含 report_agent / report）
+    store = ReportStore(db_path=str(db))
+    store.create_agent("daily", type="report", enabled=True, title="Daily Digest")
+    store.create_report(
+        report_id="rep-1",
+        agent_id="daily",
+        cadence="daily",
+        report_date="2026-06-01",
+        window_start="2026-06-01T00:00:00Z",
+        window_end="2026-06-02T00:00:00Z",
+    )
+    store.finish_report(
+        "rep-1",
+        status="ready",
+        blocks_json='{"blocks": []}',
+        counts_json='{"total": 3}',
+        headline="3 emails today",
+    )
+    return str(db)
+
+
+@pytest.fixture()
+def skill_client(repo: EmailRepository, skill_report_db: str) -> Iterator[TestClient]:
+    """TestClient with skills 路由所需 deps 全部 override（email repo + report store + config）。
+
+    auth bypass 默认 ON（MAILAGENT_API_AUTH_DISABLED=true）；bearer / 401 测试自行
+    monkeypatch src.api.auth.AUTH_DISABLED=False。
+    """
+    from src.api.deps import get_report_store, get_repository, get_settings
+    from src.reports.store import ReportStore
+
+    report_store = ReportStore(db_path=skill_report_db)
+
+    class _Cfg:
+        sync_store_db_path = skill_report_db
+        calendar_caldav_sync_enabled = False
+
+    app.dependency_overrides[get_repository] = lambda: repo
+    app.dependency_overrides[get_report_store] = lambda: report_store
+    app.dependency_overrides[get_settings] = lambda: _Cfg()
+    with TestClient(app, raise_server_exceptions=False) as c:
+        yield c
+    for dep in (get_repository, get_report_store, get_settings):
+        app.dependency_overrides.pop(dep, None)
+
+
+@pytest.fixture()
+def api_key_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """临时 api_auth.db 上的 ApiKeyStore，并把 agent_auth 用的解析器指向它。"""
+    from src.security import api_keys
+
+    store = api_keys.ApiKeyStore(db_path=str(tmp_path / "api_auth.db"))
+    monkeypatch.setattr(api_keys, "get_api_key_store", lambda: store)
+    return store
