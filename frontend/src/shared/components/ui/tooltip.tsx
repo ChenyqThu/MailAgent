@@ -28,7 +28,7 @@ export const TooltipContent = React.forwardRef<
         'z-50 overflow-hidden rounded-md px-2 py-1',
         'glass-pop border border-ink-border-soft',
         'shadow-[0_4px_12px_rgba(0,0,0,0.35)]',
-        'text-meta text-ink-fg-1',
+        'text-aux text-ink-fg-1',
         'data-[state=open]:animate-in data-[state=closed]:animate-out',
         'data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0',
         'data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95',

@@ -96,13 +96,11 @@ const CHIP_CLASS = cn(
   // forces wrap mid-word when zh-CN strings have no spaces. `w-max` lets
   // short labels stay single-line — only longs hit the 150px ceiling.
   'w-max max-w-[150px] whitespace-pre-line break-words text-center',
-  // Sprint 13 round 8 set this at 9px ("再小 2 个号" from text-micro 11px);
-  // task 06-08-chat dogfood r4 bumps it one step up to 10px (user: "tooltip
-  // 字号统一大一号") — still below the text-micro(11px) CJK floor. Delibe-
-  // rately NOT `font-mono` so CJK glyphs don't go mossy at this size
-  // (DESIGN.md §14 #2 bans CJK at mono 11/12px); sans 10px stays legible
-  // for glanceable hover labels, not body copy.
-  'text-[10px] leading-none text-ink-fg-2 px-1.5 py-1 rounded',
+  // Size history: 9px (Sprint 13 r8) → 10px (task 06-08-chat r4) → text-micro
+  // (11px, task 06-18 cleanup, user: "所有 hover 字号大一号"). 11px is the
+  // text-micro CJK floor (DESIGN.md §14 #2). Deliberately NOT `font-mono` so
+  // CJK glyphs stay legible at this size for glanceable hover labels.
+  'text-micro leading-none text-ink-fg-2 px-1.5 py-1 rounded',
   'glass-pop pointer-events-none select-none',
   'shadow-[0_4px_12px_rgba(0,0,0,0.35)]'
 )

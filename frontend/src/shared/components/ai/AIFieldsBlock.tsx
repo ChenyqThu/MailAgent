@@ -228,7 +228,7 @@ function ReplyDraftHero({
   }
 
   const actionBtn =
-    'inline-flex items-center gap-1 px-2 py-1 rounded text-micro ' +
+    'inline-flex items-center gap-1 px-2 py-1 rounded text-meta ' +
     'text-ink-fg-2 hover:text-ink-fg hover:bg-ink-4 transition-colors duration-fast ' +
     'disabled:opacity-50 disabled:hover:bg-transparent'
 
@@ -347,14 +347,14 @@ function ReplyDraftHero({
             rows={Math.min(Math.max(editedBody.split('\n').length, 5), 16)}
             className={cn(
               'w-full mt-1 px-2 py-1.5 rounded border border-ink-border-soft',
-              'bg-ink-2/55 text-meta text-ink-fg leading-snug font-sans',
+              'bg-ink-2/55 text-aux text-ink-fg leading-snug font-sans',
               'focus:outline-none focus:border-coral resize-y'
             )}
           />
         ) : (
           <pre
             className={cn(
-              'text-meta text-ink-fg leading-snug font-sans whitespace-pre-wrap break-words m-0'
+              'text-aux text-ink-fg leading-snug font-sans whitespace-pre-wrap break-words m-0'
               // Sprint 14 round 14 — no max-height / inner scrollbar; the
               // outer email-pane container is the single scroll surface,
               // long replies push the rest of the page down.
