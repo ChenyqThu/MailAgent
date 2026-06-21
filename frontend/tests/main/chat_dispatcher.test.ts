@@ -16,7 +16,10 @@ import { join } from 'node:path'
 import {
   appendMessage,
   closeChatDb,
+  createNewSession,
   getOrCreateSession,
+  getSession,
+  listGeneralSessions,
   listMessages,
   type BackendKind
 } from '../../src/electron/main/chat_db'
@@ -499,7 +502,7 @@ describe('dispatcher — error paths', () => {
         },
         sink
       )
-    ).rejects.toThrow(/invalid emailId/)
+    ).rejects.toThrow(/non-negative emailId/)
   })
 
   test('startChat with empty user message throws', async () => {
@@ -949,5 +952,79 @@ describe('dispatcher — editChatMessage', () => {
     ).rejects.toThrow(/non-empty string/)
     // Pre-validation rejection: the user row remains untouched.
     expect(listMessages(session.id)).toHaveLength(1)
+  })
+})
+
+// P2d — general (context-free) anchor: startChat with anchorType='general' creates
+// a general session (email_id NULL), streams a reply, and never crosses anchors.
+describe('dispatcher — general anchor (P2d)', () => {
+  test('startChat anchorType=general creates a general session + completes', async () => {
+    registerChatBackend(
+      fakeBackend('custom-api', [
+        { type: 'chunk', delta: 'general reply' },
+        { type: 'done', finalContent: 'general reply', model: 'claude' }
+      ])
+    )
+    const sink = recordingSink()
+    const result = await d.startChat(
+      {
+        anchorType: 'general',
+        emailId: null,
+        userMessage: 'what can you do?',
+        backendKind: 'custom-api',
+        backendModel: 'claude-sonnet-4-6',
+        backendAgentPageId: null
+      },
+      sink
+    )
+    expect(result.sessionId).toBeGreaterThan(0)
+    const session = getSession(result.sessionId)
+    expect(session?.anchor_type).toBe('general')
+    expect(session?.email_id).toBeNull()
+    // Listed as a general session, NOT in any email sidebar.
+    expect(listGeneralSessions().map((s) => s.id)).toContain(result.sessionId)
+
+    const assistant = await waitForAssistant(result.sessionId, ['complete'])
+    expect(assistant?.status).toBe('complete')
+    expect(assistant?.content).toBe('general reply')
+  })
+
+  test('starting a general turn against an email session id throws (no cross-anchor)', async () => {
+    registerChatBackend(fakeBackend('custom-api', []))
+    const emailSession = getOrCreateSession({ emailId: 999, backendKind: 'custom-api' })
+    await expect(
+      d.startChat(
+        {
+          anchorType: 'general',
+          emailId: null,
+          sessionId: emailSession.id,
+          userMessage: 'hi',
+          backendKind: 'custom-api',
+          backendModel: null,
+          backendAgentPageId: null
+        },
+        recordingSink()
+      )
+    ).rejects.toThrow(/is an email session, not a general one/)
+  })
+
+  test('reusing the latest general session via createNewSession + general start', async () => {
+    registerChatBackend(
+      fakeBackend('custom-api', [{ type: 'done', finalContent: 'ok', model: 'claude' }])
+    )
+    const created = createNewSession({ anchorType: 'general', backendKind: 'custom-api' })
+    const result = await d.startChat(
+      {
+        anchorType: 'general',
+        emailId: null,
+        sessionId: created.id,
+        userMessage: 'continue',
+        backendKind: 'custom-api',
+        backendModel: null,
+        backendAgentPageId: null
+      },
+      recordingSink()
+    )
+    expect(result.sessionId).toBe(created.id)
   })
 })

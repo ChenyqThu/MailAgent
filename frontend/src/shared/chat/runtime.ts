@@ -97,8 +97,15 @@ function invalidArg(message: string): Error & { code: string } {
  *  入参但抛无 code Error（会被 normalizeDispatchError 归成 E_DISPATCH）；前置校验确保 bad-args
  *  精确映射 E_INVALID_ARG（codex 3c-2 复审 LOW，parity 对齐 electron）。 */
 function validateStartOpts(opts: ChatStartOpts): void {
-  if (!Number.isInteger(opts.emailId) || opts.emailId < 0) {
-    throw invalidArg('emailId must be a non-negative integer')
+  // P2d — anchor-aware: email (default) requires a non-negative emailId; general
+  // ignores emailId (no sentinel). Anything else is E_INVALID_ARG.
+  const anchorType = opts.anchorType ?? 'email'
+  if (anchorType === 'email') {
+    if (!Number.isInteger(opts.emailId) || (opts.emailId as number) < 0) {
+      throw invalidArg('email anchor requires a non-negative integer emailId')
+    }
+  } else if (anchorType !== 'general') {
+    throw invalidArg(`anchorType must be 'email' or 'general', got ${String(anchorType)}`)
   }
   if (typeof opts.message !== 'string' || opts.message.length === 0) {
     throw invalidArg('message must be a non-empty string')
@@ -219,7 +226,8 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
 
   function mapStart(opts: ChatStartOpts): StartChatInput {
     return {
-      emailId: opts.emailId,
+      anchorType: opts.anchorType ?? 'email',
+      emailId: opts.emailId ?? null,
       userMessage: opts.message,
       backendKind: opts.backendKind,
       backendModel: opts.backendModel ?? null,
@@ -373,6 +381,16 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
     async listAllSessions(): Promise<ChatSessionListItem[]> {
       try {
         return await request<ChatSessionListItem[]>(baseUrl, 'GET', '/chat/sessions/all')
+      } catch {
+        return []
+      }
+    },
+
+    async listGeneralSessions(): Promise<ChatSession[]> {
+      // P2d — general (context-free) sessions for the Cmd+O surface (P3). Direct
+      // fetch, graceful [] (no engine construction needed).
+      try {
+        return await request<ChatSession[]>(baseUrl, 'GET', '/chat/sessions/general')
       } catch {
         return []
       }

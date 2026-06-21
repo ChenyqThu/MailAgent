@@ -25,7 +25,7 @@
 // 旧的 main-only makeWebContentsSink / drainNotionAgentGate / abortAllChatSessions wrapper
 // 已随 chat 直跑路径一并删除（notion-agent 子进程串行闸由 serve-api asyncio spawn 接管）。
 
-import type { BackendKind, ChatMessage, ChatSession } from './model'
+import type { AnchorType, BackendKind, ChatMessage, ChatSession } from './model'
 import { runHarness } from './harness'
 import { cancelConfirmationsForSession } from './tools/confirmation'
 import type { ChatInfraPlatform } from './platform'
@@ -33,7 +33,10 @@ import type { ToolRegistry } from './tools/registry'
 import type { ChatBackend, ChatStreamEnvelope, EmailContext, ThinkingOptions } from './types'
 
 export interface StartChatInput {
-  emailId: number
+  /** P2d — session anchor. 'email' (default) requires emailId; 'general'
+   *  (context-free) passes emailId null and gets no inline email context. */
+  anchorType?: AnchorType
+  emailId: number | null
   userMessage: string
   backendKind: BackendKind
   backendModel: string | null
@@ -144,8 +147,17 @@ export function createChatDispatcher(deps: ChatDispatcherDeps): ChatDispatcher {
    * stream fills it in.
    */
   async function startChat(input: StartChatInput, sink: StreamSink): Promise<StartChatResult> {
-    if (!Number.isInteger(input.emailId) || input.emailId < 0) {
-      throw new Error(`startChat: invalid emailId ${input.emailId}`)
+    // P2d — anchor-aware. Email (default): emailId must be a non-negative int.
+    // General (context-free): emailId is ignored (no sentinel).
+    const anchorType: AnchorType = input.anchorType ?? 'email'
+    if (anchorType === 'email') {
+      if (!Number.isInteger(input.emailId) || (input.emailId as number) < 0) {
+        throw new Error(
+          `startChat: email anchor requires a non-negative emailId, got ${input.emailId}`
+        )
+      }
+    } else if (anchorType !== 'general') {
+      throw new Error(`startChat: invalid anchorType ${String(anchorType)}`)
     }
     if (typeof input.userMessage !== 'string' || input.userMessage.length === 0) {
       throw new Error('startChat: userMessage must be a non-empty string')
@@ -153,7 +165,7 @@ export function createChatDispatcher(deps: ChatDispatcherDeps): ChatDispatcher {
 
     // Sprint 19 — when renderer threaded an explicit sessionId (post-
     // newSession() send), use that row directly. Else fall back to the
-    // legacy email-keyed find-or-create-latest path (first-time email open).
+    // anchor find-or-create-latest path (first-time email open / general).
     let session: ChatSession
     if (input.sessionId !== undefined && input.sessionId !== null) {
       const existing = await deps.platform.persist.getSession(input.sessionId)
@@ -162,19 +174,36 @@ export function createChatDispatcher(deps: ChatDispatcherDeps): ChatDispatcher {
           `startChat: sessionId=${input.sessionId} not found (caller passed stale id)`
         )
       }
-      if (existing.email_id !== input.emailId) {
+      // Ownership check by anchor — an email session must match the requested
+      // emailId; a general session must actually be general (don't cross anchors).
+      if (anchorType === 'email') {
+        if (existing.email_id !== input.emailId) {
+          throw new Error(
+            `startChat: sessionId=${input.sessionId} belongs to email ${existing.email_id}, not ${input.emailId}`
+          )
+        }
+      } else if (existing.anchor_type !== 'general') {
         throw new Error(
-          `startChat: sessionId=${input.sessionId} belongs to email ${existing.email_id}, not ${input.emailId}`
+          `startChat: sessionId=${input.sessionId} is an email session, not a general one`
         )
       }
       session = existing
     } else {
-      session = await deps.platform.persist.getOrCreateSession({
-        emailId: input.emailId,
-        backendKind: input.backendKind,
-        backendModel: input.backendModel,
-        backendAgentPageId: input.backendAgentPageId
-      })
+      session = await deps.platform.persist.getOrCreateSession(
+        anchorType === 'email'
+          ? {
+              emailId: input.emailId as number,
+              backendKind: input.backendKind,
+              backendModel: input.backendModel,
+              backendAgentPageId: input.backendAgentPageId
+            }
+          : {
+              anchorType: 'general',
+              backendKind: input.backendKind,
+              backendModel: input.backendModel,
+              backendAgentPageId: input.backendAgentPageId
+            }
+      )
     }
 
     // Pre-empt any prior stream on the same session BEFORE appending new rows.
@@ -203,7 +232,11 @@ export function createChatDispatcher(deps: ChatDispatcherDeps): ChatDispatcher {
     _inflight.set(session.id, ac)
 
     const backend = deps.getBackend(input.backendKind)
-    const emailContext = await deps.platform.loadEmailContext(input.emailId)
+    // P2d — email anchor inlines its email context; general anchor has none.
+    const emailContext =
+      anchorType === 'email' && input.emailId != null
+        ? await deps.platform.loadEmailContext(input.emailId)
+        : null
     const history = await deps.platform.persist.listLastNMessages(session.id, HISTORY_WINDOW_SIZE)
 
     // Kick off the consumer loop without awaiting — handler returns ids

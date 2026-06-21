@@ -1356,7 +1356,11 @@ export interface ChatStreamEnvelope {
 }
 
 export interface ChatStartOpts {
-  emailId: number
+  // P2c/P2d — session anchor. 'email' (default) requires emailId; 'general'
+  // (context-free) ignores emailId (pass null). NEVER pass emailId=0 as a
+  // general sentinel.
+  anchorType?: ChatAnchorType
+  emailId: number | null
   message: string
   backendKind: ChatBackendKind
   backendModel?: string | null
@@ -1420,6 +1424,10 @@ export interface ChatApi {
    * sync_store.db is unavailable). Read-only; never throws (degrades to []).
    */
   listAllSessions(): Promise<ChatSessionListItem[]>
+  /** P2c/P2d — general (context-free, anchor_type='general') sessions, newest
+   *  first. Separate from listSessions(emailId) so a general session never shows
+   *  up in a specific email's sidebar. Read-only; degrades to [] on failure. */
+  listGeneralSessions(): Promise<ChatSession[]>
   /**
    * Sprint 14 PR B — truncate session messages from `editingMessageId`
    * onward, append a new user message with `newContent`, and re-stream
