@@ -2,17 +2,17 @@
 //
 // Replaces the old ChatSidebar 140px left rail (mockup `.hist-pop`): a
 // 262px floating card anchored under the panel header's "History" button.
-// The two agents (Notion Agent / Custom AI) do NOT share history — the
-// parent (AIChatPanel) already scopes `sessions` to the active backend
-// kind, so flipping the agent (BackendSelector) re-renders the list in
-// place while the popover stays open.
+// The parent (AIChatPanel) scopes `sessions` to the active backend kind.
+// task 06-18-custom-ai-harness cleanup — notion-agent is retired as a user
+// choice, so the active kind only changes when restoring an old notion-agent
+// session read-only; there is no longer a live agent toggle to keep the popover
+// open for (the old BackendSelector `[data-chat-agent-switch]` exclusion is
+// gone).
 //
 // Anchoring contract: the parent must render this inside a `relative`
 // container (the panel header) so the popover positions `absolute` to it.
-// Outside-click closes the popover but is intentionally NOT triggered by
-// clicks inside the BackendSelector (`[data-chat-agent-switch]`) — so the
-// user can switch agents with the list open and watch it re-scope. Esc
-// also closes. reduced-motion drops the entrance fade.
+// Outside-click and Esc close the popover (clicks on the History toggle button
+// are excluded so it owns open/close). reduced-motion drops the entrance fade.
 //
 // Item rendering (title preview / backend-label fallback / relative time /
 // inline delete confirm) mirrors the old ChatSidebar SessionItem so the
@@ -59,18 +59,15 @@ export function ChatHistoryPopover({
   const reduceMotion = useReducedMotion()
   const popRef = useRef<HTMLDivElement>(null)
 
-  // Outside-click close. Clicks inside the popover itself, the History
-  // toggle button ([data-chat-history-toggle]), or the agent switcher
-  // ([data-chat-agent-switch]) are excluded — the toggle owns open/close,
-  // and the agent switch must NOT close the popover (so the list visibly
-  // re-scopes between Notion Agent / Custom AI). Esc closes.
+  // Outside-click close. Clicks inside the popover itself or on the History
+  // toggle button ([data-chat-history-toggle]) are excluded — the toggle owns
+  // open/close. Esc closes.
   useEffect(() => {
     const handler = (e: MouseEvent): void => {
       const target = e.target as HTMLElement | null
       if (!target) return
       if (popRef.current?.contains(target)) return
       if (target.closest('[data-chat-history-toggle]')) return
-      if (target.closest('[data-chat-agent-switch]')) return
       onClose()
     }
     const escHandler = (e: KeyboardEvent): void => {

@@ -822,9 +822,9 @@ export function AIChatPanel({
 
         {/* task 06-08-chat §3.1 — per-agent session history popover, anchored
             under the History button. Open state = sidebarOpen (reused; the
-            store key is now popover-open semantics). Switching agents keeps it
-            open (outside-click excludes [data-chat-agent-switch]) and the list
-            re-scopes because chat.sessions is filtered by backend.kind. */}
+            store key is now popover-open semantics). The list re-scopes when
+            backend.kind changes (chat.sessions is filtered by backend.kind);
+            notion-agent is retired as a switchable backend (task 06-18). */}
         {sidebarOpen && (
           <ChatHistoryPopover
             backendKind={backend.kind}
