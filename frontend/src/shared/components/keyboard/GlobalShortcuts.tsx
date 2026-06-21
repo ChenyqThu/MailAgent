@@ -16,6 +16,7 @@ import i18n from '@shared/i18n'
 
 import { useShortcut } from '@shared/hooks/useShortcut'
 import { toggleAIChatPanel } from '@shared/state/ai-chat-panel'
+import { toggleGeneralAgent } from '@shared/state/general-agent'
 import { useCommandPalette } from '@shared/state/command-palette'
 import { openKeyboardHelp } from '@shared/state/keyboard-help'
 import { useNavCollapsed } from '@shared/state/nav-shell'
@@ -49,6 +50,12 @@ export function GlobalShortcuts(): null {
     toggleAIChatPanel()
   }, [])
 
+  // P3 — ⌘O toggles the General Agent dialog (Cmd+O = "Open" a context-free
+  // Custom AI conversation, not tied to any email). Toggle semantics mirror ⌘K.
+  const toggleGeneral = useCallback(() => {
+    toggleGeneralAgent()
+  }, [])
+
   // Sprint 11 V1.4 — nav-shell collapse + locale toggle.
   const toggleNav = useCallback(() => {
     useNavCollapsed.getState().toggle()
@@ -66,6 +73,7 @@ export function GlobalShortcuts(): null {
   useShortcut('cmd+k', togglePalette)
   useShortcut('cmd+,', goSettings)
   useShortcut('cmd+l', toggleAIPanel)
+  useShortcut('cmd+o', toggleGeneral)
   // ⌘N — 写新邮件 (居中模态, ComposeNewModal 挂 RootLayout)。global scope: 任意
   // 页面可开, 与全局侧边栏「写邮件」按钮一致。editable context 默认 short-circuit,
   // chat / 主题输入框打字不误触。

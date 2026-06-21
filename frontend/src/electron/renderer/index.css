@@ -2379,6 +2379,34 @@ body:not([data-batch-mode='true']) .email-row .cb {
   overflow: hidden;
 }
 
+/* P3 — General Agent dialog (Cmd+O). Same glass-pop-over-veil shell as the
+ * command palette, but taller: it hosts a full chat (message list + composer),
+ * not a result list. Veil keeps the title/status bar interactive (inset 36/24). */
+.general-agent-veil {
+  position: fixed;
+  inset: 36px 0 24px 0;
+  background: rgb(var(--ink-0) / 0.62);
+  z-index: 40;
+}
+@media (prefers-reduced-transparency: reduce) {
+  .general-agent-veil {
+    background: rgb(var(--ink-0) / 0.86);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+.general-agent-pane {
+  position: fixed;
+  top: 72px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(760px, calc(100vw - 32px));
+  height: min(760px, calc(100vh - 72px - 24px - 28px));
+  z-index: 50;
+  border-radius: 14px;
+  overflow: hidden;
+}
+
 .palette-input {
   width: 100%;
   height: 44px;

@@ -73,6 +73,7 @@ import { useMailbox } from '@shared/state/mailbox'
 import { useActiveEmail } from '@shared/state/active-email'
 import { useEmailFilter, type EmailView } from '@shared/state/email-filter'
 import { showAIChatPanel } from '@shared/state/ai-chat-panel'
+import { openGeneralAgent } from '@shared/state/general-agent'
 import { closeCommandPalette, useCommandPalette } from '@shared/state/command-palette'
 import { useSearchHistory } from '@shared/state/search-history'
 import { toastError, toastSuccess } from '@shared/state/toast'
@@ -645,6 +646,22 @@ export function CommandPalette(): React.ReactElement | null {
 
     // Always offer the AI panel jump + admin kanban shortcut as static rows
     // so users can ⌘K → ⏎ to surface them without typing.
+    // P3 — General Agent (Cmd+O) entry: opens the context-free Custom AI dialog.
+    out.push({
+      id: 'jump:general-agent',
+      icon: <Sparkles size={14} strokeWidth={1.75} />,
+      label: (
+        <span className="text-body flex-1 truncate">
+          <span className="text-ink-fg font-medium">{t('palette.jump.generalAgent')}</span>
+          <span className="text-ink-fg-3 mx-1">·</span>
+          <span className="text-ink-fg-2">{t('palette.jump.generalAgentMeta')}</span>
+        </span>
+      ),
+      run: () => {
+        closeCommandPalette()
+        openGeneralAgent()
+      }
+    })
     out.push({
       id: 'jump:ai-history',
       icon: <History size={14} strokeWidth={1.75} />,

@@ -86,6 +86,17 @@ export const SHORTCUTS: ReadonlyArray<ShortcutDef> = [
     labelKey: 'shortcutHelp.binding.composeNew',
     wired: true
   },
+  {
+    // P3 — ⌘O opens the General Agent dialog: a context-free Custom AI
+    // conversation not tied to any email (GlobalShortcuts useShortcut('cmd+o',
+    // toggleGeneral)). Toggle semantics mirror ⌘K.
+    id: 'generalAgent',
+    spec: 'cmd+o',
+    display: '⌘O',
+    scope: 'global',
+    labelKey: 'shortcutHelp.binding.generalAgent',
+    wired: true
+  },
   // ── Inbox ─────────────────────────────────────────────────────────────
   // `wired` flags track "has a real handler producing the documented behavior
   // today", NOT design intent. Wired: J / K row nav (useEmailKeyboardNav) +

@@ -47,6 +47,7 @@ import { useActiveEmail } from './state/active-email'
 // RouterProvider's sibling — co-located here so they share the router
 // context with the rest of the route tree.
 import { CommandPalette } from './components/command/CommandPalette'
+import { GeneralAgentDialog } from './components/agent/GeneralAgentDialog'
 import { GlobalShortcuts } from './components/keyboard/GlobalShortcuts'
 import { KeyboardHelpModal } from './components/keyboard/KeyboardHelpModal'
 import { ComposeNewModal } from './components/email/compose/ComposeNewModal'
@@ -127,6 +128,9 @@ function RootLayout(): React.ReactElement {
       <GlobalShortcuts />
       <KeyboardHelpModal />
       <CommandPalette />
+      {/* P3 — General Agent (Cmd+O) centered dialog; global single instance,
+          separate from the per-email AIChatPanel so it never pollutes a sidebar. */}
+      <GeneralAgentDialog />
       {/* 写新邮件居中模态 — 全局单实例, 由侧边栏「写邮件」按钮 / ⌘N 打开。 */}
       <ComposeNewModal />
     </>
