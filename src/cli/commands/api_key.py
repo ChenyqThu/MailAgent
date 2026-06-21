@@ -21,7 +21,7 @@ from src.security.api_keys import (
     HANDOFF_SCOPES,
     READ_ONLY_SCOPES,
     ApiKeyStore,
-    api_auth_db_for,
+    resolve_api_auth_db_path,
     validate_scopes,
 )
 
@@ -36,7 +36,9 @@ app = typer.Typer(
 
 
 def _store(cli: "CliContext") -> ApiKeyStore:
-    return ApiKeyStore(db_path=api_auth_db_for(cli.cli_config.sync_store_db_path))
+    # 🔴 与 serve-api 同一解析真源（env MAILAGENT_API_AUTH_DB_PATH 优先 → 否则 cli 的 sync_store
+    # 同目录）。dogfood 发现：CLI 若忽略 env override，建的 key serve-api 看不见。
+    return ApiKeyStore(db_path=resolve_api_auth_db_path(cli.cli_config.sync_store_db_path))
 
 
 def _record_to_dict(rec) -> dict:

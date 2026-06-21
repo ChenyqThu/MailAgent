@@ -64,6 +64,25 @@ def test_store_rejects_unknown_scope(tmp_path):
         st.create_key("bad", scopes=["bogus:scope"])
 
 
+def test_api_auth_path_resolution_unified(tmp_path, monkeypatch):
+    """dogfood 回归：CLI 与 serve-api 必须解析到同一 api_auth.db。
+
+    env override 最高优先（两边都认，传不传 sync_store 都返 override）；无 override 时按显式
+    sync_store 同目录推（CLI 传 cli_config 路径 → 尊重 --db-path）。
+    """
+    from src.security.api_keys import api_auth_db_for, resolve_api_auth_db_path
+
+    override = str(tmp_path / "override_api_auth.db")
+    monkeypatch.setenv("MAILAGENT_API_AUTH_DB_PATH", override)
+    # serve-api 路径（不传参）与 CLI 路径（传 sync_store）在 override 下一致
+    assert resolve_api_auth_db_path() == override
+    assert resolve_api_auth_db_path("/some/other/data/sync_store.db") == override
+
+    monkeypatch.delenv("MAILAGENT_API_AUTH_DB_PATH", raising=False)
+    ss = str(tmp_path / "data" / "sync_store.db")
+    assert resolve_api_auth_db_path(ss) == api_auth_db_for(ss)
+
+
 # ---------------------------------------------------------------------------
 # 第四腿鉴权（bearer）via /api/skills —— fail-closed
 # ---------------------------------------------------------------------------

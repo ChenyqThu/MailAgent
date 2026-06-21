@@ -372,15 +372,20 @@ def api_auth_db_for(sync_store_db_path: str) -> str:
     return os.path.join(os.path.dirname(os.path.abspath(sync_store_db_path)), "api_auth.db")
 
 
-def resolve_api_auth_db_path() -> str:
-    """api_auth.db 绝对路径。
+def resolve_api_auth_db_path(sync_store_db_path: Optional[str] = None) -> str:
+    """api_auth.db 绝对路径 —— **serve-api 与 CLI 的统一解析真源**（必须一致，否则 CLI 建的 key
+    serve-api 看不见）。
 
-    优先 env ``MAILAGENT_API_AUTH_DB_PATH``；否则锚到 config.sync_store_db_path 同目录；
-    config 构造失败（裸 worktree / 缺 .env）→ 回退 ``<DATA_ROOT>/data/api_auth.db``。
+    优先级：env ``MAILAGENT_API_AUTH_DB_PATH``（serve-api / CLI 都认，最高优先 → 设了就一致）→
+    显式 ``sync_store_db_path`` 同目录（CLI 传 cli_config 路径，尊重 --db-path/--config）→
+    config.sync_store_db_path 同目录（serve-api 不传参时）→ config 构造失败回退
+    ``<DATA_ROOT>/data/api_auth.db``。
     """
     override = os.environ.get("MAILAGENT_API_AUTH_DB_PATH")
     if override:
         return os.path.abspath(os.path.expanduser(override))
+    if sync_store_db_path:
+        return api_auth_db_for(sync_store_db_path)
     try:
         from src.config import config as _config_singleton
 
