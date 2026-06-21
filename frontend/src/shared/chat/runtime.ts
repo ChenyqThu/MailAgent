@@ -192,9 +192,14 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
   }
 
   // P2b — read tools we cut over to the Skill manifest (generic invoke) when
-  // MAILAGENT_CHAT_MANIFEST_MODE is on. Everything else (write / KOS / memory /
-  // notion) keeps its builtin typed path.
-  const CUTOVER_READ_TOOLS = new Set(['email_search', 'email_get', 'report_list', 'report_get'])
+  // MAILAGENT_CHAT_MANIFEST_MODE is on. Scoped to report_list/report_get — the only
+  // tools whose builtin and manifest definitions are byte-identical (same name,
+  // schema, semantics). email_search is deliberately EXCLUDED: the builtin is a
+  // metadata filter while the manifest `email_search` is FTS body search (a different
+  // tool under the same name — codex/workflow review HIGH); email_get's manifest
+  // schema is a superset, not identical. replaceWithManifestReadTools additionally
+  // schema-guards every swap, so a future drift in report_* is also kept builtin.
+  const CUTOVER_READ_TOOLS = new Set(['report_list', 'report_get'])
 
   /** Build the harness tool catalog. Default = the builtin catalog (zero
    *  regression). manifestMode on: replace the cutover read tools with
@@ -225,7 +230,20 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
         }
       }
     }
-    return replaceWithManifestReadTools(builtin, manifest, invoke, CUTOVER_READ_TOOLS)
+    const { tools, skipped } = replaceWithManifestReadTools(
+      builtin,
+      manifest,
+      invoke,
+      CUTOVER_READ_TOOLS
+    )
+    if (skipped.length > 0) {
+      // non-silent: a cutover tool the manifest didn't expose (disabled/unavailable)
+      // or whose schema diverged is kept builtin — surface it (review MEDIUM).
+      console.warn(
+        `[chat] manifest mode kept builtin for ${skipped.join(', ')} (manifest missing or schema diverged)`
+      )
+    }
+    return tools
   }
 
   async function buildEngine(): Promise<ChatEngine> {

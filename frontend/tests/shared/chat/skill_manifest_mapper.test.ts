@@ -233,91 +233,125 @@ describe('manifest mapper — shadow parity vs the real builtin catalog', () => 
 })
 
 describe('manifest cutover — replaceWithManifestReadTools (P2b)', () => {
+  // The manifestTool helper ships input_schema { type:object, properties:{query} };
+  // a builtin with the SAME schema is a valid (schema-matching) swap target.
+  const MATCH_SCHEMA: Record<string, unknown> = {
+    type: 'object',
+    properties: { query: { type: 'string' } }
+  }
   const builtinTool = (
     name: string,
+    schema: Record<string, unknown> = MATCH_SCHEMA,
     handler: ToolDef['handler'] = async () => ({ ok: true, output: 'builtin', durationMs: 0 })
   ): ToolDef => ({
     name,
     description: '',
-    inputSchema: {},
+    inputSchema: schema,
     confirmationTier: 'silent',
     category: 'read',
     surface: 'ipc',
     handler
   })
 
-  function emailManifest(toolNames: ManifestToolDef[]): SkillManifest {
+  function reportManifest(
+    tools: ManifestToolDef[],
+    over: { enabled?: boolean } = {}
+  ): SkillManifest {
     return {
       generated_at: 'x',
       server_version: '3',
       capabilities: {},
       skills: [
         {
-          name: 'email',
+          name: 'report',
           version: '1',
           title: '',
           description: '',
-          default_enabled: true,
+          default_enabled: over.enabled ?? true,
           availability: { available: true },
           prompt_fragment: '',
           docs_path: '',
-          tools: toolNames
+          tools
         }
       ]
     }
   }
 
-  test('replaces cutover read tools with manifest invoke versions, keeps the rest', async () => {
+  test('swaps a cutover tool whose manifest schema matches the builtin; keeps the rest', async () => {
     const builtin = [
-      builtinTool('email_search'),
-      builtinTool('email_get'),
+      builtinTool('report_list'),
       builtinTool('email_flag'),
       builtinTool('kos_query')
     ]
-    const manifest = emailManifest([
-      manifestTool({ name: 'email_search' }),
-      manifestTool({ name: 'email_get' }),
-      manifestTool({ name: 'email_send', side_effect: 'send' })
+    const manifest = reportManifest([
+      manifestTool({ name: 'report_list', input_schema: MATCH_SCHEMA }),
+      manifestTool({ name: 'report_run', side_effect: 'external_call' }) // not in cutover
     ])
     const invoke = vi.fn(async () => ({ ok: true as const, output: 'manifest', durationMs: 0 }))
-    const merged = replaceWithManifestReadTools(
+    const { tools, skipped } = replaceWithManifestReadTools(
       builtin,
       manifest,
       invoke,
-      new Set(['email_search', 'email_get'])
+      new Set(['report_list'])
     )
-    // email_flag + kos_query preserved; email_search/email_get replaced; email_send
-    // NOT added (not in the cutover set).
-    expect(merged.map((t) => t.name).sort()).toEqual([
-      'email_flag',
-      'email_get',
-      'email_search',
-      'kos_query'
-    ])
-    // the replaced email_search dispatches to the manifest generic invoke.
-    const replaced = merged.find((t) => t.name === 'email_search')!
-    expect(await replaced.handler({ query: 'q' }, ctx)).toMatchObject({ output: 'manifest' })
-    expect(invoke).toHaveBeenCalledWith('email', 'email_search', { query: 'q' }, ctx)
-    // a preserved builtin still runs its builtin handler.
-    expect(await merged.find((t) => t.name === 'email_flag')!.handler({}, ctx)).toMatchObject({
+    expect(skipped).toEqual([])
+    // report_list is the manifest generic-invoke version; the rest stay builtin.
+    expect(tools.map((t) => t.name).sort()).toEqual(['email_flag', 'kos_query', 'report_list'])
+    expect(
+      await tools.find((t) => t.name === 'report_list')!.handler({ query: 'q' }, ctx)
+    ).toMatchObject({ output: 'manifest' })
+    expect(invoke).toHaveBeenCalledWith('report', 'report_list', { query: 'q' }, ctx)
+    expect(await tools.find((t) => t.name === 'email_flag')!.handler({}, ctx)).toMatchObject({
       output: 'builtin'
     })
   })
 
-  test('a cutover tool the manifest does not expose stays builtin', async () => {
-    const builtin = [builtinTool('email_search'), builtinTool('report_list')]
-    const manifest = emailManifest([manifestTool({ name: 'email_search' })])
-    const invoke = vi.fn(async () => ({ ok: true as const, output: 'm', durationMs: 0 }))
-    // cutover wants report_list too, but the manifest doesn't have it → it stays builtin.
-    const merged = replaceWithManifestReadTools(
+  test('keeps builtin + records skipped when the manifest schema diverges (codex HIGH)', async () => {
+    const builtin = [builtinTool('report_list', { type: 'object', properties: { a: {} } })]
+    const manifest = reportManifest([
+      manifestTool({ name: 'report_list', input_schema: { type: 'object', properties: { b: {} } } })
+    ])
+    const invoke = vi.fn(async () => ({ ok: true as const, output: 'manifest', durationMs: 0 }))
+    const { tools, skipped } = replaceWithManifestReadTools(
       builtin,
       manifest,
       invoke,
-      new Set(['email_search', 'report_list'])
+      new Set(['report_list'])
     )
-    expect(merged).toHaveLength(2)
-    expect(await merged.find((t) => t.name === 'report_list')!.handler({}, ctx)).toMatchObject({
-      output: 'builtin'
-    })
+    // divergent schema → NOT swapped (never hand the LLM an incompatibly-named tool).
+    expect(skipped).toEqual(['report_list'])
+    expect(await tools[0].handler({}, ctx)).toMatchObject({ output: 'builtin' })
+    expect(invoke).not.toHaveBeenCalled()
+  })
+
+  test('keeps builtin + skipped when the manifest does not expose the cutover tool', async () => {
+    const builtin = [builtinTool('report_list')]
+    const manifest = reportManifest([]) // exposes nothing
+    const { tools, skipped } = replaceWithManifestReadTools(
+      builtin,
+      manifest,
+      vi.fn(async () => ({ ok: true as const, output: 'm', durationMs: 0 })),
+      new Set(['report_list'])
+    )
+    expect(skipped).toEqual(['report_list'])
+    expect(tools).toHaveLength(1)
+    expect(await tools[0].handler({}, ctx)).toMatchObject({ output: 'builtin' })
+  })
+
+  test('a DISABLED skill is filtered out → its cutover tool stays builtin (gate, codex MEDIUM)', async () => {
+    const builtin = [builtinTool('report_list')]
+    // report skill default_enabled=false → mapManifestToToolDefs drops it → not a swap candidate.
+    const manifest = reportManifest(
+      [manifestTool({ name: 'report_list', input_schema: MATCH_SCHEMA })],
+      { enabled: false }
+    )
+    const { tools, skipped } = replaceWithManifestReadTools(
+      builtin,
+      manifest,
+      vi.fn(async () => ({ ok: true as const, output: 'manifest', durationMs: 0 })),
+      new Set(['report_list'])
+    )
+    expect(skipped).toEqual(['report_list'])
+    expect(await tools[0].handler({}, ctx)).toMatchObject({ output: 'builtin' })
   })
 })

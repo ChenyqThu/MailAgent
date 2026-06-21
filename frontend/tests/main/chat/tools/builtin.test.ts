@@ -47,6 +47,25 @@ function makePlatform(over: Partial<ChatToolPlatform> = {}): ChatToolPlatform {
     kosConfig: () => ({ configured: false, timeDecayEnabled: false }),
     kosCallTool: async () => null,
     saveToKos: async () => ({ slug: '', status: 'unknown', contentBytes: 0 }),
+    // P2f/P2g/P2b platform methods (handlers never invoked in these construction tests).
+    listMemory: async () => [],
+    getMemory: async () => null,
+    writeMemory: async () => ({
+      scope: 'user',
+      key: '',
+      value_json: 'null',
+      source_wiki_path: null,
+      created_at: 0,
+      updated_at: 0
+    }),
+    deleteMemory: async () => 0,
+    notionAgentChat: async () => ({
+      text: '',
+      threadId: null,
+      status: 'ok' as const,
+      metadata: null
+    }),
+    invokeSkillTool: async () => null,
     ...over
   }
 }

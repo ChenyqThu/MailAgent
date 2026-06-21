@@ -33,7 +33,7 @@ import { createMemoryTools } from './memory'
 import { createNotionAgentTools } from './notion_agent'
 import { createKosTools } from './kos'
 
-/** Build every builtin tool bound to the injected platform. The 20 default
+/** Build every builtin tool bound to the injected platform. The 25 default
  *  tools always register; the 9 KOS tools register only when
  *  `platform.kosConfig().configured` is true (electron: isKosConsumerEnabled()
  *  — zero-regression registration gate; http: serve-api kos-available). */

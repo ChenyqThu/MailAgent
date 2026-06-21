@@ -157,20 +157,46 @@ export function mapManifestToToolDefs(
 
 // ── cutover (P2b) ───────────────────────────────────────────────────────────
 
-/** P2b — replace selected builtin tools with their manifest-driven generic-invoke
- *  versions. Returns the builtin catalog MINUS the cutover tools, PLUS the manifest
- *  versions of exactly those cutover tools that the manifest actually exposes. Every
- *  non-cutover builtin tool (write / KOS / memory / notion) is preserved untouched.
- *  Pure (no I/O) so the runtime's manifest-mode wiring is unit-testable. */
+export interface ManifestCutoverResult {
+  tools: ToolDef[]
+  /** Cutover tools kept as builtin because the manifest didn't expose them
+   *  (disabled / unavailable) OR its input schema diverged from the builtin's.
+   *  Surfaced so the caller can WARN instead of silently shipping a mismatch. */
+  skipped: string[]
+}
+
+/** P2b — replace selected builtin read tools with their manifest-driven
+ *  generic-invoke versions. A cutover tool is swapped ONLY when the manifest
+ *  exposes it (enabled + available — mapManifestToToolDefs already filters those)
+ *  AND its input schema matches the builtin's (order-insensitive). Otherwise the
+ *  builtin is kept and the name is recorded in `skipped` — never hand the LLM an
+ *  incompatibly-named tool (the builtin `email_search` is metadata-filter while the
+ *  manifest `email_search` is FTS — codex/workflow review HIGH), and never silently
+ *  drop a working read tool (review MEDIUM). Non-cutover builtin tools (write / KOS
+ *  / memory / notion) are preserved untouched. Pure (no I/O) → unit-testable. */
 export function replaceWithManifestReadTools(
   builtin: ToolDef[],
   manifest: SkillManifest,
   invoke: SkillToolInvoker,
   cutover: ReadonlySet<string>
-): ToolDef[] {
-  const manifestTools = mapManifestToToolDefs(manifest, invoke).filter((t) => cutover.has(t.name))
-  const cut = new Set(manifestTools.map((t) => t.name))
-  return [...builtin.filter((t) => !cut.has(t.name)), ...manifestTools]
+): ManifestCutoverResult {
+  const manifestByName = new Map(mapManifestToToolDefs(manifest, invoke).map((t) => [t.name, t]))
+  const skipped: string[] = []
+  const tools: ToolDef[] = []
+  for (const b of builtin) {
+    if (!cutover.has(b.name)) {
+      tools.push(b)
+      continue
+    }
+    const m = manifestByName.get(b.name)
+    if (m && stableStringify(b.inputSchema) === stableStringify(m.inputSchema)) {
+      tools.push(m)
+    } else {
+      tools.push(b)
+      skipped.push(b.name)
+    }
+  }
+  return { tools, skipped }
 }
 
 // ── shadow parity ─────────────────────────────────────────────────────────────

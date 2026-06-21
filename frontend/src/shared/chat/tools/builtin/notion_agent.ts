@@ -62,12 +62,17 @@ export function createNotionAgentTools(platform: ChatToolPlatform): ToolDef[] {
       const message = asStr(i.message)
       if (!message) return err('E_INVALID_ARG', 'message is required (non-empty string)', start)
       try {
-        const result = await platform.notionAgentChat({
-          message,
-          threadId: asStr(i.thread_id) ?? null,
-          model: asStr(i.model) ?? null,
-          agentPageId: asStr(i.agent_page_id) ?? null
-        })
+        const result = await platform.notionAgentChat(
+          {
+            message,
+            threadId: asStr(i.thread_id) ?? null,
+            model: asStr(i.model) ?? null,
+            agentPageId: asStr(i.agent_page_id) ?? null
+          },
+          // codex review — thread the harness signal so the declared timeoutMs /
+          // user cancel actually aborts the fetch (else it hangs to the server idle TO).
+          ctx.signal
+        )
         if (result.status === 'error') {
           return err(
             result.errorCode ?? 'E_NOTION_AGENT_FAIL',
@@ -75,7 +80,18 @@ export function createNotionAgentTools(platform: ChatToolPlatform): ToolDef[] {
             start
           )
         }
-        return ok({ text: result.text, thread_id: result.threadId, user_edited: userEdited }, start)
+        // codex review LOW — surface status + metadata (thread_id lives in both
+        // thread_id and metadata.thread_id for the model to continue the thread).
+        return ok(
+          {
+            text: result.text,
+            thread_id: result.threadId,
+            status: result.status,
+            metadata: result.metadata,
+            user_edited: userEdited
+          },
+          start
+        )
       } catch (e) {
         return err(
           (e as { code?: string }).code ?? 'E_INTERNAL',

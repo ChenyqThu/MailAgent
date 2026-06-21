@@ -210,7 +210,7 @@ export class HttpChatPlatform
   private _req<T>(
     method: string,
     path: string,
-    opts?: { body?: unknown; query?: Record<string, QueryValue> }
+    opts?: { body?: unknown; query?: Record<string, QueryValue>; signal?: AbortSignal }
   ): Promise<T> {
     return request<T>(this.baseUrl, method, path, opts)
   }
@@ -732,8 +732,17 @@ export class HttpChatPlatform
   }
 
   // ── notion_agent_chat tool（P2g）→ serve-api /chat/notion-agent-once ────────
-  notionAgentChat(input: NotionAgentChatInput): Promise<NotionAgentChatResult> {
-    return this._req<NotionAgentChatResult>('POST', '/chat/notion-agent-once', { body: input })
+  // signal threaded to fetch: harness per-tool timeout / user cancel aborts the
+  // request (client disconnect → serve-api run_notion_agent CancelledError → kills
+  // the subprocess + releases the serial gate). codex review MEDIUM.
+  notionAgentChat(
+    input: NotionAgentChatInput,
+    signal?: AbortSignal
+  ): Promise<NotionAgentChatResult> {
+    return this._req<NotionAgentChatResult>('POST', '/chat/notion-agent-once', {
+      body: input,
+      signal
+    })
   }
 
   // ── generic Skill invoke（P2b）→ serve-api POST /api/skills/invoke ──────────

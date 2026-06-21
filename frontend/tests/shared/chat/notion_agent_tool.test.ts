@@ -34,13 +34,16 @@ describe('notion_agent_chat tool', () => {
     )
     const [t] = createNotionAgentTools(mockPlatform({ notionAgentChat }))
     const res = await t.handler({ message: 'q', thread_id: 'thr-9', model: 'm' }, ctx)
-    expect(notionAgentChat).toHaveBeenCalledWith({
-      message: 'q',
-      threadId: 'thr-9',
-      model: 'm',
-      agentPageId: null
+    // codex review — input AND the harness abort signal are forwarded.
+    expect(notionAgentChat).toHaveBeenCalledWith(
+      { message: 'q', threadId: 'thr-9', model: 'm', agentPageId: null },
+      ctx.signal
+    )
+    // codex review LOW — status + metadata surfaced alongside text + thread_id.
+    expect(res).toMatchObject({
+      ok: true,
+      output: { text: 'answer', thread_id: 'thr-9', status: 'ok', metadata: { thread_id: 'thr-9' } }
     })
-    expect(res).toMatchObject({ ok: true, output: { text: 'answer', thread_id: 'thr-9' } })
   })
 
   test('error status → ok:false with the notion error code', async () => {
@@ -78,7 +81,10 @@ describe('notion_agent_chat tool', () => {
       { message: 'orig' },
       { ...ctx, userEditedInput: { message: 'edited' } }
     )
-    expect(notionAgentChat).toHaveBeenCalledWith(expect.objectContaining({ message: 'edited' }))
+    expect(notionAgentChat).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'edited' }),
+      ctx.signal
+    )
     expect(res).toMatchObject({ ok: true, output: { user_edited: true } })
   })
 })

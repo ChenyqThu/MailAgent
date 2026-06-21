@@ -385,9 +385,11 @@ export interface ChatToolPlatform {
   deleteMemory(scope: string, key: string): Promise<number>
   // ── notion_agent_chat tool（P2g）→ serve-api /chat/notion-agent-once ────────
   /** Run the notion-agent CLI once (non-streaming collect) and return its text +
-   *  thread_id for continuity. Reuses the serial gate / idle timeout. The old
-   *  streaming notion-agent backend + backend_kind stay (Phase 3 retires the UI). */
-  notionAgentChat(input: NotionAgentChatInput): Promise<NotionAgentChatResult>
+   *  thread_id for continuity. Reuses the serial gate / idle timeout. `signal` is
+   *  threaded to the fetch so the harness's per-tool timeout / user cancel actually
+   *  aborts the request (codex review — notion-agent can otherwise hang to the server
+   *  idle timeout). The old streaming notion-agent backend stays (Phase 3 retires UI). */
+  notionAgentChat(input: NotionAgentChatInput, signal?: AbortSignal): Promise<NotionAgentChatResult>
   // ── generic Skill invoke（P2b）→ serve-api POST /api/skills/invoke ──────────
   /** Invoke a Skill tool through the authoritative Python registry (the same face
    *  MCP / external agents use). Returns the envelope's `data`; throws Error&{code}
