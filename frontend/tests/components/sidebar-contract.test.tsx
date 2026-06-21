@@ -121,12 +121,13 @@ describe('Sidebar §2.11 contract', () => {
     expect(bottomDeadAnchors).toHaveLength(0)
   })
 
-  test('exactly 13 nav rows (5 + 3 + 3 + 2)', async () => {
+  test('exactly 12 nav rows (5 + 2 + 3 + 2)', async () => {
     // MAILBOXES: 收件箱, 发件箱, 草稿箱, 已标旗, 所有邮件 (5)
-    // AI AGENTS: 3; VIEW: 3; bottom: 2
+    // AI AGENTS: 2 (Custom AI + AI 会话历史; Notion Agent 退役 — task 06-18 cleanup)
+    // VIEW: 3; bottom: 2
     const container = await renderSidebar()
     const allRows = container.querySelectorAll('[data-app-nav] .row')
-    expect(allRows).toHaveLength(13)
+    expect(allRows).toHaveLength(12)
   })
 
   test('AI 会话历史 row renders enabled (Sprint 18 review — 不再灰禁)', async () => {
