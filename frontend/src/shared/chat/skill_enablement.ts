@@ -120,6 +120,15 @@ export function resolveSkills(
   })
 }
 
+// Tool names that collide ACROSS skills with different builtin semantics, so they
+// must NOT be auto-dropped by a skill toggle. The builtin `email_search` is a
+// metadata filter (subject/sender/date/flags — the agent's primary "find emails"
+// tool) while the manifest `search` skill's `email_search` is FTS body search
+// (documented in tools/manifest.ts; the P2 manifest cutover excluded it for the
+// same reason). Dropping the builtin metadata search because the FTS "search"
+// skill was toggled off is collateral damage the user didn't intend.
+const COLLISION_EXEMPT_TOOL_NAMES = new Set(['email_search'])
+
 export interface SkillEnablement {
   /** Tool names to drop from the harness catalog (owned by a non-advertised
    *  skill). Tools not owned by any manifest skill (memory_*, kos_*) never
@@ -146,8 +155,11 @@ export function computeSkillEnablement(
       const frag = s.promptFragment.trim()
       if (frag.length > 0) fragments.push(frag)
     } else {
-      // A non-advertised skill's tools are dropped from the catalog by name.
-      for (const name of s.toolNames) disabledToolNames.add(name)
+      // A non-advertised skill's tools are dropped from the catalog by name,
+      // EXCEPT collision-exempt names (same name, different builtin semantics).
+      for (const name of s.toolNames) {
+        if (!COLLISION_EXEMPT_TOOL_NAMES.has(name)) disabledToolNames.add(name)
+      }
     }
   }
   return { disabledToolNames, skillFragments: fragments.join('\n\n'), resolved }

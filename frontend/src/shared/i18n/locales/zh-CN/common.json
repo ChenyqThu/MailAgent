@@ -1069,6 +1069,8 @@
       "savedToast": "记忆已更新",
       "deletedToast": "记忆已删除",
       "emptyValue": "内容不能为空",
+      "saveError": "无法保存记忆",
+      "deleteError": "无法删除记忆",
       "loadError": "无法加载记忆"
     },
     "shortcut": {

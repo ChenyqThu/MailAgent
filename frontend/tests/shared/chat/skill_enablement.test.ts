@@ -150,6 +150,30 @@ describe('computeSkillEnablement — user overrides', () => {
   })
 })
 
+describe('computeSkillEnablement — collision-exempt tools (review MEDIUM)', () => {
+  test('email_search is never auto-dropped (builtin metadata ≠ manifest FTS)', () => {
+    const m: SkillManifest = {
+      ...MANIFEST,
+      skills: [
+        skill('search', {
+          defaultEnabled: true,
+          available: true,
+          fragment: 'SEARCH_FRAG',
+          tools: [tool('email_search'), tool('email_search_fulltext')]
+        })
+      ]
+    }
+    // disable the search skill → its tools would normally drop…
+    const e = computeSkillEnablement(m, { search: false })
+    // …but email_search is collision-exempt (the builtin is a metadata filter, a
+    // different tool from the search skill's FTS email_search) → kept.
+    expect(e.disabledToolNames.has('email_search')).toBe(false)
+    // a non-colliding tool of the same disabled skill IS still dropped.
+    expect(e.disabledToolNames.has('email_search_fulltext')).toBe(true)
+    expect(e.skillFragments).not.toContain('SEARCH_FRAG')
+  })
+})
+
 describe('resolveSkills — UI projection', () => {
   test('effectiveEnabled = override ?? default; advertised = effective && available', () => {
     const resolved = resolveSkills(MANIFEST, { report: false, notion_agent: true })

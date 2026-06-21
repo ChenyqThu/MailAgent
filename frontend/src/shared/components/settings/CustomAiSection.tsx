@@ -110,11 +110,11 @@ function SkillsSection(): React.ReactElement {
 
 interface MemoryEntryRowProps {
   entry: AgentMemoryEntry
-  onSaved: () => void
-  onDeleted: () => void
 }
 
-function MemoryEntryRow({ entry, onSaved, onDeleted }: MemoryEntryRowProps): React.ReactElement {
+// The row owns its own refresh (qc.invalidateQueries on save/delete) — no parent
+// onSaved/onDeleted indirection (review LOW: it was a noop).
+function MemoryEntryRow({ entry }: MemoryEntryRowProps): React.ReactElement {
   const { t } = useTranslation()
   const api = useMailApi()
   const qc = useQueryClient()
@@ -160,9 +160,8 @@ function MemoryEntryRow({ entry, onSaved, onDeleted }: MemoryEntryRowProps): Rea
       await qc.invalidateQueries({ queryKey: ['memory', 'user'] })
       setEditing(false)
       toastSuccess(t('settings.memory.savedToast'))
-      onSaved()
     } catch (err) {
-      toastError(t('settings.memory.savedToast'), (err as Error).message)
+      toastError(t('settings.memory.saveError'), (err as Error).message)
     } finally {
       setSaving(false)
     }
@@ -174,9 +173,8 @@ function MemoryEntryRow({ entry, onSaved, onDeleted }: MemoryEntryRowProps): Rea
       api.chat.invalidateConfig()
       await qc.invalidateQueries({ queryKey: ['memory', 'user'] })
       toastSuccess(t('settings.memory.deletedToast'))
-      onDeleted()
     } catch (err) {
-      toastError(t('settings.memory.deletedToast'), (err as Error).message)
+      toastError(t('settings.memory.deleteError'), (err as Error).message)
     }
   }
 
@@ -204,7 +202,7 @@ function MemoryEntryRow({ entry, onSaved, onDeleted }: MemoryEntryRowProps): Rea
                 <>
                   <button
                     onClick={() => void handleDelete()}
-                    className="px-2 py-0.5 rounded text-meta bg-red-500/15 text-red-400 hover:bg-red-500/25 transition-colors duration-fast"
+                    className="px-2 py-0.5 rounded text-meta bg-fail/15 text-fail hover:bg-fail/25 transition-colors duration-fast"
                   >
                     {t('settings.memory.deleteConfirm')}
                   </button>
@@ -218,7 +216,7 @@ function MemoryEntryRow({ entry, onSaved, onDeleted }: MemoryEntryRowProps): Rea
               ) : (
                 <button
                   onClick={() => setConfirmDelete(true)}
-                  className="p-1 rounded text-ink-fg-2 hover:text-red-400 hover:bg-ink-3 transition-colors duration-fast"
+                  className="p-1 rounded text-ink-fg-2 hover:text-fail hover:bg-ink-3 transition-colors duration-fast"
                   aria-label={t('settings.memory.delete')}
                 >
                   <Trash2 className="size-3.5" />
@@ -288,20 +286,11 @@ function MemoryEntryRow({ entry, onSaved, onDeleted }: MemoryEntryRowProps): Rea
 function MemorySection(): React.ReactElement {
   const { t } = useTranslation()
   const api = useMailApi()
-  const qc = useQueryClient()
 
   const { data: entries, isError } = useQuery<AgentMemoryEntry[]>({
     queryKey: ['memory', 'user'],
     queryFn: () => api.chat.listMemory('user')
   })
-
-  // Stable no-op callbacks — the query invalidation inside each row already
-  // refreshes the list; these exist so MemoryEntryRow can signal completion
-  // without needing direct query client access.
-  const noop = React.useCallback(() => {
-    // The row already called qc.invalidateQueries; nothing extra needed here.
-    void qc
-  }, [qc])
 
   const content: React.ReactNode = (() => {
     if (isError) {
@@ -315,12 +304,7 @@ function MemorySection(): React.ReactElement {
     return (
       <div className="divide-y divide-ink-border-soft">
         {entries.map((entry) => (
-          <MemoryEntryRow
-            key={`${entry.scope}/${entry.key}`}
-            entry={entry}
-            onSaved={noop}
-            onDeleted={noop}
-          />
+          <MemoryEntryRow key={`${entry.scope}/${entry.key}`} entry={entry} />
         ))}
       </div>
     )

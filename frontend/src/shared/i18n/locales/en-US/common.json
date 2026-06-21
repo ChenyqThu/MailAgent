@@ -1069,6 +1069,8 @@
       "savedToast": "Memory updated",
       "deletedToast": "Memory deleted",
       "emptyValue": "Value cannot be empty",
+      "saveError": "Could not save memory",
+      "deleteError": "Could not delete memory",
       "loadError": "Could not load memory"
     },
     "shortcut": {

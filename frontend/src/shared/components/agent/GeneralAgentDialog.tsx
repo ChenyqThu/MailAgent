@@ -80,8 +80,6 @@ export function GeneralAgentDialog(): React.ReactElement | null {
   const mailApi = useMailApi()
 
   const open = useGeneralAgent((s) => s.open)
-  const pendingSessionId = useGeneralAgent((s) => s.pendingSessionId)
-  const consumePendingSession = useGeneralAgent((s) => s.consumePendingSession)
 
   const chat = useGeneralChat()
   const { models: availableModels } = useEnabledModels()
@@ -116,14 +114,6 @@ export function GeneralAgentDialog(): React.ReactElement | null {
     model,
     agentPageId: null
   })
-
-  // One-shot: open pinned to a specific general session (history-list click).
-  const chatSelectSession = chat.selectSession
-  useEffect(() => {
-    if (!open || pendingSessionId === null) return
-    void chatSelectSession(pendingSessionId)
-    consumePendingSession()
-  }, [open, pendingSessionId, chatSelectSession, consumePendingSession])
 
   const { dialogRef, handleTab } = useFocusTrap({ open })
   const { shouldRender, scopeRef } = useExitAnimation<HTMLDivElement>(open, {
