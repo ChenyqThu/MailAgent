@@ -122,22 +122,48 @@ function hasColumn(db: Database.Database, table: string, column: string): boolea
   return cols.some((c) => c.name === column)
 }
 
+/** P2c (codex review MEDIUM) — is ai_chat_sessions already the FULL v7 shape?
+ *  Presence of the anchor_type column alone is not proof: a half-built or tampered
+ *  table could carry the column without anchor_id or the coupling CHECK. Verify
+ *  both anchor columns AND that the table's CREATE SQL carries the `anchor_id =
+ *  email_id` coupling CHECK (which only the v7 CREATE emits). Used by the v6→v7
+ *  re-entry guard so a partial table is never mistaken for a completed migration. */
+function isV7SessionShape(db: Database.Database): boolean {
+  if (!hasColumn(db, 'ai_chat_sessions', 'anchor_type')) return false
+  if (!hasColumn(db, 'ai_chat_sessions', 'anchor_id')) return false
+  const row = db
+    .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='ai_chat_sessions'")
+    .get() as { sql?: string } | undefined
+  return /anchor_id\s*=\s*email_id/.test(row?.sql ?? '')
+}
+
 /** P2c — one-time .pre-v7.bak snapshot before the destructive v6→v7 rebuild.
  *  Best-effort: any failure is logged and swallowed (the rebuild itself is
  *  atomic + the version gate above guards a downgrade, so the backup is
  *  belt-and-suspenders, not a correctness dependency). Skips :memory: / unnamed
- *  DBs. Checkpoint-truncates the WAL first so the copied main file is
- *  self-contained (un-checkpointed pages would otherwise live only in -wal).
- *  Never overwrites an existing .pre-v7.bak — a prior partial-upgrade snapshot
- *  is more valuable than the current possibly-half-migrated state. */
+ *  DBs. We TRY a TRUNCATE checkpoint to fold the WAL into the main file, but
+ *  `wal_checkpoint(TRUNCATE)` returns `{busy:1}` (does NOT throw) when a reader
+ *  blocks it — leaving un-checkpointed pages only in `-wal` (codex review
+ *  MEDIUM). So we ALWAYS copy `-wal` + `-shm` alongside the main file: the
+ *  three together are a consistent restore set regardless of whether the
+ *  checkpoint succeeded. Never overwrites an existing .pre-v7.bak — a prior
+ *  partial-upgrade snapshot is more valuable than the current state. */
 function backupChatDbBeforeV7(db: Database.Database): void {
   const path = db.name
   if (!path || path === ':memory:') return
   const backupPath = path + '.pre-v7.bak'
   if (existsSync(backupPath)) return
   try {
+    // Best-effort fold WAL into the main file; busy → falls through to the
+    // sidecar copies below (we never trust the truncate succeeded).
     db.pragma('wal_checkpoint(TRUNCATE)')
     copyFileSync(path, backupPath)
+    // Copy the WAL sidecars too so a busy checkpoint can't leave the snapshot
+    // missing un-checkpointed pages. SQLite reads <main>-wal / <main>-shm next
+    // to the restored main file on open.
+    for (const suffix of ['-wal', '-shm']) {
+      if (existsSync(path + suffix)) copyFileSync(path + suffix, backupPath + suffix)
+    }
     console.log(`[chat_db] pre-v7 backup written to ${backupPath}`)
   } catch (err) {
     console.error('[chat_db] pre-v7 backup failed (continuing; rebuild is atomic)', err)
@@ -467,9 +493,19 @@ function migrate(db: Database.Database): void {
   // leave "physical v7 + meta v6". But the artificial "meta rolled back" re-entry
   // (crash-resilience test) would otherwise re-run the destructive rebuild and
   // clobber any general row to anchor_type='email' (→ CHECK violation). When the
-  // anchor_type column already exists the rebuild already happened — just advance
-  // meta, don't rebuild.
+  // table is ALREADY the full v7 shape the rebuild already happened — just advance
+  // meta. codex review MEDIUM: validate the FULL shape (anchor_id + coupling CHECK),
+  // not just the anchor_type column — a partial/tampered table must neither be
+  // silently blessed as v7 nor destructively rebuilt (the rebuild would clobber
+  // general rows), so fail loudly and point at the backup.
   if (current < 7 && hasColumn(db, 'ai_chat_sessions', 'anchor_type')) {
+    if (!isV7SessionShape(db)) {
+      throw new Error(
+        'ai_chat_sessions carries an anchor_type column but not the full v7 shape ' +
+          '(missing anchor_id and/or the anchor_id=email_id coupling CHECK). Refusing to ' +
+          'advance schema_version — restore ai_chat.db from .pre-v7.bak or delete the file.'
+      )
+    }
     db.prepare(
       "INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', '7')"
     ).run()
@@ -492,7 +528,10 @@ function migrate(db: Database.Database): void {
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL,
             CHECK (
-              (anchor_type = 'email' AND anchor_id IS NOT NULL AND email_id IS NOT NULL)
+              -- email rows: anchor_id MUST equal email_id (codex review HIGH — the
+              -- tier-1 invariant is anchor_id = email_id for email anchors, not just
+              -- both non-null). general rows: both NULL (no sentinel).
+              (anchor_type = 'email' AND email_id IS NOT NULL AND anchor_id = email_id)
               OR
               (anchor_type = 'general' AND anchor_id IS NULL AND email_id IS NULL)
             )
@@ -571,6 +610,13 @@ function resolveAnchor(input: OpenSessionInput): {
 } {
   const anchorType: AnchorType = input.anchorType ?? 'email'
   if (anchorType === 'general') {
+    // codex review HIGH — a general anchor carrying ANY non-null emailId (incl. 0)
+    // is rejected, never silently dropped: that's exactly the sentinel we banned.
+    if (input.emailId != null) {
+      throw new Error(
+        `getOrCreateSession: general anchor must not carry an emailId (got ${input.emailId})`
+      )
+    }
     return { anchorType: 'general', emailId: null, anchorId: null }
   }
   const emailId = input.emailId

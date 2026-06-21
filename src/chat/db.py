@@ -49,6 +49,10 @@ def _resolve_anchor(
     general → 两者 NULL（**绝不**接受 emailId sentinel）。非法 email anchor 抛 ValueError
     （router 已前置校验，这里是 defense-in-depth，免得插入违反 v7 CHECK 的行）。"""
     if anchor_type == "general":
+        # codex review HIGH — reject a general anchor carrying ANY non-None emailId
+        # (incl. 0); never silently drop it (that's the banned sentinel).
+        if email_id is not None:
+            raise ValueError(f"general anchor must not carry an emailId (got {email_id!r})")
         return "general", None, None
     if anchor_type != "email":
         raise ValueError(f"anchor_type must be 'email' or 'general', got {anchor_type!r}")

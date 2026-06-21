@@ -193,6 +193,16 @@ describe('chat_db — general anchor', () => {
   test('email anchor without an emailId throws (no silent sentinel insert)', () => {
     expect(() => getOrCreateSession({ backendKind: 'custom-api' })).toThrow(/non-negative integer/)
   })
+
+  test('general anchor carrying an emailId throws (codex HIGH — no sentinel)', () => {
+    // incl. 0 — the exact sentinel we banned.
+    expect(() =>
+      createNewSession({ anchorType: 'general', emailId: 0, backendKind: 'custom-api' })
+    ).toThrow(/must not carry an emailId/)
+    expect(() =>
+      getOrCreateSession({ anchorType: 'general', emailId: 5, backendKind: 'custom-api' })
+    ).toThrow(/must not carry an emailId/)
+  })
 })
 
 describe('chat_db — v7 coupling CHECK', () => {
@@ -217,6 +227,19 @@ describe('chat_db — v7 coupling CHECK', () => {
           `INSERT INTO ai_chat_sessions
              (email_id, anchor_type, anchor_id, backend_kind, created_at, updated_at)
            VALUES (NULL, 'email', NULL, 'custom-api', 1, 1)`
+        )
+        .run()
+    ).toThrow()
+  })
+
+  test('rejects an email row whose anchor_id != email_id (codex HIGH equality)', () => {
+    const db = getChatDb()
+    expect(() =>
+      db
+        .prepare(
+          `INSERT INTO ai_chat_sessions
+             (email_id, anchor_type, anchor_id, backend_kind, created_at, updated_at)
+           VALUES (5, 'email', 6, 'custom-api', 1, 1)`
         )
         .run()
     ).toThrow()

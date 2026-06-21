@@ -39,7 +39,7 @@ CREATE TABLE ai_chat_sessions (
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
     CHECK (
-        (anchor_type = 'email' AND anchor_id IS NOT NULL AND email_id IS NOT NULL)
+        (anchor_type = 'email' AND email_id IS NOT NULL AND anchor_id = email_id)
         OR
         (anchor_type = 'general' AND anchor_id IS NULL AND email_id IS NULL)
     )
@@ -143,6 +143,28 @@ def test_general_invalid_email_anchor_rejected(chatdb: ChatDb) -> None:
         chatdb.get_or_create_session(backend_kind="custom-api")  # anchor_type='email' 但无 email_id
 
 
+def test_general_anchor_with_emailid_rejected(chatdb: ChatDb) -> None:
+    """codex HIGH — general anchor 带 emailId（含 0）必须抛，绝不静默丢（=sentinel）。"""
+    with pytest.raises(ValueError):
+        chatdb.create_new_session(anchor_type="general", email_id=0, backend_kind="custom-api")
+    with pytest.raises(ValueError):
+        chatdb.get_or_create_session(anchor_type="general", email_id=5, backend_kind="custom-api")
+
+
+def test_v7_check_rejects_email_anchor_id_mismatch(chat_db_path: Path) -> None:
+    """codex HIGH — v7 CHECK 强制 email 行 anchor_id = email_id（不只两者非空）。"""
+    conn = sqlite3.connect(str(chat_db_path))
+    now = int(time.time() * 1000)
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO ai_chat_sessions "
+            "(email_id, anchor_type, anchor_id, backend_kind, created_at, updated_at) "
+            "VALUES (5, 'email', 6, 'custom-api', ?, ?)",
+            (now, now),
+        )
+    conn.close()
+
+
 def test_v7_check_rejects_email_anchor_with_null_email(chat_db_path: Path) -> None:
     """v7 CHECK：email anchor 行 email_id/anchor_id 不能为 NULL（sentinel by-construction 不可达）。"""
     conn = sqlite3.connect(str(chat_db_path))
@@ -218,3 +240,13 @@ def test_router_rejects_bad_anchor_type(chat_client: TestClient) -> None:
         json={"anchorType": "thread", "backendKind": "custom-api"},
     ).json()["error"]
     assert err["code"] == "E_INVALID_ARG"
+
+
+def test_router_general_with_emailid_rejected(chat_client: TestClient) -> None:
+    """codex HIGH — router 拒 general anchor 带 emailId（含 0），不静默丢。"""
+    for sentinel in (0, 5):
+        err = chat_client.post(
+            "/api/chat/sessions",
+            json={"anchorType": "general", "emailId": sentinel, "backendKind": "custom-api"},
+        ).json()["error"]
+        assert err["code"] == "E_INVALID_ARG"

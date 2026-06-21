@@ -104,7 +104,12 @@ function validateStartOpts(opts: ChatStartOpts): void {
     if (!Number.isInteger(opts.emailId) || (opts.emailId as number) < 0) {
       throw invalidArg('email anchor requires a non-negative integer emailId')
     }
-  } else if (anchorType !== 'general') {
+  } else if (anchorType === 'general') {
+    // codex review HIGH — a general anchor must NOT carry an emailId (incl. 0).
+    if (opts.emailId != null) {
+      throw invalidArg('general anchor must not carry an emailId')
+    }
+  } else {
     throw invalidArg(`anchorType must be 'email' or 'general', got ${String(anchorType)}`)
   }
   if (typeof opts.message !== 'string' || opts.message.length === 0) {

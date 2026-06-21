@@ -126,13 +126,28 @@ export function mapManifestToolToToolDef(
   return def
 }
 
-/** Flatten every skill's tools into a single ToolDef[] (manifest catalog). */
+export interface MapManifestOpts {
+  /** Include tools from skills with default_enabled=false. Default false. */
+  includeDisabled?: boolean
+  /** Include tools from skills with availability.available=false. Default false. */
+  includeUnavailable?: boolean
+}
+
+/** Flatten skill tools into a single ToolDef[] (manifest catalog). codex review
+ *  LOW: by default ONLY enabled + available skills are registered — `/api/skills`
+ *  ships e.g. notion_agent with default_enabled=false, and a disabled/unavailable
+ *  skill's tools must not be advertised to the LLM (architecture.md §6.5 — enabled
+ *  ≠ available; a disabled skill injects neither tool nor prompt fragment). Pass
+ *  includeDisabled/includeUnavailable to see the full set for shadow diagnostics. */
 export function mapManifestToToolDefs(
   manifest: SkillManifest,
-  invoke: SkillToolInvoker
+  invoke: SkillToolInvoker,
+  opts: MapManifestOpts = {}
 ): ToolDef[] {
   const out: ToolDef[] = []
   for (const skill of manifest.skills) {
+    if (!opts.includeDisabled && !skill.default_enabled) continue
+    if (!opts.includeUnavailable && !skill.availability.available) continue
     for (const tool of skill.tools) {
       out.push(mapManifestToolToToolDef(skill.name, tool, invoke))
     }

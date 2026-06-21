@@ -36,7 +36,7 @@ CREATE TABLE ai_chat_sessions (
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
     CHECK (
-        (anchor_type = 'email' AND anchor_id IS NOT NULL AND email_id IS NOT NULL)
+        (anchor_type = 'email' AND email_id IS NOT NULL AND anchor_id = email_id)
         OR
         (anchor_type = 'general' AND anchor_id IS NULL AND email_id IS NULL)
     )

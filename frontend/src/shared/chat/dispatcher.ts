@@ -156,7 +156,12 @@ export function createChatDispatcher(deps: ChatDispatcherDeps): ChatDispatcher {
           `startChat: email anchor requires a non-negative emailId, got ${input.emailId}`
         )
       }
-    } else if (anchorType !== 'general') {
+    } else if (anchorType === 'general') {
+      // codex review HIGH — general anchor must NOT carry an emailId (incl. 0).
+      if (input.emailId != null) {
+        throw new Error(`startChat: general anchor must not carry an emailId, got ${input.emailId}`)
+      }
+    } else {
       throw new Error(`startChat: invalid anchorType ${String(anchorType)}`)
     }
     if (typeof input.userMessage !== 'string' || input.userMessage.length === 0) {

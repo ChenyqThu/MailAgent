@@ -451,7 +451,15 @@ def _validate_session_opts(opts: Dict[str, Any], route: str) -> tuple[str, Optio
                 source="sqlite",
             )
     else:
-        email_id = None  # general session 无 emailId（CHECK 强制 email_id IS NULL）
+        # codex review HIGH — reject a general anchor carrying ANY emailId (incl. 0);
+        # don't silently drop it (that's the banned sentinel).
+        if email_id is not None:
+            raise APIError(
+                "E_INVALID_ARG",
+                f"{route} general anchor must not carry an emailId",
+                source="sqlite",
+            )
+        # general session 无 emailId（CHECK 强制 email_id IS NULL）。
     backend_kind = opts.get("backendKind")
     if backend_kind not in ("notion-agent", "custom-api"):
         raise APIError(

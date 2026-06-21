@@ -121,6 +121,45 @@ describe('manifest mapper — tool → ToolDef', () => {
     }))
     expect(defs.map((d) => d.name)).toEqual(['email_search', 'email_get', 'report_run'])
   })
+
+  test('filters disabled + unavailable skills by default (codex LOW)', () => {
+    const skill = (
+      name: string,
+      toolName: string,
+      enabled: boolean,
+      available: boolean
+    ): SkillManifest['skills'][number] => ({
+      name,
+      version: '1',
+      title: name,
+      description: '',
+      default_enabled: enabled,
+      availability: { available },
+      prompt_fragment: '',
+      docs_path: '',
+      tools: [manifestTool({ name: toolName })]
+    })
+    const manifest: SkillManifest = {
+      generated_at: 'x',
+      server_version: '3.0.0',
+      capabilities: {},
+      skills: [
+        skill('email', 'email_search', true, true),
+        skill('notion_agent', 'notion_agent_chat', false, true), // disabled
+        skill('kos', 'kos_query', true, false) // unavailable
+      ]
+    }
+    const noop = async () => ({ ok: true as const, output: null, durationMs: 1 })
+    // Default: only the enabled + available skill's tools.
+    expect(mapManifestToToolDefs(manifest, noop).map((d) => d.name)).toEqual(['email_search'])
+    // Opt-in diagnostics include the rest.
+    expect(
+      mapManifestToToolDefs(manifest, noop, {
+        includeDisabled: true,
+        includeUnavailable: true
+      }).map((d) => d.name)
+    ).toEqual(['email_search', 'notion_agent_chat', 'kos_query'])
+  })
 })
 
 describe('manifest mapper — shadow parity', () => {
