@@ -619,6 +619,12 @@ function resolveAnchor(input: OpenSessionInput): {
     }
     return { anchorType: 'general', emailId: null, anchorId: null }
   }
+  // codex review NIT — reject any anchorType that's neither 'general' nor 'email'
+  // (parity with router/runtime/dispatcher/db.py) instead of silently treating it
+  // as email. input is wire-sourced, so a bad string can reach here at runtime.
+  if (anchorType !== 'email') {
+    throw new Error(`getOrCreateSession: invalid anchorType ${String(anchorType)}`)
+  }
   const emailId = input.emailId
   if (typeof emailId !== 'number' || !Number.isInteger(emailId) || emailId < 0) {
     throw new Error(

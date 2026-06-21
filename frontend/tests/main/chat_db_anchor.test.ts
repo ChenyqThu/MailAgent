@@ -194,6 +194,13 @@ describe('chat_db — general anchor', () => {
     expect(() => getOrCreateSession({ backendKind: 'custom-api' })).toThrow(/non-negative integer/)
   })
 
+  test('invalid anchorType throws (codex NIT — not silently treated as email)', () => {
+    expect(() =>
+      // wire-sourced bad string — TS cast simulates a malformed payload reaching resolveAnchor.
+      getOrCreateSession({ anchorType: 'thread' as never, emailId: 1, backendKind: 'custom-api' })
+    ).toThrow(/invalid anchorType/)
+  })
+
   test('general anchor carrying an emailId throws (codex HIGH — no sentinel)', () => {
     // incl. 0 — the exact sentinel we banned.
     expect(() =>

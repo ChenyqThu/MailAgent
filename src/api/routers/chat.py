@@ -128,7 +128,10 @@ async def list_all_sessions(request: Request):
     """跨邮件 session 历史（含 first_user_message 预览 + message_count + join email
     subject/sender）。镜像 chat:listAllSessions → ChatSessionListItem[]。"""
     summaries = get_chat_db().list_all_sessions()
-    email_ids = list({s["email_id"] for s in summaries})
+    # codex review NIT — general sessions have email_id=None; exclude them so the
+    # email metadata join doesn't query a NULL id (and skips get_settings() when no
+    # real email ids remain).
+    email_ids = list({s["email_id"] for s in summaries if s["email_id"] is not None})
     # email_ids 空（无 session）时不调 get_settings()（省 config 访问，codex review）。
     meta = (
         _email_meta_for_sessions(email_ids, get_settings().sync_store_db_path)
