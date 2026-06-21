@@ -414,6 +414,7 @@ from src.api.routers import (  # noqa: E402
     llm,
     reports,
     settings,
+    skills,
 )
 
 app.include_router(email.router)
@@ -428,6 +429,7 @@ app.include_router(jobs.router)
 app.include_router(reports.router)
 app.include_router(chat.router)
 app.include_router(settings.router)
+app.include_router(skills.router)
 
 
 @app.get("/api/health")
