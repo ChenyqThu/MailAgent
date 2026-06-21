@@ -28,6 +28,26 @@ import type { SearchHit } from '@shared/api/types'
 
 import { MentionPopover } from './MentionPopover'
 
+/** Which chat surface a Composer instance lives in. */
+type PanelScope = 'chat' | 'general'
+
+/** Scope of the panel currently holding keyboard focus, or `null` if focus is
+ *  outside any chat surface. Drives the per-instance shortcut gating below: the
+ *  Composer is shared between the email-mode AIChatPanel (`ai-chat-panel`) and
+ *  the Cmd+O General Agent dialog (`data-general-agent-panel`), and both can be
+ *  mounted at once. The shared shortcut bus is LIFO and re-registers handlers on
+ *  every render, so without checking "is the focused panel MY panel" a
+ *  background composer could handle the foreground panel's ⌘↩ and submit into
+ *  the wrong surface. */
+function activePanelScope(): PanelScope | null {
+  if (typeof document === 'undefined') return null
+  const active = document.activeElement
+  if (!(active instanceof HTMLElement)) return null
+  if (active.closest('[aria-label="ai-chat-panel"]')) return 'chat'
+  if (active.closest('[data-general-agent-panel]')) return 'general'
+  return null
+}
+
 interface Props {
   /** Renderer-controlled draft text. Lifted so QuickActions can prefill it. */
   value: string
@@ -73,6 +93,11 @@ interface Props {
   attachments?: ReadonlyArray<ChatAttachment>
   onAddAttachment?(attachment: ChatAttachment): void
   onRemoveAttachment?(id: string): void
+  /** Which chat surface this Composer lives in. Gates the ⌘↩ / ⌘O / ⌘⇧M
+   *  shortcuts so they only fire when focus is inside THIS panel. Defaults to
+   *  the email-mode chat panel; the Cmd+O General Agent dialog passes
+   *  `'general'`. */
+  panelScope?: PanelScope
 }
 
 export function Composer({
@@ -95,7 +120,8 @@ export function Composer({
   onRemoveAttachment,
   thinkingEnabled = false,
   onToggleThinking,
-  thinkingDisabled = false
+  thinkingDisabled = false,
+  panelScope = 'chat'
 }: Props): React.ReactElement {
   const { t } = useTranslation()
   const taRef = useRef<HTMLTextAreaElement>(null)
@@ -179,35 +205,36 @@ export function Composer({
 
   // ⌘↩ to send. Sprint 4 review (opus M carry-forward): `enabled: focused`
   // killed the shortcut whenever the user clicked a tool row or the
-  // BackendSelector. Scope to "anywhere inside the AI panel" via aria-label
-  // instead — composer textarea, quick-action chips, and BackendSelector
-  // all sit under `aria-label="ai-chat-panel"` (see AIChatPanel root).
-  function isInsidePanel(): boolean {
-    if (typeof document === 'undefined') return false
-    const active = document.activeElement
-    if (!(active instanceof HTMLElement)) return false
-    return active.closest('[aria-label="ai-chat-panel"]') !== null
-  }
-
+  // BackendSelector. Scope to "anywhere inside MY panel" — composer textarea,
+  // quick-action chips, and BackendSelector all sit under the panel root
+  // (`aria-label="ai-chat-panel"` for chat, `data-general-agent-panel` for the
+  // Cmd+O General Agent dialog). `panelScope` tells THIS instance which panel
+  // it owns, so only the composer whose panel holds focus submits.
   useShortcut(
     'cmd+enter',
     () => {
-      if (!isInsidePanel()) return
+      if (activePanelScope() !== panelScope) return
       submit()
       return true
     },
     { allowInEditable: true }
   )
 
-  // Sprint 14 PR H — ⌘O picks an attachment file. Browser default for
-  // ⌘O is "Open File" which Electron doesn't honour in renderer, so
-  // overriding is free of side effects. Returning `true` from the
-  // handler stops the shortcut bus from cascading the keystroke
-  // elsewhere (matching cmd+enter above).
+  // Sprint 14 PR H — ⌘O picks an attachment file (chat panel only; the
+  // General Agent dialog has no attachments). Browser default for ⌘O is
+  // "Open File" which Electron doesn't honour in renderer, so overriding is
+  // free of side effects. Returning `true` stops the shortcut bus from
+  // cascading the keystroke to the GLOBAL ⌘O (GlobalShortcuts toggles the
+  // General Agent dialog) — without consuming it inside the dialog, ⌘O there
+  // would fall through and toggle the dialog shut.
   useShortcut(
     'cmd+o',
     () => {
-      if (!isInsidePanel() || !attachEnabled) return
+      if (activePanelScope() !== panelScope) return
+      // General Agent dialog: no attachments — consume so the global ⌘O
+      // (toggle dialog) doesn't fire and close us mid-typing.
+      if (panelScope === 'general') return true
+      if (!attachEnabled) return
       fileInputRef.current?.click()
       return true
     },
@@ -222,7 +249,7 @@ export function Composer({
   useShortcut(
     'cmd+shift+m',
     () => {
-      if (!isInsidePanel() || !mentionEnabled) return
+      if (activePanelScope() !== panelScope || !mentionEnabled) return
       setMentionOpen((cur) => !cur)
       return true
     },

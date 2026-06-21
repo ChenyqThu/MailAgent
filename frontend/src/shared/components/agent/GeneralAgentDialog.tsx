@@ -231,6 +231,7 @@ export function GeneralAgentDialog(): React.ReactElement | null {
         role="dialog"
         aria-modal="true"
         aria-label={t('generalAgent.title')}
+        data-general-agent-panel
         tabIndex={-1}
         onKeyDown={onKeyDown}
         className="general-agent-pane glass-pop flex flex-col"
@@ -363,6 +364,7 @@ export function GeneralAgentDialog(): React.ReactElement | null {
                 thinkingEnabled={thinkingEnabled}
                 onToggleThinking={toggleThinking}
                 thinkingDisabled={!thinkingSupported}
+                panelScope="general"
               />
             </>
           )}
