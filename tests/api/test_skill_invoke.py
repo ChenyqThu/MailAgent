@@ -139,6 +139,31 @@ async def test_email_send_threads_confirm_to_service(monkeypatch):
     assert res["sent"] is True
 
 
+@pytest.mark.asyncio
+async def test_confirm_gate_requires_strict_true(monkeypatch):
+    """codex blocker 回归（invoke chokepoint）：edit gate 用严格 `is True`，非布尔真值不算确认。
+
+    覆盖非 router 路径（MCP/in-process）：即便上游传了 "true"/1 等真值，invoke 层仍拒。
+    """
+    import src.api.agent_auth as aa
+    from src.skills.context import SkillContext
+    from src.skills.errors import SkillError
+    from src.skills.invoke import invoke_skill
+
+    principal = aa.Principal(kind="agent", auth_method="bearer", scopes=frozenset({"email:write"}))
+    ctx = SkillContext()
+    monkeypatch.setattr(ctx, "service_ctx", lambda: None)
+
+    for truthy in ("true", "false", 1, "yes"):
+        with pytest.raises(SkillError) as ei:
+            await invoke_skill(
+                principal, "email", "email_send",
+                {"internalId": 1, "mode": "reply-all"}, confirm=truthy, ctx=ctx,
+            )
+        assert ei.value.http_status == 403, f"confirm={truthy!r} must NOT confirm"
+        assert "confirm" in (ei.value.hint or ei.value.message).lower()
+
+
 def test_invoke_path_does_not_fork_cli(skill_client, monkeypatch):
     """invoke 主路径无 run_cli：把 cli_runner.run_cli 换成炸弹，email_search/report 仍成功。"""
 

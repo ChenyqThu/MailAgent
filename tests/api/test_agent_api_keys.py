@@ -97,6 +97,21 @@ def test_revoked_bearer_403(skill_client, api_key_store, monkeypatch):
     assert r.status_code == 403
 
 
+def test_bearer_rejected_on_non_skills_route(skill_client, api_key_store, monkeypatch):
+    """codex medium 回归：Bearer agent key **只在 /api/skills 生效**；非 skills 路由
+    （用 verify_cf_access，不认 Bearer）→ 401 → 越权 by construction 不可达。"""
+    monkeypatch.setattr(auth_mod, "AUTH_DISABLED", False)
+    _rec, plain = api_key_store.create_key("agent", scopes=["email:read"])
+    hdr = {"Authorization": f"Bearer {plain}"}
+    # 读路由（email/list 走 verify_cf_access）：Bearer 不被识别 → 401
+    r = skill_client.get("/api/email/list?limit=1", headers=hdr)
+    assert r.status_code == 401, r.text
+    assert r.json()["error"]["code"] == "E_AUTH_FAILED"
+    # 写路由（email flag 批量）同样 401（无 CF JWT / 无 local token）
+    r2 = skill_client.post("/api/email/flag", json={"ids": [1], "isRead": True}, headers=hdr)
+    assert r2.status_code == 401
+
+
 def test_audit_records_invoke(skill_client, api_key_store, monkeypatch):
     monkeypatch.setattr(auth_mod, "AUTH_DISABLED", False)
     rec, plain = api_key_store.create_key("agent", scopes=["email:read"])

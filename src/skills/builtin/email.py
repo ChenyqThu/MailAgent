@@ -133,7 +133,7 @@ def _email_send(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
         result = svc.send(
             req,
             actor=Actor(kind="http", authenticated=True, label="bearer-agent"),
-            confirmed=bool(getattr(ctx, "confirm", False)),
+            confirmed=(getattr(ctx, "confirm", False) is True),
         )
     except ServiceError as exc:
         raise SkillError.from_service(exc)

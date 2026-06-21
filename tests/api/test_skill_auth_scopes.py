@@ -63,6 +63,21 @@ def test_email_write_key_requires_confirmation(skill_client, api_key_store, monk
     assert "confirm" in (r.json()["error"].get("hint", "") + r.json()["error"]["message"]).lower()
 
 
+def test_confirm_must_be_json_boolean_not_truthy(skill_client, api_key_store, monkeypatch):
+    """codex blocker 回归：confirm 必须是 JSON 布尔；字符串 "false"/"true" 不得击穿确认闸。"""
+    monkeypatch.setattr(auth_mod, "AUTH_DISABLED", False)
+    headers, _ = _bearer(api_key_store, ["email:write"])
+    for bad in ("false", "true", 1, 0):
+        r = skill_client.post(
+            "/api/skills/invoke",
+            json={"skill": "email", "tool": "email_send", "input": {"internalId": 1}, "confirm": bad},
+            headers=headers,
+        )
+        # 非布尔 confirm → 400（router 拒），绝不当作已确认放行发信。
+        assert r.status_code == 400, f"confirm={bad!r} should be rejected, got {r.status_code}"
+        assert r.json()["error"]["code"] == "E_INVALID_ARG"
+
+
 def test_handoff_key_can_run_report(skill_client, api_key_store, monkeypatch):
     """有 report:run 的 handoff key → report_run 不被 scope 拦（→ 200）。"""
     monkeypatch.setattr(auth_mod, "AUTH_DISABLED", False)

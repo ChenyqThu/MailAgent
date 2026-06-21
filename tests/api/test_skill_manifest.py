@@ -78,6 +78,20 @@ def test_manifest_http_shape(skill_client):
     assert body["meta"]["skills"] == len(EXPECTED_TOOLS)
 
 
+def test_manifest_scopes_within_known_catalog():
+    """codex low 回归：每个 tool.auth_scopes ⊆ KNOWN_SCOPES（防 manifest↔key-store scope 漂移）。
+
+    若 manifest 用了 key store 不认的 scope，该 tool 将永远无法被任何 key 授权（ungrantable）。
+    """
+    from src.security.api_keys import KNOWN_SCOPES
+
+    m = build_manifest(None, generated_at="x")
+    for s in m.skills:
+        for t in s.tools:
+            for sc in t.auth_scopes:
+                assert sc in KNOWN_SCOPES, f"{s.name}.{t.name} scope {sc!r} not in KNOWN_SCOPES"
+
+
 def test_send_tool_always_edit_confirmation():
     """发信工具恒 confirmation_tier=edit + side_effect=send（硬约束）。"""
     m = build_manifest(None, generated_at="x")

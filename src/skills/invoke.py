@@ -62,14 +62,17 @@ async def invoke_skill(
             hint="this API key is not authorized for that scope",
         )
 
-    # confirmation gate：edit 层（发信/草稿等）必须显式 confirm=True（永远 edit confirmation）。
-    if tdef.confirmation_tier == "edit" and not confirm:
+    # confirmation gate：edit 层（发信/草稿等）必须显式布尔 True（永远 edit confirmation）。
+    # 🔴 用 `is not True`（严格身份），**绝不** truthiness：否则 confirm="false" / "no" / 1
+    # 等真值字符串/数字会击穿确认闸（codex review blocker）。本层是 REST + MCP 共用的唯一
+    # chokepoint，严格判定在此一处把死。
+    if tdef.confirmation_tier == "edit" and confirm is not True:
         raise SkillError(
             "E_AUTH_FAILED",
             f"tool {skill_name}.{tool_name} is confirmation_tier=edit; "
-            "caller must pass confirm=true",
+            "caller must pass confirm=true (JSON boolean)",
             http_status=403,
-            hint="send/draft tools always require explicit confirmation",
+            hint="send/draft tools always require an explicit boolean true confirmation",
         )
 
     _validate_input(tdef.input_schema, params)
@@ -77,7 +80,8 @@ async def invoke_skill(
     if ctx is None:
         ctx = SkillContext()
     # 把本次 confirm 透传给 handler（发信/草稿 handler 据此让 service 二次校验，防御纵深）。
-    ctx.confirm = confirm
+    # 归一成严格布尔，下游 handler 看到的恒是 True/False。
+    ctx.confirm = confirm is True
 
     if tool.blocking:
         # 同步阻塞 handler（如 report_run 跑 LLM）：放线程池，别堵 event loop。

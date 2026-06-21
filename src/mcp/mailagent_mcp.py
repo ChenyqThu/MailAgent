@@ -76,7 +76,8 @@ class LocalSkillClient:
     async def call_tool(self, skill: str, tool: str, args: dict[str, Any]) -> dict[str, Any]:
         from src.skills.invoke import invoke_skill
 
-        confirm = bool(args.pop("confirm", False)) if isinstance(args, dict) else False
+        # 🔴 严格布尔，不做 truthiness（codex blocker）：仅 JSON true 算确认。
+        confirm = (args.pop("confirm", False) is True) if isinstance(args, dict) else False
         return await invoke_skill(None, skill, tool, args, confirm=confirm, ctx=self._ctx)
 
 
@@ -101,7 +102,8 @@ class HttpSkillClient:
     async def call_tool(self, skill: str, tool: str, args: dict[str, Any]) -> dict[str, Any]:
         import httpx
 
-        confirm = bool(args.pop("confirm", False)) if isinstance(args, dict) else False
+        # 🔴 严格布尔，不做 truthiness（codex blocker）：仅 JSON true 算确认。
+        confirm = (args.pop("confirm", False) is True) if isinstance(args, dict) else False
         payload = {"skill": skill, "tool": tool, "input": args, "confirm": confirm}
         async with httpx.AsyncClient(timeout=180) as c:
             r = await c.post(

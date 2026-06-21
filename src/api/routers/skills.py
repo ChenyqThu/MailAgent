@@ -94,7 +94,11 @@ async def invoke(
     skill = raw.get("skill")
     tool = raw.get("tool")
     params = raw.get("input") or {}
-    confirm = bool(raw.get("confirm", False))
+    # 🔴 confirm 必须是真布尔，**不做** truthiness 转换（codex blocker）：拒 "false"/"true"/1 等
+    # 非布尔值，免得字符串 "false" 被当成已确认击穿发信确认闸。缺省 False。
+    confirm = raw.get("confirm", False)
+    if not isinstance(confirm, bool):
+        raise APIError("E_INVALID_ARG", "body.confirm must be a JSON boolean", source="cli")
     if not isinstance(skill, str) or not isinstance(tool, str):
         raise APIError("E_INVALID_ARG", "body.skill and body.tool are required strings", source="cli")
     if not isinstance(params, dict):
