@@ -10,6 +10,7 @@ handler 调 services / repository / ReportStore / run_report_once / notion_agent
 
 from __future__ import annotations
 
+import logging
 import time
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -30,6 +31,7 @@ if TYPE_CHECKING:
     from src.repository import EmailRepository
 
 router = APIRouter(prefix="/api/skills", tags=["skills"])
+_log = logging.getLogger("mailagent.api.skills")
 
 
 def _audit(
@@ -56,7 +58,7 @@ def _audit(
             duration_ms=int((time.perf_counter() - t0) * 1000),
         )
     except Exception:  # noqa: BLE001 — audit best-effort，不能因审计失败而吞掉调用结果
-        pass
+        _log.warning("agent api-key audit write failed (key_id=%s, tool=%s.%s)", principal.key_id, skill, tool)
 
 
 @router.get("", dependencies=[])

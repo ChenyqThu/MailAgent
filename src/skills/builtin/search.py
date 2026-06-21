@@ -7,7 +7,6 @@ agent-facing 输出强调 ``total_matches`` + ``has_more``（自我收敛信号�
 
 from __future__ import annotations
 
-import sqlite3
 from typing import Any
 
 from src.skills.errors import SkillError
@@ -16,17 +15,6 @@ from src.skills.registry import BoundSkill, BoundTool
 
 _SEARCH_LIMIT_MAX = 200
 _ATTACHMENT_SEARCH_LIMIT_MAX = 100
-
-
-def _count_fts(repo: Any, table: str) -> int:
-    conn = repo._connect()
-    try:
-        row = conn.execute(f"SELECT count(*) AS c FROM {table}").fetchone()
-        return int(row["c"]) if row else 0
-    except sqlite3.OperationalError:
-        return 0
-    finally:
-        conn.close()
 
 
 def _email_search(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
@@ -64,7 +52,6 @@ def _email_search(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
     ]
     data: dict[str, Any] = {
         "items": items,
-        "total_indexed": _count_fts(repo, "email_body_fts"),
         "total_matches": len(items),
         "has_more": result.has_more,
         "mode": mode,
@@ -114,7 +101,6 @@ def _attachment_search(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
     mode = "raw" if raw else "smart"
     data: dict[str, Any] = {
         "items": items,
-        "total_indexed": _count_fts(repo, "email_attachment_text_fts"),
         "total_matches": len(items),
         "mode": mode,
     }

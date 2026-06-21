@@ -285,16 +285,17 @@ class ApiKeyStore:
             return cur.rowcount > 0
 
     def rotate(self, key_id: str) -> Optional[str]:
-        """轮换：同 id/label/scopes 换新明文（旧明文立即失效），清 revoked/last_used。
+        """轮换：同 id/label/scopes 换新明文（旧明文立即失效），清 last_used。
 
-        返回新明文（仅此一次可见），key 不存在 → None。
+        返回新明文（仅此一次可见）；key 不存在 **或已撤销** → None（撤销是终态，rotate 不复活
+        revoked key —— 要重新启用须显式 create 新 key，避免「rotate 复活」误操作）。
         """
         plaintext = KEY_PREFIX + secrets.token_urlsafe(32)
         key_prefix = plaintext[: len(KEY_PREFIX) + 8]
         with self._connection() as conn:
             cur = conn.execute(
                 "UPDATE agent_api_keys SET key_hash = ?, key_prefix = ?, "
-                "last_used_at = NULL, revoked_at = NULL WHERE id = ?",
+                "last_used_at = NULL WHERE id = ? AND revoked_at IS NULL",
                 (_hash_key(plaintext), key_prefix, key_id),
             )
             conn.commit()

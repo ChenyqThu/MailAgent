@@ -35,6 +35,15 @@ def test_store_create_verify_revoke_rotate(tmp_path):
     assert st.rotate("no-such-id") is None
 
 
+def test_store_rotate_refuses_revoked_key(tmp_path):
+    """撤销是终态：rotate 不复活已撤销 key（返回 None）。"""
+    st = ApiKeyStore(str(tmp_path / "rot.db"))
+    rec, _ = st.create_key("r", scopes=["email:read"])
+    assert st.revoke(rec.id) is True
+    assert st.rotate(rec.id) is None
+    assert st.get_key(rec.id).revoked_at is not None  # 仍为撤销态
+
+
 def test_store_expired_key_fails_closed(tmp_path):
     st = ApiKeyStore(str(tmp_path / "b.db"))
     rec, plain = st.create_key("exp", expires_at=int(time.time()) - 10)

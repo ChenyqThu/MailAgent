@@ -6,6 +6,7 @@ DoD ③：invoke 调通 email_search、report_run（拿 report_id）、report_ge
 
 from __future__ import annotations
 
+import pytest
 
 from tests.api.conftest import EMAIL_ID
 
@@ -102,6 +103,40 @@ def test_invoke_missing_required_arg_400(skill_client):
     )
     assert r.status_code in (400, 422)
     assert r.json()["error"]["code"] == "E_INVALID_ARG"
+
+
+@pytest.mark.asyncio
+async def test_email_send_threads_confirm_to_service(monkeypatch):
+    """MEDIUM-1 防御纵深：handler 把真实 confirm 透传给 service（非硬编码 True）。"""
+    import src.services.mail_write as mw
+    from src.skills.context import SkillContext
+    from src.skills.invoke import invoke_skill
+
+    captured: dict = {}
+
+    class _FakeResult:
+        internal_id = 1
+        mode = "reply-all"
+        message_id = "mid"
+        archived_to_sent = False
+        method = "smtp"
+
+    def _fake_send(self, req, *, actor, confirmed):
+        captured["confirmed"] = confirmed
+        return _FakeResult()
+
+    monkeypatch.setattr(mw.MailWriteService, "__init__", lambda self, ctx: None)
+    monkeypatch.setattr(mw.MailWriteService, "send", _fake_send)
+
+    ctx = SkillContext()
+    monkeypatch.setattr(ctx, "service_ctx", lambda: None)  # 避免构造真 ServiceContext
+
+    # owner principal(None)→scope 通过；confirm=True→edit gate 通过 → 透传 confirmed=True。
+    res = await invoke_skill(
+        None, "email", "email_send", {"internalId": 1, "mode": "reply-all"}, confirm=True, ctx=ctx
+    )
+    assert captured["confirmed"] is True
+    assert res["sent"] is True
 
 
 def test_invoke_path_does_not_fork_cli(skill_client, monkeypatch):

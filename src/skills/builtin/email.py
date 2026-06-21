@@ -128,10 +128,12 @@ def _email_send(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
     req = _compose_request(params)
     svc = MailWriteService(ctx.service_ctx())
     try:
+        # confirm 由 invoke 层 edit-tier gate 把住后透传至 ctx.confirm；这里把真实值交给
+        # service 二次校验（而非硬编码 True）→ 防御纵深：gate 若被旁路，service 仍拒发。
         result = svc.send(
             req,
             actor=Actor(kind="http", authenticated=True, label="bearer-agent"),
-            confirmed=True,
+            confirmed=bool(getattr(ctx, "confirm", False)),
         )
     except ServiceError as exc:
         raise SkillError.from_service(exc)

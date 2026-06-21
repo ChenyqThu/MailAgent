@@ -76,6 +76,8 @@ async def invoke_skill(
 
     if ctx is None:
         ctx = SkillContext()
+    # 把本次 confirm 透传给 handler（发信/草稿 handler 据此让 service 二次校验，防御纵深）。
+    ctx.confirm = confirm
 
     if tool.blocking:
         # 同步阻塞 handler（如 report_run 跑 LLM）：放线程池，别堵 event loop。

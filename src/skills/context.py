@@ -31,6 +31,9 @@ class SkillContext:
         self._report_store = report_store
         self._config = config
         self._service_ctx: Optional["ServiceContext"] = None
+        # invoke_skill 在 dispatch 前写入本次调用的 confirm 标志（发信/草稿 handler 据此把
+        # 真实 confirm 透传给 service 二次校验，而非硬编码 True —— 防御纵深，见 invoke.py）。
+        self.confirm: bool = False
 
     def config(self) -> "Config":
         if self._config is None:
