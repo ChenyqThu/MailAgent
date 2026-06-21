@@ -17,6 +17,7 @@ nav:
     - { label: Live, href: '#island' }
     - { label: Reports, href: '#agent' }
     - { label: Provenance, href: '#trust' }
+    - { label: Agent Delivery, href: '#agent-delivery' }
     - { label: FAQ, href: '#faq' }
   download: Download
 
@@ -148,6 +149,32 @@ customAI:
         blocked at the bridge to keep the graph clean.
     - title: Graceful degradation
       body: If KOS is offline, it falls back to local FTS5 search — the conversation never breaks.
+
+agentDelivery:
+  eyebrow: Agent Delivery
+  title: Hand your inbox capabilities to your own agent
+  body: >-
+    MailAgent exposes one thing outward: a Skill layer. Mint a scope-narrowed
+    Bearer key and your agent can read email, run full-text search, and pull
+    reports or calendar over REST or MCP. Every capability flows from one
+    authoritative Python manifest; write/send tools require explicit confirm.
+  points:
+    - title: Scoped Bearer key
+      body: >-
+        mailagent api-key create issues keys by preset / scope (prefix mak_);
+        bad, revoked, or expired keys fail closed with 403.
+    - title: Authoritative Python manifest
+      body: >-
+        src/skills is the single source of truth — REST, MCP, and the skill
+        pack all derive from one manifest, so nothing drifts.
+    - title: REST /api/skills + invoke
+      body: >-
+        GET returns a scope-filtered manifest; POST /invoke calls a tool.
+        Write/send tools must carry confirm:true.
+    - title: MCP stdio + skill pack
+      body: >-
+        mailagent-mcp plugs straight into Claude Desktop / Code;
+        export_skill_pack.py emits a ready client config plus a selftest script.
 
 provenance:
   eyebrow: Provenance

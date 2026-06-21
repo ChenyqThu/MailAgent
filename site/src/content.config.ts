@@ -140,6 +140,17 @@ const landingSchema = z
       .loose()
       .optional(),
 
+    // AGENT DELIVERY (Skill Delivery API / MCP / CLI)
+    agentDelivery: z
+      .object({
+        eyebrow: z.string().optional(),
+        title: z.string().optional(),
+        body: z.string().optional(),
+        points: z.array(fItem).optional(),
+      })
+      .loose()
+      .optional(),
+
     // PROVENANCE (anti-hallucination)
     provenance: z
       .object({

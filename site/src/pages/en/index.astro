@@ -16,6 +16,7 @@ import AIFields from '../../components/landing/AIFields.astro'
 import Island from '../../components/landing/Island.astro'
 import ReportAgent from '../../components/landing/ReportAgent.astro'
 import CustomAI from '../../components/landing/CustomAI.astro'
+import AgentDelivery from '../../components/landing/AgentDelivery.astro'
 import Provenance from '../../components/landing/Provenance.astro'
 import Observability from '../../components/landing/Observability.astro'
 import Mobile from '../../components/landing/Mobile.astro'
@@ -90,6 +91,14 @@ const seo = d.seo ?? {}
     title={d.customAI?.title}
     body={d.customAI?.body}
     points={d.customAI?.points ?? []}
+    locale={locale}
+  />
+
+  <AgentDelivery
+    eyebrow={d.agentDelivery?.eyebrow}
+    title={d.agentDelivery?.title}
+    body={d.agentDelivery?.body}
+    points={d.agentDelivery?.points ?? []}
     locale={locale}
   />
 

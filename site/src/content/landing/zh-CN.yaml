@@ -17,6 +17,7 @@ nav:
     - { label: 灵动岛, href: '#island' }
     - { label: 报告 Agent, href: '#agent' }
     - { label: 可溯源, href: '#trust' }
+    - { label: Agent 交付, href: '#agent-delivery' }
     - { label: FAQ, href: '#faq' }
   download: 下载
 
@@ -126,6 +127,23 @@ customAI:
       body: 只暴露 query / search / traverse 等只读工具，写操作一律拦在桥外，杜绝图谱污染。
     - title: 不可达就降级
       body: KOS 不可达时，自然回落到本地 FTS5 全文检索，对话不中断。
+
+agentDelivery:
+  eyebrow: Agent 交付
+  title: 把收件箱能力，交给你自己的 agent
+  body: >-
+    MailAgent 对外只交付一层 Skill：申请一把按权限收敛的 Bearer key，
+    你的 agent 就能经 REST 或 MCP 调邮件读取、全文搜索、报告与日历。
+    所有能力来自 Python 权威 manifest 单一真源，写/发类工具强制确认。
+  points:
+    - title: Scoped Bearer key
+      body: mailagent api-key create 按 preset / scope 发 key（前缀 mak_），坏/撤销/过期一律 403 fail-closed。
+    - title: Python 权威 Skill manifest
+      body: src/skills 是单一真源，REST / MCP / skill pack 三面都从同一份 manifest 派生，不会漂移。
+    - title: REST /api/skills + invoke
+      body: GET 取按 scope 过滤的 manifest，POST /invoke 调用；写/发类工具须带 confirm:true。
+    - title: MCP stdio + skill pack
+      body: mailagent-mcp 直接接 Claude Desktop / Code；export_skill_pack.py 出现成配置 + 自检脚本。
 
 provenance:
   eyebrow: Provenance

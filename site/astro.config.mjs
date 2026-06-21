@@ -130,6 +130,8 @@ export default defineConfig({
               { slug: 'agent/webhook-redis' },
               { slug: 'agent/search-dsl' },
               { slug: 'agent/mcp-harness' },
+              { slug: 'agent/skill-delivery' },
+              { slug: 'agent/mcp-setup' },
               { slug: 'agent/ops' },
             ],
           },

@@ -65,7 +65,36 @@ handoff 推荐 key（`--preset handoff`）= `email:read, attachment:read, report
   mcp-config.example.json / manifest.json / openapi.json / selftest.sh / skills/<skill>/SKILL.md。
   `selftest.sh` 只跑安全动作（health / manifest / search / report_list；report.run 为 opt-in）。
 
-## 5. 不变式（每次动本面复跑）
+## 5. 快速接入（外部 agent）
+
+三步把 MailAgent 能力接进外部 agent（Claude Code / OpenClaw / 任意 MCP client）。`$BASE` 本机 = `http://127.0.0.1:8200`，远程 = `https://mail.chenge.ink`。
+
+1. **申请 scoped key**（本机，需 CLI auth）：
+   ```bash
+   mailagent api-key create --preset handoff   # email:read+attachment:read+report:read+report:run
+   # 明文 key（mak_…）仅此一次显示, 存好。纯读用 --preset readonly; 细粒度用 --scopes
+   ```
+2. **REST 直调**（自带 loop 的 agent）：
+   ```bash
+   curl -H "Authorization: Bearer mak_…" $BASE/api/skills           # manifest（只见 scope 内 tool）
+   curl -H "Authorization: Bearer mak_…" -H 'Content-Type: application/json' \
+     -X POST $BASE/api/skills/invoke \
+     -d '{"skill":"search","tool":"email_search","input":{"q":"redis timeout"}}'
+   # 写/发类 tool（confirmation_tier='edit'）须带 {"confirm": true}
+   ```
+3. **MCP stdio**（Claude Desktop / Claude Code 等 MCP client）：
+   ```bash
+   MAILAGENT_API_BASE=$BASE MAILAGENT_AGENT_KEY=mak_… mailagent-mcp
+   ```
+   或导出 skill pack 拿现成 client 配置 + 自检：
+   ```bash
+   python scripts/export_skill_pack.py     # → dist/mailagent-skill-pack/（含 mcp-config.example.json）
+   MAILAGENT_API_BASE=$BASE MAILAGENT_AGENT_KEY=mak_… bash dist/mailagent-skill-pack/selftest.sh
+   ```
+
+key 管理 `mailagent api-key list|revoke|rotate`；坏/撤销/过期 key → 403 fail-closed。
+
+## 6. 不变式（每次动本面复跑）
 
 - BASE-1：`grep -RIn "run_cli(" src/api/routers` 业务残留 = 4（不新增）；skills/mcp/invoke 主
   路径无 `run_cli`。

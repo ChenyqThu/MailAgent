@@ -1,0 +1,58 @@
+---
+/**
+ * Agent Delivery (Skill Delivery API / MCP / CLI) — section head (eyebrow,
+ * h2, lede) + a 4-card .fgrid describing the outward agent-delivery surface:
+ * scoped Bearer key · authoritative Python Skill manifest · REST /api/skills
+ * (+invoke) · MCP stdio + skill pack.
+ *
+ * Copy-only (no mock React island): reuses the existing .fgrid/.card/.col-6
+ * tokens so it sits between CustomAI (05) and Provenance (06) without a media
+ * panel. The eyebrow is intentionally un-numbered to avoid renumbering the
+ * downstream sections.
+ */
+import Icon from './Icon.astro'
+import type { IconName } from './icons'
+
+interface FItem {
+  title?: string
+  body?: string
+}
+interface Props {
+  eyebrow?: string
+  title?: string
+  body?: string
+  points?: FItem[]
+  locale: 'zh-CN' | 'en'
+}
+
+const { eyebrow, title, body, points = [] } = Astro.props
+
+// Per-card icon, by position (key / cube / search / bolt).
+const icons: IconName[] = ['shieldCheck', 'cube', 'search', 'bolt']
+---
+
+<section class="section" id="agent-delivery">
+  <div class="wrap">
+    <div class="s-head reveal">
+      {eyebrow && <span class="eyebrow">{eyebrow}</span>}
+      {title && <h2 class="s-title">{title}</h2>}
+      {body && <p class="s-lede">{body}</p>}
+    </div>
+
+    {
+      points.length > 0 && (
+        <div class="fgrid">
+          {points.map((p, i) => (
+            <div class="card col-6 reveal" data-d={i % 2 === 1 ? '1' : undefined}>
+              <div class="kicker">
+                <span class="ic"><Icon name={icons[i] ?? 'cube'} size={16} /></span>
+                {p.title}
+              </div>
+              {p.body && <p>{p.body}</p>}
+            </div>
+          ))}
+        </div>
+      )
+    }
+  </div>
+</section>
