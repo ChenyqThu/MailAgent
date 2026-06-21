@@ -310,6 +310,28 @@ app.whenReady().then(async () => {
       },
       { role: 'editMenu' },
       { role: 'viewMenu' },
+      {
+        label: 'AI',
+        submenu: [
+          {
+            label: 'General Agent',
+            // No accelerator — ⌘O is owned by the renderer GlobalShortcuts
+            // (useShortcut('cmd+o')). A menu accelerator would double-fire with
+            // the renderer binding and immediately toggle the dialog shut, so
+            // the menu only does click → IPC → renderer openGeneralAgent().
+            click(): void {
+              // Main window = first window (popout windows are created later;
+              // same simplification as setDeeplinkSink). PopoutShell has no
+              // GeneralAgentDialog, so never target a popout.
+              const win = BrowserWindow.getAllWindows()[0]
+              if (!win) return
+              if (win.isMinimized()) win.restore()
+              win.focus()
+              win.webContents.send('mailagent:open-general-agent')
+            }
+          }
+        ]
+      },
       { role: 'windowMenu' }
     ])
     Menu.setApplicationMenu(appMenu)

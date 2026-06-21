@@ -47,6 +47,7 @@ import { useActiveEmail } from './state/active-email'
 // context with the rest of the route tree.
 import { CommandPalette } from './components/command/CommandPalette'
 import { GeneralAgentDialog } from './components/agent/GeneralAgentDialog'
+import { openGeneralAgent } from './state/general-agent'
 import { GlobalShortcuts } from './components/keyboard/GlobalShortcuts'
 import { KeyboardHelpModal } from './components/keyboard/KeyboardHelpModal'
 import { ComposeNewModal } from './components/email/compose/ComposeNewModal'
@@ -119,8 +120,37 @@ function useDeeplinkRouter(): void {
   }, [])
 }
 
+/**
+ * 监听 main 菜单 (AI → General Agent) 转发的 'mailagent:open-general-agent' →
+ * 打开 Cmd+O 通用 agent 对话框。菜单项不绑 accelerator（⌘O 由 renderer
+ * GlobalShortcuts 拥有，菜单加速键会与之双触发把弹窗关掉），只走 click → IPC →
+ * 这里。RootLayout 仅主 shell 渲染（popout 绕过 router），故 popout 天然不订阅、
+ * 也不挂 GeneralAgentDialog —— 与 main 端「只发主窗口」对齐。
+ */
+function useGeneralAgentMenu(): void {
+  useEffect(() => {
+    const ipc = (
+      window as unknown as {
+        electron?: {
+          ipcRenderer?: {
+            on(ch: string, fn: (...args: unknown[]) => void): (() => void) | void
+            removeListener?(ch: string, fn: (...args: unknown[]) => void): void
+          }
+        }
+      }
+    ).electron?.ipcRenderer
+    if (!ipc) return
+    const handler = (): void => openGeneralAgent()
+    const off = ipc.on('mailagent:open-general-agent', handler)
+    return typeof off === 'function'
+      ? off
+      : () => ipc.removeListener?.('mailagent:open-general-agent', handler)
+  }, [])
+}
+
 function RootLayout(): React.ReactElement {
   useDeeplinkRouter()
+  useGeneralAgentMenu()
   return (
     <>
       <Outlet />
