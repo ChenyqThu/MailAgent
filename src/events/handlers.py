@@ -227,6 +227,10 @@ class EventHandlers:
             return
 
         # ===== 老路径：outbox disabled, 直接调 AppleScript =====
+        # DEPRECATED (灰度回退): 生产 MAILAGENT_OUTBOX_ENABLED=true 永远走上面的
+        # outbox 路径, 此分支仅 outbox=off (代码默认) 时可达。退役/清理决策见
+        # docs/reference/architecture/davmail-write-path-trace.md §3/§6 —— 勿删,
+        # 删会动到默认配置下的回退路径。
         changed = False
 
         # 同步 read 状态

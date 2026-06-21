@@ -612,6 +612,11 @@ async def update_flag(
 ):
     """直写 Notion 邮件页 Is Read / Is Flagged / Processing Status (CLI `notion update-flag`)。
 
+    DEPRECATED (Phase C): 此 HTTP wrapper 前端已 D1 改道 outbox ``email:flag`` 端点,
+    无活跃前端消费者; 保留仅为兼容, 计入 BASE-1 残留。CLI 命令本体不动 (仍被灵动岛
+    src/notify/island_response.py fork)。详见
+    docs/reference/architecture/davmail-write-path-trace.md §4。
+
     legacy notion.updateFlag 契约 (UpdateFlagOpts): {isRead, isFlagged,
     processingStatus, dryRun}。tri-bool 用字符串形 ``--is-read true/false``。
     data = notion-update-flag.schema.json {internal_id, page_id,

@@ -19,7 +19,10 @@ Sprint 15 起 (架构纯净化, hotfix 2):
   outbox, 否则 query_pages_for_reverse_sync 的 filter 失效 -> 下次轮询又拉
   同一批 page 导致 outbox 重复入队。
 
-  outbox_repo=None 时走老路径 (灰度回退兼容)。
+  outbox_repo=None 时走老路径 (灰度回退兼容)。生产 outbox=on 不可达, 仅代码默认
+  outbox=off 时才走。退役/清理决策见
+  docs/reference/architecture/davmail-write-path-trace.md §3/§6 (勿删, 删会动到
+  默认配置下的回退路径)。
 """
 
 from datetime import datetime

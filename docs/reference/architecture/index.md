@@ -14,3 +14,4 @@
 | [`service-layer-architecture.md`](./service-layer-architecture.md) | 改写操作 / 加传输端 / 动 src/services 前 | 后端服务层：统一写面 + CLI/serve-api in-process + async-jobs + 双层鉴权 + 前端 daemon 转发 |
 | [`backend-service-migration-matrix.md`](./backend-service-migration-matrix.md) | 查写操作×传输端迁移状态 | 后端服务化迁移能力矩阵（活看板） |
 | [`roadmap-post-cutover.md`](./roadmap-post-cutover.md) | 看短中长期规划 / EWS 关停应对前 | DavMail 切换后 Roadmap（含 EWS 2026-10 退役、Graph 路线） |
+| [`davmail-write-path-trace.md`](./davmail-write-path-trace.md) | 退役 Notion 反向链路(B1) / 清 outbox 灰度死分支前 | davmail 写op×路径 trace + B1 反向链路现状判定 + AppleScript fallback 链 + B1 退役决策选项（人工介入点 + STOP 清单） |

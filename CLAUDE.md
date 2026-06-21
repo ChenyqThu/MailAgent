@@ -21,6 +21,7 @@
 | 主题 | 何时读 | 路径 |
 |---|---|---|
 | 架构内核（v3 流程 / 重试 / Processing Status / webhook / 线程 / Sprint15 outbox / Sprint16 dual-backend） | 改正/反向 sync、webhook、状态机前 | [`architecture/architecture-internals.md`](./docs/reference/architecture/architecture-internals.md) |
+| DavMail 写路径 trace + Notion 反向链路(B1) 退役决策依据（写op×路径 / B1 现状 / outbox 灰度死分支 / AppleScript fallback 链） | 退役 Notion 反向链路 / 清 outbox 死分支 / 动 reverse_sync·handlers 前 | [`architecture/davmail-write-path-trace.md`](./docs/reference/architecture/davmail-write-path-trace.md) |
 | LLM Agent（本地 LLM 分类，fallback / cache / 监控 / payload） | 改邮件分类、prompt、cache 前 | [`llm-agent/llm-agent.md`](./docs/reference/llm-agent/llm-agent.md) + [`llm-agent/LLM_AGENT_SETUP.md`](./docs/reference/llm-agent/LLM_AGENT_SETUP.md) |
 | 项目周报同步（外挂模块，xlsx → Notion） | 动 `src/project_progress/` 前 | [`project-progress/project-progress-sync.md`](./docs/reference/project-progress/project-progress-sync.md) |
 | 报告 Agent 系统（日/周/月报，ReportDoc 块模型 + 定时生成 + 前端渲染 + KOS 工具桥） | 动 `src/reports/` / 报告 / Custom AI Agents 区前 | [`remote-chat-report/report-agent-prd.md`](./docs/reference/remote-chat-report/report-agent-prd.md) |
