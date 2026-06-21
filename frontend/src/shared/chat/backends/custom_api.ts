@@ -277,6 +277,18 @@ function buildStableSystemPrompt(
       '# preference, persist it via memory_write (the user confirms).\n\n' +
       cfg.memorySummary
   }
+  // P3 — active Skill prompt fragments, AFTER memory. Only ENABLED + AVAILABLE
+  // skills contribute (the runtime computed cfg.skillFragments from the manifest +
+  // the user's per-skill toggles); a disabled skill injects neither its tools nor
+  // this fragment. Stable per session (recomputed only on engine rebuild after a
+  // toggle → invalidateConfig) → stays in the cacheable prefix. "" / null → skip.
+  if (cfg.skillFragments && cfg.skillFragments.length > 0) {
+    text +=
+      '\n\n# Active skills (capabilities currently enabled)\n' +
+      '# Read silently; these describe what you can do right now. Disabled skills are\n' +
+      '# absent here AND their tools are not registered — do not claim or attempt them.\n\n' +
+      cfg.skillFragments
+  }
   // KOS 可用（启用 AND 对接，= kosConfigured）时注入使用指南（静态、可缓存；与 allKosTools
   // 注册同 gate —— 开关开着但凭据未对接时都不注入，避免 prompt 叫 AI 用未注册的工具）。
   if (cfg.kosConfigured) {

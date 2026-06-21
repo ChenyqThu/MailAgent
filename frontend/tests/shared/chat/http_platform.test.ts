@@ -969,7 +969,9 @@ describe('HttpChatPlatform config 快照', () => {
       kosConfigured: false,
       kosL1HotBlockEnabled: false,
       userContext: null,
-      memorySummary: null
+      memorySummary: null,
+      // P3 — skill fragments default null (runtime injects them via config override).
+      skillFragments: null
     })
     expect(p.kosConfig()).toEqual({ configured: false, timeDecayEnabled: true })
   })

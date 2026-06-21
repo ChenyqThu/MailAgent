@@ -156,6 +156,13 @@ export interface ChatModelConfig {
    *  prefix AFTER userContext (both are cacheable "user profile" overlays). From
    *  serve-api /chat/config (ChatDb.memory_summary). null / "" → not injected. */
   memorySummary: string | null
+  /** P3 — concatenated prompt fragments of the ENABLED + AVAILABLE Skills,
+   *  injected into the stable system prefix AFTER memorySummary (cacheable). The
+   *  runtime computes this from the Skill manifest + the user's per-skill toggles
+   *  (shared/chat/skill_enablement.computeSkillEnablement); a disabled skill's
+   *  fragment is excluded here AND its tools are filtered from the catalog.
+   *  null / "" → not injected (manifest unreachable or no skills enabled). */
+  skillFragments: string | null
 }
 
 export interface ChatModelPlatform {

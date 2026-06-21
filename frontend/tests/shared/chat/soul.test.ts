@@ -21,6 +21,7 @@ function cfg(over: Partial<ChatModelConfig> = {}): ChatModelConfig {
     kosL1HotBlockEnabled: false,
     userContext: null,
     memorySummary: null,
+    skillFragments: null,
     ...over
   }
 }
@@ -50,5 +51,45 @@ describe('soul — cache layering (userContext overlay preserved)', () => {
     expect(stable.startsWith(SOUL_MARKDOWN)).toBe(true)
     expect(stable).toContain('USER_PROFILE_XYZ')
     expect(stable.indexOf(SOUL_MARKDOWN)).toBeLessThan(stable.indexOf('USER_PROFILE_XYZ'))
+  })
+})
+
+// P3 — Skill prompt fragments are injected ONLY when the runtime supplied a
+// non-empty skillFragments (= the enabled+available skills' fragments). A disabled
+// skill contributes nothing → its fragment must be absent. This is the "prompt
+// assembly" half of acceptance ③ (the tool-filter half is covered by
+// skill_enablement.test.ts).
+describe('soul — Skill prompt fragment injection (P3)', () => {
+  test('null / empty skillFragments → nothing injected (zero regression)', () => {
+    const none = __testing.buildStableSystemPrompt(null, cfg({ skillFragments: null }), () => null)
+    expect(none).toBe(SOUL_MARKDOWN)
+    const empty = __testing.buildStableSystemPrompt(null, cfg({ skillFragments: '' }), () => null)
+    expect(empty).toBe(SOUL_MARKDOWN)
+  })
+
+  test('enabled skill fragments are appended after the soul, after memory', () => {
+    const stable = __testing.buildStableSystemPrompt(
+      null,
+      cfg({ memorySummary: 'MEM_OVERLAY', skillFragments: 'REPORT_SKILL_FRAGMENT' }),
+      () => null
+    )
+    expect(stable.startsWith(SOUL_MARKDOWN)).toBe(true)
+    expect(stable).toContain('REPORT_SKILL_FRAGMENT')
+    // Ordering: soul → memory → skills (all in the cacheable stable prefix).
+    expect(stable.indexOf('MEM_OVERLAY')).toBeLessThan(stable.indexOf('REPORT_SKILL_FRAGMENT'))
+  })
+
+  test('a DISABLED skill fragment is absent — runtime passes only enabled ones', () => {
+    // The runtime derives skillFragments via computeSkillEnablement (only
+    // advertised skills contribute). Here we model the post-toggle result: the
+    // report fragment is enabled, the (disabled) calendar fragment never reaches
+    // the prompt because the runtime excluded it from skillFragments.
+    const stable = __testing.buildStableSystemPrompt(
+      null,
+      cfg({ skillFragments: 'REPORT_SKILL_FRAGMENT' }),
+      () => null
+    )
+    expect(stable).toContain('REPORT_SKILL_FRAGMENT')
+    expect(stable).not.toContain('CALENDAR_SKILL_FRAGMENT')
   })
 })

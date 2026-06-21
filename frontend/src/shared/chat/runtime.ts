@@ -18,6 +18,7 @@
 
 import { request } from '../api/http_client'
 import type {
+  ChatAnchorType,
   ChatApi,
   ChatBackendKind,
   ChatEditOpts,
@@ -45,9 +46,17 @@ import { createBuiltinTools } from './tools/builtin'
 import { resolveConfirmation } from './tools/confirmation'
 import { createToolRegistry, type ToolDef } from './tools/registry'
 import { replaceWithManifestReadTools, type SkillToolInvoker } from './tools/manifest'
+import type { SkillManifest } from './tools/manifest'
 import { fetchSkillManifest } from './tools/manifest_client'
+import { computeSkillEnablement, readSkillOverrides } from './skill_enablement'
 import type { ChatBackend } from './types'
-import type { SearchAgentInput, SearchAgentResult } from '../api/types'
+import type {
+  AgentMemoryEntry,
+  SearchAgentInput,
+  SearchAgentResult,
+  SkillSummary,
+  WriteMemoryInput
+} from '../api/types'
 
 export interface ChatRuntimeDeps {
   /** HttpChatPlatform 工具读委托（reads.email / reads.attachment）。web = HttpApi 自身；
@@ -204,14 +213,16 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
   /** Build the harness tool catalog. Default = the builtin catalog (zero
    *  regression). manifestMode on: replace the cutover read tools with
    *  manifest-driven generic-invoke versions, keeping every other builtin tool.
-   *  Manifest unreachable → full builtin (fallback, architecture §3.2). */
-  async function buildToolDefs(
+   *  Manifest unreachable (null) → full builtin (fallback, architecture §3.2).
+   *  P3 — the manifest is fetched ONCE in buildEngine (shared with skill
+   *  enablement) and passed in here, not re-fetched. */
+  function buildToolDefs(
     platform: HttpChatPlatform,
-    snapshot: Partial<HttpPlatformConfig>
-  ): Promise<ToolDef[]> {
+    snapshot: Partial<HttpPlatformConfig>,
+    manifest: SkillManifest | null
+  ): ToolDef[] {
     const builtin = createBuiltinTools(platform)
     if (!snapshot.manifestMode) return builtin
-    const manifest = await fetchSkillManifest(baseUrl)
     if (!manifest) {
       console.warn('[chat] manifest mode on but manifest unreachable — using builtin catalog')
       return builtin
@@ -248,13 +259,36 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
 
   async function buildEngine(): Promise<ChatEngine> {
     const snapshot = await fetchConfigSnapshot()
-    const platform = new HttpChatPlatform(reads, baseUrl, snapshot)
+
+    // P3 — fetch the Skill manifest ONCE (graceful null on failure) and derive the
+    // skill enablement from it + the user's per-skill overrides. Two effects, both
+    // from the same (manifest, overrides) pair: (a) skillFragments injected into the
+    // stable system prompt, (b) disabled/unavailable skills' tools filtered from the
+    // catalog. Manifest unreachable → empty enablement (no filtering, no fragments =
+    // today's behaviour) AND buildToolDefs falls back to builtin (zero regression).
+    const manifest = await fetchSkillManifest(baseUrl)
+    const enablement = manifest
+      ? computeSkillEnablement(manifest, readSkillOverrides())
+      : { disabledToolNames: new Set<string>(), skillFragments: '' }
+
+    // skillFragments rides in the platform config override (a client-side derivation,
+    // NOT from the serve-api /chat/config snapshot) → modelConfig() surfaces it to
+    // custom_api.buildStableSystemPrompt.
+    const platform = new HttpChatPlatform(reads, baseUrl, {
+      ...snapshot,
+      skillFragments: enablement.skillFragments
+    })
 
     // 工具 registry 注入式（取代 module-global）：createBuiltinTools(platform) 据
     // platform.kosConfig().configured（= 预取的 kosConfigured）gate 9 个 KOS 工具注册；
     // P2b：manifestMode on 时 buildToolDefs 把 cutover read 工具换成 manifest generic-invoke。
+    // P3：再按 skill enablement 过滤掉禁用/不可用 skill 拥有的工具（按工具名，manifest 为
+    // 归属权威；不属于任何 manifest skill 的工具[memory_*/kos_*]永不被过滤 = 核心工具安全）。
     const registry = createToolRegistry()
-    for (const tool of await buildToolDefs(platform, snapshot)) registry.register(tool)
+    for (const tool of buildToolDefs(platform, snapshot, manifest)) {
+      if (enablement.disabledToolNames.has(tool.name)) continue
+      registry.register(tool)
+    }
 
     // backend factory 注入 platform：custom-api 复用既有 factory；notion-agent = http backend
     // 薄包 platform.notionAgentStream（与 electron execa 同形供 harness 消费）。
@@ -379,20 +413,28 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
     },
 
     async newSession(input: {
-      emailId: number
+      anchorType?: ChatAnchorType
+      emailId?: number | null
       backendKind: ChatBackendKind
       backendModel?: string | null
       backendAgentPageId?: string | null
     }): Promise<ChatSession> {
       // 走 platform.persist（单一真源，POST /chat/sessions/new）。用户点「+ 新建会话」后紧接
       // start → engine 构造可接受。throw Error&{code} 由 request() 透传（E_INVALID_ARG / E_DISPATCH）。
+      // P3 — email 路径**逐字节零回归**：不带 anchorType（serve-api 默认 'email'），body 形状
+      // 与既有完全一致；仅 'general' 显式带 anchorType:'general' + emailId:null（serve-api
+      // _validate_session_opts 拒 general 携 emailId），createNewSession 无条件 INSERT 新 general 行。
       const engine = await ensureEngine()
-      return engine.platform.persist.createNewSession({
-        emailId: input.emailId,
+      const base = {
         backendKind: input.backendKind,
         backendModel: input.backendModel ?? null,
         backendAgentPageId: input.backendAgentPageId ?? null
-      })
+      }
+      return engine.platform.persist.createNewSession(
+        input.anchorType === 'general'
+          ? { anchorType: 'general', emailId: null, ...base }
+          : { emailId: input.emailId ?? null, ...base }
+      )
     },
 
     async saveToKos(input: {
@@ -503,6 +545,59 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
       // search_agent 内 HttpChatPlatform 补 DEFAULT_HTTP_CONFIG。runSearchAgent 永不 throw。
       const config = await fetchConfigSnapshot()
       return runSearchAgent({ reads, baseUrl, config }, input)
+    },
+
+    invalidateConfig(): void {
+      // P3 — drop the cached engine + config snapshot so the NEXT start() rebuilds
+      // with a fresh /chat/config (memorySummary) + manifest + skill enablement.
+      // In-flight streams kept their own engine reference, so they're unaffected.
+      // Idempotent: nulling already-null promises is a no-op.
+      enginePromise = null
+      snapshotPromise = null
+    },
+
+    async listSkills(): Promise<SkillSummary[]> {
+      // P3 — flatten the Skill manifest to the Settings-facing SkillSummary[].
+      // Reports the manifest's compile-time `default_enabled` + availability; the UI
+      // overlays the local per-skill override store. Graceful [] when unreachable.
+      const manifest = await fetchSkillManifest(baseUrl)
+      if (!manifest) return []
+      return manifest.skills.map((s) => ({
+        name: s.name,
+        title: s.title,
+        description: s.description,
+        defaultEnabled: s.default_enabled,
+        available: s.availability.available,
+        unavailableReason: s.availability.reason ?? null,
+        toolCount: s.tools.length,
+        scopes: [...new Set(s.tools.flatMap((t) => t.auth_scopes))].sort()
+      }))
+    },
+
+    async listMemory(scope?: string): Promise<AgentMemoryEntry[]> {
+      // P3 — direct fetch (no engine needed), graceful [] (same pattern as the
+      // read methods above). GET /chat/memory[?scope=].
+      try {
+        return await request<AgentMemoryEntry[]>(baseUrl, 'GET', '/chat/memory', {
+          query: scope ? { scope } : undefined
+        })
+      } catch {
+        return []
+      }
+    },
+
+    async writeMemory(input: WriteMemoryInput): Promise<AgentMemoryEntry> {
+      // P3 — upsert; throw Error&{code}透传（E_INVALID_ARG）。caller invalidateConfig()
+      // 让下一轮 memory summary 生效。
+      return request<AgentMemoryEntry>(baseUrl, 'POST', '/chat/memory', { body: input })
+    },
+
+    async deleteMemory(scope: string, key: string): Promise<number> {
+      // P3 — DELETE /chat/memory?scope=&key= → {deleted}. caller invalidateConfig().
+      const data = await request<{ deleted: number }>(baseUrl, 'DELETE', '/chat/memory', {
+        query: { scope, key }
+      })
+      return data.deleted
     }
   }
 }

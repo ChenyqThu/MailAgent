@@ -36,6 +36,7 @@ function cfg(opts?: Partial<ChatModelConfig>): ChatModelConfig {
     kosL1HotBlockEnabled: false,
     userContext: null,
     memorySummary: null,
+    skillFragments: null,
     ...opts
   }
 }

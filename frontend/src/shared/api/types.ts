@@ -1403,6 +1403,50 @@ export interface ChatStartResult {
   assistantMessageId: number
 }
 
+// P2f/P3 — agent memory WAL row (ai_chat.db agent_memory_kv). Mirror of
+// shared/chat/model.ts AgentMemoryEntry — duplicated here (not imported) to keep
+// api/types the boundary surface, same as ChatSession/ChatMessage above. The P3
+// Memory UI (Settings) lists/edits/deletes these via the ChatApi methods below.
+export interface AgentMemoryEntry {
+  /** Namespace: 'user' = durable preferences; 'skill:<name>' = skill-scoped. */
+  scope: string
+  key: string
+  /** JSON-serialized fact (scalar or object). */
+  value_json: string
+  /** Provenance pointer (session/message/tool / wiki path); null when unknown. */
+  source_wiki_path: string | null
+  created_at: number
+  updated_at: number
+}
+
+export interface WriteMemoryInput {
+  scope: string
+  key: string
+  valueJson: string
+  sourceWikiPath?: string | null
+}
+
+// P3 — one installed Skill, as the Settings "Skills" toggle renders it. A flat
+// projection of the Skill manifest (shared/chat/tools/manifest SkillManifest) so
+// api/types stays self-contained. `defaultEnabled` is the manifest compile-time
+// seed; the user's per-skill override (shared/chat/skill_enablement) sits on top.
+export interface SkillSummary {
+  name: string
+  title: string
+  description: string
+  /** Manifest compile-time default. The UI shows the effective state by
+   *  overlaying the local override store. */
+  defaultEnabled: boolean
+  /** availability.available — KOS / notion-agent CLI / etc. preconditions met. */
+  available: boolean
+  /** Reason the skill is unavailable (KOS creds missing, CLI absent…), else null. */
+  unavailableReason: string | null
+  /** Number of tools the skill owns. */
+  toolCount: number
+  /** Union of the skill tools' auth_scopes (side-effect summary). */
+  scopes: string[]
+}
+
 export interface ChatApi {
   /**
    * Open or reuse the (emailId, backendKind, agentPageId) session, append
@@ -1460,12 +1504,19 @@ export interface ChatApi {
    * Schema v4 dropped the UNIQUE on (email_id, backend_kind,
    * backend_agent_page_id) so this INSERT always creates a brand-new row.
    *
+   * P3 — `anchorType` defaults to 'email' (emailId required). Pass
+   * `anchorType:'general'` (and omit emailId) to INSERT a fresh general
+   * (context-free, Cmd+O) session — the serve-api `POST /chat/sessions/new`
+   * + chat_db.ts createNewSession already accept the general anchor (email_id
+   * NULL). Never pass emailId for a general session.
+   *
    * Throws `Error & { code }` on dispatch failure (E_INVALID_ARG /
    * E_DISPATCH). Caller can fall through to a regular send() on failure;
    * the legacy resurrection path still works as a fallback.
    */
   newSession(input: {
-    emailId: number
+    anchorType?: ChatAnchorType
+    emailId?: number | null
     backendKind: ChatBackendKind
     backendModel?: string | null
     backendAgentPageId?: string | null
@@ -1534,6 +1585,39 @@ export interface ChatApi {
    * （HttpApi）不支持（LLM key 在桌面）→ E_UNSUPPORTED。
    */
   runSearchAgent(input: SearchAgentInput): Promise<SearchAgentResult>
+  /**
+   * P3 — drop the cached chat engine + /chat/config snapshot so the NEXT
+   * chat.start() rebuilds the engine fresh. Call after a Skill toggle or a
+   * Memory edit/delete so the next turn's system prompt + tool catalog reflect
+   * the change (the engine is built once and memoizes the config snapshot +
+   * skill enablement; without this, edits are invisible until reload). Cheap +
+   * idempotent; in-flight streams are unaffected (they keep their engine).
+   */
+  invalidateConfig(): void
+  /**
+   * P3 — list installed Skills (the manifest, flattened to SkillSummary) for the
+   * Settings "Skills" toggle. Read-only; degrades to [] when the manifest is
+   * unreachable (so the section shows an empty/"unavailable" state, never throws).
+   */
+  listSkills(): Promise<SkillSummary[]>
+  /**
+   * P3 — list agent memory entries (agent_memory_kv) for the Settings "Memory"
+   * panel, newest-first. Optional `scope` filter ('user' by default in the UI).
+   * Read-only; degrades to [] on failure.
+   */
+  listMemory(scope?: string): Promise<AgentMemoryEntry[]>
+  /**
+   * P3 — upsert one memory entry (Settings Memory edit). Returns the persisted
+   * row. Throws `Error & { code }` on validation failure (E_INVALID_ARG). The
+   * caller should invalidateConfig() after a successful write so the next turn's
+   * memory summary reflects the edit.
+   */
+  writeMemory(input: WriteMemoryInput): Promise<AgentMemoryEntry>
+  /**
+   * P3 — delete one memory entry (scope+key). Returns the number of rows removed
+   * (0 = not found, idempotent). Caller should invalidateConfig() afterward.
+   */
+  deleteMemory(scope: string, key: string): Promise<number>
 }
 
 // ---- F2 — agentic 搜索（runSearchAgent）契约 ------------------------------

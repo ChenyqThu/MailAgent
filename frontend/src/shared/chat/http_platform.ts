@@ -124,6 +124,12 @@ export interface HttpPlatformConfig {
    *  tools from the Skill manifest (generic invoke) instead of the builtin catalog,
    *  with builtin fallback. Default false (zero regression). */
   manifestMode: boolean
+  /** P3 — concatenated prompt fragments of the enabled+available Skills, computed
+   *  by the runtime from the manifest + per-skill toggles (NOT from /chat/config —
+   *  it's a client-side derivation). Injected into the stable system prompt. "" →
+   *  not injected. The constructor merges this in via the config override; it is
+   *  never sourced from the serve-api snapshot. */
+  skillFragments: string
 }
 
 /** 远程默认快照（对齐 electron chat/config.ts 默认：harness ON / timeDecay ON / 其余
@@ -144,7 +150,9 @@ export const DEFAULT_HTTP_CONFIG: HttpPlatformConfig = {
   // dynamic-models — empty until /chat/config supplies it; consumers fall back to FALLBACK_MODELS.
   enabledModels: [],
   // P2b — manifest-driven tools off by default (builtin catalog = today's behaviour).
-  manifestMode: false
+  manifestMode: false,
+  // P3 — no skill fragments until the runtime computes + injects them.
+  skillFragments: ''
 }
 
 /** per-messageId 的 streamContent debounce 状态。`latest` = 最近一次累积全量正文
@@ -452,7 +460,9 @@ export class HttpChatPlatform
       // buildStableSystemPrompt only injects when non-null + non-empty.
       userContext: this.config.userContext.length > 0 ? this.config.userContext : null,
       // P2f — "" → null (custom_api injects only when non-null + non-empty).
-      memorySummary: this.config.memorySummary.length > 0 ? this.config.memorySummary : null
+      memorySummary: this.config.memorySummary.length > 0 ? this.config.memorySummary : null,
+      // P3 — "" → null (custom_api injects skill fragments only when non-empty).
+      skillFragments: this.config.skillFragments.length > 0 ? this.config.skillFragments : null
     }
   }
 
