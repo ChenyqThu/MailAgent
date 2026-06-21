@@ -292,6 +292,25 @@ export interface SaveConversationResult {
   contentBytes: number
 }
 
+/** notion_agent_chat tool 结果（P2g）= serve-api POST /chat/notion-agent-once 收集的
+ *  非流式结果。threadId 续接（带回供下一轮 input.threadId）；status='error' 时带 errorCode/Message。 */
+export interface NotionAgentChatResult {
+  text: string
+  threadId: string | null
+  status: 'ok' | 'error'
+  metadata: Record<string, unknown> | null
+  errorCode?: string
+  errorMessage?: string
+}
+
+/** notion_agent_chat tool 入参（P2g）。 */
+export interface NotionAgentChatInput {
+  message: string
+  threadId?: string | null
+  model?: string | null
+  agentPageId?: string | null
+}
+
 export interface ChatToolPlatform {
   // ── 读原语（8 silent 工具）— electron 直调 handlers（同步包 async）/ http fetch serve-api ──
   listEmails(opts: ChatToolListEmailsOpts): Promise<EmailList_EmailListItem[]>
@@ -364,4 +383,9 @@ export interface ChatToolPlatform {
   writeMemory(input: WriteMemoryInput): Promise<AgentMemoryEntry>
   /** delete a memory entry → rows removed (0 if absent). */
   deleteMemory(scope: string, key: string): Promise<number>
+  // ── notion_agent_chat tool（P2g）→ serve-api /chat/notion-agent-once ────────
+  /** Run the notion-agent CLI once (non-streaming collect) and return its text +
+   *  thread_id for continuity. Reuses the serial gate / idle timeout. The old
+   *  streaming notion-agent backend + backend_kind stay (Phase 3 retires the UI). */
+  notionAgentChat(input: NotionAgentChatInput): Promise<NotionAgentChatResult>
 }

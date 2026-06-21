@@ -198,5 +198,9 @@ export const testChatPlatform: ChatInfraPlatform & ChatToolPlatform = {
   },
   async deleteMemory() {
     return toolNotExercised()
+  },
+  // P2g notion_agent_chat stub — scripted backends never emit tool_use → never invoked.
+  async notionAgentChat() {
+    return toolNotExercised()
   }
 }

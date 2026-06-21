@@ -6,7 +6,7 @@
 // 取工具 —— main / 3c renderer 各自用对应 platform（electron / http）构造一份 registry，
 // 零 parity。本文件零 Electron import（不变式 1，pnpm build:web 验证）。
 //
-//   Default catalog (24 tools):
+//   Default catalog (25 tools):
 //     Read  (11): email_search / email_get / email_body / email_list_thread /
 //                 email_search_fulltext / email_get_ai_fields / email_list_folders /
 //                 attachment_list / email_search_attachments /
@@ -16,6 +16,7 @@
 //                 email_move / email_resync / report_run
 //     Memory (4, P2f): memory_list / memory_get (silent) /
 //                 memory_write / memory_delete (preview confirm)
+//     Notion (1, P2g): notion_agent_chat (preview confirm; delegates to notion-agent CLI)
 //
 //   KOS gated (+9 tools when platform.kosConfig().configured = true):
 //     Meta read  (7): kos_query / kos_digest / kos_recall / kos_find_experts /
@@ -29,6 +30,7 @@ import { createAttachmentTools } from './attachment'
 import { createWriteTools } from './write'
 import { createReportTools } from './report'
 import { createMemoryTools } from './memory'
+import { createNotionAgentTools } from './notion_agent'
 import { createKosTools } from './kos'
 
 /** Build every builtin tool bound to the injected platform. The 20 default
@@ -42,7 +44,10 @@ export function createBuiltinTools(platform: ChatToolPlatform): ToolDef[] {
     ...createWriteTools(platform),
     ...createReportTools(platform),
     // P2f — memory WAL (always available; agent_memory_kv lives in ai_chat.db).
-    ...createMemoryTools(platform)
+    ...createMemoryTools(platform),
+    // P2g — notion_agent_chat (delegates to the notion-agent CLI; graceful error
+    // if the CLI isn't installed, same as the notion-agent backend).
+    ...createNotionAgentTools(platform)
   ]
   if (platform.kosConfig().configured) {
     tools.push(...createKosTools(platform))
@@ -56,5 +61,6 @@ export {
   createWriteTools,
   createReportTools,
   createMemoryTools,
+  createNotionAgentTools,
   createKosTools
 }

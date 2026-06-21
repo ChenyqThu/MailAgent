@@ -15,6 +15,7 @@ ChatSessionSummary / ChatSessionListItem / ChatMessage / ChatToolCall（``types.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import sqlite3
 from datetime import datetime, timezone
@@ -426,6 +427,76 @@ async def notion_agent(request: Request):
             yield sse_encode(event)
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@router.post("/notion-agent-once", dependencies=[Depends(verify_cf_access)])
+async def notion_agent_once(request: Request, body: Optional[Dict[str, Any]] = None):
+    """notion_agent_chat tool 的**非流式**面（P2g）：跑 ``run_notion_agent`` 收集成
+    ``{text, threadId, status, metadata}``。复用串行 gate / idle timeout / thread_id 续接
+    （extract_turn 从构造的 assistant.metadata.thread_id 取已有 thread_id）。envelope（非 SSE）。
+
+    body = ``{message, threadId?, model?, agentPageId?}``。旧流式 ``/notion-agent`` 端点 + 旧
+    ``backend_kind='notion-agent'`` 不动（Phase 3 再退役 UI 入口）。
+    """
+    opts = body or {}
+    message = opts.get("message")
+    if not isinstance(message, str) or not message:
+        raise APIError("E_INVALID_ARG", "notion-agent-once requires message:str")
+    thread_id = opts.get("threadId")
+    thread_id = thread_id if isinstance(thread_id, str) and thread_id else None
+    model = opts.get("model")
+    agent_page_id = opts.get("agentPageId")
+
+    # 构造 history 让 extract_turn 取到 message + 已有 thread_id（续轮 → assistant.metadata.thread_id）。
+    history: List[Dict[str, Any]] = []
+    if thread_id:
+        history.append(
+            {"role": "assistant", "content": "", "metadata": json.dumps({"thread_id": thread_id})}
+        )
+    history.append({"role": "user", "content": message})
+    payload = {
+        "history": history,
+        "model": model,
+        "agentPageId": agent_page_id,
+        "emailContext": None,
+    }
+
+    text = ""
+    out_thread_id: Optional[str] = thread_id
+    status = "ok"
+    error_code: Optional[str] = None
+    error_message: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+    async for event in run_notion_agent(payload):
+        etype = event.get("type")
+        if etype == "chunk":
+            text += event.get("delta") or ""
+        elif etype in ("done", "usage"):
+            if etype == "done":
+                fc = event.get("finalContent")
+                if isinstance(fc, str):
+                    text = fc
+            md = event.get("metadata")
+            if isinstance(md, dict):
+                metadata = md
+                tid = md.get("thread_id")
+                if isinstance(tid, str) and tid:
+                    out_thread_id = tid
+        elif etype == "error":
+            status = "error"
+            error_code = event.get("code")
+            error_message = event.get("message")
+
+    result: Dict[str, Any] = {
+        "text": text,
+        "threadId": out_thread_id,
+        "status": status,
+        "metadata": metadata,
+    }
+    if status == "error":
+        result["errorCode"] = error_code
+        result["errorMessage"] = error_message
+    return success_envelope(result, request=request, source="cli")
 
 
 # ── chat 持久化写端点（V2.1 阶段 3 3b-3：ChatPersistPort 写面）──────────────

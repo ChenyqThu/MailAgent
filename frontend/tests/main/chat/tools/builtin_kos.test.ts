@@ -383,17 +383,17 @@ describe('createBuiltinTools KOS gate', () => {
     const names = tools.map((t) => t.name)
     expect(names).not.toContain('kos_query')
     expect(names).not.toContain('kos_digest')
-    expect(tools).toHaveLength(24) // 11 read + 9 write + 4 memory (P2f), no KOS
+    expect(tools).toHaveLength(25) // 11 read + 9 write + 4 memory (P2f) + 1 notion (P2g), no KOS
   })
 
-  test('configured=true — KOS tools registered alongside default 24 (→ 33)', () => {
+  test('configured=true — KOS tools registered alongside default 25 (→ 34)', () => {
     const tools = createBuiltinTools(
       makePlatform({ kosConfig: () => ({ configured: true, timeDecayEnabled: false }) })
     )
     const names = tools.map((t) => t.name).sort()
     expect(names).toContain('kos_query')
     expect(names).toContain('kos_put_page')
-    expect(tools).toHaveLength(33) // 24 default (incl. 4 memory) + 9 KOS
+    expect(tools).toHaveLength(34) // 25 default (incl. 4 memory + 1 notion) + 9 KOS
   })
 
   test('configured=true: category=meta holds the KOS tools + the 4 memory tools', () => {

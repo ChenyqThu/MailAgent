@@ -71,6 +71,8 @@ import type {
   ChatToolReportListOpts,
   ChatToolSearchOpts,
   LlmFetchRequest,
+  NotionAgentChatInput,
+  NotionAgentChatResult,
   ReplySuggestionData,
   SaveConversationInput,
   SaveConversationResult
@@ -721,5 +723,10 @@ export class HttpChatPlatform
     return this._req<{ deleted: number }>('DELETE', '/chat/memory', {
       query: { scope, key }
     }).then((r) => r.deleted)
+  }
+
+  // ── notion_agent_chat tool（P2g）→ serve-api /chat/notion-agent-once ────────
+  notionAgentChat(input: NotionAgentChatInput): Promise<NotionAgentChatResult> {
+    return this._req<NotionAgentChatResult>('POST', '/chat/notion-agent-once', { body: input })
   }
 }
