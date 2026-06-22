@@ -301,7 +301,26 @@ def test_chat_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
         "memorySummary": "",
         "enabledModels": [],
         "manifestMode": False,
+        # R6 — override store healthy by default → available True.
+        "skillOverridesAvailable": True,
     }
+
+
+def test_chat_config_skill_overrides_fail_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """R6 — override store 读失败 → skillOverridesAvailable False + skillOverrides {} + 仍 200
+    （不 500）。runtime 据该 flag 复用 last-known-good，不把禁用的 skill 静默复活。"""
+    import src.agent_config.projections as _proj
+
+    def _boom(*a, **k):
+        raise RuntimeError("agent_config.db unavailable")
+
+    monkeypatch.setattr(_proj, "skill_overrides_map", _boom)
+    with _config_client(monkeypatch, _ChatConfigStub()) as c:
+        r = c.get("/api/chat/config")
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data["skillOverrides"] == {}
+    assert data["skillOverridesAvailable"] is False
 
 
 def test_chat_config_standing_context_flag_off(

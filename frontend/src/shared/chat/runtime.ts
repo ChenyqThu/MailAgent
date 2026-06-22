@@ -51,7 +51,8 @@ import { fetchSkillManifest } from './tools/manifest_client'
 import {
   computeActiveSkillsHash,
   computeSkillEnablement,
-  readSkillOverrides
+  readSkillOverrides,
+  resolveBackendOverrides
 } from './skill_enablement'
 import type { ChatBackend } from './types'
 import type {
@@ -190,6 +191,12 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
     enginePromise = null // activation changed → rebuild engine (config snapshot reused)
   }
 
+  // R6 (GPT-5.5 review) — last-known-good backend skill overrides. When /chat/config
+  // reports the override store was unavailable (skillOverridesAvailable=false), reuse this
+  // instead of {} so a transient store blip never silently re-enables a user-DISABLED
+  // skill (capability broadening). null until the first successful read.
+  let lastGoodBackendOverrides: Record<string, boolean> | null = null
+
   /** 预取 serve-api chat 运行配置快照（D-3c-3：配置以 serve-api 为准，避免本地改过的 env
    *  被 DEFAULT_HTTP_CONFIG 硬编码默认覆盖漂移）。端点 data 形状 = HttpPlatformConfig
    *  （camelCase 全字段，恒等覆盖）。预取失败（端点不可达 / 鉴权失败 / 10s 超时）→ {}
@@ -297,6 +304,22 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
     // pushes them to the backend + clears localStorage. computeSkillEnablement's
     // signature is unchanged (still (manifest, overrides)) — only the override source
     // moved. COLLISION_EXEMPT_TOOL_NAMES stays inside computeSkillEnablement (client-side).
+    // R6 — fail-closed on a backend override-store blip (skillOverridesAvailable===false →
+    // agent_config.db unreadable, snapshot.skillOverrides forced to {} but NOT because the
+    // user cleared toggles): reuse last-known-good rather than broadening to manifest
+    // defaults (which would silently re-enable a user-disabled skill).
+    const storeAvailable = snapshot.skillOverridesAvailable !== false
+    const resolvedBackend = resolveBackendOverrides(
+      snapshot.skillOverrides,
+      storeAvailable,
+      lastGoodBackendOverrides
+    )
+    lastGoodBackendOverrides = resolvedBackend.lastGood
+    if (!storeAvailable) {
+      console.warn(
+        '[chat] skill override store unavailable — reusing last-known-good overrides to avoid re-enabling disabled skills'
+      )
+    }
     // R3 — fold the per-turn @mention activation (force-on = true) on top, so a mentioned
     // skill is advertised for THIS turn's scope. Threaded via start/editMessage opts into
     // activatedSkillsList (no global read → no cross-surface leak). Highest precedence
@@ -305,7 +328,7 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
     // token is ignored.
     const overrides: Record<string, boolean> = {
       ...readSkillOverrides(),
-      ...(snapshot.skillOverrides ?? {})
+      ...resolvedBackend.overrides
     }
     for (const n of activatedSkillsList) overrides[n] = true
     const enablement = manifest

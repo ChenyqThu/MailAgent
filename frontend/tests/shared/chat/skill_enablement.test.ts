@@ -16,6 +16,7 @@ import {
   computeActiveSkillsHash,
   computeSkillEnablement,
   readSkillOverrides,
+  resolveBackendOverrides,
   resolveSkills,
   setSkillOverride,
   SKILL_OVERRIDES_KEY
@@ -206,6 +207,31 @@ describe('computeSkillEnablement — advertised owner wins (R2, GPT-5.5 review H
     expect(e.disabledToolNames.has('report_get')).toBe(true)
     // report_list / report_run are report-only → also dropped.
     expect(e.disabledToolNames.has('report_list')).toBe(true)
+  })
+})
+
+describe('resolveBackendOverrides — fail-closed (R6, GPT-5.5 review MED)', () => {
+  test('healthy read → returns snapshot overrides + advances last-known-good', () => {
+    const r = resolveBackendOverrides({ report: false }, true, null)
+    expect(r.overrides).toEqual({ report: false })
+    expect(r.lastGood).toEqual({ report: false })
+  })
+
+  test('store unavailable → reuses last-known-good, does NOT re-enable a disabled skill', () => {
+    // user disabled report (LKG), then the store blips (available=false, snapshot {}).
+    const r = resolveBackendOverrides({}, false, { report: false })
+    expect(r.overrides).toEqual({ report: false }) // report stays disabled (not broadened)
+    expect(r.lastGood).toEqual({ report: false }) // LKG unchanged
+  })
+
+  test('store unavailable with no last-known-good yet → {} (cannot do better on first load)', () => {
+    const r = resolveBackendOverrides({}, false, null)
+    expect(r.overrides).toEqual({})
+    expect(r.lastGood).toBeNull()
+  })
+
+  test('undefined snapshot overrides on a healthy read → {}', () => {
+    expect(resolveBackendOverrides(undefined, true, { a: true }).overrides).toEqual({})
   })
 })
 

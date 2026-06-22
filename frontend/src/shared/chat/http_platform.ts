@@ -145,6 +145,11 @@ export interface HttpPlatformConfig {
    *  fallback until migrated). Empty {} = no overrides → manifest defaults. NOT used in
    *  modelConfig() — it's a runtime-level (tool-catalog) concern, not a prompt one. */
   skillOverrides: Record<string, boolean>
+  /** R6 (task 06-22) — false when the agent_config.db override store could not be read
+   *  (so skillOverrides is {} for "store down", not "user toggled nothing"). The runtime
+   *  then reuses its last-known-good overrides instead of broadening to manifest defaults,
+   *  so a transient store blip never silently re-enables a user-DISABLED skill. */
+  skillOverridesAvailable: boolean
 }
 
 /** 远程默认快照（对齐 electron chat/config.ts 默认：harness ON / timeDecay ON / 其余
@@ -171,7 +176,9 @@ export const DEFAULT_HTTP_CONFIG: HttpPlatformConfig = {
   // PR4 — no standing context until /chat/config supplies it (→ legacy SOUL_MARKDOWN).
   standingContext: '',
   // PR5 — no backend skill overrides until /chat/config supplies them (→ manifest defaults).
-  skillOverrides: {}
+  skillOverrides: {},
+  // R6 — assume the override store is available by default (a real /chat/config sets it).
+  skillOverridesAvailable: true
 }
 
 /** per-messageId 的 streamContent debounce 状态。`latest` = 最近一次累积全量正文

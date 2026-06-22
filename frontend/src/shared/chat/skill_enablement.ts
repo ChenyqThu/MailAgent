@@ -180,6 +180,24 @@ export function computeSkillEnablement(
   return { disabledToolNames, skillFragments: fragments.join('\n\n'), resolved }
 }
 
+/** R6 (GPT-5.5 review) — resolve the effective backend skill overrides for a /chat/config
+ *  snapshot, failing CLOSED on a store blip. When the override store was unavailable
+ *  (`available === false`, so the snapshot's overrides are {} for "store down", NOT "user
+ *  cleared toggles"), reuse the last-known-good map instead of {} — otherwise a transient
+ *  blip would broaden to manifest defaults and silently re-enable a user-DISABLED skill.
+ *  `lastGood` is only advanced on a healthy read. Pure → unit-testable. */
+export function resolveBackendOverrides(
+  snapshotOverrides: Record<string, boolean> | undefined,
+  available: boolean,
+  lastGood: Record<string, boolean> | null
+): { overrides: Record<string, boolean>; lastGood: Record<string, boolean> | null } {
+  if (available === false) {
+    return { overrides: lastGood ?? {}, lastGood } // fail-closed: reuse LKG, don't advance it
+  }
+  const fresh = snapshotOverrides ?? {}
+  return { overrides: fresh, lastGood: fresh }
+}
+
 /** PR7 — extract `@skill` mentions from a chat message → lowercase skill-name tokens
  *  (e.g. "ping @calendar about @report" → ["calendar", "report"]). The runtime
  *  force-activates these for the session's scope. Non-skill tokens are harmless: an

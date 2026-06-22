@@ -343,7 +343,12 @@ async def chat_config(request: Request):
     # computeSkillEnablement instead of readSkillOverrides(). Only explicitly-toggled
     # skills appear (enabled non-null); absent → runtime falls back to the manifest
     # default_enabled. Best-effort: store hiccup → {} (never fail /config).
+    # R6 (GPT-5.5 review) — on a store hiccup we ALSO flag skillOverridesAvailable=false.
+    # An empty {} is ambiguous ("user toggled nothing" vs "store down"); the runtime must
+    # not silently re-enable a user-DISABLED skill just because the override store blipped.
+    # The flag lets the runtime reuse its last-known-good overrides instead of broadening.
     skill_overrides: Dict[str, bool] = {}
+    skill_overrides_available = True
     try:
         from src.agent_config.projections import skill_overrides_map
         from src.agent_config.store import get_agent_config_store
@@ -351,6 +356,7 @@ async def chat_config(request: Request):
         skill_overrides = skill_overrides_map(get_agent_config_store())
     except Exception:  # noqa: BLE001 — skill overrides are best-effort; never fail /config
         skill_overrides = {}
+        skill_overrides_available = False
     return success_envelope(
         {
             "maxIter": max_iter,
@@ -369,6 +375,7 @@ async def chat_config(request: Request):
             "installedSkillsHash": installed_skills_hash,
             "standingContext": standing_context,
             "skillOverrides": skill_overrides,
+            "skillOverridesAvailable": skill_overrides_available,
         },
         request=request,
         source="config",
