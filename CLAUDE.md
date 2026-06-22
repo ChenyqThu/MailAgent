@@ -30,6 +30,7 @@
 | 后端服务层（统一写面：`src/services/` 应用服务 + CLI/serve-api 薄适配器 in-process + async-jobs + 双层鉴权 + 前端 daemon 转发） | 改写操作（flag/resync/archive/pin/llm/compose/send）/ 加传输端 / 动 `src/services/` 前 | [`architecture/service-layer-architecture.md`](./docs/reference/architecture/service-layer-architecture.md) + `~/.claude/plans/cli-streamed-brook.md` |
 | AI Agent Harness + KOS（前端 chat 多轮 agent + 跨域知识图） | 动前端 chat / KOS 集成前 | [`llm-agent/agent-harness-kos.md`](./docs/reference/llm-agent/agent-harness-kos.md) + [`llm-agent/kos-integration-design.md`](./docs/reference/llm-agent/kos-integration-design.md) |
 | Skill Delivery API（对外 agent 交付面：scoped Bearer key 第四腿 + Python Skill manifest + `/api/skills(+invoke)` + MCP stdio + skill pack） | 动 scoped key / `src/skills` / `/api/skills` / MCP / pack 前 | [`llm-agent/skill-delivery-api.md`](./docs/reference/llm-agent/skill-delivery-api.md) |
+| Capability & Context Foundation（Phase -1/0A：backend `agent_config.db` + Standing Context 文档体系 + installed skill registry + @mention scope 激活 + 配置快照 hash） | 动 `src/agent_config` / `/api/agent/*` / standing-context prompt / installed skill / @mention 前 | [`llm-agent/capability-context-foundation.md`](./docs/reference/llm-agent/capability-context-foundation.md) |
 | V2.1 远程 chat + report/agent（B-pure-unified：一份引擎 `shared/chat` + 一份 serve-api + 一份 HttpChatPlatform；本地 token webRequest / 远程 CF cookie；cutover 后 chat 引擎跑 UI 进程） | 动远程 web chat / serve-api chat 端点 / chat 引擎 cutover 后语义前 | [`remote-chat-report/remote-chat-report-architecture.md`](./docs/reference/remote-chat-report/remote-chat-report-architecture.md) + [设计](./docs/reference/remote-chat-report/v2.1-stage3-chat-platform-design.md) + [看板](./docs/reference/remote-chat-report/v2.1-remote-chat-report-matrix.md) |
 | CLI 完整命令表 + 退出码 + schema 契约 | 查命令明细 / 加 CLI 命令前 | [`cli/cli-reference.md`](./docs/reference/cli/cli-reference.md) + [`cli/agent-cli-rfc.md`](./docs/reference/cli/agent-cli-rfc.md) |
 | 存档/草稿箱 + 多文件夹同步（folder_sync） | 动 folder 同步前 | [`folder-sync/multi-folder-sync-design.md`](./docs/reference/folder-sync/multi-folder-sync-design.md) + [`folder-sync/folder-ui-prd.md`](./docs/reference/folder-sync/folder-ui-prd.md) |
@@ -79,6 +80,8 @@
 | `SYNC_FOLDERS` | `[]`（空） | 多文件夹同步白名单（JSON 数组的 imap_name，davmail-only）；空=零激活=逐字节同现状；勾选的自定义 Exchange 文件夹走 `email_metadata` 主链路（AI/Notion/FTS/线程/写操作全等同收件箱）。配套 `FOLDER_NOTIFY_ENABLED`（自定义文件夹默认不推飞书，JSON 白名单 opt-in）/ `FOLDER_LLM_DISABLED`（默认全跑 LLM，JSON 黑名单可关）/ `FOLDER_SYNC_PAST_DAYS`(90) / `FOLDER_SYNC_MAX_MESSAGES`(2000)。详见 architecture-internals.md「多文件夹同步」 |
 | `PROJECT_PROGRESS_SYNC_ENABLED` | `false` | 项目周报 CLI + 钩子总开关 |
 | `MAILAGENT_AGENT_HARNESS` | `false` | 前端 chat 多轮 agent（M1 已 ship 未 dogfood） |
+| `MAILAGENT_STANDING_CONTEXT_ENABLED` | `true` | Standing Context 分层 prompt（不可弱化 `PRODUCT_SAFETY_FLOOR` + `SOUL/AGENT/RULES/USER` 由 backend `agent_config.db` 组装）；**默认 ON**，OFF 回退旧 `SOUL_MARKDOWN`（字节一致，应急回切）。`standingContextActive` 在 /chat/config 可观测。详见 capability-context-foundation.md |
+| `MAILAGENT_AGENT_CONFIG_DB_PATH` | —（空） | backend-owned `agent_config.db` 路径覆盖（默认 sync_store 同目录）；不进 `DB_VERSION`，镜像 api_keys 纪律 |
 | `MAILAGENT_KOS_INGEST_ENABLED` / `_CONSUMER_ENABLED` / `_L1_HOT_BLOCK_ENABLED` | `false` | KOS 集成三层，全默认 OFF |
 | `MAILAGENT_REPORT_AGENT_ENABLED` | `false` | 报告 Agent worker（日/周/月报，`src/reports`）；per-agent 还需 `report_agent.enabled`（种子 daily 默认关） |
 | `FEISHU_NOTIFY_ENABLED` / `REDIS_EVENTS_ENABLED` / `ALERT_ENABLED` | `false` | 通知 / 事件消费 / 告警 |
@@ -176,6 +179,7 @@ sqlite3 data/sync_store.db "SELECT COUNT(*) FROM email_metadata WHERE sync_statu
 | `src/converter/` | `html_converter.py`(HTML→Notion blocks+内联图) · `eml_generator.py` · `office_converter.py` · `attachment_text.py`(附件文本化) · `html_to_markdown.py` |
 | `src/repository/` | v4 `EmailRepository` / `AttachmentStore` / FTS5 搜索 |
 | `src/llm_agent/` / `src/project_progress/` / `src/kos/` | 见对应下沉文档 |
+| `src/agent_config/` | Capability & Context 配置面（Phase -1/0A，backend-owned `agent_config.db`）：`store`(统一 skill registry + Standing Context 文档 SOUL/AGENT/RULES/USER + history/rollback) · `templates`(seed) · `projections`(MEMORY/SKILLS 投影 + 配置快照 hash) · `validator`(RULES deny-list, negation-aware)。配 `src/skills/installed.py`(安装行→BoundSkill 投影，owner-only) + `src/api/routers/agent.py`(`/api/agent/*`)。见 [`capability-context-foundation.md`](./docs/reference/llm-agent/capability-context-foundation.md) |
 | `src/reports/` | 报告 Agent 系统（日/周/月报）：`models`(ReportDoc 块模型) / `data`(取数+分组) / `summarizer`(LLM tool_use) / `assembler`(防幻觉权威回填) / `worker`(tick_loop 定时) / `store`(report_agent+report 表)。见 [`docs/reference/remote-chat-report/report-agent-prd.md`](./docs/reference/remote-chat-report/report-agent-prd.md) |
 | `src/stats_reporter.py` | 定期上报运行统计到远程看板 |
 | `webhook-server/` | FastAPI（接收 Notion Automation webhook → Redis 路由 + 看板 API，端口 8100）|
