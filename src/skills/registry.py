@@ -48,6 +48,12 @@ class BoundSkill:
     availability: SkillAvailability = field(
         default_factory=lambda: SkillAvailability(available=True, reason=None)
     )
+    # R1 (GPT-5.5 review, HIGH) — whether this skill may be advertised to EXTERNAL
+    # scoped agent principals (Bearer keys) via /api/skills + MCP. builtin skills are
+    # product-shipped → exposed. User-INSTALLED skills (document-only / existing-tool /
+    # mcp) carry private prompt_fragment guidance + are owner-runtime oriented in the
+    # MVP, so they are owner-only (build_manifest hides them from is_agent principals).
+    external_exposed: bool = True
 
 
 def _server_version() -> str:
@@ -141,6 +147,19 @@ def build_manifest(principal: Any = None, *, generated_at: Optional[str] = None)
     stamp = generated_at or datetime.now(timezone.utc).isoformat()
     skills_out: list[SkillDef] = []
     for skill in all_skills():
+        # R1 (GPT-5.5 review, HIGH) — hide owner-only (user-installed) skills from
+        # EXTERNAL scoped agent principals (Bearer keys), so their private prompt
+        # fragments / docs never leak through /api/skills + MCP. The owner paths are
+        # unaffected: principal=None (internal build_manifest(None) — chat_config /
+        # projections) and the local/CF human principal (is_agent=False, the desktop
+        # harness's own /api/skills fetch) both still see installed skills, so the
+        # Custom AI runtime keeps getting their skillFragments (PR3 behaviour intact).
+        if (
+            principal is not None
+            and getattr(principal, "is_agent", False)
+            and not skill.external_exposed
+        ):
+            continue
         visible = [
             t.definition
             for t in skill.tools

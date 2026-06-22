@@ -12,7 +12,21 @@ from __future__ import annotations
 import pytest
 
 from src.agent_config import store as acstore
+from src.api.agent_auth import Principal
 from src.skills.registry import build_manifest, find_tool, reset_registry_cache
+
+
+def _agent_principal(*scopes: str) -> Principal:
+    """外部 scoped Bearer agent（is_agent=True）。"""
+    return Principal(
+        kind="agent", auth_method="bearer", key_id="k1", label="ext",
+        scopes=frozenset(scopes),
+    )
+
+
+def _human_principal() -> Principal:
+    """本机 owner（local/cf，is_agent=False，scopes=None → 全 scope）。"""
+    return Principal(kind="human", auth_method="local", user_email="me@local")
 
 
 @pytest.fixture()
@@ -61,6 +75,58 @@ def test_document_only_skill_kept_in_manifest(installed_store):
     assert s.prompt_fragment == "Use the notes workflow."
     assert len(s.tools) == 0
     assert s.availability.available is True
+
+
+# ---------------------------------------------------------------------------
+# R1（GPT-5.5 review HIGH）—— installed skill 是 owner-only，不泄漏给外部 Bearer agent
+# ---------------------------------------------------------------------------
+def test_document_only_skill_hidden_from_external_agent(installed_store):
+    """document-only skill 的私有 prompt_fragment 不得经 /api/skills 泄漏给 scoped agent。"""
+    installed_store.install_skill(
+        "private-notes",
+        source_type="document",
+        manifest={
+            "name": "private-notes",
+            "title": "Private Notes",
+            "version": "1.0",
+            "default_enabled": True,
+            "prompt_fragment": "SECRET personal workflow guidance",
+            "tools": [],
+        },
+    )
+    # owner（principal=None，内部 chat_config/projections 路径）→ 可见
+    assert _skill_of(build_manifest(None), "private-notes") is not None
+    # owner（本机 human local/cf，桌面 harness 自己的 /api/skills fetch）→ 可见（保 PR3）
+    assert _skill_of(build_manifest(_human_principal()), "private-notes") is not None
+    # 外部 scoped Bearer agent（无 scope 也好、有 scope 也好）→ 不可见（不泄漏私有 fragment）
+    assert _skill_of(build_manifest(_agent_principal()), "private-notes") is None
+    assert _skill_of(build_manifest(_agent_principal("email:read")), "private-notes") is None
+
+
+def test_installed_existing_tool_skill_hidden_from_external_agent(installed_store):
+    """existing-tool installed skill 同样 owner-only —— 外部 agent 只看 builtin email skill。"""
+    installed_store.install_skill(
+        "email-helper",
+        source_type="skill_pack",
+        granted_scopes=["email:read"],
+        manifest={
+            "name": "email-helper",
+            "title": "Email Helper",
+            "version": "1.0",
+            "default_enabled": True,
+            "prompt_fragment": "helper guidance",
+            "tools": [{"name": "email_get", "bind": "existing"}],
+        },
+    )
+    agent_names = {s.name for s in build_manifest(_agent_principal("email:read")).skills}
+    assert "email-helper" not in agent_names  # installed → 外部不可见
+    assert "email" in agent_names  # builtin email skill 仍对 agent 可见（其 email_get 在）
+
+
+def test_builtin_skills_still_visible_to_external_agent(installed_store):
+    """R1 只藏 installed —— builtin skill 对 scoped agent 不受影响（按 scope 过滤 tool）。"""
+    names = {s.name for s in build_manifest(_agent_principal("email:read", "report:read")).skills}
+    assert "email" in names and "report" in names
 
 
 # ---------------------------------------------------------------------------

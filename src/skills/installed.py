@@ -131,4 +131,11 @@ def installed_skill_to_bound(
         docs_path=manifest.get("docs_path") or "",
         tools=tools_out,
         availability=availability,
+        # R1 (GPT-5.5 review, HIGH) — user-installed skills are owner-only: their
+        # private prompt_fragment must not leak to external scoped Bearer agents via
+        # /api/skills + MCP. build_manifest hides external_exposed=False skills from
+        # is_agent principals; the owner runtime (principal=None / local human) keeps
+        # seeing them. Exposing an installed skill externally is a future feature
+        # (explicit visibility scopes), not an MVP default.
+        external_exposed=False,
     )
