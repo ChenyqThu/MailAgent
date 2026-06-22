@@ -12,12 +12,14 @@
 //      prompt (custom_api.buildStableSystemPrompt). A disabled skill injects
 //      neither its tools nor its prompt fragment (architecture.md §6.5).
 //
-// Persistence is CLIENT-side (localStorage): the manifest's `default_enabled` is
-// the compile-time seed; the user's per-skill override sits on top. There is no
-// backend skill-enabled store (P2 left none) and adding one would bump
-// CHAT_DB_VERSION / touch the high-risk manifest cutover — out of P3 scope. The
-// override is per-surface (desktop / each remote browser keep their own), which
-// is acceptable for a global MVP toggle.
+// Persistence is BACKEND SSoT (Phase -1 / PR5): the per-skill enable override lives
+// in agent_config.db and reaches the runtime via `/chat/config`.skillOverrides; the
+// manifest's `default_enabled` is the compile-time seed underneath it. The localStorage
+// helpers below (readSkillOverrides / writeSkillOverrides / setSkillOverride +
+// SKILL_OVERRIDES_KEY) are a TRANSITIONAL migration fallback only — they let an
+// un-migrated client keep applying its prior per-surface toggles until the Settings
+// panel pushes them to the backend (migrateLocalSkillOverrides) — and should be removed
+// once old clients have migrated. Do NOT treat localStorage as the source of truth.
 //
 // availability ≠ enabled: a KOS-less / notion-agent-CLI-less skill reports
 // `availability.available=false` and its tools/fragment are dropped even if the
@@ -148,18 +150,31 @@ export function computeSkillEnablement(
   overrides: Record<string, boolean>
 ): SkillEnablement {
   const resolved = resolveSkills(manifest, overrides)
-  const disabledToolNames = new Set<string>()
+  // R2 (GPT-5.5 review, HIGH) — a tool name is dropped ONLY when NO advertised skill
+  // still owns it. The old rule ("a non-advertised skill disables its tool names")
+  // was safe when tool names were unique per skill, but Phase -1 installed
+  // existing-tool skills can ALIAS a builtin read tool name (email_get, report_get,
+  // email_body, …). Disabling such an alias skill would then drop the builtin tool
+  // from the harness catalog even though the builtin Email/Report skill is still
+  // enabled — silent capability loss. Partition the names first; an advertised owner
+  // always wins. (email_search stays collision-exempt for the separate
+  // builtin-metadata vs manifest-FTS same-name clash.)
+  const advertisedToolNames = new Set<string>()
+  const nonAdvertisedToolNames = new Set<string>()
   const fragments: string[] = []
   for (const s of resolved) {
     if (s.advertised) {
+      for (const name of s.toolNames) advertisedToolNames.add(name)
       const frag = s.promptFragment.trim()
       if (frag.length > 0) fragments.push(frag)
     } else {
-      // A non-advertised skill's tools are dropped from the catalog by name,
-      // EXCEPT collision-exempt names (same name, different builtin semantics).
-      for (const name of s.toolNames) {
-        if (!COLLISION_EXEMPT_TOOL_NAMES.has(name)) disabledToolNames.add(name)
-      }
+      for (const name of s.toolNames) nonAdvertisedToolNames.add(name)
+    }
+  }
+  const disabledToolNames = new Set<string>()
+  for (const name of nonAdvertisedToolNames) {
+    if (!advertisedToolNames.has(name) && !COLLISION_EXEMPT_TOOL_NAMES.has(name)) {
+      disabledToolNames.add(name)
     }
   }
   return { disabledToolNames, skillFragments: fragments.join('\n\n'), resolved }

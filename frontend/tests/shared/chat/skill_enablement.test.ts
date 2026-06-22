@@ -175,6 +175,40 @@ describe('computeSkillEnablement — collision-exempt tools (review MEDIUM)', ()
   })
 })
 
+describe('computeSkillEnablement — advertised owner wins (R2, GPT-5.5 review HIGH)', () => {
+  // An installed existing-tool skill aliases a builtin read tool name (report_get).
+  // Disabling the installed alias must NOT strip report_get from the catalog while the
+  // builtin report skill is still advertised.
+  const withAlias: SkillManifest = {
+    ...MANIFEST,
+    skills: [
+      ...MANIFEST.skills,
+      skill('my_report_helper', {
+        defaultEnabled: false, // installed, default-off → not advertised
+        available: true,
+        fragment: 'HELPER_FRAG',
+        tools: [tool('report_get')] // aliases the builtin report skill's read tool
+      })
+    ]
+  }
+
+  test('a tool kept by an advertised skill is NOT disabled by a disabled aliasing skill', () => {
+    // report (builtin) advertised owns report_get; my_report_helper disabled also owns it.
+    const e = computeSkillEnablement(withAlias, {})
+    expect(e.disabledToolNames.has('report_get')).toBe(false)
+    // the helper's fragment is still excluded (it's not advertised).
+    expect(e.skillFragments).not.toContain('HELPER_FRAG')
+  })
+
+  test('a tool owned ONLY by disabled skills is still disabled', () => {
+    // Disable the builtin report too → report_get now has no advertised owner → dropped.
+    const e = computeSkillEnablement(withAlias, { report: false })
+    expect(e.disabledToolNames.has('report_get')).toBe(true)
+    // report_list / report_run are report-only → also dropped.
+    expect(e.disabledToolNames.has('report_list')).toBe(true)
+  })
+})
+
 describe('resolveSkills — UI projection', () => {
   test('effectiveEnabled = override ?? default; advertised = effective && available', () => {
     const resolved = resolveSkills(MANIFEST, { report: false, notion_agent: true })
