@@ -49,11 +49,13 @@ import { replaceWithManifestReadTools, type SkillToolInvoker } from './tools/man
 import type { SkillManifest } from './tools/manifest'
 import { fetchSkillManifest } from './tools/manifest_client'
 import {
-  computeActiveSkillsHash,
+  computeActiveSkillNames,
   computeSkillEnablement,
   readSkillOverrides,
-  resolveBackendOverrides
+  resolveBackendOverrides,
+  sha256Hex
 } from './skill_enablement'
+import { setActiveSkillsSnapshot } from './active_skills_trace'
 import type { ChatBackend } from './types'
 import type {
   AgentMemoryEntry,
@@ -334,11 +336,16 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
     const enablement = manifest
       ? computeSkillEnablement(manifest, overrides)
       : { disabledToolNames: new Set<string>(), skillFragments: '' }
-    // PR5 — activeSkillsHash for Phase 0 eval trace (client-side: depends on the
-    // advertised gate + collision-exempt logic here). Logged for observability; a
-    // formal runtime accessor lands when Phase 0 wires the trace recorder.
+    // R7 — active_skills_hash for the Phase 0 eval trace (client-side: depends on the
+    // advertised gate + collision-exempt logic + @mention overlay here). sha256 over the
+    // canonical active skill names; exposed via setActiveSkillsSnapshot (NOT console-only)
+    // so the trace recorder can read the list + hash. Awaited so the snapshot is ready by
+    // the time the engine is built (sha256 of a short string is sub-ms).
     if (manifest) {
-      console.debug('[chat] active_skills_hash', computeActiveSkillsHash(manifest, overrides))
+      const activeSkills = computeActiveSkillNames(manifest, overrides)
+      const activeSkillsHash = await sha256Hex(activeSkills.join('\n'))
+      setActiveSkillsSnapshot({ activeSkills, activeSkillsHash })
+      console.debug('[chat] active_skills_hash', activeSkillsHash, activeSkills)
     }
 
     // skillFragments rides in the platform config override (a client-side derivation,

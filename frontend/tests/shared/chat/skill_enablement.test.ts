@@ -13,12 +13,13 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
 import {
-  computeActiveSkillsHash,
+  computeActiveSkillNames,
   computeSkillEnablement,
   readSkillOverrides,
   resolveBackendOverrides,
   resolveSkills,
   setSkillOverride,
+  sha256Hex,
   SKILL_OVERRIDES_KEY
 } from '../../../src/shared/chat/skill_enablement'
 import type {
@@ -294,33 +295,36 @@ describe('readSkillOverrides / setSkillOverride — localStorage SSoT', () => {
   })
 })
 
-// PR5 — activeSkillsHash: a stable fingerprint of the advertised (enabled ∧ available)
-// skill set, for the Phase 0 config snapshot. Pure (manifest + overrides → hash).
-describe('computeActiveSkillsHash (PR5)', () => {
-  test('deterministic + 8 hex chars; default active = {calendar, report}', () => {
-    const h1 = computeActiveSkillsHash(MANIFEST, {})
-    const h2 = computeActiveSkillsHash(MANIFEST, {})
-    expect(h1).toBe(h2)
-    expect(h1).toMatch(/^[0-9a-f]{8}$/)
+// R7 — active_skills: the canonical (sorted) advertised skill names + a sha256 hash, for
+// the Phase 0 config snapshot / eval trace reproducibility key. Pure (manifest + overrides).
+describe('computeActiveSkillNames + sha256Hex (R7)', () => {
+  test('default active = [calendar, report] (sorted advertised names)', () => {
+    expect(computeActiveSkillNames(MANIFEST, {})).toEqual(['calendar', 'report'])
   })
 
-  test('disabling an advertised skill changes the hash', () => {
-    const before = computeActiveSkillsHash(MANIFEST, {})
-    const after = computeActiveSkillsHash(MANIFEST, { report: false })
-    expect(after).not.toBe(before)
+  test('disabling an advertised skill drops it from the active set', () => {
+    expect(computeActiveSkillNames(MANIFEST, { report: false })).toEqual(['calendar'])
   })
 
-  test('enabling a default-off skill (notion_agent) changes the hash', () => {
-    const before = computeActiveSkillsHash(MANIFEST, {})
-    const after = computeActiveSkillsHash(MANIFEST, { notion_agent: true })
-    expect(after).not.toBe(before)
+  test('enabling a default-off available skill (notion_agent) adds it', () => {
+    expect(computeActiveSkillNames(MANIFEST, { notion_agent: true })).toEqual([
+      'calendar',
+      'notion_agent',
+      'report'
+    ])
   })
 
   test('an UNAVAILABLE skill cannot be activated by an override (advertised gate)', () => {
-    // kos is available:false → enabling it must NOT enter the active set, so the hash
-    // is identical to the default. (Mirrors the @mention overlay availability gate.)
-    expect(computeActiveSkillsHash(MANIFEST, { kos: true })).toBe(
-      computeActiveSkillsHash(MANIFEST, {})
-    )
+    // kos is available:false → enabling it must NOT enter the active set. (Mirrors the
+    // @mention overlay availability gate.)
+    expect(computeActiveSkillNames(MANIFEST, { kos: true })).toEqual(['calendar', 'report'])
+  })
+
+  test('sha256Hex is deterministic + 64 hex chars, and changes with the active set', async () => {
+    const base = await sha256Hex(computeActiveSkillNames(MANIFEST, {}).join('\n'))
+    expect(base).toMatch(/^[0-9a-f]{64}$/)
+    expect(await sha256Hex(computeActiveSkillNames(MANIFEST, {}).join('\n'))).toBe(base)
+    const changed = await sha256Hex(computeActiveSkillNames(MANIFEST, { report: false }).join('\n'))
+    expect(changed).not.toBe(base)
   })
 })

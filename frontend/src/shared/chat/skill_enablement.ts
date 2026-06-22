@@ -219,32 +219,26 @@ export function parseSkillMentions(text: string): string[] {
   return [...out]
 }
 
-/** PR5 — synchronous FNV-1a 32-bit → 8 hex chars. A compact, deterministic
- *  fingerprint (NOT a cryptographic hash) for the active-skill set. activeSkillsHash
- *  is client-only (the backend doesn't compute it — it depends on the @mention
- *  overlay + collision-exempt logic that live here), so it needn't match the backend
- *  sha256; it only needs to be stable + cheap + synchronous (Web Crypto digest is async). */
-function fnv1a(str: string): string {
-  let h = 0x811c9dc5
-  for (let i = 0; i < str.length; i++) {
-    h ^= str.charCodeAt(i)
-    h = Math.imul(h, 0x01000193)
-  }
-  return (h >>> 0).toString(16).padStart(8, '0')
-}
-
-/** PR5 — the config-snapshot `active_skills_hash` for Phase 0 eval trace: a stable
- *  fingerprint of the ADVERTISED (enabled ∧ available) skill names under the given
- *  manifest + overrides. Computed client-side because the active set depends on the
- *  same `advertised` gate + collision-exempt logic the runtime uses (and, from PR7,
- *  the per-session @mention overlay merged into `overrides`). Pure → unit-testable. */
-export function computeActiveSkillsHash(
+/** R7 (GPT-5.5 review) — the canonical ACTIVE (advertised = enabled ∧ available) skill
+ *  names under the given manifest + overrides, sorted. This is the reproducibility key the
+ *  Phase 0 eval trace records. Computed client-side because the active set depends on the
+ *  same `advertised` gate + collision-exempt logic the runtime uses (and the per-turn
+ *  @mention overlay merged into `overrides`). Pure → unit-testable. */
+export function computeActiveSkillNames(
   manifest: SkillManifest,
   overrides: Record<string, boolean>
-): string {
-  const active = resolveSkills(manifest, overrides)
+): string[] {
+  return resolveSkills(manifest, overrides)
     .filter((s) => s.advertised)
     .map((s) => s.name)
     .sort()
-  return fnv1a(active.join('\n'))
+}
+
+/** R7 — SHA-256 hex of a string via Web Crypto (async). Used for the `active_skills_hash`
+ *  trace key (replacing the old 32-bit FNV fingerprint — a crypto digest is the right
+ *  strength for an eval reproducibility key). Available in all the V8 runtimes this ships
+ *  to (Electron / browsers / Node ≥18 vitest). */
+export async function sha256Hex(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('')
 }
