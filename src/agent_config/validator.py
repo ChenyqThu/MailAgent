@@ -37,16 +37,37 @@ _DENY_PATTERNS: tuple[str, ...] = (
 
 _COMPILED = tuple(re.compile(p, re.IGNORECASE) for p in _DENY_PATTERNS)
 
+# R8（GPT-5.5 review）—— negation-aware 例外。一条**禁止**越权的规则（「禁止无需确认直接发送」
+# 「不允许绕过确认删除」）本身是安全的，却含 deny-list 短语。命中越权 pattern 后，若同一行该匹配
+# 之前的近窗里出现否定/禁止前缀，则视为安全 prohibition 放行（belt-and-suspenders，可容少量
+# false-negative —— 真正的安全保证是结构性 floor + confirmation tier）。
+_NEGATION_MARKERS: tuple[str, ...] = (
+    "不允许", "不要", "不得", "不能", "不可", "禁止", "严禁", "请勿", "切勿", "拒绝", "杜绝",
+    "never", "do not", "don't", "must not", "should not", "cannot", "can't", "won't",
+    "forbid", "prohibit",
+)
+# 否定前缀与越权短语之间允许的最大间隔（字符）。够覆盖「不允许[无需确认]直接发送」这类整句。
+_NEGATION_WINDOW = 40
+
+
+def _has_negation_prefix(text: str, match_start: int) -> bool:
+    """匹配点之前（同一行、限 _NEGATION_WINDOW 窗口）是否有否定/禁止前缀。"""
+    line_start = text.rfind("\n", 0, match_start) + 1  # 无换行 → 0
+    window = text[max(line_start, match_start - _NEGATION_WINDOW) : match_start].lower()
+    return any(mark in window for mark in _NEGATION_MARKERS)
+
 
 def validate_rules_content(content: str) -> Optional[str]:
     """检查 RULES.md 拟写内容是否含露骨的安全颠覆指令。
 
     返回 None = 通过；返回字符串 = 拒绝原因（命中的 deny-list 类别，供 audit / 报错）。
+    仅当某个越权短语的匹配点之前**没有**否定/禁止前缀时才拒绝（R8：放行安全的 prohibition）。
     """
     text = content or ""
     for rx in _COMPILED:
-        m = rx.search(text)
-        if m:
+        for m in rx.finditer(text):
+            if _has_negation_prefix(text, m.start()):
+                continue  # 安全的禁止句（「禁止无需确认发送」）→ 放行此匹配
             return (
                 "RULES.md may not contain instructions that override or bypass the product "
                 f"safety floor (matched a disallowed pattern near: '{m.group(0)[:60]}'). The "
