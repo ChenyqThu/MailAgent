@@ -286,6 +286,8 @@ def test_chat_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     standing = data.pop("standingContext")
     assert "# SOUL" in standing and "# AGENT" in standing
     assert "# RULES" in standing and "# USER" in standing
+    # PR5 — per-skill enable overrides (empty store → no explicit overrides).
+    assert data.pop("skillOverrides") == {}
     assert data == {
         "maxIter": 8,
         "maxCostUsd": 0.5,

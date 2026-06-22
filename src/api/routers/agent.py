@@ -13,13 +13,28 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, Query, Request
 
-from src.agent_config.projections import memory_doc_projection, skills_doc_projection
-from src.agent_config.store import PROFILE_DOC_NAMES, get_agent_config_store
+from src.agent_config.projections import (
+    memory_doc_projection,
+    resolved_skills,
+    skills_doc_projection,
+)
+from src.agent_config.store import (
+    INSTALLABLE_SOURCE_TYPES,
+    PROFILE_DOC_NAMES,
+    get_agent_config_store,
+)
 from src.api.app import APIError, success_envelope
 from src.api.auth import verify_cf_access
 from src.api.deps import get_chat_db
 
 router = APIRouter(prefix="/api/agent", tags=["agent"])
+
+
+def _manifest_skill_names() -> set[str]:
+    """当前 manifest 里的全部 skill 名（builtin + installed），用于 enable 端点的存在性校验。"""
+    from src.skills.registry import build_manifest
+
+    return {s.name for s in build_manifest(None).skills}
 
 # 文档展示顺序：4 个可编辑 + 2 个投影。
 _DOC_ORDER = list(PROFILE_DOC_NAMES) + ["memory", "skills"]
@@ -127,3 +142,81 @@ async def list_profile_history(
     ]
     return success_envelope({"history": data}, request=request, source="sqlite",
                             meta_extra={"count": len(data)})
+
+
+# ── skill 管理（PR5 —— enablement 迁后端 + install/uninstall）────────────────────────
+
+
+@router.get("/skills", dependencies=[Depends(verify_cf_access)])
+async def list_agent_skills(request: Request):
+    """Settings 面的解析后 skill 列表：manifest skill ⋈ store 启用覆盖 + source_type。"""
+    from src.skills.registry import build_manifest
+
+    store = get_agent_config_store()
+    data = resolved_skills(build_manifest(None).skills, store)
+    return success_envelope({"skills": data}, request=request, source="sqlite",
+                            meta_extra={"count": len(data)})
+
+
+@router.post("/skills/{name}/enabled", dependencies=[Depends(verify_cf_access)])
+async def set_skill_enabled(name: str, request: Request, body: Optional[dict[str, Any]] = None):
+    """启用/禁用一个 skill（builtin 懒建覆盖行 / installed 更新行）。body = {enabled: bool}。"""
+    raw = body or {}
+    enabled = raw.get("enabled")
+    if not isinstance(enabled, bool):
+        raise APIError("E_INVALID_ARG", "body.enabled must be a JSON boolean",
+                       http_status=400, source="sqlite")
+    if name not in _manifest_skill_names():
+        raise APIError("E_NOT_FOUND", f"unknown skill: {name}", http_status=404, source="sqlite")
+    store = get_agent_config_store()
+    # builtin skill 懒建 source_type='builtin'；installed skill 已有行 → set_enabled 只更 enabled。
+    existing = store.get_skill(name)
+    source_type = existing.source_type if existing else "builtin"
+    store.set_enabled(name, enabled, source_type=source_type)
+    return success_envelope({"name": name, "enabled": enabled}, request=request, source="sqlite")
+
+
+@router.post("/skills", dependencies=[Depends(verify_cf_access)])
+async def install_agent_skill(request: Request, body: Optional[dict[str, Any]] = None):
+    """安装一个用户来源 skill。body = {name, sourceType, manifest, version?, sourceUri?,
+    grantedScopes?, packageHash?, trusted?, enabled?}。grantedScopes 写时校验 ⊆ KNOWN_SCOPES。"""
+    raw = body or {}
+    name = raw.get("name")
+    source_type = raw.get("sourceType")
+    manifest = raw.get("manifest")
+    if not isinstance(name, str) or not name.strip():
+        raise APIError("E_INVALID_ARG", "body.name is required", http_status=400, source="sqlite")
+    if source_type not in INSTALLABLE_SOURCE_TYPES:
+        raise APIError("E_INVALID_ARG",
+                       f"body.sourceType must be one of {list(INSTALLABLE_SOURCE_TYPES)}",
+                       http_status=400, source="sqlite")
+    if manifest is not None and not isinstance(manifest, dict):
+        raise APIError("E_INVALID_ARG", "body.manifest must be an object", http_status=400,
+                       source="sqlite")
+    store = get_agent_config_store()
+    try:
+        skill = store.install_skill(
+            name.strip(),
+            source_type=source_type,
+            manifest=manifest,
+            manifest_version=raw.get("manifestVersion"),
+            version=raw.get("version"),
+            source_uri=raw.get("sourceUri"),
+            granted_scopes=raw.get("grantedScopes"),
+            package_hash=raw.get("packageHash"),
+            trusted=bool(raw.get("trusted", False)),
+            enabled=raw.get("enabled") if isinstance(raw.get("enabled"), bool) else None,
+        )
+    except ValueError as exc:  # 非法 scope / source_type
+        raise APIError("E_INVALID_ARG", str(exc), http_status=400, source="sqlite") from exc
+    return success_envelope(
+        {"name": skill.skill_name, "sourceType": skill.source_type},
+        request=request, source="sqlite", status_code=201,
+    )
+
+
+@router.delete("/skills/{name}", dependencies=[Depends(verify_cf_access)])
+async def uninstall_agent_skill(name: str, request: Request):
+    """卸载一个 skill 行（installed → 卸载；builtin 懒行 → 回退代码默认）。幂等。"""
+    removed = get_agent_config_store().uninstall_skill(name)
+    return success_envelope({"name": name, "removed": removed}, request=request, source="sqlite")

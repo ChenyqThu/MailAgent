@@ -14,7 +14,7 @@ from __future__ import annotations
 import hashlib
 from typing import Any, Iterable
 
-from src.agent_config.store import AgentConfigStore
+from src.agent_config.store import AgentConfigStore, resolve_enabled
 
 
 def _sha256(text: str) -> str:
@@ -79,3 +79,46 @@ def compute_installed_skills_hash(
     sig = builtin_skills_signature(manifest_skills)
     fp = store.installed_rows_fingerprint()
     return _sha256(f"{sig}\n##installed##\n{fp}")
+
+
+# ---------------------------------------------------------------------------
+# 启用态（PR5 —— enablement 迁后端）
+# ---------------------------------------------------------------------------
+
+
+def skill_overrides_map(store: AgentConfigStore) -> dict[str, bool]:
+    """显式启用覆盖 map ``{skill_name: enabled}`` —— 只含用户 toggle 过的 skill（enabled 非 None）。
+
+    供 /chat/config 下发给 runtime（取代 localStorage 的 readSkillOverrides）。无覆盖的 skill
+    不在 map 里 → runtime 的 computeSkillEnablement 回退 manifest default_enabled（签名不变）。
+    """
+    return {r.skill_name: bool(r.enabled) for r in store.list_skills() if r.enabled is not None}
+
+
+def resolved_skills(manifest_skills: Iterable[Any], store: AgentConfigStore) -> list[dict[str, Any]]:
+    """Settings 面用的解析后 skill 列表 —— manifest skill ⋈ store 启用覆盖 + source_type。
+
+    enabled = ``resolve_enabled(store_override, manifest.default_enabled)``。builtin skill 无
+    store 行 → source_type='builtin'、override=None；installed skill 携其 source_type。
+    """
+    rows = {r.skill_name: r for r in store.list_skills()}
+    out: list[dict[str, Any]] = []
+    for s in manifest_skills:
+        row = rows.get(s.name)
+        override = row.enabled if row else None
+        out.append(
+            {
+                "name": s.name,
+                "title": s.title,
+                "description": s.description,
+                "defaultEnabled": s.default_enabled,
+                "enabled": resolve_enabled(override, s.default_enabled),
+                "overridden": override is not None,
+                "available": s.availability.available,
+                "unavailableReason": s.availability.reason,
+                "toolCount": len(s.tools),
+                "scopes": sorted({sc for t in s.tools for sc in t.auth_scopes}),
+                "sourceType": row.source_type if row else "builtin",
+            }
+        )
+    return out

@@ -482,3 +482,18 @@ def api_key_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     store = api_keys.ApiKeyStore(db_path=str(tmp_path / "api_auth.db"))
     monkeypatch.setattr(api_keys, "get_api_key_store", lambda: store)
     return store
+
+
+@pytest.fixture()
+def fresh_agent_cfg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Phase -1 / 0A：每测试一个干净 agent_config.db（覆盖 conftest session env + reset 单例）。
+
+    /api/agent/* + /chat/config 的 hash/standingContext/skillOverrides 都经
+    get_agent_config_store()（env 单例）读，故测试用独立临时库 + reset cache 隔离。
+    """
+    from src.agent_config import store as acstore
+
+    monkeypatch.setenv("MAILAGENT_AGENT_CONFIG_DB_PATH", str(tmp_path / "agent_config.db"))
+    acstore.reset_agent_config_store_cache()
+    yield acstore.get_agent_config_store()
+    acstore.reset_agent_config_store_cache()

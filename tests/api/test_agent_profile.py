@@ -6,21 +6,11 @@ owner-only（auth bypass on）。每个测试用独立临时 agent_config.db（f
 
 from __future__ import annotations
 
-import pytest
 
 from src.agent_config.store import PROFILE_DOC_NAMES
 from src.agent_config.templates import SEED_TEMPLATES
 
-
-@pytest.fixture()
-def fresh_agent_cfg(tmp_path, monkeypatch):
-    """每测试一个干净 agent_config.db（覆盖 conftest session env + reset 单例）。"""
-    from src.agent_config import store as acstore
-
-    monkeypatch.setenv("MAILAGENT_AGENT_CONFIG_DB_PATH", str(tmp_path / "agent_config.db"))
-    acstore.reset_agent_config_store_cache()
-    yield acstore.get_agent_config_store()
-    acstore.reset_agent_config_store_cache()
+# fresh_agent_cfg fixture 在 tests/api/conftest.py（与 test_agent_skills 共用）。
 
 
 def test_list_profile_docs_returns_six(client, fresh_agent_cfg):

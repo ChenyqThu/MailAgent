@@ -11,19 +11,25 @@ from src.agent_config.projections import (
     builtin_skills_signature,
     compute_installed_skills_hash,
     memory_doc_projection,
+    resolved_skills,
+    skill_overrides_map,
     skills_doc_projection,
 )
 from src.agent_config.store import AgentConfigStore
 
 
-def _skill(name, version="1.0", title=None, default_enabled=True, available=True, reason=None, ntools=0):
+def _skill(
+    name, version="1.0", title=None, default_enabled=True, available=True, reason=None,
+    ntools=0, scopes=None,
+):
     return SimpleNamespace(
         name=name,
         version=version,
         title=title or name.title(),
+        description=f"{name} skill",
         default_enabled=default_enabled,
         availability=SimpleNamespace(available=available, reason=reason),
-        tools=[None] * ntools,
+        tools=[SimpleNamespace(auth_scopes=list(scopes or [])) for _ in range(ntools)],
     )
 
 
@@ -93,3 +99,31 @@ def test_installed_skills_hash_stable_on_toggle(tmp_path):
     before = compute_installed_skills_hash(skills, store)
     store.set_enabled("x", False)
     assert compute_installed_skills_hash(skills, store) == before
+
+
+# ---------------------------------------------------------------------------
+# 启用态（PR5）
+# ---------------------------------------------------------------------------
+def test_skill_overrides_map_only_explicit(tmp_path):
+    store = AgentConfigStore(str(tmp_path / "ov.db"))
+    store.install_skill("a", source_type="document", enabled=True)
+    store.install_skill("b", source_type="document", enabled=False)
+    store.install_skill("c", source_type="document", enabled=None)  # 无覆盖
+    store.set_enabled("email", False)  # builtin 懒覆盖
+    m = skill_overrides_map(store)
+    assert m == {"a": True, "b": False, "email": False}  # c（None）不在 map
+
+
+def test_resolved_skills_merges_override(tmp_path):
+    store = AgentConfigStore(str(tmp_path / "rs.db"))
+    store.set_enabled("email", False)  # builtin override
+    skills = [
+        _skill("email", default_enabled=True, ntools=2, scopes=["email:read"]),
+        _skill("search", default_enabled=True, ntools=1, scopes=["email:read"]),
+    ]
+    by = {s["name"]: s for s in resolved_skills(skills, store)}
+    assert by["email"]["enabled"] is False and by["email"]["overridden"] is True
+    assert by["email"]["sourceType"] == "builtin"
+    assert by["email"]["scopes"] == ["email:read"]
+    # search 无覆盖 → 回退 default_enabled=True
+    assert by["search"]["enabled"] is True and by["search"]["overridden"] is False

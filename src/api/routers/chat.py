@@ -338,6 +338,19 @@ async def chat_config(request: Request):
             standing_context = "\n\n".join(p for p in _parts if p)
         except Exception:  # noqa: BLE001 — standing context is best-effort; never fail /config
             standing_context = ""
+    # PR5 (task 06-22) — per-skill enable overrides (backend SSoT in agent_config.db,
+    # replacing the old per-surface localStorage source). The runtime feeds these to
+    # computeSkillEnablement instead of readSkillOverrides(). Only explicitly-toggled
+    # skills appear (enabled non-null); absent → runtime falls back to the manifest
+    # default_enabled. Best-effort: store hiccup → {} (never fail /config).
+    skill_overrides: Dict[str, bool] = {}
+    try:
+        from src.agent_config.projections import skill_overrides_map
+        from src.agent_config.store import get_agent_config_store
+
+        skill_overrides = skill_overrides_map(get_agent_config_store())
+    except Exception:  # noqa: BLE001 — skill overrides are best-effort; never fail /config
+        skill_overrides = {}
     return success_envelope(
         {
             "maxIter": max_iter,
@@ -355,6 +368,7 @@ async def chat_config(request: Request):
             "agentProfileHash": agent_profile_hash,
             "installedSkillsHash": installed_skills_hash,
             "standingContext": standing_context,
+            "skillOverrides": skill_overrides,
         },
         request=request,
         source="config",
