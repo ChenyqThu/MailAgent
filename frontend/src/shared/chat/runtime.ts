@@ -48,7 +48,11 @@ import { createToolRegistry, type ToolDef } from './tools/registry'
 import { replaceWithManifestReadTools, type SkillToolInvoker } from './tools/manifest'
 import type { SkillManifest } from './tools/manifest'
 import { fetchSkillManifest } from './tools/manifest_client'
-import { computeSkillEnablement, readSkillOverrides } from './skill_enablement'
+import {
+  computeActiveSkillsHash,
+  computeSkillEnablement,
+  readSkillOverrides
+} from './skill_enablement'
 import type { ChatBackend } from './types'
 import type {
   AgentMemoryEntry,
@@ -267,9 +271,22 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
     // catalog. Manifest unreachable → empty enablement (no filtering, no fragments =
     // today's behaviour) AND buildToolDefs falls back to builtin (zero regression).
     const manifest = await fetchSkillManifest(baseUrl)
+    // PR5 — override source: the backend agent_config.db (snapshot.skillOverrides) is
+    // the SSoT and WINS; the localStorage store is a TRANSITIONAL fallback so an
+    // un-migrated user's prior per-surface toggles still apply until the Settings panel
+    // pushes them to the backend + clears localStorage. computeSkillEnablement's
+    // signature is unchanged (still (manifest, overrides)) — only the override source
+    // moved. COLLISION_EXEMPT_TOOL_NAMES stays inside computeSkillEnablement (client-side).
+    const overrides = { ...readSkillOverrides(), ...(snapshot.skillOverrides ?? {}) }
     const enablement = manifest
-      ? computeSkillEnablement(manifest, readSkillOverrides())
+      ? computeSkillEnablement(manifest, overrides)
       : { disabledToolNames: new Set<string>(), skillFragments: '' }
+    // PR5 — activeSkillsHash for Phase 0 eval trace (client-side: depends on the
+    // advertised gate + collision-exempt logic here). Logged for observability; a
+    // formal runtime accessor lands when Phase 0 wires the trace recorder.
+    if (manifest) {
+      console.debug('[chat] active_skills_hash', computeActiveSkillsHash(manifest, overrides))
+    }
 
     // skillFragments rides in the platform config override (a client-side derivation,
     // NOT from the serve-api /chat/config snapshot) → modelConfig() surfaces it to
@@ -557,21 +574,25 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
     },
 
     async listSkills(): Promise<SkillSummary[]> {
-      // P3 — flatten the Skill manifest to the Settings-facing SkillSummary[].
-      // Reports the manifest's compile-time `default_enabled` + availability; the UI
-      // overlays the local per-skill override store. Graceful [] when unreachable.
-      const manifest = await fetchSkillManifest(baseUrl)
-      if (!manifest) return []
-      return manifest.skills.map((s) => ({
-        name: s.name,
-        title: s.title,
-        description: s.description,
-        defaultEnabled: s.default_enabled,
-        available: s.availability.available,
-        unavailableReason: s.availability.reason ?? null,
-        toolCount: s.tools.length,
-        scopes: [...new Set(s.tools.flatMap((t) => t.auth_scopes))].sort()
-      }))
+      // PR5 — read the RESOLVED list from the backend (GET /agent/skills): manifest
+      // skills (builtin + installed) ⋈ agent_config.db enable overrides + source_type.
+      // Replaces the old manifest-flatten + localStorage overlay. Graceful [] when
+      // unreachable (the Settings section shows an empty state, never throws).
+      try {
+        const data = await request<{ skills: SkillSummary[] }>(baseUrl, 'GET', '/agent/skills')
+        return data.skills ?? []
+      } catch {
+        return []
+      }
+    },
+
+    async setSkillEnabled(name: string, enabled: boolean): Promise<void> {
+      // PR5 — persist the toggle to the backend (POST /agent/skills/{name}/enabled).
+      // Throws Error&{code} on failure (request() 透传 E_NOT_FOUND / E_INVALID_ARG).
+      // Caller invalidateConfig() so the next start() rebuilds with the new enablement.
+      await request(baseUrl, 'POST', `/agent/skills/${encodeURIComponent(name)}/enabled`, {
+        body: { enabled }
+      })
     },
 
     async listMemory(scope?: string): Promise<AgentMemoryEntry[]> {

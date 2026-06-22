@@ -13,6 +13,7 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
 import {
+  computeActiveSkillsHash,
   computeSkillEnablement,
   readSkillOverrides,
   resolveSkills,
@@ -230,5 +231,36 @@ describe('readSkillOverrides / setSkillOverride — localStorage SSoT', () => {
   test('non-boolean values are dropped', () => {
     localStorage.setItem(SKILL_OVERRIDES_KEY, JSON.stringify({ a: true, b: 'yes', c: 1 }))
     expect(readSkillOverrides()).toEqual({ a: true })
+  })
+})
+
+// PR5 — activeSkillsHash: a stable fingerprint of the advertised (enabled ∧ available)
+// skill set, for the Phase 0 config snapshot. Pure (manifest + overrides → hash).
+describe('computeActiveSkillsHash (PR5)', () => {
+  test('deterministic + 8 hex chars; default active = {calendar, report}', () => {
+    const h1 = computeActiveSkillsHash(MANIFEST, {})
+    const h2 = computeActiveSkillsHash(MANIFEST, {})
+    expect(h1).toBe(h2)
+    expect(h1).toMatch(/^[0-9a-f]{8}$/)
+  })
+
+  test('disabling an advertised skill changes the hash', () => {
+    const before = computeActiveSkillsHash(MANIFEST, {})
+    const after = computeActiveSkillsHash(MANIFEST, { report: false })
+    expect(after).not.toBe(before)
+  })
+
+  test('enabling a default-off skill (notion_agent) changes the hash', () => {
+    const before = computeActiveSkillsHash(MANIFEST, {})
+    const after = computeActiveSkillsHash(MANIFEST, { notion_agent: true })
+    expect(after).not.toBe(before)
+  })
+
+  test('an UNAVAILABLE skill cannot be activated by an override (advertised gate)', () => {
+    // kos is available:false → enabling it must NOT enter the active set, so the hash
+    // is identical to the default. (Mirrors the @mention overlay availability gate.)
+    expect(computeActiveSkillsHash(MANIFEST, { kos: true })).toBe(
+      computeActiveSkillsHash(MANIFEST, {})
+    )
   })
 })

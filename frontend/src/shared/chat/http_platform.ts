@@ -136,6 +136,12 @@ export interface HttpPlatformConfig {
    *  (flag MAILAGENT_STANDING_CONTEXT_ENABLED off, or store unavailable). Remote
    *  default "" until /chat/config supplies it. */
   standingContext: string
+  /** PR5 (task 06-22) — per-skill enable overrides from the backend agent_config.db
+   *  ({skillName: enabled}, only explicitly-toggled skills). The runtime's buildEngine
+   *  feeds these to computeSkillEnablement (backend wins; localStorage is a transitional
+   *  fallback until migrated). Empty {} = no overrides → manifest defaults. NOT used in
+   *  modelConfig() — it's a runtime-level (tool-catalog) concern, not a prompt one. */
+  skillOverrides: Record<string, boolean>
 }
 
 /** 远程默认快照（对齐 electron chat/config.ts 默认：harness ON / timeDecay ON / 其余
@@ -160,7 +166,9 @@ export const DEFAULT_HTTP_CONFIG: HttpPlatformConfig = {
   // P3 — no skill fragments until the runtime computes + injects them.
   skillFragments: '',
   // PR4 — no standing context until /chat/config supplies it (→ legacy SOUL_MARKDOWN).
-  standingContext: ''
+  standingContext: '',
+  // PR5 — no backend skill overrides until /chat/config supplies them (→ manifest defaults).
+  skillOverrides: {}
 }
 
 /** per-messageId 的 streamContent debounce 状态。`latest` = 最近一次累积全量正文

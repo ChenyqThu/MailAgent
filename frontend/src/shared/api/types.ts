@@ -1434,9 +1434,18 @@ export interface SkillSummary {
   name: string
   title: string
   description: string
-  /** Manifest compile-time default. The UI shows the effective state by
-   *  overlaying the local override store. */
+  /** Manifest compile-time default. */
   defaultEnabled: boolean
+  /** PR5 — resolved enabled state from the backend agent_config.db (the override
+   *  if the user toggled it, else the manifest default). The Settings toggle reads
+   *  this directly (no more localStorage overlay). */
+  enabled: boolean
+  /** PR5 — true if the user has an explicit backend enable override for this skill
+   *  (vs falling back to defaultEnabled). */
+  overridden: boolean
+  /** PR5 — 'builtin' | 'document' | 'local_folder' | 'skill_pack' | 'mcp'. Drives
+   *  the Settings "installed vs builtin" affordances (uninstall only for installed). */
+  sourceType: string
   /** availability.available — KOS / notion-agent CLI / etc. preconditions met. */
   available: boolean
   /** Reason the skill is unavailable (KOS creds missing, CLI absent…), else null. */
@@ -1595,11 +1604,20 @@ export interface ChatApi {
    */
   invalidateConfig(): void
   /**
-   * P3 — list installed Skills (the manifest, flattened to SkillSummary) for the
-   * Settings "Skills" toggle. Read-only; degrades to [] when the manifest is
-   * unreachable (so the section shows an empty/"unavailable" state, never throws).
+   * P3 / PR5 — list Skills for the Settings "Skills" panel. Now reads the RESOLVED
+   * list from the backend (GET /api/agent/skills): manifest skills (builtin +
+   * installed) joined with the agent_config.db enable overrides + source_type.
+   * Read-only; degrades to [] when unreachable (empty/"unavailable" state, never throws).
    */
   listSkills(): Promise<SkillSummary[]>
+  /**
+   * PR5 — enable/disable a skill (POST /api/agent/skills/{name}/enabled). Persists
+   * to the backend agent_config.db (replaces the old per-surface localStorage toggle).
+   * Caller should invalidateConfig() afterward so the next turn's tool catalog +
+   * skill fragments reflect the change. Throws `Error & { code }` on failure
+   * (E_NOT_FOUND for an unknown skill, E_INVALID_ARG for a bad arg).
+   */
+  setSkillEnabled(name: string, enabled: boolean): Promise<void>
   /**
    * P3 — list agent memory entries (agent_memory_kv) for the Settings "Memory"
    * panel, newest-first. Optional `scope` filter ('user' by default in the UI).

@@ -1,10 +1,12 @@
 // P3 (task 06-18-custom-ai-harness-agent Phase 3) — Settings "Custom AI" section.
 //
 // Two sub-sections rendered inside the AI tab:
-//   1. Skills toggle list  — react-query fetches SkillSummary[], zustand
-//      useSkillEnablement overlays user overrides; toggling calls setEnabled +
-//      invalidateConfig so the next chat turn sees the updated tool catalog +
-//      prompt fragments.
+//   1. Skills toggle list  — react-query fetches the RESOLVED SkillSummary[] from the
+//      backend (GET /api/agent/skills: manifest ⋈ agent_config.db enable overrides).
+//      Toggling calls api.chat.setSkillEnabled (POST /api/agent/skills/{name}/enabled) +
+//      invalidateConfig so the next chat turn sees the updated tool catalog + prompt
+//      fragments. A one-time mount effect migrates any leftover localStorage overrides
+//      to the backend (PR5 — enablement SSoT moved off per-surface localStorage).
 //   2. Memory manager      — react-query fetches AgentMemoryEntry[] for scope
 //      'user'; each entry is view/edit/delete (agent writes, user manages).
 //
@@ -17,9 +19,9 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Loader2, Trash2, Pencil, X, Check } from 'lucide-react'
 
 import { useMailApi } from '@shared/hooks/useMailApi'
-import { useSkillEnablement } from '@shared/state/skill-enablement'
+import { readSkillOverrides, writeSkillOverrides } from '@shared/chat/skill_enablement'
 import { toastError, toastSuccess } from '@shared/state/toast'
-import type { AgentMemoryEntry, SkillSummary, WriteMemoryInput } from '@shared/api/types'
+import type { AgentMemoryEntry, MailApi, SkillSummary, WriteMemoryInput } from '@shared/api/types'
 import { Switch } from '@shared/components/ui/switch'
 import { Button } from '@shared/components/ui/button'
 
@@ -30,22 +32,56 @@ import { Row } from './parts/Row'
 // Skills subsection
 // ---------------------------------------------------------------------------
 
+// PR5 — one-time migration of leftover localStorage skill overrides to the backend
+// agent_config.db. The runtime now reads backend overrides (localStorage is only a
+// transitional fallback in buildEngine); push each leftover toggle to the backend, then
+// clear localStorage so it stops shadowing. Best-effort per skill (an unknown/renamed
+// skill is skipped); cleared unconditionally afterward to avoid a re-push loop.
+async function migrateLocalSkillOverrides(
+  api: MailApi,
+  invalidateSkills: () => Promise<unknown>
+): Promise<void> {
+  const local = readSkillOverrides()
+  const names = Object.keys(local)
+  if (names.length === 0) return
+  for (const name of names) {
+    try {
+      await api.chat.setSkillEnabled(name, local[name])
+    } catch {
+      /* unknown skill / transient — skip; the clear below prevents a re-push loop */
+    }
+  }
+  writeSkillOverrides({})
+  api.chat.invalidateConfig()
+  await invalidateSkills()
+}
+
 function SkillsSection(): React.ReactElement {
   const { t } = useTranslation()
   const api = useMailApi()
-  const { overrides, setEnabled } = useSkillEnablement()
+  const qc = useQueryClient()
 
   const { data: skills, isLoading } = useQuery<SkillSummary[]>({
     queryKey: ['skills'],
     queryFn: () => api.chat.listSkills()
-    // graceful: listSkills() already degrades to [] on manifest unreachable
+    // graceful: listSkills() degrades to [] when the backend is unreachable
   })
 
-  function handleToggle(skill: SkillSummary, next: boolean): void {
-    setEnabled(skill.name, next)
-    // Drop the cached chat engine so the next chat.start() rebuilds with the
-    // updated tool catalog + prompt fragments (effectiveEnabled && available).
-    api.chat.invalidateConfig()
+  // Run the one-time localStorage→backend override migration once on mount.
+  React.useEffect(() => {
+    void migrateLocalSkillOverrides(api, () => qc.invalidateQueries({ queryKey: ['skills'] }))
+  }, [api, qc])
+
+  async function handleToggle(skill: SkillSummary, next: boolean): Promise<void> {
+    try {
+      await api.chat.setSkillEnabled(skill.name, next)
+      // Drop the cached chat engine so the next chat.start() rebuilds with the
+      // updated tool catalog + prompt fragments, then refetch the resolved list.
+      api.chat.invalidateConfig()
+      await qc.invalidateQueries({ queryKey: ['skills'] })
+    } catch (err) {
+      toastError(t('settings.skills.title'), (err as Error).message)
+    }
   }
 
   const rows: React.ReactNode = (() => {
@@ -60,41 +96,38 @@ function SkillsSection(): React.ReactElement {
     if (!skills || skills.length === 0) {
       return <div className="px-4 py-3.5 text-aux text-ink-fg-3">{t('settings.skills.empty')}</div>
     }
-    return skills.map((skill) => {
-      const effectiveEnabled = overrides[skill.name] ?? skill.defaultEnabled
-      return (
-        <Row
-          key={skill.name}
-          label={<span className={skill.available ? '' : 'opacity-60'}>{skill.title}</span>}
-          helper={
-            <span className="flex flex-col gap-0.5">
-              <span>{skill.description}</span>
-              {!skill.available && skill.unavailableReason ? (
-                <span className="text-meta text-ink-fg-3 italic">
-                  {t('settings.skills.unavailable', { reason: skill.unavailableReason })}
+    return skills.map((skill) => (
+      <Row
+        key={skill.name}
+        label={<span className={skill.available ? '' : 'opacity-60'}>{skill.title}</span>}
+        helper={
+          <span className="flex flex-col gap-0.5">
+            <span>{skill.description}</span>
+            {!skill.available && skill.unavailableReason ? (
+              <span className="text-meta text-ink-fg-3 italic">
+                {t('settings.skills.unavailable', { reason: skill.unavailableReason })}
+              </span>
+            ) : null}
+            <span className="flex items-center gap-2 mt-0.5">
+              <span className="inline-flex items-center rounded-full bg-ink-4 border border-ink-border px-1.5 py-0.5 text-micro font-mono text-ink-fg-2">
+                {t('settings.skills.toolCount', { n: skill.toolCount })}
+              </span>
+              {skill.scopes.length > 0 ? (
+                <span className="text-micro text-ink-fg-3">
+                  {t('settings.skills.scopes')}: {skill.scopes.join(', ')}
                 </span>
               ) : null}
-              <span className="flex items-center gap-2 mt-0.5">
-                <span className="inline-flex items-center rounded-full bg-ink-4 border border-ink-border px-1.5 py-0.5 text-micro font-mono text-ink-fg-2">
-                  {t('settings.skills.toolCount', { n: skill.toolCount })}
-                </span>
-                {skill.scopes.length > 0 ? (
-                  <span className="text-micro text-ink-fg-3">
-                    {t('settings.skills.scopes')}: {skill.scopes.join(', ')}
-                  </span>
-                ) : null}
-              </span>
             </span>
-          }
-        >
-          <Switch
-            checked={effectiveEnabled}
-            onCheckedChange={(next) => handleToggle(skill, next)}
-            aria-label={t('settings.skills.enabled')}
-          />
-        </Row>
-      )
-    })
+          </span>
+        }
+      >
+        <Switch
+          checked={skill.enabled}
+          onCheckedChange={(next) => void handleToggle(skill, next)}
+          aria-label={t('settings.skills.enabled')}
+        />
+      </Row>
+    ))
   })()
 
   return (
