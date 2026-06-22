@@ -149,7 +149,10 @@ export function CalendarToolbar({
   }
 
   const showDateNav = view === 'today' || view === 'week' || view === 'month'
-  const head = syncStatus?.[0]
+  // 健康优先选行：有任一无错误的日历就显绿，避免后端残留的孤儿行（端口配错期间用
+  // fallback 假名 'calendar' 建的行带旧错，字母序排在真实 '日历' 前）被盲取 [0] →
+  // sync-pill 常红。后端 clear_stale_errors 清孤儿根治；此处兜底，新孤儿出现也不误报。
+  const head = syncStatus?.find((s) => !s.last_error) ?? syncStatus?.[0]
   const lastIso = head?.last_incremental_sync_at_iso ?? head?.last_full_sync_at_iso ?? null
   const lastDate = lastIso ? new Date(lastIso) : null
   const lastError = head?.last_error ?? null

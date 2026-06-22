@@ -249,17 +249,24 @@ class DavMailBackend(IMailBackend):
         self.imap_port = int(getattr(cfg, "davmail_imap_port", 0) or 1143)
         self.smtp_port = int(getattr(cfg, "davmail_smtp_port", 0) or 1025)
 
-        # probe 时探测填充
+        # probe 时探测填充。配置值是显示名 (可能中文如 '草稿'), 而 IMAP SELECT/STATUS
+        # 需 modified-UTF7 原始名 → encode_imap_utf7 (对纯 ASCII 恒等, 仅转义 &; 中文则
+        # 编码)。probe 路径 (discover_drafts_folder) 返回的已是 IMAP LIST 原始名, 不经过这里。
+        _drafts_cfg = getattr(cfg, "davmail_drafts_folder", "") or None
         self.drafts_folder: Optional[str] = (
-            getattr(cfg, "davmail_drafts_folder", "") or None
+            encode_imap_utf7(_drafts_cfg) if _drafts_cfg else None
         )
         # 草稿箱同步 (DRAFTS_SYNC_ENABLED) — 全量对账路径 (reconcile_drafts), 不走
         # SYNC_FOLDERS 增量链路 (_effective_custom_folders 有意 block Drafts)。
         self._sync_drafts: bool = bool(getattr(cfg, "drafts_sync_enabled", True))
         # 发件箱 (Sent) 同步 — 跟 drafts 一样: 配置优先, 留空时 probe 探测。
         # 仅当 sync_mailboxes 含"发件箱"/"已发送"时才启用 (默认 config 已含发件箱)。
+        # 配置值显示名 (如 '已发送') 同样 encode 成 IMAP 原始名 — 否则 _folder_uidnext /
+        # 发件箱取数把中文喂 imaplib STATUS/SELECT → 'ascii' codec can't encode 炸 (日志反复
+        # 报 _folder_uidnext('已发送') failed)。probe 路径 (discover_sent_folder) 不经过这里。
+        _sent_cfg = getattr(cfg, "davmail_sent_folder", "") or None
         self.sent_folder: Optional[str] = (
-            getattr(cfg, "davmail_sent_folder", "") or None
+            encode_imap_utf7(_sent_cfg) if _sent_cfg else None
         )
         _mbs = [m.strip() for m in (getattr(cfg, "sync_mailboxes", "") or "").split(",")]
         self._sync_sent: bool = any(m in ("发件箱", "已发送", "已发送邮件") for m in _mbs)

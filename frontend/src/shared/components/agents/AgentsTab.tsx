@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import type { ReportAgentConfig, ReportCadence, ReportConfigPatch } from '@shared/api/types'
+import { DEFAULT_SEARCH_AGENT_PROMPT } from '@shared/chat/search_agent'
 import { CadencePill, ReportIcon, StatusBadge, Switch } from './primitives'
 import {
   useCreateAgent,
@@ -322,34 +323,24 @@ function AgentCard({
   )
 }
 
-// F4b — 新建搜索 Agent 入口（原死占位「即将推出」改为可点）。点击 → 打开空态
-// SearchConfigDrawer。文案走 agents.search.newAgent/newAgentHint。
-function NewAgentTile({ onClick }: { onClick: () => void }): React.ReactElement {
+// 「Custom Agent」入口 —— 完全自定义 Agent，待上线占位（不可点）。原 F4b 把这里
+// 改成了可点的「新建搜索 Agent」按钮；按产品要求退回 coming-soon: 搜索 Agent 只用
+// 内置一个（用户编辑既有即可，不再新建），此位保留给将来的完全自定义 Agent。
+function NewAgentTile(): React.ReactElement {
   const { t } = useTranslation()
   return (
-    <button
-      type="button"
-      onClick={onClick}
+    <div
       className="flex items-center"
+      aria-disabled="true"
       style={{
         width: '100%',
-        textAlign: 'left',
-        fontFamily: 'inherit',
         borderRadius: 14,
         border: '1px dashed rgb(var(--ink-border))',
         padding: '22px 20px',
         gap: 13,
-        cursor: 'pointer',
+        cursor: 'default',
         background: 'transparent',
-        transition: 'border-color 120ms, background 120ms'
-      }}
-      onMouseEnter={(e) => {
-        e.currentTarget.style.borderColor = 'rgb(var(--c-accent) / 0.5)'
-        e.currentTarget.style.background = 'rgb(var(--c-accent) / 0.04)'
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.borderColor = 'rgb(var(--ink-border))'
-        e.currentTarget.style.background = 'transparent'
+        opacity: 0.6
       }}
     >
       <span
@@ -360,21 +351,21 @@ function NewAgentTile({ onClick }: { onClick: () => void }): React.ReactElement 
           display: 'grid',
           placeItems: 'center',
           flexShrink: 0,
-          background: 'rgb(var(--c-accent) / 0.14)',
-          color: 'rgb(var(--c-accent))'
+          background: 'rgb(var(--ink-2) / 0.6)',
+          color: 'rgb(var(--ink-fg-3))'
         }}
       >
         <ReportIcon name="plus" size={20} />
       </span>
       <div style={{ flex: 1 }}>
-        <div style={{ fontSize: 14, fontWeight: 500, color: 'rgb(var(--ink-fg-1))' }}>
-          {t('agents.search.newAgent')}
+        <div style={{ fontSize: 14, fontWeight: 500, color: 'rgb(var(--ink-fg-2))' }}>
+          {t('agents.search.customAgentTitle')}
         </div>
         <div style={{ fontSize: 12, color: 'rgb(var(--ink-fg-3))', marginTop: 2 }}>
-          {t('agents.search.newAgentHint')}
+          {t('agents.search.customAgentHint')}
         </div>
       </div>
-    </button>
+    </div>
   )
 }
 
@@ -1042,7 +1033,9 @@ export function SearchConfigDrawer({
     if (create || !cfg) {
       setEnabled(true)
       setTitle('')
-      setPrompt('')
+      // 回显内置默认搜索 prompt 供查看/覆写；promptDirty 仍 false → 未改时 onSave 存
+      // null 走默认，不把默认快照写死进库（将来内置默认改了，此 agent 仍跟随）。
+      setPrompt(DEFAULT_SEARCH_AGENT_PROMPT)
       setPromptDirty(false)
       setModel('')
       setTools([...SEARCH_TOOLS])
@@ -1050,7 +1043,8 @@ export function SearchConfigDrawer({
     }
     setEnabled(cfg.enabled)
     setTitle(cfg.title)
-    setPrompt(cfg.prompt)
+    // prompt_is_default 的行后端返回空串 → 回显内置默认供查看/覆写；已自定义则回显自定义。
+    setPrompt(cfg.prompt_is_default ? DEFAULT_SEARCH_AGENT_PROMPT : cfg.prompt)
     setPromptDirty(false)
     setModel(cfg.model || '')
     setTools(cfg.tools_json?.length ? cfg.tools_json : [...SEARCH_TOOLS])
@@ -1087,8 +1081,8 @@ export function SearchConfigDrawer({
         title: title.trim() || id,
         enabled,
         model: model || null,
-        // 新建时 prompt 空 → null（用内置默认）。
-        prompt: prompt.trim() ? prompt : null,
+        // prompt 已回显内置默认；未改（promptDirty=false）→ null 走默认不写死快照，改过 → 存文本。
+        prompt: promptDirty ? prompt : null,
         tools
       })
         .then(onClose)
@@ -1573,7 +1567,8 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
               {isLoading ? t('agents.reports.loading') : t('agents.search.noAgent')}
             </div>
           )}
-          <NewAgentTile onClick={() => setSearchDrawer({ mode: 'create' })} />
+          {/* Custom Agent 待上线占位（不可点）；新建搜索 Agent 入口已按产品要求退回。 */}
+          <NewAgentTile />
         </div>
       </div>
       {/* 始终挂载，由 open 驱动进/退场动画（退场播完才卸载，见 useExitAnimation）。 */}

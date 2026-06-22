@@ -327,6 +327,110 @@ function MailSourceSection(): React.ReactElement {
   )
 }
 
+/** 日历同步 Section — 按 backend 条件渲染（从 SyncTab 迁来，归账户）。
+ *  applescript 走本机 Calendar.app（AppleScript / EventKit）；davmail 走 CalDAV
+ *  （把 Exchange 日历拉进本地），端口在上方「邮件源 · 高级连接 · CalDAV 端口」。 */
+function CalendarSyncSection(): React.ReactElement {
+  const { t } = useTranslation()
+  const rawBackend = useEnvValue('MAILAGENT_BACKEND')
+  const backend: MailBackend = rawBackend === 'davmail' ? 'davmail' : 'applescript'
+  return (
+    <Section
+      title={t('settings.sync.calendar.title', { defaultValue: '日历同步' })}
+      helper={
+        backend === 'davmail'
+          ? t('settings.accounts.calendar.helperDavmail', {
+              defaultValue:
+                'DavMail 经 CalDAV 把 Exchange 日历同步进本地（端口见上方「高级连接 · CalDAV 端口」）。'
+            })
+          : t('settings.accounts.calendar.helperApplescript', {
+              defaultValue: 'Mail.app 经 AppleScript / EventKit 读取本机 Calendar.app。'
+            })
+      }
+    >
+      {backend === 'applescript' ? (
+        <>
+          <EnvField
+            envKey="CALENDAR_SYNC_MODE"
+            control="select"
+            label={t('settings.sync.calendar.syncMode.label')}
+            helper={t('settings.sync.calendar.syncMode.helper')}
+            options={[
+              { value: 'applescript', label: 'AppleScript' },
+              { value: 'eventkit', label: 'EventKit' }
+            ]}
+          />
+          <EnvField
+            envKey="CALENDAR_PAST_DAYS"
+            control="number"
+            label={t('settings.sync.calendar.pastDays.label')}
+            helper={t('settings.sync.calendar.pastDays.helper')}
+            min={0}
+            max={365}
+          />
+          <EnvField
+            envKey="CALENDAR_FUTURE_DAYS"
+            control="number"
+            label={t('settings.sync.calendar.futureDays.label')}
+            helper={t('settings.sync.calendar.futureDays.helper')}
+            min={0}
+            max={365}
+          />
+        </>
+      ) : (
+        <>
+          <EnvField
+            envKey="CALENDAR_CALDAV_SYNC_ENABLED"
+            control="toggle"
+            label={t('settings.accounts.calendar.caldav.enabled.label', {
+              defaultValue: '启用 CalDAV 日历同步'
+            })}
+            helper={t('settings.accounts.calendar.caldav.enabled.helper', {
+              defaultValue: '开启后从 DavMail CalDAV 周期性拉取 Exchange 日历进本地。'
+            })}
+          />
+          <EnvField
+            envKey="CALENDAR_CALDAV_SYNC_POLL_INTERVAL_SEC"
+            control="number"
+            label={t('settings.accounts.calendar.caldav.poll.label', {
+              defaultValue: '轮询间隔（秒）'
+            })}
+            helper={t('settings.accounts.calendar.caldav.poll.helper', {
+              defaultValue: '每隔多少秒检查一次日历变化，默认 60。'
+            })}
+            min={10}
+            max={3600}
+          />
+          <EnvField
+            envKey="CALENDAR_CALDAV_SYNC_WINDOW_PAST_DAYS"
+            control="number"
+            label={t('settings.accounts.calendar.caldav.pastDays.label', {
+              defaultValue: '过去多少天'
+            })}
+            helper={t('settings.accounts.calendar.caldav.pastDays.helper', {
+              defaultValue: '回溯历史事件窗口，默认 30。'
+            })}
+            min={0}
+            max={3650}
+          />
+          <EnvField
+            envKey="CALENDAR_CALDAV_SYNC_WINDOW_FUTURE_DAYS"
+            control="number"
+            label={t('settings.accounts.calendar.caldav.futureDays.label', {
+              defaultValue: '未来多少天'
+            })}
+            helper={t('settings.accounts.calendar.caldav.futureDays.helper', {
+              defaultValue: '向前扩展窗口，默认 180。'
+            })}
+            min={0}
+            max={3650}
+          />
+        </>
+      )}
+    </Section>
+  )
+}
+
 /** 签名编辑框 — settings.signature (HTML/纯文本)。失焦保存; 空串存 null。 */
 function SignatureSection(): React.ReactElement {
   const { t } = useTranslation()
@@ -428,6 +532,8 @@ export function AccountsTab(): React.ReactElement {
       </Section>
 
       <MailSourceSection />
+
+      <CalendarSyncSection />
 
       <SignatureSection />
     </>

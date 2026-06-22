@@ -1322,7 +1322,7 @@
     "sync": {
       "window": {
         "title": "同步窗口",
-        "helper": "决定 SQLite radar 起始位置与时间过滤"
+        "helper": "决定增量同步的起始位置与时间过滤"
       },
       "cadence": {
         "title": "节拍"
@@ -1362,12 +1362,12 @@
         "placeholder": "收件箱,发件箱"
       },
       "radarInterval": {
-        "label": "SQLite radar 间隔",
+        "label": "新邮件检测间隔",
         "helper": "秒 — 检测新邮件频率"
       },
       "reverseInterval": {
         "label": "反向同步间隔",
-        "helper": "秒 — Notion 反向 → Mail.app 轮询"
+        "helper": "秒 — 把 Notion 端改动回写邮箱的轮询间隔"
       },
       "healthInterval": {
         "label": "健康检查间隔",
@@ -1376,7 +1376,7 @@
       "page": {
         "eyebrow": "SYNC",
         "title": "同步",
-        "intro": "SQLite radar 同步窗口、节拍与日历采集范围。"
+        "intro": "增量同步的时间窗口与轮询节拍。"
       }
     },
     "ai": {
@@ -2100,9 +2100,9 @@
     "solid": "实色"
   },
   "agents": {
-    "title": "Agents",
+    "title": "报告 Agents",
     "subtitle": "自动生成、可溯源的邮件报告。日报为主，周报 / 月报同引擎。",
-    "tabAgents": "Agents",
+    "tabAgents": "报告 Agents",
     "tabReports": "报告",
     "tabChats": "Chats",
     "cadence": {
@@ -2215,14 +2215,16 @@
       "sectionHint": "命令面板 AI 搜索入口用的智能体。用自然语言搜邮件，自动转检索。",
       "newAgent": "新建搜索 Agent",
       "newAgentHint": "自定义提示词、模型与工具",
+      "customAgentTitle": "Custom Agent",
+      "customAgentHint": "完全自定义 Agent · 待上线",
       "noAgent": "暂无搜索 Agent，点上方新建。",
       "configTitle": "搜索 Agent · {title}",
       "newTitle": "新建搜索 Agent",
       "titleLabel": "名称",
       "titlePlaceholder": "如 邮件搜索助手",
       "promptLabel": "搜索 Prompt",
-      "promptHint": "留空 = 用内置默认",
-      "promptPlaceholder": "留空 = 用内置默认搜索 persona；在此输入可完全覆写",
+      "promptHint": "下方为内置默认搜索 prompt，可直接覆写；占位符会在运行时自动替换",
+      "promptPlaceholder": "搜索 Agent 的系统 prompt",
       "tools": "工具",
       "toolsHint": "搜索 Agent 可调用的工具（MVP 仅全文搜索）",
       "tool": {

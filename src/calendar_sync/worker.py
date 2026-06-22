@@ -20,7 +20,7 @@ from __future__ import annotations
 import asyncio
 import traceback
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from loguru import logger
 
@@ -123,6 +123,20 @@ class CalendarSyncWorker:
                     f"[calendar-sync-worker] discovered {len(self._calendars)} "
                     f"calendars: {self._calendars}"
                 )
+                # 清掉端口配错期间 fallback 假名留下的孤儿错误行 (防 stale 告警常驻)。
+                try:
+                    cleared = await asyncio.to_thread(
+                        self.repo.clear_stale_errors, self._calendars
+                    )
+                    if cleared:
+                        logger.info(
+                            f"[calendar-sync-worker] cleared {cleared} stale "
+                            f"sync-state error row(s)"
+                        )
+                except Exception as ce:
+                    logger.warning(
+                        f"[calendar-sync-worker] clear_stale_errors failed: {ce}"
+                    )
             except Exception as e:
                 logger.error(
                     f"[calendar-sync-worker] list_calendar_names_for_sync failed: {e} "
@@ -291,6 +305,12 @@ class CalendarSyncWorker:
             f"new_total={len(fresh)}"
         )
         self._calendars = list(fresh)
+
+        # calendar 列表变了 → 清掉不再活跃且带 error 的孤儿行 (removed 里的失败行)。
+        try:
+            await asyncio.to_thread(self.repo.clear_stale_errors, list(fresh))
+        except Exception as ce:
+            logger.warning(f"[calendar-sync-worker] clear_stale_errors failed: {ce}")
 
         # 新增 cal 立即全量 sync (单 cal 路径), 让前端 ~60s 内就看到数据
         for cal_name in added:

@@ -1322,7 +1322,7 @@
     "sync": {
       "window": {
         "title": "Sync window",
-        "helper": "Defines the SQLite radar starting point and date filter"
+        "helper": "Defines the incremental-sync starting point and date filter"
       },
       "cadence": {
         "title": "Cadence"
@@ -1362,12 +1362,12 @@
         "placeholder": "收件箱,发件箱"
       },
       "radarInterval": {
-        "label": "SQLite radar interval",
+        "label": "New-mail check interval",
         "helper": "Seconds — new-mail detection cadence"
       },
       "reverseInterval": {
         "label": "Reverse sync interval",
-        "helper": "Seconds — Notion → Mail.app poll"
+        "helper": "Seconds — poll to write Notion-side changes back to the mailbox"
       },
       "healthInterval": {
         "label": "Health-check interval",
@@ -1376,7 +1376,7 @@
       "page": {
         "eyebrow": "SYNC",
         "title": "Sync",
-        "intro": "SQLite radar sync window, cadence, and calendar collection range."
+        "intro": "Incremental-sync time window and polling cadence."
       }
     },
     "ai": {
@@ -2100,9 +2100,9 @@
     "solid": "Solid"
   },
   "agents": {
-    "title": "Agents",
+    "title": "Report Agents",
     "subtitle": "Auto-generated, traceable email reports. Daily by default; weekly / monthly share the engine.",
-    "tabAgents": "Agents",
+    "tabAgents": "Report Agents",
     "tabReports": "Reports",
     "tabChats": "Chats",
     "cadence": {
@@ -2215,14 +2215,16 @@
       "sectionHint": "Powers the command palette AI search. Ask in natural language; it searches your mail.",
       "newAgent": "New Search Agent",
       "newAgentHint": "Custom prompt, model & tools",
+      "customAgentTitle": "Custom Agent",
+      "customAgentHint": "Fully custom agent · Coming soon",
       "noAgent": "No search agent yet — click New above.",
       "configTitle": "Search Agent · {title}",
       "newTitle": "New Search Agent",
       "titleLabel": "Name",
       "titlePlaceholder": "e.g. Mail search assistant",
       "promptLabel": "Search Prompt",
-      "promptHint": "Empty = built-in default",
-      "promptPlaceholder": "Empty = built-in search persona; type to override",
+      "promptHint": "Built-in default search prompt below — edit to override; placeholders auto-filled at runtime",
+      "promptPlaceholder": "Search agent system prompt",
       "tools": "Tools",
       "toolsHint": "Tools this search agent can call (MVP: full-text search only)",
       "tool": {

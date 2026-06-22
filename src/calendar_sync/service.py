@@ -519,12 +519,14 @@ class CalendarService:
         ws = now_utc - timedelta(days=past_days)
         we = now_utc + timedelta(days=future_days)
 
+        used_fallback = False
         if calendar_name:
             cals = [calendar_name]
         else:
             cals = reader.list_calendar_names_for_sync()
             if not cals:
                 cals = ["calendar"]
+                used_fallback = True
 
         results: List[Dict[str, Any]] = []
         for cal in cals:
@@ -586,6 +588,12 @@ class CalendarService:
                     "mode": "full" if full else "incremental",
                     "error": str(e)[:500],
                 })
+
+        # 整轮成功后清孤儿错误行: 仅在「同步了全部真实日历」(未指定单日历 + 非 fallback)
+        # 时清, 否则按单日历 / 假名的 active 集会误删其他真实行。端口配错期间 fallback
+        # 假名 'calendar' 留下的 last_error 会永久挂着 → 前端 sync-pill 常红, 这里根治。
+        if calendar_name is None and not used_fallback:
+            repo.clear_stale_errors(cals)
 
         return {
             "results": results,

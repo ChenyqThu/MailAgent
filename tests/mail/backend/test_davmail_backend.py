@@ -735,3 +735,51 @@ def _make_backend(uidvalidity=12345):
     # 多文件夹同步白名单 (空 = 零激活, 与 __init__ 默认一致)。需要时测试自行设。
     backend._custom_folders = []
     return backend
+
+
+# --------- __init__ encode 中文 sent/drafts 配置 (ascii-codec warning 修复回归) ---------
+
+
+def _cfg_stub(*, sent: str, drafts: str):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        davmail_imap_host="127.0.0.1",
+        davmail_imap_port=1143,
+        davmail_smtp_port=1025,
+        davmail_drafts_folder=drafts,
+        davmail_sent_folder=sent,
+        drafts_sync_enabled=True,
+        sync_mailboxes="收件箱,发件箱",
+        sync_folders="",
+    )
+
+
+def test_init_encodes_chinese_sent_drafts_config():
+    """配置 DAVMAIL_SENT/DRAFTS_FOLDER 为中文显示名 → __init__ encode 成 IMAP
+    modified-UTF7 原始名 (纯 ASCII), 否则 _folder_uidnext/取数 SELECT 把中文喂 imaplib
+    STATUS/SELECT → 'ascii' codec can't encode 炸。"""
+    from src.mail.backend.imap_utf7 import encode_imap_utf7
+
+    be = DavMailBackend(_cfg_stub(sent="已发送", drafts="草稿"), sync_store=MagicMock())
+    assert be.sent_folder == encode_imap_utf7("已发送")
+    assert be.drafts_folder == encode_imap_utf7("草稿")
+    # 编码后必须是纯 ASCII — imaplib STATUS/SELECT 不再炸。
+    assert be.sent_folder.isascii()
+    assert be.drafts_folder.isascii()
+
+
+def test_init_ascii_folder_config_is_identity():
+    """纯 ASCII 配置 (如 'Sent Items') encode 恒等, 不破坏既有英文配置。"""
+    be = DavMailBackend(
+        _cfg_stub(sent="Sent Items", drafts="Drafts"), sync_store=MagicMock()
+    )
+    assert be.sent_folder == "Sent Items"
+    assert be.drafts_folder == "Drafts"
+
+
+def test_init_empty_folder_config_stays_none():
+    """留空配置 → None (留待 probe 探测), 不被 encode 成空串。"""
+    be = DavMailBackend(_cfg_stub(sent="", drafts=""), sync_store=MagicMock())
+    assert be.sent_folder is None
+    assert be.drafts_folder is None

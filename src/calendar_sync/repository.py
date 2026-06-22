@@ -694,6 +694,36 @@ class CalendarEventRepository:
             for r in rows
         ]
 
+    def clear_stale_errors(self, active_names: list[str]) -> int:
+        """删除不在 active_names 集合里、且带 last_error 的孤儿行 (防 stale 告警常驻)。
+
+        端口配错 / CalDAV 连不上期间, list_calendar_names_for_sync 返回空 → 代码回退到
+        fallback 假名 (如 'calendar'), 用它同步必败并把错误写进 calendar_name='calendar'
+        这一行。修好后真实日历名变 (如 '日历'), 成功路径只清它当前遍历到的日历的 error,
+        那条假名孤儿行的 last_error 永久挂着 → 前端 sync-pill 盲取 [0] 常显「同步失败」。
+        整轮同步成功 (拿到真实 active_names) 后调本方法清掉孤儿。
+
+        只删「带 error」的行: 没 error 的旧日历行 (可能只是本轮 probe 没列到) 保留其
+        ctag/sync_token, 避免误删导致下次全量重扫。仅在 active_names 非空 (真实列表,
+        非 fallback) 时调用 —— 空集合直接返回, 防 fallback 期间误删真实行。
+
+        Returns: 删除的行数。
+        """
+        if not active_names:
+            return 0
+        placeholders = ",".join("?" for _ in active_names)
+        with self._conn_ctx() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                f"DELETE FROM calendar_sync_state "
+                f"WHERE calendar_name NOT IN ({placeholders}) "
+                f"AND last_error IS NOT NULL",
+                list(active_names),
+            )
+            deleted = cur.rowcount
+            conn.commit()
+        return deleted
+
 
 # ============================================================
 # Row → dataclass adapter

@@ -199,7 +199,11 @@ function VirtualRow({
   )
 }
 
-function computeRowHeight(r: ListRow | undefined, newIds: ReadonlySet<number>): number {
+function computeRowHeight(
+  r: ListRow | undefined,
+  newIds: ReadonlySet<number>,
+  snippets: Record<number, string>
+): number {
   if (!r) return 28
   if (r.type === 'header') return 28
   if (r.type === 'loader') return 44
@@ -210,10 +214,20 @@ function computeRowHeight(r: ListRow | undefined, newIds: ReadonlySet<number>): 
   // supplement-only children (listByThread, no snippet / AI) fall
   // through to the 60px no-snippet branch naturally.
   const e = r.email
-  // Sprint 19 — 行高用 has_body (listEnriched 立即返回) 而非 snippet 文本。
-  // snippet 改为可见行懒取 (email:listSnippets); 若按文本算高, snippet 异步到达
-  // 会让行高跳变。has_body 立即预留预览行空间, 文本填入不改高度。
-  const hasSnippet = e.has_body
+  // Sprint 20 — 行高跟 EmailRow 实际渲染口径一致: 用「合并后的 snippet 文本」
+  // (e.snippet 优先, 空则懒取 snippetMap[id], 与 VirtualRow liveSnippet 合并同源)
+  // 而非 has_body。原用 has_body 预留正文行的副作用: has_body=true 但 markdown 实际
+  // 为空 (会议「已接受/已拒绝」通知) 或 snippet 尚未懒取到时, EmailRow 不渲染正文行
+  // (:453 靠文本), 行高却已预留一行 → 视觉「少一行内容却占 4 行高」。改用文本后行高
+  // 自适应: 无正文文本即收缩, 懒取到达再增高 (单向增高, 可接受)。
+  const liveSnippet = snippets[e.internal_id]
+  const snippetText =
+    e.snippet && e.snippet.length > 0
+      ? e.snippet
+      : liveSnippet && liveSnippet.length > 0
+        ? liveSnippet
+        : ''
+  const hasSnippet = snippetText.length > 0
   // `isNew` flips ai-strip on (renders "NEW" chip in EmailRow). Must mirror
   // EmailRow.tsx aiStripVisible exactly — otherwise the slot under-counts and
   // the chip clips into the next row's separator.
@@ -993,6 +1007,38 @@ export function EmailList(): React.ReactElement {
       selectedIds.every((id) => enrichedById.get(id)?.is_flagged === true),
     [selectedIds, enrichedById]
   )
+  // Sprint 20 — 线程子邮件 enriched 补全。listByThreads 返回 bare EmailMeta
+  // (无 has_body / ai_* / snippet)。大线程里老的、或被分页 / focused·other tab
+  // 过滤出当前 listEnriched(all) 的成员, enrichedById 命中不到 → 落 enrichDefaults
+  // 空壳 → 列表只剩发件人+标题两行, 即便 SQLite 里 body / AI 齐备 (金样本: 收件箱
+  // 1000000760, synced + md1749 + 🟡重要, 属 15 封大线程却只显两行)。这里对所有
+  // 线程成员 id 批量 listEnriched(by internalIds, 跨 mailbox) 补真实字段:
+  // enrichedById (当前 view 最新) 优先, 此补全 query 补差, enrichDefaults 仅真取不到兜底。
+  const threadMemberIds = useMemo(() => {
+    if (!threadBatch) return [] as number[]
+    const set = new Set<number>()
+    for (const tid of uniqueThreadIds) {
+      const arr = threadBatch[tid]
+      if (arr) for (const meta of arr) set.add(meta.internal_id)
+    }
+    return Array.from(set).sort((a, b) => a - b)
+  }, [threadBatch, uniqueThreadIds])
+  const threadEnrichedQ = useQuery({
+    queryKey: ['emails', 'thread-enriched', threadMemberIds],
+    queryFn: () =>
+      mailApi.email.listEnriched({
+        internalIds: threadMemberIds,
+        limit: threadMemberIds.length
+      }),
+    enabled: threadMemberIds.length > 0,
+    staleTime: 60_000,
+    placeholderData: keepPreviousData
+  })
+  const threadEnrichedById = useMemo(() => {
+    const m = new Map<number, EnrichedEmailMeta>()
+    for (const e of threadEnrichedQ.data ?? []) m.set(e.internal_id, e)
+    return m
+  }, [threadEnrichedQ.data])
   const threadSupplement = useMemo(() => {
     const m = new Map<string, EnrichedEmailMeta[]>()
     if (!threadBatch) return m
@@ -1001,11 +1047,16 @@ export function EmailList(): React.ReactElement {
       if (!data) continue
       m.set(
         tid,
-        data.map((meta) => enrichedById.get(meta.internal_id) ?? enrichDefaults(meta))
+        data.map(
+          (meta) =>
+            enrichedById.get(meta.internal_id) ??
+            threadEnrichedById.get(meta.internal_id) ??
+            enrichDefaults(meta)
+        )
       )
     }
     return m
-  }, [uniqueThreadIds, threadBatch, enrichedById])
+  }, [uniqueThreadIds, threadBatch, enrichedById, threadEnrichedById])
 
   // 发件箱用 groupBySentAnchor (发件作母邮件 + 之前线程作子邮件); 其余视图
   // 用 groupByThread (线程最新邮件作 head)。
@@ -1080,14 +1131,15 @@ export function EmailList(): React.ReactElement {
   // 会对所有 row 调一遍 rowHeight 算 total height. 之前 rowHeight 函数内联
   // cleanSnippet (11 段正则) + AI strip check, 500 行级别累积 ≥ 200ms 触发
   // macOS wait cursor. 这里一把 useMemo 算好高度数组, rowHeight 改成 O(1)
-  // 查表; deps 含 newIds 因为 "NEW" chip 会影响 ai-strip 显示.
+  // 查表; deps 含 newIds ("NEW" chip 影响 ai-strip) 与 snippetMap (Sprint 20 行高
+  // 改用懒取 snippet 文本判正文行, 文本到达后须重算高度让行随内容自适应)。
   const rowHeights = useMemo(() => {
     const arr = new Array<number>(rows.length)
     for (let i = 0; i < rows.length; i++) {
-      arr[i] = computeRowHeight(rows[i], newIds)
+      arr[i] = computeRowHeight(rows[i], newIds, snippetMap)
     }
     return arr
-  }, [rows, newIds])
+  }, [rows, newIds, snippetMap])
   const getRowHeight = useCallback((index: number): number => rowHeights[index] ?? 28, [rowHeights])
 
   // 滚动锚定: 展开 B 时手风琴折叠上方长线程 A → B 及下方行整体上移, 但 react-window

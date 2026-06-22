@@ -1,4 +1,5 @@
-// Sprint 18 §PR D — Sync tab. SQLite radar + reverse sync + calendar 同步配置.
+// Sprint 18 §PR D — Sync tab. 增量同步窗口 + 节拍 (reverse sync)。
+// 日历配置已迁至「账户」Tab 的日历同步 Section (按 backend 分流 AppleScript / CalDAV)。
 // 全部走 .env, restart=yes (config.py 单例化, 不支持热 reload).
 
 import * as React from 'react'
@@ -17,7 +18,7 @@ export function SyncTab(): React.ReactElement {
         eyebrow={t('settings.sync.page.eyebrow', { defaultValue: 'SYNC' })}
         title={t('settings.sync.page.title', { defaultValue: '同步' })}
         description={t('settings.sync.page.intro', {
-          defaultValue: 'SQLite radar 同步窗口、节拍与日历采集范围。'
+          defaultValue: '增量同步的时间窗口与轮询节拍。'
         })}
       />
       <Section title={t('settings.sync.window.title')} helper={t('settings.sync.window.helper')}>
@@ -71,35 +72,6 @@ export function SyncTab(): React.ReactElement {
           helper={t('settings.sync.healthInterval.helper')}
           min={60}
           max={86400}
-        />
-      </Section>
-
-      <Section title={t('settings.sync.calendar.title')}>
-        <EnvField
-          envKey="CALENDAR_SYNC_MODE"
-          control="select"
-          label={t('settings.sync.calendar.syncMode.label')}
-          helper={t('settings.sync.calendar.syncMode.helper')}
-          options={[
-            { value: 'applescript', label: 'AppleScript' },
-            { value: 'eventkit', label: 'EventKit' }
-          ]}
-        />
-        <EnvField
-          envKey="CALENDAR_PAST_DAYS"
-          control="number"
-          label={t('settings.sync.calendar.pastDays.label')}
-          helper={t('settings.sync.calendar.pastDays.helper')}
-          min={0}
-          max={365}
-        />
-        <EnvField
-          envKey="CALENDAR_FUTURE_DAYS"
-          control="number"
-          label={t('settings.sync.calendar.futureDays.label')}
-          helper={t('settings.sync.calendar.futureDays.helper')}
-          min={0}
-          max={365}
         />
       </Section>
     </>

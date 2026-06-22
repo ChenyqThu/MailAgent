@@ -335,6 +335,32 @@ class TestSyncState:
         states = repo.list_sync_states()
         assert [s.calendar_name for s in states] == ["a", "b"]
 
+    def test_clear_stale_errors_removes_orphan_error_row(self, repo):
+        # 真实日历健康 + fallback 假名孤儿行(带 1801 端口旧错)
+        repo.upsert_sync_state("日历", ctag="c1")
+        repo.upsert_sync_state(
+            "calendar", last_error="CalDAV connect failed: port=1801"
+        )
+        # 整轮成功后用真实列表清孤儿
+        deleted = repo.clear_stale_errors(["日历"])
+        assert deleted == 1
+        assert [s.calendar_name for s in repo.list_sync_states()] == ["日历"]
+
+    def test_clear_stale_errors_keeps_healthy_inactive_row(self, repo):
+        # 不在 active 但无 error 的行 → 保留(不丢 ctag, 避免下次全量重扫)
+        repo.upsert_sync_state("日历", ctag="c1")
+        repo.upsert_sync_state("old-cal", ctag="c2")
+        deleted = repo.clear_stale_errors(["日历"])
+        assert deleted == 0
+        assert {s.calendar_name for s in repo.list_sync_states()} == {"日历", "old-cal"}
+
+    def test_clear_stale_errors_empty_active_is_noop(self, repo):
+        # fallback 期间 active 为空 → 不删任何行(防误删真实行)
+        repo.upsert_sync_state("日历", last_error="transient")
+        deleted = repo.clear_stale_errors([])
+        assert deleted == 0
+        assert len(repo.list_sync_states()) == 1
+
 
 # ============================================================
 # list_calendar_names
@@ -431,7 +457,6 @@ class TestUpsertConcurrent:
         assert len(set(results)) == 1, f"Expected 1 unique id, got {sorted(set(results))}"
 
         # DB 里只有 1 行
-        from src.calendar_sync import CalendarEventRepository
         final_repo = CalendarEventRepository(fresh_db)
         rows = final_repo.list_event_rows(source="caldav")
         assert len(rows) == 1
