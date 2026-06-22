@@ -124,7 +124,11 @@ export function createReportTools(platform: ChatToolPlatform): ToolDef[] {
       try {
         const detail = await platform.getReport(id)
         if (!detail) return ok({ found: false, report_id: id }, start)
-        return ok({ found: true, ...detail }, start)
+        // Surface the canonical report id under `report_id` (the same key the input
+        // param + report_list reference it by), not only the ReportDetail.`id` field —
+        // so a consumer that keys on report_id (citation grounding, cross-references)
+        // can resolve it consistently. Additive; `...detail` still carries `id`.
+        return ok({ found: true, report_id: id, ...detail }, start)
       } catch (e) {
         const code = (e as { code?: string }).code ?? 'E_INTERNAL'
         return err(code, e instanceof Error ? e.message : String(e), start)
