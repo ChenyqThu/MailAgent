@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import tempfile
 import time
 from pathlib import Path
 from typing import Iterator
@@ -35,6 +36,14 @@ import pytest
 # auth.py:  AUTH_DISABLED = os.environ.get("MAILAGENT_API_AUTH_DISABLED", ...)
 # app.py:   ALLOWED_ORIGINS extension keyed on the same var.
 os.environ.setdefault("MAILAGENT_API_AUTH_DISABLED", "true")
+# agent_config.db (Phase -1 / 0A): /chat/config now computes agentProfileHash +
+# installedSkillsHash against the AgentConfigStore. Pin it to a throwaway temp dir
+# so api tests never seed/touch a real agent_config.db (the resolver would otherwise
+# fall to the dev machine's sync_store sibling or ./data on a bare worktree).
+os.environ.setdefault(
+    "MAILAGENT_AGENT_CONFIG_DB_PATH",
+    os.path.join(tempfile.mkdtemp(prefix="mailagent-test-agentcfg-"), "agent_config.db"),
+)
 # auth.py (codex C2): auth bypass is dev-only — it RuntimeErrors at import unless an
 # explicit dev context is declared. The test suite IS a dev/CI context, so declare it.
 os.environ.setdefault("MAILAGENT_API_DEV", "true")

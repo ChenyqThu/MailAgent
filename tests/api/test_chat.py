@@ -273,7 +273,15 @@ def test_chat_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     with _config_client(monkeypatch, _ChatConfigStub()) as c:
         r = c.get("/api/chat/config")
     assert r.status_code == 200
-    assert r.json()["data"] == {
+    data = r.json()["data"]
+    # Phase -1 / 0A — config snapshot hashes (computed against the isolated temp
+    # agent_config.db from conftest). Deterministic but not pinned to exact values
+    # (would be brittle to template / builtin-skill changes) — assert sha256 hex shape.
+    profile_hash = data.pop("agentProfileHash")
+    installed_hash = data.pop("installedSkillsHash")
+    assert isinstance(profile_hash, str) and len(profile_hash) == 64
+    assert isinstance(installed_hash, str) and len(installed_hash) == 64
+    assert data == {
         "maxIter": 8,
         "maxCostUsd": 0.5,
         "harnessEnabled": True,

@@ -403,6 +403,7 @@ async def _handle_unexpected(request: Request, exc: Exception) -> JSONResponse:
 # calendar / folder / ai / email_views 为 Phase B 待填充骨架 (空 router，挂载即生效)。
 from src.api.routers import (  # noqa: E402
     admin,
+    agent,
     ai,
     attachment,
     calendar,
@@ -430,6 +431,7 @@ app.include_router(reports.router)
 app.include_router(chat.router)
 app.include_router(settings.router)
 app.include_router(skills.router)
+app.include_router(agent.router)
 
 
 @app.get("/api/health")

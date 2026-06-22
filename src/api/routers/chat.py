@@ -300,6 +300,27 @@ async def chat_config(request: Request):
         memory_summary = get_chat_db().memory_summary()
     except Exception:  # noqa: BLE001 — memory is best-effort; never fail /config
         memory_summary = ""
+    # Phase -1 / 0A — config snapshot hashes for Phase 0 eval trace (reproducible
+    # baseline). agentProfileHash = hash of the 4 editable profile docs' content
+    # hashes; installedSkillsHash = builtin name|version signature + installed-rows
+    # fingerprint. active_skills_hash is NOT here — it's client-side (depends on the
+    # @mention session overlay + collision-exempt logic, plan §F). Best-effort: a
+    # store/manifest hiccup → None (never fail /config — same discipline as memory).
+    agent_profile_hash = None
+    installed_skills_hash = None
+    try:
+        from src.agent_config.projections import compute_installed_skills_hash
+        from src.agent_config.store import get_agent_config_store
+        from src.skills.registry import build_manifest
+
+        _agent_store = get_agent_config_store()
+        agent_profile_hash = _agent_store.profile_hash()
+        installed_skills_hash = compute_installed_skills_hash(
+            build_manifest(None).skills, _agent_store
+        )
+    except Exception:  # noqa: BLE001 — hashes are best-effort; never fail /config
+        agent_profile_hash = None
+        installed_skills_hash = None
     return success_envelope(
         {
             "maxIter": max_iter,
@@ -314,6 +335,8 @@ async def chat_config(request: Request):
             "memorySummary": memory_summary,
             "enabledModels": enabled_models,
             "manifestMode": manifest_mode,
+            "agentProfileHash": agent_profile_hash,
+            "installedSkillsHash": installed_skills_hash,
         },
         request=request,
         source="config",
