@@ -117,20 +117,39 @@ export function createSkillManagementTools(platform: ChatToolPlatform): ToolDef[
     name: 'skill_install',
     description:
       'Install a user skill from a document / local_folder / skill_pack source. The user MUST ' +
-      'confirm (preview tier) — the proposal shows the source and any requested scopes, which ' +
-      'are validated against the known catalog. Arbitrary-code plugins are NOT supported; ' +
-      'requested scopes can only be ones that already exist.',
+      'confirm (preview tier) — the proposal shows the FULL install risk: source URI, package ' +
+      'hash, trusted flag, requested scopes, and your reason / risk summary. Always fill ' +
+      'source_uri / package_hash (when the skill comes from a folder or pack), reason, and ' +
+      'risk_summary so the user can make an informed decision. Requested scopes are validated ' +
+      'against the known catalog; arbitrary-code plugins are NOT supported.',
     inputSchema: {
       type: 'object',
       properties: {
-        name: { type: 'string', description: 'skill name (unique)' },
+        name: { type: 'string', description: 'skill name (unique slug)' },
         source_type: { type: 'string', description: 'document | local_folder | skill_pack' },
         manifest: {
           type: 'object',
           description: 'skill manifest (name/title/prompt_fragment/tools…)'
         },
         version: { type: 'string' },
-        granted_scopes: { type: 'array', items: { type: 'string' } }
+        granted_scopes: { type: 'array', items: { type: 'string' } },
+        source_uri: {
+          type: 'string',
+          description: 'where the skill comes from (folder path / pack URL); shown to the user'
+        },
+        package_hash: {
+          type: 'string',
+          description: 'content hash of the package for integrity, when known'
+        },
+        trusted: {
+          type: 'boolean',
+          description: 'mark the source as trusted (default false; the user confirms)'
+        },
+        reason: { type: 'string', description: 'why you are installing this skill' },
+        risk_summary: {
+          type: 'string',
+          description: 'a 1-line summary of what this skill can do / its risk'
+        }
       },
       required: ['name', 'source_type']
     },
@@ -152,6 +171,9 @@ export function createSkillManagementTools(platform: ChatToolPlatform): ToolDef[
         )
       }
       try {
+        // R9 — forward the full install risk metadata so the backend persists
+        // source_uri / package_hash / trusted (reason / risk_summary are display-only:
+        // they ride in the tool input the ConfirmToolDialog already renders).
         const res = await platform.installAgentSkill({
           name,
           sourceType,
@@ -159,7 +181,10 @@ export function createSkillManagementTools(platform: ChatToolPlatform): ToolDef[
           version: asStr(i.version),
           grantedScopes: Array.isArray(i.granted_scopes)
             ? (i.granted_scopes as string[])
-            : undefined
+            : undefined,
+          sourceUri: asStr(i.source_uri),
+          packageHash: asStr(i.package_hash),
+          trusted: typeof i.trusted === 'boolean' ? i.trusted : undefined
         })
         return ok({ installed: true, ...res }, start)
       } catch (e) {

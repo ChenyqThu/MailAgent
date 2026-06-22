@@ -70,6 +70,31 @@ def test_install_document_skill(client, fresh_agent_cfg):
     assert s is not None and s["sourceType"] == "document"
 
 
+def test_install_persists_risk_metadata(client, fresh_agent_cfg):
+    """R9 — install 端点把 sourceUri / packageHash / trusted 落到安装行。"""
+    from src.agent_config.store import get_agent_config_store
+
+    r = client.post(
+        "/api/agent/skills",
+        json={
+            "name": "pack-skill",
+            "sourceType": "skill_pack",
+            "sourceUri": "https://example.com/pack.zip",
+            "packageHash": "sha256:abc123",
+            "trusted": True,
+            "grantedScopes": ["email:read"],
+            "manifest": {"name": "pack-skill", "tools": []},
+        },
+    )
+    assert r.status_code == 201
+    row = get_agent_config_store().get_skill("pack-skill")
+    assert row is not None
+    assert row.source_uri == "https://example.com/pack.zip"
+    assert row.package_hash == "sha256:abc123"
+    assert row.trusted is True
+    assert row.granted_scopes == ("email:read",)
+
+
 def test_install_bad_source_type_400(client, fresh_agent_cfg):
     r = client.post("/api/agent/skills", json={"name": "x", "sourceType": "builtin"})
     assert r.status_code == 400

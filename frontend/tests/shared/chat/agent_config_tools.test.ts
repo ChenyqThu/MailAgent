@@ -179,6 +179,34 @@ describe('skill management — forwarding + validation', () => {
     )
   })
 
+  test('R9 — skill_install forwards source_uri / package_hash / trusted risk metadata', async () => {
+    const installAgentSkill = vi.fn(async () => ({ name: 'pack', sourceType: 'skill_pack' }))
+    await byName(
+      createSkillManagementTools(mockPlatform({ installAgentSkill })),
+      'skill_install'
+    ).handler(
+      {
+        name: 'pack',
+        source_type: 'skill_pack',
+        source_uri: 'https://example.com/pack.zip',
+        package_hash: 'sha256:abc',
+        trusted: true,
+        reason: 'user asked',
+        risk_summary: 'read-only report helper'
+      },
+      ctx
+    )
+    expect(installAgentSkill).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'pack',
+        sourceType: 'skill_pack',
+        sourceUri: 'https://example.com/pack.zip',
+        packageHash: 'sha256:abc',
+        trusted: true
+      })
+    )
+  })
+
   test('skill_uninstall forwards the name', async () => {
     const uninstallAgentSkill = vi.fn(async () => ({ name: 'gone', removed: true }))
     const res = await byName(

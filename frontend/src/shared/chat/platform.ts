@@ -443,13 +443,17 @@ export interface ChatToolPlatform {
   /** Enable/disable a skill (gated behind a preview confirmation). */
   setAgentSkillEnabled(name: string, enabled: boolean): Promise<void>
   /** Install a user skill (document/local_folder/skill_pack). Gated behind a preview
-   *  confirmation that shows source + scopes. */
+   *  confirmation that shows source + scopes. R9 — sourceUri / packageHash / trusted are
+   *  the install-risk metadata the backend persists (the confirmation preview shows them). */
   installAgentSkill(input: {
     name: string
     sourceType: string
     manifest?: Record<string, unknown>
     version?: string
     grantedScopes?: string[]
+    sourceUri?: string
+    packageHash?: string
+    trusted?: boolean
   }): Promise<{ name: string; sourceType: string }>
   /** Uninstall a skill (gated behind a preview confirmation). */
   uninstallAgentSkill(name: string): Promise<{ name: string; removed: boolean }>

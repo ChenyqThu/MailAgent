@@ -822,7 +822,12 @@ export class HttpChatPlatform
     manifest?: Record<string, unknown>
     version?: string
     grantedScopes?: string[]
+    sourceUri?: string
+    packageHash?: string
+    trusted?: boolean
   }): Promise<{ name: string; sourceType: string }> {
+    // R9 — body carries the full set; serve-api install_agent_skill reads sourceUri /
+    // packageHash / trusted / grantedScopes and persists them on the install row.
     return this._req<{ name: string; sourceType: string }>('POST', '/agent/skills', { body: input })
   }
 
