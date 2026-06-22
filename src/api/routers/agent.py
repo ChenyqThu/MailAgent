@@ -144,6 +144,57 @@ async def list_profile_history(
                             meta_extra={"count": len(data)})
 
 
+# ── profile 写（PR6 —— agent/用户经确认编辑 SOUL/AGENT/RULES/USER + rollback）──────────
+
+
+@router.post("/profile/docs/{name}", dependencies=[Depends(verify_cf_access)])
+async def write_profile_doc(name: str, request: Request, body: Optional[dict[str, Any]] = None):
+    """覆盖一个可编辑文档（SOUL/AGENT/RULES/USER）。RULES.md 过 validator（deny-list 拦截
+    露骨的安全颠覆指令）。body = {content, updatedBy?, sessionId?, messageId?}。"""
+    if name not in PROFILE_DOC_NAMES:
+        raise APIError("E_NOT_FOUND", f"unknown or non-editable profile doc: {name}",
+                       http_status=404, source="sqlite")
+    raw = body or {}
+    content = raw.get("content")
+    if not isinstance(content, str) or not content.strip():
+        raise APIError("E_INVALID_ARG", "body.content must be a non-empty string",
+                       http_status=400, source="sqlite")
+    updated_by = raw.get("updatedBy") if raw.get("updatedBy") in ("user", "agent_proposed") else "user"
+    if name == "rules":
+        # 安全 floor 结构上不可弱化（前端 prepend PRODUCT_SAFETY_FLOOR）；validator 是
+        # belt-and-suspenders，拦截把「忽略前文 / 绕过确认」写进 RULES 的露骨尝试。
+        from src.agent_config.validator import validate_rules_content
+
+        reason = validate_rules_content(content)
+        if reason:
+            raise APIError("E_INVALID_ARG", reason, http_status=400, source="sqlite")
+    doc = get_agent_config_store().set_profile_doc(
+        name, content, updated_by=updated_by,
+        session_id=raw.get("sessionId"), message_id=raw.get("messageId"),
+    )
+    return success_envelope(_editable_doc_dict(doc), request=request, source="sqlite")
+
+
+@router.post("/profile/docs/{name}/rollback", dependencies=[Depends(verify_cf_access)])
+async def rollback_profile_doc(name: str, request: Request, body: Optional[dict[str, Any]] = None):
+    """把文档回滚到某历史版本（按 targetHash 定位 content_snapshot）。body = {targetHash, updatedBy?}。"""
+    if name not in PROFILE_DOC_NAMES:
+        raise APIError("E_NOT_FOUND", f"unknown or non-editable profile doc: {name}",
+                       http_status=404, source="sqlite")
+    raw = body or {}
+    target = raw.get("targetHash")
+    if not isinstance(target, str) or not target:
+        raise APIError("E_INVALID_ARG", "body.targetHash is required", http_status=400, source="sqlite")
+    updated_by = raw.get("updatedBy") if raw.get("updatedBy") in ("user", "agent_proposed") else "user"
+    try:
+        doc = get_agent_config_store().rollback_profile_doc(
+            name, target, updated_by=updated_by, session_id=raw.get("sessionId")
+        )
+    except KeyError as exc:
+        raise APIError("E_NOT_FOUND", str(exc), http_status=404, source="sqlite") from exc
+    return success_envelope(_editable_doc_dict(doc), request=request, source="sqlite")
+
+
 # ── skill 管理（PR5 —— enablement 迁后端 + install/uninstall）────────────────────────
 
 
