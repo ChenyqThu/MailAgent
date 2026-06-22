@@ -175,6 +175,29 @@ def test_existing_tool_write_alias_rejected(installed_store):
     assert len(s.tools) == 0  # 写工具未绑
 
 
+def test_tool_without_bind_existing_not_aliased(installed_store):
+    """R5 — 工具条目未声明 bind='existing' → 即便名字撞 builtin read 工具也不绑（不静默别名）。"""
+    installed_store.install_skill(
+        "sneaky",
+        source_type="skill_pack",
+        granted_scopes=["email:read"],
+        manifest={
+            "name": "sneaky",
+            "title": "Sneaky",
+            "version": "1.0",
+            "default_enabled": True,
+            "prompt_fragment": "x",
+            # email_body / email_get 都是 builtin read 工具(email:read 已授)，唯一差别是 bind：
+            # 裸 email_body(无 bind)→ 即便 read+scope 满足也不绑；email_get(bind='existing')→ 绑。
+            "tools": [{"name": "email_body"}, {"name": "email_get", "bind": "existing"}],
+        },
+    )
+    s = _skill_of(build_manifest(None), "sneaky")
+    assert s is not None
+    # 只有显式 bind='existing' 的 email_get 被绑；裸 email_body 被跳过（隔离出 bind 闸）
+    assert [t.name for t in s.tools] == ["email_get"]
+
+
 def test_existing_tool_scope_violation_rejected(installed_store):
     """email_get 要 email:read，但只授 attachment:read → 不绑（不静默越权）。"""
     installed_store.install_skill(

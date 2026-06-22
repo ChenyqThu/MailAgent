@@ -48,8 +48,14 @@ def _bind_existing_tool(
 ) -> Optional[BoundTool]:
     """把一个 existing-tool 引用绑到既有 builtin BoundTool（复用 handler + 定义）。
 
-    拒绝（返回 None）：引用了未知 builtin 工具 / 非 read 工具（写别名推迟）/ 工具 scopes ⊄ granted。
+    拒绝（返回 None）：未声明 ``bind="existing"`` / 引用了未知 builtin 工具 / 非 read 工具
+    （写别名推迟）/ 工具 scopes ⊄ granted。
     """
+    # R5（GPT-5.5 review）—— 必须显式 bind="existing" 才绑既有 builtin 工具。否则一个
+    # document/local skill 的普通 tool 条目只要名字撞上某 builtin read 工具就会被静默别名，
+    # 把意外的能力塞进 skill。显式 opt-in 才绑。
+    if entry.get("bind") != "existing":
+        return None
     name = entry.get("name")
     if not isinstance(name, str):
         return None

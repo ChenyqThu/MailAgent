@@ -177,6 +177,31 @@ def test_install_skill_rejects_builtin_source(tmp_path):
         st.install_skill("x", source_type="builtin")  # builtin 来自代码，不可经 install
 
 
+# R5（GPT-5.5 review）—— skill_name slug + manifest.name 一致性
+def test_install_skill_rejects_invalid_slug(tmp_path):
+    st = _store(tmp_path)
+    for bad in ("Has Space", "UPPER", "with/slash", "包含中文", "9starts-digit", "-leadhyphen", ""):
+        with pytest.raises(ValueError):
+            st.install_skill(bad, source_type="document")
+
+
+def test_install_skill_accepts_valid_slug(tmp_path):
+    st = _store(tmp_path)
+    for good in ("a", "my-notes", "report_helper", "x9", "a" + "b" * 40):
+        st.install_skill(good, source_type="document")  # 不抛
+
+
+def test_install_skill_rejects_manifest_name_mismatch(tmp_path):
+    st = _store(tmp_path)
+    with pytest.raises(ValueError):
+        st.install_skill(
+            "foo", source_type="document", manifest={"name": "bar", "tools": []}
+        )
+    # manifest.name 缺省 或 与 skill_name 相等 → 通过
+    st.install_skill("foo", source_type="document", manifest={"tools": []})
+    st.install_skill("baz", source_type="document", manifest={"name": "baz", "tools": []})
+
+
 def test_set_enabled_lazy_builtin_row(tmp_path):
     st = _store(tmp_path)
     assert st.get_skill("email") is None

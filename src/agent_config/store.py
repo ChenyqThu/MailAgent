@@ -27,6 +27,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import sqlite3
 import time
 from contextlib import contextmanager
@@ -48,6 +49,11 @@ PROJECTION_DOC_NAMES: tuple[str, ...] = ("memory", "skills")
 # 可安装 skill 的来源类型（builtin 来自代码，不算"安装"）。
 INSTALLABLE_SOURCE_TYPES: tuple[str, ...] = ("local_folder", "skill_pack", "document", "mcp")
 ALL_SOURCE_TYPES: tuple[str, ...] = ("builtin",) + INSTALLABLE_SOURCE_TYPES
+
+# R5（GPT-5.5 review）—— skill_name 必须是规范 slug：小写字母开头，[a-z0-9_-]，≤41 字符。
+# 防「名为 foo 的行投影成 manifest skill bar」/ @mention 与 enable/disable 解析漂移 /
+# 含空格·大写·斜杠·unicode 标点的脏名进 registry。
+_SKILL_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,40}$")
 
 # skill 能力变更事件类型（审计）。
 SKILL_EVENTS: tuple[str, ...] = (
@@ -413,6 +419,19 @@ class AgentConfigStore:
         skill_name = (skill_name or "").strip()
         if not skill_name:
             raise ValueError("skill_name is required")
+        # R5 — strict slug + manifest.name agreement (so the registry projection,
+        # @mention parsing, and enable/disable all key off the same canonical name).
+        if not _SKILL_NAME_RE.match(skill_name):
+            raise ValueError(
+                f"skill_name must be a lowercase slug matching {_SKILL_NAME_RE.pattern!r}, "
+                f"got {skill_name!r}"
+            )
+        if manifest is not None:
+            mname = manifest.get("name")
+            if mname is not None and mname != skill_name:
+                raise ValueError(
+                    f"manifest.name ({mname!r}) must be absent or equal skill_name ({skill_name!r})"
+                )
         scopes = self._validate_scopes(granted_scopes)
         manifest_json = (
             json.dumps(manifest, ensure_ascii=False, sort_keys=True) if manifest is not None else None
