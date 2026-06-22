@@ -87,7 +87,7 @@ export function SurfacePickerPopover(): React.ReactElement {
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         className={cn(
           'flex items-center gap-1.5 px-1.5 py-0.5 rounded',
-          'hover:bg-ink-3 hover:text-ink-fg-1 transition-colors duration-fast'
+          'hover:bg-ink-3 hover:text-ink-fg-1 active:bg-ink-4 transition-colors duration-fast'
         )}
       >
         <SurfaceSwatch surface={surface} />

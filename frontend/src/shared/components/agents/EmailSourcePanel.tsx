@@ -4,11 +4,17 @@
 //   • 在收件箱打开 → setActive(id, navTarget) + 导航到 /（豁免 active-reset）
 import { useNavigate } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
+import { useState } from 'react'
 
 import { useActiveEmail } from '@shared/state/active-email'
+import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 import { priorityTone, fmtClock } from './lib'
 import type { ReportEmailItemForPanel } from './lib'
 import { Pip, ReportIcon } from './primitives'
+
+// 内联按钮缺 :active 伪类 → 用 pointer 事件落地 press scale（DESIGN §9.3 / make-interfaces #12）。
+// scale 0.97 ≥ 0.95 红线；调用方须在 style 里把 transform 列进 transition（含 transform，禁 transition:all）。
+const PRESS_SCALE = 'scale(0.97)'
 
 function openExternal(url: string): void {
   const w = window as unknown as {
@@ -29,29 +35,43 @@ export function EmailSourcePanel({
   const { t } = useTranslation()
   const navigate = useNavigate()
   const setActive = useActiveEmail((s) => s.setActive)
-  if (!email) return null
 
-  const tone = priorityTone(email.priority)
-  const notionUrl = email.source?.notion_url || null
+  // 进/退场动效：与同区 ConfigDrawer/SearchConfigDrawer 同配方 —— 遮罩与 aside 同步
+  // 进退（syncBackdrop），退场对称、可中断、自动尊重 reduced-motion。open 由 email!==null
+  // 驱动；退场期间 email→null，须保留最后一份非空 email 渲染，否则解构会崩。
+  const open = email !== null
+  const { shouldRender, scopeRef } = useExitAnimation<HTMLDivElement>(open, {
+    card: 'aside',
+    from: { autoAlpha: 0, xPercent: 100 },
+    syncBackdrop: true
+  })
+  const [shown, setShown] = useState<ReportEmailItemForPanel | null>(email)
+  if (email && email !== shown) setShown(email)
+
+  if (!shouldRender || !shown) return null
+
+  const tone = priorityTone(shown.priority)
+  const notionUrl = shown.source?.notion_url || null
   const avatar =
-    (email.sender_name || '?')
+    (shown.sender_name || '?')
       .replace(/[^\p{L}\p{N}]/gu, '')
       .slice(0, 2)
       .toUpperCase() || '?'
 
   const openInbox = (): void => {
-    setActive(email.internal_id, { navTarget: true })
+    setActive(shown.internal_id, { navTarget: true })
     void navigate({ to: '/' })
     onClose()
   }
 
   return (
-    <>
-      <div
-        onClick={onClose}
-        style={{ position: 'absolute', inset: 0, zIndex: 60, background: 'rgb(0 0 0 / 0.4)' }}
-      />
+    <div
+      ref={scopeRef}
+      onClick={onClose}
+      style={{ position: 'absolute', inset: 0, zIndex: 60, background: 'rgb(0 0 0 / 0.4)' }}
+    >
       <aside
+        onClick={(e) => e.stopPropagation()}
         style={{
           position: 'absolute',
           top: 0,
@@ -114,7 +134,7 @@ export function EmailSourcePanel({
                   letterSpacing: '-0.01em'
                 }}
               >
-                {email.subject || t('agents.source.noSubject')}
+                {shown.subject || t('agents.source.noSubject')}
               </h3>
               <div className="flex items-center" style={{ gap: 8, marginTop: 9 }}>
                 <span
@@ -129,16 +149,17 @@ export function EmailSourcePanel({
                     fontWeight: 600,
                     color: 'rgb(var(--ink-fg-1))',
                     background: 'rgb(var(--ink-4))',
-                    border: '1px solid rgb(var(--ink-border))'
+                    // #11 类图片方块用中性低透明描边（ink-fg/0.10 暗亮自动取中性黑白）。
+                    border: '1px solid rgb(var(--ink-fg) / 0.10)'
                   }}
                 >
                   {avatar}
                 </span>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 13.5, fontWeight: 500, color: 'rgb(var(--ink-fg))' }}>
-                    {email.sender_name}
+                    {shown.sender_name}
                   </div>
-                  {email.sender_addr && (
+                  {shown.sender_addr && (
                     <div
                       style={{
                         fontSize: 12,
@@ -146,7 +167,7 @@ export function EmailSourcePanel({
                         fontFamily: 'ui-monospace, monospace'
                       }}
                     >
-                      {email.sender_addr}
+                      {shown.sender_addr}
                     </div>
                   )}
                 </div>
@@ -157,7 +178,7 @@ export function EmailSourcePanel({
                     color: 'rgb(var(--ink-fg-3))'
                   }}
                 >
-                  {fmtClock(email.time)}
+                  {fmtClock(shown.time)}
                 </span>
               </div>
             </div>
@@ -187,7 +208,7 @@ export function EmailSourcePanel({
                 {t('agents.source.aiFields')}
               </div>
               <div style={{ padding: 13, display: 'flex', flexDirection: 'column', gap: 11 }}>
-                {email.ai_summary && (
+                {shown.ai_summary && (
                   <div>
                     <div
                       style={{
@@ -201,16 +222,16 @@ export function EmailSourcePanel({
                       {t('agents.source.summary')}
                     </div>
                     <p style={{ fontSize: 13.5, lineHeight: 1.6, color: 'rgb(var(--ink-fg-1))' }}>
-                      {email.ai_summary}
+                      {shown.ai_summary}
                     </p>
                   </div>
                 )}
                 <div className="flex items-center flex-wrap" style={{ gap: 8 }}>
-                  {email.priority && <Pip tone={tone}>{email.priority}</Pip>}
-                  {email.category && <Pip tone="neutral">{email.category}</Pip>}
-                  {email.ai_action && (
+                  {shown.priority && <Pip tone={tone}>{shown.priority}</Pip>}
+                  {shown.category && <Pip tone="neutral">{shown.category}</Pip>}
+                  {shown.ai_action && (
                     <span style={{ fontSize: 12, color: 'rgb(var(--ink-fg-2))' }}>
-                      · {email.ai_action}
+                      · {shown.ai_action}
                     </span>
                   )}
                 </div>
@@ -236,7 +257,7 @@ export function EmailSourcePanel({
               flex: 1
             }}
           >
-            #{email.internal_id}
+            #{shown.internal_id}
           </span>
           {notionUrl && (
             <button
@@ -252,8 +273,12 @@ export function EmailSourcePanel({
                 cursor: 'pointer',
                 color: 'rgb(var(--ink-fg-1))',
                 background: 'transparent',
-                border: '1px solid rgb(var(--ink-border))'
+                border: '1px solid rgb(var(--ink-border))',
+                transition: 'transform 120ms cubic-bezier(0.4,0,0.2,1)'
               }}
+              onMouseDown={(e) => (e.currentTarget.style.transform = PRESS_SCALE)}
+              onMouseUp={(e) => (e.currentTarget.style.transform = 'none')}
+              onMouseLeave={(e) => (e.currentTarget.style.transform = 'none')}
             >
               <ReportIcon name="external" size={13} />
               {t('agents.source.openNotion')}
@@ -273,13 +298,22 @@ export function EmailSourcePanel({
               cursor: 'pointer',
               color: 'rgb(var(--c-accent-fg))',
               background: 'rgb(var(--c-accent-dim))',
-              border: 0
+              border: 0,
+              transition:
+                'background-color 120ms cubic-bezier(0.4,0,0.2,1), transform 120ms cubic-bezier(0.4,0,0.2,1)'
             }}
             onMouseEnter={(e) => {
               e.currentTarget.style.background = 'rgb(var(--c-accent))'
             }}
+            onMouseDown={(e) => {
+              e.currentTarget.style.transform = PRESS_SCALE
+            }}
+            onMouseUp={(e) => {
+              e.currentTarget.style.transform = 'none'
+            }}
             onMouseLeave={(e) => {
               e.currentTarget.style.background = 'rgb(var(--c-accent-dim))'
+              e.currentTarget.style.transform = 'none'
             }}
           >
             <ReportIcon name="inbox" size={13} />
@@ -287,6 +321,6 @@ export function EmailSourcePanel({
           </button>
         </footer>
       </aside>
-    </>
+    </div>
   )
 }

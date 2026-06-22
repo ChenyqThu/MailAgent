@@ -256,7 +256,10 @@ function Stepper({
   canInc: boolean
 }): React.ReactElement {
   const btn = cn(
-    'inline-flex size-7 items-center justify-center rounded-md border border-ink-border-soft',
+    'relative inline-flex size-7 items-center justify-center rounded-md border border-ink-border-soft',
+    // #16: 视觉保持 28px，伪元素把命中域扩到 40×40（28+12）；下方 gap 提到
+    // gap-3(12px) 让相邻 +/− 两按钮的扩展区刚好相接而不重叠。
+    'after:absolute after:-inset-1.5 after:content-[""]',
     'text-ink-fg-1 hover:bg-ink-fg/[0.06] transition-colors duration-fast',
     'disabled:opacity-40 disabled:pointer-events-none',
     'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70'
@@ -267,7 +270,7 @@ function Stepper({
         <div className="text-aux font-medium text-ink-fg">{label}</div>
         <div className="text-meta text-ink-fg-2 mt-0.5">{meta}</div>
       </div>
-      <div className="inline-flex items-center gap-1.5 shrink-0">
+      <div className="inline-flex items-center gap-3 shrink-0">
         <button
           type="button"
           aria-label="decrease"

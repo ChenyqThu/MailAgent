@@ -116,7 +116,7 @@ function SidebarFolderRow({
               ? 'opacity-50 cursor-not-allowed text-ink-fg-2'
               : selected
                 ? 'row-selected acc-select text-ink-fg font-medium'
-                : 'text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg'
+                : 'text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg active:bg-ink-4'
           )}
         >
           {/* expand chevron — 仅父节点; <span> 非 app-nav-keep, 收起态自动隐藏。 */}
@@ -133,7 +133,10 @@ function SidebarFolderRow({
                 e.stopPropagation()
                 onToggleExpand(node.imapName)
               }}
-              className="shrink-0 -ml-1 inline-flex items-center justify-center w-4 h-4 rounded text-ink-fg-2 hover:text-ink-fg"
+              // #16 命中区扩展 — 视觉仍 16px，但 ::before 把可点区域纵向撑到
+              // 整行高度、横向 +4px，不放大可见 swatch 故不压到父行选中左光条
+              // (row-selected::before left:-8px) 也不与父行选中区视觉重合。
+              className="shrink-0 -ml-1 relative inline-flex items-center justify-center w-4 h-4 rounded text-ink-fg-2 hover:text-ink-fg before:absolute before:-inset-y-1 before:-inset-x-0.5 before:content-['']"
             >
               <ChevronRight
                 size={12}
@@ -289,7 +292,7 @@ export function SidebarFolderTree(): React.ReactElement | null {
         <button
           type="button"
           onClick={() => setShowAll((s) => !s)}
-          className="row w-full flex items-center gap-2.5 px-2 py-1 rounded-md text-body text-left text-ink-fg-2 hover:bg-ink-3 hover:text-ink-fg transition-colors duration-fast"
+          className="row w-full flex items-center gap-2.5 px-2 py-1 rounded-md text-body text-left text-ink-fg-2 hover:bg-ink-3 hover:text-ink-fg active:bg-ink-4 transition-colors duration-fast"
         >
           {showAll ? (
             <ChevronDown size={13} strokeWidth={2} className="shrink-0 rotate-180" />

@@ -26,6 +26,27 @@ import {
   SelectValue
 } from '@shared/components/ui/select'
 
+// 内联按钮缺 :active 伪类 → 用 pointer 事件落地 press scale（DESIGN §9.3 / make-interfaces #12）。
+// scale 0.97 ≥ 0.95 红线；调用方须在 style 里把 transform 列进 transition（含 transform，禁 transition:all）。
+const PRESS_SCALE = 'scale(0.97)'
+function pressHandlers(scale = PRESS_SCALE): {
+  onMouseDown: (e: React.MouseEvent<HTMLElement>) => void
+  onMouseUp: (e: React.MouseEvent<HTMLElement>) => void
+  onMouseLeave: (e: React.MouseEvent<HTMLElement>) => void
+} {
+  return {
+    onMouseDown: (e) => {
+      e.currentTarget.style.transform = scale
+    },
+    onMouseUp: (e) => {
+      e.currentTarget.style.transform = 'none'
+    },
+    onMouseLeave: (e) => {
+      e.currentTarget.style.transform = 'none'
+    }
+  }
+}
+
 const HOUR_OPTIONS = [6, 7, 8, 9, 10, 12, 18, 21]
 // weekday：与后端 worker.py 一致，Python datetime.weekday() 口径 0=周一 … 6=周日。
 const WEEKDAY_OPTIONS = [0, 1, 2, 3, 4, 5, 6]
@@ -262,13 +283,22 @@ function AgentCard({
             cursor: isRunning ? 'wait' : 'pointer',
             color: 'rgb(var(--c-cta-fg))',
             background: 'rgb(var(--c-cta-bg))',
-            border: 0
+            border: 0,
+            transition:
+              'background-color 120ms cubic-bezier(0.4,0,0.2,1), transform 120ms cubic-bezier(0.4,0,0.2,1)'
           }}
           onMouseEnter={(e) => {
             if (!isRunning) e.currentTarget.style.background = 'rgb(var(--c-cta-bg-hover))'
           }}
+          onMouseDown={(e) => {
+            if (!isRunning) e.currentTarget.style.transform = PRESS_SCALE
+          }}
+          onMouseUp={(e) => {
+            e.currentTarget.style.transform = 'none'
+          }}
           onMouseLeave={(e) => {
             e.currentTarget.style.background = 'rgb(var(--c-cta-bg))'
+            e.currentTarget.style.transform = 'none'
           }}
         >
           {isRunning ? (
@@ -298,10 +328,17 @@ function AgentCard({
             cursor: 'pointer',
             color: 'rgb(var(--ink-fg-1))',
             background: 'transparent',
-            border: '1px solid rgb(var(--ink-border))'
+            border: '1px solid rgb(var(--ink-border))',
+            transition:
+              'background-color 120ms cubic-bezier(0.4,0,0.2,1), transform 120ms cubic-bezier(0.4,0,0.2,1)'
           }}
           onMouseEnter={(e) => (e.currentTarget.style.background = 'rgb(var(--ink-4))')}
-          onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+          onMouseDown={(e) => (e.currentTarget.style.transform = PRESS_SCALE)}
+          onMouseUp={(e) => (e.currentTarget.style.transform = 'none')}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = 'transparent'
+            e.currentTarget.style.transform = 'none'
+          }}
         >
           <ReportIcon name="cog" size={14} />
           {t('agents.card.configure')}
@@ -450,8 +487,7 @@ export function ConfigDrawer({
     background: 'rgb(var(--ink-1) / 0.55)',
     border: '1px solid rgb(var(--ink-border))',
     borderRadius: 8,
-    padding: '9px 11px',
-    outline: 'none'
+    padding: '9px 11px'
   }
 
   const onSave = (): void => {
@@ -725,7 +761,8 @@ export function ConfigDrawer({
                               ? 'rgb(var(--c-accent) / 0.14)'
                               : 'rgb(var(--ink-1) / 0.5)',
                             border: `1px solid ${on ? 'rgb(var(--c-accent))' : 'rgb(var(--ink-border))'}`,
-                            transition: 'all 120ms'
+                            transition:
+                              'color 120ms cubic-bezier(0.4,0,0.2,1), background-color 120ms cubic-bezier(0.4,0,0.2,1), border-color 120ms cubic-bezier(0.4,0,0.2,1)'
                           }}
                         >
                           {p}
@@ -852,13 +889,22 @@ export function ConfigDrawer({
               cursor: isSaving ? 'wait' : 'pointer',
               color: 'rgb(var(--c-cta-fg))',
               background: 'rgb(var(--c-cta-bg))',
-              border: 0
+              border: 0,
+              transition:
+                'background-color 120ms cubic-bezier(0.4,0,0.2,1), transform 120ms cubic-bezier(0.4,0,0.2,1)'
             }}
             onMouseEnter={(e) => {
               if (!isSaving) e.currentTarget.style.background = 'rgb(var(--c-cta-bg-hover))'
             }}
+            onMouseDown={(e) => {
+              if (!isSaving) e.currentTarget.style.transform = PRESS_SCALE
+            }}
+            onMouseUp={(e) => {
+              e.currentTarget.style.transform = 'none'
+            }}
             onMouseLeave={(e) => {
               e.currentTarget.style.background = 'rgb(var(--c-cta-bg))'
+              e.currentTarget.style.transform = 'none'
             }}
           >
             {t('agents.config.save')}
@@ -885,14 +931,23 @@ function SearchAgentCard({
     void save(cfg.id, { enabled: v })
   }
   return (
-    <button
-      type="button"
+    <div
+      role="button"
+      tabIndex={0}
       onClick={onConfig}
+      onKeyDown={(e) => {
+        // 只响应卡片本身的键盘激活；焦点在内嵌 Switch 上的 Enter/Space 由 Switch
+        // 处理，不应冒泡触发开抽屉。
+        if (e.target !== e.currentTarget) return
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          onConfig()
+        }
+      }}
       className="flex items-center"
       style={{
         width: '100%',
         textAlign: 'left',
-        fontFamily: 'inherit',
         cursor: 'pointer',
         gap: 13,
         padding: '18px 20px',
@@ -959,12 +1014,13 @@ function SearchAgentCard({
           {cfg.model || t('agents.config.model')}
         </div>
       </div>
-      {/* span wrapper：开关是按钮内嵌按钮（HTML 不允许 button>button），用 div 承载
-          role=switch 的 Switch + stopPropagation 防止点开关连带开抽屉。 */}
+      {/* 外层卡是 div role=button（非 <button>），故内嵌 Switch 的 role=switch button
+          合法（HTML 不允许 button>button — 早期用 <button> 卡套 Switch 会触发
+          hydration error）；span stopPropagation 防止点开关连带触发卡片 onConfig（开抽屉）。 */}
       <span onClick={(e) => e.stopPropagation()} style={{ display: 'flex', flexShrink: 0 }}>
         <Switch on={cfg.enabled} onChange={toggle} />
       </span>
-    </button>
+    </div>
   )
 }
 
@@ -1063,8 +1119,7 @@ export function SearchConfigDrawer({
     background: 'rgb(var(--ink-1) / 0.55)',
     border: '1px solid rgb(var(--ink-border))',
     borderRadius: 8,
-    padding: '9px 11px',
-    outline: 'none'
+    padding: '9px 11px'
   }
 
   const toggleTool = (tool: string): void => {
@@ -1284,7 +1339,8 @@ export function SearchConfigDrawer({
                         color: on ? 'rgb(var(--c-accent))' : 'rgb(var(--ink-fg-2))',
                         background: on ? 'rgb(var(--c-accent) / 0.14)' : 'rgb(var(--ink-1) / 0.5)',
                         border: `1px solid ${on ? 'rgb(var(--c-accent))' : 'rgb(var(--ink-border))'}`,
-                        transition: 'all 120ms'
+                        transition:
+                          'color 120ms cubic-bezier(0.4,0,0.2,1), background-color 120ms cubic-bezier(0.4,0,0.2,1), border-color 120ms cubic-bezier(0.4,0,0.2,1)'
                       }}
                     >
                       {t(`agents.search.tool.${tool}`)}
@@ -1339,8 +1395,10 @@ export function SearchConfigDrawer({
                     cursor: busy ? 'wait' : 'pointer',
                     color: 'rgb(var(--c-fail))',
                     background: 'rgb(var(--c-fail) / 0.12)',
-                    border: '1px solid rgb(var(--c-fail) / 0.3)'
+                    border: '1px solid rgb(var(--c-fail) / 0.3)',
+                    transition: 'transform 120ms cubic-bezier(0.4,0,0.2,1)'
                   }}
+                  {...pressHandlers()}
                 >
                   {t('agents.search.deleteConfirm')}
                 </button>
@@ -1367,8 +1425,10 @@ export function SearchConfigDrawer({
                   cursor: 'pointer',
                   color: 'rgb(var(--c-fail))',
                   background: 'transparent',
-                  border: '1px solid rgb(var(--c-fail) / 0.3)'
+                  border: '1px solid rgb(var(--c-fail) / 0.3)',
+                  transition: 'transform 120ms cubic-bezier(0.4,0,0.2,1)'
                 }}
+                {...pressHandlers()}
               >
                 <ReportIcon name="x" size={14} />
                 {t('agents.search.delete')}
@@ -1396,13 +1456,22 @@ export function SearchConfigDrawer({
               cursor: busy ? 'wait' : 'pointer',
               color: 'rgb(var(--c-cta-fg))',
               background: 'rgb(var(--c-cta-bg))',
-              border: 0
+              border: 0,
+              transition:
+                'background-color 120ms cubic-bezier(0.4,0,0.2,1), transform 120ms cubic-bezier(0.4,0,0.2,1)'
             }}
             onMouseEnter={(e) => {
               if (!busy) e.currentTarget.style.background = 'rgb(var(--c-cta-bg-hover))'
             }}
+            onMouseDown={(e) => {
+              if (!busy) e.currentTarget.style.transform = PRESS_SCALE
+            }}
+            onMouseUp={(e) => {
+              e.currentTarget.style.transform = 'none'
+            }}
             onMouseLeave={(e) => {
               e.currentTarget.style.background = 'rgb(var(--c-cta-bg))'
+              e.currentTarget.style.transform = 'none'
             }}
           >
             {create ? t('agents.search.create') : t('agents.config.save')}

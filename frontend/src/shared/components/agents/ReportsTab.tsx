@@ -20,6 +20,23 @@ import {
 } from './lib'
 import { useDeleteReport, useNarrow, useReport, useReportList, useRunNow } from './hooks'
 
+// 内联按钮缺 :active 伪类 → 用 pointer 事件落地 press scale（DESIGN §9.3 / make-interfaces #12）。
+// scale 0.97 ≥ 0.95 红线；调用方须在 style 里把 transform 列进 transition（含 transform，禁 transition:all）。
+const PRESS_SCALE = 'scale(0.97)'
+function pressHandlers(): {
+  onMouseDown: (e: React.MouseEvent<HTMLElement>) => void
+  onMouseUp: (e: React.MouseEvent<HTMLElement>) => void
+} {
+  return {
+    onMouseDown: (e) => {
+      e.currentTarget.style.transform = PRESS_SCALE
+    },
+    onMouseUp: (e) => {
+      e.currentTarget.style.transform = 'none'
+    }
+  }
+}
+
 const WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
 const CADENCE_FILTERS: Array<[string, string]> = [
   ['all', '全部'],
@@ -369,7 +386,12 @@ function FailedState({
           cursor: retrying ? 'wait' : 'pointer',
           color: 'rgb(var(--c-accent))',
           background: 'rgb(var(--c-accent) / 0.10)',
-          border: '1px solid rgb(var(--c-accent) / 0.30)'
+          border: '1px solid rgb(var(--c-accent) / 0.30)',
+          transition: 'transform 120ms cubic-bezier(0.4,0,0.2,1)'
+        }}
+        {...pressHandlers()}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.transform = 'none'
         }}
       >
         <span className={retrying ? 'spin' : undefined} style={{ display: 'flex' }}>
@@ -478,13 +500,22 @@ function ReportDetailView({
               color: 'rgb(var(--ink-fg-2))',
               background: 'transparent',
               border: 0,
-              cursor: retrying ? 'wait' : 'pointer'
+              cursor: retrying ? 'wait' : 'pointer',
+              transition:
+                'color 120ms cubic-bezier(0.4,0,0.2,1), transform 120ms cubic-bezier(0.4,0,0.2,1)'
             }}
             onMouseEnter={(e) => {
               e.currentTarget.style.color = 'rgb(var(--c-accent))'
             }}
+            onMouseDown={(e) => {
+              e.currentTarget.style.transform = PRESS_SCALE
+            }}
+            onMouseUp={(e) => {
+              e.currentTarget.style.transform = 'none'
+            }}
             onMouseLeave={(e) => {
               e.currentTarget.style.color = 'rgb(var(--ink-fg-2))'
+              e.currentTarget.style.transform = 'none'
             }}
           >
             <span className={retrying ? 'spin' : undefined} style={{ display: 'flex' }}>

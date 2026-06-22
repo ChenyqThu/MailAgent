@@ -1098,7 +1098,7 @@ export function CommandPalette(): React.ReactElement | null {
         {/* Parse warnings — 字段语法被忽略/降级时给可见反馈（T0） */}
         {hasQuery && parseWarnings.length > 0 && (
           <div className="px-4 py-1.5 flex items-start gap-1.5 border-b border-ink-border-soft text-micro text-ink-fg-2 shrink-0">
-            <AlertTriangle size={12} strokeWidth={2} className="mt-px shrink-0 text-amber-500" />
+            <AlertTriangle size={12} strokeWidth={2} className="mt-px shrink-0 text-warn" />
             <span className="leading-snug">
               {parseWarnings.map((w) => formatWarning(w)).join('；')}
             </span>
@@ -1108,7 +1108,7 @@ export function CommandPalette(): React.ReactElement | null {
         {/* F3 — AI 检索失败 banner（无 key / 超时 / 配额 / agent 出错 / web 不支持）。 */}
         {aiError && (
           <div className="px-4 py-1.5 flex items-start gap-1.5 border-b border-ink-border-soft text-micro text-ink-fg-2 shrink-0">
-            <AlertTriangle size={12} strokeWidth={2} className="mt-px shrink-0 text-amber-500" />
+            <AlertTriangle size={12} strokeWidth={2} className="mt-px shrink-0 text-warn" />
             <span className="leading-snug flex-1 min-w-0">{aiError}</span>
             <button
               type="button"

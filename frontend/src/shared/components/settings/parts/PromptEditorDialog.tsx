@@ -107,7 +107,7 @@ export function PromptEditorDialog({ slot, open, onClose }: Props): React.ReactE
               setDirty(true)
             }}
             spellCheck={false}
-            className="w-full min-h-[480px] max-h-[60vh] resize-y rounded-md border border-ink-border-soft bg-ink-2/40 p-3 font-mono text-aux text-ink-fg leading-relaxed focus:outline-none focus:ring-1 focus:ring-coral/70"
+            className="w-full min-h-[480px] max-h-[60vh] resize-y rounded-md border border-ink-border-soft bg-ink-2/40 p-3 font-mono text-aux text-ink-fg leading-relaxed focus:outline-none focus-visible:ring-2 focus-visible:ring-coral/70"
             placeholder={t('settings.ai.prompts.placeholder')}
           />
         )}

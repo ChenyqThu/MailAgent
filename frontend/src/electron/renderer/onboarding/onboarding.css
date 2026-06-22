@@ -94,7 +94,10 @@
   border: 1.5px solid rgb(var(--ink-border));
   color: rgb(var(--ink-fg-2));
   background: rgb(var(--ink-2));
-  transition: all var(--dur-base) var(--ease-standard);
+  transition: background-color var(--dur-base) var(--ease-standard),
+    border-color var(--dur-base) var(--ease-standard),
+    color var(--dur-base) var(--ease-standard),
+    box-shadow var(--dur-base) var(--ease-standard);
 }
 .ob .step-item .lbl {
   font-size: 13.5px;
@@ -149,7 +152,8 @@
   border-radius: 50%;
   background: rgb(var(--ink-4));
   flex-shrink: 0;
-  transition: all var(--dur-base) var(--ease-standard);
+  transition: background-color var(--dur-base) var(--ease-standard),
+    box-shadow var(--dur-base) var(--ease-standard);
 }
 .ob .ts-bead.done {
   background: rgb(var(--c-accent) / 0.55);
@@ -341,7 +345,8 @@
   border-radius: 999px;
   font-size: 13px;
   cursor: pointer;
-  transition: all var(--dur-fast);
+  transition: background-color var(--dur-fast), border-color var(--dur-fast),
+    color var(--dur-fast), transform var(--dur-fast);
   border: 1px solid rgb(var(--ink-border));
   background: rgb(var(--ink-3));
   color: rgb(var(--ink-fg-1));
@@ -350,6 +355,9 @@
 .ob .chip-sel:hover {
   border-color: rgb(var(--ink-fg-3));
   color: rgb(var(--ink-fg));
+}
+.ob .chip-sel:active {
+  transform: scale(0.97);
 }
 .ob .chip-sel.on {
   background: rgb(var(--c-accent) / 0.14);
@@ -370,11 +378,17 @@
   border-radius: 9px;
   padding: 15px 16px;
   cursor: pointer;
-  transition: all var(--dur-base) var(--ease-standard);
+  transition: border-color var(--dur-base) var(--ease-standard),
+    background-color var(--dur-base) var(--ease-standard),
+    box-shadow var(--dur-base) var(--ease-standard),
+    transform var(--dur-base) var(--ease-standard);
   position: relative;
 }
 .ob .opt-card:hover {
   border-color: rgb(var(--ink-fg-3));
+}
+.ob .opt-card:active {
+  transform: scale(0.99);
 }
 .ob .opt-card.on {
   border-color: rgb(var(--c-accent) / 0.7);
@@ -388,7 +402,7 @@
   border: 1.5px solid rgb(var(--ink-fg-3));
   flex-shrink: 0;
   position: relative;
-  transition: all var(--dur-fast);
+  transition: border-color var(--dur-fast);
 }
 .ob .opt-card.on .opt-radio {
   border-color: rgb(var(--c-accent));
@@ -410,7 +424,7 @@
   border-radius: 8px;
   background: rgb(var(--ink-2));
   border: 1px solid rgb(var(--ink-border-soft));
-  transition: all var(--dur-base);
+  transition: background-color var(--dur-base), border-color var(--dur-base);
 }
 .ob .chk-icon {
   width: 22px;
@@ -580,7 +594,8 @@
   font-weight: 600;
   border: 0;
   cursor: pointer;
-  transition: all var(--dur-fast);
+  transition: background-color var(--dur-fast), color var(--dur-fast),
+    transform var(--dur-fast);
 }
 .ob .btn-primary:hover {
   background: rgb(var(--c-accent-hi));
@@ -604,12 +619,16 @@
   font-size: 14px;
   border: 1px solid rgb(var(--ink-border));
   cursor: pointer;
-  transition: all var(--dur-fast);
+  transition: background-color var(--dur-fast), color var(--dur-fast),
+    border-color var(--dur-fast);
 }
 .ob .btn-sec:hover {
   background: rgb(var(--ink-3));
   color: rgb(var(--ink-fg));
   border-color: rgb(var(--ink-fg-3));
+}
+.ob .btn-sec:active {
+  background: rgb(var(--ink-4));
 }
 .ob .btn-link {
   background: none;
@@ -621,6 +640,9 @@
   transition: color var(--dur-fast);
 }
 .ob .btn-link:hover {
+  color: rgb(var(--ink-fg));
+}
+.ob .btn-link:active {
   color: rgb(var(--ink-fg));
 }
 
@@ -677,5 +699,10 @@
   }
   .ob * {
     transition-duration: 0.01ms !important;
+  }
+  .ob .btn-primary:active,
+  .ob .chip-sel:active,
+  .ob .opt-card:active {
+    transform: none;
   }
 }

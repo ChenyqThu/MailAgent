@@ -739,7 +739,10 @@ mark {
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  transition: all 0.12s ease;
+  transition:
+    background 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+    border-color 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+    transform 0.12s cubic-bezier(0.4, 0, 0.2, 1);
   cursor: pointer;
 }
 /* hover = 预选提示 (浅 accent tint + 高亮边框), 与 .cb-on 实心选中态明确区分 —
@@ -747,6 +750,9 @@ mark {
 .cb:hover {
   border-color: rgb(var(--c-accent) / 0.6);
   background: rgb(var(--c-accent) / 0.12);
+}
+.cb:active {
+  transform: scale(0.95);
 }
 .cb-on {
   border-color: rgb(var(--c-accent));
@@ -950,10 +956,17 @@ body::before {
     inset 0 1px 0 rgb(255 255 255 / 0.22),
     0 1px 3px rgb(0 0 0 / 0.35),
     0 0 18px var(--acc-glow);
+  /* 红线: 永不 transition filter — 只把 transform 纳入过渡, brightness hover
+     维持「即时态」不进 transition。 */
+  transition: transform 0.12s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .btn-cta:hover:not(:disabled),
 .acc-cta:hover {
   filter: brightness(1.08);
+}
+.btn-cta:active:not(:disabled),
+.acc-cta:active {
+  transform: scale(0.98);
 }
 
 /* 选中行 / 选中邮箱 — 向右衰减的 accent wash (左光条配方见 .acc-bar;
@@ -1153,10 +1166,13 @@ body::before {
   box-shadow:
     0 0 0 1px rgba(0, 0, 0, 0.25),
     0 1px 2px rgba(0, 0, 0, 0.2);
-  transition: transform 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: transform 0.12s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .swatch:hover {
   transform: scale(1.06);
+}
+.swatch:active {
+  transform: scale(0.97);
 }
 .swatch[aria-checked='true'] {
   box-shadow:
@@ -1228,7 +1244,10 @@ body::before {
 .app-nav[data-collapsed='true'] .app-nav-bottom button {
   justify-content: center;
   padding-inline: 0.25rem;
-  padding-block: 0.5rem;
+  /* #16: 收起态 icon-only rail 行补到 ≥40px 命中区 (10px + 19px icon ≈ 39px,
+   * 配 min-height 钉死), 与 compose-btn 收起态 40×40 对齐。 */
+  padding-block: 0.625rem;
+  min-height: 40px;
 }
 /* Slightly larger icons when collapsed — easier hit target + compensates
  * for the missing label. CSS width on <svg> overrides any inline width.
@@ -1340,6 +1359,9 @@ body::before {
   }
   .swatch {
     transition: none;
+  }
+  .swatch:active {
+    transform: none;
   }
 }
 
@@ -1814,10 +1836,14 @@ body:not([data-batch-mode='true']) .email-row .cb {
   transition:
     color 0.12s cubic-bezier(0.4, 0, 0.2, 1),
     background 0.12s cubic-bezier(0.4, 0, 0.2, 1),
-    opacity 0.12s cubic-bezier(0.4, 0, 0.2, 1);
+    opacity 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+    transform 0.12s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .row-actions .ricon:hover {
   background: rgb(var(--ink-4) / 0.7);
+}
+.row-actions .ricon:active {
+  transform: scale(0.96);
 }
 .row-actions .ricon svg {
   /* CSS 是 icon sizing 的 SSoT — inline SVG 不再带 width/height attr
@@ -1904,6 +1930,9 @@ body:not([data-batch-mode='true']) .email-row .cb {
 .email-row:hover .ricon-delete {
   opacity: 1;
   transform: translateY(0);
+}
+.ricon-delete:active {
+  transform: translateY(0) scale(0.96);
 }
 .ricon-delete:hover {
   color: #e5634f;
@@ -2314,13 +2343,22 @@ body:not([data-batch-mode='true']) .email-row .cb {
   color: rgb(var(--ink-fg-1));
   background: rgb(var(--ink-fg) / 0.04);
   border: 1px solid rgb(var(--ink-border));
-  transition: all 0.12s;
+  /* #14: 确切属性含 transform (勿 all) — hover 动 bg/color/border, press 动
+   * transform。 */
+  transition:
+    background-color 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+    color 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+    border-color 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+    transform 0.12s cubic-bezier(0.4, 0, 0.2, 1);
   cursor: pointer;
 }
 .qchip:hover {
   background: rgb(var(--ink-fg) / 0.08);
   color: rgb(var(--ink-fg));
   border-color: rgb(var(--ink-fg-3));
+}
+.qchip:active {
+  transform: scale(0.97);
 }
 
 /* Draft preview card — coral ring + faint glow because the draft IS the
@@ -2535,7 +2573,9 @@ body:not([data-batch-mode='true']) .email-row .cb {
 .wk-dayhead.is-today .wk-dn {
   background: rgb(var(--c-accent));
   color: rgb(var(--c-accent-fg));
-  border-radius: 8px;
+  /* today 高亮 pill 圆角与 month 视图 .nday 取齐 (#1: 同一 today 语义→同一
+   * 形状), 均落 chip 档 6px; 尺寸各自保留不动。 */
+  border-radius: 6px;
 }
 
 /* all-day strip */
@@ -2628,7 +2668,7 @@ body:not([data-batch-mode='true']) .email-row .cb {
   text-align: left;
 }
 .evt:hover { background: rgb(var(--c-accent) / 0.22); z-index: 5; }
-.evt:active { transform: scale(0.99); }
+.evt:active { transform: scale(0.98); }
 .evt .e-time {
   font-family: ui-monospace, 'SF Mono', monospace;
   font-size: 10.5px;
@@ -2751,6 +2791,7 @@ body:not([data-batch-mode='true']) .email-row .cb {
 }
 .mm-nav { display: flex; gap: 2px; }
 .mm-nav button {
+  position: relative;
   width: 22px;
   height: 22px;
   display: inline-flex;
@@ -2761,6 +2802,13 @@ body:not([data-batch-mode='true']) .email-row .cb {
   background: transparent;
   border: 0;
   cursor: pointer;
+}
+/* 视觉保持 22×22, 伪元素把可点区扩到 ~36px (#16, rail 250px 宽 40 会顶到
+ * mm-title, 36 是该上下文上限); 两箭头 gap 2px, inset -7 后 hit area 不重叠。 */
+.mm-nav button::after {
+  content: '';
+  position: absolute;
+  inset: -7px;
 }
 .mm-nav button:hover {
   background: rgb(var(--ink-3) / 0.7);
@@ -3374,11 +3422,18 @@ body:not([data-batch-mode='true']) .email-row .cb {
   gap: 5px;
   padding: 0 8px;
   font-family: inherit;
-  transition: background 0.12s, border-color 0.12s, color 0.12s;
+  transition:
+    background 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+    border-color 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+    color 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+    transform 0.12s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .dw-act:hover:not(:disabled):not([data-current='true']) {
   background: rgb(var(--ink-3) / 0.85);
   border-color: rgb(var(--ink-border) / 1.4);
+}
+.dw-act:active:not(:disabled) {
+  transform: scale(0.98);
 }
 .dw-act:disabled {
   opacity: 0.55;
@@ -3508,7 +3563,12 @@ body:not([data-batch-mode='true']) .email-row .cb {
   border: 1px solid rgb(var(--ink-border));
   background: rgb(var(--ink-2) / 0.5);
   cursor: pointer;
-  transition: all 0.12s;
+  /* #14: 确切属性 (勿 all) — 只动 bg/border/color, 不含 width 防 inline width
+   * 变化被卷入过渡。 */
+  transition:
+    background 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+    border-color 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+    color 0.12s cubic-bezier(0.4, 0, 0.2, 1);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -3528,7 +3588,12 @@ body:not([data-batch-mode='true']) .email-row .cb {
   border: 1px solid rgb(var(--ink-border));
   background: rgb(var(--ink-2) / 0.5);
   cursor: pointer;
-  transition: all 0.12s;
+  /* #14: 确切属性 (勿 all) — toolbar 内此钮被 inline style 改 width (calendar-
+   * filter / sync), 过渡列表务必不含 width 否则首帧宽度动画。 */
+  transition:
+    background 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+    border-color 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+    color 0.12s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .nav-btn:hover { background: rgb(var(--ink-3)); color: rgb(var(--ink-fg)); }
 .nav-btn:disabled { opacity: 0.5; cursor: not-allowed; }
@@ -3816,7 +3881,11 @@ body:not([data-batch-mode='true']) .email-row .cb {
   background: transparent;
   border: 1px solid rgb(var(--ink-border));
   cursor: pointer;
-  transition: all 0.12s;
+  /* #14: 确切属性 (勿 all) — 实际只动 bg/border/color。 */
+  transition:
+    background 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+    border-color 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+    color 0.12s cubic-bezier(0.4, 0, 0.2, 1);
   font-family: inherit;
 }
 .btn-ghost:hover:not(:disabled) { background: rgb(var(--ink-3)); color: rgb(var(--ink-fg)); }
@@ -3885,7 +3954,12 @@ body:not([data-batch-mode='true']) .email-row .cb {
   justify-content: center;
   gap: 5px;
   cursor: pointer;
-  transition: all 0.12s;
+  /* #14: 确切属性含 transform (勿 all); §9.3 press 见 :active。 */
+  transition:
+    background 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+    border-color 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+    color 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+    transform 0.08s cubic-bezier(0.4, 0, 0.2, 1);
   border: 1px solid rgb(var(--ink-border));
   background: rgb(var(--ink-3) / 0.5);
   color: rgb(var(--ink-fg-1));
@@ -3895,6 +3969,9 @@ body:not([data-batch-mode='true']) .email-row .cb {
   background: rgb(var(--ink-3));
   color: rgb(var(--ink-fg));
   border-color: rgb(var(--c-accent) / 0.5);
+}
+.btn-rsvp:active:not(:disabled) {
+  transform: scale(0.98);
 }
 .btn-rsvp.sel {
   background: rgb(var(--c-accent));
@@ -3917,11 +3994,19 @@ body:not([data-batch-mode='true']) .email-row .cb {
   justify-content: center;
   gap: 6px;
   cursor: pointer;
-  transition: all 0.12s;
+  /* #14: 确切属性含 transform (勿 all); §9.3 press 见 :active。 */
+  transition:
+    background 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+    border-color 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+    color 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+    transform 0.08s cubic-bezier(0.4, 0, 0.2, 1);
   border: 1px solid rgb(var(--ink-border));
   background: rgb(var(--ink-3) / 0.5);
   color: rgb(var(--ink-fg-1));
   font-family: inherit;
+}
+.btn-op:active:not(:disabled) {
+  transform: scale(0.98);
 }
 .btn-op.edit {
   background: rgb(var(--c-accent));
@@ -4416,13 +4501,21 @@ body:not([data-batch-mode='true']) .email-row .cb {
   color: rgb(var(--ink-fg-1));
   background: rgb(var(--ink-3));
   border: 1px solid rgb(var(--ink-border));
-  transition: all 0.12s;
+  /* #14: 确切属性含 transform (勿 all); §9.3 press 见 :active。 */
+  transition:
+    color 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+    background-color 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+    border-color 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+    transform 0.12s cubic-bezier(0.4, 0, 0.2, 1);
   cursor: pointer;
   white-space: nowrap;
 }
 .gbtn:hover:not(:disabled) {
   background: rgb(var(--ink-4));
   color: rgb(var(--ink-fg));
+}
+.gbtn:active:not(:disabled) {
+  transform: scale(0.98);
 }
 .gbtn:disabled {
   opacity: 0.55;
@@ -4561,17 +4654,33 @@ body:not([data-batch-mode='true']) .email-row .cb {
   text-transform: uppercase;
 }
 .recipient-chip .rc-close {
+  position: relative;
   margin-left: 2px;
-  padding: 0 2px;
+  padding: 2px;
+  border-radius: 50%;
   color: rgb(var(--ink-fg-2));
   cursor: pointer;
   border: 0;
   background: transparent;
   display: inline-flex;
   align-items: center;
+  transition:
+    color 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+    background-color 0.12s cubic-bezier(0.4, 0, 0.2, 1);
+}
+/* #16: 伪元素扩可点区到 ~27×27, inset -6 不超过相邻 chip 半 gap (gap 6px),
+ * 不与相邻 chip hit area 重叠。 */
+.recipient-chip .rc-close::after {
+  content: '';
+  position: absolute;
+  inset: -6px;
 }
 .recipient-chip .rc-close:hover {
   color: rgb(var(--ink-fg));
+  background: rgb(var(--ink-fg) / 0.08);
+}
+.recipient-chip .rc-close:active {
+  background: rgb(var(--ink-fg) / 0.12);
 }
 
 /* ── Composer field rows — From/To/Cc/Subject (mockup .field-row). ───────── */
@@ -4625,7 +4734,10 @@ body:not([data-batch-mode='true']) .email-row .cb {
   justify-content: center;
   color: rgb(var(--ink-fg-1));
   background: transparent;
-  transition: all 0.12s;
+  /* #14: 确切属性 (勿 all) — 28×28 固定盒, 实际只动 color/background。 */
+  transition:
+    color 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+    background-color 0.12s cubic-bezier(0.4, 0, 0.2, 1);
   cursor: pointer;
 }
 .folder-editor-btn:hover {
@@ -4656,7 +4768,9 @@ body:not([data-batch-mode='true']) .email-row .cb {
   0% { box-shadow: 0 0 0 2px rgb(var(--c-accent)); background: rgb(var(--c-accent) / 0.10); }
   100% { box-shadow: 0 0 0 2px rgb(var(--c-accent) / 0); background: rgb(var(--c-accent) / 0); }
 }
-.email-flash { animation: agents-email-flash 1.6s ease; border-radius: 8px; }
+/* #1: 不写死 radius — box-shadow ring 跟随被高亮元素自身 border-radius
+ * (list 态 email_item 直角 / card 态 10), 避免直角行上浮出 8px 圆角光环。 */
+.email-flash { animation: agents-email-flash 1.6s ease; }
 
 /* ── Chat thinking block — text shimmer (streaming head) + blink caret ──
    task 06-08-chat PR A. Distinct from the block-skeleton `.shimmer` above:
@@ -4768,7 +4882,11 @@ body:not([data-batch-mode='true']) .email-row .cb {
   font-size: 12px;
   color: rgb(var(--ink-fg-2));
   cursor: pointer;
-  transition: all var(--dur-fast, 120ms);
+  transition:
+    color var(--dur-fast, 120ms) cubic-bezier(0.4, 0, 0.2, 1),
+    background-color var(--dur-fast, 120ms) cubic-bezier(0.4, 0, 0.2, 1),
+    box-shadow var(--dur-fast, 120ms) cubic-bezier(0.4, 0, 0.2, 1),
+    transform var(--dur-fast, 120ms) cubic-bezier(0.4, 0, 0.2, 1);
   background: transparent;
   border: 0;
   font-family: inherit;
@@ -4878,4 +4996,26 @@ body:not([data-batch-mode='true']) .email-row .cb {
   .icon-swap-item { transition: none !important; }
   /* Hide the (now non-blinking) caret so it doesn't read as a stuck cursor. */
   .think-caret { display: none; }
+}
+
+/* ── Reduced-motion: 关掉本轮新增的 :active press scale。两类一起兜底：
+ *   ① index.css 内 authored 控件的按压 transform（.cb / .ricon / CTA / RSVP …）；
+ *   ② Tailwind 组件的 active:scale-*（button / switch / segmented / chat / batch …）——
+ *      用 [class*='active:scale-'] 一处覆盖，免逐组件加 motion-reduce 变体。本块在
+ *      @tailwind utilities（顶部 @layer）之后且处 layer 外，必覆盖 utilities，无需 !important。 */
+@media (prefers-reduced-motion: reduce) {
+  .cb:active,
+  .row-actions .ricon:active,
+  .ricon-delete:active,
+  .btn-cta:active,
+  .acc-cta:active,
+  .evt:active,
+  .btn-rsvp:active:not(:disabled),
+  .btn-op:active:not(:disabled),
+  .dw-act:active:not(:disabled),
+  .qchip:active,
+  .gbtn:active:not(:disabled),
+  [class*='active:scale-']:active {
+    transform: none;
+  }
 }

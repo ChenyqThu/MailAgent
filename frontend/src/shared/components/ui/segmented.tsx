@@ -143,6 +143,9 @@ export function SegmentedControl<T extends string>({
             className={cn(
               // Content sits above the absolutely-positioned indicator.
               'relative z-[1] justify-center',
+              // §9.3 press feedback — light scale on the segment tab (≥0.95).
+              // Animates via the authored `.seg button` transition.
+              'active:scale-[0.96]',
               size === 'md' ? 'h-8' : 'h-7',
               fluid && 'flex-1',
               active && 'seg-active'

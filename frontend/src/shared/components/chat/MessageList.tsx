@@ -343,7 +343,8 @@ function DraftPreviewCard({
             className={cn(
               'inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded',
               'text-aux text-accent-fg bg-coral/100 hover:bg-coral-hover',
-              'transition-colors duration-fast',
+              'transition-[color,background-color,transform] duration-fast',
+              'enabled:active:scale-[0.98]',
               'disabled:opacity-50 disabled:cursor-not-allowed'
             )}
           >
@@ -366,7 +367,7 @@ function DraftPreviewCard({
             tabIndex={regenDisabled ? -1 : 0}
             className={cn(
               'inline-flex items-center gap-1.5 px-2 py-1.5 rounded text-aux',
-              'text-ink-fg-1 hover:text-ink-fg hover:bg-ink-4',
+              'text-ink-fg-1 hover:text-ink-fg hover:bg-ink-4 enabled:active:bg-ink-5',
               'transition-colors duration-fast',
               'disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-ink-fg-1'
             )}
@@ -402,8 +403,8 @@ function DraftPreviewCard({
             className={cn(
               'inline-flex items-center px-2 py-1.5 rounded text-aux',
               editing
-                ? 'text-c-accent bg-c-accent/10 hover:bg-c-accent/15'
-                : 'text-ink-fg-1 hover:text-ink-fg hover:bg-ink-4',
+                ? 'text-c-accent bg-c-accent/10 hover:bg-c-accent/15 enabled:active:bg-c-accent/20'
+                : 'text-ink-fg-1 hover:text-ink-fg hover:bg-ink-4 enabled:active:bg-ink-5',
               'transition-colors duration-fast',
               'disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-ink-fg-1'
             )}
@@ -422,7 +423,7 @@ function DraftPreviewCard({
             tabIndex={!onOpenInWindow ? -1 : 0}
             className={cn(
               'inline-flex items-center px-2 py-1.5 rounded text-aux',
-              'text-ink-fg-2 hover:text-ink-fg hover:bg-ink-4',
+              'text-ink-fg-2 hover:text-ink-fg hover:bg-ink-4 enabled:active:bg-ink-5',
               'transition-colors duration-fast',
               'disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-ink-fg-2'
             )}

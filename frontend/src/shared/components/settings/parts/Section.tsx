@@ -46,7 +46,10 @@ export function Section({
       {helper ? <div className="text-aux text-ink-fg-1 mb-2.5">{helper}</div> : null}
       <div
         className={cn(
-          'tile rounded-lg border border-ink-border-soft',
+          // `tile` 在 index.css 无对应 authored 规则（grep 全仓零定义），视觉全靠
+          // border + divide-y；删掉这个 no-op 死类，避免误导维护者以为有一套 tile
+          // 视觉规则。
+          'rounded-lg border border-ink-border-soft',
           'divide-y divide-ink-border-soft'
         )}
       >

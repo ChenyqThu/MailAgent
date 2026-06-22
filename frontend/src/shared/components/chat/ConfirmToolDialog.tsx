@@ -335,6 +335,7 @@ export function ConfirmToolDialog({
             className={cn(
               'h-7 px-3 rounded text-aux',
               'border border-ink-border-soft bg-ink-2 text-ink-fg',
+              'transition-[color,background-color,transform] duration-fast active:scale-[0.98]',
               'hover:bg-ink-3 disabled:opacity-50'
             )}
           >
@@ -351,6 +352,7 @@ export function ConfirmToolDialog({
               // per-mode --c-accent-fg token + the coral-hover utility.
               // bg-coral→bg-coral/100 also clears no-coral-flood (the one CTA).
               'bg-coral/100 text-accent-fg hover:bg-coral-hover',
+              'transition-[color,background-color,transform] duration-fast active:scale-[0.98]',
               'disabled:opacity-50'
             )}
           >

@@ -156,8 +156,11 @@ describe('AgentsTab — Search Agents 区', () => {
     expect(await screen.findByText('邮件搜索助手')).toBeTruthy()
     // report agent 卡仍渲染（报告区不破坏）—— 「日报」可能在卡标题/cadence 多处出现，断在场即可
     expect(screen.getAllByText('日报').length).toBeGreaterThan(0)
-    // 新建按钮文案从「即将推出」改为可用入口
-    expect(screen.getByText('新建搜索 Agent')).toBeTruthy()
+    // 新建入口按产品要求退回 coming-soon（搜索 Agent 只用内置一个，编辑既有即可），
+    // 改为不可点的「完全自定义 Agent · 待上线」占位 tile（NewAgentTile）—— 故「新建搜索
+    // Agent」按钮不再渲染，占位 hint 在场。
+    expect(screen.queryByText('新建搜索 Agent')).toBeNull()
+    expect(screen.getByText(/完全自定义 Agent/)).toBeTruthy()
   })
 
   test('无 search agent 时显示空态提示', async () => {
@@ -192,7 +195,7 @@ describe('SearchConfigDrawer — 编辑既有', () => {
   test('改 prompt 后 patch.prompt 带文本', async () => {
     mockSetConfig.mockResolvedValue(makeSearchCfg())
     renderUi(<SearchConfigDrawer cfg={makeSearchCfg()} open onClose={() => {}} />)
-    const ta = screen.getByPlaceholderText(/内置默认搜索 persona/) as HTMLTextAreaElement
+    const ta = screen.getByPlaceholderText('搜索 Agent 的系统 prompt') as HTMLTextAreaElement
     fireEvent.change(ta, { target: { value: '只搜未读邮件' } })
     fireEvent.click(screen.getByText('保存'))
     await vi.waitFor(() => expect(mockSetConfig).toHaveBeenCalled())

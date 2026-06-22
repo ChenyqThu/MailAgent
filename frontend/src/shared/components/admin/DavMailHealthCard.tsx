@@ -95,7 +95,7 @@ export function DavMailHealthCard(): React.ReactElement | null {
   return (
     <section className="space-y-3">
       <h2 className="text-lead text-ink-fg font-medium flex items-center gap-2">
-        <Cloud size={16} strokeWidth={1.75} className="text-cyan-400" />
+        <Cloud size={16} strokeWidth={1.75} className="text-info" />
         DavMail Backend
         <span
           className={cn(

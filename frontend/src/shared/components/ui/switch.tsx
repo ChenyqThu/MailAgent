@@ -25,8 +25,12 @@ export const Switch = React.forwardRef<
     className={cn(
       'peer inline-flex h-[18px] w-[32px] shrink-0 cursor-pointer items-center',
       'rounded-full border border-ink-border bg-ink-4',
-      'transition-colors duration-fast ease-standard',
-      'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 focus-visible:ring-offset-2 focus-visible:ring-offset-ink-1',
+      // `transform` joins the list so the §9.3 press-scale animates (#14).
+      'transition-[color,background-color,border-color,transform] duration-fast ease-standard',
+      // Focus ring unified app-wide to coral/70 — no offset (the geometry-tier
+      // ring-offset-2/ink-1 read mis-aligned against input rows on the same row).
+      'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70',
+      'active:scale-[0.96]',
       'data-[state=checked]:bg-coral/100 data-[state=checked]:border-coral-hover',
       'disabled:cursor-not-allowed disabled:opacity-50',
       className

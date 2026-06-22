@@ -45,8 +45,10 @@ export const TabsTrigger = React.forwardRef<
       // Sprint 18 review — 默认 font-normal, 选中态才加 font-medium. 旧版
       // 全 font-medium 让 SettingsRail 的 8 个 tab 都看起来加粗, 跟主
       // Sidebar 风格不一致 (Sidebar 默认 font-normal, selected 才 medium).
-      'text-aux font-normal ring-offset-ink-1',
+      'text-aux font-normal',
       'transition-colors duration-fast ease-standard',
+      // Focus ring unified to coral/70 with no offset (the orphan
+      // `ring-offset-ink-1` had no matching offset-width and is dropped).
       'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70',
       'disabled:pointer-events-none disabled:opacity-50',
       'text-ink-fg-1 hover:text-ink-fg',

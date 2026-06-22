@@ -54,6 +54,11 @@ export function Row({
         'flex items-center gap-3',
         'px-[var(--settings-tile-px,1rem)]',
         compact ? 'py-3' : 'py-[var(--settings-tile-py,0.875rem)]',
+        // 仅给关联到表单控件 (htmlFor) 的可交互行一个极轻 hover wash，提示
+        // 「这行可操作」；纯展示/readonly 行不加，避免误导。0.025 alpha 不盖
+        // divide-y 分隔线。reduced-motion 下 transition 由全局 @media 短路，
+        // hover 终态色保留无碍。
+        htmlFor && 'transition-colors duration-fast hover:bg-ink-fg/[0.025]',
         className
       )}
     >

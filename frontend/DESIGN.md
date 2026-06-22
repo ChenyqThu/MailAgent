@@ -987,8 +987,10 @@ Transition: `transition` (Tailwind default = 150ms).
 
 ### 9.2 Focus
 
-Every focusable element MUST have a visible focus ring. Default:
-`focus:outline-none focus:ring-2 focus:ring-coral/40 focus:ring-offset-1 focus:ring-offset-ink-3`.
+Every focusable element MUST have a visible focus ring. Default (no offset —
+the ring sits flush so it never collides with adjacent hairlines in dense
+divide-y rows):
+`focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70`.
 
 Composer textarea uses `focus-within:border-coral/50` on its container
 (a softer indicator since the textarea has its own ring conventions).

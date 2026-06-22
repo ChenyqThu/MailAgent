@@ -437,8 +437,9 @@ export function Composer({
               data-disabled={attachEnabled ? undefined : ''}
               className={cn(
                 'w-7 h-7 rounded-md grid place-items-center',
+                'transition-[color,background-color,transform] duration-fast',
                 attachEnabled
-                  ? 'text-ink-fg-2 hover:text-ink-fg hover:bg-ink-4'
+                  ? 'text-ink-fg-2 hover:text-ink-fg hover:bg-ink-4 active:bg-ink-4 active:scale-[0.96]'
                   : 'text-ink-fg-3 opacity-50 cursor-not-allowed'
               )}
             >
@@ -463,10 +464,11 @@ export function Composer({
                 data-disabled={mentionEnabled ? undefined : ''}
                 className={cn(
                   'w-7 h-7 rounded-md grid place-items-center',
+                  'transition-[color,background-color,transform] duration-fast',
                   mentionEnabled
                     ? mentionOpen
-                      ? 'text-coral bg-coral/10'
-                      : 'text-ink-fg-2 hover:text-ink-fg hover:bg-ink-4'
+                      ? 'text-coral bg-coral/10 active:scale-[0.96]'
+                      : 'text-ink-fg-2 hover:text-ink-fg hover:bg-ink-4 active:bg-ink-4 active:scale-[0.96]'
                     : 'text-ink-fg-3 opacity-50 cursor-not-allowed'
                 )}
               >
@@ -510,12 +512,12 @@ export function Composer({
                 tabIndex={modelPickerDisabled ? -1 : 0}
                 className={cn(
                   'w-7 h-7 rounded-md grid place-items-center',
-                  'transition-colors duration-fast',
+                  'transition-[color,background-color,transform] duration-fast',
                   modelPickerDisabled
                     ? 'text-ink-fg-3 opacity-50 cursor-not-allowed'
                     : modelPickerOpen
-                      ? 'text-coral bg-coral/10'
-                      : 'text-ink-fg-2 hover:text-ink-fg hover:bg-ink-4'
+                      ? 'text-coral bg-coral/10 active:scale-[0.96]'
+                      : 'text-ink-fg-2 hover:text-ink-fg hover:bg-ink-4 active:bg-ink-4 active:scale-[0.96]'
                 )}
               >
                 <Cpu size={13} strokeWidth={2} />
@@ -595,12 +597,13 @@ export function Composer({
                 tabIndex={thinkingDisabled ? -1 : 0}
                 data-disabled={thinkingDisabled ? '' : undefined}
                 className={cn(
-                  'w-7 h-7 rounded-md grid place-items-center transition-colors duration-fast',
+                  'w-7 h-7 rounded-md grid place-items-center',
+                  'transition-[color,background-color,transform] duration-fast',
                   thinkingDisabled
                     ? 'text-ink-fg-3 opacity-50 cursor-not-allowed'
                     : thinkingEnabled
-                      ? 'text-coral bg-coral/10'
-                      : 'text-ink-fg-2 hover:text-ink-fg hover:bg-ink-4'
+                      ? 'text-coral bg-coral/10 active:scale-[0.96]'
+                      : 'text-ink-fg-2 hover:text-ink-fg hover:bg-ink-4 active:bg-ink-4 active:scale-[0.96]'
                 )}
               >
                 <Brain size={13} strokeWidth={2} />
@@ -622,9 +625,10 @@ export function Composer({
               aria-label={t('chat.composer.cancel')}
               title={t('chat.composer.cancel')}
               className={cn(
-                'ml-1 w-7 h-7 rounded-md grid place-items-center',
+                'relative ml-1 w-7 h-7 rounded-md grid place-items-center',
+                'after:absolute after:-inset-1.5 after:content-[""]',
                 'bg-ink-4 hover:bg-coral/100 text-ink-fg-1 hover:text-accent-fg',
-                'transition-colors duration-fast'
+                'transition-[color,background-color,transform] duration-fast active:scale-[0.96]'
               )}
             >
               <X size={12} strokeWidth={2.5} />
@@ -637,11 +641,12 @@ export function Composer({
               aria-label={t('chat.composer.send')}
               title={sendTitle}
               className={cn(
-                'ml-1 w-7 h-7 rounded-md grid place-items-center',
-                'transition-colors duration-fast',
+                'relative ml-1 w-7 h-7 rounded-md grid place-items-center',
+                'after:absolute after:-inset-1.5 after:content-[""]',
+                'transition-[color,background-color,transform] duration-fast',
                 sendDisabled
                   ? 'bg-ink-4 text-ink-fg-3 cursor-not-allowed'
-                  : 'bg-ink-4 hover:bg-coral/100 text-ink-fg-1 hover:text-accent-fg'
+                  : 'bg-ink-4 hover:bg-coral/100 text-ink-fg-1 hover:text-accent-fg active:scale-[0.96]'
               )}
             >
               <ArrowUp size={12} strokeWidth={2.5} />

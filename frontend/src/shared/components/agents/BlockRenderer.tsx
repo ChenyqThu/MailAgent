@@ -520,7 +520,8 @@ function EmailItemBlock({
             fontWeight: 600,
             color: 'rgb(var(--ink-fg-1))',
             background: 'rgb(var(--ink-4))',
-            border: '1px solid rgb(var(--ink-border))'
+            // #11 类图片方块用中性低透明描边（ink-fg/0.10 暗亮自动取中性黑白）。
+            border: '1px solid rgb(var(--ink-fg) / 0.10)'
           }}
         >
           {avatarInitials}
@@ -960,8 +961,8 @@ function TrendBlock({
                   maxWidth: 38,
                   height: `${h}%`,
                   borderRadius: '5px 5px 0 0',
-                  background:
-                    'linear-gradient(to top, rgb(var(--c-accent) / 0.55), rgb(var(--c-accent)))'
+                  // DESIGN 红线禁 gradient surface → 实色 coral（accent 是像素不是背景泛色）。
+                  background: 'rgb(var(--c-accent))'
                 }}
               />
               <span style={{ fontSize: 11, color: 'rgb(var(--ink-fg-3))', whiteSpace: 'nowrap' }}>

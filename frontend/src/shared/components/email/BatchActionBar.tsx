@@ -152,7 +152,7 @@ export function BatchActionBar({
 
       <button
         type="button"
-        className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-aux text-ink-fg-1 hover:text-ink-fg hover:bg-ink-3 transition-colors duration-fast"
+        className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-aux text-ink-fg-1 hover:text-ink-fg hover:bg-ink-3 active:bg-ink-4 active:scale-[0.97] transition-[color,background-color,transform] duration-fast"
         onClick={() => void runBulk(t('batchbar.markRead'), { isRead: true })}
       >
         <Mail size={13} strokeWidth={2} />
@@ -160,7 +160,7 @@ export function BatchActionBar({
       </button>
       <button
         type="button"
-        className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-aux text-ink-fg-1 hover:text-ink-fg hover:bg-ink-3 transition-colors duration-fast"
+        className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-aux text-ink-fg-1 hover:text-ink-fg hover:bg-ink-3 active:bg-ink-4 active:scale-[0.97] transition-[color,background-color,transform] duration-fast"
         onClick={() => void runBulk(t('batchbar.toggleFlag'), { isFlagged: !selectedAllFlagged })}
       >
         <Flag size={13} strokeWidth={2} />
@@ -168,7 +168,7 @@ export function BatchActionBar({
       </button>
       <button
         type="button"
-        className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-aux text-ink-fg-1 hover:text-ink-fg hover:bg-ink-3 transition-colors duration-fast"
+        className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-aux text-ink-fg-1 hover:text-ink-fg hover:bg-ink-3 active:bg-ink-4 active:scale-[0.97] transition-[color,background-color,transform] duration-fast"
         onClick={() =>
           void runBulk(t('batchbar.markDone'), {
             isFlagged: false,
@@ -181,7 +181,7 @@ export function BatchActionBar({
       </button>
       <button
         type="button"
-        className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-aux text-ink-fg-1 hover:text-ink-fg hover:bg-ink-3 transition-colors duration-fast"
+        className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-aux text-ink-fg-1 hover:text-ink-fg hover:bg-ink-3 active:bg-ink-4 active:scale-[0.97] transition-[color,background-color,transform] duration-fast"
         onClick={() =>
           void runBulk(t('batchbar.archive'), {
             isFlagged: false,
@@ -194,7 +194,7 @@ export function BatchActionBar({
       </button>
       <button
         type="button"
-        className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-aux text-ink-fg-1 hover:text-ink-fg hover:bg-ink-3 transition-colors duration-fast"
+        className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-aux text-ink-fg-1 hover:text-ink-fg hover:bg-ink-3 active:bg-ink-4 active:scale-[0.97] transition-[color,background-color,transform] duration-fast"
         onClick={() => void runResyncBatch()}
       >
         <RefreshCw size={13} strokeWidth={2} />
@@ -206,7 +206,7 @@ export function BatchActionBar({
       <kbd>Esc</kbd>
       <button
         type="button"
-        className="text-ink-fg-2 hover:text-ink-fg p-1.5 rounded transition-colors duration-fast hover:bg-ink-3 grid place-items-center"
+        className="text-ink-fg-2 hover:text-ink-fg p-1.5 rounded hover:bg-ink-3 active:bg-ink-4 active:scale-[0.96] transition-[color,background-color,transform] duration-fast grid place-items-center"
         title={t('batchbar.exitTooltip')}
         aria-label={t('batchbar.exitTooltip')}
         onClick={() => exit()}

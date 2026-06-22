@@ -154,7 +154,7 @@ function NavRow({
         // (左光条由 .row-selected::before 提供)。
         selected
           ? 'row-selected acc-select text-ink-fg font-medium'
-          : 'text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg'
+          : 'text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg active:bg-ink-4'
       )}
     >
       {renderIcon(icon)}
@@ -333,7 +333,7 @@ export function Sidebar(): React.ReactElement {
           onClick={() => setAccountOpen((o) => !o)}
           className={cn(
             'app-nav-account flex-1 min-w-0 flex items-center gap-1.5 px-1.5 py-1 rounded-md',
-            'hover:bg-ink-3 transition-colors duration-fast group'
+            'hover:bg-ink-3 active:bg-ink-4 transition-colors duration-fast group'
           )}
           aria-haspopup="menu"
           aria-expanded={accountOpen}
@@ -357,7 +357,7 @@ export function Sidebar(): React.ReactElement {
         <button
           type="button"
           onClick={toggleCollapsed}
-          className="shrink-0 p-1 rounded hover:bg-ink-3 text-ink-fg-2 hover:text-ink-fg transition-colors duration-fast"
+          className="shrink-0 p-1.5 rounded hover:bg-ink-3 active:bg-ink-4 text-ink-fg-2 hover:text-ink-fg transition-colors duration-fast"
           title={t('nav.toggleTitle')}
           aria-label={t('nav.toggleAria')}
         >

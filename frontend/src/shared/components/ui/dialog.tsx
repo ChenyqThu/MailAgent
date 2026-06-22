@@ -61,9 +61,12 @@ export const DialogContent = React.forwardRef<
       <DialogPrimitive.Close
         className={cn(
           'absolute right-4 top-4 rounded-md p-1 text-ink-fg-2',
-          'transition-colors duration-fast ease-standard',
+          // `transform` joins the list so the §9.3 press-scale animates (#14).
+          'transition-[color,background-color,transform] duration-fast ease-standard',
           'hover:bg-ink-3 hover:text-ink-fg',
-          'focus:outline-none focus:ring-2 focus:ring-coral/70',
+          'active:scale-[0.96]',
+          // `focus-visible` + coral/70 no offset, unified with the primitives.
+          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70',
           'disabled:pointer-events-none'
         )}
       >

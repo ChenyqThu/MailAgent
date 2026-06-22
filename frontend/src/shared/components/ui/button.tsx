@@ -16,19 +16,29 @@ const buttonVariants = cva(
   cn(
     'inline-flex items-center justify-center gap-2 whitespace-nowrap',
     'rounded-md text-aux font-medium',
-    'transition-colors duration-fast ease-standard',
+    // §9.3 press feedback needs `transform` in the transition list — a bare
+    // `transition-colors` would hard-jump the active:scale (#14: name exact
+    // properties, never transition-all).
+    'transition-[color,background-color,border-color,transform] duration-fast ease-standard',
     'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70',
     'disabled:pointer-events-none disabled:opacity-50',
     '[&_svg]:size-4 [&_svg]:shrink-0'
   ),
   {
     variants: {
+      // §9.3 Active/pressed: coral CTAs get `active:scale-[0.98]`, ghost gets
+      // `active:bg-ink-4` (one tier deeper than hover), never an opacity dip.
+      // Disabled coral swaps to `coral-dim` (§9.4) so it reads as "the disabled
+      // accent" rather than muddied gray.
       variant: {
-        default: 'bg-coral/100 text-accent-fg hover:bg-coral-hover',
-        secondary: 'bg-ink-3 text-ink-fg border border-ink-border-soft hover:bg-ink-4',
-        ghost: 'text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg',
-        outline: 'border border-ink-border bg-transparent text-ink-fg hover:bg-ink-3',
-        destructive: 'bg-fail text-accent-fg hover:opacity-90',
+        default:
+          'bg-coral/100 text-accent-fg hover:bg-coral-hover active:scale-[0.98] disabled:bg-coral-dim',
+        secondary:
+          'bg-ink-3 text-ink-fg border border-ink-border-soft hover:bg-ink-4 active:scale-[0.98]',
+        ghost: 'text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg active:bg-ink-4',
+        outline:
+          'border border-ink-border bg-transparent text-ink-fg hover:bg-ink-3 active:scale-[0.98]',
+        destructive: 'bg-fail text-accent-fg hover:opacity-90 active:scale-[0.98]',
         link: 'text-coral underline-offset-4 hover:underline'
       },
       size: {

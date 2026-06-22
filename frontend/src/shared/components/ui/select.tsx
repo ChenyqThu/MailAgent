@@ -38,7 +38,9 @@ export const SelectTrigger = React.forwardRef<
       // chromium: long value glyphLeft offset 17.55px → 0px after this.)
       'text-left text-aux text-ink-fg',
       'transition-colors duration-fast ease-standard',
-      'focus:outline-none focus:ring-2 focus:ring-coral/70 focus:border-coral/60',
+      // `focus-visible` (not `focus`) so a mouse click doesn't flash the ring,
+      // matching <Input> and the rest of the primitives. coral/70, no offset.
+      'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 focus-visible:border-coral/60',
       'disabled:cursor-not-allowed disabled:opacity-50',
       '[&>span]:line-clamp-1 [&[data-placeholder]]:text-ink-fg-3',
       className

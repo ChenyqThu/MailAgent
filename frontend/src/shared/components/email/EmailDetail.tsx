@@ -791,7 +791,7 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
                   EN
                 </span>
               )}
-              <h1 className="text-subj font-semibold text-ink-fg leading-snug tracking-tight flex-1 break-words">
+              <h1 className="text-subj font-semibold text-ink-fg leading-snug tracking-tight flex-1 break-words text-balance">
                 {email.subject || '(no subject)'}
               </h1>
             </div>
