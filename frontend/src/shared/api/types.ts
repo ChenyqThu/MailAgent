@@ -1430,6 +1430,29 @@ export interface WriteMemoryInput {
 // projection of the Skill manifest (shared/chat/tools/manifest SkillManifest) so
 // api/types stays self-contained. `defaultEnabled` is the manifest compile-time
 // seed; the user's per-skill override (shared/chat/skill_enablement) sits on top.
+/** PR6 — a Standing Context document (SOUL/AGENT/RULES/USER editable, or MEMORY/SKILLS
+ *  projection) as served by GET /api/agent/profile/docs. */
+export interface AgentProfileDoc {
+  docName: string
+  content: string
+  contentHash: string | null
+  updatedBy: string
+  updatedAt: number | null
+  editable: boolean
+}
+
+/** PR6 — one entry of a profile doc's version history (GET /api/agent/profile/history). */
+export interface AgentProfileHistoryEntry {
+  id: number
+  docName: string
+  oldHash: string | null
+  newHash: string
+  changedBy: string
+  sessionId: number | null
+  messageId: number | null
+  createdAt: number
+}
+
 export interface SkillSummary {
   name: string
   title: string

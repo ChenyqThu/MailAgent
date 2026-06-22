@@ -28,13 +28,16 @@
 
 import { request, type QueryValue } from '../api/http_client'
 import type {
+  AgentProfileDoc,
+  AgentProfileHistoryEntry,
   AIFields,
   FolderInfo,
   MailApi,
   ReportDetail,
   ReportListItem,
   ReportRunResult,
-  SearchResult
+  SearchResult,
+  SkillSummary
 } from '../api/types'
 import type {
   AttachmentList_AttachmentItem,
@@ -757,6 +760,77 @@ export class HttpChatPlatform
     return this._req<{ deleted: number }>('DELETE', '/chat/memory', {
       query: { scope, key }
     }).then((r) => r.deleted)
+  }
+
+  // ── agent config（PR6）→ serve-api /agent/* ───────────────────────────────────
+  listProfileDocs(): Promise<AgentProfileDoc[]> {
+    return this._req<{ docs: AgentProfileDoc[] }>('GET', '/agent/profile/docs').then((r) => r.docs)
+  }
+
+  readProfileDoc(name: string): Promise<AgentProfileDoc> {
+    return this._req<AgentProfileDoc>('GET', `/agent/profile/docs/${encodeURIComponent(name)}`)
+  }
+
+  listProfileHistory(docName?: string): Promise<AgentProfileHistoryEntry[]> {
+    return this._req<{ history: AgentProfileHistoryEntry[] }>(
+      'GET',
+      '/agent/profile/history',
+      docName ? { query: { docName } } : undefined
+    ).then((r) => r.history)
+  }
+
+  setProfileDoc(input: {
+    name: string
+    content: string
+    updatedBy?: string
+    sessionId?: number
+    messageId?: number
+  }): Promise<AgentProfileDoc> {
+    const { name, ...body } = input
+    return this._req<AgentProfileDoc>('POST', `/agent/profile/docs/${encodeURIComponent(name)}`, {
+      body
+    })
+  }
+
+  rollbackProfileDoc(input: {
+    name: string
+    targetHash: string
+    updatedBy?: string
+    sessionId?: number
+  }): Promise<AgentProfileDoc> {
+    const { name, ...body } = input
+    return this._req<AgentProfileDoc>(
+      'POST',
+      `/agent/profile/docs/${encodeURIComponent(name)}/rollback`,
+      { body }
+    )
+  }
+
+  listAgentSkills(): Promise<SkillSummary[]> {
+    return this._req<{ skills: SkillSummary[] }>('GET', '/agent/skills').then((r) => r.skills)
+  }
+
+  setAgentSkillEnabled(name: string, enabled: boolean): Promise<void> {
+    return this._req<unknown>('POST', `/agent/skills/${encodeURIComponent(name)}/enabled`, {
+      body: { enabled }
+    }).then(() => undefined)
+  }
+
+  installAgentSkill(input: {
+    name: string
+    sourceType: string
+    manifest?: Record<string, unknown>
+    version?: string
+    grantedScopes?: string[]
+  }): Promise<{ name: string; sourceType: string }> {
+    return this._req<{ name: string; sourceType: string }>('POST', '/agent/skills', { body: input })
+  }
+
+  uninstallAgentSkill(name: string): Promise<{ name: string; removed: boolean }> {
+    return this._req<{ name: string; removed: boolean }>(
+      'DELETE',
+      `/agent/skills/${encodeURIComponent(name)}`
+    )
   }
 
   // ── notion_agent_chat tool（P2g）→ serve-api /chat/notion-agent-once ────────

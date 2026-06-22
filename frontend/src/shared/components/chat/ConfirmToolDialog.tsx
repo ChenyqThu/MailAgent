@@ -55,10 +55,11 @@ export interface ConfirmToolDialogProps {
 }
 
 /** Extract the field the dialog should expose as a textarea when the tier
- *  is 'edit'. Right now only email_draft_reply has this — `body_markdown`.
- *  Returning null falls back to the JSON read-only render so future
- *  edit-tier tools without a single-field surface still produce something
- *  usable. */
+ *  is 'edit'. email_draft_reply → `body_markdown`; PR6 agent_profile_apply_patch
+ *  → `content` (so the user reviews + can tweak the proposed SOUL/AGENT/RULES/USER
+ *  document before it's saved). Returning null falls back to the JSON read-only
+ *  render so future edit-tier tools without a single-field surface still produce
+ *  something usable. */
 function pickEditableField(
   toolName: string,
   input: unknown
@@ -70,6 +71,9 @@ function pickEditableField(
   const obj = input as Record<string, unknown>
   if (toolName === 'email_draft_reply' && typeof obj.body_markdown === 'string') {
     return { key: 'body_markdown', value: obj.body_markdown }
+  }
+  if (toolName === 'agent_profile_apply_patch' && typeof obj.content === 'string') {
+    return { key: 'content', value: obj.content }
   }
   return null
 }

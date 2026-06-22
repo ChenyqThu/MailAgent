@@ -32,6 +32,8 @@ import { createReportTools } from './report'
 import { createMemoryTools } from './memory'
 import { createNotionAgentTools } from './notion_agent'
 import { createKosTools } from './kos'
+import { createAgentProfileTools } from './agent_profile'
+import { createSkillManagementTools } from './skill_management'
 
 /** Build every builtin tool bound to the injected platform. The 25 default
  *  tools always register; the 9 KOS tools register only when
@@ -47,7 +49,13 @@ export function createBuiltinTools(platform: ChatToolPlatform): ToolDef[] {
     ...createMemoryTools(platform),
     // P2g — notion_agent_chat (delegates to the notion-agent CLI; graceful error
     // if the CLI isn't installed, same as the notion-agent backend).
-    ...createNotionAgentTools(platform)
+    ...createNotionAgentTools(platform),
+    // PR6 — agent self-config: read/edit Standing Context docs (apply_patch = edit
+    // confirmation; rollback = preview) + inspect/manage skills (mutations = preview
+    // confirmation). The agent can never silently change its identity/rules or widen
+    // its own capabilities; RULES edits also pass a backend safety validator.
+    ...createAgentProfileTools(platform),
+    ...createSkillManagementTools(platform)
   ]
   if (platform.kosConfig().configured) {
     tools.push(...createKosTools(platform))
@@ -62,5 +70,7 @@ export {
   createReportTools,
   createMemoryTools,
   createNotionAgentTools,
-  createKosTools
+  createKosTools,
+  createAgentProfileTools,
+  createSkillManagementTools
 }

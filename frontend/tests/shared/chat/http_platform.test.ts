@@ -1007,14 +1007,15 @@ describe('HttpChatPlatform config 快照', () => {
 // ── createBuiltinTools 集成 + createHttpNotionAgentBackend ───────────────────
 
 describe('HttpChatPlatform 工具板满足 createBuiltinTools', () => {
-  test('kosConfigured=false → 25 工具（无 KOS；含 4 memory + 1 notion）', () => {
+  test('kosConfigured=false → 36 工具（无 KOS；含 4 memory + 1 notion + 11 agent config[PR6]）', () => {
     const p = new HttpChatPlatform(makeHttpApi(), '/api')
-    expect(createBuiltinTools(p).length).toBe(25)
+    // PR6 — +11: agent_profile_* (5) + skill_* management (6).
+    expect(createBuiltinTools(p).length).toBe(36)
   })
 
-  test('kosConfigured=true → 34 工具（+9 KOS）', () => {
+  test('kosConfigured=true → 45 工具（+9 KOS）', () => {
     const p = new HttpChatPlatform(makeHttpApi(), '/api', { kosConfigured: true })
-    expect(createBuiltinTools(p).length).toBe(34)
+    expect(createBuiltinTools(p).length).toBe(45)
   })
 })
 

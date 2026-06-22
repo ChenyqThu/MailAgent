@@ -48,11 +48,14 @@ import type {
   MailagentEmailBody
 } from '../types/cli.gen'
 import type {
+  AgentProfileDoc,
+  AgentProfileHistoryEntry,
   AIFields,
   ReportDetail,
   ReportListItem,
   ReportRunResult,
-  SearchResult
+  SearchResult,
+  SkillSummary
 } from '../api/types'
 
 // ─── 基础设施板：持久化端口（ai_chat.db 写读）────────────────────────────
@@ -411,4 +414,43 @@ export interface ChatToolPlatform {
    *  is on, so a read tool runs against the single source of truth. The local/CF
    *  auth the chat runtime already carries is an owner principal → full scopes. */
   invokeSkillTool(skill: string, tool: string, input: unknown): Promise<unknown>
+  // ── agent config（PR6）→ serve-api /api/agent/* ─────────────────────────────
+  /** Standing Context docs (SOUL/AGENT/RULES/USER + MEMORY/SKILLS projections). */
+  listProfileDocs(): Promise<AgentProfileDoc[]>
+  /** One profile doc (memory/skills = projection; soul/agent/rules/user = editable). */
+  readProfileDoc(name: string): Promise<AgentProfileDoc>
+  /** A doc's version history (newest-first), for rollback / audit. */
+  listProfileHistory(docName?: string): Promise<AgentProfileHistoryEntry[]>
+  /** Overwrite an editable doc (RULES.md runs the backend safety validator). The
+   *  agent_profile_apply_patch tool gates this behind an edit confirmation. */
+  setProfileDoc(input: {
+    name: string
+    content: string
+    updatedBy?: string
+    sessionId?: number
+    messageId?: number
+  }): Promise<AgentProfileDoc>
+  /** Roll a doc back to a history version (by its newHash). Gated behind a preview
+   *  confirmation by the agent_profile_rollback tool. */
+  rollbackProfileDoc(input: {
+    name: string
+    targetHash: string
+    updatedBy?: string
+    sessionId?: number
+  }): Promise<AgentProfileDoc>
+  /** Resolved skill list (manifest ⋈ agent_config.db enable overrides + source_type). */
+  listAgentSkills(): Promise<SkillSummary[]>
+  /** Enable/disable a skill (gated behind a preview confirmation). */
+  setAgentSkillEnabled(name: string, enabled: boolean): Promise<void>
+  /** Install a user skill (document/local_folder/skill_pack). Gated behind a preview
+   *  confirmation that shows source + scopes. */
+  installAgentSkill(input: {
+    name: string
+    sourceType: string
+    manifest?: Record<string, unknown>
+    version?: string
+    grantedScopes?: string[]
+  }): Promise<{ name: string; sourceType: string }>
+  /** Uninstall a skill (gated behind a preview confirmation). */
+  uninstallAgentSkill(name: string): Promise<{ name: string; removed: boolean }>
 }
