@@ -163,6 +163,13 @@ export interface ChatModelConfig {
    *  fragment is excluded here AND its tools are filtered from the catalog.
    *  null / "" → not injected (manifest unreachable or no skills enabled). */
   skillFragments: string | null
+  /** PR4 (task 06-22) — Standing Context (SOUL+AGENT+RULES+USER, assembled
+   *  backend-side) from serve-api /chat/config. When non-null, buildStableSystemPrompt
+   *  uses the layered assembly `PRODUCT_SAFETY_FLOOR + standingContext` as the system
+   *  header instead of the legacy SOUL_MARKDOWN. null / "" → flag OFF (or store
+   *  unavailable) → fall back to SOUL_MARKDOWN (byte-identical, zero regression).
+   *  Gated backend-side by MAILAGENT_STANDING_CONTEXT_ENABLED (default ON). */
+  standingContext: string | null
 }
 
 export interface ChatModelPlatform {

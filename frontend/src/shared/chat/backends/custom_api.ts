@@ -39,6 +39,7 @@ import type {
 } from '../types'
 import type { ChatModelConfig, ChatModelPlatform } from '../platform'
 import { SOUL_MARKDOWN } from '../prompts/soul'
+import { PRODUCT_SAFETY_FLOOR } from '../prompts/safety_floor'
 
 // Anthropic `max_tokens` caps the model's RESPONSE length (not input).
 // Same 4096 ceiling Sprint 3 translate.ts used; ~12k Chinese chars at
@@ -254,7 +255,18 @@ function buildStableSystemPrompt(
   cfg: ChatModelConfig,
   getCachedSenderDigest: (senderAddr: string) => string | null
 ): string {
-  let text = buildStaticSystemHeader()
+  // PR4 (task 06-22) — layered assembly when Standing Context is on (default):
+  // PRODUCT_SAFETY_FLOOR (immutable, code-owned) + standingContext (SOUL+AGENT+
+  // RULES+USER, user-editable, assembled backend-side). The floor is prepended
+  // FIRST and is NOT part of standingContext, so a user/agent doc edit physically
+  // cannot weaken it. standingContext null/"" (flag MAILAGENT_STANDING_CONTEXT_ENABLED
+  // off, or the agent_config store unavailable) → legacy SOUL_MARKDOWN, byte-identical
+  // → zero email-mode regression + prompt-cache key unchanged. Everything after this
+  // header (userContext / memory / skills / KOS / session) is untouched.
+  let text =
+    cfg.standingContext && cfg.standingContext.length > 0
+      ? `${PRODUCT_SAFETY_FLOOR}\n\n${cfg.standingContext}`
+      : buildStaticSystemHeader()
   // task 06-08-chat 第二波 Bug B — inject the user-context page (role / Sender
   // Priority / focus projects) into the stable prefix so the assistant knows who
   // the user is. Mirrors src/llm_agent/processor.py:167-176 format (header → then

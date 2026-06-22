@@ -37,6 +37,7 @@ function cfg(opts?: Partial<ChatModelConfig>): ChatModelConfig {
     userContext: null,
     memorySummary: null,
     skillFragments: null,
+    standingContext: null,
     ...opts
   }
 }

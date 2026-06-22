@@ -971,7 +971,9 @@ describe('HttpChatPlatform config 快照', () => {
       userContext: null,
       memorySummary: null,
       // P3 — skill fragments default null (runtime injects them via config override).
-      skillFragments: null
+      skillFragments: null,
+      // PR4 — standing context default null (→ legacy SOUL_MARKDOWN header path).
+      standingContext: null
     })
     expect(p.kosConfig()).toEqual({ configured: false, timeDecayEnabled: true })
   })

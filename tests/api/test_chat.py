@@ -281,6 +281,11 @@ def test_chat_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     installed_hash = data.pop("installedSkillsHash")
     assert isinstance(profile_hash, str) and len(profile_hash) == 64
     assert isinstance(installed_hash, str) and len(installed_hash) == 64
+    # PR4 — Standing Context assembled (flag default ON; env_file=None → default True).
+    # Seeded docs SOUL+AGENT+RULES+USER joined; assert structure, not exact bytes.
+    standing = data.pop("standingContext")
+    assert "# SOUL" in standing and "# AGENT" in standing
+    assert "# RULES" in standing and "# USER" in standing
     assert data == {
         "maxIter": 8,
         "maxCostUsd": 0.5,
@@ -295,6 +300,18 @@ def test_chat_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
         "enabledModels": [],
         "manifestMode": False,
     }
+
+
+def test_chat_config_standing_context_flag_off(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """PR4 — MAILAGENT_STANDING_CONTEXT_ENABLED=false → standingContext ""（TS 回退
+    SOUL_MARKDOWN，邮件态字节零回归）。flag 热读 .env，默认 ON。"""
+    env = tmp_path / ".env"
+    env.write_text("MAILAGENT_STANDING_CONTEXT_ENABLED=false\n")
+    with _config_client(monkeypatch, _ChatConfigStub(), env_file=str(env)) as c:
+        data = c.get("/api/chat/config").json()["data"]
+    assert data["standingContext"] == ""
 
 
 def _clear_kos_creds_env(monkeypatch: pytest.MonkeyPatch) -> None:

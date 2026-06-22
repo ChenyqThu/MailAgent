@@ -321,6 +321,23 @@ async def chat_config(request: Request):
     except Exception:  # noqa: BLE001 — hashes are best-effort; never fail /config
         agent_profile_hash = None
         installed_skills_hash = None
+    # PR4 (task 06-22) — Standing Context assembled into ONE field: the 4 editable
+    # docs SOUL+AGENT+RULES+USER joined in order (no per-request-varying bytes →
+    # stable prompt-cache prefix). The TS harness prepends PRODUCT_SAFETY_FLOOR (a
+    # code-owned const) ahead of this, so user docs can never weaken the floor.
+    # Gated by MAILAGENT_STANDING_CONTEXT_ENABLED (hot-read .env, default ON — same
+    # discipline as manifestMode). OFF / store hiccup → "" → TS falls back to the
+    # legacy SOUL_MARKDOWN (byte-identical, zero email-mode regression).
+    standing_context = ""
+    if _hot_bool(env_vals, "MAILAGENT_STANDING_CONTEXT_ENABLED", True):
+        try:
+            from src.agent_config.store import PROFILE_DOC_NAMES, get_agent_config_store
+
+            _acs = get_agent_config_store()
+            _parts = [_acs.get_profile_doc(n).content.strip() for n in PROFILE_DOC_NAMES]
+            standing_context = "\n\n".join(p for p in _parts if p)
+        except Exception:  # noqa: BLE001 — standing context is best-effort; never fail /config
+            standing_context = ""
     return success_envelope(
         {
             "maxIter": max_iter,
@@ -337,6 +354,7 @@ async def chat_config(request: Request):
             "manifestMode": manifest_mode,
             "agentProfileHash": agent_profile_hash,
             "installedSkillsHash": installed_skills_hash,
+            "standingContext": standing_context,
         },
         request=request,
         source="config",

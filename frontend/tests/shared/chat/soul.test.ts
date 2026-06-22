@@ -10,6 +10,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { SOUL_MARKDOWN } from '../../../src/shared/chat/prompts/soul'
+import { PRODUCT_SAFETY_FLOOR } from '../../../src/shared/chat/prompts/safety_floor'
 import { __testing } from '../../../src/shared/chat/backends/custom_api'
 import type { ChatModelConfig } from '../../../src/shared/chat/platform'
 
@@ -22,6 +23,8 @@ function cfg(over: Partial<ChatModelConfig> = {}): ChatModelConfig {
     userContext: null,
     memorySummary: null,
     skillFragments: null,
+    // PR4 — null = Standing Context flag OFF → legacy SOUL_MARKDOWN header path.
+    standingContext: null,
     ...over
   }
 }
@@ -91,5 +94,55 @@ describe('soul — Skill prompt fragment injection (P3)', () => {
     )
     expect(stable).toContain('REPORT_SKILL_FRAGMENT')
     expect(stable).not.toContain('CALENDAR_SKILL_FRAGMENT')
+  })
+})
+
+// PR4 (task 06-22) — Standing Context layered assembly. When the backend supplies a
+// non-empty standingContext (flag MAILAGENT_STANDING_CONTEXT_ENABLED on, default), the
+// header becomes PRODUCT_SAFETY_FLOOR + standingContext instead of the legacy
+// SOUL_MARKDOWN. null/"" → legacy path (the existing tests above already cover that
+// the legacy header is byte-identical SOUL_MARKDOWN).
+describe('safety floor + standing context (PR4)', () => {
+  test('floor is byte-identical to soul.md safety section (drift guard)', () => {
+    // PRODUCT_SAFETY_FLOOR must remain a verbatim slice of the legacy soul so the
+    // hard safety behaviour is preserved when the layered assembly is on.
+    expect(SOUL_MARKDOWN.includes(PRODUCT_SAFETY_FLOOR)).toBe(true)
+  })
+
+  test('standingContext present → floor leads, then user docs (not SOUL_MARKDOWN)', () => {
+    const standing = '# SOUL\nIdentity here\n\n# RULES\nNever send silently'
+    const stable = __testing.buildStableSystemPrompt(
+      null,
+      cfg({ standingContext: standing }),
+      () => null
+    )
+    expect(stable.startsWith(PRODUCT_SAFETY_FLOOR)).toBe(true)
+    expect(stable).toContain('Identity here')
+    expect(stable).toContain('Never send silently')
+    // floor is prepended BEFORE the user-editable docs (cannot be weakened)
+    expect(stable.indexOf(PRODUCT_SAFETY_FLOOR)).toBeLessThan(stable.indexOf('Identity here'))
+    // the legacy combined SOUL_MARKDOWN is NOT used as the header in the on-path
+    expect(stable.startsWith(SOUL_MARKDOWN)).toBe(false)
+  })
+
+  test('standingContext keeps memory/skills ordering after the header', () => {
+    const stable = __testing.buildStableSystemPrompt(
+      null,
+      cfg({
+        standingContext: '# SOUL\nx',
+        memorySummary: 'MEM_OVERLAY',
+        skillFragments: 'SKILL_FRAG'
+      }),
+      () => null
+    )
+    // floor → standing → memory → skills (all in the cacheable stable prefix).
+    expect(stable.indexOf(PRODUCT_SAFETY_FLOOR)).toBeLessThan(stable.indexOf('# SOUL'))
+    expect(stable.indexOf('# SOUL')).toBeLessThan(stable.indexOf('MEM_OVERLAY'))
+    expect(stable.indexOf('MEM_OVERLAY')).toBeLessThan(stable.indexOf('SKILL_FRAG'))
+  })
+
+  test('empty standingContext → legacy SOUL_MARKDOWN header (flag-off fallback)', () => {
+    const stable = __testing.buildStableSystemPrompt(null, cfg({ standingContext: '' }), () => null)
+    expect(stable).toBe(SOUL_MARKDOWN)
   })
 })

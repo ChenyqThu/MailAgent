@@ -130,6 +130,12 @@ export interface HttpPlatformConfig {
    *  not injected. The constructor merges this in via the config override; it is
    *  never sourced from the serve-api snapshot. */
   skillFragments: string
+  /** PR4 (task 06-22) — Standing Context (SOUL+AGENT+RULES+USER) assembled
+   *  backend-side, from serve-api /chat/config. Non-empty → buildStableSystemPrompt
+   *  uses `PRODUCT_SAFETY_FLOOR + standingContext`; "" → legacy SOUL_MARKDOWN path
+   *  (flag MAILAGENT_STANDING_CONTEXT_ENABLED off, or store unavailable). Remote
+   *  default "" until /chat/config supplies it. */
+  standingContext: string
 }
 
 /** 远程默认快照（对齐 electron chat/config.ts 默认：harness ON / timeDecay ON / 其余
@@ -152,7 +158,9 @@ export const DEFAULT_HTTP_CONFIG: HttpPlatformConfig = {
   // P2b — manifest-driven tools off by default (builtin catalog = today's behaviour).
   manifestMode: false,
   // P3 — no skill fragments until the runtime computes + injects them.
-  skillFragments: ''
+  skillFragments: '',
+  // PR4 — no standing context until /chat/config supplies it (→ legacy SOUL_MARKDOWN).
+  standingContext: ''
 }
 
 /** per-messageId 的 streamContent debounce 状态。`latest` = 最近一次累积全量正文
@@ -462,7 +470,9 @@ export class HttpChatPlatform
       // P2f — "" → null (custom_api injects only when non-null + non-empty).
       memorySummary: this.config.memorySummary.length > 0 ? this.config.memorySummary : null,
       // P3 — "" → null (custom_api injects skill fragments only when non-empty).
-      skillFragments: this.config.skillFragments.length > 0 ? this.config.skillFragments : null
+      skillFragments: this.config.skillFragments.length > 0 ? this.config.skillFragments : null,
+      // PR4 — "" → null (custom_api falls back to SOUL_MARKDOWN when null/empty).
+      standingContext: this.config.standingContext.length > 0 ? this.config.standingContext : null
     }
   }
 
