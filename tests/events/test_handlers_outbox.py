@@ -211,10 +211,14 @@ class TestCompletedWithOutbox:
         assert e.source == "notion_webhook"
         assert e.payload == {"is_read": True, "is_flagged": False}
 
-    async def test_already_unflagged_short_circuits(
+    async def test_already_completed_short_circuits(
         self, handlers_with_outbox, outbox_repo, sync_store
     ):
-        # stored_flagged 默认 False → 直接 return
+        # Sprint 16 收尾 (codex 审 P1, 33e057d37) 起, short-circuit 条件是"三个目标
+        # 状态都已满足" (is_flagged=False AND is_read=True AND ps='已完成'), 而非旧
+        # 契约的"仅 is_flagged=False". 已在完成态的邮件不该再入 outbox.
+        sync_store.update_local_flags(5001, True, False, processing_status="已完成")
+
         await handlers_with_outbox.handle_completed({
             "properties": {
                 "message_id": "<msg-uuid@example.com>",
@@ -224,6 +228,32 @@ class TestCompletedWithOutbox:
 
         rows = outbox_repo.list_by_internal_id(5001)
         assert len(rows) == 0
+
+    async def test_unflagged_but_not_completed_mirrors_and_enqueues(
+        self, handlers_with_outbox, outbox_repo, sync_store
+    ):
+        # Sprint 16 收尾 (codex 审 P1) 的核心修复分支: 邮件虽已 unflagged, 但
+        # is_read / ps 还没到完成态时不能短路 — 必须补 ps='已完成' 镜像 (SSoT 修复)
+        # 并入 mailapp outbox 把邮件标已读. fixture 默认即此态
+        # (is_read=0, is_flagged=0, ps='').
+        await handlers_with_outbox.handle_completed({
+            "properties": {
+                "message_id": "<msg-uuid@example.com>",
+                "processing_status": "已完成",
+            },
+        })
+
+        rows = outbox_repo.list_by_internal_id(5001)
+        assert len(rows) == 1
+        assert rows[0].target == "mailapp"
+        assert rows[0].source == "notion_webhook"
+        assert rows[0].payload == {"is_read": True, "is_flagged": False}
+
+        # SSoT 镜像: SQLite 立即反映完成态
+        record = sync_store.get(5001)
+        assert bool(record["is_flagged"]) is False
+        assert bool(record["is_read"]) is True
+        assert record["processing_status"] == "已完成"
 
     async def test_guard_skips_when_processing_status_not_completed(
         self, handlers_with_outbox, outbox_repo, sync_store
