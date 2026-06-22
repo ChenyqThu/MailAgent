@@ -135,10 +135,15 @@ export interface HttpPlatformConfig {
   skillFragments: string
   /** PR4 (task 06-22) — Standing Context (SOUL+AGENT+RULES+USER) assembled
    *  backend-side, from serve-api /chat/config. Non-empty → buildStableSystemPrompt
+   *  R4 — `standingContextActive` (below) is the observability flag for which path ran.
    *  uses `PRODUCT_SAFETY_FLOOR + standingContext`; "" → legacy SOUL_MARKDOWN path
    *  (flag MAILAGENT_STANDING_CONTEXT_ENABLED off, or store unavailable). Remote
    *  default "" until /chat/config supplies it. */
   standingContext: string
+  /** R4 (task 06-22) — observability: true iff the layered Standing Context prompt is in
+   *  effect (flag on AND store readable → standingContext non-empty). false → the harness
+   *  ran the byte-identical legacy SOUL_MARKDOWN. For dogfood / trace, not prompt assembly. */
+  standingContextActive: boolean
   /** PR5 (task 06-22) — per-skill enable overrides from the backend agent_config.db
    *  ({skillName: enabled}, only explicitly-toggled skills). The runtime's buildEngine
    *  feeds these to computeSkillEnablement (backend wins; localStorage is a transitional
@@ -175,6 +180,8 @@ export const DEFAULT_HTTP_CONFIG: HttpPlatformConfig = {
   skillFragments: '',
   // PR4 — no standing context until /chat/config supplies it (→ legacy SOUL_MARKDOWN).
   standingContext: '',
+  // R4 — assume layered prompt inactive until /chat/config reports it (legacy fallback).
+  standingContextActive: false,
   // PR5 — no backend skill overrides until /chat/config supplies them (→ manifest defaults).
   skillOverrides: {},
   // R6 — assume the override store is available by default (a real /chat/config sets it).

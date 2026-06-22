@@ -301,6 +301,8 @@ def test_chat_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
         "memorySummary": "",
         "enabledModels": [],
         "manifestMode": False,
+        # R4 — flag default ON + seeded docs → layered prompt in effect.
+        "standingContextActive": True,
         # R6 — override store healthy by default → available True.
         "skillOverridesAvailable": True,
     }
@@ -333,6 +335,8 @@ def test_chat_config_standing_context_flag_off(
     with _config_client(monkeypatch, _ChatConfigStub(), env_file=str(env)) as c:
         data = c.get("/api/chat/config").json()["data"]
     assert data["standingContext"] == ""
+    # R4 — observability: flag off → layered prompt NOT in effect (legacy SOUL_MARKDOWN).
+    assert data["standingContextActive"] is False
 
 
 def _clear_kos_creds_env(monkeypatch: pytest.MonkeyPatch) -> None:

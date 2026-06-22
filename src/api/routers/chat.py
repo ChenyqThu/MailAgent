@@ -338,6 +338,11 @@ async def chat_config(request: Request):
             standing_context = "\n\n".join(p for p in _parts if p)
         except Exception:  # noqa: BLE001 — standing context is best-effort; never fail /config
             standing_context = ""
+    # R4 (GPT-5.5 review) — observability: layered prompt is IN EFFECT iff standing_context
+    # actually assembled (flag on AND store readable). When false, the TS harness falls back
+    # to the byte-identical legacy SOUL_MARKDOWN. Lets dogfood / debug confirm which prompt
+    # path a session ran without inspecting bytes.
+    standing_context_active = bool(standing_context)
     # PR5 (task 06-22) — per-skill enable overrides (backend SSoT in agent_config.db,
     # replacing the old per-surface localStorage source). The runtime feeds these to
     # computeSkillEnablement instead of readSkillOverrides(). Only explicitly-toggled
@@ -374,6 +379,7 @@ async def chat_config(request: Request):
             "agentProfileHash": agent_profile_hash,
             "installedSkillsHash": installed_skills_hash,
             "standingContext": standing_context,
+            "standingContextActive": standing_context_active,
             "skillOverrides": skill_overrides,
             "skillOverridesAvailable": skill_overrides_available,
         },
