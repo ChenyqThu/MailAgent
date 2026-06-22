@@ -53,6 +53,7 @@ import {
   computeSkillEnablement,
   readSkillOverrides
 } from './skill_enablement'
+import { getActivatedSkillOverrides } from '../state/skill-activation'
 import type { ChatBackend } from './types'
 import type {
   AgentMemoryEntry,
@@ -277,7 +278,15 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
     // pushes them to the backend + clears localStorage. computeSkillEnablement's
     // signature is unchanged (still (manifest, overrides)) — only the override source
     // moved. COLLISION_EXEMPT_TOOL_NAMES stays inside computeSkillEnablement (client-side).
-    const overrides = { ...readSkillOverrides(), ...(snapshot.skillOverrides ?? {}) }
+    // PR7 — fold the per-session @mention activation (force-on = true) on top, so a
+    // mentioned skill is advertised for the session. Highest precedence (after backend),
+    // but still passes through computeSkillEnablement → an unavailable mentioned skill is
+    // NOT advertised (advertised = enabled && available) and a non-skill token is ignored.
+    const overrides = {
+      ...readSkillOverrides(),
+      ...(snapshot.skillOverrides ?? {}),
+      ...getActivatedSkillOverrides()
+    }
     const enablement = manifest
       ? computeSkillEnablement(manifest, overrides)
       : { disabledToolNames: new Set<string>(), skillFragments: '' }

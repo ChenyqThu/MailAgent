@@ -32,6 +32,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 
 import { useMailApi } from './useMailApi'
+import { applySkillMentions, useSkillActivation } from '../state/skill-activation'
 import type { ChatBackendKind, ChatMessage, ChatSession, ChatStartResult } from '../api/types'
 
 export interface SendChatInput {
@@ -1114,6 +1115,9 @@ export function useEmailChat(
         activeSessionRef.current = newSess.id
         setActiveSessionIdState(newSess.id)
       }
+      // PR7 — @mention: force-activate any @skill in this message for the session +
+      // invalidate the cached engine if the set changed so start() rebuilds with it.
+      applySkillMentions(input.message, () => mailApi.chat.invalidateConfig())
       const result = await mailApi.chat.start({
         emailId,
         message: input.message,
@@ -1243,6 +1247,7 @@ export function useEmailChat(
     setStreamingMessageId(null)
     setError(null)
     setLastFailedInput(null)
+    useSkillActivation.getState().clear() // PR7 — drop session @mention activations
     // task 06-08-chat PR B — drop any in-flight turn's live tool steps.
     setLiveToolCalls(new Map())
     // task 06-08-chat Bug 1 (codex follow-up) — a fresh conversation starts

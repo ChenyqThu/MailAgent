@@ -19,6 +19,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { useMailApi } from './useMailApi'
+import { applySkillMentions, useSkillActivation } from '../state/skill-activation'
 import type { ChatMessage, ChatSession, ChatStartResult } from '../api/types'
 import type { ChatError, EditChatInput, LiveToolCall, PendingConfirmation } from './useEmailChat'
 
@@ -303,6 +304,9 @@ export function useGeneralChat(): UseGeneralChatReturn {
         activeSessionRef.current = newSess.id
         setActiveSessionId(newSess.id)
       }
+      // PR7 — @mention: force-activate any @skill in this message for the session +
+      // invalidate the cached engine if the set changed so start() rebuilds with it.
+      applySkillMentions(input.message, () => mailApi.chat.invalidateConfig())
       const result = await mailApi.chat.start({
         anchorType: 'general',
         emailId: null,
@@ -352,6 +356,7 @@ export function useGeneralChat(): UseGeneralChatReturn {
     navGenerationRef.current += 1
     setPendingConfirmations([])
     forceNewSessionRef.current = true
+    useSkillActivation.getState().clear() // PR7 — drop session @mention activations
   }, [mailApi])
 
   const confirmTool = useCallback(

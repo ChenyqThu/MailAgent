@@ -165,6 +165,21 @@ export function computeSkillEnablement(
   return { disabledToolNames, skillFragments: fragments.join('\n\n'), resolved }
 }
 
+/** PR7 — extract `@skill` mentions from a chat message → lowercase skill-name tokens
+ *  (e.g. "ping @calendar about @report" → ["calendar", "report"]). The runtime
+ *  force-activates these for the session. Non-skill tokens are harmless: an override for
+ *  a name no skill owns is ignored by computeSkillEnablement, and an unavailable skill is
+ *  still gated by `advertised = enabled && available`. Matches `@` at a word boundary
+ *  followed by a letter-led token; deduped. Pure → unit-testable. */
+export function parseSkillMentions(text: string): string[] {
+  if (typeof text !== 'string' || text.length === 0) return []
+  const out = new Set<string>()
+  const re = /(?:^|[\s(])@([a-z][a-z0-9_-]{0,40})/gi
+  let m: RegExpExecArray | null
+  while ((m = re.exec(text)) !== null) out.add(m[1].toLowerCase())
+  return [...out]
+}
+
 /** PR5 — synchronous FNV-1a 32-bit → 8 hex chars. A compact, deterministic
  *  fingerprint (NOT a cryptographic hash) for the active-skill set. activeSkillsHash
  *  is client-only (the backend doesn't compute it — it depends on the @mention

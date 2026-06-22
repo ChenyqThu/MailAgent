@@ -27,6 +27,7 @@ import { toastError } from '@shared/state/toast'
 import type { SearchHit } from '@shared/api/types'
 
 import { MentionPopover } from './MentionPopover'
+import { ActiveSkillChips } from './ActiveSkillChips'
 
 /** Which chat surface a Composer instance lives in. */
 type PanelScope = 'chat' | 'general'
@@ -344,6 +345,8 @@ export function Composer({
           ))}
         </ul>
       )}
+      {/* PR7 — @mention skill activation chips (self-hides when none are active). */}
+      <ActiveSkillChips />
       <div
         className={cn(
           'rounded-md bg-ink-3 border transition-colors duration-fast',
