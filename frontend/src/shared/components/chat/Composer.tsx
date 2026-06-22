@@ -99,6 +99,10 @@ interface Props {
    *  the email-mode chat panel; the Cmd+O General Agent dialog passes
    *  `'general'`. */
   panelScope?: PanelScope
+  /** R3 — the per-conversation @mention activation scope key (from the chat hook's
+   *  `skillScopeKey`). Drives ActiveSkillChips so each surface/session shows only its own
+   *  pinned skills. Omitted → no chips rendered. */
+  skillScopeKey?: string
 }
 
 export function Composer({
@@ -122,7 +126,8 @@ export function Composer({
   thinkingEnabled = false,
   onToggleThinking,
   thinkingDisabled = false,
-  panelScope = 'chat'
+  panelScope = 'chat',
+  skillScopeKey
 }: Props): React.ReactElement {
   const { t } = useTranslation()
   const taRef = useRef<HTMLTextAreaElement>(null)
@@ -346,7 +351,7 @@ export function Composer({
         </ul>
       )}
       {/* PR7 — @mention skill activation chips (self-hides when none are active). */}
-      <ActiveSkillChips />
+      {skillScopeKey ? <ActiveSkillChips scopeKey={skillScopeKey} /> : null}
       <div
         className={cn(
           'rounded-md bg-ink-3 border transition-colors duration-fast',

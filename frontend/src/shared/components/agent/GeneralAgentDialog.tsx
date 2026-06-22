@@ -365,6 +365,7 @@ export function GeneralAgentDialog(): React.ReactElement | null {
                 onToggleThinking={toggleThinking}
                 thinkingDisabled={!thinkingSupported}
                 panelScope="general"
+                skillScopeKey={chat.skillScopeKey}
               />
             </>
           )}

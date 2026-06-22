@@ -943,6 +943,7 @@ export function AIChatPanel({
                 isStreaming={chat.isStreaming}
                 canSend={canSend}
                 backendName={backendName}
+                skillScopeKey={chat.skillScopeKey}
                 mentions={mentions}
                 onAddMention={handleAddMention}
                 onRemoveMention={handleRemoveMention}

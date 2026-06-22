@@ -182,14 +182,20 @@ export function computeSkillEnablement(
 
 /** PR7 — extract `@skill` mentions from a chat message → lowercase skill-name tokens
  *  (e.g. "ping @calendar about @report" → ["calendar", "report"]). The runtime
- *  force-activates these for the session. Non-skill tokens are harmless: an override for
- *  a name no skill owns is ignored by computeSkillEnablement, and an unavailable skill is
- *  still gated by `advertised = enabled && available`. Matches `@` at a word boundary
- *  followed by a letter-led token; deduped. Pure → unit-testable. */
+ *  force-activates these for the session's scope. Non-skill tokens are harmless: an
+ *  override for a name no skill owns is ignored by computeSkillEnablement, and an
+ *  unavailable skill is still gated by `advertised = enabled && available`. Deduped.
+ *  Pure → unit-testable.
+ *
+ *  R3 (GPT-5.5 review Q5) — the `@` must NOT be preceded by an identifier char
+ *  ([A-Za-z0-9._-]); that rejects email addresses ("user@example.com" → no match) while
+ *  ALLOWING a mention after CJK text or punctuation ("请@report", "，@calendar") which the
+ *  old `(?:^|[\s(])@` boundary missed. Negative lookbehind is supported in all the V8
+ *  runtimes this ships to (Electron / browsers / Node ≥18 vitest). */
 export function parseSkillMentions(text: string): string[] {
   if (typeof text !== 'string' || text.length === 0) return []
   const out = new Set<string>()
-  const re = /(?:^|[\s(])@([a-z][a-z0-9_-]{0,40})/gi
+  const re = /(?<![A-Za-z0-9._-])@([a-z][a-z0-9_-]{0,40})/gi
   let m: RegExpExecArray | null
   while ((m = re.exec(text)) !== null) out.add(m[1].toLowerCase())
   return [...out]

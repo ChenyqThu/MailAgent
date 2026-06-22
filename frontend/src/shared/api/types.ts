@@ -1378,6 +1378,11 @@ export interface ChatStartOpts {
    *  collapsible block + (MVP) drops tools for this turn. Undefined/false →
    *  today's behaviour. Ignored by notion-agent + OpenAI-protocol models. */
   thinking?: boolean
+  /** R3 (task 06-22) — the skills the user `@mention`-activated for THIS turn's scope.
+   *  The hook reads them from the per-scope activation store and threads them here; the
+   *  runtime folds them (force-on) into the engine's skill enablement for this turn only,
+   *  so a mention never leaks across surfaces / sessions. Undefined/[] → no override. */
+  activatedSkills?: string[]
 }
 
 // Sprint 14 PR B — inline message edit. The renderer sends the session +
@@ -1395,6 +1400,9 @@ export interface ChatEditOpts {
   /** task 06-08-chat 需求 5 — per-turn extended-thinking toggle (parity with
    *  ChatStartOpts). Applies to the re-streamed assistant reply. */
   thinking?: boolean
+  /** R3 (task 06-22) — @mention activation for the re-streamed reply (parity with
+   *  ChatStartOpts.activatedSkills). */
+  activatedSkills?: string[]
 }
 
 export interface ChatStartResult {

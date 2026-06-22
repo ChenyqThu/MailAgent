@@ -57,6 +57,9 @@ export interface UseGeneralChatReturn {
   liveToolCalls: Map<number, LiveToolCall[]>
   /** Re-pull the general sessions list (after delete / external change). */
   refreshSessions: () => Promise<void>
+  /** R3 — per-scope @mention activation key for the active general session. The dialog
+   *  passes it to Composer so ActiveSkillChips renders only THIS session's activations. */
+  skillScopeKey: string
 }
 
 export function useGeneralChat(): UseGeneralChatReturn {
@@ -304,9 +307,12 @@ export function useGeneralChat(): UseGeneralChatReturn {
         activeSessionRef.current = newSess.id
         setActiveSessionId(newSess.id)
       }
-      // PR7 — @mention: force-activate any @skill in this message for the session +
-      // invalidate the cached engine if the set changed so start() rebuilds with it.
-      applySkillMentions(input.message, () => mailApi.chat.invalidateConfig())
+      // R3 — @mention: force-activate any @skill for THIS general session's scope (keyed
+      // by session id, resolved AFTER the forceNew block so a brand-new session uses its
+      // real id), then thread the scope's activation list into start(). Scope-keyed so a
+      // mention in general session A never leaks into session B or the Email surface.
+      const skillScope = `general:${activeSessionRef.current ?? 'new'}`
+      const activatedSkills = applySkillMentions(skillScope, input.message)
       const result = await mailApi.chat.start({
         anchorType: 'general',
         emailId: null,
@@ -314,7 +320,8 @@ export function useGeneralChat(): UseGeneralChatReturn {
         backendKind: GENERAL_BACKEND,
         backendModel: input.backendModel ?? null,
         sessionId: activeSessionRef.current,
-        thinking: input.thinking
+        thinking: input.thinking,
+        activatedSkills
       })
       if (!mountedRef.current || myGen !== navGenerationRef.current) {
         mailApi.chat.abort(result.sessionId)
@@ -356,7 +363,8 @@ export function useGeneralChat(): UseGeneralChatReturn {
     navGenerationRef.current += 1
     setPendingConfirmations([])
     forceNewSessionRef.current = true
-    useSkillActivation.getState().clear() // PR7 — drop session @mention activations
+    // R3 — drop @mention activations for the session being left (scope-keyed by id).
+    useSkillActivation.getState().clearScope(`general:${sid ?? 'new'}`)
   }, [mailApi])
 
   const confirmTool = useCallback(
@@ -388,6 +396,9 @@ export function useGeneralChat(): UseGeneralChatReturn {
       }
       setError(null)
       const myGen = navGenerationRef.current
+      // R3 — re-apply @mention activation from the edited content into this scope.
+      const skillScope = `general:${activeSessionId ?? 'new'}`
+      const activatedSkills = applySkillMentions(skillScope, input.newContent)
       const result = await mailApi.chat.editMessage({
         sessionId: activeSessionId,
         editingMessageId: input.messageId,
@@ -395,7 +406,8 @@ export function useGeneralChat(): UseGeneralChatReturn {
         backendKind: GENERAL_BACKEND,
         backendModel: input.backendModel ?? null,
         backendAgentPageId: null,
-        thinking: input.thinking
+        thinking: input.thinking,
+        activatedSkills
       })
       if (!mountedRef.current || myGen !== navGenerationRef.current) {
         mailApi.chat.abort(result.sessionId)
@@ -469,6 +481,7 @@ export function useGeneralChat(): UseGeneralChatReturn {
     pendingConfirmations,
     confirmTool,
     liveToolCalls,
-    refreshSessions
+    refreshSessions,
+    skillScopeKey: `general:${activeSessionId ?? 'new'}`
   }
 }

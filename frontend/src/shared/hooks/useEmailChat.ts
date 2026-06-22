@@ -191,6 +191,10 @@ export interface UseEmailChatReturn {
    *  currently streaming tools; the renderer reads the DB audit rows once the
    *  turn settles. */
   liveToolCalls: Map<number, LiveToolCall[]>
+  /** R3 — the per-scope @mention activation key for this (email, kind). The panel passes
+   *  it to Composer so ActiveSkillChips renders only THIS scope's activated skills, never
+   *  another email's or the General Agent's. */
+  skillScopeKey: string
 }
 
 // Sprint 5 §2.3 state-machine #4: quota cooldown duration. The Anthropic
@@ -1115,9 +1119,13 @@ export function useEmailChat(
         activeSessionRef.current = newSess.id
         setActiveSessionIdState(newSess.id)
       }
-      // PR7 — @mention: force-activate any @skill in this message for the session +
-      // invalidate the cached engine if the set changed so start() rebuilds with it.
-      applySkillMentions(input.message, () => mailApi.chat.invalidateConfig())
+      // R3 — @mention: force-activate any @skill for THIS turn's scope
+      // (email:<id>:<kind>), then thread the scope's activation list into start() so the
+      // runtime advertises it for this turn only. Scope-keyed (not a global list) so a
+      // mention in this email/kind never leaks into another email, kind, or the General
+      // Agent surface (they share one runtime).
+      const skillScope = `email:${myEmail}:${input.backendKind}`
+      const activatedSkills = applySkillMentions(skillScope, input.message)
       const result = await mailApi.chat.start({
         emailId,
         message: input.message,
@@ -1131,7 +1139,8 @@ export function useEmailChat(
         sessionId: activeSessionRef.current,
         // task 06-08-chat 需求 5 — per-turn thinking toggle (AIChatPanel reads it
         // from the persisted Composer state at send time).
-        thinking: input.thinking
+        thinking: input.thinking,
+        activatedSkills
       })
       if (
         !mountedRef.current ||
@@ -1247,7 +1256,9 @@ export function useEmailChat(
     setStreamingMessageId(null)
     setError(null)
     setLastFailedInput(null)
-    useSkillActivation.getState().clear() // PR7 — drop session @mention activations
+    // R3 — drop @mention activations for THIS scope only (email:<id>:<kind>); other
+    // emails' / the General surface's activations are namespaced and untouched.
+    useSkillActivation.getState().clearScope(`email:${emailId}:${backendKind}`)
     // task 06-08-chat PR B — drop any in-flight turn's live tool steps.
     setLiveToolCalls(new Map())
     // task 06-08-chat Bug 1 (codex follow-up) — a fresh conversation starts
@@ -1273,7 +1284,7 @@ export function useEmailChat(
     // here (BackendSelector lives in AIChatPanel; send() receives it
     // through SendChatInput) so we defer the actual INSERT to send().
     forceNewSessionRef.current = true
-  }, [mailApi])
+  }, [mailApi, emailId, backendKind])
 
   // Sprint 19 PR-1d.2 — Confirmation dialog reply. The harness IPC fires
   // FIRST and unblocks the suspended main-process promise (闭环不变); only the
@@ -1341,6 +1352,9 @@ export function useEmailChat(
       // also leaves the IPC resolving against a scope the user has left.
       const myEmail = emailIdRef.current
       const myGen = navGenerationRef.current
+      // R3 — re-apply @mention activation from the edited content into this scope.
+      const skillScope = `email:${myEmail}:${input.backendKind}`
+      const activatedSkills = applySkillMentions(skillScope, input.newContent)
       const result = await mailApi.chat.editMessage({
         sessionId: activeSessionId,
         editingMessageId: input.messageId,
@@ -1349,7 +1363,8 @@ export function useEmailChat(
         backendModel: input.backendModel ?? null,
         backendAgentPageId: input.backendAgentPageId ?? null,
         // task 06-08-chat 需求 5 — per-turn thinking toggle for the re-stream.
-        thinking: input.thinking
+        thinking: input.thinking,
+        activatedSkills
       })
       if (
         !mountedRef.current ||
@@ -1486,7 +1501,8 @@ export function useEmailChat(
     deleteSession,
     pendingConfirmations,
     confirmTool,
-    liveToolCalls
+    liveToolCalls,
+    skillScopeKey: `email:${emailId ?? 'null'}:${backendKind}`
   }
 }
 

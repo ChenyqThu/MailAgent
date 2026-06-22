@@ -53,7 +53,6 @@ import {
   computeSkillEnablement,
   readSkillOverrides
 } from './skill_enablement'
-import { getActivatedSkillOverrides } from '../state/skill-activation'
 import type { ChatBackend } from './types'
 import type {
   AgentMemoryEntry,
@@ -171,6 +170,26 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
   // 失败不缓存 → 下次重取（同 enginePromise 的重试语义）。
   let snapshotPromise: Promise<Partial<HttpPlatformConfig>> | null = null
 
+  // R3 (GPT-5.5 review, HIGH) — the @mention skill activation for the CURRENT turn's
+  // scope, threaded in per call via ChatStartOpts/ChatEditOpts.activatedSkills (NOT read
+  // from a global store). buildEngine folds these as force-on overrides. Because two
+  // surfaces share one runtime, reading a global list would leak email X's mention into
+  // email Y / General; passing the turn's own scope's list keeps the engine correct for
+  // exactly the turn being sent. applyActivatedSkills drops the cached engine when the
+  // list changes so the next ensureEngine() rebuilds with the new advertised set.
+  let activatedSkillsList: string[] = []
+  let activatedSkillsKey = ''
+  function applyActivatedSkills(list: string[] | undefined): void {
+    const names = Array.isArray(list)
+      ? [...new Set(list.filter((n): n is string => typeof n === 'string' && n.length > 0))].sort()
+      : []
+    const key = names.join('\n')
+    if (key === activatedSkillsKey) return
+    activatedSkillsKey = key
+    activatedSkillsList = names
+    enginePromise = null // activation changed → rebuild engine (config snapshot reused)
+  }
+
   /** 预取 serve-api chat 运行配置快照（D-3c-3：配置以 serve-api 为准，避免本地改过的 env
    *  被 DEFAULT_HTTP_CONFIG 硬编码默认覆盖漂移）。端点 data 形状 = HttpPlatformConfig
    *  （camelCase 全字段，恒等覆盖）。预取失败（端点不可达 / 鉴权失败 / 10s 超时）→ {}
@@ -278,15 +297,17 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
     // pushes them to the backend + clears localStorage. computeSkillEnablement's
     // signature is unchanged (still (manifest, overrides)) — only the override source
     // moved. COLLISION_EXEMPT_TOOL_NAMES stays inside computeSkillEnablement (client-side).
-    // PR7 — fold the per-session @mention activation (force-on = true) on top, so a
-    // mentioned skill is advertised for the session. Highest precedence (after backend),
-    // but still passes through computeSkillEnablement → an unavailable mentioned skill is
-    // NOT advertised (advertised = enabled && available) and a non-skill token is ignored.
-    const overrides = {
+    // R3 — fold the per-turn @mention activation (force-on = true) on top, so a mentioned
+    // skill is advertised for THIS turn's scope. Threaded via start/editMessage opts into
+    // activatedSkillsList (no global read → no cross-surface leak). Highest precedence
+    // (after backend), but still passes through computeSkillEnablement → an unavailable
+    // mentioned skill is NOT advertised (advertised = enabled && available) and a non-skill
+    // token is ignored.
+    const overrides: Record<string, boolean> = {
       ...readSkillOverrides(),
-      ...(snapshot.skillOverrides ?? {}),
-      ...getActivatedSkillOverrides()
+      ...(snapshot.skillOverrides ?? {})
     }
+    for (const n of activatedSkillsList) overrides[n] = true
     const enablement = manifest
       ? computeSkillEnablement(manifest, overrides)
       : { disabledToolNames: new Set<string>(), skillFragments: '' }
@@ -381,6 +402,7 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
       // handlers/chat.ts chat:start 的 envelope code 映射：backend-missing→E_BACKEND_UNAVAILABLE）。
       try {
         validateStartOpts(opts)
+        applyActivatedSkills(opts.activatedSkills) // R3 — per-turn @mention scope
         const engine = await ensureEngine()
         return await engine.dispatcher.startChat(mapStart(opts), sink)
       } catch (err) {
@@ -393,6 +415,7 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
       // backend-missing→E_BACKEND_UNAVAILABLE，其余→E_DISPATCH（对齐 chat:editMessage）。
       try {
         validateEditOpts(opts)
+        applyActivatedSkills(opts.activatedSkills) // R3 — per-turn @mention scope
         const engine = await ensureEngine()
         return await engine.dispatcher.editChatMessage(mapEdit(opts), sink)
       } catch (err) {
