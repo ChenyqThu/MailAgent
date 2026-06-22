@@ -402,20 +402,20 @@ describe('createBuiltinTools KOS gate', () => {
     const names = tools.map((t) => t.name)
     expect(names).not.toContain('kos_query')
     expect(names).not.toContain('kos_digest')
-    expect(tools).toHaveLength(25) // 11 read + 9 write + 4 memory (P2f) + 1 notion (P2g), no KOS
+    expect(tools).toHaveLength(36) // 11 read + 9 write + 4 memory (P2f) + 1 notion (P2g) + 5 agent_profile + 6 skill, no KOS
   })
 
-  test('configured=true — KOS tools registered alongside default 25 (→ 34)', () => {
+  test('configured=true — KOS tools registered alongside default 36 (→ 45)', () => {
     const tools = createBuiltinTools(
       makePlatform({ kosConfig: () => ({ configured: true, timeDecayEnabled: false }) })
     )
     const names = tools.map((t) => t.name).sort()
     expect(names).toContain('kos_query')
     expect(names).toContain('kos_put_page')
-    expect(tools).toHaveLength(34) // 25 default (incl. 4 memory + 1 notion) + 9 KOS
+    expect(tools).toHaveLength(45) // 36 default (incl. 4 memory + 1 notion + 5 agent_profile + 6 skill) + 9 KOS
   })
 
-  test('configured=true: category=meta holds the KOS tools + the 4 memory tools', () => {
+  test('configured=true: category=meta holds KOS + 4 memory + 5 agent_profile + 6 skill tools', () => {
     const tools = createBuiltinTools(
       makePlatform({ kosConfig: () => ({ configured: true, timeDecayEnabled: false }) })
     )
@@ -424,8 +424,26 @@ describe('createBuiltinTools KOS gate', () => {
       .map((t) => t.name)
       .sort()
     // P2f — memory tools are also category 'meta' (agent-meta), alongside KOS.
+    // PR6 — agent_profile (Standing Context) + skill management tools are also 'meta'.
     const MEMORY_NAMES = ['memory_delete', 'memory_get', 'memory_list', 'memory_write']
-    expect(metaNames).toEqual([...ALL_KOS_NAMES, ...MEMORY_NAMES].sort())
+    const PROFILE_NAMES = [
+      'agent_profile_apply_patch',
+      'agent_profile_history',
+      'agent_profile_list_docs',
+      'agent_profile_read_doc',
+      'agent_profile_rollback'
+    ]
+    const SKILL_NAMES = [
+      'skill_disable',
+      'skill_enable',
+      'skill_install',
+      'skill_list_installed',
+      'skill_read',
+      'skill_uninstall'
+    ]
+    expect(metaNames).toEqual(
+      [...ALL_KOS_NAMES, ...MEMORY_NAMES, ...PROFILE_NAMES, ...SKILL_NAMES].sort()
+    )
     // every KOS tool is still meta-categorized (the original invariant).
     expect(metaNames.filter((n) => n.startsWith('kos_'))).toEqual(ALL_KOS_NAMES)
   })

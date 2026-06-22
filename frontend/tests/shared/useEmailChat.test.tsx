@@ -252,7 +252,9 @@ describe('useEmailChat — send + stream', () => {
       backendAgentPageId: null,
       // Sprint 19 — useEmailChat 透传 activeSessionId (首次 send + 空 sessions
       // list → null) 让 dispatcher 落到正确 session row.
-      sessionId: null
+      sessionId: null,
+      // PR7 — @mention 会话级 skill 激活（无激活 → 空数组）
+      activatedSkills: []
     })
     expect(result.current.activeSessionId).toBe(1)
     expect(result.current.streamingMessageId).toBe(101)
@@ -1618,7 +1620,9 @@ describe('useEmailChat — editMessage (Sprint 14 PR B)', () => {
       newContent: 'edited',
       backendKind: 'custom-api',
       backendModel: 'claude',
-      backendAgentPageId: null
+      backendAgentPageId: null,
+      // PR7 — @mention 会话级 skill 激活（无激活 → 空数组）
+      activatedSkills: []
     })
     await waitFor(() => expect(result.current.streamingMessageId).toBe(201))
     expect(result.current.messages.map((m) => m.id)).toEqual([200, 201])

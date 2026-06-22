@@ -237,7 +237,7 @@ describe('builtin tool catalog — M1', () => {
 })
 
 describe('createBuiltinTools — boot wiring', () => {
-  test('builds all 25 default tools (KOS off) into a fresh registry (11 read + 9 write + 4 memory + 1 notion)', () => {
+  test('builds all 36 default tools (KOS off) into a fresh registry (11 read + 9 write + 4 memory + 1 notion + 5 agent_profile + 6 skill)', () => {
     const r = createToolRegistry()
     for (const t of createBuiltinTools(makePlatform())) r.register(t)
     expect(r.names().sort()).toEqual(
@@ -268,7 +268,20 @@ describe('createBuiltinTools — boot wiring', () => {
         'memory_write',
         'memory_delete',
         // P2g notion_agent_chat
-        'notion_agent_chat'
+        'notion_agent_chat',
+        // PR6 — agent self-config: Standing Context docs (read/edit)
+        'agent_profile_list_docs',
+        'agent_profile_read_doc',
+        'agent_profile_history',
+        'agent_profile_apply_patch',
+        'agent_profile_rollback',
+        // PR6 — installed skill management
+        'skill_list_installed',
+        'skill_read',
+        'skill_enable',
+        'skill_disable',
+        'skill_install',
+        'skill_uninstall'
       ].sort()
     )
   })
@@ -277,7 +290,7 @@ describe('createBuiltinTools — boot wiring', () => {
     const r = createToolRegistry()
     for (const t of createBuiltinTools(makePlatform())) r.register(t)
     const schema = r.toAnthropicSchema()
-    expect(schema).toHaveLength(25)
+    expect(schema).toHaveLength(36)
     for (const t of schema) {
       expect(t.name).toBeTruthy()
       expect(t.description).toBeTruthy()
@@ -298,13 +311,13 @@ describe('createBuiltinTools — boot wiring', () => {
     }
   })
 
-  test('KOS gate — kosConfig().configured=true adds the 9 KOS tools (25 → 34)', () => {
+  test('KOS gate — kosConfig().configured=true adds the 9 KOS tools (36 → 45)', () => {
     const off = createBuiltinTools(makePlatform())
-    expect(off).toHaveLength(25)
+    expect(off).toHaveLength(36)
     const on = createBuiltinTools(
       makePlatform({ kosConfig: () => ({ configured: true, timeDecayEnabled: false }) })
     )
-    expect(on).toHaveLength(34) // 25 default (incl. 4 memory + 1 notion) + 9 KOS
+    expect(on).toHaveLength(45) // 36 default (incl. 4 memory + 1 notion + 5 agent_profile + 6 skill) + 9 KOS
     const names = on.map((t) => t.name)
     expect(names).toContain('kos_query')
     expect(names).toContain('kos_put_page')
