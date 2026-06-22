@@ -75,10 +75,9 @@ data/notion_ds_cache.json
 .playwright-mcp/
 
 # --- v0.3.0 后清理（2026-06-04）: 本地运行时 / 产物（文件保留, git 不再 track）---
-# AI chat 运行时库（dogfood 对话数据）
-frontend/ai_chat.db
-frontend/ai_chat.db-shm
-frontend/ai_chat.db-wal
+# AI chat 运行时库（dogfood 对话数据）+ 迁移备份（test 跑 schema migration 时落的
+# .pre-vN.bak / -shm / -wal）。通配覆盖所有变体，防 `git add frontend/` 误纳入。
+frontend/ai_chat.db*
 # electron-vite/rollup build 误落根目录的 bundle 产物（正常应在 out/main|out/renderer/）
 frontend/index.js
 frontend/index-*.js
