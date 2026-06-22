@@ -58,8 +58,8 @@ def _server_version() -> str:
 
 
 @lru_cache(maxsize=1)
-def all_skills() -> tuple[BoundSkill, ...]:
-    """收集全部 builtin skills（进程内缓存）。新增 skill 在此登记 builder。"""
+def code_builtin_skills() -> tuple[BoundSkill, ...]:
+    """代码内置 builtin skills（进程内缓存 —— 不随运行时变化）。新增 builtin 在此登记 builder。"""
     from src.skills.builtin import calendar, email, notion_agent, report, search
 
     return (
@@ -69,6 +69,50 @@ def all_skills() -> tuple[BoundSkill, ...]:
         calendar.build_skill(),
         notion_agent.build_skill(),
     )
+
+
+def _load_installed_skills(builtins: tuple[BoundSkill, ...]) -> list[BoundSkill]:
+    """从 agent_config.db 读安装行 → BoundSkill（PR3 merge）。
+
+    **不缓存合并结果**（Plan review §7.1：lru_cache 在多 worker 下会陈旧 —— 一个 worker 装的
+    skill 别的 worker 看不到直到重启）。按 ``api_keys`` 的 per-call 短连接纪律，每次重查使
+    install/uninstall 即时可见。best-effort：agent_config 不可达 → []（退化为纯 builtin，never
+    崩 /api/skills）。过滤 builtin 懒行（只承载 enable 覆盖）+ 与 builtin 同名的安装行（builtin
+    胜出，installed 不得 shadow）。
+    """
+    try:
+        from src.agent_config.store import get_agent_config_store
+
+        rows = get_agent_config_store().list_skills()
+    except Exception:  # noqa: BLE001 — agent_config 不可达 → 纯 builtin（never 崩 manifest）
+        return []
+    from src.skills.installed import build_builtin_tool_index, installed_skill_to_bound
+
+    idx = build_builtin_tool_index(builtins)
+    seen = {s.name for s in builtins}
+    out: list[BoundSkill] = []
+    for row in rows:
+        if row.source_type == "builtin":
+            continue  # 懒 enable-覆盖行，不是 skill 定义（manifest 来自代码）
+        if row.skill_name in seen:
+            continue  # 与 builtin / 已加载 installed 同名 → 跳过（builtin 胜出）
+        bound = installed_skill_to_bound(row, idx)
+        if bound is None or bound.name in seen:
+            continue
+        out.append(bound)
+        seen.add(bound.name)
+    return out
+
+
+def all_skills() -> tuple[BoundSkill, ...]:
+    """code builtin + installed（agent_config.db）的合并视图。
+
+    **不缓存** installed 部分 —— 每次重查使 install/uninstall 即时可见，且多 worker 无陈旧
+    （Plan review §7.1）。code builtin 部分仍缓存（运行时不变）。``build_manifest`` / ``find_tool``
+    经此拿到完整 skill 集，installed skill 自动流向 ``/api/skills`` + MCP（无需改那两层）。
+    """
+    builtins = code_builtin_skills()
+    return builtins + tuple(_load_installed_skills(builtins))
 
 
 def find_tool(skill_name: str, tool_name: str) -> Optional[tuple[BoundSkill, BoundTool]]:
@@ -102,7 +146,12 @@ def build_manifest(principal: Any = None, *, generated_at: Optional[str] = None)
             for t in skill.tools
             if _principal_allows(principal, t.definition.auth_scopes)
         ]
-        if not visible:
+        # PR3 — keep legitimately tool-less skills (document-only installed skills):
+        # only hide a skill whose tools were ALL scope-filtered out (had tools, none
+        # visible to this principal). A zero-tool skill stays so its prompt_fragment /
+        # docs reach the manifest consumer (else build_manifest silently drops it,
+        # losing the document-only skill's fragment from the harness skillFragments).
+        if skill.tools and not visible:
             continue
         skills_out.append(
             SkillDef(
@@ -126,5 +175,5 @@ def build_manifest(principal: Any = None, *, generated_at: Optional[str] = None)
 
 
 def reset_registry_cache() -> None:
-    """test-only：清 skill 缓存。"""
-    all_skills.cache_clear()
+    """test-only：清 code builtin 缓存（installed 部分不缓存，无需清）。"""
+    code_builtin_skills.cache_clear()
