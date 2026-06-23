@@ -48,13 +48,16 @@ export default defineConfig({
     define: {
       __GIT_HASH__: JSON.stringify(GIT_HASH),
       __BUILD_TIME__: JSON.stringify(BUILD_TIME),
-      // chat-panel P4 Phase 01 — assistant-ui shell flags (shared/assistant/runtime/flags.ts).
-      // Per-flag define (NOT envPrefix:['MAILAGENT_']) so only these two non-secret
+      // chat-panel P4 Phase 01/02 — assistant-ui shell flags (shared/assistant/runtime/flags.ts).
+      // Per-flag define (NOT envPrefix:['MAILAGENT_']) so only these non-secret
       // toggles enter the renderer bundle, never MAILAGENT_CLI_API_KEY et al. Default '' = off.
       __MAILAGENT_ASSISTANT_UI_PANEL__: JSON.stringify(
         process.env.MAILAGENT_ASSISTANT_UI_PANEL ?? ''
       ),
-      __MAILAGENT_CHAT_RUNTIME__: JSON.stringify(process.env.MAILAGENT_CHAT_RUNTIME ?? '')
+      __MAILAGENT_CHAT_RUNTIME__: JSON.stringify(process.env.MAILAGENT_CHAT_RUNTIME ?? ''),
+      // Phase 02 — renderer mirror of MAILAGENT_AI_SDK_GATEWAY (gates the AI SDK
+      // runtime entry). Non-secret boolean toggle.
+      __MAILAGENT_AI_SDK_GATEWAY__: JSON.stringify(process.env.MAILAGENT_AI_SDK_GATEWAY ?? '')
     },
     resolve: {
       alias: {

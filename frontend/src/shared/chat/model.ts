@@ -86,6 +86,13 @@ export interface ChatMessage {
   // Null for non-thinking turns + all pre-v6 rows (ALTER ADD default). chat_db.ts
   // v6 migration adds the column; serve-api db.py mirrors the read/write.
   thinking: string | null
+  // v9 (P4 Phase 02 — chat-panel AI SDK Gateway) — the AI SDK v6 UIMessage
+  // canonical JSON for this turn. The gateway runtime dual-writes it next to
+  // `content` (extracted text); legacy-runtime rows + all pre-v9 rows stay NULL
+  // and the reload converter synthesizes a UIMessage from `content`. chat_db.ts
+  // v9 migration adds the column; serve-api db.py mirrors read (SELECT *) + write.
+  // NEVER store secrets here — the field crosses the IPC boundary.
+  ui_message_json: string | null
   created_at: number
   updated_at: number
 }
@@ -153,6 +160,9 @@ export interface AppendMessageInput {
   costUsd?: number | null
   errorMessage?: string | null
   metadata?: string | null
+  // v9 (P4 Phase 02) — AI SDK UIMessage canonical JSON. Gateway runtime sets it;
+  // legacy callers omit → persisted NULL (reload synthesizes from content).
+  uiMessageJson?: string | null
 }
 
 export interface UpdateMessagePatch {
@@ -167,6 +177,8 @@ export interface UpdateMessagePatch {
   // task 06-08-chat 需求 5 — finalizeMessage persists the full thinking buffer
   // here (harness streams it live, writes it on终态). Omitted on non-thinking turns.
   thinking?: string | null
+  // v9 (P4 Phase 02) — AI SDK UIMessage canonical JSON, finalized on turn end.
+  uiMessageJson?: string | null
 }
 
 // Sprint 19 — chat_tool_call row + CRUD inputs.

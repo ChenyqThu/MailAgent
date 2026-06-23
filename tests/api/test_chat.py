@@ -49,6 +49,7 @@ CREATE TABLE ai_chat_messages (
     tokens_input INTEGER, tokens_output INTEGER, cost_usd REAL, model TEXT,
     status TEXT NOT NULL, error_message TEXT, metadata TEXT,
     thinking TEXT,
+    ui_message_json TEXT,
     created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
 );
 CREATE TABLE chat_tool_call (

@@ -14,6 +14,9 @@ import {
   registerBackendQuitHook,
   resolveApiPort
 } from './backend_lifecycle'
+// chat-panel P4 Phase 02 — pure port resolver (config.ts only type-imports `ai`,
+// so this static import does NOT pull the heavy AI SDK chunk into the main bundle).
+import { resolveAiGatewayPort } from '../../ai-gateway/config'
 import { detectUserState } from './onboarding/detect'
 import { registerOnboardingHandlers } from './handlers/onboarding'
 import { MAIN_WINDOW, ONBOARDING_WINDOW } from './lib/window-config'
@@ -134,6 +137,13 @@ function createWindow(opts: { onboarding?: boolean } = {}): void {
   // 同源 resolveApiPort)；renderer 进程无 process.env，故经 `?apiPort=` 注入。
   const params = new URLSearchParams({ apiPort: String(resolveApiPort()) })
   if (opts.onboarding) params.set('onboarding', '1')
+  // chat-panel P4 Phase 02 — when the embedded AI SDK Gateway is enabled, hand the
+  // renderer its loopback port the same way as apiPort (the gateway binds the same
+  // deterministic resolveAiGatewayPort()). flag-off → param absent → the renderer's
+  // resolver falls back and the AI SDK runtime entry stays hidden.
+  if (process.env.MAILAGENT_AI_SDK_GATEWAY === 'true') {
+    params.set('aiGatewayPort', String(resolveAiGatewayPort()))
+  }
   const search = params.toString()
   // onboarding 向导用固定小窗 (768×640, 不可缩放, 居中); 主 App 用 1280×800。
   // 尺寸常量集中在 lib/window-config (reloadToMain 进主界面时也据此恢复, 防漂移)。
@@ -484,29 +494,20 @@ app.whenReady().then(async () => {
     createWindow()
   }
 
-  // chat-panel P4 Phase 00 spike — flag-gated AI SDK Gateway PoC。**默认关**:
+  // chat-panel P4 Phase 02 — flag-gated embedded AI SDK Gateway。**默认关**:
   // MAILAGENT_AI_SDK_GATEWAY!=='true' 时下面整块短路, 默认行为字节级不变 (重依赖
   // ai / @ai-sdk/anthropic 经动态 import 进懒 chunk, flag-off 永不加载)。flag-on 时在
-  // Electron main 内嵌一个 loopback Node HTTP server (/health + /api/ai/echo-stream +
-  // /api/ai/chat streamText), dev/打包均可启, 与 serve-api / DavMail 解耦。架构定位见
-  // docs/plans/chat-panel-ai-sdk-assistant-ui-refactor/architecture.md §4.3 (Phase 2 PoC)。
+  // Electron main 内嵌一个 loopback Node HTTP server (/health + /api/ai/config +
+  // /api/ai/chat UIMessage 流), dev/打包均可启, 与 serve-api / DavMail 解耦。端口经
+  // createWindow 的 ?aiGatewayPort= 注入 renderer (resolveAiGatewayPort 单源)。架构定位见
+  // docs/plans/chat-panel-ai-sdk-assistant-ui-refactor/architecture.md §13.3 (form A)。
   if (process.env.MAILAGENT_AI_SDK_GATEWAY === 'true') {
     void (async () => {
       try {
-        const [{ startAiGatewayPocServer, resolveAiGatewayPocPort }, llm] = await Promise.all([
-          import('./ai_gateway_poc'),
-          import('./llm_settings')
-        ])
-        const handle = await startAiGatewayPocServer({
-          port: resolveAiGatewayPocPort(),
-          baseUrl: llm.getLlmBaseUrl(),
-          apiKey: await llm.getLlmApiKey(),
-          model: llm.getLlmModel()
-        })
-        console.log(`[ai-gateway-poc] 已在 http://127.0.0.1:${handle.port} 启动 (flag-gated PoC)`)
-        app.once('before-quit', () => void handle.close())
+        const { startEmbeddedAiGateway } = await import('./ai_gateway_lifecycle')
+        await startEmbeddedAiGateway()
       } catch (err) {
-        console.error('[ai-gateway-poc] 启动失败 (PoC, 不影响主流程)', err)
+        console.error('[ai-gateway] 启动失败 (不影响主流程)', err)
       }
     })()
   }

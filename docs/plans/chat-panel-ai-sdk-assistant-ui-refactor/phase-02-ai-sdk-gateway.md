@@ -1,7 +1,7 @@
 # Phase 02 — AI SDK Gateway
 
-> status: planning（**下一步**，goal-prompts P4-Phase02）
-> last-verified: 2026-06-23
+> status: ✅ done（2026-06-24，全程 flag-off）。**落地结论见 [§13](#13-实现落地2026-06-24)** + [architecture §13.8](./architecture.md#138-phase-02-落地2026-06-24embedded-ai-sdk-gateway)。§1–§12 是规划层（实现前）。
+> last-verified: 2026-06-24
 > goal: 引入 Node / TypeScript AI SDK Gateway，先完成纯文本 streaming 与 UIMessage 持久化。
 >
 > **🔴 与 Phase 00 spike + Phase 01 现实对齐（本文 §2/§5 写于 spike 前，按下列三点为准）：**
@@ -245,3 +245,31 @@ MAILAGENT_CHAT_RUNTIME=legacy
 ```
 
 Gateway 进程未启动时，前端自动隐藏 AI SDK runtime 入口。
+
+---
+
+## 13. 实现落地（2026-06-24）
+
+> 全程 **flag-off 默认**。完整架构决策 + 踩坑见 [architecture §13.8](./architecture.md#138-phase-02-落地2026-06-24embedded-ai-sdk-gateway)。
+
+### 13.1 产出（对照 DoD）
+
+| DoD | 落地 |
+|---|---|
+| (1) 正式化 Gateway | `frontend/src/ai-gateway/{server,config}.ts`（纯 Node 核，spike `ai_gateway_poc.ts` 收编后删）+ `electron/main/ai_gateway_lifecycle.ts`（impure wrapper：llm_settings/persistTurn/health-poll/before-quit）。endpoints `/health` + `/api/ai/config` + `/api/ai/chat`（`streamText`→`pipeUIMessageStreamToResponse` 纯文本 UIMessage 流 + abort + onFinish 持久化）。`index.ts` flag-gated 动态 import wrapper；`createWindow` 注入 `?aiGatewayPort=`。|
+| (2) provider key 路径 | **(A) Gateway 直连 provider**（key 仅 main，renderer 不接触；CRS baseURL 归一含 `/v1`）。决策依据 architecture §13.8.2。|
+| (3) 前端 AI SDK runtime 分支 | `flags.ts` `getChatRuntimeMode→'ai-sdk'` + `isAiSdkGatewayEnabled` + `resolveAiGatewayBaseUrl`；`AiSdkRuntimeProvider`(useChatRuntime+AssistantChatTransport)；`AssistantUIChatPanel` 据 mode 分流，默认 legacy/external-store 字节级不变。vite per-flag define 加 `__MAILAGENT_AI_SDK_GATEWAY__`。|
+| (4) UIMessage 持久化 v1 | chat_db v9 加 `ui_message_json` 列（双写 canonical + content + usage/model）；纯 mapper `shared/assistant/uiMessage.ts`（重载转 UIMessage / 旧会话从 content 合成）；`src/chat/db.py` 头注释 + 列镜像。**不动 EXPECTED_DB_VERSION**。|
+| (5) 测试 | `frontend/tests/ai-gateway/{health,chat_stream,ui_message_persistence,port_discovery}.test.ts`（24 passed）+ gateway harness 4/4。|
+
+### 13.2 §11 验收（全 ✅）
+
+- `MAILAGENT_AI_SDK_GATEWAY=1` → Gateway 启动 + `/health` ok（harness 实测 service=`mailagent-ai-gateway` v0.2.0）。
+- `MAILAGENT_CHAT_RUNTIME=ai-sdk` → 新会话经 AI SDK 流式回复（harness `[4]` 经 CRS 真实 streamText → UIMessage 流重建中文文本端到端）。
+- 默认 flag off 现有 chat 字节级不变（panel lazy 分流 + per-flag define，重依赖 flag-off 不加载）。
+- renderer 未接触 provider key（key 仅 `llm_settings` in main；renderer 只拿 loopback 端口）。
+- `pnpm typecheck`(node+web) 0 · 全量 vitest 1725 passed · `tests/agent_eval` 85 passed（≥ baseline）。
+
+### 13.3 有意延后（§9）
+
+不迁 tools / 不启 write actions / 不删 legacy harness / 不接 AG-UI / 不强制旧会话全变 UIMessage。standing-context 注入 + A2UI 卡片 + approval 两次调用语义 + eval R5 recorder 重对齐 → phase-03/04。

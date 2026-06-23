@@ -27,8 +27,12 @@
 // identifier never throws a ReferenceError.
 declare const __MAILAGENT_ASSISTANT_UI_PANEL__: string | undefined
 declare const __MAILAGENT_CHAT_RUNTIME__: string | undefined
+// Phase 02 — renderer-facing mirror of the main-process MAILAGENT_AI_SDK_GATEWAY
+// flag, so the AI SDK runtime entry only shows when the gateway is actually
+// embedded. NON-secret (a boolean toggle); injected per-flag like the other two.
+declare const __MAILAGENT_AI_SDK_GATEWAY__: string | undefined
 
-export type ChatRuntimeMode = 'legacy' | 'external-store'
+export type ChatRuntimeMode = 'legacy' | 'external-store' | 'ai-sdk'
 
 function truthy(value: string): boolean {
   const v = value.trim().toLowerCase()
@@ -55,17 +59,51 @@ function buildRuntimeFlag(): string | undefined {
   return typeof __MAILAGENT_CHAT_RUNTIME__ !== 'undefined' ? __MAILAGENT_CHAT_RUNTIME__ : undefined
 }
 
+function buildAiSdkGatewayFlag(): string | undefined {
+  return typeof __MAILAGENT_AI_SDK_GATEWAY__ !== 'undefined'
+    ? __MAILAGENT_AI_SDK_GATEWAY__
+    : undefined
+}
+
 /** True when the assistant-ui chat shell should replace the legacy AIChatPanel.
  *  Evaluated at call time (not module load) so tests can stub the env first. */
 export function isAssistantUiPanelEnabled(): boolean {
   return truthy(resolveFlag('MAILAGENT_ASSISTANT_UI_PANEL', buildPanelFlag))
 }
 
-/** Which runtime adapter the assistant-ui shell uses. Phase 01 only implements
- *  the legacy ExternalStore adapter; `ai-sdk` / `ag-ui` are reserved for later
- *  phases and currently resolve to `external-store` so the shell still renders. */
+/** Which runtime adapter the assistant-ui shell uses:
+ *  - `legacy` (default) / `external-store` — the Phase 01 ExternalStore adapter.
+ *  - `ai-sdk` (Phase 02) — the AI SDK `useChatRuntime` pointed at the embedded
+ *    Gateway. Only takes effect when the Gateway is actually reachable
+ *    (isAiSdkGatewayEnabled + resolveAiGatewayBaseUrl); the panel falls back to
+ *    external-store otherwise, so a misconfigured flag never breaks chat.
+ *  `ag-ui` stays reserved → folds to external-store. */
 export function getChatRuntimeMode(): ChatRuntimeMode {
   const raw = resolveFlag('MAILAGENT_CHAT_RUNTIME', buildRuntimeFlag).trim().toLowerCase()
-  if (raw === 'external-store' || raw === 'ai-sdk' || raw === 'ag-ui') return 'external-store'
+  if (raw === 'ai-sdk') return 'ai-sdk'
+  if (raw === 'external-store' || raw === 'ag-ui') return 'external-store'
   return 'legacy'
+}
+
+/** True when the embedded AI SDK Gateway is enabled (renderer mirror of the
+ *  main-process MAILAGENT_AI_SDK_GATEWAY flag). Gates the AI SDK runtime entry so
+ *  it never shows when the gateway isn't running. */
+export function isAiSdkGatewayEnabled(): boolean {
+  return truthy(resolveFlag('MAILAGENT_AI_SDK_GATEWAY', buildAiSdkGatewayFlag))
+}
+
+/** Loopback base URL of the embedded AI SDK Gateway, discovered from the
+ *  `?aiGatewayPort=N` the main process injects into the window URL (same channel
+ *  as `?apiPort=`, see ElectronApi.loopbackBaseUrl). Returns null when the param
+ *  is absent (gateway not started / non-renderer test env) → the AI SDK runtime
+ *  entry stays hidden and the panel uses the legacy ExternalStore adapter. */
+export function resolveAiGatewayBaseUrl(): string | null {
+  try {
+    const raw = new URLSearchParams(window.location.search).get('aiGatewayPort')
+    const n = raw != null ? Number.parseInt(raw, 10) : NaN
+    if (Number.isFinite(n) && n > 0) return `http://127.0.0.1:${n}`
+  } catch {
+    /* non-renderer (no window) → null */
+  }
+  return null
 }

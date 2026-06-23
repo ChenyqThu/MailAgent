@@ -1,15 +1,17 @@
 /**
- * chat-panel P4 Phase 00 spike — AI Gateway PoC 验证 harness（纯 Node，经 tsx 运行）。
+ * chat-panel P4 — AI Gateway 验证 harness（纯 Node，经 tsx 运行）。manual lane（不进 CI）。
  *
  * 用法：
  *   cd frontend && node_modules/.bin/tsx scripts/poc/run-ai-gateway-poc.ts
  *
- * 它 import 与 Electron main 完全相同的 `ai_gateway_poc.ts` 核心，在临时端口拉起 server，
- * 验证 4 条可行性命题（无需启动整个 Electron）：
+ * 它 import 与 Electron main 完全相同的 `src/ai-gateway/server.ts` 规范核心（Phase 02 把
+ * Phase 00 spike 的 ai_gateway_poc.ts 收编为此正式模块），在临时端口拉起 server，验证 4 条
+ * 命题（无需启动整个 Electron）：
  *   [1] GET /health 返回 ok + 配置可观测；
  *   [2] POST /api/ai/echo-stream 把 prompt 逐 token SSE 回吐（transport 通）；
  *   [3] echo-stream 在 client abort 后立即停止（abort 生效）；
- *   [4] POST /api/ai/chat 经 @ai-sdk/anthropic + CRS 跑真实 streamText，SSE 出非空文本。
+ *   [4] POST /api/ai/chat 经 @ai-sdk/anthropic + CRS 跑真实 streamText → AI SDK UIMessage 流，
+ *       重建出非空文本。
  *
  * key/base/model 从 repo 根 .env 读（与后端 bootstrapDotenv 同源）。无 key → [4] 标 SKIP。
  */
@@ -18,7 +20,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { startAiGatewayPocServer } from '../../src/electron/main/ai_gateway_poc'
+import { startAiGatewayServer } from '../../src/ai-gateway/server'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = join(__dirname, '..', '..', '..')
@@ -85,7 +87,7 @@ async function main(): Promise<void> {
   const baseUrl = process.env.LLM_API_BASE ?? 'https://crs.chenge.ink/api'
   const model = process.env.LLM_MODEL ?? 'claude-sonnet-4-6'
 
-  const handle = await startAiGatewayPocServer({ port: 0, apiKey, baseUrl, model })
+  const handle = await startAiGatewayServer({ port: 0, apiKey, baseUrl, model })
   const base = `http://127.0.0.1:${handle.port}`
   console.log(`\n— AI Gateway PoC 起于 ${base} (model=${model}, hasKey=${Boolean(apiKey)}) —\n`)
 
@@ -94,7 +96,7 @@ async function main(): Promise<void> {
     const health = await fetch(`${base}/health`).then(
       (r) => r.json() as Promise<Record<string, unknown>>
     )
-    if (health.status === 'ok' && health.service === 'mailagent-ai-gateway-poc') {
+    if (health.status === 'ok' && health.service === 'mailagent-ai-gateway') {
       record('1-health', 'PASS', `GET /health → ${JSON.stringify(health)}`)
     } else {
       record('1-health', 'FAIL', `意外响应 ${JSON.stringify(health)}`)
@@ -148,10 +150,21 @@ async function main(): Promise<void> {
     if (!apiKey) {
       record('4-streamText', 'SKIP', '无 LLM_API_KEY，跳过真实调用（echo 已证明 transport）')
     } else {
+      // Phase 02: /api/ai/chat now takes UIMessage[] and emits an AI SDK UIMessage
+      // stream (text-delta chunks carry { id, delta }); parse them back to text.
       const chatRes = await fetch(`${base}/api/ai/chat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: '用一句话（≤20字）介绍你自己。', model })
+        headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+        body: JSON.stringify({
+          model,
+          messages: [
+            {
+              id: 'u1',
+              role: 'user',
+              parts: [{ type: 'text', text: '用一句话（≤20字）介绍你自己。' }]
+            }
+          ]
+        })
       })
       if (chatRes.status === 503) {
         record('4-streamText', 'SKIP', '503 E_NO_LLM_KEY')
@@ -162,14 +175,17 @@ async function main(): Promise<void> {
           .map((f) => String(f.delta))
           .join('')
         const errFrame = chatFrames.find((f) => f.type === 'error')
-        const finish = chatFrames.find((f) => f.type === 'finish')
         if (errFrame) {
-          record('4-streamText', 'FAIL', `error 帧：${String(errFrame.message)}`)
+          record(
+            '4-streamText',
+            'FAIL',
+            `error 帧：${String(errFrame.errorText ?? errFrame.message)}`
+          )
         } else if (chatText.length > 0) {
           record(
             '4-streamText',
             'PASS',
-            `streamText 出 ${chatFrames.length} 帧文本「${chatText}」usage=${JSON.stringify(finish?.usage ?? {})}`
+            `UIMessage 流出 ${chatFrames.length} 帧、重建文本「${chatText}」`
           )
         } else {
           record('4-streamText', 'FAIL', `空文本（${chatFrames.length} 帧）`)

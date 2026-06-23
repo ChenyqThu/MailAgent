@@ -272,6 +272,7 @@ AG-UI 可并行但不阻塞主线：
 
 - **Phase 00 spike ✅ GO**（`bc5c1e80`）。
 - **Phase 01 assistant-ui Shell ✅**（2026-06-23，commit `b82ee24e`，全程 flag-off）：`frontend/src/shared/assistant/` headless primitives + MailAgent token；legacy ExternalStore adapter（`useExternalStoreRuntime`，**非** AI SDK）喂 `useEmailChat`；`legacyMessageMapper` ChatMessage→ThreadMessageLike；AIChatPanel `lazy()` flag 分流（flag-off 字节级一致）；删 Phase 00 PoC。验收 typecheck 0 / vitest 1700·0fail（+22）/ agent_eval 85（≥baseline）/ 4 组 parity 截图 / 不新增 provider 路径；reviewer(opus) APPROVE。落地结论 [phase-01 §9](./phase-01-assistant-ui-shell.md)。
-- **下一步 = Phase 02（AI SDK Gateway）**：启动 prompt 见 [epic goal-prompts.md `P4-Phase02`](../agent-experience-epic/goal-prompts.md)。
+- **Phase 02 AI SDK Gateway ✅**（2026-06-24，全程 flag-off）：嵌入式 Gateway（`frontend/src/ai-gateway/` 纯 Node 核 + `electron/main/ai_gateway_lifecycle.ts` wrapper）`/health`+`/api/ai/config`+`/api/ai/chat`（streamText→`pipeUIMessageStreamToResponse` UIMessage 流 + abort）；provider key 路径 **(A) Gateway 直连**（key 仅 main，renderer 经 `?aiGatewayPort=` 只拿端口）；前端 `getChatRuntimeMode→'ai-sdk'` + `AiSdkRuntimeProvider`(useChatRuntime)；持久化 v1 chat_db **v9** 加 `ui_message_json` 双写 + 重载转换。验收：harness 4/4（含真实 streamText 端到端）· ai-gateway 测试 24 · typecheck 0 · vitest 1725 · agent_eval 85（≥baseline）。落地见 [phase-02 §13](./phase-02-ai-sdk-gateway.md#13-实现落地2026-06-24) + [architecture §13.8](./architecture.md#138-phase-02-落地2026-06-24embedded-ai-sdk-gateway)。
+- **下一步 = Phase 03a（read tools 迁移）**：AI SDK `tool()` 暴露 email_search/email_get/email_body/kos_query，经 Python domain client 执行；叠加 `tests/agent_eval` baseline 不回退。
 
 执行顺序复用 §8：`00 → 01 → 02 → 03a → 04a → 04b → 03b → 06`；每个 phase 验收叠加 `tests/agent_eval` baseline 不回退闸（§2 原则 6）。

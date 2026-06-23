@@ -122,6 +122,7 @@ function fakeMessage(over: Partial<ChatMessage>): ChatMessage {
     error_message: null,
     metadata: null,
     thinking: null,
+    ui_message_json: null,
     created_at: 1_700_000_000_000,
     updated_at: 1_700_000_000_000,
     ...over

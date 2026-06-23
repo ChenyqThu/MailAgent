@@ -82,7 +82,16 @@ export type {
 // rule). 🔴 bump 时同步刷新 src/chat/db.py 头注释的 CHAT_DB_VERSION（mirror，不建表）。
 // 注意：ai_chat.db 自有版本梯，与 backend_lifecycle.EXPECTED_DB_VERSION（gate
 // sync_store.db）无关 —— 不要因这次 bump 去动 EXPECTED_DB_VERSION。
-const CHAT_DB_VERSION = 8
+// v9 (P4 Phase 02, task 06-23 chat-panel AI SDK Gateway) — ai_chat_messages.ui_message_json:
+// the AI SDK v6 UIMessage canonical JSON for a turn. The AI SDK runtime path
+// dual-writes this (canonical) alongside `content` (legacy extracted text) +
+// usage/model metadata, so a session authored through the gateway round-trips
+// losslessly on reload (protocol-contracts §2, architecture §6). NULL for every
+// legacy-runtime row + all pre-v9 rows (additive ALTER default) → the reload
+// converter falls back to synthesizing a UIMessage from `content`. Plain additive
+// ALTER, hasColumn idempotency guard (same discipline as v5/v6/v8). 🔴 bump 同步
+// 刷 src/chat/db.py 头注释 + append/update 写列；NOT backend_lifecycle.EXPECTED_DB_VERSION.
+const CHAT_DB_VERSION = 9
 
 export function resolveChatDbPath(): string {
   const fromEnv = process.env['AI_CHAT_DB_PATH']
@@ -625,6 +634,31 @@ function migrate(db: Database.Database): void {
       throw err
     }
   }
+
+  // v8 → v9 — task 06-23 (chat-panel P4 Phase 02) AI SDK Gateway UIMessage
+  // persistence. Add ai_chat_messages.ui_message_json: the AI SDK v6 UIMessage
+  // canonical JSON for a turn. The gateway runtime dual-writes it next to the
+  // legacy `content` (extracted text) so a gateway-authored session reloads
+  // losslessly; legacy-runtime rows + all pre-v9 rows stay NULL and the reload
+  // converter synthesizes a UIMessage from `content`. Plain additive ALTER (no
+  // UNIQUE/FK drop) → safe in one transaction, same hasColumn idempotency guard
+  // as v5/v6/v8 (crash-after-ALTER-before-version-bump re-entry). ai_chat.db has
+  // its own version ladder; this bump does NOT touch backend_lifecycle.EXPECTED_DB_VERSION.
+  if (current < 9) {
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      if (!hasColumn(db, 'ai_chat_messages', 'ui_message_json')) {
+        db.exec('ALTER TABLE ai_chat_messages ADD COLUMN ui_message_json TEXT')
+      }
+      db.prepare(
+        "INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', '9')"
+      ).run()
+      db.exec('COMMIT')
+    } catch (err) {
+      db.exec('ROLLBACK')
+      throw err
+    }
+  }
 }
 
 // ── singleton ───────────────────────────────────────────────────────────
@@ -896,8 +930,8 @@ export function appendMessage(input: AppendMessageInput): ChatMessage {
     .prepare(
       `INSERT INTO ai_chat_messages
         (session_id, role, content, tokens_input, tokens_output, cost_usd,
-         model, status, error_message, metadata, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         model, status, error_message, metadata, ui_message_json, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       input.sessionId,
@@ -910,6 +944,9 @@ export function appendMessage(input: AppendMessageInput): ChatMessage {
       input.status,
       input.errorMessage ?? null,
       input.metadata ?? null,
+      // v9 — AI SDK UIMessage canonical JSON (gateway runtime dual-writes it;
+      // legacy runtime omits → NULL → reload synthesizes from `content`).
+      input.uiMessageJson ?? null,
       now,
       now
     )
@@ -928,6 +965,7 @@ export function appendMessage(input: AppendMessageInput): ChatMessage {
     status: input.status,
     error_message: input.errorMessage ?? null,
     metadata: input.metadata ?? null,
+    ui_message_json: input.uiMessageJson ?? null,
     // task 06-08-chat 需求 5 — appendMessage never seeds thinking (finalizeMessage
     // writes it on终态 via updateMessage); the inserted row column defaults to NULL.
     thinking: null,
@@ -977,6 +1015,12 @@ export function updateMessage(messageId: number, patch: UpdateMessagePatch): voi
   if (patch.thinking !== undefined) {
     fields.push('thinking = ?')
     params.push(patch.thinking)
+  }
+  // v9 (P4 Phase 02) — AI SDK UIMessage canonical JSON, finalized on turn end
+  // (the gateway onFinish writes the streamed assistant text's UIMessage here).
+  if (patch.uiMessageJson !== undefined) {
+    fields.push('ui_message_json = ?')
+    params.push(patch.uiMessageJson)
   }
   if (fields.length === 0) return
   fields.push('updated_at = ?')

@@ -1,13 +1,16 @@
 """ai_chat.db 读 + 写访问 —— serve-api 远程 chat 端点（V2.1 阶段 2 读 + 阶段 3 3b-3 写）。
 
-ai_chat.db = 前端 owned schema（``frontend/src/electron/main/chat_db.ts``，CHAT_DB_VERSION 8）。
+ai_chat.db = 前端 owned schema（``frontend/src/electron/main/chat_db.ts``，CHAT_DB_VERSION 9）。
 v7（P2c）= chat session anchor：``email_id`` 改 nullable + 加 ``anchor_type``/``anchor_id`` 列
 （table CHECK 强制 email→两者非空 / general→两者 NULL，禁 emailId=0 sentinel）。
 v8（P2a，task 06-23）= agent_memory_kv provenance + priority：加 ``source_session_id`` /
 ``source_message_id`` / ``source_tool_use_id``（写入来源的会话/消息/工具，取代
 ``source_wiki_path='session:<id>'`` 旧 overload）+ ``priority``（用户显式重要性，驱动
-``memory_summary`` 注入相关性排序）。本文件只 mirror 读写既有列、**绝不建表/改 schema**
-（schema 归 chat_db.ts ``migrate``）。
+``memory_summary`` 注入相关性排序）。
+v9（P4 Phase 02，task 06-23 chat-panel AI SDK Gateway）= ``ai_chat_messages.ui_message_json``：
+AI SDK v6 UIMessage canonical JSON（gateway runtime 双写，与 ``content`` 提取文本并列）。读走
+``SELECT *`` 自动带回；写经 ``append_message`` / ``update_message`` 镜像（legacy 行 NULL）。本
+文件只 mirror 读写既有列、**绝不建表/改 schema**（schema 归 chat_db.ts ``migrate``）。
 读函数（阶段 2）+ 写函数（3b-3）SQL **逐字镜像** chat_db.ts 对应函数，行形状对齐前端
 ``ChatSession`` / ``ChatSessionSummary`` / ``ChatMessage`` / ``ChatToolCall``（``model.ts``）：
   - 读：``listSessionsForEmail`` / ``listAllSessions`` / ``listMessages`` / ``listToolCallsForMessage``。
@@ -90,6 +93,8 @@ _MESSAGE_PATCH_FIELDS = (
     ("metadata", "metadata"),
     # task 06-08-chat 需求 5 — extended-thinking summary（finalizeMessage 终态写）。
     ("thinking", "thinking"),
+    # v9（P4 Phase 02）— AI SDK UIMessage canonical JSON（gateway onFinish 终态写）。
+    ("uiMessageJson", "ui_message_json"),
 )
 _TOOL_CALL_PATCH_FIELDS = (
     ("status", "status"),
@@ -362,16 +367,20 @@ class ChatDb:
         cost_usd: Optional[float] = None,
         error_message: Optional[str] = None,
         metadata: Optional[str] = None,
+        ui_message_json: Optional[str] = None,
     ) -> Dict[str, Any]:
         """INSERT 一条消息 + bump session updated_at（列表排序反映新活动）。镜像 chat_db.ts
-        appendMessage → ChatMessage。两条语句同一 now、同一事务。"""
+        appendMessage → ChatMessage。两条语句同一 now、同一事务。
+
+        v9（P4 Phase 02）— ``ui_message_json`` = AI SDK UIMessage canonical JSON（gateway
+        runtime 双写）；legacy 写省略 → NULL（重载时由 content 合成 UIMessage）。"""
         now = _now_ms()
         with self._write_connection() as conn:
             cur = conn.execute(
                 "INSERT INTO ai_chat_messages "
                 "(session_id, role, content, tokens_input, tokens_output, cost_usd, "
-                "model, status, error_message, metadata, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "model, status, error_message, metadata, ui_message_json, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     session_id,
                     role,
@@ -383,6 +392,7 @@ class ChatDb:
                     status,
                     error_message,
                     metadata,
+                    ui_message_json,
                     now,
                     now,
                 ),
@@ -405,6 +415,7 @@ class ChatDb:
                 # task 06-08-chat 需求 5 — appendMessage 不 seed thinking（finalizeMessage
                 # 终态经 update_message 写）；INSERT 未写该列 → 行 thinking=NULL。镜像 chat_db.ts。
                 "thinking": None,
+                "ui_message_json": ui_message_json,
                 "created_at": now,
                 "updated_at": now,
             }

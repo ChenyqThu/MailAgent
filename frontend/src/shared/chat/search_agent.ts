@@ -272,6 +272,7 @@ async function runSearchAgentInner(
       error_message: null,
       metadata: null,
       thinking: null,
+      ui_message_json: null,
       created_at: 0,
       updated_at: 0
     }

@@ -501,13 +501,55 @@ assistant-ui + Node AI SDK Gateway 作为换引擎方向**值得推进**。理�
 
 → 验证 §G1 / §8：换视图层不换设计系统可行；生产将把静态 runtime 换成 `@assistant-ui/react-ai-sdk` 的 `useChatRuntime` 接 Gateway（§8）。
 
-### 13.6 已知 gap / 留给后续 phase
+### 13.6 已知 gap / 留给后续 phase（→ 标 ✅ 的在 §13.8 Phase 02 落地中解决）
 
 - Tool UI 卡片（A2UI ComponentRegistry）未在本 spike 渲染（Phase 04，goal 非目标）；本 PoC 只覆盖 text 气泡 + composer。
-- `toUIMessageStreamResponse()` 原生消费未在 PoC 接通（PoC 手工转 SSE 便于与 echo 统一取证）；Phase 02 接 `useChatRuntime` 时才走原生 UIMessage stream。
-- streamText PoC 直连 CRS 取 key（main 侧，不过 renderer）；生产 Phase 02 决定「Gateway 直连 provider」vs「Gateway 经 serve-api /api/llm-proxy 转发」（后者零改 key 路径，见 protocol-contracts §6）。
-- Persistence（S0.5，UIMessage JSON ↔ ai_chat schema）本 spike 未写代码验证 —— 但 `ai` 导出 `readUIMessageStream`/`safeValidateUIMessages` 已确认存在，§6 双写策略可行，留 Phase 02b。
+- ✅ `toUIMessageStreamResponse()` 原生消费未在 PoC 接通（PoC 手工转 SSE）；**Phase 02 已接** —— 嵌入式 Gateway 走 Node 版 `result.pipeUIMessageStreamToResponse(res)`（§13.8），前端 `useChatRuntime` 原生消费 UIMessage 流。
+- ✅ streamText PoC 直连 CRS 取 key（main 侧，不过 renderer）；**Phase 02 裁决 = (A) Gateway 直连 provider**（§13.8）。
+- ✅ Persistence（S0.5，UIMessage JSON ↔ ai_chat schema）本 spike 未写代码；**Phase 02 已落** —— chat_db v9 加 `ui_message_json` 列 + 双写 + 重载转换（§13.8）。
 
 ### 13.7 GO → Phase 01 起 PR 拆分
 
 沿用 [roadmap.md §4](./roadmap.md#4-pr-拆分建议)（spike 验证其可行，无需重写），最小可用路径 `00 → 01 → 02 → 03a → 04a → 04b → 03b → 06`。Phase 00 产出（本 PoC + 文档）= **PR-00a（文档）已落 + PR-00b（依赖与 scaffold）由本 spike 部分预置**（已装 5 个 devDeps + flag-gated gateway/assistant-ui scaffold，均 flag-off）。下一步开 Phase 01（assistant-ui shell + ExternalStore adapter）实现 task。
+
+---
+
+## 13.8 Phase 02 落地（2026-06-24，embedded AI SDK Gateway）
+
+> spike 的 `ai_gateway_poc.ts` 正式化为规范模块 `frontend/src/ai-gateway/{server,config}.ts`（纯 Node 核：`node:http` + `ai` + `@ai-sdk/anthropic`，零 electron/keytar import），由 `electron/main/ai_gateway_lifecycle.ts`（impure wrapper）嵌入 main 拉起。全程 `MAILAGENT_AI_SDK_GATEWAY` flag-gated，默认 off 字节级不变。
+
+### 13.8.1 endpoints + 原生 UIMessage 流
+
+`/health`（service/version/model/hasKey/baseUrl）+ `/api/ai/config`（modelConfigured/persistence 可观测）+ `POST /api/ai/chat`：`convertToModelMessages` → `streamText` → **`result.pipeUIMessageStreamToResponse(res, {originalMessages, generateMessageId, onFinish})`**（Node `http.ServerResponse` 原生 pipe，非手工 SSE）。abort 经 `req.on('close')→controller.abort()`。无 key → 503 `E_NO_LLM_KEY`、空 messages → 400 `E_INVALID_ARG`（typed，未开流）。
+
+**🔴 实测踩坑（写进 server.ts 注释）**：ai@6 的 `convertToModelMessages` 是 **async（返回 Promise）**，必须 `await`；同步传 Promise 给 `streamText` → `standardizePrompt` 抛 `messages.some is not a function`（流出 `error` 帧、文本为空）。spike 期未踩到（PoC 用 `prompt` 而非 `messages`）。
+
+### 13.8.2 §13.6 留项裁决 — provider key 路径 = (A) Gateway 直连 provider
+
+二选一裁决 **(A) Gateway 直连 provider（CRS）**，拒 (B) 经 serve-api `/api/llm-proxy` 转发。理由：
+
+- 嵌入式 Gateway 与 keytar entry 同在**可信 main 进程**，key 经 `llm_settings.getLlmApiKey()` 注入 `cfg.apiKey`，**renderer 全程不接触**（renderer 只经 `?aiGatewayPort=` 拿到 loopback 端口）。main 进程本就是 keytar 信任边界，(B) 多一个 Python hop 不增隔离。
+- (B) 还需 body 翻译 shim：`/api/llm-proxy` 收 `{protocol, body}`，而 `@ai-sdk/anthropic` provider 发 anthropic-native body 到 `{baseURL}/messages` —— 形状不兼容。
+- CRS baseURL 归一含 `/v1`（spike §13.2 踩坑，`config.anthropicBaseUrl()` 处理）。
+
+远程 Web 路径（§4.2，浏览器经 CF Access）非 Phase 02 目标 —— 嵌入式 Gateway 当前只服务 Electron renderer 的 loopback，远程暴露留 Phase 06+。
+
+### 13.8.3 持久化 v1（chat_db v9）+ 前端 runtime 分支
+
+- **schema**：chat_db.ts bump `CHAT_DB_VERSION 8→9`，additive ALTER 加 `ai_chat_messages.ui_message_json TEXT`（hasColumn 幂等守卫，同 v5/v6/v8 纪律）；`src/chat/db.py` 头注释 + append/update 列镜像。**不动 `EXPECTED_DB_VERSION`**（gate sync_store.db，与 ai_chat.db 版本梯无关）。
+- **双写**：Gateway `onFinish` → `cfg.persistTurn`（wrapper 写 chat_db）：user + assistant 各 `appendMessage({content: extractText(uiMsg), uiMessageJson: JSON.stringify(uiMsg), 用量/model})`。纯 mapper `shared/assistant/uiMessage.ts`（`extractTextFromUIMessage` / `chatMessageToUIMessage` / `parseUiMessageJson`）renderer+main 共用、零 DB 依赖。重载：`ui_message_json` 非空 = canonical，否则从 `content`(+thinking→reasoning) 合成 UIMessage（旧会话兼容）。
+- **runtime 分支**：`flags.getChatRuntimeMode()` 接 `'ai-sdk'`（不再折叠）+ `isAiSdkGatewayEnabled()` + `resolveAiGatewayBaseUrl()`（读 `?aiGatewayPort=`）；`AiSdkRuntimeProvider` 走 `useChatRuntime({transport: new AssistantChatTransport({api: gateway/api/ai/chat, body:{sessionId,model}})})`。`MailAgentRuntimeProvider`(legacy ExternalStore) 与 `AiSdkRuntimeProvider` 各调一个 runtime hook（不违反 hooks 规则），panel 据 mode 分流；默认 legacy/external-store 字节级不变。
+
+### 13.8.4 验收证据
+
+gateway harness `4/4 PASS`（含 `[4]` 经 CRS 真实 `streamText` → UIMessage 流重建中文文本端到端）；`frontend/tests/ai-gateway/*` 24 passed（health/chat_stream[mock UIMessage 流+abort+typed error]/ui_message_persistence[写→重载 round-trip]/port_discovery）；`pnpm typecheck`(node+web) 0；全量 vitest 1725 passed；`tests/agent_eval` 85 passed（≥ baseline，AI SDK 路径 opt-in 天然不影响 legacy harness trace）。
+
+### 13.8.5 本阶段未做（→ 后续 phase）
+
+不迁 tools / 不启 write actions / 不删 legacy harness / 不接 AG-UI / 不强制旧会话全变 UIMessage canonical（roadmap §9）。standing-context system prompt 注入、A2UI 卡片、approval 两次调用语义 + eval R5 recorder 重对齐 → phase-03/04。
+
+明确的阶段边界（code-reviewer opus 标注，避免下个 phase 误判为遗漏）：
+
+- **会话重载接线延后**：`chatMessageToUIMessage` mapper 已实现 + 单测（写→重载 round-trip），但**尚未**接进 AI SDK runtime 的初始 `messages` —— 故 ai-sdk 模式下选已有会话当前是空线程、只渲染本次流式新轮次。把 `prior.map(chatMessageToUIMessage)` 喂 `useChatRuntime({messages})` 是 phase-03 工作（与「不强制旧会话全变 canonical」一致）。
+- **远程 Web 鉴权 / CORS 收紧**：Gateway 当前 `127.0.0.1` loopback-only + `ACAO:*`（仅方便 Electron 同源 + harness）。开 §4.2 远程 Web 面（phase-06+）前须加 Origin/loopback-token 校验 + `ACAO` 收紧到具体 renderer origin（防同机恶意页面驱动付费推理；key 不泄漏但配额可被烧）。
+- **请求体 64KB 上限**：`readJsonBody` 64KB cap，长多轮 `messages[]` / 大 context 超限会落 `400 E_INVALID_ARG`（hint 误导）。phase-03 加 standing-context + thread body 同传前，提上限（~1–2MB）或区分 `413 E_PAYLOAD_TOO_LARGE`。

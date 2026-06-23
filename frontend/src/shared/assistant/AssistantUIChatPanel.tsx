@@ -37,6 +37,8 @@ import { ConfirmToolDialog } from '@shared/components/chat/ConfirmToolDialog'
 import { ContextChips } from '@shared/components/chat/ContextChips'
 
 import { MailAgentRuntimeProvider } from './runtime/MailAgentRuntimeProvider'
+import { AiSdkRuntimeProvider } from './runtime/AiSdkRuntimeProvider'
+import { getChatRuntimeMode, isAiSdkGatewayEnabled, resolveAiGatewayBaseUrl } from './runtime/flags'
 import { AssistantThread } from './components/thread'
 import { useChatContextChips } from './context/useChatContextChips'
 
@@ -147,6 +149,15 @@ export function AssistantUIChatPanel({
   const chat = useEmailChat(activeInternalId, backend.kind)
   const ctx = useChatContextChips(activeInternalId)
   const toolCallsByMessage = useSessionToolCalls(chat.messages, chat.streamingMessageId)
+
+  // chat-panel P4 Phase 02 — AI SDK runtime opt-in. Engages ONLY when the runtime
+  // flag is 'ai-sdk' AND the embedded Gateway is enabled AND its loopback port was
+  // discovered (?aiGatewayPort=). Otherwise the panel keeps the Phase 01 ExternalStore
+  // adapter, byte-identical. Flags are build-time constants; resolveAiGatewayBaseUrl
+  // reads window.location.search once.
+  const gatewayBaseUrl = useMemo(() => resolveAiGatewayBaseUrl(), [])
+  const useAiSdkRuntime =
+    getChatRuntimeMode() === 'ai-sdk' && isAiSdkGatewayEnabled() && gatewayBaseUrl !== null
 
   // custom-api readiness = keychain llmApiKey present (mirror of legacy gate).
   const secretsQ = useQuery({
@@ -453,16 +464,31 @@ export function AssistantUIChatPanel({
                 <QuotaCooldownTimer until={quotaCooldownUntil} />
               )}
 
-              <MailAgentRuntimeProvider
-                chat={chat}
-                toolCallsByMessage={toolCallsByMessage}
-                onSend={onSend}
-                onEdit={onEditMessage}
-                onReload={chat.retryLast ?? null}
-                sendDisabled={inQuotaCooldown}
-              >
-                <AssistantThread pendingSlot={pendingSlot} emptyState={emptyMessages} />
-              </MailAgentRuntimeProvider>
+              {useAiSdkRuntime && gatewayBaseUrl ? (
+                // Phase 02 AI SDK path: a fresh thread streams straight from the
+                // embedded Gateway; turns persist into chat.activeSessionId (Gateway
+                // dual-write). Keyed by the email so switching emails remounts a fresh
+                // runtime. No legacy pending-confirmation slot (tools migrate phase-03).
+                <AiSdkRuntimeProvider
+                  key={activeInternalId ?? 'none'}
+                  gatewayBaseUrl={gatewayBaseUrl}
+                  sessionId={chat.activeSessionId}
+                  model={backend.model}
+                >
+                  <AssistantThread emptyState={emptyMessages} />
+                </AiSdkRuntimeProvider>
+              ) : (
+                <MailAgentRuntimeProvider
+                  chat={chat}
+                  toolCallsByMessage={toolCallsByMessage}
+                  onSend={onSend}
+                  onEdit={onEditMessage}
+                  onReload={chat.retryLast ?? null}
+                  sendDisabled={inQuotaCooldown}
+                >
+                  <AssistantThread pendingSlot={pendingSlot} emptyState={emptyMessages} />
+                </MailAgentRuntimeProvider>
+              )}
             </>
           )}
         </div>

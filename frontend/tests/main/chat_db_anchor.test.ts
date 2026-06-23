@@ -110,8 +110,9 @@ describe('chat_db — v6 → v7 anchor migration', () => {
       }
     ).value
     // Climbs through the v6→v7 anchor step (asserted below) and on to the
-    // current head (v8 — agent_memory_kv provenance/priority, additive).
-    expect(ver).toBe('8')
+    // current head (v8 — agent_memory_kv provenance/priority; v9 —
+    // ai_chat_messages.ui_message_json, both additive).
+    expect(ver).toBe('9')
 
     // Anchor columns added + backfilled for the pre-existing email row.
     const row = db.prepare('SELECT * FROM ai_chat_sessions WHERE id = 1').get() as {
