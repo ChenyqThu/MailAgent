@@ -1,8 +1,14 @@
 # Phase 02 — AI SDK Gateway
 
-> status: planning
-> last-verified: 2026-06-22
+> status: planning（**下一步**，goal-prompts P4-Phase02）
+> last-verified: 2026-06-23
 > goal: 引入 Node / TypeScript AI SDK Gateway，先完成纯文本 streaming 与 UIMessage 持久化。
+>
+> **🔴 与 Phase 00 spike + Phase 01 现实对齐（本文 §2/§5 写于 spike 前，按下列三点为准）：**
+> 1. **Gateway 嵌入 Electron main，非独立 OS 进程**（architecture [§13.3](./architecture.md#133-第三进程成本评估叠加-serve-api-python--davmail-jvm) 裁决形态 A）。spike 已有 `frontend/src/electron/main/ai_gateway_poc.ts`（纯 Node 核 `node:http`+`ai`+`@ai-sdk/anthropic`，**不 import electron/keytar**）+ `index.ts` 经 `MAILAGENT_AI_SDK_GATEWAY` **flag-gated 动态 import**（flag-off 字节级不变）+ `scripts/poc/run-ai-gateway-poc.ts` harness 4/4。Phase 02 = 把 PoC 正式化（§2 的 `frontend/src/ai-gateway/` 模块由 main 嵌入式拉起，不是 §4.3 Phase 3 的独立进程）。
+> 2. **flag 地基已在 Phase 01 就位**：`frontend/src/shared/assistant/runtime/flags.ts` 已有 `MAILAGENT_CHAT_RUNTIME`（`getChatRuntimeMode()`：legacy / external-store，`ai-sdk`/`ag-ui` 当前折叠回 external-store）+ vite per-flag `define`（**禁用 `envPrefix:['MAILAGENT_']`**，否则泄漏 `MAILAGENT_CLI_API_KEY`）。Phase 02 在此加 `ai-sdk` 分支（§8）+ `MAILAGENT_AI_SDK_GATEWAY` 端口发现，**不重造 flag 层**。
+> 3. **provider key 路径决策（architecture §13.6 留给本 phase）**：spike 直连 CRS 取 key（main 侧）。Phase 02 二选一并写清：(A) Gateway 直连 provider；(B) Gateway 经 serve-api `/api/llm-proxy` 转发（零改 key 路径，key 仍只在 Python 侧）。**🔴 CRS 踩坑**：`@ai-sdk/anthropic` baseURL 须含 `/v1`（默认只追加 `/messages`→命中 `…/api/messages` 404，须归一 `…/api/v1`，见 architecture §13.2）。
+> 4. **eval 闸**：Phase 02 是 text-only + AI SDK 路径 opt-in（flag-off 默认仍走 legacy harness），故 `tests/agent_eval`（录的是 legacy harness trace）**≥ baseline 应天然成立**；真正的 R5 recorder 重对齐在 Phase 03b/04b（write tools + approval）落，见 architecture §13.4。
 
 ## 1. 目标
 

@@ -1,6 +1,6 @@
 # Agent 体验大版本专项（Agent Experience Epic）
 
-> status: in_progress（P0 止血 + P1 eval 固化 ✅ 随 v0.14.0 发布；**P2 内核全部 ✅**：P2a provenance/relevance `7c93c3be` + P2b memory auto-capture/冲突 `19b3f381` + P2c skill 透明 `ef9115d8` + P2d cross-domain plan `c9e0b8c5`；**P3 重定向 ✅ 文档落地**（chat-panel phase-01 §8 / phase-04 §12 映射表 + 06-22 superseded 指针 + fix-now 清单）/ **P4 换引擎 Phase 00 spike ✅ GO**（2026-06-23）：assistant-ui parity + Node AI SDK Gateway harness 4/4 + approval/eval-R5 重对齐，结论入 chat-panel architecture.md §13 / roadmap §10；Phase 01 待开工）
+> status: in_progress（P0 止血 + P1 eval 固化 ✅ 随 v0.14.0 发布；**P2 内核全部 ✅**：P2a provenance/relevance `7c93c3be` + P2b memory auto-capture/冲突 `19b3f381` + P2c skill 透明 `ef9115d8` + P2d cross-domain plan `c9e0b8c5`；**P3 重定向 ✅ 文档落地**（chat-panel phase-01 §8 / phase-04 §12 映射表 + 06-22 superseded 指针 + fix-now 清单）/ **P4 换引擎进行中**：Phase 00 spike ✅ GO（`bc5c1e80`）+ **Phase 01 assistant-ui Shell ✅**（2026-06-23，`b82ee24e`，flag-off，eval≥baseline，reviewer APPROVE）；**Phase 02 AI SDK Gateway 待开工**）
 > last-verified: 2026-06-23
 > owner: chenyqThu
 > Trellis 跟踪任务：`06-23-agent-eval-memory-skill-assistant-ui-ai-sdk`（`.trellis/tasks/`，本地执行壳）
@@ -34,7 +34,7 @@ P0 止血 ✅ ── P1 eval 固化 ✅ ──┬─ P2 内核(memory+skill) ─
 | **P1** | eval 网固化为 git-tracked [`tests/agent_eval/`](../../../tests/agent_eval/) | `tests/agent_eval/schema.md` | ✅ v0.14.0 |
 | **P2** | 内核：memory provenance/冲突 + skill 透明 + cross-domain（**view-agnostic**） | `.trellis/tasks/06-22-harness-agent-polish/roadmap.md` Phase 3/4 | ✅ 完成：P2a `7c93c3be` + P2b `19b3f381` + P2c `ef9115d8` + P2d `c9e0b8c5`（eval 36/29↑23 零回退；code-reviewer APPROVE） |
 | **P3** | 重定向：冻结 06-22 Phase 2 UX，诉求并入 chat-panel assistant-ui | 本 README + chat-panel | ✅ 文档落地：chat-panel phase-01 §8 + phase-04 §12 映射表 / 06-22 Phase 2 superseded 指针 + fix-now 清单 |
-| **P4** | 换引擎：assistant-ui + AI SDK Gateway，**每 phase 跑通 eval baseline 不回退** | [`../chat-panel-ai-sdk-assistant-ui-refactor/`](../chat-panel-ai-sdk-assistant-ui-refactor/) | ◐ **Phase 00 spike ✅ GO**（2026-06-23）：parity 4 截图 + Gateway harness 4/4 + approval/R5 重对齐；Phase 01 待开工 |
+| **P4** | 换引擎：assistant-ui + AI SDK Gateway，**每 phase 跑通 eval baseline 不回退** | [`../chat-panel-ai-sdk-assistant-ui-refactor/`](../chat-panel-ai-sdk-assistant-ui-refactor/) | ◐ **Phase 00 spike ✅ GO** + **Phase 01 assistant-ui Shell ✅**（2026-06-23，`b82ee24e`，flag-off，eval 85≥baseline，reviewer APPROVE）；**Phase 02 AI SDK Gateway 待开工** |
 
 **门控铁律**：P1 回归网（`tests/agent_eval`）不绿，P2 不改 prompt、P4 不换引擎。其它不变量见 [`roadmap.md`](./roadmap.md)（单 loop / 业务权威在 Python / 安全底线 / view-agnostic）。
 
@@ -46,7 +46,7 @@ P0 止血 ✅ ── P1 eval 固化 ✅ ──┬─ P2 内核(memory+skill) ─
 |---|---|
 | [`prd.md`](./prd.md) | 权威 PRD：五步→五阶段映射、依赖门控、版本切分、开放决策 |
 | [`roadmap.md`](./roadmap.md) | 执行脊柱：每阶段范围/出口门控/PR拆分/回滚 + 不变量 |
-| [`goal-prompts.md`](./goal-prompts.md) | **P1-P4 可粘贴 `/goal` session 启动手册**（下一 session 从这里取 P2a） |
+| [`goal-prompts.md`](./goal-prompts.md) | **P1-P4 可粘贴 `/goal` session 启动手册**（下一 session 从这里取 **P4-Phase02 AI SDK Gateway**） |
 | [`../chat-panel-ai-sdk-assistant-ui-refactor/`](../chat-panel-ai-sdk-assistant-ui-refactor/) | P4 换引擎权威（prd/architecture/roadmap/phase-00~06/acceptance） |
 | [`tests/agent_eval/schema.md`](../../../tests/agent_eval/schema.md) | P1 回归网规格（schema v1.2 + hard rules R1-R8） |
 | `.trellis/tasks/06-22-harness-agent-polish/roadmap.md` | P2 内核细节（Phase 3 memory / Phase 4 skill·cross-domain）—— **本地 Trellis 任务** |

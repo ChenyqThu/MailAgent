@@ -110,6 +110,7 @@ P0 止血 ✅ ── P1 eval 固化 ──┬─ P2 内核(memory+skill) ──�
 
 **关键门控（叠加在 chat-panel 各 phase 验收之上）：**
 - [x] **Phase 00 先行 gate**（✅ 2026-06-23，裁决 **GO**）：assistant-ui 视觉 parity（token/主题三态/6 accent，4 截图）PoC + Node AI SDK Gateway 嵌入 main PoC（`/health`+echo+真实 streamText+abort，harness **4/4 PASS**）通过；第三进程成本走「嵌入 main」近零。证据见 chat-panel [architecture.md §13](../chat-panel-ai-sdk-assistant-ui-refactor/architecture.md) / [roadmap §10](../chat-panel-ai-sdk-assistant-ui-refactor/roadmap.md)。→ 决定推进 01→06。
+- [x] **Phase 01 assistant-ui Shell**（✅ 2026-06-23，commit `b82ee24e`，全程 flag-off）：`frontend/src/shared/assistant/` headless primitives + MailAgent token，legacy ExternalStore adapter 喂 `useEmailChat`（**非** AI SDK），AIChatPanel 经 `lazy()` flag 分流（flag-off 字节级一致），删 Phase 00 PoC。验收 typecheck 0 / vitest 1700·0fail（+22）/ agent_eval 85（≥baseline，view-only）/ 4 组 parity 截图 / 不新增 provider 路径；code-reviewer(opus) APPROVE。落地结论见 chat-panel [phase-01 §9](../chat-panel-ai-sdk-assistant-ui-refactor/phase-01-assistant-ui-shell.md)。
 - [ ] read tools / write tools 迁移后，跑同一套 `tests/agent_eval` ≥ baseline（golden fixtures 防 parity 漂移）。
 - [ ] 高风险工具：`email_prepare_send` 无 approval token 不能真实发送；外发绑 content hash + approval id + expiry + idempotency；server-side guard 二次校验。
 - [ ] approval 心智模型从 `awaitConfirmation` 迁到 AI SDK two-call needsApproval/response，eval R5 重新对齐。
@@ -138,4 +139,4 @@ P0 止血 ✅ ── P1 eval 固化 ──┬─ P2 内核(memory+skill) ──�
 | P1 eval 固化 | ✅ 完成（commit `7a74a922` 推送 origin；85 passed 0.1s 零-LLM；脱敏审计零命中；CLAUDE.md 已登记） |
 | P2 内核 | ✅ 完成（P2a `7c93c3be` + P2b `19b3f381` + P2c `ef9115d8` + P2d `c9e0b8c5`；eval 36 tasks/hard_pass 29↑23 零回退；pytest 85 + vitest 151 + typecheck node+web 0；code-reviewer(opus) APPROVE 6/6 护栏） |
 | P3 重定向 | ✅ 文档落地（2026-06-23）：chat-panel phase-01 §8 + phase-04 §12 映射表 / 06-22 Phase 2 superseded 指针 + fix-now 清单（F1/F2/F3）；纯文档零代码 |
-| P4 换引擎 | ⬜ 待开工（Phase 00 spike 先行，goal-prompts.md P4-Phase00） |
+| P4 换引擎 | ◐ 进行中：Phase 00 spike ✅ GO（`bc5c1e80`）+ **Phase 01 assistant-ui Shell ✅**（`b82ee24e`，flag-off，eval≥baseline）；**Phase 02 AI SDK Gateway 待开工**（goal-prompts.md P4-Phase02） |

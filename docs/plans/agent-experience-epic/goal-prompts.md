@@ -181,11 +181,33 @@ frontend/ARCHITECTURE.md（renderer 现状 + token/主题）、CLAUDE.md「打�
 ```
 </details>
 
-### P4-Phase01 — assistant-ui Shell（下一个 session，PR-01a+b）
+### P4-Phase01 — assistant-ui Shell ✅ 已落地（2026-06-23, commit `b82ee24e`，全程 flag-off）
 
-> 只换**视图层**：assistant-ui shell + ExternalStore adapter 包 legacy `useEmailChat`，**不接 AI SDK Gateway**
-> （那是 Phase 02）、不迁工具执行、不改 Python service。flag `MAILAGENT_ASSISTANT_UI_PANEL` 默认 off。
-> 可选先建子任务：`task.py create "chat-panel Phase 01 assistant-ui shell" --parent 06-23-agent-eval-memory-skill-assistant-ui-ai-sdk`。
+> **DONE**：新建 `frontend/src/shared/assistant/`（headless primitives + MailAgent token）；**legacy
+> ExternalStore adapter**（`useExternalStoreRuntime`，**非** AI SDK）喂现有 `useEmailChat`/`useGeneralChat`；
+> `legacyMessageMapper` ChatMessage(+toolSteps/isStreaming)→ThreadMessageLike（text/reasoning/tool-call，
+> status 仅 assistant，序 reasoning→tool→text）。AIChatPanel body 改名 `LegacyAIChatPanel`（reviewer 机械
+> 证明字节级一致）+ wrapper 经 `lazy()` flag 分流（flag-off→legacy，assistant-ui 重依赖只在 flag-on 进
+> chunk）。markdown 复用 `TranslatedBody`(Streamdown)，tool 走 generic `tools.Fallback`(ToolTraceCard)，
+> pending confirmation 走 legacy `ConfirmToolDialog` fallback。归并删 Phase 00 PoC（renderer/poc +
+> vite.poc.config + poc/ demo）。**flag 投递铁律**：`electron.vite.config.ts`+`vite.web.config.ts`
+> **per-flag `define`（禁用 `envPrefix:['MAILAGENT_']`，否则把 `MAILAGENT_CLI_API_KEY` 打进 renderer bundle）**；
+> .env.example 登记 `MAILAGENT_ASSISTANT_UI_PANEL` / `MAILAGENT_CHAT_RUNTIME`。
+>
+> **验证**：typecheck(node+web) 0 / 全量 vitest **1700 passed/1 skipped/0 failed**（+22：mapper golden 16 +
+> shell 6）/ eslint clean / `tests/agent_eval` **85**（≥baseline，view-only 未影响 harness/trace）/ 4 组
+> theme·accent parity 截图（主题三态 × accent 正交）/ 不新增 LLM provider 路径（send/edit 仍走
+> `chat.send`→`mailApi.chat.start`）。code-reviewer(opus) **APPROVE**（0 CRITICAL/HIGH/MEDIUM，5 LOW 3 已修）。
+> 落地结论 = chat-panel [phase-01 §9](../chat-panel-ai-sdk-assistant-ui-refactor/phase-01-assistant-ui-shell.md)。
+>
+> **坑（写给后续 phase）**：① thinking 映射成 assistant-ui 原生 `reasoning` part（非 spec §P1.3 的
+> `data-thinking`；protocol §4 的 data-thinking 是 Phase 02 AI SDK UIMessage 层目标）。② assistant-ui Thread
+> 在 happy-dom 测试须 stub `ResizeObserver`/`IntersectionObserver`/`scrollIntoView`。③ part 组件用
+> `TextMessagePartProps` 等 props 类型**直接标注参数**（非 `TextMessagePartComponent` ComponentType 别名）
+> 才过 eslint `react/prop-types`；混合导出（组件 + 非组件对象）触发 `react-refresh/only-export-components`
+> → 组件定义与 part-component 配置对象分文件。④ send 键 = assistant-ui 原生 Enter（Shift+Enter 换行），非 legacy ⌘↩。原 /goal 备查于下。
+
+<details><summary>原 P4-Phase01 /goal（备查）</summary>
 
 ```
 开工先读：
@@ -215,12 +237,53 @@ ai@6 / @assistant-ui/react(+react-ai-sdk) / zod 已装（devDeps）；markdown �
 .env.example 登记 MAILAGENT_ASSISTANT_UI_PANEL / MAILAGENT_CHAT_RUNTIME。证据（截图 + 测试输出）贴对话。
 完成用 codex（codex-rescue）或 code-reviewer 过 diff 再收。
 ```
+</details>
 
-### P4-Phase02+ — 按 chat-panel roadmap §4 PR 拆分逐 phase 推进
+### P4-Phase02 — AI SDK Gateway（下一个 session）
+
+> 引入 Node AI SDK Gateway（**嵌入 Electron main，非独立 OS 进程**），只接管 chat orchestration 的**纯文本
+> streaming + UIMessage 持久化**：**不迁工具 / 不启 write actions / 不删 legacy harness / 不接 AG-UI**。默认
+> flag off → 现有 chat 字节级不变。可选先建子任务：
+> `task.py create "chat-panel Phase 02 AI SDK Gateway" --parent 06-23-agent-eval-memory-skill-assistant-ui-ai-sdk`。
+
+```
+开工先读：
+- docs/plans/chat-panel-ai-sdk-assistant-ui-refactor/{phase-02-ai-sdk-gateway,architecture,roadmap,protocol-contracts}.md
+  （phase-02 = DoD 主规格 + 头部「🔴 与 spike/Phase 01 对齐」四点：§3 endpoints / §4 chat / §5 lifecycle / §7 持久化 / §8 runtime 选择 / §9 不做 / §11 验收；architecture §13 = spike 实测结论；protocol-contracts §5 = /api/ai/chat 请求契约、§6 = Python domain service 契约、§9 = ai-sdk-v6 版本）
+- frontend/src/electron/main/ai_gateway_poc.ts（spike 已验证的嵌入式 Node 核：node:http + ai + @ai-sdk/anthropic，**不 import electron/keytar**）+ scripts/poc/run-ai-gateway-poc.ts（harness 4/4 范式）+ frontend/src/electron/main/index.ts 的 MAILAGENT_AI_SDK_GATEWAY flag-gated 动态 import 块（本 phase 把 PoC 正式化为规范模块）
+- frontend/src/shared/assistant/runtime/{flags.ts,MailAgentRuntimeProvider.tsx,useLegacyExternalStoreRuntime.ts} + AssistantUIChatPanel.tsx（Phase 01 落地：flags 已有 MAILAGENT_CHAT_RUNTIME/getChatRuntimeMode；Provider 现走 ExternalStore，本 phase 加 ai-sdk 分支，**不重造 flag 层**）
+- frontend/src/shared/chat/{platform,http_platform}.ts + src/api/routers/chat.py（serve-api /chat/config + llm-proxy；provider key 路径 B 选项落点）+ frontend/src/electron/main/chat_db.ts（CHAT_DB_VERSION，ai_chat_messages schema owner）
+前置已绿（引用即可，勿重验/重装）：Phase 00 spike ✅ GO（gateway harness 4/4，architecture §13）；Phase 01 ✅（shell + ExternalStore adapter + flags，commit b82ee24e）；ai@6 / @ai-sdk/anthropic / @assistant-ui/react-ai-sdk / zod 已装。
+
+/goal 完成 chat-panel Phase 02（AI SDK Gateway，纯文本 streaming + UIMessage 持久化），产出可验证：
+(1) 正式化嵌入式 Gateway（ai_gateway_poc.ts 收编进规范模块，仍嵌 Electron main 非独立进程）：/health +
+    /api/ai/config + /api/ai/chat（streamText → toUIMessageStreamResponse 纯文本流 + abort）；Electron lifecycle
+    （端口发现经 ?aiGatewayPort= / preload、/health poll、app quit 关闭），全程 MAILAGENT_AI_SDK_GATEWAY
+    flag-gated（默认 off → 不启动、重依赖不加载）；
+(2) provider key 路径二选一并写清（architecture §13.6）：(A) Gateway 直连 provider 或 (B) 经 serve-api
+    /api/llm-proxy 转发（key 仍只在 Python 侧）—— renderer 全程不接触 provider key；CRS baseURL 归一含 /v1（§13.2）；
+(3) 前端 AI SDK runtime 分支：flags.ts getChatRuntimeMode 接 'ai-sdk' → MailAgentRuntimeProvider 支持
+    useChatRuntime(@assistant-ui/react-ai-sdk) 指向 Gateway，gated by MAILAGENT_CHAT_RUNTIME=ai-sdk +
+    MAILAGENT_AI_SDK_GATEWAY=1；新建临时会话可经 AI SDK 流式回复；默认（legacy / external-store）字节级不变；
+(4) UIMessage 持久化 v1：新会话双写 ai_chat_messages.ui_message_json（canonical）+ content（legacy text）+
+    usage/model metadata，旧会话读取转 UIMessage；若动 schema → bump CHAT_DB_VERSION（**非**
+    EXPECTED_DB_VERSION，见上方 P2a 纠正）+ src/chat/db.py 头注释镜像 + 迁移幂等（优先经 Python chat endpoint 写）；
+(5) 测试：ai-gateway/{health, chat_stream(纯文本+abort), ui_message_persistence(写→重载)}.test.ts +
+    model-key 缺失返 typed error + renderer 端口发现；（可选）e2e chat_ai_sdk_basic。
+验收（phase-02 §11）：MAILAGENT_AI_SDK_GATEWAY=1 Gateway 可启动 + /health ok；MAILAGENT_CHAT_RUNTIME=ai-sdk
+  下新建会话可流式回复（贴 trace/截图）；默认 flag off 现有 chat 字节级不变；renderer 未接触 provider key；
+  pnpm -C frontend typecheck 0 + test 无新增失败；tests/agent_eval ≥ baseline（默认走 legacy harness，AI SDK
+  路径 opt-in，天然不影响 —— 跑一次兜底）。
+本阶段不做（phase-02 §9）：不迁 tools / 不启 write actions / 不删 legacy harness / 不接 AG-UI / 不强制旧会话全变 UIMessage。
+.env.example 若新增 flag 同步登记。证据（gateway harness 输出 + 流式 trace/截图 + 测试）贴对话。完成用 codex（codex-rescue）或 code-reviewer 过 diff 再收。
+```
+
+### P4-Phase03+ — 按 chat-panel roadmap §4 PR 拆分逐 phase 推进
 
 > 每个 phase 用 chat-panel 对应 phase-0X 文档 + acceptance-checklist 当 DoD，外加：
 > - read/write tools 迁移后跑 `tests/agent_eval` ≥ baseline（golden fixtures 防 parity 漂移）；
 > - 高风险工具：`email_prepare_send` 无 approval token 不能真实发送 + 外发绑 content hash/approval id/expiry/idempotency + server-side guard；
+> - approval 心智模型从 `awaitConfirmation` 迁到 AI SDK two-call needsApproval/response，eval R5 重对齐落点 = recorder 适配层（architecture §13.4，规则逻辑零改）；
 > - 旧会话可读（UIMessage 双写 + legacy mapper）；Gateway 不可用自动降级 legacy；
 > - cutover 前 AI SDK 新会话连续 dogfood 7 天无 P0/P1。
 > - **harness 退役前始终保留为 rollback 通道**（先删 legacy UI 主路径，dogfood 后再归档 harness）。

@@ -268,12 +268,10 @@ AG-UI 可并行但不阻塞主线：
 | PR-00a 文档与调研落档 | ✅ 本 spike 完成 | architecture.md §13 + roadmap §10 + 本目录文档；research-sources / protocol-contracts 已对齐 ai-sdk-v6 |
 | PR-00b 依赖与 spike scaffold | ◐ 部分预置 | 已装 5 个 devDeps（ai@6 / @ai-sdk/anthropic / @assistant-ui/react(+ai-sdk) / zod）+ flag-gated gateway（`ai_gateway_poc.ts`）/ assistant-ui（`renderer/poc/`）scaffold + 8 个 feature flag（phase-00 §3）**全 flag-off**。正式 PR-00b 把 scaffold 收编进 `frontend/src/shared/assistant/` + `frontend/src/ai-gateway/` 规范目录 |
 
-### 10.2 下一步
+### 10.2 进度
 
-GO → 按 §4 + §8 最小路径开 **Phase 01（assistant-ui Shell + ExternalStore adapter）** 实现 task：
-
-```
-task.py create "chat-panel Phase 01 assistant-ui shell" --parent 06-23-agent-eval-memory-skill-assistant-ui-ai-sdk
-```
+- **Phase 00 spike ✅ GO**（`bc5c1e80`）。
+- **Phase 01 assistant-ui Shell ✅**（2026-06-23，commit `b82ee24e`，全程 flag-off）：`frontend/src/shared/assistant/` headless primitives + MailAgent token；legacy ExternalStore adapter（`useExternalStoreRuntime`，**非** AI SDK）喂 `useEmailChat`；`legacyMessageMapper` ChatMessage→ThreadMessageLike；AIChatPanel `lazy()` flag 分流（flag-off 字节级一致）；删 Phase 00 PoC。验收 typecheck 0 / vitest 1700·0fail（+22）/ agent_eval 85（≥baseline）/ 4 组 parity 截图 / 不新增 provider 路径；reviewer(opus) APPROVE。落地结论 [phase-01 §9](./phase-01-assistant-ui-shell.md)。
+- **下一步 = Phase 02（AI SDK Gateway）**：启动 prompt 见 [epic goal-prompts.md `P4-Phase02`](../agent-experience-epic/goal-prompts.md)。
 
 执行顺序复用 §8：`00 → 01 → 02 → 03a → 04a → 04b → 03b → 06`；每个 phase 验收叠加 `tests/agent_eval` baseline 不回退闸（§2 原则 6）。

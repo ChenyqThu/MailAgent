@@ -1,7 +1,7 @@
 # MailAgent Chat Panel × assistant-ui × Vercel AI SDK 重构专项
 
-> status: planning
-> last-verified: 2026-06-22
+> status: 进行中 —— Phase 00 spike ✅ GO（`bc5c1e80`）+ **Phase 01 assistant-ui Shell ✅**（2026-06-23，`b82ee24e`，flag-off，[phase-01 §9](./phase-01-assistant-ui-shell.md)）；**Phase 02 AI SDK Gateway 待开工**
+> last-verified: 2026-06-23
 > owner: frontend / agent runtime
 > **本专项 = [agent-experience-epic](../agent-experience-epic/README.md) 的 P4（换引擎）** —— 每 phase 验收叠加 eval 闸（跑通 [`tests/agent_eval`](../../../tests/agent_eval/) 27-task baseline 不回退）；并吸收 `06-22-harness-agent-polish` 的 **Phase 2 UX** 诉求（tool timeline / thinking / approval polish 由 assistant-ui + A2UI 原生承载，不在 legacy `MessageList`/`Composer` 上单独做）。整体 P0→P4 序列与门控见 epic 的 [README](../agent-experience-epic/README.md) / [roadmap](../agent-experience-epic/roadmap.md)。
 
@@ -36,8 +36,8 @@ MailAgent 的核心后端不是普通 chat backend，而是邮件同步、DavMai
 | [`generative-ui-hitl.md`](./generative-ui-hitl.md) | 改工具卡片 / 审批链路前 | A2UI ComponentRegistry、NotionSyncCard、SendApprovalCard、人类在环 |
 | [`roadmap.md`](./roadmap.md) | 拆 PR / 排期前 | 总体阶段图、依赖关系、feature flags、回滚策略 |
 | [`phase-00-research-and-spike.md`](./phase-00-research-and-spike.md) | 开始专项前 | 调研、PoC、技术闸口 |
-| [`phase-01-assistant-ui-shell.md`](./phase-01-assistant-ui-shell.md) | 替换视图层前 | assistant-ui shell、视觉一致性、legacy UI 并行 |
-| [`phase-02-ai-sdk-gateway.md`](./phase-02-ai-sdk-gateway.md) | 引入 Node AI Gateway 前 | AI SDK Gateway、模型调用、UIMessage stream、持久化 |
+| [`phase-01-assistant-ui-shell.md`](./phase-01-assistant-ui-shell.md) | 替换视图层前 | assistant-ui shell、视觉一致性、legacy UI 并行 — **✅ done（`b82ee24e`，§9 落地）** |
+| [`phase-02-ai-sdk-gateway.md`](./phase-02-ai-sdk-gateway.md) | 引入 Node AI Gateway 前 | AI SDK Gateway、模型调用、UIMessage stream、持久化 — **← 下一步（goal-prompts P4-Phase02）** |
 | [`phase-03-tool-registry.md`](./phase-03-tool-registry.md) | 迁移工具定义前 | AI SDK tools、Python domain tool bridge、审计表兼容 |
 | [`phase-04-generative-ui-hitl.md`](./phase-04-generative-ui-hitl.md) | 上线复杂交互卡片前 | A2UI 卡片、approval、外发邮件安全底线 |
 | [`phase-05-ag-ui-interop.md`](./phase-05-ag-ui-interop.md) | 接 AG-UI / 对外 agent 协议前 | AG-UI event mirror、interrupt、state snapshot |
