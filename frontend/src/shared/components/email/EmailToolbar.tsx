@@ -699,12 +699,12 @@ export function EmailToolbar({
       // relative z-[15]: position:relative + 正 z-index 自成 stacking context
       // (无需 backdrop-filter), 让 reply 下拉 (top-full z-50) 和 HoverTip 向下溢出
       // 时画在 sticky 标题 (z-10) 之上、compose overlay (z-20) 之下.
-      // pl-8 (= 正文 px-8 的 32px) 让首个按钮 (回复 CTA) 左边缘与下方标题/正文左起点
+      // pl-4 (= 正文 px-4 的 16px) 让首个按钮 (回复 CTA) 左边缘与下方标题/正文左起点
       // 对齐; 右侧 pr-3 不变 (右端 nav/AI 按钮维持原边距)。
       className={cn(
         'relative z-[15] h-11 border-b border-ink-border-soft flex items-center pr-3 gap-1 shrink-0',
-        // <lg 返回按钮占左侧 → pl 收窄；≥lg 无返回按钮 → pl-8 对齐正文起点。
-        onBack ? 'pl-2 lg:pl-8' : 'pl-8'
+        // <lg 返回按钮占左侧 → pl 收窄；≥lg 无返回按钮 → pl-4 对齐正文起点。
+        onBack ? 'pl-2 lg:pl-4' : 'pl-4'
       )}
     >
       {/* <lg 返回列表 — 详情覆盖态的返回入口（EmailDetail 主分支传 onBack）。

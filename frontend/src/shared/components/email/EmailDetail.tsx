@@ -446,9 +446,15 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
       from: { autoAlpha: 0, y: 20 }
     })
 
-  // B2 — 切邮件时正文内容区交叉淡入. internalId 变化时 from autoAlpha:0 (120ms),
+  // B2 — 切邮件时正文内容区交叉淡入. internalId 变化时 0→1 淡入 (120ms),
   // overwrite:'auto' 让快速 J/K 连切打断上一个 tween. 仅淡入正文滚动容器 (不含
   // toolbar, 避免 toolbar 闪). keepPreviousData 防内容闪。reduced-motion 短路.
+  //
+  // 🔴 必须用 fromTo (终点显式 =1), 不能用 gsap.from(autoAlpha:0): from 会把
+  // **调用时元素的当前 opacity** 快照成动画终点。快速切邮箱时若上一次淡入 (0→1)
+  // 还在中途 (如 0.64) 就被新一次打断, from 会把 0.64 当终点 → 再切又取更低的中途
+  // 值 → opacity 单调下降锁死 (真机 bug: style="opacity:0.6432")。fromTo 终点恒 1,
+  // 无论何时重入打断都收敛到不透明, 杜绝累积。
   const bodyScopeRef = useRef<HTMLDivElement>(null)
   const reduceMotion = useReducedMotion()
   useGSAP(
@@ -456,7 +462,7 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
       if (reduceMotion) return
       const el = bodyScopeRef.current
       if (!el) return
-      gsap.from(el, { autoAlpha: 0, duration: DUR.fast, overwrite: 'auto' })
+      gsap.fromTo(el, { autoAlpha: 0 }, { autoAlpha: 1, duration: DUR.fast, overwrite: 'auto' })
     },
     { dependencies: [internalId, reduceMotion], scope: bodyScopeRef }
   )
@@ -779,9 +785,10 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
             'border-b border-ink-border-soft'
           )}
         >
-          <div className="px-8 pt-3 pb-3">
+          <div className="px-4 pt-3 pb-3">
             {/* Subject block — EN lang pip + tracking-tight headline.
-                pt 与 pb 取齐 (pt-3=pb-3): 之前 pt-6 上留白比下大一截, 视觉不平衡。 */}
+                pt 与 pb 取齐 (pt-3=pb-3): 之前 pt-6 上留白比下大一截, 视觉不平衡。
+                px-4 (16px): 与正文 px-4 + 工具栏 pl-4 同一左起点 (原 px-8 太宽)。 */}
             <div className="flex items-start gap-3">
               {langIsEn && (
                 <span
@@ -880,7 +887,7 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
           </div>
         </div>
 
-        <div className="px-8 pt-4 pb-6">
+        <div className="px-4 pt-4 pb-6">
           {/* Meta grid — Sprint 13 round 9 user feedback:
                 - "To/CC 仍然没正确显示。(默认显示 100 字符吧, 可以 more
                   展开)" — Cc moves back into the default rows; both To
