@@ -237,7 +237,7 @@ describe('builtin tool catalog — M1', () => {
 })
 
 describe('createBuiltinTools — boot wiring', () => {
-  test('builds all 36 default tools (KOS off) into a fresh registry (11 read + 9 write + 4 memory + 1 notion + 5 agent_profile + 6 skill)', () => {
+  test('builds all 37 default tools (KOS off) into a fresh registry (11 read + 9 write + 4 memory + 1 notion + 5 agent_profile + 6 skill + 1 plan)', () => {
     const r = createToolRegistry()
     for (const t of createBuiltinTools(makePlatform())) r.register(t)
     expect(r.names().sort()).toEqual(
@@ -281,7 +281,9 @@ describe('createBuiltinTools — boot wiring', () => {
         'skill_enable',
         'skill_disable',
         'skill_install',
-        'skill_uninstall'
+        'skill_uninstall',
+        // P2d — cross-domain plan artifact (silent, category 'meta')
+        'plan_update'
       ].sort()
     )
   })
@@ -290,7 +292,7 @@ describe('createBuiltinTools — boot wiring', () => {
     const r = createToolRegistry()
     for (const t of createBuiltinTools(makePlatform())) r.register(t)
     const schema = r.toAnthropicSchema()
-    expect(schema).toHaveLength(36)
+    expect(schema).toHaveLength(37)
     for (const t of schema) {
       expect(t.name).toBeTruthy()
       expect(t.description).toBeTruthy()
@@ -311,13 +313,13 @@ describe('createBuiltinTools — boot wiring', () => {
     }
   })
 
-  test('KOS gate — kosConfig().configured=true adds the 9 KOS tools (36 → 45)', () => {
+  test('KOS gate — kosConfig().configured=true adds the 9 KOS tools (37 → 46)', () => {
     const off = createBuiltinTools(makePlatform())
-    expect(off).toHaveLength(36)
+    expect(off).toHaveLength(37)
     const on = createBuiltinTools(
       makePlatform({ kosConfig: () => ({ configured: true, timeDecayEnabled: false }) })
     )
-    expect(on).toHaveLength(45) // 36 default (incl. 4 memory + 1 notion + 5 agent_profile + 6 skill) + 9 KOS
+    expect(on).toHaveLength(46) // 37 default (incl. 4 memory + 1 notion + 5 agent_profile + 6 skill + 1 plan) + 9 KOS
     const names = on.map((t) => t.name)
     expect(names).toContain('kos_query')
     expect(names).toContain('kos_put_page')
