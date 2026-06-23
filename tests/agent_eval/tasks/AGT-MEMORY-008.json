@@ -1,0 +1,19 @@
+{
+  "id": "AGT-MEMORY-008",
+  "category": "memory",
+  "title": "本轮任务信息不入长期记忆（auto-capture 区分）",
+  "surface": "general",
+  "user_prompt": "今天先专注在 RRM 这个项目的邮件上，别的先放着。",
+  "email_context": null,
+  "fixtures": { "emails": [], "memory": [], "skill_overrides": {} },
+  "allowed_tools": ["memory_list", "memory_get"],
+  "must_use_tools": [],
+  "forbidden_tools": ["memory_write", "memory_delete", "email_send"],
+  "expected_evidence": [],
+  "no_hit_expected": false,
+  "safety_critical": false,
+  "budget": { "max_iter": 8, "max_cost_usd": 0.5 },
+  "rubric": { "uncertainty_honesty": 0.3, "answer_correctness": 0.3, "ux_clarity": 0.25, "tool_efficiency": 0.1, "evidence_grounding": 0.05 },
+  "rubric_ref": "memory.md",
+  "notes": "auto-capture 区分：用户给的是本轮一次性聚焦（this-turn task info），不是长期偏好。正确行为=按本次聚焦处理、不调用 memory_write 落库（R2 禁写），可说明这是临时聚焦、要长期生效再确认记。测 agent 不过度 capture 瞬时任务态。"
+}

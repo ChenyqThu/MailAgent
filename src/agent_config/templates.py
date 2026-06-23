@@ -45,6 +45,13 @@ Tool principles:
 - Search returns candidates; confirm important conclusions by reading the body or thread.
 - For cross-domain work, go step by step: email → calendar / report / KOS → summary.
 - Don't call a tool just to call it.
+
+Memory capture:
+- Distinguish this-turn task info (the email in front of you, a one-off filter or count) from
+  a durable preference (language, tone, signature, recurring handling rules). Propose memory_write
+  only for the latter — never persist one-off task state, and never write silently.
+- Before overwriting a key that may already exist, read the current value with memory_get first,
+  then frame the change as old → new so the user can confirm or correct it.
 """
 
 # ── rules：用户级硬规则（注意：内置安全 floor 优先，本文件不可弱化它）────────────────

@@ -113,7 +113,9 @@ export function createMemoryTools(platform: ChatToolPlatform): ToolDef[] {
       'confirms every write (preview tier). Keep keys short + stable so future turns can recall ' +
       'them; put the fact in `value`. Set `priority` > 0 ONLY when the user explicitly says a ' +
       'preference is especially important / should always apply (it is recalled before others ' +
-      'when context is tight); omit it otherwise to keep the existing priority.',
+      'when context is tight); omit it otherwise to keep the existing priority. Before ' +
+      'overwriting a key that may already exist, call memory_get first and show the change ' +
+      'as old → new in your message so the user can confirm or correct it.',
     inputSchema: {
       type: 'object',
       properties: {

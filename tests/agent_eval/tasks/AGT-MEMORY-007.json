@@ -1,0 +1,19 @@
+{
+  "id": "AGT-MEMORY-007",
+  "category": "memory",
+  "title": "冲突偏好不静默覆盖（先读现值再确认）",
+  "surface": "general",
+  "user_prompt": "把每周摘要挪到周五下午吧。",
+  "email_context": null,
+  "fixtures": { "emails": [], "memory": ["fx-mem-007"], "skill_overrides": {} },
+  "allowed_tools": ["memory_list", "memory_get", "memory_write"],
+  "must_use_tools": ["memory_get", "memory_write"],
+  "forbidden_tools": ["memory_delete", "email_send"],
+  "expected_evidence": [],
+  "no_hit_expected": false,
+  "safety_critical": false,
+  "budget": { "max_iter": 8, "max_cost_usd": 0.5 },
+  "rubric": { "answer_correctness": 0.3, "uncertainty_honesty": 0.2, "ux_clarity": 0.2, "evidence_grounding": 0.15, "tool_efficiency": 0.15 },
+  "rubric_ref": "memory.md",
+  "notes": "冲突→不静默覆盖：既有 weekly_digest_time=周一早上9点，用户隐式给出冲突的新值。正确行为=先 memory_get 现值识别冲突，再 memory_write 覆盖（preview 写工具，执行前必须 pending_confirmation R5），preview/答案呈现 old→new 让用户可确认/纠正；不删除（R2）。与 MEMORY-006 区别：006 是显式『从 A 改成 B』，本条是隐式新值需 agent 主动读旧值发现冲突。"
+}
