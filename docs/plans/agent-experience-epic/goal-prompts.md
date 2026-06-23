@@ -22,7 +22,11 @@
 
 ---
 
-## P2 —— 内核打磨（memory + skill/cross-domain，view-agnostic）
+## P2 —— 内核打磨（memory + skill/cross-domain，view-agnostic）✅ 全部完成（2026-06-23）
+
+> **P2a–P2d 全部落地**（commit `7c93c3be` / `19b3f381` / `ef9115d8` / `c9e0b8c5`）。eval 36 tasks /
+> hard_pass 29（↑23，零既有回退）；pytest tests/agent_eval 85 + 相关 vitest 151 + typecheck node+web 0；
+> code-reviewer(opus) APPROVE 6/6 护栏。**下一 session 接 P3（重定向决策，纯文档）/ P4（换引擎，Phase 00 spike 先行）。**
 
 > 权威细节：`.trellis/tasks/06-22-harness-agent-polish/roadmap.md` Phase 3 + Phase 4。
 > **铁律：view-agnostic** —— 只动 Python domain services + 工具语义 + prompt + 轻量 artifact，**不碰** `MessageList`/`Composer`/`ConfirmToolDialog`（P4 会换）。每改一处 prompt/工具，跑 `tests/agent_eval` 对比 baseline。
@@ -60,11 +64,13 @@
 ```
 </details>
 
-### P2b — Memory auto-capture + conflict（确认制）← **下一片，compact 后从这里接力**
+### P2b — Memory auto-capture + conflict（确认制）✅ 已落地（2026-06-23, commit `19b3f381`）
 
-> **判断（接力建议）**：P2b **大概率不需动 DB schema**（provenance/priority 列 P2a 已就位）。
-> 重点 = **prompt policy**（引导 agent 主动提议）+ **工具/编排语义**（冲突先 `memory_get` 现值、在 preview
-> 里呈现 old→new diff 再确认）+ **新 eval 任务 + baseline trace**。不建表、不引第二 loop。
+> **DONE**（接力判断验证正确：**零 DB schema 变更**，纯 prompt policy + eval）。落地：AGENT_TEMPLATE
+> "Memory capture"（区分本轮任务信息 vs 长期偏好、只后者提议 memory_write、绝不静默写）+ memory_write
+> 工具 description 冲突指引（覆盖前先 memory_get 现值、消息里呈现 old→new）。eval +AGT-MEMORY-007（冲突
+> →不静默覆盖，must_use memory_get+write+R5）/ 008（本轮信息不入长期记忆，forbidden memory_write）/
+> 009（已删/不存在偏好不被使用，memory_get found:false 诚实）。memory 9/9 pass。原 /goal 备查于下。
 
 ```
 开工先读（按序）：
@@ -83,7 +89,13 @@
 铁律 view-agnostic（不碰 MessageList/Composer/ConfirmToolDialog）+ 单 loop。证据贴对话。完成用 codex/code-reviewer 过 diff 再收。
 ```
 
-### P2c — Skill transparency
+### P2c — Skill transparency ✅ 已落地（2026-06-23, commit `ef9115d8`）
+
+> **DONE**：SOUL_TEMPLATE capability-honesty value + custom_api.ts skillFragments header 四类不可用
+> 措辞（禁用 / 未装·无 scope / 服务未配置 / 需确认）+「绝不调用/模拟缺失工具」；capability summary 走
+> 既有 skill_list_installed（经 resolved_skills 已带 unavailableReason，无需注入）。eval +AGT-SKILL-004
+> capability summary，skill_enablement 4/4。四类的「无 scope/需确认」chat 态 owner 全 scope → prompt
+> policy + judge 软评，硬闸覆盖禁用/不可用 + 不幻觉。原 /goal 备查于下。
 
 ```
 开工先读：frontend/src/shared/chat/runtime.ts（skill enablement）、src/skills/{registry,invoke}.py、
@@ -97,7 +109,14 @@ src/api/routers/skills.py、docs/reference/llm-agent/{skill-delivery-api,capabil
 view-agnostic。证据贴对话。
 ```
 
-### P2d — Cross-domain plan artifact（同一 loop，不引入第二 engine）
+### P2d — Cross-domain plan artifact（同一 loop，不引入第二 engine）✅ 已落地（2026-06-23, commit `c9e0b8c5`）
+
+> **DONE**：新增 builtin 工具 `plan_update`（plan.ts，silent meta，纯计算无 platform I/O）= {plan_id,
+> goal, steps:[{id,domain,status,evidence?}]}，注册进 createBuiltinTools + tool_catalog（counts 45→46）。
+> 缺能力步骤标 'unavailable'（接 P2c honesty）。plan 经 tool_use/tool_result 进 trace（可视化/可回放，
+> 无 view 改动）。eval +AGT-CROSS-004（mail↔report 用 plan 串核对，双 evidence R8）/ 005（mail↔calendar
+> 把 calendar 步标 unavailable，从 .ics 取时间）。report_cross 4/5 pass。**单 loop**：仅 harness.ts
+> `while(iter<MAX_ITER)`（grep 证），plan_update 只是工具零新 loop。原 /goal 备查于下。
 
 ```
 /goal 引入轻量 plan/subgoal artifact 支撑跨域任务，但不引入第二 agent loop：

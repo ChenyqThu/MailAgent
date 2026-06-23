@@ -1,6 +1,6 @@
 # Agent 体验大版本专项（Agent Experience Epic）
 
-> status: in_progress（P0 止血 + P1 eval 固化 ✅ 随 v0.14.0 发布；**P2a memory provenance+相关性 ✅ commit `7c93c3be`**；P2b skill 透明 + cross-domain / P3 / P4 待开工）
+> status: in_progress（P0 止血 + P1 eval 固化 ✅ 随 v0.14.0 发布；**P2 内核全部 ✅**：P2a provenance/relevance `7c93c3be` + P2b memory auto-capture/冲突 `19b3f381` + P2c skill 透明 `ef9115d8` + P2d cross-domain plan `c9e0b8c5`；P3 重定向决策已定 / P4 换引擎待开工）
 > last-verified: 2026-06-23
 > owner: chenyqThu
 > Trellis 跟踪任务：`06-23-agent-eval-memory-skill-assistant-ui-ai-sdk`（`.trellis/tasks/`，本地执行壳）
@@ -32,7 +32,7 @@ P0 止血 ✅ ── P1 eval 固化 ✅ ──┬─ P2 内核(memory+skill) ─
 |---|---|---|---|
 | **P0** | 止血：Phase 1 侧分支合 main + push 积压 | 本 README + roadmap | ✅ v0.14.0 |
 | **P1** | eval 网固化为 git-tracked [`tests/agent_eval/`](../../../tests/agent_eval/) | `tests/agent_eval/schema.md` | ✅ v0.14.0 |
-| **P2** | 内核：memory provenance/冲突 + skill 透明 + cross-domain（**view-agnostic**） | `.trellis/tasks/06-22-harness-agent-polish/roadmap.md` Phase 3/4 | 🟡 P2a(provenance+规则化相关性+memory eval) ✅ `7c93c3be`；剩 P2b(conflict/auto-capture + skill 透明 + cross-domain) |
+| **P2** | 内核：memory provenance/冲突 + skill 透明 + cross-domain（**view-agnostic**） | `.trellis/tasks/06-22-harness-agent-polish/roadmap.md` Phase 3/4 | ✅ 完成：P2a `7c93c3be` + P2b `19b3f381` + P2c `ef9115d8` + P2d `c9e0b8c5`（eval 36/29↑23 零回退；code-reviewer APPROVE） |
 | **P3** | 重定向：冻结 06-22 Phase 2 UX，诉求并入 chat-panel assistant-ui | 本 README + chat-panel | 决策已定 |
 | **P4** | 换引擎：assistant-ui + AI SDK Gateway，**每 phase 跑通 eval baseline 不回退** | [`../chat-panel-ai-sdk-assistant-ui-refactor/`](../chat-panel-ai-sdk-assistant-ui-refactor/) | ⬜ 待开工 |
 

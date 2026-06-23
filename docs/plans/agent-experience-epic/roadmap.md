@@ -69,12 +69,12 @@ P0 止血 ✅ ── P1 eval 固化 ──┬─ P2 内核(memory+skill) ──�
 - Skill 透明：对话内 capability summary、why-not-call-tool 四类解释（禁用/无 scope/不可用/需确认）、禁用 skill 不幻觉调用。
 - Cross-domain：轻量 plan/subgoal artifact（同一 harness loop 执行，可视化/可回放，**不是第二 engine**）。
 
-**出口门控：**
-- [ ] memory eval：写入→下轮召回 / 修改→新规则生效 / 删除→不再用 / irrelevant 不污染 —— 全 pass。
-- [ ] provenance 可见；冲突/删除可回放；memory prompt 注入长度可控。
-- [ ] skill disabled/unavailable/permission 四类解释清楚不幻觉。
-- [ ] ≥3 条跨域 curated task pass；plan artifact 进 trace report；**未引入第二 loop**（grep gate）。
-- [ ] `tests/agent_eval` 总分不低于 baseline；有 tradeoff 必在 report 写明。
+**出口门控（全部达成，2026-06-23）：**
+- [x] memory eval：写入→下轮召回（004）/ 修改→新规则生效（006）/ 删除→不再用（003/009）/ irrelevant 不污染（005）/ 冲突→不静默覆盖（007）/ 本轮信息不入长期记忆（008）—— 全 pass（memory 9/9）。
+- [x] provenance 可见（P2a）；冲突先读现值再 old→new 确认（P2b prompt policy）；删除可回放；memory prompt 注入长度可控 + `memorySummaryMeta` 可观测（P2a）。
+- [x] skill disabled/unavailable/needs-confirm 四类解释清楚不幻觉（P2c：SOUL honesty value + skillFragments header 四类 + AGT-SKILL-004 capability summary；skill_enablement 4/4）。
+- [x] ≥3 条跨域 task pass（report_cross 4/5：001/002/004/005）；plan artifact（plan_update 工具）进 trace report；**未引入第二 loop**（grep gate：仅 harness.ts `while(iter<MAX_ITER)`）。
+- [x] `tests/agent_eval` 总分不低于 baseline（36 tasks / hard_pass 29 ↑23，零既有回退，7 失败均既有 v0.13.0 设计缺陷样本）；无 tradeoff。
 
 **PR 拆分（建议）：** P2a memory provenance+relevance / P2b auto-capture+conflict / P2c skill transparency / P2d cross-domain plan artifact。每个独立 PR + eval before/after。
 
@@ -136,6 +136,6 @@ P0 止血 ✅ ── P1 eval 固化 ──┬─ P2 内核(memory+skill) ──�
 |---|---|
 | P0 止血 | ✅ 完成（main 同步 origin `6518b7a5`，分支已删） |
 | P1 eval 固化 | ✅ 完成（commit `7a74a922` 推送 origin；85 passed 0.1s 零-LLM；脱敏审计零命中；CLAUDE.md 已登记） |
-| P2 内核 | ⬜ 待开工（goal-prompts.md P2a-d） |
+| P2 内核 | ✅ 完成（P2a `7c93c3be` + P2b `19b3f381` + P2c `ef9115d8` + P2d `c9e0b8c5`；eval 36 tasks/hard_pass 29↑23 零回退；pytest 85 + vitest 151 + typecheck node+web 0；code-reviewer(opus) APPROVE 6/6 护栏） |
 | P3 重定向 | ⬜ 决策已定，随 P4 文档落地 |
 | P4 换引擎 | ⬜ 待开工（Phase 00 spike 先行，goal-prompts.md P4-Phase00） |

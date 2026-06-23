@@ -6,7 +6,7 @@
 // 取工具 —— main / 3c renderer 各自用对应 platform（electron / http）构造一份 registry，
 // 零 parity。本文件零 Electron import（不变式 1，pnpm build:web 验证）。
 //
-//   Default catalog (25 tools):
+//   Default catalog (26 tools):
 //     Read  (11): email_search / email_get / email_body / email_list_thread /
 //                 email_search_fulltext / email_get_ai_fields / email_list_folders /
 //                 attachment_list / email_search_attachments /
@@ -37,7 +37,7 @@ import { createAgentProfileTools } from './agent_profile'
 import { createSkillManagementTools } from './skill_management'
 import { createPlanTools } from './plan'
 
-/** Build every builtin tool bound to the injected platform. The 25 default
+/** Build every builtin tool bound to the injected platform. The 26 default
  *  tools always register; the 9 KOS tools register only when
  *  `platform.kosConfig().configured` is true (electron: isKosConsumerEnabled()
  *  — zero-regression registration gate; http: serve-api kos-available). */
