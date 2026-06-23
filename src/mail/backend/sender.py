@@ -32,6 +32,25 @@ if TYPE_CHECKING:
 # RFC 4315 APPENDUID response: [APPENDUID uidvalidity uid]
 _APPENDUID_RE = re.compile(rb"APPENDUID\s+(\d+)\s+(\d+)", re.IGNORECASE)
 
+# header 折叠 (CRLF/LF/CR + 随后空白) — unfold 成单空格用
+_HEADER_FOLD_RE = re.compile(r"[\r\n]+[ \t]*")
+
+
+def _sanitize_header(value: str) -> str:
+    """Unfold + 去裸 CR/LF — header 值绝不能含换行 (RFC 5322), 否则 Python email
+    序列化抛 ``Header values may not contain linefeed or carriage return characters``.
+
+    原邮件长 Subject 被 RFC 折叠后, 解析入库会残留 ``\\n`` (continuation line, 如
+    真机 internal_id=1000000950 的主题); reply/forward 时直接塞进 ``msg["Subject"]``
+    即炸。附件 filename / 收件人地址同理 — 都来自不可信原邮件数据。这里把 "换行 +
+    随后空白" 归一为单空格 (标准 unfolding) 并 strip 首尾, 保证任何 header 都能安全
+    序列化。我们自己生成的固定 header (Date / Message-ID / User-Agent / Importance)
+    天然干净, 不经过本函数。
+    """
+    if not value:
+        return value
+    return _HEADER_FOLD_RE.sub(" ", value).strip()
+
 
 def build_outgoing_mime(cfg: "Config", draft: DraftRequest) -> bytes:
     """构造发件 MIME (reply / reply-all / forward / new), 供 IMAP APPEND 或 SMTP send.
@@ -46,16 +65,18 @@ def build_outgoing_mime(cfg: "Config", draft: DraftRequest) -> bytes:
     msg = EmailMessage()
     from_display = getattr(cfg, "user_name", "") or ""
     from_email = cfg.user_email
-    msg["From"] = f"{from_display} <{from_email}>" if from_display else from_email
+    msg["From"] = _sanitize_header(
+        f"{from_display} <{from_email}>" if from_display else from_email
+    )
     if draft.to:
-        msg["To"] = ", ".join(draft.to)
+        msg["To"] = _sanitize_header(", ".join(draft.to))
     if draft.cc:
-        msg["Cc"] = ", ".join(draft.cc)
+        msg["Cc"] = _sanitize_header(", ".join(draft.cc))
     if draft.bcc:
         # send 时 smtplib.send_message 自动从 Bcc 提取收件人并剥离该 header;
         # draft APPEND 时 Bcc 留在草稿 (Outlook 草稿可见 Bcc, 可接受).
-        msg["Bcc"] = ", ".join(draft.bcc)
-    msg["Subject"] = draft.subject or "(no subject)"
+        msg["Bcc"] = _sanitize_header(", ".join(draft.bcc))
+    msg["Subject"] = _sanitize_header(draft.subject or "(no subject)")
     msg["Date"] = formatdate(localtime=True)
     msg["Message-ID"] = make_msgid(domain="mailagent.local")
 
@@ -65,7 +86,7 @@ def build_outgoing_mime(cfg: "Config", draft: DraftRequest) -> bytes:
             irt = draft.in_reply_to.strip()
             if not irt.startswith("<"):
                 irt = f"<{irt}>"
-            msg["In-Reply-To"] = irt
+            msg["In-Reply-To"] = _sanitize_header(irt)
         if draft.references:
             # 调用方应传完整 chain (``<old_refs> <old_msgid>``); 这里只做空白归一.
             refs_clean = " ".join(draft.references.split())
@@ -75,7 +96,7 @@ def build_outgoing_mime(cfg: "Config", draft: DraftRequest) -> bytes:
             irt = draft.in_reply_to.strip()
             if not irt.startswith("<"):
                 irt = f"<{irt}>"
-            msg["References"] = irt
+            msg["References"] = _sanitize_header(irt)
 
     msg["User-Agent"] = "MailAgent/dual-backend/davmail"
 
@@ -117,7 +138,9 @@ def build_outgoing_mime(cfg: "Config", draft: DraftRequest) -> bytes:
             content,
             maintype=maintype or "application",
             subtype=subtype or "octet-stream",
-            filename=filename,
+            # filename 进 Content-Disposition header — 同样不能含 CR/LF
+            # (原邮件附件名亦属不可信数据)。
+            filename=_sanitize_header(filename),
         )
     return msg.as_bytes()
 
