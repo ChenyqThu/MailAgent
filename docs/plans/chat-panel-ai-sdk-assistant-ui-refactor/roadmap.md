@@ -1,8 +1,9 @@
 # Roadmap — Chat Panel AI SDK / assistant-ui 重构专项路线图
 
 > status: planning
-> last-verified: 2026-06-22
+> last-verified: 2026-06-23
 > scope: phase breakdown, feature flags, rollout, rollback, PR sequencing
+> **Phase 00 spike：✅ 完成（2026-06-23），裁决 = GO。结论见 [§10](#10-phase-00-spike-结论--go2026-06-23) + [architecture.md §13](./architecture.md#13-phase-00-spike-实测结论2026-06-23go)。**
 
 ## 1. 总体路线
 
@@ -246,3 +247,33 @@ AG-UI 可并行但不阻塞主线：
 | Week 6 | Phase 05 AG-UI mirror + Phase 06 cutover prep |
 
 实际进度以 dogfood 和安全验收为准，高风险工具不赶进度。
+
+---
+
+## 10. Phase 00 Spike 结论 + GO（2026-06-23）
+
+详细实测结论与证据见 [architecture.md §13](./architecture.md#13-phase-00-spike-实测结论2026-06-23go)。摘要：
+
+- **裁决 = GO**。三项核心技术风险全部以 flag-off PoC 打通：
+  - assistant-ui Thread/Composer 在 MailAgent token + 主题三态 + 6 accent 下渲染 parity（4 组截图）；
+  - Node AI SDK Gateway 嵌入 Electron main，`/health` + echo-stream + 真实 `streamText`（经 CRS）+ abort，harness **4/4 PASS**；
+  - approval 两次调用语义差异写清，eval R5 重对齐落点 = recorder 适配层（规则逻辑零改）。
+- **第三进程成本**：PoC 采**嵌入 main**形态（不新增 OS 进程，≈几 MB 堆 + 1 loopback 端口），把「第三常驻进程」成本降到近零；独立 Node 进程留作 Phase 06+ 后置选项。
+- **本专项 = [agent-experience-epic](../agent-experience-epic/README.md) 的 P4**；门控 P1（`tests/agent_eval` 85 passed）/ P2 / P3（commit `13bab74b`）已绿。
+
+### 10.1 Phase 00 产出状态（对照 §4 PR 拆分）
+
+| §4 PR | 状态 | 说明 |
+|---|---|---|
+| PR-00a 文档与调研落档 | ✅ 本 spike 完成 | architecture.md §13 + roadmap §10 + 本目录文档；research-sources / protocol-contracts 已对齐 ai-sdk-v6 |
+| PR-00b 依赖与 spike scaffold | ◐ 部分预置 | 已装 5 个 devDeps（ai@6 / @ai-sdk/anthropic / @assistant-ui/react(+ai-sdk) / zod）+ flag-gated gateway（`ai_gateway_poc.ts`）/ assistant-ui（`renderer/poc/`）scaffold + 8 个 feature flag（phase-00 §3）**全 flag-off**。正式 PR-00b 把 scaffold 收编进 `frontend/src/shared/assistant/` + `frontend/src/ai-gateway/` 规范目录 |
+
+### 10.2 下一步
+
+GO → 按 §4 + §8 最小路径开 **Phase 01（assistant-ui Shell + ExternalStore adapter）** 实现 task：
+
+```
+task.py create "chat-panel Phase 01 assistant-ui shell" --parent 06-23-agent-eval-memory-skill-assistant-ui-ai-sdk
+```
+
+执行顺序复用 §8：`00 → 01 → 02 → 03a → 04a → 04b → 03b → 06`；每个 phase 验收叠加 `tests/agent_eval` baseline 不回退闸（§2 原则 6）。

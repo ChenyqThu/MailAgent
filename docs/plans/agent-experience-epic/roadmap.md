@@ -109,7 +109,7 @@ P0 止血 ✅ ── P1 eval 固化 ──┬─ P2 内核(memory+skill) ──�
 ```
 
 **关键门控（叠加在 chat-panel 各 phase 验收之上）：**
-- [ ] **Phase 00 先行 gate**：assistant-ui 视觉 parity（MailAgent token/主题三态/accent）PoC + Node Gateway 进程生命周期 PoC（第三进程打包/端口/健康检查）通过，**再决定**是否推进 01→06。
+- [x] **Phase 00 先行 gate**（✅ 2026-06-23，裁决 **GO**）：assistant-ui 视觉 parity（token/主题三态/6 accent，4 截图）PoC + Node AI SDK Gateway 嵌入 main PoC（`/health`+echo+真实 streamText+abort，harness **4/4 PASS**）通过；第三进程成本走「嵌入 main」近零。证据见 chat-panel [architecture.md §13](../chat-panel-ai-sdk-assistant-ui-refactor/architecture.md) / [roadmap §10](../chat-panel-ai-sdk-assistant-ui-refactor/roadmap.md)。→ 决定推进 01→06。
 - [ ] read tools / write tools 迁移后，跑同一套 `tests/agent_eval` ≥ baseline（golden fixtures 防 parity 漂移）。
 - [ ] 高风险工具：`email_prepare_send` 无 approval token 不能真实发送；外发绑 content hash + approval id + expiry + idempotency；server-side guard 二次校验。
 - [ ] approval 心智模型从 `awaitConfirmation` 迁到 AI SDK two-call needsApproval/response，eval R5 重新对齐。

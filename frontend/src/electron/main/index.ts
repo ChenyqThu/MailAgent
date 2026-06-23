@@ -484,6 +484,33 @@ app.whenReady().then(async () => {
     createWindow()
   }
 
+  // chat-panel P4 Phase 00 spike — flag-gated AI SDK Gateway PoC。**默认关**:
+  // MAILAGENT_AI_SDK_GATEWAY!=='true' 时下面整块短路, 默认行为字节级不变 (重依赖
+  // ai / @ai-sdk/anthropic 经动态 import 进懒 chunk, flag-off 永不加载)。flag-on 时在
+  // Electron main 内嵌一个 loopback Node HTTP server (/health + /api/ai/echo-stream +
+  // /api/ai/chat streamText), dev/打包均可启, 与 serve-api / DavMail 解耦。架构定位见
+  // docs/plans/chat-panel-ai-sdk-assistant-ui-refactor/architecture.md §4.3 (Phase 2 PoC)。
+  if (process.env.MAILAGENT_AI_SDK_GATEWAY === 'true') {
+    void (async () => {
+      try {
+        const [{ startAiGatewayPocServer, resolveAiGatewayPocPort }, llm] = await Promise.all([
+          import('./ai_gateway_poc'),
+          import('./llm_settings')
+        ])
+        const handle = await startAiGatewayPocServer({
+          port: resolveAiGatewayPocPort(),
+          baseUrl: llm.getLlmBaseUrl(),
+          apiKey: await llm.getLlmApiKey(),
+          model: llm.getLlmModel()
+        })
+        console.log(`[ai-gateway-poc] 已在 http://127.0.0.1:${handle.port} 启动 (flag-gated PoC)`)
+        app.once('before-quit', () => void handle.close())
+      } catch (err) {
+        console.error('[ai-gateway-poc] 启动失败 (PoC, 不影响主流程)', err)
+      }
+    })()
+  }
+
   // F6 — deeplink sink: 聚焦主窗口 + 把 target 转给 renderer (useDeeplinkRouter
   // 监听 'mailagent:deeplink' → router.navigate + setActive). createWindow 后注册,
   // 有 cold-start buffer 立即 flush. 主窗口取第一个非 popout window (popout 也是
