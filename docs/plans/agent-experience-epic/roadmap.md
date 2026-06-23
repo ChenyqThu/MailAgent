@@ -88,12 +88,12 @@ P0 止血 ✅ ── P1 eval 固化 ──┬─ P2 内核(memory+skill) ──�
 
 06-22 roadmap **Phase 2（UX Fluidity）**要打磨的 tool timeline / thinking 展示 / confirmation polish / error recovery，全在 `MessageList`/`Composer`/`ConfirmToolDialog` 上——而这三个文件是 chat-panel phase-06 明确要删的主路径。assistant-ui 原生就提供 tool UI / thinking / approval card，多数 Phase 2 诉求是「白送」的。
 
-**动作：**
-- [ ] 在 `docs/plans/chat-panel-ai-sdk-assistant-ui-refactor/phase-01-assistant-ui-shell.md` + `phase-04-generative-ui-hitl.md` 登记「06-22 Phase 2 UX 诉求清单由 assistant-ui shell + A2UI cards 承载」（逐条映射）。
-- [ ] 在 06-22 `roadmap.md` Phase 2 标记 **superseded by 06-23 P3 → chat-panel**（留指针，不删历史）。
-- [ ] 仅保留少量「不依赖视图层、当前就值得修」的 UX 微调（若有）作为 P2 附带，其余一律推迟到 P4。
+**动作（2026-06-23 全部落地）：**
+- [x] 在 `phase-01-assistant-ui-shell.md` **§8**（baseline primitive）+ `phase-04-generative-ui-hitl.md` **§12**（A2UI rich cards）各加一张「06-22 Phase 2 五诉求 → assistant-ui 承载」逐条映射表，两表交叉引用。
+- [x] 在 06-22 `roadmap.md` Phase 2 标题标记 **SUPERSEDED by 06-23 P3 → chat-panel** + blockquote 指针（phase-01 §8 / phase-04 §12 / 本 roadmap P3），目标/候选/出口保留作历史不删。
+- [x] 「不依赖视图层、当前就值得修」的 UX 微调列为 06-22 roadmap Phase 2「fix-now 清单」F1（通用工具错误转写）/F2（latency·cost trace instrumentation）/F3（确认 tier taxonomy verify-only），标为**可选 P2.x 附带**；其余（工具时间线/thinking/卡片富文案/error 卡片/前台 latency 信号）推迟 P4。
 
-**出口：** chat-panel 两份 phase 文档含 Phase 2 诉求映射表；06-22 Phase 2 不再单独排期。
+**出口（✅ 达成）：** chat-panel 两份 phase 文档含 Phase 2 诉求映射表；06-22 Phase 2 不再单独排期。**纯文档，零运行代码改动。**
 
 ---
 
@@ -137,5 +137,5 @@ P0 止血 ✅ ── P1 eval 固化 ──┬─ P2 内核(memory+skill) ──�
 | P0 止血 | ✅ 完成（main 同步 origin `6518b7a5`，分支已删） |
 | P1 eval 固化 | ✅ 完成（commit `7a74a922` 推送 origin；85 passed 0.1s 零-LLM；脱敏审计零命中；CLAUDE.md 已登记） |
 | P2 内核 | ✅ 完成（P2a `7c93c3be` + P2b `19b3f381` + P2c `ef9115d8` + P2d `c9e0b8c5`；eval 36 tasks/hard_pass 29↑23 零回退；pytest 85 + vitest 151 + typecheck node+web 0；code-reviewer(opus) APPROVE 6/6 护栏） |
-| P3 重定向 | ⬜ 决策已定，随 P4 文档落地 |
+| P3 重定向 | ✅ 文档落地（2026-06-23）：chat-panel phase-01 §8 + phase-04 §12 映射表 / 06-22 Phase 2 superseded 指针 + fix-now 清单（F1/F2/F3）；纯文档零代码 |
 | P4 换引擎 | ⬜ 待开工（Phase 00 spike 先行，goal-prompts.md P4-Phase00） |

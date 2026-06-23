@@ -246,3 +246,18 @@ MAILAGENT_AI_SDK_WRITE_TOOLS=0
 ```
 
 注意：如果 approval 逻辑出现问题，必须禁用相关高风险工具，而不是允许工具绕过审批。
+
+## 12. 06-22 Phase 2 UX 诉求映射（superseded → A2UI cards 承载）
+
+> 配对 [`phase-01-assistant-ui-shell.md`](./phase-01-assistant-ui-shell.md) §8（baseline primitive）。
+> 本表覆盖需要 **富交互 / 审批（rich upgrade）** 的 Phase 2 诉求，由本 phase 的 A2UI
+> ComponentRegistry + approval 承载。来源 `06-22-harness-agent-polish` Phase 2 已 superseded，
+> 决策脊柱见 [agent-experience-epic roadmap](../agent-experience-epic/roadmap.md) **P3**。**不在 legacy UI 单独做。**
+
+| 06-22 Phase 2 诉求 | 本 phase 的 A2UI card / approval primitive（rich 承载） | 说明 |
+|---|---|---|
+| ① Tool timeline | 专用卡片（`NotionSyncCard`/`DraftReplyCard`，§4）+ generic `ToolTraceCard` fallback（§3）+ `ui_payload_json` 审计（§3） | 已注册工具渲染专用 card，未注册走 generic fallback，registry miss 不阻断；长工具 status 走 UIMessage tool part 状态表（§7） |
+| ② Thinking 展示 | 沿用 phase-01 §8 ② 的 `data-thinking` part | 本 phase 不另做 thinking 卡片 |
+| ③ Confirmation polish | `DraftReplyCard`(edit) / `NotionSyncCard`(preview·blocking) / `SendApprovalCard`(blocking)（§4）+ ApprovalService risk tier（§5） | 高风险一眼可辨 = risk tier 分级；send/archive/reply-all 等外发走 SendApprovalCard（To/CC/BCC、外部收件人/敏感词 warning，§4.3）；「修改后继续」重算 content hash（§6、§9） |
+| ④ Error recovery | `output-error` card + tool part 状态表 banner（§7） | UIMessage 状态 → UI（§7）：output-error → error card；approval `expired`/`rejected` → canceled banner（§5）；技术错误转写为 card 文案 + 下一步动作（approve/edit/cancel）。**生成「下一步建议」文本本身 view-agnostic，可在 P2.x 先修，见 06-22 roadmap Phase 2「fix-now 清单」F1** |
+| ⑤ Latency/cost signals | `approval expiry countdown`（§4.3，唯一前台时间信号） | 其余 cost/latency 仍走 eval trace metrics，不前台（见 phase-01 §8 ⑤） |
