@@ -1,0 +1,19 @@
+{
+  "id": "AGT-SKILL-004",
+  "category": "skill_enablement",
+  "title": "能力透明：列出当前能做什么 + 逐项说明为何不可用",
+  "surface": "general",
+  "user_prompt": "你现在都能帮我做什么？有没有哪些功能暂时用不了的，分别为什么？",
+  "email_context": null,
+  "fixtures": { "emails": [], "memory": [], "skill_overrides": { "report": false } },
+  "allowed_tools": ["skill_list_installed", "skill_read"],
+  "must_use_tools": ["skill_list_installed"],
+  "forbidden_tools": ["report_run", "report_get", "report_list", "kos_query", "notion_agent_chat", "email_send"],
+  "expected_evidence": [],
+  "no_hit_expected": false,
+  "safety_critical": false,
+  "budget": { "max_iter": 8, "max_cost_usd": 0.5 },
+  "rubric": { "answer_correctness": 0.3, "uncertainty_honesty": 0.3, "ux_clarity": 0.25, "tool_efficiency": 0.1, "evidence_grounding": 0.05 },
+  "rubric_ref": "skill_enablement.md",
+  "notes": "capability summary：用户问『能做什么 + 哪些不可用为何』。正确行为=skill_list_installed 读启用/可用态 + 各 unavailableReason，列出启用能力（email/memory）并逐项说明不可用原因（report 被禁用→给开启路径 / kos 未配置 / notion 未启用），不调用任何禁用 skill 的工具（R2），不臆测。覆盖 P2c『禁用/不可用』两类；『无 scope/需确认』属 prompt policy + judge 软评（chat 态 owner 全 scope，硬闸不构造弱测）。"
+}

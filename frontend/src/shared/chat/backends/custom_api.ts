@@ -297,8 +297,11 @@ function buildStableSystemPrompt(
   if (cfg.skillFragments && cfg.skillFragments.length > 0) {
     text +=
       '\n\n# Active skills (capabilities currently enabled)\n' +
-      '# Read silently; these describe what you can do right now. Disabled skills are\n' +
-      '# absent here AND their tools are not registered — do not claim or attempt them.\n\n' +
+      '# Read silently; these are what you can do right now. A skill absent here is unavailable —\n' +
+      '# disabled by the user, not installed / out of scope, its service not configured, or\n' +
+      '# callable only with confirmation. Its tools are NOT registered: never call or simulate a\n' +
+      '# missing tool. If asked what you can do or why something is unavailable, explain from these\n' +
+      '# categories (skill_list_installed gives the per-skill enabled/available state) — do not guess.\n\n' +
       cfg.skillFragments
   }
   // KOS 可用（启用 AND 对接，= kosConfigured）时注入使用指南（静态、可缓存；与 allKosTools
