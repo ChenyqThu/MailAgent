@@ -27,31 +27,60 @@
 > 权威细节：`.trellis/tasks/06-22-harness-agent-polish/roadmap.md` Phase 3 + Phase 4。
 > **铁律：view-agnostic** —— 只动 Python domain services + 工具语义 + prompt + 轻量 artifact，**不碰** `MessageList`/`Composer`/`ConfirmToolDialog`（P4 会换）。每改一处 prompt/工具，跑 `tests/agent_eval` 对比 baseline。
 
-### P2a — Memory provenance + relevance（先做）
+### P2a — Memory provenance + relevance ✅ 已落地（2026-06-23, commit `7c93c3be` feat + `79bb793f` docs）
+
+> **DONE**。落地事实见下（= P2b/P2c 复用地基）；原 /goal 折叠备查。
+>
+> **落地**：`agent_memory_kv` **v7→v8**（schema owner=`frontend/src/electron/main/chat_db.ts`，bump
+> `CHAT_DB_VERSION` 7→8；加 `source_session_id/source_message_id/source_tool_use_id` + `priority`）。
+> 写路径=serve-api `POST /chat/memory`→`src/chat/db.py ChatDb.upsert_memory_entry`（chat_db.ts 是 owner+镜像，db.py 绝不 DDL）。
+> `ToolExecCtx` 加 `messageId`(=harness `assistantMessageId`)/`toolUseId`(=`use.toolUseId`)，`dispatch.ts runSingleTool` 注入；
+> `memory_write` 写 provenance + 可选 `priority`，工具结果暴露 `source{}`+`updated_at`（chat trace 可见）。
+> 相关性=`memory_summary` `ORDER BY priority DESC, updated_at DESC` + 条数/字符上限 +
+> `memory_summary_meta()`→`/chat/config.memorySummaryMeta`{injected,total,chars,truncated,caps} 可观测。
+> `priority` **COALESCE 保留**（value-only 改写不清零）+ 负值夹紧 0。eval +AGT-MEMORY-004/005/006 + fixtures + baseline trace。
+> **验证**：pytest tests/agent_eval **85 passed** / compare **无回退（hard_pass 23↑20，memory 6/6）** / vitest **1670 passed** / tsc node+web 0 / Python 177+71。code-reviewer(opus) APPROVE 0 CRITICAL/HIGH。
+>
+> **🔴 版本纪律纠正（写给后续所有 memory 阶段）**：memory 动的是 **`ai_chat.db`（前端 owned）**，它有
+> **独立版本梯 `CHAT_DB_VERSION`** —— bump 它 + 同步 `src/chat/db.py` 头注释镜像即可，**不要动
+> `backend_lifecycle.EXPECTED_DB_VERSION`**（那个 gate 的是 `sync_store.db` 后端库，与 chat 库无关；
+> `frontend/tests/main/db_version_consistency.test.ts` 只校验它===sync_store.DB_VERSION，碰了反破）。
+> 原 P2a /goal 第(5)条按 sync_store 措辞，chat 库场景按此纠正。**迁移坑**：手工 seed v≥3 的 vitest
+> 漏建 `agent_memory_kv`→v8 ALTER 炸；v8 块已加表存在性 guard（生产任何 v≥3 库必有该表）。
+
+<details><summary>原 P2a /goal（备查）</summary>
 
 ```
-开工先读：docs/plans/agent-experience-epic/{prd,roadmap}.md、
-.trellis/tasks/06-22-harness-agent-polish/roadmap.md（Phase 3）、tests/agent_eval/（回归网怎么跑）、
-frontend/src/electron/main/chat_db.ts（agent_memory_kv schema owner）、frontend/src/shared/chat/tools/builtin/memory*（memory 工具）。
-
 /goal 给 agent memory 加 provenance + 规则化相关性，满足可验证：
-(1) 每条 memory 写入记录来源（session_id / message_id / tool），UI 与 trace 可见来源 + 更新时间；
-(2) 注入 prompt 的 memory 走规则化相关性选择（scope/key/最近更新/显式优先级），注入长度有上限可观测；
-(3) 新增/更新 memory eval 任务在 tests/agent_eval 中：写入→下轮召回 pass、irrelevant memory 不污染答案 pass；
-(4) tests/agent_eval 总 hard_pass 不低于 baseline（贴 run_baseline --compare 输出）；
-(5) DB schema 变更走 /db-migration（bump DB_VERSION + 同步前端 EXPECTED_DB_VERSION），迁移幂等。
-view-agnostic：不改 legacy 聊天 UI 组件。证据贴对话。完成后用 codex 或 code-reviewer 过一遍再收。
+(1) 每条写入记录来源(session/message/tool)，UI 与 trace 可见来源+更新时间；
+(2) 注入走规则化相关性(scope/key/最近更新/显式优先级)，注入长度有上限可观测；
+(3) memory eval：写入→下轮召回 pass、irrelevant 不污染 pass；
+(4) tests/agent_eval 总 hard_pass ≥ baseline；
+(5) DB schema 走迁移、幂等。view-agnostic。证据贴对话。codex/code-reviewer 过 diff 再收。
 ```
+</details>
 
-### P2b — Memory auto-capture + conflict（确认制）
+### P2b — Memory auto-capture + conflict（确认制）← **下一片，compact 后从这里接力**
+
+> **判断（接力建议）**：P2b **大概率不需动 DB schema**（provenance/priority 列 P2a 已就位）。
+> 重点 = **prompt policy**（引导 agent 主动提议）+ **工具/编排语义**（冲突先 `memory_get` 现值、在 preview
+> 里呈现 old→new diff 再确认）+ **新 eval 任务 + baseline trace**。不建表、不引第二 loop。
 
 ```
-/goal 让 agent 能在发现长期偏好时提议 memory_write（必须人类确认，preview tier），且冲突不静默覆盖：
-(1) auto-capture 区分「本轮任务信息」与「长期偏好」，只有后者触发提议，且不确认不写；
-(2) 新偏好与旧偏好冲突时先确认再改，支持 tombstone/delete；
-(3) tests/agent_eval 加：修改→新规则生效 pass、删除→不再使用 pass、冲突→不静默覆盖 pass；
-(4) 所有 memory 写/删走 pending_confirmation（eval R5 不破）；总分不低于 baseline。
-view-agnostic。证据贴对话。
+开工先读（按序）：
+- docs/plans/agent-experience-epic/{README,roadmap}.md + 本文「通用收尾」+ 上方 P2a ✅ 落地块（地基）
+- .trellis/tasks/06-22-harness-agent-polish/roadmap.md Phase 3（出口标准：provenance/relevance/eval 已勾，剩 conflict + auto-capture；conflict 那条标 [~]）
+- frontend/src/shared/chat/tools/builtin/memory.ts（memory_write 已 preview tier + provenance；conflict 在此加「先读现值再 diff」语义）
+- agent 行为策略入口：Standing Context（SOUL/AGENT/RULES via backend agent_config.db，见 docs/reference/llm-agent/capability-context-foundation.md）+ memory_write 工具 description —— auto-capture「何时主动提议长期偏好」靠 prompt 引导
+- tests/agent_eval/tasks/AGT-MEMORY-00{2,3,6}.json（写/删/改确认范式）+ baselines/v0.13.0.jsonl（confirmed-write trace 结构，R5 confirmation 序）；新任务照此写 + 追加 baseline trace
+
+/goal 让 agent 在发现长期偏好时提议 memory_write（必人类确认 preview tier），冲突不静默覆盖：
+(1) auto-capture 区分「本轮任务信息」vs「长期偏好」，只后者触发提议，不确认不写（prompt policy，非新 loop）；
+(2) 冲突先确认再改：写同 key 前先 memory_get 现值，preview 呈现 old→new；支持 delete/tombstone；
+(3) tests/agent_eval 加：冲突→不静默覆盖 pass、删除→不再使用 pass（修改→新规则已由 AGT-MEMORY-006 覆盖，可加强）；
+(4) memory 写/删全走 pending_confirmation（eval R5 不破）；pytest tests/agent_eval -q 全绿 + run_baseline --compare 总 hard_pass ≥ baseline（贴输出）；
+(5) 若再动 DB schema：bump CHAT_DB_VERSION（**非** EXPECTED_DB_VERSION，见 P2a 纠正）+ src/chat/db.py 头注释镜像 + 迁移幂等。
+铁律 view-agnostic（不碰 MessageList/Composer/ConfirmToolDialog）+ 单 loop。证据贴对话。完成用 codex/code-reviewer 过 diff 再收。
 ```
 
 ### P2c — Skill transparency
