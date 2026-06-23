@@ -1,8 +1,9 @@
 # Phase 01 — assistant-ui Shell
 
-> status: planning
-> last-verified: 2026-06-22
+> status: ✅ done（2026-06-23，commit b82ee24e，全程 flag-off）
+> last-verified: 2026-06-23
 > goal: 在不切 AI orchestration 的前提下，先把聊天视图层迁移到 assistant-ui。
+> **实现落地结论见 [§9](#9-实现落地2026-06-23)。** §1–§8 是规划层（实现前），§9 是落地层。
 
 ## 1. 目标
 
@@ -173,3 +174,41 @@ MAILAGENT_CHAT_RUNTIME=legacy
 | ③ Confirmation polish（文案、高风险一眼可辨、编辑后 input 下一轮可见） | `pending tool part (requires-action)` + legacy `ConfirmToolDialog` fallback（§4）+ `action-bar` edit（§4） | pendingConfirmations → tool part / requires-action metadata（§P1.3）；编辑后可见 = action-bar edit user message + ExternalStore 回写。**富文案 / 风险分级 / send 审批 → phase-04 §12 ③** |
 | ④ Error recovery（timeout/unavailable/auth/disabled 给下一步、不甩技术错误） | `message status`（done/error）映射（§5） | phase-01 shell 只做 error 态可视化。**下一步建议 / 技术错误转写 → phase-04 §12 ④（output-error card）**；skill 禁用/不可用四类解释**已在 06-23 P2c 落地**（view-agnostic，不依赖本 shell） |
 | ⑤ Latency/cost signals（首 token/工具耗时/总耗时/cost） | 不前台；沿用 `tests/agent_eval` trace metrics | shell 不前台展示；指标走 eval trace（[`recorder-contract.md`](../../../tests/agent_eval/recorder-contract.md)）。前台时间信号（approval expiry countdown）在 phase-04 §12 ⑤ |
+
+---
+
+## 9. 实现落地（2026-06-23）
+
+> commit `b82ee24e`（24 files, +1972/-204）。全程 **flag-off 默认**；code-reviewer(opus) APPROVE（0 CRITICAL/HIGH/MEDIUM）。
+
+### 9.1 产出（对照 §2 目录）
+
+实际落地为 `frontend/src/shared/assistant/`：
+
+```txt
+runtime/
+  flags.ts                       MAILAGENT_ASSISTANT_UI_PANEL / _CHAT_RUNTIME 解析
+  legacyMessageMapper.ts         ChatMessage(+toolSteps/isStreaming) → ThreadMessageLike
+  useLegacyExternalStoreRuntime.ts  useExternalStoreRuntime adapter（非 AI SDK）
+  MailAgentRuntimeProvider.tsx
+components/  thread / message / composer / action-bar / markdown-text(.tsx)
+tools/       registerToolUIs.tsx + generic/ToolTraceCard.tsx
+context/     useChatContextChips.ts
+AssistantUIChatPanel.tsx         flag-on 邮件面板
+```
+
+- thinking → **`reasoning` part**（assistant-ui 原生可折叠），非 §P1.3 写的 `data-thinking`：ExternalStore 世界里 reasoning 是 data-thinking 的原生等价（protocol-contracts §4 的 data-thinking 是 Phase 02 AI SDK UIMessage 层目标）。
+- AIChatPanel 经 `lazy()` 分流：flag-off → `LegacyAIChatPanel`（body 与原 AIChatPanel **字节级一致**，reviewer 机械证明），assistant-ui 重依赖只在 flag-on 进 chunk；flag-on → `AssistantUIChatPanel`。
+- markdown 复用 legacy `TranslatedBody`(Streamdown)；tool 走 generic `tools.Fallback`（ToolTraceCard）；pending confirmation 走 legacy `ConfirmToolDialog` fallback（Thread `pendingSlot`）。
+- flag 投递：`electron.vite.config.ts` + `vite.web.config.ts` per-flag `define`（**不用 `envPrefix:['MAILAGENT_']`**，否则会把 `MAILAGENT_CLI_API_KEY` 等 secret 打进 renderer bundle）。`.env.example` 已登记。
+
+### 9.2 §6 验收（全 ✅）
+
+- `pnpm typecheck`(node+web) 0 · 全量 vitest **1700 passed / 1 skipped / 0 failed**（+22 新：legacyMessageMapper golden 16 + AssistantUIChatPanel shell 6）· eslint clean。
+- flag-off 字节级不变（reviewer diff 证明）；不新增 LLM provider 路径（send/edit 仍走 `chat.send`→`mailApi.chat.start` 既有 dispatcher）。
+- 视觉 parity：4 组 theme/accent 截图（dark/light × coral/teal/cobalt），主题三态 × accent 正交、零组件改动重皮肤。
+- `tests/agent_eval` 85 passed（≥ baseline，view-only 未影响 harness/trace）。
+
+### 9.3 Phase 01 内有意延后（非本 shell 范围）
+
+assistant-ui composer 暂不带：@mention / 附件 chips、in-composer 模型 picker、extended-thinking 开关（legacy composer 特性，send 固定 `thinking:false`）；富 DraftPreviewCard / KOS-Notion footer → phase-04 A2UI。send 键为 assistant-ui 原生 Enter（Shift+Enter 换行），非 legacy ⌘↩。`getChatRuntimeMode()` 为 Phase 02 预留（当前 shell 恒走 ExternalStore）。下一步按 roadmap §8 开 **Phase 02（AI SDK Gateway）**。
