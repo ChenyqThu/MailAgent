@@ -185,3 +185,87 @@ def test_calendar_names_excludes_deleted(cal_folder_client):
     assert body["meta"]["count"] == 1
     # sanity: the deleted uid never leaks into names.
     assert CAL_DELETED_UID not in str(body["data"])
+
+
+# ===========================================================================
+# POST /api/calendar/sync-trigger — 远程手动同步触发 (sync_now mock 掉, 不真连 CalDAV)
+# ===========================================================================
+
+
+def test_calendar_sync_trigger_ok(cal_folder_client, monkeypatch):
+    captured: dict = {}
+
+    def fake_sync_now(self, *, full=True, calendar_name=None, **_kw):
+        captured["full"] = full
+        captured["calendar_name"] = calendar_name
+        return {
+            "mode": "full", "total_calendars": 1,
+            "window": {"from_iso": "2026-06-01T00:00:00+00:00",
+                       "to_iso": "2026-12-01T00:00:00+00:00"},
+            "results": [{"calendar_name": "Work", "mode": "full", "upserted": 3}],
+        }
+
+    from src.calendar_sync.service import CalendarService
+    monkeypatch.setattr(CalendarService, "sync_now", fake_sync_now)
+
+    r = cal_folder_client.post(
+        "/api/calendar/sync-trigger", json={"full": True, "calendarName": "Work"}
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "success"
+    assert body["error"] is None
+    # mutating 端点 → meta.source='cli' (不是读端点的 'sqlite').
+    assert body["meta"]["source"] == "cli"
+    # data = sync_now 结果 dict, 原样透传 (不 remap).
+    assert body["data"]["mode"] == "full"
+    assert body["data"]["results"][0]["upserted"] == 3
+    # body 正确解包到 sync_now kwargs.
+    assert captured == {"full": True, "calendar_name": "Work"}
+
+
+def test_calendar_sync_trigger_defaults_full_true(cal_folder_client, monkeypatch):
+    captured: dict = {}
+
+    def fake_sync_now(self, *, full=True, calendar_name=None, **_kw):
+        captured["full"] = full
+        captured["calendar_name"] = calendar_name
+        return {"mode": "full", "total_calendars": 0, "results": []}
+
+    from src.calendar_sync.service import CalendarService
+    monkeypatch.setattr(CalendarService, "sync_now", fake_sync_now)
+
+    # 空 body → full 默认 True, calendar_name None.
+    r = cal_folder_client.post("/api/calendar/sync-trigger", json={})
+    assert r.status_code == 200
+    assert captured == {"full": True, "calendar_name": None}
+
+
+def test_calendar_sync_trigger_bad_full_400(cal_folder_client):
+    r = cal_folder_client.post("/api/calendar/sync-trigger", json={"full": "yes"})
+    assert r.status_code == 400
+    _err(r.json(), code="E_INVALID_ARG")
+
+
+def test_calendar_sync_trigger_value_error_400(cal_folder_client, monkeypatch):
+    def bad(self, **_kw):
+        raise ValueError("past_days >= 0 and future_days > 0")
+
+    from src.calendar_sync.service import CalendarService
+    monkeypatch.setattr(CalendarService, "sync_now", bad)
+
+    r = cal_folder_client.post("/api/calendar/sync-trigger", json={"full": False})
+    assert r.status_code == 400
+    _err(r.json(), code="E_INVALID_ARG")
+
+
+def test_calendar_sync_trigger_caldav_fail_502(cal_folder_client, monkeypatch):
+    def boom(self, **_kw):
+        raise RuntimeError("connection refused: DavMail 1080 down")
+
+    from src.calendar_sync.service import CalendarService
+    monkeypatch.setattr(CalendarService, "sync_now", boom)
+
+    r = cal_folder_client.post("/api/calendar/sync-trigger", json={})
+    assert r.status_code == 502
+    _err(r.json(), code="E_CALDAV")

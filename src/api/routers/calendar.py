@@ -1,10 +1,11 @@
-"""calendar 路由 — /api/calendar/* (READ only)。
+"""calendar 路由 — /api/calendar/* (4 读端点 + sync-trigger 写)。
 
-填充 4 个读端点 (handoff §2; 写端点全 defer):
-  GET /api/calendar/events             — eventsList   (→ CalendarEventOccurrence[])
-  GET /api/calendar/events/{event_id}  — eventGet     (→ CalendarEventDetail | null, 404→null)
-  GET /api/calendar/sync-status        — syncStatus   (→ CalendarSyncStateItem[])
-  GET /api/calendar/names              — calendarNames (→ string[])
+填充 4 个读端点 (handoff §2) + 远程手动同步触发 (syncTrigger; 其余写端点仍 defer):
+  GET  /api/calendar/events             — eventsList   (→ CalendarEventOccurrence[])
+  GET  /api/calendar/events/{event_id}  — eventGet     (→ CalendarEventDetail | null, 404→null)
+  GET  /api/calendar/sync-status        — syncStatus   (→ CalendarSyncStateItem[])
+  GET  /api/calendar/names              — calendarNames (→ string[])
+  POST /api/calendar/sync-trigger       — syncTrigger  (CalDAV→SQLite, to_thread, →unknown)
 
 实现纪律:
   - 全部经 ``CalendarService`` (src/calendar_sync/service.py) 直读 ``calendar_event`` /
@@ -31,6 +32,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Optional
 
@@ -258,3 +260,69 @@ async def calendar_names(
         source="sqlite",
         meta_extra={"count": len(names)},
     )
+
+
+# ===========================================================================
+# POST /api/calendar/sync-trigger — CalendarService.sync_now (远程手动触发)
+# ===========================================================================
+
+
+@router.post("/sync-trigger", dependencies=[Depends(verify_cf_access)])
+async def sync_trigger(
+    request: Request,
+    cfg: "Config" = Depends(get_settings),
+):
+    """手动触发一次 CalDAV → SQLite 日历同步 (远程 admin/debug 写端点)。
+
+    镜像 CLI ``calendar sync-now`` / Electron ``calendar:syncTrigger``:
+    body = ``{full?: bool = True, calendarName?: str}``。CalDAV 是阻塞网络操作
+    (逐 calendar LIST + REPORT, 单个最长 ~60-120s), 经 ``asyncio.to_thread`` 跑,
+    不阻塞 event loop (同 folder.py IMAP 写端点)。
+
+    data = ``sync_now`` 结果 dict (mode / total_calendars / window / results) —
+    与 CLI emit 同形, HttpApi 直接当 ``unknown`` 透传 (对齐 WriteEnvelope 语义,
+    不 remap)。错误分两段对齐 CLI: ValueError(参数非法) → 400 E_INVALID_ARG;
+    其它 (CalDAV 连接失败) → 502 E_CALDAV + DavMail hint。meta.source='cli'。
+    """
+    # body 直接读 request.json() (对齐 chat.py POST 模式) — 不用 ``body: dict`` 参数
+    # 注解, 因 ``from __future__ import annotations`` 下 FastAPI/pydantic resolve 该
+    # forward ref 会 "name 'Optional' is not defined" 炸。
+    try:
+        raw = await request.json()
+    except Exception:
+        raw = {}
+    if not isinstance(raw, dict):
+        raise APIError(
+            "E_INVALID_ARG", "body must be a JSON object",
+            http_status=400, source="cli",
+        )
+    full = raw.get("full", True)
+    calendar_name = raw.get("calendarName")
+    if not isinstance(full, bool):
+        raise APIError(
+            "E_INVALID_ARG", "body.full must be a JSON boolean",
+            http_status=400, source="cli",
+        )
+    if calendar_name is not None and not isinstance(calendar_name, str):
+        raise APIError(
+            "E_INVALID_ARG", "body.calendarName must be a string",
+            http_status=400, source="cli",
+        )
+
+    svc = _build_service(cfg)
+    try:
+        data = await asyncio.to_thread(
+            svc.sync_now, full=full, calendar_name=calendar_name,
+        )
+    except ValueError as exc:
+        raise APIError(
+            "E_INVALID_ARG", str(exc), http_status=400, source="cli",
+        ) from exc
+    except Exception as exc:  # CalDAV connect / reader 失败 (对齐 CLI 第二段 except)
+        raise APIError(
+            "E_CALDAV", f"CalDAV connect failed: {exc}",
+            hint="检查 DavMail 1080 端口是否 online + .env DAVMAIL_CIPHER_KEY",
+            http_status=502, source="cli",
+        ) from exc
+
+    return success_envelope(data, request=request, source="cli")

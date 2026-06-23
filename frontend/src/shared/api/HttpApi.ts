@@ -40,6 +40,7 @@ import type {
   ChatApi,
   EventGetOpts,
   EventsListOpts,
+  SyncNowOpts,
   CleanupDeadLetterOpts,
   ComposeDraftOpts,
   ContactSuggestion,
@@ -597,7 +598,13 @@ export class HttpApi implements MailApi {
 
     calendarNames: (): Promise<string[]> => this.req<string[]>('GET', '/calendar/names'),
 
-    syncTrigger: () => notImplemented('calendar.syncTrigger'),
+    // 远程手动触发 CalDAV → SQLite 同步 (serve-api POST /calendar/sync-trigger,
+    // 后端 asyncio.to_thread 跑 CalendarService.sync_now)。data = sync_now 结果 dict,
+    // 直接当 unknown 透传 (对齐 ElectronApi calendar:syncTrigger 的 WriteEnvelope)。
+    syncTrigger: (opts: SyncNowOpts = {}): Promise<unknown> =>
+      this.req<unknown>('POST', '/calendar/sync-trigger', {
+        body: { full: opts.full, calendarName: opts.calendarName }
+      }),
     eventReplay: () => notImplemented('calendar.eventReplay'),
     eventRsvp: () => notImplemented('calendar.eventRsvp'),
     eventCreate: () => notImplemented('calendar.eventCreate'),
