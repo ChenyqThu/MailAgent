@@ -51,6 +51,13 @@ export interface ToolExecCtx {
   emailId: number | null
   signal: AbortSignal
   userEditedInput?: unknown
+  /** P2a (task 06-23) — provenance of the current dispatch, for tools that
+   *  persist durable state (memory_write). `messageId` is the assistant message
+   *  this tool_use belongs to; `toolUseId` is the Anthropic toolu_xxx id of this
+   *  very call. Both undefined in legacy/test dispatch paths that don't thread
+   *  them — handlers must treat them as optional. */
+  messageId?: number
+  toolUseId?: string
 }
 
 /** Result envelope. `ok:true` returns `output` (handler-specific shape);

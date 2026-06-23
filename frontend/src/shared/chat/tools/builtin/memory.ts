@@ -111,7 +111,9 @@ export function createMemoryTools(platform: ChatToolPlatform): ToolDef[] {
       'genuinely long-lived facts the user stated or confirmed (e.g. "always reply in English", ' +
       'preferred signature, recurring project context) — NOT transient task state. The user ' +
       'confirms every write (preview tier). Keep keys short + stable so future turns can recall ' +
-      'them; put the fact in `value`.',
+      'them; put the fact in `value`. Set `priority` > 0 ONLY when the user explicitly says a ' +
+      'preference is especially important / should always apply (it is recalled before others ' +
+      'when context is tight); omit it otherwise to keep the existing priority.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -120,7 +122,13 @@ export function createMemoryTools(platform: ChatToolPlatform): ToolDef[] {
           description: 'Scope (default "user"; "skill:<name>" for skill-specific).'
         },
         key: { type: 'string', description: 'Short stable key, e.g. "reply_language".' },
-        value: { description: 'The fact to remember (string or JSON value).' }
+        value: { description: 'The fact to remember (string or JSON value).' },
+        priority: {
+          type: 'integer',
+          description:
+            'User-explicit importance (default 0). Use a small positive number (e.g. 1) only ' +
+            'when the user stresses a preference is especially important; otherwise omit.'
+        }
       },
       required: ['key', 'value']
     },
@@ -136,16 +144,45 @@ export function createMemoryTools(platform: ChatToolPlatform): ToolDef[] {
       if (!key) return err('E_INVALID_ARG', 'key is required (non-empty string)', start)
       if (i.value === undefined) return err('E_INVALID_ARG', 'value is required', start)
       const scope = asStr(i.scope) ?? DEFAULT_SCOPE
+      // P2a — structured priority (user-explicit). Only forward a number; a
+      // non-numeric / absent value stays undefined so the store keeps the
+      // existing priority (COALESCE) rather than resetting it to 0. Clamp to
+      // >= 0: the relevance rule sorts priority DESC, so a negative value would
+      // sort BELOW the default 0 — i.e. silently de-prioritize. 0 = no boost.
+      const priority =
+        typeof i.priority === 'number' && Number.isFinite(i.priority)
+          ? Math.max(0, Math.trunc(i.priority))
+          : undefined
       try {
         const entry = await platform.writeMemory({
           scope,
           key,
           valueJson: toValueJson(i.value),
-          // traceable provenance — which chat session wrote this (architecture §3.5).
+          priority,
+          // P2a — structured provenance: which session/message/tool_use proposed
+          // this fact. The legacy free-form sourceWikiPath mirrors it for any
+          // older reader that still parses "session:<id>".
+          sourceSessionId: ctx.sessionId,
+          sourceMessageId: ctx.messageId ?? null,
+          sourceToolUseId: ctx.toolUseId ?? null,
           sourceWikiPath: `session:${ctx.sessionId}`
         })
+        // Surface provenance + update time in the tool result so it is visible
+        // wherever tool outputs render (chat timeline / UI), per DoD (1).
         return ok(
-          { saved: true, scope: entry.scope, key: entry.key, user_edited: userEdited },
+          {
+            saved: true,
+            scope: entry.scope,
+            key: entry.key,
+            priority: entry.priority,
+            updated_at: entry.updated_at,
+            source: {
+              session_id: entry.source_session_id,
+              message_id: entry.source_message_id,
+              tool_use_id: entry.source_tool_use_id
+            },
+            user_edited: userEdited
+          },
           start
         )
       } catch (e) {

@@ -295,11 +295,17 @@ async def chat_config(request: Request):
     )
     kos_configured = kos_consumer and kos_creds
     # P2f — compact user-scope memory summary injected into the custom-api stable
-    # system prefix (after userContext). Best-effort: db missing / empty → "".
+    # system prefix (after userContext). P2a — rule-based relevance selection
+    # (priority DESC, updated_at DESC) + caps; memorySummaryMeta exposes
+    # injected/total/truncated/caps so the injection is observable (DoD 2).
+    # Best-effort: db missing / empty → "" + meta None.
     try:
-        memory_summary = get_chat_db().memory_summary()
+        _mem_meta = get_chat_db().memory_summary_meta()
+        memory_summary = _mem_meta["text"]
+        memory_summary_meta = {k: v for k, v in _mem_meta.items() if k != "text"}
     except Exception:  # noqa: BLE001 — memory is best-effort; never fail /config
         memory_summary = ""
+        memory_summary_meta = None
     # Phase -1 / 0A — config snapshot hashes for Phase 0 eval trace (reproducible
     # baseline). agentProfileHash = hash of the 4 editable profile docs' content
     # hashes; installedSkillsHash = builtin name|version signature + installed-rows
@@ -374,6 +380,7 @@ async def chat_config(request: Request):
             "kosTimeDecayEnabled": kos_time_decay,
             "userContext": user_context,
             "memorySummary": memory_summary,
+            "memorySummaryMeta": memory_summary_meta,
             "enabledModels": enabled_models,
             "manifestMode": manifest_mode,
             "agentProfileHash": agent_profile_hash,
@@ -945,7 +952,8 @@ async def get_memory(request: Request, scope: str = Query(...), key: str = Query
 
 @router.post("/memory", dependencies=[Depends(verify_cf_access)])
 async def upsert_memory(request: Request, body: Optional[Dict[str, Any]] = None):
-    """UPSERT 一条 memory。body = {scope, key, valueJson, sourceWikiPath?}（camelCase）。"""
+    """UPSERT 一条 memory。body = {scope, key, valueJson, sourceWikiPath?, sourceSessionId?,
+    sourceMessageId?, sourceToolUseId?, priority?}（camelCase，P2a provenance + priority 均可选）。"""
     opts = body or {}
     scope = opts.get("scope")
     key = opts.get("key")
@@ -959,7 +967,39 @@ async def upsert_memory(request: Request, body: Optional[Dict[str, Any]] = None)
     source = opts.get("sourceWikiPath")
     if source is not None and not isinstance(source, str):
         raise APIError("E_INVALID_ARG", "memory sourceWikiPath must be a string", source="sqlite")
-    row = get_chat_db().upsert_memory_entry(scope, key, value_json, source)
+
+    # P2a — structured provenance + priority. All optional; None → store keeps
+    # default (priority COALESCE-preserves existing). bool is an int subclass in
+    # Python, so reject it explicitly for the integer fields.
+    def _opt_int(name: str) -> Optional[int]:
+        v = opts.get(name)
+        if v is None:
+            return None
+        if isinstance(v, bool) or not isinstance(v, int):
+            raise APIError("E_INVALID_ARG", f"memory {name} must be an integer", source="sqlite")
+        return v
+
+    source_session_id = _opt_int("sourceSessionId")
+    source_message_id = _opt_int("sourceMessageId")
+    # priority clamps to >= 0: the relevance rule sorts priority DESC, so a
+    # negative value would sort below the default 0 (silent de-prioritize). 0 = no boost.
+    priority = _opt_int("priority")
+    if priority is not None and priority < 0:
+        priority = 0
+    source_tool_use_id = opts.get("sourceToolUseId")
+    if source_tool_use_id is not None and not isinstance(source_tool_use_id, str):
+        raise APIError("E_INVALID_ARG", "memory sourceToolUseId must be a string", source="sqlite")
+
+    row = get_chat_db().upsert_memory_entry(
+        scope,
+        key,
+        value_json,
+        source,
+        source_session_id=source_session_id,
+        source_message_id=source_message_id,
+        source_tool_use_id=source_tool_use_id,
+        priority=priority,
+    )
     return success_envelope(row, request=request, source="sqlite")
 
 

@@ -453,6 +453,9 @@ export async function runHarness(args: RunHarnessArgs): Promise<void> {
       sessionId: args.sessionId,
       emailId: args.emailContext?.internalId ?? null,
       signal: args.ac.signal,
+      // P2a — thread the turn's assistant message id so memory_write records
+      // session + message + tool_use provenance.
+      messageId: args.assistantMessageId,
       confirm: async (use, def) => {
         forward({
           type: 'pending_confirmation',

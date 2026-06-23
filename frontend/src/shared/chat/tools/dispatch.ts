@@ -47,6 +47,10 @@ export interface DispatchContext {
   emailId: number | null
   /** Session-level AbortSignal. Propagated into every handler via ToolExecCtx.signal. */
   signal: AbortSignal
+  /** P2a (task 06-23) — the assistant message id this dispatch batch belongs to.
+   *  Threaded into ToolExecCtx so memory_write can record which turn proposed a
+   *  durable fact. Optional: legacy/test dispatch paths may omit it. */
+  messageId?: number
   /** PR-1d.1 — async hook the harness uses to bridge preview/edit-tier
    *  tools through the ConfirmToolDialog. Called once per such tool BEFORE
    *  the handler runs. The implementation MUST forward a
@@ -207,7 +211,11 @@ async function runSingleTool(
     sessionId: ctx.sessionId,
     emailId: ctx.emailId,
     signal: combined,
-    userEditedInput
+    userEditedInput,
+    // P2a — provenance for durable-state tools (memory_write): the turn's
+    // assistant message + this call's tool_use id.
+    messageId: ctx.messageId,
+    toolUseId: use.toolUseId
   }
 
   try {

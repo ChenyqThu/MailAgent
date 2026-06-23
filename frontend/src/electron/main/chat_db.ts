@@ -74,9 +74,15 @@ export type {
 
 // v7 (P2c, task 06-18-custom-ai-harness-agent) — chat session anchor: email_id
 // becomes nullable, anchor_type/anchor_id added with a coupling CHECK so general
-// (context-free) sessions never need an email_id sentinel. 🔴 bump 时同步刷新
-// src/chat/db.py 头注释的 CHAT_DB_VERSION（mirror，不建表）。
-const CHAT_DB_VERSION = 7
+// (context-free) sessions never need an email_id sentinel.
+// v8 (P2a, task 06-23 agent-experience-epic) — agent_memory_kv provenance +
+// priority: source_session_id / source_message_id / source_tool_use_id (full
+// turn+tool provenance, superseding the source_wiki_path='session:<id>' overload)
+// + priority (user-explicit importance, drives the prompt-injection relevance
+// rule). 🔴 bump 时同步刷新 src/chat/db.py 头注释的 CHAT_DB_VERSION（mirror，不建表）。
+// 注意：ai_chat.db 自有版本梯，与 backend_lifecycle.EXPECTED_DB_VERSION（gate
+// sync_store.db）无关 —— 不要因这次 bump 去动 EXPECTED_DB_VERSION。
+const CHAT_DB_VERSION = 8
 
 export function resolveChatDbPath(): string {
   const fromEnv = process.env['AI_CHAT_DB_PATH']
@@ -565,6 +571,58 @@ function migrate(db: Database.Database): void {
       }
     } finally {
       db.pragma('foreign_keys = ON')
+    }
+  }
+
+  // v7 → v8 — task 06-23 (agent-experience-epic P2a) memory provenance +
+  // relevance. Add four columns to agent_memory_kv:
+  //   source_session_id / source_message_id / source_tool_use_id — full
+  //     provenance of which chat turn + tool_use proposed the fact. The old
+  //     source_wiki_path='session:<id>' overload only carried the session id
+  //     (and abused a column named for wiki paths); these are first-class.
+  //   priority — user-explicit importance (0 = default). The prompt-injection
+  //     relevance rule (src/chat/db.py memory_summary) orders by priority DESC,
+  //     updated_at DESC so a pinned preference survives the injection cap.
+  // All pre-v8 rows backfill to source_* NULL + priority 0, so the injection
+  // ORDER BY is byte-identical to the old `updated_at DESC` for existing data
+  // (priority only re-orders once a user sets it > 0). Plain additive ALTERs
+  // (no UNIQUE/FK drop) → safe in one transaction, with the same hasColumn
+  // idempotency guard as v5/v6 (crash-after-ALTER-before-version-bump re-entry).
+  // NOTE: ai_chat.db has its own version ladder; this bump does NOT touch
+  // backend_lifecycle.EXPECTED_DB_VERSION (that gates sync_store.db only).
+  if (current < 8) {
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      // agent_memory_kv is created in the v3 block, so any DB that climbed the
+      // ladder normally has it by the time v8 runs. Guard defensively: a DB
+      // that lacks the table (a hand-seeded partial DB, or some future manual
+      // repair) has no memory rows to migrate — skip the ALTERs rather than
+      // crash on "no such table". Same defensive idiom as the hasColumn /
+      // isV7SessionShape guards above; harmless in production (table always present).
+      const hasMemTable = db
+        .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='agent_memory_kv'")
+        .get()
+      if (hasMemTable) {
+        if (!hasColumn(db, 'agent_memory_kv', 'source_session_id')) {
+          db.exec('ALTER TABLE agent_memory_kv ADD COLUMN source_session_id INTEGER')
+        }
+        if (!hasColumn(db, 'agent_memory_kv', 'source_message_id')) {
+          db.exec('ALTER TABLE agent_memory_kv ADD COLUMN source_message_id INTEGER')
+        }
+        if (!hasColumn(db, 'agent_memory_kv', 'source_tool_use_id')) {
+          db.exec('ALTER TABLE agent_memory_kv ADD COLUMN source_tool_use_id TEXT')
+        }
+        if (!hasColumn(db, 'agent_memory_kv', 'priority')) {
+          db.exec('ALTER TABLE agent_memory_kv ADD COLUMN priority INTEGER NOT NULL DEFAULT 0')
+        }
+      }
+      db.prepare(
+        "INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', '8')"
+      ).run()
+      db.exec('COMMIT')
+    } catch (err) {
+      db.exec('ROLLBACK')
+      throw err
     }
   }
 }
@@ -1125,23 +1183,51 @@ export function getMemoryEntry(scope: string, key: string): AgentMemoryEntry | n
 }
 
 /** UPSERT a memory entry (PRIMARY KEY (scope,key)). created_at is preserved on
- *  update (only value_json / source_wiki_path / updated_at change). */
+ *  update. v8 (P2a) — provenance (source_session_id / source_message_id /
+ *  source_tool_use_id) updates to the latest writer's turn+tool on conflict.
+ *  `priority` is COALESCE-preserved: a write that omits priority (e.g. the agent
+ *  just refreshing a fact's value) keeps the user's existing pin instead of
+ *  silently resetting it to 0; an explicit priority overrides. A brand-new row
+ *  with no priority defaults to 0. */
 export function upsertMemoryEntry(input: {
   scope: string
   key: string
   valueJson: string
   sourceWikiPath?: string | null
+  sourceSessionId?: number | null
+  sourceMessageId?: number | null
+  sourceToolUseId?: string | null
+  priority?: number | null
 }): AgentMemoryEntry {
   const db = getChatDb()
   const now = Date.now()
+  const priority = input.priority ?? null
   db.prepare(
-    `INSERT INTO agent_memory_kv (scope, key, value_json, source_wiki_path, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?)
+    `INSERT INTO agent_memory_kv
+       (scope, key, value_json, source_wiki_path, source_session_id,
+        source_message_id, source_tool_use_id, priority, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(?, 0), ?, ?)
      ON CONFLICT(scope, key) DO UPDATE SET
        value_json = excluded.value_json,
        source_wiki_path = excluded.source_wiki_path,
+       source_session_id = excluded.source_session_id,
+       source_message_id = excluded.source_message_id,
+       source_tool_use_id = excluded.source_tool_use_id,
+       priority = COALESCE(?, agent_memory_kv.priority),
        updated_at = excluded.updated_at`
-  ).run(input.scope, input.key, input.valueJson, input.sourceWikiPath ?? null, now, now)
+  ).run(
+    input.scope,
+    input.key,
+    input.valueJson,
+    input.sourceWikiPath ?? null,
+    input.sourceSessionId ?? null,
+    input.sourceMessageId ?? null,
+    input.sourceToolUseId ?? null,
+    priority,
+    now,
+    now,
+    priority
+  )
   // Non-null: we just inserted/updated this exact (scope,key).
   return getMemoryEntry(input.scope, input.key) as AgentMemoryEntry
 }

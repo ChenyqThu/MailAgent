@@ -9,7 +9,14 @@ import type { ChatToolPlatform } from '../../../src/shared/chat/platform'
 import type { AgentMemoryEntry } from '../../../src/shared/chat/model'
 import type { ToolDef, ToolExecCtx } from '../../../src/shared/chat/tools/registry'
 
-const ctx: ToolExecCtx = { sessionId: 42, emailId: null, signal: new AbortController().signal }
+const ctx: ToolExecCtx = {
+  sessionId: 42,
+  emailId: null,
+  signal: new AbortController().signal,
+  // P2a — provenance threaded by dispatch (assistant message + this tool_use id).
+  messageId: 100,
+  toolUseId: 'tu_test'
+}
 
 function mockPlatform(over: Partial<ChatToolPlatform> = {}): ChatToolPlatform {
   return { ...over } as unknown as ChatToolPlatform
@@ -27,6 +34,10 @@ function entry(over: Partial<AgentMemoryEntry> = {}): AgentMemoryEntry {
     key: 'k',
     value_json: '"v"',
     source_wiki_path: null,
+    source_session_id: null,
+    source_message_id: null,
+    source_tool_use_id: null,
+    priority: 0,
     created_at: 1,
     updated_at: 1,
     ...over
@@ -75,21 +86,65 @@ describe('memory_list / memory_get', () => {
 })
 
 describe('memory_write', () => {
-  test('serializes value + records session provenance', async () => {
-    const writeMemory = vi.fn(async (i: { scope: string; key: string; valueJson: string }) =>
-      entry({ scope: i.scope, key: i.key, value_json: i.valueJson })
+  test('serializes value + records session/message/tool provenance', async () => {
+    const writeMemory = vi.fn(
+      async (i: {
+        scope: string
+        key: string
+        valueJson: string
+        sourceSessionId?: number | null
+        sourceMessageId?: number | null
+        sourceToolUseId?: string | null
+      }) =>
+        entry({
+          scope: i.scope,
+          key: i.key,
+          value_json: i.valueJson,
+          source_session_id: i.sourceSessionId ?? null,
+          source_message_id: i.sourceMessageId ?? null,
+          source_tool_use_id: i.sourceToolUseId ?? null
+        })
     )
     const res = await byName(
       createMemoryTools(mockPlatform({ writeMemory })),
       'memory_write'
     ).handler({ key: 'reply_language', value: 'English' }, ctx)
-    expect(writeMemory).toHaveBeenCalledWith({
-      scope: 'user',
-      key: 'reply_language',
-      valueJson: '"English"',
-      sourceWikiPath: 'session:42'
+    // P2a — structured provenance (session + message + tool_use) flows to the store.
+    expect(writeMemory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scope: 'user',
+        key: 'reply_language',
+        valueJson: '"English"',
+        sourceSessionId: 42,
+        sourceMessageId: 100,
+        sourceToolUseId: 'tu_test',
+        sourceWikiPath: 'session:42'
+      })
+    )
+    // …and is surfaced in the tool result (visible in the chat trace / UI).
+    expect(res).toMatchObject({
+      ok: true,
+      output: {
+        saved: true,
+        key: 'reply_language',
+        source: { session_id: 42, message_id: 100, tool_use_id: 'tu_test' }
+      }
     })
-    expect(res).toMatchObject({ ok: true, output: { saved: true, key: 'reply_language' } })
+  })
+
+  test('forwards an explicit user priority; omits a non-numeric one', async () => {
+    const writeMemory = vi.fn(async (i: { scope: string; key: string; valueJson: string }) =>
+      entry({ scope: i.scope, key: i.key, value_json: i.valueJson })
+    )
+    const tools = createMemoryTools(mockPlatform({ writeMemory }))
+    await byName(tools, 'memory_write').handler({ key: 'k', value: 'v', priority: 2 }, ctx)
+    expect(writeMemory).toHaveBeenLastCalledWith(expect.objectContaining({ priority: 2 }))
+    // a non-numeric priority is dropped → undefined (store COALESCE-preserves existing)
+    await byName(tools, 'memory_write').handler({ key: 'k', value: 'v', priority: 'high' }, ctx)
+    expect(writeMemory).toHaveBeenLastCalledWith(expect.objectContaining({ priority: undefined }))
+    // a negative priority clamps to 0 (ORDER BY priority DESC must not de-prioritize below default)
+    await byName(tools, 'memory_write').handler({ key: 'k', value: 'v', priority: -3 }, ctx)
+    expect(writeMemory).toHaveBeenLastCalledWith(expect.objectContaining({ priority: 0 }))
   })
 
   test('requires key + value', async () => {

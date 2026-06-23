@@ -288,6 +288,10 @@ def test_chat_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "# RULES" in standing and "# USER" in standing
     # PR5 — per-skill enable overrides (empty store → no explicit overrides).
     assert data.pop("skillOverrides") == {}
+    # P2a — memorySummaryMeta observability (no memory rows in the default stub →
+    # None on a store hiccup, or an all-zero meta dict). Pop + assert shape, not pinned.
+    mem_meta = data.pop("memorySummaryMeta")
+    assert mem_meta is None or mem_meta["total"] == 0
     assert data == {
         "maxIter": 8,
         "maxCostUsd": 0.5,

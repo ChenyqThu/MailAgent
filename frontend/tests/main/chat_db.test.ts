@@ -31,6 +31,7 @@ import {
   deleteSession,
   getChatDb,
   getMessage,
+  getMemoryEntry,
   getOrCreateSession,
   getSession,
   getToolCallByUseId,
@@ -41,7 +42,8 @@ import {
   listToolCallsForMessage,
   resolveChatDbPath,
   updateMessage,
-  updateToolCall
+  updateToolCall,
+  upsertMemoryEntry
 } from '../../src/electron/main/chat_db'
 
 // chat_db 现在 import db.resolveDataRoot() (→ import electron app), 故碰 chat_db 的测试都需
@@ -120,7 +122,7 @@ describe('chat_db — path + schema bootstrap', () => {
     // task 06-08-chat 需求 5: bumped to 6 — ai_chat_messages.thinking.
     // P2c (06-18-custom-ai-harness-agent): bumped to 7 — session anchor
     // (email_id nullable + anchor_type/anchor_id + coupling CHECK).
-    expect(ver.value).toBe('7')
+    expect(ver.value).toBe('8')
   })
 
   test('fresh DB schema includes the v2 metadata column', () => {
@@ -141,6 +143,21 @@ describe('chat_db — path + schema bootstrap', () => {
     expect(cols.map((c) => c.name)).toContain('thinking')
   })
 
+  test('fresh DB schema includes the v8 agent_memory_kv provenance + priority columns', () => {
+    const db = getChatDb()
+    const cols = db.prepare('PRAGMA table_info(agent_memory_kv)').all() as Array<{
+      name: string
+      notnull: number
+    }>
+    const names = cols.map((c) => c.name)
+    expect(names).toContain('source_session_id')
+    expect(names).toContain('source_message_id')
+    expect(names).toContain('source_tool_use_id')
+    expect(names).toContain('priority')
+    // priority is NOT NULL DEFAULT 0 → legacy rows + omitted writes sort last.
+    expect(cols.find((c) => c.name === 'priority')?.notnull).toBe(1)
+  })
+
   test('re-opening an existing DB does not re-run migrations (idempotent)', () => {
     getChatDb()
     closeChatDb()
@@ -149,7 +166,7 @@ describe('chat_db — path + schema bootstrap', () => {
     const ver = db.prepare("SELECT value FROM chat_db_meta WHERE key = 'schema_version'").get() as {
       value: string
     }
-    expect(ver.value).toBe('7')
+    expect(ver.value).toBe('8')
   })
 
   test('v1-version DB ALTERs in the metadata column on first open (forward migration)', () => {
@@ -202,7 +219,7 @@ describe('chat_db — path + schema bootstrap', () => {
     }
     // Sprint 19 (PR-1a → bug-fix): v1 DB jumped to v4; task 06-08-chat Bug 2
     // bumped to v5; 需求 5 bumped to v6 → a v1 DB now climbs the whole ladder to v6.
-    expect(ver.value).toBe('7')
+    expect(ver.value).toBe('8')
     const cols = db.prepare('PRAGMA table_info(ai_chat_messages)').all() as Array<{ name: string }>
     expect(cols.map((c) => c.name)).toContain('metadata')
     // v6 column present after climbing from v1.
@@ -253,7 +270,7 @@ describe('chat_db — path + schema bootstrap', () => {
           value: string
         }
       ).value
-    ).toBe('7')
+    ).toBe('8')
     // Simulate the crash window: roll the meta back to v3 while the physical
     // schema (content_offset + thinking columns, v4 table shape) stays at v6.
     db.prepare("UPDATE chat_db_meta SET value = '3' WHERE key = 'schema_version'").run()
@@ -265,7 +282,7 @@ describe('chat_db — path + schema bootstrap', () => {
     const ver = reopened
       .prepare("SELECT value FROM chat_db_meta WHERE key='schema_version'")
       .get() as { value: string }
-    expect(ver.value).toBe('7')
+    expect(ver.value).toBe('8')
     // Columns are still present exactly once (no duplication, no loss).
     const msgCols = reopened.prepare('PRAGMA table_info(ai_chat_messages)').all() as Array<{
       name: string
@@ -874,6 +891,55 @@ describe('chat_db — v3 schema (wiki + memory_kv)', () => {
   })
 })
 
+// v8 (P2a) — agent_memory_kv provenance + priority via the upsertMemoryEntry API.
+describe('chat_db — v8 memory provenance + priority', () => {
+  test('upsert records session/message/tool provenance + priority', () => {
+    const e = upsertMemoryEntry({
+      scope: 'user',
+      key: 'reply_language',
+      valueJson: '"中文"',
+      sourceSessionId: 42,
+      sourceMessageId: 100,
+      sourceToolUseId: 'tu1',
+      priority: 3
+    })
+    expect(e.source_session_id).toBe(42)
+    expect(e.source_message_id).toBe(100)
+    expect(e.source_tool_use_id).toBe('tu1')
+    expect(e.priority).toBe(3)
+    // round-trips through a fresh read
+    const got = getMemoryEntry('user', 'reply_language')
+    expect(got?.source_session_id).toBe(42)
+    expect(got?.priority).toBe(3)
+  })
+
+  test('a value-only update preserves an existing priority (COALESCE), refreshes provenance', () => {
+    upsertMemoryEntry({
+      scope: 'user',
+      key: 'sig',
+      valueJson: '"v1"',
+      priority: 5,
+      sourceSessionId: 1
+    })
+    // Re-write the value WITHOUT priority (agent just refreshing the fact).
+    const e = upsertMemoryEntry({
+      scope: 'user',
+      key: 'sig',
+      valueJson: '"v2"',
+      sourceSessionId: 9
+    })
+    expect(e.value_json).toBe('"v2"')
+    expect(e.priority).toBe(5) // preserved, not reset to 0
+    expect(e.source_session_id).toBe(9) // provenance follows the latest writer
+  })
+
+  test('a brand-new entry with no priority defaults to 0', () => {
+    const e = upsertMemoryEntry({ scope: 'user', key: 'fresh', valueJson: '"x"' })
+    expect(e.priority).toBe(0)
+    expect(e.source_session_id).toBeNull()
+  })
+})
+
 // Sprint 19 bug-fix — v3 → v4 migration drops UNIQUE on ai_chat_sessions
 // (email_id, backend_kind, backend_agent_page_id). Sprint 14 PR A sidebar
 // design intended multi-session per email but v1 schema's UNIQUE was
@@ -948,7 +1014,7 @@ describe('chat_db — v3 → v4 migration (drop UNIQUE on ai_chat_sessions)', ()
     const ver = db.prepare("SELECT value FROM chat_db_meta WHERE key = 'schema_version'").get() as {
       value: string
     }
-    expect(ver.value).toBe('7')
+    expect(ver.value).toBe('8')
     // UNIQUE gone — CREATE TABLE SQL no longer contains UNIQUE clause on
     // (email_id, backend_kind, backend_agent_page_id).
     const tableSql = (
@@ -1091,7 +1157,7 @@ describe('chat_db — v4 → v5 migration (chat_tool_call.content_offset)', () =
       value: string
     }
     // v4 DB now climbs the whole ladder to v6 (content_offset added at v5).
-    expect(ver.value).toBe('7')
+    expect(ver.value).toBe('8')
     // Column present, pre-existing row reads NULL (degrade path in renderer).
     const cols = db.prepare('PRAGMA table_info(chat_tool_call)').all() as Array<{ name: string }>
     expect(cols.map((c) => c.name)).toContain('content_offset')
@@ -1153,7 +1219,7 @@ describe('chat_db — v5 → v6 migration (ai_chat_messages.thinking)', () => {
     const ver = db.prepare("SELECT value FROM chat_db_meta WHERE key = 'schema_version'").get() as {
       value: string
     }
-    expect(ver.value).toBe('7')
+    expect(ver.value).toBe('8')
     // Column present, pre-existing row reads NULL (no thinking block in renderer).
     const cols = db.prepare('PRAGMA table_info(ai_chat_messages)').all() as Array<{ name: string }>
     expect(cols.map((c) => c.name)).toContain('thinking')

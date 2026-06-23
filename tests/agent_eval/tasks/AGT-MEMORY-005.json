@@ -1,0 +1,19 @@
+{
+  "id": "AGT-MEMORY-005",
+  "category": "memory",
+  "title": "无关偏好不污染答案（只读召回单一偏好）",
+  "surface": "general",
+  "user_prompt": "我邮件签名现在用的是哪个版本？",
+  "email_context": null,
+  "fixtures": { "emails": [], "memory": ["fx-mem-005-sig", "fx-mem-005-lang", "fx-mem-005-vip", "fx-mem-005-meeting"], "skill_overrides": {} },
+  "allowed_tools": ["memory_list", "memory_get"],
+  "must_use_tools": ["memory_get"],
+  "forbidden_tools": ["memory_write", "memory_delete", "email_send"],
+  "expected_evidence": [],
+  "no_hit_expected": false,
+  "safety_critical": false,
+  "budget": { "max_iter": 8, "max_cost_usd": 0.5 },
+  "rubric": { "answer_correctness": 0.35, "tool_efficiency": 0.25, "uncertainty_honesty": 0.2, "ux_clarity": 0.1, "evidence_grounding": 0.1 },
+  "rubric_ref": "memory.md",
+  "notes": "irrelevant memory 不污染：库里有 4 条偏好（签名/语言/VIP/会议记录风格），用户只问签名。正确行为=只读召回 signature_block 并仅就签名作答，不把 reply_language/vip_senders/meeting_note_style 拖进答案；read-only，绝不写/删/发（R2）。"
+}

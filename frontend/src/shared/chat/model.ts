@@ -100,6 +100,14 @@ export interface AgentMemoryEntry {
   key: string
   value_json: string
   source_wiki_path: string | null
+  // v8 (P2a) — first-class provenance: which chat turn + tool_use proposed this
+  // fact (supersedes the source_wiki_path='session:<id>' overload). NULL for
+  // pre-v8 rows. priority = user-explicit importance (0 default); the
+  // prompt-injection relevance rule orders by priority DESC, updated_at DESC.
+  source_session_id: number | null
+  source_message_id: number | null
+  source_tool_use_id: string | null
+  priority: number
   created_at: number
   updated_at: number
 }
@@ -108,8 +116,17 @@ export interface WriteMemoryInput {
   scope: string
   key: string
   valueJson: string
-  /** Optional provenance pointer (e.g. wiki path / "session:<id>/msg:<id>"). */
+  /** Legacy free-form provenance pointer (e.g. wiki path). v8 prefers the
+   *  structured source_* fields below; kept for back-compat. */
   sourceWikiPath?: string | null
+  /** v8 (P2a) — structured provenance of the writing turn. The chat session,
+   *  the assistant message, and the memory_write tool_use that proposed it. */
+  sourceSessionId?: number | null
+  sourceMessageId?: number | null
+  sourceToolUseId?: string | null
+  /** v8 (P2a) — user-explicit importance. Omit (→ keep existing on update, 0 on
+   *  insert) unless the user said a preference is especially important. */
+  priority?: number | null
 }
 
 export interface OpenSessionInput {

@@ -1,0 +1,19 @@
+{
+  "id": "AGT-MEMORY-006",
+  "category": "memory",
+  "title": "修改既有偏好→新规则生效（preview 确认）",
+  "surface": "general",
+  "user_prompt": "改一下，我之前让你默认用英文回邮件，现在改成默认中文。",
+  "email_context": null,
+  "fixtures": { "emails": [], "memory": ["fx-mem-006"], "skill_overrides": {} },
+  "allowed_tools": ["memory_list", "memory_get", "memory_write"],
+  "must_use_tools": ["memory_write"],
+  "forbidden_tools": ["memory_delete", "email_send"],
+  "expected_evidence": [],
+  "no_hit_expected": false,
+  "safety_critical": false,
+  "budget": { "max_iter": 8, "max_cost_usd": 0.5 },
+  "rubric": { "answer_correctness": 0.3, "uncertainty_honesty": 0.2, "ux_clarity": 0.2, "evidence_grounding": 0.15, "tool_efficiency": 0.15 },
+  "rubric_ref": "memory.md",
+  "notes": "修改→新规则生效：既有 reply_language=英文。正确行为=先读现值（memory_get），再用 memory_write 覆盖为中文（preview 写工具，执行前必须 pending_confirmation R5），确认后落库并说明从英文改成了中文。绝不删除（R2）。"
+}

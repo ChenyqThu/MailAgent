@@ -1,0 +1,7 @@
+{
+  "key": "vip_senders",
+  "value": "pmo@example-corp.test, ceo@example-corp.test",
+  "scope": "user",
+  "priority": 1,
+  "updated_at": "2026-06-12T08:00:00+08:00"
+}

@@ -1,9 +1,13 @@
 """ai_chat.db 读 + 写访问 —— serve-api 远程 chat 端点（V2.1 阶段 2 读 + 阶段 3 3b-3 写）。
 
-ai_chat.db = 前端 owned schema（``frontend/src/electron/main/chat_db.ts``，CHAT_DB_VERSION 7）。
+ai_chat.db = 前端 owned schema（``frontend/src/electron/main/chat_db.ts``，CHAT_DB_VERSION 8）。
 v7（P2c）= chat session anchor：``email_id`` 改 nullable + 加 ``anchor_type``/``anchor_id`` 列
-（table CHECK 强制 email→两者非空 / general→两者 NULL，禁 emailId=0 sentinel）。本文件只 mirror
-读写既有列、**绝不建表/改 schema**（schema 归 chat_db.ts ``migrate``）。
+（table CHECK 强制 email→两者非空 / general→两者 NULL，禁 emailId=0 sentinel）。
+v8（P2a，task 06-23）= agent_memory_kv provenance + priority：加 ``source_session_id`` /
+``source_message_id`` / ``source_tool_use_id``（写入来源的会话/消息/工具，取代
+``source_wiki_path='session:<id>'`` 旧 overload）+ ``priority``（用户显式重要性，驱动
+``memory_summary`` 注入相关性排序）。本文件只 mirror 读写既有列、**绝不建表/改 schema**
+（schema 归 chat_db.ts ``migrate``）。
 读函数（阶段 2）+ 写函数（3b-3）SQL **逐字镜像** chat_db.ts 对应函数，行形状对齐前端
 ``ChatSession`` / ``ChatSessionSummary`` / ``ChatMessage`` / ``ChatToolCall``（``model.ts``）：
   - 读：``listSessionsForEmail`` / ``listAllSessions`` / ``listMessages`` / ``listToolCallsForMessage``。
@@ -40,6 +44,14 @@ from typing import Any, Dict, List, Optional
 def _now_ms() -> int:
     """epoch 毫秒（对齐 chat_db.ts ``Date.now()``，所有写的 created_at/updated_at 用它）。"""
     return int(time.time() * 1000)
+
+
+# P2a (task 06-23) — prompt-injection 相关性选择的上限。注入 system prompt 的 memory
+# 是「规则化挑选」而非全量：scope 过滤 + ORDER BY priority DESC, updated_at DESC，截前
+# MEMORY_INJECT_MAX_ENTRIES 条 + MEMORY_INJECT_MAX_CHARS 字符。上限防 unrelated 偏好刷屏/
+# 污染上下文；``memory_summary_meta`` 暴露 injected/total/truncated 供 /chat/config 可观测。
+MEMORY_INJECT_MAX_ENTRIES = 20
+MEMORY_INJECT_MAX_CHARS = 2000
 
 
 def _resolve_anchor(
@@ -555,20 +567,37 @@ class ChatDb:
         key: str,
         value_json: str,
         source_wiki_path: Optional[str] = None,
+        source_session_id: Optional[int] = None,
+        source_message_id: Optional[int] = None,
+        source_tool_use_id: Optional[str] = None,
+        priority: Optional[int] = None,
     ) -> Dict[str, Any]:
-        """UPSERT 一条 memory（PK (scope,key)）。created_at 更新时保留（仅改 value/source/updated）。
-        镜像 chat_db.ts upsertMemoryEntry。schema 归前端 owns（agent_memory_kv 由 chat_db.ts v3
-        建），serve-api 只写既有表。"""
+        """UPSERT 一条 memory（PK (scope,key)）。created_at 更新时保留。镜像 chat_db.ts
+        upsertMemoryEntry。schema 归前端 owns（agent_memory_kv 由 chat_db.ts v3 建、v8 加
+        provenance/priority 列），serve-api 只写既有表。
+
+        v8（P2a）：provenance（source_session_id/source_message_id/source_tool_use_id）冲突时
+        更新为最新写入者的会话/消息/工具。``priority`` 用 COALESCE 保留：写入省略 priority
+        （如 agent 仅刷新 value）保住用户已置的优先级、不悄悄清零；显式给值则覆盖；全新行省略
+        → 默认 0。"""
         now = _now_ms()
         with self._write_connection() as conn:
             conn.execute(
                 "INSERT INTO agent_memory_kv "
-                "(scope, key, value_json, source_wiki_path, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?) "
+                "(scope, key, value_json, source_wiki_path, source_session_id, "
+                "source_message_id, source_tool_use_id, priority, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(?, 0), ?, ?) "
                 "ON CONFLICT(scope, key) DO UPDATE SET "
                 "value_json = excluded.value_json, source_wiki_path = excluded.source_wiki_path, "
+                "source_session_id = excluded.source_session_id, "
+                "source_message_id = excluded.source_message_id, "
+                "source_tool_use_id = excluded.source_tool_use_id, "
+                "priority = COALESCE(?, agent_memory_kv.priority), "
                 "updated_at = excluded.updated_at",
-                (scope, key, value_json, source_wiki_path, now, now),
+                (
+                    scope, key, value_json, source_wiki_path, source_session_id,
+                    source_message_id, source_tool_use_id, priority, now, now, priority,
+                ),
             )
             row = conn.execute(
                 "SELECT * FROM agent_memory_kv WHERE scope = ? AND key = ?", (scope, key)
@@ -583,30 +612,84 @@ class ChatDb:
             )
             return cur.rowcount
 
-    def memory_summary(
-        self, scope: str = "user", limit: int = 20, max_chars: int = 2000
-    ) -> str:
-        """紧凑 memory 摘要供 system prompt 注入（限长防污染上下文）。scope 默认 'user'，取最近
-        limit 条 `- key: value`（value_json 解出标量则直接用，否则 compact JSON），整体截断 max_chars。
-        库不存在 / 表空 → ''（graceful，不阻断 /chat/config）。"""
-        rows = self.list_memory_entries(scope)[:limit]
-        if not rows:
-            return ""
-        lines: List[str] = []
-        for r in rows:
-            raw = r.get("value_json")
-            val: Any = raw
+    def _select_injection_rows(self, scope: str, max_entries: int) -> List[Dict[str, Any]]:
+        """P2a — 规则化相关性选择：scope 过滤 + ORDER BY priority DESC, updated_at DESC，取前
+        max_entries 条。priority 默认 0 → 无显式优先级时退化为纯 updated_at DESC（与旧行为逐字
+        一致）。priority 列 v8 引入；遇老库/未迁移库（no such column）回退纯 updated_at 排序，
+        其余 sqlite 错误（库锁/表缺）→ [] graceful，不阻断 /chat/config。ORDER 串为硬编码非用户
+        输入，f-string 安全。"""
+        if not os.path.exists(self.db_path):
+            return []
+        for order in ("priority DESC, updated_at DESC", "updated_at DESC"):
             try:
-                parsed = json.loads(raw) if isinstance(raw, str) else raw
-                val = (
-                    parsed
-                    if isinstance(parsed, (str, int, float, bool))
-                    else json.dumps(parsed, ensure_ascii=False)
-                )
-            except (ValueError, TypeError):
-                val = raw
-            lines.append(f"- {r['key']}: {val}")
+                with self._connection() as conn:
+                    return [
+                        dict(r)
+                        for r in conn.execute(
+                            f"SELECT * FROM agent_memory_kv WHERE scope = ? "
+                            f"ORDER BY {order} LIMIT ?",
+                            (scope, max_entries),
+                        ).fetchall()
+                    ]
+            except sqlite3.OperationalError:
+                continue  # no such column: priority（老库）→ retry 纯 updated_at
+            except sqlite3.Error:
+                return []
+        return []
+
+    @staticmethod
+    def _format_memory_value(raw: Any) -> Any:
+        """value_json 解出标量则直接用，否则 compact JSON（注入 prompt 用人读形态）。"""
+        try:
+            parsed = json.loads(raw) if isinstance(raw, str) else raw
+            if isinstance(parsed, (str, int, float, bool)):
+                return parsed
+            return json.dumps(parsed, ensure_ascii=False)
+        except (ValueError, TypeError):
+            return raw
+
+    def memory_summary(
+        self,
+        scope: str = "user",
+        limit: int = MEMORY_INJECT_MAX_ENTRIES,
+        max_chars: int = MEMORY_INJECT_MAX_CHARS,
+    ) -> str:
+        """紧凑 memory 摘要文本供 system prompt 注入（规则化相关性 + 限长防污染）。
+        = memory_summary_meta(...)['text']（保持原 str 契约，agent.py / projections.py 不破）。"""
+        return self.memory_summary_meta(scope, limit, max_chars)["text"]
+
+    def memory_summary_meta(
+        self,
+        scope: str = "user",
+        limit: int = MEMORY_INJECT_MAX_ENTRIES,
+        max_chars: int = MEMORY_INJECT_MAX_CHARS,
+    ) -> Dict[str, Any]:
+        """P2a — 注入摘要 + 可观测 meta。规则化相关性挑前 limit 条（priority DESC, updated_at
+        DESC），格式化为 `- key: value`，整体截断 max_chars。返回
+        {text, injected, total, chars, truncated, max_entries, max_chars}：
+          - `injected` = 被条数上限选中、参与注入的条目数（`injected` < `total` 即尾部低优先级
+            条目被条数上限截掉）；
+          - `truncated` = 拼接文本超 max_chars 被字符级截断（此时末尾若干条目正文被裁，故实际进
+            prompt 的完整条目可能少于 `injected`）。
+        库不存在/表空 → text=''、计数 0（graceful，不阻断 /chat/config）。`total` 走 COUNT(*)
+        单查（不 materialize 全表）。"""
+        cnt = self._read_one(
+            "SELECT COUNT(*) AS n FROM agent_memory_kv WHERE scope = ?", (scope,)
+        )
+        total = int(cnt["n"]) if cnt else 0
+        rows = self._select_injection_rows(scope, limit)
+        lines = [f"- {r['key']}: {self._format_memory_value(r.get('value_json'))}" for r in rows]
         text = "\n".join(lines)
+        truncated = False
         if len(text) > max_chars:
             text = text[:max_chars] + "\n… (truncated)"
-        return text
+            truncated = True
+        return {
+            "text": text,
+            "injected": len(rows),
+            "total": total,
+            "chars": len(text),
+            "truncated": truncated,
+            "max_entries": limit,
+            "max_chars": max_chars,
+        }

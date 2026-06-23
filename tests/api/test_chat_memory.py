@@ -17,12 +17,19 @@ from fastapi.testclient import TestClient
 from src.api.app import app
 from src.chat.db import ChatDb
 
+# v8 (P2a) shape — mirror chat_db.ts agent_memory_kv after the v7→v8 migration
+# (provenance + priority columns). The frontend owns the real schema; this DDL
+# must track it so serve-api writes don't hit "no such column".
 _MEM_DDL = """
 CREATE TABLE agent_memory_kv (
     scope TEXT NOT NULL,
     key TEXT NOT NULL,
     value_json TEXT NOT NULL,
     source_wiki_path TEXT,
+    source_session_id INTEGER,
+    source_message_id INTEGER,
+    source_tool_use_id TEXT,
+    priority INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
     PRIMARY KEY (scope, key)
@@ -159,3 +166,102 @@ def test_config_includes_memory_summary(chat_client: TestClient) -> None:
     cfg = chat_client.get("/api/chat/config").json()["data"]
     assert "memorySummary" in cfg
     assert "tone" in cfg["memorySummary"]
+
+
+# ── v8 (P2a) provenance + relevance ──────────────────────────────────────────
+
+
+def test_upsert_records_provenance_and_priority(chatdb: ChatDb) -> None:
+    row = chatdb.upsert_memory_entry(
+        "user", "reply_language", '"中文"', "session:42",
+        source_session_id=42, source_message_id=100, source_tool_use_id="tu1", priority=3,
+    )
+    assert row["source_session_id"] == 42
+    assert row["source_message_id"] == 100
+    assert row["source_tool_use_id"] == "tu1"
+    assert row["priority"] == 3
+
+
+def test_priority_coalesce_preserved_on_value_only_update(chatdb: ChatDb) -> None:
+    chatdb.upsert_memory_entry("user", "k", '"v1"', priority=5, source_session_id=1)
+    # re-write value WITHOUT priority → keep 5 (COALESCE), refresh provenance to latest
+    row = chatdb.upsert_memory_entry("user", "k", '"v2"', source_session_id=9)
+    assert row["value_json"] == '"v2"'
+    assert row["priority"] == 5
+    assert row["source_session_id"] == 9
+    # a brand-new entry with no priority defaults to 0
+    fresh = chatdb.upsert_memory_entry("user", "fresh", '"x"')
+    assert fresh["priority"] == 0
+
+
+def test_memory_summary_relevance_priority_then_recency(chatdb: ChatDb) -> None:
+    # lower priority but newer
+    chatdb.upsert_memory_entry("user", "recent_low", '"a"', priority=0)
+    # higher priority → must sort FIRST despite being written earlier in real time
+    chatdb.upsert_memory_entry("user", "pinned_high", '"b"', priority=9)
+    summary = chatdb.memory_summary("user")
+    lines = summary.splitlines()
+    assert lines[0].startswith("- pinned_high"), summary
+
+
+def test_memory_summary_meta_observability_and_caps(chatdb: ChatDb) -> None:
+    for i in range(5):
+        chatdb.upsert_memory_entry("user", f"k{i}", '"v"')
+    # entry cap observable: injected <= max_entries, total counts all
+    meta = chatdb.memory_summary_meta("user", limit=3)
+    assert meta["injected"] == 3
+    assert meta["total"] == 5
+    assert meta["max_entries"] == 3
+    # char cap observable
+    chatdb.upsert_memory_entry("user", "big", '"' + "x" * 5000 + '"')
+    meta2 = chatdb.memory_summary_meta("user", max_chars=200)
+    assert meta2["truncated"] is True
+    assert meta2["max_chars"] == 200
+
+
+def test_router_upsert_provenance_passthrough(chat_client: TestClient) -> None:
+    r = chat_client.post(
+        "/api/chat/memory",
+        json={
+            "scope": "user", "key": "sig", "valueJson": '"Best, L"',
+            "sourceSessionId": 7, "sourceMessageId": 70, "sourceToolUseId": "tu9", "priority": 2,
+        },
+    )
+    data = r.json()["data"]
+    assert data["source_session_id"] == 7
+    assert data["source_message_id"] == 70
+    assert data["source_tool_use_id"] == "tu9"
+    assert data["priority"] == 2
+
+
+def test_router_upsert_rejects_bad_provenance_types(chat_client: TestClient) -> None:
+    base = {"scope": "user", "key": "k", "valueJson": '"v"'}
+    for bad in (
+        {**base, "priority": "high"},          # str, not int
+        {**base, "priority": True},            # bool rejected (int subclass)
+        {**base, "sourceSessionId": "x"},      # str, not int
+        {**base, "sourceToolUseId": 5},        # int, not str
+    ):
+        err = chat_client.post("/api/chat/memory", json=bad).json()["error"]
+        assert err["code"] == "E_INVALID_ARG"
+
+
+def test_router_clamps_negative_priority(chat_client: TestClient) -> None:
+    # ORDER BY priority DESC → a negative priority would sort below default 0;
+    # the router clamps it to 0 (no boost) rather than storing a de-prioritizer.
+    r = chat_client.post(
+        "/api/chat/memory",
+        json={"scope": "user", "key": "k", "valueJson": '"v"', "priority": -5},
+    )
+    assert r.json()["data"]["priority"] == 0
+
+
+def test_config_includes_memory_summary_meta(chat_client: TestClient) -> None:
+    chat_client.post(
+        "/api/chat/memory", json={"scope": "user", "key": "tone", "valueJson": '"terse"'}
+    )
+    cfg = chat_client.get("/api/chat/config").json()["data"]
+    meta = cfg["memorySummaryMeta"]
+    assert meta is not None
+    assert meta["total"] == 1 and meta["injected"] == 1
+    assert meta["max_entries"] >= 1 and meta["max_chars"] >= 1
