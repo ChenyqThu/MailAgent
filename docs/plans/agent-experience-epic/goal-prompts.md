@@ -239,12 +239,31 @@ ai@6 / @assistant-ui/react(+react-ai-sdk) / zod 已装（devDeps）；markdown �
 ```
 </details>
 
-### P4-Phase02 — AI SDK Gateway（下一个 session）
+### P4-Phase02 — AI SDK Gateway ✅ 已落地（2026-06-24, commit `a6d189ac`，全程 flag-off）
 
-> 引入 Node AI SDK Gateway（**嵌入 Electron main，非独立 OS 进程**），只接管 chat orchestration 的**纯文本
-> streaming + UIMessage 持久化**：**不迁工具 / 不启 write actions / 不删 legacy harness / 不接 AG-UI**。默认
-> flag off → 现有 chat 字节级不变。可选先建子任务：
-> `task.py create "chat-panel Phase 02 AI SDK Gateway" --parent 06-23-agent-eval-memory-skill-assistant-ui-ai-sdk`。
+> spike `ai_gateway_poc.ts` 正式化为 `frontend/src/ai-gateway/{server,config}.ts`（纯 Node 核：node:http+ai+
+> @ai-sdk/anthropic，零 electron/keytar）+ `electron/main/ai_gateway_lifecycle.ts`（impure wrapper：llm_settings
+> key + persistTurn→chat_db + health-poll + before-quit）。endpoints `/health`+`/api/ai/config`+`/api/ai/chat`
+> （`streamText`→**Node 原生 `pipeUIMessageStreamToResponse(res)`** UIMessage 流 + abort + onFinish 持久化；无
+> key→503 / 空→400 typed）。**provider key 路径裁决 = (A) Gateway 直连 provider**（key 仅 main，renderer 经
+> `?aiGatewayPort=` 只拿 loopback 端口，全程不接触；拒 (B) llm-proxy 因 body 形状不兼容 + 嵌入 main 无额外隔离）。
+> 前端 `getChatRuntimeMode→'ai-sdk'` + `AiSdkRuntimeProvider`(useChatRuntime+AssistantChatTransport) vs legacy
+> 各调一个 runtime hook，panel 据 mode 分流；vite per-flag define 加 `__MAILAGENT_AI_SDK_GATEWAY__`。持久化 v1：
+> chat_db **v8→v9** 加 `ai_chat_messages.ui_message_json`（additive ALTER+hasColumn 守卫，**不动 EXPECTED_DB_VERSION**），
+> 纯 mapper `shared/assistant/uiMessage.ts`（双写 canonical+content / 重载转 UIMessage，旧会话从 content 合成），
+> `src/chat/db.py` 头注释+列镜像。
+>
+> **🔴 头号坑**：ai@6 `convertToModelMessages` 是 **async（返 Promise），必须 await** —— 同步传 Promise 给
+> `streamText`→`standardizePrompt` 抛 `messages.some is not a function`（流出 error 帧、文本空；spike 用 prompt
+> 没踩到）。**坑②**：chat_db v9 bump → 4 个测试文件 7 处 `schema_version` 终态断言（'8'→'9'）+ Python test_chat.py
+> seed DDL 加 `ui_message_json` 列（否则 append INSERT no-such-column→500）。
+>
+> 验收：gateway harness **4/4**（含真实 streamText 经 CRS 重建中文端到端）· ai-gateway 测试 24 · typecheck(node+web) 0 ·
+> 全量 vitest 1724 · agent_eval 85（≥baseline）· python chat 126 · code-reviewer(opus) **APPROVE**（0 CRITICAL/HIGH，
+> 6 项 invariant 全 PASS；1 MEDIUM=会话重载接进 runtime 留 phase-03 + 3 LOW=remote-web auth/ACAO·body 64KB cap·
+> lazy react-ai-sdk 前瞻硬化，均写进 architecture §13.8.5 延后清单）。落地见 [phase-02 §13](../chat-panel-ai-sdk-assistant-ui-refactor/phase-02-ai-sdk-gateway.md#13-实现落地2026-06-24) + [architecture §13.8](../chat-panel-ai-sdk-assistant-ui-refactor/architecture.md#138-phase-02-落地2026-06-24embedded-ai-sdk-gateway)。
+
+<details><summary>原 P4-Phase02 /goal（备查）</summary>
 
 ```
 开工先读：
@@ -276,6 +295,52 @@ ai@6 / @assistant-ui/react(+react-ai-sdk) / zod 已装（devDeps）；markdown �
   路径 opt-in，天然不影响 —— 跑一次兜底）。
 本阶段不做（phase-02 §9）：不迁 tools / 不启 write actions / 不删 legacy harness / 不接 AG-UI / 不强制旧会话全变 UIMessage。
 .env.example 若新增 flag 同步登记。证据（gateway harness 输出 + 流式 trace/截图 + 测试）贴对话。完成用 codex（codex-rescue）或 code-reviewer 过 diff 再收。
+```
+
+</details>
+
+### P4-Phase03a — Tool Registry Migration: read tools first（下一个 session）
+
+> 把 **只读工具**（email_search / email_get / email_body / email_list_thread / email_search_attachments / kos_query
+> / report_list·report_get）从 legacy harness registry 迁到 **AI SDK Gateway tools**（`tool({inputSchema:zod, execute})`
+> 接进 Phase 02 `server.ts` 的 `streamText({tools})`），经 **MailAgentDomainClient**（typed HTTP → Python serve-api
+> read 端点）执行，Python domain service 仍是业务权威。**只迁 read，不启 write actions / 不接 approval / 不画 A2UI
+> 卡片 / 不接 AG-UI**（write=03b、approval=04b、A2UI=04a）。默认 flag off → 现有 chat 字节级不变；AI SDK 路径 opt-in。
+> 可选先建子任务：`task.py create "chat-panel Phase 03a read tools" --parent 06-23-agent-eval-memory-skill-assistant-ui-ai-sdk`。
+
+```
+开工先读：
+- docs/plans/chat-panel-ai-sdk-assistant-ui-refactor/{phase-03-tool-registry,architecture,roadmap,protocol-contracts}.md
+  （phase-03 = DoD 主规格：§2.1 read tools 清单+Python endpoint 映射 / §3 tool 定义模板 / §4 Domain Client / §5 ToolFactoryContext / §6 audit 写入 / §7 legacy 并存 / §8 schema 权威 / §9 测试 / §10 验收 / §11 回滚；architecture §13.8 = Phase 02 落地实测【tools 加在 server.ts 的 streamText({tools}) 调用；Gateway 须保持纯核——domain client + tool registry 经 cfg 注入，与 persistTurn/createModel 同纪律】；protocol-contracts §6 = Python domain read 端点契约、§3 = A2UI envelope【03a 可先不填 a2ui，留 04a】、§9 = ai-sdk-v6）
+- frontend/src/ai-gateway/{server.ts,config.ts}（Phase 02 纯核：streamText 在此，本 phase 加 tools + 把 domain client/tool registry 经 AiGatewayConfig 注入，勿 import electron/chat_db）+ frontend/src/electron/main/ai_gateway_lifecycle.ts（impure wrapper：本 phase 在此构造 DomainClient 注入 serve-api baseURL[resolveApiPort] + 内部 auth token，并把 read-tool registry 注入 cfg）
+- frontend/src/shared/chat/tools/{registry.ts,manifest.ts,builtin/}（legacy 工具定义 = schema/语义 SSoT，迁移时共享 fixture 防 parity 漂移）+ frontend/src/shared/chat/dispatch.ts（legacy 执行/审计语义，chat_tool_call 字段不能比它少）
+- src/api/routers/email.py（read 端点：GET /{id}(:239) · /{id}/body(:294) · /search(:358)）+ src/api/routers/chat.py（/api/chat/kos-call）+ src/api/routers/reports.py（report 读）—— DomainClient 包这些，envelope unwrap + error code→tool error + abort signal
+- frontend/src/electron/main/chat_db.ts 的 chat_tool_call 表（audit owner）+ tests/agent_eval/（read 场景 baseline，golden fixtures 防 parity 漂移）
+前置已绿（引用即可，勿重验/重装）：Phase 02 ✅（embedded Gateway + UIMessage 流 + 持久化 v1，commit a6d189ac，architecture §13.8）；Gateway 纯核/wrapper 注入范式（persistTurn/createModel）已立；ai@6 / @ai-sdk/anthropic / @assistant-ui/react-ai-sdk / zod 已装。🔴 已知坑（沿用）：convertToModelMessages 是 async 必须 await；动 chat_db schema → bump CHAT_DB_VERSION（非 EXPECTED_DB_VERSION）+ db.py 头注释镜像 + 改对应 schema_version 终态断言。
+
+/goal 完成 chat-panel Phase 03a（read tools 迁移到 AI SDK Gateway tools），产出可验证：
+(1) AI SDK Gateway read-tool registry（frontend/src/ai-gateway/tools/）：email_search/email_get/email_body/
+    email_list_thread/email_search_attachments/kos_query（+ report_list/report_get 若低成本）用 tool({inputSchema:zod,
+    execute}) 定义，接进 server.ts 的 streamText({tools, stopWhen: stepCountIs(N)}) 实现多步「调读工具→回答」；
+    **read tools 绝不 needsApproval**；write tools 本 phase 不暴露（gated MAILAGENT_AI_SDK_WRITE_TOOLS 默认 off）；
+(2) MailAgentDomainClient（frontend/src/ai-gateway/python/domainClient.ts）：typed HTTP → serve-api read 端点，
+    统一 envelope unwrap / error code→tool error / abort signal / 注入内部 auth token；**不直接读 SQLite**；
+    Gateway 保持纯核——domain client + tool registry 经 AiGatewayConfig 注入（wrapper 在 ai_gateway_lifecycle.ts
+    构造，serve-api baseURL=resolveApiPort + token），server.ts 不 import electron/chat_db；
+(3) ToolFactoryContext（§5）：domain client + session{id,uiThreadId} + signal 注入，工具不从 React/global/
+    renderer 读上下文；
+(4) audit：每个 tool call 写 chat_tool_call（input/output/status/duration_ms，字段不比 legacy dispatch 少；
+    若需 ui_payload_json 列 → bump CHAT_DB_VERSION 同 Phase 02 纪律；read tools 无 approval 字段）；
+(5) 测试：ai-gateway/tools/{email_search,email_get,kos_query,parity}.test.ts —— input schema invalid /
+    Python endpoint error→tool error / abort 取消 HTTP / read tools 不请求 approval / **parity**（legacy result
+    vs gateway result 关键字段一致，共享 schema fixture）。
+验收（phase-03 §10）：read tools 在 AI SDK runtime 下可用（MAILAGENT_AI_SDK_GATEWAY=1 + MAILAGENT_CHAT_RUNTIME=ai-sdk
+  贴一次「问→调 read tool→带结果回答」trace）；≥5 个历史 read eval scenario 通过；write tools 未开 flag 不暴露；
+  chat_tool_call 审计字段不少于 legacy；pnpm -C frontend typecheck 0 + test 无新增失败；tests/agent_eval ≥ baseline
+  （默认走 legacy harness opt-in 不影响 —— 跑一次兜底；read-tool parity 由 parity.test 保）。
+本阶段不做：write tools 执行（03b）/ approval 两次调用语义 + R5 recorder 重对齐（04b）/ A2UI 卡片（04a）/ AG-UI。
+.env.example 若新增 flag（MAILAGENT_AI_SDK_WRITE_TOOLS 等）同步登记。证据（tool trace + parity 测试 + eval）贴对话。
+完成用 codex（codex-rescue）或 code-reviewer 过 diff 再收。
 ```
 
 ### P4-Phase03+ — 按 chat-panel roadmap §4 PR 拆分逐 phase 推进
