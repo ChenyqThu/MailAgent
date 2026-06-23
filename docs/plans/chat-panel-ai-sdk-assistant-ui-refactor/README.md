@@ -3,6 +3,7 @@
 > status: planning
 > last-verified: 2026-06-22
 > owner: frontend / agent runtime
+> **本专项 = [agent-experience-epic](../agent-experience-epic/README.md) 的 P4（换引擎）** —— 每 phase 验收叠加 eval 闸（跑通 [`tests/agent_eval`](../../../tests/agent_eval/) 27-task baseline 不回退）；并吸收 `06-22-harness-agent-polish` 的 **Phase 2 UX** 诉求（tool timeline / thinking / approval polish 由 assistant-ui + A2UI 原生承载，不在 legacy `MessageList`/`Composer` 上单独做）。整体 P0→P4 序列与门控见 epic 的 [README](../agent-experience-epic/README.md) / [roadmap](../agent-experience-epic/roadmap.md)。
 
 本目录是 MailAgent 前端聊天面板规范化重构专项的落地文档。它回答一个新的架构问题：**如果后端也切到 Vercel AI SDK，整体是否更优，以及应该如何切**。
 

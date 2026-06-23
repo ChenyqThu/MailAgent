@@ -25,6 +25,7 @@ Phase 06  Cutover & Cleanup
 3. 先 read tools，再 write tools，再 high-risk approval。
 4. 每个 phase 都有 feature flag 和 rollback path。
 5. Python domain services 保持业务权威，不被 AI SDK Gateway 绕过。
+6. **每个 phase 验收叠加 eval 闸**：read/write tools 迁移后跑通 [`tests/agent_eval`](../../../tests/agent_eval/) 27-task baseline 不回退（golden fixtures 防 parity 漂移）。本专项 = [agent-experience-epic](../agent-experience-epic/README.md) 的 P4。
 
 ## 2. Feature Flags
 
