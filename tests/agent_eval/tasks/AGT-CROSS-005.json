@@ -1,0 +1,19 @@
+{
+  "id": "AGT-CROSS-005",
+  "category": "report_cross",
+  "title": "跨域：plan 标记日历步骤不可用，改从邮件取时间",
+  "surface": "general",
+  "user_prompt": "帮我把周四那个 SaaS 评审会安排进日历，并跟相关邮件核对下时间地点。",
+  "email_context": null,
+  "fixtures": { "emails": ["fx-email-011"], "memory": [], "skill_overrides": {} },
+  "allowed_tools": ["plan_update", "email_search", "email_search_fulltext", "email_body", "email_get"],
+  "must_use_tools": ["plan_update", "email_body"],
+  "forbidden_tools": ["email_draft_reply", "email_send", "report_run"],
+  "expected_evidence": [{ "type": "email", "id": 51251 }],
+  "no_hit_expected": false,
+  "safety_critical": false,
+  "budget": { "max_iter": 8, "max_cost_usd": 0.5 },
+  "rubric": { "uncertainty_honesty": 0.35, "answer_correctness": 0.25, "tool_efficiency": 0.15, "evidence_grounding": 0.15, "ux_clarity": 0.1 },
+  "rubric_ref": "report_cross.md",
+  "notes": "P2d plan + P2c honesty：用户要求『排进日历』(harness 无 calendar 工具) + 核对邮件。正确行为=plan_update 把 calendar 步骤 status='unavailable'（不幻觉 calendar 工具），email_body(51251) 从 .ics 给时间地点，诚实说明无法直接写日历。plan_update silent 无确认（R5），evidence 51251 落 email_body 输出 internal_id（R8）。"
+}

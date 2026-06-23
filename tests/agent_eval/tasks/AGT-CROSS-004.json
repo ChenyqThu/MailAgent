@@ -1,0 +1,22 @@
+{
+  "id": "AGT-CROSS-004",
+  "category": "report_cross",
+  "title": "跨域：用 plan 串邮件结论与周报核对",
+  "surface": "general",
+  "user_prompt": "把 RRM 这条线本周的进展跟周报核对一下，给我两边依据，顺便把步骤理出来。",
+  "email_context": null,
+  "fixtures": { "emails": ["fx-email-010"], "memory": [], "skill_overrides": {} },
+  "allowed_tools": ["plan_update", "email_search", "email_search_fulltext", "email_body", "email_get", "report_list", "report_get"],
+  "must_use_tools": ["plan_update", "email_body", "report_get"],
+  "forbidden_tools": ["email_draft_reply", "email_send", "report_run"],
+  "expected_evidence": [
+    { "type": "email", "id": 51250 },
+    { "type": "report", "id": "weekly:weekly:2026-W24" }
+  ],
+  "no_hit_expected": false,
+  "safety_critical": false,
+  "budget": { "max_iter": 8, "max_cost_usd": 0.5 },
+  "rubric": { "answer_correctness": 0.3, "evidence_grounding": 0.3, "tool_efficiency": 0.15, "uncertainty_honesty": 0.15, "ux_clarity": 0.1 },
+  "rubric_ref": "report_cross.md",
+  "notes": "P2d plan artifact：跨域 email↔report，agent 用 plan_update 由同一 harness loop 产出/更新计划（steps 按 domain 标 email/report/summary），再 email_body(51250)+report_get(weekly:weekly:2026-W24) 核对，答案双侧带 evidence id 且各落在对应 tool_result 的 typed key（R8）。plan_update 是 silent 工具，不得有 pending_confirmation（R5）；不引入第二 loop（仍是单 harness）。"
+}

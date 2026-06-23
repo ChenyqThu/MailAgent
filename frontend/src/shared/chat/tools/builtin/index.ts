@@ -17,6 +17,7 @@
 //     Memory (4, P2f): memory_list / memory_get (silent) /
 //                 memory_write / memory_delete (preview confirm)
 //     Notion (1, P2g): notion_agent_chat (preview confirm; delegates to notion-agent CLI)
+//     Plan   (1, P2d): plan_update (silent; cross-domain plan/subgoal artifact, single loop)
 //
 //   KOS gated (+9 tools when platform.kosConfig().configured = true):
 //     Meta read  (7): kos_query / kos_digest / kos_recall / kos_find_experts /
@@ -34,6 +35,7 @@ import { createNotionAgentTools } from './notion_agent'
 import { createKosTools } from './kos'
 import { createAgentProfileTools } from './agent_profile'
 import { createSkillManagementTools } from './skill_management'
+import { createPlanTools } from './plan'
 
 /** Build every builtin tool bound to the injected platform. The 25 default
  *  tools always register; the 9 KOS tools register only when
@@ -55,7 +57,9 @@ export function createBuiltinTools(platform: ChatToolPlatform): ToolDef[] {
     // confirmation). The agent can never silently change its identity/rules or widen
     // its own capabilities; RULES edits also pass a backend safety validator.
     ...createAgentProfileTools(platform),
-    ...createSkillManagementTools(platform)
+    ...createSkillManagementTools(platform),
+    // P2d — cross-domain plan artifact (silent, single-loop bookkeeping; no platform I/O).
+    ...createPlanTools()
   ]
   if (platform.kosConfig().configured) {
     tools.push(...createKosTools(platform))
@@ -72,5 +76,6 @@ export {
   createNotionAgentTools,
   createKosTools,
   createAgentProfileTools,
-  createSkillManagementTools
+  createSkillManagementTools,
+  createPlanTools
 }
