@@ -63,6 +63,13 @@ export default defineConfig({
   define: {
     // factory.ts reads this to pick HttpApi over ElectronApi.
     'import.meta.env.VITE_BUILD_TARGET': JSON.stringify('web'),
+    // chat-panel P4 Phase 01 — assistant-ui shell flags (shared/assistant/runtime/flags.ts).
+    // Per-flag define (NOT envPrefix:['MAILAGENT_']) so only these two non-secret
+    // toggles enter the bundle, never MAILAGENT_CLI_API_KEY et al. Default '' = off.
+    __MAILAGENT_ASSISTANT_UI_PANEL__: JSON.stringify(
+      process.env.MAILAGENT_ASSISTANT_UI_PANEL ?? ''
+    ),
+    __MAILAGENT_CHAT_RUNTIME__: JSON.stringify(process.env.MAILAGENT_CHAT_RUNTIME ?? ''),
     // Workbox guards its dev logger behind `process.env.NODE_ENV`, which is
     // undefined in the browser ServiceWorker global (`process` doesn't exist
     // there) → the SW would throw on load. Define it at build time so the

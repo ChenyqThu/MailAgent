@@ -9,10 +9,12 @@
 // Sprint 18 follow-up: dropped the Thread / Sync placeholder tabs — they
 // never carried real surfaces and the noise distracted from the AI flow.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from '@tanstack/react-router'
 import { History, Maximize2, Plus, Settings, Sparkles, X } from 'lucide-react'
+
+import { isAssistantUiPanelEnabled } from '@shared/assistant/runtime/flags'
 
 import type { AIFields, ChatBackendKind, EmailMeta, SearchHit } from '@shared/api/types'
 import { type ChatAttachment, buildAttachmentBlock } from '@shared/lib/chat-attachments'
@@ -117,7 +119,50 @@ interface AIChatPanelProps {
   fillWrapper?: boolean
 }
 
-export function AIChatPanel({
+// chat-panel P4 Phase 01 — assistant-ui shell, lazy-loaded so @assistant-ui/react
+// (and the whole shared/assistant tree) only enters the bundle as a separate
+// chunk that is requested ONLY when the flag is on. flag-off never renders it →
+// the import never fires → default behavior is byte-identical.
+const AssistantUIChatPanel = lazy(() =>
+  import('@shared/assistant/AssistantUIChatPanel').then((m) => ({
+    default: m.AssistantUIChatPanel
+  }))
+)
+
+/** Empty panel shell shown while the assistant-ui chunk loads (flag-on only).
+ *  Matches the panel's width contract so there's no layout shift; runs no chat
+ *  hooks (unlike rendering the legacy panel as the fallback, which would mount +
+ *  immediately unmount useEmailChat). */
+function AssistantPanelFallback({ fullScreen, fillWrapper }: AIChatPanelProps): React.ReactElement {
+  return (
+    <aside
+      aria-label="ai-chat-panel"
+      className={cn(
+        'glass-panel flex min-h-0 flex-col border-l border-ink-border',
+        fullScreen
+          ? 'w-full flex-1 border-l-0'
+          : fillWrapper
+            ? 'w-full shrink-0'
+            : 'w-[360px] max-w-[92vw] shrink-0'
+      )}
+    />
+  )
+}
+
+/** chat-panel P4 Phase 01 — flag-gated view-layer split. Default (flag off) →
+ *  LegacyAIChatPanel, byte-identical. flag on (MAILAGENT_ASSISTANT_UI_PANEL=1) →
+ *  the assistant-ui shell. Both importers (InboxLayout barrel + PopoutShell)
+ *  keep importing `AIChatPanel`; the split is invisible to them. */
+export function AIChatPanel(props: AIChatPanelProps = {}): React.ReactElement {
+  if (!isAssistantUiPanelEnabled()) return <LegacyAIChatPanel {...props} />
+  return (
+    <Suspense fallback={<AssistantPanelFallback {...props} />}>
+      <AssistantUIChatPanel {...props} />
+    </Suspense>
+  )
+}
+
+export function LegacyAIChatPanel({
   fullScreen = false,
   fillWrapper = false
 }: AIChatPanelProps = {}): React.ReactElement {
