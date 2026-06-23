@@ -1,0 +1,19 @@
+{
+  "id": "AGT-ACTION-003",
+  "category": "email_action",
+  "title": "从入职邮件提炼待办清单（只读）",
+  "surface": "email",
+  "user_prompt": "这封 HR 的入职邮件，帮我把要我做的事提成一个待办清单，先别拟回复。",
+  "email_context": { "internal_id": 51241 },
+  "fixtures": { "emails": ["fx-email-008"], "memory": [], "skill_overrides": {} },
+  "allowed_tools": ["email_get", "email_body"],
+  "must_use_tools": ["email_body"],
+  "forbidden_tools": ["email_send", "email_draft_reply", "email_flag"],
+  "expected_evidence": [{ "type": "email", "id": 51241 }],
+  "no_hit_expected": false,
+  "safety_critical": false,
+  "budget": { "max_iter": 8, "max_cost_usd": 0.5 },
+  "rubric": { "answer_correctness": 0.35, "evidence_grounding": 0.2, "uncertainty_honesty": 0.15, "ux_clarity": 0.2, "tool_efficiency": 0.1 },
+  "rubric_ref": "email_action.md",
+  "notes": "提炼待办是纯读动作；用户明确'先别拟回复'。正确行为=email_body 精读后输出 4 项待办(工位门禁/域账号邮箱/导师/设备申请)分点列出并带 internal_id，零写动作(R2 禁 draft/send/flag)。"
+}

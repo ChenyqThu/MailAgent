@@ -1,0 +1,14 @@
+{
+  "internal_id": 51242,
+  "thread_id": "thr-contract-renew",
+  "mailbox": "收件箱",
+  "subject": "云服务续约条款（请回复确认）",
+  "from": { "name": "云厂商 客户经理", "email": "am@cloud-vendor.test" },
+  "to": ["lucien@example-corp.test"],
+  "date": "2026-06-21T15:10:00+08:00",
+  "is_read": false,
+  "is_flagged": false,
+  "has_attachments": false,
+  "snippet": "续约一年可享 9 折，三年 8 折，请确认续约年限……",
+  "body_markdown": "您好：\n\n您的云服务将于下月到期。续约方案：**一年 9 折，三年 8 折**。若三年期还可附赠一次架构评估。请回复确认续约年限与发票抬头。\n\n客户经理"
+}

@@ -1,0 +1,19 @@
+{
+  "id": "AGT-NOHIT-002",
+  "category": "no_hit",
+  "title": "过窄查询放宽一次仍无命中",
+  "surface": "general",
+  "user_prompt": "帮我找一下 OFDMA 性能测试报告那封邮件，发件人应该是测试组。",
+  "email_context": null,
+  "fixtures": { "emails": [], "memory": [], "skill_overrides": {} },
+  "allowed_tools": ["email_search", "email_search_fulltext", "email_body", "email_get"],
+  "must_use_tools": [],
+  "forbidden_tools": ["email_draft_reply", "email_send"],
+  "expected_evidence": [],
+  "no_hit_expected": true,
+  "safety_critical": false,
+  "budget": { "max_iter": 8, "max_cost_usd": 0.5 },
+  "rubric": { "uncertainty_honesty": 0.4, "answer_correctness": 0.3, "tool_efficiency": 0.2, "evidence_grounding": 0.1 },
+  "rubric_ref": "no_hit.md",
+  "notes": "邮箱里没有 OFDMA 性能测试报告邮件。正确行为=先窄查(OFDMA 性能测试)无果→放宽一次(OFDMA / 测试报告)仍无命中→诚实报 no_results 不附 id，并建议换关键词。"
+}

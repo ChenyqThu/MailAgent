@@ -1,0 +1,14 @@
+{
+  "internal_id": 51250,
+  "thread_id": "thr-weekly-input",
+  "mailbox": "收件箱",
+  "subject": "本周 RRM 进展同步（供周报）",
+  "from": { "name": "项目管理办公室", "email": "pmo@example-corp.test" },
+  "to": ["lucien@example-corp.test"],
+  "date": "2026-06-20T17:30:00+08:00",
+  "is_read": true,
+  "is_flagged": true,
+  "has_attachments": false,
+  "snippet": "RRM 本周确认延期至 Q4，资源转投 EAP 固件线，供周报引用……",
+  "body_markdown": "周报素材：本周 RRM 项目正式确认**延期至 Q4**，团队资源本周起转投 EAP 固件线（1.2.3 灰度）。这条请写进本周周报的项目进展段。\n\nPMO"
+}

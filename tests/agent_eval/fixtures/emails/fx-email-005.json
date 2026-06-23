@@ -1,0 +1,14 @@
+{
+  "internal_id": 51221,
+  "thread_id": "thr-budget-q3",
+  "mailbox": "收件箱",
+  "subject": "Re: Q3 市场预算审批结果",
+  "from": { "name": "市场部 王经理", "email": "wang@example-corp.test" },
+  "to": ["lucien@example-corp.test"],
+  "date": "2026-06-19T18:05:00+08:00",
+  "is_read": true,
+  "is_flagged": false,
+  "has_attachments": false,
+  "snippet": "收到，38 万我们重新排一版投放……",
+  "body_markdown": "收到财务的结论，38 万这个数我们重新排一版投放，线下展会先撤掉。下周一给你看修订稿。\n\n王经理"
+}

@@ -217,6 +217,7 @@ mailagent email resync 53675 --dry-run -o json
 - 加新配置：① `src/config.py` 加 Field → ② `.env.example` 加示例 → ③ 必要时更新本文件「关键开关现状」表
 - **加新文档**（防再次乱套，完整规范见 [`docs/DOC-GUIDE.md`](./docs/DOC-GUIDE.md)）：先判类型 —— **常青参考**（描述系统"现在如何"、会反复读）放 `docs/reference/<子系统>/`，**且必须在上方「文档地图」加一行**（否则无人发现）；**过程产物**（handoff / complete / phaseN / prN / sprint / 验收 matrix / 交接 / dogfood）放 `.trellis/tasks/<task>/`，已成历史的归 `docs/archive/{年-月}/` —— **禁止堆回 `docs/` 顶层或 `docs/reference/`**。判据：*半年后还有人为"现在怎么回事"来读吗？* 是→reference，否→archive。
 - SQLite schema 升级：用 `/db-migration` skill（bump DB_VERSION + idempotent migration + 一致性更新）。**bump `DB_VERSION` 必同步前端 `frontend/src/electron/main/backend_lifecycle.ts` 的 `EXPECTED_DB_VERSION`**（TS 手抄 Python 常量，漏改 → 打包 app 启动门控 `waitReady` 卡 120s 降级；判据已 `>=` 容错 + `frontend/tests/main/db_version_consistency.test.ts` 兜底）
+- **跑 agent 行为回归网**：改 chat agent 的 prompt / 工具 / 编排引擎后**必跑** `venv/bin/python -m pytest tests/agent_eval -q`（零-LLM hard rules R1-R8 + 27 curated tasks + v0.13.0 baseline，~0.1s）。这是「换 agent 引擎不回退」的金标准——回归闸 `python -m runner.run_baseline --compare`（在 `tests/agent_eval/` 下跑），总分不得低于 baseline。规格见 `tests/agent_eval/schema.md` + `recorder-contract.md`；**judge / live recorder 是 manual lane，不进 CI**（fixtures 全 `.test` 合成域，零真实 PII）。整合大版本规划见 `.trellis/tasks/06-23-agent-eval-memory-skill-assistant-ui-ai-sdk/`。
 
 ## 文件位置
 

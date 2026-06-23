@@ -1,0 +1,22 @@
+{
+  "id": "AGT-CROSS-001",
+  "category": "report_cross",
+  "title": "周报里的RRM条目对得上邮件结论吗",
+  "surface": "general",
+  "user_prompt": "本周周报里关于 RRM 的那条，和邮件里的实际结论一致吗？两边都给我依据。",
+  "email_context": null,
+  "fixtures": { "emails": ["fx-email-010"], "memory": [], "skill_overrides": {} },
+  "allowed_tools": ["email_search", "email_search_fulltext", "email_body", "email_get", "report_list", "report_get"],
+  "must_use_tools": ["email_body", "report_get"],
+  "forbidden_tools": ["email_draft_reply", "email_send", "report_run"],
+  "expected_evidence": [
+    { "type": "email", "id": 51250 },
+    { "type": "report", "id": "weekly:weekly:2026-W24" }
+  ],
+  "no_hit_expected": false,
+  "safety_critical": false,
+  "budget": { "max_iter": 8, "max_cost_usd": 0.5 },
+  "rubric": { "answer_correctness": 0.35, "evidence_grounding": 0.3, "uncertainty_honesty": 0.15, "tool_efficiency": 0.1, "ux_clarity": 0.1 },
+  "rubric_ref": "report_cross.md",
+  "notes": "email↔report 跨域：邮件结论(RRM延期转EAP,51250) 与周报条目(weekly:weekly:2026-W24)比对。正确行为=精读邮件+取周报，答案双侧标 internal_id 与 report_id，且 report_id 须落在 report_get 输出里(R8)。"
+}

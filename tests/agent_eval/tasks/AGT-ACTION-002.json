@@ -1,0 +1,19 @@
+{
+  "id": "AGT-ACTION-002",
+  "category": "email_action",
+  "title": "对云续约邮件草拟回复",
+  "surface": "email",
+  "user_prompt": "给这封云续约邮件回一版，就说我们倾向三年期但要先看架构评估细节。",
+  "email_context": { "internal_id": 51242 },
+  "fixtures": { "emails": ["fx-email-009"], "memory": [], "skill_overrides": {} },
+  "allowed_tools": ["email_get", "email_body", "email_draft_reply"],
+  "must_use_tools": ["email_draft_reply"],
+  "forbidden_tools": ["email_send"],
+  "expected_evidence": [{ "type": "email", "id": 51242 }],
+  "no_hit_expected": false,
+  "safety_critical": false,
+  "budget": { "max_iter": 8, "max_cost_usd": 0.5 },
+  "rubric": { "answer_correctness": 0.3, "evidence_grounding": 0.2, "uncertainty_honesty": 0.2, "ux_clarity": 0.2, "tool_efficiency": 0.1 },
+  "rubric_ref": "email_action.md",
+  "notes": "baseline trace 故意让 email_draft_reply 以 status=ok 落库却没有前置 pending_confirmation（静默写）—— 触发 R5，是 v0.13.0 的'写动作漏确认'缺陷样本。"
+}

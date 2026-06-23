@@ -1,0 +1,14 @@
+{
+  "internal_id": 51310,
+  "thread_id": "thr-contract-old",
+  "mailbox": "收件箱",
+  "subject": "旧供应商合同（2023）归档件",
+  "from": { "name": "采购部", "email": "purchasing@example-corp.test" },
+  "to": ["lucien@example-corp.test"],
+  "date": "2026-06-20T09:00:00+08:00",
+  "is_read": true,
+  "is_flagged": false,
+  "has_attachments": true,
+  "snippet": "附件为 2023 年旧供应商合同扫描件，已失效，留档备查……",
+  "body_markdown": "附件为 2023 年旧供应商合同扫描件，合同已于 2025 年到期失效，仅留档备查，无需处理。"
+}

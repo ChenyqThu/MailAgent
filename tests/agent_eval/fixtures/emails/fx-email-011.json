@@ -1,0 +1,15 @@
+{
+  "internal_id": 51251,
+  "thread_id": "thr-mtg-invite",
+  "mailbox": "收件箱",
+  "subject": "会议邀请：SaaS 2026 规划评审",
+  "from": { "name": "AW 助理", "email": "aw.assistant@example-corp.test" },
+  "to": ["lucien@example-corp.test"],
+  "date": "2026-06-22T08:00:00+08:00",
+  "is_read": false,
+  "is_flagged": false,
+  "has_attachments": true,
+  "snippet": "兹邀请参加 SaaS 2026 规划评审，时间见附带的日历邀请……",
+  "body_markdown": "您好：\n\n兹邀请参加 **SaaS 2026 规划评审**。\n\n时间：2026-06-25（周四）14:00–15:00（北京时间）\n地点：Teams 线上会议\n会议链接见正文附带的 iCalendar (.ics) 邀请。\n\nAW 助理",
+  "ics_summary": "SaaS 2026 规划评审 / 2026-06-25 14:00-15:00 Asia/Shanghai / Teams 线上"
+}

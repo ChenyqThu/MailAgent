@@ -1,0 +1,14 @@
+{
+  "internal_id": 51202,
+  "thread_id": "thr-rrm-2026",
+  "mailbox": "收件箱",
+  "subject": "Re: RRM 项目 2026 计划",
+  "from": { "name": "张工", "email": "zhang@example-corp.test" },
+  "to": ["lucien@example-corp.test"],
+  "date": "2026-06-11T10:05:00+08:00",
+  "is_read": true,
+  "is_flagged": false,
+  "has_attachments": false,
+  "snippet": "目前看还是按原计划推进，等评审结论再定，先把排期占住……",
+  "body_markdown": "我这边倾向**按原计划** Q2 推进，但要等管理层评审最终拍板。先占排期，评审后再调整。\n\n张工"
+}

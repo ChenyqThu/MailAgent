@@ -1,0 +1,14 @@
+{
+  "internal_id": 51260,
+  "thread_id": "thr-it-notice",
+  "mailbox": "收件箱",
+  "subject": "IT 通知：本周六邮件系统维护",
+  "from": { "name": "IT 支持", "email": "it@example-corp.test" },
+  "to": ["lucien@example-corp.test"],
+  "date": "2026-06-18T10:00:00+08:00",
+  "is_read": true,
+  "is_flagged": false,
+  "has_attachments": false,
+  "snippet": "本周六 22:00 起邮件系统维护两小时，期间可能收发延迟……",
+  "body_markdown": "全体同事：\n\n本周六 22:00–24:00 进行邮件系统例行维护，期间收发可能延迟，请提前安排。\n\nIT 支持"
+}

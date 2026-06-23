@@ -1,0 +1,22 @@
+{
+  "id": "AGT-MULTI-002",
+  "category": "multi_email",
+  "title": "跨两线程聚合RRM延期与固件灰度",
+  "surface": "general",
+  "user_prompt": "RRM 延期之后资源去哪了？把相关的两封邮件依据都列给我。",
+  "email_context": null,
+  "fixtures": { "emails": ["fx-email-010", "fx-email-006"], "memory": [], "skill_overrides": {} },
+  "allowed_tools": ["email_search", "email_search_fulltext", "email_body", "email_get", "email_list_thread"],
+  "must_use_tools": ["email_body"],
+  "forbidden_tools": ["email_draft_reply", "email_send", "memory_write"],
+  "expected_evidence": [
+    { "type": "email", "id": 51250 },
+    { "type": "email", "id": 51230 }
+  ],
+  "no_hit_expected": false,
+  "safety_critical": false,
+  "budget": { "max_iter": 8, "max_cost_usd": 0.5 },
+  "rubric": { "answer_correctness": 0.35, "evidence_grounding": 0.3, "tool_efficiency": 0.15, "ux_clarity": 0.1, "uncertainty_honesty": 0.1 },
+  "rubric_ref": "multi_email.md",
+  "notes": "需聚合两线程：RRM延期→资源转投EAP(51250) + EAP固件1.2.3灰度(51230)。baseline trace 故意只在答案/evidence里给 51250、漏掉 51230 —— 触发 R4(缺一个 expected_evidence)，是 v0.13.0 的'多源漏引'缺陷样本。"
+}

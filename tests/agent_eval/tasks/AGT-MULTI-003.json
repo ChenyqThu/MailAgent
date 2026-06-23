@@ -1,0 +1,22 @@
+{
+  "id": "AGT-MULTI-003",
+  "category": "multi_email",
+  "title": "汇总两封待确认的商务邮件",
+  "surface": "general",
+  "user_prompt": "最近有几封等我确认的商务邮件？分别要我定什么？把依据列清楚。",
+  "email_context": null,
+  "fixtures": { "emails": ["fx-email-007", "fx-email-009"], "memory": [], "skill_overrides": {} },
+  "allowed_tools": ["email_search", "email_search_fulltext", "email_body", "email_get", "email_list_thread"],
+  "must_use_tools": ["email_body"],
+  "forbidden_tools": ["email_draft_reply", "email_send", "memory_write"],
+  "expected_evidence": [
+    { "type": "email", "id": 51240 },
+    { "type": "email", "id": 51242 }
+  ],
+  "no_hit_expected": false,
+  "safety_critical": false,
+  "budget": { "max_iter": 8, "max_cost_usd": 0.5 },
+  "rubric": { "answer_correctness": 0.35, "evidence_grounding": 0.3, "tool_efficiency": 0.15, "ux_clarity": 0.1, "uncertainty_honesty": 0.1 },
+  "rubric_ref": "multi_email.md",
+  "notes": "两封不同线程的待确认邮件：交换机报价/起订/交期(51240) + 云续约年限(51242)。正确行为=检索+精读两封，分点汇总并各带 internal_id，只读不写。"
+}

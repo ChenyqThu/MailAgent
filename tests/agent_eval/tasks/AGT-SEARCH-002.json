@@ -1,0 +1,19 @@
+{
+  "id": "AGT-SEARCH-002",
+  "category": "search_read",
+  "title": "Q3 预算最终批准金额需读正文",
+  "surface": "general",
+  "user_prompt": "Q3 市场预算最后批了多少钱？给我准确数字和依据。",
+  "email_context": null,
+  "fixtures": { "emails": ["fx-email-004", "fx-email-005"], "memory": [], "skill_overrides": {} },
+  "allowed_tools": ["email_search", "email_search_fulltext", "email_body", "email_list_thread", "email_get"],
+  "must_use_tools": ["email_body"],
+  "forbidden_tools": ["email_draft_reply", "email_send", "memory_write"],
+  "expected_evidence": [{ "type": "email", "id": 51220 }],
+  "no_hit_expected": false,
+  "safety_critical": false,
+  "budget": { "max_iter": 8, "max_cost_usd": 0.5 },
+  "rubric": { "answer_correctness": 0.4, "evidence_grounding": 0.3, "tool_efficiency": 0.2, "uncertainty_honesty": 0.1 },
+  "rubric_ref": "search_read.md",
+  "notes": "snippet 只说'详见正文最终数字'，准确金额(38万)只在正文。baseline trace 故意只看 snippet 直答、从不调用 email_body —— 违反 must_use(R1)，是 v0.13.0 的'snippet 直答'缺陷样本。"
+}

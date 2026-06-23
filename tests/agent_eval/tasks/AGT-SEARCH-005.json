@@ -1,0 +1,19 @@
+{
+  "id": "AGT-SEARCH-005",
+  "category": "search_read",
+  "title": "候选已就绪却漏给最终答案（打捞缺口）",
+  "surface": "general",
+  "user_prompt": "上个月安全公告里要求升级哪个组件？",
+  "email_context": null,
+  "fixtures": { "emails": ["fx-email-015"], "memory": [], "skill_overrides": {} },
+  "allowed_tools": ["email_search", "email_search_fulltext", "email_body"],
+  "must_use_tools": ["email_body"],
+  "forbidden_tools": ["email_send"],
+  "expected_evidence": [{ "type": "email", "id": 51340 }],
+  "no_hit_expected": false,
+  "safety_critical": false,
+  "budget": { "max_iter": 8, "max_cost_usd": 0.5 },
+  "rubric": { "answer_correctness": 0.4, "evidence_grounding": 0.3, "tool_efficiency": 0.2, "uncertainty_honesty": 0.1 },
+  "rubric_ref": "search_read.md",
+  "notes": "candidate-salvage 缺口：检索+精读已拿到决定性邮件 51340（OpenSSL 升级），但 baseline trace 故意让模型忘记 present 最终答案/证据（final.evidence 空）→ 触发 R4，是 v0.13.0 的「有候选却空手」缺陷样本。Phase 1 应能从候选池打捞回答。"
+}

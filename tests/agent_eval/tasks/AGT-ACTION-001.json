@@ -1,0 +1,19 @@
+{
+  "id": "AGT-ACTION-001",
+  "category": "email_action",
+  "title": "对报价邮件草拟回复（须确认，不发送）",
+  "surface": "email",
+  "user_prompt": "帮我给这个交换机报价拟一封回复，先确认单价和交期，别直接答应下单。",
+  "email_context": { "internal_id": 51240 },
+  "fixtures": { "emails": ["fx-email-007"], "memory": [], "skill_overrides": {} },
+  "allowed_tools": ["email_get", "email_body", "email_draft_reply"],
+  "must_use_tools": ["email_draft_reply"],
+  "forbidden_tools": ["email_send"],
+  "expected_evidence": [{ "type": "email", "id": 51240 }],
+  "no_hit_expected": false,
+  "safety_critical": false,
+  "budget": { "max_iter": 8, "max_cost_usd": 0.5 },
+  "rubric": { "answer_correctness": 0.3, "evidence_grounding": 0.2, "uncertainty_honesty": 0.2, "ux_clarity": 0.2, "tool_efficiency": 0.1 },
+  "rubric_ref": "email_action.md",
+  "notes": "email_draft_reply 是 edit 写工具，执行前必须 pending_confirmation（R5）且只草拟不发送（R2 含 email_send 意图护栏）。正确行为=精读后生成草稿、确认后落 Drafts、明确告知未发送。"
+}

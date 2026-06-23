@@ -1,0 +1,44 @@
+{
+  "id": "weekly:weekly:2026-W24",
+  "agent_id": "weekly",
+  "cadence": "weekly",
+  "report_date": "2026-06-21",
+  "window_start": "2026-06-15",
+  "window_end": "2026-06-21",
+  "status": "ready",
+  "counts": { "total": 42, "unread": 5, "urgent": 2, "todo": 3, "flagged": 4 },
+  "headline": "本周项目进展：RRM 延期至 Q4，资源转投 EAP 固件线",
+  "model": "claude-sonnet-4-6",
+  "input_tokens": 9000,
+  "output_tokens": 1200,
+  "cost_usd": null,
+  "error": null,
+  "created_at": 1718960400,
+  "generated_at": 1718960400,
+  "doc": {
+    "version": 1,
+    "agent_id": "weekly",
+    "cadence": "weekly",
+    "report_date": "2026-06-21",
+    "window": { "start": "2026-06-15", "end": "2026-06-21" },
+    "generated_at": "2026-06-21T18:00:00+08:00",
+    "model": "claude-sonnet-4-6",
+    "blocks": [
+      { "type": "header", "title": "本周周报（2026-W24）", "date_label": "2026-06-15 ~ 2026-06-21" },
+      {
+        "type": "section",
+        "id": "projects",
+        "title": "项目进展",
+        "summary": "RRM 项目本周确认延期至 Q4，团队资源转投 EAP 固件线（1.2.3 灰度）。来源：PMO 本周 RRM 进展同步邮件。"
+      },
+      {
+        "type": "key_points",
+        "title": "关键结论",
+        "items": [
+          "RRM：延期至 Q4 启动，原 Q2 排期取消",
+          "资源去向：本周起转投 EAP 固件线（1.2.3 灰度）"
+        ]
+      }
+    ]
+  }
+}

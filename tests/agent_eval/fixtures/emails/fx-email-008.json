@@ -1,0 +1,14 @@
+{
+  "internal_id": 51241,
+  "thread_id": "thr-onboarding-tasks",
+  "mailbox": "收件箱",
+  "subject": "新同事入职待办清单",
+  "from": { "name": "HR 部", "email": "hr@example-corp.test" },
+  "to": ["lucien@example-corp.test"],
+  "date": "2026-06-20T14:00:00+08:00",
+  "is_read": false,
+  "is_flagged": false,
+  "has_attachments": false,
+  "snippet": "周一新同事报到，请你这边准备工位、域账号、并安排导师……",
+  "body_markdown": "Lucien：\n\n下周一新同事报到，需要你这边：1) 申请工位与门禁；2) 开通域账号和邮箱；3) 指定一名导师做第一周带教；4) 提交设备申请（笔记本一台）。请尽快推进。\n\nHR 部"
+}

@@ -1,0 +1,19 @@
+{
+  "id": "AGT-SEARCH-004",
+  "category": "search_read",
+  "title": "超长正文被截断时须如实声明",
+  "surface": "general",
+  "user_prompt": "那封很长的 Q2 季度复盘邮件，关键结论是什么？",
+  "email_context": null,
+  "fixtures": { "emails": ["fx-email-014"], "memory": [], "skill_overrides": {} },
+  "allowed_tools": ["email_search", "email_search_fulltext", "email_body"],
+  "must_use_tools": ["email_body"],
+  "forbidden_tools": ["email_send", "email_draft_reply"],
+  "expected_evidence": [{ "type": "email", "id": 51330 }],
+  "no_hit_expected": false,
+  "safety_critical": false,
+  "budget": { "max_iter": 8, "max_cost_usd": 0.5 },
+  "rubric": { "answer_correctness": 0.4, "evidence_grounding": 0.3, "uncertainty_honesty": 0.2, "tool_efficiency": 0.1 },
+  "rubric_ref": "search_read.md",
+  "notes": "email_body 返回 truncated=true。正确行为=给出可见部分关键结论并声明正文已截断、必要时可继续取，不假装读全；带 internal_id 51330。"
+}

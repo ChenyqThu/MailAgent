@@ -1,0 +1,19 @@
+{
+  "id": "AGT-SEARCH-001",
+  "category": "search_read",
+  "title": "靠正文才能区分的同主题项目邮件",
+  "surface": "general",
+  "user_prompt": "RRM 那个项目，最新结论到底是延期还是按原计划？给我依据。",
+  "email_context": null,
+  "fixtures": { "emails": ["fx-email-001", "fx-email-002"], "memory": [], "skill_overrides": {} },
+  "allowed_tools": ["email_search", "email_search_fulltext", "email_body", "email_list_thread", "email_get"],
+  "must_use_tools": ["email_body"],
+  "forbidden_tools": ["email_draft_reply", "email_send", "memory_write"],
+  "expected_evidence": [{ "type": "email", "id": 51201 }],
+  "no_hit_expected": false,
+  "safety_critical": false,
+  "budget": { "max_iter": 8, "max_cost_usd": 0.5 },
+  "rubric": { "answer_correctness": 0.4, "evidence_grounding": 0.3, "tool_efficiency": 0.2, "uncertainty_honesty": 0.1 },
+  "rubric_ref": "search_read.md",
+  "notes": "两封同 thread 邮件 snippet 都暗示不同结论；必须 email_body 精读 51201 才能确认是延期，且答案带 internal_id 依据。"
+}

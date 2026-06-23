@@ -1,0 +1,14 @@
+{
+  "internal_id": 51240,
+  "thread_id": "thr-vendor-quote",
+  "mailbox": "收件箱",
+  "subject": "请确认：交换机报价与交期",
+  "from": { "name": "供应商 李销售", "email": "li.sales@vendor.test" },
+  "to": ["lucien@example-corp.test"],
+  "date": "2026-06-21T09:30:00+08:00",
+  "is_read": false,
+  "is_flagged": false,
+  "has_attachments": false,
+  "snippet": "附上 24 口交换机报价，单价 1280 元，交期 4 周，请确认是否下单……",
+  "body_markdown": "您好：\n\n附上 24 口三层交换机报价：**单价 1280 元，最小起订 50 台，交期 4 周**。如确认请回复，我方安排排产。另外，付款方式建议预付 30%。\n\n李销售"
+}

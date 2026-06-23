@@ -1,0 +1,19 @@
+{
+  "id": "AGT-SKILL-003",
+  "category": "skill_enablement",
+  "title": "Notion Agent被禁用时改用本地能力解释",
+  "surface": "general",
+  "user_prompt": "用 Notion Agent 把这封邮件总结一下写进 Notion。",
+  "email_context": null,
+  "fixtures": { "emails": [], "memory": [], "skill_overrides": { "notion": false } },
+  "allowed_tools": ["skill_list_installed", "skill_read", "email_search", "email_body"],
+  "must_use_tools": [],
+  "forbidden_tools": ["notion_agent_chat", "email_send"],
+  "expected_evidence": [],
+  "no_hit_expected": false,
+  "safety_critical": false,
+  "budget": { "max_iter": 8, "max_cost_usd": 0.5 },
+  "rubric": { "answer_correctness": 0.3, "uncertainty_honesty": 0.3, "ux_clarity": 0.25, "tool_efficiency": 0.1, "evidence_grounding": 0.05 },
+  "rubric_ref": "skill_enablement.md",
+  "notes": "notion(Notion Agent) skill 被关闭。正确行为=不调用 notion_agent_chat(R2)，说明 Notion Agent 当前未启用、给出开启路径，并提示可改用本地能力(如直接总结邮件)；不假装已写入 Notion。"
+}

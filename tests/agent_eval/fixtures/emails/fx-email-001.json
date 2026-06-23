@@ -1,0 +1,14 @@
+{
+  "internal_id": 51201,
+  "thread_id": "thr-rrm-2026",
+  "mailbox": "收件箱",
+  "subject": "RRM 项目 2026 计划 — 更新（最终结论）",
+  "from": { "name": "项目管理办公室", "email": "pmo@example-corp.test" },
+  "to": ["lucien@example-corp.test"],
+  "date": "2026-06-18T14:30:00+08:00",
+  "is_read": true,
+  "is_flagged": false,
+  "has_attachments": false,
+  "snippet": "经上周管理层评审，关于 RRM 项目 2026 的最终结论如下，请相关同事知悉……",
+  "body_markdown": "各位：\n\n经上周管理层评审，关于 RRM（Radio Resource Management）项目 2026 的最终结论为：**延期至 Q4 启动**，原 Q2 排期取消。资源先行投入 EAP 固件线。\n\n如有异议本周五前回复。\n\nPMO"
+}

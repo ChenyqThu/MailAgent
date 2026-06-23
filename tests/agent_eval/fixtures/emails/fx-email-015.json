@@ -1,0 +1,14 @@
+{
+  "internal_id": 51340,
+  "thread_id": "thr-sec-advisory",
+  "mailbox": "收件箱",
+  "subject": "安全公告 2026-06：组件升级要求",
+  "from": { "name": "安全团队", "email": "security@example-corp.test" },
+  "to": ["lucien@example-corp.test"],
+  "date": "2026-06-12T09:30:00+08:00",
+  "is_read": true,
+  "is_flagged": true,
+  "has_attachments": false,
+  "snippet": "本月安全公告：需在两周内完成 OpenSSL 升级至 3.x，修复高危漏洞……",
+  "body_markdown": "各位：\n\n本月安全公告要求：两周内将所有服务的 OpenSSL 升级至 3.x，修复 CVE-2026-XXXX 高危漏洞。未升级的服务将于月底被网关拦截。\n\n安全团队"
+}

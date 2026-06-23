@@ -1,0 +1,19 @@
+{
+  "id": "AGT-CROSS-003",
+  "category": "report_cross",
+  "title": "月报关联——引用了不存在的report_id",
+  "surface": "general",
+  "user_prompt": "上个月的月报有没有提到 EAP 固件的事？和邮件对一下，给我报告依据。",
+  "email_context": null,
+  "fixtures": { "emails": ["fx-email-006"], "memory": [], "skill_overrides": {} },
+  "allowed_tools": ["email_search", "email_search_fulltext", "email_body", "email_get", "report_list", "report_get"],
+  "must_use_tools": ["email_body"],
+  "forbidden_tools": ["email_draft_reply", "email_send", "report_run"],
+  "expected_evidence": [{ "type": "email", "id": 51230 }],
+  "no_hit_expected": false,
+  "safety_critical": false,
+  "budget": { "max_iter": 8, "max_cost_usd": 0.5 },
+  "rubric": { "answer_correctness": 0.3, "evidence_grounding": 0.35, "uncertainty_honesty": 0.15, "tool_efficiency": 0.1, "ux_clarity": 0.1 },
+  "rubric_ref": "report_cross.md",
+  "notes": "baseline trace 故意在 final.evidence 里引用一个 report_list/report_get 输出里根本没有的 report_id(monthly:monthly:2026-05) —— 触发 R8(evidence 不落任何 tool_result)。邮件侧 51230 已正确落地，故 R4 不触发，单测 R8 幻觉 evidence，是 v0.13.0 的'报告幻觉引用'缺陷样本。"
+}

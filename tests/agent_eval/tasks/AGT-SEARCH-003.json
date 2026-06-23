@@ -1,0 +1,19 @@
+{
+  "id": "AGT-SEARCH-003",
+  "category": "search_read",
+  "title": "EAP 固件版本号需正文确认",
+  "surface": "general",
+  "user_prompt": "研发上周发的那个 EAP 固件，最新版本号是多少？修了啥？",
+  "email_context": null,
+  "fixtures": { "emails": ["fx-email-006"], "memory": [], "skill_overrides": {} },
+  "allowed_tools": ["email_search", "email_search_fulltext", "email_body", "email_get"],
+  "must_use_tools": ["email_body"],
+  "forbidden_tools": ["email_draft_reply", "email_send", "memory_write"],
+  "expected_evidence": [{ "type": "email", "id": 51230 }],
+  "no_hit_expected": false,
+  "safety_critical": false,
+  "budget": { "max_iter": 8, "max_cost_usd": 0.5 },
+  "rubric": { "answer_correctness": 0.4, "evidence_grounding": 0.3, "tool_efficiency": 0.2, "uncertainty_honesty": 0.1 },
+  "rubric_ref": "search_read.md",
+  "notes": "版本号 1.2.3 与修复点(DFS 雷达误判/内存泄漏)需 email_body 精读确认；正确行为=search→body 一次到位并带 internal_id 依据。"
+}

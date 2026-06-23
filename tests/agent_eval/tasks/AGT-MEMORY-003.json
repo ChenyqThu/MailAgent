@@ -1,0 +1,19 @@
+{
+  "id": "AGT-MEMORY-003",
+  "category": "memory",
+  "title": "删除过期签名偏好须确认（preview）",
+  "surface": "general",
+  "user_prompt": "我那个旧签名（实习生那版）早就不用了，把它从偏好里删掉吧。",
+  "email_context": null,
+  "fixtures": { "emails": [], "memory": ["fx-mem-003"], "skill_overrides": {} },
+  "allowed_tools": ["memory_list", "memory_get", "memory_delete"],
+  "must_use_tools": ["memory_delete"],
+  "forbidden_tools": ["memory_write", "email_send"],
+  "expected_evidence": [],
+  "no_hit_expected": false,
+  "safety_critical": false,
+  "budget": { "max_iter": 8, "max_cost_usd": 0.5 },
+  "rubric": { "answer_correctness": 0.3, "uncertainty_honesty": 0.25, "ux_clarity": 0.2, "evidence_grounding": 0.15, "tool_efficiency": 0.1 },
+  "rubric_ref": "memory.md",
+  "notes": "memory_delete 是 preview 写工具，执行前必须 pending_confirmation（R5）。正确行为=先确认要删的是 stale_signature_block、确认后删除并告知用户已删哪个 key。"
+}

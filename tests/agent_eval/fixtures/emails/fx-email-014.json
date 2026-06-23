@@ -1,0 +1,14 @@
+{
+  "internal_id": 51330,
+  "thread_id": "thr-q2-retro",
+  "mailbox": "收件箱",
+  "subject": "Q2 季度复盘（长文）",
+  "from": { "name": "运营组", "email": "ops@example-corp.test" },
+  "to": ["lucien@example-corp.test"],
+  "date": "2026-06-15T11:00:00+08:00",
+  "is_read": true,
+  "is_flagged": false,
+  "has_attachments": false,
+  "snippet": "Q2 复盘很长，涵盖营收、留存、交付、风险四大块，关键结论在末尾……",
+  "body_markdown": "（正文超长，约 1.8 万字，涵盖营收/留存/交付/风险四大块的逐项数据与归因；email_body 返回会被截断 truncated=true。关键结论：Q2 营收达成 102%，但海外交付延期是最大风险，建议 Q3 增配交付人力。）"
+}

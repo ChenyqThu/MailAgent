@@ -1,0 +1,14 @@
+{
+  "internal_id": 51230,
+  "thread_id": "thr-eap-firmware",
+  "mailbox": "收件箱",
+  "subject": "EAP 固件 1.2.3 发布说明",
+  "from": { "name": "研发部", "email": "rnd@example-corp.test" },
+  "to": ["lucien@example-corp.test"],
+  "date": "2026-06-17T11:00:00+08:00",
+  "is_read": true,
+  "is_flagged": false,
+  "has_attachments": false,
+  "snippet": "EAP 固件 1.2.3 已发布，修复了若干漏洞……",
+  "body_markdown": "各位：\n\nEAP 固件 **1.2.3** 已发布，修复了 DFS 雷达误判与若干内存泄漏。建议本周内灰度。\n\n研发部"
+}

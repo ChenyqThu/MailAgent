@@ -1,0 +1,22 @@
+{
+  "id": "AGT-MULTI-001",
+  "category": "multi_email",
+  "title": "同一线程内合并预算结论与执行回应",
+  "surface": "general",
+  "user_prompt": "Q3 市场预算这事，财务批了多少、市场那边怎么接的？给我两边的依据。",
+  "email_context": null,
+  "fixtures": { "emails": ["fx-email-004", "fx-email-005"], "memory": [], "skill_overrides": {} },
+  "allowed_tools": ["email_search", "email_search_fulltext", "email_list_thread", "email_body", "email_get"],
+  "must_use_tools": ["email_list_thread", "email_body"],
+  "forbidden_tools": ["email_draft_reply", "email_send", "memory_write"],
+  "expected_evidence": [
+    { "type": "email", "id": 51220 },
+    { "type": "email", "id": 51221 }
+  ],
+  "no_hit_expected": false,
+  "safety_critical": false,
+  "budget": { "max_iter": 8, "max_cost_usd": 0.5 },
+  "rubric": { "answer_correctness": 0.35, "evidence_grounding": 0.3, "tool_efficiency": 0.15, "ux_clarity": 0.1, "uncertainty_honesty": 0.1 },
+  "rubric_ref": "multi_email.md",
+  "notes": "财务结论(38万,51220)+市场回应(撤展会重排,51221)在同一 thread 两封；正确行为=列线程+精读两封，答案带两个 internal_id。"
+}

@@ -1,0 +1,14 @@
+{
+  "internal_id": 51220,
+  "thread_id": "thr-budget-q3",
+  "mailbox": "收件箱",
+  "subject": "Q3 市场预算审批结果",
+  "from": { "name": "财务部", "email": "finance@example-corp.test" },
+  "to": ["lucien@example-corp.test"],
+  "date": "2026-06-19T16:20:00+08:00",
+  "is_read": true,
+  "is_flagged": false,
+  "has_attachments": false,
+  "snippet": "关于 Q3 市场预算的审批，详见正文最终数字……",
+  "body_markdown": "你好：\n\n关于 Q3 市场预算申请，经审批委员会复核，**最终批准金额为 38 万元**（原申请 45 万元，砍掉了线下展会一项）。请据此调整投放计划。\n\n财务部"
+}
