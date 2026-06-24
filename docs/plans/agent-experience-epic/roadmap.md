@@ -139,4 +139,4 @@ P0 止血 ✅ ── P1 eval 固化 ──┬─ P2 内核(memory+skill) ──�
 | P1 eval 固化 | ✅ 完成（commit `7a74a922` 推送 origin；85 passed 0.1s 零-LLM；脱敏审计零命中；CLAUDE.md 已登记） |
 | P2 内核 | ✅ 完成（P2a `7c93c3be` + P2b `19b3f381` + P2c `ef9115d8` + P2d `c9e0b8c5`；eval 36 tasks/hard_pass 29↑23 零回退；pytest 85 + vitest 151 + typecheck node+web 0；code-reviewer(opus) APPROVE 6/6 护栏） |
 | P3 重定向 | ✅ 文档落地（2026-06-23）：chat-panel phase-01 §8 + phase-04 §12 映射表 / 06-22 Phase 2 superseded 指针 + fix-now 清单（F1/F2/F3）；纯文档零代码 |
-| P4 换引擎 | ◐ 进行中：Phase 00 spike ✅ GO（`bc5c1e80`）+ **Phase 01 assistant-ui Shell ✅**（`b82ee24e`，flag-off，eval≥baseline）；**Phase 02 AI SDK Gateway 待开工**（goal-prompts.md P4-Phase02） |
+| P4 换引擎 | ◐ 进行中：Phase 00 spike ✅ GO（`bc5c1e80`）+ **01 Shell ✅**（`b82ee24e`）+ **02 AI SDK Gateway ✅**（`a6d189ac`）+ **03a read tools ✅**（vitest 1756、eval 85）+ **03b write tools + HITL approval ✅**（2026-06-24，`ae268c67`，flag-off：5 写工具 + needsApproval 两调 + 两层 guard[ai@6 签名 + domain ApprovalGuard id/hash/expiry] + R5 recorder 重对齐 rules 零改；vitest 1786、eval 87≥baseline、reviewer APPROVE）；**Phase 04a A2UI 工具卡片 待开工**（goal-prompts.md P4-Phase04a） |

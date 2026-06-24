@@ -351,15 +351,35 @@ ai@6 / @assistant-ui/react(+react-ai-sdk) / zod 已装（devDeps）；markdown �
 
 </details>
 
-### P4-Phase03b — write tools preview + HITL approval（下一个 session）
+### P4-Phase03b — write tools preview + HITL approval ✅ 已落地（2026-06-24，commit `ae268c67`，全程 flag-off）
 
-> 把 **preview/edit 写工具**（email_flag / email_archive / email_pin / email_draft_reply / sync_to_notion preview）迁到
-> AI SDK Gateway tools，**默认需 approval**（`MAILAGENT_AI_SDK_WRITE_TOOLS` + `MAILAGENT_AI_SDK_HIGH_RISK_APPROVAL`，全默认 off）。
-> 核心 = AI SDK `needsApproval` **两次调用**心智模型（首调结束于 `tool-approval-request` part → 用户 approve/edit/reject →
-> 二调执行）取代 legacy `awaitConfirmation` 同进程 suspend；+ Python domain service 二次鉴权 guard；+ **eval R5 recorder
-> 重对齐**（architecture §13.4：把 AI SDK approval-request 映射成 trace 的 `pending_confirmation`，rules.py 零改，baseline 不回退）。
-> **不做高风险外发**（email_prepare_send/send_approved = 04b 末）/ 不画富 A2UI 卡片（04a，先 generic trace）/ 不接 AG-UI。
-> 可选先建子任务：`task.py create "chat-panel Phase 03b write tools approval" --parent 06-23-agent-eval-memory-skill-assistant-ui-ai-sdk`。
+> **DONE**：5 写工具（`email_flag`/`email_archive`/`email_pin` preview + `email_draft_reply` edit + **`email_resync`** preview
+> = goal 里 `sync_to_notion` preview 的「重推 Notion」语义）迁 AI SDK Gateway，gated `MAILAGENT_AI_SDK_WRITE_TOOLS`（默认 off →
+> `buildGatewayTools` 仅 `writeToolsEnabled && approvalGuard` 加写工具，字节级等同 03a）；经 `MailAgentDomainClient`(+5 写方法，
+> wire 逐字镜像 HttpChatPlatform)→serve-api 写端点（MailWriteService 二次鉴权）。**HITL 两次调用**（`auditedWriteTool`，tools/types.ts）：
+> `needsApproval` 恒 true + 副作用注册 `ApprovalGuard` 记录（keyed toolCallId，keep-first 绝对，跨两调存活）；`execute` 仅二调
+> （已批准 + ai@6 验签）跑 `guard.verify`(expiry/hash)→domain 写→审计。**两层正交 guard**：(a) ai@6 `experimental_toolApprovalSecret`
+> HMAC **绑 approvalId+toolCallId+toolName+input**（核 ai dist 确认 → 换料即 `InvalidToolApprovalSignatureError`，execute 前拒）；
+> (b) domain `ApprovalGuard`（`security/approval.ts`，独有 = expiry[ai@6 无] + 审计 id + 防御纵深）。审计：`chat_tool_call` 加
+> `approval_status`/`approval_hash`（`user_edited_input_json` v3 已存在）→ `CHAT_DB_VERSION 9→10`（additive ALTER + hasColumn +
+> 终态断言 + db.py 头注释 + test_chat seed DDL；NOT EXPECTED_DB_VERSION）。**eval R5 重对齐（rules.py 零改）**：recorder 适配层
+> `tests/agent_eval/recorder/ai_sdk_adapter.ts`（纯函数，结构对齐 ai@6 `ToolUIPart`）把 ai@6 tool parts → trace events
+> （write→`pending_confirmation` 同 tier、`output-available`→`tool_result`、首调 `approval-requested` 未决→`final.status='needs_confirmation'`、
+> read 绝不 pending）；fixture `runs/ai-sdk-approval.jsonl` 在未改 rules.py 下 hard_pass。
+>
+> **🔴 两处必须正视的契约差（architecture §13.10.2）**：① ai@6 `ToolApprovalResponse` **无 `editedInput`** 字段 + signed approval
+> 绑 input → **严格 approve/reject，原生不支持 edit-tier 改料**（03b 无 UI 编辑 → 不触发；**edit→重签是 Phase 04a 的核心活**）；
+> ② `sync_to_notion` 落地为 `email_resync` —— eval catalog（R5 冻结真源）+ legacy SSoT + parity 三者一致（catalog 有 `email_resync`
+> preview、无 `sync_to_notion`），dry-run-diff 富卡片留 04a。**🔴 ABI runner 陷阱（本 session 踩）**：全量 vitest 须 electron-as-node
+> runner（`ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron ./node_modules/vitest/vitest.mjs run`）—— 残留 node-ABI(147) 则 144 测
+> `ERR_DLOPEN_FAILED`，先 `pnpm run rebuild:electron` 还原 140；`backend_lifecycle > process.resourcesPath 缺失` 是 electron-as-node 唯一
+> 伪影（node runner 62/62 过，与 diff 无关，[[reference_vitest_better_sqlite3_abi_runner]]）。
+>
+> **验收**：typecheck(node+web) 0 · 全量 vitest **1786 passed**（+30）· `tests/agent_eval` **87**（+2，≥baseline）· `run_baseline --compare`
+> hard_pass **29==29** rc=0 · code-reviewer(opus) **APPROVE**（7 不变式全 PASS，0 BLOCKER/HIGH；1 MEDIUM=edit-tier 在 secret-on 下不可达
+> = 已文档化 fail-closed 04a 延后，3 LOW 全无需改）。落地见 [phase-03 §13](../chat-panel-ai-sdk-assistant-ui-refactor/phase-03-tool-registry.md#13-实现落地03b2026-06-24) + [architecture §13.10](../chat-panel-ai-sdk-assistant-ui-refactor/architecture.md#1310-phase-03b-落地2026-06-24write-tools-preview--hitl-approval)。原 /goal 备查于下。
+
+<details><summary>原 P4-Phase03b /goal（备查）</summary>
 
 ```
 开工先读：
@@ -387,6 +407,37 @@ ai@6 / @assistant-ui/react(+react-ai-sdk) / zod 已装（devDeps）；markdown �
   无 approval token 不能真实执行；typecheck 0 + test 无新增失败；tests/agent_eval ≥ baseline（R5 新 recorder 下）。
 本阶段不做：高风险外发 email_prepare_send/send_approved（04b 末，SendApprovalCard + content hash）/ 富 A2UI 卡片（04a）/ AG-UI。
 .env.example 同步登记新 flag。证据（approval flow trace + R5 重对齐 eval + parity）贴对话。完成用 codex 或 code-reviewer 过 diff 再收。
+```
+</details>
+
+### P4-Phase04a — Generative UI & A2UI 工具卡片（下一个 session）
+
+> 把 03b 的写工具 approval / tool result 从 generic trace 升级为 assistant-ui inline **A2UI 卡片**（ComponentRegistry +
+> DraftReplyCard / NotionSyncCard + generic fallback），gated `MAILAGENT_A2UI_TOOL_CARDS`（默认 off）。**核心 = 03b 留的
+> editedInput/re-sign gap**（architecture §13.10.2(1)：ai@6 signed approval 绑 input → 原生不支持 edit-tier 改料；本 phase 在
+> DraftReplyCard 编辑正文时**重签/re-issue approval** 使编辑后 input 经二调执行，保 R5 不破）。主要是**视图层**活（assistant-ui
+> Tool UI 卡渲染 A2UI payload，类比 Phase 01 view-layer，eval trace 理应不受影响）。**不做高风险外发**（SendApprovalCard +
+> email_prepare_send = 04b）/ 不接 AG-UI（05）/ 不 cutover（06）。
+> 可选先建子任务：`task.py create "chat-panel Phase 04a A2UI cards" --parent 06-23-agent-eval-memory-skill-assistant-ui-ai-sdk`。
+
+```
+开工先读：
+- docs/plans/chat-panel-ai-sdk-assistant-ui-refactor/{phase-04-generative-ui-hitl,phase-01-assistant-ui-shell,architecture,protocol-contracts}.md
+  （phase-04 §3 ComponentRegistry / §4 DraftReplyCard·NotionSyncCard / §7 UIMessage state→UI 状态表 / §8 legacy compat / §9 测试 / §10 验收 / §11 回滚；phase-01 §8 = 06-22 Phase 2 UX 诉求映射[tool timeline/thinking/confirmation polish/error recovery 由 assistant-ui+A2UI 承载]；**architecture §13.10.2(1) = 03b 留的 editedInput/re-sign gap = 本 phase 核心**、§13.10.3 = 两层 guard；protocol-contracts §3 = A2UIPayload 契约 / §7 = ToolApprovalRequest/Response payload + a2ui envelope）
+- frontend/src/ai-gateway/tools/{write.ts,types.ts,email.ts,report.ts,kos.ts}（03a/03b 工具：本 phase 在 tool result + approval-request 加可选 `a2ui` envelope payload[protocol §3/§7.3]，**不改执行/审批语义**）+ server.ts（approval-request part 经 streamText 已出，本 phase 不改两调 flow）
+- frontend/src/shared/assistant/{components,runtime,tools}（Phase 01 落地：headless primitives + MailAgentRuntimeProvider + 现 generic `tools.Fallback`/ToolTraceCard；本 phase 加 ComponentRegistry + 专用卡）+ AssistantUIChatPanel.tsx + 现 legacy ConfirmToolDialog fallback
+- frontend/src/electron/main/chat_db.ts 的 chat_tool_call（`ui_payload_json` 列若需则 bump CHAT_DB_VERSION 10→11 同纪律）+ frontend/src/ai-gateway/security/approval.ts（ApprovalGuard：re-sign/re-issue 时 edit-tier 已放宽 hash，本 phase 接 UI 编辑触发）
+前置已绿（引用即可，勿重验/重装）：Phase 03b ✅（5 write tools + needsApproval 两调 + ApprovalGuard + R5 adapter，commit `ae268c67`，architecture §13.10）；Phase 01 assistant-ui shell + generic ToolTraceCard fallback 已立；ai@6 内建 needsApproval/approval-request part + assistant-ui `hitl`/`makeAssistantToolUI`/`ToolApprovalResponse` 原语（architecture §13.1）。🔴 已知坑（沿用）：全量 vitest 须 **electron-as-node runner**（残留 node-ABI 先 `pnpm run rebuild:electron`）；assistant-ui Thread happy-dom 测试须 stub ResizeObserver/IntersectionObserver/scrollIntoView；flag 走 **per-flag vite define**（不用 envPrefix 防泄漏 CLI_API_KEY）；动 chat_db schema → bump CHAT_DB_VERSION（非 EXPECTED_DB_VERSION）+ db.py 头注释 + 终态断言 + test_chat.py seed DDL。
+
+/goal 完成 chat-panel Phase 04a（A2UI ComponentRegistry + 富工具卡片），gated MAILAGENT_A2UI_TOOL_CARDS（默认 off），产出可验证：
+(1) A2UI ComponentRegistry（frontend/src/shared/assistant/tools/）：createComponentRegistry + A2UIPayload 类型（protocol §3）+ registerToolUIs；已注册工具渲专用卡、未注册走 generic ToolTraceCard fallback、**registry miss 不阻断对话**；
+(2) 富卡片接 03b 写工具的 approval-request + tool-result part（assistant-ui makeAssistantToolUI/hitl 原语）：DraftReplyCard（email_draft_reply, edit tier — 预览正文 + **可编辑 markdown** + 创建前确认 + 成功展 draft id/mailbox）/ NotionSyncCard（email_resync/sync — 目标 db·page + property mapping + conflict warning）/ generic 审批卡（flag/archive/pin preview）；tool result 的 a2ui payload → 卡片渲染；
+(3) **edit → re-sign approval（03b 留的 gap，architecture §13.10.2(1)）**：用户在 DraftReplyCard 改正文 → 前端重新发起 approval 使 ai@6 签名对编辑后 input 有效（重签/re-issue approval-request，或域内 re-approve），编辑后仍经 needsApproval 二调执行；**保 R5 不破**（edited input 仍 pending_confirmation→tool_result，recorder 适配层 userEdited 已就位）；
+(4) audit：A2UI payload 进 chat_tool_call.ui_payload_json（若加列 → bump CHAT_DB_VERSION 10→11 同纪律）；
+(5) 测试：assistant/tools/{ComponentRegistry(hit/miss/fallback), DraftReplyCard(render + edit→re-sign), NotionSyncCard}.test.tsx + a2ui schema invalid fallback + edit→re-sign 保 R5 fixture + tests/agent_eval ≥ baseline（view-layer 理应不影响 trace；edit→re-sign 的 trace 仍 R5 valid，跑兜底）。
+验收（phase-04 §10）：MAILAGENT_A2UI_TOOL_CARDS=1 下 tool cards 正常渲染；email_draft_reply 可编辑后创建草稿（edit→re-sign 真生效）；registry miss 不阻断；flag-off（默认）走 generic ToolTraceCard 字节级不变；typecheck 0 + test 无新增失败；tests/agent_eval ≥ baseline。
+本阶段不做：高风险外发 SendApprovalCard + email_prepare_send/send_approved（04b 末，content hash + idempotency）/ AG-UI（05）/ cutover 删 legacy（06）。
+.env.example 登记 MAILAGENT_A2UI_TOOL_CARDS。证据（卡片截图 + edit→re-sign approval flow trace + R5 eval + 测试）贴对话。完成用 codex 或 code-reviewer 过 diff 再收。
 ```
 
 ### P4-Phase03+ — 按 chat-panel roadmap §4 PR 拆分逐 phase 推进
