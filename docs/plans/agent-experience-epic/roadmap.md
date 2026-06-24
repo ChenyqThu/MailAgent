@@ -101,19 +101,21 @@ P0 止血 ✅ ── P1 eval 固化 ──┬─ P2 内核(memory+skill) ──�
 
 = `docs/plans/chat-panel-ai-sdk-assistant-ui-refactor/` 全量 7 phase。assistant-ui（唯一视图层）+ Vercel AI SDK Gateway（Node 编排层）。**每个 phase 验收叠加一条：跑通 `tests/agent_eval` 27-task baseline 不回退。**
 
-**phase 顺序（chat-panel roadmap §8 最小可用路径）：**
+**phase 顺序（实际落地序，chat-panel roadmap §8）：**
 ```txt
-00 Research&Spike → 01 assistant-ui Shell → 02 AI SDK Gateway
-  → 03a read tools → 04a A2UI cards → 04b high-risk approval → 03b write tools → 06 cutover
-(05 AG-UI mirror 可并行，不阻塞主线)
+00 Spike ✅ → 01 Shell ✅ → 02 Gateway ✅ → 03a read ✅ → 03b write ✅ → 04a A2UI cards ✅
+  → 04b high-risk send ✅ → 05 AG-UI mirror（旁路，进行中选定）
+  → 〔AI SDK 生产 parity：standing-context 注入 + 会话重载 = cutover 真前置〕→ 06 cutover
 ```
+> 🔴 05（AG-UI）是互操作旁路、**不解锁 cutover**；06 切流前必须先补「AI SDK 生产 parity」（AI SDK 路径当前 context-light，见进度表 P4 注 + phase-06 §2）。
 
 **关键门控（叠加在 chat-panel 各 phase 验收之上）：**
 - [x] **Phase 00 先行 gate**（✅ 2026-06-23，裁决 **GO**）：assistant-ui 视觉 parity（token/主题三态/6 accent，4 截图）PoC + Node AI SDK Gateway 嵌入 main PoC（`/health`+echo+真实 streamText+abort，harness **4/4 PASS**）通过；第三进程成本走「嵌入 main」近零。证据见 chat-panel [architecture.md §13](../chat-panel-ai-sdk-assistant-ui-refactor/architecture.md) / [roadmap §10](../chat-panel-ai-sdk-assistant-ui-refactor/roadmap.md)。→ 决定推进 01→06。
 - [x] **Phase 01 assistant-ui Shell**（✅ 2026-06-23，commit `b82ee24e`，全程 flag-off）：`frontend/src/shared/assistant/` headless primitives + MailAgent token，legacy ExternalStore adapter 喂 `useEmailChat`（**非** AI SDK），AIChatPanel 经 `lazy()` flag 分流（flag-off 字节级一致），删 Phase 00 PoC。验收 typecheck 0 / vitest 1700·0fail（+22）/ agent_eval 85（≥baseline，view-only）/ 4 组 parity 截图 / 不新增 provider 路径；code-reviewer(opus) APPROVE。落地结论见 chat-panel [phase-01 §9](../chat-panel-ai-sdk-assistant-ui-refactor/phase-01-assistant-ui-shell.md)。
-- [ ] read tools / write tools 迁移后，跑同一套 `tests/agent_eval` ≥ baseline（golden fixtures 防 parity 漂移）。
-- [ ] 高风险工具：`email_prepare_send` 无 approval token 不能真实发送；外发绑 content hash + approval id + expiry + idempotency；server-side guard 二次校验。
-- [ ] approval 心智模型从 `awaitConfirmation` 迁到 AI SDK two-call needsApproval/response，eval R5 重新对齐。
+- [x] read tools / write tools 迁移后，跑同一套 `tests/agent_eval` ≥ baseline（golden fixtures 防 parity 漂移）。（03a/03b/04a/04b ✅；eval 89 ≥ baseline、`run_baseline --compare` 29==29）
+- [x] 高风险工具：`email_prepare_send` 无 approval token 不能真实发送；外发绑 content hash + approval id + expiry + idempotency；server-side guard 二次校验。（**04b ✅** `66d1b489`：双 guard〔gateway `consume` 一次性幂等 + content hash ↔ Python 签名 + `SendLedger.reserve` 在 send 前 fail-closed〕+ 真发 dogfood 落 Sent + replay 拒）
+- [x] approval 心智模型从 `awaitConfirmation` 迁到 AI SDK two-call needsApproval/response，eval R5 重新对齐。（03b recorder 适配层 + 04a/04b fixture，rules.py 零改）
+- [ ] **🔴 cutover 前置（AG-UI 05 不解锁）**：standing-context 注入（SOUL/AGENT/RULES/USER + memory_summary + skill 能力 + 邮件/anchor 上下文 → AI SDK 路径，当前 context-light）+ 会话重载接线（prior `ui_message_json` → `useChatRuntime({messages})`，§13.8.5）+ body cap 提升 + remote-web CORS 收紧。**05 之后的「AI SDK 生产 parity」phase 做**。
 - [ ] 旧会话可读（UIMessage 双写 + legacy mapper）；Gateway 不可用自动降级 legacy + 非阻断提示。
 - [ ] cutover 前 AI SDK 新会话连续 dogfood 7 天无 P0/P1（chat-panel phase-06 §8）。
 
@@ -139,4 +141,4 @@ P0 止血 ✅ ── P1 eval 固化 ──┬─ P2 内核(memory+skill) ──�
 | P1 eval 固化 | ✅ 完成（commit `7a74a922` 推送 origin；85 passed 0.1s 零-LLM；脱敏审计零命中；CLAUDE.md 已登记） |
 | P2 内核 | ✅ 完成（P2a `7c93c3be` + P2b `19b3f381` + P2c `ef9115d8` + P2d `c9e0b8c5`；eval 36 tasks/hard_pass 29↑23 零回退；pytest 85 + vitest 151 + typecheck node+web 0；code-reviewer(opus) APPROVE 6/6 护栏） |
 | P3 重定向 | ✅ 文档落地（2026-06-23）：chat-panel phase-01 §8 + phase-04 §12 映射表 / 06-22 Phase 2 superseded 指针 + fix-now 清单（F1/F2/F3）；纯文档零代码 |
-| P4 换引擎 | ◐ 进行中：Phase 00 spike ✅ GO（`bc5c1e80`）+ **01 Shell ✅**（`b82ee24e`）+ **02 AI SDK Gateway ✅**（`a6d189ac`）+ **03a read tools ✅**（vitest 1756、eval 85）+ **03b write tools + HITL approval ✅**（2026-06-24，`ae268c67`，flag-off：5 写工具 + needsApproval 两调 + 两层 guard[ai@6 签名 + domain ApprovalGuard id/hash/expiry] + R5 recorder 重对齐 rules 零改；vitest 1786、eval 87≥baseline、reviewer APPROVE）+ **04a A2UI 富工具卡片 + edit→re-approve ✅**（2026-06-24，`09424fd4`，flag-off `MAILAGENT_A2UI_TOOL_CARDS`：ComponentRegistry + DraftReplyCard[可编辑]/NotionSyncCard/通用审批卡 + 域内 re-approve 侧信道[编辑不进 ai@6 history input、secret 保持 on] + ui_payload_json[CHAT_DB_VERSION 11]；vitest 1828、eval 88≥baseline、reviewer APPROVE 6 不变式）；**Phase 04b 高风险外发 SendApprovalCard + email_prepare_send 待开工**（goal-prompts.md P4-Phase04b） |
+| P4 换引擎 | ◐ 进行中：Phase 00 spike ✅ GO（`bc5c1e80`）+ **01 Shell ✅**（`b82ee24e`）+ **02 AI SDK Gateway ✅**（`a6d189ac`）+ **03a read tools ✅**（vitest 1756、eval 85）+ **03b write tools + HITL approval ✅**（2026-06-24，`ae268c67`，flag-off：5 写工具 + needsApproval 两调 + 两层 guard[ai@6 签名 + domain ApprovalGuard id/hash/expiry] + R5 recorder 重对齐 rules 零改；vitest 1786、eval 87≥baseline、reviewer APPROVE）+ **04a A2UI 富工具卡片 + edit→re-approve ✅**（2026-06-24，`09424fd4`，flag-off `MAILAGENT_A2UI_TOOL_CARDS`：ComponentRegistry + DraftReplyCard[可编辑]/NotionSyncCard/通用审批卡 + 域内 re-approve 侧信道[编辑不进 ai@6 history input、secret 保持 on] + ui_payload_json[CHAT_DB_VERSION 11]；vitest 1828、eval 88≥baseline、reviewer APPROVE 6 不变式）+ **04b 高风险外发 email_prepare_send + SendApprovalCard + 双 guard ✅**（2026-06-25，`66d1b489`，flag-off `MAILAGENT_AI_SDK_SEND_TOOL`：blocking send 经人工确认 + gateway〔consume 幂等 + content hash〕↔Python〔签名 + SendLedger reserve fail-closed〕双 guard，跨语言 hash golden 两侧断言，CHAT_DB_VERSION 12，catalog gateway_only；vitest 1856、eval 89、compare 29==29、rules.py 零改、真发 dogfood 落 Sent、reviewer APPROVE 9 不变式）；**Phase 05 AG-UI interop mirror 待开工**（goal-prompts.md P4-Phase05，gated `MAILAGENT_AG_UI_MIRROR`）。**🔴 cutover〔06〕真前置 = standing-context 注入 + 会话重载（AI SDK 路径当前 context-light），05 AG-UI 旁路不解锁切流** |

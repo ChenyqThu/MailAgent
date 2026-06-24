@@ -448,20 +448,27 @@ ai@6 / @assistant-ui/react(+react-ai-sdk) / zod 已装（devDeps）；markdown �
 ```
 </details>
 
-### P4-Phase04b — 高风险外发 SendApprovalCard + email_prepare_send（下一个 session）
+### P4-Phase04b — 高风险外发 SendApprovalCard + email_prepare_send ✅ 已落地（2026-06-25, commit `66d1b489`, flag-off `MAILAGENT_AI_SDK_SEND_TOOL`）
 
-> 04a 把 preview/edit 写工具升级为富卡片；04b 是**最后一道高风险闸**：引入**真实外发**（`email_prepare_send` blocking
-> tier + 真 SMTP send），用 `SendApprovalCard`（To/CC/BCC/Subject/Body/附件 + 外部收件人·敏感词 warning + expiry
-> countdown）做最终人工确认，并叠 **content hash + idempotency + 双 guard**（Gateway ApprovalService + Python domain
-> send ledger）。gated（建议 `MAILAGENT_AI_SDK_SEND_TOOL`，默认 off + 须 03b/04a flag 同开）。
-> **🔴 最大 landmine = eval 安全地板张力**：当前 `tool_catalog.json` 的 `no_send_tool` 明写「**没有** send / 硬删 /
-> reply-all-send 工具，最外向是 email_draft_reply（只草拟不发）」，且 R2 安全任务（AGT-SAFETY-*/AGT-ACTION-001
-> forbidden_tools 含 `email_send`）以此为底。新增真实 send 工具 = 动这条地板 —— 必须：新工具名**不叫 `email_send`**
-> （那是 R2 禁用名）、是 blocking tier **永远** needs explicit human approval（绝不 auto-send）、catalog/safety rubric
-> 同步更新且 R2/R5 baseline **零回退**。catalog 改动遇 `materialize_ref(main)` 提交序坑（见 [[P2d]]：commit 到 main 后
-> catalog 比对才全绿）。**🔴 真实 SMTP 依赖**：复用既有 compose send 路径（`feat/island-p0-fixes` 的真实 SMTP，serve-api
-> 写端点 + MailWriteService），未 dogfood 过 → 04b 须真发一封自测信验收（高风险，dogfood gate）。
-> 可选先建子任务：`task.py create "chat-panel Phase 04b send approval" --parent 06-23-agent-eval-memory-skill-assistant-ui-ai-sdk`。
+> **DONE**：唯一真发信工具 `email_prepare_send`（blocking tier，needsApproval 恒 true，**工具名刻意不叫 email_send**=R2 禁裸发名）经
+> SendApprovalCard 人工确认 + **双 guard** 才走真实 SMTP。新文件：`ai-gateway/{security/sendToken.ts,tools/send.ts}` +
+> `shared/assistant/tools/{security/hashOutboundPayload.ts[纯，renderer 安全],mail/SendApprovalCard.tsx[To/CC/BCC/Subject/Body 可编辑 +
+> 外部/敏感词 warning + 审批倒计时 + edit→re-approve 复用 04a 侧信道重算 hash]}` + `src/services/send_guard.py` + `POST /api/email/send-approved`。
+> **🔴 跨语言 content hash**=行分隔规范串（**刻意非 JSON**，避键序/转义漂移）TS `canonicalizeOutbound`↔Python `canonicalize_outbound`，golden
+> `f203073…` 两侧对同一 payload 断言（锁「canonical 漂移→每封拒发」）。**🔴 双 guard ordering**：Python `SendLedger.reserve` 在
+> `MailWriteService.send` **之前**（replay/并发先拒，fail-closed）+ gateway `ApprovalGuard.consume`（一次性 usedAt→E_APPROVAL_USED）。**🔴 risk
+> 双词汇**（沿用 03b sync_to_notion→email_resync 先例）：gateway/A2UI=`blocking`，持久化/eval/recorder=`edit`（chat_tool_call CHECK + catalog
+> 只认 silent/preview/edit），`auditedWriteTool.risk` 类型收窄 `Exclude<…,'blocking'>`。**🔴 HMAC key=复用 local API token**（main-only，零新增密钥）。
+> **🔴 eval gateway_only**：catalog 加 `email_prepare_send` 须标 `gateway_only:true`（无 legacy builtin 源，否则 `test_catalog_in_sync_with_main_source`
+> DRIFT），validate_catalog 豁免其 extra+count parity 但 legacy 仍严格；**新 task 须给 baseline trace**（run_baseline `validate_all` 强制，否则「Refusing
+> to score」），AGT-ACTION-004 baseline 落**新文件** `baselines/phase04b.jsonl`（保 v0.13.0 冻结，compare 仍 29==29）。chat_tool_call+`content_hash`/
+> `idempotency_key`→`CHAT_DB_VERSION 11→12`（不动 EXPECTED_DB_VERSION）；send_ledger=sync_store.db feature-owned `CREATE IF NOT EXISTS`（不 bump
+> DB_VERSION）。验收：typecheck 0 · vitest **1856**（唯一 fail=backend_lifecycle resourcesPath electron-as-node 伪影，node runner 62/62 过）·
+> test_send_guard 9 · agent_eval **89** · compare **29==29** · **真发自测信 dogfood**（`scripts/dev/dogfood_send_approved_04b.py`：SENT + IMAP
+> 实测落 Sent + replay E_SEND_ALREADY_SENT）· 卡片截图 dark+light · **rules.py 零改** · code-reviewer(opus) **APPROVE**（9 不变式全 PASS，0
+> CRITICAL/HIGH，MEDIUM mark_sent 已改 best-effort）。落地见 [architecture §13.12](../chat-panel-ai-sdk-assistant-ui-refactor/architecture.md#1312-phase-04b-落地2026-06-25高风险外发-email_prepare_send--sendapprovalcard--双-guard)。原 /goal 备查于下。
+
+<details><summary>原 P4-Phase04b /goal（备查）</summary>
 
 ```
 开工先读：
@@ -483,6 +490,43 @@ ai@6 / @assistant-ui/react(+react-ai-sdk) / zod 已装（devDeps）；markdown �
 验收（phase-04 §10）：email_prepare_send 无 approval / hash mismatch / idempotency 重放 均不能真实发送；SendApprovalCard 外部收件人 warning 正常；双 guard 任一失败邮件不发；flag-off（默认）字节级不变；typecheck 0 + test 无新增失败；tests/agent_eval ≥ baseline；真发自测信成功并落 Sent。
 本阶段不做：AG-UI mirror（05）/ cutover 删 legacy harness/UI（06）/ remote-web 暴露面（resolve+send 端点 loopback CORS 收紧与 06 同批）。
 .env.example 登记 MAILAGENT_AI_SDK_SEND_TOOL。证据（SendApprovalCard 截图 + 真发自测信 trace + 双 guard 拒发用例 + R5 eval + 测试）贴对话。完成用 codex 或 code-reviewer 过 diff 再收。
+```
+
+</details>
+
+### P4-Phase05 — AG-UI Interop mirror（下一个 session）
+
+> 04b 把高风险外发也接进了 AI SDK Gateway；05 是**互操作旁路**：把已稳定的 AI SDK UIMessage / tool parts / approval /
+> context snapshot 映射成标准 **AG-UI event stream**（`/api/ai/agui/chat`），供外部 agent client / CopilotKit 生态 + 标准
+> run lifecycle / interrupt / state snapshot / replay 用。gated `MAILAGENT_AG_UI_MIRROR`（默认 off）。**AG-UI 不是产品主
+> runtime、不改 canonical persistence、不重实现工具**（architecture §9 / phase-05 §2）。
+> **🔴 cutover（06）真正前置 ≠ AG-UI**：核实过 AI SDK chat 路径目前 **context-light** —— ① **standing-context 未注入**
+> （SOUL/AGENT/RULES/USER + memory_summary + skill 能力 + 当前邮件/anchor 上下文只在 legacy `platform.ts` 组装，
+> `useMailAgentAiSdkRuntime` transport 只发 `{sessionId,model}`，`server.ts` 的 system 无人填）；② **会话重载未接线**
+> （prior `ui_message_json` 未喂 `useChatRuntime({messages})`，§13.8.5）。这两项 + body cap + remote-web CORS 是 cutover
+> 前置（phase-06 §2），**AG-UI 旁路不解锁切流**；05 之后须补「AI SDK 生产 parity」再 06。本 phase 只做 AG-UI mirror。
+> **🔴 先确认 AG-UI 官方包/版本/类型**（`@ag-ui/*` core/client + assistant-ui AG-UI runtime 适配如 `@assistant-ui/react-ag-ui`
+> 是否存在/版本，依据=npm view + 包内 `.d.ts`，非凭记忆；若生态未就绪则范围降为「Gateway 侧 event adapter + golden
+> snapshot 测试」，前端 smoke 标可选），装 devDeps。
+
+```
+开工先读：
+- docs/plans/chat-panel-ai-sdk-assistant-ui-refactor/{phase-05-ag-ui-interop,architecture,protocol-contracts}.md
+  （phase-05 §3 新增目录[agui/{eventMapper,aguiRoute,stateSnapshot,interruptMapper}] / §4 endpoint / §5 event mapping 表 / §6 state snapshot[MailAgentAgUiState] / §7 interrupt mapping[approval→interrupt、interrupt response→ToolApprovalResponse] / §8 assistant-ui AG-UI runtime smoke / §9 测试 / §10 验收 / §11 回滚；architecture §9 = AG-UI 位置[旁路 mirror 非第一阶段主路径] / §13.8.1 = /api/ai/chat 现状[pipeUIMessageStreamToResponse] / §13.12 = 04b 双 guard approval 现状；protocol-contracts §8 = AG-UI mirror event 映射表 / §7 = ToolApprovalRequest/Response payload[interrupt 复用]）
+- frontend/src/ai-gateway/{server.ts,config.ts}（02/03a/03b/04a/04b 纯核：streamText + tools + approval + pipeUIMessageStreamToResponse 在此；本 phase 加 /api/ai/agui/chat 旁路 endpoint —— **复用同一 streamText + tools + 04b 双 guard approval，只换 output 编码器为 AG-UI event**，勿 import electron/chat_db，agui route/adapter 经 cfg 注入）+ ai_gateway_lifecycle.ts（wrapper：本 phase flag-gate AG-UI route）
+- frontend/src/shared/assistant/runtime/{useMailAgentAiSdkRuntime.ts,MailAgentRuntimeProvider.tsx,flags.ts}（01/02 落地：AI SDK runtime；本 phase 加**可选** aguiRuntimeProvider 仅 smoke 验互操作，非默认 runtime）
+- frontend/src/ai-gateway/security/{approval.ts,sendToken.ts}（04b 双 guard：AG-UI interrupt 往返必须复用 ApprovalGuard.verify/consume + content hash + idempotency，**绝不另开绕过外发的路径**）
+前置已绿（引用即可，勿重验/重装）：Phase 04b ✅（email_prepare_send + 双 guard + content hash + idempotency，commit `66d1b489`，architecture §13.12）；02 Gateway 纯核 streamText + UIMessage 流；03a/03b read+write tools + 04a/04b approval part 已在 streamText 输出。🔴 已知坑（沿用）：Gateway 纯核（agui adapter/route 经 cfg 注入，不 import electron）；flag 走 per-flag vite define；全量 vitest 须 electron-as-node runner（backend_lifecycle resourcesPath 唯一伪影 node runner 全过）；若动 chat_db schema → bump CHAT_DB_VERSION（非 EXPECTED_DB_VERSION）—— 但 AG-UI 旁路理应零 schema 改动。
+
+/goal 完成 chat-panel Phase 05（AG-UI interop mirror），gated MAILAGENT_AG_UI_MIRROR（默认 off，不影响 AI SDK runtime 主路径），产出可验证：
+(1) AG-UI event adapter（frontend/src/ai-gateway/agui/）：eventMapper（AI SDK canonical run / UIMessage parts → AG-UI RUN_STARTED / TEXT_MESSAGE_START·content·END / TOOL_CALL_START+args / TOOL_CALL_RESULT / STATE_SNAPSHOT / RUN_FINISHED / RUN_ERROR，protocol-contracts §8 表）+ interruptMapper（approval-request → AG-UI interrupt/requires-action[带 toolCallId/input/a2ui/risk/expiresAt]，interrupt response → ToolApprovalResponsePayload）+ stateSnapshot（MailAgentAgUiState：mailagentContext + thread{sessionId,anchorType,anchorId} + capabilities{enabledTools,enabledSkills,highRiskApprovalRequired:true}；**不塞完整邮件正文（大正文仍截断）、token/provider key 绝不进 state**）；
+(2) endpoint POST /api/ai/agui/chat（SSE AG-UI event stream）：**复用同一 streamText + tools + 04b 双 guard approval**（不重实现工具、不绕过 content hash/idempotency），仅把 output 经 AG-UI 编码器；flag-gated，flag-off 不注册路由（默认行为字节级不变）；
+(3) approval interrupt 往返：高风险外发 / 写工具 approval-request → AG-UI interrupt → interrupt response → 复用 03b/04b approval 二调（ApprovalGuard.verify/consume + content hash + idempotency，**任一失败邮件/写不发生**，与 /api/ai/chat 同一守卫）；
+(4) 可选 assistant-ui AG-UI runtime smoke（useAgUiRuntime/HttpAgent 指向 /api/ai/agui/chat）渲一条基础对话 + 一条 tool call + 一条 approval，证互操作（**非默认产品 runtime**；若 assistant-ui AG-UI 适配生态未就绪 → 标可选、以 Gateway 侧 event golden snapshot 为主验收）；
+(5) 测试：ai-gateway/agui/{eventMapper,interruptMapper,stateSnapshot}.test.ts（event 顺序 golden snapshot / tool args+result / approval interrupt 往返 / state snapshot 不含正文·token / error 映射）+（可选）e2e chat_agui_smoke。
+验收（phase-05 §10）：MAILAGENT_AG_UI_MIRROR=1 下 endpoint 可用；不影响 AI SDK runtime 主路径（flag-off 字节级不变）；基础对话 / tool call / approval 三场景过 AG-UI smoke（或 Gateway 侧 golden snapshot）；AG-UI event sequence 有 golden snapshot；approval 经 AG-UI 仍走 04b 双 guard（**无静默外发路径**）；typecheck 0 + test 无新增失败；tests/agent_eval ≥ baseline（AG-UI 旁路天然不影响 legacy harness trace，跑一次兜底）。
+本阶段不做：把 canonical persistence 改成 AG-UI event log / 把 assistant-ui 默认 runtime 切 AG-UI / 重实现 tools / **cutover（06）**；**standing-context 注入 + 会话重载 = cutover 前置，留 05 之后的「AI SDK 生产 parity」phase，不在本 phase**。
+.env.example 登记 MAILAGENT_AG_UI_MIRROR。证据（AG-UI event golden snapshot + approval interrupt 往返 + smoke 截图/说明 + 测试）贴对话。完成用 codex 或 code-reviewer 过 diff 再收。
 ```
 
 ### P4-Phase03+ — 按 chat-panel roadmap §4 PR 拆分逐 phase 推进
