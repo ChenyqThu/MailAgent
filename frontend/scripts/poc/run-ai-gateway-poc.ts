@@ -21,6 +21,8 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { startAiGatewayServer } from '../../src/ai-gateway/server'
+import { MailAgentDomainClient } from '../../src/ai-gateway/python/domainClient'
+import { buildGatewayTools } from '../../src/ai-gateway/tools'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = join(__dirname, '..', '..', '..')
@@ -190,6 +192,89 @@ async function main(): Promise<void> {
         } else {
           record('4-streamText', 'FAIL', `空文本（${chatFrames.length} 帧）`)
         }
+      }
+    }
+
+    // [5] Phase 03a — read-tool loop end-to-end: a gateway with email_search bound to
+    // a MOCK domain (canned email, no real serve-api) + the REAL model. The model
+    // should call email_search, get the result, and answer — exercising the full
+    // experimental_context → tool execute → audit → persistTurn wiring with a real
+    // model (the part a mock model can't reliably drive).
+    if (!apiKey) {
+      record('5-readtool-loop', 'SKIP', '无 LLM_API_KEY，跳过真实工具循环')
+    } else {
+      const cannedEmail = {
+        internal_id: 42,
+        subject: 'redis 超时排查',
+        sender: 'alice@x.test',
+        date_received: '2026-06-20'
+      }
+      const toolDomain = new MailAgentDomainClient({
+        baseUrl: 'http://127.0.0.1:1/api',
+        localToken: null,
+        fetchImpl: (async () =>
+          new Response(JSON.stringify({ status: 'success', data: [cannedEmail] }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' }
+          })) as unknown as typeof fetch
+      })
+      const toolPersisted: Array<Record<string, unknown>> = []
+      const toolHandle = await startAiGatewayServer({
+        port: 0,
+        apiKey,
+        baseUrl,
+        model,
+        buildTools: (collector) => buildGatewayTools({ domain: toolDomain }, collector),
+        persistTurn: (turn) => {
+          toolPersisted.push(turn as unknown as Record<string, unknown>)
+        }
+      })
+      try {
+        const toolRes = await fetch(`http://127.0.0.1:${toolHandle.port}/api/ai/chat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+          body: JSON.stringify({
+            sessionId: 7,
+            model,
+            messages: [
+              {
+                id: 'u1',
+                role: 'user',
+                parts: [
+                  {
+                    type: 'text',
+                    text: '用 email_search 工具搜索主题包含 "redis" 的邮件，然后用一句话告诉我找到了什么主题的邮件。'
+                  }
+                ]
+              }
+            ]
+          })
+        })
+        const frames = await readSse(toolRes)
+        const text = frames
+          .filter((f) => f.type === 'text-delta')
+          .map((f) => String(f.delta))
+          .join('')
+        const toolFrames = frames.filter((f) => String(f.type).startsWith('tool-'))
+        const calls = (toolPersisted[0]?.toolCalls ?? []) as Array<Record<string, unknown>>
+        const searchCall = calls.find((c) => c.toolName === 'email_search')
+        if (searchCall && searchCall.status === 'ok' && text.length > 0) {
+          record(
+            '5-readtool-loop',
+            'PASS',
+            `模型调 email_search（audit status=ok, ${toolFrames.length} 个 tool 帧）→ 答「${text}」`
+          )
+        } else if (calls.length === 0 && toolFrames.length === 0) {
+          record('5-readtool-loop', 'FAIL', `模型未调用工具（${frames.length} 帧，答「${text}」）`)
+        } else {
+          record(
+            '5-readtool-loop',
+            'FAIL',
+            `工具调用异常：audit=${JSON.stringify(calls)} text="${text}"`
+          )
+        }
+      } finally {
+        await toolHandle.close()
       }
     }
   } finally {

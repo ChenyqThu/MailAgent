@@ -1,7 +1,7 @@
 # Phase 03 — Tool Registry Migration
 
-> status: planning
-> last-verified: 2026-06-22
+> status: **03a read tools ✅ done（2026-06-24，flag-off）**；03b write tools + approval = 下一步。落地见 [§12](#12-实现落地03a2026-06-24) + [architecture §13.9](./architecture.md#139-phase-03a-落地2026-06-24read-tools-migration)。§1–§11 是规划层（实现前）。
+> last-verified: 2026-06-24
 > goal: 将 MailAgent agent tools 从 legacy harness registry 逐步迁移到 AI SDK Gateway tools，同时保持 Python domain service 权威。
 
 ## 1. 目标
@@ -231,3 +231,33 @@ MAILAGENT_AI_SDK_WRITE_TOOLS=0
 ```txt
 MAILAGENT_AI_SDK_DISABLED_TOOLS=email_archive,sync_to_notion
 ```
+
+---
+
+## 12. 实现落地（03a，2026-06-24）
+
+> 只迁 **read tools**，全程 flag-off。架构决策 + 踩坑见 [architecture §13.9](./architecture.md#139-phase-03a-落地2026-06-24read-tools-migration)。
+
+### 12.1 产出
+
+| 文件 | 职责 |
+|---|---|
+| `frontend/src/ai-gateway/python/domainClient.ts` | `MailAgentDomainClient`（纯 Node typed HTTP → serve-api read 端点 + `X-MailAgent-Local-Token` + envelope unwrap + E_NOT_FOUND→null + abort）|
+| `frontend/src/ai-gateway/tools/{schemas,types,email,kos,report,index}.ts` | zod schemas（镜像 legacy）+ `auditedReadTool`（execute+audit）+ 9 read 工具 + `buildGatewayTools`（read-only，write gate 占位 03b）|
+| `server.ts` / `config.ts` | `cfg.buildTools(auditEntries)`（闭包绑 collector）+ `streamText({tools, stopWhen})`，`auditEntries` 进 `persistTurn`；`AiGatewayConfig.buildTools/maxSteps` + `PersistTurnInput.toolCalls` |
+| `ai_gateway_lifecycle.ts` | 构造 DomainClient（`resolveApiPort` + `getLocalApiToken`）+ `buildGatewayTools` → `cfg.tools`；persistTurn 写 chat_tool_call（appendToolCall+updateToolCall）|
+| `frontend/tests/ai-gateway/{domainClient,tools/*}.test.ts` | 32 新测：HTTP/envelope/auth + 每工具 execute + audit + buildGatewayTools 闭包/read-only scope + **parity**（legacy vs gateway 关键字段一致）|
+
+迁移的 9 个 read 工具：`email_search`（metadata）/ `email_search_fulltext`（FTS）/ `email_get` / `email_body` / `email_list_thread` / `email_search_attachments` / `kos_query` / `report_list` / `report_get`。
+
+### 12.2 §10 验收（全 ✅，CRS 不可达项除外）
+
+- read tools 在 AI SDK runtime 下可用：harness `[5]`（真实 CRS 模型 + mock domain）证「问→调 email_search→audit status=ok→回答」；**本次 CRS 网关 transient 不可达（HTTP 000），[4]/[5] 待 CRS 恢复复跑**，代码正确（同一未改的 [4] 在 Phase 02 session CRS 可达时 PASS）。
+- ≥5 read scenario：parity + 单测覆盖 email_search/get/body/thread/attachments/kos/report ≥ 7。
+- write tools 未开 flag 不暴露：03a 不构建 write 工具（`buildGatewayTools` 只回 read；`MAILAGENT_AI_SDK_WRITE_TOOLS` 预留 03b）。
+- chat_tool_call 审计字段 ≥ legacy（tool_use_id/name/input/output/status/duration/confirmation_tier）。
+- `pnpm typecheck`(node+web) 0 · 全量 vitest **1756 passed**（+32）· `tests/agent_eval` **85**（≥baseline，AI SDK 路径 opt-in 不影响 legacy harness）。
+
+### 12.3 本阶段不做（→ 03b/04）
+
+write tools 执行 / approval 两次调用语义 + R5 recorder 重对齐 / A2UI 卡片 / AG-UI / 会话重载接进 runtime / standing-context 注入。

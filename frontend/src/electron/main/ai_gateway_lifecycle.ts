@@ -22,11 +22,24 @@ import { app } from 'electron'
 
 import { startAiGatewayServer, type AiGatewayHandle } from '../../ai-gateway/server'
 import { resolveAiGatewayPort, type PersistTurnInput } from '../../ai-gateway/config'
+import { MailAgentDomainClient } from '../../ai-gateway/python/domainClient'
+import { buildGatewayTools } from '../../ai-gateway/tools'
 import { extractTextFromUIMessage } from '@shared/assistant/uiMessage'
-import { appendMessage } from './chat_db'
+import { appendMessage, appendToolCall, updateToolCall } from './chat_db'
 import { getLlmApiKey, getLlmBaseUrl, getLlmModel } from './llm_settings'
+import { resolveApiPort } from './backend_lifecycle'
+import { getLocalApiToken } from './local_token'
 
 let _handle: AiGatewayHandle | null = null
+
+/** Mirror electron readEnvBool: only '1'/'true' (case-insensitive) → true; unset →
+ *  the supplied default; any other non-empty value → false. */
+function envBool(key: string, def: boolean): boolean {
+  const raw = process.env[key]
+  if (raw == null || raw === '') return def
+  const v = raw.trim().toLowerCase()
+  return v === '1' || v === 'true'
+}
 
 /**
  * Persist one finished AI SDK turn into ai_chat.db (dual-write). Best-effort:
@@ -47,7 +60,7 @@ function persistTurn(turn: PersistTurnInput): void {
       uiMessageJson: JSON.stringify(turn.userMessage)
     })
   }
-  appendMessage({
+  const assistant = appendMessage({
     sessionId: turn.sessionId,
     role: 'assistant',
     content: extractTextFromUIMessage(turn.responseMessage),
@@ -57,6 +70,20 @@ function persistTurn(turn: PersistTurnInput): void {
     tokensOutput: turn.usage?.outputTokens ?? null,
     uiMessageJson: JSON.stringify(turn.responseMessage)
   })
+  // Phase 03a — write a chat_tool_call audit row per read-tool call, keyed to the
+  // assistant message (same fields as the legacy harness dispatch: input/output/
+  // status/duration; confirmation_tier='silent' for read tools, no approval column).
+  for (const tc of turn.toolCalls ?? []) {
+    const { id } = appendToolCall({
+      messageId: assistant.id,
+      toolUseId: tc.toolUseId,
+      toolName: tc.toolName,
+      inputJson: tc.inputJson,
+      confirmationTier: 'silent',
+      status: tc.status
+    })
+    updateToolCall(id, { outputJson: tc.outputJson, durationMs: tc.durationMs })
+  }
 }
 
 /** Poll /health until it answers ok (or attempts exhausted). Confirms the embedded
@@ -86,12 +113,30 @@ async function pollHealth(port: number, attempts = 10): Promise<boolean> {
 export async function startEmbeddedAiGateway(): Promise<number | null> {
   if (_handle) return _handle.port
   const apiKey = await getLlmApiKey()
+  // Phase 03a — domain client → Python serve-api READ endpoints (loopback +
+  // same-machine local token, mirrors the renderer's auth leg). The read-tool
+  // registry binds to it; the gateway core never reaches SQLite directly.
+  const domain = new MailAgentDomainClient({
+    baseUrl: `http://127.0.0.1:${resolveApiPort()}/api`,
+    localToken: getLocalApiToken()
+  })
   const handle = await startAiGatewayServer({
     port: resolveAiGatewayPort(),
     baseUrl: getLlmBaseUrl(),
     apiKey,
     model: getLlmModel(),
-    persistTurn
+    persistTurn,
+    // Factory: the gateway builds the read tools per request bound to a fresh audit
+    // collector (closure). Reserved write gate is read-only in 03a (no write tools).
+    buildTools: (collector) =>
+      buildGatewayTools(
+        {
+          domain,
+          kosTimeDecayEnabled: envBool('MAILAGENT_KOS_TIME_DECAY_ENABLED', true),
+          writeToolsEnabled: envBool('MAILAGENT_AI_SDK_WRITE_TOOLS', false)
+        },
+        collector
+      )
   })
   _handle = handle
   const healthy = await pollHealth(handle.port)

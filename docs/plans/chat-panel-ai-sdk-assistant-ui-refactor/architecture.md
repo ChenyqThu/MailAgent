@@ -553,3 +553,32 @@ gateway harness `4/4 PASS`（含 `[4]` 经 CRS 真实 `streamText` → UIMessage
 - **会话重载接线延后**：`chatMessageToUIMessage` mapper 已实现 + 单测（写→重载 round-trip），但**尚未**接进 AI SDK runtime 的初始 `messages` —— 故 ai-sdk 模式下选已有会话当前是空线程、只渲染本次流式新轮次。把 `prior.map(chatMessageToUIMessage)` 喂 `useChatRuntime({messages})` 是 phase-03 工作（与「不强制旧会话全变 canonical」一致）。
 - **远程 Web 鉴权 / CORS 收紧**：Gateway 当前 `127.0.0.1` loopback-only + `ACAO:*`（仅方便 Electron 同源 + harness）。开 §4.2 远程 Web 面（phase-06+）前须加 Origin/loopback-token 校验 + `ACAO` 收紧到具体 renderer origin（防同机恶意页面驱动付费推理；key 不泄漏但配额可被烧）。
 - **请求体 64KB 上限**：`readJsonBody` 64KB cap，长多轮 `messages[]` / 大 context 超限会落 `400 E_INVALID_ARG`（hint 误导）。phase-03 加 standing-context + thread body 同传前，提上限（~1–2MB）或区分 `413 E_PAYLOAD_TOO_LARGE`。
+
+---
+
+## 13.9 Phase 03a 落地（2026-06-24，read tools migration）
+
+> 把 **9 个只读工具**从 legacy harness 迁到 AI SDK Gateway tools，经 `MailAgentDomainClient` → Python serve-api read 端点执行；Python domain service 仍是业务权威。全程 flag-off（read 工具随 Gateway flag 一起，默认整个 Gateway 关）。**只迁 read**：write/approval/A2UI/AG-UI 留 03b/04。
+
+### 13.9.1 形态（保持纯核 + 注入纪律）
+
+沿用 Phase 02 的「纯核 + 注入」范式（与 persistTurn/createModel 同纪律）：
+
+- **`frontend/src/ai-gateway/python/domainClient.ts`** — `MailAgentDomainClient`，纯 Node typed HTTP client（global fetch，零 electron/chat_db）。每方法映一个 serve-api read 端点，注入 `X-MailAgent-Local-Token` header（main-only token，renderer 永不接触），unwrap envelope（success→data / error→`DomainError{code}` / E_NOT_FOUND→null）。**不直接读 SQLite**。
+- **`frontend/src/ai-gateway/tools/`** — `tool({inputSchema:zod, execute})` ×9（email_search / email_search_fulltext / email_get / email_body / email_list_thread / email_search_attachments / kos_query / report_list / report_get）。zod schema + 描述 + output massage **逐字镜像 legacy**（parity）。`auditedReadTool(opts, collector)` 统一：execute → domain → 把一条 audit 条目（input/output/status/duration）push 进**闭包持有的 `collector`** → 抛错归一为 typed tool-error。**read 工具绝不 needsApproval**。
+- **`server.ts`** — `cfg.buildTools(auditEntries)` 用一个 per-request `auditEntries` 数组构建工具（闭包绑定）；非空时 `streamText({ tools, stopWhen: stepCountIs(maxSteps??8) })` 跑多步「调读工具→回答」；`auditEntries` 随 turn 进 `persistTurn`。无 tools → text-only（Phase 02 字节级行为）。
+- **`ai_gateway_lifecycle.ts`**（impure wrapper）— 构造 DomainClient（`baseUrl=127.0.0.1:{resolveApiPort()}/api` + `getLocalApiToken()`）+ `cfg.buildTools = (collector) => buildGatewayTools({domain, kosTimeDecayEnabled, writeToolsEnabled}, collector)`；persistTurn 捕获 assistant message id，对每条 `turn.toolCalls` 写 `appendToolCall`(silent)+`updateToolCall`(output/duration) → chat_tool_call（字段 ≥ legacy dispatch）。
+
+### 13.9.2 audit 心智模型差异（vs legacy harness）
+
+legacy harness 先建 streaming assistant row → 循环里 `appendToolCall`(running)→`updateToolCall`(ok/error) 实时写。AI SDK 路径里工具在 `streamText` 多步循环中执行、assistant message 在 onFinish 才落库，故改为：**工具把审计条目（含自测 duration）push 进一个闭包持有的 per-request `collector` → onFinish 持久化 assistant message 后一次性写 chat_tool_call**。最终行的字段（tool_use_id/tool_name/input/output/status/duration/confirmation_tier='silent'）与 legacy 对齐；read 工具无 approval 列（留 04b）。
+
+### 13.9.3 wire-param fidelity（spike 实测踩坑）
+
+serve-api read 端点的 query 参数名**不一致**，DomainClient 逐一硬编码以保 parity：`/email/list` 用 camelCase alias（`sinceDate`/`fromAddr`/`isRead`），`/email/search` 用 `q`/`since`/`until`，`/attachment/search` 用 `q`，`/reports` 用 `agentId`。（domainClient.test.ts 钉死。）
+
+### 13.9.4 已知 gap / 测试取舍
+
+- **audit 用闭包 collector，不用 `experimental_context`**（code-reviewer 标 MEDIUM 后采纳）：AI SDK 文档警告 `experimental_context` 应「treat as immutable」（可能 per-call clone/freeze → 静默丢审计）。改为 `cfg.buildTools(collector)` 每 request 建工具、闭包绑定一个 `collector` 数组，工具 push 进它——不依赖 SDK context 传递语义，且**可直接单测**（build tools + collector → execute → 断言 collector，无需跑完整 streamText tool loop）。`build.test.ts` 钉死这条 server.ts onFinish 路径。
+- **mock-model tool-loop 不可靠**：`MockLanguageModelV3`+`streamText` 在本仓难稳定触发客户端工具执行（流式 tool-call 协议 fiddly）。故 e2e 全链路（真实模型「调 email_search→answer」）走真实模型 harness `[5]`（gateway 带 read tools + mock domain + 真实 CRS，manual lane）；CI 侧由 56 个单测（domainClient + 每工具 execute + audit + buildGatewayTools 闭包 + **parity**：legacy vs gateway 关键字段一致）覆盖。
+- **会话重载接线**仍延后（§13.8.5）；standing-context system prompt 注入留 phase-03/04；write tools + approval（两次调用语义 + R5 recorder 重对齐）= 03b/04b。

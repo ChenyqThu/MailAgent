@@ -7,9 +7,14 @@
 // (electron/main/ai_gateway_lifecycle.ts) builds a concrete AiGatewayConfig; the
 // harness / vitest build a minimal one (in-memory persist + mock model).
 
-import type { LanguageModel } from 'ai'
+import type { LanguageModel, ToolSet } from 'ai'
 
 import type { MailAgentUIMessage } from '@shared/assistant/uiMessage'
+// 🔴 type-only import — fully erased, so config.ts keeps ZERO runtime dependency on
+// tools/types (which DOES import `tool` from 'ai'). index.ts statically imports
+// config.ts for resolveAiGatewayPort; this must never pull the heavy `ai` chunk into
+// the main bundle when MAILAGENT_AI_SDK_GATEWAY is off (Phase 02 invariant).
+import type { GatewayToolAuditEntry } from './tools/types'
 
 /** Default loopback port. serve-api=8200, local SSE gate=9200 — pick 8300 to dodge
  *  both. Overridable via env MAILAGENT_AI_GATEWAY_PORT (createWindow injects the
@@ -48,6 +53,10 @@ export interface PersistTurnInput {
   userMessage: MailAgentUIMessage | null
   responseMessage: MailAgentUIMessage
   usage?: { inputTokens?: number | null; outputTokens?: number | null }
+  /** Phase 03a — the read-tool calls executed this turn (collected by the gateway
+   *  via experimental_context). The wrapper writes each to chat_tool_call keyed to
+   *  the persisted assistant message. Empty / omitted when no tools ran. */
+  toolCalls?: GatewayToolAuditEntry[]
 }
 
 export interface AiGatewayConfig {
@@ -64,4 +73,14 @@ export interface AiGatewayConfig {
   /** Build the LanguageModel for a model id. Injected by tests (mock model); the
    *  default wires @ai-sdk/anthropic + the normalized baseURL + apiKey. */
   createModel?: (modelId: string) => LanguageModel
+  /** Phase 03a — factory that builds the AI SDK read tools bound to a per-request
+   *  audit collector (closure). The gateway calls it once per /api/ai/chat with a
+   *  fresh `collector` array, runs a multi-step tool loop (streamText { tools,
+   *  stopWhen }), and drains the collector into chat_tool_call in onFinish. Bound by
+   *  closure (NOT streamText experimental_context — see tools/types.ts) so audit is
+   *  robust + directly testable. Omitted / empty result → text-only (Phase 02
+   *  behaviour, byte-identical). */
+  buildTools?: (collector: GatewayToolAuditEntry[]) => ToolSet
+  /** Max tool-loop steps (stopWhen: stepCountIs). Default 8 (legacy AGENT_MAX_ITER). */
+  maxSteps?: number
 }

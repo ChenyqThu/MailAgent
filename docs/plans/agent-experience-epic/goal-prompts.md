@@ -299,14 +299,20 @@ ai@6 / @assistant-ui/react(+react-ai-sdk) / zod 已装（devDeps）；markdown �
 
 </details>
 
-### P4-Phase03a — Tool Registry Migration: read tools first（下一个 session）
+### P4-Phase03a — Tool Registry Migration: read tools first ✅ 已落地（2026-06-24，flag-off）
 
-> 把 **只读工具**（email_search / email_get / email_body / email_list_thread / email_search_attachments / kos_query
-> / report_list·report_get）从 legacy harness registry 迁到 **AI SDK Gateway tools**（`tool({inputSchema:zod, execute})`
-> 接进 Phase 02 `server.ts` 的 `streamText({tools})`），经 **MailAgentDomainClient**（typed HTTP → Python serve-api
-> read 端点）执行，Python domain service 仍是业务权威。**只迁 read，不启 write actions / 不接 approval / 不画 A2UI
-> 卡片 / 不接 AG-UI**（write=03b、approval=04b、A2UI=04a）。默认 flag off → 现有 chat 字节级不变；AI SDK 路径 opt-in。
-> 可选先建子任务：`task.py create "chat-panel Phase 03a read tools" --parent 06-23-agent-eval-memory-skill-assistant-ui-ai-sdk`。
+> 9 read 工具（email_search/_fulltext/get/body/list_thread/search_attachments + kos_query + report_list/get）迁 AI SDK
+> Gateway `tool({inputSchema:zod, execute})`，经 **`MailAgentDomainClient`**（纯 Node typed HTTP + `X-MailAgent-Local-Token`
+> + envelope unwrap + E_NOT_FOUND→null）→ serve-api read 端点；`server.ts` `cfg.buildTools(collector)` 每 request 建工具
+> （闭包绑 audit collector）+ `streamText({tools, stopWhen: stepCountIs(8)})` 多步循环 → `persistTurn` 写 chat_tool_call
+> （appendToolCall+updateToolCall，字段 ≥ legacy）。schema/描述/massage **逐字镜像 legacy**（parity 测试钉死）；read 绝不 needsApproval。
+> wrapper 构造 DomainClient（`resolveApiPort`+`getLocalApiToken`）+ `cfg.buildTools=(c)=>buildGatewayTools({...},c)`。**🔴 坑**：①
+> audit 不用 `experimental_context`（AI SDK「treat as immutable」可能 clone 丢审计 + 难测）→ **闭包 collector**（可直接单测）；
+> ② `MockLanguageModelV3`+streamText 难稳定触发工具执行 → 真实模型 harness `[5]` 证 e2e（CRS 不可达时待复跑）+ 56 单测兜 CI；
+> ③ 运行时 @shared 导入在 tsx harness 不解析 → email/kos 的 `buildSearchHint`/`rerankByRecency` 改相对路径。
+> 验收：typecheck 0 · vitest **1756**（+32）· agent_eval **85**（≥baseline）。落地见 [phase-03 §12](../chat-panel-ai-sdk-assistant-ui-refactor/phase-03-tool-registry.md#12-实现落地03a2026-06-24) + [architecture §13.9](../chat-panel-ai-sdk-assistant-ui-refactor/architecture.md#139-phase-03a-落地2026-06-24read-tools-migration)。
+
+<details><summary>原 P4-Phase03a /goal（备查）</summary>
 
 ```
 开工先读：
@@ -341,6 +347,46 @@ ai@6 / @assistant-ui/react(+react-ai-sdk) / zod 已装（devDeps）；markdown �
 本阶段不做：write tools 执行（03b）/ approval 两次调用语义 + R5 recorder 重对齐（04b）/ A2UI 卡片（04a）/ AG-UI。
 .env.example 若新增 flag（MAILAGENT_AI_SDK_WRITE_TOOLS 等）同步登记。证据（tool trace + parity 测试 + eval）贴对话。
 完成用 codex（codex-rescue）或 code-reviewer 过 diff 再收。
+```
+
+</details>
+
+### P4-Phase03b — write tools preview + HITL approval（下一个 session）
+
+> 把 **preview/edit 写工具**（email_flag / email_archive / email_pin / email_draft_reply / sync_to_notion preview）迁到
+> AI SDK Gateway tools，**默认需 approval**（`MAILAGENT_AI_SDK_WRITE_TOOLS` + `MAILAGENT_AI_SDK_HIGH_RISK_APPROVAL`，全默认 off）。
+> 核心 = AI SDK `needsApproval` **两次调用**心智模型（首调结束于 `tool-approval-request` part → 用户 approve/edit/reject →
+> 二调执行）取代 legacy `awaitConfirmation` 同进程 suspend；+ Python domain service 二次鉴权 guard；+ **eval R5 recorder
+> 重对齐**（architecture §13.4：把 AI SDK approval-request 映射成 trace 的 `pending_confirmation`，rules.py 零改，baseline 不回退）。
+> **不做高风险外发**（email_prepare_send/send_approved = 04b 末）/ 不画富 A2UI 卡片（04a，先 generic trace）/ 不接 AG-UI。
+> 可选先建子任务：`task.py create "chat-panel Phase 03b write tools approval" --parent 06-23-agent-eval-memory-skill-assistant-ui-ai-sdk`。
+
+```
+开工先读：
+- docs/plans/chat-panel-ai-sdk-assistant-ui-refactor/{phase-03-tool-registry,phase-04-generative-ui-hitl,architecture,protocol-contracts}.md
+  （phase-03 §2.2 = preview write 工具清单+迁移策略 / §6 = audit 的 approval_status 列 / §7 legacy 并存；phase-04 = HITL approval（SendApprovalCard/hash/expiry）；architecture §13.4 = approval 两次调用 vs awaitConfirmation 差异 + **eval R5 重对齐落点=recorder 适配层**、§13.9 = 03a read tools 落地纪律（纯核+注入+audit）；protocol-contracts §6.2 = Python write 端点契约、§7 = ToolApprovalRequest/Response payload 契约、§3 = A2UI approval envelope）
+- frontend/src/ai-gateway/{server.ts,config.ts,tools/*}（03a 落地：read 工具 + auditedReadTool + buildGatewayTools 的 writeToolsEnabled gate 占位在此；本 phase 加 write 工具 + needsApproval + 二调 flow）+ ai_gateway_lifecycle.ts（DomainClient 已建，本 phase 加 write 端点方法 + approval guard）
+- frontend/src/shared/chat/tools/builtin/write.ts（legacy 写工具 = schema/语义/confirmationTier SSoT，parity）+ confirmation.ts（legacy awaitConfirmation/userEdited 语义）+ src/api/routers/email.py（写端点：/{id}/flag · /archive · /pin · /draft；MailWriteService 二次校验）
+- tests/agent_eval/（R5 规则 + recorder-contract.md：approval-request→pending_confirmation 映射的重对齐落点）+ frontend/src/electron/main/chat_db.ts chat_tool_call（approval_status/approval_hash 若需则 bump CHAT_DB_VERSION）
+前置已绿（引用即可，勿重验/重装）：Phase 03a ✅（9 read 工具 + DomainClient + audit + parity，commit <03a>，architecture §13.9）；Gateway 纯核/注入 + audit 范式已立；ai@6 内建 needsApproval/InvalidToolApprovalSignatureError（architecture §13.1）。🔴 已知坑（沿用）：convertToModelMessages async 必 await；动 chat_db schema → bump CHAT_DB_VERSION（非 EXPECTED_DB_VERSION）+ db.py 头注释 + 改 schema_version 终态断言 + test_chat.py seed DDL；mock-model 难驱动 tool loop（用真实模型 harness + 单测/parity 兜 CI）。
+
+/goal 完成 chat-panel Phase 03b（write tools preview + HITL approval），产出可验证：
+(1) write-tool registry（preview/edit）：email_flag/email_archive/email_pin/email_draft_reply/sync_to_notion(preview)
+    用 tool({inputSchema:zod, needsApproval, execute}) 定义，gated MAILAGENT_AI_SDK_WRITE_TOOLS（默认 off）；经 DomainClient
+    → serve-api 写端点，Python domain service 二次鉴权；parity（legacy write result vs gateway）；
+(2) HITL approval（needsApproval 两次调用）：首调结束于 tool-approval-request part → 前端审批卡（先复用/generic）→
+    approve/edit/reject → 二调执行；approval id/hash/expiry guard（domain 侧 + ai@6 内建签名校验叠加）；
+(3) eval R5 重对齐（不回退判据）：recorder 适配层把 AI SDK approval-request 映射成 trace pending_confirmation（同
+    tool_use_id/tool_name/tier）、二调 output-available→tool_result、首调未决→final.status='needs_confirmation'；
+    **rules.py 零改**；tests/agent_eval baseline 在新 recorder 下重过不回退；
+(4) audit：write tool call 写 chat_tool_call（approval_status/approval_hash/user_edited_input_json；若加列→bump
+    CHAT_DB_VERSION 同纪律）；
+(5) 测试：ai-gateway/tools/{write_preview,approval}.test.ts（needsApproval 触发 / approve-edit-reject flow / hash
+    mismatch 拒 / domain guard / parity）+ R5 recorder 重对齐 fixture。
+验收：write tools 仅 flag-on 暴露 + 默认需 approval（无 silent 写）；approve 后二调真实写 + audit approval_status；
+  无 approval token 不能真实执行；typecheck 0 + test 无新增失败；tests/agent_eval ≥ baseline（R5 新 recorder 下）。
+本阶段不做：高风险外发 email_prepare_send/send_approved（04b 末，SendApprovalCard + content hash）/ 富 A2UI 卡片（04a）/ AG-UI。
+.env.example 同步登记新 flag。证据（approval flow trace + R5 重对齐 eval + parity）贴对话。完成用 codex 或 code-reviewer 过 diff 再收。
 ```
 
 ### P4-Phase03+ — 按 chat-panel roadmap §4 PR 拆分逐 phase 推进

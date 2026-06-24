@@ -19,12 +19,16 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 
 import { createAnthropic } from '@ai-sdk/anthropic'
-import { convertToModelMessages, streamText, type LanguageModel } from 'ai'
+import { convertToModelMessages, stepCountIs, streamText, type LanguageModel } from 'ai'
 
 import { anthropicBaseUrl, type AiGatewayConfig, type PersistTurnInput } from './config'
+import type { GatewayToolAuditEntry } from './tools/types'
 import type { MailAgentUIMessage } from '@shared/assistant/uiMessage'
 
 const GATEWAY_VERSION = '0.2.0'
+
+/** Default tool-loop ceiling (matches the legacy harness AGENT_MAX_ITER default). */
+const DEFAULT_MAX_STEPS = 8
 
 const SSE_HEADERS = {
   'Content-Type': 'text/event-stream; charset=utf-8',
@@ -193,11 +197,27 @@ async function handleChat(
     return
   }
 
+  // Phase 03a — when a tool factory is injected, build the read tools bound to a
+  // fresh per-request audit collector (closure) and run a multi-step tool loop
+  // (streamText { tools, stopWhen }). The collector is captured by the tools' execute
+  // closures (NOT streamText experimental_context — robust + testable, see
+  // tools/types.ts); the gateway drains it into the persisted turn in onFinish. No
+  // tools → text-only (Phase 02 behaviour, byte-identical).
+  const auditEntries: GatewayToolAuditEntry[] = []
+  const tools = cfg.buildTools?.(auditEntries)
+  const hasTools = tools != null && Object.keys(tools).length > 0
+
   const result = streamText({
     model: resolveModelFactory(cfg)(modelId),
     system,
     messages: modelMessages,
-    abortSignal: controller.signal
+    abortSignal: controller.signal,
+    ...(hasTools
+      ? {
+          tools,
+          stopWhen: stepCountIs(cfg.maxSteps ?? DEFAULT_MAX_STEPS)
+        }
+      : {})
   })
 
   result.pipeUIMessageStreamToResponse(res, {
@@ -215,7 +235,9 @@ async function handleChat(
         responseMessage: responseMessage as MailAgentUIMessage,
         usage: usage
           ? { inputTokens: usage.inputTokens ?? null, outputTokens: usage.outputTokens ?? null }
-          : undefined
+          : undefined,
+        // read-tool audit entries collected this turn (empty when no tools ran).
+        toolCalls: auditEntries
       }
       try {
         await cfg.persistTurn(turn)
