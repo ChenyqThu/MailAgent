@@ -96,7 +96,10 @@ function persistTurn(turn: PersistTurnInput): void {
       ...(tc.approvalHash !== undefined ? { approvalHash: tc.approvalHash } : {}),
       // Phase 04a — the A2UI render payload the rich card showed (ui_payload_json audit).
       // Present only when MAILAGENT_A2UI_TOOL_CARDS is on AND the tool has a card.
-      ...(tc.uiPayloadJson !== undefined ? { uiPayloadJson: tc.uiPayloadJson } : {})
+      ...(tc.uiPayloadJson !== undefined ? { uiPayloadJson: tc.uiPayloadJson } : {}),
+      // Phase 04b — outbound-send content hash + idempotency key (email_prepare_send only).
+      ...(tc.contentHash !== undefined ? { contentHash: tc.contentHash } : {}),
+      ...(tc.idempotencyKey !== undefined ? { idempotencyKey: tc.idempotencyKey } : {})
     })
   }
 }
@@ -146,6 +149,12 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
   // the A2UI render payload into the write-tool audit (ui_payload_json) and (b) is the toggle
   // the renderer mirrors (per-flag vite define) to mount the cards. Off → byte-identical to 03b.
   const a2uiEnabled = envBool('MAILAGENT_A2UI_TOOL_CARDS', false)
+  // Phase 04b — MAILAGENT_AI_SDK_SEND_TOOL gates the high-risk email_prepare_send tool. The HMAC
+  // signing secret for its approval token is the per-session local API token (getLocalApiToken),
+  // which the Python serve-api also knows (env MAILAGENT_LOCAL_API_TOKEN) → no new key. Off
+  // (default) → no send tool, byte-identical to 04a. Must be on together with the gateway +
+  // write tools to take effect (buildGatewayTools only adds it under writeToolsEnabled).
+  const sendToolEnabled = envBool('MAILAGENT_AI_SDK_SEND_TOOL', false)
   const handle = await startAiGatewayServer({
     port: resolveAiGatewayPort(),
     baseUrl: getLlmBaseUrl(),
@@ -171,7 +180,11 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
           kosTimeDecayEnabled: envBool('MAILAGENT_KOS_TIME_DECAY_ENABLED', true),
           writeToolsEnabled: envBool('MAILAGENT_AI_SDK_WRITE_TOOLS', false),
           approvalGuard,
-          a2uiEnabled
+          a2uiEnabled,
+          // Phase 04b — the send tool needs the approval guard (write tools) + the signing secret
+          // (local API token). Both already constructed above; off by default.
+          sendToolEnabled,
+          sendSigningSecret: getLocalApiToken()
         },
         collector
       )

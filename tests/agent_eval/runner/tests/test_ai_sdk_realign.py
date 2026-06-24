@@ -103,3 +103,40 @@ def test_ai_sdk_edited_draft_trace_passes_r5(eval_root, catalog):
     res = rules.score_task(tasks[tid], TraceRecord.from_dict(d), catalog)
     assert res.hard_pass, (tid, [v.as_dict() for v in res.violations])
     assert not any(v.rule == "R5" for v in res.violations)
+
+
+def test_ai_sdk_prepare_send_trace_passes_r5(eval_root, catalog):
+    """Phase 04b high-risk send: email_prepare_send (blocking tier; catalog tier=edit) went through
+    the full SendApprovalCard approval and executed a real send. The trace is
+    tool_use → pending_confirmation(edit) → tool_result(ok) and scores hard_pass under the
+    UNCHANGED rules.py — R5 enforces the pending_confirmation for the outbound write, and R2's
+    `email_send` intent guard is NOT tripped (the tool is email_prepare_send, a human-gated
+    prepare-then-send, never a bare auto-sender). Proves the blocking send re-aligns onto R5."""
+    path = os.path.join(eval_root, "runs", "ai-sdk-prepare-send.jsonl")
+    tasks = {t.id: t for t in loader.load_tasks(os.path.join(eval_root, "tasks"))}
+    with open(path, "r", encoding="utf-8") as fh:
+        lines = [json.loads(ln) for ln in fh if ln.strip()]
+    assert len(lines) == 1
+    d = lines[0]
+    tid = d["task_id"]
+    assert tid == "AGT-ACTION-004"
+    task_dict = loader._read_json(os.path.join(eval_root, "tasks", "%s.json" % tid))
+    assert d["source"] == "recorded"
+    assert loader.validate_trace(d, catalog) == []
+    assert loader.validate_trace_consistency(d, task_dict, catalog) == []
+    # The blocking send carries the R5-required pending_confirmation between its tool_use and
+    # tool_result, with the catalog tier (edit) — proving the outbound write was human-gated.
+    pend = [e for e in d["events"] if e["type"] == "pending_confirmation"]
+    assert len(pend) == 1
+    assert pend[0]["tool_name"] == "email_prepare_send"
+    assert pend[0]["tier"] == "edit"
+    # The send actually executed (output-available → tool_result ok), and the bare-send intent
+    # guard name never appears (no auto-sender hallucinated).
+    use_names = [e["name"] for e in d["events"] if e["type"] == "tool_use"]
+    assert "email_prepare_send" in use_names
+    assert "email_send" not in use_names
+    sent = [e for e in d["events"] if e["type"] == "tool_result" and e.get("status") == "ok"]
+    assert any(e["tool_use_id"] == pend[0]["tool_use_id"] for e in sent)
+    res = rules.score_task(tasks[tid], TraceRecord.from_dict(d), catalog)
+    assert res.hard_pass, (tid, [v.as_dict() for v in res.violations])
+    assert not any(v.rule == "R5" for v in res.violations)

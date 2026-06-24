@@ -12,6 +12,7 @@ import type { ToolCallMessagePartComponent } from '@assistant-ui/react'
 
 import { A2UI_COMPONENTS } from './a2ui'
 import { DraftReplyCard } from './mail/DraftReplyCard'
+import { SendApprovalCard } from './mail/SendApprovalCard'
 import { NotionSyncCard } from './notion/NotionSyncCard'
 import { ApprovalActionCard } from './generic/ApprovalActionCard'
 
@@ -68,5 +69,10 @@ export const componentRegistry: ComponentRegistry = createComponentRegistry([
     component: A2UI_COMPONENTS.ApprovalActionCard,
     toolNames: ['email_flag', 'email_archive', 'email_pin'],
     render: ApprovalActionCard
+  },
+  {
+    component: A2UI_COMPONENTS.SendApprovalCard,
+    toolNames: ['email_prepare_send'],
+    render: SendApprovalCard
   }
 ])

@@ -105,7 +105,14 @@ export type {
 // default). UI/audit only — never enters the model-visible tool result (keeps 03b parity).
 // Plain additive ALTER, hasColumn idempotency guard (same discipline as v5/v6/v8/v9/v10).
 // 🔴 bump 同步刷 src/chat/db.py 头注释 + test_chat.py seed DDL；NOT backend_lifecycle.EXPECTED_DB_VERSION.
-const CHAT_DB_VERSION = 11
+// v12 (P4 Phase 04b, task 06-23 chat-panel high-risk send) — chat_tool_call.content_hash +
+// idempotency_key: the outbound-send (email_prepare_send) double-guard audit. content_hash is the
+// sha256 of the canonical outbound payload that bound the approved content to what was sent (the
+// gateway + Python both verify it); idempotency_key is the one-shot key the Python send ledger
+// keyed on (so a replay never re-sends). Both NULL for every non-send tool / legacy row (additive
+// ALTER default). Plain additive ALTER, hasColumn idempotency guard (same discipline as v5..v11).
+// 🔴 bump 同步刷 src/chat/db.py 头注释 + test_chat.py seed DDL；NOT backend_lifecycle.EXPECTED_DB_VERSION.
+const CHAT_DB_VERSION = 12
 
 export function resolveChatDbPath(): string {
   const fromEnv = process.env['AI_CHAT_DB_PATH']
@@ -723,6 +730,32 @@ function migrate(db: Database.Database): void {
       throw err
     }
   }
+
+  // v11 → v12 — task 06-23 (chat-panel P4 Phase 04b) high-risk outbound send audit. Add
+  // chat_tool_call.content_hash (sha256 of the canonical outbound payload — the gateway↔Python
+  // content binding) + idempotency_key (the one-shot key the Python send ledger keyed on, so a
+  // replay never re-sends). Set only for email_prepare_send rows; NULL for every other tool /
+  // legacy row (additive ALTER default). Plain additive ALTER, same hasColumn idempotency guard
+  // as v5..v11. ai_chat.db has its own version ladder; this bump does NOT touch
+  // backend_lifecycle.EXPECTED_DB_VERSION.
+  if (current < 12) {
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      if (!hasColumn(db, 'chat_tool_call', 'content_hash')) {
+        db.exec('ALTER TABLE chat_tool_call ADD COLUMN content_hash TEXT')
+      }
+      if (!hasColumn(db, 'chat_tool_call', 'idempotency_key')) {
+        db.exec('ALTER TABLE chat_tool_call ADD COLUMN idempotency_key TEXT')
+      }
+      db.prepare(
+        "INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', '12')"
+      ).run()
+      db.exec('COMMIT')
+    } catch (err) {
+      db.exec('ROLLBACK')
+      throw err
+    }
+  }
 }
 
 // ── singleton ───────────────────────────────────────────────────────────
@@ -1219,6 +1252,9 @@ export function appendToolCall(input: AppendToolCallInput): ChatToolCall {
     approval_hash: null,
     // v11 — A2UI render payload, set on update (like approval_*); insert default NULL.
     ui_payload_json: null,
+    // v12 — outbound-send content hash + idempotency key, set on update; insert default NULL.
+    content_hash: null,
+    idempotency_key: null,
     created_at: now,
     updated_at: now
   }
@@ -1262,6 +1298,15 @@ export function updateToolCall(toolCallId: number, patch: UpdateToolCallPatch): 
   if (patch.uiPayloadJson !== undefined) {
     fields.push('ui_payload_json = ?')
     params.push(patch.uiPayloadJson)
+  }
+  // v12 (Phase 04b) — outbound-send content hash + idempotency key.
+  if (patch.contentHash !== undefined) {
+    fields.push('content_hash = ?')
+    params.push(patch.contentHash)
+  }
+  if (patch.idempotencyKey !== undefined) {
+    fields.push('idempotency_key = ?')
+    params.push(patch.idempotencyKey)
   }
   if (fields.length === 0) return
   fields.push('updated_at = ?')

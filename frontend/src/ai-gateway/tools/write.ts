@@ -64,7 +64,8 @@ export function createWriteTools(
     name: string
     description: string
     inputSchema: z.ZodType<I>
-    risk: ApprovalRisk
+    // preview/edit only — the high-risk 'blocking' send tool lives in send.ts (auditedSendTool).
+    risk: Exclude<ApprovalRisk, 'blocking'>
     /** Phase 04a — editable fields for edit-tier tools (e.g. ['body_markdown']). */
     editableFields?: readonly string[]
     run: (

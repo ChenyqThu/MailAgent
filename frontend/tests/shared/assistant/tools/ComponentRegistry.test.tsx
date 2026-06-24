@@ -36,18 +36,20 @@ describe('componentRegistry — resolution', () => {
     expect(componentRegistry.resolve('totally_unknown')).toBeUndefined()
   })
 
-  test('byName covers the five write tools; components covers the three card names', () => {
+  test('byName covers the six write tools; components covers the four card names', () => {
     expect(Object.keys(componentRegistry.byName).sort()).toEqual([
       'email_archive',
       'email_draft_reply',
       'email_flag',
       'email_pin',
+      'email_prepare_send',
       'email_resync'
     ])
     expect(Object.keys(componentRegistry.components).sort()).toEqual([
       'ApprovalActionCard',
       'DraftReplyCard',
-      'NotionSyncCard'
+      'NotionSyncCard',
+      'SendApprovalCard'
     ])
   })
 

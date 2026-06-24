@@ -10,6 +10,7 @@ import { createRoot } from 'react-dom/client'
 import type { ToolCallMessagePartProps } from '@assistant-ui/react'
 
 import { DraftReplyCard } from '@shared/assistant/tools/mail/DraftReplyCard'
+import { SendApprovalCard } from '@shared/assistant/tools/mail/SendApprovalCard'
 import { NotionSyncCard } from '@shared/assistant/tools/notion/NotionSyncCard'
 import { ApprovalActionCard } from '@shared/assistant/tools/generic/ApprovalActionCard'
 import { ToolTraceCard } from '@shared/assistant/tools/generic/ToolTraceCard'
@@ -139,6 +140,44 @@ function App(): React.JSX.Element {
             approval: { id: 'a', approved: true },
             args: { internal_id: 51240 },
             result: { internal_id: 51240, archived: true }
+          })}
+        />
+      </Section>
+
+      <Section label="SendApprovalCard · 待确认（blocking · 外部/敏感词 warning · 倒计时）">
+        <SendApprovalCard
+          {...mockProps({
+            toolName: 'email_prepare_send',
+            args: {
+              to: ['procurement@example-corp.test', 'partner@gmail.com'],
+              cc: [],
+              subject: '交换机报价确认结论',
+              body_markdown: '单价 1280、交期 4 周。另：登录密码见附件。',
+              internal_id: 51240
+            }
+          })}
+        />
+      </Section>
+
+      <Section label="SendApprovalCard · 已发送（落 Sent）">
+        <SendApprovalCard
+          {...mockProps({
+            toolName: 'email_prepare_send',
+            status: { type: 'complete' },
+            approval: { id: 'a', approved: true },
+            args: {
+              to: ['procurement@example-corp.test'],
+              subject: '交换机报价确认结论',
+              body_markdown: '单价 1280、交期 4 周。'
+            },
+            result: {
+              internal_id: 51240,
+              sent: true,
+              message_id: '<sent-51240@corp.test>',
+              archived_to_sent: true,
+              to: ['procurement@example-corp.test'],
+              subject: '交换机报价确认结论'
+            }
           })}
         />
       </Section>

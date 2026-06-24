@@ -89,13 +89,17 @@ def scan_source(src_dir: str) -> Dict[str, str]:
 def diff_catalog(expected: Dict[str, str], catalog_tools: Dict[str, dict]) -> List[str]:
     errs: List[str] = []
     cat = {k: v.get("tier") for k, v in catalog_tools.items()}
+    # Gateway-only tools (e.g. email_prepare_send) live ONLY in the AI SDK Gateway, with no
+    # legacy builtin source, so they are exempt from the "extra in catalog" check. Legacy tools
+    # stay strictly checked (missing / tier drift still caught for everything else).
+    gateway_only = {k for k, v in catalog_tools.items() if v.get("gateway_only")}
     for name, tier in sorted(expected.items()):
         if name not in cat:
             errs.append("missing in catalog: %s (source tier=%s)" % (name, tier))
         elif cat[name] != tier:
             errs.append("tier drift %s: source=%s catalog=%s" % (name, tier, cat[name]))
     for name in sorted(cat):
-        if name not in expected:
+        if name not in expected and name not in gateway_only:
             errs.append("extra in catalog (not found in source): %s" % name)
     return errs
 
@@ -109,7 +113,10 @@ def check(eval_root: str, source_dir: str) -> Tuple[bool, List[str], Dict[str, i
         return True, ["source dir absent (skipped): %s" % source_dir], {"source": -1, "catalog": len(catalog_tools)}
     expected = scan_source(source_dir)
     errs = diff_catalog(expected, catalog_tools)
-    return (len(errs) == 0), errs, {"source": len(expected), "catalog": len(catalog_tools)}
+    # Count parity excludes gateway-only tools (no legacy source) so source==catalog means
+    # "every legacy builtin tool is mirrored 1:1", with gateway-only extras allowed on top.
+    gateway_only = sum(1 for v in catalog_tools.values() if v.get("gateway_only"))
+    return (len(errs) == 0), errs, {"source": len(expected), "catalog": len(catalog_tools) - gateway_only}
 
 
 def main(argv=None) -> int:

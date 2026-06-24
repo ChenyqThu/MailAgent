@@ -23,7 +23,7 @@ import { tool, type Tool } from 'ai'
 import type { z } from 'zod'
 
 import { DomainError } from '../python/domainClient'
-import { type ApprovalGuard, type ApprovalRisk } from '../security/approval'
+import { type ApprovalGuard, type ApprovalRecord, type ApprovalRisk } from '../security/approval'
 // RELATIVE import (not the @shared alias) so the pure-Node poc harness (tsx, which doesn't
 // resolve tsconfig paths at runtime) can load the gateway tools; vite/vitest/tsc resolve it
 // identically. a2ui.ts is pure TS (types + zod, no react) — safe for the gateway core.
@@ -56,6 +56,12 @@ export interface GatewayToolAuditEntry {
    *  is on AND the tool has a registered card; null/omitted otherwise. NOT part of the
    *  model-visible tool result (UI/audit only — keeps 03b parity + no model noise). */
   uiPayloadJson?: string | null
+  /** Phase 04b — outbound-send (email_prepare_send) only: the content hash that bound the
+   *  approved payload to what was sent (chat_tool_call.content_hash). null/omitted otherwise. */
+  contentHash?: string | null
+  /** Phase 04b — outbound-send only: the one-shot idempotency key the send ledger keyed on
+   *  (chat_tool_call.idempotency_key). null/omitted otherwise. */
+  idempotencyKey?: string | null
 }
 
 /** A per-request audit collector — a plain array the gateway creates per /api/ai/chat
@@ -175,7 +181,9 @@ export function auditedWriteTool<I>(
     name: string
     description: string
     inputSchema: z.ZodType<I>
-    risk: ApprovalRisk
+    // preview/edit only — the high-risk 'blocking' send tool uses auditedSendTool (below), whose
+    // audit tier maps to 'edit'. This keeps confirmationTier within the chat_tool_call CHECK set.
+    risk: Exclude<ApprovalRisk, 'blocking'>
     /** Phase 04a — top-level input fields the user may edit on the rich card (edit-tier
      *  only, e.g. ['body_markdown']). Registered onto the approval so applyEdit can overlay
      *  only these (identity fields pinned). Omitted → not editable. */
@@ -272,6 +280,133 @@ export function auditedWriteTool<I>(
           approvalStatus,
           approvalHash,
           userEditedInputJson: userEditedJson
+        })
+        throw new ToolExecutionError(code, message)
+      }
+    }
+  })
+}
+
+/**
+ * Build the high-risk OUTBOUND-SEND tool (email_prepare_send) — Phase 04b. Like auditedWriteTool
+ * but for the one tool that performs a real, irreversible SMTP send, so it adds the two extra
+ * guards of the "double guard" (architecture §13.10.3 / phase-04 §6):
+ *   - idempotency (gateway scope): after the approval is verified, `guard.consume()` reserves the
+ *     blocking approval for its ONE allowed execution — a replayed approval-response throws
+ *     E_APPROVAL_USED and never sends twice (the Python send ledger is the cross-process half).
+ *   - content hash: `run` computes the content hash over the EFFECTIVE (post-edit) outbound
+ *     payload + signs the approval token, sends to Python (which re-verifies both), and returns
+ *     it for audit. The card edit rides the 04a resolve side-channel, so the hash is naturally
+ *     recomputed over the edited payload (the ai@6 history input is unchanged → signature valid).
+ *
+ * 🔴 Risk vocabulary: the approval is registered at risk 'blocking' (idempotency + editable send
+ *    fields), but the AUDIT confirmation_tier is written as 'edit' — the eval tool_catalog +
+ *    chat_tool_call CHECK only allow silent/preview/edit, and email_prepare_send's catalog tier
+ *    is 'edit'. 'blocking' is the gateway/A2UI-risk vocabulary only.
+ */
+export function auditedSendTool<I>(
+  opts: {
+    name: string
+    description: string
+    inputSchema: z.ZodType<I>
+    /** Top-level send fields the user may edit on the SendApprovalCard (identity fields like
+     *  internal_id are pinned). e.g. ['to','cc','bcc','subject','body_markdown']. */
+    editableFields: readonly string[]
+    a2uiEnabled?: boolean
+    /** Compute the content hash, sign the token, perform the real send via the domain client, and
+     *  return the model-facing output + the content hash for audit. Receives the verified
+     *  approval record (its idempotencyKey + expiry feed the signed token). */
+    run: (
+      input: I,
+      ctx: { userEdited: boolean; signal: AbortSignal | undefined; record: ApprovalRecord }
+    ) => Promise<{ output: unknown; contentHash: string }>
+  },
+  collector: GatewayToolAuditCollector,
+  guard: ApprovalGuard
+): Tool {
+  const RISK: ApprovalRisk = 'blocking'
+  // blocking maps DOWN to 'edit' for chat_tool_call.confirmation_tier (CHECK) + the eval catalog.
+  const AUDIT_TIER = 'edit' as const
+
+  const a2uiJson = (args: unknown, result: unknown, userEdited: boolean): string | undefined => {
+    if (!opts.a2uiEnabled) return undefined
+    const payload = buildToolA2UIPayload(opts.name, { args, result, userEdited, risk: 'blocking' })
+    return payload ? safeJson(payload) : undefined
+  }
+
+  return tool({
+    description: opts.description,
+    inputSchema: opts.inputSchema,
+    needsApproval: (input, { toolCallId }) => {
+      guard.register(toolCallId, opts.name, RISK, input, opts.editableFields)
+      return true
+    },
+    execute: async (input, { toolCallId, abortSignal }) => {
+      const start = Date.now()
+      let userEdited = false
+      let record: ApprovalRecord
+      let effectiveInput: unknown = input
+      try {
+        const v = guard.verify(toolCallId, input)
+        userEdited = v.userEdited
+        record = v.record
+        effectiveInput = v.effectiveInput
+        // Reserve the one allowed execution (gateway-scope idempotency) BEFORE the send. A
+        // replayed approval-response → E_APPROVAL_USED → the email is never sent twice.
+        guard.consume(toolCallId)
+      } catch (e) {
+        const { code, message } = normalizeToolError(e)
+        collector.push({
+          toolUseId: toolCallId,
+          toolName: opts.name,
+          inputJson: safeJson(input),
+          outputJson: safeJson({ error: code, message }),
+          status: 'error',
+          durationMs: Date.now() - start,
+          confirmationTier: AUDIT_TIER,
+          approvalStatus: 'rejected'
+        })
+        throw new ToolExecutionError(code, message)
+      }
+      const approvalStatus = userEdited ? 'edited' : 'approved'
+      const userEditedJson = userEdited ? safeJson(effectiveInput) : null
+      try {
+        const { output, contentHash } = await opts.run(effectiveInput as I, {
+          userEdited,
+          signal: abortSignal,
+          record
+        })
+        collector.push({
+          toolUseId: toolCallId,
+          toolName: opts.name,
+          inputJson: safeJson(input),
+          outputJson: safeJson(output),
+          status: 'ok',
+          durationMs: Date.now() - start,
+          confirmationTier: AUDIT_TIER,
+          approvalStatus,
+          approvalHash: record.inputHash,
+          userEditedInputJson: userEditedJson,
+          contentHash,
+          idempotencyKey: record.idempotencyKey ?? null,
+          uiPayloadJson: a2uiJson(effectiveInput, output, userEdited)
+        })
+        return output
+      } catch (e) {
+        if (isAbortError(e)) throw e
+        const { code, message } = normalizeToolError(e)
+        collector.push({
+          toolUseId: toolCallId,
+          toolName: opts.name,
+          inputJson: safeJson(input),
+          outputJson: safeJson({ error: code, message }),
+          status: 'error',
+          durationMs: Date.now() - start,
+          confirmationTier: AUDIT_TIER,
+          approvalStatus,
+          approvalHash: record.inputHash,
+          userEditedInputJson: userEditedJson,
+          idempotencyKey: record.idempotencyKey ?? null
         })
         throw new ToolExecutionError(code, message)
       }

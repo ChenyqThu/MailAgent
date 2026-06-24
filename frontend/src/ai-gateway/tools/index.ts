@@ -17,6 +17,7 @@ import { createEmailReadTools } from './email'
 import { createKosReadTools } from './kos'
 import { createReportReadTools } from './report'
 import { createWriteTools } from './write'
+import { createSendTools } from './send'
 import type { GatewayToolAuditCollector } from './types'
 
 export interface BuildGatewayToolsOpts {
@@ -34,6 +35,14 @@ export interface BuildGatewayToolsOpts {
    *  into their audit row (ui_payload_json). UI/audit only — does not change the model result
    *  (off → byte-identical to 03b). */
   a2uiEnabled?: boolean
+  /** MAILAGENT_AI_SDK_SEND_TOOL (phase-04b). When true, the high-risk email_prepare_send tool is
+   *  added — but only if writeToolsEnabled + approvalGuard + sendSigningSecret are also present
+   *  (a send tool cannot exist without its guard + token secret). Off (default) → no send tool,
+   *  byte-identical to 04a. */
+  sendToolEnabled?: boolean
+  /** HMAC secret for the send approval token (the per-session local API token, shared with the
+   *  Python serve-api). Required to build the send tool; omitted → no send tool even if enabled. */
+  sendSigningSecret?: string
 }
 
 /** Names of the read tools exposed by the gateway (for tests / observability). */
@@ -71,6 +80,18 @@ export function buildGatewayTools(
         a2uiEnabled: opts.a2uiEnabled
       })
     )
+    // phase-04b — the high-risk send tool layers on top of the write tools (it needs the same
+    // approval guard) and only when MAILAGENT_AI_SDK_SEND_TOOL is on AND a signing secret is
+    // present. Off → no send tool, byte-identical to 04a.
+    if (opts.sendToolEnabled && opts.sendSigningSecret) {
+      Object.assign(
+        tools,
+        createSendTools(opts.domain, collector, opts.approvalGuard, {
+          signingSecret: opts.sendSigningSecret,
+          a2uiEnabled: opts.a2uiEnabled
+        })
+      )
+    }
   }
   return tools
 }

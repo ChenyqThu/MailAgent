@@ -127,6 +127,34 @@ export interface DomainDraftResult {
   draftId: string
 }
 
+/** POST /email/send-approved request body (Phase 04b). The outbound fields + the double-guard
+ *  envelope (content hash + idempotency key + HMAC approval token + expiry) the Python guard
+ *  re-verifies before a real SMTP send. */
+export interface DomainSendApprovedRequest {
+  to: string[]
+  cc: string[]
+  bcc: string[]
+  subject: string
+  bodyText: string
+  /** Optional source-email context (audit / threading); the send itself is a fresh 'new'
+   *  compose using the explicit recipients/subject/body. -1 = no source. */
+  internalId: number
+  contentHash: string
+  idempotencyKey: string
+  approvalToken: string
+  expiresAt: number
+}
+
+/** POST /email/send-approved data block (the relevant subset the tool reads). */
+export interface DomainSendApprovedResult {
+  sent?: boolean
+  message_id?: string | null
+  archived_to_sent?: boolean
+  method?: string | null
+  to_count?: number
+  cc_count?: number
+}
+
 const LOCAL_TOKEN_HEADER = 'X-MailAgent-Local-Token'
 
 function buildQuery(query: Record<string, QueryValue>): string {
@@ -399,5 +427,31 @@ export class MailAgentDomainClient {
       accountName: null,
       draftId: data.method ?? 'reply_all'
     }
+  }
+
+  /** email_prepare_send (Phase 04b) — real SMTP send AFTER the double guard. POST
+   *  /email/send-approved with the outbound fields + content hash + idempotency key + HMAC
+   *  approval token + expiry. The Python guard verifies the token signature / expiry, recomputes
+   *  the payload hash, checks the idempotency send ledger, and confirms the backend supports
+   *  send — then sends. Any guard failure → DomainError (the email is never sent). */
+  sendApproved(
+    req: DomainSendApprovedRequest,
+    signal?: AbortSignal
+  ): Promise<DomainSendApprovedResult> {
+    return this._req<DomainSendApprovedResult>('POST', '/email/send-approved', {
+      body: {
+        to: req.to,
+        cc: req.cc,
+        bcc: req.bcc,
+        subject: req.subject,
+        bodyText: req.bodyText,
+        internalId: req.internalId,
+        contentHash: req.contentHash,
+        idempotencyKey: req.idempotencyKey,
+        approvalToken: req.approvalToken,
+        expiresAt: req.expiresAt
+      },
+      signal
+    })
   }
 }

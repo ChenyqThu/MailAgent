@@ -61,6 +61,7 @@ CREATE TABLE chat_tool_call (
     content_offset INTEGER,
     approval_status TEXT, approval_hash TEXT,
     ui_payload_json TEXT,
+    content_hash TEXT, idempotency_key TEXT,
     created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
 );
 """

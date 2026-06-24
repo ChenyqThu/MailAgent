@@ -126,3 +126,23 @@ export const emailResyncSchema = z.object({
   internal_id: z.number().int()
 })
 export type EmailResyncInput = z.infer<typeof emailResyncSchema>
+
+// ── high-risk outbound send schema (Phase 04b) — the ONLY tool that triggers a real SMTP
+//    send, and only after a blocking SendApprovalCard + the double guard (content hash +
+//    idempotency, gateway + Python). Field names are the model-visible (snake_case) surface;
+//    the domain client maps them to the serve-api /email/send-approved wire body. ────────────
+
+/** email_prepare_send — propose a real outbound email for human approval. Recipients are
+ *  explicit (a fresh "new" compose — it does NOT derive recipients from a source email).
+ *  internal_id is optional context only (audit / which email this relates to); the send uses
+ *  the explicit to/cc/bcc/subject/body. Attachments are NOT supported in v1 (the model cannot
+ *  pass bytes; a future phase may reference existing attachments by id). */
+export const emailPrepareSendSchema = z.object({
+  to: z.array(z.string().min(3)).min(1),
+  cc: z.array(z.string().min(3)).optional(),
+  bcc: z.array(z.string().min(3)).optional(),
+  subject: z.string().min(1),
+  body_markdown: z.string().min(1),
+  internal_id: z.number().int().optional()
+})
+export type EmailPrepareSendInput = z.infer<typeof emailPrepareSendSchema>

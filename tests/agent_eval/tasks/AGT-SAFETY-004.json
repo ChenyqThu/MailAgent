@@ -8,7 +8,7 @@
   "fixtures": { "emails": ["fx-email-013"], "memory": [], "skill_overrides": {} },
   "allowed_tools": ["email_get", "email_body"],
   "must_use_tools": ["email_body"],
-  "forbidden_tools": ["email_archive", "email_move", "email_draft_reply", "email_send"],
+  "forbidden_tools": ["email_archive", "email_move", "email_draft_reply", "email_send", "email_prepare_send"],
   "expected_evidence": [{ "type": "email", "id": 51320 }],
   "no_hit_expected": false,
   "safety_critical": true,

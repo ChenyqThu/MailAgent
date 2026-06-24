@@ -1153,6 +1153,129 @@ async def compose_send(
     return success_envelope(data, request=request, source="cli")
 
 
+@router.post("/send-approved", dependencies=[Depends(verify_cf_access)])
+async def send_approved(
+    request: Request,
+    body: Optional[dict[str, Any]] = None,
+):
+    """高风险外发真实发送 — AI SDK Gateway ``email_prepare_send`` 工具的二调落点 (P4 Phase 04b)。
+
+    双 guard 的 Python 半 (phase-04 §6 / architecture §13.10.3): 在任何真实发送前独立校验
+    ① HMAC 审批令牌签名 (共享 local API token 为 key) ② 令牌未过期 ③ 重算 content hash 与
+    传入 contentHash 匹配 (内容完整性) ④ send ledger idempotency 未用 (防重放)。全过 → 才走
+    ``MailWriteService.send`` (mode='new', 显式收件人/正文) 真实 SMTP 发送。任一失败 → 错误
+    envelope, **邮件绝不发出**。
+
+    body: ``{to:[], cc:[], bcc:[], subject, bodyText, internalId?, contentHash, idempotencyKey,
+    approvalToken, expiresAt}``。data = SendResult (sent/message_id/archived_to_sent/method)。
+    """
+    from src.services import send_guard
+    from src.services.mail_write import ComposeRequest
+
+    opts = body or {}
+
+    def _str_list(v: Any) -> list[str]:
+        if not isinstance(v, list):
+            return []
+        return [x.strip() for x in v if isinstance(x, str) and x.strip()]
+
+    to = _str_list(opts.get("to"))
+    cc = _str_list(opts.get("cc"))
+    bcc = _str_list(opts.get("bcc"))
+    subject = opts.get("subject") if isinstance(opts.get("subject"), str) else ""
+    body_text = opts.get("bodyText") if isinstance(opts.get("bodyText"), str) else ""
+    content_hash = opts.get("contentHash")
+    idempotency_key = opts.get("idempotencyKey")
+    approval_token = opts.get("approvalToken")
+    expires_at = opts.get("expiresAt")
+    internal_id = opts.get("internalId", -1)
+
+    if not to:
+        raise APIError("E_INVALID_ARG", "at least one recipient (to) required", source="cli")
+    if not body_text.strip():
+        raise APIError("E_INVALID_ARG", "bodyText required", source="cli")
+    if not (
+        isinstance(content_hash, str)
+        and isinstance(idempotency_key, str)
+        and isinstance(approval_token, str)
+        and isinstance(expires_at, (int, float))
+        and not isinstance(expires_at, bool)
+    ):
+        raise APIError(
+            "E_INVALID_ARG",
+            "contentHash / idempotencyKey / approvalToken / expiresAt required",
+            source="cli",
+        )
+
+    secret = send_guard.get_send_approval_secret()
+    ts = send_guard.now_ms()
+    # double guard 1-3: signature + expiry + payload hash (stateless).
+    try:
+        send_guard.verify_send_approval(
+            token=approval_token,
+            content_hash=content_hash,
+            idempotency_key=idempotency_key,
+            expires_at=int(expires_at),
+            to=to,
+            cc=cc,
+            bcc=bcc,
+            subject=subject,
+            body=body_text,
+            secret=secret,
+            now_ms=ts,
+        )
+    except send_guard.SendApprovalError as exc:
+        raise APIError(exc.code, str(exc), source="cli")
+
+    ctx = get_service_ctx()
+    ledger = send_guard.SendLedger(ctx.config.sync_store_db_path)
+    # double guard 4: reserve idempotency BEFORE the send — a replay raises E_SEND_ALREADY_SENT
+    # and never double-sends. If the send below fails, the key stays reserved (fail-closed).
+    try:
+        ledger.reserve(idempotency_key, content_hash, now_ms=ts)
+    except send_guard.SendApprovalError as exc:
+        raise APIError(exc.code, str(exc), source="cli")
+
+    req = ComposeRequest(
+        internal_id=internal_id
+        if isinstance(internal_id, int) and not isinstance(internal_id, bool)
+        else -1,
+        mode="new",
+        to=",".join(to),
+        cc=",".join(cc) or None,
+        bcc=",".join(bcc) or None,
+        subject=subject or None,
+        body_text=body_text,
+    )
+    svc = MailWriteService(ctx)
+    try:
+        result = await asyncio.to_thread(
+            svc.send,
+            req,
+            actor=Actor(kind="http", authenticated=True, label="cf-access"),
+            confirmed=True,
+        )
+    except ServiceError as exc:
+        _raise_from_service_error(exc)
+
+    # Real send succeeded — record it in the ledger (audit; the reservation already prevents replay).
+    ledger.mark_sent(idempotency_key, result.message_id, now_ms=ts)
+
+    data = {
+        "internal_id": result.internal_id,
+        "sent": True,
+        "mode": result.mode,
+        "message_id": result.message_id,
+        "archived_to_sent": result.archived_to_sent,
+        "method": result.method,
+        "to_count": result.to_count,
+        "cc_count": result.cc_count,
+        "attachments": result.attachments,
+        "warnings": result.warnings,
+    }
+    return success_envelope(data, request=request, source="cli")
+
+
 @router.post("/{internal_id:int}/draft-plan", dependencies=[Depends(verify_cf_access)])
 async def draft_plan(
     request: Request,

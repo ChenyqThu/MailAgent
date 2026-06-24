@@ -94,7 +94,9 @@ export function parseA2UIPayload(value: unknown): A2UIPayload | null {
 export const A2UI_COMPONENTS = {
   DraftReplyCard: 'DraftReplyCard',
   NotionSyncCard: 'NotionSyncCard',
-  ApprovalActionCard: 'ApprovalActionCard'
+  ApprovalActionCard: 'ApprovalActionCard',
+  // Phase 04b — the high-risk outbound send card (email_prepare_send, blocking tier).
+  SendApprovalCard: 'SendApprovalCard'
 } as const
 
 /** Which A2UI component renders a given gateway write tool. Unknown / read tools → null
@@ -109,6 +111,8 @@ export function componentForTool(toolName: string): string | null {
     case 'email_archive':
     case 'email_pin':
       return A2UI_COMPONENTS.ApprovalActionCard
+    case 'email_prepare_send':
+      return A2UI_COMPONENTS.SendApprovalCard
     default:
       return null
   }
@@ -146,6 +150,22 @@ export interface ApprovalActionCardProps {
   applied?: Record<string, unknown> | null
 }
 
+/** email_prepare_send (blocking tier) — the high-risk outbound send card. At approval-request
+ *  time the recipients / subject / body come from the model input (all editable); after the send
+ *  runs, the result fields (sent / messageId / archivedToSent) land. `internalId` is optional
+ *  source context, pinned (not editable). */
+export interface SendApprovalCardProps {
+  to: string[]
+  cc: string[]
+  bcc: string[]
+  subject: string
+  bodyMarkdown: string
+  internalId?: number
+  sent?: boolean
+  messageId?: string | null
+  archivedToSent?: boolean
+}
+
 function asNum(v: unknown, fallback = -1): number {
   return typeof v === 'number' && Number.isFinite(v) ? v : fallback
 }
@@ -154,6 +174,9 @@ function asStr(v: unknown): string | undefined {
 }
 function asObj(v: unknown): Record<string, unknown> | null {
   return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null
+}
+function asStrArray(v: unknown): string[] {
+  return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []
 }
 
 /** Build a short human summary for the generic approval card from a flag/archive/pin input. */
@@ -226,6 +249,29 @@ export function buildToolA2UIPayload(
       component,
       props: props as unknown as Record<string, unknown>,
       audit: { risk: io.risk ?? 'preview', requiresApproval }
+    }
+  }
+
+  if (component === A2UI_COMPONENTS.SendApprovalCard) {
+    const props: SendApprovalCardProps = {
+      // at approval-request time the fields come from args; after the send the result echoes
+      // the exact sent recipients/subject (final source of truth).
+      to: asStrArray(result?.to ?? args.to),
+      cc: asStrArray(result?.cc ?? args.cc),
+      bcc: asStrArray(args.bcc),
+      subject: asStr(result?.subject) ?? asStr(args.subject) ?? '',
+      bodyMarkdown: asStr(args.body_markdown) ?? '',
+      internalId: typeof args.internal_id === 'number' ? args.internal_id : undefined,
+      sent: result?.sent === true,
+      messageId: asStr(result?.message_id) ?? null,
+      archivedToSent: result?.archived_to_sent === true
+    }
+    return {
+      protocol: A2UI_PROTOCOL,
+      version: A2UI_VERSION,
+      component,
+      props: props as unknown as Record<string, unknown>,
+      audit: { risk: io.risk ?? 'blocking', requiresApproval }
     }
   }
 

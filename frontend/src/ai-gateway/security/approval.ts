@@ -48,8 +48,14 @@ import { createHash, randomUUID } from 'node:crypto'
 
 /** Risk tier of a write tool, mirroring the legacy confirmationTier (write.ts) +
  *  tool_catalog.json. 'preview' = reversible, approve/reject only (no input edit).
- *  'edit' = user-editable input (e.g. a draft body) before the write. */
-export type ApprovalRisk = 'preview' | 'edit'
+ *  'edit' = user-editable input (e.g. a draft body) before the write.
+ *  'blocking' (Phase 04b) = high-risk irreversible OUTBOUND (email_prepare_send): like 'edit'
+ *  for the editable/re-approve path (all send fields are editable on the SendApprovalCard), but
+ *  additionally carries a one-shot idempotency key (consume()) and a content-hash binding the
+ *  gateway + Python both verify (the "double guard"). 🔴 At the eval/persistence layer this maps
+ *  DOWN to confirmationTier='edit' (tool_catalog + chat_tool_call CHECK only allow
+ *  silent/preview/edit); 'blocking' is the gateway/A2UI-risk vocabulary only. */
+export type ApprovalRisk = 'preview' | 'edit' | 'blocking'
 
 /** Approval error codes surfaced to the model as a tool-error (normalizeToolError
  *  reads the duck-typed `.code`). Distinct from ai@6's InvalidToolApprovalSignatureError
@@ -58,9 +64,13 @@ export type ApprovalErrorCode =
   | 'E_APPROVAL_NOT_FOUND'
   | 'E_APPROVAL_EXPIRED'
   | 'E_APPROVAL_HASH_MISMATCH'
-  // Phase 04a — applyEdit on a non-edit-tier (preview) record, or a record that registered
+  // Phase 04a — applyEdit on a non-editable (preview) record, or a record that registered
   // no editable fields. preview writes are approve/reject only — they cannot be edited.
   | 'E_APPROVAL_NOT_EDITABLE'
+  // Phase 04b — consume() on a blocking-tier approval that was already executed once. The
+  // gateway-scope idempotency guard for outbound send (a replayed approval-response must NOT
+  // send twice). Fail-closed: a used approval is dead; a retry needs a fresh approval.
+  | 'E_APPROVAL_USED'
 
 /** A thrown domain-approval failure. `.code` lets normalizeToolError map it to a stable
  *  tool-error code without a dependency on this module. */
@@ -92,6 +102,13 @@ export interface ApprovalRecord {
   /** Phase 04a — the effective input after a UI edit (set by applyEdit). undefined until the
    *  user edits; once set, verify() returns it as effectiveInput + userEdited. */
   editedInput?: unknown
+  /** Phase 04b — blocking-tier (outbound send) only: a one-shot idempotency key generated at
+   *  register time. Carried to the Python send-approved endpoint (its send ledger keys on it);
+   *  undefined for preview/edit writes. */
+  idempotencyKey?: string
+  /** Phase 04b — set by consume() the first time a blocking approval is executed. A second
+   *  consume() (replayed approval-response) throws E_APPROVAL_USED → the send never runs twice. */
+  usedAt?: number
   createdAt: number
   expiresAt: number
 }
@@ -144,11 +161,19 @@ export class ApprovalGuard {
   private readonly ttlMs: number
   private readonly now: () => number
   private readonly genId: () => string
+  private readonly genIdempotency: () => string
 
-  constructor(opts?: { ttlMs?: number; now?: () => number; genId?: () => string }) {
+  constructor(opts?: {
+    ttlMs?: number
+    now?: () => number
+    genId?: () => string
+    /** Phase 04b — injectable idempotency-key generator (deterministic in tests). */
+    genIdempotency?: () => string
+  }) {
     this.ttlMs = opts?.ttlMs ?? DEFAULT_APPROVAL_TTL_MS
     this.now = opts?.now ?? (() => Date.now())
     this.genId = opts?.genId ?? (() => `apr-${randomUUID()}`)
+    this.genIdempotency = opts?.genIdempotency ?? (() => `idem-${randomUUID()}`)
   }
 
   /**
@@ -168,6 +193,8 @@ export class ApprovalGuard {
     const existing = this.store.get(toolCallId)
     if (existing) return existing
     const createdAt = this.now()
+    const editable =
+      (risk === 'edit' || risk === 'blocking') && editableFields && editableFields.length > 0
     const record: ApprovalRecord = {
       approvalId: this.genId(),
       toolCallId,
@@ -175,9 +202,11 @@ export class ApprovalGuard {
       risk,
       inputHash: hashApprovalInput(input),
       input,
-      // editable fields only matter for edit-tier; for preview they stay undefined so
+      // editable fields matter for edit + blocking tiers; for preview they stay undefined so
       // applyEdit fails E_APPROVAL_NOT_EDITABLE.
-      ...(risk === 'edit' && editableFields && editableFields.length > 0 ? { editableFields } : {}),
+      ...(editable ? { editableFields } : {}),
+      // blocking (outbound send) carries a one-shot idempotency key Python's send ledger keys on.
+      ...(risk === 'blocking' ? { idempotencyKey: this.genIdempotency() } : {}),
       createdAt,
       expiresAt: createdAt + this.ttlMs
     }
@@ -210,7 +239,8 @@ export class ApprovalGuard {
         `approval ${record.approvalId} expired — re-propose the action`
       )
     }
-    if (record.risk !== 'edit' || !record.editableFields || record.editableFields.length === 0) {
+    const editableTier = record.risk === 'edit' || record.risk === 'blocking'
+    if (!editableTier || !record.editableFields || record.editableFields.length === 0) {
       throw new ApprovalError(
         'E_APPROVAL_NOT_EDITABLE',
         `${record.toolName} is not editable (preview-tier writes are approve/reject only)`
@@ -258,9 +288,9 @@ export class ApprovalGuard {
     }
     const inputHash = hashApprovalInput(input)
     if (inputHash !== record.inputHash) {
-      if (record.risk === 'edit') {
-        // edit-tier with a directly-changed exec input (no applyEdit override) — e.g. a test
-        // or a future runtime that mutates the history input. The executed input is
+      if (record.risk === 'edit' || record.risk === 'blocking') {
+        // edit / blocking tier with a directly-changed exec input (no applyEdit override) — e.g.
+        // a test or a future runtime that mutates the history input. The executed input is
         // authoritative; record the edit.
         return { record, userEdited: true, effectiveInput: input }
       }
@@ -270,6 +300,39 @@ export class ApprovalGuard {
       )
     }
     return { record, userEdited: false, effectiveInput: input }
+  }
+
+  /**
+   * Phase 04b — atomically reserve a blocking-tier (outbound send) approval for its ONE allowed
+   * execution. The send tool calls this right before dispatching to Python: the first call sets
+   * `usedAt` and returns the record; a second call (a replayed approval-response, or a renderer
+   * that fires execute twice) throws E_APPROVAL_USED so the email is never sent twice — the
+   * gateway-scope half of the idempotency guard (Python's send ledger is the cross-process half).
+   * Also re-checks not-found / expiry so a stale approval can't be consumed. Fail-closed: a
+   * consumed approval is dead even if the subsequent send fails — a retry needs a fresh approval.
+   */
+  consume(toolCallId: string): ApprovalRecord {
+    const record = this.store.get(toolCallId)
+    if (!record) {
+      throw new ApprovalError(
+        'E_APPROVAL_NOT_FOUND',
+        `no approval on record for tool call ${toolCallId} (re-propose the action)`
+      )
+    }
+    if (this.now() >= record.expiresAt) {
+      throw new ApprovalError(
+        'E_APPROVAL_EXPIRED',
+        `approval ${record.approvalId} expired — re-propose the action`
+      )
+    }
+    if (record.usedAt !== undefined) {
+      throw new ApprovalError(
+        'E_APPROVAL_USED',
+        `approval ${record.approvalId} was already executed (a send is never replayed)`
+      )
+    }
+    record.usedAt = this.now()
+    return record
   }
 
   /** Diagnostic — number of records currently held (tests / observability). */

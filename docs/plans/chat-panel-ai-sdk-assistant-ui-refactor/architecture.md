@@ -687,3 +687,64 @@ edited draft 的 trace 仍 `tool_use → pending_confirmation(edit, user_edited)
 - **mock-model 难驱动 streamText 的 approval 两调 loop**（沿用 03a/03b）：CI 不跑真实 streamText 两调，由单测覆盖（guard + 卡片 + endpoint + parity）；真实模型端到端 approval+edit flow 是 manual lane（CRS）。
 - **resolve 端点的 loopback 信任模型**：当前 `ACAO:*` loopback-only（同 §13.8.5），同机恶意页面理论上可在用户 approve 前改 pending draft 的 body（用户仍在卡片里看到当前值再确认 + domain expiry 兜底）。开远程 Web 面（06+）前须收紧 Origin/loopback-token（与 §13.8.5 同批）。
 - 高风险外发 `SendApprovalCard` + `email_prepare_send`/`send_approved`（content hash + idempotency）= **04b**；AG-UI mirror = 05；cutover 删 legacy = 06。
+
+---
+
+## 13.12 Phase 04b 落地（2026-06-25，高风险外发 email_prepare_send + SendApprovalCard + 双 guard）
+
+> 把唯一会真实发信的工具 `email_prepare_send`（blocking tier）接入 Gateway，经 SendApprovalCard 人工确认 + **双 guard**（gateway + Python 各自独立校验）才走真实 SMTP。全程 `MAILAGENT_AI_SDK_SEND_TOOL` flag-gated（默认 off → 不建 send 工具，字节级等同 04a）。AG-UI（05）/ cutover 删 legacy（06）/ resolve+send 端点 CORS 收紧（与 06 同批）留后续。
+
+### 13.12.1 产出
+
+| 文件 | 职责 |
+|---|---|
+| `frontend/src/shared/assistant/tools/security/hashOutboundPayload.ts` | 跨语言 content hash 的**纯**真源（无 crypto，renderer 安全）：`canonicalizeOutbound`（行分隔规范串 `v1\n…`，**非 JSON** 防 JS/Python 键序/转义漂移）+ `detectExternalRecipients`（外部/个人邮箱 warning）+ `detectSensitiveTerms`。Python 镜像 = `send_guard.py canonicalize_outbound` |
+| `frontend/src/ai-gateway/security/sendToken.ts` | gateway 侧 crypto（node:crypto）：`hashOutbound`（注入 sha256 给纯模块）+ `signSendApprovalToken`（HMAC over `{contentHash}.{idempotencyKey}.{expiresAt}`，key=**复用 local API token**，main-only，零新增密钥分发） |
+| `frontend/src/ai-gateway/security/approval.ts` | ApprovalRisk 加 `'blocking'`（编辑式 like edit + idempotency）；ApprovalRecord 加 `idempotencyKey`（register 生成）+ `usedAt`；`consume()`（一次性预留：replay → `E_APPROVAL_USED`，gateway-scope 幂等）。applyEdit/verify 把 blocking 当 editable |
+| `frontend/src/ai-gateway/tools/{send.ts,types.ts,schemas.ts}` | `email_prepare_send` 工具 + `auditedSendTool`（needsApproval 恒 true→register；execute 二调 verify→consume→hash→sign→`domain.sendApproved`；审计 `confirmationTier='edit'`+content_hash+idempotency_key）。**🔴 工具名不叫 email_send**；`auditedWriteTool.risk` 收窄为 `Exclude<…,'blocking'>` |
+| `frontend/src/ai-gateway/python/domainClient.ts` | `sendApproved`（POST /email/send-approved，wire body=to/cc/bcc/subject/bodyText/internalId+contentHash/idempotencyKey/approvalToken/expiresAt） |
+| `frontend/src/shared/assistant/tools/{a2ui.ts,ComponentRegistry.tsx,mail/SendApprovalCard.tsx}` | SendApprovalCard（blocking，risk='blocking'）：To/CC/BCC/Subject/Body 可编辑 + 外部/敏感词 warning + 审批倒计时 + 允许发送/取消；编辑→re-approve 复用 04a resolve 侧信道（重算 content hash） |
+| `src/services/send_guard.py` | Python 半双 guard：`verify_send_approval`（HMAC 签名 + expiry + 重算 payload hash，constant-time compare，secret 空 fail-closed）+ `SendLedger`（sync_store.db feature-owned `CREATE TABLE IF NOT EXISTS`，`reserve` 原子幂等，**不 bump sync_store DB_VERSION**） |
+| `src/api/routers/email.py` | `POST /send-approved`：parse → verify_send_approval → ledger.reserve（**send 前**预留，fail-closed）→ `MailWriteService.send`（mode='new', confirmed=True）→ mark_sent（best-effort 永不抛，防真发后 audit 失败误报 500） |
+| chat_db.ts/model.ts/api/types.ts/db.py/test_chat.py | `chat_tool_call` 加 `content_hash`+`idempotency_key` → bump `CHAT_DB_VERSION 11→12`（additive ALTER + hasColumn 幂等 + 终态断言 + db.py 头注释 + seed DDL）；**不动 EXPECTED_DB_VERSION** |
+| `tests/agent_eval/*` | catalog 加 `email_prepare_send`（tier:edit, write:true, **gateway_only:true**）+ counts + no_send_tool 改措辞（区分 auto-send vs human-gated prepare-send）；validate_catalog 豁免 gateway_only（legacy 仍严格）；AGT-ACTION-004 + recorder PREPARE_SEND_SCENARIO + test_ai_sdk_realign 测；4 个 safety 任务 forbidden_tools 加 email_prepare_send |
+
+### 13.12.2 🔴 双 guard（gateway + Python 各自独立，防御纵深）
+
+真实发送须**同时**过两侧（phase-04 §6）：
+
+| 层 | 校验 | 失败 |
+|---|---|---|
+| Gateway（`auditedSendTool` execute）| 审批存在/未过期/approved-or-edited（`guard.verify`）+ idempotency 一次性预留（`guard.consume`，replay→E_APPROVAL_USED）+ content hash over effective payload + HMAC 签 token | tool-error，**execute 内不发** |
+| Python（`/send-approved`）| token 签名（HMAC，key=local API token）+ 未过期 + **重算** payload hash 匹配 + send_ledger.reserve 原子幂等 + `MailWriteService.send`（独立 require_write_auth + confirmed=True 第三道闸）| 错误 envelope，**邮件绝不发出** |
+
+**ordering 关键**：Python `reserve` 在 `send` **之前**（replay/并发先被拒）；send 失败则 key 保持已预留（fail-closed，重试须新审批=新 key）。
+
+### 13.12.3 跨语言 content hash 一致（最易静默炸的点）
+
+gateway（TS `canonicalizeOutbound`）与 Python（`canonicalize_outbound`）必须产出**字节一致**的规范串。用**行分隔串**（`v1` 版本前缀 + 规范化 to/cc/bcc + 逐字 subject/body，`\n` join），**刻意不用 JSON**（JS `JSON.stringify` 与 Python `json.dumps` 的键序/unicode 转义有别）。committed golden `f20307313f87a208e2b8884e93922f4ffa324e6e8b8507f44245f6ff94b97bff` 在 TS（`outbound_hash.test.ts`）+ Python（`test_send_guard.py`）**两侧对同一 payload 断言**，锁死「canonical 漂移→每封都拒发」这个最危险的静默失败。
+
+### 13.12.4 risk 双词汇调和（沿用 03b sync_to_notion→email_resync 先例）
+
+`email_prepare_send` 在 **gateway/A2UI 风险层 = `blocking`**（SendApprovalCard 高风险呈现 + 编辑式 + idempotency），但在 **持久化/eval/recorder 层映射 = `edit`**（`chat_tool_call.confirmation_tier` CHECK + eval catalog tier 只认 silent/preview/edit）。`auditedWriteTool.risk` 收窄为 `Exclude<ApprovalRisk,'blocking'>`（类型强制写工具不带 blocking）；`auditedSendTool` 用 `AUDIT_TIER='edit'`；recorder fixture tier='edit' 对齐 catalog → R5 校验通过。
+
+### 13.12.5 eval R5 重对齐（rules.py 零改 — 不回退判据）
+
+catalog 加 `gateway_only:true`（无 legacy builtin 源），`validate_catalog.py` 豁免其「extra in catalog」+ count parity（legacy 工具仍严格 missing/tier-drift 检查，豁免集只含 gateway_only 标记项，无法掩盖 legacy 漂移）。recorder `PREPARE_SEND_SCENARIO`（AGT-ACTION-004）把 blocking send 映射成 `tool_use → pending_confirmation(edit) → tool_result(ok)`，在**未改的 rules.py** 下 hard_pass（`test_ai_sdk_realign.py::test_ai_sdk_prepare_send_trace_passes_r5`）。AGT-ACTION-004 的 baseline trace 落 `baselines/phase04b.jsonl`（保 v0.13.0 冻结基线不动，validate_all「每任务有 trace」过）。
+
+### 13.12.6 验收证据
+
+- `pnpm typecheck`(node+web) 0；全量 vitest **1856 passed / 1 skipped**（唯一 1 fail = backend_lifecycle `process.resourcesPath` electron-as-node 伪影，plain node runner 62/62 全过，与本 phase 无关，03b/04a 已记）；新增测试：outbound_hash(12)+send_approval(7)+SendApprovalCard(8)+chat_db v12 列(2)+ComponentRegistry(更新断言)；Python `test_send_guard.py` 9 passed。
+- `tests/agent_eval` **89 passed**（+1 prepare_send R5 测）；`run_baseline --validate` OK；`run_baseline --compare` base_hard_pass=29==candidate=29，**RESULT: OK (no regression)**；rules.py git diff 空。
+- 跨语言 content hash：TS == Python golden `f203073…`（两侧断言）。
+- SendApprovalCard 截图 dark+light（`frontend/poc/cards/shots/`，gitignored）：编辑式 To/CC/BCC/Subject/Body + 外部收件人 warning（partner@gmail.com）+ 敏感词 warning（密码）+ 审批倒计时 + 已发送态全正常，主题三态×token 零组件改动重皮肤。
+- **真发自测信 dogfood**（`scripts/dev/dogfood_send_approved_04b.py`，发给自己）：`verify_send_approval OK` → `send_ledger reserved` → `✅ SENT message_id=<…@mailagent.local> method=smtp_davmail` → IMAP 实测**落 Sent**（最新一封）+ INBOX 收到（self round-trip）→ replay `✅ E_SEND_ALREADY_SENT`（幂等不重发）。
+- code-reviewer(opus) **APPROVE**（9 不变式全 PASS，0 CRITICAL/HIGH；MEDIUM=mark_sent 事务外[已改 best-effort]，LOW×3=resolve CORS[06 收紧]/signing-message 转义[当前无碰撞]/mark_sent 错误面[已修]）。
+
+### 13.12.7 已知 gap / 留后续
+
+- **mock-model 难驱动 streamText 两调 loop**（沿用 03a/03b/04a）：CI 不跑真实 streamText 两调，由单测覆盖（guard + send 工具 + 卡片 + 跨语言 hash + Python guard + endpoint）；真实模型端到端 send flow 是 manual lane（CRS）+ 已 dogfood。
+- **resolve + send-approved 端点 loopback CORS 收紧**：当前 `ACAO:*` loopback-only（同 §13.8.5/§13.11.6），开远程 Web 面前须收紧 Origin/loopback-token（与 06 同批）。
+- **send_ledger 跨进程幂等用 feature-owned 表**（lazy `CREATE TABLE IF NOT EXISTS`，不 bump sync_store DB_VERSION）：仅 gated 端点触达，零 blast radius；若未来要进迁移体系再 bump。
+- **attachments 未支持**（schema 不含，模型无法传字节）：prepare_send 仅文本外发，未来可按 internal_id 引用既有附件。
+- AG-UI mirror = 05；cutover 删 legacy harness/UI = 06。

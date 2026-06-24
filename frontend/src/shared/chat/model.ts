@@ -225,6 +225,13 @@ export interface ChatToolCall {
    *  rich tool card showed for an AI SDK Gateway write tool. NULL for read tools / legacy rows
    *  / flag-off writes. Optional (absent on rows from a pre-v11 DB / older serve-api JSON). */
   ui_payload_json?: string | null
+  /** Phase 04b (v12) — outbound-send (email_prepare_send) only: sha256 of the canonical outbound
+   *  payload that bound the approved content to what was sent. NULL for every other tool / legacy
+   *  row. Optional (absent on rows from a pre-v12 DB / older serve-api JSON). */
+  content_hash?: string | null
+  /** Phase 04b (v12) — outbound-send only: the one-shot idempotency key the Python send ledger
+   *  keyed on (a replay never re-sends). NULL otherwise. Optional (see content_hash). */
+  idempotency_key?: string | null
   created_at: number
   updated_at: number
 }
@@ -256,6 +263,10 @@ export interface UpdateToolCallPatch {
   approvalHash?: string | null
   /** Phase 04a (v11) — the A2UI render payload (JSON) the rich tool card showed. */
   uiPayloadJson?: string | null
+  /** Phase 04b (v12) — outbound-send content hash (sha256 of the canonical outbound payload). */
+  contentHash?: string | null
+  /** Phase 04b (v12) — outbound-send one-shot idempotency key (the send ledger key). */
+  idempotencyKey?: string | null
 }
 
 // ── 后端能力查询（派生自 BackendKind 的纯逻辑）──────────────────────────────

@@ -1268,6 +1268,11 @@ export interface ChatToolCall {
    *  read-tool / legacy rows and on pre-v10 serve-api responses. */
   approval_status?: string | null
   approval_hash?: string | null
+  /** Phase 04a (v11) — A2UI render payload the rich tool card showed (UI/audit only). */
+  ui_payload_json?: string | null
+  /** Phase 04b (v12) — outbound-send content hash + idempotency key (email_prepare_send only). */
+  content_hash?: string | null
+  idempotency_key?: string | null
   created_at: number
   updated_at: number
 }
