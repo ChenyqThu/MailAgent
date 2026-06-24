@@ -410,15 +410,22 @@ ai@6 / @assistant-ui/react(+react-ai-sdk) / zod 已装（devDeps）；markdown �
 ```
 </details>
 
-### P4-Phase04a — Generative UI & A2UI 工具卡片（下一个 session）
+### P4-Phase04a — Generative UI & A2UI 工具卡片 ✅ 已落地（2026-06-24，commit `09424fd4`，全程 flag-off `MAILAGENT_A2UI_TOOL_CARDS`）
 
-> 把 03b 的写工具 approval / tool result 从 generic trace 升级为 assistant-ui inline **A2UI 卡片**（ComponentRegistry +
-> DraftReplyCard / NotionSyncCard + generic fallback），gated `MAILAGENT_A2UI_TOOL_CARDS`（默认 off）。**核心 = 03b 留的
-> editedInput/re-sign gap**（architecture §13.10.2(1)：ai@6 signed approval 绑 input → 原生不支持 edit-tier 改料；本 phase 在
-> DraftReplyCard 编辑正文时**重签/re-issue approval** 使编辑后 input 经二调执行，保 R5 不破）。主要是**视图层**活（assistant-ui
-> Tool UI 卡渲染 A2UI payload，类比 Phase 01 view-layer，eval trace 理应不受影响）。**不做高风险外发**（SendApprovalCard +
-> email_prepare_send = 04b）/ 不接 AG-UI（05）/ 不 cutover（06）。
-> 可选先建子任务：`task.py create "chat-panel Phase 04a A2UI cards" --parent 06-23-agent-eval-memory-skill-assistant-ui-ai-sdk`。
+> **DONE**。A2UI ComponentRegistry（`createComponentRegistry`/`byName`→assistant-ui `tools.by_name`/`resolve` miss→generic
+> ToolTraceCard **不阻断**）+ 富卡片（DraftReplyCard[edit 可编辑 markdown] / NotionSyncCard[email_resync] / ApprovalActionCard
+> [flag·archive·pin]）+ `buildToolA2UIPayload` 单一真源（卡片渲染 + gateway 审计共用）+ `getAssistantPartComponents` flag-off
+> 字节级一致。**🔴 核心裁决 = 域内 re-approve（secret 保持 on）**：ai@6 验签绑 history 里的 `toolCall.input` 且 `signToolApproval`
+> 未导出 → 无法 ai@6 格式重签；裁决「编辑从不进 ai@6 history input」—— 卡片改正文 → `POST /api/ai/approval/resolve` →
+> `ApprovalGuard.applyEdit` 存 `editedInput`（仅 editableFields，identity[internal_id] pin）→ `verify` 返 `effectiveInput` →
+> execute 跑编辑后 input；卡片只发 `{approved:true}`，body 走侧信道 → 二调对未变的 input 验签仍过（无安全回退）。preview 不可编辑
+> （E_APPROVAL_NOT_EDITABLE）。a2ui 只进审计绝不进模型 result（保 03b parity）→ `chat_tool_call.ui_payload_json`（`CHAT_DB_VERSION
+> 10→11`）。R5 零改 rules.py（recorder `userEdited`→`pending_confirmation.user_edited` + fixture `runs/ai-sdk-approval-edit.jsonl`
+> AGT-ACTION-001 hard_pass）。验收：typecheck 0 · vitest **1828**（唯一 fail = backend_lifecycle resourcesPath electron-as-node
+> 伪影，node runner 62/62 过）· agent_eval **88** · 卡片截图 dark+light（重建 `frontend/poc/cards/` harness）· code-reviewer(opus)
+> APPROVE（6 不变式全 PASS 含对抗 edit 安全，0 CRITICAL/HIGH）。落地见 [architecture §13.11](../chat-panel-ai-sdk-assistant-ui-refactor/architecture.md#1311-phase-04a-落地2026-06-24a2ui-componentregistry--富工具卡片--editre-approve)。原 /goal 备查于下。
+
+<details><summary>原 P4-Phase04a /goal（备查）</summary>
 
 ```
 开工先读：
@@ -438,6 +445,44 @@ ai@6 / @assistant-ui/react(+react-ai-sdk) / zod 已装（devDeps）；markdown �
 验收（phase-04 §10）：MAILAGENT_A2UI_TOOL_CARDS=1 下 tool cards 正常渲染；email_draft_reply 可编辑后创建草稿（edit→re-sign 真生效）；registry miss 不阻断；flag-off（默认）走 generic ToolTraceCard 字节级不变；typecheck 0 + test 无新增失败；tests/agent_eval ≥ baseline。
 本阶段不做：高风险外发 SendApprovalCard + email_prepare_send/send_approved（04b 末，content hash + idempotency）/ AG-UI（05）/ cutover 删 legacy（06）。
 .env.example 登记 MAILAGENT_A2UI_TOOL_CARDS。证据（卡片截图 + edit→re-sign approval flow trace + R5 eval + 测试）贴对话。完成用 codex 或 code-reviewer 过 diff 再收。
+```
+</details>
+
+### P4-Phase04b — 高风险外发 SendApprovalCard + email_prepare_send（下一个 session）
+
+> 04a 把 preview/edit 写工具升级为富卡片；04b 是**最后一道高风险闸**：引入**真实外发**（`email_prepare_send` blocking
+> tier + 真 SMTP send），用 `SendApprovalCard`（To/CC/BCC/Subject/Body/附件 + 外部收件人·敏感词 warning + expiry
+> countdown）做最终人工确认，并叠 **content hash + idempotency + 双 guard**（Gateway ApprovalService + Python domain
+> send ledger）。gated（建议 `MAILAGENT_AI_SDK_SEND_TOOL`，默认 off + 须 03b/04a flag 同开）。
+> **🔴 最大 landmine = eval 安全地板张力**：当前 `tool_catalog.json` 的 `no_send_tool` 明写「**没有** send / 硬删 /
+> reply-all-send 工具，最外向是 email_draft_reply（只草拟不发）」，且 R2 安全任务（AGT-SAFETY-*/AGT-ACTION-001
+> forbidden_tools 含 `email_send`）以此为底。新增真实 send 工具 = 动这条地板 —— 必须：新工具名**不叫 `email_send`**
+> （那是 R2 禁用名）、是 blocking tier **永远** needs explicit human approval（绝不 auto-send）、catalog/safety rubric
+> 同步更新且 R2/R5 baseline **零回退**。catalog 改动遇 `materialize_ref(main)` 提交序坑（见 [[P2d]]：commit 到 main 后
+> catalog 比对才全绿）。**🔴 真实 SMTP 依赖**：复用既有 compose send 路径（`feat/island-p0-fixes` 的真实 SMTP，serve-api
+> 写端点 + MailWriteService），未 dogfood 过 → 04b 须真发一封自测信验收（高风险，dogfood gate）。
+> 可选先建子任务：`task.py create "chat-panel Phase 04b send approval" --parent 06-23-agent-eval-memory-skill-assistant-ui-ai-sdk`。
+
+```
+开工先读：
+- docs/plans/chat-panel-ai-sdk-assistant-ui-refactor/{phase-04-generative-ui-hitl,architecture,protocol-contracts}.md
+  （phase-04 §4.3 = SendApprovalCard 必备字段[To/CC/BCC/Subject/Body editor/附件/外部收件人·敏感词 warning/expiry countdown/允许发送·修改后继续·取消] / §5 = ApprovalService(ApprovalRecord{contentHash,idempotency,expiry,status}) / §6 = 外发 domain guard 双层校验清单[Gateway: approval exists·not expired·approved/edited·hash(finalDraft)==contentHash·idempotency 未用；Python: token 签名·未过期·payload hash·idempotency 未在 send ledger·backend 支持 send] / §10 验收 / §11 回滚；**architecture §13.11 = 04a edit→re-approve 侧信道（04b 的 edit→re-approve 复用它 + 加 content hash 重算）**、§13.10.3 = 两层 guard；protocol-contracts §3 = A2UIPayload.audit{contentHash} / §6.2 = POST /api/email/send-approved 契约 / §7 = ToolApprovalRequest.approval.contentHash）
+- frontend/src/ai-gateway/{tools/write.ts,tools/types.ts,security/approval.ts,server.ts,config.ts}（04a 落地：auditedWriteTool 两调 + ApprovalGuard.applyEdit 侧信道 + /api/ai/approval/resolve；本 phase 加 blocking-tier email_prepare_send + content hash 绑定 + idempotency + ApprovalGuard 扩 contentHash/idempotency）+ ai_gateway_lifecycle.ts（DomainClient 加 send 方法）
+- frontend/src/shared/assistant/tools/（04a：a2ui.ts 单一真源 + ComponentRegistry + DraftReplyCard/_cardShell；本 phase 加 SendApprovalCard[blocking] + a2ui SendApprovalCardProps + componentForTool 注册 email_prepare_send）+ security/hashOutboundPayload.ts（新）
+- 真实 send 后端：src/api/routers/email.py 的 send 端点 + src/services/ MailWriteService send（复用 compose 的真实 SMTP；若无 send-approved 端点则新增，带 server-side approval token + idempotency send ledger 校验）
+- tests/agent_eval/{tool_catalog.json,tasks/*,rubrics/email_action.md}（**🔴 加 email_prepare_send blocking + 更新 no_send_tool 措辞 + 保 R2/R5 baseline 零回退**；safety tasks forbidden_tools 仍禁 auto-send 名）+ frontend/src/electron/main/chat_db.ts chat_tool_call（content_hash/idempotency_key 若需→bump CHAT_DB_VERSION 11→12 同纪律）
+前置已绿（引用即可，勿重验/重装）：Phase 04a ✅（A2UI ComponentRegistry + 富卡片 + edit→re-approve 侧信道 + ui_payload_json，commit `09424fd4`，architecture §13.11）；03b ✅（needsApproval 两调 + ApprovalGuard id/hash/expiry + R5 adapter）；ai@6 内建 needsApproval/InvalidToolApprovalSignatureError + assistant-ui hitl/makeAssistantToolUI 原语。🔴 已知坑（沿用）：edit→re-approve 走域内侧信道（编辑不进 ai@6 history input，secret 保持 on）；全量 vitest 须 electron-as-node runner（backend_lifecycle process.resourcesPath 是唯一伪影，node runner 全过）；flag 走 per-flag vite define；动 chat_db schema → bump CHAT_DB_VERSION（非 EXPECTED_DB_VERSION）+ db.py 头注释 + 终态断言 chat_db(_anchor).test + test_chat.py seed DDL；catalog 改动遇 materialize_ref(main) → commit 后 pytest tests/agent_eval 才全绿（pre-commit 该条 deselect），工具数断言同步改。
+
+/goal 完成 chat-panel Phase 04b（高风险外发 SendApprovalCard + email_prepare_send），gated MAILAGENT_AI_SDK_SEND_TOOL（默认 off，须与 _GATEWAY/_WRITE_TOOLS/_A2UI 同开），产出可验证：
+(1) email_prepare_send（blocking tier，永远 needsApproval，绝不 auto-send）：tool({inputSchema:zod[to/cc/bcc/subject/body/attachments/internal_id?], needsApproval, execute})；首调结束于 approval-request → SendApprovalCard；二调仅在 approve + content hash 匹配 + idempotency 未用时经 DomainClient → serve-api send 端点真实 SMTP 发送；**工具名不叫 email_send**（R2 禁用名）；
+(2) SendApprovalCard（blocking，frontend/src/shared/assistant/tools/mail/）：展 To/CC/BCC/Subject/Body editor/附件列表 + 外部收件人·敏感词 warning + approval expiry countdown + 允许发送/修改后继续/取消；编辑 → re-approve 复用 04a 侧信道 + **重算 content hash**；
+(3) **双层 guard（architecture §13.10.3 / phase-04 §6）**：Gateway ApprovalService（approval exists·not expired·approved/edited·hash(finalDraft)==contentHash·idempotency 未在 gateway scope 用）+ Python domain（approval token 签名·未过期·payload hash 匹配·idempotency 未在 send ledger·backend 支持 send）；任一失败 → tool_result error/canceled + **邮件绝不发出** + audit 错误码；
+(4) eval 安全地板（**零回退判据**）：tool_catalog 加 email_prepare_send（blocking, write:true）+ 更新 no_send_tool 措辞（区分「无 auto-send」vs「有 human-gated prepare-send」）；R2 安全任务/forbidden_tools 仍禁裸发名；新增 AGT-ACTION/SAFETY 任务（prepare_send 须 pending_confirmation·hash mismatch 不发·idempotency 重放不重发）；run_baseline --compare 在新 catalog 下 hard_pass 不回退（rules.py 零改）；
+(5) audit + 持久化：send approval 写 chat_tool_call（approval_status/content_hash/idempotency_key；若加列→bump CHAT_DB_VERSION 11→12 同纪律 + db.py + test_chat seed）；
+(6) 测试 + dogfood：ai-gateway/tools/{send_approval,outbound_hash}.test.ts（needsApproval / hash mismatch 拒发 / idempotency 重放拒 / expiry / 双 guard / 外部收件人 warning）+ SendApprovalCard.test.tsx（render + edit→re-approve + warning）+ R5 send fixture；**真发一封自测信（dogfood gate，发给自己验证真实 SMTP + 落 Sent + idempotency 不重发）**。
+验收（phase-04 §10）：email_prepare_send 无 approval / hash mismatch / idempotency 重放 均不能真实发送；SendApprovalCard 外部收件人 warning 正常；双 guard 任一失败邮件不发；flag-off（默认）字节级不变；typecheck 0 + test 无新增失败；tests/agent_eval ≥ baseline；真发自测信成功并落 Sent。
+本阶段不做：AG-UI mirror（05）/ cutover 删 legacy harness/UI（06）/ remote-web 暴露面（resolve+send 端点 loopback CORS 收紧与 06 同批）。
+.env.example 登记 MAILAGENT_AI_SDK_SEND_TOOL。证据（SendApprovalCard 截图 + 真发自测信 trace + 双 guard 拒发用例 + R5 eval + 测试）贴对话。完成用 codex 或 code-reviewer 过 diff 再收。
 ```
 
 ### P4-Phase03+ — 按 chat-panel roadmap §4 PR 拆分逐 phase 推进
