@@ -98,7 +98,14 @@ export type {
 // ApprovalGuard binding). user_edited_input_json already exists (v3). NULL for every read-tool
 // + legacy row (additive ALTER default). Plain additive ALTER, hasColumn idempotency guard.
 // 🔴 bump 同步刷 src/chat/db.py 头注释 + test_chat.py seed DDL；NOT backend_lifecycle.EXPECTED_DB_VERSION.
-const CHAT_DB_VERSION = 10
+// v11 (P4 Phase 04a, task 06-23 chat-panel A2UI tool cards) — chat_tool_call.ui_payload_json:
+// the A2UI render payload (protocol-contracts §3) the rich tool card showed for this write
+// (component + props + audit). Stamped only when MAILAGENT_A2UI_TOOL_CARDS is on AND the tool
+// has a registered card; NULL for read tools / legacy rows / flag-off writes (additive ALTER
+// default). UI/audit only — never enters the model-visible tool result (keeps 03b parity).
+// Plain additive ALTER, hasColumn idempotency guard (same discipline as v5/v6/v8/v9/v10).
+// 🔴 bump 同步刷 src/chat/db.py 头注释 + test_chat.py seed DDL；NOT backend_lifecycle.EXPECTED_DB_VERSION.
+const CHAT_DB_VERSION = 11
 
 export function resolveChatDbPath(): string {
   const fromEnv = process.env['AI_CHAT_DB_PATH']
@@ -693,6 +700,29 @@ function migrate(db: Database.Database): void {
       throw err
     }
   }
+
+  // v10 → v11 — task 06-23 (chat-panel P4 Phase 04a) A2UI tool cards. Add
+  // chat_tool_call.ui_payload_json: the A2UI render payload (component + props + audit) the
+  // rich tool card showed for an AI SDK Gateway write tool. Stamped only when
+  // MAILAGENT_A2UI_TOOL_CARDS is on; NULL for read tools / legacy rows / flag-off writes
+  // (additive ALTER default). UI/audit only. Plain additive ALTER, same hasColumn idempotency
+  // guard as v5/v6/v8/v9/v10. ai_chat.db has its own version ladder; this bump does NOT touch
+  // backend_lifecycle.EXPECTED_DB_VERSION.
+  if (current < 11) {
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      if (!hasColumn(db, 'chat_tool_call', 'ui_payload_json')) {
+        db.exec('ALTER TABLE chat_tool_call ADD COLUMN ui_payload_json TEXT')
+      }
+      db.prepare(
+        "INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', '11')"
+      ).run()
+      db.exec('COMMIT')
+    } catch (err) {
+      db.exec('ROLLBACK')
+      throw err
+    }
+  }
 }
 
 // ── singleton ───────────────────────────────────────────────────────────
@@ -1187,6 +1217,8 @@ export function appendToolCall(input: AppendToolCallInput): ChatToolCall {
     content_offset: contentOffset,
     approval_status: null,
     approval_hash: null,
+    // v11 — A2UI render payload, set on update (like approval_*); insert default NULL.
+    ui_payload_json: null,
     created_at: now,
     updated_at: now
   }
@@ -1225,6 +1257,11 @@ export function updateToolCall(toolCallId: number, patch: UpdateToolCallPatch): 
   if (patch.approvalHash !== undefined) {
     fields.push('approval_hash = ?')
     params.push(patch.approvalHash)
+  }
+  // v11 (Phase 04a) — A2UI render payload (ui_payload_json).
+  if (patch.uiPayloadJson !== undefined) {
+    fields.push('ui_payload_json = ?')
+    params.push(patch.uiPayloadJson)
   }
   if (fields.length === 0) return
   fields.push('updated_at = ?')

@@ -30,6 +30,10 @@ export interface BuildGatewayToolsOpts {
   /** The per-gateway ApprovalGuard the write tools bind to (id/hash/expiry domain guard).
    *  Required to build write tools; omitted → read-only even when writeToolsEnabled. */
   approvalGuard?: ApprovalGuard
+  /** MAILAGENT_A2UI_TOOL_CARDS (phase-04a). When on, write tools stamp the A2UI render payload
+   *  into their audit row (ui_payload_json). UI/audit only — does not change the model result
+   *  (off → byte-identical to 03b). */
+  a2uiEnabled?: boolean
 }
 
 /** Names of the read tools exposed by the gateway (for tests / observability). */
@@ -61,7 +65,12 @@ export function buildGatewayTools(
   // guard) → read-only, byte-identical to 03a. Approval is enforced two ways: ai@6's
   // needsApproval/signature (set at streamText) + the guard bound here (id/hash/expiry).
   if (opts.writeToolsEnabled && opts.approvalGuard) {
-    Object.assign(tools, createWriteTools(opts.domain, collector, opts.approvalGuard))
+    Object.assign(
+      tools,
+      createWriteTools(opts.domain, collector, opts.approvalGuard, {
+        a2uiEnabled: opts.a2uiEnabled
+      })
+    )
   }
   return tools
 }

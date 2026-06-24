@@ -93,7 +93,10 @@ function persistTurn(turn: PersistTurnInput): void {
         ? { userEditedInputJson: tc.userEditedInputJson }
         : {}),
       ...(tc.approvalStatus !== undefined ? { approvalStatus: tc.approvalStatus } : {}),
-      ...(tc.approvalHash !== undefined ? { approvalHash: tc.approvalHash } : {})
+      ...(tc.approvalHash !== undefined ? { approvalHash: tc.approvalHash } : {}),
+      // Phase 04a — the A2UI render payload the rich card showed (ui_payload_json audit).
+      // Present only when MAILAGENT_A2UI_TOOL_CARDS is on AND the tool has a card.
+      ...(tc.uiPayloadJson !== undefined ? { uiPayloadJson: tc.uiPayloadJson } : {})
     })
   }
 }
@@ -139,6 +142,10 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
   // the layer that stacks on the domain guard). Both only matter when write tools are on.
   const approvalGuard = new ApprovalGuard()
   const toolApprovalSecret = randomBytes(32).toString('hex')
+  // Phase 04a — MAILAGENT_A2UI_TOOL_CARDS gates the rich tool cards. Backend side it (a) stamps
+  // the A2UI render payload into the write-tool audit (ui_payload_json) and (b) is the toggle
+  // the renderer mirrors (per-flag vite define) to mount the cards. Off → byte-identical to 03b.
+  const a2uiEnabled = envBool('MAILAGENT_A2UI_TOOL_CARDS', false)
   const handle = await startAiGatewayServer({
     port: resolveAiGatewayPort(),
     baseUrl: getLlmBaseUrl(),
@@ -146,6 +153,14 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     model: getLlmModel(),
     persistTurn,
     toolApprovalSecret,
+    // Phase 04a — apply an edit-tier UI edit to a pending approval (the resolve side-channel).
+    // applyEdit overlays the editable fields onto the original input (identity pinned) WITHOUT
+    // touching the ai@6 history input, so the signed approval stays valid on replay. Throws an
+    // ApprovalError (.code) on not-found / expired / not-editable → typed HTTP from server.ts.
+    resolveEditedApproval: (toolCallId, editedFields) => {
+      const rec = approvalGuard.applyEdit(toolCallId, editedFields)
+      return { approvalId: rec.approvalId, toolName: rec.toolName }
+    },
     // Factory: the gateway builds the tools per request bound to a fresh audit collector
     // (closure). Read tools always; the five approval-gated write tools only when
     // MAILAGENT_AI_SDK_WRITE_TOOLS is on (default off → byte-identical to 03a read-only).
@@ -155,7 +170,8 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
           domain,
           kosTimeDecayEnabled: envBool('MAILAGENT_KOS_TIME_DECAY_ENABLED', true),
           writeToolsEnabled: envBool('MAILAGENT_AI_SDK_WRITE_TOOLS', false),
-          approvalGuard
+          approvalGuard,
+          a2uiEnabled
         },
         collector
       )

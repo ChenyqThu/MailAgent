@@ -53,10 +53,11 @@ export interface PersistTurnInput {
   userMessage: MailAgentUIMessage | null
   responseMessage: MailAgentUIMessage
   usage?: { inputTokens?: number | null; outputTokens?: number | null }
-  /** Phase 03a/03b — the tool calls executed this turn (collected by the gateway via a
+  /** Phase 03a/03b/04a — the tool calls executed this turn (collected by the gateway via a
    *  closure-bound per-request collector, NOT streamText experimental_context). The
    *  wrapper writes each to chat_tool_call keyed to the persisted assistant message;
-   *  write tools carry their tier + approval audit. Empty / omitted when no tools ran. */
+   *  write tools carry their tier + approval audit + (04a) the A2UI ui_payload_json.
+   *  Empty / omitted when no tools ran. */
   toolCalls?: GatewayToolAuditEntry[]
 }
 
@@ -92,4 +93,15 @@ export interface AiGatewayConfig {
    *  generates a per-process random secret; tests inject a fixed one). Omitted → no
    *  signing (write tools still need approval, just unsigned — dev/test only). */
   toolApprovalSecret?: string
+  /** Phase 04a — apply a UI edit to a pending edit-tier approval (POST /api/ai/approval/resolve).
+   *  The Electron wrapper implements this as `approvalGuard.applyEdit(toolCallId, editedFields)`:
+   *  it overlays the editable fields onto the original input (identity pinned) so the next
+   *  streamText call's execute runs the edited input WITHOUT changing the ai@6 history input
+   *  (the signed approval stays valid). Throws an ApprovalError-shaped error (`.code`) on
+   *  not-found / expired / not-editable, which the server maps to a typed HTTP error. Omitted →
+   *  /api/ai/approval/resolve returns 501 (edit cards not wired — read-only / 03b config). */
+  resolveEditedApproval?: (
+    toolCallId: string,
+    editedFields: Record<string, unknown>
+  ) => { approvalId: string; toolName: string }
 }

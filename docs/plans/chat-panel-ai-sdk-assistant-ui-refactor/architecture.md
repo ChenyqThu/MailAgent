@@ -634,3 +634,56 @@ R5 期望序 = `tool_use → pending_confirmation(同 tool_name+tier) → tool_r
 - **mock-model 难驱动 streamText 的 approval 两调 loop**（同 03a §13.9.4）：CI 不跑真实 streamText 两调，而由单测覆盖 —— `approval.test.ts`（ApprovalGuard 单元 + 写工具 execute/needsApproval 闭环：approve/edit/reject/hash-mismatch/expired/not-found + 审计）+ `write_preview.test.ts`（gate / needsApproval 声明 / 5 工具 parity）；真实模型端到端 approval flow 是 manual lane（CRS）。
 - **前端审批卡仍是 generic/复用**（assistant-ui 原生 HITL 原语）：富 `SendApprovalCard`/`DraftReplyCard`/`NotionSyncCard` = 04a。
 - **edit-tier 改料 + signed approval 的张力**见 §13.10.2（1）→ 04a 处理。
+
+---
+
+## 13.11 Phase 04a 落地（2026-06-24，A2UI ComponentRegistry + 富工具卡片 + edit→re-approve）
+
+> 把 03b 的 generic ToolTraceCard fallback 升级为**专用富卡片**，并补上 03b 留的 editedInput/re-sign gap（§13.10.2(1)）。全程 `MAILAGENT_A2UI_TOOL_CARDS` flag-gated（默认 off → 工具槽只剩 generic fallback，字节级等同 03b）。高风险外发 `SendApprovalCard` + `email_prepare_send`（04b）/ AG-UI（05）/ cutover 删 legacy（06）留后续。
+
+### 13.11.1 产出
+
+| 文件 | 职责 |
+|---|---|
+| `frontend/src/shared/assistant/tools/a2ui.ts` | A2UIPayload 类型（protocol §3）+ zod `parseA2UIPayload`（invalid→null 永不抛）+ `buildToolA2UIPayload(toolName,{args,result})`：工具 io → 卡片 typed props 的**单一真源**（卡片渲染 + gateway 审计共用，永不漂移）。纯 TS（无 react），gateway 相对 import + 卡片 `@shared` import |
+| `tools/ComponentRegistry.tsx` | `createComponentRegistry`（generic）+ `componentRegistry`（5 写工具→3 卡片）：`byName`（喂 assistant-ui `tools.by_name`）+ `components`（A2UI allowlist）+ `resolve(toolName)`（miss→undefined→generic fallback，**永不阻断**） |
+| `tools/mail/DraftReplyCard.tsx` | email_draft_reply（edit）：pending 渲**可编辑 markdown textarea** + approve/edit/reject；done 展 draft id/mailbox/含修改标记 |
+| `tools/notion/NotionSyncCard.tsx` | email_resync（preview）：重推预览 + old→new page id + action |
+| `tools/generic/ApprovalActionCard.tsx` | email_flag/archive/pin（preview）：一行 summary + approve/reject |
+| `tools/_cardShell.tsx` | 共享 `CardFrame`（icon+title+phase pill）+ `ApprovalActions`（approve/reject + busy/error）+ `deriveCardPhase`（pending/authorized/done/rejected/expired/error，phase-04 §7 状态表）+ `postApprovalEdit`（resolve 侧信道 POST） |
+| `tools/registerToolUIs.tsx` | `getAssistantPartComponents()`：flag-off 返回 Phase 01 对象（generic fallback only，字节级一致）；flag-on 加 `tools.by_name` |
+| `security/approval.ts` | `applyEdit(toolCallId,editedFields)` 侧信道 override（edit-tier only，identity pin）+ `verify` 返回 `effectiveInput` + `ApprovalRecord.{input,editableFields,editedInput}` + `E_APPROVAL_NOT_EDITABLE` |
+| `tools/types.ts` / `tools/write.ts` | auditedWriteTool 用 `v.effectiveInput` 跑 run + a2ui 审计（`uiPayloadJson`，gated）；email_draft_reply register `editableFields=['body_markdown']` |
+| `server.ts` / `config.ts` / `ai_gateway_lifecycle.ts` | `POST /api/ai/approval/resolve`（404/410/400/501 typed）→ `cfg.resolveEditedApproval`→`guard.applyEdit`；persistTurn 写 `ui_payload_json`；envBool `MAILAGENT_A2UI_TOOL_CARDS`→a2uiEnabled |
+| chat_db.ts/model.ts/db.py/test_chat.py | `chat_tool_call.ui_payload_json` → bump `CHAT_DB_VERSION 10→11`（additive ALTER + hasColumn 幂等 + 终态断言 + db.py 头注释 + seed DDL） |
+| `tests/agent_eval/recorder/ai_sdk_adapter.ts` | `userEdited` → `pending_confirmation.user_edited`（rules.py 忽略额外字段）+ EDITED_DRAFT_SCENARIO（AGT-ACTION-001）→ `runs/ai-sdk-approval-edit.jsonl` |
+
+### 13.11.2 🔴 edit→re-approve 的核心裁决（解 §13.10.2(1) 的 gap）
+
+**约束**：ai@6 `validateApprovedToolApprovals` 对 **history 里的 `toolCall.input`** 验签（`secret+approvalId+toolCallId+toolName+input`），且 `signToolApproval` **未导出** → 无法在 ai@6 格式下重签编辑后的 input；`ToolApprovalResponse={approvalId,approved,reason?}` 也无 editedInput 字段。
+
+**裁决 = 域内 re-approve（side-channel override），secret 保持 on**：用户在 DraftReplyCard 改正文 → 卡片先 `POST /api/ai/approval/resolve {toolCallId, editedInput}` → `ApprovalGuard.applyEdit` 把编辑后的字段（仅 `editableFields`，identity pin 原始）存进记录的 `editedInput` → 再 `respondToApproval({approved:true})`。**关键：编辑从不进 ai@6 history input**——模型提的 input X 全程不变，ai@6 二调对 X 验签仍通过（secret 不必关、无安全回退）；execute 里 `guard.verify(X)` 发现 `editedInput` → 返回 `effectiveInput=X'`，domain 写 X'，审计 `approval_status='edited'` + `user_edited_input_json=X'`。这是「ai@6 当 approve/reject 传输层、domain 当编辑+执行权威」的干净分层。preview-tier 不注册 editableFields → applyEdit 抛 `E_APPROVAL_NOT_EDITABLE`。
+
+**为何不选「edit-tier 不设 secret」**：secret 是 per-streamText-call（一调一 secret，无法只对 edit-tier 关）；且即便关 secret，编辑后的 input 仍得想办法进 execute（assistant-ui 的 approve/reject 不带 editedInput）——所以侧信道 override 无论如何都要，既然要，保 secret on 严格更优。
+
+### 13.11.3 a2ui 不进模型 result（保 03b parity）
+
+A2UI payload **只**进 `chat_tool_call.ui_payload_json`（审计）+ 卡片前端经同一 `buildToolA2UIPayload` 自建渲染——**绝不**加进工具的 model-visible result（否则破 03b parity test + 给模型加噪声）。flag-off 时 a2ui 完全不生成（gated），写工具 result 字节级等同 03b。
+
+### 13.11.4 R5 重对齐（rules.py 零改 — 不回退判据）
+
+edited draft 的 trace 仍 `tool_use → pending_confirmation(edit, user_edited) → tool_result(ok)`，在**未改的 rules.py** 下 hard_pass（fixture `runs/ai-sdk-approval-edit.jsonl`，AGT-ACTION-001；Python `test_ai_sdk_realign.py::test_ai_sdk_edited_draft_trace_passes_r5` 验）。adapter 把 `userEdited` surface 成 `pending_confirmation.user_edited`（informational，R5 忽略额外字段，verdict 不变）。
+
+### 13.11.5 验收证据
+
+- `pnpm typecheck`(node+web) 0；全量 vitest **1828 passed / 1 skipped**（+42：a2ui 14 + approval_resolve 10 + ComponentRegistry 8 + DraftReplyCard 6 + NotionSyncCard 3 + chat_db v11 1）。**唯一 1 fail = backend_lifecycle `process.resourcesPath` electron-as-node 伪影**（plain node runner 62/62 全过，与本 phase 无关，03b 已记）。
+- `tests/agent_eval` **88 passed**（≥ baseline 87，+1 edit R5 测试）；`run_baseline` validate OK（36 traces，schema OK）。
+- 卡片截图（`frontend/poc/cards/` harness，dark+light×coral，gitignored shots）：DraftReplyCard pending（可编辑 textarea）+ done（含修改）/ NotionSyncCard / ApprovalActionCard / registry miss→generic ToolTraceCard 全正常渲染。
+- edit→re-approve flow（DraftReplyCard.test + approval_resolve.test 端到端）：register body A → applyEdit body B →（ai@6 history input 仍 A）execute 跑 B、审计 edited；失败 resolve 不 approve。
+- flag-off：`getAssistantPartComponents()===assistantPartComponents`（字节级 Phase 01）。
+
+### 13.11.6 已知 gap / 留后续
+
+- **mock-model 难驱动 streamText 的 approval 两调 loop**（沿用 03a/03b）：CI 不跑真实 streamText 两调，由单测覆盖（guard + 卡片 + endpoint + parity）；真实模型端到端 approval+edit flow 是 manual lane（CRS）。
+- **resolve 端点的 loopback 信任模型**：当前 `ACAO:*` loopback-only（同 §13.8.5），同机恶意页面理论上可在用户 approve 前改 pending draft 的 body（用户仍在卡片里看到当前值再确认 + domain expiry 兜底）。开远程 Web 面（06+）前须收紧 Origin/loopback-token（与 §13.8.5 同批）。
+- 高风险外发 `SendApprovalCard` + `email_prepare_send`/`send_approved`（content hash + idempotency）= **04b**；AG-UI mirror = 05；cutover 删 legacy = 06。

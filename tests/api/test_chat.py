@@ -60,6 +60,7 @@ CREATE TABLE chat_tool_call (
     duration_ms INTEGER, confirmation_tier TEXT NOT NULL, confirmed_at INTEGER,
     content_offset INTEGER,
     approval_status TEXT, approval_hash TEXT,
+    ui_payload_json TEXT,
     created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
 );
 """

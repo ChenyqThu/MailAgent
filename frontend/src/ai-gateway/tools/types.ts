@@ -24,6 +24,10 @@ import type { z } from 'zod'
 
 import { DomainError } from '../python/domainClient'
 import { type ApprovalGuard, type ApprovalRisk } from '../security/approval'
+// RELATIVE import (not the @shared alias) so the pure-Node poc harness (tsx, which doesn't
+// resolve tsconfig paths at runtime) can load the gateway tools; vite/vitest/tsc resolve it
+// identically. a2ui.ts is pure TS (types + zod, no react) — safe for the gateway core.
+import { buildToolA2UIPayload } from '../../shared/assistant/tools/a2ui'
 
 /** One finished tool call, ready to persist into chat_tool_call. The gateway
  *  collects these per request and the Electron wrapper writes them (appendToolCall
@@ -47,6 +51,11 @@ export interface GatewayToolAuditEntry {
   approvalHash?: string
   /** Phase 03b — the user-edited input (edit-tier writes only); null otherwise. */
   userEditedInputJson?: string | null
+  /** Phase 04a — the A2UI render payload (JSON) the rich card showed for this tool, stamped
+   *  for audit into chat_tool_call.ui_payload_json. Only present when MAILAGENT_A2UI_TOOL_CARDS
+   *  is on AND the tool has a registered card; null/omitted otherwise. NOT part of the
+   *  model-visible tool result (UI/audit only — keeps 03b parity + no model noise). */
+  uiPayloadJson?: string | null
 }
 
 /** A per-request audit collector — a plain array the gateway creates per /api/ai/chat
@@ -167,6 +176,13 @@ export function auditedWriteTool<I>(
     description: string
     inputSchema: z.ZodType<I>
     risk: ApprovalRisk
+    /** Phase 04a — top-level input fields the user may edit on the rich card (edit-tier
+     *  only, e.g. ['body_markdown']). Registered onto the approval so applyEdit can overlay
+     *  only these (identity fields pinned). Omitted → not editable. */
+    editableFields?: readonly string[]
+    /** Phase 04a — stamp the A2UI render payload into the audit row (ui_payload_json) when
+     *  MAILAGENT_A2UI_TOOL_CARDS is on. UI/audit only — never enters the model result. */
+    a2uiEnabled?: boolean
     run: (
       input: I,
       ctx: { userEdited: boolean; signal: AbortSignal | undefined }
@@ -175,6 +191,13 @@ export function auditedWriteTool<I>(
   collector: GatewayToolAuditCollector,
   guard: ApprovalGuard
 ): Tool {
+  /** Build the optional A2UI audit payload (UI/audit only — NOT the model result). */
+  const a2uiJson = (args: unknown, result: unknown, userEdited: boolean): string | undefined => {
+    if (!opts.a2uiEnabled) return undefined
+    const payload = buildToolA2UIPayload(opts.name, { args, result, userEdited, risk: opts.risk })
+    return payload ? safeJson(payload) : undefined
+  }
+
   return tool({
     description: opts.description,
     inputSchema: opts.inputSchema,
@@ -183,19 +206,24 @@ export function auditedWriteTool<I>(
     // params are left unannotated so tool() infers INPUT=I from inputSchema alone — an
     // explicit `: I` on these contravariant param sites breaks tool()'s overload inference.)
     needsApproval: (input, { toolCallId }) => {
-      guard.register(toolCallId, opts.name, opts.risk, input)
+      guard.register(toolCallId, opts.name, opts.risk, input, opts.editableFields)
       return true
     },
     execute: async (input, { toolCallId, abortSignal }) => {
       const start = Date.now()
-      // Domain guard (second run): expiry + (preview) input-binding, layered on ai@6's
-      // signature. Rejection → audit 'rejected' + tool-error, write never runs.
+      // Domain guard (second run): expiry + (preview) input-binding + (edit) UI-edit override,
+      // layered on ai@6's signature. Rejection → audit 'rejected' + tool-error, write never runs.
       let userEdited = false
       let approvalHash: string | undefined
+      let effectiveInput: unknown = input
       try {
         const v = guard.verify(toolCallId, input)
         userEdited = v.userEdited
         approvalHash = v.record.inputHash
+        // Phase 04a — execute the EFFECTIVE input (the applyEdit override when the user edited
+        // the card, else the verified input). The ai@6 history input stays `input` (signature
+        // intact); the domain decides what actually runs.
+        effectiveInput = v.effectiveInput
       } catch (e) {
         const { code, message } = normalizeToolError(e)
         collector.push({
@@ -211,8 +239,11 @@ export function auditedWriteTool<I>(
         throw new ToolExecutionError(code, message)
       }
       const approvalStatus = userEdited ? 'edited' : 'approved'
+      // userEditedInputJson records the EXECUTED (effective) input when edited; input_json
+      // stays the model-proposed (history) input — matching the legacy audit shape.
+      const userEditedJson = userEdited ? safeJson(effectiveInput) : null
       try {
-        const output = await opts.run(input as I, { userEdited, signal: abortSignal })
+        const output = await opts.run(effectiveInput as I, { userEdited, signal: abortSignal })
         collector.push({
           toolUseId: toolCallId,
           toolName: opts.name,
@@ -223,7 +254,8 @@ export function auditedWriteTool<I>(
           confirmationTier: opts.risk,
           approvalStatus,
           approvalHash,
-          userEditedInputJson: userEdited ? safeJson(input) : null
+          userEditedInputJson: userEditedJson,
+          uiPayloadJson: a2uiJson(effectiveInput, output, userEdited)
         })
         return output
       } catch (e) {
@@ -239,7 +271,7 @@ export function auditedWriteTool<I>(
           confirmationTier: opts.risk,
           approvalStatus,
           approvalHash,
-          userEditedInputJson: userEdited ? safeJson(input) : null
+          userEditedInputJson: userEditedJson
         })
         throw new ToolExecutionError(code, message)
       }

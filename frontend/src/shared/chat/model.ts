@@ -221,6 +221,10 @@ export interface ChatToolCall {
   /** Phase 03b (v10) — sha256 of the approved input (the domain ApprovalGuard binding).
    *  NULL for read tools + legacy rows. Optional (see approval_status). */
   approval_hash?: string | null
+  /** Phase 04a (v11) — the A2UI render payload (component + props + audit, protocol §3) the
+   *  rich tool card showed for an AI SDK Gateway write tool. NULL for read tools / legacy rows
+   *  / flag-off writes. Optional (absent on rows from a pre-v11 DB / older serve-api JSON). */
+  ui_payload_json?: string | null
   created_at: number
   updated_at: number
 }
@@ -250,6 +254,8 @@ export interface UpdateToolCallPatch {
   approvalStatus?: string | null
   /** Phase 03b (v10) — sha256 of the approved input (domain ApprovalGuard binding). */
   approvalHash?: string | null
+  /** Phase 04a (v11) — the A2UI render payload (JSON) the rich tool card showed. */
+  uiPayloadJson?: string | null
 }
 
 // ── 后端能力查询（派生自 BackendKind 的纯逻辑）──────────────────────────────

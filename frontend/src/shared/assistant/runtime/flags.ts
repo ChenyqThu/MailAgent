@@ -31,6 +31,11 @@ declare const __MAILAGENT_CHAT_RUNTIME__: string | undefined
 // flag, so the AI SDK runtime entry only shows when the gateway is actually
 // embedded. NON-secret (a boolean toggle); injected per-flag like the other two.
 declare const __MAILAGENT_AI_SDK_GATEWAY__: string | undefined
+// Phase 04a — renderer mirror of MAILAGENT_A2UI_TOOL_CARDS. Gates the rich A2UI tool
+// cards (DraftReplyCard / NotionSyncCard / generic approval card). Off (default) → the
+// assistant-ui tool slot keeps only the generic ToolTraceCard fallback (byte-identical to
+// Phase 01). NON-secret; injected per-flag like the others.
+declare const __MAILAGENT_A2UI_TOOL_CARDS__: string | undefined
 
 export type ChatRuntimeMode = 'legacy' | 'external-store' | 'ai-sdk'
 
@@ -65,6 +70,12 @@ function buildAiSdkGatewayFlag(): string | undefined {
     : undefined
 }
 
+function buildA2uiToolCardsFlag(): string | undefined {
+  return typeof __MAILAGENT_A2UI_TOOL_CARDS__ !== 'undefined'
+    ? __MAILAGENT_A2UI_TOOL_CARDS__
+    : undefined
+}
+
 /** True when the assistant-ui chat shell should replace the legacy AIChatPanel.
  *  Evaluated at call time (not module load) so tests can stub the env first. */
 export function isAssistantUiPanelEnabled(): boolean {
@@ -90,6 +101,14 @@ export function getChatRuntimeMode(): ChatRuntimeMode {
  *  it never shows when the gateway isn't running. */
 export function isAiSdkGatewayEnabled(): boolean {
   return truthy(resolveFlag('MAILAGENT_AI_SDK_GATEWAY', buildAiSdkGatewayFlag))
+}
+
+/** Phase 04a — true when the rich A2UI tool cards should replace the generic ToolTraceCard
+ *  fallback (renderer mirror of MAILAGENT_A2UI_TOOL_CARDS). Off (default) → the assistant-ui
+ *  tool slot keeps ONLY the generic fallback, byte-identical to Phase 01 / 03b. Evaluated at
+ *  call time so tests can stub the env first. */
+export function isA2uiToolCardsEnabled(): boolean {
+  return truthy(resolveFlag('MAILAGENT_A2UI_TOOL_CARDS', buildA2uiToolCardsFlag))
 }
 
 /** Loopback base URL of the embedded AI SDK Gateway, discovered from the

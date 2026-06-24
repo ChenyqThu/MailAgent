@@ -31,6 +31,18 @@
 //    request's tool factory). A gateway restart between the two calls drops the record →
 //    verify fails closed (E_APPROVAL_NOT_FOUND), which also matches ai@6 losing its
 //    per-process signing secret. Fail-closed is the safe direction for a write gate.
+//
+// Phase 04a — edit-tier UI edits via a domain side-channel (closes architecture §13.10.2(1)).
+//   ai@6's signed approval binds the signature to the tool INPUT IN THE MESSAGE HISTORY and
+//   `signToolApproval` is NOT exported, so we cannot re-sign an edited input in ai@6's format.
+//   Instead the user's edit NEVER touches the ai@6 history input: the rich card POSTs the
+//   edited fields to POST /api/ai/approval/resolve, which calls `applyEdit` to stamp an
+//   `editedInput` override onto the record (edit-tier only; identity fields pinned to the
+//   original). On the second streamText call ai@6 re-verifies its signature against the
+//   UNCHANGED history input (still valid → secret stays ON, no security regression), runs
+//   `execute`, and the write tool runs `verify(...).effectiveInput` — which returns the
+//   override. So the edit takes effect domain-side ("域内 re-approve") with the ai@6 signature
+//   intact. preview-tier never registers editable fields, so applyEdit rejects it.
 
 import { createHash, randomUUID } from 'node:crypto'
 
@@ -46,6 +58,9 @@ export type ApprovalErrorCode =
   | 'E_APPROVAL_NOT_FOUND'
   | 'E_APPROVAL_EXPIRED'
   | 'E_APPROVAL_HASH_MISMATCH'
+  // Phase 04a — applyEdit on a non-edit-tier (preview) record, or a record that registered
+  // no editable fields. preview writes are approve/reject only — they cannot be edited.
+  | 'E_APPROVAL_NOT_EDITABLE'
 
 /** A thrown domain-approval failure. `.code` lets normalizeToolError map it to a stable
  *  tool-error code without a dependency on this module. */
@@ -68,15 +83,29 @@ export interface ApprovalRecord {
   risk: ApprovalRisk
   /** sha256 of the canonical approved input — the anti-swap binding. */
   inputHash: string
+  /** Phase 04a — the original model-proposed input (kept so applyEdit can pin identity
+   *  fields and only overlay the editable ones). */
+  input: unknown
+  /** Phase 04a — which top-level input fields the user may edit (edit-tier only, e.g.
+   *  ['body_markdown'] for email_draft_reply). Empty/undefined → applyEdit rejects. */
+  editableFields?: readonly string[]
+  /** Phase 04a — the effective input after a UI edit (set by applyEdit). undefined until the
+   *  user edits; once set, verify() returns it as effectiveInput + userEdited. */
+  editedInput?: unknown
   createdAt: number
   expiresAt: number
 }
 
-/** verify() outcome: the matched record + whether the executed input differed from the
- *  approved input (only possible for edit-tier; preview-tier throws on mismatch). */
+/** verify() outcome: the matched record, whether the executed input differed from the
+ *  approved input (edit-tier — via applyEdit override or a directly-changed exec input), and
+ *  the `effectiveInput` the tool MUST run with (the override when present, else the verified
+ *  input). preview-tier throws on a changed input instead of reporting userEdited. */
 export interface ApprovalVerifyResult {
   record: ApprovalRecord
   userEdited: boolean
+  /** The input the write tool should execute with: the applyEdit override (UI edit), or the
+   *  verified input itself (no edit / a directly-supplied edited exec input). */
+  effectiveInput: unknown
 }
 
 /** Default approval validity window (5 min) — long enough for a human to review a card,
@@ -133,7 +162,8 @@ export class ApprovalGuard {
     toolCallId: string,
     toolName: string,
     risk: ApprovalRisk,
-    input: unknown
+    input: unknown,
+    editableFields?: readonly string[]
   ): ApprovalRecord {
     const existing = this.store.get(toolCallId)
     if (existing) return existing
@@ -144,10 +174,59 @@ export class ApprovalGuard {
       toolName,
       risk,
       inputHash: hashApprovalInput(input),
+      input,
+      // editable fields only matter for edit-tier; for preview they stay undefined so
+      // applyEdit fails E_APPROVAL_NOT_EDITABLE.
+      ...(risk === 'edit' && editableFields && editableFields.length > 0 ? { editableFields } : {}),
       createdAt,
       expiresAt: createdAt + this.ttlMs
     }
     this.store.set(toolCallId, record)
+    return record
+  }
+
+  /**
+   * Phase 04a — apply a UI edit to a pending edit-tier approval (the POST /api/ai/approval/
+   * resolve side-channel). The user changed some editable fields on the rich card before
+   * approving; record the effective input so the second-call execute runs it. Identity
+   * fields are PINNED to the original input (only `editableFields` are overlaid from the
+   * edit), so the side channel can never swap, say, internal_id. Throws ApprovalError when:
+   *   - no record (E_APPROVAL_NOT_FOUND) / expired (E_APPROVAL_EXPIRED);
+   *   - the record is not edit-tier or registered no editable fields (E_APPROVAL_NOT_EDITABLE
+   *     — preview writes are approve/reject only).
+   * The ai@6 history input is UNCHANGED, so the signed approval stays valid on replay.
+   */
+  applyEdit(toolCallId: string, editedFields: Record<string, unknown>): ApprovalRecord {
+    const record = this.store.get(toolCallId)
+    if (!record) {
+      throw new ApprovalError(
+        'E_APPROVAL_NOT_FOUND',
+        `no approval on record for tool call ${toolCallId} (re-propose the action)`
+      )
+    }
+    if (this.now() >= record.expiresAt) {
+      throw new ApprovalError(
+        'E_APPROVAL_EXPIRED',
+        `approval ${record.approvalId} expired — re-propose the action`
+      )
+    }
+    if (record.risk !== 'edit' || !record.editableFields || record.editableFields.length === 0) {
+      throw new ApprovalError(
+        'E_APPROVAL_NOT_EDITABLE',
+        `${record.toolName} is not editable (preview-tier writes are approve/reject only)`
+      )
+    }
+    // Overlay ONLY the editable fields from the edit onto the original input (identity pin).
+    // Expected single-shot per approval round-trip (one card POSTs once before approving); a
+    // second resolve is last-write-wins, which the single-renderer Electron flow never races.
+    const base = (record.input ?? {}) as Record<string, unknown>
+    const effective: Record<string, unknown> = { ...base }
+    for (const field of record.editableFields) {
+      if (Object.prototype.hasOwnProperty.call(editedFields, field)) {
+        effective[field] = editedFields[field]
+      }
+    }
+    record.editedInput = effective
     return record
   }
 
@@ -171,19 +250,26 @@ export class ApprovalGuard {
         `approval ${record.approvalId} expired — re-propose the action`
       )
     }
+    // Phase 04a — a UI edit (applyEdit side-channel) is authoritative. The ai@6 history input
+    // is unchanged (so the signature verified before we got here) and hashes to inputHash;
+    // the user's edited fields live in record.editedInput. Execute that, report userEdited.
+    if (record.editedInput !== undefined) {
+      return { record, userEdited: true, effectiveInput: record.editedInput }
+    }
     const inputHash = hashApprovalInput(input)
     if (inputHash !== record.inputHash) {
       if (record.risk === 'edit') {
-        // edit-tier: the user is allowed to change the proposed input (e.g. a draft body)
-        // before approving. Record the edit; the executed input is the authoritative one.
-        return { record, userEdited: true }
+        // edit-tier with a directly-changed exec input (no applyEdit override) — e.g. a test
+        // or a future runtime that mutates the history input. The executed input is
+        // authoritative; record the edit.
+        return { record, userEdited: true, effectiveInput: input }
       }
       throw new ApprovalError(
         'E_APPROVAL_HASH_MISMATCH',
         `approved input was modified for ${record.toolName} (preview-tier writes cannot be edited)`
       )
     }
-    return { record, userEdited: false }
+    return { record, userEdited: false, effectiveInput: input }
   }
 
   /** Diagnostic — number of records currently held (tests / observability). */

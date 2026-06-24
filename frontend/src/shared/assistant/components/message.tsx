@@ -8,12 +8,13 @@
 // hover Copy/Reload action bar. Theme three-state + 6 accents reskin for free —
 // only CSS variables drive color.
 
+import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ComposerPrimitive, MessagePrimitive } from '@assistant-ui/react'
 
 import { cn } from '@shared/lib/cn'
 
-import { assistantPartComponents } from '../tools/registerToolUIs'
+import { getAssistantPartComponents } from '../tools/registerToolUIs'
 import { AssistantActionBar, UserActionBar } from './action-bar'
 
 export function UserMessage(): React.JSX.Element {
@@ -28,10 +29,15 @@ export function UserMessage(): React.JSX.Element {
 }
 
 export function AssistantMessage(): React.JSX.Element {
+  // Phase 04a — flag-aware part components (generic ToolTraceCard fallback always; A2UI
+  // per-tool cards added as tools.by_name when MAILAGENT_A2UI_TOOL_CARDS is on). Memoized
+  // once per mount so the object reference stays stable across re-renders. flag-off → the
+  // Phase 01 object verbatim.
+  const partComponents = useMemo(() => getAssistantPartComponents(), [])
   return (
     <MessagePrimitive.Root className="group mb-4 flex w-full justify-start">
       <div className="min-w-0 max-w-[85%] space-y-1.5 rounded-2xl rounded-bl-md border border-[var(--hairline)] bg-ink-3 px-3.5 py-2 text-body leading-relaxed text-ink-fg">
-        <MessagePrimitive.Parts components={assistantPartComponents} />
+        <MessagePrimitive.Parts components={partComponents} />
         <AssistantActionBar />
       </div>
     </MessagePrimitive.Root>

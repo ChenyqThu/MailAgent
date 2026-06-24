@@ -258,6 +258,68 @@ async function handleChat(
   })
 }
 
+/** Map an ApprovalError-shaped `.code` to an HTTP status for the resolve endpoint. */
+function approvalErrorStatus(code: string): number {
+  switch (code) {
+    case 'E_APPROVAL_NOT_FOUND':
+      return 404
+    case 'E_APPROVAL_EXPIRED':
+      return 410
+    case 'E_APPROVAL_NOT_EDITABLE':
+      return 400
+    default:
+      return 400
+  }
+}
+
+/**
+ * `POST /api/ai/approval/resolve` — Phase 04a edit-tier side-channel. The rich DraftReplyCard
+ * POSTs the user's edited fields here BEFORE replaying the ai@6 approval. The gateway overlays
+ * the editable fields onto the pending approval's original input (via cfg.resolveEditedApproval
+ * → ApprovalGuard.applyEdit) so the next streamText call's execute runs the edited input — all
+ * WITHOUT changing the ai@6 history input, so the signed approval stays valid (architecture
+ * §13.10.2(1)). Identity fields are pinned domain-side. Errors are typed: 404 not-found / 410
+ * expired / 400 not-editable / 501 when no resolver is wired (read-only / 03b config).
+ */
+async function handleApprovalResolve(
+  req: IncomingMessage,
+  res: ServerResponse,
+  cfg: AiGatewayConfig
+): Promise<void> {
+  if (!cfg.resolveEditedApproval) {
+    writeJson(res, 501, {
+      error: 'E_NOT_IMPLEMENTED',
+      hint: 'edit-tier approval cards not enabled'
+    })
+    return
+  }
+  const body = await readJsonBody(req)
+  const toolCallId = typeof body.toolCallId === 'string' ? body.toolCallId : ''
+  const editedInput =
+    body.editedInput && typeof body.editedInput === 'object' && !Array.isArray(body.editedInput)
+      ? (body.editedInput as Record<string, unknown>)
+      : null
+  if (!toolCallId || !editedInput) {
+    writeJson(res, 400, { error: 'E_INVALID_ARG', hint: 'toolCallId + editedInput{} required' })
+    return
+  }
+  try {
+    const out = cfg.resolveEditedApproval(toolCallId, editedInput)
+    writeJson(res, 200, { status: 'ok', ...out })
+  } catch (e) {
+    const code = (e as { code?: unknown }).code
+    const message = e instanceof Error ? e.message : String(e)
+    if (typeof code === 'string') {
+      writeJson(res, approvalErrorStatus(code), { error: code, hint: message })
+    } else {
+      // Unexpected non-ApprovalError on a security-adjacent endpoint — log for forensics
+      // (never executes a write; the resolver only records an override).
+      console.error('[ai-gateway] /api/ai/approval/resolve failed unexpectedly', e)
+      writeJson(res, 500, { error: 'E_INTERNAL', hint: message })
+    }
+  }
+}
+
 /**
  * Create (but do not listen) the gateway HTTP server. Pure factory — all external
  * deps arrive via cfg, so the Electron main can embed it and the Node harness can
@@ -314,6 +376,12 @@ export function createAiGatewayServer(cfg: AiGatewayConfig): Server {
 
     if (method === 'POST' && path === '/api/ai/chat') {
       void handleChat(req, res, cfg)
+      return
+    }
+
+    // Phase 04a — edit-tier approval side-channel (DraftReplyCard edits before approve).
+    if (method === 'POST' && path === '/api/ai/approval/resolve') {
+      void handleApprovalResolve(req, res, cfg)
       return
     }
 

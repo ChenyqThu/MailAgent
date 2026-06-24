@@ -57,18 +57,21 @@ function nonEmpty(s: string | undefined): string | undefined {
 export function createWriteTools(
   domain: MailAgentDomainClient,
   collector: GatewayToolAuditCollector = [],
-  guard: ApprovalGuard
+  guard: ApprovalGuard,
+  opts: { a2uiEnabled?: boolean } = {}
 ): Record<string, Tool> {
-  const make = <I>(opts: {
+  const make = <I>(toolOpts: {
     name: string
     description: string
     inputSchema: z.ZodType<I>
     risk: ApprovalRisk
+    /** Phase 04a — editable fields for edit-tier tools (e.g. ['body_markdown']). */
+    editableFields?: readonly string[]
     run: (
       input: I,
       ctx: { userEdited: boolean; signal: AbortSignal | undefined }
     ) => Promise<unknown>
-  }): Tool => auditedWriteTool(opts, collector, guard)
+  }): Tool => auditedWriteTool({ ...toolOpts, a2uiEnabled: opts.a2uiEnabled }, collector, guard)
 
   const email_flag = make({
     name: 'email_flag',
@@ -157,6 +160,9 @@ export function createWriteTools(
       'may modify your draft.',
     inputSchema: emailDraftReplySchema,
     risk: 'edit',
+    // Phase 04a — the user may edit ONLY the body on the DraftReplyCard; internal_id is pinned
+    // to the model's original (the approval side-channel cannot retarget the draft).
+    editableFields: ['body_markdown'],
     run: async (input, { userEdited, signal }) => {
       if (input.internal_id < 0) invalidArg('internal_id required (non-negative integer)')
       const data = await domain.draftReply(input.internal_id, input.body_markdown, signal)

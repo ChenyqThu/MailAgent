@@ -1,6 +1,6 @@
 """ai_chat.db 读 + 写访问 —— serve-api 远程 chat 端点（V2.1 阶段 2 读 + 阶段 3 3b-3 写）。
 
-ai_chat.db = 前端 owned schema（``frontend/src/electron/main/chat_db.ts``，CHAT_DB_VERSION 10）。
+ai_chat.db = 前端 owned schema（``frontend/src/electron/main/chat_db.ts``，CHAT_DB_VERSION 11）。
 v7（P2c）= chat session anchor：``email_id`` 改 nullable + 加 ``anchor_type``/``anchor_id`` 列
 （table CHECK 强制 email→两者非空 / general→两者 NULL，禁 emailId=0 sentinel）。
 v8（P2a，task 06-23）= agent_memory_kv provenance + priority：加 ``source_session_id`` /
@@ -15,6 +15,10 @@ v10（P4 Phase 03b，task 06-23 chat-panel HITL write tools）= ``chat_tool_call
 + ``approval_hash``：AI SDK Gateway 写工具的审批审计（gateway 在 Electron main 经 chat_db.ts
 直写，非本 serve-api 路径）。读走 ``SELECT *`` 自动带回（read/legacy 行 NULL），本文件的
 ``append_tool_call`` 不写这两列（既有写面不变，新列默认 NULL）。
+v11（P4 Phase 04a，task 06-23 chat-panel A2UI tool cards）= ``chat_tool_call.ui_payload_json``：
+富工具卡的 A2UI 渲染 payload（component + props + audit，protocol §3），gateway 在 Electron main
+经 chat_db.ts 直写（仅 MAILAGENT_A2UI_TOOL_CARDS 开 + 工具有卡时）。读走 ``SELECT *`` 自动带回
+（read/legacy/flag-off 行 NULL），``append_tool_call`` 不写此列（既有写面不变，新列默认 NULL）。
 读函数（阶段 2）+ 写函数（3b-3）SQL **逐字镜像** chat_db.ts 对应函数，行形状对齐前端
 ``ChatSession`` / ``ChatSessionSummary`` / ``ChatMessage`` / ``ChatToolCall``（``model.ts``）：
   - 读：``listSessionsForEmail`` / ``listAllSessions`` / ``listMessages`` / ``listToolCallsForMessage``。

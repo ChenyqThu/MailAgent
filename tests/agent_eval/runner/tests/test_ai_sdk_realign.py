@@ -72,3 +72,34 @@ def test_ai_sdk_needs_confirmation_first_call_passes_r5(eval_root, catalog):
     assert res.hard_pass, [v.as_dict() for v in res.violations]
     # No R5 violation specifically (the H2 exception path).
     assert not any(v.rule == "R5" for v in res.violations)
+
+
+def test_ai_sdk_edited_draft_trace_passes_r5(eval_root, catalog):
+    """Phase 04a edit → re-approve: an email_draft_reply the user EDITED before approving still
+    scores hard_pass under the UNCHANGED rules.py. The edit rode the gateway resolve side-channel
+    (ai@6 history input unchanged → signed approval valid), so the trace is still
+    tool_use → pending_confirmation(edit, user_edited) → tool_result. Proves the view-layer
+    edit→re-sign path keeps the eval trace valid (the "edit → re-sign 保 R5" fixture)."""
+    path = os.path.join(eval_root, "runs", "ai-sdk-approval-edit.jsonl")
+    tasks = {t.id: t for t in loader.load_tasks(os.path.join(eval_root, "tasks"))}
+    with open(path, "r", encoding="utf-8") as fh:
+        lines = [json.loads(ln) for ln in fh if ln.strip()]
+    assert len(lines) == 1
+    d = lines[0]
+    tid = d["task_id"]
+    assert tid == "AGT-ACTION-001"
+    task_dict = loader._read_json(os.path.join(eval_root, "tasks", "%s.json" % tid))
+    # source="recorded" + real 64-hex config hashes (loader enforces) + consistent with the task.
+    assert d["source"] == "recorded"
+    assert loader.validate_trace(d, catalog) == []
+    assert loader.validate_trace_consistency(d, task_dict, catalog) == []
+    # The edit-tier write carries the R5-required pending_confirmation between its tool_use and
+    # tool_result, with the catalog tier (edit) and the user_edited marker (Phase 04a).
+    pend = [e for e in d["events"] if e["type"] == "pending_confirmation"]
+    assert len(pend) == 1
+    assert pend[0]["tool_name"] == "email_draft_reply"
+    assert pend[0]["tier"] == "edit"
+    assert pend[0].get("user_edited") is True
+    res = rules.score_task(tasks[tid], TraceRecord.from_dict(d), catalog)
+    assert res.hard_pass, (tid, [v.as_dict() for v in res.violations])
+    assert not any(v.rule == "R5" for v in res.violations)

@@ -1,8 +1,9 @@
 # Phase 04 — Generative UI & Human-in-the-loop
 
-> status: planning
-> last-verified: 2026-06-22
+> status: 04a ✅ done（2026-06-24，commit 见 README；全程 flag-off `MAILAGENT_A2UI_TOOL_CARDS`）· 04b planning
+> last-verified: 2026-06-24
 > goal: 在 AI SDK Gateway runtime 下启用 A2UI 原生工具卡片与高风险工具审批。
+> **04a 落地（ComponentRegistry + DraftReplyCard/NotionSyncCard/通用审批卡 + edit→re-approve + ui_payload_json 审计）见 [architecture §13.11](./architecture.md#1311-phase-04a-落地2026-06-24a2ui-componentregistry--富工具卡片--editre-approve)。** 本文 §1–§11 是规划层；§4.3 SendApprovalCard + §5/§6 外发 domain guard（`email_prepare_send`/`send-approved`，content hash + idempotency）= 04b 未落。
 
 ## 1. 目标
 

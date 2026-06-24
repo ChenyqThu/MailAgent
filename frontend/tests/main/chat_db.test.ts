@@ -125,7 +125,8 @@ describe('chat_db — path + schema bootstrap', () => {
     // P2a (06-23 agent-experience-epic): bumped to 8 — agent_memory_kv provenance + priority.
     // P4 Phase 02 (06-23 chat-panel AI SDK Gateway): bumped to 9 — ai_chat_messages.ui_message_json.
     // P4 Phase 03b (06-23 chat-panel HITL write tools): bumped to 10 — chat_tool_call.approval_status + approval_hash.
-    expect(ver.value).toBe('10')
+    // P4 Phase 04a (06-23 chat-panel A2UI tool cards): bumped to 11 — chat_tool_call.ui_payload_json.
+    expect(ver.value).toBe('11')
   })
 
   test('fresh DB schema includes the v2 metadata column', () => {
@@ -146,6 +147,12 @@ describe('chat_db — path + schema bootstrap', () => {
     const names = cols.map((c) => c.name)
     expect(names).toContain('approval_status')
     expect(names).toContain('approval_hash')
+  })
+
+  test('fresh DB schema includes the v11 chat_tool_call.ui_payload_json column', () => {
+    const db = getChatDb()
+    const cols = db.prepare('PRAGMA table_info(chat_tool_call)').all() as Array<{ name: string }>
+    expect(cols.map((c) => c.name)).toContain('ui_payload_json')
   })
 
   test('fresh DB schema includes the v6 ai_chat_messages.thinking column', () => {
@@ -177,7 +184,7 @@ describe('chat_db — path + schema bootstrap', () => {
     const ver = db.prepare("SELECT value FROM chat_db_meta WHERE key = 'schema_version'").get() as {
       value: string
     }
-    expect(ver.value).toBe('10')
+    expect(ver.value).toBe('11')
   })
 
   test('v1-version DB ALTERs in the metadata column on first open (forward migration)', () => {
@@ -231,7 +238,7 @@ describe('chat_db — path + schema bootstrap', () => {
     // Sprint 19 (PR-1a → bug-fix): v1 DB jumped to v4; task 06-08-chat Bug 2
     // bumped to v5; 需求 5 bumped to v6; P2a → v8; P4 Phase 02 → v9 → a v1 DB now
     // climbs the whole ladder to v9.
-    expect(ver.value).toBe('10')
+    expect(ver.value).toBe('11')
     const cols = db.prepare('PRAGMA table_info(ai_chat_messages)').all() as Array<{ name: string }>
     expect(cols.map((c) => c.name)).toContain('metadata')
     // v6 column present after climbing from v1.
@@ -286,7 +293,7 @@ describe('chat_db — path + schema bootstrap', () => {
           value: string
         }
       ).value
-    ).toBe('10')
+    ).toBe('11')
     // Simulate the crash window: roll the meta back to v3 while the physical
     // schema (content_offset + thinking columns, v4 table shape) stays at v6.
     db.prepare("UPDATE chat_db_meta SET value = '3' WHERE key = 'schema_version'").run()
@@ -298,7 +305,7 @@ describe('chat_db — path + schema bootstrap', () => {
     const ver = reopened
       .prepare("SELECT value FROM chat_db_meta WHERE key='schema_version'")
       .get() as { value: string }
-    expect(ver.value).toBe('10')
+    expect(ver.value).toBe('11')
     // Columns are still present exactly once (no duplication, no loss).
     const msgCols = reopened.prepare('PRAGMA table_info(ai_chat_messages)').all() as Array<{
       name: string
@@ -1030,7 +1037,7 @@ describe('chat_db — v3 → v4 migration (drop UNIQUE on ai_chat_sessions)', ()
     const ver = db.prepare("SELECT value FROM chat_db_meta WHERE key = 'schema_version'").get() as {
       value: string
     }
-    expect(ver.value).toBe('10')
+    expect(ver.value).toBe('11')
     // UNIQUE gone — CREATE TABLE SQL no longer contains UNIQUE clause on
     // (email_id, backend_kind, backend_agent_page_id).
     const tableSql = (
@@ -1173,7 +1180,7 @@ describe('chat_db — v4 → v5 migration (chat_tool_call.content_offset)', () =
       value: string
     }
     // v4 DB now climbs the whole ladder to v6 (content_offset added at v5).
-    expect(ver.value).toBe('10')
+    expect(ver.value).toBe('11')
     // Column present, pre-existing row reads NULL (degrade path in renderer).
     const cols = db.prepare('PRAGMA table_info(chat_tool_call)').all() as Array<{ name: string }>
     expect(cols.map((c) => c.name)).toContain('content_offset')
@@ -1235,7 +1242,7 @@ describe('chat_db — v5 → v6 migration (ai_chat_messages.thinking)', () => {
     const ver = db.prepare("SELECT value FROM chat_db_meta WHERE key = 'schema_version'").get() as {
       value: string
     }
-    expect(ver.value).toBe('10')
+    expect(ver.value).toBe('11')
     // Column present, pre-existing row reads NULL (no thinking block in renderer).
     const cols = db.prepare('PRAGMA table_info(ai_chat_messages)').all() as Array<{ name: string }>
     expect(cols.map((c) => c.name)).toContain('thinking')
