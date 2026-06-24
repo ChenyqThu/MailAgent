@@ -23,11 +23,13 @@ import { tool, type Tool } from 'ai'
 import type { z } from 'zod'
 
 import { DomainError } from '../python/domainClient'
+import { type ApprovalGuard, type ApprovalRisk } from '../security/approval'
 
 /** One finished tool call, ready to persist into chat_tool_call. The gateway
  *  collects these per request and the Electron wrapper writes them (appendToolCall
- *  + updateToolCall) keyed to the assistant message id. `confirmation_tier` is
- *  always 'silent' for read tools (set by the writer, not carried here). */
+ *  + updateToolCall) keyed to the assistant message id. Read tools (03a) omit the
+ *  approval fields → the writer defaults `confirmation_tier` to 'silent' with no
+ *  approval columns; write tools (03b) carry the tier + approval audit. */
 export interface GatewayToolAuditEntry {
   toolUseId: string
   toolName: string
@@ -35,6 +37,16 @@ export interface GatewayToolAuditEntry {
   outputJson: string
   status: 'ok' | 'error'
   durationMs: number
+  /** Phase 03b — 'preview' | 'edit' for write tools; omitted → 'silent' (read). */
+  confirmationTier?: 'silent' | 'preview' | 'edit'
+  /** Phase 03b — write-tool approval outcome: 'approved'/'edited' = guard passed and
+   *  the write executed; 'rejected' = approval guard rejected (not executed). Omitted
+   *  for read tools (no approval). */
+  approvalStatus?: 'approved' | 'edited' | 'rejected'
+  /** Phase 03b — sha256 of the approved input (the domain guard binding). */
+  approvalHash?: string
+  /** Phase 03b — the user-edited input (edit-tier writes only); null otherwise. */
+  userEditedInputJson?: string | null
 }
 
 /** A per-request audit collector — a plain array the gateway creates per /api/ai/chat
@@ -121,6 +133,113 @@ export function auditedReadTool<I>(
           outputJson: safeJson({ error: code, message }),
           status: 'error',
           durationMs: Date.now() - start
+        })
+        throw new ToolExecutionError(code, message)
+      }
+    }
+  })
+}
+
+/**
+ * Build an approval-gated AI SDK write tool with built-in audit, bound to one
+ * `collector` (closure) + one `guard` (the per-gateway ApprovalGuard). Phase 03b.
+ *
+ * HITL two-call flow (architecture §5.3 / §13.4):
+ *   - `needsApproval` always returns true (write tools are never silent). As a
+ *     side-effect it REGISTERS the approval record (keyed by toolCallId, keep-first)
+ *     on the FIRST streamText run, when ai@6 decides the tool needs approval. The run
+ *     then ends with a signed `tool-approval-request` part (no execute).
+ *   - `execute` runs on the SECOND run only — after the user approved AND ai@6
+ *     verified the approval signature (when streamText `experimental_toolApprovalSecret`
+ *     is set, the HMAC binds approvalId+toolCallId+toolName+input, so an input swap is
+ *     rejected before we get here). It then runs the MailAgent domain guard
+ *     (`guard.verify`: record exists, not expired, input matches for preview / edit
+ *     permits change), runs the domain write via `run`, and pushes a write-audit entry
+ *     (tier + approval_status + approval_hash + user_edited) into `collector`.
+ *
+ * A guard rejection (not-found / expired / preview hash mismatch) audits an
+ * `approvalStatus:'rejected'` error entry and throws a ToolExecutionError → the write
+ * never executes ("no silent write"; "no execution without a valid approval").
+ */
+export function auditedWriteTool<I>(
+  opts: {
+    name: string
+    description: string
+    inputSchema: z.ZodType<I>
+    risk: ApprovalRisk
+    run: (
+      input: I,
+      ctx: { userEdited: boolean; signal: AbortSignal | undefined }
+    ) => Promise<unknown>
+  },
+  collector: GatewayToolAuditCollector,
+  guard: ApprovalGuard
+): Tool {
+  return tool({
+    description: opts.description,
+    inputSchema: opts.inputSchema,
+    // First run: register the approval record (keep-first) and require approval. The
+    // model never sees a write execute without the user approving it. (input/execute
+    // params are left unannotated so tool() infers INPUT=I from inputSchema alone — an
+    // explicit `: I` on these contravariant param sites breaks tool()'s overload inference.)
+    needsApproval: (input, { toolCallId }) => {
+      guard.register(toolCallId, opts.name, opts.risk, input)
+      return true
+    },
+    execute: async (input, { toolCallId, abortSignal }) => {
+      const start = Date.now()
+      // Domain guard (second run): expiry + (preview) input-binding, layered on ai@6's
+      // signature. Rejection → audit 'rejected' + tool-error, write never runs.
+      let userEdited = false
+      let approvalHash: string | undefined
+      try {
+        const v = guard.verify(toolCallId, input)
+        userEdited = v.userEdited
+        approvalHash = v.record.inputHash
+      } catch (e) {
+        const { code, message } = normalizeToolError(e)
+        collector.push({
+          toolUseId: toolCallId,
+          toolName: opts.name,
+          inputJson: safeJson(input),
+          outputJson: safeJson({ error: code, message }),
+          status: 'error',
+          durationMs: Date.now() - start,
+          confirmationTier: opts.risk,
+          approvalStatus: 'rejected'
+        })
+        throw new ToolExecutionError(code, message)
+      }
+      const approvalStatus = userEdited ? 'edited' : 'approved'
+      try {
+        const output = await opts.run(input as I, { userEdited, signal: abortSignal })
+        collector.push({
+          toolUseId: toolCallId,
+          toolName: opts.name,
+          inputJson: safeJson(input),
+          outputJson: safeJson(output),
+          status: 'ok',
+          durationMs: Date.now() - start,
+          confirmationTier: opts.risk,
+          approvalStatus,
+          approvalHash,
+          userEditedInputJson: userEdited ? safeJson(input) : null
+        })
+        return output
+      } catch (e) {
+        if (isAbortError(e)) throw e
+        const { code, message } = normalizeToolError(e)
+        collector.push({
+          toolUseId: toolCallId,
+          toolName: opts.name,
+          inputJson: safeJson(input),
+          outputJson: safeJson({ error: code, message }),
+          status: 'error',
+          durationMs: Date.now() - start,
+          confirmationTier: opts.risk,
+          approvalStatus,
+          approvalHash,
+          userEditedInputJson: userEdited ? safeJson(input) : null
         })
         throw new ToolExecutionError(code, message)
       }

@@ -12,18 +12,24 @@
 import type { ToolSet } from 'ai'
 
 import type { MailAgentDomainClient } from '../python/domainClient'
+import type { ApprovalGuard } from '../security/approval'
 import { createEmailReadTools } from './email'
 import { createKosReadTools } from './kos'
 import { createReportReadTools } from './report'
+import { createWriteTools } from './write'
 import type { GatewayToolAuditCollector } from './types'
 
 export interface BuildGatewayToolsOpts {
   domain: MailAgentDomainClient
   /** kosConfig().timeDecayEnabled — gates kos_query recency rerank. */
   kosTimeDecayEnabled?: boolean
-  /** MAILAGENT_AI_SDK_WRITE_TOOLS — reserved for phase-03b. When false (default,
-   *  and the only value in 03a) the registry is read-only. */
+  /** MAILAGENT_AI_SDK_WRITE_TOOLS (phase-03b). When false (default) the registry is
+   *  read-only. When true, the five approval-gated write tools are added — but only
+   *  if `approvalGuard` is also supplied (a write tool cannot exist without its guard). */
   writeToolsEnabled?: boolean
+  /** The per-gateway ApprovalGuard the write tools bind to (id/hash/expiry domain guard).
+   *  Required to build write tools; omitted → read-only even when writeToolsEnabled. */
+  approvalGuard?: ApprovalGuard
 }
 
 /** Names of the read tools exposed by the gateway (for tests / observability). */
@@ -46,12 +52,16 @@ export function buildGatewayTools(
   opts: BuildGatewayToolsOpts,
   collector: GatewayToolAuditCollector = []
 ): ToolSet {
-  const readTools: ToolSet = {
+  const tools: ToolSet = {
     ...createEmailReadTools(opts.domain, collector),
     ...createKosReadTools(opts.domain, collector, { timeDecayEnabled: opts.kosTimeDecayEnabled }),
     ...createReportReadTools(opts.domain, collector)
   }
-  // phase-03b: if (opts.writeToolsEnabled) Object.assign(readTools, createWriteTools(...))
-  // — no write tools exist yet, so the gate is a no-op in 03a (read-only stays read-only).
-  return readTools
+  // phase-03b — write tools only when the flag is on AND a guard is supplied. Off (or no
+  // guard) → read-only, byte-identical to 03a. Approval is enforced two ways: ai@6's
+  // needsApproval/signature (set at streamText) + the guard bound here (id/hash/expiry).
+  if (opts.writeToolsEnabled && opts.approvalGuard) {
+    Object.assign(tools, createWriteTools(opts.domain, collector, opts.approvalGuard))
+  }
+  return tools
 }

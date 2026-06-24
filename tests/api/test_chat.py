@@ -59,6 +59,7 @@ CREATE TABLE chat_tool_call (
     user_edited_input_json TEXT, output_json TEXT, status TEXT NOT NULL,
     duration_ms INTEGER, confirmation_tier TEXT NOT NULL, confirmed_at INTEGER,
     content_offset INTEGER,
+    approval_status TEXT, approval_hash TEXT,
     created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
 );
 """

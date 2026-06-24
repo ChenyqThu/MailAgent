@@ -86,3 +86,43 @@ export const reportGetSchema = z.object({
   report_id: z.string().min(1)
 })
 export type ReportGetInput = z.infer<typeof reportGetSchema>
+
+// ── write-tool schemas (Phase 03b) — mirror the legacy JSON-Schema field names /
+//    requireds from shared/chat/tools/builtin/write.ts byte-for-byte (parity). The
+//    "at least one of …" semantic checks stay in the tool's run (matching the legacy
+//    handler's E_INVALID_ARG), not the schema, so the error shape matches legacy. ──
+
+/** email_flag — toggle is_read / is_flagged / processing_status (≥1 enforced in run). */
+export const emailFlagSchema = z.object({
+  internal_id: z.number().int(),
+  is_read: z.boolean().optional(),
+  is_flagged: z.boolean().optional(),
+  processing_status: z.string().optional()
+})
+export type EmailFlagInput = z.infer<typeof emailFlagSchema>
+
+/** email_archive — move into Archive (davmail-only). */
+export const emailArchiveSchema = z.object({
+  internal_id: z.number().int()
+})
+export type EmailArchiveInput = z.infer<typeof emailArchiveSchema>
+
+/** email_pin — pin / unpin (local UI flag). */
+export const emailPinSchema = z.object({
+  internal_id: z.number().int(),
+  pinned: z.boolean()
+})
+export type EmailPinInput = z.infer<typeof emailPinSchema>
+
+/** email_draft_reply — compose a reply-all draft. */
+export const emailDraftReplySchema = z.object({
+  internal_id: z.number().int(),
+  body_markdown: z.string().min(1)
+})
+export type EmailDraftReplyInput = z.infer<typeof emailDraftReplySchema>
+
+/** email_resync — re-push to Notion from the SQLite SSoT. */
+export const emailResyncSchema = z.object({
+  internal_id: z.number().int()
+})
+export type EmailResyncInput = z.infer<typeof emailResyncSchema>

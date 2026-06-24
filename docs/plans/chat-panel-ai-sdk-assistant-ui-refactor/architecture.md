@@ -582,3 +582,55 @@ serve-api read 端点的 query 参数名**不一致**，DomainClient 逐一硬�
 - **audit 用闭包 collector，不用 `experimental_context`**（code-reviewer 标 MEDIUM 后采纳）：AI SDK 文档警告 `experimental_context` 应「treat as immutable」（可能 per-call clone/freeze → 静默丢审计）。改为 `cfg.buildTools(collector)` 每 request 建工具、闭包绑定一个 `collector` 数组，工具 push 进它——不依赖 SDK context 传递语义，且**可直接单测**（build tools + collector → execute → 断言 collector，无需跑完整 streamText tool loop）。`build.test.ts` 钉死这条 server.ts onFinish 路径。
 - **mock-model tool-loop 不可靠**：`MockLanguageModelV3`+`streamText` 在本仓难稳定触发客户端工具执行（流式 tool-call 协议 fiddly）。故 e2e 全链路（真实模型「调 email_search→answer」）走真实模型 harness `[5]`（gateway 带 read tools + mock domain + 真实 CRS，manual lane）；CI 侧由 56 个单测（domainClient + 每工具 execute + audit + buildGatewayTools 闭包 + **parity**：legacy vs gateway 关键字段一致）覆盖。
 - **会话重载接线**仍延后（§13.8.5）；standing-context system prompt 注入留 phase-03/04；write tools + approval（两次调用语义 + R5 recorder 重对齐）= 03b/04b。
+
+---
+
+## 13.10 Phase 03b 落地（2026-06-24，write tools preview + HITL approval）
+
+> 把 **5 个 preview/edit 写工具**从 legacy harness 迁到 AI SDK Gateway，经 ai@6 原生 `needsApproval` 两次调用 HITL flow 执行；全程 `MAILAGENT_AI_SDK_WRITE_TOOLS` flag-gated（默认 off → Gateway 恒只读，字节级等同 03a）。write/approval/audit 落地；A2UI 富卡片（04a）/ 高风险外发 `email_prepare_send`（04b）留后续。
+
+### 13.10.1 产出
+
+| 文件 | 职责 |
+|---|---|
+| `frontend/src/ai-gateway/security/approval.ts` | `ApprovalGuard`（domain 侧 id/hash/expiry guard）：`register(toolCallId,…)`（needsApproval 内 keep-first 注册，跨两调存活）+ `verify(toolCallId,input)`（not-found/expired/preview-hash-mismatch → typed `ApprovalError`，edit-tier 放宽报 userEdited）。纯 node:crypto |
+| `frontend/src/ai-gateway/tools/write.ts` | 5 写工具 `email_flag/email_archive/email_pin/email_draft_reply/email_resync`，`tool({inputSchema:zod, needsApproval, execute})`，描述/校验/massage 逐字镜像 legacy write.ts（parity）|
+| `frontend/src/ai-gateway/tools/types.ts` | `auditedWriteTool(opts,collector,guard)`：needsApproval 注册 + execute 前 guard.verify + domain 写 + 审计（tier/approval_status/approval_hash/user_edited）|
+| `frontend/src/ai-gateway/python/domainClient.ts` | +5 写方法（flagEmail/archiveEmail/setPin/draftReply/resyncEmail），wire body/path/envelope 逐字镜像 HttpChatPlatform |
+| `server.ts` / `config.ts` / `ai_gateway_lifecycle.ts` | streamText 配 `experimental_toolApprovalSecret`（per-process 随机）；`buildGatewayTools` write gate（writeToolsEnabled + approvalGuard）；wrapper 建 1 个 ApprovalGuard + secret；persistTurn 写 approval 审计列 |
+| chat_db.ts / model.ts / api/types.ts / db.py / test_chat.py | `chat_tool_call` 加 `approval_status`/`approval_hash`（`user_edited_input_json` v3 已存在）→ bump `CHAT_DB_VERSION 9→10`（additive ALTER + hasColumn 幂等 + 终态断言 + db.py 头注释 + seed DDL）|
+| `tests/agent_eval/recorder/ai_sdk_adapter.ts` | R5 重对齐适配层（AI SDK tool parts → trace events）+ fixture 驱动 |
+
+### 13.10.2 🔴 两处必须正视的契约差（决定设计正确性）
+
+1. **ai@6 `ToolApprovalResponse` 无 `editedInput` 字段** —— §13.4 表格曾假设「approval-response.editedInput → 二调」，但实装 `ToolApprovalResponse = {approvalId, approved, reason?}`（核 `@ai-sdk/provider-utils` 类型确认）。更关键：设 `experimental_toolApprovalSecret` 后，ai@6 的 `verifyToolApprovalSignature` 对 **`{secret, approvalId, toolCallId, toolName, input}`** 验签 —— **签名已绑定 input**，二调改料直接 `InvalidToolApprovalSignatureError`。推论：**signed approval = 严格 approve/reject，原生不支持 edit-tier 改料**。03b 无 UI 编辑（富编辑卡是 04a）→ 不触发；`ApprovalGuard` 的 edit-tier hash 放宽是 04a 前置 + secret-off 时的兜底。04a 接 UI 编辑时须处理签名（重签 / edit-tier 不设 secret）。
+2. **`sync_to_notion` 落地为 `email_resync`** —— phase-03 §2.2 的 `sync_to_notion`（dry-run diff + apply）实为 04a 富卡片（NotionSyncCard）。03b 的「重推 Notion」preview 写就是既有 `email_resync`。为保 **eval catalog（R5 冻结真源）+ legacy SSoT + parity 三者一致**（catalog 有 `email_resync` preview、无 `sync_to_notion`，未知工具名会被 R3 当 out-of-scope + R5 跳过 tier 校验），模型可见工具名取 `email_resync`。
+
+### 13.10.3 approval 双层 guard（domain + ai@6 内建，正交叠加）
+
+| 层 | 机制 | 防什么 | 局限 |
+|---|---|---|---|
+| ai@6 内建（`experimental_toolApprovalSecret`）| HMAC 签名 approvalId+toolCallId+toolName+**input** | 伪造审批 / 换料 / 换工具 | **无 expiry**；execute 前即拒（domain hash 被其遮蔽，仅 secret 失配时兜底）|
+| domain `ApprovalGuard` | toolCallId→{inputHash,expiresAt}（keep-first 绝对，跨两调存活）| **expiry**（5min）+ 审计 id + 防御纵深 hash | 进程重启丢记录 → verify fail-closed（安全方向，与 ai@6 secret 同进程丢失一致）|
+
+execute 仅在二调（已批准 + 签名验过）跑：先 `guard.verify`（expiry/hash）→ domain 写 → 审计 `approval_status='approved'/'edited'` + `approval_hash`。guard 拒 → 审计 `'rejected'` + tool-error，**写永不发生**（无 silent 写）。
+
+### 13.10.4 audit 心智模型（沿用 03a collector 单源）
+
+写工具 execute（二调=已批准）push 一条 collector 条目（含 `confirmationTier`(preview/edit) + `approvalStatus` + `approvalHash` + `userEditedInputJson`），onFinish 经 wrapper 写 `chat_tool_call`（字段 ≥ legacy dispatch + 新 approval 列）。**首调 pending / reject 不另写 chat_tool_call 行**（由 `ui_message_json` 的 approval-requested/output-denied part 承载，最小化）；「approve 后二调真实写 + audit approval_status」即满足。
+
+### 13.10.5 eval R5 重对齐（rules.py 零改 — 不回退判据，roadmap §2 原则 6）
+
+R5 期望序 = `tool_use → pending_confirmation(同 tool_name+tier) → tool_result`。AI SDK 世界无单一 pending_confirmation 事件，由 ai@6 UIMessage tool parts 跨两调承载。**重对齐落点 = recorder 适配层** `ai_sdk_adapter.ts`（纯函数，结构子集对齐 ai@6 `ToolUIPart`）：
+- write part（tier≠silent）→ `tool_use` + `pending_confirmation`（同 tier，介于 use 与 result 之间）；
+- `output-available`→`tool_result(ok)`、`output-denied`→`tool_result(canceled)`、`output-error`→`tool_result(error)`；
+- 写 part 滞留 `approval-requested`（首调未决）→ 无 tool_result + `final.status='needs_confirmation'`（R5 H2 例外）；
+- read part（silent）**绝不** pending_confirmation。
+
+证据：fixture `runs/ai-sdk-approval.jsonl`（AI-SDK-sourced 的 AGT-SAFETY-001「确认后归档」）在**未改的 rules.py** 下 hard_pass（Python `test_ai_sdk_realign.py` 验 + needs_confirmation H2 例外）；适配层映射逻辑 frontend vitest `recorder_realign.test.ts`（approved/needs_confirmation/reject/read）；`run_baseline --compare` 回归闸 base_hard_pass=29==candidate（RESULT: OK，rc=0）。
+
+### 13.10.6 已知 gap / 测试取舍
+
+- **mock-model 难驱动 streamText 的 approval 两调 loop**（同 03a §13.9.4）：CI 不跑真实 streamText 两调，而由单测覆盖 —— `approval.test.ts`（ApprovalGuard 单元 + 写工具 execute/needsApproval 闭环：approve/edit/reject/hash-mismatch/expired/not-found + 审计）+ `write_preview.test.ts`（gate / needsApproval 声明 / 5 工具 parity）；真实模型端到端 approval flow 是 manual lane（CRS）。
+- **前端审批卡仍是 generic/复用**（assistant-ui 原生 HITL 原语）：富 `SendApprovalCard`/`DraftReplyCard`/`NotionSyncCard` = 04a。
+- **edit-tier 改料 + signed approval 的张力**见 §13.10.2（1）→ 04a 处理。

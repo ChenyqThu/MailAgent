@@ -215,7 +215,15 @@ async function handleChat(
     ...(hasTools
       ? {
           tools,
-          stopWhen: stepCountIs(cfg.maxSteps ?? DEFAULT_MAX_STEPS)
+          stopWhen: stepCountIs(cfg.maxSteps ?? DEFAULT_MAX_STEPS),
+          // Phase 03b — when write tools are present and a secret is configured, ai@6
+          // HMAC-signs each tool-approval-request and verifies it on replay (binding
+          // approvalId+toolCallId+toolName+input → InvalidToolApprovalSignatureError on a
+          // forged / input-swapped approval). Read-only turns set no secret (no tool needs
+          // approval). Layers on the domain ApprovalGuard bound inside the write tools.
+          ...(cfg.toolApprovalSecret
+            ? { experimental_toolApprovalSecret: cfg.toolApprovalSecret }
+            : {})
         }
       : {})
   })

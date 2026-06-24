@@ -18,12 +18,15 @@
 // flag-gated by MAILAGENT_AI_SDK_GATEWAY (index.ts dynamic-imports this module only
 // when the flag is 'true'), so flag-off the heavy `ai` deps never load.
 
+import { randomBytes } from 'node:crypto'
+
 import { app } from 'electron'
 
 import { startAiGatewayServer, type AiGatewayHandle } from '../../ai-gateway/server'
 import { resolveAiGatewayPort, type PersistTurnInput } from '../../ai-gateway/config'
 import { MailAgentDomainClient } from '../../ai-gateway/python/domainClient'
 import { buildGatewayTools } from '../../ai-gateway/tools'
+import { ApprovalGuard } from '../../ai-gateway/security/approval'
 import { extractTextFromUIMessage } from '@shared/assistant/uiMessage'
 import { appendMessage, appendToolCall, updateToolCall } from './chat_db'
 import { getLlmApiKey, getLlmBaseUrl, getLlmModel } from './llm_settings'
@@ -70,19 +73,28 @@ function persistTurn(turn: PersistTurnInput): void {
     tokensOutput: turn.usage?.outputTokens ?? null,
     uiMessageJson: JSON.stringify(turn.responseMessage)
   })
-  // Phase 03a — write a chat_tool_call audit row per read-tool call, keyed to the
-  // assistant message (same fields as the legacy harness dispatch: input/output/
-  // status/duration; confirmation_tier='silent' for read tools, no approval column).
+  // Phase 03a/03b — write a chat_tool_call audit row per tool call, keyed to the assistant
+  // message. Read tools carry no tier → 'silent', no approval columns (03a). Write tools
+  // (03b) carry their confirmation_tier + approval_status/approval_hash/user_edited (the
+  // executed-after-approval audit; fields ≥ legacy dispatch).
   for (const tc of turn.toolCalls ?? []) {
     const { id } = appendToolCall({
       messageId: assistant.id,
       toolUseId: tc.toolUseId,
       toolName: tc.toolName,
       inputJson: tc.inputJson,
-      confirmationTier: 'silent',
+      confirmationTier: tc.confirmationTier ?? 'silent',
       status: tc.status
     })
-    updateToolCall(id, { outputJson: tc.outputJson, durationMs: tc.durationMs })
+    updateToolCall(id, {
+      outputJson: tc.outputJson,
+      durationMs: tc.durationMs,
+      ...(tc.userEditedInputJson !== undefined
+        ? { userEditedInputJson: tc.userEditedInputJson }
+        : {}),
+      ...(tc.approvalStatus !== undefined ? { approvalStatus: tc.approvalStatus } : {}),
+      ...(tc.approvalHash !== undefined ? { approvalHash: tc.approvalHash } : {})
+    })
   }
 }
 
@@ -120,20 +132,30 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     baseUrl: `http://127.0.0.1:${resolveApiPort()}/api`,
     localToken: getLocalApiToken()
   })
+  // Phase 03b — one ApprovalGuard per gateway process (the id/hash/expiry domain guard;
+  // its record store must survive between the two HTTP calls of an approval round-trip,
+  // so it is created ONCE here and bound into every request's write-tool factory). The
+  // per-process HMAC secret signs ai@6's tool-approval-requests (forge / input-swap guard,
+  // the layer that stacks on the domain guard). Both only matter when write tools are on.
+  const approvalGuard = new ApprovalGuard()
+  const toolApprovalSecret = randomBytes(32).toString('hex')
   const handle = await startAiGatewayServer({
     port: resolveAiGatewayPort(),
     baseUrl: getLlmBaseUrl(),
     apiKey,
     model: getLlmModel(),
     persistTurn,
-    // Factory: the gateway builds the read tools per request bound to a fresh audit
-    // collector (closure). Reserved write gate is read-only in 03a (no write tools).
+    toolApprovalSecret,
+    // Factory: the gateway builds the tools per request bound to a fresh audit collector
+    // (closure). Read tools always; the five approval-gated write tools only when
+    // MAILAGENT_AI_SDK_WRITE_TOOLS is on (default off → byte-identical to 03a read-only).
     buildTools: (collector) =>
       buildGatewayTools(
         {
           domain,
           kosTimeDecayEnabled: envBool('MAILAGENT_KOS_TIME_DECAY_ENABLED', true),
-          writeToolsEnabled: envBool('MAILAGENT_AI_SDK_WRITE_TOOLS', false)
+          writeToolsEnabled: envBool('MAILAGENT_AI_SDK_WRITE_TOOLS', false),
+          approvalGuard
         },
         collector
       )

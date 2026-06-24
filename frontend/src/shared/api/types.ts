@@ -1264,6 +1264,10 @@ export interface ChatToolCall {
    *  at these offsets to interleave tool chips in time order. Null for v4 rows
    *  → renderer falls back to "all chips after the body". */
   content_offset: number | null
+  /** Phase 03b (v10) — AI SDK Gateway write-tool approval audit. Optional: absent on
+   *  read-tool / legacy rows and on pre-v10 serve-api responses. */
+  approval_status?: string | null
+  approval_hash?: string | null
   created_at: number
   updated_at: number
 }

@@ -214,6 +214,13 @@ export interface ChatToolCall {
    *  before v5 (and for non-custom-api / non-harness paths) → renderer falls
    *  back to the legacy "all chips after the body" layout. */
   content_offset: number | null
+  /** Phase 03b (v10) — write-tool approval outcome: 'approved' / 'edited' / 'rejected'
+   *  for AI SDK Gateway HITL write tools; NULL for read tools + legacy harness rows.
+   *  Optional: absent on rows read from a pre-v10 DB / older serve-api JSON. */
+  approval_status?: string | null
+  /** Phase 03b (v10) — sha256 of the approved input (the domain ApprovalGuard binding).
+   *  NULL for read tools + legacy rows. Optional (see approval_status). */
+  approval_hash?: string | null
   created_at: number
   updated_at: number
 }
@@ -239,6 +246,10 @@ export interface UpdateToolCallPatch {
   durationMs?: number | null
   userEditedInputJson?: string | null
   confirmedAt?: number | null
+  /** Phase 03b (v10) — write-tool approval outcome ('approved'/'edited'/'rejected'). */
+  approvalStatus?: string | null
+  /** Phase 03b (v10) — sha256 of the approved input (domain ApprovalGuard binding). */
+  approvalHash?: string | null
 }
 
 // ── 后端能力查询（派生自 BackendKind 的纯逻辑）──────────────────────────────

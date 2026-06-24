@@ -81,6 +81,52 @@ export interface DomainReportListOpts {
   limit?: number
 }
 
+// ── write-endpoint shapes (Phase 03b) — mirror the legacy ChatToolPlatform data
+//    blocks (shared/chat/tools/builtin/write.ts) byte-for-byte so a gateway write
+//    tool's massaged output matches the legacy tool's (parity). ──────────────────
+
+/** email_flag patch — only the provided fields go on the wire (mirrors HttpApi.flag). */
+export interface DomainFlagPatch {
+  isRead?: boolean
+  isFlagged?: boolean
+  processingStatus?: string
+}
+
+/** POST /email/{id}/flag data block (FlagResult — the relevant subset the tool reads). */
+export interface DomainFlagResult {
+  updated_ids?: number[]
+  outbox_entries?: unknown[]
+}
+
+/** POST /email/{id}/archive | /move data block (Archive/MoveResult). */
+export interface DomainArchiveResult {
+  from_mailbox?: string | null
+  to_mailbox?: string | null
+  notion_updated?: boolean
+}
+
+/** POST /email/{id}/pin data block (PinResult). */
+export interface DomainPinResult {
+  is_pinned?: boolean
+  changed?: boolean
+}
+
+/** POST /email/{id}/resync data block (ResyncResult). */
+export interface DomainResyncResult {
+  old_page_id?: string | null
+  new_page_id?: string | null
+  action?: string
+}
+
+/** Projected reply-draft result — mirrors HttpChatPlatform.draftReply's projection of
+ *  the POST /email/draft data block ({internal_id, drafts_folder?, method?}). */
+export interface DomainDraftResult {
+  internalId: number
+  mailbox: string | null
+  accountName: string | null
+  draftId: string
+}
+
 const LOCAL_TOKEN_HEADER = 'X-MailAgent-Local-Token'
 
 function buildQuery(query: Record<string, QueryValue>): string {
@@ -282,6 +328,76 @@ export class MailAgentDomainClient {
     } catch (e) {
       if (e instanceof DomainError && e.code === 'E_NOT_FOUND') return null
       throw e
+    }
+  }
+
+  // ── write primitives (Phase 03b — one per gateway write tool) ─────────────
+  // Each mirrors the legacy HttpChatPlatform write method's exact wire call
+  // (body shape + path) so the gateway write tool is byte-for-byte parity with
+  // the legacy tool over the same serve-api endpoint. The Python MailWriteService
+  // remains the authoritative validator (二次鉴权): davmail-only checks, ai-field
+  // enum/mailbox subset, outbox SSoT — the gateway approval guard is additive.
+
+  /** email_flag — toggle is_read/is_flagged/processing_status. POST /email/{id}/flag.
+   *  Only provided fields go on the wire (mirrors HttpApi.flag single mode). */
+  flagEmail(
+    internalId: number,
+    patch: DomainFlagPatch,
+    signal?: AbortSignal
+  ): Promise<DomainFlagResult> {
+    const body: Record<string, unknown> = {}
+    if (patch.isRead !== undefined) body.isRead = patch.isRead
+    if (patch.isFlagged !== undefined) body.isFlagged = patch.isFlagged
+    if (patch.processingStatus !== undefined) body.processingStatus = patch.processingStatus
+    return this._req<DomainFlagResult>('POST', `/email/${internalId}/flag`, { body, signal })
+  }
+
+  /** email_archive — IMAP MOVE INBOX→Archive + Mailbox→存档. POST /email/{id}/archive. */
+  archiveEmail(internalId: number, signal?: AbortSignal): Promise<DomainArchiveResult> {
+    return this._req<DomainArchiveResult>('POST', `/email/${internalId}/archive`, {
+      body: {},
+      signal
+    })
+  }
+
+  /** email_pin — pin/unpin (local UI flag). POST /email/{id}/pin {pinned}. */
+  setPin(internalId: number, pinned: boolean, signal?: AbortSignal): Promise<DomainPinResult> {
+    return this._req<DomainPinResult>('POST', `/email/${internalId}/pin`, {
+      body: { pinned },
+      signal
+    })
+  }
+
+  /** email_resync — re-push to Notion from the SQLite SSoT. POST /email/{id}/resync. */
+  resyncEmail(internalId: number, signal?: AbortSignal): Promise<DomainResyncResult> {
+    return this._req<DomainResyncResult>('POST', `/email/${internalId}/resync`, {
+      body: {},
+      signal
+    })
+  }
+
+  /** email_draft_reply — create a reply-all draft (davmail IMAP APPEND). POST /email/draft
+   *  with {internalId, mode:'reply-all', bodyText, quoteOriginal:true} (server derives
+   *  recipients + quotes the source). Projects the data block exactly like
+   *  HttpChatPlatform.draftReply so the tool's massage matches the legacy tool. */
+  async draftReply(
+    internalId: number,
+    bodyMarkdown: string,
+    signal?: AbortSignal
+  ): Promise<DomainDraftResult> {
+    const data = await this._req<{
+      internal_id: number
+      drafts_folder?: string | null
+      method?: string | null
+    }>('POST', '/email/draft', {
+      body: { internalId, mode: 'reply-all', bodyText: bodyMarkdown, quoteOriginal: true },
+      signal
+    })
+    return {
+      internalId: data.internal_id,
+      mailbox: data.drafts_folder ?? null,
+      accountName: null,
+      draftId: data.method ?? 'reply_all'
     }
   }
 }

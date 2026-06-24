@@ -91,7 +91,14 @@ export type {
 // converter falls back to synthesizing a UIMessage from `content`. Plain additive
 // ALTER, hasColumn idempotency guard (same discipline as v5/v6/v8). 🔴 bump 同步
 // 刷 src/chat/db.py 头注释 + append/update 写列；NOT backend_lifecycle.EXPECTED_DB_VERSION.
-const CHAT_DB_VERSION = 9
+// v10 (P4 Phase 03b, task 06-23 chat-panel HITL write tools) — chat_tool_call.approval_status
+// + approval_hash: the AI SDK Gateway write-tool approval audit. A write tool executes only
+// after the user approves (two-call HITL); the executed row records approval_status
+// ('approved'/'edited'/'rejected') + approval_hash (sha256 of the approved input, the domain
+// ApprovalGuard binding). user_edited_input_json already exists (v3). NULL for every read-tool
+// + legacy row (additive ALTER default). Plain additive ALTER, hasColumn idempotency guard.
+// 🔴 bump 同步刷 src/chat/db.py 头注释 + test_chat.py seed DDL；NOT backend_lifecycle.EXPECTED_DB_VERSION.
+const CHAT_DB_VERSION = 10
 
 export function resolveChatDbPath(): string {
   const fromEnv = process.env['AI_CHAT_DB_PATH']
@@ -659,6 +666,33 @@ function migrate(db: Database.Database): void {
       throw err
     }
   }
+
+  // v9 → v10 — task 06-23 (chat-panel P4 Phase 03b) HITL write-tool approval audit.
+  // Add chat_tool_call.approval_status ('approved'/'edited'/'rejected') + approval_hash
+  // (sha256 of the approved input — the domain ApprovalGuard binding). The AI SDK Gateway
+  // write tools execute only after the user approves; the executed row records the outcome
+  // so a write is auditable end-to-end. NULL for every read-tool / legacy row (additive
+  // ALTER default). Plain additive ALTER, same hasColumn idempotency guard as v5/v6/v8/v9
+  // (crash-after-ALTER-before-version-bump re-entry). ai_chat.db has its own version ladder;
+  // this bump does NOT touch backend_lifecycle.EXPECTED_DB_VERSION.
+  if (current < 10) {
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      if (!hasColumn(db, 'chat_tool_call', 'approval_status')) {
+        db.exec('ALTER TABLE chat_tool_call ADD COLUMN approval_status TEXT')
+      }
+      if (!hasColumn(db, 'chat_tool_call', 'approval_hash')) {
+        db.exec('ALTER TABLE chat_tool_call ADD COLUMN approval_hash TEXT')
+      }
+      db.prepare(
+        "INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', '10')"
+      ).run()
+      db.exec('COMMIT')
+    } catch (err) {
+      db.exec('ROLLBACK')
+      throw err
+    }
+  }
 }
 
 // ── singleton ───────────────────────────────────────────────────────────
@@ -1151,6 +1185,8 @@ export function appendToolCall(input: AppendToolCallInput): ChatToolCall {
     confirmation_tier: input.confirmationTier,
     confirmed_at: null,
     content_offset: contentOffset,
+    approval_status: null,
+    approval_hash: null,
     created_at: now,
     updated_at: now
   }
@@ -1180,6 +1216,15 @@ export function updateToolCall(toolCallId: number, patch: UpdateToolCallPatch): 
   if (patch.confirmedAt !== undefined) {
     fields.push('confirmed_at = ?')
     params.push(patch.confirmedAt)
+  }
+  // v10 (Phase 03b) — write-tool approval audit.
+  if (patch.approvalStatus !== undefined) {
+    fields.push('approval_status = ?')
+    params.push(patch.approvalStatus)
+  }
+  if (patch.approvalHash !== undefined) {
+    fields.push('approval_hash = ?')
+    params.push(patch.approvalHash)
   }
   if (fields.length === 0) return
   fields.push('updated_at = ?')

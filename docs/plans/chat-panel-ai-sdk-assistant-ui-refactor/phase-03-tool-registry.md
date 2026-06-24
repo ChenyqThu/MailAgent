@@ -1,6 +1,6 @@
 # Phase 03 — Tool Registry Migration
 
-> status: **03a read tools ✅ done（2026-06-24，flag-off）**；03b write tools + approval = 下一步。落地见 [§12](#12-实现落地03a2026-06-24) + [architecture §13.9](./architecture.md#139-phase-03a-落地2026-06-24read-tools-migration)。§1–§11 是规划层（实现前）。
+> status: **03a read tools ✅ + 03b write tools + HITL approval ✅ done（2026-06-24，flag-off）**。落地见 [§12](#12-实现落地03a2026-06-24)（03a）+ [§13](#13-实现落地03b2026-06-24write-tools--hitl-approval)（03b）+ [architecture §13.9](./architecture.md#139-phase-03a-落地2026-06-24read-tools-migration) / [§13.10](./architecture.md#1310-phase-03b-落地2026-06-24write-tools-preview--hitl-approval)。§1–§11 是规划层（实现前）。
 > last-verified: 2026-06-24
 > goal: 将 MailAgent agent tools 从 legacy harness registry 逐步迁移到 AI SDK Gateway tools，同时保持 Python domain service 权威。
 
@@ -261,3 +261,34 @@ MAILAGENT_AI_SDK_DISABLED_TOOLS=email_archive,sync_to_notion
 ### 12.3 本阶段不做（→ 03b/04）
 
 write tools 执行 / approval 两次调用语义 + R5 recorder 重对齐 / A2UI 卡片 / AG-UI / 会话重载接进 runtime / standing-context 注入。
+
+---
+
+## 13. 实现落地（03b，2026-06-24）
+
+> 5 个 preview/edit 写工具 + HITL approval（ai@6 `needsApproval` 两次调用），全程 `MAILAGENT_AI_SDK_WRITE_TOOLS` flag-off。架构决策 + 双层 guard + 契约差见 [architecture §13.10](./architecture.md#1310-phase-03b-落地2026-06-24write-tools-preview--hitl-approval)。
+
+### 13.1 产出
+
+迁移的 5 个写工具：`email_flag`/`email_archive`/`email_pin`（preview）+ `email_draft_reply`（edit）+ `email_resync`（preview，= §2.2 `sync_to_notion` 的「重推 Notion」语义；富 dry-run-diff 卡片 = 04a）。
+
+| 文件 | 职责 |
+|---|---|
+| `security/approval.ts` | `ApprovalGuard`（domain id/hash/expiry，keep-first，跨两调存活）|
+| `tools/write.ts` + `tools/types.ts`(`auditedWriteTool`) + `tools/schemas.ts`(write zod) | 写工具 registry（needsApproval 注册 + execute verify + domain 写 + parity massage + 审计）|
+| `python/domainClient.ts` | +5 写方法（wire 逐字镜像 HttpChatPlatform）|
+| `server.ts`/`config.ts`/`ai_gateway_lifecycle.ts` | `experimental_toolApprovalSecret` + write gate（writeToolsEnabled+guard）+ persistTurn approval 审计 |
+| chat_db.ts/model.ts/api types/db.py/test_chat.py | `chat_tool_call.approval_status`+`approval_hash`，`CHAT_DB_VERSION 9→10`|
+| `tests/agent_eval/recorder/ai_sdk_adapter.ts` | R5 重对齐适配层（AI SDK tool parts → trace events）+ `runs/ai-sdk-approval.jsonl` fixture |
+
+### 13.2 §10 验收（全 ✅）
+
+- Read tools 在 AI SDK runtime 可用（03a，不回退）。
+- write tools 未开 flag 不暴露：`buildGatewayTools` 仅在 `writeToolsEnabled && approvalGuard` 时加写工具；off（默认）字节级等同 03a（`write_preview.test.ts` 钉死 3 态）。
+- 所有 write tools 都需 approval（never silent）+ domain service 二次校验：每工具声明 `needsApproval`；Python MailWriteService 仍是业务权威；`无 approval token 不能真实执行`（execute 无 record → E_APPROVAL_NOT_FOUND，domain 写永不触发）。
+- `chat_tool_call` 审计 ≥ legacy：approved 执行写 tier+approval_status+approval_hash+user_edited（字段 ≥ legacy dispatch）。
+- `pnpm typecheck`(node+web) 0 · 全量 vitest **1786 passed**（+30；唯一失败 = `backend_lifecycle process.resourcesPath` electron-as-node runner 伪影，node runner 下 62 passed，与本 diff 无关）· `tests/agent_eval` **87 passed**（≥baseline，+2 R5 重对齐）+ `run_baseline --compare` base==candidate hard_pass=29（RESULT: OK，rc=0）。
+
+### 13.3 本阶段不做（→ 04a/04b）
+
+高风险外发 `email_prepare_send`/`email_send_approved`（04b，SendApprovalCard + content hash）/ 富 A2UI 卡片（04a，DraftReplyCard/NotionSyncCard 含 UI 编辑）/ AG-UI / 会话重载接 runtime / standing-context 注入。

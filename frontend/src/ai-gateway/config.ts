@@ -53,9 +53,10 @@ export interface PersistTurnInput {
   userMessage: MailAgentUIMessage | null
   responseMessage: MailAgentUIMessage
   usage?: { inputTokens?: number | null; outputTokens?: number | null }
-  /** Phase 03a — the read-tool calls executed this turn (collected by the gateway
-   *  via experimental_context). The wrapper writes each to chat_tool_call keyed to
-   *  the persisted assistant message. Empty / omitted when no tools ran. */
+  /** Phase 03a/03b — the tool calls executed this turn (collected by the gateway via a
+   *  closure-bound per-request collector, NOT streamText experimental_context). The
+   *  wrapper writes each to chat_tool_call keyed to the persisted assistant message;
+   *  write tools carry their tier + approval audit. Empty / omitted when no tools ran. */
   toolCalls?: GatewayToolAuditEntry[]
 }
 
@@ -83,4 +84,12 @@ export interface AiGatewayConfig {
   buildTools?: (collector: GatewayToolAuditEntry[]) => ToolSet
   /** Max tool-loop steps (stopWhen: stepCountIs). Default 8 (legacy AGENT_MAX_ITER). */
   maxSteps?: number
+  /** Phase 03b — HMAC secret for streamText `experimental_toolApprovalSecret`. When set,
+   *  ai@6 signs each tool-approval-request at issuance and verifies the signature (binding
+   *  approvalId+toolCallId+toolName+input) when the approval is replayed on the second
+   *  call → InvalidToolApprovalSignatureError on a forged / input-swapped approval. This
+   *  is the built-in layer that stacks on the domain ApprovalGuard (the Electron wrapper
+   *  generates a per-process random secret; tests inject a fixed one). Omitted → no
+   *  signing (write tools still need approval, just unsigned — dev/test only). */
+  toolApprovalSecret?: string
 }
