@@ -33,6 +33,11 @@ import { appendMessage, appendToolCall, updateToolCall } from './chat_db'
 import { getLlmApiKey, getLlmBaseUrl, getLlmModel } from './llm_settings'
 import { resolveApiPort } from './backend_lifecycle'
 import { getLocalApiToken } from './local_token'
+// Phase 06 (context injection) — the standing-context provider fetches the SAME serve-api
+// /chat/config the legacy runtime uses, projecting the system-prompt fields for the gateway.
+import { request } from '@shared/api/http_client'
+import type { HttpPlatformConfig } from '@shared/chat/http_platform'
+import type { GatewaySystemPromptConfig } from '../../ai-gateway/systemPrompt'
 
 let _handle: AiGatewayHandle | null = null
 
@@ -123,6 +128,41 @@ async function pollHealth(port: number, attempts = 10): Promise<boolean> {
   return false
 }
 
+// Phase 06 (context injection) — TTL-cached /chat/config projection for the gateway system prompt.
+// Fetched from the SAME serve-api endpoint the legacy runtime uses (request() handles the envelope
+// unwrap); a busy session reuses the cache so we don't refetch per turn. A fetch failure → null so
+// the gateway degrades to context-light (SOUL fallback) rather than breaking the turn — this
+// provider is CONTRACTED to never throw (chatRun trusts it returns null on failure).
+const CONTEXT_CONFIG_TTL_MS = 15_000
+let _systemPromptCache: { at: number; value: GatewaySystemPromptConfig | null } | null = null
+
+async function getSystemPromptConfig(
+  apiBase: string,
+  localToken: string | null
+): Promise<GatewaySystemPromptConfig | null> {
+  const now = Date.now()
+  if (_systemPromptCache && now - _systemPromptCache.at < CONTEXT_CONFIG_TTL_MS) {
+    return _systemPromptCache.value
+  }
+  let value: GatewaySystemPromptConfig | null = null
+  try {
+    const cfg = await request<HttpPlatformConfig>(apiBase, 'GET', '/chat/config', {
+      headers: localToken ? { 'X-MailAgent-Local-Token': localToken } : {}
+    })
+    value = {
+      standingContext: cfg.standingContext ?? null,
+      userContext: cfg.userContext ?? null,
+      memorySummary: cfg.memorySummary ?? null,
+      kosConfigured: cfg.kosConfigured ?? false
+    }
+  } catch (err) {
+    console.warn('[ai-gateway] /chat/config fetch failed — context-light system prompt', err)
+    value = null
+  }
+  _systemPromptCache = { at: now, value }
+  return value
+}
+
 /**
  * Start the embedded AI SDK Gateway in the Electron main process. Reads the LLM
  * config from llm_settings, wires persistTurn → chat_db, listens on the resolved
@@ -161,6 +201,12 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
   // reuses the SAME streamText + tools + double-guard approval as /api/ai/chat (no new write path),
   // only re-encoding the output as an AG-UI event stream. It does NOT affect the AI SDK runtime.
   const aguiMirrorEnabled = envBool('MAILAGENT_AG_UI_MIRROR', false)
+  // Phase 06 — MAILAGENT_AI_SDK_CONTEXT_INJECTION gates the standing-context system prompt + the
+  // renderer sending the typed AgentContextSnapshot + session reload. On → the gateway assembles the
+  // system from /chat/config + the snapshot (reusing the legacy stable prefix via the provider); off
+  // (default) → body.system passthrough, byte-identical to 04b/05. Independent one-flag rollback.
+  const contextInjectionEnabled = envBool('MAILAGENT_AI_SDK_CONTEXT_INJECTION', false)
+  const apiBase = `http://127.0.0.1:${resolveApiPort()}/api`
   const handle = await startAiGatewayServer({
     port: resolveAiGatewayPort(),
     baseUrl: getLlmBaseUrl(),
@@ -180,6 +226,12 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     // (approvalGuard.peek — never mutates / consumes) and only surfaces what a client needs to render
     // the interrupt card (risk / reason / expiry + optional A2UI). NO token / secret leaves main.
     aguiMirrorEnabled,
+    // Phase 06 — inject the standing-context provider ONLY when the flag is on. Off → omitted →
+    // prepareChatRun uses body.system (byte-identical to 05). The provider never throws (returns
+    // null → context-light) so a /chat/config blip can't break a turn.
+    systemPromptProvider: contextInjectionEnabled
+      ? () => getSystemPromptConfig(apiBase, getLocalApiToken())
+      : undefined,
     resolveApprovalRequest: aguiMirrorEnabled
       ? (info) => {
           const rec = approvalGuard.peek(info.toolCallId)

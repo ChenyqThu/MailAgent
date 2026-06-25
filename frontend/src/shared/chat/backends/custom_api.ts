@@ -250,7 +250,12 @@ function buildKosGuidanceBlock(): string {
  *      KOS returned a hit)
  *  Cache miss / null / flag off → no injection (graceful degrade).
  */
-function buildStableSystemPrompt(
+// chat-panel P4 Phase 06 (context injection) — EXPORTED so the AI SDK Gateway reuses the EXACT same
+// stable-prefix assembly (PRODUCT_SAFETY_FLOOR + standingContext/SOUL + userContext + memory + skill
+// fragments + KOS guidance). The gateway calls it with ctx=null + a no-op digest (email context goes
+// in the typed AgentContextSnapshot block, not the legacy EmailContext section) so its system prompt
+// shares the standing-context source with the legacy custom-api path — no second assembly, no drift.
+export function buildStableSystemPrompt(
   ctx: EmailContext | null,
   cfg: ChatModelConfig,
   getCachedSenderDigest: (senderAddr: string) => string | null

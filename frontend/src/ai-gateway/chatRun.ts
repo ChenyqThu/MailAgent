@@ -22,6 +22,12 @@ import { anthropicBaseUrl, type AiGatewayConfig, type PersistTurnInput } from '.
 import { createAnthropic } from '@ai-sdk/anthropic'
 import type { GatewayToolAuditEntry } from './tools/types'
 import type { MailAgentUIMessage } from '@shared/assistant/uiMessage'
+// Phase 06 (context injection) — system prompt assembly + snapshot schema guard.
+import { buildGatewaySystemPrompt } from './systemPrompt'
+import {
+  isValidContextSnapshot,
+  type AgentContextSnapshot
+} from '@shared/assistant/context/contextSnapshot'
 
 /** Default tool-loop ceiling (matches the legacy harness AGENT_MAX_ITER default). */
 export const DEFAULT_MAX_STEPS = 8
@@ -93,9 +99,41 @@ export async function prepareChatRun(
     return { ok: false, status: 400, body: { error: 'E_INVALID_ARG', hint: 'messages[] required' } }
   }
   const modelId = typeof body.model === 'string' && body.model.length > 0 ? body.model : cfg.model
-  const system = typeof body.system === 'string' && body.system.length > 0 ? body.system : undefined
   const sessionId =
     typeof body.sessionId === 'number' && Number.isInteger(body.sessionId) ? body.sessionId : null
+
+  // System prompt. With the injection provider set (MAILAGENT_AI_SDK_CONTEXT_INJECTION on) assemble
+  // from standing-context + the typed snapshot, reusing the legacy stable prefix
+  // (buildGatewaySystemPrompt). Without it (default) pass body.system through unchanged AND ignore the
+  // contextSnapshot field entirely — Phase 02/05 behaviour, byte-identical (no validation, no 400).
+  let system: string | undefined
+  if (cfg.systemPromptProvider) {
+    // Resolve the typed context snapshot ONLY on the injection path: a valid v1 snapshot is used; a
+    // snapshot that CLAIMS to be typed (carries a `version`) but fails validation → 400 (no off-spec
+    // blob into the prompt); an UNtyped passthrough blob (no version — the AG-UI mirror's open
+    // context, handled by the AG-UI route's own redacting readContext) is ignored here. Absent → null.
+    let contextSnapshot: AgentContextSnapshot | null = null
+    if (body.contextSnapshot != null) {
+      if (isValidContextSnapshot(body.contextSnapshot)) {
+        contextSnapshot = body.contextSnapshot
+      } else if (
+        typeof body.contextSnapshot === 'object' &&
+        !Array.isArray(body.contextSnapshot) &&
+        'version' in (body.contextSnapshot as object)
+      ) {
+        return {
+          ok: false,
+          status: 400,
+          body: { error: 'E_INVALID_ARG', hint: 'contextSnapshot failed schema validation' }
+        }
+      }
+    }
+    // The provider is contracted to return null (not throw) on a /chat/config blip → context-light.
+    const promptConfig = (await cfg.systemPromptProvider()) ?? null
+    system = buildGatewaySystemPrompt({ promptConfig, contextSnapshot })
+  } else {
+    system = typeof body.system === 'string' && body.system.length > 0 ? body.system : undefined
+  }
 
   // 🔴 ai@6 convertToModelMessages is ASYNC (returns a Promise) — must await, else
   // streamText.standardizePrompt receives a Promise and throws "messages.some is not a function".

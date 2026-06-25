@@ -74,6 +74,10 @@ export default defineConfig({
     __MAILAGENT_AI_SDK_GATEWAY__: JSON.stringify(process.env.MAILAGENT_AI_SDK_GATEWAY ?? ''),
     // Phase 04a — renderer mirror of MAILAGENT_A2UI_TOOL_CARDS (gates the rich tool cards).
     __MAILAGENT_A2UI_TOOL_CARDS__: JSON.stringify(process.env.MAILAGENT_A2UI_TOOL_CARDS ?? ''),
+    // Phase 06 — renderer mirror of MAILAGENT_AI_SDK_CONTEXT_INJECTION (context snapshot + reload).
+    __MAILAGENT_AI_SDK_CONTEXT_INJECTION__: JSON.stringify(
+      process.env.MAILAGENT_AI_SDK_CONTEXT_INJECTION ?? ''
+    ),
     // Workbox guards its dev logger behind `process.env.NODE_ENV`, which is
     // undefined in the browser ServiceWorker global (`process` doesn't exist
     // there) → the SW would throw on load. Define it at build time so the

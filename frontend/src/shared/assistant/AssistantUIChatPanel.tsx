@@ -38,9 +38,17 @@ import { ContextChips } from '@shared/components/chat/ContextChips'
 
 import { MailAgentRuntimeProvider } from './runtime/MailAgentRuntimeProvider'
 import { AiSdkRuntimeProvider } from './runtime/AiSdkRuntimeProvider'
-import { getChatRuntimeMode, isAiSdkGatewayEnabled, resolveAiGatewayBaseUrl } from './runtime/flags'
+import {
+  getChatRuntimeMode,
+  isAiSdkContextInjectionEnabled,
+  isAiSdkGatewayEnabled,
+  resolveAiGatewayBaseUrl
+} from './runtime/flags'
 import { AssistantThread } from './components/thread'
 import { useChatContextChips } from './context/useChatContextChips'
+import { useAgentContextSnapshot } from './context/useAgentContextSnapshot'
+import type { CapabilityContext, ContextScope } from './context/contextSnapshot'
+import { chatMessageToUIMessage } from './uiMessage'
 
 // custom-api is the only selectable backend (notion-agent retired as a new
 // session backend — task 06-18). Phase 01 shell defaults to the user's last
@@ -158,6 +166,54 @@ export function AssistantUIChatPanel({
   const gatewayBaseUrl = useMemo(() => resolveAiGatewayBaseUrl(), [])
   const useAiSdkRuntime =
     getChatRuntimeMode() === 'ai-sdk' && isAiSdkGatewayEnabled() && gatewayBaseUrl !== null
+
+  // chat-panel P4 Phase 06 — context injection (flag-gated). On → build + send the typed
+  // AgentContextSnapshot, read ContextChips from it, and seed prior-session messages (reload). Off
+  // (default) → the AI SDK path stays Phase-02 context-light, byte-identical.
+  const contextInjectionOn = useAiSdkRuntime && isAiSdkContextInjectionEnabled()
+  const contextScope = useMemo<ContextScope>(
+    () => ({
+      surface: 'email-chat',
+      anchorType: 'email',
+      anchorId: activeInternalId,
+      sessionId: chat.activeSessionId,
+      backendKind: 'ai-sdk'
+    }),
+    [activeInternalId, chat.activeSessionId]
+  )
+  // Phase 01 shell defers the in-composer thinking toggle + attachment chips; tool calling is always
+  // available on the gateway. enabledSkills is empty here (the panel doesn't compute manifest skill
+  // enablement) → the capabilities block honestly reads "none beyond the built-in tools".
+  const contextCapabilities = useMemo<CapabilityContext>(
+    () => ({
+      thinkingEnabled: false,
+      attachmentsEnabled: false,
+      toolCallingEnabled: true,
+      humanApprovalRequired: true,
+      enabledSkills: []
+    }),
+    []
+  )
+  const { snapshot: contextSnapshot } = useAgentContextSnapshot({
+    activeInternalId,
+    scope: contextScope,
+    capabilities: contextCapabilities,
+    panelMode: fullScreen ? 'fullscreen' : 'dock',
+    enabled: contextInjectionOn
+  })
+  // Session reload (§13.8.5): seed the AI SDK runtime with the active session's prior messages. Guard
+  // the selectSession race (activeSessionId flips before refresh reloads messages) by only seeding
+  // once chat.messages belong to the active session; the mount is deferred until then (below).
+  const reloadMessagesReady =
+    chat.activeSessionId === null ||
+    !chat.messages.some((m) => m.session_id !== chat.activeSessionId)
+  const initialMessages = useMemo(
+    () =>
+      contextInjectionOn && reloadMessagesReady
+        ? chat.messages.map(chatMessageToUIMessage)
+        : undefined,
+    [contextInjectionOn, reloadMessagesReady, chat.messages]
+  )
 
   // custom-api readiness = keychain llmApiKey present (mirror of legacy gate).
   const secretsQ = useQuery({
@@ -401,6 +457,7 @@ export function AssistantUIChatPanel({
         <div className="flex min-h-0 w-full min-w-0 flex-1 flex-col">
           <BackendSelector value={backend} agentName={null} />
           <ContextChips
+            snapshot={contextInjectionOn ? contextSnapshot : undefined}
             hasEmailBody={ctx.hasEmailBody}
             aiFieldsCount={ctx.aiFieldsCount}
             threadCount={ctx.threadCount}
@@ -465,18 +522,32 @@ export function AssistantUIChatPanel({
               )}
 
               {useAiSdkRuntime && gatewayBaseUrl ? (
-                // Phase 02 AI SDK path: a fresh thread streams straight from the
-                // embedded Gateway; turns persist into chat.activeSessionId (Gateway
-                // dual-write). Keyed by the email so switching emails remounts a fresh
-                // runtime. No legacy pending-confirmation slot (tools migrate phase-03).
-                <AiSdkRuntimeProvider
-                  key={activeInternalId ?? 'none'}
-                  gatewayBaseUrl={gatewayBaseUrl}
-                  sessionId={chat.activeSessionId}
-                  model={backend.model}
-                >
-                  <AssistantThread emptyState={emptyMessages} />
-                </AiSdkRuntimeProvider>
+                contextInjectionOn && !reloadMessagesReady ? (
+                  // Phase 06 — session switch in flight: defer the mount until chat.messages match the
+                  // active session, so the runtime never seeds stale history. Brief; refresh() then
+                  // flips reloadMessagesReady and the runtime mounts seeded with the right messages.
+                  emptyMessages
+                ) : (
+                  // Phase 02/06 AI SDK path: a fresh thread streams straight from the embedded
+                  // Gateway; turns persist into chat.activeSessionId (Gateway dual-write). Phase 06:
+                  // keyed by (email, session) so picking a history session remounts seeded with that
+                  // session's prior messages (initialMessages) + sends the typed context snapshot.
+                  // Flag-off → context-light, keyed by email only (byte-identical to Phase 02).
+                  <AiSdkRuntimeProvider
+                    key={
+                      contextInjectionOn
+                        ? `${activeInternalId ?? 'none'}:${chat.activeSessionId ?? 'new'}`
+                        : (activeInternalId ?? 'none')
+                    }
+                    gatewayBaseUrl={gatewayBaseUrl}
+                    sessionId={chat.activeSessionId}
+                    model={backend.model}
+                    contextSnapshot={contextSnapshot}
+                    initialMessages={initialMessages}
+                  >
+                    <AssistantThread emptyState={emptyMessages} />
+                  </AiSdkRuntimeProvider>
+                )
               ) : (
                 <MailAgentRuntimeProvider
                   chat={chat}

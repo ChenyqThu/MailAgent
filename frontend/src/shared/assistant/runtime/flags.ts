@@ -36,6 +36,11 @@ declare const __MAILAGENT_AI_SDK_GATEWAY__: string | undefined
 // assistant-ui tool slot keeps only the generic ToolTraceCard fallback (byte-identical to
 // Phase 01). NON-secret; injected per-flag like the others.
 declare const __MAILAGENT_A2UI_TOOL_CARDS__: string | undefined
+// Phase 06 — renderer mirror of MAILAGENT_AI_SDK_CONTEXT_INJECTION. Gates the AI SDK path
+// building + sending the typed AgentContextSnapshot, reading ContextChips from it, and seeding
+// prior-session messages (session reload). Off (default) → the AI SDK path stays Phase-02
+// context-light (no snapshot sent, empty initial thread), byte-identical. NON-secret per-flag toggle.
+declare const __MAILAGENT_AI_SDK_CONTEXT_INJECTION__: string | undefined
 
 export type ChatRuntimeMode = 'legacy' | 'external-store' | 'ai-sdk'
 
@@ -76,6 +81,12 @@ function buildA2uiToolCardsFlag(): string | undefined {
     : undefined
 }
 
+function buildAiSdkContextInjectionFlag(): string | undefined {
+  return typeof __MAILAGENT_AI_SDK_CONTEXT_INJECTION__ !== 'undefined'
+    ? __MAILAGENT_AI_SDK_CONTEXT_INJECTION__
+    : undefined
+}
+
 /** True when the assistant-ui chat shell should replace the legacy AIChatPanel.
  *  Evaluated at call time (not module load) so tests can stub the env first. */
 export function isAssistantUiPanelEnabled(): boolean {
@@ -109,6 +120,15 @@ export function isAiSdkGatewayEnabled(): boolean {
  *  call time so tests can stub the env first. */
 export function isA2uiToolCardsEnabled(): boolean {
   return truthy(resolveFlag('MAILAGENT_A2UI_TOOL_CARDS', buildA2uiToolCardsFlag))
+}
+
+/** Phase 06 — true when the AI SDK path should build + send the typed AgentContextSnapshot, read
+ *  ContextChips from it, and seed prior-session messages (session reload). Renderer mirror of the
+ *  main-process MAILAGENT_AI_SDK_CONTEXT_INJECTION flag (the gateway only injects its
+ *  systemPromptProvider under the same flag). Off (default) → Phase-02 context-light, byte-identical.
+ *  Evaluated at call time so tests can stub the env first. */
+export function isAiSdkContextInjectionEnabled(): boolean {
+  return truthy(resolveFlag('MAILAGENT_AI_SDK_CONTEXT_INJECTION', buildAiSdkContextInjectionFlag))
 }
 
 /** Loopback base URL of the embedded AI SDK Gateway, discovered from the

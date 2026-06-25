@@ -18,6 +18,9 @@ import type { GatewayToolAuditEntry } from './tools/types'
 // 🔴 type-only imports — fully erased (same discipline as GatewayToolAuditEntry above), so the
 // AG-UI mirror types never pull the `ai` chunk into the main bundle when the gateway is off.
 import type { ToolApprovalRequestPayload } from './agui/interruptMapper'
+// 🔴 type-only — fully erased; the systemPrompt module (which imports the custom_api prompt
+// assembly) is never pulled into the main bundle when the gateway is off (Phase 02 invariant).
+import type { GatewaySystemPromptConfig } from './systemPrompt'
 
 /** Phase 05 — what the AG-UI mirror passes the approval-request resolver: the accumulated tool call
  *  + the ai@6 approval id/signature. The Electron wrapper looks toolCallId up in the ApprovalGuard
@@ -127,4 +130,15 @@ export interface AiGatewayConfig {
    *  ApprovalGuard.peek (risk / reason / expiry) + optional A2UI. Returns null when no record is
    *  found → the mirror falls back to a minimal fail-closed interrupt. Omitted → same fallback. */
   resolveApprovalRequest?: (info: ApprovalRequestResolveInfo) => ToolApprovalRequestPayload | null
+  /** Phase 06 (context injection) — MAILAGENT_AI_SDK_CONTEXT_INJECTION. Returns the standing-context
+   *  config (/chat/config projection) used to build streamText `system`. Set by the Electron wrapper
+   *  ONLY when the flag is on; it fetches the SAME serve-api /chat/config the legacy runtime uses
+   *  (TTL-cached). When set, prepareChatRun assembles the system from standingContext + the request's
+   *  AgentContextSnapshot (buildGatewaySystemPrompt) instead of passing through body.system. Omitted
+   *  (default) → body.system passthrough, byte-identical to Phase 02. A null RESULT (fetch failed) →
+   *  context-light fallback (SOUL_MARKDOWN, no standing context). */
+  systemPromptProvider?: () =>
+    | Promise<GatewaySystemPromptConfig | null>
+    | GatewaySystemPromptConfig
+    | null
 }

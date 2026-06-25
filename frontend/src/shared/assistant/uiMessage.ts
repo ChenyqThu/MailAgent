@@ -16,7 +16,20 @@
 
 import type { UIMessage } from 'ai'
 
-import type { ChatMessage } from '@shared/chat/model'
+/** The fields chatMessageToUIMessage reads, with `ui_message_json` OPTIONAL. Structural (not the
+ *  chat_db ChatMessage) so BOTH a chat_db row (ui_message_json present = AI SDK canonical) AND a
+ *  renderer api/types ChatMessage (no ui_message_json column on the read projection → content
+ *  fallback) can be reloaded into the AI SDK runtime without a cast. */
+export interface ReloadableChatMessageRow {
+  id: number
+  role: 'user' | 'assistant' | 'system' | 'tool'
+  content: string
+  thinking: string | null
+  model: string | null
+  tokens_input: number | null
+  tokens_output: number | null
+  ui_message_json?: string | null
+}
 
 /** Per-message metadata the gateway attaches to the AI SDK UIMessage stream.
  *  Kept light for Phase 02 (model + token usage); the full protocol-contracts §2
@@ -75,9 +88,9 @@ export function parseUiMessageJson(raw: string | null): MailAgentUIMessage | nul
  *  `thinking`) so legacy-runtime / pre-v9 rows still render. `tool`/`system` rows
  *  are not first-class UIMessage roles → folded to `assistant` text (Phase 02 is
  *  text-only; tool parts arrive when tools migrate in phase-03). */
-export function chatMessageToUIMessage(row: ChatMessage): MailAgentUIMessage {
+export function chatMessageToUIMessage(row: ReloadableChatMessageRow): MailAgentUIMessage {
   const id = String(row.id)
-  const canonical = parseUiMessageJson(row.ui_message_json)
+  const canonical = parseUiMessageJson(row.ui_message_json ?? null)
   if (canonical) return { ...canonical, id }
 
   const role: MailAgentUIMessage['role'] = row.role === 'user' ? 'user' : 'assistant'

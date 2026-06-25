@@ -1,8 +1,13 @@
 # Context Injection — AgentContextSnapshot 与轻量上下文注入机制
 
-> status: planning
-> last-verified: 2026-06-22
+> status: landed（2026-06-25，flag `MAILAGENT_AI_SDK_CONTEXT_INJECTION`，默认 off）
+> last-verified: 2026-06-25
 > scope: active email context, UI implicit state, prompt hardening, AI SDK Gateway context input
+>
+> 落地详情 + 关键裁决（复用同一 standing-context 源 / 防注入纵深 / 会话重载竞态）见
+> [`architecture.md` §13.14](./architecture.md)。本文是设计规格；实现以 §13.14 为权威。
+> §3 schema → `frontend/src/shared/assistant/context/contextSnapshot.ts`；§5/§7 序列化 →
+> `contextSerializer.ts`；§6 budget → `contextRedaction.ts`；gateway 装配 → `ai-gateway/systemPrompt.ts`。
 
 ## 1. 目标
 
