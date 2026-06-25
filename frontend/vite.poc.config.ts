@@ -25,7 +25,8 @@ export default defineConfig({
     __MAILAGENT_A2UI_TOOL_CARDS__: JSON.stringify('1'),
     __MAILAGENT_ASSISTANT_UI_PANEL__: JSON.stringify('1'),
     __MAILAGENT_CHAT_RUNTIME__: JSON.stringify('ai-sdk'),
-    __MAILAGENT_AI_SDK_GATEWAY__: JSON.stringify('1')
+    __MAILAGENT_AI_SDK_GATEWAY__: JSON.stringify('1'),
+    __MAILAGENT_AI_SDK_NEW_SESSION_DEFAULT__: JSON.stringify('1')
   },
   server: { port: 5199, strictPort: true, host: '127.0.0.1' },
   cacheDir: resolve(import.meta.dirname, 'node_modules/.vite-poc')

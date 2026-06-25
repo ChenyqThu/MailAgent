@@ -78,6 +78,11 @@ export default defineConfig({
     __MAILAGENT_AI_SDK_CONTEXT_INJECTION__: JSON.stringify(
       process.env.MAILAGENT_AI_SDK_CONTEXT_INJECTION ?? ''
     ),
+    // Phase 06a (cutover) — MASTER switch (default '' off; Chunk H flips to '1'). flags.ts falls
+    // back to this when a sub-flag is unset; MAILAGENT_CHAT_RUNTIME=legacy overrides back to legacy.
+    __MAILAGENT_AI_SDK_NEW_SESSION_DEFAULT__: JSON.stringify(
+      process.env.MAILAGENT_AI_SDK_NEW_SESSION_DEFAULT ?? ''
+    ),
     // Workbox guards its dev logger behind `process.env.NODE_ENV`, which is
     // undefined in the browser ServiceWorker global (`process` doesn't exist
     // there) → the SW would throw on load. Define it at build time so the

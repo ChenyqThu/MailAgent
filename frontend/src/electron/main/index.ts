@@ -17,6 +17,7 @@ import {
 // chat-panel P4 Phase 02 — pure port resolver (config.ts only type-imports `ai`,
 // so this static import does NOT pull the heavy AI SDK chunk into the main bundle).
 import { resolveAiGatewayPort } from '../../ai-gateway/config'
+import { shouldStartEmbeddedGateway } from './ai_gateway_flags'
 import { detectUserState } from './onboarding/detect'
 import { registerOnboardingHandlers } from './handlers/onboarding'
 import { MAIN_WINDOW, ONBOARDING_WINDOW } from './lib/window-config'
@@ -141,7 +142,7 @@ function createWindow(opts: { onboarding?: boolean } = {}): void {
   // renderer its loopback port the same way as apiPort (the gateway binds the same
   // deterministic resolveAiGatewayPort()). flag-off → param absent → the renderer's
   // resolver falls back and the AI SDK runtime entry stays hidden.
-  if (process.env.MAILAGENT_AI_SDK_GATEWAY === 'true') {
+  if (shouldStartEmbeddedGateway()) {
     params.set('aiGatewayPort', String(resolveAiGatewayPort()))
   }
   const search = params.toString()
@@ -501,7 +502,7 @@ app.whenReady().then(async () => {
   // /api/ai/chat UIMessage 流), dev/打包均可启, 与 serve-api / DavMail 解耦。端口经
   // createWindow 的 ?aiGatewayPort= 注入 renderer (resolveAiGatewayPort 单源)。架构定位见
   // docs/plans/chat-panel-ai-sdk-assistant-ui-refactor/architecture.md §13.3 (form A)。
-  if (process.env.MAILAGENT_AI_SDK_GATEWAY === 'true') {
+  if (shouldStartEmbeddedGateway()) {
     void (async () => {
       try {
         const { startEmbeddedAiGateway } = await import('./ai_gateway_lifecycle')

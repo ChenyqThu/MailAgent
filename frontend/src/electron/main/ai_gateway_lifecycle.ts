@@ -38,6 +38,7 @@ import { getLocalApiToken } from './local_token'
 import { request } from '@shared/api/http_client'
 import type { HttpPlatformConfig } from '@shared/chat/http_platform'
 import type { GatewaySystemPromptConfig } from '../../ai-gateway/systemPrompt'
+import { masterNewSessionDefaultOn } from './ai_gateway_flags'
 
 let _handle: AiGatewayHandle | null = null
 
@@ -204,8 +205,15 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
   // Phase 06 — MAILAGENT_AI_SDK_CONTEXT_INJECTION gates the standing-context system prompt + the
   // renderer sending the typed AgentContextSnapshot + session reload. On → the gateway assembles the
   // system from /chat/config + the snapshot (reusing the legacy stable prefix via the provider); off
-  // (default) → body.system passthrough, byte-identical to 04b/05. Independent one-flag rollback.
-  const contextInjectionEnabled = envBool('MAILAGENT_AI_SDK_CONTEXT_INJECTION', false)
+  // → body.system passthrough, byte-identical to 04b/05. Independent one-flag rollback.
+  // Phase 06a — the DEFAULT now follows the NEW_SESSION_DEFAULT master so the cutover ships
+  // standing-context parity (the renderer's isAiSdkContextInjectionEnabled mirrors the same master);
+  // an explicit env still wins. (When the gateway is started via an explicit MAILAGENT_AI_SDK_GATEWAY
+  // =true dogfood with master off, this stays off unless the injection flag is set — old per-flag UX.)
+  const contextInjectionEnabled = envBool(
+    'MAILAGENT_AI_SDK_CONTEXT_INJECTION',
+    masterNewSessionDefaultOn()
+  )
   const apiBase = `http://127.0.0.1:${resolveApiPort()}/api`
   const handle = await startAiGatewayServer({
     port: resolveAiGatewayPort(),

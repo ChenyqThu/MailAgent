@@ -41,6 +41,14 @@ declare const __MAILAGENT_A2UI_TOOL_CARDS__: string | undefined
 // prior-session messages (session reload). Off (default) → the AI SDK path stays Phase-02
 // context-light (no snapshot sent, empty initial thread), byte-identical. NON-secret per-flag toggle.
 declare const __MAILAGENT_AI_SDK_CONTEXT_INJECTION__: string | undefined
+// Phase 06a (cutover) — renderer mirror of MAILAGENT_AI_SDK_NEW_SESSION_DEFAULT, the MASTER switch
+// that flips new chats to the AI SDK Gateway by default. When a specific sub-flag (ASSISTANT_UI_PANEL
+// / CHAT_RUNTIME / AI_SDK_GATEWAY / CONTEXT_INJECTION / A2UI_TOOL_CARDS) is UNSET, the resolvers fall
+// back to this master; an explicitly-set sub-flag always wins, and MAILAGENT_CHAT_RUNTIME=legacy is
+// the one-key rollback. Default '' (off) here; the production build flips it to '1' at cutover
+// (electron.vite/vite.web define). Under vitest there is no define → undefined → master off → every
+// sub-flag keeps its byte-identical default-off. NON-secret per-flag toggle.
+declare const __MAILAGENT_AI_SDK_NEW_SESSION_DEFAULT__: string | undefined
 
 export type ChatRuntimeMode = 'legacy' | 'external-store' | 'ai-sdk'
 
@@ -49,14 +57,23 @@ function truthy(value: string): boolean {
   return v === '1' || v === 'true' || v === 'on' || v === 'yes'
 }
 
-/** process.env (test/dev override) wins so vitest can `vi.stubEnv`; otherwise the
- *  build-time constant (production/dev renderer, where `process` is absent). */
-function resolveFlag(envKey: string, readBuildConst: () => string | undefined): string {
+/** Resolve a flag to its raw string AND whether it was EXPLICITLY set. process.env
+ *  (test/dev override) wins so vitest can `vi.stubEnv`; otherwise the build-time
+ *  constant (production/dev renderer, where `process` is absent). The `set` bit is the
+ *  crux of the Phase-06a master fallback: an env var present (even '') OR a NON-EMPTY
+ *  build const counts as explicitly set → that flag wins; an absent env + an
+ *  empty/undefined build const (the default, incl. every vitest read) counts as UNSET
+ *  → the resolver falls back to the NEW_SESSION_DEFAULT master. */
+function resolveFlagRaw(
+  envKey: string,
+  readBuildConst: () => string | undefined
+): { set: boolean; value: string } {
   if (typeof process !== 'undefined' && process.env && process.env[envKey] != null) {
-    return String(process.env[envKey])
+    return { set: true, value: String(process.env[envKey]) }
   }
   const fromBuild = readBuildConst()
-  return fromBuild != null ? String(fromBuild) : ''
+  if (fromBuild != null && fromBuild !== '') return { set: true, value: String(fromBuild) }
+  return { set: false, value: '' }
 }
 
 function buildPanelFlag(): string | undefined {
@@ -87,48 +104,85 @@ function buildAiSdkContextInjectionFlag(): string | undefined {
     : undefined
 }
 
-/** True when the assistant-ui chat shell should replace the legacy AIChatPanel.
- *  Evaluated at call time (not module load) so tests can stub the env first. */
-export function isAssistantUiPanelEnabled(): boolean {
-  return truthy(resolveFlag('MAILAGENT_ASSISTANT_UI_PANEL', buildPanelFlag))
+function buildNewSessionDefaultFlag(): string | undefined {
+  return typeof __MAILAGENT_AI_SDK_NEW_SESSION_DEFAULT__ !== 'undefined'
+    ? __MAILAGENT_AI_SDK_NEW_SESSION_DEFAULT__
+    : undefined
+}
+
+/** Phase 06a — is the NEW_SESSION_DEFAULT master switched on? Only true when the master
+ *  flag is EXPLICITLY set truthy (env, or the prod build's '1' define). Under vitest (no
+ *  define, no stub) it is off, so every sub-flag below keeps its pre-cutover default-off and
+ *  the byte-identical flag-off contract holds. */
+function masterNewSessionDefaultOn(): boolean {
+  const m = resolveFlagRaw('MAILAGENT_AI_SDK_NEW_SESSION_DEFAULT', buildNewSessionDefaultFlag)
+  return m.set && truthy(m.value)
 }
 
 /** Which runtime adapter the assistant-ui shell uses:
- *  - `legacy` (default) / `external-store` — the Phase 01 ExternalStore adapter.
- *  - `ai-sdk` (Phase 02) — the AI SDK `useChatRuntime` pointed at the embedded
- *    Gateway. Only takes effect when the Gateway is actually reachable
- *    (isAiSdkGatewayEnabled + resolveAiGatewayBaseUrl); the panel falls back to
- *    external-store otherwise, so a misconfigured flag never breaks chat.
- *  `ag-ui` stays reserved → folds to external-store. */
+ *  - `legacy` — the legacy MessageList view + ExternalStore.
+ *  - `external-store` — assistant-ui shell + ExternalStore adapter (alias `ag-ui`).
+ *  - `ai-sdk` — the AI SDK `useChatRuntime` pointed at the embedded Gateway. Only takes
+ *    effect when the Gateway is reachable (panel-side isAiSdkGatewayEnabled +
+ *    resolveAiGatewayBaseUrl + health); the panel falls back otherwise.
+ *  Resolution (Phase 06a): an explicit MAILAGENT_CHAT_RUNTIME wins — `=legacy` is the
+ *  one-key rollback, `=ai-sdk` the manual opt-in; when UNSET it follows the
+ *  NEW_SESSION_DEFAULT master (on → 'ai-sdk', off → 'legacy'). */
 export function getChatRuntimeMode(): ChatRuntimeMode {
-  const raw = resolveFlag('MAILAGENT_CHAT_RUNTIME', buildRuntimeFlag).trim().toLowerCase()
-  if (raw === 'ai-sdk') return 'ai-sdk'
-  if (raw === 'external-store' || raw === 'ag-ui') return 'external-store'
-  return 'legacy'
+  const r = resolveFlagRaw('MAILAGENT_CHAT_RUNTIME', buildRuntimeFlag)
+  if (r.set) {
+    const raw = r.value.trim().toLowerCase()
+    if (raw === 'ai-sdk') return 'ai-sdk'
+    if (raw === 'external-store' || raw === 'ag-ui') return 'external-store'
+    return 'legacy'
+  }
+  // Unset → the master decides the default new-session runtime.
+  return masterNewSessionDefaultOn() ? 'ai-sdk' : 'legacy'
 }
 
-/** True when the embedded AI SDK Gateway is enabled (renderer mirror of the
- *  main-process MAILAGENT_AI_SDK_GATEWAY flag). Gates the AI SDK runtime entry so
- *  it never shows when the gateway isn't running. */
+/** True when the assistant-ui chat shell should replace the legacy AIChatPanel MessageList
+ *  view. An explicit MAILAGENT_ASSISTANT_UI_PANEL wins; when UNSET it derives from the
+ *  resolved runtime — any non-legacy runtime (ai-sdk / external-store) uses the assistant-ui
+ *  shell, legacy uses the old view. So the master turning on (→ runtime 'ai-sdk') brings the
+ *  shell with it, and MAILAGENT_CHAT_RUNTIME=legacy drops back to the legacy view. Evaluated
+ *  at call time (not module load) so tests can stub the env first. */
+export function isAssistantUiPanelEnabled(): boolean {
+  const p = resolveFlagRaw('MAILAGENT_ASSISTANT_UI_PANEL', buildPanelFlag)
+  if (p.set) return truthy(p.value)
+  return getChatRuntimeMode() !== 'legacy'
+}
+
+/** True when the embedded AI SDK Gateway runtime entry is enabled (renderer mirror of the
+ *  main-process MAILAGENT_AI_SDK_GATEWAY flag). An explicit flag wins; when UNSET it is on
+ *  exactly when the resolved runtime is 'ai-sdk' (the gateway only serves that path). So the
+ *  master default brings the gateway with it; legacy turns it off. */
 export function isAiSdkGatewayEnabled(): boolean {
-  return truthy(resolveFlag('MAILAGENT_AI_SDK_GATEWAY', buildAiSdkGatewayFlag))
+  const g = resolveFlagRaw('MAILAGENT_AI_SDK_GATEWAY', buildAiSdkGatewayFlag)
+  if (g.set) return truthy(g.value)
+  return getChatRuntimeMode() === 'ai-sdk'
 }
 
-/** Phase 04a — true when the rich A2UI tool cards should replace the generic ToolTraceCard
- *  fallback (renderer mirror of MAILAGENT_A2UI_TOOL_CARDS). Off (default) → the assistant-ui
- *  tool slot keeps ONLY the generic fallback, byte-identical to Phase 01 / 03b. Evaluated at
- *  call time so tests can stub the env first. */
+/** Phase 04a — true when the rich A2UI tool cards replace the generic ToolTraceCard fallback
+ *  (mirror of MAILAGENT_A2UI_TOOL_CARDS). An explicit flag wins (so MAILAGENT_A2UI_TOOL_CARDS=0
+ *  is an independent partial rollback per phase-06 §7); when UNSET it is on when the ai-sdk
+ *  runtime is active, so the cutover ships the rich cards (DraftReplyCard / SendApprovalCard) by
+ *  default. Flag-off (vitest) → runtime 'legacy' → off → byte-identical to Phase 01 / 03b. */
 export function isA2uiToolCardsEnabled(): boolean {
-  return truthy(resolveFlag('MAILAGENT_A2UI_TOOL_CARDS', buildA2uiToolCardsFlag))
+  const a = resolveFlagRaw('MAILAGENT_A2UI_TOOL_CARDS', buildA2uiToolCardsFlag)
+  if (a.set) return truthy(a.value)
+  return getChatRuntimeMode() === 'ai-sdk'
 }
 
-/** Phase 06 — true when the AI SDK path should build + send the typed AgentContextSnapshot, read
- *  ContextChips from it, and seed prior-session messages (session reload). Renderer mirror of the
- *  main-process MAILAGENT_AI_SDK_CONTEXT_INJECTION flag (the gateway only injects its
- *  systemPromptProvider under the same flag). Off (default) → Phase-02 context-light, byte-identical.
- *  Evaluated at call time so tests can stub the env first. */
+/** Phase 06 — true when the AI SDK path builds + sends the typed AgentContextSnapshot, reads
+ *  ContextChips from it, and seeds prior-session messages (reload). An explicit
+ *  MAILAGENT_AI_SDK_CONTEXT_INJECTION wins; when UNSET it is on when the ai-sdk runtime is active,
+ *  so the cutover ships standing-context parity by default (the gateway degrades to context-light
+ *  if /chat/config blips). Flag-off (vitest) → runtime 'legacy' → off → Phase-02 context-light,
+ *  byte-identical. */
 export function isAiSdkContextInjectionEnabled(): boolean {
-  return truthy(resolveFlag('MAILAGENT_AI_SDK_CONTEXT_INJECTION', buildAiSdkContextInjectionFlag))
+  const c = resolveFlagRaw('MAILAGENT_AI_SDK_CONTEXT_INJECTION', buildAiSdkContextInjectionFlag)
+  if (c.set) return truthy(c.value)
+  return getChatRuntimeMode() === 'ai-sdk'
 }
 
 /** Loopback base URL of the embedded AI SDK Gateway, discovered from the

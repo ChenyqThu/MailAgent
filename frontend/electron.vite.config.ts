@@ -18,8 +18,19 @@ const GIT_HASH = ((): string => {
 })()
 const BUILD_TIME = new Date().toISOString()
 
+// Phase 06a (cutover) MASTER default, injected into BOTH the renderer (flags.ts) and main
+// (index.ts shouldStartEmbeddedGateway) so they agree on whether new chats default to the AI SDK
+// Gateway. '' = off (Chunk B ships dark). Chunk H flips the fallback to '1'. A runtime
+// MAILAGENT_AI_SDK_NEW_SESSION_DEFAULT env still overrides at launch on either side.
+const AI_SDK_NEW_SESSION_DEFAULT = process.env.MAILAGENT_AI_SDK_NEW_SESSION_DEFAULT ?? ''
+
 export default defineConfig({
   main: {
+    define: {
+      // Phase 06a — main mirror of the renderer NEW_SESSION_DEFAULT master so
+      // shouldStartEmbeddedGateway() agrees with flags.ts on the packaged default.
+      __MAILAGENT_AI_SDK_NEW_SESSION_DEFAULT__: JSON.stringify(AI_SDK_NEW_SESSION_DEFAULT)
+    },
     resolve: {
       alias: {
         '@shared': resolve(__dirname, 'src/shared')
@@ -65,7 +76,11 @@ export default defineConfig({
       // the AgentContextSnapshot, ContextChips same-source, session reload). Non-secret toggle.
       __MAILAGENT_AI_SDK_CONTEXT_INJECTION__: JSON.stringify(
         process.env.MAILAGENT_AI_SDK_CONTEXT_INJECTION ?? ''
-      )
+      ),
+      // Phase 06a (cutover) — MASTER switch (shared with the main define above; AI_SDK_NEW_SESSION
+      // _DEFAULT = '' off in Chunk B, flipped to '1' at cutover). flags.ts falls back to this when a
+      // sub-flag is unset; MAILAGENT_CHAT_RUNTIME=legacy overrides it back to legacy.
+      __MAILAGENT_AI_SDK_NEW_SESSION_DEFAULT__: JSON.stringify(AI_SDK_NEW_SESSION_DEFAULT)
     },
     resolve: {
       alias: {
