@@ -810,6 +810,16 @@ def test_create_new_session_always_inserts(chat_client: TestClient) -> None:
     assert len(sessions) == 2
 
 
+def test_create_new_session_accepts_ai_sdk_kind(chat_client: TestClient) -> None:
+    """P4 Phase 06a — 'ai-sdk' 是合法 backendKind（chat_db v13 放宽 CHECK + 校验白名单同步放宽）。
+    serve-api 只持久化该行（gateway 跑 turn），故必须接受、不报 E_INVALID_ARG。"""
+    r = chat_client.post(
+        "/api/chat/sessions/new", json={"emailId": EMAIL_ID, "backendKind": "ai-sdk"}
+    )
+    assert r.status_code == 200
+    assert r.json()["data"]["backend_kind"] == "ai-sdk"
+
+
 def test_get_session_found_and_null(chat_client: TestClient) -> None:
     assert chat_client.get(f"/api/chat/sessions/{SESSION_ID}").json()["data"]["id"] == SESSION_ID
     r = chat_client.get("/api/chat/sessions/99999")

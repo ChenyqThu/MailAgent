@@ -14,7 +14,10 @@ declare const __MAILAGENT_AI_SDK_NEW_SESSION_DEFAULT__: string | undefined
 
 function truthyFlag(raw: string | undefined | null): boolean {
   const v = (raw ?? '').trim().toLowerCase()
-  return v === '1' || v === 'true'
+  // Same accepted set as the renderer flags.ts `truthy` — otherwise a master value of 'on' / 'yes'
+  // engages the renderer's ai-sdk runtime but not the gateway (renderer wants ai-sdk, gateway never
+  // starts → silent legacy fallback). Keep both in lock-step.
+  return v === '1' || v === 'true' || v === 'on' || v === 'yes'
 }
 
 /** Master on = an explicit MAILAGENT_AI_SDK_NEW_SESSION_DEFAULT env wins, else the build-time const

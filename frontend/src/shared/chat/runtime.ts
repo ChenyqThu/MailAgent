@@ -403,9 +403,10 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
 
   /** P4 Phase 06a (cutover) — the legacy shared/chat engine serves only the two
    *  legacy backend kinds; an 'ai-sdk' chat routes through the embedded AI SDK
-   *  Gateway and must never be dispatched here. Narrow ChatBackendKind → the
-   *  engine's BackendKind, failing loud if an ai-sdk turn is mis-routed to the
-   *  legacy engine (a programming error, never a user-reachable path). */
+   *  Gateway and must never be DISPATCHED here (start/edit a turn). Applied to
+   *  mapStart/mapEdit only — failing loud if an ai-sdk turn is mis-routed to the
+   *  legacy engine (a programming error, never a user-reachable path). NOT applied
+   *  to newSession: creating an ai-sdk session row is legitimate (it only INSERTs). */
   function assertLegacyBackendKind(kind: ChatBackendKind): BackendKind {
     if (kind === 'ai-sdk') {
       throw new Error(
@@ -522,7 +523,11 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
       // _validate_session_opts 拒 general 携 emailId），createNewSession 无条件 INSERT 新 general 行。
       const engine = await ensureEngine()
       const base = {
-        backendKind: assertLegacyBackendKind(input.backendKind),
+        // P4 Phase 06a — newSession only INSERTs the row (no engine dispatch), so an 'ai-sdk' session
+        // is valid here: onEnsureSession creates it via this path BEFORE the gateway run. The legacy
+        // dispatch guard (assertLegacyBackendKind) is applied to mapStart/mapEdit only — NOT here, or
+        // the eager-session creation the cutover depends on would throw on every first send.
+        backendKind: input.backendKind,
         backendModel: input.backendModel ?? null,
         backendAgentPageId: input.backendAgentPageId ?? null
       }

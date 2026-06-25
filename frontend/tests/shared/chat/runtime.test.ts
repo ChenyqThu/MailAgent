@@ -300,6 +300,23 @@ describe('ChatRuntime.newSession / deleteSession', () => {
     })
   })
 
+  test('newSession backendKind=ai-sdk → does NOT throw + POSTs ai-sdk (cutover eager-session)', async () => {
+    // P4 Phase 06a regression — onEnsureSession creates the ai-sdk session through THIS exact path
+    // before the gateway run. The legacy dispatch guard (assertLegacyBackendKind) must NOT fire on
+    // newSession — it only persists the row — or the first send of every cutover conversation throws.
+    fetchMock.mockImplementation(async (url: unknown) => {
+      const path = String(url).split('?')[0]
+      if (path === '/api/chat/config') return env(CONFIG_LEGACY)
+      if (path === '/api/chat/sessions/new') return env(SESSION_ROW)
+      throw new Error(`unexpected ${String(url)}`)
+    })
+    const runtime = createChatRuntime({ reads: makeReads(), baseUrl: '/api' })
+    const s = await runtime.newSession({ emailId: 1, backendKind: 'ai-sdk' })
+    expect(s.id).toBe(5)
+    const call = fetchMock.mock.calls.find((c) => String(c[0]) === '/api/chat/sessions/new')!
+    expect(JSON.parse(call[1].body).backendKind).toBe('ai-sdk')
+  })
+
   test('deleteSession → DELETE /chat/sessions/{id}（fire-and-forget）', async () => {
     fetchMock.mockResolvedValue(env({ deleted: true }))
     const runtime = createChatRuntime({ reads: makeReads(), baseUrl: '/api' })

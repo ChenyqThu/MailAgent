@@ -620,10 +620,14 @@ def _validate_session_opts(opts: Dict[str, Any], route: str) -> tuple[str, Optio
             )
         # general session 无 emailId（CHECK 强制 email_id IS NULL）。
     backend_kind = opts.get("backendKind")
-    if backend_kind not in ("notion-agent", "custom-api"):
+    # P4 Phase 06a (cutover) — 'ai-sdk' is a valid persistable session kind (chat_db v13 widened the
+    # CHECK); a chat authored through the embedded AI SDK Gateway. The serve-api only PERSISTS the
+    # row here (the gateway runs the turn), so the allow-list must admit it in lock-step with the
+    # SQLite CHECK, else creating an ai-sdk session over serve-api 400s.
+    if backend_kind not in ("notion-agent", "custom-api", "ai-sdk"):
         raise APIError(
             "E_INVALID_ARG",
-            f"{route} requires backendKind in {{notion-agent, custom-api}}",
+            f"{route} requires backendKind in {{notion-agent, custom-api, ai-sdk}}",
             source="sqlite",
         )
     return anchor_type, email_id, backend_kind

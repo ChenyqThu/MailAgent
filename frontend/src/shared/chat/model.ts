@@ -11,7 +11,11 @@
 // 这些类型 1:1 对齐 ai_chat.db 的 ai_chat_sessions / ai_chat_messages /
 // chat_tool_call 三表（CREATE 语句见 chat_db.ts），是 chat 持久化的契约面。
 
-export type BackendKind = 'notion-agent' | 'custom-api'
+// 'ai-sdk' (P4 Phase 06a cutover) is a persistable session kind: a chat authored through the embedded
+// AI SDK Gateway. The legacy engine never DISPATCHES it (mapStart/mapEdit guard via
+// assertLegacyBackendKind + the backends Partial record has no ai-sdk entry → getBackend throws), but
+// createNewSession must be able to INSERT the row — onEnsureSession creates it before the gateway run.
+export type BackendKind = 'notion-agent' | 'custom-api' | 'ai-sdk'
 export type MessageRole = 'user' | 'assistant' | 'system' | 'tool'
 export type MessageStatus = 'pending' | 'streaming' | 'complete' | 'error' | 'aborted'
 
