@@ -19,7 +19,7 @@
 // (chatMessageToUIMessage → useChatRuntime({ messages }), architecture §13.8.5). All three are
 // undefined/empty when MAILAGENT_AI_SDK_CONTEXT_INJECTION is off → byte-identical to Phase 02.
 
-import { useMemo } from 'react'
+import { useMemo, useRef } from 'react'
 import type { AssistantRuntime } from '@assistant-ui/react'
 import { AssistantChatTransport, useChatRuntime } from '@assistant-ui/react-ai-sdk'
 
@@ -43,18 +43,75 @@ export interface UseMailAgentAiSdkRuntimeOptions {
   /** Phase 06 — prior-session messages to seed the runtime (session reload). Empty → fresh thread.
    *  The panel remounts (keyed by session) so this is the initial set per mount, not live-controlled. */
   initialMessages?: MailAgentUIMessage[]
+  /** Phase 06a (cutover) — lazily create the ai-sdk session on the FIRST send of a brand-new
+   *  conversation (sessionId null), returning the new id. Called at most once per thread (latched);
+   *  a reject surfaces as a stream error and clears the latch so a retry re-attempts. Omitted →
+   *  the body sends sessionId: null and the gateway skips persistence (Phase 02 behaviour). */
+  onEnsureSession?: () => Promise<number>
+}
+
+/** Per-thread session-id latch (held in a ref by the hook). `id` is the resolved session for this
+ *  thread (null until created / seeded); `inflight` dedups the create so concurrent first sends call
+ *  onEnsureSession exactly once. */
+export interface AiSdkSessionLatch {
+  id: number | null
+  inflight: Promise<number> | null
+}
+
+/** Resolve the session id to put in the gateway request body, creating it lazily on the FIRST send
+ *  when the thread started without one (a brand-new ai-sdk conversation). At-most-once per thread:
+ *  a non-null prop / already-latched id short-circuits (no create); a null id triggers a single
+ *  onEnsureSession() whose result is cached on the latch; concurrent sends await the same in-flight
+ *  promise; a create failure clears `inflight` (and leaves `id` null) so a retry re-attempts. No empty
+ *  session leaks — the renderer owns the id and the gateway only persists when it is non-null. The
+ *  body runs this synchronously up to the `return`, so two concurrent calls share one create. */
+export async function resolveAiSdkSessionId(
+  latch: AiSdkSessionLatch,
+  sessionIdProp: number | null | undefined,
+  onEnsureSession?: () => Promise<number>
+): Promise<number | null> {
+  if (sessionIdProp != null) return sessionIdProp
+  if (latch.id != null) return latch.id
+  if (!onEnsureSession) return null
+  if (!latch.inflight) {
+    latch.inflight = (async (): Promise<number> => {
+      const id = await onEnsureSession()
+      latch.id = id
+      return id
+    })().finally(() => {
+      latch.inflight = null
+    })
+  }
+  return latch.inflight
 }
 
 export function useMailAgentAiSdkRuntime(opts: UseMailAgentAiSdkRuntimeOptions): AssistantRuntime {
-  const { gatewayBaseUrl, sessionId, model, system, contextSnapshot, initialMessages } = opts
+  const {
+    gatewayBaseUrl,
+    sessionId,
+    model,
+    system,
+    contextSnapshot,
+    initialMessages,
+    onEnsureSession
+  } = opts
 
-  // Extra body fields ride along with `messages` on every send (AI SDK
-  // HttpChatTransportInitOptions.body). The Gateway reads sessionId for the
-  // dual-write, model/system for the streamText call, and (Phase 06) the
-  // contextSnapshot + anchor + options.enabledSkills for the system prompt.
-  // The snapshot identity is stable (useAgentContextSnapshot memoizes it), so the
-  // transport only rebuilds when context actually changes (email switch / body load) —
-  // the same memo pattern Phase 02 uses for sessionId/model.
+  // Phase 06a — per-thread session-id latch. Seeded from the sessionId prop (reload → an existing id;
+  // a new conversation → null, created lazily on the first send). The panel remounts this provider
+  // keyed by (email, session), so within a mount the prop is stable and the latch owns the
+  // null→created transition; the ref lets the memoized transport read the latest id without rebuilding.
+  const latchRef = useRef<AiSdkSessionLatch>({ id: sessionId ?? null, inflight: null })
+  if (sessionId != null && latchRef.current.id !== sessionId) {
+    latchRef.current = { id: sessionId, inflight: null }
+  }
+
+  // Extra body fields ride along with `messages` on every send (AI SDK HttpChatTransportInitOptions
+  // .body). Phase 06a: `body` is a FUNCTION (ai@6 Resolvable<object>) resolved per send, so the latch
+  // creates the ai-sdk session on the first send (onEnsureSession) and injects its id; the gateway
+  // reads sessionId for the dual-write, model/system for streamText, and (Phase 06) the contextSnapshot
+  // + anchor + options.enabledSkills for the system prompt. sessionId is intentionally NOT a useMemo
+  // dep — the latch owns it and the panel remounts (key) on a session switch, so the transport never
+  // rebuilds mid-thread (which would drop the resumable adapter).
   const transport = useMemo(() => {
     const anchor = contextSnapshot
       ? { type: contextSnapshot.scope.anchorType, id: contextSnapshot.scope.anchorId }
@@ -62,16 +119,21 @@ export function useMailAgentAiSdkRuntime(opts: UseMailAgentAiSdkRuntimeOptions):
     const enabledSkills = contextSnapshot?.capabilities.enabledSkills ?? []
     return new AssistantChatTransport({
       api: `${gatewayBaseUrl}/api/ai/chat`,
-      body: {
-        sessionId: sessionId ?? null,
-        ...(model ? { model } : {}),
-        ...(system ? { system } : {}),
-        ...(contextSnapshot ? { contextSnapshot } : {}),
-        ...(anchor ? { anchor } : {}),
-        ...(enabledSkills.length > 0 ? { options: { enabledSkills } } : {})
+      body: async () => {
+        const sid = await resolveAiSdkSessionId(latchRef.current, sessionId, onEnsureSession)
+        return {
+          sessionId: sid ?? null,
+          ...(model ? { model } : {}),
+          ...(system ? { system } : {}),
+          ...(contextSnapshot ? { contextSnapshot } : {}),
+          ...(anchor ? { anchor } : {}),
+          ...(enabledSkills.length > 0 ? { options: { enabledSkills } } : {})
+        }
       }
     })
-  }, [gatewayBaseUrl, sessionId, model, system, contextSnapshot])
+    // sessionId intentionally excluded from deps — owned by latchRef (see comment above).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gatewayBaseUrl, model, system, contextSnapshot, onEnsureSession])
 
   return useChatRuntime({
     transport,

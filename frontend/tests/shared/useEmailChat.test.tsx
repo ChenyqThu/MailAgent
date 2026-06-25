@@ -223,6 +223,53 @@ describe('useEmailChat — initial load', () => {
   })
 })
 
+describe('useEmailChat — adoptSession (Phase 06a ai-sdk eager session)', () => {
+  test('folds an out-of-band ai-sdk session into state: active + messagesSessionId + sessions', async () => {
+    mockChatListSessions.mockResolvedValue([]) // a brand-new email with no prior sessions
+    const { result } = renderHook(() => useEmailChat(101, 'ai-sdk'))
+    await waitFor(() => expect(mockChatListSessions).toHaveBeenCalledWith(101))
+    expect(result.current.activeSessionId).toBeNull()
+
+    const created = fakeSession({
+      id: 4242,
+      email_id: 101,
+      anchor_type: 'email',
+      anchor_id: 101,
+      backend_kind: 'ai-sdk'
+    })
+    act(() => {
+      result.current.adoptSession(created)
+    })
+
+    expect(result.current.activeSessionId).toBe(4242)
+    // 0-row session → messagesSessionId = id makes the AI SDK reload gate read "ready".
+    expect(result.current.messagesSessionId).toBe(4242)
+    expect(result.current.messages).toEqual([])
+    // Appears in the history list (filtered to the ai-sdk scope).
+    expect(result.current.sessions.map((s) => s.id)).toContain(4242)
+    // adoptSession runs NO IPC — the gateway persists the turn itself on first send.
+    expect(mockChatStart).not.toHaveBeenCalled()
+  })
+
+  test('adopting a session already in the list does not duplicate it', async () => {
+    const existing = fakeSession({
+      id: 9,
+      email_id: 101,
+      anchor_type: 'email',
+      anchor_id: 101,
+      backend_kind: 'ai-sdk'
+    })
+    mockChatListSessions.mockResolvedValue([existing])
+    const { result } = renderHook(() => useEmailChat(101, 'ai-sdk'))
+    await waitFor(() => expect(result.current.sessions.length).toBe(1))
+
+    act(() => {
+      result.current.adoptSession(existing)
+    })
+    expect(result.current.sessions.filter((s) => s.id === 9)).toHaveLength(1)
+  })
+})
+
 describe('useEmailChat — send + stream', () => {
   test('send() calls chat.start with full opts and resets error', async () => {
     mockChatListSessions.mockResolvedValue([])

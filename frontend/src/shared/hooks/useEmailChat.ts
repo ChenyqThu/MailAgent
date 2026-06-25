@@ -162,6 +162,12 @@ export interface UseEmailChatReturn {
    *  current email. Aborts any in-flight stream, loads the target session's
    *  messages, and points `activeSessionId` at the new session. */
   selectSession: (sessionId: number) => Promise<void>
+  /** Phase 06a (cutover) — fold a session the AI SDK path created out-of-band
+   *  (renderer IPC, backend_kind='ai-sdk') into the hook state: prepend it to
+   *  `sessions`, point `activeSessionId` + `messagesSessionId` at it, and reset
+   *  messages to empty (the AI SDK runtime owns the live turns; the row persists
+   *  via the gateway's dual-write once the first turn finishes). No IPC / refresh. */
+  adoptSession: (session: ChatSession) => void
   /** Sprint 14 PR B — edit a user message and re-stream the assistant
    *  reply. Backend truncates messages from `messageId` onward, appends
    *  a fresh user row with the new content, then runs the same dispatcher
@@ -1483,6 +1489,22 @@ export function useEmailChat(
     [emailId, mailApi, refresh]
   )
 
+  // Phase 06a (cutover) — adopt an ai-sdk session the panel created out-of-band (renderer IPC,
+  // backend_kind='ai-sdk') so the legacy hook state stays the SSoT for history / title / reload.
+  // Unlike selectSession this runs NO IPC / refresh: the session is freshly created + empty (0 rows),
+  // and the AI SDK runtime owns the live turns; messagesSessionId = id makes the reload gate read
+  // "ready" without a listMessages round-trip. The row persists via the gateway dual-write once the
+  // first turn finishes; a later refreshSessions reconciles it with the DB.
+  const adoptSession = useCallback((session: ChatSession): void => {
+    setAllSessions((cur) => (cur.some((s) => s.id === session.id) ? cur : [session, ...cur]))
+    setActiveSessionIdState(session.id)
+    activeSessionRef.current = session.id
+    setMessages([])
+    setMessagesSessionId(session.id)
+    setStreamingMessageId(null)
+    setError(null)
+  }, [])
+
   // Sprint 5 #3 — Retry CTA. Only available when:
   //   1. we have a captured failed input (set in send())
   //   2. the error is "retriable" (network / upstream / agent timeout)
@@ -1517,6 +1539,7 @@ export function useEmailChat(
     quotaCooldownKind,
     sessions,
     selectSession,
+    adoptSession,
     editMessage,
     deleteSession,
     pendingConfirmations,
