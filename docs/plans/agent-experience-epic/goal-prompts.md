@@ -536,15 +536,25 @@ ai@6 / @assistant-ui/react(+react-ai-sdk) / zod 已装（devDeps）；markdown �
 
 </details>
 
-### P4-Phase-Parity — AI SDK 生产 parity（standing-context + 上下文注入 + 会话重载，cutover 06 真前置）（下一个 session）
+### P4-Phase-Parity — AI SDK 生产 parity（standing-context + 上下文注入 + 会话重载，cutover 06 真前置）✅ 已落地（2026-06-25, commit `b758d25f`, flag-off `MAILAGENT_AI_SDK_CONTEXT_INJECTION`）
 
-> 05 把 AG-UI 旁路也接好了，但 **AG-UI 不解锁 cutover**。核实过 AI SDK chat 路径目前 **context-light**：① **standing-context 未注入**
-> ——SOUL/AGENT/RULES/USER + memory_summary + skill 能力 + 当前邮件/anchor 上下文只在 legacy `shared/chat` 组装，`useMailAgentAiSdkRuntime`
-> transport 只发 `{sessionId,model}`，`chatRun.ts` 的 streamText `system` 无人填；② **会话重载未接线**——选历史会话时 prior `ui_message_json`
-> 未喂 `useChatRuntime({messages})`（§13.8.5），只渲新流。这两项 + prompt-injection 防护 + body cap 是 **cutover（06）真前置**（phase-06 §2），
-> 不补齐就切默认 runtime = agent 能力断崖式回退（无人格/无记忆/不知当前邮件）。本 phase 把 AI SDK 路径做到**生产 parity**，之后才是 06 cutover。
-> **🔴 这是 epic 的倒数第二阶**（剩 parity + 06）；不是收尾文档，是实打实的能力补齐，安全敏感（注入 standing-context 不得弱化 `PRODUCT_SAFETY_FLOOR`、
-> 邮件正文须当 untrusted data 防 prompt injection）。**若一 session 偏大可拆 parity-a〔context+standing 注入〕/ parity-b〔会话重载〕两 commit，门控同一。**
+> **DONE**：AI SDK chat 路径补齐到生产 parity，不再 context-light。① **standing-context 注入**：`ai-gateway/systemPrompt.ts` 的
+> `buildGatewaySystemPrompt` **复用 legacy `buildStableSystemPrompt(ctx=null)`**（同一 `/chat/config` 数据源 + 同一装配函数，不另起炉灶）
+> → `PRODUCT_SAFETY_FLOOR` + standingContext(SOUL/AGENT/RULES/USER) + userContext + memory + KOS 指南**逐字节复用**（parity byte-identical 有测，
+> floor 始终最前不可弱化）；当前邮件改走 **typed AgentContextSnapshot**（`shared/assistant/context/{contextSnapshot,contextSerializer,contextRedaction,useAgentContextSnapshot}.ts`，
+> §6 token budget 截断 + §7 `UNTRUSTED_*` 围栏防注入）→ `buildContextSystemBlock` append 到 stable prefix 之后。② **会话重载**（§13.8.5）：
+> `useChatRuntime({messages})` 接 prior 消息（`chatMessageToUIMessage` 参数解耦成结构化类型，吃 renderer api/types row → content fallback），
+> 延迟挂载避 `selectSession` 竞态（activeSessionId 先翻 messages 后 refresh → `session_id` 一致性判 ready 再挂载、绝不 seed 旧历史）。③ ContextChips
+> 同源（展示==实际注入）。④ Electron wrapper TTL(15s) 缓存 provider fetch `/chat/config`（失败降级 context-light，永不抛）。⑤ Gateway 校验 snapshot
+> schema（自称 typed 但非法 → 400；无 version passthrough 放行供 AG-UI）。🔴 **防注入纵深 = 三处 `sanitizeUntrusted` ZWSP 打断 fence/UNTRUSTED_ token**：
+> ①围栏正文/excerpt ②`<mailagent_context_json>` **JSON 元数据块**（携攻击者可控邮件 Subject/From，`JSON.stringify` 不转义 `<`/`/` →
+> 不脱敏可提前闭合可信围栏注入，**reviewer 抓的 HIGH**）③START-line attrs。验收：typecheck node+web 0 · 全量 vitest **154 files/1913 passed/1
+> skipped/0 fail**（+5 测试文件/+29 测）· agent_eval **89**（flag-gated → legacy trace + rules.py 零改 → ≥ baseline）· reviewer(opus) **APPROVE**
+> （修复 1 HIGH JSON 块 fence 逃逸 + 1 MEDIUM attr + 2 LOW，复核确认无残留注入向量）。落地见 [architecture §13.14](../chat-panel-ai-sdk-assistant-ui-refactor/architecture.md#1314-phase-06-parity-落地2026-06-25context-injection--standing-context--会话重载)。原 /goal 备查于下。
+>
+> **🔴 这是 epic 的倒数第一阶**：剩 **06 cutover**（切默认 runtime + 删 legacy UI 主路径），见下方「P4-Phase06」。
+
+<details><summary>原 P4-Phase-Parity /goal（备查）</summary>
 
 ```
 开工先读：
@@ -568,6 +578,40 @@ ai@6 / @assistant-ui/react(+react-ai-sdk) / zod 已装（devDeps）；markdown �
 验收（context-injection §10 + phase-06 §2）：AI SDK 路径有 standing-context + memory + 当前邮件上下文（不再 context-light，可观测如 /chat/config standingContextActive/contextInjected）；选历史会话渲其历史并可续聊；prompt-injection 防护就位；flag-off/未配置字节级不变 + 一键回滚；typecheck 0 + test 无新增失败；tests/agent_eval ≥ baseline 且 AI SDK 路径 context 覆盖可见提升。
 本阶段不做：切默认新会话 runtime 为 ai-sdk（06）/ 删 legacy UI 主路径（06）/ AG-UI 默认化 / remote-web 暴露面（resolve+agui+send 端点 loopback CORS 收紧与 06 同批）。
 .env.example 登记本 phase flag。证据（system prompt 组装样例[含 standing-context + 脱敏 context block] + 会话重载渲历史截图/说明 + injection marker 用例 + context-dependent eval 覆盖提升 + 测试）贴对话。完成用 codex 或 code-reviewer 过 diff 再收。
+```
+
+</details>
+
+### P4-Phase06 — Cutover & Cleanup（切默认新会话 runtime = AI SDK + 下线 legacy chat UI 主路径）（epic 最后一阶，下一个 session）
+
+> **🔴 epic 最后一阶，最高风险**：这是唯一**改默认行为**的 phase（前 00→06-parity 全程 flag-off）。前置已全绿 = AI SDK 路径已生产 parity
+> （Phase-Parity `b758d25f`：standing-context + 当前邮件上下文 + 会话重载就位、不再 context-light）+ 9 read/5 write/外发工具 + HITL approval + A2UI 卡片
+> 全在 AI SDK Gateway。本 phase 把**新会话默认切到 assistant-ui + AI SDK Gateway**，并从产品主路径**下线 legacy chat 视图层**（但保留 useEmailChat/harness/tools 作
+> rollback 通道）。**两步走**：**06a** = 切默认 + 移除 legacy UI 主路径（保 rollback flag）；**06b** = AI SDK 新会话连续 dogfood 7 天无 P0/P1 后才归档 legacy harness。
+> 一个 session 只做 06a（06b 是 dogfood 观察窗，不在同一 session）。**一键回滚铁律**：`MAILAGENT_CHAT_RUNTIME=legacy` 必须随时把默认切回 legacy（cutover 不是删路径，是改默认 + 后续归档）。
+
+```
+开工先读：
+- docs/plans/chat-panel-ai-sdk-assistant-ui-refactor/{phase-06-cutover-and-cleanup,architecture,acceptance-checklist}.md
+  （phase-06 §2 cutover 前置条件清单[逐条核对：shell 覆盖对话/编辑/重试/停止/历史/popout · read+write preview 稳 · 高风险审批 hash/expiry/idempotency 测过 · UIMessage 持久化+旧会话读取过 · electron/web 各 dogfood · MAILAGENT_CHAT_RUNTIME=legacy 一键回滚] / §3 默认切流[C6.1 新会话默认 AI SDK：MAILAGENT_AI_SDK_NEW_SESSION_DEFAULT/CHAT_RUNTIME=ai-sdk/ASSISTANT_UI_PANEL=1，新建 backend_kind='ai-sdk'，gateway health 不可用自动降级 legacy + 非阻断提示 / C6.2 旧会话兼容[ui_message_json→UIMessage 否则 legacyMapper；notion-agent 旧 session 只读或提示新开；custom-api 旧 session 继续 legacy runtime] / C6.3 tool registry 权威切换] / §4 cleanup 范围[可下线主路径：MessageList/Composer/ConfirmToolDialog；**不立即删**：useEmailChat/runtime/harness/tools 留 rollback] / §5 数据迁移[backfill-ui-messages.ts dry-run + 不覆盖已有 + 失败不中断；search/history 仍读 content_text_legacy] / §6 观测指标 / §7 回滚[快速=三 flag 关；部分=write tools/approval/A2UI/AG-UI 各自关] / §8 删除条件[7天 dogfood 无 P0/P1] / §9 验收 / §10 归档；architecture §13.8-§13.14 全部已落地[引用即可]，§13.8.5/§13.11.6/§13.12.7/§13.13.5 = resolve+agui+send 端点 loopback CORS/Origin 收紧延后清单[本 phase 同批收紧]；acceptance-checklist 当 DoD）
+- frontend/src/shared/assistant/AssistantUIChatPanel.tsx + runtime/flags.ts（02/06-parity 落地：`getChatRuntimeMode`/`isAiSdkGatewayEnabled`/`isAiSdkContextInjectionEnabled` + panel 据 mode 分流 AiSdkRuntimeProvider vs MailAgentRuntimeProvider；本 phase 把**新会话默认**翻到 ai-sdk[新增 `MAILAGENT_AI_SDK_NEW_SESSION_DEFAULT` 或复用 CHAT_RUNTIME 默认值]，旧会话按 backend_kind 读取；gateway health 不可用降级 legacy + 提示）
+- frontend/src/shared/components/chat/{MessageList,Composer,ConfirmToolDialog}.tsx（legacy 主路径，本 phase 06a 从产品入口下线[wrapper 不再渲染]，**文件保留**到 06b 归档）+ frontend/src/shared/hooks/useEmailChat.ts + shared/chat/{runtime,harness,tools/*}（rollback + 旧会话通道，**不删**）
+- frontend/scripts/chat/backfill-ui-messages.ts（新建：缺 ui_message_json 的 legacy 行生成 UIMessage JSON，dry-run 统计 + 不覆盖已有 + 失败行记录不中断）
+- frontend/src/ai-gateway/server.ts + electron/main/ai_gateway_lifecycle.ts（resolve/agui/send/chat 端点当前 `ACAO:*` loopback-only；本 phase 同批**收紧 Origin/loopback-token**——开远程 web 面前置，§13.8.5/§13.11.6/§13.12.7/§13.13.5 延后清单收口）
+前置已绿（引用即可，勿重验/重装）：Phase 00→06-parity 全 ✅（assistant-ui shell `b82ee24e` / AI SDK Gateway `a6d189ac` / 9 read `63d020ff` / 5 write+HITL `ae268c67` / A2UI `09424fd4` / 外发双 guard `66d1b489` / AG-UI `7ddd09a0` / **生产 parity `b758d25f`**）。AI SDK 路径已有 standing-context + 当前邮件上下文 + 会话重载 + 全部工具 + approval + A2UI 卡片 → **不再 context-light，cutover 前置满足**。🔴 已知坑（沿用）：flag 走 per-flag vite define（不用 envPrefix 防泄漏 CLI_API_KEY）；全量 vitest 须 electron-as-node runner（backend_lifecycle resourcesPath 唯一伪影 node runner 全过）；动 chat_db schema → bump CHAT_DB_VERSION（非 EXPECTED_DB_VERSION）—— 但 cutover 理应零 schema 改动（backfill 只写既有 ui_message_json 列）。
+
+/goal 完成 chat-panel Phase 06a（cutover：新会话默认 AI SDK + 下线 legacy chat UI 主路径），**改默认行为但保一键回滚**，产出可验证：
+(1) 新会话默认 AI SDK（phase-06 §3 C6.1）：翻默认 runtime（`MAILAGENT_AI_SDK_NEW_SESSION_DEFAULT=1` 或等效默认值变更）→ 新建会话 `backend_kind='ai-sdk'` 走 assistant-ui + AI SDK Gateway；gateway `/health` 不可用 → 新会话入口**自动降级 legacy** + 显示非阻断提示（不白屏）；`MAILAGENT_CHAT_RUNTIME=legacy` 一键回滚到 legacy 默认；
+(2) 旧会话兼容读取（phase-06 §3 C6.2）：`ui_message_json` 存在 → 渲 UIMessage；否则 legacy fields → `legacyMessageMapper` → UIMessage；`notion-agent` 旧 session 只读或提示「新开 AI SDK 会话继续」、`custom-api` 旧 session 可继续 legacy runtime；旧会话历史不丢；
+(3) Tool registry 权威切换（§3 C6.3）：新 session 只用 AI SDK Gateway tools；legacy tools 仅服务旧 session / rollback；tool schema fixture 留共享测试防漂移；
+(4) Backfill 脚本（§5）：`frontend/scripts/chat/backfill-ui-messages.ts`（缺 `ui_message_json` 的 legacy messages 生成 UIMessage JSON，**不覆盖已有**，`--dry-run` 输出统计，失败行记录不中断）；
+(5) Cleanup 06a（§4）：从产品主路径**下线** legacy `MessageList`/`Composer`/`ConfirmToolDialog`（wrapper 不再渲染它们）；**保留** `useEmailChat`/`shared/chat/{runtime,harness,tools}` 作 rollback + 旧会话通道（06b dogfood 后才归档）；assistant-ui 成唯一产品 chat 视图层；
+(6) 端点 CORS/Origin 收紧（§13.8.5/§13.11.6/§13.12.7/§13.13.5 同批）：`/api/ai/{chat,approval/resolve,agui/chat,email/send-approved}` 等 loopback 端点把 `ACAO:*` 收紧为 Origin/loopback-token 校验（loopback 仍通、跨 origin 拒）——开远程 web 面前置；
+(7) 观测（§6，可选最小集）：诊断面板/日志暴露 gateway health/version · active chat runtime · UIMessage persistence enabled · last stream error · approval pending/expired count · legacy fallback count；
+(8) 测试：新会话默认走 AI SDK（mode 解析单测）+ 旧会话读取 round-trip（ui_message_json / legacy fallback / notion-agent vs custom-api）+ gateway 不可用降级 legacy + backfill dry-run/不覆盖/失败不中断 + CORS 收紧后 loopback 通·跨 origin 拒。
+验收（phase-06 §9 + acceptance-checklist）：默认新会话走 AI SDK Gateway；旧会话可读不丢历史；assistant-ui 是唯一产品 chat 视图层；高风险工具无静默执行路径；gateway 不可用有明确降级提示；`MAILAGENT_CHAT_RUNTIME=legacy` 一键回滚验证过；typecheck node+web 0 + 全量 vitest 无新增失败 + （动了 prompt/工具）`tests/agent_eval` ≥ baseline；electron + web 各跑一次 dogfood scenario。
+本阶段不做（→ 06b / 后续）：**删 legacy harness/UI 文件**（06b，AI SDK 新会话连续 dogfood 7 天无 P0/P1 后归档，§8 删除条件）/ 把 canonical persistence 改成 AG-UI event log / AG-UI 默认化 / remote-web 正式暴露（CORS 收紧是前置，暴露面是独立 epic）。
+.env.example 登记/更新本 phase flag（默认值变更须显式标注「★ 生产偏离默认」）。证据（新会话默认 AI SDK 截图/说明 + 旧会话读取 round-trip + 降级提示 + 一键回滚验证 + backfill dry-run 统计 + 测试）贴对话。完成用 codex 或 code-reviewer 过 diff 再收。收尾后 epic README/roadmap「当前进度」标 06a 完成、剩 06b dogfood 观察窗。
 ```
 
 ### P4-Phase03+ — 按 chat-panel roadmap §4 PR 拆分逐 phase 推进
