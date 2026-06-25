@@ -22,6 +22,8 @@ import { anthropicBaseUrl, type AiGatewayConfig, type PersistTurnInput } from '.
 import { createAnthropic } from '@ai-sdk/anthropic'
 import type { GatewayToolAuditEntry } from './tools/types'
 import type { MailAgentUIMessage } from '@shared/assistant/uiMessage'
+// chat-panel P4 composer-parity C1-① — per-turn extended-thinking → @ai-sdk/anthropic providerOptions.
+import { thinkingProviderOptions } from './thinking'
 // Phase 06 (context injection) — system prompt assembly + snapshot schema guard.
 import { buildGatewaySystemPrompt } from './systemPrompt'
 import {
@@ -101,6 +103,10 @@ export async function prepareChatRun(
   const modelId = typeof body.model === 'string' && body.model.length > 0 ? body.model : cfg.model
   const sessionId =
     typeof body.sessionId === 'number' && Number.isInteger(body.sessionId) ? body.sessionId : null
+  // chat-panel P4 composer-parity C1-① — per-turn extended-thinking toggle. body.thinking===true →
+  // inject providerOptions by the model-family matrix (./thinking); absent/false → undefined →
+  // providerOptions omitted below, byte-identical to the pre-toggle no-thinking streamText call.
+  const thinkingProviderOpts = thinkingProviderOptions(modelId, body.thinking === true)
 
   // System prompt. With the injection provider set (MAILAGENT_AI_SDK_CONTEXT_INJECTION on) assemble
   // from standing-context + the typed snapshot, reusing the legacy stable prefix
@@ -160,6 +166,7 @@ export async function prepareChatRun(
     system,
     messages: modelMessages,
     abortSignal,
+    ...(thinkingProviderOpts ? { providerOptions: thinkingProviderOpts } : {}),
     ...(hasTools
       ? {
           tools,

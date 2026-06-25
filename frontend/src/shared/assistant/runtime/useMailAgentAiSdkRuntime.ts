@@ -48,6 +48,10 @@ export interface UseMailAgentAiSdkRuntimeOptions {
    *  a reject surfaces as a stream error and clears the latch so a retry re-attempts. Omitted →
    *  the body sends sessionId: null and the gateway skips persistence (Phase 02 behaviour). */
   onEnsureSession?: () => Promise<number>
+  /** chat-panel P4 composer-parity C1-① — per-turn extended-thinking toggle. true → the request body
+   *  carries thinking:true and the gateway injects providerOptions (model-family matrix). Off/undefined
+   *  → omitted, byte-identical to the no-thinking path. Changing it rebuilds the transport (in deps). */
+  thinking?: boolean
 }
 
 /** Per-thread session-id latch (held in a ref by the hook). `id` is the resolved session for this
@@ -93,7 +97,8 @@ export function useMailAgentAiSdkRuntime(opts: UseMailAgentAiSdkRuntimeOptions):
     system,
     contextSnapshot,
     initialMessages,
-    onEnsureSession
+    onEnsureSession,
+    thinking
   } = opts
 
   // Phase 06a — per-thread session-id latch. Seeded from the sessionId prop (reload → an existing id;
@@ -125,6 +130,7 @@ export function useMailAgentAiSdkRuntime(opts: UseMailAgentAiSdkRuntimeOptions):
           sessionId: sid ?? null,
           ...(model ? { model } : {}),
           ...(system ? { system } : {}),
+          ...(thinking ? { thinking: true } : {}),
           ...(contextSnapshot ? { contextSnapshot } : {}),
           ...(anchor ? { anchor } : {}),
           ...(enabledSkills.length > 0 ? { options: { enabledSkills } } : {})
@@ -133,7 +139,7 @@ export function useMailAgentAiSdkRuntime(opts: UseMailAgentAiSdkRuntimeOptions):
     })
     // sessionId intentionally excluded from deps — owned by latchRef (see comment above).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gatewayBaseUrl, model, system, contextSnapshot, onEnsureSession])
+  }, [gatewayBaseUrl, model, system, thinking, contextSnapshot, onEnsureSession])
 
   return useChatRuntime({
     transport,

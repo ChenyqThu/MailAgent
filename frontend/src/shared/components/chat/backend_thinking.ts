@@ -17,5 +17,8 @@ import type { BackendChoice } from './BackendSelector'
  *  the per-turn send/edit `thinking` flag so a stale-ON toggle (after a model
  *  switch) never sends thinking:true to a backend that ignores it. */
 export function backendSupportsThinking(b: BackendChoice): boolean {
-  return b.kind === 'custom-api' && (b.model ?? '').startsWith('claude-')
+  // chat-panel P4 composer-parity — the ai-sdk runtime (cutover default) also routes Claude models
+  // through extended thinking (gateway thinkingProviderOptions); custom-api is the legacy path. Both
+  // still require a claude- model — OpenAI-protocol gpt models ignore thinking, notion-agent has none.
+  return (b.kind === 'custom-api' || b.kind === 'ai-sdk') && (b.model ?? '').startsWith('claude-')
 }

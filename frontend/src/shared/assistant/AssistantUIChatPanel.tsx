@@ -35,6 +35,8 @@ import { BackendSelector, type BackendChoice } from '@shared/components/chat/Bac
 import { ChatHistoryPopover } from '@shared/components/chat/ChatHistoryPopover'
 import { ConfirmToolDialog } from '@shared/components/chat/ConfirmToolDialog'
 import { ContextChips } from '@shared/components/chat/ContextChips'
+import { backendSupportsThinking } from '@shared/components/chat/backend_thinking'
+import { useEnabledModels } from '@shared/hooks/useLlmModels'
 
 import { MailAgentRuntimeProvider } from './runtime/MailAgentRuntimeProvider'
 import { AiSdkRuntimeProvider } from './runtime/AiSdkRuntimeProvider'
@@ -45,6 +47,10 @@ import {
   resolveAiGatewayBaseUrl
 } from './runtime/flags'
 import { AssistantThread } from './components/thread'
+import {
+  ChatComposerControlsProvider,
+  type ChatComposerControls
+} from './components/composerControls'
 import { useChatContextChips } from './context/useChatContextChips'
 import { useAgentContextSnapshot } from './context/useAgentContextSnapshot'
 import type { CapabilityContext, ContextScope } from './context/contextSnapshot'
@@ -60,6 +66,31 @@ function readModelPref(): string {
     return localStorage.getItem(CUSTOM_MODEL_PREF) || DEFAULT_CUSTOM_MODEL
   } catch {
     return DEFAULT_CUSTOM_MODEL
+  }
+}
+function writeModelPref(model: string): void {
+  try {
+    localStorage.setItem(CUSTOM_MODEL_PREF, model)
+  } catch {
+    /* ignore — pref persistence is best-effort */
+  }
+}
+
+// composer-parity C1-① — extended-thinking toggle pref (mirror of the legacy panel's THINKING_PREF
+// localStorage contract: '1'/'0'). Panel owns it; the composer toggle reads/writes via controls.
+const THINKING_PREF = 'mailagent.chat.thinkingEnabled'
+function readThinkingPref(): boolean {
+  try {
+    return localStorage.getItem(THINKING_PREF) === '1'
+  } catch {
+    return false
+  }
+}
+function writeThinkingPref(on: boolean): void {
+  try {
+    localStorage.setItem(THINKING_PREF, on ? '1' : '0')
+  } catch {
+    /* ignore — pref persistence is best-effort */
   }
 }
 
@@ -185,6 +216,48 @@ export function AssistantUIChatPanel({
   // render routes by kind below even while aiSdkEnabled is globally true.
   const useAiSdkRuntime = backend.kind === 'ai-sdk' && aiSdkEnabled
 
+  // composer-parity C1-①② — panel-owned extended-thinking + model state, surfaced to the assistant-ui
+  // ThreadComposer (rendered inside the runtime provider) via ChatComposerControlsProvider below. The
+  // per-turn thinking flag is gated on backend support too (thinkingActive), so a stale-ON toggle after
+  // a model switch never sends thinking to a backend that ignores it (mirror of the legacy panel).
+  const [thinkingEnabled, setThinkingEnabled] = useState(() => readThinkingPref())
+  const onToggleThinking = useCallback((): void => {
+    setThinkingEnabled((v) => {
+      const next = !v
+      writeThinkingPref(next)
+      return next
+    })
+  }, [])
+  const thinkingSupported = backendSupportsThinking(backend)
+  const thinkingActive = thinkingSupported && thinkingEnabled
+  const { models: availableModels } = useEnabledModels()
+  const onModelChange = useCallback(
+    (m: string): void => {
+      writeModelPref(m)
+      selectBackend({ kind: backend.kind, model: m, agentPageId: backend.agentPageId })
+    },
+    [selectBackend, backend.kind, backend.agentPageId]
+  )
+  const composerControls = useMemo<ChatComposerControls>(
+    () => ({
+      thinkingSupported,
+      thinkingEnabled,
+      onToggleThinking,
+      model: backend.model,
+      availableModels,
+      onModelChange,
+      modelPickerDisabled: false
+    }),
+    [
+      thinkingSupported,
+      thinkingEnabled,
+      onToggleThinking,
+      backend.model,
+      availableModels,
+      onModelChange
+    ]
+  )
+
   // chat-panel P4 Phase 06 — context injection (flag-gated). On → build + send the typed
   // AgentContextSnapshot, read ContextChips from it, and seed prior-session messages (reload). Off
   // (default) → the AI SDK path stays Phase-02 context-light, byte-identical.
@@ -199,18 +272,18 @@ export function AssistantUIChatPanel({
     }),
     [activeInternalId, chat.activeSessionId]
   )
-  // Phase 01 shell defers the in-composer thinking toggle + attachment chips; tool calling is always
-  // available on the gateway. enabledSkills is empty here (the panel doesn't compute manifest skill
-  // enablement) → the capabilities block honestly reads "none beyond the built-in tools".
+  // composer-parity: thinkingEnabled reflects the live composer toggle (thinkingActive); attachments
+  // land in C2 (still false). tool calling is always available on the gateway. enabledSkills is empty
+  // here (the panel doesn't compute manifest skill enablement) → "none beyond the built-in tools".
   const contextCapabilities = useMemo<CapabilityContext>(
     () => ({
-      thinkingEnabled: false,
+      thinkingEnabled: thinkingActive,
       attachmentsEnabled: false,
       toolCallingEnabled: true,
       humanApprovalRequired: true,
       enabledSkills: []
     }),
-    []
+    [thinkingActive]
   )
   const { snapshot: contextSnapshot } = useAgentContextSnapshot({
     activeInternalId,
@@ -392,12 +465,13 @@ export function AssistantUIChatPanel({
         backendAgentPageId: backend.agentPageId,
         senderName: ctx.detail?.sender_name ?? null,
         subject: ctx.detail?.subject ?? null,
-        // Phase 01 shell: extended-thinking toggle is a legacy-composer feature
-        // (deferred). Sends false — identical to legacy with the toggle off.
-        thinking: false
+        // composer-parity C1-① — the legacy custom-api path honours the panel thinking toggle (gated
+        // on backend support). The ai-sdk path carries thinking via the AiSdkRuntimeProvider prop, not
+        // here (it streams through the transport, not chat.send).
+        thinking: thinkingActive
       })
     },
-    [activeInternalId, chat, backend, ctx.detail]
+    [activeInternalId, chat, backend, ctx.detail, thinkingActive]
   )
 
   const onEditMessage = useCallback(
@@ -408,10 +482,10 @@ export function AssistantUIChatPanel({
         backendKind: backend.kind,
         backendModel: backend.model,
         backendAgentPageId: backend.agentPageId,
-        thinking: false
+        thinking: thinkingActive
       })
     },
-    [chat, backend]
+    [chat, backend, thinkingActive]
   )
 
   // ── pending tool confirmation (legacy ConfirmToolDialog fallback) ──────────
@@ -654,69 +728,74 @@ export function AssistantUIChatPanel({
                 </div>
               )}
 
-              {useAiSdkRuntime && gatewayBaseUrl ? (
-                contextInjectionOn && !reloadMessagesReady ? (
-                  // Phase 06 — session switch in flight: defer the mount until chat.messages match the
-                  // active session, so the runtime never seeds stale history. Brief; refresh() then
-                  // flips reloadMessagesReady and the runtime mounts seeded with the right messages.
-                  emptyMessages
-                ) : (
-                  // Phase 02/06 AI SDK path: a fresh thread streams straight from the embedded
-                  // Gateway; turns persist into chat.activeSessionId (Gateway dual-write). Phase 06:
-                  // keyed by (email, session) so picking a history session remounts seeded with that
-                  // session's prior messages (initialMessages) + sends the typed context snapshot.
-                  // Flag-off → context-light, keyed by email only (byte-identical to Phase 02).
-                  <AiSdkRuntimeProvider
-                    key={
-                      // Phase 06a — key on the session id ONLY when RELOADING an existing session
-                      // (initialMessages non-empty); a fresh / just-adopted conversation (empty
-                      // messages) keeps `:new` so onEnsureSession setting activeSessionId mid-first-
-                      // send does NOT remount the provider and interrupt the in-flight turn. Email
-                      // switch (activeInternalId) + history select (seeded id) still remount + re-seed.
-                      contextInjectionOn
-                        ? `${activeInternalId ?? 'none'}:${
-                            initialMessages && initialMessages.length > 0
-                              ? chat.activeSessionId
-                              : 'new'
-                          }`
-                        : (activeInternalId ?? 'none')
-                    }
-                    gatewayBaseUrl={gatewayBaseUrl}
-                    sessionId={chat.activeSessionId}
-                    model={backend.model}
-                    contextSnapshot={contextSnapshot}
-                    initialMessages={initialMessages}
-                    onEnsureSession={onEnsureSession}
-                  >
-                    <AssistantThread emptyState={emptyMessages} />
-                  </AiSdkRuntimeProvider>
-                )
-              ) : backend.kind === 'notion-agent' ? (
-                // Phase 06a — a retired notion-agent session opened from history renders READ-ONLY:
-                // its prior messages show via the legacy adapter, but the composer is suppressed (no
-                // new turns on a retired agent — the user starts a fresh ai-sdk chat to continue).
-                <MailAgentRuntimeProvider
-                  chat={chat}
-                  toolCallsByMessage={toolCallsByMessage}
-                  onSend={onSend}
-                  onEdit={onEditMessage}
-                  onReload={null}
-                  sendDisabled
-                >
-                  <AssistantThread emptyState={emptyMessages} readOnly />
-                </MailAgentRuntimeProvider>
-              ) : (
-                <MailAgentRuntimeProvider
-                  chat={chat}
-                  toolCallsByMessage={toolCallsByMessage}
-                  onSend={onSend}
-                  onEdit={onEditMessage}
-                  onReload={chat.retryLast ?? null}
-                  sendDisabled={inQuotaCooldown}
-                >
-                  <AssistantThread pendingSlot={pendingSlot} emptyState={emptyMessages} />
-                </MailAgentRuntimeProvider>
-              )}
+              {
+                <ChatComposerControlsProvider value={composerControls}>
+                  {useAiSdkRuntime && gatewayBaseUrl ? (
+                    contextInjectionOn && !reloadMessagesReady ? (
+                      // Phase 06 — session switch in flight: defer the mount until chat.messages match the
+                      // active session, so the runtime never seeds stale history. Brief; refresh() then
+                      // flips reloadMessagesReady and the runtime mounts seeded with the right messages.
+                      emptyMessages
+                    ) : (
+                      // Phase 02/06 AI SDK path: a fresh thread streams straight from the embedded
+                      // Gateway; turns persist into chat.activeSessionId (Gateway dual-write). Phase 06:
+                      // keyed by (email, session) so picking a history session remounts seeded with that
+                      // session's prior messages (initialMessages) + sends the typed context snapshot.
+                      // Flag-off → context-light, keyed by email only (byte-identical to Phase 02).
+                      <AiSdkRuntimeProvider
+                        key={
+                          // Phase 06a — key on the session id ONLY when RELOADING an existing session
+                          // (initialMessages non-empty); a fresh / just-adopted conversation (empty
+                          // messages) keeps `:new` so onEnsureSession setting activeSessionId mid-first-
+                          // send does NOT remount the provider and interrupt the in-flight turn. Email
+                          // switch (activeInternalId) + history select (seeded id) still remount + re-seed.
+                          contextInjectionOn
+                            ? `${activeInternalId ?? 'none'}:${
+                                initialMessages && initialMessages.length > 0
+                                  ? chat.activeSessionId
+                                  : 'new'
+                              }`
+                            : (activeInternalId ?? 'none')
+                        }
+                        gatewayBaseUrl={gatewayBaseUrl}
+                        sessionId={chat.activeSessionId}
+                        model={backend.model}
+                        thinking={thinkingActive}
+                        contextSnapshot={contextSnapshot}
+                        initialMessages={initialMessages}
+                        onEnsureSession={onEnsureSession}
+                      >
+                        <AssistantThread emptyState={emptyMessages} />
+                      </AiSdkRuntimeProvider>
+                    )
+                  ) : backend.kind === 'notion-agent' ? (
+                    // Phase 06a — a retired notion-agent session opened from history renders READ-ONLY:
+                    // its prior messages show via the legacy adapter, but the composer is suppressed (no
+                    // new turns on a retired agent — the user starts a fresh ai-sdk chat to continue).
+                    <MailAgentRuntimeProvider
+                      chat={chat}
+                      toolCallsByMessage={toolCallsByMessage}
+                      onSend={onSend}
+                      onEdit={onEditMessage}
+                      onReload={null}
+                      sendDisabled
+                    >
+                      <AssistantThread emptyState={emptyMessages} readOnly />
+                    </MailAgentRuntimeProvider>
+                  ) : (
+                    <MailAgentRuntimeProvider
+                      chat={chat}
+                      toolCallsByMessage={toolCallsByMessage}
+                      onSend={onSend}
+                      onEdit={onEditMessage}
+                      onReload={chat.retryLast ?? null}
+                      sendDisabled={inQuotaCooldown}
+                    >
+                      <AssistantThread pendingSlot={pendingSlot} emptyState={emptyMessages} />
+                    </MailAgentRuntimeProvider>
+                  )}
+                </ChatComposerControlsProvider>
+              }
             </>
           )}
         </div>
