@@ -723,6 +723,9 @@
       "retry": "重试",
       "quotaCooldown": "冷却中 · {seconds} 秒后可再次发送"
     },
+    "aiSdk": {
+      "degraded": "AI 网关不可用，已切换到标准助手"
+    },
     "toolCall": {
       "running": "执行中",
       "ok": "完成",

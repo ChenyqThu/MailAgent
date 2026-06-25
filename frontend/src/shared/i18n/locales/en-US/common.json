@@ -723,6 +723,9 @@
       "retry": "Retry",
       "quotaCooldown": "Cooldown · {seconds}s until next send"
     },
+    "aiSdk": {
+      "degraded": "AI gateway unavailable — switched to the standard assistant"
+    },
     "toolCall": {
       "running": "running",
       "ok": "ok",

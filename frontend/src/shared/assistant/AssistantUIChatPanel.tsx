@@ -315,6 +315,38 @@ export function AssistantUIChatPanel({
   })
   const backendConfigured = secretsQ.data?.llmApiKey === true
 
+  // Phase 06a (cutover) — gateway health probe. When the panel resolves to the ai-sdk runtime, probe
+  // the embedded gateway's /health once per mount (sticky: staleTime Infinity, no refetch / focus
+  // refetch). A definitive failure (after one retry) means the gateway didn't come up / crashed → the
+  // effect below DEGRADES to the legacy custom-api path + a non-blocking info banner shows, so the
+  // user always has a working assistant instead of a dead ai-sdk thread. Disabled on the legacy path
+  // (→ never degraded), so it's byte-identical when the cutover flag is off.
+  const healthQ = useQuery({
+    queryKey: ['ai-gateway', 'health', gatewayBaseUrl],
+    queryFn: async () => {
+      const res = await fetch(`${gatewayBaseUrl}/health`)
+      if (!res.ok) throw new Error('ai-gateway unhealthy')
+      const body = (await res.json()) as { status?: string }
+      if (body.status !== 'ok') throw new Error('ai-gateway unhealthy')
+      return body
+    },
+    enabled: gatewayBaseUrl !== null && getChatRuntimeMode() === 'ai-sdk',
+    retry: 1,
+    staleTime: Infinity,
+    refetchOnWindowFocus: false
+  })
+  const gatewayDegraded = aiSdkEnabled && healthQ.isError
+  // Degrade flip: a fresh conversation defaulted to 'ai-sdk', but the gateway is unreachable → drop
+  // the whole panel to the legacy custom-api engine (re-scopes useEmailChat + keeps onSend valid; an
+  // 'ai-sdk' send through the legacy engine would throw). One-time per mount (gatewayDegraded is
+  // sticky); an OLD session opened via pendingOpen keeps its own persisted kind.
+  useEffect(() => {
+    if (gatewayDegraded && backend.kind === 'ai-sdk') {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- degrade action, not derived state
+      selectBackend({ kind: 'custom-api', model, agentPageId: null })
+    }
+  }, [gatewayDegraded, backend.kind, model, selectBackend])
+
   // Sidebar session preview cache (lazy on open) — same shape as legacy.
   const [sessionPreviews, setSessionPreviews] = useState<Record<number, string | null>>({})
   useEffect(() => {
@@ -611,6 +643,15 @@ export function AssistantUIChatPanel({
 
               {inQuotaCooldown && quotaCooldownUntil !== null && (
                 <QuotaCooldownTimer until={quotaCooldownUntil} />
+              )}
+
+              {/* Phase 06a — non-blocking info banner when the gateway probe failed and the panel
+                  degraded to the legacy assistant. Neutral (not error) tone: the user still has a
+                  working assistant below, this is just a heads-up. */}
+              {gatewayDegraded && (
+                <div className="mx-3 my-2 rounded-md border border-ink-border bg-ink-3/70 px-3 py-2 text-aux text-ink-fg-2">
+                  {t('chat.aiSdk.degraded')}
+                </div>
               )}
 
               {useAiSdkRuntime && gatewayBaseUrl ? (
