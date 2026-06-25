@@ -582,8 +582,10 @@ ai@6 / @assistant-ui/react(+react-ai-sdk) / zod 已装（devDeps）；markdown �
 
 </details>
 
-### P4-Phase06 — Cutover & Cleanup（切默认新会话 runtime = AI SDK + 下线 legacy chat UI 主路径）（epic 最后一阶，下一个 session）
+### P4-Phase06 — Cutover & Cleanup（切默认新会话 runtime = AI SDK + 下线 legacy chat UI 主路径）（epic 最后一阶）
 
+> **✅ 06a A–G 已落地（2026-06-25，全程 master 默认 OFF→dark）**：chat_db v13 / `MAILAGENT_AI_SDK_NEW_SESSION_DEFAULT` master flag / 急切会话 latch / per-session 3-way 路由 + 首轮重挂修复 / 健康降级 / loopback CORS / backfill（commits `256153d9`→`14b4fefb` + 落地 `eeb6448e` + **opus code-reviewer 抓修 1 CRITICAL** `3fbafede`〔Chunk A 的 `assertLegacyBackendKind` 守卫误伤 Chunk D 的 `onEnsureSession(newSession ai-sdk)`，C/D 测试 mock 了 newSession 把它藏住→flag 一开新会话首轮必死；修=`BackendKind` 放宽 + newSession 去守卫 + Python validator 同步 + 真实非-mock 回归测试〕；vitest 1960、eval 89、typecheck 0；权威落地 architecture §13.15）。**剩 06 的 H = 一行式翻 master 默认 `AI_SDK_NEW_SESSION_DEFAULT ?? '' → '1'`（electron.vite.config.ts + vite.web.config.ts 两处），gate 在 electron+web dogfood**。下方原 06a /goal 保留作执行记录；**下一 session 取下方「P4-Phase06b」**。
+>
 > **🔴 epic 最后一阶，最高风险**：这是唯一**改默认行为**的 phase（前 00→06-parity 全程 flag-off）。前置已全绿 = AI SDK 路径已生产 parity
 > （Phase-Parity `b758d25f`：standing-context + 当前邮件上下文 + 会话重载就位、不再 context-light）+ 9 read/5 write/外发工具 + HITL approval + A2UI 卡片
 > 全在 AI SDK Gateway。本 phase 把**新会话默认切到 assistant-ui + AI SDK Gateway**，并从产品主路径**下线 legacy chat 视图层**（但保留 useEmailChat/harness/tools 作
@@ -612,6 +614,29 @@ ai@6 / @assistant-ui/react(+react-ai-sdk) / zod 已装（devDeps）；markdown �
 验收（phase-06 §9 + acceptance-checklist）：默认新会话走 AI SDK Gateway；旧会话可读不丢历史；assistant-ui 是唯一产品 chat 视图层；高风险工具无静默执行路径；gateway 不可用有明确降级提示；`MAILAGENT_CHAT_RUNTIME=legacy` 一键回滚验证过；typecheck node+web 0 + 全量 vitest 无新增失败 + （动了 prompt/工具）`tests/agent_eval` ≥ baseline；electron + web 各跑一次 dogfood scenario。
 本阶段不做（→ 06b / 后续）：**删 legacy harness/UI 文件**（06b，AI SDK 新会话连续 dogfood 7 天无 P0/P1 后归档，§8 删除条件）/ 把 canonical persistence 改成 AG-UI event log / AG-UI 默认化 / remote-web 正式暴露（CORS 收紧是前置，暴露面是独立 epic）。
 .env.example 登记/更新本 phase flag（默认值变更须显式标注「★ 生产偏离默认」）。证据（新会话默认 AI SDK 截图/说明 + 旧会话读取 round-trip + 降级提示 + 一键回滚验证 + backfill dry-run 统计 + 测试）贴对话。完成用 codex 或 code-reviewer 过 diff 再收。收尾后 epic README/roadmap「当前进度」标 06a 完成、剩 06b dogfood 观察窗。
+```
+
+### P4-Phase06b — H flip + dogfood → 归档 legacy harness（epic 收官，下一个 session）
+
+> **前提**：06a A–G 已落地（chat_db v13 / master flag / 急切会话 / per-session 路由 / 健康降级 / CORS / backfill，全 dark；CRITICAL 已修 `3fbafede`）。本 session = **翻 master 默认（H）→ electron+web dogfood → 连续 7 天无 P0/P1 后归档 legacy harness/UI 主路径**。**两段不必同 session**：H+dogfood 启动观察窗是一段；7 天后的「删 legacy」是另一段。**一键回滚铁律不变**：`MAILAGENT_CHAT_RUNTIME=legacy` 随时切回。
+> **🔴 删除集 explore-first**：legacy `MessageList`/`Composer` 仍被 `GeneralAgentDialog`（Cmd+O 通用 agent）+ `ChatsTab` 共用，`ConfirmToolDialog` 仍被 AssistantUIChatPanel 的 custom-api legacy fallback 分支用——**不能裸删**。归档前必先建「cutover 后谁还 import 它们」的用法图，只删真正 orphan 的 legacy 邮件 chat 路径。
+
+```
+开工先读：
+- docs/plans/chat-panel-ai-sdk-assistant-ui-refactor/{phase-06-cutover-and-cleanup,architecture,acceptance-checklist}.md（phase-06 §4 cleanup 范围 + §7 回滚 + §8 删除条件[7天 dogfood 无 P0/P1] + §10 归档；architecture §13.15.3 = H flip 前置 DoD + 延后项[F loopback-token / E full-panel health 测试]）
+- frontend/electron.vite.config.ts + vite.web.config.ts（顶层共享常量 `AI_SDK_NEW_SESSION_DEFAULT = process.env.MAILAGENT_AI_SDK_NEW_SESSION_DEFAULT ?? ''`——H = 翻成 `?? '1'`；poc 已全开；main+renderer 两段 define 共享它，翻一处同时生效）
+- frontend/src/shared/components/chat/AIChatPanel.tsx（`AIChatPanel` wrapper 据 `isAssistantUiPanelEnabled()` 分流；`LegacyAIChatPanel`=legacy 邮件 chat 路径，cutover 后是 rollback-only 死分支，06b 候删）+ {MessageList,Composer,ConfirmToolDialog}.tsx（**共用，先查用法图**）+ shared/hooks/useEmailChat.ts + shared/chat/{runtime,harness,tools/*}（cutover 后仍服务旧 custom-api 会话 legacy runtime + rollback；删前确认无活跃依赖）
+- frontend/src/shared/components/agent/GeneralAgentDialog.tsx + components/agents/ChatsTab.tsx（仍 import legacy MessageList/Composer——归档不可误伤）
+
+/goal 推进 chat-panel Phase 06b（翻默认 + 观察窗 + 归档 legacy），产出可验证：
+(1) **H flip**：把 `AI_SDK_NEW_SESSION_DEFAULT ?? ''` → `?? '1'`（electron.vite.config.ts + vite.web.config.ts 两处），隔离 commit。typecheck node+web 0 + 全量 vitest 无新增失败（master on 后 flag-off 字节级测试仍须靠 vitest 无 define→master off 保住，确认零回归）+ agent_eval ≥ baseline；
+(2) **dogfood（DoD 硬门，无证据不进归档）**：`pnpm build`（**先 `bash frontend/scripts/build-python-venv.sh` 重 provision venv**，因 06a 改过 Python `chat.py`/`db.py`）→ 装机 → electron + web 各跑回归场景（总结当前邮件 / 起草回复 / 搜索引用 / 标记完成 / archive / 同步 Notion / 外发审批 / 拒绝外发停止）+ 旧 custom-api/notion-agent 会话从全局历史页可读不丢史 + `MAILAGENT_CHAT_RUNTIME=legacy` 一键回滚实测。证据贴对话；
+(3) **观察窗**：AI SDK 新会话连续 dogfood 7 天无 P0/P1（phase-06 §8）——这是删 legacy 的唯一前置，期间 rollback flag 必须保留可用；
+(4) **归档（7 天窗过后）**：先建删除集用法图（grep 谁还 import legacy MessageList/Composer/ConfirmToolDialog/useEmailChat/runtime/harness/tools），**只删 cutover 后真正 orphan 的 legacy 邮件 chat 路径**（LegacyAIChatPanel 死分支等）；GeneralAgentDialog/ChatsTab 仍用的共用组件 **保留**；决定 rollback flag（`MAILAGENT_CHAT_RUNTIME=legacy`）是退役还是保留（退役须确认无回切需求 + 删对应分支）；
+(5) **收尾延后项**（06a 留的，本 phase 或后续按需）：F 的 loopback-token（同机 CSRF 防护，开远程 web 面前置）+ E 的 full-panel health-degrade 测试（需新建 panel mount harness）。
+验收：默认新会话走 AI SDK Gateway（已 dogfood 实测）；旧会话可读不丢史；assistant-ui 是唯一产品 chat 视图层；7 天窗无 P0/P1 才删 legacy；删后 typecheck 0 + 全量 vitest 无新增失败 + agent_eval ≥ baseline + GeneralAgentDialog/ChatsTab 不回归；rollback 路径状态明确记档。
+本阶段不做：把 canonical persistence 改 AG-UI event log / AG-UI 默认化 / remote-web 正式暴露（独立 epic，loopback-token 是其前置）。
+完成用 codex 或 code-reviewer 过 diff 再收。收尾标 epic 收官（P4 全完成）。
 ```
 
 ### P4-Phase03+ — 按 chat-panel roadmap §4 PR 拆分逐 phase 推进
