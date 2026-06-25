@@ -9,6 +9,8 @@
 // 🔴 SSoT for the matrix + budget rationale: src/shared/chat/backends/custom_api.ts:55-75. If the
 //    model families or budget change there, mirror them here (no shared import to avoid the dep).
 
+import type { JSONValue } from 'ai'
+
 const THINKING_BUDGET_TOKENS = 16_000
 const THINKING_EFFORT = 'high' as const
 
@@ -29,9 +31,9 @@ function modelSupportsManualThinking(model: string): boolean {
 export function thinkingProviderOptions(
   model: string,
   enabled: boolean
-): Record<string, Record<string, unknown>> | undefined {
+): Record<string, Record<string, JSONValue>> | undefined {
   if (!enabled) return undefined
-  const anthropic = modelSupportsManualThinking(model)
+  const anthropic: Record<string, JSONValue> = modelSupportsManualThinking(model)
     ? { thinking: { type: 'enabled', budgetTokens: THINKING_BUDGET_TOKENS } }
     : { thinking: { type: 'adaptive' }, effort: THINKING_EFFORT }
   return { anthropic }
