@@ -154,27 +154,45 @@ export function buildContextSystemBlock(snapshot: AgentContextSnapshot): string 
     }
   }
 
-  // capabilities (P2c honesty): what's enabled + what's unavailable and WHY.
+  // capabilities (P2c honesty): what's enabled + what's unavailable and WHY. 🔴 These render as
+  // TRUSTED prose (## headers, OUTSIDE the UNTRUSTED_* fences), and the snapshot is a body-controlled
+  // gateway field — so every snapshot-provided string here goes through sanitizeProse (codex review
+  // HIGH: a raw newline in enabledSkills/unavailableTools could otherwise forge a `## SYSTEM` section).
   const cap = snapshot.capabilities
   const capLines: string[] = ['## Capabilities']
   capLines.push(
     cap.enabledSkills.length > 0
-      ? `Enabled skills: ${cap.enabledSkills.join(', ')}.`
+      ? `Enabled skills: ${cap.enabledSkills.map(sanitizeProse).join(', ')}.`
       : 'Enabled skills: none beyond the built-in tools.'
   )
   if (cap.unavailableTools && cap.unavailableTools.length > 0) {
     capLines.push(
       'Unavailable (do not call or simulate; explain honestly if asked): ' +
-        cap.unavailableTools.map((u) => `${u.name} — ${u.reason}`).join('; ') +
+        cap.unavailableTools
+          .map((u) => `${sanitizeProse(u.name)} — ${sanitizeProse(u.reason)}`)
+          .join('; ') +
         '.'
     )
   }
   parts.push(capLines.join('\n'))
 
   // privacy note — same one-liner ContextChips shows, so display == what the model was told.
-  parts.push(`## Context note\n${snapshot.privacy.userVisibleSummary}`)
+  // Sanitized too (body-controlled, rendered as trusted prose).
+  parts.push(`## Context note\n${sanitizeProse(snapshot.privacy.userVisibleSummary)}`)
 
   return parts.join('\n')
+}
+
+/** Sanitize a snapshot-provided string that is rendered as TRUSTED prose (the capabilities /
+ *  privacy note — OUTSIDE the UNTRUSTED_* fences). The snapshot arrives in the gateway request body,
+ *  so even though the renderer normally fills these with code-owned values, a direct caller could
+ *  inject. Two-step: break fence/UNTRUSTED_ tokens (sanitizeUntrusted) + collapse control chars
+ *  (incl. CR/LF/TAB) to a space, so attacker text can't start a forged `## ` section or a new
+ *  instruction line. (codex review HIGH.) */
+function sanitizeProse(value: string): string {
+  // Collapse whitespace (incl. CR/LF) to one space so attacker text cannot start a forged section
+  // header or new instruction line, then break fence + UNTRUSTED_ tokens (codex review HIGH).
+  return sanitizeUntrusted(value).replace(/\s+/g, ' ').trim()
 }
 
 /** Quote a value for a START-line attribute (keeps a name with spaces / newlines on one safe token). */

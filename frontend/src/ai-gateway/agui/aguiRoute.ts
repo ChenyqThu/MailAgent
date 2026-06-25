@@ -19,7 +19,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 
 import type { AiGatewayConfig } from '../config'
 import { makePersistOnFinish, makeIdGenerator, prepareChatRun } from '../chatRun'
-import { readJsonBody, writeJson, writeSse, SSE_HEADERS } from '../httpUtil'
+import { isBodyTooLarge, readJsonBody, writeJson, writeSse, SSE_HEADERS } from '../httpUtil'
 import type { MailAgentUIMessage } from '@shared/assistant/uiMessage'
 import { AgUiEventType, type AgUiEvent } from './events'
 import { createAgUiEventMapper } from './eventMapper'
@@ -105,6 +105,14 @@ export async function handleAguiChat(
   cfg: AiGatewayConfig
 ): Promise<void> {
   const rawBody = await readJsonBody(req)
+  // Phase 06-parity — same 413 as /api/ai/chat (the mirror shares the body shape + size profile).
+  if (isBodyTooLarge(rawBody)) {
+    writeJson(res, 413, {
+      error: 'E_PAYLOAD_TOO_LARGE',
+      hint: 'chat request body exceeds the gateway size limit'
+    })
+    return
+  }
   const body = applyInterruptResponse(rawBody)
 
   const controller = new AbortController()

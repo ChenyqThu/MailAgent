@@ -854,3 +854,12 @@ goal 死硬要求 AI SDK 路径与 legacy custom-api 用**同一** standing-cont
 - **canonical ui_message_json 重载延后**：renderer 读 API 不暴露该列 → 会话重载走 content/thinking fallback（文本忠实，tool parts 历史是 richer refinement，待读 API 加列）。
 - **/chat/config 取数在 main**：gateway 用 `request()`（浏览器语义 `credentials:'include'` 在 Node 无害）+ 15s TTL；standingContext 改动 ≤15s 生效（可接受，dogfood 验）。
 - cutover（06）：切默认新会话 runtime=ai-sdk + 删 legacy harness/UI + resolve/agui/send 端点 loopback CORS/Origin 收紧（同批）。
+
+### 13.14.7 codex gpt-5.5 xhigh 二次验收（opus APPROVE 后的独立第二意见）+ 3 修复
+
+opus reviewer APPROVE 后，再过一遍 codex gpt-5.5 xhigh 独立验收（对抗式），**REQUEST CHANGES**——抓到 3 个 opus 漏的，全部已修（typecheck 0 · 全量 vitest **155 files/1921 passed/0 fail** · agent_eval 89 · eslint 0）：
+
+- **HIGH — trusted-prose 注入面**：`buildContextSystemBlock` 把 `capabilities.enabledSkills` / `unavailableTools.{name,reason}` / `privacy.userVisibleSummary` 渲染成**可信 prose**（`## Capabilities`/`## Context note`，在 UNTRUSTED 围栏外、未脱敏）。正常 renderer 流这些是 code 生成（不可控），但 gateway 是 body-controlled 端点——按「body 即 untrusted」原则（同 Subject/From HIGH 威胁模型）是真注入面（换行可伪造 `## SYSTEM` 顶层段）。**修**：① 新增 `sanitizeProse`（`sanitizeUntrusted` + `\s+`→空格折叠换行/控制符，攻击文本无法另起 `## ` 段/指令行），应用到上述三处 prose 字段；② `isValidContextSnapshot` 严格校验 prompt-consumed 字段类型（enabledSkills:string[] / unavailableTools:{name,reason}[] / userVisibleSummary:string），畸形 typed snapshot 可靠 400（之前太浅会漏到 prompt 装配）。
+- **Medium — 会话重载竞态**：readiness 用 `!chat.messages.some(...)`，把**空 stale 数组**判成 ready（`[].some()===false`）——`selectSession` 先翻 activeSessionId 再 await refresh，从空/新会话切到有历史会话或初次加载时，AI SDK runtime 可能挂载成 `initialMessages=[]` 且 key 已是终态 session→历史不再 seed（多轮上下文也丢）。**修**：useEmailChat 加 `messagesSessionId`（refresh 成功后= sessionId，**覆盖真空会话**；reset=null；legacy 只写不读零回归），面板 `reloadMessagesReady = activeSessionId===null || messagesSessionId===activeSessionId`——区分「真空已加载」（ready）vs「加载中 stale」（defer）。
+- **Medium — 64KB body cap**：会话重载（全量 history）+ 12k 正文 + context 元数据，合法 Phase 06 请求可超 64KB 静默变 `{}`→误报 `messages[] required` 400。**修**：`httpUtil` cap 64KB→**8 MiB** + 溢出返回 `BODY_TOO_LARGE` sentinel → `/api/ai/chat` + AG-UI mirror 回显式 **413 E_PAYLOAD_TOO_LARGE**（非误导 400）；其余小 body 端点把 sentinel 当 {} 自然 400（零改）。
+- 测试新增：serializer trusted-prose 硬化（换行折叠无伪造顶层段 + 内嵌 token 中和）+ isValidContextSnapshot 类型混淆拒绝 + `http_body.test.ts`（cap/sentinel/解析）。codex 复核确认 6 不变式（floor 不弱化 / flag-off 字节级 / AG-UI passthrough / 重载竞态 / gateway 纯核 / 结构化解耦）全 PASS。

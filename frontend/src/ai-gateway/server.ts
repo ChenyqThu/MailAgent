@@ -22,7 +22,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 
 import type { AiGatewayConfig } from './config'
 import { makeIdGenerator, makePersistOnFinish, prepareChatRun } from './chatRun'
-import { delay, readJsonBody, writeJson, writeSse, SSE_HEADERS } from './httpUtil'
+import { delay, isBodyTooLarge, readJsonBody, writeJson, writeSse, SSE_HEADERS } from './httpUtil'
 import { handleAguiChat } from './agui/aguiRoute'
 
 const GATEWAY_VERSION = '0.2.0'
@@ -73,6 +73,15 @@ async function handleChat(
   cfg: AiGatewayConfig
 ): Promise<void> {
   const body = await readJsonBody(req)
+  // Phase 06-parity — session reload + a 12k context snapshot can push a legit turn past the old
+  // 64KB cap; answer an explicit 413 rather than a misleading "messages[] required" 400 (codex review).
+  if (isBodyTooLarge(body)) {
+    writeJson(res, 413, {
+      error: 'E_PAYLOAD_TOO_LARGE',
+      hint: 'chat request body exceeds the gateway size limit'
+    })
+    return
+  }
   // abort: client disconnect (or the renderer AbortController) cancels the upstream call.
   const controller = new AbortController()
   req.on('close', () => controller.abort())

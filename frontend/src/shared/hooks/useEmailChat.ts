@@ -114,6 +114,10 @@ export interface PendingConfirmation {
 export interface UseEmailChatReturn {
   /** Messages of the active session, oldest-first. Empty when no session yet. */
   messages: ChatMessage[]
+  /** Phase 06-parity — the session id `messages` reflects (set after a load lands, even for a 0-row
+   *  session; null when none loaded / reset). The AI SDK reload gate uses it to tell a loaded-empty
+   *  session from a still-loading stale array. */
+  messagesSessionId: number | null
   /** The id of the assistant message currently being streamed, or null. */
   streamingMessageId: number | null
   /** Convenience: streamingMessageId !== null. */
@@ -266,6 +270,13 @@ export function useEmailChat(
 ): UseEmailChatReturn {
   const mailApi = useMailApi()
   const [messages, setMessages] = useState<ChatMessage[]>([])
+  // chat-panel P4 Phase 06-parity (codex review) — the session id `messages` currently reflects
+  // (set by refresh AFTER a load completes, even for a 0-row session; null when no session is loaded
+  // or it was reset). The AI SDK session-reload gate reads this to distinguish "session loaded, 0
+  // history" from "load in flight, messages still stale" — `selectSession` flips activeSessionId
+  // BEFORE refresh resolves, so an empty stale array would otherwise read as ready. Legacy path never
+  // reads it (write-only there) → zero legacy regression.
+  const [messagesSessionId, setMessagesSessionId] = useState<number | null>(null)
   const [activeSessionId, setActiveSessionIdState] = useState<number | null>(null)
   const [streamingMessageId, setStreamingMessageId] = useState<number | null>(null)
   const [error, setError] = useState<ChatError | null>(null)
@@ -480,6 +491,7 @@ export function useEmailChat(
     setLastEmailId(emailId)
     setError(null)
     setMessages([])
+    setMessagesSessionId(null)
     setActiveSessionIdState(null)
     setStreamingMessageId(null)
     setLastFailedInput(null)
@@ -606,6 +618,10 @@ export function useEmailChat(
           return local ?? row
         })
       })
+      // Phase 06-parity — `messages` now reflect `sessionId` (even when `fresh` is empty: a loaded
+      // 0-row session). The reload gate uses this to mount the AI SDK runtime only once the active
+      // session's load has actually landed (not on a stale empty array during a session switch).
+      setMessagesSessionId(sessionId)
       if (syncStreaming) {
         // If the freshest assistant message is still pending/streaming,
         // mark it as the streaming target — protects against a stream
@@ -680,6 +696,7 @@ export function useEmailChat(
       if (target === null) {
         setActiveSessionIdState(null)
         setMessages([])
+        setMessagesSessionId(null)
         setStreamingMessageId(null)
         return
       }
@@ -1253,6 +1270,7 @@ export function useEmailChat(
     setActiveSessionIdState(null)
     activeSessionRef.current = null
     setMessages([])
+    setMessagesSessionId(null)
     setStreamingMessageId(null)
     setError(null)
     setLastFailedInput(null)
@@ -1407,6 +1425,7 @@ export function useEmailChat(
         setActiveSessionIdState(null)
         activeSessionRef.current = null
         setMessages([])
+        setMessagesSessionId(null)
         setStreamingMessageId(null)
         setLastFailedInput(null)
         setError(null)
@@ -1484,6 +1503,7 @@ export function useEmailChat(
 
   return {
     messages,
+    messagesSessionId,
     streamingMessageId,
     isStreaming: streamingMessageId !== null,
     error,

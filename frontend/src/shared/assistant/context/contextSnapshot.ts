@@ -332,10 +332,16 @@ function summarizePrivacy(args: {
 
 // ── Validation (used by the gateway to reject a malformed snapshot) ──────────────────────────────
 
-/** True when `value` is a structurally-valid AgentContextSnapshot (version + required fields +
- *  array shapes). Cheap structural guard (NOT a full schema validator) — the gateway returns 400 on
- *  a present-but-invalid snapshot so a malformed client can't smuggle an off-spec blob into the
- *  prompt. Absent snapshot is handled by the caller (valid → context-light), not here. */
+/** True when `value` is a structurally-valid AgentContextSnapshot. The gateway returns 400 on a
+ *  present-but-invalid snapshot so a malformed client can't smuggle an off-spec blob into the prompt.
+ *  Absent snapshot is handled by the caller (valid → context-light), not here.
+ *
+ *  🔴 Validates the PROMPT-CONSUMED string fields strictly (codex review HIGH): `capabilities`
+ *  (enabledSkills: string[], unavailableTools: {name,reason}[]) and `privacy.userVisibleSummary` are
+ *  rendered as TRUSTED prose by the serializer, so a type-confused snapshot (e.g. enabledSkills
+ *  carrying objects, or userVisibleSummary a non-string) must be rejected here rather than reaching
+ *  prompt assembly. The untrusted excerpt fields (references/attachments) are render-sanitized
+ *  (UNTRUSTED_* fences), so they only need structural array checks. */
 export function isValidContextSnapshot(value: unknown): value is AgentContextSnapshot {
   if (value == null || typeof value !== 'object' || Array.isArray(value)) return false
   const v = value as Record<string, unknown>
@@ -345,7 +351,22 @@ export function isValidContextSnapshot(value: unknown): value is AgentContextSna
   if (typeof scope.surface !== 'string' || typeof scope.anchorType !== 'string') return false
   if (!Array.isArray(v.references) || !Array.isArray(v.attachments)) return false
   if (v.uiState == null || typeof v.uiState !== 'object') return false
-  if (v.capabilities == null || typeof v.capabilities !== 'object') return false
   if (v.privacy == null || typeof v.privacy !== 'object') return false
+  // privacy.userVisibleSummary is rendered as prose → must be a string.
+  if (typeof (v.privacy as Record<string, unknown>).userVisibleSummary !== 'string') return false
+  // capabilities: enabledSkills must be string[]; unavailableTools (if present) must be {name,reason}[].
+  if (v.capabilities == null || typeof v.capabilities !== 'object') return false
+  const cap = v.capabilities as Record<string, unknown>
+  if (!Array.isArray(cap.enabledSkills) || cap.enabledSkills.some((s) => typeof s !== 'string')) {
+    return false
+  }
+  if (cap.unavailableTools !== undefined) {
+    if (!Array.isArray(cap.unavailableTools)) return false
+    for (const u of cap.unavailableTools) {
+      if (u == null || typeof u !== 'object') return false
+      const uu = u as Record<string, unknown>
+      if (typeof uu.name !== 'string' || typeof uu.reason !== 'string') return false
+    }
+  }
   return true
 }

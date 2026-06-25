@@ -202,11 +202,13 @@ export function AssistantUIChatPanel({
     enabled: contextInjectionOn
   })
   // Session reload (§13.8.5): seed the AI SDK runtime with the active session's prior messages. Guard
-  // the selectSession race (activeSessionId flips before refresh reloads messages) by only seeding
-  // once chat.messages belong to the active session; the mount is deferred until then (below).
+  // the selectSession race (activeSessionId flips BEFORE refresh reloads messages) by gating on
+  // useEmailChat's messagesSessionId — the session id `messages` actually reflect (set only after a
+  // load lands). Empty matters: a `.some()` check would read a 0-row session OR a stale empty array
+  // both as ready, mounting an empty thread that never re-seeds; messagesSessionId distinguishes a
+  // loaded-empty session (===activeSessionId → ready) from a still-loading stale array (≠ → defer).
   const reloadMessagesReady =
-    chat.activeSessionId === null ||
-    !chat.messages.some((m) => m.session_id !== chat.activeSessionId)
+    chat.activeSessionId === null || chat.messagesSessionId === chat.activeSessionId
   const initialMessages = useMemo(
     () =>
       contextInjectionOn && reloadMessagesReady

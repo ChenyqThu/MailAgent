@@ -154,4 +154,39 @@ describe('isValidContextSnapshot', () => {
     const noRefs = { ...build(), references: 'oops' }
     expect(isValidContextSnapshot(noRefs)).toBe(false)
   })
+
+  test('rejects type-confused prompt-consumed fields (codex review HIGH)', () => {
+    // enabledSkills must be string[] — an object element is rejected (would otherwise render as prose).
+    expect(
+      isValidContextSnapshot({
+        ...build(),
+        capabilities: { ...CAPS, enabledSkills: [{ evil: 'x' }] }
+      })
+    ).toBe(false)
+    // unavailableTools must be {name,reason}[] strings.
+    expect(
+      isValidContextSnapshot({
+        ...build(),
+        capabilities: { ...CAPS, unavailableTools: [{ name: 1, reason: 2 }] }
+      })
+    ).toBe(false)
+    // privacy.userVisibleSummary must be a string (rendered as prose).
+    expect(
+      isValidContextSnapshot({
+        ...build(),
+        privacy: { ...build().privacy, userVisibleSummary: { not: 'a string' } }
+      })
+    ).toBe(false)
+    // a well-typed snapshot with valid capabilities still passes.
+    expect(
+      isValidContextSnapshot({
+        ...build(),
+        capabilities: {
+          ...CAPS,
+          enabledSkills: ['memory'],
+          unavailableTools: [{ name: 'cal', reason: 'none' }]
+        }
+      })
+    ).toBe(true)
+  })
 })

@@ -19,8 +19,25 @@ export const SSE_HEADERS = {
 
 export const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' } as const
 
-/** Read a request JSON body (64KB cap). Malformed / oversized → {} (callers validate the shape and
- *  answer E_INVALID_ARG so a bad body never throws). */
+/** Max request body size. Phase 06-parity raised this from 64KB: session reload sends the full
+ *  message history alongside a ~12k email-body context snapshot, so a legit chat turn can exceed
+ *  64KB and was silently becoming `{}` → a misleading "messages[] required" 400 (codex review). 8 MiB
+ *  is ample for a long session + context and bounded for a loopback single-user gateway. */
+export const MAX_JSON_BODY_BYTES = 8 * 1024 * 1024
+
+/** Sentinel resolved by readJsonBody when the body exceeds MAX_JSON_BODY_BYTES, so chat handlers can
+ *  answer an explicit 413 E_PAYLOAD_TOO_LARGE instead of a misleading 400. It is a frozen plain object
+ *  so a caller that does NOT check (echo / approval — tiny bodies) just treats it as an empty body and
+ *  fails its own shape validation, exactly as before. */
+export const BODY_TOO_LARGE: Record<string, unknown> = Object.freeze({ __bodyTooLarge: true })
+
+/** True when readJsonBody hit the size cap (reference-equality on the frozen sentinel). */
+export function isBodyTooLarge(body: Record<string, unknown>): boolean {
+  return body === BODY_TOO_LARGE
+}
+
+/** Read a request JSON body (MAX_JSON_BODY_BYTES cap). Malformed → {}; oversized → BODY_TOO_LARGE
+ *  (chat handlers map it to 413, others treat it as {} and 400 on shape). A bad body never throws. */
 export function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
   return new Promise((resolve) => {
     let body = ''
@@ -29,13 +46,14 @@ export function readJsonBody(req: IncomingMessage): Promise<Record<string, unkno
     req.on('data', (chunk: string) => {
       if (tooBig) return
       body += chunk
-      if (body.length > 65_536) {
+      if (body.length > MAX_JSON_BODY_BYTES) {
         tooBig = true
         body = ''
       }
     })
     req.on('end', () => {
-      if (tooBig || body.length === 0) return resolve({})
+      if (tooBig) return resolve(BODY_TOO_LARGE)
+      if (body.length === 0) return resolve({})
       try {
         const parsed = JSON.parse(body) as unknown
         resolve(
