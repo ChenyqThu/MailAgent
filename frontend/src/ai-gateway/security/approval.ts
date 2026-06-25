@@ -335,6 +335,16 @@ export class ApprovalGuard {
     return record
   }
 
+  /**
+   * Phase 05 — READ-ONLY peek at a pending approval record (the AG-UI mirror's interrupt enricher
+   * uses it to surface risk / reason / expiry without mutating the guard). Returns null when no
+   * record exists. Unlike verify()/consume() it NEVER mutates and NEVER throws on expiry — it is a
+   * pure getter, so it can never be a side-door that advances or consumes an approval.
+   */
+  peek(toolCallId: string): ApprovalRecord | null {
+    return this.store.get(toolCallId) ?? null
+  }
+
   /** Diagnostic — number of records currently held (tests / observability). */
   size(): number {
     return this.store.size

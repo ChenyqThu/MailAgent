@@ -27,6 +27,7 @@ import { resolveAiGatewayPort, type PersistTurnInput } from '../../ai-gateway/co
 import { MailAgentDomainClient } from '../../ai-gateway/python/domainClient'
 import { buildGatewayTools } from '../../ai-gateway/tools'
 import { ApprovalGuard } from '../../ai-gateway/security/approval'
+import { buildToolA2UIPayload } from '../../shared/assistant/tools/a2ui'
 import { extractTextFromUIMessage } from '@shared/assistant/uiMessage'
 import { appendMessage, appendToolCall, updateToolCall } from './chat_db'
 import { getLlmApiKey, getLlmBaseUrl, getLlmModel } from './llm_settings'
@@ -155,6 +156,11 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
   // (default) → no send tool, byte-identical to 04a. Must be on together with the gateway +
   // write tools to take effect (buildGatewayTools only adds it under writeToolsEnabled).
   const sendToolEnabled = envBool('MAILAGENT_AI_SDK_SEND_TOOL', false)
+  // Phase 05 — MAILAGENT_AG_UI_MIRROR gates the AG-UI interop mirror endpoint (POST /api/ai/agui/
+  // chat). Off (default) → the route is not registered, byte-identical to 04b. It is a pure旁路: it
+  // reuses the SAME streamText + tools + double-guard approval as /api/ai/chat (no new write path),
+  // only re-encoding the output as an AG-UI event stream. It does NOT affect the AI SDK runtime.
+  const aguiMirrorEnabled = envBool('MAILAGENT_AG_UI_MIRROR', false)
   const handle = await startAiGatewayServer({
     port: resolveAiGatewayPort(),
     baseUrl: getLlmBaseUrl(),
@@ -170,6 +176,32 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
       const rec = approvalGuard.applyEdit(toolCallId, editedFields)
       return { approvalId: rec.approvalId, toolName: rec.toolName }
     },
+    // Phase 05 — AG-UI mirror flag + its approval-request enricher. The enricher is READ-ONLY
+    // (approvalGuard.peek — never mutates / consumes) and only surfaces what a client needs to render
+    // the interrupt card (risk / reason / expiry + optional A2UI). NO token / secret leaves main.
+    aguiMirrorEnabled,
+    resolveApprovalRequest: aguiMirrorEnabled
+      ? (info) => {
+          const rec = approvalGuard.peek(info.toolCallId)
+          if (!rec) return null
+          const input = rec.editedInput ?? rec.input
+          const a2ui = a2uiEnabled
+            ? (buildToolA2UIPayload(rec.toolName, { args: input, risk: rec.risk }) ?? undefined)
+            : undefined
+          return {
+            toolCallId: rec.toolCallId,
+            toolName: rec.toolName,
+            input,
+            approval: {
+              id: rec.approvalId,
+              risk: rec.risk,
+              reason: `${rec.toolName} needs your approval before it runs (${rec.risk}-tier).`,
+              expiresAt: new Date(rec.expiresAt).toISOString()
+            },
+            ...(a2ui ? { a2ui } : {})
+          }
+        }
+      : undefined,
     // Factory: the gateway builds the tools per request bound to a fresh audit collector
     // (closure). Read tools always; the five approval-gated write tools only when
     // MAILAGENT_AI_SDK_WRITE_TOOLS is on (default off → byte-identical to 03a read-only).

@@ -15,6 +15,20 @@ import type { MailAgentUIMessage } from '@shared/assistant/uiMessage'
 // config.ts for resolveAiGatewayPort; this must never pull the heavy `ai` chunk into
 // the main bundle when MAILAGENT_AI_SDK_GATEWAY is off (Phase 02 invariant).
 import type { GatewayToolAuditEntry } from './tools/types'
+// 🔴 type-only imports — fully erased (same discipline as GatewayToolAuditEntry above), so the
+// AG-UI mirror types never pull the `ai` chunk into the main bundle when the gateway is off.
+import type { ToolApprovalRequestPayload } from './agui/interruptMapper'
+
+/** Phase 05 — what the AG-UI mirror passes the approval-request resolver: the accumulated tool call
+ *  + the ai@6 approval id/signature. The Electron wrapper looks toolCallId up in the ApprovalGuard
+ *  (risk / reason / expiry) + optional A2UI and returns the full request payload (or null). */
+export interface ApprovalRequestResolveInfo {
+  toolCallId: string
+  toolName: string | null
+  input: unknown
+  approvalId: string
+  signature?: string
+}
 
 /** Default loopback port. serve-api=8200, local SSE gate=9200 — pick 8300 to dodge
  *  both. Overridable via env MAILAGENT_AI_GATEWAY_PORT (createWindow injects the
@@ -104,4 +118,13 @@ export interface AiGatewayConfig {
     toolCallId: string,
     editedFields: Record<string, unknown>
   ) => { approvalId: string; toolName: string }
+  /** Phase 05 — MAILAGENT_AG_UI_MIRROR. When true, the gateway registers the AG-UI mirror endpoint
+   *  POST /api/ai/agui/chat (the SAME streamText + tools + approval as /api/ai/chat, re-encoded as an
+   *  AG-UI event stream). Off (default) → the route is NOT registered (404), byte-identical to 04b. */
+  aguiMirrorEnabled?: boolean
+  /** Phase 05 — enrich an AG-UI `tool-approval-request` into a full ToolApprovalRequestPayload (the
+   *  mirror then maps it to an AG-UI interrupt). The Electron wrapper implements it as a READ-ONLY
+   *  ApprovalGuard.peek (risk / reason / expiry) + optional A2UI. Returns null when no record is
+   *  found → the mirror falls back to a minimal fail-closed interrupt. Omitted → same fallback. */
+  resolveApprovalRequest?: (info: ApprovalRequestResolveInfo) => ToolApprovalRequestPayload | null
 }

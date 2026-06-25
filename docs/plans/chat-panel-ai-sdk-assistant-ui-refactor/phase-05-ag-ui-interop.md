@@ -1,8 +1,11 @@
 # Phase 05 — AG-UI Interop
 
-> status: planning
-> last-verified: 2026-06-22
+> status: ✅ done（2026-06-25，flag-gated `MAILAGENT_AG_UI_MIRROR`，默认 off）
+> last-verified: 2026-06-25
 > goal: 在 AI SDK Gateway 稳定后，输出 AG-UI mirror endpoint，提供标准 agent event / interrupt / state snapshot 互操作能力。
+>
+> **落地详情 = architecture.md §13.13**（产出表 / 「复用同一 streamText+双 guard，只换编码器」/ 测试取舍 / 验收证据 / 已知 gap）。本文件是设计规格，§13.13 是权威落地记录。
+> 实测验收：`pnpm typecheck` 0 + 全量 vitest 1884 passed/1 skipped/0 fail（新增 agui 27 测）+ `tests/agent_eval` 89 passed（rules.py 零改）。assistant-ui AG-UI runtime smoke（§8）以 Gateway 侧 route SSE golden 替代（`@ag-ui/*` 不在依赖树，旁路默认关不加生态运行期依赖）。
 
 ## 1. 目标
 

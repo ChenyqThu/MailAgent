@@ -748,3 +748,50 @@ catalog 加 `gateway_only:true`（无 legacy builtin 源），`validate_catalog.
 - **send_ledger 跨进程幂等用 feature-owned 表**（lazy `CREATE TABLE IF NOT EXISTS`，不 bump sync_store DB_VERSION）：仅 gated 端点触达，零 blast radius；若未来要进迁移体系再 bump。
 - **attachments 未支持**（schema 不含，模型无法传字节）：prepare_send 仅文本外发，未来可按 internal_id 引用既有附件。
 - AG-UI mirror = 05；cutover 删 legacy harness/UI = 06。
+
+## 13.13 Phase 05 落地（2026-06-25，AG-UI interop mirror）
+
+> 把已稳定的 AI SDK Gateway 输出**镜像**成标准 AG-UI event 流，新增旁路端点 `POST /api/ai/agui/chat`，供外部 agent client / CopilotKit / AG-UI 生态互操作。全程 `MAILAGENT_AG_UI_MIRROR` flag-gated（默认 off → 路由不注册=404，字节级等同 04b），**不影响 AI SDK runtime 主路径**。AG-UI 仍是旁路、非第一阶段 canonical persistence（§9）。standing-context 注入 + 会话重载 = cutover 前置的「生产 parity」phase，**不在 05**；cutover 删 legacy = 06。
+
+### 13.13.1 产出
+
+| 文件 | 职责 |
+|---|---|
+| `frontend/src/ai-gateway/agui/events.ts` | AG-UI core event 词汇（`AgUiEventType` + discriminated union `AgUiEvent` + 构造器）。**dependency-free**（不引 `@ag-ui/*` npm 包——旁路 flag-off 默认关，不该为它把运行期依赖塞进常驻 bundle；纯 union 让 golden snapshot 纯 Node 可测）；字段名对齐 `@ag-ui/core`，将来接生态 adapter 即字节互通。无 `timestamp`（保 golden 确定性） |
+| `frontend/src/ai-gateway/agui/eventMapper.ts` | **mirror 核心** + golden 目标：stateful 翻译器 `createAgUiEventMapper`，把 `result.toUIMessageStream()` 的 UIMessageChunk 逐块译成 AG-UI event。累积 tool-input（`tool-approval-request` chunk 只带 approvalId/toolCallId/signature → 富化 interrupt 需 join 前序 tool-input + guard record）；text/reasoning/tool-call/result/error/finish/step 全覆盖；interrupt 后 `finish` 不再补第二个 RUN_FINISHED |
+| `frontend/src/ai-gateway/agui/interruptMapper.ts` | approval↔interrupt 双向纯翻译：`approvalToAgUiInterrupt`（req→AG-UI interrupt value，§7 payload，无 secret）+ `interruptToAgUiEvents`（→ CUSTOM `Interrupt` + RUN_FINISHED `requires_action`）+ `aguiInterruptResponseToApproval`（response→ToolApprovalResponsePayload，未知 decision **fail-closed=rejected**）+ `applyApprovalResponseToMessages`（resume 桥：在 history 里把对应 tool part 迁 `approval-requested`→`approval-responded`，**只翻状态+保签名+不动 signed input**） |
+| `frontend/src/ai-gateway/agui/stateSnapshot.ts` | `MailAgentAgUiState`（§6：mailagentContext + thread + capabilities，`highRiskApprovalRequired:true` 字面量）+ `redactForState`（**脱敏**：drop token/secret/authorization/cookie 等键名 + 截断长串 `MAX_SNAPSHOT_STRING` + 限深递归）+ `stateSnapshotEvent` |
+| `frontend/src/ai-gateway/agui/aguiRoute.ts` | mirror 端点 `handleAguiChat`：复用 `prepareChatRun` 的**同一** streamText+tools+approval；消费 `toUIMessageStream` 经 eventMapper 编成 AG-UI SSE，前置 RUN_STARTED + 脱敏 STATE_SNAPSHOT，复用 `makePersistOnFinish`；支持 native ai@6 replay + AG-UI interrupt-response 两种 resume。**不 import electron/chat_db；自身从不调工具/sendApproved——所有写/发仍在工具 execute 里经同一 guard** |
+| `frontend/src/ai-gateway/{httpUtil,chatRun}.ts` | 从 server.ts 抽出共享单源：`httpUtil`（readJsonBody/writeJson/writeSse/SSE_HEADERS，断 server↔aguiRoute 循环依赖）+ `chatRun`（`prepareChatRun` 校验→build streamText with tools+approval + `makePersistOnFinish`）。**handleChat 与 handleAguiChat 走同一 prepareChatRun**，结构性保证「复用同一 streamText+tools+approval」，无第二份工具实现 |
+| `frontend/src/ai-gateway/security/approval.ts` | 加只读 `peek(toolCallId)`（不 mutate/不抛 expiry → 永不成为推进/消费审批的侧门），供 interrupt 富化读 risk/reason/expiry |
+| `frontend/src/ai-gateway/{config.ts,server.ts}` | config 加 `aguiMirrorEnabled` + `resolveApprovalRequest` 注入点（type-only import，运行期零依赖）；server 仅在 `cfg.aguiMirrorEnabled` 注册 `/api/ai/agui/chat`（flag-off 落 404）+ `/api/ai/config` 暴露 `aguiMirror` 可观测 |
+| `frontend/src/electron/main/ai_gateway_lifecycle.ts` | `envBool('MAILAGENT_AG_UI_MIRROR')` → 传 `aguiMirrorEnabled` + 实现 `resolveApprovalRequest`（`approvalGuard.peek` 只读组装 ToolApprovalRequestPayload + a2uiEnabled 时附 `buildToolA2UIPayload`）。默认 off |
+| `frontend/tests/ai-gateway/agui/{eventMapper,interruptMapper,stateSnapshot,route}.test.ts` | 27 测试：event 顺序 golden（text/tool/approval/reasoning/error）+ interrupt 往返 + resume 桥安全（保签名·不动 input·非匹配不应用）+ 脱敏（drop token·截断 body）+ route SSE golden（flag-off 404 / 基础对话 RUN_STARTED→STATE_SNAPSHOT→TEXT_MESSAGE_*→RUN_FINISHED / STATE_SNAPSHOT 脱敏 / persist 同源 / no-key 503） |
+
+### 13.13.2 🔴 「复用同一 streamText + 双 guard，只换编码器」（无静默外发路径）
+
+mirror 不重实现任何工具、也不自己发信。三条结构性保证：
+
+1. **同一 prepareChatRun**：handleChat 与 handleAguiChat 都调 `chatRun.prepareChatRun`，工具来自 `cfg.buildTools`、approval 签名来自 `cfg.toolApprovalSecret`——两端点字节级同一套 streamText+tools+approval，差异只在输出编码器（pipe UIMessage 流 vs toUIMessageStream→AG-UI event）。
+2. **approval 二调仍在工具 execute 内**：AG-UI 的高风险外发不经任何新路径。resume 桥 `applyApprovalResponseToMessages` 只把 history 里的 tool part 从 `approval-requested` 翻到 `approval-responded`（保留 ai@6 签名、**不改 signed input**），streamText 重放时 ai@6 重验签名 + 工具 execute 里 `ApprovalGuard.verify/consume` + content hash + idempotency **原样触发**（§13.10.3 / §13.12.2 双 guard）。
+3. **interrupt 富化只读**：`resolveApprovalRequest` 用 `ApprovalGuard.peek`（纯 getter，不 mutate/不消费），且 STATE_SNAPSHOT/interrupt payload 都不含 token/secret（脱敏 + 仅公开 approvalId）。
+
+未知 decision fail-closed=rejected；malformed interrupt-response 被忽略后 history 无 approval-responded part → 二调不 execute（永不成开放发送路径）。
+
+### 13.13.3 测试取舍（沿用 03b/04b 的 mock-model 边界）
+
+mock-model 难驱动 streamText 的工具/approval 两调 loop（§13.10.6 一致）。故：**基础对话**走 route SSE golden（真 streamText + mock model）；**tool call + approval** 走 eventMapper golden（合成 UIMessageChunk 序列，确定性）+ interruptMapper 往返单测——这正是 phase-05 §10「以 Gateway 侧 event golden snapshot 为主验收」的兜底口径。三场景（基础/工具/审批）全覆盖、零真实 PII。
+
+### 13.13.4 验收证据
+
+- `pnpm typecheck`（node+web）**exit 0**；全量 vitest **149 files / 1884 passed / 1 skipped / 0 fail**（含新增 agui 27 测 + ui_message_persistence 在正确 ABI 下复绿；npx vitest 在 node v26 下 better-sqlite3 套件须 electron-as-node/rebuild:node runner，已 rebuild 后全绿）。
+- `tests/agent_eval` **89 passed**；`run_baseline --validate` OK（37/37 trace、coverage_ok、schema OK）。**rules.py / catalog / recorder / tasks 零改**——AG-UI 旁路天然不产 legacy harness trace，对 eval 面零影响（`--compare` 需 candidate trace=manual lane，无新候选）。
+- AG-UI event golden：基础对话 `RUN_STARTED → STATE_SNAPSHOT → STEP_STARTED → TEXT_MESSAGE_{START,CONTENT×N,END} → STEP_FINISHED → RUN_FINISHED(success)`；approval `… → TOOL_CALL_{START,ARGS,END} → CUSTOM Interrupt → RUN_FINISHED(requires_action)`（trailing finish 被抑制）。
+- STATE_SNAPSHOT 脱敏：context blob 里 `secretToken`/`access_token`/`authorization`/`cookie` 等键被 drop、大 body 截断带 marker、`sk-*` 不出现在任何 SSE 字节。
+
+### 13.13.5 已知 gap / 留后续
+
+- **assistant-ui AG-UI runtime smoke 用 Gateway 侧 golden 替代**：`@assistant-ui/react-ag-ui` / `@ag-ui/client` 不在依赖树，为一个默认关的旁路加生态运行期依赖不划算（phase-05 §8/§10 已留 fallback 口径）。route SSE golden 已证 AG-UI event 流良构可消费；将来采纳生态 adapter 时 events.ts 形态已对齐、即插即用。
+- **AG-UI resolve/agui 端点 loopback CORS 收紧**：mirror 继承 `ACAO:*` loopback-only 信任模型（同 §13.8.5/§13.11.6/§13.12.7），开远程 Web 面前须收紧 Origin/loopback-token（与 cutover 06 同批）。
+- **standing-context 注入 + 会话重载**：仍延后到 cutover 前置的「AI SDK 生产 parity」phase（§13.8.5）；AG-UI STATE_SNAPSHOT 当前透传请求方给的 contextSnapshot（脱敏），真正的分层 standing-context 快照随该 phase 落地。
+- cutover 删 legacy harness/UI（resolve+send 端点 CORS 收紧同批）= 06。
