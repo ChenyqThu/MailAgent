@@ -18,6 +18,10 @@ interface AssistantThreadProps {
   pendingSlot?: React.ReactNode
   /** Shown by ThreadPrimitive.Empty when the thread has no messages. */
   emptyState?: React.ReactNode
+  /** Phase 06a (cutover) — read-only mode for a retired-backend (notion-agent) session opened
+   *  from history: render the prior messages but suppress the composer (no new turns on a
+   *  retired agent). Default false keeps the live composer for the ai-sdk / custom-api paths. */
+  readOnly?: boolean
 }
 
 const THREAD_MESSAGE_COMPONENTS = {
@@ -29,7 +33,8 @@ const THREAD_MESSAGE_COMPONENTS = {
 
 export function AssistantThread({
   pendingSlot,
-  emptyState
+  emptyState,
+  readOnly = false
 }: AssistantThreadProps): React.JSX.Element {
   return (
     <ThreadPrimitive.Root className="flex min-h-0 flex-1 flex-col bg-ink-1 text-ink-fg">
@@ -41,7 +46,7 @@ export function AssistantThread({
           <div className="min-h-2 shrink-0" />
         </ThreadPrimitive.If>
       </ThreadPrimitive.Viewport>
-      <ThreadComposer />
+      {!readOnly && <ThreadComposer />}
     </ThreadPrimitive.Root>
   )
 }

@@ -169,6 +169,27 @@ describe('AssistantUIChatPanel shell — content rendering', () => {
     )
     await waitFor(() => expect(screen.getByText('email_search')).toBeTruthy())
   })
+
+  test('readOnly thread renders prior messages but suppresses the composer (notion-agent path)', async () => {
+    // Phase 06a — a retired notion-agent session opened from history is read-only: its prior
+    // messages render via the legacy adapter, but AssistantThread readOnly drops the composer so
+    // there is no way to start a new turn on the retired agent.
+    const chat = makeChat({
+      messages: [
+        fakeMessage({ id: 1, role: 'user', content: '旧 notion-agent 提问' }),
+        fakeMessage({ id: 2, role: 'assistant', content: '旧 agent 回答' })
+      ]
+    })
+    render(
+      <MailAgentRuntimeProvider chat={chat} onSend={vi.fn()}>
+        <AssistantThread emptyState={<div>empty</div>} readOnly />
+      </MailAgentRuntimeProvider>
+    )
+    await waitFor(() => expect(screen.getByText('旧 notion-agent 提问')).toBeTruthy())
+    expect(screen.getByText('旧 agent 回答')).toBeTruthy()
+    // The composer input is gone (the default-mode tests below prove it is present without readOnly).
+    expect(screen.queryByLabelText(i18n.t('chat.composer.placeholder'))).toBeNull()
+  })
 })
 
 describe('AssistantUIChatPanel shell — interaction', () => {

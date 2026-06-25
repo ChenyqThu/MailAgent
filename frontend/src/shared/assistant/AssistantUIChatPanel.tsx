@@ -145,27 +145,45 @@ export function AssistantUIChatPanel({
   const activeInternalId = useActiveEmail((s) => s.activeInternalId)
 
   const [model] = useState(() => readModelPref())
-  const backend: BackendChoice = useMemo(
-    () => ({ kind: 'custom-api', model, agentPageId: null }),
-    [model]
-  )
+
+  // chat-panel P4 Phase 02/06a — the embedded AI SDK Gateway path is live when the runtime resolves
+  // to 'ai-sdk', the gateway is enabled, and its loopback port was discovered (?aiGatewayPort=).
+  // resolveAiGatewayBaseUrl reads window.location.search once; the flags are build-time constants.
+  const gatewayBaseUrl = useMemo(() => resolveAiGatewayBaseUrl(), [])
+  const aiSdkEnabled =
+    getChatRuntimeMode() === 'ai-sdk' && isAiSdkGatewayEnabled() && gatewayBaseUrl !== null
+
+  // Phase 06a (cutover) — backend is now STATEFUL (was hardcoded custom-api). A fresh conversation
+  // defaults to the 'ai-sdk' kind when the gateway path is live, else legacy 'custom-api'. Opening an
+  // OLD session from the global history page (pendingOpen carries its backend_kind) re-scopes the
+  // panel to that kind via selectBackend so it renders on the matching runtime (custom-api → legacy,
+  // retired notion-agent → read-only). "+New" returns to the default kind.
+  const [backend, setBackend] = useState<BackendChoice>(() => ({
+    kind: aiSdkEnabled ? 'ai-sdk' : 'custom-api',
+    model,
+    agentPageId: null
+  }))
+  const selectBackend = useCallback((next: BackendChoice): void => setBackend(next), [])
 
   const sidebarOpen = useAIChatPanel((s) => s.sidebarOpen)
   const toggleSidebar = useAIChatPanel((s) => s.toggleSidebar)
   const setSidebarOpen = useAIChatPanel((s) => s.setSidebarOpen)
+  // Phase 06a — one-shot signals from the sidebar tabs + the global session-history page (the same
+  // store the legacy panel consumes): requestedBackendKind switches the panel's kind; pendingOpen
+  // opens a specific (email, session) re-scoping the kind first. consume* clears them once applied.
+  const requestedBackendKind = useAIChatPanel((s) => s.requestedBackendKind)
+  const consumeRequestedBackend = useAIChatPanel((s) => s.consumeRequestedBackend)
+  const pendingOpen = useAIChatPanel((s) => s.pendingOpen)
+  const consumePendingOpen = useAIChatPanel((s) => s.consumePendingOpen)
 
   const chat = useEmailChat(activeInternalId, backend.kind)
   const ctx = useChatContextChips(activeInternalId)
   const toolCallsByMessage = useSessionToolCalls(chat.messages, chat.streamingMessageId)
 
-  // chat-panel P4 Phase 02 — AI SDK runtime opt-in. Engages ONLY when the runtime
-  // flag is 'ai-sdk' AND the embedded Gateway is enabled AND its loopback port was
-  // discovered (?aiGatewayPort=). Otherwise the panel keeps the Phase 01 ExternalStore
-  // adapter, byte-identical. Flags are build-time constants; resolveAiGatewayBaseUrl
-  // reads window.location.search once.
-  const gatewayBaseUrl = useMemo(() => resolveAiGatewayBaseUrl(), [])
-  const useAiSdkRuntime =
-    getChatRuntimeMode() === 'ai-sdk' && isAiSdkGatewayEnabled() && gatewayBaseUrl !== null
+  // AI SDK runtime engages when the ACTIVE backend kind is 'ai-sdk' AND the gateway path is live. An
+  // old custom-api / notion-agent session (opened via pendingOpen) re-scopes backend.kind, so the
+  // render routes by kind below even while aiSdkEnabled is globally true.
+  const useAiSdkRuntime = backend.kind === 'ai-sdk' && aiSdkEnabled
 
   // chat-panel P4 Phase 06 — context injection (flag-gated). On → build + send the typed
   // AgentContextSnapshot, read ContextChips from it, and seed prior-session messages (reload). Off
@@ -216,6 +234,78 @@ export function AssistantUIChatPanel({
         : undefined,
     [contextInjectionOn, reloadMessagesReady, chat.messages]
   )
+
+  // ── Phase 06a: old-session re-scope (lifted from the legacy panel's proven pattern) ──────────
+  // Alias the two chat members the pendingOpen effect reads so exhaustive-deps tracks each as a
+  // distinct identifier (multi-member access on the un-memoized `chat` collapses to "the whole chat",
+  // which changes identity every render and would re-run the effect spuriously).
+  const chatSessions = chat.sessions
+  const chatSelectSession = chat.selectSession
+  // Sidebar tab click → switch the panel onto that kind. Consume even when the kind already matches
+  // so a later same-kind click isn't swallowed by a stale flag.
+  useEffect(() => {
+    if (requestedBackendKind === null) return
+    if (requestedBackendKind !== backend.kind) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot signal action, not derived
+      selectBackend({
+        kind: requestedBackendKind,
+        model: requestedBackendKind === 'custom-api' ? (backend.model ?? readModelPref()) : null,
+        agentPageId: null
+      })
+    }
+    consumeRequestedBackend()
+  }, [requestedBackendKind, backend.kind, backend.model, selectBackend, consumeRequestedBackend])
+
+  // Global session-history row click → after the active email re-keyed + this email's sessions
+  // loaded, select the exact target. If it's a different kind, switch first (re-scope) and bail; the
+  // next render (now on the right kind, the hook re-filtered + reloaded that kind's sessions) finds
+  // and selects it. One-shot pendingOpen consumed only after the select fires.
+  useEffect(() => {
+    if (pendingOpen === null) return
+    if (activeInternalId !== pendingOpen.emailId) return
+    if (backend.kind !== pendingOpen.backendKind) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot signal action, not derived
+      selectBackend({
+        kind: pendingOpen.backendKind,
+        model: pendingOpen.backendKind === 'custom-api' ? (backend.model ?? readModelPref()) : null,
+        agentPageId: null
+      })
+      return
+    }
+    const loadedForThisEmail = chatSessions.some((s) => s.email_id === pendingOpen.emailId)
+    if (!loadedForThisEmail) return
+    if (chatSessions.find((s) => s.id === pendingOpen.sessionId)) {
+      void chatSelectSession(pendingOpen.sessionId)
+    }
+    consumePendingOpen()
+  }, [
+    pendingOpen,
+    activeInternalId,
+    backend.kind,
+    backend.model,
+    selectBackend,
+    chatSessions,
+    chatSelectSession,
+    consumePendingOpen
+  ])
+
+  // Phase 06a — eager ai-sdk session creation on the FIRST send of a fresh conversation. The AI SDK
+  // transport calls this (via the runtime latch) only when there's no session yet; we create the
+  // backend_kind='ai-sdk' row through the same IPC the legacy path uses, adopt it into the hook state
+  // (history / title / reload), and hand the id back so the gateway persists the turn into it.
+  const onEnsureSession = useCallback(async (): Promise<number> => {
+    if (activeInternalId === null) {
+      throw new Error('cannot create an ai-sdk session without an active email')
+    }
+    const session = await mailApi.chat.newSession({
+      anchorType: 'email',
+      emailId: activeInternalId,
+      backendKind: 'ai-sdk',
+      backendModel: backend.model
+    })
+    chat.adoptSession(session)
+    return session.id
+  }, [activeInternalId, mailApi, backend.model, chat])
 
   // custom-api readiness = keychain llmApiKey present (mirror of legacy gate).
   const secretsQ = useQuery({
@@ -537,8 +627,17 @@ export function AssistantUIChatPanel({
                   // Flag-off → context-light, keyed by email only (byte-identical to Phase 02).
                   <AiSdkRuntimeProvider
                     key={
+                      // Phase 06a — key on the session id ONLY when RELOADING an existing session
+                      // (initialMessages non-empty); a fresh / just-adopted conversation (empty
+                      // messages) keeps `:new` so onEnsureSession setting activeSessionId mid-first-
+                      // send does NOT remount the provider and interrupt the in-flight turn. Email
+                      // switch (activeInternalId) + history select (seeded id) still remount + re-seed.
                       contextInjectionOn
-                        ? `${activeInternalId ?? 'none'}:${chat.activeSessionId ?? 'new'}`
+                        ? `${activeInternalId ?? 'none'}:${
+                            initialMessages && initialMessages.length > 0
+                              ? chat.activeSessionId
+                              : 'new'
+                          }`
                         : (activeInternalId ?? 'none')
                     }
                     gatewayBaseUrl={gatewayBaseUrl}
@@ -546,10 +645,25 @@ export function AssistantUIChatPanel({
                     model={backend.model}
                     contextSnapshot={contextSnapshot}
                     initialMessages={initialMessages}
+                    onEnsureSession={onEnsureSession}
                   >
                     <AssistantThread emptyState={emptyMessages} />
                   </AiSdkRuntimeProvider>
                 )
+              ) : backend.kind === 'notion-agent' ? (
+                // Phase 06a — a retired notion-agent session opened from history renders READ-ONLY:
+                // its prior messages show via the legacy adapter, but the composer is suppressed (no
+                // new turns on a retired agent — the user starts a fresh ai-sdk chat to continue).
+                <MailAgentRuntimeProvider
+                  chat={chat}
+                  toolCallsByMessage={toolCallsByMessage}
+                  onSend={onSend}
+                  onEdit={onEditMessage}
+                  onReload={null}
+                  sendDisabled
+                >
+                  <AssistantThread emptyState={emptyMessages} readOnly />
+                </MailAgentRuntimeProvider>
               ) : (
                 <MailAgentRuntimeProvider
                   chat={chat}
