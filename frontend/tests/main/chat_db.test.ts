@@ -127,7 +127,8 @@ describe('chat_db — path + schema bootstrap', () => {
     // P4 Phase 03b (06-23 chat-panel HITL write tools): bumped to 10 — chat_tool_call.approval_status + approval_hash.
     // P4 Phase 04a (06-23 chat-panel A2UI tool cards): bumped to 11 — chat_tool_call.ui_payload_json.
     // P4 Phase 04b (06-23 chat-panel high-risk send): bumped to 12 — chat_tool_call.content_hash + idempotency_key.
-    expect(ver.value).toBe('12')
+    // P4 Phase 06a (06-23 chat-panel cutover): bumped to 13 — ai_chat_sessions.backend_kind CHECK admits 'ai-sdk'.
+    expect(ver.value).toBe('13')
   })
 
   test('fresh DB schema includes the v2 metadata column', () => {
@@ -164,6 +165,22 @@ describe('chat_db — path + schema bootstrap', () => {
     expect(names).toContain('idempotency_key')
   })
 
+  test('fresh DB v13 — ai_chat_sessions.backend_kind CHECK admits ai-sdk + a session can be created', () => {
+    const db = getChatDb()
+    // The widened CHECK literal only appears in the v13 CREATE.
+    const sql = (
+      db
+        .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='ai_chat_sessions'")
+        .get() as { sql: string }
+    ).sql
+    expect(sql).toMatch(/'ai-sdk'/)
+    // The old narrow CHECK rejected backend_kind='ai-sdk'; the v13 rebuild unblocks it.
+    const session = getOrCreateSession({ emailId: 4242, backendKind: 'ai-sdk' })
+    expect(session.backend_kind).toBe('ai-sdk')
+    expect(session.email_id).toBe(4242)
+    expect(getSession(session.id)?.backend_kind).toBe('ai-sdk')
+  })
+
   test('fresh DB schema includes the v6 ai_chat_messages.thinking column', () => {
     const db = getChatDb()
     const cols = db.prepare('PRAGMA table_info(ai_chat_messages)').all() as Array<{ name: string }>
@@ -193,7 +210,7 @@ describe('chat_db — path + schema bootstrap', () => {
     const ver = db.prepare("SELECT value FROM chat_db_meta WHERE key = 'schema_version'").get() as {
       value: string
     }
-    expect(ver.value).toBe('12')
+    expect(ver.value).toBe('13')
   })
 
   test('v1-version DB ALTERs in the metadata column on first open (forward migration)', () => {
@@ -247,7 +264,7 @@ describe('chat_db — path + schema bootstrap', () => {
     // Sprint 19 (PR-1a → bug-fix): v1 DB jumped to v4; task 06-08-chat Bug 2
     // bumped to v5; 需求 5 bumped to v6; P2a → v8; P4 Phase 02 → v9 → a v1 DB now
     // climbs the whole ladder to v9.
-    expect(ver.value).toBe('12')
+    expect(ver.value).toBe('13')
     const cols = db.prepare('PRAGMA table_info(ai_chat_messages)').all() as Array<{ name: string }>
     expect(cols.map((c) => c.name)).toContain('metadata')
     // v6 column present after climbing from v1.
@@ -280,6 +297,87 @@ describe('chat_db — path + schema bootstrap', () => {
     expect(tableNames).toContain('agent_memory_kv')
   })
 
+  // P4 Phase 06a (cutover) — a v12 DB (post-v7 anchor shape, narrow backend_kind
+  // CHECK) forward-migrates to v13: the sessions table is rebuilt with the widened
+  // CHECK, every existing row + its messages survive the FK-off rebuild, and an
+  // 'ai-sdk' session becomes insertable (the regression the cutover unblocks).
+  test('v12 DB forward-migrates to v13 — sessions rebuilt with widened CHECK, rows + messages preserved', () => {
+    closeChatDb()
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const BetterSqlite3 = require('better-sqlite3') as typeof import('better-sqlite3')
+    const seed = new BetterSqlite3(dbPath)
+    seed.pragma('foreign_keys = ON')
+    // The v12 ai_chat_sessions shape == the v7 anchor table (v8..v12 were all
+    // additive on messages / tool_call / memory), with the OLD narrow CHECK.
+    seed.exec(`
+      CREATE TABLE chat_db_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE ai_chat_sessions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        email_id INTEGER,
+        anchor_type TEXT NOT NULL DEFAULT 'email' CHECK (anchor_type IN ('email', 'general')),
+        anchor_id INTEGER,
+        backend_kind TEXT NOT NULL CHECK (backend_kind IN ('notion-agent', 'custom-api')),
+        backend_model TEXT,
+        backend_agent_page_id TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        CHECK (
+          (anchor_type = 'email' AND email_id IS NOT NULL AND anchor_id = email_id)
+          OR (anchor_type = 'general' AND anchor_id IS NULL AND email_id IS NULL)
+        )
+      );
+      CREATE TABLE ai_chat_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id INTEGER NOT NULL REFERENCES ai_chat_sessions(id) ON DELETE CASCADE,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL,
+        status TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        ui_message_json TEXT
+      );
+      CREATE INDEX idx_sessions_email ON ai_chat_sessions(email_id, updated_at DESC);
+      CREATE INDEX idx_sessions_anchor ON ai_chat_sessions(anchor_type, anchor_id, updated_at DESC);
+      INSERT INTO chat_db_meta (key, value) VALUES ('schema_version', '12');
+      INSERT INTO ai_chat_sessions
+        (id, email_id, anchor_type, anchor_id, backend_kind, backend_model, backend_agent_page_id, created_at, updated_at)
+        VALUES (7, 555, 'email', 555, 'custom-api', 'claude-sonnet-4-6', NULL, 0, 0);
+      INSERT INTO ai_chat_messages
+        (session_id, role, content, status, created_at, updated_at)
+        VALUES (7, 'user', 'hello pre-cutover', 'complete', 0, 0);
+    `)
+    seed.close()
+
+    const db = getChatDb()
+    expect(
+      (
+        db.prepare("SELECT value FROM chat_db_meta WHERE key='schema_version'").get() as {
+          value: string
+        }
+      ).value
+    ).toBe('13')
+    // Narrow CHECK gone, widened CHECK in place.
+    const sql = (
+      db
+        .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='ai_chat_sessions'")
+        .get() as { sql: string }
+    ).sql
+    expect(sql).toMatch(/'ai-sdk'/)
+    // Pre-existing session preserved verbatim through the rebuild (pure copy).
+    const preserved = getSession(7)
+    expect(preserved?.backend_kind).toBe('custom-api')
+    expect(preserved?.email_id).toBe(555)
+    expect(preserved?.anchor_type).toBe('email')
+    // Its message survived the sessions-table rebuild (FK-off discipline — DROP
+    // TABLE with FK on would have cascade-deleted it).
+    const msgs = listMessages(7)
+    expect(msgs).toHaveLength(1)
+    expect(msgs[0]?.content).toBe('hello pre-cutover')
+    // The regression the cutover unblocks: an ai-sdk session is now insertable.
+    const aiSdk = getOrCreateSession({ emailId: 999, backendKind: 'ai-sdk' })
+    expect(aiSdk.backend_kind).toBe('ai-sdk')
+  })
+
   test('opening a future-version DB refuses to load', () => {
     const db = getChatDb()
     db.prepare("UPDATE chat_db_meta SET value = '99' WHERE key = 'schema_version'").run()
@@ -302,7 +400,7 @@ describe('chat_db — path + schema bootstrap', () => {
           value: string
         }
       ).value
-    ).toBe('12')
+    ).toBe('13')
     // Simulate the crash window: roll the meta back to v3 while the physical
     // schema (content_offset + thinking columns, v4 table shape) stays at v6.
     db.prepare("UPDATE chat_db_meta SET value = '3' WHERE key = 'schema_version'").run()
@@ -314,7 +412,7 @@ describe('chat_db — path + schema bootstrap', () => {
     const ver = reopened
       .prepare("SELECT value FROM chat_db_meta WHERE key='schema_version'")
       .get() as { value: string }
-    expect(ver.value).toBe('12')
+    expect(ver.value).toBe('13')
     // Columns are still present exactly once (no duplication, no loss).
     const msgCols = reopened.prepare('PRAGMA table_info(ai_chat_messages)').all() as Array<{
       name: string
@@ -1046,7 +1144,7 @@ describe('chat_db — v3 → v4 migration (drop UNIQUE on ai_chat_sessions)', ()
     const ver = db.prepare("SELECT value FROM chat_db_meta WHERE key = 'schema_version'").get() as {
       value: string
     }
-    expect(ver.value).toBe('12')
+    expect(ver.value).toBe('13')
     // UNIQUE gone — CREATE TABLE SQL no longer contains UNIQUE clause on
     // (email_id, backend_kind, backend_agent_page_id).
     const tableSql = (
@@ -1189,7 +1287,7 @@ describe('chat_db — v4 → v5 migration (chat_tool_call.content_offset)', () =
       value: string
     }
     // v4 DB now climbs the whole ladder to v6 (content_offset added at v5).
-    expect(ver.value).toBe('12')
+    expect(ver.value).toBe('13')
     // Column present, pre-existing row reads NULL (degrade path in renderer).
     const cols = db.prepare('PRAGMA table_info(chat_tool_call)').all() as Array<{ name: string }>
     expect(cols.map((c) => c.name)).toContain('content_offset')
@@ -1251,7 +1349,7 @@ describe('chat_db — v5 → v6 migration (ai_chat_messages.thinking)', () => {
     const ver = db.prepare("SELECT value FROM chat_db_meta WHERE key = 'schema_version'").get() as {
       value: string
     }
-    expect(ver.value).toBe('12')
+    expect(ver.value).toBe('13')
     // Column present, pre-existing row reads NULL (no thinking block in renderer).
     const cols = db.prepare('PRAGMA table_info(ai_chat_messages)').all() as Array<{ name: string }>
     expect(cols.map((c) => c.name)).toContain('thinking')

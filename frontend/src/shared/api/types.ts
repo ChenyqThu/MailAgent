@@ -1176,7 +1176,11 @@ export interface AiApi {
 // the seam; types align by hand and are guarded by the schema-ish unit
 // tests in `tests/main/chat_db.test.ts` + `tests/components/useEmailChat.test.tsx`.
 
-export type ChatBackendKind = 'notion-agent' | 'custom-api'
+// 'ai-sdk' (P4 Phase 06a cutover) — a chat authored through the embedded AI SDK
+// Gateway. New email chats default to this kind; the panel routes the runtime per
+// session by backend_kind (ai-sdk → AI SDK Gateway, legacy custom-api →
+// ExternalStore, retired notion-agent → read-only). chat_db v13 widened the CHECK.
+export type ChatBackendKind = 'notion-agent' | 'custom-api' | 'ai-sdk'
 export type ChatMessageRole = 'user' | 'assistant' | 'system' | 'tool'
 export type ChatMessageStatus = 'pending' | 'streaming' | 'complete' | 'error' | 'aborted'
 

@@ -1,6 +1,6 @@
 """ai_chat.db 读 + 写访问 —— serve-api 远程 chat 端点（V2.1 阶段 2 读 + 阶段 3 3b-3 写）。
 
-ai_chat.db = 前端 owned schema（``frontend/src/electron/main/chat_db.ts``，CHAT_DB_VERSION 12）。
+ai_chat.db = 前端 owned schema（``frontend/src/electron/main/chat_db.ts``，CHAT_DB_VERSION 13）。
 v7（P2c）= chat session anchor：``email_id`` 改 nullable + 加 ``anchor_type``/``anchor_id`` 列
 （table CHECK 强制 email→两者非空 / general→两者 NULL，禁 emailId=0 sentinel）。
 v8（P2a，task 06-23）= agent_memory_kv provenance + priority：加 ``source_session_id`` /
@@ -24,6 +24,10 @@ v12（P4 Phase 04b，task 06-23 chat-panel high-risk send）= ``chat_tool_call.c
 实发内容，idempotency_key 是 Python send ledger 的一次性键），gateway 在 Electron main 经 chat_db.ts
 直写（仅 email_prepare_send 行）。读走 ``SELECT *`` 自动带回（其余/legacy 行 NULL），
 ``append_tool_call`` 不写此两列（既有写面不变，新列默认 NULL）。
+v13（P4 Phase 06a，task 06-23 chat-panel cutover）= ``ai_chat_sessions.backend_kind`` CHECK 放宽，
+加 ``'ai-sdk'``（经 AI SDK Gateway 创作的会话成为一等 backend_kind，面板按 session 路由 runtime）。
+chat_db.ts ``migrate`` 表重建放宽 CHECK；本文件纯镜像不建表，``get_or_create_session`` /
+``create_new_session`` 的 ``backend_kind: str`` 形参无独立 CHECK，故只需同步本头注释版本号。
 读函数（阶段 2）+ 写函数（3b-3）SQL **逐字镜像** chat_db.ts 对应函数，行形状对齐前端
 ``ChatSession`` / ``ChatSessionSummary`` / ``ChatMessage`` / ``ChatToolCall``（``model.ts``）：
   - 读：``listSessionsForEmail`` / ``listAllSessions`` / ``listMessages`` / ``listToolCallsForMessage``。

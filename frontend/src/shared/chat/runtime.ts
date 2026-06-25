@@ -39,6 +39,7 @@ import {
   type StartChatInput,
   type StreamSink
 } from './dispatcher'
+import type { BackendKind } from './model'
 import { ChatStreamEmitter } from './emitter'
 import { HttpChatPlatform, type HttpPlatformConfig } from './http_platform'
 import { runSearchAgent } from './search_agent'
@@ -369,7 +370,9 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
 
     // backend factory 注入 platform：custom-api 复用既有 factory；notion-agent = http backend
     // 薄包 platform.notionAgentStream（与 electron execa 同形供 harness 消费）。
-    const backends: Record<ChatBackendKind, ChatBackend> = {
+    // Partial：'ai-sdk'（P4 Phase 06a cutover）不经此 legacy dispatcher —— ai-sdk 会话直连内嵌
+    // AI SDK Gateway，故此处无 ai-sdk backend。getBackend 的 `if (!backend) throw` 兜底任何缺失 kind。
+    const backends: Partial<Record<ChatBackendKind, ChatBackend>> = {
       'custom-api': createCustomApiBackend(platform),
       'notion-agent': createHttpNotionAgentBackend(platform)
     }
@@ -398,12 +401,26 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
     return enginePromise
   }
 
+  /** P4 Phase 06a (cutover) — the legacy shared/chat engine serves only the two
+   *  legacy backend kinds; an 'ai-sdk' chat routes through the embedded AI SDK
+   *  Gateway and must never be dispatched here. Narrow ChatBackendKind → the
+   *  engine's BackendKind, failing loud if an ai-sdk turn is mis-routed to the
+   *  legacy engine (a programming error, never a user-reachable path). */
+  function assertLegacyBackendKind(kind: ChatBackendKind): BackendKind {
+    if (kind === 'ai-sdk') {
+      throw new Error(
+        'ai-sdk chats are served by the embedded AI SDK Gateway, not the legacy chat engine'
+      )
+    }
+    return kind
+  }
+
   function mapStart(opts: ChatStartOpts): StartChatInput {
     return {
       anchorType: opts.anchorType ?? 'email',
       emailId: opts.emailId ?? null,
       userMessage: opts.message,
-      backendKind: opts.backendKind,
+      backendKind: assertLegacyBackendKind(opts.backendKind),
       backendModel: opts.backendModel ?? null,
       backendAgentPageId: opts.backendAgentPageId ?? null,
       sessionId: opts.sessionId ?? null,
@@ -418,7 +435,7 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
       sessionId: opts.sessionId,
       editingMessageId: opts.editingMessageId,
       newContent: opts.newContent,
-      backendKind: opts.backendKind,
+      backendKind: assertLegacyBackendKind(opts.backendKind),
       backendModel: opts.backendModel ?? null,
       backendAgentPageId: opts.backendAgentPageId ?? null,
       // task 06-08-chat 需求 5 — same boolean → ThinkingOptions mapping as mapStart.
@@ -505,7 +522,7 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
       // _validate_session_opts 拒 general 携 emailId），createNewSession 无条件 INSERT 新 general 行。
       const engine = await ensureEngine()
       const base = {
-        backendKind: input.backendKind,
+        backendKind: assertLegacyBackendKind(input.backendKind),
         backendModel: input.backendModel ?? null,
         backendAgentPageId: input.backendAgentPageId ?? null
       }

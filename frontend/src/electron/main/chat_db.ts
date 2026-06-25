@@ -112,7 +112,16 @@ export type {
 // keyed on (so a replay never re-sends). Both NULL for every non-send tool / legacy row (additive
 // ALTER default). Plain additive ALTER, hasColumn idempotency guard (same discipline as v5..v11).
 // 🔴 bump 同步刷 src/chat/db.py 头注释 + test_chat.py seed DDL；NOT backend_lifecycle.EXPECTED_DB_VERSION.
-const CHAT_DB_VERSION = 12
+// v13 (P4 Phase 06a, task 06-23 chat-panel cutover) — widen ai_chat_sessions.backend_kind CHECK to
+// admit 'ai-sdk'. A chat authored through the AI SDK Gateway now persists as a first-class session
+// kind so the panel routes the runtime PER SESSION by backend_kind ('ai-sdk' → AI SDK Gateway,
+// legacy 'custom-api' → ExternalStore, 'notion-agent' → read-only). SQLite cannot ALTER a CHECK and
+// the old CHECK actively REJECTS a backend_kind='ai-sdk' INSERT, so this is a table REBUILD (same
+// FK-off discipline as v3→v4 / v6→v7 — DROP TABLE with foreign_keys=ON cascades through
+// ai_chat_messages and wipes the log). Pure CHECK widening: every existing row re-inserts
+// byte-identically (no value changes), so email/general anchoring + all history is unchanged.
+// 🔴 bump 同步刷 src/chat/db.py 头注释 + test_chat.py seed DDL；NOT backend_lifecycle.EXPECTED_DB_VERSION.
+const CHAT_DB_VERSION = 13
 
 export function resolveChatDbPath(): string {
   const fromEnv = process.env['AI_CHAT_DB_PATH']
@@ -173,6 +182,20 @@ function isV7SessionShape(db: Database.Database): boolean {
     .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='ai_chat_sessions'")
     .get() as { sql?: string } | undefined
   return /anchor_id\s*=\s*email_id/.test(row?.sql ?? '')
+}
+
+/** Phase 06a — is ai_chat_sessions already the widened v13 shape (backend_kind
+ *  CHECK admits 'ai-sdk')? The literal `'ai-sdk'` only appears in the v13 CREATE's
+ *  backend_kind CHECK, so its presence in the table's CREATE SQL is the marker.
+ *  Used by the v12→v13 re-entry guard (same discipline as isV7SessionShape) so the
+ *  destructive rebuild is never re-run on a DB whose table was already widened —
+ *  e.g. the artificial "meta rolled back after a committed rebuild" crash-resilience
+ *  re-entry would otherwise rebuild a second time. */
+function isV13SessionShape(db: Database.Database): boolean {
+  const row = db
+    .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='ai_chat_sessions'")
+    .get() as { sql?: string } | undefined
+  return /'ai-sdk'/.test(row?.sql ?? '')
 }
 
 /** P2c — one-time .pre-v7.bak snapshot before the destructive v6→v7 rebuild.
@@ -754,6 +777,80 @@ function migrate(db: Database.Database): void {
     } catch (err) {
       db.exec('ROLLBACK')
       throw err
+    }
+  }
+
+  // v12 → v13 — task 06-23 (chat-panel P4 Phase 06a cutover) ai-sdk backend_kind.
+  // Widen ai_chat_sessions.backend_kind CHECK to admit 'ai-sdk' (see the header note).
+  // Same out-of-transaction FK-off rebuild discipline as v3→v4 / v6→v7: the outer
+  // transaction opened at the top of migrate() always COMMITs before this point, and
+  // every v8..v12 block runs its own BEGIN/COMMIT, so no transaction is open here —
+  // PRAGMA foreign_keys can only change outside a transaction, and DROP TABLE with FK on
+  // would cascade through ai_chat_messages and wipe the message log. Re-entry guard
+  // (same discipline as the v6→v7 isV7SessionShape guard): a table that ALREADY carries
+  // 'ai-sdk' in its CHECK has been rebuilt — just advance meta rather than rebuild again
+  // (the artificial "meta rolled back" crash-resilience re-entry). ai_chat.db has its own
+  // version ladder; this bump does NOT touch backend_lifecycle.EXPECTED_DB_VERSION.
+  if (current < 13 && isV13SessionShape(db)) {
+    db.prepare(
+      "INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', '13')"
+    ).run()
+  } else if (current < 13) {
+    db.pragma('foreign_keys = OFF')
+    try {
+      db.exec('BEGIN IMMEDIATE')
+      try {
+        db.exec(`
+          CREATE TABLE ai_chat_sessions_v13 (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email_id INTEGER,
+            anchor_type TEXT NOT NULL DEFAULT 'email'
+              CHECK (anchor_type IN ('email', 'general')),
+            anchor_id INTEGER,
+            backend_kind TEXT NOT NULL
+              CHECK (backend_kind IN ('notion-agent', 'custom-api', 'ai-sdk')),
+            backend_model TEXT,
+            backend_agent_page_id TEXT,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            CHECK (
+              -- unchanged v7 anchor coupling: email rows pin anchor_id = email_id,
+              -- general rows keep both NULL (no sentinel).
+              (anchor_type = 'email' AND email_id IS NOT NULL AND anchor_id = email_id)
+              OR
+              (anchor_type = 'general' AND anchor_id IS NULL AND email_id IS NULL)
+            )
+          );
+          INSERT INTO ai_chat_sessions_v13
+            (id, email_id, anchor_type, anchor_id, backend_kind, backend_model,
+             backend_agent_page_id, created_at, updated_at)
+            SELECT id, email_id, anchor_type, anchor_id, backend_kind, backend_model,
+                   backend_agent_page_id, created_at, updated_at
+            FROM ai_chat_sessions;
+          DROP TABLE ai_chat_sessions;
+          ALTER TABLE ai_chat_sessions_v13 RENAME TO ai_chat_sessions;
+          DROP INDEX IF EXISTS idx_sessions_email;
+          CREATE INDEX idx_sessions_email ON ai_chat_sessions(email_id, updated_at DESC);
+          DROP INDEX IF EXISTS idx_sessions_anchor;
+          CREATE INDEX idx_sessions_anchor
+            ON ai_chat_sessions(anchor_type, anchor_id, updated_at DESC);
+        `)
+        db.prepare(
+          "INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', '13')"
+        ).run()
+        db.exec('COMMIT')
+      } catch (err) {
+        db.exec('ROLLBACK')
+        throw err
+      }
+      const violations = db.prepare('PRAGMA foreign_key_check').all() as unknown[]
+      if (violations.length > 0) {
+        throw new Error(
+          `chat_db v12→v13 migration left FK violations: ${JSON.stringify(violations)}`
+        )
+      }
+    } finally {
+      db.pragma('foreign_keys = ON')
     }
   }
 }
