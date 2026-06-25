@@ -52,6 +52,13 @@ export interface UseMailAgentAiSdkRuntimeOptions {
    *  carries thinking:true and the gateway injects providerOptions (model-family matrix). Off/undefined
    *  → omitted, byte-identical to the no-thinking path. Changing it rebuilds the transport (in deps). */
   thinking?: boolean
+  /** composer-parity C2 — resolve the per-send mention/attachment prefix (async: mention excerpts are
+   *  fetched). Called once per send; a non-empty result is sent as body.injectedContext (the gateway
+   *  prepends it to the model's last user message) and then onConsumeInjected clears the chips. Omitted
+   *  → no prefix. */
+  buildInjectedContext?: () => Promise<string>
+  /** composer-parity C2 — clear the mention/attachment chips after their prefix was captured for a send. */
+  onConsumeInjected?: () => void
 }
 
 /** Per-thread session-id latch (held in a ref by the hook). `id` is the resolved session for this
@@ -98,7 +105,9 @@ export function useMailAgentAiSdkRuntime(opts: UseMailAgentAiSdkRuntimeOptions):
     contextSnapshot,
     initialMessages,
     onEnsureSession,
-    thinking
+    thinking,
+    buildInjectedContext,
+    onConsumeInjected
   } = opts
 
   // Phase 06a — per-thread session-id latch. Seeded from the sessionId prop (reload → an existing id;
@@ -109,6 +118,14 @@ export function useMailAgentAiSdkRuntime(opts: UseMailAgentAiSdkRuntimeOptions):
   if (sessionId != null && latchRef.current.id !== sessionId) {
     latchRef.current = { id: sessionId, inflight: null }
   }
+
+  // composer-parity C2 — refs for the per-send injected-context builder + its post-send consumer. Held
+  // in refs (not transport useMemo deps) so adding/removing a chip doesn't rebuild the transport (which
+  // would drop the resumable adapter mid-thread); the body reads the latest each send.
+  const buildInjectedContextRef = useRef(buildInjectedContext)
+  buildInjectedContextRef.current = buildInjectedContext
+  const onConsumeInjectedRef = useRef(onConsumeInjected)
+  onConsumeInjectedRef.current = onConsumeInjected
 
   // Extra body fields ride along with `messages` on every send (AI SDK HttpChatTransportInitOptions
   // .body). Phase 06a: `body` is a FUNCTION (ai@6 Resolvable<object>) resolved per send, so the latch
@@ -126,11 +143,19 @@ export function useMailAgentAiSdkRuntime(opts: UseMailAgentAiSdkRuntimeOptions):
       api: `${gatewayBaseUrl}/api/ai/chat`,
       body: async () => {
         const sid = await resolveAiSdkSessionId(latchRef.current, sessionId, onEnsureSession)
+        // composer-parity C2 — resolve the mention/attachment prefix at send time (async: mention
+        // excerpts are fetched), send it as body.injectedContext (the gateway prepends it to the
+        // model's last user message; persistence keeps the original text), then clear the chips.
+        const injectedContext = buildInjectedContextRef.current
+          ? await buildInjectedContextRef.current()
+          : ''
+        if (injectedContext.length > 0) onConsumeInjectedRef.current?.()
         return {
           sessionId: sid ?? null,
           ...(model ? { model } : {}),
           ...(system ? { system } : {}),
           ...(thinking ? { thinking: true } : {}),
+          ...(injectedContext.length > 0 ? { injectedContext } : {}),
           ...(contextSnapshot ? { contextSnapshot } : {}),
           ...(anchor ? { anchor } : {}),
           ...(enabledSkills.length > 0 ? { options: { enabledSkills } } : {})

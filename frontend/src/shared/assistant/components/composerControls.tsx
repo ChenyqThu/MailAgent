@@ -13,6 +13,9 @@
 
 import { createContext, useContext } from 'react'
 
+import type { SearchHit } from '@shared/api/types'
+import type { ChatAttachment } from '@shared/lib/chat-attachments'
+
 export interface ChatComposerControls {
   // C1-① extended thinking. `supported` gates visibility (Claude-only); `enabled` is
   // the current toggle; onToggle flips + persists (panel owns the localStorage pref).
@@ -26,6 +29,16 @@ export interface ChatComposerControls {
   onModelChange: (model: string) => void
   /** Disable the picker (e.g. a turn is streaming) — mirror of legacy modelPickerDisabled. */
   modelPickerDisabled: boolean
+  // C2-① @mention — referenced-email chips. The panel resolves each chip's body excerpt at SEND time
+  // (buildMentionContext) and prepends an untrusted-framed block to the turn; chips clear after send.
+  mentions: ReadonlyArray<SearchHit>
+  onAddMention: (hit: SearchHit) => void
+  onRemoveMention: (internalId: number) => void
+  // C2-② attachments — local text/binary chips. Text content (≤5k chars) is prepended as an untrusted
+  // block; binary chips are metadata-only (the model acknowledges but can't read them).
+  attachments: ReadonlyArray<ChatAttachment>
+  onAddAttachment: (attachment: ChatAttachment) => void
+  onRemoveAttachment: (id: string) => void
 }
 
 const ChatComposerControlsContext = createContext<ChatComposerControls | null>(null)

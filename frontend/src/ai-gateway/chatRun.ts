@@ -13,6 +13,7 @@ import {
   stepCountIs,
   streamText,
   type LanguageModel,
+  type ModelMessage,
   type StreamTextResult,
   type ToolSet,
   type UIMessageStreamOnFinishCallback
@@ -52,6 +53,30 @@ export function lastUserMessage(messages: MailAgentUIMessage[]): MailAgentUIMess
     if (messages[i]?.role === 'user') return messages[i]
   }
   return null
+}
+
+/** composer-parity C2 — prepend the renderer's mention/attachment injected context to the LAST user
+ *  message of the MODEL-message array (NOT rawMessages, so persistence keeps the original user text).
+ *  String content → string prefix; array content → an extra leading text part. The prefix already
+ *  carries untrusted-content framing (buildMentionContext / buildAttachmentBlock from the renderer),
+ *  so a mentioned email body can't masquerade as a system directive. Empty prefix → unchanged. */
+export function prependInjectedContext(messages: ModelMessage[], prefix: string): ModelMessage[] {
+  if (prefix.length === 0) return messages
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]
+    if (m?.role !== 'user') continue
+    const content = m.content
+    if (typeof content === 'string') {
+      const next = { ...m, content: `${prefix}${content}` } as ModelMessage
+      return messages.map((mm, idx) => (idx === i ? next : mm))
+    }
+    if (Array.isArray(content)) {
+      const next = { ...m, content: [{ type: 'text', text: prefix }, ...content] } as ModelMessage
+      return messages.map((mm, idx) => (idx === i ? next : mm))
+    }
+    break
+  }
+  return messages
 }
 
 /** Monotonic-ish id generator for response message ids (transient — reload re-stamps the persisted
@@ -152,6 +177,12 @@ export async function prepareChatRun(
       status: 400,
       body: { error: 'E_INVALID_ARG', hint: 'messages[] not convertible to model messages' }
     }
+  }
+  // composer-parity C2 — prepend the renderer's mention/attachment context to the model's last user
+  // message (rawMessages stay original → persistence is clean). The prefix carries untrusted framing.
+  const injectedContext = typeof body.injectedContext === 'string' ? body.injectedContext : ''
+  if (injectedContext.length > 0) {
+    modelMessages = prependInjectedContext(modelMessages, injectedContext)
   }
 
   // Build the tools bound to a fresh per-request audit collector (closure). No tools → text-only

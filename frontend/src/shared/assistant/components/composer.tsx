@@ -5,19 +5,21 @@
 // right). While the thread is running the Send swaps to a Cancel (stop generating)
 // via ThreadPrimitive.If. ComposerPrimitive.Send is auto-disabled on empty input.
 //
-// composer-parity: the model picker + thinking toggle read panel-owned state via
-// useChatComposerControls(). When no provider is mounted (controls === null — the
-// read-only notion-agent thread, or a bare test render) the toolbar shows only
-// send/cancel, byte-identical in behaviour to the Phase 01 text-only composer.
-// @mention / attachment chrome lands in C2 (same controls context).
+// composer-parity: the model picker + thinking toggle + @mention + attachment chips all read
+// panel-owned state via useChatComposerControls(). When no provider is mounted (controls === null —
+// the read-only notion-agent thread, or a bare test render) the toolbar shows only send/cancel,
+// byte-identical in behaviour to the Phase 01 text-only composer.
 
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ArrowUp, Brain, Cpu, X } from 'lucide-react'
+import { ArrowUp, AtSign, Brain, Cpu, Paperclip, X } from 'lucide-react'
 import { ComposerPrimitive, ThreadPrimitive } from '@assistant-ui/react'
 
 import { cn } from '@shared/lib/cn'
 import { HoverTip } from '@shared/components/ui/HoverTip'
+import { MentionPopover } from '@shared/components/chat/MentionPopover'
+import { formatAttachmentSize, readAttachment } from '@shared/lib/chat-attachments'
+import { toastError } from '@shared/state/toast'
 
 import { useChatComposerControls, type ChatComposerControls } from './composerControls'
 
@@ -171,11 +173,146 @@ function ComposerThinkingToggle({
   )
 }
 
+/** C2-① @mention — AtSign button + MentionPopover (FTS email search). A selected hit becomes a chip
+ *  (controls.onAddMention); the panel resolves its body excerpt + prepends an untrusted block at send. */
+function ComposerMentionButton({
+  controls
+}: {
+  controls: ChatComposerControls
+}): React.JSX.Element {
+  const { t } = useTranslation()
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="relative">
+      <HoverTip text={t('chat.mention.title', { defaultValue: 'Reference an email' })} side="top">
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          aria-label={t('chat.mention.title', { defaultValue: 'Reference an email' })}
+          aria-expanded={open}
+          className={cn(
+            ICON_BTN,
+            open
+              ? 'bg-coral/10 text-coral active:scale-[0.96]'
+              : 'text-ink-fg-2 hover:bg-ink-4 hover:text-ink-fg active:scale-[0.96]'
+          )}
+        >
+          <AtSign size={13} strokeWidth={2} />
+        </button>
+      </HoverTip>
+      <MentionPopover
+        open={open}
+        onClose={() => setOpen(false)}
+        onSelect={(hit) => {
+          controls.onAddMention(hit)
+          setOpen(false)
+        }}
+      />
+    </div>
+  )
+}
+
+/** C2-② attachment — Paperclip button + hidden file input. Each picked file → readAttachment
+ *  (FileReader text for text-class files, metadata-only otherwise) → chip (controls.onAddAttachment). */
+function ComposerAttachmentButton({
+  controls
+}: {
+  controls: ChatComposerControls
+}): React.JSX.Element {
+  const { t } = useTranslation()
+  const inputRef = useRef<HTMLInputElement>(null)
+  const onPick = async (files: FileList | null): Promise<void> => {
+    if (!files || files.length === 0) return
+    for (const file of Array.from(files)) {
+      try {
+        controls.onAddAttachment(await readAttachment(file))
+      } catch {
+        toastError(t('chat.attachment.readFailed', { defaultValue: 'Could not read attachment' }))
+      }
+    }
+  }
+  return (
+    <>
+      <HoverTip text={t('chat.attachment.add', { defaultValue: 'Attach a file' })} side="top">
+        <button
+          type="button"
+          onClick={() => inputRef.current?.click()}
+          aria-label={t('chat.attachment.add', { defaultValue: 'Attach a file' })}
+          className={cn(
+            ICON_BTN,
+            'text-ink-fg-2 hover:bg-ink-4 hover:text-ink-fg active:scale-[0.96]'
+          )}
+        >
+          <Paperclip size={13} strokeWidth={2} />
+        </button>
+      </HoverTip>
+      <input
+        ref={inputRef}
+        type="file"
+        multiple
+        hidden
+        onChange={(e) => {
+          void onPick(e.target.files)
+          e.target.value = ''
+        }}
+      />
+    </>
+  )
+}
+
+/** C2 chip stack — referenced-email + attachment chips above the input, each with an X to remove.
+ *  Nothing renders when both lists are empty (byte-identical to no chips). */
+function ComposerChips({ controls }: { controls: ChatComposerControls }): React.JSX.Element | null {
+  if (controls.mentions.length === 0 && controls.attachments.length === 0) return null
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {controls.mentions.map((m) => (
+        <span
+          key={`m-${m.internal_id}`}
+          className="inline-flex max-w-[200px] items-center gap-1 rounded-md border border-ink-border bg-ink-3 px-2 py-1 text-meta text-ink-fg-1"
+        >
+          <AtSign size={11} strokeWidth={2} className="shrink-0 text-coral" />
+          <span className="truncate">{m.subject || `#${m.internal_id}`}</span>
+          <button
+            type="button"
+            onClick={() => controls.onRemoveMention(m.internal_id)}
+            aria-label="remove"
+            className="shrink-0 text-ink-fg-3 hover:text-ink-fg"
+          >
+            <X size={11} strokeWidth={2.5} />
+          </button>
+        </span>
+      ))}
+      {controls.attachments.map((a) => (
+        <span
+          key={`a-${a.id}`}
+          className="inline-flex max-w-[200px] items-center gap-1 rounded-md border border-ink-border bg-ink-3 px-2 py-1 text-meta text-ink-fg-1"
+        >
+          <Paperclip size={11} strokeWidth={2} className="shrink-0 text-ink-fg-3" />
+          <span className="truncate">{a.filename}</span>
+          <span className="shrink-0 font-mono text-micro text-ink-fg-3">
+            {formatAttachmentSize(a.sizeBytes)}
+          </span>
+          <button
+            type="button"
+            onClick={() => controls.onRemoveAttachment(a.id)}
+            aria-label="remove"
+            className="shrink-0 text-ink-fg-3 hover:text-ink-fg"
+          >
+            <X size={11} strokeWidth={2.5} />
+          </button>
+        </span>
+      ))}
+    </div>
+  )
+}
+
 export function ThreadComposer(): React.JSX.Element {
   const { t } = useTranslation()
   const controls = useChatComposerControls()
   return (
     <ComposerPrimitive.Root className="flex flex-col gap-2 border-t border-[var(--hairline)] bg-ink-2 px-3 py-2.5">
+      {controls && <ComposerChips controls={controls} />}
       <ComposerPrimitive.Input
         placeholder={t('chat.composer.placeholder')}
         aria-label={t('chat.composer.placeholder')}
@@ -190,6 +327,8 @@ export function ThreadComposer(): React.JSX.Element {
       <div className="flex items-center gap-1">
         {controls && (
           <>
+            <ComposerMentionButton controls={controls} />
+            <ComposerAttachmentButton controls={controls} />
             <ComposerModelPicker controls={controls} />
             <ComposerThinkingToggle controls={controls} />
           </>
