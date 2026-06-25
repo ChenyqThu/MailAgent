@@ -7,17 +7,38 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
+// Phase 06a (cutover) — the static ACAO '*' was dropped here; the SSE response headers now merge
+// corsHeadersFor(req.headers.origin) at writeHead time so a REMOTE cross-origin page can't read the
+// stream (architecture §13.8.5/§13.11.6/§13.12.7/§13.13.5). writeJson responses (/health, /config)
+// never carried an ACAO and stay that way — the Electron renderer (file:// → 'null' origin / dev →
+// loopback) reaches the loopback gateway without needing one. The same-machine loopback-token (the
+// CSRF defense vs a malicious local page) is the remote-web-surface phase's job; this is the Origin leg.
 export const SSE_HEADERS = {
   'Content-Type': 'text/event-stream; charset=utf-8',
   'Cache-Control': 'no-cache, no-transform',
-  Connection: 'keep-alive',
-  // loopback same-origin in production; opening CORS only eases harness/browser direct connection.
-  // 🔴 Tighten Origin/loopback-token before any remote web surface (architecture §13.8.5/§13.11.6 —
-  // batched with cutover 06); the AG-UI mirror inherits the same loopback-only trust model.
-  'Access-Control-Allow-Origin': '*'
+  Connection: 'keep-alive'
 } as const
 
 export const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' } as const
+
+/** Loopback-only CORS for the embedded gateway. The gateway is a same-machine loopback server reached
+ *  by the Electron renderer (file:// → Origin 'null', dev → http://localhost:<vite>); reflect the
+ *  Origin only when it is loopback / file / null / absent, so a REMOTE cross-origin page cannot read a
+ *  response. A non-loopback http(s) Origin gets no ACAO → the browser blocks the read. Replaces the
+ *  blanket ACAO '*'. NB: this is the Origin leg only — it does not stop a malicious SAME-machine
+ *  loopback page (which shares the loopback origin); that needs the loopback-token deferred to the
+ *  remote-web-surface phase. The high-risk write/send tools already carry the HMAC + Python guards. */
+const LOOPBACK_ORIGIN_RE = /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/
+
+export function corsHeadersFor(origin: string | undefined): Record<string, string> {
+  // No Origin header → not a CORS request (same-origin / server-to-server) → nothing to add.
+  if (origin == null) return {}
+  if (origin === 'null' || origin === 'file://' || LOOPBACK_ORIGIN_RE.test(origin)) {
+    return { 'Access-Control-Allow-Origin': origin, Vary: 'Origin' }
+  }
+  // Remote / cross-origin → omit ACAO; the browser blocks the response read.
+  return { Vary: 'Origin' }
+}
 
 /** Max request body size. Phase 06-parity raised this from 64KB: session reload sends the full
  *  message history alongside a ~12k email-body context snapshot, so a legit chat turn can exceed

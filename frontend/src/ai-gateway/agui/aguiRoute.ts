@@ -19,7 +19,14 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 
 import type { AiGatewayConfig } from '../config'
 import { makePersistOnFinish, makeIdGenerator, prepareChatRun } from '../chatRun'
-import { isBodyTooLarge, readJsonBody, writeJson, writeSse, SSE_HEADERS } from '../httpUtil'
+import {
+  corsHeadersFor,
+  isBodyTooLarge,
+  readJsonBody,
+  writeJson,
+  writeSse,
+  SSE_HEADERS
+} from '../httpUtil'
 import type { MailAgentUIMessage } from '@shared/assistant/uiMessage'
 import { AgUiEventType, type AgUiEvent } from './events'
 import { createAgUiEventMapper } from './eventMapper'
@@ -133,7 +140,7 @@ export async function handleAguiChat(
         : 'thread-anon'
   const runId = makeRunId()
 
-  res.writeHead(200, SSE_HEADERS)
+  res.writeHead(200, { ...SSE_HEADERS, ...corsHeadersFor(req.headers.origin) })
 
   // Track whether a terminal event (RUN_FINISHED / RUN_ERROR) was emitted so we never double-close
   // and always close exactly once.

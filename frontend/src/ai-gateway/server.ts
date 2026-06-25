@@ -22,7 +22,15 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 
 import type { AiGatewayConfig } from './config'
 import { makeIdGenerator, makePersistOnFinish, prepareChatRun } from './chatRun'
-import { delay, isBodyTooLarge, readJsonBody, writeJson, writeSse, SSE_HEADERS } from './httpUtil'
+import {
+  corsHeadersFor,
+  delay,
+  isBodyTooLarge,
+  readJsonBody,
+  writeJson,
+  writeSse,
+  SSE_HEADERS
+} from './httpUtil'
 import { handleAguiChat } from './agui/aguiRoute'
 
 const GATEWAY_VERSION = '0.2.0'
@@ -47,7 +55,7 @@ async function handleEchoStream(req: IncomingMessage, res: ServerResponse): Prom
   req.on('close', () => {
     aborted = true
   })
-  res.writeHead(200, SSE_HEADERS)
+  res.writeHead(200, { ...SSE_HEADERS, ...corsHeadersFor(req.headers.origin) })
   writeSse(res, { type: 'start', route: 'echo-stream' })
   const tokens = prompt.match(/\S+\s*|\s+/g) ?? [prompt]
   for (const tok of tokens) {
@@ -95,7 +103,10 @@ async function handleChat(
   run.result.pipeUIMessageStreamToResponse(res, {
     originalMessages: run.rawMessages,
     generateMessageId: makeIdGenerator(),
-    onFinish: makePersistOnFinish(cfg, run)
+    onFinish: makePersistOnFinish(cfg, run),
+    // Phase 06a — loopback-only CORS on the main chat stream too (the AI SDK pipe sets no ACAO by
+    // default; reflect the renderer's loopback / null origin, omit for a remote cross-origin page).
+    headers: corsHeadersFor(req.headers.origin)
   })
 }
 
@@ -174,7 +185,7 @@ export function createAiGatewayServer(cfg: AiGatewayConfig): Server {
 
     if (method === 'OPTIONS') {
       res.writeHead(204, {
-        'Access-Control-Allow-Origin': '*',
+        ...corsHeadersFor(req.headers.origin),
         'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
         'Access-Control-Allow-Headers': 'Content-Type'
       })
