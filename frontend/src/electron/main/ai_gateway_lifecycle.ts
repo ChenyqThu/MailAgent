@@ -190,13 +190,17 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
   // Phase 04a — MAILAGENT_A2UI_TOOL_CARDS gates the rich tool cards. Backend side it (a) stamps
   // the A2UI render payload into the write-tool audit (ui_payload_json) and (b) is the toggle
   // the renderer mirrors (per-flag vite define) to mount the cards. Off → byte-identical to 03b.
-  const a2uiEnabled = envBool('MAILAGENT_A2UI_TOOL_CARDS', false)
+  // Phase 06a — DEFAULT now follows the NEW_SESSION_DEFAULT master (mirrors the renderer's
+  // isA2uiToolCardsEnabled) so the cutover ships the rich cards by default; an explicit env wins.
+  const a2uiEnabled = envBool('MAILAGENT_A2UI_TOOL_CARDS', masterNewSessionDefaultOn())
   // Phase 04b — MAILAGENT_AI_SDK_SEND_TOOL gates the high-risk email_prepare_send tool. The HMAC
   // signing secret for its approval token is the per-session local API token (getLocalApiToken),
   // which the Python serve-api also knows (env MAILAGENT_LOCAL_API_TOKEN) → no new key. Off
   // (default) → no send tool, byte-identical to 04a. Must be on together with the gateway +
   // write tools to take effect (buildGatewayTools only adds it under writeToolsEnabled).
-  const sendToolEnabled = envBool('MAILAGENT_AI_SDK_SEND_TOOL', false)
+  // Phase 06a — DEFAULT follows the master too (cutover ships the send tool, behind its double
+  // guard + human approval); an explicit MAILAGENT_AI_SDK_SEND_TOOL still wins (independent rollback).
+  const sendToolEnabled = envBool('MAILAGENT_AI_SDK_SEND_TOOL', masterNewSessionDefaultOn())
   // Phase 05 — MAILAGENT_AG_UI_MIRROR gates the AG-UI interop mirror endpoint (POST /api/ai/agui/
   // chat). Off (default) → the route is not registered, byte-identical to 04b. It is a pure旁路: it
   // reuses the SAME streamText + tools + double-guard approval as /api/ai/chat (no new write path),
@@ -264,13 +268,14 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
       : undefined,
     // Factory: the gateway builds the tools per request bound to a fresh audit collector
     // (closure). Read tools always; the five approval-gated write tools only when
-    // MAILAGENT_AI_SDK_WRITE_TOOLS is on (default off → byte-identical to 03a read-only).
+    // MAILAGENT_AI_SDK_WRITE_TOOLS is on (Phase 06a: default follows the cutover master; vitest /
+    // no-define → off → byte-identical to 03a read-only).
     buildTools: (collector) =>
       buildGatewayTools(
         {
           domain,
           kosTimeDecayEnabled: envBool('MAILAGENT_KOS_TIME_DECAY_ENABLED', true),
-          writeToolsEnabled: envBool('MAILAGENT_AI_SDK_WRITE_TOOLS', false),
+          writeToolsEnabled: envBool('MAILAGENT_AI_SDK_WRITE_TOOLS', masterNewSessionDefaultOn()),
           approvalGuard,
           a2uiEnabled,
           // Phase 04b — the send tool needs the approval guard (write tools) + the signing secret

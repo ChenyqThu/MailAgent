@@ -265,7 +265,10 @@ function createPopoutWindow(emailId: number): void {
   attachExternalLinkGuard(popout.webContents)
 
   // V2.1 3c-3: popout 窗口同样需 apiPort (它也跑 ChatRuntime → loopback serve-api)。
-  const search = `popout=1&email=${emailId}&apiPort=${resolveApiPort()}`
+  // Phase 06a cutover fix: popout 也必须带 aiGatewayPort (与主窗 createWindow:146 一致)，否则
+  // popout 的 resolveAiGatewayBaseUrl()=null → aiSdkEnabled=false → backend 降 custom-api →
+  // useEmailChat 过滤不到 ai-sdk 会话 = 会话清空 + history 空 (dogfood ①②)。
+  const search = `popout=1&email=${emailId}&apiPort=${resolveApiPort()}&aiGatewayPort=${resolveAiGatewayPort()}`
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     popout.loadURL(`${process.env['ELECTRON_RENDERER_URL']}?${search}`)
   } else {
