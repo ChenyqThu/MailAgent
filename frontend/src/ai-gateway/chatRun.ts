@@ -89,7 +89,7 @@ export function makeIdGenerator(): () => string {
 
 /** A prepared streamText run + the metadata both endpoints need to encode + persist it. */
 export interface PreparedChatRun {
-  result: StreamTextResult<ToolSet, never>
+  result: StreamTextResult<ToolSet, never, never>
   rawMessages: MailAgentUIMessage[]
   sessionId: number | null
   modelId: string
@@ -207,7 +207,7 @@ export async function prepareChatRun(
             : {})
         }
       : {})
-  }) as StreamTextResult<ToolSet, never>
+  }) as StreamTextResult<ToolSet, never, never>
 
   return {
     ok: true,

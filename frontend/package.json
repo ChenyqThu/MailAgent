@@ -44,9 +44,9 @@
     "zustand": "^5.0.13"
   },
   "devDependencies": {
-    "@ai-sdk/anthropic": "^3.0.85",
-    "@assistant-ui/react": "^0.14.23",
-    "@assistant-ui/react-ai-sdk": "^1.3.37",
+    "@ai-sdk/anthropic": "^4.0.0",
+    "@assistant-ui/react": "^0.14.24",
+    "@assistant-ui/react-ai-sdk": "^1.3.38",
     "@axe-core/playwright": "^4.11.3",
     "@electron-toolkit/eslint-config-prettier": "^3.0.0",
     "@electron-toolkit/eslint-config-ts": "^3.1.0",
@@ -83,7 +83,7 @@
     "@types/which": "^3.0.4",
     "@vitejs/plugin-react": "^5.1.1",
     "@vitest/coverage-v8": "^4.1.6",
-    "ai": "^6.0.208",
+    "ai": "^7.0.0",
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
     "autoprefixer": "^10.5.0",

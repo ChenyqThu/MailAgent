@@ -19,8 +19,7 @@
 // 🔴 read tools NEVER set `needsApproval` (silent tier). Approval lands with write
 //    tools in phase-03b/04b.
 
-import { tool, type Tool } from 'ai'
-import type { z } from 'zod'
+import { tool, type FlexibleSchema, type Tool } from 'ai'
 
 import { DomainError } from '../python/domainClient'
 import { type ApprovalGuard, type ApprovalRecord, type ApprovalRisk } from '../security/approval'
@@ -28,6 +27,17 @@ import { type ApprovalGuard, type ApprovalRecord, type ApprovalRisk } from '../s
 // resolve tsconfig paths at runtime) can load the gateway tools; vite/vitest/tsc resolve it
 // identically. a2ui.ts is pure TS (types + zod, no react) — safe for the gateway core.
 import { buildToolA2UIPayload } from '../../shared/assistant/tools/a2ui'
+
+// v7 adaptation — auditedTool/auditedWriteTool/auditedSendTool are GENERIC over the tool input type I
+// and hand tool() a FlexibleSchema<I> wrapper. v7's tool() infers INPUT from the CONCRETE inputSchema;
+// a generic wrapper collapses that inference to `never`, so neither a bare tool(...) (→ never) nor an
+// explicit tool<I>(...) (→ I must satisfy the RUNTIME_CONTEXT/Context constraint) type-checks. This
+// thin helper keeps the generic wrappers + their execute/needsApproval bodies type-checked against I,
+// casting ONLY at the tool() call boundary — behaviour is identical to a direct tool() call. The
+// audited wrappers are the SSoT for I; every call site passes a concrete zod schema so I is sound.
+function makeTool(def: unknown): Tool {
+  return tool(def as never) as Tool
+}
 
 /** One finished tool call, ready to persist into chat_tool_call. The gateway
  *  collects these per request and the Electron wrapper writes them (appendToolCall
@@ -117,12 +127,12 @@ export function auditedReadTool<I>(
   opts: {
     name: string
     description: string
-    inputSchema: z.ZodType<I>
+    inputSchema: FlexibleSchema<I>
     run: (input: I, signal: AbortSignal | undefined) => Promise<unknown>
   },
   collector: GatewayToolAuditCollector
 ): Tool {
-  return tool({
+  return makeTool({
     description: opts.description,
     inputSchema: opts.inputSchema,
     execute: async (input: I, { toolCallId, abortSignal }) => {
@@ -180,7 +190,7 @@ export function auditedWriteTool<I>(
   opts: {
     name: string
     description: string
-    inputSchema: z.ZodType<I>
+    inputSchema: FlexibleSchema<I>
     // preview/edit only — the high-risk 'blocking' send tool uses auditedSendTool (below), whose
     // audit tier maps to 'edit'. This keeps confirmationTier within the chat_tool_call CHECK set.
     risk: Exclude<ApprovalRisk, 'blocking'>
@@ -206,7 +216,7 @@ export function auditedWriteTool<I>(
     return payload ? safeJson(payload) : undefined
   }
 
-  return tool({
+  return makeTool({
     description: opts.description,
     inputSchema: opts.inputSchema,
     // First run: register the approval record (keep-first) and require approval. The
@@ -308,7 +318,7 @@ export function auditedSendTool<I>(
   opts: {
     name: string
     description: string
-    inputSchema: z.ZodType<I>
+    inputSchema: FlexibleSchema<I>
     /** Top-level send fields the user may edit on the SendApprovalCard (identity fields like
      *  internal_id are pinned). e.g. ['to','cc','bcc','subject','body_markdown']. */
     editableFields: readonly string[]
@@ -334,7 +344,7 @@ export function auditedSendTool<I>(
     return payload ? safeJson(payload) : undefined
   }
 
-  return tool({
+  return makeTool({
     description: opts.description,
     inputSchema: opts.inputSchema,
     needsApproval: (input, { toolCallId }) => {

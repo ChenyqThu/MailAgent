@@ -168,10 +168,11 @@ export function useMailAgentAiSdkRuntime(opts: UseMailAgentAiSdkRuntimeOptions):
 
   return useChatRuntime({
     transport,
-    // Phase 06 — seed prior history when reloading an existing session. Omitted when empty so a
-    // fresh thread starts blank (Phase 02 behaviour). The cast narrows to the runtime's UIMessage.
-    ...(initialMessages && initialMessages.length > 0
-      ? { messages: initialMessages as MailAgentUIMessage[] }
-      : {})
+    // Phase 06 — seed prior history when reloading an existing session. Omitted when empty so a fresh
+    // thread starts blank (Phase 02 behaviour). v7: useChatRuntime types `messages` against @ai-sdk/
+    // react's UIMessage, which is no longer structurally interchangeable with ai's UIMessage (our
+    // MailAgentUIMessage) at the type level — cast through `never` (the runtime shape is identical; the
+    // gateway persists/streams the same UIMessage JSON regardless).
+    ...(initialMessages && initialMessages.length > 0 ? { messages: initialMessages as never } : {})
   })
 }
