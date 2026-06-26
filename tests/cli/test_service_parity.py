@@ -101,6 +101,51 @@ def test_set_flags_matches_golden(cli_env, seeded_db):
     assert "not_found" not in _flag_data_from_result(result)
 
 
+def test_set_flags_emits_flag_changed_sse(cli_env, seeded_db, monkeypatch):
+    """#4 乐观回显: set_flags 写 SQLite 后立即发 email.flag_changed SSE → useEventBridge
+    invalidate ['emails']/['mailboxes']/['email',id] → 所有视图(含智能信箱 [已旗标])从
+    已同步写入的 SQLite 秒刷新, 不必等 outbox.done(fanout 完成可能几秒~几十秒)。"""
+    import src.events.publisher as publisher
+    from src.services.mail_write import MailWriteService
+
+    events: list = []
+    monkeypatch.setattr(
+        publisher,
+        "safe_publish",
+        lambda event_type, **kw: events.append((event_type, kw)),
+    )
+
+    MailWriteService(_service_ctx(seeded_db)).set_flags(
+        [12345], is_flagged=True, actor=_cli_actor(), allow_concurrent=True
+    )
+
+    flag_events = [e for e in events if e[0] == "email.flag_changed"]
+    assert len(flag_events) == 1, f"应发恰好 1 个 email.flag_changed, 实得 {events!r}"
+    _type, kw = flag_events[0]
+    assert kw["internal_id"] == 12345
+    assert kw["data"]["is_flagged"] is True
+    assert kw["source"] == "mail_write.set_flags"
+
+
+def test_set_flags_not_found_no_sse(cli_env, seeded_db, monkeypatch):
+    """#4: 不存在的 id → 不写 SQLite → 不应发 flag_changed SSE (避免误刷)。"""
+    import src.events.publisher as publisher
+    from src.services.mail_write import MailWriteService
+
+    events: list = []
+    monkeypatch.setattr(
+        publisher,
+        "safe_publish",
+        lambda event_type, **kw: events.append((event_type, kw)),
+    )
+
+    MailWriteService(_service_ctx(seeded_db)).set_flags(
+        [99999], is_read=True, actor=_cli_actor(), allow_concurrent=True
+    )
+
+    assert [e for e in events if e[0] == "email.flag_changed"] == []
+
+
 def test_set_flags_not_found_matches_golden(cli_env, seeded_db):
     from src.services.mail_write import MailWriteService
 

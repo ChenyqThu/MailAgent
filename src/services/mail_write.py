@@ -580,6 +580,22 @@ class MailWriteService:
                 source=_OUTBOX_SOURCE,
             )
             updated.append(iid)
+            # #4 乐观回显: 立即发 SSE → useEventBridge invalidate ['emails']/['mailboxes']/
+            # ['email',id] → 所有视图(含智能信箱 [已旗标])从已同步写入的 SQLite 秒刷新,
+            # 不必等 outbox.done(fanout 派发 davmail/Notion 完成, 可能几秒~几十秒)。
+            # 在 service 层发(非 storage update_local_flags): 只覆盖用户发起的写, 不对
+            # reverse_sync / fanout echo-prevention / 批量回填等内部写喷事件。
+            try:
+                from src.events.publisher import safe_publish
+
+                safe_publish(
+                    "email.flag_changed",
+                    internal_id=iid,
+                    data={"is_read": new_read, "is_flagged": new_flagged},
+                    source="mail_write.set_flags",
+                )
+            except Exception:
+                pass
             outbox_entries.append(
                 {
                     "internal_id": iid,
