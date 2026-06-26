@@ -1206,6 +1206,45 @@ export function EmailList(): React.ReactElement {
     })
   }, [rows, rowHeights])
 
+  // #2 搜索跳转列表联动: 命令面板选搜索结果 → setActive(id,{navTarget:true}) 设 activeId
+  // + navTargetId。正文(EmailDetail)按 id 独立加载已能跳, 但列表此前从不滚动定位到该行
+  // (只靠 bundleSelected 高亮, 在视口外看不见)。这里用 useLayoutEffect (与上面手风琴锚定
+  // 同相位, 在 render-body 的 clearNavTarget 微任务之前同步跑 → navTargetId 此刻仍在,
+  // 避开竞态) 把目标行平滑滚入视口 (几何法 rowTopOfId, 不读 DOM)。目标尚未分页到 rows
+  // 时 rowTopOfId=null 不滚 + navTargetId 不清 → 列表续拉(escalate 到 800)后 rows 变化
+  // 重跑本 effect, 命中即滚 ("加载后跳转")。已在视口内则不滚 (smart align 免多余跳动)。
+  // 超出 800 行的极旧邮件不会自动载入 (需 by-id union 补拉, 属边缘场景, 暂留 TODO)。
+  useLayoutEffect(() => {
+    if (navTargetId === null) return
+    const el = listRef.current?.element
+    if (!el) return
+    const top = rowTopOfId(rows, rowHeights, navTargetId)
+    if (top === null) return
+    const viewTop = el.scrollTop
+    const viewBottom = viewTop + el.clientHeight
+    if (top >= viewTop && top <= viewBottom - 40) return
+    const target = Math.max(0, top - el.clientHeight / 2)
+    const reduce =
+      typeof window !== 'undefined' &&
+      window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true
+    if (reduce) {
+      // 命令式回滚到目标; 规则误判 listRef.element 不可变。
+      // eslint-disable-next-line react-hooks/immutability
+      el.scrollTop = target
+      return
+    }
+    isAnchoringRef.current = true
+    gsap.to(el, {
+      scrollTo: { y: target },
+      duration: DUR.base,
+      ease: 'standard',
+      overwrite: 'auto',
+      onComplete: () => {
+        isAnchoringRef.current = false
+      }
+    })
+  }, [navTargetId, rows, rowHeights])
+
   const priActive = !allPrioritiesSelected()
   const catActive = !allCategoriesSelected()
   const filterActive = filter !== 'all' || priActive || catActive
