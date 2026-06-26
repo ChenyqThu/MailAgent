@@ -1150,6 +1150,20 @@ export function updateSessionTitle(sessionId: number, title: string): void {
   getChatDb().prepare('UPDATE ai_chat_sessions SET title = ? WHERE id = ?').run(title, sessionId)
 }
 
+/** Phase 10b — the first user message's text for a session (the auto-title generation input). Null
+ *  when the session has no user message yet. Mirrors the listAllSessions first_user_message subquery
+ *  (oldest user row by created_at, id tiebreak). */
+export function getFirstUserText(sessionId: number): string | null {
+  const row = getChatDb()
+    .prepare(
+      `SELECT content FROM ai_chat_messages
+         WHERE session_id = ? AND role = 'user'
+         ORDER BY created_at ASC, id ASC LIMIT 1`
+    )
+    .get(sessionId) as { content: string } | undefined
+  return row?.content ?? null
+}
+
 // ── messages ────────────────────────────────────────────────────────────
 
 export function appendMessage(input: AppendMessageInput): ChatMessage {

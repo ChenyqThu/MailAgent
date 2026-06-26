@@ -10,6 +10,7 @@
 
 import {
   convertToModelMessages,
+  generateText,
   stepCountIs,
   streamText,
   type LanguageModel,
@@ -251,4 +252,57 @@ export function makePersistOnFinish(
       console.error('[ai-gateway] persistTurn failed (turn streamed OK)', err)
     }
   }
+}
+
+// ── Phase 10b — configurable LLM auto-title ────────────────────────────────────────────────────────
+
+/** Clamp a model-generated title: strip wrapping quotes / a leading "Title:" label, collapse internal
+ *  whitespace to single spaces, drop a trailing period, and cap the length. Empty after cleaning →
+ *  null (the caller then leaves the session untitled so the first-message preview keeps showing). */
+export function sanitizeSessionTitle(raw: string): string | null {
+  let t = raw.trim()
+  // strip surrounding quotes (ASCII + CJK) the model sometimes wraps the title in
+  t = t.replace(/^["'「『]+/, '').replace(/["'」』]+$/, '')
+  // a model may prefix "Title:" / "标题：" — drop a short leading label
+  t = t.replace(/^\s*(title|标题)\s*[:：]\s*/i, '')
+  t = t.replace(/\s+/g, ' ').trim()
+  t = t.replace(/[.。]+$/, '').trim()
+  if (t.length === 0) return null
+  return t.length > 60 ? t.slice(0, 60).trim() : t
+}
+
+/** The auto-title prompt: a SHORT topic title in the user's own language, no quotes, no end label. The
+ *  first user message is clipped (a title needs only the gist, not a 12k-char body). */
+export function buildTitlePrompt(firstUserText: string): string {
+  const clipped = firstUserText.length > 1000 ? firstUserText.slice(0, 1000) : firstUserText
+  return [
+    'Generate a SHORT title (at most 6 words) summarizing the topic of the user message below.',
+    'Reply with ONLY the title text — no surrounding quotes, no trailing punctuation, no prefix label.',
+    'Write the title in the SAME language as the user message.',
+    '',
+    'User message:',
+    '<<<',
+    clipped,
+    '>>>'
+  ].join('\n')
+}
+
+/** Generate a session title from its first user message via the configured model factory. Non-streaming
+ *  generateText; returns the cleaned title or null (empty / clean-to-empty). Output is a handful of
+ *  tokens (a title), so maxOutputTokens is small — deliberately NOT the chat ceiling. Throws on an
+ *  upstream error (the caller maps it to 502); the title is best-effort UX, never blocks the chat. */
+export async function generateSessionTitle(
+  cfg: AiGatewayConfig,
+  firstUserText: string,
+  modelId: string,
+  abortSignal?: AbortSignal
+): Promise<string | null> {
+  const factory = resolveModelFactory(cfg)
+  const { text } = await generateText({
+    model: factory(modelId),
+    prompt: buildTitlePrompt(firstUserText),
+    maxOutputTokens: 64,
+    abortSignal
+  })
+  return sanitizeSessionTitle(text)
 }

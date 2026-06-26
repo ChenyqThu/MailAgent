@@ -21,8 +21,22 @@ import { useUpstreamModels, useEnabledModels, FALLBACK_MODELS } from '@shared/ho
 import { applyEnvPatch, useEnvStore } from '@shared/state/env'
 import { Button } from '@shared/components/ui/button'
 import { Popover, PopoverTrigger, PopoverContent } from '@shared/components/ui/popover'
+import { Switch } from '@shared/components/ui/switch'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from '@shared/components/ui/select'
 import { toastError, toastSuccess } from '@shared/state/toast'
 import type { PromptInfo, PromptSlot } from '@shared/api/types'
+import {
+  readAutoTitleSettings,
+  writeAutoTitleMode,
+  writeAutoTitleModel,
+  type AutoTitleMode
+} from '@shared/lib/autoTitle'
 
 import { PageHeader } from '../parts/PageHeader'
 import { Section } from '../parts/Section'
@@ -38,6 +52,16 @@ export function AiTab(): React.ReactElement {
   const api = useMailApi()
   const qc = useQueryClient()
   const [testing, setTesting] = React.useState(false)
+
+  // Phase 10b — configurable LLM auto-title (renderer-local localStorage; default off = first-message
+  // preview). Seeded once from storage; each change writes through immediately (the agent view reads
+  // the same keys at turn-complete). Only the desktop ai-sdk gateway path acts on it.
+  const [autoTitleMode, setAutoTitleMode] = React.useState<AutoTitleMode>(
+    () => readAutoTitleSettings().mode
+  )
+  const [autoTitleModel, setAutoTitleModel] = React.useState<string>(
+    () => readAutoTitleSettings().model
+  )
 
   // dynamic-models (main provider — for LLM_MODEL / LLM_FALLBACK_MODELS / enabled list)
   const {
@@ -503,6 +527,62 @@ export function AiTab(): React.ReactElement {
             { value: '1h', label: t('settings.ai.cache.ttl.1h') }
           ]}
         />
+      </Section>
+
+      <Section
+        title={t('settings.ai.autoTitle.title', { defaultValue: '会话自动标题' })}
+        helper={t('settings.ai.autoTitle.helper', {
+          defaultValue: '为通用 Agent 会话自动生成标题；关闭时用首条消息摘要作标题。'
+        })}
+      >
+        <Row
+          label={t('settings.ai.autoTitle.enabledLabel', { defaultValue: 'AI 自动标题' })}
+          helper={t('settings.ai.autoTitle.enabledHelper', {
+            defaultValue: '开启后首轮对话结束，用所选模型生成标题并写入；手动改名始终优先保留。'
+          })}
+        >
+          <Switch
+            checked={autoTitleMode === 'llm'}
+            onCheckedChange={(checked) => {
+              const next: AutoTitleMode = checked ? 'llm' : 'off'
+              setAutoTitleMode(next)
+              writeAutoTitleMode(next)
+            }}
+          />
+        </Row>
+        {autoTitleMode === 'llm' && (
+          <Row
+            label={t('settings.ai.autoTitle.modelLabel', { defaultValue: '标题模型' })}
+            helper={t('settings.ai.autoTitle.modelHelper', {
+              defaultValue: '生成标题用的模型，建议用快速便宜的小模型（如 haiku）。'
+            })}
+          >
+            <Select
+              value={autoTitleModel}
+              onValueChange={(v) => {
+                setAutoTitleModel(v)
+                writeAutoTitleModel(v)
+              }}
+            >
+              <SelectTrigger className="w-[200px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {(() => {
+                  const base = enabledModels.length > 0 ? enabledModels : FALLBACK_MODELS
+                  const withOrphan = base.includes(autoTitleModel)
+                    ? base
+                    : [...base, autoTitleModel]
+                  return withOrphan.map((id) => (
+                    <SelectItem key={id} value={id}>
+                      {id}
+                    </SelectItem>
+                  ))
+                })()}
+              </SelectContent>
+            </Select>
+          </Row>
+        )}
       </Section>
 
       <CustomAiSection />

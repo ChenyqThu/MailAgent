@@ -3,6 +3,9 @@ venv/
 env/
 ENV/
 
+# Local UI reference (xulux base demo copied out of ~/Downloads for the chat redesign; never tracked)
+.xulux-ref/
+
 # Database and runtime data
 data/
 # Python

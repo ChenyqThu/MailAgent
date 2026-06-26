@@ -29,7 +29,14 @@ import { buildGatewayTools } from '../../ai-gateway/tools'
 import { ApprovalGuard } from '../../ai-gateway/security/approval'
 import { buildToolA2UIPayload } from '../../shared/assistant/tools/a2ui'
 import { extractTextFromUIMessage } from '@shared/assistant/uiMessage'
-import { appendMessage, appendToolCall, updateToolCall } from './chat_db'
+import {
+  appendMessage,
+  appendToolCall,
+  getFirstUserText,
+  getSession,
+  updateSessionTitle,
+  updateToolCall
+} from './chat_db'
 import { getLlmApiKey, getLlmBaseUrl, getLlmModel } from './llm_settings'
 import { resolveApiPort } from './backend_lifecycle'
 import { getLocalApiToken } from './local_token'
@@ -284,7 +291,18 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
           sendSigningSecret: getLocalApiToken()
         },
         collector
-      )
+      ),
+    // Phase 10b — configurable LLM auto-title. getTitleContext reads ai_chat.db (current title + first
+    // user message); a non-null title = already-named (manual rename / prior auto-title) so the endpoint
+    // skips regeneration → manual titles never overwritten. saveSessionTitle persists via
+    // updateSessionTitle (no updated_at bump → history order stable). Always wired here; the renderer's
+    // opt-in setting (default off) is the real gate — it only POSTs /api/ai/title when enabled.
+    getTitleContext: (sessionId) => {
+      const session = getSession(sessionId)
+      if (!session) return null
+      return { title: session.title ?? null, firstUserText: getFirstUserText(sessionId) }
+    },
+    saveSessionTitle: (sessionId, title) => updateSessionTitle(sessionId, title)
   })
   _handle = handle
   const healthy = await pollHealth(handle.port)

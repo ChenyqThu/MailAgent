@@ -1554,6 +1554,14 @@
         "label": "Context 页面 ID",
         "helper": "Email Agent Context markdown 页;30min TTL 缓存"
       },
+      "autoTitle": {
+        "title": "会话自动标题",
+        "helper": "为通用 Agent 会话自动生成标题；关闭时用首条消息摘要作标题。",
+        "enabledLabel": "AI 自动标题",
+        "enabledHelper": "开启后首轮对话结束，用所选模型生成标题并写入；手动改名始终优先保留。",
+        "modelLabel": "标题模型",
+        "modelHelper": "生成标题用的模型，建议用快速便宜的小模型（如 haiku）。"
+      },
       "cache": {
         "title": "Prompt 缓存",
         "helper": "Sonnet 4.6 ≥ 2048 token 时自动命中; OpenAI 协议无缓存",

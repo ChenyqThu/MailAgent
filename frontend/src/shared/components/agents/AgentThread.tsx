@@ -8,6 +8,8 @@
 // Built on the same headless ThreadPrimitive as the right pane but a SEPARATE component (independent
 // demo styling) — it renders inside the same AssistantRuntimeProvider (no singleton, safe).
 
+import { useEffect, useRef } from 'react'
+
 import { AuiIf, ThreadPrimitive, useAuiState, type AssistantState } from '@assistant-ui/react'
 import { ArrowDown } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -39,12 +41,16 @@ interface AgentThreadProps {
   readOnly?: boolean
   /** Legacy pending-confirmation ConfirmToolDialog (custom-api fallback), scrolls with the stream. */
   pendingSlot?: React.ReactNode
+  /** Phase 10b — fires on the running→idle edge after an assistant reply (a turn just completed). The
+   *  parent (ai-sdk path only) uses it to trigger configurable LLM auto-title. Omitted → no watcher. */
+  onTurnComplete?: () => void
 }
 
 export function AgentThread({
   quickActions,
   readOnly = false,
-  pendingSlot
+  pendingSlot,
+  onTurnComplete
 }: AgentThreadProps): React.JSX.Element {
   const isEmpty = useAuiState(isNewChatView)
   return (
@@ -52,6 +58,7 @@ export function AgentThread({
       className="flex min-h-0 flex-1 flex-col bg-ink-1 text-ink-fg"
       style={{ ['--thread-max-width' as string]: '44rem' }}
     >
+      {onTurnComplete && <TurnCompleteWatcher onComplete={onTurnComplete} />}
       <ThreadPrimitive.Viewport
         className={cn(
           'scrollbar-thin relative flex min-h-0 flex-1 flex-col overflow-y-auto px-4 pt-4',
@@ -96,6 +103,24 @@ function AgentWelcome(): React.JSX.Element {
       <p className="mt-2 text-aux text-ink-fg-3">{t('agentView.emptyHint')}</p>
     </div>
   )
+}
+
+/** Phase 10b — fires `onComplete` on the running→idle edge once an assistant reply exists (a turn just
+ *  completed). Renders nothing; lives inside the runtime provider so it can read thread state. The
+ *  parent dedups per session, so firing every turn is harmless (the gateway is idempotent on an
+ *  already-titled session). */
+function TurnCompleteWatcher({ onComplete }: { onComplete: () => void }): null {
+  const isRunning = useAuiState((s) => s.thread.isRunning)
+  const hasAssistant = useAuiState((s) => s.thread.messages.some((m) => m.role === 'assistant'))
+  const prevRunningRef = useRef(isRunning)
+  useEffect(() => {
+    // running→idle edge with an assistant reply = a turn just completed. onComplete is in deps (the
+    // parent memoizes it); a changing identity re-runs the effect but can't false-fire — prevRunning
+    // already equals isRunning by then, so the edge condition is false.
+    if (prevRunningRef.current && !isRunning && hasAssistant) onComplete()
+    prevRunningRef.current = isRunning
+  }, [isRunning, hasAssistant, onComplete])
+  return null
 }
 
 function AgentScrollToBottom(): React.JSX.Element {

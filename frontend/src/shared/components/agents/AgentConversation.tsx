@@ -14,7 +14,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from '@tanstack/react-router'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Settings } from 'lucide-react'
 
 import type {
@@ -33,6 +33,7 @@ import { type BackendChoice } from '@shared/components/chat/BackendSelector'
 import { backendSupportsThinking } from '@shared/components/chat/backend_thinking'
 import { useEnabledModels } from '@shared/hooks/useLlmModels'
 import { buildAttachmentBlock, type ChatAttachment } from '@shared/lib/chat-attachments'
+import { readAutoTitleSettings } from '@shared/lib/autoTitle'
 
 import { MailAgentRuntimeProvider } from '@shared/assistant/runtime/MailAgentRuntimeProvider'
 import { AiSdkRuntimeProvider } from '@shared/assistant/runtime/AiSdkRuntimeProvider'
@@ -151,6 +152,7 @@ export function AgentConversation({ chat, activeItem }: AgentConversationProps):
   const { t } = useTranslation()
   const navigate = useNavigate()
   const mailApi = useMailApi()
+  const queryClient = useQueryClient()
 
   // ── runtime resolution (ai-sdk gateway vs legacy degrade) ──────────────────
   const gatewayBaseUrl = useMemo(() => resolveAiGatewayBaseUrl(), [])
@@ -360,6 +362,46 @@ export function AgentConversation({ chat, activeItem }: AgentConversationProps):
     return session.id
   }, [mailApi, model, chat])
 
+  // Phase 10b — turn-complete handler (AgentThread's running→idle edge). Two jobs:
+  //  (1) refresh the unified history on a session's FIRST completed turn so a brand-new conversation
+  //      appears — the eager-create invalidate fires BEFORE the gateway persists the turn's messages
+  //      (onFinish), so listAllSessions (WHERE EXISTS messages) misses it until this post-persist
+  //      refresh (redesign review MED-4). Runs in BOTH modes (deduped per session so a multi-turn chat
+  //      doesn't refetch every turn).
+  //  (2) configurable LLM auto-title (opt-in): generate + persist once per session via the gateway,
+  //      then refresh again so the title shows live. The gateway is idempotent (skips an already-titled
+  //      session → a manual rename is never overwritten). Off mode (default) → no title call. ai-sdk only.
+  const turnCompleteSeenRef = useRef<Set<number>>(new Set())
+  const autoTitlePostedRef = useRef<Set<number>>(new Set())
+  const handleTurnComplete = useCallback((): void => {
+    const sid = chat.activeSessionId
+    if (sid == null) return
+    if (!turnCompleteSeenRef.current.has(sid)) {
+      turnCompleteSeenRef.current.add(sid)
+      void queryClient.invalidateQueries({ queryKey: ['chat', 'allSessions'] })
+    }
+    if (gatewayBaseUrl == null) return
+    const { mode, model: titleModel } = readAutoTitleSettings()
+    if (mode !== 'llm') return
+    if (autoTitlePostedRef.current.has(sid)) return
+    autoTitlePostedRef.current.add(sid)
+    void fetch(`${gatewayBaseUrl}/api/ai/title`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sessionId: sid, model: titleModel })
+    })
+      .then((r) => (r.ok ? (r.json() as Promise<{ title?: string | null }>) : null))
+      .then((data) => {
+        if (data && data.title) {
+          void queryClient.invalidateQueries({ queryKey: ['chat', 'allSessions'] })
+        }
+      })
+      .catch(() => {
+        // network / gateway hiccup — allow a retry on the next turn-complete edge.
+        autoTitlePostedRef.current.delete(sid)
+      })
+  }, [chat.activeSessionId, gatewayBaseUrl, queryClient])
+
   // ── legacy (degrade / custom-api) adapter callbacks ────────────────────────
   const onSend = useCallback(
     async (text: string): Promise<void> => {
@@ -497,7 +539,10 @@ export function AgentConversation({ chat, activeItem }: AgentConversationProps):
               initialMessages={initialMessages}
               onEnsureSession={onEnsureSession}
             >
-              <AgentThread quickActions={<AgentQuickActions />} />
+              <AgentThread
+                quickActions={<AgentQuickActions />}
+                onTurnComplete={handleTurnComplete}
+              />
             </AiSdkRuntimeProvider>
           )
         ) : (

@@ -141,4 +141,16 @@ export interface AiGatewayConfig {
     | Promise<GatewaySystemPromptConfig | null>
     | GatewaySystemPromptConfig
     | null
+  /** Phase 10b (configurable LLM auto-title) — read the auto-title context for a session: its current
+   *  title and the first user message text. A non-null `title` means the session is already named
+   *  (manual rename OR a prior auto-title), so POST /api/ai/title returns it unchanged and skips
+   *  regeneration → a manually-edited title is NEVER overwritten. `firstUserText` is the generation
+   *  input. Returns null on a missing session. The Electron wrapper reads ai_chat.db (getSession +
+   *  getFirstUserText). Omitted → POST /api/ai/title returns 501 (auto-title not wired). */
+  getTitleContext?: (
+    sessionId: number
+  ) => { title: string | null; firstUserText: string | null } | null
+  /** Phase 10b — persist a generated session title (Electron wrapper → chat_db.updateSessionTitle,
+   *  which does NOT bump updated_at so the history order stays stable). Omitted → 501. */
+  saveSessionTitle?: (sessionId: number, title: string) => void
 }

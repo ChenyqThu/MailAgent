@@ -1554,6 +1554,14 @@
         "label": "Context page ID",
         "helper": "Email Agent Context markdown page; 30-min TTL cache"
       },
+      "autoTitle": {
+        "title": "Auto chat title",
+        "helper": "Auto-generate titles for general agent chats; off uses the first message as the title.",
+        "enabledLabel": "AI auto-title",
+        "enabledHelper": "After the first turn, generate a title with the chosen model and save it; a manual rename always wins.",
+        "modelLabel": "Title model",
+        "modelHelper": "Model used to generate the title — a fast, cheap small model (e.g. haiku) is recommended."
+      },
       "cache": {
         "title": "Prompt cache",
         "helper": "Sonnet 4.6 auto-hits at ≥ 2048 tokens; OpenAI protocol has no cache",

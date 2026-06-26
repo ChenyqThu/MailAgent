@@ -21,7 +21,12 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 
 import type { AiGatewayConfig } from './config'
-import { makeIdGenerator, makePersistOnFinish, prepareChatRun } from './chatRun'
+import {
+  generateSessionTitle,
+  makeIdGenerator,
+  makePersistOnFinish,
+  prepareChatRun
+} from './chatRun'
 import {
   corsHeadersFor,
   delay,
@@ -187,6 +192,69 @@ async function handleApprovalResolve(
 }
 
 /**
+ * `POST /api/ai/title` — Phase 10b configurable LLM auto-title. The renderer POSTs { sessionId,
+ * model? } after the FIRST turn of a brand-new conversation WHEN the user enabled LLM auto-title in
+ * settings (default off → first-message preview is the title, no call here). The gateway reads the
+ * session's first user message (cfg.getTitleContext), generates a short title via the chosen model
+ * (generateSessionTitle), persists it (cfg.saveSessionTitle), and returns it so the renderer refreshes
+ * the unified history → the title updates live. IDEMPOTENT: a session that already has a title (manual
+ * rename OR a prior auto-title) is returned unchanged (skipped) so a manual title is never overwritten.
+ * 501 when auto-title isn't wired (read-only config); 503 no key; 400 bad arg; 404 no user message.
+ */
+async function handleTitle(
+  req: IncomingMessage,
+  res: ServerResponse,
+  cfg: AiGatewayConfig
+): Promise<void> {
+  if (!cfg.getTitleContext || !cfg.saveSessionTitle) {
+    writeJson(res, 501, { error: 'E_NOT_IMPLEMENTED', hint: 'auto-title not enabled' })
+    return
+  }
+  if (!cfg.apiKey || cfg.apiKey.length === 0) {
+    writeJson(res, 503, { error: 'E_NO_LLM_KEY', hint: '设置 LLM_API_KEY 后重试' })
+    return
+  }
+  const body = await readJsonBody(req)
+  const sessionId =
+    typeof body.sessionId === 'number' && Number.isInteger(body.sessionId) ? body.sessionId : null
+  if (sessionId == null) {
+    writeJson(res, 400, { error: 'E_INVALID_ARG', hint: 'sessionId required' })
+    return
+  }
+  const ctx = cfg.getTitleContext(sessionId)
+  if (!ctx) {
+    writeJson(res, 404, { error: 'E_NOT_FOUND', hint: 'session not found' })
+    return
+  }
+  // Idempotent: an already-titled session (manual rename / prior auto-title) is never regenerated.
+  if (ctx.title && ctx.title.trim().length > 0) {
+    writeJson(res, 200, { title: ctx.title, skipped: true })
+    return
+  }
+  if (!ctx.firstUserText || ctx.firstUserText.trim().length === 0) {
+    writeJson(res, 404, { error: 'E_NOT_FOUND', hint: 'session has no user message' })
+    return
+  }
+  const model = typeof body.model === 'string' && body.model.length > 0 ? body.model : cfg.model
+  const controller = new AbortController()
+  req.on('close', () => controller.abort())
+  try {
+    const title = await generateSessionTitle(cfg, ctx.firstUserText, model, controller.signal)
+    if (title) {
+      cfg.saveSessionTitle(sessionId, title)
+      writeJson(res, 200, { title })
+    } else {
+      // The model returned nothing usable — leave the session untitled (preview keeps showing).
+      writeJson(res, 200, { title: null, skipped: true })
+    }
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e)
+    console.error('[ai-gateway] /api/ai/title failed', e)
+    writeJson(res, 502, { error: 'E_UPSTREAM', hint: message })
+  }
+}
+
+/**
  * Create (but do not listen) the gateway HTTP server. Pure factory — all external
  * deps arrive via cfg, so the Electron main can embed it and the Node harness can
  * drive it directly.
@@ -250,6 +318,13 @@ export function createAiGatewayServer(cfg: AiGatewayConfig): Server {
     // Phase 04a — edit-tier approval side-channel (DraftReplyCard edits before approve).
     if (method === 'POST' && path === '/api/ai/approval/resolve') {
       void handleApprovalResolve(req, res, cfg)
+      return
+    }
+
+    // Phase 10b — configurable LLM auto-title (renderer POSTs after the first turn when enabled).
+    // Registered unconditionally; cfg.getTitleContext/saveSessionTitle gate it (501 when not wired).
+    if (method === 'POST' && path === '/api/ai/title') {
+      void handleTitle(req, res, cfg)
       return
     }
 
