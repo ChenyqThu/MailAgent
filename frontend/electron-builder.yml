@@ -84,7 +84,10 @@ mac:
         - arm64
   minimumSystemVersion: '12.0'
   extendInfo:
-    NSDocumentsFolderUsageDescription: MailAgent reads the local SQLite database under your Documents folder.
+    # #7: 移除 NSDocumentsFolderUsageDescription —— 打包态数据库/.env 都在 userData
+    # (~/Library/Application Support/...), 不读 ~/Documents。配套把 cli_runner
+    # getProjectRoot() 打包态也锚 userData (见 cli_runner.ts), 彻底不碰 TCC 保护的文稿目录,
+    # 消除「每次安装后弹读取文稿授权框」(ad-hoc 签名重装重置 TCC → 首次访问重弹)。
     NSDownloadsFolderUsageDescription: MailAgent saves email attachments to your Downloads folder when you export them.
     NSAppleEventsUsageDescription: MailAgent uses Mail.app and Notion automation events to create draft replies and open email pages.
 dmg:

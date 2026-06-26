@@ -69,6 +69,16 @@ function packagedResourcesBin(): string {
 export function getProjectRoot(): string {
   const fromEnv = process.env['MAILAGENT_PROJECT_ROOT']
   if (fromEnv && fromEnv.length > 0) return fromEnv
+  // #7 打包态不碰 ~/Documents: 该目录是 macOS TCC 保护区, ad-hoc 签名每次重装会重置
+  // TCC → 首次访问就弹「读取文稿中数据库」授权框 (每装一次弹一次)。打包态 .env / 数据根
+  // 都在 userData (db.ts resolveDataRoot + Python get_project_root 经注入的
+  // MAILAGENT_PROJECT_ROOT=userData 同源), 故锚 userData; dev 保持 ~/Documents/MailAgent
+  // 零变更。与 resolveBundledResourcesRoot 同款 try/catch (单测 mock app 无 isPackaged)。
+  try {
+    if (app.isPackaged) return app.getPath('userData')
+  } catch {
+    /* 单测 mock app 可能无 isPackaged / getPath → 落 dev 默认 */
+  }
   return join(homedir(), 'Documents', 'MailAgent')
 }
 
