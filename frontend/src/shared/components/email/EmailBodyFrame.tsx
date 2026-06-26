@@ -172,6 +172,14 @@ const BODY_CSS = `
     padding: 6px 10px; font-size: 13px;
     word-break: break-word;
   }
+  /* #8 宽表格横向滚动: 后处理把每个 <table> 包进 .mailagent-table-scroll 容器。
+     容器 max-width:100% 填满 body 宽 (不撑破 body — body overflow:hidden 只裁自身),
+     overflow-x:auto 让超宽表格在容器内左右滚动。**刻意保留上面 table{max-width:100%}
+     不动** (零回归): 可 reflow 的 newsletter 布局表 (width="600" 等) 照常缩到 100%,
+     min-content < 容器 → 无溢出无滚动条; 含不可压缩宽内容的数据表 min-content 超过
+     100% (max-width 压不过 min-content) → 在容器内溢出 → 出横向滚动条 (取代旧的
+     body overflow:hidden 直接截断看不到)。容器高度=表格高度, 不影响 scrollHeight 测高。 */
+  .mailagent-table-scroll { max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
   hr {
     border: 0;
     border-top: 1px solid rgb(var(--ink-border));
@@ -537,6 +545,18 @@ function BodyIframe({ srcDoc, translations, onImageClick }: BodyIframeProps): Re
         requestAnimationFrame(() => measure())
       })
       ro.observe(body)
+      // #8 宽表格横向滚动: 把每个 <table> 包进 overflow-x:auto 容器 (见 BODY_CSS
+      // .mailagent-table-scroll)。超宽数据表格不再被 body overflow:hidden 截断, 而是
+      // 在容器内左右滚动。幂等 (已包裹则跳过), 在 measure() 前跑使测高基于最终布局。
+      doc!.querySelectorAll('table').forEach((tbl) => {
+        const parent = tbl.parentElement
+        if (parent && parent.classList.contains('mailagent-table-scroll')) return
+        const wrap = doc!.createElement('div')
+        wrap.className = 'mailagent-table-scroll'
+        tbl.replaceWith(wrap)
+        wrap.appendChild(tbl)
+      })
+
       // Sprint 18 — every <img> gets:
       //   1. load/error listener → re-measure height when async decode lands
       //   2. click listener → open lightbox preview with resolved src
