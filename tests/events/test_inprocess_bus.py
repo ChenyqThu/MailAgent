@@ -158,3 +158,37 @@ class TestSingleton:
         a = get_inprocess_bus()
         reset_inprocess_bus_for_tests()
         assert get_inprocess_bus() is not a
+
+
+# ============================================================
+# bind_loop 幂等 / rebind 安全 (codex MEDIUM 1)
+# ============================================================
+
+class TestBindLoop:
+    def test_bind_loop_idempotent_same_loop(self):
+        """相同 loop 重复 bind → 幂等, 不清 subscriber."""
+        loop = asyncio.new_event_loop()
+        try:
+            bus = InProcessEventBus()
+            bus.bind_loop(loop)
+            bus.subscribe()
+            bus.bind_loop(loop)  # 幂等
+            assert len(bus._subscribers) == 1
+        finally:
+            loop.close()
+
+    def test_bind_loop_rebind_clears_stale_subscribers(self):
+        """重绑到不同 loop + 有 subscriber → 清旧 subscriber (防跨 loop 投递)."""
+        l1 = asyncio.new_event_loop()
+        l2 = asyncio.new_event_loop()
+        try:
+            bus = InProcessEventBus()
+            bus.bind_loop(l1)
+            bus.subscribe()
+            assert len(bus._subscribers) == 1
+            bus.bind_loop(l2)  # 重绑新 loop → 清旧 subscriber
+            assert len(bus._subscribers) == 0
+            assert bus._loop is l2
+        finally:
+            l1.close()
+            l2.close()

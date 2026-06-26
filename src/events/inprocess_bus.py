@@ -12,8 +12,10 @@
 - ``publish()`` 是同步函数 (``safe_publish`` 本身 sync), 可能从 loop 线程 / 别的线程 /
   serve-api 进程调。``asyncio.Queue`` 非线程安全 → 统一走 ``loop.call_soon_threadsafe``
   投递, 对所有边界 (无 loop / 跨线程 / loop 关闭) 都安全。
-- per-subscriber 有界 ``Queue`` fanout; 满则 drop —— 事件是 invalidation hint
-  (前端对 ``email.synced`` 宽 invalidate), 丢了下次事件或 60s poll 补, 绝不阻塞 loop。
+- per-subscriber 有界 ``Queue`` fanout; 满则 drop。这是一条 **lossy bus**: 丢事件不阻塞
+  loop。当前事件 (email.synced / llm.* / job.*) 要么是 invalidation hint (前端宽 invalidate),
+  要么有查询/轮询兜底 (如 job 走 ``/jobs/{id}`` 轮询)。**新增状态类事件必须自带查询/轮询
+  兜底**, 不能假设 bus 不丢。
 """
 from __future__ import annotations
 
@@ -32,7 +34,21 @@ class InProcessEventBus:
         self._max_queue = max_queue
 
     def bind_loop(self, loop: asyncio.AbstractEventLoop) -> None:
-        """由 ``start_sse_server()`` 在 serve loop 上调一次, 捕获投递目标 loop。"""
+        """由 ``start_sse_server()`` 在 serve loop 上调, 捕获投递目标 loop。
+
+        幂等 (相同 loop 重复调无副作用)。若重绑到**不同** loop 且仍有 subscriber:
+        说明 SSE server 在同进程被重启到新 loop —— 旧 subscriber 的 ``asyncio.Queue``
+        绑在旧 loop 上, 继续向其投递会跨 loop 唤醒 (不安全), 故清空它们 + warning
+        (旧连接由其自身 handler 的 finally 收尾)。
+        """
+        if self._loop is loop:
+            return
+        if self._loop is not None and self._subscribers:
+            logger.warning(
+                f"[inprocess-bus] rebind to a new loop, clearing "
+                f"{len(self._subscribers)} stale subscriber(s) bound to the old loop"
+            )
+            self._subscribers.clear()
         self._loop = loop
 
     def subscribe(self) -> "asyncio.Queue[str]":

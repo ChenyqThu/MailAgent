@@ -177,7 +177,9 @@ def safe_publish(
     try:
         from src.config import config
 
-        if config.redis_url:
+        # 归一化: 与 sse_server._get_redis_url() 的 .strip() 同口径 —— 否则
+        # REDIS_URL="   " 会让 publisher 走 Redis(silent fail) 而 SSE 走进程内总线 → 断流。
+        if (config.redis_url or "").strip():
             get_publisher().publish(
                 event_type, internal_id=internal_id, data=data, source=source
             )

@@ -192,6 +192,32 @@ class TestSafePublishAndSingleton:
         bus_payload.pop("ts")
         assert redis_payload == bus_payload
 
+    def test_safe_publish_whitespace_redis_url_routes_to_bus(self, monkeypatch):
+        """REDIS_URL 纯空格 → 归一化为空 → 走进程内总线 (与 sse_server _get_redis_url
+        的 .strip() 同口径; codex MEDIUM 2: 防 publisher/SSE 分裂断流)."""
+        from src.config import config
+        monkeypatch.setattr(config, "redis_url", "   ")
+        with patch.object(EventPublisher, "publish") as mock_pub, \
+             patch.object(InProcessEventBus, "publish") as mock_bus:
+            safe_publish("email.new", internal_id=1)
+            mock_bus.assert_called_once()
+            mock_pub.assert_not_called()
+
+    def test_redis_publish_exact_json_bytes(self, monkeypatch):
+        """Redis publish payload 精确字节 golden — 钉死 key order / ensure_ascii /
+        default=str / 分隔符 (codex LOW 2: 字节级不变只靠 parsed parity 抓不住)."""
+        import src.events.publisher as pub_mod
+        monkeypatch.setattr(pub_mod.time, "time", lambda: 1234567890.5)
+        p = EventPublisher(redis_url="redis://x", redis_db=2)
+        mock = MagicMock(return_value=1)
+        p._client = MagicMock(publish=mock)
+        p.publish("email.synced", internal_id=7, data={"k": "中"}, source="s")
+        published = mock.call_args.args[1]
+        assert published == (
+            '{"event_type": "email.synced", "ts": 1234567890.5, '
+            '"internal_id": 7, "data": {"k": "中"}, "source": "s"}'
+        )
+
 
 # ============================================================
 # close()

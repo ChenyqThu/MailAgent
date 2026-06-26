@@ -180,3 +180,32 @@ async def test_end_to_end_safe_publish_to_sse(monkeypatch):
         resp.close()
     finally:
         await c.close()
+
+
+@pytest.mark.asyncio
+async def test_production_start_sse_server_e2e(monkeypatch):
+    """通过 start_sse_server 真实启动 (含 bind_loop), safe_publish → SSE client 收到,
+    不手工 bind —— 覆盖 production 启动路径 (codex LOW 1)."""
+    import aiohttp
+
+    from src.config import config
+    from src.events.publisher import safe_publish
+
+    monkeypatch.setattr(sse, "_LOCAL_API_TOKEN", "")
+    monkeypatch.setattr(sse, "_get_redis_url", lambda: None)
+    monkeypatch.setattr(config, "redis_url", "")
+    reset_inprocess_bus_for_tests()
+    runner = await sse.start_sse_server(host="127.0.0.1", port=19200)
+    try:
+        assert get_inprocess_bus()._loop is not None  # production 路径已 bind_loop
+        async with aiohttp.ClientSession() as sess:
+            async with sess.get("http://127.0.0.1:19200/api/events/stream") as resp:
+                assert resp.status == 200
+                await _wait_until(
+                    lambda: len(get_inprocess_bus()._subscribers) == 1
+                )
+                safe_publish("email.synced", internal_id=5, source="new_watcher")
+                frame = await asyncio.wait_for(resp.content.readuntil(b"\n\n"), 2.0)
+                assert b"email.synced" in frame
+    finally:
+        await runner.cleanup()
