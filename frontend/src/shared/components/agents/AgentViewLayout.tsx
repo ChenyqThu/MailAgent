@@ -13,6 +13,7 @@ import { ChevronLeft } from 'lucide-react'
 
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { useGeneralChat } from '@shared/hooks/useGeneralChat'
+import { useAIChatPanel } from '@shared/state/ai-chat-panel'
 
 import { AgentThreadList } from './AgentThreadList'
 import { AgentConversation } from './AgentConversation'
@@ -52,6 +53,20 @@ export function AgentViewLayout(): React.ReactElement {
     invalidateSessions()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chat.sessions])
+
+  // assistant-modal P6 — consume a fullscreen-jump request: the floating modal parked the active session
+  // id (requestOpenAgentSession) then navigated here; select it so the agent view opens that exact chat
+  // (an email-anchored session continues correctly via AgentConversation's per-item routing). A brand-new
+  // modal chat parks nothing → no-op (fresh empty agent view). flag-off → pendingAgentSessionId stays null.
+  const pendingAgentSessionId = useAIChatPanel((s) => s.pendingAgentSessionId)
+  const consumeOpenAgentSession = useAIChatPanel((s) => s.consumeOpenAgentSession)
+  useEffect(() => {
+    if (pendingAgentSessionId == null) return
+    void chat.selectSession(pendingAgentSessionId)
+    consumeOpenAgentSession()
+    // selectSession is stable (useCallback); only re-run when a new id is parked.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingAgentSessionId])
 
   // The active session's unified item (anchor_type / email_id / backend_kind) drives the conversation's
   // runtime + context routing (email vs general). null for a brand-new chat → general default.

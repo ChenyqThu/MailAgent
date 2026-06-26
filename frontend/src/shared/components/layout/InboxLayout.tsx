@@ -24,6 +24,7 @@ import { EmailList } from '../email/EmailList'
 import { EmailDetail } from '../email/EmailDetail'
 import { AIChatPanel } from '../chat'
 import { ChatModalFab } from '@shared/assistant/modal/ChatModalFab'
+import { AssistantChatModal } from '@shared/assistant/modal/AssistantChatModal'
 import { isAssistantModalEnabled } from '@shared/assistant/runtime/flags'
 
 // Lane C — AIChatPanel 整列挤压出入场宽度（DESIGN.md §4.1 layout-anim 许可：
@@ -106,7 +107,11 @@ export function InboxLayout(): React.ReactElement {
   // 1280px layout, leaving EmailDetail < 320px wide. Now it's an on-demand
   // overlay column toggled via the toolbar icon, ⌘L, or any AI Agents
   // sidebar entry.
-  const aiPanelVisible = useAIChatPanel((s) => s.visible)
+  // assistant-modal flag-on：旧 AIChatPanel 退役 —— `visible` 由 floating modal（AssistantChatModal）
+  // 接管，这里强制 aiPanelVisible=false 让挤压列 width 恒 0 + 面板不挂载，避免 modal 与旧抽屉同时展开
+  // （plan P2 中间态）。isAssistantModalEnabled() 是 build-time 常量 → flag-off 时 = raw，字节级原行为。
+  const aiPanelVisibleRaw = useAIChatPanel((s) => s.visible)
+  const aiPanelVisible = isAssistantModalEnabled() ? false : aiPanelVisibleRaw
   // Lane C — 挤压（width tween），不是覆盖：AIChatPanel 始终 mount（一旦首次
   // 打开后不再卸载，保留 chat state / 滚动位置），用 overflow:hidden 的 wrapper
   // 在 0 ↔ 360px 间 tween width 来"推开"正文。首帧 visible=false 时 wrapper
@@ -383,8 +388,10 @@ export function InboxLayout(): React.ReactElement {
       {/* Sprint 17 — 旧 Sprint 5 fixed BatchActionBar 移除. floating bar
           (Sprint 12 设计, components/email/BatchActionBar.tsx) 由 EmailList
           portal 到 document.body, 不再需要在 chrome 这层 mount. */}
-      {/* assistant-modal P1 — 正文右下 FAB 入口（flag-on；ChatModalFab 自 portal 到 body）。 */}
+      {/* assistant-modal P1/P2 — 正文右下 FAB 入口（最小化态）+ 展开后的 floating modal（两者 portal 到
+          body，FAB↔modal 由 useAIChatPanel.visible 互斥：visible 时 modal 显示、FAB 自隐）。flag-on only。 */}
       {isAssistantModalEnabled() && <ChatModalFab />}
+      {isAssistantModalEnabled() && <AssistantChatModal />}
       <StatusBar />
     </div>
   )

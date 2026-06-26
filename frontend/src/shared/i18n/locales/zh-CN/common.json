@@ -655,6 +655,20 @@
     "fab": {
       "label": "聊聊这封邮件"
     },
+    "modal": {
+      "title": "AI 对话",
+      "newChat": "新对话",
+      "minimize": "最小化",
+      "newSession": "开启新对话",
+      "switchMode": "切换显示模式",
+      "modeFloating": "悬浮窗",
+      "modeSidebar": "侧边栏",
+      "modeFullscreen": "全屏",
+      "collapse": "收起为悬浮按钮",
+      "history": "历史对话",
+      "removeContext": "移除邮件上下文",
+      "emailContextUntitled": "(无主题)"
+    },
     "resizePanel": "拖动调整面板宽度",
     "popout": {
       "button": "在独立窗口打开 · ⇧⌥W",

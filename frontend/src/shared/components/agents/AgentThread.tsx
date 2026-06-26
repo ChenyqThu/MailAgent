@@ -47,6 +47,12 @@ interface AgentThreadProps {
   /** dogfood-3 — dynamic follow-up suggestions for the latest completed turn (ai-sdk path). Rendered as
    *  autoSend chips above the composer in an active, idle thread. Empty / omitted → no chips. */
   followUps?: string[]
+  /** assistant-modal P2 — welcome heading alignment. The floating modal left-aligns its welcome (the
+   *  截图 layout); the /sessions agent view keeps the centered hero. Default 'center' → /sessions unchanged. */
+  welcomeAlign?: 'center' | 'left'
+  /** assistant-modal P5 — a removable context chip (the current email) rendered just above the composer.
+   *  The modal passes the email chip; /sessions omits it → nothing rendered. */
+  contextChip?: React.ReactNode
 }
 
 export function AgentThread({
@@ -54,7 +60,9 @@ export function AgentThread({
   readOnly = false,
   pendingSlot,
   onTurnComplete,
-  followUps
+  followUps,
+  welcomeAlign = 'center',
+  contextChip
 }: AgentThreadProps): React.JSX.Element {
   const isEmpty = useAuiState(isNewChatView)
   return (
@@ -70,7 +78,7 @@ export function AgentThread({
         )}
       >
         <AuiIf condition={isNewChatView}>
-          <AgentWelcome />
+          <AgentWelcome align={welcomeAlign} />
         </AuiIf>
 
         <div className="mb-10 flex flex-col gap-y-5 empty:hidden">
@@ -106,6 +114,9 @@ export function AgentThread({
               </div>
             </AuiIf>
           )}
+          {/* assistant-modal P5 — removable email-context chip directly above the composer (modal only;
+              /sessions omits contextChip → nothing here). */}
+          {!readOnly && contextChip}
           {!readOnly && <AgentComposer />}
           <AuiIf condition={isNewChatView}>
             <AuiIf condition={(s) => s.composer.isEmpty}>
@@ -118,10 +129,15 @@ export function AgentThread({
   )
 }
 
-function AgentWelcome(): React.JSX.Element {
+function AgentWelcome({ align = 'center' }: { align?: 'center' | 'left' }): React.JSX.Element {
   const { t } = useTranslation()
   return (
-    <div className="mx-auto mb-6 flex w-full max-w-[var(--thread-max-width)] flex-col items-center px-4 text-center">
+    <div
+      className={cn(
+        'mx-auto mb-6 flex w-full max-w-[var(--thread-max-width)] flex-col px-4',
+        align === 'left' ? 'items-start text-left' : 'items-center text-center'
+      )}
+    >
       <h1 className="animate-in fade-in slide-in-from-bottom-1 fill-mode-both text-2xl font-semibold text-ink-fg duration-200">
         {t('agentView.welcome')}
       </h1>

@@ -655,6 +655,20 @@
     "fab": {
       "label": "Chat about this page"
     },
+    "modal": {
+      "title": "AI chat",
+      "newChat": "New AI chat",
+      "minimize": "Minimize",
+      "newSession": "Start new chat",
+      "switchMode": "Switch display mode",
+      "modeFloating": "Floating",
+      "modeSidebar": "Sidebar",
+      "modeFullscreen": "Fullscreen",
+      "collapse": "Collapse to button",
+      "history": "Chat history",
+      "removeContext": "Remove email context",
+      "emailContextUntitled": "(no subject)"
+    },
     "resizePanel": "Drag to resize panel",
     "popout": {
       "button": "Open in window · ⇧⌥W",
