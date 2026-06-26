@@ -33,6 +33,7 @@ import {
   appendMessage,
   appendToolCall,
   getFirstUserText,
+  getLastTurnTexts,
   getSession,
   updateSessionTitle,
   updateToolCall
@@ -302,7 +303,11 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
       if (!session) return null
       return { title: session.title ?? null, firstUserText: getFirstUserText(sessionId) }
     },
-    saveSessionTitle: (sessionId, title) => updateSessionTitle(sessionId, title)
+    saveSessionTitle: (sessionId, title) => updateSessionTitle(sessionId, title),
+    // dogfood-3 (follow-ups) — read the last completed turn (last user + last assistant message) for
+    // dynamic next-question suggestions. Always wired; the route is per-turn best-effort (the renderer
+    // POSTs after each completed turn, ai-sdk path only).
+    getFollowupContext: (sessionId) => getLastTurnTexts(sessionId)
   })
   _handle = handle
   const healthy = await pollHealth(handle.port)

@@ -219,11 +219,14 @@ class ChatDb:
             "SELECT * FROM ai_chat_sessions WHERE anchor_type = 'general' ORDER BY updated_at DESC",
         )
 
-    def list_all_sessions(self, limit: int = 300) -> List[Dict[str, Any]]:
+    def list_all_sessions(self, limit: int = 300, include_archived: bool = False) -> List[Dict[str, Any]]:
         """跨邮件 session 历史（含 first_user_message 预览 + message_count，排除无消息 session）。
-        镜像 listAllSessions → ChatSessionSummary[]。"""
+        镜像 listAllSessions → ChatSessionSummary[]。
+        include_archived=False（默认）只返回活跃会话（archived=0）；
+        include_archived=True 返回全部含归档会话（用于归档分组视图）。"""
+        archived_clause = "" if include_archived else "s.archived = 0 AND "
         return self._read_all(
-            """SELECT
+            f"""SELECT
                  s.id, s.email_id, s.anchor_type, s.anchor_id, s.backend_kind, s.backend_model,
                  s.backend_agent_page_id, s.title, s.archived, s.created_at, s.updated_at,
                  (SELECT substr(m.content, 1, 500) FROM ai_chat_messages m
@@ -231,7 +234,7 @@ class ChatDb:
                     ORDER BY m.created_at ASC LIMIT 1) AS first_user_message,
                  (SELECT COUNT(*) FROM ai_chat_messages m WHERE m.session_id = s.id) AS message_count
                FROM ai_chat_sessions s
-               WHERE s.archived = 0 AND EXISTS (SELECT 1 FROM ai_chat_messages m WHERE m.session_id = s.id)
+               WHERE {archived_clause}EXISTS (SELECT 1 FROM ai_chat_messages m WHERE m.session_id = s.id)
                ORDER BY s.updated_at DESC
                LIMIT ?""",
             (limit,),

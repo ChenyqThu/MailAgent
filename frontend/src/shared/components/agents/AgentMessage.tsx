@@ -14,27 +14,27 @@
 
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
-import { MessagePrimitive } from '@assistant-ui/react'
+import { ComposerPrimitive, MessagePrimitive } from '@assistant-ui/react'
 
 import { DotMatrix } from '@shared/components/ui/DotMatrix'
 import { MessageTiming } from '@shared/assistant/components/MessageTiming'
+import { ThinkingPhrases } from '@shared/components/chat/ThinkingPhrases'
 import { getAssistantPartComponents } from '@shared/assistant/tools/registerToolUIs'
 import { AssistantActionBar, UserActionBar } from '@shared/assistant/components/action-bar'
 
-// Reuse the shared edit/system renderers verbatim — no demo-specific treatment in Phase 7.
-export { EditComposer, SystemMessage } from '@shared/assistant/components/message'
+// SystemMessage reuses the shared renderer; EditComposer is demo-fidelity in-place (defined below).
+export { SystemMessage } from '@shared/assistant/components/message'
 
 /** Working indicator — assistant-ui renders the Empty part slot while a (streaming) assistant message
- *  has no content yet. A shimmering "thinking" line covers the pre-first-token moment; once a part
- *  streams in, Empty is replaced by the real content. */
+ *  has no content yet (the pre-first-token moment); once a part streams in, Empty is replaced by the
+ *  real content. dogfood-3: DotMatrix「connecting」点阵动画（demo idiom）+ 轮换流光短句 ThinkingPhrases
+ *  （复用 chat 面板的 i18n chat.thinkingPhrases 轮播 + ShimmerText 字形流光）—— 用户要的「动态 icon +
+ *  多句轮换 shimmer」，取代 dogfood-2 的静态单句。 */
 function AgentWorkingIndicator(): React.JSX.Element {
-  const { t } = useTranslation()
-  // demo idiom: 流式回复尚无内容时(Empty part slot)显示 DotMatrix「connecting」点阵动画 + 文案，
-  // 取代旧 ShimmerText —— 与 assistant-ui base demo 的 loading indicator 对齐(dogfood-2)。
   return (
     <span className="inline-flex items-center gap-2 align-middle text-ink-fg-3">
       <DotMatrix state="connecting" aria-hidden />
-      <span className="text-meta">{t('agentView.connecting')}</span>
+      <ThinkingPhrases />
     </span>
   )
 }
@@ -68,12 +68,41 @@ export function AgentAssistantMessage(): React.JSX.Element {
         <MessagePrimitive.Parts components={partComponents} />
       </div>
       {/* Height-reserved footer so the hover action bar never shifts message spacing (demo idiom).
-          dogfood-2: action bar(Copy/Reload/KOS, autohide hover) 旁加 MessageTiming「答复时间」badge
-          (hover 看 token 数据)；MessageTiming 用 group-hover 与 action bar 同步显隐。 */}
-      <div className="-mb-7 ml-1 flex min-h-7 items-center gap-1 pt-1.5">
-        <AssistantActionBar />
-        <MessageTiming className="opacity-0 transition-opacity duration-fast group-hover:opacity-100" />
+          dogfood-3: MessageTiming「答复时间」badge 放进 AssistantActionBar 的 ActionBarPrimitive.Root 内
+          (children slot)，继承 autohide="not-last" —— 最后一条 AI 回复常显、其余 hover 显示（demo
+          base.tsx:848 同款）。取代 dogfood-2 的兄弟 div + group-hover（导致最后一条不常显的 bug）。 */}
+      <div className="-mb-7 ml-1 flex min-h-7 items-center pt-1.5">
+        <AssistantActionBar>
+          <MessageTiming />
+        </AssistantActionBar>
       </div>
+    </MessagePrimitive.Root>
+  )
+}
+
+/** dogfood-3 — demo-fidelity 原位编辑（取代 re-export 的 shared EditComposer，后者无 MessagePrimitive.Root
+ *  包裹 + self-end 导致编辑框脱离消息原位、跑到顶部）。复刻 demo base.tsx:898：MessagePrimitive.Root
+ *  包裹让 assistant-ui 在该 user message 的原位渲染编辑框；内部 ComposerPrimitive ml-auto max-w-[85%]
+ *  右对齐成气泡形态（与 AgentUserMessage 对齐）+ footer 取消/更新。re-stream 走 runtime 的 onEdit
+ *  适配器（与 shared EditComposer 同一条链路），仅布局换成原位 demo 形态。 */
+export function EditComposer(): React.JSX.Element {
+  const { t } = useTranslation()
+  return (
+    <MessagePrimitive.Root className="mx-auto flex w-full max-w-[var(--thread-max-width)] flex-col px-2">
+      <ComposerPrimitive.Root className="ml-auto flex w-full max-w-[85%] flex-col rounded-2xl border border-[var(--hairline)] bg-ink-2 shadow-[0_4px_16px_-8px_rgba(0,0,0,0.18),0_1px_2px_rgba(0,0,0,0.06)]">
+        <ComposerPrimitive.Input
+          autoFocus
+          className="scrollbar-thin max-h-40 min-h-14 w-full resize-none bg-transparent px-4 pb-1 pt-3 text-body leading-relaxed text-ink-fg outline-none"
+        />
+        <div className="mx-2.5 mb-2.5 flex items-center gap-1.5 self-end">
+          <ComposerPrimitive.Cancel className="h-8 rounded-full px-3.5 text-meta font-medium text-ink-fg-1 transition-colors duration-fast hover:bg-ink-3">
+            {t('chat.composer.cancel', { defaultValue: 'Cancel' })}
+          </ComposerPrimitive.Cancel>
+          <ComposerPrimitive.Send className="h-8 rounded-full bg-[rgb(var(--c-accent))] px-3.5 text-meta font-medium text-[rgb(var(--c-accent-fg))] transition-opacity duration-fast hover:opacity-90 disabled:opacity-40">
+            {t('chat.message.update', { defaultValue: 'Update' })}
+          </ComposerPrimitive.Send>
+        </div>
+      </ComposerPrimitive.Root>
     </MessagePrimitive.Root>
   )
 }

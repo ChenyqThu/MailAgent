@@ -125,10 +125,11 @@ def _email_meta_for_sessions(
 
 
 @router.get("/sessions/all", dependencies=[Depends(verify_cf_access)])
-async def list_all_sessions(request: Request):
+async def list_all_sessions(request: Request, include_archived: bool = Query(False)):
     """跨邮件 session 历史（含 first_user_message 预览 + message_count + join email
-    subject/sender）。镜像 chat:listAllSessions → ChatSessionListItem[]。"""
-    summaries = get_chat_db().list_all_sessions()
+    subject/sender）。镜像 chat:listAllSessions → ChatSessionListItem[]。
+    include_archived=true 时含归档会话（用于归档分组视图）。"""
+    summaries = get_chat_db().list_all_sessions(include_archived=include_archived)
     # codex review NIT — general sessions have email_id=None; exclude them so the
     # email metadata join doesn't query a NULL id (and skips get_settings() when no
     # real email ids remain).

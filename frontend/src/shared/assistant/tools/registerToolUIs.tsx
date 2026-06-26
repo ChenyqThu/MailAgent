@@ -14,15 +14,28 @@
 
 import { isA2uiToolCardsEnabled } from '../runtime/flags'
 import { MarkdownText, ReasoningText } from '../components/markdown-text'
+import { SourcePart } from '../components/sources'
 import { ToolTraceCard } from './generic/ToolTraceCard'
 import { componentRegistry } from './ComponentRegistry'
+
+/** The assistant message-part component map passed to MessagePrimitive.Parts `components`. tools.by_name
+ *  is optional (only the A2UI flag-on path sets it). */
+type AssistantPartComponentMap = {
+  Text: typeof MarkdownText
+  Reasoning: typeof ReasoningText
+  Source: typeof SourcePart
+  tools: { Fallback: typeof ToolTraceCard; by_name?: typeof componentRegistry.byName }
+}
 
 /** Phase 01 baseline — generic tool fallback only. Kept as the flag-off object (and for any
  *  importer that wants the legacy shape). Passed to MessagePrimitive.Parts `components`.
  *  Keys not listed fall through to assistant-ui defaults (file/image already covered). */
-export const assistantPartComponents = {
+export const assistantPartComponents: AssistantPartComponentMap = {
   Text: MarkdownText,
   Reasoning: ReasoningText,
+  // dogfood-3 — render AI SDK source-url / source-document parts (web-search-style tools) as link pills.
+  // Additive: a turn with no source parts renders nothing here (no visual change for the email surface).
+  Source: SourcePart,
   tools: { Fallback: ToolTraceCard }
 }
 
@@ -31,11 +44,12 @@ export const assistantPartComponents = {
  *  registry's per-tool cards as `tools.by_name`, keeping ToolTraceCard as the fallback so any
  *  unregistered tool still renders (registry miss never blocks the conversation). Evaluated at
  *  call time so the renderer flag (build-time constant) and tests (vi.stubEnv) both work. */
-export function getAssistantPartComponents() {
+export function getAssistantPartComponents(): AssistantPartComponentMap {
   if (!isA2uiToolCardsEnabled()) return assistantPartComponents
   return {
     Text: MarkdownText,
     Reasoning: ReasoningText,
+    Source: SourcePart,
     tools: { by_name: componentRegistry.byName, Fallback: ToolTraceCard }
   }
 }

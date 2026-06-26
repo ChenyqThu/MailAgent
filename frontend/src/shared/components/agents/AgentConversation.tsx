@@ -204,6 +204,10 @@ export function AgentConversation({ chat, activeItem }: AgentConversationProps):
 
   // ── composer controls (model / thinking / @mention / attachments) ──────────
   const [model, setModel] = useState(() => readModelPref())
+  // dogfood-3 (follow-ups) — dynamic next-question chips for the latest completed turn (ai-sdk path).
+  // Refreshed per turn-complete (best-effort); AgentThread hides them while running so a fresh send
+  // never overlaps stale chips.
+  const [followups, setFollowups] = useState<string[]>([])
   const onModelChange = useCallback((m: string): void => {
     writeModelPref(m)
     setModel(m)
@@ -381,6 +385,17 @@ export function AgentConversation({ chat, activeItem }: AgentConversationProps):
       void queryClient.invalidateQueries({ queryKey: ['chat', 'allSessions'] })
     }
     if (gatewayBaseUrl == null) return
+    // dogfood-3 (follow-ups) — generate next-question chips for the just-completed turn. Per-turn (NOT
+    // idempotent — fresh each turn), best-effort (failure → clear). ai-sdk only (this handler is wired
+    // only on the ai-sdk AgentThread).
+    void fetch(`${gatewayBaseUrl}/api/ai/followups`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sessionId: sid, model })
+    })
+      .then((r) => (r.ok ? (r.json() as Promise<{ followups?: string[] }>) : null))
+      .then((data) => setFollowups(data && Array.isArray(data.followups) ? data.followups : []))
+      .catch(() => setFollowups([]))
     const { mode, model: titleModel } = readAutoTitleSettings()
     if (mode !== 'llm') return
     if (autoTitlePostedRef.current.has(sid)) return
@@ -400,7 +415,7 @@ export function AgentConversation({ chat, activeItem }: AgentConversationProps):
         // network / gateway hiccup — allow a retry on the next turn-complete edge.
         autoTitlePostedRef.current.delete(sid)
       })
-  }, [chat.activeSessionId, gatewayBaseUrl, queryClient])
+  }, [chat.activeSessionId, gatewayBaseUrl, queryClient, model])
 
   // ── legacy (degrade / custom-api) adapter callbacks ────────────────────────
   const onSend = useCallback(
@@ -542,6 +557,7 @@ export function AgentConversation({ chat, activeItem }: AgentConversationProps):
               <AgentThread
                 quickActions={<AgentQuickActions />}
                 onTurnComplete={handleTurnComplete}
+                followUps={followups}
               />
             </AiSdkRuntimeProvider>
           )

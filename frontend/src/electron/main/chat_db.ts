@@ -1136,18 +1136,22 @@ export function listGeneralSessions(): ChatSession[] {
 // IPC payload; the renderer truncates further for display. `limit` caps the
 // list so an account with thousands of conversations doesn't ship them all at
 // once (newest-first, so the cap drops the least-recently-touched).
-export function listAllSessions(limit = 300): ChatSessionSummary[] {
+export function listAllSessions(limit = 300, includeArchived = false): ChatSessionSummary[] {
+  // dogfood-3 — includeArchived (default false → only active sessions, byte-identical to before; the
+  // agent view passes true to also pull archived rows for its bottom "归档" group). SELECT now carries
+  // s.archived so the renderer can split active vs archived. The archived branch is a fixed boolean (no
+  // user input), so inlining it in the WHERE is injection-safe.
   return getChatDb()
     .prepare(
       `SELECT
          s.id, s.email_id, s.anchor_type, s.anchor_id, s.backend_kind, s.backend_model,
-         s.backend_agent_page_id, s.title, s.created_at, s.updated_at,
+         s.backend_agent_page_id, s.title, s.archived, s.created_at, s.updated_at,
          (SELECT substr(m.content, 1, 500) FROM ai_chat_messages m
             WHERE m.session_id = s.id AND m.role = 'user'
             ORDER BY m.created_at ASC LIMIT 1) AS first_user_message,
          (SELECT COUNT(*) FROM ai_chat_messages m WHERE m.session_id = s.id) AS message_count
        FROM ai_chat_sessions s
-       WHERE s.archived = 0
+       WHERE ${includeArchived ? '1 = 1' : 's.archived = 0'}
          AND EXISTS (SELECT 1 FROM ai_chat_messages m WHERE m.session_id = s.id)
        ORDER BY s.updated_at DESC
        LIMIT ?`
@@ -1174,6 +1178,29 @@ export function deleteSession(sessionId: number): void {
  *  serve-api → src/chat/db.py.update_session_title (same ai_chat.db file). */
 export function updateSessionTitle(sessionId: number, title: string): void {
   getChatDb().prepare('UPDATE ai_chat_sessions SET title = ? WHERE id = ?').run(title, sessionId)
+}
+
+/** dogfood-3 (follow-ups) — the last completed turn's text: the most-recent non-empty user message +
+ *  the most-recent non-empty assistant message for a session. The gateway feeds these to a small model
+ *  to generate next-question suggestions. Returns null when either side is missing (no turn yet). */
+export function getLastTurnTexts(
+  sessionId: number
+): { userText: string; assistantText: string } | null {
+  const db = getChatDb()
+  const pick = (role: 'user' | 'assistant'): string | undefined =>
+    (
+      db
+        .prepare(
+          `SELECT content FROM ai_chat_messages
+             WHERE session_id = ? AND role = ? AND content <> ''
+             ORDER BY created_at DESC LIMIT 1`
+        )
+        .get(sessionId, role) as { content: string } | undefined
+    )?.content
+  const userText = pick('user')
+  const assistantText = pick('assistant')
+  if (!userText || !assistantText) return null
+  return { userText, assistantText }
 }
 
 /** dogfood-2 — 归档 / 取消归档一个 session（软删：archived=1 从 listAllSessions 过滤，行保留）。

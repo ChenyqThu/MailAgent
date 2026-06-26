@@ -46,7 +46,11 @@ const ACTION_BTN = cn(
   'disabled:opacity-40 disabled:hover:bg-transparent'
 )
 
-export function AssistantActionBar(): React.JSX.Element {
+export function AssistantActionBar({
+  children
+}: {
+  children?: React.ReactNode
+}): React.JSX.Element {
   const { t } = useTranslation()
   return (
     <ActionBarPrimitive.Root
@@ -73,6 +77,10 @@ export function AssistantActionBar(): React.JSX.Element {
         <RotateCcw size={13} strokeWidth={2} />
       </ActionBarPrimitive.Reload>
       <KosSaveButton />
+      {/* dogfood-3 — optional slot rendered INSIDE the action bar Root so it inherits autohide
+          ("not-last" → last assistant reply stays visible). The agent view injects <MessageTiming />
+          here; the email panel passes nothing → byte-identical to before. */}
+      {children}
     </ActionBarPrimitive.Root>
   )
 }

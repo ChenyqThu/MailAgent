@@ -1042,6 +1042,63 @@ def test_update_session_archived_hides_from_list_all(chat_client: TestClient) ->
     assert SESSION_ID in [s["id"] for s in r.json()["data"]]
 
 
+def test_list_all_sessions_excludes_archived_by_default(chat_client: TestClient) -> None:
+    """默认（无 include_archived）不返回 archived=1 的 session。"""
+    import sqlite3 as _sqlite3
+    import src.api.routers.chat as _chat_router
+    now = int(time.time() * 1000)
+    # 通过 monkeypatched get_chat_db 拿到 seeded ChatDb 实例，再直连写 archived=1 的 session。
+    db = _chat_router.get_chat_db()
+    archived_id = 999
+    conn = _sqlite3.connect(db.db_path)
+    conn.execute(
+        "INSERT INTO ai_chat_sessions (id, email_id, anchor_type, anchor_id, backend_kind, "
+        "backend_model, archived, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+        (archived_id, None, "general", None, "custom-api", "claude-sonnet-4-6", 1, now, now),
+    )
+    conn.execute(
+        "INSERT INTO ai_chat_messages (id, session_id, role, content, status, created_at, updated_at) "
+        "VALUES (?,?,?,?,?,?,?)",
+        (9001, archived_id, "user", "archived session msg", "complete", now, now),
+    )
+    conn.commit()
+    conn.close()
+
+    r = chat_client.get("/api/chat/sessions/all")
+    assert r.status_code == 200
+    ids = [s["id"] for s in r.json()["data"]]
+    assert archived_id not in ids
+    assert SESSION_ID in ids  # 活跃 session 仍可见
+
+
+def test_list_all_sessions_include_archived_returns_archived(chat_client: TestClient) -> None:
+    """include_archived=true 时归档 session 出现在结果中。"""
+    import sqlite3 as _sqlite3
+    import src.api.routers.chat as _chat_router
+    now = int(time.time() * 1000)
+    db = _chat_router.get_chat_db()
+    archived_id = 998
+    conn = _sqlite3.connect(db.db_path)
+    conn.execute(
+        "INSERT INTO ai_chat_sessions (id, email_id, anchor_type, anchor_id, backend_kind, "
+        "backend_model, archived, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+        (archived_id, None, "general", None, "custom-api", "claude-sonnet-4-6", 1, now, now),
+    )
+    conn.execute(
+        "INSERT INTO ai_chat_messages (id, session_id, role, content, status, created_at, updated_at) "
+        "VALUES (?,?,?,?,?,?,?)",
+        (9002, archived_id, "user", "another archived msg", "complete", now, now),
+    )
+    conn.commit()
+    conn.close()
+
+    r = chat_client.get("/api/chat/sessions/all?include_archived=true")
+    assert r.status_code == 200
+    ids = [s["id"] for s in r.json()["data"]]
+    assert archived_id in ids
+    assert SESSION_ID in ids  # 活跃 session 也在
+
+
 def test_update_session_archived_invalid_body_400(chat_client: TestClient) -> None:
     """archived 不是 bool → E_INVALID_ARG（镜像 title 端点的类型校验）。"""
     r = chat_client.patch(f"/api/chat/sessions/{SESSION_ID}/archived", json={"archived": "yes"})

@@ -602,9 +602,16 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
       }
     },
 
-    async listAllSessions(): Promise<ChatSessionListItem[]> {
+    async listAllSessions(includeArchived = false): Promise<ChatSessionListItem[]> {
       try {
-        return await request<ChatSessionListItem[]>(baseUrl, 'GET', '/chat/sessions/all')
+        // dogfood-3 — includeArchived=true also returns archived sessions (the agent view's "归档" group);
+        // default false is byte-identical (active only) for SessionsPage / ChatsTab.
+        return await request<ChatSessionListItem[]>(
+          baseUrl,
+          'GET',
+          '/chat/sessions/all',
+          includeArchived ? { query: { include_archived: 'true' } } : undefined
+        )
       } catch {
         return []
       }

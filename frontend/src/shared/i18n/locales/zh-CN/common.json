@@ -588,6 +588,7 @@
     "rename": "重命名",
     "delete": "删除",
     "archive": "归档",
+    "restore": "恢复",
     "more": "更多",
     "collapseSidebar": "折叠 / 展开会话历史",
     "historyTitle": "会话",
@@ -595,7 +596,8 @@
     "group": {
       "today": "今天",
       "yesterday": "昨天",
-      "earlier": "更早"
+      "earlier": "更早",
+      "archived": "归档"
     },
     "quickActions": {
       "summarize": {

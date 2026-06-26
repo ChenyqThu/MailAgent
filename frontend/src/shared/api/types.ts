@@ -1527,7 +1527,7 @@ export interface ChatApi {
    * count, and the owning email's subject/sender (best-effort — null when
    * sync_store.db is unavailable). Read-only; never throws (degrades to []).
    */
-  listAllSessions(): Promise<ChatSessionListItem[]>
+  listAllSessions(includeArchived?: boolean): Promise<ChatSessionListItem[]>
   /** P2c/P2d — general (context-free, anchor_type='general') sessions, newest
    *  first. Separate from listSessions(emailId) so a general session never shows
    *  up in a specific email's sidebar. Read-only; degrades to [] on failure. */

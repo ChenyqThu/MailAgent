@@ -11,7 +11,7 @@
 import { useEffect, useRef } from 'react'
 
 import { AuiIf, ThreadPrimitive, useAuiState, type AssistantState } from '@assistant-ui/react'
-import { ArrowDown } from 'lucide-react'
+import { ArrowDown, CornerDownRight } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 import { cn } from '@shared/lib/cn'
@@ -44,13 +44,17 @@ interface AgentThreadProps {
   /** Phase 10b — fires on the running→idle edge after an assistant reply (a turn just completed). The
    *  parent (ai-sdk path only) uses it to trigger configurable LLM auto-title. Omitted → no watcher. */
   onTurnComplete?: () => void
+  /** dogfood-3 — dynamic follow-up suggestions for the latest completed turn (ai-sdk path). Rendered as
+   *  autoSend chips above the composer in an active, idle thread. Empty / omitted → no chips. */
+  followUps?: string[]
 }
 
 export function AgentThread({
   quickActions,
   readOnly = false,
   pendingSlot,
-  onTurnComplete
+  onTurnComplete,
+  followUps
 }: AgentThreadProps): React.JSX.Element {
   const isEmpty = useAuiState(isNewChatView)
   return (
@@ -81,6 +85,27 @@ export function AgentThread({
           )}
         >
           <AgentScrollToBottom />
+          {/* dogfood-3 (follow-ups) — dynamic next-question chips above the composer for the latest
+              completed turn (ai-sdk only). Active + idle thread only: AuiIf hides them while running so
+              stale chips never overlap a new reply, and the welcome screen owns quick-actions instead.
+              autoSend (assistant-ui Suggestion) → one tap sends the question through the runtime. */}
+          {!readOnly && followUps && followUps.length > 0 && (
+            <AuiIf condition={(s) => s.thread.messages.length > 0 && !s.thread.isRunning}>
+              <div className="flex flex-wrap gap-2">
+                {followUps.map((fu, i) => (
+                  <ThreadPrimitive.Suggestion
+                    key={`${i}-${fu}`}
+                    prompt={fu}
+                    autoSend
+                    className="inline-flex items-center gap-1.5 rounded-full border border-ink-border-soft bg-ink-2 px-3 py-1.5 text-aux text-ink-fg-1 transition-colors duration-fast hover:bg-ink-3"
+                  >
+                    <CornerDownRight size={13} strokeWidth={1.75} className="shrink-0 text-coral" />
+                    {fu}
+                  </ThreadPrimitive.Suggestion>
+                ))}
+              </div>
+            </AuiIf>
+          )}
           {!readOnly && <AgentComposer />}
           <AuiIf condition={isNewChatView}>
             <AuiIf condition={(s) => s.composer.isEmpty}>

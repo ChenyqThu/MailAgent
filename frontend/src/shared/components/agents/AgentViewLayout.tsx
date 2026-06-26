@@ -37,7 +37,9 @@ export function AgentViewLayout(): React.ReactElement {
   // preview cache is gone.
   const sessionsQ = useQuery({
     queryKey: ALL_SESSIONS_KEY,
-    queryFn: () => mailApi.chat.listAllSessions(),
+    // dogfood-3 — include archived sessions so the left list can render the bottom "归档" group
+    // (active vs archived are split client-side in AgentThreadList).
+    queryFn: () => mailApi.chat.listAllSessions(true),
     staleTime: 10_000
   })
   const items = sessionsQ.data ?? []
@@ -79,9 +81,16 @@ export function AgentViewLayout(): React.ReactElement {
           .catch(() => undefined)
       }}
       onArchive={(id) => {
-        // dogfood-2: 归档 = 软删(从统一列表过滤；行/消息保留)。serve-api → ai_chat.db，再刷新列表。
+        // dogfood-2: 归档 = 软删(从日期分组移到底部「归档」组；行/消息保留)。serve-api → ai_chat.db，刷新。
         void mailApi.chat
           .updateSessionArchived(id, true)
+          .then(invalidateSessions)
+          .catch(() => undefined)
+      }}
+      onRestore={(id) => {
+        // dogfood-3: 恢复 = 取消归档(archived=false)，从「归档」组移回日期分组。
+        void mailApi.chat
+          .updateSessionArchived(id, false)
           .then(invalidateSessions)
           .catch(() => undefined)
       }}

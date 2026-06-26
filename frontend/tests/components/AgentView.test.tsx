@@ -149,13 +149,14 @@ describe('Agent view — demo-fidelity thread', () => {
       isStreaming: true,
       streamingMessageId: 2
     })
-    render(
+    const { container } = render(
       <MailAgentRuntimeProvider chat={chat} onSend={vi.fn()}>
         <AgentThread quickActions={<AgentQuickActions />} />
       </MailAgentRuntimeProvider>
     )
-    // dogfood-2: working indicator 改用 DotMatrix + 「connecting」文案（demo parity，取代 ShimmerText）。
-    await waitFor(() => expect(screen.getByText(i18n.t('agentView.connecting'))).toBeTruthy())
+    // dogfood-3: working indicator = DotMatrix 点阵 + 轮换流光短句 ThinkingPhrases（取代 dogfood-2 的
+    // 静态 connecting 文案）。断言 DotMatrix 挂载（data-slot，不受 ShimmerText 多层 text 干扰）。
+    await waitFor(() => expect(container.querySelector('[data-slot="dot-matrix"]')).toBeTruthy())
   })
 
   test('readOnly suppresses the composer', async () => {
@@ -220,6 +221,8 @@ describe('Agent view — unified history list (Phase 9)', () => {
     onNew: vi.fn(),
     onDelete: vi.fn(),
     onRename: vi.fn(),
+    onArchive: vi.fn(),
+    onRestore: vi.fn(),
     collapsed: false,
     onToggleCollapse: vi.fn()
   }

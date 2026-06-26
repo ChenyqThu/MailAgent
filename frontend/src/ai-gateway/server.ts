@@ -22,6 +22,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 
 import type { AiGatewayConfig } from './config'
 import {
+  generateFollowups,
   generateSessionTitle,
   makeIdGenerator,
   makePersistOnFinish,
@@ -255,6 +256,59 @@ async function handleTitle(
 }
 
 /**
+ * `POST /api/ai/followups` — dogfood-3 dynamic follow-up suggestions. After a turn completes the
+ * renderer POSTs { sessionId, model? }; the gateway reads the last turn (cfg.getFollowupContext),
+ * generates 2-3 short next-questions via the chosen model (generateFollowups), and returns them so the
+ * renderer renders tappable chips above the composer. Per-turn (NOT idempotent — each turn gets fresh
+ * ones), best-effort: no turn yet → { followups: [] } (200, not an error). 501 when not wired; 503 no
+ * key; 400 bad arg; 502 upstream. Never persists, never blocks the chat.
+ */
+async function handleFollowups(
+  req: IncomingMessage,
+  res: ServerResponse,
+  cfg: AiGatewayConfig
+): Promise<void> {
+  if (!cfg.getFollowupContext) {
+    writeJson(res, 501, { error: 'E_NOT_IMPLEMENTED', hint: 'follow-ups not enabled' })
+    return
+  }
+  if (!cfg.apiKey || cfg.apiKey.length === 0) {
+    writeJson(res, 503, { error: 'E_NO_LLM_KEY', hint: '设置 LLM_API_KEY 后重试' })
+    return
+  }
+  const body = await readJsonBody(req)
+  const sessionId =
+    typeof body.sessionId === 'number' && Number.isInteger(body.sessionId) ? body.sessionId : null
+  if (sessionId == null) {
+    writeJson(res, 400, { error: 'E_INVALID_ARG', hint: 'sessionId required' })
+    return
+  }
+  const ctx = cfg.getFollowupContext(sessionId)
+  if (!ctx || !ctx.userText || !ctx.assistantText) {
+    // No completed turn yet — empty is a normal state, not an error.
+    writeJson(res, 200, { followups: [] })
+    return
+  }
+  const model = typeof body.model === 'string' && body.model.length > 0 ? body.model : cfg.model
+  const controller = new AbortController()
+  req.on('close', () => controller.abort())
+  try {
+    const followups = await generateFollowups(
+      cfg,
+      ctx.userText,
+      ctx.assistantText,
+      model,
+      controller.signal
+    )
+    writeJson(res, 200, { followups })
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e)
+    console.error('[ai-gateway] /api/ai/followups failed', e)
+    writeJson(res, 502, { error: 'E_UPSTREAM', hint: message })
+  }
+}
+
+/**
  * Create (but do not listen) the gateway HTTP server. Pure factory — all external
  * deps arrive via cfg, so the Electron main can embed it and the Node harness can
  * drive it directly.
@@ -325,6 +379,13 @@ export function createAiGatewayServer(cfg: AiGatewayConfig): Server {
     // Registered unconditionally; cfg.getTitleContext/saveSessionTitle gate it (501 when not wired).
     if (method === 'POST' && path === '/api/ai/title') {
       void handleTitle(req, res, cfg)
+      return
+    }
+
+    // dogfood-3 — dynamic follow-up suggestions (renderer POSTs after each completed turn). Registered
+    // unconditionally; cfg.getFollowupContext gates it (501 when not wired).
+    if (method === 'POST' && path === '/api/ai/followups') {
+      void handleFollowups(req, res, cfg)
       return
     }
 

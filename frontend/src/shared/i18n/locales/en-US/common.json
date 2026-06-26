@@ -588,6 +588,7 @@
     "rename": "Rename",
     "delete": "Delete",
     "archive": "Archive",
+    "restore": "Restore",
     "more": "More",
     "collapseSidebar": "Collapse / expand history",
     "historyTitle": "Chats",
@@ -595,7 +596,8 @@
     "group": {
       "today": "Today",
       "yesterday": "Yesterday",
-      "earlier": "Earlier"
+      "earlier": "Earlier",
+      "archived": "Archived"
     },
     "quickActions": {
       "summarize": {

@@ -14,6 +14,8 @@ import type { TFunction } from 'i18next'
 import { useTranslation } from 'react-i18next'
 import {
   Archive,
+  ArchiveRestore,
+  ChevronRight,
   Mail,
   MessagesSquare,
   MoreHorizontal,
@@ -36,16 +38,20 @@ export interface AgentThreadListProps {
   onDelete: (id: number) => void
   /** Phase 10 — inline rename → updateSessionTitle (parent persists + refreshes the list). */
   onRename: (id: number, title: string) => void
-  /** dogfood-2 — 归档 → updateSessionArchived(id, true)（parent persists + refreshes，从列表过滤）。 */
+  /** dogfood-2 — 归档 → updateSessionArchived(id, true)（parent persists + refreshes，移到底部归档组）。 */
   onArchive: (id: number) => void
+  /** dogfood-3 — 恢复 → updateSessionArchived(id, false)（从归档组移回日期分组）。 */
+  onRestore: (id: number) => void
   collapsed: boolean
   onToggleCollapse: () => void
   /** fluid = full-width single pane (narrow / mobile); ignores collapse. */
   fluid?: boolean
 }
 
-type GroupKey = 'today' | 'yesterday' | 'earlier'
-const GROUP_ORDER: readonly GroupKey[] = ['today', 'yesterday', 'earlier']
+// dogfood-3 — 'archived' is a synthetic group pinned to the BOTTOM (collapsed by default); active
+// sessions still group by updated_at into today / yesterday / earlier.
+type GroupKey = 'today' | 'yesterday' | 'earlier' | 'archived'
+const GROUP_ORDER: readonly GroupKey[] = ['today', 'yesterday', 'earlier', 'archived']
 
 function groupOf(updatedAtMs: number, todayStartMs: number): GroupKey {
   if (updatedAtMs >= todayStartMs) return 'today'
@@ -73,12 +79,23 @@ export function AgentThreadList(props: AgentThreadListProps): React.ReactElement
     onDelete,
     onRename,
     onArchive,
+    onRestore,
     collapsed,
     onToggleCollapse,
     fluid
   } = props
   const { t } = useTranslation()
   const [renamingId, setRenamingId] = useState<number | null>(null)
+  // dogfood-3 — per-group collapse (date headers + the archived group are all collapsible). Archived
+  // starts collapsed so it stays out of the way until expanded.
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<GroupKey>>(() => new Set(['archived']))
+  const toggleGroup = (g: GroupKey): void =>
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev)
+      if (next.has(g)) next.delete(g)
+      else next.add(g)
+      return next
+    })
 
   // Desktop collapses to a 48px rail; fluid (narrow / mobile) stays full-width and never collapses.
   // Single <aside> with a width + opacity transition (demo parity): the rail keeps the PanelLeft
@@ -90,8 +107,17 @@ export function AgentThreadList(props: AgentThreadListProps): React.ReactElement
   const todayStart = new Date()
   todayStart.setHours(0, 0, 0, 0)
   const todayStartMs = todayStart.getTime()
-  const grouped: Record<GroupKey, ChatSessionListItem[]> = { today: [], yesterday: [], earlier: [] }
-  for (const s of items) grouped[groupOf(s.updated_at, todayStartMs)].push(s)
+  const grouped: Record<GroupKey, ChatSessionListItem[]> = {
+    today: [],
+    yesterday: [],
+    earlier: [],
+    archived: []
+  }
+  // Archived sessions go to the bottom group regardless of date; active ones group by updated_at.
+  for (const s of items) {
+    if (s.archived) grouped.archived.push(s)
+    else grouped[groupOf(s.updated_at, todayStartMs)].push(s)
+  }
 
   return (
     <aside
@@ -160,36 +186,57 @@ export function AgentThreadList(props: AgentThreadListProps): React.ReactElement
             {t('agentView.emptyHistory')}
           </div>
         ) : (
-          GROUP_ORDER.map((g) =>
-            grouped[g].length === 0 ? null : (
+          GROUP_ORDER.map((g) => {
+            if (grouped[g].length === 0) return null
+            const isGroupCollapsed = collapsedGroups.has(g)
+            return (
               <div key={g} className="mb-1">
-                <div className="px-2 pb-1 pt-2.5 text-micro font-medium uppercase tracking-wider text-ink-fg-3">
-                  {t(`agentView.group.${g}`)}
-                </div>
-                <div className="flex flex-col gap-0.5">
-                  {grouped[g].map((s) => (
-                    <SessionRow
-                      key={s.id}
-                      title={titleOf(s, t)}
-                      isEmail={s.anchor_type === 'email'}
-                      selected={s.id === activeSessionId}
-                      onSelect={() => onSelect(s.id)}
-                      renaming={renamingId === s.id}
-                      onStartRename={() => setRenamingId(s.id)}
-                      onSubmitRename={(next) => {
-                        setRenamingId(null)
-                        onRename(s.id, next)
-                      }}
-                      onCancelRename={() => setRenamingId(null)}
-                      onArchive={() => onArchive(s.id)}
-                      onDelete={() => onDelete(s.id)}
-                      t={t}
-                    />
-                  ))}
-                </div>
+                {/* Collapsible group header — the chevron rotates on expand; a count sits to the right. */}
+                <button
+                  type="button"
+                  onClick={() => toggleGroup(g)}
+                  aria-expanded={!isGroupCollapsed}
+                  className="flex w-full items-center gap-1 rounded px-2 pb-1 pt-2.5 text-micro font-medium uppercase tracking-wider text-ink-fg-3 transition-colors duration-fast hover:text-ink-fg-1"
+                >
+                  <ChevronRight
+                    size={11}
+                    strokeWidth={2.5}
+                    className={cn(
+                      'shrink-0 transition-transform duration-fast',
+                      !isGroupCollapsed && 'rotate-90'
+                    )}
+                  />
+                  <span className="flex-1 text-left">{t(`agentView.group.${g}`)}</span>
+                  <span className="shrink-0 tabular-nums opacity-60">{grouped[g].length}</span>
+                </button>
+                {!isGroupCollapsed && (
+                  <div className="flex flex-col gap-0.5">
+                    {grouped[g].map((s) => (
+                      <SessionRow
+                        key={s.id}
+                        title={titleOf(s, t)}
+                        isEmail={s.anchor_type === 'email'}
+                        isArchived={g === 'archived'}
+                        selected={s.id === activeSessionId}
+                        onSelect={() => onSelect(s.id)}
+                        renaming={renamingId === s.id}
+                        onStartRename={() => setRenamingId(s.id)}
+                        onSubmitRename={(next) => {
+                          setRenamingId(null)
+                          onRename(s.id, next)
+                        }}
+                        onCancelRename={() => setRenamingId(null)}
+                        onArchive={() => onArchive(s.id)}
+                        onRestore={() => onRestore(s.id)}
+                        onDelete={() => onDelete(s.id)}
+                        t={t}
+                      />
+                    ))}
+                  </div>
+                )}
               </div>
             )
-          )
+          })
         )}
       </div>
     </aside>
@@ -199,6 +246,7 @@ export function AgentThreadList(props: AgentThreadListProps): React.ReactElement
 function SessionRow({
   title,
   isEmail,
+  isArchived,
   selected,
   renaming,
   onSelect,
@@ -206,11 +254,13 @@ function SessionRow({
   onSubmitRename,
   onCancelRename,
   onArchive,
+  onRestore,
   onDelete,
   t
 }: {
   title: string
   isEmail: boolean
+  isArchived: boolean
   selected: boolean
   renaming: boolean
   onSelect: () => void
@@ -218,6 +268,7 @@ function SessionRow({
   onSubmitRename: (title: string) => void
   onCancelRename: () => void
   onArchive: () => void
+  onRestore: () => void
   onDelete: () => void
   t: TFunction
 }): React.ReactElement {
@@ -297,7 +348,14 @@ function SessionRow({
           {title}
         </span>
       </button>
-      <SessionRowMenu onRename={onStartRename} onArchive={onArchive} onDelete={onDelete} t={t} />
+      <SessionRowMenu
+        onRename={onStartRename}
+        isArchived={isArchived}
+        onArchive={onArchive}
+        onRestore={onRestore}
+        onDelete={onDelete}
+        t={t}
+      />
     </div>
   )
 }
@@ -306,12 +364,16 @@ function SessionRow({
  *  垃圾桶）：hover / 选中 / 菜单打开时显示单个 ... → radix Popover 菜单 改名 / 归档 / 删除。 */
 function SessionRowMenu({
   onRename,
+  isArchived,
   onArchive,
+  onRestore,
   onDelete,
   t
 }: {
   onRename: () => void
+  isArchived: boolean
   onArchive: () => void
+  onRestore: () => void
   onDelete: () => void
   t: TFunction
 }): React.ReactElement {
@@ -345,17 +407,31 @@ function SessionRowMenu({
           <Pencil size={13} strokeWidth={1.75} className="shrink-0 text-ink-fg-3" />
           {t('agentView.rename')}
         </button>
-        <button
-          type="button"
-          onClick={() => {
-            setOpen(false)
-            onArchive()
-          }}
-          className={cn(ITEM, 'text-ink-fg-1 hover:bg-ink-3')}
-        >
-          <Archive size={13} strokeWidth={1.75} className="shrink-0 text-ink-fg-3" />
-          {t('agentView.archive')}
-        </button>
+        {isArchived ? (
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false)
+              onRestore()
+            }}
+            className={cn(ITEM, 'text-ink-fg-1 hover:bg-ink-3')}
+          >
+            <ArchiveRestore size={13} strokeWidth={1.75} className="shrink-0 text-ink-fg-3" />
+            {t('agentView.restore')}
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false)
+              onArchive()
+            }}
+            className={cn(ITEM, 'text-ink-fg-1 hover:bg-ink-3')}
+          >
+            <Archive size={13} strokeWidth={1.75} className="shrink-0 text-ink-fg-3" />
+            {t('agentView.archive')}
+          </button>
+        )}
         <button
           type="button"
           onClick={() => {

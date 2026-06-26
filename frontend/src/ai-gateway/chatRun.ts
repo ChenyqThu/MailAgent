@@ -306,3 +306,75 @@ export async function generateSessionTitle(
   })
   return sanitizeSessionTitle(text)
 }
+
+/** dogfood-3 (follow-ups) — parse model output into at most 3 short suggestion strings. Accepts a JSON
+ *  array, or a newline / numbered list (the model sometimes ignores "JSON only"). Each is trimmed,
+ *  de-bulleted, quote-stripped, capped at 80 chars; empties + dups dropped; capped to 3. */
+export function parseFollowups(raw: string): string[] {
+  const out: string[] = []
+  const push = (s: string): void => {
+    let t = s
+      .trim()
+      .replace(/^[-*\d.)\s]+/, '')
+      .replace(/^["'「『]+/, '')
+      .replace(/["'」』]+$/, '')
+      .trim()
+    if (t.length > 80) t = t.slice(0, 80).trim()
+    if (t.length > 0 && !out.includes(t)) out.push(t)
+  }
+  const trimmed = raw.trim()
+  if (trimmed.startsWith('[')) {
+    try {
+      const arr: unknown = JSON.parse(trimmed)
+      if (Array.isArray(arr)) {
+        for (const x of arr) if (typeof x === 'string') push(x)
+        return out.slice(0, 3)
+      }
+    } catch {
+      /* not JSON — fall through to line parsing */
+    }
+  }
+  for (const line of trimmed.split('\n')) push(line)
+  return out.slice(0, 3)
+}
+
+/** The follow-ups prompt: 2-3 SHORT next questions the user is likely to ask after this reply, phrased
+ *  as the USER (first person) in the user's own language. Both texts are clipped (a hint suffices). */
+export function buildFollowupsPrompt(userText: string, assistantText: string): string {
+  const clip = (s: string, n: number): string => (s.length > n ? s.slice(0, n) : s)
+  return [
+    'Based on the conversation turn below, suggest 2-3 SHORT follow-up questions the user is likely to',
+    'ask NEXT. Phrase each as the USER would ask it (first person), in the SAME language as the user.',
+    'Each at most 10 words. Reply with ONLY a JSON array of strings — nothing else.',
+    '',
+    'User asked:',
+    '<<<',
+    clip(userText, 800),
+    '>>>',
+    '',
+    'Assistant replied:',
+    '<<<',
+    clip(assistantText, 1500),
+    '>>>'
+  ].join('\n')
+}
+
+/** Generate follow-up suggestions for the last turn via the configured model factory. Non-streaming
+ *  generateText; small output. Returns [] on empty / parse-empty. Throws on an upstream error (caller
+ *  maps to 502); follow-ups are best-effort UX, never block the chat. */
+export async function generateFollowups(
+  cfg: AiGatewayConfig,
+  userText: string,
+  assistantText: string,
+  modelId: string,
+  abortSignal?: AbortSignal
+): Promise<string[]> {
+  const factory = resolveModelFactory(cfg)
+  const { text } = await generateText({
+    model: factory(modelId),
+    prompt: buildFollowupsPrompt(userText, assistantText),
+    maxOutputTokens: 200,
+    abortSignal
+  })
+  return parseFollowups(text)
+}
