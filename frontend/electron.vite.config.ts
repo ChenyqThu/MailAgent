@@ -83,7 +83,10 @@ export default defineConfig({
       __MAILAGENT_AI_SDK_NEW_SESSION_DEFAULT__: JSON.stringify(AI_SDK_NEW_SESSION_DEFAULT),
       // redesign — renderer mirror of MAILAGENT_AGENT_VIEW (gates the interactive MailAgent
       // general-agent view at /sessions). Independent surface flag; default '' = off.
-      __MAILAGENT_AGENT_VIEW__: JSON.stringify(process.env.MAILAGENT_AGENT_VIEW ?? '')
+      __MAILAGENT_AGENT_VIEW__: JSON.stringify(process.env.MAILAGENT_AGENT_VIEW ?? ''),
+      // assistant-modal — renderer mirror of MAILAGENT_ASSISTANT_MODAL (gates the email-body AI panel's
+      // three-mode floating modal + FAB). Independent surface flag; default '' = off.
+      __MAILAGENT_ASSISTANT_MODAL__: JSON.stringify(process.env.MAILAGENT_ASSISTANT_MODAL ?? '')
     },
     resolve: {
       alias: {
