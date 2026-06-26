@@ -12,13 +12,13 @@
 from __future__ import annotations
 
 import json
-import threading
-import time
-from typing import Any
 from unittest.mock import MagicMock, patch
 
-import pytest
 
+from src.events.inprocess_bus import (
+    InProcessEventBus,
+    reset_inprocess_bus_for_tests,
+)
 from src.events.publisher import (
     DEFAULT_CHANNEL,
     EventPublisher,
@@ -118,9 +118,11 @@ class TestPublishHappy:
 class TestSafePublishAndSingleton:
     def setup_method(self):
         reset_publisher_for_tests()
+        reset_inprocess_bus_for_tests()
 
     def teardown_method(self):
         reset_publisher_for_tests()
+        reset_inprocess_bus_for_tests()
 
     def test_get_publisher_singleton(self):
         a = get_publisher()
@@ -133,14 +135,19 @@ class TestSafePublishAndSingleton:
         b = get_publisher()
         assert a is not b
 
-    def test_safe_publish_swallows_exceptions(self):
-        """safe_publish 调用一个 get_publisher() 抛异常的场景 → silent."""
+    def test_safe_publish_swallows_exceptions(self, monkeypatch):
+        """safe_publish 任何异常 silent (redis 分支 get_publisher 抛)."""
+        from src.config import config
+        monkeypatch.setattr(config, "redis_url", "redis://localhost:6379")
         with patch("src.events.publisher.get_publisher", side_effect=RuntimeError("boom")):
-            # 不应抛
-            safe_publish("email.new", internal_id=1)
+            safe_publish("email.new", internal_id=1)  # 不抛即通过
 
-    def test_safe_publish_uses_singleton(self):
-        with patch.object(EventPublisher, "publish", return_value=True) as mock_pub:
+    def test_safe_publish_redis_set_routes_to_redis(self, monkeypatch):
+        """redis_url 非空 → EventPublisher.publish, 不碰进程内总线 (回归 guard)."""
+        from src.config import config
+        monkeypatch.setattr(config, "redis_url", "redis://localhost:6379")
+        with patch.object(EventPublisher, "publish", return_value=True) as mock_pub, \
+             patch.object(InProcessEventBus, "publish") as mock_bus:
             get_publisher()  # 触发单例 init
             safe_publish("email.synced", internal_id=42, data={"x": 1}, source="cli")
             mock_pub.assert_called_once()
@@ -148,6 +155,42 @@ class TestSafePublishAndSingleton:
             assert kwargs.get("internal_id") == 42
             assert kwargs.get("data") == {"x": 1}
             assert kwargs.get("source") == "cli"
+            mock_bus.assert_not_called()
+
+    def test_safe_publish_no_redis_routes_to_bus(self, monkeypatch):
+        """redis_url 空 → 投进程内总线 (合法 JSON frame), 不调 EventPublisher.publish."""
+        from src.config import config
+        monkeypatch.setattr(config, "redis_url", "")
+        with patch.object(EventPublisher, "publish", return_value=True) as mock_pub, \
+             patch.object(InProcessEventBus, "publish") as mock_bus:
+            safe_publish("email.synced", internal_id=42, data={"x": 1}, source="cli")
+            mock_bus.assert_called_once()
+            frame = mock_bus.call_args.args[0]
+            parsed = json.loads(frame)
+            assert parsed["event_type"] == "email.synced"
+            assert parsed["internal_id"] == 42
+            assert parsed["data"] == {"x": 1}
+            assert parsed["source"] == "cli"
+            assert isinstance(parsed["ts"], (int, float))
+            mock_pub.assert_not_called()
+
+    def test_payload_schema_parity(self, monkeypatch):
+        """bus frame schema 与 EventPublisher 序列化一致 (单源 _build_payload)."""
+        from src.config import config
+        # Redis 分支序列化
+        p = EventPublisher(redis_url="redis://x", redis_db=2)
+        mock = MagicMock(return_value=1)
+        p._client = MagicMock(publish=mock)
+        p.publish("email.new", internal_id=7, data={"k": "v"}, source="s")
+        redis_payload = json.loads(mock.call_args.args[1])
+        # 进程内总线分支序列化
+        monkeypatch.setattr(config, "redis_url", "")
+        with patch.object(InProcessEventBus, "publish") as mock_bus:
+            safe_publish("email.new", internal_id=7, data={"k": "v"}, source="s")
+        bus_payload = json.loads(mock_bus.call_args.args[0])
+        redis_payload.pop("ts")
+        bus_payload.pop("ts")
+        assert redis_payload == bus_payload
 
 
 # ============================================================

@@ -31,6 +31,23 @@ from loguru import logger
 DEFAULT_CHANNEL = "mailagent:events:v1"
 
 
+def _build_payload(
+    event_type: str,
+    *,
+    internal_id: Optional[int],
+    data: Optional[Dict[str, Any]],
+    source: str,
+) -> Dict[str, Any]:
+    """单源化 SSE 事件 payload schema (Redis 路径 + 进程内总线路径共用, 防漂移)。"""
+    return {
+        "event_type": event_type,
+        "ts": time.time(),
+        "internal_id": internal_id,
+        "data": data or {},
+        "source": source,
+    }
+
+
 class EventPublisher:
     """同步 publish 包装. 用 redis-py 同步客户端的 publish() (~1ms)."""
 
@@ -88,13 +105,9 @@ class EventPublisher:
         client = self._client_or_none()
         if client is None:
             return False
-        payload = {
-            "event_type": event_type,
-            "ts": time.time(),
-            "internal_id": internal_id,
-            "data": data or {},
-            "source": source,
-        }
+        payload = _build_payload(
+            event_type, internal_id=internal_id, data=data, source=source
+        )
         try:
             client.publish(
                 self.channel,
@@ -152,14 +165,29 @@ def safe_publish(
     data: Optional[Dict[str, Any]] = None,
     source: str = "mailagent",
 ) -> None:
-    """便利函数: get_publisher().publish 包一层 try; 任何异常都 silent.
+    """便利函数: 按 redis_url 选传输, 任何异常 silent (主链路不被烧穿)。
 
-    使用场景: caller 不关心 SSE 失败，主链路不被烧穿.
+    - redis_url 在场 → Redis publish (远程 web + 旧用户外部 Redis, 字节级不变)
+    - redis_url 缺席 → 进程内总线 (一体化 app: serve 进程内 sse_server fanout 到前端;
+      serve-api 进程调到这里 → bus._loop=None → no-op, 由前端乐观 + 同步按钮(X) 兜底)
+
+    使用场景: caller 不关心 SSE 失败。
     例: outbox.mark_done() → safe_publish('outbox.done', internal_id=...).
     """
     try:
-        get_publisher().publish(
-            event_type, internal_id=internal_id, data=data, source=source
-        )
+        from src.config import config
+
+        if config.redis_url:
+            get_publisher().publish(
+                event_type, internal_id=internal_id, data=data, source=source
+            )
+        else:
+            from src.events.inprocess_bus import get_inprocess_bus
+
+            payload = _build_payload(
+                event_type, internal_id=internal_id, data=data, source=source
+            )
+            frame = json.dumps(payload, ensure_ascii=False, default=str)
+            get_inprocess_bus().publish(frame)
     except Exception as e:
         logger.debug(f"[publisher] safe_publish swallowed: {event_type}: {e}")

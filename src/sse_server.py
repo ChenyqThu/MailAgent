@@ -103,9 +103,8 @@ async def _stream_events(request: web.Request) -> web.StreamResponse:
 
     redis_url = _get_redis_url()
     if not redis_url:
-        return web.json_response(
-            {"error": "redis_url not configured"}, status=503
-        )
+        # 无 Redis (一体化 app): 订阅进程内总线, 不再 503 (Y, task #11)
+        return await _stream_events_inprocess(request)
 
     resp = web.StreamResponse(
         status=200,
@@ -192,6 +191,67 @@ async def _stream_events(request: web.Request) -> web.StreamResponse:
             pass
 
 
+async def _stream_events_inprocess(request: web.Request) -> web.StreamResponse:
+    """无 Redis (一体化 app): 订阅进程内总线 InProcessEventBus, 复用 redis 分支同款
+    SSE 帧 (event: mailagent / event: ping) + heartbeat + 断连清理。
+
+    Redis 分支字节级不变 —— 仅 token gate 后、redis_url 缺席时改走这里 (取代旧 503)。
+    data 行内容 = safe_publish 投递的已序列化 JSON frame (与 redis pubsub 的 data 同形)。
+    """
+    from src.events.inprocess_bus import get_inprocess_bus
+
+    resp = web.StreamResponse(
+        status=200,
+        headers={
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+    await resp.prepare(request)
+
+    bus = get_inprocess_bus()
+    queue = bus.subscribe()
+    _state["subscriber_count"] += 1
+    peer = request.remote or "?"
+    logger.info(
+        f"[sse] client connected from {peer} "
+        f"(in-process, total={_state['subscriber_count']})"
+    )
+
+    try:
+        while not request.transport or not request.transport.is_closing():
+            try:
+                data = await asyncio.wait_for(queue.get(), timeout=SSE_HEARTBEAT_SEC)
+            except asyncio.TimeoutError:
+                # timeout → heartbeat (防代理空闲断连)
+                try:
+                    await resp.write(b"event: ping\ndata: \n\n")
+                except (ConnectionResetError, asyncio.CancelledError):
+                    break
+                continue
+            except asyncio.CancelledError:
+                raise
+            # SSE 帧: event + data + 空行 (与 redis 分支逐字一致)
+            frame = f"event: mailagent\ndata: {data}\n\n"
+            try:
+                await resp.write(frame.encode("utf-8"))
+                _state["last_event_ts"] = time.time()
+            except (ConnectionResetError, asyncio.CancelledError):
+                break
+        return resp
+    except asyncio.CancelledError:
+        raise
+    finally:
+        bus.unsubscribe(queue)
+        _state["subscriber_count"] = max(0, _state["subscriber_count"] - 1)
+        logger.info(
+            f"[sse] client disconnected from {peer} "
+            f"(in-process, remaining={_state['subscriber_count']})"
+        )
+
+
 async def _health(request: web.Request) -> web.Response:
     """SSE server 健康检查 (无鉴权).
 
@@ -233,6 +293,11 @@ async def start_sse_server(
     app = make_app()
     runner = web.AppRunner(app, access_log=None)
     await runner.setup()
+    # 把进程内总线绑到当前 (serve) loop, 让 safe_publish 的无-Redis 投递能 call_soon
+    # 调度过来。redis 在场时无害 (无人 subscribe bus, publish 早返回)。
+    from src.events.inprocess_bus import get_inprocess_bus
+
+    get_inprocess_bus().bind_loop(asyncio.get_running_loop())
     site = web.TCPSite(runner, host=host, port=port, reuse_address=True)
     await site.start()
     _state["started_at"] = time.time()
