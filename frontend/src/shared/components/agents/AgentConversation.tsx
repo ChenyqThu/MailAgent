@@ -182,9 +182,18 @@ export function AgentConversation({ chat, activeItem }: AgentConversationProps):
   // (continue it in the inbox panel instead).
   const isEmailSession = activeItem?.anchor_type === 'email' && activeItem.email_id != null
   const emailAnchorId = isEmailSession ? (activeItem!.email_id as number) : null
-  const activeKind: ChatBackendKind =
-    activeItem?.backend_kind ?? (gatewayLive ? 'ai-sdk' : 'custom-api')
-  const useAiSdkRuntime = activeKind === 'ai-sdk' && gatewayLive
+  // Resolve the active session's backend_kind. Prefer the unified item; while it's still loading, fall
+  // back to the engine's own session list (general sessions whose metadata useGeneralChat already has).
+  // For a brand-new chat (no active id) default to ai-sdk when the gateway is live. metadataPending =
+  // an EXISTING session whose kind isn't known anywhere yet → the render DEFERS the runtime (placeholder)
+  // rather than assume ai-sdk, which would misroute a custom-api session into the AI SDK runtime and
+  // persist a turn to the wrong backend-kind session.
+  const knownKind: ChatBackendKind | undefined =
+    activeItem?.backend_kind ??
+    chat.sessions.find((s) => s.id === chat.activeSessionId)?.backend_kind
+  const metadataPending = chat.activeSessionId !== null && knownKind === undefined
+  const activeKind: ChatBackendKind = knownKind ?? (gatewayLive ? 'ai-sdk' : 'custom-api')
+  const useAiSdkRuntime = activeKind === 'ai-sdk' && gatewayLive && !metadataPending
   // Read-only when the active session can't run a live turn HERE: an email session without the live
   // gateway, a retired notion-agent, or an ai-sdk session while the gateway is degraded/off.
   const readOnly = isEmailSession
@@ -463,7 +472,11 @@ export function AgentConversation({ chat, activeItem }: AgentConversationProps):
       )}
 
       <ChatComposerControlsProvider value={composerControls}>
-        {useAiSdkRuntime && gatewayBaseUrl ? (
+        {metadataPending ? (
+          // An existing session whose backend_kind isn't known yet (unified list still loading) — defer
+          // the runtime mount so we never misroute it to the AI SDK runtime by default (codex HIGH-2).
+          <AgentSwitchPlaceholder />
+        ) : useAiSdkRuntime && gatewayBaseUrl ? (
           contextInjectionOn && !reloadMessagesReady ? (
             // session switch in flight — neutral placeholder until messages match the active session.
             <AgentSwitchPlaceholder />

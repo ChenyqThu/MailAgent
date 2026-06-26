@@ -320,6 +320,7 @@ class ChatDb:
                 "backend_kind": backend_kind,
                 "backend_model": backend_model,
                 "backend_agent_page_id": backend_agent_page_id,
+                "title": None,
                 "created_at": now,
                 "updated_at": now,
             }
@@ -354,6 +355,7 @@ class ChatDb:
                 "backend_kind": backend_kind,
                 "backend_model": backend_model,
                 "backend_agent_page_id": backend_agent_page_id,
+                "title": None,
                 "created_at": now,
                 "updated_at": now,
             }
