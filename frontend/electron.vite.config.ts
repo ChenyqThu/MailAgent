@@ -80,7 +80,10 @@ export default defineConfig({
       // Phase 06a (cutover) — MASTER switch (shared with the main define above; AI_SDK_NEW_SESSION
       // _DEFAULT = '' off in Chunk B, flipped to '1' at cutover). flags.ts falls back to this when a
       // sub-flag is unset; MAILAGENT_CHAT_RUNTIME=legacy overrides it back to legacy.
-      __MAILAGENT_AI_SDK_NEW_SESSION_DEFAULT__: JSON.stringify(AI_SDK_NEW_SESSION_DEFAULT)
+      __MAILAGENT_AI_SDK_NEW_SESSION_DEFAULT__: JSON.stringify(AI_SDK_NEW_SESSION_DEFAULT),
+      // redesign — renderer mirror of MAILAGENT_AGENT_VIEW (gates the interactive MailAgent
+      // general-agent view at /sessions). Independent surface flag; default '' = off.
+      __MAILAGENT_AGENT_VIEW__: JSON.stringify(process.env.MAILAGENT_AGENT_VIEW ?? '')
     },
     resolve: {
       alias: {

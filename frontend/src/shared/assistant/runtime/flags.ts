@@ -49,6 +49,12 @@ declare const __MAILAGENT_AI_SDK_CONTEXT_INJECTION__: string | undefined
 // (electron.vite/vite.web define). Under vitest there is no define → undefined → master off → every
 // sub-flag keeps its byte-identical default-off. NON-secret per-flag toggle.
 declare const __MAILAGENT_AI_SDK_NEW_SESSION_DEFAULT__: string | undefined
+// redesign — renderer mirror of MAILAGENT_AGENT_VIEW. Gates the interactive MailAgent general-agent
+// VIEW at /sessions (left history + live thread + quick-actions) replacing the read-only ChatsTab,
+// and repoints Cmd+O / the command palette / the IPC menu to navigate there. INDEPENDENT surface flag
+// (NOT folded into the NEW_SESSION_DEFAULT master): default '' (off) → /sessions=ChatsTab, Cmd+O=dialog,
+// byte-identical. NON-secret per-flag toggle, injected like the others.
+declare const __MAILAGENT_AGENT_VIEW__: string | undefined
 
 export type ChatRuntimeMode = 'legacy' | 'external-store' | 'ai-sdk'
 
@@ -108,6 +114,10 @@ function buildNewSessionDefaultFlag(): string | undefined {
   return typeof __MAILAGENT_AI_SDK_NEW_SESSION_DEFAULT__ !== 'undefined'
     ? __MAILAGENT_AI_SDK_NEW_SESSION_DEFAULT__
     : undefined
+}
+
+function buildAgentViewFlag(): string | undefined {
+  return typeof __MAILAGENT_AGENT_VIEW__ !== 'undefined' ? __MAILAGENT_AGENT_VIEW__ : undefined
 }
 
 /** Phase 06a — is the NEW_SESSION_DEFAULT master switched on? Only true when the master
@@ -183,6 +193,16 @@ export function isAiSdkContextInjectionEnabled(): boolean {
   const c = resolveFlagRaw('MAILAGENT_AI_SDK_CONTEXT_INJECTION', buildAiSdkContextInjectionFlag)
   if (c.set) return truthy(c.value)
   return getChatRuntimeMode() === 'ai-sdk'
+}
+
+/** redesign — true when the `/sessions` route renders the new interactive MailAgent general-agent
+ *  VIEW (left history + live thread + quick-actions) instead of the legacy read-only ChatsTab, and
+ *  Cmd+O / the command palette / the IPC menu navigate there instead of opening GeneralAgentDialog.
+ *  INDEPENDENT build-time surface flag — does NOT fold into the NEW_SESSION_DEFAULT master; an
+ *  explicit MAILAGENT_AGENT_VIEW wins, default OFF → byte-identical (/sessions = ChatsTab, Cmd+O =
+ *  dialog, Sidebar reads "AI 会话历史"). Evaluated at call time so tests can stub the env. */
+export function isAgentViewEnabled(): boolean {
+  return truthy(resolveFlagRaw('MAILAGENT_AGENT_VIEW', buildAgentViewFlag).value)
 }
 
 /** Loopback base URL of the embedded AI SDK Gateway, discovered from the

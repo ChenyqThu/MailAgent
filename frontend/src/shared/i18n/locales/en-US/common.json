@@ -499,6 +499,7 @@
     "flagged": "Flagged",
     "allMail": "All mail",
     "aiSessions": "AI sessions",
+    "agentView": "MailAgent",
     "adminKanban": "Admin",
     "calendar": "Calendar",
     "settings": "Settings",
@@ -545,6 +546,63 @@
       "title": "Custom AI isn't configured yet",
       "hint": "Add an LLM API key in Settings → AI to use the General Agent.",
       "openSettings": "Open Settings"
+    }
+  },
+  "agentView": {
+    "welcome": "How can I help you?",
+    "emptyHint": "Ask anything, or @-mention an email to bring it into context",
+    "newSession": "New chat",
+    "rename": "Rename",
+    "delete": "Delete",
+    "collapseSidebar": "Collapse / expand history",
+    "historyTitle": "Chats",
+    "emptyHistory": "No conversations yet",
+    "group": {
+      "today": "Today",
+      "yesterday": "Yesterday",
+      "earlier": "Earlier"
+    },
+    "quickActions": {
+      "summarize": {
+        "label": "Summarize",
+        "options": {
+          "unread": "Summarize the unread emails in my inbox",
+          "weekly": "Give me a digest of this week's important emails",
+          "sender": "Summarize recent emails from a specific sender"
+        }
+      },
+      "draft": {
+        "label": "Draft a reply",
+        "options": {
+          "followup": "Draft a follow-up email for me",
+          "decline": "Politely decline a request",
+          "thanks": "Draft a short thank-you reply"
+        }
+      },
+      "search": {
+        "label": "Search mail",
+        "options": {
+          "invoice": "Find recent invoices or bills",
+          "unanswered": "Find emails I haven't replied to",
+          "attachments": "Find emails with attachments"
+        }
+      },
+      "todo": {
+        "label": "This week",
+        "options": {
+          "needReply": "List emails that need my reply",
+          "waiting": "Who am I waiting on",
+          "thisWeek": "What to follow up on this week"
+        }
+      },
+      "write": {
+        "label": "Write",
+        "options": {
+          "meeting": "Write a meeting invitation email",
+          "report": "Draft this week's project report",
+          "intro": "Write an introduction email"
+        }
+      }
     }
   },
   "chat": {
