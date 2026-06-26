@@ -17,6 +17,7 @@ import i18n from '@shared/i18n'
 import { useShortcut } from '@shared/hooks/useShortcut'
 import { toggleAIChatPanel } from '@shared/state/ai-chat-panel'
 import { toggleGeneralAgent } from '@shared/state/general-agent'
+import { isAgentViewEnabled } from '@shared/assistant/runtime/flags'
 import { useCommandPalette } from '@shared/state/command-palette'
 import { openKeyboardHelp } from '@shared/state/keyboard-help'
 import { useNavCollapsed } from '@shared/state/nav-shell'
@@ -52,9 +53,15 @@ export function GlobalShortcuts(): null {
 
   // P3 — ⌘O toggles the General Agent dialog (Cmd+O = "Open" a context-free
   // Custom AI conversation, not tied to any email). Toggle semantics mirror ⌘K.
+  // redesign — flag-on ⌘O navigates to the MailAgent view (/sessions) instead of opening the legacy
+  // centered dialog; flag-off keeps the dialog toggle.
   const toggleGeneral = useCallback(() => {
+    if (isAgentViewEnabled()) {
+      void navigate({ to: '/sessions' })
+      return
+    }
     toggleGeneralAgent()
-  }, [])
+  }, [navigate])
 
   // Sprint 11 V1.4 — nav-shell collapse + locale toggle.
   const toggleNav = useCallback(() => {

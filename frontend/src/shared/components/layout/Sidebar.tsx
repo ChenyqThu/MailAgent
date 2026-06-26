@@ -37,6 +37,7 @@ import {
 } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
+import { isAgentViewEnabled } from '@shared/assistant/runtime/flags'
 import { HoverTip } from '@shared/components/ui/HoverTip'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { usePollingFallback } from '@shared/hooks/usePollingFallback'
@@ -520,11 +521,17 @@ export function Sidebar(): React.ReactElement {
             selected={onAgents}
             onClick={() => navigate({ to: '/agents', search: { tab: 'agents' } })}
           />
-          {/* AI 会话历史 — /sessions 全局视图（全部 backend + 搜索 + 筛选分类）。 */}
+          {/* /sessions — flag-off：AI 会话历史只读浏览；flag-on：MailAgent 交互式通用 agent 视图。 */}
           <NavRow
             icon={<History size={15} strokeWidth={1.75} />}
-            label={t('nav.aiSessions')}
-            title={collapsed ? t('nav.aiSessions') : undefined}
+            label={isAgentViewEnabled() ? t('nav.agentView') : t('nav.aiSessions')}
+            title={
+              collapsed
+                ? isAgentViewEnabled()
+                  ? t('nav.agentView')
+                  : t('nav.aiSessions')
+                : undefined
+            }
             selected={pathname === '/sessions'}
             onClick={() => navigate({ to: '/sessions' })}
           />
