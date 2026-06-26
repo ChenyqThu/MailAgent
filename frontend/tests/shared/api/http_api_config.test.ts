@@ -270,3 +270,47 @@ describe('HttpApi — email.search mode→raw 映射', () => {
     expect(calledUrl()).not.toContain('raw=')
   })
 })
+
+// #5 远程日历空 bug 回归 — serve-api 已按 C7 契约把裸数组/对象放进 envelope.data
+// （total/window/filters/worker_enabled 落 meta）。HttpApi 不可再取 .events/.event/
+// .calendars，否则对裸数组求属性永远 undefined → 远程日历永远空（本地 Electron 走
+// IPC 直读 SQLite 不受影响，故只有远程坏）。
+describe('HttpApi — calendar C7 裸数组解包（远程日历空 bug 回归）', () => {
+  const api = new HttpApi('/api')
+
+  test('eventsList → 返回裸 occurrence 数组（非 data.events）', async () => {
+    const occ = [
+      { ical_uid: 'u1', recurrence_id: null, summary: 'Standup' },
+      { ical_uid: 'u2', recurrence_id: null, summary: 'Review' }
+    ]
+    fetchMock.mockResolvedValue(envelopeResponse(occ))
+    const out = await api.calendar.eventsList({ fromIso: '2026-06-26', toIso: '2026-07-03' })
+    expect(calledMethod()).toBe('GET')
+    expect(calledUrl()).toContain('/api/calendar/events')
+    expect(out).toHaveLength(2)
+    expect(out).toEqual(occ)
+  })
+
+  test('eventsList 空数组 envelope → []（不抛）', async () => {
+    fetchMock.mockResolvedValue(envelopeResponse([]))
+    const out = await api.calendar.eventsList()
+    expect(out).toEqual([])
+  })
+
+  test('syncStatus → 返回裸 sync-state 数组（非 data.calendars）', async () => {
+    const states = [{ calendar_name: 'Work', ctag: 'c1', last_synced_at: null }]
+    fetchMock.mockResolvedValue(envelopeResponse(states))
+    const out = await api.calendar.syncStatus()
+    expect(calledUrl()).toContain('/api/calendar/sync-status')
+    expect(out).toHaveLength(1)
+    expect(out).toEqual(states)
+  })
+
+  test('eventGet → 返回裸 detail 对象（非 data.event）', async () => {
+    const detail = { ical_uid: 'u1', recurrence_id: null, summary: 'Standup' }
+    fetchMock.mockResolvedValue(envelopeResponse(detail))
+    const out = await api.calendar.eventGet({ icalUid: 'u1' })
+    expect(calledUrl()).toContain('/api/calendar/events/u1')
+    expect(out).toEqual(detail)
+  })
+})

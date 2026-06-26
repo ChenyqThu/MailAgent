@@ -555,8 +555,10 @@ export class HttpApi implements MailApi {
 
     // Reads — implemented.
     eventsList: async (opts: EventsListOpts = {}): Promise<CalendarEventOccurrence[]> => {
-      // data is {events,total,window,filters} → return data.events.
-      const data = await this.req<{ events: CalendarEventOccurrence[] }>(
+      // C7: serve-api 把 CalendarEventOccurrence[] 放进 envelope.data（裸数组，
+      // total/window/filters 落 meta）。req() 已解到 .data，直接当数组用——
+      // 旧代码再取 .events 对裸数组永远 undefined → 远程日历永远空。
+      const data = await this.req<CalendarEventOccurrence[]>(
         'GET',
         '/calendar/events',
         {
@@ -570,17 +572,18 @@ export class HttpApi implements MailApi {
           }
         }
       )
-      return data?.events ?? []
+      return data ?? []
     },
 
     eventGet: async (opts: EventGetOpts): Promise<CalendarEventDetail | null> => {
       try {
-        const data = await this.req<{ event: CalendarEventDetail }>(
+        // C7: serve-api 返裸 CalendarEventDetail 进 envelope.data（非 {event}）。
+        const data = await this.req<CalendarEventDetail>(
           'GET',
           `/calendar/events/${encodeURIComponent(opts.icalUid)}`,
           { query: { source: opts.source, recurrenceId: opts.recurrenceId } }
         )
-        return data?.event ?? null
+        return data ?? null
       } catch (e) {
         if (isNotFound(e)) return null
         throw e
@@ -588,12 +591,13 @@ export class HttpApi implements MailApi {
     },
 
     syncStatus: async (): Promise<CalendarSyncStateItem[]> => {
-      // data.calendars → CalendarSyncStateItem[].
-      const data = await this.req<{ calendars: CalendarSyncStateItem[] }>(
+      // C7: serve-api 返裸 CalendarSyncStateItem[] 进 envelope.data
+      // （total/worker_enabled 落 meta）。req() 已解到 .data。
+      const data = await this.req<CalendarSyncStateItem[]>(
         'GET',
         '/calendar/sync-status'
       )
-      return data?.calendars ?? []
+      return data ?? []
     },
 
     calendarNames: (): Promise<string[]> => this.req<string[]>('GET', '/calendar/names'),
