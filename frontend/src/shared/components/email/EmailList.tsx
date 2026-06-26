@@ -1091,10 +1091,8 @@ export function EmailList(): React.ReactElement {
     return ids
   }, [threadGroups])
 
-  // 搜索跳转目标一旦真正出现在列表里, 就解除豁免(此后手动切邮箱恢复正常 reset)。
-  if (navTargetId !== null && orderedIds.includes(navTargetId)) {
-    queueMicrotask(() => clearNavTarget())
-  }
+  // #2/codex review MEDIUM: navTargetId 的「解除豁免」移到下方滚动 effect (仅定位成功后
+  // 才清), 避免折叠日期组/线程里的目标(在 orderedIds 里但未渲染成 row)被提前清掉 → 滚不到。
   const firstId = orderedIds[0]
   if (
     firstId !== undefined &&
@@ -1219,7 +1217,10 @@ export function EmailList(): React.ReactElement {
     const el = listRef.current?.element
     if (!el) return
     const top = rowTopOfId(rows, rowHeights, navTargetId)
+    // 目标行尚未渲染(未分页到 / 折叠组或线程里) → 不清 navTargetId, 等 rows 变化重跑本
+    // effect(续拉/展开后仍可定位); 仅定位成功才解除豁免。codex review MEDIUM。
     if (top === null) return
+    clearNavTarget()
     const viewTop = el.scrollTop
     const viewBottom = viewTop + el.clientHeight
     if (top >= viewTop && top <= viewBottom - 40) return
@@ -1243,7 +1244,7 @@ export function EmailList(): React.ReactElement {
         isAnchoringRef.current = false
       }
     })
-  }, [navTargetId, rows, rowHeights])
+  }, [navTargetId, rows, rowHeights, clearNavTarget])
 
   const priActive = !allPrioritiesSelected()
   const catActive = !allCategoriesSelected()

@@ -27,6 +27,12 @@ import {
 
 import { cn } from '@shared/lib/cn'
 
+// codex review LOW: <input type="color"> 只接受 #rrggbb; 草稿 HTML 可解析出 rgb()/
+// 具名色 → 给取色器回退到有效 hex(不动实际 textStyle mark, icon 仍用原值显示)。
+function toHexColor(c: string, fallback: string): string {
+  return /^#[0-9a-fA-F]{6}$/.test(c) ? c : fallback
+}
+
 function FmtBtn({
   icon,
   label,
@@ -201,7 +207,7 @@ export function ComposeFormatToolbar({ editor }: { editor: Editor }): React.Reac
         <Baseline size={13} strokeWidth={2} style={{ color: fmt.color }} />
         <input
           type="color"
-          value={fmt.color}
+          value={toHexColor(fmt.color, '#1a1a1a')}
           className="absolute inset-0 h-full w-full opacity-0 cursor-pointer"
           onChange={(e) => editor.chain().focus().setColor(e.target.value).run()}
         />
@@ -216,7 +222,7 @@ export function ComposeFormatToolbar({ editor }: { editor: Editor }): React.Reac
         <Highlighter size={13} strokeWidth={2} style={{ color: fmt.backgroundColor }} />
         <input
           type="color"
-          value={fmt.backgroundColor}
+          value={toHexColor(fmt.backgroundColor, '#fde68a')}
           className="absolute inset-0 h-full w-full opacity-0 cursor-pointer"
           onChange={(e) => editor.chain().focus().setBackgroundColor(e.target.value).run()}
         />
@@ -260,11 +266,15 @@ export function ComposeFormatToolbar({ editor }: { editor: Editor }): React.Reac
             placeholder={t('compose.editor.linkUrl')}
             onChange={(e) => setLinkValue(e.target.value)}
             onKeyDown={(e) => {
+              // stopPropagation: 否则 Esc/Enter 冒泡到 ComposePanel 的 window 级 keydown
+              // (Escape 会关掉整个撰写框) —— codex review MEDIUM。
               if (e.key === 'Enter') {
                 e.preventDefault()
+                e.stopPropagation()
                 applyLink()
               } else if (e.key === 'Escape') {
                 e.preventDefault()
+                e.stopPropagation()
                 setLinkOpen(false)
               }
             }}
