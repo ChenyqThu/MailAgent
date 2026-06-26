@@ -55,6 +55,12 @@ declare const __MAILAGENT_AI_SDK_NEW_SESSION_DEFAULT__: string | undefined
 // (NOT folded into the NEW_SESSION_DEFAULT master): default '' (off) → /sessions=ChatsTab, Cmd+O=dialog,
 // byte-identical. NON-secret per-flag toggle, injected like the others.
 declare const __MAILAGENT_AGENT_VIEW__: string | undefined
+// assistant-modal — renderer mirror of MAILAGENT_ASSISTANT_MODAL. Gates the floating / sidebar /
+// fullscreen AI chat modal (right-bottom FAB entry + three-mode shell reusing AgentConversation)
+// replacing the legacy AssistantUIChatPanel sidebar drawer. INDEPENDENT surface flag (NOT folded into
+// the NEW_SESSION_DEFAULT master): default '' (off) → email panel / ⌘L / agent view byte-identical.
+// NON-secret per-flag toggle.
+declare const __MAILAGENT_ASSISTANT_MODAL__: string | undefined
 
 export type ChatRuntimeMode = 'legacy' | 'external-store' | 'ai-sdk'
 
@@ -118,6 +124,12 @@ function buildNewSessionDefaultFlag(): string | undefined {
 
 function buildAgentViewFlag(): string | undefined {
   return typeof __MAILAGENT_AGENT_VIEW__ !== 'undefined' ? __MAILAGENT_AGENT_VIEW__ : undefined
+}
+
+function buildAssistantModalFlag(): string | undefined {
+  return typeof __MAILAGENT_ASSISTANT_MODAL__ !== 'undefined'
+    ? __MAILAGENT_ASSISTANT_MODAL__
+    : undefined
 }
 
 /** Phase 06a — is the NEW_SESSION_DEFAULT master switched on? Only true when the master
@@ -203,6 +215,15 @@ export function isAiSdkContextInjectionEnabled(): boolean {
  *  dialog, Sidebar reads "AI 会话历史"). Evaluated at call time so tests can stub the env. */
 export function isAgentViewEnabled(): boolean {
   return truthy(resolveFlagRaw('MAILAGENT_AGENT_VIEW', buildAgentViewFlag).value)
+}
+
+/** assistant-modal — true when the email AI panel renders as the floating / sidebar / fullscreen chat
+ *  modal (right-bottom FAB entry, three-mode shell reusing AgentConversation) instead of the legacy
+ *  AssistantUIChatPanel sidebar drawer. INDEPENDENT build-time surface flag — an explicit
+ *  MAILAGENT_ASSISTANT_MODAL wins, default OFF → byte-identical (toolbar AI button + ⌘L + sidebar drawer
+ *  unchanged). Evaluated at call time so tests can stub the env. */
+export function isAssistantModalEnabled(): boolean {
+  return truthy(resolveFlagRaw('MAILAGENT_ASSISTANT_MODAL', buildAssistantModalFlag).value)
 }
 
 /** Loopback base URL of the embedded AI SDK Gateway, discovered from the

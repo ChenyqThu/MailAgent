@@ -23,6 +23,8 @@ import { StatusBar } from './StatusBar'
 import { EmailList } from '../email/EmailList'
 import { EmailDetail } from '../email/EmailDetail'
 import { AIChatPanel } from '../chat'
+import { ChatModalFab } from '@shared/assistant/modal/ChatModalFab'
+import { isAssistantModalEnabled } from '@shared/assistant/runtime/flags'
 
 // Lane C — AIChatPanel 整列挤压出入场宽度（DESIGN.md §4.1 layout-anim 许可：
 // 非列表 / 单实例 / 低频，width tween 可接受）。360 = mockup 默认右栏宽，F3a 起
@@ -381,6 +383,8 @@ export function InboxLayout(): React.ReactElement {
       {/* Sprint 17 — 旧 Sprint 5 fixed BatchActionBar 移除. floating bar
           (Sprint 12 设计, components/email/BatchActionBar.tsx) 由 EmailList
           portal 到 document.body, 不再需要在 chrome 这层 mount. */}
+      {/* assistant-modal P1 — 正文右下 FAB 入口（flag-on；ChatModalFab 自 portal 到 body）。 */}
+      {isAssistantModalEnabled() && <ChatModalFab />}
       <StatusBar />
     </div>
   )

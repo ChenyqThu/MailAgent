@@ -47,6 +47,7 @@ import { HoverTip } from '@shared/components/ui/HoverTip'
 import { useFocusTrap } from '@shared/hooks/useFocusTrap'
 import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 import { toggleAIChatPanel, useAIChatPanel } from '@shared/state/ai-chat-panel'
+import { isAssistantModalEnabled } from '@shared/assistant/runtime/flags'
 import type { ComposeMode } from '@shared/api/types'
 
 export type TranslateStatus = 'idle' | 'loading' | 'translated' | 'error'
@@ -861,8 +862,13 @@ export function EmailToolbar({
           label={`${t('toolbar.next')} · J`}
           onClick={onNext}
         />
-        <Divider />
-        <AIPanelToggleButton />
+        {/* assistant-modal P1 — flag-on：退役工具栏 AI 按钮（入口改正文右下 FAB）；flag-off 原样。 */}
+        {!isAssistantModalEnabled() && (
+          <>
+            <Divider />
+            <AIPanelToggleButton />
+          </>
+        )}
       </div>
 
       <ResyncConfirmDialog

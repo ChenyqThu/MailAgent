@@ -15,9 +15,9 @@ import { useNavigate } from '@tanstack/react-router'
 import i18n from '@shared/i18n'
 
 import { useShortcut } from '@shared/hooks/useShortcut'
-import { toggleAIChatPanel } from '@shared/state/ai-chat-panel'
+import { openChatModal, toggleAIChatPanel } from '@shared/state/ai-chat-panel'
 import { toggleGeneralAgent } from '@shared/state/general-agent'
-import { isAgentViewEnabled } from '@shared/assistant/runtime/flags'
+import { isAgentViewEnabled, isAssistantModalEnabled } from '@shared/assistant/runtime/flags'
 import { useCommandPalette } from '@shared/state/command-palette'
 import { openKeyboardHelp } from '@shared/state/keyboard-help'
 import { useNavCollapsed } from '@shared/state/nav-shell'
@@ -47,8 +47,15 @@ export function GlobalShortcuts(): null {
 
   // Sprint 10 user-acceptance — ⌘L toggles the AI Chat panel (was always
   // mounted before, see ai-chat-panel.ts module doc).
+  // assistant-modal: flag-on 退役 ⌘L（入口改 FAB + ⌘J）；flag-off 保留 legacy 侧边面板 toggle。
   const toggleAIPanel = useCallback(() => {
+    if (isAssistantModalEnabled()) return
     toggleAIChatPanel()
+  }, [])
+  // assistant-modal: ⌘J 展开 chat modal（仅 flag-on）；flag-off no-op。
+  const openModal = useCallback(() => {
+    if (!isAssistantModalEnabled()) return
+    openChatModal()
   }, [])
 
   // P3 — ⌘O toggles the General Agent dialog (Cmd+O = "Open" a context-free
@@ -80,6 +87,7 @@ export function GlobalShortcuts(): null {
   useShortcut('cmd+k', togglePalette)
   useShortcut('cmd+,', goSettings)
   useShortcut('cmd+l', toggleAIPanel)
+  useShortcut('cmd+j', openModal)
   useShortcut('cmd+o', toggleGeneral)
   // ⌘N — 写新邮件 (居中模态, ComposeNewModal 挂 RootLayout)。global scope: 任意
   // 页面可开, 与全局侧边栏「写邮件」按钮一致。editable context 默认 short-circuit,

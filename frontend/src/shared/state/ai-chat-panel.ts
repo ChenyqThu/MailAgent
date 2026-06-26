@@ -13,6 +13,10 @@ import { create } from 'zustand'
 
 import type { ChatBackendKind } from '@shared/api/types'
 
+/** assistant-modal (新大版本) — dock mode of the floating AI chat modal. `fullscreen` is an ACTION
+ *  (navigate to the agent view), NOT a persisted dock mode, so only these two are cached. */
+export type AssistantMode = 'floating' | 'sidebar'
+
 interface AIChatPanelStore {
   visible: boolean
   setVisible(next: boolean): void
@@ -46,6 +50,18 @@ interface AIChatPanelStore {
   consumeRequestedBackend(): void
   requestOpenSession(emailId: number, sessionId: number, backendKind: ChatBackendKind): void
   consumePendingOpen(): void
+
+  // assistant-modal (新大版本) — three-mode AI chat modal, ORTHOGONAL to `visible` (visible = expanded
+  // vs minimised-to-FAB). `mode` is the cached dock mode (floating/sidebar, persisted in localStorage);
+  // fullscreen is an action that navigates to the agent view (parks `pendingAgentSessionId` for
+  // AgentViewLayout to consume). All fields are additive — the legacy panel / ⌘L never touch them.
+  mode: AssistantMode
+  setMode(next: AssistantMode): void
+  openChatModal(): void
+  hideChatModal(): void
+  pendingAgentSessionId: number | null
+  requestOpenAgentSession(sessionId: number): void
+  consumeOpenAgentSession(): void
 }
 
 const SIDEBAR_STORAGE_KEY = 'mailagent.chat.sidebarOpen'
@@ -67,6 +83,28 @@ function writePersistedSidebar(open: boolean): void {
     } else {
       localStorage.removeItem(SIDEBAR_STORAGE_KEY)
     }
+  } catch {
+    // localStorage unavailable — in-memory state still works for the session.
+  }
+}
+
+// assistant-modal (新大版本) — cached dock mode so re-opening the modal restores the last floating /
+// sidebar choice. Default floating; only 'sidebar' is stored explicitly (anything else → floating).
+const DOCK_MODE_STORAGE_KEY = 'mailagent.chat.dockMode'
+
+function readDockModePref(): AssistantMode {
+  try {
+    if (typeof localStorage === 'undefined') return 'floating'
+    return localStorage.getItem(DOCK_MODE_STORAGE_KEY) === 'sidebar' ? 'sidebar' : 'floating'
+  } catch {
+    return 'floating'
+  }
+}
+
+function writeDockModePref(mode: AssistantMode): void {
+  try {
+    if (typeof localStorage === 'undefined') return
+    localStorage.setItem(DOCK_MODE_STORAGE_KEY, mode)
   } catch {
     // localStorage unavailable — in-memory state still works for the session.
   }
@@ -103,6 +141,26 @@ export const useAIChatPanel = create<AIChatPanelStore>((set, get) => ({
   },
   consumePendingOpen() {
     set({ pendingOpen: null })
+  },
+  // assistant-modal (新大版本) — three-mode modal state.
+  mode: readDockModePref(),
+  setMode(next) {
+    set({ mode: next })
+    writeDockModePref(next)
+  },
+  openChatModal() {
+    // mode already holds the cached dock mode; just reveal (expand) the modal.
+    set({ visible: true })
+  },
+  hideChatModal() {
+    set({ visible: false })
+  },
+  pendingAgentSessionId: null,
+  requestOpenAgentSession(sessionId) {
+    set({ pendingAgentSessionId: sessionId })
+  },
+  consumeOpenAgentSession() {
+    set({ pendingAgentSessionId: null })
   }
 }))
 
@@ -142,4 +200,19 @@ export function openAIChatSession(
   const s = useAIChatPanel.getState()
   s.requestOpenSession(emailId, sessionId, backendKind)
   s.setVisible(true)
+}
+
+// ── assistant-modal (新大版本) — non-React entry points for the FAB / shortcuts / fullscreen jump ──
+/** Open (expand) the AI chat modal in its cached dock mode. Called by the FAB + ⌘J. */
+export function openChatModal(): void {
+  useAIChatPanel.getState().openChatModal()
+}
+/** Minimise the modal back to the FAB (keeps the cached mode; next open restores it). */
+export function hideChatModal(): void {
+  useAIChatPanel.getState().hideChatModal()
+}
+/** fullscreen jump — park the session id for AgentViewLayout to select on mount; the caller does the
+ *  router navigate + hideChatModal(). */
+export function requestOpenAgentSession(sessionId: number): void {
+  useAIChatPanel.getState().requestOpenAgentSession(sessionId)
 }

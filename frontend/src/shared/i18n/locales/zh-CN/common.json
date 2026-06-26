@@ -652,6 +652,9 @@
     "history": "会话历史",
     "historyHint": "切换历史会话 · ⇧⌥H",
     "closePanel": "收起面板 · ⌘L",
+    "fab": {
+      "label": "聊聊这封邮件"
+    },
     "resizePanel": "拖动调整面板宽度",
     "popout": {
       "button": "在独立窗口打开 · ⇧⌥W",

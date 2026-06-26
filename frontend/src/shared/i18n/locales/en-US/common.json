@@ -652,6 +652,9 @@
     "history": "History",
     "historyHint": "Toggle session history · ⇧⌥H",
     "closePanel": "Hide panel · ⌘L",
+    "fab": {
+      "label": "Chat about this page"
+    },
     "resizePanel": "Drag to resize panel",
     "popout": {
       "button": "Open in window · ⇧⌥W",
