@@ -3,23 +3,23 @@
 // A collapsible (260px ↔ 48px) thread-list for the general-agent surface, restyled from the
 // assistant-ui base template with our coral/ink tokens. Visual DNA borrowed from the ChatsTab
 // SessionRow/SessionListPane (the read-only /sessions browser this view replaces). Pure
-// props-driven — the parent AgentViewLayout owns the session state (useGeneralChat) — so the same
-// component serves Phase 1 (static list) and Phase 2 (live CRUD). Sessions group by updated_at into
-// Today / Yesterday / Earlier; each row has a hover arm-to-delete (rename deferred — no rename IPC).
-// General sessions carry no subject, so row titles come from the parent's lazy first-message preview.
+// props-driven — the parent AgentViewLayout owns the session state — so the same component serves
+// Phase 1 (static list) and Phase 9 (live CRUD). Phase 9: the list is UNIFIED (all agent sessions,
+// email + general) from listAllSessions; rows carry their own title (email subject / first user
+// message) + anchor icon. Sessions group by updated_at into Today / Yesterday / Earlier; each row has
+// a hover arm-to-delete (rename deferred — no rename IPC).
 
 import { useState } from 'react'
 import type { TFunction } from 'i18next'
 import { useTranslation } from 'react-i18next'
-import { Check, PanelLeft, Plus, Trash2, X } from 'lucide-react'
+import { Check, Mail, MessagesSquare, PanelLeft, Plus, Trash2, X } from 'lucide-react'
 
-import type { ChatSession } from '@shared/api/types'
+import type { ChatSessionListItem } from '@shared/api/types'
 import { cn } from '@shared/lib/cn'
 
 export interface AgentThreadListProps {
-  sessions: ChatSession[]
-  /** session id → lazily-loaded first-user-message preview (row title source). */
-  previews: Record<number, string | null>
+  /** Unified history — all sessions (email + general), newest-first. */
+  items: ChatSessionListItem[]
   activeSessionId: number | null
   onSelect: (id: number) => void
   onNew: () => void
@@ -39,28 +39,14 @@ function groupOf(updatedAtMs: number, todayStartMs: number): GroupKey {
   return 'earlier'
 }
 
-function titleOf(
-  session: ChatSession,
-  previews: Record<number, string | null>,
-  t: TFunction
-): string {
-  const preview = previews[session.id]
-  if (typeof preview === 'string' && preview.trim().length > 0) return preview.trim()
-  return t('sessions.untitled')
+// Unified title: an email session shows its subject; a general session shows the first user message.
+function titleOf(item: ChatSessionListItem, t: TFunction): string {
+  return item.email_subject?.trim() || item.first_user_message?.trim() || t('sessions.untitled')
 }
 
 export function AgentThreadList(props: AgentThreadListProps): React.ReactElement {
-  const {
-    sessions,
-    previews,
-    activeSessionId,
-    onSelect,
-    onNew,
-    onDelete,
-    collapsed,
-    onToggleCollapse,
-    fluid
-  } = props
+  const { items, activeSessionId, onSelect, onNew, onDelete, collapsed, onToggleCollapse, fluid } =
+    props
   const { t } = useTranslation()
   const [armedDelete, setArmedDelete] = useState<number | null>(null)
 
@@ -74,8 +60,8 @@ export function AgentThreadList(props: AgentThreadListProps): React.ReactElement
   const todayStart = new Date()
   todayStart.setHours(0, 0, 0, 0)
   const todayStartMs = todayStart.getTime()
-  const grouped: Record<GroupKey, ChatSession[]> = { today: [], yesterday: [], earlier: [] }
-  for (const s of sessions) grouped[groupOf(s.updated_at, todayStartMs)].push(s)
+  const grouped: Record<GroupKey, ChatSessionListItem[]> = { today: [], yesterday: [], earlier: [] }
+  for (const s of items) grouped[groupOf(s.updated_at, todayStartMs)].push(s)
 
   return (
     <aside
@@ -139,7 +125,7 @@ export function AgentThreadList(props: AgentThreadListProps): React.ReactElement
           isRail && 'pointer-events-none opacity-0'
         )}
       >
-        {sessions.length === 0 ? (
+        {items.length === 0 ? (
           <div className="px-2 py-6 text-center text-meta text-ink-fg-3">
             {t('agentView.emptyHistory')}
           </div>
@@ -154,7 +140,8 @@ export function AgentThreadList(props: AgentThreadListProps): React.ReactElement
                   {grouped[g].map((s) => (
                     <SessionRow
                       key={s.id}
-                      title={titleOf(s, previews, t)}
+                      title={titleOf(s, t)}
+                      isEmail={s.anchor_type === 'email'}
                       selected={s.id === activeSessionId}
                       armed={armedDelete === s.id}
                       onSelect={() => {
@@ -182,6 +169,7 @@ export function AgentThreadList(props: AgentThreadListProps): React.ReactElement
 
 function SessionRow({
   title,
+  isEmail,
   selected,
   armed,
   onSelect,
@@ -191,6 +179,7 @@ function SessionRow({
   t
 }: {
   title: string
+  isEmail: boolean
   selected: boolean
   armed: boolean
   onSelect: () => void
@@ -199,6 +188,8 @@ function SessionRow({
   onConfirmDelete: () => void
   t: TFunction
 }): React.ReactElement {
+  // Anchor cue: an email-anchored session (opened from the inbox panel) vs a general agent chat.
+  const Icon = isEmail ? Mail : MessagesSquare
   return (
     <div
       className={cn(
@@ -215,8 +206,9 @@ function SessionRow({
       <button
         type="button"
         onClick={onSelect}
-        className="flex h-9 min-w-0 flex-1 items-center rounded-lg pl-2.5 pr-8 text-left"
+        className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-lg pl-2.5 pr-8 text-left"
       >
+        <Icon size={13} strokeWidth={1.75} className="shrink-0 text-ink-fg-3" />
         <span className="min-w-0 flex-1 truncate text-body text-ink-fg-1" title={title}>
           {title}
         </span>

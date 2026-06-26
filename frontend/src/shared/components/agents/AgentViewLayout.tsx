@@ -8,6 +8,7 @@
 
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronLeft } from 'lucide-react'
 
 import { useMailApi } from '@shared/hooks/useMailApi'
@@ -17,9 +18,12 @@ import { AgentThreadList } from './AgentThreadList'
 import { AgentConversation } from './AgentConversation'
 import { useNarrow } from './hooks'
 
+const ALL_SESSIONS_KEY = ['chat', 'allSessions'] as const
+
 export function AgentViewLayout(): React.ReactElement {
   const { t } = useTranslation()
   const mailApi = useMailApi()
+  const qc = useQueryClient()
   const narrow = useNarrow()
   const chat = useGeneralChat()
   const [collapsed, setCollapsed] = useState(false)
@@ -27,43 +31,33 @@ export function AgentViewLayout(): React.ReactElement {
   // the conversation; the back arrow returns to the list).
   const [mobileDetail, setMobileDetail] = useState(false)
 
-  // Lazy first-user-message preview cache for row titles (general sessions have no subject) — mirror
-  // of GeneralAgentDialog / the email panel's sessionPreviews. The `missing.length === 0` guard makes
-  // the previews-in-deps loop converge (same proven shape).
-  const [previews, setPreviews] = useState<Record<number, string | null>>({})
-  const chatSessions = chat.sessions
+  // Phase 9 — UNIFIED history (email + general) for the left list, from listAllSessions (same query key
+  // as ChatsTab → shared cache). useGeneralChat stays the ENGINE (activeSessionId + select/new/delete +
+  // general send); each row carries its own title (email subject / first user message), so the lazy
+  // preview cache is gone.
+  const sessionsQ = useQuery({
+    queryKey: ALL_SESSIONS_KEY,
+    queryFn: () => mailApi.chat.listAllSessions(),
+    staleTime: 10_000
+  })
+  const items = sessionsQ.data ?? []
+  const invalidateSessions = (): void => {
+    void qc.invalidateQueries({ queryKey: ALL_SESSIONS_KEY })
+  }
+  // A new general session created via send / adoptSession grows useGeneralChat.sessions — mirror it
+  // into the unified list so the fresh chat shows up promptly (message_count freshness rides staleTime).
   useEffect(() => {
-    const missing = chatSessions.filter((s) => !(s.id in previews))
-    if (missing.length === 0) return undefined
-    let cancelled = false
-    void Promise.all(
-      missing.map(async (s) => {
-        try {
-          const msgs = await mailApi.chat.listMessages(s.id)
-          const firstUser = msgs.find((m) => m.role === 'user')
-          const preview = firstUser?.content?.trim() ?? null
-          return [s.id, preview === null ? null : preview.slice(0, 80)] as const
-        } catch {
-          return [s.id, null] as const
-        }
-      })
-    ).then((pairs) => {
-      if (cancelled) return
-      setPreviews((cur) => {
-        const next = { ...cur }
-        for (const [id, p] of pairs) next[id] = p
-        return next
-      })
-    })
-    return (): void => {
-      cancelled = true
-    }
-  }, [chatSessions, previews, mailApi])
+    invalidateSessions()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chat.sessions])
+
+  // The active session's unified item (anchor_type / email_id / backend_kind) drives the conversation's
+  // runtime + context routing (email vs general). null for a brand-new chat → general default.
+  const activeItem = items.find((s) => s.id === chat.activeSessionId) ?? null
 
   const list = (
     <AgentThreadList
-      sessions={chat.sessions}
-      previews={previews}
+      items={items}
       activeSessionId={chat.activeSessionId}
       onSelect={(id) => {
         void chat.selectSession(id)
@@ -73,7 +67,10 @@ export function AgentViewLayout(): React.ReactElement {
         chat.newSession()
         if (narrow) setMobileDetail(true)
       }}
-      onDelete={chat.deleteSession}
+      onDelete={(id) => {
+        chat.deleteSession(id)
+        invalidateSessions()
+      }}
       collapsed={collapsed}
       onToggleCollapse={() => setCollapsed((c) => !c)}
       fluid={narrow}
@@ -82,7 +79,7 @@ export function AgentViewLayout(): React.ReactElement {
 
   // The welcome heading + quick-action chips now live INSIDE AgentThread (demo layout: heading at the
   // viewport top, chips below the centered composer), so AgentConversation owns the empty state.
-  const conversation = <AgentConversation chat={chat} />
+  const conversation = <AgentConversation chat={chat} activeItem={activeItem} />
 
   if (narrow) {
     return mobileDetail ? (

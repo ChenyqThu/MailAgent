@@ -13,7 +13,7 @@ import { afterEach, beforeAll, describe, expect, test, vi } from 'vitest'
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
-import type { ChatMessage } from '@shared/api/types'
+import type { ChatMessage, ChatSessionListItem } from '@shared/api/types'
 import type { LegacyRuntimeChat } from '@shared/assistant/runtime/useLegacyExternalStoreRuntime'
 import i18n from '@shared/i18n'
 
@@ -28,6 +28,7 @@ import {
 } from '@shared/assistant/components/composerControls'
 import { AgentThread } from '@shared/components/agents/AgentThread'
 import { AgentQuickActions } from '@shared/components/agents/AgentQuickActions'
+import { AgentThreadList } from '@shared/components/agents/AgentThreadList'
 
 beforeAll(async () => {
   await i18n.changeLanguage('zh-CN')
@@ -191,5 +192,55 @@ describe('Agent view — demo-fidelity thread', () => {
     // (lexical trigger popover), so there is no separate @ button — only attach + model picker remain.
     await waitFor(() => expect(screen.getByText('claude-sonnet-4-6')).toBeTruthy())
     expect(screen.getByLabelText(i18n.t('chat.composer.attach'))).toBeTruthy()
+  })
+})
+
+function fakeListItem(over: Partial<ChatSessionListItem>): ChatSessionListItem {
+  const now = Date.now()
+  return {
+    id: 1,
+    email_id: null,
+    anchor_type: 'general',
+    anchor_id: null,
+    backend_kind: 'ai-sdk',
+    backend_model: null,
+    backend_agent_page_id: null,
+    created_at: now,
+    updated_at: now,
+    first_user_message: null,
+    message_count: 1,
+    email_subject: null,
+    email_sender: null,
+    ...over
+  }
+}
+
+describe('Agent view — unified history list (Phase 9)', () => {
+  const handlers = {
+    activeSessionId: null,
+    onSelect: vi.fn(),
+    onNew: vi.fn(),
+    onDelete: vi.fn(),
+    collapsed: false,
+    onToggleCollapse: vi.fn()
+  }
+
+  test('email session shows its subject; general session shows the first user message', () => {
+    render(
+      <AgentThreadList
+        items={[
+          fakeListItem({ id: 1, anchor_type: 'email', email_id: 99, email_subject: '续约确认' }),
+          fakeListItem({ id: 2, anchor_type: 'general', first_user_message: '帮我总结今天的邮件' })
+        ]}
+        {...handlers}
+      />
+    )
+    expect(screen.getByText('续约确认')).toBeTruthy()
+    expect(screen.getByText('帮我总结今天的邮件')).toBeTruthy()
+  })
+
+  test('empty unified list shows the empty-history hint', () => {
+    render(<AgentThreadList items={[]} {...handlers} />)
+    expect(screen.getByText(i18n.t('agentView.emptyHistory'))).toBeTruthy()
   })
 })

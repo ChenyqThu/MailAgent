@@ -17,7 +17,13 @@ import { useNavigate } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { Settings } from 'lucide-react'
 
-import type { ChatBackendKind, ChatMessage, ChatToolCall, SearchHit } from '@shared/api/types'
+import type {
+  ChatBackendKind,
+  ChatMessage,
+  ChatSessionListItem,
+  ChatToolCall,
+  SearchHit
+} from '@shared/api/types'
 import { cn } from '@shared/lib/cn'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import type { UseGeneralChatReturn } from '@shared/hooks/useGeneralChat'
@@ -136,9 +142,12 @@ function AgentSwitchPlaceholder(): React.JSX.Element {
 
 export interface AgentConversationProps {
   chat: UseGeneralChatReturn
+  /** The active session's unified-history item (anchor_type / email_id / backend_kind), or null for a
+   *  brand-new chat. Drives runtime + context routing (email-anchored vs general). */
+  activeItem: ChatSessionListItem | null
 }
 
-export function AgentConversation({ chat }: AgentConversationProps): React.JSX.Element {
+export function AgentConversation({ chat, activeItem }: AgentConversationProps): React.JSX.Element {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const mailApi = useMailApi()
@@ -165,15 +174,22 @@ export function AgentConversation({ chat }: AgentConversationProps): React.JSX.E
   const gatewayDegraded = aiSdkEnabled && healthQ.isError
   const gatewayLive = aiSdkEnabled && !gatewayDegraded
 
-  // Per-session runtime routing (mixed-kind history): an EXISTING session renders on its persisted
-  // backend_kind; a fresh conversation (no active id) defaults to ai-sdk when the gateway is live.
-  const activeSession = chat.sessions.find((s) => s.id === chat.activeSessionId)
+  // Per-session runtime routing (mixed-kind unified history): an EXISTING session renders on its
+  // persisted backend_kind (from the unified item); a fresh conversation (no active id) defaults to
+  // ai-sdk when the gateway is live. Phase 9 — an EMAIL-anchored session (opened from the inbox) can
+  // only be CONTINUED here via the ai-sdk gateway (it injects the email body + persists by session id);
+  // useGeneralChat's send is general-anchored, so a degraded gateway makes an email session read-only
+  // (continue it in the inbox panel instead).
+  const isEmailSession = activeItem?.anchor_type === 'email' && activeItem.email_id != null
+  const emailAnchorId = isEmailSession ? (activeItem!.email_id as number) : null
   const activeKind: ChatBackendKind =
-    activeSession?.backend_kind ?? (gatewayLive ? 'ai-sdk' : 'custom-api')
+    activeItem?.backend_kind ?? (gatewayLive ? 'ai-sdk' : 'custom-api')
   const useAiSdkRuntime = activeKind === 'ai-sdk' && gatewayLive
-  // Read-only when the active session's kind can't run a live turn HERE: a retired notion-agent, or an
-  // ai-sdk session while the gateway is degraded/off (no custom-api send into an ai-sdk session).
-  const readOnly = !useAiSdkRuntime && activeKind !== 'custom-api'
+  // Read-only when the active session can't run a live turn HERE: an email session without the live
+  // gateway, a retired notion-agent, or an ai-sdk session while the gateway is degraded/off.
+  const readOnly = isEmailSession
+    ? !useAiSdkRuntime
+    : !useAiSdkRuntime && activeKind !== 'custom-api'
 
   // ── composer controls (model / thinking / @mention / attachments) ──────────
   const [model, setModel] = useState(() => readModelPref())
@@ -281,17 +297,17 @@ export function AgentConversation({ chat }: AgentConversationProps): React.JSX.E
     ]
   )
 
-  // ── context snapshot (general: no email anchor → SOUL-only prompt) ──────────
+  // ── context snapshot (email session → inject that email's body; general → SOUL-only prompt) ──────
   const contextInjectionOn = useAiSdkRuntime && isAiSdkContextInjectionEnabled()
   const contextScope = useMemo<ContextScope>(
     () => ({
       surface: 'general-agent',
-      anchorType: 'general',
-      anchorId: null,
+      anchorType: isEmailSession ? 'email' : 'general',
+      anchorId: emailAnchorId,
       sessionId: chat.activeSessionId,
       backendKind: 'ai-sdk'
     }),
-    [chat.activeSessionId]
+    [isEmailSession, emailAnchorId, chat.activeSessionId]
   )
   const contextCapabilities = useMemo<CapabilityContext>(
     () => ({
@@ -304,7 +320,7 @@ export function AgentConversation({ chat }: AgentConversationProps): React.JSX.E
     [thinkingActive]
   )
   const { snapshot: contextSnapshot } = useAgentContextSnapshot({
-    activeInternalId: null,
+    activeInternalId: emailAnchorId,
     scope: contextScope,
     capabilities: contextCapabilities,
     panelMode: 'fullscreen',
