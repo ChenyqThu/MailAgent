@@ -61,6 +61,30 @@ export function SendApprovalCard(props: ToolCallMessagePartProps): React.JSX.Ele
   const [subject, setSubject] = useState(data.subject)
   const [body, setBody] = useState(data.bodyMarkdown)
 
+  // composer-parity dogfood-2 #3 — same streaming-args latch as DraftReplyCard: the five fields are
+  // seeded from the proposed input, which is still empty when the card first mounts (input-streaming),
+  // so plain useState left every field blank at the send gate. Until the user edits any field, keep
+  // them synced to the latest proposed values (adjust-on-prop-change, react.dev); once edited, the
+  // user's text wins so "允许发送" sends exactly what is shown.
+  const [edited, setEdited] = useState(false)
+  const proposedKey = JSON.stringify([data.to, data.cc, data.bcc, data.subject, data.bodyMarkdown])
+  const [prevProposedKey, setPrevProposedKey] = useState(proposedKey)
+  if (!edited && prevProposedKey !== proposedKey) {
+    setPrevProposedKey(proposedKey)
+    setToText(data.to.join(', '))
+    setCcText(data.cc.join(', '))
+    setBccText(data.bcc.join(', '))
+    setSubject(data.subject)
+    setBody(data.bodyMarkdown)
+  }
+  /** Wrap a field setter so the first user edit latches `edited` (stops the proposed-body resync). */
+  const editing =
+    (setter: (v: string) => void) =>
+    (v: string): void => {
+      setEdited(true)
+      setter(v)
+    }
+
   // Approximate expiry countdown (domain guard is the real enforcement).
   const [remainingMs, setRemainingMs] = useState(SEND_APPROVAL_TTL_MS)
   useEffect(() => {
@@ -115,17 +139,30 @@ export function SendApprovalCard(props: ToolCallMessagePartProps): React.JSX.Ele
           <SendField
             label="收件人"
             value={toText}
-            onChange={setToText}
+            onChange={editing(setToText)}
             placeholder="多个收件人用逗号分隔"
           />
-          <SendField label="抄送" value={ccText} onChange={setCcText} placeholder="可留空" />
-          <SendField label="密送" value={bccText} onChange={setBccText} placeholder="可留空" />
-          <SendField label="主题" value={subject} onChange={setSubject} />
+          <SendField
+            label="抄送"
+            value={ccText}
+            onChange={editing(setCcText)}
+            placeholder="可留空"
+          />
+          <SendField
+            label="密送"
+            value={bccText}
+            onChange={editing(setBccText)}
+            placeholder="可留空"
+          />
+          <SendField label="主题" value={subject} onChange={editing(setSubject)} />
           <div>
             <FieldLabel>正文</FieldLabel>
             <textarea
               value={body}
-              onChange={(e) => setBody(e.target.value)}
+              onChange={(e) => {
+                setEdited(true)
+                setBody(e.target.value)
+              }}
               rows={6}
               className="scrollbar-thin w-full resize-y rounded-lg border border-ink-border-soft bg-ink-2 px-2.5 py-2 text-aux leading-relaxed text-ink-fg outline-none focus:border-coral/50"
               aria-label="send body"

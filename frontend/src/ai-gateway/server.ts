@@ -103,6 +103,20 @@ async function handleChat(
   run.result.pipeUIMessageStreamToResponse(res, {
     originalMessages: run.rawMessages,
     generateMessageId: makeIdGenerator(),
+    // composer-parity dogfood-2 #2 — forward extended-thinking reasoning parts to the UIMessage
+    // stream. The AG-UI mirror (aguiRoute.ts) already sets this; the canonical route was missing it,
+    // and ai@7 defaults sendReasoning to false → the thinking block never reached the renderer even
+    // when the model produced one. Off-thinking turns carry no reasoning parts, so this is inert there.
+    sendReasoning: true,
+    // composer-parity dogfood-2 #4 — surface a stream/resume error to the client instead of ai@7's
+    // default masked generic. Without it a failed approval-resume turn ended the stream with a
+    // swallowed error and the rich card silently vanished ("卡执行中然后没了"); now the card renders a
+    // real error and the cause is logged for forensics (mirrors the AG-UI route's RunError emit).
+    onError: (error: unknown) => {
+      const msg = error instanceof Error ? error.message : String(error)
+      console.error('[ai-gateway] /api/ai/chat stream error', error)
+      return msg
+    },
     onFinish: makePersistOnFinish(cfg, run),
     // Phase 06a — loopback-only CORS on the main chat stream too (the AI SDK pipe sets no ACAO by
     // default; reflect the renderer's loopback / null origin, omit for a remote cross-origin page).

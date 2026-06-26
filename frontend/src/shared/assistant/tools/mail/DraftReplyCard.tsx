@@ -34,7 +34,18 @@ export function DraftReplyCard(props: ToolCallMessagePartProps): React.JSX.Eleme
   const { args, result, toolCallId, respondToApproval } = props
   const phase = deriveCardPhase(props)
   const data = propsOf(args, result)
+  // composer-parity dogfood-2 #3 — the proposed body streams in (input-streaming → input-available),
+  // so the card first mounts while args.body_markdown is still empty; a plain useState(data.bodyMarkdown)
+  // latched '' and never caught up → the textarea stayed empty until execution. Track the user's own
+  // edit separately and, until they type, keep the textarea synced to the latest proposed body
+  // (adjust-on-prop-change, react.dev). Once edited, their text wins (so approve sends what they see).
   const [body, setBody] = useState(data.bodyMarkdown)
+  const [edited, setEdited] = useState(false)
+  const [prevProposed, setPrevProposed] = useState(data.bodyMarkdown)
+  if (!edited && prevProposed !== data.bodyMarkdown) {
+    setPrevProposed(data.bodyMarkdown)
+    setBody(data.bodyMarkdown)
+  }
 
   const onApprove = async (): Promise<void> => {
     // Edit-tier: when the user rewrote the body, re-approve domain-side first so the executed
@@ -53,7 +64,10 @@ export function DraftReplyCard(props: ToolCallMessagePartProps): React.JSX.Eleme
           <div className="mb-1 text-meta text-ink-fg-2">{`回复邮件 #${data.internalId}（可编辑后再确认）`}</div>
           <textarea
             value={body}
-            onChange={(e) => setBody(e.target.value)}
+            onChange={(e) => {
+              setEdited(true)
+              setBody(e.target.value)
+            }}
             rows={6}
             className="scrollbar-thin w-full resize-y rounded-lg border border-ink-border-soft bg-ink-2 px-2.5 py-2 text-aux leading-relaxed text-ink-fg outline-none focus:border-coral/50"
             aria-label="reply draft body"
