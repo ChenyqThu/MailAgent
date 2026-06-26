@@ -827,13 +827,25 @@ class TestSmartQueryTransform:
         assert smart_query_transform("redis OR cache") == "redis OR cache"
         assert smart_query_transform("redis NOT timeout") == "redis NOT timeout"
 
-    def test_punctuation_returns_raw(self):
-        """含 punct (例 -, @, .) → 原样, 让 FTS5 自己处理."""
-        assert smart_query_transform("redis-timeout") == "redis-timeout"
-        assert smart_query_transform("user@example.com") == "user@example.com"
-        # 含括号 / 冒号 (FTS5 column filter / group)
+    def test_grouping_and_column_syntax_returns_raw(self):
+        """真·FTS5 语法 (分组 () / 列限定 :) → 原样下放, 让 FTS5 自己处理."""
         assert smart_query_transform("(redis)") == "(redis)"
         assert smart_query_transform("body:redis") == "body:redis"
+
+    def test_incidental_punctuation_quoted_as_phrase(self):
+        """#1 修复: 含「附带标点」的 token (版本号 6.3 / IP / 邮箱 / 连字符, 无 FTS5
+        语法字符) → quote 成短语而非原样下放.
+
+        旧实现把整个 query 原样下放 → 裸 MATCH 触发 'fts5 syntax error near "."' →
+        _fts_match_ids/_fetch_body_fts_rows 吞错返回空 → 整句零命中 (实测「Omada 6.3」
+        「…SDN 6.3 Wlan Group修改」搜不到根因). 短语让 unicode61 按分词后子序列匹配.
+        """
+        assert smart_query_transform("6.3") == '"6.3"'
+        assert smart_query_transform("Omada 6.3") == 'Omada AND "6.3"'
+        assert smart_query_transform("SDN 6.3 Wlan") == 'SDN AND "6.3" AND Wlan'
+        assert smart_query_transform("redis-timeout") == '"redis-timeout"'
+        assert smart_query_transform("user@example.com") == '"user@example.com"'
+        assert smart_query_transform("192.168.1.1") == '"192.168.1.1"'
 
     def test_hiragana_treated_as_cjk(self):
         """日文假名也走 CJK prefix 通配 (跟中文同 token-chunk 困境)."""
@@ -935,6 +947,52 @@ class TestSearchEmailBodiesSmart:
         smart_hits = repo.search_email_bodies_smart("meeting", limit=10)
         raw_hits = repo.search_email_bodies("meeting", limit=10)
         assert [h.internal_id for h in smart_hits] == [h.internal_id for h in raw_hits]
+
+    def _seed_version_subject(self, repo: EmailRepository, fresh_db: Path):
+        """#1 回归种子: 含版本号 (6.3) 的 CJK+英文混排主题邮件 + 一封不相关诱饵。"""
+        _insert_metadata_full(
+            fresh_db, 776,
+            subject="回复: 【配置声明】Omada SDN 6.3 Wlan Group修改",
+            sender="lucien@omadanetworks.com",
+            mailbox="收件箱",
+        )
+        repo.commit_email_with_body(
+            776,
+            BodyPayload(
+                html="",
+                markdown="Omada SDN 6.3 controller wlan group 配置声明 修改 deadline。",
+                body_format="html",
+            ),
+            [],
+        )
+        _insert_metadata_full(
+            fresh_db, 777,
+            subject="无关邮件",
+            sender="bob@example.com",
+            mailbox="收件箱",
+        )
+        repo.commit_email_with_body(
+            777,
+            BodyPayload(html="", markdown="completely unrelated content.", body_format="html"),
+            [],
+        )
+
+    def test_smart_version_token_fastpath(self, repo: EmailRepository, fresh_db: Path):
+        """#1 修复: 纯英文含版本号 'Omada 6.3' (fast-path, token 含 '.') 不再因 fts5
+        语法错误零命中。旧实现 smart_query_transform 原样下放 → MATCH 报错 → []。"""
+        self._seed_version_subject(repo, fresh_db)
+        ids = [h.internal_id for h in repo.search_email_bodies_smart("Omada 6.3", limit=10)]
+        assert 776 in ids
+        assert 777 not in ids
+
+    def test_smart_version_token_trigram_cjk(self, fresh_db: Path):
+        """#1 修复: CJK+英文混排含版本号 'SDN 6.3 修改' (trigram 路径) 不再因 '6.3'
+        unicode term MATCH 语法错误打死整条 AND 链 → []（用户报告主题的最小复现）。"""
+        repo = EmailRepository(db_path=str(fresh_db), trigram_enabled=True)
+        self._seed_version_subject(repo, fresh_db)
+        ids = [h.internal_id for h in repo.search_email_bodies_smart("SDN 6.3 修改", limit=10)]
+        assert 776 in ids
+        assert 777 not in ids
 
     def test_smart_empty_query_returns_empty(self, repo: EmailRepository, fresh_db: Path):
         self._seed_cjk(repo, fresh_db)

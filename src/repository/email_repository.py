@@ -350,10 +350,20 @@ def smart_query_transform(query: str) -> str:
 
     转换规则:
         - 空 / 仅空白 → 原样
-        - 含 FTS5 特殊字符 (引号/通配/括号/punct 等) → 原样
+        - 含真·FTS5 语法字符 (引号 " / 通配 * / 分组 () / 列限定 :) → 原样下放
+          (尊重高级用户手写 FTS5 的意图)
         - 含 AND/OR/NOT 全大写 operator token → 原样
-        - 否则按空白 split token, 逐 token 用 _wrap_token_cjk_aware 包装,
+        - 否则按空白 split token, 逐 token 包装:
+            simple token (字母数字/CJK) → _wrap_token_cjk_aware (整词/前缀/CJK 子串)
+            含「附带标点」的 token (版本号 6.3 / IP / 邮箱 / 连字符) → _quote_fts_token
+              成短语 —— 否则裸 MATCH 触发 FTS5 语法错误 (near ".") → 整个查询零命中
           多 token 用 AND 连接
+
+    历史 bug (本次修复): 旧实现对「含任意非 alnum/空格/CJK 字符」的整个 query 一律原样
+    下放, 导致含版本号/IP/邮箱的自然语言 query (如 'Omada 6.3' / 'SDN 6.3 Wlan
+    Group修改' 的 '6.3' term) 裸 MATCH 报 fts5 syntax error → _fts_match_ids/
+    _fetch_body_fts_rows 吞错返回空 → 整句搜不到。改为只对真·FTS5 语法原样下放, 其余
+    逐 token 安全化 (含标点 token quote 成短语), 既保留高级语法又修复零命中。
 
     Examples:
         '产' → '产*'
@@ -362,6 +372,9 @@ def smart_query_transform(query: str) -> str:
         'redis 超时' → 'redis AND (超时* OR (超* AND 时*))'
         'redis timeout' → 'redis AND timeout'
         'Redis超时' → '(Redis AND (超时* OR (超* AND 时*)))'
+        '6.3' → '"6.3"'                          (附带标点, quote 成短语)
+        'Omada 6.3' → 'Omada AND "6.3"'          (版本号 token 安全化)
+        'user@host.com' → '"user@host.com"'      (邮箱, quote)
         '"redis timeout"' → '"redis timeout"'   (raw, 含 quote)
         'redis AND timeout' → 'redis AND timeout'  (raw, 含 operator)
         '产品*' → '产品*'  (raw, 含 wildcard)
@@ -370,15 +383,24 @@ def smart_query_transform(query: str) -> str:
         return query
     q = query.strip()
 
-    if not _is_simple_natural_query(q):
+    # 真·FTS5 语法字符 → 原样下放 (用户手写 FTS5: 短语/通配/分组/列限定)。
+    # 注意: 仅这些字符算「语法」; 附带标点 (. @ , - / 等) 不算, 继续走逐 token 安全化。
+    if any(c in q for c in '"*():'):
         return q
 
     tokens = q.split()
     if any(t in _FTS5_OPERATORS for t in tokens):
         return q
 
-    wrapped = [_wrap_token_cjk_aware(t) for t in tokens]
-    wrapped = [w for w in wrapped if w]
+    wrapped: list[str] = []
+    for t in tokens:
+        if _is_simple_natural_query(t):
+            w = _wrap_token_cjk_aware(t)
+        else:
+            # 含附带标点的 token: quote 成短语, 避免裸 MATCH 语法错误。
+            w = _quote_fts_token(t)
+        if w:
+            wrapped.append(w)
     if not wrapped:
         return q
     if len(wrapped) == 1:
