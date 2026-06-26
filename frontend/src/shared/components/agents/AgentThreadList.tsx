@@ -12,10 +12,20 @@
 import { useRef, useState } from 'react'
 import type { TFunction } from 'i18next'
 import { useTranslation } from 'react-i18next'
-import { Check, Mail, MessagesSquare, PanelLeft, Pencil, Plus, Trash2, X } from 'lucide-react'
+import {
+  Archive,
+  Mail,
+  MessagesSquare,
+  MoreHorizontal,
+  PanelLeft,
+  Pencil,
+  Plus,
+  Trash2
+} from 'lucide-react'
 
 import type { ChatSessionListItem } from '@shared/api/types'
 import { cn } from '@shared/lib/cn'
+import { Popover, PopoverContent, PopoverTrigger } from '@shared/components/ui/popover'
 
 export interface AgentThreadListProps {
   /** Unified history — all sessions (email + general), newest-first. */
@@ -26,6 +36,8 @@ export interface AgentThreadListProps {
   onDelete: (id: number) => void
   /** Phase 10 — inline rename → updateSessionTitle (parent persists + refreshes the list). */
   onRename: (id: number, title: string) => void
+  /** dogfood-2 — 归档 → updateSessionArchived(id, true)（parent persists + refreshes，从列表过滤）。 */
+  onArchive: (id: number) => void
   collapsed: boolean
   onToggleCollapse: () => void
   /** fluid = full-width single pane (narrow / mobile); ignores collapse. */
@@ -60,12 +72,12 @@ export function AgentThreadList(props: AgentThreadListProps): React.ReactElement
     onNew,
     onDelete,
     onRename,
+    onArchive,
     collapsed,
     onToggleCollapse,
     fluid
   } = props
   const { t } = useTranslation()
-  const [armedDelete, setArmedDelete] = useState<number | null>(null)
   const [renamingId, setRenamingId] = useState<number | null>(null)
 
   // Desktop collapses to a 48px rail; fluid (narrow / mobile) stays full-width and never collapses.
@@ -161,27 +173,16 @@ export function AgentThreadList(props: AgentThreadListProps): React.ReactElement
                       title={titleOf(s, t)}
                       isEmail={s.anchor_type === 'email'}
                       selected={s.id === activeSessionId}
-                      armed={armedDelete === s.id}
-                      onSelect={() => {
-                        setArmedDelete(null)
-                        onSelect(s.id)
-                      }}
+                      onSelect={() => onSelect(s.id)}
                       renaming={renamingId === s.id}
-                      onArmDelete={() => setArmedDelete(s.id)}
-                      onCancelDelete={() => setArmedDelete(null)}
-                      onConfirmDelete={() => {
-                        setArmedDelete(null)
-                        onDelete(s.id)
-                      }}
-                      onStartRename={() => {
-                        setArmedDelete(null)
-                        setRenamingId(s.id)
-                      }}
+                      onStartRename={() => setRenamingId(s.id)}
                       onSubmitRename={(next) => {
                         setRenamingId(null)
                         onRename(s.id, next)
                       }}
                       onCancelRename={() => setRenamingId(null)}
+                      onArchive={() => onArchive(s.id)}
+                      onDelete={() => onDelete(s.id)}
                       t={t}
                     />
                   ))}
@@ -199,29 +200,25 @@ function SessionRow({
   title,
   isEmail,
   selected,
-  armed,
   renaming,
   onSelect,
-  onArmDelete,
-  onCancelDelete,
-  onConfirmDelete,
   onStartRename,
   onSubmitRename,
   onCancelRename,
+  onArchive,
+  onDelete,
   t
 }: {
   title: string
   isEmail: boolean
   selected: boolean
-  armed: boolean
   renaming: boolean
   onSelect: () => void
-  onArmDelete: () => void
-  onCancelDelete: () => void
-  onConfirmDelete: () => void
   onStartRename: () => void
   onSubmitRename: (title: string) => void
   onCancelRename: () => void
+  onArchive: () => void
+  onDelete: () => void
   t: TFunction
 }): React.ReactElement {
   // Anchor cue: an email-anchored session (opened from the inbox panel) vs a general agent chat.
@@ -293,52 +290,84 @@ function SessionRow({
       <button
         type="button"
         onClick={onSelect}
-        className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-lg pl-2.5 pr-14 text-left"
+        className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-lg pl-2.5 pr-10 text-left"
       >
         <Icon size={13} strokeWidth={1.75} className="shrink-0 text-ink-fg-3" />
         <span className="min-w-0 flex-1 truncate text-body text-ink-fg-1" title={title}>
           {title}
         </span>
       </button>
-      {armed ? (
-        <div className="absolute right-1 flex items-center gap-0.5">
-          <button
-            type="button"
-            onClick={onConfirmDelete}
-            aria-label={t('agentView.delete')}
-            className="grid size-6 place-items-center rounded text-fail transition-colors duration-fast hover:bg-fail/15"
-          >
-            <Check size={13} strokeWidth={2.5} />
-          </button>
-          <button
-            type="button"
-            onClick={onCancelDelete}
-            aria-label={t('generalAgent.dismiss')}
-            className="grid size-6 place-items-center rounded text-ink-fg-2 transition-colors duration-fast hover:bg-ink-4"
-          >
-            <X size={13} strokeWidth={2.5} />
-          </button>
-        </div>
-      ) : (
-        <div className="absolute right-1 flex items-center gap-0.5 opacity-0 transition-opacity duration-fast group-hover:opacity-100 focus-within:opacity-100">
-          <button
-            type="button"
-            onClick={onStartRename}
-            aria-label={t('agentView.rename')}
-            className="grid size-6 place-items-center rounded text-ink-fg-3 transition-colors duration-fast hover:bg-ink-4 hover:text-ink-fg"
-          >
-            <Pencil size={12} strokeWidth={1.75} />
-          </button>
-          <button
-            type="button"
-            onClick={onArmDelete}
-            aria-label={t('agentView.delete')}
-            className="grid size-6 place-items-center rounded text-ink-fg-3 transition-colors duration-fast hover:bg-ink-4 hover:text-fail"
-          >
-            <Trash2 size={13} strokeWidth={1.75} />
-          </button>
-        </div>
-      )}
+      <SessionRowMenu onRename={onStartRename} onArchive={onArchive} onDelete={onDelete} t={t} />
     </div>
+  )
+}
+
+/** dogfood-2 — session row hover「...」菜单（demo ThreadListItemMore 形态，取代旧的双 icon 铅笔+
+ *  垃圾桶）：hover / 选中 / 菜单打开时显示单个 ... → radix Popover 菜单 改名 / 归档 / 删除。 */
+function SessionRowMenu({
+  onRename,
+  onArchive,
+  onDelete,
+  t
+}: {
+  onRename: () => void
+  onArchive: () => void
+  onDelete: () => void
+  t: TFunction
+}): React.ReactElement {
+  const [open, setOpen] = useState(false)
+  const ITEM =
+    'flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-aux transition-colors duration-fast'
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          aria-label={t('agentView.more')}
+          className={cn(
+            'absolute right-1 grid size-6 place-items-center rounded text-ink-fg-3 transition-opacity duration-fast',
+            'hover:bg-ink-4 hover:text-ink-fg',
+            open ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus-within:opacity-100'
+          )}
+        >
+          <MoreHorizontal size={14} strokeWidth={2} />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="start" side="right" sideOffset={6} className="w-36 p-1">
+        <button
+          type="button"
+          onClick={() => {
+            setOpen(false)
+            onRename()
+          }}
+          className={cn(ITEM, 'text-ink-fg-1 hover:bg-ink-3')}
+        >
+          <Pencil size={13} strokeWidth={1.75} className="shrink-0 text-ink-fg-3" />
+          {t('agentView.rename')}
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setOpen(false)
+            onArchive()
+          }}
+          className={cn(ITEM, 'text-ink-fg-1 hover:bg-ink-3')}
+        >
+          <Archive size={13} strokeWidth={1.75} className="shrink-0 text-ink-fg-3" />
+          {t('agentView.archive')}
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setOpen(false)
+            onDelete()
+          }}
+          className={cn(ITEM, 'text-fail hover:bg-fail/10')}
+        >
+          <Trash2 size={13} strokeWidth={1.75} className="shrink-0" />
+          {t('agentView.delete')}
+        </button>
+      </PopoverContent>
+    </Popover>
   )
 }

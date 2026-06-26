@@ -1226,6 +1226,9 @@ export interface ChatSession {
   // turn (via the gateway), user-renamable. null → fall back to the email subject / first user message
   // (the unified history's titleOf). ai_chat.db v14 additive column.
   title: string | null
+  // dogfood-2 — soft-delete: archived=true hides the session from listAllSessions without deleting the
+  // row. ai_chat.db v15 additive column (DEFAULT 0, existing rows read as false).
+  archived: boolean
   created_at: number
   updated_at: number
 }
@@ -1558,6 +1561,12 @@ export interface ChatApi {
    * it lands; throws `Error & { code }` on failure.
    */
   updateSessionTitle(sessionId: number, title: string): Promise<void>
+  /**
+   * dogfood-2 — archive / unarchive a session (soft-delete: archived=true hides the row from
+   * listAllSessions without deleting it). PATCH /chat/sessions/{id}/archived; does NOT bump
+   * updated_at (same discipline as updateSessionTitle). Awaited so the caller can refresh.
+   */
+  updateSessionArchived(sessionId: number, archived: boolean): Promise<void>
   /**
    * Sprint 19 — INSERT a fresh ai_chat_sessions row, bypassing the
    * (email_id, backend_kind, backend_agent_page_id) reuse lookup. Used by

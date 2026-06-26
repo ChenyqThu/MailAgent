@@ -34,6 +34,7 @@ CREATE TABLE ai_chat_sessions (
     backend_model TEXT,
     backend_agent_page_id TEXT,
     title TEXT,
+    archived INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
     CHECK (
@@ -1014,6 +1015,38 @@ def test_delete_session_nonexistent(chat_client: TestClient) -> None:
     r = chat_client.delete("/api/chat/sessions/99999")
     assert r.status_code == 200
     assert r.json()["data"] == {"deleted": True}
+
+
+def test_update_session_archived_hides_from_list_all(chat_client: TestClient) -> None:
+    """PATCH /sessions/{id}/archived archived=true → 该 session 从 list_all_sessions 消失。
+    镜像 test_delete_session 风格；验证 archived=false 可重新出现（软删可逆）。"""
+    # seed SESSION_ID=1 有消息，list_all_sessions 应可见。
+    r = chat_client.get("/api/chat/sessions/all")
+    assert r.status_code == 200
+    ids_before = [s["id"] for s in r.json()["data"]]
+    assert SESSION_ID in ids_before
+
+    # 归档 → 应从列表消失。
+    r = chat_client.patch(f"/api/chat/sessions/{SESSION_ID}/archived", json={"archived": True})
+    assert r.status_code == 200
+    assert r.json()["data"] == {"updated": True}
+
+    r = chat_client.get("/api/chat/sessions/all")
+    assert r.status_code == 200
+    assert SESSION_ID not in [s["id"] for s in r.json()["data"]]
+
+    # 取消归档 → 重新可见（软删可逆）。
+    r = chat_client.patch(f"/api/chat/sessions/{SESSION_ID}/archived", json={"archived": False})
+    assert r.status_code == 200
+    r = chat_client.get("/api/chat/sessions/all")
+    assert SESSION_ID in [s["id"] for s in r.json()["data"]]
+
+
+def test_update_session_archived_invalid_body_400(chat_client: TestClient) -> None:
+    """archived 不是 bool → E_INVALID_ARG（镜像 title 端点的类型校验）。"""
+    r = chat_client.patch(f"/api/chat/sessions/{SESSION_ID}/archived", json={"archived": "yes"})
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "E_INVALID_ARG"
 
 
 def test_open_session_invalid_backend_kind(chat_client: TestClient) -> None:

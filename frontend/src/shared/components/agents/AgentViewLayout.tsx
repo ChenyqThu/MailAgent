@@ -78,6 +78,13 @@ export function AgentViewLayout(): React.ReactElement {
           .then(invalidateSessions)
           .catch(() => undefined)
       }}
+      onArchive={(id) => {
+        // dogfood-2: 归档 = 软删(从统一列表过滤；行/消息保留)。serve-api → ai_chat.db，再刷新列表。
+        void mailApi.chat
+          .updateSessionArchived(id, true)
+          .then(invalidateSessions)
+          .catch(() => undefined)
+      }}
       collapsed={collapsed}
       onToggleCollapse={() => setCollapsed((c) => !c)}
       fluid={narrow}

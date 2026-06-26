@@ -695,6 +695,20 @@ async def update_session_title(
     return success_envelope({"updated": True}, request=request, source="sqlite")
 
 
+@router.patch("/sessions/{session_id:int}/archived", dependencies=[Depends(verify_cf_access)])
+async def update_session_archived(
+    request: Request, session_id: int, body: Optional[Dict[str, Any]] = None
+):
+    """updateSessionArchived：设置 session 归档状态（软删）。镜像 chat_db updateSessionArchived（刻意不
+    bump updated_at → 归档不重排历史）。body = {archived: bool}。改不存在的 id 也返 {updated: True}。"""
+    opts = body or {}
+    archived = opts.get("archived")
+    if not isinstance(archived, bool):
+        raise APIError("E_INVALID_ARG", "archived requires archived:bool", source="sqlite")
+    get_chat_db().update_session_archived(session_id, archived)
+    return success_envelope({"updated": True}, request=request, source="sqlite")
+
+
 @router.post("/sessions/{session_id:int}/messages", dependencies=[Depends(verify_cf_access)])
 async def append_message(
     request: Request, session_id: int, body: Optional[Dict[str, Any]] = None

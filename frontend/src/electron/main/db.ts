@@ -61,8 +61,13 @@ export function resolveDataRoot(): string {
     try {
       return app.getPath('userData')
     } catch {
-      /* app.getPath() 在 whenReady 前会抛 — fall through 到 dev 默认。
-         打包运行时必然已 ready, 这条只在极端早期/测试导入命中。 */
+      // app.getPath('userData') 在 app.whenReady 前会抛 —— 而 bootstrapDotenv() 是
+      // index.ts 模块级调用(早于 whenReady), 必然命中这条。
+      // 🔴 dogfood-2: 绝不能 fall through 到 ~/Documents —— 后续 existsSync(~/Documents/
+      // MailAgent/.env) 会在打包 app 启动早期触发 macOS「文稿」TCC 授权框(用户反复反馈)。
+      // 改用确定性推算的 userData 路径(= app.getPath('userData') 的实际值, name 由
+      // package.json `mailagent-frontend` 决定; 见 userData 目录), 完全不碰 ~/Documents。
+      return join(homedir(), 'Library', 'Application Support', 'mailagent-frontend')
     }
   }
   return join(homedir(), 'Documents', 'MailAgent')

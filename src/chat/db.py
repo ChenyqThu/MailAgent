@@ -1,6 +1,9 @@
 """ai_chat.db 读 + 写访问 —— serve-api 远程 chat 端点（V2.1 阶段 2 读 + 阶段 3 3b-3 写）。
 
-ai_chat.db = 前端 owned schema（``frontend/src/electron/main/chat_db.ts``，CHAT_DB_VERSION 14）。
+ai_chat.db = 前端 owned schema（``frontend/src/electron/main/chat_db.ts``，CHAT_DB_VERSION 15）。
+v15：ai_chat_sessions.archived INTEGER NOT NULL DEFAULT 0 — 软删标志（0=正常，1=已归档）。归档会话
+从 list_all_sessions 过滤（WHERE s.archived = 0）；写经 update_session_archived 镜像（ai_chat.db
+own ladder，非 EXPECTED_DB_VERSION；chat_db.ts 是 schema 真源，本文件不建表）。
 v14（demo-fidelity Phase 10）：ai_chat_sessions.title — 可选会话标题（gateway haiku 自动标题 /
 手动改名）。读走 ``SELECT *`` 自动带回（list_all_sessions 显式列已加 s.title）；写经
 update_session_title 镜像（chat_db.ts 是 schema 真源，本文件不建表）。
@@ -222,13 +225,13 @@ class ChatDb:
         return self._read_all(
             """SELECT
                  s.id, s.email_id, s.anchor_type, s.anchor_id, s.backend_kind, s.backend_model,
-                 s.backend_agent_page_id, s.title, s.created_at, s.updated_at,
+                 s.backend_agent_page_id, s.title, s.archived, s.created_at, s.updated_at,
                  (SELECT substr(m.content, 1, 500) FROM ai_chat_messages m
                     WHERE m.session_id = s.id AND m.role = 'user'
                     ORDER BY m.created_at ASC LIMIT 1) AS first_user_message,
                  (SELECT COUNT(*) FROM ai_chat_messages m WHERE m.session_id = s.id) AS message_count
                FROM ai_chat_sessions s
-               WHERE EXISTS (SELECT 1 FROM ai_chat_messages m WHERE m.session_id = s.id)
+               WHERE s.archived = 0 AND EXISTS (SELECT 1 FROM ai_chat_messages m WHERE m.session_id = s.id)
                ORDER BY s.updated_at DESC
                LIMIT ?""",
             (limit,),
@@ -381,6 +384,15 @@ class ChatDb:
         with self._write_connection() as conn:
             conn.execute(
                 "UPDATE ai_chat_sessions SET title = ? WHERE id = ?", (title, session_id)
+            )
+
+    def update_session_archived(self, session_id: int, archived: bool) -> None:
+        """设置 session 归档状态（软删）。镜像 chat_db.ts updateSessionArchived：刻意不 bump
+        updated_at → 归档不重排历史列表。改不存在的 id 是 no-op（UPDATE 匹配 0 行）。"""
+        with self._write_connection() as conn:
+            conn.execute(
+                "UPDATE ai_chat_sessions SET archived = ? WHERE id = ?",
+                (1 if archived else 0, session_id),
             )
 
     # ── messages（写 + 单读，3b-3）─────────────────────────────────────────

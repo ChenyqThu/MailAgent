@@ -16,7 +16,8 @@ import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { MessagePrimitive } from '@assistant-ui/react'
 
-import { ShimmerText } from '@shared/components/ShimmerText'
+import { DotMatrix } from '@shared/components/ui/DotMatrix'
+import { MessageTiming } from '@shared/assistant/components/MessageTiming'
 import { getAssistantPartComponents } from '@shared/assistant/tools/registerToolUIs'
 import { AssistantActionBar, UserActionBar } from '@shared/assistant/components/action-bar'
 
@@ -28,9 +29,12 @@ export { EditComposer, SystemMessage } from '@shared/assistant/components/messag
  *  streams in, Empty is replaced by the real content. */
 function AgentWorkingIndicator(): React.JSX.Element {
   const { t } = useTranslation()
+  // demo idiom: 流式回复尚无内容时(Empty part slot)显示 DotMatrix「connecting」点阵动画 + 文案，
+  // 取代旧 ShimmerText —— 与 assistant-ui base demo 的 loading indicator 对齐(dogfood-2)。
   return (
-    <span className="inline-flex items-center gap-2 align-middle">
-      <ShimmerText text={t('agentView.thinking')} neutral className="text-meta" />
+    <span className="inline-flex items-center gap-2 align-middle text-ink-fg-3">
+      <DotMatrix state="connecting" aria-hidden />
+      <span className="text-meta">{t('agentView.connecting')}</span>
     </span>
   )
 }
@@ -38,10 +42,15 @@ function AgentWorkingIndicator(): React.JSX.Element {
 export function AgentUserMessage(): React.JSX.Element {
   return (
     <MessagePrimitive.Root className="group mx-auto flex w-full max-w-[var(--thread-max-width)] flex-col items-end">
-      <div className="max-w-[80%] rounded-2xl rounded-br-md border border-[var(--hairline)] bg-ink-3 px-3.5 py-2 text-body leading-relaxed text-ink-fg">
-        <MessagePrimitive.Parts />
+      <div className="relative max-w-[80%]">
+        <div className="rounded-2xl rounded-br-md border border-[var(--hairline)] bg-ink-3 px-3.5 py-2 text-body leading-relaxed text-ink-fg">
+          <MessagePrimitive.Parts />
+        </div>
+        {/* edit 按钮悬浮在气泡左侧外(demo idiom：absolute -translate-x-full)，hover 才出现(dogfood-2)。 */}
+        <div className="absolute left-0 top-1/2 -translate-x-full -translate-y-1/2 pr-2">
+          <UserActionBar />
+        </div>
       </div>
-      <UserActionBar />
     </MessagePrimitive.Root>
   )
 }
@@ -58,9 +67,12 @@ export function AgentAssistantMessage(): React.JSX.Element {
       <div className="min-w-0 px-1 text-body leading-relaxed text-ink-fg">
         <MessagePrimitive.Parts components={partComponents} />
       </div>
-      {/* Height-reserved footer so the hover action bar never shifts message spacing (demo idiom). */}
-      <div className="-mb-7 ml-1 min-h-7 pt-1.5">
+      {/* Height-reserved footer so the hover action bar never shifts message spacing (demo idiom).
+          dogfood-2: action bar(Copy/Reload/KOS, autohide hover) 旁加 MessageTiming「答复时间」badge
+          (hover 看 token 数据)；MessageTiming 用 group-hover 与 action bar 同步显隐。 */}
+      <div className="-mb-7 ml-1 flex min-h-7 items-center gap-1 pt-1.5">
         <AssistantActionBar />
+        <MessageTiming className="opacity-0 transition-opacity duration-fast group-hover:opacity-100" />
       </div>
     </MessagePrimitive.Root>
   )

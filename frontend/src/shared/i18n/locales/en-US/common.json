@@ -565,6 +565,14 @@
     "welcome": "How can I help you?",
     "emptyHint": "Ask anything, or @-mention an email to bring it into context",
     "thinking": "Thinking",
+    "connecting": "Connecting",
+    "timing": {
+      "label": "Response time",
+      "firstToken": "First token",
+      "total": "Total",
+      "speed": "Speed",
+      "chunks": "Chunks"
+    },
     "scrollToBottom": "Scroll to bottom",
     "composer": {
       "placeholder": "Message MailAgent... (@ to mention an email, / for commands)"
@@ -579,6 +587,8 @@
     "newSession": "New chat",
     "rename": "Rename",
     "delete": "Delete",
+    "archive": "Archive",
+    "more": "More",
     "collapseSidebar": "Collapse / expand history",
     "historyTitle": "Chats",
     "emptyHistory": "No conversations yet",

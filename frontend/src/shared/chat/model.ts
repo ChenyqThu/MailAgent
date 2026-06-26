@@ -54,6 +54,9 @@ export interface ChatSession {
   // turn, user-renamable). null when unset; the UI then derives a title from the email subject / first
   // user message. ai_chat.db v14 additive column.
   title: string | null
+  // dogfood-2 — soft-delete: archived=true hides the session from listAllSessions without deleting the
+  // row. ai_chat.db v15 additive column (DEFAULT 0, existing rows read as false).
+  archived: boolean
   created_at: number
   updated_at: number
 }

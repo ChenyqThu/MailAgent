@@ -154,10 +154,8 @@ describe('Agent view — demo-fidelity thread', () => {
         <AgentThread quickActions={<AgentQuickActions />} />
       </MailAgentRuntimeProvider>
     )
-    // ShimmerText renders the label in 1 (reduced-motion) or 2 spans — assert at least one.
-    await waitFor(() =>
-      expect(screen.getAllByText(i18n.t('agentView.thinking')).length).toBeGreaterThan(0)
-    )
+    // dogfood-2: working indicator 改用 DotMatrix + 「connecting」文案（demo parity，取代 ShimmerText）。
+    await waitFor(() => expect(screen.getByText(i18n.t('agentView.connecting'))).toBeTruthy())
   })
 
   test('readOnly suppresses the composer', async () => {

@@ -1308,21 +1308,40 @@ body::before {
   height: 19px !important;
 }
 
-/* MailAgent agent-view accent 行 (flag-on /sessions) — 复刻 .app-nav-compose-btn 的
- * coral 填充 + 白 icon, 作为 AI AGENTS 段的高亮主入口 (NavRow accent 分支挂此 class)。
- * 收起态居中 / svg 放大由 §2.11 `nav button` 通杀处理 —— 本行在 <nav> 内, 不需要
- * compose 那套独立 collapsed 规则。Authored CSS class (load-bearing), Tailwind 不可见。 */
-.app-nav-agent-btn {
-  background: rgb(var(--c-accent));
-  color: rgb(var(--c-accent-fg));
-  box-shadow: 0 1px 2px rgb(0 0 0 / 0.08);
-  transition: filter 0.12s ease;
+/* dogfood-2 — DotMatrix (agent 视图 working indicator) keyframes + @property + dot 动画规则。
+ * 复刻 assistant-ui demo dot-matrix；放 authored CSS 一次定义 (不依赖 React 19 style-hoisting)。
+ * 每点的 hi/lo 振幅 + animation duration/delay 由 DotMatrix 组件 inline style 注入; 这里只定
+ * keyframes / transition / iteration。@property 让 hi/lo 可过渡 → 状态切换逐点 cross-fade。 */
+@property --aui-dot-matrix-hi {
+  syntax: '<number>';
+  inherits: false;
+  initial-value: 1;
 }
-.app-nav-agent-btn:hover {
-  filter: brightness(1.08);
+@property --aui-dot-matrix-lo {
+  syntax: '<number>';
+  inherits: false;
+  initial-value: 0.15;
 }
-.app-nav-agent-btn:active {
-  filter: brightness(0.96);
+@keyframes aui-dot-matrix-blink {
+  0%,
+  100% {
+    opacity: var(--aui-dot-matrix-hi, 1);
+  }
+  50% {
+    opacity: var(--aui-dot-matrix-lo, 0.15);
+  }
+}
+.aui-dot-matrix-dot {
+  transition-property: --aui-dot-matrix-hi, --aui-dot-matrix-lo, opacity;
+  transition-duration: 0.3s;
+  animation-name: aui-dot-matrix-blink;
+  animation-iteration-count: infinite;
+  animation-timing-function: ease-in-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .aui-dot-matrix-dot {
+    animation-name: none;
+  }
 }
 
 /* 收起态数字角标 — 展开态隐藏 (数字由行右侧 CountRight/TotalCount 承担),

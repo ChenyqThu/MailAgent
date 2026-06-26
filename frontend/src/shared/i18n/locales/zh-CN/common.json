@@ -565,6 +565,14 @@
     "welcome": "我能帮你做什么？",
     "emptyHint": "问任何问题，或用 @ 带上一封邮件作为上下文",
     "thinking": "思考中",
+    "connecting": "连接中",
+    "timing": {
+      "label": "答复用时",
+      "firstToken": "首 token",
+      "total": "总耗时",
+      "speed": "速度",
+      "chunks": "分块数"
+    },
     "scrollToBottom": "滚动到底部",
     "composer": {
       "placeholder": "给 MailAgent 发消息…（@ 引用邮件，/ 命令）"
@@ -579,6 +587,8 @@
     "newSession": "新会话",
     "rename": "重命名",
     "delete": "删除",
+    "archive": "归档",
+    "more": "更多",
     "collapseSidebar": "折叠 / 展开会话历史",
     "historyTitle": "会话",
     "emptyHistory": "还没有会话",

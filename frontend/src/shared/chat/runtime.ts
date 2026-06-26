@@ -567,6 +567,16 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
       await request(baseUrl, 'PATCH', `/chat/sessions/${sessionId}/title`, { body: { title } })
     },
 
+    async updateSessionArchived(sessionId: number, archived: boolean): Promise<void> {
+      // dogfood-2 — soft-delete: PATCH /chat/sessions/{id}/archived (serve-api → src/chat/db.py;
+      // no updated_at bump → no reorder). Awaited so the caller can refresh the history list.
+      // Throws Error&{code} on failure (caller toasts / leaves the optimistic value).
+      if (!Number.isInteger(sessionId) || sessionId < 0) return
+      await request(baseUrl, 'PATCH', `/chat/sessions/${sessionId}/archived`, {
+        body: { archived }
+      })
+    },
+
     openPopout(_emailId: number): void {
       // Electron BrowserWindow 能力（开独立 chat 窗口）—— shared runtime 无第二窗口（web 无此
       // 场景）→ no-op。3c-3 electron 切 runtime 时由 ElectronApi override 注入真实

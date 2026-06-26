@@ -126,7 +126,11 @@ export type {
 // NULL → the unified history list derives a title from the email subject / first user message. Plain
 // additive ALTER, hasColumn idempotency guard (same discipline as v5..v12). 🔴 bump 同步刷
 // src/chat/db.py 头注释 + test_chat.py seed DDL；NOT backend_lifecycle.EXPECTED_DB_VERSION.
-const CHAT_DB_VERSION = 14
+// v15 (dogfood-2, session 归档) — ai_chat_sessions.archived: 0/1 软删标记(默认 0)。归档的会话从
+// listAllSessions 过滤掉(WHERE archived=0)，行与消息保留。Plain additive ALTER, hasColumn idempotency
+// guard (same discipline as v5..v14)。🔴 bump 同步刷 src/chat/db.py 头注释 + test_chat.py seed DDL；
+// NOT backend_lifecycle.EXPECTED_DB_VERSION。
+const CHAT_DB_VERSION = 15
 
 export function resolveChatDbPath(): string {
   const fromEnv = process.env['AI_CHAT_DB_PATH']
@@ -878,6 +882,25 @@ function migrate(db: Database.Database): void {
       throw err
     }
   }
+
+  // v14 → v15 — dogfood-2 session 归档。ai_chat_sessions.archived 软删标记(0/1，默认 0)；归档会话从
+  // listAllSessions 过滤(WHERE archived=0)，行/消息保留。Plain additive ALTER, hasColumn idempotency
+  // guard。ai_chat.db 自有 version ladder；NOT backend_lifecycle.EXPECTED_DB_VERSION。
+  if (current < 15) {
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      if (!hasColumn(db, 'ai_chat_sessions', 'archived')) {
+        db.exec('ALTER TABLE ai_chat_sessions ADD COLUMN archived INTEGER NOT NULL DEFAULT 0')
+      }
+      db.prepare(
+        "INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', '15')"
+      ).run()
+      db.exec('COMMIT')
+    } catch (err) {
+      db.exec('ROLLBACK')
+      throw err
+    }
+  }
 }
 
 // ── singleton ───────────────────────────────────────────────────────────
@@ -1027,6 +1050,7 @@ export function getOrCreateSession(input: OpenSessionInput): ChatSession {
     backend_model: backendModel,
     backend_agent_page_id: backendAgentPageId,
     title: null,
+    archived: false,
     created_at: now,
     updated_at: now
   }
@@ -1081,6 +1105,7 @@ export function createNewSession(input: OpenSessionInput): ChatSession {
     backend_model: backendModel,
     backend_agent_page_id: backendAgentPageId,
     title: null,
+    archived: false,
     created_at: now,
     updated_at: now
   }
@@ -1122,7 +1147,8 @@ export function listAllSessions(limit = 300): ChatSessionSummary[] {
             ORDER BY m.created_at ASC LIMIT 1) AS first_user_message,
          (SELECT COUNT(*) FROM ai_chat_messages m WHERE m.session_id = s.id) AS message_count
        FROM ai_chat_sessions s
-       WHERE EXISTS (SELECT 1 FROM ai_chat_messages m WHERE m.session_id = s.id)
+       WHERE s.archived = 0
+         AND EXISTS (SELECT 1 FROM ai_chat_messages m WHERE m.session_id = s.id)
        ORDER BY s.updated_at DESC
        LIMIT ?`
     )
@@ -1148,6 +1174,14 @@ export function deleteSession(sessionId: number): void {
  *  serve-api → src/chat/db.py.update_session_title (same ai_chat.db file). */
 export function updateSessionTitle(sessionId: number, title: string): void {
   getChatDb().prepare('UPDATE ai_chat_sessions SET title = ? WHERE id = ?').run(title, sessionId)
+}
+
+/** dogfood-2 — 归档 / 取消归档一个 session（软删：archived=1 从 listAllSessions 过滤，行保留）。
+ *  不 bump updated_at（与 updateSessionTitle 同纪律，归档不该重排历史）。Safe on missing id。 */
+export function updateSessionArchived(sessionId: number, archived: boolean): void {
+  getChatDb()
+    .prepare('UPDATE ai_chat_sessions SET archived = ? WHERE id = ?')
+    .run(archived ? 1 : 0, sessionId)
 }
 
 /** Phase 10b — the first user message's text for a session (the auto-title generation input). Null
