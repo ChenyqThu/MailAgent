@@ -135,7 +135,9 @@ describe('Agent view — demo-fidelity thread', () => {
       </MailAgentRuntimeProvider>
     )
     await waitFor(() => expect(screen.getByText(i18n.t('agentView.welcome'))).toBeTruthy())
-    expect(screen.getByLabelText(i18n.t('agentView.composer.placeholder'))).toBeTruthy()
+    // composer present (LexicalComposerInput renders a contenteditable, not an aria-labelled input,
+    // so assert the send button — our toolbar chrome — as the "composer rendered" signal).
+    expect(screen.getByLabelText(i18n.t('chat.composer.send'))).toBeTruthy()
     // a quick-action category label sits below the centered composer
     expect(screen.getByText(i18n.t('agentView.quickActions.summarize.label'))).toBeTruthy()
   })
@@ -167,10 +169,11 @@ describe('Agent view — demo-fidelity thread', () => {
       </MailAgentRuntimeProvider>
     )
     await waitFor(() => expect(screen.getByText('历史回答')).toBeTruthy())
-    expect(screen.queryByLabelText(i18n.t('agentView.composer.placeholder'))).toBeNull()
+    // readOnly drops the composer entirely → no send button.
+    expect(screen.queryByLabelText(i18n.t('chat.composer.send'))).toBeNull()
   })
 
-  test('composer toolbar (with controls) shows the model picker + @ + attachment', async () => {
+  test('composer toolbar (with controls) shows the model picker + attachment', async () => {
     const chat = makeChat({ messages: [] })
     // With controls, AgentComposer mounts AgentMentionButton → MentionPopover, which runs a useQuery
     // unconditionally → a QueryClientProvider is required (the search itself stays disabled while empty).
@@ -184,9 +187,9 @@ describe('Agent view — demo-fidelity thread', () => {
         </ChatComposerControlsProvider>
       </QueryClientProvider>
     )
-    // model picker trigger shows the active model id (vendor icon is aria-hidden)
+    // model picker trigger shows the active model id (vendor icon is aria-hidden); @ is now in-field
+    // (lexical trigger popover), so there is no separate @ button — only attach + model picker remain.
     await waitFor(() => expect(screen.getByText('claude-sonnet-4-6')).toBeTruthy())
-    expect(screen.getByLabelText(i18n.t('chat.composer.mention'))).toBeTruthy()
     expect(screen.getByLabelText(i18n.t('chat.composer.attach'))).toBeTruthy()
   })
 })

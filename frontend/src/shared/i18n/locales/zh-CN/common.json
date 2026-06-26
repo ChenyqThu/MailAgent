@@ -554,7 +554,14 @@
     "thinking": "思考中",
     "scrollToBottom": "滚动到底部",
     "composer": {
-      "placeholder": "给 MailAgent 发消息…（@ 引用一封邮件）"
+      "placeholder": "给 MailAgent 发消息…（@ 引用邮件，/ 命令）"
+    },
+    "mention": {
+      "loading": "搜索邮件中…",
+      "empty": "没有匹配的邮件"
+    },
+    "slash": {
+      "empty": "没有匹配的命令"
     },
     "newSession": "新会话",
     "rename": "重命名",
