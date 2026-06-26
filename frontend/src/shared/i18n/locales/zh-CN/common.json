@@ -159,6 +159,7 @@
       "fontSize": "字号",
       "textColor": "字体颜色",
       "bgColor": "字体底色",
+      "moreColor": "更多颜色",
       "fontDefault": "默认",
       "fontSystem": "系统",
       "fontSerif": "衬线",

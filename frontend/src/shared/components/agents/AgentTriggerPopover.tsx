@@ -103,7 +103,7 @@ const Items: FC<{
             <ChevronLeft className="size-3.5" />
             {backLabel}
           </ComposerPrimitive.Unstable_TriggerPopoverBack>
-          <div className="py-1">
+          <div className="scrollbar-thin max-h-[260px] overflow-y-auto py-1">
             {items.map((item, index) => {
               const iconKey =
                 typeof item.metadata?.icon === 'string' ? item.metadata.icon : undefined
@@ -115,9 +115,9 @@ const Items: FC<{
                   index={index}
                   className="flex w-full cursor-pointer flex-col items-start gap-0.5 px-3 py-1.5 text-start outline-none transition-colors duration-fast hover:bg-ink-4 data-[highlighted]:bg-ink-4"
                 >
-                  <span className="flex items-center gap-2 text-aux font-medium text-ink-fg">
-                    <Icon className="size-3.5 text-coral" />
-                    {item.label}
+                  <span className="flex w-full min-w-0 items-center gap-2 text-aux font-medium text-ink-fg">
+                    <Icon className="size-3.5 shrink-0 text-coral" />
+                    <span className="truncate">{item.label}</span>
                   </span>
                   {item.description && (
                     <span className="ms-5 truncate text-micro text-ink-fg-3">

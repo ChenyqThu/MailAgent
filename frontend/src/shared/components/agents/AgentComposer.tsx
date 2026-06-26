@@ -14,7 +14,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   ArrowUp,
-  Cpu,
+  ChevronDown,
   FileText,
   ListTodo,
   Mail,
@@ -50,66 +50,6 @@ import {
 } from '@shared/assistant/components/composerControls'
 
 import { AgentDirectiveChip, AgentTriggerPopover } from './AgentTriggerPopover'
-
-// ── vendor icon ────────────────────────────────────────────────────────────────
-type Vendor = 'anthropic' | 'openai' | 'google' | 'other'
-function vendorOf(modelId: string | null): Vendor {
-  const m = (modelId ?? '').toLowerCase()
-  if (m.startsWith('claude')) return 'anthropic'
-  if (m.startsWith('gpt') || /^o[134]/.test(m)) return 'openai'
-  if (m.startsWith('gemini')) return 'google'
-  return 'other'
-}
-
-/** Compact, brand-coloured vendor marks (simplified — recognisable, not pixel-perfect logos):
- *  Anthropic sunburst (coral), OpenAI hexagon (teal), Gemini spark (blue), else a neutral Cpu. */
-function ModelVendorIcon({ vendor }: { vendor: Vendor }): React.JSX.Element {
-  switch (vendor) {
-    case 'anthropic':
-      return (
-        <svg
-          viewBox="0 0 24 24"
-          className="size-3.5 shrink-0"
-          stroke="var(--vendor-anthropic)"
-          strokeWidth="2"
-          strokeLinecap="round"
-          aria-hidden
-        >
-          <line x1="12" y1="3.5" x2="12" y2="20.5" />
-          <line x1="3.5" y1="12" x2="20.5" y2="12" />
-          <line x1="6" y1="6" x2="18" y2="18" />
-          <line x1="18" y1="6" x2="6" y2="18" />
-        </svg>
-      )
-    case 'openai':
-      return (
-        <svg
-          viewBox="0 0 24 24"
-          className="size-3.5 shrink-0"
-          fill="none"
-          stroke="var(--vendor-openai)"
-          strokeWidth="2"
-          strokeLinejoin="round"
-          aria-hidden
-        >
-          <path d="M12 3l7.8 4.5v9L12 21l-7.8-4.5v-9z" />
-        </svg>
-      )
-    case 'google':
-      return (
-        <svg
-          viewBox="0 0 24 24"
-          className="size-3.5 shrink-0"
-          fill="var(--vendor-google)"
-          aria-hidden
-        >
-          <path d="M12 2c0 5-5 10-10 10 5 0 10 5 10 10 0-5 5-10 10-10-5 0-10-5-10-10z" />
-        </svg>
-      )
-    default:
-      return <Cpu size={13} strokeWidth={2} className="shrink-0 text-ink-fg-2" />
-  }
-}
 
 // ── @ email mention adapter (async FTS search bridged into a sync trigger adapter) ───────────────
 // The trigger popover takes a SYNCHRONOUS adapter (search(query) → items[]) plus a separate isLoading
@@ -346,10 +286,10 @@ function AgentModelPicker({
               : 'text-ink-fg-2 hover:bg-ink-4 hover:text-ink-fg'
         )}
       >
-        <ModelVendorIcon vendor={vendorOf(controls.model)} />
-        <span className="max-w-[110px] truncate font-mono">
+        <span className="max-w-[130px] truncate font-mono">
           {controls.model ?? t('chat.composer.model')}
         </span>
+        <ChevronDown size={13} strokeWidth={2} className="shrink-0 opacity-60" />
       </button>
       {open && (
         <div
@@ -376,7 +316,6 @@ function AgentModelPicker({
                     : 'text-ink-fg-1 hover:bg-ink-4 hover:text-ink-fg'
                 )}
               >
-                <ModelVendorIcon vendor={vendorOf(m)} />
                 <span className="truncate">{m}</span>
               </button>
             )
@@ -481,7 +420,7 @@ export function AgentComposer(): React.JSX.Element {
             directiveChip={AgentDirectiveChip}
             placeholder={t('agentView.composer.placeholder')}
             autoFocus
-            className="scrollbar-thin max-h-32 min-h-[2.5rem] w-full resize-none bg-transparent px-2.5 py-1.5 text-body leading-snug text-ink-fg outline-none [&_.aui-lexical-placeholder]:pointer-events-none [&_.aui-lexical-placeholder]:absolute [&_.aui-lexical-placeholder]:px-2.5 [&_.aui-lexical-placeholder]:py-1.5 [&_.aui-lexical-placeholder]:text-ink-fg-3"
+            className="scrollbar-thin max-h-32 min-h-[2.5rem] w-full resize-none bg-transparent px-2.5 py-1.5 text-body leading-snug text-ink-fg outline-none [&_.aui-lexical-input]:outline-none [&_.aui-lexical-placeholder]:pointer-events-none [&_.aui-lexical-placeholder]:absolute [&_.aui-lexical-placeholder]:px-2.5 [&_.aui-lexical-placeholder]:py-1.5 [&_.aui-lexical-placeholder]:text-ink-fg-3"
           />
           <div className="flex items-center justify-between gap-1 px-0.5">
             <div className="flex items-center gap-0.5">

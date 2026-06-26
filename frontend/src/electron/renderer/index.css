@@ -84,12 +84,6 @@
    * mockup-visible change beyond CTA legibility. */
   --c-accent-fg: 15 16 21;
 
-  /* Vendor brand marks (model-picker icons) — theme-invariant brand colours, deliberately
-   * off-palette (logos, not theme tokens); consumed by AgentComposer's ModelVendorIcon. */
-  --vendor-anthropic: #cc785c;
-  --vendor-openai: #10a37f;
-  --vendor-google: #4285f4;
-
   /* Sprint 13 round 7 user feedback — "起草回复" CTA needed visible
    * mockup-style white text on a deep coral. text-accent-fg (near-black
    * on lifted coral) preserved AA but read as muted compared with the

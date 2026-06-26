@@ -1220,10 +1220,16 @@ export function EmailList(): React.ReactElement {
     // 目标行尚未渲染(未分页到 / 折叠组或线程里) → 不清 navTargetId, 等 rows 变化重跑本
     // effect(续拉/展开后仍可定位); 仅定位成功才解除豁免。codex review MEDIUM。
     if (top === null) return
-    clearNavTarget()
+    // C5(搜索跳转选中): 不在此处 clearNavTarget。上面的 active-reset 仅在 activeId === navTargetId
+    // 时豁免不抢选中; 若在目标行尚未在视口/列表稳定前就清掉 navTargetId, 一次 (navigate 引发的)
+    // 重渲会因 orderedIds 还没含目标而把 activeId reset 成 firstId → 跳转目标的高亮被抢走。把
+    // clearNavTarget 延后到滚动定型之后 (已在视口 / reduced-motion 则立即), 让选中存活。
     const viewTop = el.scrollTop
     const viewBottom = viewTop + el.clientHeight
-    if (top >= viewTop && top <= viewBottom - 40) return
+    if (top >= viewTop && top <= viewBottom - 40) {
+      clearNavTarget()
+      return
+    }
     const target = Math.max(0, top - el.clientHeight / 2)
     const reduce =
       typeof window !== 'undefined' &&
@@ -1232,6 +1238,7 @@ export function EmailList(): React.ReactElement {
       // 命令式回滚到目标; 规则误判 listRef.element 不可变。
       // eslint-disable-next-line react-hooks/immutability
       el.scrollTop = target
+      clearNavTarget()
       return
     }
     isAnchoringRef.current = true
@@ -1242,6 +1249,7 @@ export function EmailList(): React.ReactElement {
       overwrite: 'auto',
       onComplete: () => {
         isAnchoringRef.current = false
+        clearNavTarget()
       }
     })
   }, [navTargetId, rows, rowHeights, clearNavTarget])

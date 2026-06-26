@@ -159,6 +159,7 @@
       "fontSize": "Size",
       "textColor": "Text color",
       "bgColor": "Highlight",
+      "moreColor": "More colors",
       "fontDefault": "Default",
       "fontSystem": "System",
       "fontSerif": "Serif",

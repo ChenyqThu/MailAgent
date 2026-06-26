@@ -14,6 +14,7 @@ import {
   Baseline,
   Bold,
   Check,
+  ChevronDown,
   Code,
   Highlighter,
   Italic,
@@ -26,12 +27,7 @@ import {
 } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
-
-// codex review LOW: <input type="color"> 只接受 #rrggbb; 草稿 HTML 可解析出 rgb()/
-// 具名色 → 给取色器回退到有效 hex(不动实际 textStyle mark, icon 仍用原值显示)。
-function toHexColor(c: string, fallback: string): string {
-  return /^#[0-9a-fA-F]{6}$/.test(c) ? c : fallback
-}
+import { Popover, PopoverContent, PopoverTrigger } from '@shared/components/ui/popover'
 
 function FmtBtn({
   icon,
@@ -58,6 +54,177 @@ function FmtBtn({
     >
       {icon}
     </button>
+  )
+}
+
+// #9 dogfood — 固定色盘 (取代原生 input[type=color] 系统色轮)。6 列 × 5 行: 4 行彩色 (色相×明度)
+// + 1 行灰阶 (白→黑)。点格子即应用; 「更多颜色」回退到原生取色器兜底自定义色。用 radix Popover
+// (React, 无系统弹窗) → 不再触发 ComposeNewModal backdrop 的误关 (原生 select/color 的系统弹窗
+// 关闭时 click 落到 backdrop 会关整个撰写框, dogfood 反馈)。
+/* eslint-disable mailagent/no-raw-hex -- 固定色盘的品牌色集，本质是 hex 常量（非 theme token，类似厂商色）。 */
+const COLOR_PALETTE: readonly string[] = [
+  '#5b9bf3',
+  '#5cb85c',
+  '#f5d142',
+  '#f0962e',
+  '#ef6c5a',
+  '#c45cd6',
+  '#2d7fe0',
+  '#2e9e4f',
+  '#e6c419',
+  '#e07c1c',
+  '#dc4533',
+  '#9a3fb0',
+  '#1f5fa8',
+  '#1f6b35',
+  '#b89a16',
+  '#b85d18',
+  '#a82a20',
+  '#6e2a82',
+  '#163d68',
+  '#16401f',
+  '#8a7011',
+  '#8a4212',
+  '#7a1a12',
+  '#421a52',
+  '#ffffff',
+  '#cfcfcf',
+  '#9a9a9a',
+  '#666666',
+  '#333333',
+  '#000000'
+]
+// fmt selector / fallback 的默认显示色 (TipTap textStyle 缺省时回退值，非 UI token)。
+const DEFAULT_TEXT_COLOR = '#1a1a1a'
+const DEFAULT_BG_COLOR = '#fde68a'
+/* eslint-enable mailagent/no-raw-hex */
+
+/** 固定色盘按钮: 图标反映当前色; popover 内 6×5 格 + 「更多颜色」原生兜底。onMouseDown preventDefault
+ *  保住编辑器选区 (否则点工具栏会抢走选区, setColor 作用到空选区)。 */
+function ColorPaletteButton({
+  icon,
+  title,
+  current,
+  onPick,
+  moreLabel
+}: {
+  icon: React.ReactNode
+  title: string
+  current: string
+  onPick: (color: string) => void
+  moreLabel: string
+}): React.ReactElement {
+  const [open, setOpen] = useState(false)
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          title={title}
+          aria-label={title}
+          onMouseDown={(e) => e.preventDefault()}
+          className="folder-editor-btn"
+        >
+          {icon}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        align="start"
+        sideOffset={6}
+        onMouseDown={(e) => e.preventDefault()}
+        className="w-auto p-2"
+      >
+        <div className="grid grid-cols-6 gap-1.5">
+          {COLOR_PALETTE.map((c) => (
+            <button
+              key={c}
+              type="button"
+              title={c}
+              onClick={() => {
+                onPick(c)
+                setOpen(false)
+              }}
+              className={cn(
+                'size-5 rounded-full border transition-transform duration-fast hover:scale-110',
+                current.toLowerCase() === c.toLowerCase()
+                  ? 'border-coral ring-1 ring-coral'
+                  : 'border-ink-border/40'
+              )}
+              style={{ background: c }}
+            />
+          ))}
+        </div>
+        <label className="mt-2 flex cursor-pointer items-center justify-center rounded-md border border-ink-border/60 py-1.5 text-meta text-ink-fg-2 transition-colors duration-fast hover:bg-ink-3">
+          {moreLabel}
+          <input
+            type="color"
+            className="sr-only"
+            onChange={(e) => {
+              onPick(e.target.value)
+              setOpen(false)
+            }}
+          />
+        </label>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+/** 字体 / 字号选择: radix Popover 选项列表 (取代原生 <select> — 它的系统下拉在 Electron modal 里
+ *  关闭时会误关 backdrop, dogfood 反馈)。当前值显示在按钮上, 选项点击在 PopoverContent 内不冒泡。 */
+function OptionPopoverButton({
+  title,
+  currentLabel,
+  options,
+  value,
+  onSelect
+}: {
+  title: string
+  currentLabel: string
+  options: ReadonlyArray<{ value: string; label: string }>
+  value: string
+  onSelect: (value: string) => void
+}): React.ReactElement {
+  const [open, setOpen] = useState(false)
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          title={title}
+          aria-label={title}
+          onMouseDown={(e) => e.preventDefault()}
+          className="flex h-7 max-w-[92px] items-center gap-1 rounded-md border border-ink-border/60 bg-ink-2/50 px-1.5 text-[11px] text-ink-fg-2 transition-colors duration-fast hover:bg-ink-2"
+        >
+          <span className="truncate">{currentLabel}</span>
+          <ChevronDown size={12} strokeWidth={2} className="shrink-0 opacity-60" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        align="start"
+        sideOffset={6}
+        onMouseDown={(e) => e.preventDefault()}
+        className="w-40 p-1"
+      >
+        {options.map((o) => (
+          <button
+            key={o.value || 'default'}
+            type="button"
+            onClick={() => {
+              onSelect(o.value)
+              setOpen(false)
+            }}
+            className={cn(
+              'flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-aux transition-colors duration-fast hover:bg-ink-3',
+              o.value === value ? 'text-coral' : 'text-ink-fg-1'
+            )}
+          >
+            <span className="truncate">{o.label}</span>
+            {o.value === value && <Check size={13} strokeWidth={2.5} className="shrink-0" />}
+          </button>
+        ))}
+      </PopoverContent>
+    </Popover>
   )
 }
 
@@ -89,9 +256,9 @@ export function ComposeFormatToolbar({ editor }: { editor: Editor }): React.Reac
       code: e?.isActive('code') ?? false,
       fontFamily: (e?.getAttributes('textStyle').fontFamily as string | undefined) ?? '',
       fontSize: (e?.getAttributes('textStyle').fontSize as string | undefined) ?? '',
-      color: (e?.getAttributes('textStyle').color as string | undefined) ?? '#1a1a1a',
+      color: (e?.getAttributes('textStyle').color as string | undefined) ?? DEFAULT_TEXT_COLOR,
       backgroundColor:
-        (e?.getAttributes('textStyle').backgroundColor as string | undefined) ?? '#fde68a'
+        (e?.getAttributes('textStyle').backgroundColor as string | undefined) ?? DEFAULT_BG_COLOR
     })
   }) ?? {
     bold: false,
@@ -104,8 +271,8 @@ export function ComposeFormatToolbar({ editor }: { editor: Editor }): React.Reac
     code: false,
     fontFamily: '',
     fontSize: '',
-    color: '#1a1a1a',
-    backgroundColor: '#fde68a'
+    color: DEFAULT_TEXT_COLOR,
+    backgroundColor: DEFAULT_BG_COLOR
   }
 
   const openLinkDialog = useCallback(() => {
@@ -127,10 +294,6 @@ export function ComposeFormatToolbar({ editor }: { editor: Editor }): React.Reac
     setLinkOpen(false)
     editor.chain().focus().extendMarkRange('link').unsetLink().run()
   }, [editor])
-
-  const selectCls =
-    'h-7 rounded-md bg-ink-2/50 border border-ink-border/60 text-[11px] px-1 text-ink-fg-2 ' +
-    'hover:bg-ink-2 focus:outline-none focus:border-accent/60 cursor-pointer max-w-[88px]'
 
   return (
     <div className="relative border-t border-ink-border/60 bg-ink-2/40 px-3 py-2 flex items-center gap-1.5 shrink-0 flex-wrap">
@@ -159,74 +322,54 @@ export function ComposeFormatToolbar({ editor }: { editor: Editor }): React.Reac
         onClick={() => editor.chain().focus().toggleStrike().run()}
       />
       <span className="w-px h-5 bg-ink-border-soft mx-1" aria-hidden />
-      {/* #9 字体 — setFontFamily / unsetFontFamily (textStyle mark)。 */}
-      <select
-        className={selectCls}
+      {/* #9 字体 — OptionPopoverButton (取代原生 select，避免系统下拉关闭误关 modal)。 */}
+      <OptionPopoverButton
         title={t('compose.editor.fontFamily')}
-        aria-label={t('compose.editor.fontFamily')}
         value={fmt.fontFamily}
-        onMouseDown={(e) => e.stopPropagation()}
-        onChange={(e) => {
-          const v = e.target.value
+        currentLabel={t(
+          `compose.editor.${fontFamilies.find((f) => f.value === fmt.fontFamily)?.key ?? 'fontDefault'}`
+        )}
+        options={fontFamilies.map((f) => ({
+          value: f.value,
+          label: t(`compose.editor.${f.key}`)
+        }))}
+        onSelect={(v) => {
           if (v) editor.chain().focus().setFontFamily(v).run()
           else editor.chain().focus().unsetFontFamily().run()
         }}
-      >
-        {fontFamilies.map((f) => (
-          <option key={f.key} value={f.value}>
-            {t(`compose.editor.${f.key}`)}
-          </option>
-        ))}
-      </select>
-      {/* #9 字号 — setFontSize / unsetFontSize (官方 FontSize)。 */}
-      <select
-        className={selectCls}
+      />
+      {/* #9 字号 — OptionPopoverButton (取代原生 select)。 */}
+      <OptionPopoverButton
         title={t('compose.editor.fontSize')}
-        aria-label={t('compose.editor.fontSize')}
         value={fmt.fontSize}
-        onMouseDown={(e) => e.stopPropagation()}
-        onChange={(e) => {
-          const v = e.target.value
+        currentLabel={
+          fmt.fontSize ? fmt.fontSize.replace('px', '') : t('compose.editor.fontDefault')
+        }
+        options={fontSizes.map((s) => ({
+          value: s,
+          label: s ? s.replace('px', '') : t('compose.editor.fontDefault')
+        }))}
+        onSelect={(v) => {
           if (v) editor.chain().focus().setFontSize(v).run()
           else editor.chain().focus().unsetFontSize().run()
         }}
-      >
-        {fontSizes.map((s) => (
-          <option key={s || 'default'} value={s}>
-            {s ? s.replace('px', '') : t('compose.editor.fontDefault')}
-          </option>
-        ))}
-      </select>
-      {/* #9 字体颜色 — 原生 color input (setColor); icon 反映当前色。 */}
-      <label
-        className="folder-editor-btn relative cursor-pointer"
+      />
+      {/* #9 字体颜色 — 固定色盘 (setColor); icon 反映当前色。 */}
+      <ColorPaletteButton
         title={t('compose.editor.textColor')}
-        aria-label={t('compose.editor.textColor')}
-        onMouseDown={(e) => e.preventDefault()}
-      >
-        <Baseline size={13} strokeWidth={2} style={{ color: fmt.color }} />
-        <input
-          type="color"
-          value={toHexColor(fmt.color, '#1a1a1a')}
-          className="absolute inset-0 h-full w-full opacity-0 cursor-pointer"
-          onChange={(e) => editor.chain().focus().setColor(e.target.value).run()}
-        />
-      </label>
-      {/* #9 字体底色 — BackgroundColor (setBackgroundColor); icon 反映当前底色。 */}
-      <label
-        className="folder-editor-btn relative cursor-pointer"
+        icon={<Baseline size={13} strokeWidth={2} style={{ color: fmt.color }} />}
+        current={fmt.color}
+        onPick={(c) => editor.chain().focus().setColor(c).run()}
+        moreLabel={t('compose.editor.moreColor')}
+      />
+      {/* #9 字体底色 — 固定色盘 (setBackgroundColor); icon 反映当前底色。 */}
+      <ColorPaletteButton
         title={t('compose.editor.bgColor')}
-        aria-label={t('compose.editor.bgColor')}
-        onMouseDown={(e) => e.preventDefault()}
-      >
-        <Highlighter size={13} strokeWidth={2} style={{ color: fmt.backgroundColor }} />
-        <input
-          type="color"
-          value={toHexColor(fmt.backgroundColor, '#fde68a')}
-          className="absolute inset-0 h-full w-full opacity-0 cursor-pointer"
-          onChange={(e) => editor.chain().focus().setBackgroundColor(e.target.value).run()}
-        />
-      </label>
+        icon={<Highlighter size={13} strokeWidth={2} style={{ color: fmt.backgroundColor }} />}
+        current={fmt.backgroundColor}
+        onPick={(c) => editor.chain().focus().setBackgroundColor(c).run()}
+        moreLabel={t('compose.editor.moreColor')}
+      />
       <span className="w-px h-5 bg-ink-border-soft mx-1" aria-hidden />
       <FmtBtn
         icon={<List size={13} strokeWidth={2} />}
@@ -257,9 +400,8 @@ export function ComposeFormatToolbar({ editor }: { editor: Editor }): React.Reac
 
       {/* #9 链接输入弹框 — 浮在工具栏上方。Enter 应用 / Esc 取消; 有链接时显移除。 */}
       {linkOpen && (
-        <div className="absolute bottom-full left-3 mb-1.5 z-20 flex items-center gap-1 rounded-lg border border-ink-border bg-ink-1 p-1.5 shadow-lg">
+        <div className="absolute bottom-full left-3 mb-1.5 z-20 flex items-center gap-1 rounded-lg border border-ink-border bg-ink-1 p-1.5 shadow-md">
           <input
-            // eslint-disable-next-line jsx-a11y/no-autofocus -- 弹框打开即聚焦输入是预期交互
             autoFocus
             type="url"
             value={linkValue}
