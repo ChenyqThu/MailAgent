@@ -1,0 +1,192 @@
+// @vitest-environment happy-dom
+//
+// demo-fidelity Phase 7 — MailAgent agent-view component render smoke.
+//
+// Mounts the NEW agent-view thread (AgentThread + AgentMessage + AgentComposer) on the legacy
+// ExternalStore runtime — the same degrade path AgentConversation uses — driven by a controlled chat
+// stub. Asserts the demo layout renders: assistant prose + user message, the empty-state welcome +
+// centered composer + quick-action chips, the working indicator on a streamed-empty reply, the
+// vendor-icon model picker / @ / attachment toolbar (with controls), and readOnly composer suppression.
+// The shared MarkdownText is mocked to a plain div (its internals are covered by its own tests).
+
+import { afterEach, beforeAll, describe, expect, test, vi } from 'vitest'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+
+import type { ChatMessage } from '@shared/api/types'
+import type { LegacyRuntimeChat } from '@shared/assistant/runtime/useLegacyExternalStoreRuntime'
+import i18n from '@shared/i18n'
+
+vi.mock('@shared/components/email/TranslatedBody', () => ({
+  TranslatedBody: ({ text }: { text: string }) => <div data-testid="md">{text}</div>
+}))
+
+import { MailAgentRuntimeProvider } from '@shared/assistant/runtime/MailAgentRuntimeProvider'
+import {
+  ChatComposerControlsProvider,
+  type ChatComposerControls
+} from '@shared/assistant/components/composerControls'
+import { AgentThread } from '@shared/components/agents/AgentThread'
+import { AgentQuickActions } from '@shared/components/agents/AgentQuickActions'
+
+beforeAll(async () => {
+  await i18n.changeLanguage('zh-CN')
+  // assistant-ui Viewport relies on observers happy-dom lacks; stub them.
+  if (!('ResizeObserver' in globalThis)) {
+    ;(globalThis as { ResizeObserver?: unknown }).ResizeObserver = class {
+      observe(): void {}
+      unobserve(): void {}
+      disconnect(): void {}
+    }
+  }
+  if (!('IntersectionObserver' in globalThis)) {
+    ;(globalThis as { IntersectionObserver?: unknown }).IntersectionObserver = class {
+      observe(): void {}
+      unobserve(): void {}
+      disconnect(): void {}
+      takeRecords(): [] {
+        return []
+      }
+    }
+  }
+  if (!Element.prototype.scrollIntoView) {
+    Element.prototype.scrollIntoView = (): void => {}
+  }
+})
+
+afterEach(() => {
+  cleanup()
+})
+
+function fakeMessage(over: Partial<ChatMessage>): ChatMessage {
+  return {
+    id: 1,
+    session_id: 10,
+    role: 'assistant',
+    content: '',
+    tokens_input: null,
+    tokens_output: null,
+    cost_usd: null,
+    model: null,
+    status: 'complete',
+    error_message: null,
+    metadata: null,
+    thinking: null,
+    ui_message_json: null,
+    created_at: 1_700_000_000_000,
+    updated_at: 1_700_000_000_000,
+    ...over
+  }
+}
+
+function makeChat(
+  over: { messages?: ChatMessage[]; isStreaming?: boolean; streamingMessageId?: number | null } = {}
+): LegacyRuntimeChat & { abortCurrent: ReturnType<typeof vi.fn> } {
+  return {
+    messages: over.messages ?? [],
+    isStreaming: over.isStreaming ?? false,
+    streamingMessageId: over.streamingMessageId ?? null,
+    liveToolCalls: new Map(),
+    abortCurrent: vi.fn()
+  }
+}
+
+function stubControls(over: Partial<ChatComposerControls> = {}): ChatComposerControls {
+  return {
+    thinkingSupported: true,
+    thinkingEnabled: true,
+    onToggleThinking: vi.fn(),
+    model: 'claude-sonnet-4-6',
+    availableModels: ['claude-sonnet-4-6', 'gpt-4o', 'gemini-2.0-flash'],
+    onModelChange: vi.fn(),
+    modelPickerDisabled: false,
+    mentions: [],
+    onAddMention: vi.fn(),
+    onRemoveMention: vi.fn(),
+    attachments: [],
+    onAddAttachment: vi.fn(),
+    onRemoveAttachment: vi.fn(),
+    ...over
+  }
+}
+
+describe('Agent view — demo-fidelity thread', () => {
+  test('user + assistant messages render in the agent layout', async () => {
+    const chat = makeChat({
+      messages: [
+        fakeMessage({ id: 1, role: 'user', content: '帮我安排今天的邮件' }),
+        fakeMessage({ id: 2, role: 'assistant', content: '好的，这是今天的待办。' })
+      ]
+    })
+    render(
+      <MailAgentRuntimeProvider chat={chat} onSend={vi.fn()}>
+        <AgentThread quickActions={<AgentQuickActions />} />
+      </MailAgentRuntimeProvider>
+    )
+    await waitFor(() => expect(screen.getByText('帮我安排今天的邮件')).toBeTruthy())
+    expect(screen.getByText('好的，这是今天的待办。')).toBeTruthy()
+  })
+
+  test('empty thread shows the welcome + composer + quick-action chips', async () => {
+    const chat = makeChat({ messages: [] })
+    render(
+      <MailAgentRuntimeProvider chat={chat} onSend={vi.fn()}>
+        <AgentThread quickActions={<AgentQuickActions />} />
+      </MailAgentRuntimeProvider>
+    )
+    await waitFor(() => expect(screen.getByText(i18n.t('agentView.welcome'))).toBeTruthy())
+    expect(screen.getByLabelText(i18n.t('agentView.composer.placeholder'))).toBeTruthy()
+    // a quick-action category label sits below the centered composer
+    expect(screen.getByText(i18n.t('agentView.quickActions.summarize.label'))).toBeTruthy()
+  })
+
+  test('streamed-empty assistant reply shows the working indicator', async () => {
+    const chat = makeChat({
+      messages: [fakeMessage({ id: 2, role: 'assistant', content: '', status: 'streaming' })],
+      isStreaming: true,
+      streamingMessageId: 2
+    })
+    render(
+      <MailAgentRuntimeProvider chat={chat} onSend={vi.fn()}>
+        <AgentThread quickActions={<AgentQuickActions />} />
+      </MailAgentRuntimeProvider>
+    )
+    // ShimmerText renders the label in 1 (reduced-motion) or 2 spans — assert at least one.
+    await waitFor(() =>
+      expect(screen.getAllByText(i18n.t('agentView.thinking')).length).toBeGreaterThan(0)
+    )
+  })
+
+  test('readOnly suppresses the composer', async () => {
+    const chat = makeChat({
+      messages: [fakeMessage({ id: 2, role: 'assistant', content: '历史回答' })]
+    })
+    render(
+      <MailAgentRuntimeProvider chat={chat} onSend={vi.fn()}>
+        <AgentThread quickActions={<AgentQuickActions />} readOnly />
+      </MailAgentRuntimeProvider>
+    )
+    await waitFor(() => expect(screen.getByText('历史回答')).toBeTruthy())
+    expect(screen.queryByLabelText(i18n.t('agentView.composer.placeholder'))).toBeNull()
+  })
+
+  test('composer toolbar (with controls) shows the model picker + @ + attachment', async () => {
+    const chat = makeChat({ messages: [] })
+    // With controls, AgentComposer mounts AgentMentionButton → MentionPopover, which runs a useQuery
+    // unconditionally → a QueryClientProvider is required (the search itself stays disabled while empty).
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ChatComposerControlsProvider value={stubControls()}>
+          <MailAgentRuntimeProvider chat={chat} onSend={vi.fn()}>
+            <AgentThread quickActions={<AgentQuickActions />} />
+          </MailAgentRuntimeProvider>
+        </ChatComposerControlsProvider>
+      </QueryClientProvider>
+    )
+    // model picker trigger shows the active model id (vendor icon is aria-hidden)
+    await waitFor(() => expect(screen.getByText('claude-sonnet-4-6')).toBeTruthy())
+    expect(screen.getByLabelText(i18n.t('chat.composer.mention'))).toBeTruthy()
+    expect(screen.getByLabelText(i18n.t('chat.composer.attach'))).toBeTruthy()
+  })
+})

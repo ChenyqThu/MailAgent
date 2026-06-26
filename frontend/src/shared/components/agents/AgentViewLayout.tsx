@@ -15,7 +15,6 @@ import { useGeneralChat } from '@shared/hooks/useGeneralChat'
 
 import { AgentThreadList } from './AgentThreadList'
 import { AgentConversation } from './AgentConversation'
-import { AgentQuickActions } from './AgentQuickActions'
 import { useNarrow } from './hooks'
 
 export function AgentViewLayout(): React.ReactElement {
@@ -81,24 +80,9 @@ export function AgentViewLayout(): React.ReactElement {
     />
   )
 
-  // Empty-thread welcome: heading + hint + quick-action chips. Passed as the AssistantThread empty
-  // state (rendered INSIDE the runtime), so each quick-action's ThreadPrimitive.Suggestion sends
-  // through the active runtime (ai-sdk gateway or the legacy degrade engine) uniformly.
-  const welcome = (
-    <div className="flex flex-1 flex-col items-center justify-center gap-5 px-4 text-center">
-      <div className="flex flex-col items-center gap-2">
-        <h1 className="animate-in fade-in slide-in-from-bottom-1 fill-mode-both text-2xl font-semibold text-ink-fg duration-200 motion-reduce:animate-none">
-          {t('agentView.welcome')}
-        </h1>
-        <p className="max-w-md text-aux text-ink-fg-2">{t('agentView.emptyHint')}</p>
-      </div>
-      <div className="w-full max-w-2xl">
-        <AgentQuickActions />
-      </div>
-    </div>
-  )
-
-  const conversation = <AgentConversation chat={chat} emptyState={welcome} />
+  // The welcome heading + quick-action chips now live INSIDE AgentThread (demo layout: heading at the
+  // viewport top, chips below the centered composer), so AgentConversation owns the empty state.
+  const conversation = <AgentConversation chat={chat} />
 
   if (narrow) {
     return mobileDetail ? (

@@ -551,6 +551,11 @@
   "agentView": {
     "welcome": "我能帮你做什么？",
     "emptyHint": "问任何问题，或用 @ 带上一封邮件作为上下文",
+    "thinking": "思考中",
+    "scrollToBottom": "滚动到底部",
+    "composer": {
+      "placeholder": "给 MailAgent 发消息…（@ 引用一封邮件）"
+    },
     "newSession": "新会话",
     "rename": "重命名",
     "delete": "删除",

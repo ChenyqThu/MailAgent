@@ -551,6 +551,11 @@
   "agentView": {
     "welcome": "How can I help you?",
     "emptyHint": "Ask anything, or @-mention an email to bring it into context",
+    "thinking": "Thinking",
+    "scrollToBottom": "Scroll to bottom",
+    "composer": {
+      "placeholder": "Message MailAgent... (@ to mention an email)"
+    },
     "newSession": "New chat",
     "rename": "Rename",
     "delete": "Delete",

@@ -36,7 +36,6 @@ import {
   isAiSdkGatewayEnabled,
   resolveAiGatewayBaseUrl
 } from '@shared/assistant/runtime/flags'
-import { AssistantThread } from '@shared/assistant/components/thread'
 import {
   ChatComposerControlsProvider,
   type ChatComposerControls
@@ -45,11 +44,15 @@ import { useAgentContextSnapshot } from '@shared/assistant/context/useAgentConte
 import type { CapabilityContext, ContextScope } from '@shared/assistant/context/contextSnapshot'
 import { chatMessageToUIMessage } from '@shared/assistant/uiMessage'
 
+import { AgentThread } from './AgentThread'
+import { AgentQuickActions } from './AgentQuickActions'
+
 // Shared model/thinking prefs (same localStorage keys as the email panel → one user preference across
 // both surfaces). Best-effort; a blocked localStorage falls back to the default.
 const CUSTOM_MODEL_PREF = 'mailagent.chat.customModel'
 const DEFAULT_CUSTOM_MODEL = 'claude-sonnet-4-6'
-const THINKING_PREF = 'mailagent.chat.thinkingEnabled'
+/** No-op for the removed thinking toggle — the agent view follows the model (see thinkingActive). */
+const NOOP = (): void => {}
 function readModelPref(): string {
   try {
     return localStorage.getItem(CUSTOM_MODEL_PREF) || DEFAULT_CUSTOM_MODEL
@@ -60,20 +63,6 @@ function readModelPref(): string {
 function writeModelPref(model: string): void {
   try {
     localStorage.setItem(CUSTOM_MODEL_PREF, model)
-  } catch {
-    /* best-effort */
-  }
-}
-function readThinkingPref(): boolean {
-  try {
-    return localStorage.getItem(THINKING_PREF) === '1'
-  } catch {
-    return false
-  }
-}
-function writeThinkingPref(on: boolean): void {
-  try {
-    localStorage.setItem(THINKING_PREF, on ? '1' : '0')
   } catch {
     /* best-effort */
   }
@@ -139,13 +128,17 @@ function useSessionToolCalls(
   return byId
 }
 
-export interface AgentConversationProps {
-  chat: UseGeneralChatReturn
-  /** Empty-thread content (Phase 3 swaps in the welcome + quick-actions). */
-  emptyState: React.ReactNode
+/** Momentary placeholder during a context-injection session switch (messages catching up to the
+ *  active session) — neutral, since it renders OUTSIDE the runtime provider. */
+function AgentSwitchPlaceholder(): React.JSX.Element {
+  return <div className="flex flex-1 items-center justify-center" />
 }
 
-export function AgentConversation({ chat, emptyState }: AgentConversationProps): React.JSX.Element {
+export interface AgentConversationProps {
+  chat: UseGeneralChatReturn
+}
+
+export function AgentConversation({ chat }: AgentConversationProps): React.JSX.Element {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const mailApi = useMailApi()
@@ -188,20 +181,14 @@ export function AgentConversation({ chat, emptyState }: AgentConversationProps):
     writeModelPref(m)
     setModel(m)
   }, [])
-  const [thinkingEnabled, setThinkingEnabled] = useState(() => readThinkingPref())
-  const onToggleThinking = useCallback((): void => {
-    setThinkingEnabled((v) => {
-      const next = !v
-      writeThinkingPref(next)
-      return next
-    })
-  }, [])
   const backendChoice = useMemo<BackendChoice>(
     () => ({ kind: useAiSdkRuntime ? 'ai-sdk' : 'custom-api', model, agentPageId: null }),
     [useAiSdkRuntime, model]
   )
+  // 去思考开关 (user feedback): the agent view follows the model — extended thinking is on
+  // automatically whenever the active model supports it (Claude); there is no UI toggle.
   const thinkingSupported = backendSupportsThinking(backendChoice)
-  const thinkingActive = thinkingSupported && thinkingEnabled
+  const thinkingActive = thinkingSupported
   const { models: availableModels } = useEnabledModels()
 
   const [mentions, setMentions] = useState<SearchHit[]>([])
@@ -263,9 +250,11 @@ export function AgentConversation({ chat, emptyState }: AgentConversationProps):
 
   const composerControls = useMemo<ChatComposerControls>(
     () => ({
+      // No thinking toggle in the agent view (去思考开关) — thinkingActive follows the model;
+      // these fields satisfy the shared ChatComposerControls type, AgentComposer ignores them.
       thinkingSupported,
-      thinkingEnabled,
-      onToggleThinking,
+      thinkingEnabled: thinkingActive,
+      onToggleThinking: NOOP,
       model,
       availableModels,
       onModelChange,
@@ -279,8 +268,7 @@ export function AgentConversation({ chat, emptyState }: AgentConversationProps):
     }),
     [
       thinkingSupported,
-      thinkingEnabled,
-      onToggleThinking,
+      thinkingActive,
       model,
       availableModels,
       onModelChange,
@@ -461,8 +449,8 @@ export function AgentConversation({ chat, emptyState }: AgentConversationProps):
       <ChatComposerControlsProvider value={composerControls}>
         {useAiSdkRuntime && gatewayBaseUrl ? (
           contextInjectionOn && !reloadMessagesReady ? (
-            // session switch in flight — defer the mount until messages match the active session.
-            emptyState
+            // session switch in flight — neutral placeholder until messages match the active session.
+            <AgentSwitchPlaceholder />
           ) : (
             <AiSdkRuntimeProvider
               key={
@@ -480,7 +468,7 @@ export function AgentConversation({ chat, emptyState }: AgentConversationProps):
               initialMessages={initialMessages}
               onEnsureSession={onEnsureSession}
             >
-              <AssistantThread emptyState={emptyState} />
+              <AgentThread quickActions={<AgentQuickActions />} />
             </AiSdkRuntimeProvider>
           )
         ) : (
@@ -492,9 +480,9 @@ export function AgentConversation({ chat, emptyState }: AgentConversationProps):
             onReload={null}
             sendDisabled={readOnly}
           >
-            <AssistantThread
+            <AgentThread
+              quickActions={<AgentQuickActions />}
               pendingSlot={pendingSlot}
-              emptyState={emptyState}
               readOnly={readOnly}
             />
           </MailAgentRuntimeProvider>
