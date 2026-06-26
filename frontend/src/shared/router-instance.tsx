@@ -27,7 +27,8 @@ import {
   createRoute,
   createRouter,
   Outlet,
-  redirect
+  redirect,
+  useNavigate
 } from '@tanstack/react-router'
 
 import { AdminLayout } from './components/layout/AdminLayout'
@@ -48,6 +49,7 @@ import { useActiveEmail } from './state/active-email'
 import { CommandPalette } from './components/command/CommandPalette'
 import { GeneralAgentDialog } from './components/agent/GeneralAgentDialog'
 import { openGeneralAgent } from './state/general-agent'
+import { isAgentViewEnabled } from './assistant/runtime/flags'
 import { GlobalShortcuts } from './components/keyboard/GlobalShortcuts'
 import { KeyboardHelpModal } from './components/keyboard/KeyboardHelpModal'
 import { ComposeNewModal } from './components/email/compose/ComposeNewModal'
@@ -128,6 +130,7 @@ function useDeeplinkRouter(): void {
  * 也不挂 GeneralAgentDialog —— 与 main 端「只发主窗口」对齐。
  */
 function useGeneralAgentMenu(): void {
+  const navigate = useNavigate()
   useEffect(() => {
     const ipc = (
       window as unknown as {
@@ -140,12 +143,17 @@ function useGeneralAgentMenu(): void {
       }
     ).electron?.ipcRenderer
     if (!ipc) return
-    const handler = (): void => openGeneralAgent()
+    // redesign — flag-on the AI → General Agent menu navigates to the MailAgent view (/sessions);
+    // flag-off it opens the legacy Cmd+O dialog. The main-process menu item + channel stay unchanged.
+    const handler = (): void => {
+      if (isAgentViewEnabled()) void navigate({ to: '/sessions' })
+      else openGeneralAgent()
+    }
     const off = ipc.on('mailagent:open-general-agent', handler)
     return typeof off === 'function'
       ? off
       : () => ipc.removeListener?.('mailagent:open-general-agent', handler)
-  }, [])
+  }, [navigate])
 }
 
 function RootLayout(): React.ReactElement {
@@ -157,9 +165,10 @@ function RootLayout(): React.ReactElement {
       <GlobalShortcuts />
       <KeyboardHelpModal />
       <CommandPalette />
-      {/* P3 — General Agent (Cmd+O) centered dialog; global single instance,
-          separate from the per-email AIChatPanel so it never pollutes a sidebar. */}
-      <GeneralAgentDialog />
+      {/* P3 — General Agent (Cmd+O) centered dialog; global single instance, separate from the
+          per-email AIChatPanel. redesign — flag-on the MailAgent view (/sessions) supersedes it, so it
+          stops mounting (its useGeneralChat would otherwise run a duplicate general-session engine). */}
+      {!isAgentViewEnabled() && <GeneralAgentDialog />}
       {/* 写新邮件居中模态 — 全局单实例, 由侧边栏「写邮件」按钮 / ⌘N 打开。 */}
       <ComposeNewModal />
     </>

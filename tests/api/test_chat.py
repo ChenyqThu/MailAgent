@@ -33,6 +33,7 @@ CREATE TABLE ai_chat_sessions (
     backend_kind TEXT NOT NULL,
     backend_model TEXT,
     backend_agent_page_id TEXT,
+    title TEXT,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
     CHECK (

@@ -31,12 +31,14 @@ import {
   Mail,
   Send,
   Settings,
+  Sparkles,
   SquarePen,
   Star,
   Sliders
 } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
+import { isAgentViewEnabled } from '@shared/assistant/runtime/flags'
 import { HoverTip } from '@shared/components/ui/HoverTip'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { usePollingFallback } from '@shared/hooks/usePollingFallback'
@@ -64,6 +66,9 @@ interface NavRowProps {
    *  样式/显隐由 authored CSS `.nav-collapsed-badge` 按 data-collapsed 切换；
    *  `app-nav-keep` 豁免 §2.11 收起态 span 隐藏规则。0/undefined 不渲染。 */
   collapsedBadge?: number
+  /** Accent 主入口高亮 (MailAgent flag-on /sessions 行) — 挂 authored
+   *  `.app-nav-agent-btn` coral 填充 + 白 icon, 优先于 selected wash。 */
+  accent?: boolean
 }
 
 /** Inject `shrink-0` on the Lucide svg so it doesn't compress in flex
@@ -118,7 +123,8 @@ function NavRow({
   right,
   disabled,
   title,
-  collapsedBadge
+  collapsedBadge,
+  accent
 }: NavRowProps): React.ReactElement {
   // Disabled rows render as a non-interactive <div> per DESIGN.md §9.4 —
   // opacity-50 + cursor-not-allowed, no hover bg, no keyboard focus, no
@@ -151,10 +157,13 @@ function NavRow({
         'row relative w-full flex items-center gap-2.5 px-2 py-1 rounded-md',
         'text-body text-left transition-colors duration-fast',
         // 主题 v2 — 选中行从 ink-4 平涂换 .acc-select accent wash
-        // (左光条由 .row-selected::before 提供)。
-        selected
-          ? 'row-selected acc-select text-ink-fg font-medium'
-          : 'text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg active:bg-ink-4'
+        // (左光条由 .row-selected::before 提供)。accent = MailAgent flag-on 高亮主
+        // 入口, 复刻 .app-nav-compose-btn coral 填充 (优先于 selected wash)。
+        accent
+          ? 'app-nav-agent-btn font-medium'
+          : selected
+            ? 'row-selected acc-select text-ink-fg font-medium'
+            : 'text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg active:bg-ink-4'
       )}
     >
       {renderIcon(icon)}
@@ -520,12 +529,26 @@ export function Sidebar(): React.ReactElement {
             selected={onAgents}
             onClick={() => navigate({ to: '/agents', search: { tab: 'agents' } })}
           />
-          {/* AI 会话历史 — /sessions 全局视图（全部 backend + 搜索 + 筛选分类）。 */}
+          {/* /sessions — flag-off：AI 会话历史只读浏览（History icon, 普通行）；
+              flag-on：MailAgent 交互式通用 agent 视图（Sparkles + coral accent 主入口）。 */}
           <NavRow
-            icon={<History size={15} strokeWidth={1.75} />}
-            label={t('nav.aiSessions')}
-            title={collapsed ? t('nav.aiSessions') : undefined}
+            icon={
+              isAgentViewEnabled() ? (
+                <Sparkles size={15} strokeWidth={1.75} />
+              ) : (
+                <History size={15} strokeWidth={1.75} />
+              )
+            }
+            label={isAgentViewEnabled() ? t('nav.agentView') : t('nav.aiSessions')}
+            title={
+              collapsed
+                ? isAgentViewEnabled()
+                  ? t('nav.agentView')
+                  : t('nav.aiSessions')
+                : undefined
+            }
             selected={pathname === '/sessions'}
+            accent={isAgentViewEnabled()}
             onClick={() => navigate({ to: '/sessions' })}
           />
         </nav>

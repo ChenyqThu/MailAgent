@@ -511,6 +511,7 @@
     "flagged": "已标旗",
     "allMail": "所有邮件",
     "aiSessions": "AI 会话历史",
+    "agentView": "MailAgent",
     "adminKanban": "看板 Admin",
     "calendar": "日历",
     "settings": "设置",
@@ -557,6 +558,75 @@
       "title": "Custom AI 尚未配置",
       "hint": "在「设置 → AI」里填入 LLM API Key 即可使用通用 Agent。",
       "openSettings": "打开设置"
+    }
+  },
+  "agentView": {
+    "welcome": "我能帮你做什么？",
+    "emptyHint": "问任何问题，或用 @ 带上一封邮件作为上下文",
+    "thinking": "思考中",
+    "scrollToBottom": "滚动到底部",
+    "composer": {
+      "placeholder": "给 MailAgent 发消息…（@ 引用邮件，/ 命令）"
+    },
+    "mention": {
+      "loading": "搜索邮件中…",
+      "empty": "没有匹配的邮件"
+    },
+    "slash": {
+      "empty": "没有匹配的命令"
+    },
+    "newSession": "新会话",
+    "rename": "重命名",
+    "delete": "删除",
+    "collapseSidebar": "折叠 / 展开会话历史",
+    "historyTitle": "会话",
+    "emptyHistory": "还没有会话",
+    "group": {
+      "today": "今天",
+      "yesterday": "昨天",
+      "earlier": "更早"
+    },
+    "quickActions": {
+      "summarize": {
+        "label": "总结邮件",
+        "options": {
+          "unread": "总结我收件箱里的未读邮件",
+          "weekly": "给我本周重要邮件的摘要",
+          "sender": "总结某位发件人最近发来的邮件"
+        }
+      },
+      "draft": {
+        "label": "起草回复",
+        "options": {
+          "followup": "帮我起草一封跟进邮件",
+          "decline": "礼貌地婉拒一个请求",
+          "thanks": "起草一封简短的感谢回复"
+        }
+      },
+      "search": {
+        "label": "搜索邮件",
+        "options": {
+          "invoice": "找最近的发票或账单邮件",
+          "unanswered": "找出我还没回复的邮件",
+          "attachments": "找带附件的邮件"
+        }
+      },
+      "todo": {
+        "label": "本周待办",
+        "options": {
+          "needReply": "列出需要我回复的邮件",
+          "waiting": "我在等谁回复",
+          "thisWeek": "本周要跟进的事"
+        }
+      },
+      "write": {
+        "label": "写一封",
+        "options": {
+          "meeting": "写一封会议邀请邮件",
+          "report": "起草本周项目周报",
+          "intro": "写一封自我介绍邮件"
+        }
+      }
     }
   },
   "chat": {

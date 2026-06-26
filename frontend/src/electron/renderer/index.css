@@ -84,6 +84,12 @@
    * mockup-visible change beyond CTA legibility. */
   --c-accent-fg: 15 16 21;
 
+  /* Vendor brand marks (model-picker icons) — theme-invariant brand colours, deliberately
+   * off-palette (logos, not theme tokens); consumed by AgentComposer's ModelVendorIcon. */
+  --vendor-anthropic: #cc785c;
+  --vendor-openai: #10a37f;
+  --vendor-google: #4285f4;
+
   /* Sprint 13 round 7 user feedback — "起草回复" CTA needed visible
    * mockup-style white text on a deep coral. text-accent-fg (near-black
    * on lifted coral) preserved AA but read as muted compared with the
@@ -512,6 +518,14 @@ body {
 .scrollbar-thin:hover::-webkit-scrollbar-thumb {
   background: rgb(var(--ink-fg-2) / 0.5);
   background-clip: padding-box;
+}
+
+/* Hidden scrollbar (horizontal chip rows) — scrolls but shows no track/thumb. */
+.scrollbar-none {
+  scrollbar-width: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
 }
 
 /* ─── Native date input — 日历图标随主题变色 + 贴右 ──────────────────── */
@@ -1298,6 +1312,23 @@ body::before {
 .app-nav[data-collapsed='true'] .app-nav-compose-btn > svg {
   width: 19px !important;
   height: 19px !important;
+}
+
+/* MailAgent agent-view accent 行 (flag-on /sessions) — 复刻 .app-nav-compose-btn 的
+ * coral 填充 + 白 icon, 作为 AI AGENTS 段的高亮主入口 (NavRow accent 分支挂此 class)。
+ * 收起态居中 / svg 放大由 §2.11 `nav button` 通杀处理 —— 本行在 <nav> 内, 不需要
+ * compose 那套独立 collapsed 规则。Authored CSS class (load-bearing), Tailwind 不可见。 */
+.app-nav-agent-btn {
+  background: rgb(var(--c-accent));
+  color: rgb(var(--c-accent-fg));
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.08);
+  transition: filter 0.12s ease;
+}
+.app-nav-agent-btn:hover {
+  filter: brightness(1.08);
+}
+.app-nav-agent-btn:active {
+  filter: brightness(0.96);
 }
 
 /* 收起态数字角标 — 展开态隐藏 (数字由行右侧 CountRight/TotalCount 承担),

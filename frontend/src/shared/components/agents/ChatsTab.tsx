@@ -31,7 +31,9 @@ import { MessageList } from '@shared/components/chat/MessageList'
 import { SegmentedControl } from '@shared/components/ui/segmented'
 import { useNarrow } from './hooks'
 
-type BackendFilter = 'all' | 'notion-agent' | 'custom-api'
+// redesign Phase 5 — notion-agent retired as a NEW-session backend; its history surfacing (the filter
+// tab + label) is removed here. Old notion-agent session ROWS stay readable via the per-email panel.
+type BackendFilter = 'all' | 'custom-api'
 const SESSIONS_QUERY_KEY = ['chat', 'allSessions'] as const
 
 function relTime(epochMs: number, t: TFunction): string {
@@ -43,9 +45,7 @@ function relTime(epochMs: number, t: TFunction): string {
 }
 
 function backendLabel(item: ChatSessionListItem, t: TFunction): string {
-  return item.backend_kind === 'notion-agent'
-    ? t('chat.backend.notionAgent')
-    : (item.backend_model ?? t('chat.backend.customApi'))
+  return item.backend_model ?? t('chat.backend.customApi')
 }
 
 // ─── 会话行 ──────────────────────────────────────────────────────────────────
@@ -186,7 +186,6 @@ function SessionListPane({
             className="w-full"
             options={[
               { value: 'all', label: t('sessions.filterAll') },
-              { value: 'notion-agent', label: t('chat.backend.notionAgent') },
               { value: 'custom-api', label: t('chat.backend.customApi') }
             ]}
           />
@@ -354,11 +353,7 @@ export function ChatsTab({ backend }: { backend?: ChatBackendKind } = {}): React
     if (narrow) setMobileDetail(true)
   }
 
-  const title = scoped
-    ? backend === 'notion-agent'
-      ? t('chat.backend.notionAgent')
-      : t('chat.backend.customApi')
-    : t('sessions.title')
+  const title = scoped ? t('chat.backend.customApi') : t('sessions.title')
 
   const list = (
     <SessionListPane

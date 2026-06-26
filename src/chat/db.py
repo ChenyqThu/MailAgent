@@ -1,6 +1,9 @@
 """ai_chat.db 读 + 写访问 —— serve-api 远程 chat 端点（V2.1 阶段 2 读 + 阶段 3 3b-3 写）。
 
-ai_chat.db = 前端 owned schema（``frontend/src/electron/main/chat_db.ts``，CHAT_DB_VERSION 13）。
+ai_chat.db = 前端 owned schema（``frontend/src/electron/main/chat_db.ts``，CHAT_DB_VERSION 14）。
+v14（demo-fidelity Phase 10）：ai_chat_sessions.title — 可选会话标题（gateway haiku 自动标题 /
+手动改名）。读走 ``SELECT *`` 自动带回（list_all_sessions 显式列已加 s.title）；写经
+update_session_title 镜像（chat_db.ts 是 schema 真源，本文件不建表）。
 v7（P2c）= chat session anchor：``email_id`` 改 nullable + 加 ``anchor_type``/``anchor_id`` 列
 （table CHECK 强制 email→两者非空 / general→两者 NULL，禁 emailId=0 sentinel）。
 v8（P2a，task 06-23）= agent_memory_kv provenance + priority：加 ``source_session_id`` /
@@ -219,7 +222,7 @@ class ChatDb:
         return self._read_all(
             """SELECT
                  s.id, s.email_id, s.anchor_type, s.anchor_id, s.backend_kind, s.backend_model,
-                 s.backend_agent_page_id, s.created_at, s.updated_at,
+                 s.backend_agent_page_id, s.title, s.created_at, s.updated_at,
                  (SELECT substr(m.content, 1, 500) FROM ai_chat_messages m
                     WHERE m.session_id = s.id AND m.role = 'user'
                     ORDER BY m.created_at ASC LIMIT 1) AS first_user_message,
@@ -317,6 +320,7 @@ class ChatDb:
                 "backend_kind": backend_kind,
                 "backend_model": backend_model,
                 "backend_agent_page_id": backend_agent_page_id,
+                "title": None,
                 "created_at": now,
                 "updated_at": now,
             }
@@ -351,6 +355,7 @@ class ChatDb:
                 "backend_kind": backend_kind,
                 "backend_model": backend_model,
                 "backend_agent_page_id": backend_agent_page_id,
+                "title": None,
                 "created_at": now,
                 "updated_at": now,
             }
@@ -369,6 +374,14 @@ class ChatDb:
         no-op，对齐 fire-and-forget 语义）。"""
         with self._write_connection() as conn:
             conn.execute("DELETE FROM ai_chat_sessions WHERE id = ?", (session_id,))
+
+    def update_session_title(self, session_id: int, title: str) -> None:
+        """设置 session 标题（手动改名 / gateway haiku 自动标题）。镜像 chat_db.ts updateSessionTitle：
+        刻意不 bump updated_at → 改名不重排历史列表。改不存在的 id 是 no-op（UPDATE 匹配 0 行）。"""
+        with self._write_connection() as conn:
+            conn.execute(
+                "UPDATE ai_chat_sessions SET title = ? WHERE id = ?", (title, session_id)
+            )
 
     # ── messages（写 + 单读，3b-3）─────────────────────────────────────────
 

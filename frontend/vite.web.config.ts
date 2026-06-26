@@ -83,6 +83,9 @@ export default defineConfig({
     __MAILAGENT_AI_SDK_NEW_SESSION_DEFAULT__: JSON.stringify(
       process.env.MAILAGENT_AI_SDK_NEW_SESSION_DEFAULT ?? ''
     ),
+    // redesign — renderer mirror of MAILAGENT_AGENT_VIEW (gates the interactive MailAgent
+    // general-agent view at /sessions). Independent surface flag; default '' = off.
+    __MAILAGENT_AGENT_VIEW__: JSON.stringify(process.env.MAILAGENT_AGENT_VIEW ?? ''),
     // Workbox guards its dev logger behind `process.env.NODE_ENV`, which is
     // undefined in the browser ServiceWorker global (`process` doesn't exist
     // there) → the SW would throw on load. Define it at build time so the
