@@ -1308,6 +1308,23 @@ body::before {
   height: 19px !important;
 }
 
+/* MailAgent agent-view accent 行 (flag-on /sessions) — 复刻 .app-nav-compose-btn 的
+ * coral 填充 + 白 icon, 作为 AI AGENTS 段的高亮主入口 (NavRow accent 分支挂此 class)。
+ * 收起态居中 / svg 放大由 §2.11 `nav button` 通杀处理 —— 本行在 <nav> 内, 不需要
+ * compose 那套独立 collapsed 规则。Authored CSS class (load-bearing), Tailwind 不可见。 */
+.app-nav-agent-btn {
+  background: rgb(var(--c-accent));
+  color: rgb(var(--c-accent-fg));
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.08);
+  transition: filter 0.12s ease;
+}
+.app-nav-agent-btn:hover {
+  filter: brightness(1.08);
+}
+.app-nav-agent-btn:active {
+  filter: brightness(0.96);
+}
+
 /* 收起态数字角标 — 展开态隐藏 (数字由行右侧 CountRight/TotalCount 承担),
  * 收起态绝对定位到 icon 右上角 (NavRow button 自带 relative)。位置推导:
  * 56px rail, icon 19px 居中 → icon 右缘距按钮右 ~18px; right:7px 让角标

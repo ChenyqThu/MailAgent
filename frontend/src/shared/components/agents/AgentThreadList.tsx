@@ -11,7 +11,7 @@
 import { useState } from 'react'
 import type { TFunction } from 'i18next'
 import { useTranslation } from 'react-i18next'
-import { Check, ChevronsLeft, ChevronsRight, Plus, Trash2, X } from 'lucide-react'
+import { Check, PanelLeft, Plus, Trash2, X } from 'lucide-react'
 
 import type { ChatSession } from '@shared/api/types'
 import { cn } from '@shared/lib/cn'
@@ -64,29 +64,11 @@ export function AgentThreadList(props: AgentThreadListProps): React.ReactElement
   const { t } = useTranslation()
   const [armedDelete, setArmedDelete] = useState<number | null>(null)
 
-  // Collapsed rail (desktop only — fluid/narrow never collapses).
-  if (collapsed && !fluid) {
-    return (
-      <aside className="flex h-full w-12 shrink-0 flex-col items-center gap-1 border-r border-ink-border py-3">
-        <button
-          type="button"
-          onClick={onToggleCollapse}
-          aria-label={t('agentView.collapseSidebar')}
-          className="grid size-8 place-items-center rounded-md text-ink-fg-2 transition-colors duration-fast hover:bg-ink-3 hover:text-ink-fg"
-        >
-          <ChevronsRight size={16} strokeWidth={1.75} />
-        </button>
-        <button
-          type="button"
-          onClick={onNew}
-          aria-label={t('agentView.newSession')}
-          className="grid size-8 place-items-center rounded-md text-coral transition-colors duration-fast hover:bg-ink-3"
-        >
-          <Plus size={16} strokeWidth={2} />
-        </button>
-      </aside>
-    )
-  }
+  // Desktop collapses to a 48px rail; fluid (narrow / mobile) stays full-width and never collapses.
+  // Single <aside> with a width + opacity transition (demo parity): the rail keeps the PanelLeft
+  // toggle + New icon visible while the title and session list fade out — no DOM swap, so the 200ms
+  // collapse animates smoothly instead of hard-cutting between two layouts.
+  const isRail = collapsed && !fluid
 
   // Sessions arrive newest-first from the hook; group them by their updated_at day.
   const todayStart = new Date()
@@ -98,42 +80,65 @@ export function AgentThreadList(props: AgentThreadListProps): React.ReactElement
   return (
     <aside
       className={cn(
-        'flex h-full flex-col',
-        fluid ? 'w-full' : 'w-[260px] shrink-0 border-r border-ink-border'
+        'flex h-full shrink-0 flex-col overflow-hidden',
+        fluid
+          ? 'w-full'
+          : cn(
+              'border-r border-ink-border transition-[width] duration-200',
+              isRail ? 'w-12' : 'w-[260px]'
+            )
       )}
     >
-      <div className="flex h-12 shrink-0 items-center gap-1 px-3">
-        <h2 className="flex-1 truncate text-body font-semibold text-ink-fg">
-          {t('agentView.historyTitle')}
-        </h2>
+      {/* Header — PanelLeft collapse toggle (demo icon) + fading title. */}
+      <div
+        className={cn(
+          'flex h-12 shrink-0 items-center gap-1',
+          isRail ? 'justify-center px-2' : 'px-3'
+        )}
+      >
         {!fluid && (
           <button
             type="button"
             onClick={onToggleCollapse}
             aria-label={t('agentView.collapseSidebar')}
-            className="grid size-7 place-items-center rounded-md text-ink-fg-3 transition-colors duration-fast hover:bg-ink-3 hover:text-ink-fg"
+            className="grid size-7 shrink-0 place-items-center rounded-md text-ink-fg-3 transition-colors duration-fast hover:bg-ink-3 hover:text-ink-fg"
           >
-            <ChevronsLeft size={15} strokeWidth={1.75} />
+            <PanelLeft size={15} strokeWidth={1.75} />
           </button>
+        )}
+        {!isRail && (
+          <h2 className="min-w-0 flex-1 truncate text-body font-semibold text-ink-fg">
+            {t('agentView.historyTitle')}
+          </h2>
         )}
       </div>
 
-      <div className="px-3 pb-2">
+      {/* New-session button — collapses to a centered icon on the rail. */}
+      <div className={cn('pb-2', isRail ? 'px-2' : 'px-3')}>
         <button
           type="button"
           onClick={onNew}
+          aria-label={t('agentView.newSession')}
+          title={isRail ? t('agentView.newSession') : undefined}
           className={cn(
-            'flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-body font-medium',
-            'border border-ink-border-soft bg-ink-2 text-ink-fg',
-            'transition-colors duration-fast hover:bg-ink-3'
+            'flex h-8 items-center rounded-lg border border-ink-border-soft bg-ink-2',
+            'text-body font-medium text-ink-fg transition-colors duration-fast hover:bg-ink-3',
+            isRail ? 'w-8 justify-center px-0' : 'w-full gap-2 px-2.5'
           )}
         >
-          <Plus size={15} strokeWidth={2} className="text-coral" />
-          {t('agentView.newSession')}
+          <Plus size={15} strokeWidth={2} className="shrink-0 text-coral" />
+          {!isRail && <span className="truncate">{t('agentView.newSession')}</span>}
         </button>
       </div>
 
-      <div className="scrollbar-thin flex-1 overflow-y-auto px-2 pb-2">
+      {/* Session list — fades out on the rail (kept mounted, no DOM swap). */}
+      <div
+        aria-hidden={isRail}
+        className={cn(
+          'scrollbar-thin flex-1 overflow-y-auto px-2 pb-2 transition-opacity duration-200',
+          isRail && 'pointer-events-none opacity-0'
+        )}
+      >
         {sessions.length === 0 ? (
           <div className="px-2 py-6 text-center text-meta text-ink-fg-3">
             {t('agentView.emptyHistory')}
