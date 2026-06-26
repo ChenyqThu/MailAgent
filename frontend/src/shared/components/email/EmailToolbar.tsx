@@ -34,6 +34,7 @@ import {
   ExternalLink,
   Languages,
   Loader2,
+  Pin,
   RefreshCcw,
   Sparkles,
   Star,
@@ -91,6 +92,12 @@ interface ToolbarProps {
   onToggleFlag?: () => void
   isFlagged?: boolean
   flagState?: WriteActionState
+
+  /** 置顶/取消置顶 (本地 is_pinned flag, 不走 davmail/Notion, 秒回显). #3 —
+   *  复用 usePinned/useTogglePin 系统, 与 EmailRow 行内 pin 一致。 */
+  onTogglePin?: () => void
+  isPinned?: boolean
+  pinState?: WriteActionState
 
   /** 归档收件箱邮件 (IMAP MOVE INBOX→Archive + Mailbox→存档). davmail-only —
    *  EmailDetail 在非 davmail 后端可不传, 按钮则保持禁用占位。 */
@@ -652,6 +659,9 @@ export function EmailToolbar({
   onToggleFlag,
   isFlagged,
   flagState,
+  onTogglePin,
+  isPinned,
+  pinState,
   onArchive,
   archiveState,
   isImportant,
@@ -768,6 +778,17 @@ export function EmailToolbar({
         pressed={isFlagged}
         pending={flagState?.pending}
         onClick={onToggleFlag}
+      />
+      {/* 置顶 — 放在旗标之后 (#3). 本地 is_pinned, 秒回显 (optimistic flip). */}
+      <GhostBtn
+        icon={<Pin size={13} strokeWidth={1.5} className={isPinned ? 'fill-current' : ''} />}
+        label={t('toolbar.togglePin')}
+        showLabel={wantsLabels}
+        hoverHint={t('toolbar.togglePin')}
+        active={isPinned}
+        pressed={isPinned}
+        pending={pinState?.pending}
+        onClick={onTogglePin}
       />
 
       {/* Mark Important — passive indicator. Source: RFC headers

@@ -104,6 +104,7 @@
     "markRead": "Read",
     "markUnread": "Unread",
     "toggleFlag": "Flag",
+    "togglePin": "Pin",
     "important": "Important",
     "importantHint": "Sender-marked importance (Importance / X-Priority) · read-only",
     "archive": "Archive",

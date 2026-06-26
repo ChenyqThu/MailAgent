@@ -28,6 +28,8 @@ import { useShortcut } from '@shared/hooks/useShortcut'
 import { useIsBelowLg } from '@shared/hooks/useMediaQuery'
 import { toastError, toastSuccess } from '@shared/state/toast'
 import { useActiveEmail, pickNext, pickPrev } from '@shared/state/active-email'
+import { useTogglePin } from '@shared/hooks/usePinnedSync'
+import { usePinned } from '@shared/state/pinned'
 
 import { EmailBodyFrame } from './EmailBodyFrame'
 import { EmailToolbar, type TranslateStatus } from './EmailToolbar'
@@ -204,6 +206,9 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
   const [showTranslation, setShowTranslation] = useState(false)
   const [pending, setPending] = useState<PendingMap>(NO_PENDING)
   const [propsExpanded, setPropsExpanded] = useState(false)
+  // #3 置顶: 复用 usePinned 系统 (pin 状态不在 email 对象上, 由 zustand 镜像维护)。
+  const togglePin = useTogglePin()
+  const isPinned = usePinned((s) => (internalId !== null ? s.isPinned(internalId) : false))
   const [lastInternalId, setLastInternalId] = useState<number | null>(internalId)
   // React 19 "Adjusting state on prop change" pattern (react.dev/learn/you-might-not-need-an-effect):
   // resetting derived state on a prop transition is a render-time concern,
@@ -747,6 +752,10 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
         onToggleFlag={() => void handleToggleFlag(email.is_flagged)}
         isFlagged={email.is_flagged}
         flagState={{ pending: pending.flag }}
+        onTogglePin={() => {
+          if (internalId !== null) void togglePin(internalId)
+        }}
+        isPinned={isPinned}
         isImportant={email.is_important === true}
         notionUrl={email.notion_url}
         onArchive={handleArchive}

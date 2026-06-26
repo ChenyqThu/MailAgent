@@ -104,6 +104,7 @@
     "markRead": "已读",
     "markUnread": "未读",
     "toggleFlag": "标旗",
+    "togglePin": "置顶",
     "important": "重要",
     "importantHint": "邮件头标记为重要 (Importance / X-Priority) · 只读",
     "archive": "归档",
