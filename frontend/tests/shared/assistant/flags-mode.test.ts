@@ -13,6 +13,7 @@ import { afterEach, describe, expect, test, vi } from 'vitest'
 import {
   getChatRuntimeMode,
   isA2uiToolCardsEnabled,
+  isAgentViewEnabled,
   isAiSdkContextInjectionEnabled,
   isAiSdkGatewayEnabled,
   isAssistantUiPanelEnabled
@@ -139,5 +140,26 @@ describe('flags — manual opt-in without the master (the existing dogfood path)
     expect(getChatRuntimeMode()).toBe('legacy')
     vi.stubEnv('MAILAGENT_AI_SDK_NEW_SESSION_DEFAULT', '')
     expect(getChatRuntimeMode()).toBe('legacy')
+  })
+})
+
+describe('flags — isAgentViewEnabled (independent surface flag, NOT folded into the master)', () => {
+  test('nothing stubbed → false (flag-off: /sessions = ChatsTab, Cmd+O = dialog)', () => {
+    expect(isAgentViewEnabled()).toBe(false)
+  })
+
+  test('MAILAGENT_AGENT_VIEW=1 → true (/sessions = MailAgent view)', () => {
+    vi.stubEnv('MAILAGENT_AGENT_VIEW', '1')
+    expect(isAgentViewEnabled()).toBe(true)
+  })
+
+  test('MAILAGENT_AGENT_VIEW=0 → false (explicit off)', () => {
+    vi.stubEnv('MAILAGENT_AGENT_VIEW', '0')
+    expect(isAgentViewEnabled()).toBe(false)
+  })
+
+  test('master on but AGENT_VIEW unset → STILL false (independent of NEW_SESSION_DEFAULT)', () => {
+    vi.stubEnv('MAILAGENT_AI_SDK_NEW_SESSION_DEFAULT', '1')
+    expect(isAgentViewEnabled()).toBe(false)
   })
 })
