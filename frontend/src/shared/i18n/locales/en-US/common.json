@@ -154,7 +154,18 @@
       "bulletList": "Bullet list",
       "orderedList": "Numbered list",
       "link": "Link",
-      "code": "Inline code"
+      "code": "Inline code",
+      "fontFamily": "Font",
+      "fontSize": "Size",
+      "textColor": "Text color",
+      "bgColor": "Highlight",
+      "fontDefault": "Default",
+      "fontSystem": "System",
+      "fontSerif": "Serif",
+      "fontMono": "Mono",
+      "linkUrl": "Link URL",
+      "linkApply": "Apply",
+      "linkRemove": "Remove link"
     },
     "sendConfirm": {
       "title": "Send to {n} recipient(s)?",

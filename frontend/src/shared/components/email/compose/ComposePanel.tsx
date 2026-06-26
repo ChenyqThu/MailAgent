@@ -21,6 +21,16 @@ import { useTranslation } from 'react-i18next'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEditor } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
+// #9 富文本扩展 — 全部来自 @tiptap/extension-text-style@3.23.6 (与核心同版本, 无 skew)：
+// TextStyle 基座 + Color(字体颜色)/FontFamily(字体)/FontSize(字号, 官方)/BackgroundColor
+// (字体底色)。StarterKit v3 已 bundle Bold/Italic/Underline/Strike/Link/Code/List。
+import {
+  TextStyle,
+  Color,
+  FontFamily,
+  FontSize,
+  BackgroundColor
+} from '@tiptap/extension-text-style'
 import DOMPurify from 'dompurify'
 import {
   ChevronDown,
@@ -202,7 +212,16 @@ export function ComposePanelInner({
   const [quoteOpen, setQuoteOpen] = useState(false)
 
   const editor = useEditor({
-    extensions: [StarterKit.configure({ link: { openOnClick: false } })],
+    // TextStyle 必须在 Color/FontFamily/FontSize/BackgroundColor 之前 (它们扩展 textStyle
+    // mark 的属性)。这些 mark 经 getHTML() 落 inline style, 发送/存草稿原样保留。
+    extensions: [
+      StarterKit.configure({ link: { openOnClick: false } }),
+      TextStyle,
+      Color,
+      FontFamily,
+      FontSize,
+      BackgroundColor
+    ],
     content: '',
     immediatelyRender: false
   })
