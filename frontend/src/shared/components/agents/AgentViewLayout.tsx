@@ -71,6 +71,13 @@ export function AgentViewLayout(): React.ReactElement {
         chat.deleteSession(id)
         invalidateSessions()
       }}
+      onRename={(id, title) => {
+        // Persist the rename (serve-api → ai_chat.db) then refresh the list so the new title shows.
+        void mailApi.chat
+          .updateSessionTitle(id, title)
+          .then(invalidateSessions)
+          .catch(() => undefined)
+      }}
       collapsed={collapsed}
       onToggleCollapse={() => setCollapsed((c) => !c)}
       fluid={narrow}

@@ -681,6 +681,20 @@ async def delete_session(request: Request, session_id: int):
     return success_envelope({"deleted": True}, request=request, source="sqlite")
 
 
+@router.patch("/sessions/{session_id:int}/title", dependencies=[Depends(verify_cf_access)])
+async def update_session_title(
+    request: Request, session_id: int, body: Optional[Dict[str, Any]] = None
+):
+    """updateSessionTitle：设置 session 标题（手动改名）。镜像 chat_db updateSessionTitle（刻意不
+    bump updated_at → 改名不重排历史）。body = {title: str}。改不存在的 id 也返 {updated: True}。"""
+    opts = body or {}
+    title = opts.get("title")
+    if not isinstance(title, str):
+        raise APIError("E_INVALID_ARG", "title requires title:str", source="sqlite")
+    get_chat_db().update_session_title(session_id, title)
+    return success_envelope({"updated": True}, request=request, source="sqlite")
+
+
 @router.post("/sessions/{session_id:int}/messages", dependencies=[Depends(verify_cf_access)])
 async def append_message(
     request: Request, session_id: int, body: Optional[Dict[str, Any]] = None

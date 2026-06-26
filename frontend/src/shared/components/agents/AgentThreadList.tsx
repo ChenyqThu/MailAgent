@@ -9,10 +9,10 @@
 // message) + anchor icon. Sessions group by updated_at into Today / Yesterday / Earlier; each row has
 // a hover arm-to-delete (rename deferred — no rename IPC).
 
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import type { TFunction } from 'i18next'
 import { useTranslation } from 'react-i18next'
-import { Check, Mail, MessagesSquare, PanelLeft, Plus, Trash2, X } from 'lucide-react'
+import { Check, Mail, MessagesSquare, PanelLeft, Pencil, Plus, Trash2, X } from 'lucide-react'
 
 import type { ChatSessionListItem } from '@shared/api/types'
 import { cn } from '@shared/lib/cn'
@@ -24,6 +24,8 @@ export interface AgentThreadListProps {
   onSelect: (id: number) => void
   onNew: () => void
   onDelete: (id: number) => void
+  /** Phase 10 — inline rename → updateSessionTitle (parent persists + refreshes the list). */
+  onRename: (id: number, title: string) => void
   collapsed: boolean
   onToggleCollapse: () => void
   /** fluid = full-width single pane (narrow / mobile); ignores collapse. */
@@ -39,16 +41,32 @@ function groupOf(updatedAtMs: number, todayStartMs: number): GroupKey {
   return 'earlier'
 }
 
-// Unified title: an email session shows its subject; a general session shows the first user message.
+// Unified title: a stored title wins (manual rename / haiku auto-title); else an email session shows
+// its subject, a general session the first user message; else "untitled".
 function titleOf(item: ChatSessionListItem, t: TFunction): string {
-  return item.email_subject?.trim() || item.first_user_message?.trim() || t('sessions.untitled')
+  return (
+    item.title?.trim() ||
+    item.email_subject?.trim() ||
+    item.first_user_message?.trim() ||
+    t('sessions.untitled')
+  )
 }
 
 export function AgentThreadList(props: AgentThreadListProps): React.ReactElement {
-  const { items, activeSessionId, onSelect, onNew, onDelete, collapsed, onToggleCollapse, fluid } =
-    props
+  const {
+    items,
+    activeSessionId,
+    onSelect,
+    onNew,
+    onDelete,
+    onRename,
+    collapsed,
+    onToggleCollapse,
+    fluid
+  } = props
   const { t } = useTranslation()
   const [armedDelete, setArmedDelete] = useState<number | null>(null)
+  const [renamingId, setRenamingId] = useState<number | null>(null)
 
   // Desktop collapses to a 48px rail; fluid (narrow / mobile) stays full-width and never collapses.
   // Single <aside> with a width + opacity transition (demo parity): the rail keeps the PanelLeft
@@ -148,12 +166,22 @@ export function AgentThreadList(props: AgentThreadListProps): React.ReactElement
                         setArmedDelete(null)
                         onSelect(s.id)
                       }}
+                      renaming={renamingId === s.id}
                       onArmDelete={() => setArmedDelete(s.id)}
                       onCancelDelete={() => setArmedDelete(null)}
                       onConfirmDelete={() => {
                         setArmedDelete(null)
                         onDelete(s.id)
                       }}
+                      onStartRename={() => {
+                        setArmedDelete(null)
+                        setRenamingId(s.id)
+                      }}
+                      onSubmitRename={(next) => {
+                        setRenamingId(null)
+                        onRename(s.id, next)
+                      }}
+                      onCancelRename={() => setRenamingId(null)}
                       t={t}
                     />
                   ))}
@@ -172,24 +200,83 @@ function SessionRow({
   isEmail,
   selected,
   armed,
+  renaming,
   onSelect,
   onArmDelete,
   onCancelDelete,
   onConfirmDelete,
+  onStartRename,
+  onSubmitRename,
+  onCancelRename,
   t
 }: {
   title: string
   isEmail: boolean
   selected: boolean
   armed: boolean
+  renaming: boolean
   onSelect: () => void
   onArmDelete: () => void
   onCancelDelete: () => void
   onConfirmDelete: () => void
+  onStartRename: () => void
+  onSubmitRename: (title: string) => void
+  onCancelRename: () => void
   t: TFunction
 }): React.ReactElement {
   // Anchor cue: an email-anchored session (opened from the inbox panel) vs a general agent chat.
   const Icon = isEmail ? Mail : MessagesSquare
+
+  // Inline rename — local draft, re-seeded from the title each time the row enters rename mode
+  // (adjust-on-prop-change setState; conditional so it doesn't loop). Enter / Escape both blur the
+  // input so onBlur is the single commit/cancel path (no double-fire); an escape flag (mutated only in
+  // the keydown handler, never during render) distinguishes cancel from commit.
+  const [draft, setDraft] = useState(title)
+  const [wasRenaming, setWasRenaming] = useState(renaming)
+  const escapeRef = useRef(false)
+  if (renaming !== wasRenaming) {
+    setWasRenaming(renaming)
+    if (renaming) setDraft(title)
+  }
+  const commit = (): void => {
+    const next = draft.trim()
+    if (next.length > 0 && next !== title) onSubmitRename(next)
+    else onCancelRename()
+  }
+
+  if (renaming) {
+    return (
+      <div className="relative flex items-center rounded-lg bg-ink-3 pl-2.5">
+        <Icon size={13} strokeWidth={1.75} className="mr-2 shrink-0 text-ink-fg-3" />
+        <input
+          autoFocus
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              e.currentTarget.blur()
+            } else if (e.key === 'Escape') {
+              e.preventDefault()
+              escapeRef.current = true
+              e.currentTarget.blur()
+            }
+          }}
+          onBlur={() => {
+            if (escapeRef.current) {
+              escapeRef.current = false
+              onCancelRename()
+            } else {
+              commit()
+            }
+          }}
+          aria-label={t('agentView.rename')}
+          className="h-9 min-w-0 flex-1 bg-transparent pr-2.5 text-body text-ink-fg outline-none"
+        />
+      </div>
+    )
+  }
+
   return (
     <div
       className={cn(
@@ -206,7 +293,7 @@ function SessionRow({
       <button
         type="button"
         onClick={onSelect}
-        className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-lg pl-2.5 pr-8 text-left"
+        className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-lg pl-2.5 pr-14 text-left"
       >
         <Icon size={13} strokeWidth={1.75} className="shrink-0 text-ink-fg-3" />
         <span className="min-w-0 flex-1 truncate text-body text-ink-fg-1" title={title}>
@@ -233,18 +320,24 @@ function SessionRow({
           </button>
         </div>
       ) : (
-        <button
-          type="button"
-          onClick={onArmDelete}
-          aria-label={t('agentView.delete')}
-          className={cn(
-            'absolute right-1 grid size-6 place-items-center rounded text-ink-fg-3 opacity-0',
-            'transition-[opacity,color,background-color] duration-fast hover:bg-ink-4 hover:text-fail',
-            'group-hover:opacity-100 focus-visible:opacity-100'
-          )}
-        >
-          <Trash2 size={13} strokeWidth={1.75} />
-        </button>
+        <div className="absolute right-1 flex items-center gap-0.5 opacity-0 transition-opacity duration-fast group-hover:opacity-100 focus-within:opacity-100">
+          <button
+            type="button"
+            onClick={onStartRename}
+            aria-label={t('agentView.rename')}
+            className="grid size-6 place-items-center rounded text-ink-fg-3 transition-colors duration-fast hover:bg-ink-4 hover:text-ink-fg"
+          >
+            <Pencil size={12} strokeWidth={1.75} />
+          </button>
+          <button
+            type="button"
+            onClick={onArmDelete}
+            aria-label={t('agentView.delete')}
+            className="grid size-6 place-items-center rounded text-ink-fg-3 transition-colors duration-fast hover:bg-ink-4 hover:text-fail"
+          >
+            <Trash2 size={13} strokeWidth={1.75} />
+          </button>
+        </div>
       )}
     </div>
   )
