@@ -39,6 +39,10 @@ export interface UseGeneralChatReturn {
   isStreaming: boolean
   error: ChatError | null
   activeSessionId: number | null
+  /** The session id `messages` currently reflect (set only after a load lands). Guards the AI SDK
+   *  reload race: activeSessionId flips on select BEFORE refresh reloads, so the MailAgent view defers
+   *  the runtime mount until messagesSessionId === activeSessionId. Mirror of useEmailChat. */
+  messagesSessionId: number | null
   /** All general sessions, newest-first (history list). */
   sessions: ChatSession[]
   send: (input: SendGeneralInput) => Promise<ChatStartResult>
@@ -46,6 +50,11 @@ export interface UseGeneralChatReturn {
   clearError: () => void
   newSession: () => void
   selectSession: (sessionId: number) => Promise<void>
+  /** Adopt an ai-sdk session created out-of-band (the MailAgent view's onEnsureSession) into the hook
+   *  state — insert it, make it active, empty messages, point messagesSessionId at it. No IPC/refresh
+   *  (the row is freshly created + empty; the gateway dual-write persists turns; a later refreshSessions
+   *  reconciles). Mirror of useEmailChat.adoptSession. */
+  adoptSession: (session: ChatSession) => void
   deleteSession: (sessionId: number) => void
   editMessage: (input: EditChatInput) => Promise<ChatStartResult>
   pendingConfirmations: PendingConfirmation[]
@@ -66,6 +75,7 @@ export function useGeneralChat(): UseGeneralChatReturn {
   const mailApi = useMailApi()
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [activeSessionId, setActiveSessionId] = useState<number | null>(null)
+  const [messagesSessionId, setMessagesSessionId] = useState<number | null>(null)
   const [streamingMessageId, setStreamingMessageId] = useState<number | null>(null)
   const [error, setError] = useState<ChatError | null>(null)
   const [sessions, setSessions] = useState<ChatSession[]>([])
@@ -97,6 +107,7 @@ export function useGeneralChat(): UseGeneralChatReturn {
       const gen = navGenerationRef.current
       const fresh = await mailApi.chat.listMessages(sessionId)
       if (!mountedRef.current || gen !== navGenerationRef.current) return
+      setMessagesSessionId(sessionId)
       const terminal = terminalIdsRef.current
       setMessages((prev) => {
         if (terminal.size === 0) return fresh
@@ -145,6 +156,7 @@ export function useGeneralChat(): UseGeneralChatReturn {
         if (latest === null) {
           setActiveSessionId(null)
           setMessages([])
+          setMessagesSessionId(null)
           setStreamingMessageId(null)
           return
         }
@@ -356,6 +368,7 @@ export function useGeneralChat(): UseGeneralChatReturn {
     setActiveSessionId(null)
     activeSessionRef.current = null
     setMessages([])
+    setMessagesSessionId(null)
     setStreamingMessageId(null)
     setError(null)
     setLiveToolCalls(new Map())
@@ -429,6 +442,7 @@ export function useGeneralChat(): UseGeneralChatReturn {
         setActiveSessionId(null)
         activeSessionRef.current = null
         setMessages([])
+        setMessagesSessionId(null)
         setStreamingMessageId(null)
         setError(null)
         setLiveToolCalls(new Map())
@@ -438,6 +452,19 @@ export function useGeneralChat(): UseGeneralChatReturn {
     },
     [mailApi]
   )
+
+  // Adopt an ai-sdk session created out-of-band (the MailAgent view's onEnsureSession). No IPC/refresh
+  // — the row is freshly created + empty; the gateway dual-write persists turns; messagesSessionId = id
+  // makes the reload gate read "ready" without a listMessages round-trip. Mirror of useEmailChat.
+  const adoptSession = useCallback((session: ChatSession): void => {
+    setSessions((cur) => (cur.some((s) => s.id === session.id) ? cur : [session, ...cur]))
+    setActiveSessionId(session.id)
+    activeSessionRef.current = session.id
+    setMessages([])
+    setMessagesSessionId(session.id)
+    setStreamingMessageId(null)
+    setError(null)
+  }, [])
 
   const selectSession = useCallback(
     async (sessionId: number): Promise<void> => {
@@ -470,12 +497,14 @@ export function useGeneralChat(): UseGeneralChatReturn {
     isStreaming: streamingMessageId !== null,
     error,
     activeSessionId,
+    messagesSessionId,
     sessions,
     send,
     abortCurrent,
     clearError,
     newSession,
     selectSession,
+    adoptSession,
     deleteSession,
     editMessage,
     pendingConfirmations,
