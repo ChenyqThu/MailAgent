@@ -514,6 +514,14 @@ body {
   background-clip: padding-box;
 }
 
+/* Hidden scrollbar (horizontal chip rows) — scrolls but shows no track/thumb. */
+.scrollbar-none {
+  scrollbar-width: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+
 /* ─── Native date input — 日历图标随主题变色 + 贴右 ──────────────────── */
 /* :root 默认暗色主题; 原生 <input type=date> 的 calendar-picker-indicator 跟随
  * color-scheme 渲染, 缺省 light → 深色 glyph 在暗色背景上看不见。设 color-scheme
