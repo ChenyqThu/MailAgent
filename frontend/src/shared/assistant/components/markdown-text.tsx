@@ -33,14 +33,17 @@ export function ReasoningText({ text, status }: ReasoningMessagePartProps): Reac
     setOpen(active)
   }
   const shown = open || active
+  // dogfood round-4 — render reasoning as a VISUALLY DISTINCT collapsible block (rounded card + hairline
+  // border + tinted header), not a bare chevron+pre that reads as inline prose. The user saw the thinking
+  // text but "没有进单独的折叠 reasoning 块" — the collapse logic was right, the block affordance was missing.
   return (
-    <div className="min-w-0">
+    <div className="my-1.5 min-w-0 overflow-hidden rounded-lg border border-[var(--hairline)] bg-ink-2">
       <button
         type="button"
         onClick={() => {
           if (!active) setOpen((o) => !o)
         }}
-        className="inline-flex items-center gap-1.5 py-0.5 text-left text-ink-fg-2 transition-colors duration-fast hover:text-ink-fg-1"
+        className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left transition-colors duration-fast hover:bg-ink-3"
         aria-expanded={shown}
       >
         <ChevronRight
@@ -53,11 +56,11 @@ export function ReasoningText({ text, status }: ReasoningMessagePartProps): Reac
         {active ? (
           <ShimmerText text={t('chat.thinking.streaming')} className="text-aux" />
         ) : (
-          <span className="text-aux">{t('chat.thinking.label')}</span>
+          <span className="text-aux text-ink-fg-2">{t('chat.thinking.label')}</span>
         )}
       </button>
-      <div className={cn('pl-[18px]', shown ? 'block' : 'hidden')} aria-hidden={!shown}>
-        <pre className="scrollbar-thin whitespace-pre-wrap break-words pt-1 pb-0.5 font-sans text-aux leading-relaxed text-ink-fg-1">
+      <div className={cn(shown ? 'block' : 'hidden')} aria-hidden={!shown}>
+        <pre className="scrollbar-thin whitespace-pre-wrap break-words border-t border-[var(--hairline)] px-2.5 py-2 font-sans text-aux leading-relaxed text-ink-fg-1">
           {text}
           {active && <span className="think-caret" aria-hidden="true" />}
         </pre>

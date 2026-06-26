@@ -47,9 +47,13 @@ const ACTION_BTN = cn(
 )
 
 export function AssistantActionBar({
-  children
+  className
 }: {
-  children?: React.ReactNode
+  /** dogfood round-4 — agent-view footer passes a `data-[floating]` positioning skin: assistant-ui
+   *  stamps `data-floating="true"` on a non-last message's hover-revealed bar but injects NO layout, so
+   *  WITHOUT this the floating bar renders un-positioned (≈ invisible) — the "非最新 hover 没 action bar"
+   *  report. Optional → the email panel passes nothing = byte-identical to before (no floating skin). */
+  className?: string
 }): React.JSX.Element {
   const { t } = useTranslation()
   return (
@@ -57,7 +61,7 @@ export function AssistantActionBar({
       hideWhenRunning
       autohide="not-last"
       autohideFloat="single-branch"
-      className="flex items-center gap-1 pt-1 text-ink-fg-2"
+      className={cn('flex items-center gap-1 pt-1 text-ink-fg-2', className)}
     >
       <ActionBarPrimitive.Copy
         className={ACTION_BTN}
@@ -77,10 +81,6 @@ export function AssistantActionBar({
         <RotateCcw size={13} strokeWidth={2} />
       </ActionBarPrimitive.Reload>
       <KosSaveButton />
-      {/* dogfood-3 — optional slot rendered INSIDE the action bar Root so it inherits autohide
-          ("not-last" → last assistant reply stays visible). The agent view injects <MessageTiming />
-          here; the email panel passes nothing → byte-identical to before. */}
-      {children}
     </ActionBarPrimitive.Root>
   )
 }

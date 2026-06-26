@@ -67,14 +67,15 @@ export function AgentAssistantMessage(): React.JSX.Element {
       <div className="min-w-0 px-1 text-body leading-relaxed text-ink-fg">
         <MessagePrimitive.Parts components={partComponents} />
       </div>
-      {/* Height-reserved footer so the hover action bar never shifts message spacing (demo idiom).
-          dogfood-3: MessageTiming「答复时间」badge 放进 AssistantActionBar 的 ActionBarPrimitive.Root 内
-          (children slot)，继承 autohide="not-last" —— 最后一条 AI 回复常显、其余 hover 显示（demo
-          base.tsx:848 同款）。取代 dogfood-2 的兄弟 div + group-hover（导致最后一条不常显的 bug）。 */}
-      <div className="-mb-7 ml-1 flex min-h-7 items-center pt-1.5">
-        <AssistantActionBar>
-          <MessageTiming />
-        </AssistantActionBar>
+      {/* dogfood round-4 — footer 重布局：action bar（copy/reload/kos，autohide）在左、「答复时间」badge
+          独立在右（ml-auto）。timing 不再嵌在 ActionBar.Root 内 —— 嵌入（dogfood-3）让它跟随 ActionBar 的
+          hideWhenRunning/autohide 一起被吞 → 用户报「badge 始终没出现」；移出后只要本轮有客户端 streaming
+          timing 即常显。AssistantActionBar 收到 data-[floating] 定位皮肤：非最后一条 hover 时 assistant-ui
+          把它转 floating（标 data-floating="true" 但不注入布局），靠这套 absolute 皮肤浮现（修「非最新
+          hover 没 action bar」）。relative=floating 锚点；-mb-7 + min-h-7 = height-reserved 防 hover 跳动。 */}
+      <div className="relative -mb-7 ml-1 flex min-h-7 items-center pr-1 pt-1.5">
+        <AssistantActionBar className="data-[floating=true]:absolute data-[floating=true]:left-0 data-[floating=true]:top-1/2 data-[floating=true]:-translate-y-1/2 data-[floating=true]:rounded-md data-[floating=true]:border data-[floating=true]:border-[var(--hairline)] data-[floating=true]:bg-ink-2 data-[floating=true]:p-1 data-[floating=true]:shadow-md" />
+        <MessageTiming className="ml-auto" />
       </div>
     </MessagePrimitive.Root>
   )
