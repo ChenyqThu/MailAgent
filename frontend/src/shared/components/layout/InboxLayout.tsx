@@ -54,6 +54,31 @@ function writePanelWidthPref(px: number): void {
   }
 }
 
+// #6 — EmailList 宽度用户可拖拽 (≥lg 固定列模式; <lg 列表占满, 不可拖)。范式同上面
+// AI 面板宽度 (clamp + localStorage + try-catch)。default 340 = 原 lg:w-[340px] 宽度。
+const LIST_WIDTH_DEFAULT = 340
+const LIST_WIDTH_MIN = 240
+const LIST_WIDTH_MAX = 560
+const LIST_WIDTH_PREF = 'mailagent.list.width'
+function clampListWidth(px: number): number {
+  return Math.min(LIST_WIDTH_MAX, Math.max(LIST_WIDTH_MIN, px))
+}
+function readListWidthPref(): number {
+  try {
+    const raw = Number(localStorage.getItem(LIST_WIDTH_PREF))
+    return Number.isFinite(raw) && raw > 0 ? clampListWidth(raw) : LIST_WIDTH_DEFAULT
+  } catch {
+    return LIST_WIDTH_DEFAULT
+  }
+}
+function writeListWidthPref(px: number): void {
+  try {
+    localStorage.setItem(LIST_WIDTH_PREF, String(px))
+  } catch {
+    /* localStorage 在 sandbox / privacy 模式可能拒写; 偏好丢失无伤大雅 */
+  }
+}
+
 export function InboxLayout(): React.ReactElement {
   const activeId = useActiveEmail((s) => s.activeInternalId)
   // RESPONSIVE-XCUT-01 — <lg(1024) 列表/详情单栏切换：选中邮件 → 详情 absolute
@@ -205,6 +230,59 @@ export function InboxLayout(): React.ReactElement {
       return next
     })
   }
+
+  // #6 — EmailList 宽度拖拽 (仅 ≥lg 固定列; <lg 列表占满不挂手柄)。范式同 AI 面板拖拽:
+  // mousedown 记起点, mousemove 直接写 wrapper.style.width 实时跟手 (列表在左侧 → 向右
+  // 拖变宽, newWidth = startWidth + Δx), clamp [MIN,MAX]; mouseup 写回 state +
+  // localStorage。teardown 存 ref, onUp 与 unmount 共用 → 拖拽中卸载不漏 listener /
+  // 不留 body col-resize·user-select:none 残留。
+  const listWrapperRef = useRef<HTMLDivElement>(null)
+  const [listWidth, setListWidth] = useState(readListWidthPref)
+  const listDragTeardownRef = useRef<(() => void) | null>(null)
+  const startListResize = (e: React.MouseEvent): void => {
+    const wrapper = listWrapperRef.current
+    if (!wrapper) return
+    e.preventDefault()
+    const startX = e.clientX
+    const startWidth = wrapper.getBoundingClientRect().width
+    let nextWidth = startWidth
+    const prevCursor = document.body.style.cursor
+    const prevUserSelect = document.body.style.userSelect
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+    const onMove = (ev: MouseEvent): void => {
+      nextWidth = clampListWidth(startWidth + (ev.clientX - startX))
+      // 拖拽期间直接写 inline width 跟手, 不走 React state (避免每帧 re-render)。
+      wrapper.style.width = `${nextWidth}px`
+    }
+    const teardown = (): void => {
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+      document.body.style.cursor = prevCursor
+      document.body.style.userSelect = prevUserSelect
+      listDragTeardownRef.current = null
+    }
+    const onUp = (): void => {
+      teardown()
+      setListWidth(nextWidth)
+      writeListWidthPref(nextWidth)
+    }
+    listDragTeardownRef.current = teardown
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }
+  useEffect(() => () => listDragTeardownRef.current?.(), [])
+  const resizeListByKey = (e: React.KeyboardEvent): void => {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
+    e.preventDefault()
+    // 列表在左侧: ArrowRight 向右 = 变宽, ArrowLeft 向左 = 变窄 (与拖拽方向一致)。
+    const delta = e.key === 'ArrowRight' ? 16 : -16
+    setListWidth((w) => {
+      const next = clampListWidth(w + delta)
+      writeListWidthPref(next)
+      return next
+    })
+  }
   // Sprint 7 review (opus Nit) — removed local `useShortcut('cmd+k', goSearch)`
   // because `GlobalShortcuts` (mounted in App.tsx) now owns ⌘K → command
   // palette. The palette includes a "Go · Search" navigation entry, so the
@@ -221,7 +299,27 @@ export function InboxLayout(): React.ReactElement {
             list(340) + detail(flex-1) 并排；<lg list 占满, detail 覆盖(选中) /
             hidden(未选中)。 */}
         <div className="relative flex flex-1 min-h-0 min-w-0">
-          <EmailList />
+          {/* #6 — EmailList 宽度 wrapper: ≥lg 固定 listWidth (拖右缘调整 + localStorage
+              记忆), <lg 列表占满 (单栏切换, 不挂手柄)。EmailList 自身已改 w-full 由本层控宽;
+              拖拽期 mousemove 直接写本 div 的 style.width 跟手, mouseup 才落 state。 */}
+          <div
+            ref={listWrapperRef}
+            className={cn('relative flex min-h-0', belowLg ? 'w-full' : 'lg:shrink-0')}
+            style={belowLg ? undefined : { width: listWidth }}
+          >
+            <EmailList />
+            {!belowLg && (
+              <div
+                role="separator"
+                aria-orientation="vertical"
+                aria-label={t('list.resizeHandle', '调整列表宽度')}
+                tabIndex={0}
+                onMouseDown={startListResize}
+                onKeyDown={resizeListByKey}
+                className="absolute top-0 right-0 z-10 h-full w-1 cursor-col-resize hover:bg-accent/40 focus-visible:bg-accent/60 focus:outline-none transition-colors"
+              />
+            )}
+          </div>
           <div
             className={cn(
               'flex min-h-0',

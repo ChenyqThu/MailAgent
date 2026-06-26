@@ -1268,9 +1268,10 @@ export function EmailList(): React.ReactElement {
   return (
     <section
       aria-label="email-list"
-      // EMAIL-02 响应式：<lg 列表占满 master-detail 容器（详情走 absolute 覆盖）；
-      // ≥lg 恢复 340 固定列 + shrink-0（桌面三栏零回归）。
-      className="w-full lg:w-[340px] lg:shrink-0 glass-2 border-r border-ink-border flex flex-col min-h-0"
+      // EMAIL-02 响应式：<lg 列表占满 master-detail 容器（详情走 absolute 覆盖）。
+      // #6 — 宽度由父层 InboxLayout wrapper 控制 (≥lg 用户可拖拽调整 + localStorage
+      // 记忆, default 340; <lg 占满)。本组件 w-full 填满 wrapper, 不再自带固定列宽。
+      className="w-full glass-2 border-r border-ink-border flex flex-col min-h-0"
     >
       {/* Header — Focused/Other tabs · batch + filter cluster · meta line */}
       {/* 分割线统一 hairline — 与 sidebar header / AgentsPage tab 条同色连贯。 */}
