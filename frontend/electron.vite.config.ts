@@ -20,9 +20,12 @@ const BUILD_TIME = new Date().toISOString()
 
 // Phase 06a (cutover) MASTER default, injected into BOTH the renderer (flags.ts) and main
 // (index.ts shouldStartEmbeddedGateway) so they agree on whether new chats default to the AI SDK
-// Gateway. '' = off (Chunk B ships dark). Chunk H flips the fallback to '1'. A runtime
-// MAILAGENT_AI_SDK_NEW_SESSION_DEFAULT env still overrides at launch on either side.
-const AI_SDK_NEW_SESSION_DEFAULT = process.env.MAILAGENT_AI_SDK_NEW_SESSION_DEFAULT ?? ''
+// Gateway. Chunk H (v0.20.0 cutover) flipped the desktop fallback '' → '1': new chats now default to
+// the embedded AI SDK Gateway (+ context injection derives on). A runtime
+// MAILAGENT_AI_SDK_NEW_SESSION_DEFAULT env still overrides at launch on either side, and
+// MAILAGENT_CHAT_RUNTIME=legacy is the one-key rollback. (The remote web SPA, vite.web.config.ts,
+// stays '' off until the web→ai-sdk phase — it has no embedded gateway yet.)
+const AI_SDK_NEW_SESSION_DEFAULT = process.env.MAILAGENT_AI_SDK_NEW_SESSION_DEFAULT ?? '1'
 
 export default defineConfig({
   main: {
@@ -82,11 +85,11 @@ export default defineConfig({
       // sub-flag is unset; MAILAGENT_CHAT_RUNTIME=legacy overrides it back to legacy.
       __MAILAGENT_AI_SDK_NEW_SESSION_DEFAULT__: JSON.stringify(AI_SDK_NEW_SESSION_DEFAULT),
       // redesign — renderer mirror of MAILAGENT_AGENT_VIEW (gates the interactive MailAgent
-      // general-agent view at /sessions). Independent surface flag; default '' = off.
-      __MAILAGENT_AGENT_VIEW__: JSON.stringify(process.env.MAILAGENT_AGENT_VIEW ?? ''),
+      // general-agent view at /sessions). Chunk H (v0.20.0 cutover) flipped desktop default '' → '1'.
+      __MAILAGENT_AGENT_VIEW__: JSON.stringify(process.env.MAILAGENT_AGENT_VIEW ?? '1'),
       // assistant-modal — renderer mirror of MAILAGENT_ASSISTANT_MODAL (gates the email-body AI panel's
-      // three-mode floating modal + FAB). Independent surface flag; default '' = off.
-      __MAILAGENT_ASSISTANT_MODAL__: JSON.stringify(process.env.MAILAGENT_ASSISTANT_MODAL ?? '')
+      // three-mode floating modal + FAB). Chunk H (v0.20.0 cutover) flipped desktop default '' → '1'.
+      __MAILAGENT_ASSISTANT_MODAL__: JSON.stringify(process.env.MAILAGENT_ASSISTANT_MODAL ?? '1')
     },
     resolve: {
       alias: {
