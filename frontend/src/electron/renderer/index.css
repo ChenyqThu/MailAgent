@@ -5072,6 +5072,12 @@ body:not([data-batch-mode='true']) .email-row .cb {
   }
 }
 
+/* reactbits Strands — motion-gsap §10 decorative backdrop (non-loading WebGL silk strands).
+   Position: absolute, fills the nearest `relative isolate` ancestor (AgentThread.Root).
+   Canvas is transparent; pointer events are suppressed via the wrapper's className. */
+.strands-container { position: absolute; inset: 0; width: 100%; height: 100%; background: transparent; }
+.strands-container canvas { display: block; width: 100%; height: 100%; }
+
 @media (prefers-reduced-motion: reduce) {
   .spin > *, .shimmer, .email-flash, .think-caret { animation: none !important; }
   /* 字形流光 + phrase 轮播停帧：ShimmerText 在 reduce 下已渲染 shimmer-text-static
