@@ -36,6 +36,8 @@
 1. **Epic 工作 review**：把整个 agent 体验大版本（P0→P4 + redesign + assistant-modal + dogfood 1-7）从头梳一遍，确认无遗留债 / 回归 / 半成品 flag。
 2. **Harness Agent 架构 review**：按用户给的"核心调度层重构"框架（下面 §2）做架构级评审——**重点是把愿景映射到现有 infra，识别真正的 gap，而不是重造已有件**。
 
+> ✅ **任务 C 第 2 件已落地（2026-06-27）** → [`memory-skill-core-refactor.md`](./memory-skill-core-refactor.md)：架构 review 报告（4 findings：cutover 丢 memory 工具 / 读侧静态 dump / mem0 greenfield / gateway 工具不受 skill 门控）+ 4 步×infra 对账 + **3 blocker 已锁定**（Step 2=query 召回注入 · Mem0=长成自有内核不引三方 · 写 hook=Node onFinish→Python 单一 capture）+ **M0→M4 分阶段计划**（全 flag-gated + 过 eval 闸 + flag-off 字节级不变）。代码待用户 go 后按「每步一 diff」开（先 M0）。
+
 ---
 
 ## 2. 用户框架：Harness Agent 核心调度层代码级重构（待架构 review）
