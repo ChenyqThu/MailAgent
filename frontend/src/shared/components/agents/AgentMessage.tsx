@@ -67,14 +67,13 @@ export function AgentAssistantMessage(): React.JSX.Element {
       <div className="min-w-0 px-1 text-body leading-relaxed text-ink-fg">
         <MessagePrimitive.Parts components={partComponents} />
       </div>
-      {/* dogfood round-4 — footer 重布局：action bar（copy/reload/kos，autohide）在左、「答复时间」badge
-          独立在右（ml-auto）。timing 不再嵌在 ActionBar.Root 内 —— 嵌入（dogfood-3）让它跟随 ActionBar 的
-          hideWhenRunning/autohide 一起被吞 → 用户报「badge 始终没出现」；移出后只要本轮有客户端 streaming
-          timing 即常显。AssistantActionBar 收到 data-[floating] 定位皮肤：非最后一条 hover 时 assistant-ui
-          把它转 floating（标 data-floating="true" 但不注入布局），靠这套 absolute 皮肤浮现（修「非最新
-          hover 没 action bar」）。relative=floating 锚点；-mb-7 + min-h-7 = height-reserved 防 hover 跳动。 */}
-      <div className="relative -mb-7 ml-1 flex min-h-7 items-center pr-1 pt-1.5">
-        <AssistantActionBar className="data-[floating=true]:absolute data-[floating=true]:left-0 data-[floating=true]:top-1/2 data-[floating=true]:-translate-y-1/2 data-[floating=true]:rounded-md data-[floating=true]:border data-[floating=true]:border-[var(--hairline)] data-[floating=true]:bg-ink-2 data-[floating=true]:p-1 data-[floating=true]:shadow-md" />
+      {/* dogfood round-5 — footer：action bar（copy/reload/kos）在左、「答复时间」badge 独立在右（ml-auto）。
+          action bar 走 inlineOnHover（去 autohideFloat）：最新一条常显、非最新一条 hover 才显，但都是 INLINE
+          同款样式（无外框/阴影/绝对定位）—— round-4 的 data-[floating] 皮肤是用户嫌弃的浮窗样，已撤。
+          -mb-7 + min-h-7 = 预留固定高度（非最新未 hover 时 bar 卸载，但行高仍占位 → 不跳动，符合「位置预留、
+          默认隐藏、hover 显示」）。timing 独立在 ActionBar 外 → 有 client streaming timing 即常显（不被 autohide 吞）。 */}
+      <div className="-mb-7 ml-1 flex min-h-7 items-center pr-1 pt-1.5">
+        <AssistantActionBar inlineOnHover />
         <MessageTiming className="ml-auto" />
       </div>
     </MessagePrimitive.Root>

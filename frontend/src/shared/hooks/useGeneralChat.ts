@@ -144,7 +144,16 @@ export function useGeneralChat(): UseGeneralChatReturn {
     }
   }, [mailApi])
 
-  // --- initial load: general sessions + latest conversation ----------------
+  // --- initial load: general sessions list ONLY → default to a NEW empty chat -------------
+  // User feedback: ⌘O / ⌘J / clicking the MailAgent entry must open a FRESH chat, not resume the most
+  // recent historical session. So we load the sessions list (history stays reachable via the left list /
+  // title dropdown + it feeds per-session backend_kind routing) but DO NOT auto-select the latest one —
+  // activeSessionId stays null (a brand-new chat). The activeSessionRef guard skips seeding the default
+  // if a session was already selected out-of-band before this async settled (P6 fullscreen selectSession,
+  // or a fast history click). forceNew makes the first send create the session, so the ai-sdk runtime
+  // streams the reply LIVE (carrying reasoning + timing) instead of rendering a reloaded historical turn
+  // (content-only fallback carries neither) — which is why the timing badge / reasoning block were never
+  // visible when the modal opened straight onto an old session.
   useEffect(() => {
     let cancelled = false
     void (async (): Promise<void> => {
@@ -152,16 +161,13 @@ export function useGeneralChat(): UseGeneralChatReturn {
         const fetched = await mailApi.chat.listGeneralSessions()
         if (cancelled || !mountedRef.current) return
         setSessions(fetched)
-        const latest = fetched.length > 0 ? fetched[0].id : null
-        if (latest === null) {
+        if (activeSessionRef.current === null) {
           setActiveSessionId(null)
           setMessages([])
           setMessagesSessionId(null)
           setStreamingMessageId(null)
-          return
+          forceNewSessionRef.current = true
         }
-        setActiveSessionId(latest)
-        await refresh(latest)
       } catch (err) {
         if (cancelled) return
         const message = err instanceof Error ? err.message : String(err)
@@ -171,7 +177,7 @@ export function useGeneralChat(): UseGeneralChatReturn {
     return (): void => {
       cancelled = true
     }
-  }, [mailApi, refresh])
+  }, [mailApi])
 
   // --- stream subscription -------------------------------------------------
   useEffect(() => {

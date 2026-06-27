@@ -47,20 +47,23 @@ const ACTION_BTN = cn(
 )
 
 export function AssistantActionBar({
-  className
+  className,
+  inlineOnHover = false
 }: {
-  /** dogfood round-4 — agent-view footer passes a `data-[floating]` positioning skin: assistant-ui
-   *  stamps `data-floating="true"` on a non-last message's hover-revealed bar but injects NO layout, so
-   *  WITHOUT this the floating bar renders un-positioned (≈ invisible) — the "非最新 hover 没 action bar"
-   *  report. Optional → the email panel passes nothing = byte-identical to before (no floating skin). */
   className?: string
+  /** dogfood round-5 — agent view renders the bar INLINE on hover (the demo idiom): a non-last
+   *  message's bar occupies a reserved row, hidden by default, revealed on hover with the SAME inline
+   *  style as the last message's — NO floating pill (border + shadow). Setting this drops
+   *  `autohideFloat`, so the non-last hover status resolves to "normal" (inline) instead of "floating".
+   *  The email panel omits it → autohideFloat='single-branch' stays (byte-identical to before). */
+  inlineOnHover?: boolean
 }): React.JSX.Element {
   const { t } = useTranslation()
   return (
     <ActionBarPrimitive.Root
       hideWhenRunning
       autohide="not-last"
-      autohideFloat="single-branch"
+      {...(inlineOnHover ? {} : { autohideFloat: 'single-branch' as const })}
       className={cn('flex items-center gap-1 pt-1 text-ink-fg-2', className)}
     >
       <ActionBarPrimitive.Copy

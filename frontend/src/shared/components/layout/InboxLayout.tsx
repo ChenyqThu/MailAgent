@@ -384,6 +384,10 @@ export function InboxLayout(): React.ReactElement {
           )}
           {mountPanel && <AIChatPanel fillWrapper={!belowXl} />}
         </div>
+        {/* assistant-modal — dock 内嵌在 master-detail 行内：sidebar 模式 = 可调宽 flex 列（挤压正文，
+            像旧 AI 面板）；floating 模式 = 自身 position:fixed 脱流（0 flow 占位，不挤压）；最小化 = hidden。
+            渲染在行内（非 portal）正是为了让 sidebar 能真正挤压正文。flag-on only；flag-off 整行字节级不变。 */}
+        {isAssistantModalEnabled() && <AssistantChatModal />}
       </div>
       {/* Sprint 17 — 旧 Sprint 5 fixed BatchActionBar 移除. floating bar
           (Sprint 12 设计, components/email/BatchActionBar.tsx) 由 EmailList

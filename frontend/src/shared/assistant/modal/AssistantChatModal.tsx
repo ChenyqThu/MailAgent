@@ -1,20 +1,23 @@
-// assistant-modal P2/P3 — floating AI chat modal shell (the FAB expands into this), three display modes.
+// assistant-modal — AI chat dock with two presentations (floating card / embedded resizable sidebar)
+// + an action (fullscreen → the /sessions agent view). The FAB expands into this.
 //
-// Self-built fixed floating container, NOT AssistantModalPrimitive.Root: that primitive needs useAui()
-// (runtime context) which lives INSIDE the body, and its unstable_openOnRunStart conflicts with our
-// external FAB/⌘J/minimise control. So the shell is a plain portal'd <div> whose open state is the
-// useAIChatPanel store; the assistant-ui runtime lives one layer down inside AgentConversation.
+// Rendered INLINE as a flex child of InboxLayout's master-detail row (NOT a portal): so the SIDEBAR
+// mode is a real embedded column that PUSHES the email content (resizable + width-cached, matching the
+// legacy AIChatPanel) rather than a floating overlay. The FLOATING mode positions the SAME element
+// `fixed` (0 flow footprint). Switching floating↔sidebar only swaps this wrapper's className/positioning
+// — the body (AgentConversation + its useGeneralChat stream + ai-sdk runtime) is the SAME React subtree
+// at the SAME mount point, so a mode switch never remounts it (no dropped stream / lost timing).
 //
-// 🔴 Body = AgentConversation (the SAME general-agent conversation as the /sessions view), so the three
-//    modes share one component and the fullscreen jump (P6) is seamless. P3 floating↔sidebar switching
-//    ONLY swaps the container className — the body (AgentConversation + its useGeneralChat stream +
-//    runtime) is the SAME React subtree at the SAME portal mount point, so a mode switch never remounts
-//    it (no dropped stream / lost timing). fullscreen is an ACTION (navigate to /sessions), not a mode.
+// 🔴 Body = AgentConversation (the SAME general-agent conversation as /sessions), so the three modes
+//    share one component and the fullscreen jump (P6) is seamless. fullscreen is an ACTION (navigate to
+//    /sessions), not a persisted mode.
+//
+// Mount-once: the body (useGeneralChat session load) only mounts after the FIRST open, then stays mounted
+// (hidden via CSS when minimised) so the conversation survives minimise/restore + a mode switch.
 //
 // flag-gated: InboxLayout mounts this only when isAssistantModalEnabled(); flag-off it never renders.
 
-import { useState } from 'react'
-import { createPortal } from 'react-dom'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
@@ -41,12 +44,43 @@ import { AgentConversation } from '@shared/components/agents/AgentConversation'
 import { ChatModalHistoryDropdown } from './ChatModalHistoryDropdown'
 import { titleOf } from './sessionTitle'
 
-/** Outer gate: only MOUNT the body (and its useGeneralChat session load + stream subscription) while the
- *  modal is expanded. Minimised → render nothing (the FAB is showing instead). Keeps hooks unconditional
- *  in the inner component. */
+// sidebar 内嵌可调宽 — 宽度缓存（范式同 InboxLayout 旧 AI 面板：clamp + localStorage + try-catch）。
+// 独立 key（不复用旧面板的 mailagent.chat.panelWidth）：dock 与旧面板是两套不同实体。
+const SIDEBAR_WIDTH_DEFAULT = 400
+const SIDEBAR_WIDTH_MIN = 320
+const SIDEBAR_WIDTH_MAX = 720
+const SIDEBAR_WIDTH_PREF = 'mailagent.chat.dockSidebarWidth'
+function clampSidebarWidth(px: number): number {
+  return Math.min(SIDEBAR_WIDTH_MAX, Math.max(SIDEBAR_WIDTH_MIN, px))
+}
+function readSidebarWidthPref(): number {
+  try {
+    const raw = Number(localStorage.getItem(SIDEBAR_WIDTH_PREF))
+    return Number.isFinite(raw) && raw > 0 ? clampSidebarWidth(raw) : SIDEBAR_WIDTH_DEFAULT
+  } catch {
+    return SIDEBAR_WIDTH_DEFAULT
+  }
+}
+function writeSidebarWidthPref(px: number): void {
+  try {
+    localStorage.setItem(SIDEBAR_WIDTH_PREF, String(px))
+  } catch {
+    /* localStorage 在 sandbox / privacy 模式可能拒写; 偏好丢失无伤大雅 */
+  }
+}
+
+/** Mount-once gate: the dock body (useGeneralChat + its session load) only mounts after the FIRST open,
+ *  so a user who never opens it pays no IPC. After that it stays mounted (hidden via CSS when minimised)
+ *  so the conversation + stream survive minimise/restore AND a floating↔sidebar mode switch. */
 export function AssistantChatModal(): React.JSX.Element | null {
   const visible = useAIChatPanel((s) => s.visible)
-  if (!visible) return null
+  const [mountedOnce, setMountedOnce] = useState(visible)
+  useEffect(() => {
+    // 一次性 false→true latch（同 InboxLayout mountPanel 范式）。
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (visible) setMountedOnce(true)
+  }, [visible])
+  if (!mountedOnce) return null
   return <AssistantChatModalInner />
 }
 
@@ -63,10 +97,63 @@ function AssistantChatModalInner(): React.JSX.Element {
   // The email the body pane is currently showing — the modal carries it as the default removable context
   // chip (P5). null (no active email) → AgentConversation gets undefined → no chip.
   const activeEmailId = useActiveEmail((s) => s.activeInternalId)
+  const visible = useAIChatPanel((s) => s.visible)
   const mode = useAIChatPanel((s) => s.mode)
   const setMode = useAIChatPanel((s) => s.setMode)
   const [menuOpen, setMenuOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
+  const sidebar = mode === 'sidebar'
+
+  // sidebar 内嵌可调宽：宽度 state + 左缘拖拽手柄（仅 sidebar 模式；floating 用固定尺寸）。拖拽中直接写
+  // inline width 跟手（不走 React state 避免每帧 re-render），mouseup 才落 state + localStorage。teardown
+  // 存 ref，onUp 与 unmount 共用 → 拖拽中卸载不漏 listener / 不留 body col-resize·user-select 残留。
+  const [sidebarWidth, setSidebarWidth] = useState(readSidebarWidthPref)
+  const rootRef = useRef<HTMLDivElement>(null)
+  const dragTeardownRef = useRef<(() => void) | null>(null)
+  const startResize = (e: React.MouseEvent): void => {
+    const el = rootRef.current
+    if (!el) return
+    e.preventDefault()
+    const startX = e.clientX
+    const startWidth = el.getBoundingClientRect().width
+    let nextWidth = startWidth
+    const prevCursor = document.body.style.cursor
+    const prevUserSelect = document.body.style.userSelect
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+    const onMove = (ev: MouseEvent): void => {
+      // 面板在右侧 → 向左拖变宽（newWidth = startWidth - Δx）。
+      nextWidth = clampSidebarWidth(startWidth - (ev.clientX - startX))
+      el.style.width = `${nextWidth}px`
+    }
+    const teardown = (): void => {
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+      document.body.style.cursor = prevCursor
+      document.body.style.userSelect = prevUserSelect
+      dragTeardownRef.current = null
+    }
+    const onUp = (): void => {
+      teardown()
+      setSidebarWidth(nextWidth)
+      writeSidebarWidthPref(nextWidth)
+    }
+    dragTeardownRef.current = teardown
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }
+  useEffect(() => () => dragTeardownRef.current?.(), [])
+  const resizeByKey = (e: React.KeyboardEvent): void => {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
+    e.preventDefault()
+    // 面板在右侧：ArrowLeft 向左 = 变宽，ArrowRight 向右 = 变窄（与拖拽方向一致）。
+    const delta = e.key === 'ArrowLeft' ? 16 : -16
+    setSidebarWidth((w) => {
+      const next = clampSidebarWidth(w + delta)
+      writeSidebarWidthPref(next)
+      return next
+    })
+  }
 
   // Unified history (email + general) — same query key as AgentViewLayout / ChatsTab → shared cache. The
   // active session's item drives AgentConversation's runtime + context routing (email vs general).
@@ -77,12 +164,6 @@ function AssistantChatModalInner(): React.JSX.Element {
   })
   const items = sessionsQ.data ?? []
   const activeItem = items.find((s) => s.id === chat.activeSessionId) ?? null
-
-  const sidebar = mode === 'sidebar'
-  // 🔴 floating↔sidebar = SAME portal subtree, only this className differs → body never remounts.
-  const containerClass = sidebar
-    ? 'fixed inset-y-0 right-0 h-full w-[min(30rem,calc(100vw-3rem))] rounded-none border-l slide-in-from-right-3'
-    : 'fixed bottom-5 right-5 h-[min(40rem,calc(100vh-7rem))] w-[min(28rem,calc(100vw-2.5rem))] rounded-2xl border slide-in-from-bottom-2'
 
   // fullscreen = ACTION: park the active session for AgentViewLayout to select (P6), navigate, minimise.
   const onFullscreen = (): void => {
@@ -96,17 +177,44 @@ function AssistantChatModalInner(): React.JSX.Element {
     setMenuOpen(false)
   }
 
-  return createPortal(
+  // 容器：minimised → hidden（保状态、零 flow 占位 → FAB 显）；floating → fixed 右下卡片（脱流，不挤压）；
+  // sidebar → 内嵌 flex 列（在 master-detail 行内挤压正文）+ 左缘可调宽。
+  const wrapperClass = !visible
+    ? 'hidden'
+    : sidebar
+      ? cn(
+          'relative flex h-full min-h-0 shrink-0 flex-col border-l border-[var(--hairline)] bg-ink-1',
+          'animate-in fade-in slide-in-from-right-3 duration-200 motion-reduce:animate-none'
+        )
+      : cn(
+          'fixed bottom-5 right-5 z-40 flex h-[min(40rem,calc(100vh-7rem))] w-[min(28rem,calc(100vw-2.5rem))] flex-col',
+          'rounded-2xl border border-[var(--hairline)] bg-ink-1 shadow-[0_16px_48px_-16px_rgba(0,0,0,0.4)]',
+          'animate-in fade-in slide-in-from-bottom-2 duration-200 motion-reduce:animate-none'
+        )
+
+  return (
     <div
+      ref={rootRef}
       role="dialog"
       aria-label={t('chat.modal.title')}
-      className={cn(
-        'z-40 flex flex-col overflow-hidden border-[var(--hairline)] bg-ink-1',
-        'shadow-[0_16px_48px_-16px_rgba(0,0,0,0.4)]',
-        'animate-in fade-in duration-200 motion-reduce:animate-none',
-        containerClass
-      )}
+      className={cn('overflow-hidden', wrapperClass)}
+      style={sidebar && visible ? { width: sidebarWidth } : undefined}
     >
+      {/* sidebar 左缘可调宽手柄（仅 sidebar + 展开时）。细条 w-1，col-resize cursor，z-50 接 mousedown。 */}
+      {sidebar && visible && (
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label={t('chat.resizePanel')}
+          aria-valuenow={sidebarWidth}
+          aria-valuemin={SIDEBAR_WIDTH_MIN}
+          aria-valuemax={SIDEBAR_WIDTH_MAX}
+          tabIndex={0}
+          onMouseDown={startResize}
+          onKeyDown={resizeByKey}
+          className="absolute bottom-0 left-0 top-0 z-50 w-1 cursor-col-resize hover:bg-coral/30 focus:outline-none focus-visible:bg-coral/50"
+        />
+      )}
       {/* header: 左 标题（P4 下拉切 history session）· 右 三键（新开会话 / switch-mode 菜单 / 最小化或 >>）。 */}
       <div className="flex h-11 shrink-0 items-center justify-between gap-2 border-b border-[var(--hairline)] px-3">
         {/* P4 标题状态机：新会话→"新对话"；有 activeItem→titleOf（首条输入概览 first_user_message →
@@ -197,8 +305,7 @@ function AssistantChatModalInner(): React.JSX.Element {
           initialMentionEmailId={activeEmailId ?? undefined}
         />
       </div>
-    </div>,
-    document.body
+    </div>
   )
 }
 
