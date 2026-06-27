@@ -12,38 +12,31 @@
 
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
-import {
-  Bell,
-  Bot,
-  Globe,
-  Palette,
-  Plug,
-  Radio,
-  RefreshCw,
-  User,
-  Wifi,
-  type LucideIcon
-} from 'lucide-react'
+import { Globe, Palette, Plug, User } from 'lucide-react'
 
 import { TabsList, TabsTrigger } from '@shared/components/ui/tabs'
+import { BellIcon, BotIcon, RadioIcon, RefreshCwIcon, WifiIcon } from '@shared/components/icons'
 import { useUpdaterStore } from '@shared/state/updater'
 
 interface TabEntry {
   value: string
-  Icon: LucideIcon
+  // 兼容静态 lucide（Globe/Palette/Plug/User，无 pqoqubbw 动画版）与动画 AnimatedIcon
+  // （Bell/Bot/RefreshCw/Wifi/Radio）。动画图标默认 trigger='self'（tab 图标自身 hover，
+  //  Radix TabsTrigger 非 motion 无法传播整 tab）。
+  Icon: React.ComponentType<{ size?: number; strokeWidth?: number; className?: string }>
   labelKey: string
 }
 
 const TAB_ORDER: TabEntry[] = [
   { value: 'general', Icon: Palette, labelKey: 'settings.tabs.general' },
   { value: 'accounts', Icon: User, labelKey: 'settings.tabs.accounts' },
-  { value: 'sync', Icon: RefreshCw, labelKey: 'settings.tabs.sync' },
-  { value: 'ai', Icon: Bot, labelKey: 'settings.tabs.ai' },
-  { value: 'notifications', Icon: Bell, labelKey: 'settings.tabs.notifications' },
+  { value: 'sync', Icon: RefreshCwIcon, labelKey: 'settings.tabs.sync' },
+  { value: 'ai', Icon: BotIcon, labelKey: 'settings.tabs.ai' },
+  { value: 'notifications', Icon: BellIcon, labelKey: 'settings.tabs.notifications' },
   { value: 'integrations', Icon: Plug, labelKey: 'settings.tabs.integrations' },
-  { value: 'realtime', Icon: Wifi, labelKey: 'settings.tabs.realtime' },
+  { value: 'realtime', Icon: WifiIcon, labelKey: 'settings.tabs.realtime' },
   { value: 'remote', Icon: Globe, labelKey: 'settings.tabs.remote' },
-  { value: 'island', Icon: Radio, labelKey: 'settings.tabs.island' }
+  { value: 'island', Icon: RadioIcon, labelKey: 'settings.tabs.island' }
 ]
 
 export function SettingsRail(): React.ReactElement {
@@ -73,7 +66,7 @@ export function SettingsRail(): React.ReactElement {
         <TabsList className="flex flex-row md:flex-col items-stretch gap-px bg-transparent p-0 w-full">
           {TAB_ORDER.map(({ value, Icon, labelKey }) => (
             <TabsTrigger key={value} value={value} className="shrink-0 md:w-full">
-              <Icon className="size-3.5 shrink-0" strokeWidth={2} />
+              <Icon size={14} strokeWidth={2} className="shrink-0" />
               <span className="truncate">{t(labelKey, { defaultValue: value })}</span>
             </TabsTrigger>
           ))}

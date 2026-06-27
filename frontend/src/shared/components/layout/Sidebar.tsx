@@ -15,29 +15,32 @@
 // Tailwind purge. Do NOT replace with Tailwind utilities.
 
 import { cloneElement, isValidElement, useRef, useState } from 'react'
+import { motion, useReducedMotion } from 'motion/react'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate, useRouterState } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import {
-  Activity,
   BarChart3,
-  CalendarDays,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
-  HelpCircle,
-  History,
   Inbox,
   Mail,
-  Send,
-  Settings,
-  Sparkles,
-  SquarePen,
   Star,
   Sliders
 } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
+import {
+  ActivityIcon,
+  CalendarDaysIcon,
+  CircleHelpIcon,
+  HistoryIcon,
+  SendIcon,
+  SettingsIcon,
+  SparklesIcon,
+  SquarePenIcon
+} from '@shared/components/icons'
 import { isAgentViewEnabled } from '@shared/assistant/runtime/flags'
 import { HoverTip } from '@shared/components/ui/HoverTip'
 import { useMailApi } from '@shared/hooks/useMailApi'
@@ -122,6 +125,9 @@ function NavRow({
   title,
   collapsedBadge
 }: NavRowProps): React.ReactElement {
+  // reduce 时不挂 motion whileHover —— 无 hover 传播源, AnimatedIcon 停在 normal
+  // 静止态（等价旧 lucide-react）。详见 components/icons/AnimatedIcon.tsx + §10。
+  const reduce = useReducedMotion()
   // Disabled rows render as a non-interactive <div> per DESIGN.md §9.4 —
   // opacity-50 + cursor-not-allowed, no hover bg, no keyboard focus, no
   // `.row-selected` capability. Screenreaders announce aria-disabled.
@@ -146,9 +152,11 @@ function NavRow({
   }
   return maybeWrapTip(
     title,
-    <button
+    <motion.button
       type="button"
       onClick={onClick}
+      initial="normal"
+      {...(reduce ? {} : { whileHover: 'animate' as const })}
       className={cn(
         'row relative w-full flex items-center gap-2.5 px-2 py-1 rounded-md',
         'text-body text-left transition-colors duration-fast',
@@ -163,7 +171,7 @@ function NavRow({
       {collapsedBadgeNode(collapsedBadge)}
       <span className="flex-1 truncate">{label}</span>
       {right && <span className="shrink-0">{right}</span>}
-    </button>
+    </motion.button>
   )
 }
 
@@ -216,10 +224,12 @@ function TotalCount({ count }: { count: number }): React.ReactElement | null {
   )
 }
 
+// 有 pqoqubbw 动画版的（outbox/drafts）走 AnimatedIcon + trigger='parent'（NavRow
+// 整行 hover 传播）；无动画版的（inbox/flagged/all = Inbox/Star/Mail）保持静态 lucide。
 const MAILBOX_ICON: Record<EmailView, React.ReactNode> = {
   inbox: <Inbox size={15} strokeWidth={1.75} />,
-  outbox: <Send size={15} strokeWidth={1.75} />,
-  drafts: <SquarePen size={15} strokeWidth={1.75} />,
+  outbox: <SendIcon size={15} strokeWidth={1.75} trigger="parent" />,
+  drafts: <SquarePenIcon size={15} strokeWidth={1.75} trigger="parent" />,
   flagged: <Star size={15} strokeWidth={1.75} />,
   all: <Mail size={15} strokeWidth={1.75} />
 }
@@ -418,7 +428,7 @@ export function Sidebar(): React.ReactElement {
           title={collapsed ? t('nav.composeNew') : undefined}
           aria-label={t('nav.composeNew')}
         >
-          <SquarePen size={16} strokeWidth={2} className="shrink-0" />
+          <SquarePenIcon size={16} strokeWidth={2} className="shrink-0" />
           <span className="flex-1 text-left">{t('nav.composeNew')}</span>
         </button>
       </div>
@@ -519,9 +529,14 @@ export function Sidebar(): React.ReactElement {
           <NavRow
             icon={
               isAgentViewEnabled() ? (
-                <Sparkles size={15} strokeWidth={1.75} className="text-coral" />
+                <SparklesIcon
+                  size={15}
+                  strokeWidth={1.75}
+                  className="text-coral"
+                  trigger="parent"
+                />
               ) : (
-                <History size={15} strokeWidth={1.75} />
+                <HistoryIcon size={15} strokeWidth={1.75} trigger="parent" />
               )
             }
             label={isAgentViewEnabled() ? t('nav.agentView') : t('nav.aiSessions')}
@@ -559,7 +574,7 @@ export function Sidebar(): React.ReactElement {
         </div>
         <nav className="px-2 space-y-px">
           <NavRow
-            icon={<Activity size={15} strokeWidth={1.75} />}
+            icon={<ActivityIcon size={15} strokeWidth={1.75} trigger="parent" />}
             label="LLM Dashboard"
             title={collapsed ? 'LLM Dashboard' : undefined}
             selected={pathname.startsWith('/admin/llm') || pathname === '/llm'}
@@ -573,7 +588,7 @@ export function Sidebar(): React.ReactElement {
             onClick={() => navigate({ to: '/admin/kanban' })}
           />
           <NavRow
-            icon={<CalendarDays size={15} strokeWidth={1.75} />}
+            icon={<CalendarDaysIcon size={15} strokeWidth={1.75} trigger="parent" />}
             label={t('nav.calendar')}
             title={collapsed ? t('nav.calendar') : undefined}
             selected={pathname.startsWith('/admin/calendar') || pathname === '/calendar'}
@@ -585,7 +600,7 @@ export function Sidebar(): React.ReactElement {
       {/* ── Bottom strip · 设置 + 快捷键 ──────────────────────────────── */}
       <div className="app-nav-bottom border-t [border-top-color:var(--hairline)] p-2 space-y-px">
         <NavRow
-          icon={<Settings size={15} strokeWidth={1.75} />}
+          icon={<SettingsIcon size={15} strokeWidth={1.75} trigger="parent" />}
           label={t('nav.settings')}
           title={collapsed ? t('nav.settings') : undefined}
           selected={pathname === '/settings'}
@@ -593,7 +608,7 @@ export function Sidebar(): React.ReactElement {
           right={<kbd>⌘,</kbd>}
         />
         <NavRow
-          icon={<HelpCircle size={15} strokeWidth={1.75} />}
+          icon={<CircleHelpIcon size={15} strokeWidth={1.75} trigger="parent" />}
           label={t('nav.shortcuts')}
           title={collapsed ? t('nav.shortcuts') : undefined}
           onClick={openKeyboardHelp}
