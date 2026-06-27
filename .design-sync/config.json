@@ -7,6 +7,28 @@
   "cssEntry": "_ds_compiled.css",
   "tsconfig": "../../../.design-sync/tsconfig.dssync.json",
   "readmeHeader": ".design-sync/conventions.md",
+  "extraEntries": [
+    "./_foundations/DsPreviewProvider.tsx",
+    "./_foundations/FoundationColors.tsx",
+    "./_foundations/FoundationType.tsx",
+    "./_foundations/FoundationSemantics.tsx"
+  ],
+  "componentSrcMap": {
+    "FoundationColors": "_foundations/FoundationColors.tsx",
+    "FoundationType": "_foundations/FoundationType.tsx",
+    "FoundationSemantics": "_foundations/FoundationSemantics.tsx"
+  },
+  "overrides": {
+    "EmailRow": { "cardMode": "column" },
+    "EmptyState": { "cardMode": "column" },
+    "ContextChips": { "cardMode": "column" },
+    "UnsavedBar": { "cardMode": "single", "primaryStory": "Pending" }
+  },
+  "docsMap": {
+    "FoundationColors": "_foundations/Foundations.md",
+    "FoundationType": "_foundations/Foundations.md",
+    "FoundationSemantics": "_foundations/Foundations.md"
+  },
   "libOverrides": {
     "source-kit.mjs": "exclude pure glue/barrel files (agents/primitives.tsx) from the synth bundle — its Switch re-export collides with ui/switch.tsx (ESM ambiguous star drops Switch from the global); list in .design-sync/bundle-exclude.json"
   }

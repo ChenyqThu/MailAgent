@@ -90,8 +90,17 @@ export async function resolvePackage(ctx) {
     names.add(k);
   }
   let components = [...names].sort().map((name) => ({ name, group: 'general' }));
-  if (!components.length && synthEntry) {
-    components = deriveComponentsFromSrc(srcFiles).filter((c) => srcMap[c.name] !== null);
+  if (synthEntry) {
+    // FORK: synth mode derives the real component set from src files (the
+    // package ships no exports/types — exportedNames is ~empty). A non-null
+    // componentSrcMap entry injects an EXTRA root that lives OUTSIDE srcDir
+    // (design-sync foundation cards), which would otherwise make names[]
+    // non-empty and short-circuit the derive (losing all 170 real ones).
+    // Union instead of either/or.
+    const derived = deriveComponentsFromSrc(srcFiles).filter((c) => srcMap[c.name] !== null);
+    const have = new Set(components.map((c) => c.name));
+    for (const c of derived) if (!have.has(c.name)) components.push(c);
+    components.sort((a, b) => a.name.localeCompare(b.name));
   }
   if (!components.length) {
     if (cfg.cssEntry || existsSync(join(PKG_DIR, 'styles.css'))) {

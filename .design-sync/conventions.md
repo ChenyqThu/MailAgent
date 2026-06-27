@@ -6,6 +6,8 @@ MailAgent is a macOS desktop **email client**. This library is its real renderer
 
 - **No provider needed for the styled primitives.** `Button`, `Input`, `Select`, `Dialog`, `Popover`, `Tabs`, `Switch`, `Badge`, `EmailRow`, etc. are Radix + Tailwind — just render them. The shipped `styles.css` defines every token on `:root`, so components are styled with zero setup.
 - **Theme & accent are root attributes.** Tokens default to **dark**; add `data-theme="light"` on a wrapping element for light mode. `data-accent="<hue>"` swaps the brand accent (default coral). One attribute re-skins everything.
+- **Start from the `Foundations` group** — `FoundationColors`, `FoundationType`, `FoundationSemantics` are visual reference cards for the design tokens (colour, type scale, semantic chips). They are not building blocks; read them to learn the token values, then compose the real components.
+- **Many core components ship a rich preview** (email row, calendar event chip/block, settings rows/sections, page header, tabs, segmented control, select, AI badge, empty state, …). The rest render an honest floor card ("preview not yet authored") but are fully importable with the same API.
 - **Skip the AI-chat / rich-text-editor components** (`AgentThread`, `AgentConversation`, `AgentComposer`, `AIChatPanel`, `MessageList`, `ComposeEditor`, `ComposePanel`, `TranslatedBody`, the `*Layout` shells). Their heavy runtime deps (assistant-ui, lexical, TipTap, streamdown) are stubbed in this library, so they render empty. Use the primitives and smaller compositions instead.
 
 ## Styling idiom — Tailwind utilities with this system's tokens

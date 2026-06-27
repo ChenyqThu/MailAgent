@@ -34,6 +34,20 @@ Fix: `node .design-sync/scripts/asciify-bundle.mjs` after every `package-build` 
 
 `agents/primitives.tsx` (an assistant-ui re-export barrel, stubbed) also exports `Switch`, colliding with the real `ui/switch.tsx` `Switch` → ESM ambiguous star re-export drops `Switch` from `window.MailAgent`. The committed fork `.design-sync/overrides/source-kit.mjs` excludes files listed in `.design-sync/bundle-exclude.json` from the synth entry (currently just `agents/primitives.tsx`). If `[BUNDLE_EXPORT]` flags a NEW name as "not a component", check for a duplicate export (`grep -rl "export .* <Name>" src/shared/components`) and add the glue/barrel file to `bundle-exclude.json`. The fork needs `.design-sync/node_modules` (symlink → `.ds-sync/node_modules`, for ts-morph/esbuild) — recreate per clone.
 
+## Foundations + authored previews (the visual layer)
+
+This sync ships two things beyond the bare component bundle:
+
+- **Foundation cards** — `FoundationColors` / `FoundationType` / `FoundationSemantics` (group `foundations`): pure presentational token showcases, durable source in `.design-sync/preview-support/`, copied into the scratch package `_foundations/` at setup. They're injected as components via `cfg.componentSrcMap` (which **adds** roots — see the fork note) and styled with raw `rgb(var(--token))` so they don't depend on which Tailwind utilities got compiled. They take no props, so the card renders them directly (no `previews/*.tsx`). Grouped via `cfg.docsMap` → `_foundations/Foundations.md` (`category: Foundations`) — but the group actually comes from the `_foundations/` dir-name slug; the docsMap category only applies when a component's group is still generic, so the **dir name is what sets the group**.
+- **Authored previews** — `.design-sync/previews/<Name>.tsx` (durable, committed, NOT gitignored on this branch): one per scoped component, named exports = card cells, real JSX importing from `'mailagent-frontend'`. Currently authored: AIBadge, Select, EmailRow, EmptyState, Row, Section, PageHeader, SegmentedControl, UnsavedBar, ContextChips, EventChip, EventBlock, Tabs, RadioGroup, DotMatrix. The rest ship the floor card.
+
+🔴 **Three load-bearing facts for re-sync:**
+1. **The fork (`overrides/source-kit.mjs`) is patched** so synth mode runs `deriveComponentsFromSrc` (the 170 real ones) AND unions in `componentSrcMap` names. Stock logic short-circuits the derive the moment `componentSrcMap` makes `names[]` non-empty → you'd get ONLY the foundations. Keep that patch.
+2. **A foundation needs BOTH `cfg.componentSrcMap` (→ its CARD) AND `cfg.extraEntries` (→ its EXPORT on `window.MailAgent`).** componentSrcMap alone gives a card whose render is `undefined` (`✗ [BUNDLE_EXPORT] … not a component`); extraEntries alone gives an export with no card. Listing them in both trips a `! [EXPORT_COLLISION]` warning — **benign here** (foundations have no authored `previews/*.tsx` story, so the "stories render the main package's binding" concern doesn't apply; the card renders the correct component). Recorded under Known render warns; do not "fix" by dropping either side.
+3. **`DsPreviewProvider`** (in `_foundations/`, exported via `extraEntries`) wraps previews that read a TanStack Query client (EmailRow and any other react-query component). It is **NOT** set as a global `cfg.provider` — that would wrap all 173 and degrade the unauthored data-components from an honest floor card to an empty skeleton. Authored previews import it and wrap explicitly. It lives in the scratch package so `@tanstack/react-query` resolves to frontend's copy (same instance as the components → the QueryClient context matches).
+
+Note: every component's emitted `.d.ts` is `{ [key: string]: unknown }` — this repo ships no types, so prop contracts can't be auto-extracted. Authored-preview props came from reading the real source in `frontend/src/shared/components/**`. Improving the `.d.ts` for authored components (via `cfg.dtsPropsFor`) is a future lever.
+
 ## Setup (fresh clone — recreate the gitignored build inputs)
 
 ```sh
@@ -47,6 +61,12 @@ ln -sfn ../.ds-sync/node_modules .design-sync/node_modules
 mkdir -p frontend/node_modules/mailagent-frontend
 printf '{"name":"mailagent-frontend","version":"0.20.0","private":true}' > frontend/node_modules/mailagent-frontend/package.json
 cp "$(ls -1 frontend/out/renderer/assets/index-*.css | head -1)" frontend/node_modules/mailagent-frontend/_ds_compiled.css
+# 3b. design-sync foundation cards + preview provider into the scratch package.
+#     They import react / @tanstack/react-query / @shared/* and MUST resolve those
+#     from frontend/node_modules, so they live INSIDE the scratch package (durable
+#     source-of-truth is .design-sync/preview-support/, copied here per clone).
+mkdir -p frontend/node_modules/mailagent-frontend/_foundations
+cp .design-sync/preview-support/*.tsx .design-sync/preview-support/*.md frontend/node_modules/mailagent-frontend/_foundations/
 # 4. regenerate the heavy-import stub
 node .design-sync/scripts/collect-heavy-imports.mjs
 # 5. build → asciify → validate  (NOT the one-command resync.mjs driver — see Re-sync)
@@ -63,7 +83,11 @@ If `frontend/out/renderer/assets/index-*.css` is absent, build the renderer firs
 
 ## Known render warns (non-blocking — recorded so re-sync doesn't re-flag)
 
-Final validate: 170/170 render cleanly, **0 bad**, 117 floor cards (unauthored — the user chose all-floor-card), ~53 real renders, **15 `[RENDER_THIN]`** warns. The thin ones are layout fragments / compound sub-parts that paint little without their parent context (e.g. `Row`, `PageHeader`, `SectionHeader`, `EnvField`, `EnvSecretField`, `DialogHeader`, `DialogFooter`, `SelectGroup`, `Label`, `HoverTip`, `Tabs`, `RadioGroup`, `EmptyState`, `ShimmerText`, `ReportIcon`, `TranslatedBody`). All expected for a floor-card sync; not failures. ~17 total warns incl. a few `[RENDER_ERRORS]` on stubbed components (they swap to the floor card).
+Final validate (after the foundations + authored-previews wave): **173/173 render cleanly, 0 bad, VALIDATE_EXIT 0**, ~113 floor cards (the unauthored remainder), ~60 real renders (18 authored + the components that render on default props). Standing warns, all triaged-benign:
+- **`! [EXPORT_COLLISION]` ×3** — `FoundationColors` / `FoundationType` / `FoundationSemantics` (they're in both componentSrcMap and extraEntries by necessity; foundations have no story so the binding concern doesn't apply — see "Foundations + authored previews" #2).
+- **`! [GRID_OVERFLOW]`** — resolved by `cfg.overrides`: `EmailRow` / `EmptyState` / `ContextChips` → `cardMode: column`; `UnsavedBar` → `cardMode: single` (it positions fixed). If a NEW authored preview overflows, add the override the warn names.
+- **`! [RENDER_THIN]`** on the still-floor layout fragments / compound sub-parts (DialogHeader/Footer, SelectGroup, Label, HoverTip, TranslatedBody, …) — expected for unauthored components; author a preview to upgrade.
+- **`! [TOKENS_MISSING]` / `! [FONT_MISSING]`** — pre-existing, non-blocking: runtime-injected CSS vars (`--ink-N`, `--tw`, …) and the app's SF Pro / JetBrains Mono fonts (system-font fallback in the pane). Address fonts via `cfg.extraFonts` only if needed.
 
 ## Re-sync risks (what can silently go stale)
 
