@@ -71,9 +71,13 @@ export function AgentThread({
       style={{ ['--thread-max-width' as string]: '44rem' }}
     >
       {onTurnComplete && <TurnCompleteWatcher onComplete={onTurnComplete} />}
+      {/* dogfood round-7 — turnAnchor="top"：发送后用户消息钉到视口顶部、回复向下铺开，不再每个 chunk 瞬跳追底
+          （旧 bottom-anchor 的 resize-follow 硬编码 scrollToBottom("instant") → "滚动生硬/跳变"）。这也实现了
+          用户之前 deferred 的"首条消息上移 + 聚焦阅读"。scroll-smooth 给余下的 auto 滚动（ScrollToBottom 按钮）补平滑。 */}
       <ThreadPrimitive.Viewport
+        turnAnchor="top"
         className={cn(
-          'scrollbar-thin relative flex min-h-0 flex-1 flex-col overflow-y-auto px-4 pt-4',
+          'scrollbar-thin relative flex min-h-0 flex-1 flex-col overflow-y-auto scroll-smooth px-4 pt-4',
           isEmpty && 'justify-center'
         )}
       >

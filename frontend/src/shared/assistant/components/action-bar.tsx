@@ -48,7 +48,8 @@ const ACTION_BTN = cn(
 
 export function AssistantActionBar({
   className,
-  inlineOnHover = false
+  inlineOnHover = false,
+  trailing
 }: {
   className?: string
   /** dogfood round-6 — agent view: the bar ALWAYS renders (no autohide mount/unmount) and reveals via
@@ -58,6 +59,11 @@ export function AssistantActionBar({
    *  inline style for both (no floating pill). The email panel omits this prop → the legacy autohide +
    *  float-pill path (byte-identical to before). */
   inlineOnHover?: boolean
+  /** dogfood round-7 — extra node rendered INSIDE the bar's Root after the buttons (the agent view passes
+   *  the MessageTiming badge). Sharing the Root gives it the SAME items-center alignment AND the SAME
+   *  opacity gating (non-last → hover-reveal, last → always) as Copy/Reload — the user's "放进 action bar
+   *  的 div 里一起,免得对不齐 + hover 效果一致". Omitted (email panel) → nothing extra. */
+  trailing?: React.ReactNode
 }): React.JSX.Element {
   const { t } = useTranslation()
   // isLast drives the always-visible-vs-hover-reveal split (inlineOnHover path only). Called
@@ -82,7 +88,10 @@ export function AssistantActionBar({
       >
         <RotateCcw size={13} strokeWidth={2} />
       </ActionBarPrimitive.Reload>
-      <KosSaveButton />
+      {/* KOS save — kept only on the legacy email panel (!inlineOnHover); the agent view drops it per the
+          dogfood round-7 feedback ("保存到 kos 的按钮移除吧"). */}
+      {!inlineOnHover && <KosSaveButton />}
+      {trailing}
     </>
   )
   if (inlineOnHover) {

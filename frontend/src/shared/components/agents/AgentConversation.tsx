@@ -640,9 +640,14 @@ export function AgentConversation({
           ) : (
             <AiSdkRuntimeProvider
               key={
+                // navEpoch makes "new chat" / "switch session" remount the runtime so the ai-sdk thread
+                // (owned by useChatRuntime, NOT by chat.messages) is cleared / reloaded — without it the
+                // key stayed `general:new` across a newSession (initialMessages is empty during a live
+                // chat after adoptSession), so new-chat 没反应. navEpoch does NOT bump on the first-send
+                // adoptSession, so a fresh chat getting its id mid-stream never remounts.
                 contextInjectionOn
-                  ? `general:${initialMessages && initialMessages.length > 0 ? chat.activeSessionId : 'new'}`
-                  : 'general'
+                  ? `general:${chat.navEpoch}:${initialMessages && initialMessages.length > 0 ? chat.activeSessionId : 'new'}`
+                  : `general:${chat.navEpoch}`
               }
               gatewayBaseUrl={gatewayBaseUrl}
               sessionId={chat.activeSessionId}

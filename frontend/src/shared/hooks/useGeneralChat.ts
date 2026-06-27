@@ -43,6 +43,12 @@ export interface UseGeneralChatReturn {
    *  reload race: activeSessionId flips on select BEFORE refresh reloads, so the MailAgent view defers
    *  the runtime mount until messagesSessionId === activeSessionId. Mirror of useEmailChat. */
   messagesSessionId: number | null
+  /** Monotonic thread-reset epoch — bumps on newSession / selectSession / deleteSession(active), NOT on
+   *  the first-send adoptSession. The AI SDK agent view keys its runtime on this so "new chat" / "switch
+   *  session" remount the thread (clearing / reloading it), while a brand-new chat getting its real id on
+   *  the FIRST send does NOT remount mid-stream. Fixes "new chat 没反应": the ai-sdk thread lives in the
+   *  useChatRuntime, not in `messages`, so without a key change newSession can't clear it. */
+  navEpoch: number
   /** All general sessions, newest-first (history list). */
   sessions: ChatSession[]
   send: (input: SendGeneralInput) => Promise<ChatStartResult>
@@ -81,6 +87,9 @@ export function useGeneralChat(): UseGeneralChatReturn {
   const [sessions, setSessions] = useState<ChatSession[]>([])
   const [pendingConfirmations, setPendingConfirmations] = useState<PendingConfirmation[]>([])
   const [liveToolCalls, setLiveToolCalls] = useState<Map<number, LiveToolCall[]>>(new Map())
+  // Reactive mirror of navGenerationRef for the AI SDK runtime key (see UseGeneralChatReturn.navEpoch).
+  // A ref alone can't drive a React `key`; this state bumps in lock-step on every thread reset.
+  const [navEpoch, setNavEpoch] = useState(0)
 
   const mountedRef = useRef(true)
   const activeSessionRef = useRef<number | null>(null)
@@ -380,6 +389,7 @@ export function useGeneralChat(): UseGeneralChatReturn {
     setLiveToolCalls(new Map())
     terminalIdsRef.current.clear()
     navGenerationRef.current += 1
+    setNavEpoch((n) => n + 1)
     setPendingConfirmations([])
     forceNewSessionRef.current = true
     // R3 — drop @mention activations for the session being left (scope-keyed by id).
@@ -445,6 +455,7 @@ export function useGeneralChat(): UseGeneralChatReturn {
       if (sessionId === activeSessionRef.current) {
         mailApi.chat.abort(sessionId)
         navGenerationRef.current += 1
+        setNavEpoch((n) => n + 1)
         setActiveSessionId(null)
         activeSessionRef.current = null
         setMessages([])
@@ -478,6 +489,7 @@ export function useGeneralChat(): UseGeneralChatReturn {
       const prev = activeSessionRef.current
       if (prev !== null) mailApi.chat.abort(prev)
       navGenerationRef.current += 1
+      setNavEpoch((n) => n + 1)
       setError(null)
       setStreamingMessageId(null)
       setLiveToolCalls(new Map())
@@ -504,6 +516,7 @@ export function useGeneralChat(): UseGeneralChatReturn {
     error,
     activeSessionId,
     messagesSessionId,
+    navEpoch,
     sessions,
     send,
     abortCurrent,
