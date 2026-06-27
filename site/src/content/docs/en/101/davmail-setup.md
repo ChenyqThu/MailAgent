@@ -7,8 +7,8 @@ If your mailbox is **corporate Exchange / Microsoft 365**, we recommend using **
 
 This page covers DavMail from scratch: what it is, why, how to install it, how to authenticate, how to confirm it, and how to daemonize it.
 
-:::note
-This page follows [Install the Backend](/en/101/install-backend/). Get the `mailagent` CLI, the Notion databases, and the five required `.env` values set up there first, then come back here to switch the backend from AppleScript to DavMail.
+:::note[An extra step for corporate Exchange users]
+After installing the [desktop App](/en/101/install-app/), if your mailbox is corporate Exchange / Microsoft 365, you need to run DavMail separately as a mail source. This page explains how to install, authenticate, and daemonize it. The backend embedded in the App automatically detects and connects to a locally running DavMail. If you use a regular Mail.app mailbox, skip this page and go straight to [In-App First-Time Setup](/en/101/onboarding/).
 :::
 
 ## What is DavMail
@@ -116,9 +116,11 @@ When the console stops asking for authorization and `token.dat` is created, auth
 DavMail's current sign-in via the Outlook desktop well-known client_id is for evaluation use; for corporate production, go through your company's IT approval or apply for a Graph API app. Also, Microsoft has announced that EWS for O365 will be **shut down on 2026-10-01**, at which point you'll need to move to the Graph route. The AppleScript path is unaffected by either and is always available as a fallback.
 :::
 
-## Step 3: Point MailAgent at DavMail (edit `.env`)
+## Step 3: Point MailAgent at DavMail
 
-Back in `~/Documents/MailAgent/.env`, switch the backend to davmail and add a few values:
+**Desktop App users**: fill in the DavMail settings (mailbox address, ports, Cipher Key) in the App's **Settings panel**—no need to edit `.env` manually.
+
+**Developers running the backend from source**: back in `~/Documents/MailAgent/.env`, switch the backend to davmail and add a few values (each parameter maps one-to-one to the App's Settings panel):
 
 ```bash
 MAILAGENT_BACKEND=davmail
@@ -133,7 +135,7 @@ DAVMAIL_ROOT=/absolute/path/MailAgent/davmail-poc   # absolute path required for
 DavMail uses the **AUTH password the client provides on connection** as the key to encrypt `token.dat`. MailAgent's components (mail-sync, the CLI, the frontend) all connect to the same DavMail, so **they must use the same cipher key**, or the credentials can't be decrypted—it throws `BadPaddingException` and forces a fresh OAuth round. The key can be any string, but once chosen it must not change across components or restarts.
 :::
 
-Restart mail-sync to pick up the new backend:
+When running from source, restart mail-sync to pick up the new backend:
 
 ```bash
 pm2 restart mail-sync
@@ -203,8 +205,8 @@ The refresh token in `token.dat` is valid for 90 days by default and DavMail ren
 
 ## Next up
 
-Once DavMail is working, head back to **[Initial Sync](/en/101/initial-sync/)** to load your historical email into Notion, or continue to **[Install the Desktop App](/en/101/install-app/)**.
+Once DavMail is working, the next step is **[In-App First-Time Setup](/en/101/onboarding/)**—fill in your keys, choose an AI backend inside the App, and you're ready for daily use.
 
 ---
 
-> Learn more: [Install the Backend](/en/101/install-backend/) · [Architecture Core (Sprint 16 dual-backend)](https://github.com/ChenyqThu/MailAgent/blob/main/docs/reference/architecture/architecture-internals.md) · [EWS Shutdown Migration Roadmap §5.1](https://github.com/ChenyqThu/MailAgent/blob/main/docs/reference/architecture/roadmap-post-cutover.md)
+> Learn more: [(Developer) Run the Backend from Source](/en/101/install-backend/) · [Architecture Core (Sprint 16 dual-backend)](https://github.com/ChenyqThu/MailAgent/blob/main/docs/reference/architecture/architecture-internals.md) · [EWS Shutdown Migration Roadmap §5.1](https://github.com/ChenyqThu/MailAgent/blob/main/docs/reference/architecture/roadmap-post-cutover.md)

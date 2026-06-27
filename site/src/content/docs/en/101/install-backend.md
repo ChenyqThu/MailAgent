@@ -1,14 +1,20 @@
 ---
-title: Install the Backend (CLI + mail-sync)
+title: "(Developer) Run the Backend from Source"
 description: Clone the repo, create a virtual environment, install the mailagent CLI, fill in the five required .env values, choose the DavMail or AppleScript backend, grant macOS permissions, and start the mail-sync service.
+sidebar:
+  badge:
+    text: Advanced
+    variant: caution
 ---
 
-The backend is the engine of all of MailAgent: it syncs email in the background, runs AI classification, and maintains the local database. The desktop App is just its graphical interface. **Get the backend running first, then install the App.**
+:::caution[Regular users don't need this page]
+Just [install the desktop App](/en/101/install-app/)—the backend is already bundled inside, ready to go out of the box. This page is an advanced guide for **developers who want to run the backend from source** (contributing code, customizing, debugging).
+:::
 
-The whole process is five steps and takes about 15 minutes if you follow along.
+The backend is the engine of all of MailAgent: it syncs email in the background, runs AI classification, and maintains the local database. When running from source, the whole process is five steps and takes about 15 minutes if you follow along.
 
 :::note
-This page assumes you have read the system requirements in [What Is MailAgent](/en/101/overview/). You need: macOS 12+, Python 3.11+, a Notion workspace, and an Exchange / Mail.app mailbox.
+This page assumes you have read the system requirements in [What Is MailAgent](/en/101/overview/). You need: macOS 12+, Python 3.11+, and an Exchange / Mail.app mailbox. Notion is optional (see Step 2).
 :::
 
 ## Step 1: Clone the repo and create a virtual environment
@@ -37,9 +43,11 @@ mailagent --version  # expected output 3.0.0
 The `mailagent` command is only available in a terminal where the virtual environment is activated. Each time you open a new terminal, first run `cd ~/Documents/MailAgent && source venv/bin/activate`. If `mailagent` is not found, nine times out of ten you forgot this step.
 :::
 
-## Step 2: Set up the databases in Notion (critical and easy to miss)
+## Step 2: Optional — build a Notion mirror
 
-MailAgent syncs email into two Notion databases: one for email, one for the calendar. **You must create these two databases in Notion first and set up their fields per the tables below**—the field names and types must match exactly, or sync will fail.
+Notion is **optional**: MailAgent stores email bodies and attachments in a local SQLite database (the authoritative copy); Notion is only an optional extra archive mirror. Skip this step if you want a purely local SQLite setup—go straight to Step 3.
+
+If you do want a Notion mirror, MailAgent needs two Notion databases: one for email, one for the calendar. **You must create these two databases in Notion first and set up their fields per the tables below**—the field names and types must match exactly, or sync will fail.
 
 ### 2a. Create the Integration and get the Token
 
@@ -187,7 +195,7 @@ When you see the SQLite radar running every 5 seconds and `healthy` is `true`, t
 
 ## Next up
 
-Once the backend is ready, the next step is to load your historical email into Notion: **[Initial Sync](/101/initial-sync/)**. If you also want the graphical interface after installing the backend, go to **[Install the Desktop App](/en/101/install-app/)**.
+Once the backend is ready, the next step is to load your historical email: **[Initial Sync (CLI)](/en/101/initial-sync/)**. If you also want the graphical interface, go to **[Install the Desktop App](/en/101/install-app/)**.
 
 ---
 
