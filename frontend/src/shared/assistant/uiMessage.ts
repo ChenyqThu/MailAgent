@@ -15,6 +15,7 @@
 //     `thinking`) so legacy-runtime / pre-v9 rows still render in the AI SDK shell.
 
 import type { UIMessage } from 'ai'
+import type { MessageTiming } from '@assistant-ui/react'
 
 /** The fields chatMessageToUIMessage reads, with `ui_message_json` OPTIONAL. Structural (not the
  *  chat_db ChatMessage) so BOTH a chat_db row (ui_message_json present = AI SDK canonical) AND a
@@ -38,6 +39,14 @@ export interface MailAgentUIMessageMetadata {
   model?: string | null
   tokensInput?: number | null
   tokensOutput?: number | null
+  /** dogfood (codex root-cause) — client-visible response timing, injected by the gateway on the
+   *  finish chunk (messageMetadata) so it rides the UIMessage's own metadata. WHY not the
+   *  react-ai-sdk `messageTiming` runtime path: @assistant-ui/core's converter caches by the AI SDK
+   *  message OBJECT (WeakMap); the post-stream metadata-only timing update never re-runs the
+   *  converter, so `message.metadata.timing` stayed empty and the badge never showed. A finish-chunk
+   *  metadata write makes the client clone the message → cache miss → timing lands. Persisted into
+   *  ui_message_json too, so a history reload keeps the badge. useMessageTiming() reads this. */
+  timing?: MessageTiming
 }
 
 export type MailAgentUIMessage = UIMessage<MailAgentUIMessageMetadata>

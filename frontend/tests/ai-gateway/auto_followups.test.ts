@@ -78,6 +78,17 @@ describe('parseFollowups', () => {
   test('blank / garbage → []', () => {
     expect(parseFollowups('   ')).toEqual([])
   })
+  // dogfood — the model sometimes wraps the JSON array in a markdown code fence; without stripping it
+  // the user saw 3 bogus chips: "```json", the array text, "```".
+  test('strips a ```json fence and parses the inner array', () => {
+    expect(parseFollowups('```json\n["A?", "B?", "C?"]\n```')).toEqual(['A?', 'B?', 'C?'])
+  })
+  test('strips a bare ``` fence', () => {
+    expect(parseFollowups('```\n["X", "Y"]\n```')).toEqual(['X', 'Y'])
+  })
+  test('never leaks a ``` chip on a partial / unmatched fence', () => {
+    expect(parseFollowups('```json\n- A\n- B')).toEqual(['A', 'B'])
+  })
 })
 
 describe('buildFollowupsPrompt', () => {

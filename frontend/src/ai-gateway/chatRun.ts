@@ -322,7 +322,13 @@ export function parseFollowups(raw: string): string[] {
     if (t.length > 80) t = t.slice(0, 80).trim()
     if (t.length > 0 && !out.includes(t)) out.push(t)
   }
-  const trimmed = raw.trim()
+  // dogfood — strip a markdown code fence the model sometimes wraps the JSON in (```json … ``` or
+  // bare ``` … ```). Without this `trimmed` starts with "```json" (not "[") → the JSON branch is
+  // skipped → the fence lines become bogus "```json" / "```" chips + the whole array becomes one
+  // truncated chip (user-reported). Match the fenced body; fall back to the raw trim if no fence.
+  let trimmed = raw.trim()
+  const fence = trimmed.match(/^```[a-zA-Z]*[ \t]*\r?\n([\s\S]*?)\r?\n?```$/)
+  if (fence) trimmed = fence[1].trim()
   if (trimmed.startsWith('[')) {
     try {
       const arr: unknown = JSON.parse(trimmed)
@@ -334,7 +340,12 @@ export function parseFollowups(raw: string): string[] {
       /* not JSON — fall through to line parsing */
     }
   }
-  for (const line of trimmed.split('\n')) push(line)
+  // Line fallback: skip any stray fence line defensively so a partial / unmatched fence never leaks
+  // a "```" chip.
+  for (const line of trimmed.split('\n')) {
+    if (/^\s*```/.test(line)) continue
+    push(line)
+  }
   return out.slice(0, 3)
 }
 

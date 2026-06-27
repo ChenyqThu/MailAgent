@@ -21,6 +21,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 
 import type { AiGatewayConfig } from './config'
+import type { MailAgentUIMessageMetadata } from '@shared/assistant/uiMessage'
 import {
   generateFollowups,
   generateSessionTitle,
@@ -106,9 +107,51 @@ async function handleChat(
     return
   }
   const run = prepared.run
+  // dogfood (codex root-cause) — client-visible「答复时间」timing. WHY server-side messageMetadata and
+  // not react-ai-sdk's runtime messageTiming: @assistant-ui/core's converter caches conversions by the
+  // AI SDK message OBJECT in a WeakMap; the runtime injects timing as a metadata-only update AFTER the
+  // stream ends (same message object) → the converter cache hits the stale result, never re-runs, and
+  // `message.metadata.timing` stays empty → the badge never shows (reasoning rendered fine because it's
+  // a streamed part = object changes). Emitting timing on the FINISH chunk makes the AI SDK client clone
+  // the message → cache miss → metadata.timing lands, AND it's persisted in ui_message_json so a history
+  // reload keeps the badge. Wall-clock measured client-perceived from just-before-pipe (LLM already in
+  // flight) — a reasonable approximation for a response-time badge.
+  const streamStartTime = Date.now()
+  let firstTokenTime: number | undefined
+  let totalChunks = 0
+  let outputChars = 0
+  const timingToolCallIds = new Set<string>()
   run.result.pipeUIMessageStreamToResponse(res, {
     originalMessages: run.rawMessages,
     generateMessageId: makeIdGenerator(),
+    messageMetadata: ({ part }): MailAgentUIMessageMetadata | undefined => {
+      if (part.type === 'text-delta') {
+        totalChunks += 1
+        if ('text' in part && typeof part.text === 'string') outputChars += part.text.length
+        if (firstTokenTime === undefined) firstTokenTime = Date.now() - streamStartTime
+        return undefined
+      }
+      if ('toolCallId' in part && typeof part.toolCallId === 'string') {
+        timingToolCallIds.add(part.toolCallId)
+      }
+      if (part.type !== 'finish') return undefined
+      const totalStreamTime = Date.now() - streamStartTime
+      // ~4 chars/token rough estimate (no server tokenizer here); drives the optional tok/s tooltip only.
+      const tokenCount = outputChars > 0 ? Math.ceil(outputChars / 4) : undefined
+      return {
+        timing: {
+          streamStartTime,
+          totalStreamTime,
+          totalChunks,
+          toolCallCount: timingToolCallIds.size,
+          ...(firstTokenTime !== undefined ? { firstTokenTime } : {}),
+          ...(tokenCount !== undefined ? { tokenCount } : {}),
+          ...(tokenCount !== undefined && totalStreamTime > 0
+            ? { tokensPerSecond: tokenCount / (totalStreamTime / 1000) }
+            : {})
+        }
+      }
+    },
     // composer-parity dogfood-2 #2 — forward extended-thinking reasoning parts to the UIMessage
     // stream. The AG-UI mirror (aguiRoute.ts) already sets this; the canonical route was missing it,
     // and ai@7 defaults sendReasoning to false → the thinking block never reached the renderer even
