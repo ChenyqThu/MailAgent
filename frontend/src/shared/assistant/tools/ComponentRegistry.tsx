@@ -15,6 +15,7 @@ import { DraftReplyCard } from './mail/DraftReplyCard'
 import { SendApprovalCard } from './mail/SendApprovalCard'
 import { NotionSyncCard } from './notion/NotionSyncCard'
 import { ApprovalActionCard } from './generic/ApprovalActionCard'
+import { MemoryApprovalCard } from './generic/MemoryApprovalCard'
 
 /** One registration: an A2UI component (by name) + the tool names that render through it. */
 export interface ToolUIRegistration {
@@ -74,5 +75,10 @@ export const componentRegistry: ComponentRegistry = createComponentRegistry([
     component: A2UI_COMPONENTS.SendApprovalCard,
     toolNames: ['email_prepare_send'],
     render: SendApprovalCard
+  },
+  {
+    component: A2UI_COMPONENTS.MemoryApprovalCard,
+    toolNames: ['memory_write', 'memory_delete'],
+    render: MemoryApprovalCard
   }
 ])
