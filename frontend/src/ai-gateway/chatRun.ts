@@ -11,6 +11,7 @@
 import {
   convertToModelMessages,
   generateText,
+  smoothStream,
   stepCountIs,
   streamText,
   type LanguageModel,
@@ -198,6 +199,10 @@ export async function prepareChatRun(
     system,
     messages: modelMessages,
     abortSignal,
+    // dogfood — 平滑流式输出（用户要「更流畅」）：smoothStream 把模型的突发 chunk 重整成稳定节奏。
+    // CJK-aware chunking（AI SDK 文档推荐）：中文逐字、英文逐词输出，配合 Streamdown 逐 token fadeIn，
+    // 整体像匀速打字而非一段段蹦。两个端点（/api/ai/chat + AG-UI 镜像）共用此 streamText，一致生效。
+    experimental_transform: smoothStream({ chunking: /[一-鿿]|\S+\s+/ }),
     ...(thinkingProviderOpts ? { providerOptions: thinkingProviderOpts } : {}),
     ...(hasTools
       ? {

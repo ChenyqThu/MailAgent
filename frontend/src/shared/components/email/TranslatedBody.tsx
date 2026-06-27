@@ -75,7 +75,9 @@ const STREAMDOWN_ZH_TRANSLATIONS: Partial<StreamdownTranslations> = {
 // sep:'word' 而非 'char': 中文逐字会生成大量 span + 动画, DOM/性能开销大。
 const STREAMDOWN_ANIMATED = {
   animation: 'fadeIn',
-  duration: 90,
+  // dogfood — 用户要「稍微加一些淡出, 更流畅」: 90→170ms 让逐 token 淡入更柔和 (配合网关 smoothStream
+  // 的平滑分块, 整体不再突兀地一段段蹦出)。sep 仍 'word' (中文逐字会爆 DOM)。
+  duration: 170,
   easing: 'ease-out',
   sep: 'word',
   stagger: 6
@@ -97,7 +99,6 @@ export function TranslatedBody({ text, streaming = false }: Props): React.ReactE
         mode={streaming ? 'streaming' : 'static'}
         parseIncompleteMarkdown
         isAnimating={streaming}
-        caret="block"
         animated={STREAMDOWN_ANIMATED}
         translations={STREAMDOWN_ZH_TRANSLATIONS}
       >

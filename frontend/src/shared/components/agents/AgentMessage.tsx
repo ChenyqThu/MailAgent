@@ -72,9 +72,11 @@ export function AgentAssistantMessage(): React.JSX.Element {
           同款样式（无外框/阴影/绝对定位）—— round-4 的 data-[floating] 皮肤是用户嫌弃的浮窗样，已撤。
           -mb-7 + min-h-7 = 预留固定高度（非最新未 hover 时 bar 卸载，但行高仍占位 → 不跳动，符合「位置预留、
           默认隐藏、hover 显示」）。timing 独立在 ActionBar 外 → 有 client streaming timing 即常显（不被 autohide 吞）。 */}
-      <div className="-mb-7 ml-1 flex min-h-7 items-center pr-1 pt-1.5">
+      <div className="-mb-7 ml-1 flex min-h-7 items-center gap-1 pr-1 pt-1.5">
         <AssistantActionBar inlineOnHover />
-        <MessageTiming className="ml-auto" />
+        {/* dogfood — timing badge 紧跟 action bar 之后（去掉 ml-auto 的靠右推挤）：用户要它和 copy/reload
+            成一组、不要甩到消息列最右。footer 的 gap-1 给一点间距。 */}
+        <MessageTiming />
       </div>
     </MessagePrimitive.Root>
   )

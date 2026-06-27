@@ -220,6 +220,14 @@ export function AgentConversation({
   // Refreshed per turn-complete (best-effort); AgentThread hides them while running so a fresh send
   // never overlaps stale chips.
   const [followups, setFollowups] = useState<string[]>([])
+  // dogfood — follow-ups are PER-SESSION: clear them on a session switch / new chat so a previous
+  // session's suggestions never leak into another (they repopulate after THIS session's next turn
+  // completes). activeSessionId is the switch signal; reset-on-dep-change (same opt-in as the other
+  // effect-driven resets in this codebase).
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setFollowups([])
+  }, [chat.activeSessionId])
   const onModelChange = useCallback((m: string): void => {
     writeModelPref(m)
     setModel(m)
