@@ -96,7 +96,9 @@ export const A2UI_COMPONENTS = {
   NotionSyncCard: 'NotionSyncCard',
   ApprovalActionCard: 'ApprovalActionCard',
   // Phase 04b — the high-risk outbound send card (email_prepare_send, blocking tier).
-  SendApprovalCard: 'SendApprovalCard'
+  SendApprovalCard: 'SendApprovalCard',
+  // M0 — the memory write/forget approval card (memory_write / memory_delete, preview tier).
+  MemoryApprovalCard: 'MemoryApprovalCard'
 } as const
 
 /** Which A2UI component renders a given gateway write tool. Unknown / read tools → null
@@ -113,6 +115,9 @@ export function componentForTool(toolName: string): string | null {
       return A2UI_COMPONENTS.ApprovalActionCard
     case 'email_prepare_send':
       return A2UI_COMPONENTS.SendApprovalCard
+    case 'memory_write':
+    case 'memory_delete':
+      return A2UI_COMPONENTS.MemoryApprovalCard
     default:
       return null
   }
@@ -166,6 +171,21 @@ export interface SendApprovalCardProps {
   archivedToSent?: boolean
 }
 
+/** memory_write / memory_delete (preview tier) — the agent-memory approve/reject card. At
+ *  approval-request time the operation / scope / key (+ value preview for write) come from the
+ *  model input; after execution the result echoes saved (write) / deleted count (delete).
+ *  `memoryKey` (not `key`) avoids the React/TS reserved-name confusion. Memory has no email
+ *  context — this card NEVER shows an "邮件 #id". */
+export interface MemoryApprovalCardProps {
+  operation: 'write' | 'delete'
+  scope: string
+  memoryKey: string
+  valuePreview?: string
+  priority?: number
+  saved?: boolean
+  deleted?: number
+}
+
 function asNum(v: unknown, fallback = -1): number {
   return typeof v === 'number' && Number.isFinite(v) ? v : fallback
 }
@@ -177,6 +197,25 @@ function asObj(v: unknown): Record<string, unknown> | null {
 }
 function asStrArray(v: unknown): string[] {
   return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []
+}
+
+/** Build a short, safe preview of a memory_write value (any type: string / number / object).
+ *  Stringifies (try/catch — a value with a cyclic structure must not throw) and truncates to
+ *  ~120 chars with an ellipsis. Returns undefined when there is no value to preview. */
+function memoryValuePreview(v: unknown): string | undefined {
+  if (v === undefined || v === null) return undefined
+  let s: string
+  if (typeof v === 'string') {
+    s = v
+  } else {
+    try {
+      s = JSON.stringify(v)
+    } catch {
+      s = String(v)
+    }
+  }
+  if (s.length === 0) return undefined
+  return s.length > 120 ? `${s.slice(0, 120)}…` : s
 }
 
 /** Build a short human summary for the generic approval card from a flag/archive/pin input. */
@@ -272,6 +311,28 @@ export function buildToolA2UIPayload(
       component,
       props: props as unknown as Record<string, unknown>,
       audit: { risk: io.risk ?? 'blocking', requiresApproval }
+    }
+  }
+
+  if (component === A2UI_COMPONENTS.MemoryApprovalCard) {
+    const props: MemoryApprovalCardProps = {
+      operation: toolName === 'memory_delete' ? 'delete' : 'write',
+      scope: asStr(args.scope) ?? 'user',
+      memoryKey: asStr(args.key) ?? '',
+      valuePreview: toolName === 'memory_delete' ? undefined : memoryValuePreview(args.value),
+      priority:
+        typeof args.priority === 'number' && Number.isFinite(args.priority)
+          ? args.priority
+          : undefined,
+      saved: result?.saved === true,
+      deleted: typeof result?.deleted === 'number' ? result.deleted : undefined
+    }
+    return {
+      protocol: A2UI_PROTOCOL,
+      version: A2UI_VERSION,
+      component,
+      props: props as unknown as Record<string, unknown>,
+      audit: { risk: io.risk ?? 'preview', requiresApproval }
     }
   }
 

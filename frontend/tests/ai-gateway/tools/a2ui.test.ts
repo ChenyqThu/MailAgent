@@ -14,6 +14,7 @@ import {
   parseA2UIPayload,
   type ApprovalActionCardProps,
   type DraftReplyCardProps,
+  type MemoryApprovalCardProps,
   type NotionSyncCardProps
 } from '../../../src/shared/assistant/tools/a2ui'
 
@@ -24,6 +25,8 @@ describe('componentForTool — the registry allowlist', () => {
     expect(componentForTool('email_flag')).toBe(A2UI_COMPONENTS.ApprovalActionCard)
     expect(componentForTool('email_archive')).toBe(A2UI_COMPONENTS.ApprovalActionCard)
     expect(componentForTool('email_pin')).toBe(A2UI_COMPONENTS.ApprovalActionCard)
+    expect(componentForTool('memory_write')).toBe(A2UI_COMPONENTS.MemoryApprovalCard)
+    expect(componentForTool('memory_delete')).toBe(A2UI_COMPONENTS.MemoryApprovalCard)
     // unknown / read tools → null (caller falls back to the generic ToolTraceCard)
     expect(componentForTool('email_search')).toBeNull()
     expect(componentForTool('kos_query')).toBeNull()
@@ -105,6 +108,70 @@ describe('buildToolA2UIPayload — generic approval card (flag/archive/pin)', ()
 
   test('unknown tool → null payload', () => {
     expect(buildToolA2UIPayload('email_search', { args: { q: 'x' } })).toBeNull()
+  })
+})
+
+describe('buildToolA2UIPayload — memory approval card (write / delete)', () => {
+  test('memory_write → operation/scope/key/valuePreview/priority from args', () => {
+    const p = buildToolA2UIPayload('memory_write', {
+      args: { scope: 'user', key: 'morning_only', value: '每天上午只看重要邮件', priority: 1 }
+    })
+    expect(p!.component).toBe(A2UI_COMPONENTS.MemoryApprovalCard)
+    const props = p!.props as unknown as MemoryApprovalCardProps
+    expect(props.operation).toBe('write')
+    expect(props.scope).toBe('user')
+    expect(props.memoryKey).toBe('morning_only')
+    expect(props.valuePreview).toContain('每天上午只看重要邮件')
+    expect(props.priority).toBe(1)
+    expect(p!.audit).toMatchObject({ risk: 'preview', requiresApproval: true })
+  })
+
+  test('memory_write value preview stringifies non-string values and truncates long ones', () => {
+    const obj = buildToolA2UIPayload('memory_write', {
+      args: { key: 'k', value: { tone: 'concise' } }
+    })
+    expect((obj!.props as unknown as MemoryApprovalCardProps).valuePreview).toBe(
+      '{"tone":"concise"}'
+    )
+    const long = buildToolA2UIPayload('memory_write', {
+      args: { key: 'k', value: 'x'.repeat(200) }
+    })
+    const preview = (long!.props as unknown as MemoryApprovalCardProps).valuePreview!
+    expect(preview.endsWith('…')).toBe(true)
+    expect(preview.length).toBe(121) // 120 chars + ellipsis
+  })
+
+  test('memory_delete → operation=delete, no valuePreview', () => {
+    const p = buildToolA2UIPayload('memory_delete', {
+      args: { scope: 'user', key: 'morning_only' }
+    })
+    expect(p!.component).toBe(A2UI_COMPONENTS.MemoryApprovalCard)
+    const props = p!.props as unknown as MemoryApprovalCardProps
+    expect(props.operation).toBe('delete')
+    expect(props.memoryKey).toBe('morning_only')
+    expect(props.valuePreview).toBeUndefined()
+  })
+
+  test('result echoes saved (write) / deleted count (delete)', () => {
+    const w = buildToolA2UIPayload('memory_write', {
+      args: { key: 'k', value: 'v' },
+      result: { saved: true }
+    })
+    expect((w!.props as unknown as MemoryApprovalCardProps).saved).toBe(true)
+    const d = buildToolA2UIPayload('memory_delete', {
+      args: { key: 'k' },
+      result: { deleted: 2 }
+    })
+    expect((d!.props as unknown as MemoryApprovalCardProps).deleted).toBe(2)
+  })
+
+  test('scope/key default when args are missing', () => {
+    const p = buildToolA2UIPayload('memory_write', { args: {} })
+    const props = p!.props as unknown as MemoryApprovalCardProps
+    expect(props.scope).toBe('user')
+    expect(props.memoryKey).toBe('')
+    expect(props.valuePreview).toBeUndefined()
+    expect(props.priority).toBeUndefined()
   })
 })
 
