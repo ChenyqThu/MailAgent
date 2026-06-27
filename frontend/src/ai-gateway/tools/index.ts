@@ -18,6 +18,7 @@ import { createKosReadTools } from './kos'
 import { createReportReadTools } from './report'
 import { createWriteTools } from './write'
 import { createSendTools } from './send'
+import { createMemoryTools } from './memory'
 import type { GatewayToolAuditCollector } from './types'
 
 export interface BuildGatewayToolsOpts {
@@ -43,6 +44,12 @@ export interface BuildGatewayToolsOpts {
   /** HMAC secret for the send approval token (the per-session local API token, shared with the
    *  Python serve-api). Required to build the send tool; omitted → no send tool even if enabled. */
   sendSigningSecret?: string
+  /** MAILAGENT_AI_SDK_MEMORY_TOOLS (M0 — post-cutover parity restore). When true, the four memory
+   *  tools are added (memory_list/get silent reads + memory_write/delete preview writes) — but the
+   *  two writes need `approvalGuard` too (a write tool cannot exist without its guard), so they are
+   *  only registered when the guard is present. Off (default) → no memory tools, byte-identical to
+   *  the cutover tool set. Independent of writeToolsEnabled (memory has its own flag/rollback). */
+  memoryToolsEnabled?: boolean
 }
 
 /** Names of the read tools exposed by the gateway (for tests / observability). */
@@ -69,6 +76,18 @@ export function buildGatewayTools(
     ...createEmailReadTools(opts.domain, collector),
     ...createKosReadTools(opts.domain, collector, { timeDecayEnabled: opts.kosTimeDecayEnabled }),
     ...createReportReadTools(opts.domain, collector)
+  }
+  // M0 — memory tools (post-cutover parity restore) when MAILAGENT_AI_SDK_MEMORY_TOOLS is on AND a
+  // guard is supplied (memory_write/delete are preview-tier writes that need it, like email writes).
+  // Independent of writeToolsEnabled — memory has its own flag/rollback. Off (or no guard) →
+  // byte-identical to the cutover tool set.
+  if (opts.memoryToolsEnabled && opts.approvalGuard) {
+    Object.assign(
+      tools,
+      createMemoryTools(opts.domain, collector, opts.approvalGuard, {
+        a2uiEnabled: opts.a2uiEnabled
+      })
+    )
   }
   // phase-03b — write tools only when the flag is on AND a guard is supplied. Off (or no
   // guard) → read-only, byte-identical to 03a. Approval is enforced two ways: ai@6's

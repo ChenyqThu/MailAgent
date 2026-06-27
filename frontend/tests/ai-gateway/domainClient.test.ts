@@ -144,6 +144,71 @@ describe('MailAgentDomainClient — wire-param fidelity', () => {
   })
 })
 
+describe('MailAgentDomainClient — memory wire (M0, mirrors legacy http_platform)', () => {
+  test('listMemory → GET /chat/memory (scope query only when provided)', async () => {
+    const { fetchImpl, calls } = recordingFetch(() => success([{ scope: 'user', key: 'k' }]))
+    const c = client(fetchImpl)
+    await c.listMemory('user')
+    expect(calls[0].method ?? 'GET').toBe('GET')
+    expect(calls[0].url).toContain('/api/chat/memory?')
+    expect(calls[0].url).toContain('scope=user')
+    // no scope → no query string at all
+    await c.listMemory()
+    expect(calls[1].url).toMatch(/\/api\/chat\/memory$/)
+  })
+
+  test('getMemory → GET /chat/memory/entry with scope + key query', async () => {
+    const { fetchImpl, calls } = recordingFetch(() => success({ scope: 'user', key: 'k' }))
+    await client(fetchImpl).getMemory('user', 'reply_language')
+    expect(calls[0].method ?? 'GET').toBe('GET')
+    expect(calls[0].url).toContain('/api/chat/memory/entry?')
+    expect(calls[0].url).toContain('scope=user')
+    expect(calls[0].url).toContain('key=reply_language')
+  })
+
+  test('getMemory → data:null is a normal "not stored" result (NOT a throw)', async () => {
+    const { fetchImpl } = recordingFetch(() => success(null))
+    const out = await client(fetchImpl).getMemory('user', 'missing')
+    expect(out).toBeNull()
+  })
+
+  test('writeMemory → POST /chat/memory with the camelCase body', async () => {
+    const { fetchImpl, calls } = recordingFetch(() => success({ scope: 'user', key: 'k' }))
+    await client(fetchImpl).writeMemory({
+      scope: 'user',
+      key: 'reply_language',
+      valueJson: '"English"',
+      priority: 1,
+      sourceSessionId: null,
+      sourceMessageId: null,
+      sourceToolUseId: null,
+      sourceWikiPath: null
+    })
+    expect(calls[0].method).toBe('POST')
+    expect(calls[0].url).toContain('/api/chat/memory')
+    expect(JSON.parse(calls[0].body as string)).toEqual({
+      scope: 'user',
+      key: 'reply_language',
+      valueJson: '"English"',
+      priority: 1,
+      sourceSessionId: null,
+      sourceMessageId: null,
+      sourceToolUseId: null,
+      sourceWikiPath: null
+    })
+  })
+
+  test('deleteMemory → DELETE /chat/memory (scope+key query) → projects the deleted count', async () => {
+    const { fetchImpl, calls } = recordingFetch(() => success({ deleted: 1 }))
+    const count = await client(fetchImpl).deleteMemory('user', 'reply_language')
+    expect(calls[0].method).toBe('DELETE')
+    expect(calls[0].url).toContain('/api/chat/memory?')
+    expect(calls[0].url).toContain('scope=user')
+    expect(calls[0].url).toContain('key=reply_language')
+    expect(count).toBe(1)
+  })
+})
+
 describe('MailAgentDomainClient — abort', () => {
   test('threads the abort signal; an aborted fetch rejects (not wrapped as DomainError)', async () => {
     const ac = new AbortController()
