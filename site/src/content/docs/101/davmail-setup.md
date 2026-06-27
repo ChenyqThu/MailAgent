@@ -7,8 +7,8 @@ description: DavMail 是什么、为什么把它作为推荐的邮箱源、怎�
 
 本页从零讲清 DavMail：是什么、为什么、怎么装、怎么认证、怎么确认、怎么守护。
 
-:::note
-本页接在[安装后端](/101/install-backend/)之后。建议你先按那一篇把 `mailagent` CLI、Notion 数据库、`.env` 五项必填配好，再回到这里把后端从 AppleScript 切到 DavMail。
+:::note[企业 Exchange 用户的额外一步]
+装好[桌面 App](/101/install-app/) 后，如果你的邮箱是企业 Exchange / Microsoft 365，需要单独把 DavMail 跑起来作为邮件源。本页讲怎么装、认证、守护。App 内嵌的后端会自动识别并连上本机运行的 DavMail；普通 Mail.app 邮箱用户不需要这一页，直接去[应用内首次配置](/101/onboarding/)即可。
 :::
 
 ## DavMail 是什么
@@ -114,9 +114,11 @@ java -jar davmail.jar ../config/davmail.properties
 DavMail 当前用 Outlook 桌面端 well-known client_id 伪装登录属评估用途，企业生产前建议走公司 IT 审批或直接申请 Graph API 应用；另微软已宣布 O365 的 EWS 协议将于 **2026-10-01 关停**，届时需切换到 Graph 路线。AppleScript 路径不受这两条影响，始终可作兜底。
 :::
 
-## 第 3 步：让 MailAgent 用 DavMail（改 `.env`）
+## 第 3 步：让 MailAgent 用 DavMail
 
-回到 `~/Documents/MailAgent/.env`，把后端切到 davmail 并补几项：
+**桌面 App 用户**：在 App 的**设置面板**里填写 DavMail 配置（用户邮箱、端口、Cipher Key），无需手动编辑 `.env`。
+
+**从源码运行后端的开发者**：回到 `~/Documents/MailAgent/.env`，把后端切到 davmail 并补几项（参数含义与 App 设置面板一一对应）：
 
 ```bash
 MAILAGENT_BACKEND=davmail
@@ -131,7 +133,7 @@ DAVMAIL_ROOT=/绝对路径/MailAgent/davmail-poc   # 打包桌面 App 时必填�
 DavMail 用**连接时 client 提供的 AUTH 密码**作为加密 `token.dat` 的 key。MailAgent 的多个组件（mail-sync、CLI、前端）都会连同一个 DavMail，**它们必须用同一个 cipher key**，否则解不开凭据，报 `BadPaddingException` 然后强制重新走 OAuth。这个 key 可以是任意字符串，但一旦定下，所有组件、所有重启都不能变。
 :::
 
-改完重启 mail-sync 让新后端生效：
+从源码运行时，改完重启 mail-sync 让新后端生效：
 
 ```bash
 pm2 restart mail-sync
@@ -201,8 +203,8 @@ DavMail 要先于 mail-sync 起来。两个都交给 PM2 并 `pm2 save` 后，�
 
 ## 接下来
 
-DavMail 跑通后，回到 **[首次同步](/101/initial-sync/)** 把历史邮件灌进 Notion，或继续 **[安装桌面 App](/101/install-app/)**。
+DavMail 跑通后，下一步是 **[应用内首次配置](/101/onboarding/)** —— 在 App 里填好密钥、选好 AI 后端，就可以开始日常使用了。
 
 ---
 
-> 深入了解：[安装后端](/101/install-backend/) · [架构内核（Sprint 16 双后端）](https://github.com/ChenyqThu/MailAgent/blob/main/docs/reference/architecture/architecture-internals.md) · [EWS 关停迁移路线图 §5.1](https://github.com/ChenyqThu/MailAgent/blob/main/docs/reference/architecture/roadmap-post-cutover.md)
+> 深入了解：[（开发者）从源码运行后端](/101/install-backend/) · [架构内核（Sprint 16 双后端）](https://github.com/ChenyqThu/MailAgent/blob/main/docs/reference/architecture/architecture-internals.md) · [EWS 关停迁移路线图 §5.1](https://github.com/ChenyqThu/MailAgent/blob/main/docs/reference/architecture/roadmap-post-cutover.md)

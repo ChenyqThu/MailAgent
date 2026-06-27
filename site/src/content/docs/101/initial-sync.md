@@ -1,15 +1,49 @@
 ---
 title: 首次同步
-description: 用 mailagent init 把历史邮件灌进 Notion——一键完整初始化或分步执行，了解大邮箱耗时预期，并在 Notion 里核对同步结果。
+description: 装好 App 并配好邮件源后，后端会自动开始同步邮件；大邮箱进度在 App 里可见，不需要手动跑任何命令。
 ---
 
-后端跑起来后，它会**自动同步从此刻起新到的邮件**。但你过去几个月、几年的历史邮件还在邮箱里——首次同步就是把这批存量邮件一次性灌进 Notion，建立可检索的归档。
+装好桌面 App、完成[应用内首次配置](/101/onboarding/)后，App 内嵌的后端会**自动开始同步**——先同步从此刻起新到的邮件，并按需把历史邮件灌入本地库。进度在 App 主界面可见，你不需要手动跑任何命令。
 
-:::note[前置]
-开始前确认：[后端已装好并在运行](/101/install-backend/)，`.env` 五项必填都填了，两个 Notion 数据库字段配齐且已连上 Integration。可以先跑 `mailagent admin health -o json | jq .data.healthy` 确认返回 `true`。
+## App 自动同步
+
+后端启动后，它会：
+
+1. **实时同步新邮件**：每隔几秒检测一次邮箱变化，新邮件一到就自动抓取、（如启用）AI 分类。
+2. **灌入历史邮件**：在后台把你过去几个月、几年的存量邮件一次性拉进本地库，建立可检索的归档。
+
+整个过程对你透明——打开 App 就能看邮件，历史邮件会陆续出现，不需要等同步完才能用。
+
+## 在 App 里核对结果
+
+同步跑起来后，打开 MailAgent 的邮件列表，应该能看到邮件陆续出现，每一行带着主题、发件人、日期、邮箱归属。如果启用了 AI 分类，优先级 / 动作建议等字段也会被填上。
+
+几个核对要点：
+
+- **去重正确**：同一封邮件不应出现两次（靠 `Message ID` 去重）。
+- **线程成形**：同一话题的回复应归属到同一线程。
+- **全文搜索可用**：用 `⌘K` 打开搜索，试着搜一封你知道有的邮件，应该能找到。
+
+（若启用了 Notion 镜像）也可以打开你的 Notion 邮件数据库核对：邮件应陆续出现，带 `Message ID`、`Thread ID`、`AI Priority` 等字段。
+
+## 大邮箱要等多久
+
+首次同步是一次性的重活，耗时取决于邮箱规模和所选后端：
+
+- **小邮箱（几千封）**：通常几分钟到十几分钟。
+- **大邮箱（6–7 万封）**：可能要一两个小时甚至更久。MailAgent 的 v3 架构专门为大邮箱优化过，单封邮件获取约 1 秒（AppleScript）或约 236 毫秒（DavMail）。
+
+历史邮件同步在后台进行，不影响你实时查看新邮件。
+
+---
+
+## 开发者：用 CLI 手动初始化（从源码运行时）
+
+:::note[普通用户不需要这一节]
+如果你用的是桌面 App，后端已自动处理同步，无需手动跑 CLI。以下内容仅适用于从源码运行后端的开发者。
 :::
 
-## 一键完整初始化（推荐）
+### 一键完整初始化（推荐）
 
 绝大多数情况，一条命令搞定：
 
@@ -27,7 +61,7 @@ mailagent init fetch-cache --inbox-count 3000 --sent-count 500
 mailagent init all --yes
 ```
 
-## 分步执行（需要更细控制时）
+### 分步执行（需要更细控制时）
 
 `init` 拆成 7 个子动作，必要时可单独跑某一步（例如某步失败后续跑）：
 
@@ -47,45 +81,26 @@ mailagent init all --yes
 mailagent init update-parents --yes
 ```
 
-## 大邮箱要等多久
-
-首次同步是一次性的重活，耗时取决于邮箱规模和所选后端：
-
-- **小邮箱（几千封）**：通常几分钟到十几分钟。
-- **大邮箱（6–7 万封）**：可能要一两个小时甚至更久。MailAgent 的 v3 架构专门为大邮箱优化过，单封邮件获取约 1 秒（AppleScript）或约 236 毫秒（DavMail）。
-
 :::tip[让它安心跑完]
 首次同步建议用 PM2 后台跑，或在一个不会关掉的终端里跑，中途可以去忙别的。`init` 是**可断点续传**的——万一中断，用相同命令再跑一次会从上次的进度接着走，不会重头来。进度和报错都会写进日志，`tail -f logs/sync.log` 随时看。
 :::
 
-如果 10 分钟过去 Notion 里一封邮件都没出现，多半不是慢、而是卡住了——去 [故障排查 FAQ](/101/troubleshooting/) 对照检查（常见是权限没给全、Integration 没连到数据库、或字段名对不上）。
+如果 10 分钟过去邮件一封都没出现，多半不是慢、而是卡住了——去 [故障排查 FAQ](/101/troubleshooting/) 对照检查（常见是权限没给全、Integration 没连到数据库、或字段名对不上）。
 
-## 在 Notion 里核对结果
-
-同步跑起来后，打开你的邮件数据库，应该能看到邮件陆续出现，每一行带着主题、发件人、日期、邮箱归属。如果你已经启用了 AI 分类，`AI Priority` / `AI Action` / `AI Review Status` 等字段也会被填上。
-
-几个核对要点：
-
-- **去重正确**：同一封邮件不应出现两次（靠 `Message ID` 去重）。
-- **线程成形**：同一话题的回复应通过 `Parent Item` 挂在线程头下。
-- **数量大致对得上**：可以用下面的命令看本地数据库里各状态的邮件分布，确认没有大量卡在失败状态：
+也可以用 SQL 查本地数据库里各状态的邮件分布，确认没有大量卡在失败状态：
 
 ```bash
 sqlite3 data/sync_store.db \
   "SELECT sync_status, COUNT(*) FROM email_metadata GROUP BY sync_status"
 ```
 
-如果看到不少行卡在 `fetch_failed` 或 `failed`，先别慌——系统会按指数退避自动重试。持续不动的话，查日志定位原因。
+---
 
-## 同步之后会发生什么
+## 接下来
 
-首次同步完成后，后端就转入**常驻模式**：每隔几秒检测一次邮箱变化，新邮件一到就自动抓取、（如启用）AI 分类、镜像到 Notion。你不需要再手动跑 `init`。日常的标已读、标旗等操作也会双向同步。
-
-接下来：
-
-- 想要图形界面看邮件、用 AI Chat 和搜索？去 **[安装桌面 App](/101/install-app/)**。
 - 想了解日常怎么用？看 **[日常工作流：收件箱](/101/daily-inbox/)**。
+- 找不到某封邮件？看 **[全文搜索](/101/search/)**。
 
 ---
 
-> 深入了解：[README 初始化同步](https://github.com/ChenyqThu/MailAgent/blob/main/README.md) · [Notion 数据库结构](https://github.com/ChenyqThu/MailAgent/blob/main/README.md) · [CLI 命令全表](https://github.com/ChenyqThu/MailAgent/blob/main/docs/reference/cli/cli-reference.md)
+> 深入了解：[README 初始化同步](https://github.com/ChenyqThu/MailAgent/blob/main/README.md) · [CLI 命令全表](https://github.com/ChenyqThu/MailAgent/blob/main/docs/reference/cli/cli-reference.md)

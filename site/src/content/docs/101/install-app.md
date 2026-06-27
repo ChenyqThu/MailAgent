@@ -3,10 +3,10 @@ title: 安装桌面 App
 description: 从 GitHub Releases 下载对应架构的 .dmg、拖进应用程序、首次启动绕过 Gatekeeper、授予权限，把 MailAgent 桌面 App 装好。
 ---
 
-桌面 App 是后端的图形界面：三栏收件箱、AI 面板、全文搜索、一键翻译、回复撰写都在这里。它读取后端写好的本地数据库，并通过后端执行写操作。
+桌面 App 是 MailAgent 的主体：三栏收件箱、AI 面板、全文搜索、一键翻译、回复撰写都在这里。**它内嵌了完整的同步后端（自带运行环境，无需另装 Python 或 CLI）**——装好打开就能用，邮件数据存在你自己 Mac 的本地数据库里。
 
-:::caution[先有后端，再装 App]
-桌面 App 不能脱离后端独立工作——它读的是后端维护的 `data/sync_store.db`。如果还没跑通后端，先回到 **[安装后端](/101/install-backend/)** 与 **[首次同步](/101/initial-sync/)**。后端没在跑时，App 打开会提示找不到数据库。
+:::note[只需要装这一个 App]
+不用先装"后端"。旧版那套 `git clone` + 虚拟环境 + `mailagent` CLI 是给开发者从源码跑的进阶玩法（见 [（开发者）从源码运行后端](/101/install-backend/)）。普通用户**直接下载下面的 App 即可**，后端已经打包在里面、随 App 自动启动。唯一的额外一步是：企业 Exchange / Microsoft 365 邮箱需要单独跑一个 DavMail 邮件源（[下一节](/101/davmail-setup/)讲）。
 :::
 
 ## 第 1 步：下载对应架构的 .dmg
@@ -56,12 +56,13 @@ MailAgent 目前是 **ad-hoc 签名**（没有 Apple 付费的 Developer ID）�
 
 配置完成后，主界面就是三栏收件箱：左侧文件夹与 AI Agents、中间邮件列表、右侧详情与 AI 字段面板。
 
-:::note[App 与后端 CLI 别同时写]
-当你用桌面 App 时，请确保后端的 PM2 `mail-sync` 进程**已停止**（`pm2 stop mail-sync`），避免 App 和 CLI 同时往数据库写引发冲突。如果你用的是 DavMail，`davmail-poc` 这个桥接进程要保留（它不打进 App）。
+:::note[App 自带后端 · DavMail 要单独留着]
+App 内嵌的后端会随 App 自动启动，你不需要再跑任何 `mail-sync` 进程。**唯一需要单独运行的是 DavMail**（企业 Exchange 邮件源桥接，不打进 App）——下一节讲怎么把它跑成后台守护。如果你之前从源码跑过 CLI 后端（PM2 `mail-sync`），用 App 时请先把它停掉（`pm2 stop mail-sync`），避免两个后端同时往同一个数据库写。
 :::
 
 ## 接下来
 
+- 企业 Exchange / Microsoft 365 邮箱？先配邮件源：**[用 DavMail 接入企业邮箱](/101/davmail-setup/)**。
 - 配置 App：**[应用内首次配置](/101/onboarding/)**。
 - 开始用：**[日常工作流：收件箱](/101/daily-inbox/)**。
 - 装不上 / 打开闪退？看 **[故障排查 FAQ](/101/troubleshooting/)**。

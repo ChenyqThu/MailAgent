@@ -1,14 +1,20 @@
 ---
-title: 安装后端（CLI + mail-sync）
+title: （开发者）从源码运行后端
 description: 克隆仓库、建虚拟环境、装 mailagent CLI、填 .env 五项必填、选 DavMail 或 AppleScript 后端、授予 macOS 权限，并启动 mail-sync 同步服务。
+sidebar:
+  badge:
+    text: 进阶
+    variant: caution
 ---
 
-后端是整个 MailAgent 的引擎：它在后台同步邮件、跑 AI 分类、维护本地数据库。桌面 App 只是它的图形界面。**先把后端跑通，再装 App。**
+:::caution[普通用户不需要这一页]
+直接[装桌面 App](/101/install-app/) 即可，后端已打包在内，开箱即用。本页是给想从**源码运行后端**的开发者（贡献代码、自定义、调试）的进阶指南。
+:::
 
-整个过程分五步，照着做大约 15 分钟。
+后端是整个 MailAgent 的引擎：它在后台同步邮件、跑 AI 分类、维护本地数据库。从源码运行时，整个过程分五步，照着做大约 15 分钟。
 
 :::note
-本页假设你已读过 [MailAgent 是什么](/101/overview/) 的系统要求。需要：macOS 12+、Python 3.11+、一个 Notion 工作区、一个 Exchange / Mail.app 邮箱。
+本页假设你已读过 [MailAgent 是什么](/101/overview/) 的系统要求。需要：macOS 12+、Python 3.11+、一个 Exchange / Mail.app 邮箱。Notion 是可选的（见第 2 步）。
 :::
 
 ## 第 1 步：克隆仓库并建虚拟环境
@@ -37,9 +43,11 @@ mailagent --version  # 期望输出 3.0.0
 `mailagent` 命令只在激活了虚拟环境的终端里可用。每次新开终端，先 `cd ~/Documents/MailAgent && source venv/bin/activate`。如果 `mailagent` 找不到，十有八九是忘了这步。
 :::
 
-## 第 2 步：在 Notion 里建好数据库（关键且容易漏）
+## 第 2 步：可选——建 Notion 镜像库
 
-MailAgent 把邮件同步到两个 Notion 数据库：一个存邮件，一个存日历。**这两个库需要你先在 Notion 里建好，并按下表配齐字段**——字段名和类型必须对得上，否则同步会失败。
+Notion 是**可选的**：MailAgent 的邮件正文和附件以本地 SQLite 为 SSoT，Notion 只是可选的额外归档镜像。只有想把邮件额外镜像到 Notion 才需要建库；纯本地 SQLite 使用可跳过本步，直接去第 3 步。
+
+如果你需要 Notion 镜像，MailAgent 要用到两个 Notion 数据库：一个存邮件，一个存日历。**这两个库需要你先在 Notion 里建好，并按下表配齐字段**——字段名和类型必须对得上，否则同步会失败。
 
 ### 2a. 创建 Integration，拿 Token
 
@@ -187,7 +195,7 @@ tail -f logs/sync.log                                # 日志里不应有 ERROR 
 
 ## 接下来
 
-后端就绪后，下一步是把历史邮件灌进 Notion：**[首次同步](/101/initial-sync/)**。装完后端也想要图形界面的话，去 **[安装桌面 App](/101/install-app/)**。
+后端就绪后，下一步是把历史邮件灌进本地库：**[首次同步（CLI 方式）](/101/initial-sync/)**。如果也想要图形界面，去 **[安装桌面 App](/101/install-app/)**。
 
 ---
 
