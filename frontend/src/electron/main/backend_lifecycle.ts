@@ -42,6 +42,7 @@ import { join } from 'path'
 
 import Database from 'better-sqlite3'
 
+import { resolveAiGatewayPort } from '../../ai-gateway/config'
 import { getMailagentBin } from './cli_runner'
 import { resolveDataRoot, resolveDbPath } from './db'
 import { getLocalApiToken, LOCAL_TOKEN_ENV } from './local_token'
@@ -550,7 +551,15 @@ export class BackendLifecycleManager {
    * 透传)。仅当 process.env 里非空才 set, 避免把 undefined 写成字面 "undefined" 字符串。
    */
   private serveApiEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-    const env: NodeJS.ProcessEnv = { ...baseEnv, MAILAGENT_API_PORT: String(resolveApiPort()) }
+    const env: NodeJS.ProcessEnv = {
+      ...baseEnv,
+      MAILAGENT_API_PORT: String(resolveApiPort()),
+      // task A — 远程 web 切 AI SDK: serve-api 的 ai_gateway_proxy 据此 env 把 web 的 chat 请求转发
+      // 到同机 loopback AI SDK Gateway。值 = resolveAiGatewayPort() (env 覆盖否则 8300), 与 index.ts
+      // createWindow 注入 renderer 的 ?aiGatewayPort= / 嵌入式 gateway listen 端口同一单源 →
+      // 代理与 gateway 永远指向同一端口。本地 electron 不经代理 (renderer 直连)，此 env 仅供 web 代理用。
+      MAILAGENT_AI_GATEWAY_PORT: String(resolveAiGatewayPort())
+    }
     const spaDir = resolveSpaDir()
     if (spaDir) env.MAILAGENT_SPA_DIR = spaDir
     // Cloudflare Access 鉴权 env: 仅透传非空值 (空值交由 Python 端按未配置处理)。

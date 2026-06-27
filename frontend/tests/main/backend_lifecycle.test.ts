@@ -196,6 +196,7 @@ beforeEach(() => {
   delete process.env.CF_TEAM_DOMAIN
   delete process.env.MAILAGENT_API_ALLOWED_EMAIL
   delete process.env.MAILAGENT_MEM_LIMIT_MB // 防宿主 env 污染 buildBaseEnv 默认值断言
+  delete process.env.MAILAGENT_AI_GATEWAY_PORT // task A: 防宿主 env 污染 gateway 端口默认断言
   httpHandler = { kind: 'refused' } // 默认: uvicorn 没起, probe 失败
   _resetBackendLifecycleForTests()
 })
@@ -207,6 +208,7 @@ afterEach(() => {
   delete process.env.CF_TEAM_DOMAIN
   delete process.env.MAILAGENT_API_ALLOWED_EMAIL
   delete process.env.MAILAGENT_MEM_LIMIT_MB
+  delete process.env.MAILAGENT_AI_GATEWAY_PORT
   vi.clearAllMocks()
 })
 
@@ -438,6 +440,40 @@ describe('serve-api gate — 默认开 (gate on → spawn serve + serve-api)', (
     const serveCall = spawnCalls.find((c) => c.args[0] === 'serve')!
     const env = serveCall.opts.env as NodeJS.ProcessEnv
     expect(env.MAILAGENT_API_PORT).toBeUndefined()
+  })
+
+  // task A — 远程 web 切 AI SDK: serve-api 的 ai_gateway_proxy 据 MAILAGENT_AI_GATEWAY_PORT 把
+  // web 的 chat 请求转发到同机 loopback gateway。值 = resolveAiGatewayPort()（env 覆盖否则 8300），
+  // 与 index.ts 注入 renderer 的 ?aiGatewayPort= / gateway listen 端口同一单源。
+  test('serve-api 注入 MAILAGENT_AI_GATEWAY_PORT (默认 8300, 与 gateway 同源)', () => {
+    appMock.isPackaged = true
+    enableGate()
+    const mgr = new BackendLifecycleManager(fastApiOpts())
+    mgr.start()
+    const apiCall = spawnCalls.find((c) => c.args[0] === 'serve-api')!
+    const env = apiCall.opts.env as NodeJS.ProcessEnv
+    expect(env.MAILAGENT_AI_GATEWAY_PORT).toBe('8300')
+  })
+
+  test('MAILAGENT_AI_GATEWAY_PORT 自定义端口透传给 serve-api (env 覆盖)', () => {
+    appMock.isPackaged = true
+    enableGate()
+    process.env.MAILAGENT_AI_GATEWAY_PORT = '8765'
+    const mgr = new BackendLifecycleManager(fastApiOpts())
+    mgr.start()
+    const apiCall = spawnCalls.find((c) => c.args[0] === 'serve-api')!
+    const env = apiCall.opts.env as NodeJS.ProcessEnv
+    expect(env.MAILAGENT_AI_GATEWAY_PORT).toBe('8765')
+  })
+
+  test('serve 的 env 不带 MAILAGENT_AI_GATEWAY_PORT (gateway 端口只注入 serve-api)', () => {
+    appMock.isPackaged = true
+    enableGate()
+    const mgr = new BackendLifecycleManager(fastApiOpts())
+    mgr.start()
+    const serveCall = spawnCalls.find((c) => c.args[0] === 'serve')!
+    const env = serveCall.opts.env as NodeJS.ProcessEnv
+    expect(env.MAILAGENT_AI_GATEWAY_PORT).toBeUndefined()
   })
 
   test('dev 模式 (isPackaged=false) 即便 gate on 也不 spawn 任何进程', () => {

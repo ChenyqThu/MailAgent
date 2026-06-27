@@ -821,7 +821,8 @@ export function AssistantUIChatPanel({
 
               {
                 <ChatComposerControlsProvider value={composerControls}>
-                  {useAiSdkRuntime && gatewayBaseUrl ? (
+                  {/* `gatewayBaseUrl != null` not truthy: '' (same-origin web proxy) is a valid base. */}
+                  {useAiSdkRuntime && gatewayBaseUrl != null ? (
                     contextInjectionOn && !reloadMessagesReady ? (
                       // Phase 06 — session switch in flight: defer the mount until chat.messages match the
                       // active session, so the runtime never seeds stale history. Brief; refresh() then

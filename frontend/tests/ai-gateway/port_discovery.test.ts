@@ -76,3 +76,68 @@ describe('flags — resolveAiGatewayBaseUrl', () => {
     expect(resolveAiGatewayBaseUrl()).toBeNull()
   })
 })
+
+// task A — 远程 web 切 AI SDK: resolveAiGatewayBaseUrl three-branch resolution.
+//   (1) ?aiGatewayPort=N present → http://127.0.0.1:N  (LOCAL Electron, byte-identical)
+//   (2) no port + web build + ai-sdk on → ''            (same-origin serve-api proxy)
+//   (3) otherwise → null                                (legacy)
+// The crux: '' ONLY ever fires on the web build with the ai-sdk runtime on; the local
+// Electron path (port present → http://…) and every off path (→ null) are unchanged.
+describe('flags — resolveAiGatewayBaseUrl three-branch (task A web proxy)', () => {
+  test('(2) web build + ai-sdk runtime on, no port → "" (same-origin proxy)', () => {
+    vi.stubEnv('VITE_BUILD_TARGET', 'web')
+    vi.stubEnv('MAILAGENT_CHAT_RUNTIME', 'ai-sdk')
+    vi.stubGlobal('window', { location: { search: '?apiPort=8200' } })
+    expect(resolveAiGatewayBaseUrl()).toBe('')
+  })
+
+  test('(2) "" makes the transport/health/approval URLs same-origin (proxy-bound)', () => {
+    vi.stubEnv('VITE_BUILD_TARGET', 'web')
+    vi.stubEnv('MAILAGENT_CHAT_RUNTIME', 'ai-sdk')
+    vi.stubGlobal('window', { location: { search: '' } })
+    const base = resolveAiGatewayBaseUrl()
+    expect(base).toBe('')
+    // The exact strings the renderer composes (transport / health / followups / approval).
+    expect(`${base}/api/ai/chat`).toBe('/api/ai/chat')
+    expect(`${base}/health`).toBe('/health')
+    expect(`${base}/api/ai/title`).toBe('/api/ai/title')
+    expect(`${base}/api/ai/approval/resolve`).toBe('/api/ai/approval/resolve')
+  })
+
+  test('(3) web build but ai-sdk runtime OFF → null (legacy, byte-identical)', () => {
+    vi.stubEnv('VITE_BUILD_TARGET', 'web')
+    // MAILAGENT_CHAT_RUNTIME unset + master off → getChatRuntimeMode() === 'legacy'.
+    vi.stubGlobal('window', { location: { search: '?apiPort=8200' } })
+    expect(resolveAiGatewayBaseUrl()).toBeNull()
+  })
+
+  test('(1) LOCAL byte-identical: port present wins even on a web build', () => {
+    // Defensive: were a web page ever served with ?aiGatewayPort=, the loopback branch
+    // still wins (it returns BEFORE the web check) — local-direct semantics preserved.
+    vi.stubEnv('VITE_BUILD_TARGET', 'web')
+    vi.stubEnv('MAILAGENT_CHAT_RUNTIME', 'ai-sdk')
+    vi.stubGlobal('window', { location: { search: '?aiGatewayPort=8300' } })
+    expect(resolveAiGatewayBaseUrl()).toBe('http://127.0.0.1:8300')
+  })
+
+  test('(1) LOCAL Electron (NOT web) + ai-sdk on, port present → loopback (unchanged)', () => {
+    // Electron build: VITE_BUILD_TARGET is NOT 'web' (left unset). Port present → loopback,
+    // exactly as before this change — the local path never resolves to '' .
+    vi.stubEnv('MAILAGENT_CHAT_RUNTIME', 'ai-sdk')
+    vi.stubGlobal('window', { location: { search: '?aiGatewayPort=8300' } })
+    expect(resolveAiGatewayBaseUrl()).toBe('http://127.0.0.1:8300')
+  })
+
+  test('(3) NOT web (Electron) + ai-sdk on + NO port → null (never "" off-web)', () => {
+    // The byte-identical guard: a non-web build with ai-sdk on but no port param resolves to
+    // null (the old behaviour), never the new same-origin '' — that is web-only.
+    vi.stubEnv('MAILAGENT_CHAT_RUNTIME', 'ai-sdk')
+    vi.stubGlobal('window', { location: { search: '?apiPort=8200' } })
+    expect(resolveAiGatewayBaseUrl()).toBeNull()
+  })
+
+  test('(3) NOT web + runtime off + no port → null (pre-change default)', () => {
+    vi.stubGlobal('window', { location: { search: '?apiPort=8200' } })
+    expect(resolveAiGatewayBaseUrl()).toBeNull()
+  })
+})

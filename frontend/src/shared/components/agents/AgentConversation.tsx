@@ -633,7 +633,8 @@ export function AgentConversation({
           // An existing session whose backend_kind isn't known yet (unified list still loading) — defer
           // the runtime mount so we never misroute it to the AI SDK runtime by default (codex HIGH-2).
           <AgentSwitchPlaceholder />
-        ) : useAiSdkRuntime && gatewayBaseUrl ? (
+        ) : /* `!= null` not truthy: '' (same-origin web proxy) is a valid base. */
+        useAiSdkRuntime && gatewayBaseUrl != null ? (
           contextInjectionOn && !reloadMessagesReady ? (
             // session switch in flight — neutral placeholder until messages match the active session.
             <AgentSwitchPlaceholder />

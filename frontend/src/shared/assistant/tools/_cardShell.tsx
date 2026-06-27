@@ -53,7 +53,8 @@ export async function postApprovalEdit(
   editedInput: Record<string, unknown>
 ): Promise<void> {
   const base = resolveAiGatewayBaseUrl()
-  if (!base) throw new Error('E_NO_GATEWAY')
+  // `''` (same-origin web proxy) is a VALID base but falsy — null-check explicitly, never `!base`.
+  if (base == null) throw new Error('E_NO_GATEWAY')
   const res = await fetch(`${base}/api/ai/approval/resolve`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

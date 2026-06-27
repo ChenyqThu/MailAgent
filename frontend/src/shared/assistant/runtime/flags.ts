@@ -226,18 +226,60 @@ export function isAssistantModalEnabled(): boolean {
   return truthy(resolveFlagRaw('MAILAGENT_ASSISTANT_MODAL', buildAssistantModalFlag).value)
 }
 
-/** Loopback base URL of the embedded AI SDK Gateway, discovered from the
- *  `?aiGatewayPort=N` the main process injects into the window URL (same channel
- *  as `?apiPort=`, see ElectronApi.loopbackBaseUrl). Returns null when the param
- *  is absent (gateway not started / non-renderer test env) → the AI SDK runtime
- *  entry stays hidden and the panel uses the legacy ExternalStore adapter. */
+/** True when this is the remote web (SPA) build, NOT the Electron renderer. Mirrors the
+ *  established `import.meta.env.VITE_BUILD_TARGET === 'web'` probe used across settings
+ *  (EnvField / SettingsShell / AiTab): vite.web.config.ts `define`s VITE_BUILD_TARGET='web'
+ *  (production web bundle), the electron build does not → Electron is non-web.
+ *
+ *  Like resolveFlagRaw below, we ALSO honour `process.env.VITE_BUILD_TARGET` so a test can
+ *  flip it with `vi.stubEnv('VITE_BUILD_TARGET','web')` — under the electron-as-node vitest
+ *  runner `vi.stubEnv` populates process.env but NOT import.meta.env, so the import.meta-only
+ *  read would never see it. process.env is absent in the production web bundle (browser, no
+ *  `process`) and undefined-for-this-key in the Electron renderer, so this extra read changes
+ *  nothing in production — Electron stays non-web (→ resolver never returns '' off-web). */
+function isWebBuild(): boolean {
+  if (typeof process !== 'undefined' && process.env && process.env.VITE_BUILD_TARGET === 'web') {
+    return true
+  }
+  try {
+    return (
+      (import.meta as unknown as { env?: { VITE_BUILD_TARGET?: string } }).env
+        ?.VITE_BUILD_TARGET === 'web'
+    )
+  } catch {
+    return false
+  }
+}
+
+/** Base URL the renderer uses to reach the AI SDK Gateway. Three branches:
+ *
+ *  1. `?aiGatewayPort=N` present → `http://127.0.0.1:N` (LOCAL Electron: the main process
+ *     injects the loopback port; the renderer hits the embedded gateway DIRECTLY, never the
+ *     serve-api proxy). This branch is byte-for-byte the original behaviour.
+ *  2. Otherwise, on the remote WEB build with the ai-sdk runtime enabled → `''` (same-origin):
+ *     `${''}/api/ai/chat` = `/api/ai/chat`, `${''}/health` = `/health`, both hit the serve-api
+ *     proxy (src/api/routers/ai_gateway_proxy.py) which forwards to the same-machine loopback
+ *     gateway. The remote browser can't reach loopback, so serve-api proxies on its behalf.
+ *  3. Otherwise → `null` (legacy: gateway not started / non-renderer test env / web with the
+ *     ai-sdk runtime off) → the AI SDK runtime entry stays hidden, panel uses the legacy adapter.
+ *
+ *  🔴 LOCAL byte-identical contract: branch (1) (`?aiGatewayPort=` present → `http://...`) and
+ *  branch (3) (`null`) are unchanged. The new `''` (branch 2) only ever fires on the WEB build
+ *  with ai-sdk on — Electron always has `?aiGatewayPort=` (branch 1) or no flag (branch 3), and
+ *  isWebBuild() is false under Electron/vitest. So flag-off web (getChatRuntimeMode()!=='ai-sdk')
+ *  → null → byte-identical, and Electron is wholly untouched.
+ *
+ *  ⚠️ Consumers MUST null-check with `=== null` / `!= null`, NOT truthiness — `''` is a valid
+ *  base (same-origin) but falsy. (`gatewayBaseUrl ?` / `!base` would wrongly reject web.) */
 export function resolveAiGatewayBaseUrl(): string | null {
   try {
     const raw = new URLSearchParams(window.location.search).get('aiGatewayPort')
     const n = raw != null ? Number.parseInt(raw, 10) : NaN
     if (Number.isFinite(n) && n > 0) return `http://127.0.0.1:${n}`
   } catch {
-    /* non-renderer (no window) → null */
+    /* non-renderer (no window) → fall through (no port param) */
   }
+  // No loopback port → on the web build with ai-sdk on, use the same-origin serve-api proxy.
+  if (isWebBuild() && getChatRuntimeMode() === 'ai-sdk') return ''
   return null
 }
