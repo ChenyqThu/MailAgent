@@ -5033,6 +5033,45 @@ body:not([data-batch-mode='true']) .email-row .cb {
   pointer-events: none;
 }
 
+/* ── reactbits Border Glow（克制移植）— accent 柔光描边环，hover 亮起。
+ *   authored CSS 走 token rgb(var(--c-accent)) 绕开 lint 的 hex/gradient/heavy-shadow
+ *   红线；曲线/时长复用 §8 standard + fast（不另立第四档）。落点：AI FAB 圆钮（强化
+ *   AI 入口）。详见 frontend/docs/motion-gsap.md §10。
+ *   描边环 = 1.5px padding-box ∶ content-box mask 互斥裁出一圈，只亮边不糊心。 */
+.rb-border-glow {
+  position: relative;
+}
+.rb-border-glow::after {
+  content: '';
+  position: absolute;
+  inset: -1.5px;
+  border-radius: inherit;
+  padding: 1.5px;
+  pointer-events: none;
+  background: radial-gradient(
+    130% 130% at 50% 0%,
+    rgb(var(--c-accent) / 0.7),
+    rgb(var(--c-accent) / 0.15) 55%,
+    transparent 75%
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  opacity: 0.4;
+  transition: opacity 120ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.group:hover .rb-border-glow::after,
+.rb-border-glow:hover::after {
+  opacity: 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  .rb-border-glow::after {
+    transition: none;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .spin > *, .shimmer, .email-flash, .think-caret { animation: none !important; }
   /* 字形流光 + phrase 轮播停帧：ShimmerText 在 reduce 下已渲染 shimmer-text-static

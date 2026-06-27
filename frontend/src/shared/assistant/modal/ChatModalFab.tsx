@@ -41,7 +41,7 @@ export function ChatModalFab(): React.JSX.Element | null {
       </span>
       <span
         className={cn(
-          'grid size-12 shrink-0 place-items-center rounded-full shadow-md transition-transform duration-fast',
+          'rb-border-glow grid size-12 shrink-0 place-items-center rounded-full shadow-md transition-transform duration-fast',
           'bg-[rgb(var(--c-accent))] text-[rgb(var(--c-accent-fg))] group-hover:scale-105',
           'motion-reduce:transition-none'
         )}
