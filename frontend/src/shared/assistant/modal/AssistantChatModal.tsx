@@ -31,6 +31,8 @@ import {
 } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
+import { gsap, useGSAP, DUR } from '@shared/lib/gsap'
+import { useReducedMotion } from '@shared/hooks/useReducedMotion'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { useGeneralChat } from '@shared/hooks/useGeneralChat'
 import { useActiveEmail } from '@shared/state/active-email'
@@ -103,6 +105,18 @@ function AssistantChatModalInner(): React.JSX.Element {
   const [menuOpen, setMenuOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
   const sidebar = mode === 'sidebar'
+
+  // 每次唤出（FAB / ⌘J，最小化→展开）都开一段「关于当前邮件」的新对话 —— 用户：默认新会话 + 默认带当前这封，
+  // 不是上一封。AgentConversation 的 email-context effect 随后在空会话上 seed 当前 activeEmailId。mode 切换
+  // （floating↔sidebar）走 setMode 不改 visible → 不触发这里 → 切模式不重开、不丢流。历史仍可从标题下拉进。
+  const prevVisibleRef = useRef(visible)
+  useEffect(() => {
+    const justOpened = visible && !prevVisibleRef.current
+    prevVisibleRef.current = visible
+    if (justOpened) chat.newSession()
+    // chat.newSession 稳定（useCallback）；只在 visible 上升沿开新会话。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible])
 
   // sidebar 内嵌可调宽：宽度 state + 左缘拖拽手柄（仅 sidebar 模式；floating 用固定尺寸）。拖拽中直接写
   // inline width 跟手（不走 React state 避免每帧 re-render），mouseup 才落 state + localStorage。teardown
@@ -177,19 +191,42 @@ function AssistantChatModalInner(): React.JSX.Element {
     setMenuOpen(false)
   }
 
+  // GSAP 入场（替代 CSS animate-in，用户反馈：浮窗/抽屉打开动效统一走 GSAP）：floating 缩放+上浮+淡入，
+  // sidebar 右滑+淡入。§8 standard ease + base 时长。只依赖 visible → 仅开窗（最小化→展开）时播；floating↔
+  // sidebar 切换（visible 不变）不重播，保持顺滑换 className（不重挂 body）。clearProps 复原 inline transform，
+  // 不干扰 sidebar 的布局宽度 / 拖拽。reduce 直达终态。
+  const reduce = useReducedMotion()
+  useGSAP(
+    () => {
+      const el = rootRef.current
+      if (!el || !visible) return
+      if (reduce) {
+        gsap.set(el, { opacity: 1, x: 0, y: 0, scale: 1 })
+        return
+      }
+      const from = sidebar ? { opacity: 0, x: 28 } : { opacity: 0, y: 12, scale: 0.97 }
+      gsap.fromTo(el, from, {
+        opacity: 1,
+        x: 0,
+        y: 0,
+        scale: 1,
+        duration: DUR.base,
+        clearProps: 'opacity,transform'
+      })
+    },
+    // 只依赖 visible（sidebar 故意不入 deps：切模式不重播入场）。
+    { dependencies: [visible] }
+  )
+
   // 容器：minimised → hidden（保状态、零 flow 占位 → FAB 显）；floating → fixed 右下卡片（脱流，不挤压）；
   // sidebar → 内嵌 flex 列（在 master-detail 行内挤压正文）+ 左缘可调宽。
   const wrapperClass = !visible
     ? 'hidden'
     : sidebar
-      ? cn(
-          'relative flex h-full min-h-0 shrink-0 flex-col border-l border-[var(--hairline)] bg-ink-1',
-          'animate-in fade-in slide-in-from-right-3 duration-200 motion-reduce:animate-none'
-        )
+      ? 'relative flex h-full min-h-0 shrink-0 flex-col border-l border-[var(--hairline)] bg-ink-1'
       : cn(
           'fixed bottom-5 right-5 z-40 flex h-[min(40rem,calc(100vh-7rem))] w-[min(28rem,calc(100vw-2.5rem))] flex-col',
-          'rounded-2xl border border-[var(--hairline)] bg-ink-1 shadow-[0_16px_48px_-16px_rgba(0,0,0,0.4)]',
-          'animate-in fade-in slide-in-from-bottom-2 duration-200 motion-reduce:animate-none'
+          'rounded-2xl border border-[var(--hairline)] bg-ink-1 shadow-[0_16px_48px_-16px_rgba(0,0,0,0.4)]'
         )
 
   return (

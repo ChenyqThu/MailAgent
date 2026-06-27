@@ -861,9 +861,17 @@
       "Thinking…",
       "Understanding your question…",
       "Searching your emails…",
+      "Skimming your inbox…",
+      "Checking senders and dates…",
       "Piecing together context…",
       "Connecting the dots…",
-      "Composing a reply…"
+      "Consulting the knowledge base…",
+      "Organizing thoughts…",
+      "Weighing the wording…",
+      "Distilling key points…",
+      "Composing a reply…",
+      "Refining the response…",
+      "Proofreading the details…"
     ]
   },
   "admin": {

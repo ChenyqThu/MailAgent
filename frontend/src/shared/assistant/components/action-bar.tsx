@@ -51,21 +51,20 @@ export function AssistantActionBar({
   inlineOnHover = false
 }: {
   className?: string
-  /** dogfood round-5 — agent view renders the bar INLINE on hover (the demo idiom): a non-last
-   *  message's bar occupies a reserved row, hidden by default, revealed on hover with the SAME inline
-   *  style as the last message's — NO floating pill (border + shadow). Setting this drops
-   *  `autohideFloat`, so the non-last hover status resolves to "normal" (inline) instead of "floating".
-   *  The email panel omits it → autohideFloat='single-branch' stays (byte-identical to before). */
+  /** dogfood round-6 — agent view: the bar ALWAYS renders (no autohide mount/unmount) and reveals via
+   *  OPACITY, so its geometry never changes → zero layout shift on hover (round-5 still used assistant-ui
+   *  autohide which mounts/unmounts the element → the "布局位置跳变" the user reported). The last message's
+   *  bar is always visible; a non-last message's bar is opacity-0 until the message row is hovered. SAME
+   *  inline style for both (no floating pill). The email panel omits this prop → the legacy autohide +
+   *  float-pill path (byte-identical to before). */
   inlineOnHover?: boolean
 }): React.JSX.Element {
   const { t } = useTranslation()
-  return (
-    <ActionBarPrimitive.Root
-      hideWhenRunning
-      autohide="not-last"
-      {...(inlineOnHover ? {} : { autohideFloat: 'single-branch' as const })}
-      className={cn('flex items-center gap-1 pt-1 text-ink-fg-2', className)}
-    >
+  // isLast drives the always-visible-vs-hover-reveal split (inlineOnHover path only). Called
+  // unconditionally to satisfy the hooks rule; the legacy path simply ignores it.
+  const isLast = useMessage().isLast
+  const buttons = (
+    <>
       <ActionBarPrimitive.Copy
         className={ACTION_BTN}
         aria-label={t('chat.messageActions.copy', { defaultValue: 'Copy' })}
@@ -84,6 +83,32 @@ export function AssistantActionBar({
         <RotateCcw size={13} strokeWidth={2} />
       </ActionBarPrimitive.Reload>
       <KosSaveButton />
+    </>
+  )
+  if (inlineOnHover) {
+    return (
+      <ActionBarPrimitive.Root
+        hideWhenRunning
+        className={cn(
+          'flex items-center gap-1 pt-1 text-ink-fg-2 transition-opacity duration-fast',
+          isLast
+            ? 'opacity-100'
+            : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100',
+          className
+        )}
+      >
+        {buttons}
+      </ActionBarPrimitive.Root>
+    )
+  }
+  return (
+    <ActionBarPrimitive.Root
+      hideWhenRunning
+      autohide="not-last"
+      autohideFloat="single-branch"
+      className={cn('flex items-center gap-1 pt-1 text-ink-fg-2', className)}
+    >
+      {buttons}
     </ActionBarPrimitive.Root>
   )
 }

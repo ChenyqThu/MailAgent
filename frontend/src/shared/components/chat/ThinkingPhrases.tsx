@@ -10,7 +10,8 @@ import { useTranslation } from 'react-i18next'
 import { useReducedMotion } from '@shared/hooks/useReducedMotion'
 import { ShimmerText } from '@shared/components/ShimmerText'
 
-const CYCLE_MS = 2600
+// 用户反馈：轮换时间加长 ≥+50%（2600 → 4000ms），让每句流光看得更从容。
+const CYCLE_MS = 4000
 
 export function ThinkingPhrases(): React.ReactElement {
   const { t } = useTranslation()

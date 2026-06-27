@@ -243,8 +243,15 @@ export function AgentConversation({
   const [emailContext, setEmailContext] = useState<{ internalId: number; subject: string } | null>(
     null
   )
-  const emailContextResolvedRef = useRef(false)
-  const onRemoveEmailContext = useCallback((): void => setEmailContext(null), [])
+  // Track the email id whose chip the user explicitly removed, so the reactive seed below doesn't re-add
+  // it — but switching to a DIFFERENT email re-offers its context.
+  const emailContextRemovedRef = useRef<number | null>(null)
+  const onRemoveEmailContext = useCallback((): void => {
+    setEmailContext((cur) => {
+      if (cur) emailContextRemovedRef.current = cur.internalId
+      return null
+    })
+  }, [])
   const onAddMention = useCallback((hit: SearchHit): void => {
     setMentions((cur) => (cur.some((m) => m.internal_id === hit.internal_id) ? cur : [...cur, hit]))
   }, [])
@@ -327,12 +334,22 @@ export function AgentConversation({
     return `${emailContextBlock}${attachmentContext}${mentionContext}`
   }, [buildEmailContextBlock, buildMentionContext, mentions, attachments])
 
-  // assistant-modal P5 — resolve the modal's default email context once on mount (fetch the subject for
-  // the chip; the body is fetched lazily at send in buildEmailContextBlock). Latched so a × removal isn't
-  // re-added. initialMentionEmailId is undefined for /sessions → no chip, no injection.
+  // assistant-modal — keep the modal's default email context pointing at the CURRENTLY active email while
+  // the chat is NEW/empty (user: 每次唤出默认带的是当前这封, not the previous one). Re-resolves whenever the
+  // active email changes; FREEZES once a conversation starts (activeSessionId set or messages exist) so the
+  // chip keeps reflecting that conversation's email; never re-adds an email the user explicitly removed
+  // (emailContextRemovedRef). /sessions passes no initialMentionEmailId → chip cleared, no injection.
+  const chatIsEmpty = chat.activeSessionId === null && chat.messages.length === 0
   useEffect(() => {
-    if (initialMentionEmailId == null || emailContextResolvedRef.current) return undefined
-    emailContextResolvedRef.current = true
+    if (initialMentionEmailId == null) {
+      // No active email (/sessions, or email deselected) → clear any stale chip so its body isn't injected.
+      // Effect-driven reset of derived state (same opt-in as the mount-once latches in this codebase).
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setEmailContext(null)
+      return undefined
+    }
+    if (!chatIsEmpty) return undefined
+    if (emailContextRemovedRef.current === initialMentionEmailId) return undefined
     let cancelled = false
     void (async () => {
       try {
@@ -346,7 +363,7 @@ export function AgentConversation({
     return (): void => {
       cancelled = true
     }
-  }, [initialMentionEmailId, mailApi])
+  }, [initialMentionEmailId, chatIsEmpty, mailApi])
 
   const composerControls = useMemo<ChatComposerControls>(
     () => ({

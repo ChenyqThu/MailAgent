@@ -392,10 +392,10 @@ export function InboxLayout(): React.ReactElement {
       {/* Sprint 17 — 旧 Sprint 5 fixed BatchActionBar 移除. floating bar
           (Sprint 12 设计, components/email/BatchActionBar.tsx) 由 EmailList
           portal 到 document.body, 不再需要在 chrome 这层 mount. */}
-      {/* assistant-modal P1/P2 — 正文右下 FAB 入口（最小化态）+ 展开后的 floating modal（两者 portal 到
-          body，FAB↔modal 由 useAIChatPanel.visible 互斥：visible 时 modal 显示、FAB 自隐）。flag-on only。 */}
+      {/* assistant-modal — 正文右下 FAB 入口（最小化态，portal 到 body）。⚠️ dock 本体只在 master-detail
+          行内渲染（见上 line ~390，sidebar 才能挤压正文）；这里**不再**第二次挂 AssistantChatModal——之前
+          重复挂载导致两个 dock + 两个 useGeneralChat，底部那个挂在 flex-col 根上撑满宽度把列表/正文顶没。 */}
       {isAssistantModalEnabled() && <ChatModalFab />}
-      {isAssistantModalEnabled() && <AssistantChatModal />}
       <StatusBar />
     </div>
   )

@@ -4857,7 +4857,8 @@ body:not([data-batch-mode='true']) .email-row .cb {
   top: 0;
   left: 0;
   white-space: nowrap;
-  color: rgb(var(--shimmer-hl, var(--c-ai)));
+  /* 用户反馈：思考/加载流光高光改用强调色（coral accent），不再用 AI 紫。neutral 仍切 ink-fg。 */
+  color: rgb(var(--shimmer-hl, var(--c-accent)));
   animation: shimmer-hi 1.4s linear infinite;
 }
 .shimmer-neutral { --shimmer-hl: var(--ink-fg); }
