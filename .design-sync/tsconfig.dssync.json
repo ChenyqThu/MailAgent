@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "baseUrl": "../frontend",
+    "paths": {
+      "@assistant-ui/react": ["../.design-sync/stubs/empty.mjs"],
+      "@assistant-ui/react-ai-sdk": ["../.design-sync/stubs/empty.mjs"],
+      "@assistant-ui/react-lexical": ["../.design-sync/stubs/empty.mjs"],
+      "@tiptap/react": ["../.design-sync/stubs/empty.mjs"],
+      "@tiptap/starter-kit": ["../.design-sync/stubs/empty.mjs"],
+      "@tiptap/extension-text-style": ["../.design-sync/stubs/empty.mjs"],
+      "streamdown": ["../.design-sync/stubs/empty.mjs"],
+      "ai": ["../.design-sync/stubs/empty.mjs"],
+      "zod": ["../.design-sync/stubs/empty.mjs"],
+      "@shared/format": ["src/shared/format/index.ts"],
+      "@shared/i18n": ["src/shared/i18n/index.ts"],
+      "@shared/*": ["src/shared/*"],
+      "@renderer/*": ["src/electron/renderer/*"]
+    }
+  }
+}

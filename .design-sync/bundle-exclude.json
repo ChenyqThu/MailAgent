@@ -1,0 +1,1 @@
+{"note":"Files excluded from the synth bundle. agents/primitives.tsx is an assistant-ui re-export barrel (stubbed) whose Switch export collides with ui/switch.tsx → ESM ambiguous star → Switch dropped from window.MailAgent. Recompute heavy/light split via .ds-sync/closure-analyze.mjs; consumed by .design-sync/overrides/source-kit.mjs.","excludeRelPaths":["agents/primitives.tsx"]}

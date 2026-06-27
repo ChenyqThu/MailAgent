@@ -1,0 +1,13 @@
+{
+  "pkg": "mailagent-frontend",
+  "projectId": "a5ade42b-8e2a-442f-a1fd-a44f3b59fbb1",
+  "globalName": "MailAgent",
+  "shape": "package",
+  "srcDir": "../../src/shared/components",
+  "cssEntry": "_ds_compiled.css",
+  "tsconfig": "../../../.design-sync/tsconfig.dssync.json",
+  "readmeHeader": ".design-sync/conventions.md",
+  "libOverrides": {
+    "source-kit.mjs": "exclude pure glue/barrel files (agents/primitives.tsx) from the synth bundle — its Switch re-export collides with ui/switch.tsx (ESM ambiguous star drops Switch from the global); list in .design-sync/bundle-exclude.json"
+  }
+}

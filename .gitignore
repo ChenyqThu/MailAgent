@@ -109,3 +109,10 @@ frontend/index-*.js
 
 # chat-panel P4: transient agent_eval run-output reports (run_baseline --compare/score)
 tests/agent_eval/baselines/*.report.*
+
+# design-sync (claude.ai/design) — staged converter, build output, machine state
+/.ds-sync/
+/ds-bundle/
+/.design-sync/.cache/
+/.design-sync/node_modules
+/.design-sync/learnings/
