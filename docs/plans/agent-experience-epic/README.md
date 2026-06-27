@@ -5,6 +5,8 @@
 > owner: chenyqThu
 > Trellis 跟踪任务：`06-23-agent-eval-memory-skill-assistant-ui-ai-sdk`（`.trellis/tasks/`，本地执行壳）
 > **本目录是这个大版本的权威 master plan（git-tracked，canonical）。**
+>
+> **✅ Chunk H cutover 已落（v0.20.0，2026-06-27）**：桌面端 `electron.vite.config.ts` 翻 master(`AI_SDK_NEW_SESSION_DEFAULT`) + `AGENT_VIEW` + `ASSISTANT_MODAL` 默认 `'1'`（CDP 验三 flag 默认开：embedded gateway 启动 + /sessions agent 视图 + "聊聊这封邮件" FAB）。**web（`vite.web.config.ts`）故意没翻**——留下一 phase。**cutover 后的代办**（web→ai-sdk / 06b 删 legacy / 完整 epic + harness 架构 review + 用户「核心调度层重构」框架 Mem0≠gbrain/user.md/SkillRegistry）→ [`next-phase-backlog.md`](./next-phase-backlog.md)。
 
 ---
 
