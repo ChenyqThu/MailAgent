@@ -172,4 +172,59 @@ describe('context injection — gateway system prompt', () => {
     await res.text()
     expect(captured.system).toBe('CUSTOM-LEGACY-SYSTEM')
   })
+
+  // ── M2 — query-recalled memory injected end-to-end through the gateway ──────────────────────────
+  test('M2 — retrieveMemory recalled block reaches the model system prompt (keyed on raw user text)', async () => {
+    const seenQueries: string[] = []
+    const captured = { system: null as string | null }
+    const cfg = baseCfg(capturingModel(captured), {
+      systemPromptProvider: () => ({ standingContext: '# AGENT\nfocused email agent' }),
+      retrieveMemory: async (query: string) => {
+        seenQueries.push(query)
+        return [{ id: 'm1', memory: 'User prefers terse Chinese' }]
+      }
+    })
+    const h = await start(cfg)
+    const res = await postChat(h.port, {
+      sessionId: null,
+      messages: [
+        { id: 'u1', role: 'user', parts: [{ type: 'text', text: 'what is my tone preference' }] }
+      ]
+    })
+    await res.text()
+    expect(seenQueries).toEqual(['what is my tone preference']) // recall keyed on the raw user text
+    expect(captured.system).toContain('UNTRUSTED_RECALLED_MEMORY_START')
+    expect(captured.system).toContain('User prefers terse Chinese')
+  })
+
+  test('M2 — no retrieveMemory → no recalled block (flag-off byte-level)', async () => {
+    const captured = { system: null as string | null }
+    const cfg = baseCfg(capturingModel(captured), {
+      systemPromptProvider: () => ({ standingContext: '# AGENT\nfocused' })
+      // retrieveMemory omitted → MAILAGENT_MEM0_RETRIEVAL off
+    })
+    const h = await start(cfg)
+    const res = await postChat(h.port, {
+      sessionId: null,
+      messages: [{ id: 'u1', role: 'user', parts: [{ type: 'text', text: 'hi' }] }]
+    })
+    await res.text()
+    expect(captured.system).not.toContain('UNTRUSTED_RECALLED_MEMORY_START')
+  })
+
+  test('M2 — retrieveMemory returns null (recall failed / timeout) → context-light, turn unbroken', async () => {
+    const captured = { system: null as string | null }
+    const cfg = baseCfg(capturingModel(captured), {
+      systemPromptProvider: () => ({ standingContext: '# AGENT\nfocused' }),
+      retrieveMemory: async () => null // simulate failure / timeout degrade
+    })
+    const h = await start(cfg)
+    const res = await postChat(h.port, {
+      sessionId: null,
+      messages: [{ id: 'u1', role: 'user', parts: [{ type: 'text', text: 'hi' }] }]
+    })
+    await res.text()
+    expect(captured.system).not.toContain('UNTRUSTED_RECALLED_MEMORY_START')
+    expect(captured.system).toContain('focused') // turn still ran with standing context
+  })
 })

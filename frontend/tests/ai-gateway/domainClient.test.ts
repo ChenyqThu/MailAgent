@@ -207,6 +207,24 @@ describe('MailAgentDomainClient — memory wire (M0, mirrors legacy http_platfor
     expect(calls[0].url).toContain('key=reply_language')
     expect(count).toBe(1)
   })
+
+  // ── M2 recall (mem0 store — independent from the agent_memory_kv methods above) ──
+  test('searchMemory → POST /chat/memory/search with {query} (limit omitted when absent)', async () => {
+    const { fetchImpl, calls } = recordingFetch(() =>
+      success({ memories: [{ id: 'm1', memory: 'terse', score: 0.8 }], count: 1 })
+    )
+    const out = await client(fetchImpl).searchMemory({ query: 'tone preference' })
+    expect(calls[0].method).toBe('POST')
+    expect(calls[0].url).toContain('/api/chat/memory/search')
+    expect(JSON.parse(calls[0].body as string)).toEqual({ query: 'tone preference' })
+    expect(out).toEqual({ memories: [{ id: 'm1', memory: 'terse', score: 0.8 }], count: 1 })
+  })
+
+  test('searchMemory → limit goes on the wire only when it is a real number', async () => {
+    const { fetchImpl, calls } = recordingFetch(() => success({ memories: [], count: 0 }))
+    await client(fetchImpl).searchMemory({ query: 'q', limit: 10 })
+    expect(JSON.parse(calls[0].body as string)).toEqual({ query: 'q', limit: 10 })
+  })
 })
 
 describe('MailAgentDomainClient — abort', () => {

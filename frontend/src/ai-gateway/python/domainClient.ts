@@ -520,4 +520,21 @@ export class MailAgentDomainClient {
       signal
     })
   }
+
+  /** M2 recall — fetch memories relevant to a query from the mem0 store. POST /chat/memory/search
+   *  {query, limit?}. Returns the projected memories; the caller (lifecycle retrieveMemory, on the
+   *  TTFT path) injects them into the system prompt as an untrusted block. INDEPENDENT from the
+   *  agent_memory_kv memory_* methods above — this hits the mem0 auto-extraction store, not the
+   *  explicit WAL. limit only goes on the wire when it is a real number. */
+  searchMemory(
+    input: { query: string; limit?: number },
+    signal?: AbortSignal
+  ): Promise<{ memories: Array<{ id: string; memory: string; score?: number }>; count: number }> {
+    const body: Record<string, unknown> = { query: input.query }
+    if (typeof input.limit === 'number') body.limit = input.limit
+    return this._req<{
+      memories: Array<{ id: string; memory: string; score?: number }>
+      count: number
+    }>('POST', '/chat/memory/search', { body, signal })
+  }
 }

@@ -20,7 +20,7 @@ import type { GatewayApprovalMode, GatewayToolAuditEntry } from './tools/types'
 import type { ToolApprovalRequestPayload } from './agui/interruptMapper'
 // 🔴 type-only — fully erased; the systemPrompt module (which imports the custom_api prompt
 // assembly) is never pulled into the main bundle when the gateway is off (Phase 02 invariant).
-import type { GatewaySystemPromptConfig } from './systemPrompt'
+import type { GatewaySystemPromptConfig, RetrievedMemory } from './systemPrompt'
 
 /** Phase 05 — what the AG-UI mirror passes the approval-request resolver: the accumulated tool call
  *  + the ai@6 approval id/signature. The Electron wrapper looks toolCallId up in the ApprovalGuard
@@ -96,6 +96,14 @@ export interface AiGatewayConfig {
    *  reply. Injected by the lifecycle ONLY when MAILAGENT_MEM0_CAPTURE is on; omitted (default) →
    *  no capture, byte-identical. */
   captureTurnMemory?: (turn: PersistTurnInput) => void
+  /** M2 — recall durable memories relevant to the current turn's query (mem0 vector search) to
+   *  inject into the system prompt. Called by prepareChatRun BEFORE streamText, so UNLIKE
+   *  captureTurnMemory this is ON the TTFT critical path. 🔴 CONTRACTED to never throw: the
+   *  implementation returns null on failure / timeout / empty (the Electron wrapper posts to serve-api
+   *  /chat/memory/search with a timeout and catches everything), so a slow / failed recall degrades
+   *  the turn to context-light rather than breaking it. Injected by the lifecycle ONLY when
+   *  MAILAGENT_MEM0_RETRIEVAL is on; omitted (default) → no recall, byte-identical. */
+  retrieveMemory?: (query: string) => Promise<RetrievedMemory[] | null>
   /** Build the LanguageModel for a model id. Injected by tests (mock model); the
    *  default wires @ai-sdk/anthropic + the normalized baseURL + apiKey. */
   createModel?: (modelId: string) => LanguageModel
