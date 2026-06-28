@@ -24,7 +24,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
-import { AlertCircle, ArrowLeft, ChevronDown, Loader2 } from 'lucide-react'
+import { AlertCircle, ArrowLeft, ChevronDown, Loader2, Trash2 } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
 import {
@@ -34,7 +34,6 @@ import {
   CheckCheckIcon,
   ChevronDownIcon,
   ChevronUpIcon,
-  DeleteIcon,
   LanguagesIcon,
   MapPinCheckIcon,
   MapPinIcon,
@@ -884,9 +883,9 @@ export function EmailToolbar({
         onClick={onArchive}
       />
       {/* 删除（收件箱语义 = 归档完成 flag→done，非物理删除；与上面 archive 的 IMAP MOVE
-          移文件夹区分）。delete 图标。 */}
+          移文件夹区分）。垃圾桶图标 Trash2（lucide 静态 — pqoqubbw 无垃圾桶动画版）。 */}
       <GhostBtn
-        icon={<DeleteIcon size={13} strokeWidth={2} />}
+        icon={<Trash2 size={13} strokeWidth={2} />}
         label={t('toolbar.delete', { defaultValue: '删除' })}
         showLabel={wantsLabels}
         hoverHint={t('toolbar.delete', { defaultValue: '删除' })}

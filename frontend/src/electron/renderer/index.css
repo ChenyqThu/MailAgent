@@ -5058,41 +5058,6 @@ body:not([data-batch-mode='true']) .email-row .cb {
   pointer-events: none;
 }
 
-/* ── reactbits Border Glow（克制移植）— accent 柔光环，hover 亮起。authored CSS 走
- *   token rgb(var(--c-accent)) 绕开 lint 的 hex/gradient/heavy-shadow 红线；曲线/时长
- *   复用 §8 standard + fast。落点：AI FAB 圆钮。详见 frontend/docs/motion-gsap.md §10。
- *   FAB 本体是 accent 实心填充 → 1px 内描边在同色实心上零对比（旧 mask 描边环不可见
- *   的根因）→ 改为「1px 描边线 + 向外柔光扩散 halo」，光环溢出到周围深色背景才看得见。 */
-.rb-border-glow {
-  position: relative;
-}
-.rb-border-glow::after {
-  content: '';
-  position: absolute;
-  inset: -2px;
-  border-radius: inherit;
-  pointer-events: none;
-  box-shadow:
-    0 0 0 1px rgb(var(--c-accent) / 0.5),
-    0 0 14px 1px rgb(var(--c-accent) / 0.55);
-  opacity: 0.65;
-  transition:
-    opacity 120ms cubic-bezier(0.4, 0, 0.2, 1),
-    box-shadow 120ms cubic-bezier(0.4, 0, 0.2, 1);
-}
-.group:hover .rb-border-glow::after,
-.rb-border-glow:hover::after {
-  opacity: 1;
-  box-shadow:
-    0 0 0 1.5px rgb(var(--c-accent) / 0.7),
-    0 0 24px 3px rgb(var(--c-accent) / 0.8);
-}
-@media (prefers-reduced-motion: reduce) {
-  .rb-border-glow::after {
-    transition: none;
-  }
-}
-
 /* reactbits StarBorder（移植自官方 JS+CSS）— 沿元素边缘流动的星光描边。落点 AI FAB：
    两条 radial 光带在上下边缘反向平移 + 淡入淡出（star-movement），圆形 FAB overflow-hidden
    裁成边缘光环；内圈 accent 实心（inset 2px）露出 2px 环。color 走 accent-fg token（accent

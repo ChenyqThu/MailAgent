@@ -223,10 +223,12 @@ function AssistantChatModalInner(): React.JSX.Element {
   const wrapperClass = !visible
     ? 'hidden'
     : sidebar
-      ? 'relative flex h-full min-h-0 shrink-0 flex-col border-l border-[var(--hairline)] bg-ink-1'
+      ? // 侧边态：与 AIChatPanel 一致用 glass-panel（侧面板玻璃），不再孤立 bg-ink-1
+        'relative flex h-full min-h-0 shrink-0 flex-col border-l border-[var(--hairline)] glass-panel'
       : cn(
           'fixed bottom-5 right-5 z-40 flex h-[min(40rem,calc(100vh-7rem))] w-[min(28rem,calc(100vw-2.5rem))] flex-col',
-          'rounded-2xl border border-[var(--hairline)] bg-ink-1 shadow-[0_16px_48px_-16px_rgba(0,0,0,0.4)]'
+          // 浮窗态：用 glass-pop（带 blur 的浮层玻璃，与 popover/menu 同档），保留圆角 + 投影
+          'rounded-2xl glass-pop shadow-[0_16px_48px_-16px_rgba(0,0,0,0.4)]'
         )
 
   return (
