@@ -15,7 +15,6 @@
 // Tailwind purge. Do NOT replace with Tailwind utilities.
 
 import { cloneElement, isValidElement, useRef, useState } from 'react'
-import { motion, useReducedMotion } from 'motion/react'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate, useRouterState } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
@@ -33,6 +32,7 @@ import {
 import { cn } from '@shared/lib/cn'
 import {
   ActivityIcon,
+  AnimatedIconActiveProvider,
   CalendarDaysIcon,
   CircleHelpIcon,
   HistoryIcon,
@@ -125,9 +125,10 @@ function NavRow({
   title,
   collapsedBadge
 }: NavRowProps): React.ReactElement {
-  // reduce 时不挂 motion whileHover —— 无 hover 传播源, AnimatedIcon 停在 normal
-  // 静止态（等价旧 lucide-react）。详见 components/icons/AnimatedIcon.tsx + §10。
-  const reduce = useReducedMotion()
+  // 整行 hover/focus 经 AnimatedIconActiveProvider（zero-DOM Context）驱动行内
+  // AnimatedIcon 播放/复位 —— 不靠脆弱的 motion variant 传播（根因见
+  // components/icons/AnimatedIcon.tsx 顶部复盘）。reduce 降级统一在 IconShell 内处理。
+  const [iconActive, setIconActive] = useState(false)
   // Disabled rows render as a non-interactive <div> per DESIGN.md §9.4 —
   // opacity-50 + cursor-not-allowed, no hover bg, no keyboard focus, no
   // `.row-selected` capability. Screenreaders announce aria-disabled.
@@ -152,11 +153,13 @@ function NavRow({
   }
   return maybeWrapTip(
     title,
-    <motion.button
+    <button
       type="button"
       onClick={onClick}
-      initial="normal"
-      {...(reduce ? {} : { whileHover: 'animate' as const })}
+      onPointerEnter={() => setIconActive(true)}
+      onPointerLeave={() => setIconActive(false)}
+      onFocus={() => setIconActive(true)}
+      onBlur={() => setIconActive(false)}
       className={cn(
         'row relative w-full flex items-center gap-2.5 px-2 py-1 rounded-md',
         'text-body text-left transition-colors duration-fast',
@@ -167,11 +170,13 @@ function NavRow({
           : 'text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg active:bg-ink-4'
       )}
     >
-      {renderIcon(icon)}
+      <AnimatedIconActiveProvider active={iconActive}>
+        {renderIcon(icon)}
+      </AnimatedIconActiveProvider>
       {collapsedBadgeNode(collapsedBadge)}
       <span className="flex-1 truncate">{label}</span>
       {right && <span className="shrink-0">{right}</span>}
-    </motion.button>
+    </button>
   )
 }
 

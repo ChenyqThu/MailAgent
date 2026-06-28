@@ -15,7 +15,14 @@ import { useTranslation } from 'react-i18next'
 import { Globe, Palette, Plug, User } from 'lucide-react'
 
 import { TabsList, TabsTrigger } from '@shared/components/ui/tabs'
-import { BellIcon, BotIcon, RadioIcon, RefreshCwIcon, WifiIcon } from '@shared/components/icons'
+import {
+  AnimatedIconActiveProvider,
+  BellIcon,
+  BotIcon,
+  RadioIcon,
+  RefreshCwIcon,
+  WifiIcon
+} from '@shared/components/icons'
 import { useUpdaterStore } from '@shared/state/updater'
 
 interface TabEntry {
@@ -38,6 +45,37 @@ const TAB_ORDER: TabEntry[] = [
   { value: 'remote', Icon: Globe, labelKey: 'settings.tabs.remote' },
   { value: 'island', Icon: RadioIcon, labelKey: 'settings.tabs.island' }
 ]
+
+/** 单个设置 tab —— 整个 TabsTrigger（含文字区）作为 hover/focus 触发面，经
+ *  AnimatedIconActiveProvider 把激活态下发给 tab 图标，解决旧版「只有 hover 到
+ *  14px 图标本身才触发」的问题。静态 lucide 图标（Palette/User/Plug/Globe）在
+ *  Provider 内不读 context，无副作用。 */
+function SettingsTabTrigger({
+  value,
+  Icon,
+  label
+}: {
+  value: string
+  Icon: React.ComponentType<{ size?: number; strokeWidth?: number; className?: string }>
+  label: string
+}): React.ReactElement {
+  const [iconActive, setIconActive] = React.useState(false)
+  return (
+    <TabsTrigger
+      value={value}
+      className="shrink-0 md:w-full"
+      onPointerEnter={() => setIconActive(true)}
+      onPointerLeave={() => setIconActive(false)}
+      onFocus={() => setIconActive(true)}
+      onBlur={() => setIconActive(false)}
+    >
+      <AnimatedIconActiveProvider active={iconActive}>
+        <Icon size={14} strokeWidth={2} className="shrink-0" />
+      </AnimatedIconActiveProvider>
+      <span className="truncate">{label}</span>
+    </TabsTrigger>
+  )
+}
 
 export function SettingsRail(): React.ReactElement {
   const { t } = useTranslation()
@@ -65,10 +103,12 @@ export function SettingsRail(): React.ReactElement {
             修复 rail +20px 后 active bg 仍贴左半边的视觉. */}
         <TabsList className="flex flex-row md:flex-col items-stretch gap-px bg-transparent p-0 w-full">
           {TAB_ORDER.map(({ value, Icon, labelKey }) => (
-            <TabsTrigger key={value} value={value} className="shrink-0 md:w-full">
-              <Icon size={14} strokeWidth={2} className="shrink-0" />
-              <span className="truncate">{t(labelKey, { defaultValue: value })}</span>
-            </TabsTrigger>
+            <SettingsTabTrigger
+              key={value}
+              value={value}
+              Icon={Icon}
+              label={t(labelKey, { defaultValue: value })}
+            />
           ))}
         </TabsList>
       </div>
