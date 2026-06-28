@@ -278,8 +278,10 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     // Factory: the gateway builds the tools per request bound to a fresh audit collector
     // (closure). Read tools always; the five approval-gated write tools only when
     // MAILAGENT_AI_SDK_WRITE_TOOLS is on (Phase 06a: default follows the cutover master; vitest /
-    // no-define → off → byte-identical to 03a read-only).
-    buildTools: (collector) =>
+    // no-define → off → byte-identical to 03a read-only). `approvalMode` (PART 2) comes from the
+    // request body (default 'always'); 'auto-reversible' lets reversible preview writes skip the
+    // card. The blocking send always asks regardless (safety floor in auditedSendTool).
+    buildTools: (collector, approvalMode) =>
       buildGatewayTools(
         {
           domain,
@@ -295,7 +297,9 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
           // NEW_SESSION_DEFAULT master (like write/send) so the desktop default runtime can read /
           // write durable user facts again; an explicit MAILAGENT_AI_SDK_MEMORY_TOOLS wins
           // (independent rollback). memory_write/delete bind to the same approvalGuard.
-          memoryToolsEnabled: envBool('MAILAGENT_AI_SDK_MEMORY_TOOLS', masterNewSessionDefaultOn())
+          memoryToolsEnabled: envBool('MAILAGENT_AI_SDK_MEMORY_TOOLS', masterNewSessionDefaultOn()),
+          // PART 2 — auto-approval mode from the request body (default 'always' when absent).
+          approvalMode
         },
         collector
       ),

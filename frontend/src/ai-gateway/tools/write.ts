@@ -23,7 +23,7 @@ import type { z } from 'zod'
 
 import { DomainError, type MailAgentDomainClient } from '../python/domainClient'
 import type { ApprovalGuard, ApprovalRisk } from '../security/approval'
-import { auditedWriteTool, type GatewayToolAuditCollector } from './types'
+import { auditedWriteTool, type GatewayApprovalMode, type GatewayToolAuditCollector } from './types'
 import {
   emailArchiveSchema,
   emailDraftReplySchema,
@@ -60,7 +60,7 @@ export function createWriteTools(
   domain: MailAgentDomainClient,
   collector: GatewayToolAuditCollector = [],
   guard: ApprovalGuard,
-  opts: { a2uiEnabled?: boolean } = {}
+  opts: { a2uiEnabled?: boolean; approvalMode?: GatewayApprovalMode } = {}
 ): Record<string, Tool> {
   const make = <I>(toolOpts: {
     name: string
@@ -74,7 +74,12 @@ export function createWriteTools(
       input: I,
       ctx: { userEdited: boolean; signal: AbortSignal | undefined }
     ) => Promise<unknown>
-  }): Tool => auditedWriteTool({ ...toolOpts, a2uiEnabled: opts.a2uiEnabled }, collector, guard)
+  }): Tool =>
+    auditedWriteTool(
+      { ...toolOpts, a2uiEnabled: opts.a2uiEnabled, approvalMode: opts.approvalMode },
+      collector,
+      guard
+    )
 
   const email_flag = make({
     name: 'email_flag',

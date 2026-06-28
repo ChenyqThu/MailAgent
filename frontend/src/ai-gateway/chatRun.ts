@@ -23,7 +23,7 @@ import {
 
 import { anthropicBaseUrl, type AiGatewayConfig, type PersistTurnInput } from './config'
 import { createAnthropic } from '@ai-sdk/anthropic'
-import type { GatewayToolAuditEntry } from './tools/types'
+import type { GatewayApprovalMode, GatewayToolAuditEntry } from './tools/types'
 import type { MailAgentUIMessage } from '@shared/assistant/uiMessage'
 // chat-panel P4 composer-parity C1-① — per-turn extended-thinking → @ai-sdk/anthropic providerOptions.
 import { thinkingProviderOptions } from './thinking'
@@ -198,8 +198,13 @@ export async function prepareChatRun(
   // hash + expiry across the two HTTP calls of an approval round-trip (security/approval.ts), and the
   // high-risk send path keeps its own Python-side double guard. So removing the AI SDK secret weakens
   // nothing that actually gates a write.
+  // Auto-approval mode (PART 2) — body.approvalMode threads into the write/memory tools'
+  // needsApproval. Only the two recognized values are honored; anything else (incl. absent) →
+  // 'always', so a malformed body never silently relaxes approval (byte-identical to pre-toggle).
+  const approvalMode: GatewayApprovalMode =
+    body.approvalMode === 'auto-reversible' ? 'auto-reversible' : 'always'
   const auditEntries: GatewayToolAuditEntry[] = []
-  const tools = cfg.buildTools?.(auditEntries)
+  const tools = cfg.buildTools?.(auditEntries, approvalMode)
   const hasTools = tools != null && Object.keys(tools).length > 0
 
   const result = streamText({

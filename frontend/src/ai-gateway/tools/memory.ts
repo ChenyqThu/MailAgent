@@ -37,7 +37,12 @@ import type { z } from 'zod'
 
 import type { ApprovalGuard } from '../security/approval'
 import { DomainError, type MailAgentDomainClient } from '../python/domainClient'
-import { auditedReadTool, auditedWriteTool, type GatewayToolAuditCollector } from './types'
+import {
+  auditedReadTool,
+  auditedWriteTool,
+  type GatewayApprovalMode,
+  type GatewayToolAuditCollector
+} from './types'
 import { memoryDeleteSchema, memoryGetSchema, memoryListSchema, memoryWriteSchema } from './schemas'
 
 /** Names of the memory tools the gateway exposes when MAILAGENT_AI_SDK_MEMORY_TOOLS is on. */
@@ -82,7 +87,7 @@ export function createMemoryTools(
   domain: MailAgentDomainClient,
   collector: GatewayToolAuditCollector = [],
   guard: ApprovalGuard,
-  opts: { a2uiEnabled?: boolean } = {}
+  opts: { a2uiEnabled?: boolean; approvalMode?: GatewayApprovalMode } = {}
 ): Record<string, Tool> {
   const makeRead = <I>(o: {
     name: string
@@ -100,7 +105,11 @@ export function createMemoryTools(
       ctx: { userEdited: boolean; signal: AbortSignal | undefined }
     ) => Promise<unknown>
   }): Tool =>
-    auditedWriteTool({ ...o, risk: 'preview', a2uiEnabled: opts.a2uiEnabled }, collector, guard)
+    auditedWriteTool(
+      { ...o, risk: 'preview', a2uiEnabled: opts.a2uiEnabled, approvalMode: opts.approvalMode },
+      collector,
+      guard
+    )
 
   const memory_list = makeRead({
     name: 'memory_list',

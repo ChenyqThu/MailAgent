@@ -19,7 +19,7 @@ import { createReportReadTools } from './report'
 import { createWriteTools } from './write'
 import { createSendTools } from './send'
 import { createMemoryTools } from './memory'
-import type { GatewayToolAuditCollector } from './types'
+import type { GatewayApprovalMode, GatewayToolAuditCollector } from './types'
 
 export interface BuildGatewayToolsOpts {
   domain: MailAgentDomainClient
@@ -50,6 +50,11 @@ export interface BuildGatewayToolsOpts {
    *  only registered when the guard is present. Off (default) → no memory tools, byte-identical to
    *  the cutover tool set. Independent of writeToolsEnabled (memory has its own flag/rollback). */
   memoryToolsEnabled?: boolean
+  /** Auto-approval mode (body.approvalMode, default 'always'). 'auto-reversible' lets reversible
+   *  preview-tier writes (flag/archive/pin/resync + memory write/delete) execute without a card;
+   *  edit-tier + the blocking send still ask. Threaded into the write + memory tools' needsApproval.
+   *  Absent / 'always' → every write asks (current behaviour, byte-identical). */
+  approvalMode?: GatewayApprovalMode
 }
 
 /** Names of the read tools exposed by the gateway (for tests / observability). */
@@ -85,7 +90,8 @@ export function buildGatewayTools(
     Object.assign(
       tools,
       createMemoryTools(opts.domain, collector, opts.approvalGuard, {
-        a2uiEnabled: opts.a2uiEnabled
+        a2uiEnabled: opts.a2uiEnabled,
+        approvalMode: opts.approvalMode
       })
     )
   }
@@ -96,7 +102,8 @@ export function buildGatewayTools(
     Object.assign(
       tools,
       createWriteTools(opts.domain, collector, opts.approvalGuard, {
-        a2uiEnabled: opts.a2uiEnabled
+        a2uiEnabled: opts.a2uiEnabled,
+        approvalMode: opts.approvalMode
       })
     )
     // phase-04b — the high-risk send tool layers on top of the write tools (it needs the same

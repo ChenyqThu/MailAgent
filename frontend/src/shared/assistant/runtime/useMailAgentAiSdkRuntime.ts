@@ -101,6 +101,11 @@ export interface UseMailAgentAiSdkRuntimeOptions {
   buildInjectedContext?: () => Promise<string>
   /** composer-parity C2 — clear the mention/attachment chips after their prefix was captured for a send. */
   onConsumeInjected?: () => void
+  /** PART 2 (auto-approval) — when 'auto-reversible' the request body carries approvalMode so the
+   *  gateway lets reversible preview-tier writes execute without an approval card (edit + blocking
+   *  send still ask). Omitted / 'always' → not sent (gateway defaults to 'always'), byte-identical
+   *  to the pre-toggle path. */
+  approvalMode?: 'always' | 'auto-reversible'
 }
 
 /** Per-thread session-id latch (held in a ref by the hook). `id` is the resolved session for this
@@ -149,7 +154,8 @@ export function useMailAgentAiSdkRuntime(opts: UseMailAgentAiSdkRuntimeOptions):
     onEnsureSession,
     thinking,
     buildInjectedContext,
-    onConsumeInjected
+    onConsumeInjected,
+    approvalMode
   } = opts
 
   // Phase 06a — per-thread session-id latch. Seeded from the sessionId prop (reload → an existing id;
@@ -197,6 +203,11 @@ export function useMailAgentAiSdkRuntime(opts: UseMailAgentAiSdkRuntimeOptions):
           ...(model ? { model } : {}),
           ...(system ? { system } : {}),
           ...(thinking ? { thinking: true } : {}),
+          // PART 2 — only send approvalMode when relaxing (auto-reversible); 'always'/absent omits it
+          // so the gateway default ('always') applies, byte-identical to the pre-toggle body.
+          // approvalMode is a transport useMemo dep (like `thinking`) — a settings change rebuilds the
+          // transport, which is fine: the user toggles this in Settings, not mid-stream.
+          ...(approvalMode === 'auto-reversible' ? { approvalMode } : {}),
           ...(injectedContext.length > 0 ? { injectedContext } : {}),
           ...(contextSnapshot ? { contextSnapshot } : {}),
           ...(anchor ? { anchor } : {}),
@@ -206,7 +217,7 @@ export function useMailAgentAiSdkRuntime(opts: UseMailAgentAiSdkRuntimeOptions):
     })
     // sessionId intentionally excluded from deps — owned by latchRef (see comment above).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gatewayBaseUrl, model, system, thinking, contextSnapshot, onEnsureSession])
+  }, [gatewayBaseUrl, model, system, thinking, approvalMode, contextSnapshot, onEnsureSession])
 
   return useChatRuntime({
     transport,

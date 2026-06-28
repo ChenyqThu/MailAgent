@@ -78,6 +78,15 @@ export interface GatewayToolAuditEntry {
  *  request and binds into the tools (closure). Drained in onFinish. */
 export type GatewayToolAuditCollector = GatewayToolAuditEntry[]
 
+/** Auto-approval mode threaded from the request body (body.approvalMode) → buildGatewayTools →
+ *  each write tool's needsApproval. Mirrors the renderer's @shared/lib/approvalMode.ApprovalMode
+ *  (a string union — no shared import, so the gateway core stays harness-testable / @shared-free).
+ *   - 'always'          (DEFAULT, absent body field) — every write tool asks (current behaviour).
+ *   - 'auto-reversible'                              — reversible preview-tier writes execute
+ *                                                     without a card; edit + blocking still ask.
+ *  🔴 The high-risk blocking send (auditedSendTool) IGNORES this and always asks (safety floor). */
+export type GatewayApprovalMode = 'always' | 'auto-reversible'
+
 /** True for an abort/cancel error — let it propagate untouched so the AI SDK
  *  treats the run as aborted (not as a tool error). */
 function isAbortError(e: unknown): boolean {
@@ -201,6 +210,11 @@ export function auditedWriteTool<I>(
     /** Phase 04a — stamp the A2UI render payload into the audit row (ui_payload_json) when
      *  MAILAGENT_A2UI_TOOL_CARDS is on. UI/audit only — never enters the model result. */
     a2uiEnabled?: boolean
+    /** Auto-approval mode (body.approvalMode, default 'always'). When 'auto-reversible' a
+     *  preview-tier (reversible) write skips the approval card and executes in the SAME call;
+     *  edit-tier still asks. The approval record is registered regardless (execute's verify +
+     *  the audit need it), so the only change is whether needsApproval returns true. */
+    approvalMode?: GatewayApprovalMode
     run: (
       input: I,
       ctx: { userEdited: boolean; signal: AbortSignal | undefined }
@@ -219,12 +233,19 @@ export function auditedWriteTool<I>(
   return makeTool({
     description: opts.description,
     inputSchema: opts.inputSchema,
-    // First run: register the approval record (keep-first) and require approval. The
-    // model never sees a write execute without the user approving it. (input/execute
-    // params are left unannotated so tool() infers INPUT=I from inputSchema alone — an
-    // explicit `: I` on these contravariant param sites breaks tool()'s overload inference.)
+    // First run: register the approval record (keep-first) ALWAYS — execute's guard.verify +
+    // the audit need it whether or not a card is shown. Then decide if a card is required:
+    //   - 'auto-reversible' + preview-tier (reversible) → return false → ai@6 runs execute in the
+    //     SAME call (no card). guard.verify still passes (record was registered; preview hash
+    //     matches the unchanged input) and the audit records approval_status='approved'.
+    //   - everything else (default 'always', or any edit-tier write) → return true → the two-call
+    //     HITL flow (approval card) as before. The model never sees a non-reversible write run
+    //     without the user approving it.
+    // (input/execute params are left unannotated so tool() infers INPUT=I from inputSchema alone —
+    // an explicit `: I` on these contravariant param sites breaks tool()'s overload inference.)
     needsApproval: (input, { toolCallId }) => {
       guard.register(toolCallId, opts.name, opts.risk, input, opts.editableFields)
+      if (opts.approvalMode === 'auto-reversible' && opts.risk === 'preview') return false
       return true
     },
     execute: async (input, { toolCallId, abortSignal }) => {
@@ -347,6 +368,10 @@ export function auditedSendTool<I>(
   return makeTool({
     description: opts.description,
     inputSchema: opts.inputSchema,
+    // 🔴 The high-risk outbound send ALWAYS asks — it hard-returns true regardless of approvalMode
+    // ('auto-reversible' relaxes only reversible preview writes, never an irreversible send). This is
+    // the safety floor; auditedSendTool intentionally takes no approvalMode param so it can never be
+    // wired to skip approval.
     needsApproval: (input, { toolCallId }) => {
       guard.register(toolCallId, opts.name, RISK, input, opts.editableFields)
       return true

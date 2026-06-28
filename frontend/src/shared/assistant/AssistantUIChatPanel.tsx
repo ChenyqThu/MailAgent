@@ -38,6 +38,7 @@ import { ContextChips } from '@shared/components/chat/ContextChips'
 import { backendSupportsThinking } from '@shared/components/chat/backend_thinking'
 import { useEnabledModels } from '@shared/hooks/useLlmModels'
 import { buildAttachmentBlock, type ChatAttachment } from '@shared/lib/chat-attachments'
+import { useApprovalMode } from '@shared/lib/approvalMode'
 
 import { MailAgentRuntimeProvider } from './runtime/MailAgentRuntimeProvider'
 import { AiSdkRuntimeProvider } from './runtime/AiSdkRuntimeProvider'
@@ -231,6 +232,9 @@ export function AssistantUIChatPanel({
   }, [])
   const thinkingSupported = backendSupportsThinking(backend)
   const thinkingActive = thinkingSupported && thinkingEnabled
+  // PART 2 — auto-approval mode (Settings → AI). Threaded into the ai-sdk runtime body so reversible
+  // preview-tier writes can skip the approval card in 'auto-reversible'; default 'always' = unchanged.
+  const approvalMode = useApprovalMode()
   const { models: availableModels } = useEnabledModels()
   const onModelChange = useCallback(
     (m: string): void => {
@@ -853,6 +857,7 @@ export function AssistantUIChatPanel({
                         sessionId={chat.activeSessionId}
                         model={backend.model}
                         thinking={thinkingActive}
+                        approvalMode={approvalMode}
                         buildInjectedContext={buildInjectedContext}
                         onConsumeInjected={onConsumeInjected}
                         contextSnapshot={contextSnapshot}

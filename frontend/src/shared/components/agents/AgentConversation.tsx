@@ -34,6 +34,7 @@ import { backendSupportsThinking } from '@shared/components/chat/backend_thinkin
 import { useEnabledModels } from '@shared/hooks/useLlmModels'
 import { buildAttachmentBlock, type ChatAttachment } from '@shared/lib/chat-attachments'
 import { readAutoTitleSettings } from '@shared/lib/autoTitle'
+import { useApprovalMode } from '@shared/lib/approvalMode'
 
 import { MailAgentRuntimeProvider } from '@shared/assistant/runtime/MailAgentRuntimeProvider'
 import { AiSdkRuntimeProvider } from '@shared/assistant/runtime/AiSdkRuntimeProvider'
@@ -435,6 +436,9 @@ export function AgentConversation({
     panelMode: 'fullscreen',
     enabled: contextInjectionOn
   })
+  // PART 2 — auto-approval mode (Settings → AI). Threaded into the ai-sdk runtime body so reversible
+  // preview-tier writes can skip the approval card in 'auto-reversible'; default 'always' = unchanged.
+  const approvalMode = useApprovalMode()
   // Session reload: seed the ai-sdk runtime with the active session's prior messages once they reflect
   // it (messagesSessionId gate). Empty matters — a freshly-adopted session has 0 rows and `:new` keying.
   const reloadMessagesReady =
@@ -654,6 +658,7 @@ export function AgentConversation({
               sessionId={chat.activeSessionId}
               model={model}
               thinking={thinkingActive}
+              approvalMode={approvalMode}
               buildInjectedContext={buildInjectedContext}
               onConsumeInjected={onConsumeInjected}
               contextSnapshot={contextSnapshot}

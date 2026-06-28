@@ -37,6 +37,7 @@ import {
   writeAutoTitleModel,
   type AutoTitleMode
 } from '@shared/lib/autoTitle'
+import { readApprovalMode, writeApprovalMode, type ApprovalMode } from '@shared/lib/approvalMode'
 
 import { PageHeader } from '../parts/PageHeader'
 import { Section } from '../parts/Section'
@@ -62,6 +63,12 @@ export function AiTab(): React.ReactElement {
   const [autoTitleModel, setAutoTitleModel] = React.useState<string>(
     () => readAutoTitleSettings().model
   )
+
+  // PART 2 — auto-approval mode (renderer-local localStorage; default 'always' = every write asks).
+  // 'auto-reversible' lets reversible preview-tier writes (flag/archive/pin/resync/memory) run without
+  // a confirmation card; edit-tier (draft reply) + the irreversible send ALWAYS ask. Only the desktop
+  // ai-sdk gateway path acts on it (rides the chat body).
+  const [approvalMode, setApprovalMode] = React.useState<ApprovalMode>(() => readApprovalMode())
 
   // dynamic-models (main provider — for LLM_MODEL / LLM_FALLBACK_MODELS / enabled list)
   const {
@@ -583,6 +590,30 @@ export function AiTab(): React.ReactElement {
             </Select>
           </Row>
         )}
+      </Section>
+
+      <Section
+        title={t('settings.ai.approval.title', { defaultValue: 'Agent 操作审批' })}
+        helper={t('settings.ai.approval.helper', {
+          defaultValue: 'Agent 执行写操作前是否需要逐个确认。发送邮件等不可逆操作始终需要确认。'
+        })}
+      >
+        <Row
+          label={t('settings.ai.approval.autoReversibleLabel', { defaultValue: '可逆操作免确认' })}
+          helper={t('settings.ai.approval.autoReversibleHelper', {
+            defaultValue:
+              '开启后，标记 / 归档 / 置顶 / 重传 Notion / 记忆读写等可逆操作直接执行，无需确认卡片；起草回复仍需确认，发送邮件（不可逆）始终需要确认。'
+          })}
+        >
+          <Switch
+            checked={approvalMode === 'auto-reversible'}
+            onCheckedChange={(checked) => {
+              const next: ApprovalMode = checked ? 'auto-reversible' : 'always'
+              setApprovalMode(next)
+              writeApprovalMode(next)
+            }}
+          />
+        </Row>
       </Section>
 
       <CustomAiSection />

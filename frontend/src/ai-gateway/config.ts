@@ -14,7 +14,7 @@ import type { MailAgentUIMessage } from '@shared/assistant/uiMessage'
 // tools/types (which DOES import `tool` from 'ai'). index.ts statically imports
 // config.ts for resolveAiGatewayPort; this must never pull the heavy `ai` chunk into
 // the main bundle when MAILAGENT_AI_SDK_GATEWAY is off (Phase 02 invariant).
-import type { GatewayToolAuditEntry } from './tools/types'
+import type { GatewayApprovalMode, GatewayToolAuditEntry } from './tools/types'
 // 🔴 type-only imports — fully erased (same discipline as GatewayToolAuditEntry above), so the
 // AG-UI mirror types never pull the `ai` chunk into the main bundle when the gateway is off.
 import type { ToolApprovalRequestPayload } from './agui/interruptMapper'
@@ -98,8 +98,12 @@ export interface AiGatewayConfig {
    *  stopWhen }), and drains the collector into chat_tool_call in onFinish. Bound by
    *  closure (NOT streamText experimental_context — see tools/types.ts) so audit is
    *  robust + directly testable. Omitted / empty result → text-only (Phase 02
-   *  behaviour, byte-identical). */
-  buildTools?: (collector: GatewayToolAuditEntry[]) => ToolSet
+   *  behaviour, byte-identical).
+   *
+   *  `approvalMode` (from body.approvalMode, default 'always') controls whether reversible
+   *  preview-tier writes skip the approval card ('auto-reversible') or always ask ('always');
+   *  the blocking send always asks regardless. Absent → 'always' (byte-identical to pre-toggle). */
+  buildTools?: (collector: GatewayToolAuditEntry[], approvalMode?: GatewayApprovalMode) => ToolSet
   /** Max tool-loop steps (stopWhen: stepCountIs). Default 8 (legacy AGENT_MAX_ITER). */
   maxSteps?: number
   /** Phase 04a — apply a UI edit to a pending edit-tier approval (POST /api/ai/approval/resolve).
