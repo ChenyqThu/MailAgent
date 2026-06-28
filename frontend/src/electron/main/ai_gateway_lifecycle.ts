@@ -141,6 +141,12 @@ async function pollHealth(port: number, attempts = 10): Promise<boolean> {
 // the gateway degrades to context-light (SOUL fallback) rather than breaking the turn — this
 // provider is CONTRACTED to never throw (chatRun trusts it returns null on failure).
 const CONTEXT_CONFIG_TTL_MS = 15_000
+
+// M2 — query 相关性召回（MAILAGENT_MEM0_RETRIEVAL）。top-k=10（引擎默认，用户拍板）。5s 超时
+// 兜底首次 fastembed ONNX 冷加载（本地 bge+faiss 召回常 <100ms；首次慢一次，超时则该 turn
+// context-light）。召回在 TTFT 关键路径 → 超时 = 「冷加载绝不卡死整个 chat」的硬保护。
+const MEM0_RETRIEVAL_TOP_K = 10
+const MEM0_RETRIEVAL_TIMEOUT_MS = 5_000
 let _systemPromptCache: { at: number; value: GatewaySystemPromptConfig | null } | null = null
 
 async function getSystemPromptConfig(
@@ -255,6 +261,29 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
             .catch((err) => {
               console.error('[ai-gateway] auto-capture post failed (turn streamed OK)', err)
             })
+        }
+      : undefined,
+    // M2 — query 相关性召回注入（MAILAGENT_MEM0_RETRIEVAL，默认关）。开时注入回调：用末条 user
+    // 文本向 mem0 store 召回 top-k 相关记忆，gateway 在 streamText 前 await 它注入 system prompt。
+    // 🔴 区别于 captureTurnMemory（fire-and-forget）：召回在 TTFT 关键路径 → 契约 never-throw：
+    // 失败/超时/空都返回 null → context-light（gateway 不注入 memory block，chat 照跑），绝不让召回
+    // 慢/失败阻断已开始的 turn。5s 超时兜底首次 fastembed 冷加载。关时 undefined → prepareChatRun
+    // 不召回 → system prompt 字节级同现在（flag-off）。纯后端注入（renderer 无感，无 UI gate）→ 此
+    // flag 只用 main 进程 env，不需 vite define（与 capture 同，区别于 AGENT_VIEW 等 renderer 直读 flag）。
+    retrieveMemory: envBool('MAILAGENT_MEM0_RETRIEVAL', false)
+      ? async (query: string) => {
+          try {
+            const data = await domain.searchMemory(
+              { query, limit: MEM0_RETRIEVAL_TOP_K },
+              AbortSignal.timeout(MEM0_RETRIEVAL_TIMEOUT_MS)
+            )
+            return data.memories
+          } catch (err) {
+            // 召回失败/超时绝不阻断 chat（TTFT 路径红线）→ 降级 context-light（null → 不注入
+            // block）。记 warning 可观测（首次冷加载超时 / serve-api blip）。
+            console.warn('[ai-gateway] memory recall failed (turn runs context-light)', err)
+            return null
+          }
         }
       : undefined,
     // Phase 04a — apply an edit-tier UI edit to a pending approval (the resolve side-channel).
