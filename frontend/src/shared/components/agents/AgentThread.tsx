@@ -91,13 +91,16 @@ export function AgentThread({
           用户之前 deferred 的"首条消息上移 + 聚焦阅读"。scroll-smooth 给余下的 auto 滚动（ScrollToBottom 按钮）补平滑。 */}
       <ThreadPrimitive.Viewport
         turnAnchor="top"
-        className={cn(
-          'scrollbar-thin relative flex min-h-0 flex-1 flex-col overflow-y-auto scroll-smooth px-4 pt-4',
-          isEmpty && 'justify-center'
-        )}
+        className="scrollbar-thin relative flex min-h-0 flex-1 flex-col overflow-y-auto scroll-smooth px-4 pt-4"
       >
         <AuiIf condition={isNewChatView}>
-          <AgentWelcome align={welcomeAlign} />
+          {/* 空态 welcome 对齐 Strands 背景（top-0 h-[62%]）的垂直中心：包一层 min-h-[62%] +
+              justify-center → 文案落在丝线光晕中心，而非旧 justify-center 把 welcome+composer 整组
+              居中导致文案偏下（dogfood：欢迎文案上移）。agent 视图 / 浮窗 / 抽屉同走 AgentThread，
+              行为一致。 */}
+          <div className="flex min-h-[62%] shrink-0 flex-col justify-center">
+            <AgentWelcome align={welcomeAlign} />
+          </div>
         </AuiIf>
 
         <div className="mb-10 flex flex-col gap-y-5 empty:hidden">

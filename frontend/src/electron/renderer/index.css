@@ -5058,59 +5058,38 @@ body:not([data-batch-mode='true']) .email-row .cb {
   pointer-events: none;
 }
 
-/* reactbits StarBorder（移植自官方 JS+CSS）— 沿元素边缘流动的星光描边。落点 AI FAB：
-   两条 radial 光带在上下边缘反向平移 + 淡入淡出（star-movement），圆形 FAB overflow-hidden
-   裁成边缘光环；内圈 accent 实心（inset 2px）露出 2px 环。color 走 accent-fg token（accent
-   实心上的亮色对比，非裸 hex）；linear 平移非 spring（装饰循环动画同 .shimmer 范式）；reduce 关。 */
+/* reactbits StarBorder（圆形适配）— 官方双水平光带是为长条 button 设计的（光点沿长边扫过），
+   在 size-12 圆形 FAB 上扫光不可见（width 300% 光带被圆形裁掉、水平移动只在上下边缘闪一下）。
+   改为 conic-gradient 高光段绕圆心匀速旋转（rb-star-spin），内圈 accent 实心（inset 2px）盖住
+   中心、只露边缘 2px 环 → 一道 accent-fg 亮光沿圆环流动。color 走 accent-fg token（accent 实心
+   上的亮色对比，非裸 hex）；单向匀速旋转非 spring（装饰循环动画同 .shimmer 范式）；reduce 关。 */
 .rb-star-border {
   position: relative;
   overflow: hidden;
 }
-.rb-star-border::before,
-.rb-star-border::after {
+.rb-star-border::before {
   content: '';
   position: absolute;
-  width: 300%;
-  height: 50%;
-  border-radius: 50%;
-  opacity: 0.75;
+  inset: 0;
+  border-radius: inherit;
   pointer-events: none;
   z-index: 0;
-  background: radial-gradient(circle, rgb(var(--c-accent-fg) / 0.9), transparent 12%);
+  background: conic-gradient(
+    from 0deg,
+    transparent 0deg,
+    transparent 215deg,
+    rgb(var(--c-accent-fg) / 0.95) 312deg,
+    transparent 360deg
+  );
+  animation: rb-star-spin 3.2s linear infinite;
 }
-.rb-star-border::after {
-  bottom: -11px;
-  right: -250%;
-  animation: rb-star-movement-bottom 5s linear infinite alternate;
-}
-.rb-star-border::before {
-  top: -11px;
-  left: -250%;
-  animation: rb-star-movement-top 5s linear infinite alternate;
-}
-@keyframes rb-star-movement-bottom {
-  0% {
-    transform: translate(0, 0);
-    opacity: 1;
-  }
-  100% {
-    transform: translate(-100%, 0);
-    opacity: 0;
-  }
-}
-@keyframes rb-star-movement-top {
-  0% {
-    transform: translate(0, 0);
-    opacity: 1;
-  }
-  100% {
-    transform: translate(100%, 0);
-    opacity: 0;
+@keyframes rb-star-spin {
+  to {
+    transform: rotate(360deg);
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .rb-star-border::before,
-  .rb-star-border::after {
+  .rb-star-border::before {
     animation: none;
     opacity: 0;
   }
@@ -5155,6 +5134,71 @@ body:not([data-batch-mode='true']) .email-row .cb {
 @media (prefers-reduced-motion: reduce) {
   .rb-composer-accent {
     transition: none;
+  }
+}
+
+/* reactbits BorderGlow（精简移植，组件 effects/BorderGlow.tsx）— pointer 跟随的边缘辉光环 +
+   挂载 intro sweep。单色 --c-accent（跟随 6 主题色 + 明暗），落点 AI 输入框（包裹 composer shell）。
+   辉光层 .rb-edge-light 默认透明，靠 --rb-edge-proximity（指针靠边升高）显隐 + --rb-cursor-angle
+   （conic mask 只点亮指针所在弧段）定位；hover / .rb-sweep-active 才可见。mask 黑白非设计色（.css
+   豁免 no-raw-hex）。reduce 直接隐藏辉光层 → 退回 shell 自身 .rb-composer-accent 静态描边。 */
+.rb-border-glow-card {
+  --rb-edge-proximity: 0;
+  --rb-cursor-angle: 45deg;
+  --rb-edge-sens: 30;
+  --rb-radius: 16px;
+  --rb-glow-pad: 22px;
+  --rb-glow-intensity: 0.5;
+  position: relative;
+  border-radius: var(--rb-radius);
+  isolation: isolate;
+}
+.rb-border-glow-card > .rb-edge-light {
+  position: absolute;
+  inset: calc(var(--rb-glow-pad) * -1);
+  border-radius: calc(var(--rb-radius) + var(--rb-glow-pad));
+  pointer-events: none;
+  z-index: 1;
+  transition: opacity 0.25s ease-out;
+  opacity: calc((var(--rb-edge-proximity) - var(--rb-edge-sens)) / (100 - var(--rb-edge-sens)));
+  mix-blend-mode: plus-lighter;
+  -webkit-mask-image: conic-gradient(
+    from var(--rb-cursor-angle) at center,
+    #000 2.5%,
+    transparent 12%,
+    transparent 88%,
+    #000 97.5%
+  );
+  mask-image: conic-gradient(
+    from var(--rb-cursor-angle) at center,
+    #000 2.5%,
+    transparent 12%,
+    transparent 88%,
+    #000 97.5%
+  );
+}
+/* 非 hover 且非 intro 时辉光淡出（更慢，避免离开生硬）。 */
+.rb-border-glow-card:not(:hover):not(.rb-sweep-active) > .rb-edge-light {
+  opacity: 0;
+  transition: opacity 0.75s ease-in-out;
+}
+/* 实际辉光环：贴 shell 边缘的多层 accent box-shadow（inset 内辉 + outset 外发光）。 */
+.rb-border-glow-card > .rb-edge-light::before {
+  content: '';
+  position: absolute;
+  inset: var(--rb-glow-pad);
+  border-radius: var(--rb-radius);
+  box-shadow:
+    inset 0 0 0 1px rgb(var(--c-accent) / calc(0.9 * var(--rb-glow-intensity))),
+    inset 0 0 4px 0 rgb(var(--c-accent) / calc(0.5 * var(--rb-glow-intensity))),
+    inset 0 0 12px 0 rgb(var(--c-accent) / calc(0.3 * var(--rb-glow-intensity))),
+    0 0 4px 0 rgb(var(--c-accent) / calc(0.5 * var(--rb-glow-intensity))),
+    0 0 12px 0 rgb(var(--c-accent) / calc(0.3 * var(--rb-glow-intensity))),
+    0 0 22px 2px rgb(var(--c-accent) / calc(0.18 * var(--rb-glow-intensity)));
+}
+@media (prefers-reduced-motion: reduce) {
+  .rb-border-glow-card > .rb-edge-light {
+    display: none;
   }
 }
 

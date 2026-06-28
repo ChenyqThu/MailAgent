@@ -41,6 +41,7 @@ import { LexicalComposerInput } from '@assistant-ui/react-lexical'
 
 import { cn } from '@shared/lib/cn'
 import { HoverTip } from '@shared/components/ui/HoverTip'
+import { BorderGlow } from '@shared/components/effects/BorderGlow'
 import type { SearchHit, SearchResult } from '@shared/api/types'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { formatAttachmentSize, readAttachment } from '@shared/lib/chat-attachments'
@@ -479,43 +480,46 @@ export function AgentComposer(): React.JSX.Element {
   return (
     <ComposerPrimitive.Unstable_TriggerPopoverRoot>
       <ComposerPrimitive.Root className="relative flex w-full flex-col">
-        {/* AI 对话框 — 很淡 accent 背景色调 + accent border glow（.rb-composer-accent），
-            focus-within 增强；几何/内边距保留。 */}
-        <div className="rb-composer-accent flex w-full flex-col gap-1.5 rounded-2xl bg-ink-2 p-2">
-          {controls && <AgentAttachmentChips controls={controls} />}
-          <LexicalComposerInput
-            directiveChip={AgentDirectiveChip}
-            placeholder={isEmptyThread ? t('agentView.composer.placeholder') : ''}
-            autoFocus
-            className="scrollbar-thin relative max-h-32 min-h-[2.5rem] w-full resize-none bg-transparent px-2.5 py-1 text-body leading-snug text-ink-fg outline-none [&_.aui-lexical-input]:min-h-lh [&_.aui-lexical-input]:outline-none [&_.aui-lexical-placeholder]:pointer-events-none [&_.aui-lexical-placeholder]:absolute [&_.aui-lexical-placeholder]:left-0 [&_.aui-lexical-placeholder]:right-0 [&_.aui-lexical-placeholder]:top-0 [&_.aui-lexical-placeholder]:truncate [&_.aui-lexical-placeholder]:px-2.5 [&_.aui-lexical-placeholder]:py-1 [&_.aui-lexical-placeholder]:text-ink-fg-3"
-          />
-          <div className="flex items-center justify-between gap-1 px-0.5">
-            <div className="flex items-center gap-0.5">
-              {controls && <AgentAttachmentButton controls={controls} />}
-              {controls && <AgentModelPicker controls={controls} />}
-            </div>
-            <div className="flex items-center">
-              <ThreadPrimitive.If running={false}>
-                <ComposerPrimitive.Send
-                  aria-label={t('chat.composer.send')}
-                  title={t('chat.composer.send')}
-                  className="grid size-8 shrink-0 place-items-center rounded-full bg-[rgb(var(--c-accent))] text-[rgb(var(--c-accent-fg))] transition-opacity duration-fast hover:opacity-90 disabled:opacity-40"
-                >
-                  <ArrowUp size={17} strokeWidth={2.5} />
-                </ComposerPrimitive.Send>
-              </ThreadPrimitive.If>
-              <ThreadPrimitive.If running>
-                <ComposerPrimitive.Cancel
-                  aria-label={t('chat.composer.cancel')}
-                  title={t('chat.composer.cancel')}
-                  className="grid size-8 shrink-0 place-items-center rounded-full bg-ink-4 text-ink-fg-1 transition-colors duration-fast hover:bg-[rgb(var(--c-accent))] hover:text-[rgb(var(--c-accent-fg))]"
-                >
-                  <Square size={14} strokeWidth={2.5} className="fill-current" />
-                </ComposerPrimitive.Cancel>
-              </ThreadPrimitive.If>
+        {/* AI 对话框 — reactbits BorderGlow（pointer 跟随的边缘辉光 + 挂载 intro sweep，accent 单色）
+            包裹 shell；shell 自身保留很淡 accent 底色 + 静态描边（.rb-composer-accent）作平时态。
+            borderRadius 16 = shell rounded-2xl，辉光环贴边。 */}
+        <BorderGlow animated glowIntensity={0.5} borderRadius={16} className="w-full">
+          <div className="rb-composer-accent flex w-full flex-col gap-1.5 rounded-2xl bg-ink-2 p-2">
+            {controls && <AgentAttachmentChips controls={controls} />}
+            <LexicalComposerInput
+              directiveChip={AgentDirectiveChip}
+              placeholder={isEmptyThread ? t('agentView.composer.placeholder') : ''}
+              autoFocus
+              className="scrollbar-thin relative max-h-32 min-h-[2.5rem] w-full resize-none bg-transparent px-2.5 py-1 text-body leading-snug text-ink-fg outline-none [&_.aui-lexical-input]:min-h-lh [&_.aui-lexical-input]:outline-none [&_.aui-lexical-placeholder]:pointer-events-none [&_.aui-lexical-placeholder]:absolute [&_.aui-lexical-placeholder]:left-0 [&_.aui-lexical-placeholder]:right-0 [&_.aui-lexical-placeholder]:top-0 [&_.aui-lexical-placeholder]:truncate [&_.aui-lexical-placeholder]:px-2.5 [&_.aui-lexical-placeholder]:py-1 [&_.aui-lexical-placeholder]:text-ink-fg-3"
+            />
+            <div className="flex items-center justify-between gap-1 px-0.5">
+              <div className="flex items-center gap-0.5">
+                {controls && <AgentAttachmentButton controls={controls} />}
+                {controls && <AgentModelPicker controls={controls} />}
+              </div>
+              <div className="flex items-center">
+                <ThreadPrimitive.If running={false}>
+                  <ComposerPrimitive.Send
+                    aria-label={t('chat.composer.send')}
+                    title={t('chat.composer.send')}
+                    className="grid size-8 shrink-0 place-items-center rounded-full bg-[rgb(var(--c-accent))] text-[rgb(var(--c-accent-fg))] transition-opacity duration-fast hover:opacity-90 disabled:opacity-40"
+                  >
+                    <ArrowUp size={17} strokeWidth={2.5} />
+                  </ComposerPrimitive.Send>
+                </ThreadPrimitive.If>
+                <ThreadPrimitive.If running>
+                  <ComposerPrimitive.Cancel
+                    aria-label={t('chat.composer.cancel')}
+                    title={t('chat.composer.cancel')}
+                    className="grid size-8 shrink-0 place-items-center rounded-full bg-ink-4 text-ink-fg-1 transition-colors duration-fast hover:bg-[rgb(var(--c-accent))] hover:text-[rgb(var(--c-accent-fg))]"
+                  >
+                    <Square size={14} strokeWidth={2.5} className="fill-current" />
+                  </ComposerPrimitive.Cancel>
+                </ThreadPrimitive.If>
+              </div>
             </div>
           </div>
-        </div>
+        </BorderGlow>
 
         {/* @ email mention — async FTS search → inline directive chip + controls.mentions for send context. */}
         {controls && (
