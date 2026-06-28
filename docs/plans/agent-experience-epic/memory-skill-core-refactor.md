@@ -1,6 +1,6 @@
 # Harness Agent 核心调度层重构 — 架构 Review + 分阶段计划
 
-> status: planning（review ✅ + 3 blocker 已锁定；代码未开）· owner: chenyqThu · created: 2026-06-27
+> status: M1 定稿 ✅（2026-06-28 框架收敛，见 §0）· M5 新增 · M1a 实现中 · owner: chenyqThu · created: 2026-06-27
 > 上游：epic master = [`README.md`](./README.md) · 触发交接 = [`next-phase-backlog.md`](./next-phase-backlog.md) §2（用户「核心调度层重构」框架）
 > 本档 = backlog §2 框架的**架构级 review 落地** + **可执行分阶段计划**。代码等本计划经用户确认后按「每步一 diff」开。
 >
@@ -38,6 +38,18 @@
 - **M4**：不变（skills，与记忆无关）。
 - **🔴 新增 packaging 成本（build 时核实）**：venv 加 `mem0ai` + `faiss-cpu` + `fastembed`(+`onnxruntime`) + bge-small 权重 ≈ **+150-250MB**（bge-small 本身 ~30-90MB，runtime 占大头）。若超预算再回头议（云 embedding / 更轻向量）。`build-python-venv.sh` 须加这些依赖。
 - **离线降级**：bge-small 本地 → 检索离线可用；capture 的抽取 LLM 不可达 → fire-and-forget 静默失败（chat 不受影响，红线不破）。
+
+### 🔴 框架收敛（2026-06-28，M1 定稿讨论 + 3 路 agent 实测核实）—— 统一记忆地图
+
+把「mem0 引擎」与用户拍板的「记忆既有少量可编辑偏好、又有大量可检索事实」整合成 **单写入口、读侧按用途分流**：
+
+- **写侧（单一）**：`onFinish` fire-and-forget → `mem0.add(turn)` 自动抽取，不分叉；preference/fact 分类**不在 M1 做**（留 M3 读侧）。
+- **读侧分流（=「两者都要」）**：① 事实层（大量）经 `mem0.search(query)` 按 query 召回 top-k（M2）；② 偏好层（少量）经 **独立 `user.md`** 恒定全量注入 standing-context（M3），不依赖向量召回（防漏），人可读可编辑可 git diff。
+- **🔴 偏好层 SSoT = 独立 `.md`（user.md）**（拍板）：可校验，亦可经 **`AGENT.md` WAL「先写后答」约束**让 AI 自行识别+维护；**不**走 mem0 投影（免双向同步）。仅影响 M3。
+- **🔴 触发点修正（实测纠 §5/§3 旧「BackgroundTasks」说法）**：serve-api **无**持久化型 `/chat` 流式端点（`/llm-proxy`、`/notion-agent` 只转发不落库，`chat.py` 未 import `BackgroundTasks`）；远程 web 经任务 A 已代理到**同一 Node gateway**（复用 `chatRun.ts`）→ **`onFinish` 一处覆盖桌面 + 远程 web**，不需 Python 第二触发；legacy（待删 + M1 默认关）不接。
+- **🔴 CRS 抽取 provider**（实测）：mem0 **anthropic provider 不支持自定义 base_url**（官方文档证），故用 **openai provider + `openai_base_url={LLM_API_BASE}/v1`** 走 CRS 的 OpenAI 腿（`/v1/chat/completions`，`config.py:295-302` 证 CRS 双协议）+ 复用 `LLM_API_KEY`，抽取 model 可配（mem0 死依赖 openai 库，不算额外 provider）。
+- **🔴 `agent_memory_kv` 去留 → 独立 phase（M5）**：M1 **暂留并行**（M0 显式工具层照常，mem0 独立 store，M1 不碰 `chat_db` schema → 不 bump `CHAT_DB_VERSION`）；退役收尾梳理见 §5 M5。
+- **体积（拍板）**：**接受全量、先不瘦身**；但 fastembed 离线修复 + 遥测 monkeypatch 仍做（功能正确 + 隐私红线，非瘦身）。
 
 ---
 
@@ -105,14 +117,17 @@
 - **eval**：`tool_catalog.json` += 4 工具（`gateway_only:true`）；recorder 适配；baseline 不回退。
 - **可与 M1 合并**，拆开更易 review。
 
-### M1 — Step 1：异步自动抽取写（CRITICAL）
+### M1 — Step 1：异步自动抽取写（CRITICAL，定稿 2026-06-28）
 > flag `MAILAGENT_MEM0_CAPTURE`（default off）· 难度中 · 红线=永不阻塞 TTFT/SSE
+> 本节取代原方案（Mem0 前写的「自写小 LLM 抽取 + `upsert_memory_entry` 落 `agent_memory_kv`」）：引擎换 `mem0ai` 后抽取/dedup/冲突全在库内，落点改 mem0 独立 store。
 
-- **Python（写逻辑权威）**：新 `POST /chat/memory/capture`（接 turn：user+assistant+anchor）→ 小 LLM 抽取「持久事实」→ 对既有 key `memory_get` 冲突检查 → `upsert_memory_entry`（source 标 `auto_capture`，复用 v8 provenance 列）。**只抽持久偏好，绝不抽一次性任务态**（抽取 prompt + RULES floor 双重约束）。
-- **Node 触发**：`persistTurn` 末尾 **fire-and-forget**（不 await）调该端点。
-- **远程/legacy 对称**：Python `/chat` 流式路径用 `BackgroundTasks` 触发同一端点。
-- **自动写姿态（已锁定）**：写入 + `auto_capture` provenance + 用户可见「已记住 X」+ 一键撤销；默认关；durable-only。
-- **flag-off 不变量**：`persistTurn` 不调 capture，字节级同 M0。
+- **落点 = mem0 独立 store**（`<DATA_ROOT>/mem0/`：FAISS index + mem0 自管 SQLite history），**不经 `agent_memory_kv`、不碰 `chat_db` schema → 不 bump `CHAT_DB_VERSION`**。`agent_memory_kv`（M0 显式层）M1 暂留并行（退役 = M5）。
+- **Python（写逻辑权威）**：新 `POST /chat/memory/capture`（接 turn：user+assistant 文本 + sessionId + provenance）→ `mem0.add(messages, user_id, metadata)`；抽取+dedup+ADD/UPDATE/DELETE/NOOP 冲突全在 mem0 内，不自写。**只抽持久偏好/事实，绝不抽一次性任务态**：`custom_fact_extraction_prompt` + RULES floor 双重约束。`metadata.source='auto_capture'` + provenance。
+- **mem0 本地栈**：抽取 LLM = **openai provider + `openai_base_url={LLM_API_BASE}/v1`**（CRS OpenAI 腿，复用 `LLM_API_KEY`，model 可配；anthropic provider 不支持 base_url 故不用）+ fastembed bge-small（离线）+ FAISS（on-disk，pin DATA_ROOT）+ `MEM0_TELEMETRY=False`（env）+ PostHog monkeypatch（#3729 不干净）+ pre-bake 权重 + pin `cache_dir`（fastembed #615 离线 bug）。mem0 **同步库** → capture 端点用 `run_in_executor` 跑，不阻塞 event loop。
+- **Node 触发**：`makePersistOnFinish`（`chatRun.ts`）在 `cfg.persistTurn(turn)` 之后 `void cfg.captureTurnMemory(turn).catch(...)` —— fire-and-forget，绝不 await。
+- **自动写姿态（锁定）**：写入 + `auto_capture` provenance + 用户可见「已记住 X」（`memory.captured` SSE → toast）+ 一键撤销（mem0 delete by id）；默认关；durable-only。
+- **flag-off 不变量**：`captureTurnMemory` undefined → `persistTurn` 字节级同 M0；mem0 懒加载（flag-off 不 import 重依赖）。
+- **子步骤（每步一 diff）**：M1a 引擎封装（`src/memory/`，懒加载 + openai/CRS + fastembed + FAISS + telemetry + pyproject `[memory]` extra）→ M1b `/chat/memory/capture`（mem0.add + 抽取 prompt + run_in_executor）→ M1c Node 触发 + `MAILAGENT_MEM0_CAPTURE` flag（electron.vite + vite.web 两 define + flags.ts）→ M1d 姿态（SSE「已记住」+ 撤销端点 + 按钮）→ M1e 打包（build-python-venv.sh 纳入 memory extra + 离线/遥测修复，瘦身后置）→ M1f eval（capture task + baseline，rules.py 零改）。
 
 ### M2 — Step 2：query 相关性召回注入（读侧）
 > flag `MAILAGENT_MEM0_RETRIEVAL`（default off）· 难度中-高
@@ -122,10 +137,12 @@
 - **flag-off 不变量**：不调 search，仍走 `/chat/config` 静态 top-20，字节级不变。
 - **eval 注意**：改注入内容会动依赖 memory 的 task → 按 recorder-contract 重录 baseline；**真 gate 看迭代质量，不靠改任务凑绿**。
 
-### M3 — Step 3：`user.md` 编译闭环
+### M3 — Step 3：`user.md` 偏好编译闭环（含偏好层 SSoT 决策）
 > flag `MAILAGENT_USER_MD_COMPILE`（default off）· 难度低-中 · 无 hot-path
+> **🔴 偏好层 SSoT = 独立 `user.md`（2026-06-28 拍板）**：偏好恒定全量注入、人可读可编辑可 git diff；维护走校验或经 `AGENT.md` WAL「先写后答」约束让 AI 自行识别+维护；**不**走 mem0 投影（免双向同步）。
 
-- **Python**：`scripts/compile_user_md.py` / 路由 → kernel `get_all(user_id)`（= `list_memory_entries('user')`）→ LLM 重排为结构化 Markdown → `set_profile_doc('user', updated_by='agent_proposed')`（安全覆写基建已全在：history + rollback + hash）。`user.md` ≡ USER standing-context 文档别名。
+- **Python**：路由/脚本 → `mem0.get_all(user_id)` → LLM **判定偏好类 + 重排**为结构化 Markdown → `set_profile_doc('user', updated_by='agent_proposed')`（安全覆写基建全在：history + rollback + hash）。`user.md` ≡ USER standing-context 文档别名。**preference/fact 分类在此读侧做**（M1 写侧不分类）。
+- **事实层不进 user.md**：事实经 M2 `mem0.search` 按 query 召回，不恒注入。
 - **触发**：手动路由（先）+ 可选定时（后）。
 - **flag-off 不变量**：不触发，USER 文档不动。
 
@@ -137,6 +154,20 @@
 - **M4c `discover_skills` 工具**：包 `resolved_skills`（查未激活能力）+ `set_enabled`（自我挂载 discover→mount→暴露闭环）。
 - **flag-off 不变量**：gateway 仍用硬编码工具集，字节级不变。
 - **KOS 不动**：`src/kos/` 保持独立检索源（`kos_query` 工具），不并入记忆。
+
+### M5 — `agent_memory_kv` 退役 / 记忆存储统一收尾（独立 phase，2026-06-28 新增）
+> flag `MAILAGENT_MEMORY_KV_RETIRE`（default off）· 难度中 · **前置 = M1+M2+M3 落地且 mem0 读侧稳定**
+> 用户拍板：kv 退役接受，但**必须独立成 phase**，先把涉及面/影响点/移除收尾全梳理清楚再动，不夹带进 M1。
+
+- **背景**：用户质疑 `agent_memory_kv`（KV 表）作身份/偏好主记忆的设计（top-N dump 注入、key 易碎、人不可读）。统一方向 = 偏好 → `user.md`（M3）、事实 → mem0（M1/M2），kv 显式工具层退役或改接 mem0。
+- **phase 启动先产出影响面清单，再动代码**：
+  - **读侧消费点**：`memory_summary`/`memory_summary_meta` 注入（`/chat/config`）、`src/agent_config` MEMORY 投影、standing-context。
+  - **写侧/工具**：M0 的 `memory_list/get/write/delete`（gateway `createMemoryTools` + DomainClient + Python `/chat/memory*`）、legacy harness memory 工具。
+  - **schema**：`agent_memory_kv` 表 + `CHAT_DB_VERSION`（删表/只读冻结/数据迁移 mem0+user.md 三选一）。
+  - **eval**：AGT-MEMORY-* task + `tool_catalog`（4 工具去留）+ baseline 重录。
+  - **provenance/priority**：v8 列去向（迁 mem0 metadata / user.md 标注）。
+- **候选路径**（phase 内定）：(A) M0 工具改接 mem0（`memory_write`→`add(infer=False)`，`get/list`→mem0）+ kv 表只读冻结；(B) 偏好迁 user.md、事实迁 mem0 后 kv 数据迁移 + 表退役。
+- **flag-off 不变量**：不翻则 kv + M0 工具字节级照旧。
 
 ---
 
@@ -158,15 +189,17 @@
 | `MAILAGENT_MEM0_RETRIEVAL` | M2 | per-turn query 召回注入 |
 | `MAILAGENT_USER_MD_COMPILE` | M3 | user.md 编译触发 |
 | `MAILAGENT_SKILL_SELF_MOUNT` | M4 | 工具门控 + update_system_md + discover_skills |
+| `MAILAGENT_MEMORY_KV_RETIRE` | M5 | agent_memory_kv 退役 / 记忆存储统一 |
 
 ---
 
 ## 7. 依赖图 + 版本排期
 
 ```
-M0 ──→ M1(CRITICAL) ──→ M2 ──┐
-  └──────────────────────────┴─→ M4(a/b/c)
-M3 可与 M1/M2 并行（独立 get_all，无 hot-path）
+M0 ──→ M1(CRITICAL) ──→ M2 ──┬─→ M4(a/b/c)
+  └──────────────────────────┘
+M3 接 M1/M2（mem0.get_all → 偏好编译 user.md）
+M5（agent_memory_kv 退役）前置 = M1+M2+M3 稳定后
 ```
 
 版本：post-cutover 新子-epic。建议 M0-M1 = v0.21、M2 = v0.22、M3/M4 分 release。与 backlog 任务 A（web→ai-sdk）/ 任务 B（删 legacy）互不阻塞。**注意**：任务 B 删 legacy harness 前，M0 须确认 gateway 记忆面已 parity（否则删了 legacy = 记忆工具彻底消失）。
@@ -175,7 +208,11 @@ M3 可与 M1/M2 并行（独立 get_all，无 hot-path）
 
 ## 8. 开放决策（后续 phase 内定）
 
-- **M2b 向量召回**：何时引入语义检索（embedding 来源 = LLM provider embedding 端点 vs 本地小模型 vs sqlite-vec），打包体积权衡。
+- ~~**M2b 向量召回**~~ **已定（2026-06-28）**：mem0 第一天就有 fastembed bge-small 向量检索，无「FTS5 先行/向量后置」分阶段。
+- ~~**capture 抽取模型/provider**~~ **已定**：openai provider 经 CRS `/v1`（复用 `LLM_API_KEY`，model 可配）；频率 = 每轮 onFinish fire-and-forget；遵守「LLM 调用 1M+64k」全局指令（facts 输出实际短）。
+- ~~**偏好层 SSoT**~~ **已定**：独立 `user.md` + `AGENT.md` WAL 约束（见 §0 框架收敛 / M3）。
+- ~~**打包体积**~~ **已定**：接受全量不瘦身，离线/遥测修复仍做（见 §0）。
+- **M3 user.md 自动维护形态**：校验式 vs `AGENT.md` WAL「先写后答」自维护——M3 phase 内定。
 - **M4b 审批 tier 细则**：SOUL/RULES 改的人审形态（ConfirmDialog vs 独立审计面）。
-- **capture 抽取模型**：用哪个小模型 + 频率（每轮 vs 批量），成本权衡（遵守「LLM 调用 1M+64k」全局指令，但抽取是小结构化调用，maxOutputTokens 应小）。
-- **记忆 GC/衰减**：自有内核长大后的过期/合并策略（Mem0 有，自有内核需补）。
+- **M5 kv 退役路径**：候选 A（工具改接 mem0 + 表只读冻结）vs B（数据迁移 + 表退役）——M5 phase 内定（见 §5 M5）。
+- **记忆 GC/衰减**：mem0 store 长大后的过期/合并策略。
