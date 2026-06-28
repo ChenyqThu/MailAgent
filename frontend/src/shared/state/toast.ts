@@ -31,6 +31,12 @@ export interface ToastInput {
    *  caller pushes a terminal `success` / `error` toast or removes this
    *  one via `dismiss(id)`. */
   progress?: number
+  /** M1d — optional inline action button (e.g. mem0 auto-capture's 「撤销」).
+   *  When present, the toast card renders a small text button under the
+   *  title/detail; clicking it runs `onClick` then dismisses the toast.
+   *  Absent (undefined) for every existing caller → no button, zero visual
+   *  change. */
+  action?: { label: string; onClick: () => void }
 }
 
 export interface Toast extends ToastInput {
@@ -79,7 +85,8 @@ export const useToastStore = create<ToastStore>((set, get) => ({
       title: input.title,
       detail: input.detail,
       ttlMs: input.ttlMs ?? DEFAULT_TTL_MS,
-      progress: input.progress
+      progress: input.progress,
+      action: input.action
     }
     set((s) => {
       const next = [...s.items, toast]

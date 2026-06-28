@@ -54,6 +54,10 @@ function VariantIcon({ variant }: { variant: ToastModel['variant'] }): React.Rea
 
 function ToastCard({ toast, exiting, onExited, onDismiss }: CardProps): React.ReactElement {
   const rootRef = useRef<HTMLDivElement>(null)
+  // M1d — one-shot latch: the card stays clickable through the 120ms slide-out, so a
+  // double-click would fire the action twice — a 2nd undo on an already-deleted memory id
+  // could surface a spurious「撤销失败」. Latch on first click so it runs at most once.
+  const actionFiredRef = useRef(false)
   const reduce = useReducedMotion()
   // Time-based progress for non-long-task toasts (TTL bar). For toasts
   // with a caller-supplied `progress` field, we render that fraction
@@ -128,6 +132,23 @@ function ToastCard({ toast, exiting, onExited, onDismiss }: CardProps): React.Re
             <div className="text-meta font-mono text-ink-fg-2 mt-0.5 break-words">
               {toast.detail}
             </div>
+          )}
+          {/* M1d — optional inline action (e.g. mem0 auto-capture 「撤销」). Run the
+              action then dismiss the toast. Absent for every existing caller → not
+              rendered (zero visual change to current toasts). */}
+          {toast.action && (
+            <button
+              type="button"
+              onClick={() => {
+                if (actionFiredRef.current) return
+                actionFiredRef.current = true
+                toast.action!.onClick()
+                onDismiss()
+              }}
+              className="mt-1.5 text-meta font-medium text-coral hover:text-coral/80 transition-colors duration-fast"
+            >
+              {toast.action.label}
+            </button>
           )}
         </div>
         <button

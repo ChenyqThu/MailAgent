@@ -62,6 +62,24 @@ describe('toast store — push', () => {
     expect(useToastStore.getState().items.find((t) => t.id === id)).toBeTruthy()
   })
 
+  // M1d — optional `action` (mem0 auto-capture 「撤销」). Passed through verbatim;
+  // absent for every existing caller → undefined (zero behavior change).
+  test('action passes through to the Toast (undefined when omitted)', () => {
+    const onClick = vi.fn()
+    useToastStore.getState().push({
+      variant: 'success',
+      title: '已记住：偏好简洁',
+      action: { label: '撤销', onClick }
+    })
+    const [withAction] = useToastStore.getState().items
+    expect(withAction.action?.label).toBe('撤销')
+    withAction.action?.onClick()
+    expect(onClick).toHaveBeenCalledTimes(1)
+    // A plain toast carries no action → undefined (no button rendered).
+    toastSuccess('plain')
+    expect(useToastStore.getState().items.find((t) => t.title === 'plain')?.action).toBeUndefined()
+  })
+
   test('beyond MAX_VISIBLE oldest gets demoted (drop from queue)', () => {
     for (let i = 0; i < MAX_VISIBLE + 3; i++) toastInfo(`t${i}`)
     expect(useToastStore.getState().items.length).toBe(MAX_VISIBLE)

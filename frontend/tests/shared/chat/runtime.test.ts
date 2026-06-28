@@ -333,6 +333,37 @@ describe('ChatRuntime.newSession / deleteSession', () => {
     runtime.deleteSession(Number.NaN)
     expect(fetchMock).not.toHaveBeenCalled()
   })
+
+  test('undoCapturedMemory → DELETE /chat/memory/captured?id=（M1d，直 request，不构造 engine）', async () => {
+    fetchMock.mockResolvedValue(env({ deleted: true, id: 'mem-1' }))
+    const runtime = createChatRuntime({ reads: makeReads(), baseUrl: '/api' })
+    await runtime.undoCapturedMemory('mem-1')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('/api/chat/memory/captured?id=mem-1')
+    expect(init.method).toBe('DELETE')
+  })
+
+  test('undoCapturedMemory 空 id → 不 fetch（guard）', async () => {
+    const runtime = createChatRuntime({ reads: makeReads(), baseUrl: '/api' })
+    await runtime.undoCapturedMemory('')
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  test('undoCapturedMemory 后端 500 → throw Error&{code}（用户主动操作，非 best-effort）', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          status: 'error',
+          schema_version: 1,
+          error: { code: 'E_INTERNAL', message: 'failed to delete captured memory mem-1' }
+        }),
+        { status: 500, headers: { 'content-type': 'application/json' } }
+      )
+    )
+    const runtime = createChatRuntime({ reads: makeReads(), baseUrl: '/api' })
+    await expect(runtime.undoCapturedMemory('mem-1')).rejects.toMatchObject({ code: 'E_INTERNAL' })
+  })
 })
 
 // ── 读 graceful + kosAvailable ─────────────────────────────────────────────

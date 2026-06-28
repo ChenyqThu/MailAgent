@@ -728,6 +728,19 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
         query: { scope, key }
       })
       return data.deleted
+    },
+
+    async undoCapturedMemory(id: string): Promise<void> {
+      // M1d — undo one mem0 auto-captured memory (「已记住 X」toast 的撤销按钮).
+      // DELETE /chat/memory/captured?id=<mem0 memory_id> → {deleted, id}. User-initiated
+      // write → throw Error&{code}透传（E_INTERNAL）, renderer toasts 「撤销失败」. Mirrors the
+      // deleteMemory direct-request write path (electron loopback serve-api with token injected by
+      // chat_local_bridge / web CF cookie) — no engine, no IPC. Guard empty id (no-op, never hits the
+      // wire) since the backend Query(...) would 422 it anyway.
+      if (typeof id !== 'string' || id.length === 0) return
+      await request<{ deleted: boolean; id: string }>(baseUrl, 'DELETE', '/chat/memory/captured', {
+        query: { id }
+      })
     }
   }
 }

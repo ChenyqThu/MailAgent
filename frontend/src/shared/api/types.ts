@@ -1700,6 +1700,15 @@ export interface ChatApi {
    * (0 = not found, idempotent). Caller should invalidateConfig() afterward.
    */
   deleteMemory(scope: string, key: string): Promise<number>
+  /**
+   * M1d — undo one mem0 auto-captured memory (the "已记住 X" toast's 撤销 button).
+   * DELETE /chat/memory/captured?id=<mem0 memory_id>. Unlike the best-effort
+   * capture, this is a user-initiated write → the backend raises (E_INTERNAL/500)
+   * on failure. Electron 走 loopback serve-api（token 由 chat_local_bridge 注入）/
+   * web 走 HTTP（CF Access cookie）—— 同 deleteMemory 的直 request() 写路径，无 IPC。
+   * Throws `Error & { code }` on failure; the caller toasts 「撤销失败」.
+   */
+  undoCapturedMemory(id: string): Promise<void>
 }
 
 // ---- F2 — agentic 搜索（runSearchAgent）契约 ------------------------------
@@ -1873,6 +1882,7 @@ export type SseEventType =
   | 'llm.failed'
   | 'llm.gave_up'
   | 'folder.synced'
+  | 'memory.captured'
 
 export interface SseEvent {
   event_type: SseEventType | string
