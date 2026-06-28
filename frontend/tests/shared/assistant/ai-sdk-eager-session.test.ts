@@ -10,6 +10,7 @@ import { describe, expect, test, vi } from 'vitest'
 
 import {
   resolveAiSdkSessionId,
+  shouldResumeAfterToolApprovalResponses,
   type AiSdkSessionLatch
 } from '../../../src/shared/assistant/runtime/useMailAgentAiSdkRuntime'
 
@@ -89,5 +90,77 @@ describe('resolveAiSdkSessionId — lazy create on first send', () => {
     await expect(resolveAiSdkSessionId(latch, null, onEnsureSession)).resolves.toBe(888)
     expect(onEnsureSession).toHaveBeenCalledTimes(2) // retried
     expect(latch.id).toBe(888)
+  })
+})
+
+describe('shouldResumeAfterToolApprovalResponses — second-call (resume) trigger', () => {
+  test('pending approval (approval-requested) does NOT resume', () => {
+    expect(
+      shouldResumeAfterToolApprovalResponses({
+        messages: [
+          {
+            role: 'assistant',
+            parts: [{ type: 'tool-memory_write', state: 'approval-requested' }]
+          }
+        ]
+      })
+    ).toBe(false)
+  })
+
+  test('an approval response (approval-responded) resumes', () => {
+    expect(
+      shouldResumeAfterToolApprovalResponses({
+        messages: [
+          {
+            role: 'assistant',
+            parts: [{ type: 'tool-memory_write', state: 'approval-responded' }]
+          }
+        ]
+      })
+    ).toBe(true)
+  })
+
+  test('a mix where one tool part is still approval-requested does NOT resume', () => {
+    expect(
+      shouldResumeAfterToolApprovalResponses({
+        messages: [
+          {
+            role: 'assistant',
+            parts: [
+              { type: 'step-start' },
+              { type: 'tool-email_pin', state: 'approval-responded' },
+              { type: 'tool-email_flag', state: 'approval-requested' }
+            ]
+          }
+        ]
+      })
+    ).toBe(false)
+  })
+
+  test('only the LAST step counts — a responded tool in an earlier step does not trigger resume', () => {
+    expect(
+      shouldResumeAfterToolApprovalResponses({
+        messages: [
+          {
+            role: 'assistant',
+            parts: [
+              { type: 'tool-email_pin', state: 'approval-responded' },
+              { type: 'step-start' },
+              { type: 'text', text: 'asking again' },
+              { type: 'tool-email_flag', state: 'approval-requested' }
+            ]
+          }
+        ]
+      })
+    ).toBe(false)
+  })
+
+  test('non-assistant / empty last message → false', () => {
+    expect(shouldResumeAfterToolApprovalResponses({ messages: [] })).toBe(false)
+    expect(
+      shouldResumeAfterToolApprovalResponses({
+        messages: [{ role: 'user', parts: [{ type: 'text', text: 'hi' }] }]
+      })
+    ).toBe(false)
   })
 })

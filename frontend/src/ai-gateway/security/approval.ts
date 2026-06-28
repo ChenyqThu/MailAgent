@@ -1,16 +1,15 @@
 // chat-panel P4 Phase 03b — domain-side approval guard (HITL write tools).
 //
-// AI SDK v6 already gives us the *transport* of human-in-the-loop approval: a write
-// tool declared `needsApproval` ends the first streamText run with a signed
-// `tool-approval-request` part, and the second run only executes after the client
-// replays a `tool-approval-response` whose HMAC signature verifies (set via
-// streamText `experimental_toolApprovalSecret` → InvalidToolApprovalSignatureError on
-// a forged/tampered approval). That signature binds approval↔toolCall — it does NOT
-// bind the tool *input*. So a client could legitimately approve tool call X and then
-// swap X's input before the replay.
+// AI SDK v6 gives us the *transport* of human-in-the-loop approval: a write tool declared
+// `needsApproval` ends the first streamText run with a `tool-approval-request` part, and the
+// second run only executes after the client replays a `tool-approval-response`. ai@6 can
+// additionally HMAC-sign that approval (streamText `experimental_toolApprovalSecret`), but we
+// deliberately do NOT enable that on the native assistant-ui path — the replay drops the request
+// signature, so it would fail the resume call rather than add protection (see chatRun.ts).
 //
-// This ApprovalGuard is the MailAgent domain-side layer that closes that gap and adds
-// id/expiry, LAYERED on top of ai@6's signature (architecture §5.3, §13.4; phase-04 §5/§6):
+// This ApprovalGuard is therefore the AUTHORITATIVE write gate — toolCallId + input hash + expiry,
+// surviving across the two HTTP calls of one approval round-trip (architecture §5.3, §13.4;
+// phase-04 §5/§6):
 //   - register(toolCallId, …) runs in the write tool's `needsApproval` callback on the
 //     FIRST call (when ai@6 decides the tool needs approval). It stamps a record keyed
 //     by the stable toolCallId with the input hash + an expiry. KEEP-FIRST ABSOLUTE:
@@ -18,19 +17,19 @@
 //     window is anchored to when the approval was first requested, and an input swap
 //     cannot rewrite the bound hash).
 //   - verify(toolCallId, input) runs inside `execute` on the SECOND call (i.e. only
-//     after ai@6 verified the approval signature). It enforces: record exists, not
-//     expired, and the executed input matches the approved input. preview-tier writes
-//     reject any input change (E_APPROVAL_HASH_MISMATCH — "no silent input swap").
-//     edit-tier writes (email_draft_reply) PERMIT an input change (the user may edit
-//     the proposed draft) and report it as userEdited so audit records it.
+//     after the user approved). It enforces: record exists, not expired, and the executed
+//     input matches the approved input. preview-tier writes reject any input change
+//     (E_APPROVAL_HASH_MISMATCH — "no silent input swap"). edit-tier writes
+//     (email_draft_reply) PERMIT an input change (the user may edit the proposed draft)
+//     and report it as userEdited so audit records it.
 //
 // 🔴 Pure Node (node:crypto only) — no electron / chat_db / ai imports, so the gateway
 //    core stays harness-testable and this guard is directly unit-testable. The store is
 //    a module-instance Map shared across the two HTTP calls of one approval round-trip
 //    (the Electron wrapper builds ONE guard per gateway start and binds it into every
 //    request's tool factory). A gateway restart between the two calls drops the record →
-//    verify fails closed (E_APPROVAL_NOT_FOUND), which also matches ai@6 losing its
-//    per-process signing secret. Fail-closed is the safe direction for a write gate.
+//    verify fails closed (E_APPROVAL_NOT_FOUND). Fail-closed is the safe direction for a
+//    write gate.
 //
 // Phase 04a — edit-tier UI edits via a domain side-channel (closes architecture §13.10.2(1)).
 //   ai@6's signed approval binds the signature to the tool INPUT IN THE MESSAGE HISTORY and

@@ -8,15 +8,16 @@
 //
 // 🔴 SECURITY — the reverse path must NEVER become an alternate send path that skips the guard.
 //    In ai@6 an approval is not a standalone message; it is a STATE TRANSITION on the existing tool
-//    UI part: `state: 'approval-requested'` (carrying `approval: { id, signature }`) →
-//    `state: 'approval-responded'` (carrying `approval: { id, approved, signature }`). We ONLY flip
-//    that state + set `approved`; we KEEP the original ai@6 `signature` and DO NOT touch the part's
-//    `input`. So when the route replays the history through the SAME streamText + tools +
-//    experimental_toolApprovalSecret, ai@6 re-verifies the unchanged signed input and the domain
+//    UI part: `state: 'approval-requested'` (carrying `approval: { id }`) →
+//    `state: 'approval-responded'` (carrying `approval: { id, approved }`). We ONLY flip that state +
+//    set `approved`; we KEEP any original ai@6 approval metadata and DO NOT touch the part's `input`.
+//    So when the route replays the history through the SAME streamText + tools, the domain
 //    ApprovalGuard.verify/consume + content-hash + idempotency all fire in the tool's execute —
-//    exactly the /api/ai/chat double guard (architecture §13.10.3 / §13.12.2). An `edited` decision
+//    exactly the /api/ai/chat write gate (architecture §13.10.3 / §13.12.2). An `edited` decision
 //    rides the 04a resolve side-channel (POST /api/ai/approval/resolve), which is unchanged here;
-//    this module never rewrites the history input, so the signature stays valid.
+//    this module never rewrites the history input. (streamText `experimental_toolApprovalSecret` is
+//    intentionally not used — the native replay drops the signature, see chatRun.ts — so the domain
+//    ApprovalGuard, not an HMAC signature, is the authoritative write gate.)
 //
 // 🔴 Pure TS (no node:* / electron / crypto) — harness-testable; the only `ai` import is type-only.
 

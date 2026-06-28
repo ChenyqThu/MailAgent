@@ -26,6 +26,48 @@ import { AssistantChatTransport, useChatRuntime } from '@assistant-ui/react-ai-s
 import type { AgentContextSnapshot } from '@shared/assistant/context/contextSnapshot'
 import type { MailAgentUIMessage } from '@shared/assistant/uiMessage'
 
+type AiSdkMessageLike = { role?: unknown; parts?: unknown[] }
+type AiSdkToolPartLike = { type: string; state?: unknown }
+
+function isToolPartLike(part: unknown): part is AiSdkToolPartLike {
+  return (
+    !!part &&
+    typeof part === 'object' &&
+    typeof (part as { type?: unknown }).type === 'string' &&
+    (part as { type: string }).type.startsWith('tool-')
+  )
+}
+
+/** Resume trigger after a tool approval is responded. AI SDK records the approval locally
+ *  (addToolApprovalResponse) but only re-POSTs when sendAutomaticallyWhen returns true. Mirrors AI
+ *  SDK's lastAssistantMessageIsCompleteWithApprovalResponses; local predicate avoids the v6/v7 type
+ *  split (renderer helper is ai@6, gateway is ai@7). */
+export function shouldResumeAfterToolApprovalResponses({
+  messages
+}: {
+  messages: readonly AiSdkMessageLike[]
+}): boolean {
+  const message = messages[messages.length - 1]
+  if (!message || message.role !== 'assistant' || !Array.isArray(message.parts)) return false
+  const lastStepStartIndex = message.parts.reduce<number>(
+    (last, part, index) =>
+      !!part && typeof part === 'object' && (part as { type?: unknown }).type === 'step-start'
+        ? index
+        : last,
+    -1
+  )
+  const toolParts = message.parts.slice(lastStepStartIndex + 1).filter(isToolPartLike)
+  return (
+    toolParts.some((part) => part.state === 'approval-responded') &&
+    toolParts.every(
+      (part) =>
+        part.state === 'approval-responded' ||
+        part.state === 'output-available' ||
+        part.state === 'output-error'
+    )
+  )
+}
+
 export interface UseMailAgentAiSdkRuntimeOptions {
   /** Loopback base URL of the embedded Gateway (resolveAiGatewayBaseUrl()). */
   gatewayBaseUrl: string
@@ -168,6 +210,12 @@ export function useMailAgentAiSdkRuntime(opts: UseMailAgentAiSdkRuntimeOptions):
 
   return useChatRuntime({
     transport,
+    // dogfood — resume after a write-tool approval. AI SDK's addToolApprovalResponse only updates the
+    // local message state (approval-responded); without a sendAutomaticallyWhen predicate it never
+    // re-POSTs /api/ai/chat, so the approved tool stays stuck "executing". This local predicate fires
+    // the second request once every tool part in the last step is responded/done (version-agnostic so
+    // it sidesteps the renderer-ai@6 vs gateway-ai@7 type split).
+    sendAutomaticallyWhen: shouldResumeAfterToolApprovalResponses,
     // Phase 06 — seed prior history when reloading an existing session. Omitted when empty so a fresh
     // thread starts blank (Phase 02 behaviour). v7: useChatRuntime types `messages` against @ai-sdk/
     // react's UIMessage, which is no longer structurally interchangeable with ai's UIMessage (our

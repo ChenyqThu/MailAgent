@@ -12,9 +12,11 @@
 //
 // 🔴 Gated behind MAILAGENT_AI_SDK_WRITE_TOOLS (buildGatewayTools writeToolsEnabled) —
 //    off by default, so the model only ever sees these when the flag is on.
-// 🔴 Approval is layered: ai@6's signed approval (streamText experimental_toolApprovalSecret
-//    → InvalidToolApprovalSignatureError) + the domain ApprovalGuard (id/hash/expiry,
-//    see auditedWriteTool + security/approval.ts). A write never runs without both.
+// 🔴 Approval is enforced by the domain ApprovalGuard (id/hash/expiry, see auditedWriteTool +
+//    security/approval.ts) — the AUTHORITATIVE write gate. ai@6's signed-approval layer
+//    (streamText experimental_toolApprovalSecret) is intentionally NOT used: the native
+//    assistant-ui replay drops the request signature, so it would fail the resume call rather
+//    than add protection (chatRun.ts). A write never runs without a valid domain approval.
 
 import type { Tool } from 'ai'
 import type { z } from 'zod'

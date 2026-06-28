@@ -102,14 +102,6 @@ export interface AiGatewayConfig {
   buildTools?: (collector: GatewayToolAuditEntry[]) => ToolSet
   /** Max tool-loop steps (stopWhen: stepCountIs). Default 8 (legacy AGENT_MAX_ITER). */
   maxSteps?: number
-  /** Phase 03b — HMAC secret for streamText `experimental_toolApprovalSecret`. When set,
-   *  ai@6 signs each tool-approval-request at issuance and verifies the signature (binding
-   *  approvalId+toolCallId+toolName+input) when the approval is replayed on the second
-   *  call → InvalidToolApprovalSignatureError on a forged / input-swapped approval. This
-   *  is the built-in layer that stacks on the domain ApprovalGuard (the Electron wrapper
-   *  generates a per-process random secret; tests inject a fixed one). Omitted → no
-   *  signing (write tools still need approval, just unsigned — dev/test only). */
-  toolApprovalSecret?: string
   /** Phase 04a — apply a UI edit to a pending edit-tier approval (POST /api/ai/approval/resolve).
    *  The Electron wrapper implements this as `approvalGuard.applyEdit(toolCallId, editedFields)`:
    *  it overlays the editable fields onto the original input (identity pinned) so the next

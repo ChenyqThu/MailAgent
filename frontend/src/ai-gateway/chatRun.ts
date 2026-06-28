@@ -188,8 +188,16 @@ export async function prepareChatRun(
   }
 
   // Build the tools bound to a fresh per-request audit collector (closure). No tools → text-only
-  // (Phase 02 behaviour). The same buildTools + toolApprovalSecret feed BOTH endpoints, so the
-  // mirror's approval path is identical to /api/ai/chat (no bypass).
+  // (Phase 02 behaviour). The same buildTools feed BOTH endpoints, so the mirror's approval path is
+  // identical to /api/ai/chat (no bypass).
+  //
+  // 🔴 We deliberately do NOT pass streamText `experimental_toolApprovalSecret`: the native
+  // assistant-ui replay uses ai@6's addToolApprovalResponse, which DROPS the request signature, so a
+  // signed approval would fail with a missing-signature error on the second (resume) call. The
+  // MailAgent domain ApprovalGuard remains the authoritative write gate — it binds toolCallId + input
+  // hash + expiry across the two HTTP calls of an approval round-trip (security/approval.ts), and the
+  // high-risk send path keeps its own Python-side double guard. So removing the AI SDK secret weakens
+  // nothing that actually gates a write.
   const auditEntries: GatewayToolAuditEntry[] = []
   const tools = cfg.buildTools?.(auditEntries)
   const hasTools = tools != null && Object.keys(tools).length > 0
@@ -207,10 +215,7 @@ export async function prepareChatRun(
     ...(hasTools
       ? {
           tools,
-          stopWhen: stepCountIs(cfg.maxSteps ?? DEFAULT_MAX_STEPS),
-          ...(cfg.toolApprovalSecret
-            ? { experimental_toolApprovalSecret: cfg.toolApprovalSecret }
-            : {})
+          stopWhen: stepCountIs(cfg.maxSteps ?? DEFAULT_MAX_STEPS)
         }
       : {})
   }) as StreamTextResult<ToolSet, never, never>

@@ -18,8 +18,6 @@
 // flag-gated by MAILAGENT_AI_SDK_GATEWAY (index.ts dynamic-imports this module only
 // when the flag is 'true'), so flag-off the heavy `ai` deps never load.
 
-import { randomBytes } from 'node:crypto'
-
 import { app } from 'electron'
 
 import { startAiGatewayServer, type AiGatewayHandle } from '../../ai-gateway/server'
@@ -190,11 +188,15 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
   })
   // Phase 03b — one ApprovalGuard per gateway process (the id/hash/expiry domain guard;
   // its record store must survive between the two HTTP calls of an approval round-trip,
-  // so it is created ONCE here and bound into every request's write-tool factory). The
-  // per-process HMAC secret signs ai@6's tool-approval-requests (forge / input-swap guard,
-  // the layer that stacks on the domain guard). Both only matter when write tools are on.
+  // so it is created ONCE here and bound into every request's write-tool factory). It is
+  // the AUTHORITATIVE write gate.
+  //
+  // 🔴 We do NOT pass streamText `experimental_toolApprovalSecret` on the native
+  // assistant-ui path: ai@6's addToolApprovalResponse drops the request signature before
+  // the resume call, so a signed approval would fail missing-signature on the second POST.
+  // The domain ApprovalGuard (toolCallId + input hash + expiry, surviving across the two
+  // HTTP calls) plus the send tool's Python-side double guard already gate every write.
   const approvalGuard = new ApprovalGuard()
-  const toolApprovalSecret = randomBytes(32).toString('hex')
   // Phase 04a — MAILAGENT_A2UI_TOOL_CARDS gates the rich tool cards. Backend side it (a) stamps
   // the A2UI render payload into the write-tool audit (ui_payload_json) and (b) is the toggle
   // the renderer mirrors (per-flag vite define) to mount the cards. Off → byte-identical to 03b.
@@ -233,7 +235,6 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     apiKey,
     model: getLlmModel(),
     persistTurn,
-    toolApprovalSecret,
     // Phase 04a — apply an edit-tier UI edit to a pending approval (the resolve side-channel).
     // applyEdit overlays the editable fields onto the original input (identity pinned) WITHOUT
     // touching the ai@6 history input, so the signed approval stays valid on replay. Throws an

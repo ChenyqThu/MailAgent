@@ -173,14 +173,14 @@ export function auditedReadTool<I>(
  *   - `needsApproval` always returns true (write tools are never silent). As a
  *     side-effect it REGISTERS the approval record (keyed by toolCallId, keep-first)
  *     on the FIRST streamText run, when ai@6 decides the tool needs approval. The run
- *     then ends with a signed `tool-approval-request` part (no execute).
- *   - `execute` runs on the SECOND run only — after the user approved AND ai@6
- *     verified the approval signature (when streamText `experimental_toolApprovalSecret`
- *     is set, the HMAC binds approvalId+toolCallId+toolName+input, so an input swap is
- *     rejected before we get here). It then runs the MailAgent domain guard
- *     (`guard.verify`: record exists, not expired, input matches for preview / edit
- *     permits change), runs the domain write via `run`, and pushes a write-audit entry
- *     (tier + approval_status + approval_hash + user_edited) into `collector`.
+ *     then ends with a `tool-approval-request` part (no execute).
+ *   - `execute` runs on the SECOND run only — after the user approved. It then runs the
+ *     MailAgent domain guard (`guard.verify`: record exists, not expired, input matches
+ *     for preview / edit permits change) — the AUTHORITATIVE write gate — runs the domain
+ *     write via `run`, and pushes a write-audit entry (tier + approval_status +
+ *     approval_hash + user_edited) into `collector`. (ai@6's signed-approval layer,
+ *     streamText `experimental_toolApprovalSecret`, is intentionally NOT used: the native
+ *     assistant-ui replay drops the request signature — see chatRun.ts.)
  *
  * A guard rejection (not-found / expired / preview hash mismatch) audits an
  * `approvalStatus:'rejected'` error entry and throws a ToolExecutionError → the write
