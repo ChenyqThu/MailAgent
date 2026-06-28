@@ -18,21 +18,24 @@ import { cloneElement, isValidElement, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate, useRouterState } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
-import { BarChart3, ChevronDown, ChevronLeft, ChevronRight, Inbox, Star } from 'lucide-react'
+import { ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
 import {
-  ActivityIcon,
   AnimatedIconActiveProvider,
-  CalendarDaysIcon,
+  CalendarCheckIcon,
+  ChartLineIcon,
+  ChartPieIcon,
   CircleHelpIcon,
   FeatherIcon,
   FoldersIcon,
   GripIcon,
   HistoryIcon,
+  MailboxIcon,
   SettingsIcon,
   SparklesIcon,
-  SquarePenIcon
+  SquarePenIcon,
+  ZapIcon
 } from '@shared/components/icons'
 import { isAgentViewEnabled } from '@shared/assistant/runtime/flags'
 import { HoverTip } from '@shared/components/ui/HoverTip'
@@ -222,14 +225,13 @@ function TotalCount({ count }: { count: number }): React.ReactElement | null {
   )
 }
 
-// 动画图标（feather/square-pen/folders）走 AnimatedIcon；整行 hover/focus 经 NavRow 的
-// AnimatedIconActiveProvider 驱动（trigger='parent' 仅保留标注语义）。无 pqoqubbw 动画版的
-// inbox/flagged（Inbox/Star）保持静态 lucide —— 库里无对应动画版。
+// 全部走 AnimatedIcon（mailbox/feather/square-pen/zap/folders）；整行 hover/focus 经 NavRow 的
+// AnimatedIconActiveProvider 驱动（trigger='parent' 仅保留标注语义）。已标旗用 zap（用户点名）。
 const MAILBOX_ICON: Record<EmailView, React.ReactNode> = {
-  inbox: <Inbox size={15} strokeWidth={1.75} />,
+  inbox: <MailboxIcon size={15} strokeWidth={1.75} trigger="parent" />,
   outbox: <FeatherIcon size={15} strokeWidth={1.75} trigger="parent" />,
   drafts: <SquarePenIcon size={15} strokeWidth={1.75} trigger="parent" />,
-  flagged: <Star size={15} strokeWidth={1.75} />,
+  flagged: <ZapIcon size={15} strokeWidth={1.75} trigger="parent" />,
   all: <FoldersIcon size={15} strokeWidth={1.75} trigger="parent" />
 }
 
@@ -573,21 +575,21 @@ export function Sidebar(): React.ReactElement {
         </div>
         <nav className="px-2 space-y-px">
           <NavRow
-            icon={<ActivityIcon size={15} strokeWidth={1.75} trigger="parent" />}
+            icon={<ChartPieIcon size={15} strokeWidth={1.75} trigger="parent" />}
             label="LLM Dashboard"
             title={collapsed ? 'LLM Dashboard' : undefined}
             selected={pathname.startsWith('/admin/llm') || pathname === '/llm'}
             onClick={() => navigate({ to: '/admin/llm' })}
           />
           <NavRow
-            icon={<BarChart3 size={15} strokeWidth={1.75} />}
+            icon={<ChartLineIcon size={15} strokeWidth={1.75} trigger="parent" />}
             label={t('nav.adminKanban')}
             title={collapsed ? t('nav.adminKanban') : undefined}
             selected={pathname === '/admin/kanban' || pathname === '/admin'}
             onClick={() => navigate({ to: '/admin/kanban' })}
           />
           <NavRow
-            icon={<CalendarDaysIcon size={15} strokeWidth={1.75} trigger="parent" />}
+            icon={<CalendarCheckIcon size={15} strokeWidth={1.75} trigger="parent" />}
             label={t('nav.calendar')}
             title={collapsed ? t('nav.calendar') : undefined}
             selected={pathname.startsWith('/admin/calendar') || pathname === '/calendar'}

@@ -12,37 +12,39 @@
 
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
-import { Globe, Palette, Plug, User } from 'lucide-react'
 
 import { TabsList, TabsTrigger } from '@shared/components/ui/tabs'
 import {
   AnimatedIconActiveProvider,
   BellIcon,
+  BlocksIcon,
   BotIcon,
+  ConnectIcon,
   RadioIcon,
   RefreshCwIcon,
+  RouteIcon,
+  UserRoundCogIcon,
   WifiIcon
 } from '@shared/components/icons'
 import { useUpdaterStore } from '@shared/state/updater'
 
 interface TabEntry {
   value: string
-  // 兼容静态 lucide（Globe/Palette/Plug/User，无 pqoqubbw 动画版）与动画 AnimatedIcon
-  // （Bell/Bot/RefreshCw/Wifi/Radio）。动画图标默认 trigger='self'（tab 图标自身 hover，
-  //  Radix TabsTrigger 非 motion 无法传播整 tab）。
+  // 全部用动画 AnimatedIcon（pqoqubbw 动画版）。整 tab hover/focus 经 SettingsTabTrigger 的
+  // AnimatedIconActiveProvider 驱动（Radix TabsTrigger 非 motion，靠受控 active 而非传播）。
   Icon: React.ComponentType<{ size?: number; strokeWidth?: number; className?: string }>
   labelKey: string
 }
 
 const TAB_ORDER: TabEntry[] = [
-  { value: 'general', Icon: Palette, labelKey: 'settings.tabs.general' },
-  { value: 'accounts', Icon: User, labelKey: 'settings.tabs.accounts' },
+  { value: 'general', Icon: BlocksIcon, labelKey: 'settings.tabs.general' },
+  { value: 'accounts', Icon: UserRoundCogIcon, labelKey: 'settings.tabs.accounts' },
   { value: 'sync', Icon: RefreshCwIcon, labelKey: 'settings.tabs.sync' },
   { value: 'ai', Icon: BotIcon, labelKey: 'settings.tabs.ai' },
   { value: 'notifications', Icon: BellIcon, labelKey: 'settings.tabs.notifications' },
-  { value: 'integrations', Icon: Plug, labelKey: 'settings.tabs.integrations' },
+  { value: 'integrations', Icon: ConnectIcon, labelKey: 'settings.tabs.integrations' },
   { value: 'realtime', Icon: WifiIcon, labelKey: 'settings.tabs.realtime' },
-  { value: 'remote', Icon: Globe, labelKey: 'settings.tabs.remote' },
+  { value: 'remote', Icon: RouteIcon, labelKey: 'settings.tabs.remote' },
   { value: 'island', Icon: RadioIcon, labelKey: 'settings.tabs.island' }
 ]
 

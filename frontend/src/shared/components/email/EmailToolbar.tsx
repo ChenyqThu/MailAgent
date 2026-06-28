@@ -24,24 +24,25 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
-import {
-  AlertCircle,
-  Archive,
-  ArrowLeft,
-  CheckCheck,
-  ChevronDown,
-  ChevronUp,
-  ExternalLink,
-  Languages,
-  Loader2,
-  Pin,
-  RefreshCcw,
-  Sparkles,
-  Star,
-  Zap
-} from 'lucide-react'
+import { AlertCircle, ArrowLeft, ChevronDown, Loader2 } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
+import {
+  AnimatedIconActiveProvider,
+  ArchiveIcon,
+  AtomIcon,
+  CheckCheckIcon,
+  ChevronDownIcon,
+  ChevronUpIcon,
+  LanguagesIcon,
+  MapPinCheckIcon,
+  MapPinIcon,
+  RefreshCcwIcon,
+  RocketIcon,
+  SparklesIcon,
+  ZapIcon,
+  ZapOffIcon
+} from '@shared/components/icons'
 import { DUR } from '@shared/lib/gsap'
 import { HoverTip } from '@shared/components/ui/HoverTip'
 import { useFocusTrap } from '@shared/hooks/useFocusTrap'
@@ -182,10 +183,16 @@ function GhostBtn({
   onClick
 }: GhostBtnProps): React.ReactElement {
   const isDisabled = disabled === true || pending === true || !onClick
+  // 整按钮 hover/focus 经 AnimatedIconActiveProvider 驱动图标动画（icon 是 AnimatedIcon 时）。
+  const [iconActive, setIconActive] = useState(false)
   const btn = (
     <button
       type="button"
       onClick={onClick}
+      onPointerEnter={() => setIconActive(true)}
+      onPointerLeave={() => setIconActive(false)}
+      onFocus={() => setIconActive(true)}
+      onBlur={() => setIconActive(false)}
       disabled={isDisabled}
       aria-label={label}
       aria-pressed={pressed === true ? true : pressed === false ? false : undefined}
@@ -202,7 +209,11 @@ function GhostBtn({
       )}
     >
       <span className="shrink-0 grid place-items-center w-[13px] h-[13px]">
-        {pending ? <Loader2 size={13} strokeWidth={2} className="animate-spin" /> : icon}
+        {pending ? (
+          <Loader2 size={13} strokeWidth={2} className="animate-spin" />
+        ) : (
+          <AnimatedIconActiveProvider active={iconActive}>{icon}</AnimatedIconActiveProvider>
+        )}
       </span>
       {showLabel && <span className="whitespace-nowrap">{label}</span>}
     </button>
@@ -238,6 +249,7 @@ function PrimaryBtn({
   onClick
 }: PrimaryBtnProps): React.ReactElement {
   const isDisabled = disabled === true || pending === true || !onClick
+  const [iconActive, setIconActive] = useState(false)
   // Squared 8x8 chip when icon-only (matches mockup L2046) — width opens to
   // pill shape when label is visible.
   const padClass = showLabel ? 'gap-1.5 px-3 py-1.5' : 'w-8 h-8'
@@ -251,6 +263,10 @@ function PrimaryBtn({
     <button
       type="button"
       onClick={onClick}
+      onPointerEnter={() => setIconActive(true)}
+      onPointerLeave={() => setIconActive(false)}
+      onFocus={() => setIconActive(true)}
+      onBlur={() => setIconActive(false)}
       disabled={isDisabled}
       aria-label={label}
       className={cn(
@@ -262,7 +278,11 @@ function PrimaryBtn({
       )}
     >
       <span className="shrink-0 grid place-items-center w-[14px] h-[14px]">
-        {pending ? <Loader2 size={14} strokeWidth={2} className="animate-spin" /> : icon}
+        {pending ? (
+          <Loader2 size={14} strokeWidth={2} className="animate-spin" />
+        ) : (
+          <AnimatedIconActiveProvider active={iconActive}>{icon}</AnimatedIconActiveProvider>
+        )}
       </span>
       {showLabel && <span className="whitespace-nowrap">{label}</span>}
     </button>
@@ -290,6 +310,7 @@ function ComposeSplitButton({
 }: ComposeSplitProps): React.ReactElement {
   const { t } = useTranslation()
   const [menuOpen, setMenuOpen] = useState(false)
+  const [iconActive, setIconActive] = useState(false)
   const wrapRef = useRef<HTMLDivElement>(null)
   // 下拉菜单出入场：与主题/材质弹层同款（顶部微展开 + 淡入），退场延迟卸载。
   const { shouldRender: menuShouldRender, scopeRef: menuRef } = useExitAnimation<HTMLDivElement>(
@@ -337,6 +358,10 @@ function ComposeSplitButton({
         <button
           type="button"
           onClick={() => pick('reply')}
+          onPointerEnter={() => setIconActive(true)}
+          onPointerLeave={() => setIconActive(false)}
+          onFocus={() => setIconActive(true)}
+          onBlur={() => setIconActive(false)}
           disabled={pending}
           aria-label={label}
           className={cn(
@@ -349,7 +374,9 @@ function ComposeSplitButton({
             {pending ? (
               <Loader2 size={14} strokeWidth={2} className="animate-spin" />
             ) : (
-              <Sparkles size={14} strokeWidth={2} className="fill-current" />
+              <AnimatedIconActiveProvider active={iconActive}>
+                <RocketIcon size={14} strokeWidth={2} />
+              </AnimatedIconActiveProvider>
             )}
           </span>
           {showLabel && <span className="whitespace-nowrap">{label}</span>}
@@ -422,10 +449,15 @@ function IconOnlyBtn({
   onClick
 }: IconOnlyBtnProps): React.ReactElement {
   const isDisabled = !onClick
+  const [iconActive, setIconActive] = useState(false)
   const btn = (
     <button
       type="button"
       onClick={onClick}
+      onPointerEnter={() => setIconActive(true)}
+      onPointerLeave={() => setIconActive(false)}
+      onFocus={() => setIconActive(true)}
+      onBlur={() => setIconActive(false)}
       disabled={isDisabled}
       aria-label={label}
       aria-pressed={pressed === true ? true : pressed === false ? false : undefined}
@@ -439,7 +471,7 @@ function IconOnlyBtn({
         'disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent'
       )}
     >
-      {icon}
+      <AnimatedIconActiveProvider active={iconActive}>{icon}</AnimatedIconActiveProvider>
     </button>
   )
   return (
@@ -458,6 +490,7 @@ function TranslateButton({
   showLabel
 }: TranslateProps & { showLabel: boolean }): React.ReactElement {
   const { t } = useTranslation()
+  const [iconActive, setIconActive] = useState(false)
   const isError = status === 'error'
   const isLoading = status === 'loading'
   const isTranslated = status === 'translated'
@@ -474,6 +507,10 @@ function TranslateButton({
     <button
       type="button"
       onClick={onToggle}
+      onPointerEnter={() => setIconActive(true)}
+      onPointerLeave={() => setIconActive(false)}
+      onFocus={() => setIconActive(true)}
+      onBlur={() => setIconActive(false)}
       aria-label={label}
       className={cn(
         'flex items-center gap-1 px-2 py-1.5 rounded-md text-aux',
@@ -486,7 +523,13 @@ function TranslateButton({
       )}
     >
       <span className="shrink-0 grid place-items-center w-[13px] h-[13px]">
-        <Languages size={13} strokeWidth={2} className={isLoading ? 'animate-spin' : undefined} />
+        {isLoading ? (
+          <Loader2 size={13} strokeWidth={2} className="animate-spin" />
+        ) : (
+          <AnimatedIconActiveProvider active={iconActive}>
+            <LanguagesIcon size={13} strokeWidth={2} />
+          </AnimatedIconActiveProvider>
+        )}
       </span>
       {langIsEn && !isError && !isLoading && (
         <span
@@ -633,7 +676,7 @@ function AIPanelToggleButton(): React.ReactElement {
           : 'text-ink-fg-2 hover:text-ink-fg hover:bg-ink-4'
       )}
     >
-      <Sparkles size={14} strokeWidth={2} className={visible ? 'fill-current' : ''} />
+      <SparklesIcon size={14} strokeWidth={2} />
     </button>
   )
   return (
@@ -744,7 +787,7 @@ export function EmailToolbar({
         />
       ) : (
         <PrimaryBtn
-          icon={<Sparkles size={14} strokeWidth={2} className="fill-current" />}
+          icon={<RocketIcon size={14} strokeWidth={2} />}
           label={draftLabel}
           showLabel={wantsPrimaryLabel}
           hoverHint={`${draftLabel} · R`}
@@ -761,7 +804,7 @@ export function EmailToolbar({
           handleToggleRead / handleToggleFlag now call `mailApi.email.flag()`
           (SSoT inversion: SQLite intent + outbox dual fanout). */}
       <GhostBtn
-        icon={<CheckCheck size={13} strokeWidth={2} />}
+        icon={<CheckCheckIcon size={13} strokeWidth={2} />}
         label={readLabel}
         showLabel={wantsLabels}
         hoverHint={`${readLabel} · U`}
@@ -771,7 +814,13 @@ export function EmailToolbar({
         onClick={onToggleRead}
       />
       <GhostBtn
-        icon={<Star size={13} strokeWidth={1.5} className={isFlagged ? 'fill-current' : ''} />}
+        icon={
+          isFlagged ? (
+            <ZapIcon size={13} strokeWidth={1.75} />
+          ) : (
+            <ZapOffIcon size={13} strokeWidth={1.75} />
+          )
+        }
         label={t('toolbar.toggleFlag')}
         showLabel={wantsLabels}
         hoverHint={`${t('toolbar.toggleFlag')} · S`}
@@ -782,7 +831,13 @@ export function EmailToolbar({
       />
       {/* 置顶 — 放在旗标之后 (#3). 本地 is_pinned, 秒回显 (optimistic flip). */}
       <GhostBtn
-        icon={<Pin size={13} strokeWidth={1.5} className={isPinned ? 'fill-current' : ''} />}
+        icon={
+          isPinned ? (
+            <MapPinCheckIcon size={13} strokeWidth={1.75} />
+          ) : (
+            <MapPinIcon size={13} strokeWidth={1.75} />
+          )
+        }
         label={t('toolbar.togglePin')}
         showLabel={wantsLabels}
         hoverHint={t('toolbar.togglePin')}
@@ -813,7 +868,7 @@ export function EmailToolbar({
           (davmail-only). onArchive 未接 (非 davmail 后端) 时 GhostBtn 因 !onClick
           自动禁用, hoverHint 解释 davmail 限制, 用户不会以为按钮坏了。 */}
       <GhostBtn
-        icon={<Archive size={13} strokeWidth={2} />}
+        icon={<ArchiveIcon size={13} strokeWidth={2} />}
         label={t('toolbar.archive')}
         showLabel={wantsLabels}
         hoverHint={onArchive ? t('toolbar.archive') : t('toolbar.archiveBlocked')}
@@ -824,14 +879,14 @@ export function EmailToolbar({
       <Divider />
 
       <GhostBtn
-        icon={<RefreshCcw size={13} strokeWidth={2} />}
+        icon={<RefreshCcwIcon size={13} strokeWidth={2} />}
         label={resyncLabel}
         showLabel={wantsLabels}
         pending={resyncState?.pending}
         onClick={onResync ? handleResyncClick : undefined}
       />
       <GhostBtn
-        icon={<Zap size={13} strokeWidth={2} />}
+        icon={<SparklesIcon size={13} strokeWidth={2} />}
         label={llmLabel}
         showLabel={wantsLabels}
         pending={llmRunState?.pending}
@@ -847,18 +902,18 @@ export function EmailToolbar({
           "更多"无菜单内容 — 等有真实次要操作时再以溢出菜单引入。) */}
       <div className="ml-auto flex items-center gap-1">
         <IconOnlyBtn
-          icon={<ExternalLink size={13} strokeWidth={2} />}
+          icon={<AtomIcon size={13} strokeWidth={2} />}
           label={t('toolbar.openNotion')}
           onClick={openNotion}
         />
         <Divider />
         <IconOnlyBtn
-          icon={<ChevronUp size={14} strokeWidth={2} />}
+          icon={<ChevronUpIcon size={14} strokeWidth={2} />}
           label={`${t('toolbar.prev')} · K`}
           onClick={onPrev}
         />
         <IconOnlyBtn
-          icon={<ChevronDown size={14} strokeWidth={2} />}
+          icon={<ChevronDownIcon size={14} strokeWidth={2} />}
           label={`${t('toolbar.next')} · J`}
           onClick={onNext}
         />

@@ -11,10 +11,11 @@
 // spec). Theme cycle KEPT as 3-state (system / dark / light) per user
 // scope decision (mockup is 2-state Dark/Light, prod prefers tri-state).
 
-import { Search } from 'lucide-react'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { cn } from '@shared/lib/cn'
+import { AnimatedIconActiveProvider, SearchIcon } from '@shared/components/icons'
 import { useCommandPalette } from '@shared/state/command-palette'
 
 import { AccentPickerPopover } from './AccentPickerPopover'
@@ -26,6 +27,8 @@ import { ThemePickerPopover } from './ThemePickerPopover'
 export function TitleBar(): React.ReactElement {
   const { t } = useTranslation()
   const togglePalette = useCommandPalette((s) => s.toggle)
+  // 整个搜索按钮 hover/focus 经 AnimatedIconActiveProvider 驱动 search 图标动画。
+  const [searchActive, setSearchActive] = useState(false)
 
   return (
     <header
@@ -56,6 +59,10 @@ export function TitleBar(): React.ReactElement {
         <button
           type="button"
           onClick={togglePalette}
+          onPointerEnter={() => setSearchActive(true)}
+          onPointerLeave={() => setSearchActive(false)}
+          onFocus={() => setSearchActive(true)}
+          onBlur={() => setSearchActive(false)}
           title={t('search.title')}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           className={cn(
@@ -63,7 +70,9 @@ export function TitleBar(): React.ReactElement {
             'hover:text-ink-fg hover:bg-ink-3 transition-colors duration-fast'
           )}
         >
-          <Search size={13} strokeWidth={2} />
+          <AnimatedIconActiveProvider active={searchActive}>
+            <SearchIcon size={13} strokeWidth={2} />
+          </AnimatedIconActiveProvider>
           {/* <md 退化为纯图标按钮 (省空间防 chrome 折行); 文字 + kbd 桌面才出。 */}
           <span className="hidden md:inline">{t('search.title')}</span>
           <kbd className="hidden md:inline-block group-hover:bg-ink-4">⌘K</kbd>
