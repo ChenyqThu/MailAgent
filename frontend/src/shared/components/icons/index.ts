@@ -43,6 +43,11 @@ export { ChevronUpIcon } from './animated/chevron-up'
 export { ChevronDownIcon } from './animated/chevron-down'
 export { DeleteIcon } from './animated/delete'
 
+// 第四批（dogfood 微调）：收件箱 folder-input、设置账户 user、设置 AI tab bot-message-square。
+export { FolderInputIcon } from './animated/folder-input'
+export { UserIcon } from './animated/user'
+export { BotMessageSquareIcon } from './animated/bot-message-square'
+
 export { SendIcon } from './animated/send'
 export { SquarePenIcon } from './animated/square-pen'
 export { HistoryIcon } from './animated/history'

@@ -18,12 +18,12 @@ import {
   AnimatedIconActiveProvider,
   BellIcon,
   BlocksIcon,
-  BotIcon,
+  BotMessageSquareIcon,
   ConnectIcon,
   RadioIcon,
   RefreshCwIcon,
   RouteIcon,
-  UserRoundCogIcon,
+  UserIcon,
   WifiIcon
 } from '@shared/components/icons'
 import { useUpdaterStore } from '@shared/state/updater'
@@ -38,9 +38,9 @@ interface TabEntry {
 
 const TAB_ORDER: TabEntry[] = [
   { value: 'general', Icon: BlocksIcon, labelKey: 'settings.tabs.general' },
-  { value: 'accounts', Icon: UserRoundCogIcon, labelKey: 'settings.tabs.accounts' },
+  { value: 'accounts', Icon: UserIcon, labelKey: 'settings.tabs.accounts' },
   { value: 'sync', Icon: RefreshCwIcon, labelKey: 'settings.tabs.sync' },
-  { value: 'ai', Icon: BotIcon, labelKey: 'settings.tabs.ai' },
+  { value: 'ai', Icon: BotMessageSquareIcon, labelKey: 'settings.tabs.ai' },
   { value: 'notifications', Icon: BellIcon, labelKey: 'settings.tabs.notifications' },
   { value: 'integrations', Icon: ConnectIcon, labelKey: 'settings.tabs.integrations' },
   { value: 'realtime', Icon: WifiIcon, labelKey: 'settings.tabs.realtime' },

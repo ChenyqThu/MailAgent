@@ -29,7 +29,7 @@ export function ThinkingPhrases(): React.ReactElement {
   const safe = idx < phrases.length ? idx : 0
   return (
     <span className="thinking-phrases">
-      <ShimmerText key={safe} text={phrases[safe] ?? ''} className="thinking-phrases-item" />
+      <ShimmerText shiny key={safe} text={phrases[safe] ?? ''} className="thinking-phrases-item" />
     </span>
   )
 }

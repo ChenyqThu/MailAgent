@@ -4862,6 +4862,14 @@ body:not([data-batch-mode='true']) .email-row .cb {
   animation: shimmer-hi 1.4s linear infinite;
 }
 .shimmer-neutral { --shimmer-hl: var(--ink-fg); }
+/* ShinyText 风格变体（reactbits 观感，transform 驱动 — 避开官方 bg-clip-text +
+   background-position 在 Electron macOS 合成层/虚拟滚动失效的坑，见 ShimmerText.tsx 注释）。
+   base 压暗一档 + 高光带放慢，呈现柔和渐变扫光；win/hi width 不变以保持 transform 抵消对齐。 */
+.shimmer-shiny .shimmer-text-base { color: rgb(var(--ink-fg-3)); }
+.shimmer-shiny .shimmer-text-win,
+.shimmer-shiny .shimmer-text-hi {
+  animation-duration: 2.4s;
+}
 /* AI 思考态多段 phrase 轮播（ThinkingPhrases.tsx）：切换时 fade + 上移 enter（opacity/
    transform 合成器属性，合成层内可靠）。reduce 下由下方 @media 关闭。 */
 .thinking-phrases { display: inline-block; }

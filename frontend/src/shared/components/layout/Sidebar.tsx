@@ -28,10 +28,11 @@ import {
   ChartPieIcon,
   CircleHelpIcon,
   FeatherIcon,
+  FolderInputIcon,
   FoldersIcon,
   GripIcon,
   HistoryIcon,
-  MailboxIcon,
+  SendIcon,
   SettingsIcon,
   SparklesIcon,
   SquarePenIcon,
@@ -228,9 +229,9 @@ function TotalCount({ count }: { count: number }): React.ReactElement | null {
 // 全部走 AnimatedIcon（mailbox/feather/square-pen/zap/folders）；整行 hover/focus 经 NavRow 的
 // AnimatedIconActiveProvider 驱动（trigger='parent' 仅保留标注语义）。已标旗用 zap（用户点名）。
 const MAILBOX_ICON: Record<EmailView, React.ReactNode> = {
-  inbox: <MailboxIcon size={15} strokeWidth={1.75} trigger="parent" />,
-  outbox: <FeatherIcon size={15} strokeWidth={1.75} trigger="parent" />,
-  drafts: <SquarePenIcon size={15} strokeWidth={1.75} trigger="parent" />,
+  inbox: <FolderInputIcon size={15} strokeWidth={1.75} trigger="parent" />,
+  outbox: <SendIcon size={15} strokeWidth={1.75} trigger="parent" />,
+  drafts: <FeatherIcon size={15} strokeWidth={1.75} trigger="parent" />,
   flagged: <ZapIcon size={15} strokeWidth={1.75} trigger="parent" />,
   all: <FoldersIcon size={15} strokeWidth={1.75} trigger="parent" />
 }

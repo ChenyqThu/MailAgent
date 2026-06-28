@@ -73,7 +73,7 @@ export function AgentThread({
   const isEmpty = useAuiState(isNewChatView)
   return (
     <ThreadPrimitive.Root
-      className="relative isolate flex min-h-0 flex-1 flex-col bg-ink-1 text-ink-fg"
+      className="relative isolate flex min-h-0 flex-1 flex-col glass-3 text-ink-fg"
       style={{ ['--thread-max-width' as string]: '44rem' }}
     >
       {onTurnComplete && <TurnCompleteWatcher onComplete={onTurnComplete} />}
