@@ -166,14 +166,21 @@ export async function prepareChatRun(
     // M2 — recall durable memories relevant to THIS turn's query and inject them as an untrusted block.
     // Use the ORIGINAL last user text (rawMessages, NOT the injectedContext-prefixed model message) so
     // a mentioned email body doesn't pollute the recall query. retrieveMemory is CONTRACTED to never
-    // throw (null on failure / timeout) → a slow recall degrades to context-light, never breaks the
-    // turn. Injected only when MAILAGENT_MEM0_RETRIEVAL is on; absent → null → byte-identical.
+    // throw (null on failure / timeout), but the core does NOT trust the callback to honor it: the
+    // await is wrapped so a contract-violating throw/reject still degrades to context-light and never
+    // breaks the turn (defense-in-depth, codex review MEDIUM-2). Injected only when
+    // MAILAGENT_MEM0_RETRIEVAL is on; absent → null → byte-identical.
     let retrievedMemories: RetrievedMemory[] | null = null
     if (cfg.retrieveMemory) {
       const lastUser = lastUserMessage(rawMessages)
       const queryText = lastUser ? extractTextFromUIMessage(lastUser) : ''
       if (queryText.length > 0) {
-        retrievedMemories = await cfg.retrieveMemory(queryText)
+        try {
+          retrievedMemories = await cfg.retrieveMemory(queryText)
+        } catch (err) {
+          console.error('[ai-gateway] retrieveMemory threw (turn runs context-light)', err)
+          retrievedMemories = null
+        }
       }
     }
     system = buildGatewaySystemPrompt({ promptConfig, contextSnapshot, retrievedMemories })

@@ -227,4 +227,25 @@ describe('context injection — gateway system prompt', () => {
     expect(captured.system).not.toContain('UNTRUSTED_RECALLED_MEMORY_START')
     expect(captured.system).toContain('focused') // turn still ran with standing context
   })
+
+  test('M2 — retrieveMemory that THROWS (contract violation) is caught by core → turn unbroken', async () => {
+    // codex MEDIUM-2: the core must not trust the callback's never-throw contract. A throwing
+    // retrieveMemory must still degrade to context-light, not 500 / break the stream.
+    const captured = { system: null as string | null }
+    const cfg = baseCfg(capturingModel(captured), {
+      systemPromptProvider: () => ({ standingContext: '# AGENT\nfocused' }),
+      retrieveMemory: async () => {
+        throw new Error('contract violation: recall blew up')
+      }
+    })
+    const h = await start(cfg)
+    const res = await postChat(h.port, {
+      sessionId: null,
+      messages: [{ id: 'u1', role: 'user', parts: [{ type: 'text', text: 'hi' }] }]
+    })
+    expect(res.status).toBe(200)
+    await res.text()
+    expect(captured.system).not.toContain('UNTRUSTED_RECALLED_MEMORY_START')
+    expect(captured.system).toContain('focused') // turn still ran despite the throwing recall
+  })
 })
