@@ -1,6 +1,6 @@
 # Harness Agent 核心调度层重构 — 架构 Review + 分阶段计划
 
-> status: M1 定稿 ✅（2026-06-28 框架收敛，见 §0）· M5 新增 · M1a 实现中 · owner: chenyqThu · created: 2026-06-27
+> status: **M1 全落地 ✅（2026-06-28，M1a–M1f 6 commits `3aa91a2b`→`b906eee1`，main 未 push，每步独立 code-reviewer APPROVE）** · **M2 next** · M5 新增 · owner: chenyqThu · created: 2026-06-27
 > 上游：epic master = [`README.md`](./README.md) · 触发交接 = [`next-phase-backlog.md`](./next-phase-backlog.md) §2（用户「核心调度层重构」框架）
 > 本档 = backlog §2 框架的**架构级 review 落地** + **可执行分阶段计划**。代码等本计划经用户确认后按「每步一 diff」开。
 >
@@ -120,6 +120,8 @@
 ### M1 — Step 1：异步自动抽取写（CRITICAL，定稿 2026-06-28）
 > flag `MAILAGENT_MEM0_CAPTURE`（default off）· 难度中 · 红线=永不阻塞 TTFT/SSE
 > 本节取代原方案（Mem0 前写的「自写小 LLM 抽取 + `upsert_memory_entry` 落 `agent_memory_kv`」）：引擎换 `mem0ai` 后抽取/dedup/冲突全在库内，落点改 mem0 独立 store。
+>
+> **✅ 已落地（2026-06-28，6 commits）— 实测偏差（覆盖下文旧描述，详见 memory `project_mem0_m1_enhance_epic`）**：① 抽取 LLM = **anthropic provider 经 CRS anthropic 腿**（**非 openai**：CRS openai 腿强制 `stream=true` + 把 claude 转成 mem0 解析不了的 list；anthropic 腿返回标准 text 走通）；② telemetry 仅 **`MEM0_TELEMETRY=False` env**（import 前设，PostHog 从不实例化；monkeypatch 无效已删）；③ `max_tokens=8192`（anthropic SDK 非流式 >10min 硬限，不能用全局 64k）；④ `MAILAGENT_MEM0_CAPTURE` **只用 main 进程 env，不加 vite define/flags.ts**（capture 纯后端 renderer 无感，**偏离铁律 1 的"两 define"**——那条只针对 renderer 直读 gate UI 的 flag，reviewer 确认对）；⑤ M1d 撤销前端走**统一 `createChatRuntime` 直 `request` 无 IPC**（cutover 3c-3 后双 surface 共享 runtime，非 HttpApi/ElectronApi 双 block）；⑥ M1f **无新 eval task**（capture 是 onFinish 后台 side-effect、无 agent 行为可测，agent_eval 89 passed 零回退 + 9 端点/6 引擎单测覆盖契约）；⑦ pre-bake 权重后置（首次 flag-on 联网下载 bge）。
 
 - **落点 = mem0 独立 store**（`<DATA_ROOT>/mem0/`：FAISS index + mem0 自管 SQLite history），**不经 `agent_memory_kv`、不碰 `chat_db` schema → 不 bump `CHAT_DB_VERSION`**。`agent_memory_kv`（M0 显式层）M1 暂留并行（退役 = M5）。
 - **Python（写逻辑权威）**：新 `POST /chat/memory/capture`（接 turn：user+assistant 文本 + sessionId + provenance）→ `mem0.add(messages, user_id, metadata)`；抽取+dedup+ADD/UPDATE/DELETE/NOOP 冲突全在 mem0 内，不自写。**只抽持久偏好/事实，绝不抽一次性任务态**：`custom_fact_extraction_prompt` + RULES floor 双重约束。`metadata.source='auto_capture'` + provenance。
@@ -132,7 +134,7 @@
 ### M2 — Step 2：query 相关性召回注入（读侧）
 > flag `MAILAGENT_MEM0_RETRIEVAL`（default off）· 难度中-高
 
-- **Python**：新 `POST /chat/memory/search`（query → 相关性召回 top-k）。**先 FTS5 词法**（复用仓内 FTS5 基建，零新依赖、打包零增重）；**向量语义召回 = M2b 后置**（避免现在给 .app 塞 embedding 模型）。
+- **Python**：新 `POST /chat/memory/search`（query → 相关性召回 top-k）= `get_mem0_engine().search(query, user_id=DEFAULT_USER_ID, limit=k)`（**M1a 引擎已封装 `search` 方法**：`mem0.search(query, filters={"user_id"}, top_k)`，bge-small 向量 hybrid，本地离线）。~~（§0 决策更新已覆盖原"先 FTS5 词法/向量后置 M2b"分阶段——Mem0 第一天就有向量检索，M1e 已把 fastembed/FAISS 打进 venv，无需 FTS5 过渡）~~ 注意 faiss 不支持 keyword/BM25（M1 集成坑），纯语义召回。
 - **Node**：`prepareChatRun` 在 `streamText` 前用末条 user 文本调 search → 召回注入 context block（取代静态 `memorySummary` 全量 dump）。
 - **flag-off 不变量**：不调 search，仍走 `/chat/config` 静态 top-20，字节级不变。
 - **eval 注意**：改注入内容会动依赖 memory 的 task → 按 recorder-contract 重录 baseline；**真 gate 看迭代质量，不靠改任务凑绿**。
