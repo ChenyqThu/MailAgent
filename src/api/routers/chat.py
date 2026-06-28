@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import sqlite3
 from datetime import datetime, timezone
@@ -35,6 +36,8 @@ from src.chat.notion_agent import run_notion_agent, sse_encode
 from src.kos.client import KOSClient, KOSError
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
+
+logger = logging.getLogger(__name__)
 
 # task 06-08-chat 第二波 Bug B — reuse the email-classification context page
 # (user profile / Sender Priority / focus projects / 研发课组 / 邮件风格 / 时区)
@@ -1041,3 +1044,100 @@ async def delete_memory(request: Request, scope: str = Query(...), key: str = Qu
     """删一条 memory → {deleted: count}。删不存在的 (scope,key) 也返 {deleted:0}（幂等）。"""
     count = get_chat_db().delete_memory_entry(scope, key)
     return success_envelope({"deleted": count}, request=request, source="sqlite")
+
+
+# ── mem0 auto-capture 端点（M1 — 异步自动抽取写记忆）─────────────────────────
+#
+# ⚠️ 与上面 agent_memory_kv 端点（/memory GET/POST/DELETE）**完全独立**：那是 M0 的显式
+# 记忆工具层（ChatDb.agent_memory_kv，前端 owns schema）；这里是 M1 的 mem0 自动抽取层，
+# 写进独立的 FAISS store（DATA_ROOT/mem0/），**不碰 chat_db / CHAT_DB_VERSION**。
+#
+# 触发链：Node gateway onFinish fire-and-forget（**永不 await**）→ 本端点 → mem0.add 自动
+# 抽取持久偏好/事实。mem0 是同步库（含网络抽取调用）→ run_in_threadpool 跑，绝不阻塞
+# serve-api event loop。durable-only 抽取约束在引擎 custom_instructions（绝不抽一次性任务态）。
+# flag MAILAGENT_MEM0_CAPTURE 关时 Node 端根本不触发本端点（没被调用 = 字节级 flag-off），
+# 故本端点不自检 flag。
+
+
+@router.post("/memory/capture", dependencies=[Depends(verify_cf_access)])
+async def capture_memory(request: Request, body: Optional[Dict[str, Any]] = None):
+    """从一个完成的 chat turn 自动抽取持久记忆（mem0.add）。
+
+    body = ``{userText:str, assistantText:str, sessionId?:int, messageId?:int}``。
+    data = ``{captured: [{id, memory, event}], count}``（只含真正写入的 ADD/UPDATE 条目）。
+
+    best-effort：抽取/写入失败**不 raise**（调用方 fire-and-forget 不重试）→ 记 warning +
+    返回 ``captured=[]``。空 turn 直接短路，不触发模型调用。
+    """
+    opts = body or {}
+    user_text = opts.get("userText")
+    assistant_text = opts.get("assistantText")
+    if not isinstance(user_text, str) or not isinstance(assistant_text, str):
+        # contract violation = Node onFinish 侧 bug（本不该发生）。调用方 fire-and-forget
+        # 看不到这个 400，故 server 侧 log 让它可观测（best-effort 路径唯一的硬失败）。
+        logger.warning(
+            "capture got malformed body (need userText+assistantText:str), keys=%s",
+            list(opts.keys()),
+        )
+        raise APIError(
+            "E_INVALID_ARG",
+            "capture requires userText:str + assistantText:str",
+            source="memory",
+        )
+    user_text = user_text.strip()
+    assistant_text = assistant_text.strip()
+    # 空 turn（无实质内容）→ 无可抽取，短路（省一次模型调用 + 不污染 store）。
+    if not user_text and not assistant_text:
+        return success_envelope(
+            {"captured": [], "count": 0}, request=request, source="memory"
+        )
+
+    # provenance（可选）→ 存进 mem0 metadata，撤销/审计可溯源。bool 是 int 子类，显式排除。
+    metadata: Dict[str, Any] = {"source": "auto_capture"}
+    session_id = opts.get("sessionId")
+    if isinstance(session_id, int) and not isinstance(session_id, bool):
+        metadata["session_id"] = session_id
+    message_id = opts.get("messageId")
+    if isinstance(message_id, int) and not isinstance(message_id, bool):
+        metadata["message_id"] = message_id
+
+    # 懒 import：守 chat.py 的 lazy-config 纪律（顶部 import mem0_engine 会触发 src.config
+    # import-time，裸 worktree / CI import self-check 会炸）+ mem0 引擎懒加载红线（真正 add
+    # 才拉 mem0/fastembed/faiss ~150MB）。
+    from src.memory.mem0_engine import (
+        CAPTURE_TEXT_MAX_CHARS,
+        DEFAULT_USER_ID,
+        get_mem0_engine,
+    )
+
+    # 截断：durable facts 在前几段，超大 turn（如多线程邮件 dump 粘进 chat）截断省 token +
+    # 防 threadpool slot 被慢抽取长占。
+    messages = [
+        {"role": "user", "content": user_text[:CAPTURE_TEXT_MAX_CHARS]},
+        {"role": "assistant", "content": assistant_text[:CAPTURE_TEXT_MAX_CHARS]},
+    ]
+    try:
+        # mem0 同步库 → threadpool，绝不阻塞 event loop（红线：capture 永不卡 serve-api）。
+        result = await run_in_threadpool(
+            get_mem0_engine().add, messages, DEFAULT_USER_ID, metadata
+        )
+    except Exception:  # noqa: BLE001 — best-effort，任何抽取/写入失败都不阻断
+        logger.warning("mem0 auto-capture failed (turn already streamed)", exc_info=True)
+        return success_envelope(
+            {"captured": [], "count": 0}, request=request, source="memory"
+        )
+
+    # mem0.add → {"results": [{"id","memory","event"}]}（event ∈ ADD/UPDATE/DELETE/NOOP）。
+    # 只把真正写入/更新的条目当「已记住」上报（NOOP/DELETE 不弹 M1d toast）。
+    raw = result.get("results", []) if isinstance(result, dict) else []
+    captured = [
+        {"id": r.get("id"), "memory": r.get("memory"), "event": r.get("event")}
+        for r in raw
+        if isinstance(r, dict) and r.get("event") in ("ADD", "UPDATE")
+    ]
+    return success_envelope(
+        {"captured": captured, "count": len(captured)},
+        request=request,
+        source="memory",
+        meta_extra={"total_events": len(raw)},
+    )

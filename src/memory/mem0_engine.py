@@ -15,7 +15,8 @@
   （实测；env 是充分防线，无需 monkeypatch consumer binding）。
 
 业务权威在 Python：抽取/检索/删除逻辑全在这里；Node 只 fire-and-forget 触发（M1c）。
-mem0 是**同步**库 → 调用方（capture 端点）须用 `run_in_executor` 跑，勿阻塞 event loop。
+mem0 是**同步**库 → 调用方（capture 端点）须用 `run_in_threadpool` 跑，勿阻塞 event loop。
+写操作（add/delete）经 per-engine 写锁序列化（mem0 的 history.db/FAISS 多线程并发写不安全）。
 """
 from __future__ import annotations
 
@@ -29,11 +30,20 @@ from src.config import config as cfg
 # bge-small-en-v1.5：384 维，fastembed 默认量化 ONNX，离线、无 key。
 BGE_MODEL = "BAAI/bge-small-en-v1.5"
 BGE_DIMS = 384
+
+# 单用户系统：所有自动抽取的记忆归一个固定逻辑分区（mem0 user_id）。刻意 **不** 用
+# USER_EMAIL —— 邮箱后缀切换（lucien.chen@tp-link→@omadanetworks）会变 email，但记忆该
+# 延续；固定串最稳。M2 召回 / M1d 撤销均按此 user_id 过滤。
+DEFAULT_USER_ID = "owner"
 # 抽取调用的 max output。刻意小（抽取出的 facts JSON 很短）：anthropic SDK 对「非流式 +
 # 大 max_tokens（预期生成 >10min）」会硬 raise「Streaming is required」，而 mem0 的
 # anthropic LLM 是非流式 messages.create，故**不能**用主调用的 64k。8192 远低于该阈值且
 # 对抽取绰绰有余。（这是 SDK 物理限制下的合理偏离，非吝啬 context。）
 CAPTURE_MAX_TOKENS = 8192
+
+# capture 抽取输入的单段字符上限：durable facts 集中在前几段，抽取不需要全文。超大 turn
+# （如把多线程邮件 dump 粘进 chat）截断到此，省 token + 防 threadpool slot 被慢抽取长占。
+CAPTURE_TEXT_MAX_CHARS = 8000
 
 # mem0 抽取约束（注入 mem0 `custom_instructions`）：只抽持久偏好/事实，绝不抽一次性任务态。
 # 与 RULES floor「绝不静默写一次性任务态」叠加（floor 在系统层，这里在抽取层，双重约束）。
@@ -117,6 +127,10 @@ class Mem0Engine:
         self._model = model
         self._mem: Any = None
         self._lock = threading.Lock()
+        # 写锁：序列化 add/delete。mem0 的 history.db（SQLite）+ FAISS index 在多个
+        # threadpool worker 并发写下可能 `database is locked` / 索引损坏。capture 是后台
+        # best-effort、非 latency-critical，序列化无妨；读（search/get_all）不锁。
+        self._write_lock = threading.Lock()
 
     def _memory(self) -> Any:
         if self._mem is None:
@@ -134,7 +148,8 @@ class Mem0Engine:
         user_id: str,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        return self._memory().add(messages, user_id=user_id, metadata=metadata)
+        with self._write_lock:
+            return self._memory().add(messages, user_id=user_id, metadata=metadata)
 
     def search(self, query: str, user_id: str, limit: int = 10) -> Dict[str, Any]:
         # mem0 2.x：user_id 走 filters、条数走 top_k（不是顶层 user_id=/limit=，会 ValueError）
@@ -144,7 +159,8 @@ class Mem0Engine:
         return self._memory().get_all(filters={"user_id": user_id})
 
     def delete(self, memory_id: str) -> None:
-        self._memory().delete(memory_id)
+        with self._write_lock:
+            self._memory().delete(memory_id)
 
 
 _engine: Optional[Mem0Engine] = None
