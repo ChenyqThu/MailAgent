@@ -1170,3 +1170,61 @@ async def undo_captured_memory(request: Request, id: str = Query(...)):
             http_status=500,
         )
     return success_envelope({"deleted": True, "id": id}, request=request, source="memory")
+
+
+@router.post("/memory/search", dependencies=[Depends(verify_cf_access)])
+async def search_memory(request: Request, body: Optional[Dict[str, Any]] = None):
+    """按 query 向 mem0 store 召回相关记忆（M2 读侧召回注入）。
+
+    body = ``{query:str, limit?:int}``。data = ``{memories:[{id,memory,score}], count}``
+    （按相关性排序；bge-small 向量召回，本地离线）。
+
+    🔴 best-effort 读：调用方（Node gateway prepareChatRun）在 **TTFT 关键路径** 上 await 本
+    端点以注入 system —— 故召回失败/引擎不可用 **绝不 raise**，记 warning + 返回 ``memories=[]``，
+    让 chat 降级 context-light 而非中断。空 query 直接短路（省一次向量检索）。
+
+    与 capture（写）/undo 独立但同命中 mem0 store（DATA_ROOT/mem0/）；不碰 agent_memory_kv。
+    flag MAILAGENT_MEM0_RETRIEVAL 关时 Node 端根本不调本端点（字节级 flag-off），故本端点不自检 flag。
+    """
+    opts = body or {}
+    query = opts.get("query")
+    if not isinstance(query, str):
+        # contract 违约 = Node 侧 bug（本不该发生）。调用方降级路径看不到这个 400 → server 侧 log。
+        logger.warning(
+            "memory search got malformed body (need query:str), keys=%s", list(opts.keys())
+        )
+        raise APIError("E_INVALID_ARG", "search requires query:str", source="memory")
+    query = query.strip()
+    if not query:
+        # 空 query → 无召回意义，短路（省一次向量检索）。
+        return success_envelope({"memories": [], "count": 0}, request=request, source="memory")
+
+    # limit 可选：有效正整数才透传，否则让引擎用自身默认 top_k（10）—— 不在此重复 magic number。
+    kwargs: Dict[str, Any] = {}
+    limit = opts.get("limit")
+    if isinstance(limit, int) and not isinstance(limit, bool) and limit > 0:
+        kwargs["limit"] = limit
+
+    # 懒 import：守 chat.py 的 lazy-config 纪律 + mem0 引擎懒加载红线（真正 search 才拉 mem0/
+    # fastembed/faiss ~150MB）。
+    from src.memory.mem0_engine import DEFAULT_USER_ID, get_mem0_engine
+
+    try:
+        # mem0 同步库 → threadpool，绝不阻塞 serve-api event loop。
+        result = await run_in_threadpool(
+            get_mem0_engine().search, query, DEFAULT_USER_ID, **kwargs
+        )
+    except Exception:  # noqa: BLE001 — best-effort 读：任何召回失败都降级空，绝不阻断 chat
+        logger.warning("mem0 search failed (chat will run context-light)", exc_info=True)
+        return success_envelope({"memories": [], "count": 0}, request=request, source="memory")
+
+    # mem0.search → {"results": [{"id","memory","score",...}]}。投影注入所需三字段；丢空 memory。
+    raw = result.get("results", []) if isinstance(result, dict) else []
+    memories = [
+        {"id": r.get("id"), "memory": r.get("memory"), "score": r.get("score")}
+        for r in raw
+        if isinstance(r, dict) and r.get("memory")
+    ]
+    return success_envelope(
+        {"memories": memories, "count": len(memories)}, request=request, source="memory"
+    )
