@@ -5068,6 +5068,64 @@ body:not([data-batch-mode='true']) .email-row .cb {
   }
 }
 
+/* reactbits StarBorder（移植自官方 JS+CSS）— 沿元素边缘流动的星光描边。落点 AI FAB：
+   两条 radial 光带在上下边缘反向平移 + 淡入淡出（star-movement），圆形 FAB overflow-hidden
+   裁成边缘光环；内圈 accent 实心（inset 2px）露出 2px 环。color 走 accent-fg token（accent
+   实心上的亮色对比，非裸 hex）；linear 平移非 spring（装饰循环动画同 .shimmer 范式）；reduce 关。 */
+.rb-star-border {
+  position: relative;
+  overflow: hidden;
+}
+.rb-star-border::before,
+.rb-star-border::after {
+  content: '';
+  position: absolute;
+  width: 300%;
+  height: 50%;
+  border-radius: 50%;
+  opacity: 0.75;
+  pointer-events: none;
+  z-index: 0;
+  background: radial-gradient(circle, rgb(var(--c-accent-fg) / 0.9), transparent 12%);
+}
+.rb-star-border::after {
+  bottom: -11px;
+  right: -250%;
+  animation: rb-star-movement-bottom 5s linear infinite alternate;
+}
+.rb-star-border::before {
+  top: -11px;
+  left: -250%;
+  animation: rb-star-movement-top 5s linear infinite alternate;
+}
+@keyframes rb-star-movement-bottom {
+  0% {
+    transform: translate(0, 0);
+    opacity: 1;
+  }
+  100% {
+    transform: translate(-100%, 0);
+    opacity: 0;
+  }
+}
+@keyframes rb-star-movement-top {
+  0% {
+    transform: translate(0, 0);
+    opacity: 1;
+  }
+  100% {
+    transform: translate(100%, 0);
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rb-star-border::before,
+  .rb-star-border::after {
+    animation: none;
+    opacity: 0;
+  }
+}
+
 /* reactbits Strands — motion-gsap §10 decorative backdrop (non-loading WebGL silk strands).
    Position: absolute, fills the nearest `relative isolate` ancestor (AgentThread.Root).
    Canvas is transparent; pointer events are suppressed via the wrapper's className. */
@@ -5078,8 +5136,36 @@ body:not([data-batch-mode='true']) .email-row .cb {
    柔和氛围而非被 welcome / composer 硬切割成割裂的块。配合 AgentThread isEmpty 时
    footer 去底色，丝线在 composer 周围连续透出。 */
 .agent-strands-mask {
-  -webkit-mask-image: radial-gradient(130% 100% at 50% 36%, #000 30%, transparent 78%);
-  mask-image: radial-gradient(130% 100% at 50% 36%, #000 30%, transparent 78%);
+  -webkit-mask-image: radial-gradient(120% 90% at 50% 42%, #000 42%, transparent 84%);
+  mask-image: radial-gradient(120% 90% at 50% 42%, #000 42%, transparent 84%);
+}
+
+/* AI 对话框（agent composer）— 很淡的 accent 背景色调（::before 叠层，跟随 6 主题色 + 明暗）
+   + accent 柔光描边（border glow），focus-within 增强。box-shadow 走 token，CSS 内非 .tsx 裸 hex。 */
+.rb-composer-accent {
+  position: relative;
+  box-shadow:
+    0 0 0 1px rgb(var(--c-accent) / 0.12),
+    0 0 12px -2px rgb(var(--c-accent) / 0.16);
+  transition: box-shadow 160ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.rb-composer-accent::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: rgb(var(--c-accent) / 0.05);
+  pointer-events: none;
+}
+.rb-composer-accent:focus-within {
+  box-shadow:
+    0 0 0 1px rgb(var(--c-accent) / 0.4),
+    0 0 18px -2px rgb(var(--c-accent) / 0.32);
+}
+@media (prefers-reduced-motion: reduce) {
+  .rb-composer-accent {
+    transition: none;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

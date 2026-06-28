@@ -479,7 +479,9 @@ export function AgentComposer(): React.JSX.Element {
   return (
     <ComposerPrimitive.Unstable_TriggerPopoverRoot>
       <ComposerPrimitive.Root className="relative flex w-full flex-col">
-        <div className="flex w-full flex-col gap-1.5 rounded-2xl border border-[var(--hairline)] bg-ink-2 p-2 shadow-[0_4px_16px_-8px_rgba(0,0,0,0.18),0_1px_2px_rgba(0,0,0,0.06)] transition-[border-color,box-shadow] duration-fast focus-within:border-[rgb(var(--c-accent))]">
+        {/* AI 对话框 — 很淡 accent 背景色调 + accent border glow（.rb-composer-accent），
+            focus-within 增强；几何/内边距保留。 */}
+        <div className="rb-composer-accent flex w-full flex-col gap-1.5 rounded-2xl bg-ink-2 p-2">
           {controls && <AgentAttachmentChips controls={controls} />}
           <LexicalComposerInput
             directiveChip={AgentDirectiveChip}

@@ -18,16 +18,7 @@ import { cloneElement, isValidElement, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate, useRouterState } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
-import {
-  BarChart3,
-  ChevronDown,
-  ChevronLeft,
-  ChevronRight,
-  Inbox,
-  Mail,
-  Star,
-  Sliders
-} from 'lucide-react'
+import { BarChart3, ChevronDown, ChevronLeft, ChevronRight, Inbox, Star } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
 import {
@@ -35,8 +26,10 @@ import {
   AnimatedIconActiveProvider,
   CalendarDaysIcon,
   CircleHelpIcon,
+  FeatherIcon,
+  FoldersIcon,
+  GripIcon,
   HistoryIcon,
-  SendIcon,
   SettingsIcon,
   SparklesIcon,
   SquarePenIcon
@@ -229,14 +222,15 @@ function TotalCount({ count }: { count: number }): React.ReactElement | null {
   )
 }
 
-// 有 pqoqubbw 动画版的（outbox/drafts）走 AnimatedIcon + trigger='parent'（NavRow
-// 整行 hover 传播）；无动画版的（inbox/flagged/all = Inbox/Star/Mail）保持静态 lucide。
+// 动画图标（feather/square-pen/folders）走 AnimatedIcon；整行 hover/focus 经 NavRow 的
+// AnimatedIconActiveProvider 驱动（trigger='parent' 仅保留标注语义）。无 pqoqubbw 动画版的
+// inbox/flagged（Inbox/Star）保持静态 lucide —— 库里无对应动画版。
 const MAILBOX_ICON: Record<EmailView, React.ReactNode> = {
   inbox: <Inbox size={15} strokeWidth={1.75} />,
-  outbox: <SendIcon size={15} strokeWidth={1.75} trigger="parent" />,
+  outbox: <FeatherIcon size={15} strokeWidth={1.75} trigger="parent" />,
   drafts: <SquarePenIcon size={15} strokeWidth={1.75} trigger="parent" />,
   flagged: <Star size={15} strokeWidth={1.75} />,
-  all: <Mail size={15} strokeWidth={1.75} />
+  all: <FoldersIcon size={15} strokeWidth={1.75} trigger="parent" />
 }
 
 export function Sidebar(): React.ReactElement {
@@ -558,7 +552,7 @@ export function Sidebar(): React.ReactElement {
           {/* Custom AI — /agents hub（Agents / 报告 / Chats=custom-api scoped）。
               整个 /agents 都属 Custom AI。（邮件上下文「问 AI」仍开 AIChatPanel。） */}
           <NavRow
-            icon={<Sliders size={15} strokeWidth={1.75} />}
+            icon={<GripIcon size={15} strokeWidth={1.75} trigger="parent" />}
             label={t('chat.backend.customApi')}
             title={collapsed ? t('chat.backend.customApi') : undefined}
             selected={onAgents}

@@ -12,6 +12,13 @@ export {
 export { SettingsIcon } from './animated/settings'
 export { SparklesIcon } from './animated/sparkles'
 
+// 第二批（用户点名替换）：发件箱→feather · 所有邮件→folders · 自定义文件夹→folder-plus
+// · Custom Agents→grip。均 pqoqubbw 动画版，已套 IconShell。
+export { FeatherIcon } from './animated/feather'
+export { FoldersIcon } from './animated/folders'
+export { FolderPlusIcon } from './animated/folder-plus'
+export { GripIcon } from './animated/grip'
+
 export { SendIcon } from './animated/send'
 export { SquarePenIcon } from './animated/square-pen'
 export { HistoryIcon } from './animated/history'

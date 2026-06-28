@@ -79,7 +79,9 @@ export function AgentThread({
       {onTurnComplete && <TurnCompleteWatcher onComplete={onTurnComplete} />}
       {isEmpty && (
         <Suspense fallback={null}>
-          <div className="agent-strands-mask pointer-events-none absolute inset-0 -z-10">
+          {/* Strands 上移聚焦到 greetings 区域（上 62%）做背景，完整显示不被下方 composer 切割；
+              径向遮罩再柔化边缘。仅 isEmpty 挂载，首条消息后卸载（零持续 GPU）。 */}
+          <div className="agent-strands-mask pointer-events-none absolute inset-x-0 top-0 h-[62%] -z-10">
             <AgentStrandsBackdrop />
           </div>
         </Suspense>
