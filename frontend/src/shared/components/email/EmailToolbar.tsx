@@ -34,6 +34,7 @@ import {
   CheckCheckIcon,
   ChevronDownIcon,
   ChevronUpIcon,
+  DeleteIcon,
   LanguagesIcon,
   MapPinCheckIcon,
   MapPinIcon,
@@ -105,6 +106,11 @@ interface ToolbarProps {
    *  EmailDetail 在非 davmail 后端可不传, 按钮则保持禁用占位。 */
   onArchive?: () => void
   archiveState?: WriteActionState
+
+  /** 删除（收件箱语义 = flag→done 归档完成, 非物理删除 — 见 types.ts deleteDraft 注释
+   *  + EmailDetail.handleDelete; 草稿走 compose 编辑态不经此工具栏）。不传则按钮禁用。 */
+  onDelete?: () => void
+  deleteState?: WriteActionState
 
   /** Sprint 13 — passive read-out from `email_metadata.is_important`
    *  (RFC header bit, see reader._parse_importance). No write path. */
@@ -708,6 +714,8 @@ export function EmailToolbar({
   pinState,
   onArchive,
   archiveState,
+  onDelete,
+  deleteState,
   isImportant,
   notionUrl,
   onPrev,
@@ -874,6 +882,16 @@ export function EmailToolbar({
         hoverHint={onArchive ? t('toolbar.archive') : t('toolbar.archiveBlocked')}
         pending={archiveState?.pending}
         onClick={onArchive}
+      />
+      {/* 删除（收件箱语义 = 归档完成 flag→done，非物理删除；与上面 archive 的 IMAP MOVE
+          移文件夹区分）。delete 图标。 */}
+      <GhostBtn
+        icon={<DeleteIcon size={13} strokeWidth={2} />}
+        label={t('toolbar.delete', { defaultValue: '删除' })}
+        showLabel={wantsLabels}
+        hoverHint={t('toolbar.delete', { defaultValue: '删除' })}
+        pending={deleteState?.pending}
+        onClick={onDelete}
       />
 
       <Divider />
