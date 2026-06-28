@@ -366,6 +366,10 @@ export default function Strands({
       glassProgram.uniforms.uResolution.value = [width, height]
     }
     window.addEventListener('resize', resize)
+    // dogfood：容器尺寸变化（浮窗展开动画 / 侧栏调宽 / banner 响应式）不触发 window resize → canvas 定格旧
+    // 尺寸 = 丝线偏移/不居中。ResizeObserver 盯容器，尺寸一变就 setSize，canvas 始终满容器、shader 居中。
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => resize()) : null
+    if (ro) ro.observe(ctn)
     resize()
 
     let animateId = 0
@@ -408,6 +412,7 @@ export default function Strands({
     return () => {
       cancelAnimationFrame(animateId)
       window.removeEventListener('resize', resize)
+      if (ro) ro.disconnect()
       if (ctn && gl.canvas.parentNode === ctn) {
         ctn.removeChild(gl.canvas)
       }

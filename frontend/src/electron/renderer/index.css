@@ -4864,28 +4864,30 @@ body:not([data-batch-mode='true']) .email-row .cb {
 .shimmer-neutral { --shimmer-hl: var(--ink-fg); }
 /* ShinyText 风格变体（reactbits ShinyText 观感，transform 驱动 — 避开官方 bg-clip-text +
    background-position 在 Electron macOS 合成层/虚拟滚动失效的坑，见 ShimmerText.tsx 注释）。
-   特征（采纳 codex 方案）：① 窗口加宽到 70%（扩大光点范围 = 更宽柔的渐变扫光带）
-   ② yoyo 来回扫（animation-direction: alternate + ease-in-out 两端减速）
-   ③ shine 色固定为 ink-fg 前景高光（不跟 accent 6 色，仅随明暗 token；base 压暗到 ink-fg-3 拉对比）。
-   🔴 win 加宽到 70% 必须同步重算 hi 抵消（保持 hi 视觉固定对齐 base）：
-     win 位移 -100%→220%（of winW=70% → 绝对 ∓70%/154% ×文字宽）；
-     hi 反向 = -0.7×win = 70%→-154%（of hiW=文字宽）。 */
+   特征（采纳 codex 方案）：① 窗口加宽到 84%（dogfood +20%：更宽柔的渐变扫光带）
+   ② yoyo 来回扫（animation-direction: alternate + ease-in-out 两端减速）+ 时长 2.6s（dogfood：比原 2s 慢 ~30%）
+   ③ shine 色固定为白（dogfood：高光更亮、像「光」扫过；旧 ink-fg 在亮色主题=近黑 → 被看成「黑 shine」）；base 压暗到 ink-fg-3 拉对比。
+   🔴 win 加宽到 84% 必须同步重算 hi 抵消（保持 hi 视觉固定对齐 base）：
+     win 位移 -100%→220%（of winW=84% → 绝对 ∓84%/184.8% ×文字宽）；
+     hi 反向 = -0.84×win = 84%→-184.8%（of hiW=文字宽）。 */
 @keyframes shimmer-shiny-win {
   from { transform: translateX(-100%); }
   to { transform: translateX(220%); }
 }
 @keyframes shimmer-shiny-hi {
-  from { transform: translateX(70%); }
-  to { transform: translateX(-154%); }
+  from { transform: translateX(84%); }
+  to { transform: translateX(-184.8%); }
 }
 .shimmer-shiny .shimmer-text-base { color: rgb(var(--ink-fg-3)); }
 .shimmer-shiny .shimmer-text-win {
-  width: 70%;
-  animation: shimmer-shiny-win 2s ease-in-out infinite alternate;
+  width: 84%;
+  animation: shimmer-shiny-win 2.6s ease-in-out infinite alternate;
 }
 .shimmer-shiny .shimmer-text-hi {
-  color: rgb(var(--ink-fg));
-  animation: shimmer-shiny-hi 2s ease-in-out infinite alternate;
+  /* dogfood：shine 用固定白（高光像「光」扫过；旧 rgb(var(--ink-fg)) 在亮色主题=近黑，被看成黑 shine）。
+     base 是 ink-fg-3 中灰，白 shine 在明暗主题都能扫出亮带。 */
+  color: rgb(255 255 255);
+  animation: shimmer-shiny-hi 2.6s ease-in-out infinite alternate;
 }
 /* AI 思考态多段 phrase 轮播（ThinkingPhrases.tsx）：切换时 fade + 上移 enter（opacity/
    transform 合成器属性，合成层内可靠）。reduce 下由下方 @media 关闭。 */
@@ -5058,14 +5060,14 @@ body:not([data-batch-mode='true']) .email-row .cb {
   pointer-events: none;
 }
 
-/* reactbits StarBorder（圆形适配）— 官方双水平光带是为长条 button 设计的（光点沿长边扫过），
-   在 size-12 圆形 FAB 上扫光不可见（width 300% 光带被圆形裁掉、水平移动只在上下边缘闪一下）。
-   改为 conic-gradient 高光段绕圆心匀速旋转（rb-star-spin），内圈 accent 实心（inset 2px）盖住
-   中心、只露边缘 2px 环 → 一道 accent-fg 亮光沿圆环流动。color 走 accent-fg token（accent 实心
-   上的亮色对比，非裸 hex）；单向匀速旋转非 spring（装饰循环动画同 .shimmer 范式）；reduce 关。 */
+/* reactbits StarBorder（圆形 FAB）— dogfood：accent 主体环 + 一段「固定白」高光绕圈。内圈是 accent 实心、
+   图标也是 accent 系 → 高光必须用白（非 accent 系）才与内圈拉开对比、看得出旋转（dogfood：提亮 accent 高光
+   与 accent 内圈太接近，看不出）。白用 CSS 字面 white（固定，不随主题翻转 —— 区别于会翻黑/白的 --c-accent-fg）。
+   内圈 accent 实心（inset 2px）盖中心、露 ~2px 环；::after accent 柔光外发光。常驻匀速旋转 8s（常驻故放慢；
+   同 .shimmer 范式非 spring）；reduce 停转留静态环。 */
 .rb-star-border {
   position: relative;
-  overflow: hidden;
+  border-radius: 9999px;
 }
 .rb-star-border::before {
   content: '';
@@ -5076,12 +5078,23 @@ body:not([data-batch-mode='true']) .email-row .cb {
   z-index: 0;
   background: conic-gradient(
     from 0deg,
-    transparent 0deg,
-    transparent 215deg,
-    rgb(var(--c-accent-fg) / 0.95) 312deg,
-    transparent 360deg
+    rgb(var(--c-accent)),
+    rgb(var(--c-accent)) 200deg,
+    white 280deg,
+    rgb(var(--c-accent)) 360deg
   );
-  animation: rb-star-spin 3.2s linear infinite;
+  animation: rb-star-spin 8s linear infinite;
+}
+.rb-star-border::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: -1;
+  box-shadow:
+    0 0 10px 0 rgb(var(--c-accent) / 0.5),
+    0 0 22px 4px rgb(var(--c-accent) / 0.32);
 }
 @keyframes rb-star-spin {
   to {
@@ -5091,7 +5104,6 @@ body:not([data-batch-mode='true']) .email-row .cb {
 @media (prefers-reduced-motion: reduce) {
   .rb-star-border::before {
     animation: none;
-    opacity: 0;
   }
 }
 
@@ -5101,102 +5113,172 @@ body:not([data-batch-mode='true']) .email-row .cb {
 .strands-container { position: absolute; inset: 0; width: 100%; height: 100%; background: transparent; }
 .strands-container canvas { display: block; width: 100%; height: 100%; }
 
-/* Agent 空态 Strands 背景遮罩 — 径向渐隐（中心偏上亮、四周淡出），让全屏丝线作为
-   柔和氛围而非被 welcome / composer 硬切割成割裂的块。配合 AgentThread isEmpty 时
-   footer 去底色，丝线在 composer 周围连续透出。 */
-.agent-strands-mask {
-  -webkit-mask-image: radial-gradient(120% 90% at 50% 42%, #000 42%, transparent 84%);
-  mask-image: radial-gradient(120% 90% at 50% 42%, #000 42%, transparent 84%);
+/* Agent 空态 Strands 装饰块遮罩 — greetings 文案上方的独立丝线块（dogfood：不再做全屏背景，单独
+   置于文案上方），居中椭圆径向渐隐柔化四边、不硬切。 */
+.agent-strands-banner {
+  /* 中心下移到 62%（丝线亮区往下沉，贴近下方欢迎语，减少 div 下部留白）+ 范围放大让丝线更饱满。 */
+  -webkit-mask-image: radial-gradient(88% 82% at 50% 62%, #000 52%, transparent 100%);
+  mask-image: radial-gradient(88% 82% at 50% 62%, #000 52%, transparent 100%);
 }
 
-/* AI 对话框（agent composer）— 很淡的 accent 背景色调（::before 叠层，跟随 6 主题色 + 明暗）
-   + accent 柔光描边（border glow），focus-within 增强。box-shadow 走 token，CSS 内非 .tsx 裸 hex。 */
-.rb-composer-accent {
+/* reactbits BorderGlow（官方 TS-CSS 逐字段移植，组件 effects/BorderGlow.tsx）— mesh-gradient 彩虹
+   边框 ::before + 近边背景填充 ::after（soft-light）+ edge-light 辉光环（::before 多层 box-shadow）+
+   inner。逐字节照搬官方 reactbits.dev/r/BorderGlow-TS-CSS，仅 3 处适配：类名/变量加 rb- 前缀（防全局
+   撞）；--rb-card-bg 默认 token（跟随主题）；末尾加 @media reduce 隐藏三层。颜色 hsla/hex/rgba 均在
+   .css（豁免 no-raw-hex）。⚠️ edge-light inset:-glow-padding 外扩盒子是官方设计 → AgentComposer 传
+   较小 glowRadius 控外扩，避免窄浮窗里撑横向滚动条。 */
+.rb-border-glow-card {
+  --rb-edge-proximity: 0;
+  --rb-cursor-angle: 45deg;
+  --rb-edge-sensitivity: 30;
+  --rb-color-sensitivity: calc(var(--rb-edge-sensitivity) + 20);
+  --rb-border-radius: 28px;
+  --rb-glow-padding: 40px;
+  --rb-cone-spread: 25;
+
   position: relative;
-  box-shadow:
-    0 0 0 1px rgb(var(--c-accent) / 0.12),
-    0 0 12px -2px rgb(var(--c-accent) / 0.16);
-  transition: box-shadow 160ms cubic-bezier(0.4, 0, 0.2, 1);
+  border-radius: var(--rb-border-radius);
+  isolation: isolate;
+  transform: translate3d(0, 0, 0.01px);
+  display: grid;
+  border: 1px solid rgb(255 255 255 / 15%);
+  background: var(--rb-card-bg, #120f17);
+  overflow: visible;
 }
-.rb-composer-accent::before {
+.rb-border-glow-card::before,
+.rb-border-glow-card::after,
+.rb-border-glow-card > .rb-edge-light {
   content: '';
   position: absolute;
   inset: 0;
   border-radius: inherit;
-  background: rgb(var(--c-accent) / 0.05);
-  pointer-events: none;
-}
-.rb-composer-accent:focus-within {
-  box-shadow:
-    0 0 0 1px rgb(var(--c-accent) / 0.4),
-    0 0 18px -2px rgb(var(--c-accent) / 0.32);
-}
-@media (prefers-reduced-motion: reduce) {
-  .rb-composer-accent {
-    transition: none;
-  }
-}
-
-/* reactbits BorderGlow（精简移植，组件 effects/BorderGlow.tsx）— pointer 跟随的边缘辉光环 +
-   挂载 intro sweep。单色 --c-accent（跟随 6 主题色 + 明暗），落点 AI 输入框（包裹 composer shell）。
-   辉光层 .rb-edge-light 默认透明，靠 --rb-edge-proximity（指针靠边升高）显隐 + --rb-cursor-angle
-   （conic mask 只点亮指针所在弧段）定位；hover / .rb-sweep-active 才可见。mask 黑白非设计色（.css
-   豁免 no-raw-hex）。reduce 直接隐藏辉光层 → 退回 shell 自身 .rb-composer-accent 静态描边。 */
-.rb-border-glow-card {
-  --rb-edge-proximity: 0;
-  --rb-cursor-angle: 45deg;
-  --rb-edge-sens: 30;
-  --rb-radius: 16px;
-  --rb-glow-pad: 22px;
-  --rb-glow-intensity: 0.5;
-  position: relative;
-  border-radius: var(--rb-radius);
-  isolation: isolate;
-}
-.rb-border-glow-card > .rb-edge-light {
-  position: absolute;
-  inset: calc(var(--rb-glow-pad) * -1);
-  border-radius: calc(var(--rb-radius) + var(--rb-glow-pad));
-  pointer-events: none;
-  z-index: 1;
   transition: opacity 0.25s ease-out;
-  opacity: calc((var(--rb-edge-proximity) - var(--rb-edge-sens)) / (100 - var(--rb-edge-sens)));
-  mix-blend-mode: plus-lighter;
-  -webkit-mask-image: conic-gradient(
-    from var(--rb-cursor-angle) at center,
-    #000 2.5%,
-    transparent 12%,
-    transparent 88%,
-    #000 97.5%
-  );
-  mask-image: conic-gradient(
-    from var(--rb-cursor-angle) at center,
-    #000 2.5%,
-    transparent 12%,
-    transparent 88%,
-    #000 97.5%
-  );
+  z-index: -1;
 }
-/* 非 hover 且非 intro 时辉光淡出（更慢，避免离开生硬）。 */
+.rb-border-glow-card:not(:hover):not(.rb-sweep-active)::before,
+.rb-border-glow-card:not(:hover):not(.rb-sweep-active)::after,
 .rb-border-glow-card:not(:hover):not(.rb-sweep-active) > .rb-edge-light {
   opacity: 0;
   transition: opacity 0.75s ease-in-out;
 }
-/* 实际辉光环：贴 shell 边缘的多层 accent box-shadow（inset 内辉 + outset 外发光）。 */
+/* colored mesh-gradient border */
+.rb-border-glow-card::before {
+  border: 1px solid transparent;
+  background:
+    linear-gradient(var(--rb-card-bg, #120f17) 0 100%) padding-box,
+    linear-gradient(rgb(255 255 255 / 0%) 0% 100%) border-box,
+    var(--rb-gradient-one, radial-gradient(at 80% 55%, hsla(268, 100%, 76%, 1) 0px, transparent 50%)) border-box,
+    var(--rb-gradient-two, radial-gradient(at 69% 34%, hsla(349, 100%, 74%, 1) 0px, transparent 50%)) border-box,
+    var(--rb-gradient-three, radial-gradient(at 8% 6%, hsla(136, 100%, 78%, 1) 0px, transparent 50%)) border-box,
+    var(--rb-gradient-four, radial-gradient(at 41% 38%, hsla(192, 100%, 64%, 1) 0px, transparent 50%)) border-box,
+    var(--rb-gradient-five, radial-gradient(at 86% 85%, hsla(186, 100%, 74%, 1) 0px, transparent 50%)) border-box,
+    var(--rb-gradient-six, radial-gradient(at 82% 18%, hsla(52, 100%, 65%, 1) 0px, transparent 50%)) border-box,
+    var(--rb-gradient-seven, radial-gradient(at 51% 4%, hsla(12, 100%, 72%, 1) 0px, transparent 50%)) border-box,
+    var(--rb-gradient-base, linear-gradient(#c299ff 0 100%)) border-box;
+
+  opacity: calc((var(--rb-edge-proximity) - var(--rb-color-sensitivity)) / (100 - var(--rb-color-sensitivity)));
+
+  mask-image: conic-gradient(
+    from var(--rb-cursor-angle) at center,
+    black calc(var(--rb-cone-spread) * 1%),
+    transparent calc((var(--rb-cone-spread) + 15) * 1%),
+    transparent calc((100 - var(--rb-cone-spread) - 15) * 1%),
+    black calc((100 - var(--rb-cone-spread)) * 1%)
+  );
+}
+/* colored mesh-gradient background fill near edges */
+.rb-border-glow-card::after {
+  border: 1px solid transparent;
+  background:
+    var(--rb-gradient-one, radial-gradient(at 80% 55%, hsla(268, 100%, 76%, 1) 0px, transparent 50%)) padding-box,
+    var(--rb-gradient-two, radial-gradient(at 69% 34%, hsla(349, 100%, 74%, 1) 0px, transparent 50%)) padding-box,
+    var(--rb-gradient-three, radial-gradient(at 8% 6%, hsla(136, 100%, 78%, 1) 0px, transparent 50%)) padding-box,
+    var(--rb-gradient-four, radial-gradient(at 41% 38%, hsla(192, 100%, 64%, 1) 0px, transparent 50%)) padding-box,
+    var(--rb-gradient-five, radial-gradient(at 86% 85%, hsla(186, 100%, 74%, 1) 0px, transparent 50%)) padding-box,
+    var(--rb-gradient-six, radial-gradient(at 82% 18%, hsla(52, 100%, 65%, 1) 0px, transparent 50%)) padding-box,
+    var(--rb-gradient-seven, radial-gradient(at 51% 4%, hsla(12, 100%, 72%, 1) 0px, transparent 50%)) padding-box,
+    var(--rb-gradient-base, linear-gradient(#c299ff 0 100%)) padding-box;
+
+  mask-image:
+    linear-gradient(to bottom, black, black),
+    radial-gradient(ellipse at 50% 50%, black 40%, transparent 65%),
+    radial-gradient(ellipse at 66% 66%, black 5%, transparent 40%),
+    radial-gradient(ellipse at 33% 33%, black 5%, transparent 40%),
+    radial-gradient(ellipse at 66% 33%, black 5%, transparent 40%),
+    radial-gradient(ellipse at 33% 66%, black 5%, transparent 40%),
+    conic-gradient(from var(--rb-cursor-angle) at center, transparent 5%, black 15%, black 85%, transparent 95%);
+
+  mask-composite: subtract, add, add, add, add, add;
+  opacity: calc(var(--rb-fill-opacity, 0.5) * (var(--rb-edge-proximity) - var(--rb-color-sensitivity)) / (100 - var(--rb-color-sensitivity)));
+  mix-blend-mode: soft-light;
+}
+/* outer glow layer */
+.rb-border-glow-card > .rb-edge-light {
+  inset: calc(var(--rb-glow-padding) * -1);
+  pointer-events: none;
+  z-index: 1;
+
+  mask-image: conic-gradient(
+    from var(--rb-cursor-angle) at center,
+    black 2.5%,
+    transparent 10%,
+    transparent 90%,
+    black 97.5%
+  );
+
+  opacity: calc((var(--rb-edge-proximity) - var(--rb-edge-sensitivity)) / (100 - var(--rb-edge-sensitivity)));
+  mix-blend-mode: plus-lighter;
+}
 .rb-border-glow-card > .rb-edge-light::before {
   content: '';
   position: absolute;
-  inset: var(--rb-glow-pad);
-  border-radius: var(--rb-radius);
+  inset: var(--rb-glow-padding);
+  border-radius: inherit;
+  /* dogfood：官方暖黄 glowColor 在亮色白底上发散成白雾、外扩太多 → 改 accent token（饱和、跟随主题，
+     亮暗自动正确）；最外档 50px→32px 收一点外扩。 */
   box-shadow:
-    inset 0 0 0 1px rgb(var(--c-accent) / calc(0.9 * var(--rb-glow-intensity))),
-    inset 0 0 4px 0 rgb(var(--c-accent) / calc(0.5 * var(--rb-glow-intensity))),
-    inset 0 0 12px 0 rgb(var(--c-accent) / calc(0.3 * var(--rb-glow-intensity))),
-    0 0 4px 0 rgb(var(--c-accent) / calc(0.5 * var(--rb-glow-intensity))),
-    0 0 12px 0 rgb(var(--c-accent) / calc(0.3 * var(--rb-glow-intensity))),
-    0 0 22px 2px rgb(var(--c-accent) / calc(0.18 * var(--rb-glow-intensity)));
+    inset 0 0 0 1px rgb(var(--c-accent) / 1),
+    inset 0 0 1px 0 rgb(var(--c-accent) / 0.6),
+    inset 0 0 3px 0 rgb(var(--c-accent) / 0.5),
+    inset 0 0 6px 0 rgb(var(--c-accent) / 0.4),
+    inset 0 0 15px 0 rgb(var(--c-accent) / 0.3),
+    inset 0 0 25px 2px rgb(var(--c-accent) / 0.18),
+    inset 0 0 32px 2px rgb(var(--c-accent) / 0.1),
+    0 0 1px 0 rgb(var(--c-accent) / 0.6),
+    0 0 3px 0 rgb(var(--c-accent) / 0.5),
+    0 0 6px 0 rgb(var(--c-accent) / 0.4),
+    0 0 15px 0 rgb(var(--c-accent) / 0.3),
+    0 0 25px 2px rgb(var(--c-accent) / 0.18),
+    0 0 32px 2px rgb(var(--c-accent) / 0.1);
+}
+/* dogfood：亮色主题下 plus-lighter（变亮混合）把 accent 辉光在浅底上加成「白雾」（用户反馈「亮色下
+   白色外扩」）→ 亮色改 normal 混合，让 edge-light 显 accent 本色（半透 accent 叠浅底 = 明度更高的
+   coral，不发白）。暗色保留 plus-lighter（深底上辉光质感好，用户认可）。 */
+:root[data-theme='light'] .rb-border-glow-card > .rb-edge-light {
+  mix-blend-mode: normal;
+}
+/* 亮色：normal 混合下 edge-light::before 的 inset 系列（尤其最内 1px 实色 accent）会盖住 mesh 彩虹边框 +
+   ::after 近边填充（暗色 plus-lighter 是加光不盖、彩虹透出，无此问题）→ 用户「亮色没彩虹、只主强调色」。
+   亮色只保留 outer 外发光、去掉全部 inset：mesh 彩虹完整露出 + accent 仅在卡片外发光，二者共存。 */
+:root[data-theme='light'] .rb-border-glow-card > .rb-edge-light::before {
+  box-shadow:
+    0 0 1px 0 rgb(var(--c-accent) / 0.6),
+    0 0 3px 0 rgb(var(--c-accent) / 0.5),
+    0 0 6px 0 rgb(var(--c-accent) / 0.4),
+    0 0 15px 0 rgb(var(--c-accent) / 0.3),
+    0 0 25px 2px rgb(var(--c-accent) / 0.18),
+    0 0 32px 2px rgb(var(--c-accent) / 0.1);
+}
+.rb-border-glow-inner {
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  overflow: auto;
+  z-index: 1;
 }
 @media (prefers-reduced-motion: reduce) {
+  .rb-border-glow-card::before,
+  .rb-border-glow-card::after,
   .rb-border-glow-card > .rb-edge-light {
     display: none;
   }

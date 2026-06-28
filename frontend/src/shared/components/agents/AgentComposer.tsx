@@ -480,11 +480,11 @@ export function AgentComposer(): React.JSX.Element {
   return (
     <ComposerPrimitive.Unstable_TriggerPopoverRoot>
       <ComposerPrimitive.Root className="relative flex w-full flex-col">
-        {/* AI 对话框 — reactbits BorderGlow（pointer 跟随的边缘辉光 + 挂载 intro sweep，accent 单色）
-            包裹 shell；shell 自身保留很淡 accent 底色 + 静态描边（.rb-composer-accent）作平时态。
-            borderRadius 16 = shell rounded-2xl，辉光环贴边。 */}
-        <BorderGlow animated glowIntensity={0.5} borderRadius={16} className="w-full">
-          <div className="rb-composer-accent flex w-full flex-col gap-1.5 rounded-2xl bg-ink-2 p-2">
+        {/* AI 对话框 — reactbits 官方 BorderGlow 包裹（卡片自带 bg/border/圆角 + hover mesh 彩虹边框 +
+            edge-light 辉光环；inner 容器只提供 flex + 内边距，去掉旧 shell 的 bg/rounded/accent 描边以免
+            双层）。glowRadius 20（< 官方 40）控外扩，避免窄浮窗里 edge-light 撑出横向滚动条。 */}
+        <BorderGlow borderRadius={16} glowRadius={20} className="w-full">
+          <div className="flex w-full flex-col gap-1.5 p-2">
             {controls && <AgentAttachmentChips controls={controls} />}
             <LexicalComposerInput
               directiveChip={AgentDirectiveChip}

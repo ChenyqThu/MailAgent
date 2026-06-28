@@ -1,118 +1,256 @@
-// reactbits BorderGlow（精简移植）— pointer 跟随的边缘辉光环 + 挂载时 intro sweep。
-// 落点 AI 输入框（AgentComposer），三端共享（effects/ 组件 + index.css 样式）。
+// reactbits BorderGlow — 官方 TS-CSS 源码（reactbits.dev/r/BorderGlow-TS-CSS）逐字段移植：
+// mesh-gradient 彩虹边框 ::before + 近边背景填充 ::after + edge-light 辉光环 + pointer 跟随 + intro。
+// 逻辑（parseHSL / buildGlowVars / buildGradientVars / pointer 算法 / animateValue / intro 四段）与
+// 官方一致；样式在 index.css（.rb-border-glow-card / .rb-edge-light / .rb-border-glow-inner）。
 //
-// 改造（守红线 + 对齐 app 调性，详见 motion-gsap §10）：
-//  · 原组件的彩虹 mesh-gradient border 去掉，辉光统一走单色 --c-accent token（跟随 6 强调色 +
-//    明暗），组件内无裸 hex；glow box-shadow / conic mask 全在 index.css（.css 豁免 no-raw-hex）。
-//  · intro sweep 用手写单 rAF 缓动（easeOutCubic/InCubic/InOut，非 motion spring）守 §8；
-//    reduce 不挂 pointer 监听、不播 intro，CSS 直接隐藏辉光层（等价无 glow，退回 shell 自身描边）。
-//  · pointer 只 setProperty 两个 CSS 变量（--rb-cursor-angle / --rb-edge-proximity），零 React
-//    re-render（高频 pointermove 安全）。卸载 cancelAnimationFrame 防泄漏。
-import { useCallback, useEffect, useRef } from 'react'
+// 仅 6 处适配（守项目红线，不改视觉）：
+//  ① CSS 变量 / 类名加 rb- 前缀（防与全局 CSS 撞，且与 FAB .rb-star-border 同前缀）；
+//  ② 去 `import './BorderGlow.css'` —— 样式合进三端共享的 index.css；
+//  ③ backgroundColor 默认 #120F17 → app token rgb(var(--ink-2))（跟随明暗主题）；
+//  ④ reduce 下不挂 pointer / 不播 intro（CSS 也隐藏辉光层）；
+//  ⑤ named export（项目惯例 import { BorderGlow }）；
+//  ⑥ 文件级 no-raw-hex 豁免：colors/glowColor 是官方固有视觉资产（紫粉蓝霓虹 + 暖黄辉光），非设计 token。
+/* eslint-disable mailagent/no-raw-hex -- reactbits 官方移植：mesh/glow 颜色是组件固有视觉，非项目 token。 */
+import { useRef, useCallback, useEffect, type ReactNode } from 'react'
 import { useReducedMotion } from 'motion/react'
 
 import { cn } from '@shared/lib/cn'
 
-const easeOutCubic = (x: number): number => 1 - Math.pow(1 - x, 3)
-const easeInCubic = (x: number): number => x * x * x
-const easeInOut = (x: number): number => (x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2)
-
 interface BorderGlowProps {
-  children: React.ReactNode
+  children?: ReactNode
   className?: string
-  /** 指针多靠近边缘才点亮辉光（0-100，越大越难触发）。 */
   edgeSensitivity?: number
-  /** 辉光整体不透明度乘子（0.1-3）。用户指定 0.5。 */
-  glowIntensity?: number
-  /** 圆角 px，须与被包裹 shell 的圆角一致（composer = rounded-2xl = 16）。 */
+  glowColor?: string
+  backgroundColor?: string
   borderRadius?: number
-  /** 外发光向外延伸 px。 */
   glowRadius?: number
-  /** 挂载时播一次 intro sweep（辉光绕一圈淡入淡出）。 */
+  glowIntensity?: number
+  coneSpread?: number
   animated?: boolean
+  colors?: string[]
+  fillOpacity?: number
+}
+
+function parseHSL(hslStr: string): { h: number; s: number; l: number } {
+  const match = hslStr.match(/([\d.]+)\s*([\d.]+)%?\s*([\d.]+)%?/)
+  if (!match) return { h: 40, s: 80, l: 80 }
+  return { h: parseFloat(match[1]), s: parseFloat(match[2]), l: parseFloat(match[3]) }
+}
+
+function buildGlowVars(glowColor: string, intensity: number): Record<string, string> {
+  const { h, s, l } = parseHSL(glowColor)
+  const base = `${h}deg ${s}% ${l}%`
+  const opacities = [100, 60, 50, 40, 30, 20, 10]
+  const keys = ['', '-60', '-50', '-40', '-30', '-20', '-10']
+  const vars: Record<string, string> = {}
+  for (let i = 0; i < opacities.length; i++) {
+    vars[`--rb-glow-color${keys[i]}`] = `hsl(${base} / ${Math.min(opacities[i] * intensity, 100)}%)`
+  }
+  return vars
+}
+
+const GRADIENT_POSITIONS = [
+  '80% 55%',
+  '69% 34%',
+  '8% 6%',
+  '41% 38%',
+  '86% 85%',
+  '82% 18%',
+  '51% 4%'
+]
+const GRADIENT_KEYS = [
+  '--rb-gradient-one',
+  '--rb-gradient-two',
+  '--rb-gradient-three',
+  '--rb-gradient-four',
+  '--rb-gradient-five',
+  '--rb-gradient-six',
+  '--rb-gradient-seven'
+]
+const COLOR_MAP = [0, 1, 2, 0, 1, 2, 1]
+
+function buildGradientVars(colors: string[]): Record<string, string> {
+  const vars: Record<string, string> = {}
+  for (let i = 0; i < 7; i++) {
+    const c = colors[Math.min(COLOR_MAP[i], colors.length - 1)]
+    vars[GRADIENT_KEYS[i]] =
+      `radial-gradient(at ${GRADIENT_POSITIONS[i]}, ${c} 0px, transparent 50%)`
+  }
+  vars['--rb-gradient-base'] = `linear-gradient(${colors[0]} 0 100%)`
+  return vars
+}
+
+function easeOutCubic(x: number): number {
+  return 1 - Math.pow(1 - x, 3)
+}
+function easeInCubic(x: number): number {
+  return x * x * x
+}
+
+interface AnimateOpts {
+  start?: number
+  end?: number
+  duration?: number
+  delay?: number
+  ease?: (t: number) => number
+  onUpdate: (v: number) => void
+  onEnd?: () => void
+}
+
+function animateValue({
+  start = 0,
+  end = 100,
+  duration = 1000,
+  delay = 0,
+  ease = easeOutCubic,
+  onUpdate,
+  onEnd
+}: AnimateOpts): void {
+  const t0 = performance.now() + delay
+  function tick(): void {
+    const elapsed = performance.now() - t0
+    const t = Math.min(elapsed / duration, 1)
+    onUpdate(start + (end - start) * ease(t))
+    if (t < 1) requestAnimationFrame(tick)
+    else if (onEnd) onEnd()
+  }
+  setTimeout(() => requestAnimationFrame(tick), delay)
 }
 
 export function BorderGlow({
   children,
-  className,
+  className = '',
   edgeSensitivity = 30,
-  glowIntensity = 0.5,
-  borderRadius = 16,
-  glowRadius = 22,
-  animated = false
+  glowColor = '40 80 80',
+  backgroundColor = 'rgb(var(--ink-2))',
+  borderRadius = 28,
+  glowRadius = 40,
+  glowIntensity = 1.0,
+  coneSpread = 25,
+  animated = false,
+  colors = ['#c084fc', '#f472b6', '#38bdf8'],
+  fillOpacity = 0.5
 }: BorderGlowProps): React.JSX.Element {
-  const ref = useRef<HTMLDivElement>(null)
+  const cardRef = useRef<HTMLDivElement>(null)
   const reduce = useReducedMotion()
 
-  // 指针位置 → 边缘贴近度(0 中心 / 1 边缘) + 指针角度（conic mask 只点亮指针所在弧段）。
-  const handlePointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    const card = ref.current
-    if (!card) return
-    const rect = card.getBoundingClientRect()
-    const cx = rect.width / 2
-    const cy = rect.height / 2
-    const dx = e.clientX - rect.left - cx
-    const dy = e.clientY - rect.top - cy
-    const edge = Math.min(Math.max(Math.max(Math.abs(dx) / cx, Math.abs(dy) / cy), 0), 1)
-    let deg = 0
-    if (dx !== 0 || dy !== 0) {
-      deg = Math.atan2(dy, dx) * (180 / Math.PI) + 90
-      if (deg < 0) deg += 360
-    }
-    card.style.setProperty('--rb-edge-proximity', (edge * 100).toFixed(2))
-    card.style.setProperty('--rb-cursor-angle', `${deg.toFixed(1)}deg`)
+  const getCenterOfElement = useCallback((el: HTMLElement) => {
+    const { width, height } = el.getBoundingClientRect()
+    return [width / 2, height / 2]
   }, [])
 
-  // intro sweep：单 rAF 按 elapsed 推 angle(110→465 扫一圈余) + proximity(淡入→保持→淡出)。
+  const getEdgeProximity = useCallback(
+    (el: HTMLElement, x: number, y: number) => {
+      const [cx, cy] = getCenterOfElement(el)
+      const dx = x - cx
+      const dy = y - cy
+      let kx = Infinity
+      let ky = Infinity
+      if (dx !== 0) kx = cx / Math.abs(dx)
+      if (dy !== 0) ky = cy / Math.abs(dy)
+      return Math.min(Math.max(1 / Math.min(kx, ky), 0), 1)
+    },
+    [getCenterOfElement]
+  )
+
+  const getCursorAngle = useCallback(
+    (el: HTMLElement, x: number, y: number) => {
+      const [cx, cy] = getCenterOfElement(el)
+      const dx = x - cx
+      const dy = y - cy
+      if (dx === 0 && dy === 0) return 0
+      const radians = Math.atan2(dy, dx)
+      let degrees = radians * (180 / Math.PI) + 90
+      if (degrees < 0) degrees += 360
+      return degrees
+    },
+    [getCenterOfElement]
+  )
+
+  const handlePointerMove = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      const card = cardRef.current
+      if (!card) return
+      const rect = card.getBoundingClientRect()
+      const x = e.clientX - rect.left
+      const y = e.clientY - rect.top
+      const edge = getEdgeProximity(card, x, y)
+      const angle = getCursorAngle(card, x, y)
+      card.style.setProperty('--rb-edge-proximity', `${(edge * 100).toFixed(3)}`)
+      card.style.setProperty('--rb-cursor-angle', `${angle.toFixed(3)}deg`)
+    },
+    [getEdgeProximity, getCursorAngle]
+  )
+
   useEffect(() => {
-    if (!animated || reduce) return
-    const card = ref.current
-    if (!card) return
+    if (!animated || reduce || !cardRef.current) return
+    const card = cardRef.current
+    const angleStart = 110
+    const angleEnd = 465
     card.classList.add('rb-sweep-active')
-    let raf = 0
-    let t0 = 0
-    const DUR = 4000
-    const tick = (now: number): void => {
-      if (!t0) t0 = now
-      const e = now - t0
-      const angle = 110 + 355 * easeInOut(Math.min(e / 3750, 1))
-      const prox =
-        e < 500
-          ? 100 * easeOutCubic(e / 500)
-          : e < 2500
-            ? 100
-            : 100 * (1 - easeInCubic(Math.min((e - 2500) / 1500, 1)))
-      card.style.setProperty('--rb-cursor-angle', `${angle.toFixed(1)}deg`)
-      card.style.setProperty('--rb-edge-proximity', prox.toFixed(2))
-      if (e < DUR) raf = requestAnimationFrame(tick)
-      else {
-        card.classList.remove('rb-sweep-active')
-        card.style.setProperty('--rb-edge-proximity', '0')
+    card.style.setProperty('--rb-cursor-angle', `${angleStart}deg`)
+
+    animateValue({
+      duration: 500,
+      onUpdate: (v) => card.style.setProperty('--rb-edge-proximity', `${v}`)
+    })
+    animateValue({
+      ease: easeInCubic,
+      duration: 1500,
+      end: 50,
+      onUpdate: (v) => {
+        card.style.setProperty(
+          '--rb-cursor-angle',
+          `${(angleEnd - angleStart) * (v / 100) + angleStart}deg`
+        )
       }
-    }
-    raf = requestAnimationFrame(tick)
-    return () => {
-      cancelAnimationFrame(raf)
-      card.classList.remove('rb-sweep-active')
-    }
+    })
+    animateValue({
+      ease: easeOutCubic,
+      delay: 1500,
+      duration: 2250,
+      start: 50,
+      end: 100,
+      onUpdate: (v) => {
+        card.style.setProperty(
+          '--rb-cursor-angle',
+          `${(angleEnd - angleStart) * (v / 100) + angleStart}deg`
+        )
+      }
+    })
+    animateValue({
+      ease: easeInCubic,
+      delay: 2500,
+      duration: 1500,
+      start: 100,
+      end: 0,
+      onUpdate: (v) => card.style.setProperty('--rb-edge-proximity', `${v}`),
+      onEnd: () => card.classList.remove('rb-sweep-active')
+    })
   }, [animated, reduce])
+
+  const glowVars = buildGlowVars(glowColor, glowIntensity)
 
   return (
     <div
-      ref={ref}
+      ref={cardRef}
       onPointerMove={reduce ? undefined : handlePointerMove}
       className={cn('rb-border-glow-card', className)}
       style={
         {
-          '--rb-radius': `${borderRadius}px`,
-          '--rb-glow-pad': `${glowRadius}px`,
-          '--rb-edge-sens': edgeSensitivity,
-          '--rb-glow-intensity': glowIntensity
+          '--rb-card-bg': backgroundColor,
+          '--rb-edge-sensitivity': edgeSensitivity,
+          '--rb-border-radius': `${borderRadius}px`,
+          '--rb-glow-padding': `${glowRadius}px`,
+          '--rb-cone-spread': coneSpread,
+          '--rb-fill-opacity': fillOpacity,
+          ...glowVars,
+          ...buildGradientVars(colors)
         } as React.CSSProperties
       }
     >
       <span className="rb-edge-light" aria-hidden="true" />
-      {children}
+      <div className="rb-border-glow-inner">{children}</div>
     </div>
   )
 }

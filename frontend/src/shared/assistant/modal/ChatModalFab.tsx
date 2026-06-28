@@ -4,8 +4,8 @@
 // 到 document.body 逃 InboxLayout 的 overflow-hidden + GSAP width tween（同 BatchActionBar 范式）。
 // flag-on 才挂（调用方 InboxLayout 用 isAssistantModalEnabled() 包裹）。
 //
-// 视觉（dogfood 反馈）：reactbits StarBorder 旋转星光边框（.rb-star-border）+ sparkles 动态图标
-// （整钮 hover 经 AnimatedIconActiveProvider 驱动）；位置上移到 bottom-8 避开界面 footer。
+// 视觉（dogfood 反馈）：reactbits StarBorder 常驻彩色旋转边框环（.rb-star-border，三色 conic 旋转
+// + 外发光）+ sparkles 动态图标（整钮 hover 经 AnimatedIconActiveProvider 驱动）；位置 bottom-8 避开 footer。
 
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -30,7 +30,7 @@ export function ChatModalFab(): React.JSX.Element | null {
       onPointerEnter={() => setHovered(true)}
       onPointerLeave={() => setHovered(false)}
       aria-label={t('chat.fab.label')}
-      className="group fixed bottom-8 right-5 z-40 flex items-center motion-reduce:transition-none"
+      className="group fixed bottom-8 right-5 z-40 flex items-center animate-in fade-in zoom-in-95 duration-300 ease-out motion-reduce:animate-none motion-reduce:transition-none"
     >
       {/* hover 向左展开的文案 pill + ⌘J 角标（max-width 过渡；reduced-motion 立即切换） */}
       <span
@@ -46,8 +46,8 @@ export function ChatModalFab(): React.JSX.Element | null {
           ⌘J
         </kbd>
       </span>
-      {/* 圆钮：StarBorder 旋转星光边框（overflow-hidden 裁成圆环）+ 内圈 accent 实心（inset 2px
-          露出边缘光环）+ sparkles 动态图标（z 在光带之上）。 */}
+      {/* 圆钮：StarBorder 常驻彩色旋转边框环（.rb-star-border ::before 三色 conic 旋转 + ::after 外
+          发光）+ 内圈 accent 实心（inset 2px 盖中心、露边缘彩色环）+ sparkles 动态图标（z 在环之上）。 */}
       <span
         className={cn(
           'rb-star-border relative grid size-12 shrink-0 place-items-center rounded-full shadow-md',
