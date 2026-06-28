@@ -116,3 +116,75 @@ def test_singleton(monkeypatch):
     a = me.get_mem0_engine()
     b = me.get_mem0_engine()
     assert a is b
+
+
+def test_store_lock_serializes_all_access():
+    # HIGH-1（codex）：search/get_all 与 add/delete 必须共用 store 锁 —— 打包的 mem0 FAISS store
+    # 无内部锁，capture 后台 add 与 M2 search 并发进同一 index = C++/dict 并发读写损坏。验证任意
+    # 时刻最多 1 个调用进入底层 Memory（锁有效）；若 search 不锁会观察到 max >1。
+    import threading
+    import time
+
+    eng = me.Mem0Engine()
+    state = {"in_flight": 0, "max": 0}
+    guard = threading.Lock()
+    # Barrier：所有线程到齐再同时冲入 → 确定性制造并发竞争（不靠 sleep 赌重叠，消除 timing
+    # false-pass：极端调度下线程若从不真正重叠，无锁 bug 会被漏过）。
+    n_calls = 9
+    barrier = threading.Barrier(n_calls)
+
+    def track(*_a, **_k):
+        with guard:
+            state["in_flight"] += 1
+            state["max"] = max(state["max"], state["in_flight"])
+        time.sleep(0.02)  # 拉长窗口：若 search 不锁，必与 add 重叠
+        with guard:
+            state["in_flight"] -= 1
+        return {"results": []}
+
+    fake = mock.MagicMock()
+    fake.add.side_effect = track
+    fake.search.side_effect = track
+    fake.get_all.side_effect = track
+    eng._mem = fake  # 跳过真实构造，直接注入 mock store
+
+    def call(fn):
+        barrier.wait()  # 等齐 9 线程再冲，确定性并发尝试 store 访问
+        fn()
+
+    threads = []
+    for _ in range(3):
+        threads.append(threading.Thread(target=call, args=(lambda: eng.add([], "owner"),)))
+        threads.append(threading.Thread(target=call, args=(lambda: eng.search("q", "owner"),)))
+        threads.append(threading.Thread(target=call, args=(lambda: eng.get_all("owner"),)))
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert state["max"] == 1  # store 锁序列化所有访问，无并发进 FAISS
+
+
+def test_capture_instructions_untrusted_framing(monkeypatch, tmp_path):
+    # HIGH-2（codex）：抽取约束须把消息内容当不可信数据，防 capture 投毒（恶意邮件/assistant
+    # 幻觉/「好的记住了」→ 长期事实，或内容里的 remember/override 指令被当命令）。
+    monkeypatch.setattr(me, "_mem0_root", lambda: str(tmp_path / "mem0"))
+    monkeypatch.setattr(me, "cfg", _fake_cfg())
+    low = me.build_mem0_config()["custom_instructions"].lower()
+    assert "untrusted" in low  # 消息内容是不可信数据
+    assert "assistant" in low and "not a source of truth" in low  # assistant 输出非事实来源
+    assert "ignore any instruction" in low  # 忽略内容里的指令注入
+    assert "auto-approve" in low or "approval" in low  # 不存审批/安全相关「偏好」
+
+
+def test_package_lazy_export():
+    # LOW-2（codex）：from src.memory import <符号> 经 __getattr__ 懒解析仍可用（import 包本身
+    # 不拉 src.config / 重依赖）；未知属性照常 AttributeError。
+    import pytest
+
+    import src.memory as pkg
+
+    assert pkg.get_mem0_engine is me.get_mem0_engine
+    assert pkg.Mem0Engine is me.Mem0Engine
+    with pytest.raises(AttributeError):
+        _ = pkg.nonexistent_symbol

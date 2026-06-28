@@ -1110,8 +1110,13 @@ async def capture_memory(request: Request, body: Optional[Dict[str, Any]] = None
         get_mem0_engine,
     )
 
-    # 截断：durable facts 在前几段，超大 turn（如多线程邮件 dump 粘进 chat）截断省 token +
-    # 防 threadpool slot 被慢抽取长占。
+    # 🔴 投毒防线（codex HIGH-2）：抽取约束在引擎 CAPTURE_INSTRUCTIONS（mem0 custom_instructions，
+    # 标注 highest-priority）—— 把引用/邮件/附件/assistant 输出当不可信数据、忽略内容里的指令注入、
+    # 不存安全/审批偏好。注意这是 **prompt 级软约束**：mem0 默认 extraction system prompt 反向偏
+    # pro-extraction（"从 user+assistant 都抽"），靠 custom_instructions 优先级压制冲突。
+    # **escape hatch**：若 dogfood 发现 assistant-sourced / 注入的事实仍泄漏，从源头移除冲突 =
+    # 只送 user_text（删下面 assistant 行）。当前按用户拍板保留 user+assistant（留 assistant 确认的偏好）。
+    # 截断：durable facts 在前几段，超大 turn（多线程邮件 dump 粘进 chat）截断省 token + 防 slot 长占。
     messages = [
         {"role": "user", "content": user_text[:CAPTURE_TEXT_MAX_CHARS]},
         {"role": "assistant", "content": assistant_text[:CAPTURE_TEXT_MAX_CHARS]},
