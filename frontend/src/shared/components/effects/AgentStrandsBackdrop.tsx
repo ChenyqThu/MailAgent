@@ -53,7 +53,7 @@ export function AgentStrandsBackdrop(): React.JSX.Element | null {
     <Strands
       colors={colors}
       className="pointer-events-none"
-      opacity={0.42}
+      opacity={0.36}
       glow={1.8}
       speed={0.3}
       count={3}

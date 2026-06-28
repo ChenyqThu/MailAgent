@@ -79,7 +79,7 @@ export function AgentThread({
       {onTurnComplete && <TurnCompleteWatcher onComplete={onTurnComplete} />}
       {isEmpty && (
         <Suspense fallback={null}>
-          <div className="pointer-events-none absolute inset-0 -z-10">
+          <div className="agent-strands-mask pointer-events-none absolute inset-0 -z-10">
             <AgentStrandsBackdrop />
           </div>
         </Suspense>
@@ -105,8 +105,11 @@ export function AgentThread({
 
         <ThreadPrimitive.ViewportFooter
           className={cn(
-            'relative mx-auto flex w-full max-w-[var(--thread-max-width)] flex-col gap-3 bg-ink-1 pb-3',
-            !isEmpty && 'sticky bottom-0 mt-auto'
+            'relative mx-auto flex w-full max-w-[var(--thread-max-width)] flex-col gap-3 pb-3',
+            // 空态：footer 不铺底色，让 Strands 氛围背景在 composer 周围连续透出
+            // （composer 自带 bg-ink-2 + border，文字仍清晰）。
+            // 有消息：sticky docked，需 bg-ink-1 遮挡其下滚动的消息内容。
+            !isEmpty && 'sticky bottom-0 mt-auto bg-ink-1'
           )}
         >
           <AgentScrollToBottom />
