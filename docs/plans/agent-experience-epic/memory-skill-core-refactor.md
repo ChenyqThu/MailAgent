@@ -14,10 +14,30 @@
 
 **本 session 锁定的 3 个 blocker（用户 2026-06-27 拍板，全采纳推荐）：**
 1. **Step 2 = query 相关性召回注入** —— 每轮用当前 query 向记忆内核召回 top-k 相关，注入 context，替代现在 `/chat/config` 的静态 top-20 dump。
-2. **Mem0 = 长成自有内核（Mem0-shaped API，不引三方库）** —— 在现有 `agent_memory_kv` + Python 逻辑上补「自动抽取 + 相关性检索 + get_all」。守业务权威在 Python + flag-off 字节级不变 + 打包体积可控 + 复用已有 provenance/priority/USER 投影。**与 KOS 无关，KOS 保持独立检索源不并入。**
+2. **Mem0 = 引入 `mem0ai` 库**（2026-06-27 二次讨论后改，详见下「决策更新」）—— 跑在 Python serve-api（进程内，仍守业务权威在 Python）；带来 自动抽取 + hybrid 检索 + get_all + ADD/UPDATE/DELETE/NOOP 冲突，M1-M3 大幅简化。**与 KOS 无关，KOS 保持独立检索源不并入。** ~~（原方案：长成自有内核不引三方；经 Mem0 vs EverOS 调研 + 隐私/体积权衡后改为直接引 Mem0）~~
 3. **异步写 hook = Node onFinish 触发 fire-and-forget → 单一 Python capture 端点**（抽取+落库逻辑在 Python）；远程/legacy 的 Python 流式路径用 `BackgroundTasks` 触发同一端点。统一记忆写入面不分叉。
 
 **M1 自动写姿态决策（用户拍板）：** 自动抽取 = **写入 + `auto_capture` provenance + 用户可见「已记住 X」+ 一键撤销**，默认关，**只抽持久偏好、绝不抽一次性任务态**。不全静默（调和 RULES「绝不静默写」+ 安全底线）。
+
+### 🔴 决策更新（2026-06-27 二次讨论后）—— 记忆引擎改为「引入 Mem0」
+
+调研 Mem0 vs EverOS（EverMind-AI/EverOS）后，**EverOS 排除**（sidecar HTTP 服务 + 强制 embedding + 无 get_all + 无同步冲突解析 + 较新，与嵌入式 Python-SQLite 栈不合）。用户拍板 **直接引 `mem0ai`** 换开发速度，**锁定栈：**
+
+- **库**：`mem0ai`（进程内 Python，跑在 serve-api；业务权威仍在 Python ✓）。
+- **embedder**：**本地 bge-small**（FastEmbed/ONNX，on-device）—— 用户选「小本地 embedder」而非云 GPT/Voyage embedding，**守"邮件衍生数据不出第三方 SaaS"红线**（Claude 不提供 embedding，云 embedding 必引第二 provider 看衍生记忆 + query）。
+- **向量库**：FAISS（嵌入式 on-disk，无 server）。
+- **抽取 LLM**：复用现有 Claude/CRS（不引新 LLM provider；抽取在既有 chat 信任边界内）。
+- **`MEM0_TELEMETRY=False`**（Mem0 默认开 PostHog 遥测，必关）。
+- **副产品**：embedding 本地化 → 记忆**读（检索）完全离线可用**；只有**写（抽取）**需 LLM（与 chat 同一网络依赖）。
+
+**对计划的影响（M1-M3 简化，M4 不变）：**
+- **M0（已发 `734129bd`）**：gateway memory 工具面**不变**，但后端 `/chat/memory*` 由 `agent_memory_kv` **改接 Mem0**（M1 phase 做）；`agent_memory_kv` 迁移/退役（或保留作「显式 pinned」层，与 Mem0「学到的」层并存 —— M1 phase 定）。
+- **M1**：`mem0.add(turn, user_id)` 自带 LLM 抽取 + dedup + 冲突 → 不再自写抽取逻辑；我们只做 Node onFinish fire-and-forget → Python capture → `mem0.add`（红线 + auto_capture 姿态不变）。
+- **M2**：`mem0.search(query, user_id)` 自带 hybrid（bge-small 向量 + BM25）→ **取代原"FTS5 先行/向量后置 M2b"分阶段**（Mem0 第一天就有向量检索）。
+- **M3**：`mem0.get_all(user_id)` → LLM 重排 → 覆写 USER 文档（安全覆写基建已有）。
+- **M4**：不变（skills，与记忆无关）。
+- **🔴 新增 packaging 成本（build 时核实）**：venv 加 `mem0ai` + `faiss-cpu` + `fastembed`(+`onnxruntime`) + bge-small 权重 ≈ **+150-250MB**（bge-small 本身 ~30-90MB，runtime 占大头）。若超预算再回头议（云 embedding / 更轻向量）。`build-python-venv.sh` 须加这些依赖。
+- **离线降级**：bge-small 本地 → 检索离线可用；capture 的抽取 LLM 不可达 → fire-and-forget 静默失败（chat 不受影响，红线不破）。
 
 ---
 
