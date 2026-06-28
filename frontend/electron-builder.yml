@@ -60,15 +60,21 @@ extraResources:
 afterPack: scripts/afterPack.cjs
 mac:
   category: public.app-category.productivity
-  # Sprint 8 §2.2 — ad-hoc 签名先够（identity: null 走 ad-hoc，no Apple
-  # Developer ID; auto-updater 走 GitHub Releases zip blockmap，不需 notarize）。
-  # 公证留 V1.5 — 需 $99/y Apple Developer 账号 + .p8 / .p12 + provisioning。
-  identity: null
+  # P6 (1.0.0) — Developer ID Application 签名 + notarytool 公证, 解锁 electron-updater
+  # 自动更新 (Squirrel.Mac 要求下载的新版与运行中 app 同一 Developer ID 身份)。
+  # identity 省略 (非 null) → electron-builder 自动发现 CSC_LINK 导入临时 keychain 的
+  # Developer ID Application 证书 (CI 日志打印 identityName 确认选了哪张)。本地无 CSC_LINK
+  # 时 electron-builder 在 arm64 上 fallback 到 ad-hoc 签名 (macPackager:245), afterPack.cjs
+  # 也走 ad-hoc 全签分支 (本地/内部分发仍可运行)。🔴 CI 缺 CSC_LINK 不会优雅回退而是 build
+  # 失败 (空串 secret → importCertificate('') 报 not a file) → build-mac.yml 有 preflight 拦。
   hardenedRuntime: true
   gatekeeperAssess: false
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
-  notarize: false
+  # notarize:true → 读 APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID (notarytool)。
+  # 缺这三个 env 时 electron-builder warn 跳过公证 (仅本地无凭据构建; CI 两条路径都过 preflight)。
+  # timestamp 不设 → osx-sign 默认连 Apple TSA 安全时间戳 (公证必需)。
+  notarize: true
   # arm64-only 发布 (Apple Silicon)。CI (build-mac.yml) 只 provision arm64 嵌入式
   # python (x64 矩阵 lane 注释/未验证); 若在此保留 x64 target 会打出「外壳 x64 + 内置
   # arm64 python」的坏包 (Intel 上后端起不来), 还要每次手动删 release 资产。故 x64

@@ -82,12 +82,14 @@ open /Applications/MailAgent.app
 - **升级（已有用户）**：userData 保留 → detect `'configured'` → **跳过 onboarding** 直接进 → 后端启动自动跑 DB 迁移。版本不同也无需重配。
 - **双写防护**：用 `.app` 时 pm2 的 `mail-sync` 必须停/删（`.app` 跑自己的内嵌后端）；davmail 用户的 `davmail-poc` 继续留 pm2（是 EWS 桥，不打进 app）。
 
-## 7. 自动更新闸（为什么现在手动升级）
+## 7. 自动更新（v1.0.0 起已激活）
 
-- 真·自动更新（electron-updater / Squirrel.Mac）要求 **Developer ID 签名 + 公证**；当前 ad-hoc 签名 `quitAndInstall` 会因签名不匹配**装不上更新**。
-- 故 `AUTO_UPDATE_ENABLED` **默认关**，升级走 §6 手动替换。
-- 启用路径（P6）：Apple Developer Program（$99/年）→ Developer ID Application 证书 → 改 `electron-builder.yml`（`identity` + `notarize:true` + CSC/APPLE_* 凭据）→ 翻 `AUTO_UPDATE_ENABLED` → `pnpm build:mac` 出 feed → 发 GitHub Release（`publish: github chenyqthu/MailAgent`）。两个**已签名**版本之间才自动更新（首签名版仍手动装）。
-- 详见 [`docs/packaging/05-auto-update-handoff.md`](05-auto-update-handoff.md) §3。
+- **已上线**（P6，v1.0.0）：electron-updater / Squirrel.Mac 自动更新打通 —— Developer ID Application 签名 + notarytool 公证就位，`quitAndInstall` 可装。检测 → 后台下载 → 主界面「就绪」banner → 一键重启更新。
+- **flag**：`AUTO_UPDATE_ENABLED` **packaged 默认开、dev 默认关**（`frontend/src/electron/main/handlers/updater.ts` `readMasterFlag()` = `!is.dev`）；gate 的只有「自动后台下载 + 自动安装」，检测/提醒（启动 10s check + 48h 周期复查）无条件跑。emergency 回滚：userData `.env` 设 `AUTO_UPDATE_ENABLED=0`（仍保留检测提醒）。运行时 `enabled` 不校验真实签名态——安全靠「翻 flag 与签名同次提交」纪律。
+- **签名/公证机制**（CI `.github/workflows/build-mac.yml`）：`electron-builder.yml` mac 段 `identity` 省略（自动发现 CSC_LINK 导入临时 keychain 的 Developer ID Application 证书）+ `notarize:true`（notarytool 读 `APPLE_ID`/`APPLE_APP_SPECIFIC_PASSWORD`/`APPLE_TEAM_ID`）；electron-builder 经 @electron/osx-sign 递归 deepest-first 签整个 `Contents/`（含嵌入式 python 148 个散装 .so，带安全 timestamp）。`afterPack.cjs` 见 `CSC_LINK` 切换：有=跳过（交 electron-builder 全签，避免 ad-hoc `--timestamp=none` 害公证 reject）；无=本地 ad-hoc 回退。CI 需 **5 个 secret**（`CSC_LINK` base64 .p12 含私钥 / `CSC_KEY_PASSWORD` / `APPLE_ID` / `APPLE_APP_SPECIFIC_PASSWORD` appleid.apple.com 生成 / `APPLE_TEAM_ID`），preflight step fail-fast 校验（缺则空串 secret 会让 electron-builder 晦涩失败）。
+- **entitlements**（`build/entitlements.mac.plist`）：嵌入式 CPython 需 `allow-jit` / `allow-unsigned-executable-memory` / `disable-library-validation`（加载非 Apple 签名的 .so）+ `allow-dyld-environment-variables`（捆绑子进程前提，比前三项更敏感）。都是 hardened-runtime exception，Apple 接受、能过公证，但放宽了部分约束 —— 有意接受的 blast radius。
+- 🔴 **首签名版仍手动装一次**：ad-hoc 旧版 → Developer ID 新版的跨签名身份升级 Squirrel.Mac 会拒绝。**v1.0.0 是「自动更新起点」，需手动装**（你 + 现有 ad-hoc 用户）；之后 v1.0.1+ 之间才全自动。
+- 发布流程仍走 §3（CI tag → 签名+公证 → draft → 手动转正式）。详见 [`05-auto-update-handoff.md`](05-auto-update-handoff.md)。
 
 ## 8. 改了 **Python 后端**代码时
 

@@ -288,11 +288,23 @@ describe('updater: registerUpdaterHandlers entry', () => {
 // AUTO_UPDATE_ENABLED flag. The dev path stays dev-disabled; the manual
 // Settings actions + the existing 11 cases above are untouched.
 describe('updater: enabled field (master flag gate)', () => {
-  test('flag OFF + bound → enabled stays false', () => {
+  test('flag explicitly OFF (=0) + bound → enabled stays false', () => {
+    // P6 (1.0.0): packaged default is ON (is.dev mocked false), so "flag off"
+    // now means an EXPLICIT AUTO_UPDATE_ENABLED=0 (emergency rollback), not unset.
+    process.env.AUTO_UPDATE_ENABLED = '0'
     const { stub } = makeStubUpdater()
-    // AUTO_UPDATE_ENABLED unset (deleted in beforeEach) → flag off.
     registerUpdaterHandlers({ updater: stub })
     expect(getStatus().enabled).toBe(false)
+  })
+
+  test('packaged build + flag unset → enabled true (P6 1.0.0 default-on)', () => {
+    // readMasterFlag()'s unset branch returns !is.dev; is.dev is mocked false
+    // (packaged), so release builds default to auto-update ON — Developer ID +
+    // notarize landed the same commit so quitAndInstall actually works.
+    delete process.env.AUTO_UPDATE_ENABLED
+    const { stub } = makeStubUpdater()
+    registerUpdaterHandlers({ updater: stub })
+    expect(getStatus().enabled).toBe(true)
   })
 
   test('flag ON + bound → enabled true', () => {
@@ -329,8 +341,10 @@ describe('updater: auto-download on update-available (gap A)', () => {
     expect(downloadSpy).toHaveBeenCalledTimes(1)
   })
 
-  test('flag OFF → downloadUpdate() NOT fired (manual download only)', () => {
-    // AUTO_UPDATE_ENABLED unset → flag off.
+  test('flag explicitly OFF (=0) → downloadUpdate() NOT fired (manual download only)', () => {
+    // P6 (1.0.0): packaged default is ON, so suppressing auto-download requires an
+    // explicit AUTO_UPDATE_ENABLED=0 (rollback), not merely an unset flag.
+    process.env.AUTO_UPDATE_ENABLED = '0'
     mockAutoDownloadUpdates = true
     const { stub, fire, downloadSpy } = makeStubUpdater()
     registerUpdaterHandlers({ updater: stub })
@@ -429,11 +443,12 @@ describe('updater: periodic re-check interval (gap C)', () => {
     expect(clearIntervalSpy).toHaveBeenCalled()
   })
 
-  test('flag OFF → setInterval STILL armed at 48h (check-only 不受 AUTO_UPDATE_ENABLED gate)', () => {
+  test('flag explicitly OFF (=0) → setInterval STILL armed at 48h (check-only 不受 AUTO_UPDATE_ENABLED gate)', () => {
     vi.useFakeTimers()
     const setIntervalSpy = vi.spyOn(global, 'setInterval')
-    // AUTO_UPDATE_ENABLED unset → flag off。但检测+提醒不需签名, 周期复查仍 arm;
-    // 仅自动下载/安装受 flag gate (maybeAutoDownload), 这里只 check 不下载。
+    // 显式 AUTO_UPDATE_ENABLED=0 (P6 后 packaged 默认 on, 显式 0 才关) → 自动下载/安装关,
+    // 但检测+提醒不需签名, 周期复查仍无条件 arm; 仅 maybeAutoDownload 受 flag gate。
+    process.env.AUTO_UPDATE_ENABLED = '0'
     const { stub } = makeStubUpdater()
     registerUpdaterHandlers({ updater: stub })
     expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 172_800_000)

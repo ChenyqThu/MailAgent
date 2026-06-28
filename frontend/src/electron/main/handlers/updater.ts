@@ -22,15 +22,18 @@
 //     re-render storm: every event collapses into one publish.
 //
 // feat/auto-update §gap-fill — two NEW proactive behaviors gated behind the
-// master AUTO_UPDATE_ENABLED env flag (default OFF; flip ON only after P6
-// notarization, since ad-hoc-signed builds can't actually install):
+// master AUTO_UPDATE_ENABLED flag. P6 (1.0.0): flipped ON for packaged builds
+// (Developer ID signing + notarize landed in the SAME commit — ad-hoc-only builds
+// were the blocker, now resolved). dev stays OFF; explicit env still overrides
+// (AUTO_UPDATE_ENABLED=0 in userData .env = emergency rollback). See readMasterFlag.
 //   (a) auto-download-on-available — Scheme 2: we keep autoDownload=false
 //       (preserves the existing test invariant + smaller blast radius) and
 //       instead fire downloadUpdate() ourselves from the update-available
 //       listener, but only when the master flag is on AND settings.json's
 //       `autoDownloadUpdates` is true (read LIVE per event, never cached).
-//   (b) periodic re-check — a 6h setInterval, armed only in the non-dev bound
-//       branch when the master flag is on; cleared on app before-quit.
+//   (b) periodic re-check — a 48h setInterval armed UNCONDITIONALLY in the non-dev
+//       bound branch (check-only reminders need no signing; only auto-download/install
+//       stays flag-gated via maybeAutoDownload); cleared on app before-quit.
 // The existing 10s startup check + Settings manual check/download/install are
 // UNCHANGED (zero regression) — the flag does NOT gate them.
 
@@ -65,12 +68,20 @@ let masterFlagEnabled = false
  *  before-quit / __resetForTesting can clear it (no leaked timers in tests). */
 let _recheckInterval: ReturnType<typeof setInterval> | null = null
 
-/** Parse AUTO_UPDATE_ENABLED with the chat/config.ts:9-12 idiom (accepts
- *  "1" or "true", case-insensitive; unset/empty → false). */
+/** Resolve the master flag. An explicit AUTO_UPDATE_ENABLED (chat/config.ts:9-12
+ *  idiom: "1"/"true" → on; anything else → off) ALWAYS wins — it's the dogfood
+ *  switch and the emergency rollback (set AUTO_UPDATE_ENABLED=0 in userData .env
+ *  to disable auto-download/install while keeping check-only reminders).
+ *  P6 (1.0.0): when unset, default ON for packaged builds (releases are now
+ *  Developer ID-signed + notarized so quitAndInstall actually works) and OFF in
+ *  dev. The is.dev guard in registerUpdaterHandlers is the second line of defense
+ *  (dev never binds the updater regardless of this flag). */
 function readMasterFlag(): boolean {
   const raw = process.env.AUTO_UPDATE_ENABLED
-  if (raw === undefined || raw === '') return false
-  return raw === '1' || raw.toLowerCase() === 'true'
+  if (raw !== undefined && raw !== '') {
+    return raw === '1' || raw.toLowerCase() === 'true'
+  }
+  return !is.dev
 }
 
 /** electron-updater throws/emits ENOENT for `app-update.yml` when the build
@@ -270,7 +281,7 @@ export function getStatus(): UpdaterStatus {
 
 /**
  * feat/auto-update re-review (codex + UX lens) — true when a build is already
- * staged (mid-download or fully downloaded). Background 6h re-check events
+ * staged (mid-download or fully downloaded). Background 48h re-check events
  * (checking-for-update / update-not-available / error) and a failed check()
  * MUST NOT clobber this — the staged build + its banner + install CTA stay put.
  * A genuinely newer version still supersedes via 'update-available'; a real

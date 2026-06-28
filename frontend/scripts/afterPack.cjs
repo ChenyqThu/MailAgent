@@ -60,6 +60,20 @@ function collectMachO(dir, acc) {
 exports.default = async function afterPack(context) {
   if (context.electronPlatformName !== 'darwin') return
 
+  // P6 Developer ID 构建门控 (CSC_LINK = CI 注入了 .p12 证书): electron-builder 在 sign
+  // 阶段经 @electron/osx-sign 递归签整个 Contents/ 的所有 Mach-O (含 Resources/python 散装
+  // .so/.dylib + bin/python3.11; inside-out + 安全 timestamp + entitlements), 再 notarytool
+  // 公证。此时若 afterPack 再做 ad-hoc 预签是多余且有害的 —— ad-hoc 的 --timestamp=none 会令
+  // 公证 reject ("signature does not include a secure timestamp")。故有证书时直接交还给
+  // electron-builder。无 CSC_LINK (本地 dev / 内部分发; electron-builder identity 省略时 arm64
+  // fallback ad-hoc) 才走下面的 afterPack ad-hoc 全签 (arm64 每个 Mach-O 至少要 ad-hoc 签才能跑)。
+  if (process.env.CSC_LINK) {
+    console.log(
+      '[afterPack] Developer ID 构建 (CSC_LINK present) — 跳过 ad-hoc 预签, 交由 electron-builder + notarytool 签名/公证'
+    )
+    return
+  }
+
   const appName = context.packager.appInfo.productFilename
   const appPath = path.join(context.appOutDir, `${appName}.app`)
   const pyRoot = path.join(appPath, 'Contents', 'Resources', 'python')

@@ -7,14 +7,18 @@
 #   - arm64 (macos-14) = 已验证主 lane: 嵌入式可重定位 CPython + ad-hoc 签名 (afterPack)。
 #   - x64 (macos-13)   = 未验证, 默认注释掉; build-python-venv.sh 支持 x64, 理论上在 Intel
 #                        runner 可跑, 启用前需先 dogfood 一次。
-#   - 签名/公证         = 当前 identity:null → afterPack 做 ad-hoc (用户端 Gatekeeper 会
-#                        "已损坏", 需右键打开)。正式分发须接 Developer ID + notarytool
-#                        (P6, 需 Apple 账号), 见下方 TODO env。
+#   - 签名/公证         = P6 (1.0.0) 已接 Developer ID Application + notarytool 公证:
+#                        electron-builder 用 CSC_LINK (.p12) 自动建临时 keychain 全签
+#                        (含嵌入式 python 散装 .so, inside-out + 安全 timestamp), 再 notarytool
+#                        公证。CI 两条路径 (workflow_dispatch + tag) 都过 preflight (5 secret
+#                        全配齐才继续)。afterPack.cjs 见 CSC_LINK 切换 (有=跳过让 electron-builder
+#                        签; 无=本地 ad-hoc 回退)。
 #
-# 前置 (合入 main 后在仓库设置):
-#   - 无需额外 secret 即可跑 ad-hoc 构建 (GITHUB_TOKEN 自动注入, 用于 tag 发布)。
-#   - 公证 (P6) 时再加 secrets: CSC_LINK / CSC_KEY_PASSWORD / APPLE_ID /
-#     APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID。
+# 前置 (在仓库 Settings → Secrets and variables → Actions 配齐 5 个):
+#   - CSC_LINK (base64 的 Developer ID Application .p12, 含私钥) / CSC_KEY_PASSWORD (.p12
+#     导出密码) / APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD (appleid.apple.com 生成, 非登录密码)
+#     / APPLE_TEAM_ID (10 位)。缺任一 → preflight step fail-fast (见 steps), 不进构建。
+#   - GITHUB_TOKEN 自动注入 (tag 发布到 Release)。无需手动 security create-keychain。
 
 name: Build macOS app
 
@@ -50,6 +54,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Preflight — 校验签名/公证 secrets 已配齐 (fail-fast)
+        # codex review HIGH-2: GitHub secret 未配置时 ${{ secrets.X }} 展开成空串 (非 null);
+        # electron-builder 的 chooseNotNull() 不排除空串 → importCertificate('') resolve 到项目
+        # 目录并报 "not a file" → build 跑到签名阶段才晦涩失败 (白跑 ~5min provision+build)。
+        # 这里 checkout 后立即 fail-fast + 指明缺哪个。CI 两条路径 (workflow_dispatch + tag) 都
+        # 签名+公证, 故要求 5 个全配齐。
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          missing=()
+          for k in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            if [[ -z "${!k}" ]]; then missing+=("$k"); fi
+          done
+          if (( ${#missing[@]} )); then
+            echo "::error::缺签名/公证 secret: ${missing[*]} — 在 repo Settings → Secrets and variables → Actions 配齐 5 个 (见本文件顶部前置说明)。"
+            exit 1
+          fi
+          echo "✓ 签名/公证 secrets 已配齐 (5/5)，可走 Developer ID 签名 + notarytool 公证。"
+
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
@@ -81,7 +108,7 @@ jobs:
 
       - name: Package .app (+ 发布, 仅 tag)
         # electron-builder --<arch> 把 yml 的双 arch target 收敛到当前 runner arch。
-        # afterPack 做 ad-hoc 签名 (identity:null)。tag → 发布到 Release; 否则只产物。
+        # Developer ID 签名 (CSC_LINK 自动发现证书) + notarytool 公证。tag → 发布到 Release; 否则只产物。
         run: |
           PUBLISH=never
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then PUBLISH=always; fi
@@ -89,13 +116,16 @@ jobs:
           pnpm exec electron-builder --mac --${{ matrix.arch }} --publish "${PUBLISH}"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # TODO(P6) 公证 — 取消注释并在仓库 secrets 配置 Developer ID + Apple 账号,
-          # 同时把 electron-builder.yml 的 identity 改成证书 hash、notarize 改 true:
-          # CSC_LINK: ${{ secrets.CSC_LINK }}                     # Developer ID .p12 (base64)
-          # CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-          # APPLE_ID: ${{ secrets.APPLE_ID }}
-          # APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          # APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # P6 (1.0.0) Developer ID 签名 + notarytool 公证 (electron-builder.yml
+          # mac.notarize:true + identity 自动发现)。5 个 secret 由上面 preflight step 保证已
+          # 配齐 (缺则 fail-fast, 不会到签名阶段才晦涩失败)。两条路径 (workflow_dispatch + tag)
+          # 都签名+公证。后续若嫌公证慢/撞 Apple 每日配额, 可把 APPLE_* 改成仅 tag 注入
+          # (startsWith(github.ref,'refs/tags/') 条件) + preflight 相应放宽手动构建只查 CSC_*。
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
       - name: Upload artifacts (非 tag 手动构建)
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
