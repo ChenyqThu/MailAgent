@@ -1135,9 +1135,38 @@ async def capture_memory(request: Request, body: Optional[Dict[str, Any]] = None
         for r in raw
         if isinstance(r, dict) and r.get("event") in ("ADD", "UPDATE")
     ]
+    # M1d — 真有抽取（ADD/UPDATE）才推 SSE，前端弹「已记住 X」+ 一键 undo toast。NOOP-only /
+    # 空抽取不打扰前端。safe_publish 自己吞所有异常（redis 在场走 Redis，缺席走进程内总线），
+    # 绝不烧穿 capture（本就 best-effort）。函数内 import 守 chat.py lazy-config 纪律。
+    if captured:
+        from src.events.publisher import safe_publish
+
+        safe_publish("memory.captured", data={"captured": captured}, source="memory")
     return success_envelope(
         {"captured": captured, "count": len(captured)},
         request=request,
         source="memory",
         meta_extra={"total_events": len(raw)},
     )
+
+
+@router.delete("/memory/captured", dependencies=[Depends(verify_cf_access)])
+async def undo_captured_memory(request: Request, id: str = Query(...)):
+    """撤销一条自动抽取的记忆（M1d「已记住」toast 的 undo 按钮）。按 mem0 memory_id 删。
+
+    与上面 best-effort 的 capture 不同：这是**用户主动操作** → 失败 raise（E_INTERNAL/500），
+    前端据此提示撤销失败。mem0 是同步库 → run_in_threadpool，不阻塞 event loop。
+    """
+    from src.memory.mem0_engine import get_mem0_engine
+
+    try:
+        await run_in_threadpool(get_mem0_engine().delete, id)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("mem0 undo-capture failed for id=%s: %s", id, e, exc_info=True)
+        raise APIError(
+            "E_INTERNAL",
+            f"failed to delete captured memory {id}",
+            source="memory",
+            http_status=500,
+        )
+    return success_envelope({"deleted": True, "id": id}, request=request, source="memory")

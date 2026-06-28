@@ -152,3 +152,49 @@ def test_capture_truncates_oversized_turn(capture_client) -> None:
     # 超大 turn 被截断到 CAPTURE_TEXT_MAX_CHARS（durable facts 在前几段，省 token）。
     assert len(messages[0]["content"]) == CAPTURE_TEXT_MAX_CHARS
     assert len(messages[1]["content"]) == CAPTURE_TEXT_MAX_CHARS
+
+
+# ── M1d — SSE publish + undo 端点 ────────────────────────────────────────────
+
+
+def test_capture_publishes_sse_when_captured(capture_client, monkeypatch) -> None:
+    client, fake = capture_client
+    published: list = []
+    import src.events.publisher as pub
+
+    monkeypatch.setattr(pub, "safe_publish", lambda et, **kw: published.append((et, kw)))
+    fake.add.return_value = {"results": [{"id": "m1", "memory": "x", "event": "ADD"}]}
+    client.post("/api/chat/memory/capture", json={"userText": "u", "assistantText": "a"})
+    # 真有抽取 → 推 memory.captured，data 携带 captured 条目供前端弹 toast。
+    assert len(published) == 1
+    event_type, kw = published[0]
+    assert event_type == "memory.captured"
+    assert kw["data"]["captured"][0]["id"] == "m1"
+    assert kw["source"] == "memory"
+
+
+def test_capture_no_sse_when_nothing_captured(capture_client, monkeypatch) -> None:
+    client, fake = capture_client
+    published: list = []
+    import src.events.publisher as pub
+
+    monkeypatch.setattr(pub, "safe_publish", lambda et, **kw: published.append(et))
+    fake.add.return_value = {"results": [{"id": "c", "memory": "noop", "event": "NOOP"}]}
+    client.post("/api/chat/memory/capture", json={"userText": "u", "assistantText": "a"})
+    assert published == []  # NOOP-only → 不推 SSE（不打扰前端）
+
+
+def test_undo_deletes_captured_memory(capture_client) -> None:
+    client, fake = capture_client
+    r = client.delete("/api/chat/memory/captured", params={"id": "m1"})
+    assert r.json()["data"] == {"deleted": True, "id": "m1"}
+    fake.delete.assert_called_once_with("m1")
+
+
+def test_undo_error_when_engine_fails(capture_client) -> None:
+    client, fake = capture_client
+    # 撤销是用户主动操作 → 失败 raise（不像 capture best-effort），前端据此提示。
+    fake.delete.side_effect = RuntimeError("faiss locked")
+    r = client.delete("/api/chat/memory/captured", params={"id": "m1"})
+    assert r.status_code == 500
+    assert r.json()["error"]["code"] == "E_INTERNAL"
