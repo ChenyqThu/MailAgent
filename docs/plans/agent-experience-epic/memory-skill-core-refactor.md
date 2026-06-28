@@ -1,6 +1,6 @@
 # Harness Agent 核心调度层重构 — 架构 Review + 分阶段计划
 
-> status: **M1 全落地 ✅（2026-06-28，M1a–M1f 6 commits `3aa91a2b`→`b906eee1`，main 未 push，每步独立 code-reviewer APPROVE）** · **M2 next** · M5 新增 · owner: chenyqThu · created: 2026-06-27
+> status: **M1 全落地 ✅（M1a–M1f 6 commits `3aa91a2b`→`b906eee1`）** · **M2 全落地 ✅（2026-06-28，M2a–M2d 4 commits `dde91f6a`→`8343479c`，main 未 push，每步独立 code-reviewer APPROVE）** · **M3 next** · M5 新增 · owner: chenyqThu · created: 2026-06-27
 > 上游：epic master = [`README.md`](./README.md) · 触发交接 = [`next-phase-backlog.md`](./next-phase-backlog.md) §2（用户「核心调度层重构」框架）
 > 本档 = backlog §2 框架的**架构级 review 落地** + **可执行分阶段计划**。代码等本计划经用户确认后按「每步一 diff」开。
 >
@@ -133,6 +133,8 @@
 
 ### M2 — Step 2：query 相关性召回注入（读侧）
 > flag `MAILAGENT_MEM0_RETRIEVAL`（default off）· 难度中-高
+>
+> **✅ 已落地（2026-06-28，M2a–M2d 4 commits `dde91f6a`→`8343479c`，main 未 push，每步独立 code-reviewer APPROVE）— 实测偏差（覆盖下文旧描述）**：① **eval 零回退不重录**（用户拍板）—— `AGT-MEMORY-*` 测的是 `memory_get`/`agent_memory_kv` 工具调用（**不同 store**），mem0 召回是 system-prompt 注入、**不在 zero-LLM rules 评分路径**（rules 看工具序列/证据，不看 prompt 字节）→ 与 M1f 同理 `agent_eval 89 passed` 零回退，**不重录 baseline**（推翻下文「按 recorder-contract 重录」的保守预判）；② **flag 只 main env 不加 vite define**（仿 M1c —— 召回纯后端注入 renderer 无感，区别于 AGENT_VIEW 等 renderer 直读 gate UI 的 flag）；③ **top-k=10**（引擎默认，用户拍板）+ `buildRetrievedMemoryBlock` 独立 re-cap 10 + 每条 clamp 500 code-point（defense-in-depth，Node 侧自保护不靠 wire）；④ **🔴 召回在 TTFT 关键路径**（区别于 M1 capture 的 fire-and-forget）→ 契约 **never-throw** + **5s 超时兜底** fastembed 冷加载（失败/超时 → context-light，绝不阻断已开始的 turn；reviewer traced `_req` 全 throw site = 全 reject → 全被 catch，airtight）；⑤ 注入结构 = floor(stable cacheable) → recalled memory(背景，untrusted-fenced + `sanitizeUntrusted` 防越界) → context(当前 view)，**与 `agent_memory_kv` 的 `memorySummary` 并存**（M5 才退役 kv）；⑥ M2 召回在 `prepareChatRun` 的 `if (cfg.systemPromptProvider)` 分支内（context injection on 时；cutover 默认 on），用 `lastUserMessage(rawMessages)` 原始 user 文本（不被 injectedContext 邮件正文污染）；⑦ M2a Python `/chat/memory/search`（best-effort 读，仿 capture）→ M2b Node 机制（`RetrievedMemory`/`buildRetrievedMemoryBlock`/`searchMemory`/契约/prepareChatRun）→ M2c lifecycle 注入 + flag → M2d eval + 文档。
 
 - **Python**：新 `POST /chat/memory/search`（query → 相关性召回 top-k）= `get_mem0_engine().search(query, user_id=DEFAULT_USER_ID, limit=k)`（**M1a 引擎已封装 `search` 方法**：`mem0.search(query, filters={"user_id"}, top_k)`，bge-small 向量 hybrid，本地离线）。~~（§0 决策更新已覆盖原"先 FTS5 词法/向量后置 M2b"分阶段——Mem0 第一天就有向量检索，M1e 已把 fastembed/FAISS 打进 venv，无需 FTS5 过渡）~~ 注意 faiss 不支持 keyword/BM25（M1 集成坑），纯语义召回。
 - **Node**：`prepareChatRun` 在 `streamText` 前用末条 user 文本调 search → 召回注入 context block（取代静态 `memorySummary` 全量 dump）。
