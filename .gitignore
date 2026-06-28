@@ -8,6 +8,8 @@ ENV/
 
 # Database and runtime data
 data/
+# M1 mem0 记忆 store（faiss / history.db / fastembed_cache，feature-owned = DATA_ROOT/mem0）
+mem0/
 # Python
 __pycache__/
 *.py[cod]

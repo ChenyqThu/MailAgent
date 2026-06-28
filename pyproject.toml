@@ -30,6 +30,15 @@ api = [
     "pyjwt[crypto]>=2.8,<3",  # PyJWKClient + RS256 verify (CF Access JWT, §6.3); crypto extra 拉 cryptography
     "httpx>=0.27",            # cli_runner / TestClient (email unsubscribe 已传递引入)
 ]
+# M1 mem0 记忆引擎（auto-capture）。重依赖（onnxruntime/faiss/fastembed ~150MB+），仅
+# MAILAGENT_MEM0_CAPTURE 开时运行期 import；嵌入式打包在 M1e 才纳入 build-python-venv.sh。
+# 需 Python >=3.11（fastembed/onnxruntime）。注意：mem0ai 会把 pydantic 提到 >=2.7、
+# typer>=0.15、click>=8.2（实测兼容现有 CLI/config，仅触发 pydantic env= Field deprecation warning）。
+memory = [
+    "mem0ai>=2.0,<3",
+    "faiss-cpu>=1.9",
+    "fastembed>=0.8",
+]
 
 [build-system]
 requires = ["setuptools>=61"]

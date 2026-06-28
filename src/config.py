@@ -363,6 +363,14 @@ class Config(BaseSettings):
             "正则剥 HTML。设 false 退回 Phase 1 之前的正则行为。"
         ),
     )
+    memory_capture_model: str = Field(
+        default="", env="MEMORY_CAPTURE_MODEL",
+        description=(
+            "M1 mem0 自动抽取记忆用的 LLM 模型名（经 CRS 的 anthropic 腿 /v1/messages，"
+            "claude 标准格式）。留空 → 复用 LLM_MODEL（claude-sonnet-4-6）。"
+            "仅 MAILAGENT_MEM0_CAPTURE 开时生效。"
+        ),
+    )
 
     # =========================================================================
     # KOS Producer (Sprint 19 M2 PR-2d) — 邮件 sync 完异步推 Jarvis KOS v2
