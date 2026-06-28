@@ -4862,13 +4862,30 @@ body:not([data-batch-mode='true']) .email-row .cb {
   animation: shimmer-hi 1.4s linear infinite;
 }
 .shimmer-neutral { --shimmer-hl: var(--ink-fg); }
-/* ShinyText 风格变体（reactbits 观感，transform 驱动 — 避开官方 bg-clip-text +
+/* ShinyText 风格变体（reactbits ShinyText 观感，transform 驱动 — 避开官方 bg-clip-text +
    background-position 在 Electron macOS 合成层/虚拟滚动失效的坑，见 ShimmerText.tsx 注释）。
-   base 压暗一档 + 高光带放慢，呈现柔和渐变扫光；win/hi width 不变以保持 transform 抵消对齐。 */
+   特征（采纳 codex 方案）：① 窗口加宽到 70%（扩大光点范围 = 更宽柔的渐变扫光带）
+   ② yoyo 来回扫（animation-direction: alternate + ease-in-out 两端减速）
+   ③ shine 色固定为 ink-fg 前景高光（不跟 accent 6 色，仅随明暗 token；base 压暗到 ink-fg-3 拉对比）。
+   🔴 win 加宽到 70% 必须同步重算 hi 抵消（保持 hi 视觉固定对齐 base）：
+     win 位移 -100%→220%（of winW=70% → 绝对 ∓70%/154% ×文字宽）；
+     hi 反向 = -0.7×win = 70%→-154%（of hiW=文字宽）。 */
+@keyframes shimmer-shiny-win {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(220%); }
+}
+@keyframes shimmer-shiny-hi {
+  from { transform: translateX(70%); }
+  to { transform: translateX(-154%); }
+}
 .shimmer-shiny .shimmer-text-base { color: rgb(var(--ink-fg-3)); }
-.shimmer-shiny .shimmer-text-win,
+.shimmer-shiny .shimmer-text-win {
+  width: 70%;
+  animation: shimmer-shiny-win 2s ease-in-out infinite alternate;
+}
 .shimmer-shiny .shimmer-text-hi {
-  animation-duration: 2.4s;
+  color: rgb(var(--ink-fg));
+  animation: shimmer-shiny-hi 2s ease-in-out infinite alternate;
 }
 /* AI 思考态多段 phrase 轮播（ThinkingPhrases.tsx）：切换时 fade + 上移 enter（opacity/
    transform 合成器属性，合成层内可靠）。reduce 下由下方 @media 关闭。 */
