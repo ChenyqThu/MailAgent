@@ -22,12 +22,17 @@ import { useReducedMotion } from '@shared/hooks/useReducedMotion'
 export function ShimmerText({
   text,
   neutral = false,
+  shiny = false,
   className
 }: {
   /** 要流光的文字（同时用于 base 与 hi 两层，保证字形一致）。 */
   text: string
   /** 中性高光（ink-fg 而非 AI 紫），用于非 AI 语境的纯加载文案。 */
   neutral?: boolean
+  /** ShinyText 风格变体（reactbits 观感，但 transform 驱动）：base 压暗一档 + 放慢，
+   *  呈现柔和渐变扫光。复用 win/hi transform 抵消，避开官方 bg-clip-text + background-position
+   *  在 Electron macOS 合成层/虚拟滚动里失效的坑（见本文件顶部注释）。 */
+  shiny?: boolean
   className?: string
 }): React.ReactElement {
   const reduce = useReducedMotion()
@@ -40,7 +45,14 @@ export function ShimmerText({
     )
   }
   return (
-    <span className={cn('shimmer-text', neutral && 'shimmer-neutral', className)}>
+    <span
+      className={cn(
+        'shimmer-text',
+        neutral && 'shimmer-neutral',
+        shiny && 'shimmer-shiny',
+        className
+      )}
+    >
       <span className="shimmer-text-base">{text}</span>
       <span className="shimmer-text-win" aria-hidden="true">
         <span className="shimmer-text-hi">{text}</span>

@@ -16,7 +16,7 @@ import * as React from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate, useRouterState } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
-import { ChevronDown, ChevronRight, Folder } from 'lucide-react'
+import { ChevronDown, ChevronRight } from 'lucide-react'
 
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { usePollingFallback } from '@shared/hooks/usePollingFallback'
@@ -24,6 +24,7 @@ import { useEmailFilter } from '@shared/state/email-filter'
 import { useMailbox } from '@shared/state/mailbox'
 import { useNavCollapsed } from '@shared/state/nav-shell'
 import { cn } from '@shared/lib/cn'
+import { AnimatedIconActiveProvider, FolderPlusIcon } from '@shared/components/icons'
 import { HoverTip } from '@shared/components/ui/HoverTip'
 
 import { buildSidebarFolderTree, type SidebarFolderNode } from './sidebarFolderTree.helpers'
@@ -69,6 +70,8 @@ function SidebarFolderRow({
   onToggleExpand
 }: SidebarFolderRowProps): React.ReactElement {
   const { t } = useTranslation()
+  // 整行 hover/focus 经 AnimatedIconActiveProvider 驱动 folder-plus 动画（同 NavRow 范式）。
+  const [iconActive, setIconActive] = React.useState(false)
   const hasChildren = node.children.length > 0
   const isOpen = expanded.has(node.imapName)
   const selected = activeMailbox === node.fullDisplayName
@@ -105,6 +108,10 @@ function SidebarFolderRow({
           onClick={() => {
             if (!isDisabled) onSelect(node)
           }}
+          onPointerEnter={() => setIconActive(true)}
+          onPointerLeave={() => setIconActive(false)}
+          onFocus={() => setIconActive(true)}
+          onBlur={() => setIconActive(false)}
           disabled={isDisabled}
           title={nativeTitle}
           // 缩进用 paddingLeft (depth*14); 收起态 CSS 用 padding-inline 覆盖, 缩进自然消失。
@@ -148,7 +155,9 @@ function SidebarFolderRow({
             <span className="shrink-0 w-4 h-4" aria-hidden="true" />
           ) : null}
 
-          <Folder size={15} strokeWidth={1.75} className="shrink-0" />
+          <AnimatedIconActiveProvider active={iconActive}>
+            <FolderPlusIcon size={15} strokeWidth={1.75} className="shrink-0" />
+          </AnimatedIconActiveProvider>
           <span className="flex-1 truncate">{node.displayName}</span>
           {count > 0 ? (
             selected ? (

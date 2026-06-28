@@ -2682,3 +2682,56 @@ html.js-anim .reveal[data-d='3'] {
     display: none;
   }
 }
+
+/* ─── Strands WebGL backdrop (Hero) ──────────────────────────────────────── */
+/* Fills the .hero container behind glow/grid (z:0) but under hero-inner (z:2). */
+.hero-strands {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  mask-image: radial-gradient(78% 60% at 50% 30%, #000 30%, transparent 82%);
+  -webkit-mask-image: radial-gradient(78% 60% at 50% 30%, #000 30%, transparent 82%);
+}
+.hero-strands canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* ─── Border Glow (.glow-border) ─────────────────────────────────────────── */
+/* Reactbits-style conic/radial gradient border ring, token-driven accent color.
+   Uses padding-box ∶ content-box mask to carve a 1.5px border ring only —
+   the fill stays transparent so the card background shows through. */
+.glow-border {
+  position: relative;
+}
+.glow-border::after {
+  content: '';
+  position: absolute;
+  inset: -1.5px;
+  border-radius: inherit;
+  padding: 1.5px;
+  pointer-events: none;
+  background: radial-gradient(
+    130% 130% at 50% 0%,
+    rgb(var(--c-accent) / 0.7),
+    rgb(var(--c-accent) / 0.15) 55%,
+    transparent 75%
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  opacity: 0.35;
+  transition: opacity 120ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.glow-border:hover::after {
+  opacity: 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  .glow-border::after {
+    transition: none;
+  }
+}

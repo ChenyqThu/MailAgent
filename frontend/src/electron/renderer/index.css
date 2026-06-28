@@ -4862,6 +4862,33 @@ body:not([data-batch-mode='true']) .email-row .cb {
   animation: shimmer-hi 1.4s linear infinite;
 }
 .shimmer-neutral { --shimmer-hl: var(--ink-fg); }
+/* ShinyText 风格变体（reactbits ShinyText 观感，transform 驱动 — 避开官方 bg-clip-text +
+   background-position 在 Electron macOS 合成层/虚拟滚动失效的坑，见 ShimmerText.tsx 注释）。
+   特征（采纳 codex 方案）：① 窗口加宽到 84%（dogfood +20%：更宽柔的渐变扫光带）
+   ② yoyo 来回扫（animation-direction: alternate + ease-in-out 两端减速）+ 时长 2.6s（dogfood：比原 2s 慢 ~30%）
+   ③ shine 色固定为白（dogfood：高光更亮、像「光」扫过；旧 ink-fg 在亮色主题=近黑 → 被看成「黑 shine」）；base 压暗到 ink-fg-3 拉对比。
+   🔴 win 加宽到 84% 必须同步重算 hi 抵消（保持 hi 视觉固定对齐 base）：
+     win 位移 -100%→220%（of winW=84% → 绝对 ∓84%/184.8% ×文字宽）；
+     hi 反向 = -0.84×win = 84%→-184.8%（of hiW=文字宽）。 */
+@keyframes shimmer-shiny-win {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(220%); }
+}
+@keyframes shimmer-shiny-hi {
+  from { transform: translateX(84%); }
+  to { transform: translateX(-184.8%); }
+}
+.shimmer-shiny .shimmer-text-base { color: rgb(var(--ink-fg-3)); }
+.shimmer-shiny .shimmer-text-win {
+  width: 84%;
+  animation: shimmer-shiny-win 2.6s ease-in-out infinite alternate;
+}
+.shimmer-shiny .shimmer-text-hi {
+  /* dogfood：shine 用固定白（高光像「光」扫过；旧 rgb(var(--ink-fg)) 在亮色主题=近黑，被看成黑 shine）。
+     base 是 ink-fg-3 中灰，白 shine 在明暗主题都能扫出亮带。 */
+  color: rgb(255 255 255);
+  animation: shimmer-shiny-hi 2.6s ease-in-out infinite alternate;
+}
 /* AI 思考态多段 phrase 轮播（ThinkingPhrases.tsx）：切换时 fade + 上移 enter（opacity/
    transform 合成器属性，合成层内可靠）。reduce 下由下方 @media 关闭。 */
 .thinking-phrases { display: inline-block; }
@@ -5031,6 +5058,230 @@ body:not([data-batch-mode='true']) .email-row .cb {
   opacity: 0;
   transform: scale(0.85);
   pointer-events: none;
+}
+
+/* reactbits StarBorder（圆形 FAB）— dogfood：accent 主体环 + 一段「固定白」高光绕圈。内圈是 accent 实心、
+   图标也是 accent 系 → 高光必须用白（非 accent 系）才与内圈拉开对比、看得出旋转（dogfood：提亮 accent 高光
+   与 accent 内圈太接近，看不出）。白用 CSS 字面 white（固定，不随主题翻转 —— 区别于会翻黑/白的 --c-accent-fg）。
+   内圈 accent 实心（inset 2px）盖中心、露 ~2px 环；::after accent 柔光外发光。常驻匀速旋转 8s（常驻故放慢；
+   同 .shimmer 范式非 spring）；reduce 停转留静态环。 */
+.rb-star-border {
+  position: relative;
+  border-radius: 9999px;
+}
+.rb-star-border::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: 0;
+  background: conic-gradient(
+    from 0deg,
+    rgb(var(--c-accent)),
+    rgb(var(--c-accent)) 200deg,
+    white 280deg,
+    rgb(var(--c-accent)) 360deg
+  );
+  animation: rb-star-spin 8s linear infinite;
+}
+.rb-star-border::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: -1;
+  box-shadow:
+    0 0 10px 0 rgb(var(--c-accent) / 0.5),
+    0 0 22px 4px rgb(var(--c-accent) / 0.32);
+}
+@keyframes rb-star-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rb-star-border::before {
+    animation: none;
+  }
+}
+
+/* reactbits Strands — motion-gsap §10 decorative backdrop (non-loading WebGL silk strands).
+   Position: absolute, fills the nearest `relative isolate` ancestor (AgentThread.Root).
+   Canvas is transparent; pointer events are suppressed via the wrapper's className. */
+.strands-container { position: absolute; inset: 0; width: 100%; height: 100%; background: transparent; }
+.strands-container canvas { display: block; width: 100%; height: 100%; }
+
+/* Agent 空态 Strands 装饰块遮罩 — greetings 文案上方的独立丝线块（dogfood：不再做全屏背景，单独
+   置于文案上方），居中椭圆径向渐隐柔化四边、不硬切。 */
+.agent-strands-banner {
+  /* 中心下移到 62%（丝线亮区往下沉，贴近下方欢迎语，减少 div 下部留白）+ 范围放大让丝线更饱满。 */
+  -webkit-mask-image: radial-gradient(88% 82% at 50% 62%, #000 52%, transparent 100%);
+  mask-image: radial-gradient(88% 82% at 50% 62%, #000 52%, transparent 100%);
+}
+
+/* reactbits BorderGlow（官方 TS-CSS 逐字段移植，组件 effects/BorderGlow.tsx）— mesh-gradient 彩虹
+   边框 ::before + 近边背景填充 ::after（soft-light）+ edge-light 辉光环（::before 多层 box-shadow）+
+   inner。逐字节照搬官方 reactbits.dev/r/BorderGlow-TS-CSS，仅 3 处适配：类名/变量加 rb- 前缀（防全局
+   撞）；--rb-card-bg 默认 token（跟随主题）；末尾加 @media reduce 隐藏三层。颜色 hsla/hex/rgba 均在
+   .css（豁免 no-raw-hex）。⚠️ edge-light inset:-glow-padding 外扩盒子是官方设计 → AgentComposer 传
+   较小 glowRadius 控外扩，避免窄浮窗里撑横向滚动条。 */
+.rb-border-glow-card {
+  --rb-edge-proximity: 0;
+  --rb-cursor-angle: 45deg;
+  --rb-edge-sensitivity: 30;
+  --rb-color-sensitivity: calc(var(--rb-edge-sensitivity) + 20);
+  --rb-border-radius: 28px;
+  --rb-glow-padding: 40px;
+  --rb-cone-spread: 25;
+
+  position: relative;
+  border-radius: var(--rb-border-radius);
+  isolation: isolate;
+  transform: translate3d(0, 0, 0.01px);
+  display: grid;
+  border: 1px solid rgb(255 255 255 / 15%);
+  background: var(--rb-card-bg, #120f17);
+  overflow: visible;
+}
+.rb-border-glow-card::before,
+.rb-border-glow-card::after,
+.rb-border-glow-card > .rb-edge-light {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  transition: opacity 0.25s ease-out;
+  z-index: -1;
+}
+.rb-border-glow-card:not(:hover):not(.rb-sweep-active)::before,
+.rb-border-glow-card:not(:hover):not(.rb-sweep-active)::after,
+.rb-border-glow-card:not(:hover):not(.rb-sweep-active) > .rb-edge-light {
+  opacity: 0;
+  transition: opacity 0.75s ease-in-out;
+}
+/* colored mesh-gradient border */
+.rb-border-glow-card::before {
+  border: 1px solid transparent;
+  background:
+    linear-gradient(var(--rb-card-bg, #120f17) 0 100%) padding-box,
+    linear-gradient(rgb(255 255 255 / 0%) 0% 100%) border-box,
+    var(--rb-gradient-one, radial-gradient(at 80% 55%, hsla(268, 100%, 76%, 1) 0px, transparent 50%)) border-box,
+    var(--rb-gradient-two, radial-gradient(at 69% 34%, hsla(349, 100%, 74%, 1) 0px, transparent 50%)) border-box,
+    var(--rb-gradient-three, radial-gradient(at 8% 6%, hsla(136, 100%, 78%, 1) 0px, transparent 50%)) border-box,
+    var(--rb-gradient-four, radial-gradient(at 41% 38%, hsla(192, 100%, 64%, 1) 0px, transparent 50%)) border-box,
+    var(--rb-gradient-five, radial-gradient(at 86% 85%, hsla(186, 100%, 74%, 1) 0px, transparent 50%)) border-box,
+    var(--rb-gradient-six, radial-gradient(at 82% 18%, hsla(52, 100%, 65%, 1) 0px, transparent 50%)) border-box,
+    var(--rb-gradient-seven, radial-gradient(at 51% 4%, hsla(12, 100%, 72%, 1) 0px, transparent 50%)) border-box,
+    var(--rb-gradient-base, linear-gradient(#c299ff 0 100%)) border-box;
+
+  opacity: calc((var(--rb-edge-proximity) - var(--rb-color-sensitivity)) / (100 - var(--rb-color-sensitivity)));
+
+  mask-image: conic-gradient(
+    from var(--rb-cursor-angle) at center,
+    black calc(var(--rb-cone-spread) * 1%),
+    transparent calc((var(--rb-cone-spread) + 15) * 1%),
+    transparent calc((100 - var(--rb-cone-spread) - 15) * 1%),
+    black calc((100 - var(--rb-cone-spread)) * 1%)
+  );
+}
+/* colored mesh-gradient background fill near edges */
+.rb-border-glow-card::after {
+  border: 1px solid transparent;
+  background:
+    var(--rb-gradient-one, radial-gradient(at 80% 55%, hsla(268, 100%, 76%, 1) 0px, transparent 50%)) padding-box,
+    var(--rb-gradient-two, radial-gradient(at 69% 34%, hsla(349, 100%, 74%, 1) 0px, transparent 50%)) padding-box,
+    var(--rb-gradient-three, radial-gradient(at 8% 6%, hsla(136, 100%, 78%, 1) 0px, transparent 50%)) padding-box,
+    var(--rb-gradient-four, radial-gradient(at 41% 38%, hsla(192, 100%, 64%, 1) 0px, transparent 50%)) padding-box,
+    var(--rb-gradient-five, radial-gradient(at 86% 85%, hsla(186, 100%, 74%, 1) 0px, transparent 50%)) padding-box,
+    var(--rb-gradient-six, radial-gradient(at 82% 18%, hsla(52, 100%, 65%, 1) 0px, transparent 50%)) padding-box,
+    var(--rb-gradient-seven, radial-gradient(at 51% 4%, hsla(12, 100%, 72%, 1) 0px, transparent 50%)) padding-box,
+    var(--rb-gradient-base, linear-gradient(#c299ff 0 100%)) padding-box;
+
+  mask-image:
+    linear-gradient(to bottom, black, black),
+    radial-gradient(ellipse at 50% 50%, black 40%, transparent 65%),
+    radial-gradient(ellipse at 66% 66%, black 5%, transparent 40%),
+    radial-gradient(ellipse at 33% 33%, black 5%, transparent 40%),
+    radial-gradient(ellipse at 66% 33%, black 5%, transparent 40%),
+    radial-gradient(ellipse at 33% 66%, black 5%, transparent 40%),
+    conic-gradient(from var(--rb-cursor-angle) at center, transparent 5%, black 15%, black 85%, transparent 95%);
+
+  mask-composite: subtract, add, add, add, add, add;
+  opacity: calc(var(--rb-fill-opacity, 0.5) * (var(--rb-edge-proximity) - var(--rb-color-sensitivity)) / (100 - var(--rb-color-sensitivity)));
+  mix-blend-mode: soft-light;
+}
+/* outer glow layer */
+.rb-border-glow-card > .rb-edge-light {
+  inset: calc(var(--rb-glow-padding) * -1);
+  pointer-events: none;
+  z-index: 1;
+
+  mask-image: conic-gradient(
+    from var(--rb-cursor-angle) at center,
+    black 2.5%,
+    transparent 10%,
+    transparent 90%,
+    black 97.5%
+  );
+
+  opacity: calc((var(--rb-edge-proximity) - var(--rb-edge-sensitivity)) / (100 - var(--rb-edge-sensitivity)));
+  mix-blend-mode: plus-lighter;
+}
+.rb-border-glow-card > .rb-edge-light::before {
+  content: '';
+  position: absolute;
+  inset: var(--rb-glow-padding);
+  border-radius: inherit;
+  /* dogfood：官方暖黄 glowColor 在亮色白底上发散成白雾、外扩太多 → 改 accent token（饱和、跟随主题，
+     亮暗自动正确）；最外档 50px→32px 收一点外扩。 */
+  box-shadow:
+    inset 0 0 0 1px rgb(var(--c-accent) / 1),
+    inset 0 0 1px 0 rgb(var(--c-accent) / 0.6),
+    inset 0 0 3px 0 rgb(var(--c-accent) / 0.5),
+    inset 0 0 6px 0 rgb(var(--c-accent) / 0.4),
+    inset 0 0 15px 0 rgb(var(--c-accent) / 0.3),
+    inset 0 0 25px 2px rgb(var(--c-accent) / 0.18),
+    inset 0 0 32px 2px rgb(var(--c-accent) / 0.1),
+    0 0 1px 0 rgb(var(--c-accent) / 0.6),
+    0 0 3px 0 rgb(var(--c-accent) / 0.5),
+    0 0 6px 0 rgb(var(--c-accent) / 0.4),
+    0 0 15px 0 rgb(var(--c-accent) / 0.3),
+    0 0 25px 2px rgb(var(--c-accent) / 0.18),
+    0 0 32px 2px rgb(var(--c-accent) / 0.1);
+}
+/* dogfood：亮色主题下 plus-lighter（变亮混合）把 accent 辉光在浅底上加成「白雾」（用户反馈「亮色下
+   白色外扩」）→ 亮色改 normal 混合，让 edge-light 显 accent 本色（半透 accent 叠浅底 = 明度更高的
+   coral，不发白）。暗色保留 plus-lighter（深底上辉光质感好，用户认可）。 */
+:root[data-theme='light'] .rb-border-glow-card > .rb-edge-light {
+  mix-blend-mode: normal;
+}
+/* 亮色：normal 混合下 edge-light::before 的 inset 系列（尤其最内 1px 实色 accent）会盖住 mesh 彩虹边框 +
+   ::after 近边填充（暗色 plus-lighter 是加光不盖、彩虹透出，无此问题）→ 用户「亮色没彩虹、只主强调色」。
+   亮色只保留 outer 外发光、去掉全部 inset：mesh 彩虹完整露出 + accent 仅在卡片外发光，二者共存。 */
+:root[data-theme='light'] .rb-border-glow-card > .rb-edge-light::before {
+  box-shadow:
+    0 0 1px 0 rgb(var(--c-accent) / 0.6),
+    0 0 3px 0 rgb(var(--c-accent) / 0.5),
+    0 0 6px 0 rgb(var(--c-accent) / 0.4),
+    0 0 15px 0 rgb(var(--c-accent) / 0.3),
+    0 0 25px 2px rgb(var(--c-accent) / 0.18),
+    0 0 32px 2px rgb(var(--c-accent) / 0.1);
+}
+.rb-border-glow-inner {
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  overflow: auto;
+  z-index: 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  .rb-border-glow-card::before,
+  .rb-border-glow-card::after,
+  .rb-border-glow-card > .rb-edge-light {
+    display: none;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

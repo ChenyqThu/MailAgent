@@ -10,6 +10,7 @@
  */
 import Icon from './Icon.astro'
 import InboxMock from '../mock/InboxMock.tsx'
+import HeroStrands from '../effects/HeroStrands.tsx'
 import { aiFields } from '../mock/fixtures/fixtures'
 import type { Locale } from '../../lib/i18n'
 
@@ -58,6 +59,7 @@ const inboxAddress = locale === 'en' ? 'MailAgent — Inbox' : 'MailAgent — �
 <header class="hero" id="top">
   <div class="hero-glow"></div>
   <div class="hero-grid"></div>
+  <HeroStrands client:visible />
 
   <div class="wrap hero-inner" id="main">
     {

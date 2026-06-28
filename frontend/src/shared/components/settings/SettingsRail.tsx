@@ -12,39 +12,72 @@
 
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
-import {
-  Bell,
-  Bot,
-  Globe,
-  Palette,
-  Plug,
-  Radio,
-  RefreshCw,
-  User,
-  Wifi,
-  type LucideIcon
-} from 'lucide-react'
 
 import { TabsList, TabsTrigger } from '@shared/components/ui/tabs'
+import {
+  AnimatedIconActiveProvider,
+  BellIcon,
+  BlocksIcon,
+  BotMessageSquareIcon,
+  ConnectIcon,
+  RadioIcon,
+  RefreshCwIcon,
+  RouteIcon,
+  UserIcon,
+  WifiIcon
+} from '@shared/components/icons'
 import { useUpdaterStore } from '@shared/state/updater'
 
 interface TabEntry {
   value: string
-  Icon: LucideIcon
+  // 全部用动画 AnimatedIcon（pqoqubbw 动画版）。整 tab hover/focus 经 SettingsTabTrigger 的
+  // AnimatedIconActiveProvider 驱动（Radix TabsTrigger 非 motion，靠受控 active 而非传播）。
+  Icon: React.ComponentType<{ size?: number; strokeWidth?: number; className?: string }>
   labelKey: string
 }
 
 const TAB_ORDER: TabEntry[] = [
-  { value: 'general', Icon: Palette, labelKey: 'settings.tabs.general' },
-  { value: 'accounts', Icon: User, labelKey: 'settings.tabs.accounts' },
-  { value: 'sync', Icon: RefreshCw, labelKey: 'settings.tabs.sync' },
-  { value: 'ai', Icon: Bot, labelKey: 'settings.tabs.ai' },
-  { value: 'notifications', Icon: Bell, labelKey: 'settings.tabs.notifications' },
-  { value: 'integrations', Icon: Plug, labelKey: 'settings.tabs.integrations' },
-  { value: 'realtime', Icon: Wifi, labelKey: 'settings.tabs.realtime' },
-  { value: 'remote', Icon: Globe, labelKey: 'settings.tabs.remote' },
-  { value: 'island', Icon: Radio, labelKey: 'settings.tabs.island' }
+  { value: 'general', Icon: BlocksIcon, labelKey: 'settings.tabs.general' },
+  { value: 'accounts', Icon: UserIcon, labelKey: 'settings.tabs.accounts' },
+  { value: 'sync', Icon: RefreshCwIcon, labelKey: 'settings.tabs.sync' },
+  { value: 'ai', Icon: BotMessageSquareIcon, labelKey: 'settings.tabs.ai' },
+  { value: 'notifications', Icon: BellIcon, labelKey: 'settings.tabs.notifications' },
+  { value: 'integrations', Icon: ConnectIcon, labelKey: 'settings.tabs.integrations' },
+  { value: 'realtime', Icon: WifiIcon, labelKey: 'settings.tabs.realtime' },
+  { value: 'remote', Icon: RouteIcon, labelKey: 'settings.tabs.remote' },
+  { value: 'island', Icon: RadioIcon, labelKey: 'settings.tabs.island' }
 ]
+
+/** 单个设置 tab —— 整个 TabsTrigger（含文字区）作为 hover/focus 触发面，经
+ *  AnimatedIconActiveProvider 把激活态下发给 tab 图标，解决旧版「只有 hover 到
+ *  14px 图标本身才触发」的问题。静态 lucide 图标（Palette/User/Plug/Globe）在
+ *  Provider 内不读 context，无副作用。 */
+function SettingsTabTrigger({
+  value,
+  Icon,
+  label
+}: {
+  value: string
+  Icon: React.ComponentType<{ size?: number; strokeWidth?: number; className?: string }>
+  label: string
+}): React.ReactElement {
+  const [iconActive, setIconActive] = React.useState(false)
+  return (
+    <TabsTrigger
+      value={value}
+      className="shrink-0 md:w-full"
+      onPointerEnter={() => setIconActive(true)}
+      onPointerLeave={() => setIconActive(false)}
+      onFocus={() => setIconActive(true)}
+      onBlur={() => setIconActive(false)}
+    >
+      <AnimatedIconActiveProvider active={iconActive}>
+        <Icon size={14} strokeWidth={2} className="shrink-0" />
+      </AnimatedIconActiveProvider>
+      <span className="truncate">{label}</span>
+    </TabsTrigger>
+  )
+}
 
 export function SettingsRail(): React.ReactElement {
   const { t } = useTranslation()
@@ -72,10 +105,12 @@ export function SettingsRail(): React.ReactElement {
             修复 rail +20px 后 active bg 仍贴左半边的视觉. */}
         <TabsList className="flex flex-row md:flex-col items-stretch gap-px bg-transparent p-0 w-full">
           {TAB_ORDER.map(({ value, Icon, labelKey }) => (
-            <TabsTrigger key={value} value={value} className="shrink-0 md:w-full">
-              <Icon className="size-3.5 shrink-0" strokeWidth={2} />
-              <span className="truncate">{t(labelKey, { defaultValue: value })}</span>
-            </TabsTrigger>
+            <SettingsTabTrigger
+              key={value}
+              value={value}
+              Icon={Icon}
+              label={t(labelKey, { defaultValue: value })}
+            />
           ))}
         </TabsList>
       </div>

@@ -121,6 +121,11 @@ gsap.to(wrapper, { width: open ? 360 : 0, duration: open ? DUR.base : DUR.fast,
 - **ui/tabs underline 滑动 indicator**：全仓仅 SettingsRail 消费 Tabs 且全 `orientation=vertical`，横向 coral underline 零渲染实例 → 做了等于 dead code，跳过。
 - **FolderRow 归档 collapse 退场**：FolderList 从 react-query data 派生行，归档→invalidate→refetch→行从 data 移除→父卸载，行内无法延迟卸载；真正的 collapse 退场需把删除队列上提到 FolderList 做数据 diff（父数据流改写，超范围）。当前只做入场 fade。
 
+**本轮新增（feat: 动效升级 2026-06，引入 `motion` + `ogl`）**：
+- lucide-animated 动画图标进主菜单（`Sidebar` 13 项）+ 设置菜单（`SettingsRail` 9 项）hover 微交互，统一收口 `components/icons/AnimatedIcon.tsx`。
+- reactbits effect：Border Glow（authored CSS，写 index.css）接 AI FAB + assistant 待确认卡片；Strands（ogl WebGL）背景接 agent 视图空态欢迎页。
+- motion 范围**严格限 icon/effect**，与 GSAP 的职责边界见 **§10**。
+
 ## 9. Loading 与渐进式加载（§8 loading 词汇）
 
 **canvas / 数学曲线 loader = 不采用**（用户拍板 2026-05-29）。理由：站点上的曲线本质是
@@ -137,6 +142,25 @@ loading 不该成为视觉焦点。**loading 只用三个词汇**（2026-06-13 �
    已接：chat thinking 头 / ToolGroup running / pre-answer「AI 思考中…」/「翻译中…」/
    报告「生成中」/ 邮件正文「加载中…」。spinner 与 shimmer **不并存**于同一条 loading 行
    （双动效闹；ReportsTab GeneratingState 的页级 spin 是既有信息锚点，例外保留）。
+
+## 10. motion 与 GSAP 职责分工（2026-06 引入 `motion`）
+
+本轮为「lucide-animated 动画图标 + reactbits 高级 effect（Border Glow / Strands）」引入 `motion`（`motion/react`，原 framer-motion 的后继独立包）。motion 与 GSAP **并存但职责严格分离**，禁止越界混用：
+
+| 维度 | **motion**（`motion/react`） | **GSAP**（`@shared/lib/gsap`） |
+|---|---|---|
+| 职责 | **图标级微交互**（lucide-animated 的 svg path 形变/描边）+ 偏 CSS 的 effect 薄包装 | **布局 / overlay / 序列**（进退场、Flip、ScrollTo、内容区淡入、width 挤压） |
+| 触发 | hover（`whileHover` + `variants`），声明式 | 命令式 `useGSAP` + ref，可中断 tween |
+| 适用 | 单个 svg 内部 path、装饰性 effect 组件 | 多元素编排、卸载延迟（`useExitAnimation`）、虚拟列表行 |
+| reduced-motion | `useReducedMotion()`（`motion/react`），reduce 渲染静态分支 | `useReducedMotion()`（`src/shared/hooks`），reduce `duration:0`/return |
+
+**边界规则（违反即返工）**：
+1. **motion 只用于 icon / effect，绝不接管 overlay / 布局** —— 那是 GSAP 地盘。新 overlay 仍走 `useExitAnimation`，不用 motion 的 `AnimatePresence`。
+2. **motion 默认 transition 是 spring，直接违反 §1 禁 spring/bounce 红线** —— 所有 motion 动画必须显式传 `transition={{ type:'tween', duration:0.12, ease:[0.4,0,0.2,1] }}`（复刻 standard 曲线，不发明第四档）。lucide-animated 源码落地时逐个改掉默认 spring。code review grep `spring`/`stiffness`/`damping` 应为零。
+3. **图标动画只动形状、不引入颜色** —— svg 用 `currentColor`，颜色仍由 className（`text-coral` 等）控制。
+4. **effect 的曲线/时长复用 §1 三档 + standard**，不另立第四档。Border Glow 是 authored CSS（写进 `index.css`，绕开 lint 的 hex/gradient/shadow 红线，用 `rgb(var(--c-accent)/…)`）；Strands 是 ogl WebGL。
+
+**Strands 与 §9 的关系（重要，避免误判违规）**：§9 的「canvas / 数学曲线 loader = 不采用」禁的是**把 canvas 当 loading 指示器**。Strands 是 **agent 视图空态欢迎页的氛围背景**（用户 2026-06 明确要求引入 reactbits WebGL 重组件），语义 ≠ loading。Loading 仍只用 §9 三词汇（spin / skeleton / shimmer），不引入 canvas loader。Strands 仅在 agent 新对话空态短暂挂载，首条消息后卸载（零持续 GPU），reduce 时 `return null` 退回静态背景。
 
 **骨架屏 + 渐进式加载**（工具型 app「高级感」的正解）：
 - 骨架原语：`feedback/LoadingSkeleton.tsx`（`Skeleton`/`SkeletonRow`/`SkeletonCard`，自带 `animate-pulse motion-reduce:animate-none`）+ `EmptyState`。

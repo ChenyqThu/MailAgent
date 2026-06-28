@@ -8,13 +8,19 @@
 // Built on the same headless ThreadPrimitive as the right pane but a SEPARATE component (independent
 // demo styling) — it renders inside the same AssistantRuntimeProvider (no singleton, safe).
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, lazy, Suspense } from 'react'
 
 import { AuiIf, ThreadPrimitive, useAuiState, type AssistantState } from '@assistant-ui/react'
 import { ArrowDown, CornerDownRight } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 import { cn } from '@shared/lib/cn'
+
+const AgentStrandsBackdrop = lazy(() =>
+  import('@shared/components/effects/AgentStrandsBackdrop').then((m) => ({
+    default: m.AgentStrandsBackdrop
+  }))
+)
 
 import { AgentComposer } from './AgentComposer'
 import {
@@ -47,8 +53,8 @@ interface AgentThreadProps {
   /** dogfood-3 — dynamic follow-up suggestions for the latest completed turn (ai-sdk path). Rendered as
    *  autoSend chips above the composer in an active, idle thread. Empty / omitted → no chips. */
   followUps?: string[]
-  /** assistant-modal P2 — welcome heading alignment. The floating modal left-aligns its welcome (the
-   *  截图 layout); the /sessions agent view keeps the centered hero. Default 'center' → /sessions unchanged. */
+  /** @deprecated dogfood：greetings 现一律居中（浮窗 / 侧栏 / agent 视图一致），此 prop 不再生效；
+   *  保留以免改动上游 AgentConversation / AssistantChatModal 的传参链。 */
   welcomeAlign?: 'center' | 'left'
   /** assistant-modal P5 — a removable context chip (the current email) rendered just above the composer.
    *  The modal passes the email chip; /sessions omits it → nothing rendered. */
@@ -61,13 +67,12 @@ export function AgentThread({
   pendingSlot,
   onTurnComplete,
   followUps,
-  welcomeAlign = 'center',
   contextChip
 }: AgentThreadProps): React.JSX.Element {
   const isEmpty = useAuiState(isNewChatView)
   return (
     <ThreadPrimitive.Root
-      className="flex min-h-0 flex-1 flex-col bg-ink-1 text-ink-fg"
+      className="relative isolate flex min-h-0 flex-1 flex-col glass-3 text-ink-fg"
       style={{ ['--thread-max-width' as string]: '44rem' }}
     >
       {onTurnComplete && <TurnCompleteWatcher onComplete={onTurnComplete} />}
@@ -77,23 +82,33 @@ export function AgentThread({
       <ThreadPrimitive.Viewport
         turnAnchor="top"
         className={cn(
-          'scrollbar-thin relative flex min-h-0 flex-1 flex-col overflow-y-auto scroll-smooth px-4 pt-4',
+          // overflow-x-hidden 显式钉死横轴：overflow-y-auto 会把未声明的 overflow-x 隐式当 auto，
+          // 窄浮窗/抽屉里 composer 的 edge-light 外扩（inset:-glow）+ strands banner 任何溢出都会触发
+          // 横向滚动条（dogfood 反馈）。显式 hidden 根治，且裁掉的只是远端很淡的外发光。
+          'scrollbar-thin relative flex min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-auto scroll-smooth px-4 pt-4',
+          // 空态：welcome + composer 整组垂直居中（"new chat"）。Strands 现是 AgentWelcome 文案上方的
+          // 独立装饰块（跟随 greetings，无需适配各容器尺寸），composer 在原居中位置不下移。
           isEmpty && 'justify-center'
         )}
       >
         <AuiIf condition={isNewChatView}>
-          <AgentWelcome align={welcomeAlign} />
+          <AgentWelcome />
         </AuiIf>
 
-        <div className="mb-10 flex flex-col gap-y-5 empty:hidden">
+        {/* 空态显式 hidden（不靠 :empty —— assistant-ui 可能渲染空节点使 :empty 失效，残留 mb-10
+            占位把 welcome 和 composer 撑开、破坏整组居中观感）。有消息时正常显示。 */}
+        <div className={cn('mb-10 flex flex-col gap-y-5', isEmpty && 'hidden')}>
           <ThreadPrimitive.Messages components={THREAD_MESSAGE_COMPONENTS} />
         </div>
         {pendingSlot}
 
         <ThreadPrimitive.ViewportFooter
           className={cn(
-            'relative mx-auto flex w-full max-w-[var(--thread-max-width)] flex-col gap-3 bg-ink-1 pb-3',
-            !isEmpty && 'sticky bottom-0 mt-auto'
+            'relative mx-auto flex w-full max-w-[var(--thread-max-width)] flex-col gap-3 pb-3',
+            // 空态：footer 不铺底色，让 Strands 氛围背景在 composer 周围连续透出
+            // （composer 自带 bg-ink-2 + border，文字仍清晰）。
+            // 有消息：sticky docked，需 bg-ink-1 遮挡其下滚动的消息内容。
+            !isEmpty && 'sticky bottom-0 mt-auto bg-ink-1'
           )}
         >
           <AgentScrollToBottom />
@@ -133,19 +148,25 @@ export function AgentThread({
   )
 }
 
-function AgentWelcome({ align = 'center' }: { align?: 'center' | 'left' }): React.JSX.Element {
+function AgentWelcome(): React.JSX.Element {
   const { t } = useTranslation()
   return (
-    <div
-      className={cn(
-        'mx-auto mb-6 flex w-full max-w-[var(--thread-max-width)] flex-col px-4',
-        align === 'left' ? 'items-start text-left' : 'items-center text-center'
-      )}
-    >
-      <h1 className="animate-in fade-in slide-in-from-bottom-1 fill-mode-both text-2xl font-semibold text-ink-fg duration-200">
+    <div className="relative mx-auto mb-6 flex min-h-[16rem] w-full max-w-[var(--thread-max-width)] flex-col items-center justify-end px-4 pb-4 text-center">
+      {/* Strands 作 greetings 背景（dogfood：独立块加高会同时拉开与文案的间距 + 暴露上下渐变空白 → 改回背景
+          方案）：absolute 脱流铺满容器（容器 min-h 给足高度让丝线饱满舒展、不局促），文案 justify-end 贴容器
+          底部、relative z-10 叠在 Strands 之上。这样块可随 min-h 拉高（丝线饱满）而文案不被推开，文案底部即
+          Strands 块底部；mask 中心偏上(62%) → 文案所在底部自然渐隐淡出，文字清晰。仅 isNewChatView 渲染 →
+          首条消息后随 AgentWelcome 卸载（AuiIf）连带卸载 Strands canvas（零持续 GPU）。
+          块高度调容器 min-h-[11rem]，丝线宽度调下面 max-w-[36rem]。 */}
+      <Suspense fallback={null}>
+        <div className="agent-strands-banner pointer-events-none absolute inset-y-0 left-1/2 w-full max-w-[30rem] -translate-x-1/2 overflow-hidden">
+          <AgentStrandsBackdrop />
+        </div>
+      </Suspense>
+      <h1 className="relative z-10 animate-in fade-in slide-in-from-bottom-1 fill-mode-both text-2xl font-semibold text-ink-fg duration-200">
         {t('agentView.welcome')}
       </h1>
-      <p className="mt-2 text-aux text-ink-fg-3">{t('agentView.emptyHint')}</p>
+      <p className="relative z-10 mt-2 text-aux text-ink-fg-3">{t('agentView.emptyHint')}</p>
     </div>
   )
 }

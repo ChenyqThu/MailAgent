@@ -10,12 +10,12 @@ description: A macOS email assistant that puts AI inside your inbox—the moment
 It runs on your own Mac and keeps your email data on the machine. It is a "local-first" tool, not yet another cloud service that hauls your inbox onto someone else's servers.
 
 :::tip[Is reading this one page enough?]
-No, but it is the starting point. By the end of this page you will know what MailAgent can do for you and what you need to prepare. Then follow the left-hand table of contents from **[Install the Backend](/en/101/install-backend/)** step by step—in about half an hour you can go from zero to your first AI-processed email.
+No, but it is the starting point. By the end of this page you will know what MailAgent can do for you and what you need to prepare. Then follow the left-hand table of contents from **[Install the Desktop App](/en/101/install-app/)** step by step—download, connect your mailbox, let the AI take over, and in a few minutes you can be looking at your first AI-processed email.
 :::
 
 ## What it does for you
 
-MailAgent has two parts: the **backend service** that quietly syncs and classifies email in the background, and the **desktop App** you open day to day to read mail, chat, and reply. Working together, they give you the capabilities below.
+MailAgent is a desktop App—it **ships with a complete backend that syncs and classifies email in the background** (a self-contained runtime, no separate Python or CLI install needed), and you open it every day to read mail, chat, and reply. Everything below is available right out of the box.
 
 | Capability | What it means | Default |
 |---|---|---|
@@ -23,7 +23,7 @@ MailAgent has two parts: the **backend service** that quietly syncs and classifi
 | **AI auto-classification** | As soon as an email is stored, it is tagged with a category, a priority (Urgent / Important / Normal / Low), a one-line summary, and a suggested action, all written into the email itself. | Optional |
 | **Full-text search** | The body plus attachment text (PDF / Word / PPT / Excel) all enter the full-text index; Chinese is searchable too, with matches highlighted. | Enabled with sync |
 | **AI Chat panel** | Inside the desktop App, ask the AI about the current email, have it search across emails, and stream a drafted reply. | In the App |
-| **One-click translation** | Translate English emails into Chinese with one click—available in the detail view, the toolbar, and in bulk. | In the App |
+| **One-click translation** | Translate English emails with one click—available in the detail view, the toolbar, and in bulk. | In the App |
 | **Meeting-invite detection** | Meeting invites (.ics) embedded in an email are automatically parsed into calendar events. | Always on |
 | **Calendar sync** | Incrementally sync your Exchange calendar to the machine, viewed together with the meeting invites in your email. | Off (can enable) |
 | **Dynamic Island notifications** (requires a separate plugin) | Important emails pop up as Dynamic Island cards, with one-click mark-as-read / flag / draft. | Off |
@@ -49,8 +49,8 @@ Before installing, confirm your environment meets these conditions.
 |---|---|
 | Operating system | macOS 12 (Monterey) or later; either Apple Silicon (M series) or Intel x64 works. |
 | Mailbox | A corporate Exchange / Microsoft 365 mailbox (bridged via DavMail), or an account already added in the built-in macOS **Mail.app** (the AppleScript path). |
-| Notion | A Notion workspace (the free plan is fine) to hold the synced email archive. The later [Initial Sync](/101/initial-sync/) section will walk you through building the required databases from scratch. |
-| Runtime | Python 3.11+ (for installing the backend CLI). The desktop App ships with its own runtime—no separate Python install needed. |
+| Notion (optional) | Not needed by default—email bodies and attachments are stored in a local SQLite database on your Mac, which the App reads and writes directly. You only need a Notion workspace if you want email **additionally mirrored to Notion** as an extra archive (setup steps are in [(Developer) Run the Backend from Source](/en/101/install-backend/) under "Optional — build a Notion mirror"). |
+| Runtime | No separate Python install needed—the desktop App ships with a self-contained runtime. (Only developers running the backend from source need Python 3.11+.) |
 | Network | The first launch requires internet access to verify the Notion API, and (if AI is enabled) to verify the LLM gateway. |
 | AI (optional) | An Anthropic-compatible LLM gateway key, or a Notion Custom Agent. You can use sync and search without filling this in—you just won't have AI classification or Chat. |
 
@@ -68,13 +68,13 @@ When you are getting started, the terms below will recur in the interface, the l
 - **DavMail**: a bridge program that translates a corporate Exchange mailbox into standard protocols, letting MailAgent read and write email at high speed.
 - **Notion Integration / Token**: the "bot" you create in Notion; MailAgent uses its Token to write emails into your database.
 
-A more complete glossary is in the [Troubleshooting FAQ](/101/troubleshooting/).
+A more complete glossary is in the [Troubleshooting FAQ](/en/101/troubleshooting/).
 
 ## Next up
 
-- Not installed yet? Start from **[Install the Backend](/en/101/install-backend/)** and follow the full onboarding flow.
-- Want to jump straight to daily use? Skip to **[Daily Workflow: Inbox](/101/daily-inbox/)**.
-- Running into problems? Flip to the **[Troubleshooting FAQ](/101/troubleshooting/)**.
+- Not installed yet? Start from **[Install the Desktop App](/en/101/install-app/)** and follow the full onboarding flow.
+- Want to jump straight to daily use? Skip to **[Daily Workflow: Inbox](/en/101/daily-inbox/)**.
+- Running into problems? Flip to the **[Troubleshooting FAQ](/en/101/troubleshooting/)**.
 
 ---
 

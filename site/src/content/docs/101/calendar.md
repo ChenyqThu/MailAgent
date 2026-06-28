@@ -78,9 +78,9 @@ pm2 restart mail-sync
 日历支持快捷键：`G` 然后 `D/W/M/A` 切换今日/周/月/Agenda，`T` 回到今天，`←` `→` 翻日期，`⌘R` 同步，`?` 看全部快捷键，`Esc` 关抽屉。
 :::
 
-## 会进 Notion 吗
+## 会进 Notion 吗（可选）
 
-会议事件除了存在 MailAgent 本地，也可以镜像到 Notion 日历数据库（如果你配置了 `CALENDAR_DATABASE_ID`）。Notion 日历库需要这几个字段：
+会议事件首先存在 MailAgent 本地数据库，**若启用了 Notion 镜像**（配置了 `CALENDAR_DATABASE_ID`），也会镜像到 Notion 日历数据库。Notion 日历库需要这几个字段：
 
 | 字段 | 类型 | 说明 |
 |---|---|---|

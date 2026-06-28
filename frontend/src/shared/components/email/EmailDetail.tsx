@@ -175,6 +175,7 @@ type PendingMap = {
   read: boolean
   flag: boolean
   archive: boolean
+  delete: boolean
 }
 
 const NO_PENDING: PendingMap = {
@@ -182,7 +183,8 @@ const NO_PENDING: PendingMap = {
   llmRun: false,
   read: false,
   flag: false,
-  archive: false
+  archive: false,
+  delete: false
 }
 
 const llmAgentUpgradeFired = new Set<number>()
@@ -519,6 +521,31 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
     }
   }, [internalId, mailApi, queryClient, t, nextId, prevId, setActive])
 
+  // 删除（收件箱语义 = flag→done 归档完成, 非物理删除; 草稿在上方已走 compose 编辑态不到这里）。
+  // 复刻 EmailRow ricon-delete 非草稿分支 + 跳下一封（同 archive）。types.ts deleteDraft 注释明确：
+  // 「收件箱删除按钮 = 归档语义 (flag→done)」，与草稿 deleteDraft 真删区分。接口复用 email.flag。
+  const handleDelete = useCallback(async (): Promise<void> => {
+    if (internalId === null) return
+    const deletingId = internalId
+    setPending((p) => ({ ...p, delete: true }))
+    try {
+      await mailApi.email.flag(deletingId, { isFlagged: false, processingStatus: '已完成' })
+      toastSuccess(t('toolbarToast.deleteOk', { defaultValue: '已删除（归档完成）' }))
+      if (nextId !== null && nextId !== deletingId) setActive(nextId)
+      else if (prevId !== null && prevId !== deletingId) setActive(prevId)
+      await queryClient.invalidateQueries({ queryKey: ['emails'] })
+      await queryClient.invalidateQueries({ queryKey: ['email', deletingId] })
+    } catch (err) {
+      const e = asWriteError(err)
+      toastError(
+        t('toolbarToast.deleteFail', { defaultValue: '删除失败' }),
+        e.code ? `${e.code} · ${e.message}` : e.message
+      )
+    } finally {
+      setPending((p) => ({ ...p, delete: false }))
+    }
+  }, [internalId, mailApi, queryClient, t, nextId, prevId, setActive])
+
   const handleResync = useCallback(
     async ({ dryRun }: { dryRun: boolean }): Promise<void> => {
       if (internalId === null) return
@@ -760,6 +787,8 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
         notionUrl={email.notion_url}
         onArchive={handleArchive}
         archiveState={{ pending: pending.archive }}
+        onDelete={() => void handleDelete()}
+        deleteState={{ pending: pending.delete }}
         onPrev={onPrev}
         onNext={onNext}
       />

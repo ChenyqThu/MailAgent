@@ -3,10 +3,10 @@ title: Install the Desktop App
 description: Download the .dmg for your architecture from GitHub Releases, drag it into Applications, get past Gatekeeper on first launch, grant permissions, and set up the MailAgent desktop App.
 ---
 
-The desktop App is the backend's graphical interface: the three-column inbox, the AI panel, full-text search, one-click translation, and reply composing all live here. It reads the local database the backend writes and performs write operations through the backend.
+The desktop App is the heart of MailAgent: the three-column inbox, the AI panel, full-text search, one-click translation, and reply composing all live here. **It ships with a complete backend already embedded (a self-contained runtime—no separate Python or CLI install needed)**—just download, open, and you're ready to go. Your email data is stored in a local database on your own Mac.
 
-:::caution[Backend first, then install the App]
-The desktop App cannot work independently of the backend—it reads the `data/sync_store.db` the backend maintains. If you haven't got the backend running yet, go back to **[Install the Backend](/en/101/install-backend/)** and **[Initial Sync](/101/initial-sync/)** first. When the backend isn't running, opening the App will report that it can't find the database.
+:::note[Just this one App—nothing else to install first]
+You do not need to "install the backend" first. The old `git clone` + virtual environment + `mailagent` CLI flow is an advanced path for developers running from source (see [(Developer) Run the Backend from Source](/en/101/install-backend/)). Regular users **just download the App below**—the backend is bundled inside and starts automatically with the App. The only additional step is: corporate Exchange / Microsoft 365 users need to run a separate DavMail mail-source bridge (covered in [the next section](/en/101/davmail-setup/)).
 :::
 
 ## Step 1: Download the .dmg for your architecture
@@ -39,14 +39,14 @@ Only the **first time** requires opening via right-click. Once trusted, you can 
 
 On first launch, macOS will pop up several permission requests; click **Allow**:
 
-- **Documents folder access**: by default the App reads the database from `~/Documents/MailAgent/data/`.
+- **Documents folder access**: by default the App reads and writes the database at `~/Documents/MailAgent/data/`.
 - **Automation permission**: used when performing operations such as mark-as-read / flag / create draft.
 
 If you didn't grant a permission at the time and later need to add it, go to **System Settings → Privacy & Security → Automation** and check the `Mail` sub-item under `MailAgent`.
 
 ### Full Disk Access (optional but recommended)
 
-The database is by default at `~/Documents/MailAgent/data/`, and the "Documents folder access" above is usually enough. But if you've changed the database path to a protected directory such as `~/Library/...`, you need to add Full Disk Access manually:
+The database is by default at `~/Documents/MailAgent/data/`, and the "Documents folder access" above is usually enough. But if you've moved the database path to a protected directory such as `~/Library/...`, you need to add Full Disk Access manually:
 
 **System Settings → Privacy & Security → Full Disk Access → +**, and add `MailAgent.app`.
 
@@ -56,15 +56,16 @@ The first time you open the App, it guides you through the in-app first-time set
 
 Once setup is complete, the main interface is the three-column inbox: folders and AI Agents on the left, the email list in the middle, and details plus the AI fields panel on the right.
 
-:::note[Don't let the App and the backend CLI write at the same time]
-When you're using the desktop App, make sure the backend's PM2 `mail-sync` process is **stopped** (`pm2 stop mail-sync`), to avoid conflicts from the App and the CLI writing to the database simultaneously. If you're using DavMail, keep the `davmail-poc` bridge process (it isn't bundled into the App).
+:::note[The App's built-in backend · DavMail stays separate]
+The backend embedded in the App starts automatically with the App—you don't need to run any `mail-sync` process separately. **The only thing that stays separate is DavMail** (the corporate Exchange mail-source bridge; it isn't bundled into the App)—the next section explains how to run it as a background daemon. If you previously ran the CLI backend from source (PM2 `mail-sync`), stop it before using the App (`pm2 stop mail-sync`) to avoid two backends writing to the same database at once.
 :::
 
 ## Next up
 
-- Configure the App: **[In-App First-Time Setup](/101/onboarding/)**.
-- Get started: **[Daily Workflow: Inbox](/101/daily-inbox/)**.
-- Can't install / crashes on open? See the **[Troubleshooting FAQ](/101/troubleshooting/)**.
+- Corporate Exchange / Microsoft 365 mailbox? Set up the mail source first: **[Connect Your Corporate Mailbox via DavMail](/en/101/davmail-setup/)**.
+- Configure the App: **[In-App First-Time Setup](/en/101/onboarding/)**.
+- Get started: **[Daily Workflow: Inbox](/en/101/daily-inbox/)**.
+- Can't install / crashes on open? See the **[Troubleshooting FAQ](/en/101/troubleshooting/)**.
 
 ---
 

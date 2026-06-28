@@ -122,7 +122,8 @@ export function AgentThreadList(props: AgentThreadListProps): React.ReactElement
   return (
     <aside
       className={cn(
-        'flex h-full shrink-0 flex-col overflow-hidden',
+        // 会话侧栏材质与右侧对话区（AgentThread glass-3）统一为玻璃，暗色下不再是孤立纯色块。
+        'glass-panel flex h-full shrink-0 flex-col overflow-hidden',
         fluid
           ? 'w-full'
           : cn(

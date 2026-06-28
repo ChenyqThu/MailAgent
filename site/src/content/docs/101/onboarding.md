@@ -51,7 +51,7 @@ notion-agent agents list   # 列出你的 agent，复制对应的 UUID
 
 | 槽位 | 用途 | 从哪拿 |
 |---|---|---|
-| **CLI API Key** | 给写操作（重传 Notion / AI 重跑 / 标记）做鉴权 | 后端 `.env` 里的 `MAILAGENT_CLI_API_KEY` |
+| **CLI API Key** | 给写操作（重传 Notion / AI 重跑 / 标记）做鉴权 | 桌面 App 自带后端时通常已自动配好，一般**留空即可**；仅当你连的是外部 / 源码运行的后端时才需要手填（取自后端 `.env` 的 `MAILAGENT_CLI_API_KEY`） |
 | **LLM API Key** | 一键翻译 + Custom API chat 后端 | 你的 LLM 网关 Key（如 `cr_xxx`） |
 | **Custom API Key** | 自托管 OpenAI 兼容端点（和 LLM 同 Key 时可复用） | 网关 Key |
 

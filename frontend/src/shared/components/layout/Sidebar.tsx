@@ -18,26 +18,26 @@ import { cloneElement, isValidElement, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate, useRouterState } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
-import {
-  Activity,
-  BarChart3,
-  CalendarDays,
-  ChevronDown,
-  ChevronLeft,
-  ChevronRight,
-  HelpCircle,
-  History,
-  Inbox,
-  Mail,
-  Send,
-  Settings,
-  Sparkles,
-  SquarePen,
-  Star,
-  Sliders
-} from 'lucide-react'
+import { ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
+import {
+  AnimatedIconActiveProvider,
+  CalendarCheckIcon,
+  ChartLineIcon,
+  ChartPieIcon,
+  CircleHelpIcon,
+  FeatherIcon,
+  FolderInputIcon,
+  FoldersIcon,
+  GripIcon,
+  HistoryIcon,
+  SendIcon,
+  SettingsIcon,
+  SparklesIcon,
+  SquarePenIcon,
+  ZapIcon
+} from '@shared/components/icons'
 import { isAgentViewEnabled } from '@shared/assistant/runtime/flags'
 import { HoverTip } from '@shared/components/ui/HoverTip'
 import { useMailApi } from '@shared/hooks/useMailApi'
@@ -122,6 +122,10 @@ function NavRow({
   title,
   collapsedBadge
 }: NavRowProps): React.ReactElement {
+  // 整行 hover/focus 经 AnimatedIconActiveProvider（zero-DOM Context）驱动行内
+  // AnimatedIcon 播放/复位 —— 不靠脆弱的 motion variant 传播（根因见
+  // components/icons/AnimatedIcon.tsx 顶部复盘）。reduce 降级统一在 IconShell 内处理。
+  const [iconActive, setIconActive] = useState(false)
   // Disabled rows render as a non-interactive <div> per DESIGN.md §9.4 —
   // opacity-50 + cursor-not-allowed, no hover bg, no keyboard focus, no
   // `.row-selected` capability. Screenreaders announce aria-disabled.
@@ -149,6 +153,10 @@ function NavRow({
     <button
       type="button"
       onClick={onClick}
+      onPointerEnter={() => setIconActive(true)}
+      onPointerLeave={() => setIconActive(false)}
+      onFocus={() => setIconActive(true)}
+      onBlur={() => setIconActive(false)}
       className={cn(
         'row relative w-full flex items-center gap-2.5 px-2 py-1 rounded-md',
         'text-body text-left transition-colors duration-fast',
@@ -159,7 +167,9 @@ function NavRow({
           : 'text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg active:bg-ink-4'
       )}
     >
-      {renderIcon(icon)}
+      <AnimatedIconActiveProvider active={iconActive}>
+        {renderIcon(icon)}
+      </AnimatedIconActiveProvider>
       {collapsedBadgeNode(collapsedBadge)}
       <span className="flex-1 truncate">{label}</span>
       {right && <span className="shrink-0">{right}</span>}
@@ -216,12 +226,14 @@ function TotalCount({ count }: { count: number }): React.ReactElement | null {
   )
 }
 
+// 全部走 AnimatedIcon（mailbox/feather/square-pen/zap/folders）；整行 hover/focus 经 NavRow 的
+// AnimatedIconActiveProvider 驱动（trigger='parent' 仅保留标注语义）。已标旗用 zap（用户点名）。
 const MAILBOX_ICON: Record<EmailView, React.ReactNode> = {
-  inbox: <Inbox size={15} strokeWidth={1.75} />,
-  outbox: <Send size={15} strokeWidth={1.75} />,
-  drafts: <SquarePen size={15} strokeWidth={1.75} />,
-  flagged: <Star size={15} strokeWidth={1.75} />,
-  all: <Mail size={15} strokeWidth={1.75} />
+  inbox: <FolderInputIcon size={15} strokeWidth={1.75} trigger="parent" />,
+  outbox: <SendIcon size={15} strokeWidth={1.75} trigger="parent" />,
+  drafts: <FeatherIcon size={15} strokeWidth={1.75} trigger="parent" />,
+  flagged: <ZapIcon size={15} strokeWidth={1.75} trigger="parent" />,
+  all: <FoldersIcon size={15} strokeWidth={1.75} trigger="parent" />
 }
 
 export function Sidebar(): React.ReactElement {
@@ -418,7 +430,7 @@ export function Sidebar(): React.ReactElement {
           title={collapsed ? t('nav.composeNew') : undefined}
           aria-label={t('nav.composeNew')}
         >
-          <SquarePen size={16} strokeWidth={2} className="shrink-0" />
+          <SquarePenIcon size={16} strokeWidth={2} className="shrink-0" />
           <span className="flex-1 text-left">{t('nav.composeNew')}</span>
         </button>
       </div>
@@ -519,9 +531,14 @@ export function Sidebar(): React.ReactElement {
           <NavRow
             icon={
               isAgentViewEnabled() ? (
-                <Sparkles size={15} strokeWidth={1.75} className="text-coral" />
+                <SparklesIcon
+                  size={15}
+                  strokeWidth={1.75}
+                  className="text-coral"
+                  trigger="parent"
+                />
               ) : (
-                <History size={15} strokeWidth={1.75} />
+                <HistoryIcon size={15} strokeWidth={1.75} trigger="parent" />
               )
             }
             label={isAgentViewEnabled() ? t('nav.agentView') : t('nav.aiSessions')}
@@ -538,7 +555,7 @@ export function Sidebar(): React.ReactElement {
           {/* Custom AI — /agents hub（Agents / 报告 / Chats=custom-api scoped）。
               整个 /agents 都属 Custom AI。（邮件上下文「问 AI」仍开 AIChatPanel。） */}
           <NavRow
-            icon={<Sliders size={15} strokeWidth={1.75} />}
+            icon={<GripIcon size={15} strokeWidth={1.75} trigger="parent" />}
             label={t('chat.backend.customApi')}
             title={collapsed ? t('chat.backend.customApi') : undefined}
             selected={onAgents}
@@ -559,21 +576,21 @@ export function Sidebar(): React.ReactElement {
         </div>
         <nav className="px-2 space-y-px">
           <NavRow
-            icon={<Activity size={15} strokeWidth={1.75} />}
+            icon={<ChartPieIcon size={15} strokeWidth={1.75} trigger="parent" />}
             label="LLM Dashboard"
             title={collapsed ? 'LLM Dashboard' : undefined}
             selected={pathname.startsWith('/admin/llm') || pathname === '/llm'}
             onClick={() => navigate({ to: '/admin/llm' })}
           />
           <NavRow
-            icon={<BarChart3 size={15} strokeWidth={1.75} />}
+            icon={<ChartLineIcon size={15} strokeWidth={1.75} trigger="parent" />}
             label={t('nav.adminKanban')}
             title={collapsed ? t('nav.adminKanban') : undefined}
             selected={pathname === '/admin/kanban' || pathname === '/admin'}
             onClick={() => navigate({ to: '/admin/kanban' })}
           />
           <NavRow
-            icon={<CalendarDays size={15} strokeWidth={1.75} />}
+            icon={<CalendarCheckIcon size={15} strokeWidth={1.75} trigger="parent" />}
             label={t('nav.calendar')}
             title={collapsed ? t('nav.calendar') : undefined}
             selected={pathname.startsWith('/admin/calendar') || pathname === '/calendar'}
@@ -585,7 +602,7 @@ export function Sidebar(): React.ReactElement {
       {/* ── Bottom strip · 设置 + 快捷键 ──────────────────────────────── */}
       <div className="app-nav-bottom border-t [border-top-color:var(--hairline)] p-2 space-y-px">
         <NavRow
-          icon={<Settings size={15} strokeWidth={1.75} />}
+          icon={<SettingsIcon size={15} strokeWidth={1.75} trigger="parent" />}
           label={t('nav.settings')}
           title={collapsed ? t('nav.settings') : undefined}
           selected={pathname === '/settings'}
@@ -593,7 +610,7 @@ export function Sidebar(): React.ReactElement {
           right={<kbd>⌘,</kbd>}
         />
         <NavRow
-          icon={<HelpCircle size={15} strokeWidth={1.75} />}
+          icon={<CircleHelpIcon size={15} strokeWidth={1.75} trigger="parent" />}
           label={t('nav.shortcuts')}
           title={collapsed ? t('nav.shortcuts') : undefined}
           onClick={openKeyboardHelp}

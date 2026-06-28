@@ -68,7 +68,7 @@ const chips = [
         cards.map((card, i) => {
           const m = meta[i] ?? { icon: 'categorize', col: 'col-4' }
           return (
-            <div class:list={['card', m.col, 'reveal']} data-d={m.d}>
+            <div class:list={['card', 'glow-border', m.col, 'reveal']} data-d={m.d}>
               {card.kicker && (
                 <div class="kicker">
                   <span class="ic"><Icon name={m.icon} size={16} /></span>
