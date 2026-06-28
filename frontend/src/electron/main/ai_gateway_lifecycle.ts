@@ -235,6 +235,28 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     apiKey,
     model: getLlmModel(),
     persistTurn,
+    // M1c — auto-capture 触发（MAILAGENT_MEM0_CAPTURE，默认关）。开时注入 fire-and-forget 回调：
+    // 抽取 turn 的 user+assistant 文本 POST serve-api /chat/memory/capture（mem0.add 自动抽取）。
+    // 🔴 红线：回调 return void（绝不让 gateway onFinish await）+ 错误自吞 → capture 慢/失败绝不
+    // 阻塞已流式 reply。关时 undefined → 字节级 flag-off（onFinish 的 ?. 短路）。capture 是纯后端
+    // 行为（renderer 无感，toast 由 M1d SSE 驱动）→ 此 flag 不需 renderer mirror / vite define。
+    captureTurnMemory: envBool('MAILAGENT_MEM0_CAPTURE', false)
+      ? (turn) => {
+          const userText = turn.userMessage ? extractTextFromUIMessage(turn.userMessage) : ''
+          const assistantText = extractTextFromUIMessage(turn.responseMessage)
+          if (!userText && !assistantText) return // 空 turn 不打扰后端
+          // 30s 上限：mem0 抽取通常几秒；fire-and-forget 下无超时 = 挂死的 serve-api 连接会留
+          // idle socket。AbortSignal.timeout 触发 → _req 抛 AbortError → 下方 .catch 吞。
+          void domain
+            .captureMemory(
+              { userText, assistantText, sessionId: turn.sessionId },
+              AbortSignal.timeout(30_000)
+            )
+            .catch((err) => {
+              console.error('[ai-gateway] auto-capture post failed (turn streamed OK)', err)
+            })
+        }
+      : undefined,
     // Phase 04a — apply an edit-tier UI edit to a pending approval (the resolve side-channel).
     // applyEdit overlays the editable fields onto the original input (identity pinned) WITHOUT
     // touching the ai@6 history input, so the signed approval stays valid on replay. Throws an

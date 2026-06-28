@@ -500,4 +500,24 @@ export class MailAgentDomainClient {
       signal
     }).then((r) => r.deleted)
   }
+
+  /** M1 auto-capture — fire a finished turn at the mem0 extraction endpoint. POST
+   *  /chat/memory/capture {userText, assistantText, sessionId?}. Returns the captured-entry
+   *  summary; the caller (lifecycle, fire-and-forget) ignores it. INDEPENDENT from the
+   *  agent_memory_kv memory_* methods above — this hits the mem0 auto-extraction store, not the
+   *  explicit WAL. sessionId (provenance) only goes on the wire when it is a real number. */
+  captureMemory(
+    input: { userText: string; assistantText: string; sessionId?: number | null },
+    signal?: AbortSignal
+  ): Promise<{ captured: unknown[]; count: number }> {
+    const body: Record<string, unknown> = {
+      userText: input.userText,
+      assistantText: input.assistantText
+    }
+    if (typeof input.sessionId === 'number') body.sessionId = input.sessionId
+    return this._req<{ captured: unknown[]; count: number }>('POST', '/chat/memory/capture', {
+      body,
+      signal
+    })
+  }
 }

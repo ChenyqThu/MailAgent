@@ -266,6 +266,16 @@ export function makePersistOnFinish(
       // persistence is best-effort — a write failure must not break the streamed reply.
       console.error('[ai-gateway] persistTurn failed (turn streamed OK)', err)
     }
+    // M1c — auto-capture 触发（fire-and-forget，**永不 await**）。红线：capture 端点的网络/抽取
+    // 延迟绝不阻塞已流式完成的 reply；回调 return void（不 return promise 给我们 await），失败由
+    // 回调内部自吞。仅当 MAILAGENT_MEM0_CAPTURE 开时由 lifecycle 注入；否则 undefined → ?. 短路 =
+    // 字节级 flag-off（这一行在 flag-off 下是纯 no-op，无行为变化）。try/catch 兜底：即便回调
+    // 实现同步抛（本不该），也绝不破坏已流式完成的 reply。
+    try {
+      cfg.captureTurnMemory?.(turn)
+    } catch (err) {
+      console.error('[ai-gateway] captureTurnMemory threw (turn streamed OK)', err)
+    }
   }
 }
 

@@ -89,6 +89,13 @@ export interface AiGatewayConfig {
   model: string
   /** Persist a finished turn (Electron wrapper → chat_db). Omitted → no persistence. */
   persistTurn?: (turn: PersistTurnInput) => void | Promise<void>
+  /** M1c — fire-and-forget auto-capture trigger. Called in onFinish AFTER persistTurn with the
+   *  finished turn; the Electron wrapper posts it to serve-api /api/chat/memory/capture (mem0.add
+   *  auto-extracts durable prefs/facts). 🔴 MUST be fire-and-forget: the implementation returns
+   *  void (NOT an awaited promise), so a slow / failed capture cannot block the already-streamed
+   *  reply. Injected by the lifecycle ONLY when MAILAGENT_MEM0_CAPTURE is on; omitted (default) →
+   *  no capture, byte-identical. */
+  captureTurnMemory?: (turn: PersistTurnInput) => void
   /** Build the LanguageModel for a model id. Injected by tests (mock model); the
    *  default wires @ai-sdk/anthropic + the normalized baseURL + apiKey. */
   createModel?: (modelId: string) => LanguageModel
