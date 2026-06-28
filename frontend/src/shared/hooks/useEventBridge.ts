@@ -77,6 +77,20 @@ export function useEventBridge(): void {
         }
         return
       }
+      // pin / unpin (agent / CLI / 远程发起的写) → ['pinnedIds'] (置顶 SSoT, usePinnedSync
+      // 据此刷新 zustand mirror) + ['emails'] (列表置顶徽标/排序)。pin 不进 outbox 流且无专门
+      // 的 SSE event(以前), 故 SSE 连着时 agent 改 pin 既无事件又不轮询 → UI 永不刷新; 此事件
+      // 链 (set_pin → email.pin_changed) 镜像 flag_changed 补齐实时性。UI 自己点 pin 走
+      // useTogglePin 的乐观更新 + onSettled invalidate, 与此处不冲突 (同 key invalidate 幂等)。
+      if (t === 'email.pin_changed') {
+        debounceInvalidate('["pinnedIds"]', () =>
+          queryClient.invalidateQueries({ queryKey: ['pinnedIds'] })
+        )
+        debounceInvalidate('["emails"]', () =>
+          queryClient.invalidateQueries({ queryKey: ['emails'] })
+        )
+        return
+      }
       // outbox 派发完成 → Notion / Mail.app 状态可能变 (但 SQLite intent 已写过,
       // 这里 invalidate 主要是为了反映 fanout 完成后的衍生状态; pinned 不在 outbox 流里)
       if (t === 'outbox.done') {

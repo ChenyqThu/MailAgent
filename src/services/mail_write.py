@@ -1129,10 +1129,29 @@ class MailWriteService:
             raise ServiceNotFoundError(
                 f"Email with internal_id={internal_id} disappeared mid-write"
             )
+        changed = self._pin_changed(already, pinned)
+        # 乐观回显 (镜像 set_flags 的 email.flag_changed): 立即发 SSE → useEventBridge
+        # invalidate ['pinnedIds']/['emails'] → 所有视图(含 agent / CLI / 远程发起的写)
+        # 秒刷新置顶态。pin 不进 outbox (Mail.app 无 pin 概念, 无 fanout), 故这是唯一的
+        # 实时通知点 —— 缺它则 SSE 连着时既无事件又不轮询, UI 永不刷新 (dogfood 根因)。
+        # 仅在真正改变时发 (changed): 重复写不喷无意义事件。在 service 层发, 只覆盖经
+        # 服务层的写 (用户/agent/CLI), 不对内部回填喷事件。
+        if changed:
+            try:
+                from src.events.publisher import safe_publish
+
+                safe_publish(
+                    "email.pin_changed",
+                    internal_id=internal_id,
+                    data={"is_pinned": pinned},
+                    source="mail_write.set_pin",
+                )
+            except Exception:
+                pass
         return PinResult(
             internal_id=internal_id,
             is_pinned=pinned,
-            changed=self._pin_changed(already, pinned),
+            changed=changed,
         )
 
     # ------------------------------------------------------------

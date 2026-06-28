@@ -672,6 +672,67 @@ def test_set_pin_matches_golden(cli_env, seeded_db):
     assert result.changed is True
 
 
+def test_set_pin_emits_pin_changed_sse(cli_env, seeded_db, monkeypatch):
+    """PART 1 (pin 实时刷新): set_pin 真正改变置顶态后立即发 email.pin_changed SSE →
+    useEventBridge invalidate ['pinnedIds']/['emails'] → agent/CLI/远程改的 pin 也秒刷新
+    (镜像 set_flags 的 flag_changed; pin 不进 outbox, 这是唯一实时通知点)。"""
+    import src.events.publisher as publisher
+    from src.services.mail_write import MailWriteService
+
+    events: list = []
+    monkeypatch.setattr(
+        publisher,
+        "safe_publish",
+        lambda event_type, **kw: events.append((event_type, kw)),
+    )
+
+    MailWriteService(_service_ctx(seeded_db)).set_pin(12345, pinned=True, actor=_cli_actor())
+
+    pin_events = [e for e in events if e[0] == "email.pin_changed"]
+    assert len(pin_events) == 1, f"应发恰好 1 个 email.pin_changed, 实得 {events!r}"
+    _type, kw = pin_events[0]
+    assert kw["internal_id"] == 12345
+    assert kw["data"]["is_pinned"] is True
+    assert kw["source"] == "mail_write.set_pin"
+
+
+def test_set_pin_unchanged_no_sse(cli_env, seeded_db, monkeypatch):
+    """PART 1: 重复写 (置顶态未变) → 不发 pin_changed SSE (避免无意义刷新)。"""
+    import src.events.publisher as publisher
+    from src.services.mail_write import MailWriteService
+
+    svc = MailWriteService(_service_ctx(seeded_db))
+    svc.set_pin(12345, pinned=True, actor=_cli_actor())  # 首次: 0 → 1, changed
+
+    events: list = []
+    monkeypatch.setattr(
+        publisher,
+        "safe_publish",
+        lambda event_type, **kw: events.append((event_type, kw)),
+    )
+
+    svc.set_pin(12345, pinned=True, actor=_cli_actor())  # 再次: 1 → 1, 未变
+    assert [e for e in events if e[0] == "email.pin_changed"] == []
+
+
+def test_set_pin_not_found_no_sse(cli_env, seeded_db, monkeypatch):
+    """PART 1: 不存在的 id → 不写 → 不应发 pin_changed SSE (set_pin 先抛 NotFound)。"""
+    import src.events.publisher as publisher
+    from src.services.errors import ServiceNotFoundError
+    from src.services.mail_write import MailWriteService
+
+    events: list = []
+    monkeypatch.setattr(
+        publisher,
+        "safe_publish",
+        lambda event_type, **kw: events.append((event_type, kw)),
+    )
+
+    with pytest.raises(ServiceNotFoundError):
+        MailWriteService(_service_ctx(seeded_db)).set_pin(99999, pinned=True, actor=_cli_actor())
+    assert [e for e in events if e[0] == "email.pin_changed"] == []
+
+
 def test_plan_pin_not_found_raises(cli_env, seeded_db):
     from src.services.errors import ServiceNotFoundError
     from src.services.mail_write import MailWriteService

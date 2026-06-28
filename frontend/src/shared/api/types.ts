@@ -1864,6 +1864,7 @@ export type SseEventType =
   | 'email.failed'
   | 'email.dead_letter'
   | 'email.flag_changed'
+  | 'email.pin_changed'
   | 'outbox.enqueued'
   | 'outbox.done'
   | 'outbox.failed'
