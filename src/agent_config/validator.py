@@ -13,6 +13,7 @@ prompt 文本控制不了 ConfirmToolDialog）。
 from __future__ import annotations
 
 import re
+import unicodedata
 from typing import Optional
 
 # 明显的 override / jailbreak 短语（小写匹配）。命中即拒 —— 这些写进 RULES.md 没有正当用途。
@@ -49,6 +50,17 @@ _NEGATION_MARKERS: tuple[str, ...] = (
 # 否定前缀与越权短语之间允许的最大间隔（字符）。够覆盖「不允许[无需确认]直接发送」这类整句。
 _NEGATION_WINDOW = 40
 
+# M4b review MED-3 —— 匹配前做廉价归一化，闭合 codex 测出的 fullwidth / 零宽插入绕过（全角
+# ｉｇｎｏｒｅ、或字符间插入零宽空格）。NFKC 把全角/兼容字符折回 ASCII，再去零宽字符。**只用于
+# 匹配**，不改存储内容。spaced（i g n o r e）/ 多语言同义词属 deny-list 固有局限，不追 —— 真正
+# 的安全保证是结构性 floor + 全文人审（见模块 docstring）。用整数码点构造，源码内不留不可见字符。
+_ZERO_WIDTH_CODEPOINTS = (0x200B, 0x200C, 0x200D, 0x2060, 0xFEFF)
+_ZERO_WIDTH = re.compile("[" + "".join(chr(c) for c in _ZERO_WIDTH_CODEPOINTS) + "]")
+
+
+def _normalize_for_match(text: str) -> str:
+    return _ZERO_WIDTH.sub("", unicodedata.normalize("NFKC", text or ""))
+
 
 def _has_negation_prefix(text: str, match_start: int) -> bool:
     """匹配点之前（同一行、限 _NEGATION_WINDOW 窗口）是否有否定/禁止前缀。"""
@@ -62,8 +74,9 @@ def validate_rules_content(content: str) -> Optional[str]:
 
     返回 None = 通过；返回字符串 = 拒绝原因（命中的 deny-list 类别，供 audit / 报错）。
     仅当某个越权短语的匹配点之前**没有**否定/禁止前缀时才拒绝（R8：放行安全的 prohibition）。
+    匹配前先 NFKC + 去零宽归一化（M4b MED-3），闭合 fullwidth / 零宽插入绕过。
     """
-    text = content or ""
+    text = _normalize_for_match(content)
     for rx in _COMPILED:
         for m in rx.finditer(text):
             if _has_negation_prefix(text, m.start()):

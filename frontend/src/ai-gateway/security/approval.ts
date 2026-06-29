@@ -18,10 +18,11 @@
 //     cannot rewrite the bound hash).
 //   - verify(toolCallId, input) runs inside `execute` on the SECOND call (i.e. only
 //     after the user approved). It enforces: record exists, not expired, and the executed
-//     input matches the approved input. preview-tier writes reject any input change
-//     (E_APPROVAL_HASH_MISMATCH — "no silent input swap"). edit-tier writes
-//     (email_draft_reply) PERMIT an input change (the user may edit the proposed draft)
-//     and report it as userEdited so audit records it.
+//     input matches the approved input — a directly-changed exec input is rejected for ALL
+//     tiers (E_APPROVAL_HASH_MISMATCH — "no silent input swap"). The ONLY way to change a
+//     write's input is a UI edit via applyEdit (the resolve side-channel), which PINS identity
+//     fields + overlays only editableFields; verify() then runs that override (record.editedInput)
+//     and reports userEdited so audit records it.
 //
 // 🔴 Pure Node (node:crypto only) — no electron / chat_db / ai imports, so the gateway
 //    core stays harness-testable and this guard is directly unit-testable. The store is
@@ -112,15 +113,15 @@ export interface ApprovalRecord {
   expiresAt: number
 }
 
-/** verify() outcome: the matched record, whether the executed input differed from the
- *  approved input (edit-tier — via applyEdit override or a directly-changed exec input), and
- *  the `effectiveInput` the tool MUST run with (the override when present, else the verified
- *  input). preview-tier throws on a changed input instead of reporting userEdited. */
+/** verify() outcome: the matched record, whether the executed input was edited (ONLY via an
+ *  applyEdit override — a directly-changed exec input is rejected for all tiers), and the
+ *  `effectiveInput` the tool MUST run with (the applyEdit override when present, else the verified
+ *  input). A hash mismatch with no applyEdit override throws E_APPROVAL_HASH_MISMATCH. */
 export interface ApprovalVerifyResult {
   record: ApprovalRecord
   userEdited: boolean
   /** The input the write tool should execute with: the applyEdit override (UI edit), or the
-   *  verified input itself (no edit / a directly-supplied edited exec input). */
+   *  verified input itself (no edit). */
   effectiveInput: unknown
 }
 
@@ -260,10 +261,11 @@ export class ApprovalGuard {
   }
 
   /**
-   * Verify a tool call may execute with the given input. Called inside `execute` on the
-   * second run (so ai@6 has already verified the approval signature). Throws ApprovalError
-   * when no record exists, it has expired, or — for preview-tier — the input was swapped.
-   * For edit-tier an input change is allowed and reported via `userEdited`.
+   * Verify a tool call may execute with the given input. Called inside `execute` on the second
+   * run. Throws ApprovalError when no record exists, it has expired, or the executed input does not
+   * match the approved input (E_APPROVAL_HASH_MISMATCH — for ALL tiers). The only sanctioned input
+   * change is an applyEdit override (record.editedInput) — returned as effectiveInput with
+   * userEdited=true, identity fields pinned.
    */
   verify(toolCallId: string, input: unknown): ApprovalVerifyResult {
     const record = this.store.get(toolCallId)
@@ -287,15 +289,16 @@ export class ApprovalGuard {
     }
     const inputHash = hashApprovalInput(input)
     if (inputHash !== record.inputHash) {
-      if (record.risk === 'edit' || record.risk === 'blocking') {
-        // edit / blocking tier with a directly-changed exec input (no applyEdit override) — e.g.
-        // a test or a future runtime that mutates the history input. The executed input is
-        // authoritative; record the edit.
-        return { record, userEdited: true, effectiveInput: input }
-      }
+      // A directly-changed exec input is NEVER accepted — for ANY tier (M4b review HIGH-1). The ONLY
+      // legitimate way to change a write's input is a UI edit via applyEdit (handled above through
+      // record.editedInput, which PINS identity fields and overlays only editableFields). Accepting a
+      // raw changed exec input here would let a mutated / replayed history input retarget a pinned
+      // identity field (e.g. update_system_md's doc_name, or email_prepare_send's recipients) on an
+      // edit/blocking-tier write. The gateway does not use ai@6 signed approval (chatRun.ts), so this
+      // domain guard is THE authoritative gate and must reject every hash mismatch.
       throw new ApprovalError(
         'E_APPROVAL_HASH_MISMATCH',
-        `approved input was modified for ${record.toolName} (preview-tier writes cannot be edited)`
+        `approved input was modified for ${record.toolName} — re-propose the action (edits apply through the approval card, not by changing the executed input)`
       )
     }
     return { record, userEdited: false, effectiveInput: input }

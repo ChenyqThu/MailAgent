@@ -202,14 +202,16 @@ describe('buildToolA2UIPayload — self-mount cards (M4b/M4c)', () => {
     expect((p!.props as unknown as SystemDocApprovalCardProps).highRisk).toBe(false)
   })
 
-  test('update_system_md long content → preview truncated (code-point safe)', () => {
+  test('update_system_md shows the FULL content (never truncated) — the review surface (M4b HIGH-2)', () => {
+    const full = '体'.repeat(300)
     const p = buildToolA2UIPayload('update_system_md', {
-      args: { doc_name: 'agent', content: '体'.repeat(300) }
+      args: { doc_name: 'agent', content: full }
     })
     const props = p!.props as unknown as SystemDocApprovalCardProps
+    expect(props.highRisk).toBe(true) // agent is high-risk (M4b MED-3)
     expect(props.contentLength).toBe(300)
-    expect(props.contentPreview.endsWith('…')).toBe(true)
-    expect([...props.contentPreview].length).toBe(241) // 240 code points + ellipsis
+    expect(props.contentPreview).toBe(full) // full content, never truncated
+    expect(props.contentPreview.endsWith('…')).toBe(false)
   })
 
   test('update_system_md HIGH-RISK (rules) long content → NOT truncated (full for 逐字确认)', () => {

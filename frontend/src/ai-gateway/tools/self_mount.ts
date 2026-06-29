@@ -123,7 +123,27 @@ export function createSelfMountTools(
     run: async (input, { userEdited, signal }) => {
       if (input.skill_name.trim().length === 0) invalidArg('skill_name required (non-empty)')
       const data = await domain.setSkillEnabled(input.skill_name, input.enabled, signal)
-      return { name: data.name, enabled: data.enabled, user_edited: userEdited }
+      // M4b review LOW-4 — enabling does NOT guarantee mounting: a skill advertises its tools only
+      // when enabled AND available. Surface availability so the result never claims a capability
+      // appeared when it did not (best-effort — the enable/disable already applied server-side).
+      let available: boolean | undefined
+      let unavailableReason: string | null = null
+      try {
+        const resolved = await domain.listResolvedSkills(signal)
+        const s = resolved.find((x) => x.name === data.name)
+        available = s?.available
+        unavailableReason = s?.unavailableReason ?? null
+      } catch {
+        /* availability is advisory; the enable/disable already applied */
+      }
+      return {
+        name: data.name,
+        enabled: data.enabled,
+        available,
+        unavailable_reason: unavailableReason,
+        mounted: data.enabled && available === true,
+        user_edited: userEdited
+      }
     }
   })
 

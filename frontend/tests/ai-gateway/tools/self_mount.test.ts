@@ -127,11 +127,31 @@ describe('update_system_md (M4b) — edit-tier, always asks, agent_proposed', ()
 })
 
 describe('set_skill_enabled (M4c) — preview-tier write', () => {
-  test('declares needsApproval + run POSTs {enabled} to /agent/skills/{name}/enabled', async () => {
-    let captured: { url: string; body: unknown } | null = null
+  test('declares needsApproval + POSTs {enabled} + surfaces mounted/available (M4b LOW-4)', async () => {
+    let enabledCall: { url: string; body: unknown } | null = null
     const domain = mockDomain((url, body) => {
-      captured = { url, body: body ? JSON.parse(body) : null }
-      return okEnvelope({ name: 'report', enabled: true })
+      if (url.includes('/enabled')) {
+        enabledCall = { url, body: body ? JSON.parse(body) : null }
+        return okEnvelope({ name: 'report', enabled: true })
+      }
+      // LOW-4 — set_skill_enabled also reads /agent/skills to surface availability/mounted.
+      return okEnvelope({
+        skills: [
+          {
+            name: 'report',
+            title: 'Report',
+            description: '',
+            defaultEnabled: false,
+            enabled: true,
+            overridden: true,
+            available: true,
+            unavailableReason: null,
+            toolCount: 2,
+            scopes: [],
+            sourceType: 'builtin'
+          }
+        ]
+      })
     })
     const tools = createSelfMountTools(domain, [], new ApprovalGuard())
     expect(tools.set_skill_enabled.needsApproval).toBeTruthy()
@@ -139,9 +159,52 @@ describe('set_skill_enabled (M4c) — preview-tier write', () => {
       skill_name: 'report',
       enabled: true
     })
-    expect(captured!.url).toContain('/agent/skills/report/enabled')
-    expect((captured!.body as { enabled?: boolean }).enabled).toBe(true)
-    expect(out).toMatchObject({ name: 'report', enabled: true, user_edited: false })
+    expect(enabledCall!.url).toContain('/agent/skills/report/enabled')
+    expect((enabledCall!.body as { enabled?: boolean }).enabled).toBe(true)
+    expect(out).toMatchObject({
+      name: 'report',
+      enabled: true,
+      available: true,
+      mounted: true,
+      user_edited: false
+    })
+  })
+
+  test('enabling an UNAVAILABLE skill → mounted:false + reason (M4b LOW-4: enable != mount)', async () => {
+    const domain = mockDomain((url) => {
+      if (url.includes('/enabled')) return okEnvelope({ name: 'kos', enabled: true })
+      return okEnvelope({
+        skills: [
+          {
+            name: 'kos',
+            title: 'KOS',
+            description: '',
+            defaultEnabled: true,
+            enabled: true,
+            overridden: false,
+            available: false,
+            unavailableReason: 'KOS not configured',
+            toolCount: 7,
+            scopes: [],
+            sourceType: 'builtin'
+          }
+        ]
+      })
+    })
+    const tools = createSelfMountTools(domain, [], new ApprovalGuard())
+    const out = (await approveAndRun(tools.set_skill_enabled, {
+      skill_name: 'kos',
+      enabled: true
+    })) as {
+      enabled: boolean
+      available: boolean
+      mounted: boolean
+      unavailable_reason: string | null
+    }
+    expect(out.enabled).toBe(true)
+    expect(out.available).toBe(false)
+    expect(out.mounted).toBe(false) // enabled but unavailable → not mounted
+    expect(out.unavailable_reason).toBe('KOS not configured')
   })
 })
 

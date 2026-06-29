@@ -6,8 +6,8 @@
 //     domain write + audits approval_status='approved' + approval_hash;
 //   - NO record (execute without a prior approval) → E_APPROVAL_NOT_FOUND, the domain write
 //     never runs (no silent write), audit approval_status='rejected';
-//   - preview-tier input swap → E_APPROVAL_HASH_MISMATCH (no write);
-//   - edit-tier input change → executes the edited input, audit approval_status='edited';
+//   - a directly-changed exec input (ANY tier) → E_APPROVAL_HASH_MISMATCH (no write);
+//   - an edit-tier UI edit via applyEdit → executes the edited input, audit approval_status='edited';
 //   - expired approval → E_APPROVAL_EXPIRED.
 
 import { describe, expect, test } from 'vitest'
@@ -71,11 +71,45 @@ describe('ApprovalGuard — register / verify', () => {
     }
   })
 
-  test('edit-tier input change → allowed, reported as userEdited', () => {
+  test('edit-tier directly-changed exec input (no applyEdit) → E_APPROVAL_HASH_MISMATCH (M4b HIGH-1)', () => {
     const g = new ApprovalGuard()
-    g.register('tc1', 'email_draft_reply', 'edit', { internal_id: 9, body_markdown: 'draft a' })
-    const v = g.verify('tc1', { internal_id: 9, body_markdown: 'draft b (user edited)' })
+    g.register('tc1', 'email_draft_reply', 'edit', { internal_id: 9, body_markdown: 'draft a' }, [
+      'body_markdown'
+    ])
+    // A raw changed exec input is NOT a sanctioned edit (edits go via applyEdit) → rejected.
+    try {
+      g.verify('tc1', { internal_id: 9, body_markdown: 'draft b (direct swap)' })
+      throw new Error('should have thrown')
+    } catch (e) {
+      expect(e).toBeInstanceOf(ApprovalError)
+      expect((e as ApprovalError).code).toBe('E_APPROVAL_HASH_MISMATCH')
+    }
+  })
+
+  test('edit-tier UI edit via applyEdit → verify (replayed unchanged input) runs the edited input', () => {
+    const g = new ApprovalGuard()
+    g.register('tc1', 'email_draft_reply', 'edit', { internal_id: 9, body_markdown: 'draft a' }, [
+      'body_markdown'
+    ])
+    g.applyEdit('tc1', { body_markdown: 'draft b (user edited)' })
+    // The ai@6 history input is replayed UNCHANGED (hashes to the approved input); the override wins.
+    const v = g.verify('tc1', { internal_id: 9, body_markdown: 'draft a' })
     expect(v.userEdited).toBe(true)
+    expect((v.effectiveInput as { body_markdown: string }).body_markdown).toBe(
+      'draft b (user edited)'
+    )
+  })
+
+  test('edit-tier identity retarget via direct exec input → rejected (M4b HIGH-1: update_system_md doc_name)', () => {
+    const g = new ApprovalGuard()
+    g.register('tc1', 'update_system_md', 'edit', { doc_name: 'user', content: 'pref' })
+    // approve {doc_name:'user'} then try to execute {doc_name:'rules'} → must NOT retarget.
+    try {
+      g.verify('tc1', { doc_name: 'rules', content: 'weaken safety' })
+      throw new Error('should have thrown')
+    } catch (e) {
+      expect((e as ApprovalError).code).toBe('E_APPROVAL_HASH_MISMATCH')
+    }
   })
 
   test('expired approval → E_APPROVAL_EXPIRED', () => {
@@ -183,18 +217,20 @@ describe('write tool — no execution without a valid approval', () => {
   })
 })
 
-describe('write tool — edit-tier executes the edited input + audits as edited', () => {
-  test('email_draft_reply: approve body A, execute body B → writes B, approval_status=edited', async () => {
+describe('write tool — edit-tier executes the applyEdit-edited input + audits as edited', () => {
+  test('email_draft_reply: approve body A, applyEdit→B, execute (replayed A) → writes B, approval_status=edited', async () => {
     const h = harness({ internal_id: 9, drafts_folder: 'Drafts', method: 'reply_all_9' })
     const proposed = { internal_id: 9, body_markdown: 'draft A' }
-    const edited = { internal_id: 9, body_markdown: 'draft B (edited)' }
     await needsApprovalOf(h.tools.email_draft_reply)(proposed, { toolCallId: 'tc1', messages: [] })
-    const out = (await executeOf(h.tools.email_draft_reply)(edited, {
+    // The user edits the body on the card → applyEdit (resolve side-channel). The ai@6 history input
+    // stays 'draft A' and is replayed UNCHANGED into execute; the applyEdit override is authoritative.
+    h.guard.applyEdit('tc1', { body_markdown: 'draft B (edited)' })
+    const out = (await executeOf(h.tools.email_draft_reply)(proposed, {
       toolCallId: 'tc1',
       messages: []
     })) as { user_edited: boolean; final_body_markdown: string }
     expect(out.user_edited).toBe(true)
-    expect(out.final_body_markdown).toBe('draft B (edited)') // the edited body was written
+    expect(out.final_body_markdown).toBe('draft B (edited)') // the applyEdit-edited body was written
     expect(h.domainCalls).toHaveLength(1)
     expect(h.collector[0]).toMatchObject({
       toolName: 'email_draft_reply',
