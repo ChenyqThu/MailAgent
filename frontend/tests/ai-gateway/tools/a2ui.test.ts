@@ -15,7 +15,9 @@ import {
   type ApprovalActionCardProps,
   type DraftReplyCardProps,
   type MemoryApprovalCardProps,
-  type NotionSyncCardProps
+  type NotionSyncCardProps,
+  type SkillToggleCardProps,
+  type SystemDocApprovalCardProps
 } from '../../../src/shared/assistant/tools/a2ui'
 
 describe('componentForTool — the registry allowlist', () => {
@@ -27,6 +29,10 @@ describe('componentForTool — the registry allowlist', () => {
     expect(componentForTool('email_pin')).toBe(A2UI_COMPONENTS.ApprovalActionCard)
     expect(componentForTool('memory_write')).toBe(A2UI_COMPONENTS.MemoryApprovalCard)
     expect(componentForTool('memory_delete')).toBe(A2UI_COMPONENTS.MemoryApprovalCard)
+    expect(componentForTool('update_system_md')).toBe(A2UI_COMPONENTS.SystemDocApprovalCard)
+    expect(componentForTool('set_skill_enabled')).toBe(A2UI_COMPONENTS.SkillToggleCard)
+    // discover_skills is a silent read → no card
+    expect(componentForTool('discover_skills')).toBeNull()
     // unknown / read tools → null (caller falls back to the generic ToolTraceCard)
     expect(componentForTool('email_search')).toBeNull()
     expect(componentForTool('kos_query')).toBeNull()
@@ -172,6 +178,53 @@ describe('buildToolA2UIPayload — memory approval card (write / delete)', () =>
     expect(props.memoryKey).toBe('')
     expect(props.valuePreview).toBeUndefined()
     expect(props.priority).toBeUndefined()
+  })
+})
+
+describe('buildToolA2UIPayload — self-mount cards (M4b/M4c)', () => {
+  test('update_system_md (rules) → high-risk SystemDocApprovalCard + content preview (edit tier)', () => {
+    const p = buildToolA2UIPayload('update_system_md', {
+      args: { doc_name: 'rules', content: 'Always confirm before sending.' }
+    })
+    expect(p!.component).toBe(A2UI_COMPONENTS.SystemDocApprovalCard)
+    const props = p!.props as unknown as SystemDocApprovalCardProps
+    expect(props.docName).toBe('rules')
+    expect(props.highRisk).toBe(true)
+    expect(props.contentPreview).toContain('Always confirm')
+    expect(props.contentLength).toBe('Always confirm before sending.'.length)
+    expect(p!.audit).toMatchObject({ risk: 'edit', requiresApproval: true })
+  })
+
+  test('update_system_md (user) → NOT high-risk', () => {
+    const p = buildToolA2UIPayload('update_system_md', {
+      args: { doc_name: 'user', content: 'Prefers concise replies.' }
+    })
+    expect((p!.props as unknown as SystemDocApprovalCardProps).highRisk).toBe(false)
+  })
+
+  test('update_system_md long content → preview truncated (code-point safe)', () => {
+    const p = buildToolA2UIPayload('update_system_md', {
+      args: { doc_name: 'agent', content: '体'.repeat(300) }
+    })
+    const props = p!.props as unknown as SystemDocApprovalCardProps
+    expect(props.contentLength).toBe(300)
+    expect(props.contentPreview.endsWith('…')).toBe(true)
+    expect([...props.contentPreview].length).toBe(241) // 240 code points + ellipsis
+  })
+
+  test('set_skill_enabled → SkillToggleCard (preview tier)', () => {
+    const p = buildToolA2UIPayload('set_skill_enabled', {
+      args: { skill_name: 'report', enabled: true }
+    })
+    expect(p!.component).toBe(A2UI_COMPONENTS.SkillToggleCard)
+    const props = p!.props as unknown as SkillToggleCardProps
+    expect(props.skillName).toBe('report')
+    expect(props.enabled).toBe(true)
+    expect(p!.audit).toMatchObject({ risk: 'preview', requiresApproval: true })
+  })
+
+  test('discover_skills (silent read) → null payload', () => {
+    expect(buildToolA2UIPayload('discover_skills', { args: {} })).toBeNull()
   })
 })
 

@@ -44,7 +44,7 @@ describe('componentRegistry — resolution', () => {
     expect(componentRegistry.resolve('memory_delete')).toBe(MemoryApprovalCard)
   })
 
-  test('byName covers the eight write tools; components covers the five card names', () => {
+  test('byName covers the ten write/self-mount tools; components covers the seven card names', () => {
     expect(Object.keys(componentRegistry.byName).sort()).toEqual([
       'email_archive',
       'email_draft_reply',
@@ -53,14 +53,18 @@ describe('componentRegistry — resolution', () => {
       'email_prepare_send',
       'email_resync',
       'memory_delete',
-      'memory_write'
+      'memory_write',
+      'set_skill_enabled',
+      'update_system_md'
     ])
     expect(Object.keys(componentRegistry.components).sort()).toEqual([
       'ApprovalActionCard',
       'DraftReplyCard',
       'MemoryApprovalCard',
       'NotionSyncCard',
-      'SendApprovalCard'
+      'SendApprovalCard',
+      'SkillToggleCard',
+      'SystemDocApprovalCard'
     ])
   })
 

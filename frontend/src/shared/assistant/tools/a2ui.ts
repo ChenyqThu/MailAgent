@@ -98,7 +98,12 @@ export const A2UI_COMPONENTS = {
   // Phase 04b — the high-risk outbound send card (email_prepare_send, blocking tier).
   SendApprovalCard: 'SendApprovalCard',
   // M0 — the memory write/forget approval card (memory_write / memory_delete, preview tier).
-  MemoryApprovalCard: 'MemoryApprovalCard'
+  MemoryApprovalCard: 'MemoryApprovalCard',
+  // M4b — the agent's Standing Context doc edit approval card (update_system_md, edit tier;
+  // soul/rules get the high-risk red treatment + the PRODUCT_SAFETY_FLOOR note).
+  SystemDocApprovalCard: 'SystemDocApprovalCard',
+  // M4c — the skill enable/disable (mount/unmount) approval card (set_skill_enabled, preview tier).
+  SkillToggleCard: 'SkillToggleCard'
 } as const
 
 /** Which A2UI component renders a given gateway write tool. Unknown / read tools → null
@@ -118,6 +123,11 @@ export function componentForTool(toolName: string): string | null {
     case 'memory_write':
     case 'memory_delete':
       return A2UI_COMPONENTS.MemoryApprovalCard
+    case 'update_system_md':
+      return A2UI_COMPONENTS.SystemDocApprovalCard
+    case 'set_skill_enabled':
+      return A2UI_COMPONENTS.SkillToggleCard
+    // discover_skills is a silent read → no card (generic ToolTraceCard).
     default:
       return null
   }
@@ -184,6 +194,26 @@ export interface MemoryApprovalCardProps {
   priority?: number
   saved?: boolean
   deleted?: number
+}
+
+/** update_system_md (M4b, edit tier) — the agent proposes new content for a Standing Context doc.
+ *  `highRisk` is true for soul/rules (identity + hard constraints) → the card uses the red high-risk
+ *  treatment + the PRODUCT_SAFETY_FLOOR note. `contentPreview` is a truncated view of the proposed
+ *  markdown (the full content rides the editable approval input). `appliedHash` lands after execute. */
+export interface SystemDocApprovalCardProps {
+  docName: string
+  highRisk: boolean
+  contentPreview: string
+  contentLength: number
+  userEdited?: boolean
+  appliedHash?: string | null
+}
+
+/** set_skill_enabled (M4c, preview tier) — enable/disable a skill (mount/unmount its tools). */
+export interface SkillToggleCardProps {
+  skillName: string
+  enabled: boolean
+  applied?: boolean
 }
 
 function asNum(v: unknown, fallback = -1): number {
@@ -326,6 +356,45 @@ export function buildToolA2UIPayload(
           : undefined,
       saved: result?.saved === true,
       deleted: typeof result?.deleted === 'number' ? result.deleted : undefined
+    }
+    return {
+      protocol: A2UI_PROTOCOL,
+      version: A2UI_VERSION,
+      component,
+      props: props as unknown as Record<string, unknown>,
+      audit: { risk: io.risk ?? 'preview', requiresApproval }
+    }
+  }
+
+  if (component === A2UI_COMPONENTS.SystemDocApprovalCard) {
+    const docName = asStr(args.doc_name) ?? ''
+    // result.content is the EXECUTED content (post-edit); fall back to the proposed input at
+    // approval-request time. Slice by code point (not UTF-16 unit) so a CJK clamp can't split a
+    // surrogate pair.
+    const content = asStr(result?.content) ?? asStr(args.content) ?? ''
+    const chars = [...content]
+    const props: SystemDocApprovalCardProps = {
+      docName,
+      highRisk: docName === 'soul' || docName === 'rules',
+      contentPreview: chars.length > 240 ? `${chars.slice(0, 240).join('')}…` : content,
+      contentLength: chars.length,
+      userEdited: io.userEdited ?? result?.user_edited === true,
+      appliedHash: asStr(result?.content_hash) ?? null
+    }
+    return {
+      protocol: A2UI_PROTOCOL,
+      version: A2UI_VERSION,
+      component,
+      props: props as unknown as Record<string, unknown>,
+      audit: { risk: io.risk ?? 'edit', requiresApproval }
+    }
+  }
+
+  if (component === A2UI_COMPONENTS.SkillToggleCard) {
+    const props: SkillToggleCardProps = {
+      skillName: asStr(args.skill_name) ?? '',
+      enabled: args.enabled === true,
+      applied: typeof result?.enabled === 'boolean' ? (result.enabled as boolean) : undefined
     }
     return {
       protocol: A2UI_PROTOCOL,
