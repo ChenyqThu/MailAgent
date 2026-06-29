@@ -194,6 +194,7 @@ def test_chat_config_enabled_models_configured(monkeypatch: pytest.MonkeyPatch) 
         kos_l1_hot_block_enabled = False
         kos_time_decay_enabled = True
         llm_model = "claude-sonnet-4-6"
+        user_md_compile_enabled = False
 
     monkeypatch.setattr("src.api.routers.chat.get_settings", lambda: _ChatCfg())
 
@@ -240,6 +241,7 @@ def test_chat_config_enabled_models_not_configured(monkeypatch: pytest.MonkeyPat
         kos_l1_hot_block_enabled = False
         kos_time_decay_enabled = True
         llm_model = "claude-sonnet-4-6"
+        user_md_compile_enabled = False
 
     monkeypatch.setattr("src.api.routers.chat.get_settings", lambda: _ChatCfg())
 

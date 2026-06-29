@@ -248,6 +248,7 @@ class _ChatConfigStub:
     kos_l1_hot_block_enabled = False
     kos_time_decay_enabled = True
     llm_model = "claude-sonnet-4-6"
+    user_md_compile_enabled = False
 
 
 def _config_client(
@@ -315,6 +316,8 @@ def test_chat_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
         "standingContextActive": True,
         # R6 — override store healthy by default → available True.
         "skillOverridesAvailable": True,
+        # M3c — user.md 偏好编译 flag（default False；M3c 把它加进 /chat/config）。
+        "userMdCompileEnabled": False,
     }
 
 
