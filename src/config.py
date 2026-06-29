@@ -371,6 +371,15 @@ class Config(BaseSettings):
             "仅 MAILAGENT_MEM0_CAPTURE 开时生效。"
         ),
     )
+    user_md_compile_enabled: bool = Field(
+        default=False, env="MAILAGENT_USER_MD_COMPILE",
+        description=(
+            "M3 user.md 偏好编译总开关。开时 Settings「从记忆编译偏好」按钮可见 + "
+            "/api/chat/memory/compile-user-md 端点放行（mem0.get_all → LLM 合并现有 user.md "
+            "→ 仅 changed 时 set_profile_doc('user', agent_proposed)）。默认关 —— flag-off 时端点"
+            "返回 E_DISABLED、按钮不渲染（M3c 起经 /chat/config 暴露 flag 态）。无 hot-path（手动触发）。"
+        ),
+    )
 
     # =========================================================================
     # KOS Producer (Sprint 19 M2 PR-2d) — 邮件 sync 完异步推 Jarvis KOS v2

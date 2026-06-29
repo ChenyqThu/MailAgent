@@ -214,6 +214,7 @@ ERROR_CODE_TO_HTTP: dict[str, int] = {
     "E_ABORTED": 499,
     "E_MAX_FAILURES": 503,
     "E_PM2_RUNNING": 409,
+    "E_DISABLED": 403,  # 功能 flag 关（如 MAILAGENT_USER_MD_COMPILE）→ 端点拒绝
 }
 
 
