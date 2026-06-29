@@ -368,15 +368,18 @@ export function buildToolA2UIPayload(
 
   if (component === A2UI_COMPONENTS.SystemDocApprovalCard) {
     const docName = asStr(args.doc_name) ?? ''
-    // result.content is the EXECUTED content (post-edit); fall back to the proposed input at
-    // approval-request time. Slice by code point (not UTF-16 unit) so a CJK clamp can't split a
-    // surrogate pair.
+    const highRisk = docName === 'soul' || docName === 'rules'
+    // result.content is the EXECUTED content; fall back to the proposed input at approval-request
+    // time. High-risk docs (soul/rules) show the FULL content so the user can verify it character by
+    // character (the card claims "逐字确认"); low-risk (agent/user) show a 240 code-point preview.
+    // Slice by code point (not UTF-16 unit) so a CJK clamp can't split a surrogate pair.
     const content = asStr(result?.content) ?? asStr(args.content) ?? ''
     const chars = [...content]
     const props: SystemDocApprovalCardProps = {
       docName,
-      highRisk: docName === 'soul' || docName === 'rules',
-      contentPreview: chars.length > 240 ? `${chars.slice(0, 240).join('')}…` : content,
+      highRisk,
+      contentPreview:
+        highRisk || chars.length <= 240 ? content : `${chars.slice(0, 240).join('')}…`,
       contentLength: chars.length,
       userEdited: io.userEdited ?? result?.user_edited === true,
       appliedHash: asStr(result?.content_hash) ?? null

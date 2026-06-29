@@ -60,7 +60,7 @@ export function SystemDocApprovalCard(props: ToolCallMessagePartProps): React.JS
               {data.contentPreview}
             </div>
           )}
-          <div className="mt-0.5 text-meta text-ink-fg-2">{`${data.contentLength} 字符（完整内容可在卡片上编辑）`}</div>
+          <div className="mt-0.5 text-meta text-ink-fg-2">{`${data.contentLength} 字符（批准后按此写入；如需改动让 agent 重新提议或到 Settings 编辑）`}</div>
           <ApprovalActions
             onApprove={() => respondToApproval({ approved: true })}
             onReject={() => respondToApproval({ approved: false })}

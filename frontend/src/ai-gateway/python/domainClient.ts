@@ -584,16 +584,6 @@ export class MailAgentDomainClient {
     )
   }
 
-  /** Read one Standing Context doc. GET /agent/profile/docs/{name}. (For the update_system_md
-   *  card's before/after diff.) */
-  getProfileDoc(name: string, signal?: AbortSignal): Promise<DomainProfileDocResult> {
-    return this._req<DomainProfileDocResult>(
-      'GET',
-      `/agent/profile/docs/${encodeURIComponent(name)}`,
-      { signal }
-    )
-  }
-
   /** discover_skills (M4c) — list resolved skills (enabled/available/unavailableReason/toolCount).
    *  GET /agent/skills → data.skills. */
   async listResolvedSkills(signal?: AbortSignal): Promise<DomainResolvedSkill[]> {

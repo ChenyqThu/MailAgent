@@ -79,16 +79,16 @@ export function createSelfMountTools(
       'agent (operating notes / self-maintained working memory), rules (hard behavioural ' +
       "constraints), or user (the user's durable preferences). The FULL new markdown content " +
       'REPLACES the current doc, so include everything you want kept. The user sees your proposed ' +
-      'content in a confirmation card and CAN edit it before it applies; nothing changes without ' +
+      'content in a confirmation card and approves or rejects it; nothing changes without ' +
       'their approval. Editing `rules` is high-risk: jailbreak / safety-override phrasing is ' +
       'rejected by a server-side validator and the product safety floor can never be weakened. ' +
       'Use sparingly — to record a durable preference the user just stated, or a lasting working ' +
       'note. Reversible (the user can roll back from Settings). Edit tier — always asks.',
     inputSchema: updateSystemMdSchema,
     risk: 'edit',
-    // The user may edit ONLY the proposed content on the card; doc_name is pinned (the approval
-    // side-channel cannot retarget which doc gets overwritten).
-    editableFields: ['content'],
+    // No editableFields → the card is approve/reject only (no edit UI); doc_name AND content are both
+    // pinned. risk:'edit' keeps it ALWAYS-ask (never auto-approves, even in auto-reversible mode) —
+    // the safety property for an identity / rules change.
     run: async (input, { userEdited, signal }) => {
       if (input.content.trim().length === 0) invalidArg('content required (non-empty)')
       const data = await domain.setProfileDoc(

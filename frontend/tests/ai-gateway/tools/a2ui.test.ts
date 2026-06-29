@@ -212,6 +212,17 @@ describe('buildToolA2UIPayload — self-mount cards (M4b/M4c)', () => {
     expect([...props.contentPreview].length).toBe(241) // 240 code points + ellipsis
   })
 
+  test('update_system_md HIGH-RISK (rules) long content → NOT truncated (full for 逐字确认)', () => {
+    const full = '规则'.repeat(300)
+    const p = buildToolA2UIPayload('update_system_md', {
+      args: { doc_name: 'rules', content: full }
+    })
+    const props = p!.props as unknown as SystemDocApprovalCardProps
+    expect(props.highRisk).toBe(true)
+    expect(props.contentPreview).toBe(full) // soul/rules show the full content, no ellipsis
+    expect(props.contentPreview.endsWith('…')).toBe(false)
+  })
+
   test('set_skill_enabled → SkillToggleCard (preview tier)', () => {
     const p = buildToolA2UIPayload('set_skill_enabled', {
       args: { skill_name: 'report', enabled: true }
