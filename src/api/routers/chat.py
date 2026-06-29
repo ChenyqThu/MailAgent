@@ -419,6 +419,10 @@ async def chat_config(request: Request):
             # flag-off → 前端 UserMdCompileSection return null，整个区块在 DOM 不存在）。
             # singleton 读 —— 翻 MAILAGENT_USER_MD_COMPILE 需重启 serve-api（M3 flag 无 live writer，by design）
             "userMdCompileEnabled": cfg.user_md_compile_enabled,
+            # Settings 身份文档编辑器显隐 gate（默认开，运行时暴露，非 vite define；
+            # flag-off → 前端 StandingDocsSection return null，整个区块在 DOM 不存在）。
+            # singleton 读 —— 翻 MAILAGENT_STANDING_DOCS_EDITOR 需重启 serve-api。
+            "standingDocsEditorEnabled": cfg.standing_docs_editor_enabled,
         },
         request=request,
         source="config",

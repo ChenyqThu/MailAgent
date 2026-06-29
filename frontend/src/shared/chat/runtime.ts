@@ -60,6 +60,8 @@ import { setActiveSkillsSnapshot } from './active_skills_trace'
 import type { ChatBackend } from './types'
 import type {
   AgentMemoryEntry,
+  AgentProfileDoc,
+  AgentProfileHistoryEntry,
   CompileUserMdResult,
   SearchAgentInput,
   SearchAgentResult,
@@ -758,6 +760,68 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
       await request<object>(baseUrl, 'POST', `/agent/profile/docs/${name}/rollback`, {
         body: { targetHash: toHash, updatedBy: 'user' }
       })
+    },
+
+    async listProfileDocs(): Promise<AgentProfileDoc[]> {
+      // Settings 身份文档编辑器 — list all profile docs.
+      // GET /api/agent/profile/docs → {docs: AgentProfileDoc[]}.
+      // Degrades to [] when unreachable (flag-gated section only calls when enabled).
+      try {
+        const data = await request<{ docs: AgentProfileDoc[] }>(
+          baseUrl,
+          'GET',
+          '/agent/profile/docs'
+        )
+        return data.docs
+      } catch {
+        return []
+      }
+    },
+
+    async readProfileDoc(name: string): Promise<AgentProfileDoc> {
+      // Settings 身份文档编辑器 — read one profile doc (full content + hash).
+      // GET /api/agent/profile/docs/{name} → AgentProfileDoc.
+      return request<AgentProfileDoc>(
+        baseUrl,
+        'GET',
+        `/agent/profile/docs/${encodeURIComponent(name)}`
+      )
+    },
+
+    async setProfileDoc(input: {
+      name: string
+      content: string
+      updatedBy?: string
+      sessionId?: number
+      messageId?: number
+    }): Promise<AgentProfileDoc> {
+      // Settings 身份文档编辑器 — write one profile doc.
+      // POST /api/agent/profile/docs/{name} → AgentProfileDoc.
+      // RULES may be rejected with E_INVALID_ARG; caller surfaces the error.
+      const { name, ...body } = input
+      return request<AgentProfileDoc>(
+        baseUrl,
+        'POST',
+        `/agent/profile/docs/${encodeURIComponent(name)}`,
+        { body }
+      )
+    },
+
+    async listProfileHistory(docName?: string): Promise<AgentProfileHistoryEntry[]> {
+      // Settings 身份文档编辑器 — version history for one doc, newest-first.
+      // GET /api/agent/profile/history[?docName=] → {history: AgentProfileHistoryEntry[]}.
+      // Degrades to [] when unreachable.
+      try {
+        const data = await request<{ history: AgentProfileHistoryEntry[] }>(
+          baseUrl,
+          'GET',
+          '/agent/profile/history',
+          docName ? { query: { docName } } : undefined
+        )
+        return data.history
+      } catch {
+        return []
+      }
     }
   }
 }

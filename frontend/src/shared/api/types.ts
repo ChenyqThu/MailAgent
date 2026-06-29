@@ -1733,6 +1733,37 @@ export interface ChatApi {
    * Throws Error & { code } on failure.
    */
   rollbackProfileDoc(input: { name: string; toHash: string }): Promise<void>
+  /**
+   * Settings 身份文档编辑器 — list all profile docs (SOUL/AGENT/RULES/USER +
+   * MEMORY/SKILLS projections). GET /api/agent/profile/docs → AgentProfileDoc[].
+   * Degrades to [] when unreachable (never throws).
+   */
+  listProfileDocs(): Promise<AgentProfileDoc[]>
+  /**
+   * Settings 身份文档编辑器 — read one profile doc with full content + hash.
+   * GET /api/agent/profile/docs/{name}. Throws Error & { code } on failure
+   * (E_NOT_FOUND for unknown doc name).
+   */
+  readProfileDoc(name: string): Promise<AgentProfileDoc>
+  /**
+   * Settings 身份文档编辑器 — write / update one profile doc.
+   * POST /api/agent/profile/docs/{name}. RULES content passes through
+   * validate_rules_content server-side — jailbreak / override phrasing → E_INVALID_ARG.
+   * Caller catches E_INVALID_ARG to surface the rejection without overwriting.
+   * Throws Error & { code } on failure.
+   */
+  setProfileDoc(input: {
+    name: string
+    content: string
+    updatedBy?: string
+    sessionId?: number
+    messageId?: number
+  }): Promise<AgentProfileDoc>
+  /**
+   * Settings 身份文档编辑器 — version history for one profile doc, newest-first.
+   * GET /api/agent/profile/history?docName=. Degrades to [] when unreachable.
+   */
+  listProfileHistory(docName?: string): Promise<AgentProfileHistoryEntry[]>
 }
 
 // ---- F2 — agentic 搜索（runSearchAgent）契约 ------------------------------

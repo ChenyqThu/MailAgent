@@ -1226,6 +1226,28 @@
       "compileError": "Compile failed",
       "rollbackError": "Undo failed"
     },
+    "standingDocs": {
+      "title": "Identity Docs",
+      "desc": "View and manually edit the 4 Standing Context identity documents (SOUL / AGENT / RULES / USER). Changes take effect on the next conversation.",
+      "highRiskBadge": "High risk",
+      "floorNote": "PRODUCT_SAFETY_FLOOR is always prepended at the code layer — document content cannot weaken it. Override phrasing in RULES is rejected server-side.",
+      "edit": "Edit",
+      "save": "Save",
+      "saving": "Saving…",
+      "cancel": "Cancel",
+      "savedToast": "Document saved",
+      "saveError": "Save failed",
+      "history": "Version history",
+      "rollback": "Restore this version",
+      "rollingBack": "Restoring…",
+      "rolledBackToast": "Restored to this version",
+      "rollbackError": "Restore failed",
+      "emptyHistory": "No version history yet",
+      "updatedBy": "Changed by",
+      "loading": "Loading…",
+      "loadError": "Failed to load",
+      "empty": "(empty)"
+    },
     "themeMode": "Theme",
     "themeModeHint": "Light / Follow system / Dark",
     "theme": {

@@ -380,6 +380,14 @@ class Config(BaseSettings):
             "返回 E_DISABLED、按钮不渲染（M3c 起经 /chat/config 暴露 flag 态）。无 hot-path（手动触发）。"
         ),
     )
+    standing_docs_editor_enabled: bool = Field(
+        default=True, env="MAILAGENT_STANDING_DOCS_EDITOR",
+        description=(
+            "Settings 身份文档编辑器总开关（默认开）。开时 AI tab 出现「身份文档 / Standing Context」"
+            "section，列出 SOUL/AGENT/RULES/USER 4 个文档，支持查看 + 手动编辑 + 版本历史/rollback。"
+            "flag-off → section 字节级不渲染（DOM 无此区块）。singleton 读 —— 翻 flag 需重启 serve-api。"
+        ),
+    )
 
     # =========================================================================
     # KOS Producer (Sprint 19 M2 PR-2d) — 邮件 sync 完异步推 Jarvis KOS v2

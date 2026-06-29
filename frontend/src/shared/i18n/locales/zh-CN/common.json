@@ -1226,6 +1226,28 @@
       "compileError": "编译失败",
       "rollbackError": "撤销失败"
     },
+    "standingDocs": {
+      "title": "身份文档",
+      "desc": "查看并手动编辑 Standing Context 的 4 个身份文档（SOUL / AGENT / RULES / USER）。修改立即生效于下一次对话。",
+      "highRiskBadge": "高危",
+      "floorNote": "PRODUCT_SAFETY_FLOOR 始终在代码层前置，文档内容无法弱化它。RULES 越权措辞会被服务端拒绝。",
+      "edit": "编辑",
+      "save": "保存",
+      "saving": "保存中…",
+      "cancel": "取消",
+      "savedToast": "文档已保存",
+      "saveError": "保存失败",
+      "history": "版本历史",
+      "rollback": "回滚到此版本",
+      "rollingBack": "回滚中…",
+      "rolledBackToast": "已回滚至此版本",
+      "rollbackError": "回滚失败",
+      "emptyHistory": "暂无版本历史记录",
+      "updatedBy": "修改者",
+      "loading": "加载中…",
+      "loadError": "加载失败",
+      "empty": "（空）"
+    },
     "themeMode": "主题模式",
     "themeModeHint": "Light / 跟随系统 / Dark",
     "theme": {
