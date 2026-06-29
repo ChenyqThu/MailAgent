@@ -1213,6 +1213,19 @@
       "deleteError": "Could not delete memory",
       "loadError": "Could not load memory"
     },
+    "userMdCompile": {
+      "title": "Compile Preferences from Memory",
+      "desc": "Merge AI-captured preference memories into user.md. Takes effect immediately after triggering manually.",
+      "button": "Compile from Memory",
+      "compiling": "Compiling…",
+      "noChange": "No new preferences found to compile",
+      "diffLabel": "Compile result (before / after)",
+      "rollback": "Undo this compile",
+      "rollingBack": "Undoing…",
+      "rolledBackToast": "Compile undone — user.md restored",
+      "compileError": "Compile failed",
+      "rollbackError": "Undo failed"
+    },
     "themeMode": "Theme",
     "themeModeHint": "Light / Follow system / Dark",
     "theme": {

@@ -21,7 +21,13 @@ import { Loader2, Trash2, Pencil, X, Check } from 'lucide-react'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { readSkillOverrides, writeSkillOverrides } from '@shared/chat/skill_enablement'
 import { toastError, toastSuccess } from '@shared/state/toast'
-import type { AgentMemoryEntry, MailApi, SkillSummary, WriteMemoryInput } from '@shared/api/types'
+import type {
+  AgentMemoryEntry,
+  CompileUserMdResult,
+  MailApi,
+  SkillSummary,
+  WriteMemoryInput
+} from '@shared/api/types'
 import { Switch } from '@shared/components/ui/switch'
 import { Button } from '@shared/components/ui/button'
 
@@ -351,6 +357,133 @@ function MemorySection(): React.ReactElement {
 }
 
 // ---------------------------------------------------------------------------
+// UserMdCompileSection — M3c 偏好编译触发面
+// ---------------------------------------------------------------------------
+
+// Resolve serve-api base URL for direct fetch calls (mirrors useLlmModels.ts resolveApiBaseUrl;
+// intentionally duplicated to avoid circular imports with the chat runtime).
+function resolveApiBaseUrl(): string {
+  const env = (import.meta as unknown as { env?: Record<string, string | undefined> }).env
+  if (env?.VITE_BUILD_TARGET === 'web') {
+    return env.VITE_API_BASE_URL ?? '/api'
+  }
+  let port = 8200
+  try {
+    const raw = new URLSearchParams(window.location.search).get('apiPort')
+    const n = raw != null ? Number.parseInt(raw, 10) : NaN
+    if (Number.isFinite(n) && n > 0) port = n
+  } catch {
+    /* non-renderer test environment */
+  }
+  return `http://127.0.0.1:${port}/api`
+}
+
+/** Fetch userMdCompileEnabled from serve-api /chat/config (runtime flag, not vite define).
+ *  Returns false when not configured or the endpoint is unreachable. */
+async function fetchUserMdCompileEnabled(): Promise<boolean> {
+  try {
+    const resp = await fetch(`${resolveApiBaseUrl()}/chat/config`, { credentials: 'include' })
+    if (!resp.ok) return false
+    const body = (await resp.json()) as { data?: { userMdCompileEnabled?: unknown } }
+    return body?.data?.userMdCompileEnabled === true
+  } catch {
+    return false
+  }
+}
+
+function UserMdCompileSection(): React.ReactElement | null {
+  const { t } = useTranslation()
+  const api = useMailApi()
+
+  // All hooks must run unconditionally before any early return.
+  const [compiling, setCompiling] = React.useState(false)
+  const [result, setResult] = React.useState<CompileUserMdResult | null>(null)
+  const [rollingBack, setRollingBack] = React.useState(false)
+
+  const { data: enabled } = useQuery<boolean>({
+    queryKey: ['chat', 'config', 'userMdCompileEnabled'],
+    queryFn: fetchUserMdCompileEnabled,
+    staleTime: 30_000,
+    retry: false
+  })
+
+  // flag-off（false / undefined）→ 字节级不渲染（DOM 无此区块）。
+  if (!enabled) return null
+
+  async function handleCompile(): Promise<void> {
+    setCompiling(true)
+    setResult(null)
+    try {
+      const r = await api.chat.compileUserMd()
+      setResult(r)
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      toastError(t('settings.userMdCompile.compileError'), msg)
+    } finally {
+      setCompiling(false)
+    }
+  }
+
+  async function handleRollback(): Promise<void> {
+    if (!result) return
+    setRollingBack(true)
+    try {
+      await api.chat.rollbackProfileDoc({ name: 'user', toHash: result.beforeHash })
+      setResult(null)
+      toastSuccess(t('settings.userMdCompile.rolledBackToast'))
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      toastError(t('settings.userMdCompile.rollbackError'), msg)
+    } finally {
+      setRollingBack(false)
+    }
+  }
+
+  return (
+    <Section title={t('settings.userMdCompile.title')} helper={t('settings.userMdCompile.desc')}>
+      <div className="px-4 py-3.5 space-y-3">
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => void handleCompile()}
+          disabled={compiling || rollingBack}
+        >
+          {compiling ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
+          {compiling ? t('settings.userMdCompile.compiling') : t('settings.userMdCompile.button')}
+        </Button>
+
+        {result && !result.changed ? (
+          <p className="text-aux text-ink-fg-3">{t('settings.userMdCompile.noChange')}</p>
+        ) : null}
+
+        {result && result.changed ? (
+          <div className="space-y-2">
+            <p className="text-micro text-ink-fg-3">{t('settings.userMdCompile.diffLabel')}</p>
+            <pre className="text-micro text-ink-fg-2 whitespace-pre-wrap break-all font-mono leading-snug bg-ink-bg-2 rounded p-2 max-h-32 overflow-auto">
+              {result.before.trim()}
+            </pre>
+            <pre className="text-micro text-ink-fg-1 whitespace-pre-wrap break-all font-mono leading-snug bg-ink-bg-2 rounded p-2 max-h-32 overflow-auto">
+              {result.after.trim()}
+            </pre>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => void handleRollback()}
+              disabled={rollingBack}
+            >
+              {rollingBack ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
+              {rollingBack
+                ? t('settings.userMdCompile.rollingBack')
+                : t('settings.userMdCompile.rollback')}
+            </Button>
+          </div>
+        ) : null}
+      </div>
+    </Section>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Public export — mounted near the bottom of AiTab
 // ---------------------------------------------------------------------------
 
@@ -359,6 +492,7 @@ export function CustomAiSection(): React.ReactElement {
     <>
       <SkillsSection />
       <MemorySection />
+      <UserMdCompileSection />
     </>
   )
 }

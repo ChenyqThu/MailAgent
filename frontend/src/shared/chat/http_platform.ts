@@ -155,6 +155,9 @@ export interface HttpPlatformConfig {
    *  then reuses its last-known-good overrides instead of broadening to manifest defaults,
    *  so a transient store blip never silently re-enables a user-DISABLED skill. */
   skillOverridesAvailable: boolean
+  /** M3c — user.md 偏好编译按钮显隐 gate（MAILAGENT_USER_MD_COMPILE）。运行时从
+   *  /chat/config 读取，非 vite define 编译期常量。false → Settings 区块在 DOM 不存在。 */
+  userMdCompileEnabled: boolean
 }
 
 /** 远程默认快照（对齐 electron chat/config.ts 默认：harness ON / timeDecay ON / 其余
@@ -185,7 +188,9 @@ export const DEFAULT_HTTP_CONFIG: HttpPlatformConfig = {
   // PR5 — no backend skill overrides until /chat/config supplies them (→ manifest defaults).
   skillOverrides: {},
   // R6 — assume the override store is available by default (a real /chat/config sets it).
-  skillOverridesAvailable: true
+  skillOverridesAvailable: true,
+  // M3c — user.md compile off until /chat/config reports otherwise (flag default=false).
+  userMdCompileEnabled: false
 }
 
 /** per-messageId 的 streamContent debounce 状态。`latest` = 最近一次累积全量正文

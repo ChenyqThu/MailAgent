@@ -393,6 +393,10 @@ async def chat_config(request: Request):
             "standingContextActive": standing_context_active,
             "skillOverrides": skill_overrides,
             "skillOverridesAvailable": skill_overrides_available,
+            # M3c — user.md 偏好编译按钮显隐 gate（运行时暴露，非 vite define；
+            # flag-off → 前端 UserMdCompileSection return null，整个区块在 DOM 不存在）。
+            # singleton 读 —— 翻 MAILAGENT_USER_MD_COMPILE 需重启 serve-api（M3 flag 无 live writer，by design）
+            "userMdCompileEnabled": cfg.user_md_compile_enabled,
         },
         request=request,
         source="config",
@@ -1270,7 +1274,8 @@ async def compile_user_md_endpoint(request: Request):
     from src.memory.user_md_compiler import UserMdCompileError, compile_user_md
 
     store = get_agent_config_store()
-    current = store.get_profile_doc("user").content  # seed-on-read 保证非空
+    current_doc = store.get_profile_doc("user")  # seed-on-read 保证非空
+    current = current_doc.content
 
     # mem0 get_all（同步库 + faiss 懒加载）→ threadpool，绝不阻塞 serve-api event loop。
     # 不可用 = 编译失败（用户主动操作）→ raise（区别 search 的 best-effort 降级空）。
@@ -1301,6 +1306,9 @@ async def compile_user_md_endpoint(request: Request):
             "after": after,
             "changed": result.changed,
             "itemCount": result.item_count,
+            # M3c — 前端 rollback 用：写前 doc 的 content_hash，传给
+            # POST /api/agent/profile/docs/user/rollback body.targetHash。
+            "beforeHash": current_doc.content_hash,
         },
         request=request,
         source="memory",

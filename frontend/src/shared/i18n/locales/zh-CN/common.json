@@ -1213,6 +1213,19 @@
       "deleteError": "无法删除记忆",
       "loadError": "无法加载记忆"
     },
+    "userMdCompile": {
+      "title": "从记忆编译偏好",
+      "desc": "将 AI 从对话中捕获的偏好类记忆合并进 user.md，手动触发后立即生效。",
+      "button": "从记忆编译偏好",
+      "compiling": "编译中…",
+      "noChange": "未发现可编译的新偏好",
+      "diffLabel": "编译结果（上：编译前 / 下：编译后）",
+      "rollback": "撤销此次编译",
+      "rollingBack": "撤销中…",
+      "rolledBackToast": "已撤销编译，user.md 已还原",
+      "compileError": "编译失败",
+      "rollbackError": "撤销失败"
+    },
     "themeMode": "主题模式",
     "themeModeHint": "Light / 跟随系统 / Dark",
     "theme": {

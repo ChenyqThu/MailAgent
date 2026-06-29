@@ -76,6 +76,16 @@ def test_compile_changed_writes_user_doc(compile_client, monkeypatch: pytest.Mon
     assert body["data"]["before"] != body["data"]["after"]  # changed → before/after 不同
     assert body["meta"]["model"] == "claude-sonnet-4-6"
     assert body["meta"]["outputTokens"] == 42
+    # M3c — beforeHash：前端 rollback 需要，应为写前 doc 的 content_hash（非空 str）。
+    before_hash = body["data"]["beforeHash"]
+    assert isinstance(before_hash, str) and len(before_hash) > 0
+    # 验证 beforeHash 与写前 doc 的 content_hash 一致（get_profile_doc 先 seed，编译后写新版；
+    # compile_client 是 fresh_agent_cfg，seed 写前无 updated_by='agent_proposed'，hash 稳定）。
+    # 注：此时 store 已写了 agent_proposed 版本；beforeHash 是编译前 seed 的 hash。
+    # 通过 rollback_profile_doc 可验：targetHash=beforeHash → 还原到 seed（不测在此）。
+    # 简单验证：beforeHash 非空 str，且与 after doc hash 不同（changed=True 时前后 hash 不同）。
+    after_doc = store.get_profile_doc("user")
+    assert before_hash != after_doc.content_hash  # changed=True → 前后 hash 不同
     # 落库验证：user doc 真被写 + updated_by=agent_proposed（agent_config history/rollback 兜底）
     doc = store.get_profile_doc("user")
     assert doc.content == "# USER\n\n- terse Chinese\n"

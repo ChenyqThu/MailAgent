@@ -1507,6 +1507,17 @@ export interface SkillSummary {
   scopes: string[]
 }
 
+/** M3c — user.md 偏好编译结果（POST /api/chat/memory/compile-user-md 返回的 data 块）。
+ *  before/after = 编译前后 user.md 内容；beforeHash = 写前 content_hash（前端 rollback 用）；
+ *  changed = LLM 是否生成了差异；itemCount = 送进编译器的 mem0 记忆条数。 */
+export interface CompileUserMdResult {
+  before: string
+  beforeHash: string
+  after: string
+  changed: boolean
+  itemCount: number
+}
+
 export interface ChatApi {
   /**
    * Open or reuse the (emailId, backendKind, agentPageId) session, append
@@ -1709,6 +1720,19 @@ export interface ChatApi {
    * Throws `Error & { code }` on failure; the caller toasts 「撤销失败」.
    */
   undoCapturedMemory(id: string): Promise<void>
+  /**
+   * M3c — 从 mem0 累积的偏好记忆编译合并进 user.md。手动触发（Settings 按钮）。
+   * POST /api/chat/memory/compile-user-md → CompileUserMdResult。
+   * flag-off（MAILAGENT_USER_MD_COMPILE）→ backend 返 403（E_DISABLED）→ caller 捕获处理。
+   */
+  compileUserMd(): Promise<CompileUserMdResult>
+  /**
+   * M3c — 把 user.md 回滚到指定历史版本（按 targetHash 定位）。
+   * POST /api/agent/profile/docs/{name}/rollback，body = {targetHash, updatedBy?}。
+   * 用于编译结果的一键 rollback（toHash = CompileUserMdResult.beforeHash）。
+   * Throws Error & { code } on failure.
+   */
+  rollbackProfileDoc(input: { name: string; toHash: string }): Promise<void>
 }
 
 // ---- F2 — agentic 搜索（runSearchAgent）契约 ------------------------------

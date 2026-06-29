@@ -60,6 +60,7 @@ import { setActiveSkillsSnapshot } from './active_skills_trace'
 import type { ChatBackend } from './types'
 import type {
   AgentMemoryEntry,
+  CompileUserMdResult,
   SearchAgentInput,
   SearchAgentResult,
   SkillSummary,
@@ -740,6 +741,22 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
       if (typeof id !== 'string' || id.length === 0) return
       await request<{ deleted: boolean; id: string }>(baseUrl, 'DELETE', '/chat/memory/captured', {
         query: { id }
+      })
+    },
+
+    async compileUserMd() {
+      // M3c — 手动触发 user.md 偏好编译（Settings 按钮）。
+      // POST /api/chat/memory/compile-user-md → CompileUserMdResult。
+      // flag-off → backend 403 E_DISABLED → request() throws → caller 捕获处理。
+      return request<CompileUserMdResult>(baseUrl, 'POST', '/chat/memory/compile-user-md', {})
+    },
+
+    async rollbackProfileDoc({ name, toHash }: { name: string; toHash: string }) {
+      // M3c — 把 profile doc 回滚到指定历史版本。
+      // POST /api/agent/profile/docs/{name}/rollback，body = {targetHash, updatedBy}。
+      // 用于编译结果的一键 rollback（toHash = CompileUserMdResult.beforeHash）。
+      await request<object>(baseUrl, 'POST', `/agent/profile/docs/${name}/rollback`, {
+        body: { targetHash: toHash, updatedBy: 'user' }
       })
     }
   }
