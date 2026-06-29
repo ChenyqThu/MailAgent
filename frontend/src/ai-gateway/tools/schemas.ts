@@ -182,3 +182,27 @@ export const memoryDeleteSchema = z.object({
   key: z.string()
 })
 export type MemoryDeleteInput = z.infer<typeof memoryDeleteSchema>
+
+// ── self-mount schemas (M4) — the agent updates its own Standing Context docs + skills. Behind
+//    MAILAGENT_SKILL_SELF_MOUNT. update_system_md = edit-tier write (always asks); set_skill_enabled
+//    = preview-tier write; discover_skills = silent read. Field names are the model-visible surface. ──
+
+/** update_system_md (M4b) — propose new full content for one Standing Context doc. doc_name is the
+ *  fixed backend enum (PROFILE_DOC_NAMES); rules content is additionally validated server-side
+ *  (jailbreak / safety-override deny-list → E_INVALID_ARG). */
+export const updateSystemMdSchema = z.object({
+  doc_name: z.enum(['soul', 'agent', 'rules', 'user']),
+  content: z.string().min(1)
+})
+export type UpdateSystemMdInput = z.infer<typeof updateSystemMdSchema>
+
+/** discover_skills (M4c) — list capabilities (enabled + unavailable, with reasons). No input. */
+export const discoverSkillsSchema = z.object({})
+export type DiscoverSkillsInput = z.infer<typeof discoverSkillsSchema>
+
+/** set_skill_enabled (M4c) — enable/disable a skill (mount/unmount its tools). */
+export const setSkillEnabledSchema = z.object({
+  skill_name: z.string().min(1),
+  enabled: z.boolean()
+})
+export type SetSkillEnabledInput = z.infer<typeof setSkillEnabledSchema>

@@ -51,7 +51,12 @@ export const CORE_UNGATED_GATEWAY_TOOLS: ReadonlySet<string> = new Set([
   'email_pin',
   'email_draft_reply',
   'email_resync',
-  'email_prepare_send'
+  'email_prepare_send',
+  // M4b/M4c self-mount meta 工具（behind MAILAGENT_SKILL_SELF_MOUNT）—— 无 skill 归属，永不 skill-gated。
+  // 列于此让完整性守护（每个 gateway 工具必被分类）通过。
+  'update_system_md',
+  'discover_skills',
+  'set_skill_enabled'
 ])
 
 /** 删掉「归属 skill ∉ advertisedSkills 且无任一 advertised skill 仍拥有它 且非 collision-exempt」的

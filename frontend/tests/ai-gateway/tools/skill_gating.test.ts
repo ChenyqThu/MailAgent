@@ -27,7 +27,11 @@ function buildAllTools() {
     approvalGuard: new ApprovalGuard(),
     sendToolEnabled: true,
     sendSigningSecret: 'secret',
-    memoryToolsEnabled: true
+    memoryToolsEnabled: true,
+    // M4b/M4c — also build the self-mount tools (update_system_md / discover_skills /
+    // set_skill_enabled) so the FORWARD completeness guard sees them. advertisedSkills left unset
+    // → applySkillGating not called → the full unfiltered set.
+    skillGatingEnabled: true
   })
 }
 

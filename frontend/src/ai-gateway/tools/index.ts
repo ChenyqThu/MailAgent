@@ -20,6 +20,7 @@ import { createWriteTools } from './write'
 import { createSendTools } from './send'
 import { createMemoryTools } from './memory'
 import { applySkillGating } from './skill_gating'
+import { createSelfMountTools } from './self_mount'
 import type { GatewayApprovalMode, GatewayToolAuditCollector } from './types'
 
 export interface BuildGatewayToolsOpts {
@@ -130,6 +131,20 @@ export function buildGatewayTools(
         })
       )
     }
+  }
+  // M4 (M4b/M4c) — self-mount tools (update_system_md / discover_skills / set_skill_enabled) behind
+  // MAILAGENT_SKILL_SELF_MOUNT (skillGatingEnabled). The two writes (update_system_md edit-tier,
+  // set_skill_enabled preview-tier) bind the approval guard; discover_skills is a silent read. They
+  // are CORE (no skill ownership) so applySkillGating below never drops them. flag-off → not added →
+  // byte-identical to the cutover set.
+  if (opts.skillGatingEnabled && opts.approvalGuard) {
+    Object.assign(
+      tools,
+      createSelfMountTools(opts.domain, collector, opts.approvalGuard, {
+        a2uiEnabled: opts.a2uiEnabled,
+        approvalMode: opts.approvalMode
+      })
+    )
   }
   // M4a — skill→tool gating LAST (after the full set is assembled), behind MAILAGENT_SKILL_SELF_MOUNT.
   // flag-off OR advertisedSkills null (Python hiccup → fail-open) → not called → byte-identical to the

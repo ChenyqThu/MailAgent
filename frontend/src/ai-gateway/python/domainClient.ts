@@ -179,6 +179,31 @@ function buildQuery(query: Record<string, QueryValue>): string {
  * tool's primitive to one endpoint, unwrapping the `{status, data, error}` envelope
  * (returns `data` on success/partial_failure, throws DomainError on `status:error`).
  */
+/** M4b — one Standing Context doc (soul/agent/rules/user) from /agent/profile/docs/{name}. */
+export interface DomainProfileDocResult {
+  docName: string
+  content: string
+  contentHash: string
+  updatedBy: string
+  updatedAt: string | null
+  editable: boolean
+}
+
+/** M4c — one resolved skill from /agent/skills (discover_skills projection). */
+export interface DomainResolvedSkill {
+  name: string
+  title: string
+  description: string
+  defaultEnabled: boolean
+  enabled: boolean
+  overridden: boolean
+  available: boolean
+  unavailableReason: string | null
+  toolCount: number
+  scopes: string[]
+  sourceType: string
+}
+
 export class MailAgentDomainClient {
   private readonly baseUrl: string
   private readonly localToken: string | null
@@ -536,5 +561,59 @@ export class MailAgentDomainClient {
       memories: Array<{ id: string; memory: string; score?: number }>
       count: number
     }>('POST', '/chat/memory/search', { body, signal })
+  }
+
+  // ── self-mount primitives (M4) — the agent reads/proposes its own Standing Context docs +
+  //    skills. All hit /agent/* (verify_cf_access dual-auth: the embedded gateway's local-token leg
+  //    passes — owner-equivalent on loopback). The gateway ApprovalGuard gates the writes; rules
+  //    content is validated server-side. The tools that call these are only registered when
+  //    MAILAGENT_SKILL_SELF_MOUNT is on.
+
+  /** update_system_md (M4b) — overwrite a Standing Context doc. POST /agent/profile/docs/{name}.
+   *  For name==='rules' the server runs validate_rules_content → 400 E_INVALID_ARG (→ DomainError)
+   *  on a jailbreak/override phrase. The tool passes updatedBy='agent_proposed'. */
+  setProfileDoc(
+    name: string,
+    body: { content: string; updatedBy?: string; sessionId?: number; messageId?: number },
+    signal?: AbortSignal
+  ): Promise<DomainProfileDocResult> {
+    return this._req<DomainProfileDocResult>(
+      'POST',
+      `/agent/profile/docs/${encodeURIComponent(name)}`,
+      { body, signal }
+    )
+  }
+
+  /** Read one Standing Context doc. GET /agent/profile/docs/{name}. (For the update_system_md
+   *  card's before/after diff.) */
+  getProfileDoc(name: string, signal?: AbortSignal): Promise<DomainProfileDocResult> {
+    return this._req<DomainProfileDocResult>(
+      'GET',
+      `/agent/profile/docs/${encodeURIComponent(name)}`,
+      { signal }
+    )
+  }
+
+  /** discover_skills (M4c) — list resolved skills (enabled/available/unavailableReason/toolCount).
+   *  GET /agent/skills → data.skills. */
+  async listResolvedSkills(signal?: AbortSignal): Promise<DomainResolvedSkill[]> {
+    const data = await this._req<{ skills: DomainResolvedSkill[] }>('GET', '/agent/skills', {
+      signal
+    })
+    return data.skills ?? []
+  }
+
+  /** set_skill_enabled (M4c) — enable/disable a skill (mount/unmount its tools). POST
+   *  /agent/skills/{name}/enabled {enabled}. */
+  setSkillEnabled(
+    name: string,
+    enabled: boolean,
+    signal?: AbortSignal
+  ): Promise<{ name: string; enabled: boolean }> {
+    return this._req<{ name: string; enabled: boolean }>(
+      'POST',
+      `/agent/skills/${encodeURIComponent(name)}/enabled`,
+      { body: { enabled }, signal }
+    )
   }
 }
