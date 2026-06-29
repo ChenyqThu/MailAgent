@@ -8,6 +8,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from src.agent_config.projections import (
+    advertised_skill_names,
     builtin_skills_signature,
     compute_installed_skills_hash,
     memory_doc_projection,
@@ -127,3 +128,39 @@ def test_resolved_skills_merges_override(tmp_path):
     assert by["email"]["scopes"] == ["email:read"]
     # search 无覆盖 → 回退 default_enabled=True
     assert by["search"]["enabled"] is True and by["search"]["overridden"] is False
+
+
+# ---------------------------------------------------------------------------
+# advertised_skill_names（M4a — gateway skill→tool 门控的业务状态源）
+# ---------------------------------------------------------------------------
+def test_advertised_skill_names_enabled_and_available(tmp_path):
+    """advertised = enabled(override ?? default) AND available。
+    供 gateway skill→tool 门控：只有这些 skill 的工具对模型可见。"""
+    store = AgentConfigStore(str(tmp_path / "adv.db"))
+    store.set_enabled("email", False)  # override 关掉 default-on 的 email
+    skills = [
+        _skill("email", default_enabled=True),  # override False → 出局
+        _skill("search", default_enabled=True),  # default on + available → 进
+        _skill("report", default_enabled=False),  # default off + 无 override → 出局
+        _skill("kos", default_enabled=True, available=False),  # enabled 但 unavailable → 出局
+    ]
+    assert advertised_skill_names(skills, store) == ["search"]
+
+
+def test_advertised_skill_names_override_enables_default_off(tmp_path):
+    """override=True 把 default-off 的 skill 激活进 advertised。"""
+    store = AgentConfigStore(str(tmp_path / "adv2.db"))
+    store.set_enabled("report", True)  # 打开 default-off 的 report
+    skills = [_skill("report", default_enabled=False)]
+    assert advertised_skill_names(skills, store) == ["report"]
+
+
+def test_advertised_skill_names_empty_when_all_off(tmp_path):
+    """全禁 / 全不可用 → []（区别于端点 fail-soft 的 None：[] = 门控全删 skill 工具，
+    None = 未知 → gateway fail-open）。"""
+    store = AgentConfigStore(str(tmp_path / "adv3.db"))
+    skills = [
+        _skill("a", default_enabled=False),
+        _skill("b", default_enabled=True, available=False),
+    ]
+    assert advertised_skill_names(skills, store) == []

@@ -372,6 +372,25 @@ async def chat_config(request: Request):
     except Exception:  # noqa: BLE001 — skill overrides are best-effort; never fail /config
         skill_overrides = {}
         skill_overrides_available = False
+    # M4a (task 06-23) — advertised skill names for the AI SDK Gateway's skill→tool
+    # gating (flag MAILAGENT_SKILL_SELF_MOUNT, read in electron main). = resolved
+    # skills with enabled(override ?? default) AND available. Data-ownership split:
+    # business state (which skills are visible to the model) is owned by Python; the
+    # gateway owns the gateway-tool→skill map and drops a disabled skill's tools.
+    # Best-effort: a store/manifest hiccup → None (NOT [] — [] means "all skills
+    # disabled" = gate everything; None means "unknown" → the gateway fails OPEN,
+    # no gating). The gated set is read-only tools; write/send keep flag+approval.
+    advertised_skills: Optional[List[str]] = None
+    try:
+        from src.agent_config.projections import advertised_skill_names
+        from src.agent_config.store import get_agent_config_store
+        from src.skills.registry import build_manifest
+
+        advertised_skills = advertised_skill_names(
+            build_manifest(None).skills, get_agent_config_store()
+        )
+    except Exception:  # noqa: BLE001 — advertised skills are best-effort; never fail /config
+        advertised_skills = None
     return success_envelope(
         {
             "maxIter": max_iter,
@@ -393,6 +412,9 @@ async def chat_config(request: Request):
             "standingContextActive": standing_context_active,
             "skillOverrides": skill_overrides,
             "skillOverridesAvailable": skill_overrides_available,
+            # M4a — advertised skill names for the gateway's skill→tool gating; null on
+            # a store/manifest hiccup → gateway fails open (see advertised_skills above).
+            "advertisedSkills": advertised_skills,
             # M3c — user.md 偏好编译按钮显隐 gate（运行时暴露，非 vite define；
             # flag-off → 前端 UserMdCompileSection return null，整个区块在 DOM 不存在）。
             # singleton 读 —— 翻 MAILAGENT_USER_MD_COMPILE 需重启 serve-api（M3 flag 无 live writer，by design）

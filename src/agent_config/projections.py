@@ -122,3 +122,24 @@ def resolved_skills(manifest_skills: Iterable[Any], store: AgentConfigStore) -> 
             }
         )
     return out
+
+
+def advertised_skill_names(
+    manifest_skills: Iterable[Any], store: AgentConfigStore
+) -> list[str]:
+    """对模型可见的 skill 名 —— ``enabled``（override ?? default_enabled）**且** ``available``。
+
+    供 /chat/config 下发给 AI SDK Gateway 的 M4a skill→tool 门控（flag
+    ``MAILAGENT_SKILL_SELF_MOUNT``）：gateway 拥有自己的 gateway-工具→skill 映射，对每个
+    skill，若其名不在本列表则 drop 它独占的工具。= 前端 ``computeSkillEnablement`` 的
+    *advertised*（effectiveEnabled && available）概念的后端权威版。
+
+    **数据所有权**：业务状态（哪些 skill 对模型可见）属 Python；工具集结构（哪个 gateway
+    工具属哪个 skill + 据此过滤）属 Node。复用 ``resolved_skills``（不重写 enabled/available
+    逻辑，免双实现漂移）。
+    """
+    return [
+        s["name"]
+        for s in resolved_skills(manifest_skills, store)
+        if s["enabled"] and s["available"]
+    ]

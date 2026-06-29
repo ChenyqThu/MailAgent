@@ -299,6 +299,11 @@ def test_chat_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     # None on a store hiccup, or an all-zero meta dict). Pop + assert shape, not pinned.
     mem_meta = data.pop("memorySummaryMeta")
     assert mem_meta is None or mem_meta["total"] == 0
+    # M4a — advertisedSkills 是 skill-依赖列表（哪些 builtin skill default-on + available），
+    # 同 hash/standingContext 不 pin、只 pop + 断言形状（None = store/manifest hiccup →
+    # gateway fail-open 不门控；list[str] = 正常）。详见 advertised_skill_names。
+    advertised = data.pop("advertisedSkills")
+    assert advertised is None or all(isinstance(x, str) for x in advertised)
     assert data == {
         "maxIter": 8,
         "maxCostUsd": 0.5,
@@ -319,6 +324,22 @@ def test_chat_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
         # M3c — user.md 偏好编译 flag（default False；M3c 把它加进 /chat/config）。
         "userMdCompileEnabled": False,
     }
+
+
+def test_chat_config_advertised_skills_fail_soft(monkeypatch: pytest.MonkeyPatch) -> None:
+    """M4a — advertised_skill_names 抛异常 → /chat/config 仍 200，advertisedSkills=None。
+    None=未知 → AI SDK Gateway fail-OPEN（不门控）；区别于 []=全禁→门控删光 skill 工具。
+    门控范围只读工具，fail-open 无害（write/send 另有 flag+审批）。镜像 fail_closed 测试姿态。"""
+    import src.agent_config.projections as _proj
+
+    def _boom(*a, **k):
+        raise RuntimeError("manifest/store unavailable")
+
+    monkeypatch.setattr(_proj, "advertised_skill_names", _boom)
+    with _config_client(monkeypatch, _ChatConfigStub()) as c:
+        r = c.get("/api/chat/config")
+    assert r.status_code == 200
+    assert r.json()["data"]["advertisedSkills"] is None
 
 
 def test_chat_config_skill_overrides_fail_closed(monkeypatch: pytest.MonkeyPatch) -> None:
