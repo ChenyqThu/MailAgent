@@ -20,7 +20,7 @@ eval 评测的不是抽象 agent，而是「某套 **agent profile + active skil
 DATA_ROOT）、`get_agent_config_store()` lru_cache 单例。**绝不写 `ai_chat.db`**（其 schema owner 是
 前端 `chat_db.ts`，BASE-3 不变式：`src/chat/db.py` 0 CREATE TABLE）。4 表：`agent_skills`（统一
 registry：builtin 懒 enable-覆盖行 + installed 全行）· `agent_skill_events`（审计）·
-`agent_profile_docs`（SOUL/AGENT/RULES/USER 可编辑）· `agent_profile_history`（full-snapshot rollback）。
+`agent_profile_docs`（SOUL/AGENT/RULES/USER 可编辑；**v1.0.1 起 Settings → AI tab → Custom AI 区有「身份文档」编辑器 `StandingDocsSection`**——查看/编辑全文 + 保存 + per-doc rollback，flag `MAILAGENT_STANDING_DOCS_EDITOR` 默认 on；此前仅 agent `update_system_md` 工具 / `/api/agent/profile/docs` API 改）· `agent_profile_history`（full-snapshot rollback）。
 
 ## 模块
 

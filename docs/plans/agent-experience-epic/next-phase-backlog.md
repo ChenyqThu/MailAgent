@@ -17,7 +17,9 @@
 
 ## 1. 下一 phase 代办（按优先级）
 
-### 任务 A — 远程 Web 切 AI SDK
+### 任务 A — 远程 Web 切 AI SDK ✅ 已落地（2026-06-30，随 v1.0.1）
+
+> ✅ **实测 scope 大坍缩**：后端 `ai_gateway_proxy.py`（httpx SSE 反代 + verify_cf_access）/ 端口注入 / `resolveAiGatewayBaseUrl` web 同源 branch **早在 6/27 就位** → 任务A 仅 = 翻 `vite.web.config.ts` 3 个 define（master+AGENT_VIEW+ASSISTANT_MODAL）+ CI 加 `build:web` 步 + web dogfood。详见 [`remote-chat-report-architecture.md`](../../reference/remote-chat-report/remote-chat-report-architecture.md) 顶部。下方原始设想保留作背景。
 **目标**：让 `mail.chenge.ink/app`（serve-api 单 origin serve SPA + API，CF Access 墙后）也走 ai-sdk runtime，而非 legacy。
 **已知约束**：
 - embedded AI SDK Gateway 现在只活在 **electron main 进程**（loopback `?aiGatewayPort=`）。web 没有这个进程。

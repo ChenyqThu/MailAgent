@@ -3,6 +3,7 @@
 > **何时读**：动 chat 引擎 / 远程 web 访问 / serve-api chat 端点 / report agent 远程化前。
 > **配套**：[详设](v2.1-stage3-chat-platform-design.md)（ChatPlatform 接口 + cutover 枚举 + D1-D5/D-3c 决策）· [验收看板](v2.1-remote-chat-report-matrix.md)（能力×层矩阵 + 残留检测 + 进度日志）· 服务层基座见 [`service-layer-architecture.md`](../architecture/service-layer-architecture.md)（serve-api in-process + 双层鉴权 + daemon 转发）。
 > 分支 `feat/v2.1-remote-chat-report`，阶段 1+2 已上线，阶段 3 cutover 落地（commit 至 `2942abd`）。
+> **🔴 web→ai-sdk（任务A，2026-06-30，随 v1.0.1）**：远程 web SPA 现跑 **ai-sdk runtime**（非 legacy）——翻 `vite.web.config.ts` 3 个 define（master `AI_SDK_NEW_SESSION_DEFAULT` + `AGENT_VIEW` + `ASSISTANT_MODAL`，env=0/`CHAT_RUNTIME=legacy` 回滚），`resolveAiGatewayBaseUrl` web 同源 branch → `/api/ai/chat` 打到 serve-api `ai_gateway_proxy.py`（`httpx.AsyncClient(stream=True)`+`aiter_raw` SSE 反代 + abort 传播 + `verify_cf_access` 双腿）→ 同机 loopback gateway:8300。后端代理/端口注入/web resolver 6/27 即就位，任务A 仅翻 flag + CI 加 `build:web` 步（`out/web` gitignored，此前 CI 漏构建致发布包 web 缺/旧）。gateway 挂 → proxy 502 → health 探针失败 → 自动降级 legacy。
 
 ## 0. 定位
 
