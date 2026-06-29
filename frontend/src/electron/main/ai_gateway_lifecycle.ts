@@ -369,10 +369,13 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
           // PART 2 — auto-approval mode from the request body (default 'always' when absent).
           approvalMode,
           // M4a — skill→tool gating (MAILAGENT_SKILL_SELF_MOUNT). advertisedSkills from the TTL-cached
-          // /chat/config projection (prewarmed at startup above + refreshed per-request by the
-          // systemPromptProvider when context injection is on → a Settings skill toggle takes effect
-          // within the 15s TTL). null (cache empty / Python hiccup) → buildGatewayTools fails open.
-          // Off → applySkillGating never called → ToolSet byte-identical to the cutover set.
+          // /chat/config projection. Refresh path: the systemPromptProvider re-fetches it per-request
+          // ONLY when MAILAGENT_AI_SDK_CONTEXT_INJECTION is on (the post-cutover master default) → a
+          // Settings skill toggle takes effect within the 15s TTL. With context injection OFF, only the
+          // startup prewarm populates the cache → advertisedSkills is frozen at that snapshot and a
+          // toggle needs an app restart (acceptable: SELF_MOUNT is a default-off dogfood flag; gating
+          // still works off the snapshot, range is read-only tools). null (cache empty / Python hiccup)
+          // → fails open. SELF_MOUNT off → applySkillGating never called → ToolSet byte-identical.
           skillGatingEnabled,
           advertisedSkills: _systemPromptCache?.value?.advertisedSkills ?? null
         },

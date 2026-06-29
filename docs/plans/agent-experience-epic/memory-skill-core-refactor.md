@@ -156,7 +156,7 @@
 ### M4 — Step 4：SkillRegistry 统一 + 自我挂载（最大，建议拆 a/b/c）
 > flag `MAILAGENT_SKILL_SELF_MOUNT`（default off）· 难度高
 
-- **M4a 工具注册受 skill 启用态门控**（收发现 4）：`buildGatewayTools` 读 resolved skill 启用态（`skill_overrides_map`/`resolved_skills` 经 domain client），关掉的 skill 其工具**不注册**给 LLM —— 恢复 legacy 的 skill→tools 真门控。
+- **M4a 工具注册受 skill 启用态门控**（收发现 4）✅ **已落地**（4 commits，main 未 push：M3c base fix `0c683496` → M4a Python `02c7265b` → Node 门控 `495bf286` → Node 接线 `d4281b15`）。**数据所有权拆分（决策 1）**：哪些 skill 对模型可见 = 业务态 = Python `/chat/config.advertisedSkills`（`advertised_skill_names` = `resolved_skills` 里 enabled(override ?? default) && available）；gateway-工具→skill 映射 + 过滤 = 工具集结构 = Node（`ai-gateway/tools/skill_gating.ts` 的 `GATEWAY_SKILL_TOOLS` + `applySkillGating`，复刻 legacy `computeSkillEnablement` 的 advertised-owner-wins 分区）。关掉的 skill 其读工具不注册给 LLM。**双独立 review（opus+codex）精炼**：① 漂移守护 = 双向**完整性**分类测试（每个 gateway 工具必 ∈ `GATEWAY_SKILL_TOOLS` ∪ collision-exempt ∪ core 白名单，防「新读工具漏门控」复发，非仅 subset）；② **fail-OPEN**（advertisedSkills=null=Python hiccup → 不门控，门控范围只读工具，write/send 另有 flag+审批）；③ flag-off 字节级范围 = **gateway ToolSet**（`/chat/config` 恒发 advertisedSkills 字段、值可 null，by design 无 flag，非字节恒等）。门控范围 = email/search/report 读工具；`email_search`(collision-exempt) + kos/memory/write/send(core) 永不门控。
 - **M4b `update_system_md` 工具**：包 `set_profile_doc` + `validator`（RULES deny-list）+ 审批。**SOUL/RULES 改 = 高危人审 tier**，USER/AGENT 较低；`PRODUCT_SAFETY_FLOOR` 结构上已不可弱化。
 - **M4c `discover_skills` 工具**：包 `resolved_skills`（查未激活能力）+ `set_enabled`（自我挂载 discover→mount→暴露闭环）。
 - **flag-off 不变量**：gateway 仍用硬编码工具集，字节级不变。
