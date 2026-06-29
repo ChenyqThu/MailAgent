@@ -127,3 +127,4 @@ tests/agent_eval/baselines/*.report.*
 /.design-sync/.cache/
 /.design-sync/node_modules
 /.design-sync/learnings/
+scripts/backfill_thread_id_rfc2047.journal.json
