@@ -141,8 +141,11 @@
 - **flag-off 不变量**：不调 search，仍走 `/chat/config` 静态 top-20，字节级不变。
 - **eval 注意**：改注入内容会动依赖 memory 的 task → 按 recorder-contract 重录 baseline；**真 gate 看迭代质量，不靠改任务凑绿**。
 
-### M3 — Step 3：`user.md` 偏好编译闭环（含偏好层 SSoT 决策）
+### M3 — Step 3：`user.md` 偏好编译闭环（含偏好层 SSoT 决策）✅
 > flag `MAILAGENT_USER_MD_COMPILE`（default off）· 难度低-中 · 无 hot-path
+>
+> **✅ 已落地（2026-06-29，M3a–M3d 4 commits `67d6d868`→`82e81a72`，main 未 push，每步独立 code-reviewer APPROVE）— 实测/决策（覆盖下文设计）**：① **维护形态 = 编译器式合并式**（§8 开放决策经 AskUserQuestion 拍板）：读现有 user.md（含手编 SSoT）+ mem0 偏好候选 → LLM forced-tool 合并（保留手编/并入新发现/去重）→ 覆写；**WAL 自维护归 M4**（与 `update_system_md` 合并，避免两条写 user.md 路径）。② **引擎不落库 + 不 import mem0**（端点传 `get_all` 的 list 进来）→ `src/memory/user_md_compiler.py` 纯逻辑易测。③ 校验兜底（空 / 缺 `# USER` / 超 20000 字符 → raise，绝不写坏恒注入身份文档）+ **候选折叠内部空白 / 剥前导 `#` 防 `\n` 伪造 section 注入**（reviewer MEDIUM-1）。④ 端点 `POST /chat/memory/compile-user-md` **自检 flag**（区别 capture/search Node 触发不自检 —— M3 手动 HTTP 直达 → flag-off `E_DISABLED` 403）+ 用户主动操作失败 raise（区别 search best-effort）+ 返回 `{before, beforeHash, after, changed, itemCount}`。⑤ flag = **config.py pydantic**（区别 M1/M2 Node env）+ `/chat/config` 暴露 `userMdCompileEnabled` 控按钮显隐（仿 useLlmModels，非 vite define，运行时一致；singleton 读 → 翻 flag 需重启）。⑥ 前端 `UserMdCompileSection`（before/after diff + rollback `toHash=beforeHash` → `/agent/profile/docs/user/rollback`）+ i18n 双 locale。⑦ **agent_eval 89 零回退**（/config 加字段不改 agent 行为，仿 M2d）。子步 M3a 引擎+单测 → M3b 端点+flag+config → M3c 前端+i18n → M3d eval+文档。
+>
 > **🔴 偏好层 SSoT = 独立 `user.md`（2026-06-28 拍板）**：偏好恒定全量注入、人可读可编辑可 git diff；维护走校验或经 `AGENT.md` WAL「先写后答」约束让 AI 自行识别+维护；**不**走 mem0 投影（免双向同步）。
 
 - **Python**：路由/脚本 → `mem0.get_all(user_id)` → LLM **判定偏好类 + 重排**为结构化 Markdown → `set_profile_doc('user', updated_by='agent_proposed')`（安全覆写基建全在：history + rollback + hash）。`user.md` ≡ USER standing-context 文档别名。**preference/fact 分类在此读侧做**（M1 写侧不分类）。
