@@ -19,6 +19,7 @@ import { createReportReadTools } from './report'
 import { createWriteTools } from './write'
 import { createSendTools } from './send'
 import { createMemoryTools } from './memory'
+import { applySkillGating } from './skill_gating'
 import type { GatewayApprovalMode, GatewayToolAuditCollector } from './types'
 
 export interface BuildGatewayToolsOpts {
@@ -55,6 +56,17 @@ export interface BuildGatewayToolsOpts {
    *  edit-tier + the blocking send still ask. Threaded into the write + memory tools' needsApproval.
    *  Absent / 'always' → every write asks (current behaviour, byte-identical). */
   approvalMode?: GatewayApprovalMode
+  /** M4a (MAILAGENT_SKILL_SELF_MOUNT) — when true AND advertisedSkills is provided (non-null),
+   *  drop the read tools of any email/search/report skill NOT in advertisedSkills (skill→tool
+   *  gating, see skill_gating.ts). Off / advertisedSkills null → applySkillGating is NOT called →
+   *  byte-identical to the cutover tool set. The gated set is read tools only; write/send/memory
+   *  (core) + the collision-exempt email_search are never gated. */
+  skillGatingEnabled?: boolean
+  /** M4a — the advertised (enabled(override ?? default) && available) skill names from Python
+   *  /chat/config.advertisedSkills. null/undefined = unknown (store/manifest hiccup) → fail OPEN
+   *  (no gating; the gated set is harmless read tools, write/send keep flag+approval); [] = all
+   *  skills disabled → gate every mapped skill tool. Only consulted when skillGatingEnabled. */
+  advertisedSkills?: readonly string[] | null
 }
 
 /** Names of the read tools exposed by the gateway (for tests / observability). */
@@ -118,6 +130,13 @@ export function buildGatewayTools(
         })
       )
     }
+  }
+  // M4a — skill→tool gating LAST (after the full set is assembled), behind MAILAGENT_SKILL_SELF_MOUNT.
+  // flag-off OR advertisedSkills null (Python hiccup → fail-open) → not called → byte-identical to the
+  // cutover set. advertisedSkills=[] (all disabled) → gates every mapped skill read tool. The gated set
+  // is read-only; write/send/memory (core) + collision-exempt email_search are never dropped.
+  if (opts.skillGatingEnabled && opts.advertisedSkills != null) {
+    return applySkillGating(tools, opts.advertisedSkills)
   }
   return tools
 }
