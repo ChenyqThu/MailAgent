@@ -10,6 +10,8 @@ fallback (cfg 端口都指向 DavMail JVM) 都委托本模块, 消除重复.
 from __future__ import annotations
 
 import re
+from email import policy
+from email.headerregistry import HeaderRegistry
 from email.message import EmailMessage
 from email.parser import BytesParser
 from email.utils import formatdate, make_msgid
@@ -52,6 +54,62 @@ def _sanitize_header(value: str) -> str:
     return _HEADER_FOLD_RE.sub(" ", value).strip()
 
 
+class _ThreadingHeader:
+    """``References`` / ``In-Reply-To`` 头的自定义 header 类: 保留完整 msg-id 链,
+    按空白折行, **永不 RFC 2047 编码**.
+
+    Python ``EmailMessage`` 默认把这两个头当 ``UnstructuredHeader``; 当单个
+    Message-ID token 超过行长上限 (78) 时 — Exchange/Outlook 的长 Message-ID
+    (``<...@SEYPR04MB7262.apcprd04.prod.outlook.com>`` 约 80 字符) 几乎必然超 —
+    折行器无法在 token 内部断开, 转而用 encoded-word 编码整段 (``<`` → ``=3C``,
+    ``@`` → ``=40``), 产出 ``References: =?utf-8?q?=3CSEYPR04MB7262...?=``. 这违反
+    RFC 5322 (msg-id 头不允许 encoded-word): 收件方 Outlook 与本端回读都解不出
+    正确线程根 → 回复被切成新线程 (见 fix/reply-thread-rfc2047). 这里改成原样
+    emit, 只在 msg-id 之间的空白处折行, 长 token 整体溢出到下一折行行 (合法).
+    """
+
+    max_count = None
+
+    @classmethod
+    def parse(cls, value, kwds):
+        kwds["parse_tree"] = None
+        kwds["decoded"] = " ".join(str(value).split())
+        kwds.setdefault("defects", [])
+
+    def fold(self, *, policy):
+        sep = policy.linesep
+        maxlen = policy.max_line_length or 0
+        if not maxlen or len(self.name) + 2 + len(self) <= maxlen:
+            return f"{self.name}: {self}{sep}"
+        # 按 msg-id 间空白贪心折行; 单 token 超长则整体占一行 (不编码).
+        lines: list[str] = []
+        cur = f"{self.name}:"
+        for tok in str(self).split():
+            if cur.endswith(":") or len(cur) + 1 + len(tok) <= maxlen:
+                cur = f"{cur} {tok}"
+            else:
+                lines.append(cur)
+                cur = f" {tok}"
+        lines.append(cur)
+        return sep.join(lines) + sep
+
+
+def _build_outgoing_policy():
+    """发件 MIME 序列化 policy: 在默认 policy 基础上, 把 ``In-Reply-To`` /
+    ``References`` 路由到 :class:`_ThreadingHeader` (不编码长 Message-ID).
+
+    其余头 (Subject 中文 encoded-word / From / Date / Message-ID / 附件) 沿用默认
+    registry 行为, 字节不变 — 仅这两个 msg-id 头的折行/编码语义被改写.
+    """
+    reg = HeaderRegistry()
+    reg.map_to_type("in-reply-to", _ThreadingHeader)
+    reg.map_to_type("references", _ThreadingHeader)
+    return policy.default.clone(header_factory=reg)
+
+
+_OUTGOING_POLICY = _build_outgoing_policy()
+
+
 def build_outgoing_mime(cfg: "Config", draft: DraftRequest) -> bytes:
     """构造发件 MIME (reply / reply-all / forward / new), 供 IMAP APPEND 或 SMTP send.
 
@@ -61,8 +119,11 @@ def build_outgoing_mime(cfg: "Config", draft: DraftRequest) -> bytes:
       multipart/mixed (外层 mixed 套 alternative + 各 attachment part).
 
     review HIGH/MEDIUM 保留: In-Reply-To 强制 ``<msg-id>`` 包裹; From display name; User-Agent.
+
+    序列化用 ``_OUTGOING_POLICY``: In-Reply-To / References 走 :class:`_ThreadingHeader`
+    不编码长 Message-ID (否则线程断裂, 见 fix/reply-thread-rfc2047).
     """
-    msg = EmailMessage()
+    msg = EmailMessage(policy=_OUTGOING_POLICY)
     from_display = getattr(cfg, "user_name", "") or ""
     from_email = cfg.user_email
     msg["From"] = _sanitize_header(

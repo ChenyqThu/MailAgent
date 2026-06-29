@@ -210,3 +210,46 @@ def test_attachment_filename_with_newline_does_not_crash():
     names = [p.get_filename() for p in m.walk() if p.get_filename()]
     assert names == ["report v2.pdf"]
     assert all("\n" not in n and "\r" not in n for n in names)
+
+
+# === fix/reply-thread-rfc2047: 长 Exchange Message-ID 线程头不得被 RFC2047 编码 ===
+
+# 真机长 Message-ID (含 outlook.com 长域名后缀, 含 <> 约 80 字符 > 78 行长上限)
+_LONG_TID = "SEYPR04MB7262D3C35F698D3C4BE501BCA4C32@SEYPR04MB7262.apcprd04.prod.outlook.com"
+_LONG_MID = "SJ0PR05MB785517F6ADAFA45242A7603E8AEC2@SJ0PR05MB7855.namprd05.prod.outlook.com"
+
+
+def test_long_message_id_threading_headers_not_rfc2047_encoded():
+    """长 Message-ID 的 In-Reply-To/References 绝不能被编码成 ``=?utf-8?q?=3C...?=``.
+
+    修复前: EmailMessage 默认把超 78 字符的 msg-id token RFC2047 编码 → 收件方
+    Outlook + 本端回读都解不出线程根 → 回复被切成新线程 (fix/reply-thread-rfc2047).
+    """
+    import re
+
+    d = DraftRequest(
+        mode="reply-all", to=["lucy@x.com"], subject="Re: FW: 云服务目标归属确认",
+        reply_text="收到", reply_html="<p>收到</p>",
+        in_reply_to=f"<{_LONG_MID}>", references=f"<{_LONG_TID}> <{_LONG_MID}>",
+    )
+    raw = build_outgoing_mime(_FakeCfg(), d)
+    head = raw.decode("utf-8", "replace").split("\n\n", 1)[0]
+    for block in re.split(r"\n(?=\S)", head):
+        if block.lower().startswith(("references:", "in-reply-to:")):
+            assert "=?" not in block, f"线程头被 RFC2047 编码: {block!r}"
+
+
+def test_long_message_id_references_preserve_full_chain():
+    """编码修复不得丢 Message-ID: References 两个 ID 都在, refs[0] 仍是线程根."""
+    d = DraftRequest(
+        mode="reply-all", to=["lucy@x.com"], subject="Re: hi",
+        reply_text="x", in_reply_to=f"<{_LONG_MID}>",
+        references=f"<{_LONG_TID}> <{_LONG_MID}>",
+    )
+    m = _parse_default(d)  # default policy → 逻辑值 (clean 头原样)
+    refs = str(m.get("References"))
+    assert _LONG_TID in refs and _LONG_MID in refs
+    assert refs.split()[0].strip("<>") == _LONG_TID
+    assert str(m.get("In-Reply-To")).strip("<>") == _LONG_MID
+    # 中文 Subject 不受本修复影响, 仍可正常 decode 回原文
+    assert m.get("Subject") == "Re: hi"

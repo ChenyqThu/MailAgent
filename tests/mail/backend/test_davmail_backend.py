@@ -783,3 +783,40 @@ def test_init_empty_folder_config_stays_none():
     be = DavMailBackend(_cfg_stub(sent="", drafts=""), sync_store=MagicMock())
     assert be.sent_folder is None
     assert be.drafts_folder is None
+
+
+# === fix/reply-thread-rfc2047: thread_id 抽取须 RFC2047 解码线程头 ===
+
+def test_thread_id_from_headers_decodes_encoded_references():
+    """davmail 旧版发件产生的 encoded-word References — 解码后取到完整线程根, 非碎片.
+
+    复刻"修复前"被编码的 wire 形式 (默认 EmailMessage 把长 Message-ID 编码),
+    davmail compat32 读到的就是这种 raw encoded-word.
+    """
+    from email.message import EmailMessage
+    from email.parser import BytesParser
+
+    from src.mail.backend.davmail_backend import _thread_id_from_headers
+
+    tid = "SEYPR04MB7262D3C35F698D3C4BE501BCA4C32@SEYPR04MB7262.apcprd04.prod.outlook.com"
+    mid = "SJ0PR05MB785517F6ADAFA45242A7603E8AEC2@SJ0PR05MB7855.namprd05.prod.outlook.com"
+    m = EmailMessage()
+    m["References"] = f"<{tid}> <{mid}>"
+    m["In-Reply-To"] = f"<{mid}>"
+    p = BytesParser().parsebytes(m.as_bytes())  # compat32 raw — davmail 视角
+    encoded_refs = p.get("References")
+    assert "=?" in encoded_refs, "前置: 复刻的 References 应是 encoded-word"
+    # 修复前 refs[0] = 截断的 encoded-word 碎片; 修复后 = 完整 tid
+    assert _thread_id_from_headers(encoded_refs, p.get("In-Reply-To"), "") == tid
+
+
+def test_thread_id_from_headers_clean_header_is_noop():
+    """干净 ASCII 头解码 no-op — 既有正常邮件 thread_id 不变 (零回归)."""
+    from src.mail.backend.davmail_backend import _thread_id_from_headers
+
+    assert _thread_id_from_headers("<root@a.com> <parent@b.com>", "", "") == "root@a.com"
+    assert _thread_id_from_headers("", "<parent@b.com>", "") == "parent@b.com"
+    # 无 References/In-Reply-To → message_id 兜底 (线程根邮件); 传 "" 则 None
+    assert _thread_id_from_headers("", "", "self@c.com") == "self@c.com"
+    assert _thread_id_from_headers("", "", "") is None
+    assert _thread_id_from_headers(None, None, "") is None

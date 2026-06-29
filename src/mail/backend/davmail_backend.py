@@ -116,6 +116,34 @@ def _quote_imap_string(value: str) -> str:
     return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
+def _thread_id_from_headers(
+    references: Optional[str],
+    in_reply_to: Optional[str],
+    message_id: str = "",
+) -> Optional[str]:
+    """从 References / In-Reply-To 头提取线程根 Message-ID (thread_id).
+
+    DavMail IMAP 返回 raw MIME: 长 Message-ID 的 References / In-Reply-To 可能被
+    RFC 2047 编码成 ``=?utf-8?q?=3C...?=`` (我方旧版发件 + 对端 Outlook 继承/转发都会
+    带这种头). 必须先 ``_decode_mime_header`` 解码再 split — 否则取到的是 encoded-word
+    碎片 (还被折行截断), 与原邮件干净 thread_id 不相等 → 同一线程被切成两段
+    (见 fix/reply-thread-rfc2047). 对已是干净 ASCII 的头, 解码是 no-op, 字节不变.
+
+    ``message_id`` 非空时作为最终兜底 (无 References/In-Reply-To 的线程根邮件); 传 ""
+    则无兜底 (返回 None), 保持各调用点原有语义.
+    """
+    refs_decoded = _decode_mime_header(references)
+    if refs_decoded:
+        parts = refs_decoded.split()
+        if parts:
+            return parts[0].strip("<>")
+    irt_decoded = _decode_mime_header(in_reply_to)
+    if irt_decoded:
+        return irt_decoded.strip().strip("<>")
+    mid = (message_id or "").strip().strip("<>")
+    return mid or None
+
+
 def _extract_first_email(addr_field: str) -> str:
     """从 RFC 822 address 字段抽出第一个 email 地址 (纯 user@host 形式).
 
@@ -954,17 +982,11 @@ class DavMailBackend(IMailBackend):
         sender_full = _decode_mime_header(msg.get("From"))
         sender = _extract_first_email(sender_full) or sender_full
         date_str = msg.get("Date") or ""
-        references = msg.get("References") or ""
-        in_reply_to = msg.get("In-Reply-To") or ""
-        thread_id = None
-        if references:
-            refs = references.strip().split()
-            if refs:
-                thread_id = refs[0].strip("<>")
-        elif in_reply_to:
-            thread_id = in_reply_to.strip().strip("<>")
-        if not thread_id and message_id:
-            thread_id = message_id
+        # RFC 2047 decode 同 Subject/From: 长 Message-ID 的 References/In-Reply-To
+        # 可能是 encoded-word, 不解码会取到碎片致线程断裂 (fix/reply-thread-rfc2047).
+        thread_id = _thread_id_from_headers(
+            msg.get("References"), msg.get("In-Reply-To"), message_id
+        )
 
         # 抽 text/plain 部分作为 content (HTML 部分留在 source 里给 v4 SQLite SSoT 解析)
         content = ""
@@ -1095,14 +1117,10 @@ class DavMailBackend(IMailBackend):
         try:
             import email
             msg = email.message_from_string(source)
-            references = msg.get("References")
-            if references:
-                refs = references.strip().split()
-                if refs:
-                    return refs[0].strip().strip("<>")
-            in_reply_to = msg.get("In-Reply-To")
-            if in_reply_to:
-                return in_reply_to.strip().strip("<>")
+            # RFC 2047 decode — 同 fetch 路径, 防 encoded-word 长 Message-ID 截断.
+            return _thread_id_from_headers(
+                msg.get("References"), msg.get("In-Reply-To")
+            )
         except Exception as e:
             logger.warning(f"[davmail-backend] extract_thread_id failed: {e}")
         return None
@@ -1868,15 +1886,10 @@ class DavMailBackend(IMailBackend):
                 dropped += 1
                 continue
             message_id = (msg.get("Message-ID") or "").strip().strip("<>")
-            references = msg.get("References") or ""
-            in_reply_to = msg.get("In-Reply-To") or ""
-            thread_id = None
-            if references:
-                refs = references.strip().split()
-                if refs:
-                    thread_id = refs[0].strip("<>")
-            elif in_reply_to:
-                thread_id = in_reply_to.strip().strip("<>")
+            # RFC 2047 decode 线程头, 防 encoded-word 长 Message-ID 截断 (见 fetch 路径).
+            thread_id = _thread_id_from_headers(
+                msg.get("References"), msg.get("In-Reply-To")
+            )
             from_decoded = _decode_mime_header(msg.get("From"))
             sender_email = _extract_first_email(from_decoded) or from_decoded
             results.append({
@@ -1891,8 +1904,10 @@ class DavMailBackend(IMailBackend):
                 "thread_id": thread_id,
                 "imap_uid": uid,
                 "imap_uidvalidity": uidvalidity if uidvalidity is not None else self.inbox_uidvalidity,
-                "references_raw": references.strip() or None,
-                "in_reply_to_raw": in_reply_to.strip().strip("<>") or None,
+                # references_raw / in_reply_to_raw: 当前无消费者 (死字段), 保留原
+                # raw 语义不变; thread_id 已在上方走 _thread_id_from_headers 解码.
+                "references_raw": (msg.get("References") or "").strip() or None,
+                "in_reply_to_raw": (msg.get("In-Reply-To") or "").strip().strip("<>") or None,
             })
         if dropped:
             logger.warning(
