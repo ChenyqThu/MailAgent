@@ -53,6 +53,13 @@ AGENTS.md
 # Env backups (含 secrets)
 .env.bak.*
 
+# 证书 / 私钥（绝不入库 —— PKCS#12 / PEM / 私钥；如 Developer ID Application 签名证书 cert.p12、CSC_LINK 来源）
+*.p12
+*.pem
+*.key
+*.cer
+*.mobileprovision
+
 # DavMail PoC 工作目录 (含 client_id 伪装 config 和 OAuth token, 整体不进 git history)
 davmail-poc/
 
