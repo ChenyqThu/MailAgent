@@ -78,17 +78,18 @@ export default defineConfig({
     __MAILAGENT_AI_SDK_CONTEXT_INJECTION__: JSON.stringify(
       process.env.MAILAGENT_AI_SDK_CONTEXT_INJECTION ?? ''
     ),
-    // Phase 06a (cutover) — MASTER switch (default '' off; Chunk H flips to '1'). flags.ts falls
-    // back to this when a sub-flag is unset; MAILAGENT_CHAT_RUNTIME=legacy overrides back to legacy.
+    // Phase 06a (cutover) — MASTER switch. 任务A：web 切 ai-sdk → default '1'（与桌面 electron.vite
+    // 一致）。flags.ts 据此把 runtime=ai-sdk + 级联 gateway / A2UI / context-injection（这些 sub-flag
+    // 仍 unset，跟 master 走）。MAILAGENT_CHAT_RUNTIME=legacy（或本 env=0）一键回滚 legacy。
     __MAILAGENT_AI_SDK_NEW_SESSION_DEFAULT__: JSON.stringify(
-      process.env.MAILAGENT_AI_SDK_NEW_SESSION_DEFAULT ?? ''
+      process.env.MAILAGENT_AI_SDK_NEW_SESSION_DEFAULT ?? '1'
     ),
     // redesign — renderer mirror of MAILAGENT_AGENT_VIEW (gates the interactive MailAgent
-    // general-agent view at /sessions). Independent surface flag; default '' = off.
-    __MAILAGENT_AGENT_VIEW__: JSON.stringify(process.env.MAILAGENT_AGENT_VIEW ?? ''),
+    // general-agent view at /sessions). Independent surface flag; 任务A：web default '1'（同桌面）；env=0 回滚。
+    __MAILAGENT_AGENT_VIEW__: JSON.stringify(process.env.MAILAGENT_AGENT_VIEW ?? '1'),
     // assistant-modal — renderer mirror of MAILAGENT_ASSISTANT_MODAL (email-body AI panel three-mode
-    // floating modal + FAB). Independent surface flag; default '' = off.
-    __MAILAGENT_ASSISTANT_MODAL__: JSON.stringify(process.env.MAILAGENT_ASSISTANT_MODAL ?? ''),
+    // floating modal + FAB). Independent surface flag; 任务A：web default '1'（同桌面）；env=0 回滚。
+    __MAILAGENT_ASSISTANT_MODAL__: JSON.stringify(process.env.MAILAGENT_ASSISTANT_MODAL ?? '1'),
     // Workbox guards its dev logger behind `process.env.NODE_ENV`, which is
     // undefined in the browser ServiceWorker global (`process` doesn't exist
     // there) → the SW would throw on load. Define it at build time so the

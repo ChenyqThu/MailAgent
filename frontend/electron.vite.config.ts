@@ -23,8 +23,9 @@ const BUILD_TIME = new Date().toISOString()
 // Gateway. Chunk H (v0.20.0 cutover) flipped the desktop fallback '' → '1': new chats now default to
 // the embedded AI SDK Gateway (+ context injection derives on). A runtime
 // MAILAGENT_AI_SDK_NEW_SESSION_DEFAULT env still overrides at launch on either side, and
-// MAILAGENT_CHAT_RUNTIME=legacy is the one-key rollback. (The remote web SPA, vite.web.config.ts,
-// stays '' off until the web→ai-sdk phase — it has no embedded gateway yet.)
+// MAILAGENT_CHAT_RUNTIME=legacy is the one-key rollback. (任务A 2026-06-29: the remote web SPA,
+// vite.web.config.ts, now ALSO defaults these 3 to '1'. The browser can't reach loopback, so web
+// hits the gateway via the serve-api ai_gateway_proxy; env=0 / CHAT_RUNTIME=legacy still roll back.)
 const AI_SDK_NEW_SESSION_DEFAULT = process.env.MAILAGENT_AI_SDK_NEW_SESSION_DEFAULT ?? '1'
 
 export default defineConfig({
