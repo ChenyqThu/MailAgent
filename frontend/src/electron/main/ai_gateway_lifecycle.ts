@@ -166,7 +166,10 @@ async function getSystemPromptConfig(
       standingContext: cfg.standingContext ?? null,
       userContext: cfg.userContext ?? null,
       memorySummary: cfg.memorySummary ?? null,
-      kosConfigured: cfg.kosConfigured ?? false
+      kosConfigured: cfg.kosConfigured ?? false,
+      // M4a — advertised (enabled && available) skill names for skill→tool gating (read by the
+      // buildTools factory, NOT the prompt). null when /chat/config omits it → gateway fails open.
+      advertisedSkills: cfg.advertisedSkills ?? null
     }
   } catch (err) {
     console.warn('[ai-gateway] /chat/config fetch failed — context-light system prompt', err)
@@ -234,7 +237,21 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     'MAILAGENT_AI_SDK_CONTEXT_INJECTION',
     masterNewSessionDefaultOn()
   )
+  // M4a — MAILAGENT_SKILL_SELF_MOUNT (default off, NOT master-following — a separate dogfood flag)
+  // gates the gateway's skill→tool filter: the per-request buildTools factory drops a disabled skill's
+  // read tools by consulting /chat/config.advertisedSkills (Python 业务态). Pure backend — the gateway
+  // runs in the electron main process; the renderer never reads this flag → main env only, NO vite
+  // define (mirrors MAILAGENT_MEM0_CAPTURE/RETRIEVAL). Off → applySkillGating never called → ToolSet
+  // byte-identical to the cutover set.
+  const skillGatingEnabled = envBool('MAILAGENT_SKILL_SELF_MOUNT', false)
   const apiBase = `http://127.0.0.1:${resolveApiPort()}/api`
+  // M4a — prewarm the /chat/config cache ONCE before the server accepts requests so the per-request
+  // buildTools factory reads a populated advertisedSkills on the very first turn (no null-first-turn
+  // gap). Only when gating is on; getSystemPromptConfig never throws (null on failure → buildGatewayTools
+  // fails open). flag-off → not called → startup behaviour unchanged.
+  if (skillGatingEnabled) {
+    await getSystemPromptConfig(apiBase, getLocalApiToken())
+  }
   const handle = await startAiGatewayServer({
     port: resolveAiGatewayPort(),
     baseUrl: getLlmBaseUrl(),
@@ -350,7 +367,14 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
           // (independent rollback). memory_write/delete bind to the same approvalGuard.
           memoryToolsEnabled: envBool('MAILAGENT_AI_SDK_MEMORY_TOOLS', masterNewSessionDefaultOn()),
           // PART 2 — auto-approval mode from the request body (default 'always' when absent).
-          approvalMode
+          approvalMode,
+          // M4a — skill→tool gating (MAILAGENT_SKILL_SELF_MOUNT). advertisedSkills from the TTL-cached
+          // /chat/config projection (prewarmed at startup above + refreshed per-request by the
+          // systemPromptProvider when context injection is on → a Settings skill toggle takes effect
+          // within the 15s TTL). null (cache empty / Python hiccup) → buildGatewayTools fails open.
+          // Off → applySkillGating never called → ToolSet byte-identical to the cutover set.
+          skillGatingEnabled,
+          advertisedSkills: _systemPromptCache?.value?.advertisedSkills ?? null
         },
         collector
       ),

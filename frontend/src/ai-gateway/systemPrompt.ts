@@ -37,6 +37,11 @@ export interface GatewaySystemPromptConfig {
   memorySummary?: string | null
   /** KOS configured (enabled AND credentialed) → inject the KOS usage guidance block. */
   kosConfigured?: boolean
+  /** M4a — advertised (enabled(override ?? default) && available) skill names from /chat/config,
+   *  used by the gateway's skill→tool gating (buildTools), NOT by the prompt assembly here. Carried
+   *  on this cached projection only because it shares the same /chat/config fetch + TTL cache as the
+   *  prompt fields. null/undefined → unknown → gating fails open (no filtering). */
+  advertisedSkills?: string[] | null
 }
 
 /** M2 — one durable memory recalled from the mem0 store (POST /chat/memory/search projection),

@@ -158,6 +158,12 @@ export interface HttpPlatformConfig {
   /** M3c — user.md 偏好编译按钮显隐 gate（MAILAGENT_USER_MD_COMPILE）。运行时从
    *  /chat/config 读取，非 vite define 编译期常量。false → Settings 区块在 DOM 不存在。 */
   userMdCompileEnabled: boolean
+  /** M4a — advertised (enabled(override ?? default) && available) skill names from serve-api
+   *  /chat/config, for the embedded AI SDK Gateway's skill→tool gating (MAILAGENT_SKILL_SELF_MOUNT,
+   *  electron main process only). Optional: absent (remote default / older serve-api) → the gateway
+   *  treats it as null → fails OPEN (no gating). NOT consumed by the renderer / modelConfig — it is a
+   *  gateway-only (main-process tool-catalog) concern, like skillOverrides is for the legacy runtime. */
+  advertisedSkills?: string[] | null
 }
 
 /** 远程默认快照（对齐 electron chat/config.ts 默认：harness ON / timeDecay ON / 其余
