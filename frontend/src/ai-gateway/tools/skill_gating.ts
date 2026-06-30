@@ -35,17 +35,12 @@ export const GATEWAY_SKILL_TOOLS: Record<string, readonly string[]> = {
  *  是 FTS body —— 关 search skill 不该殃及 builtin 元数据搜索。 */
 export const COLLISION_EXEMPT_GATEWAY_TOOLS: ReadonlySet<string> = new Set(['email_search'])
 
-/** 不属于任何 skill 的 core 工具，永不被 skill→tool 门控（复刻 legacy「memory_ 与 kos_ tools never
- *  filtered → core 工具永不过滤」）。write/send 另有 writeToolsEnabled/sendToolEnabled + 审批独立
- *  保护，本就不在门控论域。本集合是 skill_gating.test 完整性守护的「显式 core 白名单」一腿：
+/** 不属于任何 skill 的 core 工具，永不被 skill→tool 门控。write/send 另有 writeToolsEnabled/sendToolEnabled
+ *  + 审批独立保护，本就不在门控论域。本集合是 skill_gating.test 完整性守护的「显式 core 白名单」一腿：
  *  每个 gateway 工具必须 ∈ GATEWAY_SKILL_TOOLS ∪ COLLISION_EXEMPT ∪ CORE_UNGATED，否则测试红，
  *  强制新增 gateway 工具时有意识归类（防「新读工具漏门控」复发本 bug —— review M2）。 */
 export const CORE_UNGATED_GATEWAY_TOOLS: ReadonlySet<string> = new Set([
   'kos_query',
-  'memory_list',
-  'memory_get',
-  'memory_write',
-  'memory_delete',
   'email_flag',
   'email_archive',
   'email_pin',

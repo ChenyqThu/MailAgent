@@ -16,8 +16,8 @@ import {
 import { ApprovalGuard } from '../../../src/ai-gateway/security/approval'
 import { mockDomain, okEnvelope } from './_helpers'
 
-/** Build the FULL gateway tool set (all flags on → all 22 tools) — the drift guard's source of
- *  truth for "every real gateway tool". Mirrors memory.test.ts's all-flags build.
+/** Build the FULL gateway tool set (all flags on) — the drift guard's source of
+ *  truth for "every real gateway tool".
  *  🔴 维护：加新 tool-gating flag 时必须在此把它开齐，否则下方 FORWARD 完整性守护（every gateway
  *  tool ∈ 已分类）看不到该 flag 门控的工具 → 漏归类不会变红（review L2）。 */
 function buildAllTools() {
@@ -27,7 +27,6 @@ function buildAllTools() {
     approvalGuard: new ApprovalGuard(),
     sendToolEnabled: true,
     sendSigningSecret: 'secret',
-    memoryToolsEnabled: true,
     // M4b/M4c — also build the self-mount tools (update_system_md / discover_skills /
     // set_skill_enabled) so the FORWARD completeness guard sees them. advertisedSkills left unset
     // → applySkillGating not called → the full unfiltered set.

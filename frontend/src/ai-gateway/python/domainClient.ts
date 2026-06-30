@@ -23,12 +23,6 @@ import type {
   MailagentEmailBody
 } from '@shared/types/cli.gen'
 import type { ReportDetail, ReportListItem, SearchResult } from '@shared/api/types'
-// M0 — memory tools parity. Reuse the SAME full v8 AgentMemoryEntry + WriteMemoryInput the
-// legacy harness uses (shared/chat/model.ts) — NOT the truncated api/types boundary copy — so
-// the gateway memory_write tool can read the provenance/priority/updated_at fields off the
-// returned row for byte-for-byte parity with the legacy tool. Type-only import (pure types,
-// zero runtime deps), mirroring this file's other @shared type imports.
-import type { AgentMemoryEntry, WriteMemoryInput } from '@shared/chat/model'
 
 /** A serve-api domain error surfaced to the caller (tool execute turns it into a
  *  tool-error part). Mirrors the http_client ApiError shape ({code, message, hint?,
@@ -486,51 +480,10 @@ export class MailAgentDomainClient {
     })
   }
 
-  // ── memory primitives (M0 — one per gateway memory tool) ──────────────────
-  // Each mirrors the legacy HttpChatPlatform memory method's exact wire call
-  // (path + query/body shape, shared/chat/http_platform.ts) so a gateway memory
-  // tool is byte-for-byte parity with the legacy tool over the SAME serve-api
-  // /chat/memory* endpoints (Python ChatDb.agent_memory_kv is the SSoT). scope/key
-  // are arbitrary strings ('skill:foo' / special chars) → query params, not path
-  // segments, to avoid URL-encoding ambiguity (matches the Python router).
-
-  /** memory_list — list durable memory entries. GET /chat/memory (optional scope query). */
-  listMemory(scope?: string, signal?: AbortSignal): Promise<AgentMemoryEntry[]> {
-    return this._req<AgentMemoryEntry[]>('GET', '/chat/memory', {
-      query: scope ? { scope } : undefined,
-      signal
-    })
-  }
-
-  /** memory_get — one entry by scope+key. GET /chat/memory/entry. The endpoint returns
-   *  data=null (not a 404) when nothing is stored under (scope,key) — a normal result. */
-  getMemory(scope: string, key: string, signal?: AbortSignal): Promise<AgentMemoryEntry | null> {
-    return this._req<AgentMemoryEntry | null>('GET', '/chat/memory/entry', {
-      query: { scope, key },
-      signal
-    })
-  }
-
-  /** memory_write — UPSERT a durable fact. POST /chat/memory with the camelCase body
-   *  (scope/key/valueJson + optional provenance + priority). Returns the stored row. */
-  writeMemory(input: WriteMemoryInput, signal?: AbortSignal): Promise<AgentMemoryEntry> {
-    return this._req<AgentMemoryEntry>('POST', '/chat/memory', { body: input, signal })
-  }
-
-  /** memory_delete — forget one entry. DELETE /chat/memory (scope+key query). Idempotent:
-   *  deleting a missing (scope,key) returns {deleted:0}. Projects to the deleted count. */
-  deleteMemory(scope: string, key: string, signal?: AbortSignal): Promise<number> {
-    return this._req<{ deleted: number }>('DELETE', '/chat/memory', {
-      query: { scope, key },
-      signal
-    }).then((r) => r.deleted)
-  }
-
   /** M1 auto-capture — fire a finished turn at the mem0 extraction endpoint. POST
    *  /chat/memory/capture {userText, assistantText, sessionId?}. Returns the captured-entry
    *  summary; the caller (lifecycle, fire-and-forget) ignores it. INDEPENDENT from the
-   *  agent_memory_kv memory_* methods above — this hits the mem0 auto-extraction store, not the
-   *  explicit WAL. sessionId (provenance) only goes on the wire when it is a real number. */
+   *  agent_memory_kv layer (now retired). sessionId (provenance) only goes on the wire when it is a real number. */
   captureMemory(
     input: { userText: string; assistantText: string; sessionId?: number | null },
     signal?: AbortSignal
@@ -548,9 +501,9 @@ export class MailAgentDomainClient {
 
   /** M2 recall — fetch memories relevant to a query from the mem0 store. POST /chat/memory/search
    *  {query, limit?}. Returns the projected memories; the caller (lifecycle retrieveMemory, on the
-   *  TTFT path) injects them into the system prompt as an untrusted block. INDEPENDENT from the
-   *  agent_memory_kv memory_* methods above — this hits the mem0 auto-extraction store, not the
-   *  explicit WAL. limit only goes on the wire when it is a real number. */
+   *  TTFT path) injects them into the system prompt as an untrusted block. Hits the mem0
+   *  auto-extraction store (the agent_memory_kv layer is now retired). limit only goes on the wire
+   *  when it is a real number. */
   searchMemory(
     input: { query: string; limit?: number },
     signal?: AbortSignal

@@ -147,42 +147,6 @@ export const emailPrepareSendSchema = z.object({
 })
 export type EmailPrepareSendInput = z.infer<typeof emailPrepareSendSchema>
 
-// ── memory-tool schemas (M0) — mirror the legacy JSON-Schema field names / requireds from
-//    shared/chat/tools/builtin/memory.ts byte-for-byte (parity). memory_list/get are silent
-//    reads; memory_write/delete are preview writes. The default scope='user' resolution stays
-//    in the tool's run (matching the legacy handler), NOT the schema, so scope is `.optional()`
-//    here — the model may omit it. ────────────────────────────────────────────────────────
-
-/** memory_list — list durable memory entries (optional scope filter). */
-export const memoryListSchema = z.object({
-  scope: z.string().optional()
-})
-export type MemoryListInput = z.infer<typeof memoryListSchema>
-
-/** memory_get — fetch one entry by scope + key (scope defaults to 'user' in run). */
-export const memoryGetSchema = z.object({
-  scope: z.string().optional(),
-  key: z.string()
-})
-export type MemoryGetInput = z.infer<typeof memoryGetSchema>
-
-/** memory_write — save / overwrite a durable fact. `value` is an arbitrary JSON value
- *  (string or object); priority is an optional user-explicit importance boost. */
-export const memoryWriteSchema = z.object({
-  scope: z.string().optional(),
-  key: z.string(),
-  value: z.unknown(),
-  priority: z.number().int().optional()
-})
-export type MemoryWriteInput = z.infer<typeof memoryWriteSchema>
-
-/** memory_delete — forget one entry by scope + key (scope defaults to 'user' in run). */
-export const memoryDeleteSchema = z.object({
-  scope: z.string().optional(),
-  key: z.string()
-})
-export type MemoryDeleteInput = z.infer<typeof memoryDeleteSchema>
-
 // ── self-mount schemas (M4) — the agent updates its own Standing Context docs + skills. Behind
 //    MAILAGENT_SKILL_SELF_MOUNT. update_system_md = edit-tier write (always asks); set_skill_enabled
 //    = preview-tier write; discover_skills = silent read. Field names are the model-visible surface. ──

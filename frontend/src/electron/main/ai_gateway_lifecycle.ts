@@ -361,11 +361,6 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
           // (local API token). Both already constructed above; off by default.
           sendToolEnabled,
           sendSigningSecret: getLocalApiToken(),
-          // M0 — restore the four memory tools (lost at the v0.20.0 cutover). DEFAULT follows the
-          // NEW_SESSION_DEFAULT master (like write/send) so the desktop default runtime can read /
-          // write durable user facts again; an explicit MAILAGENT_AI_SDK_MEMORY_TOOLS wins
-          // (independent rollback). memory_write/delete bind to the same approvalGuard.
-          memoryToolsEnabled: envBool('MAILAGENT_AI_SDK_MEMORY_TOOLS', masterNewSessionDefaultOn()),
           // PART 2 — auto-approval mode from the request body (default 'always' when absent).
           approvalMode,
           // M4a — skill→tool gating (MAILAGENT_SKILL_SELF_MOUNT). advertisedSkills from the TTL-cached

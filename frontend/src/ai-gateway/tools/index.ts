@@ -18,7 +18,6 @@ import { createKosReadTools } from './kos'
 import { createReportReadTools } from './report'
 import { createWriteTools } from './write'
 import { createSendTools } from './send'
-import { createMemoryTools } from './memory'
 import { applySkillGating } from './skill_gating'
 import { createSelfMountTools } from './self_mount'
 import type { GatewayApprovalMode, GatewayToolAuditCollector } from './types'
@@ -46,21 +45,15 @@ export interface BuildGatewayToolsOpts {
   /** HMAC secret for the send approval token (the per-session local API token, shared with the
    *  Python serve-api). Required to build the send tool; omitted → no send tool even if enabled. */
   sendSigningSecret?: string
-  /** MAILAGENT_AI_SDK_MEMORY_TOOLS (M0 — post-cutover parity restore). When true, the four memory
-   *  tools are added (memory_list/get silent reads + memory_write/delete preview writes) — but the
-   *  two writes need `approvalGuard` too (a write tool cannot exist without its guard), so they are
-   *  only registered when the guard is present. Off (default) → no memory tools, byte-identical to
-   *  the cutover tool set. Independent of writeToolsEnabled (memory has its own flag/rollback). */
-  memoryToolsEnabled?: boolean
   /** Auto-approval mode (body.approvalMode, default 'always'). 'auto-reversible' lets reversible
-   *  preview-tier writes (flag/archive/pin/resync + memory write/delete) execute without a card;
-   *  edit-tier + the blocking send still ask. Threaded into the write + memory tools' needsApproval.
+   *  preview-tier writes (flag/archive/pin/resync) execute without a card;
+   *  edit-tier + the blocking send still ask. Threaded into the write tools' needsApproval.
    *  Absent / 'always' → every write asks (current behaviour, byte-identical). */
   approvalMode?: GatewayApprovalMode
   /** M4a (MAILAGENT_SKILL_SELF_MOUNT) — when true AND advertisedSkills is provided (non-null),
    *  drop the read tools of any email/search/report skill NOT in advertisedSkills (skill→tool
    *  gating, see skill_gating.ts). Off / advertisedSkills null → applySkillGating is NOT called →
-   *  byte-identical to the cutover tool set. The gated set is read tools only; write/send/memory
+   *  byte-identical to the cutover tool set. The gated set is read tools only; write/send
    *  (core) + the collision-exempt email_search are never gated. */
   skillGatingEnabled?: boolean
   /** M4a — the advertised (enabled(override ?? default) && available) skill names from Python
@@ -94,19 +87,6 @@ export function buildGatewayTools(
     ...createEmailReadTools(opts.domain, collector),
     ...createKosReadTools(opts.domain, collector, { timeDecayEnabled: opts.kosTimeDecayEnabled }),
     ...createReportReadTools(opts.domain, collector)
-  }
-  // M0 — memory tools (post-cutover parity restore) when MAILAGENT_AI_SDK_MEMORY_TOOLS is on AND a
-  // guard is supplied (memory_write/delete are preview-tier writes that need it, like email writes).
-  // Independent of writeToolsEnabled — memory has its own flag/rollback. Off (or no guard) →
-  // byte-identical to the cutover tool set.
-  if (opts.memoryToolsEnabled && opts.approvalGuard) {
-    Object.assign(
-      tools,
-      createMemoryTools(opts.domain, collector, opts.approvalGuard, {
-        a2uiEnabled: opts.a2uiEnabled,
-        approvalMode: opts.approvalMode
-      })
-    )
   }
   // phase-03b — write tools only when the flag is on AND a guard is supplied. Off (or no
   // guard) → read-only, byte-identical to 03a. Approval is enforced two ways: ai@6's
@@ -149,7 +129,7 @@ export function buildGatewayTools(
   // M4a — skill→tool gating LAST (after the full set is assembled), behind MAILAGENT_SKILL_SELF_MOUNT.
   // flag-off OR advertisedSkills null (Python hiccup → fail-open) → not called → byte-identical to the
   // cutover set. advertisedSkills=[] (all disabled) → gates every mapped skill read tool. The gated set
-  // is read-only; write/send/memory (core) + collision-exempt email_search are never dropped.
+  // is read-only; write/send (core) + collision-exempt email_search are never dropped.
   if (opts.skillGatingEnabled && opts.advertisedSkills != null) {
     return applySkillGating(tools, opts.advertisedSkills)
   }

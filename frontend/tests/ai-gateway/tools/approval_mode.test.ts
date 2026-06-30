@@ -12,7 +12,6 @@ import type { Tool } from 'ai'
 
 import { ApprovalGuard } from '../../../src/ai-gateway/security/approval'
 import { createWriteTools } from '../../../src/ai-gateway/tools/write'
-import { createMemoryTools } from '../../../src/ai-gateway/tools/memory'
 import { createSendTools } from '../../../src/ai-gateway/tools/send'
 import type {
   GatewayApprovalMode,
@@ -48,14 +47,6 @@ function writeTools(approvalMode?: GatewayApprovalMode): {
   return { tools, guard, collector, domainCalls }
 }
 
-function memoryTools(approvalMode?: GatewayApprovalMode): { tools: Record<string, Tool> } {
-  const collector: GatewayToolAuditEntry[] = []
-  const guard = new ApprovalGuard()
-  const domain = mockDomain(() => okEnvelope({ saved: true, scope: 'user', key: 'k' }))
-  const tools = createMemoryTools(domain, collector, guard, { approvalMode })
-  return { tools }
-}
-
 function sendTool(): { tool: Tool } {
   const collector: GatewayToolAuditEntry[] = []
   const guard = new ApprovalGuard()
@@ -83,17 +74,6 @@ describe("approvalMode 'always' (default) — every write asks", () => {
       { toolCallId: 'tc-draft', messages: [] }
     )
     expect(needs).toBe(true)
-  })
-
-  test('memory writes (preview) → needsApproval true', async () => {
-    const { tools } = memoryTools('always')
-    for (const name of ['memory_write', 'memory_delete']) {
-      const needs = await needsApprovalOf(tools[name])(
-        { scope: 'user', key: 'k', value: 'v' },
-        { toolCallId: `tc-${name}`, messages: [] }
-      )
-      expect(needs, `${name} should ask in 'always'`).toBe(true)
-    }
   })
 
   test('absent approvalMode behaves like always (preview asks)', async () => {
@@ -125,17 +105,6 @@ describe("approvalMode 'auto-reversible' — reversible preview writes skip the 
       { toolCallId: 'tc-draft', messages: [] }
     )
     expect(needs).toBe(true)
-  })
-
-  test('memory writes (preview) → needsApproval false (auto-approved)', async () => {
-    const { tools } = memoryTools('auto-reversible')
-    for (const name of ['memory_write', 'memory_delete']) {
-      const needs = await needsApprovalOf(tools[name])(
-        { scope: 'user', key: 'k', value: 'v' },
-        { toolCallId: `tc-${name}`, messages: [] }
-      )
-      expect(needs, `${name} should auto-approve in 'auto-reversible'`).toBe(false)
-    }
   })
 
   test('an auto-approved preview write still registers + verifies + executes + audits approved', async () => {
