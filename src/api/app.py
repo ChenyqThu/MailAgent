@@ -53,7 +53,7 @@ _AUTH_DISABLED = os.environ.get("MAILAGENT_API_AUTH_DISABLED", "").lower() == "t
 
 # CORS 白名单。生产仅放行远端 Web (Cloudflare Pages 域)。
 ALLOWED_ORIGINS = ["https://mail.chenge.ink"]
-# dev:web 本地 vite (localhost:5173) — **只**由 MAILAGENT_API_DEV_CORS 控 (C2)。
+# dev:web 本地 vite (localhost:5173-5174) — **只**由 MAILAGENT_API_DEV_CORS 控 (C2)。
 # 旧实现额外让 AUTH_DISABLED 也 widen CORS，把"跳鉴权"与"放本地 origin"耦死: 想本地连
 # 真 CF Access 只放 vite origin 时做不到，且 codex 标为 CORS 被 auth-disable 无意中放宽。
 # 两个旗标彻底解耦 —— auth-disable 只管 JWT (见 auth.py)，CORS 只看 _DEV_CORS。
@@ -61,11 +61,14 @@ if _DEV_CORS:
     ALLOWED_ORIGINS = ALLOWED_ORIGINS + [
         "http://localhost:5173",
         "http://127.0.0.1:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
     ]
 
 if _DEV_CORS:
     logger.warning(
-        "MAILAGENT_API_DEV_CORS=true — localhost:5173 added to CORS allowlist. "
+        "MAILAGENT_API_DEV_CORS=true — localhost:5173-5174 added to CORS allowlist "
+        "(electron-vite dev 端口 5173 被占时 fallback 5174，两者都放). "
         "MUST be off in production (REMOTE-ACCESS §6.4)."
     )
 if _AUTH_DISABLED:
