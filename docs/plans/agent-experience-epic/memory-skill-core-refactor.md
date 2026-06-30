@@ -176,6 +176,20 @@
 - **候选路径**（phase 内定）：(A) M0 工具改接 mem0（`memory_write`→`add(infer=False)`，`get/list`→mem0）+ kv 表只读冻结；(B) 偏好迁 user.md、事实迁 mem0 后 kv 数据迁移 + 表退役。
 - **flag-off 不变量**：不翻则 kv + M0 工具字节级照旧。
 
+#### ✅ M5a 落地（2026-06-30，main 未 push，trellis task `06-30-m5a-agent-memory-kv-flag-gated-mem0-dump-1`）
+
+**拍板**（4 路 Explore 影响面勘察 + 两轮 AskUserQuestion）：**路径 B（终态删表删工具，记忆只剩 user.md+mem0）+ 两段式节奏（M5a flag-gated 切换可回滚 / M5b 物理删并入任务B）**。**定性 = 真 cutover 非清死代码**（`memory_write` 工具默认 ON + dump 不受 flag 一直注入 = kv 活跃主记忆；mem0 默认关 dogfood）。
+
+- **M5a-0 spike**（`research/mem0-metadata-spike.md`）：mem0 2.0.10 **faiss payload 扁平** → `get_all(filters=)` 服务端任意 metadata 过滤（推翻 impact-map 悲观假设，无需 Python 全量筛）；`update(id,data,metadata)` merge 保 created_at；`add(infer=False)` 不 dedup → upsert 必模拟。
+- **M5a-1**（`40281c2f`）flag `MAILAGENT_MEMORY_KV_RETIRE`(config.py pydantic) + kv-over-mem0 适配层（engine `find/update/upsert_kv/delete_kv` 原语 + `src/memory/kv_over_mem0.py` 编解码壳，懒加载，**不 bump CHAT_DB_VERSION**）。
+- **M5a-2**（`bcfa0581`）4 个 `/api/chat/memory` 端点 flag-gated 改接（`run_in_threadpool` 包同步 adapter，priority None 透传复现 SQLite COALESCE）。
+- **M5a-3**（`356ae38b`）dump 退役 = **返回空**（`memorySummary='' + retired meta` + `_memory_projection` 返空绕过占位 shell）。**身份层注入零影响**（standingContext 只组装 SOUL/AGENT/RULES/USER，从不引用 memory；`_memory_projection` 仅 2 个展示端点消费者）。读侧改靠 M2 召回 + M3 user.md + agent 主动 memory_get。
+- **dual-review 每步 trellis-check(opus)+codex**：codex M5a-1 抓 **5 fix（opus 全漏，dual-review 价值）** —— 🔴 HIGH-1 `kind=agent_memory_kv` discriminator 隔离 capture 事实（kv/capture 共享 `user_id=owner` store）/ 🔴 HIGH-2 `priority: Optional[int]` 复现 COALESCE（mem0 `update` 是 metadata merge，main.py:1972-74）/ MEDIUM `find` top_k=10000 扫全部 / `_row_to_kv` 完整 wire shape(epoch ms) / 空串保留。M5a-3 codex 1 LOW（retired meta 补 caps 保形态）。**agent_eval 89 全程零回退**。配套 stub fix `2e113fea` 清 v1.0.1 standing-docs-editor 漏更新的 15 红 `/chat/config` 测试 stub。
+- **数据量实测**：打包 app 库 `agent_memory_kv` 仅 **1 行**（`communication_style`，provenance null=gateway 写）→ 迁移近零成本，无需 LLM 分类脚本；dogfood 翻 flag 前经 Settings 身份文档编辑器手动加进 `user.md`。
+- **dogfood gating**：`MAILAGENT_MEMORY_KV_RETIRE` 须同开 `MEM0_RETRIEVAL`+`USER_MD_COMPILE` 否则读侧空窗；`/chat/config` 按 runtime 缓存（legacy invalidate / gateway 15s TTL）须重启/刷新会话验证。
+
+**M5b（待续，并入任务B 删 legacy 同批）**：删 4 gateway 工具(`memory.ts`)/4 Python 端点/domainClient + DROP TABLE(`chat_db.ts` v16，**bump CHAT_DB_VERSION 15→16 + EXPECTED_DB_VERSION**) + 删 9 个 AGT-MEMORY task + tool_catalog 50→46 + 重录 baseline + 删 flag。删表破 legacy memory 回退 → 与 `CHAT_RUNTIME=legacy` 去留同决策（任务B 拍板点）。**eval memory 维度 M5b 永久移除**（mem0 capture/search 无工具、无法 zero-LLM rules 测）。
+
 ---
 
 ## 6. 贯穿铁律（每阶段都钉）
