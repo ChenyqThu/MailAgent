@@ -365,11 +365,11 @@ class Config(BaseSettings):
         ),
     )
     memory_capture_model: str = Field(
-        default="", env="MEMORY_CAPTURE_MODEL",
+        default="claude-haiku-4-5", validation_alias="MEMORY_CAPTURE_MODEL",
         description=(
             "M1 mem0 自动抽取记忆用的 LLM 模型名（经 CRS 的 anthropic 腿 /v1/messages，"
-            "claude 标准格式）。留空 → 复用 LLM_MODEL（claude-sonnet-4-6）。"
-            "仅 MAILAGENT_MEM0_CAPTURE 开时生效。"
+            "claude 标准格式）。默认 claude-haiku-4-5（便宜快，抽取每轮对话调一次）；"
+            "MEMORY_CAPTURE_MODEL env 可覆盖。仅 MAILAGENT_MEM0_CAPTURE 开时生效。"
         ),
     )
     user_md_compile_enabled: bool = Field(
