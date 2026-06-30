@@ -112,7 +112,12 @@ def build_mem0_config(model: Optional[str] = None) -> Dict[str, Any]:
                 "api_key": cfg.llm_api_key,
                 "anthropic_base_url": base,
                 "max_tokens": CAPTURE_MAX_TOKENS,
-                "temperature": 0.1,
+                # 显式传 None 覆盖 AnthropicConfig 的默认 temperature=0.1。
+                # claude-opus-4-8 等模型弃用 temperature 参数（400 invalid_request_error）；
+                # mem0 AnthropicConfig.__init__ 默认 0.1，仅省略 key 不够—必须传 None 让
+                # _get_common_params 的 `has_temperature = self.config.temperature is not None`
+                # 判为 False，才能不向 API 发送 temperature 字段。
+                "temperature": None,
             },
         },
         "embedder": {
