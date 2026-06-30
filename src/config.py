@@ -64,6 +64,7 @@ DATA_ROOT = _resolve_data_root()
 class Config(BaseSettings):
     """配置类"""
 
+    # 🔴 pydantic v2 忽略 Field(env=)；env 别名必须用 validation_alias（2026-06-30 修 9 flag env 链断 bug）。新增带 MAILAGENT_ 前缀且字段名≠env 的 flag 一律用 validation_alias。
     model_config = ConfigDict(
         env_file=_resolve_env_file(),
         env_file_encoding="utf-8",
@@ -372,7 +373,7 @@ class Config(BaseSettings):
         ),
     )
     user_md_compile_enabled: bool = Field(
-        default=False, env="MAILAGENT_USER_MD_COMPILE",
+        default=False, validation_alias="MAILAGENT_USER_MD_COMPILE",
         description=(
             "M3 user.md 偏好编译总开关。开时 Settings「从记忆编译偏好」按钮可见 + "
             "/api/chat/memory/compile-user-md 端点放行（mem0.get_all → LLM 合并现有 user.md "
@@ -381,7 +382,7 @@ class Config(BaseSettings):
         ),
     )
     memory_kv_retire_enabled: bool = Field(
-        default=False, env="MAILAGENT_MEMORY_KV_RETIRE",
+        default=False, validation_alias="MAILAGENT_MEMORY_KV_RETIRE",
         description=(
             "M5a agent_memory_kv 退役总开关（默认关，dogfood）。开时 4 个 /api/chat/memory 端点"
             "（list/get/upsert/delete，M0 显式记忆工具落点）改接 mem0 独立 store —— kv-over-mem0 "
@@ -393,7 +394,7 @@ class Config(BaseSettings):
         ),
     )
     standing_docs_editor_enabled: bool = Field(
-        default=True, env="MAILAGENT_STANDING_DOCS_EDITOR",
+        default=True, validation_alias="MAILAGENT_STANDING_DOCS_EDITOR",
         description=(
             "Settings 身份文档编辑器总开关（默认开）。开时 AI tab 出现「身份文档 / Standing Context」"
             "section，列出 SOUL/AGENT/RULES/USER 4 个文档，支持查看 + 手动编辑 + 版本历史/rollback。"
@@ -449,11 +450,11 @@ class Config(BaseSettings):
         description="harness 每轮成本上限 USD (累加 usage.costUsd, 超出 emit E_COST_BUDGET)。",
     )
     agent_harness_enabled: bool = Field(
-        default=True, env="MAILAGENT_AGENT_HARNESS",
+        default=True, validation_alias="MAILAGENT_AGENT_HARNESS",
         description="多轮 agent harness 总开关。false → dispatcher 走 legacy 单遍 (应急回退)。",
     )
     kos_consumer_enabled: bool = Field(
-        default=False, env="MAILAGENT_KOS_CONSUMER_ENABLED",
+        default=False, validation_alias="MAILAGENT_KOS_CONSUMER_ENABLED",
         description=(
             "KOS consumer chat 工具 (kos_query / kos_digest 等 9 个) 是否注册 + KOS "
             "使用指南块是否注入 system prompt。/chat/config 的 kosConfigured 即此值 "
@@ -462,11 +463,11 @@ class Config(BaseSettings):
         ),
     )
     kos_l1_hot_block_enabled: bool = Field(
-        default=False, env="MAILAGENT_KOS_L1_HOT_BLOCK_ENABLED",
+        default=False, validation_alias="MAILAGENT_KOS_L1_HOT_BLOCK_ENABLED",
         description="L1 hot block: chat start 按发件人预取 KOS people digest 注入 system prompt。",
     )
     kos_time_decay_enabled: bool = Field(
-        default=True, env="MAILAGENT_KOS_TIME_DECAY_ENABLED",
+        default=True, validation_alias="MAILAGENT_KOS_TIME_DECAY_ENABLED",
         description="kos_query 命中按 14d 半衰期时间衰减 rerank (false → 纯服务端 bm25 序)。",
     )
 
@@ -645,7 +646,7 @@ class Config(BaseSettings):
         ),
     )
     davmail_imap_host: str = Field(
-        default="127.0.0.1", env="DAVMAIL_HOST",
+        default="127.0.0.1", validation_alias="DAVMAIL_HOST",
         description="DavMail JVM bind 地址 (PM2 davmail-poc 默认仅 127.0.0.1, 勿暴露公网)",
     )
     davmail_root: str = Field(
@@ -664,7 +665,7 @@ class Config(BaseSettings):
         default=1025, env="DAVMAIL_SMTP_PORT", description="DavMail SMTP submission 端口",
     )
     davmail_cipher_key: str = Field(
-        default="", env="DAVMAIL_POC_CIPHER_KEY",
+        default="", validation_alias="DAVMAIL_POC_CIPHER_KEY",
         description=(
             "DavMail StringEncryptor password (= IMAP/SMTP AUTH password). "
             "留空时若 davmail_poc_mode=True 走 fallback 默认 'mailagent-poc-shared-key' "
