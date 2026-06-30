@@ -1004,14 +1004,24 @@ async def save_to_kos(request: Request, body: Optional[Dict[str, Any]] = None):
 
 @router.get("/memory", dependencies=[Depends(verify_cf_access)])
 async def list_memory(request: Request, scope: Optional[str] = Query(None)):
-    """列 memory 条目（可选 scope 过滤，按 updated_at 倒序）。镜像 chat_db listMemoryEntries。"""
+    """列 memory 条目（可选 scope 过滤，按 updated_at 倒序）。镜像 chat_db listMemoryEntries。
+    flag `MAILAGENT_MEMORY_KV_RETIRE` on → kv-over-mem0 适配层；off → ChatDb 字节级原样（M5a-2）。"""
+    if get_settings().memory_kv_retire_enabled:
+        from src.memory.kv_over_mem0 import kv_list  # 懒 import：flag-off 不加载 mem0
+        rows = await run_in_threadpool(kv_list, scope)
+        return success_envelope(rows, request=request, source="mem0", meta_extra={"count": len(rows)})
     rows = get_chat_db().list_memory_entries(scope)
     return success_envelope(rows, request=request, source="sqlite", meta_extra={"count": len(rows)})
 
 
 @router.get("/memory/entry", dependencies=[Depends(verify_cf_access)])
 async def get_memory(request: Request, scope: str = Query(...), key: str = Query(...)):
-    """单条 memory（data=row|null，不 404 —— null 是正常「没记过此 key」结果）。"""
+    """单条 memory（data=row|null，不 404 —— null 是正常「没记过此 key」结果）。
+    flag `MAILAGENT_MEMORY_KV_RETIRE` on → kv-over-mem0 适配层；off → ChatDb 字节级原样（M5a-2）。"""
+    if get_settings().memory_kv_retire_enabled:
+        from src.memory.kv_over_mem0 import kv_get  # 懒 import：flag-off 不加载 mem0
+        row = await run_in_threadpool(kv_get, scope, key)
+        return success_envelope(row, request=request, source="mem0")
     row = get_chat_db().get_memory_entry(scope, key)
     return success_envelope(row, request=request, source="sqlite")
 
@@ -1056,6 +1066,20 @@ async def upsert_memory(request: Request, body: Optional[Dict[str, Any]] = None)
     if source_tool_use_id is not None and not isinstance(source_tool_use_id, str):
         raise APIError("E_INVALID_ARG", "memory sourceToolUseId must be a string", source="sqlite")
 
+    # M5a-2：flag-on → kv-over-mem0 适配层（懒 import，flag-off 不加载 mem0）。
+    # 🔴 priority 原样透传（HIGH-2）：None = COALESCE「不动旧值」；显式 int 才覆盖。绝不在端点默认成 0。
+    # 注意：provenance（source_*）不落 mem0（write-only-never-read，M5b 随表删），适配层 row
+    # 的 source_* = None —— wire 兼容（前端 memory.ts:190 读回但 gateway 写时本就是 null）。
+    if get_settings().memory_kv_retire_enabled:
+        _scope, _key, _value, _priority = scope, key, value_json, priority
+
+        def _do_upsert():
+            from src.memory.kv_over_mem0 import kv_get, kv_upsert  # 懒 import
+            kv_upsert(_scope, _key, _value, _priority)
+            return kv_get(_scope, _key)
+
+        row = await run_in_threadpool(_do_upsert)
+        return success_envelope(row, request=request, source="mem0")
     row = get_chat_db().upsert_memory_entry(
         scope,
         key,
@@ -1071,7 +1095,12 @@ async def upsert_memory(request: Request, body: Optional[Dict[str, Any]] = None)
 
 @router.delete("/memory", dependencies=[Depends(verify_cf_access)])
 async def delete_memory(request: Request, scope: str = Query(...), key: str = Query(...)):
-    """删一条 memory → {deleted: count}。删不存在的 (scope,key) 也返 {deleted:0}（幂等）。"""
+    """删一条 memory → {deleted: count}。删不存在的 (scope,key) 也返 {deleted:0}（幂等）。
+    flag `MAILAGENT_MEMORY_KV_RETIRE` on → kv-over-mem0 适配层；off → ChatDb 字节级原样（M5a-2）。"""
+    if get_settings().memory_kv_retire_enabled:
+        from src.memory.kv_over_mem0 import kv_delete  # 懒 import：flag-off 不加载 mem0
+        count = await run_in_threadpool(kv_delete, scope, key)
+        return success_envelope({"deleted": count}, request=request, source="mem0")
     count = get_chat_db().delete_memory_entry(scope, key)
     return success_envelope({"deleted": count}, request=request, source="sqlite")
 
