@@ -249,6 +249,7 @@ class _ChatConfigStub:
     kos_time_decay_enabled = True
     llm_model = "claude-sonnet-4-6"
     user_md_compile_enabled = False
+    standing_docs_editor_enabled = True
 
 
 def _config_client(
@@ -323,6 +324,8 @@ def test_chat_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
         "skillOverridesAvailable": True,
         # M3c — user.md 偏好编译 flag（default False；M3c 把它加进 /chat/config）。
         "userMdCompileEnabled": False,
+        # standing-docs-editor flag（default True；4f4f71f2 加进 /chat/config）。
+        "standingDocsEditorEnabled": True,
     }
 
 
