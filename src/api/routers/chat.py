@@ -31,6 +31,7 @@ from dotenv import dotenv_values
 from src.api.app import APIError, success_envelope
 from src.api.auth import verify_cf_access
 from src.api.deps import get_chat_db, get_env_file_path, get_settings
+from src.chat.db import MEMORY_INJECT_MAX_CHARS, MEMORY_INJECT_MAX_ENTRIES
 from src.chat.kos_save import SaveConversationError, save_conversation_to_kos
 from src.chat.notion_agent import run_notion_agent, sse_encode
 from src.kos.client import KOSClient, KOSError
@@ -303,13 +304,32 @@ async def chat_config(request: Request):
     # (priority DESC, updated_at DESC) + caps; memorySummaryMeta exposes
     # injected/total/truncated/caps so the injection is observable (DoD 2).
     # Best-effort: db missing / empty → "" + meta None.
-    try:
-        _mem_meta = get_chat_db().memory_summary_meta()
-        memory_summary = _mem_meta["text"]
-        memory_summary_meta = {k: v for k, v in _mem_meta.items() if k != "text"}
-    except Exception:  # noqa: BLE001 — memory is best-effort; never fail /config
+    # M5a-3 — agent_memory_kv dump 退役（flag MAILAGENT_MEMORY_KV_RETIRE，config.py pydantic）。
+    # flag-on → memorySummary='' → custom_api.ts:290 `if (cfg.memorySummary && ...)` 真值门控不
+    # 注入旧 `# Saved memory` 块（前端零改）；meta 标 retired 供可观测（前端不读 meta，纯诊断）。
+    # 读侧改靠 mem0 召回（M2 MAILAGENT_MEM0_RETRIEVAL）+ user.md 恒注入（M3）+ agent 主动
+    # memory_get/list 查 mem0-kv（M5a-2 已改接）。🔴 dogfood：KV_RETIRE 须配 MEM0_RETRIEVAL +
+    # USER_MD_COMPILE 同开，否则读侧空窗。flag-on 不查 kv 表（退役即不读）；flag-off → 逐字走
+    # memory_summary_meta（字节级不变）。
+    if cfg.memory_kv_retire_enabled:
         memory_summary = ""
-        memory_summary_meta = None
+        memory_summary_meta = {
+            "injected": 0,
+            "total": 0,
+            "chars": 0,
+            "truncated": False,
+            "max_entries": MEMORY_INJECT_MAX_ENTRIES,
+            "max_chars": MEMORY_INJECT_MAX_CHARS,
+            "retired": True,
+        }
+    else:
+        try:
+            _mem_meta = get_chat_db().memory_summary_meta()
+            memory_summary = _mem_meta["text"]
+            memory_summary_meta = {k: v for k, v in _mem_meta.items() if k != "text"}
+        except Exception:  # noqa: BLE001 — memory is best-effort; never fail /config
+            memory_summary = ""
+            memory_summary_meta = None
     # Phase -1 / 0A — config snapshot hashes for Phase 0 eval trace (reproducible
     # baseline). agentProfileHash = hash of the 4 editable profile docs' content
     # hashes; installedSkillsHash = builtin name|version signature + installed-rows

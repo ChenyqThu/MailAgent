@@ -51,6 +51,25 @@ def test_get_memory_projection(client, fresh_agent_cfg):
     assert "# MEMORY" in d["content"]
 
 
+def test_memory_projection_retired_when_flag_on(client, fresh_agent_cfg, monkeypatch):
+    """M5a-3 — MAILAGENT_MEMORY_KV_RETIRE on → MEMORY 投影干净省略（content=''），
+    非 memory_doc_projection('') 的「No durable memory yet」空壳。读侧改靠 mem0（M2）+ user.md（M3）。"""
+    import src.config as cfgmod
+
+    monkeypatch.setattr(cfgmod.config, "memory_kv_retire_enabled", True)
+    # 单文档端点：MEMORY content 干净省略（无 # MEMORY 空壳）。
+    d = client.get("/api/agent/profile/docs/memory").json()["data"]
+    assert d["docName"] == "memory"
+    assert d["editable"] is False
+    assert d["content"] == ""
+    assert "# MEMORY" not in d["content"]
+    # 列表端点同样省略 MEMORY 内容（SKILLS 投影不受影响）。
+    docs = client.get("/api/agent/profile/docs").json()["data"]["docs"]
+    by_name = {x["docName"]: x for x in docs}
+    assert by_name["memory"]["content"] == ""
+    assert "# SKILLS" in by_name["skills"]["content"]
+
+
 def test_get_skills_projection(client, fresh_agent_cfg):
     r = client.get("/api/agent/profile/docs/skills")
     assert r.status_code == 200
