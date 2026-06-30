@@ -10,6 +10,8 @@ Phase -1 / 0A：每个用户首次访问时由 ``AgentConfigStore`` 把这些模
 - ``SOUL`` 故意做成 **surface-agnostic**（不写「当前打开的邮件」之类邮件态专属措辞）——
   邮件态的「当前邮件」由 ``buildEmailContextSection`` 单独作为 session context 追加，
   所以通用（Cmd+O）会话不会被错误地告知「在看某封邮件」。
+- ``MEMORY`` / ``SKILLS`` **不在此** —— MEMORY 是只读投影（M5b 后内容恒空），SKILLS 是
+  skill registry 的只读投影，均不存表。
 - 全英文，与既有生产 system prompt 语言一致（agent 仍按用户输入语言回复）。
 """
 

@@ -27,9 +27,9 @@ def test_list_profile_docs_returns_six(client, fresh_agent_cfg):
     by_name = {d["docName"]: d for d in docs}
     assert by_name["soul"]["content"] == SEED_TEMPLATES["soul"]
     assert by_name["soul"]["contentHash"]  # 非空
-    # 投影文档无 hash
+    # 投影文档无 hash；M5b 后 MEMORY 内容恒空（KV 退役无条件）
     assert by_name["memory"]["contentHash"] is None
-    assert "# MEMORY" in by_name["memory"]["content"]
+    assert by_name["memory"]["content"] == ""
     assert "# SKILLS" in by_name["skills"]["content"]
 
 
@@ -44,21 +44,13 @@ def test_get_editable_doc(client, fresh_agent_cfg):
 
 
 def test_get_memory_projection(client, fresh_agent_cfg):
+    """M5b — agent_memory_kv 退役无条件 → MEMORY 投影 content=''（干净省略，
+    非 memory_doc_projection('') 的「No durable memory yet」空壳）。
+    读侧改靠 mem0（M2）+ user.md（M3）。"""
+    # 单文档端点：MEMORY content 干净省略（无 # MEMORY 空壳）。
     r = client.get("/api/agent/profile/docs/memory")
     assert r.status_code == 200
     d = r.json()["data"]
-    assert d["editable"] is False
-    assert "# MEMORY" in d["content"]
-
-
-def test_memory_projection_retired_when_flag_on(client, fresh_agent_cfg, monkeypatch):
-    """M5a-3 — MAILAGENT_MEMORY_KV_RETIRE on → MEMORY 投影干净省略（content=''），
-    非 memory_doc_projection('') 的「No durable memory yet」空壳。读侧改靠 mem0（M2）+ user.md（M3）。"""
-    import src.config as cfgmod
-
-    monkeypatch.setattr(cfgmod.config, "memory_kv_retire_enabled", True)
-    # 单文档端点：MEMORY content 干净省略（无 # MEMORY 空壳）。
-    d = client.get("/api/agent/profile/docs/memory").json()["data"]
     assert d["docName"] == "memory"
     assert d["editable"] is False
     assert d["content"] == ""

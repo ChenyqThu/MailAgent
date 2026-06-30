@@ -59,7 +59,6 @@ graceful」处理：生产里前端 ``getChatDb()`` 在任何 renderer harness �
 
 from __future__ import annotations
 
-import json
 import os
 import sqlite3
 import time
@@ -70,14 +69,6 @@ from typing import Any, Dict, List, Optional
 def _now_ms() -> int:
     """epoch 毫秒（对齐 chat_db.ts ``Date.now()``，所有写的 created_at/updated_at 用它）。"""
     return int(time.time() * 1000)
-
-
-# P2a (task 06-23) — prompt-injection 相关性选择的上限。注入 system prompt 的 memory
-# 是「规则化挑选」而非全量：scope 过滤 + ORDER BY priority DESC, updated_at DESC，截前
-# MEMORY_INJECT_MAX_ENTRIES 条 + MEMORY_INJECT_MAX_CHARS 字符。上限防 unrelated 偏好刷屏/
-# 污染上下文；``memory_summary_meta`` 暴露 injected/total/truncated 供 /chat/config 可观测。
-MEMORY_INJECT_MAX_ENTRIES = 20
-MEMORY_INJECT_MAX_CHARS = 2000
 
 
 def _resolve_anchor(
@@ -601,151 +592,3 @@ class ChatDb:
             (message_id, tool_use_id),
         )
 
-    # ── agent_memory_kv（P2f — Custom AI memory WAL）───────────────────────
-
-    def list_memory_entries(self, scope: Optional[str] = None) -> List[Dict[str, Any]]:
-        """memory 条目（按 updated_at 倒序），可选 scope 过滤。镜像 chat_db.ts listMemoryEntries。"""
-        if scope:
-            return self._read_all(
-                "SELECT * FROM agent_memory_kv WHERE scope = ? ORDER BY updated_at DESC", (scope,)
-            )
-        return self._read_all("SELECT * FROM agent_memory_kv ORDER BY updated_at DESC")
-
-    def get_memory_entry(self, scope: str, key: str) -> Optional[Dict[str, Any]]:
-        """单条 memory or None。镜像 chat_db.ts getMemoryEntry。"""
-        return self._read_one(
-            "SELECT * FROM agent_memory_kv WHERE scope = ? AND key = ?", (scope, key)
-        )
-
-    def upsert_memory_entry(
-        self,
-        scope: str,
-        key: str,
-        value_json: str,
-        source_wiki_path: Optional[str] = None,
-        source_session_id: Optional[int] = None,
-        source_message_id: Optional[int] = None,
-        source_tool_use_id: Optional[str] = None,
-        priority: Optional[int] = None,
-    ) -> Dict[str, Any]:
-        """UPSERT 一条 memory（PK (scope,key)）。created_at 更新时保留。镜像 chat_db.ts
-        upsertMemoryEntry。schema 归前端 owns（agent_memory_kv 由 chat_db.ts v3 建、v8 加
-        provenance/priority 列），serve-api 只写既有表。
-
-        v8（P2a）：provenance（source_session_id/source_message_id/source_tool_use_id）冲突时
-        更新为最新写入者的会话/消息/工具。``priority`` 用 COALESCE 保留：写入省略 priority
-        （如 agent 仅刷新 value）保住用户已置的优先级、不悄悄清零；显式给值则覆盖；全新行省略
-        → 默认 0。"""
-        now = _now_ms()
-        with self._write_connection() as conn:
-            conn.execute(
-                "INSERT INTO agent_memory_kv "
-                "(scope, key, value_json, source_wiki_path, source_session_id, "
-                "source_message_id, source_tool_use_id, priority, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(?, 0), ?, ?) "
-                "ON CONFLICT(scope, key) DO UPDATE SET "
-                "value_json = excluded.value_json, source_wiki_path = excluded.source_wiki_path, "
-                "source_session_id = excluded.source_session_id, "
-                "source_message_id = excluded.source_message_id, "
-                "source_tool_use_id = excluded.source_tool_use_id, "
-                "priority = COALESCE(?, agent_memory_kv.priority), "
-                "updated_at = excluded.updated_at",
-                (
-                    scope, key, value_json, source_wiki_path, source_session_id,
-                    source_message_id, source_tool_use_id, priority, now, now, priority,
-                ),
-            )
-            row = conn.execute(
-                "SELECT * FROM agent_memory_kv WHERE scope = ? AND key = ?", (scope, key)
-            ).fetchone()
-            return dict(row)
-
-    def delete_memory_entry(self, scope: str, key: str) -> int:
-        """删一条 memory → 删除行数。镜像 chat_db.ts deleteMemoryEntry。"""
-        with self._write_connection() as conn:
-            cur = conn.execute(
-                "DELETE FROM agent_memory_kv WHERE scope = ? AND key = ?", (scope, key)
-            )
-            return cur.rowcount
-
-    def _select_injection_rows(self, scope: str, max_entries: int) -> List[Dict[str, Any]]:
-        """P2a — 规则化相关性选择：scope 过滤 + ORDER BY priority DESC, updated_at DESC，取前
-        max_entries 条。priority 默认 0 → 无显式优先级时退化为纯 updated_at DESC（与旧行为逐字
-        一致）。priority 列 v8 引入；遇老库/未迁移库（no such column）回退纯 updated_at 排序，
-        其余 sqlite 错误（库锁/表缺）→ [] graceful，不阻断 /chat/config。ORDER 串为硬编码非用户
-        输入，f-string 安全。"""
-        if not os.path.exists(self.db_path):
-            return []
-        for order in ("priority DESC, updated_at DESC", "updated_at DESC"):
-            try:
-                with self._connection() as conn:
-                    return [
-                        dict(r)
-                        for r in conn.execute(
-                            f"SELECT * FROM agent_memory_kv WHERE scope = ? "
-                            f"ORDER BY {order} LIMIT ?",
-                            (scope, max_entries),
-                        ).fetchall()
-                    ]
-            except sqlite3.OperationalError:
-                continue  # no such column: priority（老库）→ retry 纯 updated_at
-            except sqlite3.Error:
-                return []
-        return []
-
-    @staticmethod
-    def _format_memory_value(raw: Any) -> Any:
-        """value_json 解出标量则直接用，否则 compact JSON（注入 prompt 用人读形态）。"""
-        try:
-            parsed = json.loads(raw) if isinstance(raw, str) else raw
-            if isinstance(parsed, (str, int, float, bool)):
-                return parsed
-            return json.dumps(parsed, ensure_ascii=False)
-        except (ValueError, TypeError):
-            return raw
-
-    def memory_summary(
-        self,
-        scope: str = "user",
-        limit: int = MEMORY_INJECT_MAX_ENTRIES,
-        max_chars: int = MEMORY_INJECT_MAX_CHARS,
-    ) -> str:
-        """紧凑 memory 摘要文本供 system prompt 注入（规则化相关性 + 限长防污染）。
-        = memory_summary_meta(...)['text']（保持原 str 契约，agent.py / projections.py 不破）。"""
-        return self.memory_summary_meta(scope, limit, max_chars)["text"]
-
-    def memory_summary_meta(
-        self,
-        scope: str = "user",
-        limit: int = MEMORY_INJECT_MAX_ENTRIES,
-        max_chars: int = MEMORY_INJECT_MAX_CHARS,
-    ) -> Dict[str, Any]:
-        """P2a — 注入摘要 + 可观测 meta。规则化相关性挑前 limit 条（priority DESC, updated_at
-        DESC），格式化为 `- key: value`，整体截断 max_chars。返回
-        {text, injected, total, chars, truncated, max_entries, max_chars}：
-          - `injected` = 被条数上限选中、参与注入的条目数（`injected` < `total` 即尾部低优先级
-            条目被条数上限截掉）；
-          - `truncated` = 拼接文本超 max_chars 被字符级截断（此时末尾若干条目正文被裁，故实际进
-            prompt 的完整条目可能少于 `injected`）。
-        库不存在/表空 → text=''、计数 0（graceful，不阻断 /chat/config）。`total` 走 COUNT(*)
-        单查（不 materialize 全表）。"""
-        cnt = self._read_one(
-            "SELECT COUNT(*) AS n FROM agent_memory_kv WHERE scope = ?", (scope,)
-        )
-        total = int(cnt["n"]) if cnt else 0
-        rows = self._select_injection_rows(scope, limit)
-        lines = [f"- {r['key']}: {self._format_memory_value(r.get('value_json'))}" for r in rows]
-        text = "\n".join(lines)
-        truncated = False
-        if len(text) > max_chars:
-            text = text[:max_chars] + "\n… (truncated)"
-            truncated = True
-        return {
-            "text": text,
-            "injected": len(rows),
-            "total": total,
-            "chars": len(text),
-            "truncated": truncated,
-            "max_entries": limit,
-            "max_chars": max_chars,
-        }

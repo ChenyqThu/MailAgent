@@ -250,7 +250,6 @@ class _ChatConfigStub:
     llm_model = "claude-sonnet-4-6"
     user_md_compile_enabled = False
     standing_docs_editor_enabled = True
-    memory_kv_retire_enabled = False
 
 
 def _config_client(
@@ -331,15 +330,11 @@ def test_chat_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_chat_config_memory_dump_retired(monkeypatch: pytest.MonkeyPatch) -> None:
-    """M5a-3 — MAILAGENT_MEMORY_KV_RETIRE on → memorySummary='' (kv dump 退役 → 前端
+    """M5b — agent_memory_kv dump 退役无条件 → memorySummary='' (前端
     `if (cfg.memorySummary && ...)` 真值门控不注入旧 `# Saved memory` 块，前端零改) +
     memorySummaryMeta 标 retired:True 供可观测。读侧改靠 mem0 召回（M2）+ user.md（M3）。
-    flag-on 路径不查 kv 表 → 不依赖 get_chat_db stub。"""
-
-    class _Stub(_ChatConfigStub):
-        memory_kv_retire_enabled = True
-
-    with _config_client(monkeypatch, _Stub()) as c:
+    退役无条件 → 不依赖 get_chat_db stub。"""
+    with _config_client(monkeypatch, _ChatConfigStub()) as c:
         r = c.get("/api/chat/config")
     assert r.status_code == 200
     data = r.json()["data"]

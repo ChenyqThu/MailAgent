@@ -11,7 +11,6 @@ from src.agent_config.projections import (
     advertised_skill_names,
     builtin_skills_signature,
     compute_installed_skills_hash,
-    memory_doc_projection,
     resolved_skills,
     skill_overrides_map,
     skills_doc_projection,
@@ -37,16 +36,8 @@ def _skill(
 # ---------------------------------------------------------------------------
 # 文档投影
 # ---------------------------------------------------------------------------
-def test_memory_projection_empty():
-    out = memory_doc_projection("")
-    assert "# MEMORY" in out
-    assert "No durable memory yet" in out
-
-
-def test_memory_projection_with_body():
-    out = memory_doc_projection("- name: Alice\n- tz: PDT")
-    assert out.startswith("# MEMORY")
-    assert "- name: Alice" in out
+# MEMORY 投影（memory_doc_projection）随 M5b agent_memory_kv 退役删除 —— MEMORY content
+# 现恒空（src/api/routers/agent.py:_memory_projection 无条件返 ''），不再有 markdown-头投影。
 
 
 def test_skills_projection_lists_skills_sorted():

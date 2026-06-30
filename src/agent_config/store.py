@@ -43,7 +43,7 @@ from src.agent_config.templates import SEED_TEMPLATES
 
 # 用户可编辑、落 agent_profile_docs 的 4 个文档。
 PROFILE_DOC_NAMES: tuple[str, ...] = ("soul", "agent", "rules", "user")
-# 投影文档（agent_memory_kv / installed skill registry 的只读视图）—— 不存表。
+# 投影文档（只读视图，M5b 后 MEMORY 恒空，SKILLS 来自 skill registry）—— 不存表。
 PROJECTION_DOC_NAMES: tuple[str, ...] = ("memory", "skills")
 
 # 可安装 skill 的来源类型（builtin 来自代码，不算"安装"）。

@@ -14,7 +14,6 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, Query, Request
 
 from src.agent_config.projections import (
-    memory_doc_projection,
     resolved_skills,
     skills_doc_projection,
 )
@@ -25,7 +24,6 @@ from src.agent_config.store import (
 )
 from src.api.app import APIError, success_envelope
 from src.api.auth import verify_cf_access
-from src.api.deps import get_chat_db, get_settings
 
 router = APIRouter(prefix="/api/agent", tags=["agent"])
 
@@ -63,20 +61,9 @@ def _projection_doc_dict(doc_name: str, content: str) -> dict[str, Any]:
 
 
 def _memory_projection() -> str:
-    """MEMORY.md 投影（复用 ChatDb.memory_summary）。best-effort：库缺/锁 → 空占位。
-
-    M5a-3：MAILAGENT_MEMORY_KV_RETIRE on → kv dump 退役 → MEMORY 段干净省略（直接返 ''）。
-    🔴 不能走 ``memory_doc_projection('')`` —— 它对空 summary 返回 ``# MEMORY\\n\\n(No durable
-    memory yet.)\\n`` 占位空壳（误导「还没记忆」），故 flag-on 显式跳过、直接返 ''。读侧改靠
-    mem0 召回（M2）+ user.md 恒注入（M3）。flag-off → 字节级照旧（memory_doc_projection(summary)）。
-    """
-    if get_settings().memory_kv_retire_enabled:
-        return ""
-    try:
-        summary = get_chat_db().memory_summary()
-    except Exception:  # noqa: BLE001 — projection best-effort
-        summary = ""
-    return memory_doc_projection(summary)
+    """MEMORY.md 投影 — M5b 退役后恒返 ''（无条件）。
+    记忆读侧改靠 mem0 召回（M2）+ user.md 恒注入（M3）。"""
+    return ""
 
 
 def _skills_projection() -> str:

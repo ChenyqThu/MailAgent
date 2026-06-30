@@ -1,10 +1,10 @@
 """M1b — mem0 auto-capture 端点契约测试（mock 引擎，无网络/无模型下载/无 FAISS）。
 
 ``POST /api/chat/memory/capture``：从一个完成的 chat turn 抽取持久记忆（mem0.add）。
-与 test_chat_memory.py（agent_memory_kv 显式层）**正交** —— 这里测 M1 的 mem0 自动抽取层
-（独立 FAISS store）。Mem0Engine 全程 mock（patch ``get_mem0_engine`` —— capture 端点函数内
-import 它），故零网络 + 绝不加载 mem0/fastembed/faiss 重依赖。auth bypass 默认 ON（conftest
-设 MAILAGENT_API_AUTH_DISABLED=true）。
+M5b 后 agent_memory_kv 显式 KV 层已退役（test_chat_memory.py 随之删除）—— 这里只测
+M1 的 mem0 自动抽取层（独立 FAISS store）。Mem0Engine 全程 mock（patch ``get_mem0_engine``
+—— capture 端点函数内 import 它），故零网络 + 绝不加载 mem0/fastembed/faiss 重依赖。
+auth bypass 默认 ON（conftest 设 MAILAGENT_API_AUTH_DISABLED=true）。
 """
 
 from __future__ import annotations

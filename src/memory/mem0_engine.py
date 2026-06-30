@@ -45,18 +45,6 @@ CAPTURE_MAX_TOKENS = 8192
 # （如把多线程邮件 dump 粘进 chat）截断到此，省 token + 防 threadpool slot 被慢抽取长占。
 CAPTURE_TEXT_MAX_CHARS = 8000
 
-# ── M5a kv-over-mem0 适配层常量 ──────────────────────────────────────────────
-# kv-over-mem0 写的行的 metadata discriminator。**关键**（codex M5a-1 HIGH-1）：kv 适配层与 M1/M2
-# 的 auto-capture 写**同一** mem0 store + **同一** user_id（DEFAULT_USER_ID="owner"）。capture 的行
-# metadata 是 {source:"auto_capture", session_id?, message_id?}（**无** scope/key），若 kv_list 只按
-# user_id 过滤会把 capture 事实当成畸形 KV 行（scope/key=None）捞出来 + 在 top_k 下挤掉真 KV 行。故所有
-# **kv 用途**的 find/upsert/delete filters 都钉 kind=KV_KIND，capture 事实绝不混入 KV API。
-KV_KIND = "agent_memory_kv"
-# kv 操作（upsert dupe 清理 / delete_kv / list）取 mem0 的 top_k 上限。mem0 `get_all` 默认 top_k=20
-# （main.py:1202），会截断 → 漏掉 >20 行的 dupe 清理 / 列表（codex M5a-1 MEDIUM-1）。kv 量级 dogfood
-# ≤ 数十行，给一个远超的显式 cap = 实质「扫全部」（mem0 仅校验 top_k≥0 无上界，main.py:196-201）。
-KV_FETCH_CAP = 10000
-
 # mem0 抽取约束（注入 mem0 `custom_instructions`）：只抽持久偏好/事实，绝不抽一次性任务态。
 # 与 RULES floor「绝不静默写一次性任务态」叠加（floor 在系统层，这里在抽取层，双重约束）。
 CAPTURE_INSTRUCTIONS = """\
@@ -197,93 +185,6 @@ class Mem0Engine:
     def delete(self, memory_id: str) -> None:
         with self._store_lock:
             self._memory().delete(memory_id)
-
-    # ── M5a kv-over-mem0 原语（agent_memory_kv 退役适配层底座）────────────────────
-    # 仅 MAILAGENT_MEMORY_KV_RETIRE flag-on 时经 src.memory.kv_over_mem0 被调；flag-off 无人
-    # 调用 → 零行为变化。**现有 add/search/get_all/delete 4 签名绝不动**（capture/search/compile/
-    # undo 调用方字节稳定，flag-off 不变量），以下为新增方法。
-    #
-    # kv 语义映射（spike research/mem0-metadata-spike.md §2 定死）：value_json → memory 文本；
-    # {scope,key,priority} → metadata（faiss 扁平 payload，get_all 服务端任意字段过滤）。mem0
-    # add(infer=False) **不 dedup**（spike Q-dup）→ (scope,key) 唯一靠 upsert_kv 模拟。
-    # 复合方法（upsert_kv/delete_kv）的 find+mutate 须在**单次持锁**内（FAISS 无内部锁），且内部
-    # 用 raw `_memory()` op —— **不**调 self.find/self.update（_store_lock 非可重入，自调会死锁）。
-
-    def find(self, filters: Dict[str, Any], top_k: int = KV_FETCH_CAP) -> list:
-        """get_all + 任意 metadata 字段过滤（spike 证 faiss _apply_filters 匹配任意 payload key）。
-        filters 须含 user_id（mem0 强制至少一个 entity id）+ 可选 scope/key 精确寻址。返回 results
-        列表（区别现有 get_all 返回 {"results":...} dict —— kv 适配便利直接解包）。
-
-        🔴 top_k 显式高 cap（默认 KV_FETCH_CAP）覆盖 mem0 默认 20（codex M5a-1 MEDIUM-1）：kv 语义须
-        看到全部匹配行（list 全量 / dupe 清理），20 截断会漏行。"""
-        with self._store_lock:
-            return self._memory().get_all(filters=filters, top_k=top_k).get("results", [])
-
-    def update(
-        self,
-        memory_id: str,
-        *,
-        data: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-    ) -> None:
-        """原地更新一条 memory（spike Q3：保 id + created_at，merge metadata，刷新 updated_at）。"""
-        with self._store_lock:
-            self._memory().update(memory_id, data=data, metadata=metadata)
-
-    def upsert_kv(
-        self, scope: str, key: str, value_json: str, priority: Optional[int] = None
-    ) -> None:
-        """(scope,key) UPSERT over mem0（单 _store_lock span 复合，保原子 + (scope,key) 唯一）。
-        命中既有 → update（保 created_at）+ 清陈旧 dupes；未命中 → add(infer=False)。
-
-        🔴 priority = COALESCE 语义（codex M5a-1 HIGH-2，忠实复现 SQLite upsert_memory_entry：INSERT
-        `COALESCE(?, 0)` / UPDATE `COALESCE(?, agent_memory_kv.priority)`，db.py:645/651）：``None`` =
-        「不动 priority」——update 路径**省略** priority（mem0 update 的 metadata 是 **merge**：
-        `new_metadata = deepcopy(existing_payload); new_metadata.update(metadata)`，main.py:1972-1974
-        实测 → 省略即保留旧值，pinned 记忆不被 value-only 覆写降回 0）；insert 路径回退 0。显式 int 则覆盖。
-
-        🔴 kind=KV_KIND 钉进 metadata + dupe-find filters（codex M5a-1 HIGH-1）：与 capture 事实隔离。
-        🔴 dupe-find top_k=KV_FETCH_CAP（codex M5a-1 MEDIUM-1）：清理须看到 >20 行的全部历史 dupe。
-        🔴 空串保留原样（codex M5a-1 LOW-1）：mem0 infer=False **只跳 content is None 不跳空串**
-        （main.py:834-840 实测）→ "" 可直接存，不再改写成单空格（去除 lossy fallback；仅 None 兜底空串）。"""
-        text = value_json if value_json is not None else ""
-        with self._store_lock:
-            mem = self._memory()
-            rows = mem.get_all(
-                filters={"user_id": DEFAULT_USER_ID, "kind": KV_KIND, "scope": scope, "key": key},
-                top_k=KV_FETCH_CAP,
-            ).get("results", [])
-            if rows:
-                # update 路径：priority None → 省略（merge 保留旧值）；非 None → 写入覆盖。
-                md: Dict[str, Any] = {"scope": scope, "key": key, "kind": KV_KIND}
-                if priority is not None:
-                    md["priority"] = priority
-                mem.update(rows[0]["id"], data=text, metadata=md)
-                for stale in rows[1:]:
-                    mem.delete(stale["id"])  # 清历史累积 dupe，维持 (scope,key) 唯一
-            else:
-                # insert 路径：priority None → 默认 0（COALESCE(?, 0)）。
-                md = {
-                    "scope": scope,
-                    "key": key,
-                    "kind": KV_KIND,
-                    "priority": priority if priority is not None else 0,
-                }
-                mem.add(text, user_id=DEFAULT_USER_ID, metadata=md, infer=False)
-
-    def delete_kv(self, scope: str, key: str) -> int:
-        """删 (scope,key) 所有匹配 → 删除数（幂等：不存在返 0）。单 _store_lock span 复合。
-        kind=KV_KIND filter（HIGH-1）只删 kv 适配行，绝不误删 capture 事实；top_k=KV_FETCH_CAP
-        （MEDIUM-1）确保 >20 行的 dupe 全删。"""
-        with self._store_lock:
-            mem = self._memory()
-            rows = mem.get_all(
-                filters={"user_id": DEFAULT_USER_ID, "kind": KV_KIND, "scope": scope, "key": key},
-                top_k=KV_FETCH_CAP,
-            ).get("results", [])
-            for r in rows:
-                mem.delete(r["id"])
-            return len(rows)
 
 
 _engine: Optional[Mem0Engine] = None

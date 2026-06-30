@@ -31,7 +31,6 @@ from dotenv import dotenv_values
 from src.api.app import APIError, success_envelope
 from src.api.auth import verify_cf_access
 from src.api.deps import get_chat_db, get_env_file_path, get_settings
-from src.chat.db import MEMORY_INJECT_MAX_CHARS, MEMORY_INJECT_MAX_ENTRIES
 from src.chat.kos_save import SaveConversationError, save_conversation_to_kos
 from src.chat.notion_agent import run_notion_agent, sse_encode
 from src.kos.client import KOSClient, KOSError
@@ -299,37 +298,20 @@ async def chat_config(request: Request):
         _kos_cred(k) for k in ("KOS_MCP_BASE", "KOS_OAUTH_CLIENT_ID", "KOS_OAUTH_CLIENT_SECRET")
     )
     kos_configured = kos_consumer and kos_creds
-    # P2f — compact user-scope memory summary injected into the custom-api stable
-    # system prefix (after userContext). P2a — rule-based relevance selection
-    # (priority DESC, updated_at DESC) + caps; memorySummaryMeta exposes
-    # injected/total/truncated/caps so the injection is observable (DoD 2).
-    # Best-effort: db missing / empty → "" + meta None.
-    # M5a-3 — agent_memory_kv dump 退役（flag MAILAGENT_MEMORY_KV_RETIRE，config.py pydantic）。
-    # flag-on → memorySummary='' → custom_api.ts:290 `if (cfg.memorySummary && ...)` 真值门控不
-    # 注入旧 `# Saved memory` 块（前端零改）；meta 标 retired 供可观测（前端不读 meta，纯诊断）。
-    # 读侧改靠 mem0 召回（M2 MAILAGENT_MEM0_RETRIEVAL）+ user.md 恒注入（M3）+ agent 主动
-    # memory_get/list 查 mem0-kv（M5a-2 已改接）。🔴 dogfood：KV_RETIRE 须配 MEM0_RETRIEVAL +
-    # USER_MD_COMPILE 同开，否则读侧空窗。flag-on 不查 kv 表（退役即不读）；flag-off → 逐字走
-    # memory_summary_meta（字节级不变）。
-    if cfg.memory_kv_retire_enabled:
-        memory_summary = ""
-        memory_summary_meta = {
-            "injected": 0,
-            "total": 0,
-            "chars": 0,
-            "truncated": False,
-            "max_entries": MEMORY_INJECT_MAX_ENTRIES,
-            "max_chars": MEMORY_INJECT_MAX_CHARS,
-            "retired": True,
-        }
-    else:
-        try:
-            _mem_meta = get_chat_db().memory_summary_meta()
-            memory_summary = _mem_meta["text"]
-            memory_summary_meta = {k: v for k, v in _mem_meta.items() if k != "text"}
-        except Exception:  # noqa: BLE001 — memory is best-effort; never fail /config
-            memory_summary = ""
-            memory_summary_meta = None
+    # M5b — agent_memory_kv dump 退役（无条件）。
+    # 记忆读侧改靠 mem0 召回（M2 MAILAGENT_MEM0_RETRIEVAL）+ user.md 恒注入（M3）。
+    # 前端 custom_api.ts:290 `if (cfg.memorySummary && ...)` 真值门控不注入旧 `# Saved memory` 块。
+    # meta 标 retired 供可观测（前端不读 meta，纯诊断）。
+    memory_summary = ""
+    memory_summary_meta = {
+        "injected": 0,
+        "total": 0,
+        "chars": 0,
+        "truncated": False,
+        "max_entries": 20,
+        "max_chars": 2000,
+        "retired": True,
+    }
     # Phase -1 / 0A — config snapshot hashes for Phase 0 eval trace (reproducible
     # baseline). agentProfileHash = hash of the 4 editable profile docs' content
     # hashes; installedSkillsHash = builtin name|version signature + installed-rows
@@ -1013,116 +995,6 @@ async def save_to_kos(request: Request, body: Optional[Dict[str, Any]] = None):
             status = 502
         raise APIError(e.code, str(e), http_status=status)
     return success_envelope(result, request=request, source="kos")
-
-
-# ── agent_memory_kv 端点（P2f — Custom AI memory WAL）─────────────────────────
-#
-# memory_* 工具（ChatToolPlatform）→ 这些端点 → ChatDb.agent_memory_kv。scope/key 任意字符串
-# （'skill:foo' / 含特殊字符）→ 用 query param 而非 path 段避免 URL 编码歧义。envelope（非 SSE）。
-# schema 归前端 chat_db.ts owns（agent_memory_kv v3 建），serve-api 只写既有表。
-
-
-@router.get("/memory", dependencies=[Depends(verify_cf_access)])
-async def list_memory(request: Request, scope: Optional[str] = Query(None)):
-    """列 memory 条目（可选 scope 过滤，按 updated_at 倒序）。镜像 chat_db listMemoryEntries。
-    flag `MAILAGENT_MEMORY_KV_RETIRE` on → kv-over-mem0 适配层；off → ChatDb 字节级原样（M5a-2）。"""
-    if get_settings().memory_kv_retire_enabled:
-        from src.memory.kv_over_mem0 import kv_list  # 懒 import：flag-off 不加载 mem0
-        rows = await run_in_threadpool(kv_list, scope)
-        return success_envelope(rows, request=request, source="mem0", meta_extra={"count": len(rows)})
-    rows = get_chat_db().list_memory_entries(scope)
-    return success_envelope(rows, request=request, source="sqlite", meta_extra={"count": len(rows)})
-
-
-@router.get("/memory/entry", dependencies=[Depends(verify_cf_access)])
-async def get_memory(request: Request, scope: str = Query(...), key: str = Query(...)):
-    """单条 memory（data=row|null，不 404 —— null 是正常「没记过此 key」结果）。
-    flag `MAILAGENT_MEMORY_KV_RETIRE` on → kv-over-mem0 适配层；off → ChatDb 字节级原样（M5a-2）。"""
-    if get_settings().memory_kv_retire_enabled:
-        from src.memory.kv_over_mem0 import kv_get  # 懒 import：flag-off 不加载 mem0
-        row = await run_in_threadpool(kv_get, scope, key)
-        return success_envelope(row, request=request, source="mem0")
-    row = get_chat_db().get_memory_entry(scope, key)
-    return success_envelope(row, request=request, source="sqlite")
-
-
-@router.post("/memory", dependencies=[Depends(verify_cf_access)])
-async def upsert_memory(request: Request, body: Optional[Dict[str, Any]] = None):
-    """UPSERT 一条 memory。body = {scope, key, valueJson, sourceWikiPath?, sourceSessionId?,
-    sourceMessageId?, sourceToolUseId?, priority?}（camelCase，P2a provenance + priority 均可选）。"""
-    opts = body or {}
-    scope = opts.get("scope")
-    key = opts.get("key")
-    value_json = opts.get("valueJson")
-    if not isinstance(scope, str) or not scope:
-        raise APIError("E_INVALID_ARG", "memory requires scope:str", source="sqlite")
-    if not isinstance(key, str) or not key:
-        raise APIError("E_INVALID_ARG", "memory requires key:str", source="sqlite")
-    if not isinstance(value_json, str):
-        raise APIError("E_INVALID_ARG", "memory requires valueJson:str", source="sqlite")
-    source = opts.get("sourceWikiPath")
-    if source is not None and not isinstance(source, str):
-        raise APIError("E_INVALID_ARG", "memory sourceWikiPath must be a string", source="sqlite")
-
-    # P2a — structured provenance + priority. All optional; None → store keeps
-    # default (priority COALESCE-preserves existing). bool is an int subclass in
-    # Python, so reject it explicitly for the integer fields.
-    def _opt_int(name: str) -> Optional[int]:
-        v = opts.get(name)
-        if v is None:
-            return None
-        if isinstance(v, bool) or not isinstance(v, int):
-            raise APIError("E_INVALID_ARG", f"memory {name} must be an integer", source="sqlite")
-        return v
-
-    source_session_id = _opt_int("sourceSessionId")
-    source_message_id = _opt_int("sourceMessageId")
-    # priority clamps to >= 0: the relevance rule sorts priority DESC, so a
-    # negative value would sort below the default 0 (silent de-prioritize). 0 = no boost.
-    priority = _opt_int("priority")
-    if priority is not None and priority < 0:
-        priority = 0
-    source_tool_use_id = opts.get("sourceToolUseId")
-    if source_tool_use_id is not None and not isinstance(source_tool_use_id, str):
-        raise APIError("E_INVALID_ARG", "memory sourceToolUseId must be a string", source="sqlite")
-
-    # M5a-2：flag-on → kv-over-mem0 适配层（懒 import，flag-off 不加载 mem0）。
-    # 🔴 priority 原样透传（HIGH-2）：None = COALESCE「不动旧值」；显式 int 才覆盖。绝不在端点默认成 0。
-    # 注意：provenance（source_*）不落 mem0（write-only-never-read，M5b 随表删），适配层 row
-    # 的 source_* = None —— wire 兼容（前端 memory.ts:190 读回但 gateway 写时本就是 null）。
-    if get_settings().memory_kv_retire_enabled:
-        _scope, _key, _value, _priority = scope, key, value_json, priority
-
-        def _do_upsert():
-            from src.memory.kv_over_mem0 import kv_get, kv_upsert  # 懒 import
-            kv_upsert(_scope, _key, _value, _priority)
-            return kv_get(_scope, _key)
-
-        row = await run_in_threadpool(_do_upsert)
-        return success_envelope(row, request=request, source="mem0")
-    row = get_chat_db().upsert_memory_entry(
-        scope,
-        key,
-        value_json,
-        source,
-        source_session_id=source_session_id,
-        source_message_id=source_message_id,
-        source_tool_use_id=source_tool_use_id,
-        priority=priority,
-    )
-    return success_envelope(row, request=request, source="sqlite")
-
-
-@router.delete("/memory", dependencies=[Depends(verify_cf_access)])
-async def delete_memory(request: Request, scope: str = Query(...), key: str = Query(...)):
-    """删一条 memory → {deleted: count}。删不存在的 (scope,key) 也返 {deleted:0}（幂等）。
-    flag `MAILAGENT_MEMORY_KV_RETIRE` on → kv-over-mem0 适配层；off → ChatDb 字节级原样（M5a-2）。"""
-    if get_settings().memory_kv_retire_enabled:
-        from src.memory.kv_over_mem0 import kv_delete  # 懒 import：flag-off 不加载 mem0
-        count = await run_in_threadpool(kv_delete, scope, key)
-        return success_envelope({"deleted": count}, request=request, source="mem0")
-    count = get_chat_db().delete_memory_entry(scope, key)
-    return success_envelope({"deleted": count}, request=request, source="sqlite")
 
 
 # ── mem0 auto-capture 端点（M1 — 异步自动抽取写记忆）─────────────────────────
