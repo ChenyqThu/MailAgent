@@ -188,7 +188,20 @@
 - **数据量实测**：打包 app 库 `agent_memory_kv` 仅 **1 行**（`communication_style`，provenance null=gateway 写）→ 迁移近零成本，无需 LLM 分类脚本；dogfood 翻 flag 前经 Settings 身份文档编辑器手动加进 `user.md`。
 - **dogfood gating**：`MAILAGENT_MEMORY_KV_RETIRE` 须同开 `MEM0_RETRIEVAL`+`USER_MD_COMPILE` 否则读侧空窗；`/chat/config` 按 runtime 缓存（legacy invalidate / gateway 15s TTL）须重启/刷新会话验证。
 
-**M5b（待续，并入任务B 删 legacy 同批）**：删 4 gateway 工具(`memory.ts`)/4 Python 端点/domainClient + DROP TABLE(`chat_db.ts` v16，**bump CHAT_DB_VERSION 15→16 + EXPECTED_DB_VERSION**) + 删 9 个 AGT-MEMORY task + tool_catalog 50→46 + 重录 baseline + 删 flag。删表破 legacy memory 回退 → 与 `CHAT_RUNTIME=legacy` 去留同决策（任务B 拍板点）。**eval memory 维度 M5b 永久移除**（mem0 capture/search 无工具、无法 zero-LLM rules 测）。
+#### ✅ M5a 打包 app dogfood 收尾（2026-06-30）—— 逮+修 3 个真 bug，M1 验证通过
+
+> 🔴 **dev 测不出 gateway 的 auto-capture/recall**：dev (`pnpm dev`) 下 `chat_local_bridge.ts:68 if(is.dev) return` 跳过 renderer→gateway 桥 + onFinish 不 fire（`ai_chat_messages.ui_message_json` 全空）= chat 没走 gateway persist/capture 路径。**必须 build 打包 app（dogfood flag 写 userData/.env）才走完整 gateway onFinish**（ui_message_json 非空）。详见 [[reference_mem0_temperature_opus_extraction]]。
+
+打包 dogfood（build → 装 /Applications → userData 配 4 flag + 迁 communication_style → 真 chat turn）逮到并修了 3 个 review/单测都没逮到的真 bug（全 main 未 push）：
+
+1. **flag env= 失效**（`2d6b96df`）：pydantic 2.13 忽略 `Field(env=)`，只按字段名匹配 env → `MAILAGENT_USER_MD_COMPILE`/`MEMORY_KV_RETIRE` 等 **9 个 flag 经文档化 env 名翻不动**（单测 monkeypatch 属性绕过，测试绿但 env 链断）。修 = `env=`→`validation_alias=`。详见 [[reference_pydantic_v2_field_env_ignored]]。
+2. **dev CORS 5174 被拦**（`27be8e90`）：electron-vite dev renderer fallback 5174，`_DEV_CORS` 只放 5173 → 跨域拦。dev-only 修。
+3. **🔴 mem0 抽取 temperature/opus 静默失败**（`12d55e86`）—— **M1 真相**：起初 auto-capture 看似完全不 fire（mem0 store 0 条），深挖打包日志发现 = mem0 抽取 LLM config 写死 `temperature:0.1`，`claude-opus-4-8`（packaged LLM_MODEL）弃用该参数 → 每次抽取被 CRS 打回 **400 被吞 → captured:[]**。**M1 wiring 本就完好**（gateway fire capture、onFinish 跑、端点调、服务端抽取逻辑对），只此参数不兼容（dev 用 sonnet 接受 temperature 所以没暴露）。修 = 显式 `temperature=None`（非省略 key——mem0 `AnthropicConfig` 默认 0.1 会填回）。opus 实测 event=ADD captured=1 无 400。
+4. **抽取默认模型设 haiku**（`8c8d360f`）：抽取每轮一调、opus 太贵 → 默认 `claude-haiku-4-5`（CRS 实测接受），`MEMORY_CAPTURE_MODEL` 可覆盖。
+
+**结论：M1 auto-capture 在真实 gateway 运行时工作**（temperature 修复后 opus/haiku 抽取均实测通过）→ **M5b 删显式工具后的安全网（auto-capture + user.md）成立、M5b 解锁**。agent_eval 89 全程零回退。
+
+**M5b（解锁，待执行；并入任务B 删 legacy 同批）**：删 4 gateway 工具(`memory.ts` gateway+legacy 两处)/4 Python KV 端点(list/get/upsert/delete)/domainClient + DROP TABLE(`chat_db.ts`，**bump CHAT_DB_VERSION 15→16；🔴 不碰 `EXPECTED_DB_VERSION`** —— chat_db.ts:83-84 源码注释明确 ai_chat.db 自有版本梯、与 gate sync_store 的 EXPECTED_DB_VERSION 无关，§6 铁律 #6 同；早先本段写「+ EXPECTED_DB_VERSION」是错的，已纠正) + 删 9 个 AGT-MEMORY task + tool_catalog 去 4 memory 工具 + 重录 baseline + 删 `memory_kv_retire_enabled` flag（退役变无条件，M5a-2/3 的 flag-gated 分支去掉）。删表破 legacy memory 回退 → 与 `CHAT_RUNTIME=legacy` 去留同决策（任务B 拍板点）。**eval memory 维度 M5b 永久移除**（mem0 capture/search 无 zero-LLM-rules 可测工具）。
 
 ---
 
