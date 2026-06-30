@@ -380,6 +380,18 @@ class Config(BaseSettings):
             "返回 E_DISABLED、按钮不渲染（M3c 起经 /chat/config 暴露 flag 态）。无 hot-path（手动触发）。"
         ),
     )
+    memory_kv_retire_enabled: bool = Field(
+        default=False, env="MAILAGENT_MEMORY_KV_RETIRE",
+        description=(
+            "M5a agent_memory_kv 退役总开关（默认关，dogfood）。开时 4 个 /api/chat/memory 端点"
+            "（list/get/upsert/delete，M0 显式记忆工具落点）改接 mem0 独立 store —— kv-over-mem0 "
+            "适配层把 (scope,key,priority,value) 映射到 mem0 metadata（M5a-2）；且记忆 dump"
+            "（/chat/config memorySummary + standing-context MEMORY 投影）退役（M5a-3）。终态记忆只剩"
+            "偏好→user.md（M3 恒注入）+ 事实→mem0（M2 召回）。关时端点走 ChatDb.agent_memory_kv + "
+            "dump 照注入（字节级 flag-off）。前端零改、不删表、不 bump CHAT_DB_VERSION（物理删除并入 "
+            "M5b/任务B）。config.py pydantic 读（同 M3）：翻 flag 需重启 serve-api。"
+        ),
+    )
     standing_docs_editor_enabled: bool = Field(
         default=True, env="MAILAGENT_STANDING_DOCS_EDITOR",
         description=(
