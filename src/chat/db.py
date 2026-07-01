@@ -1,6 +1,8 @@
 """ai_chat.db 读 + 写访问 —— serve-api 远程 chat 端点（V2.1 阶段 2 读 + 阶段 3 3b-3 写）。
 
-ai_chat.db = 前端 owned schema（``frontend/src/electron/main/chat_db.ts``，CHAT_DB_VERSION 15）。
+ai_chat.db = 前端 owned schema（``frontend/src/electron/main/chat_db.ts``，CHAT_DB_VERSION 16）。
+v16（M5b，2026-06-30）= agent_memory_kv 物理退役（DROP TABLE）。记忆终态 = user.md(M3 恒注入) +
+mem0(M1/M2 capture/召回)；KV 表无 FK 依赖，简单事务 DROP。NOT EXPECTED_DB_VERSION。
 v15：ai_chat_sessions.archived INTEGER NOT NULL DEFAULT 0 — 软删标志（0=正常，1=已归档）。归档会话
 从 list_all_sessions 过滤（WHERE s.archived = 0）；写经 update_session_archived 镜像（ai_chat.db
 own ladder，非 EXPECTED_DB_VERSION；chat_db.ts 是 schema 真源，本文件不建表）。

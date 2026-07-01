@@ -33,7 +33,6 @@ import { resolveDataRoot } from './db'
 // 本文件函数签名使用；re-export 保既有 importer（dispatcher / harness /
 // kos_save / registry / handlers/chat）的 `from '../chat_db'` 路径不变。
 import type {
-  AgentMemoryEntry,
   AnchorType,
   AppendMessageInput,
   AppendToolCallInput,
@@ -52,7 +51,6 @@ import type {
 } from '@shared/chat/model'
 
 export type {
-  AgentMemoryEntry,
   AnchorType,
   AppendMessageInput,
   AppendToolCallInput,
@@ -130,7 +128,11 @@ export type {
 // listAllSessions 过滤掉(WHERE archived=0)，行与消息保留。Plain additive ALTER, hasColumn idempotency
 // guard (same discipline as v5..v14)。🔴 bump 同步刷 src/chat/db.py 头注释 + test_chat.py seed DDL；
 // NOT backend_lifecycle.EXPECTED_DB_VERSION。
-const CHAT_DB_VERSION = 15
+// v16 (M5b, 2026-06-30) — DROP agent_memory_kv。记忆层终态 = user.md(M3 恒注入) + mem0(M1/M2
+// capture/召回)；agent_memory_kv KV 表物理退役，同时删 4 个显式 KV 工具 + Python KV 端点。
+// 无 FK 依赖（无 REFERENCES agent_memory_kv），简单事务 DROP。ai_chat.db 自有 version ladder；
+// NOT backend_lifecycle.EXPECTED_DB_VERSION。
+const CHAT_DB_VERSION = 16
 
 export function resolveChatDbPath(): string {
   const fromEnv = process.env['AI_CHAT_DB_PATH']
@@ -901,6 +903,23 @@ function migrate(db: Database.Database): void {
       throw err
     }
   }
+
+  // v15 → v16 — M5b (2026-06-30) agent_memory_kv 物理退役。记忆终态 = user.md(M3) + mem0(M1/M2)；
+  // KV 表无 FK 依赖（REFERENCES agent_memory_kv = 0 处），简单事务 DROP。历史 CREATE(v3)/ALTER(v8)
+  // 保留不动（append-only 纪律；新库 create-then-drop OK）。NOT backend_lifecycle.EXPECTED_DB_VERSION。
+  if (current < 16) {
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      db.exec('DROP TABLE IF EXISTS agent_memory_kv')
+      db.prepare(
+        "INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', '16')"
+      ).run()
+      db.exec('COMMIT')
+    } catch (err) {
+      db.exec('ROLLBACK')
+      throw err
+    }
+  }
 }
 
 // ── singleton ───────────────────────────────────────────────────────────
@@ -1535,83 +1554,5 @@ export function getToolCallByUseId(messageId: number, toolUseId: string): ChatTo
   return row ?? null
 }
 
-// ── agent_memory_kv (P2f — Custom AI memory WAL) ──────────────────────────
-// The table landed in v3 (idle until now). One row per (scope, key); scope
-// namespaces the fact ('user' / 'skill:<name>'). value_json is the serialized
-// fact. These power the memory_* tools + the system-prompt memory summary.
-
-/** List memory entries, newest-first. Optional scope filter. */
-export function listMemoryEntries(scope?: string): AgentMemoryEntry[] {
-  const db = getChatDb()
-  if (scope) {
-    return db
-      .prepare('SELECT * FROM agent_memory_kv WHERE scope = ? ORDER BY updated_at DESC')
-      .all(scope) as AgentMemoryEntry[]
-  }
-  return db
-    .prepare('SELECT * FROM agent_memory_kv ORDER BY updated_at DESC')
-    .all() as AgentMemoryEntry[]
-}
-
-export function getMemoryEntry(scope: string, key: string): AgentMemoryEntry | null {
-  const row = getChatDb()
-    .prepare('SELECT * FROM agent_memory_kv WHERE scope = ? AND key = ?')
-    .get(scope, key) as AgentMemoryEntry | undefined
-  return row ?? null
-}
-
-/** UPSERT a memory entry (PRIMARY KEY (scope,key)). created_at is preserved on
- *  update. v8 (P2a) — provenance (source_session_id / source_message_id /
- *  source_tool_use_id) updates to the latest writer's turn+tool on conflict.
- *  `priority` is COALESCE-preserved: a write that omits priority (e.g. the agent
- *  just refreshing a fact's value) keeps the user's existing pin instead of
- *  silently resetting it to 0; an explicit priority overrides. A brand-new row
- *  with no priority defaults to 0. */
-export function upsertMemoryEntry(input: {
-  scope: string
-  key: string
-  valueJson: string
-  sourceWikiPath?: string | null
-  sourceSessionId?: number | null
-  sourceMessageId?: number | null
-  sourceToolUseId?: string | null
-  priority?: number | null
-}): AgentMemoryEntry {
-  const db = getChatDb()
-  const now = Date.now()
-  const priority = input.priority ?? null
-  db.prepare(
-    `INSERT INTO agent_memory_kv
-       (scope, key, value_json, source_wiki_path, source_session_id,
-        source_message_id, source_tool_use_id, priority, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(?, 0), ?, ?)
-     ON CONFLICT(scope, key) DO UPDATE SET
-       value_json = excluded.value_json,
-       source_wiki_path = excluded.source_wiki_path,
-       source_session_id = excluded.source_session_id,
-       source_message_id = excluded.source_message_id,
-       source_tool_use_id = excluded.source_tool_use_id,
-       priority = COALESCE(?, agent_memory_kv.priority),
-       updated_at = excluded.updated_at`
-  ).run(
-    input.scope,
-    input.key,
-    input.valueJson,
-    input.sourceWikiPath ?? null,
-    input.sourceSessionId ?? null,
-    input.sourceMessageId ?? null,
-    input.sourceToolUseId ?? null,
-    priority,
-    now,
-    now,
-    priority
-  )
-  // Non-null: we just inserted/updated this exact (scope,key).
-  return getMemoryEntry(input.scope, input.key) as AgentMemoryEntry
-}
-
-export function deleteMemoryEntry(scope: string, key: string): number {
-  return getChatDb()
-    .prepare('DELETE FROM agent_memory_kv WHERE scope = ? AND key = ?')
-    .run(scope, key).changes
-}
+// agent_memory_kv CRUD 已于 v16 (M5b, 2026-06-30) 随表一并退役。
+// 记忆终态 = user.md(M3 恒注入) + mem0(M1/M2 capture/召回)。

@@ -108,44 +108,8 @@ export interface ChatMessage {
   updated_at: number
 }
 
-// P2f (task 06-18-custom-ai-harness-agent Phase 2) — agent memory WAL. One row
-// per (scope, key) in ai_chat.db.agent_memory_kv. scope namespaces the fact:
-// 'user' = long-term preferences / writing style / mail-handling principles;
-// 'skill:<name>' = skill-specific preference. value_json is the serialized fact;
-// source_* traces where it came from (session/message/tool) for auditability.
-export interface AgentMemoryEntry {
-  scope: string
-  key: string
-  value_json: string
-  source_wiki_path: string | null
-  // v8 (P2a) — first-class provenance: which chat turn + tool_use proposed this
-  // fact (supersedes the source_wiki_path='session:<id>' overload). NULL for
-  // pre-v8 rows. priority = user-explicit importance (0 default); the
-  // prompt-injection relevance rule orders by priority DESC, updated_at DESC.
-  source_session_id: number | null
-  source_message_id: number | null
-  source_tool_use_id: string | null
-  priority: number
-  created_at: number
-  updated_at: number
-}
-
-export interface WriteMemoryInput {
-  scope: string
-  key: string
-  valueJson: string
-  /** Legacy free-form provenance pointer (e.g. wiki path). v8 prefers the
-   *  structured source_* fields below; kept for back-compat. */
-  sourceWikiPath?: string | null
-  /** v8 (P2a) — structured provenance of the writing turn. The chat session,
-   *  the assistant message, and the memory_write tool_use that proposed it. */
-  sourceSessionId?: number | null
-  sourceMessageId?: number | null
-  sourceToolUseId?: string | null
-  /** v8 (P2a) — user-explicit importance. Omit (→ keep existing on update, 0 on
-   *  insert) unless the user said a preference is especially important. */
-  priority?: number | null
-}
+// AgentMemoryEntry + WriteMemoryInput 已于 v16 (M5b, 2026-06-30) 随 agent_memory_kv 表退役。
+// 记忆终态 = user.md(M3) + mem0(M1/M2)。
 
 export interface OpenSessionInput {
   // P2c — anchor-aware session open. Back-compat: existing callers pass
