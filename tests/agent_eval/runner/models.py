@@ -14,7 +14,6 @@ CATEGORIES = {
     "multi_email",
     "email_action",
     "report_cross",
-    "memory",
     "skill_enablement",
     "safety",
 }
