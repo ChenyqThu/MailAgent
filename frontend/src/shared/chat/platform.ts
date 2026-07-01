@@ -153,9 +153,12 @@ export interface ChatModelConfig {
    *  failed; graceful). Sourced from serve-api GET /chat/config (ContextLoader,
    *  TTL-cached). notion-agent carries its own Notion context → not injected. */
   userContext: string | null
-  /** P2f — compact user-scope memory summary, injected into the stable system
-   *  prefix AFTER userContext (both are cacheable "user profile" overlays). From
-   *  serve-api /chat/config (ChatDb.memory_summary). null / "" → not injected. */
+  /** 07-01 memory.md — bounded durable-memory facts (mem0 auto-capture, curated into
+   *  the MEMORY agent_config doc), injected into the stable (cacheable) system prefix
+   *  AFTER userContext as an UNTRUSTED background fence (BACKGROUND DATA, never overrides
+   *  the safety floor). From serve-api /chat/config (memorySummary = the MEMORY doc when
+   *  MAILAGENT_MEM0_RETRIEVAL is on + non-empty; "" when off/empty). null / "" → not
+   *  injected (byte-identical flag-off). */
   memorySummary: string | null
   /** P3 — concatenated prompt fragments of the ENABLED + AVAILABLE Skills,
    *  injected into the stable system prefix AFTER memorySummary (cacheable). The

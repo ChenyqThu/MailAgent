@@ -24,11 +24,11 @@ import {
 import { anthropicBaseUrl, type AiGatewayConfig, type PersistTurnInput } from './config'
 import { createAnthropic } from '@ai-sdk/anthropic'
 import type { GatewayApprovalMode, GatewayToolAuditEntry } from './tools/types'
-import { extractTextFromUIMessage, type MailAgentUIMessage } from '@shared/assistant/uiMessage'
+import { type MailAgentUIMessage } from '@shared/assistant/uiMessage'
 // chat-panel P4 composer-parity C1-① — per-turn extended-thinking → @ai-sdk/anthropic providerOptions.
 import { thinkingProviderOptions } from './thinking'
-// Phase 06 (context injection) — system prompt assembly + snapshot schema guard. M2 — RetrievedMemory.
-import { buildGatewaySystemPrompt, type RetrievedMemory } from './systemPrompt'
+// Phase 06 (context injection) — system prompt assembly + snapshot schema guard.
+import { buildGatewaySystemPrompt } from './systemPrompt'
 import {
   isValidContextSnapshot,
   type AgentContextSnapshot
@@ -163,27 +163,11 @@ export async function prepareChatRun(
     }
     // The provider is contracted to return null (not throw) on a /chat/config blip → context-light.
     const promptConfig = (await cfg.systemPromptProvider()) ?? null
-    // M2 — recall durable memories relevant to THIS turn's query and inject them as an untrusted block.
-    // Use the ORIGINAL last user text (rawMessages, NOT the injectedContext-prefixed model message) so
-    // a mentioned email body doesn't pollute the recall query. retrieveMemory is CONTRACTED to never
-    // throw (null on failure / timeout), but the core does NOT trust the callback to honor it: the
-    // await is wrapped so a contract-violating throw/reject still degrades to context-light and never
-    // breaks the turn (defense-in-depth, codex review MEDIUM-2). Injected only when
-    // MAILAGENT_MEM0_RETRIEVAL is on; absent → null → byte-identical.
-    let retrievedMemories: RetrievedMemory[] | null = null
-    if (cfg.retrieveMemory) {
-      const lastUser = lastUserMessage(rawMessages)
-      const queryText = lastUser ? extractTextFromUIMessage(lastUser) : ''
-      if (queryText.length > 0) {
-        try {
-          retrievedMemories = await cfg.retrieveMemory(queryText)
-        } catch (err) {
-          console.error('[ai-gateway] retrieveMemory threw (turn runs context-light)', err)
-          retrievedMemories = null
-        }
-      }
-    }
-    system = buildGatewaySystemPrompt({ promptConfig, contextSnapshot, retrievedMemories })
+    // 07-01 — the bounded memory.md rides IN promptConfig.memorySummary (the cacheable stable prefix,
+    // rendered by buildStableSystemPrompt as an untrusted MEMORY fence). The M2 per-query recall path
+    // (retrieveMemory callback → /chat/memory/search) is retired: memory.md is injected whenever
+    // Python's /chat/config sends a non-empty memorySummary, so there is nothing to recall per turn.
+    system = buildGatewaySystemPrompt({ promptConfig, contextSnapshot })
   } else {
     system = typeof body.system === 'string' && body.system.length > 0 ? body.system : undefined
   }

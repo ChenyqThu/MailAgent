@@ -499,23 +499,6 @@ export class MailAgentDomainClient {
     })
   }
 
-  /** M2 recall — fetch memories relevant to a query from the mem0 store. POST /chat/memory/search
-   *  {query, limit?}. Returns the projected memories; the caller (lifecycle retrieveMemory, on the
-   *  TTFT path) injects them into the system prompt as an untrusted block. Hits the mem0
-   *  auto-extraction store (the agent_memory_kv layer is now retired). limit only goes on the wire
-   *  when it is a real number. */
-  searchMemory(
-    input: { query: string; limit?: number },
-    signal?: AbortSignal
-  ): Promise<{ memories: Array<{ id: string; memory: string; score?: number }>; count: number }> {
-    const body: Record<string, unknown> = { query: input.query }
-    if (typeof input.limit === 'number') body.limit = input.limit
-    return this._req<{
-      memories: Array<{ id: string; memory: string; score?: number }>
-      count: number
-    }>('POST', '/chat/memory/search', { body, signal })
-  }
-
   // ── self-mount primitives (M4) — the agent reads/proposes its own Standing Context docs +
   //    skills. All hit /agent/* (verify_cf_access dual-auth: the embedded gateway's local-token leg
   //    passes — owner-equivalent on loopback). The gateway ApprovalGuard gates the writes; rules
