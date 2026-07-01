@@ -348,6 +348,41 @@ def test_chat_config_memory_dump_retired(monkeypatch: pytest.MonkeyPatch) -> Non
     assert meta["max_chars"] == 2000
 
 
+def test_chat_config_memory_md_injected_when_retrieval_on(
+    monkeypatch: pytest.MonkeyPatch, tmp_path, fresh_agent_cfg
+) -> None:
+    """task 07-01 — MAILAGENT_MEM0_RETRIEVAL 开 + memory.md 非空 → memorySummary = memory.md 内容
+    （前端经 MEMORY fence untrusted 背景注入）+ meta retired False。"""
+    from src.agent_config.store import MEMORY_DOC_NAME
+
+    mem = "# MEMORY\n- prefers terse Chinese replies\n"
+    fresh_agent_cfg.set_profile_doc(MEMORY_DOC_NAME, mem, updated_by="mem0")
+    env = tmp_path / ".env"
+    env.write_text("MAILAGENT_MEM0_RETRIEVAL=true\n")
+    with _config_client(monkeypatch, _ChatConfigStub(), env_file=str(env)) as c:
+        data = c.get("/api/chat/config").json()["data"]
+    # 注入前 .content.strip()（尾部空白无意义）→ memorySummary = memory.md 去空白内容。
+    assert data["memorySummary"] == mem.strip()
+    meta = data["memorySummaryMeta"]
+    assert meta["retired"] is False
+    assert meta["injected"] == 1
+    assert meta["chars"] == len(mem.strip())
+    assert meta["source"] == "memory.md"
+
+
+def test_chat_config_memory_md_empty_when_retrieval_on_but_no_memory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path, fresh_agent_cfg
+) -> None:
+    """task 07-01 — MEM0_RETRIEVAL 开但 memory.md 空 → memorySummary="" + retired meta
+    （与 flag-off 字节级一致：前端真值门控不注入）。"""
+    env = tmp_path / ".env"
+    env.write_text("MAILAGENT_MEM0_RETRIEVAL=true\n")
+    with _config_client(monkeypatch, _ChatConfigStub(), env_file=str(env)) as c:
+        data = c.get("/api/chat/config").json()["data"]
+    assert data["memorySummary"] == ""
+    assert data["memorySummaryMeta"]["retired"] is True
+
+
 def test_chat_config_advertised_skills_fail_soft(monkeypatch: pytest.MonkeyPatch) -> None:
     """M4a — advertised_skill_names 抛异常 → /chat/config 仍 200，advertisedSkills=None。
     None=未知 → AI SDK Gateway fail-OPEN（不门控）；区别于 []=全禁→门控删光 skill 工具。

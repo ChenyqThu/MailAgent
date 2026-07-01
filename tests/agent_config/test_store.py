@@ -10,6 +10,7 @@ from __future__ import annotations
 import pytest
 
 from src.agent_config.store import (
+    MEMORY_DOC_NAME,
     PROFILE_DOC_NAMES,
     AgentConfigStore,
     agent_config_db_for,
@@ -113,9 +114,54 @@ def test_profile_doc_rollback(tmp_path):
 def test_profile_doc_rejects_unknown_name(tmp_path):
     st = _store(tmp_path)
     with pytest.raises(ValueError):
-        st.get_profile_doc("memory")  # 投影文档，不可经 profile_docs 读
+        st.get_profile_doc("skills")  # 投影文档（非 STORABLE），不可经 profile_docs 读
     with pytest.raises(ValueError):
         st.set_profile_doc("bogus", "x", updated_by="user")
+
+
+# ---------------------------------------------------------------------------
+# memory.md doc（task 07-01）—— 可存但不进身份层（standing_context / profile_hash）
+# ---------------------------------------------------------------------------
+
+
+def test_memory_doc_seed_on_read_empty(tmp_path):
+    """MEMORY doc seed-on-read → 空串（无 seed 模板）；updated_by='seed'。"""
+    st = _store(tmp_path)
+    doc = st.get_profile_doc(MEMORY_DOC_NAME)
+    assert doc.doc_name == MEMORY_DOC_NAME
+    assert doc.content == ""
+    assert doc.updated_by == "seed"
+
+
+def test_memory_doc_set_and_history(tmp_path):
+    """MEMORY doc set/get + history（复用 profile-doc 存储层）。"""
+    st = _store(tmp_path)
+    st.get_profile_doc(MEMORY_DOC_NAME)  # seed ''
+    st.set_profile_doc(MEMORY_DOC_NAME, "# MEMORY\n- v1\n", updated_by="mem0")
+    assert st.get_profile_doc(MEMORY_DOC_NAME).content == "# MEMORY\n- v1\n"
+    hist = st.list_profile_history(MEMORY_DOC_NAME)
+    # newest first：mem0 写在前，seed（空）在后
+    assert hist[0].changed_by == "mem0"
+    assert hist[0].content_snapshot == "# MEMORY\n- v1\n"
+
+
+def test_memory_doc_rollback_between_versions(tmp_path):
+    st = _store(tmp_path)
+    v1 = st.set_profile_doc(MEMORY_DOC_NAME, "# MEMORY\n- v1\n", updated_by="mem0")
+    st.set_profile_doc(MEMORY_DOC_NAME, "# MEMORY\n- v2\n", updated_by="mem0")
+    rolled = st.rollback_profile_doc(MEMORY_DOC_NAME, v1.content_hash, updated_by="user")
+    assert rolled.content == "# MEMORY\n- v1\n"
+
+
+def test_memory_doc_excluded_from_identity_layer(tmp_path):
+    """MEMORY 不进 list_profile_docs / profile_hash（standing_context 只组装 4 份可信身份）。"""
+    st = _store(tmp_path)
+    h_before = st.profile_hash()
+    st.set_profile_doc(MEMORY_DOC_NAME, "# MEMORY\n- fact\n", updated_by="mem0")
+    # memory 变化不影响 profile_hash（身份层 hash）
+    assert st.profile_hash() == h_before
+    assert [d.doc_name for d in st.list_profile_docs()] == list(PROFILE_DOC_NAMES)
+    assert MEMORY_DOC_NAME not in [d.doc_name for d in st.list_profile_docs()]
 
 
 def test_profile_doc_rejects_empty_content(tmp_path):

@@ -41,10 +41,17 @@ from src.agent_config.templates import SEED_TEMPLATES
 # 概念常量
 # ---------------------------------------------------------------------------
 
-# 用户可编辑、落 agent_profile_docs 的 4 个文档。
+# 用户可编辑、落 agent_profile_docs 的 4 个文档。这 4 份组装成 standing_context（可信身份）。
 PROFILE_DOC_NAMES: tuple[str, ...] = ("soul", "agent", "rules", "user")
-# 投影文档（只读视图，M5b 后 MEMORY 恒空，SKILLS 来自 skill registry）—— 不存表。
-PROJECTION_DOC_NAMES: tuple[str, ...] = ("memory", "skills")
+# memory.md（Hermes 式有界记忆）—— 也落 agent_profile_docs（复用 content + history/rollback），
+# 但**刻意排除出 PROFILE_DOC_NAMES**：它是 auto-capture 抽取的、源自不可信邮件正文的记忆，
+# 单独经 /chat/config 的 memorySummary（MEMORY fence，untrusted 背景）注入，不进 standing_context
+# 那 4 份可信身份、不进 profile_hash。seed 为空串（首次 get 落一行空 doc）。
+MEMORY_DOC_NAME: str = "memory"
+# 可存储（落表 + get/set/history/rollback）的全部 doc 名 = 4 份身份 + memory.md。
+STORABLE_DOC_NAMES: tuple[str, ...] = PROFILE_DOC_NAMES + (MEMORY_DOC_NAME,)
+# 投影文档（只读视图，SKILLS 来自 skill registry）—— 不存表。
+PROJECTION_DOC_NAMES: tuple[str, ...] = ("skills",)
 
 # 可安装 skill 的来源类型（builtin 来自代码，不算"安装"）。
 INSTALLABLE_SOURCE_TYPES: tuple[str, ...] = ("local_folder", "skill_pack", "document", "mcp")
@@ -249,7 +256,8 @@ class AgentConfigStore:
                 return _row_to_profile_doc(row)
             if not seed_if_absent:
                 raise KeyError(f"profile doc not found: {name}")
-            seed = SEED_TEMPLATES[name]
+            # memory.md 无 seed 模板（不在 SEED_TEMPLATES）→ 空串；4 份身份文档取其模板。
+            seed = SEED_TEMPLATES.get(name, "")
             seed_hash = _hash(seed)
             now = _now()
             cur = conn.execute(
@@ -571,9 +579,11 @@ class AgentConfigStore:
 
     @staticmethod
     def _validate_doc_name(doc_name: str) -> str:
-        if doc_name not in PROFILE_DOC_NAMES:
+        # STORABLE_DOC_NAMES = 4 份身份文档 + memory.md（memory 单独注入、不进 standing_context/
+        # profile_hash，但复用同一 get/set/history/rollback 存储层）。
+        if doc_name not in STORABLE_DOC_NAMES:
             raise ValueError(
-                f"profile doc_name must be one of {PROFILE_DOC_NAMES}, got {doc_name!r}"
+                f"profile doc_name must be one of {STORABLE_DOC_NAMES}, got {doc_name!r}"
             )
         return doc_name
 

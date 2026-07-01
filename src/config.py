@@ -372,6 +372,15 @@ class Config(BaseSettings):
             "MEMORY_CAPTURE_MODEL env 可覆盖。仅 MAILAGENT_MEM0_CAPTURE 开时生效。"
         ),
     )
+    memory_md_budget_chars: int = Field(
+        default=5000, validation_alias="MEMORY_MD_BUDGET_CHARS",
+        description=(
+            "memory.md 硬字符预算（Hermes 式有界记忆）。auto-capture 每轮把持久事实合并进 "
+            "memory.md，超预算则同 memory_capture_model 斟酌淘汰最不重要/过时的条目压回。"
+            "memory.md 恒注入每轮 system prompt（MAILAGENT_MEM0_RETRIEVAL 开时），故预算越大 "
+            "= 每轮 token 成本越高。MEMORY_MD_BUDGET_CHARS env 可覆盖。"
+        ),
+    )
     user_md_compile_enabled: bool = Field(
         default=False, validation_alias="MAILAGENT_USER_MD_COMPILE",
         description=(

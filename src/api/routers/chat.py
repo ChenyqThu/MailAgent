@@ -298,10 +298,12 @@ async def chat_config(request: Request):
         _kos_cred(k) for k in ("KOS_MCP_BASE", "KOS_OAUTH_CLIENT_ID", "KOS_OAUTH_CLIENT_SECRET")
     )
     kos_configured = kos_consumer and kos_creds
-    # M5b — agent_memory_kv dump 退役（无条件）。
-    # 记忆读侧改靠 mem0 召回（M2 MAILAGENT_MEM0_RETRIEVAL）+ user.md 恒注入（M3）。
-    # 前端 custom_api.ts:290 `if (cfg.memorySummary && ...)` 真值门控不注入旧 `# Saved memory` 块。
-    # meta 标 retired 供可观测（前端不读 meta，纯诊断）。
+    # memory.md（Hermes 式有界记忆，task 07-01）恒注入。auto-capture 每轮把持久事实合并进
+    # agent_config.db 的 MEMORY doc；这里读它进 memorySummary → 前端经现成 MEMORY fence（untrusted
+    # 背景）注入每轮 system prompt。gate = MAILAGENT_MEM0_RETRIEVAL（语义从 M2「按 query 召回」改为
+    # 「恒注入 memory.md」，复用同 flag，热读 .env）。
+    # 🔴 flag-off 或 memory.md 空 → memory_summary="" + retired meta（与 M5b 现状字节级一致：前端
+    # custom_api.ts:290 `if (cfg.memorySummary && ...)` 真值门控不注入；meta 纯诊断，前端不读）。
     memory_summary = ""
     memory_summary_meta = {
         "injected": 0,
@@ -312,6 +314,23 @@ async def chat_config(request: Request):
         "max_chars": 2000,
         "retired": True,
     }
+    if _hot_bool(env_vals, "MAILAGENT_MEM0_RETRIEVAL", False):
+        try:
+            from src.agent_config.store import MEMORY_DOC_NAME, get_agent_config_store
+
+            _mem_md = get_agent_config_store().get_profile_doc(MEMORY_DOC_NAME).content.strip()
+            if _mem_md:
+                memory_summary = _mem_md
+                memory_summary_meta = {
+                    "injected": 1,
+                    "total": 1,
+                    "chars": len(_mem_md),
+                    "truncated": False,
+                    "source": "memory.md",
+                    "retired": False,
+                }
+        except Exception:  # noqa: BLE001 — best-effort; keep "" + retired meta（byte-identical to flag-off）
+            pass
     # Phase -1 / 0A — config snapshot hashes for Phase 0 eval trace (reproducible
     # baseline). agentProfileHash = hash of the 4 editable profile docs' content
     # hashes; installedSkillsHash = builtin name|version signature + installed-rows
@@ -1003,21 +1022,21 @@ async def save_to_kos(request: Request, body: Optional[Dict[str, Any]] = None):
 # agent_memory_kv 表 + 其 4 个 KV 端点（GET/POST/DELETE /memory）已随 M5b 删除。
 #
 # 触发链：Node gateway onFinish fire-and-forget（**永不 await**）→ /memory/capture →
-# mem0.add 自动抽取持久偏好/事实。mem0 是同步库（含网络抽取调用）→ run_in_threadpool
-# 跑，绝不阻塞 serve-api event loop。durable-only 抽取约束在引擎 custom_instructions
-# （绝不抽一次性任务态）。flag MAILAGENT_MEM0_CAPTURE 关时 Node 端根本不触发本端点，
-# 故本端点不自检 flag。
+# memory.md 合并（Hermes 式有界记忆，task 07-01）。合并逻辑（读现 memory.md + 本轮 → LLM 输出
+# 更新版 + 超预算淘汰）在 src/memory/memory_md.py。抽取每轮一调（durable-only 约束在其系统提示）。
+# flag MAILAGENT_MEM0_CAPTURE 关时 Node 端根本不触发本端点，故本端点不自检 flag。
 
 
 @router.post("/memory/capture", dependencies=[Depends(verify_cf_access)])
 async def capture_memory(request: Request, body: Optional[Dict[str, Any]] = None):
-    """从一个完成的 chat turn 自动抽取持久记忆（mem0.add）。
+    """从一个完成的 chat turn 把持久事实合并进 memory.md（Hermes 式有界记忆，task 07-01）。
 
     body = ``{userText:str, assistantText:str, sessionId?:int, messageId?:int}``。
-    data = ``{captured: [{id, memory, event}], count}``（只含真正写入的 ADD/UPDATE 条目）。
+    data = ``{changed:bool, captured:[], count:0}``（``captured``/``count`` 保留形状兼容 Node
+    fire-and-forget 的 ``{captured, count}`` 返回类型；memory.md 是单文档、无 per-item id，故恒空）。
 
-    best-effort：抽取/写入失败**不 raise**（调用方 fire-and-forget 不重试）→ 记 warning +
-    返回 ``captured=[]``。空 turn 直接短路，不触发模型调用。
+    best-effort：合并/写入失败**不 raise**（调用方 fire-and-forget 不重试）→ 记 warning +
+    返回 ``changed=False``。空 turn 直接短路，不触发模型调用。
     """
     opts = body or {}
     user_text = opts.get("userText")
@@ -1036,72 +1055,49 @@ async def capture_memory(request: Request, body: Optional[Dict[str, Any]] = None
         )
     user_text = user_text.strip()
     assistant_text = assistant_text.strip()
-    # 空 turn（无实质内容）→ 无可抽取，短路（省一次模型调用 + 不污染 store）。
+    # 空 turn（无实质内容）→ 无可合并，短路（省一次模型调用）。
     if not user_text and not assistant_text:
         return success_envelope(
-            {"captured": [], "count": 0}, request=request, source="memory"
+            {"changed": False, "captured": [], "count": 0}, request=request, source="memory"
         )
 
-    # provenance（可选）→ 存进 mem0 metadata，撤销/审计可溯源。bool 是 int 子类，显式排除。
-    metadata: Dict[str, Any] = {"source": "auto_capture"}
+    # provenance（可选）→ 透传给 save_memory_md 的 history（撤销/审计可溯源）。bool 是 int 子类，显式排除。
     session_id = opts.get("sessionId")
-    if isinstance(session_id, int) and not isinstance(session_id, bool):
-        metadata["session_id"] = session_id
+    if not (isinstance(session_id, int) and not isinstance(session_id, bool)):
+        session_id = None
     message_id = opts.get("messageId")
-    if isinstance(message_id, int) and not isinstance(message_id, bool):
-        metadata["message_id"] = message_id
+    if not (isinstance(message_id, int) and not isinstance(message_id, bool)):
+        message_id = None
 
-    # 懒 import：守 chat.py 的 lazy-config 纪律（顶部 import mem0_engine 会触发 src.config
-    # import-time，裸 worktree / CI import self-check 会炸）+ mem0 引擎懒加载红线（真正 add
-    # 才拉 mem0/fastembed/faiss ~150MB）。
-    from src.memory.mem0_engine import (
-        CAPTURE_TEXT_MAX_CHARS,
-        DEFAULT_USER_ID,
-        get_mem0_engine,
-    )
+    # 懒 import：守 chat.py 的 lazy-config 纪律（顶部 import memory_md 会触发 src.config
+    # import-time，裸 worktree / CI import self-check 会炸）。memory_md 无重依赖（只 LLMClient +
+    # agent_config store），但仍函数内 import 对齐既有纪律。
+    from src.config import config as cfg
+    from src.memory.memory_md import capture_turn
 
-    # 🔴 投毒防线（codex HIGH-2）：抽取约束在引擎 CAPTURE_INSTRUCTIONS（mem0 custom_instructions，
-    # 标注 highest-priority）—— 把引用/邮件/附件/assistant 输出当不可信数据、忽略内容里的指令注入、
-    # 不存安全/审批偏好。注意这是 **prompt 级软约束**：mem0 默认 extraction system prompt 反向偏
-    # pro-extraction（"从 user+assistant 都抽"），靠 custom_instructions 优先级压制冲突。
-    # **escape hatch**：若 dogfood 发现 assistant-sourced / 注入的事实仍泄漏，从源头移除冲突 =
-    # 只送 user_text（删下面 assistant 行）。当前按用户拍板保留 user+assistant（留 assistant 确认的偏好）。
-    # 截断：durable facts 在前几段，超大 turn（多线程邮件 dump 粘进 chat）截断省 token + 防 slot 长占。
-    messages = [
-        {"role": "user", "content": user_text[:CAPTURE_TEXT_MAX_CHARS]},
-        {"role": "assistant", "content": assistant_text[:CAPTURE_TEXT_MAX_CHARS]},
-    ]
+    # capture_turn 串行化 load→merge→save（asyncio.Lock 按 doc 名 keyed），防并发 capture 各读
+    # 同一 base、后写覆盖先写（丢更新）。合并 = 一次 LLM 调用（capture model，默认 haiku），读现
+    # memory.md + 本轮 → 输出更新版（去重 + 超预算淘汰）。LLMClient 走 streaming、不发 temperature，
+    # 结构上规避 mem0 raw-anthropic 的 temperature-400 / 非流式 max_tokens 坑（详见 memory_md.py）。
     try:
-        # mem0 同步库 → threadpool，绝不阻塞 event loop（红线：capture 永不卡 serve-api）。
-        result = await run_in_threadpool(
-            get_mem0_engine().add, messages, DEFAULT_USER_ID, metadata
+        result = await capture_turn(
+            user_text=user_text,
+            assistant_text=assistant_text,
+            budget=cfg.memory_md_budget_chars,
+            session_id=session_id,
+            message_id=message_id,
         )
-    except Exception:  # noqa: BLE001 — best-effort，任何抽取/写入失败都不阻断
-        logger.warning("mem0 auto-capture failed (turn already streamed)", exc_info=True)
+    except Exception:  # noqa: BLE001 — best-effort，读/合并/落库失败都不阻断（turn 已流式）
+        logger.warning("memory.md auto-capture failed (turn already streamed)", exc_info=True)
         return success_envelope(
-            {"captured": [], "count": 0}, request=request, source="memory"
+            {"changed": False, "captured": [], "count": 0}, request=request, source="memory"
         )
 
-    # mem0.add → {"results": [{"id","memory","event"}]}（event ∈ ADD/UPDATE/DELETE/NOOP）。
-    # 只把真正写入/更新的条目当「已记住」上报（NOOP/DELETE 不弹 M1d toast）。
-    raw = result.get("results", []) if isinstance(result, dict) else []
-    captured = [
-        {"id": r.get("id"), "memory": r.get("memory"), "event": r.get("event")}
-        for r in raw
-        if isinstance(r, dict) and r.get("event") in ("ADD", "UPDATE")
-    ]
-    # M1d — 真有抽取（ADD/UPDATE）才推 SSE，前端弹「已记住 X」+ 一键 undo toast。NOOP-only /
-    # 空抽取不打扰前端。safe_publish 自己吞所有异常（redis 在场走 Redis，缺席走进程内总线），
-    # 绝不烧穿 capture（本就 best-effort）。函数内 import 守 chat.py lazy-config 纪律。
-    if captured:
-        from src.events.publisher import safe_publish
-
-        safe_publish("memory.captured", data={"captured": captured}, source="memory")
     return success_envelope(
-        {"captured": captured, "count": len(captured)},
+        {"changed": result.changed, "captured": [], "count": 0},
         request=request,
         source="memory",
-        meta_extra={"total_events": len(raw)},
+        meta_extra={"truncated": result.truncated, "model": result.model},
     )
 
 
@@ -1129,60 +1125,14 @@ async def undo_captured_memory(request: Request, id: str = Query(...)):
 
 @router.post("/memory/search", dependencies=[Depends(verify_cf_access)])
 async def search_memory(request: Request, body: Optional[Dict[str, Any]] = None):
-    """按 query 向 mem0 store 召回相关记忆（M2 读侧召回注入）。
+    """[已退役 task 07-01] mem0 按-query 召回（M2）已被 memory.md 恒注入取代。
 
-    body = ``{query:str, limit?:int}``。data = ``{memories:[{id,memory,score}], count}``
-    （按相关性排序；bge-small 向量召回，本地离线）。
-
-    🔴 best-effort 读：调用方（Node gateway prepareChatRun）在 **TTFT 关键路径** 上 await 本
-    端点以注入 system —— 故召回失败/引擎不可用 **绝不 raise**，记 warning + 返回 ``memories=[]``，
-    让 chat 降级 context-light 而非中断。空 query 直接短路（省一次向量检索）。
-
-    与 capture（写）/undo 独立但同命中 mem0 store（DATA_ROOT/mem0/）；不碰 agent_memory_kv。
-    flag MAILAGENT_MEM0_RETRIEVAL 关时 Node 端根本不调本端点（字节级 flag-off），故本端点不自检 flag。
+    memory.md（Hermes 式有界记忆）现经 /chat/config 的 ``memorySummary`` 恒注入每轮 system
+    prompt（不再按 query 召回）。保留端点返回空 ``{memories:[], count:0}``（退役 stub，不碰
+    mem0/FAISS）——过渡期若 Node 仍调用（步2 前）→ 空召回 → context-light，安全；步2 起 Node
+    停止调用本端点、删 retrieveMemory 回调。
     """
-    opts = body or {}
-    query = opts.get("query")
-    if not isinstance(query, str):
-        # contract 违约 = Node 侧 bug（本不该发生）。调用方降级路径看不到这个 400 → server 侧 log。
-        logger.warning(
-            "memory search got malformed body (need query:str), keys=%s", list(opts.keys())
-        )
-        raise APIError("E_INVALID_ARG", "search requires query:str", source="memory")
-    query = query.strip()
-    if not query:
-        # 空 query → 无召回意义，短路（省一次向量检索）。
-        return success_envelope({"memories": [], "count": 0}, request=request, source="memory")
-
-    # limit 可选：有效正整数才透传，否则让引擎用自身默认 top_k（10）—— 不在此重复 magic number。
-    kwargs: Dict[str, Any] = {}
-    limit = opts.get("limit")
-    if isinstance(limit, int) and not isinstance(limit, bool) and limit > 0:
-        kwargs["limit"] = limit
-
-    # 懒 import：守 chat.py 的 lazy-config 纪律 + mem0 引擎懒加载红线（真正 search 才拉 mem0/
-    # fastembed/faiss ~150MB）。
-    from src.memory.mem0_engine import DEFAULT_USER_ID, get_mem0_engine
-
-    try:
-        # mem0 同步库 → threadpool，绝不阻塞 serve-api event loop。
-        result = await run_in_threadpool(
-            get_mem0_engine().search, query, DEFAULT_USER_ID, **kwargs
-        )
-    except Exception:  # noqa: BLE001 — best-effort 读：任何召回失败都降级空，绝不阻断 chat
-        logger.warning("mem0 search failed (chat will run context-light)", exc_info=True)
-        return success_envelope({"memories": [], "count": 0}, request=request, source="memory")
-
-    # mem0.search → {"results": [{"id","memory","score",...}]}。投影注入所需三字段；丢空 memory。
-    raw = result.get("results", []) if isinstance(result, dict) else []
-    memories = [
-        {"id": r.get("id"), "memory": r.get("memory"), "score": r.get("score")}
-        for r in raw
-        if isinstance(r, dict) and r.get("memory")
-    ]
-    return success_envelope(
-        {"memories": memories, "count": len(memories)}, request=request, source="memory"
-    )
+    return success_envelope({"memories": [], "count": 0}, request=request, source="memory")
 
 
 # ── mem0 偏好编译端点（M3 — user.md 偏好编译闭环）─────────────────────────────
