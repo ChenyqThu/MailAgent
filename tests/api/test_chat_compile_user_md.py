@@ -1,10 +1,10 @@
-"""M3b — user.md 偏好编译端点契约测试（mock mem0 + compile，真 agent_config store）。
+"""M3b — user.md 偏好编译端点契约测试（mock load_memory_md + compile，真 agent_config store）。
 
-``POST /api/chat/memory/compile-user-md``：mem0.get_all → compile → 仅 changed 时
-``set_profile_doc('user', agent_proposed)``。与 capture/search（Node 触发不自检 flag）不同，
-本端点 **自检 `MAILAGENT_USER_MD_COMPILE`**（手动触发，HTTP 直达）。compile_user_md 引擎全 mock
-（M3a 已测内部）；agent_config store 用真 `fresh_agent_cfg`（temp db）验证落库 + agent_proposed。
-auth bypass 默认 ON（conftest 设 MAILAGENT_API_AUTH_DISABLED=true）。
+``POST /api/chat/memory/compile-user-md``：load_memory_md → compile → 仅 changed 时
+``set_profile_doc('user', agent_proposed)``（task 07-01 步4：源从 mem0 改 memory.md）。与
+capture/search（Node 触发不自检 flag）不同，本端点 **自检 `MAILAGENT_USER_MD_COMPILE`**（手动触发，
+HTTP 直达）。compile_user_md 引擎多数 mock（M3a 已测内部）；agent_config store 用真 `fresh_agent_cfg`
+（temp db）验证落库 + agent_proposed。auth bypass 默认 ON（conftest 设 MAILAGENT_API_AUTH_DISABLED=true）。
 """
 
 from __future__ import annotations
@@ -22,11 +22,12 @@ def _patch_compile(monkeypatch, *, content="# USER\n\n- merged\n", changed=True,
     """patch 端点函数内 import 的 compile_user_md（async）。端点测试隔离引擎内部（M3a 已测）。"""
     import src.memory.user_md_compiler as umc
 
-    async def fake(*, current_user_md, memory_items, client=None):
+    async def fake(*, current_user_md, memory_md, client=None):
         if raises is not None:
             raise raises
         return umc.CompileResult(
-            content=content, changed=changed, item_count=len(memory_items),
+            content=content, changed=changed,
+            item_count=sum(1 for ln in (memory_md or "").split("\n") if ln.strip()),
             model="claude-sonnet-4-6", output_tokens=42,
         )
 
@@ -37,22 +38,19 @@ def _patch_compile(monkeypatch, *, content="# USER\n\n- merged\n", changed=True,
 def compile_client(
     monkeypatch: pytest.MonkeyPatch, fresh_agent_cfg
 ) -> Iterator[Tuple[TestClient, mock.MagicMock, object]]:
-    """TestClient + flag ON + mock mem0 get_all + 真 agent_config store（fresh temp db）。"""
+    """TestClient + flag ON + mock load_memory_md + 真 agent_config store（fresh temp db）。"""
     import src.config as cfgmod
-    import src.memory.mem0_engine as me
+    import src.memory.memory_md as mm
 
     monkeypatch.setattr(cfgmod.config, "user_md_compile_enabled", True)
-    fake_engine = mock.MagicMock()
-    fake_engine.get_all.return_value = {
-        "results": [{"id": "m1", "memory": "User prefers terse Chinese replies"}]
-    }
-    monkeypatch.setattr(me, "get_mem0_engine", lambda: fake_engine)
+    fake_load = mock.MagicMock(return_value="- User prefers terse Chinese replies\n")
+    monkeypatch.setattr(mm, "load_memory_md", fake_load)
     with TestClient(app, raise_server_exceptions=False) as client:
-        yield client, fake_engine, fresh_agent_cfg
+        yield client, fake_load, fresh_agent_cfg
 
 
 def test_compile_disabled_returns_403(monkeypatch: pytest.MonkeyPatch):
-    """flag-off → E_DISABLED 403（在碰 store/engine 前拦截）。"""
+    """flag-off → E_DISABLED 403（在碰 store/memory.md 前拦截）。"""
     import src.config as cfgmod
 
     monkeypatch.setattr(cfgmod.config, "user_md_compile_enabled", False)
@@ -63,14 +61,14 @@ def test_compile_disabled_returns_403(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_compile_changed_writes_user_doc(compile_client, monkeypatch: pytest.MonkeyPatch):
-    client, fake_engine, store = compile_client
+    client, fake_load, store = compile_client
     _patch_compile(monkeypatch, content="# USER\n\n- terse Chinese\n", changed=True)
     r = client.post("/api/chat/memory/compile-user-md")
     body = r.json()
     assert r.status_code == 200
     assert body["data"]["changed"] is True
     assert body["data"]["after"] == "# USER\n\n- terse Chinese\n"
-    assert body["data"]["itemCount"] == 1
+    assert body["data"]["itemCount"] == 1  # memory.md 1 条非空行
     assert body["meta"]["source"] == "memory"
     assert body["data"]["before"].startswith("# USER")  # 写前 seed（含 # USER 锚）
     assert body["data"]["before"] != body["data"]["after"]  # changed → before/after 不同
@@ -79,23 +77,18 @@ def test_compile_changed_writes_user_doc(compile_client, monkeypatch: pytest.Mon
     # M3c — beforeHash：前端 rollback 需要，应为写前 doc 的 content_hash（非空 str）。
     before_hash = body["data"]["beforeHash"]
     assert isinstance(before_hash, str) and len(before_hash) > 0
-    # 验证 beforeHash 与写前 doc 的 content_hash 一致（get_profile_doc 先 seed，编译后写新版；
-    # compile_client 是 fresh_agent_cfg，seed 写前无 updated_by='agent_proposed'，hash 稳定）。
-    # 注：此时 store 已写了 agent_proposed 版本；beforeHash 是编译前 seed 的 hash。
-    # 通过 rollback_profile_doc 可验：targetHash=beforeHash → 还原到 seed（不测在此）。
-    # 简单验证：beforeHash 非空 str，且与 after doc hash 不同（changed=True 时前后 hash 不同）。
     after_doc = store.get_profile_doc("user")
     assert before_hash != after_doc.content_hash  # changed=True → 前后 hash 不同
     # 落库验证：user doc 真被写 + updated_by=agent_proposed（agent_config history/rollback 兜底）
     doc = store.get_profile_doc("user")
     assert doc.content == "# USER\n\n- terse Chinese\n"
     assert doc.updated_by == "agent_proposed"
-    # get_all(DEFAULT_USER_ID) —— 位置参（run_in_threadpool 转发）
-    assert fake_engine.get_all.call_args[0][0] == "owner"
+    # memory.md 源经 load_memory_md() 读（无参）
+    assert fake_load.call_count == 1
 
 
 def test_compile_unchanged_does_not_write(compile_client, monkeypatch: pytest.MonkeyPatch):
-    client, fake_engine, store = compile_client
+    client, _fake_load, store = compile_client
     before = store.get_profile_doc("user")  # seed-on-read
     _patch_compile(monkeypatch, changed=False, content=before.content)
     r = client.post("/api/chat/memory/compile-user-md")
@@ -108,11 +101,11 @@ def test_compile_unchanged_does_not_write(compile_client, monkeypatch: pytest.Mo
     assert after.content_hash == before.content_hash
 
 
-def test_compile_get_all_failure_returns_500(compile_client):
-    client, fake_engine, _store = compile_client
-    fake_engine.get_all.side_effect = RuntimeError("faiss down")
+def test_compile_load_memory_failure_returns_500(compile_client):
+    client, fake_load, _store = compile_client
+    fake_load.side_effect = RuntimeError("agent_config down")
     r = client.post("/api/chat/memory/compile-user-md")
-    # 用户主动操作 → mem0 不可用 = 编译失败 raise（区别 search best-effort 降级）
+    # 用户主动操作 → memory.md 读不可用 = 编译失败 raise（区别 search best-effort 降级）
     assert r.status_code == 500
     assert r.json()["error"]["code"] == "E_INTERNAL"
 
@@ -120,26 +113,22 @@ def test_compile_get_all_failure_returns_500(compile_client):
 def test_compile_engine_error_returns_500(compile_client, monkeypatch: pytest.MonkeyPatch):
     import src.memory.user_md_compiler as umc
 
-    client, _fake_engine, _store = compile_client
+    client, _fake_load, _store = compile_client
     _patch_compile(monkeypatch, raises=umc.UserMdCompileError("missing # USER"))
     r = client.post("/api/chat/memory/compile-user-md")
     assert r.status_code == 500
     assert r.json()["error"]["code"] == "E_INTERNAL"
 
 
-def test_compile_handles_non_dict_get_all(compile_client, monkeypatch: pytest.MonkeyPatch):
-    """mem0 API drift 防御：get_all 非 dict → items=[] 传给 compile（不 AttributeError）。"""
-    import src.memory.user_md_compiler as umc
-
-    client, fake_engine, _store = compile_client
-    fake_engine.get_all.return_value = ["weird-non-dict-shape"]
-    captured = {}
-
-    async def fake(*, current_user_md, memory_items, client=None):
-        captured["items"] = memory_items
-        return umc.CompileResult(content=current_user_md, changed=False, item_count=0)
-
-    monkeypatch.setattr(umc, "compile_user_md", fake)
+def test_compile_empty_memory_md_no_write(compile_client):
+    """空 memory.md → 真 compile_user_md 短路 unchanged → 不落库、不崩（不 patch compile）。"""
+    client, fake_load, store = compile_client
+    fake_load.return_value = ""  # 空 memory.md（seed 首次即空）
+    before = store.get_profile_doc("user")
     r = client.post("/api/chat/memory/compile-user-md")
+    body = r.json()
     assert r.status_code == 200
-    assert captured["items"] == []  # 非 dict get_all → 安全降级 []
+    assert body["data"]["changed"] is False
+    assert body["data"]["itemCount"] == 0
+    after = store.get_profile_doc("user")
+    assert after.content_hash == before.content_hash  # 未落库

@@ -1135,26 +1135,26 @@ async def search_memory(request: Request, body: Optional[Dict[str, Any]] = None)
     return success_envelope({"memories": [], "count": 0}, request=request, source="memory")
 
 
-# ── mem0 偏好编译端点（M3 — user.md 偏好编译闭环）─────────────────────────────
+# ── memory.md 偏好编译端点（M3 — user.md 偏好编译闭环）────────────────────────
 #
 # 与 capture（写）/search（读）的关键差异：那两个由 Node gateway 触发（onFinish /
 # prepareChatRun），flag 关时 Node 根本不调（字节级 flag-off），故端点不自检 flag。
 # 本端点是 **Settings 按钮手动触发**（HTTP 直达）→ 必须**自检 flag**（flag-off → E_DISABLED，
 # 防按钮以外的直接调用）。且是**用户主动操作** → 编译/落库失败 raise（区别 search 的 best-effort
-# 降级）。mem0 get_all（同步库 + faiss 懒加载）走 threadpool；SQLite profile 读写同步即可（短连接快）。
+# 降级）。memory.md 源（agent_config.db 的 MEMORY doc）+ user.md 读写均碰 SQLite 短连接（同步即可，无 faiss/threadpool）。
 
 
 @router.post("/memory/compile-user-md", dependencies=[Depends(verify_cf_access)])
 async def compile_user_md_endpoint(request: Request):
-    """从 mem0 累积的偏好记忆编译合并进 user.md（M3 偏好编译闭环，手动触发）。
+    """从 memory.md 编译合并持久偏好进 user.md（M3 偏好编译闭环，手动触发；task 07-01 步4 换源）。
 
-    ``mem0.get_all`` → LLM 合并现有 user.md（保留手编）+ 偏好候选 → 仅 ``changed`` 时
+    ``load_memory_md`` → LLM 合并现有 user.md（保留手编）+ memory.md 偏好 → 仅 ``changed`` 时
     ``set_profile_doc('user', updated_by='agent_proposed')``（agent_config history/rollback 兜底）。
     data = ``{before, after, changed, itemCount}``（前端展示 before/after diff + 一键 rollback）。
     flag ``MAILAGENT_USER_MD_COMPILE`` 关 → E_DISABLED。
     """
     # 懒 import：守 chat.py lazy-config 纪律（顶层 import src.config 会在裸 worktree / CI
-    # import self-check 时炸）+ mem0 引擎懒加载红线（真正 get_all 才拉 faiss ~150MB）。
+    # import self-check 时炸）。memory.md 读只碰 agent_config.db（SQLite 短连接，无 faiss）。
     from src.config import config as cfg
 
     if not cfg.user_md_compile_enabled:
@@ -1166,27 +1166,26 @@ async def compile_user_md_endpoint(request: Request):
         )
 
     from src.agent_config.store import get_agent_config_store
-    from src.memory.mem0_engine import DEFAULT_USER_ID, get_mem0_engine
+    from src.memory.memory_md import load_memory_md
     from src.memory.user_md_compiler import UserMdCompileError, compile_user_md
 
     store = get_agent_config_store()
     current_doc = store.get_profile_doc("user")  # seed-on-read 保证非空
     current = current_doc.content
 
-    # mem0 get_all（同步库 + faiss 懒加载）→ threadpool，绝不阻塞 serve-api event loop。
+    # memory.md（agent_config.db 的 MEMORY doc，seed-on-read → 首次 ''）= 偏好源。读只碰 SQLite
+    # 短连接（fast，无 faiss），无需 threadpool；空 memory.md → compile 短路 unchanged（不崩）。
     # 不可用 = 编译失败（用户主动操作）→ raise（区别 search 的 best-effort 降级空）。
     try:
-        raw = await run_in_threadpool(get_mem0_engine().get_all, DEFAULT_USER_ID)
+        memory_md = load_memory_md()
     except Exception as exc:  # noqa: BLE001
-        logger.warning("mem0 get_all failed during user.md compile", exc_info=True)
+        logger.warning("load_memory_md failed during user.md compile", exc_info=True)
         raise APIError(
             "E_INTERNAL", f"memory store unavailable: {exc}", source="memory", http_status=500
         )
-    # mem0 get_all → {"results": [...]}（v1.1，与 search/capture 同结构）；非 dict = API drift → []。
-    items = raw.get("results", []) if isinstance(raw, dict) else []
 
     try:
-        result = await compile_user_md(current_user_md=current, memory_items=items)
+        result = await compile_user_md(current_user_md=current, memory_md=memory_md)
     except UserMdCompileError as exc:
         raise APIError("E_INTERNAL", f"compile failed: {exc}", source="memory", http_status=500)
 
