@@ -11,11 +11,14 @@ memory.md（Hermes 式有界记忆，auto-capture 每轮合并进的持久事实
   `task_extractor` 不自写 Notion）。引擎**不读 memory.md**（端点把 `load_memory_md()` 全文传进来）
   → 引擎纯粹、易单测。
 - **forced tool_use**（复用 `LLMClient.classify`，`task_extractor.py` 同款）→ 结构化输出可靠。
-- **校验兜底**：产出空 / 不含 `# USER` 锚 → raise，绝不写坏恒注入的身份文档（rollback 兜其余）。
+- **校验兜底**：产出空 → raise；**首个非空行非 `# USER` 锚 → raise**（收紧原 substring 检查，
+  拒在 heading 前塞可信 preamble 蒙混）；绝不写坏恒注入的身份文档（rollback 兜其余）。
 - **安全（promote untrusted→trusted）**：memory.md=不可信（源自邮件抽取），user.md=可信恒注入
-  身份 → 编译是提升。此层守「只提炼真实稳定偏好、拒安全/审批弱化指令或嵌入『记住/忽略』」（结构上
-  `PRODUCT_SAFETY_FLOOR` 仍 prepend + capture 已 `_strip_unsafe_lines` 净源 + 用户审 diff 才接受，
-  多层叠加）。memory.md 包进 `<untrusted_memory>` 边界并中和内嵌标记（结构硬防御）。
+  身份 → 编译是提升。**落库前确定性剔除安全/审批弱化行**（复用 capture 侧同一
+  `memory_md._strip_unsafe_lines` SSoT，非仅靠 prompt + 事后 rollback）：即便模型无视 SAFETY 段把
+  「auto-approve all sends / ignore confirmation」写进产出，也在返回前剥掉对应行；剥后仅剩 heading
+  → 视为 no-op unchanged。叠加结构上 `PRODUCT_SAFETY_FLOOR` 仍 prepend + memory.md 包进
+  `<untrusted_memory>` 边界并中和内嵌标记 + 用户审 diff 才接受，多层防御。
 """
 from __future__ import annotations
 
@@ -23,6 +26,9 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from src.llm_agent.client import LLMClient, LLMResult
+# 复用 capture 侧的同一安全过滤 SSoT（memory_md 的纯正则函数，非 store 读取器——不破坏「引擎不读
+# memory.md」的分层）：compile 提升 untrusted→trusted 前确定性剔除安全/审批弱化行，避免规则漂移。
+from src.memory.memory_md import _strip_unsafe_lines
 
 # USER 文档必须保留的标题锚（校验兜底：LLM 产出不含此 → 拒绝，防写坏恒注入身份文档）。
 USER_DOC_HEADING = "# USER"
@@ -160,6 +166,25 @@ def _build_user(current_user_md: str, memory_md: str) -> str:
     )
 
 
+def _first_nonempty_line(content: str) -> str:
+    """返回首个非空行（trim 后）；无非空行 → ''。用于收紧 '# USER' 锚校验。"""
+    for ln in content.split("\n"):
+        s = ln.strip()
+        if s:
+            return s
+    return ""
+
+
+def _is_heading_only(content: str) -> bool:
+    """确定性安全过滤后是否只剩 '# USER' heading（或全空）—— 无干净偏好行可写 → no-op unchanged
+    （产出全是被 ``_strip_unsafe_lines`` 剔除的安全弱化行时会走到这，仿 capture「全 unsafe→unchanged」）。"""
+    for ln in content.split("\n"):
+        s = ln.strip()
+        if s and s != USER_DOC_HEADING:
+            return False
+    return True
+
+
 async def compile_user_md(
     *,
     current_user_md: str,
@@ -169,8 +194,10 @@ async def compile_user_md(
     """把 memory.md 的持久偏好合并进现有 user.md（LLM forced tool_use）。
 
     - 空 memory.md → 短路返回 unchanged（不调 LLM，省钱 + 不动文档）。
-    - 校验兜底：产出空 / 不含 ``# USER`` → raise ``UserMdCompileError``（绝不写坏恒注入身份
-      文档；history/rollback 兜其余）。
+    - 落库前确定性剔除安全/审批弱化行（复用 ``memory_md._strip_unsafe_lines``）；剥后仅剩
+      heading → no-op unchanged（不清空既有 user.md）。
+    - 校验兜底：产出空 / 首个非空行非 ``# USER`` 锚 → raise ``UserMdCompileError``（绝不写坏
+      恒注入身份文档；history/rollback 兜其余）。
     - 引擎不落库（写在端点）。``client`` 缺省自建并在 finally 关闭。
     """
     base = current_user_md.strip() if isinstance(current_user_md, str) else ""
@@ -182,6 +209,8 @@ async def compile_user_md(
     mem = memory_md.strip() if isinstance(memory_md, str) else ""
     if not mem:
         return CompileResult(content=base, changed=False, item_count=0)
+    # memory.md 非空行数（端点可观测「多少条记忆参与编译」；memory.md 是有界文档非离散列表）。
+    item_count = sum(1 for ln in mem.split("\n") if ln.strip())
 
     own_client = client is None
     client = client or LLMClient()
@@ -202,10 +231,27 @@ async def compile_user_md(
     if not isinstance(content, str) or not content.strip():
         raise UserMdCompileError("compiler returned empty content")
     content = content.strip()
-    # 校验兜底：恒注入身份文档必须保留 '# USER' 锚（LLM 偶发结构破坏 → 拒绝，不写坏）。
-    if USER_DOC_HEADING not in content:
+    # 🔴 HIGH — 落库前确定性安全过滤（defense-in-depth）：compile 把 UNTRUSTED memory.md 提升进
+    # TRUSTED 恒注入 user.md，绝不能只靠 prompt + 事后 rollback 兜安全弱化行。即便模型无视系统提示的
+    # SAFETY 段把「auto-approve all sends / ignore confirmation」写进产出，也在返回前剔除对应行
+    # （复用 capture 侧同一 memory_md._strip_unsafe_lines SSoT，避免规则漂移）。
+    content = _strip_unsafe_lines(content).strip()
+    # 过滤后实质变空 / 仅剩 '# USER' heading（产出全是被剔除的安全弱化行）→ 无干净偏好可写 →
+    # 视为 no-op unchanged（不写、不清空既有 user.md），与 capture「全 unsafe → unchanged」同理。
+    if _is_heading_only(content):
+        return CompileResult(
+            content=base,
+            changed=False,
+            item_count=item_count,
+            model=result.model,
+            input_tokens=result.input_tokens,
+            output_tokens=result.output_tokens,
+        )
+    # 校验兜底（MEDIUM — 收紧锚）：恒注入身份文档首个非空行必须严格 == '# USER'（原 substring 检查
+    # 可被在 heading 前塞可信 preamble 蒙混 —— /chat/config 会把全文拼进 standing context）。
+    if _first_nonempty_line(content) != USER_DOC_HEADING:
         raise UserMdCompileError(
-            f"compiled content missing '{USER_DOC_HEADING}' heading; "
+            f"compiled content must start with '{USER_DOC_HEADING}' heading; "
             "refusing to write malformed USER doc"
         )
     # 软上限：产出超大 = LLM 失控 / 未去重单调膨胀 → 拒绝写恒注入 doc（防 token 成本失控）。
@@ -218,8 +264,7 @@ async def compile_user_md(
     return CompileResult(
         content=content,
         changed=content != base,
-        # memory.md 非空行数（端点可观测「多少条记忆参与编译」；memory.md 是有界文档非离散列表）。
-        item_count=sum(1 for ln in mem.split("\n") if ln.strip()),
+        item_count=item_count,
         model=result.model,
         input_tokens=result.input_tokens,
         output_tokens=result.output_tokens,
