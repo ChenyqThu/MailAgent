@@ -1444,6 +1444,10 @@ export interface AgentProfileDoc {
   updatedBy: string
   updatedAt: number | null
   editable: boolean
+  /** task 07-01 — only present on the `memory` doc: the hard char budget
+   *  (config.memory_md_budget_chars) memory.md is always injected within. The
+   *  Settings editor shows length / budget prominently. */
+  budgetChars?: number
 }
 
 /** PR6 — one entry of a profile doc's version history (GET /api/agent/profile/history). */

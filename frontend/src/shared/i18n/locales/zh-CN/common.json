@@ -1213,6 +1213,12 @@
       "deleteError": "无法删除记忆",
       "loadError": "无法加载记忆"
     },
+    "memoryCaptureModel": {
+      "title": "记忆抽取模型",
+      "desc": "自动记忆（memory.md）从对话中抽取持久事实时所用的模型。仅在开启自动记忆捕获时生效。",
+      "label": "抽取模型",
+      "helper": "每一轮被捕获的对话会调用一次该模型，建议用快速便宜的小模型（如 claude-haiku-4-5）。留空即用默认 haiku。修改后需重启后端生效。"
+    },
     "userMdCompile": {
       "title": "从记忆编译偏好",
       "desc": "将 AI 从对话中捕获的偏好类记忆合并进 user.md，手动触发后立即生效。",
@@ -1227,10 +1233,15 @@
       "rollbackError": "撤销失败"
     },
     "standingDocs": {
-      "title": "身份文档",
-      "desc": "查看并手动编辑 Standing Context 的 4 个身份文档（SOUL / AGENT / RULES / USER）。修改立即生效于下一次对话。",
+      "title": "身份与记忆文档",
+      "desc": "查看并手动编辑 Standing Context 的 4 个身份文档（SOUL / AGENT / RULES / USER）与自动维护的记忆（memory）。修改立即生效于下一次对话。",
       "highRiskBadge": "高危",
       "floorNote": "PRODUCT_SAFETY_FLOOR 始终在代码层前置，文档内容无法弱化它。RULES 越权措辞会被服务端拒绝。",
+      "autoBadge": "自动记忆",
+      "memoryNote": "memory.md 由 AI 从对话中自动抽取并改写持久事实，你也可手动编辑。它作为「背景记忆」注入每轮对话（非身份文档），无法弱化安全底线。",
+      "budgetUsage": "记忆用量",
+      "overBudget": "超出预算",
+      "overBudgetHint": "内容超过 {{budget}} 字符预算，请精简后再保存。",
       "edit": "编辑",
       "save": "保存",
       "saving": "保存中…",

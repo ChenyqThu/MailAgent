@@ -102,6 +102,10 @@ export const MANAGED_ENV_KEYS = [
   'LLM_SENT_PROMPT_PATH',
   'LLM_CACHE_ENABLED',
   'LLM_CACHE_TTL',
+  // memory.md auto-capture 抽取模型 (task 07-01 #1). config.py pydantic singleton
+  // (memory_capture_model, default claude-haiku-4-5) → 改动需重启 serve-api 生效
+  // (EnvField markRestartRequired), 同 LLM_MODEL. CustomAiSection 的记忆抽取模型下拉写它.
+  'MEMORY_CAPTURE_MODEL',
 
   // — Notifications (PR D NotificationsTab)
   'FEISHU_NOTIFY_ENABLED',

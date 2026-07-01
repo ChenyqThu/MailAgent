@@ -22,10 +22,13 @@ import {
   Loader2,
   Pencil,
   RotateCcw,
+  Sparkles,
   X
 } from 'lucide-react'
 
 import { useMailApi } from '@shared/hooks/useMailApi'
+import { useEnabledModels, FALLBACK_MODELS } from '@shared/hooks/useLlmModels'
+import { useEnvStore } from '@shared/state/env'
 import { readSkillOverrides, writeSkillOverrides } from '@shared/chat/skill_enablement'
 import { toastError, toastSuccess } from '@shared/state/toast'
 import type {
@@ -40,6 +43,7 @@ import { Button } from '@shared/components/ui/button'
 
 import { Section } from './parts/Section'
 import { Row } from './parts/Row'
+import { EnvField } from './parts/EnvField'
 
 // ---------------------------------------------------------------------------
 // Skills subsection
@@ -278,6 +282,67 @@ function UserMdCompileSection(): React.ReactElement | null {
 }
 
 // ---------------------------------------------------------------------------
+// MemoryCaptureModelSection — 记忆抽取模型（MEMORY_CAPTURE_MODEL，task 07-01 #1）
+// ---------------------------------------------------------------------------
+//
+// auto-capture 每轮把持久事实合并进 memory.md 时用的 LLM 模型。这是 config.py 的 pydantic
+// 字段（singleton，非热读）→ 改动写 .env 后需重启 serve-api 生效；EnvField 的 markRestartRequired
+// 会拉起全局重启横幅（与 LLM_MODEL 同款机制）。.env 未设时后端默认 = claude-haiku-4-5（便宜快，
+// 每被捕获的对话轮跑一次，成本敏感）。
+
+const MEMORY_CAPTURE_DEFAULT_MODEL = 'claude-haiku-4-5'
+
+function MemoryCaptureModelSection(): React.ReactElement | null {
+  const { t } = useTranslation()
+  const { models: enabledModels } = useEnabledModels()
+  const currentModel = useEnvStore((s) =>
+    s.state.status === 'ready' ? (s.state.snapshot.values['MEMORY_CAPTURE_MODEL'] ?? '') : ''
+  )
+  // Gate on the SAME flag as the identity/memory doc editor (no new flag): the memory
+  // capture model is part of the same advanced agent-config surface (task 07-01 step 3).
+  // flag-off → return null (no DOM), like StandingDocsSection.
+  const { data: editorEnabled } = useQuery<boolean>({
+    queryKey: ['chat', 'config', 'standingDocsEditorEnabled'],
+    queryFn: fetchStandingDocsEditorEnabled,
+    staleTime: 30_000,
+    retry: false
+  })
+
+  const options = React.useMemo(() => {
+    const base = enabledModels.length > 0 ? enabledModels : FALLBACK_MODELS
+    // Always offer the recommended haiku default (it isn't in FALLBACK_MODELS), then append
+    // the current .env value as an orphan if it's set and not already listed (mirrors AiTab
+    // LLM_MODEL orphan handling so a narrowed enabled-list never blanks the select).
+    const withDefault = base.includes(MEMORY_CAPTURE_DEFAULT_MODEL)
+      ? base
+      : [MEMORY_CAPTURE_DEFAULT_MODEL, ...base]
+    const withOrphan =
+      currentModel && !withDefault.includes(currentModel)
+        ? [...withDefault, currentModel]
+        : withDefault
+    return withOrphan.map((id) => ({ value: id, label: id }))
+  }, [enabledModels, currentModel])
+
+  if (!editorEnabled) return null
+
+  return (
+    <Section
+      title={t('settings.memoryCaptureModel.title')}
+      helper={t('settings.memoryCaptureModel.desc')}
+    >
+      <EnvField
+        envKey="MEMORY_CAPTURE_MODEL"
+        control="select"
+        label={t('settings.memoryCaptureModel.label')}
+        helper={t('settings.memoryCaptureModel.helper')}
+        options={options}
+        placeholder={MEMORY_CAPTURE_DEFAULT_MODEL}
+      />
+    </Section>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // StandingDocsSection — Settings 身份文档编辑器（M-this task）
 // ---------------------------------------------------------------------------
 //
@@ -289,12 +354,16 @@ function UserMdCompileSection(): React.ReactElement | null {
 //   - flag MAILAGENT_STANDING_DOCS_EDITOR 默认 ON；flag-off → return null（DOM 无此区块）
 
 const HIGH_RISK_DOCS = new Set(['soul', 'agent', 'rules'])
+const MEMORY_DOC = 'memory'
+// Fallback budget if the backend omits budgetChars (config.memory_md_budget_chars default).
+const MEMORY_DEFAULT_BUDGET = 5000
 
 const DOC_LABELS: Record<string, string> = {
   soul: 'SOUL（身份）',
   agent: 'AGENT（操作笔记）',
   rules: 'RULES（硬约束）',
-  user: 'USER（用户偏好）'
+  user: 'USER（用户偏好）',
+  memory: 'MEMORY（自动记忆）'
 }
 
 /** Fetch standingDocsEditorEnabled from serve-api /chat/config.
@@ -330,7 +399,15 @@ function DocEntry({ doc, onRefetch }: DocEntryProps): React.ReactElement {
   const [rollingBack, setRollingBack] = React.useState<string | null>(null)
 
   const isHighRisk = HIGH_RISK_DOCS.has(doc.docName.toLowerCase())
+  const isMemory = doc.docName.toLowerCase() === MEMORY_DOC
   const label = DOC_LABELS[doc.docName.toLowerCase()] ?? doc.docName.toUpperCase()
+
+  // memory.md — Hermes 式有界记忆：恒注入每轮 prompt，有硬字符预算。编辑时按 draft 实时计数，
+  // 否则按已存内容；超预算时后端拒存 → 前端也 disable 保存并红色提示（显著显示长度/占比）。
+  const budget = doc.budgetChars ?? MEMORY_DEFAULT_BUDGET
+  const memoryLen = isMemory ? (editing ? draft.length : doc.content.length) : 0
+  const overBudget = isMemory && memoryLen > budget
+  const budgetPct = budget > 0 ? Math.min(100, Math.round((memoryLen / budget) * 100)) : 0
 
   // Sync draft from incoming doc.content (after parent refetch on save/rollback)
   // only if the user isn't actively editing — preserves unsaved edits otherwise.
@@ -436,7 +513,23 @@ function DocEntry({ doc, onRefetch }: DocEntryProps): React.ReactElement {
             {t('settings.standingDocs.highRiskBadge')}
           </span>
         )}
-        {updatedLabel && !expanded && (
+        {isMemory && (
+          <span className="inline-flex items-center gap-1 rounded-full bg-ink-4 border border-ink-border px-1.5 py-0.5 text-micro text-ink-fg-2 shrink-0">
+            <Sparkles className="size-2.5" />
+            {t('settings.standingDocs.autoBadge')}
+          </span>
+        )}
+        {isMemory && (
+          <span
+            className={[
+              'text-micro font-mono shrink-0',
+              overBudget ? 'text-fail' : 'text-ink-fg-3'
+            ].join(' ')}
+          >
+            {memoryLen}/{budget}
+          </span>
+        )}
+        {!isMemory && updatedLabel && !expanded && (
           <span className="text-micro text-ink-fg-3 shrink-0">{updatedLabel}</span>
         )}
       </button>
@@ -447,6 +540,36 @@ function DocEntry({ doc, onRefetch }: DocEntryProps): React.ReactElement {
           {isHighRisk && (
             <div className="rounded-md border border-fail/30 bg-fail/10 px-2.5 py-1.5 text-meta text-fail">
               {t('settings.standingDocs.floorNote')}
+            </div>
+          )}
+
+          {/* memory.md is NOT an identity doc — it's auto-maintained (agent capture
+              rewrites it) untrusted background memory. Distinct neutral note (not the
+              red high-risk floor) + prominent length/budget so the user sees usage
+              live while editing. */}
+          {isMemory && (
+            <div className="space-y-1.5">
+              <div className="rounded-md border border-ink-border bg-ink-4/60 px-2.5 py-1.5 text-meta text-ink-fg-2">
+                {t('settings.standingDocs.memoryNote')}
+              </div>
+              <div className="space-y-1">
+                <div className="flex items-center justify-between text-micro font-mono">
+                  <span className="text-ink-fg-3">{t('settings.standingDocs.budgetUsage')}</span>
+                  <span className={overBudget ? 'text-fail font-medium' : 'text-ink-fg-2'}>
+                    {memoryLen} / {budget}
+                    {overBudget ? ` · ${t('settings.standingDocs.overBudget')}` : ''}
+                  </span>
+                </div>
+                <div className="h-1.5 w-full overflow-hidden rounded-full bg-ink-4">
+                  <div
+                    className={[
+                      'h-full rounded-full transition-[width] duration-fast',
+                      overBudget ? 'bg-fail' : 'bg-[rgb(var(--c-accent))]'
+                    ].join(' ')}
+                    style={{ width: `${budgetPct}%` }}
+                  />
+                </div>
+              </div>
             </div>
           )}
 
@@ -469,11 +592,16 @@ function DocEntry({ doc, onRefetch }: DocEntryProps): React.ReactElement {
                   size="sm"
                   variant="outline"
                   onClick={() => void handleSave()}
-                  disabled={saving}
+                  disabled={saving || overBudget}
                 >
                   {saving ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
                   {saving ? t('settings.standingDocs.saving') : t('settings.standingDocs.save')}
                 </Button>
+                {overBudget && (
+                  <span className="text-micro text-fail">
+                    {t('settings.standingDocs.overBudgetHint', { budget })}
+                  </span>
+                )}
                 <button
                   onClick={handleCancelEdit}
                   className="p-1 rounded text-ink-fg-2 hover:text-ink-fg hover:bg-ink-3 transition-colors duration-fast"
@@ -609,7 +737,9 @@ function StandingDocsSection(): React.ReactElement | null {
         </div>
       )
     }
-    // Only show the 4 editable docs (SOUL/AGENT/RULES/USER); skip MEMORY/SKILLS projections.
+    // Show all editable docs (SOUL/AGENT/RULES/USER + memory.md); skip the SKILLS projection.
+    // memory.md (task 07-01) is editable=true from the backend → appears here with its own
+    // auto-maintained + budget affordances (DocEntry branches on docName==='memory').
     const editable = docs.filter((d) => d.editable)
     if (editable.length === 0) {
       return (
@@ -643,6 +773,7 @@ export function CustomAiSection(): React.ReactElement {
     <>
       <SkillsSection />
       <UserMdCompileSection />
+      <MemoryCaptureModelSection />
       <StandingDocsSection />
     </>
   )

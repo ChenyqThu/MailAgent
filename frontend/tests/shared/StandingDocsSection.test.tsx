@@ -148,13 +148,15 @@ describe('StandingDocsSection — flag-off', () => {
 
     // The section title should not be in the DOM
     expect(screen.queryByText('settings.standingDocs.title')).toBeNull()
+    // task 07-01: the memory-capture-model dropdown gates on the SAME flag → also absent.
+    expect(screen.queryByText('settings.memoryCaptureModel.title')).toBeNull()
     // listProfileDocs should not have been called
     expect(mockListProfileDocs).not.toHaveBeenCalled()
   })
 })
 
 describe('StandingDocsSection — flag-on', () => {
-  test('lists the 4 editable docs when flag is enabled', async () => {
+  test('lists the editable docs (incl. memory) when flag is enabled', async () => {
     mockChatConfig(true)
 
     const docs: AgentProfileDoc[] = [
@@ -162,8 +164,9 @@ describe('StandingDocsSection — flag-on', () => {
       makeDoc({ docName: 'agent', content: 'Agent notes', editable: true }),
       makeDoc({ docName: 'rules', content: 'Hard rules', editable: true }),
       makeDoc({ docName: 'user', content: 'User prefs', editable: true }),
-      // projections — should be filtered out (editable: false)
-      makeDoc({ docName: 'memory', content: 'memory...', editable: false }),
+      // task 07-01: memory is now an editable stored doc (with a char budget).
+      makeDoc({ docName: 'memory', content: 'durable...', editable: true, budgetChars: 5000 }),
+      // skills stays a read-only projection → filtered out (editable: false)
       makeDoc({ docName: 'skills', content: 'skills...', editable: false })
     ]
     mockListProfileDocs.mockResolvedValue(docs)
@@ -175,14 +178,44 @@ describe('StandingDocsSection — flag-on', () => {
       expect(screen.getByText('SOUL（身份）')).toBeTruthy()
     })
 
-    // All 4 editable doc labels should appear (DOC_LABELS map)
+    // 4 identity docs + memory should appear (DOC_LABELS map)
     expect(screen.getByText('AGENT（操作笔记）')).toBeTruthy()
     expect(screen.getByText('RULES（硬约束）')).toBeTruthy()
     expect(screen.getByText('USER（用户偏好）')).toBeTruthy()
+    expect(screen.getByText('MEMORY（自动记忆）')).toBeTruthy()
 
-    // Projections should NOT be listed
-    expect(screen.queryByText('MEMORY')).toBeNull()
+    // The SKILLS projection should NOT be listed
     expect(screen.queryByText('SKILLS')).toBeNull()
+  })
+
+  test('memory doc shows length/budget and disables save when over budget', async () => {
+    mockChatConfig(true)
+    const memoryDoc = makeDoc({
+      docName: 'memory',
+      content: 'short memory',
+      editable: true,
+      budgetChars: 20 // tiny budget so a modest edit trips the guard
+    })
+    mockListProfileDocs.mockResolvedValue([memoryDoc])
+
+    renderUi()
+
+    await waitFor(() => expect(screen.getByText('MEMORY（自动记忆）')).toBeTruthy())
+
+    // Expand memory → budget usage label + auto-maintained note are visible.
+    fireEvent.click(screen.getByText('MEMORY（自动记忆）'))
+    await waitFor(() => expect(screen.getByText('settings.standingDocs.budgetUsage')).toBeTruthy())
+    expect(screen.getByText('settings.standingDocs.memoryNote')).toBeTruthy()
+
+    // Edit → type content over the 20-char budget → Save disabled + over-budget hint.
+    fireEvent.click(screen.getByText('settings.standingDocs.edit'))
+    const textarea = screen.getByDisplayValue('short memory')
+    fireEvent.change(textarea, { target: { value: 'x'.repeat(40) } })
+
+    const saveBtn = screen.getByText('settings.standingDocs.save').closest('button')
+    expect(saveBtn).toBeTruthy()
+    expect((saveBtn as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByText('settings.standingDocs.overBudgetHint')).toBeTruthy()
   })
 
   test('high-risk badge appears for SOUL, AGENT, RULES but not USER', async () => {

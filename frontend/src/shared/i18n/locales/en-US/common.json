@@ -1213,6 +1213,12 @@
       "deleteError": "Could not delete memory",
       "loadError": "Could not load memory"
     },
+    "memoryCaptureModel": {
+      "title": "Memory Extraction Model",
+      "desc": "The model used when auto memory (memory.md) extracts durable facts from your conversations. Only takes effect when memory auto-capture is enabled.",
+      "label": "Extraction model",
+      "helper": "This model runs once per captured conversation turn — pick a fast, cheap small model (e.g. claude-haiku-4-5). Leave empty to use the haiku default. Requires a backend restart to take effect."
+    },
     "userMdCompile": {
       "title": "Compile Preferences from Memory",
       "desc": "Merge AI-captured preference memories into user.md. Takes effect immediately after triggering manually.",
@@ -1227,10 +1233,15 @@
       "rollbackError": "Undo failed"
     },
     "standingDocs": {
-      "title": "Identity Docs",
-      "desc": "View and manually edit the 4 Standing Context identity documents (SOUL / AGENT / RULES / USER). Changes take effect on the next conversation.",
+      "title": "Identity & Memory Docs",
+      "desc": "View and manually edit the 4 Standing Context identity documents (SOUL / AGENT / RULES / USER) plus the auto-maintained memory (memory.md). Changes take effect on the next conversation.",
       "highRiskBadge": "High risk",
       "floorNote": "PRODUCT_SAFETY_FLOOR is always prepended at the code layer — document content cannot weaken it. Override phrasing in RULES is rejected server-side.",
+      "autoBadge": "Auto memory",
+      "memoryNote": "memory.md is auto-extracted and rewritten by the AI from your conversations, and you can also edit it manually. It is injected into every conversation as BACKGROUND memory (not an identity doc) and cannot weaken the safety floor.",
+      "budgetUsage": "Memory usage",
+      "overBudget": "over budget",
+      "overBudgetHint": "Content exceeds the {{budget}}-character budget; trim it before saving.",
       "edit": "Edit",
       "save": "Save",
       "saving": "Saving…",

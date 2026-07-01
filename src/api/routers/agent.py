@@ -19,7 +19,8 @@ from src.agent_config.projections import (
 )
 from src.agent_config.store import (
     INSTALLABLE_SOURCE_TYPES,
-    PROFILE_DOC_NAMES,
+    MEMORY_DOC_NAME,
+    STORABLE_DOC_NAMES,
     get_agent_config_store,
 )
 from src.api.app import APIError, success_envelope
@@ -34,8 +35,11 @@ def _manifest_skill_names() -> set[str]:
 
     return {s.name for s in build_manifest(None).skills}
 
-# 文档展示顺序：4 个可编辑 + 2 个投影。
-_DOC_ORDER = list(PROFILE_DOC_NAMES) + ["memory", "skills"]
+# 文档展示顺序：5 个可编辑（soul/agent/rules/user/memory）+ SKILLS 投影。
+# memory.md（task 07-01）是可编辑的**有界记忆**（auto-capture 自动改写 + 用户可手编），落
+# agent_config.db 同一 profile-doc 存储层，但排除出 PROFILE_DOC_NAMES（不进 standing_context /
+# profile_hash）——它单独经 /chat/config 的 memorySummary（MEMORY fence，untrusted 背景）注入。
+_DOC_ORDER = list(STORABLE_DOC_NAMES) + ["skills"]
 
 
 def _editable_doc_dict(doc: Any) -> dict[str, Any]:
@@ -60,10 +64,19 @@ def _projection_doc_dict(doc_name: str, content: str) -> dict[str, Any]:
     }
 
 
-def _memory_projection() -> str:
-    """MEMORY.md 投影 — M5b 退役后恒返 ''（无条件）。
-    记忆读侧改靠 mem0 召回（M2）+ user.md 恒注入（M3）。"""
-    return ""
+def _memory_budget() -> int:
+    """memory.md 硬字符预算（config.memory_md_budget_chars，默认 5000）。lazy import 守
+    chat.py 同款 lazy-config 纪律（裸 worktree / CI import self-check 不炸）。"""
+    from src.config import config as cfg
+
+    return cfg.memory_md_budget_chars
+
+
+def _memory_doc_dict(doc: Any) -> dict[str, Any]:
+    """memory.md doc dict = 可编辑 doc + ``budgetChars``（恒注入预算，前端显著显示长度/占比）。"""
+    d = _editable_doc_dict(doc)
+    d["budgetChars"] = _memory_budget()
+    return d
 
 
 def _skills_projection() -> str:
@@ -78,10 +91,10 @@ def _skills_projection() -> str:
 
 @router.get("/profile/docs", dependencies=[Depends(verify_cf_access)])
 async def list_profile_docs(request: Request):
-    """列出 6 个 Standing Context 文档：4 可编辑（seed-on-read）+ MEMORY/SKILLS 投影。"""
+    """列出全部文档：4 份可信身份 + memory.md（可编辑，带预算，seed-on-read）+ SKILLS 投影。"""
     store = get_agent_config_store()
-    docs = [_editable_doc_dict(d) for d in store.list_profile_docs()]
-    docs.append(_projection_doc_dict("memory", _memory_projection()))
+    docs = [_editable_doc_dict(d) for d in store.list_profile_docs()]  # soul/agent/rules/user
+    docs.append(_memory_doc_dict(store.get_profile_doc(MEMORY_DOC_NAME)))
     docs.append(_projection_doc_dict("skills", _skills_projection()))
     return success_envelope({"docs": docs}, request=request, source="sqlite",
                             meta_extra={"count": len(docs)})
@@ -89,14 +102,11 @@ async def list_profile_docs(request: Request):
 
 @router.get("/profile/docs/{name}", dependencies=[Depends(verify_cf_access)])
 async def get_profile_doc(name: str, request: Request):
-    """读单个文档。memory/skills → 投影；soul/agent/rules/user → store（seed-on-read）。"""
-    if name == "memory":
-        return success_envelope(_projection_doc_dict("memory", _memory_projection()),
-                                request=request, source="sqlite")
+    """读单个文档。skills → 投影；soul/agent/rules/user/memory → store（seed-on-read）。"""
     if name == "skills":
         return success_envelope(_projection_doc_dict("skills", _skills_projection()),
                                 request=request, source="sqlite")
-    if name not in PROFILE_DOC_NAMES:
+    if name not in STORABLE_DOC_NAMES:
         raise APIError(
             "E_NOT_FOUND",
             f"unknown profile doc: {name} (expected one of {_DOC_ORDER})",
@@ -104,6 +114,8 @@ async def get_profile_doc(name: str, request: Request):
             source="sqlite",
         )
     doc = get_agent_config_store().get_profile_doc(name)
+    if name == MEMORY_DOC_NAME:
+        return success_envelope(_memory_doc_dict(doc), request=request, source="sqlite")
     return success_envelope(_editable_doc_dict(doc), request=request, source="sqlite")
 
 
@@ -114,10 +126,10 @@ async def list_profile_history(
     limit: int = Query(50, ge=1, le=500),
 ):
     """profile 文档版本历史（DESC，可按 docName 过滤）。供 rollback / 审计。"""
-    if doc_name is not None and doc_name not in PROFILE_DOC_NAMES:
+    if doc_name is not None and doc_name not in STORABLE_DOC_NAMES:
         raise APIError(
             "E_INVALID_ARG",
-            f"docName must be one of {list(PROFILE_DOC_NAMES)}",
+            f"docName must be one of {list(STORABLE_DOC_NAMES)}",
             http_status=400,
             source="sqlite",
         )
@@ -144,9 +156,10 @@ async def list_profile_history(
 
 @router.post("/profile/docs/{name}", dependencies=[Depends(verify_cf_access)])
 async def write_profile_doc(name: str, request: Request, body: Optional[dict[str, Any]] = None):
-    """覆盖一个可编辑文档（SOUL/AGENT/RULES/USER）。RULES.md 过 validator（deny-list 拦截
-    露骨的安全颠覆指令）。body = {content, updatedBy?, sessionId?, messageId?}。"""
-    if name not in PROFILE_DOC_NAMES:
+    """覆盖一个可编辑文档（SOUL/AGENT/RULES/USER/memory）。RULES.md 过 validator（deny-list
+    拦截露骨的安全颠覆指令）；memory.md 过硬字符预算（恒注入每轮 prompt，拒超预算防撑爆）。
+    body = {content, updatedBy?, sessionId?, messageId?}。"""
+    if name not in STORABLE_DOC_NAMES:
         raise APIError("E_NOT_FOUND", f"unknown or non-editable profile doc: {name}",
                        http_status=404, source="sqlite")
     raw = body or {}
@@ -163,17 +176,34 @@ async def write_profile_doc(name: str, request: Request, body: Optional[dict[str
         reason = validate_rules_content(content)
         if reason:
             raise APIError("E_INVALID_ARG", reason, http_status=400, source="sqlite")
+    elif name == MEMORY_DOC_NAME:
+        # memory.md 恒注入每轮 system prompt（MEMORY fence）→ enforce 硬字符预算，防用户粘贴
+        # 巨文撑爆每轮 prompt。非 RULES → **不**套 validate_rules_content（那是身份约束校验）；
+        # memory 作 untrusted 背景注入、结构上无法弱化 PRODUCT_SAFETY_FLOOR。
+        budget = _memory_budget()
+        if len(content) > budget:
+            raise APIError(
+                "E_INVALID_ARG",
+                f"memory.md exceeds the {budget}-character budget (got {len(content)}); "
+                "trim it before saving",
+                http_status=400, source="sqlite",
+            )
     doc = get_agent_config_store().set_profile_doc(
         name, content, updated_by=updated_by,
         session_id=raw.get("sessionId"), message_id=raw.get("messageId"),
     )
+    if name == MEMORY_DOC_NAME:
+        return success_envelope(_memory_doc_dict(doc), request=request, source="sqlite")
     return success_envelope(_editable_doc_dict(doc), request=request, source="sqlite")
 
 
 @router.post("/profile/docs/{name}/rollback", dependencies=[Depends(verify_cf_access)])
 async def rollback_profile_doc(name: str, request: Request, body: Optional[dict[str, Any]] = None):
-    """把文档回滚到某历史版本（按 targetHash 定位 content_snapshot）。body = {targetHash, updatedBy?}。"""
-    if name not in PROFILE_DOC_NAMES:
+    """把文档回滚到某历史版本（按 targetHash 定位 content_snapshot）。body = {targetHash, updatedBy?}。
+
+    回滚**不**重复 budget 校验：历史快照落库时已在预算内（capture 截断 / 写端点 guard），恢复
+    已知良好版本是显式用户操作；即便后来调小了预算，也允许恢复历史（下轮 capture 会自动再压回）。"""
+    if name not in STORABLE_DOC_NAMES:
         raise APIError("E_NOT_FOUND", f"unknown or non-editable profile doc: {name}",
                        http_status=404, source="sqlite")
     raw = body or {}
@@ -187,6 +217,8 @@ async def rollback_profile_doc(name: str, request: Request, body: Optional[dict[
         )
     except KeyError as exc:
         raise APIError("E_NOT_FOUND", str(exc), http_status=404, source="sqlite") from exc
+    if name == MEMORY_DOC_NAME:
+        return success_envelope(_memory_doc_dict(doc), request=request, source="sqlite")
     return success_envelope(_editable_doc_dict(doc), request=request, source="sqlite")
 
 
