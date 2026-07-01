@@ -48,6 +48,15 @@ from typing import Dict, List, Optional, Set, Any, Iterator, TypedDict
 from loguru import logger
 
 
+# Draft→Sent 提升判定用的 mailbox label 集合（见 _save_email_v3 cross-backend merge）。
+# 草稿箱 = reconcile_drafts 实际删除的唯一 label（davmail DRAFTS_MAILBOX_LABEL）。
+# 发件箱 = davmail Sent 的规范 label（_IMAP_TO_MAILBOX_LABEL["Sent Items"]）；
+# 已发送/已发送邮件 是 sync_mailboxes 配置变体，一并纳入防漏（避免 Sent 副本漏提升）。
+DRAFT_MAILBOX_LABELS = frozenset({'草稿箱'})
+SENT_MAILBOX_LABELS = frozenset({'发件箱', '已发送', '已发送邮件'})
+SENT_CANONICAL_LABEL = '发件箱'
+
+
 def _local_tz():
     """返回 IANA ``ZoneInfo`` (含 DST 规则). 优先 /etc/localtime 软链, fallback fixed offset.
 
@@ -2158,7 +2167,7 @@ class SyncStore:
                 if message_id:
                     existing = cursor.execute(
                         "SELECT internal_id, sync_status, notion_page_id, "
-                        "notion_thread_id, thread_id, backend_origin "
+                        "notion_thread_id, thread_id, backend_origin, mailbox "
                         "FROM email_metadata WHERE message_id = ?",
                         (message_id,),
                     ).fetchone()
@@ -2168,20 +2177,45 @@ class SyncStore:
                         old_iid = existing['internal_id']
                         old_origin = existing['backend_origin']
                         new_origin = email.get('backend_origin', 'applescript')
+                        new_mailbox = email.get('mailbox')
+                        # Draft→Sent 提升: 外部 (OWA/Outlook) 从草稿发送的邮件, 发送后
+                        # Draft 跨文件夹移到 Sent (Message-ID 不变), Sent 副本经 msgid
+                        # 合并进原草稿行。若只更 imap_uid 而保留 mailbox='草稿箱', 同一
+                        # poll cycle 的 reconcile_drafts 会把它当"消失草稿"删除 → 已发
+                        # 邮件本地记录被销毁 (纯本地丢失, 服务端 Sent 完好)。既有行是
+                        # 草稿、新副本来自 Sent → 归一提升 mailbox='发件箱' 阻断删除, 并
+                        # 置 pending + 清重试态, 让它像其它发件箱邮件重取正文 + 进 Notion。
+                        # 显式 gate 在 SENT_MAILBOX_LABELS (而非"任意非草稿"): 避免同 msgid
+                        # 副本先从非 Sent 文件夹进入时误提升到错误 mailbox (codex review)。
+                        promote_sent = bool(
+                            existing['mailbox'] in DRAFT_MAILBOX_LABELS
+                            and new_mailbox in SENT_MAILBOX_LABELS
+                        )
                         logger.info(
                             f"[sync_store] cross-backend merge: message_id={message_id[:40]!r} "
                             f"already at internal_id={old_iid} (origin={old_origin!r}); "
                             f"merging new internal_id={internal_id} (origin={new_origin!r}) "
-                            f"— keep notion_page_id/sync_status, update imap_uid"
+                            + (
+                                f"— promote 草稿箱→{SENT_CANONICAL_LABEL} + re-sync (sent from draft)"
+                                if promote_sent
+                                else "— keep notion_page_id/sync_status, update imap_uid"
+                            )
+                        )
+                        # 提升 SET 片段全是常量字面量 (归一 label='发件箱' + 置 pending +
+                        # 清同步/重试态), 无占位符、无注入面 → params 两分支完全一致。
+                        promote_set = (
+                            ", mailbox = '发件箱', sync_status = 'pending', "
+                            "sync_error = NULL, retry_count = 0, next_retry_at = NULL"
+                            if promote_sent else ""
                         )
                         cursor.execute(
-                            """UPDATE email_metadata
+                            f"""UPDATE email_metadata
                                SET imap_uid = COALESCE(?, imap_uid),
                                    imap_uidvalidity = COALESCE(?, imap_uidvalidity),
                                    thread_id = COALESCE(thread_id, ?),
                                    sender_name = COALESCE(NULLIF(sender_name, ''), ?),
                                    to_addr = COALESCE(NULLIF(to_addr, ''), ?),
-                                   cc_addr = COALESCE(NULLIF(cc_addr, ''), ?),
+                                   cc_addr = COALESCE(NULLIF(cc_addr, ''), ?){promote_set},
                                    updated_at = ?
                                WHERE internal_id = ?""",
                             (

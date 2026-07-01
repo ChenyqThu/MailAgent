@@ -34,7 +34,7 @@ from src.config import config as settings
 from src.models import Email
 from src.mail.sqlite_radar import SQLiteRadar
 from src.mail.applescript_arm import AppleScriptArm
-from src.mail.sync_store import SyncStore
+from src.mail.sync_store import DRAFT_MAILBOX_LABELS, SyncStore
 from src.notion.sync import NotionSync
 from src.mail.reader import EmailReader
 from src.mail.meeting_sync import MeetingInviteSync
@@ -585,6 +585,17 @@ class NewWatcher:
 
         for internal_id in to_delete:
             try:
+                # 防御 (纵深): 删前复核该行是否仍是草稿。若已被 sync_store 的
+                # Draft→Sent 提升为发件箱 (外部从草稿发送), 就不是"消失草稿"而是
+                # 已发邮件 → 删了就丢数据。reconcile 是同步、与 merge 不交错, 正常
+                # 路径 merge 先提升 mailbox 使其不进 to_delete; 这里兜底顺序竞态。
+                row = self.sync_store.get(internal_id)
+                if row is not None and row.get('mailbox') not in DRAFT_MAILBOX_LABELS:
+                    logger.info(
+                        f"[drafts] skip delete {internal_id}: mailbox="
+                        f"{row.get('mailbox')!r} (promoted, sent from draft)"
+                    )
+                    continue
                 self.email_repo.delete_email_full(internal_id)
                 logger.info(f"[drafts] deleted vanished draft {internal_id}")
                 # 让前端刷新列表/badge（events_bridge 对 email.synced 宽 invalidate）

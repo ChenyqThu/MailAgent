@@ -246,6 +246,179 @@ def test_uidvalidity_change_full_rebuild(patch_session):
 
 
 # ============================================================
+# sync_store._save_email_v3 — Draft→Sent 合并提升 (数据丢失修复)
+# ============================================================
+
+def test_draft_sent_merge_promotes_mailbox(tmp_path):
+    """Draft→Sent: OWA/Outlook 从草稿发送 → Sent 副本经 msgid 合并进原草稿行时,
+    提升 mailbox='发件箱' + 置 sync_status='pending'。
+
+    回归护栏: 修复前 merge 只更 imap_uid、保留 mailbox='草稿箱' → 同 poll cycle 的
+    reconcile_drafts 把它当"消失草稿"删除 (已发邮件本地记录被销毁)。修复后提升为
+    发件箱 → 不再进草稿对账的 to_delete, 且像其它发件箱邮件一样重取正文 + 进 Notion。
+    """
+    store = SyncStore(str(tmp_path / "t.db"))
+    # 1) OWA 存草稿 → 本地草稿行 (local-only, 无 Notion 页)
+    store.save_email({
+        "internal_id": 1_000_007_607, "message_id": "PH8@namprd05",
+        "subject": "答复: FW", "sender": "me@x.com", "mailbox": "草稿箱",
+        "sync_status": "synced", "backend_origin": "davmail",
+        "imap_uid": 38428, "imap_uidvalidity": 7,
+    })
+    # 2) OWA 发送 → Draft 跨文件夹移到 Sent, Sent 副本 (新 internal_id, 同 msgid)
+    ok = store.save_email({
+        "internal_id": 1_000_007_618, "message_id": "PH8@namprd05",
+        "subject": "答复: FW", "sender": "me@x.com", "mailbox": "发件箱",
+        "sync_status": "pending", "backend_origin": "davmail",
+        "imap_uid": 19473, "imap_uidvalidity": 9,
+    })
+    assert ok
+    promoted = store.get(1_000_007_607)          # 原草稿行被提升, 不建新行
+    assert promoted is not None
+    assert promoted["mailbox"] == "发件箱"        # 提升 → reconcile 不再当草稿删
+    assert promoted["sync_status"] == "pending"   # 置 pending → 重取正文 + 进 Notion
+    assert promoted["imap_uid"] == 19473          # 指向 Sent UID
+    assert store.get(1_000_007_618) is None       # merge 折叠, 未建新行
+
+
+def test_draft_merge_same_folder_no_promotion(tmp_path):
+    """既有草稿 + 同 msgid 草稿副本 (同文件夹, 非发送) → mailbox 保持草稿箱、
+    sync_status 不被误置 pending。防止提升逻辑过度触发。"""
+    store = SyncStore(str(tmp_path / "t.db"))
+    store.save_email({
+        "internal_id": 1_000_000_001, "message_id": "draft-mid", "subject": "d",
+        "sender": "me@x.com", "mailbox": "草稿箱", "sync_status": "synced",
+        "backend_origin": "davmail", "imap_uid": 10,
+    })
+    store.save_email({
+        "internal_id": 1_000_000_002, "message_id": "draft-mid", "subject": "d",
+        "sender": "me@x.com", "mailbox": "草稿箱", "sync_status": "pending",
+        "backend_origin": "davmail", "imap_uid": 11,
+    })
+    row = store.get(1_000_000_001)
+    assert row["mailbox"] == "草稿箱"             # 未提升
+    assert row["sync_status"] == "synced"         # 原状态保留 (未误置 pending)
+    assert store.get(1_000_000_002) is None
+
+
+def test_crossbackend_merge_nondraft_preserves_state(tmp_path):
+    """原 cross-backend merge (非草稿) 契约不回退: 保留 mailbox/sync_status/
+    notion_page_id, 仅更新 davmail 字段。提升逻辑不得波及此路径。"""
+    store = SyncStore(str(tmp_path / "t.db"))
+    store.save_email({
+        "internal_id": 42, "message_id": "inbox-mid", "subject": "hi",
+        "sender": "a@x.com", "mailbox": "收件箱", "sync_status": "synced",
+        "notion_page_id": "notion-pg-1", "backend_origin": "applescript",
+    })
+    store.save_email({
+        "internal_id": 1_000_000_050, "message_id": "inbox-mid", "subject": "hi",
+        "sender": "a@x.com", "mailbox": "收件箱", "sync_status": "pending",
+        "backend_origin": "davmail", "imap_uid": 555, "imap_uidvalidity": 3,
+    })
+    row = store.get(42)
+    assert row["mailbox"] == "收件箱"
+    assert row["sync_status"] == "synced"          # 原状态保留
+    assert row["notion_page_id"] == "notion-pg-1"  # Notion 页保留 (原 merge 契约)
+    assert row["imap_uid"] == 555                  # davmail 字段照常更新
+    assert store.get(1_000_000_050) is None
+
+
+def test_draft_merge_incoming_non_sent_no_promotion(tmp_path):
+    """codex MEDIUM: 提升须 gate 在 Sent label（非"任意非草稿"）。既有草稿 + 同 msgid
+    副本来自非 Sent 文件夹（收件箱/自定义）→ 不提升（保持草稿箱、走原 merge），避免误升
+    到错误 mailbox 且后续真 Sent 副本无法再提升。"""
+    store = SyncStore(str(tmp_path / "t.db"))
+    store.save_email({
+        "internal_id": 1_000_000_010, "message_id": "draft-x", "subject": "d",
+        "sender": "me@x.com", "mailbox": "草稿箱", "sync_status": "synced",
+        "backend_origin": "davmail", "imap_uid": 20,
+    })
+    store.save_email({
+        "internal_id": 1_000_000_011, "message_id": "draft-x", "subject": "d",
+        "sender": "me@x.com", "mailbox": "收件箱", "sync_status": "pending",
+        "backend_origin": "davmail", "imap_uid": 21, "imap_uidvalidity": 5,
+    })
+    row = store.get(1_000_000_010)
+    assert row["mailbox"] == "草稿箱"          # 未误升到收件箱
+    assert row["sync_status"] == "synced"      # 未误置 pending
+    assert store.get(1_000_000_011) is None
+
+
+def test_draft_sent_promotion_resets_retry_state(tmp_path):
+    """codex LOW: 提升当作全新一次同步 → 清 sync_error/retry_count/next_retry_at,
+    避免曾 fetch 失败的草稿提升后继承旧 retry 计数、过早进 skipped/dead_letter。"""
+    import sqlite3 as _sq
+
+    store = SyncStore(str(tmp_path / "t.db"))
+    store.save_email({
+        "internal_id": 1_000_007_607, "message_id": "PH8@y", "subject": "答复",
+        "sender": "me@x.com", "mailbox": "草稿箱", "sync_status": "fetch_failed",
+        "backend_origin": "davmail", "imap_uid": 38428,
+    })
+    conn = _sq.connect(str(tmp_path / "t.db"))
+    conn.execute(
+        "UPDATE email_metadata SET sync_error='old boom', retry_count=3, "
+        "next_retry_at=9999999999 WHERE internal_id=1000007607"
+    )
+    conn.commit()
+    conn.close()
+    store.save_email({
+        "internal_id": 1_000_007_618, "message_id": "PH8@y", "subject": "答复",
+        "sender": "me@x.com", "mailbox": "发件箱", "sync_status": "pending",
+        "backend_origin": "davmail", "imap_uid": 19473,
+    })
+    row = store.get(1_000_007_607)
+    assert row["mailbox"] == "发件箱"
+    assert row["sync_status"] == "pending"
+    assert row["sync_error"] is None          # 旧错误清掉
+    assert row["retry_count"] == 0            # 重试计数归零
+    assert row["next_retry_at"] is None       # 重试时间清掉
+
+
+def test_draft_sent_variant_label_promotes(tmp_path):
+    """SENT label 变体（'已发送'）也触发提升并归一到发件箱（防漏 Sent 副本）。"""
+    store = SyncStore(str(tmp_path / "t.db"))
+    store.save_email({
+        "internal_id": 1_000_000_020, "message_id": "var-mid", "subject": "答复",
+        "sender": "me@x.com", "mailbox": "草稿箱", "sync_status": "synced",
+        "backend_origin": "davmail", "imap_uid": 30,
+    })
+    store.save_email({
+        "internal_id": 1_000_000_021, "message_id": "var-mid", "subject": "答复",
+        "sender": "me@x.com", "mailbox": "已发送", "sync_status": "pending",
+        "backend_origin": "davmail", "imap_uid": 31,
+    })
+    row = store.get(1_000_000_020)
+    assert row["mailbox"] == "发件箱"          # 变体也提升, 且归一到规范发件箱
+    assert row["sync_status"] == "pending"
+
+
+def test_draft_non_sent_then_sent_still_promotes(tmp_path):
+    """codex 原始担忧的正解: 非 Sent 同 msgid 副本先到 → 不误升(保持草稿箱); 之后
+    真 Sent 副本再到 → 仍能正确提升到发件箱(不会因先前误升到错误 mailbox 而卡住)。"""
+    store = SyncStore(str(tmp_path / "t.db"))
+    store.save_email({
+        "internal_id": 1_000_000_030, "message_id": "seq-mid", "subject": "答复",
+        "sender": "me@x.com", "mailbox": "草稿箱", "sync_status": "synced",
+        "backend_origin": "davmail", "imap_uid": 40,
+    })
+    # 先来一个非 Sent 副本 → 不提升, 仍是草稿箱
+    store.save_email({
+        "internal_id": 1_000_000_031, "message_id": "seq-mid", "subject": "答复",
+        "sender": "me@x.com", "mailbox": "收件箱", "sync_status": "pending",
+        "backend_origin": "davmail", "imap_uid": 41,
+    })
+    assert store.get(1_000_000_030)["mailbox"] == "草稿箱"   # 未误升
+    # 再来真 Sent 副本 → 现在正确提升
+    store.save_email({
+        "internal_id": 1_000_000_032, "message_id": "seq-mid", "subject": "答复",
+        "sender": "me@x.com", "mailbox": "发件箱", "sync_status": "pending",
+        "backend_origin": "davmail", "imap_uid": 42,
+    })
+    assert store.get(1_000_000_030)["mailbox"] == "发件箱"   # 真 Sent 到达后正确提升
+
+
+# ============================================================
 # watcher._reconcile_drafts — 入库 / 删除 / AppleScript noop
 # ============================================================
 
@@ -286,6 +459,75 @@ def test_watcher_reconcile_adds_and_deletes(tmp_path):
     assert row["sync_status"] == "pending"
     assert row["imap_uid"] == 105
     w.email_repo.delete_email_full.assert_called_once_with(999)
+
+
+def test_watcher_skips_delete_of_promoted_row(tmp_path):
+    """Fix B 纵深防御: to_delete 里的行若已被 Draft→Sent 提升为发件箱 → 不删。
+
+    兜底"merge 提升 mailbox" 与 "reconcile 计算 to_delete" 的顺序竞态: 即便某行
+    进了 to_delete, 删前复核发现它已不是草稿 (mailbox='发件箱') → 跳过, 保住已发邮件。
+    """
+    w = _watcher(tmp_path)
+    w.sync_store.save_email({
+        "internal_id": 1_000_007_607, "message_id": "PH8@x", "subject": "答复",
+        "sender": "me@x.com", "mailbox": "发件箱", "sync_status": "pending",
+        "backend_origin": "davmail", "imap_uid": 19473,
+    })
+
+    class _Backend:
+        def reconcile_drafts(self):
+            return [], [1_000_007_607]
+
+    w.arm = _Backend()
+    asyncio.run(w._reconcile_drafts())
+    w.email_repo.delete_email_full.assert_not_called()      # 提升行不删
+    assert w.sync_store.get(1_000_007_607) is not None       # 仍在库
+
+
+def test_watcher_still_deletes_real_vanished_draft(tmp_path):
+    """Fix B 不误伤真删除: 仍标草稿箱的行照常删 (真·丢弃/发送后未提升的草稿)。"""
+    w = _watcher(tmp_path)
+    w.sync_store.save_email({
+        "internal_id": 1_000_000_009, "message_id": "d-mid", "subject": "d",
+        "sender": "me@x.com", "mailbox": "草稿箱", "sync_status": "synced",
+        "backend_origin": "davmail", "imap_uid": 12,
+    })
+
+    class _Backend:
+        def reconcile_drafts(self):
+            return [], [1_000_000_009]
+
+    w.arm = _Backend()
+    asyncio.run(w._reconcile_drafts())
+    w.email_repo.delete_email_full.assert_called_once_with(1_000_000_009)
+
+
+def test_integration_draft_sent_then_reconcile_no_delete(tmp_path):
+    """codex/opus LOW 集成: save 草稿 → save Sent 副本(Fix A 提升) → 一个把该 iid
+    列进 to_delete 的 reconcile(模拟 stale local 快照) → Fix B 复核跳过, 已发邮件不丢。
+    从"已提升"状态验证 Fix A+B 协同(真实 SyncStore, 非 mock 提升)。"""
+    w = _watcher(tmp_path)
+    w.sync_store.save_email({
+        "internal_id": 1_000_007_607, "message_id": "PH8@z", "subject": "答复",
+        "sender": "me@x.com", "mailbox": "草稿箱", "sync_status": "synced",
+        "backend_origin": "davmail", "imap_uid": 38428,
+    })
+    # Sent 副本进来 → Fix A 把原草稿行提升为发件箱
+    w.sync_store.save_email({
+        "internal_id": 1_000_007_618, "message_id": "PH8@z", "subject": "答复",
+        "sender": "me@x.com", "mailbox": "发件箱", "sync_status": "pending",
+        "backend_origin": "davmail", "imap_uid": 19473,
+    })
+    assert w.sync_store.get(1_000_007_607)["mailbox"] == "发件箱"  # Fix A 生效
+
+    class _Backend:
+        def reconcile_drafts(self):
+            return [], [1_000_007_607]  # stale 快照误把已提升行列进 to_delete
+
+    w.arm = _Backend()
+    asyncio.run(w._reconcile_drafts())
+    w.email_repo.delete_email_full.assert_not_called()      # Fix B 复核跳过
+    assert w.sync_store.get(1_000_007_607) is not None       # 已发邮件仍在库
 
 
 def test_watcher_reconcile_noop_without_capability(tmp_path):
