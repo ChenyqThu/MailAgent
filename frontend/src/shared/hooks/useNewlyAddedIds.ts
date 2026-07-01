@@ -35,10 +35,17 @@ export function useNewlyAddedIds(
   const fadeTimersRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map())
 
   useEffect(() => {
-    // View switch → re-baseline to the current set, emit nothing.
+    // View switch → re-baseline to the current set, emit nothing. Also clear any
+    // still-active badges + pending fade timers from the previous view: otherwise
+    // an id badged in view A that is also visible in view B keeps its NEW marker
+    // there until A's timer fires (cross-view leak — codex MEDIUM). A view switch
+    // must show a clean slate; badges only arise from real additions within a view.
     if (viewRef.current !== viewKey) {
       viewRef.current = viewKey
       lastSeenRef.current = new Set(current)
+      for (const tid of fadeTimersRef.current.values()) clearTimeout(tid)
+      fadeTimersRef.current.clear()
+      setActive((prior) => (prior.size === 0 ? prior : new Set()))
       return
     }
 

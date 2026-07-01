@@ -1651,30 +1651,47 @@ function PreprocessConfigDrawer({
     syncBackdrop: true
   })
 
-  // 启用 / 模型 = env 值的本地镜像（提交时 diff、只写变更键）；persona / 文档勾选 = row 值。
+  // 启用 / 模型 = env 值本地镜像（**dirty 追踪**：仅用户显式改过的字段在保存时写回 env → 未触碰
+  // 的字段永不写，即使预填时 env 未就绪 idle 也不会把真实 .env 覆写掉，codex HIGH）；persona /
+  // 文档勾选 = row 值。
   const [enabled, setEnabled] = useState(false)
+  const [enabledDirty, setEnabledDirty] = useState(false)
   const [model, setModel] = useState<string>('')
+  const [modelDirty, setModelDirty] = useState(false)
   const [prompt, setPrompt] = useState('')
   const [promptDirty, setPromptDirty] = useState(false)
   const [contextDocs, setContextDocs] = useState<string[]>([])
   const [envSaving, setEnvSaving] = useState(false)
   const { models: enabledModels } = useEnabledModels()
+  // env store 状态（idle/loading 时 enable/model 不可编辑、保存不写 env）+ 响应式 env 值
+  // （就绪后回填 enable/model，仅在用户未触碰该字段时）。
+  const envReady = useEnvStore((s) => s.state.status === 'ready')
+  const envEnabledRaw = useEnvStore((s) =>
+    s.state.status === 'ready' ? (s.state.snapshot.values['LLM_AGENT_ENABLED'] ?? '') : null
+  )
+  const envModelRaw = useEnvStore((s) =>
+    s.state.status === 'ready' ? (s.state.snapshot.values['LLM_MODEL'] ?? '') : null
+  )
 
-  // 打开时预填：row 字段读 cfg；启用 / 模型从 env store 快照读（getState 非响应式 → env 后续
-  // 变化不会冲掉用户在抽屉里的编辑）。依赖 [open, cfg]。同 ConfigDrawer / SearchConfigDrawer 既有
-  // 豁免理由：模态打开按 cfg + env 快照预填多字段表单，React Compiler 迁移债（真重构需父组件 key
-  // 重置 remount + 预填搬 useState initializer，等价性风险高于收益），effect 合理保留。
+  // 打开时预填 row 字段 + 复位所有 dirty。同 ConfigDrawer / SearchConfigDrawer 既有豁免理由：
+  // 模态打开按 cfg 预填多字段表单，React Compiler 迁移债（真重构需父组件 key 重置 remount +
+  // 预填搬 useState initializer，等价性风险高于收益），effect 合理保留。
   /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     if (!open || !cfg) return
-    const st = useEnvStore.getState().state
-    const vals = st.status === 'ready' ? st.snapshot.values : {}
-    setEnabled(envFlagOn(vals['LLM_AGENT_ENABLED'] ?? ''))
-    setModel(vals['LLM_MODEL'] ?? '')
     setPrompt(cfg.prompt)
     setPromptDirty(false)
     setContextDocs(cfg.context_docs ?? [])
+    setEnabledDirty(false)
+    setModelDirty(false)
   }, [open, cfg])
+  // 启用 / 模型从 env 就绪快照回填：仅在打开且用户未 dirty 该字段时同步 —— env idle→ready 的迟到
+  // 加载能纠正显示，但绝不覆盖用户在抽屉里的编辑（dirty 后停止同步）。
+  useEffect(() => {
+    if (!open) return
+    if (envEnabledRaw !== null && !enabledDirty) setEnabled(envFlagOn(envEnabledRaw))
+    if (envModelRaw !== null && !modelDirty) setModel(envModelRaw)
+  }, [open, envEnabledRaw, envModelRaw, enabledDirty, modelDirty])
   /* eslint-enable react-hooks/set-state-in-effect */
 
   if (!shouldRender) return null
@@ -1694,29 +1711,33 @@ function PreprocessConfigDrawer({
 
   const onSave = async (): Promise<void> => {
     if (!cfg) return
-    // 1) env diff：只写真正变了的键，避免无谓触发重启横幅。web 只读 → 控件禁用 → 恒无 diff。
-    const st = useEnvStore.getState().state
-    const vals = st.status === 'ready' ? st.snapshot.values : {}
-    const envPatch: Record<string, string> = {}
-    const nextEnabled = enabled ? 'true' : 'false'
-    if (nextEnabled !== (vals['LLM_AGENT_ENABLED'] ?? '')) {
-      envPatch['LLM_AGENT_ENABLED'] = nextEnabled
-    }
-    if (model && model !== (vals['LLM_MODEL'] ?? '')) {
-      envPatch['LLM_MODEL'] = model
-    }
-    if (Object.keys(envPatch).length > 0) {
-      setEnvSaving(true)
-      try {
-        const r = await applyEnvPatch(envPatch)
-        if (!r.ok) {
-          toastError(t('agents.preprocess.envSaveError'), `${r.error.code}: ${r.error.message}`)
-          return
+    // 1) env 写：仅在 env 已就绪、非 web、且用户显式改过该字段（dirty）时写 —— 未触碰的
+    //    enable/model 永不写，即使预填 stale（env idle）也不会把真实 .env 覆写掉（codex HIGH）。
+    //    只写变更键，避免无谓触发重启横幅。
+    if (envReady && !IS_WEB) {
+      const st = useEnvStore.getState().state
+      const vals = st.status === 'ready' ? st.snapshot.values : {}
+      const envPatch: Record<string, string> = {}
+      const nextEnabled = enabled ? 'true' : 'false'
+      if (enabledDirty && nextEnabled !== (vals['LLM_AGENT_ENABLED'] ?? '')) {
+        envPatch['LLM_AGENT_ENABLED'] = nextEnabled
+      }
+      if (modelDirty && model && model !== (vals['LLM_MODEL'] ?? '')) {
+        envPatch['LLM_MODEL'] = model
+      }
+      if (Object.keys(envPatch).length > 0) {
+        setEnvSaving(true)
+        try {
+          const r = await applyEnvPatch(envPatch)
+          if (!r.ok) {
+            toastError(t('agents.preprocess.envSaveError'), `${r.error.code}: ${r.error.message}`)
+            return
+          }
+          // 与 EnvField 一致：变更键挂重启横幅（LLM_MODEL / LLM_AGENT_ENABLED 是 pydantic singleton）。
+          if (r.changedKeys.length > 0) markRestartRequired(r.changedKeys)
+        } finally {
+          setEnvSaving(false)
         }
-        // 与 EnvField 一致：任何变更键都挂重启横幅（LLM_MODEL / LLM_AGENT_ENABLED 是 pydantic singleton）。
-        if (r.changedKeys.length > 0) markRestartRequired(r.changedKeys)
-      } finally {
-        setEnvSaving(false)
       }
     }
     // 2) row 保存：persona（未改且仍默认 → null 保持默认；改过 → 文本，空串后端重置默认）+ 文档勾选。
@@ -1826,14 +1847,29 @@ function PreprocessConfigDrawer({
                   {t('agents.preprocess.enableHint')}
                 </div>
               </div>
-              <span style={IS_WEB ? { opacity: 0.5, pointerEvents: 'none' } : undefined}>
-                <Switch on={enabled} onChange={setEnabled} />
+              <span
+                style={!envReady || IS_WEB ? { opacity: 0.5, pointerEvents: 'none' } : undefined}
+              >
+                <Switch
+                  on={enabled}
+                  onChange={(v) => {
+                    setEnabled(v)
+                    setEnabledDirty(true)
+                  }}
+                />
               </span>
             </div>
 
             {/* 模型（env LLM_MODEL）—— enabledModels + orphan 兜底，需重启生效 */}
             <Field label={t('agents.config.model')} hint={t('agents.preprocess.restartHint')}>
-              <Select value={model || undefined} onValueChange={setModel} disabled={IS_WEB}>
+              <Select
+                value={model || undefined}
+                onValueChange={(v) => {
+                  setModel(v)
+                  setModelDirty(true)
+                }}
+                disabled={!envReady || IS_WEB}
+              >
                 <SelectTrigger>
                   <SelectValue placeholder={t('agents.config.model')} />
                 </SelectTrigger>
@@ -2031,6 +2067,13 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
       ? envFlagOn(s.state.snapshot.values['LLM_AGENT_ENABLED'] ?? '')
       : false
   )
+  // env store 默认 idle（仅 SettingsShell mount 时 refresh）；进 /agents 主动拉一次，让预处理卡
+  // 启用徽标 + 抽屉 enable/model 预填拿到真实 .env（否则未进过设置页 → 徽标恒灰、抽屉 stale）。
+  // codex HIGH：无此 refresh 时，抽屉在 idle 下预填 enabled=false，配合 dirty 门控虽不会覆写，
+  // 但显示会误导；refresh 让正常流下 env 就绪。
+  useEffect(() => {
+    if (useEnvStore.getState().state.status === 'idle') void useEnvStore.getState().refresh()
+  }, [])
 
   // 所有报告 agent（type=report），按 cadence 日→周→月稳定排序，各渲染一张卡。
   const reportAgents = useMemo(() => {

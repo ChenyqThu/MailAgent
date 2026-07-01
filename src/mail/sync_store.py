@@ -1605,13 +1605,40 @@ class SyncStore:
         if stored_marker <= 0:
             return 'first'
         if marker_backend is None:
+            # 本 guard 首次部署遇到既有 marker（升级前写的、无归属记录）。**不能盲目认领**
+            # 当前 backend：若「升级拿到本 fix + 同时切 backend」发生在同一步（reporter 的真实
+            # 场景），盲目 adopt 会把 applescript 的 marker 当 davmail 的用 → 重演 silent-loss/
+            # deadlock。改按 email_metadata.backend_origin 推断真实归属：当前 backend 有既有行
+            # → marker 可信属它 → adopt；当前 backend 零行（刚切过来还没跑）→ marker 是别的
+            # backend 写的 → reset 到 first-run baseline（codex HIGH）。
+            if self._has_rows_for_backend(current_backend):
+                self.set_state('marker_backend', current_backend)
+                return 'adopt'
+            self.set_last_max_row_id(0)
             self.set_state('marker_backend', current_backend)
-            return 'adopt'
+            return 'reset'
         if marker_backend == current_backend:
             return 'noop'
         self.set_last_max_row_id(0)
         self.set_state('marker_backend', current_backend)
         return 'reset'
+
+    def _has_rows_for_backend(self, backend: str) -> bool:
+        """email_metadata 是否有该 backend 写入的行（judge marker 归属用，codex HIGH）。
+
+        探测失败（DB 错，近乎不可能）→ 保守返回 True（认领、不重置），避免因瞬时错误
+        误 reset 掉稳态用户离线期间到达的邮件（reset 只向前定基线、不回捞）。
+        """
+        try:
+            with self._connection() as conn:
+                row = conn.execute(
+                    "SELECT 1 FROM email_metadata WHERE backend_origin = ? LIMIT 1",
+                    (backend,),
+                ).fetchone()
+                return row is not None
+        except sqlite3.Error as e:
+            logger.warning(f"[marker-guard] backend_origin 探测失败: {e}; 保守视作有行(adopt)")
+            return True
 
     def get_last_sync_time(self) -> Optional[str]:
         """获取上次同步时间（ISO 格式）"""

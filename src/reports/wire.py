@@ -54,15 +54,22 @@ def resolve_agent(agent: Dict[str, Any]) -> Dict[str, Any]:
             body_full_priorities = []
     except (json.JSONDecodeError, TypeError):
         body_full_priorities = []
-    # v27: preprocess 的文档勾选（profile-doc 名列表）。NULL/非法 → []（前端显示"未勾选"，
-    # 运行时回退 build_task_identity_context 默认）。
-    try:
-        context_docs = json.loads(agent.get("context_docs_json") or "[]")
-        if not isinstance(context_docs, list):
-            context_docs = []
-    except (json.JSONDecodeError, TypeError):
-        context_docs = []
     agent_type = agent.get("type", "report")
+    # v27: preprocess 的文档勾选（profile-doc 名列表）。区分 NULL（列缺失/未设）与 []（用户显式
+    # 取消全部）：NULL 对 preprocess 投影成运行时默认 ['soul','user']（与 get_preprocess_config 的
+    # None→默认一致，避免 UI 显"未勾选"、保存 persona 时把 docs 覆写成 []→关掉身份注入，codex MED）；
+    # [] 保持显式空；非法当 NULL 处理。非 preprocess 一律 []（不用此字段）。
+    _raw_docs = agent.get("context_docs_json")
+    try:
+        _parsed_docs = json.loads(_raw_docs) if _raw_docs else None
+        if _parsed_docs is not None and not isinstance(_parsed_docs, list):
+            _parsed_docs = None
+    except (json.JSONDecodeError, TypeError):
+        _parsed_docs = None
+    if _parsed_docs is None:
+        context_docs = ["soul", "user"] if agent_type == "preprocess" else []
+    else:
+        context_docs = _parsed_docs
     # tools_json → list（DB 存 JSON 串）。NULL/非法：type='search' 回退默认搜索工具,
     # 其余（report）回退空 list（report agent 历史上 tools_json 全 NULL, 不破坏其投影）。
     _tools_default = ["email_search_fulltext"] if agent_type == "search" else []

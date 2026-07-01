@@ -76,6 +76,23 @@ describe('useNewlyAddedIds', () => {
     expect(result.current.has(93)).toBe(true)
   })
 
+  // codex MED — an active badge from view A must NOT leak into view B when the
+  // same id is visible there; the view switch clears active badges + pending
+  // timers rather than letting them linger until the old timer fires.
+  test('a view switch clears active badges from the previous view', () => {
+    const { result, rerender } = render([1, 2], 'inbox')
+    // id 3 arrives in inbox → active badge + pending fade timer.
+    rerender({ current: [3, 1, 2], viewKey: 'inbox' })
+    expect(result.current.has(3)).toBe(true)
+    // switch to a view where id 3 is also visible: badge must be cleared now,
+    // not carried over as a cross-view NEW marker.
+    rerender({ current: [3, 4, 5], viewKey: 'flagged' })
+    expect([...result.current]).toEqual([])
+    // the previous view's timer firing later must not resurrect anything.
+    act(() => vi.advanceTimersByTime(FADE))
+    expect([...result.current]).toEqual([])
+  })
+
   // Per-id timers are independent: staggered arrivals fade on their own clocks.
   test('staggered ids fade independently', () => {
     const { result, rerender } = render([1], 'inbox')

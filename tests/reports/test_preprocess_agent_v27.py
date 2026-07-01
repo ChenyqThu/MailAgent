@@ -106,3 +106,20 @@ def test_get_preprocess_config_missing_db_graceful(tmp_path):
     pp = get_preprocess_config(str(tmp_path / "nope.db"))
     assert pp.persona == ""
     assert pp.context_docs is None  # 缺库 → None → 运行时回退默认文档集
+
+
+def test_resolve_agent_null_docs_defaults_for_preprocess(db_path):
+    # codex MED：NULL context_docs 对 preprocess 投影成默认 ['soul','user']（与 get_preprocess_config
+    # 的 None→默认一致），避免 UI 显"未勾选"、保存 persona 时把 docs 覆写成 []→关掉身份注入。
+    store = ReportStore(db_path)
+    store.update_agent(PREPROCESS_AGENT_ID, {"context_docs_json": None})  # 置 NULL
+    cfg = wire.resolve_agent(store.get_agent(PREPROCESS_AGENT_ID))
+    assert cfg["context_docs"] == ["soul", "user"]  # NULL → 默认（非 []）
+
+
+def test_resolve_agent_explicit_empty_docs_preserved(db_path):
+    # 用户显式取消全部 → '[]' → 保持 []（非默认），运行时不注入身份文档
+    store = ReportStore(db_path)
+    store.update_agent(PREPROCESS_AGENT_ID, wire.config_patch_to_db({"context_docs": []}))
+    cfg = wire.resolve_agent(store.get_agent(PREPROCESS_AGENT_ID))
+    assert cfg["context_docs"] == []

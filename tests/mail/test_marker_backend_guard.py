@@ -21,6 +21,24 @@ def store(tmp_path: Path) -> SyncStore:
     return SyncStore(str(tmp_path / "sync.db"))
 
 
+def _seed_row(store: SyncStore, backend_origin: str, internal_id: int) -> None:
+    """插一行 email_metadata（带 backend_origin），供 _has_rows_for_backend 探测归属。"""
+    store.save_email(
+        {
+            "internal_id": internal_id,
+            "subject": "x",
+            "sender": "a@b.test",
+            "sender_name": "A",
+            "date_received": "2026-07-01T00:00:00",
+            "mailbox": "收件箱",
+            "is_read": False,
+            "is_flagged": False,
+            "sync_status": "pending",
+            "backend_origin": backend_origin,
+        }
+    )
+
+
 def test_first_run_no_marker(store: SyncStore):
     # 尚无 marker（真·首次运行）→ 'first'，不写 marker_backend（上层 baseline 分支负责盖）
     assert store.reconcile_marker_backend("davmail") == "first"
@@ -28,12 +46,24 @@ def test_first_run_no_marker(store: SyncStore):
     assert store.get_state("marker_backend") is None
 
 
-def test_adopt_existing_marker_without_reset(store: SyncStore):
-    # 本 guard 首次部署遇到既有 marker（无归属）→ 认领、不重置 → 存量稳态用户零扰动
+def test_adopt_when_current_backend_has_rows(store: SyncStore):
+    # 首次部署遇既有 marker + 当前 backend 有既有行 → 认领、不重置 → 存量稳态用户零扰动
+    _seed_row(store, "applescript", 100)
     store.set_last_max_row_id(127743)
     assert store.reconcile_marker_backend("applescript") == "adopt"
     assert store.get_last_max_row_id() == 127743
     assert store.get_state("marker_backend") == "applescript"
+
+
+def test_reset_on_first_guard_run_with_backend_switch(store: SyncStore):
+    # codex HIGH：升级拿到 guard 的**同一步就切 davmail**（marker 仍是 applescript ROWID、
+    # marker_backend 缺失）。当前 backend(davmail) 零行 → 不能盲目 adopt → 必须 reset，否则
+    # get_new_emails 发 `UID 127744:*` 重演 silent-loss/deadlock（reporter 的真实事故路径）。
+    _seed_row(store, "applescript", 100)  # 只有 applescript 行，无 davmail 行
+    store.set_last_max_row_id(127743)  # applescript ROWID 空间的 marker
+    assert store.reconcile_marker_backend("davmail") == "reset"
+    assert store.get_last_max_row_id() == 0
+    assert store.get_state("marker_backend") == "davmail"
 
 
 def test_noop_same_backend(store: SyncStore):
@@ -65,6 +95,7 @@ def test_reset_reverse_direction(store: SyncStore):
 
 def test_idempotent_after_adopt(store: SyncStore):
     # adopt 后立即再 reconcile 同 backend → noop（幂等，不反复写库/不误重置）
+    _seed_row(store, "applescript", 100)
     store.set_last_max_row_id(127743)
     assert store.reconcile_marker_backend("applescript") == "adopt"
     assert store.reconcile_marker_backend("applescript") == "noop"
