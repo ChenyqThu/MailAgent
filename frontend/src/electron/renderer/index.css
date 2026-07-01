@@ -5273,7 +5273,11 @@ body:not([data-batch-mode='true']) .email-row .cb {
   display: flex;
   flex-direction: column;
   position: relative;
-  overflow: auto;
+  /* 官方移植第 7 处适配（dogfood）：inner 原为 overflow:auto，会把 composer 里向上开的
+     model picker 弹层（bottom-full）+ top 向 HoverTip 裁死（列表显示不全无法切换）。BorderGlow
+     仅 AgentComposer 用，改 visible 让弹层/tooltip 逸出卡片；卡本身已 overflow:visible，内容有 p-2
+     内边距不会触到 16px 圆角，输入框自带 max-h-32 滚动，无回归。 */
+  overflow: visible;
   z-index: 1;
 }
 @media (prefers-reduced-motion: reduce) {
