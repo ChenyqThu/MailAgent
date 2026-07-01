@@ -35,6 +35,17 @@ def test_register_resolve_roundtrip(db):
     assert "mark_done" in pending.choices and "skip" in pending.choices
 
 
+def test_register_returns_none_on_db_failure(tmp_path):
+    """codex Fix 4：DB 写入失败（父目录不存在 → sqlite 无法打开）→ register 返 None，
+    不再返回一个永远 resolve 不了的死 token。调用方据 None 跳过发不可 resolve 的卡。"""
+    bad_path = str(tmp_path / "no_such_dir" / "store.db")  # 父目录不存在 → connect 失败
+    tok = island_ack.register(
+        bad_path, kind="agent", session_key="mailagent:agent:1",
+        event_type="AgentApproval", metadata={}, choices={"approve", "reject"},
+    )
+    assert tok is None
+
+
 def test_single_use_consumption(db):
     token = island_ack.register(
         db, kind="mail", session_key="mailagent:email:1",

@@ -538,10 +538,15 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     islandAgentEnabled,
     approvalStash,
     announceApprovalToIsland: islandAgentEnabled ? announceApprovalToIsland : undefined,
-    // /decide idempotency vs a renderer that won the race: has THIS approval already been consumed
-    // (guard.consume set usedAt)? If so, resumeApprovalRun reports 'completed' without re-running.
-    isApprovalConsumed: islandAgentEnabled
-      ? (toolCallId: string) => approvalGuard.peek(toolCallId)?.usedAt != null
+    // /decide short-circuit vs a renderer that won the race: has THIS approval already reached a
+    // terminal decision (executed OR rejected) on the other surface? If so, resumeApprovalRun does
+    // not re-run (no double execute / persist; a renderer reject also blocks a later island approve).
+    isApprovalResolved: islandAgentEnabled
+      ? (toolCallId: string) => approvalGuard.isResolved(toolCallId)
+      : undefined,
+    // Tombstone an approval as rejected so the other surface can't approve+execute it afterwards.
+    rejectApproval: islandAgentEnabled
+      ? (toolCallId: string) => approvalGuard.reject(toolCallId)
       : undefined
   })
   _handle = handle

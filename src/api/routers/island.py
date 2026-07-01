@@ -221,6 +221,13 @@ async def _agent_decide_and_complete(
         )
         status = str(result.get("status") or "")
         summary = str(result.get("summary") or "")
+        # 🔴 codex Fix 3：resume 又停在**下一个**审批门（status="repaused"）。gateway 的
+        # makePersistOnFinish 已把新审批 stash + announce 成一张**新**岛卡；此处若发 completed
+        # 会把那张新 waitingForInput 卡误清掉。故 repaused = 非终态，静默返回（不追发）。
+        if status == "repaused":
+            log.info("[island-ack] agent resume re-paused session_id=%s "
+                     "(next approval already announced)", session_id)
+            return
         if status == "error" or not result.get("ok", False):
             await island_agent.announce_status(
                 session_id=session_id, status_kind="error",

@@ -254,16 +254,26 @@ async def verify_local_token(request: Request) -> None:
 
     - AUTH_DISABLED（dev）→ 放行。
     - 配了 ``_LOCAL_API_TOKEN``：header 必须 compare_digest 匹配，否则 403。
-    - 未配 token（裸 dev / 测试）→ 放行（loopback-trusted 兜底，与 gateway 其它 loopback
-      端点无 per-endpoint token 的姿态一致）。
+    - 未配 token 且非 dev → **fail-closed 拒绝**（codex Fix 5）。
+
+    🔴 codex Fix 5：原实现在未配 token 时**放行**，但本 dependency 唯一使用者
+    ``/agent/announce`` 是**不挂全局 CF Access** 的路由 —— 一个设了 ``CF_AUDIENCE`` 却没配
+    ``MAILAGENT_LOCAL_API_TOKEN`` 的部署会因此接受任意 announce（把伪造 agent 卡推上岛）。
+    打包 Electron 由 ``local_token.ts`` 同源注入 serve-api env（``_LOCAL_API_TOKEN`` 非空）+
+    gateway header，故正常路径不受影响；未配 token 的部署本就该 fail-closed（要么开
+    ``AUTH_DISABLED`` 显式声明 dev，要么配 token）。
     """
     if AUTH_DISABLED:
         request.state.user_email = "dev@localhost"
         return
     if not _LOCAL_API_TOKEN:
-        # 未配 token：与 gateway loopback 端点同姿态（同机可信）→ 放行。
-        request.state.user_email = _resolve_allowed_email() or "local@127.0.0.1"
-        return
+        # 未配 token 且非 dev → 拒绝（不再 loopback 兜底放行）：此腿仅 /agent/announce 用，
+        # 该路由无全局 CF 门 → 放行 = 任意同机/误配远程都能推 agent 上岛卡。fail-closed。
+        logger.error(
+            "verify_local_token: MAILAGENT_LOCAL_API_TOKEN not configured and not dev — "
+            "denying fail-closed"
+        )
+        raise HTTPException(status_code=403, detail="local token not configured")
     local_tok = request.headers.get(LOCAL_TOKEN_HEADER)
     if local_tok and hmac.compare_digest(local_tok, _LOCAL_API_TOKEN):
         request.state.user_email = _resolve_allowed_email() or "local@127.0.0.1"

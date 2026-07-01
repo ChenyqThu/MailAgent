@@ -12,12 +12,20 @@
 //    the guard.verify hash still matches and the tool executes exactly as an in-app approve would.
 //
 // 🔴 Single-resolver: the stash.claim (in server.ts) is one-shot for the ISLAND side (two island
-//    clicks → the second finds nothing). The RENDERER side (a concurrent in-app approve) is caught two
-//    ways: (1) cfg.isApprovalConsumed short-circuits here BEFORE re-running when the renderer already
-//    executed (no double persist); (2) the write tool's one-shot guard.consume (enabled with island
-//    agent) makes whichever execute lands second throw E_APPROVAL_USED → never a double write.
+//    clicks → the second finds nothing). The RENDERER side (a concurrent in-app approve/reject) is
+//    caught three ways: (1) cfg.isApprovalResolved short-circuits here BEFORE re-running when the
+//    renderer already resolved it (approved+executed OR rejected — no double execute, no double
+//    persist, and a renderer reject blocks a later island approve); (2) the write tool's one-shot
+//    guard.consume (enabled with island agent) makes whichever execute lands second throw
+//    E_APPROVAL_USED → never a double write; (3) an island reject tombstones the guard so a later
+//    renderer approve fails closed too. Whichever surface acts FIRST wins ("先到先赢").
 
-import { makeIdGenerator, makePersistOnFinish, prepareChatRun } from './chatRun'
+import {
+  makeIdGenerator,
+  makePersistOnFinish,
+  prepareChatRun,
+  responseMessageAwaitsApproval
+} from './chatRun'
 import type { AiGatewayConfig } from './config'
 import {
   applyApprovalResponseToMessages,
@@ -34,10 +42,13 @@ export interface ResumeDecideInput {
 
 export interface ResumeResult {
   ok: boolean
-  /** 'completed' = approved + tool executed OK; 'rejected' = user rejected (model responded to the
-   *  denial); 'not_found' = no live stash (gateway restarted / already claimed / wrong token);
-   *  'error' = the resume ran but the tool errored (e.g. guard mismatch) or streamText threw. */
-  status: 'completed' | 'rejected' | 'not_found' | 'error'
+  /** 'completed' = approved + tool executed OK (or the OTHER surface already executed it — the action
+   *  DID happen); 'rejected' = user rejected (model responded to the denial); 'repaused' = the resume
+   *  ran the first tool but the model then requested ANOTHER approval — makePersistOnFinish already
+   *  stashed + announced a fresh island card, so this is NOT terminal (serve-api must NOT clear/complete
+   *  the card); 'not_found' = no live stash (gateway restarted / already claimed / wrong token); 'error'
+   *  = the resume ran but the tool errored (e.g. guard mismatch) or streamText threw. */
+  status: 'completed' | 'rejected' | 'repaused' | 'not_found' | 'error'
   /** A one-line human summary for the island completed/error card (the model's final text, clipped). */
   summary?: string
   error?: string
@@ -65,13 +76,20 @@ export async function resumeApprovalRun(
   const entry = stash.claim(input.toolCallId, input.resumeToken)
   if (!entry) return { ok: false, status: 'not_found', error: 'no live pending approval' }
 
-  // Renderer-won-the-race short-circuit: if the in-app approve already executed this tool (guard
-  // consumed), do NOT re-run/re-persist — report it as handled so the island clears its card.
-  if (cfg.isApprovalConsumed?.(entry.toolCallId)) {
+  // Renderer-won-the-race short-circuit: if a TERMINAL decision already landed in-app (approved +
+  // executed → usedAt, OR rejected → rejectedAt; ApprovalGuard.isResolved), do NOT re-run/re-persist.
+  // Report 'completed' so the island clears its (now stale) card either way — the decision was made
+  // in-app; the island click must not re-execute (finding 1) nor re-persist (finding 2).
+  if (cfg.isApprovalResolved?.(entry.toolCallId)) {
     return { ok: true, status: 'completed', summary: '已在 app 内处理' }
   }
 
   const approved = input.decision === 'approve'
+  // finding 1 — an island REJECT is terminal: tombstone the guard BEFORE the replay so a later (or
+  // concurrent) renderer approve fails closed (verify → E_APPROVAL_USED). Idempotent / never throws;
+  // inert when rejectApproval is unwired (but island agent off never reaches this path). The approve
+  // path never tombstones — the write tool's one-shot guard.consume is the approve-side resolver.
+  if (!approved) cfg.rejectApproval?.(entry.toolCallId)
   const approvalResp: ToolApprovalResponsePayload = {
     toolCallId: entry.toolCallId,
     approvalId: entry.approvalId,
@@ -109,14 +127,25 @@ export async function resumeApprovalRun(
   const run = prepared.run
 
   // Drain the stream server-side (no client to pipe to). This drives the tool loop (execute →
-  // guard.verify/consume → write) and, on finish, makePersistOnFinish persists the completed turn.
+  // guard.verify/consume → write). Wrap the shared persist so we can observe whether the resumed run
+  // itself PAUSED AGAIN at a second approval gate (finding 3). basePersist (makePersistOnFinish) still
+  // owns persistence: it persists a completed turn, OR (re-paused) re-stashes + re-announces the next
+  // island card and skips persist, OR (the OTHER surface already executed → E_APPROVAL_USED audit)
+  // skips the duplicate persist (finding 2, gated by islandAgentEnabled inside makePersistOnFinish).
+  const basePersist = makePersistOnFinish(cfg, run)
+  let rePaused = false
   let assistantText = ''
   try {
     const stream = run.result.toUIMessageStream({
       originalMessages: run.rawMessages,
       generateMessageId: makeIdGenerator(),
       sendReasoning: false,
-      onFinish: makePersistOnFinish(cfg, run)
+      onFinish: async (args) => {
+        if (!args.isAborted) {
+          rePaused = responseMessageAwaitsApproval(args.responseMessage as MailAgentUIMessage)
+        }
+        await basePersist(args)
+      }
     })
     for await (const chunk of stream) {
       const c = chunk as { type?: string; delta?: unknown; text?: unknown }
@@ -130,11 +159,24 @@ export async function resumeApprovalRun(
     return { ok: false, status: 'error', error: err instanceof Error ? err.message : String(err) }
   }
 
+  // finding 3 — the resume ran the approved tool but then PAUSED AGAIN at a NEXT approval gate.
+  // makePersistOnFinish already stashed + announced that fresh approval as a new island card; this
+  // result is NOT terminal, so tell serve-api to leave the (new) card alone (don't send completed).
+  if (rePaused) {
+    return { ok: true, status: 'repaused', summary: clipSummary(assistantText) }
+  }
+
   // Inspect the audit for THIS tool call to distinguish executed-OK from a guard/write error.
   const audit = run.auditEntries.find((e) => e.toolUseId === entry.toolCallId)
   if (approved) {
     if (audit && audit.status === 'error') {
-      // The write was gated out (e.g. E_APPROVAL_USED from a renderer race, or a domain error).
+      // finding 2 — E_APPROVAL_USED means the OTHER surface (renderer) won the approve race and already
+      // executed + persisted the authoritative turn. The action DID happen; report 'completed' (NOT
+      // 'error', so no misleading AgentError card). basePersist already skipped this duplicate turn.
+      if (auditIsApprovalUsed(audit.outputJson)) {
+        return { ok: true, status: 'completed', summary: '已在 app 内处理' }
+      }
+      // A real guard/write error (hash mismatch, expiry, domain failure) → surface it.
       const errMsg = parseAuditError(audit.outputJson)
       return { ok: false, status: 'error', error: errMsg, summary: errMsg }
     }
@@ -157,5 +199,18 @@ function parseAuditError(outputJson: string): string {
     return [code, msg].filter(Boolean).join(': ') || 'tool execution failed'
   } catch {
     return 'tool execution failed'
+  }
+}
+
+/** True when an audit entry's outputJson records an E_APPROVAL_USED tool-error — the one-shot
+ *  guard.consume rejected this execute because the approval was already consumed on the OTHER surface
+ *  (the renderer won the approve race). Distinguishes the benign "already handled in app" outcome from
+ *  a real guard/write failure. Never throws. */
+function auditIsApprovalUsed(outputJson: string): boolean {
+  try {
+    const o = JSON.parse(outputJson) as { error?: unknown }
+    return o.error === 'E_APPROVAL_USED'
+  } catch {
+    return false
   }
 }

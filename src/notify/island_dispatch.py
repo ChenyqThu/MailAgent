@@ -1006,11 +1006,16 @@ def _register_ack_if_intervention(
             choices={opt.id for opt in envelope.intervention.options},
             internal_id=internal_id,
         )
-        envelope.metadata["ack_token"] = token
-        # serve-api ack 端点 URL 随 envelope 带出 (fork 读它, 避免硬编码端口)。
-        # MAILAGENT_API_PORT 由 BackendLifecycleManager 与 serve-api 同 env 注入 (默认 8200)。
-        api_port = os.environ.get("MAILAGENT_API_PORT", "8200")
-        envelope.metadata["ack_url"] = f"http://127.0.0.1:{api_port}/api/island/ack"
+        # codex Fix 4: register 落库失败返 None → 不注入永远 resolve 不了的 ack_token（envelope
+        # 仍发，按钮 no-op，等同 ack 通道上线前现状）。仅在拿到 token 时才带 ack_token/ack_url。
+        if token:
+            envelope.metadata["ack_token"] = token
+            # serve-api ack 端点 URL 随 envelope 带出 (fork 读它, 避免硬编码端口)。
+            # MAILAGENT_API_PORT 由 BackendLifecycleManager 与 serve-api 同 env 注入 (默认 8200)。
+            api_port = os.environ.get("MAILAGENT_API_PORT", "8200")
+            envelope.metadata["ack_url"] = f"http://127.0.0.1:{api_port}/api/island/ack"
+        else:
+            log.warning("[island] ack register no token — notification sent without ack")
     except Exception as e:  # noqa: BLE001
         log.debug("[island] ack register failed (fail-open): %s", e)
 

@@ -413,6 +413,57 @@ function maybeStashAndAnnounceApproval(
   }
 }
 
+/** Part B (harness 上岛) — collect the toolCallIds of any approval the user REJECTED in-app (a tool
+ *  part in state 'approval-responded' with approval.approved === false). Scanned on the renderer's
+ *  reject-resume turn (its incoming history ends with that rejected part) so makePersistOnFinish can
+ *  tombstone the guard → a later island approve for the same toolCallId fails closed (finding 1,
+ *  renderer-reject side). Idempotent to re-scan: a stale part whose guard record is gone → reject()
+ *  no-ops. Pure structural narrowing (no ai import). */
+function collectRejectedApprovalToolCallIds(messages: MailAgentUIMessage[]): string[] {
+  const ids: string[] = []
+  for (const msg of messages) {
+    const parts = (msg as { parts?: unknown }).parts
+    if (!Array.isArray(parts)) continue
+    for (const part of parts) {
+      if (part == null || typeof part !== 'object') continue
+      const p = part as {
+        type?: unknown
+        state?: unknown
+        toolCallId?: unknown
+        approval?: { approved?: unknown }
+      }
+      if (
+        typeof p.type === 'string' &&
+        p.type.startsWith('tool-') &&
+        p.state === 'approval-responded' &&
+        p.approval != null &&
+        p.approval.approved === false &&
+        typeof p.toolCallId === 'string' &&
+        p.toolCallId.length > 0
+      ) {
+        ids.push(p.toolCallId)
+      }
+    }
+  }
+  return ids
+}
+
+/** Part B — true when THIS turn's audit shows a tool rejected by the one-shot guard.consume
+ *  (E_APPROVAL_USED): the approval was already executed on the OTHER surface (a renderer↔island
+ *  approve race). The winner persisted the authoritative turn, so persisting here would double-write a
+ *  bogus error turn (finding 2). Only reachable with island agent on (oneShotWrites enables consume). */
+function runHasApprovalUsedError(run: PreparedChatRun): boolean {
+  return run.auditEntries.some((e) => {
+    if (e.status !== 'error') return false
+    try {
+      const o = JSON.parse(e.outputJson) as { error?: unknown }
+      return o.error === 'E_APPROVAL_USED'
+    } catch {
+      return false
+    }
+  })
+}
+
 /**
  * Build the onFinish callback that persists a finished turn (ai_chat.db dual-write) — the SAME
  * persistence both endpoints use (the AG-UI mirror is a true mirror, including audit). Best-effort:
@@ -457,6 +508,17 @@ export function makePersistOnFinish(
       // (default) → both cfg hooks are undefined → this call is inert (byte-identical early return).
       maybeStashAndAnnounceApproval(cfg, run, responseMessage as MailAgentUIMessage)
       return
+    }
+    // Part B (harness 上岛) — cross-surface single-resolver side effects on a COMPLETED turn. Gated by
+    // islandAgentEnabled so flag-off (default) is byte-identical (both hooks below are also `?.`-guarded).
+    if (cfg.islandAgentEnabled) {
+      // (finding 1) a renderer REJECT (approval-responded approved:false in this resume's history)
+      // tombstones the guard so a later island approve for the same toolCallId fails closed.
+      for (const id of collectRejectedApprovalToolCallIds(run.rawMessages)) cfg.rejectApproval?.(id)
+      // (finding 2) if the one-shot guard.consume rejected this turn's tool (E_APPROVAL_USED), the
+      // OTHER surface already executed + persisted the authoritative turn — skip this duplicate error
+      // persist (and skip capture: an error turn is nothing to extract memory from).
+      if (runHasApprovalUsedError(run)) return
     }
     const usage = await Promise.resolve(run.result.usage).catch(() => undefined)
     const turn: PersistTurnInput = {

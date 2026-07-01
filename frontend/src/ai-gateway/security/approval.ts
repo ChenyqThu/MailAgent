@@ -109,6 +109,11 @@ export interface ApprovalRecord {
   /** Phase 04b — set by consume() the first time a blocking approval is executed. A second
    *  consume() (replayed approval-response) throws E_APPROVAL_USED → the send never runs twice. */
   usedAt?: number
+  /** Part B (harness 上岛) — set by reject() when a REJECT decision lands on ANY surface (island
+   *  /decide reject, or the renderer's rejected approval-response). A rejected approval is terminal:
+   *  verify() throws E_APPROVAL_USED so the OTHER surface can never approve+execute it afterwards
+   *  ("先到先赢" across renderer + island). Only ever set when island agent is on (the only caller). */
+  rejectedAt?: number
   createdAt: number
   expiresAt: number
 }
@@ -281,6 +286,15 @@ export class ApprovalGuard {
         `approval ${record.approvalId} expired — re-propose the action`
       )
     }
+    // Part B — a rejected approval is terminal: once ANY surface rejected it, no surface may
+    // execute it (the island + renderer race — "先到先赢"). reject() only fires when island agent
+    // is on, so this is inert (rejectedAt never set) in the pre-Part-B renderer-only flow.
+    if (record.rejectedAt !== undefined) {
+      throw new ApprovalError(
+        'E_APPROVAL_USED',
+        `approval ${record.approvalId} was already rejected — re-propose the action`
+      )
+    }
     // Phase 04a — a UI edit (applyEdit side-channel) is authoritative. The ai@6 history input
     // is unchanged (so the signature verified before we got here) and hashes to inputHash;
     // the user's edited fields live in record.editedInput. Execute that, report userEdited.
@@ -335,6 +349,30 @@ export class ApprovalGuard {
     }
     record.usedAt = this.now()
     return record
+  }
+
+  /**
+   * Part B (harness 上岛) — TOMBSTONE an approval as REJECTED. Idempotent + never throws: it marks
+   * the record so a later verify() (from the OTHER surface) fails closed. Called when a reject lands
+   * on either surface — the island /decide reject path, or the renderer's rejected approval-response
+   * (detected in makePersistOnFinish). No-op if the record is gone (already GC'd) or already used
+   * (the approve won the race first — leave usedAt authoritative). This is the reject half of the
+   * cross-surface "先到先赢" single-resolver (the approve half is consume()/usedAt).
+   */
+  reject(toolCallId: string): void {
+    const record = this.store.get(toolCallId)
+    if (!record) return
+    if (record.usedAt !== undefined) return // approve already executed → don't overwrite the outcome
+    if (record.rejectedAt === undefined) record.rejectedAt = this.now()
+  }
+
+  /** Part B — true once a terminal decision landed on ANY surface (approved+executed OR rejected).
+   *  The island /decide short-circuits on this so it never re-runs an approval the renderer already
+   *  resolved. Read-only. */
+  isResolved(toolCallId: string): boolean {
+    const record = this.store.get(toolCallId)
+    if (!record) return false
+    return record.usedAt !== undefined || record.rejectedAt !== undefined
   }
 
   /**

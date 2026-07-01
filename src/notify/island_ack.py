@@ -92,12 +92,16 @@ def register(
     choices: Set[str],
     internal_id: Optional[int] = None,
     ttl_sec: float = DEFAULT_TTL_SEC,
-) -> str:
-    """登记一条 pending，返回 ``ack_token``（注入 envelope metadata 发给 ping-island）.
+) -> Optional[str]:
+    """登记一条 pending，成功返回 ``ack_token``（注入 envelope metadata 发给 ping-island）。
 
     同 ``(session_key, event_type)`` 重发 → evict 旧 token（只保留最新 envelope 的 ack，
-    契约 §9-1 幂等语义）；顺带 GC 过期行 + cap。DB 出错仍返 token（fail-open：不阻断
-    dispatch，仅该按钮 ack 会 miss，等同现状）。
+    契约 §9-1 幂等语义）；顺带 GC 过期行 + cap。
+
+    🔴 codex Fix 4：**DB 写入失败返 None**（不再返回一个永远 resolve 不了的 token）。pending
+    没落库 = 岛上点按钮 ``/ack`` 必 404、且 agent 场景连追发 AgentError 的 session 元数据都拿不
+    到 → 「可点却不可 resolve 的死卡」。调用方据 None 决定：agent 审批**不发**这张卡（避免死卡）；
+    mail 通知仍可发（只是无 ack_token，按钮 no-op，等同 ack 通道上线前的现状）。
     """
     now = time.time()
     token = secrets.token_urlsafe(24)
@@ -143,7 +147,9 @@ def register(
         finally:
             conn.close()
     except sqlite3.Error as e:
-        log.debug("[island-ack] register failed (fail-open): %s", e)
+        # pending 没落库 → 该 token 永远 resolve 不了。返 None，让调用方跳过发不可 resolve 的卡。
+        log.warning("[island-ack] register failed — pending not persisted: %s", e)
+        return None
     return token
 
 

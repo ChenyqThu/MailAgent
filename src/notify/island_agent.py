@@ -236,11 +236,22 @@ async def announce_approval(
             internal_id=None,
             ttl_sec=ttl_sec,
         )
-        envelope.metadata["ack_token"] = ack_token
-        envelope.metadata["ack_url"] = f"http://127.0.0.1:{api_port}/api/island/ack"
-    except Exception as e:  # noqa: BLE001 — fail-open：ack 登记失败仍尝试发卡（岛上点击 no-op）
-        log.debug("[island-agent] ack register failed (fail-open): %s", e)
+    except Exception as e:  # noqa: BLE001
+        log.warning("[island-agent] ack register raised: %s", e)
+        ack_token = None
 
+    # 🔴 codex Fix 4：无 ack_token（register 落库失败）→ 岛上点批准 /ack 必 404、且连追发
+    # AgentError 的 session 元数据都没有 = 「可点却不可 resolve」的死卡。**不发这张卡**：renderer
+    # 在场仍可 app 内批准（审批 pending 不依赖岛）；完全离岛则本轮无岛上审批（安全降级，胜过死卡）。
+    if not ack_token:
+        log.warning(
+            "[island-agent] ack register failed — skip approval card (avoid unresumable card) "
+            "session_id=%s toolCallId=%s", session_id, tool_call_id,
+        )
+        return None
+
+    envelope.metadata["ack_token"] = ack_token
+    envelope.metadata["ack_url"] = f"http://127.0.0.1:{api_port}/api/island/ack"
     await _send(envelope, sock_path)
     return ack_token
 

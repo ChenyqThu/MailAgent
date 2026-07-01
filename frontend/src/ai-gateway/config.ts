@@ -212,10 +212,16 @@ export interface AiGatewayConfig {
    *  the stash minted. 🔴 MUST be fire-and-forget (returns void, never awaited) so a slow/failed
    *  announce can't block the already-streamed (paused) turn. Omitted → no island announce. */
   announceApprovalToIsland?: (info: IslandApprovalAnnounce) => void
-  /** Part B — read whether an approval was already consumed (ApprovalGuard.peek().usedAt), so
-   *  /api/ai/approval/decide can short-circuit as "already handled" when the RENDERER won the race
-   *  (in-app approve executed first) instead of re-running + double-persisting. The lifecycle
-   *  implements it as `guard.peek(toolCallId)?.usedAt != null`. Omitted → the resume runs regardless
-   *  (the write-tool one-shot consume still prevents a double write). */
-  isApprovalConsumed?: (toolCallId: string) => boolean
+  /** Part B — read whether an approval already reached a TERMINAL decision on ANY surface (approved
+   *  +executed OR rejected — ApprovalGuard.isResolved). /api/ai/approval/decide short-circuits on this
+   *  so it never re-runs an approval the RENDERER already resolved (in-app approve executed, or in-app
+   *  reject) — no double execute, no double persist, and (critically) a renderer REJECT blocks a later
+   *  island approve. Omitted → the resume runs regardless (the write-tool one-shot consume still
+   *  prevents a double write, but a cross-surface reject would not be honored). */
+  isApprovalResolved?: (toolCallId: string) => boolean
+  /** Part B — TOMBSTONE an approval as rejected (ApprovalGuard.reject) so the OTHER surface can't
+   *  approve+execute it. Called by makePersistOnFinish when a completed turn carries a REJECTED tool
+   *  part (renderer or island reject), and by resumeApprovalRun on an island reject. Idempotent /
+   *  never throws. Omitted (island agent off) → no cross-surface reject tombstoning (inert). */
+  rejectApproval?: (toolCallId: string) => void
 }

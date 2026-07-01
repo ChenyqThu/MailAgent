@@ -225,5 +225,62 @@ def test_ack_agent_gateway_error_sends_error_card(agent_client, monkeypatch):
     assert statuses and statuses[0]["status_kind"] == "error"
 
 
+def test_announce_approval_register_failure_skips_card(agent_client, monkeypatch):
+    """codex Fix 4：island_ack.register 落库失败返 None → announce **不发**不可 resolve 的死卡
+    （岛上点批准会 404、连追发 AgentError 的元数据都没有 → 安全降级为无岛卡）。"""
+    client, _db, sent = agent_client
+    monkeypatch.setattr(island_ack, "register", lambda *a, **k: None)
+    r = client.post("/api/island/agent/announce", json={
+        "kind": "approval", "sessionId": 42, "toolName": "email_draft_reply",
+        "inputPreview": "回复 Alice", "risk": "edit",
+        "toolCallId": "call_1", "resumeToken": "rt_1", "gatewayPort": 8300,
+    })
+    assert r.status_code == 200
+    assert r.json()["ackToken"] is None  # 无 token
+    assert sent == []  # 未发任何 envelope（不制造死卡）
+
+
+def test_ack_agent_repaused_no_completion(agent_client, monkeypatch):
+    """codex Fix 3：gateway resume 又停在**下一个**审批门（status=repaused）→ serve-api **不**
+    追发 completed/error 卡（新审批卡已由 gateway makePersistOnFinish announce，追发会误清它）。"""
+    client, db, _sent = agent_client
+    token = island_ack.register(
+        db, kind="agent", session_key="mailagent:agent:42",
+        event_type="AgentApproval",
+        metadata={
+            "mailagent.agentToolCallId": "call_1",
+            "mailagent.agentResumeToken": "rt_1",
+            "mailagent.agentGatewayPort": "8300",
+            "mailagent.agentSessionId": "42",
+        },
+        choices={"approve", "reject"}, internal_id=None,
+    )
+    calls = []
+
+    async def fake_decide(port, tcid, decision, rt):
+        calls.append((port, tcid, decision, rt))
+        return {"ok": True, "status": "repaused", "summary": ""}
+
+    monkeypatch.setattr("src.api.routers.island._post_gateway_decide", fake_decide)
+
+    statuses = []
+
+    async def fake_status(**kw):
+        statuses.append(kw)
+
+    monkeypatch.setattr(island_agent, "announce_status", fake_status)
+
+    r = client.post("/api/island/ack", json={"ack_token": token, "choice": "approve"})
+    assert r.status_code == 200
+    for _ in range(100):
+        if calls:
+            break
+        time.sleep(0.02)
+    assert calls == [(8300, "call_1", "approve", "rt_1")]
+    # 关键：repaused 是非终态 → 不追发任何生命周期卡（给协程收尾留个小窗后复核）
+    time.sleep(0.05)
+    assert statuses == []
+
+
 async def _noop_async(**kw):
     return None

@@ -19,7 +19,7 @@ import pytest
 from fastapi import HTTPException
 
 import src.api.auth as auth_mod
-from src.api.auth import verify_cf_access
+from src.api.auth import verify_cf_access, verify_local_token
 
 
 # ---------------------------------------------------------------------------
@@ -404,6 +404,57 @@ def test_local_token_wrong_via_testclient_401(client, monkeypatch):
     r = client.get("/api/email/list", headers={auth_mod.LOCAL_TOKEN_HEADER: "nope"})
     assert r.status_code == 401
     assert r.json()["error"]["code"] == "E_AUTH_FAILED"
+
+
+# ---------------------------------------------------------------------------
+# Part B (codex Fix 5) — verify_local_token: local-token-ONLY leg for /agent/announce
+# ---------------------------------------------------------------------------
+#
+# 唯一使用者 /api/island/agent/announce 无全局 CF 门 → 该腿必须 fail-closed：未配本地 token
+# 且非 dev 不得放行（否则 CF_AUDIENCE-only 部署会接受任意 announce 推伪造 agent 卡上岛）。
+
+
+@pytest.mark.asyncio
+async def test_verify_local_token_auth_disabled_passes(monkeypatch):
+    """AUTH_DISABLED（dev）→ 放行 + dev 占位身份。"""
+    monkeypatch.setattr(auth_mod, "AUTH_DISABLED", True)
+    req = _req_with_local_token(None)
+    assert await verify_local_token(req) is None  # type: ignore[arg-type]
+    assert req.state.user_email == "dev@localhost"
+
+
+@pytest.mark.asyncio
+async def test_verify_local_token_no_token_fails_closed(monkeypatch):
+    """codex Fix 5：未配 _LOCAL_API_TOKEN 且非 dev → 403（不再 loopback 兜底放行）。"""
+    monkeypatch.setattr(auth_mod, "AUTH_DISABLED", False)
+    monkeypatch.setattr(auth_mod, "_LOCAL_API_TOKEN", "")
+    with pytest.raises(HTTPException) as ei:
+        await verify_local_token(_req_with_local_token("anything"))  # type: ignore[arg-type]
+    assert ei.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_verify_local_token_match_passes(monkeypatch):
+    """配了 token + header 匹配 → 放行 + allowed email 身份。"""
+    monkeypatch.setattr(auth_mod, "AUTH_DISABLED", False)
+    monkeypatch.setattr(auth_mod, "_LOCAL_API_TOKEN", "ephemeral-secret")
+    monkeypatch.setattr(auth_mod, "_resolve_allowed_email", lambda: "owner@example.com")
+    req = _req_with_local_token("ephemeral-secret")
+    assert await verify_local_token(req) is None  # type: ignore[arg-type]
+    assert req.state.user_email == "owner@example.com"
+
+
+@pytest.mark.asyncio
+async def test_verify_local_token_rejects_missing_and_wrong_header(monkeypatch):
+    """配了 token 但无 header / header 不匹配 → 403（纯本地腿，不接受 CF JWT）。"""
+    monkeypatch.setattr(auth_mod, "AUTH_DISABLED", False)
+    monkeypatch.setattr(auth_mod, "_LOCAL_API_TOKEN", "ephemeral-secret")
+    with pytest.raises(HTTPException) as ei:
+        await verify_local_token(_req_with_local_token(None))  # type: ignore[arg-type]
+    assert ei.value.status_code == 403
+    with pytest.raises(HTTPException) as ei2:
+        await verify_local_token(_req_with_local_token("wrong"))  # type: ignore[arg-type]
+    assert ei2.value.status_code == 403
 
 
 # ---------------------------------------------------------------------------

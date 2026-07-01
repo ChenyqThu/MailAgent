@@ -90,7 +90,7 @@ function islandCfg(opts: {
   guard: ApprovalGuard
   stash: ApprovalRunStash
   domainCalls: unknown[]
-  consumed?: (tc: string) => boolean
+  resolved?: (tc: string) => boolean
 }): AiGatewayConfig {
   const { guard, stash, domainCalls } = opts
   const domain = spyDomain(domainCalls)
@@ -107,7 +107,9 @@ function islandCfg(opts: {
       ),
     islandAgentEnabled: true,
     approvalStash: stash,
-    isApprovalConsumed: opts.consumed
+    isApprovalResolved: opts.resolved,
+    // the real guard is the tombstone target for an island reject (finding 1)
+    rejectApproval: (tc: string) => guard.reject(tc)
   }
 }
 
@@ -202,12 +204,29 @@ describe('/api/ai/approval/decide — server-side resume', () => {
     expect(domainCalls).toHaveLength(0) // rejected → no write
   })
 
-  test('single-resolver: renderer already consumed → short-circuit completed, no re-execute', async () => {
+  // finding 1 — an island reject is TERMINAL: it tombstones the guard so a later approve on the OTHER
+  // surface (renderer) fails closed. Prove the guard is now resolved + verify() rejects.
+  test('reject tombstones the guard → a later approve fails closed (E_APPROVAL_USED)', async () => {
     const guard = new ApprovalGuard()
     const stash = new ApprovalRunStash()
     const domainCalls: unknown[] = []
-    // isApprovalConsumed returns true → the renderer won the race; /decide must NOT re-run.
-    const h = await start(islandCfg({ guard, stash, domainCalls, consumed: () => true }))
+    const h = await start(islandCfg({ guard, stash, domainCalls }))
+    const token = seedPausedApproval(guard, stash)
+
+    await decide(h.port, { toolCallId: TC, decision: 'reject', resumeToken: token })
+    // the guard now reports a terminal decision, and any subsequent execute (renderer approve) throws.
+    expect(guard.isResolved(TC)).toBe(true)
+    expect(() => guard.verify(TC, DRAFT_INPUT)).toThrowError(/E_APPROVAL_USED/)
+    expect(domainCalls).toHaveLength(0)
+  })
+
+  test('single-resolver: renderer already resolved → short-circuit completed, no re-execute', async () => {
+    const guard = new ApprovalGuard()
+    const stash = new ApprovalRunStash()
+    const domainCalls: unknown[] = []
+    // isApprovalResolved returns true → the renderer won the race (approve OR reject); /decide must NOT
+    // re-run — no double execute, no double persist.
+    const h = await start(islandCfg({ guard, stash, domainCalls, resolved: () => true }))
     const token = seedPausedApproval(guard, stash)
 
     const res = await decide(h.port, { toolCallId: TC, decision: 'approve', resumeToken: token })
