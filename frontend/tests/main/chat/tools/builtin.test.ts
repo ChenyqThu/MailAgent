@@ -226,7 +226,7 @@ describe('builtin tool catalog — M1', () => {
 })
 
 describe('createBuiltinTools — boot wiring', () => {
-  test('builds all 37 default tools (KOS off) into a fresh registry (11 read + 9 write + 4 memory + 1 notion + 5 agent_profile + 6 skill + 1 plan)', () => {
+  test('builds all 33 default tools (KOS off) into a fresh registry (11 read + 9 write + 1 notion + 5 agent_profile + 6 skill + 1 plan)', () => {
     const r = createToolRegistry()
     for (const t of createBuiltinTools(makePlatform())) r.register(t)
     expect(r.names().sort()).toEqual(

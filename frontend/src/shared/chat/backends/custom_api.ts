@@ -284,17 +284,7 @@ export function buildStableSystemPrompt(
       '# Read silently; never echo back.\n\n' +
       cfg.userContext
   }
-  // P2f — durable memory summary overlay, AFTER userContext. Both are stable per
-  // session (fetched once via /chat/config) → stay in the cacheable prefix.
-  // null / "" → skip (no memory yet). The model updates it via memory_write.
-  if (cfg.memorySummary && cfg.memorySummary.length > 0) {
-    text +=
-      '\n\n# Saved memory (durable facts about the user)\n' +
-      '# Read silently; use these to avoid re-asking. When the user states a new durable\n' +
-      '# preference, persist it via memory_write (the user confirms).\n\n' +
-      cfg.memorySummary
-  }
-  // P3 — active Skill prompt fragments, AFTER memory. Only ENABLED + AVAILABLE
+  // P3 — active Skill prompt fragments, AFTER userContext. Only ENABLED + AVAILABLE
   // skills contribute (the runtime computed cfg.skillFragments from the manifest +
   // the user's per-skill toggles); a disabled skill injects neither its tools nor
   // this fragment. Stable per session (recomputed only on engine rebuild after a

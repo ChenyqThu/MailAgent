@@ -15,7 +15,6 @@ import { DraftReplyCard } from './mail/DraftReplyCard'
 import { SendApprovalCard } from './mail/SendApprovalCard'
 import { NotionSyncCard } from './notion/NotionSyncCard'
 import { ApprovalActionCard } from './generic/ApprovalActionCard'
-import { MemoryApprovalCard } from './generic/MemoryApprovalCard'
 import { SystemDocApprovalCard } from './generic/SystemDocApprovalCard'
 import { SkillToggleCard } from './generic/SkillToggleCard'
 
@@ -77,11 +76,6 @@ export const componentRegistry: ComponentRegistry = createComponentRegistry([
     component: A2UI_COMPONENTS.SendApprovalCard,
     toolNames: ['email_prepare_send'],
     render: SendApprovalCard
-  },
-  {
-    component: A2UI_COMPONENTS.MemoryApprovalCard,
-    toolNames: ['memory_write', 'memory_delete'],
-    render: MemoryApprovalCard
   },
   // M4b/M4c — self-mount approval cards (behind MAILAGENT_SKILL_SELF_MOUNT; discover_skills is a
   // silent read → no card → generic ToolTraceCard).

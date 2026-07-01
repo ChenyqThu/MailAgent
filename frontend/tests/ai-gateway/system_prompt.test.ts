@@ -81,13 +81,16 @@ describe('buildGatewaySystemPrompt', () => {
     expect(out).not.toContain('You are the AI assistant inside MailAgent, a macOS email client.')
   })
 
-  test('memory summary is injected', () => {
+  test('memorySummary (KV dump channel) retired (M5b): non-empty value is NOT injected into stable prefix', () => {
+    // The agent_memory_kv KV dump channel is retired in M5b. buildStableSystemPrompt no longer
+    // injects memorySummary as "Saved memory". M2 recalled memories go through
+    // buildRetrievedMemoryBlock (a separate section after the stable prefix), not here.
     const out = buildGatewaySystemPrompt({
       promptConfig: { memorySummary: 'User prefers concise replies.' },
       contextSnapshot: null
     })
-    expect(out).toContain('Saved memory')
-    expect(out).toContain('User prefers concise replies.')
+    expect(out).not.toContain('Saved memory')
+    expect(out).not.toContain('User prefers concise replies.')
   })
 
   test('appends the typed context block (untrusted fences) after the stable prefix', () => {

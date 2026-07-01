@@ -70,16 +70,18 @@ describe('soul — Skill prompt fragment injection (P3)', () => {
     expect(empty).toBe(SOUL_MARKDOWN)
   })
 
-  test('enabled skill fragments are appended after the soul, after memory', () => {
+  test('enabled skill fragments are appended after the soul (M5b: memorySummary retired)', () => {
     const stable = __testing.buildStableSystemPrompt(
       null,
+      // memorySummary KV channel is retired — it is silently ignored even if passed
       cfg({ memorySummary: 'MEM_OVERLAY', skillFragments: 'REPORT_SKILL_FRAGMENT' }),
       () => null
     )
     expect(stable.startsWith(SOUL_MARKDOWN)).toBe(true)
     expect(stable).toContain('REPORT_SKILL_FRAGMENT')
-    // Ordering: soul → memory → skills (all in the cacheable stable prefix).
-    expect(stable.indexOf('MEM_OVERLAY')).toBeLessThan(stable.indexOf('REPORT_SKILL_FRAGMENT'))
+    // Ordering: soul → skills (memorySummary no longer injected).
+    expect(stable.indexOf(SOUL_MARKDOWN)).toBeLessThan(stable.indexOf('REPORT_SKILL_FRAGMENT'))
+    expect(stable).not.toContain('MEM_OVERLAY')
   })
 
   test('a DISABLED skill fragment is absent — runtime passes only enabled ones', () => {
@@ -125,20 +127,21 @@ describe('safety floor + standing context (PR4)', () => {
     expect(stable.startsWith(SOUL_MARKDOWN)).toBe(false)
   })
 
-  test('standingContext keeps memory/skills ordering after the header', () => {
+  test('standingContext keeps skills ordering after the header (M5b: memorySummary channel retired)', () => {
     const stable = __testing.buildStableSystemPrompt(
       null,
       cfg({
         standingContext: '# SOUL\nx',
+        // memorySummary KV dump channel retired in M5b; passing it has no effect
         memorySummary: 'MEM_OVERLAY',
         skillFragments: 'SKILL_FRAG'
       }),
       () => null
     )
-    // floor → standing → memory → skills (all in the cacheable stable prefix).
+    // floor → standing → skills (memorySummary no longer injected as "Saved memory").
     expect(stable.indexOf(PRODUCT_SAFETY_FLOOR)).toBeLessThan(stable.indexOf('# SOUL'))
-    expect(stable.indexOf('# SOUL')).toBeLessThan(stable.indexOf('MEM_OVERLAY'))
-    expect(stable.indexOf('MEM_OVERLAY')).toBeLessThan(stable.indexOf('SKILL_FRAG'))
+    expect(stable.indexOf('# SOUL')).toBeLessThan(stable.indexOf('SKILL_FRAG'))
+    expect(stable).not.toContain('MEM_OVERLAY')
   })
 
   test('empty standingContext → legacy SOUL_MARKDOWN header (flag-off fallback)', () => {

@@ -16,7 +16,6 @@ import {
   getAssistantPartComponents
 } from '@shared/assistant/tools/registerToolUIs'
 import { ToolTraceCard } from '@shared/assistant/tools/generic/ToolTraceCard'
-import { MemoryApprovalCard } from '@shared/assistant/tools/generic/MemoryApprovalCard'
 
 afterEach(() => {
   vi.unstubAllEnvs()
@@ -37,14 +36,12 @@ describe('componentRegistry — resolution', () => {
     expect(componentRegistry.resolve('totally_unknown')).toBeUndefined()
   })
 
-  test('memory_write / memory_delete resolve to the same MemoryApprovalCard instance', () => {
-    const write = componentRegistry.resolve('memory_write')
-    expect(write).toBeTypeOf('function')
-    expect(write).toBe(MemoryApprovalCard)
-    expect(componentRegistry.resolve('memory_delete')).toBe(MemoryApprovalCard)
+  test('memory_write / memory_delete retired (M5b) → undefined (no card)', () => {
+    expect(componentRegistry.resolve('memory_write')).toBeUndefined()
+    expect(componentRegistry.resolve('memory_delete')).toBeUndefined()
   })
 
-  test('byName covers the ten write/self-mount tools; components covers the seven card names', () => {
+  test('byName covers the eight write/self-mount tools; components covers the six card names', () => {
     expect(Object.keys(componentRegistry.byName).sort()).toEqual([
       'email_archive',
       'email_draft_reply',
@@ -52,15 +49,12 @@ describe('componentRegistry — resolution', () => {
       'email_pin',
       'email_prepare_send',
       'email_resync',
-      'memory_delete',
-      'memory_write',
       'set_skill_enabled',
       'update_system_md'
     ])
     expect(Object.keys(componentRegistry.components).sort()).toEqual([
       'ApprovalActionCard',
       'DraftReplyCard',
-      'MemoryApprovalCard',
       'NotionSyncCard',
       'SendApprovalCard',
       'SkillToggleCard',

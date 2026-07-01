@@ -1649,10 +1649,11 @@ export interface ChatApi {
   /**
    * P3 — drop the cached chat engine + /chat/config snapshot so the NEXT
    * chat.start() rebuilds the engine fresh. Call after a Skill toggle or a
-   * Memory edit/delete so the next turn's system prompt + tool catalog reflect
-   * the change (the engine is built once and memoizes the config snapshot +
-   * skill enablement; without this, edits are invisible until reload). Cheap +
-   * idempotent; in-flight streams are unaffected (they keep their engine).
+   * Standing Context doc edit so the next turn's system prompt + tool catalog
+   * reflect the change (the engine is built once and memoizes the config
+   * snapshot + skill enablement; without this, edits are invisible until
+   * reload). Cheap + idempotent; in-flight streams are unaffected (they keep
+   * their engine).
    */
   invalidateConfig(): void
   /**
