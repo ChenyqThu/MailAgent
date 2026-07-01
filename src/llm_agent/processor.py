@@ -164,13 +164,30 @@ class LLMProcessor:
         )
         blocks: List[Dict[str, Any]] = [{"type": "text", "text": header}]
 
-        # #31/#32 Part2 增量1 — 用户身份 grounding（soul/user 恒注入，flag 可关）。
+        # #31/#32 Part2 增量2 — AI 邮件预处理 Custom Agent（report_agent type='preprocess' 行）
+        # 的 persona + 文档勾选。开关/模型走全局 env（LLM_AGENT_ENABLED/LLM_MODEL），此处只对
+        # persona/docs 做 NULL-safe 叠加：卡片未动（种子默认）时与增量1 行为字节一致。
         # 落在 header 之后、稳定 prefix 内 → 随 final_block 的 cache_control 一起缓存。
         from src.agent_config.task_context import build_task_identity_context
+        from src.llm_agent.preprocess_config import get_preprocess_config
 
-        _identity = build_task_identity_context()
+        _pp = get_preprocess_config(cfg.sync_store_db_path)
+
+        # 身份 grounding：文档集用预处理 agent 的勾选（context_docs=None → 用默认 soul/user；
+        # []=用户取消全部 → 不注入）；flag task_identity_docs_enabled 仍是总闸（关则恒空）。
+        if _pp.context_docs is not None:
+            _identity = build_task_identity_context(doc_names=_pp.context_docs)
+        else:
+            _identity = build_task_identity_context()
         if _identity:
             blocks.append({"type": "text", "text": _identity})
+
+        # 预处理 agent 的可编辑 persona（分类补充指引）；空=用硬编码默认，不加块。
+        if _pp.persona:
+            blocks.append({
+                "type": "text",
+                "text": "# 分类补充指引（来自 AI 邮件预处理 Agent 配置）\n\n" + _pp.persona,
+            })
 
         ctx_md = await self._context.get_markdown()
         if ctx_md:

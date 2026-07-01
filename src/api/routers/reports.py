@@ -103,9 +103,11 @@ async def create_agent(request: Request, body: Optional[dict[str, Any]] = None):
     if not agent_id:
         raise APIError("E_INVALID_ARG", "id is required", source="sqlite")
     agent_type = str(raw.get("type") or "report")
-    if agent_type not in ("report", "search"):
+    if agent_type not in ("report", "search", "preprocess"):
         raise APIError(
-            "E_INVALID_ARG", f"type must be report|search, got {agent_type!r}", source="sqlite"
+            "E_INVALID_ARG",
+            f"type must be report|search|preprocess, got {agent_type!r}",
+            source="sqlite",
         )
     tools = raw.get("tools_json")
     tools_json = (

@@ -26,6 +26,7 @@ _AGENT_PATCH_FIELDS = {
     "timezone",
     "body_full_max",
     "body_full_priorities",
+    "context_docs_json",  # v27: preprocess agent 的文档勾选（JSON 数组 of profile-doc 名）
 }
 
 # 列表查询不返回 blocks_json（重），详情才取。

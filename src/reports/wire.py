@@ -54,6 +54,14 @@ def resolve_agent(agent: Dict[str, Any]) -> Dict[str, Any]:
             body_full_priorities = []
     except (json.JSONDecodeError, TypeError):
         body_full_priorities = []
+    # v27: preprocess 的文档勾选（profile-doc 名列表）。NULL/非法 → []（前端显示"未勾选"，
+    # 运行时回退 build_task_identity_context 默认）。
+    try:
+        context_docs = json.loads(agent.get("context_docs_json") or "[]")
+        if not isinstance(context_docs, list):
+            context_docs = []
+    except (json.JSONDecodeError, TypeError):
+        context_docs = []
     agent_type = agent.get("type", "report")
     # tools_json → list（DB 存 JSON 串）。NULL/非法：type='search' 回退默认搜索工具,
     # 其余（report）回退空 list（report agent 历史上 tools_json 全 NULL, 不破坏其投影）。
@@ -83,6 +91,7 @@ def resolve_agent(agent: Dict[str, Any]) -> Dict[str, Any]:
         ),
         "timezone": (agent.get("timezone") or ""),
         "body_full_priorities": body_full_priorities,
+        "context_docs": context_docs,  # v27: preprocess 文档勾选
         "updated_at": agent.get("updated_at"),
     }
 
@@ -146,5 +155,11 @@ def config_patch_to_db(raw: Dict[str, Any]) -> Dict[str, Any]:
     if "body_full_priorities" in raw and isinstance(raw["body_full_priorities"], list):
         db_patch["body_full_priorities"] = json.dumps(
             raw["body_full_priorities"], ensure_ascii=False
+        )
+    if "context_docs" in raw and isinstance(raw["context_docs"], list):
+        # v27: preprocess 文档勾选。只存字符串项（doc 名）；运行时 build_task_identity_context
+        # 再按 PROFILE_DOC_NAMES 过滤非法名，wire 层不校验（transport-neutral）。
+        db_patch["context_docs_json"] = json.dumps(
+            [str(x) for x in raw["context_docs"]], ensure_ascii=False
         )
     return db_patch

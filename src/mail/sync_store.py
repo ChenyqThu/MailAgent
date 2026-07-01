@@ -266,7 +266,16 @@ class SyncStore:
     #                重跑不重复; 无 version gate, 靠 INSERT OR IGNORE 幂等 (与既有 report-agent seed 同模式)。
     #                回滚 (回退 v26): DELETE FROM report_agent WHERE id='email_search_agent';
     #                必要时降 db_version 即可 (无表结构变更, 删行无副作用)。
-    DB_VERSION = 26  # v26: 播种 type='search' Custom Agent 行 (复用 report_agent, 无 DDL)
+    # v27 (AI 邮件预处理 Custom Agent, 2026-07, issue #31/#32 增量2): report_agent 加
+    #                context_docs_json 列 (JSON 数组 of profile-doc 名, 如 ["soul","user"]) +
+    #                INSERT OR IGNORE 播种一行 type='preprocess' 的预处理 agent
+    #                (id='email_preprocess_agent')。persona 复用 prompt 列、文档勾选存新列；
+    #                开关/模型走全局 env (LLM_AGENT_ENABLED/LLM_MODEL), 运行时对 persona/docs
+    #                NULL-safe 叠加 (不填=字节级回退现状)。ALTER 必须先于 seed (seed 引用新列)。
+    #                幂等: ALTER 前 PRAGMA 检查 + INSERT OR IGNORE。
+    #                回滚 (回退 v27): DELETE FROM report_agent WHERE id='email_preprocess_agent';
+    #                context_docs_json 列可留 (旧代码无害) 或手动 DROP; 必要时降 db_version。
+    DB_VERSION = 27  # v27: report_agent +context_docs_json + 播种 type='preprocess' Custom Agent
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -1078,7 +1087,8 @@ class SyncStore:
                 timezone TEXT,                 -- IANA 时区（NULL=本地）; 仅 natural_day 用
                 body_full_max INTEGER,         -- 遗留(v19 早期)，不再读写；带正文改 body_full_priorities
                 body_full_priorities TEXT,     -- daily: JSON 数组 of priority label，命中则带正文（NULL=默认紧急+重要）
-                updated_at REAL
+                updated_at REAL,
+                context_docs_json TEXT         -- v27: preprocess 用 JSON 数组 of profile-doc 名（NULL=默认 soul+user）；末列对齐 ALTER 追加位置
             )
         """)
         # report: ReportDoc 块模型 SSoT（blocks_json）+ 列表展示冗余字段。
@@ -1471,6 +1481,33 @@ class SyncStore:
             "(id, type, enabled, title, model, prompt, tools_json, updated_at) "
             "VALUES ('email_search_agent', 'search', 1, '邮件搜索', NULL, NULL, ?, ?)",
             ('["email_search_fulltext"]', time.time()),
+        )
+
+        # === v27: AI 邮件预处理 = 特化 Custom Agent (复用 report_agent 表) + context_docs_json 列 ===
+        # issue #31/#32 Part2 增量2。把"AI 邮件分类/预处理"做成 Agents 页第三种 Custom Agent
+        # (type='preprocess')：persona 复用 prompt 列、文档勾选存新列 context_docs_json (JSON 数组
+        # of profile-doc 名, 如 ["soul","user"])。开关/模型仍走全局 env (LLM_AGENT_ENABLED/
+        # LLM_MODEL)，运行时对 persona/docs 做 NULL-safe 叠加 (不填=字节级回退现状)。
+        # ① ALTER 补 context_docs_json 列 (**必须在下面 seed 前**, seed 引用它)；新库 CREATE 已含 →
+        #    PRAGMA 检查跳过。旧库 (v18-v26) 补列, 已存在则 no-op。
+        if current_version < 27:
+            try:
+                _pa_cols = {r[1] for r in cursor.execute("PRAGMA table_info(report_agent)").fetchall()}
+                if "context_docs_json" not in _pa_cols:
+                    cursor.execute("ALTER TABLE report_agent ADD COLUMN context_docs_json TEXT")
+                    logger.info("v27 migration: report_agent +context_docs_json")
+            except sqlite3.OperationalError as e:
+                logger.warning(f"v27 migration skipped: {e}")
+        # ② 播种 type='preprocess' 行。幂等 (INSERT OR IGNORE), 旧库已有则跳过、不覆盖用户改过的
+        #    prompt/docs。enabled=0/model=NULL 是占位 (预处理开关/模型走全局 env, 非本行);
+        #    context_docs_json 默认 ["soul","user"] = 对齐 build_task_identity_context 默认 → 卡片
+        #    未动时行为字节一致。worker.py 调度器只跑 type=='report', 天然不碰本行。
+        #    回滚 (回退 v27): DELETE FROM report_agent WHERE id='email_preprocess_agent'。
+        cursor.execute(
+            "INSERT OR IGNORE INTO report_agent "
+            "(id, type, enabled, title, model, prompt, tools_json, context_docs_json, updated_at) "
+            "VALUES ('email_preprocess_agent', 'preprocess', 0, 'AI 邮件预处理', NULL, NULL, NULL, ?, ?)",
+            ('["soul", "user"]', time.time()),
         )
 
         # 更新数据库版本
