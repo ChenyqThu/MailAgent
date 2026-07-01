@@ -242,6 +242,23 @@ export async function prepareChatRun(
   }
 }
 
+/** True when a finished UIMessage is PAUSED at an approval gate — it carries a tool part still in the
+ *  ai@6 `approval-requested` state (awaiting the user's approve / edit / reject). Such a turn is NOT a
+ *  complete turn: the assistant-ui runtime resumes it (a second /api/ai/chat request) after the user
+ *  responds, and only that resume is the real, complete turn. Narrowed structurally (type starts
+ *  'tool-' + state) rather than importing ai's heavy generic ToolUIPart — mirrors interruptMapper's
+ *  isApprovalRequestedPart without the approval-id requirement (persistence only needs "is ANY tool
+ *  still awaiting approval", not which one). */
+export function responseMessageAwaitsApproval(message: MailAgentUIMessage): boolean {
+  const parts = (message as { parts?: unknown }).parts
+  if (!Array.isArray(parts)) return false
+  return parts.some((part) => {
+    if (part == null || typeof part !== 'object') return false
+    const p = part as { type?: unknown; state?: unknown }
+    return typeof p.type === 'string' && p.type.startsWith('tool-') && p.state === 'approval-requested'
+  })
+}
+
 /**
  * Build the onFinish callback that persists a finished turn (ai_chat.db dual-write) — the SAME
  * persistence both endpoints use (the AG-UI mirror is a true mirror, including audit). Best-effort:
@@ -253,6 +270,17 @@ export function makePersistOnFinish(
 ): UIMessageStreamOnFinishCallback<MailAgentUIMessage> {
   return async ({ responseMessage, isAborted }) => {
     if (isAborted || !cfg.persistTurn) return
+    // dogfood #3 (HITL 授权重复/卡 loading) — a turn PAUSED at an approval gate still finishes the
+    // UIMessage stream (onFinish fires), but it is NOT a complete turn: the client resumes it after
+    // approving. Persisting here double-writes — the resume's onFinish re-persists the SAME
+    // lastUserMessage (a duplicate `user` row, since the resume's rawMessages still END with the
+    // original user message) PLUS a second, complete `assistant` row. A reloaded session then shows the
+    // whole turn twice with a stuck "待确认" card. Skip: the resume request carries `originalMessages`,
+    // so ITS responseMessage is the MERGED full turn (pre-approval tool calls + executed result),
+    // persisted exactly once. Also skips capture — an approval-paused partial is not a complete turn to
+    // extract memory from; the resume's onFinish captures the finished turn. (A never-approved turn thus
+    // isn't persisted — correct: a dead "pending" card on reload is exactly the reported symptom.)
+    if (responseMessageAwaitsApproval(responseMessage as MailAgentUIMessage)) return
     const usage = await Promise.resolve(run.result.usage).catch(() => undefined)
     const turn: PersistTurnInput = {
       sessionId: run.sessionId,
