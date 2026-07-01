@@ -128,7 +128,7 @@ def _build_system(now: datetime) -> List[Dict[str, Any]]:
     now_str = now.isoformat()
     weekday_cn = "一二三四五六日"[now.weekday()]
     body = (
-        "你帮 Lucien 写一条灵动岛『今日总结』通知，汇总他最近 24h 的邮件态势。"
+        "你帮用户写一条灵动岛『今日总结』通知，汇总用户最近 24h 的邮件态势。"
         "调用 summarize_digest 工具 EXACTLY ONCE，绝不输出纯文本。\n\n"
         f"当前时间：{now_str}（周{weekday_cn}，时区 +08:00 北京）。\n\n"
         "规则：\n"

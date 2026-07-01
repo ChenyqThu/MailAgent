@@ -19,7 +19,7 @@ from loguru import logger
 from src.config import config as cfg
 from src.repository import EmailRepository
 
-from .client import LLMClient, LLMCallError, LLMResult
+from .client import LLMClient, LLMResult
 from .context_loader import ContextLoader
 from .prompt_loader import PromptLoader
 from .schema import (
@@ -200,8 +200,10 @@ class LLMProcessor:
                 f"Markdown 仅限 inline (**bold** *italic* ~~strike~~ `code` [t](u)) + 换行；"
                 f"列表用 '- ' 前缀纯文本，禁 heading/code-block/真 list。"
                 # 真换行 (非字面 \\n) —— 早期这里写 ``\\n`` 让模型把反斜杠-n 当字面量
-                # 输出, 签名渲染成可见的 "\\n\\n----\\nBest,\\nLucien"。与 schema.py 对齐。
-                f"结尾统一加：\n\n----\nBest,\nLucien。\n"
+                # 输出, 签名渲染成可见的 "\\n\\n----\\nBest,\\n<用户姓名>"。与 schema.py 对齐。
+                f"结尾统一加签名块：\n\n----\nBest,\n"
+                f"末行署用户本人姓名；若身份信息 / 上下文未给出姓名，则省略末行、"
+                f"只保留 Best,，切勿编造或臆测姓名。\n"
                 f"`daily_digest_date` 用邮件 Date 转 UTC+8 的日期（YYYY-MM-DD）。"
             ),
         }

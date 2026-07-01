@@ -59,7 +59,7 @@ REPORT_TOOL_SCHEMA: Dict[str, Any] = {
                 "description": (
                     "把邮件分组。每组 email_refs 是该组邮件的 internal_id，"
                     "**必须从给定邮件清单里选，绝不能编造**。建议分组（按行动优先级）："
-                    "需要你亲自关注 / Jarvis 已处理 / FYI 已汇总。**FYI / 通知类"
+                    "需要你亲自关注 / 已自动处理 / FYI 已汇总。**FYI / 通知类"
                     "必须用 id='fyi'、icon='inbox'**（报告据此把它整组排到最末尾，"
                     "避免淹没上面的关键信息）。空组不要给。"
                 ),

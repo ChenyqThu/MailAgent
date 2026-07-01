@@ -191,7 +191,8 @@ EMAIL_TOOL_SCHEMA = {
                     "建议回复/跟进内容，Markdown 格式。仅 action_required=true 时填。\n"
                     "⚠️ 仅限 inline 元素 + 换行：**bold**, *italic*, ~~strike~~, `code`, [text](url)。\n"
                     "列表用 '- ' 或 '1. ' 前缀纯文本模拟，禁止 heading / code block / 真 list。\n"
-                    "结构：称呼 → 正文段落 → 签名。结尾必须是：\n\n----\nBest,\nLucien"
+                    "结构：称呼 → 正文段落 → 签名。签名固定为：\n\n----\nBest,\n"
+                    "末行为用户本人姓名；若不知用户姓名则省略末行、只保留 Best,，切勿编造姓名。"
                 ),
             },
             "daily_digest_date": {

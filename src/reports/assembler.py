@@ -259,7 +259,7 @@ def assemble_fallback_doc(
     ]
     section_spec = [
         ("attention", "需要你亲自关注", "alert"),
-        ("handled", "Jarvis 已处理", "check"),
+        ("handled", "已自动处理", "check"),
         ("fyi", "FYI / 系统通知", "inbox"),
     ]
     for sid, title, icon in section_spec:

@@ -47,7 +47,7 @@ _PRIORITY_HINT = {
 TASK_TOOL_SCHEMA: Dict[str, Any] = {
     "name": "extract_task",
     "description": (
-        "把一封需跟进的邮件转成 Lucien 日程库 (GTD 时间块 + 任务) 里的一个 task。"
+        "把一封需跟进的邮件转成 用户 日程库 (GTD 时间块 + 任务) 里的一个 task。"
         "只调用一次。"
     ),
     "input_schema": {
@@ -85,7 +85,7 @@ TASK_TOOL_SCHEMA: Dict[str, Any] = {
             "suggested_time_iso": {
                 "type": "string",
                 "description": (
-                    "建议 Lucien 何时处理，ISO 8601 本地时间含时区 (如 "
+                    "建议 用户 何时处理，ISO 8601 本地时间含时区 (如 "
                     "2026-05-27T14:00:00+08:00)。按紧急度：🔴紧急=今天剩余工作时间；"
                     "🟠高=明天工作时间(9-18)；🟡中=本周内合适时段；🟢低/不确定=留空字符串。"
                     "避免排到周末/深夜；默认 1 小时时间块的起始时间。不确定就留空字符串。"
@@ -115,7 +115,7 @@ class TaskFields:
     task_title: str
     schedule_type: str
     priority: str
-    suggested_time_iso: str = ""  # 空 = 不写 Time (Lucien 手动排)
+    suggested_time_iso: str = ""  # 空 = 不写 Time (用户 手动排)
     is_all_day: bool = False
     description: str = ""
     # meta
@@ -130,7 +130,7 @@ def _build_system(now: datetime, as_meeting: bool = False) -> List[Dict[str, Any
     if as_meeting:
         # add_to_calendar 场景: 抽邮件提到的会议实际时间 (非建议处理时间)
         body = (
-            "你帮 Lucien 把一封含会议信息的邮件加到他的日程库 (日历)。调用 extract_task "
+            "你帮 用户 把一封含会议信息的邮件加到他的日程库 (日历)。调用 extract_task "
             "工具 EXACTLY ONCE，绝不输出纯文本。\n\n"
             f"当前时间：{now_str}（周{weekday_cn}，时区 +08:00 北京）。\n"
             "这是会议邀请场景，注意：\n"
@@ -143,7 +143,7 @@ def _build_system(now: datetime, as_meeting: bool = False) -> List[Dict[str, Any
     else:
         # convert_to_notion_task 场景: 建议何时处理这个任务
         body = (
-            "你帮 Lucien 把一封需跟进的邮件转成他日程库 (GTD 时间块 + 任务) 里的"
+            "你帮 用户 把一封需跟进的邮件转成他日程库 (GTD 时间块 + 任务) 里的"
             "一个 task。调用 extract_task 工具 EXACTLY ONCE，绝不输出纯文本。\n\n"
             f"当前时间：{now_str}（周{weekday_cn}，时区 +08:00 北京）。\n"
             "排 suggested_time 时以此为基准，避免排到已过去的时间 / 周末 / 深夜 "
@@ -253,7 +253,7 @@ def _parse(result: LLMResult, now: datetime) -> TaskFields:
 def _sanitize_time(raw: Any, now: datetime) -> str:
     """校验 LLM 给的 suggested_time_iso: 必须是合法 ISO + 不在过去.
 
-    不合法 / 过去 / 空 → 返回 "" (notion CLI 不写 Time, Lucien 手动排).
+    不合法 / 过去 / 空 → 返回 "" (notion CLI 不写 Time, 用户 手动排).
     返回时统一带时区 (无时区的按北京补).
     """
     if not isinstance(raw, str) or not raw.strip():
