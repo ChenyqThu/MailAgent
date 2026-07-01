@@ -2286,6 +2286,9 @@ export interface ReportAgentConfig {
   timezone: string
   /** daily 带完整正文的优先级集合（priority label）；命中的邮件才预载正文，其余只摘要、不带附件。 */
   body_full_priorities: string[]
+  /** v27 preprocess：注入分类 system prompt 的身份文档勾选（profile-doc 名，如 ['soul','user']）。
+   *  仅 type='preprocess' 有意义；NULL/未设 → 运行时回退默认 soul+user。 */
+  context_docs?: string[]
   updated_at: number | null
 }
 
@@ -2304,14 +2307,16 @@ export interface ReportConfigPatch {
   body_full_priorities?: string[]
   /** agent 可用工具白名单（wire.config_patch_to_db 写 tools_json 列）。 */
   tools?: string[]
+  /** v27 preprocess：身份文档勾选（wire.config_patch_to_db 写 context_docs_json 列）。 */
+  context_docs?: string[]
 }
 
 /** report:createAgent — 新建一行 agent（type 多态）。 */
 export interface ReportAgentCreateInput {
   /** 新 agent id（必填，冲突 → E_INVALID_ARG）。 */
   id: string
-  /** 默认 'search'（agentic 搜索）。 */
-  type?: 'search' | 'report'
+  /** 默认 'search'（agentic 搜索）；'preprocess' = AI 邮件预处理（v27）。 */
+  type?: 'search' | 'report' | 'preprocess'
   title?: string
   enabled?: boolean
   model?: string | null

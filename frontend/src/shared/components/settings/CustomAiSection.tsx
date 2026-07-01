@@ -416,6 +416,8 @@ function DocEntry({ doc, onRefetch }: DocEntryProps): React.ReactElement {
     if (doc.content !== prevContent.current) {
       prevContent.current = doc.content
       if (!editing) {
+        // 合法的「按传入 prop 同步草稿」预填（仅非编辑态）；同本文件其他预填 effect 一致豁免。
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setDraft(doc.content)
       }
     }
@@ -698,7 +700,10 @@ function DocEntry({ doc, onRefetch }: DocEntryProps): React.ReactElement {
   )
 }
 
-function StandingDocsSection(): React.ReactElement | null {
+// Exported so the AI 邮件预处理 config drawer (AgentsTab) can inline-mount the
+// same identity-doc editor — "同组件不同入口" (zero props, self-gating on the
+// standingDocsEditorEnabled flag; renders null when off).
+export function StandingDocsSection(): React.ReactElement | null {
   const { t } = useTranslation()
   const api = useMailApi()
   const qc = useQueryClient()

@@ -25,6 +25,11 @@ import {
   SelectTrigger,
   SelectValue
 } from '@shared/components/ui/select'
+import { applyEnvPatch, useEnvStore } from '@shared/state/env'
+import { useRestartStore } from '@shared/state/restart'
+import { toastError } from '@shared/state/toast'
+// v27 「AI 邮件预处理」配置抽屉内联复用身份文档正文编辑器（同组件不同入口）。
+import { StandingDocsSection } from '@shared/components/settings/CustomAiSection'
 
 // 内联按钮缺 :active 伪类 → 用 pointer 事件落地 press scale（DESIGN §9.3 / make-interfaces #12）。
 // scale 0.97 ≥ 0.95 红线；调用方须在 style 里把 transform 列进 transition（含 transform，禁 transition:all）。
@@ -54,6 +59,24 @@ const WEEKDAY_OPTIONS = [0, 1, 2, 3, 4, 5, 6]
 const DAY_OF_MONTH_OPTIONS = Array.from({ length: 28 }, (_, i) => i + 1)
 // 顺序固定，与 src/llm_agent/schema.py PRIORITY_ENUM 对齐 —— 勾选的优先级邮件带完整正文。
 const PRIORITY_ENUM = ['🔴 紧急', '🟡 重要', '🟢 一般', '⚪ 低'] as const
+
+// v27 「AI 邮件预处理」agent —— 后端 DB v27 播种单行（id 固定、type='preprocess'）。
+// 双源绑定：启用/模型走全局 env（LLM_AGENT_ENABLED / LLM_MODEL，pydantic singleton→需重启
+// 生效，与 AiTab 现有 toggle 一致）；persona + 文档勾选存 report_agent row（prompt / context_docs）。
+const PREPROCESS_AGENT_ID = 'email_preprocess_agent'
+// 可注入分类 system prompt 的身份文档（profile-doc 名）；后端默认播种 ['soul','user']。
+const PREPROCESS_DOCS = ['soul', 'agent', 'rules', 'user'] as const
+
+// 远程 web 下 env 写只读（镜像 AiTab.isWeb）：env:set 在 HttpApi 是 notImplemented，
+// 故启用/模型控件禁用；persona / 文档勾选 / 身份文档编辑走 HTTP row/profile 端点，仍可编辑。
+const IS_WEB =
+  (import.meta as unknown as { env?: { VITE_BUILD_TARGET?: string } }).env?.VITE_BUILD_TARGET ===
+  'web'
+
+// LLM_AGENT_ENABLED 存的是 'true'/'1' 视作开（镜像 EnvField toggle 解析）。
+function envFlagOn(raw: string): boolean {
+  return raw === 'true' || raw === '1'
+}
 
 function scheduleText(
   cfg: ReportAgentConfig,
@@ -1482,6 +1505,493 @@ export function SearchConfigDrawer({
   )
 }
 
+// ─── AI 邮件预处理卡（type='preprocess'）──────────────────────────────────────
+// 后端 DB v27 播种单行，无新建 / 删除。启用态从 env LLM_AGENT_ENABLED 读（非 row.enabled
+// —— 行的 enabled 列对预处理无意义，开关绑全局 LLM agent 总开关）。persona / 文档勾选 /
+// 身份文档正文全部在配置抽屉里编辑，故卡片只有一个「配置」入口，无内嵌开关。
+function PreprocessAgentCard({
+  cfg,
+  enabled,
+  onConfig
+}: {
+  cfg: ReportAgentConfig
+  enabled: boolean
+  onConfig: () => void
+}): React.ReactElement {
+  const { t } = useTranslation()
+  return (
+    <div
+      style={{
+        borderRadius: 14,
+        background: 'rgb(var(--ink-2) / 0.55)',
+        border: '1px solid rgb(var(--ink-border))',
+        overflow: 'hidden'
+      }}
+    >
+      <div className="flex items-center" style={{ gap: 13, padding: '18px 20px 16px' }}>
+        <span
+          style={{
+            width: 42,
+            height: 42,
+            borderRadius: 11,
+            display: 'grid',
+            placeItems: 'center',
+            flexShrink: 0,
+            background: 'rgb(var(--c-accent) / 0.14)',
+            border: '1px solid rgb(var(--c-accent) / 0.30)',
+            color: 'rgb(var(--c-accent))'
+          }}
+        >
+          <ReportIcon name="zap" size={20} />
+        </span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div className="flex items-center" style={{ gap: 9 }}>
+            <h3 style={{ fontSize: 16, fontWeight: 600, color: 'rgb(var(--ink-fg))' }}>
+              {cfg.title}
+            </h3>
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 5,
+                fontSize: 11,
+                padding: '2px 8px',
+                borderRadius: 5,
+                color: enabled ? 'rgb(var(--c-ok))' : 'rgb(var(--ink-fg-3))',
+                background: enabled ? 'rgb(var(--c-ok) / 0.12)' : 'rgb(var(--ink-fg) / 0.05)',
+                border: `1px solid ${enabled ? 'rgb(var(--c-ok) / 0.25)' : 'rgb(var(--ink-border))'}`
+              }}
+            >
+              <span
+                style={{
+                  width: 6,
+                  height: 6,
+                  borderRadius: '50%',
+                  background: enabled ? 'rgb(var(--c-ok))' : 'rgb(var(--ink-fg-3))'
+                }}
+              />
+              {enabled ? t('agents.card.enabled') : t('agents.card.disabled')}
+            </span>
+          </div>
+          <div
+            style={{
+              marginTop: 4,
+              fontSize: 12.5,
+              color: 'rgb(var(--ink-fg-2))',
+              lineHeight: 1.5
+            }}
+          >
+            {t('agents.preprocess.subtitle')}
+          </div>
+        </div>
+      </div>
+      <div
+        className="flex items-center"
+        style={{
+          gap: 10,
+          padding: '14px 20px',
+          borderTop: '1px solid rgb(var(--ink-border-soft))',
+          background: 'rgb(var(--ink-1) / 0.4)'
+        }}
+      >
+        <button
+          type="button"
+          onClick={onConfig}
+          className="flex items-center"
+          style={{
+            gap: 7,
+            padding: '8px 15px',
+            borderRadius: 8,
+            fontFamily: 'inherit',
+            fontSize: 13.5,
+            cursor: 'pointer',
+            color: 'rgb(var(--ink-fg-1))',
+            background: 'transparent',
+            border: '1px solid rgb(var(--ink-border))',
+            transition:
+              'background-color 120ms cubic-bezier(0.4,0,0.2,1), transform 120ms cubic-bezier(0.4,0,0.2,1)'
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.background = 'rgb(var(--ink-4))')}
+          onMouseDown={(e) => (e.currentTarget.style.transform = PRESS_SCALE)}
+          onMouseUp={(e) => (e.currentTarget.style.transform = 'none')}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = 'transparent'
+            e.currentTarget.style.transform = 'none'
+          }}
+        >
+          <ReportIcon name="cog" size={14} />
+          {t('agents.card.configure')}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// ─── AI 邮件预处理配置抽屉 ────────────────────────────────────────────────────
+// 复刻 SearchConfigDrawer 三段式脚手架。双源写：启用 / 模型 → 全局 env（applyEnvPatch +
+// 重启横幅，与 AiTab 一致，pydantic singleton 需重启）；persona / 文档勾选 → report_agent
+// row（useSetConfig）；身份文档正文内联复用 StandingDocsSection（同组件不同入口）。
+function PreprocessConfigDrawer({
+  cfg,
+  open,
+  onClose
+}: {
+  cfg: ReportAgentConfig | null
+  open: boolean
+  onClose: () => void
+}): React.ReactElement | null {
+  const { t } = useTranslation()
+  const { save, isSaving } = useSetConfig()
+  const markRestartRequired = useRestartStore((s) => s.markRestartRequired)
+
+  // 进 / 退场动效：与 ConfigDrawer / SearchConfigDrawer 同款（遮罩淡入 + 抽屉右滑同步）。
+  const { shouldRender, scopeRef } = useExitAnimation<HTMLDivElement>(open, {
+    card: 'aside',
+    from: { autoAlpha: 0, xPercent: 100 },
+    syncBackdrop: true
+  })
+
+  // 启用 / 模型 = env 值的本地镜像（提交时 diff、只写变更键）；persona / 文档勾选 = row 值。
+  const [enabled, setEnabled] = useState(false)
+  const [model, setModel] = useState<string>('')
+  const [prompt, setPrompt] = useState('')
+  const [promptDirty, setPromptDirty] = useState(false)
+  const [contextDocs, setContextDocs] = useState<string[]>([])
+  const [envSaving, setEnvSaving] = useState(false)
+  const { models: enabledModels } = useEnabledModels()
+
+  // 打开时预填：row 字段读 cfg；启用 / 模型从 env store 快照读（getState 非响应式 → env 后续
+  // 变化不会冲掉用户在抽屉里的编辑）。依赖 [open, cfg]。同 ConfigDrawer / SearchConfigDrawer 既有
+  // 豁免理由：模态打开按 cfg + env 快照预填多字段表单，React Compiler 迁移债（真重构需父组件 key
+  // 重置 remount + 预填搬 useState initializer，等价性风险高于收益），effect 合理保留。
+  /* eslint-disable react-hooks/set-state-in-effect */
+  useEffect(() => {
+    if (!open || !cfg) return
+    const st = useEnvStore.getState().state
+    const vals = st.status === 'ready' ? st.snapshot.values : {}
+    setEnabled(envFlagOn(vals['LLM_AGENT_ENABLED'] ?? ''))
+    setModel(vals['LLM_MODEL'] ?? '')
+    setPrompt(cfg.prompt)
+    setPromptDirty(false)
+    setContextDocs(cfg.context_docs ?? [])
+  }, [open, cfg])
+  /* eslint-enable react-hooks/set-state-in-effect */
+
+  if (!shouldRender) return null
+
+  const busy = isSaving || envSaving
+
+  const inputStyle: React.CSSProperties = {
+    width: '100%',
+    fontFamily: 'inherit',
+    fontSize: 13.5,
+    color: 'rgb(var(--ink-fg))',
+    background: 'rgb(var(--ink-1) / 0.55)',
+    border: '1px solid rgb(var(--ink-border))',
+    borderRadius: 8,
+    padding: '9px 11px'
+  }
+
+  const onSave = async (): Promise<void> => {
+    if (!cfg) return
+    // 1) env diff：只写真正变了的键，避免无谓触发重启横幅。web 只读 → 控件禁用 → 恒无 diff。
+    const st = useEnvStore.getState().state
+    const vals = st.status === 'ready' ? st.snapshot.values : {}
+    const envPatch: Record<string, string> = {}
+    const nextEnabled = enabled ? 'true' : 'false'
+    if (nextEnabled !== (vals['LLM_AGENT_ENABLED'] ?? '')) {
+      envPatch['LLM_AGENT_ENABLED'] = nextEnabled
+    }
+    if (model && model !== (vals['LLM_MODEL'] ?? '')) {
+      envPatch['LLM_MODEL'] = model
+    }
+    if (Object.keys(envPatch).length > 0) {
+      setEnvSaving(true)
+      try {
+        const r = await applyEnvPatch(envPatch)
+        if (!r.ok) {
+          toastError(t('agents.preprocess.envSaveError'), `${r.error.code}: ${r.error.message}`)
+          return
+        }
+        // 与 EnvField 一致：任何变更键都挂重启横幅（LLM_MODEL / LLM_AGENT_ENABLED 是 pydantic singleton）。
+        if (r.changedKeys.length > 0) markRestartRequired(r.changedKeys)
+      } finally {
+        setEnvSaving(false)
+      }
+    }
+    // 2) row 保存：persona（未改且仍默认 → null 保持默认；改过 → 文本，空串后端重置默认）+ 文档勾选。
+    try {
+      await save(PREPROCESS_AGENT_ID, {
+        prompt: promptDirty ? prompt : cfg.prompt_is_default ? null : cfg.prompt,
+        context_docs: contextDocs
+      })
+      onClose()
+    } catch (e: unknown) {
+      toastError(t('agents.preprocess.rowSaveError'), (e as Error).message)
+    }
+  }
+
+  return (
+    <div
+      ref={scopeRef}
+      onClick={onClose}
+      style={{ position: 'absolute', inset: 0, zIndex: 60, background: 'rgb(0 0 0 / 0.4)' }}
+    >
+      <aside
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          position: 'absolute',
+          top: 0,
+          right: 0,
+          bottom: 0,
+          width: 480,
+          maxWidth: '92%',
+          zIndex: 61,
+          background: 'color-mix(in srgb, var(--glass-base) 94%, transparent)',
+          borderLeft: '1px solid var(--hairline-strong)',
+          boxShadow: 'var(--shadow-raised)',
+          display: 'flex',
+          flexDirection: 'column'
+        }}
+      >
+        <header
+          className="flex items-center"
+          style={{
+            gap: 10,
+            padding: '15px 18px',
+            borderBottom: '1px solid rgb(var(--ink-border-soft))',
+            flexShrink: 0
+          }}
+        >
+          <span style={{ color: 'rgb(var(--c-accent))', display: 'flex' }}>
+            <ReportIcon name="zap" size={16} />
+          </span>
+          <h2 style={{ fontSize: 15, fontWeight: 600, color: 'rgb(var(--ink-fg))', flex: 1 }}>
+            {t('agents.preprocess.configTitle', { title: cfg?.title ?? '' })}
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label={t('agents.source.close')}
+            style={{
+              display: 'grid',
+              placeItems: 'center',
+              width: 28,
+              height: 28,
+              borderRadius: 7,
+              background: 'transparent',
+              border: 0,
+              cursor: 'pointer',
+              color: 'rgb(var(--ink-fg-2))'
+            }}
+          >
+            <ReportIcon name="x" size={16} />
+          </button>
+        </header>
+
+        <div className="scrollbar-thin" style={{ flex: 1, overflowY: 'auto', padding: 18 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+            {/* 远程 web 只读提示（env 写不可用；persona / 文档仍可改） */}
+            {IS_WEB && (
+              <div
+                style={{
+                  fontSize: 12.5,
+                  color: 'rgb(var(--ink-fg-2))',
+                  padding: '10px 12px',
+                  borderRadius: 9,
+                  background: 'rgb(var(--ink-1) / 0.5)',
+                  border: '1px solid rgb(var(--ink-border-soft))'
+                }}
+              >
+                {t('agents.preprocess.webReadOnly')}
+              </div>
+            )}
+
+            {/* 启用（env LLM_AGENT_ENABLED）—— 需重启生效 */}
+            <div
+              className="flex items-center"
+              style={{
+                gap: 12,
+                padding: '13px 14px',
+                borderRadius: 10,
+                background: 'rgb(var(--ink-2) / 0.55)',
+                border: '1px solid rgb(var(--ink-border))'
+              }}
+            >
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 13.5, fontWeight: 500, color: 'rgb(var(--ink-fg))' }}>
+                  {t('agents.preprocess.enable')}
+                </div>
+                <div style={{ fontSize: 12, color: 'rgb(var(--ink-fg-3))', marginTop: 2 }}>
+                  {t('agents.preprocess.enableHint')}
+                </div>
+              </div>
+              <span style={IS_WEB ? { opacity: 0.5, pointerEvents: 'none' } : undefined}>
+                <Switch on={enabled} onChange={setEnabled} />
+              </span>
+            </div>
+
+            {/* 模型（env LLM_MODEL）—— enabledModels + orphan 兜底，需重启生效 */}
+            <Field label={t('agents.config.model')} hint={t('agents.preprocess.restartHint')}>
+              <Select value={model || undefined} onValueChange={setModel} disabled={IS_WEB}>
+                <SelectTrigger>
+                  <SelectValue placeholder={t('agents.config.model')} />
+                </SelectTrigger>
+                <SelectContent className="z-[70]">
+                  {(model && !enabledModels.includes(model)
+                    ? [...enabledModels, model]
+                    : enabledModels
+                  ).map((id) => {
+                    const isOrphan = !enabledModels.includes(id)
+                    return (
+                      <SelectItem key={id} value={id}>
+                        {id}
+                        {isOrphan && (
+                          <span style={{ color: 'rgb(var(--ink-fg-3))', marginLeft: 6 }}>
+                            {t('settings.ai.enabledModels.notEnabled', {
+                              defaultValue: '（未启用）'
+                            })}
+                          </span>
+                        )}
+                      </SelectItem>
+                    )
+                  })}
+                </SelectContent>
+              </Select>
+            </Field>
+
+            {/* persona（cfg.prompt）—— 留空用内置默认，dirty 追踪同 ConfigDrawer */}
+            <Field label={t('agents.preprocess.persona')} hint={t('agents.preprocess.personaHint')}>
+              <textarea
+                value={prompt}
+                placeholder={t('agents.preprocess.personaPlaceholder')}
+                onChange={(e) => {
+                  setPrompt(e.target.value)
+                  setPromptDirty(true)
+                }}
+                rows={9}
+                className="scrollbar-thin"
+                style={{
+                  ...inputStyle,
+                  resize: 'vertical',
+                  lineHeight: 1.6,
+                  fontSize: 13,
+                  minHeight: 160
+                }}
+              />
+            </Field>
+
+            {/* 文档勾选（cfg.context_docs）—— 注入分类 system prompt 的身份文档 */}
+            <Field
+              label={t('agents.preprocess.contextDocs')}
+              hint={t('agents.preprocess.contextDocsHint')}
+            >
+              <div className="flex items-center" style={{ gap: 8, flexWrap: 'wrap' }}>
+                {PREPROCESS_DOCS.map((doc) => {
+                  const on = contextDocs.includes(doc)
+                  return (
+                    <button
+                      key={doc}
+                      type="button"
+                      aria-pressed={on}
+                      onClick={() =>
+                        setContextDocs((prev) =>
+                          prev.includes(doc) ? prev.filter((x) => x !== doc) : [...prev, doc]
+                        )
+                      }
+                      style={{
+                        padding: '6px 12px',
+                        borderRadius: 8,
+                        fontFamily: 'inherit',
+                        fontSize: 13,
+                        cursor: 'pointer',
+                        color: on ? 'rgb(var(--c-accent))' : 'rgb(var(--ink-fg-2))',
+                        background: on ? 'rgb(var(--c-accent) / 0.14)' : 'rgb(var(--ink-1) / 0.5)',
+                        border: `1px solid ${on ? 'rgb(var(--c-accent))' : 'rgb(var(--ink-border))'}`,
+                        transition:
+                          'color 120ms cubic-bezier(0.4,0,0.2,1), background-color 120ms cubic-bezier(0.4,0,0.2,1), border-color 120ms cubic-bezier(0.4,0,0.2,1)'
+                      }}
+                    >
+                      {t(`agents.preprocess.doc.${doc}`)}
+                    </button>
+                  )
+                })}
+              </div>
+              <div
+                style={{
+                  fontSize: 11.5,
+                  color: 'rgb(var(--ink-fg-3))',
+                  marginTop: 7,
+                  lineHeight: 1.5
+                }}
+              >
+                {t('agents.preprocess.contextDocsNote')}
+              </div>
+            </Field>
+
+            {/* 身份文档正文编辑：内联复用 Settings 的 StandingDocsSection（自渲染标题 + 自 flag 门控，
+                flag-off / 未加载时返回 null，不留空占位）。 */}
+            <StandingDocsSection />
+          </div>
+        </div>
+
+        <footer
+          className="flex items-center"
+          style={{
+            gap: 10,
+            padding: '13px 18px',
+            borderTop: '1px solid rgb(var(--ink-border-soft))',
+            flexShrink: 0,
+            justifyContent: 'flex-end'
+          }}
+        >
+          <button
+            type="button"
+            onClick={onClose}
+            className="btn-ghost"
+            style={{ fontFamily: 'inherit' }}
+          >
+            {t('agents.config.cancel')}
+          </button>
+          <button
+            type="button"
+            onClick={() => void onSave()}
+            disabled={busy}
+            style={{
+              fontFamily: 'inherit',
+              fontSize: 13.5,
+              fontWeight: 500,
+              padding: '8px 18px',
+              borderRadius: 8,
+              cursor: busy ? 'wait' : 'pointer',
+              color: 'rgb(var(--c-cta-fg))',
+              background: 'rgb(var(--c-cta-bg))',
+              border: 0,
+              transition:
+                'background-color 120ms cubic-bezier(0.4,0,0.2,1), transform 120ms cubic-bezier(0.4,0,0.2,1)'
+            }}
+            onMouseEnter={(e) => {
+              if (!busy) e.currentTarget.style.background = 'rgb(var(--c-cta-bg-hover))'
+            }}
+            onMouseDown={(e) => {
+              if (!busy) e.currentTarget.style.transform = PRESS_SCALE
+            }}
+            onMouseUp={(e) => {
+              e.currentTarget.style.transform = 'none'
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = 'rgb(var(--c-cta-bg))'
+              e.currentTarget.style.transform = 'none'
+            }}
+          >
+            {t('agents.config.save')}
+          </button>
+        </footer>
+      </aside>
+    </div>
+  )
+}
+
 function Field({
   label,
   hint,
@@ -1513,6 +2023,14 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
   const [searchDrawer, setSearchDrawer] = useState<
     { mode: 'edit'; id: string } | { mode: 'create' } | null
   >(null)
+  // v27 — AI 邮件预处理配置抽屉开合（后端播种单行，只编辑、无新建）。
+  const [preprocessOpen, setPreprocessOpen] = useState(false)
+  // 预处理卡的启用态绑全局 env LLM_AGENT_ENABLED（响应式读，env 变即刷新徽标）。
+  const llmAgentEnabled = useEnvStore((s) =>
+    s.state.status === 'ready'
+      ? envFlagOn(s.state.snapshot.values['LLM_AGENT_ENABLED'] ?? '')
+      : false
+  )
 
   // 所有报告 agent（type=report），按 cadence 日→周→月稳定排序，各渲染一张卡。
   const reportAgents = useMemo(() => {
@@ -1526,6 +2044,8 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
     () => agents.filter((a) => a.type === 'search').sort((a, b) => a.id.localeCompare(b.id)),
     [agents]
   )
+  // v27 — AI 邮件预处理 agent（type='preprocess'，后端播种单行，正常仅 1 张卡）。
+  const preprocessAgents = useMemo(() => agents.filter((a) => a.type === 'preprocess'), [agents])
   const configAgent = useMemo(
     () => reportAgents.find((a) => a.id === configId) ?? null,
     [reportAgents, configId]
@@ -1537,8 +2057,10 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
         : null,
     [searchAgents, searchDrawer]
   )
+  // 预处理只有一行（后端播种）；抽屉编辑它。
+  const preprocessAgent = preprocessAgents[0] ?? null
   // drawer 任一打开 → 锁列表滚动。
-  const anyDrawerOpen = configAgent !== null || searchDrawer !== null
+  const anyDrawerOpen = configAgent !== null || searchDrawer !== null || preprocessOpen
 
   // 三层各司其职：①外层 relative 不滚 → drawer 钉这层（不随列表滚）②滚动层 absolute inset:0
   // 承接滚动、**block 流非 flex**（子项自然高度、超出滚动，绝不压缩卡片）③内容层 flex column
@@ -1636,6 +2158,45 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
               {isLoading ? t('agents.reports.loading') : t('agents.search.noAgent')}
             </div>
           )}
+          {/* ─── AI 邮件预处理区（v27）───────────────────────────────────── */}
+          <div style={{ marginTop: 8 }}>
+            <h2
+              style={{
+                fontSize: 16,
+                fontWeight: 600,
+                color: 'rgb(var(--ink-fg))',
+                letterSpacing: '-0.01em'
+              }}
+            >
+              {t('agents.preprocess.section')}
+            </h2>
+            <p style={{ fontSize: 13, color: 'rgb(var(--ink-fg-2))', marginTop: 4 }}>
+              {t('agents.preprocess.sectionHint')}
+            </p>
+          </div>
+          {preprocessAgents.length > 0 ? (
+            preprocessAgents.map((cfg) => (
+              <PreprocessAgentCard
+                key={cfg.id}
+                cfg={cfg}
+                enabled={llmAgentEnabled}
+                onConfig={() => setPreprocessOpen(true)}
+              />
+            ))
+          ) : (
+            <div
+              style={{
+                borderRadius: 14,
+                border: '1px solid rgb(var(--ink-border))',
+                padding: '18px 20px',
+                fontSize: 13,
+                color: 'rgb(var(--ink-fg-3))'
+              }}
+            >
+              {isLoading ? t('agents.reports.loading') : t('agents.preprocess.noAgent')}
+            </div>
+          )}
+
           {/* Custom Agent 待上线占位（不可点）；新建搜索 Agent 入口已按产品要求退回。 */}
           <NewAgentTile />
         </div>
@@ -1651,6 +2212,11 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
         open={searchDrawer !== null}
         create={searchDrawer?.mode === 'create'}
         onClose={() => setSearchDrawer(null)}
+      />
+      <PreprocessConfigDrawer
+        cfg={preprocessAgent}
+        open={preprocessOpen}
+        onClose={() => setPreprocessOpen(false)}
       />
     </div>
   )

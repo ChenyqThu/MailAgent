@@ -2413,6 +2413,31 @@
       "deleteCancel": "Cancel",
       "errConflict": "That id already exists — pick another name.",
       "errGeneric": "Operation failed, please retry."
+    },
+    "preprocess": {
+      "section": "AI Email Preprocessing",
+      "sectionHint": "Local LLM auto-classifies, tags and suggests replies for new mail. Enable and model bind to global settings.",
+      "subtitle": "Auto-classify / tag / suggest replies for new mail (local LLM)",
+      "noAgent": "No preprocessing agent found (database not initialized?)",
+      "configTitle": "AI Email Preprocessing · {title}",
+      "enable": "Enable email preprocessing",
+      "enableHint": "Turn on local LLM auto-classification for new mail (global switch LLM_AGENT_ENABLED). Requires a service restart to take effect.",
+      "restartHint": "Restart required",
+      "persona": "Persona",
+      "personaHint": "Optional; overrides the built-in classification persona",
+      "personaPlaceholder": "Empty = built-in default classification persona; type to fully override",
+      "contextDocs": "Injected identity docs",
+      "contextDocsHint": "Checked docs are injected into the classification prompt",
+      "contextDocsNote": "Checked identity docs are injected into the AI email-classification system prompt (default: SOUL + USER).",
+      "doc": {
+        "soul": "Soul",
+        "agent": "Agent",
+        "rules": "Rules",
+        "user": "User prefs"
+      },
+      "webReadOnly": "Remote web is read-only: enable state and model can't be changed (desktop only); persona and doc selection remain editable.",
+      "envSaveError": "Failed to save enable state / model",
+      "rowSaveError": "Failed to save preprocessing config"
     }
   },
   "common": {

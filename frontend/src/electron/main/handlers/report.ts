@@ -77,6 +77,7 @@ interface AgentRow {
   trigger_mode?: string | null
   timezone?: string | null
   body_full_priorities?: string | null
+  context_docs_json?: string | null
   updated_at?: number | null
 }
 
@@ -104,6 +105,8 @@ function _toAgentConfig(row: AgentRow): ReportAgentConfig {
     timezone: row.timezone || '',
     // body_full_priorities 落库是 JSON 字符串（priority label 数组）；解析失败 / 缺列兜底 []。
     body_full_priorities: _parseJson<string[]>(row.body_full_priorities, []),
+    // v27 preprocess：文档勾选 JSON 字符串；解析失败 / 缺列兜底 []。
+    context_docs: _parseJson<string[]>(row.context_docs_json, []),
     updated_at: row.updated_at ?? null
   }
 }

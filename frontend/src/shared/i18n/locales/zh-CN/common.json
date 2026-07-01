@@ -2413,6 +2413,31 @@
       "deleteCancel": "取消",
       "errConflict": "该 id 已存在，请换一个名称。",
       "errGeneric": "操作失败，请重试。"
+    },
+    "preprocess": {
+      "section": "AI 邮件预处理",
+      "sectionHint": "本地 LLM 自动为新邮件分类、打标、建议回复。启用与模型绑全局设置。",
+      "subtitle": "自动为新邮件分类 / 打标 / 建议回复（本地 LLM）",
+      "noAgent": "未找到预处理 Agent（数据库未初始化？）",
+      "configTitle": "AI 邮件预处理 · {title}",
+      "enable": "启用邮件预处理",
+      "enableHint": "开启本地 LLM 对新邮件自动分类（全局开关 LLM_AGENT_ENABLED）。需重启服务后生效。",
+      "restartHint": "需重启生效",
+      "persona": "Persona（人设）",
+      "personaHint": "可选，覆写内置分类 persona",
+      "personaPlaceholder": "留空 = 用内置默认分类 persona；在此输入可完全覆写",
+      "contextDocs": "注入的身份文档",
+      "contextDocsHint": "勾选后注入邮件分类的系统提示",
+      "contextDocsNote": "勾选的身份文档会注入 AI 邮件分类的系统提示（默认 灵魂 + 用户偏好）。",
+      "doc": {
+        "soul": "灵魂 / soul",
+        "agent": "行为 / agent",
+        "rules": "规则 / rules",
+        "user": "用户偏好 / user"
+      },
+      "webReadOnly": "远程 Web 为只读：启用状态与模型不可修改（仅本地桌面端可改）；persona 与文档勾选仍可编辑。",
+      "envSaveError": "保存启用状态 / 模型失败",
+      "rowSaveError": "保存预处理配置失败"
     }
   },
   "common": {
