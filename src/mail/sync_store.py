@@ -4001,6 +4001,52 @@ class SyncStore:
             logger.debug(f"record_island_dispatch failed: {e}")
             return None
 
+    def was_island_notified(
+        self,
+        *,
+        event_type: str,
+        internal_id: Optional[int] = None,
+        session_key: Optional[str] = None,
+        within_sec: float = 300.0,
+    ) -> bool:
+        """契约 §9-2: 是否在 ``within_sec`` 内已**成功**派发过同 (event_type, 邮件) envelope.
+
+        dedup 持久化去重源：查 island_dispatch 表最近成功 (``dispatched_ok=1``) 派发行。
+        跨进程重启有效（``island_dispatch._dedup_seen`` 内存重启即丢，这里从 SQLite 恢复）。
+        按 ``internal_id`` 优先匹配（系统事件无 internal_id 时退回 ``session_key``）。
+        查不到 / 出错 → ``False``（放行，fail-open：不因去重 bug 丢通知）。
+        """
+        if internal_id is None and not session_key:
+            return False
+        since = time.time() - max(within_sec, 0.0)
+        try:
+            with self._connection() as conn:
+                cursor = conn.cursor()
+                if internal_id is not None:
+                    cursor.execute(
+                        """
+                        SELECT 1 FROM island_dispatch
+                         WHERE event_type = ? AND internal_id = ?
+                           AND dispatched_ok = 1 AND sent_at > ?
+                         LIMIT 1
+                        """,
+                        (event_type, int(internal_id), since),
+                    )
+                else:
+                    cursor.execute(
+                        """
+                        SELECT 1 FROM island_dispatch
+                         WHERE event_type = ? AND session_key = ?
+                           AND dispatched_ok = 1 AND sent_at > ?
+                         LIMIT 1
+                        """,
+                        (event_type, session_key, since),
+                    )
+                return cursor.fetchone() is not None
+        except sqlite3.Error as e:
+            logger.debug(f"was_island_notified query failed: {e}")
+            return False
+
     def get_island_dispatch_stats(self, days: int = 14) -> Dict[str, Any]:
         """评估指标聚合（最近 N 天，默认 14d）.
 

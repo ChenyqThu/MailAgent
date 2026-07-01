@@ -144,15 +144,43 @@ def clear_all() -> None:
             pass
 
 
+def _email_handled(internal_id: int) -> bool:
+    """契约 §9-3: 到期 re-emit 前 re-check —— 邮件在 snooze 期间已被处理 → 跳过 re-emit。
+
+    ``processing_status='已完成'`` 或邮件已删除 (``get`` 返回 None) → True。
+    无 sync_store / 任何异常 → False（fail-open：不因 re-check bug 漏提醒）。
+    """
+    store = island_dispatch._state.sync_store
+    if store is None:
+        return False
+    try:
+        email = store.get(int(internal_id))
+    except Exception as exc:  # noqa: BLE001
+        log.debug("[island-snooze] re-check failed (fail-open): %s", exc)
+        return False
+    if email is None:
+        return True
+    return (email.get("processing_status") or "") == "已完成"
+
+
 def fire_due(now: Optional[float] = None) -> int:
-    """到期 entries 全部走 ``dispatch_llm_reviewed``（Urgent 路径）re-emit；返回触发数."""
+    """到期 entries 全部走 ``dispatch_llm_reviewed``（Urgent 路径）re-emit；返回真正 re-emit 数.
+
+    契约 §9-3: 每条 re-emit 前 re-check, 邮件已完成/已删 → 跳过 re-emit (仍从队列移除,
+    不反复刷屏)。
+    """
     due = due_now(now)
     if not due:
         return 0
+    fired = 0
     for e in due:
+        iid = int(e.get("internal_id"))
+        if _email_handled(iid):
+            log.info("[island-snooze] skip re-emit internal_id=%d (email done/deleted)", iid)
+            continue
         try:
             island_dispatch.dispatch_llm_reviewed(
-                internal_id=int(e.get("internal_id")),
+                internal_id=iid,
                 page_id=str(e.get("page_id") or ""),
                 subject=str(e.get("subject") or ""),
                 sender_email=str(e.get("sender") or ""),
@@ -161,17 +189,18 @@ def fire_due(now: Optional[float] = None) -> int:
                 priority=str(e.get("ai_priority") or "🔴 紧急"),
                 action=str(e.get("ai_action") or "需要回复"),
             )
+            fired += 1
         except Exception as exc:  # noqa: BLE001
             log.warning("[island-snooze] re-emit failed for %s: %s",
                         e.get("internal_id"), exc)
             continue
-    # 全部移除（即使个别 emit 失败也不能反复刷屏；用户可手动再 snooze）
+    # 全部移除（即使个别 emit 失败 / 跳过也不能反复刷屏；用户可手动再 snooze）
     remaining = [
         x for x in _read_all()
         if int(x.get("internal_id", -1)) not in {int(e.get("internal_id", -1)) for e in due}
     ]
     _write_all(remaining)
-    return len(due)
+    return fired
 
 
 async def tick_loop(

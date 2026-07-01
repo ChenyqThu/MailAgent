@@ -134,6 +134,74 @@ def test_reconnect_loop_flushes_after_socket_unlink(monkeypatch):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+class _RecheckStore:
+    """stub SyncStore.get(internal_id) → 邮件状态 dict (or None = 已删)。"""
+
+    def __init__(self, mapping):
+        self._m = mapping
+
+    def get(self, iid):
+        return self._m.get(iid)
+
+
+def _capture_send(monkeypatch):
+    sent: List[bytes] = []
+
+    def fake_send_sync(data, **kwargs):
+        sent.append(data)
+        return ping_island.SendResult(ok=True)
+
+    monkeypatch.setattr(island_reconnect.ping_island, "send_sync", fake_send_sync)
+    return sent
+
+
+def test_flush_drops_stale_completed_or_deleted(monkeypatch):
+    """契约 §9-3: flush 前 re-check — 邮件已完成/已删的待办通知直接丢弃 (不发)。"""
+    from src.notify import island_dispatch
+
+    store = _RecheckStore({
+        500: {"processing_status": "已完成"},   # 已完成 → drop
+        501: {"processing_status": None},        # 未处理 → send
+        # 502 缺失 → get None (已删) → drop
+    })
+    monkeypatch.setattr(island_dispatch._state, "sync_store", store)
+    sent = _capture_send(monkeypatch)
+
+    island_reconnect.enqueue(b'{"done":1}', status_kind="waitingForInput",
+                             internal_id=500, event_type="LLMReviewedUrgent")
+    island_reconnect.enqueue(b'{"live":1}', status_kind="waitingForInput",
+                             internal_id=501, event_type="LLMReviewedUrgent")
+    island_reconnect.enqueue(b'{"gone":1}', status_kind="waitingForInput",
+                             internal_id=502, event_type="LLMReviewedUrgent")
+    flushed = asyncio.run(island_reconnect._flush_queue())
+    assert flushed == 1                 # 只有 501 真发
+    assert sent == [b'{"live":1}']
+    assert island_reconnect.queue_len() == 0  # stale 丢 + live 发, 队列清空
+
+
+def test_flush_terminal_envelope_always_sent_even_if_done(monkeypatch):
+    """终态 envelope (completed/error, 如 MailCompleted) 即使邮件已完成也照发 (清 dock)。"""
+    from src.notify import island_dispatch
+
+    monkeypatch.setattr(island_dispatch._state, "sync_store",
+                        _RecheckStore({500: {"processing_status": "已完成"}}))
+    sent = _capture_send(monkeypatch)
+    island_reconnect.enqueue(b'{"complete":1}', status_kind="completed",
+                             internal_id=500, event_type="MailCompleted")
+    flushed = asyncio.run(island_reconnect._flush_queue())
+    assert flushed == 1
+    assert sent == [b'{"complete":1}']
+
+
+def test_flush_no_internal_id_always_sent(monkeypatch):
+    """无 internal_id (系统事件 / 向后兼容老调用) → re-check 放行, 照常 flush。"""
+    sent = _capture_send(monkeypatch)
+    island_reconnect.enqueue(b'{"sys":1}', status_kind="error")  # internal_id=None 默认
+    flushed = asyncio.run(island_reconnect._flush_queue())
+    assert flushed == 1
+    assert sent == [b'{"sys":1}']
+
+
 def test_enqueue_routes_status_kind_to_bucket():
     """status_kind ∈ {completed,error,waitingForInput} → critical; 其他 → notification."""
     island_reconnect.enqueue(b'{"a":1}', status_kind="notification")
@@ -157,9 +225,9 @@ def test_queue_full_drops_notification_first(monkeypatch):
     assert island_reconnect.queue_len() == 5
     assert island_reconnect.queue_len_critical() == 3
     assert island_reconnect.queue_len_notification() == 2
-    # 老 notification (0,1,2) 被丢, 留 notif-3, notif-4
-    assert list(island_reconnect._notification) == [b"notif-3", b"notif-4"]
-    assert list(island_reconnect._critical) == [b"crit-0", b"crit-1", b"crit-2"]
+    # 老 notification (0,1,2) 被丢, 留 notif-3, notif-4 (队列元素现为 _Queued 记录)
+    assert [q.data for q in island_reconnect._notification] == [b"notif-3", b"notif-4"]
+    assert [q.data for q in island_reconnect._critical] == [b"crit-0", b"crit-1", b"crit-2"]
 
 
 def test_queue_full_drops_critical_only_when_notification_empty(monkeypatch):
@@ -170,7 +238,7 @@ def test_queue_full_drops_critical_only_when_notification_empty(monkeypatch):
         island_reconnect.enqueue(f"crit-{i}".encode(), status_kind="error")
     # cap=3 → 留最新 3 个 critical (老的被丢)
     assert island_reconnect.queue_len() == 3
-    assert list(island_reconnect._critical) == [b"crit-2", b"crit-3", b"crit-4"]
+    assert [q.data for q in island_reconnect._critical] == [b"crit-2", b"crit-3", b"crit-4"]
     assert island_reconnect.queue_len_notification() == 0
 
 

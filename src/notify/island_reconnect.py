@@ -21,7 +21,7 @@ import logging
 import os
 import time
 from collections import deque
-from typing import Deque, Optional
+from typing import Deque, NamedTuple, Optional
 
 from src.notify import ping_island
 from src.notify.island_envelope import build_ping_envelope
@@ -79,9 +79,22 @@ def _queue_max() -> int:
         return _DEFAULT_QUEUE_MAX
 
 
+class _Queued(NamedTuple):
+    """入队条目：编码后 bytes + 契约 §9-3 re-check 所需的邮件坐标。
+
+    ``internal_id`` / ``event_type`` 让 flush 前能反查邮件当前状态（现在只存 bytes
+    无法反序列化）；``status_kind`` 供 bucket 归类 + re-check 区分终态 envelope。
+    """
+
+    data: bytes
+    internal_id: Optional[int]
+    event_type: str
+    status_kind: str
+
+
 # 两段 deque (无 maxlen — 总容量手工管理), 见 _enforce_capacity。
-_critical: Deque[bytes] = deque()
-_notification: Deque[bytes] = deque()
+_critical: Deque[_Queued] = deque()
+_notification: Deque[_Queued] = deque()
 
 
 def _enforce_capacity() -> int:
@@ -100,7 +113,13 @@ def _enforce_capacity() -> int:
     return dropped
 
 
-def enqueue(envelope_bytes: bytes, *, status_kind: str = "notification") -> None:
+def enqueue(
+    envelope_bytes: bytes,
+    *,
+    status_kind: str = "notification",
+    internal_id: Optional[int] = None,
+    event_type: str = "",
+) -> None:
     """发送失败时由 caller 入队。
 
     ``status_kind`` 来自 envelope ``status.kind``: ``completed`` / ``error`` /
@@ -108,14 +127,21 @@ def enqueue(envelope_bytes: bytes, *, status_kind: str = "notification") -> None
     queue 满时不被淘汰除非 notification 已空); 其他 (含默认 ``notification``)
     → notification bucket (queue 满时优先淘汰)。
 
-    未传 ``status_kind`` 时默认走 notification (向后兼容)。
+    ``internal_id`` / ``event_type``（契约 §9-3）：flush 前 re-check 邮件状态用；
+    未传时 re-check 直接放行（向后兼容 / 系统事件）。
     """
     if not envelope_bytes:
         return
+    item = _Queued(
+        data=envelope_bytes,
+        internal_id=internal_id,
+        event_type=event_type,
+        status_kind=status_kind,
+    )
     if status_kind in _CRITICAL_KINDS:
-        _critical.append(envelope_bytes)
+        _critical.append(item)
     else:
-        _notification.append(envelope_bytes)
+        _notification.append(item)
     dropped = _enforce_capacity()
     if dropped:
         log.debug(
@@ -143,7 +169,7 @@ def clear_queue() -> None:
     _notification.clear()
 
 
-def _peek_next() -> Optional[bytes]:
+def _peek_next() -> Optional[_Queued]:
     """先 critical 后 notification (FIFO within each tier)。"""
     if _critical:
         return _critical[0]
@@ -159,18 +185,58 @@ def _pop_next() -> None:
         _notification.popleft()
 
 
+def _should_skip_stale(item: _Queued) -> bool:
+    """契约 §9-3: 重发前 re-check —— 邮件在 outage 期间已被处理 → 丢弃过期通知。
+
+    仅对**有 internal_id 的非终态** envelope 检查（``completed`` / ``error`` 是
+    MailCompleted / ActionAcked 等终态信号，必须照常 flush）；邮件已被删除或
+    ``processing_status='已完成'`` → 返回 True（丢弃，不再弹已处理邮件的旧待办）。
+
+    任何异常 / 无 sync_store → False（fail-open：不因 re-check bug 丢通知）。
+    """
+    if item.internal_id is None:
+        return False
+    if item.status_kind in ("completed", "error"):
+        return False  # 终态 envelope always flush
+    # lazy import 避 island_dispatch ↔ island_reconnect 循环依赖
+    from src.notify import island_dispatch
+
+    store = island_dispatch._state.sync_store
+    if store is None:
+        return False
+    try:
+        email = store.get(item.internal_id)
+    except Exception as e:  # noqa: BLE001
+        log.debug("[island] reconnect re-check failed (fail-open): %s", e)
+        return False
+    if email is None:
+        return True  # 邮件已删除 → 过期通知
+    if (email.get("processing_status") or "") == "已完成":
+        return True  # 已完成 → 过期通知
+    return False
+
+
 async def _flush_queue() -> int:
     """逐条 flush；任一发送失败立即停止后续 flush，整个 batch 留待下次重试。
 
     顺序: critical 先 (按入队顺序), 全清后再 notification。
+    契约 §9-3: 每条 flush 前 re-check, 邮件已处理的过期通知直接丢弃 (不计入 flushed)。
     """
     flushed = 0
     while True:
-        envelope_bytes = _peek_next()
-        if envelope_bytes is None:
+        item = _peek_next()
+        if item is None:
             break
+        if _should_skip_stale(item):
+            log.info(
+                "[island] reconnect: drop stale envelope internal_id=%s event=%s "
+                "(email done/deleted during outage)",
+                item.internal_id, item.event_type,
+            )
+            _pop_next()
+            continue
         result = await asyncio.get_running_loop().run_in_executor(
-            None, ping_island.send_sync, envelope_bytes
+            None, ping_island.send_sync, item.data
         )
         if not result.ok:
             log.debug("[island] flush stalled (still failing): %s", result.error)

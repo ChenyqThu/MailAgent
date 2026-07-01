@@ -416,6 +416,7 @@ from src.api.routers import (  # noqa: E402
     email,
     email_views,
     folder,
+    island,
     jobs,
     llm,
     reports,
@@ -437,6 +438,9 @@ app.include_router(chat.router)
 app.include_router(settings.router)
 app.include_router(skills.router)
 app.include_router(agent.router)
+# ping-island 解耦 ack 通道 (契约 §6/§9-4): 按钮点击 fire-and-forget POST 回灌。
+# 自认 ack_token 能力令牌 (不挂 verify_cf_access)，见 routers/island.py。
+app.include_router(island.router)
 # task A — 远程 web 切 AI SDK: 把 web 的 chat 请求 (/api/ai/{chat,title,followups,approval/resolve,
 # config}, /api/ai/agui/chat) + 裸 /health 代理到同机 loopback AI SDK Gateway。在 SPA catch-all
 # mount (/app, 文件末尾) 之前注册，确保 /api/ai/* 与 /health 不被静态 SPA 遮蔽。/api/ai/* 子路径

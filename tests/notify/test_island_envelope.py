@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import time
 
-import pytest
 
 from src.notify.island_envelope import (
     BridgeEnvelope,
@@ -129,6 +128,56 @@ def test_build_ping_envelope_is_notification_no_response():
     assert env.expects_response is False
     assert env.status_kind == "notification"
     assert env.metadata.get("mailagent.kind") == "ping"
+
+
+def test_envelope_id_deterministic_and_valid_uuid():
+    """契约 §9-1: 同 (session_key, event_type) → 同一确定性 UUID (Swift id: UUID 需合法)."""
+    import uuid as _uuid
+
+    def _wire_id(sk: str, ev: str) -> str:
+        return BridgeEnvelope(event_type=ev, session_key=sk, title="t").to_wire_dict()["id"]
+
+    id1 = _wire_id("mailagent:email:53675", "LLMReviewedUrgent")
+    id2 = _wire_id("mailagent:email:53675", "LLMReviewedUrgent")
+    id3 = _wire_id("mailagent:email:53675", "MailReceived")  # 换 scenario
+    id4 = _wire_id("mailagent:email:99", "LLMReviewedUrgent")  # 换邮件
+    assert id1 == id2, "同 (邮件, scenario) 必须同 id (幂等)"
+    assert id1 != id3, "不同 scenario 必须不同 id (能再提醒)"
+    assert id1 != id4, "不同邮件必须不同 id"
+    # 必须是合法 UUID (Swift BridgeEnvelope.id: UUID 解码前提)
+    assert str(_uuid.UUID(id1)) == id1
+    # tool_use_id 随 envelope_id 确定性
+    body = BridgeEnvelope(
+        event_type="LLMReviewedUrgent", session_key="mailagent:email:53675", title="t",
+    ).to_wire_dict()
+    assert body["metadata"]["tool_use_id"] == f"bridge-{id1}"
+
+
+def test_intervention_id_deterministic_matches_fork_stable_id():
+    """契约 §9-1/§10: intervention.id = mail:{resolvedSessionID}:{event_type} (对齐 fork)."""
+    env = BridgeEnvelope(
+        event_type="LLMReviewedUrgent",
+        session_key="mailagent:email:99",
+        title="t",
+        intervention=Intervention(
+            title="T", message="M", options=[InterventionOption(id="mark_done", title="X")],
+        ),
+        expects_response=True,
+    )
+    body = env.to_wire_dict()
+    # 匹配 PING-ISLAND-INTERFACE.md §10 self-verify 例子 "mail:email:99:LLMReviewedUrgent"
+    assert body["intervention"]["id"] == "mail:email:99:LLMReviewedUrgent"
+    # 重发同身份 (幂等)
+    assert env.to_wire_dict()["intervention"]["id"] == body["intervention"]["id"]
+
+
+def test_envelope_explicit_id_overrides_deterministic():
+    """显式传 envelope_id 时不派生 (probe / 特殊场景可覆盖)."""
+    env = BridgeEnvelope(
+        event_type="Notification", session_key="mailagent:system:ping", title="p",
+        envelope_id="fixed-explicit-id",
+    )
+    assert env.to_wire_dict()["id"] == "fixed-explicit-id"
 
 
 def test_envelope_metadata_values_are_str_in_wire():

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import time
 from pathlib import Path
 
 from src.mail.sync_store import SyncStore
@@ -63,3 +62,36 @@ def test_record_does_not_raise_on_missing_optional_args(tmp_path: Path):
         internal_id=None,
     )
     assert rid is not None
+
+
+def test_was_island_notified_persistent_dedup(tmp_path: Path):
+    """契约 §9-2: 持久去重查询——按 (event_type, internal_id) 查最近成功派发行."""
+    store = SyncStore(str(tmp_path / "test.db"))
+    # 空表 → False
+    assert store.was_island_notified(event_type="LLMReviewedUrgent", internal_id=42) is False
+    # 记录一次成功派发 → True
+    store.record_island_dispatch(
+        event_type="LLMReviewedUrgent", session_key="mailagent:email:42",
+        dispatched_ok=True, internal_id=42,
+    )
+    assert store.was_island_notified(event_type="LLMReviewedUrgent", internal_id=42) is True
+    # 不同 event_type / 不同邮件 → 不匹配
+    assert store.was_island_notified(event_type="MailReceived", internal_id=42) is False
+    assert store.was_island_notified(event_type="LLMReviewedUrgent", internal_id=99) is False
+    # 失败派发 (dispatched_ok=0) 不算已通知 (允许重试)
+    store.record_island_dispatch(
+        event_type="MailReceived", internal_id=43, dispatched_ok=False,
+    )
+    assert store.was_island_notified(event_type="MailReceived", internal_id=43) is False
+    # within_sec=0 → 无"最近"窗口 (sent_at > now-0 永不成立)
+    assert store.was_island_notified(
+        event_type="LLMReviewedUrgent", internal_id=42, within_sec=0,
+    ) is False
+    # 系统事件按 session_key 匹配 (无 internal_id)
+    store.record_island_dispatch(
+        event_type="DeadLetterAccum", session_key="mailagent:system:dead_letter",
+        dispatched_ok=True, internal_id=None,
+    )
+    assert store.was_island_notified(
+        event_type="DeadLetterAccum", session_key="mailagent:system:dead_letter",
+    ) is True

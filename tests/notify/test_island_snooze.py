@@ -56,6 +56,9 @@ def test_fire_due_removes_entries(tmp_snooze_file, monkeypatch):
 
     monkeypatch.setattr(island_snooze.island_dispatch, "dispatch_llm_reviewed",
                          fake_dispatch)
+    # 隔离契约 §9-3 re-check（依赖 island_dispatch._state.sync_store 模块单例，
+    # 跨测试残留态不确定）→ 本测试只验 re-emit + 清队列路径。
+    monkeypatch.setattr(island_snooze, "_email_handled", lambda iid: False)
 
     island_snooze.add(internal_id=1, snooze_until=time.time() - 10, subject="A",
                       sender="a@b.com", page_id="pid", mailbox="收件箱",
@@ -70,6 +73,50 @@ def test_fire_due_removes_entries(tmp_snooze_file, monkeypatch):
     remaining = island_snooze.list_all()
     assert len(remaining) == 1
     assert remaining[0]["internal_id"] == 2
+
+
+def test_fire_due_skips_handled_email(tmp_snooze_file, monkeypatch):
+    """契约 §9-3: snooze 到期时邮件已被处理 → 跳过 re-emit, 但仍清出队列."""
+    called = []
+    monkeypatch.setattr(island_snooze.island_dispatch, "dispatch_llm_reviewed",
+                        lambda **kw: called.append(kw))
+    # email 1 已完成 → 跳过; email 2 未到期
+    monkeypatch.setattr(island_snooze, "_email_handled", lambda iid: iid == 1)
+
+    island_snooze.add(internal_id=1, snooze_until=time.time() - 10, subject="A")
+    island_snooze.add(internal_id=3, snooze_until=time.time() - 10, subject="C")
+
+    fired = island_snooze.fire_due()
+    assert fired == 1  # 只有 email 3 真 re-emit
+    assert [c["internal_id"] for c in called] == [3]
+    # 两条到期都清出队列 (跳过的也不反复刷屏)
+    assert island_snooze.list_all() == []
+
+
+def test_email_handled_recheck(tmp_snooze_file, monkeypatch):
+    """_email_handled: processing_status='已完成' 或已删 → True; 未处理/无 store → False."""
+    from src.notify import island_dispatch
+
+    class _Store:
+        def __init__(self, mapping):
+            self._m = mapping
+
+        def get(self, iid):
+            return self._m.get(iid)
+
+    # 无 sync_store → False (fail-open)
+    monkeypatch.setattr(island_dispatch._state, "sync_store", None)
+    assert island_snooze._email_handled(1) is False
+
+    store = _Store({
+        1: {"processing_status": "已完成"},
+        2: {"processing_status": None},
+        # 3 缺失 → get 返 None (已删)
+    })
+    monkeypatch.setattr(island_dispatch._state, "sync_store", store)
+    assert island_snooze._email_handled(1) is True   # 已完成
+    assert island_snooze._email_handled(2) is False  # 未处理
+    assert island_snooze._email_handled(3) is True   # 已删除
 
 
 def test_remove_returns_bool(tmp_snooze_file):

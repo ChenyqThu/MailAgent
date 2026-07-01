@@ -6,7 +6,10 @@ Wire 协议来源：``frontend/ISLAND-PLUGIN.md`` §3.2 + §3.3 + REVIEW-LOG H-1
 - ``provider`` 固定 ``"mail"`` —— fork 已加 ``BridgeProvider.mail`` 解码（Phase 1 完成）
 - ``sentAt`` 是 Swift Date 编码（自 2001-01-01 UTC 秒数）：``time.time() - 978307200``
 - envelope JSON 序列化后必须 ≤ 64 KiB，超出时优先截 ``metadata``（subject/preview 保留）
-- ``id`` 用 UUID v4，``intervention.id`` 也用 UUID v4
+- 契约 §9-1 确定性 id（幂等）：``id`` 用 uuid5(namespace, "{session_key}:{event_type}")
+  派生确定性 UUID（Swift ``BridgeEnvelope.id: UUID`` 需合法 UUID）；``intervention.id`` 用
+  普通 string ``mail:{resolvedSessionID}:{event_type}``（Swift ``id: String?``，对齐 fork
+  stableID）。同 (邮件, scenario) 重发得同一身份，不再每次随机
 - ``notionPageId`` 用 dash 格式 UUID（``§3.4`` 用 ``.replace('-', '')`` 拼 deep-link）
 """
 
@@ -68,6 +71,41 @@ def swift_now() -> float:
     return time.time() - SWIFT_DATE_EPOCH_OFFSET
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 契约 §9-1 确定性 id（幂等）—— 见 PING-ISLAND-INTERFACE.md §4/§5/§9。
+# - envelope wire ``id`` 必须是合法 UUID（Swift ``BridgeEnvelope.id: UUID`` 解码），故用
+#   uuid5(namespace, "{session_key}:{event_type}") 派生确定性 UUID：同 (邮件, scenario)
+#   重发得同一 id，不再每次 uuid4() 随机。
+# - intervention.id 是普通 string（Swift ``BridgeEnvelopeIntervention.id: String?``），用
+#   "mail:{resolvedSessionID}:{event_type}" 对齐 ping-island fork 的 stableID 派生式
+#   （HookSocketServer.sessionIntervention），resolvedSessionID = metadata session_id ??
+#   thread_id ?? sessionKey 去 "mailagent:" 前缀。
+# ─────────────────────────────────────────────────────────────────────────────
+_ENVELOPE_ID_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_DNS, "ping-island.mailagent")
+
+
+def _strip_session_prefix(session_key: str) -> str:
+    prefix = "mailagent:"
+    return session_key[len(prefix):] if session_key.startswith(prefix) else session_key
+
+
+def deterministic_envelope_id(session_key: str, event_type: str) -> str:
+    """同 (session_key, event_type) → 同一确定性 UUID（Swift envelope.id 需合法 UUID）."""
+    return str(uuid.uuid5(_ENVELOPE_ID_NAMESPACE, f"{session_key}:{event_type}"))
+
+
+def deterministic_intervention_id(
+    session_key: str, event_type: str, metadata: Dict[str, str]
+) -> str:
+    """对齐 ping-island fork stableID: ``mail:{resolvedSessionID}:{event_type}``."""
+    resolved = (
+        metadata.get("session_id")
+        or metadata.get("thread_id")
+        or _strip_session_prefix(session_key)
+    )
+    return f"mail:{resolved}:{event_type}"
+
+
 @dataclass
 class InterventionOption:
     """灵动岛展开后用户可点的单个选项."""
@@ -121,7 +159,8 @@ class BridgeEnvelope:
     expects_response: bool = False
     cwd: Optional[str] = None
     terminal_context: Dict[str, Any] = field(default_factory=dict)
-    envelope_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    # None → to_wire_dict 派生确定性 UUID (deterministic_envelope_id); 显式传值可覆盖。
+    envelope_id: Optional[str] = None
 
     def to_wire_dict(self) -> Dict[str, Any]:
         """生成可 ``json.dumps`` 的 dict（不做大小裁剪）.
@@ -144,14 +183,18 @@ class BridgeEnvelope:
         # updatedInput:["choice": opt.id])` → sendHookResponse 找到 pending socket
         # → write BridgeResponse JSON 回 plugin → plugin `_extract_choice` 拿 option id
         # → `island_response.handle_response` 触发对应 action handler (open_mail / mark_done / etc).
+        # 契约 §9-1: 缺省 envelope_id → 派生确定性 UUID (同 邮件+scenario 重发同身份)。
+        env_id = self.envelope_id or deterministic_envelope_id(
+            self.session_key, self.event_type
+        )
         meta_with_event: Dict[str, str] = {
             **{k: str(v) for k, v in self.metadata.items()},
             "mailagent.eventType": self.event_type,
-            "tool_use_id": f"bridge-{self.envelope_id}",
+            "tool_use_id": f"bridge-{env_id}",
         }
         status: Dict[str, Any] = {"kind": self.status_kind, "detail": self.status_detail}
         body: Dict[str, Any] = {
-            "id": self.envelope_id,
+            "id": env_id,
             "provider": "mail",
             "eventType": wire_event,
             "sessionKey": self.session_key,
@@ -167,9 +210,15 @@ class BridgeEnvelope:
             "metadata": meta_with_event,
             "sentAt": swift_now(),
         }
-        # 顶上注入 sessionID 供 intervention.sessionID fallback
-        if self.intervention is not None and not body["intervention"].get("sessionID"):
-            body["intervention"]["sessionID"] = self.session_key
+        if self.intervention is not None and body["intervention"] is not None:
+            # 契约 §9-1: 覆盖为确定性 intervention.id (Intervention.to_dict 生的随机 UUID
+            # 仅占位)，对齐 ping-island fork stableID，防回归 + 减重推。
+            body["intervention"]["id"] = deterministic_intervention_id(
+                self.session_key, self.event_type, self.metadata
+            )
+            # 注入 sessionID 供 intervention.sessionID fallback
+            if not body["intervention"].get("sessionID"):
+                body["intervention"]["sessionID"] = self.session_key
         return body
 
     def encode(self, max_bytes: int = ENVELOPE_MAX_BYTES) -> bytes:

@@ -156,17 +156,38 @@ _dedup_seen: Dict[Tuple[str, str], float] = {}
 _monotonic = time.monotonic
 
 
-def _dedup_should_skip(session_key: str, event_type: str) -> bool:
+def _dedup_should_skip(
+    session_key: str, event_type: str, internal_id: Optional[int] = None
+) -> bool:
     """True 表示该 envelope 在去重窗口内重复, 应 skip。
 
-    同 key 距上次 dispatch < ``DEDUP_WINDOW_SEC`` → skip; 否则记录本次时间并放行。
-    超 ``_DEDUP_MAX_KEYS`` 时清空整张表 (重建即可, 进程级容忍)。
+    两级去重（契约 §9-2）：
+    1. 进程内内存窗口（``_dedup_seen``，快，同进程重复直接挡）；
+    2. 内存未命中 → 查 SQLite ``island_dispatch`` 持久去重（跨重启：内存重启即丢，
+       从最近成功派发行恢复）。命中则回填内存避免每次都查 SQLite。
+
+    窗口一律 ``DEDUP_WINDOW_SEC``（300s < snooze 1h），snooze re-emit / scenario 变 /
+    12h GC 后再推仍合法放行。超 ``_DEDUP_MAX_KEYS`` 时清空整张内存表。
     """
     now = _monotonic()
     key = (session_key, event_type)
     last = _dedup_seen.get(key)
     if last is not None and (now - last) < DEDUP_WINDOW_SEC:
         return True
+    # 契约 §9-2: 内存未命中 → SQLite 持久去重 (跨重启)。fail-open。
+    store = _state.sync_store
+    if store is not None:
+        try:
+            if store.was_island_notified(
+                event_type=event_type,
+                internal_id=internal_id,
+                session_key=session_key if internal_id is None else None,
+                within_sec=DEDUP_WINDOW_SEC,
+            ):
+                _dedup_seen[key] = now  # 回填内存, 减少 SQLite 查询
+                return True
+        except Exception as e:  # noqa: BLE001
+            log.debug("[island] persistent dedup check failed: %s", e)
     if len(_dedup_seen) >= _DEDUP_MAX_KEYS:
         _dedup_seen.clear()
     _dedup_seen[key] = now
@@ -895,7 +916,8 @@ _bg_tasks: set = set()
 def _fire(envelope: BridgeEnvelope, *, internal_id: Optional[int]) -> None:
     """把 send_async 包成 background task；记录 dispatch 结果."""
     # 问题 A 去重: 同 (session_key, event_type) 在 DEDUP_WINDOW_SEC 内重复 → 静默 skip。
-    if _dedup_should_skip(envelope.session_key, envelope.event_type):
+    # 契约 §9-2: 传 internal_id 让持久去重按邮件精确匹配 island_dispatch 表。
+    if _dedup_should_skip(envelope.session_key, envelope.event_type, internal_id):
         log.debug(
             "[island] dedup skip %s session_key=%s (within %ds window)",
             envelope.event_type, envelope.session_key, DEDUP_WINDOW_SEC,
@@ -923,6 +945,8 @@ def _fire(envelope: BridgeEnvelope, *, internal_id: Optional[int]) -> None:
                 island_reconnect.enqueue(
                     envelope.encode(),
                     status_kind=envelope.status_kind,
+                    internal_id=internal_id,
+                    event_type=envelope.event_type,
                 )
             except Exception as e:  # noqa: BLE001
                 log.debug("[island] enqueue backlog failed: %s", e)
@@ -933,16 +957,62 @@ def _fire(envelope: BridgeEnvelope, *, internal_id: Optional[int]) -> None:
         )
 
         if result.ok and result.response is not None:
-            # 用户在灵动岛点过 option → 走 response handler
+            # 用户在灵动岛点过 option（3s 内的同步回写；异步点击走解耦 ack 通道）
             try:
                 from src.notify import island_response
                 await island_response.handle_response(result.response, envelope.metadata)
             except Exception as e:  # noqa: BLE001
                 log.warning("[island] response handler error: %s", e)
 
+    # 契约 §6/§9-4: 带按钮的 envelope 发送前登记解耦 ack pending + 注入 ack_token,
+    # 让 ping-island 按钮点击可经 serve-api /api/island/ack 异步回灌 (不受 3s 限制)。
+    _register_ack_if_intervention(envelope, internal_id)
+
     task = loop.create_task(_bg())
     _bg_tasks.add(task)
     task.add_done_callback(_bg_tasks.discard)
+
+
+def _register_ack_if_intervention(
+    envelope: BridgeEnvelope, internal_id: Optional[int]
+) -> None:
+    """带按钮 (expects_response + intervention) 的 envelope → 登记解耦 ack pending。
+
+    生成 ``ack_token`` 注入 ``envelope.metadata`` (随 wire 发给 ping-island)。跨进程落
+    SQLite (serve-api ack 端点在另一进程 resolve)。fail-open: 任何失败仅 debug, 不阻断发送。
+    """
+    if not (envelope.expects_response and envelope.intervention is not None):
+        return
+    store = _state.sync_store
+    db_path = getattr(store, "db_path", None) if store is not None else None
+    if not db_path:  # 无 store / 无 db_path (测试 fake) → 跳过, 不建垃圾库
+        return
+    try:
+        from src.notify import island_ack
+        from src.notify.island_envelope import deterministic_envelope_id
+
+        meta_for_ack = dict(envelope.metadata)
+        # tool_use_id 供 handle_response._extract_envelope_id (ActionAcked 关联)
+        meta_for_ack.setdefault(
+            "tool_use_id",
+            f"bridge-{deterministic_envelope_id(envelope.session_key, envelope.event_type)}",
+        )
+        token = island_ack.register(
+            str(db_path),
+            kind="mail",
+            session_key=envelope.session_key,
+            event_type=envelope.event_type,
+            metadata=meta_for_ack,
+            choices={opt.id for opt in envelope.intervention.options},
+            internal_id=internal_id,
+        )
+        envelope.metadata["ack_token"] = token
+        # serve-api ack 端点 URL 随 envelope 带出 (fork 读它, 避免硬编码端口)。
+        # MAILAGENT_API_PORT 由 BackendLifecycleManager 与 serve-api 同 env 注入 (默认 8200)。
+        api_port = os.environ.get("MAILAGENT_API_PORT", "8200")
+        envelope.metadata["ack_url"] = f"http://127.0.0.1:{api_port}/api/island/ack"
+    except Exception as e:  # noqa: BLE001
+        log.debug("[island] ack register failed (fail-open): %s", e)
 
 
 def _extract_choice(response: Dict[str, Any]) -> Optional[str]:

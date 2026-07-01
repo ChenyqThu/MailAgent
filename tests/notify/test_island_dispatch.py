@@ -11,14 +11,36 @@ from src.notify import island_dispatch, ping_island, island_reconnect
 
 
 class _FakeSyncStore:
-    """轻量 stub 替代 SyncStore，仅实现 record_island_dispatch."""
+    """轻量 stub 替代 SyncStore：record_island_dispatch + 契约 §9-2 持久去重查询."""
 
     def __init__(self):
         self.rows: List[Dict[str, Any]] = []
 
     def record_island_dispatch(self, **kwargs):
+        # 用 island_dispatch._monotonic() 打时间戳: fake_clock fixture patch 的就是它,
+        # 让持久去重与内存去重同一时钟一起释放 (真 store 用 time.time(), 生产两钟同步)。
+        kwargs = dict(kwargs)
+        kwargs["_stamp"] = island_dispatch._monotonic()
         self.rows.append(kwargs)
         return len(self.rows)
+
+    def was_island_notified(self, *, event_type, internal_id=None,
+                            session_key=None, within_sec=300.0):
+        """忠实模拟真 SyncStore：查 within_sec 内成功派发行 (dispatched_ok=1)。"""
+        now = island_dispatch._monotonic()
+        for r in self.rows:
+            if not r.get("dispatched_ok"):
+                continue
+            if r.get("event_type") != event_type:
+                continue
+            if now - float(r.get("_stamp", 0.0)) >= within_sec:
+                continue  # 超 within_sec 窗, 不算"最近"
+            if internal_id is not None and r.get("internal_id") == internal_id:
+                return True
+            if internal_id is None and session_key is not None \
+                    and r.get("session_key") == session_key:
+                return True
+        return False
 
 
 @pytest.fixture
@@ -1096,6 +1118,75 @@ def test_dedup_allows_snooze_reemit(patch_send, fake_store, fake_clock):
     fake_clock(3601)  # 1h+ 后 snooze re-emit
     _fire_urgent()
     assert len(captured) == 2
+
+
+def test_intervention_dispatch_registers_ack(patch_send, tmp_path):
+    """契约 §6/§9-4: 带按钮 (waitingForInput) 的 envelope 注入 ack_token + 登记 pending。"""
+    from src.notify import island_ack
+
+    captured, _ = patch_send
+    db = str(tmp_path / "sync_store.db")
+    store = _FakeSyncStore()
+    store.db_path = db  # _register_ack_if_intervention 用 db_path 落 SQLite
+    island_dispatch.init(enabled=True, sync_store=store, account_name="Ex")
+
+    async def _scenario():
+        island_dispatch.dispatch_llm_reviewed(
+            internal_id=888, page_id="p", subject="s", sender_email="a@b.com",
+            sender_name="A", mailbox="收件箱", priority="🔴 紧急", action="需要回复",
+        )
+        await asyncio.sleep(0.02)
+
+    asyncio.run(_scenario())
+    assert len(captured) == 1
+    env = captured[0]
+    ack_token = env.metadata.get("ack_token")
+    assert ack_token, "intervention envelope 应注入 ack_token"
+    # pending 已登记, 用实际 option id 可 resolve
+    opt_id = env.intervention.options[0].id
+    pending = island_ack.resolve(db, ack_token, opt_id)
+    assert pending is not None
+    assert pending.internal_id == 888
+    assert pending.kind == "mail"
+    assert pending.metadata["mailagent.internalId"] == "888"
+
+
+def test_non_intervention_dispatch_no_ack(patch_send, tmp_path):
+    """无按钮 (notification) 的 envelope 不登记 ack (不注入 ack_token)。"""
+    captured, _ = patch_send
+    store = _FakeSyncStore()
+    store.db_path = str(tmp_path / "sync_store.db")
+    island_dispatch.init(enabled=True, sync_store=store)
+
+    async def _scenario():
+        island_dispatch.dispatch_mail_received(
+            internal_id=889, page_id="p", subject="s", sender_email="a@b.com",
+            sender_name="A", mailbox="收件箱",
+        )
+        await asyncio.sleep(0.02)
+
+    asyncio.run(_scenario())
+    assert len(captured) == 1
+    assert "ack_token" not in captured[0].metadata
+
+
+def test_dedup_persists_across_restart(patch_send, fake_store, fake_clock):
+    """契约 §9-2: 内存 _dedup_seen 清空 (模拟进程重启) 后, 持久去重 (island_dispatch
+    表 / fake rows) 仍在窗口内 → 同 key 不重发。"""
+    captured, _ = patch_send
+    island_dispatch.init(enabled=True, sync_store=fake_store)
+    _fire_received(internal_id=777)
+    assert len(captured) == 1
+    # 模拟重启: 内存去重表丢失, 但 fake_store.rows (= SQLite island_dispatch) 还在
+    island_dispatch._dedup_seen.clear()
+    fake_clock(100)  # 100s < 300s 窗口内
+    _fire_received(internal_id=777)
+    assert len(captured) == 1, "持久去重应挡住重启后窗口内的重发"
+    # 窗口外 (>300s) 重启后放行
+    island_dispatch._dedup_seen.clear()
+    fake_clock(250)  # 累计 350s > 300s
+    _fire_received(internal_id=777)
+    assert len(captured) == 2, "超窗后应放行 (snooze/scenario 变/GC 后再推合法)"
 
 
 def test_dedup_dict_size_cap_clears(patch_send, fake_store, fake_clock):
