@@ -29,7 +29,8 @@
 **门控**：跑通 `tests/agent_eval` 不回退 + web dogfood（CF Access 墙后实测流式/工具/HITL）。
 
 ### 任务 B — Harness Agent epic 收尾（删 legacy）
-- **06b 7 天观察窗**：cutover 后稳定观察，无回滚信号 → **删 legacy harness**（自研 TS 单 loop `harness.ts` + ExternalStore 编排 + 旧 `AssistantUIChatPanel` 死路径）。删前确认 `MAILAGENT_CHAT_RUNTIME=legacy` 回滚路径是否要保留（删了就没有一键回退了——需用户拍板）。
+- **🔴 M5b（agent_memory_kv KV 退役）已独立完成**（2026-07-01，6 commits，详见 `memory-skill-core-refactor.md` §5 M5b）。**删 legacy harness 仍是本任务 B 未做项**——M5b 仅外科剔除了 legacy 的 4 个 KV 工具/方法（因 DROP 表会断它们），legacy 运行时（harness.ts/dispatcher/runtime chat loop/agentic 搜索/panels/健康降级 fallback/`CHAT_RUNTIME` flag）整体保留。
+- **06b 7 天观察窗**：cutover 后稳定观察，无回滚信号 → **删 legacy harness**（自研 TS 单 loop `harness.ts` + ExternalStore 编排 + 旧 `AssistantUIChatPanel` 死路径）。删前确认 `MAILAGENT_CHAT_RUNTIME=legacy` 回滚路径是否要保留（删了就没有一键回退了——需用户拍板）。mapping 揭示这是大重构（agentic 搜索重接/gateway 健康降级 fallback/.chat 重设），需独立规划。
 - **flag 清理**：cutover 稳定后，把已 GA 的 flag（master / AGENT_VIEW / ASSISTANT_MODAL / A2UI / context-injection / send-tool）从 define + flags.ts resolver 收敛/移除，减少分支。
 - **文档收敛**：chat-panel + 06-22 + 本 epic 的过程文档归档到 `docs/archive/`，常青结论沉淀到 `docs/reference/llm-agent/`。
 

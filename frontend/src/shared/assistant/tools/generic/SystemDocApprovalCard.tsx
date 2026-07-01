@@ -1,8 +1,8 @@
 // M4b — SystemDocApprovalCard (update_system_md).
 //
 // Approve/reject card for the agent proposing an edit to one of its own Standing Context documents
-// (soul / agent / rules / user). Mirrors MemoryApprovalCard's structure (CardFrame + ApprovalActions
-// from _cardShell) so the edit gets a proper in-conversation approve/reject affordance instead of
+// (soul / agent / rules / user). Uses the same CardFrame + ApprovalActions pattern (from _cardShell)
+// so the edit gets a proper in-conversation approve/reject affordance instead of
 // the generic ToolTraceCard. soul/rules (identity + hard constraints) get the high-risk red
 // treatment + the safety-floor note; jailbreak / override phrasing in `rules` is rejected
 // server-side (validate_rules_content) → the card then shows the error phase. The FULL new content

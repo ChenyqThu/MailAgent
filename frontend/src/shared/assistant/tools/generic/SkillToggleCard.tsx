@@ -1,7 +1,7 @@
 // M4c — SkillToggleCard (set_skill_enabled).
 //
 // Approve/reject card for the agent enabling/disabling one of its skills (mount/unmount its tools).
-// Mirrors MemoryApprovalCard's structure (CardFrame + ApprovalActions). Preview tier — reversible;
+// Uses the same CardFrame + ApprovalActions pattern as other approval cards. Preview tier — reversible;
 // the user approves the capability change. The mounted skill's own tools keep their independent
 // approval, so enabling never silently grants a write.
 

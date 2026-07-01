@@ -203,6 +203,26 @@
 
 **M5b（解锁，待执行；并入任务B 删 legacy 同批）**：删 4 gateway 工具(`memory.ts` gateway+legacy 两处)/4 Python KV 端点(list/get/upsert/delete)/domainClient + DROP TABLE(`chat_db.ts`，**bump CHAT_DB_VERSION 15→16；🔴 不碰 `EXPECTED_DB_VERSION`** —— chat_db.ts:83-84 源码注释明确 ai_chat.db 自有版本梯、与 gate sync_store 的 EXPECTED_DB_VERSION 无关，§6 铁律 #6 同；早先本段写「+ EXPECTED_DB_VERSION」是错的，已纠正) + 删 9 个 AGT-MEMORY task + tool_catalog 去 4 memory 工具 + 重录 baseline + 删 `memory_kv_retire_enabled` flag（退役变无条件，M5a-2/3 的 flag-gated 分支去掉）。删表破 legacy memory 回退 → 与 `CHAT_RUNTIME=legacy` 去留同决策（任务B 拍板点）。**eval memory 维度 M5b 永久移除**（mem0 capture/search 无 zero-LLM-rules 可测工具）。
 
+#### ✅ M5b 落地（2026-07-01，main 未 push）—— 物理退役 + prompt 残留清理（6 commits，每步 dual-review）
+
+**决策 A（拆开）**：M5b 只做 agent_memory_kv 物理退役；**删 legacy harness 仍是独立未来 task**（mapping 揭示它纠缠 agentic 搜索重接/gateway 健康降级 fallback/.chat 重设——见 next-phase-backlog 任务B）。legacy 运行时整体保留，M5b 仅外科剔除其 4 个 KV 工具/方法。
+
+- 步1 `e2bf00c9` Python KV 消费移除（4 端点/kv_over_mem0/engine 原语/config flag/dump 无条件/db.py dead 方法/6 Python 测试）
+- 步2 `71831faf` gateway-TS KV（memory.ts/schemas/index/skill_gating/M0 flag MAILAGENT_AI_SDK_MEMORY_TOOLS/domainClient；保留 captureMemory/searchMemory）
+- 步3 `62c07f8a` legacy-TS KV 外科剔除（builtin/memory.ts + platform/http_platform/runtime 的 KV 方法 + Settings MemorySection + api/types.ts；保留 legacy 运行时 + undoCapturedMemory/compileUserMd/profile-docs）
+- 步3b `a56e5d31` prompt/UI 残留（templates.py AGENT「Memory capture」段+RULES 2 条 / soul.ts+soul.md / custom_api dead memorySummary 块 / a2ui MemoryApprovalCard）—— **codex 独立 review 抓的 HIGH**（步1-3 漏：删了工具但 prompt 仍指示模型用，Standing Context 默认 ON = 主路径）
+- 步4 `7b278d43` DROP 表 + bump CHAT_DB_VERSION 15→16（+ model.ts 删 AgentMemoryEntry/WriteMemoryInput + chat_db CRUD；🔴 EXPECTED_DB_VERSION=26 未碰；v3 CREATE+v8 ALTER 历史块保留 = fresh DB create-then-drop）
+- 步5 `3c62b441` eval 删 memory 维度（9 AGT-MEMORY task+rubric+9 fixtures+CATEGORIES 8→7+tool_catalog 50→46+6 task forbidden_tools 去 memory_write+baseline 删 9 行）—— 零回退机器验证 run_baseline --compare = base_hard_pass 20==candidate 20
+
+**🔴 关键教训/坑**：
+- **codex 双 review 价值**：步3 后 codex 抓到 opus 漏的 prompt-residue HIGH → 派生步3b；impact-map 原漏 prompt-text 维度。
+- **rogue sub-agent**：步3b 的 implement agent 越界做了 step5 + reformat 6 个非-memory eval task（compact JSON→多行）→ 全 revert，step5 用「targeted 字符串编辑禁 reformat」重做。
+- **ABI 限制**：chat_db DROP migration 因 better-sqlite3 Electron-ABI 无法 vitest 运行时测 → 逻辑复核（opus+codex）+ dogfood 验。
+- **🔴 seed 一次性**（store.py INSERT OR IGNORE）：改 templates.py 只修新装；**已装库（含 dogfood 库）AGENT/RULES doc 仍旧 seed（含 memory_write/memory_get 指示），需经 Settings 身份文档编辑器手动改**；release 迁移（仅当 hash 匹配旧 seed 才 re-seed）另议。
+
+**dogfood 待做**：打包 app 验证（现有 v15 ai_chat.db → v16 表 DROP；记忆走 mem0/user.md）+ 手动改已装库 AGENT/RULES doc（去 memory_write 指示）。
+**遗留（可选 follow-up，非阻塞）**：vestigial memorySummary 字段（M5a-3 有意保留 retired-meta，恒 ''，plumb 在 platform/http_platform/systemPrompt/lifecycle）；schema.md:15「45 工具」pre-existing drift（非 M5b）；2 处「Mirrors MemoryApprovalCard」注释（本步清）。
+
 ---
 
 ## 6. 贯穿铁律（每阶段都钉）
@@ -223,7 +243,6 @@
 | `MAILAGENT_MEM0_RETRIEVAL` | M2 | per-turn query 召回注入 |
 | `MAILAGENT_USER_MD_COMPILE` | M3 | user.md 编译触发 |
 | `MAILAGENT_SKILL_SELF_MOUNT` | M4 | 工具门控 + update_system_md + discover_skills |
-| `MAILAGENT_MEMORY_KV_RETIRE` | M5 | agent_memory_kv 退役 / 记忆存储统一 |
 
 ---
 

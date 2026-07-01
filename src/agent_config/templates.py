@@ -2,7 +2,8 @@
 
 Phase -1 / 0A：每个用户首次访问时由 ``AgentConfigStore`` 把这些模板落进
 ``agent_profile_docs``，之后用户/agent（经确认）可编辑。``MEMORY`` / ``SKILLS`` **不在此**
-—— 它们是 ``agent_memory_kv`` 与 installed skill registry 的投影（只读/导出），不存表。
+—— 它们是动态投影：``MEMORY`` 恒空（M5b 后 agent_memory_kv 已退役），``SKILLS`` 是
+installed skill registry 的只读投影；均不存表。
 
 设计纪律（见 task 06-22 plan §D + foundation-config-framework §6）：
 - 这里只放 **身份 / 工作方式 / 用户级规则 / 用户画像**；**硬安全 floor 不在此** ——

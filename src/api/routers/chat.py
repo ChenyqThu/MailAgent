@@ -997,16 +997,15 @@ async def save_to_kos(request: Request, body: Optional[Dict[str, Any]] = None):
     return success_envelope(result, request=request, source="kos")
 
 
-# ── mem0 auto-capture 端点（M1 — 异步自动抽取写记忆）─────────────────────────
+# ── mem0 端点（M1/M2/M3 — auto-capture / search / compile-user-md）────────────
 #
-# ⚠️ 与上面 agent_memory_kv 端点（/memory GET/POST/DELETE）**完全独立**：那是 M0 的显式
-# 记忆工具层（ChatDb.agent_memory_kv，前端 owns schema）；这里是 M1 的 mem0 自动抽取层，
-# 写进独立的 FAISS store（DATA_ROOT/mem0/），**不碰 chat_db / CHAT_DB_VERSION**。
+# M5b 后记忆唯一存储 = mem0 独立 FAISS store（DATA_ROOT/mem0/）+ user.md（M3 恒注入）。
+# agent_memory_kv 表 + 其 4 个 KV 端点（GET/POST/DELETE /memory）已随 M5b 删除。
 #
-# 触发链：Node gateway onFinish fire-and-forget（**永不 await**）→ 本端点 → mem0.add 自动
-# 抽取持久偏好/事实。mem0 是同步库（含网络抽取调用）→ run_in_threadpool 跑，绝不阻塞
-# serve-api event loop。durable-only 抽取约束在引擎 custom_instructions（绝不抽一次性任务态）。
-# flag MAILAGENT_MEM0_CAPTURE 关时 Node 端根本不触发本端点（没被调用 = 字节级 flag-off），
+# 触发链：Node gateway onFinish fire-and-forget（**永不 await**）→ /memory/capture →
+# mem0.add 自动抽取持久偏好/事实。mem0 是同步库（含网络抽取调用）→ run_in_threadpool
+# 跑，绝不阻塞 serve-api event loop。durable-only 抽取约束在引擎 custom_instructions
+# （绝不抽一次性任务态）。flag MAILAGENT_MEM0_CAPTURE 关时 Node 端根本不触发本端点，
 # 故本端点不自检 flag。
 
 
