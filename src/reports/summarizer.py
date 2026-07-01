@@ -155,7 +155,8 @@ class ReportDraft:
 def _build_system(persona: str, now: datetime) -> List[Dict[str, Any]]:
     weekday_cn = "一二三四五六日"[now.weekday()]
     body = (
-        persona.rstrip()
+        build_task_identity_context()
+        + persona.rstrip()
         + f"\n\n当前时间：{now.isoformat()}（周{weekday_cn}，时区 +08:00 北京）。"
         + _FIXED_RULES
     )
@@ -252,7 +253,8 @@ def _build_system_agentic(persona: str, now: datetime, kos_enabled: bool) -> Lis
     weekday_cn = "一二三四五六日"[now.weekday()]
     kos_tool = "- kos_query(query)：查 Gbrain 知识库里跨人 / 项目 / 历史的背景\n" if kos_enabled else ""
     body = (
-        persona.rstrip()
+        build_task_identity_context()
+        + persona.rstrip()
         + f"\n\n当前时间：{now.isoformat()}（周{weekday_cn}，时区 +08:00 北京）。"
         + "\n\n## 工具（按需调用，别为每封都查）\n"
         + "邮件清单含 AI 摘要 + 回复建议（若有）+ 命中优先级邮件的正文；其余仅摘要。"

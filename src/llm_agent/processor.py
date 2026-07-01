@@ -164,6 +164,14 @@ class LLMProcessor:
         )
         blocks: List[Dict[str, Any]] = [{"type": "text", "text": header}]
 
+        # #31/#32 Part2 增量1 — 用户身份 grounding（soul/user 恒注入，flag 可关）。
+        # 落在 header 之后、稳定 prefix 内 → 随 final_block 的 cache_control 一起缓存。
+        from src.agent_config.task_context import build_task_identity_context
+
+        _identity = build_task_identity_context()
+        if _identity:
+            blocks.append({"type": "text", "text": _identity})
+
         ctx_md = await self._context.get_markdown()
         if ctx_md:
             blocks.append({

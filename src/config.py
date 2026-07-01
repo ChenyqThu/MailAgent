@@ -281,6 +281,14 @@ class Config(BaseSettings):
         default=False, env="LLM_AGENT_ENABLED",
         description="是否启用本地 LLM 处理邮件 AI 字段（取代 Notion Custom Agent）",
     )
+    task_identity_docs_enabled: bool = Field(
+        default=True, env="TASK_IDENTITY_DOCS_ENABLED",
+        description=(
+            "把 Standing Context 身份文档（soul/user）注入 reports / LLM 邮件分类 / 灵动岛"
+            "总结等后台任务的 system prompt（issue #31/#32 Part2 增量1）——让 Part1 去硬编码后的"
+            "通用「用户」措辞被用户真实身份 grounding。默认开；off 时字节级回退通用表述。"
+        ),
+    )
     llm_api_base: str = Field(
         default="https://crs.chenge.ink/api", env="LLM_API_BASE",
         description="Anthropic Messages 兼容网关 base url（不含 /v1/messages）",
