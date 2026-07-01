@@ -1676,15 +1676,6 @@ export interface ChatApi {
    */
   setSkillEnabled(name: string, enabled: boolean): Promise<void>
   /**
-   * M1d — undo one mem0 auto-captured memory (the "已记住 X" toast's 撤销 button).
-   * DELETE /chat/memory/captured?id=<mem0 memory_id>. Unlike the best-effort
-   * capture, this is a user-initiated write → the backend raises (E_INTERNAL/500)
-   * on failure. Electron 走 loopback serve-api（token 由 chat_local_bridge 注入）/
-   * web 走 HTTP（CF Access cookie）—— 直 request() 写路径，无 IPC。
-   * Throws `Error & { code }` on failure; the caller toasts 「撤销失败」.
-   */
-  undoCapturedMemory(id: string): Promise<void>
-  /**
    * M3c — 从 mem0 累积的偏好记忆编译合并进 user.md。手动触发（Settings 按钮）。
    * POST /api/chat/memory/compile-user-md → CompileUserMdResult。
    * flag-off（MAILAGENT_USER_MD_COMPILE）→ backend 返 403（E_DISABLED）→ caller 捕获处理。
@@ -1901,7 +1892,6 @@ export type SseEventType =
   | 'llm.failed'
   | 'llm.gave_up'
   | 'folder.synced'
-  | 'memory.captured'
 
 export interface SseEvent {
   event_type: SseEventType | string

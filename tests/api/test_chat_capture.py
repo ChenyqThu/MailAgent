@@ -2,14 +2,12 @@
 
 capture 端点内部 ``load_memory_md → merge_turn → save_memory_md``（函数内懒 import
 ``src.memory.memory_md``），故 patch 该模块的三个函数即可测端点布线，零 LLM/零 store。
-undo 端点（DELETE /memory/captured）step1 未改（仍走 mem0.delete）—— 单独 mem0 mock 测。
 auth bypass 默认 ON（conftest 设 MAILAGENT_API_AUTH_DISABLED=true）。
 """
 
 from __future__ import annotations
 
 from typing import Iterator, Tuple
-from unittest import mock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -160,35 +158,3 @@ def test_capture_best_effort_on_save_error(capture_client) -> None:
     # 落库失败也 best-effort 吞 → 报 changed=False（不 500）。
     assert r.status_code == 200
     assert r.json()["data"]["changed"] is False
-
-
-# ── undo 端点（DELETE /memory/captured）—— step1 未改，仍走 mem0.delete ─────────────
-
-
-@pytest.fixture
-def mem0_undo_client(
-    monkeypatch: pytest.MonkeyPatch,
-) -> Iterator[Tuple[TestClient, mock.MagicMock]]:
-    """undo 端点函数内 import get_mem0_engine → patch 模块属性 mock 之（零 FAISS）。"""
-    import src.memory.mem0_engine as me
-
-    fake = mock.MagicMock()
-    monkeypatch.setattr(me, "get_mem0_engine", lambda: fake)
-    with TestClient(app, raise_server_exceptions=False) as client:
-        yield client, fake
-
-
-def test_undo_deletes_captured_memory(mem0_undo_client) -> None:
-    client, fake = mem0_undo_client
-    r = client.delete("/api/chat/memory/captured", params={"id": "m1"})
-    assert r.json()["data"] == {"deleted": True, "id": "m1"}
-    fake.delete.assert_called_once_with("m1")
-
-
-def test_undo_error_when_engine_fails(mem0_undo_client) -> None:
-    client, fake = mem0_undo_client
-    # 撤销是用户主动操作 → 失败 raise（不像 capture best-effort），前端据此提示。
-    fake.delete.side_effect = RuntimeError("faiss locked")
-    r = client.delete("/api/chat/memory/captured", params={"id": "m1"})
-    assert r.status_code == 500
-    assert r.json()["error"]["code"] == "E_INTERNAL"

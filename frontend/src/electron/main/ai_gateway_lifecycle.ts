@@ -277,7 +277,11 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
       : undefined,
     // 07-01 — M2 per-query recall (retrieveMemory → /chat/memory/search) is retired. The bounded
     // memory.md is now injected into the cacheable stable prefix via /chat/config.memorySummary
-    // (getSystemPromptConfig above already carries it), so there is no per-turn recall callback.
+    // (getSystemPromptConfig above already carries it, on a 15s TTL — NOT frozen per session), so
+    // there is no per-turn recall callback. A durable-fact capture re-caches the prefix on a later
+    // turn once the TTL lapses; keeping memory in the cached prefix is cost-optimal for the occasional
+    // capture (most turns hit the cache, only an occasional re-cache — cheaper than an uncached refetch
+    // every turn).
     // Phase 04a — apply an edit-tier UI edit to a pending approval (the resolve side-channel).
     // applyEdit overlays the editable fields onto the original input (identity pinned) WITHOUT
     // touching the ai@6 history input, so the signed approval stays valid on replay. Throws an

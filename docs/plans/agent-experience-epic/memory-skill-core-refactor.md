@@ -223,6 +223,18 @@
 **dogfood 待做**：打包 app 验证（现有 v15 ai_chat.db → v16 表 DROP；记忆走 mem0/user.md）+ 手动改已装库 AGENT/RULES doc（去 memory_write 指示）。
 **遗留（可选 follow-up，非阻塞）**：vestigial memorySummary 字段（M5a-3 有意保留 retired-meta，恒 ''，plumb 在 platform/http_platform/systemPrompt/lifecycle）；schema.md:15「45 工具」pre-existing drift（非 M5b）；2 处「Mirrors MemoryApprovalCard」注释（本步清）。
 
+#### ✅ memory.md 子系统（Hermes 有界 + 写入时淘汰 + 设置编辑 + compile repoint）落地（2026-07-01，main 未 push，trellis task `07-01-memory-md-hermes-budget`）
+
+M5b 物理退役 KV 后把 mem0 侧从「FAISS + 按 query 召回（M2）」重定型为 **Hermes 式有界 memory.md 恒注入**（用户拍板 A 方案）。5 步各一 diff + dual-review：
+- **存储** = agent_config.db 新增 doc `MEMORY`（复用 profile-doc content + history/rollback，`STORABLE_DOC_NAMES` 含它但**排除出** `PROFILE_DOC_NAMES`/standing_context —— 4 份身份可信、memory.md 单独走 MEMORY fence）。不进 DB_VERSION / 不 bump CHAT_DB_VERSION。
+- **写（步1）**：`/chat/memory/capture` 改 `src/memory/memory_md.py`：读现 memory.md + 本轮 → 一次 LLM（`memory_capture_model`，默认 haiku，走 `LLMClient` streaming 规避 mem0 raw-anthropic temperature/max_tokens 坑）合并去重 + **超 `memory_md_budget_chars`(默认 5000) 写入时淘汰**压回预算；untrusted 边界 fence + `_strip_unsafe_lines` 剔安全/审批弱化行 + capture 串行化锁防丢更新。
+- **注入（步1+步2）**：`/chat/config` `memorySummary` 从恒 None 改读 memory.md（gate `MAILAGENT_MEM0_RETRIEVAL` 语义从「query 召回」改「恒注入」，serve-api 热读 .env）；Node `buildStableSystemPrompt` **真正回接** MEMORY fence（untrusted 背景 + `sanitizeUntrusted`），退役 M2 `retrieveMemory`/`buildRetrievedMemoryBlock`/`/chat/memory/search` 召回链。flag-off 或空 → memorySummary="" → 字节级同 cutover。
+- **设置（步3）**：`StandingDocsSection` 加 memory.md 第 5 份可编辑 doc（长度/预算进度条）+「记忆抽取模型」下拉（写 `MEMORY_CAPTURE_MODEL`）；`agent.py` `_memory_projection` repoint 到真 stored MEMORY doc（R1）。
+- **compile（步4）**：`user_md_compiler` 源从 `mem0.get_all()` repoint 到 `load_memory_md()`；保留 M3「LLM 编译偏好进 user.md + before/after diff + rollback」+ untrusted→trusted 三层防线（capture 已净 + 人审 diff + user.md 写校验）。
+- **收尾（步5，本步）**：R2 删死 undo-by-captured-id 链（`DELETE /memory/captured` 端点 + 前端 M1d toast/`undoCapturedMemory`/`memory.captured` SSE 类型 + 相关测试）；codex 步2 注释修准（memory 非「frozen per session」= /chat/config 15s TTL 刷新、下轮 re-cache prefix、偶发 capture 成本最优）；codex 步3 读侧 budget clamp（`/chat/config` 注入前 `_truncate_to_budget` 到当前预算，belt-and-suspenders 防 rollback 旧大版本超预算）；.env.example + CLAUDE.md 开关表 + 本记录；`tests/agent_eval --compare` no-regression（memory.md 是注入/存储层变化，未动 tool catalog）。
+
+**out of scope（follow-up）**：mem0_engine/FAISS 物理删除（memory.md 已取代但 undo 链外的引擎代码本步不删）；删 legacy harness（M5b option A 遗留独立 task）；release（翻 epic flag 默认 ON + seed 迁移 + build/push/tag）。
+
 ---
 
 ## 6. 贯穿铁律（每阶段都钉）

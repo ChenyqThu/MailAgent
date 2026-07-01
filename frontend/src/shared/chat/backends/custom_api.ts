@@ -290,11 +290,14 @@ export function buildStableSystemPrompt(
       cfg.userContext
   }
   // 07-01 memory.md — durable memory facts (mem0 auto-capture, curated into the bounded MEMORY doc)
-  // injected as an UNTRUSTED background block AFTER userContext, INSIDE the cacheable prefix (frozen
-  // per session → prefix-cache stable, this turn's capture takes effect next session). Sourced from
-  // serve-api /chat/config (memorySummary = the MEMORY agent_config doc when MAILAGENT_MEM0_RETRIEVAL
-  // is on + non-empty; Python gates it → "" when off, so this stays byte-identical flag-off). Fenced
-  // + sanitizeUntrusted because the content derives from (untrusted) email bodies: it is BACKGROUND
+  // injected as an UNTRUSTED background block AFTER userContext, INSIDE the cacheable prefix. Sourced
+  // from serve-api /chat/config (memorySummary = the MEMORY agent_config doc when MAILAGENT_MEM0_RETRIEVAL
+  // is on + non-empty; Python gates it → "" when off, so this stays byte-identical flag-off). The config
+  // is re-fetched on a TTL (gateway path = 15s), NOT frozen per session: a durable-fact capture re-caches
+  // this prefix on a LATER turn once the config refreshes (not "next session"). Keeping memory in the
+  // cached prefix is cost-optimal for the occasional capture — most turns hit the cache, only an occasional
+  // re-cache, cheaper than moving it outside the cache breakpoint and re-sending it uncached every turn.
+  // Fenced + sanitizeUntrusted because the content derives from (untrusted) email bodies: it is BACKGROUND
   // DATA, never instructions, and cannot override the safety floor (a smuggled UNTRUSTED_MEMORY_END is
   // ZWSP-broken so it can't close the fence early). null / "" → skip (byte-identical to no-memory).
   if (cfg.memorySummary && cfg.memorySummary.length > 0) {

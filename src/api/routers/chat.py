@@ -317,15 +317,21 @@ async def chat_config(request: Request):
     if _hot_bool(env_vals, "MAILAGENT_MEM0_RETRIEVAL", False):
         try:
             from src.agent_config.store import MEMORY_DOC_NAME, get_agent_config_store
+            from src.memory.memory_md import _truncate_to_budget
 
-            _mem_md = get_agent_config_store().get_profile_doc(MEMORY_DOC_NAME).content.strip()
+            _mem_raw = get_agent_config_store().get_profile_doc(MEMORY_DOC_NAME).content.strip()
+            # 读侧 budget clamp（belt-and-suspenders，codex 步3 LOW）：capture 写侧已把 memory.md
+            # 压回 budget，注入时再 clamp 一次，保证恒注入 ≤ 当前 memory_md_budget_chars —— 唯一
+            # 超预算路径 = 用户调低 budget 后 rollback 到旧的大版本（自伤、仅成本、下轮 capture 自愈，
+            # 故 LOW）。_truncate_to_budget 对 ≤budget 内容是恒等 no-op（行边界 + 闭合 code fence）。
+            _mem_md = _truncate_to_budget(_mem_raw, cfg.memory_md_budget_chars)
             if _mem_md:
                 memory_summary = _mem_md
                 memory_summary_meta = {
                     "injected": 1,
                     "total": 1,
                     "chars": len(_mem_md),
-                    "truncated": False,
+                    "truncated": len(_mem_md) < len(_mem_raw),
                     "source": "memory.md",
                     "retired": False,
                 }
@@ -1099,28 +1105,6 @@ async def capture_memory(request: Request, body: Optional[Dict[str, Any]] = None
         source="memory",
         meta_extra={"truncated": result.truncated, "model": result.model},
     )
-
-
-@router.delete("/memory/captured", dependencies=[Depends(verify_cf_access)])
-async def undo_captured_memory(request: Request, id: str = Query(...)):
-    """撤销一条自动抽取的记忆（M1d「已记住」toast 的 undo 按钮）。按 mem0 memory_id 删。
-
-    与上面 best-effort 的 capture 不同：这是**用户主动操作** → 失败 raise（E_INTERNAL/500），
-    前端据此提示撤销失败。mem0 是同步库 → run_in_threadpool，不阻塞 event loop。
-    """
-    from src.memory.mem0_engine import get_mem0_engine
-
-    try:
-        await run_in_threadpool(get_mem0_engine().delete, id)
-    except Exception as e:  # noqa: BLE001
-        logger.warning("mem0 undo-capture failed for id=%s: %s", id, e, exc_info=True)
-        raise APIError(
-            "E_INTERNAL",
-            f"failed to delete captured memory {id}",
-            source="memory",
-            http_status=500,
-        )
-    return success_envelope({"deleted": True, "id": id}, request=request, source="memory")
 
 
 @router.post("/memory/search", dependencies=[Depends(verify_cf_access)])

@@ -12,7 +12,6 @@ import { useQueryClient } from '@tanstack/react-query'
 
 import { useMailApi } from './useMailApi'
 import { useEventsStatusStore } from '@shared/state/eventsStatus'
-import { toastError, toastInfo, useToastStore } from '@shared/state/toast'
 import type { SseEvent } from '@shared/api/types'
 
 const DEBOUNCE_MS = 200
@@ -90,31 +89,6 @@ export function useEventBridge(): void {
         debounceInvalidate('["emails"]', () =>
           queryClient.invalidateQueries({ queryKey: ['emails'] })
         )
-        return
-      }
-      // M1d — mem0 auto-capture: turn 完成 + 抽到持久记忆 → 后端 safe_publish('memory.captured',
-      // {captured:[{id,memory,event}]}). 不刷任何 query (记忆是独立 mem0 store, 不影响邮件/会话列表),
-      // 只对每条抽取弹一个 success toast 带「撤销」action → 点击 DELETE /chat/memory/captured?id=.
-      // flag MAILAGENT_MEM0_CAPTURE 默认关 → 后端不 publish → 此分支永不触发 (字节级无行为变化).
-      if (t === 'memory.captured') {
-        const captured =
-          (ev.data?.captured as Array<{ id: string; memory: string }> | undefined) ?? []
-        for (const item of captured) {
-          if (!item?.id || !item?.memory) continue
-          useToastStore.getState().push({
-            variant: 'success',
-            title: `已记住：${item.memory}`,
-            ttlMs: 8000,
-            action: {
-              label: '撤销',
-              onClick: () =>
-                void mailApi.chat
-                  .undoCapturedMemory(item.id)
-                  .then(() => toastInfo('已撤销该记忆'))
-                  .catch(() => toastError('撤销失败'))
-            }
-          })
-        }
         return
       }
       // outbox 派发完成 → Notion / Mail.app 状态可能变 (但 SQLite intent 已写过,

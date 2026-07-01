@@ -36,8 +36,9 @@ def _skill(
 # ---------------------------------------------------------------------------
 # 文档投影
 # ---------------------------------------------------------------------------
-# MEMORY 投影（memory_doc_projection）随 M5b agent_memory_kv 退役删除 —— MEMORY content
-# 现恒空（src/api/routers/agent.py:_memory_projection 无条件返 ''），不再有 markdown-头投影。
+# 无 MEMORY 投影测试：MEMORY 不再是投影。task 07-01（Hermes 有界记忆）起 memory.md 是
+# agent_config.db 的可编辑 stored doc（agent.py 经 get_profile_doc(MEMORY_DOC_NAME) →
+# _memory_doc_dict 读，带字符预算），不再有 markdown-头 memory_doc_projection 函数可测。
 
 
 def test_skills_projection_lists_skills_sorted():

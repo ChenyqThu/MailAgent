@@ -250,6 +250,7 @@ class _ChatConfigStub:
     llm_model = "claude-sonnet-4-6"
     user_md_compile_enabled = False
     standing_docs_editor_enabled = True
+    memory_md_budget_chars = 5000
 
 
 def _config_client(
@@ -381,6 +382,30 @@ def test_chat_config_memory_md_empty_when_retrieval_on_but_no_memory(
         data = c.get("/api/chat/config").json()["data"]
     assert data["memorySummary"] == ""
     assert data["memorySummaryMeta"]["retired"] is True
+
+
+def test_chat_config_memory_md_clamped_to_budget_on_read(
+    monkeypatch: pytest.MonkeyPatch, tmp_path, fresh_agent_cfg
+) -> None:
+    """task 07-01 步5（codex 步3 LOW）— 读侧 belt-and-suspenders：memory.md 超当前 budget
+    （如用户调低 budget 后 rollback 到旧大版本）→ 注入前 clamp，memorySummary ≤ budget + truncated。"""
+    from src.agent_config.store import MEMORY_DOC_NAME
+
+    # 存进 store 的 memory.md 远超 budget（模拟 rollback 到旧大版本 / 调低 budget 前的内容）。
+    mem = "# MEMORY\n" + "".join(f"- durable fact number {i}\n" for i in range(200))
+    fresh_agent_cfg.set_profile_doc(MEMORY_DOC_NAME, mem, updated_by="mem0")
+    stub = _ChatConfigStub()
+    stub.memory_md_budget_chars = 120  # 远小于 mem 长度，强制读侧截断
+    env = tmp_path / ".env"
+    env.write_text("MAILAGENT_MEM0_RETRIEVAL=true\n")
+    with _config_client(monkeypatch, stub, env_file=str(env)) as c:
+        data = c.get("/api/chat/config").json()["data"]
+    assert len(data["memorySummary"]) <= 120  # 恒注入 ≤ 当前预算
+    assert len(data["memorySummary"]) < len(mem.strip())  # 确实截断了
+    meta = data["memorySummaryMeta"]
+    assert meta["truncated"] is True
+    assert meta["chars"] == len(data["memorySummary"])
+    assert meta["retired"] is False
 
 
 def test_chat_config_advertised_skills_fail_soft(monkeypatch: pytest.MonkeyPatch) -> None:
