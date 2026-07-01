@@ -152,6 +152,10 @@ def resolve(db_path: str, ack_token: str, choice: str) -> Optional[PendingAck]:
 
     ``DELETE ... RETURNING`` 原子 pop：并发同 token 只有一个调用拿到行（另一个空），
     杜绝双执行。过期 / choice 不在该 envelope options → 返 None（已消费的不复活）。
+
+    ⚠️ **有意「先消费后校验」**：DELETE 无条件 pop 行，再验 expiry/choice。坏 choice 也
+    烧掉 token（anti-replay 硬化：不让攻击者拿一个 live token 反复探 choice）。合法路径永不
+    命中——登记的 ``choices`` 恰是发给 fork 的 wire options，用户点击必在集合内。
     """
     if not ack_token or not choice:
         return None

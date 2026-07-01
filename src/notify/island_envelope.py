@@ -97,7 +97,13 @@ def deterministic_envelope_id(session_key: str, event_type: str) -> str:
 def deterministic_intervention_id(
     session_key: str, event_type: str, metadata: Dict[str, str]
 ) -> str:
-    """对齐 ping-island fork stableID: ``mail:{resolvedSessionID}:{event_type}``."""
+    """对齐 ping-island fork stableID: ``mail:{resolvedSessionID}:{event_type}``.
+
+    🔴 mail metadata（``mailagent.*`` 命名空间）**有意不设** ``session_id`` / ``thread_id``，
+    故 resolvedSessionID 恒走 ``session_key`` 去前缀分支（= ``email:{internal_id}``）。若日后
+    给 mail metadata 加了这两个 key，intervention.id 会改派生基准而 envelope_id（只用
+    session_key+event_type）不变、两者漂移 —— 且会破坏 fork stableID 匹配。改前先想清楚。
+    """
     resolved = (
         metadata.get("session_id")
         or metadata.get("thread_id")

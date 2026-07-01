@@ -50,7 +50,12 @@ def test_ack_routes_mail_choice_to_handle_response(ack_client, monkeypatch):
     assert r.status_code == 200
     body = r.json()
     assert body["ok"] is True and body["kind"] == "mail"
-    # handle_response 收到合成 BridgeResponse + 存储 metadata
+    # handle_response 现在是 fire-and-forget 后台 task (不阻塞响应), 轮询等它跑完
+    import time
+    for _ in range(100):
+        if calls:
+            break
+        time.sleep(0.02)
     assert len(calls) == 1
     assert calls[0][0] == {"decision": {"answer": {"choice": "mark_done"}}}
     assert calls[0][1]["mailagent.internalId"] == "53675"

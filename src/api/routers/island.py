@@ -14,16 +14,28 @@ unix socket 发给 ping-island（不出网、不进 Notion/远程 API），对�
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
 from src.api.deps import get_settings
 
 log = logging.getLogger("mailagent.api.island")
 
 router = APIRouter(prefix="/api/island", tags=["island"])
+
+# fire-and-forget 后台 handler task 的强引用集 (asyncio loop 只弱引用 task, 无强引用
+# 的 pending task 可能被 GC 中途回收 —— 同 island_dispatch._bg_tasks 手法)。
+_bg_tasks: set = set()
+
+
+def _schedule_bg(coro) -> None:
+    task = asyncio.create_task(coro)
+    _bg_tasks.add(task)
+    task.add_done_callback(_bg_tasks.discard)
 
 
 class IslandAckBody(BaseModel):
@@ -45,7 +57,11 @@ async def island_ack(body: IslandAckBody, settings=Depends(get_settings)) -> dic
     from src.notify import island_response
 
     db_path = settings.sync_store_db_path
-    pending = ack_registry.resolve(db_path, body.ack_token, body.choice)
+    # resolve 是同步 sqlite (busy_timeout 30s), 放线程池避免阻塞 serve-api event loop
+    # (mail-sync 持写锁时 resolve 可能等 → 不能卡住整个 serve-api / chat SSE 代理)。
+    pending = await run_in_threadpool(
+        ack_registry.resolve, db_path, body.ack_token, body.choice
+    )
     if pending is None:
         # 无效 / 过期 / choice 不匹配 —— 不泄露具体原因
         raise HTTPException(status_code=404, detail="no live pending for ack")
@@ -53,8 +69,12 @@ async def island_ack(body: IslandAckBody, settings=Depends(get_settings)) -> dic
     if pending.kind == "mail":
         # 复用现有 17 handler: 合成 BridgeResponse shape + 存储的 envelope metadata
         synthetic = {"decision": {"answer": {"choice": body.choice}}}
-        await island_response.handle_response(synthetic, pending.metadata)
-        log.info("[island-ack] mail choice=%s internal_id=%s handled",
+        # fire-and-forget: handle_response 跑真实 CLI (create_draft 60s / create-task 90s),
+        # 不 await —— ① 保持 fork POST 的 fire-and-forget 语义 (fork URLSession 5s 超时不等
+        # 结果); ② 防 fork 断连时 Starlette 取消 handler 致业务半执行。真实结果由 P0-4
+        # ActionAcked envelope 异步回流 fork。
+        _schedule_bg(island_response.handle_response(synthetic, pending.metadata))
+        log.info("[island-ack] mail choice=%s internal_id=%s dispatched (bg)",
                  body.choice, pending.internal_id)
         return {"ok": True, "kind": "mail", "choice": body.choice}
 
