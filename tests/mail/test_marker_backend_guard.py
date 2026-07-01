@@ -66,6 +66,16 @@ def test_reset_on_first_guard_run_with_backend_switch(store: SyncStore):
     assert store.get_state("marker_backend") == "davmail"
 
 
+def test_adopt_lone_baseline_on_empty_table(store: SyncStore):
+    # codex 复审 NEW-ISSUE：全新 davmail 首跑 baseline 了 UIDNEXT 但零邮件入库（停机期无新邮件），
+    # 之后部署 guard。email_metadata 全空 → 无切换证据（从别的 backend 切来必留其行）→ adopt、
+    # 不 reset（reset 会误跳过停机期间到达的邮件）。
+    store.set_last_max_row_id(5000)  # davmail UIDNEXT baseline，email_metadata 全空
+    assert store.reconcile_marker_backend("davmail") == "adopt"
+    assert store.get_last_max_row_id() == 5000  # 不清零
+    assert store.get_state("marker_backend") == "davmail"
+
+
 def test_noop_same_backend(store: SyncStore):
     store.set_last_max_row_id(127743)
     store.set_state("marker_backend", "applescript")

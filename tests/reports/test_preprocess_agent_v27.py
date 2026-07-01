@@ -123,3 +123,12 @@ def test_resolve_agent_explicit_empty_docs_preserved(db_path):
     store.update_agent(PREPROCESS_AGENT_ID, wire.config_patch_to_db({"context_docs": []}))
     cfg = wire.resolve_agent(store.get_agent(PREPROCESS_AGENT_ID))
     assert cfg["context_docs"] == []
+
+
+def test_resolve_agent_non_preprocess_forces_empty_docs(db_path):
+    # codex 复审：非 preprocess（report/search）行即使 context_docs_json 有残留值也一律 []。
+    store = ReportStore(db_path)
+    store.update_agent("email_search_agent", {"context_docs_json": '["soul"]'})
+    cfg = wire.resolve_agent(store.get_agent("email_search_agent"))
+    assert cfg["type"] == "search"
+    assert cfg["context_docs"] == []

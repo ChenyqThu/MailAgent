@@ -107,11 +107,11 @@ function _toAgentConfig(row: AgentRow): ReportAgentConfig {
     body_full_priorities: _parseJson<string[]>(row.body_full_priorities, []),
     // v27 preprocess：文档勾选 JSON 字符串。NULL/缺列/垃圾对 preprocess 兜底运行时默认
     // ['soul','user']（与 wire.resolve_agent / get_preprocess_config 一致，codex MED）；
-    // '[]'（用户显式取消全部）保留空；其余类型一律 []。
+    // '[]'（用户显式取消全部）保留空；非 preprocess 一律 []（忽略残留列值，codex 复审）。
     context_docs:
       row.type === 'preprocess'
         ? (_parseJson<string[] | null>(row.context_docs_json, null) ?? ['soul', 'user'])
-        : _parseJson<string[]>(row.context_docs_json, []),
+        : [],
     updated_at: row.updated_at ?? null
   }
 }

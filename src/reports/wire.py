@@ -66,10 +66,11 @@ def resolve_agent(agent: Dict[str, Any]) -> Dict[str, Any]:
             _parsed_docs = None
     except (json.JSONDecodeError, TypeError):
         _parsed_docs = None
-    if _parsed_docs is None:
-        context_docs = ["soul", "user"] if agent_type == "preprocess" else []
+    if agent_type == "preprocess":
+        context_docs = _parsed_docs if _parsed_docs is not None else ["soul", "user"]
     else:
-        context_docs = _parsed_docs
+        # 非 preprocess（report/search）不用此字段 → 一律 []，忽略任何残留列值（codex 复审 MED）。
+        context_docs = []
     # tools_json → list（DB 存 JSON 串）。NULL/非法：type='search' 回退默认搜索工具,
     # 其余（report）回退空 list（report agent 历史上 tools_json 全 NULL, 不破坏其投影）。
     _tools_default = ["email_search_fulltext"] if agent_type == "search" else []

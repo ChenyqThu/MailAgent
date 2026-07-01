@@ -1605,18 +1605,24 @@ class SyncStore:
         if stored_marker <= 0:
             return 'first'
         if marker_backend is None:
-            # 本 guard 首次部署遇到既有 marker（升级前写的、无归属记录）。**不能盲目认领**
-            # 当前 backend：若「升级拿到本 fix + 同时切 backend」发生在同一步（reporter 的真实
-            # 场景），盲目 adopt 会把 applescript 的 marker 当 davmail 的用 → 重演 silent-loss/
-            # deadlock。改按 email_metadata.backend_origin 推断真实归属：当前 backend 有既有行
-            # → marker 可信属它 → adopt；当前 backend 零行（刚切过来还没跑）→ marker 是别的
-            # backend 写的 → reset 到 first-run baseline（codex HIGH）。
+            # 本 guard 首次部署遇到既有 marker（升级前写的、无归属记录）。**不能盲目认领**当前
+            # backend（reporter 场景：升级拿到 fix + 同时切 davmail，盲目 adopt 会把 applescript 的
+            # marker 当 davmail 用 → 重演 silent-loss/deadlock）。按 email_metadata 推断归属
+            # （codex HIGH + 复审 NEW-ISSUE）：
+            #   ① 当前 backend 有既有行 → marker 可信属它 → adopt；
+            #   ② 当前 backend 零行但有别的 backend 的行 → 检测到切换 → reset（marker 属外来 id 空间）；
+            #   ③ email_metadata 全空 → marker 是孤立 baseline（从别的 backend 切来必留其行，空表即
+            #      无切换证据；如全新 davmail 首跑 baseline 了 UIDNEXT 但零邮件入库）→ adopt，不 reset
+            #      （否则会误跳过停机期间到达的邮件，codex 复审 NEW-ISSUE）。
             if self._has_rows_for_backend(current_backend):
                 self.set_state('marker_backend', current_backend)
                 return 'adopt'
-            self.set_last_max_row_id(0)
+            if self._has_any_email_rows():
+                self.set_last_max_row_id(0)
+                self.set_state('marker_backend', current_backend)
+                return 'reset'
             self.set_state('marker_backend', current_backend)
-            return 'reset'
+            return 'adopt'
         if marker_backend == current_backend:
             return 'noop'
         self.set_last_max_row_id(0)
@@ -1638,6 +1644,20 @@ class SyncStore:
                 return row is not None
         except sqlite3.Error as e:
             logger.warning(f"[marker-guard] backend_origin 探测失败: {e}; 保守视作有行(adopt)")
+            return True
+
+    def _has_any_email_rows(self) -> bool:
+        """email_metadata 是否有任何行（区分「空表孤立 baseline」与「切换」，codex 复审 NEW-ISSUE）。
+
+        探测失败 → 保守返回 True（配合上层：当前 backend 零行 + 探测失败 → reset；但探测失败
+        近乎不可能，且真·空表下 _has_rows_for_backend 也会走同一 conn，实践中不触发）。
+        """
+        try:
+            with self._connection() as conn:
+                row = conn.execute("SELECT 1 FROM email_metadata LIMIT 1").fetchone()
+                return row is not None
+        except sqlite3.Error as e:
+            logger.warning(f"[marker-guard] email_metadata 空表探测失败: {e}; 保守视作有行")
             return True
 
     def get_last_sync_time(self) -> Optional[str]:
