@@ -51,7 +51,7 @@ export function createSelfMountTools(
   domain: MailAgentDomainClient,
   collector: GatewayToolAuditCollector = [],
   guard: ApprovalGuard,
-  opts: { a2uiEnabled?: boolean; approvalMode?: GatewayApprovalMode } = {}
+  opts: { a2uiEnabled?: boolean; approvalMode?: GatewayApprovalMode; oneShot?: boolean } = {}
 ): Record<string, Tool> {
   const makeWrite = <I>(toolOpts: {
     name: string
@@ -65,7 +65,12 @@ export function createSelfMountTools(
     ) => Promise<unknown>
   }): Tool =>
     auditedWriteTool(
-      { ...toolOpts, a2uiEnabled: opts.a2uiEnabled, approvalMode: opts.approvalMode },
+      {
+        ...toolOpts,
+        a2uiEnabled: opts.a2uiEnabled,
+        approvalMode: opts.approvalMode,
+        oneShot: opts.oneShot // Part B — one-shot claim across island + renderer resume
+      },
       collector,
       guard
     )

@@ -99,6 +99,13 @@ export interface PreparedChatRun {
   auditEntries: GatewayToolAuditEntry[]
   /** Tool names exposed this run (for the AG-UI STATE_SNAPSHOT capabilities). */
   toolNames: string[]
+  /** Part B (island resume) — the ORIGINAL request body, kept verbatim so a paused approval can be
+   *  stashed + re-run server-side with the same model / thinking / contextSnapshot / system /
+   *  approvalMode. Only read by makePersistOnFinish when the turn pauses at an approval gate AND
+   *  cfg.islandAgentEnabled; otherwise inert. Optional so pre-Part-B test helpers that hand-build a
+   *  PreparedChatRun stay valid — prepareChatRun always sets it, and maybeStashAndAnnounceApproval
+   *  guards on it. */
+  originalBody?: Record<string, unknown>
 }
 
 export type PrepareChatOutcome =
@@ -237,8 +244,83 @@ export async function prepareChatRun(
       sessionId,
       modelId,
       auditEntries,
-      toolNames: hasTools ? Object.keys(tools as ToolSet) : []
+      toolNames: hasTools ? Object.keys(tools as ToolSet) : [],
+      originalBody: body
     }
+  }
+}
+
+/** Part B (island resume) — the paused tool part shape we narrow to when building a stash input. Same
+ *  structural view as responseMessageAwaitsApproval / interruptMapper (avoid importing ai's generic
+ *  ToolUIPart): a `tool-<name>` part in `approval-requested` state carrying an approval id + input. */
+interface PausedApprovalPart {
+  type: string
+  toolCallId?: string
+  state?: string
+  input?: unknown
+  approval?: { id?: string }
+}
+
+/**
+ * Extract the pieces the stash needs from the FIRST approval-requested part of a paused assistant
+ * message: the toolCallId, the approval id (for applyApprovalResponseToMessages), the tool name
+ * (derived from the `tool-<name>` part type), and the model-proposed input (a short preview for the
+ * island card). Returns null when no approval-request part is present (not a paused turn). Pure —
+ * exported so it is directly unit-testable.
+ */
+export function extractApprovalStashInput(responseMessage: MailAgentUIMessage): {
+  toolCallId: string
+  approvalId: string
+  toolName: string
+  input: unknown
+} | null {
+  const parts = (responseMessage as { parts?: unknown }).parts
+  if (!Array.isArray(parts)) return null
+  for (const part of parts) {
+    if (part == null || typeof part !== 'object') continue
+    const p = part as PausedApprovalPart
+    if (
+      typeof p.type === 'string' &&
+      p.type.startsWith('tool-') &&
+      p.state === 'approval-requested' &&
+      typeof p.toolCallId === 'string' &&
+      p.toolCallId.length > 0 &&
+      p.approval != null &&
+      typeof p.approval.id === 'string' &&
+      p.approval.id.length > 0
+    ) {
+      return {
+        toolCallId: p.toolCallId,
+        approvalId: p.approval.id,
+        toolName: p.type.slice('tool-'.length),
+        input: p.input
+      }
+    }
+  }
+  return null
+}
+
+/** A compact one-line preview of a tool input for the island approval card (the model-proposed
+ *  action). Prefers common human-facing fields (subject / body / recipients), falls back to a clipped
+ *  JSON. Never throws; caps length. */
+export function approvalInputPreview(toolName: string, input: unknown): string {
+  const clip = (s: string, n = 180): string => {
+    const one = s.replace(/\s+/g, ' ').trim()
+    return one.length > n ? `${one.slice(0, n)}…` : one
+  }
+  if (input && typeof input === 'object' && !Array.isArray(input)) {
+    const o = input as Record<string, unknown>
+    const pick = (k: string): string => (typeof o[k] === 'string' ? (o[k] as string) : '')
+    const to = pick('to') || pick('recipients')
+    const subject = pick('subject')
+    const body = pick('body_markdown') || pick('body') || pick('content')
+    const bits = [to && `→ ${to}`, subject && `「${subject}」`, body].filter(Boolean).join(' ')
+    if (bits) return clip(`${toolName}: ${bits}`)
+  }
+  try {
+    return clip(`${toolName}: ${JSON.stringify(input)}`)
+  } catch {
+    return toolName
   }
 }
 
@@ -295,6 +377,43 @@ export function redactApprovalRequestedParts(
 }
 
 /**
+ * Part B (island resume) — on a paused approval, stash the run for server-side resume + fire-and-forget
+ * announce it to the island. Guarded so flag-off is inert: cfg.islandAgentEnabled AND cfg.approvalStash
+ * must both be set (the lifecycle only injects them when MAILAGENT_ISLAND_AGENT_ENABLED is on). The
+ * announce is best-effort (never awaited, self-contained try/catch) so it can't block or break the
+ * already-streamed paused turn.
+ */
+function maybeStashAndAnnounceApproval(
+  cfg: AiGatewayConfig,
+  run: PreparedChatRun,
+  responseMessage: MailAgentUIMessage
+): void {
+  if (!cfg.islandAgentEnabled || !cfg.approvalStash || !run.originalBody) return
+  try {
+    const info = extractApprovalStashInput(responseMessage)
+    if (!info) return
+    const resumeToken = cfg.approvalStash.stash({
+      toolCallId: info.toolCallId,
+      approvalId: info.approvalId,
+      toolName: info.toolName,
+      sessionId: run.sessionId,
+      body: run.originalBody,
+      responseMessage
+    })
+    cfg.announceApprovalToIsland?.({
+      sessionId: run.sessionId,
+      toolCallId: info.toolCallId,
+      toolName: info.toolName,
+      risk: '', // the lifecycle enriches risk from ApprovalGuard.peek (it owns the guard)
+      inputPreview: approvalInputPreview(info.toolName, info.input),
+      resumeToken
+    })
+  } catch (err) {
+    console.error('[ai-gateway] island approval stash/announce failed (turn paused OK)', err)
+  }
+}
+
+/**
  * Build the onFinish callback that persists a finished turn (ai_chat.db dual-write) — the SAME
  * persistence both endpoints use (the AG-UI mirror is a true mirror, including audit). Best-effort:
  * a write failure logs and never breaks the already-streamed reply. Aborted turns are not persisted.
@@ -329,6 +448,14 @@ export function makePersistOnFinish(
           console.error('[ai-gateway] persistPausedAssistant failed (pause still streamed OK)', err)
         }
       }
+      // Part B (harness 上岛) — when island agent is on, a paused approval is ALSO stashed for
+      // server-side (island-driven) resume + announced to the island. Runs AFTER the R2-3 redacted
+      // persist above: both must happen on a pause (history shows what the model said; the island can
+      // approve), each self-contained (its own try/catch) so one failing never blocks the other. The
+      // island /decide resume re-enters persistence through the SAME makePersistOnFinish → persistTurn
+      // upsert (same UIMessage id), so the redacted row is replaced, never duplicated. flag-off
+      // (default) → both cfg hooks are undefined → this call is inert (byte-identical early return).
+      maybeStashAndAnnounceApproval(cfg, run, responseMessage as MailAgentUIMessage)
       return
     }
     const usage = await Promise.resolve(run.result.usage).catch(() => undefined)

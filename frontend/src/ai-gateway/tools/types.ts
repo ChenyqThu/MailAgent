@@ -215,6 +215,14 @@ export function auditedWriteTool<I>(
      *  edit-tier still asks. The approval record is registered regardless (execute's verify +
      *  the audit need it), so the only change is whether needsApproval returns true. */
     approvalMode?: GatewayApprovalMode
+    /** Part B (harness 上岛) — one-shot execution claim. When true, execute calls guard.consume()
+     *  right after verify so an approval executes AT MOST ONCE across BOTH resume paths (island
+     *  /api/ai/approval/decide and renderer /api/ai/chat): whichever lands first consumes, the second
+     *  throws E_APPROVAL_USED → the write never runs twice. Enabled by the lifecycle only when
+     *  MAILAGENT_ISLAND_AGENT_ENABLED is on (a paused approval can be resumed from two places); off
+     *  (default) → no consume, byte-identical to the pre-Part-B write path (the send tool has always
+     *  consumed regardless — this extends the same one-shot to preview/edit writes). */
+    oneShot?: boolean
     run: (
       input: I,
       ctx: { userEdited: boolean; signal: AbortSignal | undefined }
@@ -263,6 +271,10 @@ export function auditedWriteTool<I>(
         // the card, else the verified input). The ai@6 history input stays `input` (signature
         // intact); the domain decides what actually runs.
         effectiveInput = v.effectiveInput
+        // Part B — one-shot claim so the same approval never double-executes across the island
+        // /decide resume and the renderer /api/ai/chat resume. Fires E_APPROVAL_USED on the second
+        // (caught below → audited 'rejected', no write). Off (default) → skipped, byte-identical.
+        if (opts.oneShot) guard.consume(toolCallId)
       } catch (e) {
         const { code, message } = normalizeToolError(e)
         collector.push({

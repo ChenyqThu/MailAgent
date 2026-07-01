@@ -21,6 +21,22 @@ import type { ToolApprovalRequestPayload } from './agui/interruptMapper'
 // 🔴 type-only — fully erased; the systemPrompt module (which imports the custom_api prompt
 // assembly) is never pulled into the main bundle when the gateway is off (Phase 02 invariant).
 import type { GatewaySystemPromptConfig } from './systemPrompt'
+// 🔴 type-only — Part B island agent HITL. The stash module is only imported at runtime by the
+// lifecycle (which constructs it) + approvalResume; config.ts stays type-only so flag-off keeps zero
+// runtime pull of the Part B chunk.
+import type { ApprovalRunStash } from './approvalStash'
+
+/** Part B — what makePersistOnFinish tells the lifecycle when a turn pauses at an island-eligible
+ *  approval gate (announce → serve-api). NO token/secret in here beyond the resumeToken, which is the
+ *  gateway-minted capability the island round-trip must echo back on /decide. */
+export interface IslandApprovalAnnounce {
+  sessionId: number | null
+  toolCallId: string
+  toolName: string
+  risk: string
+  inputPreview: string
+  resumeToken: string
+}
 
 /** Phase 05 — what the AG-UI mirror passes the approval-request resolver: the accumulated tool call
  *  + the ai@6 approval id/signature. The Electron wrapper looks toolCallId up in the ApprovalGuard
@@ -180,4 +196,26 @@ export interface AiGatewayConfig {
     redactedMessage: MailAgentUIMessage,
     modelId: string
   ) => void
+
+  // ── Part B (harness agent 上岛) — full-offline island approval resume ────────────────────────────
+  /** MAILAGENT_ISLAND_AGENT_ENABLED. Gates the whole Part B path: makePersistOnFinish only stashes +
+   *  announces a paused approval when true; POST /api/ai/approval/decide 404s when false; the write
+   *  tools become one-shot (see below). Off (default) → renderer-driven resume only, byte-identical. */
+  islandAgentEnabled?: boolean
+  /** Part B — the per-gateway stash of paused approval runs (approvalStash.ts). Injected by the
+   *  lifecycle (constructed once, like the ApprovalGuard). makePersistOnFinish stashes into it when a
+   *  turn pauses awaiting approval; POST /api/ai/approval/decide claims + resumes from it. Omitted →
+   *  no server-side resume (renderer path only). */
+  approvalStash?: ApprovalRunStash
+  /** Part B — fire-and-forget announce a paused approval to the island (lifecycle → serve-api
+   *  /api/island/agent/announce). Called by makePersistOnFinish AFTER stashing, with the resumeToken
+   *  the stash minted. 🔴 MUST be fire-and-forget (returns void, never awaited) so a slow/failed
+   *  announce can't block the already-streamed (paused) turn. Omitted → no island announce. */
+  announceApprovalToIsland?: (info: IslandApprovalAnnounce) => void
+  /** Part B — read whether an approval was already consumed (ApprovalGuard.peek().usedAt), so
+   *  /api/ai/approval/decide can short-circuit as "already handled" when the RENDERER won the race
+   *  (in-app approve executed first) instead of re-running + double-persisting. The lifecycle
+   *  implements it as `guard.peek(toolCallId)?.usedAt != null`. Omitted → the resume runs regardless
+   *  (the write-tool one-shot consume still prevents a double write). */
+  isApprovalConsumed?: (toolCallId: string) => boolean
 }

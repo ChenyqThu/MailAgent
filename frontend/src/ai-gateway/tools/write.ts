@@ -60,7 +60,7 @@ export function createWriteTools(
   domain: MailAgentDomainClient,
   collector: GatewayToolAuditCollector = [],
   guard: ApprovalGuard,
-  opts: { a2uiEnabled?: boolean; approvalMode?: GatewayApprovalMode } = {}
+  opts: { a2uiEnabled?: boolean; approvalMode?: GatewayApprovalMode; oneShot?: boolean } = {}
 ): Record<string, Tool> {
   const make = <I>(toolOpts: {
     name: string
@@ -76,7 +76,13 @@ export function createWriteTools(
     ) => Promise<unknown>
   }): Tool =>
     auditedWriteTool(
-      { ...toolOpts, a2uiEnabled: opts.a2uiEnabled, approvalMode: opts.approvalMode },
+      {
+        ...toolOpts,
+        a2uiEnabled: opts.a2uiEnabled,
+        approvalMode: opts.approvalMode,
+        // Part B — one-shot claim across island + renderer resume (see auditedWriteTool.oneShot).
+        oneShot: opts.oneShot
+      },
       collector,
       guard
     )

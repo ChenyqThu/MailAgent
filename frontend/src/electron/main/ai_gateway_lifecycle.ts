@@ -21,10 +21,15 @@
 import { app } from 'electron'
 
 import { startAiGatewayServer, type AiGatewayHandle } from '../../ai-gateway/server'
-import { resolveAiGatewayPort, type PersistTurnInput } from '../../ai-gateway/config'
+import {
+  resolveAiGatewayPort,
+  type IslandApprovalAnnounce,
+  type PersistTurnInput
+} from '../../ai-gateway/config'
 import { MailAgentDomainClient } from '../../ai-gateway/python/domainClient'
 import { buildGatewayTools } from '../../ai-gateway/tools'
 import { ApprovalGuard } from '../../ai-gateway/security/approval'
+import { ApprovalRunStash, DEFAULT_STASH_TTL_MS } from '../../ai-gateway/approvalStash'
 import { buildToolA2UIPayload } from '../../shared/assistant/tools/a2ui'
 import { extractTextFromUIMessage } from '@shared/assistant/uiMessage'
 import {
@@ -250,7 +255,21 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
   // the resume call, so a signed approval would fail missing-signature on the second POST.
   // The domain ApprovalGuard (toolCallId + input hash + expiry, surviving across the two
   // HTTP calls) plus the send tool's Python-side double guard already gate every write.
-  const approvalGuard = new ApprovalGuard()
+  //
+  // Part B (harness 上岛, MAILAGENT_ISLAND_AGENT_ENABLED) — when the island agent path is on, an
+  // approval can wait on the island (user off the app) → extend the guard TTL to the island ack
+  // window (30 min, DEFAULT_STASH_TTL_MS) so verify()/consume() don't expire before the user comes
+  // back to click. Off (default) → the guard keeps its 5-min TTL (byte-identical).
+  const islandAgentEnabled = envBool('MAILAGENT_ISLAND_AGENT_ENABLED', false)
+  const approvalGuard = islandAgentEnabled
+    ? new ApprovalGuard({ ttlMs: DEFAULT_STASH_TTL_MS })
+    : new ApprovalGuard()
+  // Part B — per-gateway stash of paused approval runs (server-side resume source). Only when the
+  // island agent path is on; off → undefined → chatRun's stash/announce block is inert + /decide 404s.
+  const approvalStash = islandAgentEnabled ? new ApprovalRunStash() : undefined
+  // Set after the server listens (chicken-and-egg: the announce needs the gateway's own port, known
+  // only post-listen; a paused approval fires well after startup so this is populated by then).
+  let gatewayPort = 0
   // Phase 04a — MAILAGENT_A2UI_TOOL_CARDS gates the rich tool cards. Backend side it (a) stamps
   // the A2UI render payload into the write-tool audit (ui_payload_json) and (b) is the toggle
   // the renderer mirrors (per-flag vite define) to mount the cards. Off → byte-identical to 03b.
@@ -298,6 +317,39 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
   if (skillGatingEnabled) {
     await getSystemPromptConfig(apiBase, getLocalApiToken())
   }
+
+  // Part B (harness 上岛) — fire-and-forget announce a paused approval to the island via serve-api
+  // /api/island/agent/announce. Enriches `risk` from the ApprovalGuard (main owns it) and stamps THIS
+  // gateway's port so serve-api's ack → /api/ai/approval/decide callback reaches us. Local-token
+  // authenticated (gateway → serve-api loopback). Never awaited (best-effort; a slow/failed announce
+  // can't block the already-paused turn). Skips unsaved sessions (sessionId null → the user is active
+  // in-app, the renderer resumes; no island card needed).
+  const announceApprovalToIsland = (info: IslandApprovalAnnounce): void => {
+    if (info.sessionId == null) return
+    const rec = approvalGuard.peek(info.toolCallId)
+    const payload = {
+      kind: 'approval',
+      sessionId: info.sessionId,
+      toolName: info.toolName,
+      inputPreview: info.inputPreview,
+      risk: rec?.risk ?? info.risk,
+      toolCallId: info.toolCallId,
+      resumeToken: info.resumeToken,
+      gatewayPort
+    }
+    const localToken = getLocalApiToken()
+    void fetch(`http://127.0.0.1:${resolveApiPort()}/api/island/agent/announce`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(localToken ? { 'X-MailAgent-Local-Token': localToken } : {})
+      },
+      body: JSON.stringify(payload)
+    }).catch((err) => {
+      console.error('[ai-gateway] island approval announce failed (turn paused OK)', err)
+    })
+  }
+
   const handle = await startAiGatewayServer({
     port: resolveAiGatewayPort(),
     baseUrl: getLlmBaseUrl(),
@@ -458,7 +510,10 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
           // still works off the snapshot, range is read-only tools). null (cache empty / Python hiccup)
           // → fails open. SELF_MOUNT off → applySkillGating never called → ToolSet byte-identical.
           skillGatingEnabled,
-          advertisedSkills: _systemPromptCache?.value?.advertisedSkills ?? null
+          advertisedSkills: _systemPromptCache?.value?.advertisedSkills ?? null,
+          // Part B — make preview/edit writes one-shot when island agent is on, so an island-resumed
+          // approval and a renderer-resumed approval never double-execute. Off → byte-identical.
+          oneShotWrites: islandAgentEnabled
         },
         collector
       ),
@@ -476,9 +531,21 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     // dogfood-3 (follow-ups) — read the last completed turn (last user + last assistant message) for
     // dynamic next-question suggestions. Always wired; the route is per-turn best-effort (the renderer
     // POSTs after each completed turn, ai-sdk path only).
-    getFollowupContext: (sessionId) => getLastTurnTexts(sessionId)
+    getFollowupContext: (sessionId) => getLastTurnTexts(sessionId),
+    // Part B (harness 上岛, MAILAGENT_ISLAND_AGENT_ENABLED) — server-side island approval resume.
+    // All undefined when off (default) → chatRun's stash/announce block is inert + /api/ai/approval/
+    // decide 404s + write tools keep their pre-Part-B one-call verify, byte-identical.
+    islandAgentEnabled,
+    approvalStash,
+    announceApprovalToIsland: islandAgentEnabled ? announceApprovalToIsland : undefined,
+    // /decide idempotency vs a renderer that won the race: has THIS approval already been consumed
+    // (guard.consume set usedAt)? If so, resumeApprovalRun reports 'completed' without re-running.
+    isApprovalConsumed: islandAgentEnabled
+      ? (toolCallId: string) => approvalGuard.peek(toolCallId)?.usedAt != null
+      : undefined
   })
   _handle = handle
+  gatewayPort = handle.port // Part B — now the announce closure can stamp our port on /decide callbacks
   const healthy = await pollHealth(handle.port)
   console.log(
     `[ai-gateway] embedded gateway listening on http://127.0.0.1:${handle.port}` +

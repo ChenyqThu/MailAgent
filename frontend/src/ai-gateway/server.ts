@@ -40,6 +40,7 @@ import {
   SSE_HEADERS
 } from './httpUtil'
 import { handleAguiChat } from './agui/aguiRoute'
+import { resumeApprovalRun } from './approvalResume'
 
 const GATEWAY_VERSION = '0.2.0'
 
@@ -364,6 +365,53 @@ async function handleFollowups(
 }
 
 /**
+ * `POST /api/ai/approval/decide` — Part B (harness 上岛). The ISLAND approval callback lands here
+ * (serve-api → gateway, loopback): the gateway resumes a stashed paused approval SERVER-SIDE so a
+ * user fully off the app (renderer unmounted) can still approve on the island and have the tool run.
+ * Body `{ toolCallId, decision:'approve'|'reject', resumeToken }`. The resumeToken is the gateway-
+ * minted capability serve-api echoes back (approvalStash.claim rejects a wrong token). Registered
+ * unconditionally; cfg.islandAgentEnabled + cfg.approvalStash gate it (404 when off → byte-identical
+ * to pre-Part-B). Loopback-trusted like the other gateway endpoints; serve-api already validated the
+ * island ack_token capability upstream before calling here.
+ */
+async function handleApprovalDecide(
+  req: IncomingMessage,
+  res: ServerResponse,
+  cfg: AiGatewayConfig
+): Promise<void> {
+  if (!cfg.islandAgentEnabled || !cfg.approvalStash) {
+    writeJson(res, 404, { error: 'E_NOT_IMPLEMENTED', hint: 'island agent resume not enabled' })
+    return
+  }
+  const body = await readJsonBody(req)
+  const toolCallId = typeof body.toolCallId === 'string' ? body.toolCallId : ''
+  const resumeToken = typeof body.resumeToken === 'string' ? body.resumeToken : ''
+  const decision = body.decision === 'reject' ? 'reject' : 'approve'
+  if (!toolCallId || !resumeToken) {
+    writeJson(res, 400, { error: 'E_INVALID_ARG', hint: 'toolCallId + resumeToken required' })
+    return
+  }
+  // The resume drives a real write tool; the fork's ack POST is fire-and-forget (5s, doesn't read the
+  // body), and serve-api awaits us in a background task, so a long resume is fine. Abort if serve-api
+  // disconnects.
+  const controller = new AbortController()
+  req.on('close', () => controller.abort())
+  try {
+    const result = await resumeApprovalRun(
+      cfg,
+      { toolCallId, decision, resumeToken },
+      controller.signal
+    )
+    const status = result.status === 'not_found' ? 404 : 200
+    writeJson(res, status, result)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    console.error('[ai-gateway] /api/ai/approval/decide failed', err)
+    writeJson(res, 500, { ok: false, status: 'error', error: message })
+  }
+}
+
+/**
  * Create (but do not listen) the gateway HTTP server. Pure factory — all external
  * deps arrive via cfg, so the Electron main can embed it and the Node harness can
  * drive it directly.
@@ -427,6 +475,13 @@ export function createAiGatewayServer(cfg: AiGatewayConfig): Server {
     // Phase 04a — edit-tier approval side-channel (DraftReplyCard edits before approve).
     if (method === 'POST' && path === '/api/ai/approval/resolve') {
       void handleApprovalResolve(req, res, cfg)
+      return
+    }
+
+    // Part B (harness 上岛) — island approval callback → server-side resume. Registered
+    // unconditionally; cfg.islandAgentEnabled + cfg.approvalStash gate it (404 when off).
+    if (method === 'POST' && path === '/api/ai/approval/decide') {
+      void handleApprovalDecide(req, res, cfg)
       return
     }
 

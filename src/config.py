@@ -602,6 +602,16 @@ class Config(BaseSettings):
         default="dark", env="ISLAND_THEME",
         description="灵动岛 light/dark mode（envelope metadata 透传，Swift 端按此切 token）",
     )
+    # ---- 灵动岛 harness agent 上岛（Part B，默认关，完全离岛 gateway 服务端 resume）----
+    # 🔴 字段名 island_agent_enabled ≠ env MAILAGENT_ISLAND_AGENT_ENABLED → 必须 validation_alias
+    #    (pydantic v2 忽略 Field(env=)，见本类顶 model_config 注释)。默认关 → serve-api
+    #    /api/island/agent/announce 返 not-enabled、/ack kind=agent 分支不路由，与今日字节一致。
+    island_agent_enabled: bool = Field(
+        default=False, validation_alias="MAILAGENT_ISLAND_AGENT_ENABLED",
+        description="是否启用 harness agent(前端 chat)审批上灵动岛（Part B）。gated by ping_island_enabled；"
+                    "开时 AI SDK Gateway 需审批的写工具会把审批卡推上岛，岛上点批准经解耦 ack 通道触发"
+                    "gateway 服务端 resume（用户完全离开 app 也能执行）。默认关，fail-open。",
+    )
 
     # ---- 灵动岛 Phase 3 DailyDigest（每日巡检，默认关闭，gate by ping_island_enabled）----
     mailagent_daily_digest_enabled: bool = Field(

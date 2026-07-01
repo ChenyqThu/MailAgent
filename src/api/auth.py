@@ -242,3 +242,30 @@ async def verify_cf_access(request: Request) -> None:
         raise HTTPException(status_code=403, detail="email not allowed")
 
     request.state.user_email = email
+
+
+async def verify_local_token(request: Request) -> None:
+    """FastAPI dependency: **仅**本地 ephemeral token 腿（不接受 CF JWT）。
+
+    给 gateway → serve-api 的**同机 loopback** 端点用（Part B island agent announce）——
+    调用方是 Electron 主进程内嵌 gateway，持 ``MAILAGENT_LOCAL_API_TOKEN``（env 注入），
+    经 ``X-MailAgent-Local-Token`` header 携带。**不接受 CF JWT** → 远程 CF 用户无法推
+    agent 上岛卡（announce 是纯本地控制面）。
+
+    - AUTH_DISABLED（dev）→ 放行。
+    - 配了 ``_LOCAL_API_TOKEN``：header 必须 compare_digest 匹配，否则 403。
+    - 未配 token（裸 dev / 测试）→ 放行（loopback-trusted 兜底，与 gateway 其它 loopback
+      端点无 per-endpoint token 的姿态一致）。
+    """
+    if AUTH_DISABLED:
+        request.state.user_email = "dev@localhost"
+        return
+    if not _LOCAL_API_TOKEN:
+        # 未配 token：与 gateway loopback 端点同姿态（同机可信）→ 放行。
+        request.state.user_email = _resolve_allowed_email() or "local@127.0.0.1"
+        return
+    local_tok = request.headers.get(LOCAL_TOKEN_HEADER)
+    if local_tok and hmac.compare_digest(local_tok, _LOCAL_API_TOKEN):
+        request.state.user_email = _resolve_allowed_email() or "local@127.0.0.1"
+        return
+    raise HTTPException(status_code=403, detail="local token required")

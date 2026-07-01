@@ -61,6 +61,12 @@ export interface BuildGatewayToolsOpts {
    *  (no gating; the gated set is harmless read tools, write/send keep flag+approval); [] = all
    *  skills disabled → gate every mapped skill tool. Only consulted when skillGatingEnabled. */
   advertisedSkills?: readonly string[] | null
+  /** Part B (MAILAGENT_ISLAND_AGENT_ENABLED) — make the preview/edit write tools one-shot (execute
+   *  consumes the approval) so an island-resumed approval and a renderer-resumed approval can never
+   *  double-execute the same write. The blocking send has always consumed; this extends it to the
+   *  other writes + self-mount writes. Off (default) → no consume, byte-identical to the pre-Part-B
+   *  write path. */
+  oneShotWrites?: boolean
 }
 
 /** Names of the read tools exposed by the gateway (for tests / observability). */
@@ -96,7 +102,8 @@ export function buildGatewayTools(
       tools,
       createWriteTools(opts.domain, collector, opts.approvalGuard, {
         a2uiEnabled: opts.a2uiEnabled,
-        approvalMode: opts.approvalMode
+        approvalMode: opts.approvalMode,
+        oneShot: opts.oneShotWrites
       })
     )
     // phase-04b — the high-risk send tool layers on top of the write tools (it needs the same
@@ -122,7 +129,8 @@ export function buildGatewayTools(
       tools,
       createSelfMountTools(opts.domain, collector, opts.approvalGuard, {
         a2uiEnabled: opts.a2uiEnabled,
-        approvalMode: opts.approvalMode
+        approvalMode: opts.approvalMode,
+        oneShot: opts.oneShotWrites
       })
     )
   }

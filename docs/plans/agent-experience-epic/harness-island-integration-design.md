@@ -1,9 +1,19 @@
 # Harness Agent 上岛（Ping-Island）架构设计
 
-> **状态**：设计（Part B 交付物，本 session 不写实现代码）。
-> **前置**：Part A「解耦 ack 通道」已落地（`src/notify/island_ack.py` + serve-api `/api/island/ack` + ping-island fork 出站 POST），本设计**复用**它。
-> **目标硬需求**：用户**完全离开 app**（chat 面板没开）也能在灵动岛点批准并**真正执行工具**（服务端 resume）。
+> **状态**：**✅ 已实现（B2 完全离岛，2026-07-02）**。flag `MAILAGENT_ISLAND_AGENT_ENABLED`（默认关）。
+> 落地文件：Python `src/notify/island_agent.py` + serve-api `src/api/routers/island.py`（`/api/island/agent/announce` + `/ack` kind=agent 分支）；Node gateway `src/ai-gateway/approvalStash.ts` + `approvalResume.ts` + `server.ts`（`POST /api/ai/approval/decide`）+ `chatRun.ts`（stash/announce）+ 写工具 one-shot consume；ping-island fork `MailAgentSessionView.swift`（AgentApproval/Running/Completed/Error scenario）。测试：`tests/{api,notify}/test_island_agent.py` + `frontend/tests/ai-gateway/{approval_stash,approval_decide,tools/one_shot_write}.test.ts`。
+> **前置**：Part A「解耦 ack 通道」已落地（`src/notify/island_ack.py` + serve-api `/api/island/ack` + ping-island fork 出站 POST），本设计**复用**它（ack ingress `kind=agent`）。
+> **目标硬需求**：用户**完全离开 app**（chat 面板没开）也能在灵动岛点批准并**真正执行工具**（服务端 resume）—— **已达成**（`/api/ai/approval/decide` 从 `approvalStash` 重建 in-flight run 服务端 resume，实测通过）。
 > **关联**：引擎架构 [`ai-sdk-gateway-architecture.md`](../../reference/llm-agent/ai-sdk-gateway-architecture.md) §13；Part A 现状与 ack 通道见 `~/Documents/ping-island/docs/mailagent/PING-ISLAND-INTERFACE.md` §6/§9。
+
+> **实现附注（与设计的差异 / 落地决策）**：
+> - **§4.1 开放项已核实**：run 在 `tool-approval-request` 结束时 **不 persist**（`makePersistOnFinish` 的 `responseMessageAwaitsApproval` 早返回）→ 按设计保守路走：`approvalStash` **stash 完整 body + 暂停 responseMessage**（不从 ai_chat.db 重建）。
+> - **announce 走 Python broker**（gateway → serve-api `/api/island/agent/announce`）：一个 HTTP 调用同时登记 ack pending + 组卡 + 发岛（复用 Part A `island_ack` + `ping_island` fail-open），比让 Node 直发 island socket 再单独登记 pending 更 DRY。
+> - **单一 resolver = 两道闸**：① `approvalStash.claim` 一次性（防两次岛点击）；② 写工具 `guard.consume`（`oneShotWrites`，island agent 开时）防岛 `/decide` resume 与 renderer `/api/ai/chat` resume 双执行；`isApprovalConsumed` 让 `/decide` 在 renderer 已抢先执行时短路（不重跑不重 persist）。
+> - **resumeToken 能力令牌**：gateway 在 stash 时生成（`approvalStash`），随 announce 传 serve-api → 存 ack pending → `/ack` 回灌 `/decide` 时回传校验（`claim` 拒错 token 且不删，防 grief）。防同机进程伪造 `toolCallId` 越权 resume。
+> - **guard TTL**：island agent 开时 ApprovalGuard TTL 5min→30min（与 stash/ack TTL 同步，给用户离岛后回来点的窗口）。
+> - **鉴权**：`/agent/announce` 挂 `verify_local_token`（仅本地 token，拒 CF JWT）；`/ack` 沿用 Part A 能力令牌；`/decide` loopback-trusted + resumeToken（serve-api 上游已验 ack_token）。
+> - **flag-off 字节级**：默认关 → chatRun stash/announce block inert（cfg hooks undefined）+ `/decide` 404 + 写工具无 consume + guard 5min TTL，与 Part-B 前完全一致。
 
 ---
 
