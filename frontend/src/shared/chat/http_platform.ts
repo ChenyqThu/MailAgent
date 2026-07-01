@@ -46,7 +46,6 @@ import type {
   MailagentEmailBody
 } from '../types/cli.gen'
 import type {
-  AgentMemoryEntry,
   AppendMessageInput,
   AppendToolCallInput,
   ChatMessage,
@@ -54,8 +53,7 @@ import type {
   ChatToolCall,
   OpenSessionInput,
   UpdateMessagePatch,
-  UpdateToolCallPatch,
-  WriteMemoryInput
+  UpdateToolCallPatch
 } from './model'
 import type {
   AiFieldsData,
@@ -760,31 +758,6 @@ export class HttpChatPlatform
 
   saveToKos(input: SaveConversationInput): Promise<SaveConversationResult> {
     return this._req<SaveConversationResult>('POST', '/chat/save-to-kos', { body: input })
-  }
-
-  // ── memory WAL（P2f）→ serve-api /chat/memory ─────────────────────────────
-  listMemory(scope?: string): Promise<AgentMemoryEntry[]> {
-    return this._req<AgentMemoryEntry[]>(
-      'GET',
-      '/chat/memory',
-      scope ? { query: { scope } } : undefined
-    )
-  }
-
-  getMemory(scope: string, key: string): Promise<AgentMemoryEntry | null> {
-    return this._req<AgentMemoryEntry | null>('GET', '/chat/memory/entry', {
-      query: { scope, key }
-    })
-  }
-
-  writeMemory(input: WriteMemoryInput): Promise<AgentMemoryEntry> {
-    return this._req<AgentMemoryEntry>('POST', '/chat/memory', { body: input })
-  }
-
-  deleteMemory(scope: string, key: string): Promise<number> {
-    return this._req<{ deleted: number }>('DELETE', '/chat/memory', {
-      query: { scope, key }
-    }).then((r) => r.deleted)
   }
 
   // ── agent config（PR6）→ serve-api /agent/* ───────────────────────────────────

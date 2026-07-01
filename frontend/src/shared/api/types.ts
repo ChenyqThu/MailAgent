@@ -1431,29 +1431,6 @@ export interface ChatStartResult {
   assistantMessageId: number
 }
 
-// P2f/P3 — agent memory WAL row (ai_chat.db agent_memory_kv). Mirror of
-// shared/chat/model.ts AgentMemoryEntry — duplicated here (not imported) to keep
-// api/types the boundary surface, same as ChatSession/ChatMessage above. The P3
-// Memory UI (Settings) lists/edits/deletes these via the ChatApi methods below.
-export interface AgentMemoryEntry {
-  /** Namespace: 'user' = durable preferences; 'skill:<name>' = skill-scoped. */
-  scope: string
-  key: string
-  /** JSON-serialized fact (scalar or object). */
-  value_json: string
-  /** Provenance pointer (session/message/tool / wiki path); null when unknown. */
-  source_wiki_path: string | null
-  created_at: number
-  updated_at: number
-}
-
-export interface WriteMemoryInput {
-  scope: string
-  key: string
-  valueJson: string
-  sourceWikiPath?: string | null
-}
-
 // P3 — one installed Skill, as the Settings "Skills" toggle renders it. A flat
 // projection of the Skill manifest (shared/chat/tools/manifest SkillManifest) so
 // api/types stays self-contained. `defaultEnabled` is the manifest compile-time
@@ -1694,29 +1671,11 @@ export interface ChatApi {
    */
   setSkillEnabled(name: string, enabled: boolean): Promise<void>
   /**
-   * P3 — list agent memory entries (agent_memory_kv) for the Settings "Memory"
-   * panel, newest-first. Optional `scope` filter ('user' by default in the UI).
-   * Read-only; degrades to [] on failure.
-   */
-  listMemory(scope?: string): Promise<AgentMemoryEntry[]>
-  /**
-   * P3 — upsert one memory entry (Settings Memory edit). Returns the persisted
-   * row. Throws `Error & { code }` on validation failure (E_INVALID_ARG). The
-   * caller should invalidateConfig() after a successful write so the next turn's
-   * memory summary reflects the edit.
-   */
-  writeMemory(input: WriteMemoryInput): Promise<AgentMemoryEntry>
-  /**
-   * P3 — delete one memory entry (scope+key). Returns the number of rows removed
-   * (0 = not found, idempotent). Caller should invalidateConfig() afterward.
-   */
-  deleteMemory(scope: string, key: string): Promise<number>
-  /**
    * M1d — undo one mem0 auto-captured memory (the "已记住 X" toast's 撤销 button).
    * DELETE /chat/memory/captured?id=<mem0 memory_id>. Unlike the best-effort
    * capture, this is a user-initiated write → the backend raises (E_INTERNAL/500)
    * on failure. Electron 走 loopback serve-api（token 由 chat_local_bridge 注入）/
-   * web 走 HTTP（CF Access cookie）—— 同 deleteMemory 的直 request() 写路径，无 IPC。
+   * web 走 HTTP（CF Access cookie）—— 直 request() 写路径，无 IPC。
    * Throws `Error & { code }` on failure; the caller toasts 「撤销失败」.
    */
   undoCapturedMemory(id: string): Promise<void>

@@ -47,18 +47,7 @@ function makePlatform(over: Partial<ChatToolPlatform> = {}): ChatToolPlatform {
     kosConfig: () => ({ configured: false, timeDecayEnabled: false }),
     kosCallTool: async () => null,
     saveToKos: async () => ({ slug: '', status: 'unknown', contentBytes: 0 }),
-    // P2f/P2g/P2b platform methods (handlers never invoked in these construction tests).
-    listMemory: async () => [],
-    getMemory: async () => null,
-    writeMemory: async () => ({
-      scope: 'user',
-      key: '',
-      value_json: 'null',
-      source_wiki_path: null,
-      created_at: 0,
-      updated_at: 0
-    }),
-    deleteMemory: async () => 0,
+    // P2g/P2b platform methods (handlers never invoked in these construction tests).
     notionAgentChat: async () => ({
       text: '',
       threadId: null,
@@ -262,11 +251,6 @@ describe('createBuiltinTools — boot wiring', () => {
         'report_get',
         'report_list',
         'report_run',
-        // P2f memory WAL
-        'memory_list',
-        'memory_get',
-        'memory_write',
-        'memory_delete',
         // P2g notion_agent_chat
         'notion_agent_chat',
         // PR6 — agent self-config: Standing Context docs (read/edit)
@@ -292,7 +276,7 @@ describe('createBuiltinTools — boot wiring', () => {
     const r = createToolRegistry()
     for (const t of createBuiltinTools(makePlatform())) r.register(t)
     const schema = r.toAnthropicSchema()
-    expect(schema).toHaveLength(37)
+    expect(schema).toHaveLength(33)
     for (const t of schema) {
       expect(t.name).toBeTruthy()
       expect(t.description).toBeTruthy()
@@ -313,13 +297,13 @@ describe('createBuiltinTools — boot wiring', () => {
     }
   })
 
-  test('KOS gate — kosConfig().configured=true adds the 9 KOS tools (37 → 46)', () => {
+  test('KOS gate — kosConfig().configured=true adds the 9 KOS tools (33 → 42)', () => {
     const off = createBuiltinTools(makePlatform())
-    expect(off).toHaveLength(37)
+    expect(off).toHaveLength(33)
     const on = createBuiltinTools(
       makePlatform({ kosConfig: () => ({ configured: true, timeDecayEnabled: false }) })
     )
-    expect(on).toHaveLength(46) // 37 default (incl. 4 memory + 1 notion + 5 agent_profile + 6 skill + 1 plan) + 9 KOS
+    expect(on).toHaveLength(42) // 33 default (incl. 1 notion + 5 agent_profile + 6 skill + 1 plan) + 9 KOS
     const names = on.map((t) => t.name)
     expect(names).toContain('kos_query')
     expect(names).toContain('kos_put_page')

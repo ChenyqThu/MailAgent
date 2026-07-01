@@ -886,42 +886,6 @@ describe('HttpChatPlatform tool board — 委托 httpApi + 端点', () => {
     expect(JSON.parse(init.body)).toEqual({ messageId: 9 })
   })
 
-  // P2f memory WAL http wrappers
-  test('listMemory → GET /chat/memory?scope=', async () => {
-    fetchMock.mockResolvedValue(envelopeResponse([]))
-    const p = new HttpChatPlatform(makeHttpApi(), '/api')
-    await p.listMemory('user')
-    expect(fetchMock.mock.calls[0][0]).toBe('/api/chat/memory?scope=user')
-    expect(fetchMock.mock.calls[0][1].method).toBe('GET')
-  })
-
-  test('writeMemory → POST /chat/memory {scope,key,valueJson}', async () => {
-    fetchMock.mockResolvedValue(
-      envelopeResponse({
-        scope: 'user',
-        key: 'k',
-        value_json: '"v"',
-        source_wiki_path: null,
-        created_at: 1,
-        updated_at: 1
-      })
-    )
-    const p = new HttpChatPlatform(makeHttpApi(), '/api')
-    await p.writeMemory({ scope: 'user', key: 'k', valueJson: '"v"' })
-    const [url, init] = fetchMock.mock.calls[0]
-    expect(url).toBe('/api/chat/memory')
-    expect(init.method).toBe('POST')
-    expect(JSON.parse(init.body)).toEqual({ scope: 'user', key: 'k', valueJson: '"v"' })
-  })
-
-  test('deleteMemory → DELETE /chat/memory?scope&key → number', async () => {
-    fetchMock.mockResolvedValue(envelopeResponse({ deleted: 1 }))
-    const p = new HttpChatPlatform(makeHttpApi(), '/api')
-    expect(await p.deleteMemory('user', 'k')).toBe(1)
-    expect(fetchMock.mock.calls[0][0]).toBe('/api/chat/memory?scope=user&key=k')
-    expect(fetchMock.mock.calls[0][1].method).toBe('DELETE')
-  })
-
   // P2g notion_agent_chat http wrapper
   test('notionAgentChat → POST /chat/notion-agent-once', async () => {
     fetchMock.mockResolvedValue(
@@ -1007,15 +971,15 @@ describe('HttpChatPlatform config 快照', () => {
 // ── createBuiltinTools 集成 + createHttpNotionAgentBackend ───────────────────
 
 describe('HttpChatPlatform 工具板满足 createBuiltinTools', () => {
-  test('kosConfigured=false → 37 工具（无 KOS；含 4 memory + 1 notion + 11 agent config[PR6] + 1 plan[P2d]）', () => {
+  test('kosConfigured=false → 33 工具（无 KOS；含 1 notion + 11 agent config[PR6] + 1 plan[P2d]）', () => {
     const p = new HttpChatPlatform(makeHttpApi(), '/api')
     // PR6 — +11: agent_profile_* (5) + skill_* management (6). P2d — +1: plan_update.
-    expect(createBuiltinTools(p).length).toBe(37)
+    expect(createBuiltinTools(p).length).toBe(33)
   })
 
-  test('kosConfigured=true → 46 工具（+9 KOS）', () => {
+  test('kosConfigured=true → 42 工具（+9 KOS）', () => {
     const p = new HttpChatPlatform(makeHttpApi(), '/api', { kosConfigured: true })
-    expect(createBuiltinTools(p).length).toBe(46)
+    expect(createBuiltinTools(p).length).toBe(42)
   })
 })
 

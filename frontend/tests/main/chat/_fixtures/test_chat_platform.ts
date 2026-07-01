@@ -186,19 +186,6 @@ export const testChatPlatform: ChatInfraPlatform & ChatToolPlatform = {
   async saveToKos() {
     return toolNotExercised()
   },
-  // P2f memory WAL stubs — scripted backends never emit tool_use → never invoked.
-  async listMemory() {
-    return toolNotExercised()
-  },
-  async getMemory() {
-    return toolNotExercised()
-  },
-  async writeMemory() {
-    return toolNotExercised()
-  },
-  async deleteMemory() {
-    return toolNotExercised()
-  },
   // P2g notion_agent_chat stub — scripted backends never emit tool_use → never invoked.
   async notionAgentChat() {
     return toolNotExercised()

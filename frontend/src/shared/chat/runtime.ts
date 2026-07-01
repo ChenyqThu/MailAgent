@@ -59,14 +59,12 @@ import {
 import { setActiveSkillsSnapshot } from './active_skills_trace'
 import type { ChatBackend } from './types'
 import type {
-  AgentMemoryEntry,
   AgentProfileDoc,
   AgentProfileHistoryEntry,
   CompileUserMdResult,
   SearchAgentInput,
   SearchAgentResult,
-  SkillSummary,
-  WriteMemoryInput
+  SkillSummary
 } from '../api/types'
 
 export interface ChatRuntimeDeps {
@@ -707,37 +705,11 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
       })
     },
 
-    async listMemory(scope?: string): Promise<AgentMemoryEntry[]> {
-      // P3 — direct fetch (no engine needed), graceful [] (same pattern as the
-      // read methods above). GET /chat/memory[?scope=].
-      try {
-        return await request<AgentMemoryEntry[]>(baseUrl, 'GET', '/chat/memory', {
-          query: scope ? { scope } : undefined
-        })
-      } catch {
-        return []
-      }
-    },
-
-    async writeMemory(input: WriteMemoryInput): Promise<AgentMemoryEntry> {
-      // P3 — upsert; throw Error&{code}透传（E_INVALID_ARG）。caller invalidateConfig()
-      // 让下一轮 memory summary 生效。
-      return request<AgentMemoryEntry>(baseUrl, 'POST', '/chat/memory', { body: input })
-    },
-
-    async deleteMemory(scope: string, key: string): Promise<number> {
-      // P3 — DELETE /chat/memory?scope=&key= → {deleted}. caller invalidateConfig().
-      const data = await request<{ deleted: number }>(baseUrl, 'DELETE', '/chat/memory', {
-        query: { scope, key }
-      })
-      return data.deleted
-    },
-
     async undoCapturedMemory(id: string): Promise<void> {
       // M1d — undo one mem0 auto-captured memory (「已记住 X」toast 的撤销按钮).
       // DELETE /chat/memory/captured?id=<mem0 memory_id> → {deleted, id}. User-initiated
-      // write → throw Error&{code}透传（E_INTERNAL）, renderer toasts 「撤销失败」. Mirrors the
-      // deleteMemory direct-request write path (electron loopback serve-api with token injected by
+      // write → throw Error&{code}透传（E_INTERNAL）, renderer toasts 「撤销失败」. Direct-request
+      // write path (electron loopback serve-api with token injected by
       // chat_local_bridge / web CF cookie) — no engine, no IPC. Guard empty id (no-op, never hits the
       // wire) since the backend Query(...) would 422 it anyway.
       if (typeof id !== 'string' || id.length === 0) return

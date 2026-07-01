@@ -47,18 +47,7 @@ function makePlatform(over: Partial<ChatToolPlatform> = {}): ChatToolPlatform {
     kosConfig: () => ({ configured: true, timeDecayEnabled: false }),
     kosCallTool: async () => null,
     saveToKos: async () => ({ slug: '', status: 'unknown', contentBytes: 0 }),
-    // P2f/P2g/P2b platform methods (handlers never invoked in these construction tests).
-    listMemory: async () => [],
-    getMemory: async () => null,
-    writeMemory: async () => ({
-      scope: 'user',
-      key: '',
-      value_json: 'null',
-      source_wiki_path: null,
-      created_at: 0,
-      updated_at: 0
-    }),
-    deleteMemory: async () => 0,
+    // P2g/P2b platform methods (handlers never invoked in these construction tests).
     notionAgentChat: async () => ({
       text: '',
       threadId: null,
@@ -402,20 +391,20 @@ describe('createBuiltinTools KOS gate', () => {
     const names = tools.map((t) => t.name)
     expect(names).not.toContain('kos_query')
     expect(names).not.toContain('kos_digest')
-    expect(tools).toHaveLength(37) // 11 read + 9 write + 4 memory (P2f) + 1 notion (P2g) + 5 agent_profile + 6 skill + 1 plan (P2d), no KOS
+    expect(tools).toHaveLength(33) // 11 read + 9 write + 1 notion (P2g) + 5 agent_profile + 6 skill + 1 plan (P2d), no KOS
   })
 
-  test('configured=true — KOS tools registered alongside default 37 (→ 46)', () => {
+  test('configured=true — KOS tools registered alongside default 33 (→ 42)', () => {
     const tools = createBuiltinTools(
       makePlatform({ kosConfig: () => ({ configured: true, timeDecayEnabled: false }) })
     )
     const names = tools.map((t) => t.name).sort()
     expect(names).toContain('kos_query')
     expect(names).toContain('kos_put_page')
-    expect(tools).toHaveLength(46) // 37 default (incl. 4 memory + 1 notion + 5 agent_profile + 6 skill + 1 plan) + 9 KOS
+    expect(tools).toHaveLength(42) // 33 default (incl. 1 notion + 5 agent_profile + 6 skill + 1 plan) + 9 KOS
   })
 
-  test('configured=true: category=meta holds KOS + 4 memory + 1 plan + 5 agent_profile + 6 skill tools', () => {
+  test('configured=true: category=meta holds KOS + 1 plan + 5 agent_profile + 6 skill tools', () => {
     const tools = createBuiltinTools(
       makePlatform({ kosConfig: () => ({ configured: true, timeDecayEnabled: false }) })
     )
@@ -423,10 +412,8 @@ describe('createBuiltinTools KOS gate', () => {
       .filter((t) => t.category === 'meta')
       .map((t) => t.name)
       .sort()
-    // P2f — memory tools are also category 'meta' (agent-meta), alongside KOS.
     // PR6 — agent_profile (Standing Context) + skill management tools are also 'meta'.
     // P2d — plan_update (cross-domain plan artifact) is also category 'meta'.
-    const MEMORY_NAMES = ['memory_delete', 'memory_get', 'memory_list', 'memory_write']
     const PLAN_NAMES = ['plan_update']
     const PROFILE_NAMES = [
       'agent_profile_apply_patch',
@@ -444,7 +431,7 @@ describe('createBuiltinTools KOS gate', () => {
       'skill_uninstall'
     ]
     expect(metaNames).toEqual(
-      [...ALL_KOS_NAMES, ...MEMORY_NAMES, ...PLAN_NAMES, ...PROFILE_NAMES, ...SKILL_NAMES].sort()
+      [...ALL_KOS_NAMES, ...PLAN_NAMES, ...PROFILE_NAMES, ...SKILL_NAMES].sort()
     )
     // every KOS tool is still meta-categorized (the original invariant).
     expect(metaNames.filter((n) => n.startsWith('kos_'))).toEqual(ALL_KOS_NAMES)
