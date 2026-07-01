@@ -650,6 +650,19 @@ class Config(BaseSettings):
             "`pm2 ls | grep davmail-poc` online."
         ),
     )
+    mailagent_marker_backend_guard: bool = Field(
+        default=True, validation_alias="MAILAGENT_MARKER_BACKEND_GUARD",
+        description=(
+            "issue #34: 切 backend 时防 last_max_row_id (marker) id-space 混用。marker 在 "
+            "applescript 是 Mail.app ROWID (~10^5)、在 davmail 是 IMAP UID (~10^5-10^6 稀疏)，"
+            "跨切换复用会让 get_new_emails 发 `UID {外来marker+1}:*` → 要么静默跳过整段未取"
+            "区间 (丢数据) 要么超时重刷巨量 (卡死)。on (默认): 启动时若当前 backend 与写下 "
+            "marker 的 backend 不符 → 把 marker 重 baseline 到当前 backend 的 max (等同 "
+            "first-run，只向前不回捞；历史 gap 由 health_check / backfill 兜)；本 guard 首次"
+            "部署遇既有 marker = 认领不重置 (不扰动存量稳态用户)。off = 回退旧行为 (跨切换"
+            "直接复用 marker，即 #34 的 bug)。仅启动时判定一次。"
+        ),
+    )
     davmail_imap_host: str = Field(
         default="127.0.0.1", validation_alias="DAVMAIL_HOST",
         description="DavMail JVM bind 地址 (PM2 davmail-poc 默认仅 127.0.0.1, 勿暴露公网)",

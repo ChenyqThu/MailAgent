@@ -336,6 +336,25 @@ class NewWatcher:
         self._healthy = True
         logger.info("NewWatcher started")
 
+        # issue #34: 切 backend 时防 marker id-space 混用（详见
+        # sync_store.reconcile_marker_backend + config MAILAGENT_MARKER_BACKEND_GUARD）。
+        # 必须在下面 restore/baseline 之前跑：reset 分支会把 marker 清零，让 restore 落到
+        # first-run baseline 分支、在当前 backend 的 id 空间重新定基线（只向前，不回捞历史
+        # gap —— gap 由 health_check / backfill 兜）。
+        current_backend = getattr(settings, "mailagent_backend", "applescript")
+        if getattr(settings, "mailagent_marker_backend_guard", True):
+            action = self.sync_store.reconcile_marker_backend(current_backend)
+            if action == 'reset':
+                logger.warning(
+                    "[marker-guard] backend changed → 上次 marker 属于别的 id 空间; "
+                    "已重置到 first-run baseline 防 silent-loss/deadlock (issue #34). "
+                    f"backend={current_backend!r}"
+                )
+            elif action == 'adopt':
+                logger.info(
+                    f"[marker-guard] 认领既有 marker 归属 backend={current_backend!r} (不重置)"
+                )
+
         # 初始化：从 SyncStore 恢复 last_max_row_id
         last_max_row_id = self.sync_store.get_last_max_row_id()
         if self.radar:
@@ -347,6 +366,8 @@ class NewWatcher:
                 current_max = self.radar.get_current_max_row_id()
                 self.radar.set_last_max_row_id(current_max)
                 self.sync_store.set_last_max_row_id(current_max)
+                # issue #34: 盖上 marker 归属，供下次启动的 guard 比对（reset 后重定基线也走这里）
+                self.sync_store.set_state('marker_backend', current_backend)
                 logger.info(f"First run, set baseline max_row_id: {current_max}")
 
         # PR-4 US-008: 启动 v4_rollout flush loop (RFC §8 选项 A)

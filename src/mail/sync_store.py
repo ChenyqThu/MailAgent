@@ -1544,6 +1544,38 @@ class SyncStore:
         """设置最大 row_id"""
         return self.set_state('last_max_row_id', str(row_id))
 
+    def reconcile_marker_backend(self, current_backend: str) -> str:
+        """issue #34: 防跨 backend 复用 last_max_row_id（不同 id 空间）。
+
+        last_max_row_id 在 applescript 是 Mail.app ROWID、在 davmail 是 IMAP UID，
+        两个空间量级/含义都不同。切 backend 时若沿用旧 marker，get_new_emails 会发
+        ``UID {外来marker+1}:*``，命中 silent-loss（跳过整段未取区间 → 丢数据）或
+        deadlock（超时重刷巨量 → 卡死）。启动时调用一次，按需把 marker 归一到当前 backend。
+
+        用 sync_state KV（key='marker_backend'）记录「当前 marker 属于哪个 backend」，
+        复用现有通用 KV 表，无需 schema 变更 / DB_VERSION bump。
+
+        Returns 采取的动作:
+          'first'  — 尚无 marker（真·首次运行）；上层 baseline 分支会盖 owner。
+          'adopt'  — 本 guard 首次部署遇到既有 marker：认领为当前 backend、不重置
+                     （不扰动存量稳态用户）。
+          'noop'   — marker 已属当前 backend，无需动。
+          'reset'  — marker 属于别的 backend（外来 id 空间）→ 清零，强制上层走 first-run
+                     baseline，在新空间重新定基线（只向前，不回捞历史 gap）。
+        """
+        stored_marker = self.get_last_max_row_id()
+        marker_backend = self.get_state('marker_backend')
+        if stored_marker <= 0:
+            return 'first'
+        if marker_backend is None:
+            self.set_state('marker_backend', current_backend)
+            return 'adopt'
+        if marker_backend == current_backend:
+            return 'noop'
+        self.set_last_max_row_id(0)
+        self.set_state('marker_backend', current_backend)
+        return 'reset'
+
     def get_last_sync_time(self) -> Optional[str]:
         """获取上次同步时间（ISO 格式）"""
         return self.get_state('last_sync_time')
