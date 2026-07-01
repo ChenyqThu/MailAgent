@@ -855,7 +855,12 @@ export function EmailList(): React.ReactElement {
   // Limit useNewlyAddedIds to the first page so paginated reads don't make
   // the entire newly-loaded slab flash "NEW".
   const firstPageIds = useMemo(() => allIdsFirstPage(all), [all])
-  const newIds = useNewlyAddedIds(firstPageIds)
+  // Scope the "newly added" baseline to the current view + account (issue #33
+  // Bug A): switching inbox → outbox / drafts or accounts re-baselines instead
+  // of diffing the previous view's ids against the new first page and flashing
+  // the whole screen NEW. `viewKey` already folds view + custom folder.
+  const newlyAddedKey = `${viewKey}:${activeMailbox ?? ''}`
+  const newIds = useNewlyAddedIds(firstPageIds, newlyAddedKey)
 
   // `orderedIds` (a.k.a. selectable ids in the list) is computed AFTER
   // threadGroups below so cross-mailbox thread heads / supplement
