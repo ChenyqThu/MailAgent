@@ -240,6 +240,50 @@ describe('makePersistOnFinish — Part B cross-surface side effects', () => {
     expect(rejected).toHaveLength(0)
   })
 
+  // codex re-review edge case — a reject-of-A whose resume IMMEDIATELY re-pauses on approval-B must
+  // STILL tombstone A (the tombstone derives from the incoming history, so it runs BEFORE the re-pause
+  // early return). Otherwise a stale island approve of A would slip through.
+  test('finding 1 — a reject that RE-PAUSES on another approval still tombstones the rejected one', async () => {
+    const persisted: PersistTurnInput[] = []
+    const rejected: string[] = []
+    const cfg = {
+      islandAgentEnabled: true,
+      persistTurn: (t: PersistTurnInput) => persisted.push(t),
+      rejectApproval: (tc: string) => rejected.push(tc)
+    } as AiGatewayConfig
+    // history: approval A rejected in-app; responseMessage: the resume immediately asks approval B.
+    const rejAThenRaw = [
+      USER,
+      {
+        id: 'a-rejA',
+        role: 'assistant',
+        parts: [
+          {
+            type: 'tool-email_draft_reply',
+            toolCallId: 'tA',
+            state: 'approval-responded',
+            approval: { id: 'apA', approved: false }
+          }
+        ]
+      }
+    ] as unknown as PreparedChatRun['rawMessages']
+    const repausedOnB = {
+      id: 'a-B-pending',
+      role: 'assistant',
+      parts: [
+        {
+          type: 'tool-email_prepare_send',
+          toolCallId: 'tB',
+          state: 'approval-requested',
+          approval: { id: 'apB' }
+        }
+      ]
+    } as unknown as MailAgentUIMessage
+    await fire(makePersistOnFinish(cfg, makeRun(rejAThenRaw)), repausedOnB)
+    expect(rejected).toEqual(['tA']) // A tombstoned EVEN THOUGH the turn re-paused on B
+    expect(persisted).toHaveLength(0) // re-paused → not persisted
+  })
+
   test('finding 2 — E_APPROVAL_USED in the audit (lost the approve race) → NOT persisted', async () => {
     const persisted: PersistTurnInput[] = []
     const captured: PersistTurnInput[] = []

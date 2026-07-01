@@ -475,6 +475,16 @@ export function makePersistOnFinish(
 ): UIMessageStreamOnFinishCallback<MailAgentUIMessage> {
   return async ({ responseMessage, isAborted }) => {
     if (isAborted || !cfg.persistTurn) return
+    // Part B (harness 上岛, finding 1) — a renderer REJECT tombstones the guard so a later island
+    // approve for the SAME toolCallId fails closed. This is derived from the INCOMING history
+    // (run.rawMessages ends with the paused tool part transitioned to approval-responded+approved:false),
+    // INDEPENDENT of whether THIS turn then re-pauses at ANOTHER approval gate — so it must run BEFORE
+    // the re-pause early return below. (codex re-review edge case: a reject-of-A whose resume immediately
+    // requests approval-B would otherwise skip tombstoning A → a stale island approve of A slips
+    // through.) Gated by islandAgentEnabled + `?.`, so flag-off is byte-identical.
+    if (cfg.islandAgentEnabled) {
+      for (const id of collectRejectedApprovalToolCallIds(run.rawMessages)) cfg.rejectApproval?.(id)
+    }
     // dogfood #3 (HITL 授权重复/卡 loading) — a turn PAUSED at an approval gate still finishes the
     // UIMessage stream (onFinish fires), but it is NOT a complete turn: the client resumes it after
     // approving. Persisting here double-writes — the resume's onFinish re-persists the SAME
@@ -509,17 +519,11 @@ export function makePersistOnFinish(
       maybeStashAndAnnounceApproval(cfg, run, responseMessage as MailAgentUIMessage)
       return
     }
-    // Part B (harness 上岛) — cross-surface single-resolver side effects on a COMPLETED turn. Gated by
-    // islandAgentEnabled so flag-off (default) is byte-identical (both hooks below are also `?.`-guarded).
-    if (cfg.islandAgentEnabled) {
-      // (finding 1) a renderer REJECT (approval-responded approved:false in this resume's history)
-      // tombstones the guard so a later island approve for the same toolCallId fails closed.
-      for (const id of collectRejectedApprovalToolCallIds(run.rawMessages)) cfg.rejectApproval?.(id)
-      // (finding 2) if the one-shot guard.consume rejected this turn's tool (E_APPROVAL_USED), the
-      // OTHER surface already executed + persisted the authoritative turn — skip this duplicate error
-      // persist (and skip capture: an error turn is nothing to extract memory from).
-      if (runHasApprovalUsedError(run)) return
-    }
+    // Part B (harness 上岛, finding 2) — if the one-shot guard.consume rejected this turn's tool
+    // (E_APPROVAL_USED audit), the OTHER surface already executed + persisted the authoritative turn →
+    // skip this duplicate error persist (and capture). Only relevant for a COMPLETED turn: a re-paused
+    // turn already returned above without persisting. Gated by islandAgentEnabled (flag-off byte-identical).
+    if (cfg.islandAgentEnabled && runHasApprovalUsedError(run)) return
     const usage = await Promise.resolve(run.result.usage).catch(() => undefined)
     const turn: PersistTurnInput = {
       sessionId: run.sessionId,
