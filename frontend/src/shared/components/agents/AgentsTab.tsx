@@ -1644,16 +1644,19 @@ function PreprocessAgentCard({
 }
 
 // ─── AI 邮件预处理配置抽屉 ────────────────────────────────────────────────────
-// 复刻 SearchConfigDrawer 三段式脚手架。双源写：启用 / fallback 链 → 全局 env（applyEnvPatch +
-// 重启横幅，pydantic singleton 需重启；fallback 对其他后台 AI 任务同样生效）；模型 / 文档勾选 →
-// report_agent row（useSetConfig；#8-ext 模型走行级 model 列、空 = 跟随全局 LLM_MODEL —— 与
-// chat 的全局默认模型拆分，改行级模型无需重启）；身份文档正文内联复用 StandingDocsSection。
+// 复刻 SearchConfigDrawer 三段式脚手架。双源写：启用 → 全局 env（applyEnvPatch + 重启横幅，
+// pydantic singleton 需重启）；模型 / fallback / 文档勾选 → report_agent row（useSetConfig；
+// #8-ext 模型走行级 model 列、空 = 跟随全局 LLM_MODEL；R2 #2 fallback 走行级
+// fallback_models_json 列、NULL = 跟随全局 LLM_FALLBACK_MODELS —— 均与全局设置拆分，改行级
+// 值保存即生效无需重启）；身份文档正文内联复用 StandingDocsSection。
 // persona 输入已随 v1.1.0 dogfood 移除（身份/偏好由 Standing Context 文档注入）；内置分类
 // prompt（收件箱/发件箱 .md）在抽屉内只读可查看（GET /api/llm/preprocess-prompts）。
 
 /** 模型下拉「跟随全局默认」哨兵（radix SelectItem 禁空串 value）。 */
 const FOLLOW_GLOBAL_MODEL = '__follow_global__'
-/** fallback 下拉「不设」哨兵（同上，空串 value 会让 radix 直接 throw）。 */
+/** fallback 下拉「跟随全局」哨兵（R2 #2：行级列 NULL；同上 radix 禁空串 value）。 */
+const FALLBACK_FOLLOW_GLOBAL = '__follow_global_fb__'
+/** fallback 下拉「不设」哨兵（行级列 '[]'；同上，空串 value 会让 radix 直接 throw）。 */
 const FALLBACK_NONE = '__none__'
 
 interface PreprocessPromptFile {
@@ -1702,14 +1705,15 @@ function PreprocessConfigDrawer({
     syncBackdrop: true
   })
 
-  // 启用 / fallback 链 = env 值本地镜像（**dirty 追踪**：仅用户显式改过的字段在保存时写回 env →
+  // 启用 = env 值本地镜像（**dirty 追踪**：仅用户显式改过的字段在保存时写回 env →
   // 未触碰的字段永不写，即使预填时 env 未就绪 idle 也不会把真实 .env 覆写掉，codex HIGH）；
-  // 模型 / 文档勾选 = row 值（#8-ext：模型空串 = 跟随全局 LLM_MODEL，PATCH 保存无需重启）。
+  // 模型 / fallback / 文档勾选 = row 值（#8-ext 模型空串 = 跟随全局 LLM_MODEL；R2 #2
+  // fallback 存哨兵或模型 id，对应行级列 NULL / '[]' / '[m]'，PATCH 保存无需重启）。
   const [enabled, setEnabled] = useState(false)
   const [enabledDirty, setEnabledDirty] = useState(false)
   const [model, setModel] = useState<string>('')
   const [modelDirty, setModelDirty] = useState(false)
-  const [fallbackModel, setFallbackModel] = useState<string>('')
+  const [fallbackModel, setFallbackModel] = useState<string>(FALLBACK_FOLLOW_GLOBAL)
   const [fallbackModelDirty, setFallbackModelDirty] = useState(false)
   const [contextDocs, setContextDocs] = useState<string[]>([])
   const [envSaving, setEnvSaving] = useState(false)
@@ -1717,8 +1721,9 @@ function PreprocessConfigDrawer({
   const [promptView, setPromptView] = useState<PreprocessPrompts | 'loading' | 'error'>('loading')
   const [promptTab, setPromptTab] = useState<'inbox' | 'sent'>('inbox')
   const { models: enabledModels } = useEnabledModels()
-  // env store 状态（idle/loading 时 enable/fallback 不可编辑、保存不写 env）+ 响应式 env 值
-  // （就绪后回填，仅在用户未触碰该字段时）。envModelRaw 仅用于「跟随全局」选项的当前值展示。
+  // env store 状态（idle/loading 时 enable 不可编辑、保存不写 env）+ 响应式 env 值
+  // （就绪后回填，仅在用户未触碰该字段时）。envModelRaw / envFallbackRaw 仅用于
+  // 「跟随全局」选项的当前值展示（R2 #2：fallback 已改行级列，env 值不再回填进编辑态）。
   const envReady = useEnvStore((s) => s.state.status === 'ready')
   const envEnabledRaw = useEnvStore((s) =>
     s.state.status === 'ready' ? (s.state.snapshot.values['LLM_AGENT_ENABLED'] ?? '') : null
@@ -1737,19 +1742,27 @@ function PreprocessConfigDrawer({
   useEffect(() => {
     if (!open || !cfg) return
     setModel(cfg.model ?? '')
+    // R2 #2 行级 fallback：null → 跟随全局哨兵、[] → 不设哨兵、[m,...] → 首个 m
+    // （UI 单选，保存也只存单模型链 [m]）。
+    setFallbackModel(
+      cfg.fallback_models == null
+        ? FALLBACK_FOLLOW_GLOBAL
+        : cfg.fallback_models.length === 0
+          ? FALLBACK_NONE
+          : cfg.fallback_models[0]
+    )
     setContextDocs(cfg.context_docs ?? [])
     setEnabledDirty(false)
     setModelDirty(false)
     setFallbackModelDirty(false)
     setPromptTab('inbox')
   }, [open, cfg])
-  // 启用 / fallback 模型从 env 就绪快照回填：仅在打开且用户未 dirty 该字段时同步 —— env
-  // idle→ready 的迟到加载能纠正显示，但绝不覆盖用户在抽屉里的编辑（dirty 后停止同步）。
+  // 启用从 env 就绪快照回填：仅在打开且用户未 dirty 该字段时同步 —— env idle→ready 的
+  // 迟到加载能纠正显示，但绝不覆盖用户在抽屉里的编辑（dirty 后停止同步）。
   useEffect(() => {
     if (!open) return
     if (envEnabledRaw !== null && !enabledDirty) setEnabled(envFlagOn(envEnabledRaw))
-    if (envFallbackRaw !== null && !fallbackModelDirty) setFallbackModel(envFallbackRaw)
-  }, [open, envEnabledRaw, envFallbackRaw, enabledDirty, fallbackModelDirty])
+  }, [open, envEnabledRaw, enabledDirty])
   // 内置分类 prompt：打开时拉一次（best-effort，失败显示占位；关闭时丢弃避免 setState-after-close）。
   useEffect(() => {
     if (!open) return
@@ -1782,8 +1795,9 @@ function PreprocessConfigDrawer({
   const onSave = async (): Promise<void> => {
     if (!cfg) return
     // 1) env 写：仅在 env 已就绪、非 web、且用户显式改过该字段（dirty）时写 —— 未触碰的
-    //    enable/fallback 永不写，即使预填 stale（env idle）也不会把真实 .env 覆写掉（codex HIGH）。
-    //    只写变更键，避免无谓触发重启横幅。（#8-ext：模型不再写 env —— 走 row PATCH。）
+    //    enable 永不写，即使预填 stale（env idle）也不会把真实 .env 覆写掉（codex HIGH）。
+    //    只写变更键，避免无谓触发重启横幅。（#8-ext 模型 / R2 #2 fallback 均不再写 env ——
+    //    走 row PATCH。）
     if (envReady && !IS_WEB) {
       const st = useEnvStore.getState().state
       const vals = st.status === 'ready' ? st.snapshot.values : {}
@@ -1791,9 +1805,6 @@ function PreprocessConfigDrawer({
       const nextEnabled = enabled ? 'true' : 'false'
       if (enabledDirty && nextEnabled !== (vals['LLM_AGENT_ENABLED'] ?? '')) {
         envPatch['LLM_AGENT_ENABLED'] = nextEnabled
-      }
-      if (fallbackModelDirty && fallbackModel !== (vals['LLM_FALLBACK_MODELS'] ?? '')) {
-        envPatch['LLM_FALLBACK_MODELS'] = fallbackModel
       }
       if (Object.keys(envPatch).length > 0) {
         setEnvSaving(true)
@@ -1803,7 +1814,7 @@ function PreprocessConfigDrawer({
             toastError(t('agents.preprocess.envSaveError'), `${r.error.code}: ${r.error.message}`)
             return
           }
-          // 与 EnvField 一致：变更键挂重启横幅（LLM_MODEL / LLM_AGENT_ENABLED 是 pydantic singleton）。
+          // 与 EnvField 一致：变更键挂重启横幅（LLM_AGENT_ENABLED 是 pydantic singleton）。
           if (r.changedKeys.length > 0) markRestartRequired(r.changedKeys)
         } finally {
           setEnvSaving(false)
@@ -1811,11 +1822,22 @@ function PreprocessConfigDrawer({
       }
     }
     // 2) row 保存：模型（#8-ext 行级 model 列；空串 = 跟随全局 LLM_MODEL，config_patch_to_db
-    //    原样落列、resolve_agent 非 report 不回填默认）+ 文档勾选。改行级模型立即生效（分类
-    //    每封邮件重读 preprocess 行），无需重启。
+    //    原样落列、resolve_agent 非 report 不回填默认）+ fallback（R2 #2 行级列；null =
+    //    重置回跟随全局、[] = 显式不设、[m] = 单模型链）+ 文档勾选。改行级值立即生效
+    //    （分类每封邮件重读 preprocess 行），无需重启。
     try {
       await save(PREPROCESS_AGENT_ID, {
         ...(modelDirty ? { model } : {}),
+        ...(fallbackModelDirty
+          ? {
+              fallback_models:
+                fallbackModel === FALLBACK_FOLLOW_GLOBAL
+                  ? null
+                  : fallbackModel === FALLBACK_NONE
+                    ? []
+                    : [fallbackModel]
+            }
+          : {}),
         context_docs: contextDocs
       })
       onClose()
@@ -1974,28 +1996,36 @@ function PreprocessConfigDrawer({
               </Select>
             </Field>
 
-            {/* fallback 模型链（env LLM_FALLBACK_MODELS，全局语义）—— 主模型失败时兜底，
-                「不设」哨兵 = 空串（radix SelectItem 禁空串 value），需重启生效 */}
+            {/* fallback 模型（row.fallback_models_json，R2 #2 行级，PATCH 保存立即生效）——
+                主模型失败时兜底。「跟随全局」哨兵 = 行 NULL（用全局 LLM_FALLBACK_MODELS）、
+                「不设」哨兵 = 行 '[]'（显式无兜底）。 */}
             <Field
               label={t('agents.preprocess.fallback')}
               hint={t('agents.preprocess.fallbackHint')}
             >
               <Select
-                value={fallbackModel || FALLBACK_NONE}
+                value={fallbackModel}
                 onValueChange={(v) => {
-                  setFallbackModel(v === FALLBACK_NONE ? '' : v)
+                  setFallbackModel(v)
                   setFallbackModelDirty(true)
                 }}
-                disabled={!envReady || IS_WEB}
+                disabled={busy}
               >
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent className="z-[70]">
+                  <SelectItem value={FALLBACK_FOLLOW_GLOBAL}>
+                    {t('agents.preprocess.fallbackFollowGlobal', {
+                      model: envFallbackRaw || t('agents.preprocess.fallbackGlobalUnset')
+                    })}
+                  </SelectItem>
                   <SelectItem value={FALLBACK_NONE}>
                     {t('agents.preprocess.fallbackNone')}
                   </SelectItem>
-                  {(fallbackModel && !enabledModels.includes(fallbackModel)
+                  {(fallbackModel !== FALLBACK_FOLLOW_GLOBAL &&
+                  fallbackModel !== FALLBACK_NONE &&
+                  !enabledModels.includes(fallbackModel)
                     ? [...enabledModels, fallbackModel]
                     : enabledModels
                   ).map((id) => {

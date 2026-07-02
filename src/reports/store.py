@@ -27,6 +27,7 @@ _AGENT_PATCH_FIELDS = {
     "body_full_max",
     "body_full_priorities",
     "context_docs_json",  # v27: preprocess agent 的文档勾选（JSON 数组 of profile-doc 名）
+    "fallback_models_json",  # v29: preprocess 行级 fallback 链（JSON 数组；NULL=跟随全局）
 }
 
 # 列表查询不返回 blocks_json（重），详情才取。

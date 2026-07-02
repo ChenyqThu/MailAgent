@@ -279,7 +279,13 @@ class SyncStore:
     #                (仅 enabled=0 且 prompt IS NULL 的未改默认态; 客制化用户行保留)。
     #                v19 seed 块移除 monthly tuple (新库不再播种月报)。
     #                回滚 (回退 v28): 月报行已删无法自动恢复; 需手动 INSERT 或降 db_version。
-    DB_VERSION = 28  # v28: 删 monthly_email_digest 默认 seed 行（dogfood #9）
+    # v29 (预处理行级 fallback 拆分, 2026-07, dogfood R2 反馈 #2): report_agent 加
+    #                fallback_models_json 列 (JSON 数组 of 模型名)。NULL = 跟随全局
+    #                LLM_FALLBACK_MODELS (老用户升级零感知)、'[]' = 显式不设兜底、
+    #                数组 = 预处理专用 fallback 链。无 seed 变更 (种子行留 NULL=跟随全局)。
+    #                幂等: ALTER 前 PRAGMA 检查 (同 v27 context_docs_json 模式)。
+    #                回滚 (回退 v29): 列可留 (旧代码无害) 或手动 DROP; 必要时降 db_version。
+    DB_VERSION = 29  # v29: report_agent +fallback_models_json（预处理行级 fallback，dogfood R2 #2）
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -1092,7 +1098,8 @@ class SyncStore:
                 body_full_max INTEGER,         -- 遗留(v19 早期)，不再读写；带正文改 body_full_priorities
                 body_full_priorities TEXT,     -- daily: JSON 数组 of priority label，命中则带正文（NULL=默认紧急+重要）
                 updated_at REAL,
-                context_docs_json TEXT         -- v27: preprocess 用 JSON 数组 of profile-doc 名（NULL=默认 soul+user）；末列对齐 ALTER 追加位置
+                context_docs_json TEXT,        -- v27: preprocess 用 JSON 数组 of profile-doc 名（NULL=默认 soul+user）
+                fallback_models_json TEXT      -- v29: preprocess 行级 fallback 链 JSON 数组（NULL=跟随全局 LLM_FALLBACK_MODELS）；末列对齐 ALTER 追加位置
             )
         """)
         # report: ReportDoc 块模型 SSoT（blocks_json）+ 列表展示冗余字段。
@@ -1524,6 +1531,20 @@ class SyncStore:
                 "WHERE id = 'monthly_email_digest' AND enabled = 0 AND prompt IS NULL"
             )
             logger.info("v28 migration: monthly_email_digest default row removed")
+
+        # === v29: report_agent 加 fallback_models_json 列 (dogfood R2 反馈 #2) ===
+        # 预处理 fallback 从全局 env (LLM_FALLBACK_MODELS) 拆出行级列: NULL = 跟随全局
+        # (老用户升级零感知)、'[]' = 显式不设兜底、JSON 数组 = 预处理专用链。无 seed 变更。
+        # 新库 CREATE 已含 → PRAGMA 检查跳过; 旧库 (v18-v28) 补列, 已存在则 no-op。
+        # 回滚 (回退 v29): 列可留 (旧代码无害) 或手动 DROP; 必要时降 db_version。
+        if current_version < 29:
+            try:
+                _pa_cols = {r[1] for r in cursor.execute("PRAGMA table_info(report_agent)").fetchall()}
+                if "fallback_models_json" not in _pa_cols:
+                    cursor.execute("ALTER TABLE report_agent ADD COLUMN fallback_models_json TEXT")
+                    logger.info("v29 migration: report_agent +fallback_models_json")
+            except sqlite3.OperationalError as e:
+                logger.warning(f"v29 migration skipped: {e}")
 
         # 更新数据库版本
         cursor.execute("""

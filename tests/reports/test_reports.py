@@ -285,7 +285,7 @@ class TestStore:
         ver = conn.execute("SELECT value FROM sync_state WHERE key='db_version'").fetchone()[0]
         conn.close()
         assert n == 1
-        assert int(ver) == 28  # v28: 删 monthly_email_digest 默认 seed 行（dogfood #9）
+        assert int(ver) == 29  # v29: report_agent +fallback_models_json（dogfood R2 #2）
         a = store.get_agent("email_search_agent")
         assert a["model"] == "gpt-5.5" and a["enabled"] == 0  # 用户改动保留
 

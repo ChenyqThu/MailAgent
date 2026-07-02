@@ -2289,6 +2289,9 @@ export interface ReportAgentConfig {
   /** v27 preprocess：注入分类 system prompt 的身份文档勾选（profile-doc 名，如 ['soul','user']）。
    *  仅 type='preprocess' 有意义；NULL/未设 → 运行时回退默认 soul+user。 */
   context_docs?: string[]
+  /** v29 preprocess：行级 fallback 模型链。null = 跟随全局 LLM_FALLBACK_MODELS；
+   *  [] = 显式不设兜底。仅 type='preprocess' 有意义（其余恒 null）。 */
+  fallback_models?: string[] | null
   updated_at: number | null
 }
 
@@ -2309,6 +2312,9 @@ export interface ReportConfigPatch {
   tools?: string[]
   /** v27 preprocess：身份文档勾选（wire.config_patch_to_db 写 context_docs_json 列）。 */
   context_docs?: string[]
+  /** v29 preprocess：行级 fallback 链（wire.config_patch_to_db 写 fallback_models_json 列）。
+   *  null = 重置回跟随全局；[] = 显式不设兜底。 */
+  fallback_models?: string[] | null
 }
 
 /** report:createAgent — 新建一行 agent（type 多态）。 */

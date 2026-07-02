@@ -71,6 +71,20 @@ def resolve_agent(agent: Dict[str, Any]) -> Dict[str, Any]:
     else:
         # 非 preprocess（report/search）不用此字段 → 一律 []，忽略任何残留列值（codex 复审 MED）。
         context_docs = []
+    # v29: preprocess 行级 fallback 链。NULL/非法 → None（投影 null = 跟随全局
+    # LLM_FALLBACK_MODELS —— 与 context_docs 不同, 不回填默认: "跟随全局"本身就是前端要显示
+    # 的态）；JSON list → list（[] = 显式不设兜底）。非 preprocess 一律 None（不用此字段）。
+    _raw_fb = agent.get("fallback_models_json")
+    try:
+        _parsed_fb = json.loads(_raw_fb) if _raw_fb else None
+        if _parsed_fb is not None and not isinstance(_parsed_fb, list):
+            _parsed_fb = None
+    except (json.JSONDecodeError, TypeError):
+        _parsed_fb = None
+    if agent_type == "preprocess" and _parsed_fb is not None:
+        fallback_models = [str(x) for x in _parsed_fb]
+    else:
+        fallback_models = None
     # tools_json → list（DB 存 JSON 串）。NULL/非法：type='search' 回退默认搜索工具,
     # 其余（report）回退空 list（report agent 历史上 tools_json 全 NULL, 不破坏其投影）。
     _tools_default = ["email_search_fulltext"] if agent_type == "search" else []
@@ -100,6 +114,7 @@ def resolve_agent(agent: Dict[str, Any]) -> Dict[str, Any]:
         "timezone": (agent.get("timezone") or ""),
         "body_full_priorities": body_full_priorities,
         "context_docs": context_docs,  # v27: preprocess 文档勾选
+        "fallback_models": fallback_models,  # v29: preprocess 行级 fallback（null=跟随全局）
         "updated_at": agent.get("updated_at"),
     }
 
@@ -170,4 +185,16 @@ def config_patch_to_db(raw: Dict[str, Any]) -> Dict[str, Any]:
         db_patch["context_docs_json"] = json.dumps(
             [str(x) for x in raw["context_docs"]], ensure_ascii=False
         )
+    if "fallback_models" in raw:
+        # v29: preprocess 行级 fallback 链。与 context_docs 不同：None 必须能显式落 SQL NULL
+        # （用户从自定义切回"跟随全局"的路径）；list → JSON 串（[] = 显式不设兜底）。
+        fb = raw["fallback_models"]
+        if fb is None:
+            db_patch["fallback_models_json"] = None
+        elif isinstance(fb, list):
+            db_patch["fallback_models_json"] = json.dumps(
+                [str(x) for x in fb], ensure_ascii=False
+            )
+        else:
+            raise ValueError("fallback_models must be list or null")
     return db_patch

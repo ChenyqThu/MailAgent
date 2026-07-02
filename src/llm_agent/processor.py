@@ -138,19 +138,32 @@ class LLMProcessor:
         """Classify a single email; raises LLMCallError on any failure."""
         mailbox = getattr(email, "mailbox", "") or "收件箱"
         # 预处理 Agent 行配置读一次：docs 给 _build_system 注入身份文档、model 覆写模型
-        # 链头（row.model 空 = 跟随全局 LLM_MODEL；fallback 链恒走全局 env）。
+        # 链头（row.model 空 = 跟随全局 LLM_MODEL）、fallback 链走行级列（v29：None =
+        # 跟随全局 env LLM_FALLBACK_MODELS，[] = 显式不设兜底）。
         pp = get_preprocess_config(cfg.sync_store_db_path)
         system_blocks = await self._build_system(mailbox, pp)
         user_msg = self._build_user(email)
 
+        # 双跟随（model 空 + fallback None）→ None 走 classify 内建全局链（行为字节级同
+        # 拆分前）；任一被定制 → 显式链 [行模型或全局模型, *有效 fallback]。全局 fallback
+        # 是逗号分隔 env 串，解析同 client._resolve_model_chain（勿直接 * 解包 str）。
+        if pp.fallback_models is not None:
+            _fallbacks = pp.fallback_models
+        else:
+            _fallbacks = [
+                m.strip() for m in (cfg.llm_fallback_models or "").split(",") if m.strip()
+            ]
+        model_chain = (
+            None
+            if (not pp.model and pp.fallback_models is None)
+            else [pp.model or cfg.llm_model, *_fallbacks]
+        )
         result: LLMResult = await self._client.classify(
             system_blocks=system_blocks,
             user_content=user_msg,
             tool_schema=EMAIL_TOOL_SCHEMA,
             tool_name="classify_email",
-            model_chain=(
-                [pp.model, *cfg.llm_fallback_models] if pp.model else None
-            ),
+            model_chain=model_chain,
         )
         return self._parse(result, mailbox)
 

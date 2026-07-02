@@ -1632,7 +1632,7 @@
       },
       "fallbacks": {
         "label": "Fallback 链",
-        "helper": "主模型挂掉时兜底；从启用列表中选择一个备用模型，留空表示不设备模型",
+        "helper": "主模型失败时的全局兜底链；邮件预处理可在其 Agent 卡单独设置（默认跟随全局）",
         "none": "（不设备模型）"
       },
       "contextPageId": {
@@ -2435,9 +2435,11 @@
         "rules": "规则 / rules",
         "user": "用户偏好 / user"
       },
-      "webReadOnly": "远程 Web 为只读：启用状态与 fallback 不可修改（仅本地桌面端可改）；模型与文档勾选仍可编辑。",
+      "webReadOnly": "远程 Web 为只读：启用状态不可修改（仅本地桌面端可改）；模型、fallback 与文档勾选仍可编辑。",
       "fallback": "Fallback 备用模型",
-      "fallbackHint": "主模型失败时的全局兜底链（对其他后台 AI 任务同样生效）；留空不设（需重启）",
+      "fallbackHint": "预处理专用 fallback，保存即生效；默认跟随全局设置（设置 → AI 的 Fallback 链）",
+      "fallbackFollowGlobal": "跟随全局（{model}）",
+      "fallbackGlobalUnset": "未设",
       "fallbackNone": "（不设）",
       "promptView": "分类 Prompt（内置，只读）",
       "promptViewHint": "实际用于邮件分类的 mailbox prompt 文件，收件箱与发件箱各一份；身份/偏好由上方勾选的文档注入",
@@ -2447,7 +2449,7 @@
       },
       "promptEmpty": "（文件不存在或为空 —— 分类时只用内置硬约束）",
       "promptLoadError": "分类 Prompt 加载失败（serve-api 未就绪？）",
-      "envSaveError": "保存启用状态 / fallback 失败",
+      "envSaveError": "保存启用状态失败",
       "rowSaveError": "保存预处理配置失败"
     }
   },

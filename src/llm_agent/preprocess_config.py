@@ -1,10 +1,10 @@
 """issue #31/#32 增量2 — 读 AI 邮件预处理 Custom Agent 的运行时配置。
 
 预处理 = Agents 页 type='preprocess' 的 Custom Agent（id='email_preprocess_agent'）。
-它的模型（model 列，空 = 跟随全局 LLM_MODEL）+ 文档勾选（context_docs_json 列）存在
-report_agent 表（sync_store.db）。开关走全局 env（LLM_AGENT_ENABLED），fallback 链走
-全局 env（LLM_FALLBACK_MODELS）。本模块只取 model/docs 供 LLMProcessor 叠加 ——
-不填 = 字节级回退全局默认。
+它的模型（model 列，空 = 跟随全局 LLM_MODEL）+ 文档勾选（context_docs_json 列）+
+fallback 链（fallback_models_json 列，v29：NULL = 跟随全局 LLM_FALLBACK_MODELS）存在
+report_agent 表（sync_store.db）。开关走全局 env（LLM_AGENT_ENABLED）。本模块只取
+model/docs/fallback 供 LLMProcessor 叠加 —— 不填 = 字节级回退全局默认。
 
 v1.1.0 dogfood 起 persona 层已移除：身份/偏好由 Standing Context 文档注入
 （context_docs 勾选 soul/user 等），不再有独立 persona 覆写；旧行残留的 prompt
@@ -35,16 +35,20 @@ class PreprocessConfig:
     # context_docs_json 列 —— None = 列 NULL/缺失 → 用 build_task_identity_context 默认；
     # []（用户取消全部勾选）→ 显式不注入任何身份文档。
     context_docs: Optional[List[str]] = None
+    # fallback_models_json 列（v29）—— None = 跟随全局 LLM_FALLBACK_MODELS；
+    # [] = 显式不设兜底；[m, ...] = 预处理专用 fallback 链。
+    fallback_models: Optional[List[str]] = None
 
 
 def get_preprocess_config(db_path: str) -> PreprocessConfig:
-    """读 report_agent 的 preprocess 行 → model + context_docs。任何缺失 graceful 空。"""
+    """读 report_agent 的 preprocess 行 → model + context_docs + fallback。任何缺失 graceful 空。"""
     try:
         conn = sqlite3.connect(db_path, timeout=5.0)
         try:
             conn.row_factory = sqlite3.Row
             row = conn.execute(
-                "SELECT model, context_docs_json FROM report_agent WHERE id = ?",
+                "SELECT model, context_docs_json, fallback_models_json "
+                "FROM report_agent WHERE id = ?",
                 (PREPROCESS_AGENT_ID,),
             ).fetchone()
         finally:
@@ -67,4 +71,15 @@ def get_preprocess_config(db_path: str) -> PreprocessConfig:
                 context_docs = [str(x) for x in parsed]
         except (json.JSONDecodeError, TypeError):
             context_docs = None
-    return PreprocessConfig(model=model, context_docs=context_docs)
+    fallback_models: Optional[List[str]] = None
+    raw_fb = row["fallback_models_json"]
+    if raw_fb:
+        try:
+            parsed_fb = json.loads(raw_fb)
+            if isinstance(parsed_fb, list):
+                fallback_models = [str(x) for x in parsed_fb]
+        except (json.JSONDecodeError, TypeError):
+            fallback_models = None
+    return PreprocessConfig(
+        model=model, context_docs=context_docs, fallback_models=fallback_models
+    )

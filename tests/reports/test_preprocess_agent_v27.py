@@ -58,12 +58,14 @@ def test_upgrade_from_v26_adds_column_and_seeds(tmp_path):
     conn.commit()
     conn.close()
 
-    SyncStore(p)  # v27 迁移：current_version=26 < 27 → ALTER + seed
+    SyncStore(p)  # v27/v29 迁移：current_version=26 < 27/29 → ALTER + seed
     cols = {r[1] for r in sqlite3.connect(p).execute("PRAGMA table_info(report_agent)").fetchall()}
     assert "context_docs_json" in cols
+    assert "fallback_models_json" in cols  # v29 ALTER 对旧库同样补齐
     agent = ReportStore(p).get_agent(PREPROCESS_AGENT_ID)
     assert agent is not None
     assert agent["context_docs_json"] == '["soul", "user"]'
+    assert agent["fallback_models_json"] is None  # 无 seed 变更：NULL = 跟随全局
 
 
 def test_resolve_agent_exposes_context_docs(db_path):
@@ -89,6 +91,7 @@ def test_get_preprocess_config_default_seed(db_path):
     pp = get_preprocess_config(db_path)
     assert pp.context_docs == ["soul", "user"]
     assert pp.model == ""  # 种子未设模型 → 跟随全局 LLM_MODEL
+    assert pp.fallback_models is None  # v29 种子未设 fallback → 跟随全局 LLM_FALLBACK_MODELS
 
 
 def test_get_preprocess_config_after_edit(db_path):
@@ -141,3 +144,79 @@ def test_resolve_agent_non_preprocess_forces_empty_docs(db_path):
     cfg = wire.resolve_agent(store.get_agent("email_search_agent"))
     assert cfg["type"] == "search"
     assert cfg["context_docs"] == []
+
+
+# ─── v29: 行级 fallback 拆分（dogfood R2 #2） ────────────────────────────────
+
+
+def test_upgrade_from_v28_adds_fallback_column(tmp_path):
+    """模拟 v28 旧库（有 context_docs_json、无 fallback_models_json）→ 重 init 应补列，
+    既有行留 NULL = 跟随全局（老用户升级零感知）。"""
+    p = str(tmp_path / "v28.db")
+    SyncStore(p)
+    conn = sqlite3.connect(p)
+    conn.execute("DROP TABLE report_agent")
+    conn.execute(
+        "CREATE TABLE report_agent (id TEXT PRIMARY KEY, type TEXT NOT NULL DEFAULT 'report', "
+        "enabled INTEGER NOT NULL DEFAULT 0, title TEXT, schedule_json TEXT, window_hours INTEGER, "
+        "prompt TEXT, model TEXT, tools_json TEXT, kos_enrich INTEGER NOT NULL DEFAULT 0, "
+        "trigger_mode TEXT, timezone TEXT, body_full_max INTEGER, body_full_priorities TEXT, "
+        "updated_at REAL, context_docs_json TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO report_agent (id, type, enabled, context_docs_json) "
+        "VALUES ('email_preprocess_agent', 'preprocess', 0, '[\"soul\", \"user\"]')"
+    )
+    conn.execute("UPDATE sync_state SET value='28' WHERE key='db_version'")
+    conn.commit()
+    conn.close()
+
+    SyncStore(p)  # v29 迁移：current_version=28 < 29 → ALTER
+    cols = {r[1] for r in sqlite3.connect(p).execute("PRAGMA table_info(report_agent)").fetchall()}
+    assert "fallback_models_json" in cols
+    agent = ReportStore(p).get_agent(PREPROCESS_AGENT_ID)
+    assert agent["fallback_models_json"] is None  # 既有行留 NULL
+    assert wire.resolve_agent(agent)["fallback_models"] is None  # 投影 = 跟随全局
+
+
+def test_config_patch_fallback_models_three_state_roundtrip(db_path):
+    store = ReportStore(db_path)
+    # 种子默认 NULL → 投影 null（跟随全局）
+    assert wire.resolve_agent(store.get_agent(PREPROCESS_AGENT_ID))["fallback_models"] is None
+    # 显式链
+    store.update_agent(
+        PREPROCESS_AGENT_ID, wire.config_patch_to_db({"fallback_models": ["m1", "m2"]})
+    )
+    assert wire.resolve_agent(store.get_agent(PREPROCESS_AGENT_ID))["fallback_models"] == [
+        "m1",
+        "m2",
+    ]
+    # 显式空 = 不设兜底
+    store.update_agent(PREPROCESS_AGENT_ID, wire.config_patch_to_db({"fallback_models": []}))
+    assert wire.resolve_agent(store.get_agent(PREPROCESS_AGENT_ID))["fallback_models"] == []
+    # None → 落 SQL NULL（从自定义切回跟随全局的路径）
+    store.update_agent(PREPROCESS_AGENT_ID, wire.config_patch_to_db({"fallback_models": None}))
+    row = store.get_agent(PREPROCESS_AGENT_ID)
+    assert row["fallback_models_json"] is None
+    assert wire.resolve_agent(row)["fallback_models"] is None
+
+
+def test_resolve_agent_non_preprocess_forces_null_fallback(db_path):
+    # 镜像 context_docs 的非 preprocess 强制语义：残留列值一律投影 None。
+    store = ReportStore(db_path)
+    store.update_agent("email_search_agent", {"fallback_models_json": '["m"]'})
+    cfg = wire.resolve_agent(store.get_agent("email_search_agent"))
+    assert cfg["type"] == "search"
+    assert cfg["fallback_models"] is None
+
+
+def test_get_preprocess_config_fallback_three_states(db_path):
+    store = ReportStore(db_path)
+    store.update_agent(
+        PREPROCESS_AGENT_ID, wire.config_patch_to_db({"fallback_models": ["fb-a"]})
+    )
+    assert get_preprocess_config(db_path).fallback_models == ["fb-a"]
+    store.update_agent(PREPROCESS_AGENT_ID, wire.config_patch_to_db({"fallback_models": []}))
+    assert get_preprocess_config(db_path).fallback_models == []
+    store.update_agent(PREPROCESS_AGENT_ID, wire.config_patch_to_db({"fallback_models": None}))
+    assert get_preprocess_config(db_path).fallback_models is None

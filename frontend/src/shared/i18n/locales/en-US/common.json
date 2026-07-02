@@ -1632,7 +1632,7 @@
       },
       "fallbacks": {
         "label": "Fallback chain",
-        "helper": "Used when the primary fails; select one model from the enabled list, or leave empty for none",
+        "helper": "Global fallback chain when the primary model fails; email preprocessing can override it on its agent card (defaults to follow global)",
         "none": "(no fallback)"
       },
       "contextPageId": {
@@ -2435,9 +2435,11 @@
         "rules": "Rules",
         "user": "User prefs"
       },
-      "webReadOnly": "Remote web is read-only: enable state and fallback can't be changed (desktop only); model and doc selection remain editable.",
+      "webReadOnly": "Remote web is read-only: enable state can't be changed (desktop only); model, fallback and doc selection remain editable.",
       "fallback": "Fallback model",
-      "fallbackHint": "Global fallback chain when the main model fails (also applies to other background AI tasks); empty = none (restart required)",
+      "fallbackHint": "Dedicated preprocessing fallback, effective on save; defaults to following the global setting (Settings → AI → Fallback chain)",
+      "fallbackFollowGlobal": "Follow global ({model})",
+      "fallbackGlobalUnset": "not set",
       "fallbackNone": "(none)",
       "promptView": "Classification prompt (built-in, read-only)",
       "promptViewHint": "The mailbox prompt files actually used for classification — one for inbox, one for sent; identity/preferences come from the docs checked above",
@@ -2447,7 +2449,7 @@
       },
       "promptEmpty": "(file missing or empty — classification uses only the built-in hard constraints)",
       "promptLoadError": "Failed to load classification prompt (serve-api not ready?)",
-      "envSaveError": "Failed to save enable state / fallback",
+      "envSaveError": "Failed to save enable state",
       "rowSaveError": "Failed to save preprocessing config"
     }
   },

@@ -540,8 +540,10 @@ def test_recommended_actions_non_dict_entries_dropped():
 
 
 def test_process_email_model_chain_override(monkeypatch):
-    """#8-ext（v1.1.0 dogfood）：预处理行设了 model → classify 收到 [row.model, *全局 fallback]；
-    未设（model=""）→ model_chain=None（classify 内部走全局 [LLM_MODEL, *fallback] 链）。
+    """#8-ext（v1.1.0 dogfood）+ R2 #2（DB v29 行级 fallback 拆分）：
+    行 model 设 + fallback 跟随（None）→ [row.model, *全局 fallback（env 逗号串解析）]；
+    双跟随（model="" + fallback None）→ model_chain=None（classify 内建全局链，字节级同拆分前）；
+    行 fallback 定制 → 显式链（model 空则链头回填全局 LLM_MODEL）；fallback=[] → 无兜底。
     """
     import src.llm_agent.processor as proc_mod
     from src.llm_agent.preprocess_config import PreprocessConfig
@@ -580,9 +582,12 @@ def test_process_email_model_chain_override(monkeypatch):
         "src.agent_config.task_context.build_task_identity_context",
         lambda **kw: "",
     )
-    monkeypatch.setattr(proc_mod.cfg, "llm_fallback_models", ["fb-1", "fb-2"])
+    # 真实类型是逗号分隔 env 串（config.py llm_fallback_models: str），非 list ——
+    # processor 须自行解析，勿直接 * 解包 str（R2 #2 前的旧代码曾把 str 解包成单字符）。
+    monkeypatch.setattr(proc_mod.cfg, "llm_fallback_models", "fb-1, fb-2")
+    monkeypatch.setattr(proc_mod.cfg, "llm_model", "global-main")
 
-    # row.model 设置 → 覆写链头，fallback 链仍全局
+    # row.model 设置 + fallback 跟随全局（None）→ 覆写链头，fallback 链解析自全局 env 串
     monkeypatch.setattr(
         proc_mod, "get_preprocess_config",
         lambda _path: PreprocessConfig(model="claude-haiku-4-5", context_docs=None),
@@ -590,10 +595,26 @@ def test_process_email_model_chain_override(monkeypatch):
     asyncio.run(p.process_email(_fake_email()))
     assert captured["model_chain"] == ["claude-haiku-4-5", "fb-1", "fb-2"]
 
-    # row.model 空 → None（跟随全局链）
+    # 双跟随（row.model 空 + fallback None）→ None（classify 内建全局链，字节级同拆分前）
     monkeypatch.setattr(
         proc_mod, "get_preprocess_config",
         lambda _path: PreprocessConfig(model="", context_docs=None),
     )
     asyncio.run(p.process_email(_fake_email()))
     assert captured["model_chain"] is None
+
+    # 行 fallback 定制 + model 空 → 链头回填全局 LLM_MODEL + 行 fallback（R2 #2）
+    monkeypatch.setattr(
+        proc_mod, "get_preprocess_config",
+        lambda _path: PreprocessConfig(model="", context_docs=None, fallback_models=["row-fb"]),
+    )
+    asyncio.run(p.process_email(_fake_email()))
+    assert captured["model_chain"] == ["global-main", "row-fb"]
+
+    # 行 fallback=[]（显式不设兜底）+ model 设 → 链只有行模型
+    monkeypatch.setattr(
+        proc_mod, "get_preprocess_config",
+        lambda _path: PreprocessConfig(model="row-m", context_docs=None, fallback_models=[]),
+    )
+    asyncio.run(p.process_email(_fake_email()))
+    assert captured["model_chain"] == ["row-m"]

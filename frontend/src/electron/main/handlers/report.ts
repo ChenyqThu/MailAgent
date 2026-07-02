@@ -78,6 +78,7 @@ interface AgentRow {
   timezone?: string | null
   body_full_priorities?: string | null
   context_docs_json?: string | null
+  fallback_models_json?: string | null
   updated_at?: number | null
 }
 
@@ -112,6 +113,12 @@ function _toAgentConfig(row: AgentRow): ReportAgentConfig {
       row.type === 'preprocess'
         ? (_parseJson<string[] | null>(row.context_docs_json, null) ?? ['soul', 'user'])
         : [],
+    // v29 preprocess：行级 fallback 链。NULL/缺列/垃圾 → null（跟随全局，与 wire.resolve_agent
+    // 一致——不回填默认，"跟随全局"本身就是要显示的态）；'[]' 保留空；非 preprocess 一律 null。
+    fallback_models:
+      row.type === 'preprocess'
+        ? _parseJson<string[] | null>(row.fallback_models_json, null)
+        : null,
     updated_at: row.updated_at ?? null
   }
 }
