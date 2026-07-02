@@ -1,6 +1,11 @@
 """ai_chat.db 读 + 写访问 —— serve-api 远程 chat 端点（V2.1 阶段 2 读 + 阶段 3 3b-3 写）。
 
-ai_chat.db = 前端 owned schema（``frontend/src/electron/main/chat_db.ts``，CHAT_DB_VERSION 16）。
+ai_chat.db = 前端 owned schema（``frontend/src/electron/main/chat_db.ts``，CHAT_DB_VERSION 17）。
+v17（S1 R1，task 07-02 openness wave1）= ``ai_chat_messages_fts``：ai_chat_messages.content 的
+FTS5 external-content 索引（tokenize='trigram'，中文子串可搜）+ INSERT/UPDATE/DELETE 同步触发器
++ 存量 'rebuild' backfill。本文件新增 ``search_sessions``（**只 SELECT**，0 CREATE TABLE 不变式
+保持）：≥3 字符 query 走 FTS MATCH（phrase 转义，用户输入永不解析为 FTS 语法）；<3 字符（trigram
+索引够不着）或 FTS 表不存在（旧库未经前端迁移）→ LIKE 降级。
 v16（M5b，2026-06-30）= agent_memory_kv 物理退役（DROP TABLE）。记忆终态 = user.md(M3 恒注入) +
 mem0(M1/M2 capture/召回)；KV 表无 FK 依赖，简单事务 DROP。NOT EXPECTED_DB_VERSION。
 v15：ai_chat_sessions.archived INTEGER NOT NULL DEFAULT 0 — 软删标志（0=正常，1=已归档）。归档会话
@@ -93,6 +98,24 @@ def _resolve_anchor(
             f"anchor_type='email' requires a non-negative integer emailId, got {email_id!r}"
         )
     return "email", email_id, email_id
+
+
+def _clip_snippet(content: str, query: str, snippet_chars: int) -> str:
+    """把命中消息裁成以命中词为中心的 snippet（≤ snippet_chars 字符）。
+
+    大小写不敏感找 query 首次出现位置，窗口前置 ~30% 上下文；找不到（FTS 多词/大小写折叠
+    差异等）退化为开头截断。截断侧加省略号标记，模型能看出这是节选。
+    """
+    if len(content) <= snippet_chars:
+        return content
+    idx = content.lower().find(query.lower())
+    if idx < 0:
+        return content[:snippet_chars] + "…"
+    lead = max(0, idx - max(20, snippet_chars * 3 // 10))
+    clipped = content[lead : lead + snippet_chars]
+    prefix = "…" if lead > 0 else ""
+    suffix = "…" if lead + snippet_chars < len(content) else ""
+    return f"{prefix}{clipped}{suffix}"
 
 
 # UpdateMessagePatch / UpdateToolCallPatch（camelCase wire key → 列名）映射，**字段顺序逐字
@@ -241,6 +264,120 @@ class ChatDb:
             "SELECT * FROM ai_chat_messages WHERE session_id = ? ORDER BY created_at ASC, id ASC",
             (session_id,),
         )
+
+    # ── session search（S1 R1，只 SELECT — 0 CREATE TABLE 不变式）───────────
+
+    def search_sessions(
+        self,
+        query: str,
+        *,
+        session_limit: int = 20,
+        snippets_per_session: int = 3,
+        snippet_chars: int = 200,
+    ) -> List[Dict[str, Any]]:
+        """按消息内容检索历史会话，按 session 聚合返回 {session 元数据 + 命中 snippet}。
+
+        检索路径两级：≥3 字符 query → ``ai_chat_messages_fts`` MATCH（trigram，中文子串可搜；
+        query 恒转义成 FTS phrase ``"…"``，用户输入永不解析为 FTS 语法 → AND/OR/* 注入不进
+        MATCH 表达式）；<3 字符（trigram 索引最小 token=3，注定 0 命中）或 FTS 表不存在
+        （旧库未经前端 v17 迁移，OperationalError）→ LIKE 降级（``%``/``_``/``\\`` 转义）。
+
+        cap：session ≤ ``session_limit``（clamp 到 [1,20]）、每 session snippet ≤
+        ``snippets_per_session``、每 snippet ≤ ``snippet_chars`` 字符（命中词居中切窗）。
+        排序：FTS 按 rank（bm25），LIKE 按 created_at 倒序；session 序 = 其首个命中的出现序。
+        graceful（读契约）：库不存在 / 锁 / 损坏 → []。
+        """
+        query = (query or "").strip()
+        if not query or not os.path.exists(self.db_path):
+            return []
+        session_limit = max(1, min(int(session_limit), 20))
+        snippets_per_session = max(1, min(int(snippets_per_session), 5))
+        # 命中行按 hit-cap 预取：足够填满 session_limit×snippets 的聚合，又不无界扫全库。
+        hit_cap = 200
+        try:
+            with self._connection() as conn:
+                hits: Optional[List[sqlite3.Row]] = None
+                if len(query) >= 3:
+                    # FTS5 phrase：内部双引号翻倍转义 → 整个 query 是单一 phrase 字面量。
+                    match_expr = '"' + query.replace('"', '""') + '"'
+                    try:
+                        hits = conn.execute(
+                            """SELECT m.session_id, m.id AS message_id, m.role,
+                                      substr(m.content, 1, 4000) AS content, m.created_at
+                                 FROM ai_chat_messages_fts f
+                                 JOIN ai_chat_messages m ON m.id = f.rowid
+                                WHERE ai_chat_messages_fts MATCH ?
+                                ORDER BY rank
+                                LIMIT ?""",
+                            (match_expr, hit_cap),
+                        ).fetchall()
+                    except sqlite3.OperationalError:
+                        hits = None  # FTS 表不存在（未迁移库）→ LIKE 降级
+                if hits is None:
+                    like_expr = (
+                        "%"
+                        + query.replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_")
+                        + "%"
+                    )
+                    hits = conn.execute(
+                        r"""SELECT m.session_id, m.id AS message_id, m.role,
+                                  substr(m.content, 1, 4000) AS content, m.created_at
+                             FROM ai_chat_messages m
+                            WHERE m.content LIKE ? ESCAPE '\'
+                            ORDER BY m.created_at DESC, m.id DESC
+                            LIMIT ?""",
+                        (like_expr, hit_cap),
+                    ).fetchall()
+
+                # 按 session 聚合：session 序 = 首个命中的出现序（FTS=rank / LIKE=新→旧）。
+                by_session: Dict[int, List[sqlite3.Row]] = {}
+                order: List[int] = []
+                for h in hits:
+                    sid = h["session_id"]
+                    if sid not in by_session:
+                        if len(order) >= session_limit:
+                            continue
+                        by_session[sid] = []
+                        order.append(sid)
+                    if len(by_session[sid]) < snippets_per_session:
+                        by_session[sid].append(h)
+                if not order:
+                    return []
+
+                placeholders = ",".join("?" * len(order))
+                session_rows = {
+                    r["id"]: dict(r)
+                    for r in conn.execute(
+                        f"SELECT id, email_id, anchor_type, backend_kind, title, archived, "
+                        f"created_at, updated_at FROM ai_chat_sessions "
+                        f"WHERE id IN ({placeholders})",
+                        order,
+                    ).fetchall()
+                }
+                out: List[Dict[str, Any]] = []
+                for sid in order:
+                    sess = session_rows.get(sid)
+                    if sess is None:
+                        continue  # 孤儿消息（session 行已删）— 防御，正常被 FK CASCADE 挡住
+                    out.append(
+                        {
+                            "session": sess,
+                            "snippets": [
+                                {
+                                    "message_id": h["message_id"],
+                                    "role": h["role"],
+                                    "snippet": _clip_snippet(
+                                        h["content"], query, snippet_chars
+                                    ),
+                                    "created_at": h["created_at"],
+                                }
+                                for h in by_session[sid]
+                            ],
+                        }
+                    )
+                return out
+        except sqlite3.Error:
+            return []
 
     # ── tool calls ────────────────────────────────────────────────────────
 

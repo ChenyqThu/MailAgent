@@ -132,7 +132,17 @@ export type {
 // capture/召回)；agent_memory_kv KV 表物理退役，同时删 4 个显式 KV 工具 + Python KV 端点。
 // 无 FK 依赖（无 REFERENCES agent_memory_kv），简单事务 DROP。ai_chat.db 自有 version ladder；
 // NOT backend_lifecycle.EXPECTED_DB_VERSION。
-const CHAT_DB_VERSION = 16
+// v17 (S1 R1, task 07-02 openness wave1) — ai_chat_messages_fts: FTS5 external-content index over
+// ai_chat_messages.content (tokenize='trigram' → CJK substring search, ≥3-char queries; shorter
+// queries fall back to LIKE on the Python read side) + INSERT/UPDATE/DELETE sync triggers + a
+// 'rebuild' backfill of existing rows. `content` is the right index target for BOTH runtimes: the
+// gateway persist path dual-writes content (extractTextFromUIMessage) next to ui_message_json, and
+// legacy rows only ever had content. Consumed by src/chat/db.py search_sessions (SELECT-only —
+// the 0-CREATE-TABLE invariant there is unchanged; this migration is the single schema owner).
+// NOT flag-gated (additive, same discipline as every ladder step); the
+// MAILAGENT_OPENNESS_SESSION_TOOLS flag gates the TOOLS, not the schema. 🔴 bump 同步刷
+// src/chat/db.py 头注释；NOT backend_lifecycle.EXPECTED_DB_VERSION.
+const CHAT_DB_VERSION = 17
 
 export function resolveChatDbPath(): string {
   const fromEnv = process.env['AI_CHAT_DB_PATH']
@@ -913,6 +923,55 @@ function migrate(db: Database.Database): void {
       db.exec('DROP TABLE IF EXISTS agent_memory_kv')
       db.prepare(
         "INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', '16')"
+      ).run()
+      db.exec('COMMIT')
+    } catch (err) {
+      db.exec('ROLLBACK')
+      throw err
+    }
+  }
+
+  // v16 → v17 — S1 R1 (task 07-02 openness wave1) chat-session message FTS. External-content
+  // FTS5 over ai_chat_messages.content with tokenize='trigram' (CJK substring search — the same
+  // tokenizer sync_store's SEARCH_TRIGRAM path uses; queries shorter than 3 chars can't match a
+  // trigram index and fall back to LIKE in src/chat/db.py). Column-name-matches-content-table
+  // discipline as wiki_fts (v3). Sync triggers keep the index live for BOTH writers (gateway via
+  // this module, remote serve-api via src/chat/db.py — triggers fire inside SQLite regardless of
+  // who writes). The 'rebuild' command backfills every existing row from the content table and is
+  // naturally idempotent, so the whole block is safe to re-enter (IF NOT EXISTS + rebuild) after
+  // a crash-before-meta-write. Runs in one transaction (CREATE VIRTUAL TABLE inside BEGIN is fine
+  // — the v3 wiki_fts block set the precedent). ai_chat.db has its own version ladder; this bump
+  // does NOT touch backend_lifecycle.EXPECTED_DB_VERSION.
+  if (current < 17) {
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      db.exec(`
+        CREATE VIRTUAL TABLE IF NOT EXISTS ai_chat_messages_fts USING fts5(
+          content,
+          content='ai_chat_messages',
+          content_rowid='id',
+          tokenize='trigram'
+        );
+
+        CREATE TRIGGER IF NOT EXISTS ai_chat_messages_fts_ai AFTER INSERT ON ai_chat_messages BEGIN
+          INSERT INTO ai_chat_messages_fts(rowid, content)
+          VALUES (new.id, new.content);
+        END;
+        CREATE TRIGGER IF NOT EXISTS ai_chat_messages_fts_ad AFTER DELETE ON ai_chat_messages BEGIN
+          INSERT INTO ai_chat_messages_fts(ai_chat_messages_fts, rowid, content)
+          VALUES ('delete', old.id, old.content);
+        END;
+        CREATE TRIGGER IF NOT EXISTS ai_chat_messages_fts_au AFTER UPDATE ON ai_chat_messages BEGIN
+          INSERT INTO ai_chat_messages_fts(ai_chat_messages_fts, rowid, content)
+          VALUES ('delete', old.id, old.content);
+          INSERT INTO ai_chat_messages_fts(rowid, content)
+          VALUES (new.id, new.content);
+        END;
+
+        INSERT INTO ai_chat_messages_fts(ai_chat_messages_fts) VALUES ('rebuild');
+      `)
+      db.prepare(
+        "INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', '17')"
       ).run()
       db.exec('COMMIT')
     } catch (err) {

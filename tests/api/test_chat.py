@@ -1551,3 +1551,175 @@ def test_save_to_kos_role_not_assistant_400(
     r = kos_save_client.post("/api/chat/save-to-kos", json={"messageId": MSG_USER_ID})
     assert r.status_code == 400
     assert r.json()["error"]["code"] == "E_INVALID_ARG"
+
+
+# ── S1 R1 — search_sessions（ChatDb 直测 + /sessions/search 端点）────────────────
+# FTS 表由前端 chat_db.ts v17 迁移建（schema 归前端 owns）；下方 _FTS_DDL 是测试 fixture
+# 模拟「已迁移库」（db.py 本身 0 CREATE TABLE 不变式不破）。共用 seed（ai_chat_db fixture）
+# **无** FTS 表 → 正好覆盖「旧库未迁移 → OperationalError → LIKE 降级」路径。
+
+_FTS_DDL = """
+CREATE VIRTUAL TABLE ai_chat_messages_fts USING fts5(
+    content, content='ai_chat_messages', content_rowid='id', tokenize='trigram'
+);
+CREATE TRIGGER ai_chat_messages_fts_ai AFTER INSERT ON ai_chat_messages BEGIN
+    INSERT INTO ai_chat_messages_fts(rowid, content) VALUES (new.id, new.content);
+END;
+CREATE TRIGGER ai_chat_messages_fts_ad AFTER DELETE ON ai_chat_messages BEGIN
+    INSERT INTO ai_chat_messages_fts(ai_chat_messages_fts, rowid, content)
+    VALUES ('delete', old.id, old.content);
+END;
+CREATE TRIGGER ai_chat_messages_fts_au AFTER UPDATE ON ai_chat_messages BEGIN
+    INSERT INTO ai_chat_messages_fts(ai_chat_messages_fts, rowid, content)
+    VALUES ('delete', old.id, old.content);
+    INSERT INTO ai_chat_messages_fts(rowid, content) VALUES (new.id, new.content);
+END;
+INSERT INTO ai_chat_messages_fts(ai_chat_messages_fts) VALUES ('rebuild');
+"""
+
+
+@pytest.fixture
+def ai_chat_db_fts(ai_chat_db: Path) -> Path:
+    """共用 seed 之上补 FTS 表 + 触发器 + rebuild backfill（= 前端 v17 迁移后的库形状），
+    并加第二个 session（中文消息 ×2）供聚合/cap 断言。"""
+    now = int(time.time() * 1000)
+    conn = sqlite3.connect(str(ai_chat_db))
+    conn.execute(
+        "INSERT INTO ai_chat_sessions (id, email_id, anchor_type, anchor_id, backend_kind, "
+        "title, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)",
+        (2, None, "general", None, "ai-sdk", "redis 复盘", now, now),
+    )
+    conn.execute(
+        "INSERT INTO ai_chat_messages (id, session_id, role, content, status, created_at, "
+        "updated_at) VALUES (?,?,?,?,?,?,?)",
+        (10, 2, "user", "上季度 redis 超时复盘的结论是什么", "complete", now + 10, now + 10),
+    )
+    conn.execute(
+        "INSERT INTO ai_chat_messages (id, session_id, role, content, status, created_at, "
+        "updated_at) VALUES (?,?,?,?,?,?,?)",
+        (11, 2, "assistant", "redis 超时复盘结论：连接池上限调到 200", "complete", now + 11, now + 11),
+    )
+    conn.executescript(_FTS_DDL)
+    conn.commit()
+    conn.close()
+    return ai_chat_db
+
+
+def test_search_sessions_fts_cjk_substring(ai_chat_db_fts: Path) -> None:
+    """FTS 路径：≥3 字符中文子串命中（trigram），按 session 聚合返回元数据 + snippet。"""
+    db = ChatDb(str(ai_chat_db_fts))
+    out = db.search_sessions("超时复盘")
+    assert len(out) == 1
+    hit = out[0]
+    assert hit["session"]["id"] == 2
+    assert hit["session"]["title"] == "redis 复盘"
+    assert hit["session"]["anchor_type"] == "general"
+    # 两条消息都含「超时复盘」→ 同 session 聚合成 2 条 snippet。
+    assert len(hit["snippets"]) == 2
+    for sn in hit["snippets"]:
+        assert "超时复盘" in sn["snippet"]
+        assert sn["role"] in ("user", "assistant")
+        assert isinstance(sn["message_id"], int)
+
+
+def test_search_sessions_short_query_like_fallback(ai_chat_db_fts: Path) -> None:
+    """<3 字符 query：trigram 索引注定 0 命中 → LIKE 降级仍能搜到中文双字词。"""
+    db = ChatDb(str(ai_chat_db_fts))
+    out = db.search_sessions("复盘")
+    assert len(out) == 1
+    assert out[0]["session"]["id"] == 2
+    assert any("复盘" in sn["snippet"] for sn in out[0]["snippets"])
+
+
+def test_search_sessions_missing_fts_table_falls_back_to_like(ai_chat_db: Path) -> None:
+    """旧库（未经前端 v17 迁移，无 FTS 表）：FTS 查询 OperationalError → LIKE 降级命中。"""
+    db = ChatDb(str(ai_chat_db))
+    out = db.search_sessions("redis timeout")
+    assert len(out) == 1
+    assert out[0]["session"]["id"] == SESSION_ID
+    assert any("redis timeout" in sn["snippet"] for sn in out[0]["snippets"])
+
+
+def test_search_sessions_fts_syntax_never_parsed(ai_chat_db_fts: Path) -> None:
+    """query 恒转义为 FTS phrase：AND/OR/*/引号等 FTS 语法不被解析、不炸（返回 [] 或字面命中）。"""
+    db = ChatDb(str(ai_chat_db_fts))
+    for q in ('redis OR 超时', 'a" OR "b', "col:redis", "redis*", "NEAR(redis, 超时)"):
+        out = db.search_sessions(q)
+        assert isinstance(out, list)  # 绝不 OperationalError 泄漏
+    # 字面 phrase 语义：库里没有字面 "redis OR 超时" 文本 → 0 命中（若 OR 被解析会命中）。
+    assert db.search_sessions("redis OR 超时") == []
+
+
+def test_search_sessions_caps(ai_chat_db_fts: Path) -> None:
+    """session_limit / snippets_per_session / snippet_chars cap 全生效。"""
+    now = int(time.time() * 1000)
+    conn = sqlite3.connect(str(ai_chat_db_fts))
+    # 5 个新 session、每个 4 条超长命中消息（触发器自动进 FTS）。
+    long_body = "冗长前缀" * 120 + "唯一命中词组" + "冗长后缀" * 120
+    mid = 100
+    for sid in range(3, 8):
+        conn.execute(
+            "INSERT INTO ai_chat_sessions (id, email_id, anchor_type, anchor_id, backend_kind, "
+            "created_at, updated_at) VALUES (?,?,?,?,?,?,?)",
+            (sid, None, "general", None, "ai-sdk", now + sid, now + sid),
+        )
+        for _ in range(4):
+            mid += 1
+            conn.execute(
+                "INSERT INTO ai_chat_messages (id, session_id, role, content, status, "
+                "created_at, updated_at) VALUES (?,?,?,?,?,?,?)",
+                (mid, sid, "user", long_body, "complete", now + mid, now + mid),
+            )
+    conn.commit()
+    conn.close()
+    db = ChatDb(str(ai_chat_db_fts))
+    out = db.search_sessions("唯一命中词组", session_limit=3, snippets_per_session=2, snippet_chars=80)
+    assert len(out) == 3  # session cap
+    for hit in out:
+        assert len(hit["snippets"]) <= 2  # per-session snippet cap
+        for sn in hit["snippets"]:
+            # snippet_chars cap（含省略号 margin）+ 命中词居中切窗。
+            assert len(sn["snippet"]) <= 80 + 2
+            assert "唯一命中词组" in sn["snippet"]
+
+
+def test_search_sessions_missing_db(tmp_path: Path) -> None:
+    """库不存在 → []（graceful 读契约，不建空库）。"""
+    db = ChatDb(str(tmp_path / "absent.db"))
+    assert db.search_sessions("redis") == []
+    assert not (tmp_path / "absent.db").exists()
+
+
+def test_search_sessions_blank_query(ai_chat_db_fts: Path) -> None:
+    db = ChatDb(str(ai_chat_db_fts))
+    assert db.search_sessions("") == []
+    assert db.search_sessions("   ") == []
+
+
+def test_sessions_search_endpoint_shape(chat_client: TestClient) -> None:
+    """GET /api/chat/sessions/search：envelope 形状 + 聚合 data（共用 seed 无 FTS 表 → LIKE
+    降级路径，端点仍正常出结果）。"""
+    r = chat_client.get("/api/chat/sessions/search", params={"q": "redis timeout"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "success"
+    assert body["meta"]["count"] == 1
+    hit = body["data"][0]
+    assert hit["session"]["id"] == SESSION_ID
+    assert hit["session"]["backend_kind"] == "custom-api"
+    assert len(hit["snippets"]) >= 1
+    assert "redis timeout" in hit["snippets"][0]["snippet"]
+
+
+def test_sessions_search_endpoint_validation(chat_client: TestClient) -> None:
+    """q 缺失/超长、limit 越界 → FastAPI 422（Query 校验挡在 ChatDb 之前）。"""
+    assert chat_client.get("/api/chat/sessions/search").status_code == 422
+    assert (
+        chat_client.get("/api/chat/sessions/search", params={"q": "x" * 201}).status_code == 422
+    )
+    assert (
+        chat_client.get(
+            "/api/chat/sessions/search", params={"q": "redis", "limit": 21}
+        ).status_code
+        == 422
+    )

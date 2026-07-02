@@ -20,6 +20,7 @@ import { createWriteTools } from './write'
 import { createSendTools } from './send'
 import { applySkillGating } from './skill_gating'
 import { createSelfMountTools } from './self_mount'
+import { createSessionTools } from './sessions'
 import type { GatewayApprovalMode, GatewayToolAuditCollector } from './types'
 
 export interface BuildGatewayToolsOpts {
@@ -67,6 +68,11 @@ export interface BuildGatewayToolsOpts {
    *  other writes + self-mount writes. Off (default) → no consume, byte-identical to the pre-Part-B
    *  write path. */
   oneShotWrites?: boolean
+  /** S1 R1 (MAILAGENT_OPENNESS_SESSION_TOOLS) — when true, the three chat-session read tools
+   *  (chat_session_list / chat_session_search / chat_session_get) are added. Silent reads whose
+   *  message content is CHAT_HISTORY-fenced (past sessions embed email bodies = second-order
+   *  injection surface). Off (default) → not added → ToolSet byte-identical to the v1.2.0 set. */
+  sessionToolsEnabled?: boolean
 }
 
 /** Names of the read tools exposed by the gateway (for tests / observability). */
@@ -93,6 +99,13 @@ export function buildGatewayTools(
     ...createEmailReadTools(opts.domain, collector),
     ...createKosReadTools(opts.domain, collector, { timeDecayEnabled: opts.kosTimeDecayEnabled }),
     ...createReportReadTools(opts.domain, collector)
+  }
+  // S1 R1 — chat-session read tools behind MAILAGENT_OPENNESS_SESSION_TOOLS (default off →
+  // not added, byte-identical to the v1.2.0 set). Silent reads with CHAT_HISTORY-fenced output;
+  // CORE_UNGATED (no skill ownership — the flag is the on/off authority) so applySkillGating
+  // below never drops them.
+  if (opts.sessionToolsEnabled) {
+    Object.assign(tools, createSessionTools(opts.domain, collector))
   }
   // phase-03b — write tools only when the flag is on AND a guard is supplied. Off (or no
   // guard) → read-only, byte-identical to 03a. Approval is enforced two ways: ai@6's

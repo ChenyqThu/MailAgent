@@ -94,6 +94,23 @@ function untrustedBlock(kind: string, attrs: string, content: string): string {
   return `${head}\n${sanitizeUntrusted(content)}\nUNTRUSTED_${kind}_END`
 }
 
+/** S1 R1 (07-02 openness) — the untrusted-fence primitive for GATEWAY TOOL OUTPUTS (chat-session /
+ *  web tools returning second-order untrusted content into the model). Same fence + sanitization as
+ *  the system-prompt blocks above (untrustedBlock), with structured attrs. Content AND attrs are
+ *  sanitized (sanitizeUntrusted) so neither can close the fence early. */
+export function fenceUntrusted(
+  kind: string,
+  content: string,
+  attrs?: Record<string, string | number>
+): string {
+  const attrStr = attrs
+    ? Object.entries(attrs)
+        .map(([k, v]) => `${k}=${String(v)}`)
+        .join(' ')
+    : ''
+  return untrustedBlock(kind, attrStr, content)
+}
+
 const HEADER_LINES = [
   'You are MailAgent, an email productivity agent.',
   'The JSON inside <mailagent_context_json> is system-provided context metadata (trusted).',
@@ -188,8 +205,9 @@ export function buildContextSystemBlock(snapshot: AgentContextSnapshot): string 
  *  so even though the renderer normally fills these with code-owned values, a direct caller could
  *  inject. Two-step: break fence/UNTRUSTED_ tokens (sanitizeUntrusted) + collapse control chars
  *  (incl. CR/LF/TAB) to a space, so attacker text can't start a forged `## ` section or a new
- *  instruction line. (codex review HIGH.) */
-function sanitizeProse(value: string): string {
+ *  instruction line. (codex review HIGH.) Exported (S1 R1) for gateway tool outputs that surface
+ *  user-authored metadata (session titles / email subjects) as single-line prose fields. */
+export function sanitizeProse(value: string): string {
   // Collapse whitespace (incl. CR/LF) to one space so attacker text cannot start a forged section
   // header or new instruction line, then break fence + UNTRUSTED_ tokens (codex review HIGH).
   return sanitizeUntrusted(value).replace(/\s+/g, ' ').trim()

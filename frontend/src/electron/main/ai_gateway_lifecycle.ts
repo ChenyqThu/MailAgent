@@ -310,6 +310,11 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
   // MAILAGENT_MEM0_CAPTURE/RETRIEVAL). Off → applySkillGating never called → ToolSet byte-identical
   // to the cutover set.
   const skillGatingEnabled = envBool('MAILAGENT_SKILL_SELF_MOUNT', true)
+  // S1 R1 (task 07-02 openness wave1) — MAILAGENT_OPENNESS_SESSION_TOOLS gates the three
+  // chat-session read tools (chat_session_list/search/get). Default OFF (island 模式: ship off →
+  // dogfood → cutover 另拍); main-env-only, NO vite define (the renderer never reads it — mirrors
+  // MAILAGENT_ISLAND_AGENT_ENABLED). Off → buildGatewayTools output byte-identical to v1.2.0.
+  const sessionToolsEnabled = envBool('MAILAGENT_OPENNESS_SESSION_TOOLS', false)
   const apiBase = `http://127.0.0.1:${resolveApiPort()}/api`
   // M4a — prewarm the /chat/config cache ONCE before the server accepts requests so the per-request
   // buildTools factory reads a populated advertisedSkills on the very first turn (no null-first-turn
@@ -524,7 +529,9 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
           advertisedSkills: _systemPromptCache?.value?.advertisedSkills ?? null,
           // Part B — make preview/edit writes one-shot when island agent is on, so an island-resumed
           // approval and a renderer-resumed approval never double-execute. Off → byte-identical.
-          oneShotWrites: islandAgentEnabled
+          oneShotWrites: islandAgentEnabled,
+          // S1 R1 — chat-session read tools (MAILAGENT_OPENNESS_SESSION_TOOLS, default off).
+          sessionToolsEnabled
         },
         collector
       ),

@@ -177,6 +177,22 @@ async def list_general_sessions(request: Request):
     )
 
 
+@router.get("/sessions/search", dependencies=[Depends(verify_cf_access)])
+async def search_sessions(
+    request: Request,
+    q: str = Query(..., min_length=1, max_length=200),
+    limit: int = Query(20, ge=1, le=20),
+):
+    """S1 R1 — 按消息内容检索历史会话（FTS5 trigram，短 query/未迁移库 LIKE 降级）。按 session
+    聚合返回 {session 元数据 + 命中 snippet 列表}（条数/字节 cap 在 ChatDb.search_sessions）。
+    消费方 = gateway chat_session_search 工具（domainClient）；鉴权与本 router 其余 session
+    端点一致（verify_cf_access：本地 token 腿 / CF JWT 腿）。"""
+    results = get_chat_db().search_sessions(q, session_limit=limit)
+    return success_envelope(
+        results, request=request, source="sqlite", meta_extra={"count": len(results)}
+    )
+
+
 @router.get("/sessions/{session_id:int}/messages", dependencies=[Depends(verify_cf_access)])
 async def list_messages(request: Request, session_id: int):
     """某 session 的全部消息（按 created_at/id 升序）。镜像 chat:listMessages → ChatMessage[]。"""

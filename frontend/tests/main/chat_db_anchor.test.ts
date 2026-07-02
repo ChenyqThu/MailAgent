@@ -115,8 +115,8 @@ describe('chat_db — v6 → v7 anchor migration', () => {
     // chat_tool_call.ui_payload_json; v12 — chat_tool_call.content_hash + idempotency_key;
     // v13 — ai_chat_sessions.backend_kind CHECK widened to admit 'ai-sdk', a table rebuild;
     // v14 — ai_chat_sessions.title additive column; v15 — ai_chat_sessions.archived soft-delete column;
-    // v16 — DROP agent_memory_kv, M5b physical retirement).
-    expect(ver).toBe('16')
+    // v16 — DROP agent_memory_kv, M5b physical retirement; v17 — ai_chat_messages_fts, S1 R1).
+    expect(ver).toBe('17')
 
     // Anchor columns added + backfilled for the pre-existing email row.
     const row = db.prepare('SELECT * FROM ai_chat_sessions WHERE id = 1').get() as {

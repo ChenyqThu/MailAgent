@@ -129,7 +129,7 @@ describe('chat_db — path + schema bootstrap', () => {
     // P4 Phase 06a (06-23 chat-panel cutover): bumped to 13 — ai_chat_sessions.backend_kind CHECK admits 'ai-sdk'.
     // demo-fidelity Phase 10 (06-23 chat-panel agent view): bumped to 14 — ai_chat_sessions.title.
     // M5b (2026-06-30): bumped to 16 — DROP agent_memory_kv.
-    expect(ver.value).toBe('16')
+    expect(ver.value).toBe('17')
   })
 
   test('fresh DB schema includes the v2 metadata column', () => {
@@ -199,7 +199,7 @@ describe('chat_db — path + schema bootstrap', () => {
     const ver = db.prepare("SELECT value FROM chat_db_meta WHERE key = 'schema_version'").get() as {
       value: string
     }
-    expect(ver.value).toBe('16')
+    expect(ver.value).toBe('17')
   })
 
   test('v1-version DB ALTERs in the metadata column on first open (forward migration)', () => {
@@ -252,8 +252,8 @@ describe('chat_db — path + schema bootstrap', () => {
     }
     // Sprint 19 (PR-1a → bug-fix): v1 DB jumped to v4; task 06-08-chat Bug 2
     // bumped to v5; 需求 5 bumped to v6; P2a → v8; P4 Phase 02 → v9 → a v1 DB now
-    // climbs the whole ladder to v16.
-    expect(ver.value).toBe('16')
+    // climbs the whole ladder to v17.
+    expect(ver.value).toBe('17')
     const cols = db.prepare('PRAGMA table_info(ai_chat_messages)').all() as Array<{ name: string }>
     expect(cols.map((c) => c.name)).toContain('metadata')
     // v6 column present after climbing from v1.
@@ -345,7 +345,7 @@ describe('chat_db — path + schema bootstrap', () => {
           value: string
         }
       ).value
-    ).toBe('16')
+    ).toBe('17')
     // Narrow CHECK gone, widened CHECK in place.
     const sql = (
       db
@@ -390,19 +390,19 @@ describe('chat_db — path + schema bootstrap', () => {
           value: string
         }
       ).value
-    ).toBe('16')
+    ).toBe('17')
     // Simulate the crash window: roll the meta back to v3 while the physical
     // schema (content_offset + thinking columns, v4 table shape) stays at v6.
     db.prepare("UPDATE chat_db_meta SET value = '3' WHERE key = 'schema_version'").run()
     closeChatDb()
 
-    // Re-open: must NOT throw on duplicate ADD COLUMN, and must re-converge to v16.
+    // Re-open: must NOT throw on duplicate ADD COLUMN, and must re-converge to v17.
     expect(() => getChatDb()).not.toThrow()
     const reopened = getChatDb()
     const ver = reopened
       .prepare("SELECT value FROM chat_db_meta WHERE key='schema_version'")
       .get() as { value: string }
-    expect(ver.value).toBe('16')
+    expect(ver.value).toBe('17')
     // Columns are still present exactly once (no duplication, no loss).
     const msgCols = reopened.prepare('PRAGMA table_info(ai_chat_messages)').all() as Array<{
       name: string
@@ -1068,11 +1068,11 @@ describe('chat_db — v3 → v4 migration (drop UNIQUE on ai_chat_sessions)', ()
     seed.close()
 
     const db = getChatDb()
-    // Schema climbs v3 → v4 → … → v16.
+    // Schema climbs v3 → v4 → … → v17.
     const ver = db.prepare("SELECT value FROM chat_db_meta WHERE key = 'schema_version'").get() as {
       value: string
     }
-    expect(ver.value).toBe('16')
+    expect(ver.value).toBe('17')
     // UNIQUE gone — CREATE TABLE SQL no longer contains UNIQUE clause on
     // (email_id, backend_kind, backend_agent_page_id).
     const tableSql = (
@@ -1214,8 +1214,8 @@ describe('chat_db — v4 → v5 migration (chat_tool_call.content_offset)', () =
     const ver = db.prepare("SELECT value FROM chat_db_meta WHERE key = 'schema_version'").get() as {
       value: string
     }
-    // v4 DB now climbs the whole ladder to v16 (content_offset added at v5).
-    expect(ver.value).toBe('16')
+    // v4 DB now climbs the whole ladder to v17 (content_offset added at v5).
+    expect(ver.value).toBe('17')
     // Column present, pre-existing row reads NULL (degrade path in renderer).
     const cols = db.prepare('PRAGMA table_info(chat_tool_call)').all() as Array<{ name: string }>
     expect(cols.map((c) => c.name)).toContain('content_offset')
@@ -1277,7 +1277,7 @@ describe('chat_db — v5 → v6 migration (ai_chat_messages.thinking)', () => {
     const ver = db.prepare("SELECT value FROM chat_db_meta WHERE key = 'schema_version'").get() as {
       value: string
     }
-    expect(ver.value).toBe('16')
+    expect(ver.value).toBe('17')
     // Column present, pre-existing row reads NULL (no thinking block in renderer).
     const cols = db.prepare('PRAGMA table_info(ai_chat_messages)').all() as Array<{ name: string }>
     expect(cols.map((c) => c.name)).toContain('thinking')
@@ -1471,5 +1471,149 @@ describe('listAllSessions — global cross-email history', () => {
     expect(rows).toHaveLength(2)
     // newest two emails (603, 602)
     expect(rows.map((r) => r.email_id)).toEqual([603, 602])
+  })
+})
+
+// S1 R1 (task 07-02 openness wave1) — v16 → v17: ai_chat_messages_fts (FTS5 external-content,
+// tokenize='trigram') + sync triggers + 'rebuild' backfill. Consumed by src/chat/db.py
+// search_sessions (SELECT-only); this ladder step is the single schema owner.
+describe('chat_db — v16 → v17 migration (ai_chat_messages_fts)', () => {
+  const ftsHits = (q: string): number =>
+    (
+      getChatDb()
+        .prepare(
+          'SELECT COUNT(*) AS n FROM ai_chat_messages_fts WHERE ai_chat_messages_fts MATCH ?'
+        )
+        .get(`"${q}"`) as { n: number }
+    ).n
+
+  test('fresh DB carries the FTS table + the three sync triggers', () => {
+    const db = getChatDb()
+    const names = (
+      db
+        .prepare("SELECT name FROM sqlite_master WHERE name LIKE 'ai_chat_messages_fts%'")
+        .all() as Array<{ name: string }>
+    ).map((r) => r.name)
+    expect(names).toContain('ai_chat_messages_fts')
+    const triggers = (
+      db
+        .prepare("SELECT name FROM sqlite_master WHERE type='trigger' ORDER BY name")
+        .all() as Array<{ name: string }>
+    ).map((r) => r.name)
+    for (const t of [
+      'ai_chat_messages_fts_ai',
+      'ai_chat_messages_fts_ad',
+      'ai_chat_messages_fts_au'
+    ]) {
+      expect(triggers).toContain(t)
+    }
+  })
+
+  test('v16 DB with existing messages forward-migrates: backfill makes old rows searchable (CJK substring)', () => {
+    closeChatDb()
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const BetterSqlite3 = require('better-sqlite3') as typeof import('better-sqlite3')
+    const seed = new BetterSqlite3(dbPath)
+    // Full v16 shape: the v13 sessions table (+ v14 title / v15 archived) and the full
+    // messages column set — v17 only ADDS the FTS side, so the shapes must be real.
+    seed.exec(`
+      CREATE TABLE chat_db_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE ai_chat_sessions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        email_id INTEGER,
+        anchor_type TEXT NOT NULL DEFAULT 'email' CHECK (anchor_type IN ('email', 'general')),
+        anchor_id INTEGER,
+        backend_kind TEXT NOT NULL
+          CHECK (backend_kind IN ('notion-agent', 'custom-api', 'ai-sdk')),
+        backend_model TEXT,
+        backend_agent_page_id TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        title TEXT,
+        archived INTEGER NOT NULL DEFAULT 0,
+        CHECK (
+          (anchor_type = 'email' AND email_id IS NOT NULL AND anchor_id = email_id)
+          OR (anchor_type = 'general' AND anchor_id IS NULL AND email_id IS NULL)
+        )
+      );
+      CREATE TABLE ai_chat_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id INTEGER NOT NULL REFERENCES ai_chat_sessions(id) ON DELETE CASCADE,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL,
+        tokens_input INTEGER, tokens_output INTEGER, cost_usd REAL, model TEXT,
+        status TEXT NOT NULL, error_message TEXT, metadata TEXT,
+        thinking TEXT, ui_message_json TEXT,
+        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+      );
+      INSERT INTO chat_db_meta (key, value) VALUES ('schema_version', '16');
+      INSERT INTO ai_chat_sessions
+        (id, email_id, anchor_type, anchor_id, backend_kind, created_at, updated_at)
+        VALUES (3, 777, 'email', 777, 'ai-sdk', 0, 0);
+      INSERT INTO ai_chat_messages (session_id, role, content, status, created_at, updated_at)
+        VALUES (3, 'user', '上季度 redis 超时复盘的结论是什么', 'complete', 0, 0);
+    `)
+    seed.close()
+
+    const db = getChatDb()
+    expect(
+      (
+        db.prepare("SELECT value FROM chat_db_meta WHERE key='schema_version'").get() as {
+          value: string
+        }
+      ).value
+    ).toBe('17')
+    // The 'rebuild' backfill indexed the pre-existing row: trigram CJK substring hits.
+    expect(ftsHits('超时复盘')).toBe(1)
+    expect(ftsHits('redis')).toBe(1)
+  })
+
+  test('triggers keep the FTS index live on INSERT / UPDATE / DELETE (real write paths)', () => {
+    const s = createNewSession({ emailId: 801, backendKind: 'ai-sdk' })
+    const m = appendMessage({
+      sessionId: s.id,
+      role: 'user',
+      content: '交换机固件升级排期确认',
+      status: 'complete'
+    })
+    expect(ftsHits('固件升级')).toBe(1)
+
+    updateMessage(m.id, { content: '改聊 access point 的事' })
+    expect(ftsHits('固件升级')).toBe(0)
+    expect(ftsHits('access point')).toBe(1)
+
+    deleteMessagesFromId(s.id, m.id)
+    expect(ftsHits('access point')).toBe(0)
+  })
+
+  test('deleteSession cascade also clears the FTS index (FK cascade fires the delete trigger)', () => {
+    const s = createNewSession({ emailId: 802, backendKind: 'ai-sdk' })
+    appendMessage({
+      sessionId: s.id,
+      role: 'assistant',
+      content: '灵动岛审批链路已经打通',
+      status: 'complete'
+    })
+    expect(ftsHits('灵动岛审批')).toBe(1)
+    deleteSession(s.id)
+    expect(ftsHits('灵动岛审批')).toBe(0)
+  })
+
+  test('re-entry with physical v17 but meta rolled back to 16 converges without error', () => {
+    // Build the fully-migrated DB, then roll ONLY the meta back — the IF NOT EXISTS
+    // guards + the idempotent 'rebuild' must converge instead of throwing.
+    const db = getChatDb()
+    const s = createNewSession({ emailId: 803, backendKind: 'ai-sdk' })
+    appendMessage({ sessionId: s.id, role: 'user', content: '重入收敛用例', status: 'complete' })
+    db.prepare("UPDATE chat_db_meta SET value = '16' WHERE key = 'schema_version'").run()
+    closeChatDb()
+
+    expect(() => getChatDb()).not.toThrow()
+    const ver = getChatDb()
+      .prepare("SELECT value FROM chat_db_meta WHERE key='schema_version'")
+      .get() as { value: string }
+    expect(ver.value).toBe('17')
+    // Rebuild is idempotent — the row is indexed exactly once.
+    expect(ftsHits('重入收敛')).toBe(1)
   })
 })

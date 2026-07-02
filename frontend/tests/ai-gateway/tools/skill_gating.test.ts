@@ -30,7 +30,10 @@ function buildAllTools() {
     // M4b/M4c — also build the self-mount tools (update_system_md / discover_skills /
     // set_skill_enabled) so the FORWARD completeness guard sees them. advertisedSkills left unset
     // → applySkillGating not called → the full unfiltered set.
-    skillGatingEnabled: true
+    skillGatingEnabled: true,
+    // S1 R1 — chat-session read tools (MAILAGENT_OPENNESS_SESSION_TOOLS) so both drift-guard
+    // directions see them (they are classified CORE_UNGATED).
+    sessionToolsEnabled: true
   })
 }
 

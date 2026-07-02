@@ -198,6 +198,55 @@ export interface DomainResolvedSkill {
   sourceType: string
 }
 
+// ── session-read shapes (S1 R1) — the /chat/sessions/* rows the session tools consume.
+//    snake_case mirrors the serve-api envelope data (src/chat/db.py rows). ────────────
+
+/** chat_session_list — one row of GET /chat/sessions/all (ChatSessionSummary + email join). */
+export interface DomainChatSessionSummary {
+  id: number
+  email_id: number | null
+  anchor_type: string
+  backend_kind: string
+  title: string | null
+  archived: number | boolean
+  created_at: number
+  updated_at: number
+  first_user_message: string | null
+  message_count: number
+  email_subject?: string | null
+  email_sender?: string | null
+}
+
+/** chat_session_get — one row of GET /chat/sessions/{id}/messages (the subset the tool reads). */
+export interface DomainChatMessage {
+  id: number
+  session_id: number
+  role: string
+  content: string
+  model: string | null
+  created_at: number
+}
+
+/** chat_session_search — one aggregated hit of GET /chat/sessions/search. */
+export interface DomainSessionSearchHit {
+  session: {
+    id: number
+    email_id: number | null
+    anchor_type: string
+    backend_kind: string
+    title: string | null
+    archived: number | boolean
+    created_at: number
+    updated_at: number
+  }
+  snippets: Array<{
+    message_id: number
+    role: string
+    snippet: string
+    created_at: number
+  }>
+}
+
 export class MailAgentDomainClient {
   private readonly baseUrl: string
   private readonly localToken: string | null
@@ -495,6 +544,38 @@ export class MailAgentDomainClient {
     if (typeof input.sessionId === 'number') body.sessionId = input.sessionId
     return this._req<{ captured: unknown[]; count: number }>('POST', '/chat/memory/capture', {
       body,
+      signal
+    })
+  }
+
+  // ── session-read primitives (S1 R1) — the chat-session tools read the SAME ai_chat.db the
+  //    gateway persists into, but through serve-api /chat/sessions/* (never SQLite directly):
+  //    remote parity for free + the gateway core stays chat_db-free (纯核纪律). The tools that
+  //    call these are only registered when MAILAGENT_OPENNESS_SESSION_TOOLS is on.
+
+  /** chat_session_list — recent sessions incl. preview + message_count. GET /chat/sessions/all
+   *  (fixed server-side cap 300; the tool slices to its own limit). */
+  listSessions(signal?: AbortSignal): Promise<DomainChatSessionSummary[]> {
+    return this._req<DomainChatSessionSummary[]>('GET', '/chat/sessions/all', { signal })
+  }
+
+  /** chat_session_search — FTS (trigram) message search aggregated by session. GET
+   *  /chat/sessions/search (param is `q`; <3-char queries LIKE-fallback server-side). */
+  searchSessions(
+    query: string,
+    limit?: number,
+    signal?: AbortSignal
+  ): Promise<DomainSessionSearchHit[]> {
+    return this._req<DomainSessionSearchHit[]>('GET', '/chat/sessions/search', {
+      query: { q: query, limit },
+      signal
+    })
+  }
+
+  /** chat_session_get — all messages of one session (chronological). GET
+   *  /chat/sessions/{id}/messages. Missing session → [] (the endpoint reads gracefully). */
+  getSessionMessages(sessionId: number, signal?: AbortSignal): Promise<DomainChatMessage[]> {
+    return this._req<DomainChatMessage[]>('GET', `/chat/sessions/${sessionId}/messages`, {
       signal
     })
   }

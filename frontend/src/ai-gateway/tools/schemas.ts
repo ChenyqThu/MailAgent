@@ -170,3 +170,27 @@ export const setSkillEnabledSchema = z.object({
   enabled: z.boolean()
 })
 export type SetSkillEnabledInput = z.infer<typeof setSkillEnabledSchema>
+
+// ── chat-session schemas (S1 R1) — the agent reads its own past conversations. Behind
+//    MAILAGENT_OPENNESS_SESSION_TOOLS. All three are silent reads; returned message content
+//    is untrusted (past sessions embed email bodies) and is CHAT_HISTORY-fenced by the tools. ──
+
+/** chat_session_list — recent chat sessions (metadata + first-message preview). */
+export const chatSessionListSchema = z.object({
+  limit: z.number().int().min(1).max(50).default(20)
+})
+export type ChatSessionListInput = z.infer<typeof chatSessionListSchema>
+
+/** chat_session_search — full-text search over past chat messages (query required). */
+export const chatSessionSearchSchema = z.object({
+  query: z.string().min(1).max(200),
+  limit: z.number().int().min(1).max(20).default(10)
+})
+export type ChatSessionSearchInput = z.infer<typeof chatSessionSearchSchema>
+
+/** chat_session_get — read one past session's messages (recent window, capped). */
+export const chatSessionGetSchema = z.object({
+  session_id: z.number().int(),
+  limit: z.number().int().min(1).max(100).default(30)
+})
+export type ChatSessionGetInput = z.infer<typeof chatSessionGetSchema>
