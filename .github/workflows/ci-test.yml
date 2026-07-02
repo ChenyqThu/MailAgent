@@ -1,0 +1,152 @@
+# CI 测试闸 (E0 WP1)
+#
+# 在此之前 repo 从 tag 到签名发布唯一的机器闸是 typecheck (藏在 build-mac 的 pnpm run build
+# 里)。本 workflow 补上测试闸: push/PR 到 main 直接触发; build-mac.yml (tag 发布主链路) 经
+# workflow_call 复用同一份 job (build job 加 needs, 见 build-mac.yml)。
+#
+# 组成 (全零 LLM token, 无外部服务依赖), 两个 job 均零排除 (2026-07-02 E0 收尾达成):
+#   python-tests   — 后端 pytest 全量 (零排除本地实测 3216 passed; 干净 venv+干净 env
+#                    下 ~1m34s, 项目 venv+真实 .env 下 ~4m15s — 见下环境说明;
+#                    GitHub 3-vCPU runner 预计 ~3-10min)
+#                    + agent_eval 四道闸: pytest 硬闸 R1-R8 / schema+coverage validate
+#                    / tool catalog 漂移 / baseline compare 机制闸 (self-compare)
+#   frontend-tests — vitest (零排除本地实测 ~31s / 181 files 2173 passed 1 skipped;
+#                    pnpm test 自带 rebuild:node 把 better-sqlite3 切到 Node ABI)
+#
+# ABI 纪律 (0.2.3 事故的流水线化解法): 本 workflow 的 test job 与 build-mac 的 build job
+# 是不同 runner 实例 — build job 自身不跑测试, 其 pnpm install (postinstall) 产出的
+# Electron ABI better-sqlite3 不会被 rebuild:node 污染, 无需 rebuild:electron 步骤。
+#
+# 环境说明: CI 无 .env → 注入 5 个 dummy env (见 python-tests job env 注释), 让 config
+# 可 import 且 CLI 命令过配置前置检查; 测试本身全部 mock 外部服务 (Notion / Mail.app /
+# davmail / Redis), 不打真实 API。建闸时经本地干净 venv + 干净 env 全量实测绿 (1m34s);
+# E0 收尾达成零排除后以项目 venv + 真实 .env 复测绿 (2026-07-02, 3216 passed)。两个时长
+# 档的差 (~4m15s vs 1m34s) 来自真实 .env 下 tests/cli 的 llm run 系列各挂 ~10s 端点连接
+# 等待 (--durations 实测) — dummy env fail-fast, CI 条件贴近快档。
+
+name: CI tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  # build-mac.yml 复用 (tag 发布链路过同一道闸)
+  workflow_call: {}
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+# 仅对 push/PR 直接触发生效 (被 workflow_call 调用时以 caller 的 concurrency 为准)
+concurrency:
+  group: ci-test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python-tests:
+    runs-on: macos-14 # 与 build-mac 同 runner 族 (arm64), 测试环境贴近发布环境
+    timeout-minutes: 30
+    env:
+      # dummy env (CI 无 .env; 其余字段全走代码默认值)。前 3 个 = config.py 必填字段
+      # (Field(...), 缺了 import config 即 ValidationError):
+      NOTION_TOKEN: ci-dummy-token
+      EMAIL_DATABASE_ID: ci-dummy-email-db
+      USER_EMAIL: ci@example.test
+      # tests/cli/test_notion_create_task.py: create-task 命令有非空前置检查
+      # (src/cli/commands/notion.py:904), 空值 → E_INTERNAL 挡在断言前
+      CALENDAR_DATABASE_ID: ci-dummy-calendar-db
+      # tests/cli/test_schema_contract.py calendar sync-now: CalDAVReader 构造函数即要
+      # cipher key (caldav_reader.py:177 → imap_client.get_cipher_key), 连接是 lazy 的、
+      # 测试 mock 掉全部读方法 → dummy 值即 hermetic。🔴 env 键 = validation_alias
+      # "DAVMAIL_POC_CIPHER_KEY" (config.py:704), 不是报错文案里的 DAVMAIL_CIPHER_KEY
+      DAVMAIL_POC_CIPHER_KEY: ci-dummy-cipher
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11' # 对齐本地 venv (3.11.14) 与嵌入式打包 runtime
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+
+      - name: Install backend deps
+        # 运行时依赖在 requirements.txt (pyproject [project] 无 dependencies 键);
+        # extras: dev=pytest 栈, cli=typer 栈, api=fastapi/httpx (tests/api + tests/events
+        # 的 TestClient 需要)。memory extra (mem0/faiss ~150MB) 不装 — mem0_engine 顶层
+        # 懒加载, tests/memory 全 mock, 干净 venv 实测绿。
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -e ".[cli,dev,api]"
+
+      - name: Backend pytest
+        # 零排除 — 建闸时 main 上预存的 stale 测试 (test_expansion_loop stale import /
+        # test_reverse_sync_outbox 旧签名断言) 已随 E0 修复 (2026-07-02)。
+        run: python -m pytest tests/ -q -p no:cacheprovider --ignore=tests/agent_eval
+
+      - name: agent_eval hard gate (R1-R8, zero-LLM)
+        # 改 chat agent prompt/工具/编排引擎的行为回归金标准 (CLAUDE.md 纪律机器化)
+        run: python -m pytest tests/agent_eval -q -p no:cacheprovider
+
+      - name: agent_eval schema + coverage validate
+        working-directory: tests/agent_eval
+        run: python -m runner.run_baseline --validate
+
+      - name: agent_eval tool catalog drift check
+        # tool_catalog.json 必须与 frontend/src/shared/chat/tools/builtin 的真实工具
+        # (name + confirmationTier) 同步, 否则 R3/R5 规则失真 (exit 1 = drift)
+        run: python tests/agent_eval/runner/validate_catalog.py --eval-root tests/agent_eval
+
+      - name: agent_eval baseline compare gate (self-compare)
+        # --compare 必须带 --candidate-traces (缺参 exit 2)。CI 无新录制 candidate
+        # (live recorder 是 manual lane, 见 schema.md §7), 用 baseline 自比对作机制闸:
+        # 校验 baseline trace 文件与当前 tasks/catalog 的一致性 (坏 hash / dup / 未知
+        # 工具 / orphan → exit 1) + 走通完整 compare 通路。评分回归由上面 pytest 硬闸
+        # 断言; 换引擎后的真回归闸 = 本地录新 trace 后手动
+        #   run_baseline --compare --candidate-traces runs/<branch>.jsonl
+        # (对部分覆盖的 trace 集 compare 恒 REGRESSED — 缺失任务即回归, 勿在 CI 里
+        # 拿 runs/*.jsonl 当 candidate)。--out 指到 RUNNER_TEMP, 不覆盖工作区已提交的
+        # baselines/*.report.compare.json。
+        working-directory: tests/agent_eval
+        run: |
+          python -m runner.run_baseline --compare \
+            --candidate-traces baselines/v0.13.0.jsonl \
+            --out "$RUNNER_TEMP/ci-compare"
+
+  frontend-tests:
+    runs-on: macos-14
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10 # 对齐 pnpm-lock (pnpm 10.x), 与 build-mac.yml 一致
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22 # 与 build-mac.yml 一致 (CI 用 LTS)
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Install deps
+        run: pnpm install --frozen-lockfile
+
+      - name: vitest (pnpm test = rebuild:node + vitest run)
+        # rebuild:node 把 better-sqlite3 prebuild 切到 Node ABI (--arch=arm64, macos-14
+        # 即 arm64) 后跑 vitest (pool: forks, node 环境)。本 job 不打包, 测完即弃 —
+        # Electron ABI 切回纪律由「build job 独立 runner 不跑测试」保证 (见文件头)。
+        # 零排除 — 建闸时预存失败的 assistant-modal-state (node 26 下 localStorage 全局为
+        # undefined) 已随 E0 修复。若将来需临时排除: 写 `pnpm test --exclude <glob>`, 勿写
+        # `pnpm test -- --exclude` (pnpm 直接转发未知 flag, 字面 `--` 会传给 vitest 变成
+        # 文件过滤参数, 实测排除不生效)。
+        run: pnpm test

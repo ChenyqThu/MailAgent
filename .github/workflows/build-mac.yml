@@ -36,7 +36,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  test:
+    # E0 WP1: 发布主链路过测试闸 — 经 workflow_call 复用 ci-test.yml (与 push/PR 同一闸)。
+    # 测试红 → build 不启动 → tag 不产出 draft release。test 与 build 是不同 runner 实例,
+    # build job 自身不跑测试, better-sqlite3 保持 postinstall 的 Electron ABI (0.2.3 事故防线)。
+    uses: ./.github/workflows/ci-test.yml
+
   build:
+    needs: test # E0 WP1: 测试闸绿才进 build
     strategy:
       fail-fast: false
       matrix:
