@@ -33,7 +33,9 @@ function buildAllTools() {
     skillGatingEnabled: true,
     // S1 R1 — chat-session read tools (MAILAGENT_OPENNESS_SESSION_TOOLS) so both drift-guard
     // directions see them (they are classified CORE_UNGATED).
-    sessionToolsEnabled: true
+    sessionToolsEnabled: true,
+    // S1 R2 — profile-config tools (MAILAGENT_OPENNESS_CONFIG_TOOLS), same rationale.
+    configToolsEnabled: true
   })
 }
 

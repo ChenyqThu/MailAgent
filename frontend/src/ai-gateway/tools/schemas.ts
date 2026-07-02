@@ -171,6 +171,41 @@ export const setSkillEnabledSchema = z.object({
 })
 export type SetSkillEnabledInput = z.infer<typeof setSkillEnabledSchema>
 
+// ── profile-config schemas (S1 R2) — the agent reads its own Standing Context docs / history
+//    and proposes restores + memory.md updates. Behind MAILAGENT_OPENNESS_CONFIG_TOOLS.
+//    doc_name is pinned to the backend STORABLE_DOC_NAMES enum (4 identity docs + memory —
+//    wider than update_system_md's, which deliberately EXCLUDES memory: identity 边界).
+//    Reads are silent; agent_profile_restore / agent_memory_update are edit-tier writes
+//    (always ask, no editableFields → approve/reject only, update_system_md 先例). ──
+
+/** agent_profile_read (S1 R2) — full content + version info of one profile doc. */
+export const agentProfileReadSchema = z.object({
+  doc_name: z.enum(['soul', 'agent', 'rules', 'user', 'memory'])
+})
+export type AgentProfileReadInput = z.infer<typeof agentProfileReadSchema>
+
+/** agent_profile_history (S1 R2) — version history of one profile doc (newest first). */
+export const agentProfileHistorySchema = z.object({
+  doc_name: z.enum(['soul', 'agent', 'rules', 'user', 'memory']),
+  limit: z.number().int().min(1).max(100).default(20)
+})
+export type AgentProfileHistoryInput = z.infer<typeof agentProfileHistorySchema>
+
+/** agent_profile_restore (S1 R2) — roll one profile doc back to a history version
+ *  (target_hash = a version_hash from agent_profile_history). Edit-tier write. */
+export const agentProfileRestoreSchema = z.object({
+  doc_name: z.enum(['soul', 'agent', 'rules', 'user', 'memory']),
+  target_hash: z.string().min(1).max(128)
+})
+export type AgentProfileRestoreInput = z.infer<typeof agentProfileRestoreSchema>
+
+/** agent_memory_update (S1 R2) — propose new full content for memory.md (bounded memory;
+ *  the Python endpoint enforces the hard character budget). Edit-tier write. */
+export const agentMemoryUpdateSchema = z.object({
+  content: z.string().min(1)
+})
+export type AgentMemoryUpdateInput = z.infer<typeof agentMemoryUpdateSchema>
+
 // ── chat-session schemas (S1 R1) — the agent reads its own past conversations. Behind
 //    MAILAGENT_OPENNESS_SESSION_TOOLS. All three are silent reads; returned message content
 //    is untrusted (past sessions embed email bodies) and is CHAT_HISTORY-fenced by the tools. ──

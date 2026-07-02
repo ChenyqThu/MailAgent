@@ -357,6 +357,9 @@ class AgentConfigStore:
         """把文档回滚到某历史版本（按其 ``new_hash`` 定位 content_snapshot）。
 
         回滚本身记一条新 history（changed_by 透传）。找不到 target_hash → KeyError。
+        RULES 目标内容不过 validator → ValueError（S1 R2：历史里可能存在 validator 收紧前
+        / 绕过 router 落库的版本，回滚=一次普通写，享受同一 deny-list 闸——此前只有写端点
+        agent.py 校验，rollback 路径可把越权 RULES 快照重新激活）。
         """
         name = self._validate_doc_name(doc_name)
         with self._connection() as conn:
@@ -367,6 +370,12 @@ class AgentConfigStore:
             ).fetchone()
         if hist is None:
             raise KeyError(f"no history version {target_hash} for doc {name}")
+        if name == "rules":
+            from src.agent_config.validator import validate_rules_content
+
+            reason = validate_rules_content(hist["content_snapshot"])
+            if reason:
+                raise ValueError(reason)
         # 复用 set_profile_doc 写当前 + 记新 history（回滚=一次普通写，内容=历史快照）。
         return self.set_profile_doc(
             name, hist["content_snapshot"], updated_by=updated_by, session_id=session_id

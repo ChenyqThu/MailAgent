@@ -202,7 +202,8 @@ async def rollback_profile_doc(name: str, request: Request, body: Optional[dict[
     """把文档回滚到某历史版本（按 targetHash 定位 content_snapshot）。body = {targetHash, updatedBy?}。
 
     回滚**不**重复 budget 校验：历史快照落库时已在预算内（capture 截断 / 写端点 guard），恢复
-    已知良好版本是显式用户操作；即便后来调小了预算，也允许恢复历史（下轮 capture 会自动再压回）。"""
+    已知良好版本是显式用户操作；即便后来调小了预算，也允许恢复历史（下轮 capture 会自动再压回）。
+    RULES 例外（S1 R2）：目标快照仍过 validate_rules_content（store 层），拒把越权版本回滚复活。"""
     if name not in STORABLE_DOC_NAMES:
         raise APIError("E_NOT_FOUND", f"unknown or non-editable profile doc: {name}",
                        http_status=404, source="sqlite")
@@ -217,6 +218,9 @@ async def rollback_profile_doc(name: str, request: Request, body: Optional[dict[
         )
     except KeyError as exc:
         raise APIError("E_NOT_FOUND", str(exc), http_status=404, source="sqlite") from exc
+    except ValueError as exc:
+        # S1 R2 — RULES 回滚目标含越权指令（store 层 validate_rules_content 拒）→ 400。
+        raise APIError("E_INVALID_ARG", str(exc), http_status=400, source="sqlite") from exc
     if name == MEMORY_DOC_NAME:
         return success_envelope(_memory_doc_dict(doc), request=request, source="sqlite")
     return success_envelope(_editable_doc_dict(doc), request=request, source="sqlite")

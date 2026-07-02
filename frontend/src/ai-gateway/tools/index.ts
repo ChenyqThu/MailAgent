@@ -21,6 +21,7 @@ import { createSendTools } from './send'
 import { applySkillGating } from './skill_gating'
 import { createSelfMountTools } from './self_mount'
 import { createSessionTools } from './sessions'
+import { createProfileTools } from './profile'
 import type { GatewayApprovalMode, GatewayToolAuditCollector } from './types'
 
 export interface BuildGatewayToolsOpts {
@@ -73,6 +74,12 @@ export interface BuildGatewayToolsOpts {
    *  message content is CHAT_HISTORY-fenced (past sessions embed email bodies = second-order
    *  injection surface). Off (default) → not added → ToolSet byte-identical to the v1.2.0 set. */
   sessionToolsEnabled?: boolean
+  /** S1 R2 (MAILAGENT_OPENNESS_CONFIG_TOOLS) — when true AND approvalGuard is supplied, the four
+   *  profile-config tools are added: agent_profile_read / agent_profile_history (silent reads;
+   *  memory content comes back MEMORY-fenced) + agent_profile_restore / agent_memory_update
+   *  (edit-tier writes, always ask — never auto-approved). Off (default) → not added → ToolSet
+   *  byte-identical to the v1.2.0 set. */
+  configToolsEnabled?: boolean
 }
 
 /** Names of the read tools exposed by the gateway (for tests / observability). */
@@ -141,6 +148,21 @@ export function buildGatewayTools(
     Object.assign(
       tools,
       createSelfMountTools(opts.domain, collector, opts.approvalGuard, {
+        a2uiEnabled: opts.a2uiEnabled,
+        approvalMode: opts.approvalMode,
+        oneShot: opts.oneShotWrites
+      })
+    )
+  }
+  // S1 R2 — profile-config tools behind MAILAGENT_OPENNESS_CONFIG_TOOLS. Mixed set (2 silent
+  // reads + 2 edit-tier writes) → all-or-nothing on flag + guard (self-mount 先例: a write tool
+  // cannot exist without its guard, and registering only the reads would advertise a half
+  // capability). CORE (no skill ownership) so applySkillGating below never drops them.
+  // flag-off (default) → not added → byte-identical to the v1.2.0 set.
+  if (opts.configToolsEnabled && opts.approvalGuard) {
+    Object.assign(
+      tools,
+      createProfileTools(opts.domain, collector, opts.approvalGuard, {
         a2uiEnabled: opts.a2uiEnabled,
         approvalMode: opts.approvalMode,
         oneShot: opts.oneShotWrites

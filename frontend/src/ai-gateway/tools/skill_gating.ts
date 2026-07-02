@@ -56,7 +56,13 @@ export const CORE_UNGATED_GATEWAY_TOOLS: ReadonlySet<string> = new Set([
   // 在独立 flag（先例：kos_query + self-mount 三件套），永不 skill-gated。
   'chat_session_list',
   'chat_session_search',
-  'chat_session_get'
+  'chat_session_get',
+  // S1 R2 profile-config 工具（behind MAILAGENT_OPENNESS_CONFIG_TOOLS）—— agent 自配置面，
+  // 无 skill 归属，开关权在独立 flag，永不 skill-gated。
+  'agent_profile_read',
+  'agent_profile_history',
+  'agent_profile_restore',
+  'agent_memory_update'
 ])
 
 /** 删掉「归属 skill ∉ advertisedSkills 且无任一 advertised skill 仍拥有它 且非 collision-exempt」的

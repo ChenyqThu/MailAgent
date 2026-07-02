@@ -173,14 +173,31 @@ function buildQuery(query: Record<string, QueryValue>): string {
  * tool's primitive to one endpoint, unwrapping the `{status, data, error}` envelope
  * (returns `data` on success/partial_failure, throws DomainError on `status:error`).
  */
-/** M4b — one Standing Context doc (soul/agent/rules/user) from /agent/profile/docs/{name}. */
+/** M4b — one Standing Context doc (soul/agent/rules/user) from /agent/profile/docs/{name}.
+ *  S1 R2: also the shape of GET (read) + rollback + the memory doc — `budgetChars` is present
+ *  only for memory (its always-injected hard character budget); `updatedAt` is epoch ms on the
+ *  wire (store `_now()` int). */
 export interface DomainProfileDocResult {
   docName: string
   content: string
   contentHash: string
   updatedBy: string
-  updatedAt: string | null
+  updatedAt: string | number | null
   editable: boolean
+  budgetChars?: number
+}
+
+/** S1 R2 — one version-history entry from GET /agent/profile/history (newest first).
+ *  `newHash` is the version identifier a rollback targets (targetHash). */
+export interface DomainProfileHistoryEntry {
+  id: number
+  docName: string
+  oldHash: string | null
+  newHash: string
+  changedBy: string
+  sessionId: number | null
+  messageId: number | null
+  createdAt: number
 }
 
 /** M4c — one resolved skill from /agent/skills (discover_skills projection). */
@@ -599,6 +616,64 @@ export class MailAgentDomainClient {
       `/agent/profile/docs/${encodeURIComponent(name)}`,
       { body, signal }
     )
+  }
+
+  // ── profile-config primitives (S1 R2) — read/history/restore Standing Context docs +
+  //    memory.md edit. Same /agent/* owner surface as setProfileDoc (verify_cf_access local-token
+  //    leg). The tools that call these are only registered when MAILAGENT_OPENNESS_CONFIG_TOOLS
+  //    is on; the two writes are gated by the gateway ApprovalGuard (edit-tier, always ask).
+
+  /** agent_profile_read (S1 R2) — full content + version info of one profile doc
+   *  (soul/agent/rules/user/memory). GET /agent/profile/docs/{name}; memory carries
+   *  budgetChars. */
+  readProfileDoc(name: string, signal?: AbortSignal): Promise<DomainProfileDocResult> {
+    return this._req<DomainProfileDocResult>(
+      'GET',
+      `/agent/profile/docs/${encodeURIComponent(name)}`,
+      { signal }
+    )
+  }
+
+  /** agent_profile_history (S1 R2) — version history (newest first). GET /agent/profile/history
+   *  ?docName=&limit= → data.history. */
+  async listProfileHistory(
+    docName: string,
+    limit?: number,
+    signal?: AbortSignal
+  ): Promise<DomainProfileHistoryEntry[]> {
+    const data = await this._req<{ history: DomainProfileHistoryEntry[] }>(
+      'GET',
+      '/agent/profile/history',
+      { query: { docName, limit }, signal }
+    )
+    return data.history ?? []
+  }
+
+  /** agent_profile_restore (S1 R2) — roll a profile doc back to a history version. POST
+   *  /agent/profile/docs/{name}/rollback {targetHash}. For name==='rules' the server re-runs
+   *  validate_rules_content on the target snapshot → 400 E_INVALID_ARG (→ DomainError) so a
+   *  jailbreak version can never be revived. The tool passes updatedBy='agent_proposed'. */
+  rollbackProfileDoc(
+    name: string,
+    targetHash: string,
+    signal?: AbortSignal
+  ): Promise<DomainProfileDocResult> {
+    return this._req<DomainProfileDocResult>(
+      'POST',
+      `/agent/profile/docs/${encodeURIComponent(name)}/rollback`,
+      { body: { targetHash, updatedBy: 'agent_proposed' }, signal }
+    )
+  }
+
+  /** agent_memory_update (S1 R2) — overwrite memory.md (bounded memory). POST
+   *  /agent/profile/docs/memory; the server enforces the hard character budget → 400
+   *  E_INVALID_ARG (→ DomainError) when exceeded. Kept separate from setProfileDoc so the
+   *  identity boundary stays explicit (memory ≠ Standing Context identity doc). */
+  setMemoryDoc(content: string, signal?: AbortSignal): Promise<DomainProfileDocResult> {
+    return this._req<DomainProfileDocResult>('POST', '/agent/profile/docs/memory', {
+      body: { content, updatedBy: 'agent_proposed' },
+      signal
+    })
   }
 
   /** discover_skills (M4c) — list resolved skills (enabled/available/unavailableReason/toolCount).
