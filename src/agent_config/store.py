@@ -627,6 +627,53 @@ class AgentConfigStore:
             conn.commit()
         return removed
 
+    def set_skill_last_error(self, skill_name: str, error: Optional[str]) -> None:
+        """落/清一个 skill 的 ``last_error``（W4 完整性闸：``tampered:<relpath>``）。无行 no-op。
+
+        Settings 据此标红 + 提供「重新信任（re-hash）」入口；install_skill upsert 时自动清
+        （``last_error=NULL``，见上）。
+        """
+        with self._connection() as conn:
+            conn.execute(
+                "UPDATE agent_skills SET last_error = ?, updated_at = ? WHERE skill_name = ?",
+                (error, _now(), skill_name),
+            )
+            conn.commit()
+
+    def merge_first_run_approved(self, skill_name: str, updates: dict[str, dict]) -> None:
+        """把首跑记录 merge 进 ``first_run_approved`` JSON（W4 首跑闸，ADR-002 §5）。
+
+        形状 ``{<entrypoint_realpath>: {version, entrypoint_hash, approved_at}}`` —— 绑
+        version + entrypoint hash（非裸时间戳）：skill 升级 / 换脚本后旧记录自动失效、
+        首跑闸重新触发。``approved_at`` 缺失时由本层补当前 epoch。无行 no-op（供应链外
+        内容根本过不了完整性闸，不会走到这）。
+        """
+        if not updates:
+            return
+        now = _now()
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT first_run_approved FROM agent_skills WHERE skill_name = ?",
+                (skill_name,),
+            ).fetchone()
+            if row is None:
+                return
+            try:
+                existing = json.loads(row["first_run_approved"] or "{}")
+                if not isinstance(existing, dict):
+                    existing = {}
+            except (ValueError, TypeError):
+                existing = {}
+            for entrypoint, rec in updates.items():
+                merged = dict(rec)
+                merged.setdefault("approved_at", now)
+                existing[entrypoint] = merged
+            conn.execute(
+                "UPDATE agent_skills SET first_run_approved = ?, updated_at = ? WHERE skill_name = ?",
+                (json.dumps(existing, ensure_ascii=False, sort_keys=True), now, skill_name),
+            )
+            conn.commit()
+
     def list_skill_secret_names(self, skill_name: str) -> list[str]:
         """一个 skill 已存储的密钥**名**列表（永不返回值 —— 值列是密文，W3 解密专属）。"""
         with self._connection() as conn:

@@ -10,6 +10,7 @@ Bearer（Bearer 是 ``/api/skills`` 的外部 agent 通道，agent 改自身配�
 from __future__ import annotations
 
 import json
+import os
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -298,10 +299,36 @@ async def install_agent_skill(request: Request, body: Optional[dict[str, Any]] =
     )
 
 
+def _full_uninstall(name: str) -> dict[str, Any]:
+    """全清理卸载单源（W4 收口）：删 agent_skills 行 + 删 ``<skills>/<name>/`` 落盘目录 + 删
+    skill_secrets 行。``POST /skills/uninstall`` 与旧 ``DELETE /skills/{name}`` 的 pack 分支共用
+    —— 两条路径必须同一份清理集，否则同名重装会收养 stale secrets（W2 review P2-2）。幂等。"""
+    from src.skills.pack_fetch import remove_skill_dir
+
+    store = get_agent_config_store()
+    removed_row = store.uninstall_skill(name)
+    removed_dir = remove_skill_dir(name)
+    removed_secrets = store.delete_skill_secrets(name)
+    return {
+        "name": name,
+        "removed": removed_row or removed_dir,
+        "removedDir": removed_dir,
+        "removedSecrets": removed_secrets,
+    }
+
+
 @router.delete("/skills/{name}", dependencies=[Depends(verify_cf_access)])
 async def uninstall_agent_skill(name: str, request: Request):
-    """卸载一个 skill 行（installed → 卸载；builtin 懒行 → 回退代码默认）。幂等。"""
-    removed = get_agent_config_store().uninstall_skill(name)
+    """卸载一个 skill 行。**deprecated-for-packs**（W4 收口，W2 review P2-2）：pack 安装行
+    （判据 = ``files_json`` 非空 —— 只有供应链 confirm 会写它；document/mcp 声明行与 builtin
+    懒行都不写）→ 委托与 ``POST /skills/uninstall`` 相同的全清路径（行+目录+secrets），防
+    「仅删行 → 同名重装收养 stale secrets/目录」。非 pack 行为不变：builtin 懒行删除 = 回退
+    代码默认；document/mcp 声明行只删行（本就无目录/secrets 生命周期）。幂等。"""
+    store = get_agent_config_store()
+    existing = store.get_skill(name)
+    if existing is not None and existing.files_json:
+        return success_envelope(_full_uninstall(name), request=request, source="sqlite")
+    removed = store.uninstall_skill(name)
     return success_envelope({"name": name, "removed": removed}, request=request, source="sqlite")
 
 
@@ -497,28 +524,155 @@ async def delete_skill_secret(name: str, secret_name: str, request: Request):
 @router.post("/skills/uninstall", dependencies=[Depends(verify_cf_access)])
 async def uninstall_agent_skill_full(request: Request, body: Optional[dict[str, Any]] = None):
     """全清理卸载（S2 W2）：删 agent_skills 行 + 删 <skills>/<name>/ 落盘目录 + 删 skill_secrets 行。
-    body = {name}。密钥 Keychain master key 不动（W3 拥有加解密生命周期）。幂等。"""
-    from src.skills.pack_fetch import remove_skill_dir
-
+    body = {name}。密钥 Keychain master key 不动（W3 拥有加解密生命周期）。幂等。W4 起清理集
+    收敛进 ``_full_uninstall``（与旧 DELETE 的 pack 分支单源）。"""
     raw = body or {}
     name = raw.get("name")
     if not isinstance(name, str) or not name.strip():
         raise APIError("E_INVALID_ARG", "body.name is required", http_status=400, source="sqlite")
-    name = name.strip()
-    store = get_agent_config_store()
-    removed_row = store.uninstall_skill(name)
-    removed_dir = remove_skill_dir(name)
-    removed_secrets = store.delete_skill_secrets(name)
+    return success_envelope(_full_uninstall(name.strip()), request=request, source="sqlite")
+
+
+# ── skill 供应链读面（S2 W4 —— 审批卡服务端事实渲染 + skill_read 文档 + per-skill 配置）────────
+
+
+@router.get("/skills/quarantine/{qid}", dependencies=[Depends(verify_cf_access)])
+async def get_quarantine_facts(qid: str, request: Request):
+    """SkillInstallConfirmCard 的服务端事实源（ADR-002 §4：模型无法在卡上谎报包内容）——按
+    quarantine_id **重算** ``verify_content_dir``（卡上 hash = 盘上真相，非读 meta 缓存），返回
+    与 fetch preview 同形状的事实。qid 非法 → 400；quarantine 不存在 → 404。"""
+    from src.skills.pack_fetch import _quarantine_dir, _read_meta
+    from src.skills.pack_verify import PackError, verify_content_dir
+
+    try:
+        qdir = _quarantine_dir(qid)  # _QID_RE + realpath 含界闸（pack_fetch 单源）
+    except PackError as exc:
+        raise APIError(exc.code, exc.message, http_status=exc.http_status, source="sqlite") from exc
+    content = os.path.join(qdir, "content")
+    if not os.path.isdir(content):
+        raise APIError("E_NOT_FOUND", f"quarantine not found: {qid}", http_status=404, source="sqlite")
+    try:
+        vp = verify_content_dir(content)  # 重算 —— 与 fetch/confirm 同一算法
+    except PackError as exc:
+        raise APIError(exc.code, exc.message, http_status=exc.http_status, source="sqlite") from exc
+
+    meta = _read_meta(qdir)
+    m = vp.manifest_dict
+    secret_names = [
+        s.get("name") for s in (m.get("secrets") or []) if isinstance(s, dict) and s.get("name")
+    ]
     return success_envelope(
         {
-            "name": name,
-            "removed": removed_row or removed_dir,
-            "removedDir": removed_dir,
-            "removedSecrets": removed_secrets,
+            "quarantineId": qid,
+            "sourceType": meta.get("source_type"),
+            "sourceUri": meta.get("source_uri"),
+            "packageHash": vp.package_hash,
+            "files": vp.files,
+            "manifest": {
+                "name": m.get("name"),
+                "type": m.get("type"),
+                "version": m.get("version"),
+                "title": m.get("title"),
+                "description": m.get("description"),
+                "entryHint": m.get("entry_hint"),
+                "manifestVersion": m.get("manifest_version"),
+            },
+            "secretNames": secret_names,
+            "skillMdExcerpt": vp.skill_md[:_SKILL_MD_EXCERPT_MAX],
         },
         request=request,
         source="sqlite",
     )
+
+
+# SKILL.md 服务器侧读取上限（防怪物文件一口气进内存/响应；TS 进模型上下文前再截 32KB + 围栏）。
+_SKILL_DOC_CAP_BYTES = 64 * 1024
+# config.json 写入上限。
+_SKILL_CONFIG_CAP_BYTES = 64 * 1024
+
+
+def _installed_skill_dir(name: str) -> str:
+    """name 过 ``_SKILL_NAME_RE`` + realpath 含界 → ``<skills>/<name>`` 绝对路径。非法名 → 400。"""
+    from src.agent_config.store import _SKILL_NAME_RE
+    from src.skills.pack_fetch import skill_dir, skills_data_root
+
+    if not _SKILL_NAME_RE.match(name or ""):
+        raise APIError("E_INVALID_ARG", f"invalid skill name: {name!r}", http_status=400, source="sqlite")
+    d = skill_dir(name)
+    root = os.path.realpath(skills_data_root())
+    rd = os.path.realpath(d)
+    if rd != root and not rd.startswith(root + os.sep):  # belt-and-suspenders（正则已挡 / 与 .）
+        raise APIError("E_INVALID_ARG", "skill name escapes skills root", http_status=400, source="sqlite")
+    return d
+
+
+@router.get("/skills/{name}/doc", dependencies=[Depends(verify_cf_access)])
+async def get_skill_doc(name: str, request: Request):
+    """读一个已落盘 skill 的 SKILL.md **原文**（W4 ``skill_read`` 工具的数据源）。第三方文本的
+    围栏（``UNTRUSTED_SKILL_DOC`` + 32KB 截断 + 警示头）是 TS 壳进模型上下文时的职责 —— 本端点
+    不围栏（Settings 等 owner 面也读原文）。服务器侧 cap 64KB 防怪物文件。无文件 → 404。"""
+    d = _installed_skill_dir(name)
+    path = os.path.join(d, "SKILL.md")
+    if not os.path.isfile(path):
+        raise APIError("E_NOT_FOUND", f"skill doc not found: {name}", http_status=404, source="sqlite")
+    try:
+        with open(path, "rb") as f:
+            raw = f.read(_SKILL_DOC_CAP_BYTES + 1)
+    except OSError as exc:
+        raise APIError("E_INTERNAL", f"cannot read skill doc: {exc}", http_status=500, source="sqlite") from exc
+    truncated = len(raw) > _SKILL_DOC_CAP_BYTES
+    content = raw[:_SKILL_DOC_CAP_BYTES].decode("utf-8", errors="replace")
+    return success_envelope(
+        {"name": name, "content": content, "truncated": truncated},
+        request=request,
+        source="sqlite",
+    )
+
+
+@router.get("/skills/{name}/config", dependencies=[Depends(verify_cf_access)])
+async def get_skill_config(name: str, request: Request):
+    """读一个已安装 skill 的非敏感配置 ``<skills>/<name>/config.json``（明文 owner 面，脚本共读；
+    密钥**不在**这 —— 密钥走 W3 的 secrets 端点/Fernet）。skill 目录不存在 → 404；无 config.json
+    → 空配置 ``{}``。W4b Settings 消费。"""
+    d = _installed_skill_dir(name)
+    if not os.path.isdir(d):
+        raise APIError("E_NOT_FOUND", f"skill not installed: {name}", http_status=404, source="sqlite")
+    path = os.path.join(d, "config.json")
+    config: dict[str, Any] = {}
+    if os.path.isfile(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                config = data
+        except (OSError, json.JSONDecodeError):
+            config = {}  # 坏文件 → 空配置（owner 可 PUT 覆盖修复）
+    return success_envelope({"name": name, "config": config}, request=request, source="sqlite")
+
+
+@router.put("/skills/{name}/config", dependencies=[Depends(verify_cf_access)])
+async def put_skill_config(name: str, request: Request, body: Optional[dict[str, Any]] = None):
+    """写一个已安装 skill 的非敏感配置（整体覆盖 ``config.json``）。body 必须是 JSON object 且
+    序列化 ≤64KB；skill 目录不存在 → 404。"""
+    d = _installed_skill_dir(name)
+    if not os.path.isdir(d):
+        raise APIError("E_NOT_FOUND", f"skill not installed: {name}", http_status=404, source="sqlite")
+    if not isinstance(body, dict):
+        raise APIError("E_INVALID_ARG", "body must be a JSON object", http_status=400, source="sqlite")
+    serialized = json.dumps(body, ensure_ascii=False, sort_keys=True)
+    if len(serialized.encode("utf-8")) > _SKILL_CONFIG_CAP_BYTES:
+        raise APIError(
+            "E_INVALID_ARG",
+            f"config exceeds {_SKILL_CONFIG_CAP_BYTES} bytes",
+            http_status=400,
+            source="sqlite",
+        )
+    try:
+        with open(os.path.join(d, "config.json"), "w", encoding="utf-8") as f:
+            f.write(serialized)
+    except OSError as exc:
+        raise APIError("E_INTERNAL", f"cannot write config: {exc}", http_status=500, source="sqlite") from exc
+    return success_envelope({"name": name, "config": body}, request=request, source="sqlite")
 
 
 # ── exec 策略白名单（S2 W1 —— PolicyRule CRUD + evaluate）─────────────────────────────

@@ -71,7 +71,14 @@ export const CORE_UNGATED_GATEWAY_TOOLS: ReadonlySet<string> = new Set([
   // 开关权在独立 flag，永不 skill-gated（edit-tier 恒人审 + 结构化白名单 + Python inode deny 地板）。
   'run_command',
   'file_read',
-  'file_write'
+  'file_write',
+  // S2 W4 skill 供应链工具（behind MAILAGENT_OPENNESS_SKILL_INSTALL）—— agent 自身能力面，
+  // 无 skill 归属（它们*管理* skill，不*属于*任何 skill），开关权在独立 flag，永不 skill-gated
+  // （install/confirm/uninstall = edit-tier + capability_change 恒人审；skill_read 输出恒围栏）。
+  'skill_install',
+  'skill_install_confirm',
+  'skill_uninstall',
+  'skill_read'
 ])
 
 /** 删掉「归属 skill ∉ advertisedSkills 且无任一 advertised skill 仍拥有它 且非 collision-exempt」的

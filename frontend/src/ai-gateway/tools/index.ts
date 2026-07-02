@@ -24,6 +24,7 @@ import { createSessionTools } from './sessions'
 import { createProfileTools } from './profile'
 import { createWebTools } from './web'
 import { createExecTools } from './exec'
+import { createSkillSupplyTools } from './skill_supply'
 import { applyContextModePolicy, normalizeContextMode, type AgentContextMode } from './policy'
 import type { GatewayApprovalMode, GatewayToolAuditCollector } from './types'
 
@@ -94,6 +95,12 @@ export interface BuildGatewayToolsOpts {
    *  class 'exec' (manual_chat-only): applyContextModePolicy drops them outside a manual run. Off
    *  (default) → not added → ToolSet byte-identical to the v1.2.0 set. */
   execToolsEnabled?: boolean
+  /** S2 W4 (MAILAGENT_OPENNESS_SKILL_INSTALL) — when true AND approvalGuard is supplied, the four
+   *  skill-supply tools are added: skill_install / skill_install_confirm / skill_uninstall (all
+   *  edit-tier writes + class capability_change — NEVER auto-approved, no whitelist hook, two HITL
+   *  cards per install per ADR-002 §4) + skill_read (silent read, SKILL_DOC-fenced output). Off
+   *  (default) → not added → ToolSet byte-identical to the v1.2.0 set. */
+  skillInstallToolsEnabled?: boolean
   /** S2 W0 (ADR-001 D1/D3) — the run's server-asserted context mode, threaded from
    *  prepareChatRun's trustedContextMode. Governs (a) the auto-approve predicate (a reversible
    *  domain write may only skip the card in manual_chat) and (b) the LAST assembly step
@@ -222,6 +229,23 @@ export function buildGatewayTools(
     Object.assign(
       tools,
       createExecTools(opts.domain, collector, opts.approvalGuard, {
+        a2uiEnabled: opts.a2uiEnabled,
+        approvalMode: opts.approvalMode,
+        oneShot: opts.oneShotWrites,
+        contextMode
+      })
+    )
+  }
+  // S2 W4 — skill-supply tools behind MAILAGENT_OPENNESS_SKILL_INSTALL. Mixed set (3 edit-tier
+  // capability_change writes + 1 silent read) → all-or-nothing on flag + guard (profile-config
+  // 先例: registering only the read would advertise a half capability). CORE (no skill ownership)
+  // so applySkillGating below never drops them; class capability_change so applyContextModePolicy
+  // (LAST step) drops the writes outside a manual run. flag-off (default) → not added →
+  // byte-identical to the v1.2.0 set.
+  if (opts.skillInstallToolsEnabled && opts.approvalGuard) {
+    Object.assign(
+      tools,
+      createSkillSupplyTools(opts.domain, collector, opts.approvalGuard, {
         a2uiEnabled: opts.a2uiEnabled,
         approvalMode: opts.approvalMode,
         oneShot: opts.oneShotWrites,

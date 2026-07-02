@@ -45,6 +45,9 @@ function buildAllTools(contextMode?: AgentContextMode) {
     webToolsEnabled: true,
     // S2 W1 — exec tools (MAILAGENT_OPENNESS_EXEC_TOOLS), classified 'exec' (manual-only).
     execToolsEnabled: true,
+    // S2 W4 — skill-supply tools (MAILAGENT_OPENNESS_SKILL_INSTALL), classified capability_change
+    // (writes) + read (skill_read).
+    skillInstallToolsEnabled: true,
     ...(contextMode !== undefined ? { contextMode } : {})
   })
 }

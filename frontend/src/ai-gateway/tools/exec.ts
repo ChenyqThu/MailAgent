@@ -94,8 +94,16 @@ export function createExecTools(
         contextMode: opts.contextMode,
         // S2 W1 — the structured whitelist hook. A matching rule → auto_allow → skip the card;
         // ask / error → the card (fail-closed). Uses the closure-captured server contextMode.
+        // S2 W4 (W1b review P3-1) — a 2.5s abort so a hung loopback degrades to the card in
+        // bounded time instead of suspending needsApproval forever (the .catch(() => true) in
+        // types.ts turns the AbortError into "show the card" — fail-closed semantics unchanged).
         policyEvaluate: (input) =>
-          domain.policyEvaluate(toolOpts.capability, toolOpts.toAction(input), contextMode),
+          domain.policyEvaluate(
+            toolOpts.capability,
+            toolOpts.toAction(input),
+            contextMode,
+            AbortSignal.timeout(2500)
+          ),
         run: toolOpts.run
       },
       collector,

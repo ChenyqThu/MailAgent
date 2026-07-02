@@ -293,6 +293,44 @@ def rule_is_dangerously_wide(matcher_dict: dict[str, Any]) -> bool:
 # ---------------------------------------------------------------------------
 
 
+def _skill_gate_forces_ask(store: "AgentConfigStore", action_descriptor: dict[str, Any]) -> bool:
+    """W4 前置 gate（ADR-002 §5 顺序不变式，codex P2-7）：exec 动作触及 skill 目录且（任一触达
+    文件完整性不符 **或** 无有效首跑记录 **或** 无法识别将执行哪个文件）→ True（强制 ask，
+    **不查 PolicyRule**）。
+
+    堵「先装 skill 不跑 → 诱导 owner 批个宽 interpreter 白名单 → skill 脚本命中宽规则免卡」的
+    组合链：宽规则再宽也放行不了未首跑/被篡改的 skill 脚本。
+
+    🔴 探测盲区收口（team-lead 对抗推演）：probe 的路径判定是启发式的——``cd <skills>/x &&
+    python3 main.py`` 这种「cwd 落 skill 目录 + argv 全裸 token（无分隔符）」形状里，``main.py``
+    不被 probe，故 ``touched_files`` 空、``names`` 非空。这类动作**无法**做完整性/首跑校验，若放
+    行查规则，恰好能命中 owner 从同形状「总是允许」派生出的窄规则（argv0=/usr/bin/python3 +
+    argv_template 全 pin ["main.py"] + cwd_scope=<skills>/x，dangerous-all-pin 合法），叠加免卡 +
+    零完整性 + secret overlay 照常注入（overlay 按 ``names`` 命中）= 最坏组合。故 evaluate 侧对
+    「names 非空且零触达文件」**恒 ask**：动作进入 skill 目录但 gate 认不出要跑什么 ⇒ 不可校验
+    ⇒ 这类形状永不可白名单免卡（fail-closed）。run 端点对同形状仍可执行（owner 在卡上看到完整
+    argv + cwd，恒卡兜底 —— 残余面见 exec_gate 模块 docstring）。
+
+    纯读判定（落 last_error / 首跑记录是 run 端点的事）；判定自身异常 → True（fail-closed 到 ask）。
+    """
+    try:
+        from src.skills.exec_gate import check_skill_gates, probe_skill_exec
+
+        argv = action_descriptor.get("argv")
+        if not isinstance(argv, list) or not all(isinstance(a, str) for a in argv):
+            return False  # 非法 argv 匹配不了任何 exec 规则，正常评估已 fail-closed
+        cwd = action_descriptor.get("cwd")
+        probe = probe_skill_exec(argv, cwd if isinstance(cwd, str) and cwd else None)
+        if not probe.touched_files:
+            # names 非空（动作进入某 skill 目录）但零触达文件（裸 token 盲区）⇒ 不可校验 ⇒ 恒 ask；
+            # names 也空（非 skill 动作）⇒ 正常评估。
+            return bool(probe.names)
+        checks = check_skill_gates(store, probe)
+        return any(c.tampered or c.needs_first_run for c in checks)
+    except Exception:  # noqa: BLE001 — gate 判定异常 → 保守 ask
+        return True
+
+
 def evaluate(
     store: "AgentConfigStore",
     capability: str,
@@ -304,10 +342,16 @@ def evaluate(
     只查 ``enabled=1 AND capability AND context_mode AND agent_id IS NULL`` 的候选规则（context_mode
     严格等值绑定，红线①）。命中首条 → auto_allow + bump use_count；无匹配 / 任何异常 / 未知
     capability / 未知 context_mode → ask（**fail-closed**，绝不放行）。
+
+    🔴 W4 顺序不变式（codex P2-7）：exec 动作先过 skill 完整性/首跑前置 gate —— 命中 skill 目录
+    且有触达文件被篡改或未首跑 → **在查任何 PolicyRule 之前**直接 ask（种一条能匹配的宽规则也
+    放行不了首跑）。
     """
     ask: dict[str, Any] = {"decision": "ask", "rule_id": None}
     try:
         if capability not in CAPABILITIES or context_mode not in CONTEXT_MODES:
+            return ask
+        if capability == "exec" and _skill_gate_forces_ask(store, action_descriptor):
             return ask
         candidates = store.candidate_policy_rules(capability, context_mode)
         for rule in candidates:

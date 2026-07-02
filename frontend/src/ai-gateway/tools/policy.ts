@@ -92,6 +92,13 @@ export const GATEWAY_TOOL_CLASSES: Record<string, GatewayToolClass> = {
   update_system_md: 'capability_change',
   agent_profile_restore: 'capability_change',
   agent_memory_update: 'capability_change',
+  // S2 W4 — the skill supply chain (install/uninstall) IS the capability surface. Two-step
+  // install = two HITL cards; no whitelist hook exists for this class (unlike exec).
+  skill_install: 'capability_change',
+  skill_install_confirm: 'capability_change',
+  skill_uninstall: 'capability_change',
+  // S2 W4 — skill_read is a silent read (its third-party content is SKILL_DOC-fenced at the tool).
+  skill_read: 'read',
   // outbound — data leaves the machine. manual_chat-only; web is edit-tier always-ask, send is
   // blocking always-ask (its needsApproval hard-returns true regardless of anything here).
   web_fetch: 'outbound',

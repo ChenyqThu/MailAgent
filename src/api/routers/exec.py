@@ -171,44 +171,15 @@ def _finalize_output(
     return text, truncated
 
 
-def _skill_secret_overlay(argv: list[str], cwd: str) -> tuple[dict[str, str], list[str]]:
+def _skill_secret_overlay(names: frozenset) -> tuple[dict[str, str], list[str]]:
     """命中 ``<skills>/<name>/`` 的 run → 该 skill 声明(manifest.secrets) ∩ 已存储密钥，解密成 env
     overlay（叠在固定基底之上）。非 skill 命令 → ``({}, [])`` 零注入（基底行为 W1a 零变化）。
 
-    路径判定：argv 里看起来像路径的实参 + cwd realpath 后落在某 ``<skills>/<name>/`` 内 → 收集 name。
-    **命中多个不同 skill → 保守零注入**（避免把 skill A 的密钥注入触达 skill B 的命令 → 二阶泄漏），
-    warning 记之。声明侧读**已安装行的 manifest**（confirm 落库的权威事实，非可变的盘上 manifest.json）；
-    注入侧再过 ``validate_secret_name`` 二重校验。
+    ``names`` = 共享 probe（``exec_gate.probe_skill_exec``，W4 单源 —— 路径判定与完整性/首跑闸
+    逐字同一份）命中的 skill 名。**命中多个不同 skill → 保守零注入**（避免把 skill A 的密钥注入
+    触达 skill B 的命令 → 二阶泄漏），warning 记之。声明侧读**已安装行的 manifest**（confirm 落库
+    的权威事实，非可变的盘上 manifest.json）；注入侧再过 ``validate_secret_name`` 二重校验。
     """
-    import os
-
-    try:
-        from src.skills.pack_fetch import skills_data_root
-
-        skills_root = os.path.realpath(skills_data_root())
-    except Exception:  # noqa: BLE001 — 裸 worktree / skills 目录缺失 → 无注入
-        return {}, []
-
-    names: set[str] = set()
-
-    def _probe(token: str) -> None:
-        cand = token if os.path.isabs(token) else os.path.join(cwd, token)
-        try:
-            rp = os.path.realpath(cand)
-        except (OSError, ValueError):
-            return
-        if rp == skills_root or not rp.startswith(skills_root + os.sep):
-            return
-        first = rp[len(skills_root) + 1:].split(os.sep, 1)[0]
-        # .quarantine 永不执行/注入（deny 地板另有硬约束）；空段跳过。
-        if first and first != ".quarantine":
-            names.add(first)
-
-    _probe(cwd)  # cwd 落在 skill 目录内 = 常见「cd 进 skill 目录跑脚本」模式
-    for tok in argv:
-        if os.sep in tok or tok.startswith("."):
-            _probe(tok)
-
     if len(names) != 1:
         if len(names) > 1:
             logger.warning(
@@ -262,23 +233,48 @@ async def run_command(request: Request, body: RunRequest):
 
     floor_hits = floor.run_command_floor_hits(body.argv, run_cwd)
 
-    # W4: skill integrity + first-run gate hook (ADR-002 §5). 当 argv 路径实参命中
-    # DATA_ROOT/data/skills/<name>/ 时，W4 在此处（**先于**任何 policy auto_allow / spawn）做逐文件
-    # sha256 校验（对 agent_skills.files_json）+ 首跑闸（绑 version+entrypoint hash）；篡改 → 拒执行。
-    # 本 wave 不实现，仅留锚点。
+    # W4: skill integrity + first-run gate (ADR-002 §5 D3)。共享 probe（exec_gate 单源）命中
+    # <skills>/<name>/ 的触达文件在 spawn 之前逐一 sha256 对 agent_skills.files_json：不符 / 不在
+    # 清单（含无行、无 files_json）→ 409 E_SKILL_TAMPERED + last_error='tampered:<relpath>'，绝不
+    # 执行。首跑闸：触达文件无有效记录（无记录 / version 变 / hash 变）→ 视为首跑，**执行并落记录**
+    # —— 能到达此端点 = owner 批准面（chat 路径因 /policy/evaluate 前置 gate 恒 ask 必过审批卡；
+    # owner API 直调 = owner 行为）。顺序：完整性 → 首跑 → secret overlay → spawn。
+    from src.agent_config.store import get_agent_config_store
+    from src.skills.exec_gate import check_skill_gates, probe_skill_exec
+
+    probe = probe_skill_exec(body.argv, run_cwd)
+    store = get_agent_config_store()
+    gate_checks = check_skill_gates(store, probe)
+    for check in gate_checks:
+        if check.tampered:
+            store.set_skill_last_error(check.skill_name, check.tampered)
+            raise APIError(
+                "E_SKILL_TAMPERED",
+                f"skill {check.skill_name!r} integrity check failed ({check.tampered}); "
+                "re-install or re-trust it from Settings",
+                http_status=409,
+                source="exec",
+            )
 
     # W3: 命中 skill 目录 → 该 skill 声明 ∩ 已存储密钥叠加进子进程 env（固定基底之上）；stdout/stderr
     # 精确脱敏。非 skill 命令 → 零注入（基底 W1a 行为不变）。密钥值任何形态**不进响应/日志/异常**。
-    overlay, injected_names = _skill_secret_overlay(body.argv, run_cwd)
+    overlay, injected_names = _skill_secret_overlay(probe.names)
     env = build_fixed_base_env()
     env.update(overlay)  # secret 名过 validate_secret_name → 保证不覆盖任何基底名
     redact = [(name, overlay[name]) for name in injected_names]
 
     result = await _spawn(body.argv, run_cwd, body.timeout_ms, env, redact)
+    # 首跑记录在 spawn 之后落（spawn 前抛错 —— E_NO_BIN 等 —— 不算一次首跑）。
+    first_run_recorded: list[str] = []
+    for check in gate_checks:
+        if check.pending_first_run:
+            store.merge_first_run_approved(check.skill_name, check.pending_first_run)
+            first_run_recorded.extend(sorted(check.pending_first_run))
     result["cwd"] = run_cwd
     result["floor_hit"] = bool(floor_hits)
     result["floor_hits"] = floor_hits
     result["injected_secret_names"] = injected_names  # W4 审批卡展示；值不在此
+    result["first_run_recorded"] = first_run_recorded  # W4 首跑闸：本次落记录的 entrypoint
     result["policy"] = _evaluate("exec", {"argv": body.argv, "cwd": run_cwd})
     return success_envelope(result, request=request, source="exec")
 

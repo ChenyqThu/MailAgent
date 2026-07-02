@@ -284,3 +284,44 @@ export const execFileWriteSchema = z.object({
   mode: z.enum(['overwrite', 'append', 'create_new']).default('create_new')
 })
 export type ExecFileWriteInput = z.infer<typeof execFileWriteSchema>
+
+// ── skill-supply schemas (S2 W4) — the agent installs / uninstalls / reads third-party skill
+//    packages. Behind MAILAGENT_OPENNESS_SKILL_INSTALL. install / confirm / uninstall are
+//    edit-tier writes + class capability_change (ALWAYS ask — never auto-approved, never
+//    whitelist-relaxed; ADR-001 D3 row); skill_read is a silent read whose returned SKILL.md is
+//    UNTRUSTED_SKILL_DOC-fenced by the tool (third-party text = injection surface, ADR-002 D4).
+//    Python (routers/agent.py + skills/pack_fetch|pack_verify) is the business authority
+//    (SSRF-hardened download, safe unpack, real hash, confirm re-hash TOCTOU guard). ──────────
+
+/** skill_install (S2 W4) — stage one of the two-step install: fetch a skill package (from a URL
+ *  or a local path, exactly one) into QUARANTINE. Nothing is installed yet — the server returns
+ *  a preview (quarantine id + hashes + manifest summary) for the user to review. */
+export const skillInstallSchema = z.object({
+  source_url: z.string().min(1).max(4096).optional(),
+  local_path: z.string().min(1).max(4096).optional()
+})
+export type SkillInstallInput = z.infer<typeof skillInstallSchema>
+
+/** skill_install_confirm (S2 W4) — stage two: really install a quarantined package. The
+ *  expected_package_hash / expected_files MUST be echoed verbatim from the skill_install preview
+ *  — the server re-hashes the quarantine content and rejects (409) on any mismatch (TOCTOU
+ *  guard), so a forged hash only defeats the install. */
+export const skillInstallConfirmSchema = z.object({
+  quarantine_id: z.string().min(1).max(64),
+  expected_package_hash: z.string().min(1).max(128),
+  expected_files: z.record(z.string(), z.string()).optional()
+})
+export type SkillInstallConfirmInput = z.infer<typeof skillInstallConfirmSchema>
+
+/** skill_uninstall (S2 W4) — full-cleanup uninstall: DB row + on-disk directory + stored
+ *  secrets all go (POST /agent/skills/uninstall — NEVER the legacy row-only DELETE). */
+export const skillUninstallSchema = z.object({
+  name: z.string().min(1).max(64)
+})
+export type SkillUninstallInput = z.infer<typeof skillUninstallSchema>
+
+/** skill_read (S2 W4) — read an installed skill's SKILL.md (fenced + truncated by the tool). */
+export const skillReadSchema = z.object({
+  name: z.string().min(1).max(64)
+})
+export type SkillReadInput = z.infer<typeof skillReadSchema>

@@ -104,7 +104,13 @@ export const A2UI_COMPONENTS = {
   SkillToggleCard: 'SkillToggleCard',
   // S2 W1 — local exec approval card (run_command / file_read / file_write, edit tier). Shows the
   // exact argv / path + a "总是允许" affordance that creates a structured whitelist rule.
-  ExecApprovalCard: 'ExecApprovalCard'
+  ExecApprovalCard: 'ExecApprovalCard',
+  // S2 W4 — skill-supply approval cards (edit tier + capability_change; skill_read has no card).
+  // SkillInstallConfirmCard renders SERVER facts fetched by quarantine id (ADR-002 §4) — never the
+  // model's args content fields.
+  SkillInstallCard: 'SkillInstallCard',
+  SkillInstallConfirmCard: 'SkillInstallConfirmCard',
+  SkillUninstallCard: 'SkillUninstallCard'
 } as const
 
 /** Which A2UI component renders a given gateway write tool. Unknown / read tools → null
@@ -129,7 +135,13 @@ export function componentForTool(toolName: string): string | null {
     case 'file_read':
     case 'file_write':
       return A2UI_COMPONENTS.ExecApprovalCard
-    // discover_skills is a silent read → no card (generic ToolTraceCard).
+    case 'skill_install':
+      return A2UI_COMPONENTS.SkillInstallCard
+    case 'skill_install_confirm':
+      return A2UI_COMPONENTS.SkillInstallConfirmCard
+    case 'skill_uninstall':
+      return A2UI_COMPONENTS.SkillUninstallCard
+    // discover_skills / skill_read are silent reads → no card (generic ToolTraceCard).
     default:
       return null
   }
@@ -216,6 +228,34 @@ export interface ExecApprovalCardProps {
   mode?: string | null
   exitCode?: number | null
   bytesWritten?: number | null
+}
+
+/** skill_install (S2 W4, edit tier) — stage 1: fetch into quarantine. Only the SOURCE (url/path)
+ *  matters at approval time (nothing is installed); result fields land after the fetch. */
+export interface SkillInstallCardProps {
+  sourceUrl?: string | null
+  localPath?: string | null
+  quarantineId?: string | null
+  packageHash?: string | null
+  fileCount?: number | null
+  userEdited?: boolean
+}
+
+/** skill_install_confirm (S2 W4, edit tier) — stage 2. 🔴 The card renders SERVER facts fetched
+ *  live by quarantineId (GET /agent/skills/quarantine/{qid} re-hashes on disk) — these props carry
+ *  only the identity (quarantineId) + result echoes, NEVER the model's content claims. */
+export interface SkillInstallConfirmCardProps {
+  quarantineId: string
+  installedName?: string | null
+  installed?: boolean
+}
+
+/** skill_uninstall (S2 W4, edit tier) — full cleanup (row + dir + secrets). The card additionally
+ *  fetches the stored secret names live (GET /agent/skills/{name}/secrets). */
+export interface SkillUninstallCardProps {
+  skillName: string
+  removed?: boolean
+  removedSecrets?: number | null
 }
 
 function asNum(v: unknown, fallback = -1): number {
@@ -390,6 +430,60 @@ export function buildToolA2UIPayload(
       mode: asStr(args.mode) ?? null,
       exitCode: typeof result?.exit_code === 'number' ? (result.exit_code as number) : null,
       bytesWritten: typeof result?.bytes_written === 'number' ? (result.bytes_written as number) : null
+    }
+    return {
+      protocol: A2UI_PROTOCOL,
+      version: A2UI_VERSION,
+      component,
+      props: props as unknown as Record<string, unknown>,
+      audit: { risk: io.risk ?? 'edit', requiresApproval }
+    }
+  }
+
+  if (component === A2UI_COMPONENTS.SkillInstallCard) {
+    const props: SkillInstallCardProps = {
+      sourceUrl: asStr(args.source_url) ?? null,
+      localPath: asStr(args.local_path) ?? null,
+      quarantineId: asStr(result?.quarantine_id) ?? null,
+      packageHash: asStr(result?.package_hash) ?? null,
+      fileCount:
+        result?.files && typeof result.files === 'object' && !Array.isArray(result.files)
+          ? Object.keys(result.files as Record<string, unknown>).length
+          : null,
+      userEdited: io.userEdited ?? result?.user_edited === true
+    }
+    return {
+      protocol: A2UI_PROTOCOL,
+      version: A2UI_VERSION,
+      component,
+      props: props as unknown as Record<string, unknown>,
+      audit: { risk: io.risk ?? 'edit', requiresApproval }
+    }
+  }
+
+  if (component === A2UI_COMPONENTS.SkillInstallConfirmCard) {
+    // 🔴 identity only — the card fetches the quarantine facts server-side; args content fields
+    // (expected_package_hash / expected_files) are deliberately NOT projected (ADR-002 §4).
+    const props: SkillInstallConfirmCardProps = {
+      quarantineId: asStr(args.quarantine_id) ?? '',
+      installedName: asStr(result?.name) ?? null,
+      installed: result?.installed === true
+    }
+    return {
+      protocol: A2UI_PROTOCOL,
+      version: A2UI_VERSION,
+      component,
+      props: props as unknown as Record<string, unknown>,
+      audit: { risk: io.risk ?? 'edit', requiresApproval }
+    }
+  }
+
+  if (component === A2UI_COMPONENTS.SkillUninstallCard) {
+    const props: SkillUninstallCardProps = {
+      skillName: asStr(args.name) ?? '',
+      removed: result?.removed === true,
+      removedSecrets:
+        typeof result?.removed_secrets === 'number' ? (result.removed_secrets as number) : null
     }
     return {
       protocol: A2UI_PROTOCOL,

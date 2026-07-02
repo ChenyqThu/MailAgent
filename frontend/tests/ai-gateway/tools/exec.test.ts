@@ -218,6 +218,36 @@ describe('run_command (edit-tier write, structured whitelist)', () => {
     expect(await needsApproval({ argv: ['/bin/echo'] }, { toolCallId: 'tc-err' })).toBe(true)
   })
 
+  // S2 W4 (W1b review P3-1) — a hung loopback must degrade to the card in bounded time. The mock
+  // fetch never resolves but honours the abort signal; AbortSignal.timeout(2500) fires → the
+  // rejected evaluate falls into the .catch(() => true) → the card. Real 2.5s wait (AbortSignal
+  // .timeout uses a native timer fake timers cannot drive).
+  test(
+    'whitelist evaluate that never resolves → aborted at 2.5s → fail-closed to the card',
+    { timeout: 10_000 },
+    async () => {
+      const domain = execDomain()
+      domain.policyEvaluate = (_cap, _action, _mode, signal) =>
+        new Promise((_resolve, reject) => {
+          signal?.addEventListener('abort', () =>
+            reject(new DOMException('policy evaluate timed out', 'AbortError'))
+          )
+        })
+      const tools = createExecTools(domain, [], new ApprovalGuard(), {
+        contextMode: 'manual_chat'
+      })
+      const needsApproval = tools.run_command.needsApproval as (
+        i: unknown,
+        o: { toolCallId: string }
+      ) => boolean | Promise<boolean>
+      const started = Date.now()
+      expect(await needsApproval({ argv: ['/bin/echo', 'hi'] }, { toolCallId: 'tc-hang' })).toBe(true)
+      const elapsed = Date.now() - started
+      expect(elapsed).toBeGreaterThanOrEqual(2400) // the abort (not an instant error) drove it
+      expect(elapsed).toBeLessThan(8000)
+    }
+  )
+
   test('approved run POSTs /exec/run with {argv, cwd, timeout_ms}; output shape', async () => {
     let captured: { url: string; body: unknown } | null = null
     const guard = new ApprovalGuard()

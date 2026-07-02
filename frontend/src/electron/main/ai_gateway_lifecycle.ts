@@ -334,6 +334,12 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
   // NO vite define (mirrors the other openness flags). Off → buildGatewayTools output byte-identical
   // to v1.2.0.
   const execToolsEnabled = envBool('MAILAGENT_OPENNESS_EXEC_TOOLS', false)
+  // S2 W4 — MAILAGENT_OPENNESS_SKILL_INSTALL gates the four skill-supply tools (skill_install /
+  // skill_install_confirm / skill_uninstall — edit-tier capability_change writes, two HITL cards
+  // per install with the confirm card rendering SERVER facts; + skill_read, silent fenced read).
+  // Default OFF (island 模式); main-env-only, NO vite define (mirrors the other openness flags).
+  // Off → buildGatewayTools output byte-identical to v1.2.0.
+  const skillInstallToolsEnabled = envBool('MAILAGENT_OPENNESS_SKILL_INSTALL', false)
   const apiBase = `http://127.0.0.1:${resolveApiPort()}/api`
   // M4a — prewarm the /chat/config cache ONCE before the server accepts requests so the per-request
   // buildTools factory reads a populated advertisedSkills on the very first turn (no null-first-turn
@@ -583,7 +589,9 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
           // S1 R3 — web tools (MAILAGENT_OPENNESS_WEB_TOOLS, default off).
           webToolsEnabled,
           // S2 W1 — exec tools (MAILAGENT_OPENNESS_EXEC_TOOLS, default off).
-          execToolsEnabled
+          execToolsEnabled,
+          // S2 W4 — skill-supply tools (MAILAGENT_OPENNESS_SKILL_INSTALL, default off).
+          skillInstallToolsEnabled
         },
         collector
       ),

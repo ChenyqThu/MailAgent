@@ -324,6 +324,58 @@ export interface DomainPolicyRule {
   dangerous: boolean
 }
 
+// ── skill-supply shapes (S2 W4) — the /agent/skills/{fetch,confirm,uninstall} + /doc rows the
+//    skill_install / skill_install_confirm / skill_uninstall / skill_read tools consume. Python
+//    (routers/agent.py + skills/pack_fetch|pack_verify) is the business authority: SSRF-hardened
+//    download, safe unpack, REAL hashes, and the confirm-time re-hash TOCTOU guard. The client
+//    just carries the envelope; manifest title/description + skillMdExcerpt are third-party text
+//    the TOOL sanitizes/fences before they reach the model (ADR-002 D4). ────────────────────────
+
+/** POST /agent/skills/fetch preview (also the GET /agent/skills/quarantine/{qid} facts shape).
+ *  `files` is {relpath: sha256} — echoed VERBATIM into confirm as expectedFiles (byte-exact,
+ *  the server compares re-computed hashes against it). */
+export interface DomainSkillFetchPreview {
+  quarantineId: string
+  sourceType: string | null
+  sourceUri: string | null
+  packageHash: string
+  files: Record<string, string>
+  manifest: {
+    name: string | null
+    type: string | null
+    version: string | null
+    title: string | null
+    description: string | null
+    entryHint: string | null
+    manifestVersion: number | string | null
+  }
+  secretNames: string[]
+  skillMdExcerpt: string
+}
+
+/** POST /agent/skills/confirm data block (the row landed + content promoted). */
+export interface DomainSkillConfirmResult {
+  name: string
+  sourceType: string
+  packageHash: string
+}
+
+/** POST /agent/skills/uninstall data block (full cleanup: row + dir + secrets). */
+export interface DomainSkillUninstallResult {
+  name: string
+  removed: boolean
+  removedDir: boolean
+  removedSecrets: number
+}
+
+/** GET /agent/skills/{name}/doc data block — the RAW SKILL.md (server caps at 64KB; the tool
+ *  fences + truncates to 32KB before the model sees it). */
+export interface DomainSkillDocResult {
+  name: string
+  content: string
+  truncated: boolean
+}
+
 /** chat_session_search — one aggregated hit of GET /chat/sessions/search. */
 export interface DomainSessionSearchHit {
   session: {
@@ -911,6 +963,62 @@ export class MailAgentDomainClient {
   /** DELETE /agent/policy/rules/{id} → {id, removed} (idempotent). */
   deletePolicyRule(id: number, signal?: AbortSignal): Promise<{ id: number; removed: boolean }> {
     return this._req<{ id: number; removed: boolean }>('DELETE', `/agent/policy/rules/${id}`, {
+      signal
+    })
+  }
+
+  // ── skill-supply primitives (S2 W4) — two-step install (fetch→quarantine→confirm re-hash),
+  //    full-cleanup uninstall, and the SKILL.md read. All hit /agent/skills/* (owner API,
+  //    verify_cf_access — the embedded gateway's local-token leg passes). The tools that call
+  //    these are only registered when MAILAGENT_OPENNESS_SKILL_INSTALL is on; the three writes
+  //    are gated by the gateway ApprovalGuard (edit-tier + class capability_change: always ask).
+
+  /** skill_install (S2 W4) — stage one: download/import a skill package into quarantine.
+   *  POST /agent/skills/fetch {sourceUrl?|localPath?} (exactly one). Returns the preview facts
+   *  (quarantine id + real hashes + manifest summary + declared secret names + SKILL.md excerpt). */
+  skillSupplyFetch(
+    input: { sourceUrl?: string; localPath?: string },
+    signal?: AbortSignal
+  ): Promise<DomainSkillFetchPreview> {
+    const body: Record<string, unknown> = {}
+    if (input.sourceUrl !== undefined) body.sourceUrl = input.sourceUrl
+    if (input.localPath !== undefined) body.localPath = input.localPath
+    return this._req<DomainSkillFetchPreview>('POST', '/agent/skills/fetch', { body, signal })
+  }
+
+  /** skill_install_confirm (S2 W4) — stage two: really install a quarantined package. POST
+   *  /agent/skills/confirm {quarantineId, expectedPackageHash, expectedFiles?}. The server
+   *  RE-HASHES the quarantine content against the expected values → 409 E_PACK_HASH_MISMATCH
+   *  (→ DomainError) on any drift (TOCTOU guard — a forged hash only defeats the install). */
+  skillSupplyConfirm(
+    input: {
+      quarantineId: string
+      expectedPackageHash: string
+      expectedFiles?: Record<string, string>
+    },
+    signal?: AbortSignal
+  ): Promise<DomainSkillConfirmResult> {
+    const body: Record<string, unknown> = {
+      quarantineId: input.quarantineId,
+      expectedPackageHash: input.expectedPackageHash
+    }
+    if (input.expectedFiles !== undefined) body.expectedFiles = input.expectedFiles
+    return this._req<DomainSkillConfirmResult>('POST', '/agent/skills/confirm', { body, signal })
+  }
+
+  /** skill_uninstall (S2 W4) — full cleanup (row + on-disk dir + stored secrets). POST
+   *  /agent/skills/uninstall {name} — NEVER the legacy row-only DELETE (stale-secret adoption). */
+  skillSupplyUninstall(name: string, signal?: AbortSignal): Promise<DomainSkillUninstallResult> {
+    return this._req<DomainSkillUninstallResult>('POST', '/agent/skills/uninstall', {
+      body: { name },
+      signal
+    })
+  }
+
+  /** skill_read (S2 W4) — an installed skill's raw SKILL.md. GET /agent/skills/{name}/doc.
+   *  The TOOL fences (UNTRUSTED_SKILL_DOC) + truncates before the model sees the content. */
+  skillDocRead(name: string, signal?: AbortSignal): Promise<DomainSkillDocResult> {
+    return this._req<DomainSkillDocResult>('GET', `/agent/skills/${encodeURIComponent(name)}/doc`, {
       signal
     })
   }
