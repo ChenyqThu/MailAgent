@@ -16,13 +16,20 @@
     join）；realpath 后落在 ``<skills>/<name>/`` 内 → 命中 name（``.quarantine`` 永不命中——
     deny 地板另有硬拒）。裸文件名 token（如 ``main.py``）不 probe —— 已知盲区，与 secret
     overlay 一致，诚实记录而非静默扩大。
-  - 🔴 盲区收口（team-lead 对抗推演）：``cd <skills>/x && python3 main.py`` 形状里 cwd 命中
-    skill 目录（``names`` 非空）但触达文件识别不出（``touched_files`` 空）。**evaluate 侧**对
-    这种 names-without-touched-files **恒 ask**（``policy._skill_gate_forces_ask``）——不可校验 ⇒
-    永不可白名单免卡，堵「盲区形状命中窄规则免卡 + secret 注入 + 零完整性」的最坏叠加。**残余面**：
-    run 端点 / owner API 直调对该盲区形状**仍无完整性/首跑校验**（``check_skill_gates`` 无触达文件
-    对象可判），靠 gateway 恒弹审批卡兜底（owner 卡上见完整 argv + cwd）；headless（S4）重新引入
-    exec 时须复核此形状（S4 无人在环，恒卡兜底不成立）。
+  - 🔴 盲区两层收口（team-lead 对抗推演 + W4a review P2-1 探针实证）：probe 路径判定是启发式的，
+    两种形状触达文件识别不出，evaluate 侧（``policy._skill_gate_forces_ask``）分别恒 ask ——
+    ① **直接形状** ``cd <skills>/x && python3 main.py`` cwd 命中 skill 目录（``names`` 非空）但
+       ``touched_files`` 空 → 对 names-without-touched-files 恒 ask。
+    ② **壳包装形状** ``bash -c "cd <skills>/x && python3 main.py"``（cwd=/tmp）shell 命令是单个
+       token，realpath 不落 skills → ``names`` 也空，①兜不住 → ``policy`` 加 dangerous-interpreter
+       文本 belt（危险解释器 + token 文本引用 skills_root 但 probe 未落地 → 恒 ask）。
+    **陈述收窄（review P2-1）**：仅这两种形状 evaluate 恒 ask；其它编码变体（相对路径 / 变量展开
+    ``$SK/main.py`` / base64）evaluate 层**不可判**，依赖 manual 恒卡 + owner 审慎建规则。
+    **残余面**：run 端点 / owner API 直调对**两种盲区形状均无完整性/首跑校验**（``check_skill_gates``
+    无触达文件对象可判），manual 靠 gateway 恒弹审批卡兜底（owner 卡上见完整 argv + cwd）。
+    🔴 **S4 headless 前须独立 deny 防线**（无人在环，恒卡兜底不成立）——**壳包装形状优先级高于裸
+    token**：裸 token 在 headless 下 ``names`` 非空 evaluate 仍 ask，壳包装 ``names`` 空会
+    auto_allow（若预配了这类 ``bash -c`` 规则）= 直接 RCE + 零完整性。
   - 触达文件 = probe 命中且 ``os.path.isfile`` 的常规文件（目录 / 不存在路径只贡献 name，
     无完整性可言）。
   - 完整性：触达文件的 relpath 必须出现在 ``agent_skills.files_json``（confirm 落库的逐文件

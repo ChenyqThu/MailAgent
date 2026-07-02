@@ -293,6 +293,45 @@ def rule_is_dangerously_wide(matcher_dict: dict[str, Any]) -> bool:
 # ---------------------------------------------------------------------------
 
 
+def _shell_wrapped_skill_ref_forces_ask(
+    argv: list, cwd: Optional[str], skills_root: str
+) -> bool:
+    """belt-and-suspenders（壳包装盲区变体，W4a review P2-1 探针实证）：argv0 解析为**危险解释器**
+    （shell / 解释器 / 包管理器 / runner —— 复用 :func:`is_dangerous_argv0` 同一单源危险名集）
+    **且**某个后续 argv token 的**文本**包含 realpath 后的 ``skills_root`` 子串、但该 token 自身
+    realpath **不落** skills 目录内（probe 未把它当 skills 路径落地）→ True（恒 ask）。
+
+    语义：「危险解释器 + 文本引用 skill 目录 + 无法验证引用的执行对象」⇒ 不可校验 ⇒ 恒 ask。
+    典型命中 ``bash -c "cd <skills>/x && python3 main.py"``（cwd=/tmp）—— 第三个 token 文本含
+    skills_root 但作为整条 shell 命令 realpath 不落 skills 内，故直接盲区收口（names 非空）漏掉它。
+
+    🔴 **不误伤直接形状**：``python3 <skills>/x/main.py`` 的 token realpath 落 skills 内 → probe
+    已落地（``touched_files`` 有对象，:func:`_skill_gate_forces_ask` 走既有完整性/首跑逻辑，首跑
+    后 auto_allow 仍成立），根本不进本 belt（belt 仅在 ``touched_files`` 空且 ``names`` 空时被调）。
+    非危险 argv0（``cat <skills>/x/f``）第一关即 return False，由既有 touched 逻辑管。
+
+    **诚实边界**：纯文本子串匹配的 best-effort —— 相对路径 / 变量展开（``$SK/main.py``）/ base64 等
+    编码可逃逸；fail 方向恒 ask。**残余面** = run 端点 / owner API 直调对壳包装形状仍**零**完整性
+    校验（详见 exec_gate 模块 docstring 的 S4 清单）。
+    """
+    if not argv:
+        return False
+    if not is_dangerous_argv0(_resolve_argv0(argv[0], cwd)):
+        return False
+    base = cwd if cwd else os.getcwd()
+    for tok in argv[1:]:  # argv0 自身是解释器，不算「引用 skill 目录」
+        if skills_root not in tok:
+            continue
+        cand = tok if os.path.isabs(tok) else os.path.join(base, tok)
+        try:
+            rp = os.path.realpath(cand)
+        except (OSError, ValueError):
+            return True  # 文本引用 skill 目录但无法解析 → 保守 ask
+        if not (rp == skills_root or rp.startswith(skills_root + os.sep)):
+            return True  # 文本含 skills_root 但 realpath 未落地 ⇒ 不可校验的执行引用
+    return False
+
+
 def _skill_gate_forces_ask(store: "AgentConfigStore", action_descriptor: dict[str, Any]) -> bool:
     """W4 前置 gate（ADR-002 §5 顺序不变式，codex P2-7）：exec 动作触及 skill 目录且（任一触达
     文件完整性不符 **或** 无有效首跑记录 **或** 无法识别将执行哪个文件）→ True（强制 ask，
@@ -301,15 +340,20 @@ def _skill_gate_forces_ask(store: "AgentConfigStore", action_descriptor: dict[st
     堵「先装 skill 不跑 → 诱导 owner 批个宽 interpreter 白名单 → skill 脚本命中宽规则免卡」的
     组合链：宽规则再宽也放行不了未首跑/被篡改的 skill 脚本。
 
-    🔴 探测盲区收口（team-lead 对抗推演）：probe 的路径判定是启发式的——``cd <skills>/x &&
-    python3 main.py`` 这种「cwd 落 skill 目录 + argv 全裸 token（无分隔符）」形状里，``main.py``
-    不被 probe，故 ``touched_files`` 空、``names`` 非空。这类动作**无法**做完整性/首跑校验，若放
-    行查规则，恰好能命中 owner 从同形状「总是允许」派生出的窄规则（argv0=/usr/bin/python3 +
-    argv_template 全 pin ["main.py"] + cwd_scope=<skills>/x，dangerous-all-pin 合法），叠加免卡 +
-    零完整性 + secret overlay 照常注入（overlay 按 ``names`` 命中）= 最坏组合。故 evaluate 侧对
-    「names 非空且零触达文件」**恒 ask**：动作进入 skill 目录但 gate 认不出要跑什么 ⇒ 不可校验
-    ⇒ 这类形状永不可白名单免卡（fail-closed）。run 端点对同形状仍可执行（owner 在卡上看到完整
-    argv + cwd，恒卡兜底 —— 残余面见 exec_gate 模块 docstring）。
+    🔴 探测盲区两层收口（team-lead 对抗推演 + W4a review P2-1 探针实证）：probe 的路径判定是启发式
+    的，两种盲区形状 evaluate 侧恒 ask ——
+    ① **直接形状**（team-lead）``cd <skills>/x && python3 main.py``（cwd 落 skill 目录 + 裸 token
+       argv）：``main.py`` 不被 probe → ``touched_files`` 空、``names`` **非空**。gate 对
+       「names 非空且零触达文件」恒 ask（动作进入 skill 目录但认不出要跑什么 ⇒ 不可校验）。
+    ② **壳包装形状**（review P2-1）``bash -c "cd <skills>/x && python3 main.py"``（cwd=/tmp）：
+       shell 命令是**单个 token**，realpath 不落 skills → ``names`` 也空。①的收口兜不住，故加
+       :func:`_shell_wrapped_skill_ref_forces_ask` 文本 belt：危险解释器 + token 文本引用
+       skills_root 但 probe 未落地 → 恒 ask。
+
+    **陈述收窄（review P2-1 建议①）**：仅「① 直接盲区形状恒 ask」+「② dangerous-interpreter 文本
+    引用 belt 恒 ask」成立；其它编码变体（相对路径 / 变量展开 / base64）evaluate 层**不可判**，
+    依赖 manual 恒卡 + owner 审慎建规则；S4 headless 前须独立 deny 防线（壳包装形状比裸 token
+    更优先，因裸 token 在 headless 下 names 非空仍 ask，壳包装 names 空会 auto_allow）。
 
     纯读判定（落 last_error / 首跑记录是 run 端点的事）；判定自身异常 → True（fail-closed 到 ask）。
     """
@@ -320,13 +364,22 @@ def _skill_gate_forces_ask(store: "AgentConfigStore", action_descriptor: dict[st
         if not isinstance(argv, list) or not all(isinstance(a, str) for a in argv):
             return False  # 非法 argv 匹配不了任何 exec 规则，正常评估已 fail-closed
         cwd = action_descriptor.get("cwd")
-        probe = probe_skill_exec(argv, cwd if isinstance(cwd, str) and cwd else None)
-        if not probe.touched_files:
-            # names 非空（动作进入某 skill 目录）但零触达文件（裸 token 盲区）⇒ 不可校验 ⇒ 恒 ask；
-            # names 也空（非 skill 动作）⇒ 正常评估。
-            return bool(probe.names)
-        checks = check_skill_gates(store, probe)
-        return any(c.tampered or c.needs_first_run for c in checks)
+        cwd = cwd if isinstance(cwd, str) and cwd else None
+        probe = probe_skill_exec(argv, cwd)
+        if probe.touched_files:
+            checks = check_skill_gates(store, probe)
+            return any(c.tampered or c.needs_first_run for c in checks)
+        if probe.names:
+            # ① 直接盲区形状（cwd 落 skill 目录 + 裸 token）：不可识别执行对象 ⇒ 恒 ask。
+            return True
+        # ② 壳包装盲区变体：dangerous 解释器文本引用 skills_root 但 probe 未落地 ⇒ 恒 ask。
+        try:
+            from src.skills.pack_fetch import skills_data_root
+
+            skills_root = os.path.realpath(skills_data_root())
+        except Exception:  # noqa: BLE001 — skills 根不可得（裸 worktree）⇒ 无 skill 概念，正常评估
+            return False
+        return _shell_wrapped_skill_ref_forces_ask(argv, cwd, skills_root)
     except Exception:  # noqa: BLE001 — gate 判定异常 → 保守 ask
         return True
 

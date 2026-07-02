@@ -198,6 +198,97 @@ def test_bare_token_cd_pattern_ask_persists_after_run(client, fresh_agent_cfg, f
     assert _evaluate(client, argv, cwd=skdir) == {"decision": "ask", "rule_id": None}
 
 
+def test_shell_wrapped_skill_ref_belt_forces_ask(client, fresh_agent_cfg, fresh_skills_dir, tmp_path):
+    """🔴 壳包装盲区变体（W4a review P2-1 探针实证）：``bash -c "cd <skdir> && python3 main.py"``
+    （cwd=/tmp）里 shell 命令是单个 token，realpath 不落 skills → probe.names 空，直接盲区收口
+    （names 非空）兜不住。种一条恰好匹配该 bash 命令的全 pin 规则（bash 是 dangerous argv0，ADR
+    允许全 pin）——先证规则本会命中，再证 evaluate=ask（dangerous-interpreter 文本 belt 拦下）。"""
+    from src.agent_config.policy import ExecMatcher, _match_exec, _resolve_argv0
+    from src.skills.exec_gate import probe_skill_exec
+
+    skdir = _install_pack(client, tmp_path)
+    shell_cmd = f"cd {skdir} && python3 main.py"
+    argv = ["bash", "-c", shell_cmd]
+    action = {"argv": argv, "cwd": "/tmp"}  # cwd 不在 skills
+
+    # 先证 probe 对该形状确实 names 空（否则走 names 分支不是 belt）。
+    probe = probe_skill_exec(argv, "/tmp")
+    assert probe.names == frozenset() and probe.touched_files == {}
+
+    # owner 从同壳命令点「总是允许」派生的全 pin 规则（bash dangerous，只能全 pin）。
+    argv0_rp = _resolve_argv0("bash", "/tmp")
+    matcher = {
+        "v": 1,
+        "argv0_realpath": argv0_rp,
+        "argv_template": [{"pin": "-c"}, {"pin": shell_cmd}],
+    }
+    # 先断言：不经 gate，这条规则对该 action **确实命中**（证明拦截来自 belt，而非规则不匹配）。
+    assert _match_exec(ExecMatcher.model_validate(matcher), action) is True
+
+    r = client.post(
+        "/api/agent/policy/rules",
+        json={"capability": "exec", "matcher": matcher, "contextMode": "manual_chat"},
+    )
+    assert r.status_code == 201
+
+    # evaluate 必须 ask —— dangerous 解释器文本引用 skills_root 但 probe 未落地 ⇒ belt 恒 ask。
+    assert _evaluate(client, argv, cwd="/tmp") == {"decision": "ask", "rule_id": None}
+
+
+def test_dangerous_argv0_direct_path_not_belt_blocked(client, fresh_agent_cfg, fresh_skills_dir, tmp_path):
+    """反误伤：dangerous argv0（python3）走**直接路径** ``python3 <skdir>/main.py`` 时 token 被
+    probe 落地（touched_files 有对象）→ 走既有完整性/首跑逻辑，belt 不介入；首跑后 auto_allow 仍
+    成立（证明 belt 只打「文本引用但 probe 未落地」，不误伤合法直接形状）。"""
+    from src.agent_config.policy import _resolve_argv0
+
+    skdir = _install_pack(client, tmp_path)
+    main_py = os.path.join(skdir, "main.py")
+    argv = ["python3", main_py]  # dangerous argv0 + 直接路径（probe 落地）
+    argv0_rp = _resolve_argv0("python3", None)
+    r = client.post(
+        "/api/agent/policy/rules",
+        json={
+            "capability": "exec",
+            "matcher": {"v": 1, "argv0_realpath": argv0_rp, "argv_template": [{"pin": main_py}]},
+            "contextMode": "manual_chat",
+        },
+    )
+    assert r.status_code == 201
+    rule_id = r.json()["data"]["id"]
+
+    # 未首跑 → ask（完整性/首跑逻辑，非 belt）。
+    assert _evaluate(client, argv) == {"decision": "ask", "rule_id": None}
+    # run 落首跑（直接路径 probe 落地 → 有触达文件对象）。
+    d = _data(client.post("/api/exec/run", json={"argv": argv}))
+    assert d["exit_code"] == 0
+    assert d["first_run_recorded"] == [os.path.realpath(main_py)]
+    # 首跑后 → auto_allow（dangerous argv0 直接路径不被 belt 误伤）。
+    assert _evaluate(client, argv) == {"decision": "auto_allow", "rule_id": rule_id}
+
+
+def test_non_dangerous_argv0_text_ref_not_belt_blocked(client, fresh_agent_cfg, fresh_skills_dir, tmp_path):
+    """belt 只对 dangerous argv0 生效：非危险 argv0（/bin/echo）+ token 文本含 skills_root 但 probe
+    未落地（含 prefix 的假路径）→ belt 第一关 is_dangerous_argv0=False → 正常评估 → 命中 echo 全 pin
+    规则 auto_allow（证明 belt 不越界拦非危险解释器）。"""
+    skdir = _install_pack(client, tmp_path)
+    # token 文本含 skdir 子串但 realpath 不落 skills（前缀 "note:" 使其不是合法 skills 路径）。
+    tok = f"note:{skdir}/main.py"
+    argv = ["/bin/echo", tok]
+    matcher = {
+        "v": 1,
+        "argv0_realpath": os.path.realpath("/bin/echo"),
+        "argv_template": [{"pin": tok}],
+    }
+    r = client.post(
+        "/api/agent/policy/rules",
+        json={"capability": "exec", "matcher": matcher, "contextMode": "manual_chat"},
+    )
+    assert r.status_code == 201
+    rule_id = r.json()["data"]["id"]
+    # echo 非 dangerous → belt 不介入 → 命中全 pin 规则 auto_allow（无 skill 触达文件，无完整性对象）。
+    assert _evaluate(client, argv) == {"decision": "auto_allow", "rule_id": rule_id}
+
+
 def test_version_change_retriggers_first_run(client, fresh_agent_cfg, fresh_skills_dir, tmp_path):
     """首跑记录绑 version + entrypoint hash（非裸时间戳）：升级重装后旧记录失效，evaluate 回 ask。"""
     skdir = _install_pack(client, tmp_path, version="1.0")
