@@ -26,7 +26,8 @@
         "tables_present": {"type": "array", "items": {"type": "string"}},
         "tables_missing": {"type": "array", "items": {"type": "string"}},
         "healthy": {"type": "boolean"},
-        "error": {"type": "string"}
+        "error": {"type": "string"},
+        "notes": {"type": "array", "items": {"type": "string"}}
       }
     },
     "meta": {"$ref": "_common.schema.json#/$defs/meta"}

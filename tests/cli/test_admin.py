@@ -66,6 +66,39 @@ class TestAdminHealth:
         ):
             assert required in payload["data"]["tables_present"]
 
+    def test_davmail_watch_note_present_and_healthy_unaffected(
+        self, cli_runner, cli_env, seeded_db,
+    ):
+        """E1 Lane B: 静态 davmail 上游 watch note 不影响 healthy 语义 (纯提示新增字段)."""
+        from src.cli.commands import admin
+
+        result = _invoke_admin(
+            cli_runner, "health", "-o", "json", db_path=seeded_db,
+        )
+        assert result.exit_code == 0, result.output
+        payload = _extract_last_json_object(result.output)
+        assert payload["data"]["healthy"] is True
+        notes = payload["data"]["notes"]
+        assert isinstance(notes, list) and len(notes) >= 1
+        assert notes == list(admin.HEALTH_WATCH_NOTES)
+        combined = " ".join(notes)
+        assert "EWS 2026-10-01" in combined
+        assert "davmail" in combined
+        # 口径死约束 (e1-backend-contract.md §3.1 Step 4): 绝不出现 Graph API 自研 /
+        # 应用注册 / IT 审批相关字样。
+        for forbidden in ("Graph API", "应用注册", "IT 审批", "Azure"):
+            assert forbidden not in combined
+
+    def test_davmail_watch_note_present_in_text_output(
+        self, cli_runner, cli_env, seeded_db,
+    ):
+        result = _invoke_admin(
+            cli_runner, "health", "-o", "text", db_path=seeded_db,
+        )
+        assert result.exit_code == 0, result.output
+        assert "note" in result.output
+        assert "davmail" in result.output
+
 
 class TestAdminStats:
     def test_stats_json_full(self, cli_runner, cli_env, seeded_db):
