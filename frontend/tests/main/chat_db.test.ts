@@ -129,7 +129,7 @@ describe('chat_db — path + schema bootstrap', () => {
     // P4 Phase 06a (06-23 chat-panel cutover): bumped to 13 — ai_chat_sessions.backend_kind CHECK admits 'ai-sdk'.
     // demo-fidelity Phase 10 (06-23 chat-panel agent view): bumped to 14 — ai_chat_sessions.title.
     // M5b (2026-06-30): bumped to 16 — DROP agent_memory_kv.
-    expect(ver.value).toBe('17')
+    expect(ver.value).toBe('18')
   })
 
   test('fresh DB schema includes the v2 metadata column', () => {
@@ -199,7 +199,7 @@ describe('chat_db — path + schema bootstrap', () => {
     const ver = db.prepare("SELECT value FROM chat_db_meta WHERE key = 'schema_version'").get() as {
       value: string
     }
-    expect(ver.value).toBe('17')
+    expect(ver.value).toBe('18')
   })
 
   test('v1-version DB ALTERs in the metadata column on first open (forward migration)', () => {
@@ -253,7 +253,7 @@ describe('chat_db — path + schema bootstrap', () => {
     // Sprint 19 (PR-1a → bug-fix): v1 DB jumped to v4; task 06-08-chat Bug 2
     // bumped to v5; 需求 5 bumped to v6; P2a → v8; P4 Phase 02 → v9 → a v1 DB now
     // climbs the whole ladder to v17.
-    expect(ver.value).toBe('17')
+    expect(ver.value).toBe('18')
     const cols = db.prepare('PRAGMA table_info(ai_chat_messages)').all() as Array<{ name: string }>
     expect(cols.map((c) => c.name)).toContain('metadata')
     // v6 column present after climbing from v1.
@@ -326,6 +326,19 @@ describe('chat_db — path + schema bootstrap', () => {
         updated_at INTEGER NOT NULL,
         ui_message_json TEXT
       );
+      -- A real v12 DB carries chat_tool_call (created at v3 + additive columns through v12);
+      -- include it so the v18 whitelist_rule_id ALTER has a table to extend.
+      CREATE TABLE chat_tool_call (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        message_id INTEGER NOT NULL REFERENCES ai_chat_messages(id) ON DELETE CASCADE,
+        tool_use_id TEXT NOT NULL, tool_name TEXT NOT NULL, input_json TEXT NOT NULL,
+        user_edited_input_json TEXT, output_json TEXT, status TEXT NOT NULL,
+        duration_ms INTEGER, confirmation_tier TEXT NOT NULL, confirmed_at INTEGER,
+        content_offset INTEGER, approval_status TEXT, approval_hash TEXT, ui_payload_json TEXT,
+        content_hash TEXT, idempotency_key TEXT,
+        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+        UNIQUE (message_id, tool_use_id)
+      );
       CREATE INDEX idx_sessions_email ON ai_chat_sessions(email_id, updated_at DESC);
       CREATE INDEX idx_sessions_anchor ON ai_chat_sessions(anchor_type, anchor_id, updated_at DESC);
       INSERT INTO chat_db_meta (key, value) VALUES ('schema_version', '12');
@@ -345,7 +358,7 @@ describe('chat_db — path + schema bootstrap', () => {
           value: string
         }
       ).value
-    ).toBe('17')
+    ).toBe('18')
     // Narrow CHECK gone, widened CHECK in place.
     const sql = (
       db
@@ -390,7 +403,7 @@ describe('chat_db — path + schema bootstrap', () => {
           value: string
         }
       ).value
-    ).toBe('17')
+    ).toBe('18')
     // Simulate the crash window: roll the meta back to v3 while the physical
     // schema (content_offset + thinking columns, v4 table shape) stays at v6.
     db.prepare("UPDATE chat_db_meta SET value = '3' WHERE key = 'schema_version'").run()
@@ -402,7 +415,7 @@ describe('chat_db — path + schema bootstrap', () => {
     const ver = reopened
       .prepare("SELECT value FROM chat_db_meta WHERE key='schema_version'")
       .get() as { value: string }
-    expect(ver.value).toBe('17')
+    expect(ver.value).toBe('18')
     // Columns are still present exactly once (no duplication, no loss).
     const msgCols = reopened.prepare('PRAGMA table_info(ai_chat_messages)').all() as Array<{
       name: string
@@ -1072,7 +1085,7 @@ describe('chat_db — v3 → v4 migration (drop UNIQUE on ai_chat_sessions)', ()
     const ver = db.prepare("SELECT value FROM chat_db_meta WHERE key = 'schema_version'").get() as {
       value: string
     }
-    expect(ver.value).toBe('17')
+    expect(ver.value).toBe('18')
     // UNIQUE gone — CREATE TABLE SQL no longer contains UNIQUE clause on
     // (email_id, backend_kind, backend_agent_page_id).
     const tableSql = (
@@ -1215,7 +1228,7 @@ describe('chat_db — v4 → v5 migration (chat_tool_call.content_offset)', () =
       value: string
     }
     // v4 DB now climbs the whole ladder to v17 (content_offset added at v5).
-    expect(ver.value).toBe('17')
+    expect(ver.value).toBe('18')
     // Column present, pre-existing row reads NULL (degrade path in renderer).
     const cols = db.prepare('PRAGMA table_info(chat_tool_call)').all() as Array<{ name: string }>
     expect(cols.map((c) => c.name)).toContain('content_offset')
@@ -1277,7 +1290,7 @@ describe('chat_db — v5 → v6 migration (ai_chat_messages.thinking)', () => {
     const ver = db.prepare("SELECT value FROM chat_db_meta WHERE key = 'schema_version'").get() as {
       value: string
     }
-    expect(ver.value).toBe('17')
+    expect(ver.value).toBe('18')
     // Column present, pre-existing row reads NULL (no thinking block in renderer).
     const cols = db.prepare('PRAGMA table_info(ai_chat_messages)').all() as Array<{ name: string }>
     expect(cols.map((c) => c.name)).toContain('thinking')
@@ -1546,6 +1559,19 @@ describe('chat_db — v16 → v17 migration (ai_chat_messages_fts)', () => {
         thinking TEXT, ui_message_json TEXT,
         created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
       );
+      -- A real v16 DB carries chat_tool_call (created at v3 + additive columns through v12);
+      -- include it so the v18 whitelist_rule_id ALTER has a table to extend.
+      CREATE TABLE chat_tool_call (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        message_id INTEGER NOT NULL REFERENCES ai_chat_messages(id) ON DELETE CASCADE,
+        tool_use_id TEXT NOT NULL, tool_name TEXT NOT NULL, input_json TEXT NOT NULL,
+        user_edited_input_json TEXT, output_json TEXT, status TEXT NOT NULL,
+        duration_ms INTEGER, confirmation_tier TEXT NOT NULL, confirmed_at INTEGER,
+        content_offset INTEGER, approval_status TEXT, approval_hash TEXT, ui_payload_json TEXT,
+        content_hash TEXT, idempotency_key TEXT,
+        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+        UNIQUE (message_id, tool_use_id)
+      );
       INSERT INTO chat_db_meta (key, value) VALUES ('schema_version', '16');
       INSERT INTO ai_chat_sessions
         (id, email_id, anchor_type, anchor_id, backend_kind, created_at, updated_at)
@@ -1562,7 +1588,7 @@ describe('chat_db — v16 → v17 migration (ai_chat_messages_fts)', () => {
           value: string
         }
       ).value
-    ).toBe('17')
+    ).toBe('18')
     // The 'rebuild' backfill indexed the pre-existing row: trigram CJK substring hits.
     expect(ftsHits('超时复盘')).toBe(1)
     expect(ftsHits('redis')).toBe(1)
@@ -1612,8 +1638,109 @@ describe('chat_db — v16 → v17 migration (ai_chat_messages_fts)', () => {
     const ver = getChatDb()
       .prepare("SELECT value FROM chat_db_meta WHERE key='schema_version'")
       .get() as { value: string }
-    expect(ver.value).toBe('17')
+    expect(ver.value).toBe('18')
     // Rebuild is idempotent — the row is indexed exactly once.
     expect(ftsHits('重入收敛')).toBe(1)
+  })
+})
+
+// S2 W1 (task 07-02-s2-exec-skill-install) — v17 → v18: chat_tool_call.whitelist_rule_id (the exec
+// whitelist audit; approval_status='auto_whitelist' records a card-skipped exec run + the matched
+// rule id). Plain additive ALTER, same idempotency discipline as v10–v12.
+describe('chat_db — v17 → v18 migration (chat_tool_call.whitelist_rule_id)', () => {
+  const hasCol = (): boolean =>
+    (getChatDb().prepare('PRAGMA table_info(chat_tool_call)').all() as Array<{ name: string }>).some(
+      (c) => c.name === 'whitelist_rule_id'
+    )
+
+  test('fresh DB carries the whitelist_rule_id column', () => {
+    getChatDb()
+    expect(hasCol()).toBe(true)
+  })
+
+  test('append defaults whitelist_rule_id NULL; update records auto_whitelist + the rule id', () => {
+    const s = createNewSession({ emailId: 900, backendKind: 'ai-sdk' })
+    const m = appendMessage({ sessionId: s.id, role: 'assistant', content: 'ran it', status: 'complete' })
+    const tc = appendToolCall({
+      messageId: m.id,
+      toolUseId: 'tu-exec-1',
+      toolName: 'run_command',
+      inputJson: JSON.stringify({ argv: ['/bin/echo', 'hi'] }),
+      confirmationTier: 'edit',
+      status: 'running'
+    })
+    expect(tc.whitelist_rule_id).toBeNull()
+    updateToolCall(tc.id, {
+      status: 'ok',
+      approvalStatus: 'auto_whitelist',
+      whitelistRuleId: 42
+    })
+    const row = getToolCallByUseId(m.id, 'tu-exec-1')
+    expect(row?.approval_status).toBe('auto_whitelist')
+    expect(row?.whitelist_rule_id).toBe(42)
+  })
+
+  test('a v17 DB (no whitelist_rule_id column) forward-migrates: column added, converges to 18', () => {
+    closeChatDb()
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const BetterSqlite3 = require('better-sqlite3') as typeof import('better-sqlite3')
+    const seed = new BetterSqlite3(dbPath)
+    // A v17-shaped chat_tool_call WITHOUT whitelist_rule_id (the v3 base + v5/v10/v11/v12 adds).
+    seed.exec(`
+      CREATE TABLE chat_db_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE ai_chat_sessions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, email_id INTEGER,
+        anchor_type TEXT NOT NULL DEFAULT 'email' CHECK (anchor_type IN ('email', 'general')),
+        anchor_id INTEGER,
+        backend_kind TEXT NOT NULL CHECK (backend_kind IN ('notion-agent', 'custom-api', 'ai-sdk')),
+        backend_model TEXT, backend_agent_page_id TEXT,
+        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, title TEXT,
+        archived INTEGER NOT NULL DEFAULT 0,
+        CHECK ((anchor_type = 'email' AND email_id IS NOT NULL AND anchor_id = email_id)
+          OR (anchor_type = 'general' AND anchor_id IS NULL AND email_id IS NULL))
+      );
+      CREATE TABLE ai_chat_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id INTEGER NOT NULL REFERENCES ai_chat_sessions(id) ON DELETE CASCADE,
+        role TEXT NOT NULL, content TEXT NOT NULL,
+        tokens_input INTEGER, tokens_output INTEGER, cost_usd REAL, model TEXT,
+        status TEXT NOT NULL, error_message TEXT, metadata TEXT, thinking TEXT, ui_message_json TEXT,
+        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE chat_tool_call (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        message_id INTEGER NOT NULL REFERENCES ai_chat_messages(id) ON DELETE CASCADE,
+        tool_use_id TEXT NOT NULL, tool_name TEXT NOT NULL, input_json TEXT NOT NULL,
+        user_edited_input_json TEXT, output_json TEXT, status TEXT NOT NULL,
+        duration_ms INTEGER, confirmation_tier TEXT NOT NULL, confirmed_at INTEGER,
+        content_offset INTEGER, approval_status TEXT, approval_hash TEXT, ui_payload_json TEXT,
+        content_hash TEXT, idempotency_key TEXT,
+        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+        UNIQUE (message_id, tool_use_id)
+      );
+      INSERT INTO chat_db_meta (key, value) VALUES ('schema_version', '17');
+    `)
+    seed.close()
+
+    const db = getChatDb()
+    expect(
+      (db.prepare("SELECT value FROM chat_db_meta WHERE key='schema_version'").get() as {
+        value: string
+      }).value
+    ).toBe('18')
+    expect(hasCol()).toBe(true)
+  })
+
+  test('re-entry with the physical column but meta rolled back to 17 converges without error', () => {
+    getChatDb() // fully migrated (has the column)
+    getChatDb().prepare("UPDATE chat_db_meta SET value = '17' WHERE key = 'schema_version'").run()
+    closeChatDb()
+    // The hasColumn guard must NOT re-ADD (would throw "duplicate column"); it just advances meta.
+    expect(() => getChatDb()).not.toThrow()
+    const ver = getChatDb()
+      .prepare("SELECT value FROM chat_db_meta WHERE key='schema_version'")
+      .get() as { value: string }
+    expect(ver.value).toBe('18')
+    expect(hasCol()).toBe(true)
   })
 })

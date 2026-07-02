@@ -266,6 +266,64 @@ export interface DomainWebSearchResult {
   results: Array<{ title: string; url: string; snippet: string }>
 }
 
+// ── exec shapes (S2 W1) — the /api/exec/* rows the run_command/file_read/file_write tools consume.
+//    Python (routers/exec.py) is the execution authority (fixed env allowlist, inode-level deny
+//    floor, no shell); the client just carries the envelope. `policy` is an AUDIT verdict only
+//    (the exec endpoint does NOT gate — the gateway needsApproval already decided via /evaluate). ──
+
+/** POST /api/exec/run data block. floor_hit is INFORMATIONAL (a sensitive argv/cwd flagged, run
+ *  NOT blocked — run_command has no filesystem sandbox); floor_hits are human-readable reasons. */
+export interface DomainExecRunResult {
+  exit_code: number
+  stdout: string
+  stderr: string
+  truncated: boolean
+  duration_ms: number
+  cwd: string
+  floor_hit: boolean
+  floor_hits: string[]
+  policy: { decision: 'auto_allow' | 'ask'; rule_id: number | null }
+}
+
+/** POST /api/exec/file_read data block. */
+export interface DomainExecFileReadResult {
+  content: string
+  truncated: boolean
+  size: number
+  policy: { decision: 'auto_allow' | 'ask'; rule_id: number | null }
+}
+
+/** POST /api/exec/file_write data block. */
+export interface DomainExecFileWriteResult {
+  bytes_written: number
+  created: boolean
+  policy: { decision: 'auto_allow' | 'ask'; rule_id: number | null }
+}
+
+/** POST /api/agent/policy/evaluate verdict (a structured whitelist decision the gateway
+ *  needsApproval consults BEFORE showing an exec approval card). auto_allow → skip the card;
+ *  ask (no match / any error, fail-closed) → show the card. */
+export interface DomainPolicyVerdict {
+  decision: 'auto_allow' | 'ask'
+  rule_id: number | null
+}
+
+/** One PolicyRule (camelCase, GET/POST /api/agent/policy/rules). `dangerous` = a wide interpreter
+ *  rule (UI shows a red not-a-sandbox warning). matcher is the structured typed matcher. */
+export interface DomainPolicyRule {
+  id: number
+  capability: string
+  matcher: Record<string, unknown>
+  contextMode: string
+  agentId: number | null
+  enabled: boolean
+  note: string | null
+  createdAt: string
+  lastUsedAt: string | null
+  useCount: number
+  dangerous: boolean
+}
+
 /** chat_session_search — one aggregated hit of GET /chat/sessions/search. */
 export interface DomainSessionSearchHit {
   session: {
@@ -739,6 +797,120 @@ export class MailAgentDomainClient {
   webSearch(query: string, limit: number, signal?: AbortSignal): Promise<DomainWebSearchResult> {
     return this._req<DomainWebSearchResult>('POST', '/web/search', {
       body: { query, limit },
+      signal
+    })
+  }
+
+  // ── exec primitives (S2 W1) — local command / filesystem execution via serve-api /exec/* (never
+  //    child_process/fs in the gateway core): the business authority (fixed env allowlist, inode
+  //    deny floor, no shell) lives in Python (routers/exec.py) → remote parity for free. The tools
+  //    that call these are only registered when MAILAGENT_OPENNESS_EXEC_TOOLS is on; all three are
+  //    edit-tier (always ask unless a whitelist rule matches).
+
+  /** run_command (S2 W1) — run one local command (NO shell). POST /exec/run {argv, cwd?, timeout_ms}. */
+  runCommand(
+    argv: string[],
+    opts: { cwd?: string; timeoutMs?: number },
+    signal?: AbortSignal
+  ): Promise<DomainExecRunResult> {
+    const body: Record<string, unknown> = { argv }
+    if (opts.cwd !== undefined) body.cwd = opts.cwd
+    if (opts.timeoutMs !== undefined) body.timeout_ms = opts.timeoutMs
+    return this._req<DomainExecRunResult>('POST', '/exec/run', { body, signal })
+  }
+
+  /** file_read (S2 W1) — read a local file's text. POST /exec/file_read {path, max_bytes}.
+   *  Sensitive targets → DomainError E_EXEC_FLOOR_DENIED (the inode deny floor). */
+  fileRead(
+    path: string,
+    maxBytes: number,
+    signal?: AbortSignal
+  ): Promise<DomainExecFileReadResult> {
+    return this._req<DomainExecFileReadResult>('POST', '/exec/file_read', {
+      body: { path, max_bytes: maxBytes },
+      signal
+    })
+  }
+
+  /** file_write (S2 W1) — write text to a local file. POST /exec/file_write {path, content, mode}.
+   *  Sensitive targets → DomainError E_EXEC_FLOOR_DENIED; create_new on an existing file → E_FILE_EXISTS. */
+  fileWrite(
+    path: string,
+    content: string,
+    mode: 'overwrite' | 'append' | 'create_new',
+    signal?: AbortSignal
+  ): Promise<DomainExecFileWriteResult> {
+    return this._req<DomainExecFileWriteResult>('POST', '/exec/file_write', {
+      body: { path, content, mode },
+      signal
+    })
+  }
+
+  // ── policy primitives (S2 W1) — the structured whitelist. evaluate is consulted by the exec
+  //    tools' needsApproval (auto_allow → skip card); the CRUD methods back the Settings automation
+  //    policy page + the approval-card "always allow" affordance (rule creation is an OWNER action
+  //    only — no gateway TOOL creates rules). All hit /agent/policy/* (owner API, verify_cf_access).
+
+  /** POST /agent/policy/evaluate {capability, action, contextMode} → the whitelist verdict. Called
+   *  from the exec tools' needsApproval with the run's SERVER-ASSERTED contextMode (never a body value). */
+  policyEvaluate(
+    capability: string,
+    action: Record<string, unknown>,
+    contextMode: string,
+    signal?: AbortSignal
+  ): Promise<DomainPolicyVerdict> {
+    return this._req<DomainPolicyVerdict>('POST', '/agent/policy/evaluate', {
+      body: { capability, action, contextMode },
+      signal
+    })
+  }
+
+  /** GET /agent/policy/rules?capability=&contextMode= → data.rules (newest first). */
+  async listPolicyRules(
+    opts: { capability?: string; contextMode?: string } = {},
+    signal?: AbortSignal
+  ): Promise<DomainPolicyRule[]> {
+    const data = await this._req<{ rules: DomainPolicyRule[] }>('GET', '/agent/policy/rules', {
+      query: { capability: opts.capability, contextMode: opts.contextMode },
+      signal
+    })
+    return data.rules ?? []
+  }
+
+  /** POST /agent/policy/rules {capability, matcher, contextMode?, note?} → the created rule (201).
+   *  A malformed matcher → DomainError E_INVALID_ARG (422). This is the ONLY rule-creation path
+   *  (approval-card "always allow" + Settings); no gateway tool can reach it. */
+  createPolicyRule(
+    input: {
+      capability: string
+      matcher: Record<string, unknown>
+      contextMode?: string
+      note?: string
+    },
+    signal?: AbortSignal
+  ): Promise<DomainPolicyRule> {
+    const body: Record<string, unknown> = { capability: input.capability, matcher: input.matcher }
+    if (input.contextMode !== undefined) body.contextMode = input.contextMode
+    if (input.note !== undefined) body.note = input.note
+    return this._req<DomainPolicyRule>('POST', '/agent/policy/rules', { body, signal })
+  }
+
+  /** PATCH /agent/policy/rules/{id} {enabled?, note?} → the updated rule. matcher is NOT patchable
+   *  (widening = delete + recreate). Missing id → DomainError E_NOT_FOUND (404). */
+  setPolicyRule(
+    id: number,
+    patch: { enabled?: boolean; note?: string },
+    signal?: AbortSignal
+  ): Promise<DomainPolicyRule> {
+    const body: Record<string, unknown> = {}
+    if (patch.enabled !== undefined) body.enabled = patch.enabled
+    if (patch.note !== undefined) body.note = patch.note
+    return this._req<DomainPolicyRule>('PATCH', `/agent/policy/rules/${id}`, { body, signal })
+  }
+
+  /** DELETE /agent/policy/rules/{id} → {id, removed} (idempotent). */
+  deletePolicyRule(id: number, signal?: AbortSignal): Promise<{ id: number; removed: boolean }> {
+    return this._req<{ id: number; removed: boolean }>('DELETE', `/agent/policy/rules/${id}`, {
       signal
     })
   }

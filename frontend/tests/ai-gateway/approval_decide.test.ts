@@ -15,6 +15,7 @@ import type { AiGatewayConfig, IslandApprovalAnnounce } from '../../src/ai-gatew
 import { ApprovalGuard } from '../../src/ai-gateway/security/approval'
 import { ApprovalRunStash } from '../../src/ai-gateway/approvalStash'
 import { buildGatewayTools } from '../../src/ai-gateway/tools'
+import { mayAutoApprove } from '../../src/ai-gateway/tools/policy'
 import type { MailAgentDomainClient } from '../../src/ai-gateway/python/domainClient'
 import type { MailAgentUIMessage } from '../../src/shared/assistant/uiMessage'
 
@@ -237,6 +238,89 @@ describe('/api/ai/approval/decide — server-side resume', () => {
     expect(res.status).toBe(200)
     expect((await res.json()).status).toBe('completed')
     expect(domainCalls).toHaveLength(0) // did not re-execute (already done in-app)
+  })
+})
+
+// S2 W0/W1 (ADR-001 D1) — resume-path contextMode FREEZE. A run paused under a non-manual mode must
+// resume under EXACTLY that mode: the stash carries the frozen contextMode, resumeApprovalRun passes
+// it back through prepareChatRun → buildTools (3rd param), NEVER the request body. Negative proof:
+// stash 'untrusted_trigger' → the resume's buildTools receives 'untrusted_trigger' → every
+// capability_change/exec/outbound tool is stripped + domain_write cannot auto-approve.
+describe('/api/ai/approval/decide — contextMode freeze (untrusted_trigger resume)', () => {
+  test('resume rebuilds tools under the STASH-frozen untrusted_trigger mode (no manual escalation)', async () => {
+    const guard = new ApprovalGuard()
+    const stash = new ApprovalRunStash()
+    const domainCalls: unknown[] = []
+    const domain = spyDomain(domainCalls)
+    // Capture the contextMode + the resulting ToolSet keys each buildTools call sees (the resume is
+    // the only call here). Build the FULL flag-on set so capability_change/exec/outbound tools WOULD
+    // exist in manual_chat — proving they are dropped comes from the frozen mode, not from flags-off.
+    const seen: { mode: string | undefined; keys: string[] }[] = []
+    const cfg: AiGatewayConfig = {
+      port: 0,
+      baseUrl: 'https://crs.example/api',
+      apiKey: 'sk-test',
+      model: 'claude-sonnet-4-6',
+      createModel: () => mockTextModel(['done.']),
+      buildTools: (collector, _approvalMode, contextMode) => {
+        const tools = buildGatewayTools(
+          {
+            domain,
+            writeToolsEnabled: true,
+            approvalGuard: guard,
+            sendToolEnabled: true,
+            sendSigningSecret: 'secret',
+            skillGatingEnabled: true,
+            webToolsEnabled: true,
+            execToolsEnabled: true,
+            oneShotWrites: true,
+            contextMode
+          },
+          collector
+        )
+        seen.push({ mode: contextMode, keys: Object.keys(tools) })
+        return tools
+      },
+      islandAgentEnabled: true,
+      approvalStash: stash,
+      rejectApproval: (tc: string) => guard.reject(tc)
+    }
+    const h = await start(cfg)
+    // Seed a paused approval FROZEN at untrusted_trigger (the email_draft_reply is domain_write, so
+    // the resume still executes it — the point is the OTHER classes are gone + the mode is frozen).
+    guard.register(TC, 'email_draft_reply', 'edit', DRAFT_INPUT, ['body_markdown'])
+    const token = stash.stash({
+      toolCallId: TC,
+      approvalId: AP,
+      toolName: 'email_draft_reply',
+      sessionId: 1,
+      body: { messages: [USER], model: 'claude-sonnet-4-6', sessionId: 1 },
+      responseMessage: pausedResponse(),
+      contextMode: 'untrusted_trigger'
+    })
+
+    const res = await decide(h.port, { toolCallId: TC, decision: 'approve', resumeToken: token })
+    expect(res.status).toBe(200)
+    expect((await res.json()).status).toBe('completed')
+
+    // buildTools was called during the resume under the FROZEN mode (never manual_chat).
+    expect(seen.length).toBeGreaterThan(0)
+    const resumeBuild = seen[seen.length - 1]
+    expect(resumeBuild.mode).toBe('untrusted_trigger')
+    // capability_change / exec / outbound tools are absent from the resumed ToolSet.
+    for (const name of [
+      'set_skill_enabled',
+      'update_system_md',
+      'run_command',
+      'file_write',
+      'web_fetch',
+      'email_prepare_send'
+    ]) {
+      expect(resumeBuild.keys, `${name} must be stripped under untrusted_trigger`).not.toContain(name)
+    }
+    // domain_write survives (allowed in every mode) but cannot auto-approve outside manual_chat.
+    expect(resumeBuild.keys).toContain('email_flag')
+    expect(mayAutoApprove('domain_write', 'untrusted_trigger')).toBe(false)
   })
 })
 

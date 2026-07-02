@@ -62,6 +62,7 @@ import type {
   AgentProfileDoc,
   AgentProfileHistoryEntry,
   CompileUserMdResult,
+  ExecPolicyRule,
   SearchAgentInput,
   SearchAgentResult,
   SkillSummary
@@ -703,6 +704,31 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
       await request(baseUrl, 'POST', `/agent/skills/${encodeURIComponent(name)}/enabled`, {
         body: { enabled }
       })
+    },
+
+    async listPolicyRules(): Promise<ExecPolicyRule[]> {
+      // S2 W1 — the Settings 「自动化策略」 page reads the exec whitelist rules (GET
+      // /agent/policy/rules). Graceful [] when unreachable (the section shows an empty state).
+      try {
+        const data = await request<{ rules: ExecPolicyRule[] }>(
+          baseUrl,
+          'GET',
+          '/agent/policy/rules'
+        )
+        return data.rules ?? []
+      } catch {
+        return []
+      }
+    },
+
+    async setPolicyRuleEnabled(id: number, enabled: boolean): Promise<void> {
+      // S2 W1 — enable/disable a rule (PATCH /agent/policy/rules/{id}). Throws Error&{code}.
+      await request(baseUrl, 'PATCH', `/agent/policy/rules/${id}`, { body: { enabled } })
+    },
+
+    async deletePolicyRule(id: number): Promise<void> {
+      // S2 W1 — delete a rule (DELETE /agent/policy/rules/{id}). Idempotent. Throws Error&{code}.
+      await request(baseUrl, 'DELETE', `/agent/policy/rules/${id}`)
     },
 
     async compileUserMd() {

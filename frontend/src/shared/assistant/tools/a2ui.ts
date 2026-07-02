@@ -101,7 +101,10 @@ export const A2UI_COMPONENTS = {
   // soul/rules get the high-risk red treatment + the PRODUCT_SAFETY_FLOOR note).
   SystemDocApprovalCard: 'SystemDocApprovalCard',
   // M4c — the skill enable/disable (mount/unmount) approval card (set_skill_enabled, preview tier).
-  SkillToggleCard: 'SkillToggleCard'
+  SkillToggleCard: 'SkillToggleCard',
+  // S2 W1 — local exec approval card (run_command / file_read / file_write, edit tier). Shows the
+  // exact argv / path + a "总是允许" affordance that creates a structured whitelist rule.
+  ExecApprovalCard: 'ExecApprovalCard'
 } as const
 
 /** Which A2UI component renders a given gateway write tool. Unknown / read tools → null
@@ -122,6 +125,10 @@ export function componentForTool(toolName: string): string | null {
       return A2UI_COMPONENTS.SystemDocApprovalCard
     case 'set_skill_enabled':
       return A2UI_COMPONENTS.SkillToggleCard
+    case 'run_command':
+    case 'file_read':
+    case 'file_write':
+      return A2UI_COMPONENTS.ExecApprovalCard
     // discover_skills is a silent read → no card (generic ToolTraceCard).
     default:
       return null
@@ -194,6 +201,21 @@ export interface SkillToggleCardProps {
   skillName: string
   enabled: boolean
   applied?: boolean
+}
+
+/** run_command / file_read / file_write (S2 W1, edit tier) — the local exec approval card.
+ *  `kind` picks the header + which fields matter; `argv`/`cwd` for run_command, `path`/`mode`
+ *  for file ops. `summary` is a one-line human description; result fields (exitCode/bytesWritten)
+ *  land after execute. The card shows a "总是允许" affordance (creates a structured whitelist rule). */
+export interface ExecApprovalCardProps {
+  kind: 'run_command' | 'file_read' | 'file_write'
+  summary: string
+  argv?: string[]
+  cwd?: string | null
+  path?: string | null
+  mode?: string | null
+  exitCode?: number | null
+  bytesWritten?: number | null
 }
 
 function asNum(v: unknown, fallback = -1): number {
@@ -343,6 +365,38 @@ export function buildToolA2UIPayload(
       component,
       props: props as unknown as Record<string, unknown>,
       audit: { risk: io.risk ?? 'preview', requiresApproval }
+    }
+  }
+
+  if (component === A2UI_COMPONENTS.ExecApprovalCard) {
+    const kind = (toolName === 'file_read' || toolName === 'file_write' ? toolName : 'run_command') as
+      | 'run_command'
+      | 'file_read'
+      | 'file_write'
+    const argv = asStrArray(args.argv)
+    const path = asStr(args.path) ?? null
+    const summary =
+      kind === 'run_command'
+        ? `运行命令：${argv.join(' ') || '(空)'}`
+        : kind === 'file_read'
+          ? `读文件：${path ?? '?'}`
+          : `写文件：${path ?? '?'}`
+    const props: ExecApprovalCardProps = {
+      kind,
+      summary,
+      argv: kind === 'run_command' ? argv : undefined,
+      cwd: asStr(args.cwd) ?? null,
+      path,
+      mode: asStr(args.mode) ?? null,
+      exitCode: typeof result?.exit_code === 'number' ? (result.exit_code as number) : null,
+      bytesWritten: typeof result?.bytes_written === 'number' ? (result.bytes_written as number) : null
+    }
+    return {
+      protocol: A2UI_PROTOCOL,
+      version: A2UI_VERSION,
+      component,
+      props: props as unknown as Record<string, unknown>,
+      audit: { risk: io.risk ?? 'edit', requiresApproval }
     }
   }
 

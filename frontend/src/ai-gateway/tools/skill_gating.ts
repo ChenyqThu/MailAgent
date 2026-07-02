@@ -66,7 +66,12 @@ export const CORE_UNGATED_GATEWAY_TOOLS: ReadonlySet<string> = new Set([
   // S1 R3 web 工具（behind MAILAGENT_OPENNESS_WEB_TOOLS）—— 联网面，无 skill 归属，开关权在
   // 独立 flag，永不 skill-gated（edit-tier 恒人审 + Python SSRF 防护已是其保护面）。
   'web_fetch',
-  'web_search'
+  'web_search',
+  // S2 W1 exec 工具（behind MAILAGENT_OPENNESS_EXEC_TOOLS）—— 本机执行/文件面，无 skill 归属，
+  // 开关权在独立 flag，永不 skill-gated（edit-tier 恒人审 + 结构化白名单 + Python inode deny 地板）。
+  'run_command',
+  'file_read',
+  'file_write'
 ])
 
 /** 删掉「归属 skill ∉ advertisedSkills 且无任一 advertised skill 仍拥有它 且非 collision-exempt」的

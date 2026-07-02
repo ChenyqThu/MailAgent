@@ -142,7 +142,15 @@ export type {
 // NOT flag-gated (additive, same discipline as every ladder step); the
 // MAILAGENT_OPENNESS_SESSION_TOOLS flag gates the TOOLS, not the schema. 🔴 bump 同步刷
 // src/chat/db.py 头注释；NOT backend_lifecycle.EXPECTED_DB_VERSION.
-const CHAT_DB_VERSION = 17
+// v18 (S2 W1, task 07-02-s2-exec-skill-install) — chat_tool_call.whitelist_rule_id: the S2 exec
+// whitelist audit. An exec tool (run_command / file_read / file_write) that executed WITHOUT an
+// approval card because a structured PolicyRule matched records approval_status='auto_whitelist'
+// (approval_status is a free-form TEXT column — v10 added it with NO CHECK, so the new value needs
+// no enum migration) + whitelist_rule_id = the matched rule id. NULL for every card-approved /
+// read / legacy row (additive ALTER default). Plain additive ALTER, same hasColumn idempotency
+// guard as v5..v12. ai_chat.db has its own version ladder; this bump does NOT touch
+// backend_lifecycle.EXPECTED_DB_VERSION. 🔴 bump 同步刷 src/chat/db.py 头注释 + append/update 写列。
+const CHAT_DB_VERSION = 18
 
 export function resolveChatDbPath(): string {
   const fromEnv = process.env['AI_CHAT_DB_PATH']
@@ -979,6 +987,29 @@ function migrate(db: Database.Database): void {
       throw err
     }
   }
+
+  // v17 → v18 — S2 W1 (task 07-02-s2-exec-skill-install) exec whitelist audit. Add
+  // chat_tool_call.whitelist_rule_id: the PolicyRule id that auto-allowed an exec tool run without a
+  // card (approval_status='auto_whitelist'). NULL for every card-approved / read / legacy row
+  // (additive ALTER default). approval_status stays free-form TEXT (v10 added it with NO CHECK), so
+  // the new 'auto_whitelist' value needs no enum migration. Plain additive ALTER, same hasColumn
+  // idempotency guard as v5..v12. ai_chat.db has its own version ladder; this bump does NOT touch
+  // backend_lifecycle.EXPECTED_DB_VERSION.
+  if (current < 18) {
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      if (!hasColumn(db, 'chat_tool_call', 'whitelist_rule_id')) {
+        db.exec('ALTER TABLE chat_tool_call ADD COLUMN whitelist_rule_id INTEGER')
+      }
+      db.prepare(
+        "INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', '18')"
+      ).run()
+      db.exec('COMMIT')
+    } catch (err) {
+      db.exec('ROLLBACK')
+      throw err
+    }
+  }
 }
 
 // ── singleton ───────────────────────────────────────────────────────────
@@ -1581,6 +1612,8 @@ export function appendToolCall(input: AppendToolCallInput): ChatToolCall {
     // v12 — outbound-send content hash + idempotency key, set on update; insert default NULL.
     content_hash: null,
     idempotency_key: null,
+    // v18 — exec whitelist rule id (approval_status='auto_whitelist'), set on update; insert NULL.
+    whitelist_rule_id: null,
     created_at: now,
     updated_at: now
   }
@@ -1633,6 +1666,11 @@ export function updateToolCall(toolCallId: number, patch: UpdateToolCallPatch): 
   if (patch.idempotencyKey !== undefined) {
     fields.push('idempotency_key = ?')
     params.push(patch.idempotencyKey)
+  }
+  // v18 (S2 W1) — exec whitelist rule id.
+  if (patch.whitelistRuleId !== undefined) {
+    fields.push('whitelist_rule_id = ?')
+    params.push(patch.whitelistRuleId)
   }
   if (fields.length === 0) return
   fields.push('updated_at = ?')

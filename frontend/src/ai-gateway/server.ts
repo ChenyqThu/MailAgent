@@ -252,6 +252,44 @@ async function handleApprovalResolve(
 }
 
 /**
+ * `POST /api/ai/policy/remember` — S2 W1 exec whitelist "always allow" side-channel. The exec
+ * approval card POSTs { toolCallId } when the user ticks "always allow" and approves. The gateway
+ * peeks the pending exec approval (guard.peek — the SAME approved argv/cwd/path), derives a
+ * full-PIN structured PolicyRule, and persists it via the owner policy API (cfg.rememberExecApproval).
+ * This is the ONLY rule-creation path besides Settings; no gateway TOOL can reach it. Typed errors:
+ * 404 not-found / 400 bad-arg (non-exec / derivation) / 501 when exec tools aren't wired.
+ */
+async function handlePolicyRemember(
+  req: IncomingMessage,
+  res: ServerResponse,
+  cfg: AiGatewayConfig
+): Promise<void> {
+  if (!cfg.rememberExecApproval) {
+    writeJson(res, 501, { error: 'E_NOT_IMPLEMENTED', hint: 'exec tools not enabled' })
+    return
+  }
+  const body = await readJsonBody(req)
+  const toolCallId = typeof body.toolCallId === 'string' ? body.toolCallId : ''
+  if (!toolCallId) {
+    writeJson(res, 400, { error: 'E_INVALID_ARG', hint: 'toolCallId required' })
+    return
+  }
+  try {
+    const rule = await cfg.rememberExecApproval(toolCallId)
+    writeJson(res, 200, { status: 'ok', rule })
+  } catch (e) {
+    const code = (e as { code?: unknown }).code
+    const message = e instanceof Error ? e.message : String(e)
+    if (typeof code === 'string') {
+      writeJson(res, approvalErrorStatus(code), { error: code, hint: message })
+    } else {
+      console.error('[ai-gateway] /api/ai/policy/remember failed unexpectedly', e)
+      writeJson(res, 500, { error: 'E_INTERNAL', hint: message })
+    }
+  }
+}
+
+/**
  * `POST /api/ai/title` — Phase 10b configurable LLM auto-title. The renderer POSTs { sessionId,
  * model? } after the FIRST turn of a brand-new conversation WHEN the user enabled LLM auto-title in
  * settings (default off → first-message preview is the title, no call here). The gateway reads the
@@ -485,6 +523,13 @@ export function createAiGatewayServer(cfg: AiGatewayConfig): Server {
     // unconditionally; cfg.islandAgentEnabled + cfg.approvalStash gate it (404 when off).
     if (method === 'POST' && path === '/api/ai/approval/decide') {
       void handleApprovalDecide(req, res, cfg)
+      return
+    }
+
+    // S2 W1 — exec whitelist "always allow" side-channel. Registered unconditionally;
+    // cfg.rememberExecApproval gates it (501 when exec tools aren't wired).
+    if (method === 'POST' && path === '/api/ai/policy/remember') {
+      void handlePolicyRemember(req, res, cfg)
       return
     }
 

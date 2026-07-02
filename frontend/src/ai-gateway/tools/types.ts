@@ -21,7 +21,7 @@
 
 import { tool, type FlexibleSchema, type Tool } from 'ai'
 
-import { DomainError } from '../python/domainClient'
+import { DomainError, type DomainPolicyVerdict } from '../python/domainClient'
 import { type ApprovalGuard, type ApprovalRecord, type ApprovalRisk } from '../security/approval'
 // S2 W0 (ADR-001) — context-mode × tool-class policy: the auto-approve predicate consults the
 // tool's policy CLASS (from the policy.ts single-source map) + the run's server-asserted context
@@ -67,8 +67,12 @@ export interface GatewayToolAuditEntry {
   confirmationTier?: 'silent' | 'preview' | 'edit'
   /** Phase 03b — write-tool approval outcome: 'approved'/'edited' = guard passed and
    *  the write executed; 'rejected' = approval guard rejected (not executed). Omitted
-   *  for read tools (no approval). */
-  approvalStatus?: 'approved' | 'edited' | 'rejected'
+   *  for read tools (no approval). S2 W1 adds 'auto_whitelist' — an exec tool executed
+   *  without a card because a structured PolicyRule matched (whitelistRuleId carries which). */
+  approvalStatus?: 'approved' | 'edited' | 'rejected' | 'auto_whitelist'
+  /** S2 W1 — exec-tool whitelist audit (chat_tool_call.whitelist_rule_id): the PolicyRule id that
+   *  auto-allowed this run without a card (approvalStatus='auto_whitelist'). null/omitted otherwise. */
+  whitelistRuleId?: number | null
   /** Phase 03b — sha256 of the approved input (the domain guard binding). */
   approvalHash?: string
   /** Phase 03b — the user-edited input (edit-tier writes only); null otherwise. */
@@ -230,10 +234,12 @@ export function auditedWriteTool<I>(
      *  contextMode==='manual_chat' — a preview-tier capability change (set_skill_enabled) always
      *  asks now. */
     approvalMode?: GatewayApprovalMode
-    /** S2 W0 (ADR-001 D2) — the tool's policy class. Omitted → resolved from the policy.ts
-     *  single-source map by name; a name missing there fail-closes to 'exec' (strictest:
-     *  manual-only + never auto-approved). Explicit only in tests. */
-    toolClass?: GatewayToolClass
+    /** S2 W0 (ADR-001 D2) — TEST-ONLY override of the tool's policy class. Production ALWAYS resolves
+     *  the class from the policy.ts single-source map by name (a name missing there fail-closes to
+     *  'exec': manual-only + never auto-approved). Named `testOnlyToolClass` so a real tool can never
+     *  quietly claim a class different from its map entry — only a unit test drives the matrix with
+     *  a synthetic class. */
+    testOnlyToolClass?: GatewayToolClass
     /** S2 W0 (ADR-001 D1) — the run's server-asserted context mode, threaded from
      *  prepareChatRun's trustedContextMode via buildGatewayTools. Absent/unknown fail-closes to
      *  'untrusted_trigger': the write never auto-approves, and a capability_change/exec/outbound
@@ -248,6 +254,14 @@ export function auditedWriteTool<I>(
      *  (default) → no consume, byte-identical to the pre-Part-B write path (the send tool has always
      *  consumed regardless — this extends the same one-shot to preview/edit writes). */
     oneShot?: boolean
+    /** S2 W1 (ADR-001 D4) — exec-tool structured whitelist hook (run_command / file_read /
+     *  file_write only). When present, needsApproval consults it — with the run's server-asserted
+     *  contextMode captured by the exec factory, NEVER a body value — BEFORE showing a card:
+     *  'auto_allow' → skip the card (execute records approval_status='auto_whitelist' +
+     *  whitelist_rule_id); 'ask' / timeout / any error → the card (fail-closed). It runs INSTEAD of
+     *  the approvalMode auto-reversible path (exec tools are edit-tier + class exec, which that path
+     *  never relaxes anyway). Absent (every non-exec tool) → the existing behaviour, byte-identical. */
+    policyEvaluate?: (input: I) => Promise<DomainPolicyVerdict>
     run: (
       input: I,
       ctx: { userEdited: boolean; signal: AbortSignal | undefined }
@@ -268,9 +282,15 @@ export function auditedWriteTool<I>(
   // capability_change/exec/outbound tool outside manual_chat is modeDenied: registration-time
   // filtering (applyContextModePolicy) already keeps it out of the ToolSet, and this is the
   // runtime double-insurance for an entrypoint that missed the mode.
-  const toolClass = opts.toolClass ?? classOfTool(opts.name)
+  const toolClass = opts.testOnlyToolClass ?? classOfTool(opts.name)
   const contextMode = normalizeContextMode(opts.contextMode)
   const modeDenied = !isToolClassAllowedInMode(toolClass, contextMode)
+
+  // S2 W1 — when a structured whitelist rule auto-allows an exec run (needsApproval returns false),
+  // stash the matched rule id keyed by toolCallId so execute (same call, right after) can record
+  // approval_status='auto_whitelist' + whitelist_rule_id. Presence of a key = "this call was
+  // whitelist-skipped", so execute overrides the default 'approved' audit. Cleared on read.
+  const whitelistRuleIdByCall = new Map<string, number | null>()
 
   return makeTool({
     description: opts.description,
@@ -293,6 +313,21 @@ export function auditedWriteTool<I>(
       // hard-reject (tool-error the model can read).
       if (modeDenied) return false
       guard.register(toolCallId, opts.name, opts.risk, input, opts.editableFields)
+      // S2 W1 — exec tools consult the structured whitelist instead of the approvalMode path. A
+      // matching rule (auto_allow) skips the card (stash the rule id for execute's audit); any
+      // other verdict OR an error → the card (fail-closed). Returns a Promise (ai@6 awaits it).
+      if (opts.policyEvaluate) {
+        return opts
+          .policyEvaluate(input)
+          .then((verdict) => {
+            if (verdict.decision === 'auto_allow') {
+              whitelistRuleIdByCall.set(toolCallId, verdict.rule_id)
+              return false
+            }
+            return true
+          })
+          .catch(() => true)
+      }
       if (
         opts.approvalMode === 'auto-reversible' &&
         opts.risk === 'preview' &&
@@ -352,7 +387,12 @@ export function auditedWriteTool<I>(
         })
         throw new ToolExecutionError(code, message)
       }
-      const approvalStatus = userEdited ? 'edited' : 'approved'
+      // S2 W1 — an exec run the whitelist auto-allowed (needsApproval skipped the card) audits as
+      // 'auto_whitelist' + the matched rule id, distinct from the human-approved 'approved'/'edited'.
+      const wasWhitelisted = whitelistRuleIdByCall.has(toolCallId)
+      const whitelistRuleId = wasWhitelisted ? whitelistRuleIdByCall.get(toolCallId) ?? null : null
+      whitelistRuleIdByCall.delete(toolCallId)
+      const approvalStatus = wasWhitelisted ? 'auto_whitelist' : userEdited ? 'edited' : 'approved'
       // userEditedInputJson records the EXECUTED (effective) input when edited; input_json
       // stays the model-proposed (history) input — matching the legacy audit shape.
       const userEditedJson = userEdited ? safeJson(effectiveInput) : null
@@ -369,6 +409,7 @@ export function auditedWriteTool<I>(
           approvalStatus,
           approvalHash,
           userEditedInputJson: userEditedJson,
+          ...(wasWhitelisted ? { whitelistRuleId } : {}),
           uiPayloadJson: a2uiJson(effectiveInput, output, userEdited)
         })
         return output
@@ -385,7 +426,8 @@ export function auditedWriteTool<I>(
           confirmationTier: opts.risk,
           approvalStatus,
           approvalHash,
-          userEditedInputJson: userEditedJson
+          userEditedInputJson: userEditedJson,
+          ...(wasWhitelisted ? { whitelistRuleId } : {})
         })
         throw new ToolExecutionError(code, message)
       }

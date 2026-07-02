@@ -38,6 +38,8 @@ function buildAllTools() {
     configToolsEnabled: true,
     // S1 R3 — web tools (MAILAGENT_OPENNESS_WEB_TOOLS), same rationale (classified CORE_UNGATED).
     webToolsEnabled: true,
+    // S2 W1 — exec tools (MAILAGENT_OPENNESS_EXEC_TOOLS), same rationale (classified CORE_UNGATED).
+    execToolsEnabled: true,
     // S2 W0 — the drift guard reasons over the MANUAL-session universe (fail-closed default is
     // 'untrusted_trigger', which strips capability_change/outbound and would blind the guard).
     contextMode: 'manual_chat'

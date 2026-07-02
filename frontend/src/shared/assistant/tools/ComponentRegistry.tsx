@@ -17,6 +17,7 @@ import { NotionSyncCard } from './notion/NotionSyncCard'
 import { ApprovalActionCard } from './generic/ApprovalActionCard'
 import { SystemDocApprovalCard } from './generic/SystemDocApprovalCard'
 import { SkillToggleCard } from './generic/SkillToggleCard'
+import { ExecApprovalCard } from './generic/ExecApprovalCard'
 
 /** One registration: an A2UI component (by name) + the tool names that render through it. */
 export interface ToolUIRegistration {
@@ -88,5 +89,12 @@ export const componentRegistry: ComponentRegistry = createComponentRegistry([
     component: A2UI_COMPONENTS.SkillToggleCard,
     toolNames: ['set_skill_enabled'],
     render: SkillToggleCard
+  },
+  // S2 W1 — local exec approval cards (behind MAILAGENT_OPENNESS_EXEC_TOOLS + A2UI). The card shows
+  // the exact argv/path + a "总是允许" affordance (creates a structured whitelist rule).
+  {
+    component: A2UI_COMPONENTS.ExecApprovalCard,
+    toolNames: ['run_command', 'file_read', 'file_write'],
+    render: ExecApprovalCard
   }
 ])

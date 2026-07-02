@@ -249,3 +249,38 @@ export const webSearchSchema = z.object({
   limit: z.number().int().min(1).max(10).default(5)
 })
 export type WebSearchInput = z.infer<typeof webSearchSchema>
+
+// ── exec schemas (S2 W1) — the agent runs a local command / reads / writes a file. Behind
+//    MAILAGENT_OPENNESS_EXEC_TOOLS. ALL THREE are edit-tier writes (local execution = always ask
+//    unless a structured whitelist rule the user set matches; never auto-approved). Field names
+//    mirror the Python execution endpoints (routers/exec.py: /api/exec/{run,file_read,file_write}).
+//    Python is the execution authority (fixed env allowlist, inode-level deny floor, no shell). ──
+
+/** run_command (S2 W1) — run ONE local command with an explicit argv (NO shell — argv[0] is the
+ *  program, the rest are literal arguments; shell metacharacters are NOT interpreted). cwd is an
+ *  optional absolute working directory. timeout_ms bounds the run (server clamps to its own max). */
+export const execRunCommandSchema = z.object({
+  argv: z.array(z.string()).min(1),
+  cwd: z.string().optional(),
+  timeout_ms: z.number().int().min(1).max(600_000).default(60_000)
+})
+export type ExecRunCommandInput = z.infer<typeof execRunCommandSchema>
+
+/** file_read (S2 W1) — read a local file's text content. max_bytes caps the returned content
+ *  (server clamps to its own hard max). Sensitive targets (.env / *.db / token.dat / ssh keys /
+ *  the app bundle) are refused server-side (inode-level deny floor). */
+export const execFileReadSchema = z.object({
+  path: z.string().min(1),
+  max_bytes: z.number().int().min(1).max(2_097_152).default(262_144)
+})
+export type ExecFileReadInput = z.infer<typeof execFileReadSchema>
+
+/** file_write (S2 W1) — write text to a local file. mode: create_new (default — fails if the file
+ *  exists), overwrite (replace), or append. The parent directory must already exist (not created).
+ *  Sensitive targets are refused server-side (inode-level deny floor). */
+export const execFileWriteSchema = z.object({
+  path: z.string().min(1),
+  content: z.string(),
+  mode: z.enum(['overwrite', 'append', 'create_new']).default('create_new')
+})
+export type ExecFileWriteInput = z.infer<typeof execFileWriteSchema>

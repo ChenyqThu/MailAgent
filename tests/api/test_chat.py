@@ -328,6 +328,8 @@ def test_chat_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
         "userMdCompileEnabled": True,
         # standing-docs-editor flag（default True；4f4f71f2 加进 /chat/config）。
         "standingDocsEditorEnabled": True,
+        # S2 W1 — exec 策略管理页显隐 flag（MAILAGENT_OPENNESS_EXEC_TOOLS default OFF）。
+        "execPolicyEnabled": False,
     }
 
 

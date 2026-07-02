@@ -43,6 +43,8 @@ function buildAllTools(contextMode?: AgentContextMode) {
     sessionToolsEnabled: true,
     configToolsEnabled: true,
     webToolsEnabled: true,
+    // S2 W1 — exec tools (MAILAGENT_OPENNESS_EXEC_TOOLS), classified 'exec' (manual-only).
+    execToolsEnabled: true,
     ...(contextMode !== undefined ? { contextMode } : {})
   })
 }
@@ -164,15 +166,20 @@ describe('applyContextModePolicy', () => {
 describe('buildGatewayTools × contextMode (registration-time filter wiring)', () => {
   test("manual_chat → the FULL flag-on set (byte-identical keys to the pre-W0 assembly — W0 adds/removes no tool)", () => {
     const keys = Object.keys(buildAllTools('manual_chat')).sort()
-    // The 27 gateway tools of the current full flag-on set = exactly the classified universe.
+    // The 30 gateway tools of the current full flag-on set = exactly the classified universe
+    // (27 pre-W1 + the 3 S2 W1 exec tools).
     expect(keys).toEqual(Object.keys(GATEWAY_TOOL_CLASSES).sort())
   })
 
   test.each(['untrusted_trigger', 'cron_headless'] as const)(
-    '%s → every capability_change/outbound tool absent from the ToolSet; read + domain_write present',
+    '%s → every capability_change/exec/outbound tool absent from the ToolSet; read + domain_write present',
     (mode) => {
       const tools = buildAllTools(mode)
-      for (const name of [...CLASSES_OF('capability_change'), ...CLASSES_OF('outbound')]) {
+      for (const name of [
+        ...CLASSES_OF('capability_change'),
+        ...CLASSES_OF('exec'),
+        ...CLASSES_OF('outbound')
+      ]) {
         expect(tools[name], `${name} must not register in ${mode}`).toBeUndefined()
       }
       for (const name of [...CLASSES_OF('read'), ...CLASSES_OF('domain_write')]) {
@@ -188,6 +195,7 @@ describe('buildGatewayTools × contextMode (registration-time filter wiring)', (
     expect(absent).not.toContain('set_skill_enabled')
     expect(absent).not.toContain('web_fetch')
     expect(absent).not.toContain('email_prepare_send')
+    expect(absent).not.toContain('run_command')
   })
 })
 

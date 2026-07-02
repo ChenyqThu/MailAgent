@@ -47,6 +47,7 @@ import {
 import { getLlmApiKey, getLlmBaseUrl, getLlmModel } from './llm_settings'
 import { resolveApiPort } from './backend_lifecycle'
 import { getLocalApiToken } from './local_token'
+import { deriveExecRule, ExecRuleDeriveError } from './exec_policy_matcher'
 // Phase 06 (context injection) — the standing-context provider fetches the SAME serve-api
 // /chat/config the legacy runtime uses, projecting the system-prompt fields for the gateway.
 import { request } from '@shared/api/http_client'
@@ -168,7 +169,9 @@ function persistTurn(turn: PersistTurnInput): void {
       ...(tc.uiPayloadJson !== undefined ? { uiPayloadJson: tc.uiPayloadJson } : {}),
       // Phase 04b — outbound-send content hash + idempotency key (email_prepare_send only).
       ...(tc.contentHash !== undefined ? { contentHash: tc.contentHash } : {}),
-      ...(tc.idempotencyKey !== undefined ? { idempotencyKey: tc.idempotencyKey } : {})
+      ...(tc.idempotencyKey !== undefined ? { idempotencyKey: tc.idempotencyKey } : {}),
+      // S2 W1 — exec whitelist rule id (approval_status='auto_whitelist').
+      ...(tc.whitelistRuleId !== undefined ? { whitelistRuleId: tc.whitelistRuleId } : {})
     })
   }
 }
@@ -325,6 +328,12 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
   // Default OFF (island 模式); main-env-only, NO vite define (mirrors the other two openness flags).
   // Off → buildGatewayTools output byte-identical to v1.2.0.
   const webToolsEnabled = envBool('MAILAGENT_OPENNESS_WEB_TOOLS', false)
+  // S2 W1 — MAILAGENT_OPENNESS_EXEC_TOOLS gates the three exec tools (run_command / file_read /
+  // file_write, all edit-tier writes — local execution always asks unless a structured PolicyRule
+  // whitelist matches; class 'exec' = manual_chat-only). Default OFF (island 模式); main-env-only,
+  // NO vite define (mirrors the other openness flags). Off → buildGatewayTools output byte-identical
+  // to v1.2.0.
+  const execToolsEnabled = envBool('MAILAGENT_OPENNESS_EXEC_TOOLS', false)
   const apiBase = `http://127.0.0.1:${resolveApiPort()}/api`
   // M4a — prewarm the /chat/config cache ONCE before the server accepts requests so the per-request
   // buildTools factory reads a populated advertisedSkills on the very first turn (no null-first-turn
@@ -475,6 +484,30 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
       const rec = approvalGuard.applyEdit(toolCallId, editedFields)
       return { approvalId: rec.approvalId, toolName: rec.toolName }
     },
+    // S2 W1 — the exec approval card's "always allow" affordance (POST /api/ai/policy/remember).
+    // Peek the pending exec approval (READ-ONLY — never mutates/consumes; the same approved
+    // argv/cwd/path so the model cannot forge a broader rule), derive a full-PIN structured rule,
+    // and persist it via the owner policy API with context_mode PINNED to manual_chat (a whitelist
+    // is manual-only, ADR-001 §9). Only wired when exec tools are on → /remember 501s otherwise.
+    // Throws an ExecRuleDeriveError/.code (non-exec tool / no record / fs error) → typed HTTP.
+    rememberExecApproval: execToolsEnabled
+      ? async (toolCallId: string) => {
+          const rec = approvalGuard.peek(toolCallId)
+          // E_APPROVAL_NOT_FOUND → server maps to 404 (the pending approval expired / wrong id).
+          if (!rec) {
+            throw new ExecRuleDeriveError('E_APPROVAL_NOT_FOUND', 'no pending approval to remember')
+          }
+          const input = rec.editedInput ?? rec.input
+          const { capability, matcher } = deriveExecRule(rec.toolName, input)
+          const rule = await domain.createPolicyRule({
+            capability,
+            matcher,
+            contextMode: 'manual_chat',
+            note: '审批卡「总是允许」'
+          })
+          return rule as unknown as Record<string, unknown>
+        }
+      : undefined,
     // Phase 05 — AG-UI mirror flag + its approval-request enricher. The enricher is READ-ONLY
     // (approvalGuard.peek — never mutates / consumes) and only surfaces what a client needs to render
     // the interrupt card (risk / reason / expiry + optional A2UI). NO token / secret leaves main.
@@ -548,7 +581,9 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
           // S1 R2 — profile-config tools (MAILAGENT_OPENNESS_CONFIG_TOOLS, default off).
           configToolsEnabled,
           // S1 R3 — web tools (MAILAGENT_OPENNESS_WEB_TOOLS, default off).
-          webToolsEnabled
+          webToolsEnabled,
+          // S2 W1 — exec tools (MAILAGENT_OPENNESS_EXEC_TOOLS, default off).
+          execToolsEnabled
         },
         collector
       ),

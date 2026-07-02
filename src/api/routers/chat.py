@@ -467,6 +467,12 @@ async def chat_config(request: Request):
             # flag-off → 前端 StandingDocsSection return null，整个区块在 DOM 不存在）。
             # singleton 读 —— 翻 MAILAGENT_STANDING_DOCS_EDITOR 需重启 serve-api。
             "standingDocsEditorEnabled": cfg.standing_docs_editor_enabled,
+            # S2 W1 — Settings「自动化策略」区显隐 gate。MAILAGENT_OPENNESS_EXEC_TOOLS 是 main-env-only
+            # flag（gateway 在 electron main 读，非 pydantic）；这里 hot-read 同一 .env 供前端显隐用
+            # （flag-off → 前端 ExecPolicySection return null，整个区块在 DOM 不存在；字段恒发）。
+            # 注意：这个字段只驱动「策略管理页」显隐，不改变 gateway 是否注册 exec 工具（那由 gateway
+            # 自己读 flag 决定）。
+            "execPolicyEnabled": _hot_bool(env_vals, "MAILAGENT_OPENNESS_EXEC_TOOLS", False),
         },
         request=request,
         source="config",

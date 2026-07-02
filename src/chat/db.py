@@ -1,6 +1,11 @@
 """ai_chat.db 读 + 写访问 —— serve-api 远程 chat 端点（V2.1 阶段 2 读 + 阶段 3 3b-3 写）。
 
-ai_chat.db = 前端 owned schema（``frontend/src/electron/main/chat_db.ts``，CHAT_DB_VERSION 17）。
+ai_chat.db = 前端 owned schema（``frontend/src/electron/main/chat_db.ts``，CHAT_DB_VERSION 18）。
+v18（S2 W1，task 07-02-s2-exec-skill-install）= ``chat_tool_call.whitelist_rule_id``：S2 exec 工具
+（run_command / file_read / file_write）经结构化白名单 PolicyRule 命中而**免卡执行**的审计行记
+``approval_status='auto_whitelist'``（approval_status 是自由 TEXT，v10 加时无 CHECK，新值无需枚举迁移）
++ ``whitelist_rule_id`` = 命中的规则 id。gateway 在 Electron main 经 chat_db.ts 直写（本 serve-api 路径
+不写此列，同 v10-v12：``append_tool_call`` 既有写面不变、新列默认 NULL；读走 ``SELECT *`` 自动带回）。
 v17（S1 R1，task 07-02 openness wave1）= ``ai_chat_messages_fts``：ai_chat_messages.content 的
 FTS5 external-content 索引（tokenize='trigram'，中文子串可搜）+ INSERT/UPDATE/DELETE 同步触发器
 + 存量 'rebuild' backfill。本文件新增 ``search_sessions``（**只 SELECT**，0 CREATE TABLE 不变式

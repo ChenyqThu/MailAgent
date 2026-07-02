@@ -23,6 +23,7 @@ import { createSelfMountTools } from './self_mount'
 import { createSessionTools } from './sessions'
 import { createProfileTools } from './profile'
 import { createWebTools } from './web'
+import { createExecTools } from './exec'
 import { applyContextModePolicy, normalizeContextMode, type AgentContextMode } from './policy'
 import type { GatewayApprovalMode, GatewayToolAuditCollector } from './types'
 
@@ -87,6 +88,12 @@ export interface BuildGatewayToolsOpts {
    *  never auto-approved; returned content is WEB_CONTENT-fenced). Off (default) → not added →
    *  ToolSet byte-identical to the v1.2.0 set. */
   webToolsEnabled?: boolean
+  /** S2 W1 (MAILAGENT_OPENNESS_EXEC_TOOLS) — when true AND approvalGuard is supplied, the three exec
+   *  tools are added: run_command / file_read / file_write (all edit-tier writes — local execution
+   *  always asks unless a structured PolicyRule whitelist matches; never auto-approved). They are
+   *  class 'exec' (manual_chat-only): applyContextModePolicy drops them outside a manual run. Off
+   *  (default) → not added → ToolSet byte-identical to the v1.2.0 set. */
+  execToolsEnabled?: boolean
   /** S2 W0 (ADR-001 D1/D3) — the run's server-asserted context mode, threaded from
    *  prepareChatRun's trustedContextMode. Governs (a) the auto-approve predicate (a reversible
    *  domain write may only skip the card in manual_chat) and (b) the LAST assembly step
@@ -200,6 +207,21 @@ export function buildGatewayTools(
     Object.assign(
       tools,
       createWebTools(opts.domain, collector, opts.approvalGuard, {
+        a2uiEnabled: opts.a2uiEnabled,
+        approvalMode: opts.approvalMode,
+        oneShot: opts.oneShotWrites,
+        contextMode
+      })
+    )
+  }
+  // S2 W1 — exec tools behind MAILAGENT_OPENNESS_EXEC_TOOLS. All three edit-tier writes → need the
+  // approval guard (all-or-nothing on flag + guard, same as the web block). CORE (no skill ownership)
+  // so applySkillGating below never drops them; class 'exec' so applyContextModePolicy (LAST step)
+  // drops them outside a manual run. flag-off (default) → not added → byte-identical to the v1.2.0 set.
+  if (opts.execToolsEnabled && opts.approvalGuard) {
+    Object.assign(
+      tools,
+      createExecTools(opts.domain, collector, opts.approvalGuard, {
         a2uiEnabled: opts.a2uiEnabled,
         approvalMode: opts.approvalMode,
         oneShot: opts.oneShotWrites,

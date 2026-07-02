@@ -96,9 +96,14 @@ export const GATEWAY_TOOL_CLASSES: Record<string, GatewayToolClass> = {
   // blocking always-ask (its needsApproval hard-returns true regardless of anything here).
   web_fetch: 'outbound',
   web_search: 'outbound',
-  email_prepare_send: 'outbound'
-  // exec — S2 W1 (run_command / file_read / file_write) will land here. None yet in W0; the class
-  // exists now so the matrix + fail-closed default are already enforced.
+  email_prepare_send: 'outbound',
+  // exec — local command / filesystem (S2 W1). manual_chat-only; all three are edit-tier always-ask
+  // (never auto-approved by approvalMode) UNLESS a structured PolicyRule whitelist the owner set
+  // matches (needsApproval consults /api/agent/policy/evaluate — auto_allow skips the card,
+  // ask/error fail-closed to the card).
+  run_command: 'exec',
+  file_read: 'exec',
+  file_write: 'exec'
 }
 
 /** Resolve a tool's policy class. Missing/unknown name fail-closes to 'exec' (strictest class:

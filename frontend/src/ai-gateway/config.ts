@@ -153,6 +153,16 @@ export interface AiGatewayConfig {
     toolCallId: string,
     editedFields: Record<string, unknown>
   ) => { approvalId: string; toolName: string }
+  /** S2 W1 (ADR-001 D4/D6) — the exec approval card's "always allow" affordance. POST
+   *  /api/ai/policy/remember {toolCallId} calls this: the Electron wrapper peeks the pending exec
+   *  approval (ApprovalGuard.peek — the SAME approved argv/cwd/path, so the model cannot forge a
+   *  broader rule), derives a full-PIN structured PolicyRule (argv template / realpath scope), and
+   *  persists it via the owner policy API (context_mode is pinned to manual_chat — a whitelist is
+   *  manual-only, ADR-001 §9). This is the ONLY rule-creation path besides Settings; NO gateway tool
+   *  can reach it. Returns the created rule (camelCase, incl. `dangerous`); throws an
+   *  ApprovalError-shaped `.code` on a non-exec tool / no live record / a derivation failure. Omitted
+   *  → /api/ai/policy/remember returns 501 (exec tools not wired). */
+  rememberExecApproval?: (toolCallId: string) => Promise<Record<string, unknown>>
   /** Phase 05 — MAILAGENT_AG_UI_MIRROR. When true, the gateway registers the AG-UI mirror endpoint
    *  POST /api/ai/agui/chat (the SAME streamText + tools + approval as /api/ai/chat, re-encoded as an
    *  AG-UI event stream). Off (default) → the route is NOT registered (404), byte-identical to 04b. */

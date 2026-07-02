@@ -207,6 +207,10 @@ export interface ChatToolCall {
   /** Phase 04b (v12) — outbound-send only: the one-shot idempotency key the Python send ledger
    *  keyed on (a replay never re-sends). NULL otherwise. Optional (see content_hash). */
   idempotency_key?: string | null
+  /** S2 W1 (v18) — exec tools only: the PolicyRule id that auto-allowed the run without a card
+   *  (approval_status='auto_whitelist'). NULL for card-approved / read / legacy rows. Optional
+   *  (absent on rows from a pre-v18 DB / older serve-api JSON). */
+  whitelist_rule_id?: number | null
   created_at: number
   updated_at: number
 }
@@ -242,6 +246,8 @@ export interface UpdateToolCallPatch {
   contentHash?: string | null
   /** Phase 04b (v12) — outbound-send one-shot idempotency key (the send ledger key). */
   idempotencyKey?: string | null
+  /** S2 W1 (v18) — exec whitelist rule id (approval_status='auto_whitelist'). */
+  whitelistRuleId?: number | null
 }
 
 // ── 后端能力查询（派生自 BackendKind 的纯逻辑）──────────────────────────────

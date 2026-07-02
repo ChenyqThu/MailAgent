@@ -1488,6 +1488,24 @@ export interface SkillSummary {
   scopes: string[]
 }
 
+/** S2 W1 — one exec automation-policy rule (GET /agent/policy/rules, camelCase). A structured
+ *  whitelist entry the owner created via the exec approval card's "always allow". `dangerous`
+ *  flags a wide interpreter rule (the Settings row shows a red not-a-sandbox warning). `matcher`
+ *  is the typed structured matcher (argv template / realpath prefix / origin) — displayed
+ *  read-only (narrowing = delete + recreate, never an in-place edit). */
+export interface ExecPolicyRule {
+  id: number
+  capability: string
+  matcher: Record<string, unknown>
+  contextMode: string
+  enabled: boolean
+  note: string | null
+  createdAt: string
+  lastUsedAt: string | null
+  useCount: number
+  dangerous: boolean
+}
+
 /** M3c — user.md 偏好编译结果（POST /api/chat/memory/compile-user-md 返回的 data 块）。
  *  before/after = 编译前后 user.md 内容；beforeHash = 写前 content_hash（前端 rollback 用）；
  *  changed = LLM 是否生成了差异；itemCount = 送进编译器的 mem0 记忆条数。 */
@@ -1675,6 +1693,22 @@ export interface ChatApi {
    * (E_NOT_FOUND for an unknown skill, E_INVALID_ARG for a bad arg).
    */
   setSkillEnabled(name: string, enabled: boolean): Promise<void>
+  /**
+   * S2 W1 — list the exec automation-policy rules for the Settings 「自动化策略」 page
+   * (GET /agent/policy/rules). Structured whitelist rules the owner created via the exec
+   * approval card's "always allow" affordance. Read-only; degrades to [] when unreachable.
+   */
+  listPolicyRules(): Promise<ExecPolicyRule[]>
+  /**
+   * S2 W1 — enable/disable one policy rule (PATCH /agent/policy/rules/{id}). Disabling stops it
+   * auto-allowing exec runs (they go back to always-ask) without deleting it. Throws Error&{code}.
+   */
+  setPolicyRuleEnabled(id: number, enabled: boolean): Promise<void>
+  /**
+   * S2 W1 — delete one policy rule (DELETE /agent/policy/rules/{id}). Idempotent. To narrow a
+   * rule the owner deletes + re-creates (matchers are NOT editable — no silent widening).
+   */
+  deletePolicyRule(id: number): Promise<void>
   /**
    * M3c — 从 mem0 累积的偏好记忆编译合并进 user.md。手动触发（Settings 按钮）。
    * POST /api/chat/memory/compile-user-md → CompileUserMdResult。
