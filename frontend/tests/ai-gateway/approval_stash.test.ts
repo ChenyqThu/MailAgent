@@ -97,3 +97,37 @@ describe('ApprovalRunStash — stash + one-shot claim', () => {
     expect(s.stash(makeInput('b'))).toBe('tok-1')
   })
 })
+
+// GET /api/ai/approval/pending backing probe — read-only per-session lookup.
+describe('ApprovalRunStash — peekBySession (reloaded-session pending probe)', () => {
+  test('returns the live entry for the session; other sessions → null; never consumes', () => {
+    const s = new ApprovalRunStash()
+    const token = s.stash(makeInput())
+    expect(s.peekBySession(42)?.toolName).toBe('email_draft_reply')
+    expect(s.peekBySession(42)?.resumeToken).toBe(token)
+    expect(s.peekBySession(99)).toBeNull()
+    // read-only: repeated probes leave the entry claimable
+    expect(s.peekBySession(42)).not.toBeNull()
+    expect(s.size()).toBe(1)
+    expect(s.claim('tc1', token)).not.toBeNull()
+  })
+
+  test('expired entry → null (skipped, NOT deleted — no gc on the read path)', () => {
+    let clock = 0
+    const s = new ApprovalRunStash({ ttlMs: 100, now: () => clock })
+    s.stash(makeInput())
+    clock = 200
+    expect(s.peekBySession(42)).toBeNull()
+    expect(s.size()).toBe(1) // still stored; claim/stash own the cleanup
+  })
+
+  test('repause chain → keep-latest: the most recently stashed approval wins', () => {
+    let clock = 0
+    const s = new ApprovalRunStash({ now: () => clock })
+    s.stash({ ...makeInput('tc-hop1'), toolName: 'email_draft_reply' })
+    clock = 10
+    s.stash({ ...makeInput('tc-hop2'), toolName: 'email_prepare_send' })
+    expect(s.peekBySession(42)?.toolCallId).toBe('tc-hop2')
+    expect(s.peekBySession(42)?.toolName).toBe('email_prepare_send')
+  })
+})

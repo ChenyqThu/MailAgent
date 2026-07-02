@@ -427,6 +427,30 @@ async function handleApprovalDecide(
 }
 
 /**
+ * `GET /api/ai/approval/pending?sessionId=N` — Part B follow-up (paused-session reload notice). A
+ * reloaded session only shows the REDACTED paused turn (approval parts stripped, R2-3), but with
+ * island agent on the approval may still be live in the stash — the renderer probes this after
+ * seeding a history session to show a "pending approval, act on the island" notice. Read-only:
+ * peekBySession never consumes / extends the stash.
+ *
+ * 🔴 SECURITY — the response carries ONLY { pending, toolName }: the resumeToken is a capability
+ * that must never leave the gateway except through the serve-api announce leg. Island agent off /
+ * stash unwired → { pending: false } (200, not 404 — "no island agent" and "nothing pending" are
+ * the same answer for the notice).
+ */
+function handleApprovalPending(res: ServerResponse, cfg: AiGatewayConfig, url: string): void {
+  const raw = new URL(url, 'http://127.0.0.1').searchParams.get('sessionId')
+  const sessionId = raw != null && /^-?\d+$/.test(raw) ? Number(raw) : null
+  if (sessionId == null) {
+    writeJson(res, 400, { error: 'E_INVALID_ARG', hint: 'sessionId (integer) required' })
+    return
+  }
+  const entry =
+    cfg.islandAgentEnabled && cfg.approvalStash ? cfg.approvalStash.peekBySession(sessionId) : null
+  writeJson(res, 200, entry ? { pending: true, toolName: entry.toolName } : { pending: false })
+}
+
+/**
  * Create (but do not listen) the gateway HTTP server. Pure factory — all external
  * deps arrive via cfg, so the Electron main can embed it and the Node harness can
  * drive it directly.
@@ -497,6 +521,13 @@ export function createAiGatewayServer(cfg: AiGatewayConfig): Server {
     // unconditionally; cfg.islandAgentEnabled + cfg.approvalStash gate it (404 when off).
     if (method === 'POST' && path === '/api/ai/approval/decide') {
       void handleApprovalDecide(req, res, cfg)
+      return
+    }
+
+    // Part B follow-up — reloaded-session pending-approval probe. Registered unconditionally;
+    // island agent off → { pending: false } (the renderer's notice simply doesn't render).
+    if (method === 'GET' && path === '/api/ai/approval/pending') {
+      handleApprovalPending(res, cfg, url)
       return
     }
 

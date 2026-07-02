@@ -837,7 +837,8 @@
       "quotaCooldown": "冷却中 · {seconds} 秒后可再次发送"
     },
     "aiSdk": {
-      "degraded": "AI 网关不可用，已切换到标准助手"
+      "degraded": "AI 网关不可用，已切换到标准助手",
+      "pendingApproval": "有待批操作（{toolName}）正在等待处理 —— 可在灵动岛批准/拒绝"
     },
     "toolCall": {
       "running": "执行中",

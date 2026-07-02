@@ -43,6 +43,7 @@ import { useApprovalMode } from '@shared/lib/approvalMode'
 import { MailAgentRuntimeProvider } from './runtime/MailAgentRuntimeProvider'
 import { AiSdkRuntimeProvider } from './runtime/AiSdkRuntimeProvider'
 import { ThreadRunningBridge } from './runtime/ThreadRunningBridge'
+import { makeSessionSettledHandler } from './runtime/threadRunningGuard'
 import {
   getChatRuntimeMode,
   isAiSdkContextInjectionEnabled,
@@ -393,7 +394,9 @@ export function AssistantUIChatPanel({
   // for THIS session, reload its messages through the hook's existing DB→ChatMessage load path
   // (reloadActiveSession → refresh → chatMessageToUIMessage above), then bump the remount nonce so
   // the KEYED AiSdkRuntimeProvider re-seeds initialMessages — the runtime treats `messages` as a
-  // per-mount initial set, so without the remount the reloaded rows never reach the thread.
+  // per-mount initial set, so without the remount the reloaded rows never reach the thread. The
+  // guard decision (skip other sessions / skip mid-stream) lives in makeSessionSettledHandler,
+  // sensed by ThreadRunningBridge below — see that module for why bare thread.isRunning was wrong.
   // 🔴 IPC 订阅必须用返回的 disposer 清理（fe0437e：跨 contextBridge removeListener 匹配不到 →
   // listener 泄漏 + StrictMode 双订阅）。onSessionUpdated 是 optional（web HttpApi 缺省）→ ?. 。
   const [islandRefreshNonce, setIslandRefreshNonce] = useState(0)
@@ -402,15 +405,14 @@ export function AssistantUIChatPanel({
   const chatActiveSessionId = chat.activeSessionId
   useEffect(() => {
     if (!useAiSdkRuntime) return undefined
-    const dispose = mailApi.chat.onSessionUpdated?.((payload) => {
-      if (payload.sessionId !== chatActiveSessionId) return
-      // Mid-stream guard — the renderer's own run is streaming (typical: the user approved in-app
-      // and the island click short-circuited /decide to completed). Remounting now would abort that
-      // in-flight POST → gateway onFinish isAborted → persistTurn skipped → the turn is LOST. The
-      // renderer stream finishes + persists on its own; this refresh would be redundant anyway.
-      if (aiSdkRunningRef.current) return
-      void chatReloadActiveSession().then(() => setIslandRefreshNonce((n) => n + 1))
-    })
+    const dispose = mailApi.chat.onSessionUpdated?.(
+      makeSessionSettledHandler({
+        runningRef: aiSdkRunningRef,
+        activeSessionId: chatActiveSessionId,
+        reload: chatReloadActiveSession,
+        onReloaded: () => setIslandRefreshNonce((n) => n + 1)
+      })
+    )
     return dispose
   }, [useAiSdkRuntime, mailApi, chatActiveSessionId, chatReloadActiveSession])
 
@@ -525,6 +527,58 @@ export function AssistantUIChatPanel({
       selectBackend({ kind: 'custom-api', model, agentPageId: null })
     }
   }, [gatewayDegraded, backend.kind, model, selectBackend])
+
+  // Part B follow-up (paused-session reload notice) — after seeding a HISTORY session (non-empty
+  // initialMessages), probe the gateway once for a still-live stashed approval belonging to it. The
+  // paused turn is persisted REDACTED (R2-3: a reloaded session must not render a dead approval
+  // card), so without this probe the user sees only the pre-approval text and has no cue the
+  // approval is still actionable on the island. islandRefreshNonce keys the probe so the
+  // settle-driven reload re-queries (→ pending:false → the notice clears). Any failure (web HttpApi
+  // where the gateway isn't reachable, gateway down, island agent off → {pending:false}) resolves
+  // silent-false — the notice is best-effort UX, never an error surface.
+  const pendingApprovalSessionId =
+    useAiSdkRuntime && gatewayBaseUrl != null && initialMessages && initialMessages.length > 0
+      ? chat.activeSessionId
+      : null
+  const pendingApprovalQ = useQuery({
+    queryKey: [
+      'ai-gateway',
+      'approval-pending',
+      gatewayBaseUrl,
+      pendingApprovalSessionId,
+      islandRefreshNonce
+    ],
+    queryFn: async (): Promise<{ pending: boolean; toolName?: string }> => {
+      try {
+        const res = await fetch(
+          `${gatewayBaseUrl}/api/ai/approval/pending?sessionId=${pendingApprovalSessionId}`
+        )
+        if (!res.ok) return { pending: false }
+        const body = (await res.json()) as { pending?: unknown; toolName?: unknown }
+        return body.pending === true
+          ? {
+              pending: true,
+              ...(typeof body.toolName === 'string' ? { toolName: body.toolName } : {})
+            }
+          : { pending: false }
+      } catch {
+        return { pending: false }
+      }
+    },
+    enabled: pendingApprovalSessionId !== null,
+    retry: false,
+    refetchOnWindowFocus: false
+  })
+  // Rendered via AssistantThread's pendingSlot (inside the viewport, after the messages) — the same
+  // spot the legacy path shows its pending-confirmation dialog, so the notice scrolls with the
+  // conversation and reads as part of it. Informational only: approving happens on the island
+  // (in-panel approve is backlog A2).
+  const pendingApprovalNotice =
+    pendingApprovalQ.data?.pending === true ? (
+      <div className="mt-2 shrink-0 rounded-md border border-ink-border bg-ink-3/70 px-3 py-2 text-aux text-ink-fg-2">
+        {t('chat.aiSdk.pendingApproval', { toolName: pendingApprovalQ.data.toolName ?? '' })}
+      </div>
+    ) : undefined
 
   // Sidebar session preview cache (lazy on open) — same shape as legacy.
   const [sessionPreviews, setSessionPreviews] = useState<Record<number, string | null>>({})
@@ -897,7 +951,12 @@ export function AssistantUIChatPanel({
                       >
                         {/* Part B — feeds the mid-stream guard above (renders nothing). */}
                         <ThreadRunningBridge runningRef={aiSdkRunningRef} />
-                        <AssistantThread emptyState={emptyMessages} />
+                        {/* pendingSlot — the reloaded-session "approval still live on the island"
+                            notice (undefined when nothing pending → byte-identical thread). */}
+                        <AssistantThread
+                          pendingSlot={pendingApprovalNotice}
+                          emptyState={emptyMessages}
+                        />
                       </AiSdkRuntimeProvider>
                     )
                   ) : backend.kind === 'notion-agent' ? (

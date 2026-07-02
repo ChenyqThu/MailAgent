@@ -28,9 +28,13 @@ vi.mock('@shared/components/email/TranslatedBody', () => ({
   TranslatedBody: ({ text }: { text: string }) => <div data-testid="md">{text}</div>
 }))
 
+import { AssistantRuntimeProvider } from '@assistant-ui/react'
+import { useAISDKRuntime } from '@assistant-ui/react-ai-sdk'
+
 import { MailAgentRuntimeProvider } from '@shared/assistant/runtime/MailAgentRuntimeProvider'
 import type { LegacyRuntimeChat } from '@shared/assistant/runtime/useLegacyExternalStoreRuntime'
 import { ThreadRunningBridge } from '@shared/assistant/runtime/ThreadRunningBridge'
+import { makeSessionSettledHandler } from '@shared/assistant/runtime/threadRunningGuard'
 import { AssistantThread } from '@shared/assistant/components/thread'
 
 beforeAll(async () => {
@@ -290,5 +294,144 @@ describe('ThreadRunningBridge — mid-stream guard sensor', () => {
     )
     // settle a tick so any effect pass has run before asserting the negative.
     await waitFor(() => expect(runningRef.current).toBe(false))
+  })
+})
+
+// Part B (island live-refresh, real-device regression) — the guard sensor driven through the REAL
+// ai-sdk runtime pipeline (useAISDKRuntime → AISDKMessageConverter → external store → useThread),
+// NOT the legacy adapter (the previous tests' blind spot: legacy ChatMessage rows can never carry
+// an ai@6 `approval-requested` tool part, so the paused-state semantics were untested and the
+// on-device failure slipped through). The chatHelpers stub replaces only the ai@6 useChat layer,
+// whose paused-state semantics are known (stream closed → status 'ready'); everything above it —
+// where the bug lived — is the production code.
+//
+// Device condition pinned: at an approval pause assistant-ui's thread.isRunning read TRUE (CDP
+// probe: the settle IPC arrived, `aiSdkRunningRef.current === true`, no reload ran) even though the
+// gateway had already closed the stream. We force isRunning=true via status:'streaming' and assert
+// the settle handler REFRESHES anyway when (and only when) the last message is approval-paused.
+describe('ThreadRunningBridge × real ai-sdk runtime — approval-paused vs mid-stream', () => {
+  const USER_MSG = { id: 'u-g1', role: 'user', parts: [{ type: 'text', text: '帮我起草回复' }] }
+  /** The REAL paused shape: the run ended with a write tool in ai@6 `approval-requested` state. */
+  const PAUSED_ASSISTANT = {
+    id: 'a-paused',
+    role: 'assistant',
+    parts: [
+      { type: 'text', text: '我准备了草稿，需要你的批准。' },
+      {
+        type: 'tool-email_draft_reply',
+        toolCallId: 'tc-g1',
+        state: 'approval-requested',
+        input: { internal_id: 5, body_markdown: 'draft' },
+        approval: { id: 'ap-g1' }
+      }
+    ]
+  }
+  /** A genuinely mid-stream assistant message — text only, no approval gate. */
+  const STREAMING_ASSISTANT = {
+    id: 'a-live',
+    role: 'assistant',
+    parts: [{ type: 'text', text: '正在草拟…' }]
+  }
+
+  /** Minimal ai@6 useChat surface the runtime touches at render time (status/messages/error);
+   *  the action callbacks exist but are never invoked by these render-only tests. */
+  function stubChatHelpers(
+    status: string,
+    messages: unknown[]
+  ): Parameters<typeof useAISDKRuntime>[0] {
+    return {
+      status,
+      messages,
+      error: undefined,
+      setMessages: () => {},
+      sendMessage: async () => {},
+      regenerate: async () => {},
+      stop: () => {},
+      addToolResult: () => {},
+      addToolOutput: () => {},
+      addToolApprovalResponse: () => {}
+    } as unknown as Parameters<typeof useAISDKRuntime>[0]
+  }
+
+  function AiSdkGuardHarness({
+    status,
+    messages,
+    runningRef
+  }: {
+    status: string
+    messages: unknown[]
+    runningRef: { current: boolean }
+  }): React.JSX.Element {
+    const runtime = useAISDKRuntime(stubChatHelpers(status, messages))
+    return (
+      <AssistantRuntimeProvider runtime={runtime}>
+        <ThreadRunningBridge runningRef={runningRef} />
+      </AssistantRuntimeProvider>
+    )
+  }
+
+  test('thread paused at approval-requested (isRunning TRUE) → settle reloads + bumps nonce', async () => {
+    // start true so the assertion proves the bridge actively drove it false (not "never ran").
+    const runningRef = { current: true }
+    render(
+      <AiSdkGuardHarness
+        status="streaming"
+        messages={[USER_MSG, PAUSED_ASSISTANT]}
+        runningRef={runningRef}
+      />
+    )
+    // the paused state neutralizes the over-reporting isRunning — the guard opens.
+    await waitFor(() => expect(runningRef.current).toBe(false))
+
+    const reload = vi.fn().mockResolvedValue(undefined)
+    const onReloaded = vi.fn()
+    const handler = makeSessionSettledHandler({
+      runningRef,
+      activeSessionId: 7,
+      reload,
+      onReloaded
+    })
+    handler({ sessionId: 7 })
+    expect(reload).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(onReloaded).toHaveBeenCalledTimes(1))
+  })
+
+  test('genuinely mid-stream (no approval gate) → settle stays blocked (turn not aborted)', async () => {
+    const runningRef = { current: false }
+    render(
+      <AiSdkGuardHarness
+        status="streaming"
+        messages={[USER_MSG, STREAMING_ASSISTANT]}
+        runningRef={runningRef}
+      />
+    )
+    await waitFor(() => expect(runningRef.current).toBe(true))
+
+    const reload = vi.fn().mockResolvedValue(undefined)
+    const onReloaded = vi.fn()
+    const handler = makeSessionSettledHandler({
+      runningRef,
+      activeSessionId: 7,
+      reload,
+      onReloaded
+    })
+    handler({ sessionId: 7 })
+    expect(reload).not.toHaveBeenCalled()
+    expect(onReloaded).not.toHaveBeenCalled()
+  })
+
+  test('settle for another session → ignored regardless of guard state', async () => {
+    const runningRef = { current: false }
+    const reload = vi.fn().mockResolvedValue(undefined)
+    const onReloaded = vi.fn()
+    const handler = makeSessionSettledHandler({
+      runningRef,
+      activeSessionId: 7,
+      reload,
+      onReloaded
+    })
+    handler({ sessionId: 8 })
+    expect(reload).not.toHaveBeenCalled()
+    expect(onReloaded).not.toHaveBeenCalled()
   })
 })

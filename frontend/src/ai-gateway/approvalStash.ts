@@ -121,6 +121,20 @@ export class ApprovalRunStash {
     return this.store.get(toolCallId) ?? null
   }
 
+  /** Read-only per-session probe (GET /api/ai/approval/pending): the latest LIVE stashed run
+   *  belonging to this ai_chat.db session, or null. Never consumes, never extends TTL, never
+   *  deletes — expired rows are skipped, not GC'd (gc stays on the stash() write path). Keep-latest
+   *  matches stash(): on a repause chain only the most recently stashed approval is live. */
+  peekBySession(sessionId: number): StashedApprovalRun | null {
+    const now = this.now()
+    let latest: StashedApprovalRun | null = null
+    for (const entry of this.store.values()) {
+      if (entry.sessionId !== sessionId || now >= entry.expiresAt) continue
+      if (latest === null || entry.createdAt >= latest.createdAt) latest = entry
+    }
+    return latest
+  }
+
   /** Drop expired rows. Called on stash(); cheap (map scan). */
   gc(): void {
     const now = this.now()

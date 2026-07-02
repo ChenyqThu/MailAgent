@@ -837,7 +837,8 @@
       "quotaCooldown": "Cooldown · {seconds}s until next send"
     },
     "aiSdk": {
-      "degraded": "AI gateway unavailable — switched to the standard assistant"
+      "degraded": "AI gateway unavailable — switched to the standard assistant",
+      "pendingApproval": "A pending action ({toolName}) is awaiting approval — approve or reject it on the island"
     },
     "toolCall": {
       "running": "running",
