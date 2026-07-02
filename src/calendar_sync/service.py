@@ -961,7 +961,7 @@ class CalendarService:
         """重跑指定 internal_id 的会议邀请 (修复历史 mis-sync).
 
         Args:
-            arm: backend.arm (AppleScript / DavMail 抽象). 来自 cli.backend.arm
+            arm: IMailBackend 实例 (AppleScript / DavMail 抽象). 来自 cli.backend
                   或 IPC 启动时已 probe 的 backend.
         """
         if not internal_ids:

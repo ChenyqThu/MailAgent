@@ -451,7 +451,7 @@ def test_watcher_reconcile_adds_and_deletes(tmp_path):
         def reconcile_drafts(self):
             return to_add, [999]
 
-    w.arm = _Backend()
+    w.backend = _Backend()
     asyncio.run(w._reconcile_drafts())
     row = w.sync_store.get(1_000_000_001)
     assert row is not None
@@ -478,7 +478,7 @@ def test_watcher_skips_delete_of_promoted_row(tmp_path):
         def reconcile_drafts(self):
             return [], [1_000_007_607]
 
-    w.arm = _Backend()
+    w.backend = _Backend()
     asyncio.run(w._reconcile_drafts())
     w.email_repo.delete_email_full.assert_not_called()      # 提升行不删
     assert w.sync_store.get(1_000_007_607) is not None       # 仍在库
@@ -497,7 +497,7 @@ def test_watcher_still_deletes_real_vanished_draft(tmp_path):
         def reconcile_drafts(self):
             return [], [1_000_000_009]
 
-    w.arm = _Backend()
+    w.backend = _Backend()
     asyncio.run(w._reconcile_drafts())
     w.email_repo.delete_email_full.assert_called_once_with(1_000_000_009)
 
@@ -524,7 +524,7 @@ def test_integration_draft_sent_then_reconcile_no_delete(tmp_path):
         def reconcile_drafts(self):
             return [], [1_000_007_607]  # stale 快照误把已提升行列进 to_delete
 
-    w.arm = _Backend()
+    w.backend = _Backend()
     asyncio.run(w._reconcile_drafts())
     w.email_repo.delete_email_full.assert_not_called()      # Fix B 复核跳过
     assert w.sync_store.get(1_000_007_607) is not None       # 已发邮件仍在库
@@ -533,7 +533,7 @@ def test_integration_draft_sent_then_reconcile_no_delete(tmp_path):
 def test_watcher_reconcile_noop_without_capability(tmp_path):
     """AppleScript backend 无 reconcile_drafts → 整段 noop 不炸。"""
     w = _watcher(tmp_path)
-    w.arm = object()  # 无 reconcile_drafts 属性
+    w.backend = object()  # 无 reconcile_drafts 属性
     asyncio.run(w._reconcile_drafts())
     w.email_repo.delete_email_full.assert_not_called()
 
@@ -546,7 +546,7 @@ def test_watcher_reconcile_failure_isolated(tmp_path):
         def reconcile_drafts(self):
             raise RuntimeError("imap down")
 
-    w.arm = _Boom()
+    w.backend = _Boom()
     asyncio.run(w._reconcile_drafts())  # 不抛
 
 
@@ -566,8 +566,8 @@ def test_sync_single_draft_local_only(tmp_path):
         "imap_uid": 105,
         "imap_uidvalidity": 7,
     })
-    w.arm = MagicMock()
-    w.arm.fetch_email_content_by_id.return_value = {
+    w.backend = MagicMock()
+    w.backend.fetch_email_content_by_id.return_value = {
         "message_id": "<m5>",
         "thread_id": None,
         "subject": "draft",

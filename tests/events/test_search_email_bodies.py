@@ -68,7 +68,7 @@ def _make_handler(*, repo: Optional[_FakeRepo] = None):
         captured["payload"] = payload
 
     h = EventHandlers(
-        arm=_FakeArm(),
+        backend=_FakeArm(),
         sync_store=_FakeSyncStore(),
         feishu=None,
         notion_sync=None,

@@ -1,7 +1,8 @@
 """AppleScriptBackend — IMailBackend 实现, FALLBACK 模式.
 
 Wraps 现有 `AppleScriptArm` (机械臂) + `SQLiteRadar` (雷达) + `scripts/create_reply_draft.sh`.
-现有类零改动, 这里只是把方法签名对齐 IMailBackend Protocol + 返回值改成 dataclass.
+现有类零改动, 本类按 E1 收口后的 Protocol (真实 arm/radar 面, legacy dict 契约)
+逐方法委托给内部 arm / radar 对象.
 
 `backend_origin = "applescript"`: 新邮件抓进来时 SyncStore 写 backend_origin='applescript',
 internal_id = Mail.app SQLite ROWID (< 1_000_000_000).
@@ -11,20 +12,16 @@ from __future__ import annotations
 import json
 import subprocess
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Optional
 
 from loguru import logger
 
 from src.mail.applescript_arm import AppleScriptArm
 from src.mail.backend.base import IMailBackend
 from src.mail.backend.types import (
-    BackendHealth,
     BackendOrigin,
     DraftAppendResult,
     DraftRequest,
-    EmailContent,
-    EmailMeta,
-    RadarTick,
     SendResult,
 )
 from src.mail.sqlite_radar import SQLiteRadar
@@ -47,6 +44,7 @@ class AppleScriptBackend(IMailBackend):
         # sync_store 接受但不使用 — 接口统一 (DavMailBackend 需要), 这里只是签名对齐
         self.sync_store = sync_store
         mailboxes = [m.strip() for m in cfg.sync_mailboxes.split(",") if m.strip()]
+        # 内部委托对象 (真 arm / radar, 非影子 alias — DavMailBackend 自身实现同名方法)
         self.arm = AppleScriptArm(
             account_name=cfg.mail_account_name,
             inbox_name=cfg.mail_inbox_name,
@@ -57,7 +55,7 @@ class AppleScriptBackend(IMailBackend):
         )
 
     # =========================================================================
-    # 启动 / 健康检查
+    # 启动 probe
     # =========================================================================
 
     def probe_readiness(self) -> tuple[bool, str]:
@@ -73,100 +71,70 @@ class AppleScriptBackend(IMailBackend):
         except Exception as e:
             return False, f"Envelope Index query failed: {e}"
 
-    def health_status(self) -> BackendHealth:
-        ok, detail = self.probe_readiness()
-        return BackendHealth(
-            healthy=ok,
-            backend=self.backend_origin,
-            details={
-                "db_path": str(self.radar.db_path) if self.radar.db_path else None,
-                "applescript_calls": self.arm._stats.get("applescript_calls", 0),
-                "probe_detail": detail,
-            },
-            error=None if ok else detail,
-        )
-
     # =========================================================================
-    # 正向 sync — 雷达 + 邮件抓取
+    # 正向 sync — 雷达面 (委托 SQLiteRadar)
     # =========================================================================
 
-    def detect_new_emails(self, marker: Any = None) -> RadarTick:
-        """SQLite Envelope Index 雷达检测.
+    def is_available(self) -> bool:
+        return self.radar.is_available()
 
-        marker=None 启动 baseline: 返回当前 max_row_id, has_new=False.
-        marker=int: 检测自该 row_id 后是否有新邮件; 有则附带 new_emails 列表.
-        """
-        if marker is None:
-            try:
-                current_max = self.radar.get_current_max_row_id()
-            except Exception as e:
-                logger.warning(f"[applescript-backend] get_current_max_row_id failed: {e}")
-                current_max = 0
-            return RadarTick(
-                has_new=False, current_marker=current_max, estimated_new_count=0,
-            )
+    def get_current_max_row_id(self) -> int:
+        return self.radar.get_current_max_row_id()
 
-        last_max = int(marker)
-        try:
-            has_new, current_max, estimated = self.radar.check_for_changes(last_max)
-        except Exception as e:
-            logger.error(f"[applescript-backend] check_for_changes failed: {e}")
-            return RadarTick(has_new=False, current_marker=marker, estimated_new_count=0)
+    def check_for_changes(self, last_max_row_id: int) -> tuple[bool, int, int]:
+        return self.radar.check_for_changes(last_max_row_id)
 
-        new_emails: list[EmailMeta] = []
-        if has_new:
-            try:
-                rows = self.radar.get_new_emails(since_row_id=last_max)
-                new_emails = [self._radar_row_to_meta(r) for r in rows]
-            except Exception as e:
-                logger.warning(f"[applescript-backend] get_new_emails failed: {e}")
+    def get_new_emails(self, since_row_id: int) -> list[dict]:
+        return self.radar.get_new_emails(since_row_id=since_row_id)
 
-        return RadarTick(
-            has_new=has_new,
-            current_marker=current_max,
-            estimated_new_count=estimated,
-            new_emails=new_emails,
-        )
+    def set_last_max_row_id(self, row_id: int) -> None:
+        self.radar.set_last_max_row_id(row_id)
 
-    def fetch_email_by_id(
-        self, internal_id: int, *, mailbox: Optional[str] = None
-    ) -> Optional[EmailContent]:
-        raw = self.arm.fetch_email_content_by_id(internal_id, mailbox=mailbox)
-        if not raw:
-            return None
-        return EmailContent(
-            message_id=raw["message_id"],
-            internal_id=internal_id,
-            subject=raw["subject"],
-            sender=raw["sender"],
-            date_received=raw["date"],
-            content=raw["content"],
-            source=raw["source"],
-            is_read=raw["is_read"],
-            is_flagged=raw["is_flagged"],
-            thread_id=raw.get("thread_id"),
-            mailbox=mailbox,
-        )
-
-    def fetch_recent(
-        self, count: int, *, mailbox: Optional[str] = None
-    ) -> list[EmailMeta]:
-        raws = self.arm.fetch_emails_by_position(count=count, mailbox=mailbox)
-        return [self._arm_row_to_meta(r, mailbox) for r in raws]
+    def get_last_max_row_id(self) -> int:
+        return self.radar.get_last_max_row_id()
 
     # =========================================================================
-    # 反向 sync — flag / read
+    # 正向 sync — 邮件抓取面 (委托 AppleScriptArm)
     # =========================================================================
 
-    def mark_as_read(
-        self, internal_id: int, read: bool, *, mailbox: Optional[str] = None
+    def fetch_email_content_by_id(
+        self, internal_id: int, mailbox: Optional[str] = None
+    ) -> Optional[dict]:
+        return self.arm.fetch_email_content_by_id(internal_id, mailbox=mailbox)
+
+    def fetch_email_by_message_id(
+        self, message_id: str, mailbox: Optional[str] = None
+    ) -> Optional[dict]:
+        return self.arm.fetch_email_by_message_id(message_id, mailbox=mailbox)
+
+    def fetch_emails_by_position(
+        self, count: int, mailbox: Optional[str] = None
+    ) -> list[dict]:
+        return self.arm.fetch_emails_by_position(count=count, mailbox=mailbox)
+
+    # =========================================================================
+    # 反向 sync — flag / read (委托 AppleScriptArm)
+    # =========================================================================
+
+    def mark_as_read_by_id(
+        self, internal_id: int, read: bool = True, mailbox: Optional[str] = None
     ) -> bool:
         return self.arm.mark_as_read_by_id(internal_id, read=read, mailbox=mailbox)
 
-    def set_flag(
-        self, internal_id: int, flagged: bool, *, mailbox: Optional[str] = None
+    def set_flag_by_id(
+        self, internal_id: int, flagged: bool = True, mailbox: Optional[str] = None
     ) -> bool:
         return self.arm.set_flag_by_id(internal_id, flagged=flagged, mailbox=mailbox)
+
+    def mark_as_read(
+        self, message_id: str, read: bool = True, mailbox: Optional[str] = None
+    ) -> bool:
+        return self.arm.mark_as_read(message_id, read=read, mailbox=mailbox)
+
+    def set_flag(
+        self, message_id: str, flagged: bool = True, mailbox: Optional[str] = None
+    ) -> bool:
+        return self.arm.set_flag(message_id, flagged=flagged, mailbox=mailbox)
 
     # =========================================================================
     # 草稿创建 (调 create_reply_draft.sh)
@@ -251,6 +219,10 @@ class AppleScriptBackend(IMailBackend):
             error=payload.get("error"),
         )
 
+    def reconcile_drafts(self) -> tuple[list[dict], list[int]]:
+        """davmail-only 能力 — AppleScript 模式恒 noop (inventory §3 ②)."""
+        return [], []
+
     # =========================================================================
     # 真实发送 — SMTP (fallback 也走 DavMail SMTP, cfg 端口指向 DavMail JVM)
     # =========================================================================
@@ -271,36 +243,4 @@ class AppleScriptBackend(IMailBackend):
         return smtp_send(
             self.cfg, mime_bytes, method="smtp_applescript",
             archive_sent=getattr(self.cfg, "davmail_archive_sent", False),
-        )
-
-    # =========================================================================
-    # 内部转换 helper
-    # =========================================================================
-
-    def _radar_row_to_meta(self, row: dict) -> EmailMeta:
-        """SQLiteRadar.get_new_emails() 返回 dict → EmailMeta dataclass."""
-        return EmailMeta(
-            message_id=row.get("message_id", "") or "",
-            internal_id=int(row["internal_id"]) if row.get("internal_id") else 0,
-            subject=row.get("subject", "") or "",
-            sender=row.get("sender", "") or "",
-            date_received=row.get("date_received", "") or row.get("date", "") or "",
-            is_read=bool(row.get("is_read", False)),
-            is_flagged=bool(row.get("is_flagged", False)),
-            thread_id=row.get("thread_id"),
-            mailbox=row.get("mailbox"),
-        )
-
-    def _arm_row_to_meta(self, row: dict, mailbox: Optional[str]) -> EmailMeta:
-        """AppleScriptArm.fetch_emails_by_position() 返回 dict → EmailMeta dataclass."""
-        return EmailMeta(
-            message_id=row.get("message_id", "") or "",
-            internal_id=int(row["id"]) if row.get("id") else 0,
-            subject=row.get("subject", "") or "",
-            sender=row.get("sender", "") or "",
-            date_received=row.get("date_received", "") or "",
-            is_read=bool(row.get("is_read", False)),
-            is_flagged=bool(row.get("is_flagged", False)),
-            thread_id=row.get("thread_id"),
-            mailbox=mailbox,
         )

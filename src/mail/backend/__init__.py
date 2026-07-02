@@ -5,10 +5,10 @@
 
 Public API:
     create_backend(cfg) -> IMailBackend       # factory, probe-or-raise
-    IMailBackend (Protocol)                    # 8-method contract
+    IMailBackend (Protocol)                    # 真实消费面契约 (E1 收口, 见 e1-contract-inventory.md)
     BackendStartupError                        # probe 失败专用异常
-    EmailContent / EmailMeta / RadarTick       # 共享 dataclass
-    BackendHealth / DraftAppendResult          # 健康检查 + draft 返回
+    EmailContent / EmailMeta / RadarTick       # 共享 dataclass (backend 内部 / 遗留类型)
+    BackendHealth / DraftAppendResult          # 遗留类型 + draft 返回
     BackendOrigin                              # Literal['applescript', 'davmail']
 """
 from __future__ import annotations

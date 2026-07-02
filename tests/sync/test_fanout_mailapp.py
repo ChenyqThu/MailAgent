@@ -80,7 +80,7 @@ def arm():
 
 @pytest.fixture
 def fanout(sync_store, arm):
-    return MailAppFanout(sync_store=sync_store, arm=arm)
+    return MailAppFanout(sync_store=sync_store, backend=arm)
 
 
 # ============================================================

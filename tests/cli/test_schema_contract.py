@@ -254,6 +254,11 @@ class TestSchemaContract:
         monkeypatch.setattr(runner_mod.LLMRunner, "run_for_internal_id", fake_run)
         monkeypatch.setattr(runner_mod.LLMRunner, "close", fake_close)
 
+        # E1 §3.1 Step 3: `llm run` 经 LlmService._maybe_davmail_backend, davmail
+        # 模式下会在 LLMRunner 构造前真连 IMAP probe —— 中和成 None, 保持 hermetic。
+        from src.services.llm_service import LlmService
+        monkeypatch.setattr(LlmService, "_maybe_davmail_backend", lambda self: None)
+
         result = _invoke(cli_runner, "llm", "run", "12345", "--dry-run",
                          "-o", "json", db_path=seeded_db)
         assert result.exit_code == 0, result.output
@@ -660,7 +665,7 @@ class TestCalendarPhase2SchemaContract:
     def test_calendar_sync_now_matches_schema(
         self, cli_runner, cli_env, seeded_db, schema_loader, monkeypatch,
     ):
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timezone
         from jsonschema import validate
         from src.calendar_sync.caldav_reader import CalendarEvent, CalDAVReader
 

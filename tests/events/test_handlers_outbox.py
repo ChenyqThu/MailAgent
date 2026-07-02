@@ -84,7 +84,7 @@ def notion_sync():
 @pytest.fixture
 def handlers_with_outbox(arm, sync_store, notion_sync, outbox_repo):
     return EventHandlers(
-        arm=arm,
+        backend=arm,
         sync_store=sync_store,
         notion_sync=notion_sync,
         outbox_repo=outbox_repo,
@@ -94,7 +94,7 @@ def handlers_with_outbox(arm, sync_store, notion_sync, outbox_repo):
 @pytest.fixture
 def handlers_no_outbox(arm, sync_store, notion_sync):
     return EventHandlers(
-        arm=arm,
+        backend=arm,
         sync_store=sync_store,
         notion_sync=notion_sync,
         outbox_repo=None,

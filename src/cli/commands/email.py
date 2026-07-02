@@ -1484,7 +1484,7 @@ def email_send(
 #   - 否则 https URI → open 浏览器让用户手动确认
 #   - 否则 mailto URI → open 邮件客户端
 #   - 无 List-Unsubscribe header → method=none (仅 archive, 不报错)
-# raw MIME 经 backend.arm.fetch_email_content_by_id 重抽 (email_body 不存原文).
+# raw MIME 经 backend.fetch_email_content_by_id 重抽 (email_body 不存原文).
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -1657,7 +1657,7 @@ def email_unsubscribe(
 
     # 2. backend 重抽 raw MIME (email_body 表只存 sha256, 不存原文)
     try:
-        full = cli.backend.arm.fetch_email_content_by_id(internal_id, mailbox)
+        full = cli.backend.fetch_email_content_by_id(internal_id, mailbox)
     except Exception as e:  # noqa: BLE001
         raise emit_cli_error(cli, CliNotFoundError(
             f"Backend fetch failed for internal_id={internal_id}: {e}",

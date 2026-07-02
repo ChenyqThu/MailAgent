@@ -102,8 +102,6 @@ def _backend(custom_folders, folders, fail_select=None, *, alloc_start=1_000_000
     b.drafts_folder = None
     b._sync_sent = False
     b._custom_folders = list(custom_folders)
-    b.arm = b
-    b.radar = b
     b._cached_marker = None
     # sqlite-touching helper 全 mock (避免连真实库)
     b._max_folder_imap_uid = MagicMock(return_value=0)

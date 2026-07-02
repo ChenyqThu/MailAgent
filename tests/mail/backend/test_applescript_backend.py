@@ -1,7 +1,7 @@
-"""AppleScriptBackend wrapper tests — mock arm + radar, verify protocol mapping."""
+"""AppleScriptBackend wrapper tests — mock arm + radar, verify protocol delegation."""
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -24,10 +24,8 @@ def cfg():
 @pytest.fixture
 def backend(cfg):
     """Constructor 内 import arm + radar — 用 patch 避开实际 Mail.app 依赖."""
-    with patch("src.mail.backend.applescript_backend.AppleScriptArm") as MArm, \
-         patch("src.mail.backend.applescript_backend.SQLiteRadar") as MRadar:
-        # 让 MArm()._stats 字典可用
-        MArm.return_value._stats = {"applescript_calls": 0}
+    with patch("src.mail.backend.applescript_backend.AppleScriptArm"), \
+         patch("src.mail.backend.applescript_backend.SQLiteRadar"):
         b = AppleScriptBackend(cfg)
     return b
 
@@ -52,67 +50,91 @@ def test_probe_radar_available(backend):
     assert "max_row_id=12345" in detail
 
 
-def test_detect_new_emails_baseline(backend):
+# --------- 雷达面 — 委托 SQLiteRadar ---------
+
+
+def test_radar_face_delegates(backend):
+    backend.radar.is_available.return_value = True
     backend.radar.get_current_max_row_id.return_value = 999
-    tick = backend.detect_new_emails(None)
-    assert tick.has_new is False
-    assert tick.current_marker == 999
-
-
-def test_detect_new_emails_has_new(backend):
     backend.radar.check_for_changes.return_value = (True, 1010, 10)
-    backend.radar.get_new_emails.return_value = [
-        {"internal_id": 1001, "message_id": "<a@x>", "subject": "s1",
-         "sender": "f1", "date_received": "2026", "is_read": False, "is_flagged": False},
-    ]
-    tick = backend.detect_new_emails(marker=1000)
-    assert tick.has_new is True
-    assert tick.current_marker == 1010
-    assert tick.estimated_new_count == 10
-    assert len(tick.new_emails) == 1
-    assert tick.new_emails[0].internal_id == 1001
-    assert tick.new_emails[0].subject == "s1"
+    backend.radar.get_new_emails.return_value = [{"internal_id": 1001}]
+    backend.radar.get_last_max_row_id.return_value = 888
+
+    assert backend.is_available() is True
+    assert backend.get_current_max_row_id() == 999
+    assert backend.check_for_changes(1000) == (True, 1010, 10)
+    assert backend.get_new_emails(1000) == [{"internal_id": 1001}]
+    backend.radar.get_new_emails.assert_called_once_with(since_row_id=1000)
+    backend.set_last_max_row_id(1010)
+    backend.radar.set_last_max_row_id.assert_called_once_with(1010)
+    assert backend.get_last_max_row_id() == 888
 
 
-def test_fetch_email_by_id_success(backend):
-    backend.arm.fetch_email_content_by_id.return_value = {
+# --------- 抓取面 — 委托 AppleScriptArm (legacy dict 透传) ---------
+
+
+def test_fetch_email_content_by_id_delegates(backend):
+    raw = {
         "message_id": "<m@x>", "subject": "Hi", "sender": "a@x",
         "date": "2026", "content": "body", "source": "raw",
         "is_read": True, "is_flagged": False, "thread_id": "<t@x>",
     }
-    ec = backend.fetch_email_by_id(42, mailbox="收件箱")
-    assert ec is not None
-    assert ec.internal_id == 42
-    assert ec.message_id == "<m@x>"
-    assert ec.subject == "Hi"
-    assert ec.mailbox == "收件箱"
+    backend.arm.fetch_email_content_by_id.return_value = raw
+    assert backend.fetch_email_content_by_id(42, mailbox="收件箱") is raw
+    backend.arm.fetch_email_content_by_id.assert_called_once_with(42, mailbox="收件箱")
 
 
-def test_fetch_email_by_id_returns_none_on_miss(backend):
+def test_fetch_email_content_by_id_none_on_miss(backend):
     backend.arm.fetch_email_content_by_id.return_value = None
-    assert backend.fetch_email_by_id(42, mailbox="收件箱") is None
+    assert backend.fetch_email_content_by_id(42, mailbox="收件箱") is None
 
 
-def test_mark_as_read_forwards_to_arm(backend):
+def test_fetch_email_by_message_id_delegates(backend):
+    backend.arm.fetch_email_by_message_id.return_value = {"subject": "s"}
+    assert backend.fetch_email_by_message_id("<m@x>", mailbox="发件箱") == {"subject": "s"}
+    backend.arm.fetch_email_by_message_id.assert_called_once_with("<m@x>", mailbox="发件箱")
+
+
+def test_fetch_emails_by_position_delegates(backend):
+    backend.arm.fetch_emails_by_position.return_value = [{"id": 1}]
+    assert backend.fetch_emails_by_position(5, mailbox="收件箱") == [{"id": 1}]
+    backend.arm.fetch_emails_by_position.assert_called_once_with(count=5, mailbox="收件箱")
+
+
+# --------- flag 面 — 委托 AppleScriptArm ---------
+
+
+def test_mark_as_read_by_id_forwards_to_arm(backend):
     backend.arm.mark_as_read_by_id.return_value = True
-    ok = backend.mark_as_read(42, read=True, mailbox="收件箱")
+    ok = backend.mark_as_read_by_id(42, read=True, mailbox="收件箱")
     assert ok is True
     backend.arm.mark_as_read_by_id.assert_called_once_with(42, read=True, mailbox="收件箱")
 
 
-def test_set_flag_forwards_to_arm(backend):
+def test_set_flag_by_id_forwards_to_arm(backend):
     backend.arm.set_flag_by_id.return_value = True
-    ok = backend.set_flag(42, flagged=False, mailbox="发件箱")
+    ok = backend.set_flag_by_id(42, flagged=False, mailbox="发件箱")
     assert ok is True
     backend.arm.set_flag_by_id.assert_called_once_with(42, flagged=False, mailbox="发件箱")
 
 
-def test_health_status_includes_applescript_calls(backend):
-    backend.radar.is_available.return_value = True
-    backend.radar.get_current_max_row_id.return_value = 500
-    backend.radar.db_path = "/fake/Envelope Index"
-    backend.arm._stats = {"applescript_calls": 7}
-    h = backend.health_status()
-    assert h.healthy is True
-    assert h.backend == "applescript"
-    assert h.details["applescript_calls"] == 7
+def test_mark_as_read_str_fallback_forwards_to_arm(backend):
+    """str message_id fallback 面 (handlers/reverse_sync 三位置参数调用形状)."""
+    backend.arm.mark_as_read.return_value = True
+    ok = backend.mark_as_read("<m@x>", True, "收件箱")
+    assert ok is True
+    backend.arm.mark_as_read.assert_called_once_with("<m@x>", read=True, mailbox="收件箱")
+
+
+def test_set_flag_str_fallback_forwards_to_arm(backend):
+    backend.arm.set_flag.return_value = True
+    ok = backend.set_flag("<m@x>", False, "收件箱")
+    assert ok is True
+    backend.arm.set_flag.assert_called_once_with("<m@x>", flagged=False, mailbox="收件箱")
+
+
+# --------- 草稿对账 — applescript 恒 noop ---------
+
+
+def test_reconcile_drafts_noop(backend):
+    assert backend.reconcile_drafts() == ([], [])

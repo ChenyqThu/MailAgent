@@ -136,18 +136,18 @@ class ProjectProgressRunner:
         “无效的索引”）。
         """
         if self._arm is None:
+            from src.mail.backend.factory import create_backend
+            from src.mail.sync_store import SyncStore
+
             backend_name = getattr(config, "mailagent_backend", "applescript")
-            if backend_name == "davmail":
-                from src.mail.backend.factory import create_backend
-                from src.mail.sync_store import SyncStore
-
-                self._arm = create_backend(
-                    config, SyncStore(db_path=self.sync_store_db_path)
-                )
-            else:
-                from src.mail.applescript_arm import AppleScriptArm
-
-                self._arm = AppleScriptArm()
+            sync_store = (
+                SyncStore(db_path=self.sync_store_db_path)
+                if backend_name == "davmail"
+                else None
+            )
+            # E1 §3.1 Step 3: applescript 分支也走 create_backend() 而非裸构造
+            # AppleScriptArm() —— 收口进 factory, 与上面 davmail 分支统一路径。
+            self._arm = create_backend(config, sync_store)
         return self._arm
 
     @property

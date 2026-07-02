@@ -64,7 +64,7 @@ def outbox_repo():
 def _make_sync(notion_sync, arm, sync_store, outbox_repo=None):
     return NotionToMailSync(
         notion_sync=notion_sync,
-        arm=arm,
+        backend=arm,
         sync_store=sync_store,
         skip_notify=True,
         outbox_repo=outbox_repo,

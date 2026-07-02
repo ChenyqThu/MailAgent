@@ -8,8 +8,6 @@
 """
 from __future__ import annotations
 
-import asyncio
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -53,7 +51,6 @@ def test_split_addrs_empty():
 @pytest.fixture
 def handlers_with_mock_backend():
     """构造 EventHandlers, backend / sync_store / notion_sync 全 mock."""
-    arm = MagicMock()
     sync_store = MagicMock()
     feishu = None
     notion_sync = MagicMock()
@@ -63,12 +60,11 @@ def handlers_with_mock_backend():
     backend.backend_origin = "davmail"
 
     h = EventHandlers(
-        arm=arm,
+        backend=backend,
         sync_store=sync_store,
         feishu=feishu,
         notion_sync=notion_sync,
         result_callback=AsyncMock(),
-        backend=backend,
     )
     return h, backend, sync_store, notion_sync
 

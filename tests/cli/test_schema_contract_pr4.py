@@ -80,9 +80,9 @@ class TestPR4SchemaContract:
     ):
         from jsonschema import validate
 
-        # backfill body 走 cli.backend.arm (factory 路由) — mock 掉避免真连 IMAP
+        # backfill body 走 cli.backend (factory 路由) — mock 掉避免真连 IMAP
         backend_mock = MagicMock()
-        backend_mock.arm.fetch_email_content_by_id.return_value = None
+        backend_mock.fetch_email_content_by_id.return_value = None
         with patch(
             "src.mail.backend.factory.create_backend", return_value=backend_mock,
         ):

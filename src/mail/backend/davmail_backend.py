@@ -23,7 +23,7 @@ from email.header import decode_header, make_header
 from src.mail.charset_utils import decode_mime_bytes
 from email.parser import BytesParser
 from email.utils import getaddresses, parsedate_to_datetime
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Optional, Union
 
 from loguru import logger
 
@@ -40,13 +40,11 @@ from src.mail.backend.imap_client import (
 )
 from src.mail.backend.imap_utf7 import decode_imap_utf7, encode_imap_utf7
 from src.mail.backend.types import (
-    BackendHealth,
     BackendOrigin,
     DraftAppendResult,
     DraftRequest,
     EmailContent,
     EmailMeta,
-    RadarTick,
     SendResult,
 )
 
@@ -304,14 +302,6 @@ class DavMailBackend(IMailBackend):
         self._custom_folders: list[str] = self._parse_custom_folders(cfg)
         self.last_op_latency_ms: Optional[int] = None
 
-        # Phase B: 让 NewWatcher / fanout / handler 的 self.arm / self.radar 调用直接 work.
-        # davmail backend 自己实现 AppleScriptArm + SQLiteRadar 的兼容接口 (alias methods 在
-        # class 底部 #=== Arm/Radar 兼容层 ===). 这避免改 NewWatcher 19 处 / handler / fanout
-        # 内部代码, 切换 backend 完全透明.
-        self.arm = self
-        self.radar = self
-        # NewWatcher health-check / dashboard 用 radar.db_path (None 表示无本地 db)
-        self.db_path = None
         # davmail radar 内存缓存 marker (sync_store 持久化由 NewWatcher 通过
         # sync_store.set_last_max_row_id 完成, 跟 AppleScript 模式一致路径)
         self._cached_marker: Optional[int] = None
@@ -386,81 +376,9 @@ class DavMailBackend(IMailBackend):
             f"sent={self.sent_folder!r} sync_sent={self._sync_sent}, probe=NOOP)"
         )
 
-    def health_status(self) -> BackendHealth:
-        # 轻量探测: 仅 TCP, 不做 LOGIN (避免高频 LOGIN)
-        imap_ok, imap_detail = probe_tcp(self.host, self.imap_port, timeout=2.0)
-        smtp_ok, smtp_detail = probe_tcp(self.host, self.smtp_port, timeout=2.0)
-        healthy = imap_ok and smtp_ok
-        return BackendHealth(
-            healthy=healthy,
-            backend=self.backend_origin,
-            details={
-                "imap": imap_detail,
-                "smtp": smtp_detail,
-                "uidvalidity": self.inbox_uidvalidity,
-                "drafts_folder": self.drafts_folder,
-            },
-            last_op_latency_ms=self.last_op_latency_ms,
-            error=None if healthy else f"imap={imap_ok} smtp={smtp_ok}",
-        )
-
     # =========================================================================
-    # 正向 sync — IMAP STATUS UIDNEXT 雷达
+    # 正向 sync — 单封抓取 (内部 typed helper; Protocol 面 = fetch_email_content_by_id)
     # =========================================================================
-
-    def detect_new_emails(self, marker: Any = None) -> RadarTick:
-        """IMAP STATUS INBOX (UIDNEXT UIDVALIDITY) 轮询.
-
-        marker=None: 启动 baseline, 返回 (uidvalidity, uidnext), has_new=False.
-        marker=(uidvalidity, uidnext): 比对; uidvalidity 变了 → has_new=True + 全失效信号;
-            uidnext 变大 → has_new=True, 估计新邮件数 = current_uidnext - last_uidnext.
-
-        不在此处 fetch headers (lazy: 上层 new_watcher 收到 has_new=True 后再 fetch_recent
-        或 fetch_email_by_id), 避免大批量 backfill 阻塞雷达节奏.
-        """
-        try:
-            with imap_session(self.cfg, timeout=30) as imap:
-                t0 = time.time()
-                typ, data = imap.status("INBOX", "(UIDNEXT UIDVALIDITY MESSAGES)")
-                self.last_op_latency_ms = int((time.time() - t0) * 1000)
-        except Exception as e:
-            logger.warning(f"[davmail-backend] STATUS INBOX failed: {e}")
-            return RadarTick(has_new=False, current_marker=marker, estimated_new_count=0)
-
-        if typ != "OK" or not data:
-            return RadarTick(has_new=False, current_marker=marker, estimated_new_count=0)
-
-        uv = self._extract_status_value(data[0], "UIDVALIDITY")
-        uidnext = self._extract_status_value(data[0], "UIDNEXT")
-        try:
-            current = (int(uv), int(uidnext))
-        except (TypeError, ValueError):
-            return RadarTick(has_new=False, current_marker=marker, estimated_new_count=0)
-
-        if marker is None:
-            return RadarTick(has_new=False, current_marker=current, estimated_new_count=0)
-
-        try:
-            last_uv, last_uidnext = marker
-        except Exception:
-            return RadarTick(has_new=True, current_marker=current, estimated_new_count=0)
-
-        if int(last_uv) != current[0]:
-            # UIDVALIDITY 变了 — Outlook server 重建 mailbox 索引, 所有 imap_uid 失效
-            logger.warning(
-                f"[davmail-backend] UIDVALIDITY changed: {last_uv} → {current[0]}, "
-                f"all imap_uid 失效, 需触发 backfill"
-            )
-            return RadarTick(
-                has_new=True, current_marker=current, estimated_new_count=-1,
-            )
-
-        delta = current[1] - int(last_uidnext)
-        return RadarTick(
-            has_new=delta > 0,
-            current_marker=current,
-            estimated_new_count=max(0, delta),
-        )
 
     def fetch_email_by_id(
         self, internal_id: int, *, mailbox: Optional[str] = None
@@ -694,12 +612,12 @@ class DavMailBackend(IMailBackend):
         self,
         identifier: Union[int, str],
         read: bool = True,
-        *,
         mailbox: Optional[str] = None,
     ) -> bool:
-        """标记已读. 接受 ``int`` (internal_id) 或 ``str`` (message_id), 对齐
-        ``AppleScriptArm.mark_as_read`` 多形签名 — 让 ``self.arm = self`` alias 兼容层
-        在 handlers/reverse_sync 字符串 fallback 路径下也正确 dispatch (review HIGH #3).
+        """标记已读 (Protocol 面为 str message_id fallback; 内部也容忍 int internal_id).
+
+        mailbox 位置可传 — 签名统一决策 (e1-contract-inventory.md §3 ①): handlers /
+        reverse_sync 的 fallback 调用点都是三位置参数, keyword-only 会 TypeError.
         """
         flag = "(\\Seen)"
         op = "+FLAGS" if read else "-FLAGS"
@@ -709,10 +627,9 @@ class DavMailBackend(IMailBackend):
         self,
         identifier: Union[int, str],
         flagged: bool = True,
-        *,
         mailbox: Optional[str] = None,
     ) -> bool:
-        """标记/取消旗标. 同 ``mark_as_read`` 接受 int 或 message_id str."""
+        """标记/取消旗标. 同 ``mark_as_read`` 签名约定 (str 面 + 容忍 int)."""
         flag = "(\\Flagged)"
         op = "+FLAGS" if flagged else "-FLAGS"
         return self._store_flag(identifier, op, flag, mailbox)
@@ -1042,16 +959,14 @@ class DavMailBackend(IMailBackend):
     _build_reply_mime = _build_mime
 
     # =========================================================================
-    # Arm/Radar 兼容层 (Phase B): 让 NewWatcher / fanout / handler 的 self.arm.*
-    # / self.radar.* 调用在 davmail mode 直接 work, 不需要改 19+ 处调用代码.
+    # IMailBackend 正式接口 — 邮件抓取 / flag 写 (E1 收口: 原 arm-compat 面
+    # 正式化为 Protocol 方法, 见 e1-contract-inventory.md §1.1)
     # =========================================================================
-
-    # --- AppleScriptArm 兼容接口 ---
 
     def fetch_email_content_by_id(
         self, internal_id: int, mailbox: Optional[str] = None
     ) -> Optional[dict]:
-        """AppleScriptArm.fetch_email_content_by_id 兼容 — 返回 legacy dict."""
+        """单封抓取 (legacy dict) — 委托内部 typed fetch_email_by_id."""
         ec = self.fetch_email_by_id(internal_id, mailbox=mailbox)
         return ec.to_legacy_dict() if ec else None
 
@@ -1086,7 +1001,7 @@ class DavMailBackend(IMailBackend):
     def fetch_emails_by_position(
         self, count: int, mailbox: Optional[str] = None
     ) -> list[dict]:
-        """AppleScriptArm.fetch_emails_by_position 兼容 — IMAP UID SEARCH ALL 末尾 N 封."""
+        """按位置抓最近 N 封 (legacy dict) — IMAP UID SEARCH 末尾 N 封, 委托 fetch_recent."""
         metas = self.fetch_recent(count, mailbox=mailbox)
         return [
             {
@@ -1101,43 +1016,30 @@ class DavMailBackend(IMailBackend):
     def mark_as_read_by_id(
         self, internal_id: int, read: bool = True, mailbox: Optional[str] = None
     ) -> bool:
-        """AppleScriptArm.mark_as_read_by_id 兼容."""
+        """按 internal_id 标记已读 (主路径)."""
         return self.mark_as_read(internal_id, read, mailbox=mailbox)
 
     def set_flag_by_id(
         self, internal_id: int, flagged: bool = True, mailbox: Optional[str] = None
     ) -> bool:
-        """AppleScriptArm.set_flag_by_id 兼容."""
+        """按 internal_id 设置/取消旗标 (主路径)."""
         return self.set_flag(internal_id, flagged, mailbox=mailbox)
 
-    def extract_thread_id(self, source: str) -> Optional[str]:
-        """AppleScriptArm.extract_thread_id 兼容 — 从 raw MIME 提取 thread_id."""
-        if not source:
-            return None
-        try:
-            import email
-            msg = email.message_from_string(source)
-            # RFC 2047 decode — 同 fetch 路径, 防 encoded-word 长 Message-ID 截断.
-            return _thread_id_from_headers(
-                msg.get("References"), msg.get("In-Reply-To")
-            )
-        except Exception as e:
-            logger.warning(f"[davmail-backend] extract_thread_id failed: {e}")
-        return None
-
-    # --- SQLiteRadar 兼容接口 ---
+    # =========================================================================
+    # IMailBackend 正式接口 — 雷达面 (原 SQLiteRadar 形状; marker = INBOX UIDNEXT)
+    # =========================================================================
 
     def is_available(self) -> bool:
-        """SQLiteRadar.is_available 兼容 — TCP probe IMAP 端口."""
+        """雷达可用性 — TCP probe IMAP 端口."""
         ok, _ = probe_tcp(self.host, self.imap_port, timeout=2.0)
         return ok
 
     def get_current_max_row_id(self) -> int:
-        """SQLiteRadar.get_current_max_row_id 兼容 — 返回当前 IMAP UIDNEXT.
+        """当前 marker — 返回 INBOX IMAP UIDNEXT.
 
         DavMail marker = uidnext (int). uidvalidity 内部缓存在 self.inbox_uidvalidity,
-        变化时 detect_new_emails / check_for_changes 会 log warning. 主循环用 uidnext
-        作为 SyncStore.last_max_row_id 持久化.
+        变化时 check_for_changes 会 log warning. 主循环用 uidnext 作为
+        SyncStore.last_max_row_id 持久化.
         """
         try:
             with imap_session(self.cfg, timeout=30) as imap:
@@ -1203,7 +1105,7 @@ class DavMailBackend(IMailBackend):
     def check_for_changes(
         self, last_max_row_id: int
     ) -> tuple[bool, int, int]:
-        """SQLiteRadar.check_for_changes 兼容 — STATUS UIDNEXT 比对.
+        """自 marker 以来是否有新邮件 — STATUS UIDNEXT 比对.
 
         返回的 marker 始终是 INBOX uidnext (持久化为 last_max_row_id, get_new_emails
         的 INBOX 增量用它)。发件箱用独立 UID 空间, 其游标在 get_new_emails 内部从
@@ -1254,7 +1156,7 @@ class DavMailBackend(IMailBackend):
         )
 
     def get_new_emails(self, since_row_id: int) -> list[dict]:
-        """SQLiteRadar.get_new_emails 兼容 — 多 folder UID SEARCH + BATCH FETCH.
+        """取 marker 之后的新邮件 — 多 folder UID SEARCH + BATCH FETCH.
 
         davmail mode 关键: 每条邮件通过 ``sync_store.allocate_davmail_internal_id()``
         分配独立 internal_id (>= 1_000_000_000), **不再**复用 IMAP UID 作 internal_id —
@@ -1817,11 +1719,11 @@ class DavMailBackend(IMailBackend):
             logger.warning(f"[davmail-backend] _set_folder_uidvalidity({imap_name!r}={uv}) failed: {e}")
 
     def set_last_max_row_id(self, row_id: int) -> None:
-        """SQLiteRadar.set_last_max_row_id 兼容 — 内存缓存 (持久化走 sync_store)."""
+        """写 marker 内存缓存 (持久化由调用方走 sync_store)."""
         self._cached_marker = int(row_id) if row_id else None
 
     def get_last_max_row_id(self) -> int:
-        """SQLiteRadar.get_last_max_row_id 兼容."""
+        """读 marker 内存缓存."""
         return self._cached_marker or 0
 
     def _parse_batch_headers(self, data: list, *, uidvalidity: Optional[int] = None) -> list[dict]:

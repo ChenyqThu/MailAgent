@@ -133,7 +133,7 @@ class EmailNotionSyncApp:
             self.outbox_repo = OutboxRepository(config.sync_store_db_path)
             mailapp_fanout = MailAppFanout(
                 sync_store=self.watcher.sync_store,
-                arm=self.watcher.arm,
+                backend=self.backend,
             )
             notion_fanout = NotionFanout(
                 sync_store=self.watcher.sync_store,
@@ -164,7 +164,7 @@ class EmailNotionSyncApp:
         skip_notify = bool(config.redis_events_enabled and config.redis_url)
         self.reverse_sync = NotionToMailSync(
             notion_sync=self.watcher.notion_sync,
-            arm=self.watcher.arm,
+            backend=self.backend,
             sync_store=self.watcher.sync_store,
             skip_notify=skip_notify,
             outbox_repo=self.outbox_repo,
@@ -199,7 +199,7 @@ class EmailNotionSyncApp:
             feishu = self.reverse_sync._feishu
 
             handlers = EventHandlers(
-                arm=self.watcher.arm,
+                backend=self.backend,
                 sync_store=self.watcher.sync_store,
                 feishu=feishu,
                 notion_sync=self.watcher.notion_sync,
@@ -210,9 +210,6 @@ class EmailNotionSyncApp:
                 # Sprint 15: 启用 outbox 时 handle_flag_changed/completed/ai_reviewed
                 # 改写为 intent 模式，由 FanoutWorker 异步派发
                 outbox_repo=self.outbox_repo,
-                # Sprint 16 dual-backend: davmail mode 下 handle_create_draft 走
-                # backend.append_draft (IMAP APPEND), applescript mode 仍走 sh GUI 注入
-                backend=self.backend,
             )
             self._event_handlers = handlers
 

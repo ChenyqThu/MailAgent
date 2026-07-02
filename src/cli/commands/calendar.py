@@ -306,7 +306,7 @@ def calendar_recurring_replay(
         return
 
     try:
-        arm = cli.backend.arm
+        arm = cli.backend
     except Exception as e:
         raise emit_cli_error(cli, CliError(
             f"backend probe failed: {e}",

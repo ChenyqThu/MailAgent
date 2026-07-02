@@ -13,14 +13,15 @@ CLI 调用的导出: discover_recurring / replay_one / _has_calendar_part 函数
 """
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import List, Optional, TYPE_CHECKING
 
 from loguru import logger
 
-from src.mail.applescript_arm import AppleScriptArm
-from src.mail.icalendar_parser import ICalendarParser
 from src.mail.meeting_sync import MeetingInviteSync
 from src.mail.sync_store import SyncStore
+
+if TYPE_CHECKING:
+    from src.mail.backend.base import IMailBackend
 
 
 def _has_calendar_part(source: str) -> bool:
@@ -130,7 +131,7 @@ async def discover_recurring(
 async def replay_one(
     internal_id: int,
     sync_store: SyncStore,
-    arm: AppleScriptArm,
+    arm: "IMailBackend",
     meeting_sync: MeetingInviteSync,
 ) -> Optional[str]:
     """回放单个 internal_id 的会议邀请。返回代表性 page_id 或 None。

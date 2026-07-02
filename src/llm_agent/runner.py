@@ -14,7 +14,6 @@ Steps:
 from __future__ import annotations
 
 import sqlite3
-from dataclasses import asdict, is_dataclass
 from typing import Any, Dict, Optional
 
 from loguru import logger
@@ -89,9 +88,8 @@ class LLMRunner:
         self._writer = writer or AIFieldsWriter()
         self._store = store or LLMProcessingStore(db_path=effective_db_path)
         self._arm: Optional[Any] = None
-        # Sprint 16 dual-backend: 优先用 backend.arm (davmail mode 走 IMAP fetch
-        # 自身实现; applescript mode 也 OK, AppleScriptBackend.arm 是真 AppleScriptArm).
-        # 没传 backend 时 fallback 老路径 lazy-init AppleScriptArm.
+        # Sprint 16 dual-backend: 注入 backend 时直接用它抓 MIME (IMailBackend
+        # Protocol 面). 没传 backend 时 fallback 老路径 lazy-init AppleScriptArm.
         self._backend = backend
         self._reader: Optional[EmailReader] = None
         # v12 沉浸式翻译: LLM 分类时 tool_use 顺带返回 translation_segments,
@@ -106,15 +104,25 @@ class LLMRunner:
             pass
 
     def _lazy_arm(self):
-        """返回 arm/backend-like 对象, 满足 ``fetch_email_content_by_id(iid, mailbox)`` 契约.
+        """返回 backend 对象, 满足 ``fetch_email_content_by_id(iid, mailbox)`` 契约.
 
-        davmail mode (backend 注入): 用 ``backend.arm`` (DavMailBackend.arm == self,
-        实际 IMAP UID FETCH). applescript mode / 没传 backend: lazy-init AppleScriptArm.
+        backend 注入时直接用它 (IMailBackend Protocol 面; davmail = IMAP UID FETCH,
+        applescript = AppleScriptArm 委托). 没传 backend 且 applescript 模式:
+        lazy-init AppleScriptArm (老路径行为不变)。没传 backend 但当前是 davmail
+        模式: 拒绝兜底 —— 裸建 AppleScriptArm 会用 `whose id` 查一个 davmail id
+        空间 (>=10^9) 的 internal_id, 必然查不到 (E1 §3.1 Step 3)。调用方应经
+        src.mail.backend.factory.create_backend() 注入 backend。
         """
         if self._arm is not None:
             return self._arm
-        if self._backend is not None and hasattr(self._backend, "arm"):
-            self._arm = self._backend.arm
+        if self._backend is not None:
+            self._arm = self._backend
+        elif getattr(cfg, "mailagent_backend", "applescript") == "davmail":
+            raise RuntimeError(
+                "LLMRunner backend not injected while MAILAGENT_BACKEND=davmail "
+                "(AppleScriptArm fallback would query the wrong id space); caller "
+                "must pass backend=create_backend(cfg, sync_store)"
+            )
         else:
             self._arm = AppleScriptArm()
         return self._arm

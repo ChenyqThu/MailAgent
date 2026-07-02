@@ -16,7 +16,6 @@ import time
 from typing import TYPE_CHECKING, Awaitable, Callable, Dict, Optional
 from loguru import logger
 
-from src.mail.applescript_arm import AppleScriptArm
 from src.mail.charset_utils import decode_mime_bytes
 from src.mail.sync_store import SyncStore
 from src.notify.feishu import FeishuNotifier
@@ -35,16 +34,17 @@ class EventHandlers:
 
     def __init__(
         self,
-        arm: AppleScriptArm,
+        backend: "IMailBackend",
         sync_store: SyncStore,
         feishu: Optional[FeishuNotifier] = None,
         notion_sync: Optional[NotionSync] = None,
         result_callback: Optional[Callable[[str, Dict], Awaitable[None]]] = None,
         email_repo: Optional[EmailRepository] = None,
         outbox_repo: Optional[OutboxRepository] = None,
-        backend: Optional["IMailBackend"] = None,
     ):
-        self.arm = arm
+        # E1 契约收口: 原 (arm, ..., backend) 双参数合并为单 backend (二者本就是
+        # 同一对象); flag/fetch 调用直接走 IMailBackend 面.
+        self.backend = backend
         self.sync_store = sync_store
         self.feishu = feishu
         self.notion_sync = notion_sync
@@ -55,10 +55,6 @@ class EventHandlers:
         # 改写为「写 SQLite intent + outbox」, 不直调 AppleScript / NotionSync。
         # 详 SPRINT15-HANDOFF.md §3.3 (B) + plan Stage 1.4。
         self.outbox_repo = outbox_repo
-        # Sprint 16 dual-backend: 注入 IMailBackend 让 handle_create_draft 在 davmail
-        # 模式下走 IMAP APPEND 替代 scripts/create_reply_draft.sh AppleScript GUI 注入.
-        # arm 仍保留作 AppleScript 兼容接口 (davmail mode 下 arm = backend).
-        self.backend = backend
         self._result_callback = result_callback
         self._radar = None  # 延迟初始化
         self._stats = {
@@ -236,9 +232,9 @@ class EventHandlers:
         # 同步 read 状态
         if is_read is not None and is_read != stored_read:
             if internal_id:
-                success = self.arm.mark_as_read_by_id(internal_id, is_read, mailbox)
+                success = self.backend.mark_as_read_by_id(internal_id, is_read, mailbox)
             else:
-                success = self.arm.mark_as_read(message_id, is_read, mailbox)
+                success = self.backend.mark_as_read(message_id, is_read, mailbox)
             if success:
                 changed = True
                 logger.info(f"Flag sync: read={is_read} for {message_id[:40]}")
@@ -246,9 +242,9 @@ class EventHandlers:
         # 同步 flagged 状态
         if is_flagged is not None and is_flagged != stored_flagged:
             if internal_id:
-                success = self.arm.set_flag_by_id(internal_id, is_flagged, mailbox)
+                success = self.backend.set_flag_by_id(internal_id, is_flagged, mailbox)
             else:
-                success = self.arm.set_flag(message_id, is_flagged, mailbox)
+                success = self.backend.set_flag(message_id, is_flagged, mailbox)
             if success:
                 changed = True
                 logger.info(f"Flag sync: flagged={is_flagged} for {message_id[:40]}")
@@ -310,13 +306,13 @@ class EventHandlers:
                 # Sprint 16 收尾: 老路径同样镜像 processing_status='已同步' 到 SQLite,
                 # 跟 outbox 主路径口径一致, 前端 listEnriched 立即读到 done 状态.
                 if target_flagged:
-                    self.arm.mark_as_read_by_id(internal_id, True, mailbox)
-                    self.arm.set_flag_by_id(internal_id, True, mailbox)
+                    self.backend.mark_as_read_by_id(internal_id, True, mailbox)
+                    self.backend.set_flag_by_id(internal_id, True, mailbox)
                     self.sync_store.update_local_flags(
                         internal_id, True, True, processing_status='已同步'
                     )
                 else:
-                    self.arm.mark_as_read_by_id(internal_id, True, mailbox)
+                    self.backend.mark_as_read_by_id(internal_id, True, mailbox)
                     self.sync_store.update_local_flags(
                         internal_id, True, False, processing_status='已同步'
                     )
@@ -520,11 +516,11 @@ class EventHandlers:
             # 老路径
             # 移除旗标 + 标记已读
             if internal_id:
-                self.arm.set_flag_by_id(internal_id, False, mailbox)
-                self.arm.mark_as_read_by_id(internal_id, True, mailbox)
+                self.backend.set_flag_by_id(internal_id, False, mailbox)
+                self.backend.mark_as_read_by_id(internal_id, True, mailbox)
             else:
-                self.arm.set_flag(message_id, False, mailbox)
-                self.arm.mark_as_read(message_id, True, mailbox)
+                self.backend.set_flag(message_id, False, mailbox)
+                self.backend.mark_as_read(message_id, True, mailbox)
 
             # Echo prevention + Sprint 16 SSoT 镜像 processing_status='已完成'
             if internal_id:
@@ -1109,7 +1105,7 @@ class EventHandlers:
         self, internal_id: int, mailbox: Optional[str], fmt: str
     ) -> Optional[Dict]:
         """AppleScript fallback —— 历史未双写的邮件或 SQLite 异常时走这条路."""
-        full_email = self.arm.fetch_email_content_by_id(internal_id, mailbox)
+        full_email = self.backend.fetch_email_content_by_id(internal_id, mailbox)
         if not full_email:
             return None
 

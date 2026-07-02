@@ -26,14 +26,16 @@ Sprint 15 起 (架构纯净化, hotfix 2):
 """
 
 from datetime import datetime
-from typing import Any, Dict, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 from loguru import logger
 
-from src.mail.applescript_arm import AppleScriptArm
 from src.mail.sync_store import SyncStore
 from src.mail.sqlite_radar import SQLiteRadar
 from src.notion.sync import NotionSync
 from src.config import config
+
+if TYPE_CHECKING:
+    from src.mail.backend.base import IMailBackend
 
 
 class NotionToMailSync:
@@ -50,7 +52,7 @@ class NotionToMailSync:
     def __init__(
         self,
         notion_sync: NotionSync,
-        arm: AppleScriptArm = None,
+        backend: "IMailBackend" = None,
         sync_store: SyncStore = None,
         skip_notify: bool = False,
         outbox_repo: Optional[Any] = None,
@@ -59,8 +61,14 @@ class NotionToMailSync:
             raise TypeError(
                 "NotionToMailSync requires notion_sync to be injected (R-01 strict DI)"
             )
+        if backend is None:
+            raise TypeError(
+                "NotionToMailSync requires backend to be injected (E1 §3.1 Step 3: "
+                "factory 收口, 不再兜底 AppleScriptArm() — davmail 模式下会构造错 "
+                "id 空间的 arm)"
+            )
         self.notion_sync = notion_sync
-        self.arm = arm or AppleScriptArm()
+        self.backend = backend
         self.sync_store = sync_store
         self._skip_notify = skip_notify
         # Sprint 15: 注入后 sync_single_page 改 outbox 路径 (架构纯净化)
@@ -311,8 +319,8 @@ class NotionToMailSync:
     def _do_mark_read(self, internal_id: Optional[int], message_id: str, mailbox: str = None) -> bool:
         try:
             if internal_id:
-                return self.arm.mark_as_read_by_id(internal_id, True, mailbox)
-            return self.arm.mark_as_read(message_id, True, mailbox)
+                return self.backend.mark_as_read_by_id(internal_id, True, mailbox)
+            return self.backend.mark_as_read(message_id, True, mailbox)
         except Exception as e:
             logger.error(f"mark_as_read failed: {e}")
             return False
@@ -320,8 +328,8 @@ class NotionToMailSync:
     def _do_flag(self, internal_id: Optional[int], message_id: str, mailbox: str = None) -> bool:
         try:
             if internal_id:
-                return self.arm.set_flag_by_id(internal_id, True, mailbox)
-            return self.arm.set_flag(message_id, True, mailbox)
+                return self.backend.set_flag_by_id(internal_id, True, mailbox)
+            return self.backend.set_flag(message_id, True, mailbox)
         except Exception as e:
             logger.error(f"set_flag failed: {e}")
             return False

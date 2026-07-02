@@ -76,7 +76,7 @@ def _make_handler(
         captured["payload"] = payload
 
     h = EventHandlers(
-        arm=_FakeArm(returns=arm_returns),
+        backend=_FakeArm(returns=arm_returns),
         sync_store=_FakeSyncStore(metadata or {}),
         feishu=None,
         notion_sync=None,

@@ -761,6 +761,7 @@ def _patch_llm_runner(monkeypatch, run_returns):
     """Mock LLMRunner.__init__/run_for_internal_id/close (service.run function-level
     import 拿 monkeypatched 类)。"""
     from src.llm_agent import runner as runner_mod
+    from src.services.llm_service import LlmService
 
     async def fake_run(self, internal_id, *, dry_run=False, overwrite=True, force=False):
         return run_returns
@@ -774,6 +775,10 @@ def _patch_llm_runner(monkeypatch, run_returns):
     monkeypatch.setattr(runner_mod.LLMRunner, "__init__", safe_init)
     monkeypatch.setattr(runner_mod.LLMRunner, "run_for_internal_id", fake_run)
     monkeypatch.setattr(runner_mod.LLMRunner, "close", fake_close)
+    # E1 §3.1 Step 3: davmail 模式下 LlmService._maybe_davmail_backend 会在
+    # LLMRunner 构造前真连 IMAP probe (测试环境 MAILAGENT_BACKEND 落到 .env 的
+    # davmail) —— 中和成 None, 保持 hermetic。
+    monkeypatch.setattr(LlmService, "_maybe_davmail_backend", lambda self: None)
 
 
 def test_llm_run_matches_golden(cli_env, seeded_db, monkeypatch):

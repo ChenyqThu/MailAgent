@@ -131,9 +131,8 @@ class CliContext:
         关键: 走 factory 保证尊重 `MAILAGENT_BACKEND=davmail` env, 而不是硬编码
         AppleScriptArm — 避免 CLI 命令意外唤起 Mail.app GUI.
 
-        ``backend.arm`` 在 DavMailBackend 下是 self (IMAP fetch path); 在
-        AppleScriptBackend 下是真 AppleScriptArm 实例. 两者都暴露
-        ``fetch_email_content_by_id(internal_id, mailbox)``, 调用方零改动.
+        backend 自身即 IMailBackend Protocol 面 (E1 契约收口), 直接调
+        ``fetch_email_content_by_id(internal_id, mailbox)`` 等方法.
         """
         if self._backend is None:
             from src.mail.backend.factory import create_backend
