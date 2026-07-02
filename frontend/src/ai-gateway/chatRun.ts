@@ -255,8 +255,43 @@ export function responseMessageAwaitsApproval(message: MailAgentUIMessage): bool
   return parts.some((part) => {
     if (part == null || typeof part !== 'object') return false
     const p = part as { type?: unknown; state?: unknown }
-    return typeof p.type === 'string' && p.type.startsWith('tool-') && p.state === 'approval-requested'
+    return (
+      typeof p.type === 'string' && p.type.startsWith('tool-') && p.state === 'approval-requested'
+    )
   })
+}
+
+/** R2-3 (dogfood #3 后续) — build the DISPLAY-SAFE copy of an approval-paused assistant message for
+ *  eager history persistence: drop the `approval-requested` tool parts (a reloaded session must not
+ *  render a dead "待确认" card — the resume guard state doesn't survive reload), keep everything the
+ *  model already produced (text / reasoning / completed tool parts, which history rendering already
+ *  supports). Returns null when nothing displayable remains (e.g. the model went straight to a write
+ *  tool with no preamble text) — callers skip persistence entirely in that case, preserving the old
+ *  "nothing stored" behaviour for content-free pauses. */
+export function redactApprovalRequestedParts(
+  message: MailAgentUIMessage
+): MailAgentUIMessage | null {
+  const parts = (message as { parts?: unknown }).parts
+  if (!Array.isArray(parts)) return null
+  const kept = parts.filter((part) => {
+    if (part == null || typeof part !== 'object') return true
+    const p = part as { type?: unknown; state?: unknown }
+    return !(
+      typeof p.type === 'string' &&
+      p.type.startsWith('tool-') &&
+      p.state === 'approval-requested'
+    )
+  })
+  const displayable = kept.some((part) => {
+    if (part == null || typeof part !== 'object') return false
+    const p = part as { type?: unknown; text?: unknown }
+    if (p.type === 'text' || p.type === 'reasoning') {
+      return typeof p.text === 'string' && p.text.trim() !== ''
+    }
+    return typeof p.type === 'string' && p.type.startsWith('tool-')
+  })
+  if (!displayable) return null
+  return { ...(message as object), parts: kept } as MailAgentUIMessage
 }
 
 /**
@@ -278,9 +313,24 @@ export function makePersistOnFinish(
     // whole turn twice with a stuck "待确认" card. Skip: the resume request carries `originalMessages`,
     // so ITS responseMessage is the MERGED full turn (pre-approval tool calls + executed result),
     // persisted exactly once. Also skips capture — an approval-paused partial is not a complete turn to
-    // extract memory from; the resume's onFinish captures the finished turn. (A never-approved turn thus
-    // isn't persisted — correct: a dead "pending" card on reload is exactly the reported symptom.)
-    if (responseMessageAwaitsApproval(responseMessage as MailAgentUIMessage)) return
+    // extract memory from; the resume's onFinish captures the finished turn.
+    //
+    // R2-3 (v1.1.0 dogfood) — a never-approved turn used to store NOTHING, so switching back to the
+    // session showed only the user message. New: hand a display-safe REDACTED copy (approval parts
+    // stripped, see redactApprovalRequestedParts) to cfg.persistPausedAssistant. The lifecycle stores
+    // it keyed by the UIMessage id and the resume's persistTurn REPLACES that row (same merged id) —
+    // no duplicates, no dead pending card. Hook omitted → byte-identical to the old skip.
+    if (responseMessageAwaitsApproval(responseMessage as MailAgentUIMessage)) {
+      if (cfg.persistPausedAssistant) {
+        try {
+          const redacted = redactApprovalRequestedParts(responseMessage as MailAgentUIMessage)
+          if (redacted) cfg.persistPausedAssistant(run.sessionId, redacted, run.modelId)
+        } catch (err) {
+          console.error('[ai-gateway] persistPausedAssistant failed (pause still streamed OK)', err)
+        }
+      }
+      return
+    }
     const usage = await Promise.resolve(run.result.usage).catch(() => undefined)
     const turn: PersistTurnInput = {
       sessionId: run.sessionId,

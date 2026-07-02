@@ -30,9 +30,11 @@ import { extractTextFromUIMessage } from '@shared/assistant/uiMessage'
 import {
   appendMessage,
   appendToolCall,
+  findAssistantMessageRowIdByUiId,
   getFirstUserText,
   getLastTurnTexts,
   getSession,
+  updateMessage,
   updateSessionTitle,
   updateToolCall
 } from './chat_db'
@@ -105,23 +107,42 @@ function persistTurn(turn: PersistTurnInput): void {
       uiMessageJson: JSON.stringify(turn.userMessage)
     })
   }
-  const assistant = appendMessage({
-    sessionId: turn.sessionId,
-    role: 'assistant',
-    content: extractTextFromUIMessage(turn.responseMessage),
-    status: 'complete',
-    model: turn.model,
-    tokensInput: turn.usage?.inputTokens ?? null,
-    tokensOutput: turn.usage?.outputTokens ?? null,
-    uiMessageJson: JSON.stringify(turn.responseMessage)
-  })
+  // R2-3 — upsert by UIMessage id: if the approval pause already persisted a redacted copy of this
+  // assistant message (persistPausedAssistant, same merged id on resume), REPLACE that row with the
+  // final full message instead of appending a duplicate. DB-backed lookup（json_extract '$.id'）——
+  // survives app restarts, no in-memory state. Normal turns: lookup misses（one cheap per-session
+  // SELECT）→ append as before.
+  const pausedRowId = findAssistantMessageRowIdByUiId(turn.sessionId, turn.responseMessage.id)
+  let assistantId: number
+  if (pausedRowId != null) {
+    updateMessage(pausedRowId, {
+      content: extractTextFromUIMessage(turn.responseMessage),
+      status: 'complete',
+      model: turn.model,
+      tokensInput: turn.usage?.inputTokens ?? null,
+      tokensOutput: turn.usage?.outputTokens ?? null,
+      uiMessageJson: JSON.stringify(turn.responseMessage)
+    })
+    assistantId = pausedRowId
+  } else {
+    assistantId = appendMessage({
+      sessionId: turn.sessionId,
+      role: 'assistant',
+      content: extractTextFromUIMessage(turn.responseMessage),
+      status: 'complete',
+      model: turn.model,
+      tokensInput: turn.usage?.inputTokens ?? null,
+      tokensOutput: turn.usage?.outputTokens ?? null,
+      uiMessageJson: JSON.stringify(turn.responseMessage)
+    }).id
+  }
   // Phase 03a/03b — write a chat_tool_call audit row per tool call, keyed to the assistant
   // message. Read tools carry no tier → 'silent', no approval columns (03a). Write tools
   // (03b) carry their confirmation_tier + approval_status/approval_hash/user_edited (the
   // executed-after-approval audit; fields ≥ legacy dispatch).
   for (const tc of turn.toolCalls ?? []) {
     const { id } = appendToolCall({
-      messageId: assistant.id,
+      messageId: assistantId,
       toolUseId: tc.toolUseId,
       toolName: tc.toolName,
       inputJson: tc.inputJson,
@@ -308,6 +329,33 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
         // Best-effort: if eager write fails, persistTurn's onFinish will write the user
         // message as a fallback — NOT adding to set so persistTurn doesn't skip it.
         console.error('[ai-gateway] onTurnStart eager persist failed (persistTurn will retry)', err)
+      }
+    },
+    // R2-3 — 审批暂停轮的 assistant 消息 eager 落库（chatRun 已剥离 approval-requested part 的
+    // display-safe 副本）。upsert by UIMessage id：resume 的 persistTurn 以同一 merged id REPLACE
+    // 该行 → 无重复行、无僵死「待确认」卡；user 行已由 onTurnStart eager 写过。best-effort。
+    persistPausedAssistant: (sessionId, redactedMessage, modelId) => {
+      if (sessionId == null) return
+      try {
+        const existing = findAssistantMessageRowIdByUiId(sessionId, redactedMessage.id)
+        if (existing != null) {
+          updateMessage(existing, {
+            content: extractTextFromUIMessage(redactedMessage),
+            model: modelId,
+            uiMessageJson: JSON.stringify(redactedMessage)
+          })
+        } else {
+          appendMessage({
+            sessionId,
+            role: 'assistant',
+            content: extractTextFromUIMessage(redactedMessage),
+            status: 'complete',
+            model: modelId,
+            uiMessageJson: JSON.stringify(redactedMessage)
+          })
+        }
+      } catch (err) {
+        console.error('[ai-gateway] persistPausedAssistant write failed (best-effort)', err)
       }
     },
     persistTurn,

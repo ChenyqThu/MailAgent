@@ -1297,6 +1297,28 @@ export function appendMessage(input: AppendMessageInput): ChatMessage {
   }
 }
 
+/** R2-3 (paused-assistant persist) — find the row id of an assistant message by the UIMessage id
+ *  stored in its canonical `ui_message_json` (`$.id`). Used by the gateway lifecycle to make the
+ *  resume turn's persistTurn REPLACE the eagerly-persisted paused assistant row (same merged
+ *  UIMessage id) instead of appending a duplicate. Session-scoped; newest row wins. JSON1
+ *  `json_extract` on a per-session scan — session message counts are small, no index needed.
+ *  Survives app restarts (no in-memory state), unlike a Set-based dedup. */
+export function findAssistantMessageRowIdByUiId(
+  sessionId: number,
+  uiMessageId: string
+): number | null {
+  const row = getChatDb()
+    .prepare(
+      `SELECT id FROM ai_chat_messages
+         WHERE session_id = ? AND role = 'assistant'
+           AND ui_message_json IS NOT NULL
+           AND json_extract(ui_message_json, '$.id') = ?
+         ORDER BY id DESC LIMIT 1`
+    )
+    .get(sessionId, uiMessageId) as { id: number } | undefined
+  return row?.id ?? null
+}
+
 export function updateMessage(messageId: number, patch: UpdateMessagePatch): void {
   const db = getChatDb()
   const now = Date.now()

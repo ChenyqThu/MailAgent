@@ -168,4 +168,16 @@ export interface AiGatewayConfig {
    *  Best-effort: a failure is logged and the stream continues — persistTurn's onFinish falls back to
    *  writing the user message. Omitted → no eager persist, byte-identical to pre-#12 behaviour. */
   onTurnStart?: (sessionId: number | null, userMessage: MailAgentUIMessage | null) => void
+  /** R2-3 (dogfood) — called when a turn PAUSES at an approval gate, with a DISPLAY-SAFE redacted
+   *  copy of the paused assistant message (approval-requested tool parts stripped; see
+   *  redactApprovalRequestedParts). The Electron wrapper upserts it into ai_chat.db keyed by the
+   *  UIMessage id so switching to the session shows what the model already said; the resume turn's
+   *  persistTurn REPLACES the row (the resume's merged responseMessage keeps the same id) instead of
+   *  appending a duplicate. Best-effort + fire-and-forget (never awaited). Omitted → paused turns
+   *  store nothing, byte-identical to the pre-R2-3 behaviour. */
+  persistPausedAssistant?: (
+    sessionId: number | null,
+    redactedMessage: MailAgentUIMessage,
+    modelId: string
+  ) => void
 }
