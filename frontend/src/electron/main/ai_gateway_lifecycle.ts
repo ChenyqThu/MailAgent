@@ -48,6 +48,20 @@ import { masterNewSessionDefaultOn } from './ai_gateway_flags'
 
 let _handle: AiGatewayHandle | null = null
 
+// #12 — keys（`${sessionId}:${userMessageId}`）of user messages already written eagerly at turn
+// start (onTurnStart). persistTurn checks this to avoid double-writing the SAME user message
+// (once eager, once in onFinish). Keyed by session+message id — NOT bare sessionId — so an
+// abandoned HITL turn (approval never resolved → persistTurn never ran → key never cleared)
+// cannot swallow the NEXT, different user message in the same session. Module-level so it
+// survives across request handlers within one gateway lifecycle; entries are removed by
+// persistTurn on the matched turn and the set resets on app restart.
+const eagerWrittenUserMessages = new Set<string>()
+
+/** #12 — dedup key for one eagerly-written user message. */
+function eagerUserMessageKey(sessionId: number, userMessageId: string): string {
+  return `${sessionId}:${userMessageId}`
+}
+
 /** Mirror electron readEnvBool: only '1'/'true' (case-insensitive) → true; unset →
  *  the supplied default; any other non-empty value → false. */
 function envBool(key: string, def: boolean): boolean {
@@ -64,10 +78,25 @@ function envBool(key: string, def: boolean): boolean {
  * canonical JSON + the extracted legacy text; usage/model land in the row columns.
  * Prior-turn messages are NOT re-appended — the gateway only hands us the latest
  * user message, so multi-turn sessions append incrementally without duplication.
+ *
+ * #12 — if onTurnStart already wrote THIS turn's user message eagerly (tracked via
+ * eagerWrittenUserMessages, keyed by session+message id), skip the user message here
+ * to avoid duplicate rows. The key is removed after the check so the set stays bounded.
  */
 function persistTurn(turn: PersistTurnInput): void {
   if (turn.sessionId == null) return
+  // #12 — skip the user message iff THIS message (matched by id) was written eagerly at turn
+  // start. The HITL resume turn re-sends the same user message (same id) → matched, not
+  // duplicated；a NEW message after an abandoned approval turn has a fresh id → still persisted.
+  let eagerWritten = false
   if (turn.userMessage) {
+    const key = eagerUserMessageKey(turn.sessionId, turn.userMessage.id)
+    eagerWritten = eagerWrittenUserMessages.has(key)
+    if (eagerWritten) {
+      eagerWrittenUserMessages.delete(key)
+    }
+  }
+  if (!eagerWritten && turn.userMessage) {
     appendMessage({
       sessionId: turn.sessionId,
       role: 'user',
@@ -253,6 +282,34 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     baseUrl: getLlmBaseUrl(),
     apiKey,
     model: getLlmModel(),
+    // #12 (dogfood session-history) — eager-persist: write the user message at turn START so the
+    // session appears in history even when the first turn is HITL-paused and onFinish skips
+    // persistTurn. eagerWrittenUserMessages（module-level Set，keyed `${sessionId}:${messageId}`）
+    // coordinates with persistTurn to prevent double-writing when both paths fire.
+    onTurnStart: (sessionId, userMessage) => {
+      if (sessionId == null || !userMessage) return
+      const key = eagerUserMessageKey(sessionId, userMessage.id)
+      // Skip if THIS message was already eagerly written. Happens on the HITL resume turn:
+      // rawMessages still ends with the original user message (same id), so lastUserMessage()
+      // returns it again — writing it would duplicate. The key is still present because the
+      // paused turn skipped persistTurn (never cleared it). A NEW message after an abandoned
+      // approval has a different id → not skipped (message-id keying, not bare sessionId).
+      if (eagerWrittenUserMessages.has(key)) return
+      try {
+        appendMessage({
+          sessionId,
+          role: 'user',
+          content: extractTextFromUIMessage(userMessage),
+          status: 'complete',
+          uiMessageJson: JSON.stringify(userMessage)
+        })
+        eagerWrittenUserMessages.add(key)
+      } catch (err) {
+        // Best-effort: if eager write fails, persistTurn's onFinish will write the user
+        // message as a fallback — NOT adding to set so persistTurn doesn't skip it.
+        console.error('[ai-gateway] onTurnStart eager persist failed (persistTurn will retry)', err)
+      }
+    },
     persistTurn,
     // M1c — auto-capture 触发（MAILAGENT_MEM0_CAPTURE，默认开 —— 2026-07-02 cutover，env 显式
     // false 为应急回退）。开时注入 fire-and-forget 回调：

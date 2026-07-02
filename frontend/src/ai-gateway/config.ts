@@ -161,4 +161,11 @@ export interface AiGatewayConfig {
    *  ai_chat.db (most-recent user message + most-recent assistant message content). Returns null when a
    *  turn isn't available yet. Omitted → POST /api/ai/followups returns 501 (follow-ups not wired). */
   getFollowupContext?: (sessionId: number) => { userText: string; assistantText: string } | null
+  /** #12 (dogfood session-history) — eager-persist hook called at the START of a chat turn, before
+   *  streaming begins. The Electron wrapper writes the user message immediately so the session appears
+   *  in the history list even when the first turn is HITL-paused and onFinish's persistTurn is
+   *  skipped. sessionId null → no-op; userMessage null when the turn carries no user message (rare).
+   *  Best-effort: a failure is logged and the stream continues — persistTurn's onFinish falls back to
+   *  writing the user message. Omitted → no eager persist, byte-identical to pre-#12 behaviour. */
+  onTurnStart?: (sessionId: number | null, userMessage: MailAgentUIMessage | null) => void
 }

@@ -25,6 +25,7 @@ import type { MailAgentUIMessageMetadata } from '@shared/assistant/uiMessage'
 import {
   generateFollowups,
   generateSessionTitle,
+  lastUserMessage,
   makeIdGenerator,
   makePersistOnFinish,
   prepareChatRun
@@ -107,6 +108,17 @@ async function handleChat(
     return
   }
   const run = prepared.run
+  // #12 (dogfood session-history) — eager-persist: write the user message at turn START so the
+  // session row appears in history even when the first turn is HITL-paused and onFinish skips
+  // persistTurn. Best-effort: a failure is logged and the stream continues (persistTurn's onFinish
+  // falls back to writing the user message so no data is lost). The Electron lifecycle's
+  // persistTurn tracks eagerly-written user messages (Set keyed by session + message id) to
+  // avoid double-writing.
+  try {
+    cfg.onTurnStart?.(run.sessionId, lastUserMessage(run.rawMessages))
+  } catch (err) {
+    console.error('[ai-gateway] onTurnStart failed (stream will continue)', err)
+  }
   // dogfood (codex root-cause) — client-visible「答复时间」timing. WHY server-side messageMetadata and
   // not react-ai-sdk's runtime messageTiming: @assistant-ui/core's converter caches conversions by the
   // AI SDK message OBJECT in a WeakMap; the runtime injects timing as a metadata-only update AFTER the
