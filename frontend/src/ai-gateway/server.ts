@@ -103,7 +103,10 @@ async function handleChat(
   const controller = new AbortController()
   req.on('close', () => controller.abort())
 
-  const prepared = await prepareChatRun(body, cfg, controller.signal)
+  // S2 W0 (ADR-001 D1) — /api/ai/chat is an owner-driven surface (local renderer direct on
+  // loopback, or remote web through serve-api's owner-authenticated proxy): assert 'manual_chat'
+  // here, in trusted code. The body is never consulted for the mode.
+  const prepared = await prepareChatRun(body, cfg, controller.signal, 'manual_chat')
   if (!prepared.ok) {
     writeJson(res, prepared.status, prepared.body)
     return

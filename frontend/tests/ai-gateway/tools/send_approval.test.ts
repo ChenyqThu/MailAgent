@@ -63,7 +63,8 @@ function harness(opts?: { now?: () => number; ttlMs?: number }): Harness {
     })
   })
   const tool = createSendTools(domain, collector, guard, {
-    signingSecret: SECRET
+    signingSecret: SECRET,
+    contextMode: 'manual_chat'
   }).email_prepare_send
   return { tool, collector, guard, sentBodies }
 }

@@ -24,6 +24,10 @@ import {
 import { anthropicBaseUrl, type AiGatewayConfig, type PersistTurnInput } from './config'
 import { createAnthropic } from '@ai-sdk/anthropic'
 import type { GatewayApprovalMode, GatewayToolAuditEntry } from './tools/types'
+// S2 W0 (ADR-001 D1) — the run's context mode is a TRUSTED prepareChatRun parameter asserted by
+// each entrypoint in its own code. It is NEVER read from the request body (a client cannot claim
+// manual_chat); absent/unknown fail-closes to 'untrusted_trigger'.
+import { normalizeContextMode, type AgentContextMode } from './tools/policy'
 import { type MailAgentUIMessage } from '@shared/assistant/uiMessage'
 // chat-panel P4 composer-parity C1-① — per-turn extended-thinking → @ai-sdk/anthropic providerOptions.
 import { thinkingProviderOptions } from './thinking'
@@ -106,6 +110,11 @@ export interface PreparedChatRun {
    *  PreparedChatRun stay valid — prepareChatRun always sets it, and maybeStashAndAnnounceApproval
    *  guards on it. */
   originalBody?: Record<string, unknown>
+  /** S2 W0 (ADR-001 D1) — the normalized trusted context mode this run was prepared under.
+   *  prepareChatRun always sets it; optional only so hand-built test PreparedChatRuns stay valid
+   *  (absent fail-closes to 'untrusted_trigger' wherever it is consumed — the stash freeze in
+   *  maybeStashAndAnnounceApproval). */
+  contextMode?: AgentContextMode
 }
 
 export type PrepareChatOutcome =
@@ -117,11 +126,19 @@ export type PrepareChatOutcome =
  * model/system/sessionId parse, convertToModelMessages, tool registry + approval wiring). Returns a
  * typed error outcome (the caller writes it as JSON) or the prepared run. Mirrors the Phase 02–04b
  * handleChat preamble exactly, so /api/ai/chat behaviour is unchanged.
+ *
+ * S2 W0 (ADR-001 D1) — `trustedContextMode` is an independent TRUSTED parameter each entrypoint
+ * asserts in its own code (/api/ai/chat + the AG-UI mirror pass 'manual_chat'; the island resume
+ * passes the mode frozen in the stash; future S4 headless entrypoints pass their trigger's mode).
+ * It is deliberately NOT read from `body` — a request carrying `contextMode:'manual_chat'` is
+ * ignored, so a client can never escalate. Absent/unknown fail-closes to 'untrusted_trigger'
+ * (strictest): an entrypoint that forgets to pass it degrades toward safety, never privilege.
  */
 export async function prepareChatRun(
   body: Record<string, unknown>,
   cfg: AiGatewayConfig,
-  abortSignal: AbortSignal
+  abortSignal: AbortSignal,
+  trustedContextMode?: AgentContextMode
 ): Promise<PrepareChatOutcome> {
   if (!cfg.apiKey || cfg.apiKey.length === 0) {
     return {
@@ -214,8 +231,11 @@ export async function prepareChatRun(
   // 'always', so a malformed body never silently relaxes approval (byte-identical to pre-toggle).
   const approvalMode: GatewayApprovalMode =
     body.approvalMode === 'auto-reversible' ? 'auto-reversible' : 'always'
+  // S2 W0 — normalize the TRUSTED mode (never from body) once; it feeds buildTools (registration
+  // filter + auto-approve predicate) and is frozen into the run for the island stash.
+  const contextMode = normalizeContextMode(trustedContextMode)
   const auditEntries: GatewayToolAuditEntry[] = []
-  const tools = cfg.buildTools?.(auditEntries, approvalMode)
+  const tools = cfg.buildTools?.(auditEntries, approvalMode, contextMode)
   const hasTools = tools != null && Object.keys(tools).length > 0
 
   const result = streamText({
@@ -245,7 +265,8 @@ export async function prepareChatRun(
       modelId,
       auditEntries,
       toolNames: hasTools ? Object.keys(tools as ToolSet) : [],
-      originalBody: body
+      originalBody: body,
+      contextMode
     }
   }
 }
@@ -398,7 +419,11 @@ function maybeStashAndAnnounceApproval(
       toolName: info.toolName,
       sessionId: run.sessionId,
       body: run.originalBody,
-      responseMessage
+      responseMessage,
+      // S2 W0 (ADR-001 D1) — freeze the pause-time trusted mode into the stash: the island resume
+      // re-runs under EXACTLY this mode (approvalResume passes it back to prepareChatRun), so a
+      // resume can never escalate. Hand-built runs without a mode fail-close to untrusted.
+      contextMode: normalizeContextMode(run.contextMode)
     })
     cfg.announceApprovalToIsland?.({
       sessionId: run.sessionId,

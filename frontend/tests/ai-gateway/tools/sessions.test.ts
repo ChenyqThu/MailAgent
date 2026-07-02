@@ -56,8 +56,12 @@ function sessionDomain(overrides?: {
 
 describe('buildGatewayTools — MAILAGENT_OPENNESS_SESSION_TOOLS gate', () => {
   test('flag off (default) → no session tools; ToolSet keys byte-identical to the un-flagged set', () => {
-    const base = buildGatewayTools({ domain: sessionDomain() })
-    const flagOff = buildGatewayTools({ domain: sessionDomain(), sessionToolsEnabled: false })
+    const base = buildGatewayTools({ domain: sessionDomain(), contextMode: 'manual_chat' })
+    const flagOff = buildGatewayTools({
+      domain: sessionDomain(),
+      sessionToolsEnabled: false,
+      contextMode: 'manual_chat'
+    })
     expect(Object.keys(flagOff)).toEqual(Object.keys(base))
     for (const name of GATEWAY_SESSION_TOOL_NAMES) {
       expect(base[name]).toBeUndefined()
@@ -66,14 +70,18 @@ describe('buildGatewayTools — MAILAGENT_OPENNESS_SESSION_TOOLS gate', () => {
   })
 
   test('flag on → the three session tools register as silent reads (no needsApproval)', () => {
-    const tools = buildGatewayTools({ domain: sessionDomain(), sessionToolsEnabled: true })
+    const tools = buildGatewayTools({
+      domain: sessionDomain(),
+      sessionToolsEnabled: true,
+      contextMode: 'manual_chat'
+    })
     for (const name of GATEWAY_SESSION_TOOL_NAMES) {
       expect(tools[name]).toBeDefined()
       // silent tier — read tools never carry needsApproval (types.ts auditedReadTool).
       expect((tools[name] as { needsApproval?: unknown }).needsApproval).toBeUndefined()
     }
     // Adding the flag only APPENDS the three names — every base tool is still present.
-    const base = buildGatewayTools({ domain: sessionDomain() })
+    const base = buildGatewayTools({ domain: sessionDomain(), contextMode: 'manual_chat' })
     for (const name of Object.keys(base)) expect(tools[name]).toBeDefined()
   })
 })

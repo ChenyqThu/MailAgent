@@ -125,7 +125,10 @@ export async function handleAguiChat(
   const controller = new AbortController()
   req.on('close', () => controller.abort())
 
-  const prepared = await prepareChatRun(body, cfg, controller.signal)
+  // S2 W0 (ADR-001 D1) — the AG-UI mirror is the same owner-driven surface as /api/ai/chat:
+  // assert 'manual_chat' in trusted code, AFTER applyInterruptResponse (codex P1-1 — the mode is
+  // a prepareChatRun parameter, so no body preprocessing can ever influence it).
+  const prepared = await prepareChatRun(body, cfg, controller.signal, 'manual_chat')
   if (!prepared.ok) {
     writeJson(res, prepared.status, prepared.body)
     return

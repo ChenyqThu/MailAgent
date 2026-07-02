@@ -21,6 +21,7 @@ import type { ApprovalGuard } from '../security/approval'
 import { hashOutbound, signSendApprovalToken } from '../security/sendToken'
 import type { OutboundPayload } from '../../shared/assistant/tools/security/hashOutboundPayload'
 import { auditedSendTool, type GatewayToolAuditCollector } from './types'
+import type { AgentContextMode } from './policy'
 import { emailPrepareSendSchema, type EmailPrepareSendInput } from './schemas'
 
 /** Name of the high-risk send tool the gateway exposes when MAILAGENT_AI_SDK_SEND_TOOL is on. */
@@ -62,7 +63,7 @@ export function createSendTools(
   domain: MailAgentDomainClient,
   collector: GatewayToolAuditCollector,
   guard: ApprovalGuard,
-  opts: { signingSecret: string; a2uiEnabled?: boolean }
+  opts: { signingSecret: string; a2uiEnabled?: boolean; contextMode?: AgentContextMode }
 ): Record<string, Tool> {
   const email_prepare_send = auditedSendTool<EmailPrepareSendInput>(
     {
@@ -73,6 +74,8 @@ export function createSendTools(
       // pinned (identity) so the side-channel can never retarget the send.
       editableFields: ['to', 'cc', 'bcc', 'subject', 'body_markdown'],
       a2uiEnabled: opts.a2uiEnabled,
+      // S2 W0 — class outbound: outside manual_chat the send neither registers nor executes.
+      contextMode: opts.contextMode,
       run: async (input, { signal, record }) => {
         const payload = outboundFromInput(input)
         if (payload.to.length === 0) {

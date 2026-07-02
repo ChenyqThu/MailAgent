@@ -35,7 +35,8 @@ describe('self-mount tools — flag gating (buildGatewayTools)', () => {
   test('skillGatingEnabled off → no self-mount tools (byte-level flag-off = cutover read set)', () => {
     const tools = buildGatewayTools({
       domain: mockDomain(() => okEnvelope({})),
-      approvalGuard: new ApprovalGuard()
+      approvalGuard: new ApprovalGuard(),
+      contextMode: 'manual_chat'
     })
     for (const n of GATEWAY_SELF_MOUNT_TOOL_NAMES) expect(Object.keys(tools)).not.toContain(n)
     expect(Object.keys(tools).sort()).toEqual([...GATEWAY_READ_TOOL_NAMES].sort())
@@ -44,7 +45,8 @@ describe('self-mount tools — flag gating (buildGatewayTools)', () => {
   test('skillGatingEnabled on but NO guard → no self-mount tools (writes need the guard)', () => {
     const tools = buildGatewayTools({
       domain: mockDomain(() => okEnvelope({})),
-      skillGatingEnabled: true
+      skillGatingEnabled: true,
+      contextMode: 'manual_chat'
     })
     for (const n of GATEWAY_SELF_MOUNT_TOOL_NAMES) expect(Object.keys(tools)).not.toContain(n)
   })
@@ -53,7 +55,8 @@ describe('self-mount tools — flag gating (buildGatewayTools)', () => {
     const tools = buildGatewayTools({
       domain: mockDomain(() => okEnvelope({})),
       skillGatingEnabled: true,
-      approvalGuard: new ApprovalGuard()
+      approvalGuard: new ApprovalGuard(),
+      contextMode: 'manual_chat'
     })
     for (const n of GATEWAY_SELF_MOUNT_TOOL_NAMES) expect(Object.keys(tools)).toContain(n)
   })
@@ -64,7 +67,8 @@ describe('update_system_md (M4b) — edit-tier, always asks, agent_proposed', ()
     const tools = createSelfMountTools(
       mockDomain(() => okEnvelope({})),
       [],
-      new ApprovalGuard()
+      new ApprovalGuard(),
+      { contextMode: 'manual_chat' }
     )
     expect(tools.update_system_md.needsApproval).toBeTruthy()
   })
@@ -75,7 +79,8 @@ describe('update_system_md (M4b) — edit-tier, always asks, agent_proposed', ()
       [],
       new ApprovalGuard(),
       {
-        approvalMode: 'auto-reversible'
+        approvalMode: 'auto-reversible',
+        contextMode: 'manual_chat'
       }
     )
     const needsApproval = tools.update_system_md.needsApproval as (
@@ -99,7 +104,9 @@ describe('update_system_md (M4b) — edit-tier, always asks, agent_proposed', ()
         editable: true
       })
     })
-    const tools = createSelfMountTools(domain, [], new ApprovalGuard())
+    const tools = createSelfMountTools(domain, [], new ApprovalGuard(), {
+      contextMode: 'manual_chat'
+    })
     const out = await approveAndRun(tools.update_system_md, {
       doc_name: 'user',
       content: 'new pref'
@@ -116,7 +123,9 @@ describe('update_system_md (M4b) — edit-tier, always asks, agent_proposed', ()
 
   test('server-side rules rejection (E_INVALID_ARG) surfaces as a tool error', async () => {
     const domain = mockDomain(() => errEnvelope('E_INVALID_ARG', 'rules content rejected', 400))
-    const tools = createSelfMountTools(domain, [], new ApprovalGuard())
+    const tools = createSelfMountTools(domain, [], new ApprovalGuard(), {
+      contextMode: 'manual_chat'
+    })
     await expect(
       approveAndRun(tools.update_system_md, {
         doc_name: 'rules',
@@ -153,7 +162,9 @@ describe('set_skill_enabled (M4c) — preview-tier write', () => {
         ]
       })
     })
-    const tools = createSelfMountTools(domain, [], new ApprovalGuard())
+    const tools = createSelfMountTools(domain, [], new ApprovalGuard(), {
+      contextMode: 'manual_chat'
+    })
     expect(tools.set_skill_enabled.needsApproval).toBeTruthy()
     const out = await approveAndRun(tools.set_skill_enabled, {
       skill_name: 'report',
@@ -191,7 +202,9 @@ describe('set_skill_enabled (M4c) — preview-tier write', () => {
         ]
       })
     })
-    const tools = createSelfMountTools(domain, [], new ApprovalGuard())
+    const tools = createSelfMountTools(domain, [], new ApprovalGuard(), {
+      contextMode: 'manual_chat'
+    })
     const out = (await approveAndRun(tools.set_skill_enabled, {
       skill_name: 'kos',
       enabled: true
@@ -242,7 +255,9 @@ describe('discover_skills (M4c) — silent read', () => {
         ]
       })
     )
-    const tools = createSelfMountTools(domain, [], new ApprovalGuard())
+    const tools = createSelfMountTools(domain, [], new ApprovalGuard(), {
+      contextMode: 'manual_chat'
+    })
     expect((tools.discover_skills as { needsApproval?: unknown }).needsApproval).toBeUndefined()
     const out = (await runTool(tools.discover_skills, {})) as {
       count: number

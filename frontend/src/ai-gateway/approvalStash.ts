@@ -26,6 +26,7 @@
 import { randomUUID } from 'node:crypto'
 
 import type { MailAgentUIMessage } from '@shared/assistant/uiMessage'
+import type { AgentContextMode } from './tools/policy'
 
 /** 30 min — long enough for a human to notice the island card and come back; matches the island ack
  *  pending TTL (island_agent.DEFAULT_AGENT_ACK_TTL_SEC) AND the extended ApprovalGuard TTL the
@@ -51,6 +52,12 @@ export interface StashInput {
   /** The paused assistant UIMessage carrying the `tool-approval-request` part. Appended to
    *  body.messages to form the resume history. */
   responseMessage: MailAgentUIMessage
+  /** S2 W0 (ADR-001 D1) — the trusted context mode FROZEN at pause time. The mode never rides the
+   *  body (a client could forge it there); the resume reads it back from here and passes it to
+   *  prepareChatRun as the trusted parameter, so an island resume runs under exactly the mode the
+   *  original entrypoint asserted — it can never escalate. REQUIRED: the stash is process-memory
+   *  (gateway restart drops it), so there is no cross-version row to stay compatible with. */
+  contextMode: AgentContextMode
 }
 
 export interface StashedApprovalRun extends StashInput {

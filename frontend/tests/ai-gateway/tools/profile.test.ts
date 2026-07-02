@@ -111,11 +111,16 @@ async function approveAndRun(
 
 describe('buildGatewayTools — MAILAGENT_OPENNESS_CONFIG_TOOLS gate', () => {
   test('flag off (default) → no profile tools; ToolSet keys byte-identical to the un-flagged set', () => {
-    const base = buildGatewayTools({ domain: profileDomain(), approvalGuard: new ApprovalGuard() })
+    const base = buildGatewayTools({
+      domain: profileDomain(),
+      approvalGuard: new ApprovalGuard(),
+      contextMode: 'manual_chat'
+    })
     const flagOff = buildGatewayTools({
       domain: profileDomain(),
       approvalGuard: new ApprovalGuard(),
-      configToolsEnabled: false
+      configToolsEnabled: false,
+      contextMode: 'manual_chat'
     })
     expect(Object.keys(flagOff)).toEqual(Object.keys(base))
     for (const name of GATEWAY_PROFILE_TOOL_NAMES) {
@@ -125,16 +130,25 @@ describe('buildGatewayTools — MAILAGENT_OPENNESS_CONFIG_TOOLS gate', () => {
   })
 
   test('flag on but NO guard → no profile tools (the writes need the guard; all-or-nothing)', () => {
-    const tools = buildGatewayTools({ domain: profileDomain(), configToolsEnabled: true })
+    const tools = buildGatewayTools({
+      domain: profileDomain(),
+      configToolsEnabled: true,
+      contextMode: 'manual_chat'
+    })
     for (const name of GATEWAY_PROFILE_TOOL_NAMES) expect(tools[name]).toBeUndefined()
   })
 
   test('flag on + guard → the four profile tools are appended; every base tool still present', () => {
-    const base = buildGatewayTools({ domain: profileDomain(), approvalGuard: new ApprovalGuard() })
+    const base = buildGatewayTools({
+      domain: profileDomain(),
+      approvalGuard: new ApprovalGuard(),
+      contextMode: 'manual_chat'
+    })
     const tools = buildGatewayTools({
       domain: profileDomain(),
       approvalGuard: new ApprovalGuard(),
-      configToolsEnabled: true
+      configToolsEnabled: true,
+      contextMode: 'manual_chat'
     })
     for (const name of GATEWAY_PROFILE_TOOL_NAMES) expect(tools[name]).toBeDefined()
     for (const name of Object.keys(base)) expect(tools[name]).toBeDefined()
@@ -200,7 +214,8 @@ describe('agent_profile_history (silent)', () => {
     const tools = createProfileTools(
       profileDomain({ onCall: (u) => urls.push(u) }),
       [],
-      new ApprovalGuard()
+      new ApprovalGuard(),
+      { contextMode: 'manual_chat' }
     )
     expect(
       (tools.agent_profile_history as { needsApproval?: unknown }).needsApproval
@@ -224,7 +239,8 @@ describe('agent_profile_history (silent)', () => {
 describe('agent_profile_restore (edit-tier write)', () => {
   test('declares needsApproval; still asks in auto-reversible mode (edit-tier never auto-approves)', async () => {
     const tools = createProfileTools(profileDomain(), [], new ApprovalGuard(), {
-      approvalMode: 'auto-reversible'
+      approvalMode: 'auto-reversible',
+      contextMode: 'manual_chat'
     })
     const needsApproval = tools.agent_profile_restore.needsApproval as (
       i: unknown,
@@ -246,7 +262,8 @@ describe('agent_profile_restore (edit-tier write)', () => {
         }
       }),
       [],
-      new ApprovalGuard()
+      new ApprovalGuard(),
+      { contextMode: 'manual_chat' }
     )
     const out = await approveAndRun(tools.agent_profile_restore, {
       doc_name: 'soul',
@@ -275,7 +292,8 @@ describe('agent_profile_restore (edit-tier write)', () => {
         }
       }),
       collector,
-      new ApprovalGuard()
+      new ApprovalGuard(),
+      { contextMode: 'manual_chat' }
     )
     // Approved for rules@hash-r1; the exec input arrives retargeted at soul@hash-evil.
     await expect(
@@ -301,7 +319,8 @@ describe('agent_profile_restore (edit-tier write)', () => {
         }
       }),
       [],
-      new ApprovalGuard()
+      new ApprovalGuard(),
+      { contextMode: 'manual_chat' }
     )
     await expect(
       approveAndRun(tools.agent_profile_restore, { doc_name: 'rules', target_hash: 'hash-bad' })
@@ -312,7 +331,8 @@ describe('agent_profile_restore (edit-tier write)', () => {
 describe('agent_memory_update (edit-tier write)', () => {
   test('declares needsApproval; still asks in auto-reversible mode', async () => {
     const tools = createProfileTools(profileDomain(), [], new ApprovalGuard(), {
-      approvalMode: 'auto-reversible'
+      approvalMode: 'auto-reversible',
+      contextMode: 'manual_chat'
     })
     const needsApproval = tools.agent_memory_update.needsApproval as (
       i: unknown,
@@ -333,7 +353,8 @@ describe('agent_memory_update (edit-tier write)', () => {
         }
       }),
       [],
-      new ApprovalGuard()
+      new ApprovalGuard(),
+      { contextMode: 'manual_chat' }
     )
     const out = await approveAndRun(tools.agent_memory_update, { content: '- keep this fact' })
     expect(captured!.url).toContain('/agent/profile/docs/memory')
@@ -359,7 +380,8 @@ describe('agent_memory_update (edit-tier write)', () => {
         }
       }),
       [],
-      new ApprovalGuard()
+      new ApprovalGuard(),
+      { contextMode: 'manual_chat' }
     )
     await expect(
       approveAndRun(tools.agent_memory_update, { content: 'x'.repeat(10) })

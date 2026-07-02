@@ -18,7 +18,9 @@ function makeInput(toolCallId = 'tc1') {
     toolName: 'email_draft_reply',
     sessionId: 42,
     body: { messages: [{ id: 'u1', role: 'user', parts: [] }], model: 'claude-sonnet-4-6' },
-    responseMessage: RESP
+    responseMessage: RESP,
+    // S2 W0 — the pause-time trusted mode is frozen into the stash (required field).
+    contextMode: 'manual_chat' as const
   }
 }
 

@@ -100,9 +100,11 @@ function islandCfg(opts: {
     apiKey: 'sk-test',
     model: 'claude-sonnet-4-6',
     createModel: () => mockTextModel(['草稿已创建。']),
-    buildTools: (collector) =>
+    // S2 W0 — thread the trusted contextMode like the production lifecycle does (the resume
+    // passes the stash-frozen mode via prepareChatRun → buildTools's 3rd param).
+    buildTools: (collector, _approvalMode, contextMode) =>
       buildGatewayTools(
-        { domain, writeToolsEnabled: true, approvalGuard: guard, oneShotWrites: true },
+        { domain, writeToolsEnabled: true, approvalGuard: guard, oneShotWrites: true, contextMode },
         collector
       ),
     islandAgentEnabled: true,
@@ -130,7 +132,9 @@ function seedPausedApproval(guard: ApprovalGuard, stash: ApprovalRunStash): stri
     toolName: 'email_draft_reply',
     sessionId: 1,
     body: { messages: [USER], model: 'claude-sonnet-4-6', sessionId: 1 },
-    responseMessage: pausedResponse()
+    responseMessage: pausedResponse(),
+    // S2 W0 — the pause happened in a manual session; the resume must re-run under it.
+    contextMode: 'manual_chat'
   })
 }
 
@@ -318,9 +322,15 @@ describe('/api/ai/approval/decide — chained two-hop approvals (repause)', () =
       apiKey: 'sk-test',
       model: 'claude-sonnet-4-6',
       createModel: () => model,
-      buildTools: (collector) =>
+      buildTools: (collector, _approvalMode, contextMode) =>
         buildGatewayTools(
-          { domain: spyDomain(domainCalls), writeToolsEnabled: true, approvalGuard: guard, oneShotWrites: true },
+          {
+            domain: spyDomain(domainCalls),
+            writeToolsEnabled: true,
+            approvalGuard: guard,
+            oneShotWrites: true,
+            contextMode
+          },
           collector
         ),
       islandAgentEnabled: true,

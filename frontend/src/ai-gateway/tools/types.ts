@@ -23,6 +23,18 @@ import { tool, type FlexibleSchema, type Tool } from 'ai'
 
 import { DomainError } from '../python/domainClient'
 import { type ApprovalGuard, type ApprovalRecord, type ApprovalRisk } from '../security/approval'
+// S2 W0 (ADR-001) — context-mode × tool-class policy: the auto-approve predicate consults the
+// tool's policy CLASS (from the policy.ts single-source map) + the run's server-asserted context
+// MODE, and a capability_change/exec/outbound tool hard-rejects at execute time outside a manual
+// session (runtime double-insurance behind the registration-time filter in tools/index.ts).
+import {
+  classOfTool,
+  isToolClassAllowedInMode,
+  mayAutoApprove,
+  normalizeContextMode,
+  type AgentContextMode,
+  type GatewayToolClass
+} from './policy'
 // RELATIVE import (not the @shared alias) so the pure-Node poc harness (tsx, which doesn't
 // resolve tsconfig paths at runtime) can load the gateway tools; vite/vitest/tsc resolve it
 // identically. a2ui.ts is pure TS (types + zod, no react) — safe for the gateway core.
@@ -213,8 +225,21 @@ export function auditedWriteTool<I>(
     /** Auto-approval mode (body.approvalMode, default 'always'). When 'auto-reversible' a
      *  preview-tier (reversible) write skips the approval card and executes in the SAME call;
      *  edit-tier still asks. The approval record is registered regardless (execute's verify +
-     *  the audit need it), so the only change is whether needsApproval returns true. */
+     *  the audit need it), so the only change is whether needsApproval returns true.
+     *  S2 W0 (ADR-001 D3): auto-reversible additionally requires class==='domain_write' AND
+     *  contextMode==='manual_chat' — a preview-tier capability change (set_skill_enabled) always
+     *  asks now. */
     approvalMode?: GatewayApprovalMode
+    /** S2 W0 (ADR-001 D2) — the tool's policy class. Omitted → resolved from the policy.ts
+     *  single-source map by name; a name missing there fail-closes to 'exec' (strictest:
+     *  manual-only + never auto-approved). Explicit only in tests. */
+    toolClass?: GatewayToolClass
+    /** S2 W0 (ADR-001 D1) — the run's server-asserted context mode, threaded from
+     *  prepareChatRun's trustedContextMode via buildGatewayTools. Absent/unknown fail-closes to
+     *  'untrusted_trigger': the write never auto-approves, and a capability_change/exec/outbound
+     *  tool hard-rejects at execute (runtime double-insurance — registration-time filtering
+     *  should have kept it out of the ToolSet already). */
+    contextMode?: AgentContextMode
     /** Part B (harness 上岛) — one-shot execution claim. When true, execute calls guard.consume()
      *  right after verify so an approval executes AT MOST ONCE across BOTH resume paths (island
      *  /api/ai/approval/decide and renderer /api/ai/chat): whichever lands first consumes, the second
@@ -238,26 +263,64 @@ export function auditedWriteTool<I>(
     return payload ? safeJson(payload) : undefined
   }
 
+  // S2 W0 (ADR-001 D2/D3) — resolve the policy class (single source: policy.ts map; explicit only
+  // in tests) + the run's context mode (fail-closed: absent/unknown → 'untrusted_trigger'). A
+  // capability_change/exec/outbound tool outside manual_chat is modeDenied: registration-time
+  // filtering (applyContextModePolicy) already keeps it out of the ToolSet, and this is the
+  // runtime double-insurance for an entrypoint that missed the mode.
+  const toolClass = opts.toolClass ?? classOfTool(opts.name)
+  const contextMode = normalizeContextMode(opts.contextMode)
+  const modeDenied = !isToolClassAllowedInMode(toolClass, contextMode)
+
   return makeTool({
     description: opts.description,
     inputSchema: opts.inputSchema,
     // First run: register the approval record (keep-first) ALWAYS — execute's guard.verify +
     // the audit need it whether or not a card is shown. Then decide if a card is required:
-    //   - 'auto-reversible' + preview-tier (reversible) → return false → ai@6 runs execute in the
-    //     SAME call (no card). guard.verify still passes (record was registered; preview hash
-    //     matches the unchanged input) and the audit records approval_status='approved'.
+    //   - 'auto-reversible' + preview-tier (reversible) + class domain_write + mode manual_chat →
+    //     return false → ai@6 runs execute in the SAME call (no card). guard.verify still passes
+    //     (record was registered; preview hash matches the unchanged input) and the audit records
+    //     approval_status='approved'. Tier keeps the card UX; class+mode carry the policy
+    //     (ADR-001 D3) — a preview-tier capability change (set_skill_enabled) always asks now.
     //   - everything else (default 'always', or any edit-tier write) → return true → the two-call
     //     HITL flow (approval card) as before. The model never sees a non-reversible write run
     //     without the user approving it.
     // (input/execute params are left unannotated so tool() infers INPUT=I from inputSchema alone —
     // an explicit `: I` on these contravariant param sites breaks tool()'s overload inference.)
     needsApproval: (input, { toolCallId }) => {
+      // modeDenied → no approval card at all: this tool can never execute in this context mode,
+      // so pausing the run on a card would be misleading. Return false and let execute
+      // hard-reject (tool-error the model can read).
+      if (modeDenied) return false
       guard.register(toolCallId, opts.name, opts.risk, input, opts.editableFields)
-      if (opts.approvalMode === 'auto-reversible' && opts.risk === 'preview') return false
+      if (
+        opts.approvalMode === 'auto-reversible' &&
+        opts.risk === 'preview' &&
+        mayAutoApprove(toolClass, contextMode)
+      ) {
+        return false
+      }
       return true
     },
     execute: async (input, { toolCallId, abortSignal }) => {
       const start = Date.now()
+      // S2 W0 runtime double-insurance (ADR-001 D3): a capability_change/exec/outbound tool must
+      // never run outside a manual session — hard-reject before any guard/domain interaction.
+      if (modeDenied) {
+        const code = 'E_CONTEXT_MODE_DENIED'
+        const message = `${opts.name} (${toolClass}) is not available in a ${contextMode} run`
+        collector.push({
+          toolUseId: toolCallId,
+          toolName: opts.name,
+          inputJson: safeJson(input),
+          outputJson: safeJson({ error: code, message }),
+          status: 'error',
+          durationMs: Date.now() - start,
+          confirmationTier: opts.risk,
+          approvalStatus: 'rejected'
+        })
+        throw new ToolExecutionError(code, message)
+      }
       // Domain guard (second run): expiry + (preview) input-binding + (edit) UI-edit override,
       // layered on ai@6's signature. Rejection → audit 'rejected' + tool-error, write never runs.
       let userEdited = false
@@ -356,6 +419,12 @@ export function auditedSendTool<I>(
      *  internal_id are pinned). e.g. ['to','cc','bcc','subject','body_markdown']. */
     editableFields: readonly string[]
     a2uiEnabled?: boolean
+    /** S2 W0 (ADR-001 D1/D3) — the run's server-asserted context mode. The send is class
+     *  'outbound' (manual_chat-only): outside a manual session execute hard-rejects (runtime
+     *  double-insurance; registration-time filtering should have dropped the tool already).
+     *  needsApproval stays a hard `true` regardless — there is deliberately still no path to
+     *  auto-approve a send. Absent/unknown fail-closes to 'untrusted_trigger'. */
+    contextMode?: AgentContextMode
     /** Compute the content hash, sign the token, perform the real send via the domain client, and
      *  return the model-facing output + the content hash for audit. Receives the verified
      *  approval record (its idempotencyKey + expiry feed the signed token). */
@@ -377,6 +446,11 @@ export function auditedSendTool<I>(
     return payload ? safeJson(payload) : undefined
   }
 
+  // S2 W0 (ADR-001 D3) — the send is class 'outbound' (manual_chat-only). Runtime
+  // double-insurance mirrors auditedWriteTool; needsApproval below stays a hard true.
+  const contextMode = normalizeContextMode(opts.contextMode)
+  const modeDenied = !isToolClassAllowedInMode('outbound', contextMode)
+
   return makeTool({
     description: opts.description,
     inputSchema: opts.inputSchema,
@@ -390,6 +464,23 @@ export function auditedSendTool<I>(
     },
     execute: async (input, { toolCallId, abortSignal }) => {
       const start = Date.now()
+      // S2 W0 runtime double-insurance (ADR-001 D3): no send ever runs outside a manual session,
+      // even if a future entrypoint misses the mode and the card was shown + approved.
+      if (modeDenied) {
+        const code = 'E_CONTEXT_MODE_DENIED'
+        const message = `${opts.name} (outbound) is not available in a ${contextMode} run`
+        collector.push({
+          toolUseId: toolCallId,
+          toolName: opts.name,
+          inputJson: safeJson(input),
+          outputJson: safeJson({ error: code, message }),
+          status: 'error',
+          durationMs: Date.now() - start,
+          confirmationTier: AUDIT_TIER,
+          approvalStatus: 'rejected'
+        })
+        throw new ToolExecutionError(code, message)
+      }
       let userEdited = false
       let record: ApprovalRecord
       let effectiveInput: unknown = input

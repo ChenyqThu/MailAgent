@@ -24,6 +24,7 @@ import type { z } from 'zod'
 import { DomainError, type MailAgentDomainClient } from '../python/domainClient'
 import type { ApprovalGuard, ApprovalRisk } from '../security/approval'
 import { auditedWriteTool, type GatewayApprovalMode, type GatewayToolAuditCollector } from './types'
+import type { AgentContextMode } from './policy'
 import {
   emailArchiveSchema,
   emailDraftReplySchema,
@@ -60,7 +61,12 @@ export function createWriteTools(
   domain: MailAgentDomainClient,
   collector: GatewayToolAuditCollector = [],
   guard: ApprovalGuard,
-  opts: { a2uiEnabled?: boolean; approvalMode?: GatewayApprovalMode; oneShot?: boolean } = {}
+  opts: {
+    a2uiEnabled?: boolean
+    approvalMode?: GatewayApprovalMode
+    oneShot?: boolean
+    contextMode?: AgentContextMode
+  } = {}
 ): Record<string, Tool> {
   const make = <I>(toolOpts: {
     name: string
@@ -81,7 +87,9 @@ export function createWriteTools(
         a2uiEnabled: opts.a2uiEnabled,
         approvalMode: opts.approvalMode,
         // Part B — one-shot claim across island + renderer resume (see auditedWriteTool.oneShot).
-        oneShot: opts.oneShot
+        oneShot: opts.oneShot,
+        // S2 W0 — the run's context mode (auto-approve requires domain_write + manual_chat).
+        contextMode: opts.contextMode
       },
       collector,
       guard

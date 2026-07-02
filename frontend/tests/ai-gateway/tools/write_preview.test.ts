@@ -62,7 +62,8 @@ describe('write tools — flag gating (buildGatewayTools)', () => {
   test('writeToolsEnabled off → read-only (no write tools)', () => {
     const tools = buildGatewayTools({
       domain: mockDomain(() => okEnvelope({})),
-      writeToolsEnabled: false
+      writeToolsEnabled: false,
+      contextMode: 'manual_chat'
     })
     const names = Object.keys(tools)
     for (const w of GATEWAY_WRITE_TOOL_NAMES) expect(names).not.toContain(w)
@@ -72,7 +73,8 @@ describe('write tools — flag gating (buildGatewayTools)', () => {
   test('writeToolsEnabled on but NO guard → still read-only (a write tool cannot exist without its guard)', () => {
     const tools = buildGatewayTools({
       domain: mockDomain(() => okEnvelope({})),
-      writeToolsEnabled: true
+      writeToolsEnabled: true,
+      contextMode: 'manual_chat'
     })
     for (const w of GATEWAY_WRITE_TOOL_NAMES) expect(Object.keys(tools)).not.toContain(w)
   })
@@ -81,7 +83,8 @@ describe('write tools — flag gating (buildGatewayTools)', () => {
     const tools = buildGatewayTools({
       domain: mockDomain(() => okEnvelope({})),
       writeToolsEnabled: true,
-      approvalGuard: new ApprovalGuard()
+      approvalGuard: new ApprovalGuard(),
+      contextMode: 'manual_chat'
     })
     const names = Object.keys(tools)
     for (const w of GATEWAY_WRITE_TOOL_NAMES) expect(names).toContain(w)

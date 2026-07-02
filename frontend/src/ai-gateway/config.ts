@@ -15,6 +15,9 @@ import type { MailAgentUIMessage } from '@shared/assistant/uiMessage'
 // config.ts for resolveAiGatewayPort; this must never pull the heavy `ai` chunk into
 // the main bundle when MAILAGENT_AI_SDK_GATEWAY is off (Phase 02 invariant).
 import type { GatewayApprovalMode, GatewayToolAuditEntry } from './tools/types'
+// 🔴 type-only — same erasure discipline. The runtime policy functions live in tools/policy.ts
+// (pure, type-only `ai` import) and are consumed by chatRun/tools, never here.
+import type { AgentContextMode } from './tools/policy'
 // 🔴 type-only imports — fully erased (same discipline as GatewayToolAuditEntry above), so the
 // AG-UI mirror types never pull the `ai` chunk into the main bundle when the gateway is off.
 import type { ToolApprovalRequestPayload } from './agui/interruptMapper'
@@ -125,8 +128,18 @@ export interface AiGatewayConfig {
    *
    *  `approvalMode` (from body.approvalMode, default 'always') controls whether reversible
    *  preview-tier writes skip the approval card ('auto-reversible') or always ask ('always');
-   *  the blocking send always asks regardless. Absent → 'always' (byte-identical to pre-toggle). */
-  buildTools?: (collector: GatewayToolAuditEntry[], approvalMode?: GatewayApprovalMode) => ToolSet
+   *  the blocking send always asks regardless. Absent → 'always' (byte-identical to pre-toggle).
+   *
+   *  `contextMode` (S2 W0, ADR-001 D1) is the run's SERVER-asserted provenance, threaded from
+   *  prepareChatRun's trustedContextMode (never from the body). It governs which tool classes
+   *  register (capability_change/exec/outbound are manual_chat-only) and whether auto-reversible
+   *  may skip a card (domain_write + manual_chat only). Absent/unknown → the implementation
+   *  fail-closes to 'untrusted_trigger'. */
+  buildTools?: (
+    collector: GatewayToolAuditEntry[],
+    approvalMode?: GatewayApprovalMode,
+    contextMode?: AgentContextMode
+  ) => ToolSet
   /** Max tool-loop steps (stopWhen: stepCountIs). Default 8 (legacy AGENT_MAX_ITER). */
   maxSteps?: number
   /** Phase 04a — apply a UI edit to a pending edit-tier approval (POST /api/ai/approval/resolve).

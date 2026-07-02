@@ -37,7 +37,10 @@ function buildAllTools() {
     // S1 R2 — profile-config tools (MAILAGENT_OPENNESS_CONFIG_TOOLS), same rationale.
     configToolsEnabled: true,
     // S1 R3 — web tools (MAILAGENT_OPENNESS_WEB_TOOLS), same rationale (classified CORE_UNGATED).
-    webToolsEnabled: true
+    webToolsEnabled: true,
+    // S2 W0 — the drift guard reasons over the MANUAL-session universe (fail-closed default is
+    // 'untrusted_trigger', which strips capability_change/outbound and would blind the guard).
+    contextMode: 'manual_chat'
   })
 }
 
@@ -105,10 +108,14 @@ describe('drift guard (review M2 — completeness, both directions)', () => {
 
 describe('buildGatewayTools skill-gating wiring', () => {
   test('flag-off → ToolSet identical to no-gating even if advertisedSkills present (byte-level)', () => {
-    const base = buildGatewayTools({ domain: mockDomain(() => okEnvelope([])) })
+    const base = buildGatewayTools({
+      domain: mockDomain(() => okEnvelope([])),
+      contextMode: 'manual_chat'
+    })
     const flagOff = buildGatewayTools({
       domain: mockDomain(() => okEnvelope([])),
-      advertisedSkills: [] // would gate everything IF the flag were on — but it's off
+      advertisedSkills: [], // would gate everything IF the flag were on — but it's off
+      contextMode: 'manual_chat'
     })
     expect(Object.keys(flagOff)).toEqual(Object.keys(base))
     expect(Object.keys(base).sort()).toEqual([...GATEWAY_READ_TOOL_NAMES].sort())
@@ -118,7 +125,8 @@ describe('buildGatewayTools skill-gating wiring', () => {
     const tools = buildGatewayTools({
       domain: mockDomain(() => okEnvelope([])),
       skillGatingEnabled: true,
-      advertisedSkills: null
+      advertisedSkills: null,
+      contextMode: 'manual_chat'
     })
     expect(Object.keys(tools).sort()).toEqual([...GATEWAY_READ_TOOL_NAMES].sort())
   })
@@ -127,7 +135,8 @@ describe('buildGatewayTools skill-gating wiring', () => {
     const tools = buildGatewayTools({
       domain: mockDomain(() => okEnvelope([])),
       skillGatingEnabled: true,
-      advertisedSkills: ['email', 'report'] // search NOT advertised
+      advertisedSkills: ['email', 'report'], // search NOT advertised
+      contextMode: 'manual_chat'
     })
     expect(tools.email_search_fulltext).toBeUndefined()
     expect(tools.email_search_attachments).toBeUndefined()

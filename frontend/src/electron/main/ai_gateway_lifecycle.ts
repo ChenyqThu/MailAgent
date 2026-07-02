@@ -513,7 +513,7 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     // no-define → off → byte-identical to 03a read-only). `approvalMode` (PART 2) comes from the
     // request body (default 'always'); 'auto-reversible' lets reversible preview writes skip the
     // card. The blocking send always asks regardless (safety floor in auditedSendTool).
-    buildTools: (collector, approvalMode) =>
+    buildTools: (collector, approvalMode, contextMode) =>
       buildGatewayTools(
         {
           domain,
@@ -527,6 +527,9 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
           sendSigningSecret: getLocalApiToken(),
           // PART 2 — auto-approval mode from the request body (default 'always' when absent).
           approvalMode,
+          // S2 W0 (ADR-001 D1) — the run's trusted context mode from prepareChatRun (never the
+          // body). Absent → buildGatewayTools fail-closes to 'untrusted_trigger'.
+          contextMode,
           // M4a — skill→tool gating (MAILAGENT_SKILL_SELF_MOUNT). advertisedSkills from the TTL-cached
           // /chat/config projection. Refresh path: the systemPromptProvider re-fetches it per-request
           // ONLY when MAILAGENT_AI_SDK_CONTEXT_INJECTION is on (the post-cutover master default) → a

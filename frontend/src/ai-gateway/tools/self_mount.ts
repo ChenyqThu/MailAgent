@@ -28,6 +28,7 @@ import {
   type GatewayApprovalMode,
   type GatewayToolAuditCollector
 } from './types'
+import type { AgentContextMode } from './policy'
 import { discoverSkillsSchema, setSkillEnabledSchema, updateSystemMdSchema } from './schemas'
 
 /** Names of the self-mount tools the gateway exposes when MAILAGENT_SKILL_SELF_MOUNT is on. */
@@ -51,7 +52,12 @@ export function createSelfMountTools(
   domain: MailAgentDomainClient,
   collector: GatewayToolAuditCollector = [],
   guard: ApprovalGuard,
-  opts: { a2uiEnabled?: boolean; approvalMode?: GatewayApprovalMode; oneShot?: boolean } = {}
+  opts: {
+    a2uiEnabled?: boolean
+    approvalMode?: GatewayApprovalMode
+    oneShot?: boolean
+    contextMode?: AgentContextMode
+  } = {}
 ): Record<string, Tool> {
   const makeWrite = <I>(toolOpts: {
     name: string
@@ -69,7 +75,10 @@ export function createSelfMountTools(
         ...toolOpts,
         a2uiEnabled: opts.a2uiEnabled,
         approvalMode: opts.approvalMode,
-        oneShot: opts.oneShot // Part B — one-shot claim across island + renderer resume
+        oneShot: opts.oneShot, // Part B — one-shot claim across island + renderer resume
+        // S2 W0 — both writes here are class capability_change (policy.ts): they never
+        // auto-approve, and outside manual_chat they neither register nor execute.
+        contextMode: opts.contextMode
       },
       collector,
       guard

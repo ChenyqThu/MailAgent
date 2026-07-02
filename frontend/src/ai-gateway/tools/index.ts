@@ -23,6 +23,7 @@ import { createSelfMountTools } from './self_mount'
 import { createSessionTools } from './sessions'
 import { createProfileTools } from './profile'
 import { createWebTools } from './web'
+import { applyContextModePolicy, normalizeContextMode, type AgentContextMode } from './policy'
 import type { GatewayApprovalMode, GatewayToolAuditCollector } from './types'
 
 export interface BuildGatewayToolsOpts {
@@ -86,6 +87,14 @@ export interface BuildGatewayToolsOpts {
    *  never auto-approved; returned content is WEB_CONTENT-fenced). Off (default) → not added →
    *  ToolSet byte-identical to the v1.2.0 set. */
   webToolsEnabled?: boolean
+  /** S2 W0 (ADR-001 D1/D3) — the run's server-asserted context mode, threaded from
+   *  prepareChatRun's trustedContextMode. Governs (a) the auto-approve predicate (a reversible
+   *  domain write may only skip the card in manual_chat) and (b) the LAST assembly step
+   *  (applyContextModePolicy): outside manual_chat every capability_change/exec/outbound tool is
+   *  dropped from the ToolSet. 🔴 Fail-closed: absent/unknown → 'untrusted_trigger' (strictest).
+   *  Every current entrypoint passes 'manual_chat', so production behaviour is byte-identical;
+   *  tests must pass it explicitly. */
+  contextMode?: AgentContextMode
 }
 
 /** Names of the read tools exposed by the gateway (for tests / observability). */
@@ -108,6 +117,10 @@ export function buildGatewayTools(
   opts: BuildGatewayToolsOpts,
   collector: GatewayToolAuditCollector = []
 ): ToolSet {
+  // S2 W0 — the run's context mode, fail-closed (absent/unknown → 'untrusted_trigger'). Threaded
+  // into every write/send factory (auto-approve predicate + runtime double-insurance) and applied
+  // as the LAST assembly step below (registration-time filter).
+  const contextMode = normalizeContextMode(opts.contextMode)
   const tools: ToolSet = {
     ...createEmailReadTools(opts.domain, collector),
     ...createKosReadTools(opts.domain, collector, { timeDecayEnabled: opts.kosTimeDecayEnabled }),
@@ -129,7 +142,8 @@ export function buildGatewayTools(
       createWriteTools(opts.domain, collector, opts.approvalGuard, {
         a2uiEnabled: opts.a2uiEnabled,
         approvalMode: opts.approvalMode,
-        oneShot: opts.oneShotWrites
+        oneShot: opts.oneShotWrites,
+        contextMode
       })
     )
     // phase-04b — the high-risk send tool layers on top of the write tools (it needs the same
@@ -140,7 +154,8 @@ export function buildGatewayTools(
         tools,
         createSendTools(opts.domain, collector, opts.approvalGuard, {
           signingSecret: opts.sendSigningSecret,
-          a2uiEnabled: opts.a2uiEnabled
+          a2uiEnabled: opts.a2uiEnabled,
+          contextMode
         })
       )
     }
@@ -156,7 +171,8 @@ export function buildGatewayTools(
       createSelfMountTools(opts.domain, collector, opts.approvalGuard, {
         a2uiEnabled: opts.a2uiEnabled,
         approvalMode: opts.approvalMode,
-        oneShot: opts.oneShotWrites
+        oneShot: opts.oneShotWrites,
+        contextMode
       })
     )
   }
@@ -171,7 +187,8 @@ export function buildGatewayTools(
       createProfileTools(opts.domain, collector, opts.approvalGuard, {
         a2uiEnabled: opts.a2uiEnabled,
         approvalMode: opts.approvalMode,
-        oneShot: opts.oneShotWrites
+        oneShot: opts.oneShotWrites,
+        contextMode
       })
     )
   }
@@ -185,16 +202,22 @@ export function buildGatewayTools(
       createWebTools(opts.domain, collector, opts.approvalGuard, {
         a2uiEnabled: opts.a2uiEnabled,
         approvalMode: opts.approvalMode,
-        oneShot: opts.oneShotWrites
+        oneShot: opts.oneShotWrites,
+        contextMode
       })
     )
   }
-  // M4a — skill→tool gating LAST (after the full set is assembled), behind MAILAGENT_SKILL_SELF_MOUNT.
+  // M4a — skill→tool gating after the full set is assembled, behind MAILAGENT_SKILL_SELF_MOUNT.
   // flag-off OR advertisedSkills null (Python hiccup → fail-open) → not called → byte-identical to the
   // cutover set. advertisedSkills=[] (all disabled) → gates every mapped skill read tool. The gated set
   // is read-only; write/send (core) + collision-exempt email_search are never dropped.
-  if (opts.skillGatingEnabled && opts.advertisedSkills != null) {
-    return applySkillGating(tools, opts.advertisedSkills)
-  }
-  return tools
+  const gated =
+    opts.skillGatingEnabled && opts.advertisedSkills != null
+      ? applySkillGating(tools, opts.advertisedSkills)
+      : tools
+  // S2 W0 — context-mode policy LAST, after every create* block AND skill gating (ADR-001 D3 /
+  // codex P2-2: no assembly path may leave a tool unfiltered). manual_chat (every current
+  // production run) is an identity pass-through → byte-identical; non-manual modes drop every
+  // capability_change/exec/outbound tool so the model structurally cannot see them.
+  return applyContextModePolicy(gated, contextMode)
 }

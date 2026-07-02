@@ -31,6 +31,7 @@ import type { z } from 'zod'
 import type { MailAgentDomainClient } from '../python/domainClient'
 import type { ApprovalGuard, ApprovalRisk } from '../security/approval'
 import { auditedWriteTool, type GatewayApprovalMode, type GatewayToolAuditCollector } from './types'
+import type { AgentContextMode } from './policy'
 // RELATIVE import (not @shared) so the pure-Node poc harness can load the gateway tools — same
 // rationale as sessions.ts / profile.ts. contextSerializer is pure TS (no react/electron).
 import { fenceUntrusted, sanitizeProse } from '../../shared/assistant/context/contextSerializer'
@@ -49,7 +50,12 @@ export function createWebTools(
   domain: MailAgentDomainClient,
   collector: GatewayToolAuditCollector = [],
   guard: ApprovalGuard,
-  opts: { a2uiEnabled?: boolean; approvalMode?: GatewayApprovalMode; oneShot?: boolean } = {}
+  opts: {
+    a2uiEnabled?: boolean
+    approvalMode?: GatewayApprovalMode
+    oneShot?: boolean
+    contextMode?: AgentContextMode
+  } = {}
 ): Record<string, Tool> {
   const makeWrite = <I>(toolOpts: {
     name: string
@@ -67,7 +73,10 @@ export function createWebTools(
         ...toolOpts,
         a2uiEnabled: opts.a2uiEnabled,
         approvalMode: opts.approvalMode,
-        oneShot: opts.oneShot
+        oneShot: opts.oneShot,
+        // S2 W0 — both tools are class outbound (policy.ts): never auto-approved,
+        // manual_chat-only.
+        contextMode: opts.contextMode
       },
       collector,
       guard

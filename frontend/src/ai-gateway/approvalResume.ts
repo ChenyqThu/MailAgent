@@ -133,7 +133,10 @@ export async function resumeApprovalRun(
     injectedContext: undefined
   }
 
-  const prepared = await prepareChatRun(resumeBody, cfg, abortSignal)
+  // S2 W0 (ADR-001 D1) — resume under the mode FROZEN at pause time (stashed by
+  // maybeStashAndAnnounceApproval, never from the body): an island resume of a manual-session
+  // approval stays manual; a future untrusted/headless pause resumes fail-closed at its own mode.
+  const prepared = await prepareChatRun(resumeBody, cfg, abortSignal, entry.contextMode)
   if (!prepared.ok) {
     return { ok: false, status: 'error', error: prepared.body.error }
   }
