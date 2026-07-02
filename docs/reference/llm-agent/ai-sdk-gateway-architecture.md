@@ -931,3 +931,37 @@ typecheck node+web **0**；**全量 vitest 160 files / 1959 passed / 1 skipped /
 - 结构化白名单（URL origin/redirect、argv template）+ `contextMode` 三态 policy engine → S2。
 - web 白名单域（本期恒问）→ S2。custom agent trigger/headless fresh-spawn → S4。
 - 测试新增：serializer trusted-prose 硬化（换行折叠无伪造顶层段 + 内嵌 token 中和）+ isValidContextSnapshot 类型混淆拒绝 + `http_body.test.ts`（cap/sentinel/解析）。codex 复核确认 6 不变式（floor 不弱化 / flag-off 字节级 / AG-UI passthrough / 重载竞态 / gateway 纯核 / 结构化解耦）全 PASS。
+
+## 13.17 S2 openness wave 落地（2026-07-03，第二波：本机执行 + skill 供应链自装）
+
+> 上游同 §13.16（实施 task `07-02-s2-exec-skill-install`，两份 frozen ADR：ADR-001 untrusted/headless policy engine + ADR-002 skill 供应链/secret 模型，codex round1 4 P1 已并入）。8 个 commit：W0 契约基建 `602dae8a` → W2 供应链后端 `2416def8` → W1a exec 后端 `3e3b7968` → W3 per-skill secret `877dc17c` → W1a-fix 鉴权收窄 `1b71b1a6` → W1b gateway exec 工具 `47ec4fc4` → W4a install 工具+首跑闸 `75c26360` → W4b Settings UI `a7ee97d0`。每 wave 独立 trellis-check review（报告在 task 目录）。**两个新 flag 代码默认全 off**（main-env-only 无 vite define，off → `buildGatewayTools` 字节级不变，测试断言）。
+
+### 13.17.1 契约基建（W0）
+
+- `contextMode` 三态（`manual_chat` / `untrusted_trigger` / `scheduled_headless`；缺省/未知 **fail-closed → untrusted_trigger**）从 prepareChatRun 服务端断言值线程进 buildGatewayTools（绝非请求体）。
+- `tool_class` 政策轴（read / domain_write / capability_change / exec / outbound；`policy.ts GATEWAY_TOOL_CLASSES` 单源 + catalog 镜像测试；未知名 fail-closed 到 exec 最严类）。auto-approve 谓词收紧 = **仅 class==domain_write && manual_chat** 可免卡（堵 set_skill_enabled 逃逸）。注册期 `applyContextModePolicy`（LAST 组装步）剥离非 manual 的 capability_change/exec/outbound 工具 + 运行时 modeDenied 双保险。生产不可越过单源 map（`testOnlyToolClass` 显式 test-only）。
+
+### 13.17.2 exec 面（W1a/W1a-fix/W1b，flag `MAILAGENT_OPENNESS_EXEC_TOOLS`）
+
+- 三工具 `run_command` / `file_read` / `file_write`（**edit-tier + class exec = manual_chat 专属恒人审**）：TS 薄壳（`tools/exec.ts`，零 fs/child_process）→ Python `/api/exec/*`（**verify_local_token 仅本地 token**——evaluate 同；防远程 CF 会话探执行面，island 先例）。执行权威在 Python：无 shell 显式 argv、超时 kill 防孤儿、stdout/stderr 256KiB cap、固定 env 白名单基底**绝不 dict(os.environ) 继承**（哨兵断言 NOTION_TOKEN/MAILAGENT_*/AWS_* 不泄）、inode 级 deny 地板（O_NOFOLLOW→fstat 认 fd 防 TOCTOU/hardlink；覆盖 .env / 各 db / token.dat / ~/.ssh / Keychains / app bundle / venv / skill_secrets.key / .quarantine；白名单不可覆盖地板）。
+- **结构化白名单**（ADR-001 D4，`policy_rules` @ agent_config.db）：matcher = argv0 realpath + argv 逐位模板 pin/any 等长无跨位 + cwd/realpath 前缀含界 + web origin 三元组等值；`context_mode` SQL 层严格等值绑定（manual 规则永不流入 untrusted/cron 查询）；未知/异常一律 ask fail-closed；危险 argv0 只可全 pin（`dangerous` 标志供 UI 红警）。
+- 免卡链：needsApproval 前置 `domain.policyEvaluate`（**闭包捕获的服务端 contextMode** + `AbortSignal.timeout(2500)`）→ 仅 `auto_allow` 跳卡，audit `approval_status='auto_whitelist'` + `whitelist_rule_id`（**CHAT_DB_VERSION 17→18** additive，`approval_status` 自由 TEXT 零枚举迁移，serve-api 不写新列）。
+- 「总是允许」唯一通道：审批卡勾选 → `POST /api/ai/policy/remember`（未接线 501）→ `approvalGuard.peek`（只读，`editedInput ?? input` = 用户批准的生效输入）→ Node 全 PIN matcher 派生（`exec_policy_matcher.ts` 忠实复刻 `_resolve_argv0` + FIXED_EXEC_PATH；**任何 Node/Python 分歧 → 规则不命中 → 继续弹卡 fail-SAFE**）→ `createPolicyRule`（context_mode 钉 manual_chat）。模型零建规则通道；Settings「自动化策略」页 = 列/停用/删除 + dangerous 红标（放宽 = 删除重建，无原地编辑）。
+
+### 13.17.3 skill 供应链（W2/W3/W4a/W4b，flag `MAILAGENT_OPENNESS_SKILL_INSTALL`）
+
+- **后端流水线**（无 flag，owner API `/agent/skills/*`）：fetch（`src/api/ssrf.py` 四件套自 web.py 抽出零行为变化 + 20MiB + zip 白名单）→ quarantine 安全解包（zip-slip/symlink/炸弹/entry≤1000）→ manifest v2（**script ⇒ tools==[] pydantic 硬约束**，不做动态工具注册）→ 逐文件 sha256 + 内容派生 `package_hash`（可重算的 Merkle 摘要，ADR 字面 zip-bytes hash 与 re-hash 内在矛盾的透明修正）→ **confirm re-hash TOCTOU 比对**（codex P1-2，409）→ atomic promote + `agent_skills` 落行（`files_json`）。卸载 = `POST /skills/uninstall` 全清（行+目录+secrets）；**旧 DELETE 对 pack 行委托同一全清路径**（W2 review P2-2 收口：同名重装不收养 stale secrets）。
+- **gateway 4 工具**（W4a，`tools/skill_supply.ts`）：`skill_install` / `skill_install_confirm`（两段两卡）/ `skill_uninstall`（三者 **edit-tier + class capability_change 恒 HITL**，无白名单钩）+ `skill_read`（silent read）。三方文本恒围栏：SKILL.md / skillMdExcerpt → `UNTRUSTED_SKILL_DOC` + 32KB 截断 + 警示头；manifest 文案 sanitizeProse；结构化字段 verbatim（confirm 回传须 byte-exact，服务端 re-hash 是真防线）。**confirm 审批卡服务端事实渲染**（`GET /skills/quarantine/{qid}` 重算 hash——模型无法在卡上谎报包内容；facts 取不到只可拒绝）。
+- **首跑闸 + 执行期完整性**（ADR-002 §5 D3）：`src/skills/exec_gate.py` 共享 probe **单源**（三消费者：W3 secret overlay / run 端点 / evaluate 前置 gate）。run 端点 spawn 前逐文件 sha256 对 `files_json`（无行/无清单/不符一律 tampered → 409 `E_SKILL_TAMPERED` + `last_error`——skills 目录只应有供应链管控内容）；首跑记录**绑 version + entrypoint_hash**（spawn 成功后落；升级/换脚本自动重触发）。**evaluate 前置 gate 在查 PolicyRule 之前**（顺序不变式 codex P2-7：宽规则放行不了未首跑/被篡改脚本）；**探测盲区收口**（验收对抗推演）：「cwd 命中 skill 目录但识别不出执行文件」（裸 token argv）恒 ask——不可校验形状永不可白名单免卡（残余：该形状在 run/owner API 直调无完整性校验，恒卡兜底，S4 headless 前须复核）。
+- **per-skill secret**（W3）：Fernet 密文落 `skill_secrets` 表，master key 单条 Keychain（`security -i` stdin 喂值防 argv 泄漏，`-A` ACL 有意取舍）/ keyfile 0600 fallback；注入 = 命中 skill 目录时 **declared∩stored** 叠加固定基底（多 skill 命中保守零注入）；输出精确值脱敏（len 降序防前缀泄漏）；secret 名 env-regex + reserved deny **单源双重校验**（`secret_names.py`，含 BASH_ENV/PYTHONBREAKPOINT/GIT_* 等劫持向量）。七条泄漏面（prompt/manifest/audit/logger/DB/响应/异常）哨兵实证隔离；信任边界 = 不防本机同用户恶意 app（ADR Consequences 写死）。
+- **Settings**（W4b，显隐跟 `/chat/config.skillInstallEnabled`）：两段式安装 Dialog（preview 服务端事实 + excerpt 纯文本 `<pre>` + 409 明示「包内容在预览后被改动」重新预览）+ 卸载确认（列 secret 名）+ 配置抽屉（secret write-only 蒙版永不回显 + config.json 编辑）。ChatApi 8 方法单实现双端。
+
+### 13.17.4 eval + 终态验证
+
+- catalog：exec 3 工具 + `skill_install_confirm` 新行（counts 58）；`skill_install/skill_uninstall/skill_read` 与 legacy `skill_management.ts` 共行（**tier=preview 低估 gateway 真实 edit 卡 = S3 删 legacy 时收口的记债**，prose 已注记；tool_class 一致，policy 镜像绿）。curated 33→**35**（AGT-SKILL-007 两段 happy + AGT-SAFETY-008 注入邮件诱导安装 + fx-email-018 + `skillsupply.jsonl` synthetic lane）；AGT-SAFETY-004 forbidden_tools 补 exec/install 意图守护。
+- 终态 gates：tsc node/web 0 · vitest 97 files/1287 · pytest api/skills/agent_config 943 · agent_eval+chat 186 · `run_baseline --compare` 20/20 无回退 · ruff 净。`rules.py` / `baselines/v0.13.0.jsonl` 全程零改；不新增 tier 词汇。
+
+### 13.17.5 dogfood 必决 + 留后续
+
+- **dogfood（dev 测不出，打包真机验）**：① 真机 Keychain（security 真行为/锁定态 rc/跨二进制读取；**锁定态 split-brain**——W3 review P2-2：区分「锁定 vs 不可用」防 keyfile 二 master key 致 secret 静默失效）② 审批卡「总是允许」端到端（勾选→建规则→下次免卡）+ Exec/SkillInstall 四卡 A2UI 富卡渲染 ③ CHAT_DB v18 打包升级路径 ④ Settings 安装→配置→卸载全流程 flag 双态。
+- **S3（删 legacy）**：catalog 共行升级 gateway_only+edit；legacy-only document skill fragment 清单。**S4（headless）前须复核**：盲区形状独立 deny 防线 · kos 读族 outbound 重审 · exec stdout fence 对称加固（W1b P3-3）· W1a P2-4 communicate OOM 流式化 · P2-5 inode 快照 staleness · send 收件人白名单（S2 有意收窄）。
