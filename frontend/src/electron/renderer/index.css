@@ -5119,6 +5119,10 @@ body:not([data-batch-mode='true']) .email-row .cb {
   /* 中心下移到 62%（丝线亮区往下沉，贴近下方欢迎语，减少 div 下部留白）+ 范围放大让丝线更饱满。 */
   -webkit-mask-image: radial-gradient(88% 82% at 50% 62%, #000 52%, transparent 100%);
   mask-image: radial-gradient(88% 82% at 50% 62%, #000 52%, transparent 100%);
+  /* #1 dogfood：负 z-index 把丝线块沉到最近 stacking context（Thread root isolate）
+     的背景层之上、其余内容之下，无需 greeting 文案持有 z-10 stacking context。
+     这样 ViewportFooter（含 AgentModelPicker 弹层）不再被 h1 z-10 压盖。 */
+  z-index: -1;
 }
 
 /* reactbits BorderGlow（官方 TS-CSS 逐字段移植，组件 effects/BorderGlow.tsx）— mesh-gradient 彩虹

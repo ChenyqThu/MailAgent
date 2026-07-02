@@ -155,21 +155,24 @@ function AgentWelcome(): React.JSX.Element {
   const { t } = useTranslation()
   return (
     <div className="relative mx-auto mb-6 flex min-h-[16rem] w-full max-w-[var(--thread-max-width)] flex-col items-center justify-end px-4 pb-4 text-center">
-      {/* Strands 作 greetings 背景（dogfood：独立块加高会同时拉开与文案的间距 + 暴露上下渐变空白 → 改回背景
-          方案）：absolute 脱流铺满容器（容器 min-h 给足高度让丝线饱满舒展、不局促），文案 justify-end 贴容器
-          底部、relative z-10 叠在 Strands 之上。这样块可随 min-h 拉高（丝线饱满）而文案不被推开，文案底部即
-          Strands 块底部；mask 中心偏上(62%) → 文案所在底部自然渐隐淡出，文字清晰。仅 isNewChatView 渲染 →
-          首条消息后随 AgentWelcome 卸载（AuiIf）连带卸载 Strands canvas（零持续 GPU）。
-          块高度调容器 min-h-[11rem]，丝线宽度调下面 max-w-[36rem]。 */}
+      {/* Strands 作 greetings 背景：absolute 脱流铺满容器（容器 min-h 给足高度让丝线饱满舒展），
+          文案 justify-end 贴容器底部。#1 dogfood 修后：canvas 用 CSS z-index:-1 沉到 SC 背景层
+          （index.css .agent-strands-banner），h1/p 只保留 relative（无 z-index），不再持有
+          stacking context → ViewportFooter（含 AgentComposer 弹层）靠 DOM 后序自然盖住文案，
+          不会被 h1 z-10 压入其 stacking context 之下。仅 isNewChatView 渲染 → 首条消息后卸载
+          Strands canvas（零持续 GPU）。 */}
       <Suspense fallback={null}>
         <div className="agent-strands-banner pointer-events-none absolute inset-y-0 left-1/2 w-full max-w-[30rem] -translate-x-1/2 overflow-hidden">
           <AgentStrandsBackdrop />
         </div>
       </Suspense>
-      <h1 className="relative z-10 animate-in fade-in slide-in-from-bottom-1 fill-mode-both text-2xl font-semibold text-ink-fg duration-200">
+      {/* #1 dogfood: z-10 已移到 .agent-strands-banner { z-index:-1 }，由
+          负 z-index 把丝线沉到底层，文案无需再持 z-10 stacking context。
+          保留 relative 供 animate-in transform 用。 */}
+      <h1 className="relative animate-in fade-in slide-in-from-bottom-1 fill-mode-both text-2xl font-semibold text-ink-fg duration-200">
         {t('agentView.welcome')}
       </h1>
-      <p className="relative z-10 mt-2 text-aux text-ink-fg-3">{t('agentView.emptyHint')}</p>
+      <p className="relative mt-2 text-aux text-ink-fg-3">{t('agentView.emptyHint')}</p>
     </div>
   )
 }
