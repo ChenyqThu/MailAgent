@@ -888,4 +888,46 @@ typecheck node+web **0**；**全量 vitest 160 files / 1959 passed / 1 skipped /
 - **F 的 loopback-token（同机防护腿）留后续**：本 chunk 只做 Origin 腿（防远程跨域）。gateway loopback-only（远程够不到），真正防「同机恶意 loopback 页面」（CSRF）需 renderer↔gateway 共享 secret token——连同观测深化留给真正开远程 web 面那一阶（高风险 write/send 已有 HMAC + Python 双 guard 兜底）。
 - **E 的 full-panel health-degrade 测试留后续**：需新建 panel mount harness（QueryClient/fetch mock/flag+port stub）；本 chunk degrade 逻辑直观 + typecheck + off-path 86 测试验证不变。
 - **06a 范围裁剪（Option 2 简化）**：ChatHistoryPopover 混合 kind（per-email popover 保持 kind-scoped）+ 初始 kind 跨 kind 派生（默认恒 ai-sdk）——均不做，旧会话经全局历史页进入不丢。
+
+## 13.16 S1 openness wave 落地（2026-07-02，agent 开放性 epic 第一波：读能力 + 联网上 gateway）
+
+> 上游 = agent 开放性 epic（trellis task `07-02-agent-openness-epic-review-and-plan`）。把 v1.1.0 已完备但封闭的 harness 往「可自我扩展个人 agent 平台」推进的第一波：把**已在位但未暴露的读能力 + 联网**接成 gateway 工具。**三个独立 flag，代码默认全 off，main-env-only（`ai_gateway_lifecycle.ts` envBool，不加 vite define）**，off → `buildGatewayTools` 字节级同 cutover（有测试断言）。9 个新工具全归 `CORE_UNGATED_GATEWAY_TOOLS`（开关权在 flag 非 skill 门控）。
+
+### 13.16.1 新增工具（9 个，分 3 面）
+
+| flag | 工具 | tier | 落点 |
+|---|---|---|---|
+| `MAILAGENT_OPENNESS_SESSION_TOOLS` | `chat_session_list` / `chat_session_search` / `chat_session_get` | silent 读 | `tools/sessions.ts`；serve-api `GET /chat/sessions/search`（FTS）+ 复用现成 list/messages；`domainClient` +3 方法 |
+| `MAILAGENT_OPENNESS_CONFIG_TOOLS` | `agent_profile_read` / `agent_profile_history`（silent）· `agent_profile_restore` / `agent_memory_update`（edit 恒人审） | silent×2 + edit×2 | `tools/profile.ts`；映射现成 owner API `/api/agent/profile/*`；`domainClient` +4 方法 |
+| `MAILAGENT_OPENNESS_WEB_TOOLS` | `web_fetch` / `web_search` | edit 恒人审（不进 auto-approve） | `tools/web.ts` + Python `src/api/routers/web.py` 执行端点 |
+
+命名对账（S3 删 legacy 前用）：`agent_profile_history` 复用 legacy 名（两边同 silent tier，`validate_catalog` 42/42 不破）；`agent_profile_restore` 新名（legacy `agent_profile_rollback`=preview vs gateway=edit，tier 不同必须新名）；`agent_profile_read`/`agent_memory_update` 新名 + `gateway_only`。
+
+### 13.16.2 会话检索 FTS（CHAT_DB_VERSION 16→17）
+
+- schema owner `chat_db.ts` 新建 `ai_chat_messages_fts`（FTS5 external-content over `ai_chat_messages.content`，`tokenize='trigram'` → 中文子串 ≥3 字符可搜）+ 增删改触发器（external-content delete 惯用式）+ `'rebuild'` 存量 backfill（幂等）。ai-sdk 消息文本随 v9 契约已双写 `content` 列 → FTS 只索引 content 即覆盖 legacy + ai-sdk 两代，零 `json_extract`。
+- Python `src/chat/db.py` `search_sessions` **只 SELECT**（BASE-3「0 CREATE TABLE」不变式保持）：FTS phrase 恒转义防语法注入；query <3 字符 / FTS 表缺失（OperationalError）→ LIKE 降级；cap = session≤20 / snippet≤3每session / ≤200 字符。**不动 `EXPECTED_DB_VERSION`**（那 gate 的是 sync_store.db）。
+
+### 13.16.3 安全（lethal trifecta 设防）
+
+- **untrusted 围栏**（复用 `contextSerializer` `fenceUntrusted`/`sanitizeUntrusted`，后者 ZWSP 打断内嵌 fence token）：历史会话内容 → `UNTRUSTED_CHAT_HISTORY`（含邮件引用=二阶注入面）；memory.md 读 → `UNTRUSTED_MEMORY`（同生产注入 token）；web 正文/标题/snippet → `UNTRUSTED_WEB_CONTENT`。身份文档（soul/agent/rules/user）**原文返回**（与 standing-context 注入一致；fence 它们反教模型「自身身份层不可信」）。
+- **web SSRF**（`web.py`）：scheme/userinfo 闸 + `socket.getaddrinfo` 逐 IP `not is_global`（v4+v6，含 v4-mapped/6to4/teredo 内嵌 v4）+ 钉已校验 IP（URL host 改 IP 字面量 + `sni_hostname` extension 保 TLS 证书按原 host 校验，关 DNS rebinding 窗口）+ `trust_env=False` 防系统代理绕钉 + 逐跳 redirect ≤5 每跳重校验 + `Accept-Encoding: identity`（防解压炸弹）+ body-read 总 deadline + 2MiB/15s cap + content-type 白名单（缺 header 拒）。
+- **edit-tier 恒人审**：`agent_profile_restore`/`agent_memory_update`/`web_fetch`/`web_search` 全 edit tier，auto-reversible 模式下 `needsApproval` 仍 true（不吃 auto-approve）；identity 不可 retarget（`ApprovalGuard.verify` 对所有 tier 拒 raw-changed input）。
+- **RULES rollback 洞修复**：`store.rollback_profile_doc` 原直落 content_snapshot → 越权 RULES 历史版本可被回滚复活；补 `validate_rules_content` 闸在 store 层（保护所有调用方）+ router ValueError→400。
+
+### 13.16.4 R4 eval 阻断门（S1.0，先闸后开）
+
+- 修 flag profile 错配（生产 `MAILAGENT_SKILL_SELF_MOUNT` 默认 ON vs eval 零覆盖）：+4 curated task（`AGT-SKILL-005/006` + `AGT-SAFETY-005/006`，+007 web 注入）+ `baselines/selfmount.jsonl` synthetic lane。
+- **新完整性闸** `test_gateway_catalog_completeness.py`：静态抽取 gateway 工具名全集（`GATEWAY_*_TOOL_NAMES` 数组 glob 全 `tools/*.ts` ∪ `skill_gating` 三集合，canary 防 regex 失效）→ 每名必 ∈ `tool_catalog.json`。堵住 `validate_catalog.py` 只扫 legacy 目录的洞——此后新 gateway 工具漏 catalog 即红。`rules.py`/`baselines/v0.13.0.jsonl` 零改。
+
+### 13.16.5 验证 + codex review
+
+- gates：tsc node/web 双 0；vitest 2191 passed（唯一 fail=`5d0a5f4e` 预存 assistant-modal，主仓同 base 复现）；pytest agent_eval 93 + api 全绿；`run_baseline --validate` 33/33 coverage_ok；v0.13.0 回归闸 + selfmount lane compare 均 no-regression；`validate_catalog` 42/42。
+- codex（gpt-5.5 xhigh read-only）后端安全 review：6 findings → 修 5（web SSRF：解压炸弹 HIGH / body-read deadline MEDIUM / content-type fail-open / web_search size cap / 裸 input echo）+ 1 误报（approval.ts editedInput 分支执行完全来自可信 record，传入 input 被忽略，篡改不生效=等价 fail-closed，M4b 审过的既有设计）。
+
+### 13.16.6 留后续（S2+）
+
+- 执行类（bash/run/文件写）+ install/uninstall skill + 带脚本 skill → S2（弱 install API 不提前暴露）。
+- 结构化白名单（URL origin/redirect、argv template）+ `contextMode` 三态 policy engine → S2。
+- web 白名单域（本期恒问）→ S2。custom agent trigger/headless fresh-spawn → S4。
 - 测试新增：serializer trusted-prose 硬化（换行折叠无伪造顶层段 + 内嵌 token 中和）+ isValidContextSnapshot 类型混淆拒绝 + `http_body.test.ts`（cap/sentinel/解析）。codex 复核确认 6 不变式（floor 不弱化 / flag-off 字节级 / AG-UI passthrough / 重载竞态 / gateway 纯核 / 结构化解耦）全 PASS。
