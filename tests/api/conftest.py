@@ -497,3 +497,11 @@ def fresh_agent_cfg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     acstore.reset_agent_config_store_cache()
     yield acstore.get_agent_config_store()
     acstore.reset_agent_config_store_cache()
+
+
+@pytest.fixture()
+def fresh_skills_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """S2 W2：每测试一个干净 skills 落盘目录（MAILAGENT_SKILLS_DIR 覆盖 → quarantine + <name>/ 落这）。"""
+    d = tmp_path / "skills"
+    monkeypatch.setenv("MAILAGENT_SKILLS_DIR", str(d))
+    return d

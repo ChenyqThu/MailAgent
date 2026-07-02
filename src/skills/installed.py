@@ -106,7 +106,15 @@ def installed_skill_to_bound(
     granted = tuple(getattr(row, "granted_scopes", ()) or ())
 
     tools_out: list[BoundTool] = []
-    if row.source_type == "mcp":
+    manifest_type = manifest.get("type")
+    if manifest_type == "script":
+        # S2 W2 带脚本 skill：**零工具**的文档型 BoundSkill。能力经 run_command 执行（ADR-001 exec
+        # 矩阵 + 首跑闸），**不注册任何一等工具**（不进 applySkillGating 三集合——那是 TS 侧；这里
+        # 保证投影 tools 恒空，manifest v2 的 pydantic 也已强制 tools==[]）。SKILL.md 经 skill_read
+        # 围栏按需进上下文（W4），prompt_fragment 不注入（post-cutover 引擎 skillFragments=null）。
+        availability = SkillAvailability(available=True, reason=None)
+        # tools_out 保持空。
+    elif row.source_type == "mcp":
         availability = SkillAvailability(available=False, reason=MCP_UNAVAILABLE_REASON)
         for entry in manifest.get("tools") or []:
             if not isinstance(entry, dict) or "name" not in entry:

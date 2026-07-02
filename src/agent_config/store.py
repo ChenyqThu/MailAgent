@@ -103,6 +103,9 @@ class SkillRow:
     last_error: Optional[str] = None
     installed_at: int = 0
     updated_at: int = 0
+    # S2 W2 供应链：{relpath: sha256} 逐文件 hash（执行时完整性校验用，W1/W4 消费）+ 首跑闸记录。
+    files_json: Optional[str] = None
+    first_run_approved: Optional[str] = None
 
     @property
     def is_builtin(self) -> bool:
@@ -172,7 +175,20 @@ CREATE TABLE IF NOT EXISTS agent_skills (
     trusted             INTEGER NOT NULL DEFAULT 0,
     last_error          TEXT,
     installed_at        INTEGER NOT NULL,
-    updated_at          INTEGER NOT NULL
+    updated_at          INTEGER NOT NULL,
+    -- S2 W2 供应链：逐文件 sha256（{relpath: sha256} JSON）+ 首跑闸记录（W1/W4 消费，本 wave 只建列）。
+    files_json          TEXT,
+    first_run_approved  TEXT
+);
+
+-- S2 W2 per-skill 密钥：值列只存密文（W3 填 Fernet 加解密，本 wave 只建表）。DB/审计只见名字，
+-- 值永不进 prompt / manifest_json / agent_skill_events.detail_json / 日志。
+CREATE TABLE IF NOT EXISTS skill_secrets (
+    skill_name       TEXT NOT NULL,
+    secret_name      TEXT NOT NULL,
+    value_ciphertext BLOB NOT NULL,
+    updated_at       TEXT NOT NULL,
+    PRIMARY KEY (skill_name, secret_name)
 );
 
 CREATE TABLE IF NOT EXISTS agent_skill_events (
@@ -236,7 +252,21 @@ class AgentConfigStore:
     def _ensure_schema(self) -> None:
         with self._connection() as conn:
             conn.executescript(_DDL)
+            self._migrate_additive(conn)
             conn.commit()
+
+    @staticmethod
+    def _migrate_additive(conn: sqlite3.Connection) -> None:
+        """幂等追加列（backend-owned db 不进 DB_VERSION —— 开库即对齐，无版本号）。
+
+        ``_DDL`` 的 CREATE TABLE 已含新列（新库直接带）；这里只为**已存在的旧 agent_skills 表**
+        补列（生产 db 建于 S2 之前）。``PRAGMA table_info`` 判存在，缺则 ALTER，重复开库无副作用。
+        """
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(agent_skills)").fetchall()}
+        if "files_json" not in cols:
+            conn.execute("ALTER TABLE agent_skills ADD COLUMN files_json TEXT")
+        if "first_run_approved" not in cols:
+            conn.execute("ALTER TABLE agent_skills ADD COLUMN first_run_approved TEXT")
 
     # ======================================================================
     # Standing Context 文档（4 个可编辑：soul/agent/rules/user）
@@ -422,12 +452,15 @@ class AgentConfigStore:
         package_hash: Optional[str] = None,
         trusted: bool = False,
         enabled: Optional[bool] = None,
+        files_json: Optional[str] = None,
         session_id: Optional[int] = None,
     ) -> SkillRow:
         """安装/更新一个用户来源 skill（source_type ∈ INSTALLABLE_SOURCE_TYPES）。
 
         ``granted_scopes`` 写时校验 ⊆ KNOWN_SCOPES（复用 api_keys.validate_scopes）—— 非法 scope
-        ``ValueError``，不静默产出 manifest 里调不动的死工具。记一条 install 事件。
+        ``ValueError``，不静默产出 manifest 里调不动的死工具。``files_json`` = S2 供应链的逐文件
+        sha256（confirm 落库）。记一条 install 事件（detail 含 package_hash/manifest_version，
+        **绝不含 secret 值**）。
         """
         if source_type not in INSTALLABLE_SOURCE_TYPES:
             raise ValueError(
@@ -462,14 +495,16 @@ class AgentConfigStore:
             conn.execute(
                 "INSERT INTO agent_skills "
                 "(skill_name, source_type, source_uri, version, manifest_version, manifest_json, "
-                " enabled, granted_scopes_json, package_hash, trusted, last_error, installed_at, updated_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                " enabled, granted_scopes_json, package_hash, trusted, last_error, installed_at, updated_at, "
+                " files_json) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
                 "ON CONFLICT(skill_name) DO UPDATE SET "
                 " source_type=excluded.source_type, source_uri=excluded.source_uri, "
                 " version=excluded.version, manifest_version=excluded.manifest_version, "
                 " manifest_json=excluded.manifest_json, enabled=excluded.enabled, "
                 " granted_scopes_json=excluded.granted_scopes_json, package_hash=excluded.package_hash, "
-                " trusted=excluded.trusted, last_error=NULL, updated_at=excluded.updated_at",
+                " trusted=excluded.trusted, last_error=NULL, updated_at=excluded.updated_at, "
+                " files_json=excluded.files_json",
                 (
                     skill_name,
                     source_type,
@@ -484,11 +519,16 @@ class AgentConfigStore:
                     None,
                     installed_at,
                     now,
+                    files_json,
                 ),
             )
-            self._record_event_conn(
-                conn, skill_name, "install", {"source_type": source_type}, session_id, now
-            )
+            # detail 记 source_type + package_hash + manifest_version（供应链溯源）；**绝不含 secret 值**。
+            detail: dict[str, Any] = {"source_type": source_type}
+            if package_hash is not None:
+                detail["package_hash"] = package_hash
+            if manifest_version is not None:
+                detail["manifest_version"] = manifest_version
+            self._record_event_conn(conn, skill_name, "install", detail, session_id, now)
             conn.commit()
         skill = self.get_skill(skill_name)
         assert skill is not None  # 刚插入
@@ -542,6 +582,25 @@ class AgentConfigStore:
                 self._record_event_conn(conn, skill_name, "uninstall", None, session_id, now)
             conn.commit()
         return removed
+
+    def list_skill_secret_names(self, skill_name: str) -> list[str]:
+        """一个 skill 已存储的密钥**名**列表（永不返回值 —— 值列是密文，W3 解密专属）。"""
+        with self._connection() as conn:
+            rows = conn.execute(
+                "SELECT secret_name FROM skill_secrets WHERE skill_name = ? ORDER BY secret_name",
+                (skill_name,),
+            ).fetchall()
+        return [r["secret_name"] for r in rows]
+
+    def delete_skill_secrets(self, skill_name: str) -> int:
+        """删一个 skill 的全部 skill_secrets 行（uninstall 清理钩子）。返回删除行数。
+
+        W2 只做结构清理（删行）；Keychain master key 不动（W3 拥有加解密 + master key 生命周期）。
+        """
+        with self._connection() as conn:
+            cur = conn.execute("DELETE FROM skill_secrets WHERE skill_name = ?", (skill_name,))
+            conn.commit()
+            return cur.rowcount
 
     def record_event(
         self,
@@ -657,6 +716,7 @@ def _row_to_skill(row: sqlite3.Row) -> SkillRow:
             manifest = parsed if isinstance(parsed, dict) else None
         except (json.JSONDecodeError, TypeError):
             manifest = None
+    keys = row.keys()
     return SkillRow(
         skill_name=row["skill_name"],
         source_type=row["source_type"],
@@ -671,6 +731,9 @@ def _row_to_skill(row: sqlite3.Row) -> SkillRow:
         last_error=row["last_error"],
         installed_at=row["installed_at"],
         updated_at=row["updated_at"],
+        # 新列（迁移前建的旧库经 _migrate_additive 补齐；防御性 keys() 判存在，避免 KeyError）。
+        files_json=row["files_json"] if "files_json" in keys else None,
+        first_run_approved=row["first_run_approved"] if "first_run_approved" in keys else None,
     )
 
 

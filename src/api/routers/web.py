@@ -26,9 +26,7 @@ size cap；解析 DDG HTML 的 title/url/snippet，DDG 的 ``/l/?uddg=`` 重定�
 
 from __future__ import annotations
 
-import ipaddress
 import logging
-import socket
 import time
 import urllib.parse
 from typing import Any, Optional
@@ -41,6 +39,12 @@ from pydantic import BaseModel, Field
 
 from src.api.app import APIError, success_envelope
 from src.api.auth import verify_cf_access
+from src.api.ssrf import check_ip as _check_ip
+from src.api.ssrf import default_addrinfo as _addrinfo
+from src.api.ssrf import host_port_scheme as _host_port_scheme
+from src.api.ssrf import pinned_send as _ssrf_pinned_send
+from src.api.ssrf import resolve_and_validate as _ssrf_resolve_and_validate
+from src.api.ssrf import validate_url as _validate_url
 
 router = APIRouter(prefix="/api/web", tags=["web"])
 
@@ -89,120 +93,26 @@ class WebSearchRequest(BaseModel):
     limit: int = Field(default=5, ge=1, le=_SEARCH_MAX_RESULTS)
 
 
-# ── SSRF 校验 ──────────────────────────────────────────────────────────────────
-
-
-def _ssrf_error(message: str) -> APIError:
-    """SSRF 拦截统一 400（E_SSRF_BLOCKED 不在 ERROR_CODE_TO_HTTP → 显式 http_status）。"""
-    return APIError("E_SSRF_BLOCKED", message, http_status=400, source="web")
-
-
-def _check_ip(ip_str: str) -> None:
-    """校验单个 IP 是否为可出网的公网 unicast 地址；否则 raise ``_ssrf_error``。
-
-    逐类拒（PRD R3）：loopback / private / link-local / reserved / multicast / unspecified。
-    v6 额外拆解内嵌 v4（v4-mapped ``::ffff:127.0.0.1`` / 6to4 / teredo）——否则可用 v6 外壳
-    藏一个私网 v4 目标绕过。
-    """
-    try:
-        ip = ipaddress.ip_address(ip_str)
-    except ValueError as e:  # getaddrinfo 不该返回非法 IP；兜底 fail-closed。
-        raise _ssrf_error(f"unparseable address: {ip_str}") from e
-
-    candidates: list[ipaddress._BaseAddress] = [ip]
-    if isinstance(ip, ipaddress.IPv6Address):
-        if ip.ipv4_mapped is not None:
-            candidates.append(ip.ipv4_mapped)
-        if ip.sixtofour is not None:
-            candidates.append(ip.sixtofour)
-        if ip.teredo is not None:
-            # teredo = (server_ipv4, client_ipv4) —— 两个 v4 都要校验。
-            candidates.extend(ip.teredo)
-
-    for c in candidates:
-        # `not is_global` 是主闸——它 subsumes 全部特殊段（private/loopback/link-local/
-        # reserved/multicast/unspecified）**并且**含单独列不全的 CGNAT 100.64/10、
-        # benchmarking、documentation 等段。显式类别保留仅为错误信息更具体（belt-and-suspenders）。
-        if (
-            not c.is_global
-            or c.is_loopback
-            or c.is_private
-            or c.is_link_local
-            or c.is_reserved
-            or c.is_multicast
-            or c.is_unspecified
-        ):
-            raise _ssrf_error(f"blocked non-public address: {ip_str}")
-
-
-# 间接层：测试可 monkeypatch ``_addrinfo`` 把一个假主机名映射到 loopback fake server，
-# 从而在**不放宽真实 _check_ip**的前提下端到端跑 fetch 管道（见 tests/api/test_web.py）。
-def _addrinfo(host: str, port: int) -> list[Any]:
-    return socket.getaddrinfo(host, port, type=socket.SOCK_STREAM, proto=socket.IPPROTO_TCP)
+# ── SSRF 校验（实现在 src/api/ssrf.py，本模块保留可 monkeypatch 的薄壳）──────────────────
+# 四件套自 web.py 抽到 ssrf.py（S2 W2，skill pack 下载器复用同一防护）。``_check_ip`` / ``_addrinfo``
+# / ``_validate_url`` / ``_host_port_scheme`` 直接 import-as 成模块级名字，使 tests/api/test_web.py
+# 对它们的直接调用与 monkeypatch 在实现搬家后仍原样生效（校验语义未动，只是实现搬家）。
 
 
 def _resolve_and_validate(host: str, port: int) -> str:
-    """DNS 解析 host → 校验**每一个**返回 IP（任一不合规即拒，保守）→ 返回首个校验过的 IP
-    作为钉死连接目标。host 本身是 IP 字面量时 getaddrinfo 原样返回、照样校验。"""
-    try:
-        infos = _addrinfo(host, port)
-    except socket.gaierror as e:
-        raise APIError(
-            "E_UPSTREAM", f"DNS resolution failed for {host}: {e}", http_status=502, source="web"
-        ) from e
-    if not infos:
-        raise APIError("E_UPSTREAM", f"no DNS results for {host}", http_status=502, source="web")
-
-    resolved: list[str] = []
-    for info in infos:
-        sockaddr = info[4]
-        ip_str = sockaddr[0]
-        # v6 scoped 地址（fe80::1%en0）—— 去掉 zone id 再校验（link-local 本就会被拒）。
-        if "%" in ip_str:
-            ip_str = ip_str.split("%", 1)[0]
-        _check_ip(ip_str)
-        resolved.append(ip_str)
-    return resolved[0]
+    """薄壳：透传模块级 ``_addrinfo`` / ``_check_ip``（monkeypatch 友好，测试放行 loopback /
+    假 DNS 仍生效），实现在 ``ssrf.resolve_and_validate``。"""
+    return _ssrf_resolve_and_validate(host, port, addrinfo=_addrinfo, check=_check_ip)
 
 
 # ── fetch 执行 ─────────────────────────────────────────────────────────────────
 
 
-def _host_port_scheme(url: httpx.URL) -> tuple[str, int, str]:
-    scheme = url.scheme
-    host = url.host
-    port = url.port or (443 if scheme == "https" else 80)
-    return host, port, scheme
-
-
-def _validate_url(raw: str) -> httpx.URL:
-    """解析 + 基础校验（scheme / userinfo / host）；raise APIError 于非法输入。"""
-    try:
-        url = httpx.URL(raw)
-    except (httpx.InvalidURL, ValueError) as e:
-        raise APIError("E_INVALID_ARG", f"invalid url: {e}", http_status=400, source="web") from e
-    if url.scheme not in ("http", "https"):
-        raise APIError(
-            "E_INVALID_ARG",
-            f"unsupported scheme '{url.scheme}' (only http/https)",
-            http_status=400,
-            source="web",
-        )
-    if url.username or url.password:
-        # 拒 userinfo：凭据经 URL 泄漏面 + 常见 SSRF 混淆（http://trusted@evil/）。
-        raise _ssrf_error("url must not contain userinfo (user:pass@host)")
-    if not url.host:
-        raise APIError("E_INVALID_ARG", "url has no host", http_status=400, source="web")
-    return url
-
-
 def _pinned_send(
     client: httpx.Client, url: httpx.URL, pinned_ip: str, remaining: float
 ) -> httpx.Response:
-    """对**已校验**的 pinned_ip 发起一次请求（钉死连接、防 rebinding）：改写 URL host 成 IP
-    字面量（httpcore 不再解析）+ Host header 保原 host + sni_hostname extension 保原 host
-    （TLS 证书按原 host 校验）。stream=True 供上层边读边截。"""
-    original_host = url.host
+    """薄壳：构造 fetch 专用 headers（含 ``Accept-Encoding: identity`` 防解压炸弹），委托
+    ``ssrf.pinned_send`` 做钉 IP + Host/SNI 保原主机名。stream=True 供上层边读边截。"""
     headers = {
         "User-Agent": _UA,
         "Accept": "text/html,application/xhtml+xml,application/json,text/plain;q=0.9,*/*;q=0.5",
@@ -212,13 +122,7 @@ def _pinned_send(
         # 压缩，_do_fetch 读 body 前还有 content-encoding fail-closed 检查兜底。
         "Accept-Encoding": "identity",
     }
-    req = client.build_request("GET", url, headers=headers, timeout=remaining)
-    # build 时 Host 已从原 URL 生成（含非默认端口），先存下来。
-    host_header = req.headers.get("Host") or original_host
-    req.url = req.url.copy_with(host=pinned_ip)
-    req.headers["Host"] = host_header
-    req.extensions = {**req.extensions, "sni_hostname": original_host}
-    return client.send(req, stream=True, follow_redirects=False)
+    return _ssrf_pinned_send(client, url, pinned_ip, headers, remaining, stream=True)
 
 
 def _extract(media_type: str, raw: bytes, encoding: Optional[str], max_chars: int) -> tuple[str, Optional[str]]:

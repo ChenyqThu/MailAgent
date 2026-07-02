@@ -9,6 +9,7 @@ Bearer（Bearer 是 ``/api/skills`` 的外部 agent 通道，agent 改自身配�
 
 from __future__ import annotations
 
+import json
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -302,3 +303,155 @@ async def uninstall_agent_skill(name: str, request: Request):
     """卸载一个 skill 行（installed → 卸载；builtin 懒行 → 回退代码默认）。幂等。"""
     removed = get_agent_config_store().uninstall_skill(name)
     return success_envelope({"name": name, "removed": removed}, request=request, source="sqlite")
+
+
+# ── skill 供应链（S2 W2 —— 两段式安装：fetch → confirm，+ 全清理 uninstall）─────────────────
+# owner-only（verify_cf_access）。gateway W4 的 skill_install/confirm/uninstall 工具经这三个端点执行；
+# Settings 安装 UI 也走同一族。业务权威在 Python（下载 SSRF 硬化 / 安全解包 / hash 实算 / re-hash
+# TOCTOU 校验全在此），gateway 只做 schema + 审批接线。
+
+
+# SKILL.md 节选上限（preview 卡片显示；全文经 W4 skill_read 围栏读）。
+_SKILL_MD_EXCERPT_MAX = 4096
+
+
+@router.post("/skills/fetch", dependencies=[Depends(verify_cf_access)])
+async def fetch_agent_skill(request: Request, body: Optional[dict[str, Any]] = None):
+    """两段式第一段：下载（URL）/ 导入（本地 zip 或目录）skill 包 → quarantine → 安全解包 + manifest
+    v2 校验 + hash。**不安装**（仅落 quarantine）。body = {sourceUrl?} 或 {localPath?}（二选一）。
+
+    返回 preview：quarantineId + packageHash + 文件表（路径+每文件 sha256）+ manifest 摘要 + 声明的
+    secret 名 + SKILL.md 节选。owner 审阅后带 quarantineId + packageHash + files 调 /confirm 真安装。"""
+    from src.skills.pack_fetch import fetch_pack
+    from src.skills.pack_verify import PackError
+
+    raw = body or {}
+    source_url = raw.get("sourceUrl")
+    local_path = raw.get("localPath")
+    if bool(source_url) == bool(local_path):
+        raise APIError(
+            "E_INVALID_ARG",
+            "exactly one of body.sourceUrl / body.localPath is required",
+            http_status=400,
+            source="sqlite",
+        )
+    if source_url is not None and not isinstance(source_url, str):
+        raise APIError("E_INVALID_ARG", "body.sourceUrl must be a string", http_status=400, source="sqlite")
+    if local_path is not None and not isinstance(local_path, str):
+        raise APIError("E_INVALID_ARG", "body.localPath must be a string", http_status=400, source="sqlite")
+
+    try:
+        res = fetch_pack(
+            source_url=source_url if source_url else None,
+            local_path=local_path if local_path else None,
+        )
+    except PackError as exc:
+        # 结构化 code（E_PACK_* / E_UPSTREAM / E_CONTENT_TYPE …）+ 各自 http_status 透传，供 W4 壳展示。
+        raise APIError(exc.code, exc.message, http_status=exc.http_status, source="sqlite") from exc
+
+    m = res.manifest_dict
+    secret_names = [
+        s.get("name") for s in (m.get("secrets") or []) if isinstance(s, dict) and s.get("name")
+    ]
+    preview = {
+        "quarantineId": res.quarantine_id,
+        "sourceType": res.source_type,
+        "sourceUri": res.source_uri,
+        "packageHash": res.package_hash,
+        "files": res.files,  # {relpath: sha256} —— confirm 时原样回传作 expectedFiles
+        "manifest": {
+            "name": m.get("name"),
+            "type": m.get("type"),
+            "version": m.get("version"),
+            "title": m.get("title"),
+            "description": m.get("description"),
+            "entryHint": m.get("entry_hint"),
+            "manifestVersion": m.get("manifest_version"),
+        },
+        "secretNames": secret_names,
+        "skillMdExcerpt": res.skill_md[:_SKILL_MD_EXCERPT_MAX],
+    }
+    return success_envelope(preview, request=request, source="sqlite")
+
+
+@router.post("/skills/confirm", dependencies=[Depends(verify_cf_access)])
+async def confirm_agent_skill(request: Request, body: Optional[dict[str, Any]] = None):
+    """两段式第二段：按 quarantineId **重算** quarantine content 的 hash 比对 owner 批准的事实
+    （expectedPackageHash + expectedFiles，TOCTOU 防 preview→落盘间被替换）→ 落 agent_skills 行 →
+    atomic rename content 到 <skills>/<name>。hash 不符 → 409。body = {quarantineId, expectedPackageHash,
+    expectedFiles?}。"""
+    from src.skills.pack_fetch import confirm_pack, promote_content
+    from src.skills.pack_verify import PackError
+
+    raw = body or {}
+    qid = raw.get("quarantineId")
+    expected_hash = raw.get("expectedPackageHash")
+    expected_files = raw.get("expectedFiles")
+    if not isinstance(qid, str) or not qid:
+        raise APIError("E_INVALID_ARG", "body.quarantineId is required", http_status=400, source="sqlite")
+    if not isinstance(expected_hash, str) or not expected_hash:
+        raise APIError(
+            "E_INVALID_ARG", "body.expectedPackageHash is required", http_status=400, source="sqlite"
+        )
+    if expected_files is not None and not isinstance(expected_files, dict):
+        raise APIError("E_INVALID_ARG", "body.expectedFiles must be an object", http_status=400, source="sqlite")
+
+    try:
+        result = confirm_pack(qid, expected_hash, expected_files)
+    except PackError as exc:
+        raise APIError(exc.code, exc.message, http_status=exc.http_status, source="sqlite") from exc
+
+    store = get_agent_config_store()
+    # 先落新行数据（含 manifest/hash/files），再 atomic swap 目录（升级语义，失败不留半成品）。
+    try:
+        store.install_skill(
+            result.name,
+            source_type=result.source_type,
+            manifest=result.manifest_dict,
+            manifest_version=result.manifest_version,
+            version=result.manifest_dict.get("version"),
+            source_uri=result.source_uri,
+            package_hash=result.package_hash,
+            files_json=json.dumps(result.files, ensure_ascii=False, sort_keys=True),
+        )
+    except ValueError as exc:  # slug / manifest.name 不一致 / 非法 scope
+        raise APIError("E_INVALID_ARG", str(exc), http_status=400, source="sqlite") from exc
+
+    try:
+        promote_content(qid, result.name)
+    except PackError as exc:
+        raise APIError(exc.code, exc.message, http_status=exc.http_status, source="sqlite") from exc
+
+    return success_envelope(
+        {"name": result.name, "sourceType": result.source_type, "packageHash": result.package_hash},
+        request=request,
+        source="sqlite",
+        status_code=201,
+    )
+
+
+@router.post("/skills/uninstall", dependencies=[Depends(verify_cf_access)])
+async def uninstall_agent_skill_full(request: Request, body: Optional[dict[str, Any]] = None):
+    """全清理卸载（S2 W2）：删 agent_skills 行 + 删 <skills>/<name>/ 落盘目录 + 删 skill_secrets 行。
+    body = {name}。密钥 Keychain master key 不动（W3 拥有加解密生命周期）。幂等。"""
+    from src.skills.pack_fetch import remove_skill_dir
+
+    raw = body or {}
+    name = raw.get("name")
+    if not isinstance(name, str) or not name.strip():
+        raise APIError("E_INVALID_ARG", "body.name is required", http_status=400, source="sqlite")
+    name = name.strip()
+    store = get_agent_config_store()
+    removed_row = store.uninstall_skill(name)
+    removed_dir = remove_skill_dir(name)
+    removed_secrets = store.delete_skill_secrets(name)
+    return success_envelope(
+        {
+            "name": name,
+            "removed": removed_row or removed_dir,
+            "removedDir": removed_dir,
+            "removedSecrets": removed_secrets,
+        },
+        request=request,
+        source="sqlite",
+    )
