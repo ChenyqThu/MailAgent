@@ -17,7 +17,6 @@ is covered in test_admin_davmail_selftest.py::test_llm_selftest_no_bin_redacts_t
 
 from __future__ import annotations
 
-import asyncio
 import logging
 
 import pytest
@@ -57,11 +56,24 @@ class _StubProc:
 
 
 def _patch_proc(monkeypatch, *, returncode: int, stdout: bytes, stderr: bytes) -> None:
-    """Replace create_subprocess_exec so run_cli never forks a real CLI."""
+    """Replace create_subprocess_exec so run_cli never forks a real CLI.
+
+    Also stub bin discovery: run_cli resolves argv0 (get_mailagent_argv0)
+    BEFORE spawning, and that walks the real filesystem ($MAILAGENT_BIN →
+    <root>/venv/bin/…) — on hosts without the dev venv (CI) it raises
+    E_NO_BIN and the sanitize branch under test is never reached. These
+    tests pin the sanitize contract, not discovery, so make them hermetic.
+    setattr on the function (not setenv MAILAGENT_BIN): the env route would
+    write the stub path into the module-global _argv0_cache, which outlives
+    monkeypatch teardown and would leak into later tests.
+    """
 
     async def _fake_exec(*_args, **_kwargs):
         return _StubProc(returncode=returncode, stdout=stdout, stderr=stderr)
 
+    monkeypatch.setattr(
+        cli_runner, "get_mailagent_argv0", lambda: ["/stub/venv/bin/mailagent"]
+    )
     monkeypatch.setattr(cli_runner.asyncio, "create_subprocess_exec", _fake_exec)
 
 
