@@ -16,7 +16,7 @@
 
 ## 2. 子包 A — 删 legacy chat harness（原「任务B」，含前置）
 
-### 2.1 关键事实（已核实）
+> **⚠️ 归属移交（2026-07-03）**：本子包与 **Agent 开放性 epic 的 S3**（trellis `07-02-agent-openness-epic-review-and-plan`，worktree `harness-epic-plan`）是**同一件工作**（S3 = 删 legacy harness = 既定任务B）。归 S3 执行，**主线不做**，理由：① S3 排在 S2（执行工具 + skill 自装）之后有真依赖——S2 的 recon 已发现 `prompt_fragment` 在 post-cutover gateway 不达模型（`systemPrompt.ts:61` skillFragments=null 有意），删 legacy 前的「legacy-only 能力清单」（含 document-only skill 引导处置）在那边持续积累；② 两边同时动 `shared/chat`/gateway 必撞。本节的 A1→A2→A3 步骤与回滚决策点**作为 S3 开工时的实施输入**合流使用。子包 B/C/D（纯 Python 同步域）不受影响，仍归主线。
 
 - **新引擎反向依赖旧引擎**：`frontend/src/ai-gateway/systemPrompt.ts:19` `import { buildStableSystemPrompt } from '@shared/chat/backends/custom_api'`（:20 还有 `ChatModelConfig` 类型）。**直接删 `shared/chat` 会炸掉活引擎——任务B 不是 rm -rf**。
 - 新 UI 层仍寄生旧传输：`shared/assistant/AssistantUIChatPanel.tsx:214` 以 `useEmailChat` 为传输 SSoT，经 `runtime/useLegacyExternalStoreRuntime.ts` 桥接。

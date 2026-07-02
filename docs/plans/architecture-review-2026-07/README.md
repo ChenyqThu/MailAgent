@@ -75,7 +75,7 @@
 |---|---|---|---|---|
 | **Now（≤2 周）** | E0 安全网 **✅ 已实施**（2026-07-02，待 CI 首跑验证，实施状态见 e0 §5） | CI 测试闸 + DB 备份/quick_check + 迁移守卫 + promote workflow + 依赖锁定 | ~1 周 | [e0](./e0-safety-net.md) |
 | **Next（1-2 月）** | E1 Backend 契约收口 | arm 面正式化为 Protocol、删影子 alias、外围入口收编 factory；davmail 上游 watch 提醒项 | 3-5 天 | [e1](./e1-backend-contract.md) |
-| **Next（1-2 月）** | E2 减法 Sprint | 删 legacy harness（前置抽 prompt 层）+ outbox 收口删死分支 + fork CLI 退役 + 反向写归一；预期 -12~15k LOC | ~2 周 | [e2](./e2-subtraction-sprint.md) |
+| **Next（1-2 月）** | E2 减法 Sprint | 删 legacy harness（**子包 A 已移交 openness epic S3**，见 e2 §2）+ outbox 收口删死分支 + fork CLI 退役 + 反向写归一 | ~2 周（B/C/D） | [e2](./e2-subtraction-sprint.md) |
 | **Next（可并行）** | E3 配置治理 | 四项一致性校验测试进 CI → env-only 收编 → 偏离决策表 | ~1 周 | [e3](./e3-config-governance.md) |
 | **Later（3-6 月）** | E4 可靠性/观测 | worker supervise / to_thread / 告警落地 / 诊断包 / venv 审计 / typed IPC / 巨石拆分 | 按条目 | [e4](./e4-reliability-observability.md) |
 | **持续 watch** | davmail 上游 | 2026-08 起关注 davmail release（EWS→O365 标准接口），出新版按 [升级回归清单](./e1-backend-contract.md) 验证 | — | e1 §3.1 Step 4 |
