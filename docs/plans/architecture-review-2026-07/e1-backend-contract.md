@@ -65,7 +65,7 @@ grep 全仓 `\.arm\.` 与 `self\.radar\.` 的方法调用，产出「真实接�
 - `reverse_sync.py:63`：删 `or AppleScriptArm()` 默认值，构造参数必传（service 装配点本就注入）。
 - `llm_agent/runner.py:119`：davmail 模式 probe 失败 → 抛错进重试/死信，禁止 fallback AppleScriptArm；applescript 模式保留 lazy-init。
 - `initial_sync.py` / `project_progress/runner.py` / `recurring_invite.py` / CLI backfill/llm：统一经 factory；`debug.py` 两处加 `# applescript-only diagnostic, factory 豁免` 注释。
-验收：`grep -rn "AppleScriptArm(" src --include='*.py' | grep -v backend/ | grep -v applescript_arm.py | grep -v debug.py` 零命中；新增单测：davmail 模式下 `run_job(backfill_body)` 取到的 arm 类型为 DavMailBackend；`source=applescript` + davmail 模式报错而非错配。
+验收：`grep -rn "AppleScriptArm(" src --include='*.py' | grep -v backend/ | grep -v applescript_arm.py | grep -v debug.py` 除 `llm_agent/runner.py` 的 applescript 模式 lazy-init（本 Step 上文明示保留的合法 fallback，davmail 模式该路径已改 raise）与注释文案外**零真实构造**；新增单测：davmail 模式下 `run_job(backfill_body)` 取到的 arm 类型为 DavMailBackend；`source=applescript` + davmail 模式报错而非错配。
 
 **Step 4 — davmail 上游 watch 提醒项（半天）**
 按用户口径：EWS 2026-10-01 关停的应对 = **跟随 davmail 官方 repo 切 O365 标准接口，项目侧零工程**。只做两件事：
@@ -93,3 +93,16 @@ grep 全仓 `\.arm\.` 与 `self\.radar\.` 的方法调用，产出「真实接�
 - 量级：约 3-5 天（含 dogfood）。
 - 依赖：无硬前置；建议在 E0（CI 测试闸）就位后做，改动面有网兜着。
 - 后续解锁：E2 减法 Sprint 中 outbox 死分支删除会再触碰 handlers——先做 E1 可让那次改动落在干净接口上。
+
+## 6. 实施状态（2026-07-03，trellis `07-03-e1-backend-contract`）
+
+Step 1-4 已全部实施并过独立 check（4 条 implement/check lane），全量 pytest 3313 passed 零排除。关键落地口径：
+
+- **新 Protocol = 17 方法**（真实消费面，非原 9 方法理想面）：probe_readiness + 雷达面 6 + 抓取面 3 + flag 面 4（含 str-fallback 双形）+ append_draft / reconcile_drafts / send_email。`health_status` / `detect_new_emails` 经盘点**零运行时调用方**（base.py 原注释「stats_reporter 定期调」从未接线）→ 连实现体删除；`fetch_email_by_id` / `fetch_recent` 退出 Protocol、DavMail 保留为内部 typed helper。盘点全文见 [`e1-contract-inventory.md`](./e1-contract-inventory.md)。
+- **签名统一方向**：mark_as_read / set_flag 取 AppleScriptArm 形状（mailbox 位置可传），DavMail 去 keyword-only——顺带消除 handlers/reverse_sync 位置传参在 davmail 下的 latent TypeError。
+- **handlers 双参合并**：`EventHandlers(arm, ..., backend=None)` → `(backend, ...)` 必传（二者本就是同一对象）。
+- **收编即修复**：`job_runners.py` backfill 批量路径原本 davmail 模式下直构 AppleScriptArm 必错配 id 空间（本 epic 最优先真 bug）——改走 `deps.backend`（ServiceContext 既有 factory 惰性封装，零新增管线）。
+- **probe fail-fast 前移**（授权行为修正的衍生，check 判定方案精神内）：initial_sync / project_progress / CLI backfill·llm 经 factory 后 probe 失败在入口报错，不再静默构造错误 arm。
+- **豁免清单**（factory 外合法 AppleScriptArm 直构，仅两处）：`llm_agent/runner.py` applescript 模式 lazy-init（davmail 模式该路径 raise）、`cli/commands/debug.py` ×2（applescript-only 诊断，已加豁免注释）。
+- **登记给 E2 的孤儿**：`RadarTick` / `BackendHealth` 类型（tests 在测但生产零消费）、`SyncHealthCheck`（全仓零构造死代码）、`types.py:91` 悬空 docstring 引用。
+- Step 4 产出：`admin health` 静态 watch note（JSON `data.notes`，不进 required、不影响 `healthy` 语义）+ [`e1-davmail-upgrade-checklist.md`](./e1-davmail-upgrade-checklist.md)。
