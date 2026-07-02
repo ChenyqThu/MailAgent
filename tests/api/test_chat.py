@@ -248,7 +248,7 @@ class _ChatConfigStub:
     kos_l1_hot_block_enabled = False
     kos_time_decay_enabled = True
     llm_model = "claude-sonnet-4-6"
-    user_md_compile_enabled = False
+    user_md_compile_enabled = True
     standing_docs_editor_enabled = True
     memory_md_budget_chars = 5000
 
@@ -278,7 +278,8 @@ def _config_client(
 def test_chat_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     """默认快照：10 字段 camelCase 齐全 + 值对齐 electron 默认 + DEFAULT_HTTP_CONFIG。
     userContext 默认 ""（未配置 LLM_CONTEXT_PAGE_ID / ContextLoader 返回空）；
-    memorySummary 默认 ""（P2f，无 memory 行）。"""
+    memorySummary 默认 ""（MEM0_RETRIEVAL 默认开 —— 2026-07-02 cutover —— 但隔离
+    agent_config.db 的 MEMORY doc 为空 → 不注入）。"""
     with _config_client(monkeypatch, _ChatConfigStub()) as c:
         r = c.get("/api/chat/config")
     assert r.status_code == 200
@@ -323,8 +324,8 @@ def test_chat_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
         "standingContextActive": True,
         # R6 — override store healthy by default → available True.
         "skillOverridesAvailable": True,
-        # M3c — user.md 偏好编译 flag（default False；M3c 把它加进 /chat/config）。
-        "userMdCompileEnabled": False,
+        # M3c — user.md 偏好编译 flag（default True —— 2026-07-02 cutover；M3c 把它加进 /chat/config）。
+        "userMdCompileEnabled": True,
         # standing-docs-editor flag（default True；4f4f71f2 加进 /chat/config）。
         "standingDocsEditorEnabled": True,
     }

@@ -390,12 +390,13 @@ class Config(BaseSettings):
         ),
     )
     user_md_compile_enabled: bool = Field(
-        default=False, validation_alias="MAILAGENT_USER_MD_COMPILE",
+        default=True, validation_alias="MAILAGENT_USER_MD_COMPILE",
         description=(
             "M3 user.md 偏好编译总开关。开时 Settings「从记忆编译偏好」按钮可见 + "
             "/api/chat/memory/compile-user-md 端点放行（load memory.md → LLM 合并现有 user.md "
-            "→ 仅 changed 时 set_profile_doc('user', agent_proposed)）。默认关 —— flag-off 时端点"
-            "返回 E_DISABLED、按钮不渲染（M3c 起经 /chat/config 暴露 flag 态）。无 hot-path（手动触发）。"
+            "→ 仅 changed 时 set_profile_doc('user', agent_proposed)）。默认开（2026-07 cutover）；"
+            "显式设 false 时端点返回 E_DISABLED、按钮不渲染（M3c 起经 /chat/config 暴露 flag 态）。"
+            "无 hot-path（手动触发）。"
         ),
     )
     standing_docs_editor_enabled: bool = Field(

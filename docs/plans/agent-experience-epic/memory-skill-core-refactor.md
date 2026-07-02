@@ -235,6 +235,10 @@ M5b 物理退役 KV 后把 mem0 侧从「FAISS + 按 query 召回（M2）」重�
 
 **out of scope（follow-up）**：mem0_engine/FAISS 物理删除（memory.md 已取代但 undo 链外的引擎代码本步不删）；删 legacy harness（M5b option A 遗留独立 task）；release（翻 epic flag 默认 ON + seed 迁移 + build/push/tag）。
 
+### cutover（2026-07-02）：4 flag 默认翻 ON
+
+`MAILAGENT_MEM0_CAPTURE` / `MAILAGENT_MEM0_RETRIEVAL` / `MAILAGENT_USER_MD_COMPILE` / `MAILAGENT_SKILL_SELF_MOUNT` 代码默认翻 true（agent_memory_kv 已物理退役，这 4 个 flag 不开则 agent 无持久记忆；v1.1.0 dogfood 已在 userData .env 手动开着验证过），env 显式 false 为应急回退。随 v1.1.0 dogfood 轮发布。
+
 ---
 
 ## 6. 贯穿铁律（每阶段都钉）

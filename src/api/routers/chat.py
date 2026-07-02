@@ -301,7 +301,8 @@ async def chat_config(request: Request):
     # memory.md（Hermes 式有界记忆，task 07-01）恒注入。auto-capture 每轮把持久事实合并进
     # agent_config.db 的 MEMORY doc；这里读它进 memorySummary → 前端经现成 MEMORY fence（untrusted
     # 背景）注入每轮 system prompt。gate = MAILAGENT_MEM0_RETRIEVAL（语义从 M2「按 query 召回」改为
-    # 「恒注入 memory.md」，复用同 flag，热读 .env）。
+    # 「恒注入 memory.md」，复用同 flag，热读 .env；默认开 —— 2026-07-02 cutover，env 显式 false
+    # 仍可关，应急回退）。
     # 🔴 flag-off 或 memory.md 空 → memory_summary="" + retired meta（与 M5b 现状字节级一致：前端
     # custom_api.ts:290 `if (cfg.memorySummary && ...)` 真值门控不注入；meta 纯诊断，前端不读）。
     memory_summary = ""
@@ -314,7 +315,7 @@ async def chat_config(request: Request):
         "max_chars": 2000,
         "retired": True,
     }
-    if _hot_bool(env_vals, "MAILAGENT_MEM0_RETRIEVAL", False):
+    if _hot_bool(env_vals, "MAILAGENT_MEM0_RETRIEVAL", True):
         try:
             from src.agent_config.store import MEMORY_DOC_NAME, get_agent_config_store
             from src.memory.memory_md import _truncate_to_budget

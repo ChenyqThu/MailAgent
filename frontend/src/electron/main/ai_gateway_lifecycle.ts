@@ -232,13 +232,14 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     'MAILAGENT_AI_SDK_CONTEXT_INJECTION',
     masterNewSessionDefaultOn()
   )
-  // M4a — MAILAGENT_SKILL_SELF_MOUNT (default off, NOT master-following — a separate dogfood flag)
-  // gates the gateway's skill→tool filter: the per-request buildTools factory drops a disabled skill's
-  // read tools by consulting /chat/config.advertisedSkills (Python 业务态). Pure backend — the gateway
-  // runs in the electron main process; the renderer never reads this flag → main env only, NO vite
-  // define (mirrors MAILAGENT_MEM0_CAPTURE/RETRIEVAL). Off → applySkillGating never called → ToolSet
-  // byte-identical to the cutover set.
-  const skillGatingEnabled = envBool('MAILAGENT_SKILL_SELF_MOUNT', false)
+  // M4a — MAILAGENT_SKILL_SELF_MOUNT (default ON since the 2026-07-02 cutover; an explicit env
+  // false is the emergency rollback — NOT master-following) gates the gateway's skill→tool filter:
+  // the per-request buildTools factory drops a disabled skill's read tools by consulting
+  // /chat/config.advertisedSkills (Python 业务态). Pure backend — the gateway runs in the electron
+  // main process; the renderer never reads this flag → main env only, NO vite define (mirrors
+  // MAILAGENT_MEM0_CAPTURE/RETRIEVAL). Off → applySkillGating never called → ToolSet byte-identical
+  // to the cutover set.
+  const skillGatingEnabled = envBool('MAILAGENT_SKILL_SELF_MOUNT', true)
   const apiBase = `http://127.0.0.1:${resolveApiPort()}/api`
   // M4a — prewarm the /chat/config cache ONCE before the server accepts requests so the per-request
   // buildTools factory reads a populated advertisedSkills on the very first turn (no null-first-turn
@@ -253,12 +254,13 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     apiKey,
     model: getLlmModel(),
     persistTurn,
-    // M1c — auto-capture 触发（MAILAGENT_MEM0_CAPTURE，默认关）。开时注入 fire-and-forget 回调：
+    // M1c — auto-capture 触发（MAILAGENT_MEM0_CAPTURE，默认开 —— 2026-07-02 cutover，env 显式
+    // false 为应急回退）。开时注入 fire-and-forget 回调：
     // 抽取 turn 的 user+assistant 文本 POST serve-api /chat/memory/capture（mem0.add 自动抽取）。
     // 🔴 红线：回调 return void（绝不让 gateway onFinish await）+ 错误自吞 → capture 慢/失败绝不
     // 阻塞已流式 reply。关时 undefined → 字节级 flag-off（onFinish 的 ?. 短路）。capture 是纯后端
     // 行为（renderer 无感，toast 由 M1d SSE 驱动）→ 此 flag 不需 renderer mirror / vite define。
-    captureTurnMemory: envBool('MAILAGENT_MEM0_CAPTURE', false)
+    captureTurnMemory: envBool('MAILAGENT_MEM0_CAPTURE', true)
       ? (turn) => {
           const userText = turn.userMessage ? extractTextFromUIMessage(turn.userMessage) : ''
           const assistantText = extractTextFromUIMessage(turn.responseMessage)
