@@ -28,6 +28,10 @@
 - flag：翻 `vite.web.config.ts` 的三个 define + `resolveAiGatewayBaseUrl()` 要能在 web 下解析到 serve-api 的 gateway 端点（而非 loopback port）。
 **门控**：跑通 `tests/agent_eval` 不回退 + web dogfood（CF Access 墙后实测流式/工具/HITL）。
 
+### 任务 A2 — 灵动岛 harness 审批 UX 打磨（v1.2.0 dogfood 遗留，两侧各一）
+- **面板侧：重载后审批卡剥离的语义升级**。现状（有意设计，R2#3）：审批暂停轮落库时剥离 approval 部件 → 切走再回只见 AI 文本、无可点审批卡；island on 时 pending 审批其实仍活在 stash+岛卡里。升级方向：重进会话时若该 session 有活 stash（gateway 可查），面板重建可批卡或至少提示「有待批操作在灵动岛」。v1.2.0 已缓解（island resume 终态会 live-refresh 面板），此项管「批之前」的窗口。
+- **fork 侧：岛卡点击后转「执行中…」**。现状：点 approve/reject 卡立即消失，AgentCompleted/Error 回执到达时已无卡可更新（通知一闪而过）。升级方向：点击后卡转 running 态（保留 stableID），收到终态回执再转绿/红并自动淡出——fork `MailAgentSessionView` + SessionStore 生命周期改动，随 fork 下个版本走。
+
 ### 任务 B — Harness Agent epic 收尾（删 legacy）
 - **🔴 M5b（agent_memory_kv KV 退役）已独立完成**（2026-07-01，6 commits，详见 `memory-skill-core-refactor.md` §5 M5b）。**删 legacy harness 仍是本任务 B 未做项**——M5b 仅外科剔除了 legacy 的 4 个 KV 工具/方法（因 DROP 表会断它们），legacy 运行时（harness.ts/dispatcher/runtime chat loop/agentic 搜索/panels/健康降级 fallback/`CHAT_RUNTIME` flag）整体保留。
 - **06b 7 天观察窗**：cutover 后稳定观察，无回滚信号 → **删 legacy harness**（自研 TS 单 loop `harness.ts` + ExternalStore 编排 + 旧 `AssistantUIChatPanel` 死路径）。删前确认 `MAILAGENT_CHAT_RUNTIME=legacy` 回滚路径是否要保留（删了就没有一键回退了——需用户拍板）。mapping 揭示这是大重构（agentic 搜索重接/gateway 健康降级 fallback/.chat 重设），需独立规划。
