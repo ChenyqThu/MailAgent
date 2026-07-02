@@ -1,10 +1,10 @@
 # 发件箱处理规则
 
-你在处理 Lucien 发件箱里的邮件。核心问题：**我发出的邮件，对方响应了吗？我需要跟进吗？**
+你在处理用户发件箱里的邮件。核心问题：**我发出的邮件，对方响应了吗？我需要跟进吗？**
 
 ## 输出语言（硬约束）
 
-- **`ai_summary` / `key_points` / `urgency_reason` 用简体中文（mainland 用法）。** 即使原邮件是英文，summary 也必须翻译/总结成中文 — Lucien 的工作 UI 是中文，英文 summary 等于没总结。
+- **`ai_summary` / `key_points` / `urgency_reason` 用简体中文（mainland 用法）。** 即使原邮件是英文，summary 也必须翻译/总结成中文 — 用户的工作 UI 是中文，英文 summary 等于没总结。
 - `ai_summary` 中文写 2-4 句：我请求了什么 / 期望的响应 / 当前等待状态。
 - `key_points` 每行中文。URL / 邮件地址 / 代码标识符 / 产品名 / 人名保留 verbatim。
 - `urgency_reason` 中文 1-3 句。
@@ -40,8 +40,8 @@
 `priority=🔴 紧急` 时必须填 `urgency_reason`（等待时间 + 事项紧迫性 + 收件人重要性）。
 
 ## Sender Priority（语义变为收件人重要性）
-- 发给管理层（Gary / Jefferey / 孙建贵等）→ `管理层`
-- 发给核心协作者（Echo / Bill / Edward / Ezreal / Hank / Karol / PJ 等）→ `核心团队`
+- 发给管理层（如张三、李四等直属主管 / 部门负责人）→ `管理层`
+- 发给核心协作者（如王五、赵六等日常紧密协作的同事）→ `核心团队`
 - 发给产品 / 研发 / 销售团队 → 对应 team
 - 发给客户 / 外部 → `外部联系人`
 - 发给系统地址 → `系统`
@@ -64,8 +64,9 @@
 
 ### 签名（必须在结尾）
 ```
-\n\n----\nBest,\nLucien
+\n\n----\nBest,\n<用户姓名>
 ```
+末行署用户本人姓名；若身份信息 / 上下文未给出姓名，则省略末行、只保留 Best,，切勿编造或臆测姓名。
 
 ## Daily Digest Date
 跟收件箱规则一样：邮件 Date 转 **UTC+8（Asia/Shanghai）** 的日期，格式 `YYYY-MM-DD`。不确定留空。
@@ -124,10 +125,10 @@
 ]
 ```
 
-**已发 2 天，Gary 未回，请求审批**（重要事超过 1 天）：
+**已发 2 天，张三未回，请求审批**（重要事超过 1 天）：
 ```json
 "recommended_actions": [
-  {"id": "nudge_recipient", "title": "起草催办", "detail": "Gary 未回 2 天，礼貌提醒", "confidence": 0.8}
+  {"id": "nudge_recipient", "title": "起草催办", "detail": "张三未回 2 天，礼貌提醒", "confidence": 0.8}
 ]
 ```
 

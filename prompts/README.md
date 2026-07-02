@@ -6,8 +6,8 @@ This directory holds the Markdown prompt templates consumed by `src/llm_agent/`.
 
 | File | Role | Consumed by |
 |---|---|---|
-| `email_inbox.md` | Mailbox-specific rules for Lucien's inbox (how to judge Priority / Category / Action Type / Reply Suggestion) | `PromptLoader.get_for_mailbox("收件箱")` |
-| `email_sent.md` | Mailbox-specific rules for Lucien's sent box (follow-up judgment, different Action Type enum) | `PromptLoader.get_for_mailbox("发件箱")` |
+| `email_inbox.md` | Mailbox-specific rules for the user's inbox (how to judge Priority / Category / Action Type / Reply Suggestion) | `PromptLoader.get_for_mailbox("收件箱")` |
+| `email_sent.md` | Mailbox-specific rules for the user's sent box (follow-up judgment, different Action Type enum) | `PromptLoader.get_for_mailbox("发件箱")` |
 
 ## Hot-reload
 
@@ -21,12 +21,12 @@ Two recommended patterns:
 If you're the only user of this repo, just edit `email_inbox.md` / `email_sent.md` directly.
 
 ### Pattern B — ship your own files
-1. Copy `email_inbox.md` → `prompts/lucien_inbox.md` and edit.
-2. Add `prompts/lucien_*.md` to `.gitignore` (already covered by `.gitignore`'s private-prompt pattern if present, otherwise add it yourself).
+1. Copy `email_inbox.md` → `prompts/my_inbox.md` and edit.
+2. Add `prompts/my_*.md` to `.gitignore` (already covered by `.gitignore`'s private-prompt pattern if present, otherwise add it yourself).
 3. Point `.env` at your own files:
    ```
-   LLM_INBOX_PROMPT_PATH=prompts/lucien_inbox.md
-   LLM_SENT_PROMPT_PATH=prompts/lucien_sent.md
+   LLM_INBOX_PROMPT_PATH=prompts/my_inbox.md
+   LLM_SENT_PROMPT_PATH=prompts/my_sent.md
    ```
 
 ## What NOT to put in the prompt
@@ -41,8 +41,8 @@ Already constrained elsewhere — don't repeat:
 
 `LLM_CONTEXT_PAGE_ID` (a Notion page) is loaded once per 30 min and prepended to system prompt with `cache_control: ephemeral`. Put stable per-user knowledge there:
 - Your role / company / products
-- Current focus projects (Lucien's version: Omada 2026, Guard SaaS, etc)
-- Sender Priority mapping (Gary = 管理层, etc)
+- Current focus projects (list your own focus projects here)
+- Sender Priority mapping (e.g. Alice = 管理层)
 - Timezone / language preferences
 - Email signature style
 
