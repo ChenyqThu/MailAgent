@@ -44,7 +44,18 @@
 注意：
 - 切到 OpenAI 协议时 cache 自动失效（不同协议 + 不同 model = 不同 prefix hash），那次调用算 cache miss；fallback 是兜底而非常态，命中率指标不会被它持续拖累。
 - Fallback warning 在 `pm2 logs mail-sync` 里以 `[llm] model=X failed, falling back to Y: ...` 出现，可作为上游异常告警信号。
-- 想完全禁用 fallback：`LLM_FALLBACK_MODELS=`（空串）。
+- 想完全禁用 fallback：`LLM_FALLBACK_MODELS=`（空串），或行级 `fallback_models_json=[]`（见下节）。
+
+## 预处理 Agent 化（v1.1.0）—— 行级模型 / 文档 / prompt 配置
+
+AI 邮件预处理在前端是 Agents 页的一张 Custom Agent 卡片（`report_agent` 表 `type='preprocess'` 行，id=`email_preprocess_agent`，DB v27 seed）。开关仍走全局 env `LLM_AGENT_ENABLED`；运行时叠加配置存行级列，读侧 `src/llm_agent/preprocess_config.py` 在**每封邮件处理时重读**该行 → 卡片 PATCH 保存即生效，不需重启服务。
+
+- **模型行级覆写**：`report_agent.model` 列，空 = 跟随全局 `LLM_MODEL`。chat gateway 的默认模型与预处理自此解耦（改 chat 默认模型不再影响分类）。
+- **fallback 行级三态**（`fallback_models_json` 列，DB v29）：`NULL` = 跟随全局 `LLM_FALLBACK_MODELS`；`[]` = 显式不设兜底；`[m, ...]` = 预处理专用 fallback 链。
+- **model_chain 构造**（`processor.py:process_email`）：model 空 + fallback NULL（双跟随）→ 传 `None` 走 `classify` 内建全局链，行为字节级同拆分前；任一被定制 → 显式链 `[行模型 or LLM_MODEL, *有效 fallback]`。
+- **身份文档勾选**（`context_docs_json` 列，DB v27）：`NULL` = 默认注入 soul+user（`build_task_identity_context` 默认）；`[]` = 不注入任何身份文档。**persona 覆写层已随 v1.1.0 移除** —— 身份/偏好统一由 Standing Context 文档注入，旧行残留的 `prompt` 列值一律忽略。
+- **分类 prompt 查看**：只读端点 `GET /api/llm/preprocess-prompts` 返回收/发件箱 mailbox prompt 全文（前端卡片抽屉内 inbox/sent tab 查看器）。改 prompt 仍走文件（`prompts/*.md` 或 `LLM_INBOX_PROMPT_PATH` / `LLM_SENT_PROMPT_PATH`），端点不提供写。
+- **PATCH 面**：`src/reports/store.py` 的 `_AGENT_PATCH_FIELDS` 白名单含 `model` / `context_docs_json` / `fallback_models_json`。
 
 ## 模块结构
 
@@ -53,6 +64,7 @@ src/llm_agent/
   schema.py          EMAIL_TOOL_SCHEMA（Anthropic tool JSON schema） + enums（匹配 Notion DB）
   client.py          AsyncAnthropic 封装（含 User-Agent 绕 Cloudflare 1010）
   prompt_loader.py   mtime-aware 热重载收/发件箱 prompt .md
+  preprocess_config.py 读 report_agent preprocess 行（行级 model/context_docs/fallback，每封邮件重读）
   context_loader.py  加载 Email Agent Context markdown（30min TTL）
   md_to_rich_text.py Markdown → Notion rich_text JSON（bold/italic/strike/code/link + 换行）
   digest_resolver.py 日期 → Daily Digest page_id（5min 缓存）

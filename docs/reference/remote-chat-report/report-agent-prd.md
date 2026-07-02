@@ -192,10 +192,12 @@ CREATE TABLE report_agent (
   schedule_json TEXT,              -- {cadence, hours, weekday?, day_of_month?}
   window_hours INTEGER,
   prompt TEXT,
-  model TEXT,
+  model TEXT,                      -- preprocess 行: 空 = 跟随全局 LLM_MODEL（v1.1.0 行级模型拆分）
   tools_json TEXT,                 -- 预留: 该 agent 可用 tool 白名单
   kos_enrich INTEGER DEFAULT 0,
-  updated_at REAL
+  updated_at REAL,
+  context_docs_json TEXT,          -- v27: preprocess 身份文档勾选（JSON 数组 of profile-doc 名；NULL=默认 soul+user，[]=不注入）
+  fallback_models_json TEXT        -- v29: preprocess 行级 fallback 链（JSON 数组；NULL=跟随全局 LLM_FALLBACK_MODELS，[]=显式不设，数组=专用链；非 preprocess 行恒 NULL）
 );
 -- 报告产物表
 CREATE TABLE report (
@@ -213,9 +215,11 @@ CREATE TABLE report (
 CREATE INDEX idx_report_agent_date ON report(agent_id, report_date DESC);
 ```
 
+> **v1.1.0 增量（DB v27–v29）**：`report_agent` 多了一类 `type='preprocess'` 特殊行 `email_preprocess_agent`（v27 seed）= **AI 邮件预处理 Custom Agent 卡片**——复用本表存运行时配置：`model`（空=跟随全局 `LLM_MODEL`，与 chat 默认模型解耦）+ `context_docs_json`（v27，身份文档勾选）+ `fallback_models_json`（v29，fallback 三态）；开关走全局 env `LLM_AGENT_ENABLED`（非 `enabled` 列），排程/窗口/报告产物字段不适用。读侧 `src/llm_agent/preprocess_config.py` 每封邮件重读该行 → PATCH 保存即生效（`store.py` `_AGENT_PATCH_FIELDS` 白名单含这 3 列）。v28 删除了 `monthly_email_digest` 默认 seed 行（dogfood #9，用户未改默认态才删）。详见 [`llm-agent.md`](../llm-agent/llm-agent.md)「预处理 Agent 化」。
+
 ### 4.7 配置（可扩展 schema）
 
-- v1 固定 `type=report`；预留 `type` / `tools_json` / 将来 `trigger` / `url` 字段为全自定义铺路。
+- v1 固定 `type=report`；预留 `type` / `tools_json` / 将来 `trigger` / `url` 字段为全自定义铺路。（v1.1.0 起 `type='preprocess'` 已实际启用 —— AI 邮件预处理 agent 行，见 §4.6 增量注。）
 - 用户在 /agents 页可：启用 / 停用、改 prompt、改排程 / 窗口、选 model、**Run now**（即时生成）。
 
 ### 4.8 日 / 周 / 月差异

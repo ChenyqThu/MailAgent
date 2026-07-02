@@ -1,6 +1,6 @@
 # Harness Agent 核心调度层重构 — 架构 Review + 分阶段计划
 
-> status: **M1 全落地 ✅（M1a–M1f 6 commits `3aa91a2b`→`b906eee1`）** · **M2 全落地 ✅（2026-06-28，M2a–M2d 4 commits `dde91f6a`→`8343479c`，main 未 push，每步独立 code-reviewer APPROVE）** · **M3 next** · M5 新增 · owner: chenyqThu · created: 2026-06-27
+> status: **M1–M5 全落地 ✅ + 4 flag cutover 默认 ON ✅（随 v1.1.0 发布，2026-07-02）** · 剩余 = 任务B[删 legacy harness]（独立 task，见 next-phase-backlog） · owner: chenyqThu · created: 2026-06-27
 > 上游：epic master = [`README.md`](./README.md) · 触发交接 = [`next-phase-backlog.md`](./next-phase-backlog.md) §2（用户「核心调度层重构」框架）
 > 本档 = backlog §2 框架的**架构级 review 落地** + **可执行分阶段计划**。代码等本计划经用户确认后按「每步一 diff」开。
 >
@@ -235,9 +235,9 @@ M5b 物理退役 KV 后把 mem0 侧从「FAISS + 按 query 召回（M2）」重�
 
 **out of scope（follow-up）**：mem0_engine/FAISS 物理删除（memory.md 已取代但 undo 链外的引擎代码本步不删）；删 legacy harness（M5b option A 遗留独立 task）；release（翻 epic flag 默认 ON + seed 迁移 + build/push/tag）。
 
-### cutover（2026-07-02）：4 flag 默认翻 ON
+### ✅ cutover（2026-07-02）：4 flag 默认翻 ON —— 已随 v1.1.0 发布
 
-`MAILAGENT_MEM0_CAPTURE` / `MAILAGENT_MEM0_RETRIEVAL` / `MAILAGENT_USER_MD_COMPILE` / `MAILAGENT_SKILL_SELF_MOUNT` 代码默认翻 true（agent_memory_kv 已物理退役，这 4 个 flag 不开则 agent 无持久记忆；v1.1.0 dogfood 已在 userData .env 手动开着验证过），env 显式 false 为应急回退。随 v1.1.0 dogfood 轮发布。
+`MAILAGENT_MEM0_CAPTURE` / `MAILAGENT_MEM0_RETRIEVAL` / `MAILAGENT_USER_MD_COMPILE` / `MAILAGENT_SKILL_SELF_MOUNT` 代码默认翻 true（agent_memory_kv 已物理退役，这 4 个 flag 不开则 agent 无持久记忆；v1.1.0 dogfood 已在 userData .env 手动开着验证过），env 显式 false 为应急回退。**✅ 已随 v1.1.0 发布（2026-07-02，GitHub releases/latest）。**
 
 ---
 
@@ -251,12 +251,12 @@ M5b 物理退役 KV 后把 mem0 侧从「FAISS + 按 query 召回（M2）」重�
 6. 动 `agent_memory_kv` schema → bump **`CHAT_DB_VERSION`**（非 `EXPECTED_DB_VERSION`）+ `src/chat/db.py` 头注释 + test_chat seed + 终态断言。
 7. 每阶段 = 一个（或少数几个）可 review diff（用户工作方式）。
 
-### flag 清单（新增，全 default off 直到各自 cutover）
+### flag 清单（M1-M4 四 flag 已随 v1.1.0 cutover **默认 ON**，env 显式 false 应急回退；M0 flag 已随 M5b 删除）
 | flag | 阶段 | 控什么 |
 |---|---|---|
-| `MAILAGENT_AI_SDK_MEMORY_TOOLS` | M0 | gateway 记忆工具注册 |
+| ~~`MAILAGENT_AI_SDK_MEMORY_TOOLS`~~ | M0 | gateway 记忆工具注册（M5b 物理退役 KV 工具时一并删除） |
 | `MAILAGENT_MEM0_CAPTURE` | M1 | onFinish 异步抽取写 |
-| `MAILAGENT_MEM0_RETRIEVAL` | M2 | per-turn query 召回注入 |
+| `MAILAGENT_MEM0_RETRIEVAL` | M2 | per-turn 注入（memory.md 重定型后语义=恒注入） |
 | `MAILAGENT_USER_MD_COMPILE` | M3 | user.md 编译触发 |
 | `MAILAGENT_SKILL_SELF_MOUNT` | M4 | 工具门控 + update_system_md + discover_skills |
 
