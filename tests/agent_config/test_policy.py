@@ -219,6 +219,12 @@ def test_evaluate_file_capability(tmp_path):
         ("bash", True), ("sh", True), ("zsh", True), ("python", True), ("python3", True),
         ("python3.11", True), ("node", True), ("git", True), ("npm", True), ("env", True),
         ("sudo", True), ("osascript", True), ("uv", True),
+        # W1a-fix P2-1: macOS / *nix 关键脚枪补充
+        ("open", True), ("ssh", True), ("scp", True), ("sftp", True),
+        ("nc", True), ("ncat", True), ("socat", True),
+        ("vim", True), ("vi", True), ("view", True), ("nano", True), ("emacs", True),
+        ("tar", True), ("sqlite3", True), ("gdb", True), ("lldb", True), ("dtrace", True),
+        ("tclsh", True), ("expect", True), ("lua", True), ("Rscript", True),
         ("ffmpeg", False), ("mytool", False), ("cat", False), ("ls", False),
     ],
 )

@@ -64,6 +64,17 @@ RESERVED_DENY_NAMES: frozenset = frozenset(
         "RUBYOPT",
         "PYTHONSTARTUP",
         "PYTHONHOME",
+        # W3 review P2-③：补漏的 shell/工具执行劫持名。PROMPT_COMMAND = bash 每次显示提示符前 eval；
+        # SHELLOPTS/BASHOPTS = 只读导入即改 shell 行为；PYTHONBREAKPOINT = breakpoint() 时 import 任意
+        # 可调用；GIT_SSH/GIT_SSH_COMMAND/GIT_EXTERNAL_DIFF/GIT_PAGER = git 子进程借这些名执行任意命令。
+        "PROMPT_COMMAND",
+        "SHELLOPTS",
+        "BASHOPTS",
+        "PYTHONBREAKPOINT",
+        "GIT_SSH",
+        "GIT_SSH_COMMAND",
+        "GIT_EXTERNAL_DIFF",
+        "GIT_PAGER",
     }
 )
 # 显式 deny 的前缀族（整族禁用：MAILAGENT_* 全局配置 / AWS_* 云凭据 / DYLD_* dylib 注入劫持 /

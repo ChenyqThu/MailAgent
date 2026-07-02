@@ -2,9 +2,10 @@
 
 地板拒绝对一组敏感目标的读/写：``DATA_ROOT/.env``（全局密钥）· 各 backend-owned SQLite
 （``agent_config.db`` / ``sync_store.db`` / ``ai_chat.db`` + wal/shm/journal —— 直写库绕过全部业务
-不变式）· ``token.dat``（davmail 凭据）· ``~/.ssh/**`` · ``~/Library/Keychains/**`` · 运行解释器根
-（venv / 打包内嵌 python，防 agent 改写自身可执行体 = 持久化后门）· ``skill_secrets.key`` · skill
-``.quarantine/**``（未审内容禁读写执行）。
+不变式；三库路径都经各自的 resolver 取，随 env override 走）· ``token.dat``（davmail 凭据）·
+``~/.ssh/**`` · ``~/Library/Keychains/**`` · 运行解释器根 + **完整 macOS .app bundle**（dev venv /
+打包内嵌 python + Electron main 可执行体，防 agent 改写自身可执行体 = 持久化后门）·
+``skill_secrets.key`` · skill ``.quarantine/**``（未审内容禁读写执行）。
 
 **inode 级复核（codex P1-4）**：realpath 前缀能挡 symlink + ``..`` traversal，但**挡不住 hardlink**
 （把敏感文件硬链进允许目录后 realpath 不暴露原路径）+ check→open 间的 rename race（TOCTOU）。故：
@@ -74,6 +75,17 @@ def _sync_store_db(data_root: str) -> str:
         return os.path.join(data_root, "data", "sync_store.db")
 
 
+def _ai_chat_db(data_root: str) -> str:
+    """ai_chat.db 现值：复用前端 owned schema 的 resolver（读 ``AI_CHAT_DB_PATH`` override，与
+    sync_store/agent_config 一致），**不硬编码路径** —— 否则 override 时地板双失（P2-3）。"""
+    try:
+        from src.chat.db import resolve_ai_chat_db_path
+
+        return resolve_ai_chat_db_path()
+    except Exception:  # noqa: BLE001 — 裸 worktree / 缺 config → 回退默认位置
+        return os.path.join(data_root, "frontend", "ai_chat.db")
+
+
 def _skills_root() -> Optional[str]:
     try:
         from src.skills.pack_fetch import skills_data_root
@@ -81,6 +93,23 @@ def _skills_root() -> Optional[str]:
         return skills_data_root()
     except Exception:  # noqa: BLE001
         return None
+
+
+def _app_bundle_root() -> Optional[str]:
+    """打包态 macOS ``.app`` bundle 根：从 ``sys.executable`` 上溯首个 ``*.app`` 目录。
+
+    一条前缀树即覆盖整个 bundle —— 内嵌可重定位 CPython + Electron main 可执行体
+    （``Contents/MacOS/*``）+ 全部 Resources，防 agent 改写自身可执行体做持久化后门（ADR-001 §7）。
+    dev 态（解释器不在 ``.app`` 内）返回 None，由 ``sys.prefix`` / repo ``venv`` 兜底。
+    """
+    p = os.path.realpath(sys.executable)
+    while True:
+        if p.endswith(".app") and os.path.isdir(p):
+            return p
+        parent = os.path.dirname(p)
+        if parent == p:  # 抵达文件系统根，未见 .app
+            return None
+        p = parent
 
 
 # ---------------------------------------------------------------------------
@@ -105,7 +134,7 @@ class ExecFloor:
         data_root = _data_root()
 
         exacts: list[str] = [os.path.join(data_root, ".env")]
-        for db in (_agent_config_db(), _sync_store_db(data_root), os.path.join(data_root, "frontend", "ai_chat.db")):
+        for db in (_agent_config_db(), _sync_store_db(data_root), _ai_chat_db(data_root)):
             if db:
                 for suf in _DB_SUFFIXES:
                     exacts.append(db + suf)
@@ -125,6 +154,8 @@ class ExecFloor:
             os.path.expanduser("~/Library/Keychains"),
             sys.prefix,  # 运行解释器根（dev = venv / 打包 = 内嵌 python）
             sys.base_prefix,
+            _app_bundle_root(),  # 打包态 .app bundle 根（内嵌 venv + Electron main + Resources 全覆盖）
+            os.path.join(data_root, "venv"),  # dev 态 repo venv（sys.prefix 之外的显式覆盖）
         ]
         skills_root = _skills_root()
         if skills_root:

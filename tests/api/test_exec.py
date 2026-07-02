@@ -250,6 +250,64 @@ def test_file_write_overwrite_hardlink_to_env_denied_and_intact(client, monkeypa
     assert env_path.read_text() == "NOTION_TOKEN=secret"  # 截断没发生
 
 
+# ── W1a-fix：deny 地板扩展（P2-2 完整 .app bundle / P2-3 ai_chat.db override）────────
+
+
+def test_file_read_denies_app_bundle_electron_main(client, monkeypatch, tmp_path):
+    """P2-2：deny 地板覆盖**完整** macOS .app bundle —— Electron main 可执行体
+    （Contents/MacOS/*）被拒（ADR-001 §7，防 agent 改写自身可执行体做持久化后门）。
+    仅覆盖内嵌 python（sys.prefix）会漏掉 bundle 内其余可执行体。"""
+    bundle = tmp_path / "MailAgent.app"
+    pybin = bundle / "Contents" / "Resources" / "python" / "bin"
+    pybin.mkdir(parents=True)
+    fake_py = pybin / "python3"
+    fake_py.write_text("#!/bin/sh\n")
+    # sys.executable 落在假 bundle 内 → _app_bundle_root 上溯命中 *.app 根。
+    monkeypatch.setattr(exec_floor.sys, "executable", str(fake_py))
+    main_bin = bundle / "Contents" / "MacOS" / "MailAgent"
+    main_bin.parent.mkdir(parents=True)
+    main_bin.write_text("mach-o binary")
+    data_root = tmp_path / "root"
+    (data_root / "work").mkdir(parents=True)
+    monkeypatch.setenv("MAILAGENT_DATA_ROOT", str(data_root))
+    exec_floor.reset_exec_floor_cache()
+    code, err = _err(_post(client, "/api/exec/file_read", {"path": str(main_bin)}))
+    assert code == 403 and err == "E_EXEC_FLOOR_DENIED"
+
+
+def test_file_write_denies_app_bundle_resource(client, monkeypatch, tmp_path):
+    """P2-2：写 bundle 内任意文件（此处 Resources/app 下的 JS）同样被拒。"""
+    bundle = tmp_path / "MailAgent.app"
+    pybin = bundle / "Contents" / "Resources" / "python" / "bin"
+    pybin.mkdir(parents=True)
+    fake_py = pybin / "python3"
+    fake_py.write_text("#!/bin/sh\n")
+    monkeypatch.setattr(exec_floor.sys, "executable", str(fake_py))
+    data_root = tmp_path / "root"
+    data_root.mkdir()
+    monkeypatch.setenv("MAILAGENT_DATA_ROOT", str(data_root))
+    exec_floor.reset_exec_floor_cache()
+    target = bundle / "Contents" / "Resources" / "app" / "inject.js"
+    target.parent.mkdir(parents=True)
+    code, err = _err(_post(client, "/api/exec/file_write",
+                           {"path": str(target), "content": "pwn", "mode": "overwrite"}))
+    assert code == 403 and err == "E_EXEC_FLOOR_DENIED"
+
+
+def test_file_read_denies_ai_chat_db_with_override(client, monkeypatch, tmp_path):
+    """P2-3：ai_chat.db 路径经 resolve_ai_chat_db_path 取 → ``AI_CHAT_DB_PATH`` override 时地板仍
+    命中该 db（之前硬编码 DATA_ROOT/frontend/ai_chat.db，override 时地板双失）。"""
+    data_root = tmp_path / "root"
+    (data_root / "custom").mkdir(parents=True)
+    db = data_root / "custom" / "relocated_chat.db"
+    db.write_text("sqlite-bytes")
+    monkeypatch.setenv("MAILAGENT_DATA_ROOT", str(data_root))
+    monkeypatch.setenv("AI_CHAT_DB_PATH", str(db))
+    exec_floor.reset_exec_floor_cache()
+    code, err = _err(_post(client, "/api/exec/file_read", {"path": str(db)}))
+    assert code == 403 and err == "E_EXEC_FLOOR_DENIED"
+
+
 # ── policy 规则 CRUD + evaluate 端点 ───────────────────────────────────────────────
 
 

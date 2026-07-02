@@ -25,7 +25,7 @@ from src.agent_config.store import (
     get_agent_config_store,
 )
 from src.api.app import APIError, success_envelope
-from src.api.auth import verify_cf_access
+from src.api.auth import verify_cf_access, verify_local_token
 
 router = APIRouter(prefix="/api/agent", tags=["agent"])
 
@@ -621,11 +621,16 @@ async def delete_policy_rule(rule_id: int, request: Request):
     return success_envelope({"id": rule_id, "removed": removed}, request=request, source="sqlite")
 
 
-@router.post("/policy/evaluate", dependencies=[Depends(verify_cf_access)])
+@router.post("/policy/evaluate", dependencies=[Depends(verify_local_token)])
 async def evaluate_policy(request: Request, body: Optional[dict[str, Any]] = None):
     """评估一次动作是否命中白名单 → {decision: auto_allow|ask, ruleId}。gateway W1b 的 needsApproval
     前置调用。body = {capability, action, contextMode?}。contextMode 缺省/非法 → fail-closed 到
-    untrusted_trigger（manual 规则不匹配 → ask）。"""
+    untrusted_trigger（manual 规则不匹配 → ask）。
+
+    🔴 鉴权 = ``verify_local_token``（**仅**本地 token，不接受 CF JWT）——唯一调用方是 in-process
+    gateway domainClient（同机 loopback，恒带 ``X-MailAgent-Local-Token``），与 exec 三端点同形状。
+    收窄理由：evaluate 是执行放行判定的前置门，若挂 ``verify_cf_access`` 则远程 CF 会话可探/预热
+    白名单判决。**注**：``/policy/rules`` CRUD 仍走 ``verify_cf_access``（Settings UI 远程管理规则）。"""
     from src.agent_config.policy import CAPABILITIES, CONTEXT_MODES, evaluate
 
     raw = body or {}

@@ -56,6 +56,11 @@ def test_document_manifest_may_have_tools():
         "NOTION_TOKEN",  # global credential
         "HTTPS_PROXY",
         "REQUESTS_CA_BUNDLE",
+        "PROMPT_COMMAND",  # W3 review P2-③ — bash eval-before-prompt hook
+        "SHELLOPTS",  # read-only import changes shell behavior
+        "PYTHONBREAKPOINT",  # breakpoint() imports arbitrary callable
+        "GIT_SSH_COMMAND",  # git subprocess arbitrary exec
+        "GIT_EXTERNAL_DIFF",
     ],
 )
 def test_illegal_secret_name_rejected(bad_name):

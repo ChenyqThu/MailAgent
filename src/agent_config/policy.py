@@ -37,13 +37,22 @@ CAPABILITIES: tuple[str, ...] = ("exec", "file_read", "file_write", "web")
 CONTEXT_MODES: tuple[str, ...] = ("manual_chat", "untrusted_trigger", "cron_headless")
 
 # 危险 argv0 basename（realpath 解析后按 basename 判定）——解释器 / shell / 包管理器 / 可扩展
-# runner：允许某位 {any} 或子命令 ≈ 任意代码执行（ADR-001 §6，codex P1-3）。
+# runner：允许某位 {any} 或子命令 ≈ 任意代码执行（ADR-001 §6，codex P1-3；W1a-fix P2-1 补 macOS 项）。
 DANGEROUS_ARGV0_BASENAMES: frozenset = frozenset(
     {
+        # shell / 解释器
         "bash", "sh", "zsh", "dash", "ksh", "csh", "tcsh", "fish",
         "python", "python3", "node", "deno", "bun", "ruby", "perl", "php", "osascript",
+        "tclsh", "expect", "lua", "Rscript",
+        # 包管理器 / 构建 / 通用 runner
         "npm", "npx", "pnpm", "yarn", "pip", "pip3", "uv",
         "git", "make", "cmake", "env", "xargs", "find", "awk", "sed", "sudo",
+        # macOS / *nix 脚枪：任意 .app 启动（open）· 网络+可执行（ssh/scp/sftp/nc/ncat/socat）·
+        # 编辑器 :!cmd 逃逸（vim/vi/view/nano/emacs）· 归档 --to-command（tar）· DB .shell/.load
+        # （sqlite3）· 调试器 attach+执行（gdb/lldb/dtrace）。
+        "open", "ssh", "scp", "sftp", "nc", "ncat", "socat",
+        "vim", "vi", "view", "nano", "emacs",
+        "tar", "sqlite3", "gdb", "lldb", "dtrace",
     }
 )
 # 版本化解释器（python3.11 / python3.12…）也算危险。

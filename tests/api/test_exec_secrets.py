@@ -74,6 +74,23 @@ def test_secret_injected_and_value_redacted(client, fresh_agent_cfg):
     assert "[REDACTED:DMS_TOKEN]" in out
 
 
+def test_redact_prefix_pair_no_tail_leak(client, fresh_agent_cfg):
+    """两 secret 值互为前缀 → 长值必须先脱敏（W3 review P2-①）。若按名序，短值 ``TOKENabc`` 先
+    替换会把长值 ``TOKENabc123XY`` 的前缀吃掉、泄漏尾部 ``123XY``；len 降序则整段命中。"""
+    store = fresh_agent_cfg
+    skdir = _install_script_skill(store, "pfx", ["SECRET_A", "SECRET_B"])
+    short_v, long_v = "TOKENabc", "TOKENabc123XY"
+    secrets.set_secret("pfx", "SECRET_A", short_v, store=store)
+    secrets.set_secret("pfx", "SECRET_B", long_v, store=store)
+
+    d = _data(client.post("/api/exec/run", json={"argv": ["/usr/bin/env"], "cwd": skdir}))
+    out = d["stdout"]
+    assert short_v not in out
+    assert long_v not in out
+    assert "123XY" not in out  # 长值尾部不因短值先替换而泄漏（前缀子串洞）
+    assert "[REDACTED:SECRET_A]" in out and "[REDACTED:SECRET_B]" in out
+
+
 def test_non_skill_command_zero_injection(client, fresh_agent_cfg):
     """普通命令（cwd 缺省 = DATA_ROOT，不触达 skill 目录）→ 零注入，无密钥泄漏。"""
     store = fresh_agent_cfg

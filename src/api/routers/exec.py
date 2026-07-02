@@ -15,9 +15,12 @@ gateway ApprovalGuard）。
     exec 无沙箱，最终防线是 HITL + 白名单窄度 + 固定 env（ADR-001 §7）。
   - **绝不 ``shell=True``**（argv 数组直传 → shell 元字符作字面参数，无注入面）。
 
-鉴权与 domainClient 消费的既有端点一致（``verify_cf_access``：本地 token 腿 / CF JWT 腿）——
-owner-only（本机用户）。W1a 一切调用都是 owner 亲手的 manual_chat 语境；policy 评估用 manual_chat
-仅作**审计透传**（``policy`` 字段），门禁在 gateway 层。
+🔴 鉴权 = ``verify_local_token``（**仅**本地 ephemeral token 腿，**不接受 CF JWT**）——对标
+island ``/agent/announce``（``island.py:141``）。唯一调用方是 Electron 主进程内嵌 gateway 的
+domainClient（同机 loopback，恒带 ``X-MailAgent-Local-Token``）。收窄理由：serve-api 经 cloudflared
+暴露公网，若挂 ``verify_cf_access`` 则持/窃 owner CF 会话者可远程 curl ``/api/exec/run`` 拿 RCE，
+绕过 gateway 的 HITL / policy engine。W1a 一切调用都是 owner 亲手的 manual_chat 语境；policy 评估用
+manual_chat 仅作**审计透传**（``policy`` 字段），门禁在 gateway 层。
 """
 
 from __future__ import annotations
@@ -32,7 +35,7 @@ from loguru import logger
 from pydantic import BaseModel, Field, field_validator
 
 from src.api.app import APIError, success_envelope
-from src.api.auth import verify_cf_access
+from src.api.auth import verify_local_token
 from src.api.exec_floor import FloorDenied, get_exec_floor
 from src.skills.secret_names import build_fixed_base_env
 
@@ -155,7 +158,11 @@ def _finalize_output(
         truncated = len(raw) > _OUTPUT_CAP_BYTES
         return raw[:_OUTPUT_CAP_BYTES].decode("utf-8", errors="replace"), truncated
     text = raw.decode("utf-8", errors="replace")
-    for name, value in redact:
+    # 按值长度**降序**替换（W3 review P2-①）：两 secret 值互为前缀时（如 ``TOKENabc`` 与
+    # ``TOKENabc123``），若短值先替换会把长值的前缀吃掉、泄漏其尾部（``123``）。长值先替换则整段命中。
+    # 保留所有非空值脱敏（不设长度下限跳过）——脱敏是 best-effort 回显防护（ADR-002 §7 已声明非外发
+    # 防线，base64/转码可逃逸），不为可用性开「超短值不脱敏」的泄漏口。
+    for name, value in sorted(redact, key=lambda nv: len(nv[1]), reverse=True):
         if value:
             text = text.replace(value, f"[REDACTED:{name}]")
     truncated = len(text) > _OUTPUT_CAP_BYTES
@@ -237,7 +244,7 @@ def _skill_secret_overlay(argv: list[str], cwd: str) -> tuple[dict[str, str], li
     return overlay, injected
 
 
-@router.post("/run", dependencies=[Depends(verify_cf_access)])
+@router.post("/run", dependencies=[Depends(verify_local_token)])
 async def run_command(request: Request, body: RunRequest):
     """执行一条命令（argv 数组，**无 shell**）。固定 env 白名单基底（不继承全局密钥）；run_command
     地板只静态标红（floor_hits），不阻断——批准后即任意执行（无沙箱，见模块 docstring）。"""
@@ -322,7 +329,7 @@ def _map_file_oserror(exc: OSError, path: str) -> APIError:
     return APIError("E_BAD_PATH", f"cannot open {path}: {exc}", http_status=400, source="exec")
 
 
-@router.post("/file_read", dependencies=[Depends(verify_cf_access)])
+@router.post("/file_read", dependencies=[Depends(verify_local_token)])
 async def file_read(request: Request, body: FileReadRequest):
     """读一个文件（deny 地板硬拒敏感目标；inode 复核挡 hardlink/TOCTOU）。返回 utf-8 lossy 文本 +
     截断标记 + 文件真实字节大小。"""
@@ -336,7 +343,7 @@ async def file_read(request: Request, body: FileReadRequest):
     return success_envelope(result, request=request, source="exec")
 
 
-@router.post("/file_write", dependencies=[Depends(verify_cf_access)])
+@router.post("/file_write", dependencies=[Depends(verify_local_token)])
 async def file_write(request: Request, body: FileWriteRequest):
     """写一个文件（deny 地板硬拒；overwrite 的截断推迟到 inode 复核之后，防 hardlink 抹敏感文件）。
     mode ∈ overwrite / append / create_new（默认 create_new，已存在则 409）。父目录须存在。"""
