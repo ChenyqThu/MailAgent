@@ -60,7 +60,7 @@ TASK_TOOL_SCHEMA: Dict[str, Any] = {
                 "maxLength": 100,
                 "description": (
                     "精炼成『动词开头的行动项』，简体中文，≤ 100 字。"
-                    "例：『Review PCI 合规文档高亮部分』『回复 Gary 关于 Q3 预算』。"
+                    "例：『Review PCI 合规文档高亮部分』『回复领导关于 Q3 预算』。"
                     "不要照搬邮件主题，不要带 Re:/Fwd: 前缀。"
                 ),
             },
