@@ -22,6 +22,7 @@ import { applySkillGating } from './skill_gating'
 import { createSelfMountTools } from './self_mount'
 import { createSessionTools } from './sessions'
 import { createProfileTools } from './profile'
+import { createWebTools } from './web'
 import type { GatewayApprovalMode, GatewayToolAuditCollector } from './types'
 
 export interface BuildGatewayToolsOpts {
@@ -80,6 +81,11 @@ export interface BuildGatewayToolsOpts {
    *  (edit-tier writes, always ask — never auto-approved). Off (default) → not added → ToolSet
    *  byte-identical to the v1.2.0 set. */
   configToolsEnabled?: boolean
+  /** S1 R3 (MAILAGENT_OPENNESS_WEB_TOOLS) — when true AND approvalGuard is supplied, the two web
+   *  tools are added: web_fetch / web_search (both edit-tier writes — outbound network always asks,
+   *  never auto-approved; returned content is WEB_CONTENT-fenced). Off (default) → not added →
+   *  ToolSet byte-identical to the v1.2.0 set. */
+  webToolsEnabled?: boolean
 }
 
 /** Names of the read tools exposed by the gateway (for tests / observability). */
@@ -163,6 +169,20 @@ export function buildGatewayTools(
     Object.assign(
       tools,
       createProfileTools(opts.domain, collector, opts.approvalGuard, {
+        a2uiEnabled: opts.a2uiEnabled,
+        approvalMode: opts.approvalMode,
+        oneShot: opts.oneShotWrites
+      })
+    )
+  }
+  // S1 R3 — web tools behind MAILAGENT_OPENNESS_WEB_TOOLS. Both edit-tier writes → need the
+  // approval guard (all-or-nothing on flag + guard, same as the profile-config block). CORE (no
+  // skill ownership) so applySkillGating below never drops them. flag-off (default) → not added →
+  // byte-identical to the v1.2.0 set.
+  if (opts.webToolsEnabled && opts.approvalGuard) {
+    Object.assign(
+      tools,
+      createWebTools(opts.domain, collector, opts.approvalGuard, {
         a2uiEnabled: opts.a2uiEnabled,
         approvalMode: opts.approvalMode,
         oneShot: opts.oneShotWrites

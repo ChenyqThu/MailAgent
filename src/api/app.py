@@ -422,6 +422,7 @@ from src.api.routers import (  # noqa: E402
     reports,
     settings,
     skills,
+    web,
 )
 
 app.include_router(email.router)
@@ -438,6 +439,10 @@ app.include_router(chat.router)
 app.include_router(settings.router)
 app.include_router(skills.router)
 app.include_router(agent.router)
+# S1 R3 (agent openness wave1) — web 联网工具执行端点 /api/web/{fetch,search}。TS 薄壳→
+# Python 执行（业务权威 + 远程 parity）；SSRF 防护 + 钉 IP 在 routers/web.py。gateway 侧
+# 恒 edit-tier 人审，flag MAILAGENT_OPENNESS_WEB_TOOLS 默认 off（工具不注册即无从触达本端点）。
+app.include_router(web.router)
 # ping-island 解耦 ack 通道 (契约 §6/§9-4): 按钮点击 fire-and-forget POST 回灌。
 # 自认 ack_token 能力令牌 (不挂 verify_cf_access)，见 routers/island.py。
 app.include_router(island.router)

@@ -229,3 +229,23 @@ export const chatSessionGetSchema = z.object({
   limit: z.number().int().min(1).max(100).default(30)
 })
 export type ChatSessionGetInput = z.infer<typeof chatSessionGetSchema>
+
+// ── web schemas (S1 R3) — the agent fetches a web page / searches the web. Behind
+//    MAILAGENT_OPENNESS_WEB_TOOLS. BOTH are edit-tier writes (outbound network = always ask,
+//    editable url/query). Returned content is untrusted → the tools WEB_CONTENT-fence it.
+//    Python (routers/web.py) is the execution authority (SSRF guard, IP pinning). ──────────
+
+/** web_fetch (S1 R3) — fetch one http/https URL's readable content. max_chars caps the
+ *  extracted text (server clamps to its own hard max). */
+export const webFetchSchema = z.object({
+  url: z.string().min(1).max(4096),
+  max_chars: z.number().int().min(200).max(200_000).default(50_000)
+})
+export type WebFetchInput = z.infer<typeof webFetchSchema>
+
+/** web_search (S1 R3) — DuckDuckGo web search (best-effort). limit caps result count. */
+export const webSearchSchema = z.object({
+  query: z.string().min(1).max(500),
+  limit: z.number().int().min(1).max(10).default(5)
+})
+export type WebSearchInput = z.infer<typeof webSearchSchema>

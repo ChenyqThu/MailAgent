@@ -320,6 +320,11 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
   // off → dogfood → cutover 另拍); main-env-only, NO vite define (mirrors
   // MAILAGENT_OPENNESS_SESSION_TOOLS). Off → buildGatewayTools output byte-identical to v1.2.0.
   const configToolsEnabled = envBool('MAILAGENT_OPENNESS_CONFIG_TOOLS', false)
+  // S1 R3 — MAILAGENT_OPENNESS_WEB_TOOLS gates the two web tools (web_fetch / web_search, both
+  // edit-tier writes — outbound network always asks; SSRF-guarded server-side in routers/web.py).
+  // Default OFF (island 模式); main-env-only, NO vite define (mirrors the other two openness flags).
+  // Off → buildGatewayTools output byte-identical to v1.2.0.
+  const webToolsEnabled = envBool('MAILAGENT_OPENNESS_WEB_TOOLS', false)
   const apiBase = `http://127.0.0.1:${resolveApiPort()}/api`
   // M4a — prewarm the /chat/config cache ONCE before the server accepts requests so the per-request
   // buildTools factory reads a populated advertisedSkills on the very first turn (no null-first-turn
@@ -538,7 +543,9 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
           // S1 R1 — chat-session read tools (MAILAGENT_OPENNESS_SESSION_TOOLS, default off).
           sessionToolsEnabled,
           // S1 R2 — profile-config tools (MAILAGENT_OPENNESS_CONFIG_TOOLS, default off).
-          configToolsEnabled
+          configToolsEnabled,
+          // S1 R3 — web tools (MAILAGENT_OPENNESS_WEB_TOOLS, default off).
+          webToolsEnabled
         },
         collector
       ),

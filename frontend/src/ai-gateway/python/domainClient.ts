@@ -244,6 +244,28 @@ export interface DomainChatMessage {
   created_at: number
 }
 
+// ── web shapes (S1 R3) — the /web/* rows the web tools consume. Python (routers/web.py) is
+//    the execution authority (SSRF guard + IP pinning); the client just carries the envelope. ──
+
+/** web_fetch — data block of POST /web/fetch. `text` is the extracted (untrusted) content;
+ *  the tool WEB_CONTENT-fences it before it reaches the model. */
+export interface DomainWebFetchResult {
+  url: string
+  final_url: string
+  status: number
+  content_type: string | null
+  title: string | null
+  text: string
+  truncated: boolean
+}
+
+/** web_search — data block of POST /web/search (DuckDuckGo, best-effort). */
+export interface DomainWebSearchResult {
+  query: string
+  count: number
+  results: Array<{ title: string; url: string; snippet: string }>
+}
+
 /** chat_session_search — one aggregated hit of GET /chat/sessions/search. */
 export interface DomainSessionSearchHit {
   session: {
@@ -697,5 +719,27 @@ export class MailAgentDomainClient {
       `/agent/skills/${encodeURIComponent(name)}/enabled`,
       { body: { enabled }, signal }
     )
+  }
+
+  // ── web primitives (S1 R3) — outbound network via serve-api /web/* (never node:fetch in the
+  //    gateway core): the business authority (SSRF guard, IP pinning, content extraction) lives in
+  //    Python (routers/web.py) → remote parity for free. The tools that call these are only
+  //    registered when MAILAGENT_OPENNESS_WEB_TOOLS is on; both are edit-tier (always ask).
+
+  /** web_fetch (S1 R3) — fetch one http/https URL's content (SSRF-guarded, IP-pinned server-side).
+   *  POST /web/fetch {url, max_chars}. Returns the extracted text (untrusted) + metadata. */
+  webFetch(url: string, maxChars: number, signal?: AbortSignal): Promise<DomainWebFetchResult> {
+    return this._req<DomainWebFetchResult>('POST', '/web/fetch', {
+      body: { url, max_chars: maxChars },
+      signal
+    })
+  }
+
+  /** web_search (S1 R3) — DuckDuckGo web search (best-effort). POST /web/search {query, limit}. */
+  webSearch(query: string, limit: number, signal?: AbortSignal): Promise<DomainWebSearchResult> {
+    return this._req<DomainWebSearchResult>('POST', '/web/search', {
+      body: { query, limit },
+      signal
+    })
   }
 }

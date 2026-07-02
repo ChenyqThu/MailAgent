@@ -35,7 +35,9 @@ function buildAllTools() {
     // directions see them (they are classified CORE_UNGATED).
     sessionToolsEnabled: true,
     // S1 R2 — profile-config tools (MAILAGENT_OPENNESS_CONFIG_TOOLS), same rationale.
-    configToolsEnabled: true
+    configToolsEnabled: true,
+    // S1 R3 — web tools (MAILAGENT_OPENNESS_WEB_TOOLS), same rationale (classified CORE_UNGATED).
+    webToolsEnabled: true
   })
 }
 
