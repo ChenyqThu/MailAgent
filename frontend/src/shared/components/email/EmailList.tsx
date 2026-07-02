@@ -334,6 +334,10 @@ interface ThreadGroup {
   threadId: string | null
   head: EnrichedEmailMeta
   children: EnrichedEmailMeta[]
+  /** #10 dogfood: 排序/分桶用的锚点日期 = 可见集合（listEnriched 结果，不含 supplement）
+   *  里最新邮件的 date_received。发件箱视图 (groupBySentAnchor) 直接用 head.date_received。
+   *  避免 supplement 里的已发回复（今日时间戳）把旧线程推入「今天」分组。 */
+  anchorDate: string | null
 }
 
 function groupByThread(
@@ -351,6 +355,10 @@ function groupByThread(
   // surface twice.  User feedback: "同一封邮件不应该出现两次, 如果被
   // 折叠到线程里, 就不应该出现在主线程里".
   const seen = new Set<number>()
+  // #10 dogfood: 每个线程里「可见集合」（listEnriched 结果）中最新邮件的日期，
+  // 用于 anchorDate。supplement 中的已发回复（今日时间戳）不计入，避免将旧线程
+  // 误推进「今天」分组。
+  const visibleAnchorByTid = new Map<string, string>()
   for (const e of emails) {
     if (seen.has(e.internal_id)) continue
     seen.add(e.internal_id)
@@ -358,8 +366,13 @@ function groupByThread(
       const arr = byTid.get(e.thread_id) ?? []
       arr.push(e)
       byTid.set(e.thread_id, arr)
+      // Track newest visible date per thread
+      const prev = visibleAnchorByTid.get(e.thread_id)
+      if (!prev || (e.date_received ?? '') > prev) {
+        visibleAnchorByTid.set(e.thread_id, e.date_received ?? '')
+      }
     } else {
-      solo.push({ threadId: null, head: e, children: [] })
+      solo.push({ threadId: null, head: e, children: [], anchorDate: e.date_received ?? null })
     }
   }
   // Merge supplement messages for every visible thread.  Skip ids we
@@ -378,17 +391,20 @@ function groupByThread(
   const groups: ThreadGroup[] = []
   for (const [tid, arr] of byTid) {
     arr.sort((a, b) => (b.date_received ?? '').localeCompare(a.date_received ?? ''))
+    // anchorDate from visible emails only; fallback to absolute head if missing
+    // (shouldn't happen: every byTid thread was seeded from the visible set).
+    const anchorDate = visibleAnchorByTid.get(tid) ?? arr[0]?.date_received ?? null
     if (arr.length === 1) {
       // Single-message thread is functionally solitary — no chevron.
-      groups.push({ threadId: null, head: arr[0]!, children: [] })
+      groups.push({ threadId: null, head: arr[0]!, children: [], anchorDate })
     } else {
-      groups.push({ threadId: tid, head: arr[0]!, children: arr.slice(1) })
+      groups.push({ threadId: tid, head: arr[0]!, children: arr.slice(1), anchorDate })
     }
   }
   groups.push(...solo)
-  // Stable ordering by head date_received DESC keeps day-bucketing
-  // deterministic across re-renders.
-  groups.sort((a, b) => (b.head.date_received ?? '').localeCompare(a.head.date_received ?? ''))
+  // Stable ordering by anchorDate (newest visible email) DESC — supplement
+  // messages (e.g. sent replies) do not bump threads in sort or bucket order.
+  groups.sort((a, b) => (b.anchorDate ?? '').localeCompare(a.anchorDate ?? ''))
   return groups
 }
 
@@ -412,7 +428,12 @@ function groupBySentAnchor(
     seen.add(sent.internal_id)
     const full = sent.thread_id ? threadSupplement.get(sent.thread_id) : undefined
     if (!full || full.length <= 1) {
-      groups.push({ threadId: null, head: sent, children: [] })
+      groups.push({
+        threadId: null,
+        head: sent,
+        children: [],
+        anchorDate: sent.date_received ?? null
+      })
       continue
     }
     const sentDate = sent.date_received ?? ''
@@ -426,11 +447,17 @@ function groupBySentAnchor(
       .sort((a, b) => (b.date_received ?? '').localeCompare(a.date_received ?? ''))
     groups.push(
       children.length === 0
-        ? { threadId: null, head: sent, children: [] }
-        : { threadId: sent.thread_id ?? null, head: sent, children }
+        ? { threadId: null, head: sent, children: [], anchorDate: sent.date_received ?? null }
+        : {
+            threadId: sent.thread_id ?? null,
+            head: sent,
+            children,
+            anchorDate: sent.date_received ?? null
+          }
     )
   }
-  groups.sort((a, b) => (b.head.date_received ?? '').localeCompare(a.head.date_received ?? ''))
+  // 发件箱：anchor = 发件时间（head 即发件，无 supplement bump 问题）。
+  groups.sort((a, b) => (b.anchorDate ?? '').localeCompare(a.anchorDate ?? ''))
   return groups
 }
 
@@ -475,11 +502,14 @@ function partitionByDate(
       buckets.pinned.push(g)
       continue
     }
-    if (!g.head.date_received) {
+    // #10 dogfood: 用 anchorDate（可见集合里最新邮件的日期）分桶，而非 head.date_received。
+    // head 可能是 supplement 里的已发回复（今日），anchorDate 则是收件邮件日期（真实分桶依据）。
+    const bucketDate = g.anchorDate ?? g.head.date_received
+    if (!bucketDate) {
       buckets.older.push(g)
       continue
     }
-    const d = new Date(g.head.date_received)
+    const d = new Date(bucketDate)
     if (d >= today) buckets.today.push(g)
     else if (d >= yesterday) buckets.yesterday.push(g)
     else if (d >= weekStart) buckets.thisWeek.push(g)
