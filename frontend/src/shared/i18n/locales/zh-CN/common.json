@@ -1578,8 +1578,8 @@
         "notEnabled": "（未启用）"
       },
       "model": {
-        "label": "主模型",
-        "helper": "从启用列表中选择主模型；fallback 失败时上抛 LLMCallError 进重试队列"
+        "label": "全局默认模型",
+        "helper": "Chat 对话与未单独设模型的后台 AI 任务默认使用（需重启）；邮件预处理模型在 AI 助理页的预处理卡单独配置"
       },
       "prompts": {
         "title": "Prompt 配置",
@@ -2417,16 +2417,15 @@
     },
     "preprocess": {
       "section": "AI 邮件预处理",
-      "sectionHint": "本地 LLM 自动为新邮件分类、打标、建议回复。启用与模型绑全局设置。",
+      "sectionHint": "本地 LLM 自动为新邮件分类、打标、建议回复。模型与 Chat 独立配置。",
       "subtitle": "自动为新邮件分类 / 打标 / 建议回复（本地 LLM）",
       "noAgent": "未找到预处理 Agent（数据库未初始化？）",
       "configTitle": "AI 邮件预处理 · {title}",
       "enable": "启用邮件预处理",
       "enableHint": "开启本地 LLM 对新邮件自动分类（全局开关 LLM_AGENT_ENABLED）。需重启服务后生效。",
       "restartHint": "需重启生效",
-      "persona": "Persona（人设）",
-      "personaHint": "可选，覆写内置分类 persona",
-      "personaPlaceholder": "留空 = 用内置默认分类 persona；在此输入可完全覆写",
+      "modelHint": "预处理专用模型，保存即生效（不影响 Chat）；「跟随全局」= 用全局默认模型",
+      "modelFollowGlobal": "跟随全局默认（{{model}}）",
       "contextDocs": "注入的身份文档",
       "contextDocsHint": "勾选后注入邮件分类的系统提示",
       "contextDocsNote": "勾选的身份文档会注入 AI 邮件分类的系统提示（默认 灵魂 + 用户偏好）。",
@@ -2436,8 +2435,19 @@
         "rules": "规则 / rules",
         "user": "用户偏好 / user"
       },
-      "webReadOnly": "远程 Web 为只读：启用状态与模型不可修改（仅本地桌面端可改）；persona 与文档勾选仍可编辑。",
-      "envSaveError": "保存启用状态 / 模型失败",
+      "webReadOnly": "远程 Web 为只读：启用状态与 fallback 不可修改（仅本地桌面端可改）；模型与文档勾选仍可编辑。",
+      "fallback": "Fallback 备用模型",
+      "fallbackHint": "主模型失败时的全局兜底链（对其他后台 AI 任务同样生效）；留空不设（需重启）",
+      "fallbackNone": "（不设）",
+      "promptView": "分类 Prompt（内置，只读）",
+      "promptViewHint": "实际用于邮件分类的 mailbox prompt 文件，收件箱与发件箱各一份；身份/偏好由上方勾选的文档注入",
+      "promptTab": {
+        "inbox": "收件箱",
+        "sent": "发件箱"
+      },
+      "promptEmpty": "（文件不存在或为空 —— 分类时只用内置硬约束）",
+      "promptLoadError": "分类 Prompt 加载失败（serve-api 未就绪？）",
+      "envSaveError": "保存启用状态 / fallback 失败",
       "rowSaveError": "保存预处理配置失败"
     }
   },

@@ -17,7 +17,7 @@ import {
   useSetConfig
 } from './hooks'
 import { useExitAnimation } from '@shared/hooks/useExitAnimation'
-import { useEnabledModels } from '@shared/hooks/useLlmModels'
+import { resolveApiBaseUrl, useEnabledModels } from '@shared/hooks/useLlmModels'
 import {
   Select,
   SelectContent,
@@ -1508,15 +1508,21 @@ export function SearchConfigDrawer({
 // ─── AI 邮件预处理卡（type='preprocess'）──────────────────────────────────────
 // 后端 DB v27 播种单行，无新建 / 删除。启用态从 env LLM_AGENT_ENABLED 读（非 row.enabled
 // —— 行的 enabled 列对预处理无意义，开关绑全局 LLM agent 总开关）。persona / 文档勾选 /
-// 身份文档正文全部在配置抽屉里编辑，故卡片只有一个「配置」入口，无内嵌开关。
+// 身份文档正文全部在配置抽屉里编辑。#7 dogfood：头部补右侧快捷开关，env 未就绪或 web 时禁用。
 function PreprocessAgentCard({
   cfg,
   enabled,
-  onConfig
+  envReady,
+  onConfig,
+  onToggle
 }: {
   cfg: ReportAgentConfig
   enabled: boolean
+  /** env store 是否就绪；未就绪时禁用开关防止误写 */
+  envReady: boolean
   onConfig: () => void
+  /** 快捷开关回调；web / env 未就绪时不传（禁用） */
+  onToggle?: (v: boolean) => void
 }): React.ReactElement {
   const { t } = useTranslation()
   return (
@@ -1584,6 +1590,16 @@ function PreprocessAgentCard({
             {t('agents.preprocess.subtitle')}
           </div>
         </div>
+        {/* #7 dogfood：快捷开关，env 未就绪 / web 时禁用（镜像抽屉的启用行语义） */}
+        <span
+          style={
+            !envReady || IS_WEB || !onToggle
+              ? { opacity: 0.5, pointerEvents: 'none', display: 'flex', flexShrink: 0 }
+              : { display: 'flex', flexShrink: 0 }
+          }
+        >
+          <Switch on={enabled} onChange={onToggle ?? (() => {})} />
+        </span>
       </div>
       <div
         className="flex items-center"
@@ -1628,9 +1644,44 @@ function PreprocessAgentCard({
 }
 
 // ─── AI 邮件预处理配置抽屉 ────────────────────────────────────────────────────
-// 复刻 SearchConfigDrawer 三段式脚手架。双源写：启用 / 模型 → 全局 env（applyEnvPatch +
-// 重启横幅，与 AiTab 一致，pydantic singleton 需重启）；persona / 文档勾选 → report_agent
-// row（useSetConfig）；身份文档正文内联复用 StandingDocsSection（同组件不同入口）。
+// 复刻 SearchConfigDrawer 三段式脚手架。双源写：启用 / fallback 链 → 全局 env（applyEnvPatch +
+// 重启横幅，pydantic singleton 需重启；fallback 对其他后台 AI 任务同样生效）；模型 / 文档勾选 →
+// report_agent row（useSetConfig；#8-ext 模型走行级 model 列、空 = 跟随全局 LLM_MODEL —— 与
+// chat 的全局默认模型拆分，改行级模型无需重启）；身份文档正文内联复用 StandingDocsSection。
+// persona 输入已随 v1.1.0 dogfood 移除（身份/偏好由 Standing Context 文档注入）；内置分类
+// prompt（收件箱/发件箱 .md）在抽屉内只读可查看（GET /api/llm/preprocess-prompts）。
+
+/** 模型下拉「跟随全局默认」哨兵（radix SelectItem 禁空串 value）。 */
+const FOLLOW_GLOBAL_MODEL = '__follow_global__'
+/** fallback 下拉「不设」哨兵（同上，空串 value 会让 radix 直接 throw）。 */
+const FALLBACK_NONE = '__none__'
+
+interface PreprocessPromptFile {
+  path: string
+  exists: boolean
+  text: string
+}
+interface PreprocessPrompts {
+  inbox: PreprocessPromptFile
+  sent: PreprocessPromptFile
+}
+
+/** 拉内置分类 prompt（best-effort：失败/非 200 返 null，UI 显加载失败占位）。
+ *  裸 fetch 走 resolveApiBaseUrl（Electron loopback 由 chat_local_bridge 注入本地
+ *  token、web 走 CF cookie —— 与 useLlmModels.fetchEnabledModels 同款）。 */
+async function fetchPreprocessPrompts(): Promise<PreprocessPrompts | null> {
+  try {
+    const resp = await fetch(`${resolveApiBaseUrl()}/llm/preprocess-prompts`, {
+      credentials: 'include'
+    })
+    if (!resp.ok) return null
+    const body = (await resp.json()) as { data?: PreprocessPrompts }
+    return body?.data ?? null
+  } catch {
+    return null
+  }
+}
+
 function PreprocessConfigDrawer({
   cfg,
   open,
@@ -1651,26 +1702,32 @@ function PreprocessConfigDrawer({
     syncBackdrop: true
   })
 
-  // 启用 / 模型 = env 值本地镜像（**dirty 追踪**：仅用户显式改过的字段在保存时写回 env → 未触碰
-  // 的字段永不写，即使预填时 env 未就绪 idle 也不会把真实 .env 覆写掉，codex HIGH）；persona /
-  // 文档勾选 = row 值。
+  // 启用 / fallback 链 = env 值本地镜像（**dirty 追踪**：仅用户显式改过的字段在保存时写回 env →
+  // 未触碰的字段永不写，即使预填时 env 未就绪 idle 也不会把真实 .env 覆写掉，codex HIGH）；
+  // 模型 / 文档勾选 = row 值（#8-ext：模型空串 = 跟随全局 LLM_MODEL，PATCH 保存无需重启）。
   const [enabled, setEnabled] = useState(false)
   const [enabledDirty, setEnabledDirty] = useState(false)
   const [model, setModel] = useState<string>('')
   const [modelDirty, setModelDirty] = useState(false)
-  const [prompt, setPrompt] = useState('')
-  const [promptDirty, setPromptDirty] = useState(false)
+  const [fallbackModel, setFallbackModel] = useState<string>('')
+  const [fallbackModelDirty, setFallbackModelDirty] = useState(false)
   const [contextDocs, setContextDocs] = useState<string[]>([])
   const [envSaving, setEnvSaving] = useState(false)
+  // 内置分类 prompt 只读查看（收件箱/发件箱 tab）—— 打开抽屉时拉一次。
+  const [promptView, setPromptView] = useState<PreprocessPrompts | 'loading' | 'error'>('loading')
+  const [promptTab, setPromptTab] = useState<'inbox' | 'sent'>('inbox')
   const { models: enabledModels } = useEnabledModels()
-  // env store 状态（idle/loading 时 enable/model 不可编辑、保存不写 env）+ 响应式 env 值
-  // （就绪后回填 enable/model，仅在用户未触碰该字段时）。
+  // env store 状态（idle/loading 时 enable/fallback 不可编辑、保存不写 env）+ 响应式 env 值
+  // （就绪后回填，仅在用户未触碰该字段时）。envModelRaw 仅用于「跟随全局」选项的当前值展示。
   const envReady = useEnvStore((s) => s.state.status === 'ready')
   const envEnabledRaw = useEnvStore((s) =>
     s.state.status === 'ready' ? (s.state.snapshot.values['LLM_AGENT_ENABLED'] ?? '') : null
   )
   const envModelRaw = useEnvStore((s) =>
     s.state.status === 'ready' ? (s.state.snapshot.values['LLM_MODEL'] ?? '') : null
+  )
+  const envFallbackRaw = useEnvStore((s) =>
+    s.state.status === 'ready' ? (s.state.snapshot.values['LLM_FALLBACK_MODELS'] ?? '') : null
   )
 
   // 打开时预填 row 字段 + 复位所有 dirty。同 ConfigDrawer / SearchConfigDrawer 既有豁免理由：
@@ -1679,19 +1736,32 @@ function PreprocessConfigDrawer({
   /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     if (!open || !cfg) return
-    setPrompt(cfg.prompt)
-    setPromptDirty(false)
+    setModel(cfg.model ?? '')
     setContextDocs(cfg.context_docs ?? [])
     setEnabledDirty(false)
     setModelDirty(false)
+    setFallbackModelDirty(false)
+    setPromptTab('inbox')
   }, [open, cfg])
-  // 启用 / 模型从 env 就绪快照回填：仅在打开且用户未 dirty 该字段时同步 —— env idle→ready 的迟到
-  // 加载能纠正显示，但绝不覆盖用户在抽屉里的编辑（dirty 后停止同步）。
+  // 启用 / fallback 模型从 env 就绪快照回填：仅在打开且用户未 dirty 该字段时同步 —— env
+  // idle→ready 的迟到加载能纠正显示，但绝不覆盖用户在抽屉里的编辑（dirty 后停止同步）。
   useEffect(() => {
     if (!open) return
     if (envEnabledRaw !== null && !enabledDirty) setEnabled(envFlagOn(envEnabledRaw))
-    if (envModelRaw !== null && !modelDirty) setModel(envModelRaw)
-  }, [open, envEnabledRaw, envModelRaw, enabledDirty, modelDirty])
+    if (envFallbackRaw !== null && !fallbackModelDirty) setFallbackModel(envFallbackRaw)
+  }, [open, envEnabledRaw, envFallbackRaw, enabledDirty, fallbackModelDirty])
+  // 内置分类 prompt：打开时拉一次（best-effort，失败显示占位；关闭时丢弃避免 setState-after-close）。
+  useEffect(() => {
+    if (!open) return
+    let cancelled = false
+    setPromptView('loading')
+    void fetchPreprocessPrompts().then((r) => {
+      if (!cancelled) setPromptView(r ?? 'error')
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [open])
   /* eslint-enable react-hooks/set-state-in-effect */
 
   if (!shouldRender) return null
@@ -1712,8 +1782,8 @@ function PreprocessConfigDrawer({
   const onSave = async (): Promise<void> => {
     if (!cfg) return
     // 1) env 写：仅在 env 已就绪、非 web、且用户显式改过该字段（dirty）时写 —— 未触碰的
-    //    enable/model 永不写，即使预填 stale（env idle）也不会把真实 .env 覆写掉（codex HIGH）。
-    //    只写变更键，避免无谓触发重启横幅。
+    //    enable/fallback 永不写，即使预填 stale（env idle）也不会把真实 .env 覆写掉（codex HIGH）。
+    //    只写变更键，避免无谓触发重启横幅。（#8-ext：模型不再写 env —— 走 row PATCH。）
     if (envReady && !IS_WEB) {
       const st = useEnvStore.getState().state
       const vals = st.status === 'ready' ? st.snapshot.values : {}
@@ -1722,8 +1792,8 @@ function PreprocessConfigDrawer({
       if (enabledDirty && nextEnabled !== (vals['LLM_AGENT_ENABLED'] ?? '')) {
         envPatch['LLM_AGENT_ENABLED'] = nextEnabled
       }
-      if (modelDirty && model && model !== (vals['LLM_MODEL'] ?? '')) {
-        envPatch['LLM_MODEL'] = model
+      if (fallbackModelDirty && fallbackModel !== (vals['LLM_FALLBACK_MODELS'] ?? '')) {
+        envPatch['LLM_FALLBACK_MODELS'] = fallbackModel
       }
       if (Object.keys(envPatch).length > 0) {
         setEnvSaving(true)
@@ -1740,10 +1810,12 @@ function PreprocessConfigDrawer({
         }
       }
     }
-    // 2) row 保存：persona（未改且仍默认 → null 保持默认；改过 → 文本，空串后端重置默认）+ 文档勾选。
+    // 2) row 保存：模型（#8-ext 行级 model 列；空串 = 跟随全局 LLM_MODEL，config_patch_to_db
+    //    原样落列、resolve_agent 非 report 不回填默认）+ 文档勾选。改行级模型立即生效（分类
+    //    每封邮件重读 preprocess 行），无需重启。
     try {
       await save(PREPROCESS_AGENT_ID, {
-        prompt: promptDirty ? prompt : cfg.prompt_is_default ? null : cfg.prompt,
+        ...(modelDirty ? { model } : {}),
         context_docs: contextDocs
       })
       onClose()
@@ -1860,20 +1932,26 @@ function PreprocessConfigDrawer({
               </span>
             </div>
 
-            {/* 模型（env LLM_MODEL）—— enabledModels + orphan 兜底，需重启生效 */}
-            <Field label={t('agents.config.model')} hint={t('agents.preprocess.restartHint')}>
+            {/* 模型（row.model，PATCH 保存立即生效）—— #8-ext：与 chat 的全局默认（LLM_MODEL）
+                拆分；「跟随全局」哨兵 = 行级空串。enabledModels + orphan 兜底同 ConfigDrawer。 */}
+            <Field label={t('agents.config.model')} hint={t('agents.preprocess.modelHint')}>
               <Select
-                value={model || undefined}
+                value={model || FOLLOW_GLOBAL_MODEL}
                 onValueChange={(v) => {
-                  setModel(v)
+                  setModel(v === FOLLOW_GLOBAL_MODEL ? '' : v)
                   setModelDirty(true)
                 }}
-                disabled={!envReady || IS_WEB}
+                disabled={busy}
               >
                 <SelectTrigger>
-                  <SelectValue placeholder={t('agents.config.model')} />
+                  <SelectValue />
                 </SelectTrigger>
                 <SelectContent className="z-[70]">
+                  <SelectItem value={FOLLOW_GLOBAL_MODEL}>
+                    {t('agents.preprocess.modelFollowGlobal', {
+                      model: envModelRaw || 'claude-sonnet-4-6'
+                    })}
+                  </SelectItem>
                   {(model && !enabledModels.includes(model)
                     ? [...enabledModels, model]
                     : enabledModels
@@ -1896,25 +1974,126 @@ function PreprocessConfigDrawer({
               </Select>
             </Field>
 
-            {/* persona（cfg.prompt）—— 留空用内置默认，dirty 追踪同 ConfigDrawer */}
-            <Field label={t('agents.preprocess.persona')} hint={t('agents.preprocess.personaHint')}>
-              <textarea
-                value={prompt}
-                placeholder={t('agents.preprocess.personaPlaceholder')}
-                onChange={(e) => {
-                  setPrompt(e.target.value)
-                  setPromptDirty(true)
+            {/* fallback 模型链（env LLM_FALLBACK_MODELS，全局语义）—— 主模型失败时兜底，
+                「不设」哨兵 = 空串（radix SelectItem 禁空串 value），需重启生效 */}
+            <Field
+              label={t('agents.preprocess.fallback')}
+              hint={t('agents.preprocess.fallbackHint')}
+            >
+              <Select
+                value={fallbackModel || FALLBACK_NONE}
+                onValueChange={(v) => {
+                  setFallbackModel(v === FALLBACK_NONE ? '' : v)
+                  setFallbackModelDirty(true)
                 }}
-                rows={9}
-                className="scrollbar-thin"
-                style={{
-                  ...inputStyle,
-                  resize: 'vertical',
-                  lineHeight: 1.6,
-                  fontSize: 13,
-                  minHeight: 160
-                }}
-              />
+                disabled={!envReady || IS_WEB}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="z-[70]">
+                  <SelectItem value={FALLBACK_NONE}>
+                    {t('agents.preprocess.fallbackNone')}
+                  </SelectItem>
+                  {(fallbackModel && !enabledModels.includes(fallbackModel)
+                    ? [...enabledModels, fallbackModel]
+                    : enabledModels
+                  ).map((id) => {
+                    const isOrphan = !enabledModels.includes(id)
+                    return (
+                      <SelectItem key={id} value={id}>
+                        {id}
+                        {isOrphan && (
+                          <span style={{ color: 'rgb(var(--ink-fg-3))', marginLeft: 6 }}>
+                            {t('settings.ai.enabledModels.notEnabled', {
+                              defaultValue: '（未启用）'
+                            })}
+                          </span>
+                        )}
+                      </SelectItem>
+                    )
+                  })}
+                </SelectContent>
+              </Select>
+            </Field>
+
+            {/* 内置分类 prompt 只读查看（#8-ext）—— 收件箱/发件箱 .md 与运行时同源（PromptLoader
+                mtime 热加载同两份文件）。persona 输入已移除：身份/偏好由上方勾选的 Standing
+                Context 文档注入。 */}
+            <Field
+              label={t('agents.preprocess.promptView')}
+              hint={t('agents.preprocess.promptViewHint')}
+            >
+              <div className="flex items-center" style={{ gap: 8, marginBottom: 8 }}>
+                {(['inbox', 'sent'] as const).map((tab) => {
+                  const on = promptTab === tab
+                  return (
+                    <button
+                      key={tab}
+                      type="button"
+                      aria-pressed={on}
+                      onClick={() => setPromptTab(tab)}
+                      style={{
+                        padding: '5px 12px',
+                        borderRadius: 8,
+                        fontFamily: 'inherit',
+                        fontSize: 12.5,
+                        cursor: 'pointer',
+                        color: on ? 'rgb(var(--c-accent))' : 'rgb(var(--ink-fg-2))',
+                        background: on ? 'rgb(var(--c-accent) / 0.14)' : 'rgb(var(--ink-1) / 0.5)',
+                        border: `1px solid ${on ? 'rgb(var(--c-accent))' : 'rgb(var(--ink-border))'}`,
+                        transition:
+                          'color 120ms cubic-bezier(0.4,0,0.2,1), background-color 120ms cubic-bezier(0.4,0,0.2,1), border-color 120ms cubic-bezier(0.4,0,0.2,1)'
+                      }}
+                    >
+                      {t(`agents.preprocess.promptTab.${tab}`)}
+                    </button>
+                  )
+                })}
+              </div>
+              {promptView === 'loading' ? (
+                <div style={{ ...inputStyle, color: 'rgb(var(--ink-fg-3))' }}>…</div>
+              ) : promptView === 'error' ? (
+                <div style={{ ...inputStyle, color: 'rgb(var(--ink-fg-3))' }}>
+                  {t('agents.preprocess.promptLoadError')}
+                </div>
+              ) : (
+                <>
+                  <pre
+                    className="scrollbar-thin"
+                    style={{
+                      ...inputStyle,
+                      margin: 0,
+                      maxHeight: 260,
+                      overflow: 'auto',
+                      whiteSpace: 'pre-wrap',
+                      wordBreak: 'break-word',
+                      fontSize: 12,
+                      lineHeight: 1.6,
+                      color:
+                        promptView[promptTab].exists && promptView[promptTab].text
+                          ? 'rgb(var(--ink-fg-2))'
+                          : 'rgb(var(--ink-fg-3))'
+                    }}
+                  >
+                    {promptView[promptTab].exists && promptView[promptTab].text
+                      ? promptView[promptTab].text
+                      : t('agents.preprocess.promptEmpty')}
+                  </pre>
+                  {promptView[promptTab].path && (
+                    <div
+                      style={{
+                        fontSize: 11,
+                        color: 'rgb(var(--ink-fg-3))',
+                        marginTop: 6,
+                        wordBreak: 'break-all'
+                      }}
+                    >
+                      {promptView[promptTab].path}
+                    </div>
+                  )}
+                </>
+              )}
             </Field>
 
             {/* 文档勾选（cfg.context_docs）—— 注入分类 system prompt 的身份文档 */}
@@ -2067,6 +2246,17 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
       ? envFlagOn(s.state.snapshot.values['LLM_AGENT_ENABLED'] ?? '')
       : false
   )
+  const llmEnvReady = useEnvStore((s) => s.state.status === 'ready')
+  // #7 dogfood：预处理卡右侧快捷开关，写 env LLM_AGENT_ENABLED + 挂重启横幅（同抽屉启用行）。
+  const markRestartRequired = useRestartStore((s) => s.markRestartRequired)
+  const handlePreprocessToggle = async (v: boolean): Promise<void> => {
+    const r = await applyEnvPatch({ LLM_AGENT_ENABLED: v ? 'true' : 'false' })
+    if (!r.ok) {
+      toastError(t('agents.preprocess.envSaveError'), `${r.error.code}: ${r.error.message}`)
+      return
+    }
+    if (r.changedKeys.length > 0) markRestartRequired(r.changedKeys)
+  }
   // env store 默认 idle（仅 SettingsShell mount 时 refresh）；进 /agents 主动拉一次，让预处理卡
   // 启用徽标 + 抽屉 enable/model 预填拿到真实 .env（否则未进过设置页 → 徽标恒灰、抽屉 stale）。
   // codex HIGH：无此 refresh 时，抽屉在 idle 下预填 enabled=false，配合 dirty 门控虽不会覆写，
@@ -2223,7 +2413,9 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
                 key={cfg.id}
                 cfg={cfg}
                 enabled={llmAgentEnabled}
+                envReady={llmEnvReady}
                 onConfig={() => setPreprocessOpen(true)}
+                onToggle={(v) => void handlePreprocessToggle(v)}
               />
             ))
           ) : (

@@ -84,8 +84,9 @@ async function fetchEnabledModels(): Promise<string[]> {
 /** Resolve the serve-api base URL for direct fetch calls, matching how
  *  the chat runtime determines it (see runtime.ts buildEngine / resolveApiPort).
  *  Intentionally duplicated here to keep this module free of circular imports
- *  with the chat runtime; keep in sync if the port-resolution logic changes. */
-function resolveApiBaseUrl(): string {
+ *  with the chat runtime; keep in sync if the port-resolution logic changes.
+ *  Exported for other raw-fetch consumers (e.g. AgentsTab 预处理 prompt 查看器). */
+export function resolveApiBaseUrl(): string {
   const env = (import.meta as unknown as { env?: Record<string, string | undefined> }).env
   if (env?.VITE_BUILD_TARGET === 'web') {
     return env.VITE_API_BASE_URL ?? '/api'

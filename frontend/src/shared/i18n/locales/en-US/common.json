@@ -1578,8 +1578,8 @@
         "notEnabled": "(not enabled)"
       },
       "model": {
-        "label": "Primary model",
-        "helper": "Select from the enabled list; errors are queued for retry when all fallbacks fail"
+        "label": "Global default model",
+        "helper": "Default for chat and background AI tasks without a dedicated model (restart required); the email-preprocessing model is configured on its agent card"
       },
       "prompts": {
         "title": "Prompt configuration",
@@ -2417,16 +2417,15 @@
     },
     "preprocess": {
       "section": "AI Email Preprocessing",
-      "sectionHint": "Local LLM auto-classifies, tags and suggests replies for new mail. Enable and model bind to global settings.",
+      "sectionHint": "Local LLM auto-classifies, tags and suggests replies for new mail. Model is configured independently from Chat.",
       "subtitle": "Auto-classify / tag / suggest replies for new mail (local LLM)",
       "noAgent": "No preprocessing agent found (database not initialized?)",
       "configTitle": "AI Email Preprocessing · {title}",
       "enable": "Enable email preprocessing",
       "enableHint": "Turn on local LLM auto-classification for new mail (global switch LLM_AGENT_ENABLED). Requires a service restart to take effect.",
       "restartHint": "Restart required",
-      "persona": "Persona",
-      "personaHint": "Optional; overrides the built-in classification persona",
-      "personaPlaceholder": "Empty = built-in default classification persona; type to fully override",
+      "modelHint": "Dedicated preprocessing model, effective on save (does not affect Chat); \"Follow global\" = use the global default model",
+      "modelFollowGlobal": "Follow global default ({{model}})",
       "contextDocs": "Injected identity docs",
       "contextDocsHint": "Checked docs are injected into the classification prompt",
       "contextDocsNote": "Checked identity docs are injected into the AI email-classification system prompt (default: SOUL + USER).",
@@ -2436,8 +2435,19 @@
         "rules": "Rules",
         "user": "User prefs"
       },
-      "webReadOnly": "Remote web is read-only: enable state and model can't be changed (desktop only); persona and doc selection remain editable.",
-      "envSaveError": "Failed to save enable state / model",
+      "webReadOnly": "Remote web is read-only: enable state and fallback can't be changed (desktop only); model and doc selection remain editable.",
+      "fallback": "Fallback model",
+      "fallbackHint": "Global fallback chain when the main model fails (also applies to other background AI tasks); empty = none (restart required)",
+      "fallbackNone": "(none)",
+      "promptView": "Classification prompt (built-in, read-only)",
+      "promptViewHint": "The mailbox prompt files actually used for classification — one for inbox, one for sent; identity/preferences come from the docs checked above",
+      "promptTab": {
+        "inbox": "Inbox",
+        "sent": "Sent"
+      },
+      "promptEmpty": "(file missing or empty — classification uses only the built-in hard constraints)",
+      "promptLoadError": "Failed to load classification prompt (serve-api not ready?)",
+      "envSaveError": "Failed to save enable state / fallback",
       "rowSaveError": "Failed to save preprocessing config"
     }
   },

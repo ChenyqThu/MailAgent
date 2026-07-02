@@ -70,7 +70,7 @@ export function AiTab(): React.ReactElement {
   // ai-sdk gateway path acts on it (rides the chat body).
   const [approvalMode, setApprovalMode] = React.useState<ApprovalMode>(() => readApprovalMode())
 
-  // dynamic-models (main provider — for LLM_MODEL / LLM_FALLBACK_MODELS / enabled list)
+  // dynamic-models (main provider — for enabled list / model popover)
   const {
     models: upstreamModels,
     isLoading: upstreamLoading,
@@ -90,9 +90,6 @@ export function AiTab(): React.ReactElement {
   // Current .env values for orphan detection on model selects.
   const currentLlmModel = useEnvStore((s) =>
     s.state.status === 'ready' ? (s.state.snapshot.values['LLM_MODEL'] ?? '') : ''
-  )
-  const currentLlmFallback = useEnvStore((s) =>
-    s.state.status === 'ready' ? (s.state.snapshot.values['LLM_FALLBACK_MODELS'] ?? '') : ''
   )
   const currentTranslateModel = useEnvStore((s) =>
     s.state.status === 'ready' ? (s.state.snapshot.values['LLM_TRANSLATE_MODEL'] ?? '') : ''
@@ -193,13 +190,11 @@ export function AiTab(): React.ReactElement {
         })}
       />
 
+      {/* LLM_AGENT_ENABLED / LLM_FALLBACK_MODELS 已收敛到 Agents 页预处理 Agent 配置抽屉（不再
+          两处）。LLM_MODEL 保留在此、改名「全局默认模型」——它是 chat gateway 默认模型 +
+          未单独设模型的后台 AI 任务兜底（#8-ext：预处理模型已拆到行级 model 列，不再与它耦合）。
+          其余为网关基建（API base/key、启用模型列表、test gateway），translate 等沿用不变。 */}
       <Section title={t('settings.ai.title')} helper={t('settings.ai.helper')}>
-        <EnvField
-          envKey="LLM_AGENT_ENABLED"
-          control="toggle"
-          label={t('settings.ai.enabled.label')}
-          helper={t('settings.ai.enabled.helper')}
-        />
         <EnvField
           envKey="LLM_API_BASE"
           control="text"
@@ -312,9 +307,8 @@ export function AiTab(): React.ReactElement {
             </PopoverContent>
           </Popover>
         </Row>
-        {/* LLM_MODEL: single-select from enabled list (+ current value if orphan).
-            When the saved value is not in the enabled list (e.g. list was narrowed),
-            we append it so the select shows the actual value rather than going blank. */}
+        {/* LLM_MODEL: 全局默认模型（chat gateway 默认 + 后台任务兜底）。single-select from
+            enabled list (+ current value if orphan) —— 保存值不在启用列表时追加显示，避免下拉空白。 */}
         <EnvField
           envKey="LLM_MODEL"
           control="select"
@@ -331,35 +325,6 @@ export function AiTab(): React.ReactElement {
                   ? `${id} ${t('settings.ai.enabledModels.notEnabled')}`
                   : id
             }))
-          })()}
-        />
-        {/* LLM_FALLBACK_MODELS: single-select (user decided no multi-select ranking).
-            Python reads it as comma-separated fallback chain; single value works fine.
-            Same orphan handling: if the saved value is not in the enabled list, append it. */}
-        <EnvField
-          envKey="LLM_FALLBACK_MODELS"
-          control="select"
-          label={t('settings.ai.fallbacks.label')}
-          helper={t('settings.ai.fallbacks.helper')}
-          options={(() => {
-            const base = enabledModels.length > 0 ? enabledModels : FALLBACK_MODELS
-            const withOrphan =
-              currentLlmFallback && !base.includes(currentLlmFallback)
-                ? [...base, currentLlmFallback]
-                : base
-            return [
-              {
-                value: '',
-                label: t('settings.ai.fallbacks.none', { defaultValue: '（不设备模型）' })
-              },
-              ...withOrphan.map((id) => ({
-                value: id,
-                label:
-                  id === currentLlmFallback && !base.includes(id)
-                    ? `${id} ${t('settings.ai.enabledModels.notEnabled')}`
-                    : id
-              }))
-            ]
           })()}
         />
         <Row
