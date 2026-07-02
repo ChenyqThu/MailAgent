@@ -92,7 +92,9 @@ export function createWebTools(
     run: async (input, { userEdited, signal }) => {
       const r = await domain.webFetch(input.url, input.max_chars, signal)
       return {
-        url: input.url,
+        // input.url is model/attacker-proposable → prose-sanitize the echo too (a fence token
+        // smuggled into the url must not survive raw into model-visible output).
+        url: sanitizeProse(input.url),
         final_url: sanitizeProse(r.final_url),
         status: r.status,
         content_type: r.content_type,
@@ -124,7 +126,8 @@ export function createWebTools(
     run: async (input, { userEdited, signal }) => {
       const r = await domain.webSearch(input.query, input.limit, signal)
       return {
-        query: input.query,
+        // input.query echo — same rationale as web_fetch's url: sanitize, never raw.
+        query: sanitizeProse(input.query),
         count: r.count,
         results: r.results.map((item) => ({
           // url = web-authored metadata → single-line prose sanitize (break fence tokens);

@@ -18,9 +18,11 @@ SSRF 分类矩阵则直接单测**真** validator（无 server、无放行）。
 
 from __future__ import annotations
 
+import gzip
 import ipaddress
 import socket
 import threading
+import types
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Iterator, Optional
 from urllib.parse import urlparse
@@ -104,6 +106,37 @@ class _FakeSiteHandler(BaseHTTPRequestHandler):
             self._send(200, b"\x00\x01\x02binary", "application/octet-stream")
         elif path == "/json":
             self._send(200, b'{"ok": true, "n": 3}', "application/json")
+        elif path == "/gzipped":
+            # 上游无视 Accept-Encoding: identity 强行压缩 → client 侧应 fail-closed 拒。
+            self._send(
+                200, gzip.compress(_HTML_PAGE.encode()), "text/html", {"Content-Encoding": "gzip"}
+            )
+        elif path == "/identity-enc":
+            self._send(
+                200,
+                _HTML_PAGE.encode(),
+                "text/html; charset=utf-8",
+                {"Content-Encoding": "identity"},
+            )
+        elif path == "/echo-accept-encoding":
+            enc = self.headers.get("Accept-Encoding", "")
+            self._send(200, f"accept-encoding={enc}".encode(), "text/plain")
+        elif path == "/no-ct":
+            # 不发 Content-Type（fail-open 回归：缺标注也必须拒）。
+            body = b"no content type header"
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        elif path == "/ddg-big":
+            # 2 个正常 result + 2 MiB padding + cap **之外**的第三个 result：bounded 读生效
+            # 则第三个永不进解析（count==2）；若全量 buffer 则 html.parser 会解出 3 个。
+            third = (
+                b'<div class="result"><h2 class="result__title">'
+                b'<a class="result__a" href="https://evil.test/past-cap">Past Cap</a></h2></div>'
+            )
+            body = _DDG_FIXTURE.encode() + b" " * web._MAX_RESPONSE_BYTES + third
+            self._send(200, body, "text/html; charset=utf-8")
         elif path == "/ddg":
             self._send(200, _DDG_FIXTURE.encode(), "text/html; charset=utf-8")
         elif path == "/ddg-503":
@@ -335,6 +368,63 @@ def test_fetch_blocks_loopback_without_allow(client: TestClient, fake_site: int)
     assert resp.json()["error"]["code"] == "E_SSRF_BLOCKED"
 
 
+def test_fetch_requests_identity_encoding(
+    client: TestClient, fake_site: int, allow_loopback
+) -> None:
+    """解压炸弹第一翼：请求必须声明 Accept-Encoding: identity（不请压缩）。"""
+    resp = client.post(
+        "/api/web/fetch", json={"url": f"http://127.0.0.1:{fake_site}/echo-accept-encoding"}
+    )
+    assert resp.status_code == 200
+    assert "accept-encoding=identity" in resp.json()["data"]["text"]
+
+
+def test_fetch_rejects_compressed_content_encoding(
+    client: TestClient, fake_site: int, allow_loopback
+) -> None:
+    """解压炸弹第二翼 fail-closed：上游无视 identity 强行返回 Content-Encoding: gzip →
+    读 body 前直接拒（cap 恒作用于真实传输字节，永不解压）。"""
+    resp = client.post("/api/web/fetch", json={"url": f"http://127.0.0.1:{fake_site}/gzipped"})
+    assert resp.status_code == 502
+    err = resp.json()["error"]
+    assert err["code"] == "E_UPSTREAM"
+    # message 断言区分「fail-closed 拒」vs「fake server 崩恰好也 502」。
+    assert "content-encoding" in err["message"]
+
+
+def test_fetch_allows_identity_content_encoding(
+    client: TestClient, fake_site: int, allow_loopback
+) -> None:
+    """显式 Content-Encoding: identity（= 未压缩）→ 正常通过。"""
+    resp = client.post(
+        "/api/web/fetch", json={"url": f"http://127.0.0.1:{fake_site}/identity-enc"}
+    )
+    assert resp.status_code == 200
+    assert "The quarterly plan ships in Q3." in resp.json()["data"]["text"]
+
+
+def test_fetch_missing_content_type_rejected(
+    client: TestClient, fake_site: int, allow_loopback
+) -> None:
+    """缺 Content-Type → 415（fail-closed，不再放行无标注响应）。"""
+    resp = client.post("/api/web/fetch", json={"url": f"http://127.0.0.1:{fake_site}/no-ct"})
+    assert resp.status_code == 415
+    assert resp.json()["error"]["code"] == "E_CONTENT_TYPE"
+
+
+def test_fetch_body_read_deadline_times_out(
+    client: TestClient, fake_site: int, allow_loopback, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """慢速逐 chunk 读（每块都在 per-op timeout 内到）不得无限占线程 —— body 读循环内的总
+    deadline 检查兜底。monkeypatch web 命名空间的 time（不污染全局 time 模块）：①deadline
+    计算 ②hop 预算 正常，③首个 body chunk 检查时已越过 deadline → 504 失败（非静默截断）。"""
+    seq = iter([0.0, 1.0])  # ① deadline=0+15 ② remaining=15-1=14（OK）；之后恒 100 > deadline
+    monkeypatch.setattr(web, "time", types.SimpleNamespace(monotonic=lambda: next(seq, 100.0)))
+    resp = client.post("/api/web/fetch", json={"url": f"http://127.0.0.1:{fake_site}/page"})
+    assert resp.status_code == 504
+    assert resp.json()["error"]["code"] == "E_UPSTREAM"
+
+
 # ===========================================================================
 # 4) search（DDG fixture 经 fake server）
 # ===========================================================================
@@ -372,6 +462,20 @@ def test_search_upstream_non_200_is_explicit_error(
     resp = client.post("/api/web/search", json={"query": "x", "limit": 5})
     assert resp.status_code == 502
     assert resp.json()["error"]["code"] == "E_UPSTREAM"
+
+
+def test_search_size_cap_bounds_read(
+    client: TestClient, fake_site: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """超大响应流式 bounded 读（不全量 buffer）：cap 之外的第三个 result 永不进解析
+    （count==2 即证只读到 cap 内字节），截断后的前部 HTML 解析照常工作。"""
+    monkeypatch.setattr(web, "_DDG_HTML_URL", f"http://127.0.0.1:{fake_site}/ddg-big")
+    resp = client.post("/api/web/search", json={"query": "q3 plan", "limit": 10})
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["count"] == 2  # cap 生效：越界的 "Past Cap" result 被截掉
+    assert data["results"][0]["title"] == "Q3 Plan Overview"
+    assert all(r["url"] != "https://evil.test/past-cap" for r in data["results"])
 
 
 # ===========================================================================

@@ -207,6 +207,10 @@ def _pinned_send(
         "User-Agent": _UA,
         "Accept": "text/html,application/xhtml+xml,application/json,text/plain;q=0.9,*/*;q=0.5",
         "Accept-Language": "en,zh;q=0.8",
+        # identity：httpx 的 iter_bytes 按响应 Content-Encoding **解压后**产出字节，压缩响应会让
+        # 2 MiB cap 作用在解压后 → gzip 炸弹可在触达 cap 前膨胀。要求不压缩；上游若无视强行
+        # 压缩，_do_fetch 读 body 前还有 content-encoding fail-closed 检查兜底。
+        "Accept-Encoding": "identity",
     }
     req = client.build_request("GET", url, headers=headers, timeout=remaining)
     # build 时 Host 已从原 URL 生成（含非默认端口），先存下来。
@@ -289,14 +293,26 @@ def _do_fetch(input_url: str, max_chars: int) -> dict[str, Any]:
                     current = _validate_url(str(current.join(location)))
                     continue
 
-                # content-type 白名单（media type，去 charset）。
+                # content-type 白名单（media type，去 charset）。缺 Content-Type 也拒
+                # （fail-closed：无标注的响应无法判断可解析性，不放行）。
                 raw_ct = resp.headers.get("content-type", "")
                 media_type = raw_ct.split(";", 1)[0].strip().lower()
-                if media_type and media_type not in _ALLOWED_CONTENT_TYPES:
+                if not media_type or media_type not in _ALLOWED_CONTENT_TYPES:
                     raise APIError(
                         "E_CONTENT_TYPE",
-                        f"unsupported content-type: {media_type}",
+                        f"unsupported content-type: {media_type or '(missing)'}",
                         http_status=415,
+                        source="web",
+                    )
+
+                # 解压炸弹 fail-closed：我们发 Accept-Encoding: identity，上游若仍返回压缩编码，
+                # iter_bytes 会产出**解压后**字节（cap 失去对真实传输字节的约束）→ 直接拒。
+                content_encoding = resp.headers.get("content-encoding", "").strip().lower()
+                if content_encoding and content_encoding != "identity":
+                    raise APIError(
+                        "E_UPSTREAM",
+                        f"unexpected content-encoding: {content_encoding}",
+                        http_status=502,
                         source="web",
                     )
 
@@ -313,6 +329,15 @@ def _do_fetch(input_url: str, max_chars: int) -> dict[str, Any]:
                 chunks: list[bytes] = []
                 total = 0
                 for chunk in resp.iter_bytes():
+                    # 总 deadline 也约束 body 读取：httpx timeout 是 per-operation，慢速逐
+                    # chunk（每块都在 timeout 内到）否则可无限占线程。超时失败，不静默截断。
+                    if time.monotonic() > deadline:
+                        raise APIError(
+                            "E_UPSTREAM",
+                            "fetch body read timed out",
+                            http_status=504,
+                            source="web",
+                        )
                     if total + len(chunk) > _MAX_RESPONSE_BYTES:
                         chunks.append(chunk[: _MAX_RESPONSE_BYTES - total])
                         truncated = True
@@ -385,29 +410,40 @@ def _parse_ddg(html: str, limit: int) -> list[dict[str, str]]:
 
 def _do_search(query: str, limit: int) -> dict[str, Any]:
     """同步执行 web_search（在 threadpool 跑）：打固定 DDG HTML 端点 + 解析 top-N。DDG host
-    非用户控制 → 无 SSRF 面，只需超时 + follow_redirects（DDG 自身可能跳）。异常/非 200 →
-    明确错误码，非静默空。"""
+    非用户控制 → 无 SSRF 面，只需超时 + follow_redirects（DDG 自身可能跳）+ size cap（流式
+    bounded 读，不全量 buffer；超顶截断后仍交给解析——结果页前部结构完整即可用）。异常/非
+    200 → 明确错误码，非静默空。"""
     try:
         with httpx.Client(
             trust_env=False, follow_redirects=True, timeout=_SEARCH_TIMEOUT_SEC
         ) as client:
-            resp = client.get(
+            with client.stream(
+                "GET",
                 _DDG_HTML_URL,
                 params={"q": query},
                 headers={"User-Agent": _UA, "Accept": "text/html"},
-            )
+            ) as resp:
+                if resp.status_code != 200:
+                    raise APIError(
+                        "E_UPSTREAM",
+                        f"search upstream returned {resp.status_code}",
+                        http_status=502,
+                        source="web",
+                    )
+                chunks: list[bytes] = []
+                total = 0
+                for chunk in resp.iter_bytes():
+                    if total + len(chunk) > _MAX_RESPONSE_BYTES:
+                        chunks.append(chunk[: _MAX_RESPONSE_BYTES - total])
+                        break
+                    chunks.append(chunk)
+                    total += len(chunk)
+                raw = b"".join(chunks)
+                encoding = resp.encoding
     except httpx.HTTPError as e:
         raise APIError("E_UPSTREAM", f"search request failed: {e}", http_status=502, source="web") from e
 
-    if resp.status_code != 200:
-        raise APIError(
-            "E_UPSTREAM",
-            f"search upstream returned {resp.status_code}",
-            http_status=502,
-            source="web",
-        )
-
-    results = _parse_ddg(resp.text, limit)
+    results = _parse_ddg(raw.decode(encoding or "utf-8", errors="replace"), limit)
     return {"query": query, "count": len(results), "results": results}
 
 
