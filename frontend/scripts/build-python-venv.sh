@@ -48,19 +48,24 @@ tar -xzf "$CACHE/$TARBALL" -C "$FRONTEND_DIR/resources"
 PYBIN="$OUT/bin/python3.11"
 [ -x "$PYBIN" ] || { echo "[build-python-venv] 解压后未找到 $PYBIN" >&2; exit 1; }
 
-# 3. 装后端依赖 (核心依赖在 requirements.txt, 不在 pyproject [project.dependencies])
-echo "[build-python-venv] pip install requirements + .[cli,api,memory] ..."
+# 3. 装后端依赖 (E0 WP5 版本锁定: 唯一安装输入 = requirements.lock.txt —— requirements.txt
+#    + pyproject [cli,api,memory] extras 的全量传递闭包 == pin, 保证连续两次 provision 逐版本
+#    一致。requirements.txt / pyproject 仍是声明「源」, 但改依赖必须重新生成 lock 才进包,
+#    生成/更新方法见 lock 文件头。)
+echo "[build-python-venv] pip install requirements.lock.txt + . (--no-deps) ..."
 "$PYBIN" -m pip install --upgrade pip -q
-"$PYBIN" -m pip install -q -r "$REPO_ROOT/requirements.txt"
+"$PYBIN" -m pip install -q -r "$REPO_ROOT/requirements.lock.txt"
 # 非 editable 安装: 把 src/ (含 src/service.py) 复制进 site-packages, 并生成 bin/mailagent。
-# .[cli,api,memory]: api extra (fastapi/uvicorn/pyjwt/httpx) 是 serve-api 远程访问后端必需 ——
-# B+C (554df0b) 把 serve-api 纳入 BackendLifecycleManager, 打包模式会 spawn 它; 不装则
-# .app 内 serve-api 'import fastapi' 崩, 远程访问不可用 (requirements.txt 不含 api 依赖)。
-# memory extra (M1, ~150-250MB: mem0ai/faiss-cpu/fastembed/onnxruntime) = MAILAGENT_MEM0_CAPTURE
-# 开时的自动抽取记忆引擎。flag 默认关 → 懒加载红线保证不开时零加载, 但依赖须在包里 (dogfood
-# 翻 flag 即用)。bge-small 权重在首次 flag-on 时联网下载到 DATA_ROOT/mem0/fastembed_cache
-# (离线 pre-bake 后置, 首次 dogfood 需网)。
-( cd "$REPO_ROOT" && "$PYBIN" -m pip install -q ".[cli,api,memory]" )
+# --no-deps: 全部依赖 (含 extras 的) 已由 lock 提供, 项目本体安装不再触发任何解析 —— 否则
+# extras 区间可能拉进未锁定版本, 破坏再现性。原 .[cli,api,memory] extras 语义备忘 (lock 已覆盖):
+# - api extra (fastapi/uvicorn/pyjwt/httpx) 是 serve-api 远程访问后端必需 ——
+#   B+C (554df0b) 把 serve-api 纳入 BackendLifecycleManager, 打包模式会 spawn 它; 不装则
+#   .app 内 serve-api 'import fastapi' 崩, 远程访问不可用 (requirements.txt 不含 api 依赖)。
+# - memory extra (M1, ~150-250MB: mem0ai/faiss-cpu/fastembed/onnxruntime) = MAILAGENT_MEM0_CAPTURE
+#   开时的自动抽取记忆引擎。flag 默认关 → 懒加载红线保证不开时零加载, 但依赖须在包里 (dogfood
+#   翻 flag 即用)。bge-small 权重在首次 flag-on 时联网下载到 DATA_ROOT/mem0/fastembed_cache
+#   (离线 pre-bake 后置, 首次 dogfood 需网)。
+( cd "$REPO_ROOT" && "$PYBIN" -m pip install -q --no-deps "." )
 # 清理 setuptools 在仓库根留下的 bdist 产物 (egg-info 已被 .gitignore 忽略, build/ 也忽略但顺手清掉)
 rm -rf "$REPO_ROOT/build"
 
