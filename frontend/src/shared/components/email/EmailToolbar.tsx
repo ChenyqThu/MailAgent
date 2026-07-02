@@ -887,9 +887,9 @@ export function EmailToolbar({
           移文件夹区分）。垃圾桶动画图标 DeleteIcon（lucide-animated delete，hover 掀盖）。 */}
       <GhostBtn
         icon={<DeleteIcon size={13} strokeWidth={2} />}
-        label={t('toolbar.delete', { defaultValue: '删除' })}
+        label={t('toolbar.delete')}
         showLabel={wantsLabels}
-        hoverHint={t('toolbar.delete', { defaultValue: '删除' })}
+        hoverHint={t('toolbar.delete')}
         pending={deleteState?.pending}
         onClick={onDelete}
       />

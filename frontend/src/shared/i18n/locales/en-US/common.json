@@ -120,7 +120,8 @@
     "reply": "Reply",
     "replyAll": "Reply All",
     "forward": "Forward",
-    "composeMenu": "Compose options"
+    "composeMenu": "Compose options",
+    "delete": "Delete"
   },
   "compose": {
     "from": "From",
