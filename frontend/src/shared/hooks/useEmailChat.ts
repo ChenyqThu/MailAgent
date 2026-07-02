@@ -162,6 +162,12 @@ export interface UseEmailChatReturn {
    *  current email. Aborts any in-flight stream, loads the target session's
    *  messages, and points `activeSessionId` at the new session. */
   selectSession: (sessionId: number) => Promise<void>
+  /** Part B (island live-refresh) — re-load the ACTIVE session's messages from ai_chat.db.
+   *  selectSession short-circuits on the same id, so this is the path for "the rows changed
+   *  underneath us" (an island-approved HITL turn the gateway resumed server-side). Reuses the
+   *  same refresh() the session-switch load uses; no-op when no session is active. Best-effort:
+   *  a load failure surfaces via `error` like any other refresh. */
+  reloadActiveSession: () => Promise<void>
   /** Phase 06a (cutover) — fold a session the AI SDK path created out-of-band
    *  (renderer IPC, backend_kind='ai-sdk') into the hook state: prepend it to
    *  `sessions`, point `activeSessionId` + `messagesSessionId` at it, and reset
@@ -1489,6 +1495,23 @@ export function useEmailChat(
     [emailId, mailApi, refresh]
   )
 
+  // Part B (island live-refresh) — reload the ACTIVE session's rows in place. selectSession
+  // short-circuits on the same id (its contract is "switch"), so the panel calls this when an
+  // island-driven server-side resume changed the session's ai_chat.db rows underneath the open
+  // panel ('chat:session-updated' IPC). Reuses refresh() — the exact session-switch load path
+  // (nav-generation guarded, sets messagesSessionId) — so the AI SDK reload gate + mapping stay
+  // single-sourced. syncStreaming=false: the settle is terminal, no live row to resume.
+  const reloadActiveSession = useCallback(async (): Promise<void> => {
+    const sid = activeSessionRef.current
+    if (sid === null) return
+    try {
+      await refresh(sid, false)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      setError({ code: 'E_LOAD', message })
+    }
+  }, [refresh])
+
   // Phase 06a (cutover) — adopt an ai-sdk session the panel created out-of-band (renderer IPC,
   // backend_kind='ai-sdk') so the legacy hook state stays the SSoT for history / title / reload.
   // Unlike selectSession this runs NO IPC / refresh: the session is freshly created + empty (0 rows),
@@ -1539,6 +1562,7 @@ export function useEmailChat(
     quotaCooldownKind,
     sessions,
     selectSession,
+    reloadActiveSession,
     adoptSession,
     editMessage,
     deleteSession,

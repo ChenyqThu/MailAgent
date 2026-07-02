@@ -1719,6 +1719,17 @@ export interface ChatApi {
    * GET /api/agent/profile/history?docName=. Degrades to [] when unreachable.
    */
   listProfileHistory(docName?: string): Promise<AgentProfileHistoryEntry[]>
+  /**
+   * Part B (island live-refresh) — subscribe to server-side approval-resume settles
+   * (`chat:session-updated` main→renderer broadcast): the island approved/rejected a paused
+   * HITL turn and the gateway resumed it server-side, so the session's ai_chat.db rows changed
+   * OUTSIDE the renderer's useChat state. An open panel matching `sessionId` reloads its
+   * messages. Electron-only (island agent runs in main); optional — web (HttpApi) omits it.
+   * Returns an unsubscribe function.
+   */
+  onSessionUpdated?(
+    handler: (payload: { sessionId: number; status: 'completed' | 'rejected' | 'error' }) => void
+  ): () => void
 }
 
 // ---- F2 — agentic 搜索（runSearchAgent）契约 ------------------------------

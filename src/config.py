@@ -602,6 +602,13 @@ class Config(BaseSettings):
         default="dark", env="ISLAND_THEME",
         description="灵动岛 light/dark mode（envelope metadata 透传，Swift 端按此切 token）",
     )
+    island_mail_notify_scope: str = Field(
+        default="important", env="ISLAND_MAIL_NOTIFY_SCOPE",
+        description="邮件通知上岛范围。important（默认）= 仅 AI 判定重要及以上级别弹卡："
+                    "MailReceived 一律静默（该时点无 priority），LLMReviewed(Urgent) 仅"
+                    "🔴 紧急 / 🟡 重要发。all = 每封新邮件 + 全部 LLM 结果都弹（旧行为回退开关）。"
+                    "非邮件卡（日历 / DeadLetter / agent 审批等）不受影响。",
+    )
     # ---- 灵动岛 harness agent 上岛（Part B，默认关，完全离岛 gateway 服务端 resume）----
     # 🔴 字段名 island_agent_enabled ≠ env MAILAGENT_ISLAND_AGENT_ENABLED → 必须 validation_alias
     #    (pydantic v2 忽略 Field(env=)，见本类顶 model_config 注释)。默认关 → serve-api

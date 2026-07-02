@@ -24,14 +24,15 @@ socket 发过 envelope 才知道它（token 不出网、不进 Notion/远程 API
 from __future__ import annotations
 
 import json
-import logging
 import secrets
 import sqlite3
 import time
 from dataclasses import dataclass
 from typing import Dict, Optional, Set
 
-log = logging.getLogger(__name__)
+# serve-api 进程无 stdlib logging root handler (uvicorn.run log_config=None)，
+# stdlib INFO/DEBUG 会被 lastResort(WARNING+) 吞掉 → 与主链路一致走 loguru。
+from loguru import logger
 
 # 邮件通知可挂较久（岛生命周期 5min 隐藏 / 12h GC 松耦合）；1h 足够人回来点。
 DEFAULT_TTL_SEC = 3600.0
@@ -148,7 +149,7 @@ def register(
             conn.close()
     except sqlite3.Error as e:
         # pending 没落库 → 该 token 永远 resolve 不了。返 None，让调用方跳过发不可 resolve 的卡。
-        log.warning("[island-ack] register failed — pending not persisted: %s", e)
+        logger.warning(f"[island-ack] register failed — pending not persisted: {e}")
         return None
     return token
 
@@ -195,7 +196,7 @@ def resolve(db_path: str, ack_token: str, choice: str) -> Optional[PendingAck]:
         finally:
             conn.close()
     except (sqlite3.Error, json.JSONDecodeError) as e:
-        log.debug("[island-ack] resolve failed: %s", e)
+        logger.debug(f"[island-ack] resolve failed: {e}")
         return None
 
 

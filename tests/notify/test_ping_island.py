@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import socket
 import threading
 from pathlib import Path
@@ -126,8 +125,30 @@ def test_send_succeeds_when_server_returns_json(tmp_socket):
     assert b'"provider":"mail"' in bytes(ctrl.received)
 
 
+def test_recv_timeout_after_sendall_is_delivered_ok(tmp_socket):
+    """修 4 (urgent 卡永动重弹): sendall 成功 + recv 超时 → ok=True + error='response_timeout'.
+
+    带按钮卡（expects_response=True）的同步回答窗口只有 3s，人几乎不可能赶上（真实点击走
+    解耦 ack POST）——每次 urgent 卡发送必然 recv 超时。旧行为把它判成 ok=False → _bg()
+    入 reconnect 队列 → flush 重发 → 再超时再入队 = 永动（dogfood 实锤 1000008019：
+    dispatched_ok=0 latency=3001ms，重弹卡 ack_token 已消费点 skip 全 404）。
+    新语义：envelope 已 flush 进 kernel = 送达成功，无同步回答不是失败。
+    """
+    sock_path, ctrl = tmp_socket
+    ctrl.response = None
+    ctrl.delay = 0.6  # server 收完后 hold 0.6s（> client 0.15s timeout）不关连接 → recv 必超时
+    env = BridgeEnvelope(event_type="LLMReviewedUrgent", session_key="x", title="t",
+                         expects_response=True)
+    result = ping_island.send_sync(env.encode(), sock_path=sock_path, timeout=0.15)
+    assert result.ok is True
+    assert result.response is None
+    assert result.error == "response_timeout"
+    # envelope 真的送到了 server
+    assert b'"provider":"mail"' in bytes(ctrl.received)
+
+
 def test_send_fails_open_when_socket_missing(tmp_path):
-    """ENOENT → ok=False, error 设置, 不抛."""
+    """ENOENT（未 sendall）→ ok=False, error 设置, 不抛 —— 修 4 只豁免已送达的 recv 超时."""
     sock_path = tmp_path / "nope.sock"
     result = ping_island.send_sync(b"{}", sock_path=str(sock_path), timeout=1.0)
     assert result.ok is False

@@ -49,6 +49,10 @@ export interface ResumeResult {
    *  the card); 'not_found' = no live stash (gateway restarted / already claimed / wrong token); 'error'
    *  = the resume ran but the tool errored (e.g. guard mismatch) or streamText threw. */
   status: 'completed' | 'rejected' | 'repaused' | 'not_found' | 'error'
+  /** The ai_chat.db session the resumed run belongs to (from the claimed stash entry). null =
+   *  unsaved session; ABSENT on 'not_found' (no entry claimed, nothing ran). The /decide route uses
+   *  it to notify the lifecycle (cfg.onServerResumeSettled) so an OPEN chat panel live-refreshes. */
+  sessionId?: number | null
   /** A one-line human summary for the island completed/error card (the model's final text, clipped). */
   summary?: string
   error?: string
@@ -81,7 +85,7 @@ export async function resumeApprovalRun(
   // Report 'completed' so the island clears its (now stale) card either way — the decision was made
   // in-app; the island click must not re-execute (finding 1) nor re-persist (finding 2).
   if (cfg.isApprovalResolved?.(entry.toolCallId)) {
-    return { ok: true, status: 'completed', summary: '已在 app 内处理' }
+    return { ok: true, status: 'completed', sessionId: entry.sessionId, summary: '已在 app 内处理' }
   }
 
   const approved = input.decision === 'approve'
@@ -120,7 +124,12 @@ export async function resumeApprovalRun(
     approvalResp
   )
   if (!applied) {
-    return { ok: false, status: 'error', error: 'approval part not found in stashed run' }
+    return {
+      ok: false,
+      status: 'error',
+      sessionId: entry.sessionId,
+      error: 'approval part not found in stashed run'
+    }
   }
 
   // Reconstruct the request body verbatim (same model/thinking/context/system/approvalMode), swapping
@@ -135,7 +144,7 @@ export async function resumeApprovalRun(
 
   const prepared = await prepareChatRun(resumeBody, cfg, abortSignal)
   if (!prepared.ok) {
-    return { ok: false, status: 'error', error: prepared.body.error }
+    return { ok: false, status: 'error', sessionId: entry.sessionId, error: prepared.body.error }
   }
   const run = prepared.run
 
@@ -169,14 +178,24 @@ export async function resumeApprovalRun(
       }
     }
   } catch (err) {
-    return { ok: false, status: 'error', error: err instanceof Error ? err.message : String(err) }
+    return {
+      ok: false,
+      status: 'error',
+      sessionId: entry.sessionId,
+      error: err instanceof Error ? err.message : String(err)
+    }
   }
 
   // finding 3 — the resume ran the approved tool but then PAUSED AGAIN at a NEXT approval gate.
   // makePersistOnFinish already stashed + announced that fresh approval as a new island card; this
   // result is NOT terminal, so tell serve-api to leave the (new) card alone (don't send completed).
   if (rePaused) {
-    return { ok: true, status: 'repaused', summary: clipSummary(assistantText) }
+    return {
+      ok: true,
+      status: 'repaused',
+      sessionId: entry.sessionId,
+      summary: clipSummary(assistantText)
+    }
   }
 
   // Inspect the audit for THIS tool call to distinguish executed-OK from a guard/write error.
@@ -187,20 +206,37 @@ export async function resumeApprovalRun(
       // executed + persisted the authoritative turn. The action DID happen; report 'completed' (NOT
       // 'error', so no misleading AgentError card). basePersist already skipped this duplicate turn.
       if (auditIsApprovalUsed(audit.outputJson)) {
-        return { ok: true, status: 'completed', summary: '已在 app 内处理' }
+        return {
+          ok: true,
+          status: 'completed',
+          sessionId: entry.sessionId,
+          summary: '已在 app 内处理'
+        }
       }
       // A real guard/write error (hash mismatch, expiry, domain failure) → surface it.
       const errMsg = parseAuditError(audit.outputJson)
-      return { ok: false, status: 'error', error: errMsg, summary: errMsg }
+      return {
+        ok: false,
+        status: 'error',
+        sessionId: entry.sessionId,
+        error: errMsg,
+        summary: errMsg
+      }
     }
     return {
       ok: true,
       status: 'completed',
+      sessionId: entry.sessionId,
       summary: clipSummary(assistantText) || `${entry.toolName} 已执行`
     }
   }
   // rejected — the model saw the denied tool output and responded; surface its text.
-  return { ok: true, status: 'rejected', summary: clipSummary(assistantText) }
+  return {
+    ok: true,
+    status: 'rejected',
+    sessionId: entry.sessionId,
+    summary: clipSummary(assistantText)
+  }
 }
 
 /** Pull a short error message out of an audit entry's outputJson ({error, message}) for the card. */

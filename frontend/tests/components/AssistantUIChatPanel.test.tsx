@@ -30,6 +30,7 @@ vi.mock('@shared/components/email/TranslatedBody', () => ({
 
 import { MailAgentRuntimeProvider } from '@shared/assistant/runtime/MailAgentRuntimeProvider'
 import type { LegacyRuntimeChat } from '@shared/assistant/runtime/useLegacyExternalStoreRuntime'
+import { ThreadRunningBridge } from '@shared/assistant/runtime/ThreadRunningBridge'
 import { AssistantThread } from '@shared/assistant/components/thread'
 
 beforeAll(async () => {
@@ -247,5 +248,47 @@ describe('AssistantUIChatPanel shell — interaction', () => {
     )
     await waitFor(() => expect(screen.getByTestId('confirm')).toBeTruthy())
     expect(screen.getByText('email_flag')).toBeTruthy()
+  })
+})
+
+// Part B (island live-refresh) — ThreadRunningBridge is the SENSOR of the panel's mid-stream guard:
+// the onSessionUpdated handler skips the reload+remount when the ref reads true, because remounting
+// a streaming thread aborts its in-flight POST → gateway onFinish isAborted → the turn is never
+// persisted (lost). If the bridge under-reports (stuck false) the race regresses; if it over-reports
+// (stuck true after unmount) island live-refresh dies permanently. Driven through the legacy
+// provider, whose adapter feeds isRunning from chat.isStreaming — the same thread state the AI SDK
+// runtime populates in production.
+describe('ThreadRunningBridge — mid-stream guard sensor', () => {
+  test('streaming thread → ref true; unmount resets to false (no stale guard)', async () => {
+    const runningRef = { current: false }
+    const chat = makeChat({
+      messages: [
+        fakeMessage({ id: 2, role: 'assistant', content: '流式中…', status: 'streaming' })
+      ],
+      isStreaming: true,
+      streamingMessageId: 2
+    })
+    const { unmount } = render(
+      <MailAgentRuntimeProvider chat={chat} onSend={vi.fn()}>
+        <ThreadRunningBridge runningRef={runningRef} />
+      </MailAgentRuntimeProvider>
+    )
+    await waitFor(() => expect(runningRef.current).toBe(true))
+    unmount()
+    expect(runningRef.current).toBe(false)
+  })
+
+  test('idle thread → ref stays false (guard never blocks a legit refresh)', async () => {
+    const runningRef = { current: false }
+    const chat = makeChat({
+      messages: [fakeMessage({ id: 2, role: 'assistant', content: '完成。' })]
+    })
+    render(
+      <MailAgentRuntimeProvider chat={chat} onSend={vi.fn()}>
+        <ThreadRunningBridge runningRef={runningRef} />
+      </MailAgentRuntimeProvider>
+    )
+    // settle a tick so any effect pass has run before asserting the negative.
+    await waitFor(() => expect(runningRef.current).toBe(false))
   })
 })

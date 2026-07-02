@@ -150,7 +150,9 @@ export function ApprovalActions({
           onClick={onReject}
           disabled={busy || disabled}
           className={cn(
-            'inline-flex h-7 items-center gap-1 rounded-md px-2.5 text-aux',
+            // leading-none: text-aux 的 20px 行高在 28px 按钮里因 CJK half-leading 视觉偏高，
+            // 去掉行高让 flex 居中的是字形本身（两个按钮一致）。
+            'inline-flex h-7 items-center justify-center gap-1 rounded-md px-2.5 text-aux leading-none',
             'border border-ink-border-soft bg-ink-2 text-ink-fg',
             'transition-colors duration-fast hover:bg-ink-3 disabled:opacity-40'
           )}
@@ -163,7 +165,7 @@ export function ApprovalActions({
           onClick={() => void handleApprove()}
           disabled={busy || disabled}
           className={cn(
-            'inline-flex h-7 items-center gap-1 rounded-md px-3 text-aux font-medium',
+            'inline-flex h-7 items-center justify-center gap-1 rounded-md px-3 text-aux font-medium leading-none',
             'bg-[rgb(var(--c-accent))] text-[rgb(var(--c-accent-fg))]',
             'transition-opacity duration-fast hover:opacity-90 disabled:opacity-40'
           )}

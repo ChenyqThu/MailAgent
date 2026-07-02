@@ -640,6 +640,22 @@ function createElectronChatRuntime(): ChatApi {
     openPopout(emailId: number): void {
       if (!Number.isInteger(emailId) || emailId < 0) return
       sender()?.('window:openChatPopout', emailId)
+    },
+    // Part B (island live-refresh) — Electron-only main→renderer broadcast（岛上批准 → gateway
+    // 服务端 resume 落库后 lifecycle 广播），web (HttpApi) 无此通道（optional 方法缺省）。
+    onSessionUpdated(
+      handler: (payload: { sessionId: number; status: 'completed' | 'rejected' | 'error' }) => void
+    ): () => void {
+      return subscribe('chat:session-updated', (...args: unknown[]) => {
+        const p = args[0] as { sessionId?: unknown; status?: unknown } | undefined
+        if (
+          p &&
+          typeof p.sessionId === 'number' &&
+          (p.status === 'completed' || p.status === 'rejected' || p.status === 'error')
+        ) {
+          handler({ sessionId: p.sessionId, status: p.status })
+        }
+      })
     }
   }
 }

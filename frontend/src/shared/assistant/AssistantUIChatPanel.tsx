@@ -42,6 +42,7 @@ import { useApprovalMode } from '@shared/lib/approvalMode'
 
 import { MailAgentRuntimeProvider } from './runtime/MailAgentRuntimeProvider'
 import { AiSdkRuntimeProvider } from './runtime/AiSdkRuntimeProvider'
+import { ThreadRunningBridge } from './runtime/ThreadRunningBridge'
 import {
   getChatRuntimeMode,
   isAiSdkContextInjectionEnabled,
@@ -385,6 +386,33 @@ export function AssistantUIChatPanel({
         : undefined,
     [contextInjectionOn, reloadMessagesReady, chat.messages]
   )
+
+  // Part B (island live-refresh) — an island-approved HITL turn was resumed SERVER-SIDE by the
+  // gateway, so the active session's ai_chat.db rows changed underneath the open panel (the useChat
+  // state still shows the stale approval card). On the lifecycle's 'chat:session-updated' broadcast
+  // for THIS session, reload its messages through the hook's existing DB→ChatMessage load path
+  // (reloadActiveSession → refresh → chatMessageToUIMessage above), then bump the remount nonce so
+  // the KEYED AiSdkRuntimeProvider re-seeds initialMessages — the runtime treats `messages` as a
+  // per-mount initial set, so without the remount the reloaded rows never reach the thread.
+  // 🔴 IPC 订阅必须用返回的 disposer 清理（fe0437e：跨 contextBridge removeListener 匹配不到 →
+  // listener 泄漏 + StrictMode 双订阅）。onSessionUpdated 是 optional（web HttpApi 缺省）→ ?. 。
+  const [islandRefreshNonce, setIslandRefreshNonce] = useState(0)
+  const aiSdkRunningRef = useRef(false)
+  const chatReloadActiveSession = chat.reloadActiveSession
+  const chatActiveSessionId = chat.activeSessionId
+  useEffect(() => {
+    if (!useAiSdkRuntime) return undefined
+    const dispose = mailApi.chat.onSessionUpdated?.((payload) => {
+      if (payload.sessionId !== chatActiveSessionId) return
+      // Mid-stream guard — the renderer's own run is streaming (typical: the user approved in-app
+      // and the island click short-circuited /decide to completed). Remounting now would abort that
+      // in-flight POST → gateway onFinish isAborted → persistTurn skipped → the turn is LOST. The
+      // renderer stream finishes + persists on its own; this refresh would be redundant anyway.
+      if (aiSdkRunningRef.current) return
+      void chatReloadActiveSession().then(() => setIslandRefreshNonce((n) => n + 1))
+    })
+    return dispose
+  }, [useAiSdkRuntime, mailApi, chatActiveSessionId, chatReloadActiveSession])
 
   // ── Phase 06a: old-session re-scope (lifted from the legacy panel's proven pattern) ──────────
   // Alias the two chat members the pendingOpen effect reads so exhaustive-deps tracks each as a
@@ -845,12 +873,15 @@ export function AssistantUIChatPanel({
                           // messages) keeps `:new` so onEnsureSession setting activeSessionId mid-first-
                           // send does NOT remount the provider and interrupt the in-flight turn. Email
                           // switch (activeInternalId) + history select (seeded id) still remount + re-seed.
+                          // Part B — `:rN` suffix only after an island live-refresh (nonce starts at 0 →
+                          // byte-identical key until the first settle) so the provider remounts re-seeded
+                          // with the reloaded messages.
                           contextInjectionOn
                             ? `${activeInternalId ?? 'none'}:${
                                 initialMessages && initialMessages.length > 0
                                   ? chat.activeSessionId
                                   : 'new'
-                              }`
+                              }${islandRefreshNonce > 0 ? `:r${islandRefreshNonce}` : ''}`
                             : (activeInternalId ?? 'none')
                         }
                         gatewayBaseUrl={gatewayBaseUrl}
@@ -864,6 +895,8 @@ export function AssistantUIChatPanel({
                         initialMessages={initialMessages}
                         onEnsureSession={onEnsureSession}
                       >
+                        {/* Part B — feeds the mid-stream guard above (renders nothing). */}
+                        <ThreadRunningBridge runningRef={aiSdkRunningRef} />
                         <AssistantThread emptyState={emptyMessages} />
                       </AiSdkRuntimeProvider>
                     )

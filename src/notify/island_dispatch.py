@@ -135,6 +135,10 @@ class _DispatcherState:
     accent: str = "coral"
     theme: str = "dark"
     extra_metadata: Dict[str, str] = field(default_factory=dict)
+    # 邮件通知上岛范围（ISLAND_MAIL_NOTIFY_SCOPE，config 默认 'important'）。模块级缺省
+    # 'all' = 旧行为——真实进程恒由 service.py 从 config 传入；init() 不传（既有测试 /
+    # 老 caller）保持逐字节现状。
+    mail_notify_scope: str = "all"
 
 
 _state = _DispatcherState()
@@ -202,14 +206,22 @@ def init(
     accent: str = "coral",
     theme: str = "dark",
     extra_metadata: Optional[Dict[str, str]] = None,
+    mail_notify_scope: str = "all",
 ) -> None:
-    """启动时调一次；后续 ``dispatch_*`` 根据 ``enabled`` 决定是否 emit."""
+    """启动时调一次；后续 ``dispatch_*`` 根据 ``enabled`` 决定是否 emit.
+
+    ``mail_notify_scope``: 'important'（config 新默认）= MailReceived 静默 +
+    LLMReviewed(Urgent) 仅重要级别；'all' = 全量（旧行为）。非法值归一 'all'
+    （fail-open 纪律：配置写错宁多勿丢通知）。
+    """
     _state.enabled = bool(enabled)
     _state.sync_store = sync_store
     _state.account_name = account_name or ""
     _state.accent = accent or "coral"
     _state.theme = theme or "dark"
     _state.extra_metadata = dict(extra_metadata or {})
+    scope = (mail_notify_scope or "all").strip().lower()
+    _state.mail_notify_scope = scope if scope in ("important", "all") else "all"
 
 
 def is_enabled() -> bool:
@@ -240,6 +252,11 @@ def dispatch_mail_received(
     ``sender_digest`` 为 Phase 2 KOS L1 hot block 预留接口（暂可空）。
     """
     if not _state.enabled:
+        return
+    # ISLAND_MAIL_NOTIFY_SCOPE='important'（config 新默认）：MailReceived 一律静默——
+    # 此时点尚无 AI priority，重要级别的弹卡由后续 LLMReviewed(Urgent) 承担；'all' =
+    # 旧行为逐字节保留（回退开关）。
+    if _state.mail_notify_scope == "important":
         return
     env = BridgeEnvelope(
         event_type="MailReceived",
@@ -289,6 +306,12 @@ def dispatch_llm_reviewed(
     替代 DEFAULT_OPTION_IDS. filter 后空 list → 退回静态 5 fallback.
     """
     if not _state.enabled:
+        return
+    # ISLAND_MAIL_NOTIFY_SCOPE='important'（config 新默认）：仅重要级别弹卡——
+    # 🔴 紧急（≈ Notion Critical/Urgent）/ 🟡 重要（≈ Important）放行，🟢 一般 / ⚪ 低
+    # 静默。放行后 urgent 卡 vs 普通卡的分流判定（priority+action，下一行）不动：
+    # 🟡 重要 + 非 NEEDS_FLAG action 仍走普通 LLMReviewed 卡。'all' = 全量（旧行为）。
+    if _state.mail_notify_scope == "important" and priority not in URGENT_PRIORITY_LABELS:
         return
 
     urgent = priority in URGENT_PRIORITY_LABELS and action in ACTION_NEEDS_FLAG

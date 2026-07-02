@@ -320,6 +320,7 @@ class EmailNotionSyncApp:
                 account_name=config.mail_account_name,
                 accent=config.island_accent,
                 theme=config.island_theme,
+                mail_notify_scope=config.island_mail_notify_scope,
             )
             logger.info(
                 f"[island] enabled (socket={config.island_socket_path} "

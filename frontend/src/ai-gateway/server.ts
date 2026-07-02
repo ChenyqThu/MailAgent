@@ -402,6 +402,21 @@ async function handleApprovalDecide(
       { toolCallId, decision, resumeToken },
       controller.signal
     )
+    // Part B (dogfood live-refresh) — a TERMINAL settle (completed / rejected / error) on a persisted
+    // session notifies the lifecycle so an open chat panel reloads instead of showing the stale
+    // approval card. 'repaused' is NOT terminal (a fresh island card owns the next hop; the panel's
+    // card is still live) and 'not_found' ran nothing. Best-effort: a hook throw must not break the
+    // HTTP response to serve-api.
+    if (
+      result.sessionId != null &&
+      (result.status === 'completed' || result.status === 'rejected' || result.status === 'error')
+    ) {
+      try {
+        cfg.onServerResumeSettled?.(result.sessionId, result.status)
+      } catch (err) {
+        console.error('[ai-gateway] onServerResumeSettled hook failed (resume settled OK)', err)
+      }
+    }
     const status = result.status === 'not_found' ? 404 : 200
     writeJson(res, status, result)
   } catch (err) {

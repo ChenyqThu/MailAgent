@@ -93,9 +93,11 @@ def send_sync(envelope_bytes: bytes, *, sock_path: Optional[str] = None,
 
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     sock.settimeout(deadline)
+    sent = False  # sendall 完成 = envelope 已 flush 进 kernel（island socket 常开必收到）
     try:
         sock.connect(path)
         sock.sendall(envelope_bytes)
+        sent = True
         try:
             sock.shutdown(socket.SHUT_WR)
         except OSError:
@@ -126,6 +128,17 @@ def send_sync(envelope_bytes: bytes, *, sock_path: Optional[str] = None,
     except (socket.timeout, FileNotFoundError, ConnectionRefusedError, BrokenPipeError,
             ConnectionResetError, ProtocolError, OSError) as e:
         latency_ms = int((time.monotonic() - t0) * 1000)
+        # 已 sendall 成功后的 recv 超时 ≠ 送达失败：带按钮卡（expects_response=True）的同步
+        # 回答窗口只有 3s，人几乎不可能赶上（真实点击走解耦 ack POST /api/island/ack）——
+        # 每次 urgent 卡发送必然 recv 超时。误判 ok=False 会入 island_reconnect 队列 →
+        # flush 重发 → 再超时再入队 = 永动重弹（且重弹卡的 ack_token 已被首次消费，按钮全
+        # 404）。此处返回 ok=True（无同步回答）：不入队、dispatch 记 ok=1（§9-2 持久 dedup
+        # 也因此生效）。其余异常（connect 拒绝 / 未完成 sendall / 协议违规）保持 ok=False。
+        if sent and isinstance(e, socket.timeout):
+            log.debug("[island] delivered, no sync response within %.1fs (async ack path)",
+                      deadline)
+            return SendResult(ok=True, response=None, error="response_timeout",
+                              latency_ms=latency_ms)
         log.debug("[island] dispatch failed (fail-open): %s", e)
         return SendResult(ok=False, error=str(e), latency_ms=latency_ms)
     finally:

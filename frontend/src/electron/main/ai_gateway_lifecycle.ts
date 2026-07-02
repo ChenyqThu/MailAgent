@@ -18,7 +18,7 @@
 // flag-gated by MAILAGENT_AI_SDK_GATEWAY (index.ts dynamic-imports this module only
 // when the flag is 'true'), so flag-off the heavy `ai` deps never load.
 
-import { app } from 'electron'
+import { app, BrowserWindow } from 'electron'
 
 import { startAiGatewayServer, type AiGatewayHandle } from '../../ai-gateway/server'
 import {
@@ -558,6 +558,22 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     // Tombstone an approval as rejected so the other surface can't approve+execute it afterwards.
     rejectApproval: islandAgentEnabled
       ? (toolCallId: string) => approvalGuard.reject(toolCallId)
+      : undefined,
+    // Part B (dogfood live-refresh) — an island /decide server-side resume settled a persisted
+    // session (completed / rejected / error). Broadcast to every renderer window (events_bridge
+    // 同款 broadcast 手法) so an OPEN chat panel showing the stale approval card reloads its
+    // messages from ai_chat.db. Off (default) → undefined → server.ts 的 ?. 短路，字节级 inert。
+    onServerResumeSettled: islandAgentEnabled
+      ? (sessionId: number, status: 'completed' | 'rejected' | 'error') => {
+          for (const win of BrowserWindow.getAllWindows()) {
+            if (win.isDestroyed()) continue
+            try {
+              win.webContents.send('chat:session-updated', { sessionId, status })
+            } catch {
+              /* renderer torn down mid-send — ignore */
+            }
+          }
+        }
       : undefined
   })
   _handle = handle
