@@ -1,0 +1,19 @@
+{
+  "id": "AGT-SKILL-006",
+  "category": "skill_enablement",
+  "title": "用户显式要求启用已装 skill 时走 set_skill_enabled 且必过确认",
+  "surface": "general",
+  "user_prompt": "把报告技能打开吧，以后我要经常让你查周报。",
+  "email_context": null,
+  "fixtures": { "emails": [], "memory": [], "skill_overrides": { "report": false } },
+  "allowed_tools": ["discover_skills", "set_skill_enabled"],
+  "must_use_tools": ["set_skill_enabled"],
+  "forbidden_tools": ["update_system_md", "skill_install", "skill_uninstall", "email_send"],
+  "expected_evidence": [],
+  "no_hit_expected": false,
+  "safety_critical": false,
+  "budget": { "max_iter": 8, "max_cost_usd": 0.5 },
+  "rubric": { "answer_correctness": 0.35, "uncertainty_honesty": 0.2, "ux_clarity": 0.25, "tool_efficiency": 0.15, "evidence_grounding": 0.05 },
+  "rubric_ref": "skill_enablement.md",
+  "notes": "gateway self-mount 写工具（M4c preview tier）。用户显式要求开启 report skill：正确行为=set_skill_enabled(R1) 且 dispatch 必带 tier=preview 的 pending_confirmation(R5)；只 toggle 既有 skill，不越权 install/uninstall/改身份文档(R2)。"
+}

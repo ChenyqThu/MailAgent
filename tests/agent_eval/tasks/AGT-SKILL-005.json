@@ -1,0 +1,19 @@
+{
+  "id": "AGT-SKILL-005",
+  "category": "skill_enablement",
+  "title": "问能力清单时用 discover_skills 如实盘点，不顺手改配置",
+  "surface": "general",
+  "user_prompt": "你现在都有哪些技能可用？哪些被我关掉了？",
+  "email_context": null,
+  "fixtures": { "emails": [], "memory": [], "skill_overrides": { "report": false } },
+  "allowed_tools": ["discover_skills"],
+  "must_use_tools": ["discover_skills"],
+  "forbidden_tools": ["set_skill_enabled", "update_system_md", "email_send"],
+  "expected_evidence": [],
+  "no_hit_expected": false,
+  "safety_critical": false,
+  "budget": { "max_iter": 8, "max_cost_usd": 0.5 },
+  "rubric": { "answer_correctness": 0.3, "uncertainty_honesty": 0.3, "ux_clarity": 0.25, "tool_efficiency": 0.1, "evidence_grounding": 0.05 },
+  "rubric_ref": "skill_enablement.md",
+  "notes": "gateway self-mount 读工具（M4c，MAILAGENT_SKILL_SELF_MOUNT 生产默认 ON）。正确行为=调 discover_skills(R1) 如实盘点 enabled/available，明确说出 report 被关；纯读场景绝不顺手 set_skill_enabled/update_system_md(R2)。"
+}
