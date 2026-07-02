@@ -275,7 +275,11 @@ class SyncStore:
     #                幂等: ALTER 前 PRAGMA 检查 + INSERT OR IGNORE。
     #                回滚 (回退 v27): DELETE FROM report_agent WHERE id='email_preprocess_agent';
     #                context_docs_json 列可留 (旧代码无害) 或手动 DROP; 必要时降 db_version。
-    DB_VERSION = 27  # v27: report_agent +context_docs_json + 播种 type='preprocess' Custom Agent
+    # v28 (删月报默认 seed, 2026-07, dogfood 反馈 #9): 删除 monthly_email_digest 默认行
+    #                (仅 enabled=0 且 prompt IS NULL 的未改默认态; 客制化用户行保留)。
+    #                v19 seed 块移除 monthly tuple (新库不再播种月报)。
+    #                回滚 (回退 v28): 月报行已删无法自动恢复; 需手动 INSERT 或降 db_version。
+    DB_VERSION = 28  # v28: 删 monthly_email_digest 默认 seed 行（dogfood #9）
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -1178,7 +1182,7 @@ class SyncStore:
             ("daily_email_digest", "邮件日报", '{"cadence": "daily", "hours": [9]}', 24,
              "rolling_24h", '["🔴 紧急", "🟡 重要"]'),
             ("weekly_email_digest", "邮件周报", '{"cadence": "weekly", "hours": [9], "weekday": 0}', 168, None, None),
-            ("monthly_email_digest", "邮件月报", '{"cadence": "monthly", "hours": [9], "day_of_month": 1}', 720, None, None),
+            # monthly_email_digest 已从默认 seed 中删除 (v28, dogfood #9): 用户未改默认态由迁移块删除
         ):
             cursor.execute(
                 f"INSERT OR IGNORE INTO report_agent {_seed_cols} "
@@ -1509,6 +1513,17 @@ class SyncStore:
             "VALUES ('email_preprocess_agent', 'preprocess', 0, 'AI 邮件预处理', NULL, NULL, NULL, ?, ?)",
             ('["soul", "user"]', time.time()),
         )
+
+        # === v28: 删 monthly_email_digest 默认 seed 行 (dogfood 反馈 #9) ===
+        # 仅删未被用户改动过的默认态行（enabled=0 AND prompt IS NULL）, 保客制化。
+        # 新库: v19 seed 块已不播种月报, 本迁移是对已存在旧库的清理; 幂等 (无行则 DELETE 零影响)。
+        # 回滚 (回退 v28): 月报行已删不自动恢复; 手动 INSERT 或降 db_version。
+        if current_version < 28:
+            cursor.execute(
+                "DELETE FROM report_agent "
+                "WHERE id = 'monthly_email_digest' AND enabled = 0 AND prompt IS NULL"
+            )
+            logger.info("v28 migration: monthly_email_digest default row removed")
 
         # 更新数据库版本
         cursor.execute("""

@@ -285,7 +285,7 @@ class TestStore:
         ver = conn.execute("SELECT value FROM sync_state WHERE key='db_version'").fetchone()[0]
         conn.close()
         assert n == 1
-        assert int(ver) == 27  # v27: +context_docs_json + preprocess agent（增量2）
+        assert int(ver) == 28  # v28: 删 monthly_email_digest 默认 seed 行（dogfood #9）
         a = store.get_agent("email_search_agent")
         assert a["model"] == "gpt-5.5" and a["enabled"] == 0  # 用户改动保留
 
@@ -850,8 +850,20 @@ class TestAggregateRun:
 
     def test_monthly_aggregates_daily_reports(self, db: Path):
         """方案 A：月报聚合整月「日报」(非周报)。seed 5 月日报 → monthly 读到并综合;
-        旧逻辑(月报读周报)下 seed 的 daily 读不到 → empty, 故此测试能区分新旧。"""
+        旧逻辑(月报读周报)下 seed 的 daily 读不到 → empty, 故此测试能区分新旧。
+
+        v28 (dogfood #9): monthly_email_digest 不再默认播种，测试需手动建行（聚合逻辑不受影响）。
+        """
         store = ReportStore(str(db))
+        # v28 起 monthly_email_digest 不再自动播种：手动建行以测试聚合逻辑（逻辑本身未移除）。
+        store.create_agent(
+            "monthly_email_digest", type="report", title="邮件月报（测试）",
+            enabled=False, model="claude-opus-4-8",
+        )
+        store.update_agent("monthly_email_digest", {
+            "schedule_json": '{"cadence": "monthly", "hours": [9], "day_of_month": 1}',
+            "window_hours": 720,
+        })
         # _NOW=2026-06-02 → 上一个自然月 5 月 [5-01, 5-31]；seed 2 份日报(缺其余 29 天)
         for d in ["2026-05-01", "2026-05-15"]:
             rid = f"daily_email_digest:daily:{d}"
