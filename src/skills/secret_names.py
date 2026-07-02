@@ -13,11 +13,17 @@ W2（``pack_verify`` / manifest 校验）安装时拒；W3（exec 端点注入�
 
 from __future__ import annotations
 
+import os
+from typing import Mapping, Optional
+
 import re
-from typing import Optional
 
 # env 变量名正则：大写字母开头，[A-Z0-9_]，≤64 字符（POSIX 命名，收窄到大写 = skill secret 约定）。
 SECRET_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
+
+# exec 子进程固定 PATH（**硬编码**安全值，非继承 —— 防 PATH 前置注入劫持；run_command 与 skill
+# 脚本执行共用同一 exec 端点固定 env，本值是其 PATH 分量单源）。
+FIXED_EXEC_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
 
 # exec 子进程固定 env 白名单基底的允许名（W3 会用这份**构造** env）—— secret **不得**同名覆盖它们。
 FIXED_ENV_ALLOW_NAMES: frozenset = frozenset(
@@ -72,3 +78,25 @@ def validate_secret_name(name: str) -> Optional[str]:
             "environment or masquerade as a global credential"
         )
     return None
+
+
+def build_fixed_base_env(source_env: Optional[Mapping[str, str]] = None) -> dict[str, str]:
+    """构造 exec 子进程的固定 env 白名单基底（**不** ``dict(os.environ)`` 继承 —— 防全局密钥 /
+    执行劫持变量泄漏进 agent 触发的子进程）。
+
+    PATH 恒 = 硬编码 ``FIXED_EXEC_PATH``（非继承）；其余 ``FIXED_ENV_ALLOW_NAMES`` + ``LC_*``
+    前缀族从 ``source_env``（默认 ``os.environ``）**择取存在者**带过去。W3 在此基底上叠加
+    per-skill secret（经 ``validate_secret_name`` 保证不覆盖任何基底名）。
+    """
+    src: Mapping[str, str] = os.environ if source_env is None else source_env
+    env: dict[str, str] = {"PATH": FIXED_EXEC_PATH}
+    for name in FIXED_ENV_ALLOW_NAMES:
+        if name == "PATH":
+            continue
+        val = src.get(name)
+        if val is not None:
+            env[name] = val
+    for key, val in src.items():
+        if any(key.startswith(p) for p in FIXED_ENV_ALLOW_PREFIXES):
+            env[key] = val
+    return env

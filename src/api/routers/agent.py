@@ -455,3 +455,127 @@ async def uninstall_agent_skill_full(request: Request, body: Optional[dict[str, 
         request=request,
         source="sqlite",
     )
+
+
+# ── exec 策略白名单（S2 W1 —— PolicyRule CRUD + evaluate）─────────────────────────────
+# 结构化白名单规则（ADR-001 §6 D4）：owner 经审批卡「总是允许」/ Settings 管理页产生，模型**无**
+# 创建通道（policy_rules 不暴露任何 gateway 工具）。evaluate 供 gateway W1b 的 needsApproval 前置调用
+# 决定免卡；exec 端点内部也调它作审计透传。业务权威在 Python，评估 fail-closed（异常→ask）。
+
+
+def _policy_rule_dict(r: Any) -> dict[str, Any]:
+    from src.agent_config.policy import rule_is_dangerously_wide
+
+    return {
+        "id": r.id,
+        "capability": r.capability,
+        "matcher": r.matcher,
+        "contextMode": r.context_mode,
+        "agentId": r.agent_id,
+        "enabled": r.enabled,
+        "note": r.note,
+        "createdAt": r.created_at,
+        "lastUsedAt": r.last_used_at,
+        "useCount": r.use_count,
+        # 危险宽规则（危险 argv0 + {any} 通配）标红供 W1b UI 警告——入库不拒（owner 可手动放宽）。
+        "dangerous": rule_is_dangerously_wide(r.matcher),
+    }
+
+
+@router.get("/policy/rules", dependencies=[Depends(verify_cf_access)])
+async def list_policy_rules(
+    request: Request,
+    capability: Optional[str] = Query(default=None),
+    context_mode: Optional[str] = Query(default=None, alias="contextMode"),
+):
+    """列策略规则（可选按 capability / contextMode 过滤），最新在前，带 dangerous 标志。"""
+    store = get_agent_config_store()
+    rules = store.list_policy_rules(capability=capability, context_mode=context_mode)
+    data = [_policy_rule_dict(r) for r in rules]
+    return success_envelope(
+        {"rules": data}, request=request, source="sqlite", meta_extra={"count": len(data)}
+    )
+
+
+@router.post("/policy/rules", dependencies=[Depends(verify_cf_access)])
+async def create_policy_rule(request: Request, body: Optional[dict[str, Any]] = None):
+    """建一条结构化白名单规则。body = {capability, matcher, contextMode?, note?}。matcher 经
+    parse_matcher 校验（非法 → 422）；contextMode 默认 manual_chat。返回含 dangerous 标志。"""
+    import json
+
+    from src.agent_config.policy import CAPABILITIES, CONTEXT_MODES, parse_matcher
+
+    raw = body or {}
+    capability = raw.get("capability")
+    matcher = raw.get("matcher")
+    context_mode = raw.get("contextMode", "manual_chat")
+    note = raw.get("note")
+    if capability not in CAPABILITIES:
+        raise APIError("E_INVALID_ARG", f"capability must be one of {list(CAPABILITIES)}",
+                       http_status=400, source="sqlite")
+    if context_mode not in CONTEXT_MODES:
+        raise APIError("E_INVALID_ARG", f"contextMode must be one of {list(CONTEXT_MODES)}",
+                       http_status=400, source="sqlite")
+    if not isinstance(matcher, dict):
+        raise APIError("E_INVALID_ARG", "matcher must be an object", http_status=400, source="sqlite")
+    if note is not None and not isinstance(note, str):
+        raise APIError("E_INVALID_ARG", "note must be a string", http_status=400, source="sqlite")
+    try:
+        parse_matcher(capability, matcher)
+    except Exception as exc:  # noqa: BLE001 — pydantic ValidationError / ValueError → 422
+        raise APIError("E_INVALID_ARG", f"invalid matcher: {exc}", http_status=422, source="sqlite") from exc
+    store = get_agent_config_store()
+    rule = store.create_policy_rule(
+        capability,
+        json.dumps(matcher, ensure_ascii=False, sort_keys=True),
+        context_mode=context_mode,
+        note=note,
+    )
+    return success_envelope(_policy_rule_dict(rule), request=request, source="sqlite", status_code=201)
+
+
+@router.patch("/policy/rules/{rule_id}", dependencies=[Depends(verify_cf_access)])
+async def patch_policy_rule(rule_id: int, request: Request, body: Optional[dict[str, Any]] = None):
+    """启用/停用 + 改备注（matcher 不可 patch —— 放宽 = 删旧建新）。不存在 → 404。"""
+    raw = body or {}
+    enabled = raw.get("enabled")
+    note = raw.get("note")
+    if enabled is not None and not isinstance(enabled, bool):
+        raise APIError("E_INVALID_ARG", "enabled must be a boolean", http_status=400, source="sqlite")
+    if note is not None and not isinstance(note, str):
+        raise APIError("E_INVALID_ARG", "note must be a string", http_status=400, source="sqlite")
+    rule = get_agent_config_store().set_policy_rule(rule_id, enabled=enabled, note=note)
+    if rule is None:
+        raise APIError("E_NOT_FOUND", f"policy rule not found: {rule_id}", http_status=404, source="sqlite")
+    return success_envelope(_policy_rule_dict(rule), request=request, source="sqlite")
+
+
+@router.delete("/policy/rules/{rule_id}", dependencies=[Depends(verify_cf_access)])
+async def delete_policy_rule(rule_id: int, request: Request):
+    """删一条规则。幂等（不存在 removed=false）。"""
+    removed = get_agent_config_store().delete_policy_rule(rule_id)
+    return success_envelope({"id": rule_id, "removed": removed}, request=request, source="sqlite")
+
+
+@router.post("/policy/evaluate", dependencies=[Depends(verify_cf_access)])
+async def evaluate_policy(request: Request, body: Optional[dict[str, Any]] = None):
+    """评估一次动作是否命中白名单 → {decision: auto_allow|ask, ruleId}。gateway W1b 的 needsApproval
+    前置调用。body = {capability, action, contextMode?}。contextMode 缺省/非法 → fail-closed 到
+    untrusted_trigger（manual 规则不匹配 → ask）。"""
+    from src.agent_config.policy import CAPABILITIES, CONTEXT_MODES, evaluate
+
+    raw = body or {}
+    capability = raw.get("capability")
+    action = raw.get("action")
+    context_mode = raw.get("contextMode")
+    if capability not in CAPABILITIES:
+        raise APIError("E_INVALID_ARG", f"capability must be one of {list(CAPABILITIES)}",
+                       http_status=400, source="sqlite")
+    if not isinstance(action, dict):
+        raise APIError("E_INVALID_ARG", "action must be an object", http_status=400, source="sqlite")
+    if context_mode not in CONTEXT_MODES:
+        context_mode = "untrusted_trigger"
+    # 返回 {decision, rule_id}（snake）= policy 判决单一 verdict 形状，与 exec 端点响应的 policy 字段
+    # 一致（W1b 一个 verdict 类型消费两处：/evaluate 前置调用 + exec 响应审计）。
+    result = evaluate(get_agent_config_store(), capability, action, context_mode)
+    return success_envelope(result, request=request, source="sqlite")

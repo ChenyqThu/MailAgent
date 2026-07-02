@@ -76,6 +76,13 @@ def _now() -> int:
     return int(time.time())
 
 
+def _now_iso() -> str:
+    """UTC ISO 时间戳（policy_rules.created_at/last_used_at 用 —— ADR SQL 定义为 TEXT）。"""
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).isoformat()
+
+
 def _hash(text: str) -> str:
     """文本 → sha256 hex（content_hash / profile_hash 用，与 api_keys._hash_key 同算法）。"""
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -110,6 +117,22 @@ class SkillRow:
     @property
     def is_builtin(self) -> bool:
         return self.source_type == "builtin"
+
+
+@dataclass(frozen=True)
+class PolicyRuleRow:
+    """``policy_rules`` 行投影（ADR-001 §6 D4）。``matcher`` 为已解析 dict（结构化 typed matcher）。"""
+
+    id: int
+    capability: str
+    matcher: dict[str, Any]
+    context_mode: str
+    agent_id: Optional[str]
+    enabled: bool
+    note: Optional[str]
+    created_at: str
+    last_used_at: Optional[str]
+    use_count: int
 
 
 @dataclass(frozen=True)
@@ -201,6 +224,27 @@ CREATE TABLE IF NOT EXISTS agent_skill_events (
 );
 
 CREATE INDEX IF NOT EXISTS idx_skill_events_name ON agent_skill_events(skill_name, created_at DESC);
+
+-- S2 W1 exec 策略：结构化白名单规则（ADR-001 §6 D4）。matcher_json 是 typed matcher（带 "v":1
+-- 版本位），**永不**字符串前缀匹配（防 `curl good | curl evil` 类逃逸）。context_mode 绑定（红线①）
+-- = manual 规则永不匹配 untrusted 触发查询。agent_id 为 S4 per-agent 规则预留（S2 恒 NULL）。
+-- 规则**只**由 owner 显式动作产生（审批卡「总是允许」/ Settings），模型无任何创建通道（policy_rules
+-- 不暴露任何 gateway 工具）。created_at/last_used_at 存 ISO 文本（与 skill_secrets.updated_at 同风格）。
+CREATE TABLE IF NOT EXISTS policy_rules (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    capability   TEXT NOT NULL,          -- 'exec' | 'file_read' | 'file_write' | 'web'
+    matcher_json TEXT NOT NULL,          -- 结构化 matcher（带 "v":1 版本位）
+    context_mode TEXT NOT NULL DEFAULT 'manual_chat',
+    agent_id     TEXT,                   -- S4 预留：per-agent 规则；S2 恒 NULL
+    enabled      INTEGER NOT NULL DEFAULT 1,
+    note         TEXT,
+    created_at   TEXT NOT NULL,
+    last_used_at TEXT,
+    use_count    INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_policy_rules_lookup
+    ON policy_rules(capability, context_mode, enabled);
 
 CREATE TABLE IF NOT EXISTS agent_profile_docs (
     doc_name     TEXT PRIMARY KEY,
@@ -643,6 +687,114 @@ class AgentConfigStore:
             )
         return "\n".join(parts)
 
+    # ======================================================================
+    # exec 策略白名单（policy_rules，ADR-001 §6 D4）
+    # ======================================================================
+
+    def create_policy_rule(
+        self,
+        capability: str,
+        matcher_json: str,
+        *,
+        context_mode: str = "manual_chat",
+        note: Optional[str] = None,
+        agent_id: Optional[str] = None,
+    ) -> PolicyRuleRow:
+        """落一条结构化白名单规则。``matcher_json`` 已是校验过的 typed matcher 序列化串
+        （合法性由 policy.py 的 pydantic 模型在 API 层把关，store 不二次解析——只存原样）。"""
+        now = _now_iso()
+        with self._connection() as conn:
+            cur = conn.execute(
+                "INSERT INTO policy_rules "
+                "(capability, matcher_json, context_mode, agent_id, enabled, note, created_at, "
+                " last_used_at, use_count) VALUES (?,?,?,?,?,?,?,?,?)",
+                (capability, matcher_json, context_mode, agent_id, 1, note, now, None, 0),
+            )
+            conn.commit()
+            rule_id = int(cur.lastrowid)
+            row = conn.execute("SELECT * FROM policy_rules WHERE id = ?", (rule_id,)).fetchone()
+        return _row_to_policy_rule(row)
+
+    def list_policy_rules(
+        self, *, capability: Optional[str] = None, context_mode: Optional[str] = None
+    ) -> list[PolicyRuleRow]:
+        """列全部规则（可选按 capability / context_mode 过滤），最新在前。"""
+        sql = "SELECT * FROM policy_rules"
+        clauses: list[str] = []
+        params: list[Any] = []
+        if capability is not None:
+            clauses.append("capability = ?")
+            params.append(capability)
+        if context_mode is not None:
+            clauses.append("context_mode = ?")
+            params.append(context_mode)
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY id DESC"
+        with self._connection() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return [_row_to_policy_rule(r) for r in rows]
+
+    def get_policy_rule(self, rule_id: int) -> Optional[PolicyRuleRow]:
+        with self._connection() as conn:
+            row = conn.execute("SELECT * FROM policy_rules WHERE id = ?", (rule_id,)).fetchone()
+        return _row_to_policy_rule(row) if row else None
+
+    def set_policy_rule(
+        self, rule_id: int, *, enabled: Optional[bool] = None, note: Optional[str] = None
+    ) -> Optional[PolicyRuleRow]:
+        """启用/停用 + 改备注（owner 管理页用）。不存在返回 None。matcher 不可 patch
+        （放宽 = 删旧建新，防原地把窄规则悄悄改宽）。"""
+        sets: list[str] = []
+        params: list[Any] = []
+        if enabled is not None:
+            sets.append("enabled = ?")
+            params.append(1 if enabled else 0)
+        if note is not None:
+            sets.append("note = ?")
+            params.append(note)
+        if not sets:
+            return self.get_policy_rule(rule_id)
+        params.append(rule_id)
+        with self._connection() as conn:
+            cur = conn.execute(
+                f"UPDATE policy_rules SET {', '.join(sets)} WHERE id = ?", params
+            )
+            conn.commit()
+            if cur.rowcount == 0:
+                return None
+            row = conn.execute("SELECT * FROM policy_rules WHERE id = ?", (rule_id,)).fetchone()
+        return _row_to_policy_rule(row)
+
+    def delete_policy_rule(self, rule_id: int) -> bool:
+        with self._connection() as conn:
+            cur = conn.execute("DELETE FROM policy_rules WHERE id = ?", (rule_id,))
+            conn.commit()
+            return cur.rowcount > 0
+
+    def candidate_policy_rules(self, capability: str, context_mode: str) -> list[PolicyRuleRow]:
+        """评估候选规则 = ``enabled=1 AND capability=? AND context_mode=? AND agent_id IS NULL``。
+
+        **context_mode 严格等值绑定**（红线①）：manual_chat 规则永不进 untrusted_trigger 查询的
+        候选集，反之亦然。agent_id IS NULL = 只全局 manual 规则（S4 的 per-agent 规则另键过滤）。
+        """
+        with self._connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM policy_rules WHERE enabled = 1 AND capability = ? "
+                "AND context_mode = ? AND agent_id IS NULL ORDER BY id ASC",
+                (capability, context_mode),
+            ).fetchall()
+        return [_row_to_policy_rule(r) for r in rows]
+
+    def bump_policy_rule_use(self, rule_id: int) -> None:
+        """规则命中（auto_allow）→ last_used_at=now + use_count+1（审计 + 管理页展示）。"""
+        with self._connection() as conn:
+            conn.execute(
+                "UPDATE policy_rules SET last_used_at = ?, use_count = use_count + 1 WHERE id = ?",
+                (_now_iso(), rule_id),
+            )
+            conn.commit()
+
     # -- internal ----------------------------------------------------------
 
     @staticmethod
@@ -734,6 +886,28 @@ def _row_to_skill(row: sqlite3.Row) -> SkillRow:
         # 新列（迁移前建的旧库经 _migrate_additive 补齐；防御性 keys() 判存在，避免 KeyError）。
         files_json=row["files_json"] if "files_json" in keys else None,
         first_run_approved=row["first_run_approved"] if "first_run_approved" in keys else None,
+    )
+
+
+def _row_to_policy_rule(row: sqlite3.Row) -> PolicyRuleRow:
+    try:
+        matcher = json.loads(row["matcher_json"])
+        if not isinstance(matcher, dict):
+            matcher = {}
+    except (json.JSONDecodeError, TypeError):
+        # 坏 matcher_json 投影成空 dict —— evaluate 侧解析空 matcher 不匹配任何动作（fail-closed）。
+        matcher = {}
+    return PolicyRuleRow(
+        id=row["id"],
+        capability=row["capability"],
+        matcher=matcher,
+        context_mode=row["context_mode"],
+        agent_id=row["agent_id"],
+        enabled=bool(row["enabled"]),
+        note=row["note"],
+        created_at=row["created_at"],
+        last_used_at=row["last_used_at"],
+        use_count=row["use_count"],
     )
 
 

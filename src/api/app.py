@@ -415,6 +415,7 @@ from src.api.routers import (  # noqa: E402
     chat,
     email,
     email_views,
+    exec as exec_router,  # 'exec' 是内建名，别名避免遮蔽
     folder,
     island,
     jobs,
@@ -443,6 +444,10 @@ app.include_router(agent.router)
 # Python 执行（业务权威 + 远程 parity）；SSRF 防护 + 钉 IP 在 routers/web.py。gateway 侧
 # 恒 edit-tier 人审，flag MAILAGENT_OPENNESS_WEB_TOOLS 默认 off（工具不注册即无从触达本端点）。
 app.include_router(web.router)
+# S2 W1 (agent openness) — exec 执行工具端点 /api/exec/{run,file_read,file_write}。TS 薄壳→Python
+# 执行；固定 env 白名单不继承全局密钥 + inode 级 deny 地板。gateway 侧恒 edit-tier 人审、不进
+# auto-approve，结构化白名单命中才免卡（/api/agent/policy/evaluate）。owner-only（verify_cf_access）。
+app.include_router(exec_router.router)
 # ping-island 解耦 ack 通道 (契约 §6/§9-4): 按钮点击 fire-and-forget POST 回灌。
 # 自认 ack_token 能力令牌 (不挂 verify_cf_access)，见 routers/island.py。
 app.include_router(island.router)
