@@ -36,9 +36,9 @@
 
 import { spawn, type ChildProcess } from 'child_process'
 import { app } from 'electron'
-import { createWriteStream, existsSync, mkdirSync, type WriteStream } from 'fs'
+import { createWriteStream, existsSync, mkdirSync, readFileSync, type WriteStream } from 'fs'
 import { get as httpGet } from 'http'
-import { join } from 'path'
+import { dirname, join } from 'path'
 
 import Database from 'better-sqlite3'
 
@@ -143,6 +143,62 @@ export function probeDbReady(dbPath: string = resolveDbPath()): ReadinessResult 
         /* close 失败无所谓 — readonly 短连接, GC 会回收。 */
       }
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// DB 完整性失败 marker (E0-WP2 数据安全网)
+// ---------------------------------------------------------------------------
+
+/** Python 侧 src/mail/db_safety.py `INTEGRITY_MARKER_FILENAME` 的手抄镜像 ——
+ *  serve 启动早期 quick_check 失败时在 sync_store.db 同目录写此 JSON 后 fail-fast
+ *  退出。两侧文件名改动必须同步。 */
+export const DB_INTEGRITY_MARKER_FILENAME = 'db_integrity_failure.json'
+
+export interface DbIntegrityFailure {
+  /** 逐库失败详情 (Python 写入: {db, detail})。 */
+  failed: Array<{ db: string; detail: string }>
+  /** 备份目录 (恢复指引展示用)。 */
+  backupsDir: string
+  checkedAt: string
+}
+
+/**
+ * 读 Python 数据安全网写下的完整性失败 marker。无 marker / 解析失败 → null。
+ *
+ * 只在 waitReady() 失败分支调用 (index.ts): serve 因 quick_check 不过 fail-fast
+ * 退出 → waitReady 快速 false → 这里区分「数据库损坏」和「慢迁移/坏配置」, 前者
+ * 用 dialog.showErrorBox 给用户明确的恢复指引 (而非静默降级空态)。
+ * 🔴 不在这里跑 PRAGMA quick_check —— 1.5 GB 库实测 ~24s, 会把 Electron main
+ * 事件循环冻死; Python 侧已检过, 读它的结论即可。
+ *
+ * @param dbPath 默认 resolveDbPath(); 可注入便于单测。
+ */
+export function readDbIntegrityFailure(
+  dbPath: string = resolveDbPath()
+): DbIntegrityFailure | null {
+  const markerPath = join(dirname(dbPath), DB_INTEGRITY_MARKER_FILENAME)
+  if (!existsSync(markerPath)) return null
+  try {
+    const parsed = JSON.parse(readFileSync(markerPath, 'utf8')) as {
+      failed?: Array<{ db?: unknown; detail?: unknown }>
+      backups_dir?: unknown
+      checked_at?: unknown
+    }
+    const failed = Array.isArray(parsed?.failed)
+      ? parsed.failed
+          .filter((f) => f && typeof f.db === 'string')
+          .map((f) => ({ db: String(f.db), detail: typeof f.detail === 'string' ? f.detail : '' }))
+      : []
+    if (failed.length === 0) return null
+    return {
+      failed,
+      backupsDir: typeof parsed.backups_dir === 'string' ? parsed.backups_dir : '',
+      checkedAt: typeof parsed.checked_at === 'string' ? parsed.checked_at : ''
+    }
+  } catch (err) {
+    console.warn('[backend_lifecycle] db integrity marker 解析失败 (忽略)', err)
+    return null
   }
 }
 

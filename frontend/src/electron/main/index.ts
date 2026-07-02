@@ -1,4 +1,4 @@
-import { app, shell, BrowserWindow, ipcMain, Menu } from 'electron'
+import { app, shell, BrowserWindow, dialog, ipcMain, Menu } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import {
@@ -10,6 +10,7 @@ import {
 } from './appearance'
 import { registerCliLifecycle } from './cli_runner'
 import {
+  readDbIntegrityFailure,
   registerBackendLifecycle,
   registerBackendQuitHook,
   resolveApiPort
@@ -486,6 +487,22 @@ app.whenReady().then(async () => {
           `[startup] 后端未在超时内就绪 (state=${backendMgr.getState()}); 降级开窗。` +
             '可能原因: bad config 或大库迁移超时。'
         )
+        // E0-WP2 数据安全网: serve 启动早期 quick_check 失败会写 marker 后 fail-fast
+        // 退出 (crash-loop 直到断路器) → waitReady 快速 false。这里读 marker 区分
+        // 「数据库损坏」和「慢迁移/坏配置」—— 前者不能静默降级空态, 弹恢复指引。
+        // (不在 main 进程跑 quick_check: 1.5 GB 库 ~24s 会冻死事件循环, 读结论即可。)
+        const integrity = readDbIntegrityFailure()
+        if (integrity) {
+          const detail = integrity.failed.map((f) => `${f.db}\n  ${f.detail}`).join('\n')
+          dialog.showErrorBox(
+            '数据库校验失败',
+            'MailAgent 检测到本地数据库损坏, 邮件同步后端已停止以保护数据。\n\n' +
+              `${detail}\n\n` +
+              '恢复方法: 退出 MailAgent 后, 从备份目录恢复最近一份备份\n' +
+              `${integrity.backupsDir || '<数据目录>/data/backups/'}\n\n` +
+              '详细步骤见项目文档 docs/reference/packaging/packaging-release.md「数据恢复」小节。'
+          )
+        }
       }
       createWindow()
     } else {

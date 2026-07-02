@@ -64,17 +64,20 @@ class EmailNotionSyncApp:
             if config.alert_feishu_webhook_url and config.alert_enabled:
                 try:
                     from src.notify.alert import FeishuAlertNotifier
+                    # E0-check 修正: kwargs 对齐 FeishuAlertNotifier 真实签名
+                    # (webhook_url/secret/enabled_levels/cooldown + send_alert 的 content=),
+                    # 与主流程 self.alerter 构造一致 —— 旧 kwargs (webhook_secret/enabled/
+                    # levels/message) 构造即 TypeError 被下面 except 吞掉, 告警从未发出。
                     _tmp_alerter = FeishuAlertNotifier(
                         webhook_url=config.alert_feishu_webhook_url,
-                        webhook_secret=config.alert_feishu_webhook_secret,
-                        enabled=config.alert_enabled,
-                        levels=[lv.strip() for lv in config.alert_levels.split(',')],
+                        secret=config.alert_feishu_webhook_secret,
+                        enabled_levels=config.alert_levels,
                         cooldown=config.alert_cooldown,
                     )
                     asyncio.run(_tmp_alerter.send_alert(
                         level="critical",
                         title=f"MailAgent 启动失败: {config.mailagent_backend} backend probe 不过",
-                        message=f"{e}\n\n切换提示: {e.fallback_hint or '无'}\n\n服务已退出, 不会自动重启 (autorestart=false).",
+                        content=f"{e}\n\n切换提示: {e.fallback_hint or '无'}\n\n服务已退出, 不会自动重启 (autorestart=false).",
                         alert_key=f"backend_startup_fail:{config.mailagent_backend}",
                     ))
                     asyncio.run(_tmp_alerter.close())
@@ -909,6 +912,66 @@ async def run_service():
 
     maybe_start_tracemalloc()
     start_parent_watchdog()
+
+    # E0-WP2 数据安全网: worker 未起、SyncStore 尚未打开 DB 的最早时点, 对 Python
+    # 两库 (sync_store.db / agent_config.db) 跑节流的 quick_check + VACUUM INTO
+    # 滚动备份 (<DATA_ROOT>/data/backups/, 24h 节流 + 保 3 份; 放 data/ 下是因为
+    # dev 态 DATA_ROOT=仓库根, data/ 已 gitignore 而根级 backups/ 不是 —— 1.5 GB
+    # 备份决不能变成可提交文件)。校验失败 → 写 marker (Electron main waitReady
+    # 失败分支据此弹「数据库校验失败」) + fail-fast 退出, **不做备份不轮转** 保住
+    # 已有好备份。ai_chat.db 是前端 owned, 首期不纳入 (已知边界, 见
+    # packaging-release.md「数据恢复」)。安全网自身的意外异常不得阻断启动
+    # (除 DbIntegrityError 外仅告警)。
+    from src.config import DATA_ROOT
+    from src.agent_config.store import resolve_agent_config_db_path
+    from src.mail.db_safety import (
+        DbIntegrityError,
+        integrity_failure_marker_path,
+        run_startup_db_safety,
+    )
+
+    try:
+        run_startup_db_safety(
+            [
+                config.sync_store_db_path,
+                resolve_agent_config_db_path(config.sync_store_db_path),
+            ],
+            Path(DATA_ROOT) / "data" / "backups",
+            marker_path=integrity_failure_marker_path(config.sync_store_db_path),
+        )
+    except DbIntegrityError as e:
+        logger.critical(f"数据库完整性校验失败, 拒绝启动: {e}")
+        print(f"\n❌ 数据库完整性校验失败: {e}", file=sys.stderr)
+        print(
+            "   → 退出 App/服务后, 按 docs/reference/packaging/packaging-release.md"
+            "「数据恢复」小节从 backups/ 目录恢复数据库。\n",
+            file=sys.stderr,
+        )
+        # 一次性飞书告警 (alerter 还没主流程初始化)。kwargs 对齐 FeishuAlertNotifier
+        # 真实签名 (webhook_url/secret/enabled_levels/cooldown + send_alert 的 content=),
+        # 与主流程 EmailNotionSyncApp.__init__ 的 self.alerter 构造 / backend probe
+        # 失败分支 (E0-check 已一并修正) 三处一致 —— 改签名必须三处同步。
+        if config.alert_feishu_webhook_url and config.alert_enabled:
+            try:
+                from src.notify.alert import FeishuAlertNotifier
+                _tmp_alerter = FeishuAlertNotifier(
+                    webhook_url=config.alert_feishu_webhook_url,
+                    secret=config.alert_feishu_webhook_secret,
+                    enabled_levels=config.alert_levels,
+                    cooldown=config.alert_cooldown,
+                )
+                await _tmp_alerter.send_alert(
+                    level="critical",
+                    title="MailAgent 启动失败: 数据库完整性校验不过",
+                    content=f"{e}\n\n服务已退出, 请从 backups/ 恢复数据库后重启。",
+                    alert_key="db_integrity_fail",
+                )
+                await _tmp_alerter.close()
+            except Exception as alert_err:
+                print(f"⚠️ 同时尝试发飞书告警也失败: {alert_err}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        logger.warning(f"[db_safety] 启动安全检查异常 (不阻断启动): {e}")
 
     app = EmailNotionSyncApp()
 
