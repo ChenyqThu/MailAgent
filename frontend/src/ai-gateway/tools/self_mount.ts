@@ -77,13 +77,16 @@ export function createSelfMountTools(
     description:
       'Propose an edit to one of your own Standing Context documents — soul (identity / voice), ' +
       'agent (operating notes / self-maintained working memory), rules (hard behavioural ' +
-      "constraints), or user (the user's durable preferences). The FULL new markdown content " +
-      'REPLACES the current doc, so include everything you want kept. The user sees your proposed ' +
-      'content in a confirmation card and approves or rejects it; nothing changes without ' +
-      'their approval. Editing `rules` is high-risk: jailbreak / safety-override phrasing is ' +
-      'rejected by a server-side validator and the product safety floor can never be weakened. ' +
-      'Use sparingly — to record a durable preference the user just stated, or a lasting working ' +
-      'note. Reversible (the user can roll back from Settings). Edit tier — always asks.',
+      "constraints), or user (the user's identity / explicit long-term preferences). " +
+      'ONLY call this when the user EXPLICITLY asks you to edit or update one of these ' +
+      'Standing Context documents. Do NOT use this to save casual preferences or facts ' +
+      'mentioned in conversation — those are automatically captured into memory.md. ' +
+      'The FULL new markdown content REPLACES the current doc, so include everything you ' +
+      'want kept. The user sees your proposed content in a confirmation card and approves ' +
+      'or rejects it; nothing changes without their approval. Editing `rules` is high-risk: ' +
+      'jailbreak / safety-override phrasing is rejected by a server-side validator and the ' +
+      'product safety floor can never be weakened. Reversible (the user can roll back from ' +
+      'Settings). Edit tier — always asks.',
     inputSchema: updateSystemMdSchema,
     risk: 'edit',
     // No editableFields → the card is approve/reject only (no edit UI); doc_name AND content are both
