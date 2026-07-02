@@ -81,3 +81,15 @@ WP1 与 WP2/3/5 互不依赖可并行；WP4 独立。合计 ~1 周（单人）�
 | CI mac runner 时长/费用上涨 | 拆 required 子集 + push 只跑增量 job；tag 全量 |
 | quick_check 在大库上的耗时 | quick_check 对 ~9k 邮件级库应 <1s；实测超预算则降级为仅备份不检查 |
 | VACUUM INTO 备份期间写锁 | 在 Python 服务启动早期（worker 未起）执行，天然无并发写 |
+
+## 5. 实施状态（2026-07-02，trellis `07-02-e0-safety-net`）
+
+5 个 WP 已全部实施并过独立 check，关键口径以实测修正：
+
+- **WP2 check 频率**：实测本机 `sync_store.db` = **1.54GB**、quick_check ~24s（§4 预估失准）→ check+backup 合并为**同一 24h 节流通道**（`src/mail/db_safety.py`，即 §4 预留的降级路径），非 due 时零启动成本；损坏检测延迟上界 = 24h（有意设计，测试固定语义）。3 份备份磁盘成本 ≈4.6GB，目录定在 `<DATA_ROOT>/data/backups/`（dev 态 `data/` 已 gitignore）。`ai_chat.db` 为前端 owned（backend 明文纪律不写它），首期不纳入——已在 packaging-release.md「数据恢复」登记为已知边界。
+- **WP3 范围扩大**：同款吞错 pattern 实为 **8 处**（v8/v9/v13/v14/v19/v20/v27/v29），全部改守卫（`_migration_guard_columns/_index`）；`project_progress/sync_store.py` 的形似 pattern 经查不同款不修。
+- **WP1 零排除达成**：建闸时 main 上 9 个预存 stale 测试（后端 7 + 前端 1 文件）已随本 epic 修复，闸内全量 **3216 passed**（后端，CI 模拟 env ~1m30s）+ **2173 passed**（前端），无任何 ignore/deselect/exclude。baseline compare 落地为 self-compare 机制闸（裸 `--compare` 缺参 exit 2；对局部 trace 恒 REGRESSED——真行为回归闸 = 本地录新 trace 的 manual lane）。
+- **WP5 生成方式**：pip-compile 会解析 PyPI 最新、与「锁定现状」冲突 → 改为对已 provision 嵌入式 venv 直接 `pip freeze`（108 pin，与现状零漂移；provision 改为 lock + `--no-deps "."`）。
+- **顺手修复**：`FeishuAlertNotifier` 两处错误 kwargs（构造即 TypeError 被静默吞、告警从未发出——含 Sprint 16 预存的 backend-probe 分支同型 bug）。
+
+**待验证**：CI workflow 未在真 runner 跑过（本地不 push 约束）——首个 push/PR 见真章。**后续 backlog**：① 弹窗覆盖缺口——DB 损坏若未伤 `db_version` 行，前端 `waitReady` 照常通过不弹框（serve 已 fail-fast + marker 留存，数据受保护但用户无感知）；补全需成功分支也读 marker 或 in-app banner，产品决策后做。② `tests/cli` llm run 系列在真实 .env 下各挂 ~10s 连接等待（测试卫生，CI dummy env 不受影响）。
