@@ -147,8 +147,13 @@ class TestOutboxPath:
         assert kwargs["payload"] == {"is_read": True, "is_flagged": True}
         assert kwargs["internal_id"] == 1001
 
-        # update_local_flags 立即写 (echo prevention)
-        sync_store.update_local_flags.assert_called_once_with(1001, True, True)
+        # update_local_flags 立即写 (echo prevention) + Sprint 16 收尾 (codex 审 P0):
+        # SQLite 侧同步镜像 Processing Status=已同步 (与下方 Notion 侧
+        # update_page_mail_sync_status 标记一致, 见 reverse_sync.py:262-271)。
+        # E0-WP3 期间发现断言落后于该行为 (预存坏测试), 对齐现状。
+        sync_store.update_local_flags.assert_called_once_with(
+            1001, True, True, processing_status="已同步"
+        )
 
         # update_page_mail_sync_status 仍直接调 (带外 ack)
         notion_sync.update_page_mail_sync_status.assert_called_once_with(

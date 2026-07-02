@@ -1,9 +1,15 @@
-// @vitest-environment happy-dom
-//
 // assistant-modal P0 — the MAILAGENT_ASSISTANT_MODAL surface flag + the useAIChatPanel three-mode
 // state (mode / cached dock mode / openChatModal·hideChatModal / pendingAgentSessionId slot). The flag
 // is independent (explicit-wins, default off → byte-identical); the modal state is orthogonal to the
-// legacy `visible`/`toggle` so the old panel never regresses. happy-dom gives a real localStorage.
+// legacy `visible`/`toggle` so the old panel never regresses.
+//
+// localStorage: memory-backed stub, mirroring tests/shared/auto-title-settings.test.ts /
+// active-email.test.ts. A happy-dom annotation does NOT provide a working localStorage here:
+// Node 22+ ships an experimental `localStorage` global that evaluates to `undefined` without
+// --localstorage-file, and vitest's global injection skips window keys already present on the
+// node global — so the bare `localStorage` stayed undefined and `.getItem` threw. The store's
+// module-init reads are typeof-guarded (ai-chat-panel.ts), so the hoisted static imports below
+// evaluating before the stub are safe.
 
 import { afterEach, describe, expect, test, vi } from 'vitest'
 
@@ -15,13 +21,23 @@ import {
   requestOpenAgentSession
 } from '../../../src/shared/state/ai-chat-panel'
 
+const memory: Record<string, string> = {}
+vi.stubGlobal('localStorage', {
+  getItem: (k: string) => (k in memory ? memory[k] : null),
+  setItem: (k: string, v: string) => {
+    memory[k] = v
+  },
+  removeItem: (k: string) => {
+    delete memory[k]
+  },
+  clear: () => {
+    for (const k of Object.keys(memory)) delete memory[k]
+  }
+})
+
 afterEach(() => {
   vi.unstubAllEnvs()
-  try {
-    localStorage.clear()
-  } catch {
-    /* ignore */
-  }
+  localStorage.clear()
   // Reset the singleton store between tests (zustand persists across the module's lifetime).
   useAIChatPanel.setState({ visible: false, mode: 'floating', pendingAgentSessionId: null })
 })

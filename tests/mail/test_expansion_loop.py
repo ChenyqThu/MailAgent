@@ -55,9 +55,11 @@ class FakeSyncStore:
 
 def _build_app(rows, state=None):
     """构造一个 mock 的 EmailNotionSyncApp 实例（只挂 _run_expansion_tick 需要的属性）."""
-    # 延迟 import 以避免顶部 main.py 加载时检查 config
+    # 延迟 import 以避免顶部 import 期检查 config
     # （必填 env 由 autouse fixture _stub_main_config_env 在测试运行时提供并逐测试还原）
-    from main import EmailNotionSyncApp
+    # P1-4a packaging C-1: EmailNotionSyncApp 从根 main.py 迁入 src/service.py,
+    # 老 import 自迁移起就 ImportError (E0-WP3 期间发现的预存坏测试, 修正指向)
+    from src.service import EmailNotionSyncApp
 
     app = EmailNotionSyncApp.__new__(EmailNotionSyncApp)
 
