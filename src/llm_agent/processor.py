@@ -21,6 +21,7 @@ from src.repository import EmailRepository
 
 from .client import LLMClient, LLMResult
 from .context_loader import ContextLoader
+from .preprocess_config import PreprocessConfig, get_preprocess_config
 from .prompt_loader import PromptLoader
 from .schema import (
     ACTION_TYPE_INBOX,
@@ -136,7 +137,10 @@ class LLMProcessor:
     async def process_email(self, email: Any) -> AILabels:
         """Classify a single email; raises LLMCallError on any failure."""
         mailbox = getattr(email, "mailbox", "") or "收件箱"
-        system_blocks = await self._build_system(mailbox)
+        # 预处理 Agent 行配置读一次：docs 给 _build_system 注入身份文档、model 覆写模型
+        # 链头（row.model 空 = 跟随全局 LLM_MODEL；fallback 链恒走全局 env）。
+        pp = get_preprocess_config(cfg.sync_store_db_path)
+        system_blocks = await self._build_system(mailbox, pp)
         user_msg = self._build_user(email)
 
         result: LLMResult = await self._client.classify(
@@ -144,12 +148,17 @@ class LLMProcessor:
             user_content=user_msg,
             tool_schema=EMAIL_TOOL_SCHEMA,
             tool_name="classify_email",
+            model_chain=(
+                [pp.model, *cfg.llm_fallback_models] if pp.model else None
+            ),
         )
         return self._parse(result, mailbox)
 
     # ---- system prompt -----------------------------------------------------
 
-    async def _build_system(self, mailbox: str) -> List[Dict[str, Any]]:
+    async def _build_system(
+        self, mailbox: str, pp: Optional[PreprocessConfig] = None
+    ) -> List[Dict[str, Any]]:
         """Build system blocks with at most one cache_control breakpoint.
 
         Wire order (before user message) is: tools -> system -> messages.
@@ -165,13 +174,14 @@ class LLMProcessor:
         blocks: List[Dict[str, Any]] = [{"type": "text", "text": header}]
 
         # #31/#32 Part2 增量2 — AI 邮件预处理 Custom Agent（report_agent type='preprocess' 行）
-        # 的 persona + 文档勾选。开关/模型走全局 env（LLM_AGENT_ENABLED/LLM_MODEL），此处只对
-        # persona/docs 做 NULL-safe 叠加：卡片未动（种子默认）时与增量1 行为字节一致。
-        # 落在 header 之后、稳定 prefix 内 → 随 final_block 的 cache_control 一起缓存。
+        # 的文档勾选。开关走全局 env（LLM_AGENT_ENABLED）、模型走行级 model 列（process_email
+        # 按它覆写 model_chain），此处只对 docs 做 NULL-safe 叠加：卡片未动（种子默认）时与
+        # 增量1 行为字节一致。落在 header 之后、稳定 prefix 内 → 随 final_block 的
+        # cache_control 一起缓存。（persona 覆写层已随 v1.1.0 dogfood 移除 —— 身份/偏好统一
+        # 由 Standing Context 文档注入。）
         from src.agent_config.task_context import build_task_identity_context
-        from src.llm_agent.preprocess_config import get_preprocess_config
 
-        _pp = get_preprocess_config(cfg.sync_store_db_path)
+        _pp = pp if pp is not None else get_preprocess_config(cfg.sync_store_db_path)
 
         # 身份 grounding：文档集用预处理 agent 的勾选（context_docs=None → 用默认 soul/user；
         # []=用户取消全部 → 不注入）；flag task_identity_docs_enabled 仍是总闸（关则恒空）。
@@ -181,13 +191,6 @@ class LLMProcessor:
             _identity = build_task_identity_context()
         if _identity:
             blocks.append({"type": "text", "text": _identity})
-
-        # 预处理 agent 的可编辑 persona（分类补充指引）；空=用硬编码默认，不加块。
-        if _pp.persona:
-            blocks.append({
-                "type": "text",
-                "text": "# 分类补充指引（来自 AI 邮件预处理 Agent 配置）\n\n" + _pp.persona,
-            })
 
         ctx_md = await self._context.get_markdown()
         if ctx_md:

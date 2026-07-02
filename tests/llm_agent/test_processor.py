@@ -537,3 +537,63 @@ def test_recommended_actions_non_dict_entries_dropped():
     ]), "收件箱")
     ids = [r["id"] for r in labels.recommended_actions]
     assert ids == ["archive_only"]
+
+
+def test_process_email_model_chain_override(monkeypatch):
+    """#8-ext（v1.1.0 dogfood）：预处理行设了 model → classify 收到 [row.model, *全局 fallback]；
+    未设（model=""）→ model_chain=None（classify 内部走全局 [LLM_MODEL, *fallback] 链）。
+    """
+    import src.llm_agent.processor as proc_mod
+    from src.llm_agent.preprocess_config import PreprocessConfig
+
+    captured = {}
+
+    class _FakeClient:
+        async def classify(self, **kwargs):
+            captured.update(kwargs)
+            return LLMResult(
+                tool_input={
+                    "ai_summary": "s", "category": "💼 产品管理",
+                    "language": "中文", "sender_priority": "核心团队",
+                    "action_required": True, "action_type": "需要回复",
+                    "priority": "🟢 一般",
+                },
+                input_tokens=1, output_tokens=1,
+                cache_creation_input_tokens=0, cache_read_input_tokens=0,
+                model="test-model", latency_ms=1,
+            )
+
+    class _FakePrompts:
+        def get_for_mailbox(self, mailbox):
+            return ""
+
+    class _FakeContext:
+        async def get_markdown(self):
+            return ""
+
+    p = _bare_processor()
+    p._client = _FakeClient()
+    p._prompts = _FakePrompts()
+    p._context = _FakeContext()
+    # 身份文档注入与本测试无关 → 短路（避免读真实 agent_config 库）。
+    monkeypatch.setattr(
+        "src.agent_config.task_context.build_task_identity_context",
+        lambda **kw: "",
+    )
+    monkeypatch.setattr(proc_mod.cfg, "llm_fallback_models", ["fb-1", "fb-2"])
+
+    # row.model 设置 → 覆写链头，fallback 链仍全局
+    monkeypatch.setattr(
+        proc_mod, "get_preprocess_config",
+        lambda _path: PreprocessConfig(model="claude-haiku-4-5", context_docs=None),
+    )
+    asyncio.run(p.process_email(_fake_email()))
+    assert captured["model_chain"] == ["claude-haiku-4-5", "fb-1", "fb-2"]
+
+    # row.model 空 → None（跟随全局链）
+    monkeypatch.setattr(
+        proc_mod, "get_preprocess_config",
+        lambda _path: PreprocessConfig(model="", context_docs=None),
+    )
+    asyncio.run(p.process_email(_fake_email()))
+    assert captured["model_chain"] is None

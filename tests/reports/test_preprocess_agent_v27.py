@@ -1,7 +1,7 @@
 """issue #31/#32 增量2 — AI 邮件预处理 Custom Agent（DB v27）后端契约。
 
 覆盖：v27 迁移（ALTER context_docs_json + 播种 type='preprocess' 行）、幂等、旧库升级、
-wire.resolve_agent/config_patch_to_db 的 context_docs 往返、运行时 get_preprocess_config。
+wire.resolve_agent/config_patch_to_db 的 context_docs/model 往返、运行时 get_preprocess_config。
 真临时 SQLite，零 LLM / 零网络。
 """
 
@@ -74,37 +74,46 @@ def test_resolve_agent_exposes_context_docs(db_path):
     assert cfg["model"] == ""
 
 
-def test_config_patch_context_docs_and_persona_roundtrip(db_path):
+def test_config_patch_context_docs_and_model_roundtrip(db_path):
+    # #8-ext（v1.1.0 dogfood）：预处理模型改走行级 model 列（与 chat 的全局 LLM_MODEL 拆分）。
     store = ReportStore(db_path)
-    patch = wire.config_patch_to_db({"context_docs": ["user"], "prompt": "只标紧急邮件"})
+    patch = wire.config_patch_to_db({"context_docs": ["user"], "model": "claude-haiku-4-5"})
     assert json.loads(patch["context_docs_json"]) == ["user"]
     store.update_agent(PREPROCESS_AGENT_ID, patch)
     cfg = wire.resolve_agent(store.get_agent(PREPROCESS_AGENT_ID))
     assert cfg["context_docs"] == ["user"]
-    assert cfg["prompt"] == "只标紧急邮件"
-    assert cfg["prompt_is_default"] is False
+    assert cfg["model"] == "claude-haiku-4-5"  # 非 report → 不回填 DEFAULT_REPORT_MODEL
 
 
 def test_get_preprocess_config_default_seed(db_path):
     pp = get_preprocess_config(db_path)
     assert pp.context_docs == ["soul", "user"]
-    assert pp.persona == ""
+    assert pp.model == ""  # 种子未设模型 → 跟随全局 LLM_MODEL
 
 
 def test_get_preprocess_config_after_edit(db_path):
     store = ReportStore(db_path)
     store.update_agent(
         PREPROCESS_AGENT_ID,
-        wire.config_patch_to_db({"context_docs": [], "prompt": "  优先看发件人  "}),
+        wire.config_patch_to_db({"context_docs": [], "model": "  claude-haiku-4-5  "}),
     )
     pp = get_preprocess_config(db_path)
     assert pp.context_docs == []  # 空列表 = 用户显式取消全部注入（≠ None 默认）
-    assert pp.persona == "优先看发件人"  # strip
+    assert pp.model == "claude-haiku-4-5"  # strip
+
+
+def test_get_preprocess_config_ignores_legacy_persona_prompt(db_path):
+    # persona 层已移除：旧行残留 prompt 列值不进入运行时配置（dataclass 无 persona 字段）。
+    store = ReportStore(db_path)
+    store.update_agent(PREPROCESS_AGENT_ID, {"prompt": "旧 persona 残值"})
+    pp = get_preprocess_config(db_path)
+    assert not hasattr(pp, "persona")
+    assert pp.model == ""
 
 
 def test_get_preprocess_config_missing_db_graceful(tmp_path):
     pp = get_preprocess_config(str(tmp_path / "nope.db"))
-    assert pp.persona == ""
+    assert pp.model == ""
     assert pp.context_docs is None  # 缺库 → None → 运行时回退默认文档集
 
 

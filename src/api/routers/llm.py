@@ -16,7 +16,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING, List, Optional
 
 import httpx
@@ -186,6 +188,47 @@ async def list_upstream_models(
         {"models": models, "cached": False, "cached_at": now, "error": None},
         request=request,
         source="upstream",
+    )
+
+
+# ============================================================
+# GET /api/llm/preprocess-prompts  (读, mailbox 分类 prompt 文件只读展示)
+# ============================================================
+_PROMPT_VIEW_MAX_CHARS = 80_000  # 防呆截断（prompt 文件通常几 KB）
+
+
+def _read_prompt_file(path: str) -> dict:
+    """读单个 mailbox prompt .md → {path, exists, text}。任何失败 graceful（不 raise）。"""
+    if not (path or "").strip():
+        return {"path": "", "exists": False, "text": ""}
+    abs_path = os.path.abspath(path)
+    try:
+        text = Path(abs_path).read_text(encoding="utf-8")
+    except OSError:
+        # FileNotFoundError / 权限 / 目录 …… → 视为不存在（运行时也只是空 prompt）。
+        return {"path": abs_path, "exists": False, "text": ""}
+    if len(text) > _PROMPT_VIEW_MAX_CHARS:
+        text = text[:_PROMPT_VIEW_MAX_CHARS] + "\n…(truncated)"
+    return {"path": abs_path, "exists": True, "text": text}
+
+
+@router.get("/preprocess-prompts")
+async def get_preprocess_prompts(request: Request, _: None = Depends(verify_cf_access)):
+    """AI 邮件预处理的 mailbox 分类 prompt（收件箱/发件箱两个 .md 文件）只读展示。
+
+    供 Agents 页预处理配置抽屉「分类 Prompt 查看器」用。文件路径来自
+    LLM_INBOX_PROMPT_PATH / LLM_SENT_PROMPT_PATH（pydantic 单例，改路径需重启）；
+    文件内容运行时由 PromptLoader 按 mtime 热加载 —— 此端点直接重读文件，与运行时同源。
+    缺文件 → exists:false（运行时将只用内置硬约束），不报错。
+    """
+    settings = get_settings()
+    return success_envelope(
+        {
+            "inbox": _read_prompt_file(getattr(settings, "llm_inbox_prompt_path", "") or ""),
+            "sent": _read_prompt_file(getattr(settings, "llm_sent_prompt_path", "") or ""),
+        },
+        request=request,
+        source="file",
     )
 
 
