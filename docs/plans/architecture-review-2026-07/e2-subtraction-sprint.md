@@ -60,6 +60,7 @@
   - `src/api/routers/admin.py`（文件头注释）：dead-letter retry / cleanup 写端点经 `cli_runner.run_cli`；
   - `src/api/routers/email.py:35`：legacy notion update-flag 仍经 run_cli；
   - `src/api/routers/llm.py:9`：selftest 经 run_cli。
+- **latent 缺陷（2026-07-03 E0 CI 首跑发现，强化退役必要性）**：`cli_runner.py:62` 默认 project root 是硬编码开发机绝对路径、发现链有意不查 PATH（:58-60）；打包态 `backend_lifecycle.ts:489` 只注入 `MAILAGENT_PROJECT_ROOT=dataRoot`（其下无 `venv/bin`）且全 repo 无 `MAILAGENT_BIN` 注入 → **打包 app 里这 4 个 run_cli 路由现状就是 E_NO_BIN 必挂**——退役它们不只是清理，是修复。
 - 步骤：dead-letter retry/cleanup 迁 `src/services/`（或挂 async_jobs，批量语义天然匹配）；legacy update-flag 端点直接评估删除（前端已走 in-process 写路径）；selftest 迁服务层直调。全部迁完后收缩 `cli_runner.py` 的存在理由（若归零则删）。
 - 验收：`grep -rn "cli_runner" src/api/routers/` 零命中；fork 路径专用的 CLI token 鉴权面同步收缩。
 
