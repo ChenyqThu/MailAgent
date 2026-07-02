@@ -36,6 +36,7 @@ import {
   appendMessage,
   appendToolCall,
   findAssistantMessageRowIdByUiId,
+  findUserMessageRowIdByUiId,
   getFirstUserText,
   getLastTurnTexts,
   getSession,
@@ -369,6 +370,16 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
       // approval has a different id → not skipped (message-id keying, not bare sessionId).
       if (eagerWrittenUserMessages.has(key)) return
       try {
+        // MEDIUM-1 (rebase 复审) — the Set is only a fast path: an ISLAND /decide resume's
+        // persistTurn dedups against it AND deletes the key, so a later renderer resume of the
+        // same (stale) approval card reaches here with an empty Set → appending would duplicate
+        // the user row (E_APPROVAL_USED only skips persistTurn, not this eager write). Make the
+        // eager write DB-idempotent: a (session, ui id, role='user') hit → re-seed the fast path
+        // and skip. Also covers the pre-existing #12 edge where a gateway RESTART empties the Set.
+        if (findUserMessageRowIdByUiId(sessionId, userMessage.id) != null) {
+          eagerWrittenUserMessages.add(key)
+          return
+        }
         appendMessage({
           sessionId,
           role: 'user',

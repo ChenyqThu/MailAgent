@@ -98,10 +98,23 @@ export async function resumeApprovalRun(
 
   // Resume history = the original turn's messages + the paused assistant message, with the tool part
   // transitioned to approval-responded. (Same shape the renderer would replay on its second call.)
+  //
+  // 🔴 HIGH-1 (rebase 复审) — dedup by id at reconstruction: on a REPAUSE chain the re-stash's body
+  // is run.originalBody of the PREVIOUS resume, whose messages already END with the hop's merged
+  // assistant — the SAME UIMessage id as the re-stashed responseMessage. Appending blindly puts TWO
+  // copies of that assistant into the history; ai@7's convertToModelMessages does not dedup by id, so
+  // the earlier hop's tool-call is emitted twice → duplicate tool_use ids reach the upstream API →
+  // 400, and the second hop never executes. Mirror the renderer's useChat semantics (replace the
+  // trailing assistant in place by id) here — one spot covers every already-stashed entry, and the
+  // stash itself keeps its "original body, verbatim" contract.
   const bodyMessages = Array.isArray(entry.body.messages)
     ? (entry.body.messages as MailAgentUIMessage[])
     : []
-  const history = [...bodyMessages, entry.responseMessage]
+  const last = bodyMessages[bodyMessages.length - 1]
+  const history =
+    last && (last as { id?: string }).id === (entry.responseMessage as { id?: string }).id
+      ? [...bodyMessages.slice(0, -1), entry.responseMessage]
+      : [...bodyMessages, entry.responseMessage]
   const { messages: resumedMessages, applied } = applyApprovalResponseToMessages(
     history as unknown as readonly UIMessage[],
     approvalResp

@@ -11,7 +11,7 @@ import { simulateReadableStream } from 'ai'
 import { MockLanguageModelV3 } from 'ai/test'
 
 import { startAiGatewayServer, type AiGatewayHandle } from '../../src/ai-gateway/server'
-import type { AiGatewayConfig } from '../../src/ai-gateway/config'
+import type { AiGatewayConfig, IslandApprovalAnnounce } from '../../src/ai-gateway/config'
 import { ApprovalGuard } from '../../src/ai-gateway/security/approval'
 import { ApprovalRunStash } from '../../src/ai-gateway/approvalStash'
 import { buildGatewayTools } from '../../src/ai-gateway/tools'
@@ -233,5 +233,141 @@ describe('/api/ai/approval/decide — server-side resume', () => {
     expect(res.status).toBe(200)
     expect((await res.json()).status).toBe('completed')
     expect(domainCalls).toHaveLength(0) // did not re-execute (already done in-app)
+  })
+})
+
+// HIGH-1 (rebase 复审, architect + codex 第 3 轮同根因) — chained two-hop island approvals.
+// hop-1 /decide(A approve) re-pauses on approval B: the re-stash's body = run.originalBody, whose
+// messages ALREADY end with the hop-1 merged assistant (same UIMessage id as the re-stashed
+// responseMessage). Without the id-dedup in resumeApprovalRun's history reconstruction, hop-2 would
+// send TWO copies of that assistant (both carrying tool-call A) to the model → duplicate tool_use ids
+// upstream → 400 → the second hop never executes. The flagship "draft then send" chain breaks.
+describe('/api/ai/approval/decide — chained two-hop approvals (repause)', () => {
+  const TC_B = 'tc_draft_b'
+  const DRAFT_INPUT_B = { internal_id: 6, body_markdown: 'second draft' }
+  const USAGE = {
+    inputTokens: { total: 5, noCache: 5, cacheRead: 0, cacheWrite: 0 },
+    outputTokens: { total: 7, text: 7, reasoning: 0 }
+  }
+
+  /** Collect the toolCallIds of every assistant `tool-call` content part in a captured model prompt
+   *  (LanguageModelV3Prompt). This is the direct observable of the HIGH-1 bug: a duplicated history
+   *  assistant emits the SAME toolCallId twice. */
+  function promptToolCallIds(prompt: unknown): string[] {
+    const ids: string[] = []
+    if (!Array.isArray(prompt)) return ids
+    for (const msg of prompt) {
+      const m = msg as { role?: unknown; content?: unknown }
+      if (m.role !== 'assistant' || !Array.isArray(m.content)) continue
+      for (const part of m.content) {
+        const p = part as { type?: unknown; toolCallId?: unknown }
+        if (p.type === 'tool-call' && typeof p.toolCallId === 'string') ids.push(p.toolCallId)
+      }
+    }
+    return ids
+  }
+
+  test('hop-2 executes with NO duplicate assistant history (each toolCallId exactly once)', async () => {
+    const guard = new ApprovalGuard()
+    const stash = new ApprovalRunStash()
+    const domainCalls: unknown[] = []
+    const announced: IslandApprovalAnnounce[] = []
+    const persisted: unknown[] = []
+    const prompts: unknown[] = []
+
+    // Stateful model: hop-1 resume (A's result folded in) → request tool B (SDK pauses at approval
+    // B via needsApproval → guard.register(TC_B) fires for real); hop-2 resume → closing text.
+    let modelCall = 0
+    const model = new MockLanguageModelV3({
+      doStream: async ({ prompt }) => {
+        prompts.push(prompt)
+        modelCall++
+        if (modelCall === 1) {
+          return {
+            stream: simulateReadableStream({
+              chunks: [
+                { type: 'stream-start' as const, warnings: [] },
+                {
+                  type: 'tool-call' as const,
+                  toolCallId: TC_B,
+                  toolName: 'email_draft_reply',
+                  input: JSON.stringify(DRAFT_INPUT_B)
+                },
+                { type: 'finish' as const, finishReason: 'tool-calls' as const, usage: USAGE }
+              ]
+            })
+          }
+        }
+        return {
+          stream: simulateReadableStream({
+            chunks: [
+              { type: 'stream-start' as const, warnings: [] },
+              { type: 'text-start' as const, id: '1' },
+              { type: 'text-delta' as const, id: '1', delta: '第二封草稿完成。' },
+              { type: 'text-end' as const, id: '1' },
+              { type: 'finish' as const, finishReason: 'stop' as const, usage: USAGE }
+            ]
+          })
+        }
+      }
+    })
+
+    const cfg: AiGatewayConfig = {
+      port: 0,
+      baseUrl: 'https://crs.example/api',
+      apiKey: 'sk-test',
+      model: 'claude-sonnet-4-6',
+      createModel: () => model,
+      buildTools: (collector) =>
+        buildGatewayTools(
+          { domain: spyDomain(domainCalls), writeToolsEnabled: true, approvalGuard: guard, oneShotWrites: true },
+          collector
+        ),
+      islandAgentEnabled: true,
+      approvalStash: stash,
+      announceApprovalToIsland: (info) => {
+        announced.push(info)
+      },
+      isApprovalResolved: (tc: string) => guard.isResolved(tc),
+      rejectApproval: (tc: string) => guard.reject(tc),
+      // persistTurn MUST be wired: makePersistOnFinish early-returns without it, and the hop-1
+      // repause re-stash + re-announce live behind it (matches the production lifecycle).
+      persistTurn: (t) => {
+        persisted.push(t)
+      }
+    }
+    const h = await start(cfg)
+    const tokenA = seedPausedApproval(guard, stash)
+
+    // hop-1: island approves A → tool A executes server-side; the model then requests B → repaused,
+    // a FRESH island card (new stash + announce) for B.
+    const res1 = await decide(h.port, { toolCallId: TC, decision: 'approve', resumeToken: tokenA })
+    expect(res1.status).toBe(200)
+    const body1 = await res1.json()
+    expect(body1.status).toBe('repaused')
+    expect(domainCalls).toHaveLength(1)
+    expect(announced).toHaveLength(1)
+    expect(announced[0].toolCallId).toBe(TC_B)
+    expect(persisted).toHaveLength(0) // repaused turn is not a complete turn — nothing persisted yet
+
+    // hop-2: island approves B with the re-announced token.
+    const res2 = await decide(h.port, {
+      toolCallId: TC_B,
+      decision: 'approve',
+      resumeToken: announced[0].resumeToken
+    })
+    expect(res2.status).toBe(200)
+    const body2 = await res2.json()
+    expect(body2.ok).toBe(true)
+    expect(body2.status).toBe('completed') // NOT error — the second hop really executed
+    expect(domainCalls).toHaveLength(2)
+    expect((domainCalls[1] as { internalId: number }).internalId).toBe(6)
+    expect(persisted).toHaveLength(1) // the completed hop-2 turn persisted exactly once
+
+    // HIGH-1 regression pin: the hop-2 model prompt carries each tool call EXACTLY once. Before the
+    // history id-dedup, the duplicated assistant (same UIMessage id twice) emitted tool-call A twice.
+    const hop2Ids = promptToolCallIds(prompts[1])
+    expect(hop2Ids.filter((id) => id === TC)).toHaveLength(1)
+    expect(hop2Ids.filter((id) => id === TC_B)).toHaveLength(1)
   })
 })

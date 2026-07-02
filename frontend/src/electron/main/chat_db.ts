@@ -1297,26 +1297,45 @@ export function appendMessage(input: AppendMessageInput): ChatMessage {
   }
 }
 
-/** R2-3 (paused-assistant persist) — find the row id of an assistant message by the UIMessage id
- *  stored in its canonical `ui_message_json` (`$.id`). Used by the gateway lifecycle to make the
- *  resume turn's persistTurn REPLACE the eagerly-persisted paused assistant row (same merged
- *  UIMessage id) instead of appending a duplicate. Session-scoped; newest row wins. JSON1
- *  `json_extract` on a per-session scan — session message counts are small, no index needed.
- *  Survives app restarts (no in-memory state), unlike a Set-based dedup. */
-export function findAssistantMessageRowIdByUiId(
+/** Find the row id of a message by role + the UIMessage id stored in its canonical
+ *  `ui_message_json` (`$.id`). Session-scoped; newest row wins. JSON1 `json_extract` on a
+ *  per-session scan — session message counts are small, no index needed. Survives app restarts
+ *  (no in-memory state), unlike a Set-based dedup. */
+function findMessageRowIdByUiId(
   sessionId: number,
-  uiMessageId: string
+  uiMessageId: string,
+  role: 'user' | 'assistant'
 ): number | null {
   const row = getChatDb()
     .prepare(
       `SELECT id FROM ai_chat_messages
-         WHERE session_id = ? AND role = 'assistant'
+         WHERE session_id = ? AND role = ?
            AND ui_message_json IS NOT NULL
            AND json_extract(ui_message_json, '$.id') = ?
          ORDER BY id DESC LIMIT 1`
     )
-    .get(sessionId, uiMessageId) as { id: number } | undefined
+    .get(sessionId, role, uiMessageId) as { id: number } | undefined
   return row?.id ?? null
+}
+
+/** R2-3 (paused-assistant persist) — assistant lookup used by the gateway lifecycle to make the
+ *  resume turn's persistTurn REPLACE the eagerly-persisted paused assistant row (same merged
+ *  UIMessage id) instead of appending a duplicate. */
+export function findAssistantMessageRowIdByUiId(
+  sessionId: number,
+  uiMessageId: string
+): number | null {
+  return findMessageRowIdByUiId(sessionId, uiMessageId, 'assistant')
+}
+
+/** MEDIUM-1 (rebase 复审) — user lookup that makes onTurnStart's eager user write DB-idempotent.
+ *  The in-memory eagerWrittenUserMessages Set is only a fast path: an island /decide resume's
+ *  persistTurn clears the key, so a LATER renderer resume of the same (stale) approval card would
+ *  re-append the same user message. Checking the DB by (session, ui id, role='user') before
+ *  appending closes that — and also the pre-existing #12 edge where a gateway restart empties
+ *  the Set. */
+export function findUserMessageRowIdByUiId(sessionId: number, uiMessageId: string): number | null {
+  return findMessageRowIdByUiId(sessionId, uiMessageId, 'user')
 }
 
 export function updateMessage(messageId: number, patch: UpdateMessagePatch): void {
