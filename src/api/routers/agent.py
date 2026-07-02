@@ -430,6 +430,70 @@ async def confirm_agent_skill(request: Request, body: Optional[dict[str, Any]] =
     )
 
 
+# ── per-skill 密钥（S2 W3 —— Settings 后端；UI 是 W4）──────────────────────────────────
+# owner-only（verify_cf_access）。值经 Fernet 加密落 agent_config.db（master key 单条进 Keychain），
+# **永不**回显：GET 只出名字 + updated_at；PUT 写后不返回值；脚本执行时经 exec 端点注入子进程 env
+# （src/agent_config/secrets.py + src/api/routers/exec.py）。secret 名过 env-regex + reserved deny
+# （防覆盖执行环境 / 冒充全局密钥），skill 存在性对齐 set_skill_enabled 的 manifest 校验。
+
+
+@router.get("/skills/{name}/secrets", dependencies=[Depends(verify_cf_access)])
+async def list_skill_secrets(name: str, request: Request):
+    """列一个 skill 已存储的密钥 —— **只名字 + updatedAt，永无值**（Settings 抽屉 write-only 蒙版）。"""
+    meta = get_agent_config_store().skill_secret_meta(name)
+    data = [{"name": n, "updatedAt": ts} for n, ts in meta]
+    return success_envelope(
+        {"secrets": data}, request=request, source="sqlite", meta_extra={"count": len(data)}
+    )
+
+
+@router.put(
+    "/skills/{name}/secrets/{secret_name}", dependencies=[Depends(verify_cf_access)]
+)
+async def set_skill_secret(
+    name: str, secret_name: str, request: Request, body: Optional[dict[str, Any]] = None
+):
+    """写/替换一个 per-skill 密钥（Fernet 加密落库）。body = {value}（write-only，响应**不回显值**）。
+    双重校验：skill 存在（manifest 名） + secret 名合法（env-regex + reserved deny）。"""
+    from src.agent_config.secrets import set_secret
+    from src.skills.secret_names import validate_secret_name
+
+    if name not in _manifest_skill_names():
+        raise APIError("E_NOT_FOUND", f"unknown skill: {name}", http_status=404, source="sqlite")
+    reason = validate_secret_name(secret_name)
+    if reason:
+        raise APIError("E_INVALID_ARG", reason, http_status=400, source="sqlite")
+    raw = body or {}
+    value = raw.get("value")
+    if not isinstance(value, str) or not value:
+        raise APIError("E_INVALID_ARG", "body.value must be a non-empty string",
+                       http_status=400, source="sqlite")
+    set_secret(name, secret_name, value)  # 值不进响应/日志
+    meta = dict(get_agent_config_store().skill_secret_meta(name))
+    return success_envelope(
+        {"name": name, "secretName": secret_name, "updatedAt": meta.get(secret_name)},
+        request=request, source="sqlite",
+    )
+
+
+@router.delete(
+    "/skills/{name}/secrets/{secret_name}", dependencies=[Depends(verify_cf_access)]
+)
+async def delete_skill_secret(name: str, secret_name: str, request: Request):
+    """删一个 per-skill 密钥。幂等（无行 removed=false）。secret 名过校验（防畸形 path 触发 500）。"""
+    from src.agent_config.secrets import delete_secret
+    from src.skills.secret_names import validate_secret_name
+
+    reason = validate_secret_name(secret_name)
+    if reason:
+        raise APIError("E_INVALID_ARG", reason, http_status=400, source="sqlite")
+    removed = delete_secret(name, secret_name)
+    return success_envelope(
+        {"name": name, "secretName": secret_name, "removed": removed},
+        request=request, source="sqlite",
+    )
+
+
 @router.post("/skills/uninstall", dependencies=[Depends(verify_cf_access)])
 async def uninstall_agent_skill_full(request: Request, body: Optional[dict[str, Any]] = None):
     """全清理卸载（S2 W2）：删 agent_skills 行 + 删 <skills>/<name>/ 落盘目录 + 删 skill_secrets 行。

@@ -28,6 +28,7 @@ from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.concurrency import run_in_threadpool
+from loguru import logger
 from pydantic import BaseModel, Field, field_validator
 
 from src.api.app import APIError, success_envelope
@@ -84,10 +85,20 @@ def _evaluate(capability: str, action: dict[str, Any]) -> dict[str, Any]:
 # ── run_command ─────────────────────────────────────────────────────────────────
 
 
-async def _spawn(argv: list[str], cwd: str, timeout_ms: int) -> dict[str, Any]:
-    """spawn argv（**绝不** shell）→ 固定 env → wait_for(timeout) → 超时 kill 防孤儿。stdout/stderr
-    各截 256KiB。抄 cli_runner 的 spawn+wait+kill 模板，但 env **不继承** os.environ。"""
-    env = build_fixed_base_env()
+async def _spawn(
+    argv: list[str],
+    cwd: str,
+    timeout_ms: int,
+    env: dict[str, str],
+    redact: Optional[list[tuple[str, str]]] = None,
+) -> dict[str, Any]:
+    """spawn argv（**绝不** shell）→ 给定 env → wait_for(timeout) → 超时 kill 防孤儿。stdout/stderr
+    各截 256KiB。抄 cli_runner 的 spawn+wait+kill 模板，但 env 由调用方构造（**不继承** os.environ）。
+
+    ``env`` = 固定白名单基底（+ 命中 skill 目录时叠加的 per-skill 密钥，W3）。``redact`` = 注入的
+    (secret_name, value) 对：对 stdout/stderr 做**精确子串**替换 → ``[REDACTED:<name>]`` 后再返回/落审计
+    （诚实边界：base64/转码后的值躲得过精确匹配，残余风险接受 —— 值本来就是 owner 自己的）。
+    """
     started = time.perf_counter()
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -119,8 +130,8 @@ async def _spawn(argv: list[str], cwd: str, timeout_ms: int) -> dict[str, Any]:
         ) from exc
 
     duration_ms = int((time.perf_counter() - started) * 1000)
-    out, out_trunc = _cap(stdout_b)
-    err, err_trunc = _cap(stderr_b)
+    out, out_trunc = _finalize_output(stdout_b, redact)
+    err, err_trunc = _finalize_output(stderr_b, redact)
     return {
         "exit_code": proc.returncode if proc.returncode is not None else -1,
         "stdout": out,
@@ -130,11 +141,100 @@ async def _spawn(argv: list[str], cwd: str, timeout_ms: int) -> dict[str, Any]:
     }
 
 
-def _cap(raw: Optional[bytes]) -> tuple[str, bool]:
+def _finalize_output(
+    raw: Optional[bytes], redact: Optional[list[tuple[str, str]]]
+) -> tuple[str, bool]:
+    """截断 + 脱敏 stdout/stderr。
+
+    无脱敏（含普通非 skill 命令）→ 原字节截断快路径（零开销）。有脱敏 → **先解码全量 + 替换密钥值
+    再截断**（``redact`` 早于 cap 是关键：byte-cap 在前会把恰跨截断边界的密钥值切一半 → 半个值泄漏）。
+    """
     if not raw:
         return "", False
-    truncated = len(raw) > _OUTPUT_CAP_BYTES
-    return raw[:_OUTPUT_CAP_BYTES].decode("utf-8", errors="replace"), truncated
+    if not redact:
+        truncated = len(raw) > _OUTPUT_CAP_BYTES
+        return raw[:_OUTPUT_CAP_BYTES].decode("utf-8", errors="replace"), truncated
+    text = raw.decode("utf-8", errors="replace")
+    for name, value in redact:
+        if value:
+            text = text.replace(value, f"[REDACTED:{name}]")
+    truncated = len(text) > _OUTPUT_CAP_BYTES
+    if truncated:
+        text = text[:_OUTPUT_CAP_BYTES]
+    return text, truncated
+
+
+def _skill_secret_overlay(argv: list[str], cwd: str) -> tuple[dict[str, str], list[str]]:
+    """命中 ``<skills>/<name>/`` 的 run → 该 skill 声明(manifest.secrets) ∩ 已存储密钥，解密成 env
+    overlay（叠在固定基底之上）。非 skill 命令 → ``({}, [])`` 零注入（基底行为 W1a 零变化）。
+
+    路径判定：argv 里看起来像路径的实参 + cwd realpath 后落在某 ``<skills>/<name>/`` 内 → 收集 name。
+    **命中多个不同 skill → 保守零注入**（避免把 skill A 的密钥注入触达 skill B 的命令 → 二阶泄漏），
+    warning 记之。声明侧读**已安装行的 manifest**（confirm 落库的权威事实，非可变的盘上 manifest.json）；
+    注入侧再过 ``validate_secret_name`` 二重校验。
+    """
+    import os
+
+    try:
+        from src.skills.pack_fetch import skills_data_root
+
+        skills_root = os.path.realpath(skills_data_root())
+    except Exception:  # noqa: BLE001 — 裸 worktree / skills 目录缺失 → 无注入
+        return {}, []
+
+    names: set[str] = set()
+
+    def _probe(token: str) -> None:
+        cand = token if os.path.isabs(token) else os.path.join(cwd, token)
+        try:
+            rp = os.path.realpath(cand)
+        except (OSError, ValueError):
+            return
+        if rp == skills_root or not rp.startswith(skills_root + os.sep):
+            return
+        first = rp[len(skills_root) + 1:].split(os.sep, 1)[0]
+        # .quarantine 永不执行/注入（deny 地板另有硬约束）；空段跳过。
+        if first and first != ".quarantine":
+            names.add(first)
+
+    _probe(cwd)  # cwd 落在 skill 目录内 = 常见「cd 进 skill 目录跑脚本」模式
+    for tok in argv:
+        if os.sep in tok or tok.startswith("."):
+            _probe(tok)
+
+    if len(names) != 1:
+        if len(names) > 1:
+            logger.warning(
+                "run_command touches multiple skill dirs {} — injecting no secrets (ambiguous)",
+                sorted(names),
+            )
+        return {}, []
+
+    skill_name = next(iter(names))
+    from src.agent_config.secrets import get_secrets_for_skill
+    from src.agent_config.store import get_agent_config_store
+
+    store = get_agent_config_store()
+    skill = store.get_skill(skill_name)
+    manifest = skill.manifest if skill else None
+    if not manifest:
+        return {}, []  # 非已安装 skill / builtin 懒行（无 manifest）→ 不知声明的 secret，零注入
+    declared = {
+        s.get("name")
+        for s in (manifest.get("secrets") or [])
+        if isinstance(s, dict) and s.get("name")
+    }
+    if not declared:
+        return {}, []
+
+    stored = get_secrets_for_skill(skill_name, store=store)  # 已过注入侧二重校验 + 解密
+    overlay: dict[str, str] = {}
+    injected: list[str] = []
+    for name in sorted(declared):
+        if name in stored:  # 只注入「声明 ∩ 已存储」
+            overlay[name] = stored[name]
+            injected.append(name)
+    return overlay, injected
 
 
 @router.post("/run", dependencies=[Depends(verify_cf_access)])
@@ -160,10 +260,18 @@ async def run_command(request: Request, body: RunRequest):
     # sha256 校验（对 agent_skills.files_json）+ 首跑闸（绑 version+entrypoint hash）；篡改 → 拒执行。
     # 本 wave 不实现，仅留锚点。
 
-    result = await _spawn(body.argv, run_cwd, body.timeout_ms)
+    # W3: 命中 skill 目录 → 该 skill 声明 ∩ 已存储密钥叠加进子进程 env（固定基底之上）；stdout/stderr
+    # 精确脱敏。非 skill 命令 → 零注入（基底 W1a 行为不变）。密钥值任何形态**不进响应/日志/异常**。
+    overlay, injected_names = _skill_secret_overlay(body.argv, run_cwd)
+    env = build_fixed_base_env()
+    env.update(overlay)  # secret 名过 validate_secret_name → 保证不覆盖任何基底名
+    redact = [(name, overlay[name]) for name in injected_names]
+
+    result = await _spawn(body.argv, run_cwd, body.timeout_ms, env, redact)
     result["cwd"] = run_cwd
     result["floor_hit"] = bool(floor_hits)
     result["floor_hits"] = floor_hits
+    result["injected_secret_names"] = injected_names  # W4 审批卡展示；值不在此
     result["policy"] = _evaluate("exec", {"argv": body.argv, "cwd": run_cwd})
     return success_envelope(result, request=request, source="exec")
 

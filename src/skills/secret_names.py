@@ -49,10 +49,27 @@ RESERVED_DENY_NAMES: frozenset = frozenset(
         "SSL_CERT_DIR",
         "REQUESTS_CA_BUNDLE",
         "CURL_CA_BUNDLE",
+        # W3 review P2-①：shell / 解释器**执行劫持**名（一个 secret 叫这些名 → 注入即改变脚本
+        # 的启动行为，等价任意代码执行）。BASH_ENV/ENV = 非交互 shell 启动时 source 的文件；
+        # IFS/CDPATH/GLOBIGNORE = 词法/路径解析劫持；PERL*/RUBY*/PYTHON* = 各解释器的库路径 /
+        # 启动脚本 / 选项注入。
+        "BASH_ENV",
+        "ENV",
+        "IFS",
+        "CDPATH",
+        "GLOBIGNORE",
+        "PERL5LIB",
+        "PERLLIB",
+        "RUBYLIB",
+        "RUBYOPT",
+        "PYTHONSTARTUP",
+        "PYTHONHOME",
     }
 )
-# 显式 deny 的前缀族（整族禁用：MAILAGENT_* 全局配置 / AWS_* 云凭据 / DYLD_* dylib 注入劫持）。
-RESERVED_DENY_PREFIXES: tuple = ("MAILAGENT_", "AWS_", "DYLD_")
+# 显式 deny 的前缀族（整族禁用：MAILAGENT_* 全局配置 / AWS_* 云凭据 / DYLD_* dylib 注入劫持 /
+# BASH_FUNC_* 导出的 bash 函数（shellshock 类）/ LD_* Linux 动态链接器劫持（跨平台稳，macOS 对应
+# DYLD_ 已在上）。
+RESERVED_DENY_PREFIXES: tuple = ("MAILAGENT_", "AWS_", "DYLD_", "BASH_FUNC_", "LD_")
 
 
 def is_reserved_secret_name(name: str) -> bool:

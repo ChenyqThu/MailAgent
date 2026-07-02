@@ -646,6 +646,70 @@ class AgentConfigStore:
             conn.commit()
             return cur.rowcount
 
+    # -- skill secret 密文 CRUD（W3 —— 加解密在 src/agent_config/secrets.py，store 只存/取密文）──
+
+    def upsert_skill_secret(
+        self, skill_name: str, secret_name: str, value_ciphertext: bytes
+    ) -> None:
+        """写/替换一个 skill secret 的密文（``value_ciphertext`` = Fernet ciphertext，本层不解密）。
+
+        值列**只存密文**（明文永不落库）；``updated_at`` = ISO 文本（与 policy_rules 同风格）。
+        secret 名合法性由调用方（``secrets.set_secret`` + 端点）校验，本层只落盘。
+        """
+        now = _now_iso()
+        with self._connection() as conn:
+            conn.execute(
+                "INSERT INTO skill_secrets (skill_name, secret_name, value_ciphertext, updated_at) "
+                "VALUES (?,?,?,?) "
+                "ON CONFLICT(skill_name, secret_name) DO UPDATE SET "
+                " value_ciphertext=excluded.value_ciphertext, updated_at=excluded.updated_at",
+                (skill_name, secret_name, sqlite3.Binary(value_ciphertext), now),
+            )
+            conn.commit()
+
+    def get_skill_secret_ciphertext(
+        self, skill_name: str, secret_name: str
+    ) -> Optional[bytes]:
+        """取一个 skill secret 的密文（无 → None）。解密归 ``secrets.get_secret``。"""
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT value_ciphertext FROM skill_secrets WHERE skill_name = ? AND secret_name = ?",
+                (skill_name, secret_name),
+            ).fetchone()
+        return bytes(row["value_ciphertext"]) if row else None
+
+    def list_skill_secret_ciphertexts(self, skill_name: str) -> list[tuple[str, bytes]]:
+        """一个 skill 的全部 (secret_name, 密文) 对（按名排序）。供 ``secrets.get_secrets_for_skill``
+        批量解密注入。返回密文，本层不解密。"""
+        with self._connection() as conn:
+            rows = conn.execute(
+                "SELECT secret_name, value_ciphertext FROM skill_secrets "
+                "WHERE skill_name = ? ORDER BY secret_name",
+                (skill_name,),
+            ).fetchall()
+        return [(r["secret_name"], bytes(r["value_ciphertext"])) for r in rows]
+
+    def skill_secret_meta(self, skill_name: str) -> list[tuple[str, str]]:
+        """一个 skill 已存储密钥的 (secret_name, updated_at) 对 —— **只名 + 时间戳，永不返回值**
+        （owner Settings ``GET .../secrets`` 用）。"""
+        with self._connection() as conn:
+            rows = conn.execute(
+                "SELECT secret_name, updated_at FROM skill_secrets "
+                "WHERE skill_name = ? ORDER BY secret_name",
+                (skill_name,),
+            ).fetchall()
+        return [(r["secret_name"], r["updated_at"]) for r in rows]
+
+    def delete_skill_secret(self, skill_name: str, secret_name: str) -> bool:
+        """删一个 skill 的单个 secret 行（owner ``DELETE .../secrets/{name}``）。幂等（无行 False）。"""
+        with self._connection() as conn:
+            cur = conn.execute(
+                "DELETE FROM skill_secrets WHERE skill_name = ? AND secret_name = ?",
+                (skill_name, secret_name),
+            )
+            conn.commit()
+        return cur.rowcount > 0
+
     def record_event(
         self,
         skill_name: str,
