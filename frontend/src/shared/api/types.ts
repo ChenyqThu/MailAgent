@@ -1506,6 +1506,58 @@ export interface ExecPolicyRule {
   dangerous: boolean
 }
 
+/** S2 W4b — server-rendered preview of a fetched (quarantined, NOT yet installed) skill
+ *  pack (POST /agent/skills/fetch). The owner reviews these facts, then echoes
+ *  quarantineId + packageHash + files back to confirmSkillPack verbatim — the backend
+ *  re-hashes the quarantine content and rejects with 409 E_PACK_HASH_MISMATCH when it
+ *  changed after preview (TOCTOU). `skillMdExcerpt` is untrusted third-party text:
+ *  render as plain text only (never markdown/HTML). */
+export interface SkillPackPreview {
+  quarantineId: string
+  /** 'skill_pack' (URL / local zip) | 'local_folder' (local directory import). */
+  sourceType: string
+  sourceUri: string | null
+  packageHash: string
+  /** {relpath: sha256} — echo back to confirmSkillPack as expectedFiles. */
+  files: Record<string, string>
+  manifest: {
+    name: string | null
+    type: string | null
+    version: string | null
+    title: string | null
+    description: string | null
+    entryHint: string | null
+    manifestVersion: number | null
+  }
+  /** Secret NAMES the manifest declares (values are set separately, write-only). */
+  secretNames: string[]
+  /** First 4KB of the pack's SKILL.md. */
+  skillMdExcerpt: string
+}
+
+/** S2 W4b — result of confirming a quarantined pack (POST /agent/skills/confirm, 201). */
+export interface SkillConfirmResult {
+  name: string
+  sourceType: string
+  packageHash: string
+}
+
+/** S2 W4b — result of the full-cleanup uninstall (POST /agent/skills/uninstall):
+ *  agent_skills row + on-disk skill dir + stored secrets in one idempotent sweep. */
+export interface SkillUninstallResult {
+  name: string
+  removed: boolean
+  removedDir: boolean
+  removedSecrets: number
+}
+
+/** S2 W3/W4b — stored per-skill secret metadata (GET /agent/skills/{name}/secrets).
+ *  Names + ISO timestamps only — values NEVER leave the backend (write-only model). */
+export interface SkillSecretMeta {
+  name: string
+  updatedAt: string | null
+}
+
 /** M3c — user.md 偏好编译结果（POST /api/chat/memory/compile-user-md 返回的 data 块）。
  *  before/after = 编译前后 user.md 内容；beforeHash = 写前 content_hash（前端 rollback 用）；
  *  changed = LLM 是否生成了差异；itemCount = 送进编译器的 mem0 记忆条数。 */
@@ -1753,6 +1805,62 @@ export interface ChatApi {
    * GET /api/agent/profile/history?docName=. Degrades to [] when unreachable.
    */
   listProfileHistory(docName?: string): Promise<AgentProfileHistoryEntry[]>
+  /**
+   * S2 W4b — two-phase install, phase 1: download (URL) / import (local zip or dir) a
+   * skill pack into quarantine + return the server-rendered preview (POST
+   * /agent/skills/fetch). Exactly one of sourceUrl / localPath. NOT an install — the
+   * owner reviews the preview, then calls confirmSkillPack. Throws Error&{code}
+   * (E_PACK_* / E_SSRF_BLOCKED / E_UPSTREAM / E_INVALID_ARG).
+   */
+  fetchSkillPack(input: { sourceUrl?: string; localPath?: string }): Promise<SkillPackPreview>
+  /**
+   * S2 W4b — two-phase install, phase 2: confirm the quarantined pack (POST
+   * /agent/skills/confirm). Pass the preview's packageHash + files verbatim — the
+   * backend re-hashes the quarantine content and throws 409 E_PACK_HASH_MISMATCH when
+   * it changed after preview (the UI tells the owner to re-fetch). Throws Error&{code}.
+   */
+  confirmSkillPack(input: {
+    quarantineId: string
+    expectedPackageHash: string
+    expectedFiles?: Record<string, string>
+  }): Promise<SkillConfirmResult>
+  /**
+   * S2 W4b — full-cleanup uninstall of an installed pack (POST /agent/skills/uninstall):
+   * agent_skills row + on-disk skill dir + stored secrets in one idempotent sweep.
+   * NEVER the legacy DELETE /agent/skills/{name} (row-only for non-pack rows).
+   * Throws Error&{code}.
+   */
+  uninstallSkillPack(name: string): Promise<SkillUninstallResult>
+  /**
+   * S2 W4b — read an installed skill's non-sensitive config.json (GET
+   * /agent/skills/{name}/config). Plaintext owner surface shared with the skill's
+   * scripts; secrets are NOT here (write-only secrets endpoints). Missing file → {}.
+   * Throws Error&{code} (E_NOT_FOUND when the skill isn't installed on disk).
+   */
+  getSkillConfig(name: string): Promise<Record<string, unknown>>
+  /**
+   * S2 W4b — overwrite an installed skill's config.json (PUT /agent/skills/{name}/config).
+   * Body must be a JSON object, ≤64KB serialized. Throws Error&{code}.
+   */
+  putSkillConfig(name: string, config: Record<string, unknown>): Promise<void>
+  /**
+   * S2 W3/W4b — list a skill's STORED secret names + updated timestamps (GET
+   * /agent/skills/{name}/secrets). Values never leave the backend. Degrades to []
+   * when unreachable.
+   */
+  listSkillSecretMeta(name: string): Promise<SkillSecretMeta[]>
+  /**
+   * S2 W3/W4b — set/replace one per-skill secret (PUT
+   * /agent/skills/{name}/secrets/{secretName}). Write-only: the response never echoes
+   * the value; the Settings input clears after a successful PUT. Secret names are
+   * validated server-side (env-name regex + reserved deny). Throws Error&{code}.
+   */
+  putSkillSecret(name: string, secretName: string, value: string): Promise<void>
+  /**
+   * S2 W3/W4b — delete one per-skill secret (DELETE
+   * /agent/skills/{name}/secrets/{secretName}). Idempotent. Throws Error&{code}.
+   */
+  deleteSkillSecret(name: string, secretName: string): Promise<void>
 }
 
 // ---- F2 — agentic 搜索（runSearchAgent）契约 ------------------------------

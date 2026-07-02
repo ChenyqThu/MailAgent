@@ -330,6 +330,8 @@ def test_chat_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
         "standingDocsEditorEnabled": True,
         # S2 W1 — exec 策略管理页显隐 flag（MAILAGENT_OPENNESS_EXEC_TOOLS default OFF）。
         "execPolicyEnabled": False,
+        # S2 W4b — Settings「Skill 安装」区显隐 flag（MAILAGENT_OPENNESS_SKILL_INSTALL default OFF）。
+        "skillInstallEnabled": False,
     }
 
 

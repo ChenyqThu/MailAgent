@@ -473,6 +473,11 @@ async def chat_config(request: Request):
             # 注意：这个字段只驱动「策略管理页」显隐，不改变 gateway 是否注册 exec 工具（那由 gateway
             # 自己读 flag 决定）。
             "execPolicyEnabled": _hot_bool(env_vals, "MAILAGENT_OPENNESS_EXEC_TOOLS", False),
+            # S2 W4b — Settings「Skill 安装」区显隐 gate。MAILAGENT_OPENNESS_SKILL_INSTALL 同为
+            # main-env-only flag（gateway 的 skill_install* 工具注册在 electron main 读，非 pydantic）；
+            # 这里 hot-read 同一 .env 供前端显隐（flag-off → 前端 SkillPacksSection return null，
+            # 整个区块在 DOM 不存在；字段恒发）。只驱动安装/管理 UI 显隐，不改变 gateway 是否注册工具。
+            "skillInstallEnabled": _hot_bool(env_vals, "MAILAGENT_OPENNESS_SKILL_INSTALL", False),
         },
         request=request,
         source="config",

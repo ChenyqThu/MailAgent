@@ -65,7 +65,11 @@ import type {
   ExecPolicyRule,
   SearchAgentInput,
   SearchAgentResult,
-  SkillSummary
+  SkillConfirmResult,
+  SkillPackPreview,
+  SkillSecretMeta,
+  SkillSummary,
+  SkillUninstallResult
 } from '../api/types'
 
 export interface ChatRuntimeDeps {
@@ -807,6 +811,88 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
       } catch {
         return []
       }
+    },
+
+    async fetchSkillPack(input): Promise<SkillPackPreview> {
+      // S2 W4b — two-phase install phase 1 (POST /agent/skills/fetch): download/import →
+      // quarantine + server-rendered preview. Business authority (SSRF hardening / safe
+      // unpack / hash) lives in Python; this is a thin transport. Throws Error&{code}
+      // (E_PACK_* / E_SSRF_BLOCKED / E_UPSTREAM) — the Settings dialog surfaces code+hint.
+      return request<SkillPackPreview>(baseUrl, 'POST', '/agent/skills/fetch', { body: input })
+    },
+
+    async confirmSkillPack(input): Promise<SkillConfirmResult> {
+      // S2 W4b — two-phase install phase 2 (POST /agent/skills/confirm). Echo the
+      // preview's packageHash + files verbatim; backend re-hashes and throws 409
+      // E_PACK_HASH_MISMATCH when the quarantine changed after preview (TOCTOU).
+      return request<SkillConfirmResult>(baseUrl, 'POST', '/agent/skills/confirm', {
+        body: input
+      })
+    },
+
+    async uninstallSkillPack(name: string): Promise<SkillUninstallResult> {
+      // S2 W4b — full-cleanup uninstall (POST /agent/skills/uninstall): row + dir +
+      // secrets in one idempotent sweep. NEVER the legacy DELETE /agent/skills/{name}.
+      return request<SkillUninstallResult>(baseUrl, 'POST', '/agent/skills/uninstall', {
+        body: { name }
+      })
+    },
+
+    async getSkillConfig(name: string): Promise<Record<string, unknown>> {
+      // S2 W4b — read <skills>/<name>/config.json (GET /agent/skills/{name}/config).
+      // Missing file → {} server-side. Throws Error&{code} (E_NOT_FOUND when not installed).
+      const data = await request<{ name: string; config: Record<string, unknown> }>(
+        baseUrl,
+        'GET',
+        `/agent/skills/${encodeURIComponent(name)}/config`
+      )
+      return data.config ?? {}
+    },
+
+    async putSkillConfig(name: string, config: Record<string, unknown>): Promise<void> {
+      // S2 W4b — overwrite config.json (PUT /agent/skills/{name}/config, body = the
+      // whole object, ≤64KB serialized server-side). Throws Error&{code}.
+      await request(baseUrl, 'PUT', `/agent/skills/${encodeURIComponent(name)}/config`, {
+        body: config
+      })
+    },
+
+    async listSkillSecretMeta(name: string): Promise<SkillSecretMeta[]> {
+      // S2 W3/W4b — stored secret names + ISO timestamps, NEVER values (GET
+      // /agent/skills/{name}/secrets). Degrades to [] when unreachable (the Settings
+      // drawer shows an empty state).
+      try {
+        const data = await request<{ secrets: SkillSecretMeta[] }>(
+          baseUrl,
+          'GET',
+          `/agent/skills/${encodeURIComponent(name)}/secrets`
+        )
+        return data.secrets ?? []
+      } catch {
+        return []
+      }
+    },
+
+    async putSkillSecret(name: string, secretName: string, value: string): Promise<void> {
+      // S2 W3/W4b — write-only secret set/replace (PUT
+      // /agent/skills/{name}/secrets/{secretName}, body = {value}). The response never
+      // echoes the value; the caller clears its input on success. Throws Error&{code}
+      // (E_INVALID_ARG for a bad name — env-regex + reserved deny live server-side).
+      await request(
+        baseUrl,
+        'PUT',
+        `/agent/skills/${encodeURIComponent(name)}/secrets/${encodeURIComponent(secretName)}`,
+        { body: { value } }
+      )
+    },
+
+    async deleteSkillSecret(name: string, secretName: string): Promise<void> {
+      // S2 W3/W4b — delete one secret (idempotent). Throws Error&{code}.
+      await request(
+        baseUrl,
+        'DELETE',
+        `/agent/skills/${encodeURIComponent(name)}/secrets/${encodeURIComponent(secretName)}`
+      )
     }
   }
 }
