@@ -2297,8 +2297,9 @@ export interface ReportAgentConfig {
   timezone: string
   /** daily 带完整正文的优先级集合（priority label）；命中的邮件才预载正文，其余只摘要、不带附件。 */
   body_full_priorities: string[]
-  /** v27 preprocess：注入分类 system prompt 的身份文档勾选（profile-doc 名，如 ['soul','user']）。
-   *  仅 type='preprocess' 有意义；NULL/未设 → 运行时回退默认 soul+user。 */
+  /** v27：注入任务 system prompt 的身份文档勾选（profile-doc 名，如 ['soul','user']）。
+   *  type='preprocess'（分类）与 'report'（日/周/月报，增量 2）有意义；NULL/未设 →
+   *  运行时回退默认 soul+user。search 恒 []。 */
   context_docs?: string[]
   /** v29 preprocess：行级 fallback 模型链。null = 跟随全局 LLM_FALLBACK_MODELS；
    *  [] = 显式不设兜底。仅 type='preprocess' 有意义（其余恒 null）。 */
@@ -2321,7 +2322,7 @@ export interface ReportConfigPatch {
   body_full_priorities?: string[]
   /** agent 可用工具白名单（wire.config_patch_to_db 写 tools_json 列）。 */
   tools?: string[]
-  /** v27 preprocess：身份文档勾选（wire.config_patch_to_db 写 context_docs_json 列）。 */
+  /** v27：身份文档勾选，preprocess + report 通用（wire.config_patch_to_db 写 context_docs_json 列）。 */
   context_docs?: string[]
   /** v29 preprocess：行级 fallback 链（wire.config_patch_to_db 写 fallback_models_json 列）。
    *  null = 重置回跟随全局；[] = 显式不设兜底。 */

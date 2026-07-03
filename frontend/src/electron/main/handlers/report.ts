@@ -106,11 +106,11 @@ function _toAgentConfig(row: AgentRow): ReportAgentConfig {
     timezone: row.timezone || '',
     // body_full_priorities 落库是 JSON 字符串（priority label 数组）；解析失败 / 缺列兜底 []。
     body_full_priorities: _parseJson<string[]>(row.body_full_priorities, []),
-    // v27 preprocess：文档勾选 JSON 字符串。NULL/缺列/垃圾对 preprocess 兜底运行时默认
+    // v27 文档勾选 JSON 字符串（preprocess + report 增量 2）。NULL/缺列/垃圾兜底运行时默认
     // ['soul','user']（与 wire.resolve_agent / get_preprocess_config 一致，codex MED）；
-    // '[]'（用户显式取消全部）保留空；非 preprocess 一律 []（忽略残留列值，codex 复审）。
+    // '[]'（用户显式取消全部）保留空；search 一律 []（忽略残留列值，codex 复审）。
     context_docs:
-      row.type === 'preprocess'
+      row.type === 'preprocess' || row.type === 'report'
         ? (_parseJson<string[] | null>(row.context_docs_json, null) ?? ['soul', 'user'])
         : [],
     // v29 preprocess：行级 fallback 链。NULL/缺列/垃圾 → null（跟随全局，与 wire.resolve_agent

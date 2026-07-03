@@ -152,12 +152,21 @@ class ReportDraft:
     model: str = ""
 
 
-def _build_system(persona: str, now: datetime) -> List[Dict[str, Any]]:
+def _build_system(
+    persona: str, now: datetime, context_docs: Optional[List[str]] = None
+) -> List[Dict[str, Any]]:
     weekday_cn = "一二三四五六日"[now.weekday()]
     from src.agent_config.task_context import build_task_identity_context
 
-    body = (
+    # context_docs：None = 行未设 → 默认文档集（soul+user）；[] = 用户显式取消 → 不注入；
+    # 非法文档名由函数内 PROFILE_DOC_NAMES 过滤（与 preprocess 的行级勾选语义一致）。
+    identity = (
         build_task_identity_context()
+        if context_docs is None
+        else build_task_identity_context(context_docs)
+    )
+    body = (
+        identity
         + persona.rstrip()
         + f"\n\n当前时间：{now.isoformat()}（周{weekday_cn}，时区 +08:00 北京）。"
         + _FIXED_RULES
@@ -250,13 +259,20 @@ def _build_user(
     return "\n".join(parts)
 
 
-def _build_system_agentic(persona: str, now: datetime, kos_enabled: bool) -> List[Dict[str, Any]]:
+def _build_system_agentic(
+    persona: str, now: datetime, kos_enabled: bool, context_docs: Optional[List[str]] = None
+) -> List[Dict[str, Any]]:
     """agentic 日报 system：persona + 工具说明 + 收尾约束。"""
     weekday_cn = "一二三四五六日"[now.weekday()]
     from src.agent_config.task_context import build_task_identity_context
     kos_tool = "- kos_query(query)：查 Gbrain 知识库里跨人 / 项目 / 历史的背景\n" if kos_enabled else ""
-    body = (
+    identity = (
         build_task_identity_context()
+        if context_docs is None
+        else build_task_identity_context(context_docs)
+    )
+    body = (
+        identity
         + persona.rstrip()
         + f"\n\n当前时间：{now.isoformat()}（周{weekday_cn}，时区 +08:00 北京）。"
         + "\n\n## 工具（按需调用，别为每封都查）\n"
@@ -325,12 +341,14 @@ async def summarize_report(
     now: Optional[datetime] = None,
     persona_prompt: Optional[str] = None,
     model: Optional[str] = None,
+    context_docs: Optional[List[str]] = None,
     client: Optional[LLMClient] = None,
 ) -> ReportDraft:
     """LLM 单次 tool_use：邮件 → ReportDraft。raises LLMCallError on failure（caller 降级）。
 
     persona_prompt 为 None → 用 cadence 对应的内置默认 persona。
     model 为 agent 选定模型（空 → DEFAULT_REPORT_MODEL=opus 4.8），接全局 fallback 链。
+    context_docs 为行级身份文档勾选（None=默认 soul+user；[]=不注入）。
     """
     now = now or datetime.now(_BEIJING)
     persona = persona_prompt if (persona_prompt and persona_prompt.strip()) else get_default_prompt(cadence)
@@ -340,7 +358,7 @@ async def summarize_report(
     client = client or LLMClient()
     try:
         result = await client.classify(
-            system_blocks=_build_system(persona, now),
+            system_blocks=_build_system(persona, now, context_docs=context_docs),
             user_content=_build_user(briefs=briefs, counts=counts, groups=groups),
             tool_schema=REPORT_TOOL_SCHEMA,
             tool_name=_TOOL_NAME,
@@ -361,6 +379,7 @@ async def summarize_report_agentic(
     now: Optional[datetime] = None,
     persona_prompt: Optional[str] = None,
     model: Optional[str] = None,
+    context_docs: Optional[List[str]] = None,
     kos_enabled: bool = False,
     client: Optional[LLMClient] = None,
     max_iter: int = 8,
@@ -381,7 +400,7 @@ async def summarize_report_agentic(
     client = client or LLMClient()
     try:
         result = await client.run_tool_loop(
-            system_blocks=_build_system_agentic(persona, now, kos_enabled),
+            system_blocks=_build_system_agentic(persona, now, kos_enabled, context_docs=context_docs),
             user_content=_build_user_agentic(briefs=briefs, counts=counts, groups=groups),
             tools=tools,
             tool_handlers=handlers,
@@ -516,6 +535,7 @@ async def summarize_aggregate(
     now: Optional[datetime] = None,
     persona_prompt: Optional[str] = None,
     model: Optional[str] = None,
+    context_docs: Optional[List[str]] = None,
     missing_note: str = "",
     client: Optional[LLMClient] = None,
 ) -> ReportDraft:
@@ -529,7 +549,7 @@ async def summarize_aggregate(
     client = client or LLMClient()
     try:
         result = await client.classify(
-            system_blocks=_build_system(persona, now),
+            system_blocks=_build_system(persona, now, context_docs=context_docs),
             user_content=_build_user_aggregate(subs, cadence, missing_note),
             tool_schema=REPORT_TOOL_SCHEMA,
             tool_name=_TOOL_NAME,

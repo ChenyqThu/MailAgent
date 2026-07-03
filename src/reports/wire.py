@@ -55,10 +55,11 @@ def resolve_agent(agent: Dict[str, Any]) -> Dict[str, Any]:
     except (json.JSONDecodeError, TypeError):
         body_full_priorities = []
     agent_type = agent.get("type", "report")
-    # v27: preprocess 的文档勾选（profile-doc 名列表）。区分 NULL（列缺失/未设）与 []（用户显式
-    # 取消全部）：NULL 对 preprocess 投影成运行时默认 ['soul','user']（与 get_preprocess_config 的
-    # None→默认一致，避免 UI 显"未勾选"、保存 persona 时把 docs 覆写成 []→关掉身份注入，codex MED）；
-    # [] 保持显式空；非法当 NULL 处理。非 preprocess 一律 []（不用此字段）。
+    # v27: 文档勾选（profile-doc 名列表），preprocess 与 report（增量 2）都用。区分 NULL
+    # （列缺失/未设）与 []（用户显式取消全部）：NULL 投影成运行时默认 ['soul','user']（与
+    # get_preprocess_config / worker._parse_context_docs 的 None→默认一致，避免 UI 显
+    # "未勾选"、保存其他字段时把 docs 覆写成 []→关掉身份注入，codex MED）；
+    # [] 保持显式空；非法当 NULL 处理。search 不用此字段 → 一律 []。
     _raw_docs = agent.get("context_docs_json")
     try:
         _parsed_docs = json.loads(_raw_docs) if _raw_docs else None
@@ -66,10 +67,10 @@ def resolve_agent(agent: Dict[str, Any]) -> Dict[str, Any]:
             _parsed_docs = None
     except (json.JSONDecodeError, TypeError):
         _parsed_docs = None
-    if agent_type == "preprocess":
+    if agent_type in ("preprocess", "report"):
         context_docs = _parsed_docs if _parsed_docs is not None else ["soul", "user"]
     else:
-        # 非 preprocess（report/search）不用此字段 → 一律 []，忽略任何残留列值（codex 复审 MED）。
+        # search 不用此字段 → 一律 []，忽略任何残留列值（codex 复审 MED）。
         context_docs = []
     # v29: preprocess 行级 fallback 链。NULL/非法 → None（投影 null = 跟随全局
     # LLM_FALLBACK_MODELS —— 与 context_docs 不同, 不回填默认: "跟随全局"本身就是前端要显示
@@ -113,7 +114,7 @@ def resolve_agent(agent: Dict[str, Any]) -> Dict[str, Any]:
         ),
         "timezone": (agent.get("timezone") or ""),
         "body_full_priorities": body_full_priorities,
-        "context_docs": context_docs,  # v27: preprocess 文档勾选
+        "context_docs": context_docs,  # v27: 文档勾选（preprocess + report 增量 2）
         "fallback_models": fallback_models,  # v29: preprocess 行级 fallback（null=跟随全局）
         "updated_at": agent.get("updated_at"),
     }
@@ -180,8 +181,9 @@ def config_patch_to_db(raw: Dict[str, Any]) -> Dict[str, Any]:
             raw["body_full_priorities"], ensure_ascii=False
         )
     if "context_docs" in raw and isinstance(raw["context_docs"], list):
-        # v27: preprocess 文档勾选。只存字符串项（doc 名）；运行时 build_task_identity_context
-        # 再按 PROFILE_DOC_NAMES 过滤非法名，wire 层不校验（transport-neutral）。
+        # v27: 文档勾选（preprocess + report 增量 2）。只存字符串项（doc 名）；运行时
+        # build_task_identity_context 再按 PROFILE_DOC_NAMES 过滤非法名，wire 层不校验
+        # （transport-neutral）。
         db_patch["context_docs_json"] = json.dumps(
             [str(x) for x in raw["context_docs"]], ensure_ascii=False
         )
