@@ -53,6 +53,8 @@ import type {
   DraftPlanOpts,
   DraftPlanResult,
   SendEmailOpts,
+  StagedAttachment,
+  UploadComposeAttachmentOpts,
   DavMailHealthData,
   DeadLetterItem,
   DeadLetterListOpts,
@@ -299,6 +301,14 @@ class ElectronEmailApi implements EmailApi {
   }
   async send(opts: SendEmailOpts): Promise<unknown> {
     const env = (await invoker()('email:send', opts)) as WriteEnvelope<unknown>
+    return unwrap(env)
+  }
+  async uploadComposeAttachment(opts: UploadComposeAttachmentOpts): Promise<StagedAttachment> {
+    // ArrayBuffer 走 IPC 结构化克隆; main 侧 raw PUT 到 serve-api staging 端点。
+    const env = (await invoker()(
+      'email:composeAttachmentUpload',
+      opts
+    )) as WriteEnvelope<StagedAttachment>
     return unwrap(env)
   }
   async draftPlan(opts: DraftPlanOpts): Promise<DraftPlanResult> {

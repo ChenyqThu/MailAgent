@@ -142,6 +142,10 @@
     "untitled": "(no subject)",
     "chars": "{n} chars",
     "attachmentsNote": "{n} attachment(s) forwarded along",
+    "attach": "Attach",
+    "attachmentRemove": "Remove {name}",
+    "attachmentFailed": "Upload failed",
+    "richPreserveHint": "Rich-format original preserved as-is; appended after your new content on send",
     "loadingPlan": "Loading…",
     "planError": "Pre-fill failed",
     "planErrorHint": "Couldn't load recipients & draft body ({code}). Retry, or check the backend service.",
@@ -197,7 +201,10 @@
       "sendFailArg": "Send failed: invalid argument",
       "sendFailGeneric": "Send failed",
       "draftDeleted": "Draft deleted",
-      "draftDeleteFail": "Failed to delete draft"
+      "draftDeleteFail": "Failed to delete draft",
+      "attachmentTooLarge": "Attachment exceeds the {max}MB limit: {name}",
+      "attachmentUploadFail": "Attachment upload failed: {name}",
+      "forwardAttachLoadFail": "Could not load the original email's attachments; send canceled to avoid losing them, please retry"
     },
     "modeReply": "Reply",
     "modeReplyAll": "Reply all",
@@ -213,7 +220,8 @@
     "importanceLow": "Low",
     "quote": {
       "reply": "Quoted message",
-      "forward": "Forwarded content"
+      "forward": "Forwarded content",
+      "original": "Original message"
     }
   },
   "toolbarToast": {

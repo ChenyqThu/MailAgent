@@ -29,14 +29,15 @@ import { join } from 'path'
 
 import { getDb } from '../db'
 import { resolveBundledResourcesRoot } from '../cli_runner'
-import { daemonRequest } from '../daemon_api'
+import { daemonRequest, daemonRequestRaw } from '../daemon_api'
 import { envelopeFromCli, type WriteEnvelope } from '../lib/envelope'
 import type {
   ComposeDraftOpts,
   ComposeMode,
   DraftPlanOpts,
   SendEmailOpts,
-  SetReplySuggestionOpts
+  SetReplySuggestionOpts,
+  UploadComposeAttachmentOpts
 } from '@shared/api/types'
 
 // ---- request / response shapes ---------------------------------------------
@@ -402,6 +403,20 @@ export function runDraftPlan(opts: { internalId: number; mode: ComposeMode }): P
   })
 }
 
+// D1 — compose 附件 staging 上传: PUT raw bytes (application/octet-stream, 服务端
+// 不用 python-multipart), filename/mime 走 query (buildQuery 负责 url-encode)。
+// 返回 data 块 {stage_id, filename, size, mime}, stage_id 进 draft/send 的
+// attachments refs。mirror HttpApi.email.uploadComposeAttachment。
+export function runComposeAttachmentUpload(
+  filename: string,
+  bytes: Uint8Array,
+  mime?: string
+): Promise<unknown> {
+  return daemonRequestRaw('PUT', '/email/compose-attachment', bytes, 'application/octet-stream', {
+    query: { filename, mime }
+  })
+}
+
 // F1 — persist a user-edited reply suggestion to the SSoT (serve-api
 // POST /email/{id}/reply-suggestion, body camelCase {replySuggestionMd}).
 export function runSetReplySuggestion(internalId: number, replyMd: string): Promise<unknown> {
@@ -487,6 +502,27 @@ export function registerDraftHandlers(): void {
     }
   )
 
+  // D1 — compose 附件 staging 上传 (renderer File → ArrayBuffer 经 IPC 结构化克隆到达,
+  // 转 Uint8Array raw PUT 到 serve-api)。20MB cap 由 renderer 先拦 + 服务端权威复核,
+  // 此处只做形状早校验。
+  ipcMain.handle(
+    'email:composeAttachmentUpload',
+    async (_evt, opts: UploadComposeAttachmentOpts): Promise<WriteEnvelope<unknown>> => {
+      if (!opts || typeof opts.filename !== 'string' || opts.filename.trim().length === 0) {
+        return { ok: false, code: 'E_INVALID_ARG', message: 'filename required' }
+      }
+      // 结构化克隆后 ArrayBuffer 可能落地为 ArrayBuffer 或 Buffer/TypedArray 视图。
+      const raw = opts.bytes as ArrayBuffer | Uint8Array
+      const bytes = raw instanceof Uint8Array ? raw : new Uint8Array(raw)
+      if (bytes.byteLength === 0) {
+        return { ok: false, code: 'E_INVALID_ARG', message: 'empty attachment bytes' }
+      }
+      return envelopeFromCli(
+        runComposeAttachmentUpload(opts.filename, bytes, opts.mime || undefined)
+      )
+    }
+  )
+
   // Compose — dry-run plan for pre-filling the composer. Read-only, no auth.
   ipcMain.handle(
     'email:draftPlan',
@@ -511,5 +547,6 @@ export const __testing = {
   validateComposeOpts,
   runComposeDraft,
   runComposeSend,
-  runDraftPlan
+  runDraftPlan,
+  runComposeAttachmentUpload
 }

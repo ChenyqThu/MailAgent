@@ -84,11 +84,19 @@ import type {
   SearchResult,
   SecretsStatus,
   SendEmailOpts,
+  StagedAttachment,
   SystemAlertsData,
+  UploadComposeAttachmentOpts,
   TargetLang,
   TranslationCache
 } from './types'
-import { fetchAsDataUrl, request, type QueryValue, type RequestOptions } from './http_client'
+import {
+  fetchAsDataUrl,
+  request,
+  requestRaw,
+  type QueryValue,
+  type RequestOptions
+} from './http_client'
 import { createChatRuntime } from '../chat/runtime'
 
 function notImplemented(method: string): Promise<never> {
@@ -277,6 +285,18 @@ export class HttpApi implements MailApi {
       // Irreversible SMTP send. Server always passes --yes (the renderer
       // shows SendConfirmDialog first — there is no flag to suppress send).
       this.req<unknown>('POST', '/email/send', { body: opts }),
+
+    uploadComposeAttachment: (opts: UploadComposeAttachmentOpts): Promise<StagedAttachment> =>
+      // D1 — staging 上传: raw bytes PUT (application/octet-stream, 服务端无
+      // python-multipart), filename/mime 走 query。响应仍是标准 envelope。
+      requestRaw<StagedAttachment>(
+        this.baseUrl,
+        'PUT',
+        '/email/compose-attachment',
+        new Uint8Array(opts.bytes),
+        'application/octet-stream',
+        { query: { filename: opts.filename, mime: opts.mime } }
+      ),
 
     draftPlan: (opts: DraftPlanOpts): Promise<DraftPlanResult> =>
       // dry-run, read-only, no auth. The response is snake_case and MUST stay
@@ -558,20 +578,16 @@ export class HttpApi implements MailApi {
       // C7: serve-api 把 CalendarEventOccurrence[] 放进 envelope.data（裸数组，
       // total/window/filters 落 meta）。req() 已解到 .data，直接当数组用——
       // 旧代码再取 .events 对裸数组永远 undefined → 远程日历永远空。
-      const data = await this.req<CalendarEventOccurrence[]>(
-        'GET',
-        '/calendar/events',
-        {
-          query: {
-            fromIso: opts.fromIso,
-            toIso: opts.toIso,
-            calendarName: opts.calendarName,
-            source: opts.source,
-            expandRecurrences: opts.expandRecurrences,
-            limit: opts.limit
-          }
+      const data = await this.req<CalendarEventOccurrence[]>('GET', '/calendar/events', {
+        query: {
+          fromIso: opts.fromIso,
+          toIso: opts.toIso,
+          calendarName: opts.calendarName,
+          source: opts.source,
+          expandRecurrences: opts.expandRecurrences,
+          limit: opts.limit
         }
-      )
+      })
       return data ?? []
     },
 
@@ -593,10 +609,7 @@ export class HttpApi implements MailApi {
     syncStatus: async (): Promise<CalendarSyncStateItem[]> => {
       // C7: serve-api 返裸 CalendarSyncStateItem[] 进 envelope.data
       // （total/worker_enabled 落 meta）。req() 已解到 .data。
-      const data = await this.req<CalendarSyncStateItem[]>(
-        'GET',
-        '/calendar/sync-status'
-      )
+      const data = await this.req<CalendarSyncStateItem[]>('GET', '/calendar/sync-status')
       return data ?? []
     },
 
