@@ -112,3 +112,33 @@ def test_send_backend_failure_surfaces_error(cli_runner, seeded_db, monkeypatch)
     assert data["status"] == "error"
     msg = data["error"]["message"].lower()
     assert "失败" in data["error"]["message"] or "fail" in msg
+
+
+def test_send_attach_local_file(cli_runner, seeded_db, monkeypatch, tmp_path):
+    # --attach (prd 07-04 D2): 本地文件 bytes 进 DraftRequest.attachments 随 SMTP 发出
+    _bypass_auth(monkeypatch)
+    _seed_reply_suggestion(seeded_db, 12345, _REPLY_MD)
+    fake = _FakeSendBackend()
+    _patch_backend(monkeypatch, fake)
+    f = tmp_path / "report.pdf"
+    f.write_bytes(b"%PDF-fake")
+    r = _invoke(cli_runner, "email", "send", "12345", "--yes",
+                "--attach", str(f), "-o", "json", db_path=seeded_db)
+    data = _last_json(r.output)
+    assert data["status"] == "success", r.output
+    assert data["data"]["attachments"] == 1
+    assert fake.sent[0].attachments == [("report.pdf", b"%PDF-fake", "application/pdf")]
+
+
+def test_send_attach_missing_file_errors_before_send(cli_runner, seeded_db, monkeypatch, tmp_path):
+    _bypass_auth(monkeypatch)
+    _seed_reply_suggestion(seeded_db, 12345, _REPLY_MD)
+    fake = _FakeSendBackend()
+    _patch_backend(monkeypatch, fake)
+    r = _invoke(cli_runner, "email", "send", "12345", "--yes",
+                "--attach", str(tmp_path / "ghost.bin"),
+                "-o", "json", db_path=seeded_db)
+    data = _last_json(r.output)
+    assert data["status"] == "error"
+    assert data["error"]["code"] in ("E_INVALID_ARG", "E_INVALID_ARGUMENT")
+    assert fake.sent == []  # 不真发

@@ -1189,11 +1189,15 @@ def _build_compose_request(
     cc: Optional[str],
     bcc: Optional[str],
     subject: Optional[str],
+    attach: Optional[list[str]] = None,
 ) -> Any:
     """读 ``--body-file`` / ``--body-html-file`` 成字符串, 构造 ``ComposeRequest``。
 
     service 接字符串正文 (不碰文件系统); body_html_file 优先于 body_file (对齐旧
     ``_prepare_draft`` 优先级)。读取失败抛 ``CliInvalidArgError``, 调用方 emit。
+    ``attach`` (可重复 ``--attach <本地路径>``, prd 07-04 D2) → local_path 引用
+    (CLI in-process 信任面专用形态, service 装配时读 bytes; serve-api schema 不
+    暴露该形态)。文件不存在这里就报 (E_INVALID_ARG), 不等 service。
     """
     from pathlib import Path
 
@@ -1210,11 +1214,19 @@ def _build_compose_request(
             body_text = Path(body_file).read_text(encoding="utf-8")
         except OSError as e:
             raise CliInvalidArgError(f"--body-file 读取失败: {e}")
+    attachments = None
+    if attach:
+        attachments = []
+        for p in attach:
+            if not Path(p).is_file():
+                raise CliInvalidArgError(f"--attach 文件不存在: {p}")
+            attachments.append({"local_path": str(p)})
     return ComposeRequest(
         internal_id=internal_id, mode=mode,
         extra_to=extra_to, extra_cc=extra_cc,
         body_text=body_text, body_html=body_html,
         to=to, cc=cc, bcc=bcc, subject=subject,
+        attachments=attachments,
     )
 
 
@@ -1254,6 +1266,10 @@ def email_draft(
         None, "--subject",
         help="完整主题 (提供时覆盖 Re:/Fwd: 自动前缀) — 前端 compose 编辑后的",
     ),
+    attach: list[str] = typer.Option(
+        None, "--attach",
+        help="附加本地文件为附件 (可重复; in-process 直读 bytes, 总大小 cap 20MB)",
+    ),
     dry_run: bool = typer.Option(
         False, "--dry-run", help="只打 plan (收件人 + 正文预览), 不创建草稿",
     ),
@@ -1287,6 +1303,7 @@ def email_draft(
             extra_to=extra_to, extra_cc=extra_cc,
             body_file=body_file, body_html_file=body_html_file,
             to=to, cc=cc, bcc=bcc, subject=subject,
+            attach=attach,
         )
     except CliError as e:
         raise emit_cli_error(cli, e)
@@ -1382,6 +1399,10 @@ def email_send(
         None, "--subject",
         help="完整主题 (提供时覆盖 Re:/Fwd: 自动前缀) — 前端 compose 编辑后的",
     ),
+    attach: list[str] = typer.Option(
+        None, "--attach",
+        help="附加本地文件为附件 (可重复; in-process 直读 bytes, 总大小 cap 20MB)",
+    ),
     yes: bool = typer.Option(
         False, "--yes", help="跳过二次确认直接发送 (前端确认对话框后传)",
     ),
@@ -1412,6 +1433,7 @@ def email_send(
             extra_to=extra_to, extra_cc=extra_cc,
             body_file=body_file, body_html_file=body_html_file,
             to=to, cc=cc, bcc=bcc, subject=subject,
+            attach=attach,
         )
     except CliError as e:
         raise emit_cli_error(cli, e)

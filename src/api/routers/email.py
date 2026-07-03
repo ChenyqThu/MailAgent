@@ -891,11 +891,62 @@ def _validate_compose_mode(mode: Any) -> str:
     return m
 
 
+def _parse_compose_attachments(opts: dict[str, Any]) -> Optional[list[dict]]:
+    """body.attachments → ``ComposeRequest.attachments`` 引用列表 (prd 07-04 D1)。
+
+    canonical = snake_case (``stage_id`` / ``attachment_id``, prd 契约), 容忍
+    camelCase 镜像 (stageId / attachmentId) 防双 lane 漂移。``local_path`` 形态是
+    CLI in-process 专用 — HTTP 面一律拒 (信任边界, 落 else 分支)。键缺省 → None
+    (forward 保持自动收集原附件); ``[]`` → 显式空列表 (forward 不带附件)。
+    """
+    if "attachments" not in opts or opts.get("attachments") is None:
+        return None
+    raw = opts["attachments"]
+    if not isinstance(raw, list):
+        raise APIError(
+            "E_INVALID_ARG",
+            f"attachments must be a list, got {type(raw).__name__}",
+            source="cli",
+        )
+    out: list[dict] = []
+    for i, item in enumerate(raw):
+        if not isinstance(item, dict):
+            raise APIError(
+                "E_INVALID_ARG", f"attachments[{i}] must be an object", source="cli"
+            )
+        sid = item.get("stage_id", item.get("stageId"))
+        aid = item.get("attachment_id", item.get("attachmentId"))
+        if sid is not None and aid is None:
+            if not isinstance(sid, str) or not sid.strip():
+                raise APIError(
+                    "E_INVALID_ARG",
+                    f"attachments[{i}].stage_id must be a non-empty string",
+                    source="cli",
+                )
+            out.append({"stage_id": sid})
+        elif aid is not None and sid is None:
+            if not isinstance(aid, int) or isinstance(aid, bool):
+                raise APIError(
+                    "E_INVALID_ARG",
+                    f"attachments[{i}].attachment_id must be an int",
+                    source="cli",
+                )
+            out.append({"attachment_id": aid})
+        else:
+            raise APIError(
+                "E_INVALID_ARG",
+                f"attachments[{i}] must have exactly one of stage_id / attachment_id",
+                source="cli",
+            )
+    return out
+
+
 def _compose_request_from_body(internal_id: int, opts: dict[str, Any]):
     """HTTP body (camelCase + list 收件人) → ``ComposeRequest`` (service 入参)。
 
     to/cc/bcc 是 list → join 成逗号串 (service ``_split_addrs`` 再提纯); bodyHtml 直接
     传字符串 (A4: 不再落临时文件)。mode 缺省 reply-all (校验早于 service 构造)。
+    attachments = 附件引用列表 (prd 07-04 D1, 见 ``_parse_compose_attachments``)。
     """
     from src.services.mail_write import ComposeRequest
 
@@ -919,6 +970,7 @@ def _compose_request_from_body(internal_id: int, opts: dict[str, Any]):
         # (前端已把引用预填进 bodyHtml)。
         quote_original=bool(opts.get("quoteOriginal", False)),
         importance=opts.get("importance") if isinstance(opts.get("importance"), str) else None,
+        attachments=_parse_compose_attachments(opts),
     )
 
 
@@ -942,6 +994,41 @@ def _require_compose_internal_id(opts: dict[str, Any]) -> int:
             source="cli",
         )
     return internal_id
+
+
+@router.put("/compose-attachment", dependencies=[Depends(verify_cf_access)])
+async def upload_compose_attachment(
+    request: Request,
+    filename: str = Query(..., description="原始文件名 (URL-encoded)"),
+):
+    """compose 附件两段式上传第 ① 段 — raw bytes 暂存 (prd 07-04 D1)。
+
+    ``Content-Type: application/octet-stream``, body = 文件原始字节 (**不引入**
+    python-multipart)。落 ``data/compose_staging/{stage_id}/{filename}`` (uuid 目录,
+    与 ``data/attachments/`` SSoT id 空间严格隔离); filename 经 sanitize (basename
+    化, 路径穿越防御)。单文件 cap = ``MAX_COMPOSE_ATTACH_BYTES`` (20MB)。
+    data = ``{stage_id, filename, size, mime}`` (filename 为实际落盘名, mime 按
+    扩展名猜)。第 ② 段: compose/send body 带 ``attachments: [{"stage_id": ...}]``。
+    """
+    from src.services.compose_staging import stage_attachment, sweep_stale
+    from src.services.mail_write import MAX_COMPOSE_ATTACH_BYTES
+
+    if not filename.strip():
+        raise APIError("E_INVALID_ARG", "filename query param required", source="cli")
+    raw = await request.body()
+    if not raw:
+        raise APIError("E_INVALID_ARG", "empty attachment body", source="cli")
+    if len(raw) > MAX_COMPOSE_ATTACH_BYTES:
+        raise APIError(
+            "E_INVALID_ARG",
+            f"attachment exceeds {MAX_COMPOSE_ATTACH_BYTES // (1024 * 1024)}MB cap",
+            source="cli",
+        )
+    cfg = get_service_ctx().config
+    # 机会式 TTL 清扫: 顺带回收 >24h 未消费的暂存 (存草稿留下的 / 放弃的 compose)。
+    await asyncio.to_thread(sweep_stale, cfg)
+    data = await asyncio.to_thread(stage_attachment, cfg, filename, raw)
+    return success_envelope(data, request=request, source="cli")
 
 
 @router.post("/draft", dependencies=[Depends(verify_cf_access)])
@@ -1096,6 +1183,15 @@ async def send_approved(
         raise APIError("E_INVALID_ARG", "at least one recipient (to) required", source="cli")
     if not body_text.strip():
         raise APIError("E_INVALID_ARG", "bodyText required", source="cli")
+    # prd 07-04 D3: send-approved 本期不支持附件 — 审批 hash 契约 (hashOutbound,
+    # Node/Python 双侧镜像) 只覆盖 to/cc/bcc/subject/body, 若静默接受附件 = 审批
+    # 未覆盖的内容被发出 (旁路)。显式拒绝, fail-closed。
+    if opts.get("attachments"):
+        raise APIError(
+            "E_INVALID_ARG",
+            "attachments not supported on send-approved (approval hash does not cover attachments)",
+            source="cli",
+        )
     if not (
         isinstance(content_hash, str)
         and isinstance(idempotency_key, str)

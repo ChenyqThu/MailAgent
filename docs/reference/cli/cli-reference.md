@@ -51,7 +51,7 @@ mailagent --help                 # 列 10 个 group (email/admin/attachment/llm/
 | `init {fetch-cache,analyze,fix-properties,fix-critical,update-parents,sync-new,all} [...]` | 初始化同步 7 个 sub-action (PR-5 inline 直调 InitialSync) |
 | `llm run <internal_id> [--dry-run/--force/--no-overwrite]` | 单封 LLM 分类 + Notion 写 AI 字段 |
 | `llm retry-failed [--limit N --dry-run]` | 跑 LLM retry queue |
-| `email draft <internal_id> [--mode reply-all\|reply/--extra-to/--extra-cc/--dry-run]` | 灵动岛 F1: 读 SQLite `llm_processing.labels_json.reply_suggestion_md` (SSoT, 含用户改过的) → 构造 DraftRequest → `backend.append_draft` (davmail IMAP APPEND / applescript sh) 创建回复草稿 |
+| `email draft <internal_id> [--mode reply-all\|reply/--extra-to/--extra-cc/--attach <path>…/--dry-run]` | 灵动岛 F1: 读 SQLite `llm_processing.labels_json.reply_suggestion_md` (SSoT, 含用户改过的) → 构造 DraftRequest → `backend.append_draft` (davmail IMAP APPEND / applescript sh) 创建回复草稿。`--attach <本地路径>` 可重复 (draft/send 同款): in-process 直读 bytes 附加为附件, 总大小 cap 20MB, 文件不存在报 E_INVALID_ARG |
 | `notion resync <internal_id>` | alias of `email resync` |
 | `notion update-flag <internal_id> [--is-read/--is-flagged/--processing-status]` | 手改 Notion 邮件页 flags |
 | `notion create-task <internal_id> [--as-meeting/--no-mark-done/--dry-run]` | 灵动岛 F3/F5: LLM (`task_extractor`) 决策填字段 (精炼 title / 智能 time / 日程类型 / 优先级) → 写日程库 (CALENDAR_DATABASE_ID) page + Email Inbox relation → 标原邮件已完成. `--as-meeting` 抽邮件提到的会议实际时间 (add_to_calendar), 默认建议处理时间 (convert_to_notion_task) |

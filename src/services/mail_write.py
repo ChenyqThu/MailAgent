@@ -153,8 +153,10 @@ class AiFieldsResult:
     review_status: Optional[str]
 
 
-# forward 附件总大小上限 (编码前). base64 膨胀 ~33%, Exchange 常见上限 25-35MB.
-_MAX_FORWARD_ATTACH_BYTES = 20 * 1024 * 1024
+# compose 附件总大小上限 (编码前; forward 自动收集与显式 attachments 引用共用,
+# serve-api 上传端点单文件 cap 也沿用同一常量). base64 膨胀 ~33%, Exchange 常见
+# 上限 25-35MB.
+MAX_COMPOSE_ATTACH_BYTES = 20 * 1024 * 1024
 
 
 @dataclass
@@ -184,6 +186,14 @@ class ComposeRequest:
     # True 用于"只给回复正文、由服务端拼引用"的调用方 (chat email_draft_reply 工具:
     # body_markdown 是纯回复内容, 语义=插在 quoted source 之上)。
     quote_original: bool = False
+    # attachments: 附件引用列表 (prd 07-04 D1/D2), 每项 dict 三选一:
+    #   {"stage_id": str}      compose-attachment 上传暂存 (serve-api 两段式)
+    #   {"attachment_id": int} 库内已有附件 (email_attachment.id, 转发沿用)
+    #   {"local_path": str}    本地文件 — 仅 CLI in-process 信任面 (--attach),
+    #                          serve-api adapter 拒绝该形态
+    # None = 未提供 (forward 保持自动收集原附件); 显式提供 (含 []) 时为权威列表,
+    # forward 不再自动收集 (语义同 to_override 覆盖推导)。
+    attachments: Optional[list[dict]] = None
 
 
 @dataclass
@@ -316,6 +326,7 @@ def _compose_reply_draft(
             #  客户端)。sender.py 对真空 plain part 另有 "(empty body)" 兜底。
             reply_text=reply_text or "",
             reply_html=reply_html,
+            attachments=attachments or [],
             importance=importance,
         )
 
@@ -388,6 +399,7 @@ def _compose_reply_draft(
         reply_html=reply_html,
         in_reply_to=in_reply_to,
         references=references,
+        attachments=attachments or [],
         importance=importance,
     )
 
@@ -1345,15 +1357,83 @@ class MailWriteService:
             if not data:
                 warnings.append(f"附件 {a.filename!r} 读取失败, 跳过")
                 continue
-            if total + len(data) > _MAX_FORWARD_ATTACH_BYTES:
+            if total + len(data) > MAX_COMPOSE_ATTACH_BYTES:
                 warnings.append(
-                    f"附件总大小超 {_MAX_FORWARD_ATTACH_BYTES // (1024 * 1024)}MB, "
+                    f"附件总大小超 {MAX_COMPOSE_ATTACH_BYTES // (1024 * 1024)}MB, "
                     f"跳过 {a.filename!r} 及之后附件"
                 )
                 break
             total += len(data)
             out.append((a.filename, data, a.content_type or "application/octet-stream"))
         return out, warnings
+
+    def _resolve_attachment_refs(
+        self, refs: list, *, total_so_far: int = 0
+    ) -> list:
+        """把 ``ComposeRequest.attachments`` 引用解析成 (filename, bytes, mime) 三元组。
+
+        三种 ref 形态见 ComposeRequest.attachments 注释 (stage_id / attachment_id /
+        local_path)。显式引用 = 用户明确要带的附件 — 任何解析失败 / 超 cap 直接
+        ``ServiceInvalidArgError`` **不静默跳过** (区别于 forward 自动收集的
+        warn+skip: 静默丢用户点名的附件等于数据丢失)。cap 与自动收集共用
+        ``MAX_COMPOSE_ATTACH_BYTES``, ``total_so_far`` 传入已收集部分的字节数。
+        """
+        from pathlib import Path
+
+        from src.services.compose_staging import guess_mime, read_staged
+
+        out: list = []
+        total = total_so_far
+        for ref in refs:
+            if not isinstance(ref, dict):
+                raise ServiceInvalidArgError(
+                    f"attachment ref 必须是 dict, got {type(ref).__name__}"
+                )
+            if "stage_id" in ref:
+                staged = read_staged(self._ctx.config, str(ref["stage_id"] or ""))
+                if staged is None:
+                    raise ServiceInvalidArgError(
+                        f"附件暂存不存在或已过期 (stage_id={ref['stage_id']!r}), 请重新上传"
+                    )
+                filename, data, mime = staged
+            elif "attachment_id" in ref:
+                att_id = ref["attachment_id"]
+                if not isinstance(att_id, int) or isinstance(att_id, bool):
+                    raise ServiceInvalidArgError(
+                        f"attachment_id 必须是 int, got {att_id!r}"
+                    )
+                rec = self._ctx.email_repo.get_attachment_record(att_id)
+                if rec is None:
+                    raise ServiceInvalidArgError(f"附件不存在 (attachment_id={att_id})")
+                data = self._ctx.email_repo.get_attachment_bytes(att_id)
+                if not data:
+                    raise ServiceInvalidArgError(
+                        f"附件文件读取失败 (attachment_id={att_id}, {rec.filename!r})"
+                    )
+                filename = rec.filename
+                mime = rec.content_type or "application/octet-stream"
+            elif "local_path" in ref:
+                # 仅 CLI in-process 信任面 (--attach); serve-api adapter 拒绝该形态。
+                p = Path(str(ref["local_path"] or ""))
+                try:
+                    data = p.read_bytes()
+                except OSError as e:
+                    raise ServiceInvalidArgError(f"--attach 文件读取失败: {e}")
+                filename = p.name
+                mime = guess_mime(p.name)
+            else:
+                raise ServiceInvalidArgError(
+                    "attachment ref 需含 stage_id / attachment_id / local_path 之一, "
+                    f"got {sorted(ref.keys())}"
+                )
+            if total + len(data) > MAX_COMPOSE_ATTACH_BYTES:
+                raise ServiceInvalidArgError(
+                    f"附件总大小超 {MAX_COMPOSE_ATTACH_BYTES // (1024 * 1024)}MB 上限"
+                    f" (加入 {filename!r} 时溢出)"
+                )
+            total += len(data)
+            out.append((filename, data, mime))
+        return out
 
     def _prepare_draft(
         self,
@@ -1419,8 +1499,12 @@ class MailWriteService:
         # 纯回复内容、未含引用) 即便有显式正文也强制构造并下拼到正文之下。
         build_quote = (not explicit_body) or request.quote_original
         if mode == "forward":
-            # 附件总是 server-side 重新收集 — 前端无法传字节, 必须按 internal_id 重读。
-            attachments, warnings = self._collect_forward_attachments(internal_id)
+            # 附件 server-side 收集 — 前端无法传字节, 按 internal_id 重读。
+            # request.attachments 显式提供 (含 []) 时为权威列表 (前端转发可取消勾选
+            # 原附件, 语义同 to_override 覆盖推导), 跳过自动收集; None (CLI 旧调用 /
+            # 灵动岛) 保持自动收集全部原邮件常规附件。
+            if request.attachments is None:
+                attachments, warnings = self._collect_forward_attachments(internal_id)
             if build_quote:
                 body_md = self._ctx.email_repo.get_body_markdown(internal_id) or ""
                 body_html = self._ctx.email_repo.get_body_html(internal_id)
@@ -1439,6 +1523,14 @@ class MailWriteService:
                 else:
                     reply_text = f"{reply_text}\n\n{q_text}" if reply_text.strip() else q_text
                     reply_html = f"{reply_html}{q_html}" if reply_html else q_html
+
+        # 显式附件引用 → bytes 三元组, 追加在 forward 自动收集之后 (forward 显式时
+        # 自动收集已跳过, attachments 为空)。cap 跨两来源共享。
+        if request.attachments:
+            attachments = attachments + self._resolve_attachment_refs(
+                request.attachments,
+                total_so_far=sum(len(a[1]) for a in attachments),
+            )
 
         draft = _compose_reply_draft(
             record, internal_id=internal_id, mode=mode,
@@ -1700,6 +1792,14 @@ class MailWriteService:
         result = self._ctx.backend.send_email(draft)
         if not result.success:
             raise ServiceError(f"邮件发送失败: {result.error}")
+
+        # send 成功 → 清理消费掉的暂存附件目录 (发送失败时保留, 用户可原样重试)。
+        # attachment_id / local_path 引用无暂存物, 不涉及。
+        from src.services.compose_staging import discard_staged
+
+        for ref in request.attachments or []:
+            if isinstance(ref, dict) and ref.get("stage_id"):
+                discard_staged(self._ctx.config, str(ref["stage_id"]))
 
         return ComposeSendResult(
             internal_id=request.internal_id,

@@ -749,3 +749,46 @@ def test_compose_draft_default_no_quote_original_keeps_body_only(seeded_db, monk
     assert "我的纯回复内容" in html        # 回复正文在
     assert "写道" not in html              # 无引用追加
     assert "body html" not in html         # 原文未被拼入
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# --attach (prd 07-04 D2): 可重复本地文件 → local_path 引用 → DraftRequest.attachments
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_draft_attach_local_files(cli_runner, seeded_db, monkeypatch, tmp_path):
+    _bypass_auth(monkeypatch)
+    _seed_reply_suggestion(seeded_db, 12345, _REPLY_MD)
+    fake_backend = _FakeBackend()
+    _patch_backend(monkeypatch, fake_backend)
+    f1 = tmp_path / "notes.txt"
+    f1.write_bytes(b"note bytes")
+    f2 = tmp_path / "chart.png"
+    f2.write_bytes(b"\x89PNG-fake")
+
+    r = _invoke(cli_runner, "email", "draft", "12345",
+                "--attach", str(f1), "--attach", str(f2),
+                "-o", "json", db_path=seeded_db)
+    data = _last_json(r.output)
+    assert data["status"] == "success", r.output
+    assert data["data"]["attachments"] == 2
+    draft = fake_backend.appended[0]
+    assert [a[0] for a in draft.attachments] == ["notes.txt", "chart.png"]
+    assert draft.attachments[0][1] == b"note bytes"
+    assert draft.attachments[1][2] == "image/png"
+
+
+def test_draft_attach_missing_file_errors(cli_runner, seeded_db, monkeypatch, tmp_path):
+    _bypass_auth(monkeypatch)
+    _seed_reply_suggestion(seeded_db, 12345, _REPLY_MD)
+    fake_backend = _FakeBackend()
+    _patch_backend(monkeypatch, fake_backend)
+
+    r = _invoke(cli_runner, "email", "draft", "12345",
+                "--attach", str(tmp_path / "nope.bin"),
+                "-o", "json", db_path=seeded_db)
+    data = _last_json(r.output)
+    assert data["status"] == "error"
+    assert data["error"]["code"] in ("E_INVALID_ARG", "E_INVALID_ARGUMENT")
+    assert "不存在" in data["error"]["message"]
+    assert fake_backend.appended == []  # 校验早于 backend
