@@ -10,6 +10,8 @@ from typing import List
 from loguru import logger
 
 from src.utils.mem_guard import (
+    _read_footprint_mb,
+    _read_mem_mb,
     _read_rss_mb,
     maybe_start_tracemalloc,
     start_mem_guard,
@@ -148,6 +150,95 @@ def test_read_rss_mb_real_process():
     rss = _read_rss_mb(os.getpid())
     assert rss is not None
     assert rss > 0
+
+
+def test_read_footprint_mb_real_process():
+    """macOS 真实 libproc 路径: phys_footprint 应为正且量级合理 (07-03 加固).
+
+    07-03 复现: 内存压力下压缩器把冷页搬进压缩池, ps RSS 下降而 footprint
+    (Activity Monitor 同源) 继续涨 → 旧 ps 度量让 4096MB 护栏全天零 breach。
+    """
+    import sys
+
+    fp = _read_footprint_mb(os.getpid())
+    if sys.platform == "darwin":
+        assert fp is not None
+        assert 10 < fp < 100_000  # 正数且量级合理 (MB)
+    else:
+        assert fp is None  # 非 macOS 静默 None → 回落 ps
+
+
+def test_read_footprint_mb_bad_pid_returns_none():
+    assert _read_footprint_mb(2**30) is None
+
+
+def test_read_mem_prefers_footprint_falls_back_to_ps(monkeypatch):
+    import src.utils.mem_guard as mg
+
+    monkeypatch.setattr(mg, "_read_footprint_mb", lambda pid: 123.0)
+    assert _read_mem_mb(os.getpid()) == 123.0
+    monkeypatch.setattr(mg, "_read_footprint_mb", lambda pid: None)
+    monkeypatch.setattr(mg, "_read_rss_mb", lambda pid: 45.0)
+    assert _read_mem_mb(os.getpid()) == 45.0
+
+
+def test_blind_guard_warns_after_3_failures(monkeypatch):
+    """读数 3 连败 → WARNING (旧代码静默 continue = 护栏永瘫不可观测)."""
+    monkeypatch.setenv("MAILAGENT_MEM_LIMIT_MB", "100")
+    records: List[dict] = []
+    sink_id = logger.add(lambda m: records.append(m.record), level="WARNING")
+    try:
+        t = start_mem_guard(
+            exit_fn=lambda code: None,
+            poll_sec=0.01,
+            warn_poll_sec=0.01,
+            rss_fn=lambda: None,
+            hard_exit_delay_sec=5.0,
+        )
+        assert t is not None
+        deadline = time.time() + 2.0
+        while time.time() < deadline:
+            if any("effectively blind" in str(r["message"]) for r in records):
+                break
+            time.sleep(0.02)
+        assert any(
+            "effectively blind" in str(r["message"]) for r in records
+        ), "3 连败未打失明 WARNING"
+    finally:
+        logger.remove(sink_id)
+
+
+def test_high_watermark_tightens_poll_and_warns(monkeypatch):
+    """≥70% 水位 → 打 high watermark WARNING 并切密轮 (仍低于 limit 不 breach)."""
+    monkeypatch.setenv("MAILAGENT_MEM_LIMIT_MB", "100")
+    records: List[dict] = []
+    sink_id = logger.add(lambda m: records.append(m.record), level="WARNING")
+    calls: List[float] = []
+
+    def reading() -> float:
+        calls.append(time.time())
+        return 75.0  # 70% < 75 < 100: 预警区但不 breach
+
+    breached = threading.Event()
+    try:
+        t = start_mem_guard(
+            on_breach=breached.set,
+            exit_fn=lambda code: breached.set(),
+            poll_sec=0.5,
+            warn_poll_sec=0.01,
+            rss_fn=reading,
+            hard_exit_delay_sec=5.0,
+        )
+        assert t is not None
+        time.sleep(1.5)
+        assert not breached.is_set(), "75% 水位不应 breach"
+        assert any(
+            "high watermark" in str(r["message"]) for r in records
+        ), "进入预警区应打 WARNING"
+        # 密轮生效: 首轮 0.5s 后进入预警区, 之后 0.01s/轮 → 1.5s 内远超 3 次采样
+        assert len(calls) > 5, f"密轮未生效, 采样仅 {len(calls)} 次"
+    finally:
+        logger.remove(sink_id)
 
 
 def test_read_rss_mb_bad_pid_returns_none():

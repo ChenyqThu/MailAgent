@@ -36,7 +36,14 @@
 
 import { spawn, type ChildProcess } from 'child_process'
 import { app } from 'electron'
-import { createWriteStream, existsSync, mkdirSync, readFileSync, type WriteStream } from 'fs'
+import {
+  createWriteStream,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  type WriteStream
+} from 'fs'
 import { get as httpGet } from 'http'
 import { dirname, join } from 'path'
 
@@ -636,9 +643,11 @@ export class BackendLifecycleManager {
    * → probeApiHealth 超时 → 误判 failed。
    *
    * 多 service 各持独立流 + 独立文件名 (serve→backend-process.log / serve-api→
-   * api-process.log), 决不共用一个 createWriteStream (会交错/竞争)。截断模式 (flags:'w')
-   * 每次 spawn 覆盖, 只留本次进程输出防无限增长。drain 接不上 (建目录/开流失败) 退化
-   * resume() 丢弃 —— 宁丢诊断日志, 也不能让 pipe 写满把进程拖死。
+   * api-process.log), 决不共用一个 createWriteStream (会交错/竞争)。spawn 前把现有
+   * log 轮转成 .prev 再以截断模式 (flags:'w') 开新流 —— 07-03 bug3 教训: 纯截断把
+   * 上一代进程的崩溃/泄漏证据直接毁掉 (内存泄漏后用户重启 app = 证据清零, 无法定罪
+   * 泄漏进程); 只留一代 .prev, 总量仍封顶防无限增长。drain 接不上 (建目录/开流失败)
+   * 退化 resume() 丢弃 —— 宁丢诊断日志, 也不能让 pipe 写满把进程拖死。
    */
   private attachLogDrain(svc: ManagedService, dataRoot: string): void {
     const child = svc.child
@@ -646,7 +655,13 @@ export class BackendLifecycleManager {
     try {
       const logDir = join(dataRoot, 'logs')
       mkdirSync(logDir, { recursive: true })
-      const stream = createWriteStream(join(logDir, svc.logFile), { flags: 'w' })
+      const logPath = join(logDir, svc.logFile)
+      try {
+        if (existsSync(logPath)) renameSync(logPath, `${logPath}.prev`)
+      } catch {
+        // rotate 失败不阻断 drain (宁丢历史证据, 也不能丢 pipe 抽干)
+      }
+      const stream = createWriteStream(logPath, { flags: 'w' })
       svc.logStream = stream
       child.stdout?.on('data', (chunk: Buffer) => stream.write(chunk))
       child.stderr?.on('data', (chunk: Buffer) => stream.write(chunk))
