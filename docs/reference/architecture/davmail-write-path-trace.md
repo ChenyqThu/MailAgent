@@ -86,7 +86,9 @@
 
 > 反直觉点：`AppleScriptBackend.send_email` 和 davmail send **都走 SMTP**（cfg SMTP 端口指向 DavMail JVM）—— send op 没有真正的「osascript 发信」fallback。
 
-## 6. B1 退役决策选项（供人工拍板 —— **本次未做**）
+## 6. B1 退役决策选项（~~供人工拍板~~ → **已拍板：保留，不退役**）
+
+> **决策记录（2026-07-03，用户拍板）**：B1 整条链路（Notion webhook → Redis → handlers → outbox → IMAP）**仍在使用中，保留不退役**——反向同步价值确认存在。E2 已完成的仅是 §3 死分支清理（选项 A 精神）；选项 B（整条退役）不再是待决事项，除非未来外部触发方（Openclaw / Notion Automation）下线再议。以下为历史决策依据原文。
 
 技术上 davmail 反向写已无 AppleScript hop（IMAP STORE），故决策本质不是「清 AppleScript」，而是「**Notion 作为反向触发源（B1）是否仍保留**」。
 
