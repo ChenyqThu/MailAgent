@@ -43,6 +43,15 @@ def enqueue_agent_run(
     Returns:
         (job_id, was_created) —— 正常入队或幂等命中既有；``None`` = runs/day 超限被拦（未入队）。
     """
+    # 不变量（codex S4 终审唯一 finding，P3）：runs/day 门是 check-then-act（count → enqueue
+    # 无事务），当前无竞态依赖「本函数同步无 await point + 两触发方（trigger_worker.tick_loop
+    # cron / email_dispatch 的同 loop create_task 后台任务）跑在同一 event loop 串行调用」
+    # → 单 loop 下 count+enqueue 原子、不可交错（机械守护
+    # tests/agents/test_run_queue.py::test_sync_atomicity_invariant）。
+    # 失效条件：count_agent_runs_since / enqueue 转 async（如换 aiosqlite）或触发方移到独立
+    # 线程/进程 → 窗口打开，须改单 DB 事务内 count+INSERT（BEGIN IMMEDIATE CAS）才安全。
+    # 语义边界：成本预算软门（D7 触发方职责）非安全边界——越限最坏 = 多跑几次 run（LLM 成本），
+    # 无数据/权限影响；同-occurrence 重复由幂等键 partial unique 另兜（不靠此门）。
     day_start = _local_day_start(now_fn())
     used = repo.count_agent_runs_since(agent_id, day_start)
     if used >= budget.max_runs_per_day:

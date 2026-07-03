@@ -1,6 +1,9 @@
 """enqueue_agent_run 单测（S4 W1, ADR D4/D7）—— runs/day 门 + 幂等 + target 约定。"""
 from __future__ import annotations
 
+import ast
+import inspect
+
 import pytest
 
 from src.agents.run_queue import enqueue_agent_run
@@ -72,3 +75,23 @@ def test_params_carry_extra(repo):
     job = repo.get(res[0])
     assert job.params["email_internal_id"] == 555
     assert job.params["agent_id"] == "a1"
+
+
+def test_sync_atomicity_invariant():
+    """守护 runs/day 门的「同步原子性不变量」（codex S4 终审 P3 finding）。
+
+    runs/day 门是 check-then-act（count → enqueue 无事务），当前无竞态完全依赖
+    enqueue_agent_run 保持同步函数、体内无 await point —— 两触发方（cron tick_loop /
+    email dispatch 同 loop 后台 task）在同一 event loop 串行调用，count+enqueue 原子执行。
+    本测试红了 = 有人把它转 async / 在 count 与 enqueue 之间引入了 await point，
+    须按 run_queue.py 门旁注释的失效条件改「单 DB 事务内 count+INSERT（BEGIN IMMEDIATE CAS）」。
+    用 ast 解析（非字符串匹配）——注释/docstring 里提到 await 不误伤。
+    """
+    assert inspect.iscoroutinefunction(enqueue_agent_run) is False
+    tree = ast.parse(inspect.getsource(enqueue_agent_run))
+    assert isinstance(tree.body[0], ast.FunctionDef)  # 非 AsyncFunctionDef
+    offenders = [
+        node for node in ast.walk(tree)
+        if isinstance(node, (ast.Await, ast.AsyncFunctionDef, ast.AsyncFor, ast.AsyncWith))
+    ]
+    assert offenders == [], "enqueue_agent_run 引入了 await point，同步原子性不变量已破"
