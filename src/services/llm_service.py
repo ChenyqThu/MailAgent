@@ -9,10 +9,12 @@ serve-api (FastAPI) 各自退化成「解析 → 调 service → 格式化」的
 返回的 ``LlmRunResult`` 字段与现 CLI ``emit`` 的 ``data`` 形状逐字段对齐
 (parity golden: tests/cli/test_service_parity.py; schema: docs/cli-schema/llm-run.schema.json)。
 
-backend 选择复刻 CLI ``_maybe_create_davmail_backend``: 仅 davmail 模式给 LLMRunner 一个
-backend (走 IMAP fetch), 否则 None (LLMRunner 内部 lazy-init AppleScriptArm) —— 保持与旧
-fork-CLI 逐字节 parity。方法同步; serve-api 经 ``asyncio.to_thread`` 调用 (``run_for_internal_id``
-是 async, service 内用 ``asyncio.run`` 起独立 loop, 落在 worker 线程不撞 uvicorn loop)。
+backend 选择复刻 CLI ``_maybe_create_davmail_backend``: davmail 模式给 LLMRunner 一个
+backend (走 IMAP fetch), applescript 模式 None (LLMRunner 内部 lazy-init AppleScriptArm)。
+davmail 模式下 backend probe 失败**不吞** —— 冒泡成 ServiceLLMFailedError (E1 §3.1
+Step 3: 防止静默回退到错 id 空间的 AppleScriptArm)。方法同步; serve-api 经
+``asyncio.to_thread`` 调用 (``run_for_internal_id`` 是 async, service 内用
+``asyncio.run`` 起独立 loop, 落在 worker 线程不撞 uvicorn loop)。
 """
 
 from __future__ import annotations
@@ -56,26 +58,21 @@ class LlmService:
 
     def _maybe_davmail_backend(self):
         """davmail 模式返回 DavMailBackend (probe ok) 让 LLMRunner 走 IMAP fetch;
-        applescript 模式 / probe 失败返回 None (LLMRunner fallback lazy-init AppleScriptArm)。
+        applescript 模式返回 None (LLMRunner lazy-init AppleScriptArm)。
 
         复刻 CLI ``src/cli/commands/llm.py::_maybe_create_davmail_backend``, 但经
         ``ctx.config`` / ``ctx.sync_store`` 而非全局 cfg。
+
+        E1 §3.1 Step 3: davmail 模式下 probe 失败**不再吞掉** — 直接冒泡给 run()
+        的 try/except 转 ServiceLLMFailedError, 而不是静默回退到会用错 id 空间
+        查询 (`whose id`) 的 AppleScriptArm。
         """
         cfg = self._ctx.config
         if getattr(cfg, "mailagent_backend", "applescript") != "davmail":
             return None
-        try:
-            from src.mail.backend.factory import create_backend
+        from src.mail.backend.factory import create_backend
 
-            return create_backend(cfg, sync_store=self._ctx.sync_store)
-        except Exception as e:
-            # service 不应因 backend probe 失败崩 — fallback AppleScript 老路径 + warn
-            from loguru import logger
-
-            logger.warning(
-                f"[service] davmail backend probe failed, fallback AppleScript: {e}"
-            )
-            return None
+        return create_backend(cfg, sync_store=self._ctx.sync_store)
 
     def run(
         self,
@@ -99,12 +96,13 @@ class LlmService:
         from src.llm_agent.runner import LLMRunner
 
         cfg = self._ctx.config
-        runner = LLMRunner(
-            db_path=cfg.sync_store_db_path,
-            attachment_storage_dir=cfg.attachment_storage_dir,
-            backend=self._maybe_davmail_backend(),
-        )
+        runner: Optional[LLMRunner] = None
         try:
+            runner = LLMRunner(
+                db_path=cfg.sync_store_db_path,
+                attachment_storage_dir=cfg.attachment_storage_dir,
+                backend=self._maybe_davmail_backend(),
+            )
             result = asyncio.run(
                 runner.run_for_internal_id(
                     internal_id,
@@ -113,17 +111,20 @@ class LlmService:
                     force=force,
                 )
             )
-        except Exception as e:  # pragma: no cover - 兜底网关意外异常
+        except Exception as e:  # pragma: no cover - 兜底网关/backend probe 意外异常
             raise ServiceLLMFailedError(
                 f"LLMRunner unexpected error: {e!r}",
-                hint="网关/依赖故障; 看 pm2 logs 或检查 LLM_API_KEY / LLM_API_BASE",
+                hint="网关/依赖故障; 看 pm2 logs 或检查 LLM_API_KEY / LLM_API_BASE "
+                "(davmail 模式下也可能是 backend probe 失败, 见异常详情)",
             ) from e
         finally:
             # runner.close() 是 async, 内部 try/except 不重试; asyncio.run 起独立 loop。
-            try:
-                asyncio.run(runner.close())
-            except Exception:
-                pass
+            # runner 可能因 backend probe 失败而未构造成功 (仍是 None) — 跳过 close。
+            if runner is not None:
+                try:
+                    asyncio.run(runner.close())
+                except Exception:
+                    pass
 
         if not result.get("ok"):
             err = result.get("error") or "unknown LLM error"
@@ -147,3 +148,37 @@ class LlmService:
             writer_summary=result.get("writer_summary"),
             stored_at=result.get("stored_at"),
         )
+
+    def selftest(self) -> dict[str, Any]:
+        """LLM gateway 健康检查 (不烧 token, 不写 Notion, 仅检 cfg)。
+
+        搬自 ``llm_selftest`` (src/cli/commands/llm.py 行 139-165, 逻辑保持不变)。纯配置
+        字段读取, 无 I/O / 副作用, 也不需要 ``Actor`` 鉴权 (镜像 CLI 该命令无 auth 的读
+        语义)。unhealthy 不是异常 —— CLI 侧 ``emit`` 完 data 后另 ``raise typer.Exit(1)``
+        是进程退出码语义, service 层没有这个概念, 直接把 data 返回给调用方判断。
+        """
+        cfg = self._ctx.config
+        reasons: list[str] = []
+        healthy = True
+        if not cfg.llm_api_key:
+            reasons.append("LLM_API_KEY is empty")
+            healthy = False
+        if not cfg.llm_api_base:
+            reasons.append("LLM_API_BASE is empty")
+            healthy = False
+        if not cfg.llm_model:
+            reasons.append("LLM_MODEL is empty")
+            healthy = False
+
+        fallback = [
+            m.strip() for m in (cfg.llm_fallback_models or "").split(",") if m.strip()
+        ]
+
+        return {
+            "healthy": healthy,
+            "api_base": cfg.llm_api_base,
+            "primary_model": cfg.llm_model,
+            "fallback_chain": fallback,
+            "llm_agent_enabled": cfg.llm_agent_enabled,
+            "reasons": reasons,
+        }

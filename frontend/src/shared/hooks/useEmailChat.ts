@@ -47,6 +47,12 @@ export interface UseEmailChatReturn {
   sessions: ChatSession[]
   /** Switch the renderer to a different session (history popover click). */
   selectSession: (sessionId: number) => Promise<void>
+  /** Part B (island live-refresh) — re-load the ACTIVE session's messages from ai_chat.db.
+   *  selectSession short-circuits on the same id, so this is the path for "the rows changed
+   *  underneath us" (an island-approved HITL turn the gateway resumed server-side). Reuses the
+   *  same refresh() the session-switch load uses; no-op when no session is active. Best-effort:
+   *  a load failure surfaces via `error` like any other refresh. */
+  reloadActiveSession: () => Promise<void>
   /** Fold a session the AI SDK path created out-of-band (renderer IPC,
    *  backend_kind='ai-sdk') into the hook state: prepend it to `sessions`,
    *  point `activeSessionId` + `messagesSessionId` at it, and reset messages
@@ -303,6 +309,23 @@ export function useEmailChat(
     [emailId, refresh]
   )
 
+  // Part B (island live-refresh) — reload the ACTIVE session's rows in place. selectSession
+  // short-circuits on the same id (its contract is "switch"), so the panel calls this when an
+  // island-driven server-side resume changed the session's ai_chat.db rows underneath the open
+  // panel ('chat:session-updated' IPC). Reuses refresh() — the exact session-switch load path
+  // (nav-generation guarded, sets messagesSessionId) — so the AI SDK reload gate + mapping stay
+  // single-sourced.
+  const reloadActiveSession = useCallback(async (): Promise<void> => {
+    const sid = activeSessionRef.current
+    if (sid === null) return
+    try {
+      await refresh(sid)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      setError({ code: 'E_LOAD', message })
+    }
+  }, [refresh])
+
   // Adopt an ai-sdk session the panel created out-of-band (renderer IPC,
   // backend_kind='ai-sdk'). No IPC / refresh: the session is freshly created +
   // empty (0 rows) and the AI SDK runtime owns the live turns;
@@ -326,6 +349,7 @@ export function useEmailChat(
     newSession,
     sessions,
     selectSession,
+    reloadActiveSession,
     adoptSession,
     deleteSession
   }

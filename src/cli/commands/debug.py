@@ -65,6 +65,7 @@ def debug_email_source(
 
     from src.mail.applescript_arm import AppleScriptArm
 
+    # applescript-only diagnostic, factory 豁免 (e1 §3.1 Step 3)
     arm = AppleScriptArm()
     try:
         full = arm.fetch_email_content_by_id(internal_id, meta.mailbox or "收件箱")
@@ -291,6 +292,7 @@ def debug_applescript_fetch(
 
     from src.mail.applescript_arm import AppleScriptArm
 
+    # applescript-only diagnostic, factory 豁免 (e1 §3.1 Step 3)
     arm = AppleScriptArm()
     try:
         full = arm.fetch_email_content_by_id(internal_id, mb)

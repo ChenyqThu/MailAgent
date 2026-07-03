@@ -49,6 +49,15 @@ def _patch_llm_runner(monkeypatch, run_returns):
         self._reader = None
     monkeypatch.setattr(runner_mod.LLMRunner, "__init__", safe_init)
 
+    # E1 §3.1 Step 3: davmail 模式下 `llm run` (经 LlmService._maybe_davmail_backend)
+    # 和 `llm retry-failed` (经 CLI 层 _maybe_create_davmail_backend) 都会在
+    # LLMRunner 构造前真连 IMAP probe (测试环境 MAILAGENT_BACKEND 落到 .env 的
+    # davmail) —— 一并中和成 None (等同 applescript 模式), 保持 hermetic。
+    from src.cli.commands import llm as llm_cmd_mod
+    from src.services.llm_service import LlmService
+    monkeypatch.setattr(LlmService, "_maybe_davmail_backend", lambda self: None)
+    monkeypatch.setattr(llm_cmd_mod, "_maybe_create_davmail_backend", lambda cli: None)
+
 
 # ============================================================
 # US-003: llm run

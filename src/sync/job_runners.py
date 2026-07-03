@@ -241,7 +241,6 @@ def run_backfill_job(
     internal_ids = params.get("internal_ids")
 
     if job_type == "backfill_body":
-        from src.mail.applescript_arm import AppleScriptArm
         from src.mail.reader import EmailReader
 
         if internal_ids:
@@ -258,9 +257,10 @@ def run_backfill_job(
         bf._ensure_dead_table(db_path)
         units = bf._make_body_units(
             records,
-            arm=AppleScriptArm(
-                account_name=cfg.mail_account_name, inbox_name=cfg.mail_inbox_name,
-            ),
+            # E1 §3.1 Step 3: 走 deps.backend (factory 已 probe, 尊重
+            # MAILAGENT_BACKEND) 而非裸构造 AppleScriptArm — davmail 模式下后者
+            # 的 `whose id` 查询无法定位 davmail id 空间 (>=10^9) 的 internal_id。
+            arm=deps.backend,
             reader=EmailReader(),
             repo=deps.email_repo,
             notion_sync=deps.notion_sync,
@@ -282,6 +282,14 @@ def run_backfill_job(
             raise ServiceInvalidArgError(
                 f"backfill_metadata source must be notion|applescript, got {source!r}"
             )
+        if source == "applescript" and getattr(cfg, "mailagent_backend", "applescript") == "davmail":
+            raise ServiceInvalidArgError(
+                "backfill_metadata source=applescript unsupported when "
+                "MAILAGENT_BACKEND=davmail (AppleScript `whose id` 无法定位 davmail "
+                "id 空间 >=10^9 的 internal_id)",
+                hint="改用 source=notion (默认), 或临时切回 "
+                "MAILAGENT_BACKEND=applescript 跑完本次回填",
+            )
         if internal_ids:
             records = bf._hydrate_metadata_records(
                 [int(x) for x in internal_ids], sync_store,
@@ -302,11 +310,10 @@ def run_backfill_job(
             from notion_client import Client as NotionSyncClient
             notion_client = NotionSyncClient(auth=cfg.notion_token)
         else:
-            from src.mail.applescript_arm import AppleScriptArm
             from src.mail.reader import EmailReader
-            arm = AppleScriptArm(
-                account_name=cfg.mail_account_name, inbox_name=cfg.mail_inbox_name,
-            )
+            # 走到这里已确保 mailagent_backend != davmail (上面 guard 挡了),
+            # deps.backend 即等价的已 probe AppleScriptBackend 实例。
+            arm = deps.backend
             reader = EmailReader()
         units = bf._make_metadata_units(
             records,

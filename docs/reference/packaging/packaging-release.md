@@ -111,6 +111,33 @@ bash frontend/scripts/build-python-venv.sh arm64   # 重装 src/ 进嵌入式 py
 | `pnpm build:mac` 报 `BUILD_EXIT=0` 但其实失败 | `$?` 取的是管道末端 `tail` 的退出码，不是 pnpm。看日志里有无 `ELIFECYCLE Command failed`。 |
 | 启动后主界面卡进 onboarding 小窗 | 旧 bug，0.1.1 已修（`reloadToMain` 恢复窗口尺寸）。 |
 | Gatekeeper 拦"已损坏/无法验证" | 本地编译的 .app 无 quarantine；若被拦 `xattr -dr com.apple.quarantine /Applications/MailAgent.app`。 |
+| 启动弹「数据库校验失败」/ serve 日志 `数据库完整性校验失败` | SQLite 损坏被启动安全网拦下（有意 fail-fast，防坏库继续写）。按 §10 从 backups/ 恢复。 |
+
+## 10. 数据恢复（E0-WP2 启动安全网 + backups/ 回滚）
+
+**机制**（`src/mail/db_safety.py`，只在 `mailagent serve` 启动早期跑）：距上次备份 >24h 时对 `sync_store.db` / `agent_config.db` 各跑一次 `PRAGMA quick_check`；通过 → `VACUUM INTO` 滚动备份到 `<DATA_ROOT>/data/backups/`（每库保最近 3 份，文件名 `<stem>-YYYYMMDD-HHMMSS.db`；放 `data/` 下：dev 态 DATA_ROOT=仓库根，`data/` 已 gitignore）；失败 → 写 `data/db_integrity_failure.json` marker + serve 拒绝启动（Electron 读 marker 弹「数据库校验失败」框），**不做备份不轮转**（保住已有好备份）。实测 1.5 GB 库一轮 ~40s（quick_check ~24s + VACUUM ~13s），每天最多一次；3 份 sync_store 备份 ≈ 4.6 GB 磁盘（已知成本）。
+
+**已知边界**：`ai_chat.db`（前端 owned，chat 历史）与 `data/attachments/` 首期不在备份范围。
+
+**恢复步骤**（DATA_ROOT：打包 app = `~/Library/Application Support/mailagent-frontend/`；dev/PM2 = 仓库根）：
+
+```bash
+# 0) 先退出 MailAgent.app（或 pm2 stop mail-sync），确保没有进程持有 DB
+# 1) 看备份（按时间戳选最近一份）
+ls -lh "<DATA_ROOT>/data/backups/"
+# 2) 现场留底（把损坏库挪走，不要直接删）
+mv "<DATA_ROOT>/data/sync_store.db" "<DATA_ROOT>/data/sync_store.db.corrupt"
+rm -f "<DATA_ROOT>/data/sync_store.db-wal" "<DATA_ROOT>/data/sync_store.db-shm"   # 旧 WAL/SHM 属于坏库，必须一起挪/删
+# 3) 回滚备份（VACUUM INTO 产物是无 WAL 的完整单文件库）
+cp "<DATA_ROOT>/data/backups/sync_store-<时间戳>.db" "<DATA_ROOT>/data/sync_store.db"
+# 4) 验证恢复件完整
+sqlite3 "<DATA_ROOT>/data/sync_store.db" "PRAGMA quick_check"   # 期望输出: ok
+# 5) 清 marker（成功启动也会自动清，手动清可立即消除弹框）
+rm -f "<DATA_ROOT>/data/db_integrity_failure.json"
+# 6) 重启 App / pm2 start；备份时间点之后的邮件由 health_check / 增量同步自动补齐
+```
+
+`agent_config.db` 同理（stem 换成 `agent_config`）。备份是 24h 粒度快照：恢复后 Notion 侧/邮件侧多出的增量会被正常对账链路补回，AI 分类/报告等派生数据按需重跑。
 
 ---
 

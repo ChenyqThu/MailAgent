@@ -101,6 +101,116 @@ def test_set_flags_matches_golden(cli_env, seeded_db):
     assert "not_found" not in _flag_data_from_result(result)
 
 
+# ============================================================
+# flag — 「置旗复活已完成」不变量 (07-03 dogfood bug: 已完成邮件被单封
+# 重新置旗后留下 is_flagged=1 ∧ '已完成' 设计外组合 → 旗标 badge /
+# 旗标列表按 is_flagged 裸查多计一封, 行渲染又被 isDone 压制)
+# ============================================================
+
+
+def _set_processing_status(db_path, internal_id, status):
+    import sqlite3
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute(
+            "UPDATE email_metadata SET processing_status=? WHERE internal_id=?",
+            (status, internal_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _read_flag_row(db_path, internal_id):
+    import sqlite3
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        row = conn.execute(
+            "SELECT is_flagged, processing_status FROM email_metadata"
+            " WHERE internal_id=?",
+            (internal_id,),
+        ).fetchone()
+        return {"is_flagged": row[0], "processing_status": row[1]}
+    finally:
+        conn.close()
+
+
+def _notion_outbox_payloads(db_path, internal_id):
+    import json
+    import sqlite3
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        rows = conn.execute(
+            "SELECT payload_json FROM email_outbox"
+            " WHERE internal_id=? AND target='notion'",
+            (internal_id,),
+        ).fetchall()
+        return [json.loads(r[0]) for r in rows]
+    finally:
+        conn.close()
+
+
+def test_set_flags_reflag_completed_revives_status(cli_env, seeded_db):
+    """已完成邮件被重新置旗 → processing_status 联动回 '已同步'（本地镜像 + Notion payload 双面）。"""
+    from src.services.mail_write import MailWriteService
+
+    _set_processing_status(seeded_db, 12345, "已完成")
+    MailWriteService(_service_ctx(seeded_db)).set_flags(
+        [12345], is_flagged=True, actor=_cli_actor(), allow_concurrent=True
+    )
+    assert _read_flag_row(seeded_db, 12345) == {
+        "is_flagged": 1,
+        "processing_status": "已同步",
+    }
+    assert _notion_outbox_payloads(seeded_db, 12345) == [
+        {"is_flagged": True, "processing_status": "已同步"}
+    ]
+
+
+def test_set_flags_reflag_completed_respects_explicit_status(cli_env, seeded_db):
+    """调用方显式传 processing_status → 尊重其值, 不做联动。"""
+    from src.services.mail_write import MailWriteService
+
+    _set_processing_status(seeded_db, 12345, "已完成")
+    MailWriteService(_service_ctx(seeded_db)).set_flags(
+        [12345],
+        is_flagged=True,
+        processing_status="已完成",
+        actor=_cli_actor(),
+        allow_concurrent=True,
+    )
+    assert _read_flag_row(seeded_db, 12345)["processing_status"] == "已完成"
+
+
+def test_set_flags_unflag_completed_keeps_status(cli_env, seeded_db):
+    """摘旗方向不触发联动（已完成邮件摘旗仍保持已完成）。"""
+    from src.services.mail_write import MailWriteService
+
+    _set_processing_status(seeded_db, 12345, "已完成")
+    MailWriteService(_service_ctx(seeded_db)).set_flags(
+        [12345], is_flagged=False, actor=_cli_actor(), allow_concurrent=True
+    )
+    assert _read_flag_row(seeded_db, 12345)["processing_status"] == "已完成"
+
+
+def test_set_flags_reflag_normal_status_untouched(cli_env, seeded_db):
+    """非已完成（'已同步'）置旗 → 不动 processing_status、payload 不注入该键。"""
+    from src.services.mail_write import MailWriteService
+
+    _set_processing_status(seeded_db, 12345, "已同步")
+    MailWriteService(_service_ctx(seeded_db)).set_flags(
+        [12345], is_flagged=True, actor=_cli_actor(), allow_concurrent=True
+    )
+    assert _read_flag_row(seeded_db, 12345) == {
+        "is_flagged": 1,
+        "processing_status": "已同步",
+    }
+    assert _notion_outbox_payloads(seeded_db, 12345) == [{"is_flagged": True}]
+
+
 def test_set_flags_emits_flag_changed_sse(cli_env, seeded_db, monkeypatch):
     """#4 乐观回显: set_flags 写 SQLite 后立即发 email.flag_changed SSE → useEventBridge
     invalidate ['emails']/['mailboxes']/['email',id] → 所有视图(含智能信箱 [已旗标])从
@@ -761,6 +871,7 @@ def _patch_llm_runner(monkeypatch, run_returns):
     """Mock LLMRunner.__init__/run_for_internal_id/close (service.run function-level
     import 拿 monkeypatched 类)。"""
     from src.llm_agent import runner as runner_mod
+    from src.services.llm_service import LlmService
 
     async def fake_run(self, internal_id, *, dry_run=False, overwrite=True, force=False):
         return run_returns
@@ -774,6 +885,10 @@ def _patch_llm_runner(monkeypatch, run_returns):
     monkeypatch.setattr(runner_mod.LLMRunner, "__init__", safe_init)
     monkeypatch.setattr(runner_mod.LLMRunner, "run_for_internal_id", fake_run)
     monkeypatch.setattr(runner_mod.LLMRunner, "close", fake_close)
+    # E1 §3.1 Step 3: davmail 模式下 LlmService._maybe_davmail_backend 会在
+    # LLMRunner 构造前真连 IMAP probe (测试环境 MAILAGENT_BACKEND 落到 .env 的
+    # davmail) —— 中和成 None, 保持 hermetic。
+    monkeypatch.setattr(LlmService, "_maybe_davmail_backend", lambda self: None)
 
 
 def test_llm_run_matches_golden(cli_env, seeded_db, monkeypatch):

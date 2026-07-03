@@ -247,4 +247,12 @@ export interface AiGatewayConfig {
    *  part (renderer or island reject), and by resumeApprovalRun on an island reject. Idempotent /
    *  never throws. Omitted (island agent off) → no cross-surface reject tombstoning (inert). */
   rejectApproval?: (toolCallId: string) => void
+  /** Part B (dogfood live-refresh) — an island /decide server-side resume reached a TERMINAL state
+   *  (completed / rejected / error) for a persisted session. The lifecycle broadcasts it to renderer
+   *  windows ('chat:session-updated' IPC) so an OPEN chat panel showing the stale approval card can
+   *  reload the session's messages from ai_chat.db instead of waiting for a manual session switch.
+   *  NOT called on 'repaused' (a fresh island card owns the next hop — the panel still shows a live
+   *  approval) nor 'not_found' (nothing ran). Fire-and-forget (server.ts wraps it in try/catch);
+   *  omitted (island agent off) → inert, byte-identical. */
+  onServerResumeSettled?: (sessionId: number, status: 'completed' | 'rejected' | 'error') => void
 }

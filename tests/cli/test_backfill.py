@@ -40,17 +40,15 @@ def _invoke(cli_runner, *args, db_path):
 # ---------------------------------------------------------------------------
 
 def _make_arm_mock(fetch_result: dict | None = None):
-    """Mock cli.backend (factory 路由): backend.arm.fetch_email_content_by_id → fetch_result.
+    """Mock cli.backend (factory 路由): backend.fetch_email_content_by_id → fetch_result.
 
-    backfill body 走 ``cli.backend.arm`` (尊重 MAILAGENT_BACKEND), 测试 patch
+    backfill body 走 ``cli.backend`` (尊重 MAILAGENT_BACKEND), 测试 patch
     ``src.mail.backend.factory.create_backend`` 返回这个 backend mock — 保持
     hermetic, 不碰磁盘 .env 选中的真实 backend (davmail 会真连 IMAP).
     """
-    arm = MagicMock()
-    arm.fetch_email_content_by_id.return_value = fetch_result
     backend_mock = MagicMock()
-    backend_mock.arm = arm
-    return backend_mock, arm
+    backend_mock.fetch_email_content_by_id.return_value = fetch_result
+    return backend_mock, backend_mock
 
 
 def _make_reader_mock(email_obj=None):

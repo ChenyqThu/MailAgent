@@ -92,6 +92,7 @@ function islandCfg(opts: {
   stash: ApprovalRunStash
   domainCalls: unknown[]
   resolved?: (tc: string) => boolean
+  onServerResumeSettled?: AiGatewayConfig['onServerResumeSettled']
 }): AiGatewayConfig {
   const { guard, stash, domainCalls } = opts
   const domain = spyDomain(domainCalls)
@@ -112,7 +113,8 @@ function islandCfg(opts: {
     approvalStash: stash,
     isApprovalResolved: opts.resolved,
     // the real guard is the tombstone target for an island reject (finding 1)
-    rejectApproval: (tc: string) => guard.reject(tc)
+    rejectApproval: (tc: string) => guard.reject(tc),
+    onServerResumeSettled: opts.onServerResumeSettled
   }
 }
 
@@ -324,6 +326,115 @@ describe('/api/ai/approval/decide — contextMode freeze (untrusted_trigger resu
   })
 })
 
+// Part B (dogfood live-refresh) — /decide notifies cfg.onServerResumeSettled on a TERMINAL settle
+// (completed / rejected / error) so the lifecycle can broadcast 'chat:session-updated' to an open
+// panel. NOT on repaused (asserted in the chained-hop test below) nor not_found; unwired hook → the
+// resume still settles (no crash).
+describe('/api/ai/approval/decide — onServerResumeSettled (panel live-refresh)', () => {
+  test('approve → completed → hook fires with (sessionId, completed)', async () => {
+    const guard = new ApprovalGuard()
+    const stash = new ApprovalRunStash()
+    const settled: Array<{ sessionId: number; status: string }> = []
+    const h = await start(
+      islandCfg({
+        guard,
+        stash,
+        domainCalls: [],
+        onServerResumeSettled: (sessionId, status) => settled.push({ sessionId, status })
+      })
+    )
+    const token = seedPausedApproval(guard, stash)
+    const res = await decide(h.port, { toolCallId: TC, decision: 'approve', resumeToken: token })
+    expect(res.status).toBe(200)
+    expect(settled).toEqual([{ sessionId: 1, status: 'completed' }])
+  })
+
+  test('reject → rejected → hook fires with (sessionId, rejected)', async () => {
+    const guard = new ApprovalGuard()
+    const stash = new ApprovalRunStash()
+    const settled: Array<{ sessionId: number; status: string }> = []
+    const h = await start(
+      islandCfg({
+        guard,
+        stash,
+        domainCalls: [],
+        onServerResumeSettled: (sessionId, status) => settled.push({ sessionId, status })
+      })
+    )
+    const token = seedPausedApproval(guard, stash)
+    const res = await decide(h.port, { toolCallId: TC, decision: 'reject', resumeToken: token })
+    expect(res.status).toBe(200)
+    expect(settled).toEqual([{ sessionId: 1, status: 'rejected' }])
+  })
+
+  test('error (no approval part in the stashed message) → hook fires with (sessionId, error)', async () => {
+    const guard = new ApprovalGuard()
+    const stash = new ApprovalRunStash()
+    const settled: Array<{ sessionId: number; status: string }> = []
+    const h = await start(
+      islandCfg({
+        guard,
+        stash,
+        domainCalls: [],
+        onServerResumeSettled: (sessionId, status) => settled.push({ sessionId, status })
+      })
+    )
+    guard.register(TC, 'email_draft_reply', 'edit', DRAFT_INPUT, ['body_markdown'])
+    // a stashed responseMessage WITHOUT the approval-requested part → applyApprovalResponseToMessages
+    // applied=false → status 'error' (with the entry's sessionId).
+    const token = stash.stash({
+      toolCallId: TC,
+      approvalId: AP,
+      toolName: 'email_draft_reply',
+      sessionId: 7,
+      body: { messages: [USER], model: 'claude-sonnet-4-6', sessionId: 7 },
+      responseMessage: {
+        id: 'a-broken',
+        role: 'assistant',
+        parts: [{ type: 'text', text: 'x' }]
+      } as unknown as MailAgentUIMessage
+    })
+    const res = await decide(h.port, { toolCallId: TC, decision: 'approve', resumeToken: token })
+    expect(res.status).toBe(200)
+    expect((await res.json()).status).toBe('error')
+    expect(settled).toEqual([{ sessionId: 7, status: 'error' }])
+  })
+
+  test('not_found → hook NOT called', async () => {
+    const guard = new ApprovalGuard()
+    const stash = new ApprovalRunStash()
+    const settled: Array<{ sessionId: number; status: string }> = []
+    const h = await start(
+      islandCfg({
+        guard,
+        stash,
+        domainCalls: [],
+        onServerResumeSettled: (sessionId, status) => settled.push({ sessionId, status })
+      })
+    )
+    const res = await decide(h.port, {
+      toolCallId: 'nope',
+      decision: 'approve',
+      resumeToken: 'bad'
+    })
+    expect(res.status).toBe(404)
+    expect(settled).toEqual([])
+  })
+
+  test('hook unwired → the resume still settles (no crash)', async () => {
+    const guard = new ApprovalGuard()
+    const stash = new ApprovalRunStash()
+    const domainCalls: unknown[] = []
+    // islandCfg without onServerResumeSettled → cfg hook undefined → server.ts ?. short-circuits.
+    const h = await start(islandCfg({ guard, stash, domainCalls }))
+    const token = seedPausedApproval(guard, stash)
+    const res = await decide(h.port, { toolCallId: TC, decision: 'approve', resumeToken: token })
+    expect(res.status).toBe(200)
+    expect((await res.json()).status).toBe('completed')
+    expect(domainCalls).toHaveLength(1)
+  })
+})
+
 // HIGH-1 (rebase 复审, architect + codex 第 3 轮同根因) — chained two-hop island approvals.
 // hop-1 /decide(A approve) re-pauses on approval B: the re-stash's body = run.originalBody, whose
 // messages ALREADY end with the hop-1 merged assistant (same UIMessage id as the re-stashed
@@ -362,6 +473,7 @@ describe('/api/ai/approval/decide — chained two-hop approvals (repause)', () =
     const announced: IslandApprovalAnnounce[] = []
     const persisted: unknown[] = []
     const prompts: unknown[] = []
+    const settled: Array<{ sessionId: number; status: string }> = []
 
     // Stateful model: hop-1 resume (A's result folded in) → request tool B (SDK pauses at approval
     // B via needsApproval → guard.register(TC_B) fires for real); hop-2 resume → closing text.
@@ -428,6 +540,10 @@ describe('/api/ai/approval/decide — chained two-hop approvals (repause)', () =
       // repause re-stash + re-announce live behind it (matches the production lifecycle).
       persistTurn: (t) => {
         persisted.push(t)
+      },
+      // live-refresh hook — hop-1 repause must NOT settle the panel (a fresh approval card is live).
+      onServerResumeSettled: (sessionId, status) => {
+        settled.push({ sessionId, status })
       }
     }
     const h = await start(cfg)
@@ -443,6 +559,7 @@ describe('/api/ai/approval/decide — chained two-hop approvals (repause)', () =
     expect(announced).toHaveLength(1)
     expect(announced[0].toolCallId).toBe(TC_B)
     expect(persisted).toHaveLength(0) // repaused turn is not a complete turn — nothing persisted yet
+    expect(settled).toEqual([]) // repaused is NOT terminal — the panel keeps its live approval card
 
     // hop-2: island approves B with the re-announced token.
     const res2 = await decide(h.port, {
@@ -457,6 +574,7 @@ describe('/api/ai/approval/decide — chained two-hop approvals (repause)', () =
     expect(domainCalls).toHaveLength(2)
     expect((domainCalls[1] as { internalId: number }).internalId).toBe(6)
     expect(persisted).toHaveLength(1) // the completed hop-2 turn persisted exactly once
+    expect(settled).toEqual([{ sessionId: 1, status: 'completed' }]) // only the terminal hop settles
 
     // HIGH-1 regression pin: the hop-2 model prompt carries each tool call EXACTLY once. Before the
     // history id-dedup, the duplicated assistant (same UIMessage id twice) emitted tool-call A twice.

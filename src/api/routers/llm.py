@@ -1,12 +1,13 @@
 """llm 路由 — /api/llm/*。
 
-run (写, in-process LlmService) / stats (读, 直查 llm_processing) / selftest (读, subprocess)。
+run (写, in-process LlmService) / stats (读, 直查 llm_processing) / selftest (读, in-process LlmService)。
 契约: llm-run.schema.json + llm-stats.schema.json + frontend llm.{run,stats}。
 
 读端点 (stats) 经 ``Depends(get_repository)`` 拿 EmailRepository, 复用其 _connect()
 直查 llm_processing 表 (镜像 src/cli/commands/llm.py llm_stats 的 SQL), meta.source='sqlite'。
-写端点 (run) A3 起经进程内 ``LlmService`` (asyncio.to_thread, 不再 fork CLI), meta.source='cli';
-selftest (读, 不烧 token) 仍经 cli_runner.run_cli。
+写端点 (run) A3 起、selftest (读, 不烧 token) E2-C 起均经进程内 ``LlmService`` (不再 fork
+CLI), meta.source='cli'（历史沿用命名, 语义是「CLI 等价写/读语义」而非字面传输方式,
+参见同目录其他已迁移端点）。
 
 统一响应走 app.success_envelope / app.APIError (与 email/attachment router 一致;
 app.py 已把 router import 下沉到 helper 定义之后, 无循环导入)。
@@ -15,7 +16,6 @@ app.py 已把 router import 下沉到 helper 定义之后, 无循环导入)。
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import time
 from pathlib import Path
@@ -26,7 +26,6 @@ from fastapi import APIRouter, Depends, Query, Request
 
 from src.api.app import APIError, success_envelope
 from src.api.auth import verify_cf_access
-from src.api.cli_runner import CliRunnerError, run_cli
 from src.api.deps import get_repository, get_service_ctx, get_settings
 from src.services.errors import ServiceError
 from src.services.guards import Actor
@@ -245,17 +244,8 @@ def _zero_cost() -> dict:
     }
 
 
-def _raise_from_cli_error(exc: CliRunnerError) -> None:
-    """CliRunnerError → APIError (全局 handler 据 code 映 HTTP)。
-
-    优先用 CLI 自报的 ``error.code`` (exc.code); http_status 缺省由
-    ERROR_CODE_TO_HTTP[code] 推导。exc.stdout/stderr 不回显客户端 (仅 runner 留底)。
-    """
-    raise APIError(exc.code, exc.message, hint=exc.hint, source="cli") from exc
-
-
 def _raise_from_service_error(exc: ServiceError) -> None:
-    """in-process service 抛的 ServiceError → APIError (与 _raise_from_cli_error 对称)。
+    """in-process service 抛的 ServiceError → APIError (email/admin router 同名 helper 同构)。
 
     code 用 service 自报的 ``ServiceError.code`` (E_LLM_FAILED / E_NOT_FOUND / ...),
     http_status 由 app.ERROR_CODE_TO_HTTP[code] 推导。``source='cli'`` 维持既有 wire 契约。
@@ -409,59 +399,25 @@ async def llm_run(
 
 
 # ============================================================
-# GET /api/llm/selftest  (读, subprocess — 不烧 token)
+# GET /api/llm/selftest  (读, in-process LlmService — 不烧 token)
 # ============================================================
 @router.get("/selftest")
 async def llm_selftest(
     request: Request,
     _: None = Depends(verify_cf_access),
 ):
-    """LLM gateway 健康检查 (镜像 ``mailagent llm selftest``)。
+    """LLM gateway 健康检查 (镜像 ``mailagent llm selftest``, E2-C 起进程内直调不再 fork CLI)。
 
     仅检 cfg (LLM_API_KEY/BASE/MODEL 非空 + fallback chain), **不烧 token, 不写 Notion**。
-    read 端点 → 不注入 api_key (selftest 是无 auth 读命令)。
+    read 端点 → 不注入 api_key (selftest 是无 auth 读命令)。纯配置字段读取零 I/O, 不需要
+    ``asyncio.to_thread`` (与真做 LLM API 调用、会阻塞的 ``/run`` 端点不同)。
 
     data 透传 CLI 的 llm-selftest.schema.json 形状
     {healthy, api_base, primary_model, fallback_chain, llm_agent_enabled, reasons}
-    (LlmSelfTestData; 前端只读其中 {healthy, detail?, latency_ms?} 子集)。
-
-    **gotcha**: CLI 在 unhealthy 时 ``emit(data)`` 后 ``raise typer.Exit(1)`` —— 即
-    stdout 携带 *合法* success wrapper, 但进程 exit 1。run_cli 据 exit≠0 抛
-    CliRunnerError, 把 wrapper 留在 ``exc.stdout``。healthy:false 是合法诊断结果
-    (与 ``admin health`` 返回 200 + healthy:false 同理), **不是** error —— 故捕获
-    exit-1 后从 stdout 还原 data 照常 200 返回。任何 *无法* 还原出 wrapper 的失败
-    (真崩 / 缺 bin / 超时) 才走 error 路径。
+    (LlmSelfTestData; 前端只读其中 {healthy, detail?, latency_ms?} 子集)。healthy:false
+    是合法诊断结果 (与 ``admin health`` 返回 200 + healthy:false 同理), **不是** error,
+    故恒 200 直接透传 —— 迁移前 CLI 侧 exit-1/stdout 还原的 hack 随 fork 一并退役
+    (service 层没有进程退出码这个概念)。
     """
-    try:
-        result = await run_cli(["llm", "selftest"])
-        return success_envelope(result.data, request=request, source="cli")
-    except CliRunnerError as exc:
-        recovered = _recover_selftest_data(exc)
-        if recovered is not None:
-            return success_envelope(recovered, request=request, source="cli")
-        _raise_from_cli_error(exc)
-
-
-def _recover_selftest_data(exc: CliRunnerError) -> Optional[dict]:
-    """从 ``llm selftest`` exit-1 的 stdout 还原 success wrapper 的 data。
-
-    CLI unhealthy 路径: ``emit(cli, data)`` (success wrapper → stdout) 后
-    ``raise typer.Exit(1)``。该 wrapper status=='success' 且含 ``healthy`` 字段 →
-    还原其 ``data`` 当正常诊断结果返回。非该形状 (真错误 wrapper / 空 stdout) → None
-    (让 caller 走 error)。
-    """
-    for buf in (exc.stdout, exc.stderr):
-        if not buf or not buf.strip():
-            continue
-        try:
-            wrapper = json.loads(buf.strip())
-        except (json.JSONDecodeError, ValueError):
-            continue
-        if (
-            isinstance(wrapper, dict)
-            and wrapper.get("status") == "success"
-            and isinstance(wrapper.get("data"), dict)
-            and "healthy" in wrapper["data"]
-        ):
-            return wrapper["data"]
-    return None
+    data = LlmService(get_service_ctx()).selftest()
+    return success_envelope(data, request=request, source="cli")

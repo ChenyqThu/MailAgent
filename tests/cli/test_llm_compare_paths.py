@@ -144,7 +144,12 @@ class TestLLMComparePaths:
             "source": "Subject: test\n\n<p>body html</p>",
             "message_id": "<msg-12345@example.com>",
         }
-        monkeypatch.setattr(llm_cmd, "AppleScriptArm", MagicMock(return_value=fake_arm))
+        # E1 §3.1 Step 3: compare-paths 现在走 cli.backend (factory), 不再裸构造
+        # AppleScriptArm — patch create_backend 保持 hermetic (同 test_backfill.py)。
+        monkeypatch.setattr(
+            "src.mail.backend.factory.create_backend",
+            MagicMock(return_value=fake_arm),
+        )
 
         fake_reader = MagicMock()
 
@@ -203,7 +208,9 @@ class TestLLMComparePaths:
             return results[internal_id]
 
         monkeypatch.setattr(llm_cmd, "_ensure_compare_deps", lambda: None)
-        monkeypatch.setattr(llm_cmd, "AppleScriptArm", MagicMock())
+        # E1 §3.1 Step 3: compare-paths 现在走 cli.backend (factory), 不再裸构造
+        # AppleScriptArm — patch create_backend 保持 hermetic (同 test_backfill.py)。
+        monkeypatch.setattr("src.mail.backend.factory.create_backend", MagicMock())
         monkeypatch.setattr(llm_cmd, "EmailReader", MagicMock())
         monkeypatch.setattr(llm_cmd, "AttachmentStore", MagicMock())
         monkeypatch.setattr(llm_cmd, "EmailRepository", MagicMock())

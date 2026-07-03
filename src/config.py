@@ -117,7 +117,6 @@ class Config(BaseSettings):
     sync_date_mode: str = Field(default="relative", env="SYNC_DATE_MODE", description="日期模式: fixed / relative")
     sync_start_date: str = Field(default="2026-01-01", env="SYNC_START_DATE", description="fixed模式: 只同步此日期之后的邮件")
     sync_lookback_days: int = Field(default=14, env="SYNC_LOOKBACK_DAYS", description="relative模式: 只同步最近N天的邮件")
-    health_check_interval: int = Field(default=3600, env="HEALTH_CHECK_INTERVAL", description="健康检查间隔(秒)")
     sync_store_db_path: str = Field(default_factory=lambda: _under_data_root("data/sync_store.db"), env="SYNC_STORE_DB_PATH", description="同步状态存储SQLite数据库路径（DATA_ROOT/data/ 下，与 attachments 同级）")
 
     # 周期会议滚动展开配置
@@ -521,17 +520,11 @@ class Config(BaseSettings):
 
     # =========================================================================
     # Sprint 15: SQLite SSoT inversion (email_outbox + FanoutWorker)
-    # 详见 SPRINT15-HANDOFF.md §3 + .claude/plans/ultrathink-sprint-15-handoff*.md
+    # E2-B (2026-07): outbox 灰度永久化 —— FanoutWorker 恒启用, 总开关
+    # MAILAGENT_OUTBOX_ENABLED 退役 (model_config extra='ignore' 使 .env 残留键
+    # 无害)。灰度依据: serve-api 写面 (mail_write.set_flags) 从来恒入队不受门控,
+    # off 安装态下条目无人消费 = 半坏; 详 e2-subtraction-sprint.md §3。
     # =========================================================================
-    mailagent_outbox_enabled: bool = Field(
-        default=False, env="MAILAGENT_OUTBOX_ENABLED",
-        description=(
-            "是否启用 email_outbox + FanoutWorker 异步派发 (Sprint 15 SSoT inversion)。"
-            "默认 false 灰度期 —— 关闭时 reverse handler 走老 AppleScript 直调路径。"
-            "切 true: 前端 `mailagent email flag` / 反向 webhook → outbox → fanout "
-            "异步派发到 Mail.app + Notion. 灰度切换详 SPRINT15-HANDOFF.md §3.5。"
-        ),
-    )
     mailagent_outbox_poll_interval_sec: int = Field(
         default=5, env="MAILAGENT_OUTBOX_POLL_INTERVAL_SEC",
         description="FanoutWorker 主循环 poll 间隔（秒），默认 5。",
@@ -597,6 +590,13 @@ class Config(BaseSettings):
     island_theme: str = Field(
         default="dark", env="ISLAND_THEME",
         description="灵动岛 light/dark mode（envelope metadata 透传，Swift 端按此切 token）",
+    )
+    island_mail_notify_scope: str = Field(
+        default="important", env="ISLAND_MAIL_NOTIFY_SCOPE",
+        description="邮件通知上岛范围。important（默认）= 仅 AI 判定重要及以上级别弹卡："
+                    "MailReceived 一律静默（该时点无 priority），LLMReviewed(Urgent) 仅"
+                    "🔴 紧急 / 🟡 重要发。all = 每封新邮件 + 全部 LLM 结果都弹（旧行为回退开关）。"
+                    "非邮件卡（日历 / DeadLetter / agent 审批等）不受影响。",
     )
     # ---- 灵动岛 harness agent 上岛（Part B，默认关，完全离岛 gateway 服务端 resume）----
     # 🔴 字段名 island_agent_enabled ≠ env MAILAGENT_ISLAND_AGENT_ENABLED → 必须 validation_alias
@@ -665,7 +665,7 @@ class Config(BaseSettings):
             "跨切换复用会让 get_new_emails 发 `UID {外来marker+1}:*` → 要么静默跳过整段未取"
             "区间 (丢数据) 要么超时重刷巨量 (卡死)。on (默认): 启动时若当前 backend 与写下 "
             "marker 的 backend 不符 → 把 marker 重 baseline 到当前 backend 的 max (等同 "
-            "first-run，只向前不回捞；历史 gap 由 health_check / backfill 兜)；本 guard 首次"
+            "first-run，只向前不回捞；历史 gap 由 backfill 兜)；本 guard 首次"
             "部署遇既有 marker = 认领不重置 (不扰动存量稳态用户)。off = 回退旧行为 (跨切换"
             "直接复用 marker，即 #34 的 bug)。仅启动时判定一次。"
         ),

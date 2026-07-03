@@ -1,8 +1,7 @@
 """email 路由 — /api/email/*。
 
-读端点经 EmailRepository (Depends(get_repository))，写端点经 cli_runner subprocess。
-契约: BACKEND-INTERFACES §2.4 + email-*.schema.json (list/get/body/search/resync/
-update-flag)。
+读端点经 EmailRepository (Depends(get_repository))，写端点经进程内 MailWriteService。
+契约: BACKEND-INTERFACES §2.4 + email-*.schema.json (list/get/body/search/resync)。
 
 本 router 端点:
   GET  /api/email/list                  — repo.list_metadata        (EmailMeta[])
@@ -14,7 +13,6 @@ update-flag)。
   POST /api/email/draft                 — service MailWriteService.compose_draft (DraftResult)
   POST /api/email/send                  — service MailWriteService.send (SendResult)
   POST /api/email/{internal_id}/resync  — service MailWriteService.resync (ResyncResult|plan)
-  POST /api/email/{internal_id}/update-flag — CLI `notion update-flag` (legacy notion.updateFlag)
   POST /api/email/{internal_id}/flag    — service MailWriteService.set_flags (Sprint 15 outbox SSoT)
   POST /api/email/{internal_id}/archive — service MailWriteService.archive (davmail-only)
   POST /api/email/{internal_id}/draft-plan — service MailWriteService.compose_plan (DraftPlanResult)
@@ -28,13 +26,17 @@ update-flag)。
     ``_meta_to_dict`` / ``_body_summary`` / ``_attachment_to_dict`` /
     ``_meta_record_to_list_item`` helper, 让 cli.gen.ts 校验不变。
   - 统一响应走 app.success_envelope / app.APIError (全局 handler 转 envelope error +
-    正确 HTTP)。meta.source='sqlite' (repo 直查) / 'cli' (in-process service 或 subprocess)。
-  - flag / resync (A2) + archive / pin (A3) + compose draft/send/draft-plan (A4) 写端点走
+    正确 HTTP)。meta.source='sqlite' (repo 直查) / 'cli' (in-process service, 历史沿用
+    命名 — 语义是「CLI 等价写语义」而非字面传输方式)。
+  - flag / resync (A2) + archive / pin (A3) + compose draft/send/draft-plan (A4) 写端点均走
     进程内 MailWriteService (不再 fork CLI)。flag/resync 恒 allow_concurrent (mail-sync 生产
     在线 → pm2 检测会拒); archive/pin/compose 不做 pm2 检测; send 端点恒 confirmed=True (前端
-    已弹 SendConfirmDialog)。仅剩 legacy notion update-flag 仍经 cli_runner.run_cli。
-  - notion update-flag (仍 fork) 用 **tri-bool 字符串形** ``--is-read true/false`` + **不做**
-    pm2 检测 (不带 --allow-concurrent), 与 email flag 路径区别 (实现规格 gotcha #6/#7)。
+    已弹 SendConfirmDialog)。
+  - E2-C: legacy ``POST /update-flag`` (直写 Notion 页, 无 outbox) 已随 serve-api 内部
+    fork-CLI 转发层整体退役一并删除 —— 前端早改道 outbox ``/flag`` 端点, 此 HTTP
+    wrapper 无活跃消费者 (BASE-1 残留清理)。CLI 命令本体 ``mailagent notion
+    update-flag`` 不受影响、不改动 (仍被灵动岛 src/notify/island_response.py 复用,
+    走独立 fork 血统, 与本文件写端点无关)。
 """
 
 from __future__ import annotations
@@ -47,7 +49,6 @@ from fastapi import APIRouter, Depends, Query, Request
 
 from src.api.app import APIError, success_envelope
 from src.api.auth import verify_cf_access
-from src.api.cli_runner import CliRunnerError, get_cli_api_key, run_cli
 from src.api.deps import get_repository, get_service_ctx
 from src.services import wire
 from src.services.errors import ServiceError
@@ -137,30 +138,16 @@ def _count_fts_indexed(repo: "EmailRepository") -> int:
 
 
 # ---------------------------------------------------------------------------
-# CLI 错误 → APIError 桥接 (写端点共用)
+# service 错误 → APIError 桥接 (写端点共用)
 # ---------------------------------------------------------------------------
-
-
-def _raise_from_cli_error(exc: CliRunnerError) -> None:
-    """把 CliRunnerError 转成 APIError (全局 handler 据 code 映 HTTP)。
-
-    code 优先用 CLI 自报的 ``error.code`` (run_cli 已解析), http_status 由
-    app.ERROR_CODE_TO_HTTP[code] 推导。raw stdout/stderr 不回显 (仅 message/hint)。
-    """
-    raise APIError(
-        exc.code,
-        exc.message,
-        hint=exc.hint,
-        source="cli",
-    ) from exc
 
 
 def _raise_from_service_error(exc: ServiceError) -> None:
     """把 in-process service 抛的 ServiceError 转成 APIError (全局 handler 据 code 映 HTTP)。
 
-    与 ``_raise_from_cli_error`` 对称 (后者处理 fork CLI 的 CliRunnerError)。code 用
-    service 自报的 ``ServiceError.code`` (E_NOT_FOUND / E_PM2_RUNNING / ...), http_status
-    由 app.ERROR_CODE_TO_HTTP[code] 推导。``source='cli'`` 维持既有 wire 契约 (meta.source)。
+    code 用 service 自报的 ``ServiceError.code`` (E_NOT_FOUND / E_PM2_RUNNING / ...),
+    http_status 由 app.ERROR_CODE_TO_HTTP[code] 推导。``source='cli'`` 维持既有 wire 契约
+    (meta.source, 语义是「CLI 等价写语义」而非字面传输方式)。
     """
     raise APIError(exc.code, exc.message, hint=exc.hint, source="cli") from exc
 
@@ -574,91 +561,6 @@ async def resync_email(
         _raise_from_service_error(exc)
 
     return success_envelope(data, request=request, source="cli")
-
-
-# ===========================================================================
-# POST /api/email/{internal_id}/update-flag — CLI `notion update-flag`
-# (legacy notion.updateFlag — 直写 Notion 页, 无 outbox; Sprint15 灰度期并存)
-# ===========================================================================
-
-
-def _tri_bool_str(value: Any) -> Optional[str]:
-    """把任意可空 bool/字符串归一成 CLI tri-bool 字符串 'true'/'false' (或 None)。
-
-    notion update-flag 用字符串形 ``--is-read true`` (与 email flag 的 slash 形不同)。
-    None / 缺省 → None (该字段不传 → CLI 不改)。
-    """
-    if value is None:
-        return None
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    v = str(value).strip().lower()
-    if v in ("true", "1", "yes"):
-        return "true"
-    if v in ("false", "0", "no"):
-        return "false"
-    raise APIError(
-        "E_INVALID_ARG",
-        f"expected boolean for flag, got {value!r}",
-        source="cli",
-    )
-
-
-@router.post("/{internal_id:int}/update-flag", dependencies=[Depends(verify_cf_access)])
-async def update_flag(
-    request: Request,
-    internal_id: int,
-    body: Optional[dict[str, Any]] = None,
-):
-    """直写 Notion 邮件页 Is Read / Is Flagged / Processing Status (CLI `notion update-flag`)。
-
-    DEPRECATED (Phase C): 此 HTTP wrapper 前端已 D1 改道 outbox ``email:flag`` 端点,
-    无活跃前端消费者; 保留仅为兼容, 计入 BASE-1 残留。CLI 命令本体不动 (仍被灵动岛
-    src/notify/island_response.py fork)。详见
-    docs/reference/architecture/davmail-write-path-trace.md §4。
-
-    legacy notion.updateFlag 契约 (UpdateFlagOpts): {isRead, isFlagged,
-    processingStatus, dryRun}。tri-bool 用字符串形 ``--is-read true/false``。
-    data = notion-update-flag.schema.json {internal_id, page_id,
-    updated_properties, dry_run}。404 当无 notion_page_id。
-    此命令**不做** pm2 检测 → 不带 --allow-concurrent。
-    """
-    opts = body or {}
-    dry_run = bool(opts.get("dryRun"))
-
-    is_read = _tri_bool_str(opts.get("isRead"))
-    is_flagged = _tri_bool_str(opts.get("isFlagged"))
-    processing_status = opts.get("processingStatus")
-
-    if is_read is None and is_flagged is None and processing_status is None:
-        raise APIError(
-            "E_INVALID_ARG",
-            "at least one of isRead / isFlagged / processingStatus required",
-            source="cli",
-        )
-
-    args: list[str] = ["notion", "update-flag", str(internal_id)]
-    if is_read is not None:
-        args += ["--is-read", is_read]
-    if is_flagged is not None:
-        args += ["--is-flagged", is_flagged]
-    if processing_status is not None:
-        args += ["--processing-status", str(processing_status)]
-    if dry_run:
-        args.append("--dry-run")
-
-    api_key = None if dry_run else get_cli_api_key()
-    try:
-        result = await run_cli(args, api_key=api_key)
-    except CliRunnerError as exc:
-        _raise_from_cli_error(exc)
-
-    return success_envelope(
-        result.data,
-        request=request,
-        source="cli",
-        meta_extra=result.meta or None,
-    )
 
 
 # ===========================================================================

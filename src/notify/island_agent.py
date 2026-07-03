@@ -22,9 +22,12 @@ gateway **服务端 resume**，用户**完全离开 app** 也能执行。
 
 from __future__ import annotations
 
-import logging
 import os
 from typing import Dict, Optional
+
+# serve-api 进程无 stdlib logging root handler (uvicorn.run log_config=None)，
+# stdlib INFO/DEBUG 会被 lastResort(WARNING+) 吞掉 → 与主链路一致走 loguru。
+from loguru import logger
 
 from src.notify import island_ack, island_i18n, ping_island
 from src.notify.island_envelope import (
@@ -32,8 +35,6 @@ from src.notify.island_envelope import (
     Intervention,
     InterventionOption,
 )
-
-log = logging.getLogger(__name__)
 
 # 岛上 agent 审批 TTL（比 mail 5min 长 —— HITL 场景用户可能离开一会才回来点）。
 # 🔴 必须与 gateway ApprovalGuard TTL 同步（ai_gateway_lifecycle 在 island agent 开时把
@@ -237,16 +238,16 @@ async def announce_approval(
             ttl_sec=ttl_sec,
         )
     except Exception as e:  # noqa: BLE001
-        log.warning("[island-agent] ack register raised: %s", e)
+        logger.warning(f"[island-agent] ack register raised: {e}")
         ack_token = None
 
     # 🔴 codex Fix 4：无 ack_token（register 落库失败）→ 岛上点批准 /ack 必 404、且连追发
     # AgentError 的 session 元数据都没有 = 「可点却不可 resolve」的死卡。**不发这张卡**：renderer
     # 在场仍可 app 内批准（审批 pending 不依赖岛）；完全离岛则本轮无岛上审批（安全降级，胜过死卡）。
     if not ack_token:
-        log.warning(
-            "[island-agent] ack register failed — skip approval card (avoid unresumable card) "
-            "session_id=%s toolCallId=%s", session_id, tool_call_id,
+        logger.warning(
+            f"[island-agent] ack register failed — skip approval card (avoid unresumable card) "
+            f"session_id={session_id} toolCallId={tool_call_id}"
         )
         return None
 
@@ -279,13 +280,17 @@ async def _send(envelope: BridgeEnvelope, sock_path: Optional[str]) -> None:
     """fail-open 发送（ping-island 未装/未跑 → SendResult ok=False，静默）。"""
     try:
         result = await ping_island.send_async(envelope, sock_path=sock_path)
-        if not result.ok:
-            log.debug(
-                "[island-agent] send %s failed (fail-open): %s",
-                envelope.event_type, result.error,
+        if result.ok:
+            # agent 事件低频（审批/终态各一条），成功也留痕 —— 排查「岛卡没出现」时
+            # 能区分「没发」和「发了没显示」。
+            logger.info(f"[island-agent] send {envelope.event_type} ok "
+                        f"session_key={envelope.session_key}")
+        else:
+            logger.debug(
+                f"[island-agent] send {envelope.event_type} failed (fail-open): {result.error}"
             )
     except Exception as e:  # noqa: BLE001
-        log.debug("[island-agent] send %s raised (fail-open): %s", envelope.event_type, e)
+        logger.debug(f"[island-agent] send {envelope.event_type} raised (fail-open): {e}")
 
 
 def _one_line(text: str, max_len: int = 200) -> str:

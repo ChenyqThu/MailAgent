@@ -164,7 +164,9 @@ async def run_report_once(
             draft = await agentic_fn(
                 briefs=briefs, counts=counts, db_path=db_path,
                 kos_enabled=kos_is_available(), cadence=cadence, now=now,
-                persona_prompt=agent.get("prompt"), model=agent.get("model"), client=client,
+                persona_prompt=agent.get("prompt"), model=agent.get("model"),
+                context_docs=_parse_context_docs(agent.get("context_docs_json")),
+                client=client,
             )
             doc = assemble_report_doc(
                 draft=draft, briefs=briefs, counts=counts, agent_id=agent["id"],
@@ -210,6 +212,21 @@ def _zone(agent: Dict[str, Any]) -> Optional[ZoneInfo]:
     except Exception as e:  # noqa: BLE001 — 非法时区名退回本地
         logger.warning(f"[report] bad timezone {tz!r} ({e}); using local")
         return None
+
+
+def _parse_context_docs(raw: Any) -> Optional[List[str]]:
+    """agent.context_docs_json（JSON 数组字符串）→ list[str]。
+    NULL / 缺失 / 非法 → None（运行时用默认文档集 soul+user）；'[]' 保留为 []（用户
+    显式取消全部 = 不注入）。语义对齐 get_preprocess_config / wire.resolve_agent。"""
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if isinstance(parsed, list):
+        return [str(x) for x in parsed]
+    return None
 
 
 _DEFAULT_BODY_PRIORITIES = ["🔴 紧急", "🟡 重要"]
@@ -322,6 +339,7 @@ async def _run_aggregate(
             draft = await aggregate_fn(
                 sub_reports=subs, cadence=cadence, now=gen_now,
                 persona_prompt=agent.get("prompt"), model=agent.get("model"),
+                context_docs=_parse_context_docs(agent.get("context_docs_json")),
                 missing_note=missing_note, client=client,
             )
             model_used = draft.model

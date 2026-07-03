@@ -2,12 +2,10 @@
 from __future__ import annotations
 
 from src.mail.backend.types import (
-    BackendHealth,
     DraftAppendResult,
     DraftRequest,
     EmailContent,
     EmailMeta,
-    RadarTick,
 )
 
 
@@ -53,25 +51,6 @@ def test_email_meta_defaults():
     assert em.thread_id is None
     assert em.mailbox is None
     assert em.imap_uid is None
-
-
-def test_radar_tick_empty():
-    tick = RadarTick(has_new=False, current_marker=12345)
-    assert tick.estimated_new_count == 0
-    assert tick.new_emails == []
-
-
-def test_radar_tick_marker_can_be_tuple():
-    """DavMail marker = (uidvalidity, uidnext) tuple."""
-    tick = RadarTick(has_new=True, current_marker=(1, 100), estimated_new_count=5)
-    assert tick.current_marker == (1, 100)
-
-
-def test_backend_health_defaults():
-    h = BackendHealth(healthy=True, backend="applescript")
-    assert h.details == {}
-    assert h.last_op_latency_ms is None
-    assert h.error is None
 
 
 def test_draft_request_defaults():

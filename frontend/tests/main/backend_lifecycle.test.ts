@@ -11,7 +11,11 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { EventEmitter } from 'events'
 // vi.mock('fs') 下面会 hoist; 这里 import 拿到的是 mock 版 (用于断言 drain 落盘调用)。
-import { createWriteStream, mkdirSync } from 'fs'
+// mkdtempSync/rmSync/writeFileSync 未被 mock 覆盖 (spread actual 透传) → 真实 fs,
+// 供 readDbIntegrityFailure 的真实临时文件测试用。
+import { createWriteStream, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
 
 // ---- electron app mock (isPackaged 可切换) ---------------------------------
 
@@ -172,7 +176,9 @@ const {
   EXPECTED_DB_VERSION,
   REQUIRED_TABLES,
   DEFAULT_API_PORT,
+  DB_INTEGRITY_MARKER_FILENAME,
   probeApiHealth,
+  readDbIntegrityFailure,
   registerBackendQuitHook,
   _resetBackendLifecycleForTests
 } = await import('../../src/electron/main/backend_lifecycle')
@@ -1242,5 +1248,66 @@ describe('registerBackendQuitHook — before-quit 等 stop 完成 (SIGKILL 升�
     expect(event.preventDefault).not.toHaveBeenCalled()
     expect(appMock.quit).not.toHaveBeenCalled()
     expect(spawnCalls).toHaveLength(0)
+  })
+})
+
+// ---- E0-WP2: DB 完整性失败 marker 读取 --------------------------------------
+//
+// Python 侧 (src/mail/db_safety.py) quick_check 失败时在 sync_store.db 同目录写
+// db_integrity_failure.json 后 fail-fast; index.ts 在 waitReady 失败分支用
+// readDbIntegrityFailure 区分「数据库损坏」vs「慢迁移/坏配置」。这里用真实临时
+// 文件测 (fs mock 只覆盖 mkdirSync/createWriteStream, 读写透传真实 fs)。
+
+describe('readDbIntegrityFailure (E0-WP2 marker)', () => {
+  let tmp: string
+
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), 'ma-db-integrity-'))
+  })
+
+  afterEach(() => {
+    rmSync(tmp, { recursive: true, force: true })
+  })
+
+  const dbPath = (): string => join(tmp, 'sync_store.db')
+  const markerPath = (): string => join(tmp, DB_INTEGRITY_MARKER_FILENAME)
+
+  test('无 marker → null (健康路径零成本)', () => {
+    expect(readDbIntegrityFailure(dbPath())).toBeNull()
+  })
+
+  test('Python 写的 marker → 解析出失败详情 + backups 目录', () => {
+    writeFileSync(
+      markerPath(),
+      JSON.stringify({
+        failed: [{ db: '/data/sync_store.db', detail: 'DatabaseError: file is not a database' }],
+        backups_dir: '/data/backups',
+        checked_at: '2026-07-02T10:00:00+08:00'
+      }),
+      'utf8'
+    )
+    const r = readDbIntegrityFailure(dbPath())
+    expect(r).not.toBeNull()
+    expect(r!.failed).toEqual([
+      { db: '/data/sync_store.db', detail: 'DatabaseError: file is not a database' }
+    ])
+    expect(r!.backupsDir).toBe('/data/backups')
+    expect(r!.checkedAt).toBe('2026-07-02T10:00:00+08:00')
+  })
+
+  test('坏 JSON / 空 failed → null (不让残缺 marker 误弹框)', () => {
+    writeFileSync(markerPath(), 'not-json{{', 'utf8')
+    expect(readDbIntegrityFailure(dbPath())).toBeNull()
+
+    writeFileSync(markerPath(), JSON.stringify({ failed: [] }), 'utf8')
+    expect(readDbIntegrityFailure(dbPath())).toBeNull()
+
+    writeFileSync(markerPath(), JSON.stringify({ failed: [{ detail: 42 }] }), 'utf8')
+    expect(readDbIntegrityFailure(dbPath())).toBeNull()
+  })
+
+  test('marker 文件名与 Python 侧手抄一致', () => {
+    // src/mail/db_safety.py INTEGRITY_MARKER_FILENAME 的镜像值 —— 改动必须两侧同步。
+    expect(DB_INTEGRITY_MARKER_FILENAME).toBe('db_integrity_failure.json')
   })
 })

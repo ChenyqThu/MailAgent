@@ -12,7 +12,6 @@ from src.cli.exceptions import CliError, CliInvalidArgError
 from src.cli.long_task import LongTaskContext, LongTaskSummary, UnitResult
 from src.cli.output import apply_local_output, emit, emit_cli_error
 from src.config import config as cfg
-from src.mail.applescript_arm import AppleScriptArm
 from src.mail.reader import EmailReader
 from src.notion.sync import NotionSync
 from src.repository import AttachmentStore, EmailRepository
@@ -34,6 +33,7 @@ from src.sync.backfill_builders import (
 
 if TYPE_CHECKING:
     from src.cli.context import CliContext
+    from src.mail.backend.base import IMailBackend
 
 app = typer.Typer(
     name="backfill",
@@ -330,11 +330,10 @@ def backfill_body(
     initial_body_count = _body_row_count(db_path)
     initial_dead_count = _dead_count(db_path)
 
-    # 走 cli.backend 工厂尊重 MAILAGENT_BACKEND: davmail 下 backend.arm 是
-    # DavMailBackend 自身 (按 imap_uid/message_id IMAP 重抓), applescript 下是
-    # 真 AppleScriptArm — 否则 davmail 库的合成 internal_id 打到 Mail.app 报
-    # "无效的索引" (同 1dcff6f 项目周报修过的坑)
-    arm = cli.backend.arm
+    # 走 cli.backend 工厂尊重 MAILAGENT_BACKEND: davmail 下按 imap_uid/message_id
+    # IMAP 重抓, applescript 下委托真 AppleScriptArm — 否则 davmail 库的合成
+    # internal_id 打到 Mail.app 报 "无效的索引" (同 1dcff6f 项目周报修过的坑)
+    arm = cli.backend
     reader = EmailReader()
     repo = EmailRepository(
         db_path=db_path,
@@ -577,7 +576,7 @@ def backfill_metadata(
 
     # 按 source 路由数据源 client
     notion_client: Optional[Any] = None
-    arm: Optional[AppleScriptArm] = None
+    arm: Optional["IMailBackend"] = None
     reader: Optional[EmailReader] = None
     if source == "notion":
         # notion-client 的 sync Client; AsyncClient 不能在 LongTaskContext sync
@@ -585,9 +584,17 @@ def backfill_metadata(
         from notion_client import Client as NotionSyncClient
         notion_client = NotionSyncClient(auth=cfg.notion_token)
     else:  # applescript
-        arm = AppleScriptArm(
-            account_name=cfg.mail_account_name, inbox_name=cfg.mail_inbox_name,
-        )
+        if getattr(cli.cli_config, "mailagent_backend", "applescript") == "davmail":
+            raise emit_cli_error(cli, CliInvalidArgError(
+                "backfill metadata --source=applescript unsupported when "
+                "MAILAGENT_BACKEND=davmail (AppleScript `whose id` 无法定位 "
+                "davmail id 空间 >=10^9 的 internal_id)",
+                hint="改用 --source=notion (默认), 或临时切回 "
+                "MAILAGENT_BACKEND=applescript 跑完本次回填",
+            ))
+        # E1 §3.1 Step 3: 走到这里已确保 mailagent_backend != davmail, cli.backend
+        # 即等价的已 probe AppleScriptBackend 实例 (factory 收口, 不再裸构造)。
+        arm = cli.backend
         reader = EmailReader()
 
     units = _make_metadata_units(

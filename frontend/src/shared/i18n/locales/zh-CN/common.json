@@ -839,7 +839,8 @@
     "aiSdk": {
       "degraded": "AI 引擎不可用 — 会话以只读方式展示",
       "retryProbe": "重试连接",
-      "readOnlyLegacy": "这是旧版引擎的历史会话，已转为只读。新建会话可继续与 AI 对话。"
+      "readOnlyLegacy": "这是旧版引擎的历史会话，已转为只读。新建会话可继续与 AI 对话。",
+      "pendingApproval": "有待批操作（{toolName}）正在等待处理 —— 可在灵动岛批准/拒绝"
     },
     "toolCall": {
       "running": "执行中",
@@ -1540,10 +1541,6 @@
       "reverseInterval": {
         "label": "反向同步间隔",
         "helper": "秒 — 把 Notion 端改动回写邮箱的轮询间隔"
-      },
-      "healthInterval": {
-        "label": "健康检查间隔",
-        "helper": "秒 — 发现漏同步邮件"
       },
       "page": {
         "eyebrow": "SYNC",
@@ -2337,6 +2334,9 @@
       "prompt": "报告 Prompt",
       "promptHint": "调报告的「口味」",
       "promptNote": "计数、internal_ids、链接由系统权威回填；Prompt 只影响文案、分组与挑选。",
+      "contextDocs": "注入的身份文档",
+      "contextDocsHint": "勾选后注入报告生成的系统提示",
+      "contextDocsNote": "勾选的身份文档会注入报告生成的系统提示（默认 灵魂 + 用户偏好；全不勾 = 不注入）。",
       "schedule": "排程",
       "at": "每天",
       "weekdayLabel": "星期",

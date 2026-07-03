@@ -839,7 +839,8 @@
     "aiSdk": {
       "degraded": "AI engine unavailable — the conversation is shown read-only",
       "retryProbe": "Retry connection",
-      "readOnlyLegacy": "This conversation ran on the retired legacy engine and is read-only. Start a new chat to continue with the AI."
+      "readOnlyLegacy": "This conversation ran on the retired legacy engine and is read-only. Start a new chat to continue with the AI.",
+      "pendingApproval": "A pending action ({toolName}) is awaiting approval — approve or reject it on the island"
     },
     "toolCall": {
       "running": "running",
@@ -1540,10 +1541,6 @@
       "reverseInterval": {
         "label": "Reverse sync interval",
         "helper": "Seconds — poll to write Notion-side changes back to the mailbox"
-      },
-      "healthInterval": {
-        "label": "Health-check interval",
-        "helper": "Seconds — catches missed emails"
       },
       "page": {
         "eyebrow": "SYNC",
@@ -2337,6 +2334,9 @@
       "prompt": "Report Prompt",
       "promptHint": "tune the report's voice",
       "promptNote": "Counts, internal_ids and links are authoritatively filled by the system; the prompt only affects prose, grouping and selection.",
+      "contextDocs": "Injected identity docs",
+      "contextDocsHint": "Checked docs are injected into the report-generation prompt",
+      "contextDocsNote": "Checked identity docs are injected into the report-generation system prompt (default: SOUL + USER; none checked = no injection).",
       "schedule": "Schedule",
       "at": "At",
       "weekdayLabel": "Weekday",

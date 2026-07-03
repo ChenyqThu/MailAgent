@@ -11,16 +11,15 @@ def _invoke(cli_runner, *args, db_path):
 
 
 def _patch_cli_backend(monkeypatch):
-    """Stub CliContext.backend → fake backend with .arm = no-op object.
+    """Stub CliContext.backend → fake backend 占位对象.
 
-    Phase 0.1 fix 把 calendar 子命令从硬编码 ``AppleScriptArm()`` 改成
-    ``cli.backend.arm`` (走 factory 尊重 MAILAGENT_BACKEND env). 测试环境下
-    factory 会 probe DavMail IMAP @ 127.0.0.1:1143 超时 (10s); 用此 helper
-    短路 backend property 返回 mock, ``arm`` 字段是占位 object (被 stub 化的
+    calendar 子命令走 ``cli.backend`` (工厂路由尊重 MAILAGENT_BACKEND env).
+    测试环境下 factory 会 probe DavMail IMAP @ 127.0.0.1:1143 超时 (10s); 用此
+    helper 短路 backend property 返回占位 object (被 stub 化的
     discover_recurring/replay_one 接收但不实际调用).
     """
     class _FakeBackend:
-        arm = object()
+        pass
 
     from src.cli import context as _ctx_mod
     monkeypatch.setattr(
@@ -568,7 +567,6 @@ class TestCalendarSyncNow:
     ):
         """stub CalDAVReader → 模拟一次 full sync 跑通."""
         from src.calendar_sync.caldav_reader import CalendarEvent, CalDAVReader
-        from src.cli.commands import calendar as cal_cmd
 
         # 1. 让 list_calendar_names_for_sync 返单 calendar
         # 2. list_events_with_full_detail 返 1 个 event

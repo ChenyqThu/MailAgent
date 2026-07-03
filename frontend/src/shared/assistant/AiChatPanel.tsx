@@ -16,7 +16,7 @@
 // is no other engine): the panel surfaces an error notice + retry and keeps the
 // current session readable.
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
@@ -40,6 +40,8 @@ import { buildAttachmentBlock, type ChatAttachment } from '@shared/lib/chat-atta
 import { useApprovalMode } from '@shared/lib/approvalMode'
 
 import { AiSdkRuntimeProvider } from './runtime/AiSdkRuntimeProvider'
+import { ThreadRunningBridge } from './runtime/ThreadRunningBridge'
+import { makeSessionSettledHandler } from './runtime/threadRunningGuard'
 import { resolveAiGatewayBaseUrl } from './runtime/flags'
 import { AssistantThread } from './components/thread'
 import {
@@ -297,6 +299,36 @@ export function AIChatPanel({
     [contextInjectionOn, reloadMessagesReady, chat.messages]
   )
 
+  // Part B (island live-refresh) — an island-approved HITL turn was resumed SERVER-SIDE by the
+  // gateway, so the active session's ai_chat.db rows changed underneath the open panel (the useChat
+  // state still shows the stale approval card). On the lifecycle's 'chat:session-updated' broadcast
+  // for THIS session, reload its messages through the hook's existing DB→ChatMessage load path
+  // (reloadActiveSession → refresh → chatMessageToUIMessage above), then bump the remount nonce so
+  // the KEYED AiSdkRuntimeProvider re-seeds initialMessages — the runtime treats `messages` as a
+  // per-mount initial set, so without the remount the reloaded rows never reach the thread. The
+  // guard decision (skip other sessions / skip mid-stream) lives in makeSessionSettledHandler,
+  // sensed by ThreadRunningBridge below — see that module for why bare thread.isRunning was wrong.
+  // 🔴 IPC 订阅必须用返回的 disposer 清理（fe0437e：跨 contextBridge removeListener 匹配不到 →
+  // listener 泄漏 + StrictMode 双订阅）。onSessionUpdated 是 optional（web HttpApi 缺省）→ ?. 。
+  const [islandRefreshNonce, setIslandRefreshNonce] = useState(0)
+  const aiSdkRunningRef = useRef(false)
+  const chatReloadActiveSession = chat.reloadActiveSession
+  const chatActiveSessionId = chat.activeSessionId
+  useEffect(() => {
+    // Single runtime (S3) — subscribe whenever the live ai-sdk path is the active surface (a D6
+    // read-only legacy re-scope has no runtime to refresh). contextInjectionOn = !legacy && gateway.
+    if (!contextInjectionOn) return undefined
+    const dispose = mailApi.chat.onSessionUpdated?.(
+      makeSessionSettledHandler({
+        runningRef: aiSdkRunningRef,
+        activeSessionId: chatActiveSessionId,
+        reload: chatReloadActiveSession,
+        onReloaded: () => setIslandRefreshNonce((n) => n + 1)
+      })
+    )
+    return dispose
+  }, [contextInjectionOn, mailApi, chatActiveSessionId, chatReloadActiveSession])
+
   // ── old-session re-scope ────────────────────────────────────────────────────
   // Alias the two chat members the pendingOpen effect reads so exhaustive-deps tracks each as a
   // distinct identifier (multi-member access on the un-memoized `chat` collapses to "the whole chat").
@@ -382,6 +414,58 @@ export function AIChatPanel({
   const gatewayDegraded = aiSdkEnabled && healthQ.isError
   // The live runtime needs the base URL discovered AND a healthy probe.
   const gatewayUnavailable = !aiSdkEnabled || gatewayDegraded
+
+  // Part B follow-up (paused-session reload notice) — after seeding a HISTORY session (non-empty
+  // initialMessages), probe the gateway once for a still-live stashed approval belonging to it. The
+  // paused turn is persisted REDACTED (R2-3: a reloaded session must not render a dead approval
+  // card), so without this probe the user sees only the pre-approval text and has no cue the
+  // approval is still actionable on the island. islandRefreshNonce keys the probe so the
+  // settle-driven reload re-queries (→ pending:false → the notice clears). Any failure (web HttpApi
+  // where the gateway isn't reachable, gateway down, island agent off → {pending:false}) resolves
+  // silent-false — the notice is best-effort UX, never an error surface.
+  const pendingApprovalSessionId =
+    contextInjectionOn && gatewayBaseUrl != null && initialMessages && initialMessages.length > 0
+      ? chat.activeSessionId
+      : null
+  const pendingApprovalQ = useQuery({
+    queryKey: [
+      'ai-gateway',
+      'approval-pending',
+      gatewayBaseUrl,
+      pendingApprovalSessionId,
+      islandRefreshNonce
+    ],
+    queryFn: async (): Promise<{ pending: boolean; toolName?: string }> => {
+      try {
+        const res = await fetch(
+          `${gatewayBaseUrl}/api/ai/approval/pending?sessionId=${pendingApprovalSessionId}`
+        )
+        if (!res.ok) return { pending: false }
+        const body = (await res.json()) as { pending?: unknown; toolName?: unknown }
+        return body.pending === true
+          ? {
+              pending: true,
+              ...(typeof body.toolName === 'string' ? { toolName: body.toolName } : {})
+            }
+          : { pending: false }
+      } catch {
+        return { pending: false }
+      }
+    },
+    enabled: pendingApprovalSessionId !== null,
+    retry: false,
+    refetchOnWindowFocus: false
+  })
+  // Rendered via AssistantThread's pendingSlot (inside the viewport, after the messages) — the same
+  // spot the legacy path shows its pending-confirmation dialog, so the notice scrolls with the
+  // conversation and reads as part of it. Informational only: approving happens on the island
+  // (in-panel approve is backlog A2).
+  const pendingApprovalNotice =
+    pendingApprovalQ.data?.pending === true ? (
+      <div className="mt-2 shrink-0 rounded-md border border-ink-border bg-ink-3/70 px-3 py-2 text-aux text-ink-fg-2">
+        {t('chat.aiSdk.pendingApproval', { toolName: pendingApprovalQ.data.toolName ?? '' })}
+      </div>
+    ) : undefined
 
   // Sidebar session preview cache (lazy on open).
   const [sessionPreviews, setSessionPreviews] = useState<Record<number, string | null>>({})
@@ -668,12 +752,15 @@ export function AIChatPanel({
                         // non-empty); a fresh / just-adopted conversation (empty messages) keeps `:new`
                         // so onEnsureSession setting activeSessionId mid-first-send does NOT remount the
                         // provider and interrupt the in-flight turn.
+                        // Part B — `:rN` suffix only after an island live-refresh (nonce starts at 0 →
+                        // byte-identical key until the first settle) so the provider remounts re-seeded
+                        // with the reloaded messages.
                         contextInjectionOn
                           ? `${activeInternalId ?? 'none'}:${
                               initialMessages && initialMessages.length > 0
                                 ? chat.activeSessionId
                                 : 'new'
-                            }`
+                            }${islandRefreshNonce > 0 ? `:r${islandRefreshNonce}` : ''}`
                           : (activeInternalId ?? 'none')
                       }
                       gatewayBaseUrl={gatewayBaseUrl as string}
@@ -687,7 +774,14 @@ export function AIChatPanel({
                       initialMessages={initialMessages}
                       onEnsureSession={onEnsureSession}
                     >
-                      <AssistantThread emptyState={emptyMessages} />
+                      {/* Part B — feeds the mid-stream guard above (renders nothing). */}
+                      <ThreadRunningBridge runningRef={aiSdkRunningRef} />
+                      {/* pendingSlot — the reloaded-session "approval still live on the island"
+                          notice (undefined when nothing pending → byte-identical thread). */}
+                      <AssistantThread
+                        pendingSlot={pendingApprovalNotice}
+                        emptyState={emptyMessages}
+                      />
                     </AiSdkRuntimeProvider>
                   )}
                 </ChatComposerControlsProvider>

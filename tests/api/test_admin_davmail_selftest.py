@@ -1,15 +1,14 @@
 """admin davmail-health / system-alerts (sync_state davmail.* direct read) +
-llm selftest (subprocess) + F1 serve_api↔loopback wiring.
+llm selftest (in-process LlmService) + F1 serve_api↔loopback wiring.
 
 - davmail-health / system-alerts have NO CLI (gotcha #12): they read the
   `davmail.*` keys DavMailWatchdog persists into sync_state and recompute the
   `level` with the watchdog's thresholds. meta.source must stay 'sqlite'. We seed
   sync_state on an ISOLATED DB so the davmail.* keys don't leak into other tests.
-- llm selftest forks `mailagent llm selftest`. The CLI emits a *success* wrapper
-  even when unhealthy and then exits 1; the router must recover that wrapper from
-  exc.stdout and return 200 (healthy:false is a valid diagnosis, not an error).
-  We monkeypatch run_cli to drive all three branches (healthy / unhealthy-recover
-  / hard-crash) without a real fork.
+- llm selftest (E2-C 起) 进程内直调 ``LlmService.selftest()`` (纯配置字段读取, 不再
+  fork CLI)。该方法从不抛异常 —— healthy:false 是合法诊断结果, 恒 200 直接透传 (与旧
+  CLI-fork 年代靠 exit-1/stdout 还原 wrapper 的 hack 不同, 那条路径已随 fork 一并退役)。
+  我们 monkeypatch router 的 ``LlmService`` 类符号驱动 healthy / unhealthy 两分支。
 - F1: serve_api wires MAILAGENT_API_HOST before uvicorn.run, and the lifespan
   assertion truly rejects a public bind when that var is poisoned.
 """
@@ -25,7 +24,6 @@ import pytest
 
 import src.api.routers.llm as llm_router
 from src.api.app import app
-from src.api.cli_runner import CliResult, CliRunnerError
 from src.api.deps import get_repository
 from src.repository import AttachmentStore, EmailRepository
 
@@ -212,89 +210,73 @@ def test_system_alerts_warning_token_and_throttle(davmail_client_factory):
 
 
 # ===========================================================================
-# GET /api/llm/selftest  (subprocess; healthy / recover / crash branches)
+# GET /api/llm/selftest  (E2-C 起进程内 LlmService.selftest() — 纯配置读取, 从不抛异常)
 # ===========================================================================
 
 
-class _LlmSpy:
-    def __init__(self, *, result=None, raises=None):
-        self.calls: list = []
-        self._result = result
-        self._raises = raises
+class _LlmSelftestSvcSpy:
+    """``LlmService`` 替身: 只记录 selftest() 调用, 返回 canned dict (从不抛异常)。"""
 
-    async def __call__(self, args, *, api_key=None, **kw):
-        self.calls.append({"args": list(args), "api_key": api_key})
-        if self._raises is not None:
-            raise self._raises
+    instances: list["_LlmSelftestSvcSpy"] = []
+
+    def __init__(self, ctx=None, *, result: Optional[dict] = None):
+        self.ctx = ctx
+        self.calls: list[tuple] = []
+        self._result = result if result is not None else {
+            "healthy": True, "api_base": "https://llm.example", "primary_model": "x",
+            "fallback_chain": [], "llm_agent_enabled": False, "reasons": [],
+        }
+        _LlmSelftestSvcSpy.instances.append(self)
+
+    def selftest(self) -> dict:
+        self.calls.append(("selftest", None, {}))
         return self._result
 
 
-def test_llm_selftest_healthy(client, monkeypatch):
-    data = {
+@pytest.fixture()
+def llm_selftest_svc_spy(monkeypatch):
+    """Patch llm router 的 LlmService, 用工厂让每个测试指定 canned selftest() 结果。"""
+    _LlmSelftestSvcSpy.instances = []
+
+    def _factory(result: Optional[dict] = None):
+        def _ctor(ctx=None):
+            return _LlmSelftestSvcSpy(ctx, result=result)
+
+        monkeypatch.setattr(llm_router, "LlmService", _ctor)
+
+    return _factory
+
+
+def test_llm_selftest_healthy(client, llm_selftest_svc_spy):
+    llm_selftest_svc_spy({
         "healthy": True, "api_base": "https://llm.example", "primary_model": "x",
         "fallback_chain": [], "llm_agent_enabled": False, "reasons": [],
-    }
-    spy = _LlmSpy(result=CliResult(data=data, meta={}, status="success"))
-    monkeypatch.setattr(llm_router, "run_cli", spy)
+    })
     r = client.get("/api/llm/selftest")
     assert r.status_code == 200
     body = r.json()
     assert body["data"]["healthy"] is True
     assert body["meta"]["source"] == "cli"
-    # read endpoint → no api key injected.
-    assert spy.calls[-1]["api_key"] is None
-    assert spy.calls[-1]["args"] == ["llm", "selftest"]
+    inst = _LlmSelftestSvcSpy.instances[-1]
+    assert inst.calls == [("selftest", None, {})]
 
 
-def test_llm_selftest_unhealthy_recovered_from_stdout(client, monkeypatch):
-    # CLI emits a success wrapper (healthy:false) to stdout, THEN exits 1.
-    # run_cli raises CliRunnerError carrying that wrapper in .stdout; the router
-    # must recover it and still return 200 (healthy:false is a valid diagnosis).
-    wrapper_stdout = (
-        '{"status":"success","schema_version":1,'
-        '"data":{"healthy":false,"reasons":["LLM_API_KEY missing"]},'
-        '"error":null,"meta":{"duration_ms":3}}'
-    )
-    exc = CliRunnerError(
-        code="E_GENERIC", exit_code=1, message="selftest unhealthy",
-        stdout=wrapper_stdout,
-    )
-    spy = _LlmSpy(raises=exc)
-    monkeypatch.setattr(llm_router, "run_cli", spy)
+def test_llm_selftest_unhealthy_returns_200_with_reasons(client, llm_selftest_svc_spy):
+    # 与旧 fork-CLI 年代 "healthy:false 靠 exit-1/stdout 还原" 的行为契约一致 ——
+    # unhealthy 是合法诊断结果, 不是 error, 必须仍是 200 (不能因为 healthy:false
+    # 就误判成失败响应)。
+    llm_selftest_svc_spy({
+        "healthy": False, "api_base": "", "primary_model": "x",
+        "fallback_chain": [], "llm_agent_enabled": False,
+        "reasons": ["LLM_API_KEY is empty", "LLM_API_BASE is empty"],
+    })
     r = client.get("/api/llm/selftest")
-    assert r.status_code == 200
+    assert r.status_code == 200  # healthy:false 是合法诊断结果, 不是 error。
     data = r.json()["data"]
     assert data["healthy"] is False
-    assert "LLM_API_KEY missing" in data["reasons"]
-
-
-def test_llm_selftest_hard_crash_surfaces_error(client, monkeypatch):
-    # A real crash (no recoverable wrapper) → error path. E_NO_BIN unmapped → 500.
-    exc = CliRunnerError(
-        code="E_NO_BIN", exit_code=-1, message="mailagent CLI not found",
-        stdout="", stderr="Traceback...",
-    )
-    spy = _LlmSpy(raises=exc)
-    monkeypatch.setattr(llm_router, "run_cli", spy)
-    r = client.get("/api/llm/selftest")
-    assert r.status_code == 500
-    assert r.json()["error"]["code"] == "E_NO_BIN"
-    # stderr/traceback must NOT leak into the wire error.
-    assert "Traceback" not in r.json()["error"]["message"]
-
-
-def test_llm_selftest_exit1_nonrecoverable_wrapper_is_error(client, monkeypatch):
-    # exit 1 but stdout is a *non*-success / non-`healthy` wrapper → not
-    # recoverable → error path (guards the recover heuristic against false hits).
-    exc = CliRunnerError(
-        code="E_GENERIC", exit_code=1, message="boom",
-        stdout='{"status":"error","error":{"code":"E_GENERIC","message":"boom"}}',
-    )
-    spy = _LlmSpy(raises=exc)
-    monkeypatch.setattr(llm_router, "run_cli", spy)
-    r = client.get("/api/llm/selftest")
-    assert r.status_code == 500  # E_GENERIC unmapped → 500.
-    assert r.json()["status"] == "error"
+    assert data["reasons"] == ["LLM_API_KEY is empty", "LLM_API_BASE is empty"]
+    assert r.json()["status"] == "success"
+    assert r.json()["error"] is None
 
 
 # ===========================================================================

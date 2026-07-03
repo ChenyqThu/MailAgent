@@ -64,17 +64,20 @@ class EmailNotionSyncApp:
             if config.alert_feishu_webhook_url and config.alert_enabled:
                 try:
                     from src.notify.alert import FeishuAlertNotifier
+                    # E0-check 修正: kwargs 对齐 FeishuAlertNotifier 真实签名
+                    # (webhook_url/secret/enabled_levels/cooldown + send_alert 的 content=),
+                    # 与主流程 self.alerter 构造一致 —— 旧 kwargs (webhook_secret/enabled/
+                    # levels/message) 构造即 TypeError 被下面 except 吞掉, 告警从未发出。
                     _tmp_alerter = FeishuAlertNotifier(
                         webhook_url=config.alert_feishu_webhook_url,
-                        webhook_secret=config.alert_feishu_webhook_secret,
-                        enabled=config.alert_enabled,
-                        levels=[lv.strip() for lv in config.alert_levels.split(',')],
+                        secret=config.alert_feishu_webhook_secret,
+                        enabled_levels=config.alert_levels,
                         cooldown=config.alert_cooldown,
                     )
                     asyncio.run(_tmp_alerter.send_alert(
                         level="critical",
                         title=f"MailAgent 启动失败: {config.mailagent_backend} backend probe 不过",
-                        message=f"{e}\n\n切换提示: {e.fallback_hint or '无'}\n\n服务已退出, 不会自动重启 (autorestart=false).",
+                        content=f"{e}\n\n切换提示: {e.fallback_hint or '无'}\n\n服务已退出, 不会自动重启 (autorestart=false).",
                         alert_key=f"backend_startup_fail:{config.mailagent_backend}",
                     ))
                     asyncio.run(_tmp_alerter.close())
@@ -111,57 +114,51 @@ class EmailNotionSyncApp:
         self._event_handlers = None
 
         # Sprint 15: SQLite SSoT inversion — outbox + FanoutWorker
-        # 默认关闭（灰度期）；开启后异步派发 email flag / processing_status 到
-        # Mail.app + Notion，handler / reverse_sync_poll 走 intent 路径不再
-        # 直接 AppleScript。详 SPRINT15-HANDOFF.md §3 + plan。
+        # E2-B (2026-07) 灰度永久化: 恒启用, MAILAGENT_OUTBOX_ENABLED 总开关退役。
+        # 所有 mutating 写 (前端 mail_write / webhook handler / reverse_sync_poll)
+        # 恒走 intent + outbox, FanoutWorker 异步派发到 Mail.app + Notion。
         # 必须先于 reverse_sync 构造（reverse_sync 需注入 outbox_repo）。
-        self.outbox_repo = None
-        self.fanout_worker = None
-        # C1: JobWorker 在 start() 里按 gate 构造; 这里先初始化为 None, 与 fanout_worker
-        # 对齐, 避免 start() 早退路径下 shutdown 引用 self.job_worker 时 AttributeError。
+        # C1: JobWorker 在 start() 里按 gate 构造; 这里先初始化为 None, 避免
+        # start() 早退路径下 shutdown 引用 self.job_worker 时 AttributeError。
         self.job_worker = None
-        if config.mailagent_outbox_enabled:
-            from src.sync import (
-                FanoutWorker,
-                MailAppFanout,
-                NotionFanout,
-                OutboxRepository,
-            )
-            self.outbox_repo = OutboxRepository(config.sync_store_db_path)
-            mailapp_fanout = MailAppFanout(
-                sync_store=self.watcher.sync_store,
-                arm=self.watcher.arm,
-            )
-            notion_fanout = NotionFanout(
-                sync_store=self.watcher.sync_store,
-                notion_sync=self.watcher.notion_sync,
-            )
-            self.fanout_worker = FanoutWorker(
-                outbox_repo=self.outbox_repo,
-                mailapp_fanout=mailapp_fanout,
-                notion_fanout=notion_fanout,
-                poll_interval_sec=config.mailagent_outbox_poll_interval_sec,
-                concurrency=config.mailagent_outbox_concurrency,
-                max_attempts=config.mailagent_outbox_max_attempts,
-            )
-            logger.info(
-                f"[outbox] FanoutWorker configured "
-                f"(poll={config.mailagent_outbox_poll_interval_sec}s, "
-                f"concurrency={config.mailagent_outbox_concurrency}, "
-                f"max_attempts={config.mailagent_outbox_max_attempts})"
-            )
-        else:
-            logger.info("[outbox] FanoutWorker disabled (MAILAGENT_OUTBOX_ENABLED=false)")
+        from src.sync import (
+            FanoutWorker,
+            MailAppFanout,
+            NotionFanout,
+            OutboxRepository,
+        )
+        self.outbox_repo = OutboxRepository(config.sync_store_db_path)
+        mailapp_fanout = MailAppFanout(
+            sync_store=self.watcher.sync_store,
+            backend=self.backend,
+        )
+        notion_fanout = NotionFanout(
+            sync_store=self.watcher.sync_store,
+            notion_sync=self.watcher.notion_sync,
+        )
+        self.fanout_worker = FanoutWorker(
+            outbox_repo=self.outbox_repo,
+            mailapp_fanout=mailapp_fanout,
+            notion_fanout=notion_fanout,
+            poll_interval_sec=config.mailagent_outbox_poll_interval_sec,
+            concurrency=config.mailagent_outbox_concurrency,
+            max_attempts=config.mailagent_outbox_max_attempts,
+        )
+        logger.info(
+            f"[outbox] FanoutWorker configured "
+            f"(poll={config.mailagent_outbox_poll_interval_sec}s, "
+            f"concurrency={config.mailagent_outbox_concurrency}, "
+            f"max_attempts={config.mailagent_outbox_max_attempts})"
+        )
 
         # 反向同步（Notion -> Mail.app + 飞书通知）
-        # Sprint 15: 注入 outbox_repo 后 sync_single_page 改写 SQLite intent + outbox
-        # 不再直调 AppleScript (跟 webhook handle_* / CLI 完全统一)。
+        # Sprint 15: sync_single_page 写 SQLite intent + outbox, 不直调 AppleScript
+        # (跟 webhook handle_* / CLI 完全统一)。E2-B: backend 参数已随老直调分支退役。
         from src.mail.reverse_sync import NotionToMailSync
         # Redis 事件启用时，跳过轮询通知（由 Redis handler 负责，避免重复）
         skip_notify = bool(config.redis_events_enabled and config.redis_url)
         self.reverse_sync = NotionToMailSync(
             notion_sync=self.watcher.notion_sync,
-            arm=self.watcher.arm,
             sync_store=self.watcher.sync_store,
             skip_notify=skip_notify,
             outbox_repo=self.outbox_repo,
@@ -196,7 +193,7 @@ class EmailNotionSyncApp:
             feishu = self.reverse_sync._feishu
 
             handlers = EventHandlers(
-                arm=self.watcher.arm,
+                backend=self.backend,
                 sync_store=self.watcher.sync_store,
                 feishu=feishu,
                 notion_sync=self.watcher.notion_sync,
@@ -204,12 +201,9 @@ class EmailNotionSyncApp:
                 # v4: 让 handle_fetch_mail_content 优先读 SQLite SSoT，
                 # 历史未双写邮件自动 fallback 到 AppleScript
                 email_repo=self.watcher.email_repo,
-                # Sprint 15: 启用 outbox 时 handle_flag_changed/completed/ai_reviewed
-                # 改写为 intent 模式，由 FanoutWorker 异步派发
+                # Sprint 15 + E2-B: handle_flag_changed/completed/ai_reviewed 恒走
+                # intent 模式（outbox_repo 必传），由 FanoutWorker 异步派发
                 outbox_repo=self.outbox_repo,
-                # Sprint 16 dual-backend: davmail mode 下 handle_create_draft 走
-                # backend.append_draft (IMAP APPEND), applescript mode 仍走 sh GUI 注入
-                backend=self.backend,
             )
             self._event_handlers = handlers
 
@@ -320,6 +314,7 @@ class EmailNotionSyncApp:
                 account_name=config.mail_account_name,
                 accent=config.island_accent,
                 theme=config.island_theme,
+                mail_notify_scope=config.island_mail_notify_scope,
             )
             logger.info(
                 f"[island] enabled (socket={config.island_socket_path} "
@@ -908,6 +903,66 @@ async def run_service():
 
     maybe_start_tracemalloc()
     start_parent_watchdog()
+
+    # E0-WP2 数据安全网: worker 未起、SyncStore 尚未打开 DB 的最早时点, 对 Python
+    # 两库 (sync_store.db / agent_config.db) 跑节流的 quick_check + VACUUM INTO
+    # 滚动备份 (<DATA_ROOT>/data/backups/, 24h 节流 + 保 3 份; 放 data/ 下是因为
+    # dev 态 DATA_ROOT=仓库根, data/ 已 gitignore 而根级 backups/ 不是 —— 1.5 GB
+    # 备份决不能变成可提交文件)。校验失败 → 写 marker (Electron main waitReady
+    # 失败分支据此弹「数据库校验失败」) + fail-fast 退出, **不做备份不轮转** 保住
+    # 已有好备份。ai_chat.db 是前端 owned, 首期不纳入 (已知边界, 见
+    # packaging-release.md「数据恢复」)。安全网自身的意外异常不得阻断启动
+    # (除 DbIntegrityError 外仅告警)。
+    from src.config import DATA_ROOT
+    from src.agent_config.store import resolve_agent_config_db_path
+    from src.mail.db_safety import (
+        DbIntegrityError,
+        integrity_failure_marker_path,
+        run_startup_db_safety,
+    )
+
+    try:
+        run_startup_db_safety(
+            [
+                config.sync_store_db_path,
+                resolve_agent_config_db_path(config.sync_store_db_path),
+            ],
+            Path(DATA_ROOT) / "data" / "backups",
+            marker_path=integrity_failure_marker_path(config.sync_store_db_path),
+        )
+    except DbIntegrityError as e:
+        logger.critical(f"数据库完整性校验失败, 拒绝启动: {e}")
+        print(f"\n❌ 数据库完整性校验失败: {e}", file=sys.stderr)
+        print(
+            "   → 退出 App/服务后, 按 docs/reference/packaging/packaging-release.md"
+            "「数据恢复」小节从 backups/ 目录恢复数据库。\n",
+            file=sys.stderr,
+        )
+        # 一次性飞书告警 (alerter 还没主流程初始化)。kwargs 对齐 FeishuAlertNotifier
+        # 真实签名 (webhook_url/secret/enabled_levels/cooldown + send_alert 的 content=),
+        # 与主流程 EmailNotionSyncApp.__init__ 的 self.alerter 构造 / backend probe
+        # 失败分支 (E0-check 已一并修正) 三处一致 —— 改签名必须三处同步。
+        if config.alert_feishu_webhook_url and config.alert_enabled:
+            try:
+                from src.notify.alert import FeishuAlertNotifier
+                _tmp_alerter = FeishuAlertNotifier(
+                    webhook_url=config.alert_feishu_webhook_url,
+                    secret=config.alert_feishu_webhook_secret,
+                    enabled_levels=config.alert_levels,
+                    cooldown=config.alert_cooldown,
+                )
+                await _tmp_alerter.send_alert(
+                    level="critical",
+                    title="MailAgent 启动失败: 数据库完整性校验不过",
+                    content=f"{e}\n\n服务已退出, 请从 backups/ 恢复数据库后重启。",
+                    alert_key="db_integrity_fail",
+                )
+                await _tmp_alerter.close()
+            except Exception as alert_err:
+                print(f"⚠️ 同时尝试发飞书告警也失败: {alert_err}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        logger.warning(f"[db_safety] 启动安全检查异常 (不阻断启动): {e}")
 
     app = EmailNotionSyncApp()
 

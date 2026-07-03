@@ -1,7 +1,7 @@
 """CLI ``mailagent email unsubscribe`` 测试 (RFC 2369 / RFC 8058 智能退订).
 
 灵动岛 (ping-island) archive_and_unsubscribe action handler 调本命令. raw MIME
-经 backend.arm.fetch_email_content_by_id 重抽, 解析 List-Unsubscribe header 智能执行:
+经 backend.fetch_email_content_by_id 重抽, 解析 List-Unsubscribe header 智能执行:
   - one_click_post: List-Unsubscribe-Post=One-Click + https URI → httpx POST
   - open_url:       https URI (无 one-click) → open 浏览器
   - open_mailto:    只有 mailto URI → open 邮件客户端
@@ -142,8 +142,8 @@ def _build_mime(*, list_unsub: str = "", list_unsub_post: str = "") -> str:
     return "\r\n".join(lines)
 
 
-class _FakeArm:
-    """fake backend.arm: fetch_email_content_by_id 返回固定 source MIME。"""
+class _FakeBackend:
+    """fake backend: fetch_email_content_by_id 返回固定 source MIME。"""
 
     def __init__(self, source: str):
         self._source = source
@@ -152,11 +152,6 @@ class _FakeArm:
     def fetch_email_content_by_id(self, internal_id, mailbox=None):
         self.calls.append((internal_id, mailbox))
         return {"source": self._source, "message_id": "<msg-12345@example.com>"}
-
-
-class _FakeBackend:
-    def __init__(self, source: str):
-        self.arm = _FakeArm(source)
 
 
 def _patch_backend_source(monkeypatch, source: str) -> _FakeBackend:

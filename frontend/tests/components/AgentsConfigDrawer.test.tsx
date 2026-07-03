@@ -52,8 +52,13 @@ function openModelSelect(): HTMLElement {
   return document.querySelector('[role="listbox"]') as HTMLElement
 }
 
+// 共享 save spy（vi.mock factory 被 hoist，须经 vi.hoisted 提前初始化）——
+// context_docs 用例要断言保存 patch 的形状。
+const { mockSave } = vi.hoisted(() => ({ mockSave: vi.fn() }))
+mockSave.mockResolvedValue({})
+
 vi.mock('../../src/shared/components/agents/hooks', () => ({
-  useSetConfig: () => ({ save: vi.fn().mockResolvedValue({}), isSaving: false }),
+  useSetConfig: () => ({ save: mockSave, isSaving: false }),
   useKosAvailable: () => false,
   useReportConfig: () => ({ agents: [], isLoading: false }),
   useReportList: () => ({ reports: [], isLoading: false }),
@@ -169,6 +174,59 @@ describe('ConfigDrawer schedule controls (Bug2)', () => {
     expect(() =>
       renderDrawer(<ConfigDrawer cfg={null} open={false} onClose={() => {}} />)
     ).not.toThrow()
+  })
+})
+
+describe('ConfigDrawer identity docs (增量 2 — report 行级 context_docs)', () => {
+  afterEach(() => {
+    mockSave.mockClear()
+  })
+
+  test('渲染 4 个文档 chips，按 cfg.context_docs 预填选中态', () => {
+    renderDrawer(
+      <ConfigDrawer
+        cfg={makeCfg({ context_docs: ['soul', 'user'] })}
+        open
+        onClose={() => {}}
+      />
+    )
+    const pressed = (name: string) =>
+      screen.getByRole('button', { name }).getAttribute('aria-pressed')
+    expect(pressed('灵魂 / soul')).toBe('true')
+    expect(pressed('用户偏好 / user')).toBe('true')
+    expect(pressed('行为 / agent')).toBe('false')
+    expect(pressed('规则 / rules')).toBe('false')
+  })
+
+  test('未动 chips 直接保存，patch 为显式默认 ["soul","user"] 而非 []（codex MED 坑）', () => {
+    renderDrawer(
+      <ConfigDrawer
+        cfg={makeCfg({ context_docs: ['soul', 'user'] })}
+        open
+        onClose={() => {}}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+    expect(mockSave).toHaveBeenCalledWith(
+      'daily',
+      expect.objectContaining({ context_docs: ['soul', 'user'] })
+    )
+  })
+
+  test('toggle 后保存，patch 携带 context_docs（取消 soul → ["user"]）', () => {
+    renderDrawer(
+      <ConfigDrawer
+        cfg={makeCfg({ context_docs: ['soul', 'user'] })}
+        open
+        onClose={() => {}}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: '灵魂 / soul' }))
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+    expect(mockSave).toHaveBeenCalledWith(
+      'daily',
+      expect.objectContaining({ context_docs: ['user'] })
+    )
   })
 })
 

@@ -21,7 +21,7 @@ BEIJING_TZ = timezone(timedelta(hours=8))
 from loguru import logger
 from src.config import config as settings
 from src.models import Email
-from src.mail.applescript_arm import AppleScriptArm
+from src.mail.backend.factory import create_backend
 from src.mail.sync_store import SyncStore
 from src.mail.reader import EmailReader
 from src.notion.sync import NotionSync
@@ -235,11 +235,13 @@ class InitialSync:
         self.mailbox_limits = mailbox_limits or {}
 
         # 初始化组件
-        self.arm = AppleScriptArm(
-            account_name=settings.mail_account_name,
-            inbox_name=settings.mail_inbox_name
-        )
         self.sync_store = SyncStore(sync_store_path)
+        # E1 §3.1 Step 3: 走 create_backend() 工厂 (尊重 MAILAGENT_BACKEND) 而非裸
+        # 构造 AppleScriptArm —— davmail 模式下后者的 `whose id` 查询无法定位
+        # davmail id 空间 (>=10^9) 的 internal_id。offset 分页批量抓取 (见
+        # _fetch_emails_from_applescript) 仍是 AppleScript-only 能力 (IMailBackend
+        # Protocol 无等价 offset 参数), 该方法内部对 davmail 模式显式 raise。
+        self.arm = create_backend(settings, sync_store=self.sync_store)
         self.email_repo = EmailRepository(
             db_path=sync_store_path,
             attachment_store=AttachmentStore(settings.attachment_storage_dir),
@@ -403,7 +405,19 @@ class InitialSync:
 
         采用时间驱动方式：获取邮件到缓存，后续通过 SYNC_START_DATE 过滤需同步的邮件。
         支持通过 mailbox_limits 参数限制每个邮箱的获取数量。
+
+        E1 §3.1 Step 3: 本方法用到的 offset 分页批量抓取是 AppleScript-only 能力 ——
+        IMailBackend Protocol 的 fetch_emails_by_position 无 offset 参数 (davmail
+        IMAP UID SEARCH 无位置分页语义), 暂无等价实现, 未收编。davmail 模式下直接
+        raise, 不静默用错 id 空间查询, 也不裸建 AppleScriptArm() 绕过 factory (留待
+        后续 Protocol 扩展再收编, 见 docs/plans/architecture-review-2026-07/e1-backend-contract.md)。
         """
+        if getattr(settings, "mailagent_backend", "applescript") == "davmail":
+            raise RuntimeError(
+                "InitialSync 全量分页回填 (mailagent init fetch-cache/all/analyze) "
+                "仅支持 MAILAGENT_BACKEND=applescript —— davmail 无等价的 offset "
+                "位置分页能力。请临时切换 MAILAGENT_BACKEND=applescript 后重跑。"
+            )
         total_fetched = 0
 
         # 获取 SyncStore 中已有的邮件数量（按邮箱）
@@ -456,7 +470,13 @@ class InitialSync:
                 # 使用 offset 分页获取
                 import time
                 start_time = time.time()
-                emails = self.arm._fetch_emails_from_applescript(fetch_count, self.arm._get_mailbox_name(mailbox), offset=offset)
+                # self.arm 是 create_backend() 返回的 AppleScriptBackend 包装; 走到
+                # 这里已确认非 davmail (guard 见方法开头), .arm 是其内部真实
+                # AppleScriptArm (E1 Lane A 的公开委托字段) —— 借它拿 offset 分页
+                # 私有方法 (IMailBackend Protocol 无此能力, 暂不收编)。
+                emails = self.arm.arm._fetch_emails_from_applescript(
+                    fetch_count, self.arm.arm._get_mailbox_name(mailbox), offset=offset
+                )
                 elapsed = time.time() - start_time
 
                 if not emails:

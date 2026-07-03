@@ -4,9 +4,10 @@
 ``Depends(get_repository)`` 拿 EmailRepository 复用 _connect() 直查 SQLite
 (meta.source='sqlite'), 镜像 ``mailagent admin health`` / ``admin stats``
 (sync_store section) / ``admin dead-letter list`` 的查询。
-写端点 (dead-letter retry / cleanup-dead-letter) 经 cli_runner.run_cli 调
-``mailagent admin dead-letter retry`` / ``admin cleanup-deadletter`` (meta.source='cli';
-注入 --api-key + --allow-concurrent 绕 PM2 检测)。
+写端点 (dead-letter retry / cleanup-dead-letter) E2-C 起经进程内 ``AdminService``
+(``src/services/admin_service.py``, 不再 fork CLI), meta.source='cli'（历史沿用命名,
+语义是「CLI 等价写语义」而非字面传输方式）。两端点均不做 PM2 冲突检测 —— 迁移前
+路由恒对 CLI 传 ``--allow-concurrent`` 绕过该检测, service 层原样不设这道闸。
 
 davmail-health / system-alerts **无 CLI** —— 直读 sync_state 的 ``davmail.*`` 键
 (DavMailWatchdog 每 60s 落盘, src/mail/davmail_watchdog.py), level 在 watchdog 内是 live
@@ -28,10 +29,12 @@ from typing import TYPE_CHECKING, Optional
 
 from fastapi import APIRouter, Depends, Request
 
-from src.api.app import APIError, partial_envelope, success_envelope
+from src.api.app import APIError, success_envelope
 from src.api.auth import verify_cf_access
-from src.api.cli_runner import CliRunnerError, get_cli_api_key, run_cli
-from src.api.deps import get_repository
+from src.api.deps import get_repository, get_service_ctx
+from src.services.admin_service import AdminService
+from src.services.errors import ServiceError
+from src.services.guards import Actor
 
 if TYPE_CHECKING:
     from src.repository import EmailRepository
@@ -39,11 +42,11 @@ if TYPE_CHECKING:
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 
-def _raise_from_cli_error(exc: CliRunnerError) -> None:
-    """CliRunnerError → APIError (全局 handler 据 code 映 HTTP)。
+def _raise_from_service_error(exc: ServiceError) -> None:
+    """in-process service 抛的 ServiceError → APIError (email/llm router 同名 helper 同构)。
 
-    优先 CLI 自报 ``error.code`` (exc.code); http_status 由 ERROR_CODE_TO_HTTP 推导。
-    exc.stdout/stderr 不回显客户端。
+    code 用 service 自报的 ``ServiceError.code`` (E_INVALID_ARG / E_SCHEMA_MISMATCH / ...),
+    http_status 由 app.ERROR_CODE_TO_HTTP[code] 推导。``source='cli'`` 维持既有 wire 契约。
     """
     raise APIError(exc.code, exc.message, hint=exc.hint, source="cli") from exc
 
@@ -312,7 +315,7 @@ async def admin_dead_letter_list(
 
 
 # ============================================================
-# POST /api/admin/dead-letter/{internal_id}/retry  (写, subprocess)
+# POST /api/admin/dead-letter/{internal_id}/retry  (写, in-process AdminService)
 # ============================================================
 @router.post("/dead-letter/{internal_id}/retry")
 async def admin_dead_letter_retry(
@@ -322,24 +325,29 @@ async def admin_dead_letter_retry(
 ):
     """把单封 dead_letter 邮件重置为 pending (下次 poll 重跑)。
 
-    镜像 ``mailagent admin dead-letter retry {id}`` (写命令; 注入 --api-key +
-    ``--allow-concurrent`` 跳过 PM2 mail-sync 冲突检测 —— web 侧总在 mail-sync 在线时
-    调用, 不加则 exit 9 E_PM2_RUNNING → 409)。
+    镜像 ``mailagent admin dead-letter retry {id}`` (写命令), E2-C 起进程内直调
+    ``AdminService`` 不再 fork CLI —— 与本文件其它 SQLite 端点同风格直接同步调用
+    (单条 UPDATE, 耗时量级与 health/stats 等读端点相当, 不需要 asyncio.to_thread)。
+    无 PM2 冲突检测: 迁移前路由恒对 CLI 传 ``--allow-concurrent`` 绕过该检测,
+    service 层原样不设这道闸。
 
     data 透传 CLI 形状 {internal_id, old_status, new_status} (DeadLetterRetryResult)。
-    internal_id 不存在 email_metadata → CLI 报 E_INVALID_ARG (400)。
+    internal_id 不存在 email_metadata → E_INVALID_ARG (400, 与 CLI 一致)。
     """
-    args = ["admin", "dead-letter", "retry", str(internal_id), "--allow-concurrent"]
+    svc = AdminService(get_service_ctx())
     try:
-        result = await run_cli(args, api_key=get_cli_api_key())
-    except CliRunnerError as exc:
-        _raise_from_cli_error(exc)
+        data = svc.retry_dead_letter(
+            internal_id,
+            actor=Actor(kind="http", authenticated=True, label="cf-access"),
+        )
+    except ServiceError as exc:
+        _raise_from_service_error(exc)
 
-    return success_envelope(result.data, request=request, source="cli")
+    return success_envelope(data, request=request, source="cli")
 
 
 # ============================================================
-# POST /api/admin/cleanup-dead-letter  (写, subprocess)
+# POST /api/admin/cleanup-dead-letter  (写, in-process AdminService)
 # ============================================================
 @router.post("/cleanup-dead-letter")
 async def admin_cleanup_dead_letter(
@@ -350,37 +358,28 @@ async def admin_cleanup_dead_letter(
 ):
     """清理超过 N 天的 dead_letter 记录 (镜像 ``mailagent admin cleanup-deadletter``)。
 
-    注意 CLI 子命令是 ``cleanup-deadletter`` (无连字符), HTTP 路径用 ``cleanup-dead-letter``。
-    默认 ``dry_run=true`` (与 CLI 一致, 只数不删); 真删需显式 ``dry_run=false`` →
-    映射为 ``--no-dry-run --yes`` (CLI 拒绝无 --yes 的非 dry-run 删除)。写命令注入
-    --api-key + ``--allow-concurrent`` (绕 PM2 检测, 否则 409)。
+    E2-C 起进程内直调 ``AdminService`` 不再 fork CLI。默认 ``dry_run=true`` (只数不删);
+    真删需显式 ``dry_run=false`` (等价原 CLI ``--no-dry-run --yes`` —— 路由层此前从不
+    允许"删除但不确认"的中间态, 故 service 同样无独立 confirm 参数)。无 PM2 冲突检测
+    (与 retry 同理)。
 
-    data 透传 CLI 形状 {action, older_than_days, candidates, deleted, dry_run, mode, ok}
-    (CleanupDeadLetterResult, loose passthrough)。
-
-    A1 (partial_failure → 207): 批量删除若部分失败, CLI exit 6 + wrapper
-    status=="partial_failure" → cli_runner 给出 ``result.is_partial_failure``;
-    此时走 ``partial_envelope`` 返 HTTP 207 (data={succeeded, failed, summary}),
-    全成功仍 200 success_envelope。
+    data 透传形状 {action, older_than_days, candidates, deleted, dry_run, mode, ok}
+    (CleanupDeadLetterResult)。单条原子 DELETE 语句不存在"部分失败" —— 迁移前 CLI
+    子进程退出码 6 (partial_failure → HTTP 207) 的分支随 fork 一并退役, 与
+    docs/cli-schema/admin-cleanup.schema.json 现仅 documented [success, wrapper_error]
+    的契约对齐 (该 schema 本就未定义 partial_failure 变体)。
     """
-    args = [
-        "admin", "cleanup-deadletter",
-        "--older-than", str(older_than),
-        "--allow-concurrent",
-    ]
-    if dry_run:
-        args.append("--dry-run")
-    else:
-        args += ["--no-dry-run", "--yes"]
-
+    svc = AdminService(get_service_ctx())
     try:
-        result = await run_cli(args, api_key=get_cli_api_key())
-    except CliRunnerError as exc:
-        _raise_from_cli_error(exc)
+        data = svc.cleanup_dead_letter(
+            older_than=older_than,
+            dry_run=dry_run,
+            actor=Actor(kind="http", authenticated=True, label="cf-access"),
+        )
+    except ServiceError as exc:
+        _raise_from_service_error(exc)
 
-    if result.is_partial_failure:
-        return partial_envelope(result.data, request=request, source="cli")
-    return success_envelope(result.data, request=request, source="cli")
+    return success_envelope(data, request=request, source="cli")
 
 
 # ============================================================

@@ -65,14 +65,6 @@ export function SyncTab(): React.ReactElement {
           min={5}
           max={300}
         />
-        <EnvField
-          envKey="HEALTH_CHECK_INTERVAL"
-          control="number"
-          label={t('settings.sync.healthInterval.label')}
-          helper={t('settings.sync.healthInterval.helper')}
-          min={60}
-          max={86400}
-        />
       </Section>
     </>
   )

@@ -36,6 +36,7 @@ from src.services.errors import (
 )
 from src.services.guards import Actor, check_pm2_conflict, require_write_auth
 from src.sync.outbox import OutboxRepository
+from src.sync.outbox_intents import mirror_and_enqueue_flag_sync
 
 if TYPE_CHECKING:
     from src.services.context import ServiceDeps
@@ -543,6 +544,16 @@ class MailWriteService:
         sync_store = self._ctx.sync_store
         outbox = OutboxRepository(str(sync_store.db_path))
 
+        # 不变量:「已完成 ⇒ 无旗标」(architecture-internals: 标完成联动摘旗的对称面)。
+        # 对已完成邮件重新置旗 = 复活为待办 → processing_status 联动回 '已同步',
+        # 否则留下 is_flagged=1 ∧ '已完成' 的设计外组合 (badge / 旗标列表按
+        # is_flagged 裸查会多计, 行渲染又被 isDone 压制 → 数字对不上)。调用方
+        # 显式传 processing_status 时尊重其值, 不做联动。
+        revive_ids: set[int] = set()
+        if is_flagged and processing_status is None:
+            statuses = sync_store.get_processing_statuses(list(internal_ids))
+            revive_ids = {i for i, s in statuses.items() if s == "已完成"}
+
         updated: list[int] = []
         outbox_entries: list[dict[str, Any]] = []
         not_found: list[int] = []
@@ -552,33 +563,31 @@ class MailWriteService:
                 not_found.append(iid)
                 continue
 
-            # 立即 update_local_flags 做 echo prevention; None 字段沿用当前 meta 值。
+            # mirror_and_enqueue_flag_sync = update_local_flags (echo prevention;
+            # None 字段沿用当前 meta 值) + dual-target 入队 (E2-D 共享层, 与
+            # handlers / reverse_sync 同一入队函数)。
             new_read = bool(is_read) if is_read is not None else bool(meta.is_read)
             new_flagged = (
                 bool(is_flagged) if is_flagged is not None else bool(meta.is_flagged)
             )
-            sync_store.update_local_flags(
-                iid, new_read, new_flagged, processing_status=processing_status
-            )
-
-            oid_mailapp = (
-                outbox.enqueue(
-                    internal_id=iid,
-                    op_type="flag_sync",
-                    target="mailapp",
-                    payload=mailapp_payload,
-                    source=_OUTBOX_SOURCE,
-                )
-                if mailapp_payload
-                else None
-            )
-            oid_notion = outbox.enqueue(
-                internal_id=iid,
-                op_type="flag_sync",
-                target="notion",
-                payload=payload,
+            local_status = processing_status
+            notion_payload = payload
+            if iid in revive_ids:
+                local_status = "已同步"
+                notion_payload = {**payload, "processing_status": "已同步"}
+            enq = mirror_and_enqueue_flag_sync(
+                sync_store,
+                outbox,
+                iid,
+                local_read=new_read,
+                local_flagged=new_flagged,
+                local_processing_status=local_status,
+                mailapp_payload=mailapp_payload,
+                notion_payload=notion_payload,
                 source=_OUTBOX_SOURCE,
             )
+            oid_mailapp = enq.mailapp_outbox_id
+            oid_notion = enq.notion_outbox_id
             updated.append(iid)
             # #4 乐观回显: 立即发 SSE → useEventBridge invalidate ['emails']/['mailboxes']/
             # ['email',id] → 所有视图(含智能信箱 [已旗标])从已同步写入的 SQLite 秒刷新,

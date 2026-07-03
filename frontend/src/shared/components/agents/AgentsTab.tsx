@@ -470,6 +470,9 @@ export function ConfigDrawer({
   const [timezone, setTimezone] = useState<string>('')
   // 带完整正文的优先级集合；空配置回落到默认（紧急 + 重要）。
   const [bodyPriorities, setBodyPriorities] = useState<string[]>(['🔴 紧急', '🟡 重要'])
+  // 注入报告 system prompt 的身份文档勾选（增量 2，与 PreprocessConfigDrawer 同语义：
+  // 投影层已把 NULL 行回填默认 ['soul','user']，[] = 显式不注入）。
+  const [contextDocs, setContextDocs] = useState<string[]>([])
   const { models: enabledModels } = useEnabledModels()
   const [model, setModel] = useState<string>('')
   const [kosEnrich, setKosEnrich] = useState(false)
@@ -494,6 +497,7 @@ export function ConfigDrawer({
     setBodyPriorities(
       cfg.body_full_priorities?.length ? cfg.body_full_priorities : ['🔴 紧急', '🟡 重要']
     )
+    setContextDocs(cfg.context_docs ?? [])
     setModel(cfg.model || '')
     setKosEnrich(cfg.kos_enrich)
   }, [open, cfg])
@@ -521,6 +525,7 @@ export function ConfigDrawer({
       prompt: promptDirty ? prompt : cfg.prompt_is_default ? null : cfg.prompt,
       model,
       kos_enrich: kosEnrich,
+      context_docs: contextDocs,
       schedule: {
         ...cfg.schedule,
         cadence,
@@ -652,6 +657,55 @@ export function ConfigDrawer({
                 }}
               >
                 {t('agents.config.promptNote')}
+              </div>
+            </Field>
+
+            {/* 文档勾选（cfg.context_docs）—— 注入报告 system prompt 的身份文档（增量 2，
+                与 PreprocessConfigDrawer 同款 chips + 同语义：[] = 显式不注入） */}
+            <Field
+              label={t('agents.config.contextDocs')}
+              hint={t('agents.config.contextDocsHint')}
+            >
+              <div className="flex items-center" style={{ gap: 8, flexWrap: 'wrap' }}>
+                {PREPROCESS_DOCS.map((doc) => {
+                  const on = contextDocs.includes(doc)
+                  return (
+                    <button
+                      key={doc}
+                      type="button"
+                      aria-pressed={on}
+                      onClick={() =>
+                        setContextDocs((prev) =>
+                          prev.includes(doc) ? prev.filter((x) => x !== doc) : [...prev, doc]
+                        )
+                      }
+                      style={{
+                        padding: '6px 12px',
+                        borderRadius: 8,
+                        fontFamily: 'inherit',
+                        fontSize: 13,
+                        cursor: 'pointer',
+                        color: on ? 'rgb(var(--c-accent))' : 'rgb(var(--ink-fg-2))',
+                        background: on ? 'rgb(var(--c-accent) / 0.14)' : 'rgb(var(--ink-1) / 0.5)',
+                        border: `1px solid ${on ? 'rgb(var(--c-accent))' : 'rgb(var(--ink-border))'}`,
+                        transition:
+                          'color 120ms cubic-bezier(0.4,0,0.2,1), background-color 120ms cubic-bezier(0.4,0,0.2,1), border-color 120ms cubic-bezier(0.4,0,0.2,1)'
+                      }}
+                    >
+                      {t(`agents.preprocess.doc.${doc}`)}
+                    </button>
+                  )
+                })}
+              </div>
+              <div
+                style={{
+                  fontSize: 11.5,
+                  color: 'rgb(var(--ink-fg-3))',
+                  marginTop: 7,
+                  lineHeight: 1.5
+                }}
+              >
+                {t('agents.config.contextDocsNote')}
               </div>
             </Field>
 

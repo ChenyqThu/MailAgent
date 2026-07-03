@@ -141,6 +141,70 @@ def _normalize_date_received_iso(value: Optional[str]) -> Optional[str]:
         return value
 
 
+class SyncStoreMigrationError(RuntimeError):
+    """数据库迁移真失败 / 版本不兼容 (E0-WP3 迁移守卫)。
+
+    抛出场景:
+    1. ALTER/索引迁移块的 except 分支复查发现目标对象仍缺失 (真失败, 非「列已存在」)
+       —— 中断 _init_database, **不写 db_version**, 下次启动自动重试;
+    2. 降级守卫: 库里的 db_version > 代码 DB_VERSION (库来自更新版本的 app),
+       拒绝启动防旧代码静默降级新库。
+    调用方 (src/service.py EmailNotionSyncApp.__init__) 捕获后 fail-fast 退出。
+    """
+
+
+def _migration_guard_columns(cursor, table: str, required_cols, label: str, err: Exception) -> None:
+    """迁移 ALTER 块 except 分支的吞错修正 (E0-WP3)。
+
+    历史 pattern: ``except sqlite3.OperationalError → logger.warning("skipped")``。
+    因为 try 里已有 PRAGMA 预检挡掉「列已存在」, except 抓到的只会是真失败
+    (disk I/O / malformed / locked …) —— 但旧代码吞掉后 db_version 照样前进, 永不重试。
+
+    这里用 PRAGMA 复查目标列: 仍缺失 → raise SyncStoreMigrationError (中断迁移,
+    version 不前进); 全部在位 → 维持旧行为 no-op warning (防御性保留, 理论上不可达)。
+
+    注意: raise 沿栈展开时由 _init_database 外层兜底 close 连接 (事务内未 commit
+    的部分随 close ROLLBACK); 版本写入在函数末尾从未执行, 下次启动以旧 version
+    重跑 (各迁移块幂等, 重试安全)。
+    """
+    try:
+        existing = {r[1] for r in cursor.execute(f"PRAGMA table_info({table})").fetchall()}
+    except sqlite3.Error:
+        existing = set()
+    missing = sorted(set(required_cols) - existing)
+    if missing:
+        logger.error(
+            f"{label}: ALTER 真失败, 目标列仍缺失 {missing} — 中断迁移, "
+            f"db_version 不前进, 下次启动重试 ({err})"
+        )
+        raise SyncStoreMigrationError(
+            f"{label}: columns still missing {missing} after migration failure: {err}"
+        ) from err
+    logger.warning(f"{label}: OperationalError 但目标列已全部在位, 按已迁移跳过 ({err})")
+
+
+def _migration_guard_index(cursor, index_name: str, label: str, err: Exception) -> None:
+    """迁移「建索引」块 except 分支的吞错修正 (E0-WP3), 语义同 _migration_guard_columns。
+
+    复查 sqlite_master: 索引仍缺失 → raise (真失败, version 不前进); 已在位 → no-op warning。
+    """
+    try:
+        row = cursor.execute(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name=?", (index_name,)
+        ).fetchone()
+    except sqlite3.Error:
+        row = None
+    if row is None:
+        logger.error(
+            f"{label}: 迁移真失败, 索引 {index_name} 仍缺失 — 中断迁移, "
+            f"db_version 不前进, 下次启动重试 ({err})"
+        )
+        raise SyncStoreMigrationError(
+            f"{label}: index {index_name} still missing after migration failure: {err}"
+        ) from err
+    logger.warning(f"{label}: OperationalError 但索引 {index_name} 已在位, 按已迁移跳过 ({err})")
+
+
 class SyncStoreStats(TypedDict, total=False):
     """同步存储统计信息类型定义"""
     total_emails: int
@@ -328,8 +392,24 @@ class SyncStore:
             conn.close()
 
     def _init_database(self):
-        """初始化数据库表结构（v3 架构）"""
+        """初始化数据库表结构（v3 架构）
+
+        E0-WP3: 迁移真失败 / 降级守卫会从 _init_database_impl 中 raise —— 这里兜底
+        关闭连接 (未 commit 的事务随 close 自动 ROLLBACK), 防止异常 traceback 持有
+        frame 导致连接 (及其写锁) 悬挂, 随后把异常原样上抛给调用方 fail-fast。
+        """
         conn = self._get_connection()
+        try:
+            self._init_database_impl(conn)
+        except BaseException:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            raise
+
+    def _init_database_impl(self, conn):
+        """_init_database 的实际建表 + 迁移体 (拆出以便异常路径统一释放连接)。"""
         cursor = conn.cursor()
 
         # 同步状态表
@@ -345,6 +425,19 @@ class SyncStore:
         cursor.execute("SELECT value FROM sync_state WHERE key = 'db_version'")
         row = cursor.fetchone()
         current_version = int(row['value']) if row else 1
+
+        # E0-WP3 降级守卫: 库版本比代码新 → 拒绝启动 (防旧版 app 打开新库后
+        # 把 db_version 静默降回、或按旧语义误写新 schema)。前端 backend_lifecycle.ts
+        # 的 EXPECTED_DB_VERSION 门控是 `>=` 容错 (不会拦更新的库), Python 侧在这里
+        # fail-fast 是有意行为 —— 两者不冲突 (TS 照常开窗, serve 拒起并留明确日志)。
+        if current_version > self.DB_VERSION:
+            # raise 由 _init_database 外层兜底 close 连接 (ROLLBACK), 这里不重复 close
+            raise SyncStoreMigrationError(
+                f"数据库 db_version={current_version} 高于本版本支持上限 "
+                f"{self.DB_VERSION} —— 该数据库来自更新版本的 MailAgent。"
+                f"请升级 App, 或从 backups/ 恢复与当前版本匹配的数据库备份 "
+                f"(拒绝启动以防旧代码降级新库)。"
+            )
 
         if current_version < 3:
             # v3 需要迁移，检查是否已有 email_metadata 表
@@ -700,8 +793,10 @@ class SyncStore:
                 )
                 logger.info("v8 migration: added email_metadata.pinned_at")
         except sqlite3.OperationalError as e:
-            # 表不存在等罕见情形（理论上前面的 CREATE TABLE IF NOT EXISTS 已经建好）
-            logger.warning(f"v8 migration: skipped is_pinned ADD COLUMN ({e})")
+            # E0-WP3: PRAGMA 预检已挡「列已存在」, 这里只会是真失败 → 复查, 缺列即中断
+            _migration_guard_columns(
+                cursor, "email_metadata", {"is_pinned", "pinned_at"}, "v8 migration", e
+            )
 
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_email_is_pinned
@@ -720,7 +815,9 @@ class SyncStore:
                 )
                 logger.info("v9 migration: added email_metadata.is_important")
         except sqlite3.OperationalError as e:
-            logger.warning(f"v9 migration: skipped is_important ADD COLUMN ({e})")
+            _migration_guard_columns(
+                cursor, "email_metadata", {"is_important"}, "v9 migration", e
+            )
 
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_email_is_important
@@ -852,7 +949,13 @@ class SyncStore:
                 )
                 logger.info("v13 migration: added email_metadata.processing_status (Sprint 15 D backfill)")
         except sqlite3.OperationalError as e:
-            logger.warning(f"v13 migration: skipped ADD COLUMN ({e})")
+            _migration_guard_columns(
+                cursor,
+                "email_metadata",
+                {"imap_uidvalidity", "imap_uid", "backend_origin", "processing_status"},
+                "v13 migration",
+                e,
+            )
 
         # ==================== v14 migration: AI 字段提升为主表列 ====================
         # 把 ai_priority / ai_action 从 llm_processing.labels_json (JSON 间接查) 提升为
@@ -874,7 +977,9 @@ class SyncStore:
                 )
                 logger.info("v14 migration: added email_metadata.ai_action")
         except sqlite3.OperationalError as e:
-            logger.warning(f"v14 migration: skipped ADD COLUMN ({e})")
+            _migration_guard_columns(
+                cursor, "email_metadata", {"ai_priority", "ai_action"}, "v14 migration", e
+            )
 
         # 索引: imap_uid 反查 (DavMail backend fetch_email_by_id 快路径) — partial 减小尺寸
         cursor.execute("""
@@ -1175,7 +1280,13 @@ class SyncStore:
                         cursor.execute(f"ALTER TABLE report_agent ADD COLUMN {_c} {_t}")
                 logger.info("v19 migration: report_agent +trigger_mode/timezone/body_full_max")
             except sqlite3.OperationalError as e:
-                logger.warning(f"v19 migration skipped: {e}")
+                _migration_guard_columns(
+                    cursor,
+                    "report_agent",
+                    {"trigger_mode", "timezone", "body_full_max", "body_full_priorities"},
+                    "v19 migration",
+                    e,
+                )
 
         # 种子: 日 / 周 / 月报三个独立 agent（enabled=0, prompt=NULL→内置默认）。幂等。
         # daily=rolling_24h 触发 + 预载 15 封正文；周 / 月报走层级聚合（读子报告，无窗口 /
@@ -1274,7 +1385,9 @@ class SyncStore:
                 )
                 logger.info("v20 migration: email_outbox partial unique index ready")
             except sqlite3.OperationalError as e:
-                logger.warning(f"v20 migration skipped: {e}")
+                # E0-WP3: dedup/建索引真失败被吞会让 outbox 原子 UPSERT 的
+                # ON CONFLICT 目标索引缺失 (运行时写路径全挂) → 复查, 缺即中断
+                _migration_guard_index(cursor, "ux_outbox_pending_intent", "v20 migration", e)
 
         # === v22: 多文件夹同步 ===
         # per-folder 增量游标 = email_metadata 派生的 MAX(imap_uid) (复用 Sent 模式)；
@@ -1508,7 +1621,9 @@ class SyncStore:
                     cursor.execute("ALTER TABLE report_agent ADD COLUMN context_docs_json TEXT")
                     logger.info("v27 migration: report_agent +context_docs_json")
             except sqlite3.OperationalError as e:
-                logger.warning(f"v27 migration skipped: {e}")
+                _migration_guard_columns(
+                    cursor, "report_agent", {"context_docs_json"}, "v27 migration", e
+                )
         # ② 播种 type='preprocess' 行。幂等 (INSERT OR IGNORE), 旧库已有则跳过、不覆盖用户改过的
         #    prompt/docs。enabled=0/model=NULL 是占位 (预处理开关/模型走全局 env, 非本行);
         #    context_docs_json 默认 ["soul","user"] = 对齐 build_task_identity_context 默认 → 卡片
@@ -1544,9 +1659,15 @@ class SyncStore:
                     cursor.execute("ALTER TABLE report_agent ADD COLUMN fallback_models_json TEXT")
                     logger.info("v29 migration: report_agent +fallback_models_json")
             except sqlite3.OperationalError as e:
-                logger.warning(f"v29 migration skipped: {e}")
+                _migration_guard_columns(
+                    cursor, "report_agent", {"fallback_models_json"}, "v29 migration", e
+                )
 
-        # 更新数据库版本
+        # 更新数据库版本 —— E0-WP3: 只有**全部迁移成功**才会执行到这里。任何迁移块
+        # 真失败都会 raise (见 _migration_guard_columns/_migration_guard_index),
+        # 沿栈中断本函数 → 本 INSERT 与末尾 commit 都不执行, version 停在旧值 →
+        # 下次启动以旧 version 重跑迁移 (各块 PRAGMA/IF NOT EXISTS 幂等, 已落地的
+        # 半程不碍重试; 事务内未 commit 的部分随连接回收 ROLLBACK)。
         cursor.execute("""
             INSERT OR REPLACE INTO sync_state (key, value, updated_at)
             VALUES ('db_version', ?, ?)
@@ -3114,6 +3235,32 @@ class SyncStore:
                 return 0
 
     # ==================== 统计和维护 ====================
+
+    def get_processing_statuses(self, internal_ids: List[int]) -> Dict[int, str]:
+        """批量读 processing_status（只含非空行，不过滤 sync_status）。
+
+        供 MailWriteService.set_flags 的「置旗复活已完成邮件」不变量判断用：
+        EmailMetadataRecord 不含 processing_status，这里补一个最小只读面。
+        """
+        if not internal_ids:
+            return {}
+
+        result: Dict[int, str] = {}
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            batch_size = 500
+            for i in range(0, len(internal_ids), batch_size):
+                batch = internal_ids[i:i + batch_size]
+                placeholders = ','.join('?' * len(batch))
+                cursor.execute(f"""
+                    SELECT internal_id, processing_status
+                    FROM email_metadata
+                    WHERE internal_id IN ({placeholders})
+                      AND processing_status IS NOT NULL
+                """, batch)
+                for row in cursor.fetchall():
+                    result[row[0]] = row[1]
+        return result
 
     def get_synced_flags(self, internal_ids: List[int]) -> Dict[int, Dict]:
         """批量获取已同步邮件的存储 flags 和 notion_page_id

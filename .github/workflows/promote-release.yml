@@ -1,0 +1,61 @@
+# Promote release (E0 WP4)
+#
+# 背景: build-mac.yml 在 tag push 后用 `electron-builder --publish always` 把 5 件 feed
+# (latest-mac.yml + zip/dmg + blockmap) 传到一个 **draft** release; draft 不更新
+# `releases/latest`, auto-update feed 也不生效。转正式过去是纯手动步骤
+# (`gh release edit <tag> --draft=false --latest`), 漏做 → latest 停在旧版。
+#
+# 本 workflow 把「手动步骤」变成「手动点一下的机器步骤」(保留 tag 后人工 dogfood 验包窗口,
+# 故不做 build 成功自动转正): Actions → Promote release → 输入 tag → Run。
+# 步骤 = edit 转正式 + 置 latest + 校验 releases/latest 确实指向该 tag。
+#
+# 注意: 不传 --notes / --notes-file — 保留 CI draft 上已有的 release notes。
+
+name: Promote release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to promote (e.g. v1.2.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write # gh release edit
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ inputs.tag }}
+    steps:
+      - name: Promote draft release to published + latest
+        # tag 不存在 / 无对应 release → gh 非零退出, job 直接红。
+        # --title 对齐现行手动流程格式 "MailAgent vX.Y.Z" (见 CLAUDE.md 打包/发布节)。
+        run: |
+          gh release edit "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft=false \
+            --latest \
+            --title "MailAgent $TAG"
+          echo "✓ gh release edit $TAG done"
+
+      - name: Verify releases/latest == tag
+        # 现行手动流程的验证步骤机器化:
+        #   gh api repos/<repo>/releases/latest --jq .tag_name 必须 == tag。
+        # edit 后 API 视图偶有传播延迟, 重试 3 次 (5s 间隔) 防 flake。
+        run: |
+          latest=""
+          for i in 1 2 3; do
+            latest=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name || echo "")
+            if [[ "$latest" == "$TAG" ]]; then
+              echo "✓ releases/latest = $latest"
+              exit 0
+            fi
+            echo "attempt $i: releases/latest='$latest' != '$TAG', retry in 5s..."
+            sleep 5
+          done
+          echo "::error::releases/latest ('$latest') != '$TAG' — promote 未生效或被更新的 release 抢占 latest, 需人工检查 gh release list。"
+          exit 1

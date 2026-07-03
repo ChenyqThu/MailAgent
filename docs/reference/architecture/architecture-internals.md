@@ -292,7 +292,7 @@ CREATE TABLE thread_head_cache (
 - DB v10 新表 `email_outbox`（13 列, CHECK target/status, FK CASCADE）
 - `OutboxRepository.enqueue` echo prevention: source='notion_webhook' + target='notion' silent skip 防回环
 - `FanoutWorker` asyncio loop 消费, AppleScript / Notion API 本身幂等所以 fanout 不做 SQLite-based idempotency short-circuit
-- 灰度开关 `MAILAGENT_OUTBOX_ENABLED=false` 时 handler + reverse_sync 都退回老 AppleScript 直调路径（回退兼容）
+- ~~灰度开关 `MAILAGENT_OUTBOX_ENABLED`~~ **已退役**（E2 灰度收口 2026-07-03）：FanoutWorker 恒启动、`outbox_repo` 在 handlers/reverse_sync 必传（None → TypeError），老 AppleScript 直调分支已删除；三处 flag→outbox 入队（handlers / reverse_sync / mail_write.set_flags）归一到 `src/sync/outbox_intents.py` 共享层（`enqueue_flag_sync` / `mirror_and_enqueue_flag_sync`，target/payload 语义差异由参数承载）
 - 详见 `docs/sprint15-backend-complete.md` + `frontend/SPRINT15-HANDOFF.md` §3
 
 ---
@@ -322,15 +322,15 @@ CREATE TABLE thread_head_cache (
 ```
 
 **核心特性**：
-- `src/mail/backend/` 抽象核心: `base.py` (`IMailBackend` Protocol, 8 个方法), `types.py` (EmailContent / EmailMeta / DraftRequest), `factory.py` (probe + create_backend), `imap_client.py` (IMAP/SMTP context manager + cipher key), `applescript_backend.py` (FALLBACK wrapper), `davmail_backend.py` (~700 行 PRIMARY IMAP/SMTP impl), `davmail_uid_mapper.py` (后台 UID backfill 任务)
+- `src/mail/backend/` 抽象核心: `base.py` (`IMailBackend` Protocol, **17 个方法 = 真实消费面**，E1 2026-07 契约收口后按实际调用重定义，盘点见 `docs/plans/architecture-review-2026-07/e1-contract-inventory.md`), `types.py` (EmailContent / EmailMeta / DraftRequest), `factory.py` (probe + create_backend), `imap_client.py` (IMAP/SMTP context manager + cipher key), `applescript_backend.py` (FALLBACK wrapper, 委托内部 arm/radar), `davmail_backend.py` (PRIMARY IMAP/SMTP impl), `davmail_uid_mapper.py` (后台 UID backfill 任务)
 - **主键策略 (B 副字段)**: `email_metadata.internal_id` PK 不变. AppleScript 时代 `internal_id = Mail.app SQLite ROWID (< 10^9)`. DavMail 时代 `internal_id = allocate_davmail_internal_id() ≥ 10^9` (DB v13 新增 `sync_sequence` 表 AUTOINCREMENT). `(imap_uidvalidity, imap_uid)` 副字段定位 IMAP 端实际邮件. `backend_origin` 列标记哪个 backend 生成的
-- **alias 兼容层**: `DavMailBackend.arm = self`, `self.radar = self` — NewWatcher / fanout / handler 19+ 处 `self.arm.fetch_email_content_by_id` / `self.radar.check_for_changes` 调用零改动支持 davmail mode
+- **契约收口（E1 2026-07，原 alias 兼容层已退役）**: 曾经的 `DavMailBackend.arm = self` / `self.radar = self` 影子层已删——NewWatcher / fanout / handler 全部改为直接持 `IMailBackend` 调 `backend.fetch_email_content_by_id` / `backend.check_for_changes`；factory 之外禁止直构 `AppleScriptArm`（唯二豁免：`llm_agent/runner.py` applescript 模式 lazy-init、`cli/commands/debug.py` applescript-only 诊断），davmail 模式下批量 backfill `source=applescript` 显式报错而非静默错配 id 空间
 - **Cross-backend merge guard**: `_save_email_v3` 当 message_id UNIQUE 冲突时不 INSERT OR REPLACE 杀老 row, 只 UPDATE backend 字段, 保留 `notion_page_id` / `sync_status='synced'` / `thread_id`. 防 cutover 时数据丢失
 - **正向 sync (davmail 路径)**: `IMAP STATUS UIDNEXT` polling (~30s 间隔) → `radar.check_for_changes` 检测 → `UID FETCH BODY[]` (~236ms vs AppleScript ~1s, 4× 快) → 后续 NotionSync + LLM 路径不变
-- **反向 sync (Sprint 15 outbox 派发)**: `FanoutWorker` 调 `backend.arm.set_flag` → `IMAP UID STORE +\Flagged +\Seen` 同步生效, 1:1 映射
+- **反向 sync (Sprint 15 outbox 派发)**: `FanoutWorker` 调 `backend.set_flag` → `IMAP UID STORE +\Flagged +\Seen` 同步生效, 1:1 映射
 - **草稿创建 (Craft 按钮)**: davmail 模式 `IMAP APPEND` 到 Drafts folder (含 SPECIAL-USE detection + fallback), 富文本 multipart/alternative + In-Reply-To 线程折叠. applescript 模式 fallback 走 `scripts/create_reply_draft.sh` 老路径
 - **DB v13 schema**: `email_metadata` 加 3 列 (`imap_uidvalidity` / `imap_uid` / `backend_origin`) + 2 索引 (`idx_imap_uid` / `idx_backend_origin`). `sync_sequence` 新表 AUTOINCREMENT seq for davmail internal_id 分配
-- **LLM runner backend 注入**: `LLMRunner(backend=...)` 让 LLM fetch 路径走 `backend.arm` (davmail mode 走 IMAP fetch ~236ms 而非 AppleScript ~1s)
+- **LLM runner backend 注入**: `LLMRunner(backend=...)` 让 LLM fetch 路径直接走 `IMailBackend` (davmail mode 走 IMAP fetch ~236ms 而非 AppleScript ~1s)；E1 后 davmail 模式未注入 backend 时显式 raise（拒绝 fallback 到错 id 空间的 AppleScriptArm）
 - **CalDAV LLM context (机会主义, 未启用)**: `src/calendar_notion/caldav_reader.py` + `build_llm_caldav_context` 已实现, 通过 DavMail CalDAV 直读 Outlook 服务端日历给 LLM 注入"今日日程" — 等观察期满 + prompt 调优再启用
 - **`date_received` SSoT 时区归一**: 入口 `_normalize_date_received_iso` helper + `_local_tz()` 用 `/etc/localtime` 解析 IANA zone 自动处理 DST. cutover 时一次性 backfill 5153 行 (5月 `-07:00` / 1月 `-08:00`), 现 8899/8899 全 iso_with_tz
 

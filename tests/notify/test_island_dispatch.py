@@ -232,6 +232,36 @@ def test_failed_send_enqueues_to_reconnect_backlog(monkeypatch, fake_store):
     island_reconnect.clear_queue()
 
 
+def test_response_timeout_send_does_not_enqueue(monkeypatch, fake_store):
+    """修 4 (urgent 卡永动重弹): 送达成功但无同步回答（recv 超时 → ok=True +
+    error='response_timeout'）→ 不入 reconnect 队列 + dispatch 记 ok=1（§9-2 持久
+    dedup 因此对该行生效）。旧行为 ok=False → 入队 → flush 重发 = 永动。"""
+    island_reconnect.clear_queue()
+    island_dispatch._dedup_seen.clear()
+    island_dispatch.init(enabled=True, sync_store=fake_store)
+
+    async def fake_send_async(envelope, **kwargs):
+        return ping_island.SendResult(ok=True, response=None,
+                                      error="response_timeout", latency_ms=3001)
+
+    monkeypatch.setattr(ping_island, "send_async", fake_send_async)
+    monkeypatch.setattr(island_dispatch.ping_island, "send_async", fake_send_async)
+
+    async def _scenario():
+        island_dispatch.dispatch_llm_reviewed(
+            internal_id=1000008019, page_id="p", subject="s", sender_email="a@b",
+            sender_name="A", mailbox="收件箱",
+            priority="🔴 紧急", action="需要回复",
+        )
+        await asyncio.sleep(0.05)
+
+    asyncio.run(_scenario())
+
+    assert island_reconnect.queue_len() == 0, "送达成功不得入 reconnect 队列（永动根因）"
+    assert fake_store.rows
+    assert fake_store.rows[-1]["dispatched_ok"] is True
+
+
 def test_response_with_decision_invokes_response_handler(monkeypatch, fake_store):
     """收到 BridgeResponse.decision → island_response.handle_response 被调."""
     island_dispatch.init(enabled=True, sync_store=fake_store, account_name="Ex")
@@ -271,6 +301,119 @@ def test_response_with_decision_invokes_response_handler(monkeypatch, fake_store
     assert captured_meta.get("mailagent.internalId") == "53675"
     # 记录到 SQLite 的 response_decision 字段
     assert fake_store.rows[-1]["response_decision"] == "open_mail"
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# 修 5 (ISLAND_MAIL_NOTIFY_SCOPE) — scope='important'（config 新默认）时仅重要级别弹卡：
+# MailReceived 一律静默、LLMReviewed 仅 🔴 紧急 / 🟡 重要 发；scope='all' = 旧行为。
+# init() 缺省 'all'（真实进程恒由 service.py 从 config 传入）→ 本文件其余测试逐字节现状。
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def test_scope_important_silences_mail_received(patch_send, fake_store):
+    """scope='important' → MailReceived 零发送（该时点无 priority，一律静默）。"""
+    captured, _ = patch_send
+    island_dispatch.init(enabled=True, sync_store=fake_store,
+                         mail_notify_scope="important")
+    _fire_received(internal_id=600)
+    assert captured == []
+    assert fake_store.rows == []  # 没进 _fire → 无 dispatch 行
+
+
+def test_scope_important_silences_normal_and_low_llm_reviewed(patch_send, fake_store):
+    """scope='important' → 🟢 一般 / ⚪ 低 的 LLMReviewed 零发送。"""
+    captured, _ = patch_send
+    island_dispatch.init(enabled=True, sync_store=fake_store,
+                         mail_notify_scope="important")
+
+    async def _scenario():
+        island_dispatch.dispatch_llm_reviewed(
+            internal_id=601, page_id="p", subject="s", sender_email="a@b",
+            sender_name="A", mailbox="收件箱",
+            priority="🟢 一般", action="仅供参考",
+        )
+        island_dispatch.dispatch_llm_reviewed(
+            internal_id=602, page_id="p", subject="s", sender_email="a@b",
+            sender_name="A", mailbox="收件箱",
+            priority="⚪ 低", action="无需操作",
+        )
+        await asyncio.sleep(0.05)
+
+    asyncio.run(_scenario())
+    assert captured == []
+
+
+def test_scope_important_important_priority_emits_plain_card(patch_send, fake_store):
+    """scope='important' → 🟡 重要 + 非 NEEDS_FLAG action 照发普通卡（分流判定不动）。"""
+    captured, _ = patch_send
+    island_dispatch.init(enabled=True, sync_store=fake_store,
+                         mail_notify_scope="important")
+
+    async def _scenario():
+        island_dispatch.dispatch_llm_reviewed(
+            internal_id=603, page_id="p", subject="s", sender_email="a@b",
+            sender_name="A", mailbox="收件箱",
+            priority="🟡 重要", action="仅供参考",
+        )
+        await asyncio.sleep(0.05)
+
+    asyncio.run(_scenario())
+    assert len(captured) == 1
+    env = captured[0]
+    assert env.event_type == "LLMReviewed"  # 普通卡（action 不命中 NEEDS_FLAG）
+    assert env.intervention is None
+
+
+def test_scope_important_urgent_card_still_emits(patch_send, fake_store):
+    """scope='important' → 🔴 紧急 + 需操作照发带按钮 Urgent 卡（现状分流不动）。"""
+    captured, _ = patch_send
+    island_dispatch.init(enabled=True, sync_store=fake_store,
+                         mail_notify_scope="important")
+
+    async def _scenario():
+        island_dispatch.dispatch_llm_reviewed(
+            internal_id=604, page_id="p", subject="s", sender_email="a@b",
+            sender_name="A", mailbox="收件箱",
+            priority="🔴 紧急", action="需要回复",
+        )
+        await asyncio.sleep(0.05)
+
+    asyncio.run(_scenario())
+    assert len(captured) == 1
+    env = captured[0]
+    assert env.event_type == "LLMReviewedUrgent"
+    assert env.expects_response is True
+
+
+def test_scope_all_keeps_legacy_behaviour(patch_send, fake_store):
+    """scope='all'（回退开关）→ MailReceived + 普通 LLMReviewed 全量照发（现状）。"""
+    captured, _ = patch_send
+    island_dispatch.init(enabled=True, sync_store=fake_store,
+                         mail_notify_scope="all")
+
+    async def _scenario():
+        island_dispatch.dispatch_mail_received(
+            internal_id=605, page_id="p", subject="s", sender_email="a@b",
+            sender_name="A", mailbox="收件箱",
+        )
+        island_dispatch.dispatch_llm_reviewed(
+            internal_id=605, page_id="p", subject="s", sender_email="a@b",
+            sender_name="A", mailbox="收件箱",
+            priority="🟢 一般", action="仅供参考",
+        )
+        await asyncio.sleep(0.05)
+
+    asyncio.run(_scenario())
+    assert {e.event_type for e in captured} == {"MailReceived", "LLMReviewed"}
+
+
+def test_scope_invalid_value_normalizes_to_all(patch_send, fake_store):
+    """非法 scope 值归一 'all'（fail-open：配置写错宁多勿丢通知）。"""
+    captured, _ = patch_send
+    island_dispatch.init(enabled=True, sync_store=fake_store,
+                         mail_notify_scope="imporant")  # 手滑拼错
+    _fire_received(internal_id=606)
+    assert len(captured) == 1  # 归一 'all' → MailReceived 照发
 
 
 # ──────────────────────────────────────────────────────────────────────────

@@ -19,17 +19,17 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+# serve-api 进程无 stdlib logging root handler (uvicorn.run log_config=None)，
+# stdlib INFO 会被 lastResort(WARNING+) 吞掉 → 与主链路一致走 loguru。
+from loguru import logger
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
 from src.api.auth import verify_local_token
 from src.api.deps import get_settings
-
-log = logging.getLogger("mailagent.api.island")
 
 router = APIRouter(prefix="/api/island", tags=["island"])
 
@@ -105,8 +105,8 @@ async def island_ack(body: IslandAckBody, settings=Depends(get_settings)) -> dic
         # 结果); ② 防 fork 断连时 Starlette 取消 handler 致业务半执行。真实结果由 P0-4
         # ActionAcked envelope 异步回流 fork。
         _schedule_bg(island_response.handle_response(synthetic, pending.metadata))
-        log.info("[island-ack] mail choice=%s internal_id=%s dispatched (bg)",
-                 body.choice, pending.internal_id)
+        logger.info(f"[island-ack] mail choice={body.choice} "
+                    f"internal_id={pending.internal_id} dispatched (bg)")
         return {"ok": True, "kind": "mail", "choice": body.choice}
 
     if pending.kind == "agent":
@@ -120,7 +120,7 @@ async def island_ack(body: IslandAckBody, settings=Depends(get_settings)) -> dic
             _session_id_from_key(pending.session_key),
         )
         if not tool_call_id or gateway_port <= 0:
-            log.warning("[island-ack] agent pending missing toolCallId/gatewayPort")
+            logger.warning("[island-ack] agent pending missing toolCallId/gatewayPort")
             raise HTTPException(status_code=422, detail="agent pending malformed")
         _schedule_bg(_agent_decide_and_complete(
             session_id=session_id,
@@ -130,11 +130,11 @@ async def island_ack(body: IslandAckBody, settings=Depends(get_settings)) -> dic
             choice=body.choice,
             sock_path=getattr(settings, "island_socket_path", None),
         ))
-        log.info("[island-ack] agent choice=%s session_id=%s dispatched (bg)",
-                 body.choice, session_id)
+        logger.info(f"[island-ack] agent choice={body.choice} "
+                    f"session_id={session_id} dispatched (bg)")
         return {"ok": True, "kind": "agent", "choice": body.choice}
 
-    log.info("[island-ack] kind=%s not handled", pending.kind)
+    logger.info(f"[island-ack] kind={pending.kind} not handled")
     return {"ok": False, "kind": pending.kind, "detail": "unknown kind"}
 
 
@@ -225,8 +225,8 @@ async def _agent_decide_and_complete(
         # makePersistOnFinish 已把新审批 stash + announce 成一张**新**岛卡；此处若发 completed
         # 会把那张新 waitingForInput 卡误清掉。故 repaused = 非终态，静默返回（不追发）。
         if status == "repaused":
-            log.info("[island-ack] agent resume re-paused session_id=%s "
-                     "(next approval already announced)", session_id)
+            logger.info(f"[island-ack] agent resume re-paused session_id={session_id} "
+                        f"(next approval already announced)")
             return
         if status == "error" or not result.get("ok", False):
             await island_agent.announce_status(
@@ -242,7 +242,7 @@ async def _agent_decide_and_complete(
             summary=summary, sock_path=sock_path,
         )
     except Exception as e:  # noqa: BLE001 — gateway 不可达 / 超时 → 明确失效回执
-        log.warning("[island-ack] agent resume failed session_id=%s: %s", session_id, e)
+        logger.warning(f"[island-ack] agent resume failed session_id={session_id}: {e}")
         try:
             await island_agent.announce_status(
                 session_id=session_id, status_kind="error",

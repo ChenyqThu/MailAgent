@@ -14,10 +14,9 @@ Covers:
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
+from unittest.mock import MagicMock
 
-import pytest
 
 from src.events.handlers import EventHandlers
 from src.repository import EmailSearchHit
@@ -68,12 +67,14 @@ def _make_handler(*, repo: Optional[_FakeRepo] = None):
         captured["payload"] = payload
 
     h = EventHandlers(
-        arm=_FakeArm(),
+        backend=_FakeArm(),
         sync_store=_FakeSyncStore(),
         feishu=None,
         notion_sync=None,
         result_callback=_capture,
         email_repo=repo,
+        # E2-B 必传化: search 路径不碰 outbox, 占位 mock 即可
+        outbox_repo=MagicMock(),
     )
     return h, captured
 

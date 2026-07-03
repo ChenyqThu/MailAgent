@@ -1,13 +1,15 @@
-"""admin WRITE endpoints — cleanup-dead-letter / dead-letter retry via cli_runner.
+"""admin WRITE endpoints — cleanup-dead-letter / dead-letter retry (E2-C in-process AdminService).
 
-These endpoints fork the real `mailagent` CLI; here we monkeypatch
-`src.api.routers.admin.run_cli` with an async spy (same technique as
-test_email_write_cli_args.py) so no subprocess is spawned. We pin:
+E2-C 起这两个端点不再 fork CLI, 而是进程内调 ``AdminService`` (``src/services/admin_service.py``)。
+这些测试把 ``admin_router.AdminService`` 换成一个记录型 spy (与 test_email_write_service.py 的
+``_SvcSpy`` 同构) —— 不碰真实 SQLite —— 断言 router (a) 把 query 参数正确透传成 service kwargs,
+(b) 恒传已鉴权 ``actor`` (两端点都过了 ``verify_cf_access``), (c) 把 ``ServiceError`` 经 envelope
+映成正确 HTTP。
 
-  - A1: a CLI ``partial_failure`` wrapper (exit 6) from cleanup-deadletter maps
-    to HTTP 207 + ``status:'partial_failure'`` envelope (data passed through),
-    while a plain success stays 200.
-  - the always-on ``--allow-concurrent`` + dry-run flag wiring on cleanup.
+真实 SQL 行为 (UPDATE 重置字段 / cutoff 计数删除) 由 tests/services/test_admin_service.py
+(真实 SQLite) 覆盖。cleanup-dead-letter 已不存在"部分失败"路径 —— 迁移前 CLI 子进程退出码 6
+(partial_failure → HTTP 207) 的分支随 fork 一并退役 (AdminService.cleanup_dead_letter 是单条
+原子 DELETE), 故不再有对应测试。
 """
 
 from __future__ import annotations
@@ -17,122 +19,104 @@ from typing import Any, Optional
 import pytest
 
 import src.api.routers.admin as admin_router
-from src.api.cli_runner import CliResult, CliRunnerError
+from src.services.errors import ServiceInvalidArgError
 
 
-class _Spy:
-    """Records run_cli(args, api_key=...) and returns a canned CliResult."""
+class _AdminSvcSpy:
+    """``AdminService`` 替身: 记录 (method, target, kwargs), 返回 canned 结果。
 
-    def __init__(
-        self,
-        *,
-        data: Any = None,
-        raises: Optional[CliRunnerError] = None,
-        status: str = "success",
-    ):
-        self.calls: list[dict] = []
-        self._data = data if data is not None else {"ok": True}
-        self._raises = raises
-        self._status = status
+    router 走 ``AdminService(get_service_ctx())`` 再调方法 —— patch 类符号即可。
+    ``_raise`` (类属性, 由 fixture 重置) 非 None 时执行类方法抛它, 测错误映射。
+    """
 
-    async def __call__(
-        self, args, *, api_key=None, timeout=60, extra_globals=None, cwd=None
-    ):
-        self.calls.append({"args": list(args), "api_key": api_key})
-        if self._raises is not None:
-            raise self._raises
-        return CliResult(data=self._data, meta={"duration_ms": 1}, status=self._status)
+    instances: list["_AdminSvcSpy"] = []
+    _raise: Optional[Exception] = None
 
-    @property
-    def last_args(self) -> list[str]:
-        assert self.calls, "run_cli was never called"
-        return self.calls[-1]["args"]
+    def __init__(self, ctx=None):
+        self.ctx = ctx
+        self.calls: list[tuple] = []
+        _AdminSvcSpy.instances.append(self)
+
+    def retry_dead_letter(self, internal_id: int, *, actor):
+        self.calls.append(("retry_dead_letter", internal_id, {"actor": actor}))
+        if _AdminSvcSpy._raise is not None:
+            raise _AdminSvcSpy._raise
+        return {"internal_id": internal_id, "old_status": "dead_letter", "new_status": "pending"}
+
+    def cleanup_dead_letter(self, *, older_than: int = 30, dry_run: bool = True, actor):
+        self.calls.append((
+            "cleanup_dead_letter", None,
+            {"older_than": older_than, "dry_run": dry_run, "actor": actor},
+        ))
+        if _AdminSvcSpy._raise is not None:
+            raise _AdminSvcSpy._raise
+        return {
+            "action": "cleanup-deadletter",
+            "older_than_days": older_than,
+            "candidates": 0,
+            "deleted": 0,
+            "dry_run": dry_run,
+            "mode": "dry-run" if dry_run else "delete",
+            "ok": True,
+        }
 
 
-def _patch(monkeypatch, spy: _Spy) -> None:
-    monkeypatch.setattr(admin_router, "run_cli", spy)
+@pytest.fixture()
+def admin_svc_spy(monkeypatch):
+    """Patch the router's AdminService with a fresh recording spy."""
+    _AdminSvcSpy.instances = []
+    _AdminSvcSpy._raise = None
+    monkeypatch.setattr(admin_router, "AdminService", _AdminSvcSpy)
+    return _AdminSvcSpy
+
+
+def _last(spy) -> tuple[str, Any, dict]:
+    """The single recorded call on the last-built spy instance."""
+    assert spy.instances, "AdminService was never constructed"
+    inst = spy.instances[-1]
+    assert inst.calls, "no service method was called"
+    return inst.calls[-1]
 
 
 # ---------------------------------------------------------------------------
-# A1: cleanup-dead-letter partial_failure → 207
+# POST /api/admin/cleanup-dead-letter
 # ---------------------------------------------------------------------------
 
 
-def test_cleanup_dead_letter_partial_failure_207(client, monkeypatch):
-    partial_data = {
-        "succeeded": [{"internal_id": 1}],
-        "failed": [
-            {"internal_id": 2, "error": {"code": "E_GENERIC", "message": "boom"}}
-        ],
-        "summary": {"total": 2, "succeeded": 1, "failed": 1, "aborted_by": None},
-    }
-    spy = _Spy(data=partial_data, status="partial_failure")
-    _patch(monkeypatch, spy)
-
-    r = client.post("/api/admin/cleanup-dead-letter", params={"dry_run": False})
-
-    assert r.status_code == 207
-    body = r.json()
-    assert body["status"] == "partial_failure"
-    assert body["error"] is None  # per-item errors live in data.failed[].error.
-    assert body["data"] == partial_data
-    assert body["meta"]["source"] == "cli"
-
-
-def test_cleanup_dead_letter_success_200(client, monkeypatch):
-    ok_data = {
-        "action": "cleanup-deadletter",
-        "older_than_days": 30,
-        "candidates": 0,
-        "deleted": 0,
-        "dry_run": True,
-        "mode": "dry-run",
-        "ok": True,
-    }
-    spy = _Spy(data=ok_data, status="success")
-    _patch(monkeypatch, spy)
-
+def test_cleanup_dead_letter_success_200(client, admin_svc_spy):
     r = client.post("/api/admin/cleanup-dead-letter")
 
     assert r.status_code == 200
     body = r.json()
     assert body["status"] == "success"
-    assert body["data"] == ok_data
-    # default dry_run=true → --dry-run, no --no-dry-run/--yes; always --allow-concurrent.
-    assert "--allow-concurrent" in spy.last_args
-    assert "--dry-run" in spy.last_args
-    assert "--no-dry-run" not in spy.last_args
-    assert "--yes" not in spy.last_args
+    assert body["data"]["dry_run"] is True
+    assert body["meta"]["source"] == "cli"
+
+    method, _, kw = _last(admin_svc_spy)
+    assert method == "cleanup_dead_letter"
+    # 未传 query 参数时走 service 默认值 (older_than=30, dry_run=True)。
+    assert kw["older_than"] == 30
+    assert kw["dry_run"] is True
+    assert kw["actor"].authenticated is True
+    assert kw["actor"].kind == "http"
 
 
-def test_cleanup_dead_letter_real_delete_flags(client, monkeypatch):
-    spy = _Spy(data={"ok": True}, status="success")
-    _patch(monkeypatch, spy)
-
+def test_cleanup_dead_letter_real_delete_passes_flags(client, admin_svc_spy):
     r = client.post(
         "/api/admin/cleanup-dead-letter",
         params={"dry_run": False, "older_than": 7},
     )
 
     assert r.status_code == 200
-    args = spy.last_args
-    assert "--no-dry-run" in args and "--yes" in args
-    assert "--dry-run" not in args
-    assert args[args.index("--older-than") + 1] == "7"
-    assert "--allow-concurrent" in args
+    method, _, kw = _last(admin_svc_spy)
+    assert method == "cleanup_dead_letter"
+    assert kw["older_than"] == 7
+    assert kw["dry_run"] is False
 
 
-def test_cleanup_dead_letter_cli_error_maps_http(client, monkeypatch):
-    """A CliRunnerError (e.g. CLI self-reported E_INVALID_ARG) → mapped HTTP, not 207."""
-    spy = _Spy(
-        raises=CliRunnerError(
-            code="E_INVALID_ARG",
-            exit_code=2,
-            message="bad older_than",
-            hint="use >=0",
-        )
-    )
-    _patch(monkeypatch, spy)
+def test_cleanup_dead_letter_service_error_maps_http(client, admin_svc_spy):
+    """A ServiceError (e.g. E_INVALID_ARG) → mapped HTTP via ERROR_CODE_TO_HTTP."""
+    admin_svc_spy._raise = ServiceInvalidArgError("bad older_than", hint="use >=0")
 
     r = client.post("/api/admin/cleanup-dead-letter", params={"older_than": -5})
 
@@ -140,26 +124,35 @@ def test_cleanup_dead_letter_cli_error_maps_http(client, monkeypatch):
     body = r.json()
     assert body["status"] == "error"
     assert body["error"]["code"] == "E_INVALID_ARG"
+    assert body["meta"]["source"] == "cli"
 
 
 # ---------------------------------------------------------------------------
-# dead-letter retry — single id, no partial-failure path (sanity guard)
+# POST /api/admin/dead-letter/{internal_id}/retry
 # ---------------------------------------------------------------------------
 
 
-def test_dead_letter_retry_success_passthrough(client, monkeypatch):
-    spy = _Spy(
-        data={"internal_id": 53675, "old_status": "dead_letter", "new_status": "pending"},
-        status="success",
-    )
-    _patch(monkeypatch, spy)
-
+def test_dead_letter_retry_success_passthrough(client, admin_svc_spy):
     r = client.post("/api/admin/dead-letter/53675/retry")
 
     assert r.status_code == 200
     body = r.json()
     assert body["status"] == "success"
-    assert body["data"]["new_status"] == "pending"
-    args = spy.last_args
-    assert args[:4] == ["admin", "dead-letter", "retry", "53675"]
-    assert "--allow-concurrent" in args
+    assert body["data"] == {
+        "internal_id": 53675, "old_status": "dead_letter", "new_status": "pending",
+    }
+
+    method, target, kw = _last(admin_svc_spy)
+    assert method == "retry_dead_letter"
+    assert target == 53675
+    assert kw["actor"].authenticated is True
+    assert kw["actor"].kind == "http"
+
+
+def test_dead_letter_retry_not_found_maps_400(client, admin_svc_spy):
+    admin_svc_spy._raise = ServiceInvalidArgError("internal_id 999999 not found")
+
+    r = client.post("/api/admin/dead-letter/999999/retry")
+
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "E_INVALID_ARG"

@@ -137,13 +137,33 @@ def test_resolve_agent_explicit_empty_docs_preserved(db_path):
     assert cfg["context_docs"] == []
 
 
-def test_resolve_agent_non_preprocess_forces_empty_docs(db_path):
-    # codex 复审：非 preprocess（report/search）行即使 context_docs_json 有残留值也一律 []。
+def test_resolve_agent_search_forces_empty_docs(db_path):
+    # codex 复审：search 行不用此字段——即使 context_docs_json 有残留值也一律 []。
+    # （增量 2 起 report 行改为尊重列值，见下一测试；仅 search 仍强制空。）
     store = ReportStore(db_path)
     store.update_agent("email_search_agent", {"context_docs_json": '["soul"]'})
     cfg = wire.resolve_agent(store.get_agent("email_search_agent"))
     assert cfg["type"] == "search"
     assert cfg["context_docs"] == []
+
+
+def test_resolve_agent_report_docs_null_defaults_and_respected(db_path):
+    # 增量 2：report 行也用 context_docs——NULL（种子行）→ 投影默认 ['soul','user']
+    # （与运行时 worker._parse_context_docs 的 None→默认一致）；显式 [] / 列值 → 尊重。
+    store = ReportStore(db_path)
+    cfg = wire.resolve_agent(store.get_agent("daily_email_digest"))
+    assert cfg["type"] == "report"
+    assert cfg["context_docs"] == ["soul", "user"]
+
+    store.update_agent("daily_email_digest", wire.config_patch_to_db({"context_docs": []}))
+    cfg = wire.resolve_agent(store.get_agent("daily_email_digest"))
+    assert cfg["context_docs"] == []
+
+    store.update_agent(
+        "daily_email_digest", wire.config_patch_to_db({"context_docs": ["user"]})
+    )
+    cfg = wire.resolve_agent(store.get_agent("daily_email_digest"))
+    assert cfg["context_docs"] == ["user"]
 
 
 # ─── v29: 行级 fallback 拆分（dogfood R2 #2） ────────────────────────────────

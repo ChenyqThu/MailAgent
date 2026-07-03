@@ -488,6 +488,21 @@ async function handleApprovalDecide(
       { toolCallId, decision, resumeToken },
       controller.signal
     )
+    // Part B (dogfood live-refresh) — a TERMINAL settle (completed / rejected / error) on a persisted
+    // session notifies the lifecycle so an open chat panel reloads instead of showing the stale
+    // approval card. 'repaused' is NOT terminal (a fresh island card owns the next hop; the panel's
+    // card is still live) and 'not_found' ran nothing. Best-effort: a hook throw must not break the
+    // HTTP response to serve-api.
+    if (
+      result.sessionId != null &&
+      (result.status === 'completed' || result.status === 'rejected' || result.status === 'error')
+    ) {
+      try {
+        cfg.onServerResumeSettled?.(result.sessionId, result.status)
+      } catch (err) {
+        console.error('[ai-gateway] onServerResumeSettled hook failed (resume settled OK)', err)
+      }
+    }
     const status = result.status === 'not_found' ? 404 : 200
     writeJson(res, status, result)
   } catch (err) {
@@ -495,6 +510,30 @@ async function handleApprovalDecide(
     console.error('[ai-gateway] /api/ai/approval/decide failed', err)
     writeJson(res, 500, { ok: false, status: 'error', error: message })
   }
+}
+
+/**
+ * `GET /api/ai/approval/pending?sessionId=N` — Part B follow-up (paused-session reload notice). A
+ * reloaded session only shows the REDACTED paused turn (approval parts stripped, R2-3), but with
+ * island agent on the approval may still be live in the stash — the renderer probes this after
+ * seeding a history session to show a "pending approval, act on the island" notice. Read-only:
+ * peekBySession never consumes / extends the stash.
+ *
+ * 🔴 SECURITY — the response carries ONLY { pending, toolName }: the resumeToken is a capability
+ * that must never leave the gateway except through the serve-api announce leg. Island agent off /
+ * stash unwired → { pending: false } (200, not 404 — "no island agent" and "nothing pending" are
+ * the same answer for the notice).
+ */
+function handleApprovalPending(res: ServerResponse, cfg: AiGatewayConfig, url: string): void {
+  const raw = new URL(url, 'http://127.0.0.1').searchParams.get('sessionId')
+  const sessionId = raw != null && /^-?\d+$/.test(raw) ? Number(raw) : null
+  if (sessionId == null) {
+    writeJson(res, 400, { error: 'E_INVALID_ARG', hint: 'sessionId (integer) required' })
+    return
+  }
+  const entry =
+    cfg.islandAgentEnabled && cfg.approvalStash ? cfg.approvalStash.peekBySession(sessionId) : null
+  writeJson(res, 200, entry ? { pending: true, toolName: entry.toolName } : { pending: false })
 }
 
 /**
@@ -581,6 +620,13 @@ export function createAiGatewayServer(cfg: AiGatewayConfig): Server {
     // S3 W1 — headless agentic search (⌘K palette). Registered unconditionally; no key → 503.
     if (method === 'POST' && path === '/api/ai/search-agent') {
       void handleSearchAgent(req, res, cfg)
+      return
+    }
+
+    // Part B follow-up — reloaded-session pending-approval probe. Registered unconditionally;
+    // island agent off → { pending: false } (the renderer's notice simply doesn't render).
+    if (method === 'GET' && path === '/api/ai/approval/pending') {
+      handleApprovalPending(res, cfg, url)
       return
     }
 

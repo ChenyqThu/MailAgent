@@ -22,7 +22,13 @@ from src.reports import data as rdata
 from src.reports import models as m
 from src.reports.assembler import assemble_fallback_doc, assemble_report_doc
 from src.reports.store import ReportStore
-from src.reports.summarizer import REPORT_TOOL_SCHEMA, ReportDraft, _parse
+from src.reports.summarizer import (
+    REPORT_TOOL_SCHEMA,
+    ReportDraft,
+    _build_system,
+    _build_system_agentic,
+    _parse,
+)
 from src.reports.agent_tools import build_report_tools
 from src.reports.worker import (
     _daily_window,
@@ -582,6 +588,43 @@ class TestSummarizer:
         assert len(draft.highlights) == 1                  # 空 body 丢弃
         assert draft.model == "mk" and draft.input_tokens == 10
 
+    def test_build_system_no_nameerror(self):
+        # af9529d9 在 _build_system/_build_system_agentic 引用 build_task_identity_context
+        # 但漏了 import → 每次日报生成 NameError 降级 fallback（07-02/07-03 日报空壳）。
+        now = datetime(2026, 7, 3, 9, 0, tzinfo=timezone(timedelta(hours=8)))
+        blocks = _build_system("PERSONA_MARKER", now)
+        assert "PERSONA_MARKER" in blocks[0]["text"]
+        blocks = _build_system_agentic("PERSONA_MARKER", now, kos_enabled=False)
+        assert "PERSONA_MARKER" in blocks[0]["text"]
+        blocks = _build_system_agentic("PERSONA_MARKER", now, kos_enabled=True)
+        assert "kos_query" in blocks[0]["text"]
+
+    def test_build_system_context_docs_param(self, monkeypatch):
+        # 增量 2：行级 context_docs 透传——None（缺省）→ 无参调用（默认文档集 soul+user）；
+        # [] → 显式传空（不注入身份块）；['soul'] → 只注入所选。
+        import src.agent_config.task_context as tc
+
+        calls: list = []
+
+        def fake(doc_names=tc.DEFAULT_TASK_IDENTITY_DOCS):
+            calls.append(list(doc_names))
+            return "IDENTITY_BLOCK\n\n" if doc_names else ""
+
+        monkeypatch.setattr(tc, "build_task_identity_context", fake)
+        now = datetime(2026, 7, 3, 9, 0, tzinfo=_BJ)
+
+        blocks = _build_system("P", now)
+        assert calls[-1] == ["soul", "user"] and "IDENTITY_BLOCK" in blocks[0]["text"]
+        blocks = _build_system("P", now, context_docs=[])
+        assert calls[-1] == [] and "IDENTITY_BLOCK" not in blocks[0]["text"]
+        blocks = _build_system("P", now, context_docs=["soul"])
+        assert calls[-1] == ["soul"] and "IDENTITY_BLOCK" in blocks[0]["text"]
+
+        blocks = _build_system_agentic("P", now, kos_enabled=False)
+        assert calls[-1] == ["soul", "user"] and "IDENTITY_BLOCK" in blocks[0]["text"]
+        blocks = _build_system_agentic("P", now, kos_enabled=False, context_docs=[])
+        assert calls[-1] == [] and "IDENTITY_BLOCK" not in blocks[0]["text"]
+
 
 # ============================================================
 # worker
@@ -660,6 +703,29 @@ class TestRunReportOnce:
         rep = store.get_report(rid)
         assert rep["status"] == "ready" and "summarize_failed" in (rep["error"] or "")
         assert rep["blocks_json"]  # fallback 仍产出 blocks
+
+    def test_context_docs_row_passed_to_agentic(self, db: Path):
+        # 增量 2：agent 行 context_docs_json 解析后透传 summarize——NULL（种子行）→ None
+        # （运行时默认 soul+user）；'["soul"]' → ["soul"]。
+        _insert(db, 1, labels=_labels())
+        store = ReportStore(str(db))
+        seen: dict = {}
+
+        async def spy(**kw):
+            seen["context_docs"] = kw.get("context_docs", "MISSING")
+            return ReportDraft(headline="h", overview="ov", model="mk")
+
+        agent = store.get_agent("daily_email_digest")
+        assert agent.get("context_docs_json") is None  # 种子行列值 NULL
+        asyncio.run(run_report_once(store=store, db_path=str(db), agent=agent,
+                                    now=_NOW, agentic_fn=spy))
+        assert seen["context_docs"] is None
+
+        store.update_agent("daily_email_digest", {"context_docs_json": '["soul"]'})
+        agent = store.get_agent("daily_email_digest")
+        asyncio.run(run_report_once(store=store, db_path=str(db), agent=agent,
+                                    now=_NOW, agentic_fn=spy))
+        assert seen["context_docs"] == ["soul"]
 
 
 # ============================================================
@@ -847,6 +913,28 @@ class TestAggregateRun:
         rid = asyncio.run(run_report_once(store=store, db_path=str(db), agent=wk,
                                           now=_NOW, aggregate_fn=self._mock_agg))
         assert store.get_report(rid)["status"] == "empty"  # 无子报告 → empty
+
+    def test_context_docs_row_passed_to_aggregate(self, db: Path):
+        # 增量 2：weekly/monthly 聚合链路同样透传行级 context_docs（monthly 同走
+        # summarize_aggregate，此测试即覆盖）。
+        store = ReportStore(str(db))
+        d = "2026-05-27"
+        rid = f"daily_email_digest:daily:{d}"
+        store.create_report(report_id=rid, agent_id="daily_email_digest", cadence="daily",
+                            report_date=d, window_start="s", window_end="e")
+        store.finish_report(rid, status="ready", blocks_json="[]",
+                            counts_json='{"total":1}', headline=d)
+        seen: dict = {}
+
+        async def spy(**kw):
+            seen["context_docs"] = kw.get("context_docs", "MISSING")
+            return ReportDraft(headline="周报", overview="ov", model="mk")
+
+        store.update_agent("weekly_email_digest", {"context_docs_json": '["user"]'})
+        wk = store.get_agent("weekly_email_digest")
+        asyncio.run(run_report_once(store=store, db_path=str(db), agent=wk,
+                                    now=_NOW, aggregate_fn=spy))
+        assert seen["context_docs"] == ["user"]
 
     def test_monthly_aggregates_daily_reports(self, db: Path):
         """方案 A：月报聚合整月「日报」(非周报)。seed 5 月日报 → monthly 读到并综合;

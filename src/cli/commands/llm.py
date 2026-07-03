@@ -16,6 +16,7 @@ import typer
 from src.cli.exceptions import (
     CliError,
     CliInvalidArgError,
+    CliLLMFailedError,
 )
 from src.cli.output import apply_local_output as _apply_local_output, emit, emit_cli_error
 from src.services.errors import ServiceError
@@ -27,7 +28,6 @@ if TYPE_CHECKING:
 # Lazy-loaded compare-paths dependencies. Keeping these names at module scope makes
 # test monkeypatching straightforward without forcing AppleScript/LLM imports on CLI
 # startup.
-AppleScriptArm = None
 EmailReader = None
 AttachmentStore = None
 EmailRepository = None
@@ -46,21 +46,16 @@ def _maybe_create_davmail_backend(cli: "CliContext"):
     实例 (probe ok), 让 LLM runner 走 IMAP fetch 而非 AppleScript ``whose id`` (后者
     对 davmail-origin internal_id >= 10^9 无法定位).
 
-    applescript mode 或 davmail probe 失败时返回 None, runner fallback 老路径
-    (lazy-init AppleScriptArm) 兼容.
+    applescript mode 返回 None (runner lazy-init AppleScriptArm, 老路径不变).
+    davmail probe 失败**不吞** —— 冒泡给调用方 (E1 §3.1 Step 3: 防止静默回退到
+    错 id 空间的 AppleScriptArm); 调用方 (llm_retry_failed) 负责转 CLI 错误。
     """
     from src.config import config as global_cfg
     backend_name = getattr(global_cfg, "mailagent_backend", "applescript")
     if backend_name != "davmail":
         return None
-    try:
-        from src.mail.backend.factory import create_backend
-        return create_backend(global_cfg, sync_store=cli.sync_store)
-    except Exception as e:
-        # CLI 不应因 backend probe 失败崩 — fallback AppleScript 老路径 + warn
-        from loguru import logger
-        logger.warning(f"[cli] davmail backend probe failed, fallback AppleScript: {e}")
-        return None
+    from src.mail.backend.factory import create_backend
+    return create_backend(global_cfg, sync_store=cli.sync_store)
 
 
 # ============================================================
@@ -231,12 +226,21 @@ def llm_retry_failed(
             emit(cli, data)
         return
 
-    runner = LLMRunner(
-        store=store,
-        db_path=cli.cli_config.sync_store_db_path,
-        attachment_storage_dir=cli.cli_config.attachment_storage_dir,
-        backend=_maybe_create_davmail_backend(cli),
-    )
+    try:
+        runner = LLMRunner(
+            store=store,
+            db_path=cli.cli_config.sync_store_db_path,
+            attachment_storage_dir=cli.cli_config.attachment_storage_dir,
+            backend=_maybe_create_davmail_backend(cli),
+        )
+    except Exception as e:
+        # E1 §3.1 Step 3: davmail 模式下 _maybe_create_davmail_backend 不再吞
+        # probe 失败 —— 这里接住转成 CLI 错误, 而不是让裸异常炸穿 typer。
+        raise emit_cli_error(cli, CliLLMFailedError(
+            f"davmail backend probe failed: {e!r}",
+            hint="检查 davmail JVM 是否在跑 / IMAP 端口可达, 或临时切回 "
+            "MAILAGENT_BACKEND=applescript",
+        ))
     items: list[dict] = []
     succeeded = 0
     failed = 0
@@ -446,17 +450,12 @@ class _MockRepo:
 
 
 def _ensure_compare_deps() -> None:
-    global AppleScriptArm
     global AttachmentStore
     global EmailReader
     global EmailRepository
     global LLMProcessor
     global build_storage_payloads
 
-    if AppleScriptArm is None:
-        from src.mail.applescript_arm import AppleScriptArm as _AppleScriptArm
-
-        AppleScriptArm = _AppleScriptArm
     if EmailReader is None:
         from src.mail.reader import EmailReader as _EmailReader
 
@@ -771,10 +770,10 @@ def llm_compare_paths(
 
     _ensure_compare_deps()
 
-    arm = AppleScriptArm(
-        account_name=cfg.mail_account_name,
-        inbox_name=cfg.mail_inbox_name,
-    )
+    # E1 §3.1 Step 3: 走 cli.backend (factory 已 probe, 尊重 MAILAGENT_BACKEND)
+    # 而非裸构造 AppleScriptArm — davmail 模式下后者的 `whose id` 查询无法定位
+    # davmail id 空间 (>=10^9) 的 internal_id。
+    arm = cli.backend
     reader = EmailReader()
     store = EmailRepository(
         db_path=cfg.sync_store_db_path,

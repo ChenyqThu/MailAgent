@@ -238,14 +238,6 @@ function AdvancedSubsection(): React.ReactElement {
           ]}
         />
         <EnvField
-          envKey="MAILAGENT_OUTBOX_ENABLED"
-          control="toggle"
-          label={t('settings.advanced.outbox.enabled.label', { defaultValue: 'Outbox 灰度' })}
-          helper={t('settings.advanced.outbox.enabled.helper', {
-            defaultValue: 'Sprint 15 反向同步路径切换'
-          })}
-        />
-        <EnvField
           envKey="MAILAGENT_OUTBOX_POLL_INTERVAL_SEC"
           control="number"
           label={t('settings.advanced.outbox.poll.label', { defaultValue: 'FanoutWorker 轮询' })}

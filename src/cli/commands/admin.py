@@ -49,6 +49,15 @@ REQUIRED_TABLES = (
     "email_outbox",     # v10: SQLite SSoT inversion (Sprint 15)
 )
 
+# E1 (2026-07): davmail 上游 watch 静态提醒项 (docs/plans/architecture-review-2026-07/
+# e1-backend-contract.md §3.1 Step 4). 无条件展示、不按 backend 分支 — 纯静态文案零状态耦合,
+# 是提示不是故障, 不影响下方 `healthy` 语义。
+HEALTH_WATCH_NOTES: tuple[str, ...] = (
+    "EWS 2026-10-01 关停；应对 = 跟随 davmail 官方 repo 切换 O365 标准接口，项目侧零工程；"
+    "2026-08 起关注 davmail release，出新版及时升级并按回归清单验证"
+    "（docs/plans/architecture-review-2026-07/e1-davmail-upgrade-checklist.md）。",
+)
+
 
 # ============================================================
 # stats (US-006)
@@ -242,6 +251,7 @@ def admin_health(
         "tables_present": tables_present,
         "tables_missing": missing,
         "healthy": healthy,
+        "notes": list(HEALTH_WATCH_NOTES),
     }
     if error_message:
         data["error"] = error_message
@@ -256,6 +266,8 @@ def admin_health(
         if error_message:
             print(f"error          {error_message}")
         print(f"healthy        {healthy}")
+        for note in HEALTH_WATCH_NOTES:
+            print(f"note           {note}")
     else:
         emit(cli, data)
 

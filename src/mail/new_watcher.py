@@ -32,8 +32,6 @@ from loguru import logger
 
 from src.config import config as settings
 from src.models import Email
-from src.mail.sqlite_radar import SQLiteRadar
-from src.mail.applescript_arm import AppleScriptArm
 from src.mail.sync_store import DRAFT_MAILBOX_LABELS, SyncStore
 from src.notion.sync import NotionSync
 from src.mail.reader import EmailReader
@@ -117,45 +115,32 @@ class NewWatcher:
             poll_interval: 轮询间隔（秒），默认 5
             sync_store_path: SyncStore 数据库路径
             backend: 可选 IMailBackend 实例 (Sprint 16 dual-backend).
-                传入时 self.arm / self.radar 复用 backend 内部 wrapping;
-                None 默认 → 自己构造 arm/radar 走老路径 (向后兼容).
+                None 默认 → 按 applescript 模式自构 AppleScriptBackend
+                (仅本模块 main() 手动入口使用; 生产由 service.py 注入).
 
         Raises:
             RuntimeError: 如果关键组件初始化失败
         """
         self.mailboxes = mailboxes or ["收件箱", "发件箱"]
         self.poll_interval = poll_interval
-        self.backend = backend  # Sprint 16 dual-backend: 可选注入 IMailBackend
 
         # 解析同步起始日期
         self.sync_start_date = _parse_sync_start_date()
         if self.sync_start_date:
             logger.info(f"Sync start date: {self.sync_start_date.strftime('%Y-%m-%d')} (emails before this date will be cached but not synced to Notion)")
 
-        # 初始化 SQLiteRadar + AppleScriptArm
-        # Sprint 16 dual-backend: 如果 backend 传入 → self.arm/radar 直接从 backend 拿
-        #   - AppleScriptBackend: self.arm = 真 AppleScriptArm, self.radar = 真 SQLiteRadar
-        #   - DavMailBackend: self.arm = self, self.radar = self (alias 兼容层, 转发到
-        #     IMAP STORE/FETCH/SEARCH); davmail mode 下 NewWatcher._poll_cycle 调
-        #     self.radar.get_new_emails → DavMailBackend.get_new_emails (IMAP UID SEARCH).
-        # backend=None (默认, 老调用方兼容) → 自己构造 arm/radar 跟现状一致.
-        if backend is not None and hasattr(backend, 'radar') and hasattr(backend, 'arm'):
-            self.radar = backend.radar
-            self.arm = backend.arm
-            logger.info(f"[dual-backend] NewWatcher 使用 backend={type(backend).__name__} (arm/radar 来自 backend)")
+        # E1 契约收口: watcher 直接持 IMailBackend 调方法 (雷达面 + 抓取面),
+        # 无 arm/radar 影子层. backend=None (老手动入口兼容) → 构造
+        # AppleScriptBackend, 与旧直构 arm/radar 语义一致 (SQLiteRadar 构造
+        # 不抛, Envelope Index 缺失仅 is_available()=False; probe 由 factory 管).
+        if backend is None:
+            from src.mail.backend.applescript_backend import AppleScriptBackend
+            backend = AppleScriptBackend(settings)
+            if not backend.is_available():
+                logger.warning("SQLite radar not available, will rely on AppleScript only")
         else:
-            try:
-                self.radar = SQLiteRadar(mailboxes=self.mailboxes, account_url_prefix=settings.mail_account_url_prefix)
-                if not self.radar.is_available():
-                    logger.warning("SQLite radar not available, will rely on AppleScript only")
-            except Exception as e:
-                logger.error(f"Failed to initialize SQLite radar: {e}")
-                self.radar = None
-
-            self.arm = AppleScriptArm(
-                account_name=settings.mail_account_name,
-                inbox_name=settings.mail_inbox_name
-            )
+            logger.info(f"[dual-backend] NewWatcher 使用 backend={type(backend).__name__}")
+        self.backend = backend
 
         try:
             self.sync_store = SyncStore(sync_store_path)
@@ -316,8 +301,8 @@ class NewWatcher:
             logger.error(f"SyncStore health check failed: {e}")
             return False
 
-        # 检查 radar（可选组件）
-        if self.radar and not self.radar.is_available():
+        # 检查雷达面（backend 可用性）
+        if not self.backend.is_available():
             logger.warning("SQLite radar became unavailable")
 
         return True
@@ -340,7 +325,7 @@ class NewWatcher:
         # sync_store.reconcile_marker_backend + config MAILAGENT_MARKER_BACKEND_GUARD）。
         # 必须在下面 restore/baseline 之前跑：reset 分支会把 marker 清零，让 restore 落到
         # first-run baseline 分支、在当前 backend 的 id 空间重新定基线（只向前，不回捞历史
-        # gap —— gap 由 health_check / backfill 兜）。
+        # gap —— gap 由 backfill 兜）。
         current_backend = getattr(settings, "mailagent_backend", "applescript")
         if getattr(settings, "mailagent_marker_backend_guard", True):
             action = self.sync_store.reconcile_marker_backend(current_backend)
@@ -357,18 +342,17 @@ class NewWatcher:
 
         # 初始化：从 SyncStore 恢复 last_max_row_id
         last_max_row_id = self.sync_store.get_last_max_row_id()
-        if self.radar:
-            if last_max_row_id > 0:
-                self.radar.set_last_max_row_id(last_max_row_id)
-                logger.info(f"Restored last_max_row_id from SyncStore: {last_max_row_id}")
-            else:
-                # 首次运行，获取当前 max_row_id 作为基线
-                current_max = self.radar.get_current_max_row_id()
-                self.radar.set_last_max_row_id(current_max)
-                self.sync_store.set_last_max_row_id(current_max)
-                # issue #34: 盖上 marker 归属，供下次启动的 guard 比对（reset 后重定基线也走这里）
-                self.sync_store.set_state('marker_backend', current_backend)
-                logger.info(f"First run, set baseline max_row_id: {current_max}")
+        if last_max_row_id > 0:
+            self.backend.set_last_max_row_id(last_max_row_id)
+            logger.info(f"Restored last_max_row_id from SyncStore: {last_max_row_id}")
+        else:
+            # 首次运行，获取当前 max_row_id 作为基线
+            current_max = self.backend.get_current_max_row_id()
+            self.backend.set_last_max_row_id(current_max)
+            self.sync_store.set_last_max_row_id(current_max)
+            # issue #34: 盖上 marker 归属，供下次启动的 guard 比对（reset 后重定基线也走这里）
+            self.sync_store.set_state('marker_backend', current_backend)
+            logger.info(f"First run, set baseline max_row_id: {current_max}")
 
         # PR-4 US-008: 启动 v4_rollout flush loop (RFC §8 选项 A)
         # 每 60s 把 NotionSync 内存累计的路由命中 / miss / error 写一行到
@@ -457,9 +441,9 @@ class NewWatcher:
         self._stats["polls"] += 1
 
         # 1. 雷达检测新邮件并直接获取元数据
-        if self.radar and self.radar.is_available():
+        if self.backend.is_available():
             last_max_row_id = self.sync_store.get_last_max_row_id()
-            has_new, current_max, estimated_count = self.radar.check_for_changes(last_max_row_id)
+            has_new, current_max, estimated_count = self.backend.check_for_changes(last_max_row_id)
 
             if not has_new:
                 logger.debug("No new emails detected")
@@ -468,7 +452,7 @@ class NewWatcher:
                 self._stats["new_emails_detected"] += estimated_count
 
                 # 2. SQLite 直接获取新邮件元数据（不通过 AppleScript）
-                new_emails = self.radar.get_new_emails(last_max_row_id)
+                new_emails = self.backend.get_new_emails(last_max_row_id)
 
                 if new_emails:
                     logger.info(f"SQLite found {len(new_emails)} new emails")
@@ -563,7 +547,7 @@ class NewWatcher:
         email_repo.delete_email_full（CASCADE 清 body / 附件 / FTS）。
         AppleScript fallback 模式无此方法 → 整段 noop。任何失败不影响主循环。
         """
-        backend = self.arm
+        backend = self.backend
         if not hasattr(backend, "reconcile_drafts"):
             return
         try:
@@ -693,9 +677,9 @@ class NewWatcher:
             logger.info(f"Syncing email {internal_id}: {email_meta.get('subject', '')[:50]}...")
 
             # 1. 通过 internal_id 获取完整邮件内容（127x 性能提升）
-            full_email = self.arm.fetch_email_content_by_id(internal_id, mailbox)
+            full_email = self.backend.fetch_email_content_by_id(internal_id, mailbox)
             if not full_email:
-                backend_name = type(self.arm).__name__
+                backend_name = type(self.backend).__name__
                 logger.warning(f"Failed to fetch email content by id {internal_id} (backend={backend_name})")
                 self.sync_store.mark_fetch_failed(internal_id, f"fetch_email_content_by_id returned None (backend={backend_name})")
                 return
@@ -1326,10 +1310,10 @@ class NewWatcher:
             try:
                 if sync_status == 'fetch_failed':
                     # AppleScript 获取失败，需要重新获取
-                    full_email = self.arm.fetch_email_content_by_id(internal_id, mailbox)
+                    full_email = self.backend.fetch_email_content_by_id(internal_id, mailbox)
 
                     if not full_email:
-                        backend_name = type(self.arm).__name__
+                        backend_name = type(self.backend).__name__
                         logger.warning(f"Retry fetch failed for {internal_id} (backend={backend_name})")
                         self.sync_store.mark_fetch_failed(internal_id, f"fetch_email_content_by_id returned None on retry (backend={backend_name})")
                         continue
@@ -1358,7 +1342,7 @@ class NewWatcher:
                     message_id = email_meta.get('message_id')
                     if not message_id:
                         # 没有 message_id，尝试重新获取
-                        full_email = self.arm.fetch_email_content_by_id(internal_id, mailbox)
+                        full_email = self.backend.fetch_email_content_by_id(internal_id, mailbox)
                         if not full_email:
                             self.sync_store.mark_fetch_failed(internal_id, "Cannot refetch for retry")
                             continue
@@ -1371,7 +1355,7 @@ class NewWatcher:
                         })
                     else:
                         # 有 message_id，通过 internal_id 重新获取
-                        full_email = self.arm.fetch_email_content_by_id(internal_id, mailbox)
+                        full_email = self.backend.fetch_email_content_by_id(internal_id, mailbox)
                         if not full_email:
                             self.sync_store.mark_fetch_failed(internal_id, "Cannot refetch for retry")
                             continue
@@ -1451,14 +1435,9 @@ class NewWatcher:
     def get_stats(self) -> Dict[str, Any]:
         """获取统计信息"""
         radar_stats = {
-            "last_max_row_id": 0,
-            "available": False
+            "last_max_row_id": self.backend.get_last_max_row_id(),
+            "available": self.backend.is_available()
         }
-        if self.radar:
-            radar_stats = {
-                "last_max_row_id": self.radar.get_last_max_row_id(),
-                "available": self.radar.is_available()
-            }
 
         return {
             **self._stats,

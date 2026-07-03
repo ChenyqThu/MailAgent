@@ -1,13 +1,13 @@
-"""MailAppFanout — outbox → Mail.app AppleScript 派发器.
+"""MailAppFanout — outbox → 邮件后端 (Mail.app / DavMail) 派发器.
 
 每条 outbox 行（target='mailapp'）执行:
   1. 读 sync_store 当前 is_read / is_flagged
   2. Idempotency check: payload 中指定的字段 == current state → 直接 OK
-  3. 否则调 AppleScript set is_read / set is_flagged
+  3. 否则调 backend mark_as_read_by_id / set_flag_by_id
   4. 成功后 update_local_flags 同步 SQLite (echo prevention)
 
-AppleScript 是 subprocess blocking (~1s)，在 asyncio.to_thread 中执行避免阻塞
-其他 fanout（特别是 NotionFanout 也是网络阻塞）。
+backend 写操作是 blocking IO (AppleScript subprocess ~1s / IMAP STORE)，在
+asyncio.to_thread 中执行避免阻塞其他 fanout（特别是 NotionFanout 也是网络阻塞）。
 
 详见 SPRINT15-HANDOFF.md §3.3-§3.4 + plan Stage 1.3。
 """
@@ -15,24 +15,27 @@ AppleScript 是 subprocess blocking (~1s)，在 asyncio.to_thread 中执行避�
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Optional, Tuple
+from typing import TYPE_CHECKING, Tuple
 
 from loguru import logger
 
 from src.sync.outbox import OutboxEntry
 
+if TYPE_CHECKING:
+    from src.mail.backend.base import IMailBackend
+
 
 class MailAppFanout:
     """outbox(target='mailapp') 执行器."""
 
-    def __init__(self, *, sync_store, arm):
+    def __init__(self, *, sync_store, backend: "IMailBackend"):
         """
         Args:
             sync_store: SyncStore 实例（共享 mail-sync 主进程的同一个）
-            arm: AppleScriptArm 实例
+            backend: IMailBackend 实例（AppleScript / DavMail）
         """
         self.sync_store = sync_store
-        self.arm = arm
+        self.backend = backend
 
     async def execute(self, entry: OutboxEntry) -> Tuple[bool, str]:
         """执行一条 mailapp outbox.
@@ -68,14 +71,14 @@ class MailAppFanout:
         target_read = bool(payload["is_read"]) if has_read else None
         target_flagged = bool(payload["is_flagged"]) if has_flagged else None
 
-        # 调 AppleScript（blocking subprocess） — 包到 to_thread 不阻塞 event loop
-        # 不做 SQLite-based idempotency: AppleScript 本身幂等, 直接调更可靠
+        # 调 backend（blocking IO） — 包到 to_thread 不阻塞 event loop
+        # 不做 SQLite-based idempotency: 写操作协议层幂等, 直接调更可靠
         errors = []
         ok = True
 
         if has_read:
             success = await asyncio.to_thread(
-                self.arm.mark_as_read_by_id, internal_id, target_read, mailbox
+                self.backend.mark_as_read_by_id, internal_id, target_read, mailbox
             )
             if not success:
                 ok = False
@@ -83,7 +86,7 @@ class MailAppFanout:
 
         if has_flagged:
             success = await asyncio.to_thread(
-                self.arm.set_flag_by_id, internal_id, target_flagged, mailbox
+                self.backend.set_flag_by_id, internal_id, target_flagged, mailbox
             )
             if not success:
                 ok = False

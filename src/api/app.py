@@ -154,65 +154,28 @@ def error_envelope(
     )
 
 
-def partial_envelope(
-    data: Any,
-    *,
-    request: Optional[Request] = None,
-    meta_extra: Optional[dict[str, Any]] = None,
-    source: str = "cli",
-) -> JSONResponse:
-    """构造批量"部分失败" envelope 的 JSONResponse → status:'partial_failure' + HTTP 207。
-
-    供 Phase 2 的 email / admin 批量写端点用 (batch flag / cleanup-dead-letter 等):
-    CLI 以 exit 6 + ``status=="partial_failure"`` wrapper 返回时 (见 cli_runner
-    ``CliResult.is_partial_failure``)，router 直接
-    ``return partial_envelope(result.data, request=request, source="cli")``。
-
-    ``data`` = 已成形的 ``{succeeded, failed, summary}`` 对象 (形状见 schemas/envelope.py
-    §"batch partial_failure"): ``succeeded`` 是成功项列表，``failed`` 是
-    ``[{"internal_id": N, "error": {...}}, ...]``，``summary`` 是
-    ``{"total", "succeeded", "failed", "aborted_by"}``。本 helper 不重组 data —— 与
-    ``success_envelope`` 一致按 caller 给的形状直接落 (CliResult.data 已是该形状)。
-
-    error 恒为 null (部分失败不是整体 error，逐项 error 落在 data.failed[].error 里)；
-    HTTP 207 Multi-Status (与 ERROR_CODE_TO_HTTP['E_PARTIAL'] 对齐)。
-    """
-    meta: dict[str, Any] = {"duration_ms": _duration_ms(request), "source": source}
-    if meta_extra:
-        meta.update({k: v for k, v in meta_extra.items() if v is not None})
-    return JSONResponse(
-        status_code=207,
-        content={
-            "status": "partial_failure",
-            "schema_version": SCHEMA_VERSION,
-            "data": data,
-            "error": None,  # 部分失败 error 仍为 null；逐项 error 在 data.failed[].error
-            "meta": meta,
-        },
-    )
-
-
 # error code → HTTP status (BACKEND-INTERFACES §1.3 exit-code map + error-codes.md)。
-# CLI-backed 写端点应优先解析 CLI 自报的 error.code，再用此表把 exit 映成 HTTP。
+# in-process service 抛的 ServiceError 应优先用自报的 error.code，再用此表把 code 映成 HTTP。
 #
-# 命名与 cli_runner.EXIT_CODE_MAP 对齐 (A2/A3): cli_runner 把 exit code 拼成
-# ``E_{EXIT_CODE_MAP[code]}`` (exit 1→E_GENERIC, 5→E_UPSTREAM, 6→E_PARTIAL)，旧表用
-# 的是 wrapper-status 名 (E_PARTIAL_FAILURE)，导致 exit-fallback 的 E_PARTIAL /
+# 命名历史 (E2-C 前 fork-CLI 转发年代留下的沿革, 现仍适用于 in-process service 的
+# 同名 E_* code): 已退役的 CLI subprocess 转发层曾把子进程 exit code 拼成
+# ``E_{name}`` (exit 1→E_GENERIC, 5→E_UPSTREAM, 6→E_PARTIAL)，旧表用的是
+# wrapper-status 名 (E_PARTIAL_FAILURE)，导致 exit-fallback 的 E_PARTIAL /
 # E_UPSTREAM / E_GENERIC 全部 miss → 一律默认 500，漂移。这里补齐三者:
-#   - E_UPSTREAM (exit 5): 上游 (SMTP / davmail / CalDAV) 失败 → 502 Bad Gateway。
-#   - E_GENERIC  (exit 1): 未分类 CLI 失败 → 500 (与默认同值，显式登记表达意图)。
-#   - E_PARTIAL  (exit 6): 批量部分失败 → 207 Multi-Status (E_PARTIAL_FAILURE 别名保留)。
+#   - E_UPSTREAM: 上游 (SMTP / davmail / CalDAV) 失败 → 502 Bad Gateway。
+#   - E_GENERIC : 未分类失败 → 500 (与默认同值，显式登记表达意图)。
+#   - E_PARTIAL : 批量部分失败 → 207 Multi-Status (E_PARTIAL_FAILURE 别名保留)。
 ERROR_CODE_TO_HTTP: dict[str, int] = {
     "E_NOT_FOUND": 404,
     "E_INTERNAL": 500,
-    "E_GENERIC": 500,  # cli_runner exit 1 → E_GENERIC (= 默认 500，显式登记)
+    "E_GENERIC": 500,  # 未分类失败 → E_GENERIC (= 默认 500，显式登记)
     "E_LLM_FAILED": 500,
     "E_INVALID_ARG": 400,
     "E_NOT_IMPLEMENTED": 400,
-    "E_AUTH_FAILED": 403,  # auth-layer 缺 token → 401 在 auth.py 处理；CLI 自报 → 403
-    "E_UPSTREAM": 502,  # cli_runner exit 5 → 上游 SMTP/davmail/CalDAV 失败
+    "E_AUTH_FAILED": 403,  # auth-layer 缺 token → 401 在 auth.py 处理；服务自报 → 403
+    "E_UPSTREAM": 502,  # 上游 SMTP/davmail/CalDAV 失败
     "E_SCHEMA_MISMATCH": 502,
-    "E_PARTIAL": 207,  # cli_runner exit 6 → 批量部分失败 (Multi-Status)
+    "E_PARTIAL": 207,  # 批量部分失败 (Multi-Status)
     "E_PARTIAL_FAILURE": 207,  # 别名: wrapper status == "partial_failure"
     "E_ABORTED": 499,
     "E_MAX_FAILURES": 503,

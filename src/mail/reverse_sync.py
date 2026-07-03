@@ -7,32 +7,28 @@ Action Type → Mail.app 操作映射:
 - 需要回复/需要决策/需要Review/需要会议/需要跟进/等待响应 → 设置旗标
 - 仅供参考/已完结 → 标记已读
 
-Sprint 15 起 (架构纯净化, hotfix 2):
-  outbox_repo 注入时, sync_single_page 改写 SQLite intent + outbox.enqueue
-  (target='mailapp', source='reverse_sync_poll'), 不再直调 AppleScript.
-  FanoutWorker 异步消费派发, 跟 webhook 路径 A / handle_ai_reviewed / CLI
-  email flag 完全统一。admin queue-depth 100% 覆盖反向写; 失败统一进
-  outbox 重试 / dead_letter。
+Sprint 15 起 (架构纯净化, hotfix 2) + E2-B 收口 (2026-07, outbox 恒启用):
+  sync_single_page 写 SQLite intent + outbox.enqueue (target='mailapp',
+  source='reverse_sync_poll', 经 src/sync/outbox_intents 共享层), 不直调
+  AppleScript。FanoutWorker 异步消费派发, 跟 webhook 路径 A /
+  handle_ai_reviewed / CLI email flag 完全统一。admin queue-depth 100% 覆盖
+  反向写; 失败统一进 outbox 重试 / dead_letter。outbox=off 灰度回退老分支已随
+  MAILAGENT_OUTBOX_ENABLED 退役删除, outbox_repo 必传。
 
   update_page_mail_sync_status (Synced to Mail checkbox + Processing Status)
   仍走直接调 (跟 handle_ai_reviewed 一致): 这是 Notion 端状态机标记, 不进
   outbox, 否则 query_pages_for_reverse_sync 的 filter 失效 -> 下次轮询又拉
   同一批 page 导致 outbox 重复入队。
-
-  outbox_repo=None 时走老路径 (灰度回退兼容)。生产 outbox=on 不可达, 仅代码默认
-  outbox=off 时才走。退役/清理决策见
-  docs/reference/architecture/davmail-write-path-trace.md §3/§6 (勿删, 删会动到
-  默认配置下的回退路径)。
 """
 
 from datetime import datetime
 from typing import Any, Dict, Optional, Tuple
 from loguru import logger
 
-from src.mail.applescript_arm import AppleScriptArm
 from src.mail.sync_store import SyncStore
 from src.mail.sqlite_radar import SQLiteRadar
 from src.notion.sync import NotionSync
+from src.sync.outbox_intents import enqueue_flag_sync, mirror_and_enqueue_flag_sync
 from src.config import config
 
 
@@ -50,20 +46,24 @@ class NotionToMailSync:
     def __init__(
         self,
         notion_sync: NotionSync,
-        arm: AppleScriptArm = None,
         sync_store: SyncStore = None,
         skip_notify: bool = False,
-        outbox_repo: Optional[Any] = None,
+        outbox_repo: Any = None,
     ):
+        # E2-B 收口: backend 参数随 outbox=off 老直调分支一并退役 —— 本类不再
+        # 直调 Mail.app, 派发全权交 outbox + FanoutWorker (MailAppFanout 持 backend)。
         if notion_sync is None:
             raise TypeError(
                 "NotionToMailSync requires notion_sync to be injected (R-01 strict DI)"
             )
+        if outbox_repo is None:
+            raise TypeError(
+                "NotionToMailSync requires outbox_repo to be injected (E2-B 收口: "
+                "outbox 恒启用, 老 AppleScript 直调回退分支已删除)"
+            )
         self.notion_sync = notion_sync
-        self.arm = arm or AppleScriptArm()
         self.sync_store = sync_store
         self._skip_notify = skip_notify
-        # Sprint 15: 注入后 sync_single_page 改 outbox 路径 (架构纯净化)
         self.outbox_repo = outbox_repo
         self.last_check: Optional[datetime] = None
         self.sync_count = 0
@@ -161,21 +161,8 @@ class NotionToMailSync:
                 return False
             return True
 
-        # Sprint 15 新路径: outbox enabled → 写 intent + outbox, fanout 异步派发
-        if self.outbox_repo is not None:
-            success = self._enqueue_outbox(internal_id, ai_action, msg_short)
-        else:
-            # 老路径: 直调 AppleScript + update_local_flags (灰度回退兼容)
-            if ai_action in self.FLAG_ACTIONS:
-                success = self._do_mark_read_and_flag(internal_id, message_id, mailbox)
-            elif ai_action in self.READ_ACTIONS:
-                success = self._do_mark_read(internal_id, message_id, mailbox)
-            else:
-                if ai_action:
-                    logger.warning(f"Unknown action '{ai_action}', defaulting to mark as read")
-                success = self._do_mark_read(internal_id, message_id, mailbox)
-            # 老路径下立即写 SQLite (echo prevention)
-            self._update_store_flags(internal_id, ai_action)
+        # Sprint 15 SSoT inversion (E2-B 起唯一路径): 写 intent + outbox, fanout 异步派发
+        success = self._enqueue_outbox(internal_id, ai_action, msg_short)
 
         # 操作失败（邮件可能已被删除），仍标记已同步防止无限重试
         if not success:
@@ -259,24 +246,31 @@ class NotionToMailSync:
                 ai_action, record
             )
 
-            # 立即 update_local_flags — echo prevention, 让下一轮 SQLite Radar 不
-            # 把 fanout 即将派发的状态作为新 diff 触发反向链路
+            # mirror_and_enqueue_flag_sync = update_local_flags (echo prevention,
+            # 让下一轮 SQLite Radar 不把 fanout 即将派发的状态当新 diff) + 入队。
             # Sprint 16 收尾 (codex 审 P0): sync_single_page() 同步把 Notion 标成
             # Processing Status=已同步, SQLite 这边也要镜像, 否则前端 listEnriched
             # 跟 Notion 看到的状态不一致.
             if self.sync_store:
-                self.sync_store.update_local_flags(
-                    internal_id, target_read, target_flagged,
-                    processing_status='已同步',
+                result = mirror_and_enqueue_flag_sync(
+                    self.sync_store,
+                    self.outbox_repo,
+                    internal_id,
+                    local_read=target_read,
+                    local_flagged=target_flagged,
+                    local_processing_status='已同步',
+                    mailapp_payload=payload,
+                    source="reverse_sync_poll",
                 )
-
-            outbox_id = self.outbox_repo.enqueue(
-                internal_id=internal_id,
-                op_type="flag_sync",
-                target="mailapp",
-                payload=payload,
-                source="reverse_sync_poll",
-            )
+            else:
+                # sync_store 未注入 (测试态): 跳过 SQLite mirror 只入队。
+                result = enqueue_flag_sync(
+                    self.outbox_repo,
+                    internal_id,
+                    mailapp_payload=payload,
+                    source="reverse_sync_poll",
+                )
+            outbox_id = result.mailapp_outbox_id
             logger.info(
                 f"[reverse_sync→outbox] internal_id={internal_id} "
                 f"outbox_id={outbox_id} payload={payload} ({msg_short})"
@@ -308,33 +302,6 @@ class NotionToMailSync:
 
         return None
 
-    def _do_mark_read(self, internal_id: Optional[int], message_id: str, mailbox: str = None) -> bool:
-        try:
-            if internal_id:
-                return self.arm.mark_as_read_by_id(internal_id, True, mailbox)
-            return self.arm.mark_as_read(message_id, True, mailbox)
-        except Exception as e:
-            logger.error(f"mark_as_read failed: {e}")
-            return False
-
-    def _do_flag(self, internal_id: Optional[int], message_id: str, mailbox: str = None) -> bool:
-        try:
-            if internal_id:
-                return self.arm.set_flag_by_id(internal_id, True, mailbox)
-            return self.arm.set_flag(message_id, True, mailbox)
-        except Exception as e:
-            logger.error(f"set_flag failed: {e}")
-            return False
-
-    def _do_mark_read_and_flag(self, internal_id: Optional[int], message_id: str, mailbox: str = None) -> bool:
-        try:
-            if not self._do_mark_read(internal_id, message_id, mailbox):
-                return False
-            return self._do_flag(internal_id, message_id, mailbox)
-        except Exception as e:
-            logger.error(f"mark_read_and_flag failed: {e}")
-            return False
-
     async def _try_notify(self, page: Dict) -> bool:
         if self._skip_notify or not self._feishu:
             return False
@@ -357,33 +324,6 @@ class NotionToMailSync:
             return False
 
         return await self._feishu.notify_important_email(page)
-
-    def _update_store_flags(self, internal_id: Optional[int], ai_action: str):
-        """Echo prevention: 反向同步后更新 SyncStore flags"""
-        if not self.sync_store or not internal_id:
-            return
-
-        try:
-            record = self.sync_store.get(internal_id)
-            if not record:
-                return
-
-            is_read = record.get('is_read', False) if isinstance(record, dict) else getattr(record, 'is_read', False)
-            is_flagged = record.get('is_flagged', False) if isinstance(record, dict) else getattr(record, 'is_flagged', False)
-
-            if ai_action in self.FLAG_ACTIONS or ai_action in self.READ_ACTIONS:
-                is_read = True
-            if ai_action in self.FLAG_ACTIONS:
-                is_flagged = True
-
-            # Sprint 16 收尾 (codex 审 P1): 老路径 fallback 同样镜像 ps='已同步'.
-            # 语义跟 outbox 主路径 _enqueue_outbox 一致, 不同的只是派发方式.
-            self.sync_store.update_local_flags(
-                internal_id, bool(is_read), bool(is_flagged),
-                processing_status='已同步',
-            )
-        except Exception as e:
-            logger.warning(f"Failed to update store flags for echo prevention: {e}")
 
     def get_stats(self) -> Dict:
         return {

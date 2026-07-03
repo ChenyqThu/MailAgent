@@ -26,16 +26,18 @@ import sqlite3
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from loguru import logger
 
-from src.mail.applescript_arm import AppleScriptArm
 from src.mail.reader import EmailReader
 from src.mail.sync_store import SyncStore
 from src.notion.sync import NotionSync
 from src.repository import AttachmentStore, EmailRepository
 from src.repository.storage_payload_builder import build_storage_payloads
+
+if TYPE_CHECKING:
+    from src.mail.backend.base import IMailBackend
 
 _BackfillRecord = dict[str, Any]
 _DerivativeCandidate = tuple[int, int, str, str]
@@ -219,7 +221,7 @@ def _source_text(source: Any) -> str:
 
 def _backfill_one_body(
     record: _BackfillRecord,
-    arm: AppleScriptArm,
+    arm: "IMailBackend",
     reader: EmailReader,
     repo: EmailRepository,
     notion_sync: NotionSync,
@@ -335,7 +337,7 @@ def _backfill_one_body(
 def _make_body_units(
     records: list[_BackfillRecord],
     *,
-    arm: AppleScriptArm,
+    arm: "IMailBackend",
     reader: EmailReader,
     repo: EmailRepository,
     notion_sync: NotionSync,
@@ -662,7 +664,7 @@ def _backfill_one_metadata(
 
 def _backfill_one_metadata_via_applescript(
     record: _BackfillRecord,
-    arm: AppleScriptArm,
+    arm: "IMailBackend",
     reader: EmailReader,
     sync_store: SyncStore,
     *,
@@ -729,7 +731,7 @@ def _make_metadata_units(
     *,
     source: str,
     notion_client: Optional[Any] = None,
-    arm: Optional[AppleScriptArm] = None,
+    arm: Optional["IMailBackend"] = None,
     reader: Optional[EmailReader] = None,
     sync_store: SyncStore,
     dry_run: bool,

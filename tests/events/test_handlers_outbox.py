@@ -1,17 +1,16 @@
-"""tests/events/test_handlers_outbox.py — Sprint 15 Stage 1.4.
+"""tests/events/test_handlers_outbox.py — Sprint 15 Stage 1.4 + E2-B 收口.
 
-覆盖 EventHandlers 3 个反向 handler 在 outbox 启用 / 关闭两种模式下的行为：
-- handle_flag_changed: outbox enabled → 写 outbox(target='mailapp', source='notion_webhook')
-                       outbox disabled → 老路径 arm 调用
-- handle_completed:    outbox enabled → 写 outbox(target='mailapp', source='notion_webhook')
+覆盖 EventHandlers 3 个反向 handler 的 outbox 行为（E2-B 起 outbox 恒启用,
+outbox=off 老 AppleScript 直调路径已删, outbox_repo 必传）：
+- handle_flag_changed: 写 outbox(target='mailapp', source='notion_webhook')
+- handle_completed:    写 outbox(target='mailapp', source='notion_webhook')
                        (notion_webhook + target='notion' 被 echo prevention 拒,
                         handler 设计本来就不写)
-- handle_ai_reviewed:  outbox enabled → 写 2 条 outbox (mailapp + notion, source='ai_reviewed_handler'),
+- handle_ai_reviewed:  写 2 条 outbox (mailapp + notion, source='ai_reviewed_handler'),
                        echo prevention 因 source 不是 notion_webhook 不拦
-                       outbox disabled → 老路径 arm + notion_sync 调用
 
-核心防回环验证: outbox 关闭时无人写 outbox; outbox 开时 notion_webhook 源不会
-被任何 target='notion' 命中（除了 ai_reviewed_handler 例外）。
+核心防回环验证: notion_webhook 源不会被任何 target='notion' 命中
+（除了 ai_reviewed_handler 例外）。
 """
 
 from __future__ import annotations
@@ -84,21 +83,23 @@ def notion_sync():
 @pytest.fixture
 def handlers_with_outbox(arm, sync_store, notion_sync, outbox_repo):
     return EventHandlers(
-        arm=arm,
+        backend=arm,
         sync_store=sync_store,
         notion_sync=notion_sync,
         outbox_repo=outbox_repo,
     )
 
 
-@pytest.fixture
-def handlers_no_outbox(arm, sync_store, notion_sync):
-    return EventHandlers(
-        arm=arm,
-        sync_store=sync_store,
-        notion_sync=notion_sync,
-        outbox_repo=None,
-    )
+class TestOutboxRepoRequired:
+    def test_none_outbox_repo_raises_type_error(self, arm, sync_store, notion_sync):
+        """E2-B 必传化: outbox_repo=None 构造即 TypeError (老回退分支已删)."""
+        with pytest.raises(TypeError, match="outbox_repo"):
+            EventHandlers(
+                backend=arm,
+                sync_store=sync_store,
+                notion_sync=notion_sync,
+                outbox_repo=None,
+            )
 
 
 # ============================================================
@@ -164,20 +165,6 @@ class TestFlagChangedWithOutbox:
         rows = outbox_repo.list_by_internal_id(5001)
         notion_targets = [r for r in rows if r.target == "notion"]
         assert notion_targets == []
-
-
-class TestFlagChangedWithoutOutbox:
-    async def test_old_path_calls_arm(
-        self, handlers_no_outbox, arm, sync_store
-    ):
-        await handlers_no_outbox.handle_flag_changed({
-            "properties": {
-                "message_id": "<msg-uuid@example.com>",
-                "is_read": True,
-            }
-        })
-
-        arm.mark_as_read_by_id.assert_called_once()
 
 
 # ============================================================
@@ -278,21 +265,6 @@ class TestCompletedWithOutbox:
         assert bool(record["is_flagged"]) is True
 
 
-class TestCompletedWithoutOutbox:
-    async def test_old_path_calls_arm(
-        self, handlers_no_outbox, arm, sync_store
-    ):
-        sync_store.update_local_flags(5001, False, True)
-        await handlers_no_outbox.handle_completed({
-            "properties": {
-                "message_id": "<msg-uuid@example.com>",
-                "processing_status": "已完成",
-            },
-        })
-        arm.set_flag_by_id.assert_called_once()
-        arm.mark_as_read_by_id.assert_called_once()
-
-
 # ============================================================
 # handle_ai_reviewed
 # ============================================================
@@ -362,25 +334,6 @@ class TestAiReviewedWithOutbox:
         rows = outbox_repo.list_by_internal_id(5001)
         mailapp_row = next(r for r in rows if r.target == "mailapp")
         assert mailapp_row.payload == {"is_read": True, "is_flagged": False}
-
-
-class TestAiReviewedWithoutOutbox:
-    async def test_old_path_calls_arm_and_notion(
-        self, handlers_no_outbox, arm, notion_sync, sync_store
-    ):
-        await handlers_no_outbox.handle_ai_reviewed({
-            "page_id": "page-uuid-abc",
-            "properties": {
-                "message_id": "<msg-uuid@example.com>",
-                "ai_action": "需要回复",
-                "ai_priority": "🟢 普通",
-                "mailbox": "收件箱",
-            },
-        })
-        arm.mark_as_read_by_id.assert_called_once()
-        arm.set_flag_by_id.assert_called_once()
-        notion_sync.update_email_flags.assert_called_once()
-        notion_sync.update_page_mail_sync_status.assert_called_once()
 
 
 # ============================================================
