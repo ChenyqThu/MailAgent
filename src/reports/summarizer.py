@@ -154,6 +154,8 @@ class ReportDraft:
 
 def _build_system(persona: str, now: datetime) -> List[Dict[str, Any]]:
     weekday_cn = "一二三四五六日"[now.weekday()]
+    from src.agent_config.task_context import build_task_identity_context
+
     body = (
         build_task_identity_context()
         + persona.rstrip()
@@ -251,6 +253,7 @@ def _build_user(
 def _build_system_agentic(persona: str, now: datetime, kos_enabled: bool) -> List[Dict[str, Any]]:
     """agentic 日报 system：persona + 工具说明 + 收尾约束。"""
     weekday_cn = "一二三四五六日"[now.weekday()]
+    from src.agent_config.task_context import build_task_identity_context
     kos_tool = "- kos_query(query)：查 Gbrain 知识库里跨人 / 项目 / 历史的背景\n" if kos_enabled else ""
     body = (
         build_task_identity_context()

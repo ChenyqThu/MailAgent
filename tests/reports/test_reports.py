@@ -22,7 +22,13 @@ from src.reports import data as rdata
 from src.reports import models as m
 from src.reports.assembler import assemble_fallback_doc, assemble_report_doc
 from src.reports.store import ReportStore
-from src.reports.summarizer import REPORT_TOOL_SCHEMA, ReportDraft, _parse
+from src.reports.summarizer import (
+    REPORT_TOOL_SCHEMA,
+    ReportDraft,
+    _build_system,
+    _build_system_agentic,
+    _parse,
+)
 from src.reports.agent_tools import build_report_tools
 from src.reports.worker import (
     _daily_window,
@@ -581,6 +587,17 @@ class TestSummarizer:
         assert draft.key_points == ["k1"]                  # 空白过滤
         assert len(draft.highlights) == 1                  # 空 body 丢弃
         assert draft.model == "mk" and draft.input_tokens == 10
+
+    def test_build_system_no_nameerror(self):
+        # af9529d9 在 _build_system/_build_system_agentic 引用 build_task_identity_context
+        # 但漏了 import → 每次日报生成 NameError 降级 fallback（07-02/07-03 日报空壳）。
+        now = datetime(2026, 7, 3, 9, 0, tzinfo=timezone(timedelta(hours=8)))
+        blocks = _build_system("PERSONA_MARKER", now)
+        assert "PERSONA_MARKER" in blocks[0]["text"]
+        blocks = _build_system_agentic("PERSONA_MARKER", now, kos_enabled=False)
+        assert "PERSONA_MARKER" in blocks[0]["text"]
+        blocks = _build_system_agentic("PERSONA_MARKER", now, kos_enabled=True)
+        assert "kos_query" in blocks[0]["text"]
 
 
 # ============================================================
