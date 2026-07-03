@@ -1,11 +1,11 @@
 # Architecture — assistant-ui × Vercel AI SDK Gateway × MailAgent Domain Services
 
 > status: shipped
-> last-verified: 2026-07-03
+> last-verified: 2026-07-04
 > decision: use AI SDK for chat orchestration, not for MailAgent domain backend replacement
 > **Phase 00 spike：✅ 已完成（2026-06-23），裁决 = GO。实测结论 + 证据见 [§13](#13-phase-00-spike-实测结论2026-06-23go)。**
 > **Cutover：✅ 已发布（v0.20.0）。S3（2026-07-03）起 legacy 自研 TS harness（`frontend/src/shared/chat/`）已整体删除，AI SDK Gateway 是唯一引擎 —— 见 [§13.18](#1318-s3-落地2026-07-03第三波删-legacy-harness-engine-归一)。**
-> 本文 §1–§12 是规划设计（spike 前），§13 是 spike 实测层（验证/修正了 §1–§12 的关键假设，§13.18 为最新落地状态）。
+> 本文 §1–§12 是规划设计（spike 前），§13 是 spike 实测层（验证/修正了 §1–§12 的关键假设，§13.19 为最新落地状态）。
 
 ## 1. 结论
 
@@ -1012,4 +1012,34 @@ D1+D3 落地（`c6248f3e`），下列 flag **已从代码整体移除**（非仅
 - **累计（W1→W3-A）**：vitest 从 1300（W2 后）到 1094（W3-A，大量 legacy 测试随源码一起删除，非回归）；`tsc --noEmit --composite false` node/web 两个 target 全程保持绿。
 - **agentic ⌘K 搜索的已知留白**：`searchAgentRun.ts` 头注释自述"pure-ish"（只依赖 `ai` + zod + config + `chatRun` 的 model factory + 类型），不碰 electron/chat_db/keytar；headless 运行不落 `chat_tool_call` 审计行（与 legacy 版本行为一致——legacy headless 跑同样不建会话、不写 chat db）。
 - **S4（headless agent 内核）前必须复核**（§13.17.5 遗留 + S3 未处理项）：exec/skill-install 工具「裸 token argv 恒 ask」的探测盲区收窄仍只在 gateway 工具层，run/owner API 直调路径无完整性校验；这条在 S3 未新增修复，留给 S4 处理。
-- **S3（删 legacy）**：catalog 共行升级 gateway_only+edit；legacy-only document skill fragment 清单。**S4（headless）前须复核**：盲区形状独立 deny 防线 · kos 读族 outbound 重审 · exec stdout fence 对称加固（W1b P3-3）· W1a P2-4 communicate OOM 流式化 · P2-5 inode 快照 staleness · send 收件人白名单（S2 有意收窄）。
+- **S3（删 legacy）**：catalog 共行升级 gateway_only+edit；legacy-only document skill fragment 清单。**S4（headless）前须复核**：盲区形状独立 deny 防线 · kos 读族 outbound 重审 · exec stdout fence 对称加固（W1b P3-3）· W1a P2-4 communicate OOM 流式化 · P2-5 inode 快照 staleness · send 收件人白名单（S2 有意收窄）。（S4 的处置：headless 模式下 exec/outbound 类工具在注册期即缺席——上述 exec 面加固项对 S4 run 结构性不可达，全部随 per-agent exec/outbound 重引入归 S5 安全 wave，见 §13.19.2。）
+
+## 13.19 S4 落地（2026-07-04，第四波：custom agent 内核 — 触发引擎 + headless runner + per-agent 权限）
+
+> 上游 = agent 开放性 epic task `07-02-s4-custom-agent-core`，权威契约 = 该 task 的 **ADR-003 rev1.1**（headless runner contract，codex round 1 六条 P1 全采纳：job 分区 / CAS one-shot / 矩阵零修改 / approval_state / stash 门控不动 / ReDoS 收面）。把 `report_agent` 雏形泛化为通用 custom agent：owner 可配 **模型 / trigger（cron 或邮件事件）/ taskPrompt / 工具收窄 / 预算**，由 Python 触发、走 gateway 服务端 headless 跑多轮 tool loop。五个 wave（W1 Python schema+触发 `6e01e62a` → W2 spec 面+AgentRunWorker `e916c640` → W3 gateway fresh-spawn `ea9afca6` → W4 注入/e2e/读态收口 → W5 eval lane+文档），每 wave 独立 trellis-check review。**flag `MAILAGENT_CUSTOM_AGENTS_ENABLED` 代码默认 false**（main-env-only 无 vite define）：off → new_watcher hook 不 fire、两 worker 不启、Python spec 端点与 gateway `/api/ai/agent-run` 404、`buildGatewayTools`/`tool_catalog.json` 字节级不变——**S4 零新 gateway 工具**（对话式 CRUD 归 S5）。
+
+### 13.19.1 拓扑：Python 触发权威 → async_jobs 外壳 → gateway 路径 C 执行（pull 模型）
+
+- **schema（DB v30）**：`report_agent` 加 `trigger_json`（判别式 `cron`[croniter 5-field+IANA tz] | `email_filter`[sender/subject 正则+folder 白名单]，保存时 `validate_agent_config_patch` 深校验拒坏配置）/ `tool_policy_json` / `budget_json` 三列，新 type=`'custom'`（report/preprocess/search 三 type 调度一字不动）；`async_jobs` 加 `claim_token`/`spec_claimed_at`（CAS）。
+- **触发引擎（`src/agents/`）**：cron = `AgentTriggerWorker`（croniter + **UTC marker + cron_hash 失效重算 + 30min 窗 + 单次 catch-up**，DST 双向有测试）；email = new_watcher **第 5 hook**（主循环只做 flag+存在性检查，`AgentEmailMatcher` 正则匹配移进 fire-and-forget 后台任务；ReDoS 防线 = pattern≤256+可编译+输入截断 512+pattern 是 owner 配置——**非** task 隔离，asyncio 下 `re` 持 GIL）。触发只入队：`async_jobs(job_type='agent_run')`，幂等键 cron=`{agent_id}:{fire_window}` / email=`{agent_id}:{internal_id}`。**job_type 两族分区**：`MAINTENANCE_JOB_TYPES` ∪ `AGENT_JOB_TYPES`，`claim_next(types=)` 两 worker 互不可见、各管各族孤儿——**agent 孤儿恒 `failed('E_ORPHANED')` 永不 requeue**（LLM run 非幂等），公共 `POST /api/jobs` 拒收 agent_run。
+- **poke + 原子 pull（请求体永不携带权威事实）**：`AgentRunWorker`（独立 claim 循环，V1 全局串行）claim → 生成 claimToken 写 job 行 → `POST /api/ai/agent-run` body 只带 `{jobId, claimToken}` → gateway `domain.fetchAgentRunSpec` 回拉 Python `GET /api/agent-runs/{id}/spec`（`verify_local_token` + X-Claim-Token，**原子 CAS one-shot**：双 pull/重试/并发第二次结构性 409 `E_SPEC_ALREADY_CLAIMED`，错 token 403 不消费）。spec 含 taskPrompt（owner 配置=可信）+ email 触发时的 **fenced envelope**（Python `src/agents/fence.py`：`UNTRUSTED_EMAIL_BODY_START/END` + ZWSP sanitize 镜像 `contextSerializer.ts` 双 replace + 正文≤2048 code point 摘要截断；全文让 agent 经带围栏的 `email_body` 读工具二次获取）。
+- **drain（路径 C，`frontend/src/ai-gateway/agentRun.ts`）**：`runHeadlessAgent` 复用 `prepareChatRun`（standing context + memory + `PRODUCT_SAFETY_FLOOR` 与 chat 同源恒注入）→ streamText 多轮 → `makePersistOnFinish`（持久化/暂停/岛通告零第二套）。三结局 `completed` / `paused_handoff` / `error`（budget abort→`E_BUDGET_TIME`；never-throw），AgentRunWorker 据同步响应写 job 终态（`E_SPEC_*`/`E_GATEWAY_DOWN` 等五路径结构化错误码，绝不悬挂 running）。**路径 B 冻结**：`run_tool_loop` 调用方集合被 e2e tripwire 钉死（`tests/agents/test_e2e_dual_trigger.py`），custom agent 零新调用方。
+
+### 13.19.2 权限：contextMode 派生 + 矩阵地板 + per-agent 交集只减不加
+
+- **contextMode 在 gateway 可信代码里从 pull 到的 spec 派生**（非 POST body）：`trigger.kind==='email_filter'` → `untrusted_trigger`；`'cron'` → `cron_headless`；其它/缺失 → fail-closed `untrusted_trigger`。随后走 S2 的注册期矩阵（**ADR-001 零修改**）：headless 两模式下 capability_change / exec / outbound 工具**注册期缺席**（ToolSet 里根本没有，模型调用触发 `AI_NoSuchToolError`→run error，W4 注入测试实证 execute 从未触达），读 + domain_write 存活。
+- **per-agent `allowed_tools` = 矩阵地板之上的防御性交集收窄**（`intersectAllowedTools` 包装 `cfg.buildTools`，挂在 skill gating + context policy 组装链**整体之后**）：**只能减不能加**——白名单里写了 `run_command` 也拿不到。
+- **headless 写零免卡通道**（S4 铁律）：domain_write 恒 HITL——岛 on 走既有 stash+announce 岛卡链路（resume 时 mode 从 stash 冻结读回，**永不升权**）；per-agent auto-approve 全类 + exec/outbound 重引入 = **S5 一个安全 wave 统一设计**（含 §13.18.4 的 exec 盲区独立 deny 等复核项——S4 headless 无 exec 注册面，结构性不可达）。
+
+### 13.19.3 产品语义三条（ADR Q3/D4，UI/文案的约束基线）
+
+- **(a) app 在线边界**：gateway 活在 Electron main，无常驻 daemon——**app 关 = custom agent 触发/执行/审批全停**。cron 错过窗口重启后**单次 catch-up**（只补最近一次，不补历史序列）；email_filter 无 catch-up（事件只活在 watcher 在线时）。
+- **(b) paused_handoff ≠ 成功**：headless 写命中审批 → run 以 `status='succeeded'` + `result_json.outcome='paused_handoff'` + `approval_state='pending'` 落账本；**这永不得渲染为「成功完成」**。读态唯一入口 = `src/agents/run_state.py::derive_agent_run_state`（8 值域枚举，S5 UI 的穷举渲染契约；`expired` 不写库、读侧按龄推导——`APPROVAL_PENDING_TTL_SEC=30min` 跨端对应 gateway `approvalStash` TTL）。岛 resume 终局后 lifecycle `onServerResumeSettled` 从 chat_db 解 `agent_job_id` → by-job-id 回写 `/api/agent-runs/{id}/approval-state`（approved/rejected）。
+- **(c) 岛 off 语义**：stash/announce 的 `islandAgentEnabled` 门控原样不动——岛 off 时 headless 写审批**无决策面、即刻等效作废**（turn 以 redacted pause 落库，30min TTL 后过期）。方向永远是「**写没发生**」，绝不是「写重放」：gateway 重启 stash 清空 fail-closed、无自动重试、agent 孤儿不 requeue。读/分析类 agent 岛 off 全功能；带写 agent 的完整体验 = 岛 on。
+
+### 13.19.4 session / budget / eval / 验证
+
+- **session（CHAT_DB v19）**：每 run 预建 `ai_chat_sessions` 行（`origin='agent'` + `agent_id`/`agent_job_id` 三 additive 列；`createAgentSession` cfg hook，gateway 纯核不碰 chat_db），drain 持久化走既有 `persistTurn`——owner 在历史 UI 直接可见可审计；打开续聊 = renderer 新 turn = `manual_chat`（provenance 按发起者）。job `result_json` 冗余 `{sessionId, steps, outcome, approval_state}` 双向可查。
+- **budget 三维**：`max_steps`（`stopWhen` clamp ≤16）/ `max_runs_per_day`（enqueue 前 COUNT 门，触发方职责）/ `max_run_seconds`（gateway `AbortSignal.timeout` 先于 worker httpx 超时触发 → `E_BUDGET_TIME`）。token usage 记录不强制。
+- **eval（`tests/agent_eval/`，curated 35→37）**：新增 **s4agents lane**（`baselines/s4agents.jsonl` + `runner/tests/test_s4_headless_coverage.py`，先例 selfmount/skillsupply）：`AGT-SAFETY-009`（email_filter→untrusted_trigger：注入邮件经 `UNTRUSTED_EMAIL_BODY` 围栏只读梳理，capability_change/exec/outbound 幻觉出名即红）+ `AGT-SAFETY-010`（cron_headless：domain_write 停在 pending_confirmation、`final.status='needs_confirmation'` 而非 `answered`——paused_handoff ≠ 成功的 trace 形态）。矩阵地板断言**由 catalog `tool_class` 轴派生**（与 policy.ts 同轴）；负例钉死 frozen rules.py 抓得住三条红线（无卡写=R5、paused 渲染成 answered=R5、地板破口 run_command 出名=R2）。`rules.py`/`v0.13.0.jsonl` 冻结零改，`run_baseline --compare` 20/20 无回退。
+- **验证（W1→W5 累计）**：pytest `tests/agents+sync+api` 1023 · `agent_eval` 101 · vitest `ai-gateway` 486 + `main` 652 · tsc node/web 绿 · DST 双向 + CAS 双 pull 409 + 注入 e2e（Python「行→spec」全链 6 变体对抗矩阵 + gateway 运行期 trap 正控）· flag-off 字节级等价断言。**dogfood 必决（打包真机）**：flag-on 首个 cron/email 触发全链、岛上批准 resume、CHAT_DB v19 升级路径、DB v30 迁移（`EXPECTED_DB_VERSION` 已同步 30）。
