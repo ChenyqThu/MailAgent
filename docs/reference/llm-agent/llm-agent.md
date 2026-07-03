@@ -3,7 +3,7 @@
 > 邮件同步到 Notion 后，由本地 LLM（Anthropic Messages 兼容网关）填 11 个 AI 分类/分析字段 + Daily Digests relation，取代原来 Notion Custom Agent（Email Agent）。**默认关闭**。
 > 启用清单另见 [`docs/LLM_AGENT_SETUP.md`](LLM_AGENT_SETUP.md)。
 >
-> 注意：这跟「AI Agent Harness（前端 Custom AI 多轮 agent）」不是同一个东西 —— 那是前端 chat panel 的 multi-turn harness，见 [`docs/architecture_agent_harness.md`](architecture_agent_harness.md)。
+> 注意：这跟「AI Agent Harness（前端 Custom AI 多轮 agent）」不是同一个东西 —— 那是前端 chat 的 AI SDK Gateway 引擎，见 [`ai-sdk-gateway-architecture.md`](ai-sdk-gateway-architecture.md)。
 
 ## ⚠️ 启用前必做（否则会双跑撞车）
 

@@ -329,6 +329,8 @@ mailagent admin backfill-processing-status [--since-date=YYYY-MM-DD] [--mailbox=
 
 ### 5.3 Frontend Sprint 19 — AI Agent Harness ✅ M1 ship (待 dogfood)
 
+> ⚠️ S3（2026-07-03）更新：本节描述的自研 TS harness 已被 AI SDK Gateway 完全取代并删除，当前引擎架构见 [`ai-sdk-gateway-architecture.md`](../llm-agent/ai-sdk-gateway-architecture.md)。以下为 Sprint 19 M1/M2 历史记录，仅存参考。
+
 **状态**：✅ M1 已 ship 6 commits 到 `feat/agent-harness` 分支（2026-05-22/23，~6261 LOC，146 tests 全过）；⚠️ **尚未 dogfood**，默认 `MAILAGENT_AGENT_HARNESS=0` 关，满足 eval gate (≥70%) 后翻默认 flag 合 main
 
 **M1 已 ship**（PR-1a → PR-1d.2）：
@@ -343,10 +345,10 @@ mailagent admin backfill-processing-status [--since-date=YYYY-MM-DD] [--mailbox=
 - typecheck:node + typecheck:web exit 0
 - 不破坏 Sprint 4-18 任何 chat 现有测试 (legacy single-turn path 保留)
 
-**Dogfood TODO（待用户跑）**：
+**Dogfood TODO（历史记录，已跑完 —— harness 现已删除）**：
 - `MAILAGENT_AGENT_HARNESS=1 pnpm electron:dev` + 切 Custom AI 后端
-- 跑 [`docs/eval/email_scenarios.md`](../../eval/email_scenarios.md) 20 scenario
-- 记 pass rate → `docs/eval/p1-baseline.md`
+- 跑 [`email_scenarios.md`](../../archive/2026-05/eval/email_scenarios.md) 20 scenario
+- 记 pass rate → `docs/archive/2026-05/eval/p1-baseline.md`
 - 期望 ≥ 70% (≥ 14/20) 才翻默认 flag
 
 **M2 起点 — 决策反转 (2026-05-23)**：原"自研 SQLite wiki"撤销，**改为接入用户已有的 Jarvis KOS v2** (gbrain fork on mac mini @ `kos.chenge.ink` + `127.0.0.1:7225`)。MailAgent 作为 KOS 的第 4 个消费者（Notion Knowledge Agent / OpenClaw / Feishu signal detector 已在用）。完整设计：[`kos-integration-design.md`](../llm-agent/kos-integration-design.md)。
@@ -365,9 +367,10 @@ PR 拆分（7 PR，~3-4 周）：
 **为何转**：KOS 已有 entity extraction (24k people / 5k companies) / 知识图谱多跳 / 混合检索 (vector + BM25 + RRF + ZeroEntropy rerank) / Facts trajectory / 夜间 consolidate；用户其他 agent (Notion / OpenClaw / Feishu) 已在用同一个 KOS — MailAgent 自维护 wiki 等于建邮件孤岛，丢跨域 entity 合并的最大价值。
 
 **关联文档**：
-- 架构（ship 状态）：[`architecture_agent_harness.md`](../llm-agent/architecture_agent_harness.md)
-- 设计 ref：[`agent-harness-design.md`](../llm-agent/agent-harness-design.md)
-- Eval gate：[`eval/email_scenarios.md`](../../eval/email_scenarios.md)
+- 架构（已归档存史）：[`architecture_agent_harness.md`](../../archive/2026-06/architecture_agent_harness.md)
+- 设计 ref（已归档存史）：[`agent-harness-design.md`](../../archive/2026-06/agent-harness-design.md)
+- 当前引擎架构：[`ai-sdk-gateway-architecture.md`](../llm-agent/ai-sdk-gateway-architecture.md)
+- Eval gate（已归档存史）：[`email_scenarios.md`](../../archive/2026-05/eval/email_scenarios.md)
 - Dogfood handoff：[`../frontend/SPRINT19-M1-HANDOFF.md`](../../../frontend/archive/2026-05/SPRINT19-M1-HANDOFF.md)
 - 决策记录：`~/.claude/plans/subagent-plan-lexical-moler.md`
 

@@ -2,7 +2,7 @@
 
 > **架构现状（2026-06，Phase A+B 后 / v0.12.0）**：搜索已**收敛为单一 Python 引擎 CORE#1**（`src/repository/email_repository.py` + `src/repository/search_query.py`）。
 > 旧 TypeScript 引擎 CORE#2（`frontend/src/.../search_query_parser.ts`）在 Phase B（G-B1a）**整体删除**；桌面 ⌘K 命令面板经 **loopback serve-api**（`127.0.0.1:8200` → `GET /api/email/search`，token 由 chat_local_bridge webRequest 注入）打到同一 Python 核——
-> 因此**人工搜索与 AI agentic 搜索结果结构性恒一致**（同引擎，而非靠夹具对齐两份实现）。agentic 搜索（自然语言 → DSL → 引擎）的 harness 见 [`llm-agent/agent-harness-kos.md`](../llm-agent/agent-harness-kos.md)。
+> 因此**人工搜索与 AI agentic 搜索结果结构性恒一致**（同引擎，而非靠夹具对齐两份实现）。agentic 搜索（自然语言 → DSL → 引擎）由 AI SDK Gateway 工具调用驱动，见 [`llm-agent/ai-sdk-gateway-architecture.md`](../llm-agent/ai-sdk-gateway-architecture.md) §13。
 > 本文档是该单一引擎的**权威规格**。行为锚 = `tests/repository/test_search_query_behavior.py`（读 `tests/fixtures/search_query_behavior.json`；旧 TS vitest runner 已随 CORE#2 删除）。
 > 改语法 = 先改本文档 + 夹具，再改引擎。
 

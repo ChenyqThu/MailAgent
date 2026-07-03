@@ -1,5 +1,7 @@
 # Agent Harness Eval Scenarios
 
+> ⚠️ 已归档存史（2026-07-03，S3）：本文的 20 个 eval scenario 已被 `tests/agent_eval/tasks/` 的 curated tasks 取代（当前 35 个，见根 `CLAUDE.md`「跑 agent 行为回归网」一节）。本文仅存历史参考。
+
 > 20 个真实邮件 agent 场景，每 phase gate 跑。**P1 (M1)** 必过 ≥ 70%；**P2 (M2)** ≥ 85%；**P3 (M3)** ≥ 90%。
 >
 > 每场景 schema：

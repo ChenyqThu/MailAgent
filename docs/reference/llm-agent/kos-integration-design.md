@@ -1,8 +1,8 @@
 # MailAgent ⇄ Jarvis KOS (gbrain fork) 集成设计
 
-> **状态**：📐 **M2 待实施**（Sprint 19 M2，2026-05-23 起）。M1 已 ship，本设计替换原 plan D1（自研 SQLite wiki）作为 M2 Wiki 实施路径。
+> **状态**：✅ **M2 已 ship**（Sprint 19，2026-05-23 起）。本设计替换原 plan D1（自研 SQLite wiki）作为 M2 Wiki 实施路径，三层 flag（`MAILAGENT_KOS_INGEST_ENABLED` / `_CONSUMER_ENABLED` / `_L1_HOT_BLOCK_ENABLED`）默认全关，见根 `CLAUDE.md` 开关表。
 > **决策反转**：从"自研 SQLite `wiki_pages` + 借鉴 gbrain 闪光点"反转为"**MailAgent 作为外部 KOS 第二大脑的第 4 个消费者**"
-> **关联架构**：[`architecture_agent_harness.md`](./architecture_agent_harness.md) §8 新加 KOS 行；[`agent-harness-design.md`](./agent-harness-design.md) §M2 重写；plan 文件 `~/.claude/plans/subagent-plan-lexical-moler.md` D1 撤销，D9 新加
+> **关联架构**：旧自研 harness 设计文档（`architecture_agent_harness.md` / `agent-harness-design.md`）已归档存史（S3，2026-07-03，见 `docs/archive/2026-06/`）；当前 chat 引擎架构见 [`ai-sdk-gateway-architecture.md`](./ai-sdk-gateway-architecture.md)
 
 ---
 
@@ -307,7 +307,7 @@ mail-sync 启动时加 `KOS_INGEST_DRY_RUN=1` 选项：跑完整 producer pipeli
 
 ## 6. 验证（M2 ship gate）
 
-跟 M1 一样跑 `docs/eval/email_scenarios.md`。新增 KOS 专属 scenario（M2 补 5 个）：
+跟 M1 一样跑 `docs/eval/email_scenarios.md`（已归档存史，见 `docs/archive/2026-05/eval/email_scenarios.md`）。新增 KOS 专属 scenario（M2 补 5 个）：
 
 - "Acme 项目最近一个月跟我的邮件互动" → 期望 `kos_query` 返跨 sender 的 page list
 - "Bob 之前怎么提集成方案" → 期望 `kos_digest(people/bob-*)` 注入 + `kos_query` 补充邮件细节
@@ -364,9 +364,9 @@ ssh chenyuanquan@100.98.144.119 \
 
 ## 10. 关联文档
 
-- 设计 ref：[`agent-harness-design.md`](./agent-harness-design.md) M2 段（PR-1d 后会重写）
-- Ship 状态架构：[`architecture_agent_harness.md`](./architecture_agent_harness.md) §9 M2 段（待更新）
-- Roadmap：[`roadmap-post-cutover.md`](../architecture/roadmap-post-cutover.md) §5.3（待更新）
+- 旧自研 harness 设计 ref（M2 段）：已归档存史，见 `docs/archive/2026-06/agent-harness-design.md` / `docs/archive/2026-06/architecture_agent_harness.md`
+- 当前 chat 引擎架构：[`ai-sdk-gateway-architecture.md`](./ai-sdk-gateway-architecture.md)
+- Roadmap：[`roadmap-post-cutover.md`](../architecture/roadmap-post-cutover.md) §5.3
 - M2 handoff：`frontend/SPRINT19-M2-PLAN.md`（同 commit 新建）
 - 决策记录：`~/.claude/plans/subagent-plan-lexical-moler.md` D1 撤销 / D9 新加（同 commit 更新）
 - KOS 上游 fork：mac mini `~/Projects/jarvis-knowledge-os-v2/`，README + `docs/JARVIS-ARCHITECTURE.md`

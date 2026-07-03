@@ -1,5 +1,7 @@
 # Agent Experience Epic — 下一 Phase Backlog（v0.20.0 cutover 之后）
 
+> ⚠️ 已归档存史（2026-07-03）：本文登记的任务 A（web→ai-sdk）与任务 B（删 legacy harness）均已完成（任务 B 见 `07-02-s3-remove-legacy-harness` task）。当前状态真相见根 `CLAUDE.md` 文档地图 + 开关表。本文仅存历史参考。
+
 > status: backlog（待启动）· owner: chenyqThu · created: 2026-06-27
 > 上游：本 epic master plan = [`README.md`](./README.md) / [`roadmap.md`](./roadmap.md)
 > 触发点：**v0.20.0 已 cutover**（Chunk H：桌面端 master + AGENT_VIEW + ASSISTANT_MODAL 默认开）。

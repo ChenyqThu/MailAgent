@@ -345,7 +345,7 @@
       "delete": "Delete",
       "translate": "Translate this email",
       "toggleBatchSelect": "Toggle batch select",
-      "openAiPanel": "Open AI panel",
+      "openAiPanel": "Open AI chat",
       "sendChat": "Send AI message",
       "newChat": "New AI conversation",
       "toggleIsland": "Toggle Dynamic Island",

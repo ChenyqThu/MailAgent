@@ -231,17 +231,19 @@ def _hot_bool(env_vals: Dict[str, Any], key: str, fallback: bool) -> bool:
 
 @router.get("/config", dependencies=[Depends(verify_cf_access)])
 async def chat_config(request: Request):
-    """chat 运行配置快照（V2.1 阶段 3c — renderer 构造 HttpChatPlatform 前预取）。
+    """chat 运行配置快照（S3 后两类消费方，均非 HttpChatPlatform ——该抽象已随 W3-A 删除）。
 
-    serve-api 读 config.py（pydantic env_file → .env）暴露 chat 引擎运行配置；前端
-    原样覆盖 DEFAULT_HTTP_CONFIG（D-3c-3：配置以 serve-api 为准）。data 形状 =
-    HttpPlatformConfig（frontend/src/shared/chat/http_platform.ts），camelCase 对齐前端。
+    serve-api 读 config.py（pydantic env_file → .env）暴露 chat 引擎运行配置。消费方：
+    ① 嵌入式 AI SDK Gateway（`ai_gateway_lifecycle.ts` 启动前 TTL 缓存预取一次，投影进
+    `GatewaySystemPromptConfig` 驱动 system prompt 组装 + 工具门控，见
+    `frontend/src/ai-gateway/{systemPrompt,config}.ts`）；② renderer Settings UI 直接
+    fetch（`CustomAiSection.tsx` / `useLlmModels.ts`，非经引擎）。camelCase 对齐两端。
 
     ``kosConsumerEnabled`` = 原始开关；``kosConfigured`` = 开关 AND OAuth 凭据齐全
     （KOS_MCP_BASE + KOS_OAUTH_CLIENT_ID + KOS_OAUTH_CLIENT_SECRET 三者非空，对齐
-    ``_kos_available``）。renderer createBuiltinTools 据 ``kosConfigured`` gate 9 个 KOS
-    工具注册，custom_api KOS 使用指南块也同 gate —— 开关开着但未对接时都不注入，避免叫
-    AI 用未注册的工具（``[✨ 保存到 KOS]`` 按钮仍单独由 ``_kos_available`` gate）。
+    ``_kos_available``）。gateway `tools/index.ts` 据 ``kosConfigured`` gate KOS 工具
+    注册 —— 开关开着但未对接时不注入，避免叫 AI 用未注册的工具（``[✨ 保存到 KOS]``
+    按钮仍单独由 ``_kos_available`` gate）。
     """
     cfg = get_settings()
     # 归一化对齐 electron chat/config.ts getter 的防御（malformed/empty env 不漂移 ——
@@ -296,8 +298,6 @@ async def chat_config(request: Request):
     kos_consumer = _hot_bool(env_vals, "MAILAGENT_KOS_CONSUMER_ENABLED", cfg.kos_consumer_enabled)
     kos_l1_hot = _hot_bool(env_vals, "MAILAGENT_KOS_L1_HOT_BLOCK_ENABLED", cfg.kos_l1_hot_block_enabled)
     kos_time_decay = _hot_bool(env_vals, "MAILAGENT_KOS_TIME_DECAY_ENABLED", cfg.kos_time_decay_enabled)
-    # P2b — manifest-driven read tools (off by default → builtin catalog, zero regression).
-    manifest_mode = _hot_bool(env_vals, "MAILAGENT_CHAT_MANIFEST_MODE", False)
     # 🔴「只在启用 AND 对接 KOS 时才注入工具」。kosConsumerEnabled = 纯开关；kosConfigured
     # = 开关 AND OAuth 凭据齐全（endpoint + client_id + secret 三者非空，对齐 _kos_available）。
     # renderer createBuiltinTools 据 kosConfigured 决定是否注册 9 个 KOS 工具 —— 开关开着却
@@ -379,9 +379,9 @@ async def chat_config(request: Request):
     # docs SOUL+AGENT+RULES+USER joined in order (no per-request-varying bytes →
     # stable prompt-cache prefix). The TS harness prepends PRODUCT_SAFETY_FLOOR (a
     # code-owned const) ahead of this, so user docs can never weaken the floor.
-    # Gated by MAILAGENT_STANDING_CONTEXT_ENABLED (hot-read .env, default ON — same
-    # discipline as manifestMode). OFF / store hiccup → "" → TS falls back to the
-    # legacy SOUL_MARKDOWN (byte-identical, zero email-mode regression).
+    # Gated by MAILAGENT_STANDING_CONTEXT_ENABLED (hot-read .env, default ON). OFF /
+    # store hiccup → "" → TS falls back to the legacy SOUL_MARKDOWN (byte-identical,
+    # zero email-mode regression).
     standing_context = ""
     if _hot_bool(env_vals, "MAILAGENT_STANDING_CONTEXT_ENABLED", True):
         try:
@@ -448,7 +448,6 @@ async def chat_config(request: Request):
             "memorySummary": memory_summary,
             "memorySummaryMeta": memory_summary_meta,
             "enabledModels": enabled_models,
-            "manifestMode": manifest_mode,
             "agentProfileHash": agent_profile_hash,
             "installedSkillsHash": installed_skills_hash,
             "standingContext": standing_context,

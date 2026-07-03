@@ -263,11 +263,13 @@ def _idle_timeout_ms() -> float:
 
 
 def sse_encode(event: Dict[str, Any]) -> bytes:
-    """ChatStreamEvent dict → SSE 行 ``data: {json}\\n\\n``（UTF-8）。
+    """event dict → SSE 行 ``data: {json}\\n\\n``（UTF-8）。
 
-    键名 camelCase 逐字段对齐 ``shared/chat/types.ts``（durationMs/finalContent/inputTokens…），
-    client 端直接 ``JSON.parse`` 反序列化为 ChatStreamEvent。``ensure_ascii=False`` 保 CJK 可读
-    （UTF-8 编码，client TextDecoder 解）。
+    键名 camelCase（durationMs/finalContent/inputTokens…）—— 历史上对齐 `shared/chat/
+    types.ts` 的 `ChatStreamEvent`（S3 已随 harness 引擎整体删除该文件，此流式端点现无
+    前端调用方；notion-agent 会话现只经非流式 `/notion-agent-once` 或历史行只读回放，
+    见 remote-chat-report-architecture.md §6）。``ensure_ascii=False`` 保 CJK 可读（UTF-8
+    编码）。
     """
     return f"data: {json.dumps(event, ensure_ascii=False)}\n\n".encode("utf-8")
 

@@ -332,9 +332,8 @@ bash scripts/dev/kos_smoke_test.sh        # health / token / MCP query / Python 
 - `MAILAGENT_KOS_INGEST_ENABLED=true` —— Producer：邮件 sync 完异步推 `/ingest`（`KOS_INGEST_PRIORITY_FLOOR` 控阈值，默认 normal）
 - `MAILAGENT_KOS_CONSUMER_ENABLED=true` —— 前端 chat 的 `kos_query`/`kos_digest` 工具
 - `MAILAGENT_KOS_L1_HOT_BLOCK_ENABLED=true` —— chat system prompt 注入 sender digest（前端）
-- `MAILAGENT_AGENT_HARNESS=true` —— 前端多轮 tool-calling chat（KOS consumer 的载体之一）
 
-验收清单见 [`docs/eval/m2-dogfood-checklist.md`](docs/eval/m2-dogfood-checklist.md)，设计见 [`docs/reference/llm-agent/kos-integration-design.md`](docs/reference/llm-agent/kos-integration-design.md)。
+前端 chat 消费 KOS 走 AI SDK Gateway 内建工具（S3 起唯一引擎，无需单独 harness flag）。验收清单见 [`docs/archive/2026-05/eval/m2-dogfood-checklist.md`](docs/archive/2026-05/eval/m2-dogfood-checklist.md)（已归档存史），设计见 [`docs/reference/llm-agent/kos-integration-design.md`](docs/reference/llm-agent/kos-integration-design.md)。
 
 ### 5.7 日历 CalDAV → SQLite SSoT
 
@@ -404,7 +403,7 @@ pm2 restart mail-sync
 | Post-cutover roadmap（含 EWS 退役应对） | [`docs/reference/architecture/roadmap-post-cutover.md`](docs/reference/architecture/roadmap-post-cutover.md) |
 | v4 SSoT 运维 | [`docs/reference/architecture/architecture_v4_sqlite_ssot.md`](docs/reference/architecture/architecture_v4_sqlite_ssot.md) · [`docs/reference/architecture/v4-ssot-ops.md`](docs/reference/architecture/v4-ssot-ops.md) |
 | 本地 LLM 分类启用 | [`docs/reference/llm-agent/LLM_AGENT_SETUP.md`](docs/reference/llm-agent/LLM_AGENT_SETUP.md) · [`docs/reference/llm-agent/llm-agent.md`](docs/reference/llm-agent/llm-agent.md) |
-| KOS 集成 | [`docs/reference/llm-agent/kos-integration-design.md`](docs/reference/llm-agent/kos-integration-design.md) · [`docs/reference/llm-agent/agent-harness-kos.md`](docs/reference/llm-agent/agent-harness-kos.md) |
+| KOS 集成 | [`docs/reference/llm-agent/kos-integration-design.md`](docs/reference/llm-agent/kos-integration-design.md) |
 | 日历模块 | [`docs/reference/calendar/calendar-ops.md`](docs/reference/calendar/calendar-ops.md) |
 | 前端安装 / 使用 | [`frontend/INSTALL.md`](frontend/INSTALL.md) |
 | CLI 命令全表 | [`docs/reference/cli/cli-reference.md`](docs/reference/cli/cli-reference.md) |

@@ -1,10 +1,11 @@
 # Architecture — assistant-ui × Vercel AI SDK Gateway × MailAgent Domain Services
 
-> status: planning
-> last-verified: 2026-06-23
+> status: shipped
+> last-verified: 2026-07-03
 > decision: use AI SDK for chat orchestration, not for MailAgent domain backend replacement
 > **Phase 00 spike：✅ 已完成（2026-06-23），裁决 = GO。实测结论 + 证据见 [§13](#13-phase-00-spike-实测结论2026-06-23go)。**
-> 本文 §1–§12 是规划设计（spike 前），§13 是 spike 实测层（验证/修正了 §1–§12 的关键假设）。
+> **Cutover：✅ 已发布（v0.20.0）。S3（2026-07-03）起 legacy 自研 TS harness（`frontend/src/shared/chat/`）已整体删除，AI SDK Gateway 是唯一引擎 —— 见 [§13.18](#1318-s3-落地2026-07-03第三波删-legacy-harness-engine-归一)。**
+> 本文 §1–§12 是规划设计（spike 前），§13 是 spike 实测层（验证/修正了 §1–§12 的关键假设，§13.18 为最新落地状态）。
 
 ## 1. 结论
 
@@ -884,7 +885,7 @@ opus reviewer APPROVE 后，再过一遍 codex gpt-5.5 xhigh 独立验收（对�
 typecheck node+web **0**；**全量 vitest 160 files / 1959 passed / 1 skipped / 0 fail**；agent_eval **89 passed**（未动 systemPrompt/tools catalog→≥ baseline）。每 chunk flag-off 字节级不变（aiSdkEnabled 在默认 flag/vitest 下 false→backend 退 custom-api→legacy 路径不变）。
 
 ### 13.15.3 H（cutover flip）+ 已知 gap / 留后续
-- **H = flip（未做，gate 在 dogfood）**：把 `electron.vite.config.ts` + `vite.web.config.ts` 的 `AI_SDK_NEW_SESSION_DEFAULT = process.env.MAILAGENT_AI_SDK_NEW_SESSION_DEFAULT ?? ''` 翻成 `?? '1'`（poc 已全开）。一行式、隔离 commit。**前置 DoD**：electron + web 各跑回归场景 dogfood（总结/起草/搜索引用/标记/archive/同步 Notion/外发审批/拒绝停止）+ 旧 custom-api/notion-agent 会话可读 + `MAILAGENT_CHAT_RUNTIME=legacy` 一键回滚验证过。dogfood 绿后翻 flag + tag 发版；之后进 06b 7 天 dogfood 观察窗（无 P0/P1 才删 legacy harness 主路径）。
+- **H = flip（✅ 已完成，v0.20.0 cutover）**：master flag 翻 `?? '1'` 已发布，dogfood DoD 全过。**后续 06b 观察窗已被 S3 取代**：没有走满 7 天观察期才删——agent 开放性 epic 收口时直接拍板 D1（见 [§13.18](#1318-s3-落地2026-07-03第三波删-legacy-harness-engine-归一)）跳过观察窗、S3 一次性完成 flag 全 GA 移除 + legacy harness 主路径删除，理由是 S1/S2 两波 openness 落地期间 cutover 已被间接 dogfood 验证充分。
 - **F 的 loopback-token（同机防护腿）留后续**：本 chunk 只做 Origin 腿（防远程跨域）。gateway loopback-only（远程够不到），真正防「同机恶意 loopback 页面」（CSRF）需 renderer↔gateway 共享 secret token——连同观测深化留给真正开远程 web 面那一阶（高风险 write/send 已有 HMAC + Python 双 guard 兜底）。
 - **E 的 full-panel health-degrade 测试留后续**：需新建 panel mount harness（QueryClient/fetch mock/flag+port stub）；本 chunk degrade 逻辑直观 + typecheck + off-path 86 测试验证不变。
 - **06a 范围裁剪（Option 2 简化）**：ChatHistoryPopover 混合 kind（per-email popover 保持 kind-scoped）+ 初始 kind 跨 kind 派生（默认恒 ai-sdk）——均不做，旧会话经全局历史页进入不丢。
@@ -964,4 +965,51 @@ typecheck node+web **0**；**全量 vitest 160 files / 1959 passed / 1 skipped /
 ### 13.17.5 dogfood 必决 + 留后续
 
 - **dogfood（dev 测不出，打包真机验）**：① 真机 Keychain（security 真行为/锁定态 rc/跨二进制读取；**锁定态 split-brain**——W3 review P2-2：区分「锁定 vs 不可用」防 keyfile 二 master key 致 secret 静默失效）② 审批卡「总是允许」端到端（勾选→建规则→下次免卡）+ Exec/SkillInstall 四卡 A2UI 富卡渲染 ③ CHAT_DB v18 打包升级路径 ④ Settings 安装→配置→卸载全流程 flag 双态。
+
+## 13.18 S3 落地（2026-07-03，第三波：删 legacy harness，engine 归一）
+
+> 上游 = agent 开放性 epic task `07-02-s3-remove-legacy-harness`。S1/S2 两波把「已在位读能力 + 本机执行 + skill 供应链」接上唯一引擎后，S3 收口 §13.15.3 遗留的 06b 观察窗：**跳过 7 天 dogfood 观察期，直接删 legacy**（S1/S2 落地期间 cutover 已被间接验证），拍板 D1（`MAILAGENT_CHAT_RUNTIME=legacy` 一键回退整体退役——回退面此后 = 装回旧版 `.app`）。分 4 个独立 review 的 wave，全部已 commit：`8bde4c6c`(W1) → `f5f1d96b`(W2) → `c6248f3e`(W3-B) → `e5510274`(W3-A)。
+
+### 13.18.1 引擎归一：`frontend/src/shared/chat/` 整体消失
+
+- **W1**（`8bde4c6c`）：CommandPalette 的 agentic ⌘K「AI 理解」搜索——S3 前最后一个还在吃 legacy harness（`runSearchAgent`→`runHarness`+`HttpChatPlatform`）的用户路径——重接到 embedded gateway：新增 `POST /api/ai/search-agent`（SSE phase + 终局 result，client 断连即 abort），核心是纯函数 `runHeadlessSearchAgent`（[`frontend/src/ai-gateway/searchAgentRun.ts`](../../../frontend/src/ai-gateway/searchAgentRun.ts)）——`generateText` 多步 loop，`cfg.buildTools` 产出的完整 ToolSet 被防御性收窄到四个只读工具白名单（`email_search_fulltext`/`email_body`/`email_get`/`email_list_thread`），`present_results` 是 loop-private 终结工具（不进 `tools/`、不进 catalog——和 legacy 版本一样从不注册进共享 registry）。renderer 消费面 `searchAgentClient.ts` 保持配置行为等价（占位符 / nlToDsl fallback 契约不变）。
+- **W2**（`f5f1d96b`，净删 ~9.7k 行）：渲染层 legacy chat UI 整套删除——`AIChatPanel`(1158 行)/`MessageList`(1494)/`Composer`(659)/`ConfirmToolDialog`/`GeneralAgentDialog`/`SessionsPage`/external-store 三件/skill-activation(@mention per-scope 激活退役) 等 14 个 src 文件 + 5 个纯 legacy 测试文件；`InboxLayout` 侧栏抽屉（`aiPanelVisible` 恒 false 死分支）整块删；⌘L 快捷键退役、对齐到 ⌘J。`AssistantUIChatPanel` 扶正为唯一 `assistant/AiChatPanel.tsx`。D6：新 `ReadOnlyTranscript` 降级渲染兜底（`ui_message_json` 缺失退纯文本，corrupt JSON 有 fallback），历史 custom-api / notion-agent 会话在三个入口仍可只读打开。D7：`/health` 探针失败改错误条 + retry 按钮，不再静默回退 legacy。
+- **W3-B**（`c6248f3e`）：flag 收敛落地（详见 [13.18.2](#13182-flag-全retire清单)）。
+- **W3-A**（`e5510274`，净删 ~17.6k 行）：**`frontend/src/shared/chat/` 目录整体消失**。9 个仍被引用的共用件先搬后删——`buildStableSystemPrompt` / `safety_floor.ts` / `soul.ts` → `frontend/src/ai-gateway/prompts/`；`kos_rerank.ts` / `buildSearchHint` → `frontend/src/ai-gateway/tools/`；`model.ts` → `frontend/src/shared/chat_model.ts`；skill overrides → `frontend/src/shared/lib/skill_overrides.ts`；`HttpPlatformConfig` 内联进 lifecycle；`runtime.ts` 的 28 个 fetch 方法拆到新 [`frontend/src/shared/api/chat_api.ts`](../../../frontend/src/shared/api/chat_api.ts)（body 逐字节保持一致）。删除内容：`harness.ts` 单遍 loop / dispatcher / 各 backend 适配器 / builtin 工具 / `search_agent.ts`（agentic 已被 W1 切走）。`ChatApi` 契约删掉 7 个引擎方法 + 14 个类型。同批完成 catalog D8 收敛（详见 [13.18.3](#13183-tool-catalog-d8-收敛-58-36)）。
+
+**唯一引擎权威路径**（cutover 后不再有第二条）：electron 内 embedded Node gateway（`frontend/src/ai-gateway/`，`ai_gateway_lifecycle.ts` 常驻启动）+ 远程 web 经 serve-api `ai_gateway_proxy.py`（httpx stream 反代）转发到同一个 loopback gateway。⌘J 面板、⌘K agentic 搜索、KOS 工具消费，三者现在都走这一份 gateway 工具注册面。
+
+### 13.18.2 flag 全retire清单
+
+D1+D3 落地（`c6248f3e`），下列 flag **已从代码整体移除**（非仅默认值改变——`flags.ts` 现在只剩 `resolveAiGatewayBaseUrl`，`ai_gateway_flags.ts` 整删，3 个 vite config 共 8 个 define 清空）：
+
+| 已移除的 flag | 退役前语义 |
+|---|---|
+| `MAILAGENT_CHAT_RUNTIME`（值 `legacy`） | 一键回退开关——回退面此后 = 安装旧版 `.app`，不再是运行时切换 |
+| `MAILAGENT_AI_SDK_NEW_SESSION_DEFAULT`（master） | cutover 主开关，现硬编码 ON（字节级不变） |
+| `MAILAGENT_ASSISTANT_UI_PANEL` / `MAILAGENT_AI_SDK_GATEWAY` / `MAILAGENT_A2UI_TOOL_CARDS` / `MAILAGENT_AI_SDK_CONTEXT_INJECTION`（4 个 master 派生子 flag） | 分别控制面板/gateway 启动/A2UI 卡片/context 注入，现全部无条件开启 |
+| `MAILAGENT_AGENT_VIEW` / `MAILAGENT_ASSISTANT_MODAL` | 面板可见性相关，现恒渲染 assistant-ui 面板 |
+| `MAILAGENT_AGENT_HARNESS` | legacy 多轮 agent 总开关；`config.py` + `/chat/config.harnessEnabled` + settings 白名单 + onboarding 映射 + `.env.example` AI SDK 段全部同步移除 |
+
+**保留为 env-only kill-switch**（非 GA flag，默认改字面 `true`，仍可显式设 `false` 应急关闭）：`MAILAGENT_AI_SDK_WRITE_TOOLS` / `MAILAGENT_AI_SDK_SEND_TOOL`。
+
+**零触碰**：M1-M4 记忆/skill 核心重构 flag、`MAILAGENT_OPENNESS_*`（S1/S2 六个开放性 flag）、`AG_UI_MIRROR` 相关配置。
+
+### 13.18.3 Tool catalog D8 收敛（58 → 36）
+
+[`tests/agent_eval/tool_catalog.json`](../../../tests/agent_eval/tool_catalog.json)（`catalog_version: "2.0"`）从 58 行收敛到 36 行：
+
+- **22 行删除**：逐工具 grep 冻结 baseline traces（`baselines/v0.13.0.jsonl`）证零引用后移除——这些工具只存在于已删除的 legacy harness。
+- **2 行保留 `legacy_retired: true`**：`skill_list_installed`（frozen baseline AGT-SKILL-001..004 有真实 tool_use 引用）、`plan_update`（AGT-CROSS-004/005 引用）。产品里这两个工具已不存在，`validate_catalog.py` 反向断言它们不会在 gateway 源里复活（若未来同名工具重新出现，必须把该行升级为正常 gateway 行而非放行）。
+- **18 行从"legacy/gateway 共行"翻成纯 `gateway_only: true`**：其中包含把 `skill_install`/`skill_uninstall`/`skill_read` 的 tier 从被 legacy 共行低估的 `preview` 修正为 gateway 真实的 `edit`（S2 遗留的记账债，随 S3 收口）。
+- **34 行保留**（36 总数 − 2 legacy_retired）：全部标 `gateway_only: true`，其中 16 行此前就已是 gateway_only，18 行是本次新翻。
+
+`counts` 字段现状：`{ total: 36, silent: 18, preview: 5, edit: 13, write: 18, gateway_only: 34, legacy_retired: 2 }`。`validate_catalog.py` 扫描 gateway 源做正反双向守护（孤儿行 / retired 复活 / tier drift / canary 全部必红），关闭了此前的静默 skip 漏洞。
+
+### 13.18.4 最终验证 + 已知残留
+
+- **W3-A 三闸**：`agent_eval` 94 passed · tsc node+web 绿 · vitest 1094（`components`+`shared` 675 passed + 1 豁免）· api 133 passed · `validate_catalog.py` 34==34。
+- **累计（W1→W3-A）**：vitest 从 1300（W2 后）到 1094（W3-A，大量 legacy 测试随源码一起删除，非回归）；`tsc --noEmit --composite false` node/web 两个 target 全程保持绿。
+- **agentic ⌘K 搜索的已知留白**：`searchAgentRun.ts` 头注释自述"pure-ish"（只依赖 `ai` + zod + config + `chatRun` 的 model factory + 类型），不碰 electron/chat_db/keytar；headless 运行不落 `chat_tool_call` 审计行（与 legacy 版本行为一致——legacy headless 跑同样不建会话、不写 chat db）。
+- **S4（headless agent 内核）前必须复核**（§13.17.5 遗留 + S3 未处理项）：exec/skill-install 工具「裸 token argv 恒 ask」的探测盲区收窄仍只在 gateway 工具层，run/owner API 直调路径无完整性校验；这条在 S3 未新增修复，留给 S4 处理。
 - **S3（删 legacy）**：catalog 共行升级 gateway_only+edit；legacy-only document skill fragment 清单。**S4（headless）前须复核**：盲区形状独立 deny 防线 · kos 读族 outbound 重审 · exec stdout fence 对称加固（W1b P3-3）· W1a P2-4 communicate OOM 流式化 · P2-5 inode 快照 staleness · send 收件人白名单（S2 有意收窄）。

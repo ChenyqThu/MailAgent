@@ -1,5 +1,7 @@
 # MailAgent AI Agent Harness 架构
 
+> ⚠️ 已归档存史（2026-07-03，S3）：本文描述的旧自研 TS harness 已被 AI SDK Gateway 完全取代并删除，当前架构真相见 [`ai-sdk-gateway-architecture.md`](../../reference/llm-agent/ai-sdk-gateway-architecture.md)。本文仅存历史参考。
+
 > **状态**：✅ **M1 已 ship（Sprint 19, 2026-05-22/23, `feat/agent-harness` 分支）— 待 dogfood 测试后合 main 并翻默认 flag**；M2/M3/M4 计划已规划，路线图见 `docs/roadmap-post-cutover.md` §5.5
 > **范围**：前端 Custom AI chat 从 single-turn 升级为 multi-turn agentic mail agent — tool calling / 跨邮件检索 / 跨 session memory（M2）
 > **设计输入**：[`docs/agent-harness-design.md`](./agent-harness-design.md)（12 段工程级 ref）+ [`docs/eval/email_scenarios.md`](../../eval/email_scenarios.md)（20 scenario gate）+ `~/.claude/plans/subagent-plan-lexical-moler.md`（决策记录）+ Sprint 19 P0 调研（gbrain 内嵌评估、Karpathy LLM Wiki、Anthropic harness 最佳实践）

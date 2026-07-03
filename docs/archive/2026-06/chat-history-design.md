@@ -1,5 +1,7 @@
 # Chat History Persistence + KOS Ingest + 时间衰减 Retrieval — 设计文档
 
+> ⚠️ 已归档存史（2026-07-03，S3）：本文是纯设计调研（未按此方案实施），实际记忆系统走了不同技术路线（mem0，见已归档的 [`memory-skill-core-refactor.md`](../2026-07/agent-experience-epic/memory-skill-core-refactor.md)）；KOS ingest 见 [`kos-integration-design.md`](../../reference/llm-agent/kos-integration-design.md)。本文仅存历史参考。
+
 > Sprint 19 Todo 1 / 起点 commit `a79e988` (chat-session bug fix ship)
 >
 > **问题来源**: user 2026-05-23 dogfood 发现 chat history 机制有 3 个未规划盲区:

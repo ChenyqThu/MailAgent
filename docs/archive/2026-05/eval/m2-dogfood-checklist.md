@@ -1,5 +1,7 @@
 # Sprint 19 M2 Dogfood 验收清单 (PR-2g)
 
+> ⚠️ 已归档存史（2026-07-03，S3）：本文的 Sprint 19 M2 dogfood 清单已随功能落地失效，当前 KOS 集成状态见 [`kos-integration-design.md`](../../reference/llm-agent/kos-integration-design.md)。本文仅存历史参考。
+
 > Sprint 19 M2 (Agent harness + KOS 集成) PR-2a 到 PR-2f 全部 ship 完毕,
 > 默认所有 flag OFF. 这份 checklist 教你怎么按 layer 启用 + 验收每层
 > 行为. 不需要全部一次开 — 按顺序 enable + verify 出问题立即定位.

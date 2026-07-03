@@ -1,5 +1,7 @@
 # Sprint 19 §B Eval Harness — Status
 
+> ⚠️ 已归档存史（2026-07-03，S3）：本文描述的早期 eval harness 状态已被 `tests/agent_eval/` 取代（当前 agent 行为回归网，见 `tests/agent_eval/schema.md` + `recorder-contract.md`）。本文仅存历史参考。
+
 > **Status**: harness 框架 ship 但 **未 run-through verified** (subagent
 > 2026-05-23 跑了 ~14 min 写完 harness 但实际 25 scenario 没跑通,
 > 缺 `docs/eval/p1-baseline.md` + `docs/eval/eval-raw.json`)

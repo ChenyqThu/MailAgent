@@ -3,7 +3,7 @@
 > **何时读**：动 chat 引擎 / 远程 web 访问 / serve-api chat 端点 / report agent 远程化前。
 > **配套**：[详设](v2.1-stage3-chat-platform-design.md)（ChatPlatform 接口 + cutover 枚举 + D1-D5/D-3c 决策）· [验收看板](v2.1-remote-chat-report-matrix.md)（能力×层矩阵 + 残留检测 + 进度日志）· 服务层基座见 [`service-layer-architecture.md`](../architecture/service-layer-architecture.md)（serve-api in-process + 双层鉴权 + daemon 转发）。
 > 分支 `feat/v2.1-remote-chat-report`，阶段 1+2 已上线，阶段 3 cutover 落地（commit 至 `2942abd`）。
-> **🔴 web→ai-sdk（任务A，2026-06-30，随 v1.0.1）**：远程 web SPA 现跑 **ai-sdk runtime**（非 legacy）——翻 `vite.web.config.ts` 3 个 define（master `AI_SDK_NEW_SESSION_DEFAULT` + `AGENT_VIEW` + `ASSISTANT_MODAL`，env=0/`CHAT_RUNTIME=legacy` 回滚），`resolveAiGatewayBaseUrl` web 同源 branch → `/api/ai/chat` 打到 serve-api `ai_gateway_proxy.py`（`httpx.AsyncClient(stream=True)`+`aiter_raw` SSE 反代 + abort 传播 + `verify_cf_access` 双腿）→ 同机 loopback gateway:8300。后端代理/端口注入/web resolver 6/27 即就位，任务A 仅翻 flag + CI 加 `build:web` 步（`out/web` gitignored，此前 CI 漏构建致发布包 web 缺/旧）。gateway 挂 → proxy 502 → health 探针失败 → 自动降级 legacy。
+> **🔴 web→ai-sdk（任务 A，2026-06-30 随 v1.0.1；S3 于 2026-07-03 转为唯一路径，无 flag）**：远程 web SPA 与本地 electron 现共享同一个 chat 引擎——嵌入式 **AI SDK Gateway**（Node，跑在 electron main 进程内，loopback 默认端口 8300）。本地 electron renderer 经 `?aiGatewayPort=` 直连 loopback gateway；远程 web 经 serve-api `ai_gateway_proxy.py`（`httpx.AsyncClient(stream=True)` + `aiter_raw` 原样透传字节，client 断开 → `aclose()` 传播 abort）反代到同机 loopback gateway，端点 1:1 镜像 `frontend/src/ai-gateway/server.ts`（`/api/ai/{chat,agui/chat,title,followups,approval/resolve,config}` + 裸 `/health`）。任务 A 落地时靠 `vite.web.config.ts` 3 个 define 翻默认；S3（`07-02-s3-remove-legacy-harness`）已把这些 build-time flag 连同 legacy TS 引擎一起整体移除——ai-sdk 路径现在是**唯一**路径，硬编码不可运行时回退（回退面 = 装回旧版 `.app`）。gateway 不可达 → 代理 502 / `/health` 探针失败 → 前端渲染 D7 错误态 + 重试按钮（**不再有 legacy 可静默降级**）。
 
 ## 0. 定位
 
@@ -17,77 +17,61 @@ V2（[`mail.chenge.ink/app`](https://mail.chenge.ink/app)）让远程 web 能**�
 
 阶段 3 是重头，本文档主述。核心 = **一份引擎 + 一份后端 + 一份传输层 = 零 parity**。
 
-## 1. 为什么 B-pure-unified
+## 1. 为什么「一份引擎」（历史决策 + S3 后现状）
 
-远程要跑 chat，但 chat 引擎（harness 多轮 loop / dispatcher / custom-api 解析 / notion-agent execa / 工具 / 持久化）原本全在 **electron main 进程**（依赖 execa / better-sqlite3 / IPC，浏览器跑不了）。
+远程要跑 chat，但 chat 引擎不能各写一套，否则两套引擎必漂移（哪个工具/分支/exit 码漏对齐都是线上 bug）。阶段 3 cutover 当时的原始决策是 **B-pure-unified**：把引擎（harness 多轮 loop / dispatcher / custom-api 解析 / notion-agent execa / 工具 / 持久化）下沉到 `shared/chat/`（零 Electron 依赖），本地 electron renderer 和远程浏览器各自在自己的 UI 进程里跑同一份引擎代码，经一份 `ChatPlatform` → 一份 serve-api 取后端原语。当时否决的另外两条路：**A** 远程独立实现一套 chat（parity 地狱）；**C** 远程瘦客户端只发 prompt、服务端跑全 harness（等于把引擎在服务端再造一遍）。
 
-三条路：
+**S3（2026-07-03）用一份更彻底的统一取代了 B-pure-unified**：引擎不再是"两边 UI 进程各跑一份相同代码"，而是收敛成**唯一一个运行中的引擎进程**——嵌入式 AI SDK Gateway，常驻 electron main 进程（Node）。本地 electron renderer 直连这个 loopback gateway；远程浏览器经 serve-api 反代（`ai_gateway_proxy.py`）打到同一个 gateway 进程。两条访问路径不再是"各自运行同一份代码"，而是"物理上共享同一个运行时"——比 B-pure-unified 的"一份代码两处跑"更进一步消除了行为分叉的可能性。
 
-- **A — 远程独立实现一套 chat**：parity 地狱，两套引擎必漂移（哪个工具/分支/exit 码漏对齐都是线上 bug）。✗
-- **B-pure-unified — 引擎下沉 `shared/chat/`（零 Electron），UI 进程跑，经一份 `ChatPlatform` → 一份 serve-api**：引擎单一真源，本地/远程仅 `baseUrl + reads + 鉴权` 差异，全对引擎透明。✅
-- C — 远程瘦客户端只发 prompt、服务端跑全 harness：服务端要起多轮 agent runtime + 流式回推，等于把引擎搬服务端再造一遍。✗
+代价与 B-pure-unified 时代一致：chat 工具读不走 IPC 直读 SQLite，而是 fetch 同机 gateway（本地）或经 serve-api 反代（远程）；工具读非热路径，可接受。
 
-选 B。代价 = chat 工具读不再走 IPC 直读 SQLite（改 fetch loopback serve-api），但工具读非热路径，可接受。
-
-## 2. 全貌（cutover 后数据流）
+## 2. 全貌（S3 后数据流）
 
 ```
-┌ UI 进程（shared React + shared/chat 引擎都跑这里）──────────────────────┐
-│  useEmailChat → mailApi.chat (ChatRuntime)                               │
-│    ├ harness 多轮 loop → dispatcher → backend.stream()                   │
-│    │    · 流式 token 直接 emit 给 React（进程内 emitter，无 IPC 推流）   │
-│    │    · confirmation = React 弹窗 → resolveConfirmation（同进程 promise，无 IPC）│
-│    └ 所有后端原语 → HttpChatPlatform（一份）→ fetch serve-api           │
-└───────────────────────────┬─────────────────────────────────────────────┘
-       本地 renderer (file://) │ 远程 browser (https://mail.chenge.ink)
-   token: main webRequest 注入 │ 鉴权: CF Access cookie
+┌ Electron main 进程（Node）──────────────────────────────────────────────┐
+│  嵌入式 AI SDK Gateway（frontend/src/ai-gateway/，S3 起唯一引擎）        │
+│    server.ts 路由 → chatRun.ts 多轮 loop → tools/* → persistTurn        │
+│    persistTurn 由 ai_gateway_lifecycle.ts 注入，直调 chat_db.ts         │
+│    （better-sqlite3，同进程免 IPC）写 ai_chat.db                        │
+│    loopback 监听 :8300（MAILAGENT_AI_GATEWAY_PORT 可覆盖）              │
+└───────────────────────────┬──────────────────────────────────────────────┘
+     本地 electron renderer   │  远程 browser (https://mail.chenge.ink)
+  `?aiGatewayPort=N` 直连     │  同源 '' → /api/ai/* 打 serve-api 反代
+     loopback gateway         │
                               ▼
-            ┌ serve-api（FastAPI 8200，唯一 chat 后端，无 harness 逻辑）┐
-            │ POST /api/chat/llm-proxy    注入 key + 透传 Anthropic/OpenAI SSE（不解析）│
-            │ POST /api/chat/notion-agent asyncio spawn CLI，Python 复刻 thread/gate/exit │
-            │ chat 持久化 9 写 + 3 单读 + 5 读端点（ChatDb 镜像 chat_db.ts）            │
-            │ GET  /api/chat/config       运行配置快照（前端构造 platform 前预取）       │
-            │ 工具 /api/email/* · /api/attachment/search · /api/chat/kos-call|save-to-kos │
-            └────────────────────────────────────────────────────────────────────────────┘
-                              │
-            ai_chat.db（schema owner = 前端 chat_db.ts，serve-api 绝不建表）
+            ┌ serve-api（FastAPI 8200）─────────────────────────────────────┐
+            │ /api/ai/{chat,agui/chat,title,followups,approval/resolve,   │
+            │   config} + 裸 /health → ai_gateway_proxy.py：httpx 转发到    │
+            │   127.0.0.1:8300（同机），逐字节透传（aiter_raw）             │
+            │ 非引擎业务不变：chat 历史读 / report / email / attachment    │
+            │   等端点见 §3.3（未随 S3 改动）                              │
+            └────────────────────────────────────────────────────────────┘
 ```
 
-**关键：流式 token 不跨进程**。cutover 前是 `harness(main) → webContents.send('chat:stream') → renderer`（IPC 推流）；cutover 后 harness 就在 renderer 同进程跑，token 经进程内 `ChatStreamEmitter` 直驱 React，confirmation 弹窗结果经同进程 `resolveConfirmation` promise 回灌——**零 IPC 往返**。serve-api 只做"后端原语"（LLM 透传 / 子进程 spawn / DB 读写 / 工具代理），不含任何 harness 编排逻辑。
+**关键：turn 落库不跨进程**。gateway 核心（`server.ts`/`chatRun.ts`）本身是 pure 核，不 import electron/chat_db；`persistTurn` 回调由 `ai_gateway_lifecycle.ts`（跑在 electron main 同一个进程里）注入，直调 `chat_db.ts` 的 better-sqlite3 API 写 `ai_chat.db`——本地和远程会话最终都落在同一个 gateway 进程、同一个 `persistTurn` 实现里，无论请求是本地直连还是经 serve-api 反代到达。serve-api 对聊天引擎本身只做**转发**（§3.2），不再解析/编排任何 chat 内容。
 
 ## 3. 三层
 
-### 3.1 引擎层 `shared/chat/`（一份，UI 进程跑，零 Electron）
+### 3.1 引擎层 —— 嵌入式 AI SDK Gateway（一份，S3 起唯一实现，权威见 [`ai-sdk-gateway-architecture.md`](../llm-agent/ai-sdk-gateway-architecture.md) §13）
 
-| 文件 | 职责 |
+`frontend/src/ai-gateway/`（Node，`shared/chat/` 的完全替代品，S3 已把后者整体删除）：
+
+| 文件/目录 | 职责 |
 |---|---|
-| `runtime.ts` `createChatRuntime(deps)` | 组装 dispatcher + HttpChatPlatform + emitter sink → 完整 `ChatApi`（electron/web 唯一入口）|
-| `dispatcher.ts` `createChatDispatcher({platform,getBackend,toolRegistry})` | startChat / editChatMessage / runStream（per-instance `_inflight`，rapid-click guard）|
-| `harness.ts` | 多轮 agent loop（maxIter/maxCostUsd gate、tool_use 收集 → 确认 → 执行 → 回灌、终态持久化）|
-| `emitter.ts` `ChatStreamEmitter` | 进程内 sink fan-out（快照遍历 + handler 隔离，取代 IPC `chat:stream`）|
-| `platform.ts` | 分层接线板接口（见 §3.2）|
-| `http_platform.ts` `HttpChatPlatform` | 全四板 fetch serve-api（见 §3.2）|
-| `backends/custom_api.ts` `createCustomApiBackend(platform)` | custom-api 双协议 SSE 解析（Anthropic/OpenAI），调 `platform.llmFetch` |
-| `backends/notion_agent_http.ts` `createHttpNotionAgentBackend(platform)` | notion-agent 薄包，调 `platform.notionAgentStream`（execa 已删）|
-| `tools/builtin/` `createBuiltinTools(platform)` | 20 工具单一真源（registry 注入式，`kosConfigured` gate 9 KOS 工具）|
-| `tools/confirmation.ts` `resolveConfirmation` | 写工具确认 promise registry（同进程，无 IPC）|
-| `model.ts` | 纯类型 + `backendSupportsTools` |
+| `server.ts` | HTTP 路由（`/api/ai/{chat,agui/chat,title,followups,approval/resolve,config}` + `/health`），loopback 监听 |
+| `chatRun.ts` | 多轮 loop（AI SDK 编排，工具调用 → HITL 审批 → 回灌） |
+| `config.ts` | 运行配置装配 + `persistTurn`/`onTurnStart` 注入点（由 electron 侧填充，见 §3.2） |
+| `tools/*.ts` | 内建工具注册（受 tool_catalog + flag 门控） |
+| `searchAgentRun.ts` | 独立 headless 子 loop（agentic ⌘K 搜索专用，`present_results` 终结工具不进共享 registry）|
+| `prompts/` | system prompt 组装（`buildStableSystemPrompt` + safety floor + soul，W3-A 从 `shared/chat` 迁入） |
 
-### 3.2 传输层 `HttpChatPlatform`（一份，分层接线板）
+**Pure-ish 纪律**：gateway 核心不 import `electron` / `chat_db` / `keytar`——依赖只有 `ai` SDK + zod + 自身 config/tools。真正碰 Electron-only 能力（持久化、密钥）的部分被拆到 electron 侧、经 config 里的回调注入（依赖倒置），使 gateway 本身可独立跑（供测试/headless 复用，如 `searchAgentRun.ts`）。
 
-`platform.ts` 把外部能力按「变更频率 + 职责」拆成独立小板（用户拍板「分层接线板」），组件各取所需：
+### 3.2 接线层 —— electron 生命周期注入 + 前端 transport 解析（S3 后新概念，取代旧 `HttpChatPlatform` 分层接线板）
 
-| 板 | 含 | 消费方 |
-|---|---|---|
-| `ChatInfraPlatform` | persist（ai_chat.db 12 法）/ loadEmailContext / resolveConfig / prefetchSenderDigest | harness + dispatcher |
-| `ChatModelPlatform` | llmFetch（custom-api SSE）/ getCachedSenderDigest / modelConfig | custom_api backend |
-| `ChatNotionAgentPlatform` | notionAgentStream（仅 http 实现）| notion_agent_http backend |
-| `ChatToolPlatform` | 8 读 + flag/draft + kosCallTool / kosConfig / saveToKos | tools/builtin |
-
-`HttpChatPlatform` 实现全四板 = fetch serve-api 对应端点。构造 `(httpApi, baseUrl, config?)`：
-- **持久化 cadence（D1）**：`streamContent` per-messageId trailing throttle ~1s（累积 buffer 覆盖 + 仅空闲 arm timer）→ PATCH `/stream`；`finalizeMessage` **先 flush 待发增量再写终态**（防晚到 stream 覆盖终态，harness 终态带 `content=buffer` 双保险）；electron 旧路径是同步直写，cutover 后统一走此 debounce。
-- **工具 8 读零投影**委托 `httpApi.email.*` / `attachment.list`（`api/types` = `cli.gen` 别名/超集）。
-- **config 快照**：第三参带远程默认 `DEFAULT_HTTP_CONFIG`；runtime 预取 `GET /chat/config` 覆盖（D-3c-3，本地/远程都精确，不被硬编码默认覆盖）。
+- **electron 侧**（`frontend/src/electron/main/ai_gateway_lifecycle.ts`）：随 electron main 启动 gateway HTTP server；构造并注入 `persistTurn(turn)`（直调 `chat_db.ts` 的 better-sqlite3 API 写 `ai_chat.db`，`ui_message_json` canonical + 抽取的 legacy content 双写）与 `onTurnStart`（eager 写用户消息，防等待响应期间刷新丢输入）两个回调。
+- **前端 transport 解析**（`frontend/src/shared/assistant/runtime/flags.ts` 的 `resolveAiGatewayBaseUrl()`）：3 分支——① URL 带 `?aiGatewayPort=N` → `http://127.0.0.1:N`（本地 electron，直连 loopback，不经 serve-api）；② 否则若是 web 构建（`VITE_BUILD_TARGET==='web'`）→ `''`（同源，命中 serve-api 反代）；③ 否则 → `null`（非 renderer 测试环境 / 端口缺失，面板走 D7 错误态）。消费方必须用 `=== null` 判空（`''` 是合法但 falsy 的同源值，不能用真值判断）。
+- **实际请求发起**：`useMailAgentAiSdkRuntime.ts` 用 `@assistant-ui/react-ai-sdk` 的 `AssistantChatTransport` + `useChatRuntime`，`api` 字段 = `` `${gatewayBaseUrl}/api/ai/chat` ``（标准 Vercel AI SDK transport 风格，非自研 `ChatApi` 抽象，详见 §5）。
 
 ### 3.3 后端层 serve-api（一份，无 harness 逻辑）
 
@@ -109,23 +93,20 @@ V2（[`mail.chenge.ink/app`](https://mail.chenge.ink/app)）让远程 web 能**�
 
 `webRequest` 对 serve-api + harness **全透明**：ALLOWED_ORIGINS 不为本地开特例，token 留 main 不进 renderer（安全），远程 CF cookie 不受影响。
 
-## 5. ChatRuntime 组装（cutover 的支点）
+## 5. 前端 runtime 组装（S3 后：assistant-ui + AI SDK transport，取代 ChatRuntime/ChatApi）
 
-`createChatRuntime({reads, baseUrl}): ChatApi`（`reads` = 工具读委托的 `MailApi`，**不**用 `reads.chat` 避免循环）：
+`useMailAgentAiSdkRuntime()`（`frontend/src/shared/assistant/runtime/`）用 `@assistant-ui/react-ai-sdk` 标准接线，不再有自研 `ChatApi`/`createChatRuntime` 抽象（连同 `runtime.ts`/`dispatcher.ts`/`harness.ts` 一起随 S3 删除）：
 
-- **emitter + sink 构造期即建**（`onStream` 在首次 `start` 前被 `useEmailChat` 订阅）。
-- **engine lazy**（首次跑方法前 `ensureEngine`）：`await GET /chat/config` → `new HttpChatPlatform(reads,baseUrl,snapshot)` → `createBuiltinTools(platform)` 注册（kosConfigured gate）→ backends `{custom-api, notion-agent}` → `createChatDispatcher`。promise 缓存幂等 + 失败清缓存重试。
-- **方法映射**：start/editMessage → engine.dispatcher；abort/confirmTool/deleteSession/读 → **不触发 engine**（confirmTool 同进程 resolveConfirmation，读直接 fetch）。
-- **接线**：web = `HttpApi` 构造 `this.chat = createChatRuntime({reads:this, baseUrl})`；electron = `ElectronApi` 构造 `createElectronChatRuntime`（`reads:new HttpApi(loopback)` + `openPopout` override 回 IPC）。
-- **破循环**：`HttpApi.chat` 是 **lazy getter**（首访构造 runtime）→ electron 注入的 `new HttpApi(loopback)` 只取 email/attachment、不碰 `.chat`，其 lazy chat 永不构造。
-- **端口透传**：renderer 无 `process.env` → main 三 load 入口（createWindow / popout / onboarding reloadToMain）注 `?apiPort=<resolveApiPort()>`，`loopbackChatBaseUrl()` 读 `window.location.search`，回退 8200。
+- **transport 构造**：`AssistantChatTransport({ api: \`${gatewayBaseUrl}/api/ai/chat\` })` 喂给 `useChatRuntime`，`gatewayBaseUrl` 来自 `resolveAiGatewayBaseUrl()`（见 §3.2 三分支）。
+- **端口透传**（本地 electron 场景，取代旧的"main 三 load 入口注 apiPort"逻辑，现在注的是 gateway 端口）：main 在 window load 时把 `?aiGatewayPort=<port>` 拼进 URL，renderer 读 `window.location.search` 拿到后直连该 loopback 端口，不再依赖 serve-api 中转。
+- **不变式**：gateway 不可达（`resolveAiGatewayBaseUrl()` 返回 `null`，或 fetch 失败）→ 面板渲染 D7 错误态 + 重试按钮，**没有 legacy 引擎可回退**（旧 `HttpApi.chat` lazy getter / 破循环设计已随 `ChatApi` 抽象一起作废）。
+- **历史会话**：`custom-api` / `notion-agent` 这两种旧 `backend_kind` 的会话仍可打开，但走 `ReadOnlyTranscript.tsx` 只读渲染（见 §6），不经过这条 transport。
 
-## 6. 两类后端的不对称（有意，按性质分）
+## 6. 历史遗留：`custom-api` / `notion-agent` 现为只读会话 kind
 
-- **custom-api = HTTP**：serve-api llm-proxy 注入 key 后透传原始 SSE，shared custom_api 在 UI 进程**解析**（解析逻辑单一真源在 shared）。
-- **notion-agent = 子进程**：execa 不能在浏览器跑，spawn + 解析 stdout + thread 探测（需 fs）天然在服务端。serve-api Python **复刻**，TS `notion_agent.ts` 删除。
+S3 前，`custom-api`（HTTP 直连 Anthropic/OpenAI 兼容网关）和 `notion-agent`（子进程 spawn `notion-agent-cli`）是两条并存的可选 chat 后端，按性质不对称处理（custom-api 走 HTTP 流式解析，notion-agent 走子进程 stdout 解析 + Python 复刻）。
 
-两者最终都是单一实现（custom_api = shared TS / notion_agent = Python）→ 零 parity。
+S3 起，前端聊天面板只构造 `'ai-sdk'` transport（见 §5），`custom-api` / `notion-agent` 不再是面板可选的实时后端。`ChatBackendKind` 类型仍保留三个字面量（`chat_db.ts` 的 CHECK 约束收不窄，旧会话行还在），但只有 `ai-sdk` 可写；`custom-api` / `notion-agent` 历史会话只能经 `ReadOnlyTranscript.tsx` 只读打开（`ui_message_json` 缺失退纯文本渲染，corrupt JSON 有 fallback），composer 对这两种 kind 隐藏输入框。serve-api 的 `POST /api/chat/notion-agent` 端点定义仍在（见 §3.3，未变），Settings 页的 Notion Agent CLI 账户/模型配置读取也仍可用——这里说的「退休」特指 AI SDK Gateway 聊天面板不再把它接成实时可选后端。
 
 ## 7. 关键决策
 
@@ -143,21 +124,21 @@ V2（[`mail.chenge.ink/app`](https://mail.chenge.ink/app)）让远程 web 能**�
 
 ## 8. 不变式 / 已知行为
 
-- 🔴 **不变式 1：`shared/chat/` 零 Electron/Node-only 依赖**（方案成败根本）。每次动 shared/chat 后 `pnpm build:web` 验证（无 `from 'electron'` / `better-sqlite3` / `execa` / `handlers/`）。
-- 🔴 **本地 chat 依赖 serve-api 在跑**：cutover 后 electron chat 经 loopback serve-api（C2 软门控 + 崩溃自拉起兜底）。serve-api 不可达时 chat **graceful 降级**（读返 `[]` / 写 throw `E_DISPATCH` → toast，不白屏 crash）。
-- 🟠 **D4 语义变化 —— harness-off 逃生阀消失**：cutover 删了 dispatcher 的 `harnessEnabled && backendSupportsTools` gate，`runStream` 无条件走 harness。`MAILAGENT_AGENT_HARNESS=0` **不再退化成 legacy 单遍纯文本路径**；notion-agent 经 harness（empty tools → 首轮 end_turn）等价单遍。**生产默认 `MAILAGENT_AGENT_HARNESS=ON`，无实际影响**；但若需排障回退单遍，该逃生阀已不存在（需代码层处理）。
-- 🟠 **flag 命名澄清 —— `MAILAGENT_REMOTE_ACCESS_ENABLED` 名不副实**：它名为「远程访问」，**实为本地 daemon / serve-api 总开关**。自 D1（前端写收编 daemon）起本地写、cutover 后本地 chat 都依赖它；`=false` **连本地 chat / 写都挂**（非仅关远程）。默认起，纳入 BackendLifecycleManager 自启。
-- 🟡 **ai_chat.db schema owner = 前端 `chat_db.ts`**（`CHAT_DB_VERSION`，better-sqlite3 在 main `getChatDb()` lazy migrate）。serve-api `ChatDb` 绝不建表 → main boot 须显式 `getChatDb()` bootstrap（首次 HTTP 写前 schema 在）。
-- 🟡 **debounce 正确性**：`streamContent`（fire-and-forget throttle）/ `finalizeMessage`（flush 先于终态）拆分，防终态被旧增量覆盖。harness 终态带 `content=buffer` 双保险。
+- 🔴 ~~不变式 1：`shared/chat/` 零 Electron/Node-only 依赖~~ **S3 后由"gateway 核心 pure-ish"取代**：`shared/chat/` 已整体删除，新的对应纪律是 gateway 核心（`server.ts`/`chatRun.ts`/`config.ts`/`tools/*`）不 import `electron` / `chat_db` / `keytar`（依赖倒置，回调注入见 §3.2）。
+- 🔴 **本地 chat 不再依赖 serve-api 存活**（与 cutover 前相反）：本地 electron renderer 直连内嵌 gateway（`ai_gateway_lifecycle.ts` 随 electron main 启动、同进程监听 loopback），serve-api（Python，8200）挂了不影响本地 chat。**远程 web 才依赖 serve-api**——它是访问 embedded gateway 的唯一路径（§3.2 反代）。gateway 本身用 `/health` 探测，不可达（无论本地直连还是远程反代）→ 面板渲染 D7 错误态 + 重试按钮，**不再有 legacy 可静默降级**（旧"graceful 降级读 `[]` / 写 throw `E_DISPATCH`"是 cutover 前 serve-api-依赖时代的行为，已随之作废）。
+- 🟠 ~~D4 语义变化——harness-off 逃生阀消失~~ **已随 flag 整体退役而彻底作废**：`MAILAGENT_AGENT_HARNESS` 在 S3 被完全从代码里删除（非仅默认值变化，见 [`ai-sdk-gateway-architecture.md`](../llm-agent/ai-sdk-gateway-architecture.md) §13.18.2），连这条 flag 本身都不存在了，"设为 0 退化成单遍"这个讨论从根上不再适用。**当前排障回退面 = 装回旧版 `.app`**（无运行时开关）。
+- 🟠 **flag 命名澄清 —— `MAILAGENT_REMOTE_ACCESS_ENABLED` 名不副实**：它名为「远程访问」，**实为本地 daemon / serve-api 总开关**。自 D1（前端写收编 daemon）起本地写都依赖它；`=false` 会挂本地写（非仅关远程）。**S3 后不再影响本地 chat**（chat 已不依赖 serve-api，见上）。默认起，纳入 BackendLifecycleManager 自启。
+- 🟡 **ai_chat.db schema owner = 前端 `chat_db.ts`**（`CHAT_DB_VERSION`，better-sqlite3 在 main `getChatDb()` lazy migrate）。serve-api `ChatDb` 绝不建表 → main boot 须显式 `getChatDb()` bootstrap（首次 HTTP 写前 schema 在）。此项 S3 未变。
+- 🟡 ~~debounce 正确性~~ **持久化模型已变**：不再有 `streamContent`（增量 debounce 直写）/`finalizeMessage`（flush 先于终态）两段式；`persistTurn` 回调仅在**回合结束时**整体落库，`onTurnStart` 额外 eager 写一次用户消息（防面板在等待响应期间刷新丢失用户输入）。细节见 `ai_gateway_lifecycle.ts` 的 `persistTurn` / `onTurnStart` 注释。
 
 ## 9. 关键文件索引
 
 | 层 | 文件 |
 |---|---|
-| 引擎（shared） | `frontend/src/shared/chat/{runtime,dispatcher,harness,emitter,platform,http_platform,model}.ts` + `backends/{custom_api,notion_agent_http}.ts` + `tools/builtin/` + `tools/confirmation.ts` |
-| electron 接线 | `frontend/src/shared/api/ElectronApi.ts`（`createElectronChatRuntime`）· `frontend/src/electron/main/chat_local_bridge.ts`（webRequest token+CORS）· `index.ts`（三 load 入口注 apiPort + `getChatDb()` bootstrap）|
-| web 接线 | `frontend/src/shared/api/HttpApi.ts`（`chat` lazy getter）|
-| serve-api | `src/api/routers/chat.py` · `src/chat/{db,notion_agent,notion_agent_gate}.py` · `src/kos/client.py` |
+| 引擎（gateway 核心，S3 起唯一引擎，权威见 [`ai-sdk-gateway-architecture.md`](../llm-agent/ai-sdk-gateway-architecture.md) §13） | `frontend/src/ai-gateway/{server,chatRun,config}.ts` + `tools/*.ts` + `prompts/` + `searchAgentRun.ts` |
+| electron 接线（生命周期 + 持久化注入） | `frontend/src/electron/main/ai_gateway_lifecycle.ts`（启动 gateway + `persistTurn`/`onTurnStart` 回调）· `chat_db.ts`（better-sqlite3，`CHAT_DB_VERSION`）|
+| 前端消费（assistant-ui 接线） | `frontend/src/shared/assistant/runtime/{useMailAgentAiSdkRuntime,AiSdkRuntimeProvider}.tsx`（`AssistantChatTransport` + `useChatRuntime`）· `flags.ts`（`resolveAiGatewayBaseUrl` 三分支）· `ReadOnlyTranscript.tsx`（legacy custom-api/notion-agent 会话只读渲染）|
+| serve-api（远程反代 + 历史读 + 非引擎业务） | `src/api/routers/ai_gateway_proxy.py`（反代 `/api/ai/*` + 裸 `/health`）· `src/api/routers/chat.py` · `src/chat/{db,notion_agent,notion_agent_gate}.py` · `src/kos/client.py` |
 | 鉴权 | `src/api/auth.py`（本地 token 腿 + CF JWT）· `frontend/src/electron/main/local_token.ts` |
 
 ## 10. 阶段 1（report/agent）+ 阶段 2（chat 只读）

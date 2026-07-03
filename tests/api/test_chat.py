@@ -317,7 +317,6 @@ def test_chat_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
         "userContext": "",
         "memorySummary": "",
         "enabledModels": [],
-        "manifestMode": False,
         # R4 — flag default ON + seeded docs → layered prompt in effect.
         "standingContextActive": True,
         # R6 — override store healthy by default → available True.

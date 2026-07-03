@@ -1,5 +1,7 @@
 # Harness Agent 核心调度层重构 — 架构 Review + 分阶段计划
 
+> ⚠️ 已归档存史（2026-07-03）：本文规划的 M1-M5 记忆重构已全部落地（见下方原文状态行）；「任务B[删 legacy harness]」已由 `07-02-s3-remove-legacy-harness` task 完成。当前记忆系统配置真相见根 `CLAUDE.md` 开关表（`MAILAGENT_MEM0_CAPTURE` 等）；引擎真相见 [`ai-sdk-gateway-architecture.md`](../../../reference/llm-agent/ai-sdk-gateway-architecture.md)。本文仅存历史设计参考。
+
 > status: **M1–M5 全落地 ✅ + 4 flag cutover 默认 ON ✅（随 v1.1.0 发布，2026-07-02）** · 剩余 = 任务B[删 legacy harness]（独立 task，见 next-phase-backlog） · owner: chenyqThu · created: 2026-06-27
 > 上游：epic master = [`README.md`](./README.md) · 触发交接 = [`next-phase-backlog.md`](./next-phase-backlog.md) §2（用户「核心调度层重构」框架）
 > 本档 = backlog §2 框架的**架构级 review 落地** + **可执行分阶段计划**。代码等本计划经用户确认后按「每步一 diff」开。

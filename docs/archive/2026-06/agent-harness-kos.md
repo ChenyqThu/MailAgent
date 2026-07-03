@@ -1,5 +1,7 @@
 # AI Agent Harness + KOS Integration（从 CLAUDE.md 下沉）
 
+> ⚠️ 已归档存史（2026-07-03，S3）：本文描述的前端 chat 多轮 harness 已被 AI SDK Gateway 取代并删除，当前架构真相见 [`ai-sdk-gateway-architecture.md`](../../reference/llm-agent/ai-sdk-gateway-architecture.md)；KOS 集成部分见 [`kos-integration-design.md`](../../reference/llm-agent/kos-integration-design.md)。本文仅存历史参考。
+
 > **前端 Custom AI chat panel** 的 multi-turn harness（用户在邮件 panel 里跟 LLM 对话时调工具），跟「LLM Agent（本地 LLM 接管 Notion Custom Agent）」那条单轮邮件分类路径不是同一个东西。
 
 ## AI Agent Harness（Sprint 19 起）

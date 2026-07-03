@@ -1,5 +1,7 @@
 # AI Agent Harness — 设计文档
 
+> ⚠️ 已归档存史（2026-07-03，S3）：本文是旧自研 TS harness 的工程实施指南，该 harness 已被 AI SDK Gateway 完全取代并删除，当前架构真相见 [`ai-sdk-gateway-architecture.md`](../../reference/llm-agent/ai-sdk-gateway-architecture.md)。本文仅存历史参考。
+
 > Sprint 19 起点。把 Electron 前端的 AI Chat 从 *single-turn LLM stream* 升级为 **multi-turn agentic mail agent**。
 >
 > 本文档配合 `/Users/chenyuanquan/.claude/plans/subagent-plan-lexical-moler.md`（路线图 + 决策依据）与 `frontend/SPRINT19-AGENT-HARNESS-HANDOFF.md`（接手要点）阅读。Plan 文档 = 决策 + 时间线；本文档 = 工程级实施指南，照着写代码用。

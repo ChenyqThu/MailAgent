@@ -1,5 +1,7 @@
 # Sprint 19 §B P1 Baseline Eval Report
 
+> ⚠️ 已归档存史（2026-07-03，S3）：本文是 Sprint 19 §B 早期 eval baseline 数据快照，已被 `tests/agent_eval/baselines/` 的冻结基线取代。本文仅存历史参考。
+
 > Model: `claude-sonnet-4-6`
 > Fixture email_id: `1000000024`
 > Run time: 2026-05-25 23:55:28
