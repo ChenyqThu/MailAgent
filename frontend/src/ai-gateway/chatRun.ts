@@ -159,7 +159,7 @@ export async function prepareChatRun(
   // providerOptions omitted below, byte-identical to the pre-toggle no-thinking streamText call.
   const thinkingProviderOpts = thinkingProviderOptions(modelId, body.thinking === true)
 
-  // System prompt. With the injection provider set (MAILAGENT_AI_SDK_CONTEXT_INJECTION on) assemble
+  // System prompt. With the injection provider set (always injected since S3) assemble
   // from standing-context + the typed snapshot, reusing the legacy stable prefix
   // (buildGatewaySystemPrompt). Without it (default) pass body.system through unchanged AND ignore the
   // contextSnapshot field entirely — Phase 02/05 behaviour, byte-identical (no validation, no 400).

@@ -1,20 +1,29 @@
 #!/usr/bin/env python3
-"""tool_catalog.json freshness check (M4) — zero LLM, zero deps.
+"""tool_catalog.json freshness check (M4, redirected to the gateway in S3) — zero LLM, zero deps.
 
-Greps the real builtin tool sources and compares tool name + confirmationTier to
-tool_catalog.json, so Phase 1 adding/removing/renaming a tool or changing a tier
-fails this check instead of silently making R3/R5 wrong.
+S3 deleted the legacy TS chat engine (frontend/src/shared/chat), so this validator now
+scans the AI SDK Gateway tool sources (frontend/src/ai-gateway/tools/*.ts) and compares
+BOTH directions against tool_catalog.json:
 
-    python eval/runner/validate_catalog.py --eval-root eval
-    python eval/runner/validate_catalog.py --source frontend/src/shared/chat/tools/builtin
-    python eval/runner/validate_catalog.py --eval-root eval --source-ref main   # branch-independent (M2)
+  * name universe  — every gateway tool must have a catalog row (mirrors the
+    test_gateway_catalog_completeness.py forward gate, double-belt), and every
+    non-`legacy_retired` catalog row must exist in the gateway (the REVERSE guard the
+    legacy-source deletion would otherwise have silently vacated — a stale catalog row
+    can no longer linger unnoticed).
+  * tier            — each tool's catalog `tier` must match the source: auditedReadTool
+    tools are implicitly `silent`; auditedWriteTool tools carry a literal `risk:
+    'preview'|'edit'`; the auditedSendTool (email_prepare_send) is blocking, which the
+    persistence/eval layer maps to `edit`.
+  * legacy_retired  — the two rows kept ONLY because the frozen v0.13.0 baseline traces
+    call them (skill_list_installed / plan_update) must stay ABSENT from the gateway; if
+    a future gateway tool reuses the name, the row must be promoted to a normal row.
 
-The catalog represents the tools on `main` (Phase -1/0A merged). Because `.trellis/`
-is gitignored and survives branch switches, scanning the working tree on a branch
-that lacks Phase -1 files (agent_profile.ts / skill_management.ts) yields a false
-DRIFT. Use `--source-ref main` to validate against a git ref regardless of checkout.
+    python runner/validate_catalog.py            # from tests/agent_eval
+    python runner/validate_catalog.py --source <gateway tools dir>
+    python runner/validate_catalog.py --source-ref <git ref>
 
-Exit 0 = in sync (or source dir absent → skipped); exit 1 = drift.
+Exit 0 = in sync (or source dir absent → skipped, e.g. CI without the frontend
+checkout); exit 1 = drift.
 """
 from __future__ import annotations
 
@@ -25,14 +34,38 @@ import os
 import re
 import subprocess
 import tempfile
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 _EVAL_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# top-level tool name paired with its confirmationTier (anchored to line starts so
-# nested schema identifiers are not matched).
-PAIR_RE = re.compile(r"^\s*name:\s*'([a-z_]+)'[\s\S]*?^\s*confirmationTier:\s*'(silent|preview|edit)'", re.M)
-DEFAULT_SOURCE = os.path.join("frontend", "src", "shared", "chat", "tools", "builtin")
+DEFAULT_SOURCE = os.path.join("frontend", "src", "ai-gateway", "tools")
+
+# ---- name universe (same extraction as test_gateway_catalog_completeness.py) ----
+# `export const GATEWAY_<X>_TOOL_NAMES [: type] = [ 'a', 'b' ]` — DOTALL, first `]` ends
+# the literal (tool-name arrays never nest).
+NAME_ARRAY_RE = re.compile(r"export\s+const\s+GATEWAY_[A-Z0-9_]*TOOL_NAMES[^=]*=\s*\[(.*?)\]", re.S)
+# skill_gating.ts: record literal ends at the first column-0 `}`; sets are single literals.
+SKILL_TOOLS_RECORD_RE = re.compile(r"GATEWAY_SKILL_TOOLS[^=]*=\s*\{(.*?)\n\}", re.S)
+SET_LITERAL_RE = re.compile(r"new\s+Set\(\[(.*?)\]\)", re.S)
+TOOL_NAME_RE = re.compile(r"'([a-z][a-z0-9_]*)'")
+
+# ---- tier extraction (per-tool option objects) ----
+# Every gateway tool is declared as an option object holding a line-anchored
+# `name: '<snake_case>'` literal. Two declaration shapes exist:
+#   * direct / per-tool risk (write.ts, profile.ts, web.ts, self_mount.ts): a line-anchored
+#     `risk: 'preview'|'edit'` literal inside the SAME object → paired within the name's span.
+#   * file-level helper factory (exec.ts, skill_supply.ts): ONE `risk: 'edit'` literal inside
+#     the helper's auditedWriteTool() call, BEFORE every tool's name → the nearest
+#     `audited*Tool(` call preceding the name disambiguates (Read → silent, Write → the
+#     nearest preceding risk literal, Send → edit).
+# Helper-factory parameter TYPES (`name: string` / `risk: Exclude<...>`) carry no quoted
+# literal so they never match.
+NAME_LINE_RE = re.compile(r"^\s*name:\s*'([a-z][a-z0-9_]*)'", re.M)
+RISK_LINE_RE = re.compile(r"^\s*risk:\s*'(preview|edit)'", re.M)
+FACTORY_RE = re.compile(r"audited(Read|Write|Send)Tool\(")
+
+# auditedSendTool hardcodes blocking (no risk: literal); persistence/eval maps it to edit.
+BLOCKING_TOOL_TIERS = {"email_prepare_send": "edit"}
 
 
 def _find_repo_root(start: str) -> str:
@@ -72,58 +105,110 @@ def materialize_ref(repo_root: str, ref: str, subpath: str) -> Optional[str]:
         return None
 
 
-def scan_source(src_dir: str) -> Dict[str, str]:
-    expected: Dict[str, str] = {}
+def scan_name_universe(src_dir: str) -> Set[str]:
+    """The gateway tool-name universe: GATEWAY_*_TOOL_NAMES arrays across ALL tools/*.ts
+    ∪ the skill_gating.ts classification sets (identical extraction to the pytest
+    completeness gate, so the two can never see different universes)."""
+    names: Set[str] = set()
     for path in sorted(glob.glob(os.path.join(src_dir, "*.ts"))):
         with open(path, "r", encoding="utf-8") as fh:
             text = fh.read()
-        for m in PAIR_RE.finditer(text):
-            expected[m.group(1)] = m.group(2)
-        # toggle(enabled) factory generates skill_enable / skill_disable (names dynamic)
-        if os.path.basename(path) == "skill_management.ts":
-            expected.setdefault("skill_enable", "preview")
-            expected.setdefault("skill_disable", "preview")
-    return expected
+        for m in NAME_ARRAY_RE.finditer(text):
+            names.update(TOOL_NAME_RE.findall(m.group(1)))
+        if os.path.basename(path) == "skill_gating.ts":
+            rec = SKILL_TOOLS_RECORD_RE.search(text)
+            if rec:
+                names.update(TOOL_NAME_RE.findall(rec.group(1)))
+            for sm in SET_LITERAL_RE.finditer(text):
+                names.update(TOOL_NAME_RE.findall(sm.group(1)))
+    return names
 
 
-def diff_catalog(expected: Dict[str, str], catalog_tools: Dict[str, dict]) -> List[str]:
+def scan_tiers(src_dir: str, universe: Set[str]) -> Dict[str, str]:
+    """Per-tool tier from the option objects: pair each line-anchored `name: 'x'` with
+    the first `risk: 'y'` literal inside its span (up to the next tool name); a name
+    with no in-span risk is disambiguated by the nearest PRECEDING `audited*Tool(` call
+    — Read → silent, Write → the nearest preceding risk literal (the helper-factory
+    shape), Send → edit. Only names in the universe are paired (schema literals /
+    unrelated `name:` keys are ignored)."""
+    tiers: Dict[str, str] = dict(BLOCKING_TOOL_TIERS)
+    for path in sorted(glob.glob(os.path.join(src_dir, "*.ts"))):
+        with open(path, "r", encoding="utf-8") as fh:
+            text = fh.read()
+        names = [(m.start(), m.group(1)) for m in NAME_LINE_RE.finditer(text) if m.group(1) in universe]
+        risks = [(m.start(), m.group(1)) for m in RISK_LINE_RE.finditer(text)]
+        factories = [(m.start(), m.group(1)) for m in FACTORY_RE.finditer(text)]
+        for i, (pos, name) in enumerate(names):
+            if name in BLOCKING_TOOL_TIERS:
+                continue
+            end = names[i + 1][0] if i + 1 < len(names) else len(text)
+            span_risks = [r for rp, r in risks if pos < rp < end]
+            if span_risks:
+                tiers[name] = span_risks[0]
+                continue
+            kinds_before = [k for fp, k in factories if fp < pos]
+            kind = kinds_before[-1] if kinds_before else None
+            if kind == "Read":
+                tiers[name] = "silent"
+            elif kind == "Send":
+                tiers[name] = "edit"
+            elif kind == "Write":
+                risks_before = [r for rp, r in risks if rp < pos]
+                if risks_before:
+                    tiers[name] = risks_before[-1]
+                # else: leave unpaired → surfaced by the caller's unpaired check.
+    return tiers
+
+
+def diff_catalog(universe: Set[str], tiers: Dict[str, str], catalog_tools: Dict[str, dict]) -> List[str]:
     errs: List[str] = []
-    cat = {k: v.get("tier") for k, v in catalog_tools.items()}
-    # Gateway-only tools (e.g. email_prepare_send) live ONLY in the AI SDK Gateway, with no
-    # legacy builtin source, so they are exempt from the "extra in catalog" check. Legacy tools
-    # stay strictly checked (missing / tier drift still caught for everything else).
-    gateway_only = {k for k, v in catalog_tools.items() if v.get("gateway_only")}
-    for name, tier in sorted(expected.items()):
-        if name not in cat:
-            errs.append("missing in catalog: %s (source tier=%s)" % (name, tier))
-        elif cat[name] != tier:
-            errs.append("tier drift %s: source=%s catalog=%s" % (name, tier, cat[name]))
-    for name in sorted(cat):
-        if name not in expected and name not in gateway_only:
-            errs.append("extra in catalog (not found in source): %s" % name)
+    retired = {k for k, v in catalog_tools.items() if v.get("legacy_retired")}
+    live_rows = {k: v for k, v in catalog_tools.items() if k not in retired}
+    # forward: every gateway tool needs a catalog row (double-belt with the pytest gate).
+    for name in sorted(universe - set(catalog_tools)):
+        errs.append("missing in catalog: %s (source tier=%s)" % (name, tiers.get(name, "?")))
+    # REVERSE guard: a live catalog row must exist in the gateway source.
+    for name in sorted(set(live_rows) - universe):
+        errs.append("extra in catalog (not found in gateway source): %s" % name)
+    # tier drift for rows present on both sides.
+    for name in sorted(universe & set(live_rows)):
+        want = tiers.get(name)
+        got = live_rows[name].get("tier")
+        if want is not None and want != got:
+            errs.append("tier drift %s: source=%s catalog=%s" % (name, want, got))
+    # retired rows must stay retired: a gateway tool reusing the name must be promoted.
+    for name in sorted(retired & universe):
+        errs.append("legacy_retired row %s exists in the gateway source — promote it to a normal row" % name)
     return errs
 
 
 def check(eval_root: str, source_dir: str) -> Tuple[bool, List[str], Dict[str, int]]:
-    """Returns (ok, errors, counts). ok=True and skipped count=-1 if source absent."""
+    """Returns (ok, errors, counts). ok=True and source count=-1 if source absent."""
     catalog_path = os.path.join(eval_root, "tool_catalog.json")
     with open(catalog_path, "r", encoding="utf-8") as fh:
         catalog_tools = json.load(fh)["tools"]
     if not os.path.isdir(source_dir):
         return True, ["source dir absent (skipped): %s" % source_dir], {"source": -1, "catalog": len(catalog_tools)}
-    expected = scan_source(source_dir)
-    errs = diff_catalog(expected, catalog_tools)
-    # Count parity excludes gateway-only tools (no legacy source) so source==catalog means
-    # "every legacy builtin tool is mirrored 1:1", with gateway-only extras allowed on top.
-    gateway_only = sum(1 for v in catalog_tools.values() if v.get("gateway_only"))
-    return (len(errs) == 0), errs, {"source": len(expected), "catalog": len(catalog_tools) - gateway_only}
+    universe = scan_name_universe(source_dir)
+    # Extraction canaries (mirror the pytest gate): a stale regex must fail loudly, not
+    # shrink the universe and green-light everything.
+    if not universe or "email_search" not in universe:
+        return False, ["extraction canary failed: gateway name universe empty or missing email_search"], {
+            "source": len(universe), "catalog": len(catalog_tools)}
+    tiers = scan_tiers(source_dir, universe)
+    unpaired = sorted(universe - set(tiers))
+    errs = diff_catalog(universe, tiers, catalog_tools)
+    if unpaired:
+        errs.append("tier extraction saw no `name:` literal for: %s (tool declaration shape changed?)" % ", ".join(unpaired))
+    retired = sum(1 for v in catalog_tools.values() if v.get("legacy_retired"))
+    return (len(errs) == 0), errs, {"source": len(universe), "catalog": len(catalog_tools) - retired}
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(description="tool_catalog.json freshness check")
+    ap = argparse.ArgumentParser(description="tool_catalog.json freshness check (gateway source)")
     ap.add_argument("--eval-root", default=_EVAL_ROOT)
-    ap.add_argument("--source", help="builtin tools dir (default: <repo>/%s)" % DEFAULT_SOURCE)
-    ap.add_argument("--source-ref", help="validate against a git ref (e.g. main) via git archive, ignoring the working tree")
+    ap.add_argument("--source", help="gateway tools dir (default: <repo>/%s)" % DEFAULT_SOURCE)
+    ap.add_argument("--source-ref", help="validate against a git ref via git archive, ignoring the working tree")
     args = ap.parse_args(argv)
 
     eval_root = os.path.abspath(args.eval_root)
@@ -154,9 +239,6 @@ def main(argv=None) -> int:
     if counts.get("source") == -1:
         print("RESULT: SKIPPED (no source)")
         return 0
-    if not ok and any(("agent_profile" in e or "skill_" in e) for e in errs):
-        print("HINT: working tree appears to lack Phase -1/0A tools (agent_profile/skill_management).")
-        print("      The catalog represents `main`. Re-run with: --source-ref main  (or check out a branch with Phase -1 commits).")
     print("RESULT: %s" % ("OK" if ok else "DRIFT"))
     return 0 if ok else 1
 

@@ -3,7 +3,7 @@
 // Loads the same three reads the legacy panel runs (email detail / AI fields / thread sibling count)
 // PLUS the full body markdown, then hands them to the pure buildAgentContextSnapshot. Query keys
 // match useChatContextChips / the legacy panel so the React Query cache is shared (no double-fetch).
-// Gated by `enabled` (the MAILAGENT_AI_SDK_CONTEXT_INJECTION flag): off → no queries, null snapshot,
+// Gated by `enabled` (the caller's context-injection condition): off → no queries, null snapshot,
 // so the AI SDK path stays Phase-02 context-light and byte-identical.
 //
 // 🔴 Renderer-only (react + useMailApi). The assembly itself is pure (contextSnapshot.ts) — this

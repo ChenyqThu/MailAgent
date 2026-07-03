@@ -6,8 +6,8 @@
 // email.ts 搜索/snippet/warm 逻辑** —— 它只产出一个 DSL 字符串。
 //
 // 调用风格刻意对齐 translate.ts（同一个 CRS /v1/messages 端点 + x-api-key +
-// anthropic-version + CRS UA + 非流式 json 解析），不走 shared/chat 的流式
-// SSE 机器（那套是多轮 harness，对单次翻译过重）。
+// anthropic-version + CRS UA + 非流式 json 解析）——单次调用，不需要多轮
+// chat 引擎。
 //
 // LLM 配置复用 llm_settings.ts 的主 LLM gateway（getLlmApiKey / getLlmBaseUrl
 // / getLlmModel）。无 key → 返回结构化 error（前端提示「请先在设置配置 LLM」），

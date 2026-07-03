@@ -172,7 +172,7 @@ export interface AiGatewayConfig {
    *  ApprovalGuard.peek (risk / reason / expiry) + optional A2UI. Returns null when no record is
    *  found → the mirror falls back to a minimal fail-closed interrupt. Omitted → same fallback. */
   resolveApprovalRequest?: (info: ApprovalRequestResolveInfo) => ToolApprovalRequestPayload | null
-  /** Phase 06 (context injection) — MAILAGENT_AI_SDK_CONTEXT_INJECTION. Returns the standing-context
+  /** Phase 06 (context injection; always injected since S3). Returns the standing-context
    *  config (/chat/config projection) used to build streamText `system`. Set by the Electron wrapper
    *  ONLY when the flag is on; it fetches the SAME serve-api /chat/config the legacy runtime uses
    *  (TTL-cached). When set, prepareChatRun assembles the system from standingContext + the request's

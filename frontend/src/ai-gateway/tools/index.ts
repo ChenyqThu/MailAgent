@@ -39,7 +39,7 @@ export interface BuildGatewayToolsOpts {
   /** The per-gateway ApprovalGuard the write tools bind to (id/hash/expiry domain guard).
    *  Required to build write tools; omitted → read-only even when writeToolsEnabled. */
   approvalGuard?: ApprovalGuard
-  /** MAILAGENT_A2UI_TOOL_CARDS (phase-04a). When on, write tools stamp the A2UI render payload
+  /** A2UI card stamping (phase-04a; always on since S3). When on, write tools stamp the A2UI render payload
    *  into their audit row (ui_payload_json). UI/audit only — does not change the model result
    *  (off → byte-identical to 03b). */
   a2uiEnabled?: boolean

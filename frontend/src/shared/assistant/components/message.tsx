@@ -30,7 +30,7 @@ export function UserMessage(): React.JSX.Element {
 
 export function AssistantMessage(): React.JSX.Element {
   // Phase 04a — flag-aware part components (generic ToolTraceCard fallback always; A2UI
-  // per-tool cards added as tools.by_name when MAILAGENT_A2UI_TOOL_CARDS is on). Memoized
+  // per-tool cards added as tools.by_name — rich cards always on since S3). Memoized
   // once per mount so the object reference stays stable across re-renders. flag-off → the
   // Phase 01 object verbatim.
   const partComponents = useMemo(() => getAssistantPartComponents(), [])

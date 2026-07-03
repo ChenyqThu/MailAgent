@@ -1,6 +1,6 @@
 // chat-panel P4 Phase 02 — AI SDK runtime provider.
 //
-// The Phase 02 sibling of MailAgentRuntimeProvider: builds the AI SDK
+// Phase 02 — builds the AI SDK
 // `useChatRuntime` (pointed at the embedded Gateway) and mounts
 // AssistantRuntimeProvider so the same Thread / Message / Composer primitives
 // render against it. Kept a separate component (not a branch inside

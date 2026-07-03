@@ -1,13 +1,12 @@
 // chat-panel P4 composer-parity C1-① — extended-thinking provider options for the gateway.
 //
-// Mirrors the legacy custom_api.ts buildAnthropicRequestBody thinking branch (the model-family
-// matrix): opus-4-7 / opus-4-8 / fable REJECT manual budget_tokens with HTTP 400 → they require
+// The model-family matrix (originally mirrored from the legacy custom_api.ts thinking branch):
+// opus-4-7 / opus-4-8 / fable REJECT manual budget_tokens with HTTP 400 → they require
 // adaptive thinking + top-level effort; sonnet-4-6 (default) + older Claude 4 accept a manual
-// budget. Kept as a PURE gateway-local copy of the simple model-string check so chatRun stays free
-// of the heavy shared/chat/custom_api import (the gateway pure-ish contract, chatRun.ts:8).
+// budget.
 //
-// 🔴 SSoT for the matrix + budget rationale: src/shared/chat/backends/custom_api.ts:55-75. If the
-//    model families or budget change there, mirror them here (no shared import to avoid the dep).
+// 🔴 S3 — the legacy engine was deleted; THIS FILE is now the SSoT for the matrix + budget
+//    rationale. Update the model families / budget here when a new family changes behaviour.
 
 import type { JSONValue } from 'ai'
 

@@ -6,7 +6,7 @@
   "user_prompt": "上个月那封带退款发票 PDF 的邮件，发票号是多少？",
   "email_context": null,
   "fixtures": { "emails": [], "memory": [], "skill_overrides": {} },
-  "allowed_tools": ["email_search", "email_search_fulltext", "email_search_attachments", "attachment_list", "email_body"],
+  "allowed_tools": ["email_search", "email_search_fulltext", "email_search_attachments", "email_body"],
   "must_use_tools": [],
   "forbidden_tools": ["email_draft_reply", "email_send"],
   "expected_evidence": [],

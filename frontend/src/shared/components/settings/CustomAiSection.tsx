@@ -3,9 +3,9 @@
 // Sub-sections rendered inside the AI tab:
 //   1. Skills toggle list  — react-query fetches the RESOLVED SkillSummary[] from the
 //      backend (GET /api/agent/skills: manifest ⋈ agent_config.db enable overrides).
-//      Toggling calls api.chat.setSkillEnabled (POST /api/agent/skills/{name}/enabled) +
-//      invalidateConfig so the next chat turn sees the updated tool catalog + prompt
-//      fragments. A one-time mount effect migrates any leftover localStorage overrides
+//      Toggling calls api.chat.setSkillEnabled (POST /api/agent/skills/{name}/enabled);
+//      the gateway re-reads /chat/config on a 15s TTL so the next chat turn sees the
+//      updated tool catalog. A one-time mount effect migrates any leftover localStorage overrides
 //      to the backend (PR5 — enablement SSoT moved off per-surface localStorage).
 //
 // i18n keys are all called via t() — the parent i18n JSON defines them.
@@ -34,7 +34,7 @@ import {
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { useEnabledModels, FALLBACK_MODELS } from '@shared/hooks/useLlmModels'
 import { useEnvStore } from '@shared/state/env'
-import { readSkillOverrides, writeSkillOverrides } from '@shared/chat/skill_enablement'
+import { readSkillOverrides, writeSkillOverrides } from '@shared/lib/skill_overrides'
 import { toastError, toastSuccess } from '@shared/state/toast'
 import type {
   AgentProfileDoc,
@@ -85,7 +85,6 @@ async function migrateLocalSkillOverrides(
     }
   }
   writeSkillOverrides({})
-  api.chat.invalidateConfig()
   await invalidateSkills()
 }
 
@@ -108,9 +107,8 @@ function SkillsSection(): React.ReactElement {
   async function handleToggle(skill: SkillSummary, next: boolean): Promise<void> {
     try {
       await api.chat.setSkillEnabled(skill.name, next)
-      // Drop the cached chat engine so the next chat.start() rebuilds with the
-      // updated tool catalog + prompt fragments, then refetch the resolved list.
-      api.chat.invalidateConfig()
+      // S3 — the gateway re-reads /chat/config on a 15s TTL, so the toggle reaches the
+      // tool catalog without any client-side engine invalidation; just refetch the list.
       await qc.invalidateQueries({ queryKey: ['skills'] })
     } catch (err) {
       toastError(t('settings.skills.title'), (err as Error).message)
@@ -1466,7 +1464,6 @@ function PackRow({
       // 全清端点（行 + 目录 + 密钥），绝不走旧 DELETE /agent/skills/{name}。
       await api.chat.uninstallSkillPack(skill.name)
       toastSuccess(`已卸载 ${skill.name}`)
-      api.chat.invalidateConfig()
       onChanged()
     } catch (err) {
       toastError('卸载失败', apiErrText(err))
@@ -1663,7 +1660,6 @@ export function SkillPacksSection(): React.ReactElement | null {
 
   const onChanged = (): void => {
     void qc.invalidateQueries({ queryKey: ['skills'] })
-    api.chat.invalidateConfig()
   }
 
   return (

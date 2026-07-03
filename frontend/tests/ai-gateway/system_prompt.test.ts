@@ -12,10 +12,12 @@ import {
   buildGatewaySystemPrompt,
   type GatewaySystemPromptConfig
 } from '../../src/ai-gateway/systemPrompt'
-import { buildStableSystemPrompt } from '@shared/chat/backends/custom_api'
-import type { ChatModelConfig } from '@shared/chat/platform'
-import { PRODUCT_SAFETY_FLOOR } from '@shared/chat/prompts/safety_floor'
-import { SOUL_MARKDOWN } from '@shared/chat/prompts/soul'
+import {
+  buildStableSystemPrompt,
+  type ChatModelConfig
+} from '../../src/ai-gateway/prompts/stable_prompt'
+import { PRODUCT_SAFETY_FLOOR } from '../../src/ai-gateway/prompts/safety_floor'
+import { SOUL_MARKDOWN } from '../../src/ai-gateway/prompts/soul'
 import {
   buildAgentContextSnapshot,
   type ContextScope,

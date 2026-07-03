@@ -1,23 +1,22 @@
 // chat-panel P4 Phase 06 (context injection) — AI SDK Gateway system-prompt assembly.
 //
-// The gateway's streamText `system` is built here, reusing the EXACT legacy stable-prefix assembly
-// (custom_api.buildStableSystemPrompt) so the AI SDK path and the legacy custom-api path share ONE
-// standing-context source — no second "stove" (context-injection.md / goal). The standing-context
-// data (SOUL/AGENT/RULES/USER assembled backend-side, the user-context page, the memory summary, the
-// KOS-configured flag) arrives via GatewaySystemPromptConfig, which the Electron wrapper fetches from
-// the SAME serve-api /chat/config endpoint the legacy runtime uses. The only AI-SDK-specific part is
-// the typed AgentContextSnapshot block (buildContextSystemBlock) appended after the stable prefix:
-// the legacy path puts the open email in buildEmailContextSection, the gateway puts it in the
-// untrusted-fenced context block (§5/§7). That is the one documented difference.
+// The gateway's streamText `system` is built here via buildStableSystemPrompt — the stable-prefix
+// assembly that the legacy custom-api backend and the gateway used to SHARE (one standing-context
+// source, no second "stove"). S3 deleted the legacy engine and moved the assembly verbatim into
+// ./prompts/stable_prompt.ts; the gateway is now its only consumer. The standing-context data
+// (SOUL/AGENT/RULES/USER assembled backend-side, the user-context page, the memory summary, the
+// KOS-configured flag) arrives via GatewaySystemPromptConfig, which the Electron wrapper fetches
+// from the serve-api /chat/config endpoint. The AI-SDK-specific part is the typed
+// AgentContextSnapshot block (buildContextSystemBlock) appended after the stable prefix — the open
+// email travels in the untrusted-fenced context block (§5/§7), not a legacy EmailContext section.
 //
-// 🔴 Pure-ish: imports only pure shared modules (custom_api prompt assembly + the context
+// 🔴 Pure-ish: imports only pure shared modules (prompt assembly + the context
 //    serializer). No node:http / electron / ai. Unit-testable in plain Node.
 // 🔴 PRODUCT_SAFETY_FLOOR cannot be weakened here: buildStableSystemPrompt prepends it FIRST and it
-//    is code-owned (safety_floor.ts), never sourced from standingContext — a parity test asserts the
-//    floor bytes are always present, even when standingContext is set.
+//    is code-owned (prompts/safety_floor.ts), never sourced from standingContext — a parity test
+//    asserts the floor bytes are always present, even when standingContext is set.
 
-import { buildStableSystemPrompt } from '@shared/chat/backends/custom_api'
-import type { ChatModelConfig } from '@shared/chat/platform'
+import { buildStableSystemPrompt, type ChatModelConfig } from './prompts/stable_prompt'
 import { buildContextSystemBlock } from '@shared/assistant/context/contextSerializer'
 import type { AgentContextSnapshot } from '@shared/assistant/context/contextSnapshot'
 

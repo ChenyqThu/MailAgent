@@ -10,34 +10,21 @@ import { afterEach, describe, expect, test, vi } from 'vitest'
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react'
 
 import { useGeneralChat } from '../../src/shared/hooks/useGeneralChat'
-import type { ChatMessage, ChatSession, ChatStreamEnvelope } from '../../src/shared/api/types'
+import type { ChatMessage, ChatSession } from '../../src/shared/api/types'
 
-const { stableMailApi, mockListGeneralSessions, mockNewSession, mockStart } = vi.hoisted(() => {
-  const handlers: Array<(env: ChatStreamEnvelope) => void> = []
+const { stableMailApi, mockListGeneralSessions, mockNewSession } = vi.hoisted(() => {
   const mockListGeneralSessions = vi.fn<() => Promise<ChatSession[]>>()
   const mockListMessages = vi.fn<(id: number) => Promise<ChatMessage[]>>(async () => [])
   const mockNewSession = vi.fn()
-  const mockStart = vi.fn()
   const stableMailApi = {
     chat: {
       listGeneralSessions: mockListGeneralSessions,
       listMessages: mockListMessages,
       newSession: mockNewSession,
-      start: mockStart,
-      abort: vi.fn(),
-      deleteSession: vi.fn(),
-      editMessage: vi.fn(),
-      confirmTool: vi.fn(),
-      onStream: (h: (env: ChatStreamEnvelope) => void): (() => void) => {
-        handlers.push(h)
-        return () => {
-          const i = handlers.indexOf(h)
-          if (i >= 0) handlers.splice(i, 1)
-        }
-      }
+      deleteSession: vi.fn()
     }
   }
-  return { stableMailApi, mockListGeneralSessions, mockNewSession, mockStart }
+  return { stableMailApi, mockListGeneralSessions, mockNewSession }
 })
 
 vi.mock('../../src/shared/hooks/useMailApi', () => ({
@@ -82,7 +69,6 @@ describe('useGeneralChat — adoptSession (ai-sdk eager general session)', () =>
     expect(result.current.messages).toEqual([])
     expect(result.current.sessions.map((s) => s.id)).toContain(4242)
     // adoptSession runs NO IPC — the gateway persists the first turn itself.
-    expect(mockStart).not.toHaveBeenCalled()
     expect(mockNewSession).not.toHaveBeenCalled()
   })
 

@@ -6,7 +6,7 @@
 // NEVER blocks the conversation). `createComponentRegistry` is generic so the same shape can be
 // reused/extended; `componentRegistry` is the concrete Phase 04a instance (Draft / Notion /
 // generic-approval cards). `registerToolUIs` (registerToolUIs.tsx) feeds `byName` into the
-// assistant-ui `tools.by_name` slot, gated by MAILAGENT_A2UI_TOOL_CARDS.
+// assistant-ui `tools.by_name` slot (rich cards always mounted since S3).
 
 import type { ToolCallMessagePartComponent } from '@assistant-ui/react'
 

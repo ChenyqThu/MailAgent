@@ -1,15 +1,14 @@
 // @vitest-environment happy-dom
 //
-// V2.1 阶段 3 — 3c-3：ElectronApi.chat cutover 接线单测。
+// V2.1 阶段 3 / S3 — ElectronApi.chat 接线单测。
 //
-// 3c-3 把 ElectronApi.chat 从 IPC 封装（旧 ElectronChatApi）切到进程内 ChatRuntime
-// （createChatRuntime + HttpChatPlatform fetch loopback serve-api）。chat 引擎本身由
-// tests/shared/chat/runtime.test.ts 钉；本测只验 electron 特有的「壳」三点：
+// S3 删 legacy 引擎后 ElectronApi.chat = shared/api/chat_api.ts 的直 fetch 面
+// （serve-api 薄传输）。本测验 electron 特有的「壳」三点：
 //   - loopback baseUrl 端口来源：main 经 `?apiPort=N` 注入 window.location.search，
 //     缺省 / 非法回退 8200（renderer 进程无 process.env，端口必由 main 透传）。
 //   - openPopout override：shared runtime 里是 no-op → electron 回 main 的
-//     window:openChatPopout IPC（guard 非法 id，对齐旧 ElectronChatApi）。
-//   - chat 字段是完整 ChatApi（createElectronChatRuntime 产物）。
+//     window:openChatPopout IPC（guard 非法 id）。
+//   - chat 字段是存活 ChatApi 直 fetch 面（引擎面方法已随 legacy 删除）。
 //
 // fetch 全 mock（只断言 URL = baseUrl 端口生效，不验 runtime 内部语义）；
 // window.electron.ipcRenderer stub。
@@ -100,27 +99,37 @@ describe('ElectronApi.chat — 3c-3 openPopout override', () => {
   })
 })
 
-describe('ElectronApi.chat — 3c-3 完整 ChatApi 形状', () => {
-  test('chat 暴露全部 ChatApi 方法（createElectronChatRuntime 产物，非旧 IPC 封装）', () => {
+describe('ElectronApi.chat — S3 直 fetch ChatApi 形状', () => {
+  test('chat 暴露全部存活 ChatApi 方法（引擎面 start/onStream/confirmTool 已随 legacy 删）', () => {
     const api = new ElectronApi()
     const methods = [
-      'start',
-      'editMessage',
-      'abort',
-      'confirmTool',
       'newSession',
       'saveToKos',
       'deleteSession',
+      'updateSessionTitle',
+      'updateSessionArchived',
       'openPopout',
       'listMessages',
       'listSessions',
       'listAllSessions',
+      'listGeneralSessions',
       'listToolCalls',
       'kosAvailable',
-      'onStream'
+      'listSkills',
+      'setSkillEnabled',
+      'listPolicyRules',
+      'compileUserMd',
+      'listProfileDocs',
+      'fetchSkillPack',
+      'confirmSkillPack',
+      'uninstallSkillPack'
     ]
     for (const m of methods) {
       expect(typeof (api.chat as unknown as Record<string, unknown>)[m]).toBe('function')
+    }
+    // 引擎面已删（S3 D1/D5）：不再存在这些方法。
+    for (const gone of ['start', 'editMessage', 'abort', 'confirmTool', 'onStream', 'runSearchAgent', 'invalidateConfig']) {
+      expect((api.chat as unknown as Record<string, unknown>)[gone]).toBeUndefined()
     }
   })
 })

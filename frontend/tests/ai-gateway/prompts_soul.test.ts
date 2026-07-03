@@ -1,18 +1,22 @@
-// P2e — soul drift guard + prompt cache layering.
+// P2e / S3 — soul drift guard + prompt cache layering (moved from
+// tests/shared/chat/soul.test.ts when S3 relocated the stable-prompt assembly into
+// ai-gateway/prompts/stable_prompt.ts and deleted the legacy engine).
 //
 // soul.md (human SSoT) and SOUL_MARKDOWN (build-safe embed) must stay byte-
 // identical; and the stable (cacheable) system prefix must still lead with the
-// soul, then overlay the Notion TTL userContext — proving P2e didn't break the
-// stable/dynamic cache split.
+// soul, then overlay the Notion TTL userContext — proving the stable/dynamic
+// cache split holds.
 
 import { describe, expect, test } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-import { SOUL_MARKDOWN } from '../../../src/shared/chat/prompts/soul'
-import { PRODUCT_SAFETY_FLOOR } from '../../../src/shared/chat/prompts/safety_floor'
-import { __testing } from '../../../src/shared/chat/backends/custom_api'
-import type { ChatModelConfig } from '../../../src/shared/chat/platform'
+import { SOUL_MARKDOWN } from '../../src/ai-gateway/prompts/soul'
+import { PRODUCT_SAFETY_FLOOR } from '../../src/ai-gateway/prompts/safety_floor'
+import {
+  buildStableSystemPrompt,
+  type ChatModelConfig
+} from '../../src/ai-gateway/prompts/stable_prompt'
 
 function cfg(over: Partial<ChatModelConfig> = {}): ChatModelConfig {
   return {
@@ -32,13 +36,13 @@ function cfg(over: Partial<ChatModelConfig> = {}): ChatModelConfig {
 describe('soul — SSoT ↔ embed parity', () => {
   test('SOUL_MARKDOWN is byte-identical to custom_ai/soul.md', () => {
     // vitest cwd = frontend package root.
-    const mdPath = join(process.cwd(), 'src/shared/chat/prompts/custom_ai/soul.md')
+    const mdPath = join(process.cwd(), 'src/ai-gateway/prompts/custom_ai/soul.md')
     const md = readFileSync(mdPath, 'utf8').replace(/\n$/, '') // tolerate one trailing newline
     expect(SOUL_MARKDOWN).toBe(md)
   })
 
   test('soul leads the stable prefix; behaviour-identical static header', () => {
-    const stable = __testing.buildStableSystemPrompt(null, cfg(), () => null)
+    const stable = buildStableSystemPrompt(null, cfg(), () => null)
     expect(stable).toBe(SOUL_MARKDOWN) // no userContext / KOS → exactly the soul (zero regression)
     expect(stable.startsWith('You are the AI assistant inside MailAgent')).toBe(true)
   })
@@ -46,7 +50,7 @@ describe('soul — SSoT ↔ embed parity', () => {
 
 describe('soul — cache layering (userContext overlay preserved)', () => {
   test('Notion userContext is appended after the soul, not before', () => {
-    const stable = __testing.buildStableSystemPrompt(
+    const stable = buildStableSystemPrompt(
       null,
       cfg({ userContext: 'USER_PROFILE_XYZ' }),
       () => null
@@ -57,21 +61,19 @@ describe('soul — cache layering (userContext overlay preserved)', () => {
   })
 })
 
-// P3 — Skill prompt fragments are injected ONLY when the runtime supplied a
-// non-empty skillFragments (= the enabled+available skills' fragments). A disabled
-// skill contributes nothing → its fragment must be absent. This is the "prompt
-// assembly" half of acceptance ③ (the tool-filter half is covered by
-// skill_enablement.test.ts).
+// P3 — Skill prompt fragments are injected ONLY when the caller supplied a
+// non-empty skillFragments. The gateway passes null (capabilities travel in the
+// snapshot block) — the null/empty path is the production one.
 describe('soul — Skill prompt fragment injection (P3)', () => {
   test('null / empty skillFragments → nothing injected (zero regression)', () => {
-    const none = __testing.buildStableSystemPrompt(null, cfg({ skillFragments: null }), () => null)
+    const none = buildStableSystemPrompt(null, cfg({ skillFragments: null }), () => null)
     expect(none).toBe(SOUL_MARKDOWN)
-    const empty = __testing.buildStableSystemPrompt(null, cfg({ skillFragments: '' }), () => null)
+    const empty = buildStableSystemPrompt(null, cfg({ skillFragments: '' }), () => null)
     expect(empty).toBe(SOUL_MARKDOWN)
   })
 
   test('memory.md (memorySummary) is injected as an UNTRUSTED_MEMORY fence, before skills (07-01)', () => {
-    const stable = __testing.buildStableSystemPrompt(
+    const stable = buildStableSystemPrompt(
       null,
       cfg({ memorySummary: 'MEM_OVERLAY', skillFragments: 'REPORT_SKILL_FRAGMENT' }),
       () => null
@@ -89,12 +91,8 @@ describe('soul — Skill prompt fragment injection (P3)', () => {
     )
   })
 
-  test('a DISABLED skill fragment is absent — runtime passes only enabled ones', () => {
-    // The runtime derives skillFragments via computeSkillEnablement (only
-    // advertised skills contribute). Here we model the post-toggle result: the
-    // report fragment is enabled, the (disabled) calendar fragment never reaches
-    // the prompt because the runtime excluded it from skillFragments.
-    const stable = __testing.buildStableSystemPrompt(
+  test('a DISABLED skill fragment is absent — caller passes only enabled ones', () => {
+    const stable = buildStableSystemPrompt(
       null,
       cfg({ skillFragments: 'REPORT_SKILL_FRAGMENT' }),
       () => null
@@ -107,8 +105,8 @@ describe('soul — Skill prompt fragment injection (P3)', () => {
 // PR4 (task 06-22) — Standing Context layered assembly. When the backend supplies a
 // non-empty standingContext (flag MAILAGENT_STANDING_CONTEXT_ENABLED on, default), the
 // header becomes PRODUCT_SAFETY_FLOOR + standingContext instead of the legacy
-// SOUL_MARKDOWN. null/"" → legacy path (the existing tests above already cover that
-// the legacy header is byte-identical SOUL_MARKDOWN).
+// SOUL_MARKDOWN. null/"" → legacy path (the tests above already cover that the legacy
+// header is byte-identical SOUL_MARKDOWN).
 describe('safety floor + standing context (PR4)', () => {
   test('floor is byte-identical to soul.md safety section (drift guard)', () => {
     // PRODUCT_SAFETY_FLOOR must remain a verbatim slice of the legacy soul so the
@@ -118,11 +116,7 @@ describe('safety floor + standing context (PR4)', () => {
 
   test('standingContext present → floor leads, then user docs (not SOUL_MARKDOWN)', () => {
     const standing = '# SOUL\nIdentity here\n\n# RULES\nNever send silently'
-    const stable = __testing.buildStableSystemPrompt(
-      null,
-      cfg({ standingContext: standing }),
-      () => null
-    )
+    const stable = buildStableSystemPrompt(null, cfg({ standingContext: standing }), () => null)
     expect(stable.startsWith(PRODUCT_SAFETY_FLOOR)).toBe(true)
     expect(stable).toContain('Identity here')
     expect(stable).toContain('Never send silently')
@@ -133,7 +127,7 @@ describe('safety floor + standing context (PR4)', () => {
   })
 
   test('standingContext keeps floor → standing → memory → skills ordering (07-01)', () => {
-    const stable = __testing.buildStableSystemPrompt(
+    const stable = buildStableSystemPrompt(
       null,
       cfg({
         standingContext: '# SOUL\nx',
@@ -150,7 +144,7 @@ describe('safety floor + standing context (PR4)', () => {
   })
 
   test('empty standingContext → legacy SOUL_MARKDOWN header (flag-off fallback)', () => {
-    const stable = __testing.buildStableSystemPrompt(null, cfg({ standingContext: '' }), () => null)
+    const stable = buildStableSystemPrompt(null, cfg({ standingContext: '' }), () => null)
     expect(stable).toBe(SOUL_MARKDOWN)
   })
 })

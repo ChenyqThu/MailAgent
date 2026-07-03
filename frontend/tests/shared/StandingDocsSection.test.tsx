@@ -43,8 +43,7 @@ const {
       readProfileDoc: vi.fn(),
       setProfileDoc: mockSetProfileDoc,
       listProfileHistory: mockListProfileHistory,
-      rollbackProfileDoc: mockRollbackProfileDoc,
-      invalidateConfig: vi.fn()
+      rollbackProfileDoc: mockRollbackProfileDoc
     }
   }
   return {

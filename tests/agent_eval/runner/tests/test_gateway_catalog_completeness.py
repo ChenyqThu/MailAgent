@@ -1,13 +1,13 @@
 """Gateway → tool_catalog.json completeness gate (S1.0/R4). Zero LLM, stdlib only.
 
-Closes the hole research/04 confirmed: validate_catalog.py only greps the LEGACY
-builtin sources (frontend/src/shared/chat/tools/builtin) and exempts gateway_only
-tools from the "extra in catalog" direction — so a NEW tool registered in the AI SDK
-Gateway (frontend/src/ai-gateway/tools/*) but missing from tool_catalog.json would
-never turn anything red, silently escaping R3/R5 scoring. This gate statically
-extracts the gateway tool-name universe from the WORKING TREE (so S1's R1-R3 waves —
-chat_session_* / agent_profile_* / web_* — and every future gateway tool trip it the
-moment they are added without a catalog entry):
+Originally closed the hole research/04 confirmed (a NEW tool registered in the AI SDK
+Gateway but missing from tool_catalog.json never turned anything red while
+validate_catalog.py still grepped the legacy builtin sources). Since S3 deleted the
+legacy engine, validate_catalog.py scans the SAME gateway sources in BOTH directions
+(extra-in-catalog + tier drift) and this gate remains the pytest-side forward belt:
+a gateway tool absent from the catalog silently escapes R3/R5 scoring. It statically
+extracts the gateway tool-name universe from the WORKING TREE (so every future
+gateway tool trips it the moment it is added without a catalog entry):
 
   * every `export const GATEWAY_*TOOL_NAMES = [...]` array in tools/*.ts (any file,
     present or future — no hardcoded file list), plus

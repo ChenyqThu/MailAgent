@@ -10,12 +10,9 @@
 
 import type { Tool } from 'ai'
 
-// buildSearchHint is the legacy fulltext teaching-hint (Phase A G-A2) — reuse it
-// verbatim for parity (pure shared helper, no Electron dep). RELATIVE import (not the
-// @shared alias) so the pure-Node poc harness (tsx, which doesn't resolve tsconfig
-// paths for runtime imports) can load the gateway tools; vite/vitest/tsc resolve it
-// identically.
-import { buildSearchHint } from '../../shared/chat/tools/builtin/email'
+// buildSearchHint is the fulltext teaching-hint (Phase A G-A2) — moved into the
+// gateway in S3 when the legacy engine was deleted (pure helper, no Electron dep).
+import { buildSearchHint } from './search_hint'
 
 import type { z } from 'zod'
 

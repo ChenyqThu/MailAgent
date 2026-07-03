@@ -89,7 +89,7 @@ import type {
   TranslationCache
 } from './types'
 import { fetchAsDataUrl, request, type QueryValue, type RequestOptions } from './http_client'
-import { createChatRuntime } from '../chat/runtime'
+import { createChatRuntime } from './chat_api'
 
 function notImplemented(method: string): Promise<never> {
   // V2-Sprint 3 stub. MUST reject, never throw synchronously: every stubbed
@@ -474,20 +474,14 @@ export class HttpApi implements MailApi {
     }
   }
 
-  // V2.1 阶段 3 — 3c-2：chat 引擎在 UI 进程跑（B-pure-unified）。chat 整面 = ChatRuntime
-  // （createChatDispatcher + HttpChatPlatform + 进程内 emitter sink，shared/chat/runtime.ts）
-  // 取代阶段 2 的只读 stub —— 读 + 跑单一真源 fetch serve-api。
-  //
-  // 🔴 lazy getter 破循环：createChatRuntime({reads:this}) 把本 HttpApi 作工具读委托
-  // （runtime → new HttpChatPlatform(this) 只用 email/attachment，不回访 .chat）。electron
-  // 注入的 new HttpApi(loopback) 只取 email/attachment、不访问 .chat → 其 runtime 永不构造
-  // （3c-3 electron 切走自己的 createChatRuntime）；远程 web 不用 chat 时零开销。
+  // V2.1 阶段 3 / S3 — chat 整面 = ChatRuntime（serve-api 直 fetch 薄传输面，
+  // shared/api/chat_api.ts）。S3 删 legacy 引擎后 chat turn 全跑 embedded AI SDK
+  // Gateway（远程 web 经 serve-api ai_gateway_proxy 同源代理），本面只剩会话/skill/
+  // profile 等 fetch 方法。lazy getter：远程 web 不用 chat 时零开销。
   private _chat?: ChatApi
   get chat(): ChatApi {
     if (!this._chat) {
-      // F2 — 远程 web 不传 searchAgent（= false）→ runSearchAgent 返 E_UNSUPPORTED（LLM key
-      // 在桌面，agentic 搜索远程 scope 外）。桌面经 createElectronChatRuntime 传 searchAgent:true。
-      this._chat = createChatRuntime({ reads: this, baseUrl: this.baseUrl })
+      this._chat = createChatRuntime({ baseUrl: this.baseUrl })
     }
     return this._chat
   }

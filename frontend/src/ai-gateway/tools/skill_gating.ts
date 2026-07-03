@@ -4,7 +4,7 @@
 // Settings 关掉某 skill，模型经 capabilities 块被「告知」它关了，但其工具仍注册、仍可调。
 // applySkillGating 据 Python /chat/config 下发的 advertisedSkills（= enabled(override ?? default)
 // && available 的 skill 名）删掉「归属 skill 未 advertised」的工具，复刻 legacy
-// shared/chat/skill_enablement.computeSkillEnablement 的 advertised-owner-wins 语义。
+// legacy skill_enablement.computeSkillEnablement（S3 已删）的 advertised-owner-wins 语义。
 //
 // 数据所有权（计划档决策 1）：哪些 skill 对模型可见 = 业务态 = Python 拥有（advertisedSkills）；
 // gateway-工具→skill 映射 + 据此过滤 = 工具集结构 = Node 拥有（本文件）。两边各管自己拥有的，
@@ -82,7 +82,7 @@ export const CORE_UNGATED_GATEWAY_TOOLS: ReadonlySet<string> = new Set([
 ])
 
 /** 删掉「归属 skill ∉ advertisedSkills 且无任一 advertised skill 仍拥有它 且非 collision-exempt」的
- *  工具 key，返回新 ToolSet（不 mutate 入参）。复刻 computeSkillEnablement 第二步：先按 advertised
+ *  工具 key，返回新 ToolSet（不 mutate 入参）。复刻 legacy computeSkillEnablement 第二步：先按 advertised
  *  把工具名分区（一个名可能被多个 skill 拥有 → 任一 advertised owner 即保留，防别名误删），再删
  *  「无 advertised owner」的非豁免名。core 工具（不在 GATEWAY_SKILL_TOOLS）天然不入 nonAdvertised
  *  → 永不删。键顺序保留（Object.entries）。纯函数，可单测。

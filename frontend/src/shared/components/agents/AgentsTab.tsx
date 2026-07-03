@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import type { ReportAgentConfig, ReportCadence, ReportConfigPatch } from '@shared/api/types'
-import { DEFAULT_SEARCH_AGENT_PROMPT } from '@shared/chat/search_agent'
+import { DEFAULT_SEARCH_AGENT_PROMPT } from '@shared/assistant/searchAgentClient'
 import { CadencePill, ReportIcon, StatusBadge, Switch } from './primitives'
 import {
   useCreateAgent,

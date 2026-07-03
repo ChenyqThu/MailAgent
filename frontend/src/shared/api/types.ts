@@ -1174,7 +1174,7 @@ export interface AiApi {
 // not import from `src/electron/main/**` — that would pull in
 // better-sqlite3 + node:fs into the browser bundle. The IPC boundary is
 // the seam; types align by hand and are guarded by the schema-ish unit
-// tests in `tests/main/chat_db.test.ts` + `tests/components/useEmailChat.test.tsx`.
+// tests in `tests/main/chat_db.test.ts` + `tests/shared/useEmailChat.test.tsx`.
 
 // 'ai-sdk' (P4 Phase 06a cutover) — a chat authored through the embedded AI SDK
 // Gateway. New email chats default to this kind; the panel routes the runtime per
@@ -1288,153 +1288,10 @@ export interface ChatToolCall {
   updated_at: number
 }
 
-export interface ChatChunkEvent {
-  type: 'chunk'
-  delta: string
-}
-/** task 06-08-chat 需求 5 — extended-thinking delta. Mirror of chat/types
- *  ThinkingEvent across the IPC/emitter seam. Carries the model's reasoning
- *  summary increment (rendered in a collapsible block, kept out of `content`). */
-export interface ChatThinkingEvent {
-  type: 'thinking'
-  delta: string
-}
-export interface ChatToolCallEvent {
-  type: 'tool_call'
-  name: string
-  args: unknown
-  status: 'running' | 'ok' | 'error'
-  durationMs?: number
-  detail?: string
-}
-/** Sprint 19 — LLM proposes a tool call inside the agent harness loop.
- *  Mirror of main-process ToolUseEvent (chat/types.ts). */
-export interface ChatToolUseEvent {
-  type: 'tool_use'
-  toolUseId: string
-  name: string
-  input: unknown
-}
-/** Sprint 19 — Tool execution finished (or was canceled by the user).
- *  Mirror of main-process ToolResultEvent. */
-export interface ChatToolResultEvent {
-  type: 'tool_result'
-  toolUseId: string
-  status: 'ok' | 'error' | 'canceled'
-  output?: unknown
-  errorMessage?: string
-  durationMs: number
-}
-/** Sprint 19 — Harness needs user confirmation before running a write tool.
- *  Renderer pops ConfirmToolDialog; user click → chat:confirmTool IPC. */
-export interface ChatPendingConfirmationEvent {
-  type: 'pending_confirmation'
-  toolUseId: string
-  toolName: string
-  input: unknown
-  preview?: string
-  tier: 'preview' | 'edit'
-}
-export interface ChatUsageEvent {
-  type: 'usage'
-  inputTokens: number
-  outputTokens: number
-  costUsd: number | null
-  model: string | null
-  metadata?: Record<string, unknown> | null
-}
-export interface ChatDoneEvent {
-  type: 'done'
-  finalContent: string
-  model: string | null
-  /** Sprint 19 — Anthropic stop_reason carried to the renderer. Optional
-   *  for backends that don't emit it (notion-agent CLI). */
-  stopReason?: 'end_turn' | 'tool_use' | 'max_tokens'
-  metadata?: Record<string, unknown> | null
-}
-export interface ChatErrorEvent {
-  type: 'error'
-  code: string
-  message: string
-}
-
-export type ChatStreamEvent =
-  | ChatChunkEvent
-  | ChatThinkingEvent
-  | ChatToolCallEvent
-  | ChatToolUseEvent
-  | ChatToolResultEvent
-  | ChatPendingConfirmationEvent
-  | ChatUsageEvent
-  | ChatDoneEvent
-  | ChatErrorEvent
-
-export interface ChatStreamEnvelope {
-  sessionId: number
-  messageId: number
-  event: ChatStreamEvent
-}
-
-export interface ChatStartOpts {
-  // P2c/P2d — session anchor. 'email' (default) requires emailId; 'general'
-  // (context-free) ignores emailId (pass null). NEVER pass emailId=0 as a
-  // general sentinel.
-  anchorType?: ChatAnchorType
-  emailId: number | null
-  message: string
-  backendKind: ChatBackendKind
-  backendModel?: string | null
-  backendAgentPageId?: string | null
-  /** Sprint 19 — explicit target session row. When provided, dispatcher
-   *  uses `getSession(sessionId)` (must exist + match emailId) instead of
-   *  running `getOrCreateSession(email + backend + agent_page_id)`. The
-   *  renderer threads `activeSessionIdRef.current` here after
-   *  `chat.newSession()` so the next message lands in the freshly-created
-   *  row, not the latest pre-existing one. `null` / undefined keeps the
-   *  legacy "find or create the latest session for this email" behaviour. */
-  sessionId?: number | null
-  /** task 06-08-chat 需求 5 — per-turn extended-thinking toggle. When true, the
-   *  custom-api Anthropic path streams the model's reasoning summary into a
-   *  collapsible block + (MVP) drops tools for this turn. Undefined/false →
-   *  today's behaviour. Ignored by notion-agent + OpenAI-protocol models. */
-  thinking?: boolean
-  /** R3 (task 06-22) — the skills the user `@mention`-activated for THIS turn's scope.
-   *  The hook reads them from the per-scope activation store and threads them here; the
-   *  runtime folds them (force-on) into the engine's skill enablement for this turn only,
-   *  so a mention never leaks across surfaces / sessions. Undefined/[] → no override. */
-  activatedSkills?: string[]
-}
-
-// Sprint 14 PR B — inline message edit. The renderer sends the session +
-// the user-message id being edited + the replacement content + the same
-// backend choice fields chat.start uses (model can change between edits).
-// Backend truncates everything from `editingMessageId` onward, appends a
-// fresh user row with `newContent`, and re-streams the assistant turn.
-export interface ChatEditOpts {
-  sessionId: number
-  editingMessageId: number
-  newContent: string
-  backendKind: ChatBackendKind
-  backendModel?: string | null
-  backendAgentPageId?: string | null
-  /** task 06-08-chat 需求 5 — per-turn extended-thinking toggle (parity with
-   *  ChatStartOpts). Applies to the re-streamed assistant reply. */
-  thinking?: boolean
-  /** R3 (task 06-22) — @mention activation for the re-streamed reply (parity with
-   *  ChatStartOpts.activatedSkills). */
-  activatedSkills?: string[]
-}
-
-export interface ChatStartResult {
-  sessionId: number
-  userMessageId: number
-  assistantMessageId: number
-}
-
-// P3 — one installed Skill, as the Settings "Skills" toggle renders it. A flat
-// projection of the Skill manifest (shared/chat/tools/manifest SkillManifest) so
-// api/types stays self-contained. `defaultEnabled` is the manifest compile-time
-// seed; the user's per-skill override (shared/chat/skill_enablement) sits on top.
+// P3 / PR5 — one installed Skill, as the Settings "Skills" toggle renders it: the
+// backend GET /api/agent/skills RESOLVED projection (manifest skills ⋈ agent_config.db
+// enable overrides + source_type). `defaultEnabled` is the manifest compile-time seed;
+// the user's per-skill override (agent_config.db) sits on top.
 /** PR6 — a Standing Context document (SOUL/AGENT/RULES/USER editable, or MEMORY/SKILLS
  *  projection) as served by GET /api/agent/profile/docs. */
 export interface AgentProfileDoc {
@@ -1569,18 +1426,12 @@ export interface CompileUserMdResult {
   itemCount: number
 }
 
+/** S3 (07-02) — the serve-api fetch face of chat. The legacy engine methods
+ *  (start/editMessage/abort/confirmTool/onStream/runSearchAgent/invalidateConfig)
+ *  were deleted with the legacy runtime: chat turns run exclusively on the embedded
+ *  AI SDK Gateway (useChatRuntime transport → /api/ai/chat), and agentic ⌘K search
+ *  goes through @shared/assistant/searchAgentClient → gateway /api/ai/search-agent. */
 export interface ChatApi {
-  /**
-   * Open or reuse the (emailId, backendKind, agentPageId) session, append
-   * the user message, kick the backend stream, and return ids the
-   * renderer needs to render an empty assistant bubble. Throws
-   * `Error & { code }` on dispatch failure (E_INVALID_ARG /
-   * E_BACKEND_UNAVAILABLE / E_DISPATCH).
-   */
-  start(opts: ChatStartOpts): Promise<ChatStartResult>
-  /** Fire-and-forget renderer-side cancel. Safe to call when nothing is
-   *  in flight. */
-  abort(sessionId: number): void
   listMessages(sessionId: number): Promise<ChatMessage[]>
   listSessions(emailId: number): Promise<ChatSession[]>
   /**
@@ -1594,14 +1445,6 @@ export interface ChatApi {
    *  first. Separate from listSessions(emailId) so a general session never shows
    *  up in a specific email's sidebar. Read-only; degrades to [] on failure. */
   listGeneralSessions(): Promise<ChatSession[]>
-  /**
-   * Sprint 14 PR B — truncate session messages from `editingMessageId`
-   * onward, append a new user message with `newContent`, and re-stream
-   * the assistant reply. Throws `Error & { code }` on dispatch failure
-   * (E_INVALID_ARG / E_NOT_FOUND / E_BACKEND_UNAVAILABLE / E_DISPATCH).
-   * Only user-role messages can be edited.
-   */
-  editMessage(opts: ChatEditOpts): Promise<ChatStartResult>
   /**
    * Sprint 14 PR E — spawn a dedicated popout window pinned to the
    * given email's AI chat. Fire-and-forget: the new window shows
@@ -1630,11 +1473,10 @@ export interface ChatApi {
    */
   updateSessionArchived(sessionId: number, archived: boolean): Promise<void>
   /**
-   * Sprint 19 — INSERT a fresh ai_chat_sessions row, bypassing the
-   * (email_id, backend_kind, backend_agent_page_id) reuse lookup. Used by
-   * useEmailChat.send() when the user clicked "+ 新建会话" before this
-   * turn — without this the next dispatcher.startChat() would resurrect
-   * the latest pre-existing session row via getOrCreateSession.
+   * Sprint 19 / S3 — INSERT a fresh ai_chat_sessions row, bypassing the
+   * (email_id, backend_kind, backend_agent_page_id) reuse lookup. The ai-sdk
+   * runtime's onEnsureSession creates the session row through this BEFORE the
+   * gateway run (eager session creation).
    *
    * Schema v4 dropped the UNIQUE on (email_id, backend_kind,
    * backend_agent_page_id) so this INSERT always creates a brand-new row.
@@ -1656,20 +1498,6 @@ export interface ChatApi {
     backendModel?: string | null
     backendAgentPageId?: string | null
   }): Promise<ChatSession>
-  /**
-   * Sprint 19 PR-1d.2 — reply to a ConfirmToolDialog. The harness is
-   * blocked on a per-toolUseId promise (main-process tools/confirmation.ts)
-   * waiting for this. `approved=false` → tool result is 'canceled' (LLM
-   * sees a structured "user declined"). `editedInput` is only used when
-   * the dialog tier is 'edit' and the user changed the LLM proposal.
-   * Returns `{ ok: false, code: 'E_NOT_PENDING' }` for late clicks after
-   * the session aborted.
-   */
-  confirmTool(
-    toolUseId: string,
-    approved: boolean,
-    editedInput?: unknown
-  ): Promise<{ ok: true } | { ok: false; code: string; message: string }>
   /**
    * Sprint 19 P1-C — explicit "save this assistant turn to KOS" action.
    * Renderer wires a [✨ 保存到 KOS] button per assistant bubble; click
@@ -1707,29 +1535,6 @@ export interface ChatApi {
    * harness involvement). Backed by `listToolCallsForMessage` in chat_db.ts.
    */
   listToolCalls(messageId: number): Promise<ChatToolCall[]>
-  /** Subscribe to backend stream events. Returns an unsubscribe function. */
-  onStream(handler: (envelope: ChatStreamEnvelope) => void): () => void
-  /**
-   * F2 — headless agentic 搜索：一句自然语言 → 跑一次性 search agent（复用 chat
-   * harness 跑 tool_use loop，工具集 [email_search_fulltext, present_results]），
-   * **不进 chat 会话、不落 chat 库**。agent 末步调 present_results 声明命中 +
-   * 摘要；wrapper 用「候选池 ∩ matched_internal_ids」得到真实带 snippet 的
-   * SearchHit（防幻觉编造 id）。永不 throw —— 失败以 {ok:false, error} 返回
-   * （E_NO_LLM_KEY / E_TIMEOUT / E_QUOTA / E_NO_OUTPUT / E_AGENT）；agent 无有效
-   * 输出时附 fallbackDsl（nlToDsl 兜底，前端填回输入框走普通搜索）。远程 web
-   * （HttpApi）不支持（LLM key 在桌面）→ E_UNSUPPORTED。
-   */
-  runSearchAgent(input: SearchAgentInput): Promise<SearchAgentResult>
-  /**
-   * P3 — drop the cached chat engine + /chat/config snapshot so the NEXT
-   * chat.start() rebuilds the engine fresh. Call after a Skill toggle or a
-   * Standing Context doc edit so the next turn's system prompt + tool catalog
-   * reflect the change (the engine is built once and memoizes the config
-   * snapshot + skill enablement; without this, edits are invisible until
-   * reload). Cheap + idempotent; in-flight streams are unaffected (they keep
-   * their engine).
-   */
-  invalidateConfig(): void
   /**
    * P3 / PR5 — list Skills for the Settings "Skills" panel. Now reads the RESOLVED
    * list from the backend (GET /api/agent/skills): manifest skills (builtin +
@@ -1740,9 +1545,9 @@ export interface ChatApi {
   /**
    * PR5 — enable/disable a skill (POST /api/agent/skills/{name}/enabled). Persists
    * to the backend agent_config.db (replaces the old per-surface localStorage toggle).
-   * Caller should invalidateConfig() afterward so the next turn's tool catalog +
-   * skill fragments reflect the change. Throws `Error & { code }` on failure
-   * (E_NOT_FOUND for an unknown skill, E_INVALID_ARG for a bad arg).
+   * The gateway re-reads /chat/config on a 15s TTL, so the toggle reaches the next
+   * turn's tool catalog without client-side invalidation. Throws `Error & { code }`
+   * on failure (E_NOT_FOUND for an unknown skill, E_INVALID_ARG for a bad arg).
    */
   setSkillEnabled(name: string, enabled: boolean): Promise<void>
   /**
@@ -1865,8 +1670,9 @@ export interface ChatApi {
 
 // ---- F2 — agentic 搜索（runSearchAgent）契约 ------------------------------
 //
-// 与 shared/chat/search_agent.ts 同形（types.ts 是 ChatApi 的契约面，re-export
-// 这两个类型 + phase 给消费方）。SSoT 实现在 search_agent.ts。
+// S3 后实现 = gateway headless run：renderer 客户端 @shared/assistant/searchAgentClient
+// （runGatewaySearchAgent）→ gateway /api/ai/search-agent（ai-gateway/searchAgentRun.ts）。
+// types.ts 只承载这两个契约类型 + phase 给消费方。
 
 export type SearchAgentPhase = 'searching' | 'summarizing'
 

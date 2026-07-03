@@ -3,7 +3,7 @@
 // 主路径 (MAILAGENT_BACKEND==='davmail', 生产默认): 转发本机 serve-api
 // `POST /email/draft`，传纯回复正文 + quoteOriginal、不传 to/cc → 服务端按原邮件
 // 推导 **reply-all** 收件人 + 在正文下方拼引用原文，davmail IMAP APPEND 写进 Drafts。
-// 与 chat `email_draft_reply` 工具同契约 (见 shared/chat/http_platform.ts)。
+// 与 chat `email_draft_reply` 工具同契约 (gateway ai-gateway/tools/write.ts)。
 //
 // Emergency fallback (MAILAGENT_BACKEND==='applescript'): `createDraftViaAppleScript`
 // 经 `scripts/create_reply_draft.sh` 在 Mail.app 里开 reply-all 草稿并 clipboard

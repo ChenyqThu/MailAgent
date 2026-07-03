@@ -11,7 +11,7 @@
 // text-aux — that's what the user flagged as "ctx 样式也没遵循". Removed.
 //
 // chat-panel P4 Phase 06 (context injection) — when a `snapshot` is supplied (the AI SDK path with
-// MAILAGENT_AI_SDK_CONTEXT_INJECTION on), the chips render from the SAME AgentContextSnapshot the
+// context injection always on since S3), the chips render from the SAME AgentContextSnapshot the
 // gateway was sent (context-injection.md §8: display == what the model actually saw — email #, thread,
 // sender, body included/truncated, references, attachments, Notion sync, injection warnings). Absent
 // (legacy / flag-off) → the original three-count props render unchanged, byte-identical.

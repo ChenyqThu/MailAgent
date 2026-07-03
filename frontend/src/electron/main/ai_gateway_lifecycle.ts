@@ -15,8 +15,8 @@
 //      extracted legacy content), via chat_db.ts (better-sqlite3, main-only).
 //   3. lifecycle — start on a resolved port, /health poll, close on app quit.
 //
-// flag-gated by MAILAGENT_AI_SDK_GATEWAY (index.ts dynamic-imports this module only
-// when the flag is 'true'), so flag-off the heavy `ai` deps never load.
+// S3 — the gateway starts unconditionally (the ONLY chat engine); index.ts still
+// dynamic-imports this module so the heavy `ai` deps stay in a lazy chunk.
 
 import { app } from 'electron'
 
@@ -48,11 +48,20 @@ import { getLlmApiKey, getLlmBaseUrl, getLlmModel } from './llm_settings'
 import { resolveApiPort } from './backend_lifecycle'
 import { getLocalApiToken } from './local_token'
 import { deriveExecRule, ExecRuleDeriveError } from './exec_policy_matcher'
-// Phase 06 (context injection) — the standing-context provider fetches the SAME serve-api
-// /chat/config the legacy runtime uses, projecting the system-prompt fields for the gateway.
+// Phase 06 (context injection) — the standing-context provider fetches the serve-api
+// /chat/config, projecting the system-prompt fields for the gateway.
 import { request } from '@shared/api/http_client'
-import type { HttpPlatformConfig } from '@shared/chat/http_platform'
 import type { GatewaySystemPromptConfig } from '../../ai-gateway/systemPrompt'
+
+/** The /chat/config response fields the gateway projects into GatewaySystemPromptConfig
+ *  (was typed via the legacy HttpPlatformConfig until S3 deleted the legacy engine). */
+interface ChatConfigResponse {
+  standingContext?: string | null
+  userContext?: string | null
+  memorySummary?: string | null
+  kosConfigured?: boolean
+  advertisedSkills?: string[] | null
+}
 
 let _handle: AiGatewayHandle | null = null
 
@@ -164,7 +173,7 @@ function persistTurn(turn: PersistTurnInput): void {
       ...(tc.approvalStatus !== undefined ? { approvalStatus: tc.approvalStatus } : {}),
       ...(tc.approvalHash !== undefined ? { approvalHash: tc.approvalHash } : {}),
       // Phase 04a — the A2UI render payload the rich card showed (ui_payload_json audit).
-      // Present only when MAILAGENT_A2UI_TOOL_CARDS is on AND the tool has a card.
+      // Present when the tool has a registered card (rich cards always on since S3).
       ...(tc.uiPayloadJson !== undefined ? { uiPayloadJson: tc.uiPayloadJson } : {}),
       // Phase 04b — outbound-send content hash + idempotency key (email_prepare_send only).
       ...(tc.contentHash !== undefined ? { contentHash: tc.contentHash } : {}),
@@ -212,7 +221,7 @@ async function getSystemPromptConfig(
   }
   let value: GatewaySystemPromptConfig | null = null
   try {
-    const cfg = await request<HttpPlatformConfig>(apiBase, 'GET', '/chat/config', {
+    const cfg = await request<ChatConfigResponse>(apiBase, 'GET', '/chat/config', {
       headers: localToken ? { 'X-MailAgent-Local-Token': localToken } : {}
     })
     value = {

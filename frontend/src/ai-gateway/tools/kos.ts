@@ -8,8 +8,8 @@
 
 import type { Tool } from 'ai'
 
-// RELATIVE import (not @shared) — pure-Node poc harness (tsx) compatibility; see email.ts.
-import { rerankByRecency, type QueryHit } from '../../shared/chat/tools/builtin/kos_rerank'
+// rerankByRecency moved into the gateway in S3 when the legacy engine was deleted.
+import { rerankByRecency, type QueryHit } from './kos_rerank'
 
 import type { MailAgentDomainClient } from '../python/domainClient'
 import { auditedReadTool, type GatewayToolAuditCollector } from './types'

@@ -122,7 +122,7 @@ import type {
   UpdaterApi,
   UpdaterStatus
 } from './types'
-import { createChatRuntime } from '../chat/runtime'
+import { createChatRuntime } from './chat_api'
 import { HttpApi } from './HttpApi'
 import { request } from './http_client'
 
@@ -602,13 +602,10 @@ class ElectronAiApi implements AiApi {
   }
 }
 
-// V2.1 3c-3 cutover — ElectronApi.chat 不再走 IPC (`chat:*` → main dispatcher)，
-// 改为在 renderer 进程内跑 shared `createChatRuntime`（dispatcher + HttpChatPlatform
-// + 进程内 emitter sink），经 loopback serve-api fetch（token + CORS 由 main
-// `chat_local_bridge` 的 webRequest 透明注入）。旧 `ElectronChatApi`（IPC 封装）+
-// `ChatStartEnvelope`（IPC 丢 Error.code 才需的 envelope）随之删除 —— runtime 同进程
-// 直 throw `Error & {code}`，无 IPC 边界，不需 envelope 解包。main 侧 `chat:*` IPC
-// handler 暂留为 dead code（3c-4 cutover 整体删 main 直跑路径）。
+// V2.1 3c-3 / S3 — ElectronApi.chat = shared `createChatRuntime`（serve-api 直
+// fetch 薄传输面，S3 删 legacy 引擎后 chat turn 全跑 embedded AI SDK Gateway），
+// 经 loopback serve-api fetch（token + CORS 由 main `chat_local_bridge` 的
+// webRequest 透明注入）。runtime 同进程直 throw `Error & {code}`，无 IPC 边界。
 
 /** renderer 内 ChatRuntime 的 loopback serve-api baseUrl。host 恒 127.0.0.1
  *  (loopback)；端口由 main `createWindow` 经 `?apiPort=N` 注入（`resolveApiPort()`
@@ -626,15 +623,12 @@ function loopbackChatBaseUrl(): string {
   return `http://127.0.0.1:${port}/api`
 }
 
-/** ElectronApi.chat 的进程内 ChatRuntime（V2.1 3c-3）。`reads = new HttpApi(loopback)`
- *  仅供 `HttpChatPlatform` 的工具读（email/attachment）；该 HttpApi 的 lazy `.chat`
- *  getter 永不构造（破循环，见 HttpApi.chat 注释）。`openPopout` 是 Electron
- *  BrowserWindow 能力（shared runtime 里是 no-op）→ 这里 override 回 main 的
- *  `window:openChatPopout` IPC（runtime 透明，web 无此第二窗口场景）。 */
+/** ElectronApi.chat 的进程内 ChatRuntime（V2.1 3c-3 / S3 直 fetch 面）。`openPopout`
+ *  是 Electron BrowserWindow 能力（shared runtime 里是 no-op）→ 这里 override 回
+ *  main 的 `window:openChatPopout` IPC（runtime 透明，web 无此第二窗口场景）。 */
 function createElectronChatRuntime(): ChatApi {
   const baseUrl = loopbackChatBaseUrl()
-  // F2 — 桌面启用 headless agentic 搜索（runSearchAgent）：LLM key + serve-api 都在本机。
-  const runtime = createChatRuntime({ reads: new HttpApi(baseUrl), baseUrl, searchAgent: true })
+  const runtime = createChatRuntime({ baseUrl })
   return {
     ...runtime,
     openPopout(emailId: number): void {

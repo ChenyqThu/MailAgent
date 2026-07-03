@@ -8,8 +8,11 @@
 //   ① boot → Inbox three-pane shell, no NotFound  (defends e34b83c)
 //   ② email.listEnriched IPC returns rows         (defends 23f3bc8 ABI fix)
 //   ③ ⌘K command palette opens                    (Sprint 7 keymap)
-//   ④ ⌘L AI Chat panel target visible
-//   ⑤ Locale switch zh-CN → en-US flips QuickActions chip text
+//   ④⑤ RETIRED in S3 (07-02): the ⌘L sidebar AIChatPanel + its QuickActions chips
+//      were deleted with the legacy chat UI (the email AI surface is now the ⌘J
+//      AssistantChatModal). Re-writing these smokes against the modal (open via ⌘J,
+//      locale flip inside AgentConversation) is a W5 follow-up — manual lane, needs a
+//      packaged .app run to author against the real DOM.
 //   ⑥ Settings → 灵动岛 testConnection → connected (Sprint 10 §2.5.4-D)
 
 import { test, expect, type Page } from '@playwright/test'
@@ -67,59 +70,6 @@ test('③ ⌘K opens command palette', async () => {
   await expect(dialog).toBeVisible({ timeout: 5_000 })
   await win.keyboard.press('Escape')
   await expect(dialog).not.toBeVisible({ timeout: 5_000 })
-})
-
-test('④ ⌘L toggles AI Chat panel visibility', async () => {
-  // Sprint 10 user-acceptance — AIChatPanel is no longer always-mounted.
-  // ⌘L (and the toolbar Bot button) toggle visibility; default is hidden
-  // so EmailDetail gets the full right pane.
-  await expect(win.locator('[aria-label="email-list"]')).toBeVisible({ timeout: 20_000 })
-  const panel = win.locator('aside[aria-label="ai-chat-panel"]')
-  // Hidden by default
-  await expect(panel).toHaveCount(0)
-  // Toggle on
-  await win.keyboard.press('Meta+L')
-  await expect(panel).toBeVisible({ timeout: 5_000 })
-  // Toggle off
-  await win.keyboard.press('Meta+L')
-  await expect(panel).toHaveCount(0, { timeout: 5_000 })
-})
-
-test('⑤ locale switch flips QuickActions chip from "总结" to "Summarize"', async () => {
-  // Defends Sprint 10 (d) i18n polish — `chat.quickActions.summarize` and
-  // `chat.quickActions.summarizePrompt` must both be wired to i18n keys so
-  // EN users get an English chip label AND an English prompt body.
-  await expect(win.locator('[aria-label="email-list"]')).toBeVisible({ timeout: 20_000 })
-
-  // Sprint 10 user-acceptance — QuickActions live inside AIChatPanel which
-  // is now hidden by default. Open the panel via ⌘L before asserting on
-  // chip text.
-  await win.keyboard.press('Meta+L')
-  await win
-    .locator('aside[aria-label="ai-chat-panel"]')
-    .waitFor({ state: 'visible', timeout: 5_000 })
-
-  // Baseline zh-CN: chip text is "总结".
-  await expect(win.locator('button:has-text("总结")').first()).toBeVisible({ timeout: 5_000 })
-
-  // Switch to EN and re-init the renderer.
-  await setLocale(win, 'en-US')
-  await expect(win.locator('[aria-label="email-list"]')).toBeVisible({ timeout: 20_000 })
-
-  // Re-open the panel (reload reset zustand state).
-  await win.keyboard.press('Meta+L')
-  await win
-    .locator('aside[aria-label="ai-chat-panel"]')
-    .waitFor({ state: 'visible', timeout: 5_000 })
-
-  // After switch: EN chip must appear, zh chip must be gone.
-  await expect(win.locator('button:has-text("Summarize")').first()).toBeVisible({
-    timeout: 8_000
-  })
-  await expect(win.locator('button:has-text("总结")')).toHaveCount(0, { timeout: 5_000 })
-
-  // Restore zh-CN so subsequent specs start clean.
-  await setLocale(win, 'zh-CN')
 })
 
 test('⑥ Settings → Island testConnection → connected (ping-island live)', async () => {

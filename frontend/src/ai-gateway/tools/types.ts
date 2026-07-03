@@ -78,7 +78,7 @@ export interface GatewayToolAuditEntry {
   /** Phase 03b — the user-edited input (edit-tier writes only); null otherwise. */
   userEditedInputJson?: string | null
   /** Phase 04a — the A2UI render payload (JSON) the rich card showed for this tool, stamped
-   *  for audit into chat_tool_call.ui_payload_json. Only present when MAILAGENT_A2UI_TOOL_CARDS
+   *  for audit into chat_tool_call.ui_payload_json. Only present when a2uiEnabled
    *  is on AND the tool has a registered card; null/omitted otherwise. NOT part of the
    *  model-visible tool result (UI/audit only — keeps 03b parity + no model noise). */
   uiPayloadJson?: string | null
@@ -224,7 +224,7 @@ export function auditedWriteTool<I>(
      *  only these (identity fields pinned). Omitted → not editable. */
     editableFields?: readonly string[]
     /** Phase 04a — stamp the A2UI render payload into the audit row (ui_payload_json) when
-     *  MAILAGENT_A2UI_TOOL_CARDS is on. UI/audit only — never enters the model result. */
+     *  a2uiEnabled is on (always since S3). UI/audit only — never enters the model result. */
     a2uiEnabled?: boolean
     /** Auto-approval mode (body.approvalMode, default 'always'). When 'auto-reversible' a
      *  preview-tier (reversible) write skips the approval card and executes in the SAME call;

@@ -1,6 +1,6 @@
 // chat-panel P4 Phase 02 — AI SDK runtime adapter (assistant-ui × embedded Gateway).
 //
-// The Phase 02 counterpart to useLegacyExternalStoreRuntime: instead of bridging
+// Phase 02 — the AI SDK runtime hook: instead of bridging
 // the legacy useEmailChat state, it hands assistant-ui an AI SDK `useChatRuntime`
 // whose transport POSTs to the embedded Gateway's /api/ai/chat. The Gateway runs
 // `streamText` and pipes an AI SDK UIMessage stream back, which useChatRuntime

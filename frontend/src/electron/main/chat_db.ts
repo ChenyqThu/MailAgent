@@ -28,10 +28,10 @@ import { dirname, join } from 'path'
 import { resolveDataRoot } from './db'
 
 // ── types ───────────────────────────────────────────────────────────────
-// V2.1 阶段 3：数据模型类型下沉到 shared/chat/model.ts（B-pure-unified —
-// harness 在 UI 进程跑需要这些类型但不能引 better-sqlite3）。下方 import 供
-// 本文件函数签名使用；re-export 保既有 importer（dispatcher / harness /
-// kos_save / registry / handlers/chat）的 `from '../chat_db'` 路径不变。
+// V2.1 阶段 3 / S3：数据模型类型在 shared/chat_model.ts（renderer 读面 +
+// 本文件签名共用，不能引 better-sqlite3；S3 删 legacy 引擎时从 shared/chat/
+// model.ts 原样迁出）。下方 import 供本文件函数签名使用；re-export 保既有
+// importer 的 `from '../chat_db'` 路径不变。
 import type {
   AnchorType,
   AppendMessageInput,
@@ -48,7 +48,7 @@ import type {
   ToolCallStatus,
   UpdateMessagePatch,
   UpdateToolCallPatch
-} from '@shared/chat/model'
+} from '@shared/chat_model'
 
 export type {
   AnchorType,
@@ -98,7 +98,7 @@ export type {
 // 🔴 bump 同步刷 src/chat/db.py 头注释 + test_chat.py seed DDL；NOT backend_lifecycle.EXPECTED_DB_VERSION.
 // v11 (P4 Phase 04a, task 06-23 chat-panel A2UI tool cards) — chat_tool_call.ui_payload_json:
 // the A2UI render payload (protocol-contracts §3) the rich tool card showed for this write
-// (component + props + audit). Stamped only when MAILAGENT_A2UI_TOOL_CARDS is on AND the tool
+// (component + props + audit). Stamped when the tool
 // has a registered card; NULL for read tools / legacy rows / flag-off writes (additive ALTER
 // default). UI/audit only — never enters the model-visible tool result (keeps 03b parity).
 // Plain additive ALTER, hasColumn idempotency guard (same discipline as v5/v6/v8/v9/v10).
@@ -763,7 +763,7 @@ function migrate(db: Database.Database): void {
   // v10 → v11 — task 06-23 (chat-panel P4 Phase 04a) A2UI tool cards. Add
   // chat_tool_call.ui_payload_json: the A2UI render payload (component + props + audit) the
   // rich tool card showed for an AI SDK Gateway write tool. Stamped only when
-  // MAILAGENT_A2UI_TOOL_CARDS is on; NULL for read tools / legacy rows / flag-off writes
+  // a card is registered (rich cards always on since S3); NULL for read tools / legacy rows
   // (additive ALTER default). UI/audit only. Plain additive ALTER, same hasColumn idempotency
   // guard as v5/v6/v8/v9/v10. ai_chat.db has its own version ladder; this bump does NOT touch
   // backend_lifecycle.EXPECTED_DB_VERSION.

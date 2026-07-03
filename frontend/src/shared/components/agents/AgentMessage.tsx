@@ -56,7 +56,7 @@ export function AgentUserMessage(): React.JSX.Element {
 }
 
 export function AgentAssistantMessage(): React.JSX.Element {
-  // flag-aware part components (generic ToolTraceCard always; A2UI by_name when MAILAGENT_A2UI_TOOL_CARDS
+  // part components (generic ToolTraceCard fallback; A2UI by_name rich cards always on since S3
   // is on) + a working-indicator Empty slot. Memoized once per mount so the reference stays stable.
   const partComponents = useMemo(
     () => ({ ...getAssistantPartComponents(), Empty: AgentWorkingIndicator }),

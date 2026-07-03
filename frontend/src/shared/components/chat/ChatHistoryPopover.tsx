@@ -32,7 +32,7 @@ interface ChatHistoryPopoverProps {
   /** Which agent the panel is currently on — drives the header label so the
    *  popover reads "Custom AI · Recent" vs "Notion Agent · Recent". */
   backendKind: ChatBackendKind
-  /** Already scoped to `backendKind` by AIChatPanel (useEmailChat). */
+  /** Already scoped to `backendKind` by the caller (AiChatPanel session reads). */
   sessions: ReadonlyArray<ChatSession>
   activeSessionId: number | null
   /** First user-message preview per session, lazy-loaded by AIChatPanel.
