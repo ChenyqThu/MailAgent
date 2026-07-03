@@ -2259,6 +2259,12 @@
       "tooltip": "Switch language (⌥G)",
       "aria": "Switch language"
     },
+    "update": {
+      "available": "New version v{version} available · click to download",
+      "downloading": "Downloading update · {percent}%",
+      "downloaded": "Version v{version} ready · click to install",
+      "error": "Update download failed · click to retry"
+    },
     "alerts": {
       "kicker": "System Health",
       "title": "System Alerts",

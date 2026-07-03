@@ -62,9 +62,7 @@ describe('settings.sanitize', () => {
   })
 
   test('coerces wrong-type pollIntervalSec to dropped', () => {
-    expect(
-      __testing.sanitize({ pollIntervalSec: '5' as unknown as 5 } as never)
-    ).toEqual({})
+    expect(__testing.sanitize({ pollIntervalSec: '5' as unknown as 5 } as never)).toEqual({})
   })
 
   test('null preserves notion fields (the "clear binding" path)', () => {
@@ -78,6 +76,13 @@ describe('settings.sanitize', () => {
     expect(__testing.DEFAULTS.pollIntervalSec).toBe(5)
     expect(__testing.DEFAULTS.dbPath).toBeNull()
     expect(__testing.DEFAULTS.attachmentDir).toBeNull()
+  })
+
+  test('DEFAULTS autoDownloadUpdates=false (07-04 manual-download default)', () => {
+    // Detect → surface the TitleBar download icon → download only on click.
+    // A user who never touched the toggle gets false; an explicit persisted
+    // value is still preserved by sanitize/merge (see http_api_config fixture).
+    expect(__testing.DEFAULTS.autoDownloadUpdates).toBe(false)
   })
 })
 

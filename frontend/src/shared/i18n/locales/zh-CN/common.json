@@ -2259,6 +2259,12 @@
       "tooltip": "切换语言 (⌥G)",
       "aria": "切换语言"
     },
+    "update": {
+      "available": "发现新版本 v{version} · 点击下载",
+      "downloading": "正在下载更新 · {percent}%",
+      "downloaded": "新版本 v{version} 已就绪 · 点击安装",
+      "error": "更新下载失败 · 点击重试"
+    },
     "alerts": {
       "kicker": "系统健康",
       "title": "系统告警",

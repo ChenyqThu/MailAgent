@@ -61,9 +61,11 @@ export interface PersistentSettings {
   /** Custom-API base URL — the key lives in keytar (custom-api-key). */
   customApiEndpoint: string | null
   /** feat/auto-update — when the master AUTO_UPDATE_ENABLED flag is on,
-   *  auto-download an available update without a manual click. Default TRUE
-   *  (Q2 locked); the IslandUpdatesTab exposes a toggle to turn it off.
-   *  Read LIVE by handlers/updater.ts at update-available time (never cached). */
+   *  auto-download an available update without a manual click. Default FALSE
+   *  (07-04 update-indicator: detect → surface the TitleBar download icon →
+   *  download only on click); the IslandUpdatesTab exposes a toggle to opt
+   *  back into auto-download. Read LIVE by handlers/updater.ts at
+   *  update-available time (never cached). */
   autoDownloadUpdates: boolean
   /** Sprint 11 V1.4 — owner's email address, surfaced in the nav-shell
    *  account header. Sourced from the repo-root `.env` USER_EMAIL key at
@@ -81,7 +83,7 @@ const DEFAULTS: PersistentSettings = {
   notionAgentPageId: null,
   notionAgentName: null,
   customApiEndpoint: null,
-  autoDownloadUpdates: true,
+  autoDownloadUpdates: false,
   userEmail: null,
   signature: null
 }
