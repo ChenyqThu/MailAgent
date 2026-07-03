@@ -40,12 +40,7 @@ import { buildAttachmentBlock, type ChatAttachment } from '@shared/lib/chat-atta
 import { useApprovalMode } from '@shared/lib/approvalMode'
 
 import { AiSdkRuntimeProvider } from './runtime/AiSdkRuntimeProvider'
-import {
-  getChatRuntimeMode,
-  isAiSdkContextInjectionEnabled,
-  isAiSdkGatewayEnabled,
-  resolveAiGatewayBaseUrl
-} from './runtime/flags'
+import { resolveAiGatewayBaseUrl } from './runtime/flags'
 import { AssistantThread } from './components/thread'
 import {
   ChatComposerControlsProvider,
@@ -112,12 +107,12 @@ export function AIChatPanel({
 
   const [model] = useState(() => readModelPref())
 
-  // The embedded AI SDK Gateway path is live when its loopback port was discovered
-  // (?aiGatewayPort= / same-origin web proxy). resolveAiGatewayBaseUrl reads
-  // window.location.search once; the flags are build-time constants.
+  // The embedded AI SDK Gateway path is live when its base URL was discovered
+  // (?aiGatewayPort= loopback / same-origin web proxy). resolveAiGatewayBaseUrl
+  // reads window.location.search once. S3 — the flag gates are gone: reachable
+  // base URL is the only condition (no other engine exists).
   const gatewayBaseUrl = useMemo(() => resolveAiGatewayBaseUrl(), [])
-  const aiSdkEnabled =
-    getChatRuntimeMode() === 'ai-sdk' && isAiSdkGatewayEnabled() && gatewayBaseUrl !== null
+  const aiSdkEnabled = gatewayBaseUrl !== null
 
   // S3 W2 — new conversations are ALWAYS 'ai-sdk' (the only engine). The backend
   // stays stateful only for the D6 read-only re-scope: opening an OLD legacy
@@ -258,9 +253,10 @@ export function AIChatPanel({
     ]
   )
 
-  // Context injection (flag-gated) — build + send the typed AgentContextSnapshot,
-  // read ContextChips from it, and seed prior-session messages (reload).
-  const contextInjectionOn = !isLegacySession && aiSdkEnabled && isAiSdkContextInjectionEnabled()
+  // Context injection — build + send the typed AgentContextSnapshot, read
+  // ContextChips from it, and seed prior-session messages (reload). S3 — always
+  // on for live ai-sdk sessions (the CONTEXT_INJECTION flag was GA'd away).
+  const contextInjectionOn = !isLegacySession && aiSdkEnabled
   const contextScope = useMemo<ContextScope>(
     () => ({
       surface: 'email-chat',
@@ -378,7 +374,7 @@ export function AIChatPanel({
       if (body.status !== 'ok') throw new Error('ai-gateway unhealthy')
       return body
     },
-    enabled: gatewayBaseUrl !== null && getChatRuntimeMode() === 'ai-sdk',
+    enabled: gatewayBaseUrl !== null,
     retry: 1,
     staleTime: Infinity,
     refetchOnWindowFocus: false

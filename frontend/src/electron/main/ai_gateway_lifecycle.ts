@@ -53,7 +53,6 @@ import { deriveExecRule, ExecRuleDeriveError } from './exec_policy_matcher'
 import { request } from '@shared/api/http_client'
 import type { HttpPlatformConfig } from '@shared/chat/http_platform'
 import type { GatewaySystemPromptConfig } from '../../ai-gateway/systemPrompt'
-import { masterNewSessionDefaultOn } from './ai_gateway_flags'
 
 let _handle: AiGatewayHandle | null = null
 
@@ -274,37 +273,27 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
   // Set after the server listens (chicken-and-egg: the announce needs the gateway's own port, known
   // only post-listen; a paused approval fires well after startup so this is populated by then).
   let gatewayPort = 0
-  // Phase 04a — MAILAGENT_A2UI_TOOL_CARDS gates the rich tool cards. Backend side it (a) stamps
-  // the A2UI render payload into the write-tool audit (ui_payload_json) and (b) is the toggle
-  // the renderer mirrors (per-flag vite define) to mount the cards. Off → byte-identical to 03b.
-  // Phase 06a — DEFAULT now follows the NEW_SESSION_DEFAULT master (mirrors the renderer's
-  // isA2uiToolCardsEnabled) so the cutover ships the rich cards by default; an explicit env wins.
-  const a2uiEnabled = envBool('MAILAGENT_A2UI_TOOL_CARDS', masterNewSessionDefaultOn())
+  // S3 — the A2UI rich tool cards are always on (MAILAGENT_A2UI_TOOL_CARDS GA'd away):
+  // backend side stamps the A2UI render payload into the write-tool audit (ui_payload_json);
+  // the renderer mounts the cards unconditionally (registerToolUIs).
+  const a2uiEnabled = true
   // Phase 04b — MAILAGENT_AI_SDK_SEND_TOOL gates the high-risk email_prepare_send tool. The HMAC
   // signing secret for its approval token is the per-session local API token (getLocalApiToken),
-  // which the Python serve-api also knows (env MAILAGENT_LOCAL_API_TOKEN) → no new key. Off
-  // (default) → no send tool, byte-identical to 04a. Must be on together with the gateway +
-  // write tools to take effect (buildGatewayTools only adds it under writeToolsEnabled).
-  // Phase 06a — DEFAULT follows the master too (cutover ships the send tool, behind its double
-  // guard + human approval); an explicit MAILAGENT_AI_SDK_SEND_TOOL still wins (independent rollback).
-  const sendToolEnabled = envBool('MAILAGENT_AI_SDK_SEND_TOOL', masterNewSessionDefaultOn())
+  // which the Python serve-api also knows (env MAILAGENT_LOCAL_API_TOKEN) → no new key. Must be
+  // on together with write tools to take effect (buildGatewayTools only adds it under
+  // writeToolsEnabled). S3 — kept as an env-only KILL-SWITCH, default literal true (the cutover
+  // master it used to follow was GA'd away); an explicit env false is the independent shutdown
+  // for the real-SMTP surface (complements, never replaces, the blocking approval).
+  const sendToolEnabled = envBool('MAILAGENT_AI_SDK_SEND_TOOL', true)
   // Phase 05 — MAILAGENT_AG_UI_MIRROR gates the AG-UI interop mirror endpoint (POST /api/ai/agui/
   // chat). Off (default) → the route is not registered, byte-identical to 04b. It is a pure旁路: it
   // reuses the SAME streamText + tools + double-guard approval as /api/ai/chat (no new write path),
   // only re-encoding the output as an AG-UI event stream. It does NOT affect the AI SDK runtime.
   const aguiMirrorEnabled = envBool('MAILAGENT_AG_UI_MIRROR', false)
-  // Phase 06 — MAILAGENT_AI_SDK_CONTEXT_INJECTION gates the standing-context system prompt + the
-  // renderer sending the typed AgentContextSnapshot + session reload. On → the gateway assembles the
-  // system from /chat/config + the snapshot (reusing the legacy stable prefix via the provider); off
-  // → body.system passthrough, byte-identical to 04b/05. Independent one-flag rollback.
-  // Phase 06a — the DEFAULT now follows the NEW_SESSION_DEFAULT master so the cutover ships
-  // standing-context parity (the renderer's isAiSdkContextInjectionEnabled mirrors the same master);
-  // an explicit env still wins. (When the gateway is started via an explicit MAILAGENT_AI_SDK_GATEWAY
-  // =true dogfood with master off, this stays off unless the injection flag is set — old per-flag UX.)
-  const contextInjectionEnabled = envBool(
-    'MAILAGENT_AI_SDK_CONTEXT_INJECTION',
-    masterNewSessionDefaultOn()
-  )
+  // S3 — standing-context injection is always on (MAILAGENT_AI_SDK_CONTEXT_INJECTION GA'd
+  // away): the gateway assembles the system prompt from /chat/config + the renderer snapshot
+  // via the provider below. The provider never throws (returns null → context-light) so a
+  // /chat/config blip can't break a turn.
   // M4a — MAILAGENT_SKILL_SELF_MOUNT (default ON since the 2026-07-02 cutover; an explicit env
   // false is the emergency rollback — NOT master-following) gates the gateway's skill→tool filter:
   // the per-request buildTools factory drops a disabled skill's read tools by consulting
@@ -518,12 +507,10 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     // (approvalGuard.peek — never mutates / consumes) and only surfaces what a client needs to render
     // the interrupt card (risk / reason / expiry + optional A2UI). NO token / secret leaves main.
     aguiMirrorEnabled,
-    // Phase 06 — inject the standing-context provider ONLY when the flag is on. Off → omitted →
-    // prepareChatRun uses body.system (byte-identical to 05). The provider never throws (returns
-    // null → context-light) so a /chat/config blip can't break a turn.
-    systemPromptProvider: contextInjectionEnabled
-      ? () => getSystemPromptConfig(apiBase, getLocalApiToken())
-      : undefined,
+    // S3 — the standing-context provider is always injected (CONTEXT_INJECTION GA'd away).
+    // The provider never throws (returns null → context-light) so a /chat/config blip can't
+    // break a turn.
+    systemPromptProvider: () => getSystemPromptConfig(apiBase, getLocalApiToken()),
     resolveApprovalRequest: aguiMirrorEnabled
       ? (info) => {
           const rec = approvalGuard.peek(info.toolCallId)
@@ -547,9 +534,9 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
         }
       : undefined,
     // Factory: the gateway builds the tools per request bound to a fresh audit collector
-    // (closure). Read tools always; the five approval-gated write tools only when
-    // MAILAGENT_AI_SDK_WRITE_TOOLS is on (Phase 06a: default follows the cutover master; vitest /
-    // no-define → off → byte-identical to 03a read-only). `approvalMode` (PART 2) comes from the
+    // (closure). Read tools always; the five approval-gated write tools under
+    // MAILAGENT_AI_SDK_WRITE_TOOLS — S3: an env-only KILL-SWITCH, default literal true (the
+    // cutover master it used to follow was GA'd away). `approvalMode` (PART 2) comes from the
     // request body (default 'always'); 'auto-reversible' lets reversible preview writes skip the
     // card. The blocking send always asks regardless (safety floor in auditedSendTool).
     buildTools: (collector, approvalMode, contextMode) =>
@@ -557,7 +544,7 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
         {
           domain,
           kosTimeDecayEnabled: envBool('MAILAGENT_KOS_TIME_DECAY_ENABLED', true),
-          writeToolsEnabled: envBool('MAILAGENT_AI_SDK_WRITE_TOOLS', masterNewSessionDefaultOn()),
+          writeToolsEnabled: envBool('MAILAGENT_AI_SDK_WRITE_TOOLS', true),
           approvalGuard,
           a2uiEnabled,
           // Phase 04b — the send tool needs the approval guard (write tools) + the signing secret
@@ -570,13 +557,10 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
           // body). Absent → buildGatewayTools fail-closes to 'untrusted_trigger'.
           contextMode,
           // M4a — skill→tool gating (MAILAGENT_SKILL_SELF_MOUNT). advertisedSkills from the TTL-cached
-          // /chat/config projection. Refresh path: the systemPromptProvider re-fetches it per-request
-          // ONLY when MAILAGENT_AI_SDK_CONTEXT_INJECTION is on (the post-cutover master default) → a
-          // Settings skill toggle takes effect within the 15s TTL. With context injection OFF, only the
-          // startup prewarm populates the cache → advertisedSkills is frozen at that snapshot and a
-          // toggle needs an app restart (acceptable: SELF_MOUNT is a default-off dogfood flag; gating
-          // still works off the snapshot, range is read-only tools). null (cache empty / Python hiccup)
-          // → fails open. SELF_MOUNT off → applySkillGating never called → ToolSet byte-identical.
+          // /chat/config projection; the systemPromptProvider (always injected post-S3) re-fetches it
+          // per-request → a Settings skill toggle takes effect within the 15s TTL. null (cache empty /
+          // Python hiccup) → fails open. SELF_MOUNT off → applySkillGating never called → ToolSet
+          // byte-identical.
           skillGatingEnabled,
           advertisedSkills: _systemPromptCache?.value?.advertisedSkills ?? null,
           // Part B — make preview/edit writes one-shot when island agent is on, so an island-resumed

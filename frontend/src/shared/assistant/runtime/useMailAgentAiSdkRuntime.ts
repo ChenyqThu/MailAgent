@@ -10,14 +10,14 @@
 // 🔴 The provider key never reaches here — the renderer only knows the loopback
 //    Gateway base URL (from ?aiGatewayPort=); the key lives in main (llm_settings).
 //    This hook is only imported by AiSdkRuntimeProvider, which the panel renders
-//    only when getChatRuntimeMode()==='ai-sdk' AND the Gateway is reachable — so
-//    @assistant-ui/react-ai-sdk loads only on the opt-in AI SDK path.
+//    only when the Gateway base URL is discovered (S3: the runtime flags are gone;
+//    reachability is the only gate).
 //
 // chat-panel P4 Phase 06 (context injection) — the transport body now also carries the typed
 // AgentContextSnapshot + anchor + options.enabledSkills (the gateway assembles the system prompt
 // from them), and the runtime accepts prior-session `initialMessages` for session reload
-// (chatMessageToUIMessage → useChatRuntime({ messages }), architecture §13.8.5). All three are
-// undefined/empty when MAILAGENT_AI_SDK_CONTEXT_INJECTION is off → byte-identical to Phase 02.
+// (chatMessageToUIMessage → useChatRuntime({ messages }), architecture §13.8.5). S3 — context
+// injection is always on (the CONTEXT_INJECTION flag was GA'd away).
 
 import { useMemo, useRef } from 'react'
 import type { AssistantRuntime } from '@assistant-ui/react'

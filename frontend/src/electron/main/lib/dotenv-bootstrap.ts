@@ -1,17 +1,17 @@
 // Sprint 19 — Load 项目根 .env 进 process.env at main-process boot.
 //
 // 背景: env-handler 复用 resolveEnvPath() + parseEnv() 给 SettingsPage UI
-// 读写, 但 main process 启动时不 auto-load 这个 .env. 结果 chat/config.ts
-// 的 readEnvBool('MAILAGENT_AGENT_HARNESS' / 'MAILAGENT_KOS_*') 永远拿
-// undefined → default false → harness path / KOS consumer / L1 hot block
-// 全没生效. PR-2g dogfood checklist §3.1 改根 .env 后 frontend 看不到.
+// 读写, 但 main process 启动时不 auto-load 这个 .env. 结果 main 侧的
+// readEnvBool('MAILAGENT_KOS_*' 等) 永远拿 undefined → default false →
+// KOS consumer / L1 hot block 全没生效. PR-2g dogfood checklist §3.1 改根
+// .env 后 frontend 看不到.
 //
 // 这个 module 在 index.ts import 后立即调一次, 把项目根 .env 注入 process.env.
 //
 // 行为契约:
 //   - process.env[KEY] 已存在 (shell export / OS-level / electron-vite 注入)
 //     时优先保留, 不覆盖. dotenv 业界默认 (override:false), 让 user 能用
-//     `MAILAGENT_AGENT_HARNESS=1 pnpm dev` 临时覆盖.
+//     `MAILAGENT_KOS_CONSUMER_ENABLED=1 pnpm dev` 临时覆盖.
 //   - .env 缺失返回 exists:false 不抛, 跟 env-handler readSnapshot 行为一致.
 //   - parse 错误 swallow + warn — main process 不该因 .env 问题 boot 失败.
 //   - 不打印 secret value 到 log, 只列 key 数量.

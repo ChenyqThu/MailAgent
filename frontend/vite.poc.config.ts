@@ -19,15 +19,8 @@ export default defineConfig({
   resolve: {
     alias: { '@shared': resolve(import.meta.dirname, 'src/shared') }
   },
-  define: {
-    // The cards read isA2uiToolCardsEnabled via flags.ts → __MAILAGENT_A2UI_TOOL_CARDS__;
-    // force it on for the preview (the harness IS the flag-on view).
-    __MAILAGENT_A2UI_TOOL_CARDS__: JSON.stringify('1'),
-    __MAILAGENT_ASSISTANT_UI_PANEL__: JSON.stringify('1'),
-    __MAILAGENT_CHAT_RUNTIME__: JSON.stringify('ai-sdk'),
-    __MAILAGENT_AI_SDK_GATEWAY__: JSON.stringify('1'),
-    __MAILAGENT_AI_SDK_NEW_SESSION_DEFAULT__: JSON.stringify('1')
-  },
+  // S3 (07-02) — the A2UI/runtime flag defines are gone (GA'd away): the rich cards are
+  // always mounted, so the preview harness needs no flag forcing.
   server: { port: 5199, strictPort: true, host: '127.0.0.1' },
   cacheDir: resolve(import.meta.dirname, 'node_modules/.vite-poc')
 })

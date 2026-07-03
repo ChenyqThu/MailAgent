@@ -1,13 +1,12 @@
 // @vitest-environment happy-dom
 //
-// assistant-modal P0 — the MAILAGENT_ASSISTANT_MODAL surface flag + the useAIChatPanel three-mode
-// state (mode / cached dock mode / openChatModal·hideChatModal / pendingAgentSessionId slot). The flag
-// is independent (explicit-wins, default off → byte-identical); the modal state is orthogonal to the
-// legacy `visible`/`toggle` so the old panel never regresses. happy-dom gives a real localStorage.
+// assistant-modal P0 / S3 — the useAIChatPanel three-mode state (mode / cached dock mode /
+// openChatModal·hideChatModal / pendingAgentSessionId slot). The MAILAGENT_ASSISTANT_MODAL
+// surface flag was GA'd and removed in S3 (the modal is the only email-panel shell); the modal
+// state stays orthogonal to the `visible`/`toggle` slot. happy-dom gives a real localStorage.
 
 import { afterEach, describe, expect, test, vi } from 'vitest'
 
-import { isAssistantModalEnabled } from '../../../src/shared/assistant/runtime/flags'
 import {
   useAIChatPanel,
   openChatModal,
@@ -24,20 +23,6 @@ afterEach(() => {
   }
   // Reset the singleton store between tests (zustand persists across the module's lifetime).
   useAIChatPanel.setState({ visible: false, mode: 'floating', pendingAgentSessionId: null })
-})
-
-describe('isAssistantModalEnabled — independent surface flag', () => {
-  test('nothing stubbed → off (flag-off byte-identical)', () => {
-    expect(isAssistantModalEnabled()).toBe(false)
-  })
-  test('MAILAGENT_ASSISTANT_MODAL=1 → on', () => {
-    vi.stubEnv('MAILAGENT_ASSISTANT_MODAL', '1')
-    expect(isAssistantModalEnabled()).toBe(true)
-  })
-  test('MAILAGENT_ASSISTANT_MODAL=0 → off (explicit-wins, not folded into a master)', () => {
-    vi.stubEnv('MAILAGENT_ASSISTANT_MODAL', '0')
-    expect(isAssistantModalEnabled()).toBe(false)
-  })
 })
 
 describe('useAIChatPanel — assistant-modal three-mode state', () => {

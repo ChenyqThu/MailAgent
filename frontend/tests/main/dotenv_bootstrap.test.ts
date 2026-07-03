@@ -34,7 +34,7 @@ NOTION_TOKEN=secret_for_test
 EMAIL_DATABASE_ID=db_test
 FEISHU_NOTIFY_ENABLED=true
 # LLM_AGENT_ENABLED=false
-MAILAGENT_AGENT_HARNESS=true
+MAILAGENT_KOS_INGEST_ENABLED=true
 MAILAGENT_KOS_CONSUMER_ENABLED=true
 `
 
@@ -44,7 +44,7 @@ const PRESERVE_KEYS = [
   'EMAIL_DATABASE_ID',
   'FEISHU_NOTIFY_ENABLED',
   'LLM_AGENT_ENABLED',
-  'MAILAGENT_AGENT_HARNESS',
+  'MAILAGENT_KOS_INGEST_ENABLED',
   'MAILAGENT_KOS_CONSUMER_ENABLED'
 ]
 const originalEnv: Record<string, string | undefined> = {}
@@ -87,7 +87,7 @@ describe('loadDotenvIntoProcessEnv', () => {
     expect(process.env.NOTION_TOKEN).toBe('secret_for_test')
     expect(process.env.EMAIL_DATABASE_ID).toBe('db_test')
     expect(process.env.FEISHU_NOTIFY_ENABLED).toBe('true')
-    expect(process.env.MAILAGENT_AGENT_HARNESS).toBe('true')
+    expect(process.env.MAILAGENT_KOS_INGEST_ENABLED).toBe('true')
     expect(process.env.MAILAGENT_KOS_CONSUMER_ENABLED).toBe('true')
   })
 
@@ -98,10 +98,10 @@ describe('loadDotenvIntoProcessEnv', () => {
 
   test('does NOT overwrite already-set process.env key (export wins)', () => {
     process.env.NOTION_TOKEN = 'exported_wins'
-    process.env.MAILAGENT_AGENT_HARNESS = 'false'
+    process.env.MAILAGENT_KOS_INGEST_ENABLED = 'false'
     const r = loadDotenvIntoProcessEnv()
     expect(process.env.NOTION_TOKEN).toBe('exported_wins')
-    expect(process.env.MAILAGENT_AGENT_HARNESS).toBe('false')
+    expect(process.env.MAILAGENT_KOS_INGEST_ENABLED).toBe('false')
     expect(r.skipped).toBe(2)
     expect(r.loaded).toBe(3)
     expect(r.totalInFile).toBe(5)

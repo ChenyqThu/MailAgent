@@ -63,33 +63,9 @@ export default defineConfig({
   define: {
     // factory.ts reads this to pick HttpApi over ElectronApi.
     'import.meta.env.VITE_BUILD_TARGET': JSON.stringify('web'),
-    // chat-panel P4 Phase 01/02 — assistant-ui shell flags (shared/assistant/runtime/flags.ts).
-    // Per-flag define (NOT envPrefix:['MAILAGENT_']) so only these non-secret
-    // toggles enter the bundle, never MAILAGENT_CLI_API_KEY et al. Default '' = off.
-    __MAILAGENT_ASSISTANT_UI_PANEL__: JSON.stringify(
-      process.env.MAILAGENT_ASSISTANT_UI_PANEL ?? ''
-    ),
-    __MAILAGENT_CHAT_RUNTIME__: JSON.stringify(process.env.MAILAGENT_CHAT_RUNTIME ?? ''),
-    // Phase 02 — renderer mirror of MAILAGENT_AI_SDK_GATEWAY (gates the AI SDK runtime entry).
-    __MAILAGENT_AI_SDK_GATEWAY__: JSON.stringify(process.env.MAILAGENT_AI_SDK_GATEWAY ?? ''),
-    // Phase 04a — renderer mirror of MAILAGENT_A2UI_TOOL_CARDS (gates the rich tool cards).
-    __MAILAGENT_A2UI_TOOL_CARDS__: JSON.stringify(process.env.MAILAGENT_A2UI_TOOL_CARDS ?? ''),
-    // Phase 06 — renderer mirror of MAILAGENT_AI_SDK_CONTEXT_INJECTION (context snapshot + reload).
-    __MAILAGENT_AI_SDK_CONTEXT_INJECTION__: JSON.stringify(
-      process.env.MAILAGENT_AI_SDK_CONTEXT_INJECTION ?? ''
-    ),
-    // Phase 06a (cutover) — MASTER switch. 任务A：web 切 ai-sdk → default '1'（与桌面 electron.vite
-    // 一致）。flags.ts 据此把 runtime=ai-sdk + 级联 gateway / A2UI / context-injection（这些 sub-flag
-    // 仍 unset，跟 master 走）。MAILAGENT_CHAT_RUNTIME=legacy（或本 env=0）一键回滚 legacy。
-    __MAILAGENT_AI_SDK_NEW_SESSION_DEFAULT__: JSON.stringify(
-      process.env.MAILAGENT_AI_SDK_NEW_SESSION_DEFAULT ?? '1'
-    ),
-    // redesign — renderer mirror of MAILAGENT_AGENT_VIEW (gates the interactive MailAgent
-    // general-agent view at /sessions). Independent surface flag; 任务A：web default '1'（同桌面）；env=0 回滚。
-    __MAILAGENT_AGENT_VIEW__: JSON.stringify(process.env.MAILAGENT_AGENT_VIEW ?? '1'),
-    // assistant-modal — renderer mirror of MAILAGENT_ASSISTANT_MODAL (email-body AI panel three-mode
-    // floating modal + FAB). Independent surface flag; 任务A：web default '1'（同桌面）；env=0 回滚。
-    __MAILAGENT_ASSISTANT_MODAL__: JSON.stringify(process.env.MAILAGENT_ASSISTANT_MODAL ?? '1'),
+    // S3 (07-02) — the cutover-era chat flag defines (CHAT_RUNTIME / master / PANEL / GATEWAY /
+    // A2UI / CONTEXT_INJECTION / AGENT_VIEW / ASSISTANT_MODAL) were GA'd and removed: the web
+    // build always runs the ai-sdk runtime through the serve-api ai_gateway_proxy (same-origin '').
     // Workbox guards its dev logger behind `process.env.NODE_ENV`, which is
     // undefined in the browser ServiceWorker global (`process` doesn't exist
     // there) → the SW would throw on load. Define it at build time so the

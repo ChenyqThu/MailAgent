@@ -11,7 +11,7 @@
 // fields. Descriptions are reused VERBATIM from the legacy tools (unchanged tool surface).
 //
 // 🔴 Gated behind MAILAGENT_AI_SDK_WRITE_TOOLS (buildGatewayTools writeToolsEnabled) —
-//    off by default, so the model only ever sees these when the flag is on.
+//    an env-only kill-switch, default ON since S3 (env false → the model never sees these).
 // 🔴 Approval is enforced by the domain ApprovalGuard (id/hash/expiry, see auditedWriteTool +
 //    security/approval.ts) — the AUTHORITATIVE write gate. ai@6's signed-approval layer
 //    (streamText experimental_toolApprovalSecret) is intentionally NOT used: the native

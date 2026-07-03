@@ -30,12 +30,7 @@ import { readAutoTitleSettings } from '@shared/lib/autoTitle'
 import { useApprovalMode } from '@shared/lib/approvalMode'
 
 import { AiSdkRuntimeProvider } from '@shared/assistant/runtime/AiSdkRuntimeProvider'
-import {
-  getChatRuntimeMode,
-  isAiSdkContextInjectionEnabled,
-  isAiSdkGatewayEnabled,
-  resolveAiGatewayBaseUrl
-} from '@shared/assistant/runtime/flags'
+import { resolveAiGatewayBaseUrl } from '@shared/assistant/runtime/flags'
 import {
   ChatComposerControlsProvider,
   type ChatComposerControls
@@ -100,9 +95,9 @@ export function AgentConversation({
   const queryClient = useQueryClient()
 
   // ── runtime resolution (ai-sdk gateway live vs error face) ─────────────────
+  // S3 — the flag gates are gone: a reachable base URL is the only condition.
   const gatewayBaseUrl = useMemo(() => resolveAiGatewayBaseUrl(), [])
-  const aiSdkEnabled =
-    getChatRuntimeMode() === 'ai-sdk' && isAiSdkGatewayEnabled() && gatewayBaseUrl !== null
+  const aiSdkEnabled = gatewayBaseUrl !== null
   // One sticky /health probe per mount. D7 — a definitive failure no longer degrades to another
   // engine (none exists): the error notice below offers a retry (refetch) instead.
   const healthQ = useQuery({
@@ -114,7 +109,7 @@ export function AgentConversation({
       if (body.status !== 'ok') throw new Error('ai-gateway unhealthy')
       return body
     },
-    enabled: gatewayBaseUrl !== null && getChatRuntimeMode() === 'ai-sdk',
+    enabled: gatewayBaseUrl !== null,
     retry: 1,
     staleTime: Infinity,
     refetchOnWindowFocus: false
@@ -326,7 +321,8 @@ export function AgentConversation({
   )
 
   // ── context snapshot (email session → inject that email's body; general → SOUL-only prompt) ──────
-  const contextInjectionOn = useAiSdkRuntime && isAiSdkContextInjectionEnabled()
+  // S3 — always on for live ai-sdk sessions (the CONTEXT_INJECTION flag was GA'd away).
+  const contextInjectionOn = useAiSdkRuntime
   const contextScope = useMemo<ContextScope>(
     () => ({
       surface: 'general-agent',

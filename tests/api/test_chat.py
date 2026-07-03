@@ -243,7 +243,6 @@ class _ChatConfigStub:
 
     agent_max_iter = 8
     agent_max_cost_usd = 0.5
-    agent_harness_enabled = True
     kos_consumer_enabled = False
     kos_l1_hot_block_enabled = False
     kos_time_decay_enabled = True
@@ -310,7 +309,6 @@ def test_chat_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert data == {
         "maxIter": 8,
         "maxCostUsd": 0.5,
-        "harnessEnabled": True,
         "kosL1HotBlockEnabled": False,
         "defaultModel": "claude-sonnet-4-6",
         "kosConsumerEnabled": False,
@@ -605,7 +603,6 @@ def test_chat_config_non_default_passthrough(monkeypatch: pytest.MonkeyPatch) ->
     class _Stub(_ChatConfigStub):
         agent_max_iter = 12
         agent_max_cost_usd = 1.5
-        agent_harness_enabled = False
         kos_l1_hot_block_enabled = True
         kos_time_decay_enabled = False
         llm_model = "claude-opus-4-8"
@@ -614,7 +611,6 @@ def test_chat_config_non_default_passthrough(monkeypatch: pytest.MonkeyPatch) ->
         data = c.get("/api/chat/config").json()["data"]
     assert data["maxIter"] == 12
     assert data["maxCostUsd"] == 1.5
-    assert data["harnessEnabled"] is False
     assert data["kosL1HotBlockEnabled"] is True
     assert data["kosTimeDecayEnabled"] is False
     assert data["defaultModel"] == "claude-opus-4-8"

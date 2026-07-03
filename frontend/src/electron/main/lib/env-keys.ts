@@ -142,12 +142,11 @@ export const MANAGED_ENV_KEYS = [
   'MAILAGENT_OUTBOX_MAX_ATTEMPTS',
   'MAILAGENT_OUTBOX_CONCURRENCY',
 
-  // — Agent Harness + KOS (Sprint 19 — chat agent multi-turn loop + Jarvis
-  // KOS v2 producer/consumer integration). boolean toggle 默认 false + KOS 对接
-  // 三件套: endpoint (KOS_MCP_BASE) + OAuth client_id/secret。IntegrationsTab 的
-  // KOS Section 经 env:set 写 app .env; KOS_OAUTH_CLIENT_SECRET 入 SECRET_ENV_KEYS
-  // → env:get 读取脱敏 (renderer 永不见明文, 同其它 secret)。其余两项非密钥明文。
-  'MAILAGENT_AGENT_HARNESS',
+  // — KOS (Jarvis KOS v2 producer/consumer integration)。boolean toggle 默认
+  // false + KOS 对接三件套: endpoint (KOS_MCP_BASE) + OAuth client_id/secret。
+  // IntegrationsTab 的 KOS Section 经 env:set 写 app .env; KOS_OAUTH_CLIENT_SECRET
+  // 入 SECRET_ENV_KEYS → env:get 读取脱敏 (renderer 永不见明文, 同其它 secret)。
+  // 其余两项非密钥明文。(MAILAGENT_AGENT_HARNESS 已随 legacy harness 退役, S3。)
   'MAILAGENT_KOS_CONSUMER_ENABLED',
   'MAILAGENT_KOS_L1_HOT_BLOCK_ENABLED',
   'MAILAGENT_KOS_INGEST_ENABLED',

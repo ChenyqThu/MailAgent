@@ -160,10 +160,9 @@ describe('AgentConversation — D7 gateway unavailable (error face, no silent en
   })
 
   test('probe-able gateway that fails /health → retry button re-runs the probe', async () => {
-    // Web build + ai-sdk runtime → resolveAiGatewayBaseUrl()==='' (same-origin) → the
+    // Web build → resolveAiGatewayBaseUrl()==='' (same-origin) → the
     // /health probe is enabled; make it fail so gatewayDegraded flips on.
     vi.stubEnv('VITE_BUILD_TARGET', 'web')
-    vi.stubEnv('MAILAGENT_CHAT_RUNTIME', 'ai-sdk')
     const fetchMock = vi.fn(async () => {
       throw new Error('connect ECONNREFUSED')
     })
@@ -183,7 +182,6 @@ describe('AgentConversation — D7 gateway unavailable (error face, no silent en
 
   test('gateway down but the active session has history → transcript stays readable (read-only)', async () => {
     vi.stubEnv('VITE_BUILD_TARGET', 'web')
-    vi.stubEnv('MAILAGENT_CHAT_RUNTIME', 'ai-sdk')
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => {

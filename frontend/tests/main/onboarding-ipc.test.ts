@@ -78,10 +78,9 @@ describe('buildCompletePatch', () => {
   it('maps every plugin to its env flag, writing explicit true/false', () => {
     const { patch } = buildCompletePatch({
       ...full,
-      plugins: { agent: true, island: false, llm: true, digest: false }
+      plugins: { island: false, llm: true, digest: false }
       // calendar omitted → defaults false
     })
-    expect(patch[PLUGIN_FLAG_MAP.agent]).toBe('true')
     expect(patch[PLUGIN_FLAG_MAP.island]).toBe('false')
     expect(patch[PLUGIN_FLAG_MAP.llm]).toBe('true')
     expect(patch[PLUGIN_FLAG_MAP.digest]).toBe('false')
@@ -100,7 +99,6 @@ describe('buildCompletePatch', () => {
 
   it('PLUGIN_FLAG_MAP points at the agreed config.py keys', () => {
     expect(PLUGIN_FLAG_MAP).toEqual({
-      agent: 'MAILAGENT_AGENT_HARNESS',
       island: 'PING_ISLAND_ENABLED',
       llm: 'LLM_AGENT_ENABLED',
       digest: 'MAILAGENT_DAILY_DIGEST_ENABLED',
@@ -274,7 +272,7 @@ describe('buildClearPatch', () => {
       DAVMAIL_SMTP_PORT: '1025',
       DAVMAIL_POC_MODE: 'false',
       DAVMAIL_POC_CIPHER_KEY: 'cipher-xyz',
-      plugins: { agent: true, island: true, llm: true, digest: true, calendar: true }
+      plugins: { island: true, llm: true, digest: true, calendar: true }
     })
     const cleared = buildClearPatch()
     for (const k of Object.keys(written)) {

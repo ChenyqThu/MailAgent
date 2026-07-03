@@ -2,7 +2,7 @@
 // "chat about this page" 文案 + ⌘J 角标；点击 openChatModal() 展开 modal（FAB 随 visible 隐藏）。
 // 仅在「有邮件正文(activeInternalId) + modal 未展开(!visible)」时显示，避免与 modal 重叠。createPortal
 // 到 document.body 逃 InboxLayout 的 overflow-hidden + GSAP width tween（同 BatchActionBar 范式）。
-// flag-on 才挂（调用方 InboxLayout 用 isAssistantModalEnabled() 包裹）。
+// InboxLayout 无条件挂载（S3: ASSISTANT_MODAL flag 已 GA 移除）。
 //
 // 视觉（dogfood 反馈）：reactbits StarBorder 常驻彩色旋转边框环（.rb-star-border，三色 conic 旋转
 // + 外发光）+ sparkles 动态图标（整钮 hover 经 AnimatedIconActiveProvider 驱动）；位置 bottom-8 避开 footer。

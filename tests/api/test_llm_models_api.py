@@ -189,7 +189,6 @@ def test_chat_config_enabled_models_configured(monkeypatch: pytest.MonkeyPatch) 
     class _ChatCfg:
         agent_max_iter = 8
         agent_max_cost_usd = 0.5
-        agent_harness_enabled = True
         kos_consumer_enabled = False
         kos_l1_hot_block_enabled = False
         kos_time_decay_enabled = True
@@ -237,7 +236,6 @@ def test_chat_config_enabled_models_not_configured(monkeypatch: pytest.MonkeyPat
     class _ChatCfg:
         agent_max_iter = 8
         agent_max_cost_usd = 0.5
-        agent_harness_enabled = True
         kos_consumer_enabled = False
         kos_l1_hot_block_enabled = False
         kos_time_decay_enabled = True

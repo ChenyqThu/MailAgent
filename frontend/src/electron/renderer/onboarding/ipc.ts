@@ -105,7 +105,6 @@ export type BackendKind = 'applescript' | 'davmail'
 
 /** Plugin keys the wizard collects (core 'notion' is always on, not sent). */
 export interface PluginFlags {
-  agent?: boolean
   island?: boolean
   llm?: boolean
   digest?: boolean

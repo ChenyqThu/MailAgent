@@ -15,7 +15,7 @@
 // Mount-once: the body (useGeneralChat session load) only mounts after the FIRST open, then stays mounted
 // (hidden via CSS when minimised) so the conversation survives minimise/restore + a mode switch.
 //
-// flag-gated: InboxLayout mounts this only when isAssistantModalEnabled(); flag-off it never renders.
+// InboxLayout mounts this unconditionally (S3: the ASSISTANT_MODAL flag was GA'd away).
 
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'

@@ -193,11 +193,12 @@ export const ONBOARDING_WRITABLE_KEYS = [
   'MAIL_ACCOUNT_NAME'
 ] as const
 
-export type PluginKey = 'agent' | 'island' | 'llm' | 'digest' | 'calendar'
+export type PluginKey = 'island' | 'llm' | 'digest' | 'calendar'
 
-/** 插件勾选 → config.py env flag。值写 'true'/'false' 字符串 (pydantic bool 解析)。 */
+/** 插件勾选 → config.py env flag。值写 'true'/'false' 字符串 (pydantic bool 解析)。
+ *  S3 — 'agent' (MAILAGENT_AGENT_HARNESS) 已随 legacy harness 退役: chat agent
+ *  (embedded AI SDK Gateway) 无条件在, 不再是可勾选插件。 */
 export const PLUGIN_FLAG_MAP: Record<PluginKey, string> = {
-  agent: 'MAILAGENT_AGENT_HARNESS',
   island: 'PING_ISLAND_ENABLED',
   llm: 'LLM_AGENT_ENABLED',
   digest: 'MAILAGENT_DAILY_DIGEST_ENABLED',

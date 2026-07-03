@@ -455,10 +455,6 @@ class Config(BaseSettings):
         default=0.5, env="AGENT_MAX_COST_USD",
         description="harness 每轮成本上限 USD (累加 usage.costUsd, 超出 emit E_COST_BUDGET)。",
     )
-    agent_harness_enabled: bool = Field(
-        default=True, validation_alias="MAILAGENT_AGENT_HARNESS",
-        description="多轮 agent harness 总开关。false → dispatcher 走 legacy 单遍 (应急回退)。",
-    )
     kos_consumer_enabled: bool = Field(
         default=False, validation_alias="MAILAGENT_KOS_CONSUMER_ENABLED",
         description=(

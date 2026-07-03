@@ -18,23 +18,13 @@ const GIT_HASH = ((): string => {
 })()
 const BUILD_TIME = new Date().toISOString()
 
-// Phase 06a (cutover) MASTER default, injected into BOTH the renderer (flags.ts) and main
-// (index.ts shouldStartEmbeddedGateway) so they agree on whether new chats default to the AI SDK
-// Gateway. Chunk H (v0.20.0 cutover) flipped the desktop fallback '' → '1': new chats now default to
-// the embedded AI SDK Gateway (+ context injection derives on). A runtime
-// MAILAGENT_AI_SDK_NEW_SESSION_DEFAULT env still overrides at launch on either side, and
-// MAILAGENT_CHAT_RUNTIME=legacy is the one-key rollback. (任务A 2026-06-29: the remote web SPA,
-// vite.web.config.ts, now ALSO defaults these 3 to '1'. The browser can't reach loopback, so web
-// hits the gateway via the serve-api ai_gateway_proxy; env=0 / CHAT_RUNTIME=legacy still roll back.)
-const AI_SDK_NEW_SESSION_DEFAULT = process.env.MAILAGENT_AI_SDK_NEW_SESSION_DEFAULT ?? '1'
+// S3 (07-02) — the cutover-era chat flags (MAILAGENT_CHAT_RUNTIME / AI_SDK_NEW_SESSION_DEFAULT
+// master / PANEL / GATEWAY / A2UI / CONTEXT_INJECTION / AGENT_VIEW / ASSISTANT_MODAL) were GA'd
+// and their per-flag `define` blocks removed: the AI SDK Gateway is the only chat engine and
+// its behaviour is hard-coded ON. Rollback = install a previous release.
 
 export default defineConfig({
   main: {
-    define: {
-      // Phase 06a — main mirror of the renderer NEW_SESSION_DEFAULT master so
-      // shouldStartEmbeddedGateway() agrees with flags.ts on the packaged default.
-      __MAILAGENT_AI_SDK_NEW_SESSION_DEFAULT__: JSON.stringify(AI_SDK_NEW_SESSION_DEFAULT)
-    },
     resolve: {
       alias: {
         '@shared': resolve(__dirname, 'src/shared')
@@ -62,35 +52,7 @@ export default defineConfig({
     root: resolve(__dirname, 'src/electron/renderer'),
     define: {
       __GIT_HASH__: JSON.stringify(GIT_HASH),
-      __BUILD_TIME__: JSON.stringify(BUILD_TIME),
-      // chat-panel P4 Phase 01/02 — assistant-ui shell flags (shared/assistant/runtime/flags.ts).
-      // Per-flag define (NOT envPrefix:['MAILAGENT_']) so only these non-secret
-      // toggles enter the renderer bundle, never MAILAGENT_CLI_API_KEY et al. Default '' = off.
-      __MAILAGENT_ASSISTANT_UI_PANEL__: JSON.stringify(
-        process.env.MAILAGENT_ASSISTANT_UI_PANEL ?? ''
-      ),
-      __MAILAGENT_CHAT_RUNTIME__: JSON.stringify(process.env.MAILAGENT_CHAT_RUNTIME ?? ''),
-      // Phase 02 — renderer mirror of MAILAGENT_AI_SDK_GATEWAY (gates the AI SDK
-      // runtime entry). Non-secret boolean toggle.
-      __MAILAGENT_AI_SDK_GATEWAY__: JSON.stringify(process.env.MAILAGENT_AI_SDK_GATEWAY ?? ''),
-      // Phase 04a — renderer mirror of MAILAGENT_A2UI_TOOL_CARDS (gates the rich tool cards).
-      // Non-secret boolean toggle; off → generic ToolTraceCard fallback only.
-      __MAILAGENT_A2UI_TOOL_CARDS__: JSON.stringify(process.env.MAILAGENT_A2UI_TOOL_CARDS ?? ''),
-      // Phase 06 — renderer mirror of MAILAGENT_AI_SDK_CONTEXT_INJECTION (gates building + sending
-      // the AgentContextSnapshot, ContextChips same-source, session reload). Non-secret toggle.
-      __MAILAGENT_AI_SDK_CONTEXT_INJECTION__: JSON.stringify(
-        process.env.MAILAGENT_AI_SDK_CONTEXT_INJECTION ?? ''
-      ),
-      // Phase 06a (cutover) — MASTER switch (shared with the main define above; AI_SDK_NEW_SESSION
-      // _DEFAULT = '' off in Chunk B, flipped to '1' at cutover). flags.ts falls back to this when a
-      // sub-flag is unset; MAILAGENT_CHAT_RUNTIME=legacy overrides it back to legacy.
-      __MAILAGENT_AI_SDK_NEW_SESSION_DEFAULT__: JSON.stringify(AI_SDK_NEW_SESSION_DEFAULT),
-      // redesign — renderer mirror of MAILAGENT_AGENT_VIEW (gates the interactive MailAgent
-      // general-agent view at /sessions). Chunk H (v0.20.0 cutover) flipped desktop default '' → '1'.
-      __MAILAGENT_AGENT_VIEW__: JSON.stringify(process.env.MAILAGENT_AGENT_VIEW ?? '1'),
-      // assistant-modal — renderer mirror of MAILAGENT_ASSISTANT_MODAL (gates the email-body AI panel's
-      // three-mode floating modal + FAB). Chunk H (v0.20.0 cutover) flipped desktop default '' → '1'.
-      __MAILAGENT_ASSISTANT_MODAL__: JSON.stringify(process.env.MAILAGENT_ASSISTANT_MODAL ?? '1')
+      __BUILD_TIME__: JSON.stringify(BUILD_TIME)
     },
     resolve: {
       alias: {

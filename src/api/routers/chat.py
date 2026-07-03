@@ -439,7 +439,6 @@ async def chat_config(request: Request):
         {
             "maxIter": max_iter,
             "maxCostUsd": max_cost,
-            "harnessEnabled": cfg.agent_harness_enabled,
             "kosL1HotBlockEnabled": kos_l1_hot,
             "defaultModel": default_model,
             "kosConsumerEnabled": kos_consumer,

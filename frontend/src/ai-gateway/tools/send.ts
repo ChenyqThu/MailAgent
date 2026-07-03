@@ -9,8 +9,8 @@
 //             in the send ledger · backend supports send  → then a real send.
 // Any failure on either side → the email is NOT sent (tool-error + audit error code).
 //
-// 🔴 Gated behind MAILAGENT_AI_SDK_SEND_TOOL (buildGatewayTools sendToolEnabled) — off by
-//    default, so the model never sees it unless the flag is on (with the Gateway + write tools).
+// 🔴 Gated behind MAILAGENT_AI_SDK_SEND_TOOL (buildGatewayTools sendToolEnabled) — an env-only
+//    kill-switch, default ON since S3 (env false → no send tool; needs write tools too).
 // 🔴 The tool is NOT named `email_send` (the R2 forbidden "bare send" name); it is a human-gated
 //    prepare-then-send, distinct from any auto-send the eval safety floor forbids.
 

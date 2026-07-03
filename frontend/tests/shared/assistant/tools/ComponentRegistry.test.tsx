@@ -1,9 +1,9 @@
 // @vitest-environment happy-dom
 //
-// chat-panel P4 Phase 04a — A2UI ComponentRegistry: tool→card resolution (hit / miss), the
-// component allowlist, and the flag-gated assistant-ui part components (flag-off = generic
-// fallback only, byte-identical to Phase 01; flag-on adds the rich cards as tools.by_name with
-// ToolTraceCard still the fallback so a registry MISS never blocks the conversation).
+// chat-panel P4 Phase 04a / S3 — A2UI ComponentRegistry: tool→card resolution (hit / miss),
+// the component allowlist, and the assistant-ui part components (S3: the A2UI flag was GA'd —
+// rich cards are always mounted as tools.by_name with ToolTraceCard still the fallback so a
+// registry MISS never blocks the conversation).
 
 import { afterEach, describe, expect, test, vi } from 'vitest'
 
@@ -41,7 +41,7 @@ describe('componentRegistry — resolution', () => {
     expect(componentRegistry.resolve('memory_delete')).toBeUndefined()
   })
 
-  test('byName covers the eight write/self-mount tools; components covers the six card names', () => {
+  test('byName covers the write/self-mount/exec/skill-supply tools; components covers the card names', () => {
     expect(Object.keys(componentRegistry.byName).sort()).toEqual([
       'email_archive',
       'email_draft_reply',
@@ -49,15 +49,25 @@ describe('componentRegistry — resolution', () => {
       'email_pin',
       'email_prepare_send',
       'email_resync',
+      'file_read',
+      'file_write',
+      'run_command',
       'set_skill_enabled',
+      'skill_install',
+      'skill_install_confirm',
+      'skill_uninstall',
       'update_system_md'
     ])
     expect(Object.keys(componentRegistry.components).sort()).toEqual([
       'ApprovalActionCard',
       'DraftReplyCard',
+      'ExecApprovalCard',
       'NotionSyncCard',
       'SendApprovalCard',
+      'SkillInstallCard',
+      'SkillInstallConfirmCard',
       'SkillToggleCard',
+      'SkillUninstallCard',
       'SystemDocApprovalCard'
     ])
   })
@@ -87,18 +97,10 @@ describe('createComponentRegistry — generic builder', () => {
   })
 })
 
-describe('getAssistantPartComponents — flag gating', () => {
-  test('flag-off (default) → byte-identical to Phase 01 (generic fallback only, no by_name)', () => {
-    vi.stubEnv('MAILAGENT_A2UI_TOOL_CARDS', '')
+describe('getAssistantPartComponents — S3 always-on rich cards', () => {
+  test('returns the registry cards as tools.by_name, keeps ToolTraceCard fallback', () => {
     const parts = getAssistantPartComponents()
     expect(parts).toBe(assistantPartComponents)
-    expect(parts.tools).toEqual({ Fallback: ToolTraceCard })
-    expect('by_name' in parts.tools).toBe(false)
-  })
-
-  test('flag-on → adds the registry cards as tools.by_name, keeps ToolTraceCard fallback', () => {
-    vi.stubEnv('MAILAGENT_A2UI_TOOL_CARDS', '1')
-    const parts = getAssistantPartComponents()
     const tools = parts.tools as { by_name?: Record<string, unknown>; Fallback?: unknown }
     expect(tools.Fallback).toBe(ToolTraceCard) // registry miss still renders the generic card
     expect(tools.by_name).toBe(componentRegistry.byName)

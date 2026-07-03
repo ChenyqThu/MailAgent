@@ -17,7 +17,6 @@ import {
 // chat-panel P4 Phase 02 — pure port resolver (config.ts only type-imports `ai`,
 // so this static import does NOT pull the heavy AI SDK chunk into the main bundle).
 import { resolveAiGatewayPort } from '../../ai-gateway/config'
-import { shouldStartEmbeddedGateway } from './ai_gateway_flags'
 import { detectUserState } from './onboarding/detect'
 import { registerOnboardingHandlers } from './handlers/onboarding'
 import { MAIN_WINDOW, ONBOARDING_WINDOW } from './lib/window-config'
@@ -138,13 +137,10 @@ function createWindow(opts: { onboarding?: boolean } = {}): void {
   // 同源 resolveApiPort)；renderer 进程无 process.env，故经 `?apiPort=` 注入。
   const params = new URLSearchParams({ apiPort: String(resolveApiPort()) })
   if (opts.onboarding) params.set('onboarding', '1')
-  // chat-panel P4 Phase 02 — when the embedded AI SDK Gateway is enabled, hand the
+  // S3 — the embedded AI SDK Gateway always starts (the ONLY chat engine); hand the
   // renderer its loopback port the same way as apiPort (the gateway binds the same
-  // deterministic resolveAiGatewayPort()). flag-off → param absent → the renderer's
-  // resolver falls back and the AI SDK runtime entry stays hidden.
-  if (shouldStartEmbeddedGateway()) {
-    params.set('aiGatewayPort', String(resolveAiGatewayPort()))
-  }
+  // deterministic resolveAiGatewayPort()).
+  params.set('aiGatewayPort', String(resolveAiGatewayPort()))
   const search = params.toString()
   // onboarding 向导用固定小窗 (768×640, 不可缩放, 居中); 主 App 用 1280×800。
   // 尺寸常量集中在 lib/window-config (reloadToMain 进主界面时也据此恢复, 防漂移)。
@@ -498,23 +494,20 @@ app.whenReady().then(async () => {
     createWindow()
   }
 
-  // chat-panel P4 Phase 02 — flag-gated embedded AI SDK Gateway。**默认关**:
-  // MAILAGENT_AI_SDK_GATEWAY!=='true' 时下面整块短路, 默认行为字节级不变 (重依赖
-  // ai / @ai-sdk/anthropic 经动态 import 进懒 chunk, flag-off 永不加载)。flag-on 时在
+  // S3 — embedded AI SDK Gateway 无条件启动 (唯一 chat 引擎; cutover flag 已 GA 移除)。
   // Electron main 内嵌一个 loopback Node HTTP server (/health + /api/ai/config +
   // /api/ai/chat UIMessage 流), dev/打包均可启, 与 serve-api / DavMail 解耦。端口经
-  // createWindow 的 ?aiGatewayPort= 注入 renderer (resolveAiGatewayPort 单源)。架构定位见
-  // docs/plans/chat-panel-ai-sdk-assistant-ui-refactor/architecture.md §13.3 (form A)。
-  if (shouldStartEmbeddedGateway()) {
-    void (async () => {
-      try {
-        const { startEmbeddedAiGateway } = await import('./ai_gateway_lifecycle')
-        await startEmbeddedAiGateway()
-      } catch (err) {
-        console.error('[ai-gateway] 启动失败 (不影响主流程)', err)
-      }
-    })()
-  }
+  // createWindow 的 ?aiGatewayPort= 注入 renderer (resolveAiGatewayPort 单源)。重依赖
+  // ai / @ai-sdk/anthropic 仍经动态 import 进懒 chunk。架构定位见
+  // docs/reference/llm-agent/ai-sdk-gateway-architecture.md §13.3 (form A)。
+  void (async () => {
+    try {
+      const { startEmbeddedAiGateway } = await import('./ai_gateway_lifecycle')
+      await startEmbeddedAiGateway()
+    } catch (err) {
+      console.error('[ai-gateway] 启动失败 (不影响主流程)', err)
+    }
+  })()
 
   // F6 — deeplink sink: 聚焦主窗口 + 把 target 转给 renderer (useDeeplinkRouter
   // 监听 'mailagent:deeplink' → router.navigate + setActive). createWindow 后注册,

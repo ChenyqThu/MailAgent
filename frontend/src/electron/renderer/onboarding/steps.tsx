@@ -1660,15 +1660,6 @@ const PLUGINS: PluginDef[] = [
     restart: 'mail-sync'
   },
   {
-    key: 'agent',
-    icon: 'brain',
-    name: 'Notion Agent CLI',
-    desc: '在 chat 里调用 notion-agent 操作 Notion',
-    needs: 'notion',
-    needCred: true,
-    restart: 'Electron'
-  },
-  {
     key: 'island',
     icon: 'bell',
     name: '灵动岛通知',
@@ -1720,7 +1711,7 @@ export function StepPlugins({
   const toggle = (k: string): void => setPlugins((p) => ({ ...p, [k]: !p[k] }))
   // 依赖是否满足: core plugin (如 'notion') 恒视为已开启 —— 它从不出现在
   // plugins[] 勾选 map 里 (用户从不勾它, 它是核心)。旧实现把 needs:'notion' 当
-  // 普通 plugins.notion 判断 → 永远 false → 依赖 notion 的 'agent' 永久置灰。
+  // 普通 plugins.notion 判断 → 永远 false → 依赖它的插件永久置灰。
   const depSatisfied = (key: string): boolean => {
     const dep = PLUGINS.find((x) => x.key === key)
     if (dep?.core) return true
@@ -1823,7 +1814,7 @@ export interface StepDoneProps {
 /** 可切换的插件 key (核心 'notion' 恒开、无 flag)。key → .env flag 的权威映射
  *  只存在于主进程 (handlers/onboarding.ts PLUGIN_FLAG_MAP, 单测已 pin); 渲染层
  *  只需把勾选状态按 key 透传, 不复制 flag 名以免 SSoT 漂移。 */
-const PLUGIN_KEYS = ['agent', 'island', 'llm', 'digest', 'calendar'] as const
+const PLUGIN_KEYS = ['island', 'llm', 'digest', 'calendar'] as const
 
 export function buildCompleteConfig(
   form: ConfigForm,
