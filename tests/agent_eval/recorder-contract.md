@@ -1,9 +1,12 @@
 # Recorder Contract — producing `source="recorded"` traces (C1)
 
-> Phase 0 ships the **scoring + regression machinery** (`run_baseline.py --compare`) and a
-> validated `source="recorded"` smoke example (`runs/recorded-smoke.jsonl`). Wiring a live
-> recorder into the real `runHarness` is **Phase 1 infra** (needs the product runtime). This
-> doc is the contract a recorder must satisfy so candidate traces score under the frozen schema.
+> Phase 0 shipped the **scoring + regression machinery** (`run_baseline.py --compare`) and a
+> validated `source="recorded"` smoke example (`runs/recorded-smoke.jsonl`). Phase 1 (a live
+> recorder) is done: the AI SDK Gateway is the product's one chat engine, and
+> `recorder/ai_sdk_adapter.ts` captures its tool-part sequences into schema-valid traces (the
+> earlier `ChatStreamEvent`-driven recorder for the deleted legacy harness is retired — S3).
+> This doc is the contract a recorder must satisfy so candidate traces score under the frozen
+> schema.
 
 ## Why
 The baseline (`baselines/v0.13.0.jsonl`, `source="synthetic_baseline"`) is a curated **failure
@@ -23,17 +26,13 @@ python eval/runner/run_baseline.py --eval-root eval \
 ## What a recorder must emit
 One JSONL line per task run, matching Trace schema (schema.md §2). Field naming is snake_case.
 
-### Event mapping (real `ChatStreamEvent` → trace event)
-| harness `ChatStreamEvent` (camelCase) | trace event (snake_case) |
-|---|---|
-| `chunk {delta}` | `{"type":"chunk","delta":...}` |
-| `thinking {delta}` | `{"type":"thinking","delta":...}` |
-| `tool_use {toolUseId,name,input}` | `{"type":"tool_use","tool_use_id":...,"name":...,"input":...}` |
-| `tool_result {toolUseId,status,output?,errorMessage?,durationMs}` | `{"type":"tool_result","tool_use_id":...,"status":...,"output":...,"error_message":...,"duration_ms":...}` |
-| `pending_confirmation {toolUseId,toolName,input,tier}` | `{"type":"pending_confirmation","tool_use_id":...,"tool_name":...,"tier":...,"input":...}` |
-| `usage {inputTokens,outputTokens,costUsd,model}` | `{"type":"usage","input_tokens":...,"output_tokens":...,"cost_usd":...,"model":...}` |
-| `done {finalContent,model,stopReason}` | `{"type":"done","final_content":...,"model":...,"stop_reason":...}` |
-| `error {code,message}` | `{"type":"error","code":...,"message":...}` |
+### Event mapping (AI SDK Gateway tool-part states → trace event)
+The one recorder, `recorder/ai_sdk_adapter.ts`, maps `ai@6` `ToolUIPart` states (plus the
+`generateText` result's usage/final content) onto this doc's snake_case trace event vocabulary
+(`tool_use` / `tool_result` / `pending_confirmation` / `usage` / `done` — same target shape a
+`ChatStreamEvent`-driven recorder would have produced for the now-deleted legacy harness). See
+that file's header comment for the exact per-state mapping table; this doc still owns the
+target trace schema below that any recorder's output must land on.
 
 ### Normalization the recorder MUST do (so hard rules apply cleanly)
 1. **config hashes are real**: fill `agent_profile_hash` / `installed_skills_hash` / `active_skills_hash`
@@ -48,8 +47,8 @@ One JSONL line per task run, matching Trace schema (schema.md §2). Field naming
 5. **surface** matches the task (`general`/`email`); for `email` the run is anchored to `email_context.internal_id`.
 
 ### Minimum acceptable recorder (Phase 1 entry)
-- A scripted/fake backend that drives the closest feasible `runHarness` layer for ≥2 smoke tasks
-  (one read-only, one write-confirmation), emitting the events above → `runs/<branch>.jsonl`.
+- A scripted scenario driving the gateway's tool-part sequence for ≥2 smoke tasks (one
+  read-only, one write-confirmation), emitting the events above → `runs/<branch>.jsonl`.
 - Then `--compare` against the baseline. A missing candidate trace, a pass→fail flip, or a safety
   regression must fail the gate (covered by `tests/test_compare.py`).
 

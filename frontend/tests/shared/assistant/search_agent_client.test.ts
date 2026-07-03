@@ -8,7 +8,7 @@
 // chat.runSearchAgent contract, unchanged.
 
 import { afterEach, describe, expect, test, vi } from 'vitest'
-import { tool, type ToolSet } from 'ai'
+import { APICallError, tool, type ToolSet } from 'ai'
 import { MockLanguageModelV3 } from 'ai/test'
 import { z } from 'zod'
 
@@ -128,6 +128,36 @@ async function startGateway(opts: {
   vi.stubGlobal('window', { location: { search: `?aiGatewayPort=${handle.port}` } })
 }
 
+/** Start a real gateway whose model throws on the very first `doGenerate` call — before
+ *  any tool use, so the candidate pool stays empty and searchAgentRun's normalizeLoopError
+ *  mapping surfaces instead of a best-effort result. `isRetryable: false` so the AI SDK's
+ *  default retry wrapper (retryable APICallError → exponential backoff) doesn't retry and
+ *  re-wrap the error before it reaches normalizeLoopError. */
+async function startGatewayThatThrows(statusCode?: number): Promise<void> {
+  const model = new MockLanguageModelV3({
+    doGenerate: async () => {
+      throw new APICallError({
+        message: `upstream failure${statusCode ? ` ${statusCode}` : ''}`,
+        url: 'https://example.test/v1/messages',
+        requestBodyValues: {},
+        statusCode,
+        isRetryable: false
+      })
+    }
+  })
+  const buildTools = (): ToolSet => ({})
+  const handle = await startAiGatewayServer({
+    port: 0,
+    baseUrl: 'http://127.0.0.1:0',
+    apiKey: 'test',
+    model: 'test-model',
+    createModel: () => model,
+    buildTools
+  })
+  handles.push(handle)
+  vi.stubGlobal('window', { location: { search: `?aiGatewayPort=${handle.port}` } })
+}
+
 describe('runGatewaySearchAgent', () => {
   test('no gateway base URL (desktop w/o port, node baseline) → E_UNSUPPORTED, no fetch', async () => {
     const fetchSpy = vi.fn()
@@ -218,5 +248,31 @@ describe('runGatewaySearchAgent', () => {
     expect(res.ok).toBe(true)
     expect(res.hits).toEqual([])
     expect(res.summary).toBe('one hit')
+  })
+
+  test('upstream 429 (APICallError) → E_QUOTA, gateway code wins over nlToDsl', async () => {
+    await startGatewayThatThrows(429)
+    const res = await runGatewaySearchAgent(
+      mockReads({ nlToDsl: { dsl: 'from:alice redis' } }),
+      { query: 'q' }
+    )
+    expect(res.ok).toBe(false)
+    expect(res.error).toMatchObject({ code: 'E_QUOTA' })
+    expect(res.error?.message.length).toBeGreaterThan(0)
+  })
+
+  test('upstream 500 (APICallError, non-429 status) → E_UPSTREAM', async () => {
+    await startGatewayThatThrows(500)
+    const res = await runGatewaySearchAgent(mockReads(), { query: 'q' })
+    expect(res.ok).toBe(false)
+    expect(res.error).toMatchObject({ code: 'E_UPSTREAM' })
+    expect(res.error?.message.length).toBeGreaterThan(0)
+  })
+
+  test('upstream failure w/o a status code (network-style APICallError) → E_UPSTREAM too', async () => {
+    await startGatewayThatThrows(undefined)
+    const res = await runGatewaySearchAgent(mockReads(), { query: 'q' })
+    expect(res.ok).toBe(false)
+    expect(res.error).toMatchObject({ code: 'E_UPSTREAM' })
   })
 })

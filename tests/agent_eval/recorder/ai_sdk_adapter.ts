@@ -1,8 +1,8 @@
 // AI SDK approval → eval trace adapter (chat-panel P4 Phase 03b — R5 re-alignment).
 //
-// The legacy recorder (recorder.ts) drives the legacy runHarness, whose write tools emit
-// a single `pending_confirmation` ChatStreamEvent that the recorder maps straight to a
-// trace `pending_confirmation`. The AI SDK Gateway has NO such event — a write tool's
+// The legacy chat harness (deleted S3) had its write tools emit a single
+// `pending_confirmation` ChatStreamEvent, which its now-retired recorder mapped straight
+// to a trace `pending_confirmation`. The AI SDK Gateway has NO such event — a write tool's
 // HITL approval is carried by ai@6 UIMessage *tool parts* across the two streamText calls
 // of the approval round-trip (architecture §5.3 / §13.4):
 //
@@ -137,7 +137,7 @@ export function aiSdkToolPartsToTraceEvents(
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Trace assembly — wrap the mapped events into a schema-valid `source="recorded"`
-// Trace (config / metrics / final), mirroring recorder.ts's normalization.
+// Trace (config / metrics / final), per recorder-contract.md's normalization rules.
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function sha256Hex(text: string): Promise<string> {
@@ -178,7 +178,7 @@ export async function buildAiSdkTrace(
 
   const status = pendingWrite ? 'needs_confirmation' : 'answered'
   const events: TraceEvent[] = [...toolEvents]
-  // usage + done (mirrors recorder.ts; a pending run still reports the partial answer text).
+  // usage + done (a pending run still reports the partial answer text).
   events.push({
     type: 'usage',
     input_tokens: scn.usage.inputTokens,
