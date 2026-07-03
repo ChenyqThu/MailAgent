@@ -22,15 +22,23 @@ from src.sync.outbox import (
     OutboxRepository,
     OutboxStats,
 )
+from src.sync.outbox_intents import (
+    FlagSyncEnqueueResult,
+    enqueue_flag_sync,
+    mirror_and_enqueue_flag_sync,
+)
 
 __all__ = [
     "AsyncJob",
     "AsyncJobRepository",
     "FanoutWorker",
+    "FlagSyncEnqueueResult",
     "JobWorker",
     "MailAppFanout",
     "NotionFanout",
     "OutboxEntry",
     "OutboxRepository",
     "OutboxStats",
+    "enqueue_flag_sync",
+    "mirror_and_enqueue_flag_sync",
 ]

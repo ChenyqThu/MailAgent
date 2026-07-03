@@ -6,7 +6,7 @@ handlers / fanout) 切 backend 无感知. 详见 plan §"切换边界 — 命令
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Literal, Optional
+from typing import Literal, Optional
 
 BackendOrigin = Literal["applescript", "davmail"]
 """标记 SyncStore 里某行 internal_id 是谁生成的.
@@ -78,37 +78,6 @@ class EmailMeta:
     # DavMail 时代填充
     imap_uidvalidity: Optional[int] = None
     imap_uid: Optional[int] = None
-
-
-@dataclass
-class RadarTick:
-    """一次雷达检测结果.
-
-    `current_marker` 是 backend-specific opaque value:
-    - AppleScript: int (max_row_id of Envelope Index)
-    - DavMail: tuple[int, int] (uidvalidity, uidnext)
-
-    上层不解析 marker 内容, 只透传给下次 detect_new_emails 调用.
-    """
-
-    has_new: bool
-    current_marker: Any  # backend-specific
-    estimated_new_count: int = 0
-    new_emails: list[EmailMeta] = field(default_factory=list)
-    # AppleScript 雷达可以一次取到所有新邮件元数据 (从 SQLite 直接读), DavMail 时代
-    # 只能拿 UID 列表, 然后再 batch fetch headers, 所以 new_emails 在 davmail 路径
-    # 通常 lazy 填 (返回时只列 UID, 真要消费时再 fetch).
-
-
-@dataclass
-class BackendHealth:
-    """backend 健康检查结果 (stats_reporter 上报飞书告警判定用)."""
-
-    healthy: bool
-    backend: BackendOrigin
-    details: dict = field(default_factory=dict)
-    last_op_latency_ms: Optional[int] = None
-    error: Optional[str] = None
 
 
 DraftMode = Literal["reply-all", "reply", "new", "forward"]

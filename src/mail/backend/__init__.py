@@ -7,8 +7,8 @@ Public API:
     create_backend(cfg) -> IMailBackend       # factory, probe-or-raise
     IMailBackend (Protocol)                    # 真实消费面契约 (E1 收口, 见 e1-contract-inventory.md)
     BackendStartupError                        # probe 失败专用异常
-    EmailContent / EmailMeta / RadarTick       # 共享 dataclass (backend 内部 / 遗留类型)
-    BackendHealth / DraftAppendResult          # 遗留类型 + draft 返回
+    EmailContent / EmailMeta                   # 共享 dataclass (backend 内部)
+    DraftAppendResult                          # draft 返回
     BackendOrigin                              # Literal['applescript', 'davmail']
 """
 from __future__ import annotations
@@ -16,19 +16,16 @@ from __future__ import annotations
 from src.mail.backend.base import BackendStartupError, IMailBackend
 from src.mail.backend.factory import create_backend
 from src.mail.backend.types import (
-    BackendHealth,
     BackendOrigin,
     DraftAppendResult,
     DraftMode,
     DraftRequest,
     EmailContent,
     EmailMeta,
-    RadarTick,
     SendResult,
 )
 
 __all__ = [
-    "BackendHealth",
     "BackendOrigin",
     "BackendStartupError",
     "DraftAppendResult",
@@ -37,7 +34,6 @@ __all__ = [
     "EmailContent",
     "EmailMeta",
     "IMailBackend",
-    "RadarTick",
     "SendResult",
     "create_backend",
 ]

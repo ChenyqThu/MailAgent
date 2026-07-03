@@ -17,7 +17,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 
 import pytest
 
@@ -208,7 +207,7 @@ class TestSet:
         self, cli_runner, cli_env, seeded_db, env_file, _unauth_writes_on,
     ):
         result = _invoke_config(
-            cli_runner, "set", "mailagent_outbox_enabled", "true",
+            cli_runner, "set", "mailagent_async_jobs_enabled", "true",
             "-o", "json", db_path=seeded_db, config_path=env_file,
         )
         assert result.exit_code == 0, result.output
@@ -230,7 +229,7 @@ class TestSet:
         self, cli_runner, cli_env, seeded_db, env_file, _unauth_writes_on,
     ):
         result = _invoke_config(
-            cli_runner, "set", "mailagent_outbox_enabled", "maybe-not",
+            cli_runner, "set", "mailagent_async_jobs_enabled", "maybe-not",
             "-o", "json", db_path=seeded_db, config_path=env_file,
         )
         assert result.exit_code == 2

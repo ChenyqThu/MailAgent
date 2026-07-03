@@ -36,6 +36,7 @@ from src.services.errors import (
 )
 from src.services.guards import Actor, check_pm2_conflict, require_write_auth
 from src.sync.outbox import OutboxRepository
+from src.sync.outbox_intents import mirror_and_enqueue_flag_sync
 
 if TYPE_CHECKING:
     from src.services.context import ServiceDeps
@@ -552,33 +553,26 @@ class MailWriteService:
                 not_found.append(iid)
                 continue
 
-            # 立即 update_local_flags 做 echo prevention; None 字段沿用当前 meta 值。
+            # mirror_and_enqueue_flag_sync = update_local_flags (echo prevention;
+            # None 字段沿用当前 meta 值) + dual-target 入队 (E2-D 共享层, 与
+            # handlers / reverse_sync 同一入队函数)。
             new_read = bool(is_read) if is_read is not None else bool(meta.is_read)
             new_flagged = (
                 bool(is_flagged) if is_flagged is not None else bool(meta.is_flagged)
             )
-            sync_store.update_local_flags(
-                iid, new_read, new_flagged, processing_status=processing_status
-            )
-
-            oid_mailapp = (
-                outbox.enqueue(
-                    internal_id=iid,
-                    op_type="flag_sync",
-                    target="mailapp",
-                    payload=mailapp_payload,
-                    source=_OUTBOX_SOURCE,
-                )
-                if mailapp_payload
-                else None
-            )
-            oid_notion = outbox.enqueue(
-                internal_id=iid,
-                op_type="flag_sync",
-                target="notion",
-                payload=payload,
+            enq = mirror_and_enqueue_flag_sync(
+                sync_store,
+                outbox,
+                iid,
+                local_read=new_read,
+                local_flagged=new_flagged,
+                local_processing_status=processing_status,
+                mailapp_payload=mailapp_payload,
+                notion_payload=payload,
                 source=_OUTBOX_SOURCE,
             )
+            oid_mailapp = enq.mailapp_outbox_id
+            oid_notion = enq.notion_outbox_id
             updated.append(iid)
             # #4 乐观回显: 立即发 SSE → useEventBridge invalidate ['emails']/['mailboxes']/
             # ['email',id] → 所有视图(含智能信箱 [已旗标])从已同步写入的 SQLite 秒刷新,

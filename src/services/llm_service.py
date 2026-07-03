@@ -148,3 +148,37 @@ class LlmService:
             writer_summary=result.get("writer_summary"),
             stored_at=result.get("stored_at"),
         )
+
+    def selftest(self) -> dict[str, Any]:
+        """LLM gateway 健康检查 (不烧 token, 不写 Notion, 仅检 cfg)。
+
+        搬自 ``llm_selftest`` (src/cli/commands/llm.py 行 139-165, 逻辑保持不变)。纯配置
+        字段读取, 无 I/O / 副作用, 也不需要 ``Actor`` 鉴权 (镜像 CLI 该命令无 auth 的读
+        语义)。unhealthy 不是异常 —— CLI 侧 ``emit`` 完 data 后另 ``raise typer.Exit(1)``
+        是进程退出码语义, service 层没有这个概念, 直接把 data 返回给调用方判断。
+        """
+        cfg = self._ctx.config
+        reasons: list[str] = []
+        healthy = True
+        if not cfg.llm_api_key:
+            reasons.append("LLM_API_KEY is empty")
+            healthy = False
+        if not cfg.llm_api_base:
+            reasons.append("LLM_API_BASE is empty")
+            healthy = False
+        if not cfg.llm_model:
+            reasons.append("LLM_MODEL is empty")
+            healthy = False
+
+        fallback = [
+            m.strip() for m in (cfg.llm_fallback_models or "").split(",") if m.strip()
+        ]
+
+        return {
+            "healthy": healthy,
+            "api_base": cfg.llm_api_base,
+            "primary_model": cfg.llm_model,
+            "fallback_chain": fallback,
+            "llm_agent_enabled": cfg.llm_agent_enabled,
+            "reasons": reasons,
+        }

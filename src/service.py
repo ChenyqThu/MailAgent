@@ -114,57 +114,51 @@ class EmailNotionSyncApp:
         self._event_handlers = None
 
         # Sprint 15: SQLite SSoT inversion — outbox + FanoutWorker
-        # 默认关闭（灰度期）；开启后异步派发 email flag / processing_status 到
-        # Mail.app + Notion，handler / reverse_sync_poll 走 intent 路径不再
-        # 直接 AppleScript。详 SPRINT15-HANDOFF.md §3 + plan。
+        # E2-B (2026-07) 灰度永久化: 恒启用, MAILAGENT_OUTBOX_ENABLED 总开关退役。
+        # 所有 mutating 写 (前端 mail_write / webhook handler / reverse_sync_poll)
+        # 恒走 intent + outbox, FanoutWorker 异步派发到 Mail.app + Notion。
         # 必须先于 reverse_sync 构造（reverse_sync 需注入 outbox_repo）。
-        self.outbox_repo = None
-        self.fanout_worker = None
-        # C1: JobWorker 在 start() 里按 gate 构造; 这里先初始化为 None, 与 fanout_worker
-        # 对齐, 避免 start() 早退路径下 shutdown 引用 self.job_worker 时 AttributeError。
+        # C1: JobWorker 在 start() 里按 gate 构造; 这里先初始化为 None, 避免
+        # start() 早退路径下 shutdown 引用 self.job_worker 时 AttributeError。
         self.job_worker = None
-        if config.mailagent_outbox_enabled:
-            from src.sync import (
-                FanoutWorker,
-                MailAppFanout,
-                NotionFanout,
-                OutboxRepository,
-            )
-            self.outbox_repo = OutboxRepository(config.sync_store_db_path)
-            mailapp_fanout = MailAppFanout(
-                sync_store=self.watcher.sync_store,
-                backend=self.backend,
-            )
-            notion_fanout = NotionFanout(
-                sync_store=self.watcher.sync_store,
-                notion_sync=self.watcher.notion_sync,
-            )
-            self.fanout_worker = FanoutWorker(
-                outbox_repo=self.outbox_repo,
-                mailapp_fanout=mailapp_fanout,
-                notion_fanout=notion_fanout,
-                poll_interval_sec=config.mailagent_outbox_poll_interval_sec,
-                concurrency=config.mailagent_outbox_concurrency,
-                max_attempts=config.mailagent_outbox_max_attempts,
-            )
-            logger.info(
-                f"[outbox] FanoutWorker configured "
-                f"(poll={config.mailagent_outbox_poll_interval_sec}s, "
-                f"concurrency={config.mailagent_outbox_concurrency}, "
-                f"max_attempts={config.mailagent_outbox_max_attempts})"
-            )
-        else:
-            logger.info("[outbox] FanoutWorker disabled (MAILAGENT_OUTBOX_ENABLED=false)")
+        from src.sync import (
+            FanoutWorker,
+            MailAppFanout,
+            NotionFanout,
+            OutboxRepository,
+        )
+        self.outbox_repo = OutboxRepository(config.sync_store_db_path)
+        mailapp_fanout = MailAppFanout(
+            sync_store=self.watcher.sync_store,
+            backend=self.backend,
+        )
+        notion_fanout = NotionFanout(
+            sync_store=self.watcher.sync_store,
+            notion_sync=self.watcher.notion_sync,
+        )
+        self.fanout_worker = FanoutWorker(
+            outbox_repo=self.outbox_repo,
+            mailapp_fanout=mailapp_fanout,
+            notion_fanout=notion_fanout,
+            poll_interval_sec=config.mailagent_outbox_poll_interval_sec,
+            concurrency=config.mailagent_outbox_concurrency,
+            max_attempts=config.mailagent_outbox_max_attempts,
+        )
+        logger.info(
+            f"[outbox] FanoutWorker configured "
+            f"(poll={config.mailagent_outbox_poll_interval_sec}s, "
+            f"concurrency={config.mailagent_outbox_concurrency}, "
+            f"max_attempts={config.mailagent_outbox_max_attempts})"
+        )
 
         # 反向同步（Notion -> Mail.app + 飞书通知）
-        # Sprint 15: 注入 outbox_repo 后 sync_single_page 改写 SQLite intent + outbox
-        # 不再直调 AppleScript (跟 webhook handle_* / CLI 完全统一)。
+        # Sprint 15: sync_single_page 写 SQLite intent + outbox, 不直调 AppleScript
+        # (跟 webhook handle_* / CLI 完全统一)。E2-B: backend 参数已随老直调分支退役。
         from src.mail.reverse_sync import NotionToMailSync
         # Redis 事件启用时，跳过轮询通知（由 Redis handler 负责，避免重复）
         skip_notify = bool(config.redis_events_enabled and config.redis_url)
         self.reverse_sync = NotionToMailSync(
             notion_sync=self.watcher.notion_sync,
-            backend=self.backend,
             sync_store=self.watcher.sync_store,
             skip_notify=skip_notify,
             outbox_repo=self.outbox_repo,
@@ -207,8 +201,8 @@ class EmailNotionSyncApp:
                 # v4: 让 handle_fetch_mail_content 优先读 SQLite SSoT，
                 # 历史未双写邮件自动 fallback 到 AppleScript
                 email_repo=self.watcher.email_repo,
-                # Sprint 15: 启用 outbox 时 handle_flag_changed/completed/ai_reviewed
-                # 改写为 intent 模式，由 FanoutWorker 异步派发
+                # Sprint 15 + E2-B: handle_flag_changed/completed/ai_reviewed 恒走
+                # intent 模式（outbox_repo 必传），由 FanoutWorker 异步派发
                 outbox_repo=self.outbox_repo,
             )
             self._event_handlers = handlers

@@ -325,7 +325,7 @@ class NewWatcher:
         # sync_store.reconcile_marker_backend + config MAILAGENT_MARKER_BACKEND_GUARD）。
         # 必须在下面 restore/baseline 之前跑：reset 分支会把 marker 清零，让 restore 落到
         # first-run baseline 分支、在当前 backend 的 id 空间重新定基线（只向前，不回捞历史
-        # gap —— gap 由 health_check / backfill 兜）。
+        # gap —— gap 由 backfill 兜）。
         current_backend = getattr(settings, "mailagent_backend", "applescript")
         if getattr(settings, "mailagent_marker_backend_guard", True):
             action = self.sync_store.reconcile_marker_backend(current_backend)

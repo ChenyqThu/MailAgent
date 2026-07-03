@@ -1540,10 +1540,6 @@
         "label": "Reverse sync interval",
         "helper": "Seconds — poll to write Notion-side changes back to the mailbox"
       },
-      "healthInterval": {
-        "label": "Health-check interval",
-        "helper": "Seconds — catches missed emails"
-      },
       "page": {
         "eyebrow": "SYNC",
         "title": "Sync",

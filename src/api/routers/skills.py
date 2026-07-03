@@ -4,8 +4,9 @@
 唯一表面。鉴权用 ``authenticate_principal``（四腿 dev→local→bearer→CF）；**只有本路由认
 Bearer key** —— 其余写端点对 agent key 天然 401，越权 by construction 不可达。
 
-invoke 主路径 **无 run_cli**（BASE-1）：``invoke_skill`` 走 ``src/skills`` registry →
-handler 调 services / repository / ReportStore / run_report_once / notion_agent。
+invoke 主路径 **不 fork 子进程调 CLI**（BASE-1；E2-C 起 serve-api 全线退役该模式，
+不止本路由）：``invoke_skill`` 走 ``src/skills`` registry → handler 调 services /
+repository / ReportStore / run_report_once / notion_agent。
 """
 
 from __future__ import annotations

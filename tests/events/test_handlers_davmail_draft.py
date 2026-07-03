@@ -65,6 +65,8 @@ def handlers_with_mock_backend():
         feishu=feishu,
         notion_sync=notion_sync,
         result_callback=AsyncMock(),
+        # E2-B 必传化: draft 路径不碰 outbox, 占位 mock 即可
+        outbox_repo=MagicMock(),
     )
     return h, backend, sync_store, notion_sync
 

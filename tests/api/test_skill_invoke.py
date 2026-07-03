@@ -1,7 +1,8 @@
-"""POST /api/skills/invoke —— email_search / report_run / report_get 闭环 + no-fork。
+"""POST /api/skills/invoke —— email_search / report_run / report_get 闭环。
 
-DoD ③：invoke 调通 email_search、report_run（拿 report_id）、report_get（取详情），
-且 invoke 主路径无 run_cli。
+DoD ③：invoke 调通 email_search、report_run（拿 report_id）、report_get（取详情）。
+invoke 主路径不 fork 子进程调 CLI（E2-C 起 ``src/api/cli_runner.py`` 已整体退役，
+这一属性现由模块不存在本身保证，不再需要运行时炸弹式反证测试）。
 """
 
 from __future__ import annotations
@@ -164,21 +165,3 @@ async def test_confirm_gate_requires_strict_true(monkeypatch):
         assert "confirm" in (ei.value.hint or ei.value.message).lower()
 
 
-def test_invoke_path_does_not_fork_cli(skill_client, monkeypatch):
-    """invoke 主路径无 run_cli：把 cli_runner.run_cli 换成炸弹，email_search/report 仍成功。"""
-
-    async def _boom(*a, **k):  # pragma: no cover - 不应被调用
-        raise AssertionError("invoke path must NOT fork the mailagent CLI")
-
-    monkeypatch.setattr("src.api.cli_runner.run_cli", _boom)
-
-    r = skill_client.post(
-        "/api/skills/invoke",
-        json={"skill": "search", "tool": "email_search", "input": {"q": "redis"}},
-    )
-    assert r.status_code == 200, r.text
-    r2 = skill_client.post(
-        "/api/skills/invoke",
-        json={"skill": "report", "tool": "report_get", "input": {"report_id": "rep-1"}},
-    )
-    assert r2.status_code == 200

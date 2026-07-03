@@ -8,7 +8,7 @@ bind 127.0.0.1:8200, 经 cloudflared tunnel 暴露给 https://mail.chenge.ink。
   app.py        FastAPI 实例 + CORS + 统一响应中间件 + 全局异常处理 + 启动 loopback assert
   deps.py       依赖注入 (EmailRepository / config) — FastAPI Depends 用
   auth.py       Cloudflare Access JWT 二次校验 (verify_cf_access)
-  cli_runner.py subprocess 调 mailagent CLI (写端点) — 由并行 agent 创建
   schemas/      pydantic 模型 (复用 docs/cli-schema 形状) — 由并行 agent 创建
-  routers/      email / attachment / llm / admin 端点 (Phase 3 填充)
+  routers/      email / attachment / llm / admin 端点 (Phase 3 填充; 写端点均经 in-process
+                service 层调用, E2-C 起不再 fork 子进程调 CLI)
 """

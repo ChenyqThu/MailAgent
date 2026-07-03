@@ -1540,10 +1540,6 @@
         "label": "反向同步间隔",
         "helper": "秒 — 把 Notion 端改动回写邮箱的轮询间隔"
       },
-      "healthInterval": {
-        "label": "健康检查间隔",
-        "helper": "秒 — 发现漏同步邮件"
-      },
       "page": {
         "eyebrow": "SYNC",
         "title": "同步",
