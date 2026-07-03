@@ -371,6 +371,7 @@ async def _handle_unexpected(request: Request, exc: Exception) -> JSONResponse:
 from src.api.routers import (  # noqa: E402
     admin,
     agent,
+    agent_runs,
     ai,
     ai_gateway_proxy,
     attachment,
@@ -411,6 +412,11 @@ app.include_router(web.router)
 # 执行；固定 env 白名单不继承全局密钥 + inode 级 deny 地板。gateway 侧恒 edit-tier 人审、不进
 # auto-approve，结构化白名单命中才免卡（/api/agent/policy/evaluate）。owner-only（verify_cf_access）。
 app.include_router(exec_router.router)
+# S4 W2 (custom agent 内核) — headless run 的 spec 面 + 审批终态回写
+# /api/agent-runs/{id}/{spec,approval-state}。gateway 回拉权威 spec（pull 模型，请求体不携带
+# 权威事实）+ 岛 resume 后回写 approval_state。owner-only（verify_local_token，不接受 CF JWT）；
+# flag MAILAGENT_CUSTOM_AGENTS_ENABLED 默认 off → 端点 404。
+app.include_router(agent_runs.router)
 # ping-island 解耦 ack 通道 (契约 §6/§9-4): 按钮点击 fire-and-forget POST 回灌。
 # 自认 ack_token 能力令牌 (不挂 verify_cf_access)，见 routers/island.py。
 app.include_router(island.router)

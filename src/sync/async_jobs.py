@@ -22,12 +22,13 @@ claim 用条件 UPDATE (status queued→running, 仿 ``fanout.py`` mark_processi
 
 from __future__ import annotations
 
+import hmac
 import json
 import sqlite3
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from loguru import logger
 
@@ -276,15 +277,16 @@ class AsyncJobRepository:
         )
 
     def recover_orphaned(self) -> int:
-        """worker 启动时回收残留 running (上次崩溃留下)，按族分家 (S4 D1)，返回**维护族**重置条数。
+        """``JobWorker`` 启动时回收残留 running (上次崩溃留下)——**只碰维护族**，返回重置条数。
 
-        单 worker 语义下任何 running 行都是孤儿 (没有活跃 worker 在跑它)。两族语义不同:
-          - 维护族 (resync/backfill_*): running → queued。幂等维护操作, claim_next 重新捡起,
-            runner 从 checkpoint_internal_id 续跑 (现状语义不变)。
-          - agent 族 (agent_run): running → failed('E_ORPHANED')。LLM run **非幂等**, 重放 =
-            违背 D4 fail-closed 方向 (陈旧写重演)。**永不 requeue**, 下个触发窗口靠新幂等键自然重来。
+        单 worker 语义下任何 running 维护行都是孤儿 (没有活跃 worker 在跑它): running → queued,
+        claim_next 重新捡起, runner 从 checkpoint_internal_id 续跑 (幂等维护操作, 现状语义不变)。
 
-        返回值 = 维护族重置条数 (保持既有调用点日志语义); agent 族失败数单独 log。
+        🔴 **不碰 agent 族** (W2-check P1 对称化)：agent 孤儿唯一归 ``recover_orphaned_agents()``
+        (AgentRunWorker 启动调)。两 worker 严格各管各族 → 彻底消除对 create_task 顺序 + CPython
+        FIFO 调度的隐式依赖。若本方法仍标 running agent_run 为 failed，会与 AgentRunWorker 已
+        claim、正在正常 poke gateway 跑 LLM 的 running agent_run 撞车 (mark_terminal 无 WHERE
+        status 守护 → recover 的 failed 与 worker 的 succeeded 互相无条件覆盖 = 脏态)。
         """
         now = time.time()
         conn = self._connect()
@@ -297,15 +299,6 @@ class AsyncJobRepository:
                 (now, *maint),
             )
             n_maint = cursor.rowcount
-            agent = tuple(self.AGENT_JOB_TYPES)
-            agent_ph = ",".join("?" for _ in agent)
-            cursor2 = conn.execute(
-                f"UPDATE async_jobs SET status='failed', last_error='E_ORPHANED', "
-                f"finished_at=?, updated_at=? "
-                f"WHERE status='running' AND job_type IN ({agent_ph})",
-                (now, now, *agent),
-            )
-            n_agent = cursor2.rowcount
             conn.commit()
         finally:
             conn.close()
@@ -313,12 +306,40 @@ class AsyncJobRepository:
             logger.warning(
                 f"[async-jobs] recovered {n_maint} orphaned maintenance job(s) → queued"
             )
+        return n_maint
+
+    def recover_orphaned_agents(self) -> int:
+        """agent 族孤儿的**唯一**回收面 (running → failed('E_ORPHANED'))，返回失败条数。
+
+        ``AgentRunWorker`` 启动时调本方法。W2-check P1 对称化后 ``recover_orphaned`` 只碰维护族、
+        本方法只碰 agent 族——两 worker 严格各管各族，无论 create_task 顺序 / 调度模型都不互相
+        误杀 (LLM run 非幂等，孤儿永不 requeue，D4 fail-closed)。
+
+        副作用（可接受）：flag-off / ``custom_agents_enabled=false`` 时无 AgentRunWorker 启动 →
+        遗留的 running agent_run 孤儿无人清、停在 running。**无害**：claim_next 只捡 queued、不
+        requeue、不执行；且 S4 默认 off 时几乎无 agent_run 行遗留。
+        """
+        now = time.time()
+        conn = self._connect()
+        try:
+            agent = tuple(self.AGENT_JOB_TYPES)
+            agent_ph = ",".join("?" for _ in agent)
+            cursor = conn.execute(
+                f"UPDATE async_jobs SET status='failed', last_error='E_ORPHANED', "
+                f"finished_at=?, updated_at=? "
+                f"WHERE status='running' AND job_type IN ({agent_ph})",
+                (now, now, *agent),
+            )
+            n_agent = cursor.rowcount
+            conn.commit()
+        finally:
+            conn.close()
         if n_agent:
             logger.warning(
                 f"[async-jobs] failed {n_agent} orphaned agent_run job(s) → E_ORPHANED "
                 f"(non-idempotent, never requeued)"
             )
-        return n_maint
+        return n_agent
 
     # ------------------------------------------------------------
     # 读: get
@@ -348,6 +369,123 @@ class AsyncJobRepository:
                 (agent_id, since_epoch),
             ).fetchone()
             return int(row["n"]) if row else 0
+        finally:
+            conn.close()
+
+    # ------------------------------------------------------------
+    # agent_run fresh-spawn 支持 (S4 D2/D4): claim_token + spec CAS + approval 回写
+    # ------------------------------------------------------------
+
+    def set_claim_token(self, job_id: int, claim_token: str) -> None:
+        """``AgentRunWorker`` 认领 agent_run 后写入 claim_token (能力令牌; spec pull CAS 校验它)。
+
+        镜像 island stash ``resumeToken`` 的能力令牌纪律: 一次性写入, 后续 spec 端点凭它做
+        one-shot CAS。worker claim → running 之后立即调 (job 已在 running 态)。
+        """
+        now = time.time()
+        conn = self._connect()
+        try:
+            conn.execute(
+                "UPDATE async_jobs SET claim_token=?, updated_at=? WHERE job_id=?",
+                (claim_token, now, job_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def claim_spec_cas(
+        self, job_id: int, claim_token: str
+    ) -> Tuple[str, Optional[AsyncJob]]:
+        """spec pull 的原子 CAS one-shot (S4 D2)。返回 (结果码, job|None)。
+
+        结果码 → caller (spec 端点) 的 HTTP 映射:
+          - ``'ok'``              : CAS 成功 (spec_claimed_at 本次写入), 返 200 + 组装 spec;
+                                    第二元 = 该 job (含 params, 供 spec 组装)。
+          - ``'not_found'``       : job 不存在或非 agent_run → 404 E_SPEC_NOT_FOUND。
+          - ``'forbidden'``       : claim_token 不匹配 → 403 E_SPEC_FORBIDDEN (**不消费**
+                                    spec_claimed_at —— 单条 UPDATE 的 WHERE 不命中即天然不写)。
+          - ``'already_claimed'`` : 已 claim 过 / 非 running → 409 E_SPEC_ALREADY_CLAIMED。
+
+        原子性 (codex P1-2): 权威闸 = 单条 ``UPDATE … WHERE status='running' AND
+        claim_token=? AND spec_claimed_at IS NULL`` (rowcount==1 才算 claim 成功) —— 重复
+        poke / HTTP 重试 / 并发第二次 pull **结构性不可能**起两个 drain (第二次 rowcount==0 →
+        already_claimed)。先读一次仅为区分 403 vs 409 错误码 (token 不符要 403 非 409);
+        token 比对用 ``hmac.compare_digest`` 防时序侧信道。``spec_claimed_at`` 列为 REAL →
+        写 ``time.time()`` float epoch (与表内其余时间戳一致, W1-check §4)。
+        """
+        now = time.time()
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT * FROM async_jobs WHERE job_id=?", (job_id,)
+            ).fetchone()
+            if row is None or row["job_type"] not in self.AGENT_JOB_TYPES:
+                return "not_found", None
+            stored = row["claim_token"]
+            if not stored or not hmac.compare_digest(str(stored), str(claim_token)):
+                # token 不符 → 403; 不做任何写 (spec_claimed_at 不消费)。
+                return "forbidden", None
+            cursor = conn.execute(
+                "UPDATE async_jobs SET spec_claimed_at=?, updated_at=? "
+                "WHERE job_id=? AND status='running' AND claim_token=? "
+                "AND spec_claimed_at IS NULL",
+                (now, now, job_id, claim_token),
+            )
+            conn.commit()
+            if cursor.rowcount != 1:
+                # 已被拉过 (spec_claimed_at 非 NULL) 或非 running → 409。
+                return "already_claimed", None
+            full = conn.execute(
+                "SELECT * FROM async_jobs WHERE job_id=?", (job_id,)
+            ).fetchone()
+            return "ok", self._row_to_job(full)
+        finally:
+            conn.close()
+
+    def settle_agent_run_approval(self, job_id: int, state: str) -> str:
+        """回写 agent_run 的 ``result_json.approval_state`` (S4 D4, P1-4)。返回结果码。
+
+        岛上 approve/reject 终局后, W3 lifecycle 从 chat_db 解出 job_id → 调本方法把审批终态落
+        job 行 (让「等审批」与「成功」在账本可区分: ``status=succeeded && approval_state=pending``
+        永不得渲染为成功完成)。**只允许从 'pending' 迁移**; ``expired`` 不写库 (读侧按 age 推导)。
+
+        结果码 → caller HTTP:
+          - ``'ok'``          : pending → approved/rejected 写入成功, 200。
+          - ``'idempotent'``  : 当前已是请求的同值 (approved==approved) → 200 幂等 no-op。
+          - ``'not_found'``   : job 不存在或非 agent_run → 404。
+          - ``'not_pending'`` : 无 result / 无 approval_state / 已是其它终态 (approved!=rejected)
+                                → 409 (无 pending 可结算, 或已结算成不同值不可再迁移)。
+        """
+        if state not in ("approved", "rejected"):
+            raise ValueError(f"invalid approval state={state!r}, must be approved|rejected")
+        now = time.time()
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT job_type, result_json FROM async_jobs WHERE job_id=?",
+                (job_id,),
+            ).fetchone()
+            if row is None or row["job_type"] not in self.AGENT_JOB_TYPES:
+                return "not_found"
+            try:
+                result = json.loads(row["result_json"]) if row["result_json"] else {}
+            except (json.JSONDecodeError, TypeError):
+                result = {}
+            if not isinstance(result, dict):
+                result = {}
+            cur = result.get("approval_state")
+            if cur == state:
+                return "idempotent"
+            if cur != "pending":
+                # 无 pending (None / 缺 result) 或已结算成不同终态 → 不可迁移。
+                return "not_pending"
+            result["approval_state"] = state
+            conn.execute(
+                "UPDATE async_jobs SET result_json=?, updated_at=? WHERE job_id=?",
+                (json.dumps(result, ensure_ascii=False, default=str), now, job_id),
+            )
+            conn.commit()
+            return "ok"
         finally:
             conn.close()
 

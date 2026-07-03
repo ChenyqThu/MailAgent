@@ -214,12 +214,18 @@ def test_recover_orphaned_maintenance_requeues(repo):
 
 
 def test_recover_orphaned_agent_run_fails_never_requeue(repo):
-    """agent_run 孤儿 → failed('E_ORPHANED'), 绝不 requeue (LLM run 非幂等, D4 fail-closed)。"""
+    """agent_run 孤儿 → failed('E_ORPHANED') 由 ``recover_orphaned_agents()`` 处理, 绝不 requeue
+    (LLM run 非幂等, D4 fail-closed); full ``recover_orphaned()`` **不碰** agent 族 (W2-check P1
+    对称化——防误杀 AgentRunWorker 已 claim、正在正常跑的 running agent_run)。"""
     a, _ = repo.enqueue(job_type="agent_run", target_kind="agent", target_key="a1")
     claimed = repo.claim_next(types=AsyncJobRepository.AGENT_JOB_TYPES)  # → running
     assert claimed.status == "running"
-    n = repo.recover_orphaned()
-    assert n == 0  # 维护族无孤儿 (返回值只计维护族)
+    # full recover (JobWorker 启动路径) 只碰维护族 → running agent **原样不动**。
+    assert repo.recover_orphaned() == 0
+    assert repo.get(a).status == "running"
+    # agent 孤儿唯一归 recover_orphaned_agents (AgentRunWorker 启动路径)。
+    n = repo.recover_orphaned_agents()
+    assert n == 1
     job = repo.get(a)
     assert job.status == "failed"
     assert job.last_error == "E_ORPHANED"
@@ -229,16 +235,21 @@ def test_recover_orphaned_agent_run_fails_never_requeue(repo):
 
 
 def test_recover_orphaned_mixed_families(repo):
+    """两 worker 严格各管各族 (W2-check P1 对称化): full recover 只重置维护族、running agent
+    原样保留; ``recover_orphaned_agents()`` 才失败 agent 孤儿 —— 无论调度顺序都不互相误杀。"""
     repo.enqueue(job_type="resync", target_kind="ids", target_key="m")
-    a, _ = repo.enqueue(job_type="agent_run", target_kind="agent", target_key="a1")
+    repo.enqueue(job_type="agent_run", target_kind="agent", target_key="a1")
     repo.claim_next()                                             # 维护 → running
     repo.claim_next(types=AsyncJobRepository.AGENT_JOB_TYPES)     # agent → running
+    # full recover: 维护 → queued, agent **原样 running**（关键: 不误杀正在正常跑的 agent run）。
     n = repo.recover_orphaned()
-    assert n == 1  # 只维护族重置计入返回
-    # 维护 → queued, agent → failed。
+    assert n == 1
     statuses = {j.job_type: j.status for j in (repo.get(1), repo.get(2))}
     assert statuses["resync"] == "queued"
-    assert statuses["agent_run"] == "failed"
+    assert statuses["agent_run"] == "running"
+    # agent 族回收唯一归 recover_orphaned_agents。
+    assert repo.recover_orphaned_agents() == 1
+    assert repo.get(2).status == "failed"
 
 
 def test_agent_run_enqueue_accepted(repo):
@@ -260,3 +271,64 @@ def test_count_agent_runs_since(repo):
     assert repo.count_agent_runs_since("a1", t0) == 2  # 按 target_key 隔离
     assert repo.count_agent_runs_since("a2", t0) == 1
     assert repo.count_agent_runs_since("a1", _t.time() + 10) == 0  # 未来窗口 → 0
+
+
+# ============================================================
+# claim_spec_cas — CAS one-shot 真线程并发 (W2 复核补测)
+# ============================================================
+
+def test_claim_spec_cas_concurrent_exactly_one(repo):
+    """N 线程**真并发**同时 CAS 同一 running job → 恰 1 个 'ok'，其余 already_claimed。
+
+    区别于 test_spec_endpoint 的顺序两次 pull：threading.Barrier 让 N 线程同一瞬间冲，
+    验证 ``UPDATE ... WHERE spec_claimed_at IS NULL`` 条件 CAS 在真并发下也只有一个赢
+    (SQLite 写锁 + 条件 UPDATE 兜底 SELECT-then-UPDATE 的 TOCTOU 缝 —— 即便两线程都通过
+    前置 SELECT, 第二条 UPDATE 的 WHERE 已不命中 → rowcount 0 → already_claimed)。
+    """
+    import threading
+
+    a, _ = repo.enqueue(
+        job_type="agent_run", target_kind="agent", target_key="a1",
+        params={"agent_id": "a1"}, idempotency_key="cas-concurrent",
+    )
+    repo.claim_next(types=AsyncJobRepository.AGENT_JOB_TYPES)  # → running
+    repo.set_claim_token(a, "tok")
+
+    n_threads = 32
+    codes: list[str] = []
+    lock = threading.Lock()
+    barrier = threading.Barrier(n_threads)
+
+    def _spin() -> None:
+        barrier.wait()  # 所有线程同一瞬间冲 CAS
+        code, _job = repo.claim_spec_cas(a, "tok")
+        with lock:
+            codes.append(code)
+
+    threads = [threading.Thread(target=_spin) for _ in range(n_threads)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert codes.count("ok") == 1, f"exactly one CAS winner, got {codes.count('ok')}"
+    assert codes.count("already_claimed") == n_threads - 1
+    assert set(codes) <= {"ok", "already_claimed"}  # 无 forbidden/not_found 噪声
+
+
+def test_claim_spec_cas_wrong_token_does_not_consume(repo):
+    """错 token → 'forbidden' 且**不写** spec_claimed_at → 之后正确 token 仍 'ok'。
+
+    读 SQL 直接确认 forbidden 分支在 UPDATE 之前 return (WHERE 不命中天然不写 marker)。
+    """
+    a, _ = repo.enqueue(
+        job_type="agent_run", target_kind="agent", target_key="a1",
+        params={"agent_id": "a1"}, idempotency_key="cas-wrongtok",
+    )
+    repo.claim_next(types=AsyncJobRepository.AGENT_JOB_TYPES)
+    repo.set_claim_token(a, "real")
+
+    bad_code, _ = repo.claim_spec_cas(a, "WRONG")
+    assert bad_code == "forbidden"
+    good_code, job = repo.claim_spec_cas(a, "real")
+    assert good_code == "ok" and job is not None and job.job_id == a

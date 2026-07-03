@@ -121,6 +121,8 @@ class EmailNotionSyncApp:
         # C1: JobWorker 在 start() 里按 gate 构造; 这里先初始化为 None, 避免
         # start() 早退路径下 shutdown 引用 self.job_worker 时 AttributeError。
         self.job_worker = None
+        # S4: AgentRunWorker 同理（start() 里按 custom_agents_enabled gate 构造）。
+        self.agent_run_worker = None
         from src.sync import (
             FanoutWorker,
             MailAppFanout,
@@ -581,11 +583,16 @@ class EmailNotionSyncApp:
                     f"enabled_agent={has_enabled_report_agent})"
                 )
 
-            # Custom Agent 触发 worker（S4，cron 定时；默认关，flag-gated）。off → 零启动。
-            # email_filter 触发走 new_watcher 第 5 hook（不在此）；执行走 AgentRunWorker（W2）。
+            # Custom Agent 触发 + 执行 worker（S4，默认关，flag-gated）。off → 零启动。
+            #   - AgentTriggerWorker: cron 定时触发（email_filter 触发走 new_watcher 第 5 hook）→ 入队 agent_run；
+            #   - AgentRunWorker: 认领 agent_run → poke gateway headless drain（W2/W3）。
+            # 两者独立 worker、独立 AsyncJobRepository（连接 per-call 短命，同一 db 文件 WAL 并发安全）。
             agent_trigger_task = None
+            agent_run_task = None
+            self.agent_run_worker = None
             if config.custom_agents_enabled:
                 from src.agents import trigger_worker as agent_trigger_worker
+                from src.agents.run_worker import AgentRunWorker
                 from src.sync.async_jobs import AsyncJobRepository
                 agent_trigger_task = asyncio.create_task(
                     agent_trigger_worker.tick_loop(
@@ -595,7 +602,15 @@ class EmailNotionSyncApp:
                         shutdown_event=self._shutdown_event,
                     )
                 )
-                logger.info("[agent-trigger] cron worker enabled (MAILAGENT_CUSTOM_AGENTS_ENABLED)")
+                self.agent_run_worker = AgentRunWorker(
+                    repo=AsyncJobRepository(report_db_path),
+                    store=report_store,
+                )
+                agent_run_task = asyncio.create_task(self.agent_run_worker.run())
+                logger.info(
+                    "[agent] custom agent trigger+run workers enabled "
+                    "(MAILAGENT_CUSTOM_AGENTS_ENABLED)"
+                )
 
             # 等待关闭信号
             await self._shutdown_event.wait()
@@ -613,6 +628,9 @@ class EmailNotionSyncApp:
             if self.job_worker:
                 self.job_worker.stop()
                 logger.info(f"[job-worker] job_worker.stats={self.job_worker.stats}")
+            if self.agent_run_worker:
+                self.agent_run_worker.stop()
+                logger.info(f"[agent-run-worker] stats={self.agent_run_worker.stats}")
 
             # 发送停止告警
             if self.alerter:
@@ -638,6 +656,8 @@ class EmailNotionSyncApp:
                 tasks.append(report_worker_task)
             if agent_trigger_task:
                 tasks.append(agent_trigger_task)
+            if agent_run_task:
+                tasks.append(agent_run_task)
             if fanout_task:
                 tasks.append(fanout_task)
             if job_worker_task:
