@@ -174,7 +174,13 @@ class AgentRunWorker:
 
     @staticmethod
     def _result_json(resp: dict) -> dict:
-        """从 gateway 响应挑 sessionId/steps/outcome/summary/usage 透传进 result_json。"""
+        """从 gateway 响应挑 sessionId/steps/outcome/summary/usage 透传进 result_json。
+
+        🔴 读侧纪律（ADR D4, codex P1-4）：这里透传的 ``outcome='paused_handoff'``（配合
+        _map_response 补写的 ``approval_state='pending'``）意味着 ``status=succeeded`` 的行
+        **永不得渲染为「成功完成」** —— 任何展示面只允许经 ``src/agents/run_state.py``
+        ``derive_agent_run_state`` 读态（expired 亦在彼处按龄推导, 不写库）。
+        """
         out: dict[str, Any] = {}
         for key in ("sessionId", "steps", "outcome", "summary", "usage"):
             val = resp.get(key)
