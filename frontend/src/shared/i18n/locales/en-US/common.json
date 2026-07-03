@@ -837,7 +837,9 @@
       "quotaCooldown": "Cooldown · {seconds}s until next send"
     },
     "aiSdk": {
-      "degraded": "AI gateway unavailable — switched to the standard assistant"
+      "degraded": "AI engine unavailable — the conversation is shown read-only",
+      "retryProbe": "Retry connection",
+      "readOnlyLegacy": "This conversation ran on the retired legacy engine and is read-only. Start a new chat to continue with the AI."
     },
     "toolCall": {
       "running": "running",

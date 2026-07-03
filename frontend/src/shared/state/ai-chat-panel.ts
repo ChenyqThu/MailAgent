@@ -29,25 +29,17 @@ interface AIChatPanelStore {
   sidebarOpen: boolean
   setSidebarOpen(next: boolean): void
   toggleSidebar(): void
-  // Sidebar AI-Agents tabs → "open the panel ON this backend". The panel's
-  // backend choice lives in AIChatPanel local state (seeded from
-  // localStorage); a sidebar click can't reach into that useState, so it
-  // parks the request here and AIChatPanel consumes it on the next render.
-  // One-shot: cleared by consumeRequestedBackend() right after it's applied.
-  requestedBackendKind: ChatBackendKind | null
   // Global "AI 会话历史" → click a row → jump to that email + load that exact
   // session. The page sets `pendingOpen` + flips the active email; AIChatPanel
   // consumes it once the matching email's sessions are in hand (see
-  // consumePendingOpen). One-shot, same lifecycle as requestedBackendKind.
+  // consumePendingOpen). One-shot.
   //
   // 交付文档 §3.1 — `backendKind` rides along so AIChatPanel can switch the panel
-  // onto the SESSION's own agent before selecting it. With per-kind session
-  // scoping the target row only lives in `chat.sessions` once the panel is on
-  // the matching kind, so opening a cross-kind history row must flip the kind
-  // first.
+  // onto the SESSION's own agent before selecting it (a legacy kind renders the
+  // D6 read-only transcript). With per-kind session scoping the target row only
+  // lives in `chat.sessions` once the panel is on the matching kind, so opening
+  // a cross-kind history row must flip the kind first.
   pendingOpen: { emailId: number; sessionId: number; backendKind: ChatBackendKind } | null
-  requestBackend(kind: ChatBackendKind): void
-  consumeRequestedBackend(): void
   requestOpenSession(emailId: number, sessionId: number, backendKind: ChatBackendKind): void
   consumePendingOpen(): void
 
@@ -128,14 +120,7 @@ export const useAIChatPanel = create<AIChatPanelStore>((set, get) => ({
     set({ sidebarOpen: next })
     writePersistedSidebar(next)
   },
-  requestedBackendKind: null,
   pendingOpen: null,
-  requestBackend(kind) {
-    set({ requestedBackendKind: kind })
-  },
-  consumeRequestedBackend() {
-    set({ requestedBackendKind: null })
-  },
   requestOpenSession(emailId, sessionId, backendKind) {
     set({ pendingOpen: { emailId, sessionId, backendKind } })
   },
@@ -164,25 +149,8 @@ export const useAIChatPanel = create<AIChatPanelStore>((set, get) => ({
   }
 }))
 
-export function showAIChatPanel(): void {
-  useAIChatPanel.getState().setVisible(true)
-}
-
 export function hideAIChatPanel(): void {
   useAIChatPanel.getState().setVisible(false)
-}
-
-export function toggleAIChatPanel(): void {
-  useAIChatPanel.getState().toggle()
-}
-
-/** Open the AI panel and switch it to a specific backend. Used by the
- *  sidebar's "Notion Agent" / "Custom AI" entries so a click lands the user
- *  on the agent they picked instead of wherever the panel was last left. */
-export function openAIChatPanelWithBackend(kind: ChatBackendKind): void {
-  const s = useAIChatPanel.getState()
-  s.requestBackend(kind)
-  s.setVisible(true)
 }
 
 /** Open the AI panel pinned to a specific (email, session) pair. The caller

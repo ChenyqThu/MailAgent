@@ -1,10 +1,8 @@
 // Sprint 20 — Chats tab（按设计稿 chat-tab.jsx 双栏实现）：左会话列表（搜索 +
-// backend 过滤 + 选中）+ 右 transcript 内联预览。transcript 复用生产 MessageList
-// （read-only：不传 draft/user handlers → draft 卡按钮禁用、编辑入口消失），自带
-// 升级后的工具调用 chip + 正文渲染。「在收件箱继续」仍可跳回实时 chat 面板。
-//
-// 取代了原先直接复用单栏 SessionsPage 的临时做法。/sessions 路由 + SessionsPage
-// 保持不变（独立入口）。
+// backend 过滤 + 选中）+ 右 transcript 内联预览。S3 W2：transcript 从 legacy
+// MessageList 换成统一的 ReadOnlyTranscript（assistant-ui 只读 thread；有
+// ui_message_json 渲染完整 parts，legacy 行降级纯文本）。「在收件箱继续」仍可跳
+// 回实时 chat 面板。
 import type { TFunction } from 'i18next'
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -27,7 +25,7 @@ import { useMailApi } from '@shared/hooks/useMailApi'
 import { useActiveEmail } from '@shared/state/active-email'
 import { openAIChatSession } from '@shared/state/ai-chat-panel'
 import { EmptyState } from '@shared/components/feedback/EmptyState'
-import { MessageList } from '@shared/components/chat/MessageList'
+import { ReadOnlyTranscript } from '@shared/assistant/ReadOnlyTranscript'
 import { SegmentedControl } from '@shared/components/ui/segmented'
 import { useNarrow } from './hooks'
 
@@ -214,7 +212,7 @@ function SessionListPane({
   )
 }
 
-// ─── 右：transcript 预览（复用 MessageList read-only）──────────────────────────
+// ─── 右：transcript 预览（ReadOnlyTranscript，read-only）───────────────────────
 function TranscriptPane({
   session,
   onBack,
@@ -293,8 +291,9 @@ function TranscriptPane({
           {t('agents.chats.emptyTranscript')}
         </div>
       ) : (
-        // read-only：不传 draftHandlers / userHandlers → draft 卡按钮禁用、编辑入口消失。
-        <MessageList messages={messages} streamingMessageId={null} />
+        // read-only transcript — messages 已加载完才 mount（ReadOnlyTranscript 的
+        // mount contract）；keyed by session id 切换重挂。
+        <ReadOnlyTranscript messages={messages} sessionKey={session.id} />
       )}
     </div>
   )

@@ -72,9 +72,7 @@ import { useFocusTrap } from '@shared/hooks/useFocusTrap'
 import { useMailbox } from '@shared/state/mailbox'
 import { useActiveEmail } from '@shared/state/active-email'
 import { useEmailFilter, type EmailView } from '@shared/state/email-filter'
-import { showAIChatPanel } from '@shared/state/ai-chat-panel'
-import { openGeneralAgent } from '@shared/state/general-agent'
-import { isAgentViewEnabled } from '@shared/assistant/runtime/flags'
+import { openChatModal } from '@shared/state/ai-chat-panel'
 import { runGatewaySearchAgent } from '@shared/assistant/searchAgentClient'
 import { closeCommandPalette, useCommandPalette } from '@shared/state/command-palette'
 import { useSearchHistory } from '@shared/state/search-history'
@@ -651,24 +649,21 @@ export function CommandPalette(): React.ReactElement | null {
 
     // Always offer the AI panel jump + admin kanban shortcut as static rows
     // so users can ⌘K → ⏎ to surface them without typing.
-    // P3 — General Agent (Cmd+O) entry: opens the context-free Custom AI dialog.
+    // MailAgent 通用 agent 视图 (/sessions)——legacy Cmd+O centered dialog 已随
+    // legacy runtime 退役。
     out.push({
       id: 'jump:general-agent',
       icon: <Sparkles size={14} strokeWidth={1.75} />,
       label: (
         <span className="text-body flex-1 truncate">
-          <span className="text-ink-fg font-medium">
-            {isAgentViewEnabled() ? t('nav.agentView') : t('palette.jump.generalAgent')}
-          </span>
+          <span className="text-ink-fg font-medium">{t('nav.agentView')}</span>
           <span className="text-ink-fg-3 mx-1">·</span>
           <span className="text-ink-fg-2">{t('palette.jump.generalAgentMeta')}</span>
         </span>
       ),
       run: () => {
         closeCommandPalette()
-        // redesign — flag-on jump to the MailAgent view (/sessions); flag-off open the legacy dialog.
-        if (isAgentViewEnabled()) void navigate({ to: '/sessions' })
-        else openGeneralAgent()
+        void navigate({ to: '/sessions' })
       }
     })
     out.push({
@@ -683,7 +678,7 @@ export function CommandPalette(): React.ReactElement | null {
       ),
       run: () => {
         closeCommandPalette()
-        showAIChatPanel()
+        openChatModal()
       }
     })
     out.push({

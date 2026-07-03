@@ -15,9 +15,7 @@ import { useNavigate } from '@tanstack/react-router'
 import i18n from '@shared/i18n'
 
 import { useShortcut } from '@shared/hooks/useShortcut'
-import { openChatModal, toggleAIChatPanel } from '@shared/state/ai-chat-panel'
-import { toggleGeneralAgent } from '@shared/state/general-agent'
-import { isAgentViewEnabled, isAssistantModalEnabled } from '@shared/assistant/runtime/flags'
+import { openChatModal } from '@shared/state/ai-chat-panel'
 import { useCommandPalette } from '@shared/state/command-palette'
 import { openKeyboardHelp } from '@shared/state/keyboard-help'
 import { useNavCollapsed } from '@shared/state/nav-shell'
@@ -45,29 +43,15 @@ export function GlobalShortcuts(): null {
     void navigate({ to: '/settings', search: { tab: 'general' } })
   }, [navigate])
 
-  // Sprint 10 user-acceptance — ⌘L toggles the AI Chat panel (was always
-  // mounted before, see ai-chat-panel.ts module doc).
-  // assistant-modal: flag-on 退役 ⌘L（入口改 FAB + ⌘J）；flag-off 保留 legacy 侧边面板 toggle。
-  const toggleAIPanel = useCallback(() => {
-    if (isAssistantModalEnabled()) return
-    toggleAIChatPanel()
-  }, [])
-  // assistant-modal: ⌘J 展开 chat modal（仅 flag-on）；flag-off no-op。
+  // assistant-modal: ⌘J 展开 chat modal（⌘L 的旧侧边面板 toggle 随 legacy 面板退役）。
   const openModal = useCallback(() => {
-    if (!isAssistantModalEnabled()) return
     openChatModal()
   }, [])
 
-  // P3 — ⌘O toggles the General Agent dialog (Cmd+O = "Open" a context-free
-  // Custom AI conversation, not tied to any email). Toggle semantics mirror ⌘K.
-  // redesign — flag-on ⌘O navigates to the MailAgent view (/sessions) instead of opening the legacy
-  // centered dialog; flag-off keeps the dialog toggle.
+  // ⌘O — MailAgent 通用 agent 视图 (/sessions)。legacy Cmd+O centered dialog 已随
+  // legacy runtime 退役。
   const toggleGeneral = useCallback(() => {
-    if (isAgentViewEnabled()) {
-      void navigate({ to: '/sessions' })
-      return
-    }
-    toggleGeneralAgent()
+    void navigate({ to: '/sessions' })
   }, [navigate])
 
   // Sprint 11 V1.4 — nav-shell collapse + locale toggle.
@@ -86,7 +70,6 @@ export function GlobalShortcuts(): null {
   useShortcut('?', openHelp)
   useShortcut('cmd+k', togglePalette)
   useShortcut('cmd+,', goSettings)
-  useShortcut('cmd+l', toggleAIPanel)
   useShortcut('cmd+j', openModal)
   useShortcut('cmd+o', toggleGeneral)
   // ⌘N — 写新邮件 (居中模态, ComposeNewModal 挂 RootLayout)。global scope: 任意

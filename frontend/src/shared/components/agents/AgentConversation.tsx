@@ -1,15 +1,16 @@
 // redesign Phase 2 — MailAgent general-agent conversation (the RIGHT pane of AgentViewLayout).
 //
-// Mirrors AssistantUIChatPanel's body for the GENERAL surface: composes the existing ai-sdk stack
-// (AiSdkRuntimeProvider → AssistantThread) with the general variant of the three anchor values
+// Mirrors AiChatPanel's body for the GENERAL surface: composes the ai-sdk stack
+// (AiSdkRuntimeProvider → AgentThread) with the general variant of the three anchor values
 // (surface 'general-agent', anchorType 'general', anchorId null), wired to the SHARED useGeneralChat
 // session state passed from the parent (left history list + this pane stay in lock-step).
 //
-// Dual-runtime (user-chosen): the ai-sdk gateway path (thinking / rich cards / all tools / HITL) when
-// the embedded gateway is reachable; otherwise it DEGRADES to the legacy useGeneralChat + ExternalStore
-// engine (MailAgentRuntimeProvider) — the SAME uniform AssistantThread shell, so the agent always works
-// (gateway crash / web). Routing is per the ACTIVE session's persisted backend_kind (mixed-kind history)
-// + gateway health, mirroring the email panel's per-session runtime routing (Chunk D + degrade).
+// S3 W2 — the legacy engine is deleted, so there is no dual-runtime degrade anymore:
+//   D6 — an EXISTING session whose persisted backend_kind isn't 'ai-sdk' (old custom-api / retired
+//        notion-agent) renders READ-ONLY via the seeded ai-sdk runtime (plain-text fallback for rows
+//        without ui_message_json).
+//   D7 — a failed gateway /health probe surfaces an error notice + retry (the probe stays); the
+//        active session stays readable instead of silently swapping engines.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -17,18 +18,10 @@ import { useNavigate } from '@tanstack/react-router'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Mail, Settings, X } from 'lucide-react'
 
-import type {
-  ChatBackendKind,
-  ChatMessage,
-  ChatSessionListItem,
-  ChatToolCall,
-  SearchHit
-} from '@shared/api/types'
+import type { ChatBackendKind, ChatSessionListItem, SearchHit } from '@shared/api/types'
 import { cn } from '@shared/lib/cn'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import type { UseGeneralChatReturn } from '@shared/hooks/useGeneralChat'
-import { toastError } from '@shared/state/toast'
-import { ConfirmToolDialog } from '@shared/components/chat/ConfirmToolDialog'
 import { type BackendChoice } from '@shared/components/chat/BackendSelector'
 import { backendSupportsThinking } from '@shared/components/chat/backend_thinking'
 import { useEnabledModels } from '@shared/hooks/useLlmModels'
@@ -36,7 +29,6 @@ import { buildAttachmentBlock, type ChatAttachment } from '@shared/lib/chat-atta
 import { readAutoTitleSettings } from '@shared/lib/autoTitle'
 import { useApprovalMode } from '@shared/lib/approvalMode'
 
-import { MailAgentRuntimeProvider } from '@shared/assistant/runtime/MailAgentRuntimeProvider'
 import { AiSdkRuntimeProvider } from '@shared/assistant/runtime/AiSdkRuntimeProvider'
 import {
   getChatRuntimeMode,
@@ -55,7 +47,7 @@ import { chatMessageToUIMessage } from '@shared/assistant/uiMessage'
 import { AgentThread } from './AgentThread'
 import { AgentQuickActions } from './AgentQuickActions'
 
-// Shared model/thinking prefs (same localStorage keys as the email panel → one user preference across
+// Shared model prefs (same localStorage keys as the email panel → one user preference across
 // both surfaces). Best-effort; a blocked localStorage falls back to the default.
 const CUSTOM_MODEL_PREF = 'mailagent.chat.customModel'
 const DEFAULT_CUSTOM_MODEL = 'claude-sonnet-4-6'
@@ -74,66 +66,6 @@ function writeModelPref(model: string): void {
   } catch {
     /* best-effort */
   }
-}
-
-function mapErrorKey(code: string): string {
-  switch (code) {
-    case 'E_NO_LLM_KEY':
-      return 'chat.error.noKey'
-    case 'E_QUOTA':
-      return 'chat.error.quota'
-    case 'E_ABORTED':
-      return 'chat.error.abort'
-    case 'E_NETWORK':
-      return 'chat.error.network'
-    case 'E_MODEL_UNSUPPORTED':
-      return 'chat.error.modelUnsupported'
-    case 'E_UPSTREAM':
-    default:
-      return 'chat.error.upstream'
-  }
-}
-
-/** Fetch persisted tool-audit rows for SETTLED assistant messages (once each), keyed by message id —
- *  a local copy of the email panel's useSessionToolCalls (read-only, audit is non-critical). */
-function useSessionToolCalls(
-  messages: ReadonlyArray<ChatMessage>,
-  streamingMessageId: number | null
-): Map<number, ChatToolCall[]> {
-  const mailApi = useMailApi()
-  const [byId, setById] = useState<Map<number, ChatToolCall[]>>(new Map())
-  const fetchedRef = useRef<Set<number>>(new Set())
-  useEffect(() => {
-    const missing = messages
-      .filter(
-        (m) =>
-          m.role === 'assistant' && m.id !== streamingMessageId && !fetchedRef.current.has(m.id)
-      )
-      .map((m) => m.id)
-    if (missing.length === 0) return undefined
-    missing.forEach((id) => fetchedRef.current.add(id))
-    let cancelled = false
-    void Promise.all(
-      missing.map(async (id) => {
-        try {
-          return [id, await mailApi.chat.listToolCalls(id)] as const
-        } catch {
-          return [id, [] as ChatToolCall[]] as const
-        }
-      })
-    ).then((pairs) => {
-      if (cancelled) return
-      setById((prev) => {
-        const next = new Map(prev)
-        for (const [id, rows] of pairs) next.set(id, rows)
-        return next
-      })
-    })
-    return (): void => {
-      cancelled = true
-    }
-  }, [messages, streamingMessageId, mailApi])
-  return byId
 }
 
 /** Momentary placeholder during a context-injection session switch (messages catching up to the
@@ -167,11 +99,12 @@ export function AgentConversation({
   const mailApi = useMailApi()
   const queryClient = useQueryClient()
 
-  // ── runtime resolution (ai-sdk gateway vs legacy degrade) ──────────────────
+  // ── runtime resolution (ai-sdk gateway live vs error face) ─────────────────
   const gatewayBaseUrl = useMemo(() => resolveAiGatewayBaseUrl(), [])
   const aiSdkEnabled =
     getChatRuntimeMode() === 'ai-sdk' && isAiSdkGatewayEnabled() && gatewayBaseUrl !== null
-  // One sticky /health probe per mount; a definitive failure degrades to the legacy engine.
+  // One sticky /health probe per mount. D7 — a definitive failure no longer degrades to another
+  // engine (none exists): the error notice below offers a retry (refetch) instead.
   const healthQ = useQuery({
     queryKey: ['ai-gateway', 'health', gatewayBaseUrl],
     queryFn: async () => {
@@ -190,41 +123,27 @@ export function AgentConversation({
   const gatewayLive = aiSdkEnabled && !gatewayDegraded
 
   // Per-session runtime routing (mixed-kind unified history): an EXISTING session renders on its
-  // persisted backend_kind (from the unified item); a fresh conversation (no active id) defaults to
-  // ai-sdk when the gateway is live. Phase 9 — an EMAIL-anchored session (opened from the inbox) can
-  // only be CONTINUED here via the ai-sdk gateway (it injects the email body + persists by session id);
-  // useGeneralChat's send is general-anchored, so a degraded gateway makes an email session read-only
-  // (continue it in the inbox panel instead).
+  // persisted backend_kind (from the unified item); a fresh conversation (no active id) is always
+  // ai-sdk. metadataPending = an EXISTING session whose kind isn't known anywhere yet → the render
+  // DEFERS the runtime (placeholder) rather than assume ai-sdk, which would misroute an old
+  // custom-api session into the live AI SDK runtime and persist a turn into it.
   const isEmailSession = activeItem?.anchor_type === 'email' && activeItem.email_id != null
   const emailAnchorId = isEmailSession ? (activeItem!.email_id as number) : null
-  // Resolve the active session's backend_kind. Prefer the unified item; while it's still loading, fall
-  // back to the engine's own session list (general sessions whose metadata useGeneralChat already has).
-  // For a brand-new chat (no active id) default to ai-sdk when the gateway is live. metadataPending =
-  // an EXISTING session whose kind isn't known anywhere yet → the render DEFERS the runtime (placeholder)
-  // rather than assume ai-sdk, which would misroute a custom-api session into the AI SDK runtime and
-  // persist a turn to the wrong backend-kind session.
   const knownKind: ChatBackendKind | undefined =
     activeItem?.backend_kind ??
     chat.sessions.find((s) => s.id === chat.activeSessionId)?.backend_kind
   const metadataPending = chat.activeSessionId !== null && knownKind === undefined
-  const activeKind: ChatBackendKind = knownKind ?? (gatewayLive ? 'ai-sdk' : 'custom-api')
-  const useAiSdkRuntime = activeKind === 'ai-sdk' && gatewayLive && !metadataPending
-  // Read-only when the active session can't run a live turn HERE: an email session without the live
-  // gateway, a retired notion-agent, or an ai-sdk session while the gateway is degraded/off.
-  const readOnly = isEmailSession
-    ? !useAiSdkRuntime
-    : !useAiSdkRuntime && activeKind !== 'custom-api'
+  const activeKind: ChatBackendKind = knownKind ?? 'ai-sdk'
+  // D6 — an old legacy-engine session (custom-api / retired notion-agent) is read-only history.
+  const isLegacySession = activeKind !== 'ai-sdk'
+  const useAiSdkRuntime = !isLegacySession && gatewayLive && !metadataPending
 
   // ── composer controls (model / thinking / @mention / attachments) ──────────
   const [model, setModel] = useState(() => readModelPref())
   // dogfood-3 (follow-ups) — dynamic next-question chips for the latest completed turn (ai-sdk path).
-  // Refreshed per turn-complete (best-effort); AgentThread hides them while running so a fresh send
-  // never overlaps stale chips.
   const [followups, setFollowups] = useState<string[]>([])
-  // dogfood — follow-ups are PER-SESSION: clear them on a session switch / new chat so a previous
-  // session's suggestions never leak into another (they repopulate after THIS session's next turn
-  // completes). activeSessionId is the switch signal; reset-on-dep-change (same opt-in as the other
-  // effect-driven resets in this codebase).
+  // Follow-ups are PER-SESSION: clear them on a session switch / new chat so a previous session's
+  // suggestions never leak into another.
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setFollowups([])
@@ -234,8 +153,8 @@ export function AgentConversation({
     setModel(m)
   }, [])
   const backendChoice = useMemo<BackendChoice>(
-    () => ({ kind: useAiSdkRuntime ? 'ai-sdk' : 'custom-api', model, agentPageId: null }),
-    [useAiSdkRuntime, model]
+    () => ({ kind: 'ai-sdk', model, agentPageId: null }),
+    [model]
   )
   // 去思考开关 (user feedback): the agent view follows the model — extended thinking is on
   // automatically whenever the active model supports it (Claude); there is no UI toggle.
@@ -352,7 +271,6 @@ export function AgentConversation({
   useEffect(() => {
     if (initialMentionEmailId == null) {
       // No active email (/sessions, or email deselected) → clear any stale chip so its body isn't injected.
-      // Effect-driven reset of derived state (same opt-in as the mount-once latches in this codebase).
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setEmailContext(null)
       return undefined
@@ -436,11 +354,11 @@ export function AgentConversation({
     panelMode: 'fullscreen',
     enabled: contextInjectionOn
   })
-  // PART 2 — auto-approval mode (Settings → AI). Threaded into the ai-sdk runtime body so reversible
-  // preview-tier writes can skip the approval card in 'auto-reversible'; default 'always' = unchanged.
+  // PART 2 — auto-approval mode (Settings → AI), threaded into the ai-sdk runtime body.
   const approvalMode = useApprovalMode()
   // Session reload: seed the ai-sdk runtime with the active session's prior messages once they reflect
   // it (messagesSessionId gate). Empty matters — a freshly-adopted session has 0 rows and `:new` keying.
+  // The D6 read-only branch shares this gate (its seed must not be stale either).
   const reloadMessagesReady =
     chat.activeSessionId === null || chat.messagesSessionId === chat.activeSessionId
   const initialMessages = useMemo(
@@ -449,6 +367,14 @@ export function AgentConversation({
         ? chat.messages.map(chatMessageToUIMessage)
         : undefined,
     [contextInjectionOn, reloadMessagesReady, chat.messages]
+  )
+  // D6 — read-only seed for a legacy session (independent of the context-injection flag).
+  const readOnlyMessages = useMemo(
+    () =>
+      isLegacySession && reloadMessagesReady
+        ? chat.messages.map(chatMessageToUIMessage)
+        : undefined,
+    [isLegacySession, reloadMessagesReady, chat.messages]
   )
 
   // ai-sdk: create the backend_kind='ai-sdk' general session on the first send, adopt it (history /
@@ -468,11 +394,10 @@ export function AgentConversation({
   //  (1) refresh the unified history on a session's FIRST completed turn so a brand-new conversation
   //      appears — the eager-create invalidate fires BEFORE the gateway persists the turn's messages
   //      (onFinish), so listAllSessions (WHERE EXISTS messages) misses it until this post-persist
-  //      refresh (redesign review MED-4). Runs in BOTH modes (deduped per session so a multi-turn chat
-  //      doesn't refetch every turn).
+  //      refresh. Deduped per session so a multi-turn chat doesn't refetch every turn.
   //  (2) configurable LLM auto-title (opt-in): generate + persist once per session via the gateway,
   //      then refresh again so the title shows live. The gateway is idempotent (skips an already-titled
-  //      session → a manual rename is never overwritten). Off mode (default) → no title call. ai-sdk only.
+  //      session → a manual rename is never overwritten). Off mode (default) → no title call.
   const turnCompleteSeenRef = useRef<Set<number>>(new Set())
   const autoTitlePostedRef = useRef<Set<number>>(new Set())
   const handleTurnComplete = useCallback((): void => {
@@ -484,8 +409,7 @@ export function AgentConversation({
     }
     if (gatewayBaseUrl == null) return
     // dogfood-3 (follow-ups) — generate next-question chips for the just-completed turn. Per-turn (NOT
-    // idempotent — fresh each turn), best-effort (failure → clear). ai-sdk only (this handler is wired
-    // only on the ai-sdk AgentThread).
+    // idempotent — fresh each turn), best-effort (failure → clear).
     void fetch(`${gatewayBaseUrl}/api/ai/followups`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -515,64 +439,7 @@ export function AgentConversation({
       })
   }, [chat.activeSessionId, gatewayBaseUrl, queryClient, model])
 
-  // ── legacy (degrade / custom-api) adapter callbacks ────────────────────────
-  const onSend = useCallback(
-    async (text: string): Promise<void> => {
-      const prefix = await buildInjectedContext()
-      const message = prefix.length > 0 ? `${prefix}${text}` : text
-      try {
-        await chat.send({ message, backendModel: model, thinking: thinkingActive })
-        onConsumeInjected()
-      } catch {
-        /* surfaces via chat.error → the red banner; chips preserved for retry */
-      }
-    },
-    [chat, model, thinkingActive, buildInjectedContext, onConsumeInjected]
-  )
-  const onEdit = useCallback(
-    async (messageId: number, text: string): Promise<void> => {
-      await chat.editMessage({
-        messageId,
-        newContent: text,
-        backendKind: 'custom-api',
-        backendModel: model,
-        thinking: thinkingActive
-      })
-    },
-    [chat, model, thinkingActive]
-  )
-
-  const toolCallsByMessage = useSessionToolCalls(chat.messages, chat.streamingMessageId)
-
-  // Legacy pending tool confirmation (custom-api ConfirmToolDialog fallback).
-  const headConfirmation = chat.pendingConfirmations[0] ?? null
-  const handleConfirmTool = useCallback(
-    async (editedInput?: unknown): Promise<void> => {
-      if (!headConfirmation) return
-      const result = await chat.confirmTool(headConfirmation.toolUseId, true, editedInput)
-      if (!result.ok && result.code !== 'E_NOT_PENDING') {
-        toastError(t('chat.confirmTool.failed', { defaultValue: 'Confirm failed' }))
-      }
-    },
-    [chat, headConfirmation, t]
-  )
-  const handleCancelTool = useCallback(async (): Promise<void> => {
-    if (!headConfirmation) return
-    await chat.confirmTool(headConfirmation.toolUseId, false)
-  }, [chat, headConfirmation])
-  const pendingSlot =
-    headConfirmation !== null ? (
-      <div className="px-1 pt-2">
-        <ConfirmToolDialog
-          key={headConfirmation.toolUseId}
-          pending={headConfirmation}
-          onConfirm={(editedInput) => handleConfirmTool(editedInput)}
-          onCancel={() => handleCancelTool()}
-        />
-      </div>
-    ) : undefined
-
-  // custom-api readiness = keychain llmApiKey present (mirror of the dialog's gate).
+  // Readiness = keychain llmApiKey present (the gateway reads the same slot in main).
   const secretsQ = useQuery({
     queryKey: ['settings', 'secrets-status'],
     queryFn: () => mailApi.settings.secretsStatus(),
@@ -580,10 +447,8 @@ export function AgentConversation({
   })
   const backendConfigured = secretsQ.data?.llmApiKey === true
 
-  const errorBanner = chat.error ? mapErrorKey(chat.error.code) : null
-
   // assistant-modal P5 — removable email-context chip (modal only; null otherwise → AgentThread renders
-  // nothing in the contextChip slot). Shared by both runtime branches below.
+  // nothing in the contextChip slot).
   const emailContextChip = emailContext ? (
     <EmailContextChip subject={emailContext.subject} onRemove={onRemoveEmailContext} />
   ) : null
@@ -613,9 +478,9 @@ export function AgentConversation({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      {errorBanner && (
+      {chat.error && (
         <div className="mx-3 my-2 flex items-start gap-2 rounded-md border border-fail/30 bg-fail/10 px-3 py-2 text-aux text-fail">
-          <span className="flex-1">{t(errorBanner)}</span>
+          <span className="flex-1">{t('chat.error.upstream')}</span>
           <button
             type="button"
             onClick={chat.clearError}
@@ -626,17 +491,54 @@ export function AgentConversation({
           </button>
         </div>
       )}
-      {gatewayDegraded && (
-        <div className="mx-3 my-2 rounded-md border border-ink-border bg-ink-3/70 px-3 py-2 text-aux text-ink-fg-2">
-          {t('chat.aiSdk.degraded')}
+      {/* D7 — gateway unreachable: error notice + retry; the session below stays readable. */}
+      {!isLegacySession && !gatewayLive && (
+        <div
+          data-gateway-error-notice
+          className="mx-3 my-2 flex items-start gap-2 rounded-md border border-fail/30 bg-fail/10 px-3 py-2 text-aux text-fail"
+        >
+          <span className="flex-1">{t('chat.aiSdk.degraded')}</span>
+          {gatewayDegraded && (
+            <button
+              type="button"
+              onClick={() => void healthQ.refetch()}
+              className="rounded px-2 py-0.5 font-mono text-meta text-fail transition-colors duration-fast hover:bg-fail/15"
+            >
+              {t('chat.aiSdk.retryProbe')}
+            </button>
+          )}
+        </div>
+      )}
+      {/* D6 — legacy-engine session: read-only notice above the transcript. */}
+      {isLegacySession && (
+        <div
+          data-legacy-readonly-notice
+          className="mx-3 my-2 rounded-md border border-ink-border bg-ink-3/70 px-3 py-2 text-aux text-ink-fg-2"
+        >
+          {t('chat.aiSdk.readOnlyLegacy')}
         </div>
       )}
 
       <ChatComposerControlsProvider value={composerControls}>
         {metadataPending ? (
           // An existing session whose backend_kind isn't known yet (unified list still loading) — defer
-          // the runtime mount so we never misroute it to the AI SDK runtime by default (codex HIGH-2).
+          // the runtime mount so we never misroute it (would persist a turn to the wrong kind).
           <AgentSwitchPlaceholder />
+        ) : isLegacySession ? (
+          // D6 — read-only seeded runtime (ui_message_json when present, plain-text fallback). Keyed by
+          // session so switching between old sessions re-seeds.
+          readOnlyMessages === undefined ? (
+            <AgentSwitchPlaceholder />
+          ) : (
+            <AiSdkRuntimeProvider
+              key={`legacy:${chat.activeSessionId ?? 'none'}`}
+              gatewayBaseUrl={gatewayBaseUrl ?? ''}
+              sessionId={null}
+              initialMessages={readOnlyMessages}
+            >
+              <AgentThread readOnly welcomeAlign={welcomeAlign} />
+            </AiSdkRuntimeProvider>
+          )
         ) : /* `!= null` not truthy: '' (same-origin web proxy) is a valid base. */
         useAiSdkRuntime && gatewayBaseUrl != null ? (
           contextInjectionOn && !reloadMessagesReady ? (
@@ -646,10 +548,9 @@ export function AgentConversation({
             <AiSdkRuntimeProvider
               key={
                 // navEpoch makes "new chat" / "switch session" remount the runtime so the ai-sdk thread
-                // (owned by useChatRuntime, NOT by chat.messages) is cleared / reloaded — without it the
-                // key stayed `general:new` across a newSession (initialMessages is empty during a live
-                // chat after adoptSession), so new-chat 没反应. navEpoch does NOT bump on the first-send
-                // adoptSession, so a fresh chat getting its id mid-stream never remounts.
+                // (owned by useChatRuntime, NOT by chat.messages) is cleared / reloaded. navEpoch does
+                // NOT bump on the first-send adoptSession, so a fresh chat getting its id mid-stream
+                // never remounts.
                 contextInjectionOn
                   ? `general:${chat.navEpoch}:${initialMessages && initialMessages.length > 0 ? chat.activeSessionId : 'new'}`
                   : `general:${chat.navEpoch}`
@@ -674,23 +575,19 @@ export function AgentConversation({
               />
             </AiSdkRuntimeProvider>
           )
-        ) : (
-          <MailAgentRuntimeProvider
-            chat={chat}
-            toolCallsByMessage={toolCallsByMessage}
-            onSend={onSend}
-            onEdit={onEdit}
-            onReload={null}
-            sendDisabled={readOnly}
+        ) : reloadMessagesReady && chat.messages.length > 0 ? (
+          // D7 — gateway down but the active session has history: keep it readable (read-only seed).
+          <AiSdkRuntimeProvider
+            key={`offline:${chat.activeSessionId ?? 'none'}`}
+            gatewayBaseUrl={gatewayBaseUrl ?? ''}
+            sessionId={null}
+            initialMessages={chat.messages.map(chatMessageToUIMessage)}
           >
-            <AgentThread
-              quickActions={<AgentQuickActions />}
-              pendingSlot={pendingSlot}
-              readOnly={readOnly}
-              welcomeAlign={welcomeAlign}
-              contextChip={emailContextChip}
-            />
-          </MailAgentRuntimeProvider>
+            <AgentThread readOnly welcomeAlign={welcomeAlign} />
+          </AiSdkRuntimeProvider>
+        ) : (
+          // D7 — gateway down, nothing to show: the error notice above carries the state.
+          <AgentSwitchPlaceholder />
         )}
       </ChatComposerControlsProvider>
     </div>
@@ -699,7 +596,7 @@ export function AgentConversation({
 
 /** assistant-modal P5 — the modal's email-context chip: an attachment-style pill above the composer with
  *  the carried email's subject (truncated) + a × to remove it (after which the email body is no longer
- *  injected). Mirrors the 截图's "已添加附件" affordance. Internal (not exported) → react-refresh-safe. */
+ *  injected). Internal (not exported) → react-refresh-safe. */
 function EmailContextChip({
   subject,
   onRemove

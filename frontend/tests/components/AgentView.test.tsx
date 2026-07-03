@@ -1,27 +1,28 @@
 // @vitest-environment happy-dom
 //
-// demo-fidelity Phase 7 — MailAgent agent-view component render smoke.
+// demo-fidelity Phase 7 → S3 W2 — MailAgent agent-view component render smoke.
 //
-// Mounts the NEW agent-view thread (AgentThread + AgentMessage + AgentComposer) on the legacy
-// ExternalStore runtime — the same degrade path AgentConversation uses — driven by a controlled chat
-// stub. Asserts the demo layout renders: assistant prose + user message, the empty-state welcome +
-// centered composer + quick-action chips, the working indicator on a streamed-empty reply, the
-// vendor-icon model picker / @ / attachment toolbar (with controls), and readOnly composer suppression.
-// The shared MarkdownText is mocked to a plain div (its internals are covered by its own tests).
+// Mounts the agent-view thread (AgentThread + AgentMessage + AgentComposer) on the
+// AI SDK runtime seeded with initialMessages (the same mount AgentConversation uses
+// for reload + the D6 read-only path) — the legacy ExternalStore runtime is deleted.
+// Asserts the demo layout renders: assistant prose + user message, the empty-state
+// welcome + centered composer + quick-action chips, the vendor-icon model picker /
+// attachment toolbar (with controls), and readOnly composer suppression. The shared
+// MarkdownText is mocked to a plain div (its internals are covered by its own tests).
 
 import { afterEach, beforeAll, describe, expect, test, vi } from 'vitest'
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 import type { ChatMessage, ChatSessionListItem } from '@shared/api/types'
-import type { LegacyRuntimeChat } from '@shared/assistant/runtime/useLegacyExternalStoreRuntime'
 import i18n from '@shared/i18n'
 
 vi.mock('@shared/components/email/TranslatedBody', () => ({
   TranslatedBody: ({ text }: { text: string }) => <div data-testid="md">{text}</div>
 }))
 
-import { MailAgentRuntimeProvider } from '@shared/assistant/runtime/MailAgentRuntimeProvider'
+import { AiSdkRuntimeProvider } from '@shared/assistant/runtime/AiSdkRuntimeProvider'
+import { chatMessageToUIMessage } from '@shared/assistant/uiMessage'
 import {
   ChatComposerControlsProvider,
   type ChatComposerControls
@@ -80,16 +81,22 @@ function fakeMessage(over: Partial<ChatMessage>): ChatMessage {
   }
 }
 
-function makeChat(
-  over: { messages?: ChatMessage[]; isStreaming?: boolean; streamingMessageId?: number | null } = {}
-): LegacyRuntimeChat & { abortCurrent: ReturnType<typeof vi.fn> } {
-  return {
-    messages: over.messages ?? [],
-    isStreaming: over.isStreaming ?? false,
-    streamingMessageId: over.streamingMessageId ?? null,
-    liveToolCalls: new Map(),
-    abortCurrent: vi.fn()
-  }
+/** Mount an AgentThread on the AI SDK runtime seeded with the given rows (the
+ *  reload / D6 read-only mount shape). The transport never fires in these tests
+ *  (no send), so a dummy loopback base is fine. */
+function mountThread(
+  messages: ChatMessage[],
+  thread: React.ReactElement
+): ReturnType<typeof render> {
+  return render(
+    <AiSdkRuntimeProvider
+      gatewayBaseUrl=""
+      sessionId={null}
+      initialMessages={messages.map(chatMessageToUIMessage)}
+    >
+      {thread}
+    </AiSdkRuntimeProvider>
+  )
 }
 
 function stubControls(over: Partial<ChatComposerControls> = {}): ChatComposerControls {
@@ -113,28 +120,19 @@ function stubControls(over: Partial<ChatComposerControls> = {}): ChatComposerCon
 
 describe('Agent view — demo-fidelity thread', () => {
   test('user + assistant messages render in the agent layout', async () => {
-    const chat = makeChat({
-      messages: [
+    mountThread(
+      [
         fakeMessage({ id: 1, role: 'user', content: '帮我安排今天的邮件' }),
         fakeMessage({ id: 2, role: 'assistant', content: '好的，这是今天的待办。' })
-      ]
-    })
-    render(
-      <MailAgentRuntimeProvider chat={chat} onSend={vi.fn()}>
-        <AgentThread quickActions={<AgentQuickActions />} />
-      </MailAgentRuntimeProvider>
+      ],
+      <AgentThread quickActions={<AgentQuickActions />} />
     )
     await waitFor(() => expect(screen.getByText('帮我安排今天的邮件')).toBeTruthy())
     expect(screen.getByText('好的，这是今天的待办。')).toBeTruthy()
   })
 
   test('empty thread shows the welcome + composer + quick-action chips', async () => {
-    const chat = makeChat({ messages: [] })
-    render(
-      <MailAgentRuntimeProvider chat={chat} onSend={vi.fn()}>
-        <AgentThread quickActions={<AgentQuickActions />} />
-      </MailAgentRuntimeProvider>
-    )
+    mountThread([], <AgentThread quickActions={<AgentQuickActions />} />)
     await waitFor(() => expect(screen.getByText(i18n.t('agentView.welcome'))).toBeTruthy())
     // composer present (LexicalComposerInput renders a contenteditable, not an aria-labelled input,
     // so assert the send button — our toolbar chrome — as the "composer rendered" signal).
@@ -143,30 +141,10 @@ describe('Agent view — demo-fidelity thread', () => {
     expect(screen.getByText(i18n.t('agentView.quickActions.summarize.label'))).toBeTruthy()
   })
 
-  test('streamed-empty assistant reply shows the working indicator', async () => {
-    const chat = makeChat({
-      messages: [fakeMessage({ id: 2, role: 'assistant', content: '', status: 'streaming' })],
-      isStreaming: true,
-      streamingMessageId: 2
-    })
-    const { container } = render(
-      <MailAgentRuntimeProvider chat={chat} onSend={vi.fn()}>
-        <AgentThread quickActions={<AgentQuickActions />} />
-      </MailAgentRuntimeProvider>
-    )
-    // dogfood-3: working indicator = DotMatrix 点阵 + 轮换流光短句 ThinkingPhrases（取代 dogfood-2 的
-    // 静态 connecting 文案）。断言 DotMatrix 挂载（data-slot，不受 ShimmerText 多层 text 干扰）。
-    await waitFor(() => expect(container.querySelector('[data-slot="dot-matrix"]')).toBeTruthy())
-  })
-
-  test('readOnly suppresses the composer', async () => {
-    const chat = makeChat({
-      messages: [fakeMessage({ id: 2, role: 'assistant', content: '历史回答' })]
-    })
-    render(
-      <MailAgentRuntimeProvider chat={chat} onSend={vi.fn()}>
-        <AgentThread quickActions={<AgentQuickActions />} readOnly />
-      </MailAgentRuntimeProvider>
+  test('readOnly suppresses the composer (D6 read-only mount)', async () => {
+    mountThread(
+      [fakeMessage({ id: 2, role: 'assistant', content: '历史回答' })],
+      <AgentThread quickActions={<AgentQuickActions />} readOnly />
     )
     await waitFor(() => expect(screen.getByText('历史回答')).toBeTruthy())
     // readOnly drops the composer entirely → no send button.
@@ -174,16 +152,15 @@ describe('Agent view — demo-fidelity thread', () => {
   })
 
   test('composer toolbar (with controls) shows the model picker + attachment', async () => {
-    const chat = makeChat({ messages: [] })
     // With controls, AgentComposer mounts AgentMentionButton → MentionPopover, which runs a useQuery
     // unconditionally → a QueryClientProvider is required (the search itself stays disabled while empty).
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     render(
       <QueryClientProvider client={queryClient}>
         <ChatComposerControlsProvider value={stubControls()}>
-          <MailAgentRuntimeProvider chat={chat} onSend={vi.fn()}>
+          <AiSdkRuntimeProvider gatewayBaseUrl="" sessionId={null}>
             <AgentThread quickActions={<AgentQuickActions />} />
-          </MailAgentRuntimeProvider>
+          </AiSdkRuntimeProvider>
         </ChatComposerControlsProvider>
       </QueryClientProvider>
     )

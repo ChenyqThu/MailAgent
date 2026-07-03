@@ -837,7 +837,9 @@
       "quotaCooldown": "冷却中 · {seconds} 秒后可再次发送"
     },
     "aiSdk": {
-      "degraded": "AI 网关不可用，已切换到标准助手"
+      "degraded": "AI 引擎不可用 — 会话以只读方式展示",
+      "retryProbe": "重试连接",
+      "readOnlyLegacy": "这是旧版引擎的历史会话，已转为只读。新建会话可继续与 AI 对话。"
     },
     "toolCall": {
       "running": "执行中",

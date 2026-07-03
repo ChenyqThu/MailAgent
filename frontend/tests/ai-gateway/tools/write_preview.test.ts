@@ -1,42 +1,21 @@
-// chat-panel P4 Phase 03b — write-tool registry + gate + needsApproval + parity.
+// chat-panel P4 Phase 03b → S3 W2 — write-tool registry + gate + needsApproval + output snapshots.
 //
-// The migration contract (phase-03 §7, §10): a migrated write tool must (a) only exist when
-// MAILAGENT_AI_SDK_WRITE_TOOLS is on AND a guard is supplied, (b) ALWAYS request approval
-// (never silent), and (c) produce output identical to the legacy tool given the same domain
-// data (parity). We drive both implementations from one fixture: the legacy ToolDef
-// (createWriteTools over a mock ChatToolPlatform) and the gateway tool (createWriteTools over
-// a mockDomain returning the SAME data), then compare the legacy ToolResult.output against
-// the gateway tool's return value.
+// Originally a legacy⋈gateway parity harness (migration contract §7/§10). The legacy
+// runtime is deleted, so the parity half now PINS the gateway write tools' output
+// shape against fixed fixtures (the exact values the parity run asserted). The gate
+// contract is unchanged: a write tool must (a) only exist when
+// MAILAGENT_AI_SDK_WRITE_TOOLS is on AND a guard is supplied, (b) ALWAYS request
+// approval (never silent).
 
 import { describe, expect, test } from 'vitest'
 
 import type { Tool } from 'ai'
-
-import { createWriteTools as createLegacyWriteTools } from '@shared/chat/tools/builtin/write'
-import type { ChatToolPlatform } from '@shared/chat/platform'
-import type { ToolDef, ToolExecCtx } from '@shared/chat/tools/registry'
 
 import { buildGatewayTools } from '../../../src/ai-gateway/tools'
 import { createWriteTools, GATEWAY_WRITE_TOOL_NAMES } from '../../../src/ai-gateway/tools/write'
 import { GATEWAY_READ_TOOL_NAMES } from '../../../src/ai-gateway/tools'
 import { ApprovalGuard } from '../../../src/ai-gateway/security/approval'
 import { mockDomain, okEnvelope } from './_helpers'
-
-const CTX: ToolExecCtx = { sessionId: 0, emailId: null, signal: new AbortController().signal }
-
-/** Minimal ChatToolPlatform — only the write primitives the migrated tools call. */
-function mockPlatform(over: Partial<ChatToolPlatform>): ChatToolPlatform {
-  return over as unknown as ChatToolPlatform
-}
-
-/** Run a legacy write ToolDef and unwrap its ToolResult.output (throws on ok:false). */
-async function legacyOutput(tools: ToolDef[], name: string, input: unknown): Promise<unknown> {
-  const def = tools.find((t) => t.name === name)
-  if (!def) throw new Error(`legacy tool ${name} not found`)
-  const r = await def.handler(input, CTX)
-  if (!r.ok) throw new Error(`legacy ${name} failed: ${r.code}`)
-  return r.output
-}
 
 /** Drive a gateway write tool's full HITL two-call shape: needsApproval (registers the
  *  approval record) → execute (verifies + runs). Returns the tool output. */
@@ -108,67 +87,59 @@ describe('write tools — always need approval (never silent)', () => {
   })
 })
 
-describe('write tools — parity (legacy harness ⋈ AI SDK Gateway)', () => {
-  test('email_flag — legacy output === gateway output', async () => {
+describe('write tools — output snapshots (pinned migration-contract values)', () => {
+  test('email_flag output', async () => {
     const DATA = { updated_ids: [9], outbox_entries: [{ kind: 'mailapp' }] }
-    const legacy = createLegacyWriteTools(mockPlatform({ flagEmail: async () => DATA }))
     const gateway = createWriteTools(
       mockDomain(() => okEnvelope(DATA)),
       [],
       new ApprovalGuard()
     )
-    const input = { internal_id: 9, is_flagged: true }
-    const legacyOut = await legacyOutput(legacy, 'email_flag', input)
-    const gatewayOut = await approveAndRun(gateway.email_flag, input)
-    expect(gatewayOut).toEqual(legacyOut)
-    expect(gatewayOut).toMatchObject({
+    const gatewayOut = await approveAndRun(gateway.email_flag, { internal_id: 9, is_flagged: true })
+    expect(gatewayOut).toEqual({
       internal_id: 9,
       applied: { is_flagged: true },
       updated_ids: [9],
+      outbox_entries: [{ kind: 'mailapp' }],
       user_edited: false
     })
   })
 
-  test('email_archive — legacy output === gateway output', async () => {
+  test('email_archive output', async () => {
     const DATA = { from_mailbox: '收件箱', to_mailbox: '存档', notion_updated: true }
-    const legacy = createLegacyWriteTools(mockPlatform({ archiveEmail: async () => DATA }))
     const gateway = createWriteTools(
       mockDomain(() => okEnvelope(DATA)),
       [],
       new ApprovalGuard()
     )
-    const input = { internal_id: 9 }
-    const legacyOut = await legacyOutput(legacy, 'email_archive', input)
-    const gatewayOut = await approveAndRun(gateway.email_archive, input)
-    expect(gatewayOut).toEqual(legacyOut)
-    expect(gatewayOut).toMatchObject({ internal_id: 9, archived: true, to_mailbox: '存档' })
+    const gatewayOut = await approveAndRun(gateway.email_archive, { internal_id: 9 })
+    expect(gatewayOut).toEqual({
+      internal_id: 9,
+      archived: true,
+      from_mailbox: '收件箱',
+      to_mailbox: '存档',
+      notion_updated: true,
+      user_edited: false
+    })
   })
 
-  test('email_pin — legacy output === gateway output', async () => {
+  test('email_pin output', async () => {
     const DATA = { is_pinned: true, changed: true }
-    const legacy = createLegacyWriteTools(mockPlatform({ setPin: async () => DATA }))
     const gateway = createWriteTools(
       mockDomain(() => okEnvelope(DATA)),
       [],
       new ApprovalGuard()
     )
-    const input = { internal_id: 9, pinned: true }
-    const legacyOut = await legacyOutput(legacy, 'email_pin', input)
-    const gatewayOut = await approveAndRun(gateway.email_pin, input)
-    expect(gatewayOut).toEqual(legacyOut)
-    expect(gatewayOut).toMatchObject({ internal_id: 9, is_pinned: true, changed: true })
+    const gatewayOut = await approveAndRun(gateway.email_pin, { internal_id: 9, pinned: true })
+    expect(gatewayOut).toEqual({
+      internal_id: 9,
+      is_pinned: true,
+      changed: true,
+      user_edited: false
+    })
   })
 
-  test('email_draft_reply — legacy output === gateway output', async () => {
-    // Legacy platform.draftReply returns the projected ChatToolDraftResult; the gateway's
-    // domain.draftReply projects the POST /email/draft data block to the SAME shape.
-    const PROJECTED = {
-      internalId: 9,
-      mailbox: 'Drafts',
-      accountName: null,
-      draftId: 'reply_all_9'
-    }
-    const legacy = createLegacyWriteTools(mockPlatform({ draftReply: async () => PROJECTED }))
+  test('email_draft_reply output', async () => {
     const gateway = createWriteTools(
       mockDomain(() =>
         okEnvelope({ internal_id: 9, drafts_folder: 'Drafts', method: 'reply_all_9' })
@@ -176,30 +147,34 @@ describe('write tools — parity (legacy harness ⋈ AI SDK Gateway)', () => {
       [],
       new ApprovalGuard()
     )
-    const input = { internal_id: 9, body_markdown: 'thanks!' }
-    const legacyOut = await legacyOutput(legacy, 'email_draft_reply', input)
-    const gatewayOut = await approveAndRun(gateway.email_draft_reply, input)
-    expect(gatewayOut).toEqual(legacyOut)
-    expect(gatewayOut).toMatchObject({
+    const gatewayOut = await approveAndRun(gateway.email_draft_reply, {
+      internal_id: 9,
+      body_markdown: 'thanks!'
+    })
+    expect(gatewayOut).toEqual({
       internal_id: 9,
       mailbox: 'Drafts',
+      account_name: null,
       draft_id: 'reply_all_9',
+      user_edited: false,
       final_body_markdown: 'thanks!'
     })
   })
 
-  test('email_resync — legacy output === gateway output', async () => {
+  test('email_resync output', async () => {
     const DATA = { old_page_id: 'p-old', new_page_id: 'p-new', action: 'recreated' }
-    const legacy = createLegacyWriteTools(mockPlatform({ resyncEmail: async () => DATA }))
     const gateway = createWriteTools(
       mockDomain(() => okEnvelope(DATA)),
       [],
       new ApprovalGuard()
     )
-    const input = { internal_id: 9 }
-    const legacyOut = await legacyOutput(legacy, 'email_resync', input)
-    const gatewayOut = await approveAndRun(gateway.email_resync, input)
-    expect(gatewayOut).toEqual(legacyOut)
-    expect(gatewayOut).toMatchObject({ internal_id: 9, new_page_id: 'p-new', action: 'recreated' })
+    const gatewayOut = await approveAndRun(gateway.email_resync, { internal_id: 9 })
+    expect(gatewayOut).toEqual({
+      internal_id: 9,
+      old_page_id: 'p-old',
+      new_page_id: 'p-new',
+      action: 'recreated',
+      user_edited: false
+    })
   })
 })

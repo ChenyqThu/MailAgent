@@ -31,14 +31,12 @@ import {
   FolderInputIcon,
   FoldersIcon,
   GripIcon,
-  HistoryIcon,
   SendIcon,
   SettingsIcon,
   SparklesIcon,
   SquarePenIcon,
   ZapIcon
 } from '@shared/components/icons'
-import { isAgentViewEnabled } from '@shared/assistant/runtime/flags'
 import { HoverTip } from '@shared/components/ui/HoverTip'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { usePollingFallback } from '@shared/hooks/usePollingFallback'
@@ -525,30 +523,14 @@ export function Sidebar(): React.ReactElement {
           </h2>
         </div>
         <nav className="px-2 space-y-px">
-          {/* /sessions — flag-off：AI 会话历史只读浏览（History icon）；flag-on：MailAgent
-              交互式通用 agent 视图。dogfood-2 user feedback：排在 Custom AI 前 + 无底色，仅
-              icon 用 coral 强调色（不再整行 coral 填充）。 */}
+          {/* /sessions — MailAgent 交互式通用 agent 视图。dogfood-2 user feedback：排在
+              Custom AI 前 + 无底色，仅 icon 用 coral 强调色（不再整行 coral 填充）。 */}
           <NavRow
             icon={
-              isAgentViewEnabled() ? (
-                <SparklesIcon
-                  size={15}
-                  strokeWidth={1.75}
-                  className="text-coral"
-                  trigger="parent"
-                />
-              ) : (
-                <HistoryIcon size={15} strokeWidth={1.75} trigger="parent" />
-              )
+              <SparklesIcon size={15} strokeWidth={1.75} className="text-coral" trigger="parent" />
             }
-            label={isAgentViewEnabled() ? t('nav.agentView') : t('nav.aiSessions')}
-            title={
-              collapsed
-                ? isAgentViewEnabled()
-                  ? t('nav.agentView')
-                  : t('nav.aiSessions')
-                : undefined
-            }
+            label={t('nav.agentView')}
+            title={collapsed ? t('nav.agentView') : undefined}
             selected={pathname === '/sessions'}
             onClick={() => navigate({ to: '/sessions' })}
           />

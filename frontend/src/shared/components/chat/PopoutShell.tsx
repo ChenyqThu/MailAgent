@@ -12,13 +12,16 @@
 // rendering AIChatPanel so the panel's `useEmailChat(activeId)`
 // resolves to the right session on first render (no `null → 123` flip
 // that would trigger a stale-session render).
+//
+// S3 W2 — AIChatPanel is the assistant-ui / AI SDK panel now (the legacy
+// panel + its flag dispatch layer were deleted with the legacy runtime).
 
 import { useEffect } from 'react'
 
 import { useActiveEmail } from '@shared/state/active-email'
 import { usePopoutMode } from '@shared/state/popout-mode'
 
-import { AIChatPanel } from './AIChatPanel'
+import { AIChatPanel } from '@shared/assistant/AiChatPanel'
 
 export function PopoutShell(): React.ReactElement {
   const emailId = usePopoutMode((s) => s.emailId)

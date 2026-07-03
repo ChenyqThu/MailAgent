@@ -1,23 +1,13 @@
-// R3 (task 06-22) — @mention parsing + the PER-SCOPE skill activation store. The core
-// fix: an activation in one conversation scope must never leak into another (two surfaces
-// share one runtime), so the store is keyed by scopeKey and applySkillMentions takes one.
+// R3 (task 06-22) → S3 W2 — @mention parsing.
+//
+// The PER-SCOPE activation store (state/skill-activation.ts) was dropped with
+// the legacy runtime (D4: the ai-sdk path never consumed activatedSkills —
+// @mention is a composer-content prefix now). parseSkillMentions survives in
+// skill_enablement.ts (Settings + composer mention chips still parse mentions).
 
-import { afterEach, describe, expect, test } from 'vitest'
+import { describe, expect, test } from 'vitest'
 
 import { parseSkillMentions } from '../../../src/shared/chat/skill_enablement'
-import {
-  applySkillMentions,
-  getActivatedSkillNames,
-  useSkillActivation
-} from '../../../src/shared/state/skill-activation'
-
-const A = 'email:1:custom-api'
-const B = 'email:2:custom-api'
-const G = 'general:7'
-
-afterEach(() => {
-  useSkillActivation.setState({ byScope: {} })
-})
 
 describe('parseSkillMentions', () => {
   test('extracts @skill tokens, lowercased + deduped', () => {
@@ -40,47 +30,5 @@ describe('parseSkillMentions', () => {
   test('R3 — matches after CJK / fullwidth punctuation, not only space/paren', () => {
     expect(parseSkillMentions('请@report')).toEqual(['report'])
     expect(parseSkillMentions('日程，@calendar 一下')).toEqual(['calendar'])
-  })
-})
-
-describe('per-scope activation store (R3)', () => {
-  test('activate is per-scope, additive, sorted, deduped', () => {
-    useSkillActivation.getState().activate(A, ['report'])
-    useSkillActivation.getState().activate(A, ['calendar', 'report'])
-    expect(getActivatedSkillNames(A)).toEqual(['calendar', 'report'])
-    expect(getActivatedSkillNames(B)).toEqual([]) // a different scope is untouched
-  })
-  test('deactivate removes one from its scope only', () => {
-    useSkillActivation.getState().activate(A, ['a', 'b'])
-    useSkillActivation.getState().activate(B, ['a'])
-    useSkillActivation.getState().deactivate(A, 'a')
-    expect(getActivatedSkillNames(A)).toEqual(['b'])
-    expect(getActivatedSkillNames(B)).toEqual(['a']) // B unaffected
-  })
-  test('clearScope empties only that scope', () => {
-    useSkillActivation.getState().activate(A, ['x'])
-    useSkillActivation.getState().activate(G, ['y'])
-    useSkillActivation.getState().clearScope(A)
-    expect(getActivatedSkillNames(A)).toEqual([])
-    expect(getActivatedSkillNames(G)).toEqual(['y'])
-  })
-})
-
-describe('applySkillMentions (R3)', () => {
-  test('activates mentions into the given scope + returns that scope list', () => {
-    const out = applySkillMentions(A, 'please @calendar this')
-    expect(out).toEqual(['calendar'])
-    expect(getActivatedSkillNames(A)).toEqual(['calendar'])
-  })
-  test('a mention in scope A does NOT leak into scope B (the core R3 fix)', () => {
-    applySkillMentions(A, '@report') // general session / other email never sees it
-    expect(getActivatedSkillNames(B)).toEqual([])
-    expect(getActivatedSkillNames(G)).toEqual([])
-    // applying a no-mention message in B returns B's own (empty) list
-    expect(applySkillMentions(B, 'plain message')).toEqual([])
-  })
-  test('re-applying with no new mention returns the scope’s existing list unchanged', () => {
-    applySkillMentions(A, '@calendar')
-    expect(applySkillMentions(A, 'plain follow-up')).toEqual(['calendar'])
   })
 })

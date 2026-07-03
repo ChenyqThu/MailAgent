@@ -48,8 +48,6 @@ import { DUR } from '@shared/lib/gsap'
 import { HoverTip } from '@shared/components/ui/HoverTip'
 import { useFocusTrap } from '@shared/hooks/useFocusTrap'
 import { useExitAnimation } from '@shared/hooks/useExitAnimation'
-import { toggleAIChatPanel, useAIChatPanel } from '@shared/state/ai-chat-panel'
-import { isAssistantModalEnabled } from '@shared/assistant/runtime/flags'
 import type { ComposeMode } from '@shared/api/types'
 
 export type TranslateStatus = 'idle' | 'loading' | 'translated' | 'error'
@@ -663,35 +661,6 @@ function ResyncConfirmDialog({
   )
 }
 
-// ─── AI Panel Toggle ─────────────────────────────────────────────────────
-
-function AIPanelToggleButton(): React.ReactElement {
-  const { t } = useTranslation()
-  const visible = useAIChatPanel((s) => s.visible)
-  const label = `${t('chat.title')} · ⌘L`
-  const btn = (
-    <button
-      type="button"
-      onClick={toggleAIChatPanel}
-      aria-pressed={visible}
-      aria-label={label}
-      className={cn(
-        'p-1.5 rounded transition-colors duration-fast',
-        visible
-          ? 'text-coral bg-coral/10 hover:bg-coral/15'
-          : 'text-ink-fg-2 hover:text-ink-fg hover:bg-ink-4'
-      )}
-    >
-      <SparklesIcon size={14} strokeWidth={2} />
-    </button>
-  )
-  return (
-    <HoverTip text={label} side="bottom">
-      {btn}
-    </HoverTip>
-  )
-}
-
 // ─── Root component ──────────────────────────────────────────────────────
 
 export function EmailToolbar({
@@ -935,13 +904,7 @@ export function EmailToolbar({
           label={`${t('toolbar.next')} · J`}
           onClick={onNext}
         />
-        {/* assistant-modal P1 — flag-on：退役工具栏 AI 按钮（入口改正文右下 FAB）；flag-off 原样。 */}
-        {!isAssistantModalEnabled() && (
-          <>
-            <Divider />
-            <AIPanelToggleButton />
-          </>
-        )}
+        {/* assistant-modal — 工具栏 AI 按钮已退役（入口 = 正文右下 FAB + ⌘J）。 */}
       </div>
 
       <ResyncConfirmDialog

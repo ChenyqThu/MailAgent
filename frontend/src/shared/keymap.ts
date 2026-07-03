@@ -187,11 +187,11 @@ export const SHORTCUTS: ReadonlyArray<ShortcutDef> = [
   },
   // ── Chat ──────────────────────────────────────────────────────────────
   {
-    // 实际绑定是 ⌘L (GlobalShortcuts useShortcut('cmd+l', toggleAIPanel)); 早期
-    // 设计的 ⌥A 从未接 handler。catalog 对齐到真实键, 去掉错误的 "soon" 标。
+    // S3 W2 — legacy 侧边面板的 ⌘L toggle 随 legacy runtime 退役；真实绑定
+    // 是 ⌘J (GlobalShortcuts useShortcut('cmd+j', openModal) → chat modal)。
     id: 'openAiPanel',
-    spec: 'cmd+l',
-    display: '⌘L',
+    spec: 'cmd+j',
+    display: '⌘J',
     scope: 'chat',
     labelKey: 'shortcutHelp.binding.openAiPanel',
     wired: true

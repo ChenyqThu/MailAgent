@@ -1,44 +1,12 @@
-// task 06-08-chat PR B — pure normalizers + classification for the Cowork tool
-// group. Replaces the per-offset interleaving (Bug 2) with a grouped,
-// time-ordered step list per handoff §2 + §6.
-//
-// Split out of MessageList.tsx so the logic is unit-testable in a plain node env
-// (no lucide / Streamdown / IPC pulled in) — mirroring the convention the old
-// tool_interleave.ts established. The renderer (ToolStep / ToolGroup) maps the
-// returned ToolStepData[] to elements 1:1; asserting the normalization here ==
-// asserting what the group renders.
-//
-// Two sources feed a single ToolStepData: the live `LiveToolCall` map (built
-// from the harness stream during streaming) and the persisted `ChatToolCall`
-// audit rows (fetched after `done`). The two phases must dovetail without a gap
-// (see AssistantBubble for the live→audit fallback).
+// task 06-08-chat PR B — pure tool classification + JSON pretty-printer for the
+// tool trace UI. S3 W2: the legacy step normalizers (liveSteps / auditSteps /
+// ToolStepData) were deleted with the legacy MessageList + ExternalStore
+// adapter; what survives is the name→kind classifier + prettyJson consumed by
+// the assistant-ui ToolTraceCard (the generic tool-call fallback card).
 
-import type { ChatToolCall } from '@shared/api/types'
-import type { LiveToolCall } from '@shared/hooks/useEmailChat'
-
-/** Tool kind classification for the Cowork timeline. Maps a tool_name to one of
+/** Tool kind classification for the tool trace card. Maps a tool_name to one of
  *  six visual buckets (icon + accent token), per handoff §2.4. */
 export type ToolKind = 'search' | 'read' | 'task' | 'write' | 'cmd' | 'link'
-
-/** A status that covers both the live (running/ok/error/canceled) and the
- *  persisted (pending/confirmed/running/ok/error/canceled) state machines. */
-export type ToolStepStatus = 'pending' | 'confirmed' | 'running' | 'ok' | 'error' | 'canceled'
-
-/** Unified step model the ToolStep renderer consumes. Built from either a live
- *  tool call or a persisted audit row (see liveSteps / auditSteps). */
-export interface ToolStepData {
-  /** Stable React key — toolUseId (live) or String(id) (audit). */
-  key: string
-  toolName: string
-  /** Pretty-printed JSON of the effective input. */
-  inputJson: string
-  /** Pretty-printed JSON of the output, or null while still running / no output. */
-  outputJson: string | null
-  status: ToolStepStatus
-  durationMs: number | null
-  /** True when the persisted row carried a user-edited input. */
-  userEdited: boolean
-}
 
 /** Name-based heuristic. Order matters: write/link/cmd specific prefixes are
  *  checked before the generic read/task/search fallbacks. */
@@ -89,38 +57,4 @@ export function prettyJson(value: unknown): string {
   } catch {
     return String(value)
   }
-}
-
-/** Normalize the live tool-call map entries into ToolStepData. */
-export function liveSteps(calls: ReadonlyArray<LiveToolCall> | undefined): ToolStepData[] {
-  if (!calls || calls.length === 0) return []
-  return calls.map((c) => ({
-    key: c.toolUseId,
-    toolName: c.name,
-    inputJson: prettyJson(c.input),
-    outputJson:
-      c.status === 'error'
-        ? c.errorMessage
-          ? prettyJson(c.errorMessage)
-          : null
-        : c.output !== undefined
-          ? prettyJson(c.output)
-          : null,
-    status: c.status,
-    durationMs: c.durationMs,
-    userEdited: false
-  }))
-}
-
-/** Normalize persisted audit rows into ToolStepData. */
-export function auditSteps(calls: ReadonlyArray<ChatToolCall>): ToolStepData[] {
-  return calls.map((c) => ({
-    key: String(c.id),
-    toolName: c.tool_name,
-    inputJson: c.user_edited_input_json ?? c.input_json,
-    outputJson: c.output_json,
-    status: c.status,
-    durationMs: c.duration_ms,
-    userEdited: c.user_edited_input_json !== null
-  }))
 }
