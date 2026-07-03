@@ -544,6 +544,16 @@ class MailWriteService:
         sync_store = self._ctx.sync_store
         outbox = OutboxRepository(str(sync_store.db_path))
 
+        # 不变量:「已完成 ⇒ 无旗标」(architecture-internals: 标完成联动摘旗的对称面)。
+        # 对已完成邮件重新置旗 = 复活为待办 → processing_status 联动回 '已同步',
+        # 否则留下 is_flagged=1 ∧ '已完成' 的设计外组合 (badge / 旗标列表按
+        # is_flagged 裸查会多计, 行渲染又被 isDone 压制 → 数字对不上)。调用方
+        # 显式传 processing_status 时尊重其值, 不做联动。
+        revive_ids: set[int] = set()
+        if is_flagged and processing_status is None:
+            statuses = sync_store.get_processing_statuses(list(internal_ids))
+            revive_ids = {i for i, s in statuses.items() if s == "已完成"}
+
         updated: list[int] = []
         outbox_entries: list[dict[str, Any]] = []
         not_found: list[int] = []
@@ -560,15 +570,20 @@ class MailWriteService:
             new_flagged = (
                 bool(is_flagged) if is_flagged is not None else bool(meta.is_flagged)
             )
+            local_status = processing_status
+            notion_payload = payload
+            if iid in revive_ids:
+                local_status = "已同步"
+                notion_payload = {**payload, "processing_status": "已同步"}
             enq = mirror_and_enqueue_flag_sync(
                 sync_store,
                 outbox,
                 iid,
                 local_read=new_read,
                 local_flagged=new_flagged,
-                local_processing_status=processing_status,
+                local_processing_status=local_status,
                 mailapp_payload=mailapp_payload,
-                notion_payload=payload,
+                notion_payload=notion_payload,
                 source=_OUTBOX_SOURCE,
             )
             oid_mailapp = enq.mailapp_outbox_id

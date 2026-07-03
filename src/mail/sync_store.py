@@ -3236,6 +3236,32 @@ class SyncStore:
 
     # ==================== 统计和维护 ====================
 
+    def get_processing_statuses(self, internal_ids: List[int]) -> Dict[int, str]:
+        """批量读 processing_status（只含非空行，不过滤 sync_status）。
+
+        供 MailWriteService.set_flags 的「置旗复活已完成邮件」不变量判断用：
+        EmailMetadataRecord 不含 processing_status，这里补一个最小只读面。
+        """
+        if not internal_ids:
+            return {}
+
+        result: Dict[int, str] = {}
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            batch_size = 500
+            for i in range(0, len(internal_ids), batch_size):
+                batch = internal_ids[i:i + batch_size]
+                placeholders = ','.join('?' * len(batch))
+                cursor.execute(f"""
+                    SELECT internal_id, processing_status
+                    FROM email_metadata
+                    WHERE internal_id IN ({placeholders})
+                      AND processing_status IS NOT NULL
+                """, batch)
+                for row in cursor.fetchall():
+                    result[row[0]] = row[1]
+        return result
+
     def get_synced_flags(self, internal_ids: List[int]) -> Dict[int, Dict]:
         """批量获取已同步邮件的存储 flags 和 notion_page_id
 
