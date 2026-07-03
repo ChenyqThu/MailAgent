@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """Sprint 19 §B — Minimal eval harness for chat agent scenarios.
 
+退役注记（S3，2026-07-03）：本脚本面向的 legacy 自研 chat harness（`shared/chat/`）已随
+agent 开放性 epic S3 整体删除，当前 chat 引擎唯一实现 = embedded AI SDK Gateway。此脚本结论
+不再权威，行为回归判据以 `tests/agent_eval`（零-LLM hard rules + curated tasks + baseline
+对比）为准；脚本本身保留仅供历史参考。
+
 Pure stdlib + urllib + sqlite3, no native deps. Tests LLM behavior end-to-end
 against the production CRS gateway. For each scenario, sends ONE Anthropic
 Messages request with the email context + 13 tool schemas, then judges the
@@ -446,7 +451,7 @@ def write_report(results: list, cost: float, wall: float, model: str) -> None:
         f'- P1 gate {"HIT (≥14/20)" if p1_pass >= 14 else "MISS"} — '
         f'{p1_pass}/{len(p1_results)}',
         '- 推荐: ' + (
-            '翻 MAILAGENT_AGENT_HARNESS default 为 true 合 main'
+            '（历史判据）gate 通过 —— 本脚本面向的 legacy flag 已退役，结论仅供归档参考'
             if p1_pass >= 14
             else '修 failed scenario 的 prompt 或 tool description 后重跑'
         ),

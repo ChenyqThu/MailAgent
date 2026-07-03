@@ -1,6 +1,6 @@
 ---
 title: "MCP / Agent Harness 集成"
-description: "前端 chat 多轮 agent harness：MAILAGENT_AGENT_HARNESS、KOS 三层开关、notion-agent-cli 后端、ChatPlatform 抽象、外部 agent 调 CLI 契约与 MCP 工具定义规格。"
+description: "前端 chat 引擎（embedded AI SDK Gateway）：工具调用与 HITL 审批、KOS 三层开关、notion-agent-cli 只读会话现状、桌面+远程共用引擎架构、外部 agent 调 CLI 契约与 MCP 工具定义规格。"
 ---
 
 这一节讲 MailAgent 的 **agent 集成面**：前端 chat 面板里那个会调工具的多轮 agent（Agent Harness），它怎么接外部 LLM、怎么接 KOS 跨域知识图，以及外部 agent / MCP 客户端如何把 `mailagent` CLI 当工具调用。
@@ -10,25 +10,25 @@ description: "前端 chat 多轮 agent harness：MAILAGENT_AGENT_HARNESS、KOS �
 **LLM Agent**（本地 LLM 接管 Notion Custom Agent 做邮件分类）是另一条单轮路径，不在本页。
 :::
 
-## Agent Harness（MAILAGENT_AGENT_HARNESS）
+## Agent 工具调用（Embedded AI SDK Gateway）
 
-总开关 `MAILAGENT_AGENT_HARNESS`（默认 `false`）。开启 + 选 Custom AI 后端后，chat 面板获得：
+Chat 面板的多轮工具调用引擎 = **embedded AI SDK Gateway**（`frontend/src/ai-gateway/`，随 Electron main 进程常驻，监听 loopback）：
 
-1. **Tool calling**：LLM 自驱调内建工具（读：`email_search` / `get` / `body` / `list_thread` / `search_fulltext` / `get_ai_fields` / `attachment_list`；写：`email_flag` / `email_archive` / `email_draft_reply`）。
-2. **Multi-turn loop**：harness 自循环（`maxIter` / `maxCostUsd` gate），`end_turn` 终止。
-3. **ConfirmToolDialog**：write tier 工具弹确认对话框（preview = 只读 JSON / edit = 可编辑 textarea），用户编辑的值生效给 LLM 下一轮看到 —— **无 silent send**。
+1. **Tool calling**：读工具恒注册（`email_search` / `email_get` / `email_body` / `email_list_thread` / `email_search_fulltext` / `email_search_attachments` / `kos_query` / `report_list` / `report_get`）；写工具按 tier 分层且需人审批（preview：`email_flag` / `email_archive` / `email_pin` / `email_resync`；edit：`email_draft_reply` / `email_prepare_send`）。完整清单以 `frontend/src/ai-gateway/tools/index.ts`（`buildGatewayTools`）为准 —— 旧文档提过的 `get_ai_fields` / `attachment_list` 已随引擎归一删除，不再存在。
+2. **Multi-turn loop**：`ai` SDK 的多步循环（`maxSteps` / cost gate），模型自然终止或耗尽预算终止。
+3. **HITL 审批卡**：write tier 工具触发 assistant-ui 原生审批卡（**preview** = 只读预览 / **edit** = 可编辑字段 / **blocking** = 发送类恒人审，无自动放行）；旧的 `ConfirmToolDialog` 组件已随 legacy 渲染层删除。
 4. **跨邮件检索**：`email_search_fulltext` 接后端 FTS5 `email_body_fts`。
-5. **Audit**：每个 tool_use 写 `chat_tool_call` 表（status / duration / user_edited_input）。
+5. **Audit**：每个 tool_use 仍写 `chat_tool_call` 表（status / duration / user_edited_input）。
 
 **关键约束**：
 
-- 仅 **Custom AI 后端**启用 tool_use（Notion Agent CLI 不支持 tool_use 协议，gate 自动 fallback legacy single-turn）。
+- 工具调用只发生在唯一引擎；`notion-agent` 会话现为历史只读回放（新对话不再走它），不涉及 tool_use。
 - prompt cache 双 breakpoint（system 末 + tools 末）保护命中率。
-- 写操作必须经 ConfirmToolDialog 确认。
-- abort signal 触发时清确认队列（`cancelConfirmationsForSession`，防 deadlock）。
+- 写操作必须经审批卡确认；send 恒人审，无例外。
+- 会话中止时清理未决审批，防 deadlock。
 
-:::caution[cutover 后 harness 不再是逃生阀]
-V2.1 cutover 后，dispatcher 删了 `harnessEnabled && backendSupportsTools` gate，`runStream` **无条件走 harness**。`MAILAGENT_AGENT_HARNESS=0` 不再退化成 legacy 单遍纯文本路径；notion-agent 经 harness（empty tools → 首轮 end_turn）等价单遍。生产默认 ON，无实际影响，但若需排障回退单遍，该逃生阀已不存在。
+:::note[历史注记]
+2026-07 前，自研 `MAILAGENT_AGENT_HARNESS` flag 曾可关闭多轮 agent；S3（引擎归一）后该 flag 与自研 harness 引擎一并删除，工具调用恒由 embedded AI SDK Gateway 提供，无 flag 可关闭或回退。
 :::
 
 ## KOS 三层开关（跨域知识图）
@@ -48,39 +48,36 @@ MailAgent 接入用户已有的 **Jarvis KOS v2**（gbrain fork，`kos.chenge.in
 | 工具 | 调谁 | 用途 |
 |---|---|---|
 | `kos_query` | KOS `tools/call` query | 跨域检索：人物 / 公司 / 邮件 / 会议 / 手记。"Bob 上次提的 X / Acme 项目最近怎么样 / 我跟这供应商的历史" |
-| `kos_digest` | KOS query（按 slug 取 top hit）| 拉指定 entity 档案（`people/{slug}` 等），chat 开场注入发件人背景 |
 
 **降级**：KOS 不可达时工具返 `ok:false` + stable error code（`E_KOS_NOT_CONFIGURED` / `E_KOS_NETWORK` / `E_KOS_RATE_LIMIT` 等），LLM 自然 fallback 到本地 FTS5（`email_search_fulltext` / `email_search_attachments`）。**LLM 不调 ingest** —— 写入路径由 mail-sync 后端独占，防 chat 路径把幻觉"事实"塞进图谱。
 
-## ChatPlatform 抽象（一份引擎，本地+远程）
+## 引擎架构（一份 embedded gateway，本地+远程共用）
 
-V2.1（B-pure-unified）把 chat 引擎下沉到 `frontend/src/shared/chat/`（零 Electron 依赖），electron 桌面与浏览器**共用一份引擎 + 一份 serve-api**，只差 `baseUrl + 鉴权`：
+chat 引擎唯一实现 = **embedded AI SDK Gateway**：一个 Node HTTP server（`frontend/src/ai-gateway/server.ts`），随桌面 Electron main 进程常驻启动，监听 loopback（默认端口 8300）。V2.1（B-pure-unified）阶段设想的 `frontend/src/shared/chat/`（`HttpChatPlatform` / `custom_api` / `notion_agent_http` 多后端抽象）已随 2026-07 S3（引擎归一）整体删除——不再有第二套引擎实现。
 
-- **引擎层** `shared/chat/`：`harness`（多轮 loop）/ `dispatcher` / `backends/{custom_api, notion_agent_http}` / `tools/builtin`（`createBuiltinTools` 单一真源）/ `emitter`（进程内流式 sink，无 IPC 推流）。
-- **传输层** `HttpChatPlatform`：分层接线板（infra / model / notion-agent / tool 四板），全部 fetch serve-api 对应端点。构造 `(httpApi, baseUrl, config?)`。
-- **后端层** serve-api（FastAPI 8200，无 harness 逻辑）：`POST /api/chat/llm-proxy`（注入 key 透传上游 SSE）/ `POST /api/chat/notion-agent`（asyncio spawn CLI）/ chat 持久化端点 / `GET /api/chat/config`（运行配置快照）。
+- **桌面**：Electron main 进程直接启动并持有这个 gateway，renderer 走 loopback fetch。
+- **远程 web**（`mail.chenge.ink/app`）：serve-api（FastAPI 8200）的 `ai_gateway_proxy.py` 用 httpx 做流式反向代理，把请求转发到同一个 loopback gateway —— 远程侧**没有**独立的第二套引擎逻辑，只是一层反代。
+- **后端服务**：serve-api 仍承担鉴权、chat 持久化端点、`GET /api/chat/config`（运行配置快照，供 gateway 启动前 TTL 缓存预取）等非引擎职责；`POST /api/chat/notion-agent`（asyncio spawn CLI）端点代码仍在，但当前无前端调用方（见下）。
 
-**鉴权两条腿**：本地 electron renderer 由 main 进程 `webRequest` 拦截 loopback 8200 注入 `X-MailAgent-Local-Token`（token 留 main 不进 renderer）；远程 browser 走 CF Access cookie。
+**鉴权两条腿**：本地 electron renderer 由 main 进程 `webRequest` 拦截 loopback 注入本地 token（token 留 main 不进 renderer）；远程 browser 走 CF Access cookie。
 
 :::caution[flag 命名误导]
-`MAILAGENT_REMOTE_ACCESS_ENABLED` 名为「远程访问」，**实为本地 daemon / serve-api 总开关**。cutover 后本地 chat / 写都依赖它，`=false` **连本地 chat / 写都挂**（非仅关远程）。默认起。
+`MAILAGENT_REMOTE_ACCESS_ENABLED` 名为「远程访问」，**实为本地 daemon / serve-api 总开关**。本地 chat / 写都依赖它，`=false` **连本地 chat / 写都挂**（非仅关远程）。默认起。
 :::
 
-## 两类后端的不对称（有意）
+## notion-agent-cli：现状（历史只读，非活跃引擎）
 
-| 后端 | 形态 | 实现位置 |
-|---|---|---|
-| **custom-api** | HTTP | serve-api `llm-proxy` 注入 key 后透传原始 SSE，shared `custom_api.ts` 在 UI 进程**解析**（双协议 Anthropic/OpenAI）|
-| **notion-agent** | 子进程 | execa 不能在浏览器跑，serve-api Python **逐语义复刻** `notion_agent.ts`（thread 探测 / exit code 分类 / idle 看门狗）|
+notion-agent-cli 曾是与 custom-api 并列的第二个 chat 后端实现；S3 后它不再参与任何实时对话 —— `/api/chat/notion-agent`（流式）与 `/api/chat/notion-agent-once`（非流式）两个端点在 serve-api 里仍存在，但前端零调用方。现存的 notion-agent 相关功能收窄为：
 
-notion-agent-cli 后端的调用契约（serve-api 复刻的就是这个）：
+- **Settings 页配置读取**：账户 / 模型 / agent 列表（`/notion-agent/config`、`/notion-agent/models`、`/notion-agent/agents`）。
+- **历史会话只读回放**：过去用 notion-agent 后端跑的会话经 `ReadOnlyTranscript` 组件读数据库行展示，不可继续对话。
+
+notion-agent-cli 本身的调用契约（serve-api 历史复刻的就是这个，供归档参考）：
 
 ```bash
 notion-agent chat "<prompt>" --json --stream
 # exit code: 75=RATE_LIMIT  77=AUTH  127=NOT_INSTALLED  0=OK
 ```
-
-两者最终各是单一实现（custom_api = shared TS / notion_agent = Python）→ 零 parity。
 
 ## 外部 agent 调 CLI 契约
 
