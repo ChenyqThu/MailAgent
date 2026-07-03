@@ -64,6 +64,14 @@ def test_enqueue_missing_job_type_rejected(client, jobs_repo):
     assert resp.json()["error"]["code"] == "E_INVALID_ARG"
 
 
+def test_enqueue_rejects_agent_run(client, jobs_repo, sse_events):
+    """S4 D1 分区: 公共 REST 只收维护族 —— agent_run 传入 → 400（唯一入队方 = 触发引擎）。"""
+    resp = client.post("/api/jobs", json={"jobType": "agent_run", "targetKey": "a1"})
+    assert resp.status_code == 400
+    assert resp.json()["error"]["code"] == "E_INVALID_ARG"
+    assert sse_events == []
+
+
 def test_enqueue_idempotent_key_no_duplicate_sse(client, jobs_repo, sse_events):
     body = {"jobType": "backfill_body", "targetKind": "all", "targetKey": "all",
             "idempotencyKey": "nightly-1"}

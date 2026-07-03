@@ -581,6 +581,22 @@ class EmailNotionSyncApp:
                     f"enabled_agent={has_enabled_report_agent})"
                 )
 
+            # Custom Agent 触发 worker（S4，cron 定时；默认关，flag-gated）。off → 零启动。
+            # email_filter 触发走 new_watcher 第 5 hook（不在此）；执行走 AgentRunWorker（W2）。
+            agent_trigger_task = None
+            if config.custom_agents_enabled:
+                from src.agents import trigger_worker as agent_trigger_worker
+                from src.sync.async_jobs import AsyncJobRepository
+                agent_trigger_task = asyncio.create_task(
+                    agent_trigger_worker.tick_loop(
+                        sync_store=self.watcher.sync_store,
+                        store=report_store,
+                        repo=AsyncJobRepository(report_db_path),
+                        shutdown_event=self._shutdown_event,
+                    )
+                )
+                logger.info("[agent-trigger] cron worker enabled (MAILAGENT_CUSTOM_AGENTS_ENABLED)")
+
             # 等待关闭信号
             await self._shutdown_event.wait()
 
@@ -620,6 +636,8 @@ class EmailNotionSyncApp:
                 tasks.append(daily_digest_task)
             if report_worker_task:
                 tasks.append(report_worker_task)
+            if agent_trigger_task:
+                tasks.append(agent_trigger_task)
             if fanout_task:
                 tasks.append(fanout_task)
             if job_worker_task:

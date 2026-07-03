@@ -265,6 +265,23 @@ class NewWatcher:
                 logger.warning(f"[feishu] init failed, disabling: {e}")
                 self._feishu = None
 
+        # Custom Agent email_filter 触发钩子（S4，需 MAILAGENT_CUSTOM_AGENTS_ENABLED）。
+        # 主循环只做 flag + 存在性检查；正则匹配移进 fire-and-forget 后台任务体（ReDoS 收面）。
+        self._custom_agents_enabled = getattr(settings, "custom_agents_enabled", False)
+        self._agent_store = None
+        self._agent_job_repo = None
+        if self._custom_agents_enabled:
+            try:
+                from src.reports.store import ReportStore
+                from src.sync.async_jobs import AsyncJobRepository
+                _agent_db = str(self.sync_store.db_path)
+                self._agent_store = ReportStore(db_path=_agent_db)
+                self._agent_job_repo = AsyncJobRepository(_agent_db)
+                logger.info("[custom-agent] email_filter hook enabled")
+            except Exception as e:
+                logger.warning(f"[custom-agent] init failed, disabling: {e}")
+                self._custom_agents_enabled = False
+
         # 运行状态
         self._running = False
         self._healthy = True  # 服务健康状态
@@ -787,6 +804,9 @@ class NewWatcher:
 
                 # 11. ping-island MailReceived（非阻塞，默认关；启用前提见 .env.example）
                 self._maybe_dispatch_island_received(email_obj, internal_id, page_id)
+
+                # 12. Custom Agent email_filter 触发钩子（S4，非阻塞，默认关）
+                self._maybe_trigger_custom_agents(email_obj, internal_id)
             else:
                 self.sync_store.mark_failed_v3(internal_id, "Notion sync returned None")
 
@@ -965,6 +985,48 @@ class NewWatcher:
             self._track_bg_task(asyncio.create_task(_bg()))
         except Exception as e:
             logger.warning(f"[llm-hook] dispatch failed: {e}")
+
+    def _maybe_trigger_custom_agents(self, email_obj: Email, internal_id: int) -> None:
+        """若启用 Custom Agent，匹配 email_filter 规则并派发后台 run（S4，ADR D5）。
+
+        主循环只做 flag + 存在性检查（不解析/编译 trigger 正则）；正则匹配 + enqueue 移出
+        当封邮件的内联处理路径（放后台 task）。任何失败只 warning。
+        注意：bg task 仍跑在同一 asyncio 事件循环（create_task 不换线程、re 匹配持 GIL），
+        owner 若配 catastrophic pattern 仍会卡循环——ReDoS 防线是 pattern≤256 + 输入截断 512
+        + owner 配置（非攻击者），不是这层 task 隔离。
+        """
+        if not self._custom_agents_enabled or self._agent_store is None:
+            return
+        try:
+            # 廉价存在性检查：有无 enabled 的 type='custom' 行（不碰正则）。
+            candidates = [
+                a for a in self._agent_store.list_agents()
+                if a.get("enabled") and a.get("type") == "custom"
+            ]
+            if not candidates:
+                return
+            sender = getattr(email_obj, "sender", None)
+            subject = getattr(email_obj, "subject", None)
+            mailbox = getattr(email_obj, "mailbox", None)
+            repo = self._agent_job_repo
+
+            async def _bg():
+                try:
+                    from src.agents.email_dispatch import dispatch_email_agents
+                    dispatch_email_agents(
+                        candidates,
+                        sender=sender,
+                        subject=subject,
+                        mailbox=mailbox,
+                        internal_id=internal_id,
+                        repo=repo,
+                    )
+                except Exception as e:
+                    logger.warning(f"[custom-agent] background dispatch failed: {e}")
+
+            self._track_bg_task(asyncio.create_task(_bg()))
+        except Exception as e:
+            logger.warning(f"[custom-agent] dispatch failed: {e}")
 
     def _maybe_trigger_kos_hook(
         self, email_obj: Email, internal_id: int, notion_page_id: str

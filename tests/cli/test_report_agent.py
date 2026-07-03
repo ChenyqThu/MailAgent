@@ -189,3 +189,43 @@ class TestReportRun:
         assert result.exit_code == 0, result.output
         data = _extract(result.output)["data"]
         assert data["status"] == "ready"
+
+
+# ============================================================
+# config-set — S4 P2-1 保存时 custom agent trigger 深校验
+# ============================================================
+class TestConfigSetTriggerValidation:
+    def test_config_set_rejects_bad_cron(
+        self, cli_runner, cli_env, seeded_db, _unauth_writes_on
+    ):
+        """坏 cron trigger patch → exit 2 / E_INVALID_ARG（保存时深校验）。"""
+        result = _invoke(
+            cli_runner, "config-set", "--agent", "daily_email_digest",
+            "--patch", '{"trigger":{"v":1,"kind":"cron","cron":"garbage cron"}}',
+            "-o", "json", db_path=seeded_db,
+        )
+        assert result.exit_code == 2, result.output
+        assert _extract(result.output)["error"]["code"] == "E_INVALID_ARG"
+
+    def test_config_set_rejects_unknown_kind(
+        self, cli_runner, cli_env, seeded_db, _unauth_writes_on
+    ):
+        result = _invoke(
+            cli_runner, "config-set", "--agent", "daily_email_digest",
+            "--patch", '{"trigger":{"v":1,"kind":"webhook"}}',
+            "-o", "json", db_path=seeded_db,
+        )
+        assert result.exit_code == 2, result.output
+        assert _extract(result.output)["error"]["code"] == "E_INVALID_ARG"
+
+    def test_config_set_normal_patch_ok(
+        self, cli_runner, cli_env, seeded_db, _unauth_writes_on
+    ):
+        """无 trigger 的普通 patch 不受校验影响（行为零回归）。"""
+        result = _invoke(
+            cli_runner, "config-set", "--agent", "daily_email_digest",
+            "--patch", '{"enabled":false,"title":"X"}',
+            "-o", "json", db_path=seeded_db,
+        )
+        assert result.exit_code == 0, result.output
+        assert _extract(result.output)["data"]["title"] == "X"

@@ -71,7 +71,9 @@ class JobWorker:
 
         while not self._stop_event.is_set():
             try:
-                job = self.repo.claim_next()
+                # 显式只 claim 维护族 (S4 D1 分区): 本 worker 跑 run_job (resync/backfill),
+                # 看不到 agent_run (那族由独立 AgentRunWorker 认领, run_job 无其分支)。
+                job = self.repo.claim_next(types=self.repo.MAINTENANCE_JOB_TYPES)
             except Exception as e:
                 logger.error(f"[job-worker] claim crash: {e}", exc_info=True)
                 job = None

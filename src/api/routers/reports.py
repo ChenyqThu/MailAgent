@@ -134,7 +134,11 @@ async def set_config(request: Request, agent_id: str, body: Optional[dict[str, A
     """部分更新 agent 配置（写）。镜像 report:setConfig。body = friendly patch
     （ReportConfigPatch）→ ReportAgentConfig。"""
     raw = body or {}
+    # S4: 保存时深校验 custom agent trigger（坏 cron/未知 kind/超长 pattern → 400，给 owner 反馈；
+    # 运行时 worker/dispatch 仍 fail-closed 双保险）。TriggerValidationError 是 ValueError 子类。
+    from src.agents.trigger import validate_agent_config_patch
     try:
+        validate_agent_config_patch(raw)
         db_patch = wire.config_patch_to_db(raw)
     except ValueError as exc:
         raise APIError("E_INVALID_ARG", str(exc), source="sqlite")

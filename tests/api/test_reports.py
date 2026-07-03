@@ -183,6 +183,66 @@ def test_set_config_404(report_client: TestClient) -> None:
 
 
 # ---------------------------------------------------------------------------
+# S4 P2-1: 保存时深校验 custom agent trigger（坏配置 → 400，DB 不变）
+# ---------------------------------------------------------------------------
+
+
+def test_set_config_rejects_bad_cron_trigger(report_client: TestClient, report_db: Path) -> None:
+    """坏 cron trigger → 400 E_INVALID_ARG，且 DB 不写入（校验在 update 前）。"""
+    r = report_client.put(
+        f"/api/report-agents/{_AGENT_ID}",
+        json={"trigger": {"v": 1, "kind": "cron", "cron": "garbage cron"}},
+    )
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "E_INVALID_ARG"
+    # DB 未变（trigger_json 仍 NULL）。
+    row = ReportStore(str(report_db)).get_agent(_AGENT_ID)
+    assert row["trigger_json"] is None
+
+
+def test_set_config_rejects_unknown_trigger_kind(report_client: TestClient) -> None:
+    r = report_client.put(
+        f"/api/report-agents/{_AGENT_ID}", json={"trigger": {"v": 1, "kind": "webhook"}}
+    )
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "E_INVALID_ARG"
+
+
+def test_set_config_rejects_overlong_pattern(report_client: TestClient) -> None:
+    r = report_client.put(
+        f"/api/report-agents/{_AGENT_ID}",
+        json={"trigger": {"v": 1, "kind": "email_filter", "subject_pattern": "a" * 300}},
+    )
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "E_INVALID_ARG"
+
+
+def test_set_config_accepts_valid_trigger_on_custom(
+    report_client: TestClient, report_db: Path
+) -> None:
+    """合法 trigger 存 custom agent → 200 + 读回一致（custom-only 投影）。"""
+    ReportStore(str(report_db)).create_agent("custom1", type="custom", enabled=True, title="DMS")
+    r = report_client.put(
+        "/api/report-agents/custom1",
+        json={"trigger": {"v": 1, "kind": "email_filter", "subject_pattern": "DMS.*审批",
+                          "folders": ["收件箱"]}},
+    )
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data["trigger"]["kind"] == "email_filter"
+    assert data["trigger"]["subject_pattern"] == "DMS.*审批"
+
+
+def test_set_config_normal_patch_unaffected_by_validation(report_client: TestClient) -> None:
+    """无 trigger 的普通 patch（report agent）不受校验影响 —— 行为零回归。"""
+    r = report_client.put(
+        f"/api/report-agents/{_AGENT_ID}", json={"enabled": False, "title": "X"}
+    )
+    assert r.status_code == 200
+    assert r.json()["data"]["title"] == "X"
+
+
+# ---------------------------------------------------------------------------
 # create agent (POST /report-agents) + tools_json 投影
 # ---------------------------------------------------------------------------
 

@@ -95,6 +95,21 @@ def resolve_agent(agent: Dict[str, Any]) -> Dict[str, Any]:
             tools_json = _tools_default
     except (json.JSONDecodeError, TypeError):
         tools_json = _tools_default
+    # v30: custom agent 三列（trigger/tool_policy/budget）。NULL/非法 → None（投影 null =
+    # 非事件型 / 不收窄 / 全默认——都是前端要显示的态，不回填默认）。均为 JSON object。
+    # 保存时 set_config(REST)/CLI config-set 已接 validate_agent_config_patch → parse_trigger 拒坏
+    # 配置（坏 cron/未知 kind/超长 pattern）；运行时 worker/dispatch 再 parse_trigger 双保险 fail-closed。
+    # wire 层 transport-neutral 只做 parse，不深校验。custom 之外的 type 一律 None（不用此三字段）。
+    def _parse_obj(raw: Any) -> Any:
+        try:
+            v = json.loads(raw) if raw else None
+        except (json.JSONDecodeError, TypeError):
+            return None
+        return v if isinstance(v, dict) else None
+    _is_custom = agent_type == "custom"
+    trigger = _parse_obj(agent.get("trigger_json")) if _is_custom else None
+    tool_policy = _parse_obj(agent.get("tool_policy_json")) if _is_custom else None
+    budget = _parse_obj(agent.get("budget_json")) if _is_custom else None
     return {
         "id": agent.get("id"),
         "type": agent_type,
@@ -116,6 +131,9 @@ def resolve_agent(agent: Dict[str, Any]) -> Dict[str, Any]:
         "body_full_priorities": body_full_priorities,
         "context_docs": context_docs,  # v27: 文档勾选（preprocess + report 增量 2）
         "fallback_models": fallback_models,  # v29: preprocess 行级 fallback（null=跟随全局）
+        "trigger": trigger,  # v30: custom agent 触发判别式（null=非事件型）
+        "tool_policy": tool_policy,  # v30: custom agent 工具收窄（null=不额外收窄）
+        "budget": budget,  # v30: custom agent 预算（null=全默认）
         "updated_at": agent.get("updated_at"),
     }
 
@@ -199,4 +217,21 @@ def config_patch_to_db(raw: Dict[str, Any]) -> Dict[str, Any]:
             )
         else:
             raise ValueError("fallback_models must be list or null")
+    # v30: custom agent 三列（trigger/tool_policy/budget）。dict → JSON 串；None → SQL NULL
+    # （清空该配置）；非 dict → ValueError（结构闸）。深校验（trigger 判别式 / cron 合法性 /
+    # ReDoS 长度）由 set_config(REST)/CLI config-set 的 validate_agent_config_patch → parse_trigger
+    # 在保存时做（坏配置拒并给 owner 反馈）；运行时 worker/dispatch 再 parse_trigger 双保险 fail-closed。
+    for _friendly, _col in (
+        ("trigger", "trigger_json"),
+        ("tool_policy", "tool_policy_json"),
+        ("budget", "budget_json"),
+    ):
+        if _friendly in raw:
+            _v = raw[_friendly]
+            if _v is None:
+                db_patch[_col] = None
+            elif isinstance(_v, dict):
+                db_patch[_col] = json.dumps(_v, ensure_ascii=False)
+            else:
+                raise ValueError(f"{_friendly} must be object or null")
     return db_patch

@@ -64,14 +64,23 @@ class AsyncJob:
 class AsyncJobRepository:
     """async_jobs 表读写入口 (仿 OutboxRepository)。"""
 
-    # job_type 枚举 (client-side validation, 与 src/sync/job_runners.py JOB_TYPES 对齐;
-    # tests/sync/test_async_jobs.py::test_job_types_match_runner_registry 断言一致)
-    VALID_JOB_TYPES = frozenset({
+    # job_type 两族分区 (S4 D1, codex P1-1)。两族**互不可见**: 各 worker claim 自己那族,
+    # 公共 REST 只收维护族, recover_orphaned 对两族分别处理 (维护族 requeue, agent 族失败不重放)。
+    #   - MAINTENANCE: 与 src/sync/job_runners.py JOB_TYPES(=runner registry) 逐一致
+    #     (test_job_types_match_runner_registry 断言); JobWorker 串行 claim + run_job 执行。
+    #   - AGENT: agent_run (S4 custom agent headless run)。run_job **不处理** (无 runner 分支);
+    #     执行走独立 AgentRunWorker (W2) → poke gateway。LLM run 非幂等 → 孤儿绝不 requeue。
+    MAINTENANCE_JOB_TYPES = frozenset({
         "resync",
         "backfill_body",
         "backfill_derivatives",
         "backfill_metadata",
     })
+    AGENT_JOB_TYPES = frozenset({
+        "agent_run",
+    })
+    # 并集 = enqueue 合法性总闸 (向后兼容: 既有 job_type 全在 MAINTENANCE 里)。
+    VALID_JOB_TYPES = MAINTENANCE_JOB_TYPES | AGENT_JOB_TYPES
     # 终态集 (mark_terminal 只接受这些; queued/running 是活跃态)
     TERMINAL_STATUSES = frozenset({
         "succeeded", "partial_failure", "failed", "aborted",
@@ -165,17 +174,28 @@ class AsyncJobRepository:
     # 写: claim / progress / terminal / recover
     # ------------------------------------------------------------
 
-    def claim_next(self) -> Optional[AsyncJob]:
-        """原子 claim 最老的 queued job → running，返回它；无 queued 则 None。
+    def claim_next(self, types: Optional[frozenset] = None) -> Optional[AsyncJob]:
+        """原子 claim 最老的 queued job → running，返回它；无匹配 queued 则 None。
+
+        Args:
+            types: 只 claim 这些 job_type (族过滤, S4 D1 分区)。默认 = ``MAINTENANCE_JOB_TYPES``
+                (既有 JobWorker/测试零变化); ``AgentRunWorker`` 传 ``AGENT_JOB_TYPES`` →
+                两族互不可见 (维护 worker 看不到 agent_run, 反之亦然)。
 
         条件 UPDATE (status queued→running, 仿 fanout mark_processing): rowcount==0
         表示被并发抢走 (单 worker 不会发生), 返 None 让 caller 下个 tick 再试。
         """
+        allowed = tuple(types if types is not None else self.MAINTENANCE_JOB_TYPES)
+        if not allowed:
+            return None  # 空族 → 无可 claim (防 IN () 语法错)
+        placeholders = ",".join("?" for _ in allowed)
         conn = self._connect()
         try:
             row = conn.execute(
-                "SELECT job_id FROM async_jobs WHERE status='queued' "
-                "ORDER BY job_id ASC LIMIT 1"
+                f"SELECT job_id FROM async_jobs WHERE status='queued' "
+                f"AND job_type IN ({placeholders}) "
+                "ORDER BY job_id ASC LIMIT 1",
+                allowed,
             ).fetchone()
             if row is None:
                 return None
@@ -256,28 +276,49 @@ class AsyncJobRepository:
         )
 
     def recover_orphaned(self) -> int:
-        """worker 启动时把残留 running (上次崩溃留下) 重置 queued，返回条数。
+        """worker 启动时回收残留 running (上次崩溃留下)，按族分家 (S4 D1)，返回**维护族**重置条数。
 
-        单 worker 语义下任何 running 行都是孤儿 (没有活跃 worker 在跑它)。重置后
-        claim_next 会重新捡起, runner 从 checkpoint_internal_id 续跑。
+        单 worker 语义下任何 running 行都是孤儿 (没有活跃 worker 在跑它)。两族语义不同:
+          - 维护族 (resync/backfill_*): running → queued。幂等维护操作, claim_next 重新捡起,
+            runner 从 checkpoint_internal_id 续跑 (现状语义不变)。
+          - agent 族 (agent_run): running → failed('E_ORPHANED')。LLM run **非幂等**, 重放 =
+            违背 D4 fail-closed 方向 (陈旧写重演)。**永不 requeue**, 下个触发窗口靠新幂等键自然重来。
+
+        返回值 = 维护族重置条数 (保持既有调用点日志语义); agent 族失败数单独 log。
         """
         now = time.time()
         conn = self._connect()
         try:
+            maint = tuple(self.MAINTENANCE_JOB_TYPES)
+            maint_ph = ",".join("?" for _ in maint)
             cursor = conn.execute(
-                "UPDATE async_jobs SET status='queued', updated_at=? "
-                "WHERE status='running'",
-                (now,),
+                f"UPDATE async_jobs SET status='queued', updated_at=? "
+                f"WHERE status='running' AND job_type IN ({maint_ph})",
+                (now, *maint),
             )
+            n_maint = cursor.rowcount
+            agent = tuple(self.AGENT_JOB_TYPES)
+            agent_ph = ",".join("?" for _ in agent)
+            cursor2 = conn.execute(
+                f"UPDATE async_jobs SET status='failed', last_error='E_ORPHANED', "
+                f"finished_at=?, updated_at=? "
+                f"WHERE status='running' AND job_type IN ({agent_ph})",
+                (now, now, *agent),
+            )
+            n_agent = cursor2.rowcount
             conn.commit()
-            n = cursor.rowcount
         finally:
             conn.close()
-        if n:
+        if n_maint:
             logger.warning(
-                f"[async-jobs] recovered {n} orphaned running job(s) → queued"
+                f"[async-jobs] recovered {n_maint} orphaned maintenance job(s) → queued"
             )
-        return n
+        if n_agent:
+            logger.warning(
+                f"[async-jobs] failed {n_agent} orphaned agent_run job(s) → E_ORPHANED "
+                f"(non-idempotent, never requeued)"
+            )
+        return n_maint
 
     # ------------------------------------------------------------
     # 读: get
@@ -290,6 +331,23 @@ class AsyncJobRepository:
                 "SELECT * FROM async_jobs WHERE job_id=?", (job_id,)
             ).fetchone()
             return self._row_to_job(row) if row else None
+        finally:
+            conn.close()
+
+    def count_agent_runs_since(self, agent_id: str, since_epoch: float) -> int:
+        """统计某 agent 自 ``since_epoch`` 起 enqueue 的 agent_run 数 (S4 D7-1 runs/day 门)。
+
+        target_key = agent_id (触发方 enqueue 时约定), 计所有 created_at>=since 的行 (含终态,
+        含 idempotent 去重后的实际入队数——去重不新建行, 天然不重复计)。
+        """
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT COUNT(*) AS n FROM async_jobs "
+                "WHERE job_type='agent_run' AND target_key=? AND created_at>=?",
+                (agent_id, since_epoch),
+            ).fetchone()
+            return int(row["n"]) if row else 0
         finally:
             conn.close()
 

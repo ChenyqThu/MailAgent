@@ -231,7 +231,11 @@ def report_config_set(
     except (json.JSONDecodeError, ValueError) as e:
         raise emit_cli_error(cli, CliInvalidArgError(f"--patch invalid JSON: {e}"))
 
+    # S4: 保存时深校验 custom agent trigger（坏 cron/未知 kind/超长 pattern → E_INVALID_ARG;
+    # 运行时 worker/dispatch 仍 fail-closed 双保险）。TriggerValidationError 是 ValueError 子类。
+    from src.agents.trigger import validate_agent_config_patch
     try:
+        validate_agent_config_patch(raw)
         db_patch = wire.config_patch_to_db(raw)
     except ValueError as e:
         raise emit_cli_error(cli, CliInvalidArgError(str(e)))

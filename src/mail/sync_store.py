@@ -349,7 +349,15 @@ class SyncStore:
     #                数组 = 预处理专用 fallback 链。无 seed 变更 (种子行留 NULL=跟随全局)。
     #                幂等: ALTER 前 PRAGMA 检查 (同 v27 context_docs_json 模式)。
     #                回滚 (回退 v29): 列可留 (旧代码无害) 或手动 DROP; 必要时降 db_version。
-    DB_VERSION = 29  # v29: report_agent +fallback_models_json（预处理行级 fallback，dogfood R2 #2）
+    # v30 (Custom Agent 内核 S4 W1, 2026-07, flag MAILAGENT_CUSTOM_AGENTS_ENABLED 默认关):
+    #                report_agent 加 trigger_json (判别式 cron|email_filter) / tool_policy_json
+    #                (D6 allowed_tools 交集收窄) / budget_json (D7 max_steps/runs_per_day/run_seconds)
+    #                三列 (TEXT NULL, 无 seed —— type='custom' 行只由 owner 创建, W1 不播种)。
+    #                async_jobs 加 claim_token / spec_claimed_at 两列 (D2 fresh-spawn CAS one-shot;
+    #                W1 只建列, 端点在 W2)。全 additive TEXT NULL, 对既有行/调用零影响。
+    #                幂等: ALTER 前 PRAGMA 检查 (同 v27/v29 模式)。
+    #                回滚 (回退 v30): 五列可留 (旧代码无害, 全 NULL) 或手动 DROP; 必要时降 db_version。
+    DB_VERSION = 30  # v30: report_agent +trigger_json/tool_policy_json/budget_json + async_jobs +claim_token/spec_claimed_at（Custom Agent S4 W1）
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -1204,7 +1212,10 @@ class SyncStore:
                 body_full_priorities TEXT,     -- daily: JSON 数组 of priority label，命中则带正文（NULL=默认紧急+重要）
                 updated_at REAL,
                 context_docs_json TEXT,        -- v27: preprocess 用 JSON 数组 of profile-doc 名（NULL=默认 soul+user）
-                fallback_models_json TEXT      -- v29: preprocess 行级 fallback 链 JSON 数组（NULL=跟随全局 LLM_FALLBACK_MODELS）；末列对齐 ALTER 追加位置
+                fallback_models_json TEXT,     -- v29: preprocess 行级 fallback 链 JSON 数组（NULL=跟随全局 LLM_FALLBACK_MODELS）
+                trigger_json TEXT,             -- v30: custom agent 触发判别式（{"v":1,"kind":"cron"|"email_filter",...}；NULL=非事件型，既有三 type 不用）
+                tool_policy_json TEXT,         -- v30: custom agent 工具收窄（{"v":1,"allowed_tools":[...]}；NULL=不额外收窄）
+                budget_json TEXT               -- v30: custom agent 预算（{"v":1,"max_steps","max_runs_per_day","max_run_seconds"}；NULL=全默认）；末列对齐 ALTER 追加位置
             )
         """)
         # report: ReportDoc 块模型 SSoT（blocks_json）+ 列表展示冗余字段。
@@ -1259,7 +1270,9 @@ class SyncStore:
                 created_at REAL NOT NULL,
                 updated_at REAL NOT NULL,
                 started_at REAL,
-                finished_at REAL
+                finished_at REAL,
+                claim_token TEXT,                        -- v30 (S4 D2): agent_run fresh-spawn 能力令牌 (worker 认领时生成)
+                spec_claimed_at REAL                     -- v30 (S4 D2): spec pull CAS one-shot marker (NULL=未拉取; 防双 drain)
             )
         """)
         cursor.execute(
@@ -1661,6 +1674,35 @@ class SyncStore:
             except sqlite3.OperationalError as e:
                 _migration_guard_columns(
                     cursor, "report_agent", {"fallback_models_json"}, "v29 migration", e
+                )
+
+        # === v30: Custom Agent 内核 S4 W1 —— report_agent 加 trigger/tool_policy/budget 三列 +
+        # async_jobs 加 claim_token/spec_claimed_at 两列 (S4 fresh-spawn CAS)。全 additive TEXT NULL,
+        # 旧库对既有行/调用零影响 (NULL = 非事件型 / 不收窄 / 全默认 / 未拉取)。新库 CREATE 已含 →
+        # PRAGMA 检查跳过; 旧库 (v18-v29) 补列, 已存在则 no-op。无 seed (type='custom' 行由 owner 创建)。
+        # 回滚 (回退 v30): 五列可留 (旧代码无害) 或手动 DROP; 必要时降 db_version。
+        if current_version < 30:
+            try:
+                _ra_cols = {r[1] for r in cursor.execute("PRAGMA table_info(report_agent)").fetchall()}
+                for _c in ("trigger_json", "tool_policy_json", "budget_json"):
+                    if _c not in _ra_cols:
+                        cursor.execute(f"ALTER TABLE report_agent ADD COLUMN {_c} TEXT")
+                logger.info("v30 migration: report_agent +trigger_json/tool_policy_json/budget_json")
+            except sqlite3.OperationalError as e:
+                _migration_guard_columns(
+                    cursor, "report_agent",
+                    {"trigger_json", "tool_policy_json", "budget_json"}, "v30 migration", e,
+                )
+            try:
+                _aj_cols = {r[1] for r in cursor.execute("PRAGMA table_info(async_jobs)").fetchall()}
+                for _c, _t in (("claim_token", "TEXT"), ("spec_claimed_at", "REAL")):
+                    if _c not in _aj_cols:
+                        cursor.execute(f"ALTER TABLE async_jobs ADD COLUMN {_c} {_t}")
+                logger.info("v30 migration: async_jobs +claim_token/spec_claimed_at")
+            except sqlite3.OperationalError as e:
+                _migration_guard_columns(
+                    cursor, "async_jobs",
+                    {"claim_token", "spec_claimed_at"}, "v30 migration", e,
                 )
 
         # 更新数据库版本 —— E0-WP3: 只有**全部迁移成功**才会执行到这里。任何迁移块

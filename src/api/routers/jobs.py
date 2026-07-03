@@ -56,7 +56,10 @@ async def enqueue_job(request: Request, body: Optional[dict[str, Any]] = None):
     """enqueue 一个长任务，立即返 job_id (status='queued')。
 
     body (camelCase): {jobType (必填), targetKind?, targetKey?, params?, idempotencyKey?}。
-    job_type ∈ {resync, backfill_body, backfill_derivatives, backfill_metadata}。
+    job_type ∈ 维护族 {resync, backfill_body, backfill_derivatives, backfill_metadata}。
+    S4 D1 分区: 公共 REST **只收维护族** —— agent_run 不可经此入队 (JOB_TYPES=runner registry
+    不含它 → 自动 400); 其唯一入队方 = 触发引擎 (AgentTriggerWorker / new_watcher 第 5 hook) +
+    未来 S5 owner run-now, 均在 owner 鉴权面之后。
     """
     opts = body or {}
     job_type = opts.get("jobType")

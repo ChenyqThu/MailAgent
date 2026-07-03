@@ -143,9 +143,19 @@ def test_get_missing_returns_none(repo):
 # ============================================================
 
 def test_job_types_match_runner_registry():
-    """async_jobs.VALID_JOB_TYPES 必须与 job_runners.JOB_TYPES 逐一致 (两份手抄防漂移)。"""
+    """S4 D1 分区后: job_runners.JOB_TYPES(=runner registry) 必须与 MAINTENANCE_JOB_TYPES
+    逐一致 (run_job 只处理维护族); agent_run 在 AGENT_JOB_TYPES, 无 runner 分支。"""
     from src.sync.job_runners import JOB_TYPES
-    assert AsyncJobRepository.VALID_JOB_TYPES == JOB_TYPES
+    assert AsyncJobRepository.MAINTENANCE_JOB_TYPES == JOB_TYPES
+    # 并集 = 维护 ∪ agent, 且两族不相交 (分区不变式)。
+    assert AsyncJobRepository.VALID_JOB_TYPES == (
+        AsyncJobRepository.MAINTENANCE_JOB_TYPES | AsyncJobRepository.AGENT_JOB_TYPES
+    )
+    assert not (
+        AsyncJobRepository.MAINTENANCE_JOB_TYPES & AsyncJobRepository.AGENT_JOB_TYPES
+    )
+    # agent_run 不在 runner registry (run_job 无分支, 公共 REST 自动拒)。
+    assert "agent_run" not in JOB_TYPES
 
 
 @pytest.mark.parametrize(
@@ -168,3 +178,85 @@ def test_summary_to_status(succeeded, failed, aborted, max_failures_hit, expecte
         aborted=aborted, max_failures_hit=max_failures_hit,
     )
     assert summary_to_status(summary) == expected
+
+
+# ============================================================
+# S4 D1 job_type 两族分区 (claim 过滤 / 孤儿分家 / count)
+# ============================================================
+
+def test_claim_next_families_are_invisible_to_each_other(repo):
+    """维护 worker claim 看不到 agent_run, agent worker claim 看不到维护 job。"""
+    m, _ = repo.enqueue(job_type="resync", target_kind="ids", target_key="m")
+    a, _ = repo.enqueue(job_type="agent_run", target_kind="agent", target_key="a1")
+    # 默认 (维护族) claim → 只拿到维护 job, 不碰 agent_run。
+    claimed = repo.claim_next()
+    assert claimed.job_id == m
+    assert repo.claim_next() is None  # 维护族已空 (agent_run 不可见)
+    # agent 族 claim → 拿到 agent_run。
+    a_claim = repo.claim_next(types=AsyncJobRepository.AGENT_JOB_TYPES)
+    assert a_claim.job_id == a
+    assert a_claim.job_type == "agent_run"
+
+
+def test_claim_next_empty_family_returns_none(repo):
+    repo.enqueue(job_type="resync", target_kind="ids", target_key="m")
+    # 空族过滤 → None (不误 claim, 不 IN () 语法错)。
+    assert repo.claim_next(types=frozenset()) is None
+
+
+def test_recover_orphaned_maintenance_requeues(repo):
+    repo.enqueue(job_type="resync", target_kind="ids", target_key="m")
+    claimed = repo.claim_next()  # → running
+    assert claimed.status == "running"
+    n = repo.recover_orphaned()
+    assert n == 1  # 返回维护族重置数
+    assert repo.get(claimed.job_id).status == "queued"  # 维护孤儿 → 重新排队
+
+
+def test_recover_orphaned_agent_run_fails_never_requeue(repo):
+    """agent_run 孤儿 → failed('E_ORPHANED'), 绝不 requeue (LLM run 非幂等, D4 fail-closed)。"""
+    a, _ = repo.enqueue(job_type="agent_run", target_kind="agent", target_key="a1")
+    claimed = repo.claim_next(types=AsyncJobRepository.AGENT_JOB_TYPES)  # → running
+    assert claimed.status == "running"
+    n = repo.recover_orphaned()
+    assert n == 0  # 维护族无孤儿 (返回值只计维护族)
+    job = repo.get(a)
+    assert job.status == "failed"
+    assert job.last_error == "E_ORPHANED"
+    assert job.finished_at is not None
+    # 不会被 agent 族 claim 重新捡起 (已终态)。
+    assert repo.claim_next(types=AsyncJobRepository.AGENT_JOB_TYPES) is None
+
+
+def test_recover_orphaned_mixed_families(repo):
+    repo.enqueue(job_type="resync", target_kind="ids", target_key="m")
+    a, _ = repo.enqueue(job_type="agent_run", target_kind="agent", target_key="a1")
+    repo.claim_next()                                             # 维护 → running
+    repo.claim_next(types=AsyncJobRepository.AGENT_JOB_TYPES)     # agent → running
+    n = repo.recover_orphaned()
+    assert n == 1  # 只维护族重置计入返回
+    # 维护 → queued, agent → failed。
+    statuses = {j.job_type: j.status for j in (repo.get(1), repo.get(2))}
+    assert statuses["resync"] == "queued"
+    assert statuses["agent_run"] == "failed"
+
+
+def test_agent_run_enqueue_accepted(repo):
+    # agent_run 现在是 VALID (AGENT 族), repo.enqueue 直接接受 (公共 REST 另有闸拒)。
+    job_id, created = repo.enqueue(
+        job_type="agent_run", target_kind="agent", target_key="a1",
+        params={"agent_id": "a1"},
+    )
+    assert created is True
+    assert repo.get(job_id).job_type == "agent_run"
+
+
+def test_count_agent_runs_since(repo):
+    import time as _t
+    t0 = _t.time()
+    repo.enqueue(job_type="agent_run", target_kind="agent", target_key="a1", idempotency_key="k1")
+    repo.enqueue(job_type="agent_run", target_kind="agent", target_key="a1", idempotency_key="k2")
+    repo.enqueue(job_type="agent_run", target_kind="agent", target_key="a2", idempotency_key="k3")
+    assert repo.count_agent_runs_since("a1", t0) == 2  # 按 target_key 隔离
+    assert repo.count_agent_runs_since("a2", t0) == 1
+    assert repo.count_agent_runs_since("a1", _t.time() + 10) == 0  # 未来窗口 → 0

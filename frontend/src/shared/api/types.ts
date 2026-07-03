@@ -2225,6 +2225,32 @@ export interface ReportSchedule {
 }
 
 /** report:getConfig — 解析后的 agent 配置（prompt 缺省已回填默认）。 */
+/** v30 Custom Agent（S4）触发判别式：cron（定时）| email_filter（邮件事件）。
+ *  后端 src/agents/trigger.py 是校验权威；前端类型仅供未来 CRUD UI（W1 无 UI 消费）。 */
+export type CustomAgentTrigger =
+  | { v: 1; kind: 'cron'; cron: string; timezone?: string }
+  | {
+      v: 1
+      kind: 'email_filter'
+      subject_pattern?: string
+      sender_pattern?: string
+      folders?: string[]
+    }
+
+/** v30 Custom Agent 工具收窄（矩阵地板之后的 allowed_tools 交集；null/缺失 = 不额外收窄）。 */
+export interface CustomAgentToolPolicy {
+  v: 1
+  allowed_tools?: string[]
+}
+
+/** v30 Custom Agent 预算三门（null/缺失 = 全默认）。 */
+export interface CustomAgentBudget {
+  v: 1
+  max_steps?: number
+  max_runs_per_day?: number
+  max_run_seconds?: number
+}
+
 export interface ReportAgentConfig {
   id: string
   type: string
@@ -2252,6 +2278,11 @@ export interface ReportAgentConfig {
   /** v29 preprocess：行级 fallback 模型链。null = 跟随全局 LLM_FALLBACK_MODELS；
    *  [] = 显式不设兜底。仅 type='preprocess' 有意义（其余恒 null）。 */
   fallback_models?: string[] | null
+  /** v30 Custom Agent（type='custom'）触发/工具/预算。仅 type='custom' 有意义（其余恒 null）；
+   *  W1 无 UI 消费（占位供 S5 CRUD）。 */
+  trigger?: CustomAgentTrigger | null
+  tool_policy?: CustomAgentToolPolicy | null
+  budget?: CustomAgentBudget | null
   updated_at: number | null
 }
 
@@ -2275,6 +2306,11 @@ export interface ReportConfigPatch {
   /** v29 preprocess：行级 fallback 链（wire.config_patch_to_db 写 fallback_models_json 列）。
    *  null = 重置回跟随全局；[] = 显式不设兜底。 */
   fallback_models?: string[] | null
+  /** v30 Custom Agent：触发/工具/预算（wire.config_patch_to_db 写对应 *_json 列）。
+   *  null = 清空该配置；object = 覆写。仅 type='custom' 有意义。 */
+  trigger?: CustomAgentTrigger | null
+  tool_policy?: CustomAgentToolPolicy | null
+  budget?: CustomAgentBudget | null
 }
 
 /** report:createAgent — 新建一行 agent（type 多态）。 */

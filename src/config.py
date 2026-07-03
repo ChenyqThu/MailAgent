@@ -641,6 +641,17 @@ class Config(BaseSettings):
         description="单次报告喂给 LLM 的邮件 brief 封数上限（按 priority/date 排序取前 N）。≤0 = 不限制（取窗口内全部邮件），默认 0 不限制。",
     )
 
+    # ---- Custom Agent 内核（S4, src/agents；默认关，flag-off 字节级不变）----
+    # 🔴 字段名 custom_agents_enabled ≠ env MAILAGENT_CUSTOM_AGENTS_ENABLED → 必须 validation_alias
+    custom_agents_enabled: bool = Field(
+        default=False, validation_alias="MAILAGENT_CUSTOM_AGENTS_ENABLED",
+        description=(
+            "Custom Agent 内核总开关（S4：cron/email_filter 触发 → gateway headless run）。"
+            "默认关；off → new_watcher 第 5 hook 不 fire、AgentTriggerWorker 不启、"
+            "agent_run 触发/入队全灭（字节级回 S3 终态）。per-agent 还需 report_agent.enabled + type='custom'。"
+        ),
+    )
+
     # =========================================================================
     # Sprint 16 dual-backend (2026-05): 邮件后端 single-driver 显式切换
     # AppleScript + Mail.app (FALLBACK, 默认) ⇄ DavMail IMAP/SMTP (PRIMARY)

@@ -21,6 +21,12 @@ aiohttp>=3.10.0  # Python 3.13 兼容性改进
 # iCalendar RRULE 展开（间接依赖 pandas，但直接 pin 防 pandas 升级断链）
 python-dateutil>=2.8.0
 
+# Custom Agent cron 触发（S4，flag MAILAGENT_CUSTOM_AGENTS_ENABLED，默认关）：
+# AgentTriggerWorker 用 croniter 解析 5-field cron + get_prev 判定 fire window。
+# 自研 cron 边界 case（DST / 闰 / 步进）是著名坑源，用成熟小库（纯 Python，无重传递依赖）。
+# 运行期仅 flag 开时 import；打包须重新生成 requirements.lock.txt 才进嵌入式 venv。
+croniter>=2.0.0
+
 # CalDAV 日历同步（calendar_sync worker：DavMail CalDAV 桥 → SQLite SSoT）
 # 之前只在 dev venv 手动装过，没进 requirements → 打包 app 缺 caldav，
 # CalDAVReader import 失败、每分钟重试。caldav 会带 icalendar / recurring-ical-events

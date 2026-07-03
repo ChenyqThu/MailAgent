@@ -29,8 +29,10 @@ if TYPE_CHECKING:
     from src.sync.async_jobs import AsyncJob
 
 
-# job_type 枚举 —— 必须与 src/sync/async_jobs.py AsyncJobRepository.VALID_JOB_TYPES
-# 逐一致 (tests/sync/test_async_jobs.py 有断言)。
+# job_type 枚举 = runner registry —— 必须与 src/sync/async_jobs.py
+# AsyncJobRepository.MAINTENANCE_JOB_TYPES 逐一致 (S4 D1 分区后, run_job 只处理维护族;
+# agent_run 在 AGENT_JOB_TYPES, 由独立 AgentRunWorker 执行, 无 runner 分支)。
+# tests/sync/test_async_jobs.py::test_job_types_match_runner_registry 断言一致。
 JOB_TYPES = frozenset({
     "resync",
     "backfill_body",
