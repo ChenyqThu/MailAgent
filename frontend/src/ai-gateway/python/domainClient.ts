@@ -22,7 +22,7 @@ import type {
   EmailList_EmailListItem,
   MailagentEmailBody
 } from '@shared/types/cli.gen'
-import type { ReportDetail, ReportListItem, SearchResult } from '@shared/api/types'
+import type { AgentRunSpec, ReportDetail, ReportListItem, SearchResult } from '@shared/api/types'
 
 /** A serve-api domain error surfaced to the caller (tool execute turns it into a
  *  tool-error part). Mirrors the http_client ApiError shape ({code, message, hint?,
@@ -411,12 +411,20 @@ export class MailAgentDomainClient {
   private async _req<T>(
     method: string,
     path: string,
-    opts?: { query?: Record<string, QueryValue>; body?: unknown; signal?: AbortSignal }
+    opts?: {
+      query?: Record<string, QueryValue>
+      body?: unknown
+      signal?: AbortSignal
+      /** Extra request headers (e.g. S4's X-Claim-Token). Merged after the Accept / local-token /
+       *  Content-Type defaults; a caller-supplied key overrides a default. */
+      headers?: Record<string, string>
+    }
   ): Promise<T> {
     const url = `${this.baseUrl}${path}${opts?.query ? buildQuery(opts.query) : ''}`
     const headers: Record<string, string> = { Accept: 'application/json' }
     if (this.localToken) headers[LOCAL_TOKEN_HEADER] = this.localToken
     if (opts?.body !== undefined) headers['Content-Type'] = 'application/json'
+    if (opts?.headers) Object.assign(headers, opts.headers)
 
     let resp: Response
     try {
@@ -1021,5 +1029,41 @@ export class MailAgentDomainClient {
     return this._req<DomainSkillDocResult>('GET', `/agent/skills/${encodeURIComponent(name)}/doc`, {
       signal
     })
+  }
+
+  // ── agent-run primitives (S4 W3) — the headless custom-agent run's spec pull + approval回写. Both
+  //    hit /agent-runs/* (owner surface, verify_local_token — the embedded gateway's local-token leg).
+  //    Called ONLY by the lifecycle's fetchAgentRunSpec hook (gate) + onServerResumeSettled, and only
+  //    when MAILAGENT_CUSTOM_AGENTS_ENABLED is on.
+
+  /** fetchAgentRunSpec (S4 W3) — pull the authoritative agent-run spec by jobId + claimToken (D2
+   *  one-shot CAS server-side). GET /agent-runs/{jobId}/spec with the X-Claim-Token header. E_SPEC_*
+   *  envelope errors (403 forbidden / 404 not-found / 409 already-claimed / 409 agent-invalid)
+   *  surface as DomainError (code + httpStatus) → the endpoint forwards them to the worker. */
+  fetchAgentRunSpec(
+    jobId: number,
+    claimToken: string,
+    signal?: AbortSignal
+  ): Promise<AgentRunSpec> {
+    return this._req<AgentRunSpec>('GET', `/agent-runs/${jobId}/spec`, {
+      headers: { 'X-Claim-Token': claimToken },
+      signal
+    })
+  }
+
+  /** settleAgentApprovalState (S4 W3) — write a headless run's terminal approval decision after an
+   *  island resume (D4, by-job-id). POST /agent-runs/{jobId}/approval-state {state}. Only migrates
+   *  from pending; a non-pending job → DomainError E_APPROVAL_NOT_PENDING (409, best-effort — the
+   *  caller ignores it). */
+  settleAgentApprovalState(
+    jobId: number,
+    state: 'approved' | 'rejected',
+    signal?: AbortSignal
+  ): Promise<{ jobId: number; approvalState: string; idempotent: boolean }> {
+    return this._req<{ jobId: number; approvalState: string; idempotent: boolean }>(
+      'POST',
+      `/agent-runs/${jobId}/approval-state`,
+      { body: { state }, signal }
+    )
   }
 }

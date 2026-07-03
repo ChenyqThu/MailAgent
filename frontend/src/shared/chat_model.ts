@@ -59,6 +59,14 @@ export interface ChatSession {
   archived: boolean
   created_at: number
   updated_at: number
+  // S4 W3 (task 07-02-s4-custom-agent-core) — headless custom-agent run provenance. 'agent' for a
+  // cron/email-triggered headless session; null/undefined for every interactive session. agent_id +
+  // agent_job_id (the async_jobs.job_id as TEXT) link back to report_agent + async_jobs. All three are
+  // ai_chat.db v19 additive columns; optional here so pre-v19 rows + interactive-session literals stay
+  // valid.
+  origin?: string | null
+  agent_id?: string | null
+  agent_job_id?: string | null
 }
 
 // Global session-history row. Unlike `ChatSession` (per-email, used by the

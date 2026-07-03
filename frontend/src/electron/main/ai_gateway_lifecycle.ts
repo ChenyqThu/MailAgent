@@ -35,6 +35,7 @@ import { extractTextFromUIMessage } from '@shared/assistant/uiMessage'
 import {
   appendMessage,
   appendToolCall,
+  createAgentSession,
   findAssistantMessageRowIdByUiId,
   findUserMessageRowIdByUiId,
   getFirstUserText,
@@ -338,6 +339,13 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
   // Default OFF (island 模式); main-env-only, NO vite define (mirrors the other openness flags).
   // Off → buildGatewayTools output byte-identical to v1.2.0.
   const skillInstallToolsEnabled = envBool('MAILAGENT_OPENNESS_SKILL_INSTALL', false)
+  // S4 W3 — MAILAGENT_CUSTOM_AGENTS_ENABLED gates the headless custom-agent fresh-spawn endpoint
+  // (POST /api/ai/agent-run): its two cfg hooks (fetchAgentRunSpec + createAgentSession) are wired
+  // only when on → off (default) → the endpoint 404s, byte-identical to S3. This wave adds ZERO
+  // gateway tools, so buildGatewayTools output is unaffected either way. Main-env-only, NO vite
+  // define (the renderer never reads it — mirrors the other openness flags). The Python side reads
+  // the SAME env via pydantic (custom_agents_enabled) to gate the trigger worker + spec endpoints.
+  const customAgentsEnabled = envBool('MAILAGENT_CUSTOM_AGENTS_ENABLED', false)
   const apiBase = `http://127.0.0.1:${resolveApiPort()}/api`
   // M4a — prewarm the /chat/config cache ONCE before the server accepts requests so the per-request
   // buildTools factory reads a populated advertisedSkills on the very first turn (no null-first-turn
@@ -623,6 +631,13 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     // session (completed / rejected / error). Broadcast to every renderer window (events_bridge
     // 同款 broadcast 手法) so an OPEN chat panel showing the stale approval card reloads its
     // messages from ai_chat.db. Off (default) → undefined → server.ts 的 ?. 短路，字节级 inert。
+    //
+    // S4 W3 (ADR-003 D4) — when this settled session is a HEADLESS agent run (origin='agent'), also
+    // write the terminal approval decision back to its async_jobs row so the ledger can distinguish
+    // "等审批" from "成功完成": look up the session's agent_job_id (chat_db, main-process) → POST
+    // serve-api /agent-runs/{jobId}/approval-state. status→state: rejected→rejected, else→approved
+    // (the user's DECISION was approve; a post-approval tool error doesn't change that the approval
+    // was granted). Best-effort (fire-and-forget); only when custom agents are on.
     onServerResumeSettled: islandAgentEnabled
       ? (sessionId: number, status: 'completed' | 'rejected' | 'error') => {
           for (const win of BrowserWindow.getAllWindows()) {
@@ -632,6 +647,42 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
             } catch {
               /* renderer torn down mid-send — ignore */
             }
+          }
+          if (customAgentsEnabled) {
+            try {
+              const session = getSession(sessionId)
+              if (session?.origin === 'agent' && session.agent_job_id) {
+                const jobId = Number(session.agent_job_id)
+                if (Number.isInteger(jobId)) {
+                  const state = status === 'rejected' ? 'rejected' : 'approved'
+                  void domain
+                    .settleAgentApprovalState(jobId, state)
+                    .catch((err) =>
+                      console.error('[ai-gateway] agent approval-state settle failed', err)
+                    )
+                }
+              }
+            } catch (err) {
+              console.error('[ai-gateway] agent approval-state lookup failed', err)
+            }
+          }
+        }
+      : undefined,
+    // S4 W3 (ADR-003 D2) — pull the authoritative agent-run spec by jobId + claimToken. Wired only
+    // when MAILAGENT_CUSTOM_AGENTS_ENABLED is on → off (default) → POST /api/ai/agent-run 404s.
+    fetchAgentRunSpec: customAgentsEnabled
+      ? (jobId: number, claimToken: string) => domain.fetchAgentRunSpec(jobId, claimToken)
+      : undefined,
+    // S4 W3 (ADR-003 D3) — pre-create the ai_chat.db session (origin='agent') a headless run persists
+    // into. Wired only when custom agents are on. A create failure returns null (the run streams but
+    // persists nothing) rather than throwing → the endpoint degrades gracefully.
+    createAgentSession: customAgentsEnabled
+      ? (input: { agentId: string; jobId: number; title: string }) => {
+          try {
+            return createAgentSession(input)
+          } catch (err) {
+            console.error('[ai-gateway] createAgentSession failed (run will be unsaved)', err)
+            return null
           }
         }
       : undefined

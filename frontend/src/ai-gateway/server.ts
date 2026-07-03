@@ -42,6 +42,8 @@ import {
 import { handleAguiChat } from './agui/aguiRoute'
 import { resumeApprovalRun } from './approvalResume'
 import { runHeadlessSearchAgent } from './searchAgentRun'
+import { runHeadlessAgent } from './agentRun'
+import type { HeadlessAgentResult } from '../shared/api/types'
 
 const GATEWAY_VERSION = '0.2.0'
 
@@ -433,7 +435,8 @@ async function handleSearchAgent(
     writeJson(res, 400, { error: 'E_INVALID_ARG', hint: 'userContent required' })
     return
   }
-  const mailbox = typeof body.mailbox === 'string' && body.mailbox.length > 0 ? body.mailbox : undefined
+  const mailbox =
+    typeof body.mailbox === 'string' && body.mailbox.length > 0 ? body.mailbox : undefined
   const model = typeof body.model === 'string' && body.model.length > 0 ? body.model : undefined
   const controller = new AbortController()
   req.on('close', () => controller.abort())
@@ -448,6 +451,107 @@ async function handleSearchAgent(
   )
   if (!controller.signal.aborted) writeSse(res, { type: 'result', result })
   res.end()
+}
+
+/** S4 W3 — map a HeadlessAgentResult to the wire JSON the AgentRunWorker consumes. The worker reads
+ *  a STRING `error` code (AgentRunResult._map_response str()s it into last_error), so we flatten
+ *  error.code; sessionId/steps/summary/usage pass through into the worker's result_json. */
+function toAgentRunWire(result: HeadlessAgentResult): Record<string, unknown> {
+  const wire: Record<string, unknown> = {
+    ok: result.ok,
+    outcome: result.outcome,
+    sessionId: result.sessionId,
+    steps: result.steps
+  }
+  if (result.summary) wire.summary = result.summary
+  if (result.usage) wire.usage = result.usage
+  if (result.error) wire.error = result.error.code
+  return wire
+}
+
+/**
+ * `POST /api/ai/agent-run` — S4 W3 headless custom-agent fresh-spawn (ADR-003 D2). The AgentRunWorker
+ * (Python) pokes this with only `{ jobId, claimToken }` — never authoritative facts. The gateway PULLS
+ * the權威 spec from serve-api (cfg.fetchAgentRunSpec, one-shot CAS), derives the context mode from the
+ * spec's trigger.kind in trusted code, pre-creates the ai_chat.db session (cfg.createAgentSession), and
+ * drains a headless run (runHeadlessAgent) under the derived mode. The synchronous response carries the
+ * terminal result the worker maps to an async_jobs state. Loopback-trusted like the other gateway
+ * endpoints (verify_local_token already gated the spec pull upstream). Both cfg hooks are injected only
+ * when MAILAGENT_CUSTOM_AGENTS_ENABLED is on → off (default) → 404, byte-identical to S3.
+ */
+async function handleAgentRun(
+  req: IncomingMessage,
+  res: ServerResponse,
+  cfg: AiGatewayConfig
+): Promise<void> {
+  if (!cfg.fetchAgentRunSpec || !cfg.createAgentSession) {
+    writeJson(res, 404, { error: 'E_NOT_IMPLEMENTED', hint: 'custom agents feature not enabled' })
+    return
+  }
+  const body = await readJsonBody(req)
+  const jobId = typeof body.jobId === 'number' && Number.isInteger(body.jobId) ? body.jobId : null
+  const claimToken = typeof body.claimToken === 'string' ? body.claimToken : ''
+  if (jobId == null || claimToken.length === 0) {
+    writeJson(res, 400, { error: 'E_INVALID_ARG', hint: 'jobId (int) + claimToken required' })
+    return
+  }
+
+  // Pull the authoritative spec (one-shot CAS server-side). A DomainError-shaped `.code` (E_SPEC_*)
+  // → forward it verbatim with the serve-api HTTP status so the worker records the exact code.
+  let spec
+  try {
+    spec = await cfg.fetchAgentRunSpec(jobId, claimToken)
+  } catch (e) {
+    const code = (e as { code?: unknown }).code
+    const httpStatus = (e as { httpStatus?: unknown }).httpStatus
+    const message = e instanceof Error ? e.message : String(e)
+    const status = typeof httpStatus === 'number' && httpStatus >= 400 ? httpStatus : 502
+    writeJson(res, status, {
+      error: typeof code === 'string' ? code : 'E_SPEC_FETCH_FAILED',
+      hint: message
+    })
+    return
+  }
+
+  // Pre-create the persist session (origin='agent'). A failure degrades to a non-persisted run
+  // rather than aborting (the tool loop + approval still work; only the history row is missing).
+  let sessionId: number | null = null
+  try {
+    sessionId = cfg.createAgentSession({ agentId: spec.agentId, jobId, title: spec.sessionTitle })
+  } catch (err) {
+    console.error(
+      '[ai-gateway] /api/ai/agent-run createAgentSession failed (run continues unsaved)',
+      err
+    )
+    sessionId = null
+  }
+
+  // Budget deadline (ADR-003 D7): merge the client (worker) disconnect with an AbortSignal.timeout at
+  // maxRunSeconds. The worker's own http timeout has a +margin, so the timeout fires FIRST → a bounded
+  // synchronous response. `clientClosed` distinguishes a worker disconnect (socket gone → skip the
+  // write) from a budget timeout (socket open → write the E_BUDGET_TIME result so the worker records it).
+  const maxRunSeconds =
+    typeof spec.budget?.maxRunSeconds === 'number' && spec.budget.maxRunSeconds > 0
+      ? spec.budget.maxRunSeconds
+      : 300
+  const clientAbort = new AbortController()
+  let clientClosed = false
+  req.on('close', () => {
+    clientClosed = true
+    clientAbort.abort()
+  })
+  const merged = AbortSignal.any([clientAbort.signal, AbortSignal.timeout(maxRunSeconds * 1000)])
+
+  // runHeadlessAgent normalizes every drain failure, but prepareChatRun sits before its try block —
+  // an unexpected throw there must still answer the worker (same belt handleApprovalDecide wears);
+  // otherwise the poke would hang until the worker's own http timeout and the rejection goes unhandled.
+  try {
+    const result = await runHeadlessAgent(cfg, { jobId, spec, sessionId }, merged)
+    if (!clientClosed) writeJson(res, 200, toAgentRunWire(result))
+  } catch (err) {
+    console.error('[ai-gateway] /api/ai/agent-run crashed', err)
+    if (!clientClosed) writeJson(res, 500, { error: 'E_AGENT_RUN_CRASH' })
+  }
 }
 
 /**
@@ -620,6 +724,13 @@ export function createAiGatewayServer(cfg: AiGatewayConfig): Server {
     // S3 W1 — headless agentic search (⌘K palette). Registered unconditionally; no key → 503.
     if (method === 'POST' && path === '/api/ai/search-agent') {
       void handleSearchAgent(req, res, cfg)
+      return
+    }
+
+    // S4 W3 — headless custom-agent fresh-spawn (AgentRunWorker poke). Registered unconditionally;
+    // cfg.fetchAgentRunSpec + cfg.createAgentSession gate it (404 when custom agents are off).
+    if (method === 'POST' && path === '/api/ai/agent-run') {
+      void handleAgentRun(req, res, cfg)
       return
     }
 

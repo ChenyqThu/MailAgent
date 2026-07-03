@@ -150,7 +150,15 @@ export type {
 // read / legacy row (additive ALTER default). Plain additive ALTER, same hasColumn idempotency
 // guard as v5..v12. ai_chat.db has its own version ladder; this bump does NOT touch
 // backend_lifecycle.EXPECTED_DB_VERSION. 🔴 bump 同步刷 src/chat/db.py 头注释 + append/update 写列。
-const CHAT_DB_VERSION = 18
+// v19 (S4 W3, task 07-02-s4-custom-agent-core) — ai_chat_sessions.origin + agent_id + agent_job_id:
+// a headless custom-agent run (cron/email-triggered, ADR-003 D3) persists into a first-class session
+// so it's visible/auditable in the SAME history UI. origin='agent' marks it (NULL for every
+// interactive session); agent_id/agent_job_id link back to report_agent + async_jobs (agent_job_id is
+// the async_jobs.job_id as TEXT — cross-db, no FK). backend_kind CHECK is UNCHANGED (still 'ai-sdk' —
+// the engine is the same, only the initiator differs). Three plain additive ALTERs, hasColumn
+// idempotency guard (same discipline as v5..v12). ai_chat.db has its own version ladder; this bump
+// does NOT touch backend_lifecycle.EXPECTED_DB_VERSION. 🔴 bump 同步刷 src/chat/db.py 头注释。
+const CHAT_DB_VERSION = 19
 
 export function resolveChatDbPath(): string {
   const fromEnv = process.env['AI_CHAT_DB_PATH']
@@ -1010,6 +1018,35 @@ function migrate(db: Database.Database): void {
       throw err
     }
   }
+
+  // v18 → v19 — S4 W3 (task 07-02-s4-custom-agent-core) headless custom-agent sessions. Add
+  // ai_chat_sessions.origin ('agent' | NULL) + agent_id + agent_job_id so a cron/email-triggered
+  // headless run's session is visible/auditable in the same history UI. NULL for every interactive
+  // session (additive ALTER default). backend_kind CHECK unchanged (still 'ai-sdk' — same engine,
+  // different initiator). Three plain additive ALTERs, hasColumn idempotency guard (same discipline
+  // as v5..v12). ai_chat.db has its own version ladder; this bump does NOT touch
+  // backend_lifecycle.EXPECTED_DB_VERSION.
+  if (current < 19) {
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      if (!hasColumn(db, 'ai_chat_sessions', 'origin')) {
+        db.exec('ALTER TABLE ai_chat_sessions ADD COLUMN origin TEXT')
+      }
+      if (!hasColumn(db, 'ai_chat_sessions', 'agent_id')) {
+        db.exec('ALTER TABLE ai_chat_sessions ADD COLUMN agent_id TEXT')
+      }
+      if (!hasColumn(db, 'ai_chat_sessions', 'agent_job_id')) {
+        db.exec('ALTER TABLE ai_chat_sessions ADD COLUMN agent_job_id TEXT')
+      }
+      db.prepare(
+        "INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', '19')"
+      ).run()
+      db.exec('COMMIT')
+    } catch (err) {
+      db.exec('ROLLBACK')
+      throw err
+    }
+  }
 }
 
 // ── singleton ───────────────────────────────────────────────────────────
@@ -1218,6 +1255,32 @@ export function createNewSession(input: OpenSessionInput): ChatSession {
     created_at: now,
     updated_at: now
   }
+}
+
+/**
+ * S4 W3 (task 07-02-s4-custom-agent-core, ADR-003 D3) — create the ai_chat.db session a HEADLESS
+ * custom-agent run persists into. Unconditionally INSERTs a general-anchor 'ai-sdk' row stamped with
+ * origin='agent' + agent_id + agent_job_id (the async_jobs.job_id as TEXT), so the run appears in the
+ * same history UI and onServerResumeSettled can resolve the job from the session. NOT deduped (each
+ * run is its own session). Returns the new session id. The gateway (electron main) calls this via the
+ * cfg.createAgentSession hook, wired only when MAILAGENT_CUSTOM_AGENTS_ENABLED is on.
+ */
+export function createAgentSession(input: {
+  agentId: string
+  jobId: number
+  title: string
+}): number {
+  const db = getChatDb()
+  const now = Date.now()
+  const result = db
+    .prepare(
+      `INSERT INTO ai_chat_sessions
+        (email_id, anchor_type, anchor_id, backend_kind, backend_model,
+         backend_agent_page_id, title, created_at, updated_at, origin, agent_id, agent_job_id)
+       VALUES (NULL, 'general', NULL, 'ai-sdk', NULL, NULL, ?, ?, ?, 'agent', ?, ?)`
+    )
+    .run(input.title, now, now, input.agentId, String(input.jobId))
+  return Number(result.lastInsertRowid)
 }
 
 export function listSessionsForEmail(emailId: number): ChatSession[] {

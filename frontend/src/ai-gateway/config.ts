@@ -28,6 +28,9 @@ import type { GatewaySystemPromptConfig } from './systemPrompt'
 // lifecycle (which constructs it) + approvalResume; config.ts stays type-only so flag-off keeps zero
 // runtime pull of the Part B chunk.
 import type { ApprovalRunStash } from './approvalStash'
+// 🔴 type-only (erased) — S4 W3 headless custom-agent run. The spec type is the wire contract the
+// gateway pulls from serve-api; config.ts stays type-only so the S4 chunk isn't pulled when off.
+import type { AgentRunSpec } from '@shared/api/types'
 
 /** Part B — what makePersistOnFinish tells the lifecycle when a turn pauses at an island-eligible
  *  approval gate (announce → serve-api). NO token/secret in here beyond the resumeToken, which is the
@@ -255,4 +258,21 @@ export interface AiGatewayConfig {
    *  approval) nor 'not_found' (nothing ran). Fire-and-forget (server.ts wraps it in try/catch);
    *  omitted (island agent off) → inert, byte-identical. */
   onServerResumeSettled?: (sessionId: number, status: 'completed' | 'rejected' | 'error') => void
+
+  // ── S4 W3 (custom-agent headless run, ADR-003) — POST /api/ai/agent-run fresh-spawn ─────────────
+  /** ADR-003 D2 — pull the AUTHORITATIVE agent-run spec by jobId + claimToken. The gateway is poked
+   *  with only {jobId, claimToken}; it fetches the权威 spec here so the POST body never carries
+   *  prompt/toolPolicy/trigger.kind (a local process cannot forge a wide run). The Electron wrapper
+   *  implements it via domainClient.fetchAgentRunSpec (GET /api/agent-runs/{id}/spec + X-Claim-Token,
+   *  verify_local_token, one-shot CAS server-side). Throws a DomainError-shaped `.code` (E_SPEC_*) on
+   *  forbidden / not-found / already-claimed → the endpoint maps it to a typed HTTP error the
+   *  AgentRunWorker records as last_error. Injected ONLY when MAILAGENT_CUSTOM_AGENTS_ENABLED is on;
+   *  omitted (default) → POST /api/ai/agent-run 404s (feature not wired), byte-identical to S3. */
+  fetchAgentRunSpec?: (jobId: number, claimToken: string) => Promise<AgentRunSpec>
+  /** ADR-003 D3 — pre-create the ai_chat.db session a headless run persists into (origin='agent' +
+   *  agent_id/job_id, CHAT_DB v19) so the run is visible/auditable in the same history UI. The
+   *  Electron wrapper calls chat_db.createAgentSession. Returns the new session id, or null if the
+   *  create failed (the run then streams but persists nothing — degraded, not fatal). Injected ONLY
+   *  when MAILAGENT_CUSTOM_AGENTS_ENABLED is on; omitted (default) → POST /api/ai/agent-run 404s. */
+  createAgentSession?: (input: { agentId: string; jobId: number; title: string }) => number | null
 }

@@ -460,6 +460,67 @@ export interface NlToDslResult {
   message?: string
 }
 
+// ---- S4 custom-agent headless run (task 07-02-s4-custom-agent-core, ADR-003) ----
+//
+// The gateway fresh-spawn contract. AgentRunSpec is the AUTHORITATIVE spec the gateway PULLS from
+// serve-api (GET /api/agent-runs/{id}/spec) after a poke — the POST /api/ai/agent-run body carries
+// only {jobId, claimToken}, never these facts (D2). Field names/casing mirror
+// src/api/routers/agent_runs.py `_assemble_spec` byte-for-byte (the spec rides inside the serve-api
+// success envelope; domainClient unwraps `data`). HeadlessAgentResult is runHeadlessAgent's terminal
+// result; the endpoint serializes a subset to the AgentRunWorker, which maps outcome → async_jobs state.
+
+/** One matched email-filter rule descriptor (trigger.matchedRule). All fields optional. */
+export interface AgentRunMatchedRule {
+  subjectPattern?: string
+  senderPattern?: string
+  folders?: string[]
+}
+
+/** The authoritative headless-run spec pulled from serve-api (never from the poke body). */
+export interface AgentRunSpec {
+  jobId: number
+  agentId: string
+  trigger: {
+    /** 'cron' → cron_headless, 'email_filter' → untrusted_trigger; anything else fail-closes to
+     *  untrusted_trigger (strictest) in the gateway. */
+    kind: string
+    firedAt: string
+    emailInternalId?: number
+    matchedRule?: AgentRunMatchedRule
+  }
+  prompt: {
+    /** Owner-configured agent prompt (TRUSTED). */
+    taskPrompt: string
+    /** Server-fenced UNTRUSTED_EMAIL_BODY block (email_filter runs only). Already fenced by W2 —
+     *  the gateway concatenates it VERBATIM into the user message, never re-wrapping it. */
+    emailEnvelope?: string
+  }
+  /** Agent model override; null/absent → the gateway default model. */
+  model?: string | null
+  /** Per-agent tool narrowing (D6). allowedTools absent → no narrowing (full matrix set); [] →
+   *  owner explicitly selected zero tools (the gateway intersection empties). */
+  toolPolicy?: { allowedTools?: string[] }
+  budget: { maxSteps: number; maxRunSeconds: number }
+  fallbackModels?: string[]
+  sessionTitle: string
+}
+
+/** runHeadlessAgent's terminal result. The /api/ai/agent-run endpoint maps this to the wire shape
+ *  the AgentRunWorker consumes ({ok, outcome, sessionId, steps, summary?, usage?, error?}); the
+ *  worker maps outcome → async_jobs terminal state (completed/paused_handoff → succeeded, error →
+ *  failed + last_error). */
+export interface HeadlessAgentResult {
+  ok: boolean
+  outcome: 'completed' | 'paused_handoff' | 'error'
+  sessionId: number | null
+  steps: number
+  summary?: string
+  usage?: { inputTokens?: number | null; outputTokens?: number | null; totalTokens?: number | null }
+  /** Present only on outcome==='error'. The endpoint sends `error.code` (a STRING) to the worker,
+   *  which stores it as async_jobs.last_error (AgentRunWorker._map_response str()s resp.error). */
+  error?: { code: string; message: string }
+}
+
 // ---- D2b — async_jobs 长任务子系统 (C1 后端 POST /api/jobs + GET /api/jobs/{id}) --
 //
 // batch resync (选中多封重传 Notion) 走 async_jobs: enqueue 立即返 job_id

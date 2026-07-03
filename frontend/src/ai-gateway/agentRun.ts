@@ -1,0 +1,275 @@
+// S4 W3 — headless custom-agent run on the embedded AI SDK Gateway (ADR-003 D2/D3/D6/D7).
+//
+// The fresh-spawn counterpart to approvalResume.ts's resume-drain: instead of restoring a stashed
+// renderer-initiated run, this constructs a run FROM the pulled AgentRunSpec and drives the same
+// prepareChatRun + streamText + tools + ApprovalGuard + makePersistOnFinish that /api/ai/chat uses.
+// It is the ONLY path a cron/email-triggered agent executes on (路径 C); the Python run_tool_loop
+// (path B, no approval gate) is frozen and never reached from here.
+//
+// 🔴 Pure-ish (gateway core discipline): depends only on chatRun (prepareChatRun / makePersistOnFinish
+//    / makeIdGenerator / responseMessageAwaitsApproval), policy (contextMode normalize), config +
+//    shared TYPES (erased). No node:http (the server handler feeds an already-pulled spec + a merged
+//    AbortSignal), no electron / chat_db / keytar. The ai_chat.db session is pre-created by the
+//    endpoint via cfg.createAgentSession (lifecycle-injected) and threaded in as sessionId.
+//
+// 🔴 NOT a new gateway tool surface: runHeadlessAgent is an ENDPOINT primitive (like
+//    runHeadlessSearchAgent), never a registered tool — it must not enter GATEWAY_*_TOOL_NAMES /
+//    skill_gating sets / tool_catalog.json (the completeness gate scans those). This wave adds ZERO
+//    gateway tools.
+//
+// 🔴 The context mode is DERIVED from the spec's trigger.kind here in trusted code and passed to
+//    prepareChatRun as its trustedContextMode parameter (never from a request body). The tool面 of a
+//    headless run is therefore the MATRIX's product under the derived mode (applyContextModePolicy
+//    strips every capability_change/exec/outbound tool outside manual_chat) — NOT the manual full set.
+//    This module does NOT re-implement the matrix; it only picks a mode + intersects an owner
+//    allow-list on top of whatever cfg.buildTools already filtered.
+
+import { APICallError, type ToolSet } from 'ai'
+
+import type { AiGatewayConfig } from './config'
+import {
+  makeIdGenerator,
+  makePersistOnFinish,
+  prepareChatRun,
+  responseMessageAwaitsApproval
+} from './chatRun'
+import { normalizeContextMode, type AgentContextMode } from './tools/policy'
+import type { MailAgentUIMessage } from '@shared/assistant/uiMessage'
+// Relative type-only import (erased) — same discipline as searchAgentRun.ts: the pure-Node harness
+// (tsx) must be able to load this module without resolving vite aliases.
+import type { AgentRunSpec, HeadlessAgentResult } from '../shared/api/types'
+
+/** ADR-003 D7 — max_steps hard ceiling (mirrors the Python parse_budget clamp, trigger.py
+ *  MAX_STEPS_CEILING=16). Python already clamps spec.budget.maxSteps into [1,16]; this is a
+ *  defensive re-clamp so a malformed spec still lands in range. */
+export const HEADLESS_MAX_STEPS_CEILING = 16
+const HEADLESS_DEFAULT_MAX_STEPS = 8
+
+export interface RunHeadlessAgentOpts {
+  jobId: number
+  spec: AgentRunSpec
+  /** Pre-created ai_chat.db session (origin='agent') the run persists into. null → the run streams
+   *  but persists nothing (createAgentSession degraded gracefully). */
+  sessionId: number | null
+}
+
+/** ADR-003 D2 — derive the run's trusted context mode from the pulled spec's trigger.kind:
+ *  email_filter → untrusted_trigger, cron → cron_headless, anything else fail-closes to
+ *  untrusted_trigger (normalizeContextMode(undefined), the strictest). The input is the SERVER-pulled
+ *  spec, never a poke body. Exported for the derivation test. */
+export function deriveContextMode(spec: AgentRunSpec): AgentContextMode {
+  const kind = spec.trigger?.kind
+  if (kind === 'email_filter') return 'untrusted_trigger'
+  if (kind === 'cron') return 'cron_headless'
+  return normalizeContextMode(undefined)
+}
+
+/** ADR-003 D6 — narrow an assembled ToolSet to the owner's per-agent allow-list. ONLY reduces
+ *  (a name in `allowed` that isn't in `all` — e.g. a capability_change/exec/outbound tool the matrix
+ *  already stripped under the non-manual mode — simply stays absent). allowed undefined → no
+ *  narrowing (full set); allowed=[] → empty (owner explicitly selected zero tools). Exported for the
+ *  intersection test. */
+export function intersectAllowedTools(all: ToolSet, allowed?: string[]): ToolSet {
+  if (!allowed) return all
+  const keep = new Set(allowed)
+  const out: ToolSet = {}
+  for (const [name, t] of Object.entries(all)) {
+    if (keep.has(name)) out[name] = t
+  }
+  return out
+}
+
+/** Defensive re-clamp of the budget step ceiling. */
+function clampMaxSteps(raw: unknown): number {
+  const n =
+    typeof raw === 'number' && Number.isFinite(raw) ? Math.floor(raw) : HEADLESS_DEFAULT_MAX_STEPS
+  return Math.max(1, Math.min(HEADLESS_MAX_STEPS_CEILING, n))
+}
+
+/** Map a drain failure to a structured error code (mirrors searchAgentRun.normalizeLoopError):
+ *  HTTP 429 → E_QUOTA, other upstream API errors → E_UPSTREAM, anything else → E_AGENT. */
+function normalizeAgentError(err: unknown): { code: string; message: string } {
+  if (APICallError.isInstance(err)) {
+    return { code: err.statusCode === 429 ? 'E_QUOTA' : 'E_UPSTREAM', message: err.message }
+  }
+  return { code: 'E_AGENT', message: err instanceof Error ? err.message : String(err) }
+}
+
+/** Clip the accumulated assistant text to a one-line summary (mirrors approvalResume.clipSummary). */
+function clipSummary(text: string, max = 180): string {
+  const one = text.replace(/\s+/g, ' ').trim()
+  return one.length > max ? `${one.slice(0, max)}…` : one
+}
+
+/** Resolve the finished run's step count (StreamTextResult.steps is a Promise). Best-effort → 0. */
+async function resolveSteps(result: { steps?: unknown }): Promise<number> {
+  try {
+    const steps = await Promise.resolve(result.steps as Promise<unknown[]> | unknown[])
+    return Array.isArray(steps) ? steps.length : 0
+  } catch {
+    return 0
+  }
+}
+
+/**
+ * Run one headless custom-agent turn: build a synthetic body from the spec, wrap cfg with the
+ * per-agent tool narrowing + budget step cap, prepareChatRun under the DERIVED context mode, then
+ * drain the stream server-side (driving the tool loop → execute → guard.verify/consume → write →
+ * makePersistOnFinish). Never throws — every failure normalizes into { ok:false, outcome:'error' }.
+ *
+ * On a paused approval, makePersistOnFinish's既有 pause path runs UNCHANGED: it persists the redacted
+ * turn and (only when cfg.islandAgentEnabled) stashes + announces an island card. Island off → the
+ * turn just停在 the redacted pause; the outcome is 'paused_handoff' either way (the worker records
+ * approval_state='pending', which the read side treats as "not a success").
+ */
+export async function runHeadlessAgent(
+  cfg: AiGatewayConfig,
+  opts: RunHeadlessAgentOpts,
+  abortSignal: AbortSignal
+): Promise<HeadlessAgentResult> {
+  const { spec, sessionId } = opts
+  const contextMode = deriveContextMode(spec)
+
+  // Synthetic body: the owner-configured taskPrompt (TRUSTED) + the server-fenced emailEnvelope
+  // (already an UNTRUSTED_EMAIL_BODY block from W2). Physically ONE user message — the envelope
+  // carries its own fence, so we concatenate verbatim WITHOUT re-wrapping. A stable message id
+  // (derived from jobId) lets persistTurn's eager-write dedup behave.
+  const taskPrompt = spec.prompt?.taskPrompt ?? ''
+  const envelope = spec.prompt?.emailEnvelope ?? ''
+  const userText = envelope ? `${taskPrompt}\n\n${envelope}` : taskPrompt
+  const body: Record<string, unknown> = {
+    messages: [
+      { id: `agent-user-${opts.jobId}`, role: 'user', parts: [{ type: 'text', text: userText }] }
+    ],
+    sessionId
+  }
+  if (spec.model) body.model = spec.model
+
+  // cfg' wrapper (ADR-003 D6/D7). The allowedTools intersection is layered on cfg.buildTools' OUTPUT
+  // — i.e. AFTER the full assembly chain (create* → applySkillGating → applyContextModePolicy). So a
+  // headless run's tool面 is: (the matrix's product under the derived mode) ∩ allowedTools. There is
+  // no body/prompt control surface. maxSteps caps the tool loop (prepareChatRun's stopWhen).
+  const cfg2: AiGatewayConfig = {
+    ...cfg,
+    maxSteps: clampMaxSteps(spec.budget?.maxSteps),
+    buildTools: (collector, approvalMode, mode) =>
+      intersectAllowedTools(
+        cfg.buildTools?.(collector, approvalMode, mode) ?? {},
+        spec.toolPolicy?.allowedTools
+      )
+  }
+
+  const prepared = await prepareChatRun(body, cfg2, abortSignal, contextMode)
+  if (!prepared.ok) {
+    return {
+      ok: false,
+      outcome: 'error',
+      sessionId,
+      steps: 0,
+      error: { code: prepared.body.error, message: prepared.body.hint }
+    }
+  }
+  const run = prepared.run
+
+  // Drain the stream server-side (no client to pipe to) — mirrors approvalResume. basePersist
+  // (makePersistOnFinish) owns persistence AND the island stash/announce on a pause (islandAgentEnabled
+  // -gated, UNCHANGED — we do NOT introduce "stash even when island off"). We only OBSERVE the finished
+  // message: whether it paused at an approval gate, was aborted, or carried a swallowed error chunk.
+  const budgetTimeError = (steps: number): HeadlessAgentResult => ({
+    ok: false,
+    outcome: 'error',
+    sessionId,
+    steps,
+    error: { code: 'E_BUDGET_TIME', message: 'run aborted (budget deadline or client cancel)' }
+  })
+  const basePersist = makePersistOnFinish(cfg2, run)
+  let paused = false
+  let aborted = false
+  let streamError: unknown = null
+  let errorText: string | null = null
+  let assistantText = ''
+  try {
+    const stream = run.result.toUIMessageStream({
+      originalMessages: run.rawMessages,
+      generateMessageId: makeIdGenerator(),
+      sendReasoning: false,
+      // Without onError ai@7 masks the error chunk's errorText to a generic "An error occurred."
+      // (same gotcha handleChat works around). Keep the FIRST error object (the propagation chain
+      // re-reports the same failure wrapped in a plain Error) so the outcome below carries a
+      // structured code (429 → E_QUOTA) + the real message, and log it — the worker only stores the
+      // code, so this log line is the forensic trail.
+      onError: (error: unknown) => {
+        if (streamError == null) streamError = error
+        console.error('[ai-gateway] agent-run stream error', error)
+        return error instanceof Error ? error.message : String(error)
+      },
+      onFinish: async (args) => {
+        aborted = args.isAborted === true
+        if (!aborted) {
+          paused = responseMessageAwaitsApproval(args.responseMessage as MailAgentUIMessage)
+        }
+        await basePersist(args)
+      }
+    })
+    for await (const chunk of stream) {
+      const c = chunk as { type?: string; delta?: unknown; text?: unknown; errorText?: unknown }
+      if (c.type === 'text-delta') {
+        assistantText +=
+          typeof c.delta === 'string' ? c.delta : typeof c.text === 'string' ? c.text : ''
+      } else if (c.type === 'error') {
+        // streamText surfaces a non-abort upstream error as an error chunk (it does NOT always throw
+        // from the drain). Capture it so an errored run never reports 'completed'.
+        errorText = typeof c.errorText === 'string' ? c.errorText : 'stream error'
+      }
+    }
+  } catch (err) {
+    // A thrown drain failure. A budget/timeout abort OR a client (worker) disconnect surface as
+    // `aborted` → E_BUDGET_TIME (ADR-003 D7); otherwise a structured upstream code.
+    if (abortSignal.aborted) return budgetTimeError(await resolveSteps(run.result))
+    const { code, message } = normalizeAgentError(err)
+    return {
+      ok: false,
+      outcome: 'error',
+      sessionId,
+      steps: await resolveSteps(run.result),
+      error: { code, message }
+    }
+  }
+
+  const steps = await resolveSteps(run.result)
+  // Abort (budget deadline / client cancel) is often SWALLOWED by streamText (marks isAborted, doesn't
+  // throw). Detect it here so an aborted run is never mislabeled 'completed'. The endpoint's
+  // AbortSignal.timeout(maxRunSeconds) fires before the worker's http timeout (+margin), so an abort
+  // here is dominantly budget exhaustion.
+  if (abortSignal.aborted || aborted) return budgetTimeError(steps)
+  if (streamError != null || errorText) {
+    // Prefer the original error object (captured in onError) over the chunk's errorText so the code
+    // stays structured (E_QUOTA / E_UPSTREAM) instead of collapsing everything into E_AGENT.
+    const { code, message } =
+      streamError != null
+        ? normalizeAgentError(streamError)
+        : { code: 'E_AGENT', message: errorText as string }
+    return { ok: false, outcome: 'error', sessionId, steps, error: { code, message } }
+  }
+  if (paused) {
+    // paused_handoff — the turn stopped at an approval gate. NOT a success: the worker stamps
+    // result_json.approval_state='pending' (island on → a card awaits; island off → it's effectively
+    // void). The read side must never render this as "completed".
+    return {
+      ok: true,
+      outcome: 'paused_handoff',
+      sessionId,
+      steps,
+      summary: clipSummary(assistantText)
+    }
+  }
+  const usage = await Promise.resolve(run.result.usage).catch(() => undefined)
+  return {
+    ok: true,
+    outcome: 'completed',
+    sessionId,
+    steps,
+    summary: clipSummary(assistantText) || undefined,
+    usage
+  }
+}

@@ -1,6 +1,12 @@
 """ai_chat.db 读 + 写访问 —— serve-api 远程 chat 端点（V2.1 阶段 2 读 + 阶段 3 3b-3 写）。
 
-ai_chat.db = 前端 owned schema（``frontend/src/electron/main/chat_db.ts``，CHAT_DB_VERSION 18）。
+ai_chat.db = 前端 owned schema（``frontend/src/electron/main/chat_db.ts``，CHAT_DB_VERSION 19）。
+v19（S4 W3，task 07-02-s4-custom-agent-core）= ``ai_chat_sessions.origin`` + ``agent_id`` +
+``agent_job_id``：headless custom-agent run（cron/email 触发，ADR-003 D3）落一个一等会话行，
+origin='agent' 标记（交互会话 NULL），agent_id/agent_job_id 回链 report_agent + async_jobs
+（agent_job_id = async_jobs.job_id 的 TEXT，跨库无 FK）。backend_kind CHECK 不变（仍 'ai-sdk'，
+引擎没变、只是发起方变）。三个 additive ALTER，读走 ``SELECT *`` 自动带回；本文件不建表/不写这三列
+（schema 归 chat_db.ts ``migrate``，会话创建走 gateway 主进程 ``createAgentSession``）。NOT EXPECTED_DB_VERSION。
 v18（S2 W1，task 07-02-s2-exec-skill-install）= ``chat_tool_call.whitelist_rule_id``：S2 exec 工具
 （run_command / file_read / file_write）经结构化白名单 PolicyRule 命中而**免卡执行**的审计行记
 ``approval_status='auto_whitelist'``（approval_status 是自由 TEXT，v10 加时无 CHECK，新值无需枚举迁移）
