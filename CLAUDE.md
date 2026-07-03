@@ -56,7 +56,7 @@
 
 **当前架构状态**（演进叠加，详见 [`docs/reference/architecture/architecture-internals.md`](./docs/reference/architecture/architecture-internals.md)）：
 - **v3 SQLite-First**（2026-01）：`internal_id`（ROWID = AppleScript id）主键，`whose id is <int>` 查询比旧方式快 127 倍，支持 6-7 万封大邮箱。
-- **Sprint 15 SQLite SSoT inversion**（2026-05）：所有 mutating 操作反转方向，SQLite 是写入 intent 聚合点，FanoutWorker 异步派发到 Mail.app + Notion，统一走 `email_outbox`。
+- **Sprint 15 SQLite SSoT inversion**（2026-05）：所有 mutating 操作反转方向，SQLite 是写入 intent 聚合点，FanoutWorker 异步派发到 Mail.app + Notion，统一走 `email_outbox`（E2 2026-07 起 outbox **恒启用**，灰度开关 `MAILAGENT_OUTBOX_ENABLED` 与老直调分支已退役；三处 flag→outbox 入队归一 `src/sync/outbox_intents.py`）。
 - **Sprint 16 Dual-Backend**（2026-05-22 cutover）：抽象 `IMailBackend` Protocol，**davmail 模式为当前主路径**（IMAP/SMTP/CalDAV 桥 EWS），AppleScript 保留作 emergency fallback。
 - **v4 SQLite-SSoT**（2026-05，Phase 1-4 已上线/灰度）：SQLite 是邮件正文 + 附件的 SSoT，Notion 退化为镜像，FTS5 全文搜索就位。
 
@@ -73,7 +73,6 @@
 |---|---|---|
 | `MAILAGENT_BACKEND` | `applescript` | ★ 生产 = `davmail`（Sprint 16 cutover 后） |
 | `DRAFTS_SYNC_ENABLED` | `true` | 草稿箱同步（davmail-only）：Exchange Drafts 全量 UID 对账进 `email_metadata`（mailbox='草稿箱'，编辑/发送/删除会同步删本地行），仅本地（列表/数量/正文/FTS），不进 Notion / LLM / 飞书 / KOS / 报告 |
-| `MAILAGENT_OUTBOX_ENABLED` | —（Sprint 15 灰度） | false 时 handler + reverse_sync 退回老 AppleScript 直调 |
 | `BODY_DUAL_WRITE_ENABLED` | `true` | v4 双写总开关；失败仅 warning 不阻断 |
 | `NOTION_READ_FROM_SQLITE` | `false` | v4 Phase 4 灰度；切 true 后 sync/resync 走 SQLite SSoT，miss fallback |
 | `SEARCH_TRIGRAM_ENABLED` | `true` | 中文子串全文检索（并行 trigram FTS5 表路由）；Phase A 起默认开，设 false 则 CJK 搜索退回 unicode61 + smart 字符级 fallback。详见 search-query-syntax.md §9 |
@@ -170,7 +169,6 @@ sqlite3 data/sync_store.db "SELECT COUNT(*) FROM email_metadata WHERE sync_statu
 | `sync_store.py` | SQLite 同步状态存储（internal_id 主键，DB schema 演进点）|
 | `reader.py` | MIME 解析（HTML、附件、thread_id） |
 | `meeting_sync.py` / `icalendar_parser.py` | 会议邀请检测 + iCalendar 解析 |
-| `health_check.py` | 健康检查（发现遗漏邮件） |
 | `reverse_sync.py` | 反向同步（Notion → SQLite intent + outbox，Sprint 15 后不直调 AppleScript） |
 
 #### 其他模块

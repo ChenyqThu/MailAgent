@@ -292,7 +292,7 @@ CREATE TABLE thread_head_cache (
 - DB v10 新表 `email_outbox`（13 列, CHECK target/status, FK CASCADE）
 - `OutboxRepository.enqueue` echo prevention: source='notion_webhook' + target='notion' silent skip 防回环
 - `FanoutWorker` asyncio loop 消费, AppleScript / Notion API 本身幂等所以 fanout 不做 SQLite-based idempotency short-circuit
-- 灰度开关 `MAILAGENT_OUTBOX_ENABLED=false` 时 handler + reverse_sync 都退回老 AppleScript 直调路径（回退兼容）
+- ~~灰度开关 `MAILAGENT_OUTBOX_ENABLED`~~ **已退役**（E2 灰度收口 2026-07-03）：FanoutWorker 恒启动、`outbox_repo` 在 handlers/reverse_sync 必传（None → TypeError），老 AppleScript 直调分支已删除；三处 flag→outbox 入队（handlers / reverse_sync / mail_write.set_flags）归一到 `src/sync/outbox_intents.py` 共享层（`enqueue_flag_sync` / `mirror_and_enqueue_flag_sync`，target/payload 语义差异由参数承载）
 - 详见 `docs/sprint15-backend-complete.md` + `frontend/SPRINT15-HANDOFF.md` §3
 
 ---

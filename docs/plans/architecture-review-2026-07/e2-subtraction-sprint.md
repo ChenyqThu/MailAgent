@@ -87,3 +87,15 @@ E0 CI 闸就位（前置，见 e0）
 | A2 传输迁移破坏审批恢复/island resume 等细语义 | dogfood 清单显式覆盖（含 #36 面板 live-refresh 场景）；agent_eval baseline compare 做闸 |
 | B 翻默认影响 applescript fallback 用户 | outbox 与 backend 正交（outbox→FanoutWorker→arm），applescript 模式同样走 outbox；翻默认前在 applescript 模式跑一轮回归 |
 | 删代码误伤共享 util | A1/A3 分 commit；每步 `pnpm typecheck` 双 target + pytest 全量 |
+
+## 8. 实施状态 —— 子包 B/C/D（2026-07-03，trellis `07-03-e2-subtraction-bcd`）
+
+B/C/D 已全部实施并过独立 check（2 implement lane + 1 check lane），全量 pytest **3324 passed 零排除**（基线 3313，净 +11）+ frontend typecheck 过；净 diff ≈ **-1150 行**。关键落地口径：
+
+- **B 节奏压缩**：§3 原「翻默认→隔一版观察→删分支」压缩为一次到位（恒启用）。决定性依据（实施盘点发现）：**off 安装态本就是静默半坏组合**——前端直写 `mail_write.set_flags` 恒入队 outbox 但 FanoutWorker 受门控不跑（serve-api 进程零 fanout 装配、onboarding 生成 .env 不写 OUTBOX 键 → 所有打包安装 = 代码默认 off = 入队无人消费），**恒启用是修复不是行为变更**。`mailagent_outbox_enabled` Field 删除（`.env` 残留键 pydantic `extra="ignore"` 静默忽略）+ 设置面同步清理（settings.py 白名单 / env-keys.ts / RealtimeStorageTab / .env.example）。
+- **B 死分支删除**：handlers（flag_changed/ai_reviewed Mail leg/completed）+ reverse_sync 的 `outbox_repo is None` 老直调分支删除，`outbox_repo` 必传化（None → TypeError，E1 先例形状）；reverse_sync `backend` 参数随之退役（零消费 orphan）。**ai_reviewed Notion 直调 else 分支保留**（`internal_id=None` 时 outbox 无键可入，outbox=on 一直可达，非灰度回退——实施中修正的盘点口径）。
+- **B1 整条链路退役未做**（有意）：trace §6 的 STOP 点成立——需人工确认 Openclaw / Notion Automation 外部触发方是否仍在发写事件，等确认后另行决策（选项 B）。
+- **D 收编**：三处 flag→outbox 入队（handlers × 4 call-site / reverse_sync `_enqueue_outbox` / mail_write `set_flags`）归一 `src/sync/outbox_intents.py`（`enqueue_flag_sync` + `mirror_and_enqueue_flag_sync`）；mailapp truthiness-skip vs notion None-skip（空 dict 仍入队）的历史语义差异由参数显式承载；echo prevention 仍在 `OutboxRepository.enqueue` 不重复。六条写路径行为等价经 check lane 逐条审计确认。
+- **C fork CLI 退役**：`src/api/cli_runner.py` 整文件删除（连带消除 E0 登记的打包态 E_NO_BIN latent 缺陷）；dead-letter retry/cleanup → `AdminService`、selftest → `LlmService.selftest()`（HTTP 契约不变，逐字段对照 cli-schema；唯一简化 = cleanup 207 partial_failure 分支退役【schema 本就未定义该变体】+ selftest unhealthy 恒 200【原 exit-1 stdout 还原 hack 的语义等价】）；update-flag 端点删除（CLI 命令本体保留，灵动岛 `island_response.py` fork lineage 不受影响）。
+- **孤儿清理**（E1 登记 + 涟漪）：RadarTick / BackendHealth / `src/mail/health_check.py`（含 SyncHealthCheck）/ `partial_envelope()`（fork 退役后零调用）/ `health_check_interval` 孤儿配置六处（Field/.env.example/白名单/env-keys/SyncTab/i18n×2）。
+- **登记 backlog（本轮不做）**：CLI 命令体（`src/cli/commands/{admin,llm}.py`）与 AdminService/LlmService 是「复制不共享」双份逻辑——后续可开收敛任务把 CLI 重构为委托 service，消除漂移风险；`EventHandlers.__init__` 必传 idiom（non-Optional 标注配 None 默认）沿项目既有形状未改。

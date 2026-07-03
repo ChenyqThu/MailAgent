@@ -11,7 +11,7 @@
 - `MAILAGENT_OUTBOX_ENABLED=true`
 - `REDIS_EVENTS_ENABLED=true`
 
-**代码默认值**（`src/config.py`）：`MAILAGENT_OUTBOX_ENABLED` 默认 **`false`**（`:486`），`REDIS_EVENTS_ENABLED` 默认 `false`。即生产 `.env` 把两者打开，但**代码默认是 outbox=off**。
+**代码默认值**（`src/config.py`）：~~`MAILAGENT_OUTBOX_ENABLED` 默认 `false`~~ → **E2 灰度收口（2026-07-03）后该开关已退役，outbox 恒启用**（Field 删除、FanoutWorker 无条件启动；`.env` 残留键被 pydantic `extra="ignore"` 静默忽略）。`REDIS_EVENTS_ENABLED` 默认 `false` 不变。收口依据：off 安装态下前端直写 `mail_write.set_flags` 恒入队但 FanoutWorker 不跑 = 入队无人消费的静默半坏组合（onboarding 生成 .env 不写 OUTBOX 键，所有打包安装均踩）——恒启用是修复不是行为变更。
 
 **决定性架构事实**：davmail 模式下 `arm = self`（`src/mail/backend/davmail_backend.py:276`，DavMailBackend 把自己当 AppleScript 机械臂兼容层），`src/mail/new_watcher.py:144` `self.arm = backend.arm` → `MailAppFanout` / `NotionToMailSync` / `EventHandlers` 注入的 `arm` 全是 DavMailBackend。故所有名为「AppleScript」的反向写 leg（`arm.set_flag_by_id` 等）**实际路由到 IMAP STORE**（`davmail_backend.py:1078→683→_store_flag→IMAP UID STORE`）。`grep osascript src/mail/backend/davmail_backend.py` = **0**。
 
@@ -53,7 +53,9 @@
 - **真正可议的是产品语义层**：「Notion 改 Processing Status → 反写邮箱 flag」这条价值，在 v4 SQLite SSoT + 前端直写（`mail_write.set_flags` 自己 dual-target 写 mailapp+notion）成熟后是否仍需要 —— 这是**产品决策**，非技术死活。
 - **消费者依赖未完全确认**：`/webhook/notion` 由 Notion Automation 触发，`/api/command` 由 **Openclaw / 外部系统**触发。退役前必须确认这两类外部触发方是否仍在发 flag_changed/ai_reviewed/completed。**仓库内无法确认外部系统现状 → 人工决策点。**
 
-## 3. B2 —— `outbox_repo=None` 灰度回退分支（生产不可达，**不删**）
+## 3. B2 —— `outbox_repo=None` 灰度回退分支（~~不删~~ → **已删，E2 2026-07-03**）
+
+> **状态更新（E2 灰度收口）**：本节「不删」判定的前提（代码默认 outbox=off → 分支是灰度回退路径）已被 E2 的灰度永久化推翻——开关退役、outbox 恒启用后这些分支成为真死代码，已删除；`outbox_repo` 在 handlers/reverse_sync 构造时必传（None → TypeError）。ai_reviewed 的 Notion 直调 else 分支**保留**（`internal_id=None` 时 outbox 无键可入，属 outbox=on 一直可达路径，非灰度回退）。以下为历史 trace 原文。
 
 `src/events/handlers.py`（flag_changed / ai_reviewed / completed 老路径）+ `src/mail/reverse_sync.py`（reverse poll 老路径）中存在 `if outbox_repo is None:` 直调 `arm` 的分支。
 
@@ -61,7 +63,9 @@
 - **但代码默认 `MAILAGENT_OUTBOX_ENABLED=false`**（`config.py:486`）→ 这些分支是「outbox 关闭时的灰度回退路径」（CLAUDE.md 关键开关表载：`false 时 handler + reverse_sync 退回老 AppleScript 直调`），**非纯死代码**。
 - **处置 = 标 deprecation 注释，不删**（删会动到默认配置下的回退路径；待灰度永久化、确认 outbox=on 成为唯一支持配置后再清）。
 
-## 4. Legacy residual（BASE-1 = serve-api `run_cli` 业务残留 4 个）
+## 4. Legacy residual（BASE-1 = serve-api `run_cli` 业务残留 4 个）（→ **已全部退役，E2 2026-07-03**）
+
+> **状态更新（E2 子包 C）**：4 个残留已清零——#1 update-flag HTTP 端点删除（CLI 命令本体保留，灵动岛 fork lineage 不受影响）；#2/#3 dead-letter retry/cleanup 迁 `AdminService` 进程内直调；#4 selftest 迁 `LlmService.selftest()`。`src/api/cli_runner.py` 整文件删除（连带消除 E0 发现的打包态 E_NO_BIN latent 缺陷——硬编码开发机 venv 路径在打包 app 里必挂）。以下为历史 trace 原文。
 
 | # | 位置 | 命令 | Phase C 处置 |
 |---|---|---|---|
@@ -78,7 +82,7 @@
 |---|---|
 | `AppleScriptBackend` 全套（`src/mail/backend/applescript_backend.py`，含真 `AppleScriptArm`） | `MAILAGENT_BACKEND=applescript` 时 PRIMARY + davmail 不可用时 emergency fallback。**保留** |
 | LLM 取正文 fallback（`src/services/llm_service.py` `_maybe_davmail_backend`：davmail probe 失败→AppleScriptArm fetch） | davmail probe 失败回退，warn-only 不崩服务。**保留** |
-| handlers/reverse_sync `outbox_repo=None` 老路径 | 灰度回退（§3）。**保留但生产不可达** |
+| ~~handlers/reverse_sync `outbox_repo=None` 老路径~~ | ~~灰度回退（§3）~~ **已删（E2 2026-07-03，见 §3 状态更新）**——AppleScript fallback 不受影响：outbox 与 backend 正交，applescript 模式下 FanoutWorker→MailAppFanout 拿到的 backend 即 AppleScriptBackend |
 
 > 反直觉点：`AppleScriptBackend.send_email` 和 davmail send **都走 SMTP**（cfg SMTP 端口指向 DavMail JVM）—— send op 没有真正的「osascript 发信」fallback。
 
