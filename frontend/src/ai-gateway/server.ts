@@ -41,6 +41,7 @@ import {
 } from './httpUtil'
 import { handleAguiChat } from './agui/aguiRoute'
 import { resumeApprovalRun } from './approvalResume'
+import { runHeadlessSearchAgent } from './searchAgentRun'
 
 const GATEWAY_VERSION = '0.2.0'
 
@@ -406,6 +407,50 @@ async function handleFollowups(
 }
 
 /**
+ * `POST /api/ai/search-agent` — S3 W1 headless agentic search (the ⌘K "AI 理解" palette entry,
+ * re-homed from the legacy harness). Body `{ userContent, mailbox?, model? }` — the renderer client
+ * assembles the prompt+query user content and the trimmed mailbox filter. Streams SSE frames:
+ * `{type:'phase', phase:'searching'|'summarizing'}` progress events (the palette's thinking-phrase
+ * groups) then one terminal `{type:'result', result}` carrying the structured SearchAgentResult
+ * (minus the renderer-side nlToDsl fallbackDsl). Loopback-trusted like the other gateway endpoints;
+ * the loop only ever sees the four read tools (defensive whitelist in searchAgentRun), so there is
+ * no approval surface. Client disconnect aborts the upstream LLM call. No persistence — a headless
+ * search never touches ai_chat.db (legacy parity). No key → 503; empty userContent → 400.
+ */
+async function handleSearchAgent(
+  req: IncomingMessage,
+  res: ServerResponse,
+  cfg: AiGatewayConfig
+): Promise<void> {
+  if (!cfg.apiKey || cfg.apiKey.length === 0) {
+    writeJson(res, 503, { error: 'E_NO_LLM_KEY', hint: '设置 LLM_API_KEY 后重试' })
+    return
+  }
+  const body = await readJsonBody(req)
+  const userContent =
+    typeof body.userContent === 'string' && body.userContent.length > 0 ? body.userContent : ''
+  if (userContent.length === 0) {
+    writeJson(res, 400, { error: 'E_INVALID_ARG', hint: 'userContent required' })
+    return
+  }
+  const mailbox = typeof body.mailbox === 'string' && body.mailbox.length > 0 ? body.mailbox : undefined
+  const model = typeof body.model === 'string' && body.model.length > 0 ? body.model : undefined
+  const controller = new AbortController()
+  req.on('close', () => controller.abort())
+  res.writeHead(200, { ...SSE_HEADERS, ...corsHeadersFor(req.headers.origin) })
+  const result = await runHeadlessSearchAgent(
+    cfg,
+    { userContent, mailbox, model },
+    controller.signal,
+    (phase) => {
+      if (!controller.signal.aborted) writeSse(res, { type: 'phase', phase })
+    }
+  )
+  if (!controller.signal.aborted) writeSse(res, { type: 'result', result })
+  res.end()
+}
+
+/**
  * `POST /api/ai/approval/decide` — Part B (harness 上岛). The ISLAND approval callback lands here
  * (serve-api → gateway, loopback): the gateway resumes a stashed paused approval SERVER-SIDE so a
  * user fully off the app (renderer unmounted) can still approve on the island and have the tool run.
@@ -530,6 +575,12 @@ export function createAiGatewayServer(cfg: AiGatewayConfig): Server {
     // cfg.rememberExecApproval gates it (501 when exec tools aren't wired).
     if (method === 'POST' && path === '/api/ai/policy/remember') {
       void handlePolicyRemember(req, res, cfg)
+      return
+    }
+
+    // S3 W1 — headless agentic search (⌘K palette). Registered unconditionally; no key → 503.
+    if (method === 'POST' && path === '/api/ai/search-agent') {
+      void handleSearchAgent(req, res, cfg)
       return
     }
 

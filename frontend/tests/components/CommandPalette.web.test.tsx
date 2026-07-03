@@ -41,8 +41,15 @@ vi.mock('@shared/hooks/useMailApi', () => ({
     llm: { run: vi.fn(), stats: vi.fn(), selftest: vi.fn() },
     attachment: { list: vi.fn(), localPath: vi.fn(), readDataUrl: vi.fn() },
     ai: { translate: vi.fn(), abortTranslate: vi.fn() },
-    chat: { runSearchAgent: mockRunSearchAgent }
+    chat: {}
   })
+}))
+
+// S3 W1 — the palette now calls the gateway search client (runGatewaySearchAgent), not
+// mailApi.chat.runSearchAgent; the web assertion stays "never called" (the IS_WEB gate
+// hides the AI entry before any client call).
+vi.mock('@shared/assistant/searchAgentClient', () => ({
+  runGatewaySearchAgent: (_reads: unknown, input: unknown) => mockRunSearchAgent(input)
 }))
 
 vi.mock('@shared/state/active-email', () => {

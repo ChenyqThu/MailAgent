@@ -68,8 +68,15 @@ vi.mock('@shared/hooks/useMailApi', () => ({
     llm: { run: mockLlmRun, stats: vi.fn(), selftest: vi.fn() },
     attachment: { list: vi.fn(), localPath: vi.fn(), readDataUrl: vi.fn() },
     ai: { translate: vi.fn(), abortTranslate: vi.fn() },
-    chat: { runSearchAgent: mockRunSearchAgent }
+    chat: {}
   })
+}))
+
+// S3 W1 — the palette now calls the gateway search client (runGatewaySearchAgent), not
+// mailApi.chat.runSearchAgent. The adapter drops the leading `reads` arg so every
+// existing single-arg assertion (calledWith({query,…}) / calls[0][0].signal) still holds.
+vi.mock('@shared/assistant/searchAgentClient', () => ({
+  runGatewaySearchAgent: (_reads: unknown, input: unknown) => mockRunSearchAgent(input)
 }))
 
 vi.mock('@shared/state/active-email', async () => {

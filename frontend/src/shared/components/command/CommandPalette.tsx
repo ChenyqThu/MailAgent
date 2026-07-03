@@ -75,6 +75,7 @@ import { useEmailFilter, type EmailView } from '@shared/state/email-filter'
 import { showAIChatPanel } from '@shared/state/ai-chat-panel'
 import { openGeneralAgent } from '@shared/state/general-agent'
 import { isAgentViewEnabled } from '@shared/assistant/runtime/flags'
+import { runGatewaySearchAgent } from '@shared/assistant/searchAgentClient'
 import { closeCommandPalette, useCommandPalette } from '@shared/state/command-palette'
 import { useSearchHistory } from '@shared/state/search-history'
 import { toastError, toastSuccess } from '@shared/state/toast'
@@ -464,7 +465,10 @@ export function CommandPalette(): React.ReactElement | null {
     setAiPhase('searching')
     setHighlight(0)
     try {
-      const res = await mailApi.chat.runSearchAgent({
+      // S3 W1 — agentic 搜索改走 embedded AI SDK Gateway 的 headless run（POST
+      // /api/ai/search-agent）；结构化结果契约（hits/summary/error/fallbackDsl）不变。
+      // legacy 的 mailApi.chat.runSearchAgent 自此无消费方（W3 随引擎删除）。
+      const res = await runGatewaySearchAgent(mailApi, {
         query: nl,
         mailbox: activeMailbox || undefined,
         signal: ac.signal,
