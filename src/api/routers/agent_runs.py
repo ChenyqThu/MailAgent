@@ -52,7 +52,7 @@ router = APIRouter(prefix="/api/agent-runs", tags=["agent-runs"])
 # 「Settings 模板不勾 kos_query」挡不住 API 直建/空策略行，收窄必须是投影层结构性保证）。
 # 排除在默认集外（owner 显式勾选才有）：kos_query（trusted-sink 残余面）、chat_session_*
 # （历史会话=二阶注入面）、agent_profile_read/history（身份文档不进 untrusted 上下文）、
-# discover_skills / skill_* / report_* / plan_update（headless 默认无需求）。
+# discover_skills / skill_read / report_*（headless 默认无需求）。
 DEFAULT_CUSTOM_AGENT_ALLOWED_TOOLS: tuple[str, ...] = (
     # email 读族（headless agent 的最小工作集）
     "email_search", "email_search_fulltext", "email_get", "email_body",
@@ -100,10 +100,8 @@ HEADLESS_TOOL_OPTIONS: tuple[tuple[str, str], ...] = (
     ("email_search_attachments", "read"),
     ("email_search_fulltext", "read"),
     ("kos_query", "read"),
-    ("plan_update", "read"),
     ("report_get", "read"),
     ("report_list", "read"),
-    ("skill_list_installed", "read"),
     ("skill_read", "read"),
     ("email_archive", "domain_write"),
     ("email_draft_reply", "domain_write"),

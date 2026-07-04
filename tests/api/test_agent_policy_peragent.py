@@ -416,10 +416,12 @@ def test_tool_options_consistent_with_tool_catalog():
 
     catalog_path = Path(__file__).resolve().parents[1] / "agent_eval" / "tool_catalog.json"
     catalog = json.loads(catalog_path.read_text())["tools"]
+    # legacy_retired 行（plan_update / skill_list_installed）在 catalog 里只为 frozen baseline
+    # v0.13.0.jsonl 的历史 tool_use 保留、产品里已不存在 —— tool-options 端点不得再提供它们。
     expected = {
         name: meta["tool_class"]
         for name, meta in catalog.items()
-        if meta["tool_class"] in ("read", "domain_write")
+        if meta["tool_class"] in ("read", "domain_write") and not meta.get("legacy_retired")
     }
     assert dict(HEADLESS_TOOL_OPTIONS) == expected
     # 默认安全集成员必须都在 headless 地板内。
