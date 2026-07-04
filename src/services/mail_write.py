@@ -701,6 +701,18 @@ class MailWriteService:
                 "--internal-ids <id>` 回填后再 resync",
             ) from e
 
+        # 回写 notion_page_id: created/replaced 建了新页 → DB 若不更新会指向老/死页,
+        # 后续 flag fanout 打死页。窄回写只动 notion_page_id (不碰 thread_id/sync_status)。
+        # 失败不阻断 resync 结果返回。
+        if result.action in ("created", "replaced") and result.page_id:
+            try:
+                self._ctx.sync_store.update_notion_page_id(internal_id, result.page_id)
+            except Exception as e:  # pragma: no cover - 防御性, 回写失败不影响 resync 结果
+                logger.warning(
+                    f"resync: failed to write back notion_page_id for "
+                    f"internal_id={internal_id}: {e}"
+                )
+
         return ResyncResult(
             internal_id=internal_id,
             old_page_id=result.existing_page_id or meta.notion_page_id,

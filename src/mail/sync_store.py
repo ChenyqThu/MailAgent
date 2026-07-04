@@ -2033,6 +2033,33 @@ class SyncStore:
                 pass
         return ok
 
+    def update_notion_page_id(self, internal_id: int, notion_page_id: str) -> bool:
+        """窄回写：只 UPDATE notion_page_id + updated_at，不动其它列。
+
+        区别于 ``mark_synced_v3``（会一并 SET notion_thread_id / sync_status /
+        清 retry 态）。resync ``--replace-existing`` 建新页 + archive 老页后回写用：
+        DB 若不更新 notion_page_id 会指向已 archived 死页，后续 flag fanout 打死页。
+
+        Returns:
+            是否有行被更新
+        """
+        now = time.time()
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute("""
+                    UPDATE email_metadata
+                    SET notion_page_id = ?,
+                        updated_at = ?
+                    WHERE internal_id = ?
+                """, (notion_page_id, now, internal_id))
+                conn.commit()
+                return cursor.rowcount > 0
+            except sqlite3.Error as e:
+                logger.error(f"Failed to update notion_page_id for internal_id={internal_id}: {e}")
+                conn.rollback()
+                return False
+
     def mark_failed_v3(self, internal_id: int, error: str, max_retries: int = 5) -> bool:
         """标记 Notion 同步失败（v3 架构，使用 internal_id）
 
