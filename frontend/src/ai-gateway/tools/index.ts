@@ -310,11 +310,24 @@ export function buildGatewayTools(
     opts.skillGatingEnabled && opts.advertisedSkills != null
       ? applySkillGating(tools, opts.advertisedSkills)
       : tools
-  // S2 W0 — context-mode policy LAST, after every create* block AND skill gating (ADR-001 D3 /
-  // codex P2-2: no assembly path may leave a tool unfiltered). manual_chat (every current
-  // production run) is an identity pass-through → byte-identical; non-manual modes drop every
-  // capability_change/exec/outbound tool so the model structurally cannot see them — except exec
-  // under an explicit per-agent grant (ADR-004 D2; the same grants object the exec tools' runtime
-  // modeDenied consumed above, from the one agentRunContext).
-  return applyContextModePolicy(gated, contextMode, opts.agentRunContext?.modeGrants)
+  // S6 W3 (ADR-004 rev3.1 §5.1/D3) — per-agent skill MOUNT gating, headless agent runs only
+  // (agentRunContext present). A SECOND applySkillGating pass stacked on the M4a business-state
+  // gate above → the surviving skill tools are (mounted ∩ advertised): mounting can never revive a
+  // globally-disabled skill. Deliberately independent of skillGatingEnabled AND of the
+  // advertisedSkills null fail-open — those are manual business-state semantics; the mount list is
+  // the owner's per-agent authorization, so it ALWAYS applies and a missing list is [] (zero
+  // mounts, fail-closed), never a null passthrough into the fail-open branch. Pure reduction over
+  // GATEWAY_SKILL_TOOLS only — CORE_UNGATED / collision-exempt floors are untouched (the mount
+  // list is not a second switch for them). Manual entrypoints never carry a context → not called
+  // → byte-identical.
+  const mounted = opts.agentRunContext
+    ? applySkillGating(gated, opts.agentRunContext.skills ?? [])
+    : gated
+  // S2 W0 — context-mode policy LAST, after every create* block AND both skill-gating passes
+  // (ADR-001 D3 / codex P2-2: no assembly path may leave a tool unfiltered). manual_chat (every
+  // current production run) is an identity pass-through → byte-identical; non-manual modes drop
+  // every capability_change/exec/outbound tool so the model structurally cannot see them — except
+  // exec under an explicit per-agent grant (ADR-004 D2; the same grants object the exec tools'
+  // runtime modeDenied consumed above, from the one agentRunContext).
+  return applyContextModePolicy(mounted, contextMode, opts.agentRunContext?.modeGrants)
 }

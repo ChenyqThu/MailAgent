@@ -155,9 +155,16 @@ def _install_pack(client, tmp_path, name="dms-approve"):
     return os.path.join(skill_dir(name), "main.py")
 
 
+def _mount_skills(store, agent_id, skills, **extra):
+    """agent 行挂载 skill（S6 W3 rev3.1 §5.2：exec 规则引用的 installed skill 必须 ∈ 挂载集）。"""
+    store.update_agent(agent_id, {"tool_policy_json": json.dumps(
+        {"v": 1, "skills": skills, **extra})})
+
+
 def test_peragent_exec_pinned_entrypoint_accepted(client, fresh_agent_cfg, fresh_skills_dir,
                                                   custom_agent_env, tmp_path):
     main_py = _install_pack(client, tmp_path)
+    _mount_skills(custom_agent_env, "dms", ["dms-approve"])  # 归属闸前置：先挂载
     r = _create(client, {
         "capability": "exec",
         "matcher": {
@@ -205,6 +212,52 @@ def test_peragent_exec_rejects_non_skill_argv1(client, fresh_agent_cfg, fresh_sk
         "matcher": {"v": 1, "argv0_realpath": ECHO, "argv_template": [{"pin": str(rogue)}]},
     })
     assert r.status_code == 201
+
+
+# ── per-agent exec：挂载归属闸（S6 W3, rev3.1 §5.2 —— 形状闸之上第四层纯收窄）──────────────
+
+
+def test_peragent_exec_mount_gate_create_and_evaluate(client, fresh_agent_cfg, fresh_skills_dir,
+                                                      custom_agent_env, tmp_path):
+    """建规侧：引用未挂载 installed skill → 400（提示先挂载）；挂载（含默认集缺省 = 未挂）后
+    201。evaluate 侧：挂载 + 首跑在位 → auto_allow；owner 卸挂载 → 规则静默 dormant（ask），
+    规则行不删 —— 重挂载即恢复（fail-closed 方向全程成立）。"""
+    import hashlib
+
+    main_py = _install_pack(client, tmp_path)
+    matcher = {"v": 1, "argv0_realpath": os.path.realpath("/bin/echo"),
+               "argv_template": [{"pin": main_py}]}
+    # 未挂载（tool_policy 缺省 → 默认挂载集 email/search，不含 installed skill）→ 400。
+    code, _, msg = _err(_create(client, {"capability": "exec", "matcher": matcher,
+                                         "agentId": "dms"}))
+    assert code == 400 and "not mounted" in msg
+    # 显式零挂载 → 同 400。
+    _mount_skills(custom_agent_env, "dms", [])
+    code2, _, msg2 = _err(_create(client, {"capability": "exec", "matcher": matcher,
+                                           "agentId": "dms"}))
+    assert code2 == 400 and "not mounted" in msg2
+    # 挂载后 → 201。
+    _mount_skills(custom_agent_env, "dms", ["email", "dms-approve"])
+    r = _create(client, {"capability": "exec", "matcher": matcher, "agentId": "dms"})
+    assert r.status_code == 201, r.json()
+    rid = r.json()["data"]["id"]
+
+    # evaluate 侧：首跑记录直写（run 端点链在 dms e2e 全跑，此处只验挂载闸的判决翻转）。
+    digest = hashlib.sha256(open(main_py, "rb").read()).hexdigest()
+    fresh_agent_cfg.merge_first_run_approved(
+        "dms-approve", {os.path.realpath(main_py): {"version": "1.0", "entrypoint_hash": digest}})
+    body = {"capability": "exec", "action": {"argv": [os.path.realpath("/bin/echo"), main_py]},
+            "contextMode": "untrusted_trigger", "agentId": "dms"}
+    d = client.post("/api/agent/policy/evaluate", json=body).json()["data"]
+    assert d == {"decision": "auto_allow", "rule_id": rid}
+    # owner 卸挂载 → 同 action dormant skip（规则行仍在，不放行）。
+    _mount_skills(custom_agent_env, "dms", ["email"])
+    d2 = client.post("/api/agent/policy/evaluate", json=body).json()["data"]
+    assert d2 == {"decision": "ask", "rule_id": None}
+    # 重挂载 → 恢复 auto_allow（dormant 非删除）。
+    _mount_skills(custom_agent_env, "dms", ["dms-approve"])
+    d3 = client.post("/api/agent/policy/evaluate", json=body).json()["data"]
+    assert d3["decision"] == "auto_allow"
 
 
 # ── per-agent web：域名白名单建规 + 双键 evaluate（S6 W3，ADR-004 rev3.1 F#1 语义翻转）────────

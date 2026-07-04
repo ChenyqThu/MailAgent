@@ -30,7 +30,7 @@ import os
 import re
 import shutil
 import urllib.parse
-from typing import TYPE_CHECKING, Annotated, Any, Literal, Optional, Union
+from typing import TYPE_CHECKING, Annotated, Any, Collection, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -516,6 +516,31 @@ def headless_exec_rule_problem(
     return None
 
 
+def exec_entrypoint_skill(matcher: ExecMatcher) -> Optional[str]:
+    """headless exec 规则 pinned entrypoint 归属的 installed skill 名 = skills root 下第一段
+    目录名（与 :func:`headless_exec_rule_problem` 同一路径解析，S6 W3 rev3.1 §5.2 挂载归属闸
+    消费）。无法解析（无 pin / 相对路径 / skills root 不可得 / 不落 root 内 / 隔离区）→ None
+    （fail-closed：调用方按「不属任何已挂载 skill」处置）。"""
+    if not matcher.argv_template or matcher.argv_template[0].pin is None:
+        return None
+    entry = matcher.argv_template[0].pin
+    if not os.path.isabs(entry):
+        return None
+    try:
+        from src.skills.pack_fetch import skills_data_root
+
+        skills_root = os.path.realpath(skills_data_root())
+    except Exception:  # noqa: BLE001 — skills 根不可得 ⇒ 无可归属的 skill 面
+        return None
+    rp = os.path.realpath(entry)
+    if not rp.startswith(skills_root + os.sep):
+        return None
+    first = rp[len(skills_root) + 1:].split(os.sep, 1)[0]
+    if not first or first == ".quarantine":
+        return None
+    return first
+
+
 # ---------------------------------------------------------------------------
 # 评估入口（fail-closed）
 # ---------------------------------------------------------------------------
@@ -618,6 +643,7 @@ def evaluate(
     action_descriptor: dict[str, Any],
     context_mode: str,
     agent_id: Optional[str] = None,
+    mounted_skills: Optional[Collection[str]] = None,
 ) -> dict[str, Any]:
     """评估一次动作 → ``{"decision": "auto_allow"|"ask", "rule_id": int|None}``。
 
@@ -634,6 +660,12 @@ def evaluate(
     🔴 per-agent exec 形状复核（ADR-004 §4.3 双防线之二）：headless 候选里的 exec 规则须过
     :func:`headless_exec_rule_problem`（pinned-entrypoint + 无 raw ``{any}``），不符 → skip
     该规则（防手工入库怪行经候选集放行）。
+
+    🔴 per-agent exec 挂载归属闸（S6 W3, rev3.1 §5.2 —— 形状闸之上的第四层纯收窄）：规则
+    entrypoint 归属的 installed skill 必须 ∈ ``mounted_skills``（调用方从 agent 行
+    tool_policy_json 解析传入，本模块不触 sync_store —— 模块边界）。不在集内 / 集未提供
+    （``None`` = 调用方未接线，恒更窄）→ skip 该规则（owner 卸挂载 → 规则静默 dormant）。
+    非 exec capability 不消费此参数（builtin skill 工具由 gateway 注册期挂载门控管）。
     """
     ask: dict[str, Any] = {"decision": "ask", "rule_id": None}
     try:
@@ -651,6 +683,9 @@ def evaluate(
                 try:
                     if headless_exec_rule_problem(store, matcher) is not None:
                         continue
+                    skill = exec_entrypoint_skill(matcher)
+                    if skill is None or mounted_skills is None or skill not in mounted_skills:
+                        continue  # 挂载归属闸：未挂载 / 集未接线 → dormant（fail-closed）
                 except Exception:  # noqa: BLE001 — 形状复核异常 → skip（fail-closed）
                     continue
             try:

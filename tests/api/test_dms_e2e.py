@@ -110,9 +110,12 @@ def dms_env(tmp_path, monkeypatch):
                        prompt="处理 DMS 审批")
     store.update_agent("dms", {
         "trigger_json": json.dumps(_DMS_TRIGGER),
-        # D8 真 exec 形态：grant_exec opt-in + 显式最小工具集（读 3 + 起草 1）。
+        # D8 真 exec 形态：grant_exec opt-in + 显式最小工具集（读 3 + 起草 1）+ S6 W3 挂载
+        # （rev3.1 §5.2：exec 规则引用 installed skill 须 ∈ 挂载集，未挂建规 400 / evaluate
+        # dormant —— 归属闸正反例在 test_agent_policy_peragent，本链走已挂载 happy path）。
         "tool_policy_json": json.dumps(
-            {"v": 1, "allowed_tools": _DMS_ALLOWED, "grant_exec": True}),
+            {"v": 1, "allowed_tools": _DMS_ALLOWED, "grant_exec": True,
+             "skills": ["email", "dms-cli"]}),
     })
 
     monkeypatch.setattr(agent_runs, "get_job_repo", lambda: repo)

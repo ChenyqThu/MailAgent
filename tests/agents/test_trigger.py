@@ -229,6 +229,7 @@ def test_validate_patch_ignores_budget_but_checks_tool_policy_shape():
 def test_parse_tool_policy_unconfigured():
     tp = parse_tool_policy(None)
     assert tp.allowed_tools is None and tp.grant_exec is False and tp.grant_web == "off"
+    assert tp.skills is None  # 未配置 → None（投影层代默认挂载集，rev3.1 §5.1）
     assert parse_tool_policy("") == ToolPolicy()
 
 
@@ -252,6 +253,19 @@ def test_parse_tool_policy_grant_web_literals(grant_web):
     assert tp.grant_web == grant_web
 
 
+def test_parse_tool_policy_skills_shapes():
+    """S6 W3（ADR-004 rev3.1 §3.2/§5.1）：skills 镜像 allowed_tools 的解析形状 —— 缺省 None /
+    显式 [] → ()（零挂载 verbatim）/ list[str] 滤空串 → tuple。未安装名不校验（strict-effect）。"""
+    assert parse_tool_policy({"v": 1}).skills is None
+    tp = parse_tool_policy({"v": 1, "skills": []})
+    assert tp.skills == ()
+    tp2 = parse_tool_policy({"v": 1, "skills": ["email", "", "dms-cli"]})
+    assert tp2.skills == ("email", "dms-cli")  # 空串滤除，未知名照收（效果为零）
+    # JSON 串输入同形。
+    tp3 = parse_tool_policy('{"v": 1, "skills": ["search"]}')
+    assert tp3.skills == ("search",)
+
+
 @pytest.mark.parametrize(
     "bad",
     [
@@ -265,6 +279,9 @@ def test_parse_tool_policy_grant_web_literals(grant_web):
         {"grant_web": {}},                           # object → 拒
         {"allowed_tools": "email_get"},              # 非 list
         {"allowed_tools": [1, 2]},                   # 非 str 项
+        {"skills": "email"},                         # skills 非 list（裸串）→ 拒（rev3.1）
+        {"skills": ["email", 3]},                    # skills 非 str 项 → 拒
+        {"skills": {"email": True}},                 # skills object → 拒
         {"v": 1, "sneaky": True},                    # 未知键（extra forbid）
         "[]",                                         # 非 object JSON
         "not-json",                                   # 坏 JSON

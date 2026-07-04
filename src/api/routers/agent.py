@@ -885,6 +885,20 @@ async def create_policy_rule(request: Request, body: Optional[dict[str, Any]] = 
                 "E_INVALID_ARG", f"invalid headless exec rule: {problem}",
                 http_status=400, source="sqlite",
             )
+        # S6 W3（rev3.1 §5.2）挂载归属闸（建规侧防线之一，evaluate 侧同判 skip）：exec 规则
+        # 引用的 installed skill 必须 ∈ 该 agent 挂载集（skills NULL → 默认挂载集）。形状闸
+        # 已过 ⇒ entrypoint 归属可解析；解析不出（并发卸载等竞态）同样拒 —— fail-closed。
+        from src.agent_config.policy import exec_entrypoint_skill
+        from src.api.routers.agent_runs import resolve_mounted_skills
+
+        skill_name = exec_entrypoint_skill(parsed)
+        if skill_name is None or skill_name not in resolve_mounted_skills(agent):
+            raise APIError(
+                "E_INVALID_ARG",
+                f"installed skill {skill_name!r} is not mounted on agent {agent_id!r}; "
+                "add it to the agent's skills first",
+                http_status=400, source="sqlite",
+            )
     rule = store.create_policy_rule(
         capability,
         json.dumps(matcher, ensure_ascii=False, sort_keys=True),
@@ -947,7 +961,22 @@ async def evaluate_policy(request: Request, body: Optional[dict[str, Any]] = Non
     # → 400（gateway 调用方 bug 早暴露；空串由 store 层拒 → evaluate 兜底 ask）。
     if agent_id is not None and not isinstance(agent_id, str):
         raise APIError("E_INVALID_ARG", "agentId must be a string", http_status=400, source="sqlite")
+    # S6 W3（rev3.1 §5.2）：per-agent exec 评估须带该 agent 挂载集（evaluate 对未挂载/未接线
+    # 的 installed-skill 规则 skip → dormant）。agent_config 不触 sync_store（模块边界），
+    # 挂载集在本调用方从 agent 行解析；读失败 → 空集（fail-closed，全 dormant）。
+    mounted_skills = None
+    if agent_id is not None and capability == "exec":
+        try:
+            from src.api.deps import get_report_store
+            from src.api.routers.agent_runs import resolve_mounted_skills
+
+            # flag off = custom agents 不存在 → 不读 store（None → evaluate 恒 dormant）。
+            if _custom_agents_enabled():
+                mounted_skills = resolve_mounted_skills(get_report_store().get_agent(agent_id))
+        except Exception:  # noqa: BLE001 — store 读失败 → 空集（dormant，绝不放行）
+            mounted_skills = frozenset()
     # 返回 {decision, rule_id}（snake）= policy 判决单一 verdict 形状，与 exec 端点响应的 policy 字段
     # 一致（W1b 一个 verdict 类型消费两处：/evaluate 前置调用 + exec 响应审计）。
-    result = evaluate(get_agent_config_store(), capability, action, context_mode, agent_id=agent_id)
+    result = evaluate(get_agent_config_store(), capability, action, context_mode,
+                      agent_id=agent_id, mounted_skills=mounted_skills)
     return success_envelope(result, request=request, source="sqlite")

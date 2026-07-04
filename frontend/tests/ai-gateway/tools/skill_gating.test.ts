@@ -152,3 +152,112 @@ describe('buildGatewayTools skill-gating wiring', () => {
     expect(tools.kos_query).toBeDefined() // core
   })
 })
+
+// S6 W3-1b (ADR-004 rev3.1 §5.1/D3) — per-agent skill MOUNT gating: a SECOND applySkillGating
+// pass keyed SOLELY on agentRunContext presence (owner authorization state), stacked on the M4a
+// business-state gate → surviving skill tools = mounted ∩ advertised. Independent of the M4a flag
+// and of the advertisedSkills-null fail-open (those are manual semantics; the mount list fails
+// CLOSED — missing → []).
+describe('buildGatewayTools per-agent mount gating (S6 W3-1b)', () => {
+  const domain = () => mockDomain(() => okEnvelope([]))
+
+  test('mount gating keys on agentRunContext presence alone — no M4a flag, no advertisedSkills', () => {
+    const tools = buildGatewayTools({
+      domain: domain(),
+      contextMode: 'manual_chat',
+      agentRunContext: { agentId: 'dms', skills: ['email'] } // search/report NOT mounted
+    })
+    // email family mounted → present
+    for (const n of ['email_get', 'email_body', 'email_list_thread']) {
+      expect(tools[n]).toBeDefined()
+    }
+    // unmounted families → ABSENT (absence, not an error — the model never sees them)
+    for (const n of ['email_search_fulltext', 'email_search_attachments', 'report_list', 'report_get']) {
+      expect(tools[n]).toBeUndefined()
+    }
+    expect(tools.email_search).toBeDefined() // collision-exempt floor: never mount-gated
+  })
+
+  test('skills=[] (zero mounts): every mapped skill tool absent; collision-exempt + FULL CORE_UNGATED floor stay', () => {
+    const tools = buildGatewayTools({
+      domain: domain(),
+      writeToolsEnabled: true,
+      approvalGuard: new ApprovalGuard(),
+      sendToolEnabled: true,
+      sendSigningSecret: 'secret',
+      skillGatingEnabled: true,
+      sessionToolsEnabled: true,
+      configToolsEnabled: true,
+      webToolsEnabled: true,
+      execToolsEnabled: true,
+      skillInstallToolsEnabled: true,
+      customAgentToolsEnabled: true,
+      contextMode: 'manual_chat', // manual probe isolates the mount gate from the mode floor
+      agentRunContext: { agentId: 'dms', skills: [] }
+    })
+    for (const names of Object.values(GATEWAY_SKILL_TOOLS)) {
+      for (const n of names) expect(tools[n]).toBeUndefined()
+    }
+    expect(tools.email_search).toBeDefined()
+    // the mount list is NOT a second switch for the core floor (ADR §5.1)
+    for (const n of CORE_UNGATED_GATEWAY_TOOLS) expect(tools[n]).toBeDefined()
+  })
+
+  test('mounted ∩ advertised: mounting can never revive a globally-disabled skill (and vice versa)', () => {
+    const tools = buildGatewayTools({
+      domain: domain(),
+      skillGatingEnabled: true,
+      advertisedSkills: ['email'], // search globally OFF
+      contextMode: 'manual_chat',
+      agentRunContext: { agentId: 'dms', skills: ['search', 'report'] } // email NOT mounted
+    })
+    // email: advertised but unmounted → absent (mount reduction)
+    expect(tools.email_get).toBeUndefined()
+    // search: mounted but not advertised → absent (business reduction — mount can't revive)
+    expect(tools.email_search_fulltext).toBeUndefined()
+    // report: mounted, and M4a only gates against the advertised list → survives the business
+    // pass only if advertised… report NOT advertised → absent too
+    expect(tools.report_list).toBeUndefined()
+    // the intersection of the two lists is empty → only the floors remain
+    expect(tools.email_search).toBeDefined()
+    expect(tools.kos_query).toBeDefined()
+  })
+
+  test('missing skills on the context → [] fail-closed (never the advertised-null fail-open)', () => {
+    const tools = buildGatewayTools({
+      domain: domain(),
+      contextMode: 'manual_chat',
+      agentRunContext: { agentId: 'dms' } // hand-built context without skills
+    })
+    for (const names of Object.values(GATEWAY_SKILL_TOOLS)) {
+      for (const n of names) expect(tools[n]).toBeUndefined()
+    }
+    expect(tools.email_search).toBeDefined()
+  })
+
+  test('no agentRunContext → mount gating never applies (manual assembly byte-identical)', () => {
+    const base = buildGatewayTools({ domain: domain(), contextMode: 'manual_chat' })
+    expect(Object.keys(base).sort()).toEqual([...GATEWAY_READ_TOOL_NAMES].sort())
+  })
+
+  test('applyContextModePolicy still filters LAST: dangerous classes stay absent under a fully-mounted headless run', () => {
+    const tools = buildGatewayTools({
+      domain: domain(),
+      writeToolsEnabled: true,
+      approvalGuard: new ApprovalGuard(),
+      sendToolEnabled: true,
+      sendSigningSecret: 'secret',
+      skillInstallToolsEnabled: true,
+      execToolsEnabled: true,
+      contextMode: 'cron_headless',
+      agentRunContext: { agentId: 'dms', skills: ['email', 'search', 'report'] } // mounts wide open
+    })
+    // mounting everything cannot smuggle a floored class past the mode policy (no grants here)
+    for (const n of ['skill_install', 'run_command', 'email_prepare_send']) {
+      expect(tools[n]).toBeUndefined()
+    }
+    // mounted read families are present under the headless floor
+    expect(tools.email_get).toBeDefined()
+    expect(tools.report_list).toBeDefined()
+  })
+})

@@ -61,6 +61,27 @@ DEFAULT_CUSTOM_AGENT_ALLOWED_TOOLS: tuple[str, ...] = (
     "email_flag", "email_archive", "email_pin", "email_resync", "email_draft_reply",
 )
 
+# 🔴 默认挂载集（S6 W3, ADR-004 rev3.1 §5.1/D3）：tool_policy_json 缺 skills（NULL）时投影此集
+# —— 恰是默认安全集内 skill 门控工具的归属两族（email_get/body/list_thread ∈ email；
+# email_search_fulltext/attachments ∈ search），默认配置 agent 的工具面与挂载语义引入前逐字节
+# 不变。显式 [] = 零挂载（门控工具全缺席；collision-exempt email_search + CORE_UNGATED 仍在）。
+# 单源：spec 投影恒输出解析完的 skills 数组（默认已代入），gateway 不手抄第二份常量。
+DEFAULT_CUSTOM_AGENT_MOUNTED_SKILLS: tuple[str, ...] = ("email", "search")
+
+
+def resolve_mounted_skills(agent: Optional[dict[str, Any]]) -> frozenset[str]:
+    """agent 行 → 挂载集（ADR-004 rev3.1 §5.1/§5.2 的唯一解析口，建规闸 / evaluate 传递共用）。
+
+    ``skills`` 未配置（NULL/缺 key/坏形状经 lenient 落 None）→ 默认挂载集；显式列表 → verbatim；
+    agent 缺失 → 空集（fail-closed —— 无可归属，exec 规则全 dormant）。
+    """
+    if agent is None:
+        return frozenset()
+    tp = _tool_policy_lenient(agent.get("tool_policy_json"))
+    if tp.skills is None:
+        return frozenset(DEFAULT_CUSTOM_AGENT_MOUNTED_SKILLS)
+    return frozenset(tp.skills)
+
 # headless 可用工具全集 = 矩阵地板内 read + domain_write（与 gateway policy.ts
 # GATEWAY_TOOL_CLASSES / tests/agent_eval/tool_catalog.json 的 tool_class 轴同源；
 # tests/api 有 catalog 一致性闸，新读/写工具漏此表必红）。exec / outbound /
@@ -264,6 +285,13 @@ def _assemble_spec(job: AsyncJob) -> dict[str, Any]:
         # 镜像 grantExec：仅非默认值（off）才投影；gateway 侧 parseWebGrant 再判别一次，
         # 缺席/junk 恒塌 'off'（ADR-004 rev3.1 D1）。
         tool_policy_out["grantWeb"] = tool_policy.grant_web
+    # S6 W3（rev3.1 §5.1）：skills **恒输出**解析完的数组（NULL → 默认挂载集已代入；显式 []
+    # → []）—— gateway 不手抄默认集第二份；gateway 侧对缺 skills 的 spec 按 [] fail-closed。
+    tool_policy_out["skills"] = (
+        list(tool_policy.skills)
+        if tool_policy.skills is not None
+        else list(DEFAULT_CUSTOM_AGENT_MOUNTED_SKILLS)
+    )
     spec: dict[str, Any] = {
         "jobId": job.job_id,
         "agentId": agent_id,

@@ -343,8 +343,8 @@ def test_evaluate_skips_nonconforming_headless_exec_rule(skill_env):
 
 
 def test_evaluate_allows_conforming_pinned_rule_after_first_run(skill_env):
-    """合形 pinned-entrypoint 规则 + 首跑记录在位 → headless auto_allow；同规则对未首跑
-    entrypoint（skill gate 前置）仍 ask —— 三重闸顺序不变式在 per-agent 下成立。"""
+    """合形 pinned-entrypoint 规则 + 首跑记录在位 + skill 已挂载 → headless auto_allow；同规则
+    对未首跑 entrypoint（skill gate 前置）仍 ask —— 三重闸顺序不变式在 per-agent 下成立。"""
     st, main_py, digest = skill_env
     argv0 = os.path.realpath("/usr/bin/python3") if os.path.exists("/usr/bin/python3") else ECHO
     rule = st.create_policy_rule(
@@ -354,14 +354,72 @@ def test_evaluate_allows_conforming_pinned_rule_after_first_run(skill_env):
         agent_id="dms",
     )
     action = {"argv": [argv0, main_py], "cwd": None}
+    mounted = frozenset({"dms-approve"})
     # 未首跑 → skill gate 在查规则之前 ask。
-    assert P.evaluate(st, "exec", action, "untrusted_trigger", agent_id="dms")["decision"] == "ask"
+    assert P.evaluate(st, "exec", action, "untrusted_trigger", agent_id="dms",
+                      mounted_skills=mounted)["decision"] == "ask"
     st.merge_first_run_approved(
         "dms-approve",
         {os.path.realpath(main_py): {"version": "1.0", "entrypoint_hash": digest}},
     )
-    assert P.evaluate(st, "exec", action, "untrusted_trigger", agent_id="dms") == {
+    assert P.evaluate(st, "exec", action, "untrusted_trigger", agent_id="dms",
+                      mounted_skills=mounted) == {
         "decision": "auto_allow", "rule_id": rule.id,
     }
     # 同 action、无 agent_id（manual）→ per-agent 规则不进候选 → ask。
     assert P.evaluate(st, "exec", action, "untrusted_trigger")["decision"] == "ask"
+
+
+def test_evaluate_mount_gate_unmounted_rule_is_dormant(skill_env):
+    """S6 W3（rev3.1 §5.2 挂载归属闸，形状闸之上第四层纯收窄）：合形 + 首跑均在位的规则，
+    entrypoint 归属 skill ∉ 挂载集 → skip（dormant，恒 ask）；挂载集未接线（None，未来调用方
+    忘传）→ 同 skip（fail-closed 恒更窄）；挂载后同 action 即 auto_allow —— 证明拦截来自
+    挂载闸而非形状/首跑。"""
+    st, main_py, digest = skill_env
+    argv0 = os.path.realpath("/usr/bin/python3") if os.path.exists("/usr/bin/python3") else ECHO
+    rule = st.create_policy_rule(
+        "exec",
+        json.dumps({"v": 1, "argv0_realpath": argv0, "argv_template": [{"pin": main_py}]}),
+        context_mode="untrusted_trigger",
+        agent_id="dms",
+    )
+    st.merge_first_run_approved(
+        "dms-approve",
+        {os.path.realpath(main_py): {"version": "1.0", "entrypoint_hash": digest}},
+    )
+    action = {"argv": [argv0, main_py], "cwd": None}
+    # 挂载在位 → auto_allow（对照组）。
+    assert P.evaluate(st, "exec", action, "untrusted_trigger", agent_id="dms",
+                      mounted_skills={"dms-approve"}) == {
+        "decision": "auto_allow", "rule_id": rule.id,
+    }
+    # owner 卸挂载（默认挂载集不含 installed skill）→ dormant skip。
+    assert P.evaluate(st, "exec", action, "untrusted_trigger", agent_id="dms",
+                      mounted_skills={"email", "search"}) == {
+        "decision": "ask", "rule_id": None,
+    }
+    # 零挂载 → 同 dormant。
+    assert P.evaluate(st, "exec", action, "untrusted_trigger", agent_id="dms",
+                      mounted_skills=frozenset())["decision"] == "ask"
+    # 挂载集未接线（None）→ fail-closed skip，绝不放行。
+    assert P.evaluate(st, "exec", action, "untrusted_trigger", agent_id="dms")["decision"] == "ask"
+
+
+def test_exec_entrypoint_skill_resolution(skill_env, tmp_path):
+    """exec_entrypoint_skill：合形 matcher → skills root 下第一段目录名；无 pin / 相对路径 /
+    root 外 → None（fail-closed）。"""
+    st, main_py, _ = skill_env
+    m = P.ExecMatcher.model_validate(_pinned_matcher(main_py))
+    assert P.exec_entrypoint_skill(m) == "dms-approve"
+    m_rel = P.ExecMatcher.model_validate(
+        {"v": 1, "argv0_realpath": ECHO, "argv_template": [{"pin": "main.py"}]}
+    )
+    assert P.exec_entrypoint_skill(m_rel) is None
+    m_none = P.ExecMatcher.model_validate(
+        {"v": 1, "argv0_realpath": ECHO, "argv_template": [{"any": True}]}
+    )
+    assert P.exec_entrypoint_skill(m_none) is None
+    outside = tmp_path / "rogue.py"
+    outside.write_text("x")
+    m_out = P.ExecMatcher.model_validate(_pinned_matcher(str(outside)))
+    assert P.exec_entrypoint_skill(m_out) is None

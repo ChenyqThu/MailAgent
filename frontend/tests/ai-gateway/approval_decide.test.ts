@@ -766,6 +766,9 @@ describe('/api/ai/approval/decide — per-agent context freeze (headless agent r
   const CTX = {
     agentId: 'dms',
     allowedTools: ['email_draft_reply', 'email_flag', 'web_fetch'],
+    // S6 W3 — a real frozen context always carries the resolved mount list (spec-projected);
+    // [] here = zero mounts, which only touches the skill-gated read families (none asserted).
+    skills: [],
     modeGrants: { exec: true }
   }
 
@@ -957,6 +960,7 @@ describe('/api/ai/approval/decide — per-agent context freeze (headless agent r
     const WEB_CTX = {
       agentId: 'dms',
       allowedTools: ['email_draft_reply'],
+      skills: [],
       modeGrants: { exec: false, web: 'gated' as const }
     }
     const guard = new ApprovalGuard()
@@ -988,5 +992,45 @@ describe('/api/ai/approval/decide — per-agent context freeze (headless agent r
     expect(names).toContain('email_draft_reply')
     expect(names).not.toContain('run_command')
     expect(names).not.toContain('email_flag') // narrowing survives too
+  })
+
+  // S6 W3-1b (rev3.1 §8) — the MOUNT list rides the same stash freeze: a resume rebuilds the exact
+  // mount face (mounted family reads present, unmounted family reads absent, collision-exempt floor
+  // untouched) — pause→resume can never widen (or shift) the per-agent skill visibility.
+  test('resume keeps the mount face: mounted-family reads survive, unmounted-family reads stay absent', async () => {
+    const MOUNT_CTX = {
+      agentId: 'dms',
+      allowedTools: ['email_body', 'email_search_fulltext', 'email_search', 'email_draft_reply'],
+      skills: ['email'], // search family NOT mounted — even though allowedTools lists its tool
+      modeGrants: { exec: false }
+    }
+    const guard = new ApprovalGuard()
+    const stash = new ApprovalRunStash()
+    const domainCalls: unknown[] = []
+    const seenCtx: Array<{ mode: string | undefined; ctx: unknown }> = []
+    const seenTools: string[][] = []
+    const cfg = headlessCfg({
+      guard,
+      stash,
+      domain: headlessDomain(domainCalls),
+      model: captureToolsModel(seenTools),
+      seenCtx
+    })
+    const h = await start(cfg)
+    const token = seedHeadlessPause(guard, stash, MOUNT_CTX)
+
+    const res = await decide(h.port, { toolCallId: TC, decision: 'approve', resumeToken: token })
+    expect(res.status).toBe(200)
+    expect((await res.json()).status).toBe('completed')
+
+    // the frozen mount list reached the rebuild verbatim
+    expect(seenCtx[seenCtx.length - 1]).toEqual({ mode: 'cron_headless', ctx: MOUNT_CTX })
+    const names = seenTools[0]
+    expect(names).toContain('email_body') // email family mounted + allowed
+    expect(names).toContain('email_search') // collision-exempt floor: never mount-gated
+    expect(names).toContain('email_draft_reply') // CORE_UNGATED domain_write
+    // search family unmounted → absent DESPITE being in allowedTools (mount gate is a pure
+    // reduction stacked on the intersection; absence, not an error)
+    expect(names).not.toContain('email_search_fulltext')
   })
 })

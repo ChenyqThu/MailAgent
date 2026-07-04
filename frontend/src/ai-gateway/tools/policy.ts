@@ -179,6 +179,13 @@ export interface AgentRunContext {
    *  (a malformed spec normalizes to [] — fail-closed, ADR-004 §5.1); undefined only survives in
    *  hand-built test contexts and wrapCfgForAgentRun re-normalizes it to []. */
   allowedTools?: string[]
+  /** S6 W3 (ADR-004 rev3.1 §5.1/D3) — the owner's per-agent skill MOUNT list, spec-projected
+   *  (the Python side substitutes the default mount set for NULL, so a real spec always carries
+   *  the resolved array; missing/malformed → [] fail-closed, mirroring allowedTools). Consumed by
+   *  buildGatewayTools as a SECOND applySkillGating pass (mounted ∩ advertised — pure reduction,
+   *  independent of the M4a flag and of the advertisedSkills null fail-open, which are manual
+   *  business-state semantics). Never widens: CORE_UNGATED / collision-exempt floors stay. */
+  skills?: string[]
   modeGrants?: AgentModeGrants
   /** S6 W1 — the async_jobs row id of this headless run, frozen into the run context so a paused
    *  approval carries it into the stash (maybeStashAndAnnounceApproval freezes the whole context).

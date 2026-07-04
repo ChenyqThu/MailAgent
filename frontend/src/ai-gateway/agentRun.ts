@@ -99,13 +99,21 @@ export function intersectAllowedTools(all: ToolSet, allowed?: string[]): ToolSet
  *  them without widening the shared surface. Exported for the discriminated-construction tests. */
 export function agentRunContextFromSpec(spec: AgentRunSpec, jobId?: number): AgentRunContext {
   const toolPolicy = spec.toolPolicy as
-    | { allowedTools?: unknown; grantExec?: unknown; grantWeb?: unknown }
+    | { allowedTools?: unknown; grantExec?: unknown; grantWeb?: unknown; skills?: unknown }
     | undefined
   const allowedRaw = toolPolicy?.allowedTools
+  // S6 W3 (rev3.1 §5.1) — the mount list mirrors allowedTools' fail-closed shape: the Python
+  // projection always emits the RESOLVED array (NULL → default mount set substituted server-side,
+  // never re-derived here), so a spec missing/malforming it is a broken spec → [] (zero mounts),
+  // NEVER null-passthrough into applySkillGating's fail-open manual semantic.
+  const skillsRaw = toolPolicy?.skills
   return {
     agentId: spec.agentId,
     allowedTools: Array.isArray(allowedRaw)
       ? allowedRaw.filter((n): n is string => typeof n === 'string')
+      : [],
+    skills: Array.isArray(skillsRaw)
+      ? skillsRaw.filter((n): n is string => typeof n === 'string')
       : [],
     modeGrants: { exec: toolPolicy?.grantExec === true, web: parseWebGrant(toolPolicy?.grantWeb) },
     // S6 W1 — carry the run's jobId so a paused approval freezes it into the stash for the
@@ -136,10 +144,13 @@ export function wrapCfgForAgentRun(
 ): AiGatewayConfig {
   // Fail-closed normalization at the ONE funnel both paths share: an agent run never treats a
   // missing list as "no narrowing" (that semantic stays with non-agent callers of
-  // intersectAllowedTools).
+  // intersectAllowedTools). skills mirrors it (S6 W3 §5.1: missing mount list → zero mounts,
+  // never fail-open) — the normalized ctx is what the pause stash freezes, so a resume rebuilds
+  // the exact same mount face.
   const ctx: AgentRunContext = {
     ...agentRunContext,
-    allowedTools: agentRunContext.allowedTools ?? []
+    allowedTools: agentRunContext.allowedTools ?? [],
+    skills: agentRunContext.skills ?? []
   }
   const keep = new Set(ctx.allowedTools)
   return {

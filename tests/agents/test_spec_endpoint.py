@@ -34,6 +34,9 @@ from src.mail.sync_store import SyncStore  # noqa: E402
 from src.reports.store import ReportStore  # noqa: E402
 from src.sync.async_jobs import AsyncJobRepository  # noqa: E402
 
+# S6 W3（rev3.1 §5.1）：spec 恒输出解析完的 skills（NULL → 默认挂载集代入）。
+_DEFAULT_SKILLS = list(agent_runs.DEFAULT_CUSTOM_AGENT_MOUNTED_SKILLS)
+
 
 # ---------------------------------------------------------------------------
 # fixtures + helpers
@@ -118,9 +121,11 @@ def test_spec_cron_full_shape(env, client):
     assert "emailEnvelope" not in spec["prompt"]  # cron 无 envelope
     assert spec["model"] == "claude-sonnet-5"
     assert spec["budget"] == {"maxSteps": 6, "maxRunSeconds": 120}
-    # S5 ADR-004 §5.1（显式修订 ADR-003 D6）：未配 tool_policy → 投影**默认安全集**（非「不收窄」）。
+    # S5 ADR-004 §5.1（显式修订 ADR-003 D6）：未配 tool_policy → 投影**默认安全集**（非「不收窄」）
+    # + S6 W3 rev3.1 §5.1：skills 恒输出（NULL → 默认挂载集已代入）。
     assert spec["toolPolicy"] == {
-        "allowedTools": list(agent_runs.DEFAULT_CUSTOM_AGENT_ALLOWED_TOOLS)
+        "allowedTools": list(agent_runs.DEFAULT_CUSTOM_AGENT_ALLOWED_TOOLS),
+        "skills": list(agent_runs.DEFAULT_CUSTOM_AGENT_MOUNTED_SKILLS),
     }
     assert spec["sessionTitle"].startswith("DMS Approver · ")
 
@@ -154,7 +159,8 @@ def test_spec_email_carries_fenced_envelope(env, client, monkeypatch):
     assert env_block.endswith("\nUNTRUSTED_EMAIL_BODY_END")
     assert "DMS Bot <dms@corp.com>" in env_block
     assert "Please approve request #42" in env_block
-    assert spec["toolPolicy"] == {"allowedTools": ["email_get", "email_body"]}
+    assert spec["toolPolicy"] == {"allowedTools": ["email_get", "email_body"],
+                                  "skills": _DEFAULT_SKILLS}
 
 
 def test_spec_tool_policy_three_states_and_grant_exec(env, client):
@@ -165,21 +171,22 @@ def test_spec_tool_policy_three_states_and_grant_exec(env, client):
                  tool_policy={"v": 1, "allowed_tools": []})
     jid = _running_job(env.repo, agent_id="a_empty", token="te")
     d = client.get(f"/api/agent-runs/{jid}/spec", headers={"X-Claim-Token": "te"}).json()["data"]
-    assert d["toolPolicy"] == {"allowedTools": []}
+    assert d["toolPolicy"] == {"allowedTools": [], "skills": _DEFAULT_SKILLS}
 
     # grant_exec: true → grantExec 投影 True。
     _seed_custom(env.store, agent_id="a_grant", trigger=_CRON,
                  tool_policy={"v": 1, "allowed_tools": ["email_get"], "grant_exec": True})
     jid2 = _running_job(env.repo, agent_id="a_grant", token="tg")
     d2 = client.get(f"/api/agent-runs/{jid2}/spec", headers={"X-Claim-Token": "tg"}).json()["data"]
-    assert d2["toolPolicy"] == {"allowedTools": ["email_get"], "grantExec": True}
+    assert d2["toolPolicy"] == {"allowedTools": ["email_get"], "grantExec": True,
+                                "skills": _DEFAULT_SKILLS}
 
     # grant_exec: false → 键不投影。
     _seed_custom(env.store, agent_id="a_nogrant", trigger=_CRON,
                  tool_policy={"v": 1, "allowed_tools": ["email_get"], "grant_exec": False})
     jid3 = _running_job(env.repo, agent_id="a_nogrant", token="tn")
     d3 = client.get(f"/api/agent-runs/{jid3}/spec", headers={"X-Claim-Token": "tn"}).json()["data"]
-    assert d3["toolPolicy"] == {"allowedTools": ["email_get"]}
+    assert d3["toolPolicy"] == {"allowedTools": ["email_get"], "skills": _DEFAULT_SKILLS}
 
     # 坏形状（grant_exec:"yes" —— 保存闸之外手工入库）→ 读侧宽容落未配置语义：默认安全集 +
     # 无 grantExec（junk 永不投影成授权，P1-4 负例）。
@@ -188,7 +195,8 @@ def test_spec_tool_policy_three_states_and_grant_exec(env, client):
     jid4 = _running_job(env.repo, agent_id="a_junk", token="tj")
     d4 = client.get(f"/api/agent-runs/{jid4}/spec", headers={"X-Claim-Token": "tj"}).json()["data"]
     assert d4["toolPolicy"] == {
-        "allowedTools": list(agent_runs.DEFAULT_CUSTOM_AGENT_ALLOWED_TOOLS)
+        "allowedTools": list(agent_runs.DEFAULT_CUSTOM_AGENT_ALLOWED_TOOLS),
+        "skills": _DEFAULT_SKILLS,
     }
 
 
@@ -200,21 +208,23 @@ def test_spec_grant_web_projection(env, client):
                  tool_policy={"v": 1, "allowed_tools": ["email_get"], "grant_web": "gated"})
     jid = _running_job(env.repo, agent_id="w_gated", token="wg")
     d = client.get(f"/api/agent-runs/{jid}/spec", headers={"X-Claim-Token": "wg"}).json()["data"]
-    assert d["toolPolicy"] == {"allowedTools": ["email_get"], "grantWeb": "gated"}
+    assert d["toolPolicy"] == {"allowedTools": ["email_get"], "grantWeb": "gated",
+                               "skills": _DEFAULT_SKILLS}
 
     # open → 投影；与 grantExec 并存。
     _seed_custom(env.store, agent_id="w_open", trigger=_CRON,
                  tool_policy={"v": 1, "allowed_tools": [], "grant_exec": True, "grant_web": "open"})
     jid2 = _running_job(env.repo, agent_id="w_open", token="wo")
     d2 = client.get(f"/api/agent-runs/{jid2}/spec", headers={"X-Claim-Token": "wo"}).json()["data"]
-    assert d2["toolPolicy"] == {"allowedTools": [], "grantExec": True, "grantWeb": "open"}
+    assert d2["toolPolicy"] == {"allowedTools": [], "grantExec": True, "grantWeb": "open",
+                                "skills": _DEFAULT_SKILLS}
 
     # 显式 off → 键不投影（与缺省同形状）。
     _seed_custom(env.store, agent_id="w_off", trigger=_CRON,
                  tool_policy={"v": 1, "allowed_tools": ["email_get"], "grant_web": "off"})
     jid3 = _running_job(env.repo, agent_id="w_off", token="wf")
     d3 = client.get(f"/api/agent-runs/{jid3}/spec", headers={"X-Claim-Token": "wf"}).json()["data"]
-    assert d3["toolPolicy"] == {"allowedTools": ["email_get"]}
+    assert d3["toolPolicy"] == {"allowedTools": ["email_get"], "skills": _DEFAULT_SKILLS}
 
     # 坏值（手工入库 "yes"）→ 读侧宽容整策略落未配置语义（默认安全集 + 零 grant 投影）。
     _seed_custom(env.store, agent_id="w_junk", trigger=_CRON,
@@ -222,6 +232,42 @@ def test_spec_grant_web_projection(env, client):
     jid4 = _running_job(env.repo, agent_id="w_junk", token="wj")
     d4 = client.get(f"/api/agent-runs/{jid4}/spec", headers={"X-Claim-Token": "wj"}).json()["data"]
     assert "grantWeb" not in d4["toolPolicy"] and "grantExec" not in d4["toolPolicy"]
+
+
+def test_spec_skills_projection_four_states(env, client):
+    """S6 W3（ADR-004 rev3.1 §5.1）：skills **恒输出**解析完的数组 —— 单源在 Python 投影，
+    gateway 不手抄默认集。四态：NULL → 默认挂载集；显式 [] → []（零挂载 verbatim）；
+    自定义列表 → verbatim（含未安装名 strict-effect 存储宽容）；坏形状 → 读侧宽容落
+    未配置语义 = 默认挂载集（fail-closed 方向：绝不由坏 JSON 放大挂载面）。"""
+    # NULL（缺 skills 键）→ 默认挂载集（test_spec_cron_full_shape 已盖无 tool_policy 情形）。
+    _seed_custom(env.store, agent_id="s_null", trigger=_CRON,
+                 tool_policy={"v": 1, "allowed_tools": ["email_get"]})
+    jid = _running_job(env.repo, agent_id="s_null", token="sn")
+    d = client.get(f"/api/agent-runs/{jid}/spec", headers={"X-Claim-Token": "sn"}).json()["data"]
+    assert d["toolPolicy"]["skills"] == _DEFAULT_SKILLS
+
+    # 显式 [] → []（owner 零挂载，非默认集）。
+    _seed_custom(env.store, agent_id="s_empty", trigger=_CRON,
+                 tool_policy={"v": 1, "allowed_tools": ["email_get"], "skills": []})
+    jid2 = _running_job(env.repo, agent_id="s_empty", token="se")
+    d2 = client.get(f"/api/agent-runs/{jid2}/spec", headers={"X-Claim-Token": "se"}).json()["data"]
+    assert d2["toolPolicy"]["skills"] == []
+
+    # 自定义 → verbatim（"dms-cli" 未安装也照投 —— strict-effect：无工具可放行，效果为零）。
+    _seed_custom(env.store, agent_id="s_custom", trigger=_CRON,
+                 tool_policy={"v": 1, "allowed_tools": ["email_get"],
+                              "skills": ["email", "dms-cli"]})
+    jid3 = _running_job(env.repo, agent_id="s_custom", token="sc")
+    d3 = client.get(f"/api/agent-runs/{jid3}/spec", headers={"X-Claim-Token": "sc"}).json()["data"]
+    assert d3["toolPolicy"]["skills"] == ["email", "dms-cli"]
+
+    # 坏形状（skills:"email" 裸串，手工入库）→ 整策略读侧宽容 → 默认挂载集 + 默认安全集。
+    _seed_custom(env.store, agent_id="s_junk", trigger=_CRON,
+                 tool_policy={"v": 1, "allowed_tools": ["email_get"], "skills": "email"})
+    jid4 = _running_job(env.repo, agent_id="s_junk", token="sj")
+    d4 = client.get(f"/api/agent-runs/{jid4}/spec", headers={"X-Claim-Token": "sj"}).json()["data"]
+    assert d4["toolPolicy"]["skills"] == _DEFAULT_SKILLS
+    assert d4["toolPolicy"]["allowedTools"] == list(agent_runs.DEFAULT_CUSTOM_AGENT_ALLOWED_TOOLS)
 
 
 def test_spec_budget_defaults_and_clamp(env, client):

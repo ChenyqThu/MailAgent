@@ -183,6 +183,7 @@ describe('agentRunContextFromSpec — discriminated grants, never a raw passthro
     expect(ctx).toEqual({
       agentId: 'dms',
       allowedTools: ['email_flag'],
+      skills: [], // spec missing skills → [] fail-closed (S6 W3 §5.1)
       modeGrants: { exec: true, web: 'off' }
     })
   })
@@ -239,6 +240,25 @@ describe('agentRunContextFromSpec — discriminated grants, never a raw passthro
     // and the junk `web:true` KEY (not grantWeb) never reaches the web grant (stays 'off')
     expect(Object.keys(ctx.modeGrants!)).toEqual(['exec', 'web'])
     expect(ctx.modeGrants?.web).toBe('off')
+  })
+
+  // S6 W3-1b (rev3.1 §5.1) — the mount list rides the same fail-closed funnel as allowedTools:
+  // a real spec ALWAYS carries the resolved array (Python substitutes the default mount set for
+  // NULL server-side); missing/malformed here = broken spec → [] (zero mounts), NEVER a null
+  // passthrough into applySkillGating's manual fail-open branch.
+  test('skills missing / non-array / non-string entries → [] resp. filtered (fail-closed §5.1)', () => {
+    expect(agentRunContextFromSpec(makeSpec({ toolPolicy: {} })).skills).toEqual([])
+    expect(agentRunContextFromSpec(makeSpec({ toolPolicy: undefined })).skills).toEqual([])
+    expect(
+      agentRunContextFromSpec(
+        makeSpec({ toolPolicy: { skills: 'email' } as unknown as AgentRunSpec['toolPolicy'] })
+      ).skills
+    ).toEqual([])
+    expect(
+      agentRunContextFromSpec(
+        makeSpec({ toolPolicy: { skills: ['email', 42, null] } as unknown as AgentRunSpec['toolPolicy'] })
+      ).skills
+    ).toEqual(['email'])
   })
 
   test('allowedTools missing / non-array / non-string entries → [] resp. filtered (fail-closed §5.1)', () => {
@@ -514,6 +534,64 @@ describe('runHeadlessAgent — per-agent exec grant + fail-closed allowedTools (
     expect(seenTools[0]).toEqual([])
   })
 
+  // S6 W3-1b (rev3.1 §5.1) — the KEY regression pin: under the DEFAULT mount set (["email",
+  // "search"], what Python projects for a NULL skills) and the DEFAULT allowed set, the tool face
+  // is byte-identical to the pre-mount (W3-1a) face. Chain: gating with ALL mapped families
+  // mounted is an identity pass (skill_gating.test's identity lemma) = the W3-1a assembly; the
+  // default allowed set names no report tools, so dropping the unmounted report family changes
+  // nothing — the two runs below must see the exact same tool list.
+  test('DEFAULT mount set + default allowed set → tool face byte-identical to the W3-1a face', async () => {
+    // Mirrors Python DEFAULT_CUSTOM_AGENT_ALLOWED_TOOLS (agent_runs.py) — the projected wire value.
+    const defaultAllowed = [
+      'email_search', 'email_search_fulltext', 'email_get', 'email_body',
+      'email_list_thread', 'email_search_attachments',
+      'email_flag', 'email_archive', 'email_pin', 'email_resync', 'email_draft_reply'
+    ]
+    const seenDefault: string[][] = []
+    await runHeadlessAgent(
+      grantAwareCfg(seenDefault),
+      {
+        jobId: 7,
+        spec: makeSpec({
+          toolPolicy: { allowedTools: defaultAllowed, skills: ['email', 'search'] } as unknown as AgentRunSpec['toolPolicy']
+        }),
+        sessionId: null
+      },
+      new AbortController().signal
+    )
+    const seenAllMounted: string[][] = []
+    await runHeadlessAgent(
+      grantAwareCfg(seenAllMounted),
+      {
+        jobId: 8,
+        spec: makeSpec({
+          // every mapped family mounted = the gating identity pass = the W3-1a assembly
+          toolPolicy: { allowedTools: defaultAllowed, skills: ['email', 'search', 'report'] } as unknown as AgentRunSpec['toolPolicy']
+        }),
+        sessionId: null
+      },
+      new AbortController().signal
+    )
+    expect(seenDefault[0]).toEqual(seenAllMounted[0])
+    expect(seenDefault[0].sort()).toEqual([...defaultAllowed].sort())
+  })
+
+  test('unmounted-family reads absent DESPITE being allowed (mount is a pure reduction stacked on the intersection)', async () => {
+    const seenTools: string[][] = []
+    const spec = makeSpec({
+      toolPolicy: {
+        allowedTools: ['email_body', 'email_search_fulltext', 'email_search', 'report_list'],
+        skills: ['email'] // search + report NOT mounted
+      } as unknown as AgentRunSpec['toolPolicy']
+    })
+    await runHeadlessAgent(grantAwareCfg(seenTools), { jobId: 7, spec, sessionId: null }, new AbortController().signal)
+    const names = seenTools[0]
+    expect(names).toContain('email_body') // mounted + allowed
+    expect(names).toContain('email_search') // collision-exempt floor, allowed
+    expect(names).not.toContain('email_search_fulltext') // allowed but unmounted → absent
+    expect(names).not.toContain('report_list') // allowed but unmounted → absent
+  })
+
   test('wrapCfgForAgentRun records the context on the cfg (the stash freeze source) and normalizes undefined allowedTools to []', () => {
     const base: AiGatewayConfig = {
       port: 0,
@@ -523,7 +601,8 @@ describe('runHeadlessAgent — per-agent exec grant + fail-closed allowedTools (
       buildTools: () => ({ email_flag: tool({ description: 'b', inputSchema: z.object({}), execute: async () => ({}) }) })
     }
     const wrapped = wrapCfgForAgentRun(base, { agentId: 'dms' })
-    expect(wrapped.agentRunContext).toEqual({ agentId: 'dms', allowedTools: [] })
+    // skills mirrors allowedTools' []-normalization at the one funnel (S6 W3 §5.1 fail-closed)
+    expect(wrapped.agentRunContext).toEqual({ agentId: 'dms', allowedTools: [], skills: [] })
     // and the wrapper's buildTools intersects against that [] → empty
     expect(Object.keys(wrapped.buildTools!([], undefined, 'cron_headless'))).toEqual([])
   })
@@ -599,6 +678,7 @@ describe('runHeadlessAgent — drain outcomes', () => {
     expect(entry?.agentRunContext).toEqual({
       agentId: 'dms',
       allowedTools: ['email_search', 'email_body', 'email_flag', 'email_draft_reply'],
+      skills: [], // makeSpec carries no skills → [] fail-closed, frozen verbatim (S6 W3 §8)
       modeGrants: { exec: false, web: 'off' },
       jobId: 7
     })

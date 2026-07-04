@@ -96,16 +96,35 @@ def _evaluate(
 ) -> dict[str, Any]:
     """policy 评估（审计透传）：命中结构化白名单 → auto_allow + rule_id，否则 ask。评估器自身
     fail-closed（异常→ask），故这里无需再兜底。``context_mode``/``agent_id`` 缺省 = W1a 现状
-    （manual_chat / 全局候选）。"""
+    （manual_chat / 全局候选）。
+
+    S6 W3（rev3.1 §5.2）：per-agent exec 评估补传挂载集 —— 让本端点的审计 verdict 与 gateway
+    /policy/evaluate 的免卡判决同判（挂载闸生效于两处，审计不撒谎）。仅 exec + agent_id 非空
+    才读 agent 行（flag off / 读失败 → None/空集，evaluate 恒 dormant，fail-closed）。"""
     from src.agent_config.policy import evaluate
     from src.agent_config.store import get_agent_config_store
 
+    mounted_skills = None
+    if agent_id is not None and capability == "exec":
+        try:
+            from src.api import deps
+            from src.api.routers import agent as agent_router
+            from src.api.routers.agent_runs import resolve_mounted_skills
+
+            # flag off = custom agents 不存在 → 不读 store（None → evaluate 恒 dormant）。
+            if agent_router._custom_agents_enabled():
+                mounted_skills = resolve_mounted_skills(
+                    deps.get_report_store().get_agent(agent_id)
+                )
+        except Exception:  # noqa: BLE001 — store 不可达 → 空集（dormant，审计 verdict 恒 ask）
+            mounted_skills = frozenset()
     return evaluate(
         get_agent_config_store(),
         capability,
         action,
         context_mode or _AUDIT_CONTEXT_MODE,
         agent_id=agent_id,
+        mounted_skills=mounted_skills,
     )
 
 

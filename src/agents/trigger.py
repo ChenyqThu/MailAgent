@@ -82,8 +82,8 @@ class Budget:
 
 
 # tool_policy_json v1 允许键（additive：S4 = allowed_tools；S5 ADR-004 §4.1 += grant_exec；
-# S6 W3 ADR-004 rev3.1 D6 += grant_web）。
-_TOOL_POLICY_KEYS = frozenset({"v", "allowed_tools", "grant_exec", "grant_web"})
+# S6 W3 ADR-004 rev3.1 D6 += grant_web + skills）。
+_TOOL_POLICY_KEYS = frozenset({"v", "allowed_tools", "grant_exec", "grant_web", "skills"})
 
 # grant_web 三态枚举（ADR-004 rev3.1 §3.1：off=headless 不注册 / gated=域名白名单免卡 /
 # open=全开放免卡）。非法态「web 关着却全开放」结构上不可表示。
@@ -98,11 +98,16 @@ class ToolPolicy:
     默认安全集（ADR-004 §5.1，对 ADR-003 D6「NULL=不收窄」的显式修订）；``()`` = owner 显式
     空集（verbatim 透传）。``grant_exec`` 仅字面 ``True`` 有效（投影仅当 True 才输出）；
     ``grant_web`` 仅字面 ``'gated'``/``'open'`` 有效（缺省 ``'off'``，投影仅非 off 才输出）。
+    ``skills``（S6 W3 rev3.1 §3.2/§5.1 —— per-agent skill 挂载列表，**收窄面**非 grants 键）：
+    ``None`` = 未配置 → 投影层落 ``DEFAULT_CUSTOM_AGENT_MOUNTED_SKILLS`` 默认挂载集；
+    ``()`` = owner 显式零挂载（verbatim，门控工具全缺席）。挂载词汇 strict-effect：未知/未装
+    skill 名存储宽容（parse 只验类型），效果为零。
     """
 
     allowed_tools: Optional[Tuple[str, ...]] = None
     grant_exec: bool = False
     grant_web: str = "off"
+    skills: Optional[Tuple[str, ...]] = None
 
 
 def _as_dict(raw: Union[str, dict, None]) -> Optional[dict]:
@@ -265,6 +270,8 @@ def parse_tool_policy(raw: Union[str, dict, None]) -> ToolPolicy:
     - ``grant_exec``：缺省 → False；必须 JSON boolean（``"yes"`` / ``1`` → 拒）
     - ``grant_web``：缺省 → ``'off'``；必须 ∈ ``('off','gated','open')`` 字面量
       （``True`` / ``1`` / ``"yes"`` → 拒，镜像 grant_exec 严格化）
+    - ``skills``：缺省/null → None（未配置 → 投影默认挂载集）；list[str]（滤空串）→ tuple
+      （显式 ``[]`` → ``()`` 零挂载）；其它类型 → 拒（``"email"`` 裸串 → 拒，镜像 allowed_tools）
 
     保存时权威（``validate_agent_config_patch`` 调用，坏形状 400）；读侧投影（spec 端点）自行
     try/except 落安全默认。Raises ``ToolPolicyValidationError``（``ValueError`` 子类）。
@@ -296,7 +303,16 @@ def parse_tool_policy(raw: Union[str, dict, None]) -> ToolPolicy:
         raise ToolPolicyValidationError(
             f"grant_web must be one of {list(_WEB_GRANT_VALUES)}"
         )
-    return ToolPolicy(allowed_tools=allowed, grant_exec=grant is True, grant_web=grant_web)
+    skills_raw = data.get("skills")
+    if skills_raw is None:
+        skills: Optional[Tuple[str, ...]] = None
+    elif isinstance(skills_raw, list) and all(isinstance(s, str) for s in skills_raw):
+        skills = tuple(s for s in skills_raw if s)
+    else:
+        raise ToolPolicyValidationError("skills must be a list of strings")
+    return ToolPolicy(
+        allowed_tools=allowed, grant_exec=grant is True, grant_web=grant_web, skills=skills
+    )
 
 
 def validate_agent_config_patch(patch: dict) -> None:
