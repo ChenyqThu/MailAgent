@@ -20,6 +20,7 @@ import { daemonRequest } from '../daemon_api'
 import { envelopeFromCli, type WriteEnvelope } from '../lib/envelope'
 import type {
   AgentRunHistoryItem,
+  AgentRunToolOptions,
   CustomAgentBudget,
   CustomAgentToolPolicy,
   CustomAgentTrigger,
@@ -241,10 +242,30 @@ export function registerReportHandlers(): void {
     async (
       _evt,
       agentId: unknown,
-      opts?: { cadence?: string }
+      opts?: { cadence?: string; type?: string }
     ): Promise<WriteEnvelope<ReportRunResult>> => {
       if (typeof agentId !== 'string' || !agentId) {
         return { ok: false, code: 'E_INVALID_ARG', message: 'agentId required' }
+      }
+      // S5：custom agent 的 run-now 是 enqueue 一次 headless run（async job → AgentRunWorker
+      // 消费），走 serve-api POST /report-agents/{id}/run 返 { jobId }，**不**走 report-only 的
+      // CLI 同步生成 fork。flag off → serve-api 404 → 转 error envelope（不静默成功）。
+      if (opts?.type === 'custom') {
+        try {
+          const res = await daemonRequest<{ jobId?: number }>(
+            'POST',
+            `/report-agents/${encodeURIComponent(agentId)}/run`,
+            { body: {} }
+          )
+          return {
+            ok: true,
+            data: { report_id: String(res.jobId ?? ''), status: 'generating', headline: '' }
+          }
+        } catch (err) {
+          const code = (err as { code?: string })?.code
+          const message = (err as { message?: string })?.message
+          return { ok: false, code: code ?? 'E_RUN_FAILED', message: message ?? 'run enqueue failed' }
+        }
       }
       const args = ['report', 'run', '--agent', agentId]
       if (opts?.cadence) args.push('--cadence', opts.cadence)
@@ -322,4 +343,16 @@ export function registerReportHandlers(): void {
       }
     }
   )
+
+  // ── report:toolOptions — S5 custom agent allowed_tools 可选清单（读，走 serve-api
+  //    GET /agent-runs/tool-options）。工具集 + 默认勾选由后端权威投影（前端不硬编码工具名）。
+  //    flag off / 端点未就绪 → catch 返空清单（守读优雅降级）。
+  ipcMain.handle('report:toolOptions', async (): Promise<AgentRunToolOptions> => {
+    try {
+      return await daemonRequest<AgentRunToolOptions>('GET', '/agent-runs/tool-options')
+    } catch (err) {
+      console.warn('[report:toolOptions] serve-api unreachable / flag off:', err)
+      return { tools: [], defaults: [] }
+    }
+  })
 }

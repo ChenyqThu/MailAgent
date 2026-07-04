@@ -3,7 +3,10 @@ import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { useMailApi } from '@shared/hooks/useMailApi'
+import { resolveApiBaseUrl } from '@shared/hooks/useLlmModels'
 import type {
+  AgentRunHistoryItem,
+  AgentRunToolOptions,
   ReportAgentConfig,
   ReportAgentCreateInput,
   ReportCadence,
@@ -49,20 +52,33 @@ export function useReportConfig(): { agents: ReportAgentConfig[]; isLoading: boo
 }
 
 export function useRunNow(): {
-  run: (agentId: string, opts?: { cadence?: ReportCadence }) => Promise<ReportRunResult>
+  run: (
+    agentId: string,
+    opts?: { cadence?: ReportCadence; type?: string }
+  ) => Promise<ReportRunResult>
   isRunning: boolean
 } {
   const api = useMailApi()
   const qc = useQueryClient()
   const mut = useMutation({
-    mutationFn: ({ agentId, cadence }: { agentId: string; cadence?: ReportCadence }) =>
-      api.report.runNow(agentId, cadence ? { cadence } : undefined),
+    mutationFn: ({
+      agentId,
+      cadence,
+      type
+    }: {
+      agentId: string
+      cadence?: ReportCadence
+      type?: string
+    }) => api.report.runNow(agentId, { cadence, type }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: LIST_KEY })
+      // S5：custom agent run-now enqueue 后刷新 run 历史（前缀匹配 ['agent-runs', ...]）。
+      void qc.invalidateQueries({ queryKey: ['agent-runs'] })
     }
   })
   return {
-    run: (agentId, opts) => mut.mutateAsync({ agentId, cadence: opts?.cadence }),
+    run: (agentId, opts) =>
+      mut.mutateAsync({ agentId, cadence: opts?.cadence, type: opts?.type }),
     isRunning: mut.isPending
   }
 }
@@ -145,6 +161,64 @@ export function useKosAvailable(): boolean {
     staleTime: Infinity
   })
   return q.data ?? false
+}
+
+/** S5 — /chat/config.customAgentsEnabled（MAILAGENT_CUSTOM_AGENTS_ENABLED，默认 OFF）。
+ *  镜像 fetchSkillInstallEnabled 先例：未配 / 不可达 → false（隐藏 custom 入口，字节级同现状）。 */
+async function fetchCustomAgentsEnabled(): Promise<boolean> {
+  try {
+    const resp = await fetch(`${resolveApiBaseUrl()}/chat/config`, { credentials: 'include' })
+    if (!resp.ok) return false
+    const body = (await resp.json()) as { data?: { customAgentsEnabled?: unknown } }
+    return body?.data?.customAgentsEnabled === true
+  } catch {
+    return false
+  }
+}
+
+export function useCustomAgentsEnabled(): boolean {
+  const q = useQuery({
+    queryKey: ['chat', 'config', 'customAgentsEnabled'],
+    queryFn: fetchCustomAgentsEnabled,
+    staleTime: 30_000,
+    retry: false
+  })
+  return q.data ?? false
+}
+
+/** S5 — 某 custom agent 的 run 历史（listRuns，读失败返 []）。state 由后端 derive_agent_run_state
+ *  单源投影，前端只穷举渲染不推导。agentId=null → 不发请求。 */
+export function useAgentRuns(
+  agentId: string | null,
+  limit = 20
+): { runs: AgentRunHistoryItem[]; isLoading: boolean; refetch: () => void } {
+  const api = useMailApi()
+  const q = useQuery({
+    queryKey: ['agent-runs', agentId ?? 'all', limit],
+    queryFn: () => api.report.listRuns({ agentId: agentId ?? undefined, limit }),
+    enabled: agentId != null
+  })
+  return { runs: q.data ?? [], isLoading: q.isLoading, refetch: () => void q.refetch() }
+}
+
+// 稳定空清单单例：q.data 未就绪时恒返同一引用，避免消费方 useEffect 依赖 options.defaults
+// 时因新数组引用每渲染都触发（→ 无限 setState 循环）。
+const EMPTY_TOOL_OPTIONS: AgentRunToolOptions = { tools: [], defaults: [] }
+
+/** S5 — custom agent allowed_tools 可选清单（后端权威投影，前端不硬编码工具名）。
+ *  enabled=false（flag off / 抽屉未开）→ 不发请求；失败返 EMPTY_TOOL_OPTIONS。 */
+export function useToolOptions(enabled: boolean): {
+  options: AgentRunToolOptions
+  isLoading: boolean
+} {
+  const api = useMailApi()
+  const q = useQuery({
+    queryKey: ['agent-runs', 'tool-options'],
+    queryFn: () => api.report.toolOptions(),
+    enabled,
+    staleTime: 60_000
+  })
+  return { options: q.data ?? EMPTY_TOOL_OPTIONS, isLoading: q.isLoading }
 }
 
 /** 窄屏（< 780px）→ 报告/会话用单栏 + 返回栈（移植自设计稿 useNarrow）。 */

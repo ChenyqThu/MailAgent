@@ -35,6 +35,7 @@ import type {
   NotionAgentConfig,
   NotionAgentDoctorCheck,
   AgentRunHistoryItem,
+  AgentRunToolOptions,
   NotionAgentListItem,
   ReportApi,
   ReportAgentConfig,
@@ -827,7 +828,10 @@ class ElectronReportApi implements ReportApi {
     )) as WriteEnvelope<ReportAgentConfig>
     return unwrap(env)
   }
-  async runNow(agentId: string, opts?: { cadence?: ReportCadence }): Promise<ReportRunResult> {
+  async runNow(
+    agentId: string,
+    opts?: { cadence?: ReportCadence; type?: string }
+  ): Promise<ReportRunResult> {
     const env = (await invoker()(
       'report:runNow',
       agentId,
@@ -851,6 +855,9 @@ class ElectronReportApi implements ReportApi {
   }
   async listRuns(opts?: { agentId?: string; limit?: number }): Promise<AgentRunHistoryItem[]> {
     return (await invoker()('report:listRuns', opts ?? {})) as AgentRunHistoryItem[]
+  }
+  async toolOptions(): Promise<AgentRunToolOptions> {
+    return (await invoker()('report:toolOptions')) as AgentRunToolOptions
   }
 }
 

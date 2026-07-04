@@ -2453,6 +2453,80 @@
       "promptLoadError": "分类 Prompt 加载失败（serve-api 未就绪？）",
       "envSaveError": "保存启用状态失败",
       "rowSaveError": "保存预处理配置失败"
+    },
+    "custom": {
+      "section": "完全自定义 Agent",
+      "sectionHint": "自定义触发（定时 / 邮件事件）、任务提示词、可用工具与预算，让 Agent 自动跑起来。",
+      "newTitle": "新建自定义 Agent",
+      "configTitle": "自定义 Agent · {title}",
+      "newTileTitle": "新建自定义 Agent",
+      "newTileHint": "定时或邮件事件触发的自主 Agent",
+      "enableHint": "启用后按下方触发条件自动运行（触发为「无」时不会自动跑）。",
+      "titleLabel": "名称",
+      "titlePlaceholder": "如 DMS 审批助手",
+      "promptLabel": "任务提示词",
+      "promptHint": "触发时注入的任务指令（告诉 Agent 要做什么）",
+      "promptPlaceholder": "描述这个 Agent 每次触发时要完成的任务",
+      "create": "创建",
+      "errTitleRequired": "请填写名称。",
+      "errCron5": "cron 必须是标准 5 段（分 时 日 月 周）。",
+      "errEmailPredicate": "邮件触发至少填一项：发件人 / 主题 / 文件夹。",
+      "errMaxSteps": "最大步数需在 1–{max} 之间。",
+      "errMaxRunSeconds": "单次运行秒数需在 1–{max} 之间。",
+      "errMaxRunsPerDay": "每日运行上限不能为负。",
+      "trigger": {
+        "label": "触发方式",
+        "hint": "决定 Agent 何时自动运行",
+        "kind": {
+          "none": "无（草稿）",
+          "cron": "定时",
+          "email_filter": "邮件事件"
+        },
+        "noneHint": "未配置触发条件：Agent 保存为草稿、不会自动运行（仍可在下方手动运行一次）。",
+        "cronHint": "标准 5 段 cron（分 时 日 月 周），如 0 9 * * 1-5 = 工作日 9 点。",
+        "tz": "时区",
+        "senderPlaceholder": "发件人正则（可留空），如 dms@corp\\.com",
+        "subjectPlaceholder": "主题正则（可留空），如 DMS.*审批",
+        "foldersPlaceholder": "文件夹（可留空，逗号分隔），如 收件箱, 审批",
+        "emailHint": "发件人 / 主题为正则；文件夹为逗号分隔的白名单。三项至少填一项。"
+      },
+      "tools": {
+        "label": "可用工具",
+        "hint": "Agent 运行时允许调用的工具（在矩阵地板内取交集）",
+        "unavailable": "无法加载工具清单（服务未就绪或功能未开启）；本次保存不会改动已有工具配置。",
+        "writeTag": "写操作工具（需人工审批）",
+        "writeBadge": "写"
+      },
+      "budget": {
+        "label": "运行预算",
+        "hint": "限制单次运行的规模与频率",
+        "maxSteps": "最大步数（≤ {max}）",
+        "maxRunsPerDay": "每日运行上限",
+        "maxRunSeconds": "单次运行秒数（≤ {max}）"
+      },
+      "card": {
+        "triggerCron": "定时：{cron}（{tz}）",
+        "triggerEmail": "邮件事件触发",
+        "triggerNone": "未配置触发（草稿）"
+      },
+      "runs": {
+        "section": "运行历史",
+        "runNow": "立即运行",
+        "loading": "加载中…",
+        "empty": "暂无运行记录。",
+        "pausedPendingHint": "运行已暂停、等待审批。请在灵动岛批准；若未开启灵动岛，此次运行将在超时后过期作废。",
+        "pausedExpiredHint": "审批已过期，此次运行未执行。",
+        "state": {
+          "queued": "排队中",
+          "running": "运行中",
+          "completed": "已完成",
+          "pausedPending": "等待审批",
+          "pausedExpired": "审批过期（未执行）",
+          "pausedApproved": "审批通过（已执行）",
+          "pausedRejected": "审批拒绝（未执行）",
+          "failed": "失败"
+        }
+      }
     }
   },
   "common": {

@@ -22,6 +22,7 @@
 
 import type {
   AgentRunHistoryItem,
+  AgentRunToolOptions,
   ReportApi,
   ReportAgentConfig,
   ReportAgentCreateInput,
@@ -766,10 +767,27 @@ export class HttpApi implements MailApi {
       this.req<ReportAgentConfig>('PUT', `/report-agents/${encodeURIComponent(agentId)}`, {
         body: patch
       }),
-    runNow: (agentId: string, opts?: { cadence?: ReportCadence }): Promise<ReportRunResult> =>
-      this.req<ReportRunResult>('POST', `/report-agents/${encodeURIComponent(agentId)}/run`, {
-        body: opts ?? {}
-      }),
+    runNow: async (
+      agentId: string,
+      opts?: { cadence?: ReportCadence; type?: string }
+    ): Promise<ReportRunResult> => {
+      if (opts?.type === 'custom') {
+        // custom agent：enqueue 一次 headless run → { jobId }；映射进 ReportRunResult
+        // （report_id=jobId）走统一 run-now 出口。调用方只需成功信号 + refetch 历史，
+        // 真实读态经 listRuns（derive_agent_run_state），此处 status 仅占位。
+        const res = await this.req<{ jobId?: number }>(
+          'POST',
+          `/report-agents/${encodeURIComponent(agentId)}/run`,
+          { body: {} }
+        )
+        return { report_id: String(res.jobId ?? ''), status: 'generating', headline: '' }
+      }
+      return this.req<ReportRunResult>(
+        'POST',
+        `/report-agents/${encodeURIComponent(agentId)}/run`,
+        { body: opts ?? {} }
+      )
+    },
     delete: async (reportId: string): Promise<void> => {
       await this.req('DELETE', `/reports/${encodeURIComponent(reportId)}`)
     },
@@ -799,6 +817,14 @@ export class HttpApi implements MailApi {
       } catch {
         // flag off → 404 / serve-api 不可达 → 空态（守 ReportApi「读失败返 []」契约）。
         return []
+      }
+    },
+    toolOptions: async (): Promise<AgentRunToolOptions> => {
+      try {
+        return await this.req<AgentRunToolOptions>('GET', '/agent-runs/tool-options')
+      } catch {
+        // flag off / 端点未就绪 → 空清单（守读优雅降级，不硬编码工具名）。
+        return { tools: [], defaults: [] }
       }
     }
   }

@@ -2453,6 +2453,80 @@
       "promptLoadError": "Failed to load classification prompt (serve-api not ready?)",
       "envSaveError": "Failed to save enable state",
       "rowSaveError": "Failed to save preprocessing config"
+    },
+    "custom": {
+      "section": "Custom Agents",
+      "sectionHint": "Define triggers (schedule / email events), a task prompt, allowed tools and budgets to let an agent run on its own.",
+      "newTitle": "New Custom Agent",
+      "configTitle": "Custom Agent · {title}",
+      "newTileTitle": "New Custom Agent",
+      "newTileHint": "An autonomous agent triggered on a schedule or email events",
+      "enableHint": "When enabled, runs automatically on the trigger below (won't run when trigger is None).",
+      "titleLabel": "Name",
+      "titlePlaceholder": "e.g. DMS approval helper",
+      "promptLabel": "Task prompt",
+      "promptHint": "Instructions injected on each trigger (what the agent should do)",
+      "promptPlaceholder": "Describe the task the agent should complete on each trigger",
+      "create": "Create",
+      "errTitleRequired": "Name is required.",
+      "errCron5": "Cron must be a standard 5-field expression (min hour dom mon dow).",
+      "errEmailPredicate": "Email trigger needs at least one of: sender / subject / folders.",
+      "errMaxSteps": "Max steps must be between 1 and {max}.",
+      "errMaxRunSeconds": "Max run seconds must be between 1 and {max}.",
+      "errMaxRunsPerDay": "Max runs per day cannot be negative.",
+      "trigger": {
+        "label": "Trigger",
+        "hint": "Decides when the agent runs automatically",
+        "kind": {
+          "none": "None (draft)",
+          "cron": "Schedule",
+          "email_filter": "Email event"
+        },
+        "noneHint": "No trigger configured: the agent is saved as a draft and won't run automatically (you can still run it once manually below).",
+        "cronHint": "Standard 5-field cron (min hour dom mon dow), e.g. 0 9 * * 1-5 = weekdays at 9am.",
+        "tz": "Timezone",
+        "senderPlaceholder": "Sender regex (optional), e.g. dms@corp\\.com",
+        "subjectPlaceholder": "Subject regex (optional), e.g. DMS.*approval",
+        "foldersPlaceholder": "Folders (optional, comma-separated), e.g. Inbox, Approvals",
+        "emailHint": "Sender / subject are regex; folders is a comma-separated allowlist. Fill at least one."
+      },
+      "tools": {
+        "label": "Allowed tools",
+        "hint": "Tools the agent may call at runtime (intersected within the matrix floor)",
+        "unavailable": "Tool list unavailable (service not ready or feature off); saving won't change the existing tool config.",
+        "writeTag": "Write tool (requires approval)",
+        "writeBadge": "write"
+      },
+      "budget": {
+        "label": "Run budget",
+        "hint": "Caps the size and frequency of each run",
+        "maxSteps": "Max steps (≤ {max})",
+        "maxRunsPerDay": "Max runs per day",
+        "maxRunSeconds": "Max run seconds (≤ {max})"
+      },
+      "card": {
+        "triggerCron": "Schedule: {cron} ({tz})",
+        "triggerEmail": "Email event trigger",
+        "triggerNone": "No trigger configured (draft)"
+      },
+      "runs": {
+        "section": "Run history",
+        "runNow": "Run now",
+        "loading": "Loading…",
+        "empty": "No runs yet.",
+        "pausedPendingHint": "Run paused, waiting for approval. Approve it in the Dynamic Island; if the island is off, this run will expire and be discarded.",
+        "pausedExpiredHint": "Approval expired; this run was not executed.",
+        "state": {
+          "queued": "Queued",
+          "running": "Running",
+          "completed": "Completed",
+          "pausedPending": "Awaiting approval",
+          "pausedExpired": "Approval expired (not run)",
+          "pausedApproved": "Approved (executed)",
+          "pausedRejected": "Rejected (not run)",
+          "failed": "Failed"
+        }
+      }
     }
   },
   "common": {

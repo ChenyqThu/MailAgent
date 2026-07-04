@@ -7,8 +7,11 @@ import { useTranslation } from 'react-i18next'
 import type { ReportAgentConfig, ReportCadence, ReportConfigPatch } from '@shared/api/types'
 import { DEFAULT_SEARCH_AGENT_PROMPT } from '@shared/assistant/searchAgentClient'
 import { CadencePill, ReportIcon, StatusBadge, Switch } from './primitives'
+import { CustomAgentDrawer, RunStateBadge } from './CustomAgentDrawer'
 import {
+  useAgentRuns,
   useCreateAgent,
+  useCustomAgentsEnabled,
   useDeleteAgent,
   useKosAvailable,
   useReportConfig,
@@ -383,24 +386,153 @@ function AgentCard({
   )
 }
 
-// 「Custom Agent」入口 —— 完全自定义 Agent，待上线占位（不可点）。原 F4b 把这里
-// 改成了可点的「新建搜索 Agent」按钮；按产品要求退回 coming-soon: 搜索 Agent 只用
-// 内置一个（用户编辑既有即可，不再新建），此位保留给将来的完全自定义 Agent。
-function NewAgentTile(): React.ReactElement {
+// 「Custom Agent」入口。S5：`MAILAGENT_CUSTOM_AGENTS_ENABLED` 开启（enabled=true）→ 可点
+// 开新建 CustomAgentDrawer；flag off / 缺失 → 保持 coming-soon 禁用占位（字节级同现状文案，
+// 只在 enabled 分支加交互，disabled 分支不变）。
+function NewAgentTile({
+  enabled,
+  onClick
+}: {
+  enabled: boolean
+  onClick: () => void
+}): React.ReactElement {
   const { t } = useTranslation()
+  if (!enabled) {
+    return (
+      <div
+        className="flex items-center"
+        aria-disabled="true"
+        style={{
+          width: '100%',
+          borderRadius: 14,
+          border: '1px dashed rgb(var(--ink-border))',
+          padding: '22px 20px',
+          gap: 13,
+          cursor: 'default',
+          background: 'transparent',
+          opacity: 0.6
+        }}
+      >
+        <span
+          style={{
+            width: 42,
+            height: 42,
+            borderRadius: 11,
+            display: 'grid',
+            placeItems: 'center',
+            flexShrink: 0,
+            background: 'rgb(var(--ink-2) / 0.6)',
+            color: 'rgb(var(--ink-fg-3))'
+          }}
+        >
+          <ReportIcon name="plus" size={20} />
+        </span>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 14, fontWeight: 500, color: 'rgb(var(--ink-fg-2))' }}>
+            {t('agents.search.customAgentTitle')}
+          </div>
+          <div style={{ fontSize: 12, color: 'rgb(var(--ink-fg-3))', marginTop: 2 }}>
+            {t('agents.search.customAgentHint')}
+          </div>
+        </div>
+      </div>
+    )
+  }
   return (
-    <div
+    <button
+      type="button"
+      onClick={onClick}
       className="flex items-center"
-      aria-disabled="true"
       style={{
         width: '100%',
+        textAlign: 'left',
         borderRadius: 14,
-        border: '1px dashed rgb(var(--ink-border))',
+        border: '1px dashed rgb(var(--c-accent) / 0.55)',
         padding: '22px 20px',
         gap: 13,
-        cursor: 'default',
+        cursor: 'pointer',
         background: 'transparent',
-        opacity: 0.6
+        fontFamily: 'inherit',
+        transition: 'transform 120ms cubic-bezier(0.4,0,0.2,1)'
+      }}
+      {...pressHandlers()}
+    >
+      <span
+        style={{
+          width: 42,
+          height: 42,
+          borderRadius: 11,
+          display: 'grid',
+          placeItems: 'center',
+          flexShrink: 0,
+          background: 'rgb(var(--c-accent) / 0.14)',
+          border: '1px solid rgb(var(--c-accent) / 0.30)',
+          color: 'rgb(var(--c-accent))'
+        }}
+      >
+        <ReportIcon name="plus" size={20} />
+      </span>
+      <div style={{ flex: 1 }}>
+        <div style={{ fontSize: 14, fontWeight: 500, color: 'rgb(var(--ink-fg))' }}>
+          {t('agents.custom.newTileTitle')}
+        </div>
+        <div style={{ fontSize: 12, color: 'rgb(var(--ink-fg-3))', marginTop: 2 }}>
+          {t('agents.custom.newTileHint')}
+        </div>
+      </div>
+    </button>
+  )
+}
+
+// ─── Custom Agent 卡（type='custom'）────────────────────────────────────────
+// 精简卡：title / enabled / trigger 摘要 / 最近 run 状态徽标；点整卡开 CustomAgentDrawer。
+function CustomAgentCard({
+  cfg,
+  onConfig
+}: {
+  cfg: ReportAgentConfig
+  onConfig: () => void
+}): React.ReactElement {
+  const { t } = useTranslation()
+  const { save } = useSetConfig()
+  // 最近一次 run 的状态徽标（listRuns 读失败/无 run → 不显徽标）。
+  const { runs } = useAgentRuns(cfg.id)
+  const lastRun = runs[0] ?? null
+  const toggle = (v: boolean): void => {
+    void save(cfg.id, { enabled: v })
+  }
+
+  const triggerSummary = ((): string => {
+    const trig = cfg.trigger
+    if (trig?.kind === 'cron') {
+      return t('agents.custom.card.triggerCron', { cron: trig.cron, tz: trig.timezone || 'UTC' })
+    }
+    if (trig?.kind === 'email_filter') return t('agents.custom.card.triggerEmail')
+    return t('agents.custom.card.triggerNone')
+  })()
+
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={onConfig}
+      onKeyDown={(e) => {
+        if (e.target !== e.currentTarget) return
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          onConfig()
+        }
+      }}
+      className="flex items-center"
+      style={{
+        width: '100%',
+        textAlign: 'left',
+        gap: 13,
+        padding: '16px 20px',
+        borderRadius: 14,
+        cursor: 'pointer',
+        background: 'rgb(var(--ink-2) / 0.55)',
+        border: '1px solid rgb(var(--ink-border))'
       }}
     >
       <span
@@ -411,19 +543,35 @@ function NewAgentTile(): React.ReactElement {
           display: 'grid',
           placeItems: 'center',
           flexShrink: 0,
-          background: 'rgb(var(--ink-2) / 0.6)',
-          color: 'rgb(var(--ink-fg-3))'
+          background: 'rgb(var(--c-accent) / 0.14)',
+          border: '1px solid rgb(var(--c-accent) / 0.30)',
+          color: 'rgb(var(--c-accent))'
         }}
       >
-        <ReportIcon name="plus" size={20} />
+        <ReportIcon name="cog" size={20} />
       </span>
-      <div style={{ flex: 1 }}>
-        <div style={{ fontSize: 14, fontWeight: 500, color: 'rgb(var(--ink-fg-2))' }}>
-          {t('agents.search.customAgentTitle')}
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div className="flex items-center" style={{ gap: 9 }}>
+          <h3
+            style={{
+              fontSize: 15.5,
+              fontWeight: 600,
+              color: 'rgb(var(--ink-fg))',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap'
+            }}
+          >
+            {cfg.title}
+          </h3>
+          {lastRun && <RunStateBadge state={lastRun.state} />}
         </div>
-        <div style={{ fontSize: 12, color: 'rgb(var(--ink-fg-3))', marginTop: 2 }}>
-          {t('agents.search.customAgentHint')}
+        <div style={{ fontSize: 12.5, color: 'rgb(var(--ink-fg-3))', marginTop: 3 }}>
+          {triggerSummary}
         </div>
+      </div>
+      <div onClick={(e) => e.stopPropagation()}>
+        <Switch on={cfg.enabled} onChange={toggle} />
       </div>
     </div>
   )
@@ -2322,6 +2470,12 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
   const [searchDrawer, setSearchDrawer] = useState<
     { mode: 'edit'; id: string } | { mode: 'create' } | null
   >(null)
+  // S5 — custom agent 配置抽屉：编辑既有(id) | 新建(create) | 关闭(null)。
+  const [customDrawer, setCustomDrawer] = useState<
+    { mode: 'edit'; id: string } | { mode: 'create' } | null
+  >(null)
+  // S5 — MAILAGENT_CUSTOM_AGENTS_ENABLED（/chat/config 热读）；控 NewAgentTile 可点性。
+  const customAgentsEnabled = useCustomAgentsEnabled()
   // v27 — AI 邮件预处理配置抽屉开合（后端播种单行，只编辑、无新建）。
   const [preprocessOpen, setPreprocessOpen] = useState(false)
   // 预处理卡的启用态绑全局 env LLM_AGENT_ENABLED（响应式读，env 变即刷新徽标）。
@@ -2363,6 +2517,12 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
   )
   // v27 — AI 邮件预处理 agent（type='preprocess'，后端播种单行，正常仅 1 张卡）。
   const preprocessAgents = useMemo(() => agents.filter((a) => a.type === 'preprocess'), [agents])
+  // S5 — 完全自定义 agent（type='custom'），按 id 稳定排序。此前无此 filter → custom 行被
+  // 静默丢弃；补上后 custom 卡片可见。
+  const customAgents = useMemo(
+    () => agents.filter((a) => a.type === 'custom').sort((a, b) => a.id.localeCompare(b.id)),
+    [agents]
+  )
   const configAgent = useMemo(
     () => reportAgents.find((a) => a.id === configId) ?? null,
     [reportAgents, configId]
@@ -2374,10 +2534,18 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
         : null,
     [searchAgents, searchDrawer]
   )
+  const customConfigAgent = useMemo(
+    () =>
+      customDrawer?.mode === 'edit'
+        ? (customAgents.find((a) => a.id === customDrawer.id) ?? null)
+        : null,
+    [customAgents, customDrawer]
+  )
   // 预处理只有一行（后端播种）；抽屉编辑它。
   const preprocessAgent = preprocessAgents[0] ?? null
   // drawer 任一打开 → 锁列表滚动。
-  const anyDrawerOpen = configAgent !== null || searchDrawer !== null || preprocessOpen
+  const anyDrawerOpen =
+    configAgent !== null || searchDrawer !== null || customDrawer !== null || preprocessOpen
 
   // 三层各司其职：①外层 relative 不滚 → drawer 钉这层（不随列表滚）②滚动层 absolute inset:0
   // 承接滚动、**block 流非 flex**（子项自然高度、超出滚动，绝不压缩卡片）③内容层 flex column
@@ -2516,8 +2684,41 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
             </div>
           )}
 
-          {/* Custom Agent 待上线占位（不可点）；新建搜索 Agent 入口已按产品要求退回。 */}
-          <NewAgentTile />
+          {/* ─── 完全自定义 Agents 区（S5）──────────────────────────────
+              flag on 或已有 custom 行时展开 section header + 卡片；flag off 且无 custom 行
+              时只留下方 NewAgentTile 禁用占位（字节级同现状）。 */}
+          {(customAgentsEnabled || customAgents.length > 0) && (
+            <>
+              <div style={{ marginTop: 8 }}>
+                <h2
+                  style={{
+                    fontSize: 16,
+                    fontWeight: 600,
+                    color: 'rgb(var(--ink-fg))',
+                    letterSpacing: '-0.01em'
+                  }}
+                >
+                  {t('agents.custom.section')}
+                </h2>
+                <p style={{ fontSize: 13, color: 'rgb(var(--ink-fg-2))', marginTop: 4 }}>
+                  {t('agents.custom.sectionHint')}
+                </p>
+              </div>
+              {customAgents.map((cfg) => (
+                <CustomAgentCard
+                  key={cfg.id}
+                  cfg={cfg}
+                  onConfig={() => setCustomDrawer({ mode: 'edit', id: cfg.id })}
+                />
+              ))}
+            </>
+          )}
+
+          {/* Custom Agent 新建入口：flag on → 可点开抽屉；off → coming-soon 禁用占位。 */}
+          <NewAgentTile
+            enabled={customAgentsEnabled}
+            onClick={() => setCustomDrawer({ mode: 'create' })}
+          />
         </div>
       </div>
       {/* 始终挂载，由 open 驱动进/退场动画（退场播完才卸载，见 useExitAnimation）。 */}
@@ -2531,6 +2732,12 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
         open={searchDrawer !== null}
         create={searchDrawer?.mode === 'create'}
         onClose={() => setSearchDrawer(null)}
+      />
+      <CustomAgentDrawer
+        cfg={customConfigAgent}
+        open={customDrawer !== null}
+        create={customDrawer?.mode === 'create'}
+        onClose={() => setCustomDrawer(null)}
       />
       <PreprocessConfigDrawer
         cfg={preprocessAgent}

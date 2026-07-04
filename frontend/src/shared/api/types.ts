@@ -2432,6 +2432,21 @@ export interface ReportRunResult {
   error?: string | null
 }
 
+/** S5 — custom agent allowed_tools 单项（GET /api/agent-runs/tool-options）。
+ *  class 决定默认勾选与危险度标注：read = 默认安全集；domain_write = 需显式勾选。 */
+export interface AgentRunToolOption {
+  name: string
+  class: 'read' | 'domain_write'
+}
+
+/** S5 — custom agent 可选工具清单（GET /api/agent-runs/tool-options）。
+ *  tools = 全部可选工具（按 class 标注）；defaults = 新建时默认勾选（后端权威，
+ *  前端不硬编码工具名清单）。端点 404 / 失败 → { tools: [], defaults: [] }。 */
+export interface AgentRunToolOptions {
+  tools: AgentRunToolOption[]
+  defaults: string[]
+}
+
 export interface ReportApi {
   /** 报告列表（不含 blocks，按 report_date 倒序）。失败返 []。 */
   list(opts?: {
@@ -2445,8 +2460,13 @@ export interface ReportApi {
   getConfig(): Promise<ReportAgentConfig[]>
   /** 部分更新 agent 配置（写, needs auth）。返回更新后的解析配置。 */
   setConfig(agentId: string, patch: ReportConfigPatch): Promise<ReportAgentConfig>
-  /** 立即生成一份报告（runNow, 写, needs auth, 跑 LLM）。 */
-  runNow(agentId: string, opts?: { cadence?: ReportCadence }): Promise<ReportRunResult>
+  /** 立即生成一份报告（runNow, 写, needs auth, 跑 LLM）。
+   *  S5：type='custom' 时改为 enqueue 一次 headless run（async job，返回 jobId 映射进
+   *  report_id；report/search 仍走同步生成路径）。 */
+  runNow(
+    agentId: string,
+    opts?: { cadence?: ReportCadence; type?: string }
+  ): Promise<ReportRunResult>
   /** 删除一份报告（写, needs auth）。 */
   delete(reportId: string): Promise<void>
   /** 新建一行 agent 配置（写, needs auth；type='search'|'report'|'preprocess'|'custom'）。返回解析后的配置。 */
@@ -2456,6 +2476,9 @@ export interface ReportApi {
   /** S5 — custom agent run 历史（读）。GET /api/agent-runs；flag off / 失败返 []（守读优雅降级）。
    *  state 由后端 derive_agent_run_state 单源投影，前端不自行推导。 */
   listRuns(opts?: { agentId?: string; limit?: number }): Promise<AgentRunHistoryItem[]>
+  /** S5 — custom agent allowed_tools 可选清单（读）。GET /api/agent-runs/tool-options；
+   *  flag off / 失败返 { tools: [], defaults: [] }（守读优雅降级，不硬编码工具名）。 */
+  toolOptions(): Promise<AgentRunToolOptions>
 }
 
 export interface MailApi {
