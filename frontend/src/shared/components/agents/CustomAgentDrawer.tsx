@@ -1051,6 +1051,9 @@ export function CustomAgentDrawer({
   const [maxRunSeconds, setMaxRunSeconds] = useState(DEFAULT_MAX_RUN_SECONDS)
   const [err, setErr] = useState<string | null>(null)
   const [confirming, setConfirming] = useState(false)
+  // 两段式 create 的第一段成果（codex S5 复核 P2）：createAgent 成功即记 id——第二段
+  // setConfig 失败后原地重试直接走 setConfig，不再重复 create（同 id 撞 409）。打开抽屉重置。
+  const [createdId, setCreatedId] = useState<string | null>(null)
 
   // 打开时按 cfg（编辑）/ 空态（新建）预填。同 SearchConfigDrawer 既有豁免理由：模态打开按
   // cfg/空态预填多字段表单，React Compiler 迁移债，effect 合理保留。
@@ -1059,6 +1062,7 @@ export function CustomAgentDrawer({
     if (!open) return
     setErr(null)
     setConfirming(false)
+    setCreatedId(null)
     if (create || !cfg) {
       setEnabled(false)
       setTitle('')
@@ -1218,18 +1222,34 @@ export function CustomAgentDrawer({
     }
     const toolPolicy: CustomAgentToolPolicy = { v: 1, allowed_tools: selectedTools }
     if (create) {
-      const id = slugifyTitle(title)
+      const id = createdId ?? slugifyTitle(title)
       // 两段式：先建草稿行（type='custom'，无 trigger），再 setConfig 补 trigger/tool_policy/budget。
       // 新建恒发显式集合（默认勾 defaults），维持安全方向。
-      void createAgent({
-        id,
-        type: 'custom',
-        title: title.trim() || id,
-        enabled,
-        model: model || null,
-        prompt: prompt.trim() || null
-      })
-        .then(() => save(id, { trigger, tool_policy: toolPolicy, budget }))
+      // 第二段失败后的重试（createdId 已记）跳过 create 直接 setConfig，patch 带上
+      // title/enabled/model/prompt 覆盖重试间隙的编辑（首次成功路径 = 同值幂等覆写）。
+      const ensureCreated: Promise<unknown> =
+        createdId !== null
+          ? Promise.resolve()
+          : createAgent({
+              id,
+              type: 'custom',
+              title: title.trim() || id,
+              enabled,
+              model: model || null,
+              prompt: prompt.trim() || null
+            }).then(() => setCreatedId(id))
+      void ensureCreated
+        .then(() =>
+          save(id, {
+            title: title.trim() || id,
+            enabled,
+            model,
+            prompt: prompt.trim() || null,
+            trigger,
+            tool_policy: toolPolicy,
+            budget
+          })
+        )
         .then(onClose)
         .catch((e: unknown) => setErr(errText(e)))
       return

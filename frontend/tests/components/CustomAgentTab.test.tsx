@@ -272,6 +272,31 @@ describe('CustomAgentDrawer — 新建（两段式）', () => {
     expect(await screen.findByText(/E_INVALID_ARG: invalid cron expression/)).toBeTruthy()
     expect(onClose).not.toHaveBeenCalled()
   })
+
+  test('第二段失败后重试：不重复 createAgent（防 409），直接 setConfig 带全字段', async () => {
+    // codex S5 复核 open P2：createAgent 成功 + setConfig 失败 → 原地重试曾重复 create 同 id 撞 409。
+    mockCreateAgent.mockResolvedValue(makeCustomCfg())
+    const err = new Error('invalid cron expression')
+    ;(err as { code?: string }).code = 'E_INVALID_ARG'
+    mockSetConfig.mockRejectedValueOnce(err).mockResolvedValueOnce(makeCustomCfg())
+    const onClose = vi.fn()
+    renderUi(<CustomAgentDrawer cfg={null} open create onClose={onClose} />)
+    fireEvent.change(screen.getByPlaceholderText('如 DMS 审批助手'), { target: { value: '巡检' } })
+    fireEvent.click(screen.getByText('定时'))
+    fireEvent.click(screen.getByText('创建'))
+    expect(await screen.findByText(/E_INVALID_ARG/)).toBeTruthy()
+    // 重试间隙用户改 title → 重试 patch 应带上（覆盖草稿行）
+    fireEvent.change(screen.getByPlaceholderText('如 DMS 审批助手'), { target: { value: '巡检v2' } })
+    fireEvent.click(screen.getByText('创建'))
+    await vi.waitFor(() => expect(mockSetConfig).toHaveBeenCalledTimes(2))
+    expect(mockCreateAgent).toHaveBeenCalledTimes(1)
+    // 重试仍用首次 create 落库的 id（不因 title 变化重新 slugify）
+    expect(mockSetConfig.mock.calls[1][0]).toBe(mockSetConfig.mock.calls[0][0])
+    const retryPatch = mockSetConfig.mock.calls[1][1]
+    expect(retryPatch.title).toBe('巡检v2')
+    expect(retryPatch.trigger.kind).toBe('cron')
+    await vi.waitFor(() => expect(onClose).toHaveBeenCalled())
+  })
 })
 
 describe('CustomAgentDrawer — P2 tool_policy 按需发送（NULL 行不被静默清空）', () => {
