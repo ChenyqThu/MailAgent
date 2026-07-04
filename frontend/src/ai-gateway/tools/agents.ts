@@ -19,11 +19,14 @@
 //    is approve/reject only; the WHOLE spec is pinned (a raw-changed input of any tier →
 //    E_APPROVAL_HASH_MISMATCH — an approved agent cannot be retargeted or its config swapped on replay).
 //
-// 🔴 Field ALLOWLIST (ADR-004 D5 / Q7 hard constraint): the create/update schemas expose ONLY
-//    title/prompt/model/enabled/trigger/allowed_tools/budget and are `.strict()` — grant_exec and any
-//    policy/rules field structurally cannot enter. The wire body is assembled field-by-field from that
-//    allowlist, so even a bypassed schema could not smuggle a self-authorization field to the REST
-//    layer. "The model can build an agent but can NEVER grant it an auto-approve/exec privilege."
+// 🔴 Field ALLOWLIST (ADR-004 rev3.1 §7, owner Q4 — revises rev1 D5/Q7): the create/update schemas
+//    are `.strict()` over title/prompt/model/enabled/trigger/allowed_tools/budget PLUS the grant
+//    vocabulary grant_exec / grant_web / skills. The model may PROPOSE grants — the defense moved
+//    from field-level deny to the always-human approval card, whose permission summary renders
+//    exec / web-open red (update additionally diffs before/after against the SERVER's current row).
+//    tool_policy / policy_rules still structurally cannot enter (wire body is assembled
+//    field-by-field), and rule creation (the actual card-free whitelist) stays owner-only: a grant
+//    only buys tool REGISTRATION — gated web / exec still need owner-built rules to skip cards.
 //
 // CORE (skill_gating.CORE_UNGATED_GATEWAY_TOOLS): the on/off authority is the flag, never skill gating.
 
@@ -40,6 +43,7 @@ import {
 } from './types'
 import type { AgentContextMode } from './policy'
 import type {
+  CustomAgentToolPolicy,
   CustomAgentTrigger,
   ReportAgentConfig,
   ReportConfigPatch,
@@ -92,7 +96,9 @@ function triggerSummary(trigger: CustomAgentTrigger | null | undefined): string 
   return `email_filter ${preds.join(' ') || '(no predicates)'}`
 }
 
-/** Project one ReportAgentConfig into the model-facing spec summary (custom-agent fields only). */
+/** Project one ReportAgentConfig into the model-facing spec summary (custom-agent fields only).
+ *  Grants/skills are projected read-side too (rev3.1 §7) so an update proposal starts from the
+ *  agent's REAL current permissions — the approval card's before-diff is still server-fetched. */
 function specSummary(agent: ReportAgentConfig): Record<string, unknown> {
   return {
     id: agent.id,
@@ -105,16 +111,16 @@ function specSummary(agent: ReportAgentConfig): Record<string, unknown> {
     trigger: agent.trigger ?? null,
     trigger_summary: triggerSummary(agent.trigger),
     allowed_tools: agent.tool_policy?.allowed_tools ?? null,
+    grant_exec: agent.tool_policy?.grant_exec === true,
+    grant_web: agent.tool_policy?.grant_web ?? 'off',
+    skills: agent.tool_policy?.skills ?? null,
     budget: agent.budget ?? null,
     updated_at: isoOrNull(agent.updated_at)
   }
 }
 
-/** Assemble the friendly REST patch body from the ALLOWLISTED tool input (create/update share this).
- *  allowed_tools → tool_policy {v:1, allowed_tools}; trigger/budget gain the `v:1` version bit the
- *  backend schemas carry (the model omits it). grant_exec / any policy field CANNOT appear here —
- *  the source object simply has no such field (structural allowlist, `.strict()` on the schema). */
-function toConfigPatch(input: {
+/** The friendly-input shape create/update share (the ALLOWLISTED fields, rev3.1 §7). */
+interface ConfigPatchInput {
   title?: string
   prompt?: string | null
   model?: string
@@ -122,7 +128,33 @@ function toConfigPatch(input: {
   trigger?: CustomAgentTriggerInput | null
   allowed_tools?: string[]
   budget?: { max_steps?: number; max_runs_per_day?: number; max_run_seconds?: number } | null
-}): ReportConfigPatch {
+  grant_exec?: boolean
+  grant_web?: 'off' | 'gated' | 'open'
+  skills?: string[]
+}
+
+/** True when the input touches any tool_policy sub-field (they live in ONE server-side JSON blob,
+ *  so update must merge the untouched ones — see the merge base in custom_agent_update). */
+function touchesToolPolicy(input: ConfigPatchInput): boolean {
+  return (
+    input.allowed_tools !== undefined ||
+    input.grant_exec !== undefined ||
+    input.grant_web !== undefined ||
+    input.skills !== undefined
+  )
+}
+
+/** Assemble the friendly REST patch body from the ALLOWLISTED tool input (create/update share this).
+ *  allowed_tools/grant_exec/grant_web/skills → tool_policy {v:1, ...}; trigger/budget gain the `v:1`
+ *  version bit the backend schemas carry (the model omits it). Raw tool_policy / policy fields
+ *  CANNOT appear — the source object has no such field (structural allowlist, `.strict()` schema).
+ *  `currentToolPolicy` (update only) is the SERVER row's policy: tool_policy_json is one blob, so a
+ *  partial grants patch carries the untouched sub-fields forward instead of wiping them. Only the
+ *  four known sub-fields are carried (never a verbatim blob passthrough). */
+function toConfigPatch(
+  input: ConfigPatchInput,
+  currentToolPolicy?: CustomAgentToolPolicy | null
+): ReportConfigPatch {
   const patch: ReportConfigPatch = {}
   if (input.title !== undefined) patch.title = input.title
   if (input.prompt !== undefined) patch.prompt = input.prompt
@@ -131,8 +163,18 @@ function toConfigPatch(input: {
   if (input.trigger !== undefined) {
     patch.trigger = input.trigger === null ? null : { ...input.trigger, v: 1 }
   }
-  if (input.allowed_tools !== undefined) {
-    patch.tool_policy = { v: 1, allowed_tools: input.allowed_tools }
+  if (touchesToolPolicy(input)) {
+    const tp: CustomAgentToolPolicy = { v: 1 }
+    const cur = currentToolPolicy ?? undefined
+    if (cur?.allowed_tools !== undefined) tp.allowed_tools = cur.allowed_tools
+    if (cur?.grant_exec !== undefined) tp.grant_exec = cur.grant_exec
+    if (cur?.grant_web !== undefined) tp.grant_web = cur.grant_web
+    if (cur?.skills !== undefined) tp.skills = cur.skills
+    if (input.allowed_tools !== undefined) tp.allowed_tools = input.allowed_tools
+    if (input.grant_exec !== undefined) tp.grant_exec = input.grant_exec
+    if (input.grant_web !== undefined) tp.grant_web = input.grant_web
+    if (input.skills !== undefined) tp.skills = input.skills
+    patch.tool_policy = tp
   }
   if (input.budget !== undefined) {
     patch.budget = input.budget === null ? null : { ...input.budget, v: 1 }
@@ -262,11 +304,14 @@ export function createCustomAgentTools(
       'that steers it, optionally a model, whether it is enabled, a trigger (either {kind:"cron", ' +
       'cron:"<5-field cron>", timezone?} for a schedule OR {kind:"email_filter", subject_pattern?, ' +
       'sender_pattern?, folders?} to fire on matching mail — omit for a disabled draft), the list of ' +
-      'tools it may use (allowed_tools), and a budget ({max_steps?, max_runs_per_day?, ' +
-      'max_run_seconds?}). The user reviews the full spec on a confirmation card and approves or ' +
-      'rejects it; nothing is created without approval. You can propose the tools an agent may use, ' +
-      'but you CANNOT grant it any auto-approve / exec privilege — that is an owner-only Settings ' +
-      'action. A bad cron / regex is rejected by a server-side validator. Edit tier — always asks.',
+      'tools it may use (allowed_tools), a budget ({max_steps?, max_runs_per_day?, ' +
+      'max_run_seconds?}), and optionally the permissions it needs: grant_exec (local command ' +
+      'execution), grant_web ("off" | "gated" domain-whitelist | "open" any URL — high risk), and ' +
+      'skills (the skill sets mounted for it). The user reviews the full spec on a confirmation ' +
+      'card whose permission summary highlights exec / open-web in red; nothing is created without ' +
+      'approval. Grants only register tools — card-free whitelist RULES remain an owner-only ' +
+      'Settings action you cannot perform. A bad cron / regex is rejected by a server-side ' +
+      'validator. Edit tier — always asks.',
     inputSchema: customAgentCreateSchema,
     risk: 'edit',
     run: async (input: CustomAgentCreateInput, { userEdited, signal }) => {
@@ -282,21 +327,51 @@ export function createCustomAgentTools(
   })
 
   // custom_agent_update — EDIT-tier write. Propose changes to an existing custom agent (partial
-  // patch). Always asks; the changed spec is shown on the card.
+  // patch). Always asks; the approval card diffs grant/skill changes against the SERVER's current
+  // row (never the model's claim of "before").
   const custom_agent_update = makeWrite({
     name: 'custom_agent_update',
     description:
       'Propose changes to an EXISTING custom agent (partial — only the fields you pass change). ' +
       'agent_id identifies it (from custom_agent_list). You may change title, prompt, model, ' +
-      'enabled, trigger, allowed_tools, or budget — same shapes as custom_agent_create. Pass ' +
-      'trigger:null to disable the agent (clear its trigger). As with create, you CANNOT grant an ' +
-      'auto-approve / exec privilege here. The user reviews and approves the change; a bad cron / ' +
-      'regex is rejected server-side. Edit tier — always asks.',
+      'enabled, trigger, allowed_tools, budget, or its permissions (grant_exec / grant_web / ' +
+      'skills) — same shapes as custom_agent_create. Pass trigger:null to disable the agent ' +
+      '(clear its trigger). A permission change is shown to the user as a before/after diff read ' +
+      'from the server (escalations highlighted red); card-free whitelist RULES remain owner-only. ' +
+      'The user reviews and approves the change; a bad cron / regex is rejected server-side. ' +
+      'Edit tier — always asks.',
     inputSchema: customAgentUpdateSchema,
     risk: 'edit',
     run: async (input: CustomAgentUpdateInput, { userEdited, signal }) => {
       if (input.agent_id.trim().length === 0) invalidArg('agent_id required (non-empty)')
-      const patch = toConfigPatch(input)
+      // tool_policy_json is ONE server-side blob: a patch touching any of its sub-fields must
+      // merge the current row's untouched ones (re-read at execute time, post-approval) — else
+      // `{grant_web:'open'}` alone would silently wipe allowed_tools/grant_exec/skills.
+      // 🔴 fail-closed: a merge-base read failure (missing row OR a transient backend error)
+      // ABORTS the update — proceeding with an empty base would reset the untouched sub-fields
+      // to the WIDER defaults (owner-narrowed allowed_tools / explicit skills:[] fall back to
+      // the default sets) and execute something other than the before→after the owner approved.
+      let currentToolPolicy: CustomAgentToolPolicy | null = null
+      if (touchesToolPolicy(input)) {
+        let current: ReportAgentConfig | null
+        try {
+          current = await domain.getReportAgent(input.agent_id, signal)
+        } catch {
+          // transient backend error (getReportAgent already maps E_NOT_FOUND to null)
+          invalidArg(
+            `could not read agent ${input.agent_id}'s current config to merge the tool_policy ` +
+              'patch (backend temporarily unavailable) — nothing was changed; retry'
+          )
+        }
+        if (!current || current.type !== 'custom') {
+          invalidArg(
+            `no custom agent ${input.agent_id} — the tool_policy patch has no merge base; ` +
+              'nothing was changed (check the agent id via custom_agent_list)'
+          )
+        }
+        currentToolPolicy = current.tool_policy ?? null
+      }
+      const patch = toConfigPatch(input, currentToolPolicy)
       if (Object.keys(patch).length === 0) invalidArg('at least one field to change is required')
       const agent = await domain.setReportAgentConfig(input.agent_id, patch, signal)
       return { updated: true, ...specSummary(agent), user_edited: userEdited }

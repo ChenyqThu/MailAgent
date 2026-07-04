@@ -18,6 +18,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { requestOpenAgentSession } from '@shared/state/ai-chat-panel'
 import { PendingDot } from './AgentPendingBadge'
 import type {
+  AgentRunHistoryItem,
   AgentRunState,
   CustomAgentToolPolicy,
   CustomAgentTrigger,
@@ -81,6 +82,33 @@ function fmtTime(ts: number | null | undefined): string {
   if (ts == null) return ''
   const ms = ts < 1e12 ? ts * 1000 : ts
   return new Date(ms).toLocaleString()
+}
+
+// 免卡 badge 分源投影（S6 W3-2，ADR-004 rev3.1 §4.4 / F#3）：rule-source（白名单规则命中）与
+// grant-source（rule_id=null 的 grant 级免卡，按工具分「全开放联网 / 搜索授权 / 授权放行」）
+// 分开标注 —— owner 误判授权范围的防线。🔴 不假设 rule_id 非空（grant 桶是一等来源）。
+// breakdown 缺席（旧 serve-api 无此字段）→ 回退泛化「自动放行 ×n」；null（账本不可达）→ 不渲染。
+function autoWhitelistBadges(
+  r: AgentRunHistoryItem,
+  t: (key: string, opts?: Record<string, unknown>) => string
+): string[] {
+  const bd = r.autoWhitelistedBreakdown
+  if (bd == null) {
+    return typeof r.autoWhitelistedWrites === 'number' && r.autoWhitelistedWrites > 0
+      ? [t('agents.custom.runs.autoWhitelisted', { n: r.autoWhitelistedWrites })]
+      : []
+  }
+  const out: string[] = []
+  if (bd.rule > 0) out.push(t('agents.custom.runs.autoWhitelistedRule', { n: bd.rule }))
+  let otherGrant = 0
+  for (const [tool, n] of Object.entries(bd.grant)) {
+    if (n <= 0) continue
+    if (tool === 'web_fetch') out.push(t('agents.custom.runs.autoWhitelistedWebOpen', { n }))
+    else if (tool === 'web_search') out.push(t('agents.custom.runs.autoWhitelistedWebSearch', { n }))
+    else otherGrant += n
+  }
+  if (otherGrant > 0) out.push(t('agents.custom.runs.autoWhitelistedGrant', { n: otherGrant }))
+  return out
 }
 
 interface RunVisual {
@@ -300,10 +328,12 @@ function RunHistorySection({ agentId }: { agentId: string }): React.ReactElement
                 <RunStateBadge state={r.state} />
                 {/* 红点链 ①（P5）：paused_pending run 待审批脉冲红点，紧邻状态徽标。 */}
                 {r.state === 'paused_pending' && <PendingDot title={t('agents.custom.runs.pendingDot')} />}
-                {/* 免卡写 badge（ADR-004 D6）：虚线边框与人审状态徽标（实线）视觉区分；
-                    null（无会话/账本不可达）不渲染 —— 不渲染 ≠「0 次免卡」。 */}
-                {typeof r.autoWhitelistedWrites === 'number' && r.autoWhitelistedWrites > 0 && (
+                {/* 免卡写 badge（ADR-004 D6；S6 W3-2 rev3.1 §4.4 分源）：虚线边框与人审状态
+                    徽标（实线）视觉区分；null（无会话/账本不可达）不渲染 —— 不渲染 ≠「0 次
+                    免卡」。分源标签见 autoWhitelistBadges（rule vs grant 两源）。 */}
+                {autoWhitelistBadges(r, t).map((label) => (
                   <span
+                    key={label}
                     style={{
                       fontSize: 11,
                       fontWeight: 500,
@@ -315,9 +345,9 @@ function RunHistorySection({ agentId }: { agentId: string }): React.ReactElement
                       border: '1px dashed rgb(var(--c-ai) / 0.45)'
                     }}
                   >
-                    {t('agents.custom.runs.autoWhitelisted', { n: r.autoWhitelistedWrites })}
+                    {label}
                   </span>
-                )}
+                ))}
                 <span style={{ fontSize: 12, color: 'rgb(var(--ink-fg-2))', flex: 1 }}>
                   {fmtTime(r.finishedAt ?? r.createdAt)}
                 </span>

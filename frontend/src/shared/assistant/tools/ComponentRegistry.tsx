@@ -21,6 +21,7 @@ import { ExecApprovalCard } from './generic/ExecApprovalCard'
 import { SkillInstallCard } from './generic/SkillInstallCard'
 import { SkillInstallConfirmCard } from './generic/SkillInstallConfirmCard'
 import { SkillUninstallCard } from './generic/SkillUninstallCard'
+import { CustomAgentApprovalCard } from './generic/CustomAgentApprovalCard'
 
 /** One registration: an A2UI component (by name) + the tool names that render through it. */
 export interface ToolUIRegistration {
@@ -116,5 +117,13 @@ export const componentRegistry: ComponentRegistry = createComponentRegistry([
     component: A2UI_COMPONENTS.SkillUninstallCard,
     toolNames: ['skill_uninstall'],
     render: SkillUninstallCard
+  },
+  // S6 W3-2 — custom-agent CRUD approval card (behind MAILAGENT_CUSTOM_AGENTS_ENABLED). The
+  // permission summary + server-fact before/after diff card; delete/run_now stay on the generic
+  // shell (identity-only inputs), list/get are silent reads → no card.
+  {
+    component: A2UI_COMPONENTS.CustomAgentApprovalCard,
+    toolNames: ['custom_agent_create', 'custom_agent_update'],
+    render: CustomAgentApprovalCard
   }
 ])

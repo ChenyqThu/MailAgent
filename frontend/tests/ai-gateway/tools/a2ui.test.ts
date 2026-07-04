@@ -13,6 +13,7 @@ import {
   componentForTool,
   parseA2UIPayload,
   type ApprovalActionCardProps,
+  type CustomAgentApprovalCardProps,
   type DraftReplyCardProps,
   type NotionSyncCardProps,
   type SkillToggleCardProps,
@@ -174,6 +175,74 @@ describe('buildToolA2UIPayload — self-mount cards (M4b/M4c)', () => {
 
   test('discover_skills (silent read) → null payload', () => {
     expect(buildToolA2UIPayload('discover_skills', { args: {} })).toBeNull()
+  })
+})
+
+describe('buildToolA2UIPayload — custom-agent CRUD approval card (S6 W3-2, rev3.1 §7 D-fix-2)', () => {
+  test('custom_agent_create → full proposal projected (permission summary fields)', () => {
+    const p = buildToolA2UIPayload('custom_agent_create', {
+      args: {
+        id: 'dms-approver',
+        title: 'DMS Approver',
+        prompt: '读取 DMS 审批邮件并起草回复建议。',
+        enabled: true,
+        trigger: { kind: 'email_filter', subject_pattern: 'DMS.*审批' },
+        allowed_tools: ['email_get'],
+        grant_exec: true,
+        grant_web: 'open',
+        skills: ['email', 'dms-approval']
+      }
+    })
+    expect(p!.component).toBe(A2UI_COMPONENTS.CustomAgentApprovalCard)
+    const props = p!.props as unknown as CustomAgentApprovalCardProps
+    expect(props.kind).toBe('create')
+    expect(props.agentId).toBe('dms-approver')
+    expect(props.title).toBe('DMS Approver')
+    expect(props.prompt).toContain('DMS 审批邮件')
+    expect(props.triggerSummary).toContain('email_filter')
+    expect(props.allowedTools).toEqual(['email_get'])
+    expect(props.grantExec).toBe(true)
+    expect(props.grantWeb).toBe('open')
+    expect(props.skills).toEqual(['email', 'dms-approval'])
+    expect(p!.audit).toMatchObject({ risk: 'edit', requiresApproval: true })
+  })
+
+  test('custom_agent_update → ONLY the patch fields; no current-state / "before" claim can ride the payload', () => {
+    const p = buildToolA2UIPayload('custom_agent_update', {
+      args: {
+        agent_id: 'dms-approver',
+        grant_web: 'open',
+        // a lying model trying to smuggle a fake baseline — not in the schema, must not project
+        current_grant_web: 'open',
+        before: { grant_web: 'open' }
+      }
+    })
+    const props = p!.props as unknown as CustomAgentApprovalCardProps & Record<string, unknown>
+    expect(props.kind).toBe('update')
+    expect(props.agentId).toBe('dms-approver')
+    expect(props.grantWeb).toBe('open')
+    // untouched fields stay ABSENT (the card reads "before" live from the server row)
+    expect(props.grantExec).toBeUndefined()
+    expect(props.skills).toBeUndefined()
+    expect(props.title).toBeUndefined()
+    expect(props.current_grant_web).toBeUndefined()
+    expect(props.before).toBeUndefined()
+  })
+
+  test('junk grant_web / trigger:null project fail-closed (enum-checked / cleared)', () => {
+    const p = buildToolA2UIPayload('custom_agent_update', {
+      args: { agent_id: 'a', grant_web: 'yes', trigger: null }
+    })
+    const props = p!.props as unknown as CustomAgentApprovalCardProps
+    expect(props.grantWeb).toBeUndefined() // junk never projects a tier
+    expect(props.triggerSummary).toBeNull() // explicit clear renders as "clear trigger"
+  })
+
+  test('custom_agent_delete / run_now / list / get → null (generic shell / silent reads)', () => {
+    expect(componentForTool('custom_agent_delete')).toBeNull()
+    expect(componentForTool('custom_agent_run_now')).toBeNull()
+    expect(componentForTool('custom_agent_list')).toBeNull()
+    expect(componentForTool('custom_agent_get')).toBeNull()
   })
 })
 

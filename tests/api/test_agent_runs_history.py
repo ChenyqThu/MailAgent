@@ -161,3 +161,106 @@ def test_list_state_flag_off_404(client, runs_env, monkeypatch):
 def test_pending_count_flag_off_404(client, runs_env, monkeypatch):
     monkeypatch.setattr(agent_runs, "_custom_agents_enabled", lambda: False)
     assert client.get("/api/agent-runs/pending-count").status_code == 404
+
+
+# ── 免卡 badge 分源投影（S6 W3-2，ADR-004 rev3.1 §4.4 / F#3）───────────────────────
+# rule-source（whitelist_rule_id 非空）与 grant-source（rule_id=null，per-tool）两桶分流。
+# 🔴 投影不得假设 rule_id 非空 —— grant 级免卡（open web_fetch / web_search）行天然 null。
+
+
+def _make_chat_db(tmp_path, monkeypatch):
+    """合成最小 ai_chat.db（messages + tool_call 审计列）并经 AI_CHAT_DB_PATH 注入 ChatDb。"""
+    import sqlite3
+
+    p = tmp_path / "ai_chat.db"
+    conn = sqlite3.connect(str(p))
+    conn.executescript(
+        """
+        CREATE TABLE ai_chat_messages (id INTEGER PRIMARY KEY, session_id INTEGER NOT NULL);
+        CREATE TABLE chat_tool_call (
+          id INTEGER PRIMARY KEY,
+          message_id INTEGER NOT NULL,
+          tool_name TEXT NOT NULL,
+          approval_status TEXT,
+          whitelist_rule_id INTEGER
+        );
+        """
+    )
+    conn.commit()
+    conn.close()
+    monkeypatch.setenv("AI_CHAT_DB_PATH", str(p))
+    return p
+
+
+def _insert_audit(db_path, session_id: int, rows) -> None:
+    """rows = [(tool_name, approval_status, whitelist_rule_id), ...] 归到一条消息。"""
+    import sqlite3
+
+    conn = sqlite3.connect(str(db_path))
+    cur = conn.execute(
+        "INSERT INTO ai_chat_messages (session_id) VALUES (?)", (session_id,)
+    )
+    mid = cur.lastrowid
+    conn.executemany(
+        "INSERT INTO chat_tool_call (message_id, tool_name, approval_status, whitelist_rule_id) "
+        "VALUES (?, ?, ?, ?)",
+        [(mid, t, s, r) for t, s, r in rows],
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_auto_whitelist_breakdown_splits_rule_vs_grant(client, runs_env, tmp_path, monkeypatch):
+    """rule_id 非空 → rule 桶；rule_id=null → grant 桶（per-tool）；total 两源合计。"""
+    db = _make_chat_db(tmp_path, monkeypatch)
+    _insert_audit(
+        db, 7,
+        [
+            ("run_command", "auto_whitelist", 5),   # rule-source（exec 白名单规则命中）
+            ("run_command", "auto_whitelist", 5),
+            ("web_fetch", "auto_whitelist", None),  # grant-source（open 档）
+            ("web_search", "auto_whitelist", None),  # grant-source（搜索授权）
+            ("web_search", "auto_whitelist", None),
+            ("web_search", "auto_whitelist", None),
+            ("email_flag", "approved", None),        # 人批行不计
+        ],
+    )
+    _enqueue_run(
+        runs_env.repo, "a", status="succeeded",
+        result={"outcome": "completed", "sessionId": 7},
+    )
+
+    it = client.get("/api/agent-runs").json()["data"][0]
+    assert it["autoWhitelistedWrites"] == 6
+    assert it["autoWhitelistedBreakdown"] == {
+        "rule": 2, "grant": {"web_fetch": 1, "web_search": 3},
+    }
+
+
+def test_auto_whitelist_breakdown_zero_vs_unreachable(client, runs_env, tmp_path, monkeypatch):
+    """账本可达且无命中 → 0/空桶（显式无免卡）；无 sessionId → 两字段均 null（不渲染 ≠ 0）。"""
+    _make_chat_db(tmp_path, monkeypatch)
+    _enqueue_run(
+        runs_env.repo, "a", status="succeeded",
+        result={"outcome": "completed", "sessionId": 9},  # 会话存在于账本域但零审计行
+    )
+    _enqueue_run(runs_env.repo, "b", status="succeeded", result=_COMPLETED)  # 无 sessionId
+
+    data = client.get("/api/agent-runs").json()["data"]
+    by_agent = {it["agentId"]: it for it in data}
+    assert by_agent["a"]["autoWhitelistedWrites"] == 0
+    assert by_agent["a"]["autoWhitelistedBreakdown"] == {"rule": 0, "grant": {}}
+    assert by_agent["b"]["autoWhitelistedWrites"] is None
+    assert by_agent["b"]["autoWhitelistedBreakdown"] is None
+
+
+def test_auto_whitelist_breakdown_ledger_missing_is_null(client, runs_env, tmp_path, monkeypatch):
+    """ai_chat.db 文件不存在 → count 返 None → 两字段降级 null（渲染 0 就是谎报）。"""
+    monkeypatch.setenv("AI_CHAT_DB_PATH", str(tmp_path / "missing.db"))
+    _enqueue_run(
+        runs_env.repo, "a", status="succeeded",
+        result={"outcome": "completed", "sessionId": 7},
+    )
+    it = client.get("/api/agent-runs").json()["data"][0]
+    assert it["autoWhitelistedWrites"] is None
+    assert it["autoWhitelistedBreakdown"] is None

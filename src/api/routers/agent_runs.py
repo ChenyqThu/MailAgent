@@ -412,16 +412,19 @@ def _run_history_item(job: AsyncJob) -> dict[str, Any]:
 
 
 def _annotate_auto_whitelist(items: list[dict[str, Any]]) -> None:
-    """run 历史行补 ``autoWhitelistedWrites``（S5 W5b，ADR-004 D6 —— 免卡写计数 badge）。
+    """run 历史行补 ``autoWhitelistedWrites`` + ``autoWhitelistedBreakdown``（S5 W5b badge；
+    S6 W3-2 ADR-004 rev3.1 §4.4/F#3 分源）。
 
     经 ``result_json.sessionId`` join ai_chat.db ``chat_tool_call``（``approval_status=
-    'auto_whitelist'`` + ``whitelist_rule_id``，CHAT_DB v18 列，gateway 直写）。语义三态：
-    行无 sessionId / chat db 不可达 → **null**（badge 不渲染 —— 账本读不到时渲染 0 就是谎报
-    「无免卡写」）；可达且有会话 → 计数（0 = 显式无免卡写）。审计计数是展示增强，任何异常
-    不阻断 run 历史本体。
+    'auto_whitelist'`` + ``whitelist_rule_id``，CHAT_DB v18 列，gateway 直写）。breakdown 按
+    rule-source（rule_id 非空 = 白名单规则命中）/ grant-source（rule_id=null = grant 级免卡，
+    per-tool 细分）两桶投影——owner 误判授权范围的防线（免卡 badge 须能区分「域名规则」与
+    「全开放联网 / 搜索授权」）。语义三态：行无 sessionId / chat db 不可达 → 两字段均 **null**
+    （badge 不渲染 —— 账本读不到时渲染 0 就是谎报「无免卡写」）；可达且有会话 → 计数
+    （0 / 空桶 = 显式无免卡写）。审计计数是展示增强，任何异常不阻断 run 历史本体。
     """
     ids = [it["sessionId"] for it in items if isinstance(it.get("sessionId"), int)]
-    counts: Optional[dict[int, int]] = None
+    counts: Optional[dict[int, dict[str, Any]]] = None
     if ids:
         try:
             from src.chat.db import ChatDb
@@ -433,9 +436,16 @@ def _annotate_auto_whitelist(items: list[dict[str, Any]]) -> None:
     for it in items:
         sid = it.get("sessionId")
         if counts is not None and isinstance(sid, int):
-            it["autoWhitelistedWrites"] = counts.get(sid, 0)
+            bucket = counts.get(sid)
+            it["autoWhitelistedWrites"] = int(bucket["total"]) if bucket else 0
+            it["autoWhitelistedBreakdown"] = (
+                {"rule": bucket["rule"], "grant": bucket["grant"]}
+                if bucket
+                else {"rule": 0, "grant": {}}
+            )
         else:
             it["autoWhitelistedWrites"] = None
+            it["autoWhitelistedBreakdown"] = None
 
 
 @router.get("/tool-options", dependencies=[Depends(verify_cf_access)])

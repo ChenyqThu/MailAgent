@@ -326,13 +326,16 @@ export const skillReadSchema = z.object({
 })
 export type SkillReadInput = z.infer<typeof skillReadSchema>
 
-// ── custom-agent CRUD schemas (S5 W3) — the assistant helps the owner build / edit / run a custom
-//    agent through conversation. Behind MAILAGENT_CUSTOM_AGENTS_ENABLED. list/get are silent reads;
-//    create/update/delete/run_now are edit-tier writes (class capability_change — always ask, never
-//    auto-approved). Deep validation lives in Python (validate_agent_config_patch); the gateway
-//    schema is an ALLOWLIST — the only writable fields are the safe ones. `.strict()` rejects any
-//    unknown key (grant_exec / tool_policy / policy rules etc. structurally cannot enter), so a model
-//    can never smuggle a self-authorization field through the CRUD surface (ADR-004 §7 D5 / Q7). ──
+// ── custom-agent CRUD schemas (S5 W3; grants opened S6 W3-2) — the assistant helps the owner
+//    build / edit / run a custom agent through conversation. Behind MAILAGENT_CUSTOM_AGENTS_ENABLED.
+//    list/get are silent reads; create/update/delete/run_now are edit-tier writes (class
+//    capability_change — always ask, never auto-approved). Deep validation lives in Python
+//    (validate_agent_config_patch); the gateway schema is an ALLOWLIST and `.strict()` rejects any
+//    unknown key. ADR-004 rev3.1 §7 (owner Q4) opened grant_exec / grant_web / skills into this
+//    vocabulary: the model may PROPOSE grants, but every create/update is pinned behind a mandatory
+//    approval card whose permission summary renders them red — the defense moved from field-level
+//    deny to the always-human card. tool_policy / policy_rules / any raw policy field still
+//    structurally cannot enter (rule creation stays owner-only). ──
 
 /** A custom-agent trigger the model may propose. Mirrors CustomAgentTrigger (backend
  *  src/agents/trigger.py is the validation authority: cron 5-field + croniter, regex ReDoS caps).
@@ -380,10 +383,15 @@ export const customAgentGetSchema = z.object({
 })
 export type CustomAgentGetInput = z.infer<typeof customAgentGetSchema>
 
+/** The per-agent web grant tier (ADR-004 rev3.1 §3.1): off = web tools absent headless; gated =
+ *  registered, web_fetch card-free only on the owner's per-agent domain whitelist; open = any URL
+ *  card-free. Proposing 'gated'/'open' is allowed — the approval card renders it red ('open'). */
+export const customAgentWebGrantSchema = z.enum(['off', 'gated', 'open'])
+
 /** custom_agent_create — propose a new custom agent (edit-tier write). ALLOWLIST: title / prompt /
- *  model / enabled / trigger / allowed_tools / budget only. `.strict()` rejects any other key —
- *  there is deliberately NO grant_exec and NO policy/rules field (ADR-004 D5: the model can build an
- *  agent but can NEVER grant it an auto-approve/exec privilege). */
+ *  model / enabled / trigger / allowed_tools / budget + (rev3.1 §7) grant_exec / grant_web / skills.
+ *  `.strict()` rejects any other key — tool_policy / policy_rules stay structurally out: the model
+ *  may propose grants (surfaced red on the mandatory approval card) but has NO rule-creation path. */
 export const customAgentCreateSchema = z
   .object({
     id: z.string().min(1).max(128),
@@ -393,14 +401,18 @@ export const customAgentCreateSchema = z
     enabled: z.boolean().optional(),
     trigger: customAgentTriggerSchema.nullable().optional(),
     allowed_tools: z.array(z.string().min(1).max(64)).max(64).optional(),
-    budget: customAgentBudgetSchema.nullable().optional()
+    budget: customAgentBudgetSchema.nullable().optional(),
+    grant_exec: z.boolean().optional(),
+    grant_web: customAgentWebGrantSchema.optional(),
+    skills: z.array(z.string().min(1).max(64)).max(32).optional()
   })
   .strict()
 export type CustomAgentCreateInput = z.infer<typeof customAgentCreateSchema>
 
 /** custom_agent_update — propose changes to an existing custom agent (edit-tier write). Same
  *  ALLOWLIST as create (minus id, plus agent_id); every config field optional (partial patch).
- *  `.strict()` keeps grant_exec / policy fields structurally out. */
+ *  `.strict()` keeps tool_policy / policy fields structurally out; grant/skill changes render as a
+ *  before/after diff on the approval card (before = the SERVER's current row, never model input). */
 export const customAgentUpdateSchema = z
   .object({
     agent_id: z.string().min(1).max(128),
@@ -410,7 +422,10 @@ export const customAgentUpdateSchema = z
     enabled: z.boolean().optional(),
     trigger: customAgentTriggerSchema.nullable().optional(),
     allowed_tools: z.array(z.string().min(1).max(64)).max(64).optional(),
-    budget: customAgentBudgetSchema.nullable().optional()
+    budget: customAgentBudgetSchema.nullable().optional(),
+    grant_exec: z.boolean().optional(),
+    grant_web: customAgentWebGrantSchema.optional(),
+    skills: z.array(z.string().min(1).max(64)).max(32).optional()
   })
   .strict()
 export type CustomAgentUpdateInput = z.infer<typeof customAgentUpdateSchema>

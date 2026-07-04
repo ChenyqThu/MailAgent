@@ -41,8 +41,10 @@ describe('componentRegistry — resolution', () => {
     expect(componentRegistry.resolve('memory_delete')).toBeUndefined()
   })
 
-  test('byName covers the write/self-mount/exec/skill-supply tools; components covers the card names', () => {
+  test('byName covers the write/self-mount/exec/skill-supply/custom-agent tools; components covers the card names', () => {
     expect(Object.keys(componentRegistry.byName).sort()).toEqual([
+      'custom_agent_create',
+      'custom_agent_update',
       'email_archive',
       'email_draft_reply',
       'email_flag',
@@ -60,6 +62,7 @@ describe('componentRegistry — resolution', () => {
     ])
     expect(Object.keys(componentRegistry.components).sort()).toEqual([
       'ApprovalActionCard',
+      'CustomAgentApprovalCard',
       'DraftReplyCard',
       'ExecApprovalCard',
       'NotionSyncCard',

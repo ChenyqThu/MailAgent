@@ -2380,6 +2380,12 @@ export interface CustomAgentToolPolicy {
   /** S5 ADR-004 D2 — per-agent exec 矩阵例外 opt-in（缺省 = false）。true 时该 agent 的
    *  headless run 注册 exec 工具面；免卡仍需白名单规则命中 + 首跑闸（三重闸）。 */
   grant_exec?: boolean
+  /** S6 W3 ADR-004 rev3.1 §3.1 — per-agent web 三档（缺省 = 'off'）：off=web 工具 headless
+   *  不注册；gated=注册 + web_fetch 仅域名白名单免卡；open=任意 URL 免卡（高危，UI 红样式）。 */
+  grant_web?: 'off' | 'gated' | 'open'
+  /** S6 W3 rev3.1 §3.2 — per-agent skill 挂载列表（收窄面）。缺失/null = 默认挂载集
+   *  ("email","search")；[] = 显式零挂载。 */
+  skills?: string[]
 }
 
 /** v30 Custom Agent 预算三门（null/缺失 = 全默认）。 */
@@ -2503,6 +2509,10 @@ export interface AgentRunHistoryItem {
   /** S5 ADR-004 D6 — 该 run 的免卡写次数（chat_tool_call approval_status='auto_whitelist'
    *  经 sessionId 归账）。null = 无 sessionId 或审计账本不可达（badge 不渲染，非「0 次」）。 */
   autoWhitelistedWrites?: number | null
+  /** S6 W3-2 ADR-004 rev3.1 §4.4 / F#3 — 免卡分源明细：rule = 白名单规则命中（whitelist_rule_id
+   *  非空）计数；grant = grant 级免卡（rule_id=null，如 open 档 web_fetch / web_search 授权），
+   *  按 tool_name 分桶。null 语义同 autoWhitelistedWrites（账本不可达 ≠ 0）。 */
+  autoWhitelistedBreakdown?: { rule: number; grant: Record<string, number> } | null
 }
 
 export interface ReportRunResult {

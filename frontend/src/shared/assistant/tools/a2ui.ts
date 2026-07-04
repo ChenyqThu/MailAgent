@@ -110,7 +110,13 @@ export const A2UI_COMPONENTS = {
   // model's args content fields.
   SkillInstallCard: 'SkillInstallCard',
   SkillInstallConfirmCard: 'SkillInstallConfirmCard',
-  SkillUninstallCard: 'SkillUninstallCard'
+  SkillUninstallCard: 'SkillUninstallCard',
+  // S6 W3-2 (ADR-004 rev3.1 §7 D5 / D-fix-2) — custom_agent_create / custom_agent_update approval
+  // card (edit tier + capability_change). Renders a permission summary (name / purpose / requested
+  // grants, exec + web-open red); for UPDATE the card fetches the agent's CURRENT row server-side
+  // and renders a before/after grant/skill diff (the payload carries ONLY the model's patch —
+  // "before" can never come from model input).
+  CustomAgentApprovalCard: 'CustomAgentApprovalCard'
 } as const
 
 /** Which A2UI component renders a given gateway write tool. Unknown / read tools → null
@@ -141,7 +147,11 @@ export function componentForTool(toolName: string): string | null {
       return A2UI_COMPONENTS.SkillInstallConfirmCard
     case 'skill_uninstall':
       return A2UI_COMPONENTS.SkillUninstallCard
-    // discover_skills / skill_read are silent reads → no card (generic ToolTraceCard).
+    case 'custom_agent_create':
+    case 'custom_agent_update':
+      return A2UI_COMPONENTS.CustomAgentApprovalCard
+    // discover_skills / skill_read are silent reads → no card (generic ToolTraceCard);
+    // custom_agent_delete / run_now keep the generic approval shell (identity-only inputs).
     default:
       return null
   }
@@ -258,6 +268,30 @@ export interface SkillUninstallCardProps {
   removedSecrets?: number | null
 }
 
+/** custom_agent_create / custom_agent_update (S6 W3-2, edit tier + capability_change — ADR-004
+ *  rev3.1 §7). The props carry ONLY the model's proposed fields (create: the full spec; update:
+ *  the partial patch — `undefined` = field not in the patch). 🔴 For update, "before" is NEVER in
+ *  this payload: the card fetches the agent's current row live from the server and diffs against
+ *  it (a model lying about the current permissions changes nothing). Grants absent on create mean
+ *  the safe defaults (no exec, web off, default skill mounts). */
+export interface CustomAgentApprovalCardProps {
+  kind: 'create' | 'update'
+  agentId: string
+  title?: string
+  /** The steering prompt (full text — the review surface is never truncated; the card scrolls). */
+  prompt?: string | null
+  model?: string
+  enabled?: boolean
+  /** Compact human trigger summary; null = trigger explicitly cleared (agent disabled). */
+  triggerSummary?: string | null
+  allowedTools?: string[]
+  grantExec?: boolean
+  grantWeb?: 'off' | 'gated' | 'open'
+  skills?: string[]
+  /** Result echoes (land after execute). */
+  applied?: boolean
+}
+
 function asNum(v: unknown, fallback = -1): number {
   return typeof v === 'number' && Number.isFinite(v) ? v : fallback
 }
@@ -269,6 +303,27 @@ function asObj(v: unknown): Record<string, unknown> | null {
 }
 function asStrArray(v: unknown): string[] {
   return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []
+}
+
+/** Compact human summary of a proposed custom-agent trigger (from raw tool args — mirrors the
+ *  gateway triggerSummary shape so the card and custom_agent_list read alike). '' on junk. */
+function summarizeAgentTrigger(trigger: Record<string, unknown> | null): string {
+  if (!trigger) return ''
+  if (trigger.kind === 'cron') {
+    const tz = asStr(trigger.timezone)
+    return `cron ${asStr(trigger.cron) ?? '?'}${tz ? ` (${tz})` : ''}`
+  }
+  if (trigger.kind === 'email_filter') {
+    const preds: string[] = []
+    const subject = asStr(trigger.subject_pattern)
+    const sender = asStr(trigger.sender_pattern)
+    const folders = asStrArray(trigger.folders)
+    if (subject) preds.push(`subject~/${subject}/`)
+    if (sender) preds.push(`sender~/${sender}/`)
+    if (folders.length > 0) preds.push(`folders=[${folders.join(',')}]`)
+    return `email_filter ${preds.join(' ') || '(no predicates)'}`
+  }
+  return ''
 }
 
 /** Build a short human summary for the generic approval card from a flag/archive/pin input. */
@@ -485,6 +540,37 @@ export function buildToolA2UIPayload(
       removedSecrets:
         typeof result?.removed_secrets === 'number' ? (result.removed_secrets as number) : null
     }
+    return {
+      protocol: A2UI_PROTOCOL,
+      version: A2UI_VERSION,
+      component,
+      props: props as unknown as Record<string, unknown>,
+      audit: { risk: io.risk ?? 'edit', requiresApproval }
+    }
+  }
+
+  if (component === A2UI_COMPONENTS.CustomAgentApprovalCard) {
+    // 🔴 props = the model's PROPOSAL only (create: full spec; update: partial patch — an absent
+    // key stays absent). The update card's "before" is fetched server-side by the component;
+    // projecting any "current state" claim from args here would let the model spoof the diff.
+    const kind = toolName === 'custom_agent_create' ? ('create' as const) : ('update' as const)
+    const props: CustomAgentApprovalCardProps = {
+      kind,
+      agentId: asStr(kind === 'create' ? args.id : args.agent_id) ?? ''
+    }
+    if (typeof args.title === 'string') props.title = args.title
+    if ('prompt' in args) props.prompt = asStr(args.prompt) ?? null
+    if (typeof args.model === 'string') props.model = args.model
+    if (typeof args.enabled === 'boolean') props.enabled = args.enabled
+    if ('trigger' in args) {
+      props.triggerSummary = args.trigger === null ? null : summarizeAgentTrigger(asObj(args.trigger))
+    }
+    if (Array.isArray(args.allowed_tools)) props.allowedTools = asStrArray(args.allowed_tools)
+    if (typeof args.grant_exec === 'boolean') props.grantExec = args.grant_exec
+    const gw = asStr(args.grant_web)
+    if (gw === 'off' || gw === 'gated' || gw === 'open') props.grantWeb = gw
+    if (Array.isArray(args.skills)) props.skills = asStrArray(args.skills)
+    if (result) props.applied = result.created === true || result.updated === true
     return {
       protocol: A2UI_PROTOCOL,
       version: A2UI_VERSION,

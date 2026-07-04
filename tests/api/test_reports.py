@@ -486,6 +486,79 @@ def test_create_custom_agent_bad_tool_policy_no_orphan_row(
     assert report_client.get("/api/report-agents?agentId=cust_badtp").status_code == 404
 
 
+# ---------------------------------------------------------------------------
+# S6 W3-2 (ADR-004 rev3.1 §7): CRUD 落库白名单放开三键（grant_exec/grant_web/skills）——
+# parse_tool_policy 是唯一权威，其余未知键拒收纪律不变。
+# ---------------------------------------------------------------------------
+
+
+def test_create_custom_agent_with_grants_persists(
+    report_client: TestClient, monkeypatch
+) -> None:
+    """flag on：create custom 带 grant_exec/grant_web/skills → 200 + tool_policy 三键读回一致。"""
+    monkeypatch.setattr("src.api.routers.reports._custom_agents_enabled", lambda: True)
+    r = report_client.post(
+        "/api/report-agents",
+        json={
+            "id": "cust_grants", "type": "custom", "title": "Webby",
+            "tool_policy": {
+                "v": 1, "allowed_tools": ["email_get"],
+                "grant_exec": True, "grant_web": "gated", "skills": ["email", "dms-approval"],
+            },
+        },
+    )
+    assert r.status_code == 200
+    tp = r.json()["data"]["tool_policy"]
+    assert tp["grant_exec"] is True
+    assert tp["grant_web"] == "gated"
+    assert tp["skills"] == ["email", "dms-approval"]
+    assert tp["allowed_tools"] == ["email_get"]
+
+
+def test_set_config_custom_grants_roundtrip(
+    report_client: TestClient, report_db: Path
+) -> None:
+    """PUT tool_policy 三键 → 200 + 读回一致（Settings/CRUD 共用同一 REST 面）。"""
+    ReportStore(str(report_db)).create_agent("cust_g2", type="custom", enabled=True, title="G2")
+    r = report_client.put(
+        "/api/report-agents/cust_g2",
+        json={"tool_policy": {"v": 1, "grant_web": "open", "skills": []}},
+    )
+    assert r.status_code == 200
+    tp = r.json()["data"]["tool_policy"]
+    assert tp["grant_web"] == "open"
+    assert tp["skills"] == []  # 显式零挂载 verbatim（≠ 默认挂载集）
+
+
+def test_set_config_rejects_unknown_tool_policy_key(
+    report_client: TestClient, report_db: Path
+) -> None:
+    """未知 tool_policy 键仍 400（extra-forbid 纪律不因三键放开而松动）。"""
+    ReportStore(str(report_db)).create_agent("cust_g3", type="custom", enabled=True, title="G3")
+    r = report_client.put(
+        "/api/report-agents/cust_g3",
+        json={"tool_policy": {"v": 1, "policy_rules": [{"capability": "exec"}]}},
+    )
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "E_INVALID_ARG"
+
+
+def test_set_config_rejects_bad_grant_web_and_skills(
+    report_client: TestClient, report_db: Path
+) -> None:
+    """grant_web 非三态字面量 / skills 非 list[str] → 400（typed 严格化，fail-closed 在边界）。"""
+    ReportStore(str(report_db)).create_agent("cust_g4", type="custom", enabled=True, title="G4")
+    for bad_tp in (
+        {"v": 1, "grant_web": "yes"},
+        {"v": 1, "grant_web": True},
+        {"v": 1, "grant_web": 1},
+        {"v": 1, "skills": "email"},
+    ):
+        r = report_client.put("/api/report-agents/cust_g4", json={"tool_policy": bad_tp})
+        assert r.status_code == 400, bad_tp
+        assert r.json()["error"]["code"] == "E_INVALID_ARG"
+
+
 def test_create_custom_agent_flag_off_rejected(report_client: TestClient, monkeypatch) -> None:
     """flag off：create type='custom' → 维持今日 E_INVALID_ARG 拒收（白名单不含 custom，字节级不变）。"""
     monkeypatch.setattr("src.api.routers.reports._custom_agents_enabled", lambda: False)

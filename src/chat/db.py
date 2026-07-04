@@ -401,14 +401,22 @@ class ChatDb:
             (message_id,),
         )
 
-    def count_auto_whitelist_writes(self, session_ids: List[int]) -> Optional[Dict[int, int]]:
-        """按 session 统计免卡执行审计行数（S5 ADR-004 D6 —— run 历史「自动放行 ×N」badge）。
+    def count_auto_whitelist_writes(
+        self, session_ids: List[int]
+    ) -> Optional[Dict[int, Dict[str, Any]]]:
+        """按 session 统计免卡执行审计行（S5 ADR-004 D6 badge；S6 W3-2 rev3.1 §4.4/F#3 分源）。
 
         ``chat_tool_call.approval_status='auto_whitelist'``（CHAT_DB v18 语义，gateway 直写）
-        经 message→session join 归到会话。返回 ``{session_id: count}``（无命中的 id 不在 dict，
-        调用方 default 0）。库不存在 / 表未初始化 / 锁 → **None**（调用方把字段降级为 null）——
-        有意不走 ``_read_all`` 的 graceful ``[]``：badge 必须区分「账本可达且 0 次免卡」与
-        「账本不可达」，后者渲染 0 就是谎报。
+        经 message→session join 归到会话，并按 ``whitelist_rule_id`` 是否为空分两源：
+        **rule-source**（rule_id 非空 = owner 逐条建的白名单规则命中）与 **grant-source**
+        （rule_id=null = grant 级免卡，如 open 档 web_fetch / web_search 授权），grant 桶按
+        ``tool_name`` 细分（UI 据此区分「全开放联网」vs「搜索授权」）。🔴 投影**不得假设
+        rule_id 非空**——grant 级免卡行 rule_id 天然为 null。
+
+        返回 ``{session_id: {"total": n, "rule": n, "grant": {tool_name: n}}}``（无命中的 id
+        不在 dict，调用方 default 0）。库不存在 / 表未初始化 / 锁 → **None**（调用方把字段
+        降级为 null）—— 有意不走 ``_read_all`` 的 graceful ``[]``：badge 必须区分「账本可达
+        且 0 次免卡」与「账本不可达」，后者渲染 0 就是谎报。
         """
         ids = [int(s) for s in session_ids]
         if not ids:
@@ -419,13 +427,27 @@ class ChatDb:
         try:
             with self._connection() as conn:
                 rows = conn.execute(
-                    "SELECT m.session_id AS sid, COUNT(*) AS n FROM chat_tool_call tc "
+                    "SELECT m.session_id AS sid, tc.tool_name AS tool, "
+                    "(tc.whitelist_rule_id IS NULL) AS grant_source, COUNT(*) AS n "
+                    "FROM chat_tool_call tc "
                     "JOIN ai_chat_messages m ON m.id = tc.message_id "
                     "WHERE tc.approval_status = 'auto_whitelist' "
-                    f"AND m.session_id IN ({placeholders}) GROUP BY m.session_id",
+                    f"AND m.session_id IN ({placeholders}) "
+                    "GROUP BY m.session_id, tc.tool_name, grant_source",
                     tuple(ids),
                 ).fetchall()
-                return {int(r["sid"]): int(r["n"]) for r in rows}
+                out: Dict[int, Dict[str, Any]] = {}
+                for r in rows:
+                    sid = int(r["sid"])
+                    bucket = out.setdefault(sid, {"total": 0, "rule": 0, "grant": {}})
+                    n = int(r["n"])
+                    bucket["total"] += n
+                    if r["grant_source"]:
+                        tool = str(r["tool"])
+                        bucket["grant"][tool] = bucket["grant"].get(tool, 0) + n
+                    else:
+                        bucket["rule"] += n
+                return out
         except sqlite3.Error:
             return None
 
