@@ -118,7 +118,10 @@ def test_spec_cron_full_shape(env, client):
     assert "emailEnvelope" not in spec["prompt"]  # cron 无 envelope
     assert spec["model"] == "claude-sonnet-5"
     assert spec["budget"] == {"maxSteps": 6, "maxRunSeconds": 120}
-    assert spec["toolPolicy"] == {}  # 未配 tool_policy → 不额外收窄
+    # S5 ADR-004 §5.1（显式修订 ADR-003 D6）：未配 tool_policy → 投影**默认安全集**（非「不收窄」）。
+    assert spec["toolPolicy"] == {
+        "allowedTools": list(agent_runs.DEFAULT_CUSTOM_AGENT_ALLOWED_TOOLS)
+    }
     assert spec["sessionTitle"].startswith("DMS Approver · ")
 
 
@@ -152,6 +155,41 @@ def test_spec_email_carries_fenced_envelope(env, client, monkeypatch):
     assert "DMS Bot <dms@corp.com>" in env_block
     assert "Please approve request #42" in env_block
     assert spec["toolPolicy"] == {"allowedTools": ["email_get", "email_body"]}
+
+
+def test_spec_tool_policy_three_states_and_grant_exec(env, client):
+    """S5 ADR-004 §5.1 投影三态 + grantExec 判别（P1-4）：NULL → 默认安全集；显式列表 →
+    verbatim（上一测试已盖）；显式 [] → 空集。grantExec 仅 parse 后字面 True 才输出。"""
+    # 显式 [] → 空集（owner 显式选零工具，非默认集）。
+    _seed_custom(env.store, agent_id="a_empty", trigger=_CRON,
+                 tool_policy={"v": 1, "allowed_tools": []})
+    jid = _running_job(env.repo, agent_id="a_empty", token="te")
+    d = client.get(f"/api/agent-runs/{jid}/spec", headers={"X-Claim-Token": "te"}).json()["data"]
+    assert d["toolPolicy"] == {"allowedTools": []}
+
+    # grant_exec: true → grantExec 投影 True。
+    _seed_custom(env.store, agent_id="a_grant", trigger=_CRON,
+                 tool_policy={"v": 1, "allowed_tools": ["email_get"], "grant_exec": True})
+    jid2 = _running_job(env.repo, agent_id="a_grant", token="tg")
+    d2 = client.get(f"/api/agent-runs/{jid2}/spec", headers={"X-Claim-Token": "tg"}).json()["data"]
+    assert d2["toolPolicy"] == {"allowedTools": ["email_get"], "grantExec": True}
+
+    # grant_exec: false → 键不投影。
+    _seed_custom(env.store, agent_id="a_nogrant", trigger=_CRON,
+                 tool_policy={"v": 1, "allowed_tools": ["email_get"], "grant_exec": False})
+    jid3 = _running_job(env.repo, agent_id="a_nogrant", token="tn")
+    d3 = client.get(f"/api/agent-runs/{jid3}/spec", headers={"X-Claim-Token": "tn"}).json()["data"]
+    assert d3["toolPolicy"] == {"allowedTools": ["email_get"]}
+
+    # 坏形状（grant_exec:"yes" —— 保存闸之外手工入库）→ 读侧宽容落未配置语义：默认安全集 +
+    # 无 grantExec（junk 永不投影成授权，P1-4 负例）。
+    _seed_custom(env.store, agent_id="a_junk", trigger=_CRON,
+                 tool_policy={"v": 1, "allowed_tools": ["email_get"], "grant_exec": "yes"})
+    jid4 = _running_job(env.repo, agent_id="a_junk", token="tj")
+    d4 = client.get(f"/api/agent-runs/{jid4}/spec", headers={"X-Claim-Token": "tj"}).json()["data"]
+    assert d4["toolPolicy"] == {
+        "allowedTools": list(agent_runs.DEFAULT_CUSTOM_AGENT_ALLOWED_TOOLS)
+    }
 
 
 def test_spec_budget_defaults_and_clamp(env, client):

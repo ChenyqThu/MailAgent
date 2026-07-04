@@ -675,10 +675,40 @@ async def put_skill_config(name: str, request: Request, body: Optional[dict[str,
     return success_envelope({"name": name, "config": body}, request=request, source="sqlite")
 
 
-# ── exec 策略白名单（S2 W1 —— PolicyRule CRUD + evaluate）─────────────────────────────
+# ── exec 策略白名单（S2 W1 —— PolicyRule CRUD + evaluate；S5 ADR-004 扩 per-agent）──────────
 # 结构化白名单规则（ADR-001 §6 D4）：owner 经审批卡「总是允许」/ Settings 管理页产生，模型**无**
 # 创建通道（policy_rules 不暴露任何 gateway 工具）。evaluate 供 gateway W1b 的 needsApproval 前置调用
 # 决定免卡；exec 端点内部也调它作审计透传。业务权威在 Python，评估 fail-closed（异常→ask）。
+# S5 per-agent（ADR-004 §3.3/§4.3）：create 收 agentId → headless 规则分支（flag 门控 + 归属校验 +
+# context_mode 从 agent trigger.kind 派生 + exec 只认 pinned-entrypoint 形状）；全局（无 agentId）
+# 分支词汇与语义 S2 逐字不变。
+
+
+def _custom_agents_enabled() -> bool:
+    """读 ``MAILAGENT_CUSTOM_AGENTS_ENABLED``（对齐 agent_runs 路由的 lazy 读法）。异常 →
+    fail-closed False。"""
+    from src.api.deps import get_settings
+
+    try:
+        return bool(get_settings().custom_agents_enabled)
+    except Exception:  # noqa: BLE001 — 配置读失败 → 保守当 feature off
+        return False
+
+
+# per-agent 规则的 capability 面（ADR-004 V1）：domain_write（D1 免卡）+ exec（D2 pinned-entrypoint）。
+# file_read/file_write/web 不在 V1 headless 设计面（web 全不引入 —— D3；file 族无形状约束设计），
+# 建规拒 —— 需要时随对应 grant 键另立 ADR。
+_PER_AGENT_CAPABILITIES: tuple[str, ...] = ("domain_write", "exec")
+
+
+def _derive_rule_context_mode(agent: dict[str, Any]) -> str:
+    """per-agent 规则的 context_mode **只**从 agent trigger.kind 派生（ADR-004 §3.3：表单/请求
+    不可选 —— 用户没有机会配出跨上下文规则）。与 gateway deriveContextMode 同表：
+    email_filter → untrusted_trigger / cron → cron_headless。坏 trigger → ValueError（400）。"""
+    from src.agents.trigger import parse_trigger
+
+    trig = parse_trigger(agent.get("trigger_json"))  # TriggerValidationError（ValueError）on 坏配置
+    return "cron_headless" if trig.kind == "cron" else "untrusted_trigger"
 
 
 def _policy_rule_dict(r: Any) -> dict[str, Any]:
@@ -705,10 +735,14 @@ async def list_policy_rules(
     request: Request,
     capability: Optional[str] = Query(default=None),
     context_mode: Optional[str] = Query(default=None, alias="contextMode"),
+    agent_id: Optional[str] = Query(default=None, alias="agentId"),
 ):
-    """列策略规则（可选按 capability / contextMode 过滤），最新在前，带 dangerous 标志。"""
+    """列策略规则（可选按 capability / contextMode / agentId 过滤），最新在前，带 dangerous 标志。
+    agentId 缺省 = 全部行（现状）；有值 = 该 agent 的 per-agent 规则（Settings per-agent 面用）。"""
     store = get_agent_config_store()
-    rules = store.list_policy_rules(capability=capability, context_mode=context_mode)
+    rules = store.list_policy_rules(
+        capability=capability, context_mode=context_mode, agent_id=agent_id
+    )
     data = [_policy_rule_dict(r) for r in rules]
     return success_envelope(
         {"rules": data}, request=request, source="sqlite", meta_extra={"count": len(data)}
@@ -717,37 +751,109 @@ async def list_policy_rules(
 
 @router.post("/policy/rules", dependencies=[Depends(verify_cf_access)])
 async def create_policy_rule(request: Request, body: Optional[dict[str, Any]] = None):
-    """建一条结构化白名单规则。body = {capability, matcher, contextMode?, note?}。matcher 经
-    parse_matcher 校验（非法 → 422）；contextMode 默认 manual_chat。返回含 dangerous 标志。"""
+    """建一条结构化白名单规则。body = {capability, matcher, contextMode?, note?, agentId?}。
+
+    无 agentId（全局/manual 分支，S2 语义逐字不变）：matcher 经 parse_matcher 校验（非法 →
+    422）；contextMode 默认 manual_chat；capability 限 S2 四族（domain_write 是 per-agent 专属）。
+
+    有 agentId（per-agent headless 分支，ADR-004 §3.3/§4.3）：
+      - flag ``MAILAGENT_CUSTOM_AGENTS_ENABLED`` off → 404（S4 纪律，feature 不存在）；
+      - agentId 须指向 sync_store 现存 ``type='custom'`` agent（拒空串/悬空归属，codex P1-5）；
+      - contextMode **从 agent trigger.kind 派生**，请求显式传 → 400（表单不可选，防跨上下文规则）；
+      - capability 限 domain_write / exec；exec matcher 须过 pinned-entrypoint 形状闸
+        （raw ``{any}`` / 非 installed-skill entrypoint → 400，evaluate 侧另有 skip 复核双防线）。
+    """
     import json
 
-    from src.agent_config.policy import CAPABILITIES, CONTEXT_MODES, parse_matcher
+    from src.agent_config.policy import (
+        CAPABILITIES,
+        CONTEXT_MODES,
+        headless_exec_rule_problem,
+        parse_matcher,
+    )
 
     raw = body or {}
     capability = raw.get("capability")
     matcher = raw.get("matcher")
-    context_mode = raw.get("contextMode", "manual_chat")
     note = raw.get("note")
+    agent_id = raw.get("agentId")
     if capability not in CAPABILITIES:
         raise APIError("E_INVALID_ARG", f"capability must be one of {list(CAPABILITIES)}",
-                       http_status=400, source="sqlite")
-    if context_mode not in CONTEXT_MODES:
-        raise APIError("E_INVALID_ARG", f"contextMode must be one of {list(CONTEXT_MODES)}",
                        http_status=400, source="sqlite")
     if not isinstance(matcher, dict):
         raise APIError("E_INVALID_ARG", "matcher must be an object", http_status=400, source="sqlite")
     if note is not None and not isinstance(note, str):
         raise APIError("E_INVALID_ARG", "note must be a string", http_status=400, source="sqlite")
+
+    if agent_id is not None:
+        # ── per-agent headless 分支（ADR-004）────────────────────────────────
+        if not _custom_agents_enabled():
+            raise APIError("E_NOT_FOUND", "custom agents feature is disabled",
+                           http_status=404, source="sqlite")
+        if not isinstance(agent_id, str) or not agent_id.strip():
+            raise APIError("E_INVALID_ARG", "agentId must be a non-empty string",
+                           http_status=400, source="sqlite")
+        agent_id = agent_id.strip()
+        if capability not in _PER_AGENT_CAPABILITIES:
+            raise APIError(
+                "E_INVALID_ARG",
+                f"per-agent rules only support capabilities {list(_PER_AGENT_CAPABILITIES)}",
+                http_status=400, source="sqlite",
+            )
+        if "contextMode" in raw:
+            raise APIError(
+                "E_INVALID_ARG",
+                "contextMode is derived from the agent trigger for per-agent rules; do not pass it",
+                http_status=400, source="sqlite",
+            )
+        from src.api.deps import get_report_store
+
+        agent = get_report_store().get_agent(agent_id)
+        if agent is None or (agent.get("type") or "") != "custom":
+            raise APIError(
+                "E_INVALID_ARG",
+                f"agentId must reference an existing custom agent, got {agent_id!r}",
+                http_status=400, source="sqlite",
+            )
+        try:
+            context_mode = _derive_rule_context_mode(agent)
+        except ValueError as exc:
+            raise APIError(
+                "E_INVALID_ARG",
+                f"agent {agent_id!r} has invalid trigger_json ({exc}); fix the agent first",
+                http_status=400, source="sqlite",
+            ) from exc
+    else:
+        # ── 全局（manual）分支 —— S2 语义逐字不变 ─────────────────────────────
+        if capability == "domain_write":
+            raise APIError(
+                "E_INVALID_ARG",
+                "domain_write rules are per-agent only (agentId required)",
+                http_status=400, source="sqlite",
+            )
+        context_mode = raw.get("contextMode", "manual_chat")
+        if context_mode not in CONTEXT_MODES:
+            raise APIError("E_INVALID_ARG", f"contextMode must be one of {list(CONTEXT_MODES)}",
+                           http_status=400, source="sqlite")
+
+    store = get_agent_config_store()
     try:
-        parse_matcher(capability, matcher)
+        parsed = parse_matcher(capability, matcher)
     except Exception as exc:  # noqa: BLE001 — pydantic ValidationError / ValueError → 422
         raise APIError("E_INVALID_ARG", f"invalid matcher: {exc}", http_status=422, source="sqlite") from exc
-    store = get_agent_config_store()
+    if agent_id is not None and capability == "exec":
+        problem = headless_exec_rule_problem(store, parsed)
+        if problem is not None:
+            raise APIError(
+                "E_INVALID_ARG", f"invalid headless exec rule: {problem}",
+                http_status=400, source="sqlite",
+            )
     rule = store.create_policy_rule(
         capability,
         json.dumps(matcher, ensure_ascii=False, sort_keys=True),
         context_mode=context_mode,
         note=note,
+        agent_id=agent_id,
     )
     return success_envelope(_policy_rule_dict(rule), request=request, source="sqlite", status_code=201)
 
@@ -778,8 +884,9 @@ async def delete_policy_rule(rule_id: int, request: Request):
 @router.post("/policy/evaluate", dependencies=[Depends(verify_local_token)])
 async def evaluate_policy(request: Request, body: Optional[dict[str, Any]] = None):
     """评估一次动作是否命中白名单 → {decision: auto_allow|ask, ruleId}。gateway W1b 的 needsApproval
-    前置调用。body = {capability, action, contextMode?}。contextMode 缺省/非法 → fail-closed 到
-    untrusted_trigger（manual 规则不匹配 → ask）。
+    前置调用。body = {capability, action, contextMode?, agentId?}。contextMode 缺省/非法 →
+    fail-closed 到 untrusted_trigger（manual 规则不匹配 → ask）；agentId 缺省 = manual 现状，
+    有值 = headless per-agent 双键候选（ADR-004 §3.3）。
 
     🔴 鉴权 = ``verify_local_token``（**仅**本地 token，不接受 CF JWT）——唯一调用方是 in-process
     gateway domainClient（同机 loopback，恒带 ``X-MailAgent-Local-Token``），与 exec 三端点同形状。
@@ -791,6 +898,7 @@ async def evaluate_policy(request: Request, body: Optional[dict[str, Any]] = Non
     capability = raw.get("capability")
     action = raw.get("action")
     context_mode = raw.get("contextMode")
+    agent_id = raw.get("agentId")
     if capability not in CAPABILITIES:
         raise APIError("E_INVALID_ARG", f"capability must be one of {list(CAPABILITIES)}",
                        http_status=400, source="sqlite")
@@ -798,7 +906,11 @@ async def evaluate_policy(request: Request, body: Optional[dict[str, Any]] = Non
         raise APIError("E_INVALID_ARG", "action must be an object", http_status=400, source="sqlite")
     if context_mode not in CONTEXT_MODES:
         context_mode = "untrusted_trigger"
+    # agentId（S5 ADR-004 §3.3）：可选；不传 = manual 现状（候选 agent_id IS NULL）。非法类型
+    # → 400（gateway 调用方 bug 早暴露；空串由 store 层拒 → evaluate 兜底 ask）。
+    if agent_id is not None and not isinstance(agent_id, str):
+        raise APIError("E_INVALID_ARG", "agentId must be a string", http_status=400, source="sqlite")
     # 返回 {decision, rule_id}（snake）= policy 判决单一 verdict 形状，与 exec 端点响应的 policy 字段
     # 一致（W1b 一个 verdict 类型消费两处：/evaluate 前置调用 + exec 响应审计）。
-    result = evaluate(get_agent_config_store(), capability, action, context_mode)
+    result = evaluate(get_agent_config_store(), capability, action, context_mode, agent_id=agent_id)
     return success_envelope(result, request=request, source="sqlite")

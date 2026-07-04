@@ -35,8 +35,12 @@ def _isolate(monkeypatch, tmp_path):
     exec_floor.reset_exec_floor_cache()
 
 
-def _install_script_skill(store, name, secret_names):
-    """装一个 script skill 行（manifest 声明 secret_names）+ 建落盘目录，返回 skill 目录路径。"""
+def _install_script_skill(store, name, secret_names, files=None):
+    """装一个 script skill 行（manifest 声明 secret_names）+ 建落盘目录，返回 skill 目录路径。
+    ``files`` = 可选 files_json 清单（{relpath: sha256}）—— argv 直引 skill 内路径的测试需要
+    （W4c 盲区 deny 地板：skills root 内清单外引用 → 409，与本文件的密钥语义无关）。"""
+    import json
+
     store.install_skill(
         name,
         source_type="local_folder",
@@ -46,6 +50,7 @@ def _install_script_skill(store, name, secret_names):
             "tools": [],
             "secrets": [{"name": s} for s in secret_names],
         },
+        files_json=json.dumps(files) if files else None,
     )
     from src.skills.pack_fetch import skill_dir
 
@@ -119,8 +124,10 @@ def test_undeclared_stored_secret_not_injected(client, fresh_agent_cfg):
 def test_ambiguous_multi_skill_no_injection(client, fresh_agent_cfg):
     """argv 触达两个不同 skill 目录 → 保守零注入（防 skill A 密钥泄漏给触达 skill B 的命令）。"""
     store = fresh_agent_cfg
-    a = _install_script_skill(store, "dms", ["DMS_TOKEN"])
-    b = _install_script_skill(store, "other", ["OTHER_TOKEN"])
+    # x/y 进 files_json 清单：过 W4c 盲区 deny 地板（清单外的 skills-root 引用 409），本测试
+    # 只关心多 skill 命中 → 零注入的密钥语义。
+    a = _install_script_skill(store, "dms", ["DMS_TOKEN"], files={"x": "0" * 64})
+    b = _install_script_skill(store, "other", ["OTHER_TOKEN"], files={"y": "0" * 64})
     secrets.set_secret("dms", "DMS_TOKEN", SENTINEL, store=store)
 
     d = _data(client.post(

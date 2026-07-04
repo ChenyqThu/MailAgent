@@ -48,14 +48,21 @@ _OUTPUT_CAP_BYTES = 256 * 1024  # stdout / stderr 各自返回上限（超出截
 _DEFAULT_MAX_READ = 256 * 1024
 _MAX_READ_BYTES = 2 * 1024 * 1024
 
-# W1a 端点是 owner 亲手动作；policy 评估仅审计透传（真门禁在 gateway needsApproval + ApprovalGuard）。
+# policy 评估的缺省审计语境（W1a：一切调用都是 owner 亲手的 manual_chat）。S5 W4c（ADR-004 D4
+# 附带项）起 gateway 可随请求透传真实 context_mode + agent_id 作**纯审计标注** —— 授权判定仍全在
+# gateway 矩阵 + evaluate，端点不据此做门禁（模块 docstring 的职责边界不变）。
 _AUDIT_CONTEXT_MODE = "manual_chat"
+
+# 审计标注字段的公共形状（三个请求模型共用）。
+_AuditContextMode = Optional[Literal["manual_chat", "untrusted_trigger", "cron_headless"]]
 
 
 class RunRequest(BaseModel):
     argv: list[str] = Field(min_length=1)
     cwd: Optional[str] = None
     timeout_ms: int = Field(default=_DEFAULT_TIMEOUT_MS, ge=1, le=_MAX_TIMEOUT_MS)
+    context_mode: _AuditContextMode = None
+    agent_id: Optional[str] = None
 
     @field_validator("argv")
     @classmethod
@@ -68,24 +75,71 @@ class RunRequest(BaseModel):
 class FileReadRequest(BaseModel):
     path: str = Field(min_length=1)
     max_bytes: int = Field(default=_DEFAULT_MAX_READ, ge=1, le=_MAX_READ_BYTES)
+    context_mode: _AuditContextMode = None
+    agent_id: Optional[str] = None
 
 
 class FileWriteRequest(BaseModel):
     path: str = Field(min_length=1)
     content: str
     mode: Literal["overwrite", "append", "create_new"] = "create_new"
+    context_mode: _AuditContextMode = None
+    agent_id: Optional[str] = None
 
 
-def _evaluate(capability: str, action: dict[str, Any]) -> dict[str, Any]:
+def _evaluate(
+    capability: str,
+    action: dict[str, Any],
+    *,
+    context_mode: Optional[str] = None,
+    agent_id: Optional[str] = None,
+) -> dict[str, Any]:
     """policy 评估（审计透传）：命中结构化白名单 → auto_allow + rule_id，否则 ask。评估器自身
-    fail-closed（异常→ask），故这里无需再兜底。"""
+    fail-closed（异常→ask），故这里无需再兜底。``context_mode``/``agent_id`` 缺省 = W1a 现状
+    （manual_chat / 全局候选）。"""
     from src.agent_config.policy import evaluate
     from src.agent_config.store import get_agent_config_store
 
-    return evaluate(get_agent_config_store(), capability, action, _AUDIT_CONTEXT_MODE)
+    return evaluate(
+        get_agent_config_store(),
+        capability,
+        action,
+        context_mode or _AUDIT_CONTEXT_MODE,
+        agent_id=agent_id,
+    )
 
 
 # ── run_command ─────────────────────────────────────────────────────────────────
+
+
+# 增量读的保留余量（D4-③）：redact 先于 cap 是 W3 语义（密钥值恰跨 cap 边界时需要边界后的文本
+# 才能整段命中替换）——源头只保留 cap+margin 字节，margin 覆盖任何现实尺寸的 secret 值；margin 外
+# 的字节在管道读取时即丢弃（**不再全量 buffer**，防大输出 OOM）。
+_DRAIN_KEEP_MARGIN = 64 * 1024
+_DRAIN_CHUNK = 64 * 1024
+
+
+async def _drain_capped(
+    stream: Optional[asyncio.StreamReader], keep: int
+) -> tuple[bytes, bool]:
+    """增量读一条子进程管道（ADR-004 D4-③）：只保留前 ``keep`` 字节，其余持续排水丢弃。
+    返回 ``(kept, overflowed)``。排水**不中断** —— 停读会让管道写满反压、子进程卡死。"""
+    if stream is None:
+        return b"", False
+    kept = bytearray()
+    overflowed = False
+    while True:
+        chunk = await stream.read(_DRAIN_CHUNK)
+        if not chunk:
+            break
+        if len(kept) < keep:
+            room = keep - len(kept)
+            kept.extend(chunk[:room])
+            if len(chunk) > room:
+                overflowed = True
+        else:
+            overflowed = True
+    return bytes(kept), overflowed
 
 
 async def _spawn(
@@ -96,7 +150,9 @@ async def _spawn(
     redact: Optional[list[tuple[str, str]]] = None,
 ) -> dict[str, Any]:
     """spawn argv（**绝不** shell）→ 给定 env → wait_for(timeout) → 超时 kill 防孤儿。stdout/stderr
-    各截 256KiB。抄 cli_runner 的 spawn+wait+kill 模板，但 env 由调用方构造（**不继承** os.environ）。
+    各截 256KiB —— **增量读**（D4-③）：cap+margin 之外的字节在读取时即丢弃，不再 ``communicate``
+    全量 buffer（headless 免卡 = 无人在环时跑飞的程序不能打满内存）。抄 cli_runner 的
+    spawn+wait+kill 模板，但 env 由调用方构造（**不继承** os.environ）。
 
     ``env`` = 固定白名单基底（+ 命中 skill 目录时叠加的 per-skill 密钥，W3）。``redact`` = 注入的
     (secret_name, value) 对：对 stdout/stderr 做**精确子串**替换 → ``[REDACTED:<name>]`` 后再返回/落审计
@@ -118,9 +174,15 @@ async def _spawn(
     except (ValueError, OSError) as exc:  # 内嵌 null / 非法 argv
         raise APIError("E_INVALID_ARG", f"cannot spawn: {exc}", http_status=400, source="exec") from exc
 
+    keep = _OUTPUT_CAP_BYTES + _DRAIN_KEEP_MARGIN
     try:
-        stdout_b, stderr_b = await asyncio.wait_for(
-            proc.communicate(), timeout=timeout_ms / 1000.0
+        (stdout_b, out_over), (stderr_b, err_over), _ = await asyncio.wait_for(
+            asyncio.gather(
+                _drain_capped(proc.stdout, keep),
+                _drain_capped(proc.stderr, keep),
+                proc.wait(),
+            ),
+            timeout=timeout_ms / 1000.0,
         )
     except asyncio.TimeoutError as exc:
         try:
@@ -133,8 +195,8 @@ async def _spawn(
         ) from exc
 
     duration_ms = int((time.perf_counter() - started) * 1000)
-    out, out_trunc = _finalize_output(stdout_b, redact)
-    err, err_trunc = _finalize_output(stderr_b, redact)
+    out, out_trunc = _finalize_output(stdout_b, redact, overflowed=out_over)
+    err, err_trunc = _finalize_output(stderr_b, redact, overflowed=err_over)
     return {
         "exit_code": proc.returncode if proc.returncode is not None else -1,
         "stdout": out,
@@ -145,17 +207,22 @@ async def _spawn(
 
 
 def _finalize_output(
-    raw: Optional[bytes], redact: Optional[list[tuple[str, str]]]
+    raw: Optional[bytes],
+    redact: Optional[list[tuple[str, str]]],
+    *,
+    overflowed: bool = False,
 ) -> tuple[str, bool]:
-    """截断 + 脱敏 stdout/stderr。
+    """截断 + 脱敏 stdout/stderr。``overflowed`` = 源头排水已丢字节（增量读，D4-③）——
+    截断标记与 cap 语义同 W1a 现状（超 256KiB 即 truncated=True）。
 
-    无脱敏（含普通非 skill 命令）→ 原字节截断快路径（零开销）。有脱敏 → **先解码全量 + 替换密钥值
-    再截断**（``redact`` 早于 cap 是关键：byte-cap 在前会把恰跨截断边界的密钥值切一半 → 半个值泄漏）。
+    无脱敏（含普通非 skill 命令）→ 原字节截断快路径（零开销）。有脱敏 → **先解码保留段 + 替换
+    密钥值再截断**（``redact`` 早于 cap 是关键：byte-cap 在前会把恰跨截断边界的密钥值切一半 →
+    半个值泄漏；保留段 = cap+margin，跨界密钥落在 margin 内整段命中）。
     """
     if not raw:
-        return "", False
+        return "", overflowed
     if not redact:
-        truncated = len(raw) > _OUTPUT_CAP_BYTES
+        truncated = overflowed or len(raw) > _OUTPUT_CAP_BYTES
         return raw[:_OUTPUT_CAP_BYTES].decode("utf-8", errors="replace"), truncated
     text = raw.decode("utf-8", errors="replace")
     # 按值长度**降序**替换（W3 review P2-①）：两 secret 值互为前缀时（如 ``TOKENabc`` 与
@@ -165,8 +232,8 @@ def _finalize_output(
     for name, value in sorted(redact, key=lambda nv: len(nv[1]), reverse=True):
         if value:
             text = text.replace(value, f"[REDACTED:{name}]")
-    truncated = len(text) > _OUTPUT_CAP_BYTES
-    if truncated:
+    truncated = overflowed or len(text) > _OUTPUT_CAP_BYTES
+    if len(text) > _OUTPUT_CAP_BYTES:
         text = text[:_OUTPUT_CAP_BYTES]
     return text, truncated
 
@@ -215,10 +282,92 @@ def _skill_secret_overlay(names: frozenset) -> tuple[dict[str, str], list[str]]:
     return overlay, injected
 
 
+def _skill_unresolved_problem(store: Any, argv: list[str], run_cwd: str) -> Optional[str]:
+    """盲区独立 deny 地板（ADR-004 D4-②，unflagged 安全修复）：spawn 前对 argv 做内容完整性
+    地板 —— **独立于审批，「人批了也不跑」**。返回问题描述（→ 409 E_SKILL_UNRESOLVED），None = 过。
+
+    判定（范围**只限 skills root 内**，root 外 manual 语义零变化，codex P2-1）：
+      - argv 任一位（含 argv[0]）为路径样 token（绝对 / 含分隔符 / ``.`` 开头）且 realpath 落
+        skills root 内，但**不在任何** ``agent_skills.files_json`` 供应链清单内（含 ``.quarantine``
+        内容 / 目录本身 / 不存在路径 / 无行 skill）→ 拒；
+      - cwd 在 skills root 内时，**裸 token**（无分隔符）若按 cwd join 后是**现存**路径，同样必须
+        在清单内（直接盲区形状 ``cd <skills>/x && python3 rogue.py`` —— probe 不落地、gate 无对象）；
+        join 后不存在的裸 token 是普通实参（子命令 / flag），不拒。
+
+    与既有 E_SKILL_TAMPERED 的分工：gate 对 probe **落地**的触达文件做 hash 校验（tampered 先判，
+    错误码不变）；本地板兜「probe 认不出执行对象」的形状 —— skills 目录只应有供应链管控内容
+    （§13.17.3），岛卡/审批卡上语义不明的裸引用不应等于放行未受管内容。诚实边界：清单内但 probe
+    不落地的裸 token（如 manifest 内 ``main.py``）通过本地板但**不经 hash 校验** —— headless 侧由
+    evaluate 恒 ask 兜底，manual 侧 owner 卡上可见完整 argv+cwd。
+    """
+    import json
+    import os
+
+    try:
+        from src.skills.pack_fetch import skills_data_root
+
+        skills_root = os.path.realpath(skills_data_root())
+    except Exception:  # noqa: BLE001 — skills 根不可得（裸 worktree）→ 无 skill 概念，地板不适用
+        return None
+
+    def _within(rp: str) -> bool:
+        return rp == skills_root or rp.startswith(skills_root + os.sep)
+
+    try:
+        cwd_rp = os.path.realpath(run_cwd)
+    except (OSError, ValueError):
+        cwd_rp = run_cwd
+    cwd_in_skills = _within(cwd_rp)
+
+    manifest_cache: dict[str, Optional[set]] = {}
+
+    def _manifest_rels(name: str) -> Optional[set]:
+        if name not in manifest_cache:
+            row = store.get_skill(name)
+            try:
+                data = json.loads(row.files_json) if row and row.files_json else None
+            except (ValueError, TypeError):
+                data = None
+            manifest_cache[name] = set(data) if isinstance(data, dict) else None
+        return manifest_cache[name]
+
+    for tok in argv:
+        if not isinstance(tok, str) or not tok:
+            continue
+        pathish = os.path.isabs(tok) or os.sep in tok or tok.startswith(".")
+        if pathish:
+            cand = tok if os.path.isabs(tok) else os.path.join(run_cwd, tok)
+        elif cwd_in_skills:
+            cand = os.path.join(run_cwd, tok)
+            if not os.path.lexists(cand):
+                continue  # 纯实参（子命令/flag），非内容引用
+        else:
+            continue
+        try:
+            rp = os.path.realpath(cand)
+        except (OSError, ValueError):
+            continue  # 解析不动的 token 不落 skills 判定（root 外语义零变化）
+        if not _within(rp):
+            continue
+        if rp == skills_root:
+            return f"argv references the skills root directory itself ({tok!r})"
+        first = rp[len(skills_root) + 1:].split(os.sep, 1)[0]
+        skdir = skills_root + os.sep + first
+        rel = rp[len(skdir) + 1:].replace(os.sep, "/") if rp.startswith(skdir + os.sep) else None
+        rels = _manifest_rels(first) if first != ".quarantine" else None
+        if rels is None or rel is None or rel not in rels:
+            return (
+                f"argv references {rp} inside the managed skills directory but it is not part of "
+                "any installed skill's file manifest"
+            )
+    return None
+
+
 @router.post("/run", dependencies=[Depends(verify_local_token)])
 async def run_command(request: Request, body: RunRequest):
     """执行一条命令（argv 数组，**无 shell**）。固定 env 白名单基底（不继承全局密钥）；run_command
-    地板只静态标红（floor_hits），不阻断——批准后即任意执行（无沙箱，见模块 docstring）。"""
+    地板只静态标红（floor_hits），不阻断——批准后即任意执行（无沙箱，见模块 docstring）。
+    skills root 内的未清单化内容另有独立 deny 地板（``_skill_unresolved_problem``，409 硬拒）。"""
     from src.api.exec_floor import _data_root
 
     floor = get_exec_floor()
@@ -256,6 +405,18 @@ async def run_command(request: Request, body: RunRequest):
                 source="exec",
             )
 
+    # ADR-004 D4-②：盲区独立 deny —— probe 认不出执行对象的 skills-root 内引用（裸 token /
+    # 目录 / quarantine / 清单外路径）硬拒，**独立于审批**（人批了也不跑）。409 文案给修复路径。
+    unresolved = _skill_unresolved_problem(store, body.argv, run_cwd)
+    if unresolved is not None:
+        raise APIError(
+            "E_SKILL_UNRESOLVED",
+            f"{unresolved}; move the script outside the skills directory to run it manually, "
+            "or install it via the skill supply chain (Settings → Skills) so it enters the manifest",
+            http_status=409,
+            source="exec",
+        )
+
     # W3: 命中 skill 目录 → 该 skill 声明 ∩ 已存储密钥叠加进子进程 env（固定基底之上）；stdout/stderr
     # 精确脱敏。非 skill 命令 → 零注入（基底 W1a 行为不变）。密钥值任何形态**不进响应/日志/异常**。
     overlay, injected_names = _skill_secret_overlay(probe.names)
@@ -275,7 +436,12 @@ async def run_command(request: Request, body: RunRequest):
     result["floor_hits"] = floor_hits
     result["injected_secret_names"] = injected_names  # W4 审批卡展示；值不在此
     result["first_run_recorded"] = first_run_recorded  # W4 首跑闸：本次落记录的 entrypoint
-    result["policy"] = _evaluate("exec", {"argv": body.argv, "cwd": run_cwd})
+    result["policy"] = _evaluate(
+        "exec",
+        {"argv": body.argv, "cwd": run_cwd},
+        context_mode=body.context_mode,
+        agent_id=body.agent_id,
+    )
     return success_envelope(result, request=request, source="exec")
 
 
@@ -335,7 +501,10 @@ async def file_read(request: Request, body: FileReadRequest):
         raise APIError("E_EXEC_FLOOR_DENIED", str(exc), http_status=403, source="exec") from exc
     except OSError as exc:
         raise _map_file_oserror(exc, body.path) from exc
-    result["policy"] = _evaluate("file_read", {"path": body.path})
+    result["policy"] = _evaluate(
+        "file_read", {"path": body.path},
+        context_mode=body.context_mode, agent_id=body.agent_id,
+    )
     return success_envelope(result, request=request, source="exec")
 
 
@@ -349,5 +518,8 @@ async def file_write(request: Request, body: FileWriteRequest):
         raise APIError("E_EXEC_FLOOR_DENIED", str(exc), http_status=403, source="exec") from exc
     except OSError as exc:
         raise _map_file_oserror(exc, body.path) from exc
-    result["policy"] = _evaluate("file_write", {"path": body.path})
+    result["policy"] = _evaluate(
+        "file_write", {"path": body.path},
+        context_mode=body.context_mode, agent_id=body.agent_id,
+    )
     return success_envelope(result, request=request, source="exec")

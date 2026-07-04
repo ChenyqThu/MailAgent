@@ -235,7 +235,7 @@ CREATE TABLE IF NOT EXISTS policy_rules (
     capability   TEXT NOT NULL,          -- 'exec' | 'file_read' | 'file_write' | 'web'
     matcher_json TEXT NOT NULL,          -- 结构化 matcher（带 "v":1 版本位）
     context_mode TEXT NOT NULL DEFAULT 'manual_chat',
-    agent_id     TEXT,                   -- S4 预留：per-agent 规则；S2 恒 NULL
+    agent_id     TEXT,                   -- NULL=全局(manual)；S5 起 per-agent 规则（严格等值键，ADR-004）
     enabled      INTEGER NOT NULL DEFAULT 1,
     note         TEXT,
     created_at   TEXT NOT NULL,
@@ -245,6 +245,11 @@ CREATE TABLE IF NOT EXISTS policy_rules (
 
 CREATE INDEX IF NOT EXISTS idx_policy_rules_lookup
     ON policy_rules(capability, context_mode, enabled);
+
+-- S5 per-agent 规则查询索引（ADR-004 §3.3，codex P1-5；additive，agent_config.db 镜像 api_keys
+-- 纪律不进 DB_VERSION —— DDL 幂等，老库下次 store 初始化自动补建）。
+CREATE INDEX IF NOT EXISTS idx_policy_rules_agent
+    ON policy_rules(capability, context_mode, agent_id, enabled);
 
 CREATE TABLE IF NOT EXISTS agent_profile_docs (
     doc_name     TEXT PRIMARY KEY,
@@ -812,7 +817,15 @@ class AgentConfigStore:
         agent_id: Optional[str] = None,
     ) -> PolicyRuleRow:
         """落一条结构化白名单规则。``matcher_json`` 已是校验过的 typed matcher 序列化串
-        （合法性由 policy.py 的 pydantic 模型在 API 层把关，store 不二次解析——只存原样）。"""
+        （合法性由 policy.py 的 pydantic 模型在 API 层把关，store 不二次解析——只存原样）。
+
+        ``agent_id``（S5 per-agent，ADR-004 §3.3）：store 层只拒**空串/空白**（``agent_id=''``
+        既非 NULL 也匹配不到任何 run，纯脏数据，codex P1-5）；「agent 存在且 type='custom'」的
+        归属校验在 API 层做 —— agent 行在 sync_store（另一库），store 保持单库零跨库依赖
+        （镜像 api_keys 纪律）。
+        """
+        if agent_id is not None and (not isinstance(agent_id, str) or not agent_id.strip()):
+            raise ValueError("policy rule agent_id must be a non-empty string or None")
         now = _now_iso()
         with self._connection() as conn:
             cur = conn.execute(
@@ -827,9 +840,14 @@ class AgentConfigStore:
         return _row_to_policy_rule(row)
 
     def list_policy_rules(
-        self, *, capability: Optional[str] = None, context_mode: Optional[str] = None
+        self,
+        *,
+        capability: Optional[str] = None,
+        context_mode: Optional[str] = None,
+        agent_id: Optional[str] = None,
     ) -> list[PolicyRuleRow]:
-        """列全部规则（可选按 capability / context_mode 过滤），最新在前。"""
+        """列全部规则（可选按 capability / context_mode / agent_id 过滤），最新在前。
+        ``agent_id=None`` = 不过滤（现状，含全局与 per-agent 全部行）；有值 = 严格等值。"""
         sql = "SELECT * FROM policy_rules"
         clauses: list[str] = []
         params: list[Any] = []
@@ -839,6 +857,9 @@ class AgentConfigStore:
         if context_mode is not None:
             clauses.append("context_mode = ?")
             params.append(context_mode)
+        if agent_id is not None:
+            clauses.append("agent_id = ?")
+            params.append(agent_id)
         if clauses:
             sql += " WHERE " + " AND ".join(clauses)
         sql += " ORDER BY id DESC"
@@ -883,19 +904,49 @@ class AgentConfigStore:
             conn.commit()
             return cur.rowcount > 0
 
-    def candidate_policy_rules(self, capability: str, context_mode: str) -> list[PolicyRuleRow]:
-        """评估候选规则 = ``enabled=1 AND capability=? AND context_mode=? AND agent_id IS NULL``。
+    def candidate_policy_rules(
+        self, capability: str, context_mode: str, agent_id: Optional[str] = None
+    ) -> list[PolicyRuleRow]:
+        """评估候选规则（双键，ADR-004 §3.3）：
+
+        - ``agent_id=None``（manual 消费方现状）→ ``AND agent_id IS NULL``，查询串与 S2
+          **逐字节相同**（tests/agent_config 有源文本锚定断言，勿改动该字符串）；
+        - ``agent_id='<id>'``（headless per-agent）→ ``AND agent_id = ?`` **严格等值** ——
+          全局（NULL）规则永不进 headless 候选集，headless 规则永不进 manual 候选集
+          （红线①双向物理隔离，绝无 ``IS NULL OR``）；
+        - ``agent_id`` 空串/空白 → 空候选（脏实参拒绝，evaluate 兜底 ask，codex P1-5）。
 
         **context_mode 严格等值绑定**（红线①）：manual_chat 规则永不进 untrusted_trigger 查询的
-        候选集，反之亦然。agent_id IS NULL = 只全局 manual 规则（S4 的 per-agent 规则另键过滤）。
+        候选集，反之亦然。
         """
-        with self._connection() as conn:
-            rows = conn.execute(
+        if agent_id is None:
+            sql = (
                 "SELECT * FROM policy_rules WHERE enabled = 1 AND capability = ? "
-                "AND context_mode = ? AND agent_id IS NULL ORDER BY id ASC",
-                (capability, context_mode),
-            ).fetchall()
+                "AND context_mode = ? AND agent_id IS NULL ORDER BY id ASC"
+            )
+            params: tuple[Any, ...] = (capability, context_mode)
+        else:
+            if not isinstance(agent_id, str) or not agent_id.strip():
+                return []
+            sql = (
+                "SELECT * FROM policy_rules WHERE enabled = 1 AND capability = ? "
+                "AND context_mode = ? AND agent_id = ? ORDER BY id ASC"
+            )
+            params = (capability, context_mode, agent_id)
+        with self._connection() as conn:
+            rows = conn.execute(sql, params).fetchall()
         return [_row_to_policy_rule(r) for r in rows]
+
+    def delete_policy_rules_for_agent(self, agent_id: str) -> int:
+        """agent 删除级联（ADR-004 §3.3 ④）：清该 agent 的全部 policy_rules —— 悬空规则虽匹配
+        不到 run，但会在 Settings 留鬼行。返回删除行数。空/空白 agent_id → 0（**绝不**误删
+        agent_id IS NULL 的全局规则）。reports 的 delete_agent 路径调用。"""
+        if not isinstance(agent_id, str) or not agent_id.strip():
+            return 0
+        with self._connection() as conn:
+            cur = conn.execute("DELETE FROM policy_rules WHERE agent_id = ?", (agent_id,))
+            conn.commit()
+            return cur.rowcount
 
     def bump_policy_rule_use(self, rule_id: int) -> None:
         """规则命中（auto_allow）→ last_used_at=now + use_count+1（审计 + 管理页展示）。"""

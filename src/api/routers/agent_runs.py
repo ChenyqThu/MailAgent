@@ -30,8 +30,10 @@ from src.agents.fence import fence_email_envelope
 from src.agents.run_state import derive_agent_run_state
 from src.agents.trigger import (
     EmailFilterTrigger,
+    ToolPolicy,
     TriggerValidationError,
     parse_budget,
+    parse_tool_policy,
     parse_trigger,
 )
 from src.api.app import APIError, success_envelope
@@ -40,6 +42,54 @@ from src.api.deps import get_job_repo, get_report_store, get_repository
 from src.sync.async_jobs import AsyncJob
 
 router = APIRouter(prefix="/api/agent-runs", tags=["agent-runs"])
+
+
+# ── per-agent 工具面常量（S5 ADR-004 §5.1 / D3，单源 —— spec 投影与 Settings tool-options
+# 端点同源，前端不手抄第二份）──────────────────────────────────────────────────────────
+
+# 🔴 默认安全集：type='custom' 且 tool_policy_json 为 NULL / 缺 allowed_tools 时投影此集 ——
+# 语义从「NULL=不收窄」改为「NULL=默认安全集」（对 ADR-003 D6 的**显式修订**，codex P1-1：
+# 「Settings 模板不勾 kos_query」挡不住 API 直建/空策略行，收窄必须是投影层结构性保证）。
+# 排除在默认集外（owner 显式勾选才有）：kos_query（trusted-sink 残余面）、chat_session_*
+# （历史会话=二阶注入面）、agent_profile_read/history（身份文档不进 untrusted 上下文）、
+# discover_skills / skill_* / report_* / plan_update（headless 默认无需求）。
+DEFAULT_CUSTOM_AGENT_ALLOWED_TOOLS: tuple[str, ...] = (
+    # email 读族（headless agent 的最小工作集）
+    "email_search", "email_search_fulltext", "email_get", "email_body",
+    "email_list_thread", "email_search_attachments",
+    # domain_write 族（注册 ≠ 免卡：无 D1 规则时仍恒岛卡）
+    "email_flag", "email_archive", "email_pin", "email_resync", "email_draft_reply",
+)
+
+# headless 可用工具全集 = 矩阵地板内 read + domain_write（与 gateway policy.ts
+# GATEWAY_TOOL_CLASSES / tests/agent_eval/tool_catalog.json 的 tool_class 轴同源；
+# tests/api 有 catalog 一致性闸，新读/写工具漏此表必红）。exec / outbound /
+# capability_change 结构性缺席（ADR-004 D2/D3：exec 走 grant_exec 矩阵例外，非此列表）。
+HEADLESS_TOOL_OPTIONS: tuple[tuple[str, str], ...] = (
+    ("agent_profile_history", "read"),
+    ("agent_profile_read", "read"),
+    ("chat_session_get", "read"),
+    ("chat_session_list", "read"),
+    ("chat_session_search", "read"),
+    ("discover_skills", "read"),
+    ("email_body", "read"),
+    ("email_get", "read"),
+    ("email_list_thread", "read"),
+    ("email_search", "read"),
+    ("email_search_attachments", "read"),
+    ("email_search_fulltext", "read"),
+    ("kos_query", "read"),
+    ("plan_update", "read"),
+    ("report_get", "read"),
+    ("report_list", "read"),
+    ("skill_list_installed", "read"),
+    ("skill_read", "read"),
+    ("email_archive", "domain_write"),
+    ("email_draft_reply", "domain_write"),
+    ("email_flag", "domain_write"),
+    ("email_pin", "domain_write"),
+    ("email_resync", "domain_write"),
+)
 
 
 # ── flag gate ───────────────────────────────────────────────────────────────────
@@ -69,21 +119,13 @@ def _require_flag() -> None:
 # ── spec 组装 helpers（纯逻辑，从 job.params + report_agent 行派生）─────────────────
 
 
-def _parse_allowed_tools(raw: Any) -> Optional[list[str]]:
-    """tool_policy_json → ``allowed_tools`` list[str]（D6 工具收窄）。
-
-    NULL/缺 key/非法 → None（不额外收窄）；显式 ``[]`` → 忠实透传（gateway 交集成空集 = owner
-    显式选零工具）。深值域校验（工具名合法性 + 交集）在 gateway W3 施加，本层只做结构 parse。
-    """
-    if not raw:
-        return None
+def _tool_policy_lenient(raw: Any) -> ToolPolicy:
+    """tool_policy_json → ``ToolPolicy``（读侧宽容包装：保存时 ``validate_agent_config_patch``
+    已严格拒，运行时坏形状 → 未配置语义 = 默认安全集 + 无 grant，fail-closed 方向，不炸 run）。"""
     try:
-        data = json.loads(raw) if isinstance(raw, str) else raw
-    except (json.JSONDecodeError, TypeError):
-        return None
-    if not isinstance(data, dict) or not isinstance(data.get("allowed_tools"), list):
-        return None
-    return [str(t) for t in data["allowed_tools"] if isinstance(t, str) and t]
+        return parse_tool_policy(raw)
+    except ValueError:
+        return ToolPolicy()
 
 
 def _parse_fallback_models(raw: Any) -> Optional[list[str]]:
@@ -190,7 +232,16 @@ def _assemble_spec(job: AsyncJob) -> dict[str, Any]:
             http_status=409, source="agent-runs",
         )
     budget = parse_budget(agent.get("budget_json"))
-    allowed_tools = _parse_allowed_tools(agent.get("tool_policy_json"))
+    tool_policy = _tool_policy_lenient(agent.get("tool_policy_json"))
+    # S5 ADR-004 §5.1（显式修订 ADR-003 D6）：allowed_tools 未配置（NULL/缺 key）→ 投影
+    # **默认安全集**（非「不收窄」）；owner 显式列表 → verbatim（仍 ∩ gateway 矩阵地板）；
+    # 显式 [] → 空集。投影后 allowedTools 恒为非空字段 —— gateway 侧对缺失 spec 按空集
+    # fail-closed（W4b）。
+    allowed_tools = (
+        list(tool_policy.allowed_tools)
+        if tool_policy.allowed_tools is not None
+        else list(DEFAULT_CUSTOM_AGENT_ALLOWED_TOOLS)
+    )
     fired_at = _fired_at_iso(trigger_kind, fire_key, job.created_at)
 
     prompt: dict[str, Any] = {"taskPrompt": (agent.get("prompt") or "")}
@@ -204,13 +255,18 @@ def _assemble_spec(job: AsyncJob) -> dict[str, Any]:
         if envelope:
             prompt["emailEnvelope"] = envelope
 
+    tool_policy_out: dict[str, Any] = {"allowedTools": allowed_tools}
+    if tool_policy.grant_exec is True:
+        # 仅 parse 后字面 True 才投影（ADR-004 P1-4 —— gateway 从判别布尔**构造** grants，
+        # 永不透传 raw object）。
+        tool_policy_out["grantExec"] = True
     spec: dict[str, Any] = {
         "jobId": job.job_id,
         "agentId": agent_id,
         "trigger": trigger_out,
         "prompt": prompt,
         "model": (agent.get("model") or "").strip() or None,
-        "toolPolicy": ({"allowedTools": allowed_tools} if allowed_tools is not None else {}),
+        "toolPolicy": tool_policy_out,
         "budget": {"maxSteps": budget.max_steps, "maxRunSeconds": budget.max_run_seconds},
         "sessionTitle": _session_title(agent, agent_id, fired_at),
     }
@@ -321,6 +377,27 @@ def _run_history_item(job: AsyncJob) -> dict[str, Any]:
         "error": job.last_error,
         "tokens": result.get("usage"),
     }
+
+
+@router.get("/tool-options", dependencies=[Depends(verify_cf_access)])
+async def get_tool_options(request: Request):
+    """Settings per-agent 工具白名单编辑面的选项源（S5 W4a，ADR-004 §5.1）。
+
+    🔴 响应契约（形状冻结，Settings wave 按此消费，不可改）：
+    ``{"tools": [{"name": str, "class": "read"|"domain_write"}], "defaults": [str, ...]}``
+    —— ``tools`` = headless 可用工具全集（矩阵地板内 read+domain_write），``defaults`` =
+    ``DEFAULT_CUSTOM_AGENT_ALLOWED_TOOLS``。鉴权同 run 历史（``verify_cf_access``，renderer
+    调用面）；flag off → 404（S4 纪律）。
+    """
+    _require_flag()
+    return success_envelope(
+        {
+            "tools": [{"name": n, "class": c} for n, c in HEADLESS_TOOL_OPTIONS],
+            "defaults": list(DEFAULT_CUSTOM_AGENT_ALLOWED_TOOLS),
+        },
+        request=request,
+        source="agent-runs",
+    )
 
 
 @router.get("", dependencies=[Depends(verify_cf_access)])

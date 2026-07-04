@@ -196,10 +196,20 @@ async def set_config(request: Request, agent_id: str, body: Optional[dict[str, A
 
 @router.delete("/report-agents/{agent_id}", dependencies=[Depends(verify_cf_access)])
 async def delete_agent(request: Request, agent_id: str):
-    """删一行 agent 配置（写）。镜像 IPC report:deleteAgent → {deleted}。404 当不存在。"""
+    """删一行 agent 配置（写）。镜像 IPC report:deleteAgent → {deleted}。404 当不存在。
+
+    S5 级联（ADR-004 §3.3 ④，codex P1-5）：随删该 agent 的 per-agent policy_rules
+    （agent_config.db）—— 悬空规则匹配不到 run，但会在 Settings 留鬼行。best-effort：
+    agent_config.db 不可得（裸 worktree）不阻断删除本体。"""
     store = get_report_store()
     if not store.delete_agent(agent_id):
         raise APIError("E_NOT_FOUND", f"report_agent {agent_id!r} not found", source="sqlite")
+    try:
+        from src.agent_config.store import get_agent_config_store
+
+        get_agent_config_store().delete_policy_rules_for_agent(agent_id)
+    except Exception:  # noqa: BLE001 — 级联清理 best-effort，不阻断删除
+        pass
     return success_envelope({"deleted": agent_id}, request=request, source="sqlite")
 
 

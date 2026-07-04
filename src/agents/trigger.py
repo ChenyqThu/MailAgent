@@ -45,6 +45,11 @@ class TriggerValidationError(ValueError):
     """trigger_json 校验失败（判别式非法 / ReDoS 超长 / cron 非法 / 谓词全空）。"""
 
 
+class ToolPolicyValidationError(ValueError):
+    """tool_policy_json 校验失败（非 object / 未知键 / 版本不符 / grant_exec 非 bool，
+    ADR-004 P1-4 严格化）。"""
+
+
 @dataclass(frozen=True)
 class CronTrigger:
     """cron 定时触发 → contextMode='cron_headless'。"""
@@ -74,6 +79,23 @@ class Budget:
     max_steps: int = DEFAULT_MAX_STEPS
     max_runs_per_day: int = DEFAULT_MAX_RUNS_PER_DAY
     max_run_seconds: int = DEFAULT_MAX_RUN_SECONDS
+
+
+# tool_policy_json v1 允许键（additive：S4 = allowed_tools；S5 ADR-004 §4.1 += grant_exec）。
+_TOOL_POLICY_KEYS = frozenset({"v", "allowed_tools", "grant_exec"})
+
+
+@dataclass(frozen=True)
+class ToolPolicy:
+    """tool_policy_json 严格解析结果（ADR-004 P1-4）。
+
+    ``allowed_tools=None`` = 未配置 —— spec 投影层落 ``DEFAULT_CUSTOM_AGENT_ALLOWED_TOOLS``
+    默认安全集（ADR-004 §5.1，对 ADR-003 D6「NULL=不收窄」的显式修订）；``()`` = owner 显式
+    空集（verbatim 透传）。``grant_exec`` 仅字面 ``True`` 有效（投影仅当 True 才输出）。
+    """
+
+    allowed_tools: Optional[Tuple[str, ...]] = None
+    grant_exec: bool = False
 
 
 def _as_dict(raw: Union[str, dict, None]) -> Optional[dict]:
@@ -223,6 +245,45 @@ def parse_budget(raw: Union[str, dict, None]) -> Budget:
     )
 
 
+def parse_tool_policy(raw: Union[str, dict, None]) -> ToolPolicy:
+    """tool_policy_json（JSON 串 / dict / None）→ ``ToolPolicy``（**严格** typed 解析，ADR-004
+    P1-4 —— TS interface 运行时擦除，两端都必须判别式校验）。
+
+    - ``None`` / ``''`` → ``ToolPolicy()``（未配置：投影层落默认安全集）
+    - 非 object / 坏 JSON → 拒
+    - ``v`` 缺省视作 1（镜像 ``_check_version`` 宽容），显式非 1 → 拒
+    - 未知键 → 拒（extra forbid —— 防未来加字段时 junk 键静默流进矩阵判定）
+    - ``allowed_tools``：缺省/null → None；list[str]（滤空串）→ tuple（显式 ``[]`` → ``()``）；
+      其它类型 → 拒
+    - ``grant_exec``：缺省 → False；必须 JSON boolean（``"yes"`` / ``1`` → 拒）
+
+    保存时权威（``validate_agent_config_patch`` 调用，坏形状 400）；读侧投影（spec 端点）自行
+    try/except 落安全默认。Raises ``ToolPolicyValidationError``（``ValueError`` 子类）。
+    """
+    if raw is None or raw == "":
+        return ToolPolicy()
+    data = _as_dict(raw)
+    if data is None:
+        raise ToolPolicyValidationError("tool_policy must be a JSON object")
+    unknown = set(data) - _TOOL_POLICY_KEYS
+    if unknown:
+        raise ToolPolicyValidationError(f"unknown tool_policy keys: {sorted(unknown)}")
+    v = data.get("v", 1)
+    if v != 1:
+        raise ToolPolicyValidationError(f"unsupported tool_policy version v={v!r} (expect 1)")
+    allowed_raw = data.get("allowed_tools")
+    if allowed_raw is None:
+        allowed: Optional[Tuple[str, ...]] = None
+    elif isinstance(allowed_raw, list) and all(isinstance(t, str) for t in allowed_raw):
+        allowed = tuple(t for t in allowed_raw if t)
+    else:
+        raise ToolPolicyValidationError("allowed_tools must be a list of strings")
+    grant = data.get("grant_exec", False)
+    if not isinstance(grant, bool):
+        raise ToolPolicyValidationError("grant_exec must be a JSON boolean")
+    return ToolPolicy(allowed_tools=allowed, grant_exec=grant is True)
+
+
 def validate_agent_config_patch(patch: dict) -> None:
     """保存时（set_config REST + CLI config-set）深校验 custom agent friendly patch。
 
@@ -231,14 +292,20 @@ def validate_agent_config_patch(patch: dict) -> None:
     不触发（cron worker / email dispatch 都先 parse_trigger 再匹配, 坏配置 skip + warning）,
     故保存时硬拒给反馈。
 
-    ``budget`` / ``tool_policy`` 保存时**不**在此硬拒:
-      - 结构校验（必须 dict|null）已在 ``wire.config_patch_to_db`` 做（非 dict → ValueError → 400）;
-      - budget 值域是运行时 ``parse_budget`` 防御性 clamp（设计即优雅降级, 非 skip, 无需拒）;
-      - tool_policy 的 allowed_tools 交集在 gateway 运行时施加（W3）, W1 无值域校验器。
+    ``tool_policy`` 非空时同样硬拒坏形状（S5 ADR-004 P1-4：``parse_tool_policy`` 严格化 ——
+    grant_exec 是 headless exec 矩阵例外的授权位, 坏形状入库再靠读侧宽容会静默丢 owner 意图）。
 
-    校验失败抛 ``TriggerValidationError``（``ValueError`` 子类）→ caller 转 400 E_INVALID_ARG /
-    CLI 错误出口。``trigger`` 缺省 / None（清空）跳过, 不碰 report/preprocess/search 的 patch。
+    ``budget`` 保存时**不**在此硬拒:
+      - 结构校验（必须 dict|null）已在 ``wire.config_patch_to_db`` 做（非 dict → ValueError → 400）;
+      - budget 值域是运行时 ``parse_budget`` 防御性 clamp（设计即优雅降级, 非 skip, 无需拒）。
+
+    校验失败抛 ``TriggerValidationError`` / ``ToolPolicyValidationError``（均 ``ValueError``
+    子类）→ caller 转 400 E_INVALID_ARG / CLI 错误出口。``trigger`` / ``tool_policy`` 缺省 /
+    None（清空）跳过, 不碰 report/preprocess/search 的 patch。
     """
     trig = patch.get("trigger")
     if trig is not None:
         parse_trigger(trig)  # 抛 TriggerValidationError（ValueError）on 坏配置
+    tp = patch.get("tool_policy")
+    if tp is not None:
+        parse_tool_policy(tp)  # 抛 ToolPolicyValidationError（ValueError）on 坏形状

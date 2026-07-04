@@ -9,8 +9,11 @@ from src.agents.trigger import (
     Budget,
     CronTrigger,
     EmailFilterTrigger,
+    ToolPolicy,
+    ToolPolicyValidationError,
     TriggerValidationError,
     parse_budget,
+    parse_tool_policy,
     parse_trigger,
     validate_agent_config_patch,
 )
@@ -214,6 +217,55 @@ def test_validate_patch_skips_when_trigger_none():
     validate_agent_config_patch({"trigger": None})
 
 
-def test_validate_patch_ignores_budget_tool_policy():
-    # budget/tool_policy 不在此硬拒（结构闸在 config_patch_to_db，值域运行时 clamp/交集）。
+def test_validate_patch_ignores_budget_but_checks_tool_policy_shape():
+    # budget 不在此硬拒（值域运行时 clamp）；tool_policy 合法形状通过（S5 起坏形状硬拒，见下）。
     validate_agent_config_patch({"budget": {"max_steps": 999}, "tool_policy": {"allowed_tools": []}})
+
+
+# ============================================================
+# tool_policy 严格解析（S5 ADR-004 P1-4）
+# ============================================================
+
+def test_parse_tool_policy_unconfigured():
+    tp = parse_tool_policy(None)
+    assert tp.allowed_tools is None and tp.grant_exec is False
+    assert parse_tool_policy("") == ToolPolicy()
+
+
+def test_parse_tool_policy_valid_shapes():
+    tp = parse_tool_policy({"v": 1, "allowed_tools": ["email_get", "email_body"], "grant_exec": True})
+    assert tp.allowed_tools == ("email_get", "email_body")
+    assert tp.grant_exec is True
+    # v 缺省视作 1；grant_exec 缺省 False；显式 [] → ()（区别于 None）。
+    tp2 = parse_tool_policy({"allowed_tools": []})
+    assert tp2.allowed_tools == () and tp2.grant_exec is False
+    # JSON 串输入 + grant_exec 显式 False。
+    tp3 = parse_tool_policy('{"v": 1, "grant_exec": false}')
+    assert tp3.allowed_tools is None and tp3.grant_exec is False
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"v": 2},                                    # 未知版本
+        {"grant_exec": "yes"},                       # 字符串真值 → 拒（必须 JSON boolean）
+        {"grant_exec": 1},                           # int 1 → 拒（bool 严格）
+        {"allowed_tools": "email_get"},              # 非 list
+        {"allowed_tools": [1, 2]},                   # 非 str 项
+        {"v": 1, "sneaky": True},                    # 未知键（extra forbid）
+        "[]",                                         # 非 object JSON
+        "not-json",                                   # 坏 JSON
+    ],
+)
+def test_parse_tool_policy_rejects(bad):
+    with pytest.raises(ToolPolicyValidationError):
+        parse_tool_policy(bad)
+
+
+def test_validate_patch_rejects_bad_tool_policy():
+    with pytest.raises(ValueError):
+        validate_agent_config_patch({"tool_policy": {"grant_exec": "yes"}})
+    with pytest.raises(ValueError):
+        validate_agent_config_patch({"tool_policy": {"v": 1, "unknown_key": 1}})
+    # 清空（None）跳过（wire 落 SQL NULL）。
+    validate_agent_config_patch({"tool_policy": None})

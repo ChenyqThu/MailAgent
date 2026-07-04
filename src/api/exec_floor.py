@@ -25,7 +25,7 @@ from __future__ import annotations
 import os
 import stat as _stat
 import sys
-from functools import lru_cache
+import time
 from typing import Optional
 
 
@@ -252,12 +252,26 @@ class ExecFloor:
         return hits
 
 
-@lru_cache(maxsize=1)
+# inode 快照 TTL（ADR-004 D4-④）：快照后新建的敏感文件（如新落盘的 db-wal）此前永不进 inode
+# 集 —— 惰性重建把 staleness 窗口收敛到 ≤5min。重建无锁：ExecFloor 构造是纯读 stat，重复构建
+# 互不影响、模块级赋值原子（GIL），读侧拿到旧/新任一完整快照皆自洽（最坏 = 判定短暂偏旧 ≤TTL）。
+_FLOOR_TTL_SECONDS = 300.0
+_floor: Optional[ExecFloor] = None
+_floor_built_at = 0.0
+
+
 def get_exec_floor() -> ExecFloor:
-    """进程内 ExecFloor 单例（按当前 env 快照构建）。"""
-    return ExecFloor()
+    """进程内 ExecFloor 快照（按当前 env 构建；age 超 TTL 惰性重建，D4-④）。"""
+    global _floor, _floor_built_at
+    now = time.monotonic()
+    if _floor is None or now - _floor_built_at > _FLOOR_TTL_SECONDS:
+        _floor = ExecFloor()
+        _floor_built_at = now
+    return _floor
 
 
 def reset_exec_floor_cache() -> None:
     """test-only：清缓存，让测试切换 MAILAGENT_DATA_ROOT / _SKILLS_DIR 后重建地板。"""
-    get_exec_floor.cache_clear()
+    global _floor, _floor_built_at
+    _floor = None
+    _floor_built_at = 0.0
