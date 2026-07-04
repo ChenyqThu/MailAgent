@@ -96,10 +96,12 @@ def test_peragent_create_domain_write_derives_context_mode(client, fresh_agent_c
           "agentId": "daily"}, "existing custom agent"),                 # 非 custom type
         ({"capability": "domain_write", "matcher": {"v": 1, "tool": "email_flag"},
           "agentId": "dms", "contextMode": "manual_chat"}, "derived"),   # 显式 contextMode 拒
-        ({"capability": "web", "matcher": {"v": 1, "origin": "https://x.com"},
-          "agentId": "dms"}, "only support"),                            # capability 面外
         ({"capability": "file_read", "matcher": {"v": 1, "realpath_prefix": "/tmp"},
-          "agentId": "dms"}, "only support"),
+          "agentId": "dms"}, "only support"),                            # capability 面外
+        ({"capability": "web", "matcher": {"v": 1, "origin": "https://x.com"},
+          "agentId": "ghost"}, "existing custom agent"),                 # web 同套归属校验
+        ({"capability": "web", "matcher": {"v": 1, "origin": "https://x.com"},
+          "agentId": "dms", "contextMode": "manual_chat"}, "derived"),   # web 同套派生纪律
         ({"capability": "domain_write", "matcher": {"v": 1, "tool": "email_flag"},
           "agentId": "broken"}, "invalid trigger_json"),                 # 坏 trigger 无法派生
     ],
@@ -203,6 +205,60 @@ def test_peragent_exec_rejects_non_skill_argv1(client, fresh_agent_cfg, fresh_sk
         "matcher": {"v": 1, "argv0_realpath": ECHO, "argv_template": [{"pin": str(rogue)}]},
     })
     assert r.status_code == 201
+
+
+# ── per-agent web：域名白名单建规 + 双键 evaluate（S6 W3，ADR-004 rev3.1 F#1 语义翻转）────────
+#
+# 🔴 本节是对 rev1「web 全不引入」拒断言的**有意翻转**（rev3.1 §13 F#1 明示，非 frozen 面）：
+# per-agent web 规则（gated web_fetch 域名白名单）可建，走同套归属校验 + context_mode 派生；
+# matcher = WebMatcher {v:1, origin}，**无** headless 专用形状闸（exec 的 pinned-entrypoint 闸
+# 不适用于 web —— 负断言见 evaluate 测试：普通 origin 规则照样 auto_allow）。
+
+
+def test_peragent_web_rule_created_with_derived_context(client, fresh_agent_cfg, custom_agent_env):
+    r = _create(client, {
+        "capability": "web", "matcher": {"v": 1, "origin": "https://api.vendor.test"},
+        "agentId": "dms",
+    })
+    assert r.status_code == 201, r.json()
+    d = r.json()["data"]
+    assert d["agentId"] == "dms" and d["contextMode"] == "untrusted_trigger"
+    assert d["capability"] == "web" and d["dangerous"] is False
+    # cron agent → cron_headless（同 domain_write 派生表）。
+    r2 = _create(client, {
+        "capability": "web", "matcher": {"v": 1, "origin": "http://feeds.corp.test:8080"},
+        "agentId": "nightly",
+    })
+    assert r2.json()["data"]["contextMode"] == "cron_headless"
+    # 坏 origin matcher → 422（WebMatcher _valid_origin 权威）。
+    code, err, _ = _err(_create(client, {
+        "capability": "web", "matcher": {"v": 1, "origin": "ftp://x.com"}, "agentId": "dms",
+    }))
+    assert code == 422
+
+
+def test_peragent_web_evaluate_dual_key_no_exec_shape_gate(client, fresh_agent_cfg, custom_agent_env):
+    """双键隔离（manual 不见 per-agent web 规则、他 agent 不见）+ 负断言：web capability 不进
+    headless_exec_rule_problem 分支 —— 普通 origin 规则（非 pinned-entrypoint 形状）在 headless
+    evaluate 照样 auto_allow（若误挂 exec 形状闸会被 skip → ask，本测试即红）。"""
+    _create(client, {"capability": "web", "matcher": {"v": 1, "origin": "https://api.vendor.test"},
+                     "agentId": "dms"})
+    body = {"capability": "web", "action": {"url": "https://api.vendor.test/v1/data?q=1"},
+            "contextMode": "untrusted_trigger"}
+    # 带 agentId → 命中（canonical origin 归一：完整 URL → origin 等值）。
+    d = client.post("/api/agent/policy/evaluate", json={**body, "agentId": "dms"}).json()["data"]
+    assert d["decision"] == "auto_allow" and d["rule_id"] is not None
+    # manual（无 agentId）→ per-agent 规则不进候选 → ask（红线①双向隔离）。
+    assert client.post("/api/agent/policy/evaluate", json=body).json()["data"]["decision"] == "ask"
+    # 他 agent → ask（严格等值）。
+    assert client.post(
+        "/api/agent/policy/evaluate", json={**body, "agentId": "other"}
+    ).json()["data"]["decision"] == "ask"
+    # 非白名单域 → ask（origin 等值，子域不命中）。
+    assert client.post(
+        "/api/agent/policy/evaluate",
+        json={**body, "action": {"url": "https://sub.api.vendor.test/"}, "agentId": "dms"},
+    ).json()["data"]["decision"] == "ask"
 
 
 # ── list 过滤 + evaluate agentId + 删除级联 ─────────────────────────────────────────────

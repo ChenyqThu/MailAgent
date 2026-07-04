@@ -173,14 +173,18 @@ describe('intersectAllowedTools', () => {
 
 // ── agentRunContextFromSpec (pure) — discriminated grants construction (ADR-004 §4.1, P1-4) ───────
 
-describe('agentRunContextFromSpec — discriminated boolean, never a raw passthrough', () => {
-  test('grantExec === true → modeGrants {exec:true}; agentId/allowedTools carried', () => {
+describe('agentRunContextFromSpec — discriminated grants, never a raw passthrough', () => {
+  test('grantExec === true → modeGrants {exec:true}; agentId/allowedTools carried; web defaults off', () => {
     const ctx = agentRunContextFromSpec(
       makeSpec({
         toolPolicy: { allowedTools: ['email_flag'], grantExec: true } as AgentRunSpec['toolPolicy']
       })
     )
-    expect(ctx).toEqual({ agentId: 'dms', allowedTools: ['email_flag'], modeGrants: { exec: true } })
+    expect(ctx).toEqual({
+      agentId: 'dms',
+      allowedTools: ['email_flag'],
+      modeGrants: { exec: true, web: 'off' }
+    })
   })
 
   test.each([
@@ -196,7 +200,27 @@ describe('agentRunContextFromSpec — discriminated boolean, never a raw passthr
         toolPolicy: { allowedTools: [], grantExec: value } as unknown as AgentRunSpec['toolPolicy']
       })
     )
-    expect(ctx.modeGrants).toEqual({ exec: false })
+    expect(ctx.modeGrants).toEqual({ exec: false, web: 'off' })
+  })
+
+  // S6 W3 (rev3.1 D1) — grantWeb rides the same discriminated funnel: exactly 'gated'/'open'
+  // pass; every other value/type collapses to 'off' (parseWebGrant, never a raw passthrough).
+  test.each([
+    ['"gated"', 'gated', 'gated'],
+    ['"open"', 'open', 'open'],
+    ['"off"', 'off', 'off'],
+    ['true (junk)', true, 'off'],
+    ['1 (junk)', 1, 'off'],
+    ['"yes" (junk)', 'yes', 'off'],
+    ['"OPEN" (case junk)', 'OPEN', 'off'],
+    ['undefined (absent)', undefined, 'off']
+  ])('grantWeb = %s → web:%s', (_label, value, expected) => {
+    const ctx = agentRunContextFromSpec(
+      makeSpec({
+        toolPolicy: { allowedTools: [], grantWeb: value } as unknown as AgentRunSpec['toolPolicy']
+      })
+    )
+    expect(ctx.modeGrants?.web).toBe(expected)
   })
 
   test('junk keys on toolPolicy never reach the grants object (constructed, not spread)', () => {
@@ -211,8 +235,10 @@ describe('agentRunContextFromSpec — discriminated boolean, never a raw passthr
         } as unknown as AgentRunSpec['toolPolicy']
       })
     )
-    // exactly the one key — a future spec field can never smuggle a second grant in
-    expect(Object.keys(ctx.modeGrants!)).toEqual(['exec'])
+    // exactly the two grant keys — a future spec field can never smuggle another grant in,
+    // and the junk `web:true` KEY (not grantWeb) never reaches the web grant (stays 'off')
+    expect(Object.keys(ctx.modeGrants!)).toEqual(['exec', 'web'])
+    expect(ctx.modeGrants?.web).toBe('off')
   })
 
   test('allowedTools missing / non-array / non-string entries → [] resp. filtered (fail-closed §5.1)', () => {
@@ -399,8 +425,9 @@ describe('runHeadlessAgent — per-agent exec grant + fail-closed allowedTools (
     expect(names).toContain('file_read')
     expect(names).toContain('file_write')
     expect(names).toContain('email_flag')
-    // the grant opens ONLY the exec class — capability_change/outbound remain structurally absent
-    // even when the owner (mis)lists them in allowedTools (intersection only reduces)
+    // the grant opens ONLY the exec class — capability_change/web(no grant)/outbound remain
+    // structurally absent even when the owner (mis)lists them in allowedTools (intersection only
+    // reduces)
     expect(names).not.toContain('skill_install')
     expect(names).not.toContain('web_fetch')
     // and the intersection still narrows the non-exec face (email_search not allowed → absent)
@@ -440,6 +467,43 @@ describe('runHeadlessAgent — per-agent exec grant + fail-closed allowedTools (
     })
     await runHeadlessAgent(grantAwareCfg(seenTools), { jobId: 7, spec, sessionId: null }, new AbortController().signal)
     expect(seenTools[0].sort()).toEqual(['file_read', 'file_write', 'run_command'])
+  })
+
+  // S6 W3 (rev3.1 §3.2) — the intersection exemption extends exec → exec ∪ web: web tool names are
+  // not in the tool-options vocabulary either, so without the exemption the matrix would admit
+  // web_fetch and the intersection would strip it right back (the grant would be dead config).
+  test("grantWeb 'gated' + allowedTools WITHOUT web names → web tools STILL reach streamText; exec/capability_change/outbound absent", async () => {
+    const seenTools: string[][] = []
+    const spec = makeSpec({
+      toolPolicy: {
+        allowedTools: ['email_flag'],
+        grantWeb: 'gated'
+      } as unknown as AgentRunSpec['toolPolicy']
+    })
+    await runHeadlessAgent(grantAwareCfg(seenTools), { jobId: 7, spec, sessionId: null }, new AbortController().signal)
+    const names = seenTools[0]
+    expect(names).toContain('web_fetch')
+    expect(names).toContain('web_search')
+    expect(names).toContain('email_flag')
+    expect(names).not.toContain('run_command') // web grant lifts web ONLY
+    expect(names).not.toContain('skill_install')
+    expect(names).not.toContain('email_prepare_send')
+  })
+
+  test("allowedTools=[] + grantWeb 'open' → web tools alone survive; junk grantWeb never registers", async () => {
+    const seenTools: string[][] = []
+    const spec = makeSpec({
+      toolPolicy: { allowedTools: [], grantWeb: 'open' } as unknown as AgentRunSpec['toolPolicy']
+    })
+    await runHeadlessAgent(grantAwareCfg(seenTools), { jobId: 7, spec, sessionId: null }, new AbortController().signal)
+    expect(seenTools[0].sort()).toEqual(['web_fetch', 'web_search'])
+
+    const seenJunk: string[][] = []
+    const junkSpec = makeSpec({
+      toolPolicy: { allowedTools: [], grantWeb: 'yes' } as unknown as AgentRunSpec['toolPolicy']
+    })
+    await runHeadlessAgent(grantAwareCfg(seenJunk), { jobId: 8, spec: junkSpec, sessionId: null }, new AbortController().signal)
+    expect(seenJunk[0]).toEqual([])
   })
 
   test('allowedTools MISSING (malformed spec, no grant) → the model sees ZERO tools (fail-closed to [], §5.1)', async () => {
@@ -535,7 +599,7 @@ describe('runHeadlessAgent — drain outcomes', () => {
     expect(entry?.agentRunContext).toEqual({
       agentId: 'dms',
       allowedTools: ['email_search', 'email_body', 'email_flag', 'email_draft_reply'],
-      modeGrants: { exec: false },
+      modeGrants: { exec: false, web: 'off' },
       jobId: 7
     })
     expect(entry?.contextMode).toBe('cron_headless')

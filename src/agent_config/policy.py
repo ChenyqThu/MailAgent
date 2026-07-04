@@ -286,15 +286,32 @@ def _within_prefix(path: str, prefix: str) -> bool:
 
 
 def _normalize_origin(origin: str) -> Optional[str]:
-    """把 origin / 完整 URL 归一成 ``scheme://host:port``（端口按 scheme 默认补齐）。非 http(s)/
-    缺 host → None。"""
+    """canonical origin（ADR-004 rev3.1 D-fix-4 —— **四个消费处的唯一权威实现**：①规则存储校验
+    ②策略匹配 ``_match_web`` 双侧归一 ③``web.py`` redirect 逐跳检查 ④TS/Settings 预览经服务端
+    回显）：把 origin / 完整 URL 归一成 ``scheme://host:port``。
+
+    规格：scheme ∈ {http,https} 小写；host 小写 + 去尾点 + IDNA/punycode ASCII 编码
+    （``bücher.example`` ≡ ``xn--bcher-kva.example``；纯 ASCII host 原样，与 httpx 编码行为
+    对齐）；端口恒显式（缺省按 scheme 补 80/443）；path/query/fragment 丢弃；含 userinfo
+    （``user:pass@host``）→ None（拒，与 ``ssrf.validate_url`` 同向）；非 http(s)/缺 host/
+    IDNA 编码失败 → None（fail-closed：规则不命中、redirect 中止）。
+    """
     if not isinstance(origin, str) or not origin:
         return None
     parsed = urllib.parse.urlsplit(origin if "//" in origin else "//" + origin)
+    if parsed.username is not None or parsed.password is not None:
+        return None
     scheme = (parsed.scheme or "").lower()
-    host = (parsed.hostname or "").lower()
+    host = (parsed.hostname or "").lower().rstrip(".")
     if scheme not in ("http", "https") or not host:
         return None
+    if not host.isascii():
+        try:
+            import idna  # httpx 既有依赖（IDNA 2008，与 fetch 侧 httpx.URL 同源编码）
+
+            host = idna.encode(host).decode("ascii")
+        except Exception:  # noqa: BLE001 — 不可 IDNA 编码的 host 无法归一 → None（fail-closed）
+            return None
     try:
         port = parsed.port
     except ValueError:

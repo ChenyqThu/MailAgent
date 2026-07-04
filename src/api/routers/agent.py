@@ -729,10 +729,12 @@ def _custom_agents_enabled() -> bool:
         return False
 
 
-# per-agent 规则的 capability 面（ADR-004 V1）：domain_write（D1 免卡）+ exec（D2 pinned-entrypoint）。
-# file_read/file_write/web 不在 V1 headless 设计面（web 全不引入 —— D3；file 族无形状约束设计），
-# 建规拒 —— 需要时随对应 grant 键另立 ADR。
-_PER_AGENT_CAPABILITIES: tuple[str, ...] = ("domain_write", "exec")
+# per-agent 规则的 capability 面：domain_write（ADR-004 D1 免卡）+ exec（D2 pinned-entrypoint）+
+# web（S6 W3, ADR-004 rev3.1 D2/F#1 —— gated web_fetch 的域名白名单，matcher = WebMatcher
+# {v:1, origin}，无 headless 专用形状闸：origin 白名单对 manual 与 headless 同样合法，双键隔离
+# 即唯一结构约束）。file_read/file_write 不在设计面（无形状约束设计），建规拒 —— 需要时随对应
+# grant 键另立 ADR。
+_PER_AGENT_CAPABILITIES: tuple[str, ...] = ("domain_write", "exec", "web")
 
 
 def _derive_rule_context_mode(agent: dict[str, Any]) -> str:
@@ -794,8 +796,9 @@ async def create_policy_rule(request: Request, body: Optional[dict[str, Any]] = 
       - flag ``MAILAGENT_CUSTOM_AGENTS_ENABLED`` off → 404（S4 纪律，feature 不存在）；
       - agentId 须指向 sync_store 现存 ``type='custom'`` agent（拒空串/悬空归属，codex P1-5）；
       - contextMode **从 agent trigger.kind 派生**，请求显式传 → 400（表单不可选，防跨上下文规则）；
-      - capability 限 domain_write / exec；exec matcher 须过 pinned-entrypoint 形状闸
-        （raw ``{any}`` / 非 installed-skill entrypoint → 400，evaluate 侧另有 skip 复核双防线）。
+      - capability 限 domain_write / exec / web；exec matcher 须过 pinned-entrypoint 形状闸
+        （raw ``{any}`` / 非 installed-skill entrypoint → 400，evaluate 侧另有 skip 复核双防线）；
+        web matcher = ``{v:1, origin}``（canonical origin 校验，无 headless 专用形状闸，rev3.1）。
     """
     import json
 

@@ -23,6 +23,7 @@ import {
   isToolClassAllowedInMode,
   mayAutoApprove,
   normalizeContextMode,
+  parseWebGrant,
   type AgentContextMode,
   type AgentModeGrants,
   type GatewayToolClass
@@ -77,7 +78,10 @@ describe('classOfTool — single source + fail-closed', () => {
   test('classified names resolve from the map', () => {
     expect(classOfTool('email_flag')).toBe('domain_write')
     expect(classOfTool('set_skill_enabled')).toBe('capability_change')
-    expect(classOfTool('web_fetch')).toBe('outbound')
+    // ADR-004 rev3.1 §3.1 — web tools migrated out of 'outbound'; send stays outbound.
+    expect(classOfTool('web_fetch')).toBe('web')
+    expect(classOfTool('web_search')).toBe('web')
+    expect(classOfTool('email_prepare_send')).toBe('outbound')
     expect(classOfTool('email_search')).toBe('read')
   })
 
@@ -88,8 +92,9 @@ describe('classOfTool — single source + fail-closed', () => {
 })
 
 describe('matrix — isToolClassAllowedInMode (registration) × mayAutoApprove (card skip)', () => {
-  // The full 3×5 matrix, spelled out (ADR-001 D3): registration allows read/domain_write
-  // everywhere and restricts capability_change/exec/outbound to manual_chat; auto-approve is
+  // The full 3×6 matrix, spelled out (ADR-001 D3, 'web' class added by ADR-004 rev3.1):
+  // registration allows read/domain_write everywhere and restricts
+  // capability_change/exec/web/outbound to manual_chat (no grants); auto-approve is
   // domain_write × manual_chat ONLY.
   const REGISTRATION_EXPECTED: Record<AgentContextMode, Record<GatewayToolClass, boolean>> = {
     manual_chat: {
@@ -97,6 +102,7 @@ describe('matrix — isToolClassAllowedInMode (registration) × mayAutoApprove (
       domain_write: true,
       capability_change: true,
       exec: true,
+      web: true,
       outbound: true
     },
     untrusted_trigger: {
@@ -104,6 +110,7 @@ describe('matrix — isToolClassAllowedInMode (registration) × mayAutoApprove (
       domain_write: true,
       capability_change: false,
       exec: false,
+      web: false,
       outbound: false
     },
     cron_headless: {
@@ -111,6 +118,7 @@ describe('matrix — isToolClassAllowedInMode (registration) × mayAutoApprove (
       domain_write: true,
       capability_change: false,
       exec: false,
+      web: false,
       outbound: false
     }
   }
@@ -133,13 +141,14 @@ describe('matrix — isToolClassAllowedInMode (registration) × mayAutoApprove (
   })
 })
 
-// S5 W4 (ADR-004 D2/§9) — the matrix's THIRD axis: per-agent grants. Three invariants pinned:
-// capability_change/outbound are false under ANY grants (structurally un-grantable — the type has
-// only an exec key, and junk keys must have no effect); grants are consumed ONLY outside
-// manual_chat (manual is true regardless); exec flips ONLY on the discriminated `exec === true`.
+// S5 W4 (ADR-004 D2/§9) + S6 W3 (rev3.1 web axis) — the matrix's THIRD axis: per-agent grants.
+// Invariants pinned: capability_change/outbound (send) are false under ANY grants (structurally
+// un-grantable — the type has only exec + web keys, and junk keys/values must have no effect);
+// grants are consumed ONLY outside manual_chat (manual is true regardless); exec flips ONLY on
+// the discriminated `exec === true`; web flips ONLY on the exact 'gated'/'open' literals.
 describe('matrix — 3-axis (class × mode × grants, ADR-004)', () => {
   // junk objects a buggy/hostile caller could smuggle in (runtime has no type erasure guard —
-  // the function itself must only ever read `exec === true`).
+  // the function itself must only ever read the discriminated literals).
   const GRANTS_AXIS: Array<{ label: string; grants?: AgentModeGrants }> = [
     { label: 'undefined', grants: undefined },
     { label: '{}', grants: {} },
@@ -147,14 +156,22 @@ describe('matrix — 3-axis (class × mode × grants, ADR-004)', () => {
     { label: '{exec:false}', grants: { exec: false } },
     { label: "{exec:'yes'} (junk value)", grants: { exec: 'yes' } as unknown as AgentModeGrants },
     { label: '{exec:1} (junk value)', grants: { exec: 1 } as unknown as AgentModeGrants },
+    { label: "{web:'off'}", grants: { web: 'off' } },
+    { label: "{web:'gated'}", grants: { web: 'gated' } },
+    { label: "{web:'open'}", grants: { web: 'open' } },
+    { label: "{exec:true, web:'open'}", grants: { exec: true, web: 'open' } },
+    { label: '{web:true} (junk value)', grants: { web: true } as unknown as AgentModeGrants },
+    { label: "{web:'yes'} (junk value)", grants: { web: 'yes' } as unknown as AgentModeGrants },
+    { label: '{web:1} (junk value)', grants: { web: 1 } as unknown as AgentModeGrants },
     {
-      label: '{web:true, outbound:true, capability_change:true} (junk keys)',
-      grants: { web: true, outbound: true, capability_change: true } as unknown as AgentModeGrants
+      label: '{outbound:true, capability_change:true} (junk keys)',
+      grants: { outbound: true, capability_change: true } as unknown as AgentModeGrants
     }
   ]
 
   test.each(GRANTS_AXIS)('registration under grants=$label', ({ grants }) => {
     const execGranted = grants?.exec === true
+    const webGranted = grants?.web === 'gated' || grants?.web === 'open'
     for (const mode of AGENT_CONTEXT_MODES) {
       for (const cls of GATEWAY_TOOL_CLASS_VALUES) {
         const expected =
@@ -164,7 +181,9 @@ describe('matrix — 3-axis (class × mode × grants, ADR-004)', () => {
               ? true
               : cls === 'exec'
                 ? execGranted
-                : false // capability_change + outbound:恒 false under ANY grants
+                : cls === 'web'
+                  ? webGranted
+                  : false // capability_change + outbound (send):恒 false under ANY grants
         expect(isToolClassAllowedInMode(cls, mode, grants), `${cls} × ${mode} × ${JSON.stringify(grants)}`).toBe(
           expected
         )
@@ -172,38 +191,64 @@ describe('matrix — 3-axis (class × mode × grants, ADR-004)', () => {
     }
   })
 
-  test('applyContextModePolicy with an exec grant: exec tools survive a headless mode; capability_change/outbound still stripped', () => {
+  test('applyContextModePolicy with an exec grant: exec tools survive a headless mode; capability_change/web/outbound still stripped', () => {
     const tools = buildAllTools('manual_chat')
     for (const mode of ['untrusted_trigger', 'cron_headless'] as const) {
       const filtered = applyContextModePolicy(tools, mode, { exec: true })
       for (const name of CLASSES_OF('exec')) {
         expect(filtered[name], `${name} (exec) must survive ${mode} under the grant`).toBeDefined()
       }
-      for (const name of [...CLASSES_OF('capability_change'), ...CLASSES_OF('outbound')]) {
+      for (const name of [
+        ...CLASSES_OF('capability_change'),
+        ...CLASSES_OF('web'),
+        ...CLASSES_OF('outbound')
+      ]) {
         expect(filtered[name], `${name} must stay stripped in ${mode} despite the grant`).toBeUndefined()
       }
     }
   })
+
+  test.each(['gated', 'open'] as const)(
+    "applyContextModePolicy with {web:'%s'}: web tools survive a headless mode; exec/capability_change/outbound still stripped",
+    (tier) => {
+      const tools = buildAllTools('manual_chat')
+      for (const mode of ['untrusted_trigger', 'cron_headless'] as const) {
+        const filtered = applyContextModePolicy(tools, mode, { web: tier })
+        for (const name of CLASSES_OF('web')) {
+          expect(filtered[name], `${name} (web) must survive ${mode} under the grant`).toBeDefined()
+        }
+        for (const name of [
+          ...CLASSES_OF('exec'),
+          ...CLASSES_OF('capability_change'),
+          ...CLASSES_OF('outbound')
+        ]) {
+          expect(filtered[name], `${name} must stay stripped in ${mode} despite the web grant`).toBeUndefined()
+        }
+      }
+    }
+  )
 
   test('applyContextModePolicy in manual_chat ignores grants entirely (same identity pass-through object)', () => {
     const tools = buildAllTools('manual_chat')
     expect(applyContextModePolicy(tools, 'manual_chat', { exec: true })).toBe(tools)
   })
 
-  test('buildGatewayTools × agentRunContext: the exec grant reaches the LAST assembly step', () => {
+  test('buildGatewayTools × agentRunContext: the exec/web grants reach the LAST assembly step', () => {
     const build = (grants?: AgentModeGrants) =>
       buildGatewayTools({
         domain: mockDomain(() => okEnvelope([])),
         writeToolsEnabled: true,
         approvalGuard: new ApprovalGuard(),
         execToolsEnabled: true,
+        webToolsEnabled: true,
         contextMode: 'cron_headless',
         ...(grants !== undefined
           ? { agentRunContext: { agentId: 'dms', allowedTools: [], modeGrants: grants } }
           : {})
       })
-    // no context → exec absent (the S2 floor)
+    // no context → exec + web absent (the S2 floor)
     expect(build(undefined).run_command).toBeUndefined()
+    expect(build(undefined).web_fetch).toBeUndefined()
     // discriminated true → the three exec tools register (still HITL'd per-call by evaluate)
     const granted = build({ exec: true })
     for (const name of ['run_command', 'file_read', 'file_write']) {
@@ -211,10 +256,36 @@ describe('matrix — 3-axis (class × mode × grants, ADR-004)', () => {
     }
     // junk value → no registration (only `exec === true` counts)
     expect(build({ exec: 'yes' } as unknown as AgentModeGrants).run_command).toBeUndefined()
-    // capability_change/outbound stay absent even under the grant
-    expect(granted.skill_install).toBeUndefined()
+    // web grant (rev3.1): gated/open register the two web tools; junk collapses to off
+    for (const tier of ['gated', 'open'] as const) {
+      const webGranted = build({ web: tier })
+      expect(webGranted.web_fetch, `web_fetch must register under web:'${tier}'`).toBeDefined()
+      expect(webGranted.web_search, `web_search must register under web:'${tier}'`).toBeDefined()
+      expect(webGranted.run_command).toBeUndefined() // web grant lifts web ONLY
+    }
+    expect(build({ web: 'yes' } as unknown as AgentModeGrants).web_fetch).toBeUndefined()
+    expect(build({ web: 'off' }).web_fetch).toBeUndefined()
+    // exec grant lifts exec ONLY: web stays floored without its own grant
     expect(granted.web_fetch).toBeUndefined()
+    expect(granted.web_search).toBeUndefined()
+    // capability_change/outbound (send) stay absent even under any grant
+    expect(granted.skill_install).toBeUndefined()
     expect(granted.email_prepare_send).toBeUndefined()
+    expect(build({ exec: true, web: 'open' } as AgentModeGrants).email_prepare_send).toBeUndefined()
+  })
+})
+
+// S6 W3 (ADR-004 rev3.1 D1) — the fail-closed web-grant parse funnel.
+describe('parseWebGrant — fail-closed literal discrimination', () => {
+  test("the exact 'gated'/'open' literals pass through", () => {
+    expect(parseWebGrant('gated')).toBe('gated')
+    expect(parseWebGrant('open')).toBe('open')
+  })
+
+  test("everything else collapses to 'off' (never a raw passthrough)", () => {
+    for (const v of [undefined, null, '', 'off', true, false, 1, 0, 'yes', 'OPEN', ' open', 'Gated', {}, [], ['open']]) {
+      expect(parseWebGrant(v), JSON.stringify(v)).toBe('off')
+    }
   })
 })
 
@@ -225,7 +296,7 @@ describe('applyContextModePolicy', () => {
   })
 
   test.each(['untrusted_trigger', 'cron_headless'] as const)(
-    '%s strips capability_change/exec/outbound, keeps read + domain_write (key order preserved)',
+    '%s strips capability_change/exec/web/outbound, keeps read + domain_write (key order preserved)',
     (mode) => {
       const tools = buildAllTools('manual_chat')
       const filtered = applyContextModePolicy(tools, mode)
@@ -264,12 +335,13 @@ describe('buildGatewayTools × contextMode (registration-time filter wiring)', (
   })
 
   test.each(['untrusted_trigger', 'cron_headless'] as const)(
-    '%s → every capability_change/exec/outbound tool absent from the ToolSet; read + domain_write present',
+    '%s → every capability_change/exec/web/outbound tool absent from the ToolSet; read + domain_write present',
     (mode) => {
       const tools = buildAllTools(mode)
       for (const name of [
         ...CLASSES_OF('capability_change'),
         ...CLASSES_OF('exec'),
+        ...CLASSES_OF('web'),
         ...CLASSES_OF('outbound')
       ]) {
         expect(tools[name], `${name} must not register in ${mode}`).toBeUndefined()

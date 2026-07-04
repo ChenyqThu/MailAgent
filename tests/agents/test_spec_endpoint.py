@@ -192,6 +192,38 @@ def test_spec_tool_policy_three_states_and_grant_exec(env, client):
     }
 
 
+def test_spec_grant_web_projection(env, client):
+    """S6 W3（ADR-004 rev3.1 D1/D6）：grantWeb 镜像 grantExec 的「仅非默认值输出」——
+    'gated'/'open' 才投影；'off'/缺省/坏值（读侧宽容 → 未配置语义）键不出现。"""
+    # gated → 投影。
+    _seed_custom(env.store, agent_id="w_gated", trigger=_CRON,
+                 tool_policy={"v": 1, "allowed_tools": ["email_get"], "grant_web": "gated"})
+    jid = _running_job(env.repo, agent_id="w_gated", token="wg")
+    d = client.get(f"/api/agent-runs/{jid}/spec", headers={"X-Claim-Token": "wg"}).json()["data"]
+    assert d["toolPolicy"] == {"allowedTools": ["email_get"], "grantWeb": "gated"}
+
+    # open → 投影；与 grantExec 并存。
+    _seed_custom(env.store, agent_id="w_open", trigger=_CRON,
+                 tool_policy={"v": 1, "allowed_tools": [], "grant_exec": True, "grant_web": "open"})
+    jid2 = _running_job(env.repo, agent_id="w_open", token="wo")
+    d2 = client.get(f"/api/agent-runs/{jid2}/spec", headers={"X-Claim-Token": "wo"}).json()["data"]
+    assert d2["toolPolicy"] == {"allowedTools": [], "grantExec": True, "grantWeb": "open"}
+
+    # 显式 off → 键不投影（与缺省同形状）。
+    _seed_custom(env.store, agent_id="w_off", trigger=_CRON,
+                 tool_policy={"v": 1, "allowed_tools": ["email_get"], "grant_web": "off"})
+    jid3 = _running_job(env.repo, agent_id="w_off", token="wf")
+    d3 = client.get(f"/api/agent-runs/{jid3}/spec", headers={"X-Claim-Token": "wf"}).json()["data"]
+    assert d3["toolPolicy"] == {"allowedTools": ["email_get"]}
+
+    # 坏值（手工入库 "yes"）→ 读侧宽容整策略落未配置语义（默认安全集 + 零 grant 投影）。
+    _seed_custom(env.store, agent_id="w_junk", trigger=_CRON,
+                 tool_policy={"v": 1, "allowed_tools": ["email_get"], "grant_web": "yes"})
+    jid4 = _running_job(env.repo, agent_id="w_junk", token="wj")
+    d4 = client.get(f"/api/agent-runs/{jid4}/spec", headers={"X-Claim-Token": "wj"}).json()["data"]
+    assert "grantWeb" not in d4["toolPolicy"] and "grantExec" not in d4["toolPolicy"]
+
+
 def test_spec_budget_defaults_and_clamp(env, client):
     # 无 budget → 全默认（maxSteps 8 / maxRunSeconds 300）
     _seed_custom(env.store, agent_id="a_default", trigger=_CRON)

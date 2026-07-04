@@ -332,6 +332,127 @@ def test_fetch_redirect_to_internal_is_blocked(
     assert resp.json()["error"]["code"] == "E_SSRF_BLOCKED"
 
 
+# ---------------------------------------------------------------------------
+# gated per-agent redirect origin 白名单（S6 W3，ADR-004 rev3.1 D-fix-1）
+# 聚合集 = policyEvaluate 同候选集（enabled + 双键 candidate_policy_rules）∪ 首跳 origin；
+# disabled / 错 context_mode 规则不在集内；SSRF 地板叠加不弱化。
+# ---------------------------------------------------------------------------
+
+_GATED = {"agent_id": "dms", "context_mode": "untrusted_trigger"}
+
+
+def _web_rule(store, origin: str, *, agent_id: str = "dms",
+              context_mode: str = "untrusted_trigger", enabled: bool = True):
+    import json as _json
+
+    rule = store.create_policy_rule(
+        "web", _json.dumps({"v": 1, "origin": origin}),
+        context_mode=context_mode, agent_id=agent_id,
+    )
+    if not enabled:
+        store.set_policy_rule(rule.id, enabled=False)
+    return rule
+
+
+def test_gated_fetch_redirect_within_whitelisted_origin(
+    client: TestClient, fake_site: int, allow_loopback, fresh_agent_cfg
+) -> None:
+    _web_rule(fresh_agent_cfg, f"http://127.0.0.1:{fake_site}")
+    resp = client.post(
+        "/api/web/fetch",
+        json={"url": f"http://127.0.0.1:{fake_site}/redirect-rel", **_GATED},
+    )
+    assert resp.status_code == 200
+    assert "The quarterly plan ships in Q3." in resp.json()["data"]["text"]
+
+
+def test_gated_fetch_redirect_to_disabled_rule_origin_aborts(
+    client: TestClient, fake_site: int, allow_loopback, fresh_agent_cfg
+) -> None:
+    """D-fix-1（P0）负例：enabled 规则 A 覆盖首跳，redirect 指向 **disabled** 规则 B 的 origin →
+    B 不在聚合集（enabled 过滤 = policyEvaluate 同候选集，绝非 raw list）→ 中止，结构化 403 ——
+    且先于 SSRF 判（若误用 raw list_policy_rules 取集，B 会混入、此处变成 400 E_SSRF_BLOCKED）。"""
+    _web_rule(fresh_agent_cfg, f"http://127.0.0.1:{fake_site}")
+    _web_rule(fresh_agent_cfg, "http://10.0.0.1", enabled=False)
+    resp = client.post(
+        "/api/web/fetch",
+        json={"url": f"http://127.0.0.1:{fake_site}/redirect-internal", **_GATED},
+    )
+    assert resp.status_code == 403
+    assert resp.json()["error"]["code"] == "E_WEB_ORIGIN_FORBIDDEN"
+
+
+def test_gated_fetch_ssrf_floor_not_weakened_inside_set(
+    client: TestClient, fake_site: int, allow_loopback, fresh_agent_cfg
+) -> None:
+    """控制组：同一 redirect 目标的规则 **enabled** → 过了 origin 白名单，仍被 SSRF 地板拒
+    （两层叠加，白名单绝不豁免 SSRF）。与上一测试成对，证明 403/400 的分野恰是 enabled 位。"""
+    _web_rule(fresh_agent_cfg, f"http://127.0.0.1:{fake_site}")
+    _web_rule(fresh_agent_cfg, "http://10.0.0.1")
+    resp = client.post(
+        "/api/web/fetch",
+        json={"url": f"http://127.0.0.1:{fake_site}/redirect-internal", **_GATED},
+    )
+    assert resp.status_code == 400
+    assert resp.json()["error"]["code"] == "E_SSRF_BLOCKED"
+
+
+def test_gated_fetch_wrong_context_mode_rule_not_in_set(
+    client: TestClient, fake_site: int, allow_loopback, fresh_agent_cfg
+) -> None:
+    """错 context_mode 的规则不进聚合集（双键严格等值；dormant 规则无放行力）。"""
+    _web_rule(fresh_agent_cfg, f"http://127.0.0.1:{fake_site}")
+    _web_rule(fresh_agent_cfg, "http://10.0.0.1", context_mode="cron_headless")
+    resp = client.post(
+        "/api/web/fetch",
+        json={"url": f"http://127.0.0.1:{fake_site}/redirect-internal", **_GATED},
+    )
+    assert resp.status_code == 403
+    assert resp.json()["error"]["code"] == "E_WEB_ORIGIN_FORBIDDEN"
+
+
+def test_gated_fetch_initial_origin_unioned(
+    client: TestClient, fake_site: int, allow_loopback, fresh_agent_cfg
+) -> None:
+    """首跳 origin ∪ 进聚合集：人批（审批卡）放行的 gated fetch 同样带约束参数 —— owner 批的
+    URL 自身 origin 可达（零规则下同源 redirect 成功），但出集（跨 origin）redirect 仍中止。
+    免卡 fetch 的首跳本就 ∈ 候选集，∪ 不扩大任何免卡面。"""
+    resp = client.post(
+        "/api/web/fetch",
+        json={"url": f"http://127.0.0.1:{fake_site}/redirect-rel", **_GATED},
+    )
+    assert resp.status_code == 200
+    resp2 = client.post(
+        "/api/web/fetch",
+        json={"url": f"http://127.0.0.1:{fake_site}/redirect-internal", **_GATED},
+    )
+    assert resp2.status_code == 403
+    assert resp2.json()["error"]["code"] == "E_WEB_ORIGIN_FORBIDDEN"
+
+
+def test_fetch_without_agent_params_unconstrained(
+    client: TestClient, fake_site: int, allow_loopback, fresh_agent_cfg
+) -> None:
+    """无 agent_id（manual / open 档）→ 无 origin 约束（即便库里有规则），仅 SSRF 地板 ——
+    wire 缺省形状行为与 S1 字节不变。"""
+    _web_rule(fresh_agent_cfg, f"http://127.0.0.1:{fake_site}")
+    resp = client.post(
+        "/api/web/fetch", json={"url": f"http://127.0.0.1:{fake_site}/redirect-internal"}
+    )
+    assert resp.status_code == 400
+    assert resp.json()["error"]["code"] == "E_SSRF_BLOCKED"
+
+
+def test_gated_fetch_invalid_context_mode_400(client: TestClient, fresh_agent_cfg) -> None:
+    """agent_id 在场 + 非法 context_mode → 400（调用方 bug 早暴露，绝不静默降级成无约束）。"""
+    resp = client.post(
+        "/api/web/fetch",
+        json={"url": "https://example.com/", "agent_id": "dms", "context_mode": "bogus"},
+    )
+    assert resp.status_code == 400
+    assert resp.json()["error"]["code"] == "E_INVALID_ARG"
+
+
 def test_fetch_size_cap_truncates(client: TestClient, fake_site: int, allow_loopback) -> None:
     resp = client.post("/api/web/fetch", json={"url": f"http://127.0.0.1:{fake_site}/big"})
     assert resp.status_code == 200

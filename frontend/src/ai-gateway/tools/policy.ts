@@ -6,16 +6,19 @@
 //     absent/unknown normalizes fail-closed to 'untrusted_trigger' (the strictest mode), so a
 //     future entrypoint that forgets to pass it can only be SAFER, never silently privileged.
 //   - GatewayToolClass: what a tool can do (read / reversible domain write / capability change /
-//     local exec / outbound). Independent of the approval `tier` (preview/edit/blocking), which
-//     keeps owning the approval-card UX — class owns POLICY (ADR-001 D2: tier 管卡片, class 管策略).
+//     local exec / outbound web read / outbound send). Independent of the approval `tier`
+//     (preview/edit/blocking), which keeps owning the approval-card UX — class owns POLICY
+//     (ADR-001 D2: tier 管卡片, class 管策略).
 //
-// The matrix (ADR-001 D3):
+// The matrix (ADR-001 D3; exec row revised by ADR-004 D2, web row by ADR-004 rev3.1):
 //   - read + domain_write register in EVERY mode (domain writes stay HITL outside manual, because
 //     mayAutoApprove requires manual_chat — see below).
-//   - capability_change / exec / outbound are manual_chat-ONLY: outside a manual session they are
-//     (a) not registered at all (applyContextModePolicy strips them from the ToolSet — the model
-//     cannot see them), and (b) hard-rejected at execute time as a second line of defense
-//     (types.ts) in case a future entrypoint misses the mode.
+//   - capability_change / exec / web / outbound are manual_chat-ONLY by default: outside a manual
+//     session they are (a) not registered at all (applyContextModePolicy strips them from the
+//     ToolSet — the model cannot see them), and (b) hard-rejected at execute time as a second line
+//     of defense (types.ts) in case a future entrypoint misses the mode. exec and web each have a
+//     per-agent grant key that lifts ONLY their own row; capability_change and outbound (send)
+//     have no key — permanently floored.
 //   - auto-approve (approvalMode 'auto-reversible' skipping the card) is a privilege of
 //     REVERSIBLE DOMAIN writes in an owner-driven manual session ONLY: mayAutoApprove ⇔
 //     class==='domain_write' && mode==='manual_chat'. This closes the set_skill_enabled escape
@@ -48,12 +51,14 @@ export function normalizeContextMode(value: unknown): AgentContextMode {
     : 'untrusted_trigger'
 }
 
-/** Policy class of a gateway tool (ADR-001 D2) — orthogonal to the approval tier. */
+/** Policy class of a gateway tool (ADR-001 D2, 'web' split out of 'outbound' by ADR-004 rev3.1
+ *  §3.1) — orthogonal to the approval tier. */
 export const GATEWAY_TOOL_CLASS_VALUES = [
   'read',
   'domain_write',
   'capability_change',
   'exec',
+  'web',
   'outbound'
 ] as const
 export type GatewayToolClass = (typeof GATEWAY_TOOL_CLASS_VALUES)[number]
@@ -110,10 +115,16 @@ export const GATEWAY_TOOL_CLASSES: Record<string, GatewayToolClass> = {
   custom_agent_run_now: 'capability_change',
   // S2 W4 — skill_read is a silent read (its third-party content is SKILL_DOC-fenced at the tool).
   skill_read: 'read',
-  // outbound — data leaves the machine. manual_chat-only; web is edit-tier always-ask, send is
-  // blocking always-ask (its needsApproval hard-returns true regardless of anything here).
-  web_fetch: 'outbound',
-  web_search: 'outbound',
+  // web — outbound network reads (S6 W3, ADR-004 rev3.1 §3.1: migrated OUT of 'outbound' so the
+  // per-agent `web` grant maps 1:1 to a class without ever admitting send). Both edit-tier
+  // always-ask in manual; in a headless agent run they register only under grant_web∈{gated,open}
+  // and the免卡 shape is per-tier (gated fetch = origin whitelist policyEvaluate; open fetch +
+  // web_search = grant-level local verdict).
+  web_fetch: 'web',
+  web_search: 'web',
+  // outbound — data irreversibly leaves the machine toward a chosen recipient (send). manual_chat
+  // -only; send is blocking always-ask (its needsApproval hard-returns true regardless of anything
+  // here) and has NO grants key — structurally un-grantable, same level as capability_change.
   email_prepare_send: 'outbound',
   // exec — local command / filesystem (S2 W1). manual_chat-only; all three are edit-tier always-ask
   // (never auto-approved by approvalMode) UNLESS a structured PolicyRule whitelist the owner set
@@ -131,14 +142,30 @@ export function classOfTool(name: string): GatewayToolClass {
   return GATEWAY_TOOL_CLASSES[name] ?? 'exec'
 }
 
-/** Per-agent mode grants (ADR-004 §4.1 — the explicit revision of the ADR-001 §5 matrix's exec
- *  row). 🔴 The type has ONLY the `exec` key: capability_change and outbound have NO corresponding
- *  field — they are structurally un-grantable (not "don't pass true" but "nowhere to pass it"),
- *  fixing the red line at the type level. Constructed by the gateway from the strictly-parsed
- *  spec as a discriminated boolean ({ exec: spec.toolPolicy?.grantExec === true }) — NEVER a
- *  passthrough of a raw spec object (a future spec field must not silently flow into the matrix). */
+/** Per-agent web grant tier (ADR-004 rev3.1 D1/D2): 'off' = not registered headless (default),
+ *  'gated' = registered + per-agent origin-whitelist免卡 for web_fetch (web_search grant-level),
+ *  'open' = registered + grant-level免卡 for any URL. A three-state enum (not two booleans) so the
+ *  illegal state "full access while web is off" is unrepresentable. */
+export type WebGrant = 'off' | 'gated' | 'open'
+
+/** Fail-closed parse of a spec's grantWeb: ONLY the exact literals 'gated'/'open' pass; anything
+ *  else (true / 1 / 'yes' / junk / absent) collapses to 'off' — the web mirror of the
+ *  `grantExec === true` discrimination, never a raw passthrough. */
+export function parseWebGrant(raw: unknown): WebGrant {
+  return raw === 'gated' || raw === 'open' ? raw : 'off'
+}
+
+/** Per-agent mode grants (ADR-004 §4.1, web key added by ADR-004 rev3.1 D1 — the explicit
+ *  revisions of the ADR-001 §5 matrix's exec/web rows). 🔴 The type has ONLY the `exec` and `web`
+ *  keys: capability_change and outbound (send) have NO corresponding field — they are structurally
+ *  un-grantable (not "don't pass true" but "nowhere to pass it"), fixing the red line at the type
+ *  level. Constructed by the gateway from the strictly-parsed spec as discriminated typed values
+ *  ({ exec: spec.toolPolicy?.grantExec === true, web: parseWebGrant(spec.toolPolicy?.grantWeb) },
+ *  exec a boolean, web a three-state literal) — NEVER a passthrough of a raw spec object (a future
+ *  spec field must not silently flow into the matrix). */
 export interface AgentModeGrants {
   exec?: boolean
+  web?: WebGrant
 }
 
 /** The per-agent run context threaded through a headless custom-agent run (ADR-004 §3.1/§4.4):
@@ -161,13 +188,14 @@ export interface AgentRunContext {
   jobId?: number
 }
 
-/** Registration-time matrix row (ADR-001 D3, exec row revised by ADR-004 D2): may a tool of this
- *  class exist in the ToolSet of a run in this mode? read/domain_write → every mode;
- *  capability_change/outbound → manual_chat only (permanently — no grant key exists for them);
- *  exec → manual_chat, OR a non-manual run whose per-agent grants carry exec===true (the owner's
- *  explicit opt-in, spec-derived). `grants` is only ever passed by the headless agent-run path;
- *  manual callers omit it (undefined = the pre-ADR-004 matrix, so a forgotten param is always
- *  SAFER, never wider). */
+/** Registration-time matrix row (ADR-001 D3, exec row revised by ADR-004 D2, web row added by
+ *  ADR-004 rev3.1 D2): may a tool of this class exist in the ToolSet of a run in this mode?
+ *  read/domain_write → every mode; capability_change/outbound → manual_chat only (permanently —
+ *  no grant key exists for them); exec → manual_chat, OR a non-manual run whose per-agent grants
+ *  carry exec===true; web → manual_chat, OR a non-manual run whose grants carry web∈{gated,open}
+ *  (the owner's explicit opt-in, spec-derived — any other value incl. junk is 'off'). `grants` is
+ *  only ever passed by the headless agent-run path; manual callers omit it (undefined = the
+ *  pre-ADR-004 matrix, so a forgotten param is always SAFER, never wider). */
 export function isToolClassAllowedInMode(
   toolClass: GatewayToolClass,
   mode: AgentContextMode,
@@ -176,6 +204,7 @@ export function isToolClassAllowedInMode(
   if (mode === 'manual_chat') return true
   if (toolClass === 'read' || toolClass === 'domain_write') return true
   if (toolClass === 'exec') return grants?.exec === true
+  if (toolClass === 'web') return grants?.web === 'gated' || grants?.web === 'open'
   return false // capability_change + outbound: false under ANY grants (structurally un-grantable)
 }
 
@@ -190,8 +219,8 @@ export function mayAutoApprove(toolClass: GatewayToolClass, mode: AgentContextMo
  *  every create* block AND applySkillGating (codex P2-2: no early return may let a class slip
  *  past). manual_chat is an identity pass-through (the same object, zero diff — S2 keeps every
  *  production run manual, so current behaviour is byte-identical); non-manual modes drop every
- *  capability_change/exec/outbound tool so the model structurally cannot see them — except an
- *  exec tool under an explicit per-agent grant (ADR-004 D2). Registration here and the runtime
+ *  capability_change/exec/web/outbound tool so the model structurally cannot see them — except an
+ *  exec/web tool under an explicit per-agent grant (ADR-004 D2 / rev3.1). Registration here and the runtime
  *  modeDenied double-insurance (types.ts) consume the SAME function with the SAME grants object
  *  (threaded from one agentRunContext) — there is no second decision point. */
 export function applyContextModePolicy(

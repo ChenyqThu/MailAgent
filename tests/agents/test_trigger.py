@@ -228,7 +228,7 @@ def test_validate_patch_ignores_budget_but_checks_tool_policy_shape():
 
 def test_parse_tool_policy_unconfigured():
     tp = parse_tool_policy(None)
-    assert tp.allowed_tools is None and tp.grant_exec is False
+    assert tp.allowed_tools is None and tp.grant_exec is False and tp.grant_web == "off"
     assert parse_tool_policy("") == ToolPolicy()
 
 
@@ -236,6 +236,7 @@ def test_parse_tool_policy_valid_shapes():
     tp = parse_tool_policy({"v": 1, "allowed_tools": ["email_get", "email_body"], "grant_exec": True})
     assert tp.allowed_tools == ("email_get", "email_body")
     assert tp.grant_exec is True
+    assert tp.grant_web == "off"  # 缺省 off（现存行零迁移）
     # v 缺省视作 1；grant_exec 缺省 False；显式 [] → ()（区别于 None）。
     tp2 = parse_tool_policy({"allowed_tools": []})
     assert tp2.allowed_tools == () and tp2.grant_exec is False
@@ -244,12 +245,24 @@ def test_parse_tool_policy_valid_shapes():
     assert tp3.allowed_tools is None and tp3.grant_exec is False
 
 
+@pytest.mark.parametrize("grant_web", ["off", "gated", "open"])
+def test_parse_tool_policy_grant_web_literals(grant_web):
+    # S6 W3（ADR-004 rev3.1 D6）：三态字面量逐个可解析。
+    tp = parse_tool_policy({"v": 1, "grant_web": grant_web})
+    assert tp.grant_web == grant_web
+
+
 @pytest.mark.parametrize(
     "bad",
     [
         {"v": 2},                                    # 未知版本
         {"grant_exec": "yes"},                       # 字符串真值 → 拒（必须 JSON boolean）
         {"grant_exec": 1},                           # int 1 → 拒（bool 严格）
+        {"grant_web": True},                         # bool → 拒（必须三态字面量，rev3.1）
+        {"grant_web": 1},                            # int → 拒
+        {"grant_web": "yes"},                        # 面外字符串 → 拒
+        {"grant_web": "OPEN"},                       # 大小写敏感 → 拒（fail-closed）
+        {"grant_web": {}},                           # object → 拒
         {"allowed_tools": "email_get"},              # 非 list
         {"allowed_tools": [1, 2]},                   # 非 str 项
         {"v": 1, "sneaky": True},                    # 未知键（extra forbid）

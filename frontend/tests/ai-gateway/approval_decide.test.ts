@@ -15,7 +15,7 @@ import type { AiGatewayConfig, IslandApprovalAnnounce } from '../../src/ai-gatew
 import { ApprovalGuard } from '../../src/ai-gateway/security/approval'
 import { ApprovalRunStash } from '../../src/ai-gateway/approvalStash'
 import { buildGatewayTools } from '../../src/ai-gateway/tools'
-import { mayAutoApprove } from '../../src/ai-gateway/tools/policy'
+import { mayAutoApprove, type AgentRunContext } from '../../src/ai-gateway/tools/policy'
 import type { MailAgentDomainClient } from '../../src/ai-gateway/python/domainClient'
 import type { MailAgentUIMessage } from '../../src/shared/assistant/uiMessage'
 
@@ -752,15 +752,17 @@ describe('/api/ai/approval/decide — chained two-hop approvals (repause)', () =
 // rebuilds cfg through the SAME wrapCfgForAgentRun the fresh spawn used. Pinned here:
 //   - the S4 defect fix: the resumed drain keeps the owner's allowedTools narrowing (before this
 //     wave the resume used the BASE cfg → full matrix floor);
-//   - grants双向: an exec tool inside the grant survives the resumed registration, outbound stays
-//     structurally absent even when (mis)listed in allowedTools;
+//   - grants双向: an exec tool inside the grant survives the resumed registration; web (grant_web
+//     defaulting 'off') and outbound stay absent even when (mis)listed in allowedTools;
 //   - re-pause chain: a second approval inside the resume re-freezes the SAME context (the tool
 //     face can never widen across hops).
 describe('/api/ai/approval/decide — per-agent context freeze (headless agent resume)', () => {
   // The PRODUCT-real shape (codex终审 P1): allowedTools comes from the Settings picker whose
   // vocabulary is read+domain_write only — it can NOT name exec tools. run_command's presence
   // must come from the grant alone (exec exempt from the intersection), surviving the resume
-  // rebuild exactly like the fresh spawn. web_fetch (mis)listed proves outbound stays floored.
+  // rebuild exactly like the fresh spawn. web_fetch (mis)listed proves the web class stays
+  // floored while grant_web is absent (= 'off') — since ADR-004 rev3.1 its absence comes from
+  // the web grant row, no longer from "outbound has no key".
   const CTX = {
     agentId: 'dms',
     allowedTools: ['email_draft_reply', 'email_flag', 'web_fetch'],
@@ -843,7 +845,11 @@ describe('/api/ai/approval/decide — per-agent context freeze (headless agent r
     }
   }
 
-  function seedHeadlessPause(guard: ApprovalGuard, stash: ApprovalRunStash): string {
+  function seedHeadlessPause(
+    guard: ApprovalGuard,
+    stash: ApprovalRunStash,
+    ctx: AgentRunContext = CTX
+  ): string {
     guard.register(TC, 'email_draft_reply', 'edit', DRAFT_INPUT, ['body_markdown'])
     return stash.stash({
       toolCallId: TC,
@@ -853,7 +859,7 @@ describe('/api/ai/approval/decide — per-agent context freeze (headless agent r
       body: { messages: [USER], model: 'claude-sonnet-4-6', sessionId: 1 },
       responseMessage: pausedResponse(),
       contextMode: 'cron_headless',
-      agentRunContext: CTX
+      agentRunContext: ctx
     })
   }
 
@@ -892,7 +898,7 @@ describe('/api/ai/approval/decide — per-agent context freeze (headless agent r
     // exec exempt from the intersection: run_command is NOT in allowedTools, the grant alone
     // carries it through the resume rebuild (codex终审 P1 组合案例的 resume 半边)
     expect(names).toContain('run_command')
-    expect(names).not.toContain('web_fetch') // grants 外恒缺席（outbound 无键可授）
+    expect(names).not.toContain('web_fetch') // grant_web 缺省 'off' → web 类恒缺席（rev3.1 后缺席原因是 web 键 off，非「类型无键」）
     expect(names).not.toContain('email_archive') // not in allowedTools → still narrowed
     expect(names).not.toContain('email_pin')
     expect(names).not.toContain('email_search') // reads outside the allow-list are narrowed too
@@ -941,5 +947,46 @@ describe('/api/ai/approval/decide — per-agent context freeze (headless agent r
     expect(entry).not.toBeNull()
     expect(entry?.contextMode).toBe('cron_headless')
     expect(entry?.agentRunContext).toEqual(CTX)
+  })
+
+  // S6 W3 (ADR-004 rev3.1 §8) — the web grant rides the SAME stash freeze: pause→resume keeps the
+  // web tier恒等 (registration + tier semantics rebuilt from the frozen context), and grant='off'
+  // (the CTX above) keeps web absent across the resume — pinned by the first test's
+  // not.toContain('web_fetch').
+  test('resume keeps the web grant: web tools reach streamText after the rebuild; exec stays absent without its own grant', async () => {
+    const WEB_CTX = {
+      agentId: 'dms',
+      allowedTools: ['email_draft_reply'],
+      modeGrants: { exec: false, web: 'gated' as const }
+    }
+    const guard = new ApprovalGuard()
+    const stash = new ApprovalRunStash()
+    const domainCalls: unknown[] = []
+    const seenCtx: Array<{ mode: string | undefined; ctx: unknown }> = []
+    const seenTools: string[][] = []
+    const cfg = headlessCfg({
+      guard,
+      stash,
+      domain: headlessDomain(domainCalls),
+      model: captureToolsModel(seenTools),
+      seenCtx
+    })
+    const h = await start(cfg)
+    const token = seedHeadlessPause(guard, stash, WEB_CTX)
+
+    const res = await decide(h.port, { toolCallId: TC, decision: 'approve', resumeToken: token })
+    expect(res.status).toBe(200)
+    expect((await res.json()).status).toBe('completed')
+
+    // the frozen context (web tier included) reached the rebuild verbatim
+    expect(seenCtx[seenCtx.length - 1]).toEqual({ mode: 'cron_headless', ctx: WEB_CTX })
+    // the model-visible ToolSet: web class registered under the frozen 'gated' grant (exempt from
+    // the intersection — 'web_fetch' is NOT in allowedTools), exec absent without its own grant
+    const names = seenTools[0]
+    expect(names).toContain('web_fetch')
+    expect(names).toContain('web_search')
+    expect(names).toContain('email_draft_reply')
+    expect(names).not.toContain('run_command')
+    expect(names).not.toContain('email_flag') // narrowing survives too
   })
 })

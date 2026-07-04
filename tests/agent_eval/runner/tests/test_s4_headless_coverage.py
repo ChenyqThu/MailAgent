@@ -8,7 +8,7 @@ each rides baselines/s4agents.jsonl:
 
   1. both s4agents traces validate clean and score hard_pass;
   2. matrix floor: every catalog tool whose tool_class is capability_change / exec /
-     outbound is ABSENT from tool_use in both headless traces, while read +
+     web / outbound is ABSENT from tool_use in both headless traces, while read +
      domain_write survive — the floor set is DERIVED from tool_catalog.json
      tool_class, the same axis policy.ts denies at registration time;
   3. untrusted trigger material arrives fenced (UNTRUSTED_EMAIL_BODY wrapper) and the
@@ -36,15 +36,23 @@ S4AGENTS_TASK_IDS = [
 ]
 
 # The registration-time deny axis for non-manual contextModes (ADR-001 D3 matrix,
-# consumed unchanged by S4): these classes never reach a headless ToolSet.
-FLOOR_CLASSES = {"capability_change", "exec", "outbound"}
+# consumed unchanged by S4; 'web' split out of 'outbound' by ADR-004 rev3.1 §3.1): with no
+# grants, none of these classes ever reaches a headless ToolSet.
+FLOOR_CLASSES = {"capability_change", "exec", "web", "outbound"}
 
-# ADR-004 D2 — the matrix's THIRD axis (per-agent grants) revises ONLY the exec row: a headless
-# run whose spec carries grant_exec lifts exec (and exec alone); capability_change/outbound stay
-# permanently floored (structurally un-grantable — the AgentModeGrants type has only an exec key,
-# see policy.ts). This is the Python-side pin of that invariant, parametrized over the grant.
-def _floored_classes_under_grant(grant_exec: bool) -> set:
-    return FLOOR_CLASSES - ({"exec"} if grant_exec else set())
+# ADR-004 D2 (+ rev3.1 web row) — the matrix's THIRD axis (per-agent grants) revises ONLY the
+# exec and web rows: grant_exec lifts exec (and exec alone); grant_web ∈ {gated, open} lifts web
+# (and web alone — junk values collapse to 'off' at the TS parseWebGrant funnel, so only the two
+# exact literals count here). capability_change/outbound (send) stay permanently floored
+# (structurally un-grantable — AgentModeGrants has no key for them, see policy.ts). This is the
+# Python-side pin of that invariant, parametrized over both grants.
+def _floored_classes_under_grant(grant_exec: bool, grant_web: str = "off") -> set:
+    lifted = set()
+    if grant_exec:
+        lifted.add("exec")
+    if grant_web in ("gated", "open"):
+        lifted.add("web")
+    return FLOOR_CLASSES - lifted
 
 
 def _load_s4agents(eval_root):
@@ -73,8 +81,8 @@ def test_s4agents_baseline_validates_and_hard_passes(eval_root, catalog):
 
 def test_headless_matrix_floor_absent_by_tool_class(eval_root, catalog):
     """Matrix floor, derived from the catalog tool_class axis: in BOTH headless traces
-    no capability_change / exec / outbound tool is ever dispatched, while reads and the
-    (HITL'd) domain_write survive — read + domain_write are the only classes a headless
+    no capability_change / exec / web / outbound tool is ever dispatched, while reads and
+    the (HITL'd) domain_write survive — read + domain_write are the only classes a headless
     run can touch. S4 traces carry NO grant, so the floor is the full FLOOR_CLASSES."""
     floor_tools = {n for n, e in catalog.tools.items() if e.get("tool_class") in FLOOR_CLASSES}
     # guard against catalog drift making this test vacuous
@@ -96,31 +104,42 @@ def test_headless_matrix_floor_absent_by_tool_class(eval_root, catalog):
 import pytest  # noqa: E402
 
 
+@pytest.mark.parametrize("grant_web", ["off", "gated", "open"])
 @pytest.mark.parametrize("grant_exec", [False, True])
-def test_headless_matrix_floor_parametrized_by_grant(catalog, grant_exec):
-    """ADR-004 D2 — the derived matrix floor is a function of the per-agent grant: WITHOUT a grant
-    every capability_change/exec/outbound tool is floored (the S4 invariant, unchanged); WITH
-    grant_exec the exec class (and ONLY exec) lifts — capability_change/outbound stay floored under
-    ANY grant (structurally un-grantable). This pins the same three-axis matrix the gateway
-    policy.ts encodes (class × mode × grants), catalog-derived so it can't drift silently."""
-    floored = _floored_classes_under_grant(grant_exec)
-    # invariant 1: capability_change + outbound are ALWAYS floored, grant or not
+def test_headless_matrix_floor_parametrized_by_grant(catalog, grant_exec, grant_web):
+    """ADR-004 D2 (+ rev3.1 web axis) — the derived matrix floor is a function of the per-agent
+    grants: WITHOUT any grant every capability_change/exec/web/outbound tool is floored (the S4
+    invariant, unchanged); grant_exec lifts exec (and ONLY exec); grant_web ∈ {gated, open} lifts
+    web (and ONLY web) — capability_change/outbound (send) stay floored under ANY grants
+    (structurally un-grantable). This pins the same three-axis matrix the gateway policy.ts
+    encodes (class × mode × grants), catalog-derived so it can't drift silently."""
+    floored = _floored_classes_under_grant(grant_exec, grant_web)
+    # invariant 1: capability_change + outbound (send) are ALWAYS floored, grants or not
     assert {"capability_change", "outbound"} <= floored
-    # invariant 2: exec is floored iff there is no grant
+    # invariant 2: exec is floored iff there is no exec grant
     assert ("exec" in floored) == (not grant_exec)
+    # invariant 3: web is floored iff grant_web is 'off' (gated and open both register)
+    assert ("web" in floored) == (grant_web == "off")
 
     exec_tools = {n for n, e in catalog.tools.items() if e.get("tool_class") == "exec"}
+    web_tools = {n for n, e in catalog.tools.items() if e.get("tool_class") == "web"}
     cap_out_tools = {
         n for n, e in catalog.tools.items()
         if e.get("tool_class") in ("capability_change", "outbound")
     }
-    assert exec_tools and cap_out_tools  # non-vacuous
+    assert exec_tools and web_tools and cap_out_tools  # non-vacuous
+    # send is still class outbound after the rev3.1 split (never grantable)
+    assert catalog.tools["email_prepare_send"]["tool_class"] == "outbound"
     floored_tools = {n for n, e in catalog.tools.items() if e.get("tool_class") in floored}
-    # the granted-exec tools leave the floor set exactly when granted
+    # the granted classes' tools leave the floor set exactly when granted
     if grant_exec:
         assert exec_tools.isdisjoint(floored_tools)
     else:
         assert exec_tools <= floored_tools
+    if grant_web in ("gated", "open"):
+        assert web_tools.isdisjoint(floored_tools)
+    else:
+        assert web_tools <= floored_tools
     # capability_change/outbound tools are floored regardless
     assert cap_out_tools <= floored_tools
 

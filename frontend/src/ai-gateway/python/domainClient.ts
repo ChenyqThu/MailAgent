@@ -854,12 +854,24 @@ export class MailAgentDomainClient {
   //    registered when MAILAGENT_OPENNESS_WEB_TOOLS is on; both are edit-tier (always ask).
 
   /** web_fetch (S1 R3) — fetch one http/https URL's content (SSRF-guarded, IP-pinned server-side).
-   *  POST /web/fetch {url, max_chars}. Returns the extracted text (untrusted) + metadata. */
-  webFetch(url: string, maxChars: number, signal?: AbortSignal): Promise<DomainWebFetchResult> {
-    return this._req<DomainWebFetchResult>('POST', '/web/fetch', {
-      body: { url, max_chars: maxChars },
-      signal
-    })
+   *  POST /web/fetch {url, max_chars}. Returns the extracted text (untrusted) + metadata.
+   *  `constrain` (S6 W3, ADR-004 rev3.1 D-fix-1) — a gated headless agent fetch passes the run's
+   *  agentId + derived contextMode so the endpoint enforces the per-agent redirect origin
+   *  whitelist (the SAME enabled+dual-key candidate set policyEvaluate consults, resolved
+   *  server-side — the gateway never assembles the origin list). Absent (manual / open tier) →
+   *  the body is byte-identical to the S1 shape. */
+  webFetch(
+    url: string,
+    maxChars: number,
+    signal?: AbortSignal,
+    constrain?: { agentId: string; contextMode: string }
+  ): Promise<DomainWebFetchResult> {
+    const body: Record<string, unknown> = { url, max_chars: maxChars }
+    if (constrain) {
+      body.agent_id = constrain.agentId
+      body.context_mode = constrain.contextMode
+    }
+    return this._req<DomainWebFetchResult>('POST', '/web/fetch', { body, signal })
   }
 
   /** web_search (S1 R3) — DuckDuckGo web search (best-effort). POST /web/search {query, limit}. */

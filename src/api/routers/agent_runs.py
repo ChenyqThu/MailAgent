@@ -260,6 +260,10 @@ def _assemble_spec(job: AsyncJob) -> dict[str, Any]:
         # 仅 parse 后字面 True 才投影（ADR-004 P1-4 —— gateway 从判别布尔**构造** grants，
         # 永不透传 raw object）。
         tool_policy_out["grantExec"] = True
+    if tool_policy.grant_web in ("gated", "open"):
+        # 镜像 grantExec：仅非默认值（off）才投影；gateway 侧 parseWebGrant 再判别一次，
+        # 缺席/junk 恒塌 'off'（ADR-004 rev3.1 D1）。
+        tool_policy_out["grantWeb"] = tool_policy.grant_web
     spec: dict[str, Any] = {
         "jobId": job.job_id,
         "agentId": agent_id,

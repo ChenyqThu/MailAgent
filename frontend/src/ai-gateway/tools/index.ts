@@ -241,7 +241,11 @@ export function buildGatewayTools(
         a2uiEnabled: opts.a2uiEnabled,
         approvalMode: opts.approvalMode,
         oneShot: opts.oneShotWrites,
-        contextMode
+        contextMode,
+        // S6 W3 (ADR-004 rev3.1 D2) — headless agent run only: the factory wires the grant-tier
+        // 免卡 paths (gated origin-whitelist evaluate / open+search grant verdict) + the runtime
+        // modeDenied grants. Manual runs never carry a context → undefined → byte-identical.
+        agentRunContext: opts.agentRunContext
       })
     )
   }

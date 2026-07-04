@@ -373,3 +373,192 @@ describe('web_search (edit-tier write)', () => {
     expect(out.results[0]?.snippet.endsWith('UNTRUSTED_WEB_CONTENT_END')).toBe(true)
   })
 })
+
+// ── S6 W3 (ADR-004 rev3.1 D2/§4) — headless grant-tier免卡: gated origin-whitelist evaluate /
+//    open + web_search grant-level local verdict / manual byte-identical ──────────────────────────
+
+describe('web tools × per-agent grants (headless custom-agent run)', () => {
+  const CTX_GATED = { agentId: 'dms', allowedTools: [], modeGrants: { web: 'gated' as const } }
+  const CTX_OPEN = { agentId: 'dms', allowedTools: [], modeGrants: { web: 'open' as const } }
+
+  function needsApprovalOf(tool: import('ai').Tool) {
+    return tool.needsApproval as (
+      i: unknown,
+      o: { toolCallId: string; messages: unknown[] }
+    ) => boolean | Promise<boolean>
+  }
+  function executeOf(tool: import('ai').Tool) {
+    return tool.execute as (
+      i: unknown,
+      o: { toolCallId: string; messages: unknown[]; abortSignal?: AbortSignal }
+    ) => Promise<unknown>
+  }
+  /** webDomain + a mocked /agent/policy/evaluate verdict + evaluate/fetch wire capture. */
+  function grantDomain(overrides?: {
+    verdict?: { decision: 'auto_allow' | 'ask'; rule_id: number | null }
+    onEvaluate?: (body: unknown) => void
+    onFetch?: (body: unknown) => void
+    onSearch?: (body: unknown) => void
+  }) {
+    return mockDomain((url, body) => {
+      if (url.includes('/agent/policy/evaluate')) {
+        overrides?.onEvaluate?.(body ? JSON.parse(body) : null)
+        return okEnvelope(overrides?.verdict ?? { decision: 'ask', rule_id: null })
+      }
+      if (url.includes('/web/fetch')) {
+        overrides?.onFetch?.(body ? JSON.parse(body) : null)
+        return okEnvelope(FETCH_RESULT)
+      }
+      if (url.includes('/web/search')) {
+        overrides?.onSearch?.(body ? JSON.parse(body) : null)
+        return okEnvelope(SEARCH_RESULT)
+      }
+      return okEnvelope({})
+    })
+  }
+
+  test('manual runs NEVER consult the whitelist — a stray agentRunContext does not inject (byte-identical)', async () => {
+    const evaluateCalls: unknown[] = []
+    const tools = createWebTools(
+      grantDomain({ onEvaluate: (b) => evaluateCalls.push(b) }),
+      [],
+      new ApprovalGuard(),
+      { contextMode: 'manual_chat', agentRunContext: CTX_OPEN }
+    )
+    expect(
+      await needsApprovalOf(tools.web_fetch)({ url: 'https://x.test' }, { toolCallId: 'tc-g0', messages: [] })
+    ).toBe(true)
+    expect(
+      await needsApprovalOf(tools.web_search)({ query: 'q' }, { toolCallId: 'tc-g0b', messages: [] })
+    ).toBe(true)
+    expect(evaluateCalls).toHaveLength(0)
+  })
+
+  test('gated web_fetch hit: evaluate wire = {web, {url}, derived mode, agentId}; no card; audit auto_whitelist + rule id (rule-source); fetch carries the constraint keys', async () => {
+    let evaluateBody: unknown = null
+    let fetchBody: unknown = null
+    const collector: GatewayToolAuditCollector = []
+    const tools = createWebTools(
+      grantDomain({
+        verdict: { decision: 'auto_allow', rule_id: 41 },
+        onEvaluate: (b) => (evaluateBody = b),
+        onFetch: (b) => (fetchBody = b)
+      }),
+      collector,
+      new ApprovalGuard(),
+      { contextMode: 'untrusted_trigger', agentRunContext: CTX_GATED }
+    )
+    const input = { url: 'https://api.vendor.test/v1', max_chars: 50000 }
+    expect(await needsApprovalOf(tools.web_fetch)(input, { toolCallId: 'tc-g1', messages: [] })).toBe(false)
+    expect(evaluateBody).toMatchObject({
+      capability: 'web',
+      action: { url: 'https://api.vendor.test/v1' },
+      contextMode: 'untrusted_trigger',
+      agentId: 'dms'
+    })
+    await executeOf(tools.web_fetch)(input, { toolCallId: 'tc-g1', messages: [], abortSignal: undefined })
+    // the gated fetch body carries the additive redirect-constraint keys (D-fix-1, same source
+    // values as policyEvaluate)
+    expect(fetchBody).toMatchObject({
+      url: 'https://api.vendor.test/v1',
+      agent_id: 'dms',
+      context_mode: 'untrusted_trigger'
+    })
+    expect(collector[0]?.approvalStatus).toBe('auto_whitelist')
+    expect(collector[0]?.whitelistRuleId).toBe(41) // rule-source: non-null
+  })
+
+  test('gated web_fetch miss (ask) / evaluate error → the card (fail-closed, no silent免卡)', async () => {
+    const tools = createWebTools(
+      grantDomain({ verdict: { decision: 'ask', rule_id: null } }),
+      [],
+      new ApprovalGuard(),
+      { contextMode: 'cron_headless', agentRunContext: CTX_GATED }
+    )
+    expect(
+      await needsApprovalOf(tools.web_fetch)({ url: 'https://evil.test' }, { toolCallId: 'tc-g2', messages: [] })
+    ).toBe(true)
+    const boom = createWebTools(
+      mockDomain((url) =>
+        url.includes('/agent/policy/evaluate')
+          ? errEnvelope('E_INTERNAL', 'boom', 500)
+          : okEnvelope(FETCH_RESULT)
+      ),
+      [],
+      new ApprovalGuard(),
+      { contextMode: 'cron_headless', agentRunContext: CTX_GATED }
+    )
+    expect(
+      await needsApprovalOf(boom.web_fetch)({ url: 'https://x.test' }, { toolCallId: 'tc-g3', messages: [] })
+    ).toBe(true)
+  })
+
+  test('open web_fetch: grant-level local verdict — NO evaluate loopback, no card, audit auto_whitelist + rule_id NULL (grant-source), fetch WITHOUT constraint keys', async () => {
+    const evaluateCalls: unknown[] = []
+    let fetchBody: Record<string, unknown> | null = null
+    const collector: GatewayToolAuditCollector = []
+    const tools = createWebTools(
+      grantDomain({
+        onEvaluate: (b) => evaluateCalls.push(b),
+        onFetch: (b) => (fetchBody = b as Record<string, unknown>)
+      }),
+      collector,
+      new ApprovalGuard(),
+      { contextMode: 'untrusted_trigger', agentRunContext: CTX_OPEN }
+    )
+    const input = { url: 'https://anywhere.test/p', max_chars: 50000 }
+    expect(await needsApprovalOf(tools.web_fetch)(input, { toolCallId: 'tc-g4', messages: [] })).toBe(false)
+    await executeOf(tools.web_fetch)(input, { toolCallId: 'tc-g4', messages: [], abortSignal: undefined })
+    expect(evaluateCalls).toHaveLength(0) // grant-source免卡 never touches the evaluate endpoint
+    expect(fetchBody).not.toBeNull()
+    expect(fetchBody!.agent_id).toBeUndefined() // open tier: SSRF floor only, no origin constraint
+    expect(fetchBody!.context_mode).toBeUndefined()
+    expect(collector[0]?.approvalStatus).toBe('auto_whitelist')
+    expect(collector[0]?.whitelistRuleId).toBeNull() // grant-source: null, distinct from rule-source
+  })
+
+  test.each([
+    ['gated', CTX_GATED],
+    ['open', CTX_OPEN]
+  ] as const)('web_search under %s: grant-level恒免卡 — no evaluate, no card, audit auto_whitelist + NULL', async (_tier, ctx) => {
+    const evaluateCalls: unknown[] = []
+    const collector: GatewayToolAuditCollector = []
+    const tools = createWebTools(
+      grantDomain({ onEvaluate: (b) => evaluateCalls.push(b) }),
+      collector,
+      new ApprovalGuard(),
+      { contextMode: 'untrusted_trigger', agentRunContext: ctx }
+    )
+    const input = { query: 'q3 plan', limit: 5 }
+    expect(await needsApprovalOf(tools.web_search)(input, { toolCallId: 'tc-g5', messages: [] })).toBe(false)
+    await executeOf(tools.web_search)(input, { toolCallId: 'tc-g5', messages: [], abortSignal: undefined })
+    expect(evaluateCalls).toHaveLength(0)
+    expect(collector[0]?.approvalStatus).toBe('auto_whitelist')
+    expect(collector[0]?.whitelistRuleId).toBeNull()
+  })
+
+  test("grant 'off' (or junk) under a headless mode → runtime modeDenied hard-rejects at execute (double insurance)", async () => {
+    const collector: GatewayToolAuditCollector = []
+    const tools = createWebTools(grantDomain(), collector, new ApprovalGuard(), {
+      contextMode: 'untrusted_trigger',
+      agentRunContext: { agentId: 'dms', allowedTools: [], modeGrants: { web: 'off' } }
+    })
+    await expect(
+      executeOf(tools.web_fetch)(
+        { url: 'https://x.test', max_chars: 50000 },
+        { toolCallId: 'tc-g6', messages: [], abortSignal: undefined }
+      )
+    ).rejects.toThrow(/E_CONTEXT_MODE_DENIED/)
+  })
+
+  test("flag off + grant 'gated' → web tools absent from the assembly (the grant is inert without MAILAGENT_OPENNESS_WEB_TOOLS)", () => {
+    const tools = buildGatewayTools({
+      domain: grantDomain(),
+      approvalGuard: new ApprovalGuard(),
+      webToolsEnabled: false,
+      contextMode: 'untrusted_trigger',
+      agentRunContext: CTX_GATED
+    })
+    for (const name of GATEWAY_WEB_TOOL_NAMES) expect(tools[name]).toBeUndefined()
+  })
+})

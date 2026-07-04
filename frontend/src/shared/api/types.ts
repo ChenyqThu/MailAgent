@@ -1464,8 +1464,10 @@ export interface ExecPolicyRule {
 /** S5 W5b — 建一条 per-agent 免卡规则（POST /agent/policy/rules）。contextMode 由后端从
  *  agent trigger.kind 派生（表单不可选，ADR-004 §3.3）——本 input 结构性无该字段。 */
 export interface CreatePolicyRuleInput {
-  capability: 'domain_write' | 'exec'
-  /** typed matcher：domain_write = {v:1, tool}；exec = pinned-entrypoint 形状（后端形状闸权威）。 */
+  /** 'web'（S6 W3, ADR-004 rev3.1 F#1）= gated web_fetch 的 per-agent 域名白名单规则。 */
+  capability: 'domain_write' | 'exec' | 'web'
+  /** typed matcher：domain_write = {v:1, tool}；exec = pinned-entrypoint 形状（后端形状闸权威）；
+   *  web = {v:1, origin}（canonical origin 归一在后端权威 `_normalize_origin`）。 */
   matcher: Record<string, unknown>
   agentId: string
   note?: string

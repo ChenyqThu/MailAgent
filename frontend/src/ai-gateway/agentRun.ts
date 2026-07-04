@@ -36,6 +36,7 @@ import {
 import {
   classOfTool,
   normalizeContextMode,
+  parseWebGrant,
   type AgentContextMode,
   type AgentRunContext
 } from './tools/policy'
@@ -87,17 +88,18 @@ export function intersectAllowedTools(all: ToolSet, allowed?: string[]): ToolSet
   return out
 }
 
-/** ADR-004 §4.1 — construct the per-agent run context from the pulled spec. Grants are a
- *  DISCRIMINATED boolean built here (`grantExec === true`), NEVER a passthrough of the spec's raw
- *  toolPolicy object — any other value/type ("yes", 1, {}, a junk key) yields {exec:false}, so a
- *  future spec field can never silently flow into the matrix (codex P1-4). allowedTools missing /
- *  non-array → [] (fail-closed, §5.1). The shared AgentRunSpec TYPE (@shared/api/types) still
- *  spells toolPolicy as {allowedTools?} — grantExec is on the wire since W4a but the shared-type
- *  extension belongs to the UI half; the structural cast below reads it without widening the
- *  shared surface. Exported for the discriminated-construction tests. */
+/** ADR-004 §4.1 (+ rev3.1 D1 web) — construct the per-agent run context from the pulled spec.
+ *  Grants are DISCRIMINATED typed values built here (`grantExec === true`; `parseWebGrant`
+ *  collapsing anything but the exact 'gated'/'open' literals to 'off'), NEVER a passthrough of the
+ *  spec's raw toolPolicy object — any other value/type ("yes", 1, {}, a junk key) yields the
+ *  narrowest grant, so a future spec field can never silently flow into the matrix (codex P1-4).
+ *  allowedTools missing / non-array → [] (fail-closed, §5.1). The shared AgentRunSpec TYPE
+ *  (@shared/api/types) still spells toolPolicy as {allowedTools?} — grantExec/grantWeb are on the
+ *  wire but the shared-type extension belongs to the UI half; the structural cast below reads
+ *  them without widening the shared surface. Exported for the discriminated-construction tests. */
 export function agentRunContextFromSpec(spec: AgentRunSpec, jobId?: number): AgentRunContext {
   const toolPolicy = spec.toolPolicy as
-    | { allowedTools?: unknown; grantExec?: unknown }
+    | { allowedTools?: unknown; grantExec?: unknown; grantWeb?: unknown }
     | undefined
   const allowedRaw = toolPolicy?.allowedTools
   return {
@@ -105,7 +107,7 @@ export function agentRunContextFromSpec(spec: AgentRunSpec, jobId?: number): Age
     allowedTools: Array.isArray(allowedRaw)
       ? allowedRaw.filter((n): n is string => typeof n === 'string')
       : [],
-    modeGrants: { exec: toolPolicy?.grantExec === true },
+    modeGrants: { exec: toolPolicy?.grantExec === true, web: parseWebGrant(toolPolicy?.grantWeb) },
     // S6 W1 — carry the run's jobId so a paused approval freezes it into the stash for the
     // record-view pending projection. Conditional include: a caller that omits it (every existing
     // test + the shared type's cast callers) yields the pre-S6 object shape, byte-identical.
@@ -143,23 +145,26 @@ export function wrapCfgForAgentRun(
   return {
     ...cfg,
     agentRunContext: ctx,
-    // ADR-004 §4.1 (codex终审 P1) — the intersection domain is the NON-exec classes only. exec
-    // tools are exempt: their presence is decided SOLELY by the matrix (contextMode + grants) —
-    // allowed_tools is the defensive narrowing for the read/domain_write face, while grant_exec is
-    // the one explicit opt-in for the exec class; the two control planes are orthogonal. Without
-    // the exemption the grant is dead config: allowed_tools comes from the Settings tool picker /
+    // ADR-004 §4.1 (codex终审 P1; rev3.1 §3.2 extends exec → exec ∪ web) — the intersection
+    // domain is the NON-granted classes only. exec AND web tools are exempt: their presence is
+    // decided SOLELY by the matrix (contextMode + grants) — allowed_tools is the defensive
+    // narrowing for the read/domain_write face, while grant_exec/grant_web are the explicit
+    // opt-ins for their classes; the control planes are orthogonal. Without the exemption a grant
+    // is dead config: allowed_tools comes from the Settings tool picker /
     // DEFAULT_CUSTOM_AGENT_ALLOWED_TOOLS, whose vocabulary is read+domain_write only (the
-    // tool-options endpoint offers no exec names), so the intersection would strip run_command
-    // right after the matrix admitted it. Boundary: allowedTools=[] + grant_exec=true → the exec
-    // tools STILL register (and every call still crosses policy_rules / first-run gate / HITL).
-    // An unclassified name fail-closes to 'exec' and would share the exemption — harmless in
-    // practice: policy.test's completeness gate forces every real tool to be classified, and the
-    // matrix already floors unclassified names whenever there is no grant.
+    // tool-options endpoint offers no exec/web names), so the intersection would strip
+    // run_command/web_fetch right after the matrix admitted them. Boundary: allowedTools=[] +
+    // grant → the granted tools STILL register (and every call still crosses policy_rules /
+    // first-run gate / grant-tier免卡 / HITL). An unclassified name fail-closes to 'exec' and
+    // would share the exemption — harmless in practice: policy.test's completeness gate forces
+    // every real tool to be classified, and the matrix already floors unclassified names whenever
+    // there is no grant.
     buildTools: (collector, approvalMode, mode) => {
       const built = cfg.buildTools?.(collector, approvalMode, mode, ctx) ?? {}
       const out: ToolSet = {}
       for (const [name, t] of Object.entries(built)) {
-        if (classOfTool(name) === 'exec' || keep.has(name)) out[name] = t
+        const cls = classOfTool(name)
+        if (cls === 'exec' || cls === 'web' || keep.has(name)) out[name] = t
       }
       return out
     }

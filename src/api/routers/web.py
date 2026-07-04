@@ -37,6 +37,9 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
+# canonical origin 唯一权威实现（ADR-004 rev3.1 D-fix-4）：redirect 逐跳检查必须与策略匹配侧
+# （policy._match_web）经**同一函数**归一，禁止 httpx 侧字符串自比（tests/api 有同一性断言）。
+from src.agent_config.policy import _normalize_origin
 from src.api.app import APIError, success_envelope
 from src.api.auth import verify_cf_access
 from src.api.ssrf import check_ip as _check_ip
@@ -80,10 +83,18 @@ _UA = (
 
 
 class WebFetchRequest(BaseModel):
-    """POST /api/web/fetch 请求体（domainClient webFetch 的 wire）。"""
+    """POST /api/web/fetch 请求体（domainClient webFetch 的 wire）。
+
+    ``agent_id`` + ``context_mode``（S6 W3, ADR-004 rev3.1 D-fix-1，additive）：gated headless
+    agent fetch 由 gateway 附带（与 policyEvaluate 同源值）→ 启用 per-agent redirect origin
+    白名单约束（见 :func:`_gated_allowed_origins`）。缺省 = 无约束（manual / open 档），wire
+    与 S1 形状字节不变。
+    """
 
     url: str = Field(min_length=1, max_length=4096)
     max_chars: int = Field(default=_DEFAULT_MAX_CHARS, ge=200, le=_MAX_MAX_CHARS)
+    agent_id: Optional[str] = None
+    context_mode: Optional[str] = None
 
 
 class WebSearchRequest(BaseModel):
@@ -147,9 +158,54 @@ def _extract(media_type: str, raw: bytes, encoding: Optional[str], max_chars: in
     return text, title
 
 
-def _do_fetch(input_url: str, max_chars: int) -> dict[str, Any]:
+def _gated_allowed_origins(body: WebFetchRequest) -> Optional[frozenset]:
+    """gated 档的 redirect origin 聚合集（ADR-004 rev3.1 D-fix-1，P0）。
+
+    集合定义 = **与 policyEvaluate 同候选集**：该 agent + 派生 context_mode 下 ``enabled=1`` 的
+    capability='web' 规则（``candidate_policy_rules`` 双键严格等值，**禁止** raw
+    ``list_policy_rules`` —— 会混入 disabled / 错 context_mode 行）origins 的 canonical 归一并集，
+    再 ∪ **首跳 origin**：人批（审批卡）放行的 gated fetch 同样带约束参数 —— owner 批的是这个
+    URL，其自身 origin 必须可达、但 redirect 出白名单域之外仍中止；免卡 fetch 的首跳本就 ∈
+    候选集（policyEvaluate 刚命中），∪ 首跳不扩大任何免卡面。
+
+    ``agent_id`` 缺省 → None（无约束：manual / open 档只有 SSRF 地板）；带 ``agent_id`` 但
+    ``context_mode`` 非法 → 400（调用方 bug 早暴露，不静默降级成无约束）。
+    """
+    if body.agent_id is None:
+        return None
+    from src.agent_config.policy import CONTEXT_MODES, parse_matcher
+    from src.agent_config.store import get_agent_config_store
+
+    if body.context_mode not in CONTEXT_MODES:
+        raise APIError(
+            "E_INVALID_ARG",
+            f"context_mode must be one of {list(CONTEXT_MODES)} when agent_id is set",
+            http_status=400,
+            source="web",
+        )
+    origins: set = set()
+    for rule in get_agent_config_store().candidate_policy_rules(
+        "web", body.context_mode, agent_id=body.agent_id
+    ):
+        try:
+            matcher = parse_matcher("web", rule.matcher)
+        except Exception:  # noqa: BLE001 — 坏规则跳过（与 evaluate 同语义），绝不因此放宽
+            continue
+        norm = _normalize_origin(matcher.origin)
+        if norm:
+            origins.add(norm)
+    init = _normalize_origin(body.url)
+    if init:
+        origins.add(init)
+    return frozenset(origins)
+
+
+def _do_fetch(
+    input_url: str, max_chars: int, allowed_origins: Optional[frozenset] = None
+) -> dict[str, Any]:
     """同步执行 web_fetch（在 threadpool 跑）：逐跳手动 redirect + 每跳 SSRF 校验 + 钉 IP +
-    size/time/content-type cap + 正文抽取。"""
+    size/time/content-type cap + 正文抽取。``allowed_origins``（gated 档）非 None 时每跳 origin
+    经 canonical 归一后必须 ∈ 集，越界中止（结构化错误，SSRF 地板不弱化、叠加生效）。"""
     deadline = time.monotonic() + _FETCH_TIMEOUT_SEC
     current = _validate_url(input_url)
     truncated = False
@@ -161,6 +217,19 @@ def _do_fetch(input_url: str, max_chars: int) -> dict[str, Any]:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise APIError("E_UPSTREAM", "fetch timed out", http_status=504, source="web")
+
+            # gated 档逐跳 origin 白名单（D-fix-1）：在 DNS/SSRF 之前判，越界即中止 —— 命中集内
+            # 仍逐 IP 过全套 SSRF 校验（两层叠加，谁都不豁免谁）。
+            if allowed_origins is not None:
+                hop_origin = _normalize_origin(str(current))
+                if hop_origin is None or hop_origin not in allowed_origins:
+                    raise APIError(
+                        "E_WEB_ORIGIN_FORBIDDEN",
+                        f"origin {hop_origin or str(current)!r} is outside this agent's "
+                        "web origin whitelist (redirect constraint)",
+                        http_status=403,
+                        source="web",
+                    )
 
             host, port, _scheme = _host_port_scheme(current)
             pinned_ip = _resolve_and_validate(host, port)
@@ -358,8 +427,10 @@ def _do_search(query: str, limit: int) -> dict[str, Any]:
 async def web_fetch(request: Request, body: WebFetchRequest):
     """抓取一个 http/https URL 的正文（SSRF 防护 + 钉 IP + 逐跳 redirect + size/time/content-type
     cap + HTML→markdown 抽取）。执行在 threadpool（httpx 同步 + 阻塞 DNS）。返回 raw 文本，围栏
-    由 gateway TS 工具做。"""
-    result = await run_in_threadpool(_do_fetch, body.url, body.max_chars)
+    由 gateway TS 工具做。gated headless agent 调用（带 agent_id/context_mode）另加 per-agent
+    redirect origin 白名单约束（ADR-004 rev3.1 D-fix-1）。"""
+    allowed_origins = _gated_allowed_origins(body)
+    result = await run_in_threadpool(_do_fetch, body.url, body.max_chars, allowed_origins)
     return success_envelope(result, request=request, source="web")
 
 

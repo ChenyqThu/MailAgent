@@ -126,6 +126,72 @@ def test_web_invalid_origin_rejected():
         P.WebMatcher.model_validate({"v": 1, "origin": "ftp://example.com"})
 
 
+# ── canonical origin（S6 W3，ADR-004 rev3.1 D-fix-4 测试矩阵）────────────────────────
+# `_normalize_origin` 是四个消费处（规则存储校验 / 策略匹配 / web.py redirect 逐跳 / TS 预览
+# 回显）的唯一权威实现 —— 等值/不等值/拒绝三组逐项钉死。
+
+
+@pytest.mark.parametrize(
+    "a,b",
+    [
+        ("HTTPS://Example.COM", "https://example.com:443"),        # 大小写 + 默认端口显式化
+        ("https://x.com", "https://x.com:443"),                    # 默认端口补齐
+        ("http://x.com", "http://x.com:80"),
+        ("https://bücher.example", "https://xn--bcher-kva.example"),  # IDN unicode ≡ punycode
+        ("https://BÜCHER.example", "https://xn--bcher-kva.example"),  # IDN 大小写
+        ("https://example.com.", "https://example.com"),           # 尾点 host
+        ("https://example.com/path?q=1#f", "https://example.com"),  # path/query/fragment 丢弃
+    ],
+)
+def test_normalize_origin_equivalence(a, b):
+    na, nb = P._normalize_origin(a), P._normalize_origin(b)
+    assert na is not None and na == nb
+
+
+@pytest.mark.parametrize(
+    "a,b",
+    [
+        ("http://x.com", "https://x.com"),                # scheme 变化
+        ("https://x.com:8443", "https://x.com"),          # 端口变化
+        ("https://sub.example.com", "https://example.com"),  # 子域
+        ("https://evil-example.com", "https://example.com"),  # 前缀攻击
+    ],
+)
+def test_normalize_origin_non_match(a, b):
+    na, nb = P._normalize_origin(a), P._normalize_origin(b)
+    assert na is not None and nb is not None and na != nb
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "https://user:pass@x.com",   # userinfo 拒（与 ssrf.validate_url 同向）
+        "https://user@x.com",        # 仅 username 也拒
+        "ftp://x.com",               # 非 http(s)
+        "https://",                  # 缺 host
+        "",                          # 空
+        None,                        # 非字符串
+        "https://x.com:99999",       # 非法端口
+    ],
+)
+def test_normalize_origin_rejects(bad):
+    assert P._normalize_origin(bad) is None
+
+
+def test_normalize_origin_idn_match_via_rule():
+    """IDN 规则与 punycode 动作互相命中（matcher 每次匹配时归一 → 函数升级对存量规则均匀生效）。"""
+    m = P.WebMatcher.model_validate({"v": 1, "origin": "https://bücher.example"})
+    assert P._match_web(m, {"url": "https://xn--bcher-kva.example/seite?x=1"}) is True
+    assert P._match_web(m, {"url": "https://buecher.example/"}) is False
+
+
+def test_normalize_origin_single_source_with_web_router():
+    """跨消费面一致性（D-fix-4 ④）：web.py redirect 检查侧与策略匹配侧是**同一个函数对象**。"""
+    import src.api.routers.web as web_router
+
+    assert web_router._normalize_origin is P._normalize_origin
+
+
 # ── evaluate: context_mode 绑定 + use_count + fail-closed ─────────────────────────
 
 
