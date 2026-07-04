@@ -325,3 +325,104 @@ export const skillReadSchema = z.object({
   name: z.string().min(1).max(64)
 })
 export type SkillReadInput = z.infer<typeof skillReadSchema>
+
+// ── custom-agent CRUD schemas (S5 W3) — the assistant helps the owner build / edit / run a custom
+//    agent through conversation. Behind MAILAGENT_CUSTOM_AGENTS_ENABLED. list/get are silent reads;
+//    create/update/delete/run_now are edit-tier writes (class capability_change — always ask, never
+//    auto-approved). Deep validation lives in Python (validate_agent_config_patch); the gateway
+//    schema is an ALLOWLIST — the only writable fields are the safe ones. `.strict()` rejects any
+//    unknown key (grant_exec / tool_policy / policy rules etc. structurally cannot enter), so a model
+//    can never smuggle a self-authorization field through the CRUD surface (ADR-004 §7 D5 / Q7). ──
+
+/** A custom-agent trigger the model may propose. Mirrors CustomAgentTrigger (backend
+ *  src/agents/trigger.py is the validation authority: cron 5-field + croniter, regex ReDoS caps).
+ *  The `v` version bit is added by the wire construction, not the model. */
+export const customAgentTriggerSchema = z.discriminatedUnion('kind', [
+  z
+    .object({
+      kind: z.literal('cron'),
+      cron: z.string().min(1).max(256),
+      timezone: z.string().max(64).optional()
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('email_filter'),
+      subject_pattern: z.string().max(256).optional(),
+      sender_pattern: z.string().max(256).optional(),
+      folders: z.array(z.string().min(1).max(200)).max(32).optional()
+    })
+    .strict()
+])
+export type CustomAgentTriggerInput = z.infer<typeof customAgentTriggerSchema>
+
+/** A custom-agent budget the model may propose (three run gates). Mirrors CustomAgentBudget; the
+ *  backend clamps each field defensively (parse_budget) — these bounds match the backend ceilings. */
+export const customAgentBudgetSchema = z
+  .object({
+    max_steps: z.number().int().min(1).max(16).optional(),
+    max_runs_per_day: z.number().int().min(0).max(100_000).optional(),
+    max_run_seconds: z.number().int().min(1).max(1800).optional()
+  })
+  .strict()
+export type CustomAgentBudgetInput = z.infer<typeof customAgentBudgetSchema>
+
+/** custom_agent_list — list the owner's custom agents (silent read). */
+export const customAgentListSchema = z.object({
+  limit: z.number().int().min(1).max(100).default(50)
+})
+export type CustomAgentListInput = z.infer<typeof customAgentListSchema>
+
+/** custom_agent_get — one custom agent's full spec + recent runs (silent read). */
+export const customAgentGetSchema = z.object({
+  agent_id: z.string().min(1).max(128),
+  runs_limit: z.number().int().min(0).max(20).default(5)
+})
+export type CustomAgentGetInput = z.infer<typeof customAgentGetSchema>
+
+/** custom_agent_create — propose a new custom agent (edit-tier write). ALLOWLIST: title / prompt /
+ *  model / enabled / trigger / allowed_tools / budget only. `.strict()` rejects any other key —
+ *  there is deliberately NO grant_exec and NO policy/rules field (ADR-004 D5: the model can build an
+ *  agent but can NEVER grant it an auto-approve/exec privilege). */
+export const customAgentCreateSchema = z
+  .object({
+    id: z.string().min(1).max(128),
+    title: z.string().min(1).max(200).optional(),
+    prompt: z.string().max(20_000).optional(),
+    model: z.string().max(128).optional(),
+    enabled: z.boolean().optional(),
+    trigger: customAgentTriggerSchema.nullable().optional(),
+    allowed_tools: z.array(z.string().min(1).max(64)).max(64).optional(),
+    budget: customAgentBudgetSchema.nullable().optional()
+  })
+  .strict()
+export type CustomAgentCreateInput = z.infer<typeof customAgentCreateSchema>
+
+/** custom_agent_update — propose changes to an existing custom agent (edit-tier write). Same
+ *  ALLOWLIST as create (minus id, plus agent_id); every config field optional (partial patch).
+ *  `.strict()` keeps grant_exec / policy fields structurally out. */
+export const customAgentUpdateSchema = z
+  .object({
+    agent_id: z.string().min(1).max(128),
+    title: z.string().min(1).max(200).optional(),
+    prompt: z.string().max(20_000).nullable().optional(),
+    model: z.string().max(128).optional(),
+    enabled: z.boolean().optional(),
+    trigger: customAgentTriggerSchema.nullable().optional(),
+    allowed_tools: z.array(z.string().min(1).max(64)).max(64).optional(),
+    budget: customAgentBudgetSchema.nullable().optional()
+  })
+  .strict()
+export type CustomAgentUpdateInput = z.infer<typeof customAgentUpdateSchema>
+
+/** custom_agent_delete — delete a custom agent by id (edit-tier write). */
+export const customAgentDeleteSchema = z.object({
+  agent_id: z.string().min(1).max(128)
+})
+export type CustomAgentDeleteInput = z.infer<typeof customAgentDeleteSchema>
+
+/** custom_agent_run_now — enqueue one immediate run of a custom agent (edit-tier write). */
+export const customAgentRunNowSchema = z.object({
+  agent_id: z.string().min(1).max(128)
+})
+export type CustomAgentRunNowInput = z.infer<typeof customAgentRunNowSchema>

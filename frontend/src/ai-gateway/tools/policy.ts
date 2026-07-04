@@ -97,6 +97,17 @@ export const GATEWAY_TOOL_CLASSES: Record<string, GatewayToolClass> = {
   skill_install: 'capability_change',
   skill_install_confirm: 'capability_change',
   skill_uninstall: 'capability_change',
+  // S5 W3 — conversational custom-agent CRUD. Building/editing/running an agent that HOLDS tools is
+  // a change to the assistant's own capability surface (ADR-004 P5): all six are capability_change,
+  // so the matrix floor keeps them manual_chat-only (a headless run can never build/edit/run agents)
+  // and they never auto-approve. list/get are silent reads but classed here so the WHOLE CRUD
+  // surface (reads included) stays a manual-session capability face.
+  custom_agent_list: 'capability_change',
+  custom_agent_get: 'capability_change',
+  custom_agent_create: 'capability_change',
+  custom_agent_update: 'capability_change',
+  custom_agent_delete: 'capability_change',
+  custom_agent_run_now: 'capability_change',
   // S2 W4 — skill_read is a silent read (its third-party content is SKILL_DOC-fenced at the tool).
   skill_read: 'read',
   // outbound — data leaves the machine. manual_chat-only; web is edit-tier always-ask, send is

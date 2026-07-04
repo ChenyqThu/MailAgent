@@ -25,6 +25,7 @@ import { createProfileTools } from './profile'
 import { createWebTools } from './web'
 import { createExecTools } from './exec'
 import { createSkillSupplyTools } from './skill_supply'
+import { createCustomAgentTools } from './agents'
 import { applyContextModePolicy, normalizeContextMode, type AgentContextMode } from './policy'
 import type { GatewayApprovalMode, GatewayToolAuditCollector } from './types'
 
@@ -101,6 +102,13 @@ export interface BuildGatewayToolsOpts {
    *  cards per install per ADR-002 §4) + skill_read (silent read, SKILL_DOC-fenced output). Off
    *  (default) → not added → ToolSet byte-identical to the v1.2.0 set. */
   skillInstallToolsEnabled?: boolean
+  /** S5 W3 (MAILAGENT_CUSTOM_AGENTS_ENABLED) — when true AND approvalGuard is supplied, the six
+   *  custom-agent CRUD tools are added: custom_agent_list / custom_agent_get (silent reads) +
+   *  custom_agent_create / custom_agent_update / custom_agent_delete / custom_agent_run_now
+   *  (edit-tier writes + class capability_change — never auto-approved; the whole spec is pinned).
+   *  The SAME flag gates the S4 headless kernel, so off (default) → not added → ToolSet byte-identical
+   *  to the S4 set. */
+  customAgentToolsEnabled?: boolean
   /** S2 W0 (ADR-001 D1/D3) — the run's server-asserted context mode, threaded from
    *  prepareChatRun's trustedContextMode. Governs (a) the auto-approve predicate (a reversible
    *  domain write may only skip the card in manual_chat) and (b) the LAST assembly step
@@ -246,6 +254,23 @@ export function buildGatewayTools(
     Object.assign(
       tools,
       createSkillSupplyTools(opts.domain, collector, opts.approvalGuard, {
+        a2uiEnabled: opts.a2uiEnabled,
+        approvalMode: opts.approvalMode,
+        oneShot: opts.oneShotWrites,
+        contextMode
+      })
+    )
+  }
+  // S5 W3 — custom-agent CRUD tools behind MAILAGENT_CUSTOM_AGENTS_ENABLED. Mixed set (2 silent
+  // reads + 4 edit-tier capability_change writes) → all-or-nothing on flag + guard (skill-supply
+  // 先例: registering only the reads would advertise a half capability). CORE (no skill ownership)
+  // so applySkillGating below never drops them; class capability_change so applyContextModePolicy
+  // (LAST step) drops the ENTIRE surface outside a manual run (a headless run can never build/edit/run
+  // agents). flag-off (default) → not added → byte-identical to the S4 set.
+  if (opts.customAgentToolsEnabled && opts.approvalGuard) {
+    Object.assign(
+      tools,
+      createCustomAgentTools(opts.domain, collector, opts.approvalGuard, {
         a2uiEnabled: opts.a2uiEnabled,
         approvalMode: opts.approvalMode,
         oneShot: opts.oneShotWrites,

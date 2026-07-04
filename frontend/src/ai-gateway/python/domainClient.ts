@@ -22,7 +22,16 @@ import type {
   EmailList_EmailListItem,
   MailagentEmailBody
 } from '@shared/types/cli.gen'
-import type { AgentRunSpec, ReportDetail, ReportListItem, SearchResult } from '@shared/api/types'
+import type {
+  AgentRunHistoryItem,
+  AgentRunSpec,
+  ReportAgentConfig,
+  ReportConfigPatch,
+  ReportAgentCreateInput,
+  ReportDetail,
+  ReportListItem,
+  SearchResult
+} from '@shared/api/types'
 
 /** A serve-api domain error surfaced to the caller (tool execute turns it into a
  *  tool-error part). Mirrors the http_client ApiError shape ({code, message, hint?,
@@ -1065,5 +1074,90 @@ export class MailAgentDomainClient {
       `/agent-runs/${jobId}/approval-state`,
       { body: { state }, signal }
     )
+  }
+
+  // ── custom-agent CRUD primitives (S5 W3) — the conversational build/edit/run surface. All hit the
+  //    SAME report-agent REST endpoints W1 opened for type='custom' (owner API, verify_cf_access —
+  //    the embedded gateway's local-token leg passes). Deep validation (trigger/tool_policy/budget)
+  //    is Python-authoritative (validate_agent_config_patch) — the client never re-validates. The
+  //    tools that call these are only registered when MAILAGENT_CUSTOM_AGENTS_ENABLED is on.
+
+  /** custom_agent_list — all agent configs (the tool filters to type='custom'). GET /report-agents. */
+  listReportAgents(signal?: AbortSignal): Promise<ReportAgentConfig[]> {
+    return this._req<ReportAgentConfig[]>('GET', '/report-agents', { signal })
+  }
+
+  /** custom_agent_get — one agent config by id. GET /report-agents?agentId=. E_NOT_FOUND → null. */
+  async getReportAgent(agentId: string, signal?: AbortSignal): Promise<ReportAgentConfig | null> {
+    try {
+      return await this._req<ReportAgentConfig>('GET', '/report-agents', {
+        query: { agentId },
+        signal
+      })
+    } catch (e) {
+      if (e instanceof DomainError && e.code === 'E_NOT_FOUND') return null
+      throw e
+    }
+  }
+
+  /** custom_agent_create — new agent row (type pinned to 'custom' by the tool). POST /report-agents.
+   *  A duplicate id → DomainError E_CONFLICT (409); a bad trigger → E_INVALID_ARG (deep-validated
+   *  server-side). The wire body carries only the friendly patch fields the tool assembled. */
+  createReportAgent(
+    input: ReportAgentCreateInput & ReportConfigPatch,
+    signal?: AbortSignal
+  ): Promise<ReportAgentConfig> {
+    return this._req<ReportAgentConfig>('POST', '/report-agents', { body: input, signal })
+  }
+
+  /** custom_agent_update — partial patch of an existing agent. PUT /report-agents/{id}. Missing id →
+   *  DomainError E_NOT_FOUND (404); a bad trigger → E_INVALID_ARG (server validate_agent_config_patch). */
+  setReportAgentConfig(
+    agentId: string,
+    patch: ReportConfigPatch,
+    signal?: AbortSignal
+  ): Promise<ReportAgentConfig> {
+    return this._req<ReportAgentConfig>(
+      'PUT',
+      `/report-agents/${encodeURIComponent(agentId)}`,
+      { body: patch, signal }
+    )
+  }
+
+  /** custom_agent_delete — delete an agent row. DELETE /report-agents/{id}. Missing → E_NOT_FOUND. */
+  deleteReportAgent(agentId: string, signal?: AbortSignal): Promise<{ deleted: string }> {
+    return this._req<{ deleted: string }>(
+      'DELETE',
+      `/report-agents/${encodeURIComponent(agentId)}`,
+      { signal }
+    )
+  }
+
+  /** custom_agent_run_now — enqueue one immediate run (custom → run_queue, S4 enqueue). POST
+   *  /report-agents/{id}/run → {jobId, agentId, wasCreated}. A runs/day budget miss → DomainError
+   *  E_BUDGET; a non-custom/report agent → E_INVALID_ARG. */
+  runReportAgentNow(
+    agentId: string,
+    signal?: AbortSignal
+  ): Promise<{ jobId: number; agentId: string; wasCreated: boolean }> {
+    return this._req<{ jobId: number; agentId: string; wasCreated: boolean }>(
+      'POST',
+      `/report-agents/${encodeURIComponent(agentId)}/run`,
+      { body: {}, signal }
+    )
+  }
+
+  /** custom_agent_get run history — the agent's recent runs (read態唯一经 derive_agent_run_state
+   *  server-side). GET /agent-runs?agentId=&limit=. The 8-value `state` is authoritative; the tool
+   *  never re-derives it. */
+  listAgentRuns(
+    agentId: string,
+    limit: number,
+    signal?: AbortSignal
+  ): Promise<AgentRunHistoryItem[]> {
+    return this._req<AgentRunHistoryItem[]>('GET', '/agent-runs', {
+      query: { agentId, limit },
+      signal
+    })
   }
 }

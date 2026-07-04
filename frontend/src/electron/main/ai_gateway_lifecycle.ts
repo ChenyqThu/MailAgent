@@ -592,7 +592,10 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
           // S2 W1 — exec tools (MAILAGENT_OPENNESS_EXEC_TOOLS, default off).
           execToolsEnabled,
           // S2 W4 — skill-supply tools (MAILAGENT_OPENNESS_SKILL_INSTALL, default off).
-          skillInstallToolsEnabled
+          skillInstallToolsEnabled,
+          // S5 W3 — conversational custom-agent CRUD tools (MAILAGENT_CUSTOM_AGENTS_ENABLED, the same
+          // flag that gates the S4 headless kernel; default off → byte-identical to the S4 set).
+          customAgentToolsEnabled: customAgentsEnabled
         },
         collector
       ),

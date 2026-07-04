@@ -48,6 +48,9 @@ function buildAllTools(contextMode?: AgentContextMode) {
     // S2 W4 — skill-supply tools (MAILAGENT_OPENNESS_SKILL_INSTALL), classified capability_change
     // (writes) + read (skill_read).
     skillInstallToolsEnabled: true,
+    // S5 W3 — custom-agent CRUD tools (MAILAGENT_CUSTOM_AGENTS_ENABLED), all classified
+    // capability_change (2 silent reads + 4 edit writes).
+    customAgentToolsEnabled: true,
     ...(contextMode !== undefined ? { contextMode } : {})
   })
 }

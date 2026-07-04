@@ -78,7 +78,16 @@ export const CORE_UNGATED_GATEWAY_TOOLS: ReadonlySet<string> = new Set([
   'skill_install',
   'skill_install_confirm',
   'skill_uninstall',
-  'skill_read'
+  'skill_read',
+  // S5 W3 custom-agent CRUD 工具（behind MAILAGENT_CUSTOM_AGENTS_ENABLED）—— agent 管理面，无 skill
+  // 归属（它们*管理* custom agent，不*属于*任何 skill），开关权在独立 flag，永不 skill-gated
+  // （list/get silent 读；create/update/delete/run_now = edit-tier + capability_change 恒人审）。
+  'custom_agent_list',
+  'custom_agent_get',
+  'custom_agent_create',
+  'custom_agent_update',
+  'custom_agent_delete',
+  'custom_agent_run_now'
 ])
 
 /** 删掉「归属 skill ∉ advertisedSkills 且无任一 advertised skill 仍拥有它 且非 collision-exempt」的

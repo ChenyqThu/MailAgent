@@ -42,6 +42,8 @@ function buildAllTools() {
     execToolsEnabled: true,
     // S2 W4 — skill-supply tools (MAILAGENT_OPENNESS_SKILL_INSTALL), same rationale (CORE_UNGATED).
     skillInstallToolsEnabled: true,
+    // S5 W3 — custom-agent CRUD tools (MAILAGENT_CUSTOM_AGENTS_ENABLED), same rationale (CORE_UNGATED).
+    customAgentToolsEnabled: true,
     // S2 W0 — the drift guard reasons over the MANUAL-session universe (fail-closed default is
     // 'untrusted_trigger', which strips capability_change/outbound and would blind the guard).
     contextMode: 'manual_chat'
