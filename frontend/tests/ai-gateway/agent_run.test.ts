@@ -380,11 +380,15 @@ describe('runHeadlessAgent — per-agent exec grant + fail-closed allowedTools (
     }
   }
 
-  test('grantExec true + run_command allowed → the exec tool REACHES streamText in a cron run; capability_change/outbound still absent', async () => {
+  test('grantExec true + allowedTools WITHOUT exec names → exec tools STILL reach streamText (exempt from the intersection, codex终审 P1); capability_change/outbound still absent', async () => {
+    // The combination the product actually produces: allowed_tools comes from the Settings picker /
+    // default safe set whose vocabulary is read+domain_write ONLY (tool-options offers no exec
+    // names). The grant must survive that list, else DMS 真 exec 形态 is structurally
+    // unconfigurable — exec presence is the matrix's call alone (contextMode + grants).
     const seenTools: string[][] = []
     const spec = makeSpec({
       toolPolicy: {
-        allowedTools: ['email_flag', 'run_command', 'file_read', 'skill_install', 'web_fetch'],
+        allowedTools: ['email_flag', 'skill_install', 'web_fetch'],
         grantExec: true
       } as AgentRunSpec['toolPolicy']
     })
@@ -393,11 +397,27 @@ describe('runHeadlessAgent — per-agent exec grant + fail-closed allowedTools (
     const names = seenTools[0]
     expect(names).toContain('run_command')
     expect(names).toContain('file_read')
+    expect(names).toContain('file_write')
     expect(names).toContain('email_flag')
     // the grant opens ONLY the exec class — capability_change/outbound remain structurally absent
     // even when the owner (mis)lists them in allowedTools (intersection only reduces)
     expect(names).not.toContain('skill_install')
     expect(names).not.toContain('web_fetch')
+    // and the intersection still narrows the non-exec face (email_search not allowed → absent)
+    expect(names).not.toContain('email_search')
+  })
+
+  test('grant OFF + the same allowedTools → exec tools absent (the matrix floor, not the allow-list, gates exec)', async () => {
+    const seenTools: string[][] = []
+    const spec = makeSpec({
+      toolPolicy: { allowedTools: ['email_flag'] } as AgentRunSpec['toolPolicy']
+    })
+    await runHeadlessAgent(grantAwareCfg(seenTools), { jobId: 7, spec, sessionId: null }, new AbortController().signal)
+    const names = seenTools[0]
+    expect(names).not.toContain('run_command')
+    expect(names).not.toContain('file_read')
+    expect(names).not.toContain('file_write')
+    expect(names).toContain('email_flag')
   })
 
   test('junk grantExec ("yes") → run_command NEVER reaches streamText (discriminated construction)', async () => {
@@ -413,7 +433,16 @@ describe('runHeadlessAgent — per-agent exec grant + fail-closed allowedTools (
     expect(seenTools[0]).toContain('email_flag')
   })
 
-  test('allowedTools MISSING (malformed spec) → the model sees ZERO tools (fail-closed to [], §5.1)', async () => {
+  test('allowedTools=[] (owner selected ZERO tools) + grantExec true → exec tools alone survive (the two control planes are orthogonal)', async () => {
+    const seenTools: string[][] = []
+    const spec = makeSpec({
+      toolPolicy: { allowedTools: [], grantExec: true } as AgentRunSpec['toolPolicy']
+    })
+    await runHeadlessAgent(grantAwareCfg(seenTools), { jobId: 7, spec, sessionId: null }, new AbortController().signal)
+    expect(seenTools[0].sort()).toEqual(['file_read', 'file_write', 'run_command'])
+  })
+
+  test('allowedTools MISSING (malformed spec, no grant) → the model sees ZERO tools (fail-closed to [], §5.1)', async () => {
     const seenTools: string[][] = []
     const spec = makeSpec({ toolPolicy: {} })
     await runHeadlessAgent(grantAwareCfg(seenTools), { jobId: 7, spec, sessionId: null }, new AbortController().signal)

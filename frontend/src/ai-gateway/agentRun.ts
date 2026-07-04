@@ -33,7 +33,12 @@ import {
   prepareChatRun,
   responseMessageAwaitsApproval
 } from './chatRun'
-import { normalizeContextMode, type AgentContextMode, type AgentRunContext } from './tools/policy'
+import {
+  classOfTool,
+  normalizeContextMode,
+  type AgentContextMode,
+  type AgentRunContext
+} from './tools/policy'
 import type { MailAgentUIMessage } from '@shared/assistant/uiMessage'
 // Relative type-only import (erased) — same discipline as searchAgentRun.ts: the pure-Node harness
 // (tsx) must be able to load this module without resolving vite aliases.
@@ -68,10 +73,10 @@ export function deriveContextMode(spec: AgentRunSpec): AgentContextMode {
  *  (a name in `allowed` that isn't in `all` — e.g. a capability_change/exec/outbound tool the matrix
  *  already stripped under the non-manual mode — simply stays absent). allowed undefined → no
  *  narrowing (full set); allowed=[] → empty (owner explicitly selected zero tools). Exported for the
- *  intersection test. 🔴 The undefined=no-narrowing semantic is reserved for NON-agent callers:
- *  the agent-run path (wrapCfgForAgentRun) normalizes a missing list to [] before it gets here
- *  (ADR-004 §5.1 fail-closed — W4a's projection always emits a non-empty allowedTools field for a
- *  custom agent, so a missing field is a malformed spec). */
+ *  intersection test. 🔴 The undefined=no-narrowing semantic is reserved for NON-agent callers.
+ *  The agent-run path does NOT go through this function any more: wrapCfgForAgentRun applies its
+ *  own filter (missing list → [] fail-closed per ADR-004 §5.1, and exec-class tools exempt from
+ *  the intersection — their presence is the matrix's call alone, codex终审 P1). */
 export function intersectAllowedTools(all: ToolSet, allowed?: string[]): ToolSet {
   if (!allowed) return all
   const keep = new Set(allowed)
@@ -123,18 +128,37 @@ export function wrapCfgForAgentRun(
   cfg: AiGatewayConfig,
   agentRunContext: AgentRunContext
 ): AiGatewayConfig {
-  // Fail-closed normalization at the ONE funnel both paths share: an agent run never passes
-  // undefined into intersectAllowedTools (whose undefined means "no narrowing" for non-agent
-  // callers).
+  // Fail-closed normalization at the ONE funnel both paths share: an agent run never treats a
+  // missing list as "no narrowing" (that semantic stays with non-agent callers of
+  // intersectAllowedTools).
   const ctx: AgentRunContext = {
     ...agentRunContext,
     allowedTools: agentRunContext.allowedTools ?? []
   }
+  const keep = new Set(ctx.allowedTools)
   return {
     ...cfg,
     agentRunContext: ctx,
-    buildTools: (collector, approvalMode, mode) =>
-      intersectAllowedTools(cfg.buildTools?.(collector, approvalMode, mode, ctx) ?? {}, ctx.allowedTools)
+    // ADR-004 §4.1 (codex终审 P1) — the intersection domain is the NON-exec classes only. exec
+    // tools are exempt: their presence is decided SOLELY by the matrix (contextMode + grants) —
+    // allowed_tools is the defensive narrowing for the read/domain_write face, while grant_exec is
+    // the one explicit opt-in for the exec class; the two control planes are orthogonal. Without
+    // the exemption the grant is dead config: allowed_tools comes from the Settings tool picker /
+    // DEFAULT_CUSTOM_AGENT_ALLOWED_TOOLS, whose vocabulary is read+domain_write only (the
+    // tool-options endpoint offers no exec names), so the intersection would strip run_command
+    // right after the matrix admitted it. Boundary: allowedTools=[] + grant_exec=true → the exec
+    // tools STILL register (and every call still crosses policy_rules / first-run gate / HITL).
+    // An unclassified name fail-closes to 'exec' and would share the exemption — harmless in
+    // practice: policy.test's completeness gate forces every real tool to be classified, and the
+    // matrix already floors unclassified names whenever there is no grant.
+    buildTools: (collector, approvalMode, mode) => {
+      const built = cfg.buildTools?.(collector, approvalMode, mode, ctx) ?? {}
+      const out: ToolSet = {}
+      for (const [name, t] of Object.entries(built)) {
+        if (classOfTool(name) === 'exec' || keep.has(name)) out[name] = t
+      }
+      return out
+    }
   }
 }
 

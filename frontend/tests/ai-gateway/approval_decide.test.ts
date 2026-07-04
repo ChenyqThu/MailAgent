@@ -595,9 +595,13 @@ describe('/api/ai/approval/decide — chained two-hop approvals (repause)', () =
 //   - re-pause chain: a second approval inside the resume re-freezes the SAME context (the tool
 //     face can never widen across hops).
 describe('/api/ai/approval/decide — per-agent context freeze (headless agent resume)', () => {
+  // The PRODUCT-real shape (codex终审 P1): allowedTools comes from the Settings picker whose
+  // vocabulary is read+domain_write only — it can NOT name exec tools. run_command's presence
+  // must come from the grant alone (exec exempt from the intersection), surviving the resume
+  // rebuild exactly like the fresh spawn. web_fetch (mis)listed proves outbound stays floored.
   const CTX = {
     agentId: 'dms',
-    allowedTools: ['email_draft_reply', 'email_flag', 'run_command', 'web_fetch'],
+    allowedTools: ['email_draft_reply', 'email_flag', 'web_fetch'],
     modeGrants: { exec: true }
   }
 
@@ -723,7 +727,9 @@ describe('/api/ai/approval/decide — per-agent context freeze (headless agent r
     const names = seenTools[0]
     expect(names).toContain('email_draft_reply')
     expect(names).toContain('email_flag')
-    expect(names).toContain('run_command') // grants 内 exec 可达
+    // exec exempt from the intersection: run_command is NOT in allowedTools, the grant alone
+    // carries it through the resume rebuild (codex终审 P1 组合案例的 resume 半边)
+    expect(names).toContain('run_command')
     expect(names).not.toContain('web_fetch') // grants 外恒缺席（outbound 无键可授）
     expect(names).not.toContain('email_archive') // not in allowedTools → still narrowed
     expect(names).not.toContain('email_pin')
