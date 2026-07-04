@@ -435,6 +435,58 @@ describe('/api/ai/approval/decide — onServerResumeSettled (panel live-refresh)
   })
 })
 
+// S6 W1 (PRD P3) — the /decide settle chain is ISLAND-AGNOSTIC. The endpoint takes ONLY
+// { toolCallId, decision, resumeToken } — it has NO caller-identity input, so it cannot branch on
+// "island ack" vs "in-app record-view". Whoever posts a valid token drives the SAME
+// onServerResumeSettled(sessionId, status) the lifecycle wires once (which broadcasts
+// chat:session-updated + writes the agent approval-state back). This pins that an in-app decision
+// (record view) reuses the island's resume + settle path — no second approval surface, no caller
+// branch. It asserts the CHAIN, not its identity: the endpoint behaviour is unchanged (W1 adds only
+// this regression pin, matching the existing onServerResumeSettled coverage above).
+describe('/api/ai/approval/decide — island-agnostic settle chain (in-app decide)', () => {
+  test('an in-app decide (same body an island ack sends) fires the settle hook identically', async () => {
+    const guard = new ApprovalGuard()
+    const stash = new ApprovalRunStash()
+    const settled: Array<{ sessionId: number; status: string }> = []
+    const h = await start(
+      islandCfg({
+        guard,
+        stash,
+        domainCalls: [],
+        onServerResumeSettled: (sessionId, status) => settled.push({ sessionId, status })
+      })
+    )
+    const token = seedPausedApproval(guard, stash)
+
+    // The record-view client posts EXACTLY { toolCallId, decision, resumeToken } — byte-identical to
+    // the body serve-api's island ack posts. No field could tell the endpoint "who" called.
+    const res = await decide(h.port, { toolCallId: TC, decision: 'approve', resumeToken: token })
+    expect(res.status).toBe(200)
+    expect((await res.json()).status).toBe('completed')
+    // The lifecycle-wired settle hook fired with the terminal (sessionId, status) — the SAME chain
+    // that broadcasts chat:session-updated + settles agent approval-state, regardless of caller.
+    expect(settled).toEqual([{ sessionId: 1, status: 'completed' }])
+  })
+
+  test('an in-app reject settles rejected identically (no caller branch on the settle chain)', async () => {
+    const guard = new ApprovalGuard()
+    const stash = new ApprovalRunStash()
+    const settled: Array<{ sessionId: number; status: string }> = []
+    const h = await start(
+      islandCfg({
+        guard,
+        stash,
+        domainCalls: [],
+        onServerResumeSettled: (sessionId, status) => settled.push({ sessionId, status })
+      })
+    )
+    const token = seedPausedApproval(guard, stash)
+    const res = await decide(h.port, { toolCallId: TC, decision: 'reject', resumeToken: token })
+    expect(res.status).toBe(200)
+    expect(settled).toEqual([{ sessionId: 1, status: 'rejected' }])
+  })
+})
+
 // HIGH-1 (rebase 复审, architect + codex 第 3 轮同根因) — chained two-hop island approvals.
 // hop-1 /decide(A approve) re-pauses on approval B: the re-stash's body = run.originalBody, whose
 // messages ALREADY end with the hop-1 merged assistant (same UIMessage id as the re-stashed

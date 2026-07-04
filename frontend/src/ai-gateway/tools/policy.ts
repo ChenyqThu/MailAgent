@@ -153,6 +153,12 @@ export interface AgentRunContext {
    *  hand-built test contexts and wrapCfgForAgentRun re-normalizes it to []. */
   allowedTools?: string[]
   modeGrants?: AgentModeGrants
+  /** S6 W1 — the async_jobs row id of this headless run, frozen into the run context so a paused
+   *  approval carries it into the stash (maybeStashAndAnnounceApproval freezes the whole context).
+   *  Read-only metadata for GET /api/ai/approval/pending's record-view projection; NEVER consulted
+   *  by the matrix / intersection / whitelist. Absent on manual entrypoints (the pre-S6 shape,
+   *  byte-identical), so pending → jobId:null for a non-agent approval. */
+  jobId?: number
 }
 
 /** Registration-time matrix row (ADR-001 D3, exec row revised by ADR-004 D2): may a tool of this

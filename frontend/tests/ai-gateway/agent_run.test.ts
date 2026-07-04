@@ -529,11 +529,14 @@ describe('runHeadlessAgent — drain outcomes', () => {
     // S5 W4 (ADR-004 §4.4) — the pause FREEZES the per-agent tool context into the stash (from the
     // pause-time server cfg, wrapCfgForAgentRun set it): the island resume rebuilds the exact same
     // narrowed tool face. This is the fix-anchor for the S4 "resume loses allowedTools" defect.
+    // S6 W1 — the frozen context also carries jobId (=7 here), so GET /api/ai/approval/pending's
+    // record-view projection can surface which run this paused approval belongs to.
     const entry = stash.peek('tc1')
     expect(entry?.agentRunContext).toEqual({
       agentId: 'dms',
       allowedTools: ['email_search', 'email_body', 'email_flag', 'email_draft_reply'],
-      modeGrants: { exec: false }
+      modeGrants: { exec: false },
+      jobId: 7
     })
     expect(entry?.contextMode).toBe('cron_headless')
   })

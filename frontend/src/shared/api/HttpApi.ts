@@ -22,6 +22,8 @@
 
 import type {
   AgentRunHistoryItem,
+  AgentRunPendingCount,
+  AgentRunState,
   AgentRunToolOptions,
   ReportApi,
   ReportAgentConfig,
@@ -822,14 +824,23 @@ export class HttpApi implements MailApi {
     listRuns: async (opts?: {
       agentId?: string
       limit?: number
+      state?: AgentRunState
     }): Promise<AgentRunHistoryItem[]> => {
       try {
         return await this.req<AgentRunHistoryItem[]>('GET', '/agent-runs', {
-          query: { agentId: opts?.agentId, limit: opts?.limit }
+          query: { agentId: opts?.agentId, limit: opts?.limit, state: opts?.state }
         })
       } catch {
         // flag off → 404 / serve-api 不可达 → 空态（守 ReportApi「读失败返 []」契约）。
         return []
+      }
+    },
+    pendingCount: async (): Promise<AgentRunPendingCount> => {
+      try {
+        return await this.req<AgentRunPendingCount>('GET', '/agent-runs/pending-count')
+      } catch {
+        // flag off / serve-api 不可达 → 零计数（守读优雅降级，红点不渲染）。
+        return { total: 0, byAgent: {} }
       }
     },
     toolOptions: async (): Promise<AgentRunToolOptions> => {

@@ -2504,6 +2504,13 @@ export interface ReportRunResult {
   error?: string | null
 }
 
+/** S6 W1 — 待审批（paused_pending）计数（GET /api/agent-runs/pending-count，P5 红点链数据源）。
+ *  只计 live 可批的 paused_pending（paused_expired 不计）；byAgent 只含 count>0 的 agent。 */
+export interface AgentRunPendingCount {
+  total: number
+  byAgent: Record<string, number>
+}
+
 /** S5 — custom agent allowed_tools 单项（GET /api/agent-runs/tool-options）。
  *  class 决定默认勾选与危险度标注：read = 默认安全集；domain_write = 需显式勾选。 */
 export interface AgentRunToolOption {
@@ -2546,8 +2553,16 @@ export interface ReportApi {
   /** 删除一行 agent 配置（写, needs auth）。 */
   deleteAgent(agentId: string): Promise<{ deleted: string }>
   /** S5 — custom agent run 历史（读）。GET /api/agent-runs；flag off / 失败返 []（守读优雅降级）。
-   *  state 由后端 derive_agent_run_state 单源投影，前端不自行推导。 */
-  listRuns(opts?: { agentId?: string; limit?: number }): Promise<AgentRunHistoryItem[]>
+   *  state 由后端 derive_agent_run_state 单源投影，前端不自行推导。S6 W1：可选 state 过滤
+   *  （8 值域，后端服务端派生后过滤）。 */
+  listRuns(opts?: {
+    agentId?: string
+    limit?: number
+    state?: AgentRunState
+  }): Promise<AgentRunHistoryItem[]>
+  /** S6 W1 — 待审批（paused_pending）计数（读）。GET /api/agent-runs/pending-count；
+   *  flag off / 失败返 { total: 0, byAgent: {} }（守读优雅降级）。 */
+  pendingCount(): Promise<AgentRunPendingCount>
   /** S5 — custom agent allowed_tools 可选清单（读）。GET /api/agent-runs/tool-options；
    *  flag off / 失败返 { tools: [], defaults: [] }（守读优雅降级，不硬编码工具名）。 */
   toolOptions(): Promise<AgentRunToolOptions>

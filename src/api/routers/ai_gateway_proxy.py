@@ -20,6 +20,10 @@ gateway 的 chatRun.ts/streamText（经代理透传），不在 Python 重写引
   - POST /api/ai/title             非流式 JSON
   - POST /api/ai/followups         非流式 JSON
   - POST /api/ai/approval/resolve  非流式 JSON
+  - GET  /api/ai/approval/pending  非流式 JSON（S6 W1：记录内审批的 pending 真值查询；远程
+                                   web 打开 agent 执行记录时 live 查 stash → 命中富化 / miss 404）
+  - POST /api/ai/approval/decide   非流式 JSON（S6 W1：记录内审批决策 → 服务端 resume；与岛
+                                   共用同一 gateway decide 通道，远程 web parity）
   - GET  /api/ai/config            非流式 JSON
   - GET  /health                   **裸路径**（非 /api/ai）：renderer 健康探针打
                                    ``${base}/health`` → 代理到 gateway /health。鉴权豁免（纯
@@ -242,6 +246,34 @@ async def proxy_approval_resolve(
 ) -> Response:
     """代理 POST /api/ai/approval/resolve → gateway（非流式 JSON，edit-tier 审批侧信道）。"""
     return await _proxy_buffered(request, "/api/ai/approval/resolve")
+
+
+@router.get("/api/ai/approval/pending")
+async def proxy_approval_pending(
+    request: Request, _: None = Depends(verify_cf_access)
+) -> Response:
+    """代理 GET /api/ai/approval/pending → gateway（S6 W1，远程 web parity）。
+
+    记录内审批 UI 打开 agent 执行记录时 live 查 stash 求 pending 真值：命中 200 富化体 /
+    miss 404（gateway 的 fail-closed 语义，透传 status + JSON body）。查询串（?sessionId=）
+    随 request.url 透传给 gateway。island agent off / stash 未接线 → gateway 恒 404，代理透传。"""
+    target = request.url.path
+    if request.url.query:
+        target = f"{target}?{request.url.query}"
+    return await _proxy_buffered(request, target)
+
+
+@router.post("/api/ai/approval/decide")
+async def proxy_approval_decide(
+    request: Request, _: None = Depends(verify_cf_access)
+) -> Response:
+    """代理 POST /api/ai/approval/decide → gateway（S6 W1，远程 web parity）。
+
+    记录内审批决策 → gateway 服务端 resume（与岛 ack 共用同一 decide 通道，无第二套审批面）。
+    body {toolCallId, decision, resumeToken}；gateway 凭 resumeToken 能力令牌 claim + resume。
+    非 2xx（404 未接线 / 400 缺参 / 500 resume 失败）原样透传。gateway 门控（islandAgentEnabled
+    + approvalStash）off → 404，代理透传。"""
+    return await _proxy_buffered(request, "/api/ai/approval/decide")
 
 
 @router.get("/api/ai/config")

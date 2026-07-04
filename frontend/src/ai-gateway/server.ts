@@ -23,6 +23,8 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AiGatewayConfig } from './config'
 import type { MailAgentUIMessageMetadata } from '@shared/assistant/uiMessage'
 import {
+  approvalInputPreview,
+  extractApprovalStashInput,
   generateFollowups,
   generateSessionTitle,
   lastUserMessage,
@@ -617,16 +619,23 @@ async function handleApprovalDecide(
 }
 
 /**
- * `GET /api/ai/approval/pending?sessionId=N` — Part B follow-up (paused-session reload notice). A
- * reloaded session only shows the REDACTED paused turn (approval parts stripped, R2-3), but with
- * island agent on the approval may still be live in the stash — the renderer probes this after
- * seeding a history session to show a "pending approval, act on the island" notice. Read-only:
- * peekBySession never consumes / extends the stash.
+ * `GET /api/ai/approval/pending?sessionId=N` — the pending-approval TRUTH probe. Two consumers:
+ *   - Part B island notice (AiChatPanel): a reloaded session shows only the REDACTED paused turn
+ *     (approval parts stripped, R2-3), but with island agent on the approval may still be live in
+ *     the stash — the notice reads { pending, toolName } to say "act on the island".
+ *   - S6 W1 in-record approval (record view): live-queries this to decide whether to render an
+ *     actionable decide card (hit) or an honest "已失效（超时或应用重启）" state (miss).
+ * Read-only: peekBySession never consumes / extends the stash.
  *
- * 🔴 SECURITY — the response carries ONLY { pending, toolName }: the resumeToken is a capability
- * that must never leave the gateway except through the serve-api announce leg. Island agent off /
- * stash unwired → { pending: false } (200, not 404 — "no island agent" and "nothing pending" are
- * the same answer for the notice).
+ * miss → 404 { pending:false } (S6 W1): the stash is process-memory (gateway restart drops it), so
+ * a miss is the fail-closed truth "no live claimable approval" — an honest boundary the record view
+ * needs. The island-notice consumer already treats !res.ok as pending:false, so the 404 is
+ * backward-compatible there. Island agent off / stash unwired → also a miss (nothing is claimable).
+ *
+ * 🔴 SECURITY — the hit body enriches with approvalId/inputPreview/agentId/jobId/ageMs for the
+ * decide card, but NEVER the resumeToken: that capability must only leave the gateway through the
+ * serve-api announce leg. `pending:true` + `toolName` are kept verbatim for the island-notice
+ * consumer (superset, zero-touch).
  */
 function handleApprovalPending(res: ServerResponse, cfg: AiGatewayConfig, url: string): void {
   const raw = new URL(url, 'http://127.0.0.1').searchParams.get('sessionId')
@@ -637,7 +646,20 @@ function handleApprovalPending(res: ServerResponse, cfg: AiGatewayConfig, url: s
   }
   const entry =
     cfg.islandAgentEnabled && cfg.approvalStash ? cfg.approvalStash.peekBySession(sessionId) : null
-  writeJson(res, 200, entry ? { pending: true, toolName: entry.toolName } : { pending: false })
+  if (!entry) {
+    writeJson(res, 404, { pending: false })
+    return
+  }
+  const info = extractApprovalStashInput(entry.responseMessage)
+  writeJson(res, 200, {
+    pending: true,
+    approvalId: entry.approvalId,
+    toolName: entry.toolName,
+    inputPreview: info ? approvalInputPreview(entry.toolName, info.input) : entry.toolName,
+    agentId: entry.agentRunContext?.agentId ?? null,
+    jobId: entry.agentRunContext?.jobId ?? null,
+    ageMs: Date.now() - entry.createdAt
+  })
 }
 
 /**
@@ -734,8 +756,9 @@ export function createAiGatewayServer(cfg: AiGatewayConfig): Server {
       return
     }
 
-    // Part B follow-up — reloaded-session pending-approval probe. Registered unconditionally;
-    // island agent off → { pending: false } (the renderer's notice simply doesn't render).
+    // Part B follow-up + S6 W1 — pending-approval truth probe. Registered unconditionally; a miss
+    // (island agent off / nothing stashed) → 404 { pending:false } (fail-closed truth), a hit → the
+    // enriched decide-card body (never the resumeToken).
     if (method === 'GET' && path === '/api/ai/approval/pending') {
       handleApprovalPending(res, cfg, url)
       return

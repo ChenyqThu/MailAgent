@@ -27,7 +27,7 @@ from loguru import logger
 from pydantic import BaseModel
 
 from src.agents.fence import fence_email_envelope
-from src.agents.run_state import derive_agent_run_state
+from src.agents.run_state import AGENT_RUN_STATES, derive_agent_run_state
 from src.agents.trigger import (
     EmailFilterTrigger,
     ToolPolicy,
@@ -427,21 +427,61 @@ async def get_tool_options(request: Request):
     )
 
 
+@router.get("/pending-count", dependencies=[Depends(verify_cf_access)])
+async def get_pending_count(request: Request):
+    """全局 + per-agent 待审批（``paused_pending``）计数（S6 W1，P5 红点链轮询数据源）。
+
+    🔴 只计 ``paused_pending``（live 可批的**唯一**状态）—— ``paused_expired`` 不可批（stash 已
+    GC / gateway 已重启），绝不计入红点（否则红点长挂在已作废的审批上）。读态唯一经
+    ``_run_history_item`` → ``derive_agent_run_state`` 派生（不在此重造第二套 status 映射）。
+
+    实现：内存过滤最近 100 行（``paused_pending`` 恒 ≤ TTL=30min 龄 → 必落在 created_at desc
+    头部窗口内，量小无需全表扫）。鉴权同 run 历史（``verify_cf_access``）；flag off → 404。
+
+    响应契约：``{"total": int, "byAgent": {agentId: count}}``（byAgent 只含 count>0 的 agent）。
+    """
+    _require_flag()
+    items = [_run_history_item(j) for j in get_job_repo().list_agent_runs(limit=100)]
+    by_agent: dict[str, int] = {}
+    for it in items:
+        if it["state"] == "paused_pending":
+            by_agent[it["agentId"]] = by_agent.get(it["agentId"], 0) + 1
+    return success_envelope(
+        {"total": sum(by_agent.values()), "byAgent": by_agent},
+        request=request,
+        source="agent-runs",
+    )
+
+
 @router.get("", dependencies=[Depends(verify_cf_access)])
 async def list_agent_runs(
     request: Request,
     agent_id: Optional[str] = Query(None, alias="agentId"),
     limit: int = Query(20, ge=1, le=100),
+    state: Optional[str] = Query(None),
 ):
     """agent_run 历史列表（Settings run 历史 UI 数据源，ADR D4/P6）。
 
     🔴 鉴权 = ``verify_cf_access``（远程 CF / 本地 token）——**对齐 report-agents 路由**，因调用方
     是 renderer 进程（非本机 gateway），**不用** ``verify_local_token``（那是 gateway 内部专用）。
     flag off → 404（S4 纪律，feature 不存在）。行读态经 ``derive_agent_run_state`` 单源投影。
+
+    ``state`` 可选过滤（S6 W1）：值域 = ``AGENT_RUN_STATES``（8 值域），服务端按
+    ``_run_history_item`` 派生后**内存过滤**（对拉取的 limit 窗口过滤，量小）；非法值 → 400
+    E_INVALID_ARG（防静默 typo）。过滤在 ``_annotate_auto_whitelist`` 前，只标注过滤后集。
     """
     _require_flag()
+    if state is not None and state not in AGENT_RUN_STATES:
+        raise APIError(
+            "E_INVALID_ARG",
+            f"unknown state {state!r} (expected one of {sorted(AGENT_RUN_STATES)})",
+            http_status=400,
+            source="agent-runs",
+        )
     jobs = get_job_repo().list_agent_runs(agent_id=agent_id, limit=limit)
     items = [_run_history_item(j) for j in jobs]
+    if state is not None:
+        items = [it for it in items if it["state"] == state]
     _annotate_auto_whitelist(items)
     return success_envelope(
         items, request=request, source="agent-runs", meta_extra={"count": len(items)}

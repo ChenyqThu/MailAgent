@@ -20,6 +20,7 @@ import { daemonRequest } from '../daemon_api'
 import { envelopeFromCli, type WriteEnvelope } from '../lib/envelope'
 import type {
   AgentRunHistoryItem,
+  AgentRunPendingCount,
   AgentRunToolOptions,
   CustomAgentBudget,
   CustomAgentToolPolicy,
@@ -337,11 +338,11 @@ export function registerReportHandlers(): void {
     'report:listRuns',
     async (
       _evt,
-      opts?: { agentId?: string; limit?: number }
+      opts?: { agentId?: string; limit?: number; state?: string }
     ): Promise<AgentRunHistoryItem[]> => {
       try {
         return await daemonRequest<AgentRunHistoryItem[]>('GET', '/agent-runs', {
-          query: { agentId: opts?.agentId, limit: opts?.limit }
+          query: { agentId: opts?.agentId, limit: opts?.limit, state: opts?.state }
         })
       } catch (err) {
         console.warn('[report:listRuns] serve-api unreachable / flag off:', err)
@@ -349,6 +350,19 @@ export function registerReportHandlers(): void {
       }
     }
   )
+
+  // ── report:pendingCount — S6 W1 待审批（paused_pending）计数（读，走 serve-api
+  //    GET /agent-runs/pending-count）。P5 红点链轮询数据源；只计 live 可批的 paused_pending。
+  //    flag off → serve-api 404 → catch 返零计数（守读优雅降级，红点不渲染；读态推导权威仍在
+  //    Python 一处，TS 绝不重造 status 映射）。
+  ipcMain.handle('report:pendingCount', async (): Promise<AgentRunPendingCount> => {
+    try {
+      return await daemonRequest<AgentRunPendingCount>('GET', '/agent-runs/pending-count')
+    } catch (err) {
+      console.warn('[report:pendingCount] serve-api unreachable / flag off:', err)
+      return { total: 0, byAgent: {} }
+    }
+  })
 
   // ── report:toolOptions — S5 custom agent allowed_tools 可选清单（读，走 serve-api
   //    GET /agent-runs/tool-options）。工具集 + 默认勾选由后端权威投影（前端不硬编码工具名）。

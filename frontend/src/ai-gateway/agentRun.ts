@@ -95,7 +95,7 @@ export function intersectAllowedTools(all: ToolSet, allowed?: string[]): ToolSet
  *  spells toolPolicy as {allowedTools?} — grantExec is on the wire since W4a but the shared-type
  *  extension belongs to the UI half; the structural cast below reads it without widening the
  *  shared surface. Exported for the discriminated-construction tests. */
-export function agentRunContextFromSpec(spec: AgentRunSpec): AgentRunContext {
+export function agentRunContextFromSpec(spec: AgentRunSpec, jobId?: number): AgentRunContext {
   const toolPolicy = spec.toolPolicy as
     | { allowedTools?: unknown; grantExec?: unknown }
     | undefined
@@ -105,7 +105,11 @@ export function agentRunContextFromSpec(spec: AgentRunSpec): AgentRunContext {
     allowedTools: Array.isArray(allowedRaw)
       ? allowedRaw.filter((n): n is string => typeof n === 'string')
       : [],
-    modeGrants: { exec: toolPolicy?.grantExec === true }
+    modeGrants: { exec: toolPolicy?.grantExec === true },
+    // S6 W1 — carry the run's jobId so a paused approval freezes it into the stash for the
+    // record-view pending projection. Conditional include: a caller that omits it (every existing
+    // test + the shared type's cast callers) yields the pre-S6 object shape, byte-identical.
+    ...(jobId != null ? { jobId } : {})
   }
 }
 
@@ -237,7 +241,7 @@ export async function runHeadlessAgent(
   // pause→resume chain keeps the exact same tool face; maxSteps stays fresh-spawn-only (it is not
   // part of the frozen context — a resumed drain runs under the base default, and the worker's
   // run-seconds abort still bounds it).
-  const agentRunContext = agentRunContextFromSpec(spec)
+  const agentRunContext = agentRunContextFromSpec(spec, opts.jobId)
   const cfg2: AiGatewayConfig = {
     ...wrapCfgForAgentRun(cfg, agentRunContext),
     maxSteps: clampMaxSteps(spec.budget?.maxSteps)

@@ -69,6 +69,13 @@ class _FakeGatewayHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self) -> None:  # noqa: N802
+        if self.path.startswith("/api/ai/approval/pending"):
+            # S6 W1 — 回显 sessionId 查询串，证明代理转发了 query（pending 端点靠它定位会话）。
+            from urllib.parse import parse_qs, urlparse
+
+            sid = parse_qs(urlparse(self.path).query).get("sessionId", [None])[0]
+            self._json(200, {"pending": True, "echoSessionId": sid})
+            return
         if self.path == "/health":
             # mirror the real gateway /health body (server.ts) INCLUDING the infra fields the
             # proxy must STRIP (baseUrl/model/hasKey) — only status/service/version pass through.
@@ -121,6 +128,13 @@ class _FakeGatewayHandler(BaseHTTPRequestHandler):
         elif self.path == "/api/ai/followups":
             # 非 2xx 透传验证（503 + 错误体）。
             self._json(503, {"error": "E_NO_LLM_KEY"})
+        elif self.path == "/api/ai/approval/decide":
+            # S6 W1 — 回显请求体，证明 decide body（toolCallId/decision/resumeToken）被转发。
+            try:
+                sent = json.loads(raw.decode()) if raw else {}
+            except ValueError:
+                sent = {}
+            self._json(200, {"status": "completed", "received": sent})
         else:
             self._json(404, {"error": "not_found", "path": self.path})
 
@@ -237,6 +251,34 @@ def test_proxy_approval_resolve_routed(proxy_client: TestClient):
     """POST /api/ai/approval/resolve 走代理（fake gateway 无此路由 → 404 透传，验路由接线）。"""
     r = proxy_client.post("/api/ai/approval/resolve", json={"toolCallId": "t"})
     assert r.status_code == 404  # fake gateway 的兜底 404；真 gateway 会 200/4xx
+
+
+def test_proxy_approval_pending_forwards_query(proxy_client: TestClient):
+    """S6 W1 — GET /api/ai/approval/pending 走代理且**转发查询串**（sessionId 靠它定位会话）。"""
+    r = proxy_client.get("/api/ai/approval/pending", params={"sessionId": 5})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["pending"] is True
+    assert data["echoSessionId"] == "5"  # 查询串抵达 gateway
+
+
+def test_proxy_approval_decide_forwards_body(proxy_client: TestClient):
+    """S6 W1 — POST /api/ai/approval/decide 走代理且**转发请求体**（与岛共用同一 decide 通道）。"""
+    body = {"toolCallId": "tc", "decision": "approve", "resumeToken": "rt"}
+    r = proxy_client.post("/api/ai/approval/decide", json=body)
+    assert r.status_code == 200
+    data = r.json()
+    assert data["status"] == "completed"
+    assert data["received"] == body
+
+
+def test_proxy_approval_decide_requires_auth_401(
+    proxy_client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    """decide 是写-resume 面：bypass OFF + 无凭证 → 401（拦在转发前，与 chat 同款鉴权）。"""
+    monkeypatch.setattr(auth_mod, "AUTH_DISABLED", False)
+    r = proxy_client.post("/api/ai/approval/decide", json={"toolCallId": "t"})
+    assert r.status_code == 401
 
 
 # ---------------------------------------------------------------------------
