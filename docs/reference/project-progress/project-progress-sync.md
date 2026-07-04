@@ -198,6 +198,22 @@ PROJECT_PROGRESS_SUBJECT_PATTERN=<标题正则，含【项目进度】等关键�
 - CLI 直接报错退出（避免误跑）
 - `new_watcher` 不初始化 detector（钩子不生效）
 
+## 配置来源（S5 W5a 起：专型行 + 行内热读）
+
+S5 W5a 把项目周报迁进 custom agent 框架的**专型行**（`report_agent` 表 `type='project_progress'` 单例，**DB v31** `INSERT OR IGNORE` seed，无 DDL——复用 v30 `trigger_json` 列）。配置来源自此**分两类**：
+
+| 配置项 | 来源（迁移后） | 说明 |
+|---|---|---|
+| `PROJECT_PROGRESS_SYNC_ENABLED` | **env 总闸**（实时读，非 UI） | 镜像 `LLM_AGENT_ENABLED`；总闸未开时行存在但不运行。Settings 只读展示 |
+| `PROJECT_PROGRESS_DATABASE_ID` / `_FILTER_BU` | **env 权威** | Settings 只读展示 |
+| `PROJECT_PROGRESS_AUTO_SYNC_ENABLED`（→ 行 `enabled`）· `_SUBJECT_PATTERN` / `_SENDER`（→ 行 `trigger_json`） | **行权威**（Settings 可编辑） | env 值仅作**首次 seed 默认**（v31 迁移瞬间从 env 快照播种一次），**行落地后改 env 不再影响已播种的行**；`INSERT OR IGNORE` 幂等不覆盖用户改行 |
+
+**行内热读**：`new_watcher` hook 1 每封邮件经 `src/project_progress/agent_config.py` 裸 sqlite3 读行 → `enabled` + `sender`/`subject_pattern` → 重建 `ProjectProgressDetector`（PATCH 即生效，镜像 preprocess 的 `get_preprocess_config`）。行不存在（老库未跑 v31）→ 回退 env 构造（行为等价窗口）。
+
+**sender 语义保真**：`trigger_json` 复用 email_filter 词汇（`subject_pattern`/`sender_pattern`），但本 type 走 `ProjectProgressDetector`（**子串**-sender + **正则**-subject），非 `AgentEmailMatcher`（正则-sender）——子串 sender 语义逐字保持。保存时经 `validate_agent_config_patch → parse_trigger` 弱校验（sender 作 email_filter regex 校验「可编译」，运行时仍子串匹配），空触发被拒。
+
+**执行引擎不变**：runner/xlsx_parser/detector 逐字未动，执行仍 Python 直调 fire-and-forget（**不进** async_jobs/gateway 路径 C）——项目周报是确定性 ETL，塞进 LLM headless run 是反模式（框架不容纳非 LLM 执行体，见 ai-sdk-gateway-architecture.md §13.20.3）。
+
 ## 首次切换迁移操作清单（v1 → v2）
 
 1. **Notion 后台**：在项目进度库的 Status 属性 → "已入库" 组下，**手动**添加 `Suspended` 选项（API 不能加）
