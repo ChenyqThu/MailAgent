@@ -1,4 +1,4 @@
-"""notion-agent serve-api 复刻测试 —— /api/chat/notion-agent + src/chat/notion_agent*（3b-2）。
+"""notion-agent Python 复刻测试 —— src/chat/notion_agent*（3b-2；现供 notion_agent_chat skill 直调）。
 
 Python 侧逐一对齐 frontend ``notion_agent_backend.test.ts`` + ``notion_agent_gate.test.ts`` 的
 语义契约（exit 75/77/127 分类 + thread 探测 + extractTurn + email context header + idle 超时 +
@@ -16,9 +16,6 @@ import json
 import os
 from typing import Any, Dict, List, Optional
 
-from fastapi.testclient import TestClient
-
-from src.api.app import app
 from src.chat.notion_agent import (
     classify_exit,
     detect_new_thread_id,
@@ -708,42 +705,3 @@ def test_gate_release_idempotent() -> None:
         r2()
 
     asyncio.run(_())
-
-
-# ── 端点（SSE 框架 + 校验）──────────────────────────────────────────────────
-
-
-def test_notion_agent_endpoint_streams_sse(monkeypatch) -> None:
-    async def fake_run(payload, **kwargs):
-        yield {"type": "tool_call", "name": "notion-agent chat", "args": {}, "status": "running"}
-        yield {"type": "chunk", "delta": "你好"}
-        yield {"type": "done", "finalContent": "你好", "model": None, "metadata": None}
-
-    monkeypatch.setattr("src.api.routers.chat.run_notion_agent", fake_run)
-    with TestClient(app, raise_server_exceptions=False) as c:
-        r = c.post(
-            "/api/chat/notion-agent",
-            json={
-                "history": [{"role": "user", "content": "hi"}],
-                "model": None,
-                "agentPageId": None,
-                "emailContext": None,
-            },
-        )
-    assert r.status_code == 200
-    assert "text/event-stream" in r.headers["content-type"]
-    body = r.text
-    assert '"type": "tool_call"' in body
-    assert '"type": "done"' in body
-    assert "你好" in body  # ensure_ascii=False 保 CJK 可读
-
-
-def test_notion_agent_endpoint_malformed_body_400() -> None:
-    with TestClient(app, raise_server_exceptions=False) as c:
-        r = c.post(
-            "/api/chat/notion-agent",
-            content=b"not json at all",
-            headers={"content-type": "application/json"},
-        )
-    assert r.status_code == 400
-    assert r.json()["error"]["code"] == "E_INVALID_ARG"

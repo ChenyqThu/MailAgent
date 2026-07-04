@@ -6,8 +6,8 @@ listAllSessions / listMessages / listToolCalls / kosAvailable。读 ai_chat.db
 email_metadata（subject/sender，best-effort）。形状对齐前端 ChatSession /
 ChatSessionSummary / ChatSessionListItem / ChatMessage / ChatToolCall（``types.ts``）。
 
-**阶段 3（后续，B-pure-unified）**：llm-proxy / chat 持久化 / notion-agent spawn /
-写工具端点 —— harness 在 browser 跑，serve-api 退化为数据/代理面。
+**阶段 3（后续，B-pure-unified）**：chat 持久化 / 写工具端点 —— harness 在 browser
+跑，serve-api 退化为数据/代理面。
 
 鉴权：所有端点 ``Depends(verify_cf_access)``。读 graceful（库不存在/锁 → []）。
 """
@@ -15,24 +15,20 @@ ChatSessionSummary / ChatSessionListItem / ChatMessage / ChatToolCall（``types.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 import sqlite3
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-import httpx
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import Response, StreamingResponse
 from dotenv import dotenv_values
 
 from src.api.app import APIError, success_envelope
 from src.api.auth import verify_cf_access
 from src.api.deps import get_chat_db, get_env_file_path, get_settings
 from src.chat.kos_save import SaveConversationError, save_conversation_to_kos
-from src.chat.notion_agent import run_notion_agent, sse_encode
 from src.kos.client import KOSClient, KOSError
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
@@ -62,15 +58,6 @@ def _get_context_loader():
 
         _context_loader = ContextLoader()
     return _context_loader
-
-# 3b-1：CRS/Cloudflare 挑剔 UA（mirror custom_api.ts / electron_platform.ts llmFetch 注入侧）。
-_CRS_USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "Chrome/146.0.0.0 Safari/537.36"
-)
-# 上游 LLM 流式 deadline（与 shared custom_api REQUEST_DEADLINE_MS=60s 对齐；read 给足长
-# 流式，connect/write 短）。
-_LLM_PROXY_TIMEOUT = httpx.Timeout(connect=10.0, read=60.0, write=10.0, pool=10.0)
 
 
 def _kos_available() -> bool:
@@ -487,188 +474,6 @@ async def chat_config(request: Request):
         request=request,
         source="config",
     )
-
-
-@router.post("/llm-proxy", dependencies=[Depends(verify_cf_access)])
-async def llm_proxy(request: Request):
-    """custom-api LLM 上游代理（V2.1 阶段 3 3b-1）：注入 key + 透传原始 SSE。
-
-    **非 envelope**（chat 端点唯一例外）：成功 → StreamingResponse（text/event-stream，
-    原始上游 SSE 字节流，shared custom_api 在 UI 进程解析）；上游非 2xx → 透传 status（空
-    body，shared 据 response.ok 分类 E_QUOTA/E_UPSTREAM，不泄漏上游错误页 body）。key 注入
-    在此（永不进 renderer/browser，REVIEW-LOG C-04）。
-
-    req body = ``{protocol: 'anthropic'|'openai', body: {…上游请求体…}}``；body 由 shared
-    custom_api 构造（model/max_tokens/system/messages/tools/stream:true）。
-    """
-    try:
-        payload = await request.json()
-    except Exception:
-        raise APIError("E_INVALID_ARG", "llm-proxy body must be JSON")
-    protocol = payload.get("protocol") if isinstance(payload, dict) else None
-    upstream_body = payload.get("body") if isinstance(payload, dict) else None
-    if protocol not in ("anthropic", "openai") or not isinstance(upstream_body, dict):
-        raise APIError(
-            "E_INVALID_ARG",
-            "llm-proxy requires {protocol: 'anthropic'|'openai', body: object}",
-        )
-
-    cfg = get_settings()
-    api_key = (cfg.llm_api_key or "").strip()
-    if not api_key:
-        raise APIError("E_NO_LLM_KEY", "LLM_API_KEY not configured on serve-api host")
-    base_url = (cfg.llm_api_base or "").rstrip("/")
-    if protocol == "anthropic":
-        url = f"{base_url}/v1/messages"
-        headers = {
-            "content-type": "application/json",
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01",
-            "user-agent": _CRS_USER_AGENT,
-        }
-    else:
-        url = f"{base_url}/v1/chat/completions"
-        headers = {
-            "content-type": "application/json",
-            "authorization": f"Bearer {api_key}",
-        }
-
-    client = httpx.AsyncClient(timeout=_LLM_PROXY_TIMEOUT)
-    try:
-        upstream_req = client.build_request(
-            "POST", url, json=upstream_body, headers=headers
-        )
-        upstream_resp = await client.send(upstream_req, stream=True)
-    except Exception as exc:  # noqa: BLE001 — codex review LOW
-        # httpx.InvalidURL（malformed LLM_API_BASE）不是 HTTPError，旧 except httpx.HTTPError
-        # 会漏它 → 跳过 aclose 泄漏 + generic 500。broad except 兜底：必 aclose + 502 envelope。
-        await client.aclose()
-        raise APIError(
-            "E_UPSTREAM", f"LLM upstream request failed: {exc}", http_status=502
-        )
-
-    # 非 2xx 一律透传 status（空 body），shared 据 response.ok 分类，不泄漏上游 body。
-    # codex review MEDIUM：含 3xx —— follow_redirects 默认 False，3xx body 非 SSE，不能当
-    # streaming success 转发 redirect body。用 <200 or >=300 覆盖全部非 2xx（仅 2xx passthrough）。
-    if upstream_resp.status_code < 200 or upstream_resp.status_code >= 300:
-        status = upstream_resp.status_code
-        await upstream_resp.aclose()
-        await client.aclose()
-        return Response(status_code=status)
-
-    async def passthrough():
-        # aiter_bytes 解 content-encoding → 明文 SSE（shared TextDecoder 解 UTF-8）。
-        try:
-            async for chunk in upstream_resp.aiter_bytes():
-                yield chunk
-        finally:
-            await upstream_resp.aclose()
-            await client.aclose()
-
-    return StreamingResponse(
-        passthrough(),
-        status_code=upstream_resp.status_code,
-        media_type="text/event-stream",
-    )
-
-
-@router.post("/notion-agent", dependencies=[Depends(verify_cf_access)])
-async def notion_agent(request: Request):
-    """notion-agent 多轮对话（V2.1 阶段 3 3b-2）：asyncio spawn ``notion-agent chat --stream``
-    复刻 frontend ``notion_agent.ts`` 全语义，输出「语义 event SSE」。
-
-    **非 envelope**（chat 流式端点，对齐 llm-proxy）：成功 → StreamingResponse
-    （``text/event-stream``，每个事件一行 ``data: {ChatStreamEvent}\\n\\n``：
-    tool_call / chunk / usage / done / error），client 端 ``notionAgentStream``（3b-5）fetch +
-    parseSse 反序列化为 ChatStreamEvent —— 与 custom-api 后端在 UI 进程产出的 event 同形。
-
-    req body = ChatStreamRequest 子集 ``{history, model, agentPageId, emailContext}``（去
-    signal/tools/iterHistory —— notion-agent CLI 不支持工具，单遍 end_turn）。流内错误（空
-    history / spawn 失败 / exit 分类）作 ``error`` 事件随流下发（对齐 TS runNotionAgent），
-    仅 body 不可解析（client bug）才 pre-stream APIError envelope。
-    """
-    try:
-        payload = await request.json()
-    except Exception:
-        raise APIError("E_INVALID_ARG", "notion-agent body must be JSON")
-    if not isinstance(payload, dict):
-        raise APIError("E_INVALID_ARG", "notion-agent body must be a JSON object")
-
-    async def event_stream():
-        async for event in run_notion_agent(payload):
-            yield sse_encode(event)
-
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
-
-
-@router.post("/notion-agent-once", dependencies=[Depends(verify_cf_access)])
-async def notion_agent_once(request: Request, body: Optional[Dict[str, Any]] = None):
-    """notion_agent_chat tool 的**非流式**面（P2g）：跑 ``run_notion_agent`` 收集成
-    ``{text, threadId, status, metadata}``。复用串行 gate / idle timeout / thread_id 续接
-    （extract_turn 从构造的 assistant.metadata.thread_id 取已有 thread_id）。envelope（非 SSE）。
-
-    body = ``{message, threadId?, model?, agentPageId?}``。旧流式 ``/notion-agent`` 端点 + 旧
-    ``backend_kind='notion-agent'`` 不动（Phase 3 再退役 UI 入口）。
-    """
-    opts = body or {}
-    message = opts.get("message")
-    if not isinstance(message, str) or not message:
-        raise APIError("E_INVALID_ARG", "notion-agent-once requires message:str")
-    thread_id = opts.get("threadId")
-    thread_id = thread_id if isinstance(thread_id, str) and thread_id else None
-    model = opts.get("model")
-    agent_page_id = opts.get("agentPageId")
-
-    # 构造 history 让 extract_turn 取到 message + 已有 thread_id（续轮 → assistant.metadata.thread_id）。
-    history: List[Dict[str, Any]] = []
-    if thread_id:
-        history.append(
-            {"role": "assistant", "content": "", "metadata": json.dumps({"thread_id": thread_id})}
-        )
-    history.append({"role": "user", "content": message})
-    payload = {
-        "history": history,
-        "model": model,
-        "agentPageId": agent_page_id,
-        "emailContext": None,
-    }
-
-    text = ""
-    out_thread_id: Optional[str] = thread_id
-    status = "ok"
-    error_code: Optional[str] = None
-    error_message: Optional[str] = None
-    metadata: Optional[Dict[str, Any]] = None
-    async for event in run_notion_agent(payload):
-        etype = event.get("type")
-        if etype == "chunk":
-            text += event.get("delta") or ""
-        elif etype in ("done", "usage"):
-            if etype == "done":
-                fc = event.get("finalContent")
-                if isinstance(fc, str):
-                    text = fc
-            md = event.get("metadata")
-            if isinstance(md, dict):
-                metadata = md
-                tid = md.get("thread_id")
-                if isinstance(tid, str) and tid:
-                    out_thread_id = tid
-        elif etype == "error":
-            status = "error"
-            error_code = event.get("code")
-            error_message = event.get("message")
-
-    result: Dict[str, Any] = {
-        "text": text,
-        "threadId": out_thread_id,
-        "status": status,
-        "metadata": metadata,
-    }
-    if status == "error":
-        result["errorCode"] = error_code
-        result["errorMessage"] = error_message
-    return success_envelope(result, request=request, source="cli")
 
 
 # ── chat 持久化写端点（V2.1 阶段 3 3b-3：ChatPersistPort 写面）──────────────

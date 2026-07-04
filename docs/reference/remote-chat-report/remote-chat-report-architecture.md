@@ -75,10 +75,8 @@ V2（[`mail.chenge.ink/app`](https://mail.chenge.ink/app)）让远程 web 能**�
 
 ### 3.3 后端层 serve-api（一份，无 harness 逻辑）
 
-`src/api/routers/chat.py` + `src/chat/`（`db.py` ChatDb / `notion_agent.py` + `notion_agent_gate.py` Python 复刻）：
+`src/api/routers/chat.py` + `src/chat/`（`db.py` ChatDb / `notion_agent.py` + `notion_agent_gate.py` Python 复刻，后者现仅供 `notion_agent_chat` skill 工具进程内直调，见 §6）：
 
-- **`POST /api/chat/llm-proxy`**：注入 `config.llm_api_key`，透传上游 SSE（仅 2xx passthrough，不解析；解析在 shared custom_api）。
-- **`POST /api/chat/notion-agent`**：`asyncio` spawn CLI，Python **逐语义复刻** `notion_agent.ts`（thread_id 探测 / 串行 gate / exit 75=RATE_LIMIT/77=AUTH/127=NOT_INSTALLED 分类 / idle 看门狗覆盖读+wait 双相 / token_v2 cookie 不泄漏）→ 语义 event SSE。
 - **chat 持久化 9 写 + 3 单读 + 5 读**：`ChatDb` SQL **verbatim 镜像** `chat_db.ts`（`IS NULL` 分支 / `key in patch` 复刻 `!== undefined` / append 后 bump session 同事务）。单读返 `row|null` 不 404（契约是 `…|null`）。**绝不建表**（schema owner = 前端 `chat_db.ts`）。
 - **`GET /api/chat/config`**：8 字段运行配置快照（读 `config.py`/env，归一化对齐 electron getter）。
 - **工具**：复用 `/api/email/*`（D1 已有读写）+ 补 `GET /attachment/search` + `POST /api/chat/kos-call`·`save-to-kos`（复用 `src/kos/client.py`，Python `kos_save` frontmatter 字节对齐）。
@@ -106,7 +104,7 @@ V2（[`mail.chenge.ink/app`](https://mail.chenge.ink/app)）让远程 web 能**�
 
 S3 前，`custom-api`（HTTP 直连 Anthropic/OpenAI 兼容网关）和 `notion-agent`（子进程 spawn `notion-agent-cli`）是两条并存的可选 chat 后端，按性质不对称处理（custom-api 走 HTTP 流式解析，notion-agent 走子进程 stdout 解析 + Python 复刻）。
 
-S3 起，前端聊天面板只构造 `'ai-sdk'` transport（见 §5），`custom-api` / `notion-agent` 不再是面板可选的实时后端。`ChatBackendKind` 类型仍保留三个字面量（`chat_db.ts` 的 CHECK 约束收不窄，旧会话行还在），但只有 `ai-sdk` 可写；`custom-api` / `notion-agent` 历史会话只能经 `ReadOnlyTranscript.tsx` 只读打开（`ui_message_json` 缺失退纯文本渲染，corrupt JSON 有 fallback），composer 对这两种 kind 隐藏输入框。serve-api 的 `POST /api/chat/notion-agent` 端点定义仍在（见 §3.3，未变），Settings 页的 Notion Agent CLI 账户/模型配置读取也仍可用——这里说的「退休」特指 AI SDK Gateway 聊天面板不再把它接成实时可选后端。
+S3 起，前端聊天面板只构造 `'ai-sdk'` transport（见 §5），`custom-api` / `notion-agent` 不再是面板可选的实时后端。`ChatBackendKind` 类型仍保留三个字面量（`chat_db.ts` 的 CHECK 约束收不窄，旧会话行还在），但只有 `ai-sdk` 可写；`custom-api` / `notion-agent` 历史会话只能经 `ReadOnlyTranscript.tsx` 只读打开（`ui_message_json` 缺失退纯文本渲染，corrupt JSON 有 fallback），composer 对这两种 kind 隐藏输入框。serve-api 的 `POST /api/chat/llm-proxy`、`/notion-agent`、`/notion-agent-once` 三个 HTTP 端点已随 S6 死端点减法批删除（2026-07，全仓 grep 确认 S3 后零消费者）；`src/chat/notion_agent.py` / `notion_agent_gate.py` 模块本体保留——`notion_agent_chat` skill 工具（`src/skills/builtin/notion_agent.py`）仍在进程内直调 `run_notion_agent`，走 `/api/skills/invoke` 而非上述已删端点。Settings 页的 Notion Agent CLI 账户/模型配置读取（`src/api/routers/settings.py` 的 `/notion-agent/{config,models,agents}`）也仍可用——这里说的「退休」特指 AI SDK Gateway 聊天面板不再把它接成实时可选后端。
 
 ## 7. 关键决策
 
