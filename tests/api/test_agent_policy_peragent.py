@@ -290,6 +290,25 @@ def test_peragent_web_rule_created_with_derived_context(client, fresh_agent_cfg,
     assert code == 422
 
 
+def test_peragent_web_origin_normalized_on_store_echo(client, fresh_agent_cfg, custom_agent_env):
+    """S6 W3-3（rev3.1 §4.2 ①/D-fix-4 ④）：web origin 归一入库 —— 完整 URL / 混大小写 / 缺省端口
+    提交 → 返回行 matcher.origin = canonical ``scheme://host:port``（Settings/PIN 直接回显该值）。"""
+    # 完整 URL（含 path/query）+ 大写 host + 缺省端口 → 塌成 https://api.vendor.test:443。
+    r = _create(client, {
+        "capability": "web",
+        "matcher": {"v": 1, "origin": "HTTPS://API.Vendor.Test/v1/data?q=1"},
+        "agentId": "dms",
+    })
+    assert r.status_code == 201, r.json()
+    assert r.json()["data"]["matcher"]["origin"] == "https://api.vendor.test:443"
+    # 显式非默认端口保留、host 小写。
+    r2 = _create(client, {
+        "capability": "web", "matcher": {"v": 1, "origin": "http://Feeds.Corp.Test:8080"},
+        "agentId": "nightly",
+    })
+    assert r2.json()["data"]["matcher"]["origin"] == "http://feeds.corp.test:8080"
+
+
 def test_peragent_web_evaluate_dual_key_no_exec_shape_gate(client, fresh_agent_cfg, custom_agent_env):
     """双键隔离（manual 不见 per-agent web 规则、他 agent 不见）+ 负断言：web capability 不进
     headless_exec_rule_problem 分支 —— 普通 origin 规则（非 pinned-entrypoint 形状）在 headless

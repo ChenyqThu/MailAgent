@@ -878,6 +878,15 @@ async def create_policy_rule(request: Request, body: Optional[dict[str, Any]] = 
         parsed = parse_matcher(capability, matcher)
     except Exception as exc:  # noqa: BLE001 — pydantic ValidationError / ValueError → 422
         raise APIError("E_INVALID_ARG", f"invalid matcher: {exc}", http_status=422, source="sqlite") from exc
+    if capability == "web":
+        # canonical origin 归一入库（ADR-004 rev3.1 §4.2 ① —— 唯一权威实现 _normalize_origin）：
+        # parse_matcher 已过 _valid_origin ⇒ 归一必非 None。入库存 canonical（Settings/PIN 回显归一
+        # 值 + redirect 聚合集/策略匹配对同一 host 恒等值），完整 URL 提交也塌成 scheme://host:port。
+        from src.agent_config.policy import _normalize_origin
+
+        canonical = _normalize_origin(matcher.get("origin", ""))
+        if canonical is not None:
+            matcher = {**matcher, "origin": canonical}
     if agent_id is not None and capability == "exec":
         problem = headless_exec_rule_problem(store, parsed)
         if problem is not None:

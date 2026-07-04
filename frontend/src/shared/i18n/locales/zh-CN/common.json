@@ -2610,6 +2610,8 @@
         "approvalTitle": "待审批",
         "approvalBody": "{agent} 请求执行 {tool}，需要你批准。",
         "approveLabel": "批准",
+        "rememberDomain": "总是允许该 Agent 访问此域名（免审批）",
+        "rememberDomainHint": "为该 Agent 的无人值守运行创建一条域名白名单，此后访问该域名免审批。仅对你信任的来源勾选。",
         "approvalExpired": "审批已失效（超时或应用重启），此次运行未执行。",
         "decideFailed": "决策失败",
         "titleBar": {
@@ -2641,7 +2643,8 @@
         "delete": "删除",
         "capability": {
           "domain_write": "自动执行写工具",
-          "exec": "自动运行 Skill 脚本"
+          "exec": "自动运行 Skill 脚本",
+          "web": "放行联网域名"
         },
         "modeDerived": "生效语境：{mode}（由触发类型自动派生，不可选）",
         "mode": {
@@ -2676,6 +2679,9 @@
         "errEntryRequired": "请选择 Skill 与入口脚本。",
         "errInterpreterAbs": "解释器必须是绝对路径（以 / 开头）。",
         "errArgEmpty": "参数位的值不能为空。",
+        "errOriginRequired": "请填写要放行的域名或完整 URL。",
+        "originPlaceholder": "域名或完整 URL，如 api.vendor.com 或 https://api.vendor.com",
+        "originHint": "免审批的联网域名（gated 档白名单）。提交后由服务端归一为 scheme://host:port 入库并回显；不同大小写 / 端口 / 子域视作不同来源，子域不继承。",
         "warnTitle": "高危：免审批自动执行",
         "warnBody": "创建后，「{agent}」将在无人确认时自动执行 {action}。规则只在{mode}中生效；删除规则即恢复逐次审批。",
         "confirmCreate": "我已了解，创建规则",
@@ -2686,6 +2692,25 @@
           "hint": "为该 Agent 的无人值守运行开放执行面。仍需上方白名单规则命中 + 首次运行在灵动岛批准才会免审批执行；无规则命中时逐次弹审批。保存后生效。",
           "warn": "高危：开启后，「{agent}」的无人值守运行可以请求执行本机 Skill 脚本。确定开启？",
           "confirm": "确认开启"
+        },
+        "web": {
+          "label": "联网（grant_web）",
+          "hint": "该 Agent 的无人值守运行是否可联网，以及免审批范围。保存后生效。",
+          "grant": {
+            "off": "关闭",
+            "gated": "域名白名单",
+            "open": "全开放"
+          },
+          "searchWarn": "gated / open 均含 web_search 免审批外送：搜索关键词会直接发往 DuckDuckGo，不再逐次弹审批。",
+          "openWarn": "全开放：该 Agent 可免审批抓取任意 URL，被夹带的数据可编入 URL 外送，仅 SSRF 防护兜底。",
+          "untrustedOpenWarn": "邮件触发 × 全开放联网是最大暴露面组合：投毒邮件可诱导把邮件内容编入外网请求。请仅对可信 Agent 开启。",
+          "gatedHint": "gated 档：web_fetch 仅命中下方域名白名单才免审批，未命中的域名逐次弹审批（卡上可「总是允许该域名」）。"
+        },
+        "mounts": {
+          "label": "Skill 挂载",
+          "hint": "该 Agent 无人值守运行时可见的 Skill（收窄面）。未挂载的 Skill 其工具对该 Agent 不可用；挂载不能复活全局已关闭的 Skill。",
+          "defaultTag": "默认挂载集（email / search）",
+          "empty": "显式零挂载：该 Agent 无任何 Skill 工具。"
         }
       }
     }

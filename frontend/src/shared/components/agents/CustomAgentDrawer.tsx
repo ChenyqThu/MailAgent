@@ -53,6 +53,13 @@ const DEFAULT_MAX_RUNS_PER_DAY = 24
 const DEFAULT_MAX_RUN_SECONDS = 300
 const MAX_RUN_SECONDS_CEILING = 1800
 
+// per-agent skill 挂载默认集（S6 W3-3；与 src/api/routers/agent_runs.py 的
+// DEFAULT_CUSTOM_AGENT_MOUNTED_SKILLS 同源，NULL 挂载 → 默认集，工具面与现存 agent 逐字节一致）。
+const DEFAULT_MOUNTED_SKILLS = ['email', 'search']
+
+type WebGrant = 'off' | 'gated' | 'open'
+const WEB_GRANTS: WebGrant[] = ['off', 'gated', 'open']
+
 type TriggerKind = 'none' | 'cron' | 'email_filter'
 const TRIGGER_KINDS: TriggerKind[] = ['none', 'cron', 'email_filter']
 
@@ -433,6 +440,10 @@ function formatRuleMatcher(rule: ExecPolicyRule): string {
   if (rule.capability === 'domain_write') {
     return typeof m.tool === 'string' ? m.tool : '?'
   }
+  if (rule.capability === 'web') {
+    // origin 服务端已归一入库（canonical scheme://host:port，rev3.1 §4.2 ①）→ 直接展示。
+    return typeof m.origin === 'string' ? m.origin : '?'
+  }
   if (rule.capability === 'exec') {
     const argv0 = typeof m.argv0_realpath === 'string' ? m.argv0_realpath : '?'
     const tmpl = Array.isArray(m.argv_template) ? m.argv_template : []
@@ -473,7 +484,12 @@ function AutomationPolicySection({
   triggerKind,
   writeToolChoices,
   grantExec,
-  onGrantChange
+  onGrantChange,
+  grantWeb,
+  onWebChange,
+  mountedSkills,
+  skillsMode,
+  onSkillsChange
 }: {
   agentId: string
   agentTitle: string
@@ -484,11 +500,35 @@ function AutomationPolicySection({
   grantExec: boolean
   /** 翻转 grant_exec（已过确认对话）；父层置 grantDirty，保存时并入 tool_policy。 */
   onGrantChange: (next: boolean) => void
+  /** grant_web 三档（S6 W3-3）；父层置 webDirty，保存时并入 tool_policy。 */
+  grantWeb: WebGrant
+  onWebChange: (next: WebGrant) => void
+  /** per-agent skill 挂载集（当前 state）+ 两态（defaults=展示默认挂载集，explicit=显式列表）。 */
+  mountedSkills: string[]
+  skillsMode: 'defaults' | 'explicit'
+  /** 覆写挂载集（父层置 skillsDirty + skillsMode='explicit'）。 */
+  onSkillsChange: (next: string[]) => void
 }): React.ReactElement {
   const { t } = useTranslation()
   const api = useMailApi()
   const qc = useQueryClient()
   const derivedMode = deriveHeadlessMode(triggerKind)
+  // untrusted_trigger（email_filter 触发）× open 全开放联网 = 最大暴露面（ADR-004 §6 残余面③）→ 叠加警示。
+  const untrustedTrigger = derivedMode === 'untrusted_trigger'
+
+  // skill 挂载多选数据源 = 统一 registry 投影（builtin + installed；owner 全局关掉的 skill 仍列出，
+  // 但挂载不能复活它 —— fail 方向恒收窄，见 ADR §5.1）。graceful []（后端不可达 → 空态提示）。
+  const skillsListQ = useQuery({
+    queryKey: ['agent', 'skills', 'registry'],
+    queryFn: () => api.chat.listSkills(),
+    staleTime: 60_000
+  })
+  const availableSkills = skillsListQ.data ?? []
+  // 挂载多选可选项 = registry skill 名 ∪ 当前挂载集（后者兜住「默认集在 registry 名不同/已卸载
+  // skill 仍显式挂载」的可见性 —— 未安装名效果为零但仍可见/可解绑，ADR §5.1 strict-effect）。
+  const mountSkillNames = Array.from(
+    new Set([...availableSkills.map((s) => s.name), ...mountedSkills])
+  )
 
   const rulesQ = useQuery({
     queryKey: ['policy', 'rules', agentId],
@@ -509,8 +549,11 @@ function AutomationPolicySection({
   })
   const skills = entryQ.data ?? []
 
-  const [capability, setCapability] = useState<'domain_write' | 'exec'>('domain_write')
+  const [capability, setCapability] = useState<'domain_write' | 'exec' | 'web'>('domain_write')
   const [tool, setTool] = useState('')
+  // web 规则：owner 粘贴域名或完整 URL；提交 {v:1, origin} → 服务端归一入库（TS 不自实现归一，
+  // rev3.1 D-fix-4 ④）→ 用返回行的 canonical origin 回显（refetchRules 后列表即显归一值）。
+  const [origin, setOrigin] = useState('')
   const [skillName, setSkillName] = useState('')
   const [entryFile, setEntryFile] = useState('')
   const [interpreter, setInterpreter] = useState('')
@@ -524,7 +567,11 @@ function AutomationPolicySection({
   const skill = skills.find((s) => s.name === skillName) ?? null
   const entryAbs = skill && entryFile ? `${skill.dir}/${entryFile}` : ''
   const actionSummary =
-    capability === 'domain_write' ? tool : `${interpreter.trim()} ${entryAbs}`.trim()
+    capability === 'domain_write'
+      ? tool
+      : capability === 'web'
+        ? origin.trim()
+        : `${interpreter.trim()} ${entryAbs}`.trim()
   const modeLabel = derivedMode
     ? t(`agents.custom.policy.mode.${derivedMode}`)
     : t('agents.custom.policy.mode.none')
@@ -532,6 +579,7 @@ function AutomationPolicySection({
   const resetForm = (): void => {
     setCapability('domain_write')
     setTool('')
+    setOrigin('')
     setSkillName('')
     setEntryFile('')
     setInterpreter('')
@@ -541,10 +589,14 @@ function AutomationPolicySection({
     setFormErr(null)
   }
 
-  // 浅校验（必选项 / 绝对路径 / 位值非空）；形状闸深校验在后端，400 detail 原样展示。
+  // 浅校验（必选项 / 绝对路径 / 位值非空 / origin 非空）；canonical origin 深校验（含 IDN/userinfo
+  // 拒）在后端 _valid_origin 权威，400/422 detail 原样展示。
   const shallowFormError = (): string | null => {
     if (capability === 'domain_write') {
       return tool ? null : t('agents.custom.policy.errToolRequired')
+    }
+    if (capability === 'web') {
+      return origin.trim() ? null : t('agents.custom.policy.errOriginRequired')
     }
     if (!skill || !entryFile) return t('agents.custom.policy.errEntryRequired')
     if (!interpreter.trim().startsWith('/')) return t('agents.custom.policy.errInterpreterAbs')
@@ -555,6 +607,8 @@ function AutomationPolicySection({
   // 无 raw {any} 选项：尾位词汇 = pin | enum | pattern | path_within（ADR-004 §4.3）。
   const buildMatcher = (): Record<string, unknown> => {
     if (capability === 'domain_write') return { v: 1, tool }
+    // web：提交 owner 输入的 origin/URL 原文，服务端 _normalize_origin 归一入库（TS 不自归一）。
+    if (capability === 'web') return { v: 1, origin: origin.trim() }
     const tmpl: Record<string, unknown>[] = [{ pin: entryAbs }]
     for (const a of args) {
       const v = a.value.trim()
@@ -755,7 +809,7 @@ function AutomationPolicySection({
           }}
         >
           <div className="seg" style={{ width: '100%' }}>
-            {(['domain_write', 'exec'] as const).map((c) => (
+            {(['domain_write', 'exec', 'web'] as const).map((c) => (
               <button
                 key={c}
                 type="button"
@@ -913,6 +967,21 @@ function AutomationPolicySection({
               </div>
             ))}
 
+          {capability === 'web' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <input
+                type="text"
+                value={origin}
+                placeholder={t('agents.custom.policy.originPlaceholder')}
+                onChange={(e) => setOrigin(e.target.value)}
+                style={{ ...inputStyle, fontFamily: 'var(--font-mono, monospace)' }}
+              />
+              <div style={{ fontSize: 11.5, color: 'rgb(var(--ink-fg-3))', lineHeight: 1.5 }}>
+                {t('agents.custom.policy.originHint')}
+              </div>
+            </div>
+          )}
+
           {formErr && (
             <div
               style={{
@@ -1061,6 +1130,147 @@ function AutomationPolicySection({
           </div>
         )}
       </div>
+
+      {/* grant_web 三档（S6 W3-3 ADR-004 rev3.1 §3.1）：off / gated（域名白名单）/ open（全开放，红样式）。
+          gated/open 均连带 web_search 免审批外送（§6 残余面①）；open × 邮件触发 = 最大暴露面（残余面③）。 */}
+      <div
+        style={{
+          marginTop: 10,
+          padding: '12px 13px',
+          borderRadius: 10,
+          background:
+            grantWeb === 'open' ? 'rgb(var(--c-fail) / 0.05)' : 'rgb(var(--ink-2) / 0.55)',
+          border: `1px solid ${
+            grantWeb === 'open' ? 'rgb(var(--c-fail) / 0.25)' : 'rgb(var(--ink-border))'
+          }`
+        }}
+      >
+        <div
+          style={{
+            fontSize: 13,
+            fontWeight: 500,
+            color: grantWeb === 'open' ? 'rgb(var(--c-fail))' : 'rgb(var(--ink-fg))'
+          }}
+        >
+          {t('agents.custom.policy.web.label')}
+        </div>
+        <div style={{ fontSize: 11.5, color: 'rgb(var(--ink-fg-3))', margin: '2px 0 9px', lineHeight: 1.5 }}>
+          {t('agents.custom.policy.web.hint')}
+        </div>
+        <div className="seg" style={{ width: '100%' }}>
+          {WEB_GRANTS.map((g) => (
+            <button
+              key={g}
+              type="button"
+              className={grantWeb === g ? 'on' : ''}
+              style={{
+                flex: 1,
+                justifyContent: 'center',
+                ...(g === 'open' && grantWeb === 'open' ? { color: 'rgb(var(--c-fail))' } : {})
+              }}
+              onClick={() => onWebChange(g)}
+            >
+              {t(`agents.custom.policy.web.grant.${g}`)}
+            </button>
+          ))}
+        </div>
+        {grantWeb !== 'off' && (
+          <div
+            style={{
+              marginTop: 9,
+              fontSize: 12,
+              lineHeight: 1.6,
+              color: grantWeb === 'open' ? 'rgb(var(--c-fail))' : 'rgb(var(--c-warn))',
+              padding: '10px 12px',
+              borderRadius: 9,
+              background:
+                grantWeb === 'open' ? 'rgb(var(--c-fail) / 0.10)' : 'rgb(var(--c-warn) / 0.10)',
+              border: `1px solid ${
+                grantWeb === 'open' ? 'rgb(var(--c-fail) / 0.35)' : 'rgb(var(--c-warn) / 0.30)'
+              }`,
+              wordBreak: 'break-word'
+            }}
+          >
+            {/* gated/open 均含 web_search 免审批外送（query → DuckDuckGo）—— §6 残余面① UI 明示义务。 */}
+            <div>{t('agents.custom.policy.web.searchWarn')}</div>
+            {grantWeb === 'open' && (
+              <div style={{ marginTop: 6 }}>{t('agents.custom.policy.web.openWarn')}</div>
+            )}
+            {grantWeb === 'open' && untrustedTrigger && (
+              <div style={{ marginTop: 6, fontWeight: 600 }}>
+                {t('agents.custom.policy.web.untrustedOpenWarn')}
+              </div>
+            )}
+          </div>
+        )}
+        {grantWeb === 'gated' && (
+          <div style={{ fontSize: 11.5, color: 'rgb(var(--ink-fg-3))', marginTop: 8, lineHeight: 1.5 }}>
+            {t('agents.custom.policy.web.gatedHint')}
+          </div>
+        )}
+      </div>
+
+      {/* per-agent skill 挂载（S6 W3-3 §5.1）：多选 registry skill（builtin + installed）。未配置（NULL）
+          = 默认挂载集（email/search），显式列表（含零挂载）verbatim；挂载不能复活全局关掉的 skill。 */}
+      <div style={{ marginTop: 10 }}>
+        <div className="flex items-baseline" style={{ gap: 8, marginBottom: 4 }}>
+          <label style={{ fontSize: 13, fontWeight: 500, color: 'rgb(var(--ink-fg))' }}>
+            {t('agents.custom.policy.mounts.label')}
+          </label>
+          {skillsMode === 'defaults' && (
+            <span style={{ fontSize: 11.5, color: 'rgb(var(--ink-fg-3))' }}>
+              {t('agents.custom.policy.mounts.defaultTag')}
+            </span>
+          )}
+        </div>
+        <div style={{ fontSize: 11.5, color: 'rgb(var(--ink-fg-3))', marginBottom: 9, lineHeight: 1.5 }}>
+          {t('agents.custom.policy.mounts.hint')}
+        </div>
+        {mountSkillNames.length === 0 ? (
+          <div
+            style={{
+              fontSize: 12.5,
+              color: 'rgb(var(--ink-fg-3))',
+              padding: '11px 13px',
+              borderRadius: 9,
+              background: 'rgb(var(--ink-1) / 0.5)',
+              border: '1px solid rgb(var(--ink-border-soft))'
+            }}
+          >
+            {t('agents.custom.policy.mounts.empty')}
+          </div>
+        ) : (
+          <div className="flex items-center" style={{ gap: 8, flexWrap: 'wrap' }}>
+            {mountSkillNames.map((name) => {
+              const on = mountedSkills.includes(name)
+              return (
+                <button
+                  key={name}
+                  type="button"
+                  aria-pressed={on}
+                  onClick={() =>
+                    onSkillsChange(
+                      on ? mountedSkills.filter((x) => x !== name) : [...mountedSkills, name]
+                    )
+                  }
+                  style={{
+                    padding: '6px 11px',
+                    borderRadius: 8,
+                    fontFamily: 'var(--font-mono, monospace)',
+                    fontSize: 12.5,
+                    cursor: 'pointer',
+                    color: on ? 'rgb(var(--c-accent))' : 'rgb(var(--ink-fg-2))',
+                    background: on ? 'rgb(var(--c-accent) / 0.14)' : 'rgb(var(--ink-1) / 0.5)',
+                    border: `1px solid ${on ? 'rgb(var(--c-accent))' : 'rgb(var(--ink-border))'}`
+                  }}
+                >
+                  {name}
+                </button>
+              )
+            })}
+          </div>
+        )}
+      </div>
     </div>
   )
 }
@@ -1112,6 +1322,14 @@ export function CustomAgentDrawer({
   // 与 toolsDirty 同一「按需发送」纪律 —— 未触碰的 NULL 行保存后仍是 NULL）。
   const [grantExec, setGrantExec] = useState(false)
   const [grantDirty, setGrantDirty] = useState(false)
+  // grant_web（S6 W3-3 ADR-004 rev3.1 §3.1）三档 + skill 挂载：均循 grantExec 的「按需发送」纪律
+  // （触碰 → dirty → 保存时并入 tool_policy）。skillsMode 区分「默认挂载集（NULL）」与「显式列表
+  // （含 []）」两态（镜像 toolsMode）—— 未触碰的 NULL 行保存后仍是 NULL，投影层默认集继续生效。
+  const [grantWeb, setGrantWeb] = useState<WebGrant>('off')
+  const [webDirty, setWebDirty] = useState(false)
+  const [mountedSkills, setMountedSkills] = useState<string[]>([])
+  const [skillsMode, setSkillsMode] = useState<'defaults' | 'explicit'>('defaults')
+  const [skillsDirty, setSkillsDirty] = useState(false)
   const [maxSteps, setMaxSteps] = useState(DEFAULT_MAX_STEPS)
   const [maxRunsPerDay, setMaxRunsPerDay] = useState(DEFAULT_MAX_RUNS_PER_DAY)
   const [maxRunSeconds, setMaxRunSeconds] = useState(DEFAULT_MAX_RUN_SECONDS)
@@ -1147,6 +1365,11 @@ export function CustomAgentDrawer({
       setToolsDirty(false)
       setGrantExec(false)
       setGrantDirty(false)
+      setGrantWeb('off')
+      setWebDirty(false)
+      setMountedSkills(DEFAULT_MOUNTED_SKILLS)
+      setSkillsMode('defaults')
+      setSkillsDirty(false)
       setMaxSteps(DEFAULT_MAX_STEPS)
       setMaxRunsPerDay(DEFAULT_MAX_RUNS_PER_DAY)
       setMaxRunSeconds(DEFAULT_MAX_RUN_SECONDS)
@@ -1189,6 +1412,19 @@ export function CustomAgentDrawer({
     setToolsDirty(false)
     setGrantExec(cfg.tool_policy?.grant_exec === true)
     setGrantDirty(false)
+    setGrantWeb(cfg.tool_policy?.grant_web ?? 'off')
+    setWebDirty(false)
+    // skills=NULL（未配置）→ 展示默认挂载集（defaults 模式，保存时未触碰不写 skills 键）；
+    // 显式列表（含 []）→ 展示行内集合（explicit）。镜像 allowed_tools 的 defaults/explicit 两态。
+    const mounts = cfg.tool_policy?.skills
+    if (Array.isArray(mounts)) {
+      setMountedSkills(mounts)
+      setSkillsMode('explicit')
+    } else {
+      setMountedSkills(DEFAULT_MOUNTED_SKILLS)
+      setSkillsMode('defaults')
+    }
+    setSkillsDirty(false)
     setMaxSteps(cfg.budget?.max_steps ?? DEFAULT_MAX_STEPS)
     setMaxRunsPerDay(cfg.budget?.max_runs_per_day ?? DEFAULT_MAX_RUNS_PER_DAY)
     setMaxRunSeconds(cfg.budget?.max_run_seconds ?? DEFAULT_MAX_RUN_SECONDS)
@@ -1333,13 +1569,16 @@ export function CustomAgentDrawer({
     // （grantDirty，S5 W5b —— 触碰 grant 即触碰 tool_policy）才发。未触碰 → 省略字段（PATCH
     // 语义：字段缺席=不动）——NULL 行仅改 prompt 保存后仍是 NULL（投影层默认安全集继续生效），
     // 显式行同理原封不动。这修复了「编辑 NULL-policy 行会被静默清成空工具集」的 P2。
-    // 组装规则：allowed_tools 仅在「工具被触碰或行本就显式」时携带 —— 只翻 grant 的 NULL 行
-    // 保持 allowed_tools 缺省（投影层默认安全集语义不被物化）；grant_exec 仅 true 时携带
-    // （缺省 = False，parse_tool_policy 语义）。
-    if (toolsDirty || grantDirty) {
+    // 组装规则：tool_policy 从**当前 state**（全部由 cfg 预填）整体重建，所以任何一个子面 dirty
+    // 都不会抹掉其它键（W3-2 教训）。各键的「按需物化」纪律：allowed_tools / skills 仅在「被触碰
+    // 或行本就显式」时携带 —— 只翻 grant 的 NULL 行保持二者缺省（投影层默认集/默认挂载集不被物化）；
+    // grant_exec 仅 true 携带、grant_web 仅非 'off' 携带（缺省语义 = parse_tool_policy 的 false/'off'）。
+    if (toolsDirty || grantDirty || webDirty || skillsDirty) {
       const tp: CustomAgentToolPolicy = { v: 1 }
       if (toolsDirty || toolsMode === 'explicit') tp.allowed_tools = selectedTools
       if (grantExec) tp.grant_exec = true
+      if (grantWeb !== 'off') tp.grant_web = grantWeb
+      if (skillsDirty || skillsMode === 'explicit') tp.skills = mountedSkills
       editPatch.tool_policy = tp
     }
     void save(cfg.id, editPatch)
@@ -1719,6 +1958,18 @@ export function CustomAgentDrawer({
                 onGrantChange={(next) => {
                   setGrantExec(next)
                   setGrantDirty(true)
+                }}
+                grantWeb={grantWeb}
+                onWebChange={(next) => {
+                  setGrantWeb(next)
+                  setWebDirty(true)
+                }}
+                mountedSkills={mountedSkills}
+                skillsMode={skillsMode}
+                onSkillsChange={(next) => {
+                  setMountedSkills(next)
+                  setSkillsDirty(true)
+                  setSkillsMode('explicit')
                 }}
               />
             )}

@@ -2610,6 +2610,8 @@
         "approvalTitle": "Approval pending",
         "approvalBody": "{agent} wants to run {tool} — your approval is required.",
         "approveLabel": "Approve",
+        "rememberDomain": "Always allow this agent to reach this domain (no approval)",
+        "rememberDomainHint": "Creates a domain whitelist entry for this agent's unattended runs, so future access to this domain skips approval. Tick only for sources you trust.",
         "approvalExpired": "Approval expired (timeout or app restart); this run was not executed.",
         "decideFailed": "Decision failed",
         "titleBar": {
@@ -2641,7 +2643,8 @@
         "delete": "Delete",
         "capability": {
           "domain_write": "Auto-run write tool",
-          "exec": "Auto-run skill script"
+          "exec": "Auto-run skill script",
+          "web": "Allow web domain"
         },
         "modeDerived": "Applies to: {mode} (derived from the trigger type, not selectable)",
         "mode": {
@@ -2676,6 +2679,9 @@
         "errEntryRequired": "Pick a skill and its entry script.",
         "errInterpreterAbs": "The interpreter must be an absolute path (starting with /).",
         "errArgEmpty": "Argument values cannot be empty.",
+        "errOriginRequired": "Enter the domain or full URL to allow.",
+        "originPlaceholder": "Domain or full URL, e.g. api.vendor.com or https://api.vendor.com",
+        "originHint": "An approval-free web domain (the gated-tier whitelist). On submit the server normalizes it to scheme://host:port and echoes it back; different case / port / subdomain count as different origins, and subdomains do not inherit.",
         "warnTitle": "High risk: approval-free execution",
         "warnBody": "Once created, \"{agent}\" will execute {action} without asking you. The rule only applies to {mode}; delete it to restore per-action approval.",
         "confirmCreate": "I understand — create the rule",
@@ -2686,6 +2692,25 @@
           "hint": "Opens the exec surface for this agent's unattended runs. Execution still requires a whitelist rule match plus a first-run approval on the Dynamic Island; without a match it pauses per action. Takes effect after saving.",
           "warn": "High risk: once enabled, unattended runs of \"{agent}\" may request executing local skill scripts. Enable?",
           "confirm": "Enable"
+        },
+        "web": {
+          "label": "Web access (grant_web)",
+          "hint": "Whether this agent's unattended runs may reach the web, and the approval-free scope. Takes effect after saving.",
+          "grant": {
+            "off": "Off",
+            "gated": "Domain whitelist",
+            "open": "Fully open"
+          },
+          "searchWarn": "Both gated and open allow web_search without approval: the search query goes straight to DuckDuckGo, no per-call prompt.",
+          "openWarn": "Fully open: this agent may fetch any URL without approval — smuggled data can be encoded into the URL and exfiltrated, with only SSRF protection as a backstop.",
+          "untrustedOpenWarn": "Email trigger × fully-open web is the largest exposure combination: a poisoned email can steer content into outbound requests. Enable only for agents you trust.",
+          "gatedHint": "Gated tier: web_fetch is approval-free only when the URL matches a domain in the whitelist below; other domains pause per call (with an \"always allow this domain\" affordance on the card)."
+        },
+        "mounts": {
+          "label": "Mounted skills",
+          "hint": "The skills visible to this agent's unattended runs (a narrowing surface). Tools of unmounted skills are unavailable to this agent; mounting cannot revive a globally disabled skill.",
+          "defaultTag": "default mount set (email / search)",
+          "empty": "Explicit zero mount: this agent has no skill tools."
         }
       }
     }

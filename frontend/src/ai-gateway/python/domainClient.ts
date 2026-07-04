@@ -986,12 +986,17 @@ export class MailAgentDomainClient {
       matcher: Record<string, unknown>
       contextMode?: string
       note?: string
+      /** S6 W3-3 (ADR-004) — per-agent headless rule (web "always allow this domain" PIN). When
+       *  present the endpoint DERIVES contextMode from the agent trigger and REJECTS an explicit
+       *  contextMode, so the caller passes agentId XOR contextMode (never both). */
+      agentId?: string
     },
     signal?: AbortSignal
   ): Promise<DomainPolicyRule> {
     const body: Record<string, unknown> = { capability: input.capability, matcher: input.matcher }
     if (input.contextMode !== undefined) body.contextMode = input.contextMode
     if (input.note !== undefined) body.note = input.note
+    if (input.agentId !== undefined) body.agentId = input.agentId
     return this._req<DomainPolicyRule>('POST', '/agent/policy/rules', { body, signal })
   }
 

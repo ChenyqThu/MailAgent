@@ -30,6 +30,7 @@ import { MailAgentDomainClient } from '../../ai-gateway/python/domainClient'
 import { buildGatewayTools } from '../../ai-gateway/tools'
 import { ApprovalGuard } from '../../ai-gateway/security/approval'
 import { ApprovalRunStash, DEFAULT_STASH_TTL_MS } from '../../ai-gateway/approvalStash'
+import { extractApprovalStashInput } from '../../ai-gateway/chatRun'
 import { buildToolA2UIPayload } from '../../shared/assistant/tools/a2ui'
 import { extractTextFromUIMessage } from '@shared/assistant/uiMessage'
 import {
@@ -533,6 +534,45 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
           return rule as unknown as Record<string, unknown>
         }
       : undefined,
+    // S6 W3-3 (ADR-004 rev3.1 §4.2 D-fix-3) — the in-record web_fetch "always allow this domain" PIN.
+    // Wired only when web tools + custom agents + the stash are on (else the { approvalId } shape 501s).
+    // Peeks the STASHED headless approval by approvalId (read-only), enforces the agent-run-only
+    // boundary (a manual web_fetch never lands in the stash — only headless runs stash — so a per-agent
+    // rule can never derive from manual chat; the toolName + agentRunContext asserts are defence in
+    // depth), extracts the approved URL, and creates a per-agent web origin rule with the agent id +
+    // SERVER-derived contextMode (Python normalizes the origin on store — TS never self-normalizes).
+    rememberWebApproval:
+      webToolsEnabled && customAgentsEnabled && approvalStash
+        ? async (approvalId: string) => {
+            const entry = approvalStash.peekByApprovalId(approvalId)
+            if (!entry) {
+              throw new ExecRuleDeriveError('E_APPROVAL_NOT_FOUND', 'no pending approval to remember')
+            }
+            const agentId = entry.agentRunContext?.agentId
+            if (entry.toolName !== 'web_fetch' || agentId == null) {
+              throw new ExecRuleDeriveError(
+                'E_INVALID_ARG',
+                'remember-web applies only to a headless web_fetch approval'
+              )
+            }
+            const extracted = extractApprovalStashInput(entry.responseMessage)
+            const url =
+              extracted && extracted.input != null && typeof extracted.input === 'object'
+                ? (extracted.input as { url?: unknown }).url
+                : undefined
+            if (typeof url !== 'string' || url.length === 0) {
+              throw new ExecRuleDeriveError('E_INVALID_ARG', 'approved web_fetch has no url')
+            }
+            const rule = await domain.createPolicyRule({
+              capability: 'web',
+              // origin = the approved URL verbatim; Python _normalize_origin canonicalizes on store.
+              matcher: { v: 1, origin: url },
+              agentId,
+              note: '审批卡「总是允许该域名」'
+            })
+            return rule as unknown as Record<string, unknown>
+          }
+        : undefined,
     // Phase 05 — AG-UI mirror flag + its approval-request enricher. The enricher is READ-ONLY
     // (approvalGuard.peek — never mutates / consumes) and only surfaces what a client needs to render
     // the interrupt card (risk / reason / expiry + optional A2UI). NO token / secret leaves main.

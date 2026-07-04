@@ -269,14 +269,40 @@ async function handlePolicyRemember(
   res: ServerResponse,
   cfg: AiGatewayConfig
 ): Promise<void> {
+  const body = await readJsonBody(req)
+  const toolCallId = typeof body.toolCallId === 'string' ? body.toolCallId : ''
+  const approvalId = typeof body.approvalId === 'string' ? body.approvalId : ''
+  // S6 W3-3 — the { approvalId } shape is the in-record web_fetch "always allow this domain" PIN:
+  // derive a per-agent web origin rule from the STASHED headless approval (agent-run-only; a manual
+  // web_fetch never stashes). Distinct hook from the exec { toolCallId } path (manual approvalGuard,
+  // context_mode pinned to manual_chat) — a web remember keys the agent + server-derived context.
+  if (approvalId) {
+    if (!cfg.rememberWebApproval) {
+      writeJson(res, 501, { error: 'E_NOT_IMPLEMENTED', hint: 'web tools not enabled' })
+      return
+    }
+    try {
+      const rule = await cfg.rememberWebApproval(approvalId)
+      writeJson(res, 200, { status: 'ok', rule })
+    } catch (e) {
+      const code = (e as { code?: unknown }).code
+      const message = e instanceof Error ? e.message : String(e)
+      if (typeof code === 'string') {
+        writeJson(res, approvalErrorStatus(code), { error: code, hint: message })
+      } else {
+        console.error('[ai-gateway] /api/ai/policy/remember (web) failed unexpectedly', e)
+        writeJson(res, 500, { error: 'E_INTERNAL', hint: message })
+      }
+    }
+    return
+  }
+  // Exec { toolCallId } path — byte-identical to S2 W1.
   if (!cfg.rememberExecApproval) {
     writeJson(res, 501, { error: 'E_NOT_IMPLEMENTED', hint: 'exec tools not enabled' })
     return
   }
-  const body = await readJsonBody(req)
-  const toolCallId = typeof body.toolCallId === 'string' ? body.toolCallId : ''
   if (!toolCallId) {
-    writeJson(res, 400, { error: 'E_INVALID_ARG', hint: 'toolCallId required' })
+    writeJson(res, 400, { error: 'E_INVALID_ARG', hint: 'toolCallId or approvalId required' })
     return
   }
   try {

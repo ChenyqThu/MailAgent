@@ -15,9 +15,11 @@ import type { PendingApprovalInfo } from '@shared/assistant/approvalRecordClient
 
 const mockFetchPending = vi.fn<(sessionId: number) => Promise<PendingApprovalInfo | null>>()
 const mockPostDecide = vi.fn()
+const mockPostRememberWeb = vi.fn()
 vi.mock('@shared/assistant/approvalRecordClient', () => ({
   fetchPendingApproval: (sessionId: number) => mockFetchPending(sessionId),
-  postApprovalDecide: (input: unknown) => mockPostDecide(input)
+  postApprovalDecide: (input: unknown) => mockPostDecide(input),
+  postRememberWebPolicy: (approvalId: string) => mockPostRememberWeb(approvalId)
 }))
 
 import i18n from '@shared/i18n'
@@ -92,6 +94,74 @@ describe('InRecordApprovalPanel — pending hit (decide card)', () => {
     fireEvent.click(screen.getByRole('button', { name: '批准' }))
     await waitFor(() => expect(mockPostDecide).toHaveBeenCalledWith({ approvalId: 'ap_1', decision: 'approve' }))
     await waitFor(() => expect(onDecided).toHaveBeenCalled())
+  })
+})
+
+// S6 W3-3 — the in-record web_fetch "总是允许该域名" PIN affordance (agent-run-only).
+const HIT_WEB_AGENT: PendingApprovalInfo = {
+  approvalId: 'ap_web',
+  toolName: 'web_fetch',
+  inputPreview: 'web_fetch · https://api.vendor.com/v1',
+  agentId: 'dms',
+  jobId: 7,
+  ageMs: 60 * 1000
+}
+const HIT_WEB_MANUAL: PendingApprovalInfo = { ...HIT_WEB_AGENT, approvalId: 'ap_m', agentId: null }
+
+describe('InRecordApprovalPanel — web PIN affordance (S6 W3-3, agent-run-only)', () => {
+  test('agent-run web_fetch → affordance shown; tick + approve → remember BEFORE decide', async () => {
+    mockFetchPending.mockResolvedValue(HIT_WEB_AGENT)
+    mockPostDecide.mockResolvedValue({ ok: true, status: 'completed' })
+    mockPostRememberWeb.mockResolvedValue(true)
+    withQuery(
+      <InRecordApprovalPanel sessionId={9} runState="paused_pending" agentName="供应商监控" onDecided={vi.fn()} />
+    )
+    const box = await screen.findByText(/总是允许该 Agent 访问此域名/)
+    expect(box).toBeTruthy()
+    // tick + approve
+    fireEvent.click(screen.getByRole('checkbox'))
+    fireEvent.click(screen.getByRole('button', { name: '批准' }))
+    await waitFor(() => expect(mockPostRememberWeb).toHaveBeenCalledWith('ap_web'))
+    await waitFor(() => expect(mockPostDecide).toHaveBeenCalledWith({ approvalId: 'ap_web', decision: 'approve' }))
+    // remember fired before decide (peek is read-only; decide consumes the stash)
+    expect(mockPostRememberWeb.mock.invocationCallOrder[0]).toBeLessThan(
+      mockPostDecide.mock.invocationCallOrder[0]
+    )
+  })
+
+  test('agent-run web_fetch, approve WITHOUT ticking → no remember call', async () => {
+    mockFetchPending.mockResolvedValue(HIT_WEB_AGENT)
+    mockPostDecide.mockResolvedValue({ ok: true, status: 'completed' })
+    withQuery(
+      <InRecordApprovalPanel sessionId={9} runState="paused_pending" agentName="供应商监控" onDecided={vi.fn()} />
+    )
+    await screen.findByText(/总是允许该 Agent 访问此域名/)
+    fireEvent.click(screen.getByRole('button', { name: '批准' }))
+    await waitFor(() => expect(mockPostDecide).toHaveBeenCalled())
+    expect(mockPostRememberWeb).not.toHaveBeenCalled()
+  })
+
+  test('MANUAL web_fetch (agentId null) → NO affordance (dead-config boundary)', async () => {
+    // 🔴 the load-bearing negative: a manual web_fetch never runs policyEvaluate, so a per-agent web
+    // rule built here would be a dead, misleading config — the affordance must be absent.
+    mockFetchPending.mockResolvedValue(HIT_WEB_MANUAL)
+    withQuery(
+      <InRecordApprovalPanel sessionId={9} runState="paused_pending" agentName="手动会话" onDecided={vi.fn()} />
+    )
+    // card renders, but no PIN affordance
+    expect(await screen.findByText('web_fetch · https://api.vendor.com/v1')).toBeTruthy()
+    expect(screen.queryByText(/总是允许该 Agent 访问此域名/)).toBeNull()
+    expect(screen.queryByRole('checkbox')).toBeNull()
+  })
+
+  test('agent-run NON-web_fetch (email_draft_reply) → NO affordance (web_fetch only)', async () => {
+    mockFetchPending.mockResolvedValue(HIT) // toolName email_draft_reply, agentId dms
+    withQuery(
+      <InRecordApprovalPanel sessionId={9} runState="paused_pending" agentName="每日摘要" onDecided={vi.fn()} />
+    )
+    await screen.findByText('email_draft_reply · 给张三回复')
+    expect(screen.queryByText(/总是允许该 Agent 访问此域名/)).toBeNull()
+    expect(screen.queryByRole('checkbox')).toBeNull()
   })
 })
 

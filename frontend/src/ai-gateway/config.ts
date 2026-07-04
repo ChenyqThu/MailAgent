@@ -171,6 +171,18 @@ export interface AiGatewayConfig {
    *  ApprovalError-shaped `.code` on a non-exec tool / no live record / a derivation failure. Omitted
    *  → /api/ai/policy/remember returns 501 (exec tools not wired). */
   rememberExecApproval?: (toolCallId: string) => Promise<Record<string, unknown>>
+  /** S6 W3-3 (ADR-004 rev3.1 §4.2 D-fix-3) — the in-record web_fetch approval card's "always allow
+   *  this domain" affordance. POST /api/ai/policy/remember {approvalId} calls this: the Electron
+   *  wrapper peeks the STASHED headless approval by approvalId (ApprovalRunStash.peekByApprovalId,
+   *  read-only), asserts it is a headless web_fetch (agentRunContext present — a manual web_fetch
+   *  never stashes, so a per-agent rule can only derive from a real agent run — the agent-run-only
+   *  boundary), extracts the approved URL, and creates a per-agent web origin rule (capability='web',
+   *  matcher={v:1,origin}) with the agent id + server-DERIVED contextMode (the origin is normalized
+   *  server-side on store — TS never self-normalizes). ONLY rule-creation path besides Settings; NO
+   *  gateway tool can reach it. Omitted (web tools / custom agents / stash off) → /remember returns
+   *  501 for the approvalId shape. Throws an ApprovalError-shaped `.code` on not-found / non-web /
+   *  non-agent-run. */
+  rememberWebApproval?: (approvalId: string) => Promise<Record<string, unknown>>
   /** Phase 05 — MAILAGENT_AG_UI_MIRROR. When true, the gateway registers the AG-UI mirror endpoint
    *  POST /api/ai/agui/chat (the SAME streamText + tools + approval as /api/ai/chat, re-encoded as an
    *  AG-UI event stream). Off (default) → the route is NOT registered (404), byte-identical to 04b. */

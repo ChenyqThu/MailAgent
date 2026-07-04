@@ -57,6 +57,8 @@ const mockCreatePolicyRule = vi.fn()
 const mockSetRuleEnabled = vi.fn()
 const mockDeleteRule = vi.fn()
 const mockListEntrypoints = vi.fn()
+// S6 W3-3 — skill 挂载多选数据源（统一 registry 投影）。
+const mockListSkills = vi.fn()
 vi.mock('@shared/hooks/useMailApi', () => ({
   useMailApi: () => ({
     report: {
@@ -77,7 +79,8 @@ vi.mock('@shared/hooks/useMailApi', () => ({
       createPolicyRule: mockCreatePolicyRule,
       setPolicyRuleEnabled: mockSetRuleEnabled,
       deletePolicyRule: mockDeleteRule,
-      listSkillEntrypoints: mockListEntrypoints
+      listSkillEntrypoints: mockListEntrypoints,
+      listSkills: mockListSkills
     }
   })
 }))
@@ -148,13 +151,22 @@ afterEach(() => {
   })
   mockListPolicyRules.mockResolvedValue([])
   mockListEntrypoints.mockResolvedValue([])
+  mockListSkills.mockResolvedValue(SKILLS_FIXTURE)
 })
+
+// S6 W3-3 — skill registry 投影夹具（默认挂载集 email/search 命中；dms-approval 为额外可挂载项）。
+const SKILLS_FIXTURE = [
+  { name: 'email', title: 'Email', description: '', enabled: true, sourceType: 'builtin' },
+  { name: 'search', title: 'Search', description: '', enabled: true, sourceType: 'builtin' },
+  { name: 'dms-approval', title: 'DMS', description: '', enabled: true, sourceType: 'skill_pack' }
+] as unknown as import('@shared/api/types').SkillSummary[]
 
 // afterEach 在首个用例前不会跑 —— 模块加载时也要有默认值（否则第一个渲染的 drawer 用例
 // 会因 listPolicyRules 返回 undefined 而 query 报错）。
 mockListRuns.mockResolvedValue([])
 mockListPolicyRules.mockResolvedValue([])
 mockListEntrypoints.mockResolvedValue([])
+mockListSkills.mockResolvedValue(SKILLS_FIXTURE)
 mockToolOptions.mockResolvedValue({
   tools: [
     { name: 'email_search', class: 'read' },
@@ -175,6 +187,17 @@ describe('i18n — agents.custom key 对齐', () => {
     const enKeys = Object.keys(enCommon.agents.custom.runs.state).sort()
     expect(zhKeys).toEqual(enKeys)
     expect(zhKeys.length).toBe(8)
+  })
+  test('zh / en policy key 一致（含 W3-3 web / mounts / capability.web）', () => {
+    const zhP = zhCommon.agents.custom.policy
+    const enP = enCommon.agents.custom.policy
+    expect(Object.keys(zhP).sort()).toEqual(Object.keys(enP).sort())
+    expect(Object.keys(zhP.capability).sort()).toEqual(Object.keys(enP.capability).sort())
+    expect(Object.keys(zhP.web).sort()).toEqual(Object.keys(enP.web).sort())
+    expect(Object.keys(zhP.web.grant).sort()).toEqual(Object.keys(enP.web.grant).sort())
+    expect(Object.keys(zhP.mounts).sort()).toEqual(Object.keys(enP.mounts).sort())
+    // web 三档字面量（radix SelectItem 空串坑无关，此处为 seg —— 仍钉死 off/gated/open）
+    expect(Object.keys(zhP.web.grant).sort()).toEqual(['gated', 'off', 'open'])
   })
 })
 
@@ -551,6 +574,180 @@ describe('CustomAgentDrawer — 自动化策略（S5 W5b）', () => {
     expect(await screen.findByText('自动放行 ×2')).toBeTruthy()
     // null 行不渲染 badge（不渲染 ≠ 0 次）—— 全列表恰一个 badge
     expect(screen.getAllByText(/自动放行/)).toHaveLength(1)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// S6 W3-3 — grants 区（web 三档 + skill 挂载 + web 域名规则构造器）
+// ---------------------------------------------------------------------------
+
+describe('CustomAgentDrawer — web grant 三档（S6 W3-3）', () => {
+  test('三档 seg 在场；选 gated → 保存 patch.tool_policy.grant_web=gated（NULL 行不物化 allowed_tools/skills）', async () => {
+    mockSetConfig.mockResolvedValue(makeCustomCfg())
+    renderUi(<CustomAgentDrawer cfg={makeCustomCfg({ tool_policy: null })} open onClose={() => {}} />)
+    // 联网块 + 三档在场
+    expect(await screen.findByText('联网（grant_web）')).toBeTruthy()
+    expect(screen.getByText('域名白名单')).toBeTruthy()
+    expect(screen.getByText('全开放')).toBeTruthy()
+    // 默认 off → 无 web_search 外送警示
+    expect(screen.queryByText(/web_search 免审批外送/)).toBeNull()
+    fireEvent.click(screen.getByText('域名白名单'))
+    // gated → 连带 web_search 外送警示在场（§6 残余面① UI 明示义务）
+    expect(await screen.findByText(/web_search 免审批外送/)).toBeTruthy()
+    fireEvent.click(screen.getByText('保存'))
+    await vi.waitFor(() => expect(mockSetConfig).toHaveBeenCalledTimes(1))
+    // NULL 行只带 grant_web；allowed_tools / skills 缺省（默认集不物化）
+    expect(mockSetConfig.mock.calls[0][1].tool_policy).toEqual({ v: 1, grant_web: 'gated' })
+  })
+
+  test('open 档：红样式全开放警示 + email_filter（untrusted_trigger）叠加最大暴露面警示', async () => {
+    // cfg trigger = email_filter → 派生 untrusted_trigger → open 档叠加警示。
+    renderUi(<CustomAgentDrawer cfg={makeCustomCfg({ tool_policy: null })} open onClose={() => {}} />)
+    fireEvent.click(await screen.findByText('全开放'))
+    expect(await screen.findByText(/可免审批抓取任意 URL/)).toBeTruthy()
+    expect(screen.getByText(/最大暴露面组合/)).toBeTruthy()
+  })
+
+  test('cron 触发 agent 选 open → 无「最大暴露面」叠加警示（仅 untrusted_trigger 才叠加）', async () => {
+    renderUi(
+      <CustomAgentDrawer
+        cfg={makeCustomCfg({
+          tool_policy: null,
+          trigger: { v: 1, kind: 'cron', cron: '0 9 * * *', timezone: 'UTC' }
+        })}
+        open
+        onClose={() => {}}
+      />
+    )
+    fireEvent.click(await screen.findByText('全开放'))
+    expect(await screen.findByText(/可免审批抓取任意 URL/)).toBeTruthy()
+    expect(screen.queryByText(/最大暴露面组合/)).toBeNull()
+  })
+
+  test('只翻 grant_web 不抹掉其它 tool_policy 键（W3-2 教训：整体重建自 state）', async () => {
+    mockSetConfig.mockResolvedValue(makeCustomCfg())
+    renderUi(
+      <CustomAgentDrawer
+        cfg={makeCustomCfg({
+          tool_policy: { v: 1, allowed_tools: ['email_search'], grant_exec: true, skills: ['email'] }
+        })}
+        open
+        onClose={() => {}}
+      />
+    )
+    // 等 registry/工具就位后翻 web 档
+    fireEvent.click(await screen.findByText('域名白名单'))
+    fireEvent.click(screen.getByText('保存'))
+    await vi.waitFor(() => expect(mockSetConfig).toHaveBeenCalledTimes(1))
+    // 所有键保留：allowed_tools（显式）+ grant_exec + skills（显式）+ 新的 grant_web
+    expect(mockSetConfig.mock.calls[0][1].tool_policy).toEqual({
+      v: 1,
+      allowed_tools: ['email_search'],
+      grant_exec: true,
+      grant_web: 'gated',
+      skills: ['email']
+    })
+  })
+})
+
+describe('CustomAgentDrawer — skill 挂载（S6 W3-3）', () => {
+  test('NULL skills 行 → 默认挂载集 email/search 预选（defaultTag 在场）；未触碰不写 skills 键', async () => {
+    mockSetConfig.mockResolvedValue(makeCustomCfg())
+    renderUi(<CustomAgentDrawer cfg={makeCustomCfg({ tool_policy: null })} open onClose={() => {}} />)
+    // 默认挂载集标签 + email/search 预选、dms-approval 未选
+    expect(await screen.findByText(/默认挂载集/)).toBeTruthy()
+    expect(await screen.findByRole('button', { name: 'email', pressed: true })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'search', pressed: true })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'dms-approval', pressed: false })).toBeTruthy()
+    // 未触碰挂载区，仅改 prompt → patch 无 tool_policy（NULL 保持 NULL，默认挂载集不物化）
+    fireEvent.change(screen.getByPlaceholderText(/描述这个 Agent/), { target: { value: 'x' } })
+    fireEvent.click(screen.getByText('保存'))
+    await vi.waitFor(() => expect(mockSetConfig).toHaveBeenCalledTimes(1))
+    expect('tool_policy' in mockSetConfig.mock.calls[0][1]).toBe(false)
+  })
+
+  test('挂载一个 skill → 保存带显式 skills 列表（含默认集 + 新增）', async () => {
+    mockSetConfig.mockResolvedValue(makeCustomCfg())
+    renderUi(<CustomAgentDrawer cfg={makeCustomCfg({ tool_policy: null })} open onClose={() => {}} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'dms-approval', pressed: false }))
+    fireEvent.click(screen.getByText('保存'))
+    await vi.waitFor(() => expect(mockSetConfig).toHaveBeenCalledTimes(1))
+    // 触碰挂载 → 显式列表（defaults email/search + dms-approval）；allowed_tools 缺省（NULL 不物化）
+    expect(mockSetConfig.mock.calls[0][1].tool_policy).toEqual({
+      v: 1,
+      skills: ['email', 'search', 'dms-approval']
+    })
+  })
+
+  test('显式挂载行（含卸载后仍挂载的未知名）→ chip 仍可见（strict-effect）', async () => {
+    renderUi(
+      <CustomAgentDrawer
+        cfg={makeCustomCfg({ tool_policy: { v: 1, skills: ['email', 'ghost-skill'] } })}
+        open
+        onClose={() => {}}
+      />
+    )
+    // registry 无 ghost-skill，但显式挂载 → union 仍渲染为选中 chip（可解绑）
+    expect(await screen.findByRole('button', { name: 'ghost-skill', pressed: true })).toBeTruthy()
+    // 默认标签不显（显式行）
+    expect(screen.queryByText(/默认挂载集/)).toBeNull()
+  })
+})
+
+describe('CustomAgentDrawer — web 域名规则构造器（S6 W3-3）', () => {
+  test('web capability → 输入 origin → 两步确认 → createPolicyRule({capability:web, matcher:{v:1,origin}})', async () => {
+    mockCreatePolicyRule.mockResolvedValue(makeRule({ id: 9, capability: 'web' }))
+    renderUi(<CustomAgentDrawer cfg={makeCustomCfg()} open onClose={() => {}} />)
+    fireEvent.click(await screen.findByText('新建规则'))
+    // 切到 web capability（seg 第三项）
+    fireEvent.click(screen.getByText('放行联网域名'))
+    fireEvent.change(screen.getByPlaceholderText(/域名或完整 URL/), {
+      target: { value: 'https://api.vendor.com/v1?q=1' }
+    })
+    fireEvent.click(screen.getByText('创建'))
+    // 红样式影响面确认在场，未确认前不发请求
+    expect(await screen.findByText('高危：免审批自动执行')).toBeTruthy()
+    expect(mockCreatePolicyRule).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByText('我已了解，创建规则'))
+    await vi.waitFor(() => expect(mockCreatePolicyRule).toHaveBeenCalledTimes(1))
+    // 提交原文（服务端 _normalize_origin 归一入库，TS 不自归一）
+    expect(mockCreatePolicyRule.mock.calls[0][0]).toEqual({
+      capability: 'web',
+      matcher: { v: 1, origin: 'https://api.vendor.com/v1?q=1' },
+      agentId: 'dms_helper'
+    })
+  })
+
+  test('web 浅校验：origin 空 → 拒 + 不发请求', async () => {
+    renderUi(<CustomAgentDrawer cfg={makeCustomCfg()} open onClose={() => {}} />)
+    fireEvent.click(await screen.findByText('新建规则'))
+    fireEvent.click(screen.getByText('放行联网域名'))
+    fireEvent.click(screen.getByText('创建'))
+    expect(await screen.findByText(/请填写要放行的域名或完整 URL/)).toBeTruthy()
+    expect(mockCreatePolicyRule).not.toHaveBeenCalled()
+  })
+
+  test('web 建规后端 400 透出（非法 origin / userinfo）', async () => {
+    const err = new Error('origin must be http(s)://host[:port]')
+    ;(err as { code?: string }).code = 'E_INVALID_ARG'
+    mockCreatePolicyRule.mockRejectedValue(err)
+    renderUi(<CustomAgentDrawer cfg={makeCustomCfg()} open onClose={() => {}} />)
+    fireEvent.click(await screen.findByText('新建规则'))
+    fireEvent.click(screen.getByText('放行联网域名'))
+    fireEvent.change(screen.getByPlaceholderText(/域名或完整 URL/), {
+      target: { value: 'ftp://x.com' }
+    })
+    fireEvent.click(screen.getByText('创建'))
+    fireEvent.click(await screen.findByText('我已了解，创建规则'))
+    expect(await screen.findByText(/E_INVALID_ARG: origin must be/)).toBeTruthy()
+  })
+
+  test('规则列表渲染 web 规则（归一 origin 直接展示）', async () => {
+    mockListPolicyRules.mockResolvedValue([
+      makeRule({ id: 3, capability: 'web', matcher: { v: 1, origin: 'https://api.vendor.com:443' } })
+    ])
+    renderUi(<CustomAgentDrawer cfg={makeCustomCfg()} open onClose={() => {}} />)
+    expect(await screen.findByText('https://api.vendor.com:443')).toBeTruthy()
   })
 })
 

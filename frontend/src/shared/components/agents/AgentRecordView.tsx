@@ -18,7 +18,11 @@ import type { UseGeneralChatReturn } from '@shared/hooks/useGeneralChat'
 import { chatMessageToUIMessage } from '@shared/assistant/uiMessage'
 import { AiSdkRuntimeProvider } from '@shared/assistant/runtime/AiSdkRuntimeProvider'
 import { ApprovalActions } from '@shared/assistant/tools/_cardShell'
-import { fetchPendingApproval, postApprovalDecide } from '@shared/assistant/approvalRecordClient'
+import {
+  fetchPendingApproval,
+  postApprovalDecide,
+  postRememberWebPolicy
+} from '@shared/assistant/approvalRecordClient'
 
 import { AgentThread } from './AgentThread'
 import { RunStateBadge } from './CustomAgentDrawer'
@@ -104,9 +108,20 @@ export function InRecordApprovalPanel({
     refetchOnWindowFocus: true
   })
   const pending = q.data ?? null
+  // S6 W3-3 — the "总是允许该域名" web PIN affordance. ONLY for an agent-run web_fetch approval
+  // (agentId present): a manual web_fetch never stashes / never runs policyEvaluate, so a per-agent
+  // web rule built from a manual card would be a dead, misleading config. Gate the affordance on both.
+  const isAgentWebFetch = pending != null && pending.agentId != null && pending.toolName === 'web_fetch'
+  const [rememberDomain, setRememberDomain] = useState(false)
 
   const decide = async (decision: 'approve' | 'reject'): Promise<void> => {
     if (!pending) return
+    // Best-effort PIN BEFORE /decide (peek is read-only; /decide claims + consumes the stash — so the
+    // rule must derive from the still-live entry first). A rule-creation failure must not block the
+    // approve the owner already made.
+    if (decision === 'approve' && rememberDomain && isAgentWebFetch) {
+      await postRememberWebPolicy(pending.approvalId)
+    }
     const res = await postApprovalDecide({ approvalId: pending.approvalId, decision })
     // 决策后：card 立即失活（re-query → miss），并让父层 reload 消息 + 刷新计数/历史。
     await qc.invalidateQueries({ queryKey: pendingKey })
@@ -138,6 +153,22 @@ export function InRecordApprovalPanel({
         <div className="mt-1.5 rounded-md border border-ink-border-soft bg-ink-1/60 px-2.5 py-1.5 font-mono text-micro text-ink-fg-2 break-words">
           {pending.inputPreview}
         </div>
+        {isAgentWebFetch && (
+          <label className="mt-2 flex cursor-pointer items-start gap-2 rounded-md border border-ink-border-soft bg-ink-1/60 px-2.5 py-2">
+            <input
+              type="checkbox"
+              checked={rememberDomain}
+              onChange={(e) => setRememberDomain(e.target.checked)}
+              className="mt-0.5 size-3.5 shrink-0 accent-[rgb(var(--c-accent))]"
+            />
+            <span className="text-aux text-ink-fg-2">
+              {t('agents.custom.runs.rememberDomain')}
+              <span className="mt-0.5 block text-ink-fg-3">
+                {t('agents.custom.runs.rememberDomainHint')}
+              </span>
+            </span>
+          </label>
+        )}
         <ApprovalActions
           approveLabel={t('agents.custom.runs.approveLabel')}
           onApprove={() => decide('approve')}

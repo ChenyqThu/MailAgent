@@ -70,6 +70,27 @@ export async function fetchPendingApproval(sessionId: number): Promise<PendingAp
   }
 }
 
+/** S6 W3-3 (ADR-004 rev3.1 §4.2 D-fix-3) — the in-record web_fetch "always allow this domain" PIN.
+ *  POSTs { approvalId } to /api/ai/policy/remember when the owner ticks the affordance and approves;
+ *  the gateway peeks the STASHED headless approval, derives a per-agent web origin rule from the
+ *  approved URL (origin normalized server-side), and persists it. 🔴 Best-effort: a rule-creation
+ *  failure must NEVER block the approve the owner already decided — the caller catches and proceeds
+ *  to /decide. Returns true on success, false on any failure. Never throws. */
+export async function postRememberWebPolicy(approvalId: string): Promise<boolean> {
+  const baseUrl = resolveAiGatewayBaseUrl()
+  if (baseUrl == null) return false
+  try {
+    const res = await fetch(`${baseUrl}/api/ai/policy/remember`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ approvalId })
+    })
+    return res.ok
+  } catch {
+    return false
+  }
+}
+
 /** Decide a pending approval server-side (approve / reject) — the SAME /decide channel the island
  *  uses, but with the in-record { approvalId, decision } shape (PRD P9): the record view carries NO
  *  capability token; the gateway resolves the internal toolCallId + resumeToken from the stash by
