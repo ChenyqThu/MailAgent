@@ -111,3 +111,62 @@ describe('ComposePanel — 草稿编辑态 (draft-edit)', () => {
     await waitFor(() => expect(onClose).toHaveBeenCalled())
   })
 })
+
+describe('ComposePanel — D5 富文本混合门 (draft-edit)', () => {
+  test('complex html (table) → 原文进折叠保真块, 发送时拼回 bodyHtml (不灌编辑器)', async () => {
+    mockEmailBody.mockResolvedValue({
+      content: '<table><tr><td>季度数据QX</td></tr></table>',
+      format: 'html'
+    })
+    renderWithClient(<ComposePanelInner internalId={99} mode="draft-edit" onClose={() => {}} />)
+    await waitFor(() => expect(screen.getByText('chenyq.thu@gmail.com')).toBeTruthy())
+    // 保真块 toggle 出现 (「原文」+ 保真提示)
+    expect(screen.getByText('原文')).toBeTruthy()
+    expect(screen.getByText(/保真保留/)).toBeTruthy()
+    // 发送: 原文经 quoteHtml 拼回 bodyHtml (只此一份, 无双份)
+    fireEvent.click(screen.getByRole('button', { name: /^发送$/ }))
+    fireEvent.click(screen.getByRole('button', { name: /确认发送/ }))
+    await waitFor(() => expect(mockSend).toHaveBeenCalledTimes(1))
+    const body = mockSend.mock.calls[0][0].bodyHtml as string
+    expect(body).toContain('季度数据QX')
+    expect(body.indexOf('季度数据QX')).toBe(body.lastIndexOf('季度数据QX'))
+  })
+
+  test('html 为空 → markdown 回落 (plaintext 降级灌编辑器)', async () => {
+    mockEmailBody.mockImplementation((_id: number, opts?: { format?: string }) =>
+      Promise.resolve(
+        opts?.format === 'markdown'
+          ? { content: '纯文本草稿内容MD', format: 'markdown' }
+          : { content: null, format: 'html' }
+      )
+    )
+    renderWithClient(<ComposePanelInner internalId={99} mode="draft-edit" onClose={() => {}} />)
+    await waitFor(() => expect(screen.getByText('chenyq.thu@gmail.com')).toBeTruthy())
+    expect(mockEmailBody).toHaveBeenCalledWith(99, { format: 'markdown' })
+    // markdown 内容进了编辑器 → 发送正文里有
+    fireEvent.click(screen.getByRole('button', { name: /^发送$/ }))
+    fireEvent.click(screen.getByRole('button', { name: /确认发送/ }))
+    await waitFor(() => expect(mockSend).toHaveBeenCalledTimes(1))
+    expect(mockSend.mock.calls[0][0].bodyHtml as string).toContain('纯文本草稿内容MD')
+  })
+
+  test('草稿已有附件 → attachment_id 引用 chips + send payload 带 refs (inline/derived 不算)', async () => {
+    mockEmailGet.mockResolvedValue({
+      ...DRAFT,
+      attachments: [
+        { id: 7, filename: 'plan.xlsx', size_bytes: 2048, is_inline: false, derived_from: null },
+        { id: 8, filename: 'logo.png', size_bytes: 100, is_inline: true, derived_from: null },
+        { id: 9, filename: 'plan.csv', size_bytes: 50, is_inline: false, derived_from: 7 }
+      ]
+    })
+    renderWithClient(<ComposePanelInner internalId={99} mode="draft-edit" onClose={() => {}} />)
+    await waitFor(() => expect(screen.getByText('plan.xlsx')).toBeTruthy())
+    // inline (正文图) / derived (office 预转) 不生成 chip
+    expect(screen.queryByText('logo.png')).toBeNull()
+    expect(screen.queryByText('plan.csv')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /^发送$/ }))
+    fireEvent.click(screen.getByRole('button', { name: /确认发送/ }))
+    await waitFor(() => expect(mockSend).toHaveBeenCalledTimes(1))
+    expect(mockSend.mock.calls[0][0].attachments).toEqual([{ attachment_id: 7 }])
+  })
+})

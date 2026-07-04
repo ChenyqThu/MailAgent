@@ -142,6 +142,10 @@
     "untitled": "（无主题）",
     "chars": "{n} 字",
     "attachmentsNote": "{n} 个附件随转发一并带上",
+    "attach": "附件",
+    "attachmentRemove": "移除 {name}",
+    "attachmentFailed": "上传失败",
+    "richPreserveHint": "复杂格式原文已保真保留，发送时自动附在新内容之后",
     "loadingPlan": "加载中…",
     "planError": "预填加载失败",
     "planErrorHint": "拿不到收件人与正文建议（{code}）。点重试，或检查后端服务是否在运行。",
@@ -197,7 +201,10 @@
       "sendFailArg": "发送失败：参数无效",
       "sendFailGeneric": "发送失败",
       "draftDeleted": "草稿已删除",
-      "draftDeleteFail": "草稿删除失败"
+      "draftDeleteFail": "草稿删除失败",
+      "attachmentTooLarge": "附件超过 {max}MB 上限：{name}",
+      "attachmentUploadFail": "附件上传失败：{name}",
+      "forwardAttachLoadFail": "无法加载原邮件附件，为避免丢失已取消发送，请重试"
     },
     "modeReply": "回复",
     "modeReplyAll": "回复所有",
@@ -213,7 +220,8 @@
     "importanceLow": "低",
     "quote": {
       "reply": "引用原文",
-      "forward": "转发内容"
+      "forward": "转发内容",
+      "original": "原文"
     }
   },
   "toolbarToast": {
@@ -2260,6 +2268,12 @@
       "label": "语言",
       "tooltip": "切换语言 (⌥G)",
       "aria": "切换语言"
+    },
+    "update": {
+      "available": "发现新版本 v{version} · 点击下载",
+      "downloading": "正在下载更新 · {percent}%",
+      "downloaded": "新版本 v{version} 已就绪 · 点击安装",
+      "error": "更新下载失败 · 点击重试"
     },
     "alerts": {
       "kicker": "系统健康",

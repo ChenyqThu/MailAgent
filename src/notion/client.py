@@ -24,6 +24,20 @@ NOTION_SUPPORTED_EXTENSIONS: Set[str] = {
 }
 
 
+def _is_cf_waf_block(err: BaseException) -> bool:
+    """判定异常是否为 Notion API 前置 Cloudflare WAF 的内容拦截 (HTML 错误页 403)。
+
+    ``_request_with_retry`` 对非 200/201/204 抛 ``Exception("HTTP {method} failed:
+    {status} - {body}")``。CF WAF 拦截 multipart body 内容时返回 HTML 错误页
+    (含 "have been blocked" / "cf-error"),而 Notion 自身的 403 是 JSON
+    (``{"object":"error",...}``) 不含这些标记 —— 用这个区分,只对前者走 zip fallback。
+    """
+    text = str(err).lower()
+    if "403" not in text:
+        return False
+    return "have been blocked" in text or "cf-error" in text
+
+
 class NotionClient:
     """Notion API 客户端封装。
 
@@ -169,6 +183,10 @@ class NotionClient:
         - Step 2: 实际上传时使用原始文件名（保持真实扩展名）
         - 最终在 Notion 中显示原始文件名，下载后无需改后缀
 
+        CF-WAF fallback: Notion API 前置 Cloudflare WAF 会按 multipart body 内容拦截
+        (真实报表 HTML 稳定 403，改名/改 content-type 躲不过)。命中 WAF 拦截时把原文件
+        zip 打包后 (``.zip`` 受支持) 重传一次，zip 内保留原文件名。
+
         Args:
             file_path: 文件路径
 
@@ -177,7 +195,6 @@ class NotionClient:
         """
         try:
             from pathlib import Path
-            import mimetypes
 
             file = Path(file_path)
 
@@ -189,88 +206,112 @@ class NotionClient:
             if file_size > 20 * 1024 * 1024:
                 raise ValueError(f"File too large: {file_size} bytes (max 20MB)")
 
-            # 检查扩展名是否被 Notion 支持
-            file_ext = file.suffix.lower()
-            is_supported = file_ext in NOTION_SUPPORTED_EXTENSIONS
+            file_content = file.read_bytes()
 
-            # Step 1 使用的文件名（不支持的扩展名伪装为 .pdf）
-            if is_supported:
-                step1_filename = file.name
-            else:
-                step1_filename = file.stem + '.pdf'
-                logger.debug(f"Unsupported extension '{file_ext}', using fake filename for Step 1: {step1_filename}")
+            try:
+                return await self._upload_bytes(file_content, file.name)
+            except Exception as e:
+                if not _is_cf_waf_block(e):
+                    raise
+                # CF WAF 拦截了原始内容 → zip 打包重传一次 (zip 内保留原文件名)。
+                import io
+                import zipfile
 
-            # Step 1: Create file upload object
-            logger.debug(f"Creating file upload for: {file.name}")
+                buf = io.BytesIO()
+                with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+                    zf.writestr(file.name, file_content)
+                zip_content = buf.getvalue()
 
-            notion_headers = {
-                "Authorization": f"Bearer {config.notion_token}",
-                "Notion-Version": "2025-09-03",
-                "Content-Type": "application/json"
-            }
-
-            create_payload = {
-                "filename": step1_filename  # 可能是伪装的 .pdf 文件名
-            }
-
-            session = await self._get_http_session()
-
-            # Step 1: Create file upload with retry
-            upload_obj = await self._request_with_retry(
-                session, "POST",
-                "https://api.notion.com/v1/file_uploads",
-                headers=notion_headers,
-                json=create_payload
-            )
-            upload_url = upload_obj["upload_url"]
-            file_upload_id = upload_obj["id"]
-
-            logger.debug(f"Created file upload: {file_upload_id}")
-
-            # Step 2: Send file content
-            logger.debug(f"Uploading file content to upload_url...")
-
-            # 读取文件内容
-            with open(file, 'rb') as f:
-                file_content = f.read()
-
-            # 确定 content type（不支持的扩展名声明为 PDF）
-            if is_supported:
-                content_type = mimetypes.guess_type(file.name)[0] or 'application/octet-stream'
-            else:
-                content_type = 'application/pdf'
-
-            # Step 2 使用原始文件名（保持真实扩展名）
-            send_headers = {
-                "Authorization": f"Bearer {config.notion_token}",
-                "Notion-Version": "2022-06-28"
-            }
-
-            import aiohttp
-            form_data = aiohttp.FormData()
-            form_data.add_field('file',
-                               file_content,
-                               filename=file.name,  # 始终使用原始文件名
-                               content_type=content_type)
-
-            # Step 2: Upload file content with retry
-            await self._request_with_retry(
-                session, "POST",
-                upload_url,
-                headers=send_headers,
-                data=form_data,
-                expect_json=False
-            )
-
-            logger.debug(f"File uploaded successfully: {file.name}" +
-                        (" (used PDF disguise)" if not is_supported else ""))
-
-            # Step 3: 返回file_upload_id，将在create_page时使用
-            return file_upload_id
+                logger.info(
+                    f"Notion upload blocked by Cloudflare WAF for {file.name!r} "
+                    f"({file_size}B); retrying as zip ({len(zip_content)}B)"
+                )
+                return await self._upload_bytes(zip_content, f"{file.name}.zip")
 
         except Exception as e:
             logger.error(f"Failed to upload file to Notion: {e}")
             raise
+
+    async def _upload_bytes(self, content: bytes, filename: str) -> str:
+        """三步上传给定字节内容到 Notion (不读磁盘)。
+
+        ``filename`` 决定 Step 1 声明名与扩展名门控：不支持的扩展名走「伪装 PDF」
+        (Step 1 声明 .pdf 绕过检查，Step 2 用真实名保留扩展名)。``upload_file``
+        与其 CF-WAF zip fallback 共用本方法 —— zip 路径复核 20MB 上限也走这里。
+
+        Returns:
+            file_upload_id: 可用于附加到 page properties 的文件 ID
+        """
+        from pathlib import Path
+        import mimetypes
+        import aiohttp
+
+        # 复核大小（20MB）—— zip fallback 后的 zip 字节也在这里再校验一次
+        if len(content) > 20 * 1024 * 1024:
+            raise ValueError(f"File too large: {len(content)} bytes (max 20MB)")
+
+        # 检查扩展名是否被 Notion 支持
+        file_ext = Path(filename).suffix.lower()
+        is_supported = file_ext in NOTION_SUPPORTED_EXTENSIONS
+
+        # Step 1 使用的文件名 + content type（不支持的扩展名伪装为 .pdf）
+        if is_supported:
+            step1_filename = filename
+            content_type = mimetypes.guess_type(filename)[0] or 'application/octet-stream'
+        else:
+            step1_filename = Path(filename).stem + '.pdf'
+            content_type = 'application/pdf'
+            logger.debug(f"Unsupported extension '{file_ext}', using fake filename for Step 1: {step1_filename}")
+
+        # Step 1: Create file upload object
+        logger.debug(f"Creating file upload for: {filename}")
+
+        notion_headers = {
+            "Authorization": f"Bearer {config.notion_token}",
+            "Notion-Version": "2025-09-03",
+            "Content-Type": "application/json"
+        }
+
+        session = await self._get_http_session()
+
+        upload_obj = await self._request_with_retry(
+            session, "POST",
+            "https://api.notion.com/v1/file_uploads",
+            headers=notion_headers,
+            json={"filename": step1_filename}  # 可能是伪装的 .pdf 文件名
+        )
+        upload_url = upload_obj["upload_url"]
+        file_upload_id = upload_obj["id"]
+
+        logger.debug(f"Created file upload: {file_upload_id}")
+
+        # Step 2: Send file content（始终用真实文件名保留扩展名）
+        logger.debug("Uploading file content to upload_url...")
+
+        send_headers = {
+            "Authorization": f"Bearer {config.notion_token}",
+            "Notion-Version": "2022-06-28"
+        }
+
+        form_data = aiohttp.FormData()
+        form_data.add_field('file',
+                            content,
+                            filename=filename,
+                            content_type=content_type)
+
+        await self._request_with_retry(
+            session, "POST",
+            upload_url,
+            headers=send_headers,
+            data=form_data,
+            expect_json=False
+        )
+
+        logger.debug(f"File uploaded successfully: {filename}" +
+                    (" (used PDF disguise)" if not is_supported else ""))
+
+        # Step 3: 返回file_upload_id，将在create_page时使用
+        return file_upload_id
 
     async def _request_with_retry(
         self,

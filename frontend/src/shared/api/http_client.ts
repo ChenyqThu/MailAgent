@@ -140,6 +140,43 @@ export async function request<T>(
     init.body = JSON.stringify(opts.body)
   }
 
+  return sendAndUnwrap<T>(url, init)
+}
+
+/**
+ * Raw-body variant of `request()` — same envelope contract on the response,
+ * but the request body is untouched bytes (attachment staging upload,
+ * D1 `PUT /email/compose-attachment`: application/octet-stream, no
+ * python-multipart on the server). Kept as a separate function so the JSON
+ * path's signature/behaviour stays byte-identical.
+ */
+export async function requestRaw<T>(
+  baseUrl: string,
+  method: string,
+  path: string,
+  body: ArrayBuffer | Uint8Array,
+  contentType: string,
+  opts: Omit<RequestOptions, 'body'> = {}
+): Promise<T> {
+  const url = `${baseUrl}${path}${buildQuery(opts.query)}`
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+    ...(opts.headers ?? {}),
+    // Set last so caller headers can't clobber it (mirror request()).
+    'Content-Type': contentType
+  }
+  const init: RequestInit = {
+    method,
+    headers,
+    credentials: 'include',
+    signal: opts.signal,
+    body: body as BodyInit
+  }
+  return sendAndUnwrap<T>(url, init)
+}
+
+/** Shared fetch + envelope unwrap for request()/requestRaw(). */
+async function sendAndUnwrap<T>(url: string, init: RequestInit): Promise<T> {
   let res: Response
   try {
     res = await fetch(url, init)

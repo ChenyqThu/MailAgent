@@ -23,6 +23,7 @@ import { LocalePicker } from './LocalePicker'
 import { SurfacePickerPopover } from './SurfacePickerPopover'
 import { SystemAlertBadge } from './SystemAlertBadge'
 import { ThemePickerPopover } from './ThemePickerPopover'
+import { UpdateIndicator } from './UpdateIndicator'
 
 export function TitleBar(): React.ReactElement {
   const { t } = useTranslation()
@@ -86,6 +87,8 @@ export function TitleBar(): React.ReactElement {
           <button> element. SystemAlertBadge renders null when no alerts. */}
       <div className="flex items-center gap-2 sm:gap-3 shrink-0 text-meta font-mono text-ink-fg-2">
         <SystemAlertBadge />
+        {/* 07-04 — 检测到新版本时出更新 icon (强调色配置左侧); 无更新时 null。 */}
+        <UpdateIndicator />
         <AccentPickerPopover />
         <span className="hidden md:inline text-ink-fg-3">·</span>
         <SurfacePickerPopover />

@@ -266,6 +266,26 @@ export type ComposeImportance = 'high' | 'normal' | 'low'
  *  后端走显式收件人/正文、零回复线程派生 (src/api/routers/email.py VALID_COMPOSE_MODES)。 */
 export type ComposeWireMode = ComposeMode | 'new'
 
+/** D1 附件引用 — compose draft/send 请求体 `attachments` 数组元素。key 是 **snake_case**
+ *  (对齐 PRD D1 契约字面): stage_id = staging 上传回执引用; attachment_id = 库内已有附件
+ *  (email_attachment.id, 服务端复用 forward 收集器读取路径)。 */
+export type ComposeAttachmentRef = { stage_id: string } | { attachment_id: number }
+
+/** `PUT /email/compose-attachment?filename=…` 的 data 块 (staging 暂存回执, snake_case)。 */
+export interface StagedAttachment {
+  stage_id: string
+  filename: string
+  size?: number | null
+  mime?: string | null
+}
+
+/** 附件上传入参 — renderer 读 File 成 ArrayBuffer 后经 IPC / raw PUT 送 staging 端点。 */
+export interface UploadComposeAttachmentOpts {
+  filename: string
+  bytes: ArrayBuffer
+  mime?: string
+}
+
 export interface ComposeDraftOpts {
   internalId: number
   mode: ComposeWireMode
@@ -283,6 +303,9 @@ export interface ComposeDraftOpts {
   quoteOriginal?: boolean
   /** 重要性 (高/普通/低)；'normal'/缺省时后端不写 Importance 头。 */
   importance?: ComposeImportance
+  /** D1 — 附件引用列表 (staging 上传 / 库内已有)。缺省 = 无附件 (forward 的原邮件附件
+   *  仍由服务端自动收集, 不在此列表重复引用, 防双份)。 */
+  attachments?: ComposeAttachmentRef[]
 }
 
 /** Send 与 draft 同形 (内部 IPC handler 给 send 追加 --yes)。 */
@@ -410,6 +433,10 @@ export interface EmailApi {
    *  The IPC handler always passes `--yes`; the renderer must show its own
    *  SendConfirmDialog before calling. Throws Error & { code } on failure. */
   send(opts: SendEmailOpts): Promise<unknown>
+  /** D1 — compose 附件 staging 上传 (raw bytes PUT, 非 multipart)。返回暂存回执,
+   *  其 stage_id 进 draft/send 的 attachments refs。单文件 20MB cap 由前端先拦 +
+   *  服务端权威复核。Throws Error & { code } on failure。 */
+  uploadComposeAttachment(opts: UploadComposeAttachmentOpts): Promise<StagedAttachment>
   /** Compose — `email draft --dry-run` plan used to pre-fill the composer
    *  (recipients / subject / body HTML). Read-only, no auth. Throws
    *  Error & { code } on failure. */

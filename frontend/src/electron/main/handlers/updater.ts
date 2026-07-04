@@ -298,8 +298,8 @@ function hasStagedBuild(): boolean {
  * feat/auto-update gap A — read settings.json's `autoDownloadUpdates` LIVE
  * (per update-available event, never cached) so a mid-session Settings toggle
  * takes effect on the next available update. `readSettings()` already falls
- * back to DEFAULTS (autoDownloadUpdates: true) on a missing/corrupt file, so
- * no extra guard is needed here.
+ * back to DEFAULTS (autoDownloadUpdates: false — 07-04 manual-download default)
+ * on a missing/corrupt file, so no extra guard is needed here.
  */
 function readAutoDownloadSetting(): boolean {
   return readSettings().autoDownloadUpdates

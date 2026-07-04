@@ -8,20 +8,32 @@
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
-const { mockDaemonRequest } = vi.hoisted(() => ({ mockDaemonRequest: vi.fn() }))
+const { mockDaemonRequest, mockDaemonRequestRaw } = vi.hoisted(() => ({
+  mockDaemonRequest: vi.fn(),
+  mockDaemonRequestRaw: vi.fn()
+}))
 
 vi.mock('../../src/electron/main/daemon_api', () => ({
-  daemonRequest: mockDaemonRequest
+  daemonRequest: mockDaemonRequest,
+  daemonRequestRaw: mockDaemonRequestRaw
 }))
 
 import { __testing } from '../../src/electron/main/handlers/draft'
 import type { ComposeDraftOpts } from '@shared/api/types'
 
-const { validateComposeOpts, runComposeDraft, runComposeSend, runDraftPlan } = __testing
+const {
+  validateComposeOpts,
+  runComposeDraft,
+  runComposeSend,
+  runDraftPlan,
+  runComposeAttachmentUpload
+} = __testing
 
 beforeEach(() => {
   mockDaemonRequest.mockReset()
   mockDaemonRequest.mockResolvedValue({ ok: 'stub' })
+  mockDaemonRequestRaw.mockReset()
+  mockDaemonRequestRaw.mockResolvedValue({ stage_id: 'stub' })
 })
 
 afterEach(() => {
@@ -58,6 +70,30 @@ describe('compose forwarders — daemon path/body (mock daemonRequest)', () => {
     expect(mockDaemonRequest).toHaveBeenCalledWith('POST', '/email/53675/draft-plan', {
       body: { mode: 'reply' }
     })
+  })
+
+  test('composeAttachmentUpload → PUT raw bytes (octet-stream), filename/mime 走 query', async () => {
+    const bytes = new Uint8Array([1, 2, 3])
+    await runComposeAttachmentUpload('报 告.pdf', bytes, 'application/pdf')
+    expect(mockDaemonRequestRaw).toHaveBeenCalledWith(
+      'PUT',
+      '/email/compose-attachment',
+      bytes,
+      'application/octet-stream',
+      { query: { filename: '报 告.pdf', mime: 'application/pdf' } }
+    )
+  })
+
+  test('draft body 可带 D1 attachments refs (stage_id / attachment_id 原样透传)', async () => {
+    const opts: ComposeDraftOpts = {
+      internalId: -1,
+      mode: 'new',
+      to: ['a@b.com'],
+      bodyHtml: '<p>hi</p>',
+      attachments: [{ stage_id: 'st-1' }, { attachment_id: 7 }]
+    }
+    await runComposeDraft(opts)
+    expect(mockDaemonRequest).toHaveBeenCalledWith('POST', '/email/draft', { body: opts })
   })
 })
 

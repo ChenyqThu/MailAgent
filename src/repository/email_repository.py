@@ -753,6 +753,40 @@ class EmailRepository:
         finally:
             conn.close()
 
+    def get_attachment_record(self, attachment_id: int) -> Optional[AttachmentRecord]:
+        """按 attachment.id 读单行 (compose attachment_id 引用装配需要 filename/
+        content_type; 行→dataclass 映射与 get_attachments 一致)。"""
+        conn = self._connect()
+        try:
+            r = conn.execute(
+                """SELECT id, internal_id, filename, content_type, size_bytes,
+                          is_inline, content_id, local_path, sha256,
+                          derived_from, derived_format,
+                          notion_file_id, notion_block_id, created_at
+                   FROM email_attachment WHERE id = ?""",
+                (attachment_id,),
+            ).fetchone()
+            if not r:
+                return None
+            return AttachmentRecord(
+                id=r["id"],
+                internal_id=r["internal_id"],
+                filename=r["filename"],
+                content_type=r["content_type"],
+                size_bytes=r["size_bytes"],
+                is_inline=bool(r["is_inline"]),
+                content_id=r["content_id"],
+                local_path=r["local_path"],
+                sha256=r["sha256"],
+                derived_from=r["derived_from"],
+                derived_format=r["derived_format"],
+                notion_file_id=r["notion_file_id"],
+                notion_block_id=r["notion_block_id"],
+                created_at=r["created_at"],
+            )
+        finally:
+            conn.close()
+
     def get_attachment_bytes(self, attachment_id: int) -> Optional[bytes]:
         """根据 attachment.id 通过 local_path 读盘。"""
         conn = self._connect()

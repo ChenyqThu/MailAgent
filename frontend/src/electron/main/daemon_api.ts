@@ -25,7 +25,7 @@
 // dev/pm2 态需手动起 `mailagent serve-api`, 否则写抛 E_NETWORK (诚实降级: 读仍 IPC 直读
 // SQLite → "能看不能改", plan §D1 不做本地 outbox 暂存)。
 
-import { request, type RequestOptions } from '@shared/api/http_client'
+import { request, requestRaw, type RequestOptions } from '@shared/api/http_client'
 
 import { getLocalApiToken, LOCAL_TOKEN_HEADER } from './local_token'
 
@@ -56,6 +56,21 @@ export function daemonRequest<T>(
   opts: RequestOptions = {}
 ): Promise<T> {
   return request<T>(resolveDaemonBaseUrl(), method, path, {
+    ...opts,
+    headers: { [LOCAL_TOKEN_HEADER]: getLocalApiToken(), ...(opts.headers ?? {}) }
+  })
+}
+
+/** Raw-body 变体 (D1 compose 附件 staging 上传: PUT raw bytes, 非 JSON)。
+ *  同 daemonRequest 的 token 注入 + envelope 语义, body 原样透传。 */
+export function daemonRequestRaw<T>(
+  method: string,
+  path: string,
+  body: ArrayBuffer | Uint8Array,
+  contentType: string,
+  opts: Omit<RequestOptions, 'body'> = {}
+): Promise<T> {
+  return requestRaw<T>(resolveDaemonBaseUrl(), method, path, body, contentType, {
     ...opts,
     headers: { [LOCAL_TOKEN_HEADER]: getLocalApiToken(), ...(opts.headers ?? {}) }
   })
