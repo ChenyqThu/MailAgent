@@ -423,7 +423,13 @@ function maybeStashAndAnnounceApproval(
       // S2 W0 (ADR-001 D1) — freeze the pause-time trusted mode into the stash: the island resume
       // re-runs under EXACTLY this mode (approvalResume passes it back to prepareChatRun), so a
       // resume can never escalate. Hand-built runs without a mode fail-close to untrusted.
-      contextMode: normalizeContextMode(run.contextMode)
+      contextMode: normalizeContextMode(run.contextMode),
+      // S5 W4 (ADR-004 §4.4) — freeze the per-agent tool context from the pause-time server cfg
+      // (wrapCfgForAgentRun set it on the headless cfg2; manual cfgs never carry it → undefined,
+      // byte-identical stash). The resume rebuilds through the same wrapper, so the narrowed
+      // ToolSet + grants survive the island round-trip; a re-pause re-enters here with the SAME
+      // cfg → the chain re-freezes the same context every hop.
+      agentRunContext: cfg.agentRunContext
     })
     cfg.announceApprovalToIsland?.({
       sessionId: run.sessionId,

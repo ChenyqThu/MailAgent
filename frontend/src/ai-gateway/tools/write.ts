@@ -24,7 +24,7 @@ import type { z } from 'zod'
 import { DomainError, type MailAgentDomainClient } from '../python/domainClient'
 import type { ApprovalGuard, ApprovalRisk } from '../security/approval'
 import { auditedWriteTool, type GatewayApprovalMode, type GatewayToolAuditCollector } from './types'
-import type { AgentContextMode } from './policy'
+import { normalizeContextMode, type AgentContextMode, type AgentRunContext } from './policy'
 import {
   emailArchiveSchema,
   emailDraftReplySchema,
@@ -66,8 +66,26 @@ export function createWriteTools(
     approvalMode?: GatewayApprovalMode
     oneShot?: boolean
     contextMode?: AgentContextMode
+    /** S5 W4 (ADR-004 D1/§3.1) — the per-agent run context of a headless custom-agent run. Only
+     *  its presence (with a non-empty agentId) UNDER a headless mode turns on the per-agent
+     *  domain_write whitelist evaluate below; manual runs never carry one. */
+    agentRunContext?: AgentRunContext
   } = {}
 ): Record<string, Tool> {
+  // S5 W4 (ADR-004 §3.1) — headless-ONLY policyEvaluate injection, decided here in the factory
+  // (NOT in needsApproval): wiring policyEvaluate unconditionally would SHADOW manual_chat's
+  // auto-reversible branch in types.ts (policyEvaluate takes precedence there), regressing the
+  // preview-write skip into a loopback RTT + rule requirement. So a domain_write tool gets the
+  // hook ONLY when the run is a headless agent run (untrusted_trigger / cron_headless + agentId
+  // present); otherwise policyEvaluate stays undefined → types.ts walks its existing branches,
+  // byte-identical (asserted by vitest).
+  const contextMode = normalizeContextMode(opts.contextMode)
+  const agentId = opts.agentRunContext?.agentId
+  const headlessAgent =
+    (contextMode === 'untrusted_trigger' || contextMode === 'cron_headless') &&
+    typeof agentId === 'string' &&
+    agentId.length > 0
+
   const make = <I>(toolOpts: {
     name: string
     description: string
@@ -89,7 +107,25 @@ export function createWriteTools(
         // Part B — one-shot claim across island + renderer resume (see auditedWriteTool.oneShot).
         oneShot: opts.oneShot,
         // S2 W0 — the run's context mode (auto-approve requires domain_write + manual_chat).
-        contextMode: opts.contextMode
+        contextMode: opts.contextMode,
+        // S5 W4 (ADR-004 D1) — per-agent domain_write whitelist: matcher V1 pins the tool name
+        // only ({v:1, tool}), so the action descriptor is just { tool } (the full input already
+        // lands in the chat_tool_call audit). Verdict semantics ride types.ts' existing exec
+        // pipeline: auto_allow → no card + approval_status='auto_whitelist' + whitelist_rule_id;
+        // ask / timeout (2.5s abort) / error → .catch(() => true) → the card → island or void
+        // (fail-closed, ADR-003 D4 semantics unchanged).
+        ...(headlessAgent
+          ? {
+              policyEvaluate: () =>
+                domain.policyEvaluate(
+                  'domain_write',
+                  { tool: toolOpts.name },
+                  contextMode,
+                  AbortSignal.timeout(2500),
+                  agentId
+                )
+            }
+          : {})
       },
       collector,
       guard

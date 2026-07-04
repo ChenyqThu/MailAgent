@@ -26,6 +26,7 @@ import {
   prepareChatRun,
   responseMessageAwaitsApproval
 } from './chatRun'
+import { wrapCfgForAgentRun } from './agentRun'
 import type { AiGatewayConfig } from './config'
 import {
   applyApprovalResponseToMessages,
@@ -145,7 +146,18 @@ export async function resumeApprovalRun(
   // S2 W0 (ADR-001 D1) — resume under the mode FROZEN at pause time (stashed by
   // maybeStashAndAnnounceApproval, never from the body): an island resume of a manual-session
   // approval stays manual; a future untrusted/headless pause resumes fail-closed at its own mode.
-  const prepared = await prepareChatRun(resumeBody, cfg, abortSignal, entry.contextMode)
+  //
+  // S5 W4 (ADR-004 §4.4) — a HEADLESS agent pause additionally froze its per-agent tool context;
+  // rebuild the cfg through the SAME wrapCfgForAgentRun the fresh spawn used (single source, no
+  // drift), so the resumed drain keeps the allowedTools narrowing + exec grants. This closes the
+  // rev0 P0-1 death path (island approve of a first-run exec card → grants lost → modeDenied) AND
+  // the pre-existing S4 defect (resume drained on the full matrix floor without the owner's
+  // narrowing). approvalResume is NOT a manual entrypoint — it is a faithful replay of the
+  // pause-time context, mode and tool face both frozen. Manual entries carry no context → base
+  // cfg, byte-identical. makePersistOnFinish below holds the SAME wrapped cfg, so a re-pause
+  // re-freezes the same context (the chain never widens).
+  const runCfg = entry.agentRunContext ? wrapCfgForAgentRun(cfg, entry.agentRunContext) : cfg
+  const prepared = await prepareChatRun(resumeBody, runCfg, abortSignal, entry.contextMode)
   if (!prepared.ok) {
     return { ok: false, status: 'error', sessionId: entry.sessionId, error: prepared.body.error }
   }
@@ -157,7 +169,7 @@ export async function resumeApprovalRun(
   // owns persistence: it persists a completed turn, OR (re-paused) re-stashes + re-announces the next
   // island card and skips persist, OR (the OTHER surface already executed → E_APPROVAL_USED audit)
   // skips the duplicate persist (finding 2, gated by islandAgentEnabled inside makePersistOnFinish).
-  const basePersist = makePersistOnFinish(cfg, run)
+  const basePersist = makePersistOnFinish(runCfg, run)
   let rePaused = false
   let assistantText = ''
   try {

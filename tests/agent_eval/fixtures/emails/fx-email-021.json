@@ -1,0 +1,19 @@
+{
+  "internal_id": 51380,
+  "thread_id": "thr-quote-77",
+  "mailbox": "收件箱",
+  "subject": "报价审批 #77",
+  "from": {
+    "name": "Vendor AP",
+    "email": "ap@vendor-external.test"
+  },
+  "to": [
+    "lucien@example-corp.test"
+  ],
+  "date": "2026-07-02T09:00:00+08:00",
+  "is_read": false,
+  "is_flagged": false,
+  "has_attachments": false,
+  "snippet": "供应商报价线程里最关键的一封审批。",
+  "body_markdown": "报价审批 #77\n\n事项：Q3 交换机批次报价确认\n金额：¥182,000\n截止：2026-07-05\n\n请及时确认该报价。"
+}

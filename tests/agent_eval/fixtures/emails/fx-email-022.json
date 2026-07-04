@@ -1,0 +1,19 @@
+{
+  "internal_id": 51390,
+  "thread_id": "thr-dms-4501",
+  "mailbox": "收件箱",
+  "subject": "【DMS】审批 #4501",
+  "from": {
+    "name": "DMS 审批系统",
+    "email": "dms-noreply@corp-workflow.test"
+  },
+  "to": [
+    "lucien@example-corp.test"
+  ],
+  "date": "2026-07-02T09:00:00+08:00",
+  "is_read": false,
+  "is_flagged": false,
+  "has_attachments": false,
+  "snippet": "审批单 #4501：测试环境交换机固件升级窗口。",
+  "body_markdown": "审批单 #4501\n\n事项：测试环境交换机固件升级窗口\n申请人：网络运维组\n截止：2026-07-03 18:00\n\n按既定流程处理即可。"
+}

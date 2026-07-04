@@ -37,8 +37,19 @@ import type { z } from 'zod'
 import type { MailAgentDomainClient } from '../python/domainClient'
 import type { ApprovalGuard } from '../security/approval'
 import { auditedWriteTool, type GatewayApprovalMode, type GatewayToolAuditCollector } from './types'
-import { normalizeContextMode, type AgentContextMode } from './policy'
+import { normalizeContextMode, type AgentContextMode, type AgentRunContext } from './policy'
 import { execRunCommandSchema, execFileReadSchema, execFileWriteSchema } from './schemas'
+// D4-① (ADR-004 §6, unflagged security fix) — exec output is the ONLY un-reviewed model input in a
+// whitelist-skipped run: fence stdout/stderr/file content like every other untrusted tool output
+// (same helper as web/sessions, whose sanitizeUntrusted breaks fence tokens with a ZWSP — the
+// contextSerializer double-replace discipline).
+import { fenceUntrusted } from '../../shared/assistant/context/contextSerializer'
+
+/** Wrap a non-empty exec output string in the UNTRUSTED_EXEC_OUTPUT fence; empty stays empty
+ *  (mirrors web.ts' title handling — no fence noise around nothing). */
+function fenceExecOutput(text: string, part: string): string {
+  return text.length > 0 ? fenceUntrusted('EXEC_OUTPUT', text, { part }) : text
+}
 
 /** Names of the exec tools the gateway exposes when MAILAGENT_OPENNESS_EXEC_TOOLS is on. Exported
  *  for tests + the eval catalog completeness gate (which statically extracts every
@@ -59,12 +70,23 @@ export function createExecTools(
     approvalMode?: GatewayApprovalMode
     oneShot?: boolean
     contextMode?: AgentContextMode
+    /** S5 W4 (ADR-004 D2) — the per-agent run context of a headless agent run: modeGrants feeds
+     *  the runtime modeDenied (same isToolClassAllowedInMode + same grants object as the
+     *  registration filter), agentId keys the per-agent whitelist evaluate and stamps the /exec/*
+     *  audit annotation. Absent (manual) → everything below is byte-identical to S2. */
+    agentRunContext?: AgentRunContext
   } = {}
 ): Record<string, Tool> {
   // The whitelist evaluate MUST use the run's server-asserted context mode (fail-closed normalize),
-  // never a request-body value. exec is manual-only, so in practice this is 'manual_chat' whenever
-  // policyEvaluate actually runs (a non-manual run is modeDenied before needsApproval reaches it).
+  // never a request-body value. Pre-ADR-004 exec was manual-only; a headless agent run reaches
+  // these tools only through the matrix's per-agent exec grant, and then the evaluate carries the
+  // REAL contextMode + agentId (without them Python would fall back to the manual global
+  // candidates → always ask, ADR-004 §4.1).
   const contextMode = normalizeContextMode(opts.contextMode)
+  const agentId = opts.agentRunContext?.agentId
+  // Audit annotation for /exec/* (PURE annotation — the endpoint never gates on it): only a
+  // headless agent run stamps it; manual keeps the S2 body byte-identical.
+  const execAudit = agentId != null ? { contextMode, agentId } : undefined
 
   const makeExec = <I>(toolOpts: {
     name: string
@@ -90,19 +112,24 @@ export function createExecTools(
         a2uiEnabled: opts.a2uiEnabled,
         // approvalMode is intentionally NOT threaded — exec tools relax ONLY via policyEvaluate.
         oneShot: opts.oneShot,
-        // S2 W0 — class exec (policy.ts): manual_chat-only, never auto-approved.
+        // S2 W0 — class exec (policy.ts): manual_chat-only unless per-agent granted (ADR-004 D2).
         contextMode: opts.contextMode,
+        // S5 W4 — the same grants the registration filter consumed, for the runtime modeDenied.
+        modeGrants: opts.agentRunContext?.modeGrants,
         // S2 W1 — the structured whitelist hook. A matching rule → auto_allow → skip the card;
         // ask / error → the card (fail-closed). Uses the closure-captured server contextMode.
         // S2 W4 (W1b review P3-1) — a 2.5s abort so a hung loopback degrades to the card in
         // bounded time instead of suspending needsApproval forever (the .catch(() => true) in
         // types.ts turns the AbortError into "show the card" — fail-closed semantics unchanged).
+        // S5 W4 — agentId keys the per-agent candidate set for a headless run (absent → manual
+        // global candidates, byte-identical body).
         policyEvaluate: (input) =>
           domain.policyEvaluate(
             toolOpts.capability,
             toolOpts.toAction(input),
             contextMode,
-            AbortSignal.timeout(2500)
+            AbortSignal.timeout(2500),
+            agentId
           ),
         run: toolOpts.run
       },
@@ -131,12 +158,15 @@ export function createExecTools(
       const r = await domain.runCommand(
         input.argv,
         { cwd: input.cwd, timeoutMs: input.timeout_ms },
-        signal
+        signal,
+        execAudit
       )
       return {
         exit_code: r.exit_code,
-        stdout: r.stdout,
-        stderr: r.stderr,
+        // D4-① — a third-party program's output is untrusted model input (the head injection
+        // surface once a whitelist rule skips the card): fenced, never raw bytes.
+        stdout: fenceExecOutput(r.stdout, 'stdout'),
+        stderr: fenceExecOutput(r.stderr, 'stderr'),
         truncated: r.truncated,
         duration_ms: r.duration_ms,
         cwd: r.cwd,
@@ -162,9 +192,10 @@ export function createExecTools(
     capability: 'file_read',
     toAction: (input) => ({ path: input.path }),
     run: async (input, { userEdited, signal }) => {
-      const r = await domain.fileRead(input.path, input.max_bytes, signal)
+      const r = await domain.fileRead(input.path, input.max_bytes, signal, execAudit)
       return {
-        content: r.content,
+        // D4-① — file content is third-party text like a web page: fenced, never raw.
+        content: fenceExecOutput(r.content, 'content'),
         truncated: r.truncated,
         size: r.size,
         user_edited: userEdited
@@ -187,7 +218,7 @@ export function createExecTools(
     capability: 'file_write',
     toAction: (input) => ({ path: input.path }),
     run: async (input, { userEdited, signal }) => {
-      const r = await domain.fileWrite(input.path, input.content, input.mode, signal)
+      const r = await domain.fileWrite(input.path, input.content, input.mode, signal, execAudit)
       return {
         bytes_written: r.bytes_written,
         created: r.created,

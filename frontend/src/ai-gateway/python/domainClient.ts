@@ -876,15 +876,20 @@ export class MailAgentDomainClient {
   //    that call these are only registered when MAILAGENT_OPENNESS_EXEC_TOOLS is on; all three are
   //    edit-tier (always ask unless a whitelist rule matches).
 
-  /** run_command (S2 W1) — run one local command (NO shell). POST /exec/run {argv, cwd?, timeout_ms}. */
+  /** run_command (S2 W1) — run one local command (NO shell). POST /exec/run {argv, cwd?, timeout_ms}.
+   *  `audit` (S5 W4, ADR-004 D4 附带项) — PURE audit annotation (context_mode + agent_id) for a
+   *  headless agent run's ledger row; the endpoint never gates on it (authorization stays in the
+   *  gateway matrix + evaluate). Absent (manual) → body byte-identical to the S2 shape. */
   runCommand(
     argv: string[],
     opts: { cwd?: string; timeoutMs?: number },
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    audit?: { contextMode?: string; agentId?: string }
   ): Promise<DomainExecRunResult> {
     const body: Record<string, unknown> = { argv }
     if (opts.cwd !== undefined) body.cwd = opts.cwd
     if (opts.timeoutMs !== undefined) body.timeout_ms = opts.timeoutMs
+    this._applyExecAudit(body, audit)
     return this._req<DomainExecRunResult>('POST', '/exec/run', { body, signal })
   }
 
@@ -893,12 +898,12 @@ export class MailAgentDomainClient {
   fileRead(
     path: string,
     maxBytes: number,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    audit?: { contextMode?: string; agentId?: string }
   ): Promise<DomainExecFileReadResult> {
-    return this._req<DomainExecFileReadResult>('POST', '/exec/file_read', {
-      body: { path, max_bytes: maxBytes },
-      signal
-    })
+    const body: Record<string, unknown> = { path, max_bytes: maxBytes }
+    this._applyExecAudit(body, audit)
+    return this._req<DomainExecFileReadResult>('POST', '/exec/file_read', { body, signal })
   }
 
   /** file_write (S2 W1) — write text to a local file. POST /exec/file_write {path, content, mode}.
@@ -907,12 +912,22 @@ export class MailAgentDomainClient {
     path: string,
     content: string,
     mode: 'overwrite' | 'append' | 'create_new',
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    audit?: { contextMode?: string; agentId?: string }
   ): Promise<DomainExecFileWriteResult> {
-    return this._req<DomainExecFileWriteResult>('POST', '/exec/file_write', {
-      body: { path, content, mode },
-      signal
-    })
+    const body: Record<string, unknown> = { path, content, mode }
+    this._applyExecAudit(body, audit)
+    return this._req<DomainExecFileWriteResult>('POST', '/exec/file_write', { body, signal })
+  }
+
+  /** S5 W4 — stamp the /exec/* audit annotation fields (snake_case per the Python body schema)
+   *  onto a request body. Absent/empty audit → the body is untouched (manual byte-identical). */
+  private _applyExecAudit(
+    body: Record<string, unknown>,
+    audit?: { contextMode?: string; agentId?: string }
+  ): void {
+    if (audit?.contextMode != null) body.context_mode = audit.contextMode
+    if (audit?.agentId != null) body.agent_id = audit.agentId
   }
 
   // ── policy primitives (S2 W1) — the structured whitelist. evaluate is consulted by the exec
@@ -920,16 +935,20 @@ export class MailAgentDomainClient {
   //    policy page + the approval-card "always allow" affordance (rule creation is an OWNER action
   //    only — no gateway TOOL creates rules). All hit /agent/policy/* (owner API, verify_cf_access).
 
-  /** POST /agent/policy/evaluate {capability, action, contextMode} → the whitelist verdict. Called
-   *  from the exec tools' needsApproval with the run's SERVER-ASSERTED contextMode (never a body value). */
+  /** POST /agent/policy/evaluate {capability, action, contextMode, agentId?} → the whitelist
+   *  verdict. Called from the exec/write tools' needsApproval with the run's SERVER-ASSERTED
+   *  contextMode (never a body value). `agentId` (S5 W4, ADR-004) keys the per-agent candidate
+   *  set for a headless agent run — absent (every manual run) → the request body is byte-identical
+   *  to the pre-ADR-004 shape and Python evaluates the manual (agent_id IS NULL) candidates. */
   policyEvaluate(
     capability: string,
     action: Record<string, unknown>,
     contextMode: string,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    agentId?: string
   ): Promise<DomainPolicyVerdict> {
     return this._req<DomainPolicyVerdict>('POST', '/agent/policy/evaluate', {
-      body: { capability, action, contextMode },
+      body: { capability, action, contextMode, ...(agentId != null ? { agentId } : {}) },
       signal
     })
   }

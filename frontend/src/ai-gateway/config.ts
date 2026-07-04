@@ -17,7 +17,7 @@ import type { MailAgentUIMessage } from '@shared/assistant/uiMessage'
 import type { GatewayApprovalMode, GatewayToolAuditEntry } from './tools/types'
 // 🔴 type-only — same erasure discipline. The runtime policy functions live in tools/policy.ts
 // (pure, type-only `ai` import) and are consumed by chatRun/tools, never here.
-import type { AgentContextMode } from './tools/policy'
+import type { AgentContextMode, AgentRunContext } from './tools/policy'
 // 🔴 type-only imports — fully erased (same discipline as GatewayToolAuditEntry above), so the
 // AG-UI mirror types never pull the `ai` chunk into the main bundle when the gateway is off.
 import type { ToolApprovalRequestPayload } from './agui/interruptMapper'
@@ -141,7 +141,12 @@ export interface AiGatewayConfig {
   buildTools?: (
     collector: GatewayToolAuditEntry[],
     approvalMode?: GatewayApprovalMode,
-    contextMode?: AgentContextMode
+    contextMode?: AgentContextMode,
+    /** S5 W4 (ADR-004) — the per-agent run context of a HEADLESS custom-agent run: agentId (keys
+     *  the per-agent whitelist evaluate), allowedTools (owner narrowing) and modeGrants (the
+     *  matrix's exec opt-in). Passed ONLY by wrapCfgForAgentRun's wrapper (fresh spawn + island
+     *  resume); every manual entrypoint leaves it undefined → assembly byte-identical. */
+    agentRunContext?: AgentRunContext
   ) => ToolSet
   /** Max tool-loop steps (stopWhen: stepCountIs). Default 8 (legacy AGENT_MAX_ITER). */
   maxSteps?: number
@@ -275,4 +280,10 @@ export interface AiGatewayConfig {
    *  create failed (the run then streams but persists nothing — degraded, not fatal). Injected ONLY
    *  when MAILAGENT_CUSTOM_AGENTS_ENABLED is on; omitted (default) → POST /api/ai/agent-run 404s. */
   createAgentSession?: (input: { agentId: string; jobId: number; title: string }) => number | null
+  /** S5 W4 (ADR-004 §4.4) — the per-agent run context of THIS cfg, set only by wrapCfgForAgentRun
+   *  (agentRun.ts) on the headless cfg2 wrapper. It is the AUTHORITATIVE pause-time source the
+   *  approval stash freezes (maybeStashAndAnnounceApproval reads it from the cfg, never from a
+   *  body), so an island resume rebuilds the exact same narrowed tool face. Manual entrypoints
+   *  never set it → the stash field stays undefined, byte-identical to the pre-ADR-004 stash. */
+  agentRunContext?: AgentRunContext
 }

@@ -84,7 +84,12 @@ function maliciousSpec(kind: 'email_filter' | 'cron'): AgentRunSpec {
       ...(kind === 'email_filter' ? { emailEnvelope: MALICIOUS_ENVELOPE } : {})
     },
     model: 'claude-sonnet-4-6',
-    toolPolicy: {},
+    // S5 W4 — a real spec always carries a non-empty allowedTools (§5.1 projection). Allow-list
+    // BOTH the read tool AND every forbidden tool, so the defence being tested is the MATRIX
+    // (which strips the forbidden classes under a headless mode) — NOT the allowedTools narrowing.
+    // The one exception is the manual-leak positive control below, which needs run_command to
+    // survive BOTH gates to reach needsApproval; it is allow-listed here.
+    toolPolicy: { allowedTools: ['email_search', ...FORBIDDEN] },
     budget: { maxSteps: 4, maxRunSeconds: 300 },
     sessionTitle: 'evil · run'
   }

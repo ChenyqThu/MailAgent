@@ -33,7 +33,7 @@ import {
   prepareChatRun,
   responseMessageAwaitsApproval
 } from './chatRun'
-import { normalizeContextMode, type AgentContextMode } from './tools/policy'
+import { normalizeContextMode, type AgentContextMode, type AgentRunContext } from './tools/policy'
 import type { MailAgentUIMessage } from '@shared/assistant/uiMessage'
 // Relative type-only import (erased) — same discipline as searchAgentRun.ts: the pure-Node harness
 // (tsx) must be able to load this module without resolving vite aliases.
@@ -68,7 +68,10 @@ export function deriveContextMode(spec: AgentRunSpec): AgentContextMode {
  *  (a name in `allowed` that isn't in `all` — e.g. a capability_change/exec/outbound tool the matrix
  *  already stripped under the non-manual mode — simply stays absent). allowed undefined → no
  *  narrowing (full set); allowed=[] → empty (owner explicitly selected zero tools). Exported for the
- *  intersection test. */
+ *  intersection test. 🔴 The undefined=no-narrowing semantic is reserved for NON-agent callers:
+ *  the agent-run path (wrapCfgForAgentRun) normalizes a missing list to [] before it gets here
+ *  (ADR-004 §5.1 fail-closed — W4a's projection always emits a non-empty allowedTools field for a
+ *  custom agent, so a missing field is a malformed spec). */
 export function intersectAllowedTools(all: ToolSet, allowed?: string[]): ToolSet {
   if (!allowed) return all
   const keep = new Set(allowed)
@@ -77,6 +80,62 @@ export function intersectAllowedTools(all: ToolSet, allowed?: string[]): ToolSet
     if (keep.has(name)) out[name] = t
   }
   return out
+}
+
+/** ADR-004 §4.1 — construct the per-agent run context from the pulled spec. Grants are a
+ *  DISCRIMINATED boolean built here (`grantExec === true`), NEVER a passthrough of the spec's raw
+ *  toolPolicy object — any other value/type ("yes", 1, {}, a junk key) yields {exec:false}, so a
+ *  future spec field can never silently flow into the matrix (codex P1-4). allowedTools missing /
+ *  non-array → [] (fail-closed, §5.1). The shared AgentRunSpec TYPE (@shared/api/types) still
+ *  spells toolPolicy as {allowedTools?} — grantExec is on the wire since W4a but the shared-type
+ *  extension belongs to the UI half; the structural cast below reads it without widening the
+ *  shared surface. Exported for the discriminated-construction tests. */
+export function agentRunContextFromSpec(spec: AgentRunSpec): AgentRunContext {
+  const toolPolicy = spec.toolPolicy as
+    | { allowedTools?: unknown; grantExec?: unknown }
+    | undefined
+  const allowedRaw = toolPolicy?.allowedTools
+  return {
+    agentId: spec.agentId,
+    allowedTools: Array.isArray(allowedRaw)
+      ? allowedRaw.filter((n): n is string => typeof n === 'string')
+      : [],
+    modeGrants: { exec: toolPolicy?.grantExec === true }
+  }
+}
+
+/**
+ * ADR-004 §4.4 — the SINGLE cfg wrapper for a per-agent tool face, shared by the fresh spawn
+ * (runHeadlessAgent) and the island resume (approvalResume). Layers the owner's allowedTools
+ * intersection on cfg.buildTools' OUTPUT (after create* → applySkillGating → applyContextModePolicy,
+ * which received the SAME agentRunContext as its fourth parameter — matrix grants + whitelist
+ * agentId all come from this one object), and records the context on the cfg so a pause freezes it
+ * into the approval stash (maybeStashAndAnnounceApproval reads cfg.agentRunContext — the pause-time
+ * server cfg is the authority, never a body).
+ *
+ * 🔴 This also fixes an S4 defect: before ADR-004 the allowedTools narrowing lived only in
+ * runHeadlessAgent's local cfg2, so an island resume rebuilt the run from the BASE cfg and the
+ * narrowing (and now the grants) was silently lost — resume drained on the full matrix floor,
+ * violating ADR-003 D6's "only reduce" promise. With the stash freezing agentRunContext and both
+ * paths rebuilding through this one function, pause→resume can never widen the tool face.
+ */
+export function wrapCfgForAgentRun(
+  cfg: AiGatewayConfig,
+  agentRunContext: AgentRunContext
+): AiGatewayConfig {
+  // Fail-closed normalization at the ONE funnel both paths share: an agent run never passes
+  // undefined into intersectAllowedTools (whose undefined means "no narrowing" for non-agent
+  // callers).
+  const ctx: AgentRunContext = {
+    ...agentRunContext,
+    allowedTools: agentRunContext.allowedTools ?? []
+  }
+  return {
+    ...cfg,
+    agentRunContext: ctx,
+    buildTools: (collector, approvalMode, mode) =>
+      intersectAllowedTools(cfg.buildTools?.(collector, approvalMode, mode, ctx) ?? {}, ctx.allowedTools)
+  }
 }
 
 /** Defensive re-clamp of the budget step ceiling. */
@@ -145,18 +204,19 @@ export async function runHeadlessAgent(
   }
   if (spec.model) body.model = spec.model
 
-  // cfg' wrapper (ADR-003 D6/D7). The allowedTools intersection is layered on cfg.buildTools' OUTPUT
-  // — i.e. AFTER the full assembly chain (create* → applySkillGating → applyContextModePolicy). So a
-  // headless run's tool面 is: (the matrix's product under the derived mode) ∩ allowedTools. There is
-  // no body/prompt control surface. maxSteps caps the tool loop (prepareChatRun's stopWhen).
+  // cfg' wrapper (ADR-003 D6/D7 + ADR-004 §4.4). The allowedTools intersection is layered on
+  // cfg.buildTools' OUTPUT — i.e. AFTER the full assembly chain (create* → applySkillGating →
+  // applyContextModePolicy, which consumes the same agentRunContext for matrix grants + the
+  // whitelist agentId). So a headless run's tool面 is: (the matrix's product under the derived
+  // mode, incl. the per-agent exec grant) ∩ allowedTools. There is no body/prompt control surface.
+  // wrapCfgForAgentRun is the SHARED wrapper the island resume also rebuilds through, so a
+  // pause→resume chain keeps the exact same tool face; maxSteps stays fresh-spawn-only (it is not
+  // part of the frozen context — a resumed drain runs under the base default, and the worker's
+  // run-seconds abort still bounds it).
+  const agentRunContext = agentRunContextFromSpec(spec)
   const cfg2: AiGatewayConfig = {
-    ...cfg,
-    maxSteps: clampMaxSteps(spec.budget?.maxSteps),
-    buildTools: (collector, approvalMode, mode) =>
-      intersectAllowedTools(
-        cfg.buildTools?.(collector, approvalMode, mode) ?? {},
-        spec.toolPolicy?.allowedTools
-      )
+    ...wrapCfgForAgentRun(cfg, agentRunContext),
+    maxSteps: clampMaxSteps(spec.budget?.maxSteps)
   }
 
   const prepared = await prepareChatRun(body, cfg2, abortSignal, contextMode)

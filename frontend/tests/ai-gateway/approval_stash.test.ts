@@ -39,6 +39,20 @@ describe('ApprovalRunStash — stash + one-shot claim', () => {
     expect(s.size()).toBe(0)
   })
 
+  test('S5 W4 — agentRunContext round-trips through stash/claim; absent stays undefined (manual byte-identical)', () => {
+    const s = new ApprovalRunStash()
+    const ctx = {
+      agentId: 'dms',
+      allowedTools: ['email_flag'],
+      modeGrants: { exec: true }
+    }
+    const token = s.stash({ ...makeInput('tc-agent'), contextMode: 'cron_headless', agentRunContext: ctx })
+    expect(s.claim('tc-agent', token)?.agentRunContext).toEqual(ctx)
+    // manual pause (no context) → the field stays undefined on the claimed entry
+    const token2 = s.stash(makeInput('tc-manual'))
+    expect(s.claim('tc-manual', token2)?.agentRunContext).toBeUndefined()
+  })
+
   test('wrong token → null WITHOUT consuming (no grief)', () => {
     const s = new ApprovalRunStash()
     const token = s.stash(makeInput())

@@ -583,3 +583,195 @@ describe('/api/ai/approval/decide — chained two-hop approvals (repause)', () =
     expect(hop2Ids.filter((id) => id === TC_B)).toHaveLength(1)
   })
 })
+
+// ── S5 W4 (ADR-004 §4.4) — the island resume rebuilds the FROZEN per-agent tool context ──────────
+//
+// The stash freezes agentRunContext at pause time (from the pause-time server cfg); the resume
+// rebuilds cfg through the SAME wrapCfgForAgentRun the fresh spawn used. Pinned here:
+//   - the S4 defect fix: the resumed drain keeps the owner's allowedTools narrowing (before this
+//     wave the resume used the BASE cfg → full matrix floor);
+//   - grants双向: an exec tool inside the grant survives the resumed registration, outbound stays
+//     structurally absent even when (mis)listed in allowedTools;
+//   - re-pause chain: a second approval inside the resume re-freezes the SAME context (the tool
+//     face can never widen across hops).
+describe('/api/ai/approval/decide — per-agent context freeze (headless agent resume)', () => {
+  const CTX = {
+    agentId: 'dms',
+    allowedTools: ['email_draft_reply', 'email_flag', 'run_command', 'web_fetch'],
+    modeGrants: { exec: true }
+  }
+
+  /** spyDomain + the per-agent whitelist evaluate (ask → a second write pauses, no免卡). */
+  function headlessDomain(calls: unknown[]): MailAgentDomainClient {
+    return {
+      draftReply: async (internalId: number, body: string) => {
+        calls.push({ internalId, body })
+        return { internalId, mailbox: '草稿箱', accountName: 'acct', draftId: 'd1' }
+      },
+      policyEvaluate: async () => ({ decision: 'ask', rule_id: null })
+    } as unknown as MailAgentDomainClient
+  }
+
+  /** Model that captures the tool names streamText actually sees, then closes with text. */
+  function captureToolsModel(sink: string[][]): MockLanguageModelV3 {
+    return new MockLanguageModelV3({
+      doStream: async (opts) => {
+        sink.push(((opts.tools ?? []) as Array<{ name: string }>).map((t) => t.name))
+        return {
+          stream: simulateReadableStream({
+            chunks: [
+              { type: 'stream-start' as const, warnings: [] },
+              { type: 'text-start' as const, id: '1' },
+              { type: 'text-delta' as const, id: '1', delta: 'done' },
+              { type: 'text-end' as const, id: '1' },
+              {
+                type: 'finish' as const,
+                finishReason: 'stop' as const,
+                usage: {
+                  inputTokens: { total: 5, noCache: 5, cacheRead: 0, cacheWrite: 0 },
+                  outputTokens: { total: 7, text: 7, reasoning: 0 }
+                }
+              }
+            ]
+          })
+        }
+      }
+    })
+  }
+
+  function headlessCfg(opts: {
+    guard: ApprovalGuard
+    stash: ApprovalRunStash
+    domain: MailAgentDomainClient
+    model: MockLanguageModelV3
+    seenCtx: Array<{ mode: string | undefined; ctx: unknown }>
+  }): AiGatewayConfig {
+    return {
+      port: 0,
+      baseUrl: 'https://crs.example/api',
+      apiKey: 'sk-test',
+      model: 'claude-sonnet-4-6',
+      createModel: () => opts.model,
+      // forwards the 4th param exactly like the production lifecycle
+      buildTools: (collector, _am, contextMode, agentRunContext) => {
+        opts.seenCtx.push({ mode: contextMode, ctx: agentRunContext })
+        return buildGatewayTools(
+          {
+            domain: opts.domain,
+            writeToolsEnabled: true,
+            approvalGuard: opts.guard,
+            webToolsEnabled: true,
+            execToolsEnabled: true,
+            oneShotWrites: true,
+            contextMode,
+            agentRunContext
+          },
+          collector
+        )
+      },
+      islandAgentEnabled: true,
+      approvalStash: opts.stash,
+      announceApprovalToIsland: () => {},
+      rejectApproval: (tc: string) => opts.guard.reject(tc),
+      persistTurn: () => {}
+    }
+  }
+
+  function seedHeadlessPause(guard: ApprovalGuard, stash: ApprovalRunStash): string {
+    guard.register(TC, 'email_draft_reply', 'edit', DRAFT_INPUT, ['body_markdown'])
+    return stash.stash({
+      toolCallId: TC,
+      approvalId: AP,
+      toolName: 'email_draft_reply',
+      sessionId: 1,
+      body: { messages: [USER], model: 'claude-sonnet-4-6', sessionId: 1 },
+      responseMessage: pausedResponse(),
+      contextMode: 'cron_headless',
+      agentRunContext: CTX
+    })
+  }
+
+  test('resume keeps the narrowing + grants: allowedTools ∩ matrix(grants) reaches streamText; approved tool executes', async () => {
+    const guard = new ApprovalGuard()
+    const stash = new ApprovalRunStash()
+    const domainCalls: unknown[] = []
+    const seenCtx: Array<{ mode: string | undefined; ctx: unknown }> = []
+    const seenTools: string[][] = []
+    const cfg = headlessCfg({
+      guard,
+      stash,
+      domain: headlessDomain(domainCalls),
+      model: captureToolsModel(seenTools),
+      seenCtx
+    })
+    const h = await start(cfg)
+    const token = seedHeadlessPause(guard, stash)
+
+    const res = await decide(h.port, { toolCallId: TC, decision: 'approve', resumeToken: token })
+    expect(res.status).toBe(200)
+    expect((await res.json()).status).toBe('completed')
+    expect(domainCalls).toHaveLength(1) // the approved draft executed server-side
+
+    // buildTools ran under the FROZEN mode AND received the FROZEN context as its 4th param
+    expect(seenCtx.length).toBeGreaterThan(0)
+    expect(seenCtx[seenCtx.length - 1]).toEqual({ mode: 'cron_headless', ctx: CTX })
+
+    // the model-visible ToolSet (post-intersection): the owner narrowing SURVIVES the resume
+    // (S4 defect fix) — un-allowed domain_writes are gone; the granted exec tool is present;
+    // outbound stays structurally absent even though the owner (mis)listed web_fetch.
+    expect(seenTools.length).toBeGreaterThan(0)
+    const names = seenTools[0]
+    expect(names).toContain('email_draft_reply')
+    expect(names).toContain('email_flag')
+    expect(names).toContain('run_command') // grants 内 exec 可达
+    expect(names).not.toContain('web_fetch') // grants 外恒缺席（outbound 无键可授）
+    expect(names).not.toContain('email_archive') // not in allowedTools → still narrowed
+    expect(names).not.toContain('email_pin')
+    expect(names).not.toContain('email_search') // reads outside the allow-list are narrowed too
+  })
+
+  test('re-pause chain: a second approval inside the resume re-freezes the SAME context', async () => {
+    const guard = new ApprovalGuard()
+    const stash = new ApprovalRunStash()
+    const domainCalls: unknown[] = []
+    const seenCtx: Array<{ mode: string | undefined; ctx: unknown }> = []
+    // the resumed model requests a SECOND write (email_flag) → headless + evaluate ask → pause
+    const model = new MockLanguageModelV3({
+      doStream: async () => ({
+        stream: simulateReadableStream({
+          chunks: [
+            { type: 'stream-start' as const, warnings: [] },
+            {
+              type: 'tool-call' as const,
+              toolCallId: 'tc_flag_2',
+              toolName: 'email_flag',
+              input: JSON.stringify({ internal_id: 6, is_flagged: true })
+            },
+            {
+              type: 'finish' as const,
+              finishReason: 'tool-calls' as const,
+              usage: {
+                inputTokens: { total: 5, noCache: 5, cacheRead: 0, cacheWrite: 0 },
+                outputTokens: { total: 7, text: 7, reasoning: 0 }
+              }
+            }
+          ]
+        })
+      })
+    })
+    const cfg = headlessCfg({ guard, stash, domain: headlessDomain(domainCalls), model, seenCtx })
+    const h = await start(cfg)
+    const token = seedHeadlessPause(guard, stash)
+
+    const res = await decide(h.port, { toolCallId: TC, decision: 'approve', resumeToken: token })
+    expect(res.status).toBe(200)
+    expect((await res.json()).status).toBe('repaused')
+    expect(domainCalls).toHaveLength(1) // hop-1's draft executed; the flag is paused, not run
+
+    // the re-stash FROZE the same per-agent context again (the chain never widens)
+    const entry = stash.peek('tc_flag_2')
+    expect(entry).not.toBeNull()
+    expect(entry?.contextMode).toBe('cron_headless')
+    expect(entry?.agentRunContext).toEqual(CTX)
+  })
+})

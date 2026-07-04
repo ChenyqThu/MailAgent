@@ -131,15 +131,46 @@ export function classOfTool(name: string): GatewayToolClass {
   return GATEWAY_TOOL_CLASSES[name] ?? 'exec'
 }
 
-/** Registration-time matrix row (ADR-001 D3): may a tool of this class exist in the ToolSet of a
- *  run in this mode? read/domain_write → every mode; capability_change/exec/outbound →
- *  manual_chat only. */
+/** Per-agent mode grants (ADR-004 §4.1 — the explicit revision of the ADR-001 §5 matrix's exec
+ *  row). 🔴 The type has ONLY the `exec` key: capability_change and outbound have NO corresponding
+ *  field — they are structurally un-grantable (not "don't pass true" but "nowhere to pass it"),
+ *  fixing the red line at the type level. Constructed by the gateway from the strictly-parsed
+ *  spec as a discriminated boolean ({ exec: spec.toolPolicy?.grantExec === true }) — NEVER a
+ *  passthrough of a raw spec object (a future spec field must not silently flow into the matrix). */
+export interface AgentModeGrants {
+  exec?: boolean
+}
+
+/** The per-agent run context threaded through a headless custom-agent run (ADR-004 §3.1/§4.4):
+ *  agentRun.ts constructs it from the pulled spec, buildTools/write/exec factories consume it, and
+ *  the approval stash FREEZES it at pause time so an island resume rebuilds the exact same tool
+ *  face (never wider). Manual entrypoints never construct one — absent everywhere means the
+ *  pre-ADR-004 behaviour, byte-identical. */
+export interface AgentRunContext {
+  agentId: string
+  /** The owner's per-agent allow-list, already normalized: an agent run ALWAYS carries an array
+   *  (a malformed spec normalizes to [] — fail-closed, ADR-004 §5.1); undefined only survives in
+   *  hand-built test contexts and wrapCfgForAgentRun re-normalizes it to []. */
+  allowedTools?: string[]
+  modeGrants?: AgentModeGrants
+}
+
+/** Registration-time matrix row (ADR-001 D3, exec row revised by ADR-004 D2): may a tool of this
+ *  class exist in the ToolSet of a run in this mode? read/domain_write → every mode;
+ *  capability_change/outbound → manual_chat only (permanently — no grant key exists for them);
+ *  exec → manual_chat, OR a non-manual run whose per-agent grants carry exec===true (the owner's
+ *  explicit opt-in, spec-derived). `grants` is only ever passed by the headless agent-run path;
+ *  manual callers omit it (undefined = the pre-ADR-004 matrix, so a forgotten param is always
+ *  SAFER, never wider). */
 export function isToolClassAllowedInMode(
   toolClass: GatewayToolClass,
-  mode: AgentContextMode
+  mode: AgentContextMode,
+  grants?: AgentModeGrants
 ): boolean {
   if (mode === 'manual_chat') return true
-  return toolClass === 'read' || toolClass === 'domain_write'
+  if (toolClass === 'read' || toolClass === 'domain_write') return true
+  if (toolClass === 'exec') return grants?.exec === true
+  return false // capability_change + outbound: false under ANY grants (structurally un-grantable)
 }
 
 /** May approvalMode 'auto-reversible' skip the approval card for this tool? Only a reversible
@@ -153,12 +184,19 @@ export function mayAutoApprove(toolClass: GatewayToolClass, mode: AgentContextMo
  *  every create* block AND applySkillGating (codex P2-2: no early return may let a class slip
  *  past). manual_chat is an identity pass-through (the same object, zero diff — S2 keeps every
  *  production run manual, so current behaviour is byte-identical); non-manual modes drop every
- *  capability_change/exec/outbound tool so the model structurally cannot see them. */
-export function applyContextModePolicy(tools: ToolSet, mode: AgentContextMode): ToolSet {
+ *  capability_change/exec/outbound tool so the model structurally cannot see them — except an
+ *  exec tool under an explicit per-agent grant (ADR-004 D2). Registration here and the runtime
+ *  modeDenied double-insurance (types.ts) consume the SAME function with the SAME grants object
+ *  (threaded from one agentRunContext) — there is no second decision point. */
+export function applyContextModePolicy(
+  tools: ToolSet,
+  mode: AgentContextMode,
+  grants?: AgentModeGrants
+): ToolSet {
   if (mode === 'manual_chat') return tools
   const out: ToolSet = {}
   for (const [name, t] of Object.entries(tools)) {
-    if (isToolClassAllowedInMode(classOfTool(name), mode)) out[name] = t
+    if (isToolClassAllowedInMode(classOfTool(name), mode, grants)) out[name] = t
   }
   return out
 }

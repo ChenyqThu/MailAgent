@@ -26,7 +26,7 @@
 import { randomUUID } from 'node:crypto'
 
 import type { MailAgentUIMessage } from '@shared/assistant/uiMessage'
-import type { AgentContextMode } from './tools/policy'
+import type { AgentContextMode, AgentRunContext } from './tools/policy'
 
 /** 30 min — long enough for a human to notice the island card and come back; matches the island ack
  *  pending TTL (island_agent.DEFAULT_AGENT_ACK_TTL_SEC) AND the extended ApprovalGuard TTL the
@@ -58,6 +58,14 @@ export interface StashInput {
    *  original entrypoint asserted — it can never escalate. REQUIRED: the stash is process-memory
    *  (gateway restart drops it), so there is no cross-version row to stay compatible with. */
   contextMode: AgentContextMode
+  /** S5 W4 (ADR-004 §4.4) — the per-agent tool context FROZEN at pause time (same discipline as
+   *  contextMode: read from the pause-time server cfg, never from a body). The island resume
+   *  rebuilds cfg through wrapCfgForAgentRun with exactly this object, so the resumed drain keeps
+   *  the same allowedTools narrowing + grants — pause→resume can never widen the tool face. Also
+   *  the fix for the S4 defect where a resumed agent run silently lost its allowedTools narrowing
+   *  (resume used the base cfg). Manual runs stash undefined here → byte-identical to the
+   *  pre-ADR-004 stash. */
+  agentRunContext?: AgentRunContext
 }
 
 export interface StashedApprovalRun extends StashInput {

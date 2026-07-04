@@ -33,6 +33,7 @@ import {
   mayAutoApprove,
   normalizeContextMode,
   type AgentContextMode,
+  type AgentModeGrants,
   type GatewayToolClass
 } from './policy'
 // RELATIVE import (not the @shared alias) so the pure-Node poc harness (tsx, which doesn't
@@ -246,6 +247,13 @@ export function auditedWriteTool<I>(
      *  tool hard-rejects at execute (runtime double-insurance — registration-time filtering
      *  should have kept it out of the ToolSet already). */
     contextMode?: AgentContextMode
+    /** S5 W4 (ADR-004 D2) — the per-agent mode grants of a headless agent run, threaded by the
+     *  exec factory from the SAME agentRunContext that registration (applyContextModePolicy)
+     *  consumed, so the runtime modeDenied double-insurance below evaluates the SAME
+     *  isToolClassAllowedInMode(class, mode, grants) — one function, one grants object, no second
+     *  decision point. Absent (every manual caller + every non-exec factory) → the pre-ADR-004
+     *  matrix, byte-identical. */
+    modeGrants?: AgentModeGrants
     /** Part B (harness 上岛) — one-shot execution claim. When true, execute calls guard.consume()
      *  right after verify so an approval executes AT MOST ONCE across BOTH resume paths (island
      *  /api/ai/approval/decide and renderer /api/ai/chat): whichever lands first consumes, the second
@@ -284,7 +292,7 @@ export function auditedWriteTool<I>(
   // runtime double-insurance for an entrypoint that missed the mode.
   const toolClass = opts.testOnlyToolClass ?? classOfTool(opts.name)
   const contextMode = normalizeContextMode(opts.contextMode)
-  const modeDenied = !isToolClassAllowedInMode(toolClass, contextMode)
+  const modeDenied = !isToolClassAllowedInMode(toolClass, contextMode, opts.modeGrants)
 
   // S2 W1 — when a structured whitelist rule auto-allows an exec run (needsApproval returns false),
   // stash the matched rule id keyed by toolCallId so execute (same call, right after) can record

@@ -26,7 +26,12 @@ import { createWebTools } from './web'
 import { createExecTools } from './exec'
 import { createSkillSupplyTools } from './skill_supply'
 import { createCustomAgentTools } from './agents'
-import { applyContextModePolicy, normalizeContextMode, type AgentContextMode } from './policy'
+import {
+  applyContextModePolicy,
+  normalizeContextMode,
+  type AgentContextMode,
+  type AgentRunContext
+} from './policy'
 import type { GatewayApprovalMode, GatewayToolAuditCollector } from './types'
 
 export interface BuildGatewayToolsOpts {
@@ -117,6 +122,13 @@ export interface BuildGatewayToolsOpts {
    *  Every current entrypoint passes 'manual_chat', so production behaviour is byte-identical;
    *  tests must pass it explicitly. */
   contextMode?: AgentContextMode
+  /** S5 W4 (ADR-004) — the per-agent run context of a headless custom-agent run, threaded from
+   *  wrapCfgForAgentRun via cfg.buildTools' fourth parameter. Consumed three ways, all from this
+   *  ONE object: (a) the write factory's headless-only policyEvaluate injection (agentId), (b) the
+   *  exec factory's whitelist evaluate + audit annotation (agentId + modeGrants for the runtime
+   *  modeDenied), (c) the LAST assembly step's matrix grants (applyContextModePolicy). Absent
+   *  (every manual entrypoint) → assembly byte-identical to the pre-ADR-004 set. */
+  agentRunContext?: AgentRunContext
 }
 
 /** Names of the read tools exposed by the gateway (for tests / observability). */
@@ -165,7 +177,11 @@ export function buildGatewayTools(
         a2uiEnabled: opts.a2uiEnabled,
         approvalMode: opts.approvalMode,
         oneShot: opts.oneShotWrites,
-        contextMode
+        contextMode,
+        // S5 W4 (ADR-004 D1) — headless agent run only: the factory injects the per-agent
+        // domain_write whitelist evaluate. Manual runs never carry a context → undefined →
+        // the factory's policyEvaluate stays absent, byte-identical.
+        agentRunContext: opts.agentRunContext
       })
     )
     // phase-04b — the high-risk send tool layers on top of the write tools (it needs the same
@@ -240,7 +256,11 @@ export function buildGatewayTools(
         a2uiEnabled: opts.a2uiEnabled,
         approvalMode: opts.approvalMode,
         oneShot: opts.oneShotWrites,
-        contextMode
+        contextMode,
+        // S5 W4 (ADR-004 D2) — per-agent grants + agentId for a headless run: the SAME grants
+        // applyContextModePolicy consumes below reach the tools' runtime modeDenied, and the
+        // whitelist evaluate + /exec/* audit annotation carry agentId/contextMode.
+        agentRunContext: opts.agentRunContext
       })
     )
   }
@@ -289,6 +309,8 @@ export function buildGatewayTools(
   // S2 W0 — context-mode policy LAST, after every create* block AND skill gating (ADR-001 D3 /
   // codex P2-2: no assembly path may leave a tool unfiltered). manual_chat (every current
   // production run) is an identity pass-through → byte-identical; non-manual modes drop every
-  // capability_change/exec/outbound tool so the model structurally cannot see them.
-  return applyContextModePolicy(gated, contextMode)
+  // capability_change/exec/outbound tool so the model structurally cannot see them — except exec
+  // under an explicit per-agent grant (ADR-004 D2; the same grants object the exec tools' runtime
+  // modeDenied consumed above, from the one agentRunContext).
+  return applyContextModePolicy(gated, contextMode, opts.agentRunContext?.modeGrants)
 }

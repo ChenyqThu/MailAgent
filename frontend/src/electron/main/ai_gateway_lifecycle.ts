@@ -556,7 +556,7 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     // cutover master it used to follow was GA'd away). `approvalMode` (PART 2) comes from the
     // request body (default 'always'); 'auto-reversible' lets reversible preview writes skip the
     // card. The blocking send always asks regardless (safety floor in auditedSendTool).
-    buildTools: (collector, approvalMode, contextMode) =>
+    buildTools: (collector, approvalMode, contextMode, agentRunContext) =>
       buildGatewayTools(
         {
           domain,
@@ -595,7 +595,11 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
           skillInstallToolsEnabled,
           // S5 W3 — conversational custom-agent CRUD tools (MAILAGENT_CUSTOM_AGENTS_ENABLED, the same
           // flag that gates the S4 headless kernel; default off → byte-identical to the S4 set).
-          customAgentToolsEnabled: customAgentsEnabled
+          customAgentToolsEnabled: customAgentsEnabled,
+          // S5 W4 (ADR-004) — the per-agent run context of a headless agent run, from
+          // wrapCfgForAgentRun's buildTools wrapper (4th param). Manual runs pass undefined →
+          // assembly byte-identical.
+          agentRunContext
         },
         collector
       ),

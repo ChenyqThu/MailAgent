@@ -16,9 +16,11 @@ import { MockLanguageModelV3 } from 'ai/test'
 
 import { startAiGatewayServer, type AiGatewayHandle } from '../../src/ai-gateway/server'
 import {
+  agentRunContextFromSpec,
   deriveContextMode,
   intersectAllowedTools,
-  runHeadlessAgent
+  runHeadlessAgent,
+  wrapCfgForAgentRun
 } from '../../src/ai-gateway/agentRun'
 import type { AiGatewayConfig } from '../../src/ai-gateway/config'
 import { ApprovalGuard } from '../../src/ai-gateway/security/approval'
@@ -93,10 +95,13 @@ function captureToolsModel(sink: string[][]): MockLanguageModelV3 {
   })
 }
 
-/** Minimal spy domain — the write tool never executes on a pause, so draftReply is unused here. */
+/** Minimal spy domain — the write tool never executes on a pause, so draftReply is unused here.
+ *  policyEvaluate answers 'ask' (S5 W4: a headless agent run consults the per-agent whitelist;
+ *  no rule → ask → the pause, same as before the wave). */
 function minimalDomain(): MailAgentDomainClient {
   return {
-    draftReply: async () => ({ internalId: 5, mailbox: '草稿箱', accountName: 'a', draftId: 'd1' })
+    draftReply: async () => ({ internalId: 5, mailbox: '草稿箱', accountName: 'a', draftId: 'd1' }),
+    policyEvaluate: async () => ({ decision: 'ask', rule_id: null })
   } as unknown as MailAgentDomainClient
 }
 
@@ -107,7 +112,10 @@ function makeSpec(over?: Partial<AgentRunSpec>): AgentRunSpec {
     trigger: { kind: 'cron', firedAt: '2026-07-03T09:00:00Z' },
     prompt: { taskPrompt: '总结今天的邮件' },
     model: 'claude-sonnet-4-6',
-    toolPolicy: {},
+    // S5 W4 — the projection ALWAYS emits a non-empty allowedTools for a custom agent (§5.1
+    // default-safe-set); a spec with the field MISSING is malformed and fail-closes to [] (its
+    // own test below). The default here mirrors the real wire shape.
+    toolPolicy: { allowedTools: ['email_search', 'email_body', 'email_flag', 'email_draft_reply'] },
     budget: { maxSteps: 8, maxRunSeconds: 300 },
     sessionTitle: 'DMS · 2026-07-03 09:00',
     ...over
@@ -160,6 +168,70 @@ describe('intersectAllowedTools', () => {
     expect(Object.keys(intersectAllowedTools(set(), ['email_search', 'run_command']))).toEqual([
       'email_search'
     ])
+  })
+})
+
+// ── agentRunContextFromSpec (pure) — discriminated grants construction (ADR-004 §4.1, P1-4) ───────
+
+describe('agentRunContextFromSpec — discriminated boolean, never a raw passthrough', () => {
+  test('grantExec === true → modeGrants {exec:true}; agentId/allowedTools carried', () => {
+    const ctx = agentRunContextFromSpec(
+      makeSpec({
+        toolPolicy: { allowedTools: ['email_flag'], grantExec: true } as AgentRunSpec['toolPolicy']
+      })
+    )
+    expect(ctx).toEqual({ agentId: 'dms', allowedTools: ['email_flag'], modeGrants: { exec: true } })
+  })
+
+  test.each([
+    ['"yes"', 'yes'],
+    ['1', 1],
+    ['{} (object)', {}],
+    ['"true" (string)', 'true'],
+    ['null', null],
+    ['undefined (absent)', undefined]
+  ])('grantExec = %s → {exec:false} (only the discriminated true counts)', (_label, value) => {
+    const ctx = agentRunContextFromSpec(
+      makeSpec({
+        toolPolicy: { allowedTools: [], grantExec: value } as unknown as AgentRunSpec['toolPolicy']
+      })
+    )
+    expect(ctx.modeGrants).toEqual({ exec: false })
+  })
+
+  test('junk keys on toolPolicy never reach the grants object (constructed, not spread)', () => {
+    const ctx = agentRunContextFromSpec(
+      makeSpec({
+        toolPolicy: {
+          allowedTools: [],
+          grantExec: true,
+          web: true,
+          outbound: true,
+          capability_change: true
+        } as unknown as AgentRunSpec['toolPolicy']
+      })
+    )
+    // exactly the one key — a future spec field can never smuggle a second grant in
+    expect(Object.keys(ctx.modeGrants!)).toEqual(['exec'])
+  })
+
+  test('allowedTools missing / non-array / non-string entries → [] resp. filtered (fail-closed §5.1)', () => {
+    expect(agentRunContextFromSpec(makeSpec({ toolPolicy: {} })).allowedTools).toEqual([])
+    expect(
+      agentRunContextFromSpec(makeSpec({ toolPolicy: undefined })).allowedTools
+    ).toEqual([])
+    expect(
+      agentRunContextFromSpec(
+        makeSpec({ toolPolicy: { allowedTools: 'email_flag' } as unknown as AgentRunSpec['toolPolicy'] })
+      ).allowedTools
+    ).toEqual([])
+    expect(
+      agentRunContextFromSpec(
+        makeSpec({
+          toolPolicy: { allowedTools: ['email_flag', 42, null] } as unknown as AgentRunSpec['toolPolicy']
+        })
+      ).allowedTools
+    ).toEqual(['email_flag'])
   })
 })
 
@@ -277,6 +349,93 @@ describe('runHeadlessAgent — allowedTools intersection reaches streamText', ()
   })
 })
 
+// ── S5 W4 (ADR-004) — grants propagation + the allowedTools missing→[] fail-closed gate ──────────
+
+describe('runHeadlessAgent — per-agent exec grant + fail-closed allowedTools (ADR-004)', () => {
+  /** Full-flag cfg whose buildTools forwards the 4th param (agentRunContext) into
+   *  buildGatewayTools, mirroring the production lifecycle wiring exactly. */
+  function grantAwareCfg(seenTools: string[][]): AiGatewayConfig {
+    const guard = new ApprovalGuard()
+    return {
+      port: 0,
+      baseUrl: 'https://crs.example/api',
+      apiKey: 'sk-test',
+      model: 'claude-sonnet-4-6',
+      createModel: () => captureToolsModel(seenTools),
+      buildTools: (collector, _am, mode, agentRunContext) =>
+        buildGatewayTools(
+          {
+            domain: minimalDomain(),
+            writeToolsEnabled: true,
+            approvalGuard: guard,
+            execToolsEnabled: true,
+            webToolsEnabled: true,
+            skillInstallToolsEnabled: true,
+            contextMode: mode,
+            agentRunContext
+          },
+          collector
+        ),
+      persistTurn: () => {}
+    }
+  }
+
+  test('grantExec true + run_command allowed → the exec tool REACHES streamText in a cron run; capability_change/outbound still absent', async () => {
+    const seenTools: string[][] = []
+    const spec = makeSpec({
+      toolPolicy: {
+        allowedTools: ['email_flag', 'run_command', 'file_read', 'skill_install', 'web_fetch'],
+        grantExec: true
+      } as AgentRunSpec['toolPolicy']
+    })
+    await runHeadlessAgent(grantAwareCfg(seenTools), { jobId: 7, spec, sessionId: null }, new AbortController().signal)
+    expect(seenTools.length).toBeGreaterThan(0)
+    const names = seenTools[0]
+    expect(names).toContain('run_command')
+    expect(names).toContain('file_read')
+    expect(names).toContain('email_flag')
+    // the grant opens ONLY the exec class — capability_change/outbound remain structurally absent
+    // even when the owner (mis)lists them in allowedTools (intersection only reduces)
+    expect(names).not.toContain('skill_install')
+    expect(names).not.toContain('web_fetch')
+  })
+
+  test('junk grantExec ("yes") → run_command NEVER reaches streamText (discriminated construction)', async () => {
+    const seenTools: string[][] = []
+    const spec = makeSpec({
+      toolPolicy: {
+        allowedTools: ['email_flag', 'run_command'],
+        grantExec: 'yes'
+      } as unknown as AgentRunSpec['toolPolicy']
+    })
+    await runHeadlessAgent(grantAwareCfg(seenTools), { jobId: 7, spec, sessionId: null }, new AbortController().signal)
+    expect(seenTools[0]).not.toContain('run_command')
+    expect(seenTools[0]).toContain('email_flag')
+  })
+
+  test('allowedTools MISSING (malformed spec) → the model sees ZERO tools (fail-closed to [], §5.1)', async () => {
+    const seenTools: string[][] = []
+    const spec = makeSpec({ toolPolicy: {} })
+    await runHeadlessAgent(grantAwareCfg(seenTools), { jobId: 7, spec, sessionId: null }, new AbortController().signal)
+    expect(seenTools.length).toBeGreaterThan(0)
+    expect(seenTools[0]).toEqual([])
+  })
+
+  test('wrapCfgForAgentRun records the context on the cfg (the stash freeze source) and normalizes undefined allowedTools to []', () => {
+    const base: AiGatewayConfig = {
+      port: 0,
+      baseUrl: 'https://crs.example/api',
+      apiKey: 'sk-test',
+      model: 'claude-sonnet-4-6',
+      buildTools: () => ({ email_flag: tool({ description: 'b', inputSchema: z.object({}), execute: async () => ({}) }) })
+    }
+    const wrapped = wrapCfgForAgentRun(base, { agentId: 'dms' })
+    expect(wrapped.agentRunContext).toEqual({ agentId: 'dms', allowedTools: [] })
+    // and the wrapper's buildTools intersects against that [] → empty
+    expect(Object.keys(wrapped.buildTools!([], undefined, 'cron_headless'))).toEqual([])
+  })
+})
+
 // ── the three drain outcomes ──────────────────────────────────────────────────────────────────────
 
 describe('runHeadlessAgent — drain outcomes', () => {
@@ -338,6 +497,16 @@ describe('runHeadlessAgent — drain outcomes', () => {
     expect(result.outcome).toBe('paused_handoff')
     expect(result.sessionId).toBe(55)
     expect(stash.size()).toBe(1) // island on → stashed for server-side (island) resume
+    // S5 W4 (ADR-004 §4.4) — the pause FREEZES the per-agent tool context into the stash (from the
+    // pause-time server cfg, wrapCfgForAgentRun set it): the island resume rebuilds the exact same
+    // narrowed tool face. This is the fix-anchor for the S4 "resume loses allowedTools" defect.
+    const entry = stash.peek('tc1')
+    expect(entry?.agentRunContext).toEqual({
+      agentId: 'dms',
+      allowedTools: ['email_search', 'email_body', 'email_flag', 'email_draft_reply'],
+      modeGrants: { exec: false }
+    })
+    expect(entry?.contextMode).toBe('cron_headless')
   })
 
   test('paused_handoff (island OFF): still paused_handoff but the stash is NOT touched', async () => {

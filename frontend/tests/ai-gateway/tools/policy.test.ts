@@ -24,6 +24,7 @@ import {
   mayAutoApprove,
   normalizeContextMode,
   type AgentContextMode,
+  type AgentModeGrants,
   type GatewayToolClass
 } from '../../../src/ai-gateway/tools/policy'
 import { ApprovalGuard } from '../../../src/ai-gateway/security/approval'
@@ -129,6 +130,91 @@ describe('matrix — isToolClassAllowedInMode (registration) × mayAutoApprove (
         expect(mayAutoApprove(cls, mode), `${cls} in ${mode}`).toBe(expected)
       }
     }
+  })
+})
+
+// S5 W4 (ADR-004 D2/§9) — the matrix's THIRD axis: per-agent grants. Three invariants pinned:
+// capability_change/outbound are false under ANY grants (structurally un-grantable — the type has
+// only an exec key, and junk keys must have no effect); grants are consumed ONLY outside
+// manual_chat (manual is true regardless); exec flips ONLY on the discriminated `exec === true`.
+describe('matrix — 3-axis (class × mode × grants, ADR-004)', () => {
+  // junk objects a buggy/hostile caller could smuggle in (runtime has no type erasure guard —
+  // the function itself must only ever read `exec === true`).
+  const GRANTS_AXIS: Array<{ label: string; grants?: AgentModeGrants }> = [
+    { label: 'undefined', grants: undefined },
+    { label: '{}', grants: {} },
+    { label: '{exec:true}', grants: { exec: true } },
+    { label: '{exec:false}', grants: { exec: false } },
+    { label: "{exec:'yes'} (junk value)", grants: { exec: 'yes' } as unknown as AgentModeGrants },
+    { label: '{exec:1} (junk value)', grants: { exec: 1 } as unknown as AgentModeGrants },
+    {
+      label: '{web:true, outbound:true, capability_change:true} (junk keys)',
+      grants: { web: true, outbound: true, capability_change: true } as unknown as AgentModeGrants
+    }
+  ]
+
+  test.each(GRANTS_AXIS)('registration under grants=$label', ({ grants }) => {
+    const execGranted = grants?.exec === true
+    for (const mode of AGENT_CONTEXT_MODES) {
+      for (const cls of GATEWAY_TOOL_CLASS_VALUES) {
+        const expected =
+          mode === 'manual_chat'
+            ? true // grants never consulted in manual
+            : cls === 'read' || cls === 'domain_write'
+              ? true
+              : cls === 'exec'
+                ? execGranted
+                : false // capability_change + outbound:恒 false under ANY grants
+        expect(isToolClassAllowedInMode(cls, mode, grants), `${cls} × ${mode} × ${JSON.stringify(grants)}`).toBe(
+          expected
+        )
+      }
+    }
+  })
+
+  test('applyContextModePolicy with an exec grant: exec tools survive a headless mode; capability_change/outbound still stripped', () => {
+    const tools = buildAllTools('manual_chat')
+    for (const mode of ['untrusted_trigger', 'cron_headless'] as const) {
+      const filtered = applyContextModePolicy(tools, mode, { exec: true })
+      for (const name of CLASSES_OF('exec')) {
+        expect(filtered[name], `${name} (exec) must survive ${mode} under the grant`).toBeDefined()
+      }
+      for (const name of [...CLASSES_OF('capability_change'), ...CLASSES_OF('outbound')]) {
+        expect(filtered[name], `${name} must stay stripped in ${mode} despite the grant`).toBeUndefined()
+      }
+    }
+  })
+
+  test('applyContextModePolicy in manual_chat ignores grants entirely (same identity pass-through object)', () => {
+    const tools = buildAllTools('manual_chat')
+    expect(applyContextModePolicy(tools, 'manual_chat', { exec: true })).toBe(tools)
+  })
+
+  test('buildGatewayTools × agentRunContext: the exec grant reaches the LAST assembly step', () => {
+    const build = (grants?: AgentModeGrants) =>
+      buildGatewayTools({
+        domain: mockDomain(() => okEnvelope([])),
+        writeToolsEnabled: true,
+        approvalGuard: new ApprovalGuard(),
+        execToolsEnabled: true,
+        contextMode: 'cron_headless',
+        ...(grants !== undefined
+          ? { agentRunContext: { agentId: 'dms', allowedTools: [], modeGrants: grants } }
+          : {})
+      })
+    // no context → exec absent (the S2 floor)
+    expect(build(undefined).run_command).toBeUndefined()
+    // discriminated true → the three exec tools register (still HITL'd per-call by evaluate)
+    const granted = build({ exec: true })
+    for (const name of ['run_command', 'file_read', 'file_write']) {
+      expect(granted[name], `${name} must register under the grant`).toBeDefined()
+    }
+    // junk value → no registration (only `exec === true` counts)
+    expect(build({ exec: 'yes' } as unknown as AgentModeGrants).run_command).toBeUndefined()
+    // capability_change/outbound stay absent even under the grant
+    expect(granted.skill_install).toBeUndefined()
+    expect(granted.web_fetch).toBeUndefined()
+    expect(granted.email_prepare_send).toBeUndefined()
   })
 })
 
