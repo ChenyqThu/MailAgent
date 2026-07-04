@@ -2339,8 +2339,9 @@ export interface ReportAgentConfig {
   /** v29 preprocess：行级 fallback 模型链。null = 跟随全局 LLM_FALLBACK_MODELS；
    *  [] = 显式不设兜底。仅 type='preprocess' 有意义（其余恒 null）。 */
   fallback_models?: string[] | null
-  /** v30 Custom Agent（type='custom'）触发/工具/预算。仅 type='custom' 有意义（其余恒 null）；
-   *  W1 无 UI 消费（占位供 S5 CRUD）。 */
+  /** v30 触发/工具/预算。trigger 对 type='custom'（CRUD）与 'project_progress'（S5 W5a 单例行，
+   *  复用 email_filter 词汇存 sender/subject）均有意义并投影；tool_policy/budget 仍 custom-only
+   *  （其余恒 null，project_progress 执行不进 gateway）。 */
   trigger?: CustomAgentTrigger | null
   tool_policy?: CustomAgentToolPolicy | null
   budget?: CustomAgentBudget | null

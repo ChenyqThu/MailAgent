@@ -107,7 +107,11 @@ def resolve_agent(agent: Dict[str, Any]) -> Dict[str, Any]:
             return None
         return v if isinstance(v, dict) else None
     _is_custom = agent_type == "custom"
-    trigger = _parse_obj(agent.get("trigger_json")) if _is_custom else None
+    # v31: project_progress 单例行也用 trigger_json 存触发配置（email_filter 词汇，运行时走
+    # ProjectProgressDetector 子串匹配）→ 投影 trigger 供 Settings 抽屉读 sender/subject。
+    # tool_policy/budget 仍 custom-only（project_progress 执行不进 gateway，无工具/预算语义）。
+    _projects_trigger = agent_type in ("custom", "project_progress")
+    trigger = _parse_obj(agent.get("trigger_json")) if _projects_trigger else None
     tool_policy = _parse_obj(agent.get("tool_policy_json")) if _is_custom else None
     budget = _parse_obj(agent.get("budget_json")) if _is_custom else None
     return {

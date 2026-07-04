@@ -2454,6 +2454,28 @@
       "envSaveError": "Failed to save enable state",
       "rowSaveError": "Failed to save preprocessing config"
     },
+    "projectProgress": {
+      "section": "Project Report Sync",
+      "sectionHint": "Detect project report emails (xlsx attachment) → auto-parse and sync into the Notion progress database. Deterministic pipeline, no AI.",
+      "subtitle": "Matched report emails auto-parse xlsx → sync into the Notion progress database",
+      "configTitle": "Project Report Sync · {title}",
+      "masterOff": "Master off",
+      "masterOnNote": "Master switch is on (env PROJECT_PROGRESS_SYNC_ENABLED). The enable toggle and trigger rules below take effect on save.",
+      "masterOffNote": "Master switch is off: set PROJECT_PROGRESS_SYNC_ENABLED=true in .env and restart the service to run. The enable toggle and trigger rules here are still saved but only apply once the master switch is on.",
+      "enable": "Enable auto-sync",
+      "enableHint": "Matched report emails auto-trigger the sync (subject to the master switch PROJECT_PROGRESS_SYNC_ENABLED).",
+      "subjectPattern": "Subject regex",
+      "subjectPatternHint": "Regex against the email subject; a match marks it as a project report (required)",
+      "subjectPlaceholder": "e.g. \\[weekly\\] project progress",
+      "senderPattern": "Sender (substring, optional)",
+      "senderPatternHint": "Case-insensitive substring match on the address; empty = any sender",
+      "senderPlaceholder": "e.g. weekly@corp.com",
+      "database": "Progress database (read-only)",
+      "databaseHint": "Sourced from .env PROJECT_PROGRESS_DATABASE_ID, not edited here",
+      "databaseUnset": "(not configured — sync will fail; set PROJECT_PROGRESS_DATABASE_ID in .env)",
+      "errEmptyTrigger": "Subject regex and sender cannot both be empty (use the enable toggle above to disable)",
+      "rowSaveError": "Failed to save project report config"
+    },
     "custom": {
       "section": "Custom Agents",
       "sectionHint": "Define triggers (schedule / email events), a task prompt, allowed tools and budgets to let an agent run on its own.",

@@ -100,9 +100,13 @@ function _toAgentConfig(row: AgentRow): ReportAgentConfig {
     hours: [9]
   })
   const prompt = (row.prompt ?? '').trim()
-  // v30 custom agent：仅 type='custom' 解析 trigger/tool_policy/budget（对齐 wire.resolve_agent
-  // 的 _is_custom 门控），其余 type 恒 null。NULL/非法 JSON → null（不回填默认）。
+  // v30 custom agent：仅 type='custom' 解析 tool_policy/budget（对齐 wire.resolve_agent 的
+  // _is_custom 门控），其余 type 恒 null。NULL/非法 JSON → null（不回填默认）。
   const isCustom = (row.type || 'report') === 'custom'
+  // v31 project_progress 单例行也用 trigger_json 存触发配置（email_filter 词汇，运行时走
+  // ProjectProgressDetector 子串匹配）→ 投影 trigger 供 Settings 抽屉读 sender/subject
+  // （对齐 wire.resolve_agent 的 _projects_trigger）。tool_policy/budget 仍 custom-only。
+  const projectsTrigger = isCustom || (row.type || 'report') === 'project_progress'
   return {
     id: row.id,
     type: row.type || 'report',
@@ -131,8 +135,10 @@ function _toAgentConfig(row: AgentRow): ReportAgentConfig {
       row.type === 'preprocess'
         ? _parseJson<string[] | null>(row.fallback_models_json, null)
         : null,
-    // v30 custom agent 三字段（仅 custom 解析；非 custom 恒 null）。
-    trigger: isCustom ? _parseJson<CustomAgentTrigger | null>(row.trigger_json, null) : null,
+    // v30/v31：trigger 对 custom + project_progress 解析（其余恒 null）；tool_policy/budget 仅 custom。
+    trigger: projectsTrigger
+      ? _parseJson<CustomAgentTrigger | null>(row.trigger_json, null)
+      : null,
     tool_policy: isCustom
       ? _parseJson<CustomAgentToolPolicy | null>(row.tool_policy_json, null)
       : null,

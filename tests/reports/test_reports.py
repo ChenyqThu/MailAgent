@@ -291,7 +291,7 @@ class TestStore:
         ver = conn.execute("SELECT value FROM sync_state WHERE key='db_version'").fetchone()[0]
         conn.close()
         assert n == 1
-        assert int(ver) == 30  # v30: custom agent 三列 + async_jobs CAS 两列（S4 W1）
+        assert int(ver) == SyncStore.DB_VERSION  # migration 把库带到当前版本（钉常量不硬编码）
         a = store.get_agent("email_search_agent")
         assert a["model"] == "gpt-5.5" and a["enabled"] == 0  # 用户改动保留
 

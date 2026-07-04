@@ -25,10 +25,11 @@ def _db_version(db):
         conn.close()
 
 
-def test_fresh_db_is_v30_with_new_columns(tmp_path):
+def test_fresh_db_is_current_version_with_new_columns(tmp_path):
     db = tmp_path / "s.db"
     SyncStore(str(db))
-    assert _db_version(db) == 30
+    # 钉当前 DB_VERSION 常量（migration 把库带到当前版本）—— 后续 bump 不再因硬编码红一次。
+    assert _db_version(db) == SyncStore.DB_VERSION
     assert _RA_NEW <= _cols(db, "report_agent")
     assert _AJ_NEW <= _cols(db, "async_jobs")
 
@@ -55,7 +56,7 @@ def test_v29_to_v30_migration_adds_columns(tmp_path):
 
     # 触发迁移。
     SyncStore(str(db))
-    assert _db_version(db) == 30
+    assert _db_version(db) == SyncStore.DB_VERSION
     assert _RA_NEW <= _cols(db, "report_agent")
     assert _AJ_NEW <= _cols(db, "async_jobs")
     # 既有数据保留。
@@ -70,7 +71,7 @@ def test_migration_idempotent(tmp_path):
     SyncStore(str(db))
     SyncStore(str(db))  # 重跑不崩、不重复
     SyncStore(str(db))
-    assert _db_version(db) == 30
+    assert _db_version(db) == SyncStore.DB_VERSION
     assert _RA_NEW <= _cols(db, "report_agent")
     assert _AJ_NEW <= _cols(db, "async_jobs")
 

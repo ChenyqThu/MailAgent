@@ -2454,6 +2454,28 @@
       "envSaveError": "保存启用状态失败",
       "rowSaveError": "保存预处理配置失败"
     },
+    "projectProgress": {
+      "section": "项目周报同步",
+      "sectionHint": "识别项目周报邮件（xlsx 附件）→ 自动解析并同步进 Notion 项目进度库。确定性流程，不走 AI。",
+      "subtitle": "匹配的周报邮件自动解析 xlsx → 同步进 Notion 项目进度库",
+      "configTitle": "项目周报同步 · {title}",
+      "masterOff": "总闸未开",
+      "masterOnNote": "总开关已开（环境变量 PROJECT_PROGRESS_SYNC_ENABLED）。下方启用开关与触发规则保存即生效。",
+      "masterOffNote": "总开关未开：需在 .env 设 PROJECT_PROGRESS_SYNC_ENABLED=true 并重启服务后才会运行。此处的启用开关与触发规则会保存，但总闸开启后才生效。",
+      "enable": "启用自动同步",
+      "enableHint": "匹配的周报邮件自动触发同步（受总开关 PROJECT_PROGRESS_SYNC_ENABLED 约束）。",
+      "subjectPattern": "标题正则",
+      "subjectPatternHint": "正则匹配邮件标题；命中才认定为项目周报（必填）",
+      "subjectPlaceholder": "例如：\\[weekly\\] 项目进度",
+      "senderPattern": "发件人（子串，可选）",
+      "senderPatternHint": "邮箱子串匹配（不区分大小写）；留空 = 任意发件人",
+      "senderPlaceholder": "例如：weekly@corp.com",
+      "database": "项目进度库（只读）",
+      "databaseHint": "来源 .env PROJECT_PROGRESS_DATABASE_ID，非此处编辑",
+      "databaseUnset": "（未配置 —— 同步会失败，请在 .env 设 PROJECT_PROGRESS_DATABASE_ID）",
+      "errEmptyTrigger": "标题正则与发件人不能同时为空（要停用请用上方启用开关）",
+      "rowSaveError": "保存项目周报配置失败"
+    },
     "custom": {
       "section": "完全自定义 Agent",
       "sectionHint": "自定义触发（定时 / 邮件事件）、任务提示词、可用工具与预算，让 Agent 自动跑起来。",

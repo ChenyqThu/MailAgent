@@ -4,7 +4,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import type { ReportAgentConfig, ReportCadence, ReportConfigPatch } from '@shared/api/types'
+import type {
+  CustomAgentTrigger,
+  ReportAgentConfig,
+  ReportCadence,
+  ReportConfigPatch
+} from '@shared/api/types'
 import { DEFAULT_SEARCH_AGENT_PROMPT } from '@shared/assistant/searchAgentClient'
 import { CadencePill, ReportIcon, StatusBadge, Switch } from './primitives'
 import { CustomAgentDrawer, RunStateBadge } from './CustomAgentDrawer'
@@ -69,6 +74,12 @@ const PRIORITY_ENUM = ['🔴 紧急', '🟡 重要', '🟢 一般', '⚪ 低'] a
 const PREPROCESS_AGENT_ID = 'email_preprocess_agent'
 // 可注入分类 system prompt 的身份文档（profile-doc 名）；后端默认播种 ['soul','user']。
 const PREPROCESS_DOCS = ['soul', 'agent', 'rules', 'user'] as const
+
+// S5 W5a 「项目周报同步」专型行 —— 后端 DB v31 播种单行（id 固定、type='project_progress'）。
+// 触发（enabled + sender/subject）存 report_agent row（enabled 列 + trigger_json，Settings 改即
+// 生效）；总闸走全局 env PROJECT_PROGRESS_SYNC_ENABLED（.env，非 UI toggle）；执行走确定性 runner
+// （xlsx→Notion），不进 gateway。
+const PROJECT_PROGRESS_AGENT_ID = 'project_progress_sync'
 
 // 远程 web 下 env 写只读（镜像 AiTab.isWeb）：env:set 在 HttpApi 是 notImplemented，
 // 故启用/模型控件禁用；persona / 文档勾选 / 身份文档编辑走 HTTP row/profile 端点，仍可编辑。
@@ -2439,6 +2450,436 @@ function PreprocessConfigDrawer({
   )
 }
 
+// ─── 项目周报同步卡（type='project_progress'，S5 W5a）────────────────────────
+// 后端 DB v31 播种单行，无新建 / 删除。启用态 = row.enabled（Settings 抽屉 / 快捷开关改，
+// 保存即生效）；但**总闸走 env PROJECT_PROGRESS_SYNC_ENABLED**（.env，非 UI）—— 总闸未开时
+// 卡片显示「总闸未开」态，快捷开关禁用（防用户误以为能全 UI 开启）。
+function ProjectProgressAgentCard({
+  cfg,
+  masterEnabled,
+  onConfig,
+  onToggle
+}: {
+  cfg: ReportAgentConfig
+  /** env 总闸 PROJECT_PROGRESS_SYNC_ENABLED（.env）；off → 卡片「总闸未开」态。 */
+  masterEnabled: boolean
+  onConfig: () => void
+  /** 快捷开关：切 row.enabled（总闸未开 / web 时禁用不传）。 */
+  onToggle?: (v: boolean) => void
+}): React.ReactElement {
+  const { t } = useTranslation()
+  const rowEnabled = cfg.enabled
+  // 徽标三态：总闸未开（中性）→ 总闸开且行启用（绿）→ 总闸开但行停用（灰）。
+  const badgeLabel = !masterEnabled
+    ? t('agents.projectProgress.masterOff')
+    : rowEnabled
+      ? t('agents.card.enabled')
+      : t('agents.card.disabled')
+  const badgeOn = masterEnabled && rowEnabled
+  return (
+    <div
+      style={{
+        borderRadius: 14,
+        background: 'rgb(var(--ink-2) / 0.55)',
+        border: '1px solid rgb(var(--ink-border))',
+        overflow: 'hidden'
+      }}
+    >
+      <div className="flex items-center" style={{ gap: 13, padding: '18px 20px 16px' }}>
+        <span
+          style={{
+            width: 42,
+            height: 42,
+            borderRadius: 11,
+            display: 'grid',
+            placeItems: 'center',
+            flexShrink: 0,
+            background: 'rgb(var(--c-accent) / 0.14)',
+            border: '1px solid rgb(var(--c-accent) / 0.30)',
+            color: 'rgb(var(--c-accent))'
+          }}
+        >
+          <ReportIcon name="barchart" size={20} />
+        </span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div className="flex items-center" style={{ gap: 9 }}>
+            <h3 style={{ fontSize: 16, fontWeight: 600, color: 'rgb(var(--ink-fg))' }}>
+              {cfg.title}
+            </h3>
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 5,
+                fontSize: 11,
+                padding: '2px 8px',
+                borderRadius: 5,
+                color: badgeOn ? 'rgb(var(--c-ok))' : 'rgb(var(--ink-fg-3))',
+                background: badgeOn ? 'rgb(var(--c-ok) / 0.12)' : 'rgb(var(--ink-fg) / 0.05)',
+                border: `1px solid ${badgeOn ? 'rgb(var(--c-ok) / 0.25)' : 'rgb(var(--ink-border))'}`
+              }}
+            >
+              <span
+                style={{
+                  width: 6,
+                  height: 6,
+                  borderRadius: '50%',
+                  background: badgeOn ? 'rgb(var(--c-ok))' : 'rgb(var(--ink-fg-3))'
+                }}
+              />
+              {badgeLabel}
+            </span>
+          </div>
+          <div
+            style={{ marginTop: 4, fontSize: 12.5, color: 'rgb(var(--ink-fg-2))', lineHeight: 1.5 }}
+          >
+            {t('agents.projectProgress.subtitle')}
+          </div>
+        </div>
+        {/* 快捷开关切 row.enabled；总闸未开 / web 时禁用（防误以为能全 UI 开启）。 */}
+        <span
+          style={
+            !masterEnabled || IS_WEB || !onToggle
+              ? { opacity: 0.5, pointerEvents: 'none', display: 'flex', flexShrink: 0 }
+              : { display: 'flex', flexShrink: 0 }
+          }
+        >
+          <Switch on={rowEnabled} onChange={onToggle ?? (() => {})} />
+        </span>
+      </div>
+      <div
+        className="flex items-center"
+        style={{
+          gap: 10,
+          padding: '14px 20px',
+          borderTop: '1px solid rgb(var(--ink-border-soft))',
+          background: 'rgb(var(--ink-1) / 0.4)'
+        }}
+      >
+        <button
+          type="button"
+          onClick={onConfig}
+          className="flex items-center"
+          style={{
+            gap: 7,
+            padding: '8px 15px',
+            borderRadius: 8,
+            fontFamily: 'inherit',
+            fontSize: 13.5,
+            cursor: 'pointer',
+            color: 'rgb(var(--ink-fg-1))',
+            background: 'transparent',
+            border: '1px solid rgb(var(--ink-border))',
+            transition:
+              'background-color 120ms cubic-bezier(0.4,0,0.2,1), transform 120ms cubic-bezier(0.4,0,0.2,1)'
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.background = 'rgb(var(--ink-4))')}
+          onMouseDown={(e) => (e.currentTarget.style.transform = PRESS_SCALE)}
+          onMouseUp={(e) => (e.currentTarget.style.transform = 'none')}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = 'transparent'
+            e.currentTarget.style.transform = 'none'
+          }}
+        >
+          <ReportIcon name="cog" size={14} />
+          {t('agents.card.configure')}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// ─── 项目周报同步配置抽屉（S5 W5a）────────────────────────────────────────────
+// 镜像 PreprocessConfigDrawer 单例编辑脚手架，但更简：**只写 row**（enabled + trigger_json，
+// 保存即生效无需重启，走 useSetConfig）—— env 总闸 PROJECT_PROGRESS_SYNC_ENABLED / 项目进度库
+// 只读展示（.env 权威，非 UI）。sender 是子串、subject 是正则（后端 ProjectProgressDetector
+// 语义；trigger_json 复用 email_filter 字段名）；保存时后端 parse_trigger 校验（空触发拒）。
+function ProjectProgressConfigDrawer({
+  cfg,
+  open,
+  onClose
+}: {
+  cfg: ReportAgentConfig | null
+  open: boolean
+  onClose: () => void
+}): React.ReactElement | null {
+  const { t } = useTranslation()
+  const { save, isSaving } = useSetConfig()
+
+  const { shouldRender, scopeRef } = useExitAnimation<HTMLDivElement>(open, {
+    card: 'aside',
+    from: { autoAlpha: 0, xPercent: 100 },
+    syncBackdrop: true
+  })
+
+  const [enabled, setEnabled] = useState(false)
+  const [sender, setSender] = useState('')
+  const [subject, setSubject] = useState('')
+  const [triggerDirty, setTriggerDirty] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+
+  // 总闸 + 项目进度库只读展示（.env，非 UI 编辑）。
+  const masterEnabled = useEnvStore((s) =>
+    s.state.status === 'ready'
+      ? envFlagOn(s.state.snapshot.values['PROJECT_PROGRESS_SYNC_ENABLED'] ?? '')
+      : false
+  )
+  const databaseId = useEnvStore((s) =>
+    s.state.status === 'ready'
+      ? (s.state.snapshot.values['PROJECT_PROGRESS_DATABASE_ID'] ?? '')
+      : ''
+  )
+
+  /* eslint-disable react-hooks/set-state-in-effect */
+  useEffect(() => {
+    if (!open || !cfg) return
+    setEnabled(cfg.enabled)
+    const trig = cfg.trigger
+    setSender(trig?.kind === 'email_filter' ? (trig.sender_pattern ?? '') : '')
+    setSubject(trig?.kind === 'email_filter' ? (trig.subject_pattern ?? '') : '')
+    setTriggerDirty(false)
+    setErr(null)
+  }, [open, cfg])
+  /* eslint-enable react-hooks/set-state-in-effect */
+
+  if (!shouldRender) return null
+
+  const inputStyle: React.CSSProperties = {
+    width: '100%',
+    fontFamily: 'inherit',
+    fontSize: 13.5,
+    color: 'rgb(var(--ink-fg))',
+    background: 'rgb(var(--ink-1) / 0.55)',
+    border: '1px solid rgb(var(--ink-border))',
+    borderRadius: 8,
+    padding: '9px 11px'
+  }
+
+  const onSave = async (): Promise<void> => {
+    if (!cfg) return
+    // 触发若被改过则一并提交；改成空触发（sender+subject 全空）= 永不匹配的死配置，
+    // 后端 parse_trigger 会拒 —— 前端先给友好错误（要停用请用启用开关）。
+    const patch: ReportConfigPatch = { enabled }
+    if (triggerDirty) {
+      if (!sender.trim() && !subject.trim()) {
+        setErr(t('agents.projectProgress.errEmptyTrigger'))
+        return
+      }
+      const trig: CustomAgentTrigger = { v: 1, kind: 'email_filter' }
+      if (sender.trim()) trig.sender_pattern = sender.trim()
+      if (subject.trim()) trig.subject_pattern = subject.trim()
+      patch.trigger = trig
+    }
+    setErr(null)
+    try {
+      await save(PROJECT_PROGRESS_AGENT_ID, patch)
+      onClose()
+    } catch (e: unknown) {
+      setErr((e as Error).message)
+    }
+  }
+
+  return (
+    <div
+      ref={scopeRef}
+      onClick={onClose}
+      style={{ position: 'absolute', inset: 0, zIndex: 60, background: 'rgb(0 0 0 / 0.4)' }}
+    >
+      <aside
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          position: 'absolute',
+          top: 0,
+          right: 0,
+          bottom: 0,
+          width: 480,
+          maxWidth: '92%',
+          zIndex: 61,
+          background: 'color-mix(in srgb, var(--glass-base) 94%, transparent)',
+          borderLeft: '1px solid var(--hairline-strong)',
+          boxShadow: 'var(--shadow-raised)',
+          display: 'flex',
+          flexDirection: 'column'
+        }}
+      >
+        <header
+          className="flex items-center"
+          style={{
+            gap: 10,
+            padding: '15px 18px',
+            borderBottom: '1px solid rgb(var(--ink-border-soft))',
+            flexShrink: 0
+          }}
+        >
+          <span style={{ color: 'rgb(var(--c-accent))', display: 'flex' }}>
+            <ReportIcon name="barchart" size={16} />
+          </span>
+          <h2 style={{ fontSize: 15, fontWeight: 600, color: 'rgb(var(--ink-fg))', flex: 1 }}>
+            {t('agents.projectProgress.configTitle', { title: cfg?.title ?? '' })}
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label={t('agents.source.close')}
+            style={{
+              display: 'grid',
+              placeItems: 'center',
+              width: 28,
+              height: 28,
+              borderRadius: 7,
+              background: 'transparent',
+              border: 0,
+              cursor: 'pointer',
+              color: 'rgb(var(--ink-fg-2))'
+            }}
+          >
+            <ReportIcon name="x" size={16} />
+          </button>
+        </header>
+
+        <div className="scrollbar-thin" style={{ flex: 1, overflowY: 'auto', padding: 18 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+            {/* 总开关说明（走 env，非 UI）。总闸未开时高亮提示。 */}
+            <div
+              style={{
+                fontSize: 12.5,
+                color: masterEnabled ? 'rgb(var(--ink-fg-2))' : 'rgb(var(--c-warn, var(--ink-fg-1)))',
+                padding: '10px 12px',
+                borderRadius: 9,
+                background: 'rgb(var(--ink-1) / 0.5)',
+                border: '1px solid rgb(var(--ink-border-soft))',
+                lineHeight: 1.55
+              }}
+            >
+              {masterEnabled
+                ? t('agents.projectProgress.masterOnNote')
+                : t('agents.projectProgress.masterOffNote')}
+            </div>
+
+            {/* 启用（row.enabled，保存即生效） */}
+            <div
+              className="flex items-center"
+              style={{
+                gap: 12,
+                padding: '13px 14px',
+                borderRadius: 10,
+                background: 'rgb(var(--ink-2) / 0.55)',
+                border: '1px solid rgb(var(--ink-border))'
+              }}
+            >
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 13.5, fontWeight: 500, color: 'rgb(var(--ink-fg))' }}>
+                  {t('agents.projectProgress.enable')}
+                </div>
+                <div style={{ fontSize: 12, color: 'rgb(var(--ink-fg-3))', marginTop: 2 }}>
+                  {t('agents.projectProgress.enableHint')}
+                </div>
+              </div>
+              <Switch on={enabled} onChange={setEnabled} />
+            </div>
+
+            {/* 触发：标题正则（必填）+ 发件人子串（可选，留空 = 任意发件人） */}
+            <Field
+              label={t('agents.projectProgress.subjectPattern')}
+              hint={t('agents.projectProgress.subjectPatternHint')}
+            >
+              <input
+                type="text"
+                value={subject}
+                placeholder={t('agents.projectProgress.subjectPlaceholder')}
+                onChange={(e) => {
+                  setSubject(e.target.value)
+                  setTriggerDirty(true)
+                }}
+                style={{ ...inputStyle, fontFamily: 'var(--font-mono, monospace)' }}
+              />
+            </Field>
+            <Field
+              label={t('agents.projectProgress.senderPattern')}
+              hint={t('agents.projectProgress.senderPatternHint')}
+            >
+              <input
+                type="text"
+                value={sender}
+                placeholder={t('agents.projectProgress.senderPlaceholder')}
+                onChange={(e) => {
+                  setSender(e.target.value)
+                  setTriggerDirty(true)
+                }}
+                style={{ ...inputStyle, fontFamily: 'var(--font-mono, monospace)' }}
+              />
+            </Field>
+
+            {/* 项目进度库（只读，来源 env PROJECT_PROGRESS_DATABASE_ID） */}
+            <Field
+              label={t('agents.projectProgress.database')}
+              hint={t('agents.projectProgress.databaseHint')}
+            >
+              <div
+                style={{
+                  ...inputStyle,
+                  fontFamily: 'var(--font-mono, monospace)',
+                  color: databaseId ? 'rgb(var(--ink-fg-2))' : 'rgb(var(--ink-fg-3))',
+                  background: 'rgb(var(--ink-1) / 0.35)',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap'
+                }}
+              >
+                {databaseId || t('agents.projectProgress.databaseUnset')}
+              </div>
+            </Field>
+
+            {err && (
+              <div style={{ fontSize: 12.5, color: 'rgb(var(--c-danger, var(--ink-fg-1)))' }}>
+                {err}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <footer
+          className="flex items-center"
+          style={{
+            gap: 10,
+            padding: '13px 18px',
+            borderTop: '1px solid rgb(var(--ink-border-soft))',
+            flexShrink: 0,
+            justifyContent: 'flex-end'
+          }}
+        >
+          <button
+            type="button"
+            onClick={onClose}
+            className="btn-ghost"
+            style={{ fontFamily: 'inherit' }}
+          >
+            {t('agents.config.cancel')}
+          </button>
+          <button
+            type="button"
+            onClick={() => void onSave()}
+            disabled={isSaving}
+            style={{
+              fontFamily: 'inherit',
+              fontSize: 13.5,
+              fontWeight: 500,
+              padding: '8px 18px',
+              borderRadius: 8,
+              cursor: isSaving ? 'wait' : 'pointer',
+              color: 'rgb(var(--c-cta-fg))',
+              background: 'rgb(var(--c-cta-bg))',
+              border: 0
+            }}
+          >
+            {t('agents.config.save')}
+          </button>
+        </footer>
+      </aside>
+    </div>
+  )
+}
+
 function Field({
   label,
   hint,
@@ -2478,6 +2919,23 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
   const customAgentsEnabled = useCustomAgentsEnabled()
   // v27 — AI 邮件预处理配置抽屉开合（后端播种单行，只编辑、无新建）。
   const [preprocessOpen, setPreprocessOpen] = useState(false)
+  // S5 W5a — 项目周报同步配置抽屉开合（后端 v31 播种单行，只编辑、无新建）。
+  const [projectProgressOpen, setProjectProgressOpen] = useState(false)
+  // 项目周报卡的总闸绑 env PROJECT_PROGRESS_SYNC_ENABLED（响应式读，总闸未开 → 卡片显「总闸未开」）。
+  const projectProgressMaster = useEnvStore((s) =>
+    s.state.status === 'ready'
+      ? envFlagOn(s.state.snapshot.values['PROJECT_PROGRESS_SYNC_ENABLED'] ?? '')
+      : false
+  )
+  const { save: saveProgressRow } = useSetConfig()
+  // 项目周报卡快捷开关：切 row.enabled（保存即生效，不写 env）。
+  const handleProjectProgressToggle = async (v: boolean): Promise<void> => {
+    try {
+      await saveProgressRow(PROJECT_PROGRESS_AGENT_ID, { enabled: v })
+    } catch (e: unknown) {
+      toastError(t('agents.projectProgress.rowSaveError'), (e as Error).message)
+    }
+  }
   // 预处理卡的启用态绑全局 env LLM_AGENT_ENABLED（响应式读，env 变即刷新徽标）。
   const llmAgentEnabled = useEnvStore((s) =>
     s.state.status === 'ready'
@@ -2517,6 +2975,11 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
   )
   // v27 — AI 邮件预处理 agent（type='preprocess'，后端播种单行，正常仅 1 张卡）。
   const preprocessAgents = useMemo(() => agents.filter((a) => a.type === 'preprocess'), [agents])
+  // S5 W5a — 项目周报同步 agent（type='project_progress'，后端 v31 播种单行）。
+  const projectProgressAgents = useMemo(
+    () => agents.filter((a) => a.type === 'project_progress'),
+    [agents]
+  )
   // S5 — 完全自定义 agent（type='custom'），按 id 稳定排序。此前无此 filter → custom 行被
   // 静默丢弃；补上后 custom 卡片可见。
   const customAgents = useMemo(
@@ -2543,9 +3006,15 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
   )
   // 预处理只有一行（后端播种）；抽屉编辑它。
   const preprocessAgent = preprocessAgents[0] ?? null
+  // 项目周报只有一行（后端播种）；抽屉编辑它。
+  const projectProgressAgent = projectProgressAgents[0] ?? null
   // drawer 任一打开 → 锁列表滚动。
   const anyDrawerOpen =
-    configAgent !== null || searchDrawer !== null || customDrawer !== null || preprocessOpen
+    configAgent !== null ||
+    searchDrawer !== null ||
+    customDrawer !== null ||
+    preprocessOpen ||
+    projectProgressOpen
 
   // 三层各司其职：①外层 relative 不滚 → drawer 钉这层（不随列表滚）②滚动层 absolute inset:0
   // 承接滚动、**block 流非 flex**（子项自然高度、超出滚动，绝不压缩卡片）③内容层 flex column
@@ -2684,6 +3153,34 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
             </div>
           )}
 
+          {/* ─── 项目周报同步区（S5 W5a）─────────────────────────────────
+              仅当后端 v31 播种行存在时渲染（老库未迁移 → 不显，避免空区块）。 */}
+          {projectProgressAgent && (
+            <>
+              <div style={{ marginTop: 8 }}>
+                <h2
+                  style={{
+                    fontSize: 16,
+                    fontWeight: 600,
+                    color: 'rgb(var(--ink-fg))',
+                    letterSpacing: '-0.01em'
+                  }}
+                >
+                  {t('agents.projectProgress.section')}
+                </h2>
+                <p style={{ fontSize: 13, color: 'rgb(var(--ink-fg-2))', marginTop: 4 }}>
+                  {t('agents.projectProgress.sectionHint')}
+                </p>
+              </div>
+              <ProjectProgressAgentCard
+                cfg={projectProgressAgent}
+                masterEnabled={projectProgressMaster}
+                onConfig={() => setProjectProgressOpen(true)}
+                onToggle={(v) => void handleProjectProgressToggle(v)}
+              />
+            </>
+          )}
+
           {/* ─── 完全自定义 Agents 区（S5）──────────────────────────────
               flag on 或已有 custom 行时展开 section header + 卡片；flag off 且无 custom 行
               时只留下方 NewAgentTile 禁用占位（字节级同现状）。 */}
@@ -2743,6 +3240,11 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
         cfg={preprocessAgent}
         open={preprocessOpen}
         onClose={() => setPreprocessOpen(false)}
+      />
+      <ProjectProgressConfigDrawer
+        cfg={projectProgressAgent}
+        open={projectProgressOpen}
+        onClose={() => setProjectProgressOpen(false)}
       />
     </div>
   )

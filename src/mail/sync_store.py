@@ -357,7 +357,17 @@ class SyncStore:
     #                W1 只建列, 端点在 W2)。全 additive TEXT NULL, 对既有行/调用零影响。
     #                幂等: ALTER 前 PRAGMA 检查 (同 v27/v29 模式)。
     #                回滚 (回退 v30): 五列可留 (旧代码无害, 全 NULL) 或手动 DROP; 必要时降 db_version。
-    DB_VERSION = 30  # v30: report_agent +trigger_json/tool_policy_json/budget_json + async_jobs +claim_token/spec_claimed_at（Custom Agent S4 W1）
+    # v31 (项目周报 sync 迁入 custom agent 框架, S5 W5a, 2026-07): report_agent 播种单例
+    #                type='project_progress' 行 (id='project_progress_sync')。**无 DDL** —— 复用
+    #                v30 的 trigger_json 列存触发配置 (email_filter 词汇: subject_pattern/sender_pattern,
+    #                但 project_progress 走 ProjectProgressDetector 子串-sender 匹配, 非 matcher 正则)。
+    #                enabled/trigger 从 env (PROJECT_PROGRESS_AUTO_SYNC_ENABLED / _SUBJECT_PATTERN /
+    #                _SENDER) 播种一次, 之后行权威 (Settings 可改); 总闸仍是 env PROJECT_PROGRESS_SYNC_ENABLED。
+    #                执行不进 async_jobs / gateway —— new_watcher hook 直调确定性 runner (P1: 框架不容纳
+    #                非 LLM 执行体, 项目周报只把触发配置搬进行, 执行仍 Python 直调)。
+    #                幂等: INSERT OR IGNORE (旧库已有则跳过、不覆盖用户改过的 enabled/trigger)。
+    #                回滚 (回退 v31): DELETE FROM report_agent WHERE id='project_progress_sync'; 必要时降 db_version。
+    DB_VERSION = 31  # v31: report_agent seed type='project_progress' 单例行（S5 W5a 项目周报迁入框架）
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -1704,6 +1714,53 @@ class SyncStore:
                     cursor, "async_jobs",
                     {"claim_token", "spec_claimed_at"}, "v30 migration", e,
                 )
+
+        # === v31: 项目周报 sync 迁入 custom agent 框架 —— 播种 type='project_progress' 单例行 ===
+        # S5 W5a（P2 拍板）。把"项目周报邮件 → 触发确定性 xlsx→Notion sync"做成 Agents 页第四种专型
+        # 行（type='project_progress'，id='project_progress_sync'）：**无 DDL**（复用 v30 trigger_json 列）。
+        # 触发配置（sender/subject）与 enabled 从 env 播种一次 → 之后 Settings 抽屉可改（行权威）；总闸仍
+        # 是 env PROJECT_PROGRESS_SYNC_ENABLED。**执行不进 async_jobs / gateway** —— runner 逐字不变，
+        # new_watcher hook 仍直调（P1：框架不容纳非 LLM 执行体，项目周报只把触发配置搬进行）。
+        #
+        # trigger_json 用 email_filter 词汇（subject_pattern/sender_pattern），但 project_progress 走
+        # ProjectProgressDetector（子串-sender + 正则-subject），**非** AgentEmailMatcher（正则-sender）—— 逐字
+        # 保持子串语义（行为等价）。sender 是 email 子串，作 email_filter regex 校验也能编译（drawer 保存
+        # 时经 validate_agent_config_patch），运行时仍子串匹配。env 全空 → 空 pattern（detector 永不匹配 =
+        # 现状"全空永不匹配"）。
+        #
+        # env 值经 pydantic settings 读（serve-api **不** load_dotenv —— 直读 os.environ 会读空，
+        # 迁移可能在 serve-api 进程先跑；settings 在两个进程都从 env_file / os.environ 正确填充）。
+        # 幂等: INSERT OR IGNORE（旧库已有则跳过、不覆盖用户改过的 enabled/trigger）。
+        # 回滚 (回退 v31): DELETE FROM report_agent WHERE id='project_progress_sync'。
+        if current_version < 31:
+            try:
+                from src.config import config as _settings
+                _pp_enabled = 1 if getattr(_settings, "project_progress_auto_sync_enabled", False) else 0
+                _pp_subject = getattr(_settings, "project_progress_subject_pattern", "") or ""
+                _pp_sender = getattr(_settings, "project_progress_sender", "") or ""
+            except Exception as e:  # noqa: BLE001 — config 不可得（裸测试环境）→ 安全默认（禁用 + 空触发）
+                logger.debug(f"v31 migration: settings unavailable, seed with safe defaults: {e}")
+                _pp_enabled, _pp_subject, _pp_sender = 0, "", ""
+            _pp_trigger = json.dumps(
+                {
+                    "v": 1,
+                    "kind": "email_filter",
+                    "subject_pattern": _pp_subject,
+                    "sender_pattern": _pp_sender,
+                },
+                ensure_ascii=False,
+            )
+            cursor.execute(
+                "INSERT OR IGNORE INTO report_agent "
+                "(id, type, enabled, title, model, prompt, tools_json, trigger_json, updated_at) "
+                "VALUES ('project_progress_sync', 'project_progress', ?, '项目周报同步', "
+                "NULL, NULL, NULL, ?, ?)",
+                (_pp_enabled, _pp_trigger, time.time()),
+            )
+            logger.info(
+                f"v31 migration: project_progress_sync seeded "
+                f"(enabled={_pp_enabled}, subject={_pp_subject!r}, sender={_pp_sender!r})"
+            )
 
         # 更新数据库版本 —— E0-WP3: 只有**全部迁移成功**才会执行到这里。任何迁移块
         # 真失败都会 raise (见 _migration_guard_columns/_migration_guard_index),

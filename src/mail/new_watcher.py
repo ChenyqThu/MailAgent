@@ -173,26 +173,20 @@ class NewWatcher:
         # 会议邀请同步器：注入 sync_store 以使用 recurring_series 表
         self.meeting_sync = MeetingInviteSync(sync_store=self.sync_store)
 
-        # 项目周报外挂钩子（需同时打开 PROJECT_PROGRESS_SYNC_ENABLED 总开关 +
-        # PROJECT_PROGRESS_AUTO_SYNC_ENABLED 子开关，且配置了项目进度库 ID）
-        self._progress_detector = None
-        if (
+        # 项目周报外挂钩子（S5 W5a: 专型行 type='project_progress'，DB v31 播种单例）。
+        # 总闸 = env PROJECT_PROGRESS_SYNC_ENABLED + 配置了项目进度库 ID（runner 需要，非事件热读项）。
+        # 具体触发（enabled + sender/subject）每封邮件从 report_agent 行**热读**（Settings 改即生效）；
+        # 行不存在（老库未跑 v31）→ 回退 env 构造（行为等价窗口）。db_path 供 hook 裸 sqlite3 热读。
+        self._progress_hook_active = bool(
             getattr(settings, "project_progress_sync_enabled", False)
-            and getattr(settings, "project_progress_auto_sync_enabled", False)
             and getattr(settings, "project_progress_database_id", "")
-        ):
-            try:
-                from src.project_progress.detector import ProjectProgressDetector
-                self._progress_detector = ProjectProgressDetector(
-                    sender=settings.project_progress_sender,
-                    subject_pattern=settings.project_progress_subject_pattern,
-                )
-                logger.info(
-                    f"Project Progress auto-sync enabled (db={settings.project_progress_database_id})"
-                )
-            except Exception as e:
-                logger.warning(f"Failed to enable project-progress detector: {e}")
-                self._progress_detector = None
+        )
+        self._agent_db_path = str(self.sync_store.db_path)
+        if self._progress_hook_active:
+            logger.info(
+                f"Project Progress hook active (db={settings.project_progress_database_id}); "
+                f"enabled/trigger 从 report_agent 行热读（Settings 可改）"
+            )
 
         # 多文件夹同步 L2/L3 per-folder gate（按 mailbox 显示名匹配，PRD §2.3）。
         # 自定义文件夹默认: L2 LLM 开 / L3 通知关。空配置 = 默认行为。
@@ -888,16 +882,36 @@ class NewWatcher:
     def _maybe_trigger_project_progress_hook(
         self, email_obj: Email, internal_id: int, notion_page_id: str
     ) -> None:
-        """若该邮件匹配项目周报规则，派发后台任务跑外挂同步。
+        """若该邮件匹配项目周报规则，派发后台任务跑外挂同步（S5 W5a 行内热读）。
 
+        运行判定 = env 总闸 PROJECT_PROGRESS_SYNC_ENABLED（+database_id，__init__ gate）AND
+        行 enabled AND ProjectProgressDetector.is_match。触发配置每封邮件从 report_agent 的
+        project_progress 行热读（Settings 改即生效）；行不存在（老库未跑 v31）→ 回退 env 构造。
+        runner 逐字不变、执行仍 fire-and-forget 直调（不进 async_jobs / gateway）。
         任何失败只打 warning，不影响主同步流程。
         """
-        if self._progress_detector is None:
+        if not getattr(self, "_progress_hook_active", False):
             return
         try:
-            if not self._progress_detector.is_match(
-                sender=email_obj.sender, subject=email_obj.subject
-            ):
+            from src.project_progress.agent_config import get_project_progress_agent_config
+            from src.project_progress.detector import ProjectProgressDetector
+
+            cfg = get_project_progress_agent_config(self._agent_db_path)
+            if cfg.row_exists:
+                if not cfg.enabled:
+                    return
+                detector = ProjectProgressDetector(
+                    sender=cfg.sender, subject_pattern=cfg.subject_pattern
+                )
+            else:
+                # 老库未跑 v31 迁移 → 回退 env 构造（行为等价窗口）。
+                if not getattr(settings, "project_progress_auto_sync_enabled", False):
+                    return
+                detector = ProjectProgressDetector(
+                    sender=settings.project_progress_sender,
+                    subject_pattern=settings.project_progress_subject_pattern,
+                )
+            if not detector.is_match(sender=email_obj.sender, subject=email_obj.subject):
                 return
             logger.info(
                 f"[pp-hook] matched internal_id={internal_id} subject="
