@@ -244,3 +244,109 @@ def test_stop_before_claim_exits_clean(env):
     worker.stop()
     _run(worker.run())
     assert worker.stats["claimed"] == 0
+
+
+# ---------------------------------------------------------------------------
+# 灵动岛「运行结果」通知（S5 W1）—— completed/error 发、paused_handoff 不发、失败不阻断
+# ---------------------------------------------------------------------------
+
+
+def _patch_client_capturing(monkeypatch, *, gateway_resp):
+    """记录所有 post 调用（按 URL 区分 gateway poke vs island announce）。announce 恒返 200。"""
+    calls: list = []
+
+    class _FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, json=None, headers=None):
+            calls.append({"url": url, "json": json})
+            if url.endswith("/api/ai/agent-run"):
+                return gateway_resp
+            return _FakeResp(200, {"ok": True})  # island announce 端点
+
+    monkeypatch.setattr(run_worker.httpx, "AsyncClient", _FakeClient)
+    return calls
+
+
+def _announce_calls(calls: list) -> list:
+    return [c for c in calls if c["url"].endswith("/api/island/agent/announce")]
+
+
+def test_completed_announces_island_completed(env, monkeypatch):
+    repo, store = env
+    job_id = _claim_agent_job(repo)
+    calls = _patch_client_capturing(monkeypatch, gateway_resp=_FakeResp(200, {
+        "ok": True, "outcome": "completed", "sessionId": 7, "steps": 1,
+    }))
+    worker = AgentRunWorker(repo=repo, store=store)
+    _run(worker._execute(repo.get(job_id)))
+
+    ann = _announce_calls(calls)
+    assert len(ann) == 1
+    assert ann[0]["json"]["kind"] == "completed"
+    assert ann[0]["json"]["sessionId"] == 7
+    assert "DMS" in ann[0]["json"]["title"]  # agent 名进 title
+
+
+def test_error_announces_island_error(env, monkeypatch):
+    repo, store = env
+    job_id = _claim_agent_job(repo)
+    calls = _patch_client_capturing(monkeypatch, gateway_resp=_FakeResp(200, {
+        "ok": False, "outcome": "error", "error": "E_BUDGET_TIME",
+    }))
+    worker = AgentRunWorker(repo=repo, store=store)
+    _run(worker._execute(repo.get(job_id)))
+
+    ann = _announce_calls(calls)
+    assert len(ann) == 1 and ann[0]["json"]["kind"] == "error"
+    assert "E_BUDGET_TIME" in ann[0]["json"]["summary"]
+
+
+def test_paused_handoff_does_not_announce(env, monkeypatch):
+    repo, store = env
+    job_id = _claim_agent_job(repo)
+    calls = _patch_client_capturing(monkeypatch, gateway_resp=_FakeResp(200, {
+        "ok": True, "outcome": "paused_handoff", "sessionId": 5,
+    }))
+    worker = AgentRunWorker(repo=repo, store=store)
+    _run(worker._execute(repo.get(job_id)))
+
+    # 审批卡链路已 announce（gateway makePersistOnFinish）→ 终态通知不重发（防双卡）
+    assert _announce_calls(calls) == []
+    assert repo.get(job_id).result["approval_state"] == "pending"  # 终态仍正确
+
+
+def test_announce_failure_does_not_block_terminal(env, monkeypatch):
+    repo, store = env
+    job_id = _claim_agent_job(repo)
+
+    class _FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, json=None, headers=None):
+            if url.endswith("/api/ai/agent-run"):
+                return _FakeResp(200, {"ok": True, "outcome": "completed", "sessionId": 1})
+            raise httpx.ConnectError("island down")  # announce POST 失败
+
+    monkeypatch.setattr(run_worker.httpx, "AsyncClient", _FakeClient)
+    worker = AgentRunWorker(repo=repo, store=store)
+    _run(worker._execute(repo.get(job_id)))
+
+    # 通知失败绝不影响 job 终态（已在 _mark 落库）
+    job = repo.get(job_id)
+    assert job.status == "succeeded"
+    assert job.result["outcome"] == "completed"

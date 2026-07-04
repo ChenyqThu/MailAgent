@@ -19,6 +19,10 @@ import { callCli } from '../cli_runner'
 import { daemonRequest } from '../daemon_api'
 import { envelopeFromCli, type WriteEnvelope } from '../lib/envelope'
 import type {
+  AgentRunHistoryItem,
+  CustomAgentBudget,
+  CustomAgentToolPolicy,
+  CustomAgentTrigger,
   ReportAgentConfig,
   ReportAgentCreateInput,
   ReportConfigPatch,
@@ -79,6 +83,10 @@ interface AgentRow {
   body_full_priorities?: string | null
   context_docs_json?: string | null
   fallback_models_json?: string | null
+  // v30 custom agent 三列（仅 type='custom' 解析，对齐 wire.resolve_agent）。
+  trigger_json?: string | null
+  tool_policy_json?: string | null
+  budget_json?: string | null
   updated_at?: number | null
 }
 
@@ -91,6 +99,9 @@ function _toAgentConfig(row: AgentRow): ReportAgentConfig {
     hours: [9]
   })
   const prompt = (row.prompt ?? '').trim()
+  // v30 custom agent：仅 type='custom' 解析 trigger/tool_policy/budget（对齐 wire.resolve_agent
+  // 的 _is_custom 门控），其余 type 恒 null。NULL/非法 JSON → null（不回填默认）。
+  const isCustom = (row.type || 'report') === 'custom'
   return {
     id: row.id,
     type: row.type || 'report',
@@ -119,6 +130,12 @@ function _toAgentConfig(row: AgentRow): ReportAgentConfig {
       row.type === 'preprocess'
         ? _parseJson<string[] | null>(row.fallback_models_json, null)
         : null,
+    // v30 custom agent 三字段（仅 custom 解析；非 custom 恒 null）。
+    trigger: isCustom ? _parseJson<CustomAgentTrigger | null>(row.trigger_json, null) : null,
+    tool_policy: isCustom
+      ? _parseJson<CustomAgentToolPolicy | null>(row.tool_policy_json, null)
+      : null,
+    budget: isCustom ? _parseJson<CustomAgentBudget | null>(row.budget_json, null) : null,
     updated_at: row.updated_at ?? null
   }
 }
@@ -282,6 +299,27 @@ export function registerReportHandlers(): void {
       return envelopeFromCli<{ deleted: string }>(
         callCli(['report', 'agent-delete', '--agent', agentId], { needsAuth: true })
       )
+    }
+  )
+
+  // ── report:listRuns — S5 custom agent run 历史（读，走 serve-api GET /agent-runs）。
+  //    state 由后端 derive_agent_run_state 单源投影（前端不推导）。flag off → serve-api 404 →
+  //    catch 返 []（守 ReportApi「读失败返 []」契约；不 fallback 直读 SQLite——读态推导只有
+  //    Python 一处权威，绝不在 TS 重造第二套 status 映射）。
+  ipcMain.handle(
+    'report:listRuns',
+    async (
+      _evt,
+      opts?: { agentId?: string; limit?: number }
+    ): Promise<AgentRunHistoryItem[]> => {
+      try {
+        return await daemonRequest<AgentRunHistoryItem[]>('GET', '/agent-runs', {
+          query: { agentId: opts?.agentId, limit: opts?.limit }
+        })
+      } catch (err) {
+        console.warn('[report:listRuns] serve-api unreachable / flag off:', err)
+        return []
+      }
     }
   )
 }

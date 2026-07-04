@@ -250,6 +250,7 @@ class _ChatConfigStub:
     user_md_compile_enabled = True
     standing_docs_editor_enabled = True
     memory_md_budget_chars = 5000
+    custom_agents_enabled = False  # S5：/config.customAgentsEnabled 热读默认
 
 
 def _config_client(
@@ -329,6 +330,8 @@ def test_chat_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
         "execPolicyEnabled": False,
         # S2 W4b — Settings「Skill 安装」区显隐 flag（MAILAGENT_OPENNESS_SKILL_INSTALL default OFF）。
         "skillInstallEnabled": False,
+        # S5 — Custom AI Agents 入口显隐 flag（MAILAGENT_CUSTOM_AGENTS_ENABLED default OFF）。
+        "customAgentsEnabled": False,
     }
 
 

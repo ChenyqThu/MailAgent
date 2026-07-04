@@ -368,3 +368,74 @@ def test_flag_off_approval_404(env, client, monkeypatch):
     r = client.post(f"/api/agent-runs/{jid}/approval-state", json={"state": "approved"})
     assert r.status_code == 404
     assert r.json()["error"]["code"] == "E_NOT_FOUND"
+
+
+# ---------------------------------------------------------------------------
+# run 历史列表（S5 W1）—— derive_agent_run_state 单源投影 + agent_id 过滤 + flag-off 404
+# ---------------------------------------------------------------------------
+
+
+def _terminal_run(env, *, agent_id, fire_key, status, result=None, last_error=None):
+    """enqueue + claim + mark_terminal 一个 agent_run → 供 run 历史投影测。"""
+    jid = _running_job(env.repo, agent_id=agent_id, fire_key=fire_key, token=f"t-{fire_key}")
+    env.repo.mark_terminal(jid, status=status, result=result, last_error=last_error)
+    return jid
+
+
+def test_list_runs_empty(env, client):
+    r = client.get("/api/agent-runs")
+    assert r.status_code == 200
+    assert r.json()["data"] == []
+
+
+def test_list_runs_state_projection(env, client):
+    """4 态（completed/failed/paused_pending/queued）→ derive_agent_run_state 投影穿过端点。"""
+    _terminal_run(env, agent_id="dms", fire_key="f-ok",
+                  status="succeeded", result={"outcome": "completed", "sessionId": 11})
+    _terminal_run(env, agent_id="dms", fire_key="f-err",
+                  status="failed", last_error="E_GATEWAY_DOWN")
+    _terminal_run(env, agent_id="dms", fire_key="f-pause", status="succeeded",
+                  result={"outcome": "paused_handoff", "approval_state": "pending", "sessionId": 22})
+    _running_job(env.repo, agent_id="dms", fire_key="f-q", token="tq", claim=False)  # queued
+
+    r = client.get("/api/agent-runs?agentId=dms")
+    assert r.status_code == 200
+    items = r.json()["data"]
+    assert {it["state"] for it in items} == {"completed", "failed", "paused_pending", "queued"}
+    # 🔴 paused_handoff 行读态**非** completed（P6 不变量：永不渲染为成功完成）
+    pause = next(it for it in items if it["outcome"] == "paused_handoff")
+    assert pause["state"] == "paused_pending"
+    assert pause["approvalState"] == "pending"
+    assert pause["sessionId"] == 22
+    ok = next(it for it in items if it["state"] == "completed")
+    assert ok["sessionId"] == 11 and ok["error"] is None
+    err = next(it for it in items if it["state"] == "failed")
+    assert err["error"] == "E_GATEWAY_DOWN"
+
+
+def test_list_runs_agent_id_filter(env, client):
+    _terminal_run(env, agent_id="dms", fire_key="a1",
+                  status="succeeded", result={"outcome": "completed"})
+    _terminal_run(env, agent_id="other", fire_key="b1",
+                  status="succeeded", result={"outcome": "completed"})
+    items = client.get("/api/agent-runs?agentId=dms").json()["data"]
+    assert len(items) == 1 and items[0]["agentId"] == "dms"
+    all_items = client.get("/api/agent-runs").json()["data"]
+    assert {it["agentId"] for it in all_items} == {"dms", "other"}
+
+
+def test_list_runs_limit_and_order(env, client):
+    for i in range(5):
+        _terminal_run(env, agent_id="dms", fire_key=f"o{i}",
+                      status="succeeded", result={"outcome": "completed"})
+    items = client.get("/api/agent-runs?agentId=dms&limit=3").json()["data"]
+    assert len(items) == 3
+    jids = [it["jobId"] for it in items]
+    assert jids == sorted(jids, reverse=True)  # created_at desc（新 job 在前）
+
+
+def test_flag_off_list_runs_404(env, client, monkeypatch):
+    monkeypatch.setattr(agent_runs, "_custom_agents_enabled", lambda: False)
+    r = client.get("/api/agent-runs?agentId=dms")
+    assert r.status_code == 404
+    assert r.json()["error"]["code"] == "E_NOT_FOUND"

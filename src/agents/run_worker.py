@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Any, Callable, Optional
 import httpx
 from loguru import logger
 
+from src.agents.run_state import derive_agent_run_state
 from src.agents.trigger import Budget, parse_budget
 
 if TYPE_CHECKING:
@@ -36,9 +37,13 @@ if TYPE_CHECKING:
 
 # gateway loopback 默认端口（与 ai_gateway_proxy._resolve_gateway_port / config.ts 同源）。
 _DEFAULT_AI_GATEWAY_PORT = 8300
+# serve-api loopback 默认端口（island announce 端点所在；同 island_agent.resolve_api_port）。
+_DEFAULT_SERVE_API_PORT = 8200
 # httpx 总超时 = spec.maxRunSeconds + 余量（drain 有界，超时兜底防 worker 卡死）。
 _HTTP_MARGIN_SEC = 30
 _CONNECT_TIMEOUT_SEC = 10.0
+# 岛通知短连接超时（fire-and-forget 语义，失败不阻断 job 终态）。
+_ANNOUNCE_TIMEOUT_SEC = 5.0
 
 
 class _GatewayPokeError(Exception):
@@ -102,22 +107,32 @@ class AgentRunWorker:
         logger.info(f"[agent-run-worker] stopped. stats={self._stats}")
 
     async def _execute(self, job: "AsyncJob") -> None:
-        """跑单个 agent_run：set token → poke → 映射终态。**绝不悬挂 running**（全路径写终态）。"""
+        """跑单个 agent_run：set token → poke → 映射终态 → 岛结果通知。**绝不悬挂 running**（全路径写终态）。"""
         job_id = job.job_id
+        status = "failed"
+        result: Optional[dict] = None
+        last_error: Optional[str] = None
         try:
             claim_token = secrets.token_urlsafe(32)
             self.repo.set_claim_token(job_id, claim_token)
             timeout_s = self._resolve_timeout(job)
             try:
                 resp = await self._poke_gateway(job_id, claim_token, timeout_s)
+                status, result, last_error = self._map_response(resp)
             except _GatewayPokeError as exc:
-                self._mark(job_id, "failed", last_error=exc.code)
-                return
-            status, result, last_error = self._map_response(resp)
-            self._mark(job_id, status, result=result, last_error=last_error)
+                status, result, last_error = "failed", None, exc.code
         except Exception as exc:  # noqa: BLE001 — 兜底：任何未预期异常也不留 running
             logger.error(f"[agent-run-worker] execute crash job_id={job_id}: {exc}", exc_info=True)
-            self._mark(job_id, "failed", last_error=f"E_WORKER_CRASH: {type(exc).__name__}")
+            status, result, last_error = "failed", None, f"E_WORKER_CRASH: {type(exc).__name__}"
+        self._mark(job_id, status, result=result, last_error=last_error)
+        # 终态落库后推灵动岛「运行结果」通知（completed/error）。绝不放在 _mark 前（通知失败不得
+        # 影响 job 终态）、也不放进 _mark（那是纯 DB 写, 无 agent/触发源上下文）。终态已落库，
+        # 通知是 best-effort：整体兜一层，任何未预期异常都不得逃出 _execute 杀死 worker 主循环
+        # （run() 不 guard _execute，靠此处「自身吞尽异常」契约）。
+        try:
+            await self._announce_terminal(job, status, result, last_error)
+        except Exception as exc:  # noqa: BLE001 — 通知路径绝不影响 job 终态 / worker 存活
+            logger.warning(f"[agent-run-worker] announce_terminal crash job_id={job_id}: {exc}")
 
     def _mark(
         self, job_id: int, status: str, *, result: Optional[dict] = None, last_error: Optional[str] = None
@@ -127,6 +142,97 @@ class AgentRunWorker:
         except Exception as exc:  # noqa: BLE001 — mark 失败只 log（下轮 recover 兜底不了本条, 但不杀 worker）
             logger.error(f"[agent-run-worker] mark_terminal failed job_id={job_id}: {exc}")
         self._stats[status] = self._stats.get(status, 0) + 1
+
+    # ── 灵动岛「运行结果」通知（S5 W1, ADR-004 P7）──────────────────────────────────
+
+    async def _announce_terminal(
+        self, job: "AsyncJob", status: str, result: Optional[dict], last_error: Optional[str]
+    ) -> None:
+        """终态后推灵动岛「运行结果」通知（completed/error）。**通知失败仅 warning 绝不影响 job 终态**。
+
+        读态经 ``derive_agent_run_state`` 单源判定（P6）：``completed`` → kind=completed；``failed``
+        → kind=error；``paused_*`` → **不发**（审批卡链路已 announce，防双卡）。POST loopback serve-api
+        ``/api/island/agent/announce``（本地 token）；端点自身双 flag（island_agent_enabled +
+        ping_island_enabled）no-op 语义在服务端保持不变（此处不重复门控，off 时端点静默 no-op）。
+        """
+        now = self.now_fn()
+        try:
+            state = derive_agent_run_state(
+                {"status": status, "result": result, "finished_at": now, "updated_at": now},
+                now_fn=self.now_fn,
+            )
+        except Exception:  # noqa: BLE001 — 读态推导失败 → 保守不发
+            return
+        if state == "completed":
+            kind = "completed"
+        elif state == "failed":
+            kind = "error"
+        else:
+            return  # paused_* → 审批链路已 announce, 不重发
+        agent_id = str((job.params or {}).get("agent_id") or job.target_key or "")
+        title, summary = self._announce_text(job, agent_id, kind, result, last_error)
+        session_id = self._session_id_of(result)
+        try:
+            await self._post_announce(kind, session_id, title, summary)
+        except Exception as exc:  # noqa: BLE001 — 通知失败绝不影响 job 终态（已在 _mark 落库）
+            logger.warning(f"[agent-run-worker] island announce failed job_id={job.job_id}: {exc}")
+
+    def _announce_text(
+        self, job: "AsyncJob", agent_id: str, kind: str, result: Optional[dict], last_error: Optional[str]
+    ) -> tuple[str, str]:
+        """岛卡 title/summary：title=「{agent 名} · {触发源}」；summary=结果摘要 / 错误码。"""
+        name = self._agent_title(agent_id) or agent_id or "Agent"
+        trigger_kind = str((job.params or {}).get("trigger_kind") or "")
+        trigger_label = {"cron": "定时", "email_filter": "邮件", "manual": "手动"}.get(
+            trigger_kind, trigger_kind or "触发"
+        )
+        title = f"{name} · {trigger_label}"
+        if kind == "completed":
+            summary = str((result or {}).get("summary") or "").strip() or "运行已完成"
+        else:
+            summary = (last_error or "").strip() or "运行失败"
+        return title, summary
+
+    def _agent_title(self, agent_id: str) -> Optional[str]:
+        """从 report_agent 行取 title（岛卡展示用）。读失败/无 title → None（回退 agent_id）。"""
+        if not agent_id or self.store is None:
+            return None
+        try:
+            row = self.store.get_agent(agent_id)
+            return ((row.get("title") or "").strip() or None) if row else None
+        except Exception:  # noqa: BLE001 — title 读失败不阻断通知
+            return None
+
+    @staticmethod
+    def _session_id_of(result: Optional[dict]) -> int:
+        """result_json 里的 sessionId（岛卡关联）；缺失/非法 → 0（通知类卡不强依赖真 session）。"""
+        try:
+            return int((result or {}).get("sessionId") or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    async def _post_announce(self, kind: str, session_id: int, title: str, summary: str) -> None:
+        """POST serve-api ``/api/island/agent/announce``（loopback + 本地 token, 沿 island.py 纪律）。"""
+        url = f"http://127.0.0.1:{self._serve_api_port()}/api/island/agent/announce"
+        payload = {"kind": kind, "sessionId": session_id, "title": title, "summary": summary}
+        headers = {}
+        token = os.environ.get("MAILAGENT_LOCAL_API_TOKEN", "").strip()
+        if token:
+            headers["X-MailAgent-Local-Token"] = token
+        async with httpx.AsyncClient(timeout=_ANNOUNCE_TIMEOUT_SEC) as client:
+            await client.post(url, json=payload, headers=headers)
+
+    @staticmethod
+    def _serve_api_port() -> int:
+        """serve-api loopback 端口（env MAILAGENT_API_PORT，缺省/非法 → 8200）——同 island_agent.resolve_api_port。"""
+        raw = os.environ.get("MAILAGENT_API_PORT")
+        if raw is None:
+            return _DEFAULT_SERVE_API_PORT
+        try:
+            n = int(raw)
+        except (TypeError, ValueError):
+            return _DEFAULT_SERVE_API_PORT
+        return n if n > 0 else _DEFAULT_SERVE_API_PORT
 
     # ── poke gateway ──────────────────────────────────────────────────────────────
 

@@ -22,11 +22,12 @@ import json
 from datetime import datetime, timezone
 from typing import Any, Literal, Optional
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from loguru import logger
 from pydantic import BaseModel
 
 from src.agents.fence import fence_email_envelope
+from src.agents.run_state import derive_agent_run_state
 from src.agents.trigger import (
     EmailFilterTrigger,
     TriggerValidationError,
@@ -34,7 +35,7 @@ from src.agents.trigger import (
     parse_trigger,
 )
 from src.api.app import APIError, success_envelope
-from src.api.auth import verify_local_token
+from src.api.auth import verify_cf_access, verify_local_token
 from src.api.deps import get_job_repo, get_report_store, get_repository
 from src.sync.async_jobs import AsyncJob
 
@@ -285,4 +286,58 @@ async def set_approval_state(request: Request, job_id: int, body: _ApprovalState
     return success_envelope(
         {"jobId": job_id, "approvalState": body.state, "idempotent": code == "idempotent"},
         request=request, source="agent-runs",
+    )
+
+
+# ── run 历史列表（S5 W1）─────────────────────────────────────────────────────────
+
+
+def _run_history_item(job: AsyncJob) -> dict[str, Any]:
+    """``AsyncJob`` → run 历史行投影（S5 W1，ADR D4/P6）。
+
+    🔴 ``state`` 唯一经 ``derive_agent_run_state`` 派生（8 值域单源）——TS 侧**永不**自行从
+    outcome/approval_state 推导状态（投影即契约），防 ``paused_handoff`` 渲染成「成功完成」的
+    第二处解读漂移。``outcome``/``approvalState``/``sessionId``/``tokens`` 从 result_json 透传
+    供展示（非状态判定输入）。
+    """
+    result = job.result if isinstance(job.result, dict) else {}
+    state = derive_agent_run_state(
+        {
+            "status": job.status,
+            "result": result,
+            "finished_at": job.finished_at,
+            "updated_at": job.updated_at,
+        }
+    )
+    return {
+        "jobId": job.job_id,
+        "agentId": job.target_key,
+        "state": state,
+        "outcome": result.get("outcome"),
+        "approvalState": result.get("approval_state"),
+        "sessionId": result.get("sessionId"),
+        "createdAt": job.created_at,
+        "finishedAt": job.finished_at,
+        "error": job.last_error,
+        "tokens": result.get("usage"),
+    }
+
+
+@router.get("", dependencies=[Depends(verify_cf_access)])
+async def list_agent_runs(
+    request: Request,
+    agent_id: Optional[str] = Query(None, alias="agentId"),
+    limit: int = Query(20, ge=1, le=100),
+):
+    """agent_run 历史列表（Settings run 历史 UI 数据源，ADR D4/P6）。
+
+    🔴 鉴权 = ``verify_cf_access``（远程 CF / 本地 token）——**对齐 report-agents 路由**，因调用方
+    是 renderer 进程（非本机 gateway），**不用** ``verify_local_token``（那是 gateway 内部专用）。
+    flag off → 404（S4 纪律，feature 不存在）。行读态经 ``derive_agent_run_state`` 单源投影。
+    """
+    _require_flag()
+    jobs = get_job_repo().list_agent_runs(agent_id=agent_id, limit=limit)
+    items = [_run_history_item(j) for j in jobs]
+    return success_envelope(
+        items, request=request, source="agent-runs", meta_extra={"count": len(items)}
     )

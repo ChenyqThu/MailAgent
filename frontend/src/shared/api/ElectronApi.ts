@@ -34,6 +34,7 @@ import type {
   NotionAgentApi,
   NotionAgentConfig,
   NotionAgentDoctorCheck,
+  AgentRunHistoryItem,
   NotionAgentListItem,
   ReportApi,
   ReportAgentConfig,
@@ -847,6 +848,9 @@ class ElectronReportApi implements ReportApi {
       deleted: string
     }>
     return unwrap(env)
+  }
+  async listRuns(opts?: { agentId?: string; limit?: number }): Promise<AgentRunHistoryItem[]> {
+    return (await invoker()('report:listRuns', opts ?? {})) as AgentRunHistoryItem[]
   }
 }
 

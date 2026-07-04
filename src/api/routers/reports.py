@@ -30,6 +30,20 @@ from src.reports import wire
 router = APIRouter(prefix="/api", tags=["reports"])
 
 
+def _custom_agents_enabled() -> bool:
+    """读 ``MAILAGENT_CUSTOM_AGENTS_ENABLED``（S5 custom agent 产品面门控）。异常 → fail-closed False。
+
+    与 ``agent_runs._custom_agents_enabled`` 同形（thin config 读, 刻意不跨 router import 私有函数）。
+    off → create/run-now 的 custom 分支拒收 = flag-off 字节级维持今日行为。
+    """
+    from src.api.deps import get_settings
+
+    try:
+        return bool(get_settings().custom_agents_enabled)
+    except Exception:  # noqa: BLE001 — 配置读失败 → 保守当 feature off
+        return False
+
+
 # ============================================================
 # report 产物（读 + 删）
 # ============================================================
@@ -95,20 +109,45 @@ async def get_config(
 
 @router.post("/report-agents", dependencies=[Depends(verify_cf_access)])
 async def create_agent(request: Request, body: Optional[dict[str, Any]] = None):
-    """新建一个 agent（写）。type 多态（'report' / 'search'）。body =
+    """新建一个 agent（写）。type 多态（'report' / 'search' / 'preprocess' / 'custom'）。body =
     {id, type?, title?, enabled?, model?, prompt?, tools_json?}（tools_json 为数组）→
-    ReportAgentConfig。id 冲突 → 409 E_CONFLICT。"""
+    ReportAgentConfig。id 冲突 → 409 E_CONFLICT。
+
+    S5：``type='custom'`` 受 ``MAILAGENT_CUSTOM_AGENTS_ENABLED`` 门控——flag off 时 custom 不在
+    白名单 = 维持今日 E_INVALID_ARG 拒收（字节级不变）。flag on 时对 create payload 里的 trigger
+    深校验（``validate_agent_config_patch``；NULL/缺 = 草稿态, 允许），并持久化 v30 三字段（若带）。
+    """
     raw = body or {}
     agent_id = str(raw.get("id") or "").strip()
     if not agent_id:
         raise APIError("E_INVALID_ARG", "id is required", source="sqlite")
     agent_type = str(raw.get("type") or "report")
-    if agent_type not in ("report", "search", "preprocess"):
+    # custom 分支仅在 flag on 时进白名单（off → 落到今日的 E_INVALID_ARG 拒收, 字节级不变）。
+    allowed_types = ["report", "search", "preprocess"]
+    if _custom_agents_enabled():
+        allowed_types.append("custom")
+    if agent_type not in allowed_types:
         raise APIError(
             "E_INVALID_ARG",
-            f"type must be report|search|preprocess, got {agent_type!r}",
+            f"type must be {'|'.join(allowed_types)}, got {agent_type!r}",
             source="sqlite",
         )
+    # custom：**在 store.create_agent 之前**深校验 + 结构转换 v30 三字段——trigger 深校验（坏
+    # cron/未知 kind/超长 pattern → 400，给 owner 反馈；NULL/缺 = 草稿态放行）+ tool_policy/budget
+    # 结构闸（config_patch_to_db 非 dict → ValueError → 400）。放建行前 = 任何坏配置拒收且**不建
+    # 行**（create 端点原子性；否则坏 tool_policy/budget 会在建行之后才 400 留下孤儿草稿行）。转换
+    # 结果留到建行后 update 落库（store.create_agent 不接受这三列）。
+    v30_patch: Optional[dict[str, Any]] = None
+    if agent_type == "custom":
+        from src.agents.trigger import validate_agent_config_patch
+
+        try:
+            validate_agent_config_patch(raw)
+            v30_raw = {k: raw[k] for k in ("trigger", "tool_policy", "budget") if k in raw}
+            if v30_raw:
+                v30_patch = wire.config_patch_to_db(v30_raw)
+        except ValueError as exc:
+            raise APIError("E_INVALID_ARG", str(exc), source="sqlite")
     tools = raw.get("tools_json")
     tools_json = (
         json.dumps(tools, ensure_ascii=False) if isinstance(tools, list) else None
@@ -126,6 +165,10 @@ async def create_agent(request: Request, body: Optional[dict[str, Any]] = None):
         )
     except ValueError as exc:
         raise APIError("E_CONFLICT", str(exc), http_status=409, source="sqlite")
+    # custom：v30 三字段（已在建行前深校验+转换）经 update 落库——store.create_agent 不接受这三列，
+    # 单独 update，避免「带 trigger 建 agent」时静默丢弃。单源复用 set_config 的规范化（wire）。
+    if v30_patch:
+        agent = store.update_agent(agent_id, v30_patch) or agent
     return success_envelope(wire.resolve_agent(agent), request=request, source="sqlite")
 
 
@@ -162,30 +205,72 @@ async def delete_agent(request: Request, agent_id: str):
 
 @router.post("/report-agents/{agent_id}/run", dependencies=[Depends(verify_cf_access)])
 async def run_now(request: Request, agent_id: str, body: Optional[dict[str, Any]] = None):
-    """立即生成一份报告（写，跑 LLM）。镜像 report:runNow → ReportRunResult。body 可含 {cadence}。
+    """立即触发一次 agent run（写）。type 分流：
 
-    同步 in-process：``await asyncio.to_thread(asyncio.run, run_report_once(...))``，与 CLI
-    ``report run`` 行为一致（独立 event loop，避免 LLM httpx client 绑 serve-api loop）。
+    - ``report`` → 同步 in-process 生成一份报告（路径 B，report 专属，**冻结不扩权**）。镜像
+      report:runNow → ReportRunResult。body 可含 {cadence}。
+    - ``custom`` → S4 enqueue（``run_queue.enqueue_agent_run`` → AgentRunWorker 认领 → gateway
+      headless drain）。幂等键 ``agent_run:{id}:manual:{uuid}``，受 runs/day 门 + budget；返回
+      {jobId}。**绝不**沿路径 B（tests/agents 有 tripwire 守）。flag off → 拒收（S4 纪律）。
+    - 其它（search/preprocess）→ 拒（manual run 仅 report/custom）。
     """
     opts = body or {}
+    store = get_report_store()
+    agent = store.get_agent(agent_id)
+    if agent is None:
+        raise APIError("E_NOT_FOUND", f"report_agent {agent_id!r} not found", source="sqlite")
+    agent_type = agent.get("type", "report")
+
+    if agent_type == "custom":
+        # flag off → 拒收（对齐 S4 端点纪律；正常态下 custom agent 应在 flag on 时才被创建）。
+        if not _custom_agents_enabled():
+            raise APIError(
+                "E_INVALID_ARG", "custom agents feature is disabled", source="sqlite"
+            )
+        import uuid
+
+        from src.agents.run_queue import enqueue_agent_run
+        from src.agents.trigger import parse_budget
+        from src.api.deps import get_job_repo
+
+        # 手动触发 → trigger_kind='manual'（gateway 侧 contextMode 从 'manual' 派生成 fail-closed
+        # untrusted_trigger；无 email envelope）。幂等键随机 uuid → 每次手动都新起一 run（不与
+        # cron/email 的 fire_key 撞）；仍过 runs/day 门（enqueue_agent_run 内）。
+        budget = parse_budget(agent.get("budget_json"))
+        outcome = enqueue_agent_run(
+            get_job_repo(),
+            agent_id=agent_id,
+            trigger_kind="manual",
+            fire_key=f"manual:{uuid.uuid4().hex}",
+            budget=budget,
+        )
+        if outcome is None:
+            raise APIError(
+                "E_BUDGET",
+                f"agent {agent_id!r} hit max_runs_per_day (budget), run not enqueued",
+                source="sqlite",
+            )
+        job_id, was_created = outcome
+        return success_envelope(
+            {"jobId": job_id, "agentId": agent_id, "wasCreated": was_created},
+            request=request,
+            source="sqlite",
+        )
+
+    if agent_type != "report":
+        raise APIError(
+            "E_INVALID_ARG",
+            f"agent {agent_id!r} is type {agent_type!r};"
+            " manual run is report/custom only",
+            source="sqlite",
+        )
+
+    # ── report 路径 B（同步 in-process 生成，report-only 冻结）─────────────────────
     cadence = opts.get("cadence")
     if cadence is not None and cadence not in ("daily", "weekly", "monthly"):
         raise APIError(
             "E_INVALID_ARG", "cadence must be daily | weekly | monthly", source="sqlite"
         )
-
-    store = get_report_store()
-    agent = store.get_agent(agent_id)
-    if agent is None:
-        raise APIError("E_NOT_FOUND", f"report_agent {agent_id!r} not found", source="sqlite")
-    if agent.get("type", "report") != "report":
-        raise APIError(
-            "E_INVALID_ARG",
-            f"agent {agent_id!r} is type {agent.get('type')!r}, not a report agent;"
-            " manual run is report-only",
-            source="sqlite",
-        )
-
     # --cadence 覆盖：在副本里改 schedule_json 的 cadence（不落库），对齐 CLI report run。
     if cadence is not None:
         try:

@@ -390,7 +390,8 @@ def test_run_now_search_agent_rejected(
     assert r.status_code == 400
     body = r.json()
     assert body["error"]["code"] == "E_INVALID_ARG"
-    assert "report-only" in body["error"]["message"]
+    # S5：manual run 现支持 report/custom（search/preprocess 仍拒）。
+    assert "report/custom" in body["error"]["message"]
     # 确认没有写入 report 行
     assert store.get_report(f"{_SEARCH_ID}:daily:2026-06-01") is None
 
@@ -417,6 +418,126 @@ def test_run_now_report_agent_still_works(
         r = c.post(f"/api/report-agents/{_AGENT_ID}/run", json={})
     assert r.status_code == 200
     assert r.json()["data"]["status"] == "ready"
+
+
+# ---------------------------------------------------------------------------
+# S5 W1: create custom agent（flag-gated）+ run-now custom（enqueue，非路径 B）
+# ---------------------------------------------------------------------------
+
+
+def test_create_custom_agent_draft_flag_on(report_client: TestClient, monkeypatch) -> None:
+    """flag on：create type='custom' 无 trigger → 草稿 custom 行（trigger 投影 null）。"""
+    monkeypatch.setattr("src.api.routers.reports._custom_agents_enabled", lambda: True)
+    r = report_client.post(
+        "/api/report-agents",
+        json={"id": "cust_draft", "type": "custom", "title": "DMS", "enabled": False},
+    )
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data["type"] == "custom"
+    assert data["trigger"] is None  # 草稿态
+
+
+def test_create_custom_agent_with_trigger_persists(report_client: TestClient, monkeypatch) -> None:
+    """flag on：create custom 带合法 cron trigger → 深校验通过 + 落库（读回一致，非静默丢弃）。"""
+    monkeypatch.setattr("src.api.routers.reports._custom_agents_enabled", lambda: True)
+    r = report_client.post(
+        "/api/report-agents",
+        json={
+            "id": "cust_cron", "type": "custom", "enabled": True,
+            "trigger": {"v": 1, "kind": "cron", "cron": "0 9 * * 1-5", "timezone": "Asia/Shanghai"},
+            "budget": {"v": 1, "max_steps": 6},
+        },
+    )
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data["trigger"]["kind"] == "cron" and data["trigger"]["cron"] == "0 9 * * 1-5"
+    assert data["budget"]["max_steps"] == 6
+
+
+def test_create_custom_agent_bad_trigger_rejected(report_client: TestClient, monkeypatch) -> None:
+    """flag on：create custom 带坏 cron → 400 E_INVALID_ARG，不写脏行。"""
+    monkeypatch.setattr("src.api.routers.reports._custom_agents_enabled", lambda: True)
+    r = report_client.post(
+        "/api/report-agents",
+        json={"id": "cust_bad", "type": "custom",
+              "trigger": {"v": 1, "kind": "cron", "cron": "not a cron"}},
+    )
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "E_INVALID_ARG"
+    assert report_client.get("/api/report-agents?agentId=cust_bad").status_code == 404
+
+
+def test_create_custom_agent_bad_tool_policy_no_orphan_row(
+    report_client: TestClient, monkeypatch
+) -> None:
+    """flag on：create custom 带非 dict tool_policy → 400，且**不留孤儿草稿行**（建行原子性）。
+
+    结构闸（config_patch_to_db 非 dict → ValueError）在 store.create_agent **之前**跑，故坏
+    tool_policy/budget 拒收时零副作用（W1-check P2 修：曾在建行后才 400 会留下无 v30 字段的行）。
+    """
+    monkeypatch.setattr("src.api.routers.reports._custom_agents_enabled", lambda: True)
+    r = report_client.post(
+        "/api/report-agents",
+        json={"id": "cust_badtp", "type": "custom", "tool_policy": "not a dict"},
+    )
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "E_INVALID_ARG"
+    assert report_client.get("/api/report-agents?agentId=cust_badtp").status_code == 404
+
+
+def test_create_custom_agent_flag_off_rejected(report_client: TestClient, monkeypatch) -> None:
+    """flag off：create type='custom' → 维持今日 E_INVALID_ARG 拒收（白名单不含 custom，字节级不变）。"""
+    monkeypatch.setattr("src.api.routers.reports._custom_agents_enabled", lambda: False)
+    r = report_client.post("/api/report-agents", json={"id": "cust_off", "type": "custom"})
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "E_INVALID_ARG"
+    # 白名单文案不含 custom（flag off 的允许集 = report|search|preprocess）
+    assert "report|search|preprocess" in r.json()["error"]["message"]
+    assert report_client.get("/api/report-agents?agentId=cust_off").status_code == 404
+
+
+def test_run_now_custom_enqueues_not_path_b(
+    report_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """type='custom' run-now → enqueue agent_run（路径 A）+ 返回 jobId；**不**写 report 行（非路径 B）。"""
+    from src.sync.async_jobs import AsyncJobRepository
+
+    store = ReportStore(str(report_db))
+    store.create_agent("cust_run", type="custom", enabled=True, title="DMS")
+    repo = AsyncJobRepository(str(report_db))
+    monkeypatch.setattr("src.api.routers.reports.get_report_store", lambda: store)
+    monkeypatch.setattr("src.api.routers.reports._custom_agents_enabled", lambda: True)
+    monkeypatch.setattr("src.api.deps.get_job_repo", lambda: repo)
+    with TestClient(app, raise_server_exceptions=False) as c:
+        r = c.post("/api/report-agents/cust_run/run", json={})
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data["agentId"] == "cust_run" and isinstance(data["jobId"], int)
+    # 真入队一个 agent_run（路径 A）
+    jobs = repo.list_agent_runs(agent_id="cust_run")
+    assert len(jobs) == 1 and jobs[0].job_type == "agent_run"
+    assert jobs[0].params["trigger_kind"] == "manual"
+
+
+def test_run_now_custom_flag_off_rejected(
+    report_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """flag off：type='custom' run-now → 400 E_INVALID_ARG（feature disabled），不入队。"""
+    from src.sync.async_jobs import AsyncJobRepository
+
+    store = ReportStore(str(report_db))
+    store.create_agent("cust_off_run", type="custom", enabled=True)
+    repo = AsyncJobRepository(str(report_db))
+    monkeypatch.setattr("src.api.routers.reports.get_report_store", lambda: store)
+    monkeypatch.setattr("src.api.routers.reports._custom_agents_enabled", lambda: False)
+    monkeypatch.setattr("src.api.deps.get_job_repo", lambda: repo)
+    with TestClient(app, raise_server_exceptions=False) as c:
+        r = c.post("/api/report-agents/cust_off_run/run", json={})
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "E_INVALID_ARG"
+    assert "disabled" in r.json()["error"]["message"]
+    assert repo.list_agent_runs(agent_id="cust_off_run") == []
 
 
 # ---------------------------------------------------------------------------

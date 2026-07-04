@@ -2378,14 +2378,49 @@ export interface ReportConfigPatch {
 export interface ReportAgentCreateInput {
   /** 新 agent id（必填，冲突 → E_INVALID_ARG）。 */
   id: string
-  /** 默认 'search'（agentic 搜索）；'preprocess' = AI 邮件预处理（v27）。 */
-  type?: 'search' | 'report' | 'preprocess'
+  /** 默认 'search'（agentic 搜索）；'preprocess' = AI 邮件预处理（v27）；
+   *  'custom' = S5 custom agent（需 MAILAGENT_CUSTOM_AGENTS_ENABLED，创建为草稿，
+   *  trigger/tool_policy/budget 经 setConfig 补齐）。 */
+  type?: 'search' | 'report' | 'preprocess' | 'custom'
   title?: string
   enabled?: boolean
   model?: string | null
   prompt?: string | null
   /** 工具白名单（落库 tools_json）。 */
   tools?: string[]
+}
+
+/** S5 custom agent run 读侧状态（后端 derive_agent_run_state 单源判读，8 值域穷举）。
+ *  🔴 前端**永不**自行从 outcome/approvalState 推导 state —— 投影即契约，防
+ *  paused_handoff 渲染成「成功完成」的第二处解读漂移（ADR-003 D4 / ADR-004 P6）。 */
+export type AgentRunState =
+  | 'queued'
+  | 'running'
+  | 'completed'
+  | 'paused_pending'
+  | 'paused_expired'
+  | 'paused_approved'
+  | 'paused_rejected'
+  | 'failed'
+
+/** S5 run 历史行（GET /api/agent-runs 投影）。 */
+export interface AgentRunHistoryItem {
+  jobId: number
+  agentId: string
+  /** 后端单源读态（derive_agent_run_state）；前端只按此穷举渲染，不自行推导。 */
+  state: AgentRunState
+  /** gateway 终态 outcome（completed | paused_handoff | error），可空。 */
+  outcome?: string | null
+  /** 审批终态（pending | approved | rejected），仅 paused_handoff 有意义。 */
+  approvalState?: string | null
+  /** 该 run 的 ai_chat.db session（可打开查看 headless 对话历史）。 */
+  sessionId?: number | null
+  createdAt: number
+  finishedAt?: number | null
+  /** 失败错误码（E_GATEWAY_DOWN / E_ORPHANED / …）。 */
+  error?: string | null
+  /** LLM usage（token 计数 map），result_json 有则带。 */
+  tokens?: Record<string, number> | null
 }
 
 export interface ReportRunResult {
@@ -2414,10 +2449,13 @@ export interface ReportApi {
   runNow(agentId: string, opts?: { cadence?: ReportCadence }): Promise<ReportRunResult>
   /** 删除一份报告（写, needs auth）。 */
   delete(reportId: string): Promise<void>
-  /** 新建一行 agent 配置（写, needs auth；type='search'|'report'）。返回解析后的配置。 */
+  /** 新建一行 agent 配置（写, needs auth；type='search'|'report'|'preprocess'|'custom'）。返回解析后的配置。 */
   createAgent(input: ReportAgentCreateInput): Promise<ReportAgentConfig>
   /** 删除一行 agent 配置（写, needs auth）。 */
   deleteAgent(agentId: string): Promise<{ deleted: string }>
+  /** S5 — custom agent run 历史（读）。GET /api/agent-runs；flag off / 失败返 []（守读优雅降级）。
+   *  state 由后端 derive_agent_run_state 单源投影，前端不自行推导。 */
+  listRuns(opts?: { agentId?: string; limit?: number }): Promise<AgentRunHistoryItem[]>
 }
 
 export interface MailApi {

@@ -21,6 +21,7 @@
 // notionAgent.getConfig/listModels/listAgents, settings.get/secretsStatus.
 
 import type {
+  AgentRunHistoryItem,
   ReportApi,
   ReportAgentConfig,
   ReportAgentCreateInput,
@@ -786,6 +787,19 @@ export class HttpApi implements MailApi {
         }
       }),
     deleteAgent: (agentId: string): Promise<{ deleted: string }> =>
-      this.req<{ deleted: string }>('DELETE', `/report-agents/${encodeURIComponent(agentId)}`)
+      this.req<{ deleted: string }>('DELETE', `/report-agents/${encodeURIComponent(agentId)}`),
+    listRuns: async (opts?: {
+      agentId?: string
+      limit?: number
+    }): Promise<AgentRunHistoryItem[]> => {
+      try {
+        return await this.req<AgentRunHistoryItem[]>('GET', '/agent-runs', {
+          query: { agentId: opts?.agentId, limit: opts?.limit }
+        })
+      } catch {
+        // flag off → 404 / serve-api 不可达 → 空态（守 ReportApi「读失败返 []」契约）。
+        return []
+      }
+    }
   }
 }

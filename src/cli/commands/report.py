@@ -254,7 +254,9 @@ def report_config_set(
 def report_agent_create(
     ctx: typer.Context,
     agent_id: str = typer.Option(..., "--id", help="新 agent 的 id（必填，冲突报错）"),
-    agent_type: str = typer.Option("search", "--type", help="report | search"),
+    agent_type: str = typer.Option(
+        "search", "--type", help="report | search | custom（custom 需 MAILAGENT_CUSTOM_AGENTS_ENABLED）"
+    ),
     title: Optional[str] = typer.Option(None, "--title"),
     enabled: bool = typer.Option(True, "--enabled/--no-enabled", help="是否启用"),
     model: Optional[str] = typer.Option(None, "--model"),
@@ -272,9 +274,14 @@ def report_agent_create(
     except CliError as e:
         raise emit_cli_error(cli, e)
 
-    if agent_type not in ("report", "search"):
+    # custom 仅在 flag on 时进白名单（off → 维持今日「report | search」拒收, 字节级不变）。
+    # preprocess 有意不加（单例 seed 行, 手动 create 无意义, 见 S5 PRD P2/W1）。
+    allowed_types = ("report", "search")
+    if getattr(cli.cli_config, "custom_agents_enabled", False):
+        allowed_types = ("report", "search", "custom")
+    if agent_type not in allowed_types:
         raise emit_cli_error(
-            cli, CliInvalidArgError("--type must be report | search")
+            cli, CliInvalidArgError(f"--type must be {' | '.join(allowed_types)}")
         )
 
     # --tools-json 必须是合法 JSON 数组串（直接落库 tools_json 列）。

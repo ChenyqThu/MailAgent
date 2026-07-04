@@ -372,6 +372,34 @@ class AsyncJobRepository:
         finally:
             conn.close()
 
+    def list_agent_runs(
+        self, *, agent_id: Optional[str] = None, limit: int = 20
+    ) -> list[AsyncJob]:
+        """列出 agent_run 历史行 (按 created_at desc)——S5 run 历史读侧唯一数据源。
+
+        agent_id 非空 → 只返回该 agent (target_key 过滤); None → 全部 agent_run。limit clamp
+        进 [1, 100]。返回 ``AsyncJob`` 投影 —— 读态 (8 值域) 由调用方经
+        ``src.agents.run_state.derive_agent_run_state`` 派生, **不在此推导** (纯查询)。
+        """
+        lim = max(1, min(100, limit))
+        conn = self._connect()
+        try:
+            if agent_id:
+                rows = conn.execute(
+                    "SELECT * FROM async_jobs WHERE job_type='agent_run' AND target_key=? "
+                    "ORDER BY created_at DESC, job_id DESC LIMIT ?",
+                    (agent_id, lim),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM async_jobs WHERE job_type='agent_run' "
+                    "ORDER BY created_at DESC, job_id DESC LIMIT ?",
+                    (lim,),
+                ).fetchall()
+            return [self._row_to_job(r) for r in rows]
+        finally:
+            conn.close()
+
     # ------------------------------------------------------------
     # agent_run fresh-spawn 支持 (S4 D2/D4): claim_token + spec CAS + approval 回写
     # ------------------------------------------------------------

@@ -91,6 +91,30 @@ class TestAgentCreate:
         assert result.exit_code == 2, result.output
         assert _extract(result.output)["error"]["code"] == "E_INVALID_ARG"
 
+    def test_create_custom_flag_off_rejected(
+        self, cli_runner, cli_env, seeded_db, _unauth_writes_on, monkeypatch
+    ):
+        """S5：flag off（默认）→ --type custom 拒收（字节级同 --type garbage，白名单不含 custom）。"""
+        monkeypatch.delenv("MAILAGENT_CUSTOM_AGENTS_ENABLED", raising=False)
+        result = _invoke(
+            cli_runner, "agent-create", "--id", "cust_off", "--type", "custom",
+            "-o", "json", db_path=seeded_db,
+        )
+        assert result.exit_code == 2, result.output
+        assert _extract(result.output)["error"]["code"] == "E_INVALID_ARG"
+
+    def test_create_custom_flag_on(
+        self, cli_runner, cli_env, seeded_db, _unauth_writes_on, monkeypatch
+    ):
+        """S5：MAILAGENT_CUSTOM_AGENTS_ENABLED=true → --type custom 建成 custom 行。"""
+        monkeypatch.setenv("MAILAGENT_CUSTOM_AGENTS_ENABLED", "true")
+        result = _invoke(
+            cli_runner, "agent-create", "--id", "cust_on", "--type", "custom",
+            "-o", "json", db_path=seeded_db,
+        )
+        assert result.exit_code == 0, result.output
+        assert _extract(result.output)["data"]["type"] == "custom"
+
     def test_create_requires_auth(self, cli_runner, cli_env, seeded_db):
         """默认 cli_env 未授权 → exit 4。"""
         result = _invoke(
