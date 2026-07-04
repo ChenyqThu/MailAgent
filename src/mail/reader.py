@@ -12,10 +12,33 @@ from loguru import logger
 from src.models import Email, Attachment
 from src.mail.applescript import MailAppScripts
 from src.mail.charset_utils import decode_text_part
+from src.mail.backend.davmail_backend import _decode_mime_header
 from src.config import config
 
 # 北京时区 (UTC+8)
 BEIJING_TZ = timezone(timedelta(hours=8))
+
+
+def _decode_attachment_filename(part) -> Optional[str]:
+    """附件 part 的 filename 提取 + RFC 2047 解码兜底 + 路径分隔符净化。
+
+    Outlook/Exchange 常把中文附件名塞成 ``filename="=?gb2312?B?...?="``
+    (RFC 2047 encoded-word)。``policy.default`` 的 ``get_filename()`` 一般已解码
+    标准 encoded-word，这里再过一道 ``_decode_mime_header`` 是幂等兜底 (对已解码
+    的纯字符串无副作用)，与 davmail 侧其它 header 的解码口径保持一致。
+    ``get_param('name')`` 对 RFC 2231 扩展参数边缘可能返回 ``(charset, lang,
+    value)`` tuple，先取 value 防 ``re.sub`` 崩。路径分隔符净化口径与 rfc822
+    分支一致。返回 None 表示无可用文件名。
+    """
+    raw = part.get_filename() or part.get_param("name")
+    if not raw:
+        return None
+    if isinstance(raw, tuple):
+        raw = raw[-1] if raw else ""
+    decoded = _decode_mime_header(str(raw))
+    if not decoded:
+        return None
+    return re.sub(r'[\\/:*?"<>|\r\n\t]+', '_', decoded)
 
 
 def _parse_importance(
@@ -641,10 +664,16 @@ class EmailReader:
                     content_id = part.get("Content-ID")
                     disposition = part.get("Content-Disposition", "")
                     part_content_type = part.get_content_type()
-                    filename = part.get_filename() or part.get_param("name")
+                    filename = _decode_attachment_filename(part)
 
-                    # 跳过主体内容
-                    if part_content_type in ("text/plain", "text/html", "multipart/alternative", "multipart/mixed", "multipart/related"):
+                    # 跳过主体内容与 multipart 容器；但带 attachment disposition 的
+                    # text/plain / text/html 是「文件附件」(Outlook 常把 .html/.txt
+                    # 附件标成对应 text/* 类型)，不能当正文 skip —— 放行到下方
+                    # attachment 分支被抽为常规附件。
+                    is_attachment_disp = disposition.lower().startswith("attachment")
+                    if part_content_type.startswith("multipart/"):
+                        continue
+                    if part_content_type in ("text/plain", "text/html") and not is_attachment_disp:
                         continue
 
                     if content_id:
@@ -886,7 +915,7 @@ class EmailReader:
                 data = part.get_payload(decode=True)
                 if not data:
                     return
-                filename = part.get_filename() or part.get_param('name')
+                filename = _decode_attachment_filename(part)
                 if not filename:
                     return  # 无名字 + 非 rfc822，跳过
                 content_type = ct
