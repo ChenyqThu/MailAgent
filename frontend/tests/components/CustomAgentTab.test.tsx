@@ -51,6 +51,12 @@ const mockDeleteAgent = vi.fn()
 const mockRunNow = vi.fn()
 const mockListRuns = vi.fn()
 const mockToolOptions = vi.fn()
+// S5 W5b — 自动化策略 section 的 chat api 面。
+const mockListPolicyRules = vi.fn()
+const mockCreatePolicyRule = vi.fn()
+const mockSetRuleEnabled = vi.fn()
+const mockDeleteRule = vi.fn()
+const mockListEntrypoints = vi.fn()
 vi.mock('@shared/hooks/useMailApi', () => ({
   useMailApi: () => ({
     report: {
@@ -65,7 +71,14 @@ vi.mock('@shared/hooks/useMailApi', () => ({
       listRuns: mockListRuns,
       toolOptions: mockToolOptions
     },
-    chat: { kosAvailable: vi.fn().mockResolvedValue(false) }
+    chat: {
+      kosAvailable: vi.fn().mockResolvedValue(false),
+      listPolicyRules: mockListPolicyRules,
+      createPolicyRule: mockCreatePolicyRule,
+      setPolicyRuleEnabled: mockSetRuleEnabled,
+      deletePolicyRule: mockDeleteRule,
+      listSkillEntrypoints: mockListEntrypoints
+    }
   })
 }))
 
@@ -133,6 +146,22 @@ afterEach(() => {
     ],
     defaults: ['email_search', 'email_get']
   })
+  mockListPolicyRules.mockResolvedValue([])
+  mockListEntrypoints.mockResolvedValue([])
+})
+
+// afterEach 在首个用例前不会跑 —— 模块加载时也要有默认值（否则第一个渲染的 drawer 用例
+// 会因 listPolicyRules 返回 undefined 而 query 报错）。
+mockListRuns.mockResolvedValue([])
+mockListPolicyRules.mockResolvedValue([])
+mockListEntrypoints.mockResolvedValue([])
+mockToolOptions.mockResolvedValue({
+  tools: [
+    { name: 'email_search', class: 'read' },
+    { name: 'email_get', class: 'read' },
+    { name: 'compose_reply', class: 'domain_write' }
+  ],
+  defaults: ['email_search', 'email_get']
 })
 
 describe('i18n — agents.custom key 对齐', () => {
@@ -286,6 +315,19 @@ describe('CustomAgentDrawer — P2 tool_policy 按需发送（NULL 行不被静�
     expect('tool_policy' in mockSetConfig.mock.calls[0][1]).toBe(false)
   })
 
+  test('显式行打开后勾选 = 行内集合（不被 defaults effect 覆盖，W5b 修 W2 潜伏 bug）', async () => {
+    renderUi(
+      <CustomAgentDrawer
+        cfg={makeCustomCfg({ tool_policy: { v: 1, allowed_tools: ['compose_reply'] } })}
+        open
+        onClose={() => {}}
+      />
+    )
+    // toolOptions 就位后：显式集合里的 compose_reply 选中，defaults 里的 email_search 未选中
+    expect(await screen.findByRole('button', { name: /compose_reply/, pressed: true })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'email_search', pressed: false })).toBeTruthy()
+  })
+
   test('显式 allowed_tools 行未触碰工具区 → patch 无 tool_policy（不误清）', async () => {
     mockSetConfig.mockResolvedValue(makeCustomCfg())
     renderUi(
@@ -320,6 +362,170 @@ describe('CustomAgentDrawer — run 历史', () => {
     await vi.waitFor(() => expect(mockRunNow).toHaveBeenCalledTimes(1))
     expect(mockRunNow.mock.calls[0][0]).toBe('dms_helper')
     expect(mockRunNow.mock.calls[0][1]).toEqual({ type: 'custom' })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// S5 W5b — 自动化策略 section（ADR-004 D5/D6）
+// ---------------------------------------------------------------------------
+
+function makeRule(over: Record<string, unknown> = {}) {
+  return {
+    id: 1,
+    capability: 'domain_write',
+    matcher: { v: 1, tool: 'email_flag' },
+    contextMode: 'untrusted_trigger',
+    agentId: 'dms_helper',
+    enabled: true,
+    note: null,
+    createdAt: '2026-07-04T09:00:00Z',
+    lastUsedAt: null,
+    useCount: 3,
+    dangerous: false,
+    ...over
+  }
+}
+
+describe('CustomAgentDrawer — 自动化策略（S5 W5b）', () => {
+  test('规则列表：matcher 摘要 + 命中计数 + dormant 提示（contextMode 失配才显）', async () => {
+    mockListPolicyRules.mockResolvedValue([
+      makeRule(),
+      makeRule({
+        id: 2,
+        capability: 'exec',
+        contextMode: 'cron_headless', // cfg trigger=email_filter → untrusted_trigger → 失配
+        matcher: {
+          v: 1,
+          argv0_realpath: '/usr/bin/python3',
+          argv_template: [
+            { pin: '/skills/dms-cli/approve.py' },
+            { arg: { kind: 'pattern', regex: '^REQ-[0-9]+$' } }
+          ]
+        },
+        useCount: 0
+      })
+    ])
+    renderUi(<CustomAgentDrawer cfg={makeCustomCfg()} open onClose={() => {}} />)
+    expect(await screen.findByText('email_flag')).toBeTruthy()
+    expect(screen.getByText('命中 3 次')).toBeTruthy()
+    expect(mockListPolicyRules).toHaveBeenCalledWith({ agentId: 'dms_helper' })
+    // exec matcher 摘要：argv0 + entry pin + 受约束位 <pattern>
+    expect(
+      screen.getByText('/usr/bin/python3 /skills/dms-cli/approve.py <pattern>')
+    ).toBeTruthy()
+    // dormant 恰出现一次（只有 cron_headless 那条失配）
+    expect(screen.getAllByText(/休眠：触发类型已变更/)).toHaveLength(1)
+  })
+
+  test('domain_write 建规：两步确认（红样式影响面声明）→ createPolicyRule payload', async () => {
+    mockCreatePolicyRule.mockResolvedValue(makeRule({ id: 9 }))
+    // 可选写工具 = domain_write 工具 ∩ allowed_tools = [compose_reply]（唯一 → 打开表单预选）
+    renderUi(
+      <CustomAgentDrawer
+        cfg={makeCustomCfg({ tool_policy: { v: 1, allowed_tools: ['compose_reply'] } })}
+        open
+        onClose={() => {}}
+      />
+    )
+    // 先等 toolOptions 就位（工具区 chip 渲染）——「新建规则」的唯一写工具预选依赖它。
+    await screen.findByRole('button', { name: /compose_reply/ })
+    fireEvent.click(screen.getByText('新建规则'))
+    fireEvent.click(screen.getByText('创建'))
+    // 红样式影响面确认在场，未确认前不发请求
+    expect(await screen.findByText('高危：免审批自动执行')).toBeTruthy()
+    // 影响面声明：agent 名 + 动作 + 语境都在声明句里
+    expect(
+      screen.getByText(/「DMS 审批助手」将在无人确认时自动执行 compose_reply/)
+    ).toBeTruthy()
+    expect(mockCreatePolicyRule).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByText('我已了解，创建规则'))
+    await vi.waitFor(() => expect(mockCreatePolicyRule).toHaveBeenCalledTimes(1))
+    expect(mockCreatePolicyRule.mock.calls[0][0]).toEqual({
+      capability: 'domain_write',
+      matcher: { v: 1, tool: 'compose_reply' },
+      agentId: 'dms_helper'
+    })
+  })
+
+  test('domain_write 建规浅校验：多选项未选 → 拒 + 不发请求', async () => {
+    mockToolOptions.mockResolvedValue({
+      tools: [
+        { name: 'email_flag', class: 'domain_write' },
+        { name: 'compose_reply', class: 'domain_write' }
+      ],
+      defaults: []
+    })
+    renderUi(
+      <CustomAgentDrawer
+        cfg={makeCustomCfg({
+          tool_policy: { v: 1, allowed_tools: ['email_flag', 'compose_reply'] }
+        })}
+        open
+        onClose={() => {}}
+      />
+    )
+    fireEvent.click(await screen.findByText('新建规则'))
+    fireEvent.click(screen.getByText('创建'))
+    expect(await screen.findByText('请选择要放行的写工具。')).toBeTruthy()
+    expect(mockCreatePolicyRule).not.toHaveBeenCalled()
+  })
+
+  test('grant_exec：确认后翻开关，保存并入 tool_policy 且 NULL 行不物化 allowed_tools', async () => {
+    mockSetConfig.mockResolvedValue(makeCustomCfg())
+    renderUi(
+      <CustomAgentDrawer cfg={makeCustomCfg({ tool_policy: null })} open onClose={() => {}} />
+    )
+    expect(await screen.findByText(/grant_exec/)).toBeTruthy()
+    // grant 开关 = 最后一个 switch（enabled 开关之后、无规则行）
+    const switches = screen.getAllByRole('switch')
+    fireEvent.click(switches[switches.length - 1])
+    // 确认对话在场，未确认前开关不翻（保存也不带 tool_policy）
+    expect(await screen.findByText(/确定开启/)).toBeTruthy()
+    fireEvent.click(screen.getByText('确认开启'))
+    fireEvent.click(screen.getByText('保存'))
+    await vi.waitFor(() => expect(mockSetConfig).toHaveBeenCalledTimes(1))
+    const patch = mockSetConfig.mock.calls[0][1]
+    // 触碰 grant = 触碰 tool_policy；NULL 行只带 grant_exec，allowed_tools 缺省（默认安全集不物化）
+    expect(patch.tool_policy).toEqual({ v: 1, grant_exec: true })
+  })
+
+  test('grant_exec 取消确认 → 开关不翻，保存不带 tool_policy', async () => {
+    mockSetConfig.mockResolvedValue(makeCustomCfg())
+    renderUi(
+      <CustomAgentDrawer cfg={makeCustomCfg({ tool_policy: null })} open onClose={() => {}} />
+    )
+    await screen.findByText(/grant_exec/)
+    const switches = screen.getAllByRole('switch')
+    fireEvent.click(switches[switches.length - 1])
+    await screen.findByText(/确定开启/)
+    // 「取消」出现两处（grant 确认块 + 抽屉 footer）—— 确认块的在 DOM 前（body 先于 footer）。
+    fireEvent.click(screen.getAllByText('取消')[0])
+    fireEvent.click(screen.getByText('保存'))
+    await vi.waitFor(() => expect(mockSetConfig).toHaveBeenCalledTimes(1))
+    expect('tool_policy' in mockSetConfig.mock.calls[0][1]).toBe(false)
+  })
+
+  test('run 行免卡 badge：autoWhitelistedWrites>0 渲染 ×N；null（账本不可达）不渲染', async () => {
+    mockListRuns.mockResolvedValue([
+      {
+        jobId: 1,
+        agentId: 'dms_helper',
+        state: 'completed',
+        createdAt: 1_700_000_000,
+        autoWhitelistedWrites: 2
+      },
+      {
+        jobId: 2,
+        agentId: 'dms_helper',
+        state: 'completed',
+        createdAt: 1_700_000_100,
+        autoWhitelistedWrites: null
+      }
+    ])
+    renderUi(<CustomAgentDrawer cfg={makeCustomCfg()} open onClose={() => {}} />)
+    expect(await screen.findByText('自动放行 ×2')).toBeTruthy()
+    // null 行不渲染 badge（不渲染 ≠ 0 次）—— 全列表恰一个 badge
+    expect(screen.getAllByText(/自动放行/)).toHaveLength(1)
   })
 })
 

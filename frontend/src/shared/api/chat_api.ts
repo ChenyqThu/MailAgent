@@ -24,8 +24,10 @@ import type {
   ChatSessionListItem,
   ChatToolCall,
   CompileUserMdResult,
+  CreatePolicyRuleInput,
   ExecPolicyRule,
   SkillConfirmResult,
+  SkillEntrypoints,
   SkillPackPreview,
   SkillSecretMeta,
   SkillSummary,
@@ -192,16 +194,39 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
       })
     },
 
-    async listPolicyRules(): Promise<ExecPolicyRule[]> {
+    async listPolicyRules(params?: { agentId?: string }): Promise<ExecPolicyRule[]> {
       // S2 W1 — the Settings 「自动化策略」 page reads the exec whitelist rules (GET
       // /agent/policy/rules). Graceful [] when unreachable (the section shows an empty state).
+      // S5 W5b — optional agentId narrows to one custom agent's per-agent rules.
+      const qs = params?.agentId ? `?agentId=${encodeURIComponent(params.agentId)}` : ''
       try {
         const data = await request<{ rules: ExecPolicyRule[] }>(
           baseUrl,
           'GET',
-          '/agent/policy/rules'
+          `/agent/policy/rules${qs}`
         )
         return data.rules ?? []
+      } catch {
+        return []
+      }
+    },
+
+    async createPolicyRule(input: CreatePolicyRuleInput): Promise<ExecPolicyRule> {
+      // S5 W5b — per-agent 免卡规则唯一创建通道（Settings 自动化策略表单，ADR-004 D5）。
+      // Throws Error&{code}：后端形状闸/归属校验 400 detail 原样透传给表单展示。
+      return request<ExecPolicyRule>(baseUrl, 'POST', '/agent/policy/rules', { body: input })
+    },
+
+    async listSkillEntrypoints(): Promise<SkillEntrypoints[]> {
+      // S5 W5b — exec 规则构造器的 entrypoint 候选（GET /agent/skills/entrypoints）。
+      // flag off（404）/ 不可达 → graceful []（构造器显示「无已安装 skill」空态）。
+      try {
+        const data = await request<{ skills: SkillEntrypoints[] }>(
+          baseUrl,
+          'GET',
+          '/agent/skills/entrypoints'
+        )
+        return data.skills ?? []
       } catch {
         return []
       }

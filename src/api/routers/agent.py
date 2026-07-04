@@ -242,6 +242,40 @@ async def list_agent_skills(request: Request):
                             meta_extra={"count": len(data)})
 
 
+@router.get("/skills/entrypoints", dependencies=[Depends(verify_cf_access)])
+async def list_skill_entrypoints(request: Request):
+    """Settings per-agent「自动化策略」exec 规则构造器的数据源（S5 W5b，ADR-004 D5）。
+
+    只列**供应链 installed** skill（``files_json`` 非空 = confirm 落库事实；builtin/声明行
+    无逐文件清单，构造不出 pinned-entrypoint）：``{name, dir, files}`` —— 前端据此组装
+    matcher（``argv[1]`` pin = ``dir/relpath``、可选 ``cwd_scope`` pin = ``dir``），不在 TS
+    手抄 skills root。flag off → 404（该面只服务 per-agent 建规，S4 纪律）。
+    """
+    if not _custom_agents_enabled():
+        raise APIError("E_NOT_FOUND", "custom agents feature is disabled",
+                       http_status=404, source="sqlite")
+    from src.skills.pack_fetch import skill_dir
+
+    out: list[dict[str, Any]] = []
+    for row in get_agent_config_store().list_skills():
+        if not row.files_json:
+            continue
+        try:
+            files = json.loads(row.files_json)
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(files, dict) or not files:
+            continue
+        out.append({
+            "name": row.skill_name,
+            "dir": skill_dir(row.skill_name),
+            "files": sorted(files.keys()),
+        })
+    out.sort(key=lambda x: x["name"])
+    return success_envelope({"skills": out}, request=request, source="sqlite",
+                            meta_extra={"count": len(out)})
+
+
 @router.post("/skills/{name}/enabled", dependencies=[Depends(verify_cf_access)])
 async def set_skill_enabled(name: str, request: Request, body: Optional[dict[str, Any]] = None):
     """启用/禁用一个 skill（builtin 懒建覆盖行 / installed 更新行）。body = {enabled: bool}。"""

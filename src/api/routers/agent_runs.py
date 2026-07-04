@@ -379,6 +379,33 @@ def _run_history_item(job: AsyncJob) -> dict[str, Any]:
     }
 
 
+def _annotate_auto_whitelist(items: list[dict[str, Any]]) -> None:
+    """run 历史行补 ``autoWhitelistedWrites``（S5 W5b，ADR-004 D6 —— 免卡写计数 badge）。
+
+    经 ``result_json.sessionId`` join ai_chat.db ``chat_tool_call``（``approval_status=
+    'auto_whitelist'`` + ``whitelist_rule_id``，CHAT_DB v18 列，gateway 直写）。语义三态：
+    行无 sessionId / chat db 不可达 → **null**（badge 不渲染 —— 账本读不到时渲染 0 就是谎报
+    「无免卡写」）；可达且有会话 → 计数（0 = 显式无免卡写）。审计计数是展示增强，任何异常
+    不阻断 run 历史本体。
+    """
+    ids = [it["sessionId"] for it in items if isinstance(it.get("sessionId"), int)]
+    counts: Optional[dict[int, int]] = None
+    if ids:
+        try:
+            from src.chat.db import ChatDb
+
+            counts = ChatDb().count_auto_whitelist_writes(ids)
+        except Exception as exc:  # noqa: BLE001 — 增强字段，读账本失败只降级不阻断
+            logger.warning(f"[agent-runs] auto_whitelist count unavailable: {exc}")
+            counts = None
+    for it in items:
+        sid = it.get("sessionId")
+        if counts is not None and isinstance(sid, int):
+            it["autoWhitelistedWrites"] = counts.get(sid, 0)
+        else:
+            it["autoWhitelistedWrites"] = None
+
+
 @router.get("/tool-options", dependencies=[Depends(verify_cf_access)])
 async def get_tool_options(request: Request):
     """Settings per-agent 工具白名单编辑面的选项源（S5 W4a，ADR-004 §5.1）。
@@ -415,6 +442,7 @@ async def list_agent_runs(
     _require_flag()
     jobs = get_job_repo().list_agent_runs(agent_id=agent_id, limit=limit)
     items = [_run_history_item(j) for j in jobs]
+    _annotate_auto_whitelist(items)
     return success_envelope(
         items, request=request, source="agent-runs", meta_extra={"count": len(items)}
     )

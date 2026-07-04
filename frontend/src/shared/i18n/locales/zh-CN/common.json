@@ -2538,6 +2538,7 @@
         "empty": "暂无运行记录。",
         "pausedPendingHint": "运行已暂停、等待审批。请在灵动岛批准；若未开启灵动岛，此次运行将在超时后过期作废。",
         "pausedExpiredHint": "审批已过期，此次运行未执行。",
+        "autoWhitelisted": "自动放行 ×{n}",
         "state": {
           "queued": "排队中",
           "running": "运行中",
@@ -2547,6 +2548,64 @@
           "pausedApproved": "审批通过（已执行）",
           "pausedRejected": "审批拒绝（未执行）",
           "failed": "失败"
+        }
+      },
+      "policy": {
+        "section": "自动化策略",
+        "hint": "该 Agent 无人值守运行时的免审批白名单。无规则时所有写操作都会逐次弹审批（灵动岛）；命中规则的操作免审批直接执行。放宽某条规则请删除后重新创建。",
+        "add": "新建规则",
+        "loading": "加载中…",
+        "empty": "还没有规则。该 Agent 的所有写操作都需要你逐次批准。",
+        "dormant": "休眠：触发类型已变更，此规则不再匹配任何运行。",
+        "hits": "命中 {n} 次",
+        "delete": "删除",
+        "capability": {
+          "domain_write": "自动执行写工具",
+          "exec": "自动运行 Skill 脚本"
+        },
+        "modeDerived": "生效语境：{mode}（由触发类型自动派生，不可选）",
+        "mode": {
+          "untrusted_trigger": "邮件事件触发运行",
+          "cron_headless": "定时触发运行",
+          "none": "未配置触发（规则将处于休眠）"
+        },
+        "toolLabel": "工具",
+        "toolNone": "该 Agent 的工具白名单里没有写工具（先在上方「可用工具」勾选写工具并保存）。",
+        "skillLabel": "Skill",
+        "skillNone": "没有已安装的 Skill（先在 设置 → Custom AI 安装）。",
+        "entryLabel": "入口脚本",
+        "interpreterPlaceholder": "解释器绝对路径，如 /usr/bin/python3",
+        "argsLabel": "尾参约束位",
+        "argsHint": "每个位置必须是 pin / 枚举 / 正则 / 路径前缀之一，无「任意」通配。",
+        "argAdd": "添加参数位",
+        "argRemove": "移除",
+        "argKind": {
+          "pin": "pin（字面）",
+          "enum": "枚举",
+          "pattern": "正则",
+          "path_within": "路径前缀"
+        },
+        "argPlaceholder": {
+          "pin": "字面值",
+          "enum": "逗号分隔允许值，如 approve, reject",
+          "pattern": "锚定正则，如 ^REQ-[0-9]+$",
+          "path_within": "绝对目录前缀，如 /Users/me/exports"
+        },
+        "cwdPin": "把工作目录锁定到该 Skill 目录",
+        "errToolRequired": "请选择要放行的写工具。",
+        "errEntryRequired": "请选择 Skill 与入口脚本。",
+        "errInterpreterAbs": "解释器必须是绝对路径（以 / 开头）。",
+        "errArgEmpty": "参数位的值不能为空。",
+        "warnTitle": "高危：免审批自动执行",
+        "warnBody": "创建后，「{agent}」将在无人确认时自动执行 {action}。规则只在{mode}中生效；删除规则即恢复逐次审批。",
+        "confirmCreate": "我已了解，创建规则",
+        "create": "创建",
+        "cancel": "取消",
+        "grant": {
+          "label": "允许运行本机 Skill 脚本（grant_exec）",
+          "hint": "为该 Agent 的无人值守运行开放执行面。仍需上方白名单规则命中 + 首次运行在灵动岛批准才会免审批执行；无规则命中时逐次弹审批。保存后生效。",
+          "warn": "高危：开启后，「{agent}」的无人值守运行可以请求执行本机 Skill 脚本。确定开启？",
+          "confirm": "确认开启"
         }
       }
     }

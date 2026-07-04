@@ -2538,6 +2538,7 @@
         "empty": "No runs yet.",
         "pausedPendingHint": "Run paused, waiting for approval. Approve it in the Dynamic Island; if the island is off, this run will expire and be discarded.",
         "pausedExpiredHint": "Approval expired; this run was not executed.",
+        "autoWhitelisted": "Auto-allowed ×{n}",
         "state": {
           "queued": "Queued",
           "running": "Running",
@@ -2547,6 +2548,64 @@
           "pausedApproved": "Approved (executed)",
           "pausedRejected": "Rejected (not run)",
           "failed": "Failed"
+        }
+      },
+      "policy": {
+        "section": "Automation policy",
+        "hint": "Approval-free whitelist for this agent's unattended runs. With no rules, every write pauses for your approval (Dynamic Island); actions matching a rule execute without a card. To loosen a rule, delete it and create a new one.",
+        "add": "New rule",
+        "loading": "Loading…",
+        "empty": "No rules yet. Every write by this agent requires your per-action approval.",
+        "dormant": "Dormant: the trigger type changed, so this rule no longer matches any run.",
+        "hits": "Matched {n} times",
+        "delete": "Delete",
+        "capability": {
+          "domain_write": "Auto-run write tool",
+          "exec": "Auto-run skill script"
+        },
+        "modeDerived": "Applies to: {mode} (derived from the trigger type, not selectable)",
+        "mode": {
+          "untrusted_trigger": "email-triggered runs",
+          "cron_headless": "scheduled runs",
+          "none": "no trigger configured (rule will be dormant)"
+        },
+        "toolLabel": "Tool",
+        "toolNone": "This agent's tool whitelist has no write tools (check write tools under \"Allowed tools\" above and save first).",
+        "skillLabel": "Skill",
+        "skillNone": "No installed skills (install one under Settings → Custom AI first).",
+        "entryLabel": "Entry script",
+        "interpreterPlaceholder": "Absolute interpreter path, e.g. /usr/bin/python3",
+        "argsLabel": "Constrained trailing arguments",
+        "argsHint": "Every position must be pin / enum / pattern / path prefix — no raw wildcard.",
+        "argAdd": "Add argument",
+        "argRemove": "Remove",
+        "argKind": {
+          "pin": "pin (literal)",
+          "enum": "enum",
+          "pattern": "pattern",
+          "path_within": "path prefix"
+        },
+        "argPlaceholder": {
+          "pin": "Literal value",
+          "enum": "Comma-separated allowed values, e.g. approve, reject",
+          "pattern": "Anchored regex, e.g. ^REQ-[0-9]+$",
+          "path_within": "Absolute directory prefix, e.g. /Users/me/exports"
+        },
+        "cwdPin": "Pin the working directory to this skill's folder",
+        "errToolRequired": "Pick the write tool to allow.",
+        "errEntryRequired": "Pick a skill and its entry script.",
+        "errInterpreterAbs": "The interpreter must be an absolute path (starting with /).",
+        "errArgEmpty": "Argument values cannot be empty.",
+        "warnTitle": "High risk: approval-free execution",
+        "warnBody": "Once created, \"{agent}\" will execute {action} without asking you. The rule only applies to {mode}; delete it to restore per-action approval.",
+        "confirmCreate": "I understand — create the rule",
+        "create": "Create",
+        "cancel": "Cancel",
+        "grant": {
+          "label": "Allow running local skill scripts (grant_exec)",
+          "hint": "Opens the exec surface for this agent's unattended runs. Execution still requires a whitelist rule match plus a first-run approval on the Dynamic Island; without a match it pauses per action. Takes effect after saving.",
+          "warn": "High risk: once enabled, unattended runs of \"{agent}\" may request executing local skill scripts. Enable?",
+          "confirm": "Enable"
         }
       }
     }

@@ -400,6 +400,34 @@ class ChatDb:
             (message_id,),
         )
 
+    def count_auto_whitelist_writes(self, session_ids: List[int]) -> Optional[Dict[int, int]]:
+        """按 session 统计免卡执行审计行数（S5 ADR-004 D6 —— run 历史「自动放行 ×N」badge）。
+
+        ``chat_tool_call.approval_status='auto_whitelist'``（CHAT_DB v18 语义，gateway 直写）
+        经 message→session join 归到会话。返回 ``{session_id: count}``（无命中的 id 不在 dict，
+        调用方 default 0）。库不存在 / 表未初始化 / 锁 → **None**（调用方把字段降级为 null）——
+        有意不走 ``_read_all`` 的 graceful ``[]``：badge 必须区分「账本可达且 0 次免卡」与
+        「账本不可达」，后者渲染 0 就是谎报。
+        """
+        ids = [int(s) for s in session_ids]
+        if not ids:
+            return {}
+        if not os.path.exists(self.db_path):
+            return None
+        placeholders = ",".join("?" * len(ids))
+        try:
+            with self._connection() as conn:
+                rows = conn.execute(
+                    "SELECT m.session_id AS sid, COUNT(*) AS n FROM chat_tool_call tc "
+                    "JOIN ai_chat_messages m ON m.id = tc.message_id "
+                    "WHERE tc.approval_status = 'auto_whitelist' "
+                    f"AND m.session_id IN ({placeholders}) GROUP BY m.session_id",
+                    tuple(ids),
+                ).fetchall()
+                return {int(r["sid"]): int(r["n"]) for r in rows}
+        except sqlite3.Error:
+            return None
+
     # ── sessions（写 + 单读，3b-3）─────────────────────────────────────────
 
     def get_or_create_session(

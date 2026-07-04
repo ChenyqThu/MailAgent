@@ -1416,12 +1416,34 @@ export interface ExecPolicyRule {
   capability: string
   matcher: Record<string, unknown>
   contextMode: string
+  /** S5 ADR-004 — per-agent headless 规则的归属 agent；null = 全局（manual）规则。 */
+  agentId?: string | null
   enabled: boolean
   note: string | null
   createdAt: string
   lastUsedAt: string | null
   useCount: number
   dangerous: boolean
+}
+
+/** S5 W5b — 建一条 per-agent 免卡规则（POST /agent/policy/rules）。contextMode 由后端从
+ *  agent trigger.kind 派生（表单不可选，ADR-004 §3.3）——本 input 结构性无该字段。 */
+export interface CreatePolicyRuleInput {
+  capability: 'domain_write' | 'exec'
+  /** typed matcher：domain_write = {v:1, tool}；exec = pinned-entrypoint 形状（后端形状闸权威）。 */
+  matcher: Record<string, unknown>
+  agentId: string
+  note?: string
+}
+
+/** S5 W5b — 供应链 installed skill 的 entrypoint 清单（GET /agent/skills/entrypoints）。
+ *  Settings exec 规则构造器数据源：argv[1] pin = `${dir}/${file}`、cwd_scope pin = dir。 */
+export interface SkillEntrypoints {
+  name: string
+  /** skill 落盘目录绝对路径（Python skill_dir 权威，前端不手抄 skills root）。 */
+  dir: string
+  /** files_json 清单相对路径（供应链 confirm 落库事实）。 */
+  files: string[]
 }
 
 /** S2 W4b — server-rendered preview of a fetched (quarantined, NOT yet installed) skill
@@ -1615,8 +1637,24 @@ export interface ChatApi {
    * S2 W1 — list the exec automation-policy rules for the Settings 「自动化策略」 page
    * (GET /agent/policy/rules). Structured whitelist rules the owner created via the exec
    * approval card's "always allow" affordance. Read-only; degrades to [] when unreachable.
+   * S5 W5b: optional `agentId` narrows to one custom agent's per-agent headless rules
+   * (the CustomAgentDrawer 自动化策略 section); omitted = all rows (S2 call sites unchanged).
    */
-  listPolicyRules(): Promise<ExecPolicyRule[]>
+  listPolicyRules(params?: { agentId?: string }): Promise<ExecPolicyRule[]>
+  /**
+   * S5 W5b — create one per-agent whitelist rule (POST /agent/policy/rules). The ONLY
+   * creation channel is the Settings per-agent 自动化策略 form (ADR-004 D5 — the model has
+   * no rule-writing tool; the island card has no "always allow (this agent)" affordance).
+   * contextMode is derived server-side from the agent trigger. Throws Error&{code} with the
+   * backend shape-gate detail verbatim (raw {any} / non-skill entrypoint / ownership 400s).
+   */
+  createPolicyRule(input: CreatePolicyRuleInput): Promise<ExecPolicyRule>
+  /**
+   * S5 W5b — supply-chain installed skill entrypoint candidates for the exec rule builder
+   * (GET /agent/skills/entrypoints, flag-gated 404 when custom agents are off). Degrades
+   * to [] when unreachable (the builder shows a "no installed skills" empty state).
+   */
+  listSkillEntrypoints(): Promise<SkillEntrypoints[]>
   /**
    * S2 W1 — enable/disable one policy rule (PATCH /agent/policy/rules/{id}). Disabling stops it
    * auto-allowing exec runs (they go back to always-ask) without deleting it. Throws Error&{code}.
@@ -2302,6 +2340,9 @@ export type CustomAgentTrigger =
 export interface CustomAgentToolPolicy {
   v: 1
   allowed_tools?: string[]
+  /** S5 ADR-004 D2 — per-agent exec 矩阵例外 opt-in（缺省 = false）。true 时该 agent 的
+   *  headless run 注册 exec 工具面；免卡仍需白名单规则命中 + 首跑闸（三重闸）。 */
+  grant_exec?: boolean
 }
 
 /** v30 Custom Agent 预算三门（null/缺失 = 全默认）。 */
@@ -2422,6 +2463,9 @@ export interface AgentRunHistoryItem {
   error?: string | null
   /** LLM usage（token 计数 map），result_json 有则带。 */
   tokens?: Record<string, number> | null
+  /** S5 ADR-004 D6 — 该 run 的免卡写次数（chat_tool_call approval_status='auto_whitelist'
+   *  经 sessionId 归账）。null = 无 sessionId 或审计账本不可达（badge 不渲染，非「0 次」）。 */
+  autoWhitelistedWrites?: number | null
 }
 
 export interface ReportRunResult {

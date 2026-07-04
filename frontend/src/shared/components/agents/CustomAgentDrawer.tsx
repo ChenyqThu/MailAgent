@@ -12,14 +12,17 @@
 //  • 新建两段式：createAgent({type:'custom'}) 建草稿 → setConfig 补 trigger/tool_policy/budget。
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 
 import type {
   AgentRunState,
   CustomAgentToolPolicy,
   CustomAgentTrigger,
+  ExecPolicyRule,
   ReportAgentConfig,
   ReportConfigPatch
 } from '@shared/api/types'
+import { useMailApi } from '@shared/hooks/useMailApi'
 import { ReportIcon, Switch } from './primitives'
 import {
   Select,
@@ -283,6 +286,24 @@ function RunHistorySection({ agentId }: { agentId: string }): React.ReactElement
             >
               <div className="flex items-center" style={{ gap: 8 }}>
                 <RunStateBadge state={r.state} />
+                {/* 免卡写 badge（ADR-004 D6）：虚线边框与人审状态徽标（实线）视觉区分；
+                    null（无会话/账本不可达）不渲染 —— 不渲染 ≠「0 次免卡」。 */}
+                {typeof r.autoWhitelistedWrites === 'number' && r.autoWhitelistedWrites > 0 && (
+                  <span
+                    style={{
+                      fontSize: 11,
+                      fontWeight: 500,
+                      padding: '2px 8px',
+                      borderRadius: 5,
+                      whiteSpace: 'nowrap',
+                      color: 'rgb(var(--c-ai))',
+                      background: 'rgb(var(--c-ai) / 0.08)',
+                      border: '1px dashed rgb(var(--c-ai) / 0.45)'
+                    }}
+                  >
+                    {t('agents.custom.runs.autoWhitelisted', { n: r.autoWhitelistedWrites })}
+                  </span>
+                )}
                 <span style={{ fontSize: 12, color: 'rgb(var(--ink-fg-2))', flex: 1 }}>
                   {fmtTime(r.finishedAt ?? r.createdAt)}
                 </span>
@@ -314,6 +335,666 @@ function RunHistorySection({ agentId }: { agentId: string }): React.ReactElement
           ))}
         </div>
       )}
+    </div>
+  )
+}
+
+// ── 自动化策略（S5 W5b，ADR-004 D5/D6）──────────────────────────────────────
+// per-agent 免卡白名单的**唯一**创建通道（模型零建规则工具、岛卡无「总是允许(此 agent)」）。
+// 高危形态 = 红样式警示块 + 影响面声明 + 两步确认（先例 = 身份文档编辑器，无 PIN）。
+// context_mode 由后端从 agent trigger.kind 派生（表单结构性不可选）；这里只做读侧 dormant
+// 对比提示（规则 contextMode ≠ 当前已保存 trigger 的派生值 → 「休眠」，不迁移不删）。
+
+type PolicyArgKind = 'pin' | 'enum' | 'pattern' | 'path_within'
+const POLICY_ARG_KINDS: PolicyArgKind[] = ['pin', 'enum', 'pattern', 'path_within']
+
+interface PolicyArgSlot {
+  kind: PolicyArgKind
+  /** pin=字面值；enum=逗号分隔允许值；pattern=锚定 regex；path_within=绝对前缀。 */
+  value: string
+}
+
+/** trigger.kind → headless context_mode（与后端 _derive_rule_context_mode 同表，只读展示用）。 */
+function deriveHeadlessMode(kind: string | null): 'cron_headless' | 'untrusted_trigger' | null {
+  if (kind === 'cron') return 'cron_headless'
+  if (kind === 'email_filter') return 'untrusted_trigger'
+  return null
+}
+
+/** matcher → 单行摘要（只读展示；放宽 = 删旧建新，无原地编辑）。受约束位显示 `<kind>`。 */
+function formatRuleMatcher(rule: ExecPolicyRule): string {
+  const m = rule.matcher
+  if (rule.capability === 'domain_write') {
+    return typeof m.tool === 'string' ? m.tool : '?'
+  }
+  if (rule.capability === 'exec') {
+    const argv0 = typeof m.argv0_realpath === 'string' ? m.argv0_realpath : '?'
+    const tmpl = Array.isArray(m.argv_template) ? m.argv_template : []
+    const parts = tmpl.map((it) => {
+      const o = it as { pin?: unknown; any?: unknown; arg?: { kind?: unknown } }
+      if (typeof o?.pin === 'string') return o.pin
+      if (o?.any === true) return '<any>'
+      return typeof o?.arg?.kind === 'string' ? `<${o.arg.kind}>` : '?'
+    })
+    return [argv0, ...parts].join(' ')
+  }
+  return JSON.stringify(m)
+}
+
+/** 红样式警示块（创建规则 / grant_exec 共用形态）。 */
+function DangerBlock({ children }: { children: React.ReactNode }): React.ReactElement {
+  return (
+    <div
+      style={{
+        fontSize: 12,
+        lineHeight: 1.6,
+        color: 'rgb(var(--c-fail))',
+        padding: '10px 12px',
+        borderRadius: 9,
+        background: 'rgb(var(--c-fail) / 0.10)',
+        border: '1px solid rgb(var(--c-fail) / 0.35)',
+        wordBreak: 'break-word'
+      }}
+    >
+      {children}
+    </div>
+  )
+}
+
+function AutomationPolicySection({
+  agentId,
+  agentTitle,
+  triggerKind,
+  writeToolChoices,
+  grantExec,
+  onGrantChange
+}: {
+  agentId: string
+  agentTitle: string
+  /** 已保存 trigger 的 kind（dormant 对比基准 + 影响面文案；null = 无触发）。 */
+  triggerKind: string | null
+  /** domain_write 规则可选工具 = 5 个 domain_write 工具 ∩ 该 agent allowed_tools。 */
+  writeToolChoices: string[]
+  grantExec: boolean
+  /** 翻转 grant_exec（已过确认对话）；父层置 grantDirty，保存时并入 tool_policy。 */
+  onGrantChange: (next: boolean) => void
+}): React.ReactElement {
+  const { t } = useTranslation()
+  const api = useMailApi()
+  const qc = useQueryClient()
+  const derivedMode = deriveHeadlessMode(triggerKind)
+
+  const rulesQ = useQuery({
+    queryKey: ['policy', 'rules', agentId],
+    queryFn: () => api.chat.listPolicyRules({ agentId })
+  })
+  const rules = rulesQ.data ?? []
+  const refetchRules = (): void => {
+    void qc.invalidateQueries({ queryKey: ['policy', 'rules', agentId] })
+  }
+
+  const [formOpen, setFormOpen] = useState(false)
+  // entrypoint 候选仅建 exec 规则需要；graceful []（flag off / 无安装面 → 空态提示）。
+  const entryQ = useQuery({
+    queryKey: ['policy', 'skill-entrypoints'],
+    queryFn: () => api.chat.listSkillEntrypoints(),
+    enabled: formOpen,
+    staleTime: 60_000
+  })
+  const skills = entryQ.data ?? []
+
+  const [capability, setCapability] = useState<'domain_write' | 'exec'>('domain_write')
+  const [tool, setTool] = useState('')
+  const [skillName, setSkillName] = useState('')
+  const [entryFile, setEntryFile] = useState('')
+  const [interpreter, setInterpreter] = useState('')
+  const [args, setArgs] = useState<PolicyArgSlot[]>([])
+  const [pinCwd, setPinCwd] = useState(true)
+  const [confirming, setConfirming] = useState(false)
+  const [creating, setCreating] = useState(false)
+  const [formErr, setFormErr] = useState<string | null>(null)
+  const [grantConfirming, setGrantConfirming] = useState(false)
+
+  const skill = skills.find((s) => s.name === skillName) ?? null
+  const entryAbs = skill && entryFile ? `${skill.dir}/${entryFile}` : ''
+  const actionSummary =
+    capability === 'domain_write' ? tool : `${interpreter.trim()} ${entryAbs}`.trim()
+  const modeLabel = derivedMode
+    ? t(`agents.custom.policy.mode.${derivedMode}`)
+    : t('agents.custom.policy.mode.none')
+
+  const resetForm = (): void => {
+    setCapability('domain_write')
+    setTool('')
+    setSkillName('')
+    setEntryFile('')
+    setInterpreter('')
+    setArgs([])
+    setPinCwd(true)
+    setConfirming(false)
+    setFormErr(null)
+  }
+
+  // 浅校验（必选项 / 绝对路径 / 位值非空）；形状闸深校验在后端，400 detail 原样展示。
+  const shallowFormError = (): string | null => {
+    if (capability === 'domain_write') {
+      return tool ? null : t('agents.custom.policy.errToolRequired')
+    }
+    if (!skill || !entryFile) return t('agents.custom.policy.errEntryRequired')
+    if (!interpreter.trim().startsWith('/')) return t('agents.custom.policy.errInterpreterAbs')
+    if (args.some((a) => !a.value.trim())) return t('agents.custom.policy.errArgEmpty')
+    return null
+  }
+
+  // 无 raw {any} 选项：尾位词汇 = pin | enum | pattern | path_within（ADR-004 §4.3）。
+  const buildMatcher = (): Record<string, unknown> => {
+    if (capability === 'domain_write') return { v: 1, tool }
+    const tmpl: Record<string, unknown>[] = [{ pin: entryAbs }]
+    for (const a of args) {
+      const v = a.value.trim()
+      if (a.kind === 'pin') tmpl.push({ pin: v })
+      else if (a.kind === 'enum') {
+        tmpl.push({
+          arg: { kind: 'enum', values: v.split(',').map((s) => s.trim()).filter(Boolean) }
+        })
+      } else if (a.kind === 'pattern') tmpl.push({ arg: { kind: 'pattern', regex: v } })
+      else tmpl.push({ arg: { kind: 'path_within', prefix: v } })
+    }
+    const m: Record<string, unknown> = {
+      v: 1,
+      argv0_realpath: interpreter.trim(),
+      argv_template: tmpl
+    }
+    if (pinCwd && skill) m.cwd_scope = skill.dir
+    return m
+  }
+
+  const onCreateClick = (): void => {
+    const v = shallowFormError()
+    if (v) {
+      setFormErr(v)
+      return
+    }
+    setFormErr(null)
+    setConfirming(true)
+  }
+
+  const onConfirmCreate = (): void => {
+    setCreating(true)
+    api.chat
+      .createPolicyRule({ capability, matcher: buildMatcher(), agentId })
+      .then(() => {
+        setFormOpen(false)
+        resetForm()
+        refetchRules()
+      })
+      .catch((e: unknown) => {
+        setConfirming(false)
+        setFormErr(errText(e))
+      })
+      .finally(() => setCreating(false))
+  }
+
+  const onToggleRule = (id: number, next: boolean): void => {
+    api.chat
+      .setPolicyRuleEnabled(id, next)
+      .then(refetchRules)
+      .catch((e: unknown) => setFormErr(errText(e)))
+  }
+  const onDeleteRule = (id: number): void => {
+    api.chat
+      .deletePolicyRule(id)
+      .then(refetchRules)
+      .catch((e: unknown) => setFormErr(errText(e)))
+  }
+
+  const smallBtn: React.CSSProperties = {
+    fontFamily: 'inherit',
+    fontSize: 12,
+    padding: '4px 10px',
+    borderRadius: 7,
+    cursor: 'pointer',
+    color: 'rgb(var(--ink-fg-2))',
+    background: 'transparent',
+    border: '1px solid rgb(var(--ink-border))'
+  }
+  const inputStyle: React.CSSProperties = {
+    width: '100%',
+    fontFamily: 'inherit',
+    fontSize: 12.5,
+    color: 'rgb(var(--ink-fg))',
+    background: 'rgb(var(--ink-1) / 0.55)',
+    border: '1px solid rgb(var(--ink-border))',
+    borderRadius: 8,
+    padding: '7px 10px'
+  }
+
+  return (
+    <div>
+      <div className="flex items-center" style={{ gap: 8, marginBottom: 4 }}>
+        <label style={{ fontSize: 13, fontWeight: 500, color: 'rgb(var(--ink-fg))', flex: 1 }}>
+          {t('agents.custom.policy.section')}
+        </label>
+        {!formOpen && (
+          <button
+            type="button"
+            style={smallBtn}
+            onClick={() => {
+              // 唯一可选写工具 → 预选（省一次下拉；多选项时留空强制显式选择）。
+              setTool(writeToolChoices.length === 1 ? writeToolChoices[0] : '')
+              setFormOpen(true)
+            }}
+          >
+            {t('agents.custom.policy.add')}
+          </button>
+        )}
+      </div>
+      <div style={{ fontSize: 11.5, color: 'rgb(var(--ink-fg-3))', marginBottom: 9, lineHeight: 1.5 }}>
+        {t('agents.custom.policy.hint')}
+      </div>
+
+      {/* 规则列表 */}
+      {rules.length === 0 ? (
+        <div
+          style={{
+            fontSize: 12.5,
+            color: 'rgb(var(--ink-fg-3))',
+            padding: '11px 13px',
+            borderRadius: 9,
+            background: 'rgb(var(--ink-1) / 0.5)',
+            border: '1px solid rgb(var(--ink-border-soft))'
+          }}
+        >
+          {rulesQ.isLoading ? t('agents.custom.policy.loading') : t('agents.custom.policy.empty')}
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {rules.map((rule) => {
+            const dormant = rule.contextMode !== derivedMode
+            return (
+              <div
+                key={rule.id}
+                style={{
+                  padding: '10px 12px',
+                  borderRadius: 9,
+                  background: 'rgb(var(--ink-1) / 0.5)',
+                  border: '1px solid rgb(var(--ink-border-soft))'
+                }}
+              >
+                <div className="flex items-center" style={{ gap: 8 }}>
+                  <span
+                    style={{
+                      fontSize: 11,
+                      padding: '2px 8px',
+                      borderRadius: 5,
+                      whiteSpace: 'nowrap',
+                      color: 'rgb(var(--c-warn))',
+                      background: 'rgb(var(--c-warn) / 0.12)',
+                      border: '1px solid rgb(var(--c-warn) / 0.28)'
+                    }}
+                  >
+                    {t(`agents.custom.policy.capability.${rule.capability}`, {
+                      defaultValue: rule.capability
+                    })}
+                  </span>
+                  <span style={{ flex: 1 }} />
+                  <Switch on={rule.enabled} onChange={(v) => onToggleRule(rule.id, v)} />
+                  <button
+                    type="button"
+                    aria-label={t('agents.custom.policy.delete')}
+                    onClick={() => onDeleteRule(rule.id)}
+                    style={{ ...smallBtn, color: 'rgb(var(--c-fail))', borderColor: 'rgb(var(--c-fail) / 0.3)' }}
+                  >
+                    {t('agents.custom.policy.delete')}
+                  </button>
+                </div>
+                <div
+                  style={{
+                    marginTop: 6,
+                    fontFamily: 'var(--font-mono, monospace)',
+                    fontSize: 12,
+                    color: 'rgb(var(--ink-fg))',
+                    wordBreak: 'break-all'
+                  }}
+                >
+                  {formatRuleMatcher(rule)}
+                </div>
+                <div style={{ fontSize: 11.5, color: 'rgb(var(--ink-fg-3))', marginTop: 3 }}>
+                  {t('agents.custom.policy.hits', { n: rule.useCount })}
+                  {rule.lastUsedAt ? ` · ${rule.lastUsedAt}` : ''}
+                </div>
+                {dormant && (
+                  <div style={{ fontSize: 11.5, color: 'rgb(var(--c-warn))', marginTop: 5, lineHeight: 1.5 }}>
+                    {t('agents.custom.policy.dormant')}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {/* 创建表单 */}
+      {formOpen && (
+        <div
+          style={{
+            marginTop: 10,
+            padding: '12px 13px',
+            borderRadius: 10,
+            background: 'rgb(var(--ink-2) / 0.55)',
+            border: '1px solid rgb(var(--ink-border))',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 10
+          }}
+        >
+          <div className="seg" style={{ width: '100%' }}>
+            {(['domain_write', 'exec'] as const).map((c) => (
+              <button
+                key={c}
+                type="button"
+                className={capability === c ? 'on' : ''}
+                style={{ flex: 1, justifyContent: 'center' }}
+                onClick={() => {
+                  setCapability(c)
+                  setConfirming(false)
+                }}
+              >
+                {t(`agents.custom.policy.capability.${c}`)}
+              </button>
+            ))}
+          </div>
+
+          {/* context_mode 只读展示（自动派生，表单不可选） */}
+          <div style={{ fontSize: 11.5, color: 'rgb(var(--ink-fg-3))', lineHeight: 1.5 }}>
+            {t('agents.custom.policy.modeDerived', { mode: modeLabel })}
+          </div>
+
+          {capability === 'domain_write' &&
+            (writeToolChoices.length === 0 ? (
+              <div style={{ fontSize: 12, color: 'rgb(var(--ink-fg-3))', lineHeight: 1.5 }}>
+                {t('agents.custom.policy.toolNone')}
+              </div>
+            ) : (
+              <Select value={tool || undefined} onValueChange={setTool}>
+                <SelectTrigger>
+                  <SelectValue placeholder={t('agents.custom.policy.toolLabel')} />
+                </SelectTrigger>
+                <SelectContent className="z-[70]">
+                  {writeToolChoices.map((name) => (
+                    <SelectItem key={name} value={name}>
+                      {name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ))}
+
+          {capability === 'exec' &&
+            (skills.length === 0 ? (
+              <div style={{ fontSize: 12, color: 'rgb(var(--ink-fg-3))', lineHeight: 1.5 }}>
+                {t('agents.custom.policy.skillNone')}
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <Select
+                  value={skillName || undefined}
+                  onValueChange={(v) => {
+                    setSkillName(v)
+                    setEntryFile('')
+                  }}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder={t('agents.custom.policy.skillLabel')} />
+                  </SelectTrigger>
+                  <SelectContent className="z-[70]">
+                    {skills.map((s) => (
+                      <SelectItem key={s.name} value={s.name}>
+                        {s.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {skill && (
+                  <Select value={entryFile || undefined} onValueChange={setEntryFile}>
+                    <SelectTrigger>
+                      <SelectValue placeholder={t('agents.custom.policy.entryLabel')} />
+                    </SelectTrigger>
+                    <SelectContent className="z-[70]">
+                      {skill.files.map((f) => (
+                        <SelectItem key={f} value={f}>
+                          {f}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+                <input
+                  type="text"
+                  value={interpreter}
+                  placeholder={t('agents.custom.policy.interpreterPlaceholder')}
+                  onChange={(e) => setInterpreter(e.target.value)}
+                  style={{ ...inputStyle, fontFamily: 'var(--font-mono, monospace)' }}
+                />
+                <div>
+                  <div className="flex items-center" style={{ gap: 8, marginBottom: 6 }}>
+                    <span style={{ fontSize: 12, color: 'rgb(var(--ink-fg-2))', flex: 1 }}>
+                      {t('agents.custom.policy.argsLabel')}
+                    </span>
+                    <button
+                      type="button"
+                      style={smallBtn}
+                      onClick={() => setArgs((prev) => [...prev, { kind: 'pattern', value: '' }])}
+                    >
+                      {t('agents.custom.policy.argAdd')}
+                    </button>
+                  </div>
+                  <div style={{ fontSize: 11.5, color: 'rgb(var(--ink-fg-3))', marginBottom: 6, lineHeight: 1.5 }}>
+                    {t('agents.custom.policy.argsHint')}
+                  </div>
+                  {args.map((a, i) => (
+                    <div key={i} className="flex items-center" style={{ gap: 6, marginBottom: 6 }}>
+                      <select
+                        value={a.kind}
+                        aria-label={t('agents.custom.policy.argsLabel')}
+                        onChange={(e) =>
+                          setArgs((prev) =>
+                            prev.map((x, j) =>
+                              j === i ? { ...x, kind: e.target.value as PolicyArgKind } : x
+                            )
+                          )
+                        }
+                        style={{ ...inputStyle, width: 110, flexShrink: 0 }}
+                      >
+                        {POLICY_ARG_KINDS.map((k) => (
+                          <option key={k} value={k}>
+                            {t(`agents.custom.policy.argKind.${k}`)}
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        type="text"
+                        value={a.value}
+                        placeholder={t(`agents.custom.policy.argPlaceholder.${a.kind}`)}
+                        onChange={(e) =>
+                          setArgs((prev) =>
+                            prev.map((x, j) => (j === i ? { ...x, value: e.target.value } : x))
+                          )
+                        }
+                        style={{ ...inputStyle, fontFamily: 'var(--font-mono, monospace)' }}
+                      />
+                      <button
+                        type="button"
+                        style={smallBtn}
+                        onClick={() => setArgs((prev) => prev.filter((_, j) => j !== i))}
+                      >
+                        {t('agents.custom.policy.argRemove')}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                <label
+                  className="flex items-center"
+                  style={{ gap: 8, fontSize: 12, color: 'rgb(var(--ink-fg-2))', cursor: 'pointer' }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={pinCwd}
+                    onChange={(e) => setPinCwd(e.target.checked)}
+                  />
+                  {t('agents.custom.policy.cwdPin')}
+                </label>
+              </div>
+            ))}
+
+          {formErr && (
+            <div
+              style={{
+                fontSize: 12,
+                color: 'rgb(var(--c-fail))',
+                padding: '8px 10px',
+                borderRadius: 8,
+                background: 'rgb(var(--c-fail) / 0.10)',
+                border: '1px solid rgb(var(--c-fail) / 0.25)',
+                wordBreak: 'break-word'
+              }}
+            >
+              {formErr}
+            </div>
+          )}
+
+          {/* 影响面确认（红样式，两步）：先例 = 身份文档编辑器高危形态，无 PIN。 */}
+          {confirming && (
+            <DangerBlock>
+              <div style={{ fontWeight: 600, marginBottom: 4 }}>
+                {t('agents.custom.policy.warnTitle')}
+              </div>
+              {t('agents.custom.policy.warnBody', {
+                agent: agentTitle,
+                action: actionSummary,
+                mode: modeLabel
+              })}
+            </DangerBlock>
+          )}
+
+          <div className="flex items-center" style={{ gap: 8 }}>
+            <span style={{ flex: 1 }} />
+            <button
+              type="button"
+              style={smallBtn}
+              onClick={() => {
+                setFormOpen(false)
+                resetForm()
+              }}
+            >
+              {t('agents.custom.policy.cancel')}
+            </button>
+            {confirming ? (
+              <button
+                type="button"
+                disabled={creating}
+                onClick={onConfirmCreate}
+                style={{
+                  fontFamily: 'inherit',
+                  fontSize: 12.5,
+                  fontWeight: 500,
+                  padding: '6px 13px',
+                  borderRadius: 8,
+                  cursor: creating ? 'wait' : 'pointer',
+                  color: 'rgb(var(--c-fail))',
+                  background: 'rgb(var(--c-fail) / 0.12)',
+                  border: '1px solid rgb(var(--c-fail) / 0.4)'
+                }}
+              >
+                {t('agents.custom.policy.confirmCreate')}
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={onCreateClick}
+                style={{
+                  fontFamily: 'inherit',
+                  fontSize: 12.5,
+                  fontWeight: 500,
+                  padding: '6px 13px',
+                  borderRadius: 8,
+                  cursor: 'pointer',
+                  color: 'rgb(var(--c-cta-fg))',
+                  background: 'rgb(var(--c-cta-bg))',
+                  border: 0
+                }}
+              >
+                {t('agents.custom.policy.create')}
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* grant_exec 开关（红样式 + 同一确认形态；保存时并入 tool_policy —— 触碰即触碰 tool_policy） */}
+      <div
+        style={{
+          marginTop: 10,
+          padding: '12px 13px',
+          borderRadius: 10,
+          background: 'rgb(var(--c-fail) / 0.05)',
+          border: '1px solid rgb(var(--c-fail) / 0.25)'
+        }}
+      >
+        <div className="flex items-center" style={{ gap: 12 }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 13, fontWeight: 500, color: 'rgb(var(--c-fail))' }}>
+              {t('agents.custom.policy.grant.label')}
+            </div>
+            <div style={{ fontSize: 11.5, color: 'rgb(var(--ink-fg-3))', marginTop: 2, lineHeight: 1.5 }}>
+              {t('agents.custom.policy.grant.hint')}
+            </div>
+          </div>
+          <Switch
+            on={grantExec}
+            onChange={(next) => {
+              if (next) {
+                setGrantConfirming(true)
+              } else {
+                // 关方向 = 收窄，直改（保存后该 agent 回恒 HITL）。
+                setGrantConfirming(false)
+                onGrantChange(false)
+              }
+            }}
+          />
+        </div>
+        {grantConfirming && !grantExec && (
+          <div style={{ marginTop: 9, display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <DangerBlock>{t('agents.custom.policy.grant.warn', { agent: agentTitle })}</DangerBlock>
+            <div className="flex items-center" style={{ gap: 8 }}>
+              <span style={{ flex: 1 }} />
+              <button type="button" style={smallBtn} onClick={() => setGrantConfirming(false)}>
+                {t('agents.custom.policy.cancel')}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setGrantConfirming(false)
+                  onGrantChange(true)
+                }}
+                style={{
+                  fontFamily: 'inherit',
+                  fontSize: 12.5,
+                  fontWeight: 500,
+                  padding: '6px 13px',
+                  borderRadius: 8,
+                  cursor: 'pointer',
+                  color: 'rgb(var(--c-fail))',
+                  background: 'rgb(var(--c-fail) / 0.12)',
+                  border: '1px solid rgb(var(--c-fail) / 0.4)'
+                }}
+              >
+                {t('agents.custom.policy.grant.confirm')}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   )
 }
@@ -361,6 +1042,10 @@ export function CustomAgentDrawer({
   // 会话是否改过工具勾选（决定编辑保存是否发 tool_policy，见 onSave）。
   const [toolsMode, setToolsMode] = useState<'defaults' | 'explicit'>('defaults')
   const [toolsDirty, setToolsDirty] = useState(false)
+  // grant_exec（S5 ADR-004 D2）：触碰开关 = 触碰 tool_policy（grantDirty 驱动保存时按需发送，
+  // 与 toolsDirty 同一「按需发送」纪律 —— 未触碰的 NULL 行保存后仍是 NULL）。
+  const [grantExec, setGrantExec] = useState(false)
+  const [grantDirty, setGrantDirty] = useState(false)
   const [maxSteps, setMaxSteps] = useState(DEFAULT_MAX_STEPS)
   const [maxRunsPerDay, setMaxRunsPerDay] = useState(DEFAULT_MAX_RUNS_PER_DAY)
   const [maxRunSeconds, setMaxRunSeconds] = useState(DEFAULT_MAX_RUN_SECONDS)
@@ -390,6 +1075,8 @@ export function CustomAgentDrawer({
       setSelectedTools([])
       setToolsMode('defaults')
       setToolsDirty(false)
+      setGrantExec(false)
+      setGrantDirty(false)
       setMaxSteps(DEFAULT_MAX_STEPS)
       setMaxRunsPerDay(DEFAULT_MAX_RUNS_PER_DAY)
       setMaxRunSeconds(DEFAULT_MAX_RUN_SECONDS)
@@ -430,6 +1117,8 @@ export function CustomAgentDrawer({
       setToolsMode('defaults')
     }
     setToolsDirty(false)
+    setGrantExec(cfg.tool_policy?.grant_exec === true)
+    setGrantDirty(false)
     setMaxSteps(cfg.budget?.max_steps ?? DEFAULT_MAX_STEPS)
     setMaxRunsPerDay(cfg.budget?.max_runs_per_day ?? DEFAULT_MAX_RUNS_PER_DAY)
     setMaxRunSeconds(cfg.budget?.max_run_seconds ?? DEFAULT_MAX_RUN_SECONDS)
@@ -438,10 +1127,14 @@ export function CustomAgentDrawer({
   // 'defaults' 模式（新建 / 编辑 NULL-policy 行）：toolOptions 就位后用后端 defaults 初始化
   // 默认勾选（展示与 NULL 投影的真实默认安全集一致）。用户触碰工具区（toolsDirty）后不再
   // 覆盖；defaults 稳定引用（EMPTY 单例），就位后仅触发一次。
+  // 🔴 显式行双保险（W5b 修 W2 潜伏 bug）：mount/打开时本 effect 与上方 prefill effect 同批
+  // 执行，闭包里 toolsMode 还是旧值 'defaults' —— 仅靠 state 守卫会把显式行刚填好的勾选
+  // clobber 成 defaults。改从 props 直判：编辑显式 allowed_tools 行永不套 defaults。
   useEffect(() => {
     if (!open || toolsMode !== 'defaults' || toolsDirty) return
+    if (!create && Array.isArray(cfg?.tool_policy?.allowed_tools)) return
     setSelectedTools([...toolOptions.defaults])
-  }, [open, toolsMode, toolsDirty, toolOptions.defaults])
+  }, [open, toolsMode, toolsDirty, toolOptions.defaults, create, cfg])
   /* eslint-enable react-hooks/set-state-in-effect */
 
   if (!shouldRender) return null
@@ -550,11 +1243,19 @@ export function CustomAgentDrawer({
       trigger,
       budget
     }
-    // 编辑「按需发送」tool_policy：仅当用户本次会话触碰过工具区（toolsDirty）才发（含空数组=
-    // 显式零工具，安全方向）。未触碰 → 省略字段（PATCH 语义：字段缺席=不动）——NULL 行仅改
-    // prompt 保存后仍是 NULL（投影层默认安全集继续生效），显式行同理原封不动。这修复了「编辑
-    // NULL-policy 行会被静默清成空工具集」的 P2（W5 的 DMS/周报模板正是此类 NULL 行）。
-    if (toolsDirty) editPatch.tool_policy = toolPolicy
+    // 编辑「按需发送」tool_policy：仅当用户本次会话触碰过工具区（toolsDirty）或 grant 开关
+    // （grantDirty，S5 W5b —— 触碰 grant 即触碰 tool_policy）才发。未触碰 → 省略字段（PATCH
+    // 语义：字段缺席=不动）——NULL 行仅改 prompt 保存后仍是 NULL（投影层默认安全集继续生效），
+    // 显式行同理原封不动。这修复了「编辑 NULL-policy 行会被静默清成空工具集」的 P2。
+    // 组装规则：allowed_tools 仅在「工具被触碰或行本就显式」时携带 —— 只翻 grant 的 NULL 行
+    // 保持 allowed_tools 缺省（投影层默认安全集语义不被物化）；grant_exec 仅 true 时携带
+    // （缺省 = False，parse_tool_policy 语义）。
+    if (toolsDirty || grantDirty) {
+      const tp: CustomAgentToolPolicy = { v: 1 }
+      if (toolsDirty || toolsMode === 'explicit') tp.allowed_tools = selectedTools
+      if (grantExec) tp.grant_exec = true
+      editPatch.tool_policy = tp
+    }
     void save(cfg.id, editPatch)
       .then(onClose)
       .catch((e: unknown) => setErr(errText(e)))
@@ -918,6 +1619,23 @@ export function CustomAgentDrawer({
                 </div>
               </div>
             </Field>
+
+            {/* 自动化策略（S5 W5b；仅编辑既有时 —— 建规归属校验要求 agent 行已存在） */}
+            {!create && cfg && (
+              <AutomationPolicySection
+                agentId={cfg.id}
+                agentTitle={title.trim() || cfg.title}
+                triggerKind={cfg.trigger?.kind ?? null}
+                writeToolChoices={toolOptions.tools
+                  .filter((tl) => tl.class === 'domain_write' && selectedTools.includes(tl.name))
+                  .map((tl) => tl.name)}
+                grantExec={grantExec}
+                onGrantChange={(next) => {
+                  setGrantExec(next)
+                  setGrantDirty(true)
+                }}
+              />
+            )}
 
             {/* run 历史（仅编辑既有时；新建时 agent 尚未存在） */}
             {!create && cfg && <RunHistorySection agentId={cfg.id} />}

@@ -477,3 +477,81 @@ def test_flag_off_list_runs_404(env, client, monkeypatch):
     r = client.get("/api/agent-runs?agentId=dms")
     assert r.status_code == 404
     assert r.json()["error"]["code"] == "E_NOT_FOUND"
+
+
+# ---------------------------------------------------------------------------
+# run 历史免卡计数投影（S5 W5b, ADR-004 D6）—— autoWhitelistedWrites 三态
+# ---------------------------------------------------------------------------
+
+# 最小 ai_chat.db 形状（仅本投影 join 触及的列；approval_status/whitelist_rule_id = CHAT_DB v18）。
+_CHAT_DDL = """
+CREATE TABLE ai_chat_sessions (id INTEGER PRIMARY KEY, backend_kind TEXT NOT NULL,
+    created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+CREATE TABLE ai_chat_messages (id INTEGER PRIMARY KEY, session_id INTEGER NOT NULL,
+    role TEXT NOT NULL, content TEXT NOT NULL, status TEXT NOT NULL,
+    created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+CREATE TABLE chat_tool_call (id INTEGER PRIMARY KEY, message_id INTEGER NOT NULL,
+    tool_use_id TEXT NOT NULL, tool_name TEXT NOT NULL, input_json TEXT NOT NULL,
+    status TEXT NOT NULL, confirmation_tier TEXT NOT NULL,
+    approval_status TEXT, whitelist_rule_id INTEGER,
+    created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+"""
+
+
+def _seed_chat_db(path, *, session_calls: dict[int, list]) -> None:
+    """{session_id: [approval_status, ...]} → 每 session 一条消息 + 逐 status 一行 tool_call。"""
+    conn = sqlite3.connect(str(path))
+    conn.executescript(_CHAT_DDL)
+    mid = 0
+    for sid, statuses in session_calls.items():
+        mid += 1
+        conn.execute(
+            "INSERT INTO ai_chat_sessions (id, backend_kind, created_at, updated_at) "
+            "VALUES (?, 'ai-sdk', 1, 1)", (sid,))
+        conn.execute(
+            "INSERT INTO ai_chat_messages (id, session_id, role, content, status, "
+            "created_at, updated_at) VALUES (?, ?, 'assistant', '', 'complete', 1, 1)",
+            (mid, sid))
+        for i, st in enumerate(statuses):
+            conn.execute(
+                "INSERT INTO chat_tool_call (message_id, tool_use_id, tool_name, input_json, "
+                "status, confirmation_tier, approval_status, whitelist_rule_id, created_at, "
+                "updated_at) VALUES (?, ?, 'email_flag', '{}', 'ok', 'preview', ?, ?, 1, 1)",
+                (mid, f"tu_{sid}_{i}", st, 7 if st == "auto_whitelist" else None))
+    conn.commit()
+    conn.close()
+
+
+def test_list_runs_auto_whitelist_count(env, client, tmp_path, monkeypatch):
+    """账本可达：有 sessionId 的行计数（auto_whitelist 行数，其它 approval_status 不计入；
+    0 = 显式无免卡写）；无 sessionId 的行恒 null（无从归账）。"""
+    chat_db = tmp_path / "ai_chat.db"
+    _seed_chat_db(chat_db, session_calls={
+        11: ["auto_whitelist", "auto_whitelist", "approved", None],
+        22: ["approved"],
+    })
+    monkeypatch.setenv("AI_CHAT_DB_PATH", str(chat_db))
+
+    _terminal_run(env, agent_id="dms", fire_key="aw1",
+                  status="succeeded", result={"outcome": "completed", "sessionId": 11})
+    _terminal_run(env, agent_id="dms", fire_key="aw2",
+                  status="succeeded", result={"outcome": "completed", "sessionId": 22})
+    _terminal_run(env, agent_id="dms", fire_key="aw3",
+                  status="failed", last_error="E_GATEWAY_DOWN")  # 无 sessionId
+
+    items = {it["sessionId"]: it for it in
+             client.get("/api/agent-runs?agentId=dms").json()["data"]}
+    assert items[11]["autoWhitelistedWrites"] == 2
+    assert items[22]["autoWhitelistedWrites"] == 0
+    assert items[None]["autoWhitelistedWrites"] is None
+
+
+def test_list_runs_auto_whitelist_null_when_chat_db_missing(env, client, tmp_path, monkeypatch):
+    """账本不可达（库不存在）→ 字段 null 降级（绝不渲染成「0 次免卡」谎报），run 历史本体照常。"""
+    monkeypatch.setenv("AI_CHAT_DB_PATH", str(tmp_path / "nonexistent" / "ai_chat.db"))
+    _terminal_run(env, agent_id="dms", fire_key="nx1",
+                  status="succeeded", result={"outcome": "completed", "sessionId": 11})
+    items = client.get("/api/agent-runs?agentId=dms").json()["data"]
+    assert len(items) == 1
+    assert items[0]["state"] == "completed"
+    assert items[0]["autoWhitelistedWrites"] is None
