@@ -12,8 +12,11 @@
 //  • 新建两段式：createAgent({type:'custom'}) 建草稿 → setConfig 补 trigger/tool_policy/budget。
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useNavigate } from '@tanstack/react-router'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 
+import { requestOpenAgentSession } from '@shared/state/ai-chat-panel'
+import { PendingDot } from './AgentPendingBadge'
 import type {
   AgentRunState,
   CustomAgentToolPolicy,
@@ -204,6 +207,7 @@ function Field({
 // run 历史区（编辑既有 custom agent 时展示；新建时 agent 尚未存在 → 不渲染）。
 function RunHistorySection({ agentId }: { agentId: string }): React.ReactElement {
   const { t } = useTranslation()
+  const navigate = useNavigate()
   const { runs, isLoading } = useAgentRuns(agentId)
   const { run, isRunning } = useRunNow()
   // run-now 失败（预算耗尽 E_BUDGET / flag off / gateway 不可达）→ 展示后端 detail，
@@ -214,6 +218,14 @@ function RunHistorySection({ agentId }: { agentId: string }): React.ReactElement
     if (isRunning) return
     setRunErr(null)
     run(agentId, { type: 'custom' }).catch((e: unknown) => setRunErr(errText(e)))
+  }
+
+  // S6 W2 — 打开该次 run 的执行记录 = 打开该 origin='agent' session（复用 AssistantChatModal
+  // fullscreen 手法：park sessionId → 导航到 /sessions → AgentViewLayout 消费并 select）。从设置里
+  // 触发 → 导航离开设置进入 agent 视图（记录视图 read-mostly，见 AgentConversation）。
+  const openRecord = (sessionId: number): void => {
+    requestOpenAgentSession(sessionId)
+    void navigate({ to: '/sessions' })
   }
 
   return (
@@ -286,6 +298,8 @@ function RunHistorySection({ agentId }: { agentId: string }): React.ReactElement
             >
               <div className="flex items-center" style={{ gap: 8 }}>
                 <RunStateBadge state={r.state} />
+                {/* 红点链 ①（P5）：paused_pending run 待审批脉冲红点，紧邻状态徽标。 */}
+                {r.state === 'paused_pending' && <PendingDot title={t('agents.custom.runs.pendingDot')} />}
                 {/* 免卡写 badge（ADR-004 D6）：虚线边框与人审状态徽标（实线）视觉区分；
                     null（无会话/账本不可达）不渲染 —— 不渲染 ≠「0 次免卡」。 */}
                 {typeof r.autoWhitelistedWrites === 'number' && r.autoWhitelistedWrites > 0 && (
@@ -307,6 +321,28 @@ function RunHistorySection({ agentId }: { agentId: string }): React.ReactElement
                 <span style={{ fontSize: 12, color: 'rgb(var(--ink-fg-2))', flex: 1 }}>
                   {fmtTime(r.finishedAt ?? r.createdAt)}
                 </span>
+                {/* S6 W2 — 「查看执行记录」入口（有 sessionId 即显）→ 打开该次 run 的对话。 */}
+                {r.sessionId != null && (
+                  <button
+                    type="button"
+                    onClick={() => openRecord(r.sessionId as number)}
+                    className="flex items-center"
+                    style={{
+                      gap: 4,
+                      fontFamily: 'inherit',
+                      fontSize: 11.5,
+                      padding: '3px 8px',
+                      borderRadius: 6,
+                      cursor: 'pointer',
+                      color: 'rgb(var(--ink-fg-2))',
+                      background: 'rgb(var(--ink-fg) / 0.05)',
+                      border: '1px solid rgb(var(--ink-border-soft))'
+                    }}
+                  >
+                    <ReportIcon name="message" size={12} />
+                    {t('agents.custom.runs.viewRecord')}
+                  </button>
+                )}
               </div>
               {r.state === 'paused_pending' && (
                 <div style={{ fontSize: 11.5, color: 'rgb(var(--ink-fg-3))', marginTop: 6, lineHeight: 1.5 }}>

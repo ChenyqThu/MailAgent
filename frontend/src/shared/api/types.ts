@@ -1319,6 +1319,14 @@ export interface ChatSession {
   archived: boolean
   created_at: number
   updated_at: number
+  // v19 (S4) — a headless custom-agent run (cron/email-triggered) persists a first-class session row
+  // marked origin='agent' (NULL/undefined for every interactive session); agent_id + agent_job_id (the
+  // async_jobs.job_id as TEXT) link back to report_agent + async_jobs. S6 W2 surfaces these to the
+  // renderer so the record view can (a) composer-lock an agent session from ANY entry point (the record
+  // is read-mostly, P4) and (b) build the agent-run banner. All three additive/nullable.
+  origin?: string | null
+  agent_id?: string | null
+  agent_job_id?: string | null
 }
 
 // Row of the global "AI 会话历史" page (chat.listAllSessions). A ChatSession

@@ -150,6 +150,21 @@ export class ApprovalRunStash {
     return latest
   }
 
+  /** S6 W2 (PRD P9) — read-only lookup by the ai@6/ai@7 approvalId. The in-record /decide takes only
+   *  { approvalId, decision } (no resumeToken): it resolves the internal toolCallId + resumeToken from
+   *  the matching LIVE entry so the capability token NEVER leaves the gateway. Returns the latest live
+   *  match (keep-latest, mirrors peekBySession) or null (expired/absent skipped; never mutates). A
+   *  wrong/stale approvalId → null → the /decide route fails closed (404 not_found). */
+  peekByApprovalId(approvalId: string): StashedApprovalRun | null {
+    const now = this.now()
+    let latest: StashedApprovalRun | null = null
+    for (const entry of this.store.values()) {
+      if (entry.approvalId !== approvalId || now >= entry.expiresAt) continue
+      if (latest === null || entry.createdAt >= latest.createdAt) latest = entry
+    }
+    return latest
+  }
+
   /** Drop expired rows. Called on stash(); cheap (map scan). */
   gc(): void {
     const now = this.now()

@@ -41,6 +41,7 @@ import { chatMessageToUIMessage } from '@shared/assistant/uiMessage'
 
 import { AgentThread } from './AgentThread'
 import { AgentQuickActions } from './AgentQuickActions'
+import { AgentRecordConversation } from './AgentRecordView'
 
 // Shared model prefs (same localStorage keys as the email panel → one user preference across
 // both surfaces). Best-effort; a blocked localStorage falls back to the default.
@@ -131,6 +132,12 @@ export function AgentConversation({
   const activeKind: ChatBackendKind = knownKind ?? 'ai-sdk'
   // D6 — an old legacy-engine session (custom-api / retired notion-agent) is read-only history.
   const isLegacySession = activeKind !== 'ai-sdk'
+  // S6 W2 (P4) — a headless custom-agent run's session (origin='agent', CHAT_DB v19). Opened for
+  // execution-record review: RECORD MODE (read-mostly) from ANY entry point (the run row's "查看执行
+  // 记录" OR the general history list — agent sessions are visible there by design). The composer must
+  // stay locked so an untrusted trigger history never gets manual-whitelist续写 (the P4 red line's
+  // mirror). Detected off the session metadata, not the run-row context, so the lock is universal.
+  const isAgentRecord = activeItem?.origin === 'agent'
   const useAiSdkRuntime = !isLegacySession && gatewayLive && !metadataPending
 
   // ── composer controls (model / thinking / @mention / attachments) ──────────
@@ -469,6 +476,21 @@ export function AgentConversation({
           {t('generalAgent.onboarding.openSettings')}
         </button>
       </div>
+    )
+  }
+
+  // S6 W2 (P4) — RECORD MODE: a headless agent run's session renders read-mostly (banner + locked
+  // composer + in-record approval), self-contained so none of the manual-session notices/branches
+  // below apply. Placed after the backend-configured gate (an unconfigured backend has no session to
+  // review anyway).
+  if (isAgentRecord && activeItem) {
+    return (
+      <AgentRecordConversation
+        chat={chat}
+        activeItem={activeItem}
+        gatewayBaseUrl={gatewayBaseUrl}
+        reloadMessagesReady={reloadMessagesReady}
+      />
     )
   }
 

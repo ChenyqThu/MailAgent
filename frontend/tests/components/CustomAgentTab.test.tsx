@@ -380,8 +380,8 @@ describe('CustomAgentDrawer — run 历史', () => {
     // 徽标：等待审批（永不渲染为成功）
     expect(await screen.findByText('等待审批')).toBeTruthy()
     expect(screen.queryByText('已完成')).toBeNull()
-    // pending 提示文案（岛 off 说明）—— 唯一子串定位，避免撞徽标文字
-    expect(screen.getByText(/若未开启灵动岛/)).toBeTruthy()
+    // pending 提示文案（S6 W2：可打开执行记录批准，或岛批准）—— 唯一子串定位，避免撞徽标文字
+    expect(screen.getByText(/打开执行记录即可批准/)).toBeTruthy()
     // run-now
     fireEvent.click(screen.getByText('立即运行'))
     await vi.waitFor(() => expect(mockRunNow).toHaveBeenCalledTimes(1))

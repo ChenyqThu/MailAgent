@@ -6,6 +6,7 @@ import { useMailApi } from '@shared/hooks/useMailApi'
 import { resolveApiBaseUrl } from '@shared/hooks/useLlmModels'
 import type {
   AgentRunHistoryItem,
+  AgentRunPendingCount,
   AgentRunToolOptions,
   ReportAgentConfig,
   ReportAgentCreateInput,
@@ -15,6 +16,8 @@ import type {
   ReportListItem,
   ReportRunResult
 } from '@shared/api/types'
+
+const EMPTY_PENDING_COUNT: AgentRunPendingCount = { total: 0, byAgent: {} }
 
 const LIST_KEY = ['report', 'list'] as const
 const CONFIG_KEY = ['report', 'config'] as const
@@ -184,6 +187,37 @@ export function useCustomAgentsEnabled(): boolean {
     retry: false
   })
   return q.data ?? false
+}
+
+/** S6 W2（P5 红点链）— 全局 + per-agent 待审批（paused_pending）计数，5s 轮询（SystemAlertBadge 先例）。
+ *  enabled=false（flag off / customAgentsEnabled=false）→ 不发请求、不轮询、恒返 {total:0,byAgent:{}}
+ *  → 所有红点面字节级不渲染。读失败（flag off / 不可达）→ 服务端已守读优雅降级返 EMPTY。 */
+export function useAgentPendingCount(enabled: boolean): AgentRunPendingCount {
+  const api = useMailApi()
+  const q = useQuery({
+    queryKey: ['agent-runs', 'pending-count'],
+    queryFn: () => api.report.pendingCount(),
+    enabled,
+    staleTime: 4_000,
+    refetchInterval: enabled ? 5_000 : false
+  })
+  return q.data ?? EMPTY_PENDING_COUNT
+}
+
+/** S6 W2（P5 红点链 ④）— 全局待审批（paused_pending）run 列表，供 TitleBar 徽标 popover 直达记录。
+ *  仅 enabled（popover 打开 + flag on）时发请求；读失败 / flag off → []（守读优雅降级）。 */
+export function usePendingRuns(enabled: boolean): {
+  runs: AgentRunHistoryItem[]
+  isLoading: boolean
+} {
+  const api = useMailApi()
+  const q = useQuery({
+    queryKey: ['agent-runs', 'list', 'paused_pending'],
+    queryFn: () => api.report.listRuns({ state: 'paused_pending', limit: 50 }),
+    enabled,
+    staleTime: 4_000
+  })
+  return { runs: q.data ?? [], isLoading: q.isLoading }
 }
 
 /** S5 — 某 custom agent 的 run 历史（listRuns，读失败返 []）。state 由后端 derive_agent_run_state

@@ -557,30 +557,52 @@ async function handleAgentRun(
 }
 
 /**
- * `POST /api/ai/approval/decide` — Part B (harness 上岛). The ISLAND approval callback lands here
- * (serve-api → gateway, loopback): the gateway resumes a stashed paused approval SERVER-SIDE so a
- * user fully off the app (renderer unmounted) can still approve on the island and have the tool run.
- * Body `{ toolCallId, decision:'approve'|'reject', resumeToken }`. The resumeToken is the gateway-
- * minted capability serve-api echoes back (approvalStash.claim rejects a wrong token). Registered
- * unconditionally; cfg.islandAgentEnabled + cfg.approvalStash gate it (404 when off → byte-identical
- * to pre-Part-B). Loopback-trusted like the other gateway endpoints; serve-api already validated the
- * island ack_token capability upstream before calling here.
+ * `POST /api/ai/approval/decide` — server-side approval resume. Two callers, two body shapes:
+ *   - ISLAND (Part B): `{ toolCallId, decision, resumeToken }`. serve-api echoes back the gateway-minted
+ *     capability token; approvalStash.claim rejects a wrong one. Used when the user is fully off the app.
+ *   - IN-RECORD (S6 W2, PRD P9): `{ approvalId, decision }` — NO resumeToken. The record view has no
+ *     capability token (it must never leave the gateway); the gateway resolves the internal toolCallId +
+ *     resumeToken from the stash by approvalId (peekByApprovalId) and drives the SAME resume. A
+ *     wrong/stale approvalId → 404 not_found (fail-closed). Loopback-trusted like the other gateway
+ *     endpoints (serve-api's ai_gateway_proxy fronts the remote-web parity, CF-Access-gated upstream).
+ *
+ * Registered unconditionally; cfg.approvalStash gates it (404 when server-side resume is off →
+ * byte-identical to pre-S6; the stash presence, not the island flag, is the gate since S6 W2 P8).
  */
 async function handleApprovalDecide(
   req: IncomingMessage,
   res: ServerResponse,
   cfg: AiGatewayConfig
 ): Promise<void> {
-  if (!cfg.islandAgentEnabled || !cfg.approvalStash) {
-    writeJson(res, 404, { error: 'E_NOT_IMPLEMENTED', hint: 'island agent resume not enabled' })
+  const stash = cfg.approvalStash
+  if (!stash) {
+    writeJson(res, 404, { error: 'E_NOT_IMPLEMENTED', hint: 'approval resume not enabled' })
     return
   }
   const body = await readJsonBody(req)
+  const decision = body.decision === 'reject' ? 'reject' : 'approve'
   const toolCallId = typeof body.toolCallId === 'string' ? body.toolCallId : ''
   const resumeToken = typeof body.resumeToken === 'string' ? body.resumeToken : ''
-  const decision = body.decision === 'reject' ? 'reject' : 'approve'
-  if (!toolCallId || !resumeToken) {
-    writeJson(res, 400, { error: 'E_INVALID_ARG', hint: 'toolCallId + resumeToken required' })
+  const approvalId = typeof body.approvalId === 'string' ? body.approvalId : ''
+  // Resolve to the island shape { toolCallId, resumeToken } either from the body (island) or from the
+  // stash by approvalId (in-record — the token is read from the entry, never sent by the caller).
+  let resolved: { toolCallId: string; resumeToken: string } | null = null
+  if (toolCallId && resumeToken) {
+    resolved = { toolCallId, resumeToken }
+  } else if (approvalId) {
+    const entry = stash.peekByApprovalId(approvalId)
+    // miss / wrong approvalId → fail-closed (no live claimable approval): 404 not_found, same shape the
+    // resume returns for a miss, so the record-view client treats it identically.
+    if (!entry) {
+      writeJson(res, 404, { ok: false, status: 'not_found', error: 'no live pending approval' })
+      return
+    }
+    resolved = { toolCallId: entry.toolCallId, resumeToken: entry.resumeToken }
+  } else {
+    writeJson(res, 400, {
+      error: 'E_INVALID_ARG',
+      hint: 'either { toolCallId, resumeToken } or { approvalId } required'
+    })
     return
   }
   // The resume drives a real write tool; the fork's ack POST is fire-and-forget (5s, doesn't read the
@@ -591,7 +613,7 @@ async function handleApprovalDecide(
   try {
     const result = await resumeApprovalRun(
       cfg,
-      { toolCallId, decision, resumeToken },
+      { toolCallId: resolved.toolCallId, decision, resumeToken: resolved.resumeToken },
       controller.signal
     )
     // Part B (dogfood live-refresh) — a TERMINAL settle (completed / rejected / error) on a persisted
@@ -630,7 +652,8 @@ async function handleApprovalDecide(
  * miss → 404 { pending:false } (S6 W1): the stash is process-memory (gateway restart drops it), so
  * a miss is the fail-closed truth "no live claimable approval" — an honest boundary the record view
  * needs. The island-notice consumer already treats !res.ok as pending:false, so the 404 is
- * backward-compatible there. Island agent off / stash unwired → also a miss (nothing is claimable).
+ * backward-compatible there. Stash unwired (both server-resume flags off, S6 W2 P8) → also a miss
+ * (nothing is claimable).
  *
  * 🔴 SECURITY — the hit body enriches with approvalId/inputPreview/agentId/jobId/ageMs for the
  * decide card, but NEVER the resumeToken: that capability must only leave the gateway through the
@@ -644,8 +667,7 @@ function handleApprovalPending(res: ServerResponse, cfg: AiGatewayConfig, url: s
     writeJson(res, 400, { error: 'E_INVALID_ARG', hint: 'sessionId (integer) required' })
     return
   }
-  const entry =
-    cfg.islandAgentEnabled && cfg.approvalStash ? cfg.approvalStash.peekBySession(sessionId) : null
+  const entry = cfg.approvalStash ? cfg.approvalStash.peekBySession(sessionId) : null
   if (!entry) {
     writeJson(res, 404, { pending: false })
     return
@@ -729,8 +751,8 @@ export function createAiGatewayServer(cfg: AiGatewayConfig): Server {
       return
     }
 
-    // Part B (harness 上岛) — island approval callback → server-side resume. Registered
-    // unconditionally; cfg.islandAgentEnabled + cfg.approvalStash gate it (404 when off).
+    // Part B (island) + S6 W2 (in-record) — approval decision → server-side resume. Registered
+    // unconditionally; cfg.approvalStash gates it (404 when server-side resume is off).
     if (method === 'POST' && path === '/api/ai/approval/decide') {
       void handleApprovalDecide(req, res, cfg)
       return

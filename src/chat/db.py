@@ -256,6 +256,7 @@ class ChatDb:
             f"""SELECT
                  s.id, s.email_id, s.anchor_type, s.anchor_id, s.backend_kind, s.backend_model,
                  s.backend_agent_page_id, s.title, s.archived, s.created_at, s.updated_at,
+                 s.origin, s.agent_id, s.agent_job_id,
                  (SELECT substr(m.content, 1, 500) FROM ai_chat_messages m
                     WHERE m.session_id = s.id AND m.role = 'user'
                     ORDER BY m.created_at ASC LIMIT 1) AS first_user_message,

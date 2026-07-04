@@ -24,6 +24,9 @@ from src.kos.client import KOSError  # kos-call 端点 KOSError→502 测试用
 # P2c — mirror chat_db.ts v7 (anchor): email_id nullable + anchor_type/anchor_id
 # + coupling CHECK. The test fixture must track the real schema or db.py's anchor
 # SELECT/INSERT (s.anchor_type / INSERT anchor columns) would fail against it.
+# S6 W2 — mirror chat_db.ts v19: origin/agent_id/agent_job_id (list_all_sessions now
+# SELECTs them so the record view can composer-lock agent sessions); without these the
+# SELECT would OperationalError and _read_all would swallow it to [] (silent empty list).
 _AI_CHAT_DDL = """
 CREATE TABLE ai_chat_sessions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -37,6 +40,9 @@ CREATE TABLE ai_chat_sessions (
     archived INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
+    origin TEXT,
+    agent_id TEXT,
+    agent_job_id TEXT,
     CHECK (
         (anchor_type = 'email' AND email_id IS NOT NULL AND anchor_id = email_id)
         OR

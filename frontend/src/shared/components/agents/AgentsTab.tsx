@@ -13,7 +13,9 @@ import type {
 import { DEFAULT_SEARCH_AGENT_PROMPT } from '@shared/assistant/searchAgentClient'
 import { CadencePill, ReportIcon, StatusBadge, Switch } from './primitives'
 import { CustomAgentDrawer, RunStateBadge } from './CustomAgentDrawer'
+import { AgentPendingCountBadge, PendingDot } from './AgentPendingBadge'
 import {
+  useAgentPendingCount,
   useAgentRuns,
   useCreateAgent,
   useCustomAgentsEnabled,
@@ -509,6 +511,10 @@ function CustomAgentCard({
   // 最近一次 run 的状态徽标（listRuns 读失败/无 run → 不显徽标）。
   const { runs } = useAgentRuns(cfg.id)
   const lastRun = runs[0] ?? null
+  // 红点链 ②（P5）：该 agent 待审批（paused_pending）计数徽标（共享 pending-count 轮询，flag off →
+  // 不轮询 → 恒 0 → 不渲染）。
+  const customAgentsEnabled = useCustomAgentsEnabled()
+  const pendingCount = useAgentPendingCount(customAgentsEnabled).byAgent[cfg.id] ?? 0
   const toggle = (v: boolean): void => {
     void save(cfg.id, { enabled: v })
   }
@@ -576,6 +582,7 @@ function CustomAgentCard({
             {cfg.title}
           </h3>
           {lastRun && <RunStateBadge state={lastRun.state} />}
+          <AgentPendingCountBadge count={pendingCount} />
         </div>
         <div style={{ fontSize: 12.5, color: 'rgb(var(--ink-fg-3))', marginTop: 3 }}>
           {triggerSummary}
@@ -2917,6 +2924,8 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
   >(null)
   // S5 — MAILAGENT_CUSTOM_AGENTS_ENABLED（/chat/config 热读）；控 NewAgentTile 可点性。
   const customAgentsEnabled = useCustomAgentsEnabled()
+  // 红点链 ③（P5）：Custom AI Agents 区 header dot（全局待审批 total>0）。flag off → 不轮询 → total 0。
+  const customPendingTotal = useAgentPendingCount(customAgentsEnabled).total
   // v27 — AI 邮件预处理配置抽屉开合（后端播种单行，只编辑、无新建）。
   const [preprocessOpen, setPreprocessOpen] = useState(false)
   // S5 W5a — 项目周报同步配置抽屉开合（后端 v31 播种单行，只编辑、无新建）。
@@ -3187,16 +3196,21 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
           {(customAgentsEnabled || customAgents.length > 0) && (
             <>
               <div style={{ marginTop: 8 }}>
-                <h2
-                  style={{
-                    fontSize: 16,
-                    fontWeight: 600,
-                    color: 'rgb(var(--ink-fg))',
-                    letterSpacing: '-0.01em'
-                  }}
-                >
-                  {t('agents.custom.section')}
-                </h2>
+                <div className="flex items-center" style={{ gap: 8 }}>
+                  <h2
+                    style={{
+                      fontSize: 16,
+                      fontWeight: 600,
+                      color: 'rgb(var(--ink-fg))',
+                      letterSpacing: '-0.01em'
+                    }}
+                  >
+                    {t('agents.custom.section')}
+                  </h2>
+                  {customPendingTotal > 0 && (
+                    <PendingDot title={t('agents.custom.runs.sectionDot', { count: customPendingTotal })} />
+                  )}
+                </div>
                 <p style={{ fontSize: 13, color: 'rgb(var(--ink-fg-2))', marginTop: 4 }}>
                   {t('agents.custom.sectionHint')}
                 </p>

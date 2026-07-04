@@ -274,12 +274,25 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
   // window (30 min, DEFAULT_STASH_TTL_MS) so verify()/consume() don't expire before the user comes
   // back to click. Off (default) → the guard keeps its 5-min TTL (byte-identical).
   const islandAgentEnabled = envBool('MAILAGENT_ISLAND_AGENT_ENABLED', false)
-  const approvalGuard = islandAgentEnabled
+  // S6 W2 (PRD P8) — the SERVER-SIDE approval resume infra (stash + extended guard TTL + settle hook)
+  // follows EITHER flag, not just the island: a headless custom-agent run (MAILAGENT_CUSTOM_AGENTS_
+  // ENABLED) that pauses at an approval must be claimable IN-APP (the record view's /decide) even with
+  // the island off ("内部审批优先"). Only the announce LEG (pushing an island card) stays island-only,
+  // gated below. Both flags off → serverResumeEnabled false → no stash, 5-min guard TTL, /pending +
+  // /decide 404 → byte-identical to pre-S6. (customAgentsEnabled is re-read for the endpoint gating
+  // comment at the agent-run wiring below; one envBool per key is cheap.)
+  const customAgentsEnabled = envBool('MAILAGENT_CUSTOM_AGENTS_ENABLED', false)
+  const serverResumeEnabled = islandAgentEnabled || customAgentsEnabled
+  // The guard record must outlive the stash window so a verify()/consume() on the eventual in-app (or
+  // island) approve doesn't expire first — extend it whenever server-side resume is live.
+  const approvalGuard = serverResumeEnabled
     ? new ApprovalGuard({ ttlMs: DEFAULT_STASH_TTL_MS })
     : new ApprovalGuard()
-  // Part B — per-gateway stash of paused approval runs (server-side resume source). Only when the
-  // island agent path is on; off → undefined → chatRun's stash/announce block is inert + /decide 404s.
-  const approvalStash = islandAgentEnabled ? new ApprovalRunStash() : undefined
+  // Part B / S6 W2 — per-gateway stash of paused approval runs (server-side resume source). Built when
+  // EITHER server-resume flag is on; both off → undefined → chatRun's stash block is inert + /pending +
+  // /decide 404 (byte-identical to pre-S6). The stash's PRESENCE (not the island flag) is now the
+  // gate everywhere downstream.
+  const approvalStash = serverResumeEnabled ? new ApprovalRunStash() : undefined
   // Set after the server listens (chicken-and-egg: the announce needs the gateway's own port, known
   // only post-listen; a paused approval fires well after startup so this is populated by then).
   let gatewayPort = 0
@@ -345,7 +358,7 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
   // gateway tools, so buildGatewayTools output is unaffected either way. Main-env-only, NO vite
   // define (the renderer never reads it — mirrors the other openness flags). The Python side reads
   // the SAME env via pydantic (custom_agents_enabled) to gate the trigger worker + spec endpoints.
-  const customAgentsEnabled = envBool('MAILAGENT_CUSTOM_AGENTS_ENABLED', false)
+  // (customAgentsEnabled is read once above with serverResumeEnabled — the S6 W2 stash decoupling.)
   const apiBase = `http://127.0.0.1:${resolveApiPort()}/api`
   // M4a — prewarm the /chat/config cache ONCE before the server accepts requests so the per-request
   // buildTools factory reads a populated advertisedSkills on the very first turn (no null-first-turn
@@ -645,7 +658,12 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     // serve-api /agent-runs/{jobId}/approval-state. status→state: rejected→rejected, else→approved
     // (the user's DECISION was approve; a post-approval tool error doesn't change that the approval
     // was granted). Best-effort (fire-and-forget); only when custom agents are on.
-    onServerResumeSettled: islandAgentEnabled
+    //
+    // S6 W2 (P8) — wired whenever server-side resume is live (island OR custom agents), NOT island-only:
+    // an IN-APP /decide from the record view must broadcast chat:session-updated so the open panel
+    // live-refreshes (task item 5) AND settle the agent's async_jobs approval-state. Both flags off →
+    // undefined → server.ts's ?. short-circuits (byte-identical).
+    onServerResumeSettled: serverResumeEnabled
       ? (sessionId: number, status: 'completed' | 'rejected' | 'error') => {
           for (const win of BrowserWindow.getAllWindows()) {
             if (win.isDestroyed()) continue

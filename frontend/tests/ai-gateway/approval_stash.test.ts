@@ -147,3 +147,28 @@ describe('ApprovalRunStash — peekBySession (reloaded-session pending probe)', 
     expect(s.peekBySession(42)?.toolName).toBe('email_prepare_send')
   })
 })
+
+// S6 W2 (PRD P9) — the in-record /decide resolves the internal toolCallId + resumeToken from an
+// approvalId so the token never leaves the gateway. peekByApprovalId is read-only and fails closed.
+describe('ApprovalRunStash — peekByApprovalId (in-record token resolution)', () => {
+  test('returns the live entry carrying the toolCallId + resumeToken; wrong id → null; never consumes', () => {
+    const s = new ApprovalRunStash()
+    const token = s.stash(makeInput('tc1')) // approvalId 'ap1'
+    const entry = s.peekByApprovalId('ap1')
+    expect(entry?.toolCallId).toBe('tc1')
+    expect(entry?.resumeToken).toBe(token)
+    expect(s.peekByApprovalId('ap_nope')).toBeNull()
+    // read-only: the entry is still claimable after the probe
+    expect(s.peekByApprovalId('ap1')).not.toBeNull()
+    expect(s.claim('tc1', token)).not.toBeNull()
+  })
+
+  test('expired entry → null (skipped, not deleted on the read path)', () => {
+    let clock = 0
+    const s = new ApprovalRunStash({ ttlMs: 100, now: () => clock })
+    s.stash(makeInput('tc1'))
+    clock = 200
+    expect(s.peekByApprovalId('ap1')).toBeNull()
+    expect(s.size()).toBe(1)
+  })
+})

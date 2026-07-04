@@ -22,6 +22,7 @@ import { AccentPickerPopover } from './AccentPickerPopover'
 import { LocalePicker } from './LocalePicker'
 import { SurfacePickerPopover } from './SurfacePickerPopover'
 import { SystemAlertBadge } from './SystemAlertBadge'
+import { TitleBarAgentPendingBadge } from '../agents/AgentPendingBadge'
 import { ThemePickerPopover } from './ThemePickerPopover'
 import { UpdateIndicator } from './UpdateIndicator'
 
@@ -87,6 +88,8 @@ export function TitleBar(): React.ReactElement {
           <button> element. SystemAlertBadge renders null when no alerts. */}
       <div className="flex items-center gap-2 sm:gap-3 shrink-0 text-meta font-mono text-ink-fg-2">
         <SystemAlertBadge />
+        {/* S6 W2（P5 红点链 ④）— custom-agent 待审批全局徽标；flag off / 无待审批 → null（不轮询）。 */}
+        <TitleBarAgentPendingBadge />
         {/* 07-04 — 检测到新版本时出更新 icon (强调色配置左侧); 无更新时 null。 */}
         <UpdateIndicator />
         <AccentPickerPopover />

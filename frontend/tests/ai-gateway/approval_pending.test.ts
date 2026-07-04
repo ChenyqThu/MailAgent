@@ -157,3 +157,22 @@ describe('GET /api/ai/approval/pending — miss (404 fail-closed)', () => {
     expect(malformed.status).toBe(400)
   })
 })
+
+// S6 W2 (PRD P8) — the stash presence, NOT cfg.islandAgentEnabled, gates the pending probe. The
+// lifecycle now injects the stash whenever server-side resume is live (island OR custom agents), so a
+// headless custom-agent pause is claimable in-app with the island OFF. Both flags off → the lifecycle
+// leaves the stash undefined → 404 (byte-identical). These pin the gate is the stash, not the island.
+describe('GET /api/ai/approval/pending — island-decoupled gate (P8)', () => {
+  test('stash present WITHOUT islandAgentEnabled (custom-agents-only) → still hits', async () => {
+    const stash = new ApprovalRunStash()
+    // islandAgentEnabled omitted (falsy) — the custom-agents lifecycle wires the stash without it.
+    const h = await start(baseCfg({ approvalStash: stash }))
+    seedStash(stash, 21)
+
+    const res = await pending(h.port, '?sessionId=21')
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, unknown>
+    expect(body.pending).toBe(true)
+    expect(body.approvalId).toBe('ap_pending')
+  })
+})

@@ -43,6 +43,11 @@ export interface UseGeneralChatReturn {
   deleteSession: (sessionId: number) => void
   /** Re-pull the general sessions list (after delete / external change). */
   refreshSessions: () => Promise<void>
+  /** S6 W2 — re-load the ACTIVE session's messages from ai_chat.db (no session switch). Mirror of
+   *  useEmailChat.reloadActiveSession: the record view calls it after an in-record /decide (or on the
+   *  chat:session-updated broadcast) so the resumed turn's rows reach the read-only thread — selectSession
+   *  no-ops for the same id, so this is the way to re-seed WITHOUT a nav. */
+  reloadActiveSession: () => Promise<void>
 }
 
 export function useGeneralChat(): UseGeneralChatReturn {
@@ -186,6 +191,20 @@ export function useGeneralChat(): UseGeneralChatReturn {
     [refresh]
   )
 
+  // S6 W2 — reload the active session's messages in place (no session switch, no navEpoch bump). The
+  // record view uses it after an in-record /decide / on chat:session-updated to re-seed the read-only
+  // thread with the resumed turn.
+  const reloadActiveSession = useCallback(async (): Promise<void> => {
+    const sid = activeSessionRef.current
+    if (sid === null) return
+    try {
+      await refresh(sid)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      setError({ code: 'E_LOAD', message })
+    }
+  }, [refresh])
+
   return {
     messages,
     error,
@@ -198,6 +217,7 @@ export function useGeneralChat(): UseGeneralChatReturn {
     selectSession,
     adoptSession,
     deleteSession,
-    refreshSessions
+    refreshSessions,
+    reloadActiveSession
   }
 }

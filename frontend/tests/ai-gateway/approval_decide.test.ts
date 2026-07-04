@@ -177,6 +177,116 @@ describe('/api/ai/approval/decide — gating + validation', () => {
   })
 })
 
+// S6 W2 (PRD P8 + P9) — the IN-RECORD decide path. P8: the stash PRESENCE (not cfg.islandAgentEnabled)
+// gates /decide, so a headless custom-agent pause is claimable in-app with the island OFF. P9: the
+// record view drives it with the { approvalId, decision } shape (NO resumeToken — the gateway resolves
+// the internal token from the stash so the capability never leaves it). Modeled on the real
+// custom-agents-only lifecycle: island flag OFF, no isApprovalResolved / rejectApproval / oneShotWrites
+// (those are island↔renderer race machinery, unreachable when only /decide can resume an agent run).
+describe('/api/ai/approval/decide — in-record { approvalId } shape (P8 + P9)', () => {
+  /** A custom-agents-only cfg: stash wired, island flag OFF, no island-race hooks (mirrors the
+   *  lifecycle when only MAILAGENT_CUSTOM_AGENTS_ENABLED is on). */
+  function customAgentCfg(
+    guard: ApprovalGuard,
+    stash: ApprovalRunStash,
+    domainCalls: unknown[]
+  ): AiGatewayConfig {
+    const domain = spyDomain(domainCalls)
+    return {
+      port: 0,
+      baseUrl: 'https://crs.example/api',
+      apiKey: 'sk-test',
+      model: 'claude-sonnet-4-6',
+      createModel: () => mockTextModel(['草稿已创建。']),
+      buildTools: (collector, _approvalMode, contextMode) =>
+        buildGatewayTools(
+          { domain, writeToolsEnabled: true, approvalGuard: guard, contextMode },
+          collector
+        ),
+      // islandAgentEnabled OMITTED — the stash presence alone must enable /decide (P8).
+      approvalStash: stash
+    }
+  }
+
+  test('{ approvalId, approve } with the island flag OFF → tool executes server-side (P8 + P9)', async () => {
+    const guard = new ApprovalGuard()
+    const stash = new ApprovalRunStash()
+    const domainCalls: unknown[] = []
+    const h = await start(customAgentCfg(guard, stash, domainCalls))
+    seedPausedApproval(guard, stash) // the token is discarded — the record view never sees it
+
+    // NO resumeToken in the body — the gateway resolves it internally from the approvalId (AP).
+    const res = await decide(h.port, { approvalId: AP, decision: 'approve' })
+    expect(res.status).toBe(200)
+    expect((await res.json()).status).toBe('completed')
+    expect(domainCalls).toHaveLength(1)
+    // one-shot at the stash level: a second in-record decide → 404 not_found (already claimed)
+    const res2 = await decide(h.port, { approvalId: AP, decision: 'approve' })
+    expect(res2.status).toBe(404)
+    expect((await res2.json()).status).toBe('not_found')
+  })
+
+  test('{ approvalId, reject } → tool does NOT execute; status rejected', async () => {
+    const guard = new ApprovalGuard()
+    const stash = new ApprovalRunStash()
+    const domainCalls: unknown[] = []
+    const h = await start(customAgentCfg(guard, stash, domainCalls))
+    seedPausedApproval(guard, stash)
+    const res = await decide(h.port, { approvalId: AP, decision: 'reject' })
+    expect(res.status).toBe(200)
+    expect((await res.json()).status).toBe('rejected')
+    expect(domainCalls).toHaveLength(0)
+  })
+
+  test('wrong / stale approvalId → 404 not_found (fail-closed), nothing runs', async () => {
+    const guard = new ApprovalGuard()
+    const stash = new ApprovalRunStash()
+    const domainCalls: unknown[] = []
+    const h = await start(customAgentCfg(guard, stash, domainCalls))
+    seedPausedApproval(guard, stash)
+    const res = await decide(h.port, { approvalId: 'ap_nope', decision: 'approve' })
+    expect(res.status).toBe(404)
+    expect((await res.json()).status).toBe('not_found')
+    expect(domainCalls).toHaveLength(0)
+  })
+
+  test('the resumeToken is NEVER required NOR echoed for the in-record shape', async () => {
+    const guard = new ApprovalGuard()
+    const stash = new ApprovalRunStash()
+    const domainCalls: unknown[] = []
+    const h = await start(customAgentCfg(guard, stash, domainCalls))
+    const token = seedPausedApproval(guard, stash)
+    const res = await decide(h.port, { approvalId: AP, decision: 'approve' })
+    const raw = await res.text()
+    expect(raw).not.toContain(token) // the capability token never leaves the gateway
+  })
+
+  test('both server-resume flags off (no stash) → /decide 404 (byte-identical to pre-S6)', async () => {
+    const h = await start({
+      port: 0,
+      baseUrl: 'https://crs.example/api',
+      apiKey: 'sk-test',
+      model: 'claude-sonnet-4-6',
+      createModel: () => mockTextModel(['x'])
+    })
+    const res = await decide(h.port, { approvalId: AP, decision: 'approve' })
+    expect(res.status).toBe(404)
+    expect((await res.json()).error).toBe('E_NOT_IMPLEMENTED')
+  })
+
+  test('the island { toolCallId, resumeToken } shape still works on the same stash (both coexist)', async () => {
+    const guard = new ApprovalGuard()
+    const stash = new ApprovalRunStash()
+    const domainCalls: unknown[] = []
+    const h = await start(customAgentCfg(guard, stash, domainCalls))
+    const token = seedPausedApproval(guard, stash)
+    const res = await decide(h.port, { toolCallId: TC, decision: 'approve', resumeToken: token })
+    expect(res.status).toBe(200)
+    expect((await res.json()).status).toBe('completed')
+    expect(domainCalls).toHaveLength(1)
+  })
+})
+
 describe('/api/ai/approval/decide — server-side resume', () => {
   test('approve → the write tool executes server-side; status completed', async () => {
     const guard = new ApprovalGuard()

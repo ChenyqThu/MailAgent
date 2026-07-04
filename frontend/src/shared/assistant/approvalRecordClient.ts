@@ -71,12 +71,14 @@ export async function fetchPendingApproval(sessionId: number): Promise<PendingAp
 }
 
 /** Decide a pending approval server-side (approve / reject) — the SAME /decide channel the island
- *  uses. `resumeToken` is the gateway capability the caller must carry (sourced by W2). A transport
- *  failure / unavailable gateway → { ok:false, status:'error', error }. Never throws. */
+ *  uses, but with the in-record { approvalId, decision } shape (PRD P9): the record view carries NO
+ *  capability token; the gateway resolves the internal toolCallId + resumeToken from the stash by
+ *  approvalId (peekByApprovalId) so the token never leaves the gateway. `approvalId` comes from the
+ *  live pending probe (fetchPendingApproval). A transport failure / unavailable gateway / stale
+ *  approvalId → { ok:false, status:'error'|'not_found', ... }. Never throws. */
 export async function postApprovalDecide(input: {
-  toolCallId: string
+  approvalId: string
   decision: 'approve' | 'reject'
-  resumeToken: string
 }): Promise<ApprovalDecideResult> {
   const baseUrl = resolveAiGatewayBaseUrl()
   if (baseUrl == null) {

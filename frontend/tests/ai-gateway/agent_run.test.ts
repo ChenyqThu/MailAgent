@@ -541,9 +541,10 @@ describe('runHeadlessAgent — drain outcomes', () => {
     expect(entry?.contextMode).toBe('cron_headless')
   })
 
-  test('paused_handoff (island OFF): still paused_handoff but the stash is NOT touched', async () => {
+  test('paused_handoff (island OFF, custom-agents stash present): stashed for in-app resume, NOT announced (P8)', async () => {
     const guard = new ApprovalGuard()
     const stash = new ApprovalRunStash()
+    const announced: unknown[] = []
     const cfg: AiGatewayConfig = {
       port: 0,
       baseUrl: 'https://crs.example/api',
@@ -555,8 +556,11 @@ describe('runHeadlessAgent — drain outcomes', () => {
           { domain: minimalDomain(), writeToolsEnabled: true, approvalGuard: guard, contextMode: mode },
           collector
         ),
-      // island OFF: approvalStash present but islandAgentEnabled undefined → maybeStashAndAnnounce is inert.
+      // S6 W2 (P8) — island OFF but the custom-agents lifecycle wires the stash: the STASH step follows
+      // the stash presence (so the pause is claimable in-app via the record view /decide), while the
+      // ANNOUNCE step stays island-only (no announce hook + island off → no island card).
       approvalStash: stash,
+      announceApprovalToIsland: (info) => announced.push(info),
       persistTurn: () => {}
     }
     const result = await runHeadlessAgent(
@@ -565,7 +569,11 @@ describe('runHeadlessAgent — drain outcomes', () => {
       new AbortController().signal
     )
     expect(result.outcome).toBe('paused_handoff')
-    expect(stash.size()).toBe(0) // island off → no decision surface → nothing stashed
+    // P8: the pause IS stashed (in-app claimable) even with the island off — the stash presence is the gate.
+    expect(stash.size()).toBe(1)
+    expect(stash.peekBySession(55)?.toolName).toBe('email_draft_reply')
+    // but the island announce leg is island-only → never fired.
+    expect(announced).toHaveLength(0)
   })
 
   test('upstream APICallError 429 (no abort) → outcome error E_QUOTA, never mislabeled completed', async () => {

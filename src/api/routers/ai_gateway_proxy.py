@@ -270,9 +270,10 @@ async def proxy_approval_decide(
     """代理 POST /api/ai/approval/decide → gateway（S6 W1，远程 web parity）。
 
     记录内审批决策 → gateway 服务端 resume（与岛 ack 共用同一 decide 通道，无第二套审批面）。
-    body {toolCallId, decision, resumeToken}；gateway 凭 resumeToken 能力令牌 claim + resume。
-    非 2xx（404 未接线 / 400 缺参 / 500 resume 失败）原样透传。gateway 门控（islandAgentEnabled
-    + approvalStash）off → 404，代理透传。"""
+    两种 body 形状原样透传（S6 W2 P9）：岛 {toolCallId, decision, resumeToken}（凭能力令牌 claim）
+    或记录内 {approvalId, decision}（gateway 按 approvalId 内部解析 toolCallId+resumeToken，令牌不出
+    gateway）。非 2xx（404 未接线 / 400 缺参 / 500 resume 失败）原样透传。gateway 门控（approvalStash
+    在场，S6 W2 P8 起 = island OR custom-agents flag）off → 404，代理透传。"""
     return await _proxy_buffered(request, "/api/ai/approval/decide")
 
 

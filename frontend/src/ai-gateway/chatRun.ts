@@ -398,9 +398,15 @@ export function redactApprovalRequestedParts(
 }
 
 /**
- * Part B (island resume) — on a paused approval, stash the run for server-side resume + fire-and-forget
- * announce it to the island. Guarded so flag-off is inert: cfg.islandAgentEnabled AND cfg.approvalStash
- * must both be set (the lifecycle only injects them when MAILAGENT_ISLAND_AGENT_ENABLED is on). The
+ * Part B / S6 W2 (PRD P8) — on a paused approval, stash the run for server-side resume, and (island
+ * only) fire-and-forget announce it to the island.
+ *
+ * The STASH step gates on cfg.approvalStash PRESENCE alone: the lifecycle now injects the stash
+ * whenever server-side resume is live (island OR custom agents), so a headless custom-agent pause is
+ * claimable in-app via the record view's /decide even with the island off ("内部审批优先"). The
+ * ANNOUNCE step stays island-only (cfg.announceApprovalToIsland is only wired when the island flag is
+ * on → the `if (cfg.islandAgentEnabled)` guard + `?.` are belt-and-suspenders). Both flags off → the
+ * lifecycle leaves cfg.approvalStash undefined → this returns early (byte-identical to pre-S6). The
  * announce is best-effort (never awaited, self-contained try/catch) so it can't block or break the
  * already-streamed paused turn.
  */
@@ -409,7 +415,7 @@ function maybeStashAndAnnounceApproval(
   run: PreparedChatRun,
   responseMessage: MailAgentUIMessage
 ): void {
-  if (!cfg.islandAgentEnabled || !cfg.approvalStash || !run.originalBody) return
+  if (!cfg.approvalStash || !run.originalBody) return
   try {
     const info = extractApprovalStashInput(responseMessage)
     if (!info) return
@@ -431,14 +437,20 @@ function maybeStashAndAnnounceApproval(
       // cfg → the chain re-freezes the same context every hop.
       agentRunContext: cfg.agentRunContext
     })
-    cfg.announceApprovalToIsland?.({
-      sessionId: run.sessionId,
-      toolCallId: info.toolCallId,
-      toolName: info.toolName,
-      risk: '', // the lifecycle enriches risk from ApprovalGuard.peek (it owns the guard)
-      inputPreview: approvalInputPreview(info.toolName, info.input),
-      resumeToken
-    })
+    // ANNOUNCE step (island-only, P8): only the island needs the pushed card + the resumeToken; the
+    // in-app record view claims from the stash directly via /decide (no token leaves the gateway).
+    // announceApprovalToIsland is undefined unless the island flag is on, so the explicit guard just
+    // documents the split and skips the preview compute when the island is off.
+    if (cfg.islandAgentEnabled) {
+      cfg.announceApprovalToIsland?.({
+        sessionId: run.sessionId,
+        toolCallId: info.toolCallId,
+        toolName: info.toolName,
+        risk: '', // the lifecycle enriches risk from ApprovalGuard.peek (it owns the guard)
+        inputPreview: approvalInputPreview(info.toolName, info.input),
+        resumeToken
+      })
+    }
   } catch (err) {
     console.error('[ai-gateway] island approval stash/announce failed (turn paused OK)', err)
   }
