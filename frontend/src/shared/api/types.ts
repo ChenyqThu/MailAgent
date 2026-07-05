@@ -2524,6 +2524,24 @@ export interface ReportRunResult {
   error?: string | null
 }
 
+/** v1.3.0 dogfood R5 — 项目周报同步的一次执行记录（GET /api/project-progress/runs）。
+ *  自有 status 词表（processing | completed | failed | skipped，非 custom agent 的 8 值域）；
+ *  时间戳为 Unix 秒（前端 fmtTime 自适应秒/毫秒）。确定性 Python 同步脚本产物，不进 async_jobs。 */
+export interface ProjectProgressRunItem {
+  internalId: number
+  subject?: string | null
+  weekTag?: string | null
+  filename?: string | null
+  status: string
+  error?: string | null
+  startedAt?: number | null
+  completedAt?: number | null
+  projectsTotal?: number | null
+  projectsCreated?: number | null
+  projectsUpdated?: number | null
+  projectsFailed?: number | null
+}
+
 /** S6 W1 — 待审批（paused_pending）计数（GET /api/agent-runs/pending-count，P5 红点链数据源）。
  *  只计 live 可批的 paused_pending（paused_expired 不计）；byAgent 只含 count>0 的 agent。 */
 export interface AgentRunPendingCount {
@@ -2599,6 +2617,9 @@ export interface ReportApi {
   /** S5 — custom agent allowed_tools 可选清单（读）。GET /api/agent-runs/tool-options；
    *  flag off / 失败返 { tools: [], defaults: [] }（守读优雅降级，不硬编码工具名）。 */
   toolOptions(): Promise<AgentRunToolOptions>
+  /** R5 (task 07-05) — 项目周报同步近期执行记录（读）。GET /api/project-progress/runs；
+   *  失败返 []（守读优雅降级）。custom agent run 历史（listRuns）之外的独立读面。 */
+  projectProgressRuns(limit?: number): Promise<ProjectProgressRunItem[]>
 }
 
 export interface MailApi {

@@ -315,3 +315,46 @@ def _run_report_once_sync(store: Any, db_path: str, agent: dict) -> str:
     from src.reports.worker import run_report_once
 
     return asyncio.run(run_report_once(store=store, db_path=db_path, agent=agent))
+
+
+# ============================================================
+# 项目周报同步执行历史（读，v1.3.0 dogfood R5）
+# ============================================================
+def _project_progress_run_item(rec: Any) -> dict[str, Any]:
+    """``ProjectProgressSyncRecord`` → 前端 ``ProjectProgressRunItem`` 投影。
+
+    只暴露历史卡需要的字段（状态 / 时间 / 错误 / 邮件标识 / 项目计数）；时间戳保持
+    Unix 秒（前端 fmtTime 自适应秒/毫秒）。custom agent 的 async_jobs run 历史体系刻意不复用
+    —— 项目周报是确定性 Python 直调、自有 status 词表（processing/completed/failed/skipped）。
+    """
+    return {
+        "internalId": rec.email_internal_id,
+        "subject": rec.email_subject,
+        "weekTag": rec.week_tag,
+        "filename": rec.xlsx_filename,
+        "status": rec.status,
+        "error": rec.error,
+        "startedAt": rec.started_at,
+        "completedAt": rec.completed_at,
+        "projectsTotal": rec.projects_total,
+        "projectsCreated": rec.projects_created,
+        "projectsUpdated": rec.projects_updated,
+        "projectsFailed": rec.projects_failed,
+    }
+
+
+@router.get("/project-progress/runs", dependencies=[Depends(verify_cf_access)])
+async def list_project_progress_runs(
+    request: Request,
+    limit: int = Query(20, ge=1, le=100),
+):
+    """项目周报同步的近期执行记录（读）。包 ``ProjectProgressSyncStore.list_recent``；
+    按 completed_at/started_at 倒序。抽屉「执行历史」区数据源。"""
+    from src.api.deps import get_project_progress_store
+
+    store = get_project_progress_store()
+    rows = store.list_recent(limit=limit)
+    items = [_project_progress_run_item(r) for r in rows]
+    return success_envelope(
+        items, request=request, source="sqlite", meta_extra={"count": len(items)}
+    )

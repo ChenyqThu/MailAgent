@@ -2390,6 +2390,7 @@
     },
     "config": {
       "title": "配置 · {title}",
+      "viewHistory": "查看全部历史",
       "enable": "启用此 Agent",
       "enableHint": "按排程自动生成报告",
       "prompt": "报告 Prompt",
@@ -2484,6 +2485,7 @@
       "subtitle": "自动为新邮件分类 / 打标 / 建议回复（本地 LLM）",
       "noAgent": "未找到预处理 Agent（数据库未初始化？）",
       "configTitle": "AI 邮件预处理 · {title}",
+      "viewStats": "查看处理统计",
       "enable": "启用邮件预处理",
       "enableHint": "开启本地 LLM 对新邮件自动分类（全局开关 LLM_AGENT_ENABLED）。需重启服务后生效。",
       "restartHint": "需重启生效",
@@ -2548,7 +2550,18 @@
       "webReadOnly": "远程 Web 为只读：总开关 / 项目库 ID / BU 过滤不可修改（仅本地桌面端可改）；启用开关与触发规则仍可编辑。",
       "envSaveError": "保存环境变量失败",
       "errEmptyTrigger": "标题正则与发件人不能同时为空（要停用请用上方启用开关）",
-      "rowSaveError": "保存项目周报配置失败"
+      "rowSaveError": "保存项目周报配置失败",
+      "runs": {
+        "section": "执行历史",
+        "sectionHint": "近期同步记录",
+        "loading": "加载中…",
+        "empty": "暂无同步记录",
+        "counts": "{total} 个项目 · 新建 {created} · 更新 {updated}",
+        "statusCompleted": "已完成",
+        "statusFailed": "失败",
+        "statusSkipped": "已跳过",
+        "statusProcessing": "处理中"
+      }
     },
     "custom": {
       "section": "完全自定义 Agent",

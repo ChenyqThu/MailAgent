@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:  # 仅类型提示，运行期不 import (避免裸 worktree import 即 Config())
     from src.chat.db import ChatDb
     from src.config import Config
+    from src.project_progress.sync_store import ProjectProgressSyncStore
     from src.reports.store import ReportStore
     from src.repository import EmailRepository
     from src.services.context import ServiceContext
@@ -112,6 +113,21 @@ def _build_report_store() -> "ReportStore":
 def get_report_store() -> "ReportStore":
     """返回进程内 ReportStore 单例 (reports 端点用)。"""
     return _build_report_store()
+
+
+@lru_cache(maxsize=1)
+def _build_project_progress_store() -> "ProjectProgressSyncStore":
+    """构造 ProjectProgressSyncStore 单例 (lazy)。项目周报同步状态表与 report 表同库
+    (config.sync_store_db_path)，连接 per-call 短命，WAL 并发安全。"""
+    from src.config import config as _config_singleton
+    from src.project_progress.sync_store import ProjectProgressSyncStore
+
+    return ProjectProgressSyncStore(db_path=_config_singleton.sync_store_db_path)
+
+
+def get_project_progress_store() -> "ProjectProgressSyncStore":
+    """返回进程内 ProjectProgressSyncStore 单例 (项目周报执行历史读端点用)。"""
+    return _build_project_progress_store()
 
 
 @lru_cache(maxsize=1)

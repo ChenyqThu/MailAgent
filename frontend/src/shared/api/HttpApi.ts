@@ -33,6 +33,7 @@ import type {
   ReportDetail,
   ReportListItem,
   ReportRunResult,
+  ProjectProgressRunItem,
   AdminHealthData,
   AdminStatsData,
   AIFields,
@@ -862,6 +863,16 @@ export class HttpApi implements MailApi {
       } catch {
         // flag off / 端点未就绪 → 空清单（守读优雅降级，不硬编码工具名）。
         return { tools: [], defaults: [] }
+      }
+    },
+    projectProgressRuns: async (limit?: number): Promise<ProjectProgressRunItem[]> => {
+      try {
+        return await this.req<ProjectProgressRunItem[]>('GET', '/project-progress/runs', {
+          query: { limit }
+        })
+      } catch {
+        // serve-api 不可达 / 表不存在 → 空态（守 ReportApi「读失败返 []」契约）。
+        return []
       }
     }
   }

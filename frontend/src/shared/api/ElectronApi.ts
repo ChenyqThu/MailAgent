@@ -47,6 +47,7 @@ import type {
   ReportDetail,
   ReportListItem,
   ReportRunResult,
+  ProjectProgressRunItem,
   CleanupDeadLetterOpts,
   ComposeDraftOpts,
   ContactSuggestion,
@@ -877,6 +878,9 @@ class ElectronReportApi implements ReportApi {
   }
   async toolOptions(): Promise<AgentRunToolOptions> {
     return (await invoker()('report:toolOptions')) as AgentRunToolOptions
+  }
+  async projectProgressRuns(limit?: number): Promise<ProjectProgressRunItem[]> {
+    return (await invoker()('report:projectProgressRuns', limit)) as ProjectProgressRunItem[]
   }
 }
 

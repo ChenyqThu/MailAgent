@@ -32,7 +32,8 @@ import type {
   ReportDetail,
   ReportDoc,
   ReportListItem,
-  ReportRunResult
+  ReportRunResult,
+  ProjectProgressRunItem
 } from '../../../shared/api/types'
 
 // runNow 跑一次 LLM 报告，给足超时（claude 限流 fallback gpt 也要时间）。
@@ -137,9 +138,7 @@ function _toAgentConfig(row: AgentRow): ReportAgentConfig {
         ? _parseJson<string[] | null>(row.fallback_models_json, null)
         : null,
     // v30/v31：trigger 对 custom + project_progress 解析（其余恒 null）；tool_policy/budget 仅 custom。
-    trigger: projectsTrigger
-      ? _parseJson<CustomAgentTrigger | null>(row.trigger_json, null)
-      : null,
+    trigger: projectsTrigger ? _parseJson<CustomAgentTrigger | null>(row.trigger_json, null) : null,
     tool_policy: isCustom
       ? _parseJson<CustomAgentToolPolicy | null>(row.tool_policy_json, null)
       : null,
@@ -271,7 +270,11 @@ export function registerReportHandlers(): void {
         } catch (err) {
           const code = (err as { code?: string })?.code
           const message = (err as { message?: string })?.message
-          return { ok: false, code: code ?? 'E_RUN_FAILED', message: message ?? 'run enqueue failed' }
+          return {
+            ok: false,
+            code: code ?? 'E_RUN_FAILED',
+            message: message ?? 'run enqueue failed'
+          }
         }
       }
       const args = ['report', 'run', '--agent', agentId]
@@ -375,4 +378,21 @@ export function registerReportHandlers(): void {
       return { tools: [], defaults: [] }
     }
   })
+
+  // ── report:projectProgressRuns — R5 项目周报同步执行历史（读，走 serve-api
+  //    GET /project-progress/runs）。确定性 Python 同步脚本产物（自有 status 词表），不属
+  //    custom agent 的 async_jobs run 体系。serve-api 不可达 → catch 返 []（守读优雅降级）。
+  ipcMain.handle(
+    'report:projectProgressRuns',
+    async (_evt, limit?: number): Promise<ProjectProgressRunItem[]> => {
+      try {
+        return await daemonRequest<ProjectProgressRunItem[]>('GET', '/project-progress/runs', {
+          query: { limit }
+        })
+      } catch (err) {
+        console.warn('[report:projectProgressRuns] serve-api unreachable:', err)
+        return []
+      }
+    }
+  )
 }

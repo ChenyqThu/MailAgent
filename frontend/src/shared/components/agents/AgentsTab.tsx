@@ -3,6 +3,7 @@
 // 移植自 ~/Downloads/agents/agents-tab.jsx，接 report:getConfig/setConfig/runNow。
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useNavigate } from '@tanstack/react-router'
 
 import type {
   CustomAgentTrigger,
@@ -21,6 +22,7 @@ import {
   useCustomAgentsEnabled,
   useDeleteAgent,
   useKosAvailable,
+  useProjectProgressRuns,
   useReportConfig,
   useReportList,
   useRunNow,
@@ -602,11 +604,15 @@ function CustomAgentCard({
 export function ConfigDrawer({
   cfg,
   open,
-  onClose
+  onClose,
+  onOpenReports
 }: {
   cfg: ReportAgentConfig | null
   open: boolean
   onClose: () => void
+  /** R5 — 跳到「报告」tab 浏览该 agent 的完整执行历史（辅助优化提示词时回看过往报告）。
+   *  可选：AgentsTab 恒传；缺省（如独立测试直接渲染）则不显「查看全部历史」入口。 */
+  onOpenReports?: () => void
 }): React.ReactElement | null {
   const { t } = useTranslation()
   const { save, isSaving } = useSetConfig()
@@ -752,6 +758,31 @@ export function ConfigDrawer({
           <h2 style={{ fontSize: 15, fontWeight: 600, color: 'rgb(var(--ink-fg))', flex: 1 }}>
             {t('agents.config.title', { title })}
           </h2>
+          {/* R5 — 「查看全部历史」→ 跳报告 tab 浏览完整执行记录（含失败态）。切 tab 会卸载
+              本抽屉所在的 agents tab，无需先播退场动画。onOpenReports 缺省时不渲染。 */}
+          {onOpenReports && (
+            <button
+              type="button"
+              onClick={onOpenReports}
+              className="flex items-center"
+              style={{
+                gap: 5,
+                fontFamily: 'inherit',
+                fontSize: 12,
+                padding: '5px 10px',
+                borderRadius: 7,
+                cursor: 'pointer',
+                color: 'rgb(var(--ink-fg-2))',
+                background: 'rgb(var(--ink-fg) / 0.05)',
+                border: '1px solid rgb(var(--ink-border-soft))'
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.color = 'rgb(var(--c-accent))')}
+              onMouseLeave={(e) => (e.currentTarget.style.color = 'rgb(var(--ink-fg-2))')}
+            >
+              <ReportIcon name="clock" size={13} />
+              {t('agents.config.viewHistory')}
+            </button>
+          )}
           <button
             type="button"
             onClick={onClose}
@@ -1884,6 +1915,9 @@ function PreprocessConfigDrawer({
   // 分类 prompt 读写走 mailApi.prompts（桌面 IPC / web PUT /api/prompts/{slot}）。
   const api = useMailApi()
   const markRestartRequired = useRestartStore((s) => s.markRestartRequired)
+  // R5 — 跳 LLM 处理统计仪表盘（预处理执行情况看 per-email llm_processing 聚合，不走
+  // custom agent run 历史）。切路由会卸载 agents tab，无需先播退场动画。
+  const navigate = useNavigate()
 
   // 进 / 退场动效：与 ConfigDrawer / SearchConfigDrawer 同款（遮罩淡入 + 抽屉右滑同步）。
   const { shouldRender, scopeRef } = useExitAnimation<HTMLDivElement>(open, {
@@ -2097,6 +2131,28 @@ function PreprocessConfigDrawer({
           <h2 style={{ fontSize: 15, fontWeight: 600, color: 'rgb(var(--ink-fg))', flex: 1 }}>
             {t('agents.preprocess.configTitle', { title: cfg?.title ?? '' })}
           </h2>
+          {/* R5 — 「查看处理统计」→ 跳 LLM 仪表盘（预处理执行情况 = per-email 分类聚合）。 */}
+          <button
+            type="button"
+            onClick={() => void navigate({ to: '/admin/llm' })}
+            className="flex items-center"
+            style={{
+              gap: 5,
+              fontFamily: 'inherit',
+              fontSize: 12,
+              padding: '5px 10px',
+              borderRadius: 7,
+              cursor: 'pointer',
+              color: 'rgb(var(--ink-fg-2))',
+              background: 'rgb(var(--ink-fg) / 0.05)',
+              border: '1px solid rgb(var(--ink-border-soft))'
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.color = 'rgb(var(--c-accent))')}
+            onMouseLeave={(e) => (e.currentTarget.style.color = 'rgb(var(--ink-fg-2))')}
+          >
+            <ReportIcon name="barchart" size={13} />
+            {t('agents.preprocess.viewStats')}
+          </button>
           <button
             type="button"
             onClick={onClose}
@@ -2576,6 +2632,138 @@ function ProjectProgressAgentCard({
   )
 }
 
+// ─── 项目周报同步执行历史（只读，v1.3.0 dogfood R5）──────────────────────────
+// 观感参考 CustomAgentDrawer 的 RunHistorySection（状态徽标 + 时间 + 错误行），但用项目
+// 周报自己的 status 词表（processing/completed/failed/skipped），不接「立即运行」/「查看
+// 记录」——确定性 Python 直调、无 headless session，只回看每次同步结果。
+function ppRunTime(ts: number | null | undefined): string {
+  if (ts == null) return ''
+  // 后端存 Unix 秒；< 1e12 视作秒 → ×1000（与 CustomAgentDrawer fmtTime 同口径）。
+  const ms = ts < 1e12 ? ts * 1000 : ts
+  return new Date(ms).toLocaleString()
+}
+
+function PpStatusBadge({ status }: { status: string }): React.ReactElement {
+  const { t } = useTranslation()
+  // 四态配色 + i18n 标签：completed=绿 / failed=红 / skipped=中性 / 其它(processing)=info。
+  const tone =
+    status === 'completed'
+      ? { c: 'var(--c-ok)', label: 'agents.projectProgress.runs.statusCompleted' }
+      : status === 'failed'
+        ? { c: 'var(--c-fail)', label: 'agents.projectProgress.runs.statusFailed' }
+        : status === 'skipped'
+          ? { c: 'var(--ink-fg-3)', label: 'agents.projectProgress.runs.statusSkipped' }
+          : { c: 'var(--c-info)', label: 'agents.projectProgress.runs.statusProcessing' }
+  return (
+    <span
+      style={{
+        fontSize: 11,
+        fontWeight: 500,
+        padding: '2px 8px',
+        borderRadius: 5,
+        whiteSpace: 'nowrap',
+        color: `rgb(${tone.c})`,
+        background: `rgb(${tone.c} / 0.12)`,
+        border: `1px solid rgb(${tone.c} / 0.25)`
+      }}
+    >
+      {t(tone.label)}
+    </span>
+  )
+}
+
+function ProjectProgressRunHistory({ open }: { open: boolean }): React.ReactElement {
+  const { t } = useTranslation()
+  // 仅抽屉打开时拉取（退场期 open=false → 停请求，沿用缓存）。
+  const { runs, isLoading } = useProjectProgressRuns(open)
+  return (
+    <Field
+      label={t('agents.projectProgress.runs.section')}
+      hint={t('agents.projectProgress.runs.sectionHint')}
+    >
+      {runs.length === 0 ? (
+        <div
+          style={{
+            fontSize: 12.5,
+            color: 'rgb(var(--ink-fg-3))',
+            padding: '11px 13px',
+            borderRadius: 9,
+            background: 'rgb(var(--ink-1) / 0.5)',
+            border: '1px solid rgb(var(--ink-border-soft))'
+          }}
+        >
+          {isLoading
+            ? t('agents.projectProgress.runs.loading')
+            : t('agents.projectProgress.runs.empty')}
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {runs.map((r) => (
+            <div
+              key={r.internalId}
+              style={{
+                padding: '10px 12px',
+                borderRadius: 9,
+                background: 'rgb(var(--ink-1) / 0.5)',
+                border: '1px solid rgb(var(--ink-border-soft))'
+              }}
+            >
+              <div className="flex items-center" style={{ gap: 8 }}>
+                <PpStatusBadge status={r.status} />
+                <span
+                  style={{
+                    fontSize: 12,
+                    color: 'rgb(var(--ink-fg-2))',
+                    flex: 1,
+                    minWidth: 0,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap'
+                  }}
+                >
+                  {r.weekTag || r.subject || `#${r.internalId}`}
+                </span>
+                <span style={{ fontSize: 11.5, color: 'rgb(var(--ink-fg-3))', flexShrink: 0 }}>
+                  {ppRunTime(r.completedAt ?? r.startedAt)}
+                </span>
+              </div>
+              {r.status === 'completed' && (r.projectsTotal ?? 0) > 0 && (
+                <div
+                  style={{
+                    fontSize: 11.5,
+                    color: 'rgb(var(--ink-fg-3))',
+                    marginTop: 6,
+                    fontFamily: 'ui-monospace, monospace'
+                  }}
+                >
+                  {t('agents.projectProgress.runs.counts', {
+                    total: r.projectsTotal ?? 0,
+                    created: r.projectsCreated ?? 0,
+                    updated: r.projectsUpdated ?? 0
+                  })}
+                </div>
+              )}
+              {r.error && (
+                <div
+                  style={{
+                    fontSize: 11.5,
+                    color: 'rgb(var(--c-fail))',
+                    marginTop: 6,
+                    wordBreak: 'break-word',
+                    lineHeight: 1.5
+                  }}
+                >
+                  {r.error}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </Field>
+  )
+}
+
 // ─── 项目周报同步配置抽屉（S5 W5a）────────────────────────────────────────────
 // 镜像 PreprocessConfigDrawer 单例编辑脚手架，双源写：
 //   • row（enabled + trigger_json，保存即生效无需重启，走 useSetConfig）—— sender 是子串、
@@ -3005,6 +3193,9 @@ function ProjectProgressConfigDrawer({
               </div>
             </Field>
 
+            {/* 执行历史（R5）：只读近期同步记录（状态/时间/错误/项目计数）。 */}
+            <ProjectProgressRunHistory open={open} />
+
             {err && (
               <div style={{ fontSize: 12.5, color: 'rgb(var(--c-danger, var(--ink-fg-1)))' }}>
                 {err}
@@ -3407,6 +3598,7 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
         cfg={configAgent}
         open={configAgent !== null}
         onClose={() => setConfigId(null)}
+        onOpenReports={onOpenReports}
       />
       <SearchConfigDrawer
         cfg={searchConfigAgent}

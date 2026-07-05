@@ -9,6 +9,7 @@ import type {
   AgentRunPendingCount,
   AgentRunToolOptions,
   ChatOpennessFlags,
+  ProjectProgressRunItem,
   ReportAgentConfig,
   ReportAgentCreateInput,
   ReportCadence,
@@ -265,6 +266,23 @@ export function useAgentRuns(
     enabled: agentId != null
   })
   return { runs: q.data ?? [], isLoading: q.isLoading, refetch: () => void q.refetch() }
+}
+
+/** R5 (task 07-05) — 项目周报同步执行历史（projectProgressRuns，读失败返 []）。
+ *  自有 status 词表（processing/completed/failed/skipped，非 custom agent 的 8 值域）。
+ *  enabled=false（抽屉未开）→ 不发请求。抽屉每次打开时 refetchOnMount 取最新。 */
+export function useProjectProgressRuns(
+  enabled: boolean,
+  limit = 20
+): { runs: ProjectProgressRunItem[]; isLoading: boolean } {
+  const api = useMailApi()
+  const q = useQuery({
+    queryKey: ['project-progress-runs', limit],
+    queryFn: () => api.report.projectProgressRuns(limit),
+    enabled,
+    staleTime: 4_000
+  })
+  return { runs: q.data ?? [], isLoading: q.isLoading }
 }
 
 // 稳定空清单单例：q.data 未就绪时恒返同一引用，避免消费方 useEffect 依赖 options.defaults

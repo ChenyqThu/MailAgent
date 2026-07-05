@@ -2390,6 +2390,7 @@
     },
     "config": {
       "title": "Configure · {title}",
+      "viewHistory": "View all history",
       "enable": "Enable this Agent",
       "enableHint": "Auto-generate on schedule",
       "prompt": "Report Prompt",
@@ -2484,6 +2485,7 @@
       "subtitle": "Auto-classify / tag / suggest replies for new mail (local LLM)",
       "noAgent": "No preprocessing agent found (database not initialized?)",
       "configTitle": "AI Email Preprocessing · {title}",
+      "viewStats": "View processing stats",
       "enable": "Enable email preprocessing",
       "enableHint": "Turn on local LLM auto-classification for new mail (global switch LLM_AGENT_ENABLED). Requires a service restart to take effect.",
       "restartHint": "Restart required",
@@ -2548,7 +2550,18 @@
       "webReadOnly": "Remote web is read-only: master switch / database ID / BU filter can't be changed (desktop only); the enable toggle and trigger rules remain editable.",
       "envSaveError": "Failed to save environment variables",
       "errEmptyTrigger": "Subject regex and sender cannot both be empty (use the enable toggle above to disable)",
-      "rowSaveError": "Failed to save project report config"
+      "rowSaveError": "Failed to save project report config",
+      "runs": {
+        "section": "Run history",
+        "sectionHint": "Recent sync records",
+        "loading": "Loading…",
+        "empty": "No sync records yet",
+        "counts": "{total} projects · {created} new · {updated} updated",
+        "statusCompleted": "Completed",
+        "statusFailed": "Failed",
+        "statusSkipped": "Skipped",
+        "statusProcessing": "Processing"
+      }
     },
     "custom": {
       "section": "Custom Agents",
