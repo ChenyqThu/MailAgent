@@ -204,8 +204,8 @@ S5 W5a 把项目周报迁进 custom agent 框架的**专型行**（`report_agent
 
 | 配置项 | 来源（迁移后） | 说明 |
 |---|---|---|
-| `PROJECT_PROGRESS_SYNC_ENABLED` | **env 总闸**（实时读，非 UI） | 镜像 `LLM_AGENT_ENABLED`；总闸未开时行存在但不运行。Settings 只读展示 |
-| `PROJECT_PROGRESS_DATABASE_ID` / `_FILTER_BU` | **env 权威** | Settings 只读展示 |
+| `PROJECT_PROGRESS_SYNC_ENABLED` | **env 总闸**（实时读，非 UI） | 镜像 `LLM_AGENT_ENABLED`；总闸未开时行存在但不运行。v1.3.x dogfood 批（task 07-05）起在 agent 抽屉内可编辑（走 env PATCH + 重启横幅） |
+| `PROJECT_PROGRESS_DATABASE_ID` / `_FILTER_BU` | **env 权威** | v1.3.x dogfood 批起在 agent 抽屉内可编辑（env PATCH，改后需重启生效）；Settings→集成 的旧配置区已整体移除（其中 AUTO_SYNC/SUBJECT_PATTERN/SENDER 三个 env 字段 v31 后本就恒不可达，随区删除） |
 | `PROJECT_PROGRESS_AUTO_SYNC_ENABLED`（→ 行 `enabled`）· `_SUBJECT_PATTERN` / `_SENDER`（→ 行 `trigger_json`） | **行权威**（Settings 可编辑） | env 值仅作**首次 seed 默认**（v31 迁移瞬间从 env 快照播种一次），**行落地后改 env 不再影响已播种的行**；`INSERT OR IGNORE` 幂等不覆盖用户改行 |
 
 **行内热读**：`new_watcher` hook 1 每封邮件经 `src/project_progress/agent_config.py` 裸 sqlite3 读行 → `enabled` + `sender`/`subject_pattern` → 重建 `ProjectProgressDetector`（PATCH 即生效，镜像 preprocess 的 `get_preprocess_config`）。行不存在（老库未跑 v31）→ 回退 env 构造（行为等价窗口）。
@@ -247,3 +247,5 @@ sqlite3 data/sync_store.db "
          projects_marked_done, projects_marked_suspended, projects_failed
   FROM project_progress_sync ORDER BY completed_at DESC LIMIT 5"
 ```
+
+UI 观测（v1.3.x dogfood 批，task 07-05）：`GET /api/project-progress/runs?limit=20`（只读，`verify_cf_access`，包 `ProjectProgressSyncStore.list_recent()` 投影状态/时间/错误/邮件标识/项目计数）→ agent 抽屉内嵌「执行历史」section（`AgentsTab.tsx` ProjectProgressConfigDrawer）。
