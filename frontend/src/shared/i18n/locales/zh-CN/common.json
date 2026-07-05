@@ -1798,34 +1798,6 @@
       }
     },
     "integrations": {
-      "projectProgress": {
-        "title": "项目周报同步",
-        "helper": "消费每周项目进度邮件,抽 xlsx 上 Notion 项目库",
-        "enabled": {
-          "label": "启用同步",
-          "helper": "总开关 — CLI / 钩子都依赖它"
-        },
-        "autoSync": {
-          "label": "自动触发",
-          "helper": "主同步检测到目标邮件后后台 dispatch"
-        },
-        "databaseId": {
-          "label": "项目库 ID",
-          "helper": "Notion 项目进度数据库 UUID"
-        },
-        "filterBu": {
-          "label": "BU 过滤",
-          "helper": "精确匹配 xlsx 的 BU 列,其他 BU 项目忽略"
-        },
-        "subjectPattern": {
-          "label": "标题正则",
-          "helper": "识别项目周报邮件的 subject 匹配"
-        },
-        "sender": {
-          "label": "发件人(可选)",
-          "helper": "留空 → 仅按 subject;配置 → sender + subject 双判定"
-        }
-      },
       "office": {
         "title": "Office 附件转换",
         "helper": "docx/pptx → PDF(LibreOffice), xlsx → CSV(pandas)",
@@ -2496,14 +2468,16 @@
       "fallbackFollowGlobal": "跟随全局（{model}）",
       "fallbackGlobalUnset": "未设",
       "fallbackNone": "（不设）",
-      "promptView": "分类 Prompt（内置，只读）",
-      "promptViewHint": "实际用于邮件分类的 mailbox prompt 文件，收件箱与发件箱各一份；身份/偏好由上方勾选的文档注入",
+      "promptView": "分类 Prompt",
+      "promptViewHint": "实际用于邮件分类的 mailbox prompt 文件，收件箱与发件箱各一份；可直接编辑，保存即生效（无需重启）；身份/偏好由上方勾选的文档注入",
       "promptTab": {
         "inbox": "收件箱",
         "sent": "发件箱"
       },
-      "promptEmpty": "（文件不存在或为空 —— 分类时只用内置硬约束）",
+      "promptEmpty": "文件不存在或为空 —— 留空则分类时只用内置硬约束；输入内容保存后自动创建文件",
       "promptLoadError": "分类 Prompt 加载失败（serve-api 未就绪？）",
+      "promptSaveError": "保存分类 Prompt 失败",
+      "promptSaved": "分类 Prompt 已保存，立即生效（无需重启）",
       "envSaveError": "保存启用状态失败",
       "rowSaveError": "保存预处理配置失败"
     },
@@ -2514,7 +2488,9 @@
       "configTitle": "项目周报同步 · {title}",
       "masterOff": "总闸未开",
       "masterOnNote": "总开关已开（环境变量 PROJECT_PROGRESS_SYNC_ENABLED）。下方启用开关与触发规则保存即生效。",
-      "masterOffNote": "总开关未开：需在 .env 设 PROJECT_PROGRESS_SYNC_ENABLED=true 并重启服务后才会运行。此处的启用开关与触发规则会保存，但总闸开启后才生效。",
+      "masterOffNote": "总开关未开：同步不会运行。可在下方打开「同步总开关」（保存后需重启服务生效）；启用开关与触发规则会照常保存。",
+      "master": "同步总开关",
+      "masterHint": "环境变量 PROJECT_PROGRESS_SYNC_ENABLED；改后需重启后端生效",
       "enable": "启用自动同步",
       "enableHint": "匹配的周报邮件自动触发同步（受总开关 PROJECT_PROGRESS_SYNC_ENABLED 约束）。",
       "subjectPattern": "标题正则",
@@ -2523,9 +2499,18 @@
       "senderPattern": "发件人（子串，可选）",
       "senderPatternHint": "邮箱子串匹配（不区分大小写）；留空 = 任意发件人",
       "senderPlaceholder": "例如：weekly@corp.com",
-      "database": "项目进度库（只读）",
-      "databaseHint": "来源 .env PROJECT_PROGRESS_DATABASE_ID，非此处编辑",
-      "databaseUnset": "（未配置 —— 同步会失败，请在 .env 设 PROJECT_PROGRESS_DATABASE_ID）",
+      "database": "项目进度库 ID",
+      "databaseHint": "环境变量 PROJECT_PROGRESS_DATABASE_ID（Notion 数据库 UUID）；改后需重启生效",
+      "databaseUnset": "（未配置 —— 同步会失败）",
+      "filterBu": "BU 过滤（可选）",
+      "filterBuHint": "精确匹配 xlsx 的 BU 列，其他 BU 项目忽略；留空 = 不过滤。环境变量 PROJECT_PROGRESS_FILTER_BU；改后需重启生效",
+      "filterBuPlaceholder": "TPS-ENBU",
+      "capability": "内置能力",
+      "capabilityHint": "恒启用，不可配置",
+      "capabilityChip": "项目周报同步脚本 · 内置恒启用",
+      "capabilityNote": "执行为确定性 Python 同步脚本（xlsx 解析 → Notion 写入），不经 AI 引擎、不属于技能体系，无法挂载或卸载其他技能；要停用整个 Agent 请用上方启用开关。",
+      "webReadOnly": "远程 Web 为只读：总开关 / 项目库 ID / BU 过滤不可修改（仅本地桌面端可改）；启用开关与触发规则仍可编辑。",
+      "envSaveError": "保存环境变量失败",
       "errEmptyTrigger": "标题正则与发件人不能同时为空（要停用请用上方启用开关）",
       "rowSaveError": "保存项目周报配置失败"
     },
@@ -2570,7 +2555,23 @@
         "hint": "Agent 运行时允许调用的工具（在矩阵地板内取交集）",
         "unavailable": "无法加载工具清单（服务未就绪或功能未开启）；本次保存不会改动已有工具配置。",
         "writeTag": "写操作工具（需人工审批）",
-        "writeBadge": "写"
+        "writeBadge": "写",
+        "group": {
+          "emailRead": "邮件读取",
+          "emailWrite": "邮件操作",
+          "report": "报告",
+          "session": "会话与身份",
+          "knowledge": "技能与知识",
+          "other": "其他"
+        },
+        "groupSelectAll": "全选",
+        "groupClearAll": "清空"
+      },
+      "capabilities": {
+        "label": "额外能力",
+        "hint": "工具白名单之外的能力授权（联网 / 命令执行）",
+        "webDisabled": "联网功能未开启（由环境变量 MAILAGENT_OPENNESS_WEB_TOOLS 控制），此处授权保存后暂不会生效。",
+        "execDisabled": "命令执行功能未开启（由环境变量 MAILAGENT_OPENNESS_EXEC_TOOLS 控制），此处授权保存后暂不会生效。"
       },
       "budget": {
         "label": "运行预算",

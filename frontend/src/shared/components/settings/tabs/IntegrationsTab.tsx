@@ -1,7 +1,7 @@
-// Sprint 18 §PR D — Integrations tab. 三类外挂模块的 ENV 配置:
-//   1. Project Progress (项目周报邮件 → Notion 项目库)
-//   2. Office Convert (docx/pptx → PDF, xlsx → CSV)
-//   3. Stats Report + Dashboard + CLI auth
+// Sprint 18 §PR D — Integrations tab. 外挂模块的 ENV 配置:
+//   1. Office Convert (docx/pptx → PDF, xlsx → CSV)
+//   2. Stats Report + Dashboard + CLI auth
+// (Project Progress 已随 v1.3.0 dogfood 收编进 Agents 页抽屉, 见下方注释)
 //
 // CLI API key 走 <EnvSecretField> 双写 (keytar + .env): main 进程的
 // cli_runner 从 keytar 注入 header, Python CLI 自己从 .env 读 (CRS-style
@@ -120,49 +120,10 @@ export function IntegrationsTab(): React.ReactElement {
         </AdvancedDisclosure>
       </Section>
 
-      <Section
-        title={t('settings.integrations.projectProgress.title')}
-        helper={t('settings.integrations.projectProgress.helper')}
-      >
-        <EnvField
-          envKey="PROJECT_PROGRESS_SYNC_ENABLED"
-          control="toggle"
-          label={t('settings.integrations.projectProgress.enabled.label')}
-          helper={t('settings.integrations.projectProgress.enabled.helper')}
-        />
-        <EnvField
-          envKey="PROJECT_PROGRESS_AUTO_SYNC_ENABLED"
-          control="toggle"
-          label={t('settings.integrations.projectProgress.autoSync.label')}
-          helper={t('settings.integrations.projectProgress.autoSync.helper')}
-        />
-        <EnvField
-          envKey="PROJECT_PROGRESS_DATABASE_ID"
-          control="text"
-          label={t('settings.integrations.projectProgress.databaseId.label')}
-          helper={t('settings.integrations.projectProgress.databaseId.helper')}
-        />
-        <EnvField
-          envKey="PROJECT_PROGRESS_FILTER_BU"
-          control="text"
-          label={t('settings.integrations.projectProgress.filterBu.label')}
-          helper={t('settings.integrations.projectProgress.filterBu.helper')}
-          placeholder="TPS-ENBU"
-        />
-        <EnvField
-          envKey="PROJECT_PROGRESS_SUBJECT_PATTERN"
-          control="text"
-          label={t('settings.integrations.projectProgress.subjectPattern.label')}
-          helper={t('settings.integrations.projectProgress.subjectPattern.helper')}
-        />
-        <EnvField
-          envKey="PROJECT_PROGRESS_SENDER"
-          control="text"
-          label={t('settings.integrations.projectProgress.sender.label')}
-          helper={t('settings.integrations.projectProgress.sender.helper')}
-        />
-      </Section>
-
+      {/* 项目周报同步 Section 已随 v1.3.0 dogfood 收编进 Agents 页的
+          ProjectProgressConfigDrawer（活字段 SYNC_ENABLED / DATABASE_ID / FILTER_BU
+          搬进抽屉；AUTO_SYNC_ENABLED / SUBJECT_PATTERN / SENDER 是 v31 行迁移后的死
+          配置 —— 活版本 = 抽屉的启用开关 / 发件人 / 标题正则，直接移除）。 */}
       <Section
         title={t('settings.integrations.office.title')}
         helper={t('settings.integrations.office.helper')}

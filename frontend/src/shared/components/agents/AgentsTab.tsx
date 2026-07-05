@@ -27,7 +27,8 @@ import {
   useSetConfig
 } from './hooks'
 import { useExitAnimation } from '@shared/hooks/useExitAnimation'
-import { resolveApiBaseUrl, useEnabledModels } from '@shared/hooks/useLlmModels'
+import { useEnabledModels } from '@shared/hooks/useLlmModels'
+import { useMailApi } from '@shared/hooks/useMailApi'
 import {
   Select,
   SelectContent,
@@ -37,7 +38,7 @@ import {
 } from '@shared/components/ui/select'
 import { applyEnvPatch, useEnvStore } from '@shared/state/env'
 import { useRestartStore } from '@shared/state/restart'
-import { toastError } from '@shared/state/toast'
+import { toastError, toastSuccess } from '@shared/state/toast'
 // v27 「AI 邮件预处理」配置抽屉内联复用身份文档正文编辑器（同组件不同入口）。
 import { StandingDocsSection } from '@shared/components/settings/CustomAiSection'
 
@@ -828,10 +829,7 @@ export function ConfigDrawer({
 
             {/* 文档勾选（cfg.context_docs）—— 注入报告 system prompt 的身份文档（增量 2，
                 与 PreprocessConfigDrawer 同款 chips + 同语义：[] = 显式不注入） */}
-            <Field
-              label={t('agents.config.contextDocs')}
-              hint={t('agents.config.contextDocsHint')}
-            >
+            <Field label={t('agents.config.contextDocs')} hint={t('agents.config.contextDocsHint')}>
               <div className="flex items-center" style={{ gap: 8, flexWrap: 'wrap' }}>
                 {PREPROCESS_DOCS.map((doc) => {
                   const on = contextDocs.includes(doc)
@@ -1728,7 +1726,8 @@ export function SearchConfigDrawer({
 // ─── AI 邮件预处理卡（type='preprocess'）──────────────────────────────────────
 // 后端 DB v27 播种单行，无新建 / 删除。启用态从 env LLM_AGENT_ENABLED 读（非 row.enabled
 // —— 行的 enabled 列对预处理无意义，开关绑全局 LLM agent 总开关）。persona / 文档勾选 /
-// 身份文档正文全部在配置抽屉里编辑。#7 dogfood：头部补右侧快捷开关，env 未就绪或 web 时禁用。
+// 身份文档正文全部在配置抽屉里编辑。#7 dogfood：右侧快捷开关，env 未就绪或 web 时禁用。
+// v1.3.0 dogfood：整卡可点开抽屉（照 SearchAgentCard 模式），删独立配置按钮。
 function PreprocessAgentCard({
   cfg,
   enabled,
@@ -1747,118 +1746,100 @@ function PreprocessAgentCard({
   const { t } = useTranslation()
   return (
     <div
+      role="button"
+      tabIndex={0}
+      onClick={onConfig}
+      onKeyDown={(e) => {
+        // 只响应卡片本身的键盘激活；焦点在内嵌 Switch 上的 Enter/Space 由 Switch
+        // 处理，不应冒泡触发开抽屉。
+        if (e.target !== e.currentTarget) return
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          onConfig()
+        }
+      }}
+      className="flex items-center"
       style={{
+        width: '100%',
+        textAlign: 'left',
+        cursor: 'pointer',
+        gap: 13,
+        padding: '18px 20px',
         borderRadius: 14,
         background: 'rgb(var(--ink-2) / 0.55)',
         border: '1px solid rgb(var(--ink-border))',
-        overflow: 'hidden'
+        transition: 'border-color 120ms'
       }}
+      onMouseEnter={(e) => (e.currentTarget.style.borderColor = 'rgb(var(--c-accent) / 0.5)')}
+      onMouseLeave={(e) => (e.currentTarget.style.borderColor = 'rgb(var(--ink-border))')}
     >
-      <div className="flex items-center" style={{ gap: 13, padding: '18px 20px 16px' }}>
-        <span
-          style={{
-            width: 42,
-            height: 42,
-            borderRadius: 11,
-            display: 'grid',
-            placeItems: 'center',
-            flexShrink: 0,
-            background: 'rgb(var(--c-accent) / 0.14)',
-            border: '1px solid rgb(var(--c-accent) / 0.30)',
-            color: 'rgb(var(--c-accent))'
-          }}
-        >
-          <ReportIcon name="zap" size={20} />
-        </span>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div className="flex items-center" style={{ gap: 9 }}>
-            <h3 style={{ fontSize: 16, fontWeight: 600, color: 'rgb(var(--ink-fg))' }}>
-              {cfg.title}
-            </h3>
-            <span
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 5,
-                fontSize: 11,
-                padding: '2px 8px',
-                borderRadius: 5,
-                color: enabled ? 'rgb(var(--c-ok))' : 'rgb(var(--ink-fg-3))',
-                background: enabled ? 'rgb(var(--c-ok) / 0.12)' : 'rgb(var(--ink-fg) / 0.05)',
-                border: `1px solid ${enabled ? 'rgb(var(--c-ok) / 0.25)' : 'rgb(var(--ink-border))'}`
-              }}
-            >
-              <span
-                style={{
-                  width: 6,
-                  height: 6,
-                  borderRadius: '50%',
-                  background: enabled ? 'rgb(var(--c-ok))' : 'rgb(var(--ink-fg-3))'
-                }}
-              />
-              {enabled ? t('agents.card.enabled') : t('agents.card.disabled')}
-            </span>
-          </div>
-          <div
-            style={{
-              marginTop: 4,
-              fontSize: 12.5,
-              color: 'rgb(var(--ink-fg-2))',
-              lineHeight: 1.5
-            }}
-          >
-            {t('agents.preprocess.subtitle')}
-          </div>
-        </div>
-        {/* #7 dogfood：快捷开关，env 未就绪 / web 时禁用（镜像抽屉的启用行语义） */}
-        <span
-          style={
-            !envReady || IS_WEB || !onToggle
-              ? { opacity: 0.5, pointerEvents: 'none', display: 'flex', flexShrink: 0 }
-              : { display: 'flex', flexShrink: 0 }
-          }
-        >
-          <Switch on={enabled} onChange={onToggle ?? (() => {})} />
-        </span>
-      </div>
-      <div
-        className="flex items-center"
+      <span
         style={{
-          gap: 10,
-          padding: '14px 20px',
-          borderTop: '1px solid rgb(var(--ink-border-soft))',
-          background: 'rgb(var(--ink-1) / 0.4)'
+          width: 42,
+          height: 42,
+          borderRadius: 11,
+          display: 'grid',
+          placeItems: 'center',
+          flexShrink: 0,
+          background: 'rgb(var(--c-accent) / 0.14)',
+          border: '1px solid rgb(var(--c-accent) / 0.30)',
+          color: 'rgb(var(--c-accent))'
         }}
       >
-        <button
-          type="button"
-          onClick={onConfig}
-          className="flex items-center"
+        <ReportIcon name="zap" size={20} />
+      </span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div className="flex items-center" style={{ gap: 9 }}>
+          <h3 style={{ fontSize: 16, fontWeight: 600, color: 'rgb(var(--ink-fg))' }}>
+            {cfg.title}
+          </h3>
+          <span
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 5,
+              fontSize: 11,
+              padding: '2px 8px',
+              borderRadius: 5,
+              color: enabled ? 'rgb(var(--c-ok))' : 'rgb(var(--ink-fg-3))',
+              background: enabled ? 'rgb(var(--c-ok) / 0.12)' : 'rgb(var(--ink-fg) / 0.05)',
+              border: `1px solid ${enabled ? 'rgb(var(--c-ok) / 0.25)' : 'rgb(var(--ink-border))'}`
+            }}
+          >
+            <span
+              style={{
+                width: 6,
+                height: 6,
+                borderRadius: '50%',
+                background: enabled ? 'rgb(var(--c-ok))' : 'rgb(var(--ink-fg-3))'
+              }}
+            />
+            {enabled ? t('agents.card.enabled') : t('agents.card.disabled')}
+          </span>
+        </div>
+        <div
           style={{
-            gap: 7,
-            padding: '8px 15px',
-            borderRadius: 8,
-            fontFamily: 'inherit',
-            fontSize: 13.5,
-            cursor: 'pointer',
-            color: 'rgb(var(--ink-fg-1))',
-            background: 'transparent',
-            border: '1px solid rgb(var(--ink-border))',
-            transition:
-              'background-color 120ms cubic-bezier(0.4,0,0.2,1), transform 120ms cubic-bezier(0.4,0,0.2,1)'
-          }}
-          onMouseEnter={(e) => (e.currentTarget.style.background = 'rgb(var(--ink-4))')}
-          onMouseDown={(e) => (e.currentTarget.style.transform = PRESS_SCALE)}
-          onMouseUp={(e) => (e.currentTarget.style.transform = 'none')}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = 'transparent'
-            e.currentTarget.style.transform = 'none'
+            marginTop: 4,
+            fontSize: 12.5,
+            color: 'rgb(var(--ink-fg-2))',
+            lineHeight: 1.5
           }}
         >
-          <ReportIcon name="cog" size={14} />
-          {t('agents.card.configure')}
-        </button>
+          {t('agents.preprocess.subtitle')}
+        </div>
       </div>
+      {/* #7 dogfood：快捷开关，env 未就绪 / web 时禁用（镜像抽屉的启用行语义）。
+          span stopPropagation 防止点开关连带触发卡片 onConfig（同 SearchAgentCard）。 */}
+      <span
+        onClick={(e) => e.stopPropagation()}
+        style={
+          !envReady || IS_WEB || !onToggle
+            ? { opacity: 0.5, pointerEvents: 'none', display: 'flex', flexShrink: 0 }
+            : { display: 'flex', flexShrink: 0 }
+        }
+      >
+        <Switch on={enabled} onChange={onToggle ?? (() => {})} />
+      </span>
     </div>
   )
 }
@@ -1869,8 +1850,10 @@ function PreprocessAgentCard({
 // #8-ext 模型走行级 model 列、空 = 跟随全局 LLM_MODEL；R2 #2 fallback 走行级
 // fallback_models_json 列、NULL = 跟随全局 LLM_FALLBACK_MODELS —— 均与全局设置拆分，改行级
 // 值保存即生效无需重启）；身份文档正文内联复用 StandingDocsSection。
-// persona 输入已随 v1.1.0 dogfood 移除（身份/偏好由 Standing Context 文档注入）；内置分类
-// prompt（收件箱/发件箱 .md）在抽屉内只读可查看（GET /api/llm/preprocess-prompts）。
+// persona 输入已随 v1.1.0 dogfood 移除（身份/偏好由 Standing Context 文档注入）；分类
+// prompt（收件箱/发件箱 .md）v1.3.0 dogfood 起在抽屉内可直接编辑（mailApi.prompts
+// read/write：桌面走 prompts IPC、远程 web 走 GET/PUT /api/prompts/{slot}；文件仍是
+// SSoT，PromptLoader mtime 热加载 —— 保存即生效无需重启）。
 
 /** 模型下拉「跟随全局默认」哨兵（radix SelectItem 禁空串 value）。 */
 const FOLLOW_GLOBAL_MODEL = '__follow_global__'
@@ -1879,31 +1862,13 @@ const FALLBACK_FOLLOW_GLOBAL = '__follow_global_fb__'
 /** fallback 下拉「不设」哨兵（行级列 '[]'；同上，空串 value 会让 radix 直接 throw）。 */
 const FALLBACK_NONE = '__none__'
 
-interface PreprocessPromptFile {
+/** 分类 prompt 每 slot 的编辑草稿（content 可编辑；path 用于次要信息展示）。 */
+interface PromptDraft {
+  content: string
   path: string
-  exists: boolean
-  text: string
+  dirty: boolean
 }
-interface PreprocessPrompts {
-  inbox: PreprocessPromptFile
-  sent: PreprocessPromptFile
-}
-
-/** 拉内置分类 prompt（best-effort：失败/非 200 返 null，UI 显加载失败占位）。
- *  裸 fetch 走 resolveApiBaseUrl（Electron loopback 由 chat_local_bridge 注入本地
- *  token、web 走 CF cookie —— 与 useLlmModels.fetchEnabledModels 同款）。 */
-async function fetchPreprocessPrompts(): Promise<PreprocessPrompts | null> {
-  try {
-    const resp = await fetch(`${resolveApiBaseUrl()}/llm/preprocess-prompts`, {
-      credentials: 'include'
-    })
-    if (!resp.ok) return null
-    const body = (await resp.json()) as { data?: PreprocessPrompts }
-    return body?.data ?? null
-  } catch {
-    return null
-  }
-}
+type PromptDrafts = Record<'inbox' | 'sent', PromptDraft>
 
 function PreprocessConfigDrawer({
   cfg,
@@ -1916,6 +1881,8 @@ function PreprocessConfigDrawer({
 }): React.ReactElement | null {
   const { t } = useTranslation()
   const { save, isSaving } = useSetConfig()
+  // 分类 prompt 读写走 mailApi.prompts（桌面 IPC / web PUT /api/prompts/{slot}）。
+  const api = useMailApi()
   const markRestartRequired = useRestartStore((s) => s.markRestartRequired)
 
   // 进 / 退场动效：与 ConfigDrawer / SearchConfigDrawer 同款（遮罩淡入 + 抽屉右滑同步）。
@@ -1937,8 +1904,9 @@ function PreprocessConfigDrawer({
   const [fallbackModelDirty, setFallbackModelDirty] = useState(false)
   const [contextDocs, setContextDocs] = useState<string[]>([])
   const [envSaving, setEnvSaving] = useState(false)
-  // 内置分类 prompt 只读查看（收件箱/发件箱 tab）—— 打开抽屉时拉一次。
-  const [promptView, setPromptView] = useState<PreprocessPrompts | 'loading' | 'error'>('loading')
+  // 分类 prompt 编辑草稿（收件箱/发件箱 tab，textarea 可编辑，保存写回 .md 文件）——
+  // 打开抽屉时经 mailApi.prompts.read 拉两份。
+  const [promptDrafts, setPromptDrafts] = useState<PromptDrafts | 'loading' | 'error'>('loading')
   const [promptTab, setPromptTab] = useState<'inbox' | 'sent'>('inbox')
   const { models: enabledModels } = useEnabledModels()
   // env store 状态（idle/loading 时 enable 不可编辑、保存不写 env）+ 响应式 env 值
@@ -1983,18 +1951,27 @@ function PreprocessConfigDrawer({
     if (!open) return
     if (envEnabledRaw !== null && !enabledDirty) setEnabled(envFlagOn(envEnabledRaw))
   }, [open, envEnabledRaw, enabledDirty])
-  // 内置分类 prompt：打开时拉一次（best-effort，失败显示占位；关闭时丢弃避免 setState-after-close）。
+  // 分类 prompt：打开时经 mailApi.prompts.read 拉两份（best-effort，失败显示占位；
+  // 关闭时丢弃避免 setState-after-close）。与运行时 PromptLoader 同两份文件（mtime 热加载）。
   useEffect(() => {
     if (!open) return
     let cancelled = false
-    setPromptView('loading')
-    void fetchPreprocessPrompts().then((r) => {
-      if (!cancelled) setPromptView(r ?? 'error')
-    })
+    setPromptDrafts('loading')
+    void Promise.all([api.prompts.read('inbox'), api.prompts.read('sent')])
+      .then(([inbox, sent]) => {
+        if (cancelled) return
+        setPromptDrafts({
+          inbox: { content: inbox.content, path: inbox.path, dirty: false },
+          sent: { content: sent.content, path: sent.path, dirty: false }
+        })
+      })
+      .catch(() => {
+        if (!cancelled) setPromptDrafts('error')
+      })
     return () => {
       cancelled = true
     }
-  }, [open])
+  }, [open, api.prompts])
   /* eslint-enable react-hooks/set-state-in-effect */
 
   if (!shouldRender) return null
@@ -2041,7 +2018,23 @@ function PreprocessConfigDrawer({
         }
       }
     }
-    // 2) row 保存：模型（#8-ext 行级 model 列；空串 = 跟随全局 LLM_MODEL，config_patch_to_db
+    // 2) 分类 prompt 写：仅 dirty 的 slot 写回 .md 文件（桌面走 prompts IPC、web 走
+    //    PUT /api/prompts/{slot}）。PromptLoader 按 mtime 热加载 —— 保存即生效无需重启。
+    if (promptDrafts !== 'loading' && promptDrafts !== 'error') {
+      let wrotePrompt = false
+      for (const slot of ['inbox', 'sent'] as const) {
+        const draft = promptDrafts[slot]
+        if (!draft.dirty) continue
+        const r = await api.prompts.write(slot, draft.content)
+        if (!r.ok) {
+          toastError(t('agents.preprocess.promptSaveError'), `${r.code}: ${r.message}`)
+          return
+        }
+        wrotePrompt = true
+      }
+      if (wrotePrompt) toastSuccess(t('agents.preprocess.promptSaved'))
+    }
+    // 3) row 保存：模型（#8-ext 行级 model 列；空串 = 跟随全局 LLM_MODEL，config_patch_to_db
     //    原样落列、resolve_agent 非 report 不回填默认）+ fallback（R2 #2 行级列；null =
     //    重置回跟随全局、[] = 显式不设、[m] = 单模型链）+ 文档勾选。改行级值立即生效
     //    （分类每封邮件重读 preprocess 行），无需重启。
@@ -2267,9 +2260,9 @@ function PreprocessConfigDrawer({
               </Select>
             </Field>
 
-            {/* 内置分类 prompt 只读查看（#8-ext）—— 收件箱/发件箱 .md 与运行时同源（PromptLoader
-                mtime 热加载同两份文件）。persona 输入已移除：身份/偏好由上方勾选的 Standing
-                Context 文档注入。 */}
+            {/* 分类 prompt 编辑（v1.3.0 dogfood：只读 → 可编辑）—— 收件箱/发件箱 .md 与
+                运行时同源（PromptLoader mtime 热加载同两份文件），保存即生效无需重启。
+                persona 输入已移除：身份/偏好由上方勾选的 Standing Context 文档注入。 */}
             <Field
               label={t('agents.preprocess.promptView')}
               hint={t('agents.preprocess.promptViewHint')}
@@ -2301,36 +2294,40 @@ function PreprocessConfigDrawer({
                   )
                 })}
               </div>
-              {promptView === 'loading' ? (
+              {promptDrafts === 'loading' ? (
                 <div style={{ ...inputStyle, color: 'rgb(var(--ink-fg-3))' }}>…</div>
-              ) : promptView === 'error' ? (
+              ) : promptDrafts === 'error' ? (
                 <div style={{ ...inputStyle, color: 'rgb(var(--ink-fg-3))' }}>
                   {t('agents.preprocess.promptLoadError')}
                 </div>
               ) : (
                 <>
-                  <pre
+                  <textarea
+                    value={promptDrafts[promptTab].content}
+                    onChange={(e) => {
+                      const next = e.target.value
+                      setPromptDrafts((prev) =>
+                        prev === 'loading' || prev === 'error'
+                          ? prev
+                          : {
+                              ...prev,
+                              [promptTab]: { ...prev[promptTab], content: next, dirty: true }
+                            }
+                      )
+                    }}
+                    spellCheck={false}
+                    placeholder={t('agents.preprocess.promptEmpty')}
                     className="scrollbar-thin"
                     style={{
                       ...inputStyle,
-                      margin: 0,
-                      maxHeight: 260,
-                      overflow: 'auto',
-                      whiteSpace: 'pre-wrap',
-                      wordBreak: 'break-word',
+                      fontFamily: 'var(--font-mono, monospace)',
                       fontSize: 12,
                       lineHeight: 1.6,
-                      color:
-                        promptView[promptTab].exists && promptView[promptTab].text
-                          ? 'rgb(var(--ink-fg-2))'
-                          : 'rgb(var(--ink-fg-3))'
+                      minHeight: 220,
+                      resize: 'vertical'
                     }}
-                  >
-                    {promptView[promptTab].exists && promptView[promptTab].text
-                      ? promptView[promptTab].text
-                      : t('agents.preprocess.promptEmpty')}
-                  </pre>
-                  {promptView[promptTab].path && (
+                  />
+                  {promptDrafts[promptTab].path && (
                     <div
                       style={{
                         fontSize: 11,
@@ -2339,7 +2336,7 @@ function PreprocessConfigDrawer({
                         wordBreak: 'break-all'
                       }}
                     >
-                      {promptView[promptTab].path}
+                      {promptDrafts[promptTab].path}
                     </div>
                   )}
                 </>
@@ -2483,124 +2480,111 @@ function ProjectProgressAgentCard({
       ? t('agents.card.enabled')
       : t('agents.card.disabled')
   const badgeOn = masterEnabled && rowEnabled
+  // v1.3.0 dogfood：整卡可点开抽屉（照 SearchAgentCard 模式），删独立配置按钮。
   return (
     <div
+      role="button"
+      tabIndex={0}
+      onClick={onConfig}
+      onKeyDown={(e) => {
+        // 只响应卡片本身的键盘激活；焦点在内嵌 Switch 上的 Enter/Space 由 Switch
+        // 处理，不应冒泡触发开抽屉。
+        if (e.target !== e.currentTarget) return
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          onConfig()
+        }
+      }}
+      className="flex items-center"
       style={{
+        width: '100%',
+        textAlign: 'left',
+        cursor: 'pointer',
+        gap: 13,
+        padding: '18px 20px',
         borderRadius: 14,
         background: 'rgb(var(--ink-2) / 0.55)',
         border: '1px solid rgb(var(--ink-border))',
-        overflow: 'hidden'
+        transition: 'border-color 120ms'
       }}
+      onMouseEnter={(e) => (e.currentTarget.style.borderColor = 'rgb(var(--c-accent) / 0.5)')}
+      onMouseLeave={(e) => (e.currentTarget.style.borderColor = 'rgb(var(--ink-border))')}
     >
-      <div className="flex items-center" style={{ gap: 13, padding: '18px 20px 16px' }}>
-        <span
-          style={{
-            width: 42,
-            height: 42,
-            borderRadius: 11,
-            display: 'grid',
-            placeItems: 'center',
-            flexShrink: 0,
-            background: 'rgb(var(--c-accent) / 0.14)',
-            border: '1px solid rgb(var(--c-accent) / 0.30)',
-            color: 'rgb(var(--c-accent))'
-          }}
-        >
-          <ReportIcon name="barchart" size={20} />
-        </span>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div className="flex items-center" style={{ gap: 9 }}>
-            <h3 style={{ fontSize: 16, fontWeight: 600, color: 'rgb(var(--ink-fg))' }}>
-              {cfg.title}
-            </h3>
-            <span
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 5,
-                fontSize: 11,
-                padding: '2px 8px',
-                borderRadius: 5,
-                color: badgeOn ? 'rgb(var(--c-ok))' : 'rgb(var(--ink-fg-3))',
-                background: badgeOn ? 'rgb(var(--c-ok) / 0.12)' : 'rgb(var(--ink-fg) / 0.05)',
-                border: `1px solid ${badgeOn ? 'rgb(var(--c-ok) / 0.25)' : 'rgb(var(--ink-border))'}`
-              }}
-            >
-              <span
-                style={{
-                  width: 6,
-                  height: 6,
-                  borderRadius: '50%',
-                  background: badgeOn ? 'rgb(var(--c-ok))' : 'rgb(var(--ink-fg-3))'
-                }}
-              />
-              {badgeLabel}
-            </span>
-          </div>
-          <div
-            style={{ marginTop: 4, fontSize: 12.5, color: 'rgb(var(--ink-fg-2))', lineHeight: 1.5 }}
-          >
-            {t('agents.projectProgress.subtitle')}
-          </div>
-        </div>
-        {/* 快捷开关切 row.enabled；总闸未开 / web 时禁用（防误以为能全 UI 开启）。 */}
-        <span
-          style={
-            !masterEnabled || IS_WEB || !onToggle
-              ? { opacity: 0.5, pointerEvents: 'none', display: 'flex', flexShrink: 0 }
-              : { display: 'flex', flexShrink: 0 }
-          }
-        >
-          <Switch on={rowEnabled} onChange={onToggle ?? (() => {})} />
-        </span>
-      </div>
-      <div
-        className="flex items-center"
+      <span
         style={{
-          gap: 10,
-          padding: '14px 20px',
-          borderTop: '1px solid rgb(var(--ink-border-soft))',
-          background: 'rgb(var(--ink-1) / 0.4)'
+          width: 42,
+          height: 42,
+          borderRadius: 11,
+          display: 'grid',
+          placeItems: 'center',
+          flexShrink: 0,
+          background: 'rgb(var(--c-accent) / 0.14)',
+          border: '1px solid rgb(var(--c-accent) / 0.30)',
+          color: 'rgb(var(--c-accent))'
         }}
       >
-        <button
-          type="button"
-          onClick={onConfig}
-          className="flex items-center"
-          style={{
-            gap: 7,
-            padding: '8px 15px',
-            borderRadius: 8,
-            fontFamily: 'inherit',
-            fontSize: 13.5,
-            cursor: 'pointer',
-            color: 'rgb(var(--ink-fg-1))',
-            background: 'transparent',
-            border: '1px solid rgb(var(--ink-border))',
-            transition:
-              'background-color 120ms cubic-bezier(0.4,0,0.2,1), transform 120ms cubic-bezier(0.4,0,0.2,1)'
-          }}
-          onMouseEnter={(e) => (e.currentTarget.style.background = 'rgb(var(--ink-4))')}
-          onMouseDown={(e) => (e.currentTarget.style.transform = PRESS_SCALE)}
-          onMouseUp={(e) => (e.currentTarget.style.transform = 'none')}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = 'transparent'
-            e.currentTarget.style.transform = 'none'
-          }}
+        <ReportIcon name="barchart" size={20} />
+      </span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div className="flex items-center" style={{ gap: 9 }}>
+          <h3 style={{ fontSize: 16, fontWeight: 600, color: 'rgb(var(--ink-fg))' }}>
+            {cfg.title}
+          </h3>
+          <span
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 5,
+              fontSize: 11,
+              padding: '2px 8px',
+              borderRadius: 5,
+              color: badgeOn ? 'rgb(var(--c-ok))' : 'rgb(var(--ink-fg-3))',
+              background: badgeOn ? 'rgb(var(--c-ok) / 0.12)' : 'rgb(var(--ink-fg) / 0.05)',
+              border: `1px solid ${badgeOn ? 'rgb(var(--c-ok) / 0.25)' : 'rgb(var(--ink-border))'}`
+            }}
+          >
+            <span
+              style={{
+                width: 6,
+                height: 6,
+                borderRadius: '50%',
+                background: badgeOn ? 'rgb(var(--c-ok))' : 'rgb(var(--ink-fg-3))'
+              }}
+            />
+            {badgeLabel}
+          </span>
+        </div>
+        <div
+          style={{ marginTop: 4, fontSize: 12.5, color: 'rgb(var(--ink-fg-2))', lineHeight: 1.5 }}
         >
-          <ReportIcon name="cog" size={14} />
-          {t('agents.card.configure')}
-        </button>
+          {t('agents.projectProgress.subtitle')}
+        </div>
       </div>
+      {/* 快捷开关切 row.enabled；总闸未开 / web 时禁用（防误以为能全 UI 开启）。
+          span stopPropagation 防止点开关连带触发卡片 onConfig（同 SearchAgentCard）。 */}
+      <span
+        onClick={(e) => e.stopPropagation()}
+        style={
+          !masterEnabled || IS_WEB || !onToggle
+            ? { opacity: 0.5, pointerEvents: 'none', display: 'flex', flexShrink: 0 }
+            : { display: 'flex', flexShrink: 0 }
+        }
+      >
+        <Switch on={rowEnabled} onChange={onToggle ?? (() => {})} />
+      </span>
     </div>
   )
 }
 
 // ─── 项目周报同步配置抽屉（S5 W5a）────────────────────────────────────────────
-// 镜像 PreprocessConfigDrawer 单例编辑脚手架，但更简：**只写 row**（enabled + trigger_json，
-// 保存即生效无需重启，走 useSetConfig）—— env 总闸 PROJECT_PROGRESS_SYNC_ENABLED / 项目进度库
-// 只读展示（.env 权威，非 UI）。sender 是子串、subject 是正则（后端 ProjectProgressDetector
-// 语义；trigger_json 复用 email_filter 字段名）；保存时后端 parse_trigger 校验（空触发拒）。
+// 镜像 PreprocessConfigDrawer 单例编辑脚手架，双源写：
+//   • row（enabled + trigger_json，保存即生效无需重启，走 useSetConfig）—— sender 是子串、
+//     subject 是正则（后端 ProjectProgressDetector 语义；trigger_json 复用 email_filter
+//     字段名）；保存时后端 parse_trigger 校验（空触发拒）。
+//   • env（v1.3.0 dogfood 收编自 Settings→集成：总闸 PROJECT_PROGRESS_SYNC_ENABLED /
+//     PROJECT_PROGRESS_DATABASE_ID / PROJECT_PROGRESS_FILTER_BU，applyEnvPatch + 重启横幅
+//     —— 三者均为启动时一次性读取，改后需重启后端生效；dirty 追踪同 PreprocessConfigDrawer，
+//     codex HIGH：未触碰的字段永不写回 .env）。
 function ProjectProgressConfigDrawer({
   cfg,
   open,
@@ -2612,6 +2596,7 @@ function ProjectProgressConfigDrawer({
 }): React.ReactElement | null {
   const { t } = useTranslation()
   const { save, isSaving } = useSetConfig()
+  const markRestartRequired = useRestartStore((s) => s.markRestartRequired)
 
   const { shouldRender, scopeRef } = useExitAnimation<HTMLDivElement>(open, {
     card: 'aside',
@@ -2624,18 +2609,33 @@ function ProjectProgressConfigDrawer({
   const [subject, setSubject] = useState('')
   const [triggerDirty, setTriggerDirty] = useState(false)
   const [err, setErr] = useState<string | null>(null)
+  // env 三字段本地镜像（dirty 追踪；保存时只写显式改过且值变化的键）。
+  const [master, setMaster] = useState(false)
+  const [masterDirty, setMasterDirty] = useState(false)
+  const [dbId, setDbId] = useState('')
+  const [dbIdDirty, setDbIdDirty] = useState(false)
+  const [filterBu, setFilterBu] = useState('')
+  const [filterBuDirty, setFilterBuDirty] = useState(false)
+  const [envSaving, setEnvSaving] = useState(false)
 
-  // 总闸 + 项目进度库只读展示（.env，非 UI 编辑）。
-  const masterEnabled = useEnvStore((s) =>
+  // env store 状态 + 响应式 env 原值（就绪后回填，仅在用户未触碰该字段时）。
+  const envReady = useEnvStore((s) => s.state.status === 'ready')
+  const envMasterRaw = useEnvStore((s) =>
     s.state.status === 'ready'
-      ? envFlagOn(s.state.snapshot.values['PROJECT_PROGRESS_SYNC_ENABLED'] ?? '')
-      : false
+      ? (s.state.snapshot.values['PROJECT_PROGRESS_SYNC_ENABLED'] ?? '')
+      : null
   )
-  const databaseId = useEnvStore((s) =>
+  const envDbIdRaw = useEnvStore((s) =>
     s.state.status === 'ready'
       ? (s.state.snapshot.values['PROJECT_PROGRESS_DATABASE_ID'] ?? '')
-      : ''
+      : null
   )
+  const envFilterBuRaw = useEnvStore((s) =>
+    s.state.status === 'ready'
+      ? (s.state.snapshot.values['PROJECT_PROGRESS_FILTER_BU'] ?? '')
+      : null
+  )
+  const masterEnabled = envMasterRaw !== null && envFlagOn(envMasterRaw)
 
   /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
@@ -2645,11 +2645,30 @@ function ProjectProgressConfigDrawer({
     setSender(trig?.kind === 'email_filter' ? (trig.sender_pattern ?? '') : '')
     setSubject(trig?.kind === 'email_filter' ? (trig.subject_pattern ?? '') : '')
     setTriggerDirty(false)
+    setMasterDirty(false)
+    setDbIdDirty(false)
+    setFilterBuDirty(false)
     setErr(null)
   }, [open, cfg])
+  // env 字段从就绪快照回填：仅在打开且用户未 dirty 该字段时同步（镜像 PreprocessConfigDrawer
+  // —— env idle→ready 的迟到加载能纠正显示，但绝不覆盖用户在抽屉里的编辑）。
+  useEffect(() => {
+    if (!open) return
+    if (envMasterRaw !== null && !masterDirty) setMaster(envFlagOn(envMasterRaw))
+  }, [open, envMasterRaw, masterDirty])
+  useEffect(() => {
+    if (!open) return
+    if (envDbIdRaw !== null && !dbIdDirty) setDbId(envDbIdRaw)
+  }, [open, envDbIdRaw, dbIdDirty])
+  useEffect(() => {
+    if (!open) return
+    if (envFilterBuRaw !== null && !filterBuDirty) setFilterBu(envFilterBuRaw)
+  }, [open, envFilterBuRaw, filterBuDirty])
   /* eslint-enable react-hooks/set-state-in-effect */
 
   if (!shouldRender) return null
+
+  const busy = isSaving || envSaving
 
   const inputStyle: React.CSSProperties = {
     width: '100%',
@@ -2678,6 +2697,41 @@ function ProjectProgressConfigDrawer({
       patch.trigger = trig
     }
     setErr(null)
+    // 1) env 写（总闸 / 项目库 ID / BU 过滤）：仅在 env 已就绪、非 web、且用户显式改过
+    //    该字段（dirty）时写 —— 镜像 PreprocessConfigDrawer（codex HIGH：未触碰的字段
+    //    永不写回 .env）。只写值变化的键，变更键挂重启横幅（三者均启动时一次性读取）。
+    if (envReady && !IS_WEB) {
+      const st = useEnvStore.getState().state
+      const vals = st.status === 'ready' ? st.snapshot.values : {}
+      const envPatch: Record<string, string> = {}
+      const nextMaster = master ? 'true' : 'false'
+      if (masterDirty && nextMaster !== (vals['PROJECT_PROGRESS_SYNC_ENABLED'] ?? '')) {
+        envPatch['PROJECT_PROGRESS_SYNC_ENABLED'] = nextMaster
+      }
+      if (dbIdDirty && dbId.trim() !== (vals['PROJECT_PROGRESS_DATABASE_ID'] ?? '')) {
+        envPatch['PROJECT_PROGRESS_DATABASE_ID'] = dbId.trim()
+      }
+      if (filterBuDirty && filterBu.trim() !== (vals['PROJECT_PROGRESS_FILTER_BU'] ?? '')) {
+        envPatch['PROJECT_PROGRESS_FILTER_BU'] = filterBu.trim()
+      }
+      if (Object.keys(envPatch).length > 0) {
+        setEnvSaving(true)
+        try {
+          const r = await applyEnvPatch(envPatch)
+          if (!r.ok) {
+            toastError(
+              t('agents.projectProgress.envSaveError'),
+              `${r.error.code}: ${r.error.message}`
+            )
+            return
+          }
+          if (r.changedKeys.length > 0) markRestartRequired(r.changedKeys)
+        } finally {
+          setEnvSaving(false)
+        }
+      }
+    }
+    // 2) row 保存（enabled + trigger，保存即生效无需重启）。
     try {
       await save(PROJECT_PROGRESS_AGENT_ID, patch)
       onClose()
@@ -2746,11 +2800,29 @@ function ProjectProgressConfigDrawer({
 
         <div className="scrollbar-thin" style={{ flex: 1, overflowY: 'auto', padding: 18 }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-            {/* 总开关说明（走 env，非 UI）。总闸未开时高亮提示。 */}
+            {/* 远程 web 只读提示（env 写不可用；启用开关与触发规则仍可改） */}
+            {IS_WEB && (
+              <div
+                style={{
+                  fontSize: 12.5,
+                  color: 'rgb(var(--ink-fg-2))',
+                  padding: '10px 12px',
+                  borderRadius: 9,
+                  background: 'rgb(var(--ink-1) / 0.5)',
+                  border: '1px solid rgb(var(--ink-border-soft))'
+                }}
+              >
+                {t('agents.projectProgress.webReadOnly')}
+              </div>
+            )}
+
+            {/* 总闸状态说明。总闸未开时高亮提示。 */}
             <div
               style={{
                 fontSize: 12.5,
-                color: masterEnabled ? 'rgb(var(--ink-fg-2))' : 'rgb(var(--c-warn, var(--ink-fg-1)))',
+                color: masterEnabled
+                  ? 'rgb(var(--ink-fg-2))'
+                  : 'rgb(var(--c-warn, var(--ink-fg-1)))',
                 padding: '10px 12px',
                 borderRadius: 9,
                 background: 'rgb(var(--ink-1) / 0.5)',
@@ -2761,6 +2833,39 @@ function ProjectProgressConfigDrawer({
               {masterEnabled
                 ? t('agents.projectProgress.masterOnNote')
                 : t('agents.projectProgress.masterOffNote')}
+            </div>
+
+            {/* 总开关（env PROJECT_PROGRESS_SYNC_ENABLED，v1.3.0 收编自 Settings→集成）
+                —— 需重启生效。env 未就绪 / web 时禁用。 */}
+            <div
+              className="flex items-center"
+              style={{
+                gap: 12,
+                padding: '13px 14px',
+                borderRadius: 10,
+                background: 'rgb(var(--ink-2) / 0.55)',
+                border: '1px solid rgb(var(--ink-border))'
+              }}
+            >
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 13.5, fontWeight: 500, color: 'rgb(var(--ink-fg))' }}>
+                  {t('agents.projectProgress.master')}
+                </div>
+                <div style={{ fontSize: 12, color: 'rgb(var(--ink-fg-3))', marginTop: 2 }}>
+                  {t('agents.projectProgress.masterHint')}
+                </div>
+              </div>
+              <span
+                style={!envReady || IS_WEB ? { opacity: 0.5, pointerEvents: 'none' } : undefined}
+              >
+                <Switch
+                  on={master}
+                  onChange={(v) => {
+                    setMaster(v)
+                    setMasterDirty(true)
+                  }}
+                />
+              </span>
             </div>
 
             {/* 启用（row.enabled，保存即生效） */}
@@ -2817,23 +2922,86 @@ function ProjectProgressConfigDrawer({
               />
             </Field>
 
-            {/* 项目进度库（只读，来源 env PROJECT_PROGRESS_DATABASE_ID） */}
+            {/* 项目进度库 ID（env PROJECT_PROGRESS_DATABASE_ID，v1.3.0 只读 → 可编辑）
+                —— 需重启生效。env 未就绪 / web 时禁用。 */}
             <Field
               label={t('agents.projectProgress.database')}
               hint={t('agents.projectProgress.databaseHint')}
             >
-              <div
+              <input
+                type="text"
+                value={dbId}
+                disabled={!envReady || IS_WEB}
+                placeholder={t('agents.projectProgress.databaseUnset')}
+                onChange={(e) => {
+                  setDbId(e.target.value)
+                  setDbIdDirty(true)
+                }}
                 style={{
                   ...inputStyle,
                   fontFamily: 'var(--font-mono, monospace)',
-                  color: databaseId ? 'rgb(var(--ink-fg-2))' : 'rgb(var(--ink-fg-3))',
-                  background: 'rgb(var(--ink-1) / 0.35)',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap'
+                  ...(!envReady || IS_WEB ? { opacity: 0.5 } : {})
+                }}
+              />
+            </Field>
+
+            {/* BU 过滤（env PROJECT_PROGRESS_FILTER_BU，v1.3.0 收编自 Settings→集成）
+                —— 需重启生效。env 未就绪 / web 时禁用。 */}
+            <Field
+              label={t('agents.projectProgress.filterBu')}
+              hint={t('agents.projectProgress.filterBuHint')}
+            >
+              <input
+                type="text"
+                value={filterBu}
+                disabled={!envReady || IS_WEB}
+                placeholder={t('agents.projectProgress.filterBuPlaceholder')}
+                onChange={(e) => {
+                  setFilterBu(e.target.value)
+                  setFilterBuDirty(true)
+                }}
+                style={{
+                  ...inputStyle,
+                  fontFamily: 'var(--font-mono, monospace)',
+                  ...(!envReady || IS_WEB ? { opacity: 0.5 } : {})
+                }}
+              />
+            </Field>
+
+            {/* 内置能力（R2(c)）：同步脚本 = 确定性 Python 直调、恒启用 —— 锁定态徽标，
+                不可交互（不是 skill 体系，不能挂载/卸载）；唯一开关 = 上方启用开关。 */}
+            <Field
+              label={t('agents.projectProgress.capability')}
+              hint={t('agents.projectProgress.capabilityHint')}
+            >
+              <span
+                aria-disabled="true"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  padding: '6px 12px',
+                  borderRadius: 8,
+                  fontSize: 13,
+                  cursor: 'default',
+                  opacity: 0.7,
+                  color: 'rgb(var(--c-accent))',
+                  background: 'rgb(var(--c-accent) / 0.14)',
+                  border: '1px solid rgb(var(--c-accent) / 0.5)'
                 }}
               >
-                {databaseId || t('agents.projectProgress.databaseUnset')}
+                <ReportIcon name="check" size={13} />
+                {t('agents.projectProgress.capabilityChip')}
+              </span>
+              <div
+                style={{
+                  fontSize: 11.5,
+                  color: 'rgb(var(--ink-fg-3))',
+                  marginTop: 7,
+                  lineHeight: 1.5
+                }}
+              >
+                {t('agents.projectProgress.capabilityNote')}
               </div>
             </Field>
 
@@ -2866,14 +3034,14 @@ function ProjectProgressConfigDrawer({
           <button
             type="button"
             onClick={() => void onSave()}
-            disabled={isSaving}
+            disabled={busy}
             style={{
               fontFamily: 'inherit',
               fontSize: 13.5,
               fontWeight: 500,
               padding: '8px 18px',
               borderRadius: 8,
-              cursor: isSaving ? 'wait' : 'pointer',
+              cursor: busy ? 'wait' : 'pointer',
               color: 'rgb(var(--c-cta-fg))',
               background: 'rgb(var(--c-cta-bg))',
               border: 0
@@ -3208,7 +3376,9 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
                     {t('agents.custom.section')}
                   </h2>
                   {customPendingTotal > 0 && (
-                    <PendingDot title={t('agents.custom.runs.sectionDot', { count: customPendingTotal })} />
+                    <PendingDot
+                      title={t('agents.custom.runs.sectionDot', { count: customPendingTotal })}
+                    />
                   )}
                 </div>
                 <p style={{ fontSize: 13, color: 'rgb(var(--ink-fg-2))', marginTop: 4 }}>

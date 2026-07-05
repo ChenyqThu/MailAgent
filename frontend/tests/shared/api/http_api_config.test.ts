@@ -231,13 +231,42 @@ describe('HttpApi — 远程 config 写方法仍 notImplemented (reject, 不 fet
     await expect(api.notionAgent.setModel('opus-4.8')).rejects.toThrow(/not implemented/)
   })
 
-  test('prompts.write rejects', async () => {
-    await expect(api.prompts.write('inbox', 'x')).rejects.toThrow(/not implemented/)
-  })
-
   test('env.set rejects (远程只读，EnvField 控件 disabled)', async () => {
     await expect(api.env.set({ USER_EMAIL: 'x@y.com' })).rejects.toThrow(/not implemented/)
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+})
+
+// v1.3.0 dogfood — prompts.write 去 notImplemented（预处理抽屉分类 prompt 可编辑）：
+// PUT /prompts/{slot}，成功/失败都折回 PromptWriteResult union（镜像 ElectronApi，不 throw）。
+describe('HttpApi — prompts.write 真实现', () => {
+  const api = new HttpApi('/api')
+
+  test('prompts.write → PUT /prompts/{slot} + body {content}，成功折回 {ok:true, info}', async () => {
+    const info = { slot: 'inbox', path: '/root/prompts/email_inbox.md', exists: true }
+    fetchMock.mockResolvedValue(envelopeResponse(info))
+    const out = await api.prompts.write('inbox', 'new body')
+    expect(calledMethod()).toBe('PUT')
+    expect(calledUrl()).toContain('/api/prompts/inbox')
+    const init = fetchMock.mock.calls[0][1] as RequestInit
+    expect(JSON.parse(String(init.body))).toEqual({ content: 'new body' })
+    expect(out).toEqual({ ok: true, info })
+  })
+
+  test('prompts.write → error envelope 折回 {ok:false, code, message}（不 throw）', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          status: 'error',
+          schema_version: 1,
+          data: null,
+          error: { code: 'E_PATH_ESCAPE', message: 'escapes data root' }
+        }),
+        { status: 400, headers: { 'content-type': 'application/json' } }
+      )
+    )
+    const out = await api.prompts.write('inbox', 'x')
+    expect(out).toEqual({ ok: false, code: 'E_PATH_ESCAPE', message: 'escapes data root' })
   })
 })
 

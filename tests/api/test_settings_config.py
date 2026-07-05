@@ -612,6 +612,63 @@ def test_prompts_path_escape_rejected(
 
 
 # ============================================================
+# prompts write (PUT /api/prompts/{slot} — v1.3.0 预处理抽屉 prompt 可编辑)
+# ============================================================
+def test_prompts_write_existing(
+    client: TestClient, prompt_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """覆写已存在 prompt → 落盘 + 返回 PromptInfo（exists:true），读回新内容。"""
+    monkeypatch.delenv("LLM_INBOX_PROMPT_PATH", raising=False)
+    target = prompt_root / "prompts" / "email_inbox.md"
+    target.write_text("old body", encoding="utf-8")
+    r = client.put("/api/prompts/inbox", json={"content": "new inbox prompt"})
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data["slot"] == "inbox"
+    assert data["exists"] is True
+    assert data["path"].endswith("prompts/email_inbox.md")
+    assert target.read_text(encoding="utf-8") == "new inbox prompt"
+
+
+def test_prompts_write_creates_missing_file_and_dir(
+    client: TestClient, prompt_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """目标文件（含父目录）不存在 → mkdir -p + 创建（镜像 prompts.ts writePrompt）。"""
+    (prompt_root / "prompts").rmdir()  # fixture 建的空目录，连目录一起缺
+    monkeypatch.delenv("LLM_SENT_PROMPT_PATH", raising=False)
+    r = client.put("/api/prompts/sent", json={"content": "sent prompt"})
+    assert r.status_code == 200
+    assert r.json()["data"]["exists"] is True
+    assert (prompt_root / "prompts" / "email_sent.md").read_text(encoding="utf-8") == "sent prompt"
+
+
+def test_prompts_write_invalid_slot(client: TestClient, prompt_root: Path) -> None:
+    """非法 slot → E_INVALID_ARG。"""
+    r = client.put("/api/prompts/bogus", json={"content": "x"})
+    assert r.json()["error"]["code"] == "E_INVALID_ARG"
+
+
+def test_prompts_write_non_string_content(
+    client: TestClient, prompt_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """content 缺失 / 非字符串 → E_INVALID_ARG（不落盘）。"""
+    monkeypatch.delenv("LLM_INBOX_PROMPT_PATH", raising=False)
+    for payload in ({}, {"content": 42}, None):
+        r = client.put("/api/prompts/inbox", json=payload)
+        assert r.json()["error"]["code"] == "E_INVALID_ARG"
+    assert not (prompt_root / "prompts" / "email_inbox.md").exists()
+
+
+def test_prompts_write_path_escape_rejected(
+    client: TestClient, prompt_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """LLM_*_PROMPT_PATH 逃逸 data root → E_PATH_ESCAPE（防写任意文件）。"""
+    monkeypatch.setenv("LLM_INBOX_PROMPT_PATH", "../../../../tmp/evil.md")
+    r = client.put("/api/prompts/inbox", json={"content": "x"})
+    assert r.json()["error"]["code"] == "E_PATH_ESCAPE"
+
+
+# ============================================================
 # auth
 # ============================================================
 def test_endpoints_require_auth(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -628,3 +685,5 @@ def test_endpoints_require_auth(monkeypatch: pytest.MonkeyPatch) -> None:
             "/api/prompts/inbox",
         ):
             assert c.get(path).status_code == 401, path
+        # 写端点同样鉴权（PUT /api/prompts/{slot}）。
+        assert c.put("/api/prompts/inbox", json={"content": "x"}).status_code == 401

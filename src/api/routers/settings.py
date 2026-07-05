@@ -589,3 +589,29 @@ async def read_prompt(request: Request, slot: str):
         raise APIError("E_INVALID_ARG", f"unknown prompt slot {slot!r}", source="config")
     payload = await run_in_threadpool(_read_prompt, slot)
     return success_envelope(payload, request=request, source="config")
+
+
+def _write_prompt(slot: str, content: str) -> dict[str, Any]:
+    """镜像 prompts.ts ``writePrompt()`` —— 写文件（含父目录创建），返回 PromptInfo。
+    路径逃逸已在 ``_resolve_prompt_path`` clamp（E_PATH_ESCAPE）。"""
+    info = _prompt_info(slot)
+    path = Path(info["path"])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+    return {**info, "exists": True}
+
+
+@router.put("/prompts/{slot}", dependencies=[Depends(verify_cf_access)])
+async def write_prompt(request: Request, slot: str, body: Optional[dict[str, Any]] = None):
+    """写单个 prompt 文件（远程 web 编辑分类 prompt）。镜像 prompts:write → PromptInfo。
+
+    v1.3.0 dogfood：预处理抽屉的分类 prompt 从只读改为可编辑，桌面走 prompts IPC，
+    远程 web 走此端点。文件仍是 SSoT —— PromptLoader 按 mtime 热加载，保存即生效。
+    非法 slot / 非字符串 content → E_INVALID_ARG。"""
+    if slot not in _PROMPT_DEFAULTS:
+        raise APIError("E_INVALID_ARG", f"unknown prompt slot {slot!r}", source="config")
+    content = (body or {}).get("content")
+    if not isinstance(content, str):
+        raise APIError("E_INVALID_ARG", "content must be a string", source="config")
+    payload = await run_in_threadpool(_write_prompt, slot, content)
+    return success_envelope(payload, request=request, source="config")

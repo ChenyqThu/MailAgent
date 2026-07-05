@@ -1798,34 +1798,6 @@
       }
     },
     "integrations": {
-      "projectProgress": {
-        "title": "Project progress sync",
-        "helper": "Consume weekly project-progress emails; push xlsx to a Notion project DB",
-        "enabled": {
-          "label": "Enable sync",
-          "helper": "Master switch — required by both CLI and hook paths"
-        },
-        "autoSync": {
-          "label": "Auto-trigger",
-          "helper": "Dispatch in the background when the main sync sees a matching email"
-        },
-        "databaseId": {
-          "label": "Project DB ID",
-          "helper": "UUID of the target Notion project-progress database"
-        },
-        "filterBu": {
-          "label": "BU filter",
-          "helper": "Exact match on the xlsx BU column; other BUs are dropped"
-        },
-        "subjectPattern": {
-          "label": "Subject regex",
-          "helper": "Identifies the weekly project-progress email"
-        },
-        "sender": {
-          "label": "Sender (optional)",
-          "helper": "Empty → match by subject only; set → require both subject + sender"
-        }
-      },
       "office": {
         "title": "Office attachment conversion",
         "helper": "docx/pptx → PDF (LibreOffice); xlsx → CSV (pandas)",
@@ -2496,14 +2468,16 @@
       "fallbackFollowGlobal": "Follow global ({model})",
       "fallbackGlobalUnset": "not set",
       "fallbackNone": "(none)",
-      "promptView": "Classification prompt (built-in, read-only)",
-      "promptViewHint": "The mailbox prompt files actually used for classification — one for inbox, one for sent; identity/preferences come from the docs checked above",
+      "promptView": "Classification prompt",
+      "promptViewHint": "The mailbox prompt files actually used for classification — one for inbox, one for sent; edit directly, changes take effect on save (no restart needed); identity/preferences come from the docs checked above",
       "promptTab": {
         "inbox": "Inbox",
         "sent": "Sent"
       },
-      "promptEmpty": "(file missing or empty — classification uses only the built-in hard constraints)",
+      "promptEmpty": "File missing or empty — leave blank to classify with only the built-in hard constraints; saved content creates the file automatically",
       "promptLoadError": "Failed to load classification prompt (serve-api not ready?)",
+      "promptSaveError": "Failed to save classification prompt",
+      "promptSaved": "Classification prompt saved — effective immediately (no restart needed)",
       "envSaveError": "Failed to save enable state",
       "rowSaveError": "Failed to save preprocessing config"
     },
@@ -2514,7 +2488,9 @@
       "configTitle": "Project Report Sync · {title}",
       "masterOff": "Master off",
       "masterOnNote": "Master switch is on (env PROJECT_PROGRESS_SYNC_ENABLED). The enable toggle and trigger rules below take effect on save.",
-      "masterOffNote": "Master switch is off: set PROJECT_PROGRESS_SYNC_ENABLED=true in .env and restart the service to run. The enable toggle and trigger rules here are still saved but only apply once the master switch is on.",
+      "masterOffNote": "Master switch is off: the sync will not run. Turn on the master switch below (requires a service restart after saving); the enable toggle and trigger rules are still saved as usual.",
+      "master": "Sync master switch",
+      "masterHint": "Env PROJECT_PROGRESS_SYNC_ENABLED; requires a backend restart to take effect",
       "enable": "Enable auto-sync",
       "enableHint": "Matched report emails auto-trigger the sync (subject to the master switch PROJECT_PROGRESS_SYNC_ENABLED).",
       "subjectPattern": "Subject regex",
@@ -2523,9 +2499,18 @@
       "senderPattern": "Sender (substring, optional)",
       "senderPatternHint": "Case-insensitive substring match on the address; empty = any sender",
       "senderPlaceholder": "e.g. weekly@corp.com",
-      "database": "Progress database (read-only)",
-      "databaseHint": "Sourced from .env PROJECT_PROGRESS_DATABASE_ID, not edited here",
-      "databaseUnset": "(not configured — sync will fail; set PROJECT_PROGRESS_DATABASE_ID in .env)",
+      "database": "Progress database ID",
+      "databaseHint": "Env PROJECT_PROGRESS_DATABASE_ID (Notion database UUID); requires a restart to take effect",
+      "databaseUnset": "(not configured — sync will fail)",
+      "filterBu": "BU filter (optional)",
+      "filterBuHint": "Exact match on the xlsx BU column; other BUs are dropped; empty = no filter. Env PROJECT_PROGRESS_FILTER_BU; requires a restart",
+      "filterBuPlaceholder": "TPS-ENBU",
+      "capability": "Built-in capability",
+      "capabilityHint": "Always on, not configurable",
+      "capabilityChip": "Project report sync script · built-in, always on",
+      "capabilityNote": "Runs as a deterministic Python sync script (xlsx parsing → Notion writes) — it does not go through the AI engine and is not part of the skill system, so other skills can't be mounted; use the enable toggle above to stop the whole agent.",
+      "webReadOnly": "Remote web is read-only: master switch / database ID / BU filter can't be changed (desktop only); the enable toggle and trigger rules remain editable.",
+      "envSaveError": "Failed to save environment variables",
       "errEmptyTrigger": "Subject regex and sender cannot both be empty (use the enable toggle above to disable)",
       "rowSaveError": "Failed to save project report config"
     },
@@ -2570,7 +2555,23 @@
         "hint": "Tools the agent may call at runtime (intersected within the matrix floor)",
         "unavailable": "Tool list unavailable (service not ready or feature off); saving won't change the existing tool config.",
         "writeTag": "Write tool (requires approval)",
-        "writeBadge": "write"
+        "writeBadge": "write",
+        "group": {
+          "emailRead": "Email reading",
+          "emailWrite": "Email actions",
+          "report": "Reports",
+          "session": "Sessions & identity",
+          "knowledge": "Skills & knowledge",
+          "other": "Other"
+        },
+        "groupSelectAll": "Select all",
+        "groupClearAll": "Clear"
+      },
+      "capabilities": {
+        "label": "Extra capabilities",
+        "hint": "Capability grants beyond the tool whitelist (web access / command execution)",
+        "webDisabled": "Web access is not enabled (controlled by the MAILAGENT_OPENNESS_WEB_TOOLS environment variable); this grant will have no effect until it is turned on.",
+        "execDisabled": "Command execution is not enabled (controlled by the MAILAGENT_OPENNESS_EXEC_TOOLS environment variable); this grant will have no effect until it is turned on."
       },
       "budget": {
         "label": "Run budget",

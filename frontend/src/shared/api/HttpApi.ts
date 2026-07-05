@@ -14,10 +14,10 @@
 // Methods listed in the 减法清单 (stub_keep) stay as notImplemented/noop:
 // chat.*, ai.translateBatch/abortTranslate, email.createDraft, calendar
 // WRITES, folder WRITES, settings WRITE/secret, updater.*, env.set, services.*,
-// prompts.write, notionAgent WRITES, island.*, notion.updateFlag, events.status/
+// notionAgent WRITES, island.*, notion.updateFlag, events.status/
 // reconnect. Implemented surfaces: email/attachment (full read + write),
 // ai.getCached/deleteCached, llm.run/stats/selftest, admin.*, calendar READS,
-// folder READS, env.get (read-only .env snapshot), prompts.list/read,
+// folder READS, env.get (read-only .env snapshot), prompts.list/read/write,
 // notionAgent.getConfig/listModels/listAgents, settings.get/secretsStatus.
 
 import type {
@@ -82,6 +82,7 @@ import type {
   PromptContent,
   PromptInfo,
   PromptSlot,
+  PromptWriteResult,
   ResyncOpts,
   ResyncResult,
   SearchOpts,
@@ -696,13 +697,25 @@ export class HttpApi implements MailApi {
   }
 
   // task 06-08-chat 第二波 — 远程 config: prompt 文件读经 serve-api（host fs，clamp
-  // 在 data root）。write 仍 stub —— 远程只读 host 已配置的 prompt。
+  // 在 data root）。v1.3.0 dogfood — write 也接真端点（PUT /prompts/{slot}，预处理抽屉
+  // 分类 prompt 可编辑）；错误不 throw 而是折回 {ok:false} union，镜像 ElectronApi
+  // prompts:write 的 PromptWriteResult 形状（call site 统一 `if (!r.ok)` 处理）。
   prompts = {
     list: (): Promise<{ inbox: PromptInfo; sent: PromptInfo }> =>
       this.req<{ inbox: PromptInfo; sent: PromptInfo }>('GET', '/prompts'),
     read: (slot: PromptSlot): Promise<PromptContent> =>
       this.req<PromptContent>('GET', `/prompts/${encodeURIComponent(slot)}`),
-    write: () => notImplemented('prompts.write')
+    write: async (slot: PromptSlot, content: string): Promise<PromptWriteResult> => {
+      try {
+        const info = await this.req<PromptInfo>('PUT', `/prompts/${encodeURIComponent(slot)}`, {
+          body: { content }
+        })
+        return { ok: true, info }
+      } catch (e) {
+        const err = e as { code?: string; message?: string }
+        return { ok: false, code: err.code ?? 'E_WRITE', message: err.message ?? String(e) }
+      }
+    }
   }
 
   // task 06-08-chat 第二波 — 远程 config: notion-agent 账户/model/agent 读经 serve-api
