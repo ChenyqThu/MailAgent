@@ -85,7 +85,8 @@ def resolve_mounted_skills(agent: Optional[dict[str, Any]]) -> frozenset[str]:
 # headless 可用工具全集 = 矩阵地板内 read + domain_write（与 gateway policy.ts
 # GATEWAY_TOOL_CLASSES / tests/agent_eval/tool_catalog.json 的 tool_class 轴同源；
 # tests/api 有 catalog 一致性闸，新读/写工具漏此表必红）。exec / outbound /
-# capability_change 结构性缺席（ADR-004 D2/D3：exec 走 grant_exec 矩阵例外，非此列表）。
+# capability_change 结构性缺席（ADR-004 D2/D3：exec 走 grant_exec 矩阵例外，非此列表）；
+# web（web_fetch/web_search，S6 起 class=web）同样结构性缺席 —— 走 grant_web 三档授权。
 HEADLESS_TOOL_OPTIONS: tuple[tuple[str, str], ...] = (
     ("agent_profile_history", "read"),
     ("agent_profile_read", "read"),

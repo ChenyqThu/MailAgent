@@ -2546,6 +2546,19 @@ export interface AgentRunToolOptions {
   defaults: string[]
 }
 
+/** R3 (task 07-05) — GET /chat/config 开放性 flag 分面（S1 openness main-env-only flag 的
+ *  前端投影：sessionToolsEnabled / configToolsEnabled / webToolsEnabled + 既有
+ *  execPolicyEnabled 映射为 execToolsEnabled）。三值语义：true = flag on；false = flag off
+ *  （授权控件禁用 + 提示，消除「UI 授权但 gateway 未注册工具」的静默 no-op）；
+ *  undefined = 旧后端无此字段或 /chat/config 不可达（按现状渲染，不禁用）。 */
+export interface ChatOpennessFlags {
+  sessionToolsEnabled?: boolean
+  configToolsEnabled?: boolean
+  webToolsEnabled?: boolean
+  /** /chat/config.execPolicyEnabled（MAILAGENT_OPENNESS_EXEC_TOOLS）的投影。 */
+  execToolsEnabled?: boolean
+}
+
 export interface ReportApi {
   /** 报告列表（不含 blocks，按 report_date 倒序）。失败返 []。 */
   list(opts?: {

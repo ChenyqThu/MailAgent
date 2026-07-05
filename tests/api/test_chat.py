@@ -338,7 +338,32 @@ def test_chat_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
         "skillInstallEnabled": False,
         # S5 — Custom AI Agents 入口显隐 flag（MAILAGENT_CUSTOM_AGENTS_ENABLED default OFF）。
         "customAgentsEnabled": False,
+        # R3 (task 07-05) — S1 openness 三分面 flag 投影（均 default OFF，热读 .env）。
+        "sessionToolsEnabled": False,
+        "configToolsEnabled": False,
+        "webToolsEnabled": False,
     }
+
+
+def test_chat_config_openness_flags_hot_read(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """R3 (task 07-05) — sessionTools/configTools/webTools 三字段热读 .env（镜像
+    execPolicyEnabled 语义：main-env-only flag，改 .env 无需重启 serve-api 即生效）。"""
+    env = tmp_path / ".env"
+    env.write_text(
+        "MAILAGENT_OPENNESS_SESSION_TOOLS=true\n"
+        "MAILAGENT_OPENNESS_CONFIG_TOOLS=1\n"
+        "MAILAGENT_OPENNESS_WEB_TOOLS=true\n"
+        "MAILAGENT_OPENNESS_EXEC_TOOLS=true\n"
+    )
+    with _config_client(monkeypatch, _ChatConfigStub(), env_file=str(env)) as c:
+        data = c.get("/api/chat/config").json()["data"]
+    assert data["sessionToolsEnabled"] is True
+    assert data["configToolsEnabled"] is True
+    assert data["webToolsEnabled"] is True
+    # 既有字段回归：exec flag 同一热读通道
+    assert data["execPolicyEnabled"] is True
 
 
 def test_chat_config_memory_dump_retired(monkeypatch: pytest.MonkeyPatch) -> None:

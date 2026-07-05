@@ -470,6 +470,14 @@ async def chat_config(request: Request):
             "customAgentsEnabled": _hot_bool(
                 env_vals, "MAILAGENT_CUSTOM_AGENTS_ENABLED", cfg.custom_agents_enabled
             ),
+            # R3 (task 07-05) — S1 openness 三分面 flag 的前端可观测投影。均为 main-env-only
+            # flag（gateway 工具注册在 electron main 读 env，非 pydantic）；这里 hot-read 同一
+            # .env，完全镜像 execPolicyEnabled 的读法。消费方：CustomAgentDrawer 的 grant_web
+            # 控件（webToolsEnabled=false → 禁用 + 提示，消除「UI 授权但 gateway 未注册 web
+            # 工具」的静默 no-op）+ Settings「系统能力」区显隐（R4）。字段恒发。
+            "sessionToolsEnabled": _hot_bool(env_vals, "MAILAGENT_OPENNESS_SESSION_TOOLS", False),
+            "configToolsEnabled": _hot_bool(env_vals, "MAILAGENT_OPENNESS_CONFIG_TOOLS", False),
+            "webToolsEnabled": _hot_bool(env_vals, "MAILAGENT_OPENNESS_WEB_TOOLS", False),
         },
         request=request,
         source="config",

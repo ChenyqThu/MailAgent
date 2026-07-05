@@ -8,6 +8,7 @@ import type {
   AgentRunHistoryItem,
   AgentRunPendingCount,
   AgentRunToolOptions,
+  ChatOpennessFlags,
   ReportAgentConfig,
   ReportAgentCreateInput,
   ReportCadence,
@@ -80,8 +81,7 @@ export function useRunNow(): {
     }
   })
   return {
-    run: (agentId, opts) =>
-      mut.mutateAsync({ agentId, cadence: opts?.cadence, type: opts?.type }),
+    run: (agentId, opts) => mut.mutateAsync({ agentId, cadence: opts?.cadence, type: opts?.type }),
     isRunning: mut.isPending
   }
 }
@@ -177,6 +177,38 @@ async function fetchCustomAgentsEnabled(): Promise<boolean> {
   } catch {
     return false
   }
+}
+
+/** R3 (task 07-05) — /chat/config 开放性 flag 分面。与 fetchCustomAgentsEnabled 的
+ *  false-on-failure 不同：这里区分 false（字段明确 off → 控件禁用 + 提示）与 undefined
+ *  （旧后端无字段 / 不可达 → 按现状渲染不禁用），故失败/缺字段一律回 undefined。 */
+async function fetchOpennessFlags(): Promise<ChatOpennessFlags> {
+  try {
+    const resp = await fetch(`${resolveApiBaseUrl()}/chat/config`, { credentials: 'include' })
+    if (!resp.ok) return {}
+    const body = (await resp.json()) as { data?: Record<string, unknown> }
+    const pick = (key: string): boolean | undefined =>
+      typeof body?.data?.[key] === 'boolean' ? (body.data[key] as boolean) : undefined
+    return {
+      sessionToolsEnabled: pick('sessionToolsEnabled'),
+      configToolsEnabled: pick('configToolsEnabled'),
+      webToolsEnabled: pick('webToolsEnabled'),
+      execToolsEnabled: pick('execPolicyEnabled')
+    }
+  } catch {
+    return {}
+  }
+}
+
+export function useOpennessFlags(enabled: boolean): ChatOpennessFlags {
+  const q = useQuery({
+    queryKey: ['chat', 'config', 'opennessFlags'],
+    queryFn: fetchOpennessFlags,
+    enabled,
+    staleTime: 30_000,
+    retry: false
+  })
+  return q.data ?? {}
 }
 
 export function useCustomAgentsEnabled(): boolean {
