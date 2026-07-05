@@ -1246,6 +1246,42 @@
       "empty": "暂无可用技能（技能清单加载失败）。",
       "loading": "正在加载技能…"
     },
+    "systemCapabilities": {
+      "title": "系统能力",
+      "desc": "由环境变量启用的内置能力，恒定生效、不能在此关闭。",
+      "lockedBadge": "系统能力 · 恒启用",
+      "lockedTip": "该能力由环境变量控制启用，运行时不可在此切换。",
+      "moreNote": "其余系统能力由环境变量控制启用。",
+      "session": {
+        "title": "会话检索",
+        "desc": "让助手检索你过往的 AI 会话历史（列出 / 搜索 / 读取）。"
+      },
+      "config": {
+        "title": "Agent 自配置",
+        "desc": "让助手查看并调整自身的身份文档与记忆（读取 / 历史 / 回滚 / 更新记忆）。"
+      },
+      "web": {
+        "title": "联网",
+        "desc": "让助手抓取网页并执行网络搜索（网页抓取 + 网络搜索）。"
+      },
+      "crossRef": {
+        "exec": {
+          "title": "命令执行 / 文件读写",
+          "desc": "管理助手运行命令、读写文件的免审批白名单规则。",
+          "action": "前往自动化策略"
+        },
+        "skillPacks": {
+          "title": "技能包管理",
+          "desc": "安装、配置、卸载第三方 skill 包。",
+          "action": "前往 Skill 安装"
+        },
+        "customAgents": {
+          "title": "自定义 Agent",
+          "desc": "创建按计划或邮件触发的自动化 agent。",
+          "action": "前往 Agents"
+        }
+      }
+    },
     "memory": {
       "title": "记忆",
       "desc": "Custom AI 长期记住的关于你的事实。编辑或删除会在下一次对话生效。",

@@ -14,25 +14,34 @@
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useNavigate } from '@tanstack/react-router'
 import {
   AlertTriangle,
+  ArrowUpRight,
+  Bot,
   ChevronDown,
   ChevronRight,
   Download,
+  Globe,
   History,
   KeyRound,
   Loader2,
+  Lock,
+  MessageSquare,
   Package,
   Pencil,
   RotateCcw,
   Settings2,
   Sparkles,
+  Terminal,
   Trash2,
+  UserCog,
   X
 } from 'lucide-react'
 
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { useEnabledModels, FALLBACK_MODELS } from '@shared/hooks/useLlmModels'
+import { useOpennessFlags, useCustomAgentsEnabled } from '@shared/components/agents/hooks'
 import { useEnvStore } from '@shared/state/env'
 import { readSkillOverrides, writeSkillOverrides } from '@shared/lib/skill_overrides'
 import { toastError, toastSuccess } from '@shared/state/toast'
@@ -1688,15 +1697,222 @@ export function SkillPacksSection(): React.ReactElement | null {
   )
 }
 
+// ---------------------------------------------------------------------------
+// SystemCapabilitiesSection — R4 (task 07-05) 内置系统能力只读区
+// ---------------------------------------------------------------------------
+//
+// 技能面板此前只列 skill 对象（email/search/report + 已装 pack），看不到 S1/S2/S5 的
+// 开放性能力族。这些能力由 main-env-only flag 驱动（运行时不可切），此区把它们呈现为两类：
+//   A. 真空三族（无独立管理面）→ 只读能力卡：锁定态 pill +「视觉 on / disabled」Switch，
+//      绝无 onCheckedChange。flag === true 才渲染（延续 return-null idiom）：
+//        · 会话检索 chat_session_*                 (sessionToolsEnabled)
+//        · Agent 自配置 agent_profile_*/agent_memory_update (configToolsEnabled)
+//        · 联网 web_fetch + web_search             (webToolsEnabled)
+//   B. 已有管理面三族 → 交叉引用行（跳到对应管理面，不造新卡）：
+//        · 命令执行/文件读写 → 同页 ExecPolicySection  (execToolsEnabled)
+//        · 技能包管理        → 同页 SkillPacksSection  (skillInstallEnabled)
+//        · 自定义 Agent      → /agents 路由            (customAgentsEnabled)
+//
+// 红线：纯只读展示，零后端写调用；不动 skill_gating 的 GATEWAY_SKILL_TOOLS/CORE_UNGATED；
+// 不往 resolved_skills()/build_manifest()/skill registry 塞假 skill 行。
+
+// 同页交叉引用滚动锚点（CustomAiSection 里 SkillPacksSection / ExecPolicySection 各裹一个 id div）。
+const SYSTEM_CAP_SCROLL_TARGETS = {
+  exec: 'settings-exec-policy',
+  skillPacks: 'settings-skill-packs'
+} as const
+
+function scrollToSection(id: string): void {
+  document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
+
+/** 锁定态卡右侧控件：不可关的 pill + 视觉 on / disabled 的 Switch（无任何 onCheckedChange —
+ *  它是「有意锁定」而非「坏掉的开关」，disabled 阻断交互、pill + tooltip 说明由环境变量控制）。 */
+function LockedCapabilityControl(): React.ReactElement {
+  const { t } = useTranslation()
+  return (
+    <div className="flex items-center gap-2">
+      <span
+        className="inline-flex items-center gap-1 rounded-full bg-ink-4 border border-ink-border px-1.5 py-0.5 text-micro text-ink-fg-2"
+        title={t('settings.systemCapabilities.lockedTip')}
+      >
+        <Lock className="size-2.5" />
+        {t('settings.systemCapabilities.lockedBadge')}
+      </span>
+      <Switch checked disabled aria-label={t('settings.systemCapabilities.lockedBadge')} />
+    </div>
+  )
+}
+
+export function SystemCapabilitiesSection(): React.ReactElement | null {
+  const { t } = useTranslation()
+  const navigate = useNavigate()
+  const flags = useOpennessFlags(true)
+  const customAgentsEnabled = useCustomAgentsEnabled()
+
+  // 技能包管理面可见性（与 SkillPacksSection 共享同一 query cache，去重）。
+  const { data: skillInstallEnabled } = useQuery<boolean>({
+    queryKey: ['chat', 'config', 'skillInstallEnabled'],
+    queryFn: fetchSkillInstallEnabled,
+    staleTime: 30_000,
+    retry: false
+  })
+
+  // A. 真空三族：flag === true 才渲染锁定卡。
+  const capabilityCards: Array<{
+    key: string
+    icon: React.ReactNode
+    title: string
+    desc: string
+    toolCount: number
+  }> = []
+  if (flags.sessionToolsEnabled === true) {
+    capabilityCards.push({
+      key: 'session',
+      icon: <MessageSquare className="size-3.5 shrink-0 text-ink-fg-2" />,
+      title: t('settings.systemCapabilities.session.title'),
+      desc: t('settings.systemCapabilities.session.desc'),
+      toolCount: 3
+    })
+  }
+  if (flags.configToolsEnabled === true) {
+    capabilityCards.push({
+      key: 'config',
+      icon: <UserCog className="size-3.5 shrink-0 text-ink-fg-2" />,
+      title: t('settings.systemCapabilities.config.title'),
+      desc: t('settings.systemCapabilities.config.desc'),
+      toolCount: 4
+    })
+  }
+  if (flags.webToolsEnabled === true) {
+    capabilityCards.push({
+      key: 'web',
+      icon: <Globe className="size-3.5 shrink-0 text-ink-fg-2" />,
+      title: t('settings.systemCapabilities.web.title'),
+      desc: t('settings.systemCapabilities.web.desc'),
+      toolCount: 2
+    })
+  }
+
+  // B. 已有管理面三族：交叉引用行（点击跳对应管理面）。
+  const crossRefs: Array<{
+    key: string
+    icon: React.ReactNode
+    title: string
+    desc: string
+    action: string
+    onGo: () => void
+  }> = []
+  if (flags.execToolsEnabled === true) {
+    crossRefs.push({
+      key: 'exec',
+      icon: <Terminal className="size-3.5 shrink-0 text-ink-fg-2" />,
+      title: t('settings.systemCapabilities.crossRef.exec.title'),
+      desc: t('settings.systemCapabilities.crossRef.exec.desc'),
+      action: t('settings.systemCapabilities.crossRef.exec.action'),
+      onGo: () => scrollToSection(SYSTEM_CAP_SCROLL_TARGETS.exec)
+    })
+  }
+  if (skillInstallEnabled === true) {
+    crossRefs.push({
+      key: 'skillPacks',
+      icon: <Package className="size-3.5 shrink-0 text-ink-fg-2" />,
+      title: t('settings.systemCapabilities.crossRef.skillPacks.title'),
+      desc: t('settings.systemCapabilities.crossRef.skillPacks.desc'),
+      action: t('settings.systemCapabilities.crossRef.skillPacks.action'),
+      onGo: () => scrollToSection(SYSTEM_CAP_SCROLL_TARGETS.skillPacks)
+    })
+  }
+  if (customAgentsEnabled) {
+    crossRefs.push({
+      key: 'customAgents',
+      icon: <Bot className="size-3.5 shrink-0 text-ink-fg-2" />,
+      title: t('settings.systemCapabilities.crossRef.customAgents.title'),
+      desc: t('settings.systemCapabilities.crossRef.customAgents.desc'),
+      action: t('settings.systemCapabilities.crossRef.customAgents.action'),
+      onGo: () => void navigate({ to: '/agents', search: { tab: 'agents' } })
+    })
+  }
+
+  // 全空（所有 flag off / 未加载）→ 字节级不渲染（return-null idiom，flag off 时布局零变化）。
+  if (capabilityCards.length === 0 && crossRefs.length === 0) return null
+
+  // 三真空族未全开 → 尾部一行提示「其余系统能力由环境变量控制」。
+  const showMoreNote =
+    flags.sessionToolsEnabled !== true ||
+    flags.configToolsEnabled !== true ||
+    flags.webToolsEnabled !== true
+
+  return (
+    <Section
+      title={t('settings.systemCapabilities.title')}
+      helper={t('settings.systemCapabilities.desc')}
+    >
+      {capabilityCards.map((cap) => (
+        <Row
+          key={cap.key}
+          label={
+            <span className="flex items-center gap-2">
+              {cap.icon}
+              {cap.title}
+            </span>
+          }
+          helper={
+            <span className="flex flex-col gap-0.5">
+              <span>{cap.desc}</span>
+              <span className="mt-0.5">
+                <span className="inline-flex items-center rounded-full bg-ink-4 border border-ink-border px-1.5 py-0.5 text-micro font-mono text-ink-fg-2">
+                  {t('settings.skills.toolCount', { n: cap.toolCount })}
+                </span>
+              </span>
+            </span>
+          }
+        >
+          <LockedCapabilityControl />
+        </Row>
+      ))}
+
+      {crossRefs.map((ref) => (
+        <Row
+          key={ref.key}
+          label={
+            <span className="flex items-center gap-2">
+              {ref.icon}
+              {ref.title}
+            </span>
+          }
+          helper={<span>{ref.desc}</span>}
+        >
+          <Button size="sm" variant="ghost" onClick={ref.onGo}>
+            {ref.action}
+            <ArrowUpRight className="ml-1 size-3.5" />
+          </Button>
+        </Row>
+      ))}
+
+      {showMoreNote && (
+        <div className="px-4 py-2.5 text-aux text-ink-fg-3">
+          {t('settings.systemCapabilities.moreNote')}
+        </div>
+      )}
+    </Section>
+  )
+}
+
 export function CustomAiSection(): React.ReactElement {
   return (
     <>
       <SkillsSection />
-      <SkillPacksSection />
+      <SystemCapabilitiesSection />
+      <div id={SYSTEM_CAP_SCROLL_TARGETS.skillPacks}>
+        <SkillPacksSection />
+      </div>
       <UserMdCompileSection />
       <MemoryCaptureModelSection />
       <StandingDocsSection />
-      <ExecPolicySection />
+      <div id={SYSTEM_CAP_SCROLL_TARGETS.exec}>
+        <ExecPolicySection />
+      </div>
     </>
   )
 }

@@ -1246,6 +1246,42 @@
       "empty": "No skills available (the skill manifest could not be loaded).",
       "loading": "Loading skills…"
     },
+    "systemCapabilities": {
+      "title": "System capabilities",
+      "desc": "Built-in capabilities enabled by environment variables — always active and cannot be turned off here.",
+      "lockedBadge": "System · Always on",
+      "lockedTip": "This capability is toggled by an environment variable and cannot be switched here at runtime.",
+      "moreNote": "Other system capabilities are enabled via environment variables.",
+      "session": {
+        "title": "Session retrieval",
+        "desc": "Lets the assistant search your past AI conversation history (list / search / read)."
+      },
+      "config": {
+        "title": "Agent self-config",
+        "desc": "Lets the assistant view and adjust its own identity docs and memory (read / history / restore / update memory)."
+      },
+      "web": {
+        "title": "Web access",
+        "desc": "Lets the assistant fetch web pages and run web searches (web fetch + web search)."
+      },
+      "crossRef": {
+        "exec": {
+          "title": "Command / file access",
+          "desc": "Manage the no-approval allowlist for the assistant running commands and reading/writing files.",
+          "action": "Go to automation policy"
+        },
+        "skillPacks": {
+          "title": "Skill packs",
+          "desc": "Install, configure, and uninstall third-party skill packs.",
+          "action": "Go to Skill install"
+        },
+        "customAgents": {
+          "title": "Custom Agents",
+          "desc": "Create automated agents triggered on a schedule or by email.",
+          "action": "Go to Agents"
+        }
+      }
+    },
     "memory": {
       "title": "Memory",
       "desc": "Durable facts the Custom AI remembers about you. Edits and deletions take effect on the next conversation.",
