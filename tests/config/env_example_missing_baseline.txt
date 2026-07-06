@@ -1,0 +1,42 @@
+# ratchet baseline — config.py 有字段、.env.example 未文档化的 env 键（方向 A）。
+#
+# 是什么：test_config_env_example.py::test_config_fields_documented 用它豁免这批「已知
+#   未在 .env.example 出现」的 config 字段。多数是可选细调项（davmail 调参、SSE / async-jobs
+#   端口、同步间隔等），有意从示例文件省略，非缺陷。
+#
+# 为什么存在：一步到位补齐 111→0 会淹没真正的信号。ratchet 模式让新增字段必须文档化，
+#   同时不逼着补全全部历史遗漏。
+#
+# 如何缩小（ONLY shrink）：给某个键在 .env.example 补上示例（裸 `KEY=` 或注释 `# KEY=`）后，
+#   从本文件删掉该行。**禁止新增行** —— 新 config 字段忘了文档化就该让测试红，逼你去
+#   .env.example 加示例，而不是往这里塞豁免。
+#
+# 一行一个 env 键；`#` 起注释；空行忽略。
+
+CALENDAR_CHECK_INTERVAL
+DAVMAIL_ARCHIVE_SENT
+DAVMAIL_CALDAV_PORT
+DAVMAIL_DRAFTS_FOLDER
+DAVMAIL_FETCH_TIMEOUT_SEC
+DAVMAIL_POC_CIPHER_KEY
+DAVMAIL_POLL_INTERVAL_SEC
+DAVMAIL_SENT_FOLDER
+DAVMAIL_UID_BACKFILL_BATCH_SIZE
+DAVMAIL_UID_BACKFILL_ENABLED
+DAVMAIL_UID_BACKFILL_SLEEP_SEC
+FRONTEND_CALENDAR_V2_ENABLED
+LLM_CALDAV_CONTEXT_ENABLED
+LLM_FALLBACK_MODELS
+MAILAGENT_ASYNC_JOBS_ENABLED
+MAILAGENT_ASYNC_JOBS_POLL_INTERVAL_SEC
+MAILAGENT_SSE_ENABLED
+MAIL_ACCOUNT_URL_PREFIX
+OFFICE_CONVERT_ENABLED
+REVERSE_SYNC_INTERVAL
+SSE_LOCAL_HOST
+SSE_LOCAL_PORT
+SYNC_DATE_MODE
+SYNC_LOOKBACK_DAYS
+SYNC_MODE
+TASK_IDENTITY_DOCS_ENABLED
+THREAD_RELATIONS_FALLBACK_TO_NOTION
