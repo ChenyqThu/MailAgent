@@ -273,8 +273,13 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
   // Part B (harness 上岛, MAILAGENT_ISLAND_AGENT_ENABLED) — when the island agent path is on, an
   // approval can wait on the island (user off the app) → extend the guard TTL to the island ack
   // window (30 min, DEFAULT_STASH_TTL_MS) so verify()/consume() don't expire before the user comes
-  // back to click. Off (default) → the guard keeps its 5-min TTL (byte-identical).
-  const islandAgentEnabled = envBool('MAILAGENT_ISLAND_AGENT_ENABLED', false)
+  // back to click. Default ON since E3 cutover (2026-07-06, owner 终拍) — no island installed/running
+  // is a first-class fail-open path (the announce POST to serve-api never throws; the island socket
+  // send fails closed → debug-only log, no retry, no queue backlog — covered by direct unit tests, see
+  // research/island-no-island-degradation.md), so users without the island app get inert no-op, not
+  // errors. An explicit env false is the emergency rollback — the guard then keeps its 5-min TTL
+  // (byte-identical to pre-cutover).
+  const islandAgentEnabled = envBool('MAILAGENT_ISLAND_AGENT_ENABLED', true)
   // S6 W2 (PRD P8) — the SERVER-SIDE approval resume infra (stash + extended guard TTL + settle hook)
   // follows EITHER flag, not just the island: a headless custom-agent run (MAILAGENT_CUSTOM_AGENTS_
   // ENABLED) that pauses at an approval must be claimable IN-APP (the record view's /decide) even with

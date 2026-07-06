@@ -598,15 +598,18 @@ class Config(BaseSettings):
                     "🔴 紧急 / 🟡 重要发。all = 每封新邮件 + 全部 LLM 结果都弹（旧行为回退开关）。"
                     "非邮件卡（日历 / DeadLetter / agent 审批等）不受影响。",
     )
-    # ---- 灵动岛 harness agent 上岛（Part B，默认关，完全离岛 gateway 服务端 resume）----
+    # ---- 灵动岛 harness agent 上岛（Part B，默认开，完全离岛 gateway 服务端 resume）----
     # 🔴 字段名 island_agent_enabled ≠ env MAILAGENT_ISLAND_AGENT_ENABLED → 必须 validation_alias
-    #    (pydantic v2 忽略 Field(env=)，见本类顶 model_config 注释)。默认关 → serve-api
-    #    /api/island/agent/announce 返 not-enabled、/ack kind=agent 分支不路由，与今日字节一致。
+    #    (pydantic v2 忽略 Field(env=)，见本类顶 model_config 注释)。默认开（E3 cutover，
+    #    2026-07-06，owner 终拍）→ serve-api /api/island/agent/announce 正常登记 + 发卡；
+    #    无岛（Ping Island 未装/未跑）时 announce 是 fail-open no-op（socket send 失败仅 debug
+    #    日志，不抛、不重试、不入队，有直接单测），非报错。env 显式 false = 应急回退。
     island_agent_enabled: bool = Field(
-        default=False, validation_alias="MAILAGENT_ISLAND_AGENT_ENABLED",
+        default=True, validation_alias="MAILAGENT_ISLAND_AGENT_ENABLED",
         description="是否启用 harness agent(前端 chat)审批上灵动岛（Part B）。gated by ping_island_enabled；"
                     "开时 AI SDK Gateway 需审批的写工具会把审批卡推上岛，岛上点批准经解耦 ack 通道触发"
-                    "gateway 服务端 resume（用户完全离开 app 也能执行）。默认关，fail-open。",
+                    "gateway 服务端 resume（用户完全离开 app 也能执行）。默认开（E3 cutover 2026-07-06，"
+                    "owner 终拍）；无岛时 fail-open 静默 no-op（有单测），env 显式 false 应急回退。",
     )
 
     # ---- 灵动岛 Phase 3 DailyDigest（每日巡检，默认关闭，gate by ping_island_enabled）----
