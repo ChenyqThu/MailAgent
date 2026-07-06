@@ -282,7 +282,10 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
   // gated below. Both flags off → serverResumeEnabled false → no stash, 5-min guard TTL, /pending +
   // /decide 404 → byte-identical to pre-S6. (customAgentsEnabled is re-read for the endpoint gating
   // comment at the agent-run wiring below; one envBool per key is cheap.)
-  const customAgentsEnabled = envBool('MAILAGENT_CUSTOM_AGENTS_ENABLED', false)
+  // Default ON since E3 cutover (2026-07-06; v1.4.0 dogfood 全 flag-on 通过 R1-R5) — an explicit
+  // env false is the emergency rollback (kill-switch). The Python side reads the SAME env via
+  // pydantic (custom_agents_enabled, default True) — both sides flip together (E3 WP4).
+  const customAgentsEnabled = envBool('MAILAGENT_CUSTOM_AGENTS_ENABLED', true)
   const serverResumeEnabled = islandAgentEnabled || customAgentsEnabled
   // The guard record must outlive the stash window so a verify()/consume() on the eventual in-app (or
   // island) approve doesn't expire first — extend it whenever server-side resume is live.
@@ -327,36 +330,45 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
   // to the cutover set.
   const skillGatingEnabled = envBool('MAILAGENT_SKILL_SELF_MOUNT', true)
   // S1 R1 (task 07-02 openness wave1) — MAILAGENT_OPENNESS_SESSION_TOOLS gates the three
-  // chat-session read tools (chat_session_list/search/get). Default OFF (island 模式: ship off →
-  // dogfood → cutover 另拍); main-env-only, NO vite define (the renderer never reads it — mirrors
-  // MAILAGENT_ISLAND_AGENT_ENABLED). Off → buildGatewayTools output byte-identical to v1.2.0.
-  const sessionToolsEnabled = envBool('MAILAGENT_OPENNESS_SESSION_TOOLS', false)
+  // chat-session read tools (chat_session_list/search/get). Default ON since E3 cutover (2026-07-06;
+  // v1.4.0 dogfood 全 flag-on 通过 R1-R5) — an explicit env false is the emergency rollback
+  // (kill-switch), NOT master-following. main-env-only, NO vite define (the renderer never reads it
+  // — mirrors MAILAGENT_ISLAND_AGENT_ENABLED). Explicit false → buildGatewayTools output
+  // byte-identical to pre-cutover (v1.2.0).
+  const sessionToolsEnabled = envBool('MAILAGENT_OPENNESS_SESSION_TOOLS', true)
   // S1 R2 — MAILAGENT_OPENNESS_CONFIG_TOOLS gates the four profile-config tools
-  // (agent_profile_read/history/restore + agent_memory_update). Default OFF (island 模式: ship
-  // off → dogfood → cutover 另拍); main-env-only, NO vite define (mirrors
-  // MAILAGENT_OPENNESS_SESSION_TOOLS). Off → buildGatewayTools output byte-identical to v1.2.0.
-  const configToolsEnabled = envBool('MAILAGENT_OPENNESS_CONFIG_TOOLS', false)
+  // (agent_profile_read/history/restore + agent_memory_update). Default ON since E3 cutover
+  // (2026-07-06); an explicit env false is the emergency rollback (kill-switch). main-env-only,
+  // NO vite define (mirrors MAILAGENT_OPENNESS_SESSION_TOOLS). Explicit false → buildGatewayTools
+  // output byte-identical to pre-cutover (v1.2.0).
+  const configToolsEnabled = envBool('MAILAGENT_OPENNESS_CONFIG_TOOLS', true)
   // S1 R3 — MAILAGENT_OPENNESS_WEB_TOOLS gates the two web tools (web_fetch / web_search, both
   // edit-tier writes — outbound network always asks; SSRF-guarded server-side in routers/web.py).
-  // Default OFF (island 模式); main-env-only, NO vite define (mirrors the other two openness flags).
-  // Off → buildGatewayTools output byte-identical to v1.2.0.
-  const webToolsEnabled = envBool('MAILAGENT_OPENNESS_WEB_TOOLS', false)
+  // Default ON since E3 cutover (2026-07-06); an explicit env false is the emergency rollback
+  // (kill-switch). The always-asks HITL floor on outbound network is unchanged by the default flip.
+  // main-env-only, NO vite define (mirrors the other two openness flags). Explicit false →
+  // buildGatewayTools output byte-identical to pre-cutover (v1.2.0).
+  const webToolsEnabled = envBool('MAILAGENT_OPENNESS_WEB_TOOLS', true)
   // S2 W1 — MAILAGENT_OPENNESS_EXEC_TOOLS gates the three exec tools (run_command / file_read /
   // file_write, all edit-tier writes — local execution always asks unless a structured PolicyRule
-  // whitelist matches; class 'exec' = manual_chat-only). Default OFF (island 模式); main-env-only,
-  // NO vite define (mirrors the other openness flags). Off → buildGatewayTools output byte-identical
-  // to v1.2.0.
-  const execToolsEnabled = envBool('MAILAGENT_OPENNESS_EXEC_TOOLS', false)
+  // whitelist matches; class 'exec' = manual_chat-only). Default ON since E3 cutover (2026-07-06);
+  // an explicit env false is the emergency rollback (kill-switch). The security floor is unchanged
+  // by the default flip: no whitelist rule → every exec still asks (恒 HITL). main-env-only, NO vite
+  // define (mirrors the other openness flags). Explicit false → buildGatewayTools output
+  // byte-identical to pre-cutover (v1.2.0).
+  const execToolsEnabled = envBool('MAILAGENT_OPENNESS_EXEC_TOOLS', true)
   // S2 W4 — MAILAGENT_OPENNESS_SKILL_INSTALL gates the four skill-supply tools (skill_install /
   // skill_install_confirm / skill_uninstall — edit-tier capability_change writes, two HITL cards
   // per install with the confirm card rendering SERVER facts; + skill_read, silent fenced read).
-  // Default OFF (island 模式); main-env-only, NO vite define (mirrors the other openness flags).
-  // Off → buildGatewayTools output byte-identical to v1.2.0.
-  const skillInstallToolsEnabled = envBool('MAILAGENT_OPENNESS_SKILL_INSTALL', false)
+  // Default ON since E3 cutover (2026-07-06); an explicit env false is the emergency rollback
+  // (kill-switch). The security floor is unchanged by the default flip: capability_change installs
+  // are 恒 HITL (never auto-approved). main-env-only, NO vite define (mirrors the other openness
+  // flags). Explicit false → buildGatewayTools output byte-identical to pre-cutover (v1.2.0).
+  const skillInstallToolsEnabled = envBool('MAILAGENT_OPENNESS_SKILL_INSTALL', true)
   // S4 W3 — MAILAGENT_CUSTOM_AGENTS_ENABLED gates the headless custom-agent fresh-spawn endpoint
   // (POST /api/ai/agent-run): its two cfg hooks (fetchAgentRunSpec + createAgentSession) are wired
-  // only when on → off (default) → the endpoint 404s, byte-identical to S3. This wave adds ZERO
-  // gateway tools, so buildGatewayTools output is unaffected either way. Main-env-only, NO vite
+  // only when on → an explicit env false → the endpoint 404s, byte-identical to S3. This wave adds
+  // ZERO gateway tools, so buildGatewayTools output is unaffected either way. Main-env-only, NO vite
   // define (the renderer never reads it — mirrors the other openness flags). The Python side reads
   // the SAME env via pydantic (custom_agents_enabled) to gate the trigger worker + spec endpoints.
   // (customAgentsEnabled is read once above with serverResumeEnabled — the S6 W2 stash decoupling.)
@@ -546,7 +558,10 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
         ? async (approvalId: string) => {
             const entry = approvalStash.peekByApprovalId(approvalId)
             if (!entry) {
-              throw new ExecRuleDeriveError('E_APPROVAL_NOT_FOUND', 'no pending approval to remember')
+              throw new ExecRuleDeriveError(
+                'E_APPROVAL_NOT_FOUND',
+                'no pending approval to remember'
+              )
             }
             const agentId = entry.agentRunContext?.agentId
             if (entry.toolName !== 'web_fetch' || agentId == null) {

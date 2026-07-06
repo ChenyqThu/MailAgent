@@ -644,11 +644,13 @@ class Config(BaseSettings):
     # ---- Custom Agent 内核（S4, src/agents；默认关，flag-off 字节级不变）----
     # 🔴 字段名 custom_agents_enabled ≠ env MAILAGENT_CUSTOM_AGENTS_ENABLED → 必须 validation_alias
     custom_agents_enabled: bool = Field(
-        default=False, validation_alias="MAILAGENT_CUSTOM_AGENTS_ENABLED",
+        default=True, validation_alias="MAILAGENT_CUSTOM_AGENTS_ENABLED",
         description=(
             "Custom Agent 内核总开关（S4：cron/email_filter 触发 → gateway headless run）。"
-            "默认关；off → new_watcher 第 5 hook 不 fire、AgentTriggerWorker 不启、"
-            "agent_run 触发/入队全灭（字节级回 S3 终态）。per-agent 还需 report_agent.enabled + type='custom'。"
+            "默认开（E3 cutover，2026-07-06；v1.4.0 dogfood 全 flag-on 通过 R1-R5）；env 显式 false "
+            "= 应急回退 → new_watcher 第 5 hook 不 fire、AgentTriggerWorker 不启、"
+            "agent_run 触发/入队全灭（字节级回 S3 终态）。per-agent 仍需 report_agent.enabled + type='custom' "
+            "才真正激活某个 agent（on 但不配 grant/规则 = 恒 HITL，per-agent opt-in 是天然开关）。"
         ),
     )
 

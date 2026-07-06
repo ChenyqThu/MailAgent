@@ -94,8 +94,9 @@ class TestAgentCreate:
     def test_create_custom_flag_off_rejected(
         self, cli_runner, cli_env, seeded_db, _unauth_writes_on, monkeypatch
     ):
-        """S5：flag off（默认）→ --type custom 拒收（字节级同 --type garbage，白名单不含 custom）。"""
-        monkeypatch.delenv("MAILAGENT_CUSTOM_AGENTS_ENABLED", raising=False)
+        """S5：flag off（显式 false —— E3 cutover 后默认 on，off 走应急回退）→ --type custom
+        拒收（字节级同 --type garbage，白名单不含 custom）。"""
+        monkeypatch.setenv("MAILAGENT_CUSTOM_AGENTS_ENABLED", "false")
         result = _invoke(
             cli_runner, "agent-create", "--id", "cust_off", "--type", "custom",
             "-o", "json", db_path=seeded_db,

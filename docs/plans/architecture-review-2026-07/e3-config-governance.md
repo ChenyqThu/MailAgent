@@ -32,7 +32,7 @@ CLAUDE.md 表中 ★ 项（`MAILAGENT_BACKEND`、`MAILAGENT_OUTBOX_ENABLED` 等�
 
 一步到位的「单一 YAML 生成全部载体」改造大、收益后置。推荐三阶段：
 
-### Step 1 — 一致性校验网（先做，~2 天，高杠杆零风险）
+### Step 1 — 一致性校验网（先做，~2 天，高杠杆零风险） ✅ 已实施（2026-07-06，WP1 commit `5229fb4e`，见 git log）
 
 复制 `db_version_consistency.test.ts` 模式，新增机器对账测试：
 
@@ -43,13 +43,13 @@ CLAUDE.md 表中 ★ 项（`MAILAGENT_BACKEND`、`MAILAGENT_OUTBOX_ENABLED` 等�
 
 全部挂进 E0 的 CI 测试闸。
 
-### Step 2 — 收敛载体（~2-3 天）
+### Step 2 — 收敛载体（~2-3 天） ✅ 已实施（2026-07-06，WP2 commit `f5741a32`，见 git log）
 
 - env-only `os.environ` 直读全部收编 pydantic（validation_alias），消灭第 2 种载体。
 - Node main env 键名统一加 `MAILAGENT_` 前缀并在 Step 1 的映射表登记（已基本符合，补漏即可）。
 - 明确并文档化「翻 flag 是否需重启」的规则（pydantic 冷读 / dotenv_values 热读 / Node spawn 时注入），写进 `.env.example` 头部说明。
 
-### Step 3 — 偏离决策表 + 默认值对齐（~1 天 + 评审）
+### Step 3 — 偏离决策表 + 默认值对齐（~1 天 + 评审） ✅ 已实施（2026-07-06，WP4：决策表落盘 [`e3-defaults-decision-table.md`](./e3-defaults-decision-table.md) + openness 六 flag 默认 true cutover，见 git log）
 
 逐项评审 ★ 偏离：
 
@@ -67,9 +67,9 @@ flags.yaml → 生成 .env.example 段落 / vite define 两份 / CLAUDE.md 表�
 
 ## 4. 验收
 
-- [ ] 4 项对账测试进 CI 并全绿（含修复现存漂移）
-- [ ] `grep -rn "os.environ.get\|os.getenv" src/ --include='*.py'`（排除 config.py 与豁免清单）趋零
-- [ ] 偏离决策表落盘且 CLAUDE.md 开关表与 config.py 实测一致
+- [x] 4 项对账测试进 CI 并全绿（含修复现存漂移）— WP1 `tests/config/`（vite define 镜像 / config↔.env.example / 跨语言映射 + cutover 双侧默认一致 / CLAUDE.md 开关表对账）+ WP2 env-only reads allowlist；实测 0 现存默认漂移
+- [x] `grep -rn "os.environ.get\|os.getenv" src/ --include='*.py'`（排除 config.py 与豁免清单）趋零 — WP2 收编 + `tests/config/test_env_only_reads.py` allowlist 守护
+- [x] 偏离决策表落盘且 CLAUDE.md 开关表与 config.py 实测一致 — WP4 [`e3-defaults-decision-table.md`](./e3-defaults-decision-table.md)；openness 六 flag 默认 true cutover（Node envBool + Python `_hot_bool`/pydantic 双侧同翻，T3/T4 机器守护）
 
 ## 5. 风险与量级
 

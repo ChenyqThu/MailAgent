@@ -457,12 +457,12 @@ async def chat_config(request: Request):
             # （flag-off → 前端 ExecPolicySection return null，整个区块在 DOM 不存在；字段恒发）。
             # 注意：这个字段只驱动「策略管理页」显隐，不改变 gateway 是否注册 exec 工具（那由 gateway
             # 自己读 flag 决定）。
-            "execPolicyEnabled": _hot_bool(env_vals, "MAILAGENT_OPENNESS_EXEC_TOOLS", False),
+            "execPolicyEnabled": _hot_bool(env_vals, "MAILAGENT_OPENNESS_EXEC_TOOLS", True),
             # S2 W4b — Settings「Skill 安装」区显隐 gate。MAILAGENT_OPENNESS_SKILL_INSTALL 同为
             # main-env-only flag（gateway 的 skill_install* 工具注册在 electron main 读，非 pydantic）；
             # 这里 hot-read 同一 .env 供前端显隐（flag-off → 前端 SkillPacksSection return null，
             # 整个区块在 DOM 不存在；字段恒发）。只驱动安装/管理 UI 显隐，不改变 gateway 是否注册工具。
-            "skillInstallEnabled": _hot_bool(env_vals, "MAILAGENT_OPENNESS_SKILL_INSTALL", False),
+            "skillInstallEnabled": _hot_bool(env_vals, "MAILAGENT_OPENNESS_SKILL_INSTALL", True),
             # S5 — Settings「Custom AI Agents」建/改/run 历史入口显隐 gate。custom agent 内核 flag
             # MAILAGENT_CUSTOM_AGENTS_ENABLED（gateway CRUD 工具注册在 electron main 读，Python worker/
             # 端点走 pydantic）；这里 hot-read 同一 .env 供前端显隐（flag-off → 前端 CustomAgent 入口/
@@ -475,9 +475,9 @@ async def chat_config(request: Request):
             # .env，完全镜像 execPolicyEnabled 的读法。消费方：CustomAgentDrawer 的 grant_web
             # 控件（webToolsEnabled=false → 禁用 + 提示，消除「UI 授权但 gateway 未注册 web
             # 工具」的静默 no-op）+ Settings「系统能力」区显隐（R4）。字段恒发。
-            "sessionToolsEnabled": _hot_bool(env_vals, "MAILAGENT_OPENNESS_SESSION_TOOLS", False),
-            "configToolsEnabled": _hot_bool(env_vals, "MAILAGENT_OPENNESS_CONFIG_TOOLS", False),
-            "webToolsEnabled": _hot_bool(env_vals, "MAILAGENT_OPENNESS_WEB_TOOLS", False),
+            "sessionToolsEnabled": _hot_bool(env_vals, "MAILAGENT_OPENNESS_SESSION_TOOLS", True),
+            "configToolsEnabled": _hot_bool(env_vals, "MAILAGENT_OPENNESS_CONFIG_TOOLS", True),
+            "webToolsEnabled": _hot_bool(env_vals, "MAILAGENT_OPENNESS_WEB_TOOLS", True),
         },
         request=request,
         source="config",
