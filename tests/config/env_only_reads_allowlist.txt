@@ -1,0 +1,79 @@
+# ratchet allowlist — src/（排除 config.py）里 os.environ.get / os.getenv 直读的 env 键（E3 WP2）。
+#
+# 是什么：test_env_only_reads.py 扫描 src/ 全部 os.environ 直读，每个读点的 env 键必须在此
+#   登记；键为运行时变量（无法抽字面量）的读点按文件豁免（见测试 _DYNAMIC_READ_FILES）。
+#   镜像 tests/config/env_example_orphans_baseline.txt 的 ratchet 纪律：只减不增。
+#
+# 为什么留 env-direct（分类理由，收编前逐个判过 —— 见 WP2 汇报）：
+#   E3 目标是把「env-only 直读」这第 2 种载体收敛进 pydantic，但下列各有正当理由留在直读，
+#   收编反而引入耦合 / 破坏子系统约定 / 改动安全路径。DAVMAIL_POC_MODE 是唯一的真冗余
+#   （与 pydantic davmail_poc_mode 双读同键）—— 已收编，故不在本清单。
+#
+# 如何缩小（ONLY shrink）：某键被收编进 pydantic（validation_alias）后从这里删行；测试的
+#   stale 断言会盯着「已不再直读却仍留在清单」的陈旧行逼你删。**禁止随手新增行** —— 新直读
+#   应先在评审里确认属 env-direct（下列某类）再登记。
+#
+# 一行一个 env 键；`#` 起注释；空行忽略。
+
+# --- A. 进程注入（父进程 spawn 时注入子进程 env，非用户可配 flag）-------------------
+MAILAGENT_DATA_ROOT
+MAILAGENT_API_PORT
+MAILAGENT_API_HOST
+MAILAGENT_AI_GATEWAY_PORT
+MAILAGENT_LOCAL_API_TOKEN
+
+# --- B. path / db override（部署路径覆盖，非行为 flag）------------------------------
+MAILAGENT_AGENT_CONFIG_DB_PATH
+MAILAGENT_API_AUTH_DB_PATH
+AI_CHAT_DB_PATH
+MAILAGENT_ENV_FILE
+MAILAGENT_CONFIG
+MAILAGENT_SKILLS_DIR
+
+# --- C. dev / security gate（模块级读 + 安全旁路；收编会耦合 import 期 config 校验或
+#        改动鉴权/CLI 安全路径，最小 diff 原则下保持直读）-------------------------------
+MAILAGENT_API_AUTH_DISABLED
+MAILAGENT_API_DEV
+MAILAGENT_API_DEV_CORS
+MAILAGENT_API_ALLOWED_EMAIL
+MAILAGENT_CLI_ALLOW_UNAUTH_WRITES
+MAILAGENT_CLI_ALLOW_CONCURRENT
+
+# --- D. credential / 凭据存在性检测（pydantic 部分已有字段做防御 fallback）------------
+CF_TEAM_DOMAIN
+CF_AUDIENCE
+KOS_MCP_BASE
+KOS_OAUTH_CLIENT_ID
+KOS_OAUTH_CLIENT_SECRET
+MAILAGENT_BULK_CLIENT_ID
+MAILAGENT_BULK_CLIENT_SECRET
+NOTION_TOKEN
+USER_EMAIL
+MAILAGENT_CLI_API_KEY
+MAILAGENT_API_BASE
+MAILAGENT_AGENT_KEY
+
+# --- E. island 子系统 env-direct 约定（ping_island / island_i18n / island_reconnect /
+#        island_response / island_dispatch 刻意不 import 全局 config —— 自带默认值、部分
+#        跑在子进程/独立 socket 客户端上下文，pydantic 镜像字段仅供 Settings 可见性）------
+ISLAND_SOCKET_PATH
+ISLAND_SOCKET_TIMEOUT
+PING_ISLAND_LANG
+LANG
+PING_ISLAND_RECONNECT_PROBE_INTERVAL
+PING_ISLAND_RECONNECT_STARTUP_FAST_WINDOW_SECONDS
+PING_ISLAND_RECONNECT_STARTUP_FAST_PROBE_SECONDS
+PING_ISLAND_QUEUE_MAX
+MAILAGENT_MASCOT_DOMAIN_RULES
+MAILAGENT_FRONTEND_DEEPLINK_ENABLED
+
+# --- F. 诊断 / infra（诊断开关，非产品行为 flag）-------------------------------------
+MAILAGENT_PARENT_WATCHDOG
+MAILAGENT_MEM_DIAG
+MAILAGENT_MEM_LIMIT_MB
+
+# --- G. legacy notion_agent（S3 后仍被 skill 直调，镜像 TS notion_agent/config.ts，
+#        env-direct by design；NOTION_AGENT_MIN_INTERVAL_MS 等经泛型 _read_env_number
+#        读，按 _DYNAMIC_READ_FILES 文件豁免，不在本键清单）-----------------------------
+NOTION_AGENT_BIN
+NOTION_AGENT_IDLE_TIMEOUT_MS

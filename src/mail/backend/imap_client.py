@@ -56,7 +56,7 @@ def get_cipher_key(cfg: "Config") -> str:
     """从配置拿 DavMail cipher key (StringEncryptor password).
 
     优先 ``cfg.davmail_cipher_key``. 留空时:
-      - 若 ``cfg.davmail_poc_mode=True`` 或 env ``DAVMAIL_POC_MODE=1`` → fallback
+      - 若 ``cfg.davmail_poc_mode=True``（读 env ``DAVMAIL_POC_MODE``）→ fallback
         到 PoC 默认值, 兼容 ``davmail-poc/`` 共享实例.
       - 否则 raise ``DavMailConnectionError``, 避免生产环境无声 fallback 导致
         BadPaddingException → token 失效 → 用户莫名其妙 (review MEDIUM).
@@ -64,10 +64,7 @@ def get_cipher_key(cfg: "Config") -> str:
     val = getattr(cfg, "davmail_cipher_key", "") or ""
     if val:
         return val
-    import os as _os
-    poc_mode = bool(getattr(cfg, "davmail_poc_mode", False)) or (
-        _os.environ.get("DAVMAIL_POC_MODE", "").lower() in ("1", "true", "yes")
-    )
+    poc_mode = bool(getattr(cfg, "davmail_poc_mode", False))
     if poc_mode:
         global _poc_warned
         msg = (

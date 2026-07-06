@@ -11,10 +11,9 @@
 #       _AI_SDK_{WRITE_TOOLS,SEND_TOOL} / _AG_UI_MIRROR / _AI_GATEWAY_PORT / AUTO_UPDATE_ENABLED
 #     - 前端设置 UI 维护 / 文档提示项：LLM_ENABLED_MODELS / DAVMAIL_{USER,INBOX_NAME,DRAFTS_NAME}
 #
-# 已知 doc 漂移（保留在此，非本任务修复面）：
-#   DAVMAIL_CIPHER_KEY —— .env.example 文档化的是 `DAVMAIL_CIPHER_KEY`，但 config 字段
-#   davmail_cipher_key 的 validation_alias 是 `DAVMAIL_POC_CIPHER_KEY`，两者不一致 → 示例里
-#   这个键实际不被 pydantic 读。真正生效的键 DAVMAIL_POC_CIPHER_KEY 在 missing baseline 里。
+# （历史 doc 漂移 DAVMAIL_CIPHER_KEY 已在 E3 WP2 修复：.env.example 改为实际 alias
+#  DAVMAIL_POC_CIPHER_KEY，故此键从本 baseline 删除、DAVMAIL_POC_CIPHER_KEY 从 missing
+#  baseline 删除。）
 #
 # 为什么存在：方向 B 的价值是「.env.example 冒出一个既不是 config 字段、也不是已知 env-only /
 #   Node-read 的新键 → 逼审查者分类」。ratchet 让历史的合法 orphan 一次性登记，新 orphan 立即红。
@@ -27,7 +26,6 @@
 AUTO_UPDATE_ENABLED
 CF_AUDIENCE
 CF_TEAM_DOMAIN
-DAVMAIL_CIPHER_KEY
 DAVMAIL_DRAFTS_NAME
 DAVMAIL_INBOX_NAME
 DAVMAIL_USER
