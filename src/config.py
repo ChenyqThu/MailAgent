@@ -321,7 +321,8 @@ class Config(BaseSettings):
         description=(
             "Tavily 搜索 API Key（agent 的 web_search 工具走 Tavily 而非 DuckDuckGo —— "
             "DDG 国内被 GFW 阻断）。支持逗号分隔多 key（tvly-a,tvly-b），某 key 额度用尽自动"
-            "切下一个；留空则回落 DuckDuckGo。web.py 经 get_settings() 读（非 os.getenv）。"
+            "切下一个；留空则回落 DuckDuckGo。web.py 热读 .env 为准（_resolve_tavily_key，"
+            "保存即生效无需重启）+ 本冻结单例兜底；非 os.getenv。"
         ),
     )
     llm_inbox_prompt_path: str = Field(

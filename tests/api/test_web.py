@@ -179,12 +179,21 @@ def allow_loopback(monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.fixture(autouse=True)
-def tavily_cfg(monkeypatch: pytest.MonkeyPatch):
+def tavily_cfg(tmp_path, monkeypatch: pytest.MonkeyPatch):
     """Stub ``web.get_settings()`` → 可设的 ``tavily_api_key``（默认 '' = DDG 回落路径）。
 
     autouse 使所有 search 测试独立于真实 Config（CI 无 .env 也稳，复刻其它 get_settings-
     消费端点测试的 stub 惯例）。fetch 测试不读它 → 无副作用。Tavily 测试把 ``holder['key']``
-    设成逗号分隔 key 串来走 Tavily 路径。"""
+    设成逗号分隔 key 串来走 Tavily 路径。
+
+    Lane B 起 ``_resolve_tavily_key`` 热读 .env（``get_env_file_path`` → dotenv_values）优先
+    于冻结单例：把 ``MAILAGENT_ENV_FILE`` 钉到一个**空**临时 .env，让默认测试对本机真实仓库
+    .env 内容免疫（否则 dev 的 .env 若配了 TAVILY_API_KEY，DDG 回落测试会莫名变红）→ 热读命
+    中空 → 回落到本 stub。要测热读的用例各自 ``monkeypatch.setenv('MAILAGENT_ENV_FILE', ...)``
+    覆盖成含 key 的临时 .env。"""
+    isolated_env = tmp_path / "isolated.env"
+    isolated_env.write_text("", encoding="utf-8")
+    monkeypatch.setenv("MAILAGENT_ENV_FILE", str(isolated_env))
     holder = {"key": ""}
     monkeypatch.setattr(
         web, "get_settings", lambda: types.SimpleNamespace(tavily_api_key=holder["key"])
@@ -824,6 +833,93 @@ def test_search_reads_key_via_get_settings_not_os_getenv(
     resp = client.post("/api/web/search", json={"query": "q3 plan", "limit": 5})
     assert resp.status_code == 200
     assert resp.json()["data"]["count"] == 2  # 走 DDG → 证明没读 os.environ
+
+
+# ---------------------------------------------------------------------------
+# 4d) Tavily key 热读 .env（保存即生效，无需重启）+ DDG 连接失败去静默回落
+#     （07-07 triage Lane B：serve-api get_settings() 冻结单例读不到运行中改的 .env →
+#      静默回落 DDG → GFW reset 把配置问题伪装成网络问题）。
+# ---------------------------------------------------------------------------
+
+
+def test_search_tavily_key_hot_read_beats_frozen_singleton(
+    client: TestClient, tmp_path, tavily_cfg, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """复现 + 修复：Settings 保存 Tavily key 进 .env 后，冻结单例（get_settings）仍是旧值 →
+    热读 .env 为准 → 立即走 Tavily（无需重启）。此处 .env 新 key 覆盖冻结单例旧 key，证明
+    优先级 .env 值 > 冻结单例。改前（只读 get_settings）此测试会因走 DDG 而失败。"""
+    env_file = tmp_path / ".env"
+    env_file.write_text("TAVILY_API_KEY=tvly-from-env\n", encoding="utf-8")
+    monkeypatch.setenv("MAILAGENT_ENV_FILE", str(env_file))
+    tavily_cfg["key"] = "tvly-old-singleton"  # 冻结单例仍是旧 key
+    monkeypatch.setattr(web, "_ddg_search", _raise_boom("must not fall back to DDG when .env has key"))
+    calls = _install_fake_tavily(
+        monkeypatch, {"tvly-from-env": _FakeTavilyResp(200, _TAVILY_PAYLOAD)}
+    )
+    resp = client.post("/api/web/search", json={"query": "q3 plan", "limit": 5})
+    assert resp.status_code == 200
+    assert resp.json()["data"]["count"] == 2
+    # 用了 .env 的新 key，而非冻结单例的旧 key。
+    assert [c["key"] for c in calls] == ["tvly-from-env"]
+
+
+def test_search_falls_back_to_singleton_when_env_key_missing(
+    client: TestClient, tmp_path, tavily_cfg, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """.env 存在但无 TAVILY_API_KEY（纯 env 部署 / 尚未配）→ 回落冻结单例
+    get_settings().tavily_api_key（兼容性），走 Tavily 用单例 key。"""
+    env_file = tmp_path / ".env"
+    env_file.write_text("SOME_OTHER_KEY=1\n", encoding="utf-8")
+    monkeypatch.setenv("MAILAGENT_ENV_FILE", str(env_file))
+    tavily_cfg["key"] = "tvly-cfg"
+    calls = _install_fake_tavily(monkeypatch, {"tvly-cfg": _FakeTavilyResp(200, _TAVILY_PAYLOAD)})
+    resp = client.post("/api/web/search", json={"query": "x", "limit": 5})
+    assert resp.status_code == 200
+    assert [c["key"] for c in calls] == ["tvly-cfg"]
+
+
+def test_search_env_empty_key_falls_back_to_singleton(
+    client: TestClient, tmp_path, tavily_cfg, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """.env 里 TAVILY_API_KEY= 显式空值 → 视作未配 → 回落冻结单例（空 → DDG）。"""
+    env_file = tmp_path / ".env"
+    env_file.write_text("TAVILY_API_KEY=\n", encoding="utf-8")
+    monkeypatch.setenv("MAILAGENT_ENV_FILE", str(env_file))
+    tavily_cfg["key"] = ""  # 单例也空 → DDG
+    monkeypatch.setattr(web, "_tavily_search", _raise_boom("empty .env key must not select Tavily"))
+    monkeypatch.setattr(web, "_ddg_search", lambda q, l: {"query": q, "count": 0, "results": []})
+    resp = client.post("/api/web/search", json={"query": "x", "limit": 5})
+    assert resp.status_code == 200
+    assert resp.json()["data"]["count"] == 0  # 走 DDG（stub）→ 证明空 .env key 未选 Tavily
+
+
+def test_search_ddg_connection_failure_hints_tavily(
+    client: TestClient, tavily_cfg, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """DDG 连接类失败（reset/timeout）→ 错误文案明确提示配 Tavily key（保存即生效），
+    不再只抛裸 Connection reset（把配置问题伪装成网络问题）。"""
+    tavily_cfg["key"] = ""  # 无 Tavily → 走 DDG
+
+    class _ResetClient:
+        def __init__(self, *a, **k) -> None:
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a) -> bool:
+            return False
+
+        def stream(self, *a, **k):
+            raise web.httpx.ConnectError("Connection reset by peer")
+
+    monkeypatch.setattr(web.httpx, "Client", _ResetClient)
+    resp = client.post("/api/web/search", json={"query": "x", "limit": 5})
+    assert resp.status_code == 502
+    err = resp.json()["error"]
+    assert err["code"] == "E_UPSTREAM"
+    assert "DuckDuckGo" in err["message"]
+    assert "Tavily" in err["message"]
 
 
 # ---------------------------------------------------------------------------

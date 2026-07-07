@@ -17,10 +17,11 @@ TS 薄壳（``frontend/src/ai-gateway/tools/web.ts``）→ 本 Python 端点执�
   - redirect 不自动跟（``follow_redirects=False``）手动循环 ≤5 跳，**每跳重走全套校验**
   - size cap（流式边读边截 ~2 MiB）+ 总超时 ~15s + content-type 白名单（text/html/json/xml/plain）
 
-``/web/search`` provider（R7）：配了 ``TAVILY_API_KEY``（get_settings，非 os.getenv；支持逗号
-分隔多 key 额度轮换）→ 打**固定** api.tavily.com（国内可达）；空 → 回落**固定** DuckDuckGo HTML
-端点（墙外/VPN 可用）。两者 host 均非用户控制 → 无 SSRF 面，只需超时 + size cap。DDG 解析 HTML
-的 title/url/snippet 并解包 ``/l/?uddg=`` 重定向；Tavily 映射 JSON ``content`` → ``snippet``。
+``/web/search`` provider（R7）：配了 ``TAVILY_API_KEY``（热读 .env 为准 + 冻结单例兜底，见
+``_resolve_tavily_key``；非 os.getenv；支持逗号分隔多 key 额度轮换）→ 打**固定** api.tavily.com
+（国内可达）；空 → 回落**固定** DuckDuckGo HTML 端点（墙外/VPN 可用）。两者 host 均非用户控制 →
+无 SSRF 面，只需超时 + size cap。DDG 解析 HTML 的 title/url/snippet 并解包 ``/l/?uddg=`` 重定向；
+Tavily 映射 JSON ``content`` → ``snippet``。
 
 鉴权与 domainClient 消费的既有端点一致（``verify_cf_access``：本地 token 腿 / CF JWT 腿）。
 无新增 pip 依赖（httpx / BeautifulSoup / markdownify 均已在 requirements）。
@@ -426,6 +427,17 @@ def _ddg_search(query: str, limit: int) -> dict[str, Any]:
                     total += len(chunk)
                 raw = b"".join(chunks)
                 encoding = resp.encoding
+    except httpx.TransportError as e:
+        # 连接类失败（reset/timeout/连接被拒/协议错）—— 十有八九是 GFW 阻断 DDG。别把配置问题
+        # 伪装成裸网络错误：明确提示配 Tavily key（热读即生效，无需重启）。TransportError 覆盖
+        # NetworkError（ConnectError/ReadError=reset）+ TimeoutException + ProtocolError。
+        raise APIError(
+            "E_UPSTREAM",
+            f"当前网络无法访问 DuckDuckGo（连接失败：{e}）。请在 Settings → AI → 联网能力 "
+            "配置 Tavily API key（保存即生效，国内可达）。",
+            http_status=502,
+            source="web",
+        ) from e
     except httpx.HTTPError as e:
         raise APIError("E_UPSTREAM", f"search request failed: {e}", http_status=502, source="web") from e
 
@@ -533,15 +545,39 @@ def _tavily_search(query: str, limit: int, keys: list[str]) -> dict[str, Any]:
     raise APIError("E_UPSTREAM", detail, http_status=502, source="web")
 
 
+def _resolve_tavily_key() -> str:
+    """热读 .env 取 Tavily key（**保存即生效，无需重启 serve-api**）。返回逗号分隔的原始 key 串。
+
+    serve-api 的 ``get_settings()`` 是 import-time 冻结单例、永不重读 .env（deps.py 文档化）——
+    Settings 保存 Tavily key 后运行中进程读不到 → web_search 静默回落 DDG → GFW reset 把配置
+    问题伪装成网络问题。故此处**热读 .env 为准**（``dotenv_values(get_env_file_path())``，同
+    ``llm.py::_resolve_translate_credentials`` 范式），.env 不存在/键缺失/显式空值 → 回落冻结
+    单例 ``get_settings().tavily_api_key``（兼容纯 env 部署）。优先级：.env 值 > 冻结单例。
+
+    仍**绝不 os.getenv** —— serve-api 不 load_dotenv，os.getenv 读不到 .env-only 值；读的是
+    .env 文件本身（dotenv_values 解析文件，不看环境变量）。"""
+    from dotenv import dotenv_values
+
+    from src.api.deps import get_env_file_path
+
+    env_path = get_env_file_path()
+    if env_path:
+        try:
+            env_key = (dotenv_values(env_path).get("TAVILY_API_KEY") or "").strip()
+        except Exception:  # noqa: BLE001 — .env 读失败不致命，回落冻结单例
+            env_key = ""
+        if env_key:
+            return env_key
+    return (get_settings().tavily_api_key or "").strip()
+
+
 def _do_search(query: str, limit: int) -> dict[str, Any]:
     """web_search 分发器（在 threadpool 跑）。provider 选择（PRD R2 机制 A）：
-    ``get_settings().tavily_api_key`` 配了（逗号分隔多 key，去空）→ 走 Tavily（国内可达，
-    R7 额度轮换）；空 → 回落 DuckDuckGo（向后兼容，墙外/VPN 可用，行为字节级不变）。
+    ``_resolve_tavily_key()`` 配了（逗号分隔多 key，去空）→ 走 Tavily（国内可达，R7 额度轮换）；
+    空 → 回落 DuckDuckGo（向后兼容，墙外/VPN 可用，行为字节级不变）。
 
-    key 经 ``get_settings()`` 读（**绝不 os.getenv** —— serve-api 不 load_dotenv，os.getenv
-    读不到 .env-only 值；Config(BaseSettings) 经 env_file 读是文档化 robust 路径，见
-    settings.py §.env merged read）。"""
-    raw_key = get_settings().tavily_api_key or ""
+    key 经 ``_resolve_tavily_key()`` 热读 .env（保存即生效）+ 冻结单例兜底，见其文档。"""
+    raw_key = _resolve_tavily_key()
     keys = [k.strip() for k in raw_key.split(",") if k.strip()]
     if keys:
         return _tavily_search(query, limit, keys)
