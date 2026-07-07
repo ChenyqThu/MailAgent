@@ -134,7 +134,7 @@ tail -f logs/sync.log
 - **验证**（每次 build 后）：`codesign --verify --deep --strict <app>` 必 OK + `Info.plist` 版本号对 + `Resources/python/bin/python3.11` 在。
 - **装机/升级**：退出旧 app → `ditto dist/mac-arm64/MailAgent.app /Applications/` → open。userData 跨重装保留 → 升级**跳过 onboarding**（detect `'configured'`）+ 后端启动自动 DB 迁移。用 `.app` 时 pm2 `mail-sync` 必须停（防双写）；davmail 用户 `davmail-poc` 留 pm2（EWS 桥，不打进 app）。
 - **改 Python 后端**后：必先 `bash frontend/scripts/build-python-venv.sh` 重 provision 才进包；只改前端 TS/CSS 不用。**改 Python 依赖（requirements.txt / pyproject extras）必须重新生成 `requirements.lock.txt`**——E0 WP5 起 provision 只认 lock（108 包全 `==` pin，保打包再现性），漏生成 = 依赖改动不进包；生成方法见 lock 文件头注释。
-- **自动更新**仍卡 Developer ID 签名（ad-hoc `quitAndInstall` 装不上更新，`AUTO_UPDATE_ENABLED` 默认关）→ 现走手动替换；P6 见 [`docs/reference/packaging/05-auto-update-handoff.md`](./docs/reference/packaging/05-auto-update-handoff.md)。
+- **自动更新**自 v1.0.0（P6）上线：Developer ID 签名 + 公证 + `AUTO_UPDATE_ENABLED` **packaged 默认开**（`readMasterFlag()` = `!is.dev`；`=0` 应急回退，仍保留检测提醒）。CI 全量 build 产 `latest-mac.yml` feed，正式 release 装机后自动检测/下载/安装。**🔴 例外：本地 `electron-builder --dir` dogfood 包不含 `app-update.yml`（走 ENOENT → `markUpdaterUnavailable`）+ 通常未公证 → 无法自更新、需手动替换，且装了 --dir 包 = 暂时脱离自更新轨道，需再装一次正式 CI/`build:mac` 包才恢复**。P6 见 [`docs/reference/packaging/05-auto-update-handoff.md`](./docs/reference/packaging/05-auto-update-handoff.md)。
 
 ## 官网（公开 Landing + 101）
 
