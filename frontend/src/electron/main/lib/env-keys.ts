@@ -108,8 +108,9 @@ export const MANAGED_ENV_KEYS = [
 
   // — Web search (agent web_search provider). Tavily key (逗号分隔多 key 额度轮换);
   // 留空 → 回落 DuckDuckGo. IntegrationsTab「Web 搜索」Section 经 env:set 写 app .env;
-  // config.py pydantic singleton (tavily_api_key) → web.py get_settings() 读, 改动需重启
-  // serve-api 生效 (EnvField markRestartRequired). TAVILY_API_KEY 入 SECRET_ENV_KEYS 脱敏.
+  // web.py _do_search 热读 .env (dotenv_values), 保存即生效无需重启后端 (EnvField
+  // hotReload 跳过 markRestartRequired); .env 缺键时回落 get_settings().tavily_api_key.
+  // TAVILY_API_KEY 入 SECRET_ENV_KEYS 脱敏.
   'TAVILY_API_KEY',
 
   // — 联网能力开关 (task 07-07 R4a)。原为 main-env-only flag（gateway 启动 envBool 读一次,

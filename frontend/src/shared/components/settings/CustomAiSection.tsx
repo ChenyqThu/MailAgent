@@ -1830,6 +1830,7 @@ export function WebCapabilityRow(): React.ReactElement {
           label={t('settings.systemCapabilities.web.tavily.label')}
           helper={t('settings.systemCapabilities.web.tavily.helper')}
           placeholder={t('settings.systemCapabilities.web.tavily.placeholder')}
+          hotReload
         />
       )}
     </>

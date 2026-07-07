@@ -1267,7 +1267,7 @@
         "restartHint": "Requires a backend restart to take effect.",
         "tavily": {
           "label": "Tavily API Key",
-          "helper": "web_search defaults to DuckDuckGo, which is blocked on mainland-China networks; enter a Tavily API key to switch to Tavily (reachable in China). Separate multiple Tavily keys with commas to auto-rotate when one runs out of quota; leave empty to use DuckDuckGo (unreachable in China). Stored only in the local .env, never returned to the UI. Requires a backend restart to take effect.",
+          "helper": "web_search defaults to DuckDuckGo, which is blocked on mainland-China networks; enter a Tavily API key to switch to Tavily (reachable in China). Separate multiple Tavily keys with commas to auto-rotate when one runs out of quota; leave empty to use DuckDuckGo (unreachable in China). Stored only in the local .env, never returned to the UI. Takes effect on save.",
           "placeholder": "tvly-xxx, comma-separate multiple keys"
         }
       },

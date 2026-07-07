@@ -79,6 +79,10 @@ interface EnvFieldProps {
   disabled?: boolean
   /** Hide the field entirely (handy for conditional sub-fields). */
   hidden?: boolean
+  /** Skip markRestartRequired on save — for keys the backend hot-reads from
+   *  .env (e.g. TAVILY_API_KEY, read live via dotenv_values), so the "需重启"
+   *  banner would be misleading. Defaults false (most keys need a restart). */
+  hotReload?: boolean
   className?: string
 }
 
@@ -101,6 +105,7 @@ export function EnvField({
   savedToastTitle,
   disabled = false,
   hidden = false,
+  hotReload = false,
   className
 }: EnvFieldProps): React.ReactElement | null {
   const { t } = useTranslation()
@@ -143,7 +148,7 @@ export function EnvField({
     try {
       const result = await applyEnvPatch(patch)
       if (result.ok) {
-        if (result.changedKeys.length > 0) {
+        if (!hotReload && result.changedKeys.length > 0) {
           markRestartRequired(result.changedKeys)
         }
         toastSuccess(labelString(savedToastTitle ?? label, envKey))

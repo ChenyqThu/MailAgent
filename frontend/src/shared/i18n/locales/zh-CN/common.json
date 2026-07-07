@@ -1267,7 +1267,7 @@
         "restartHint": "修改后需重启后端生效。",
         "tavily": {
           "label": "Tavily API Key",
-          "helper": "web_search 默认走 DuckDuckGo，国内网络被阻断不可用；填入 Tavily API key 即改走 Tavily（国内可达）。多个 Tavily key 用逗号隔开，额度用完自动切换下一个；留空则用 DuckDuckGo（国内不可达）。仅本机 .env 存储，不回传界面。修改后需重启后端生效。",
+          "helper": "web_search 默认走 DuckDuckGo，国内网络被阻断不可用；填入 Tavily API key 即改走 Tavily（国内可达）。多个 Tavily key 用逗号隔开，额度用完自动切换下一个；留空则用 DuckDuckGo（国内不可达）。仅本机 .env 存储，不回传界面。保存即生效。",
           "placeholder": "tvly-xxx，多个 key 用逗号隔开"
         }
       },
