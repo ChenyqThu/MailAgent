@@ -57,17 +57,26 @@ def test_decode_mime_header_empty():
     assert _decode_mime_header(None) == ""
 
 
-def test_normalize_date_iso_rfc822():
-    """RFC 822 → ISO 8601 (HIGH #5)."""
+def test_normalize_date_iso_rfc822_plus8_converts_to_utc():
+    """RFC 822 → ISO 8601 (HIGH #5) + tz 归一 UTC (排序 tz 归一修复).
+
+    保留 +08:00 原始偏移会让词法排序 (SQL TEXT ORDER BY / localeCompare) 把
+    ``10:54+08:00`` 压过 ``05:58+00:00``; 归一后同一绝对时刻, 偏移统一 +00:00。
+    """
     out = _normalize_date_iso("Fri, 22 May 2026 14:30:00 +0800")
-    assert out.startswith("2026-05-22T14:30")
-    assert "+08:00" in out or "+0800" in out
+    assert out == "2026-05-22T06:30:00+00:00"
+
+
+def test_normalize_date_iso_utc_offset_unchanged_wall_time():
+    """已是 +0000 的输入: 墙钟时间不变, 偏移归一为 +00:00."""
+    out = _normalize_date_iso("Fri, 22 May 2026 05:58:00 +0000")
+    assert out == "2026-05-22T05:58:00+00:00"
 
 
 def test_normalize_date_iso_naive_gets_utc():
+    """无时区 → 按既有默认当 UTC, astimezone 后墙钟不变."""
     out = _normalize_date_iso("22 May 2026 14:30:00")
-    # 不带时区时归一加 UTC
-    assert "2026-05-22" in out
+    assert out == "2026-05-22T14:30:00+00:00"
 
 
 def test_normalize_date_iso_empty():
@@ -685,6 +694,31 @@ def test_get_new_emails_sent_failure_does_not_break_inbox(monkeypatch):
     out = backend.get_new_emails(since_row_id=99)
     assert len(out) == 1  # INBOX 不受 Sent 故障影响
     assert out[0]["mailbox"] == "收件箱"
+
+
+def test_get_new_emails_session_failure_raises(monkeypatch):
+    """PR #23 游标守卫: 顶层失败 (连接/INBOX 超时) 必须 re-raise, 不得吞成返空.
+
+    修复前顶层 except 返 [] → _poll_cycle 误当"空成功"推进游标 →
+    (last_max, current_max] 窗口邮件永久跳过 (数据丢失级)。
+    """
+    import pytest
+
+    backend = _make_backend()
+
+    from contextlib import contextmanager
+
+    @contextmanager
+    def broken_session(*args, **kwargs):
+        raise TimeoutError("imap connect timeout")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(
+        "src.mail.backend.davmail_backend.imap_session", broken_session,
+    )
+
+    with pytest.raises(TimeoutError):
+        backend.get_new_emails(since_row_id=99)
 
 
 def test_check_for_changes_detects_sent_advance(monkeypatch):

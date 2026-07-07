@@ -463,7 +463,20 @@ class NewWatcher:
                 self._stats["new_emails_detected"] += estimated_count
 
                 # 2. SQLite 直接获取新邮件元数据（不通过 AppleScript）
-                new_emails = self.backend.get_new_emails(last_max_row_id)
+                #
+                # PR #23 (credit @KevinWangQQ) 游标守卫: check_for_changes 用轻量
+                # STATUS 证明有新邮件后, 这里的重量级 SEARCH/FETCH 若失败 (超时/断连),
+                # 本轮**不推进游标**、不更新 last_sync_time — 下轮同窗口自动重试,
+                # IMAP 恢复即自愈。合法返空 ([]) 仍照常推进 (UIDNEXT 差值会高估:
+                # 删信/SEARCH 不匹配, 空成功不推进会卡死)。
+                try:
+                    new_emails = self.backend.get_new_emails(last_max_row_id)
+                except Exception as e:
+                    logger.error(
+                        f"get_new_emails failed, cursor NOT advanced — window "
+                        f"({last_max_row_id}, {current_max}] retried next poll: {e}"
+                    )
+                    new_emails = None
 
                 if new_emails:
                     logger.info(f"SQLite found {len(new_emails)} new emails")
@@ -519,9 +532,11 @@ class NewWatcher:
                             f"imap_uid={email_meta.get('imap_uid')})"
                         )
 
-                # 4. 更新 last_max_row_id（立即持久化）
-                self.sync_store.set_last_max_row_id(current_max)
-                self.sync_store.set_last_sync_time(datetime.now().isoformat())
+                # 4. 更新 last_max_row_id（立即持久化）— 仅成功 (含空成功) 时推进;
+                # None = get_new_emails 失败, 游标留在原位等下轮重试
+                if new_emails is not None:
+                    self.sync_store.set_last_max_row_id(current_max)
+                    self.sync_store.set_last_sync_time(datetime.now().isoformat())
         else:
             logger.debug("Radar unavailable, skipping new email detection")
 

@@ -86,11 +86,15 @@ def _decode_mime_header(value: Optional[str]) -> str:
 
 
 def _normalize_date_iso(date_str: str) -> str:
-    """RFC 822 Date 头 → ISO 8601. 失败 fallback 原值.
+    """RFC 822 Date 头 → ISO 8601 (UTC 偏移). 失败 fallback 原值.
 
     AppleScript 路径 ``raw['date']`` 来自 ``EmailDate.isoformat()``, davmail 路径直接拿
     MIME ``Date`` 头 (RFC 822). 把 davmail 路径归一成 ISO, 跟 EmailContent.date_received
     docstring 约定 + 前端 EmailList 排序口径一致.
+
+    统一 ``astimezone(utc)``: 排序全链路是词法字符串比较 (SQL TEXT ORDER BY +
+    localeCompare), 保留原始偏移会让 ``10:54+08:00`` 字典序压过 ``05:58+00:00``
+    (绝对时间更晚的反而排前)。同一绝对时刻, 仅偏移表示归一。
     """
     if not date_str:
         return ""
@@ -100,7 +104,7 @@ def _normalize_date_iso(date_str: str) -> str:
             return date_str
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
-        return dt.isoformat()
+        return dt.astimezone(timezone.utc).isoformat()
     except Exception:
         return date_str
 
@@ -1216,8 +1220,11 @@ class DavMailBackend(IMailBackend):
                         )
             return out
         except Exception as e:
+            # PR #23 (credit @KevinWangQQ): 顶层失败 (连接/INBOX SEARCH 超时) 必须
+            # re-raise — 吞掉返空会让 _poll_cycle 误当"空成功"推进游标, 窗口内邮件
+            # 永久跳过。Sent/自定义文件夹的 inner try 隔离语义不变。
             logger.error(f"[davmail-backend] get_new_emails failed: {e}")
-            return out
+            raise
 
     def _fetch_custom_folder(self, imap, imap_name: str) -> list[dict]:
         """取一个自定义文件夹的新邮件。marker 派生 + UIDVALIDITY 变化检测 + 上限截断。

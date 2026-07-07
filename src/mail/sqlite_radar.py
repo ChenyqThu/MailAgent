@@ -330,8 +330,10 @@ class SQLiteRadar:
                 return emails
 
         except Exception as e:
+            # PR #23 (credit @KevinWangQQ): 失败必须 re-raise — 返 [] 会让
+            # _poll_cycle 误当"空成功"推进游标, 窗口内邮件永久跳过。
             logger.error(f"Failed to get new emails: {e}")
-            return []
+            raise
 
     def get_flags_by_ids(self, internal_ids: List[int]) -> Dict[int, Dict]:
         """查询指定 internal_id 列表的当前 read/flagged 状态"""
@@ -466,7 +468,7 @@ class SQLiteRadar:
 
         limit = min(limit, 50)
         mailbox_filter = self._build_mailbox_filter()
-        conditions = [f"m.deleted = 0", mailbox_filter]
+        conditions = ["m.deleted = 0", mailbox_filter]
         params: list = []
 
         # 全文模糊搜索

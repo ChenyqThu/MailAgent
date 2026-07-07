@@ -84,19 +84,24 @@ def _local_tz():
 
 
 def _normalize_date_received_iso(value: Optional[str]) -> Optional[str]:
-    """把 date_received 归一成 ISO 8601 带 tz 字符串.
+    """把 date_received 归一成 ISO 8601 (UTC 偏移) 字符串.
 
     输入支持:
-    - 已是 ISO with tz: ``2026-05-22T14:30:00+08:00`` → 原样返回
-    - ISO naive: ``2026-01-27T23:01:25`` → 加系统本地 tz
+    - 已是 ISO with tz: ``2026-05-22T14:30:00+08:00`` → ``2026-05-22T06:30:00+00:00``
+    - ISO naive: ``2026-01-27T23:01:25`` → 按系统本地 tz 解释后转 UTC
     - space-separated naive (mail.app SQLite radar 用 ``datetime(ts, 'unixepoch',
       'localtime')`` 输出, 是**系统本地 tz** naive): ``2026-05-19 04:23:53`` →
-      ``2026-05-19T04:23:53-07:00`` (假设系统 PDT)
-    - RFC 822 (旧 davmail 兜底): ``Fri, 22 May 2026 14:30:00 +0800`` → ISO 8601
+      按本地 tz (含 DST) 解释后转 UTC
+    - RFC 822 (旧 davmail 兜底): ``Fri, 22 May 2026 14:30:00 +0800`` → ISO 8601 UTC
     - 空 / 解析失败: 原样返回 (上层别 break)
 
     Sprint 16 cutover: ``_local_tz()`` 动态拿系统 tz 而非硬编码 ``+08:00`` —
     上一版本 hard-code 北京时区导致 PDT 用户的 5148 行被标错 tz.
+
+    07-07 排序 tz 归一: 统一 ``astimezone(utc)`` — 排序全链路是词法字符串比较
+    (SQL TEXT ORDER BY + localeCompare), 保留原始/本地偏移会让 ``10:54+08:00``
+    字典序压过 ``05:58+00:00``。davmail 侧 ``_normalize_date_iso`` 同口径; 本函数
+    是 AppleScript fallback 写入路径, 不同改会在应急回切时重新混入非 UTC 偏移行。
     """
     if not value:
         return value
@@ -104,9 +109,12 @@ def _normalize_date_received_iso(value: Optional[str]) -> Optional[str]:
     if not s:
         return value
     local_tz = _local_tz()
-    # 已是 ISO with tz (T 加 +HH:MM / -HH:MM / Z)
+    # 已是 ISO with tz (T 加 +HH:MM / -HH:MM / Z) → 同一绝对时刻, 偏移表示归一 UTC
     if "T" in s and (s.endswith("Z") or "+" in s[10:] or "-" in s[10:]):
-        return s
+        try:
+            return datetime.fromisoformat(s).astimezone(timezone.utc).isoformat()
+        except (TypeError, ValueError):
+            return s
     # ISO naive: 2026-01-27T23:01:25
     if "T" in s and len(s) >= 19:
         try:
@@ -116,7 +124,7 @@ def _normalize_date_received_iso(value: Optional[str]) -> Optional[str]:
                 dt = dt.replace(tzinfo=local_tz)
                 # 但 Python tzinfo 加上去不一定带 DST, 用 astimezone re-resolve 一次
                 dt = dt.astimezone(local_tz)
-            return dt.isoformat()
+            return dt.astimezone(timezone.utc).isoformat()
         except (TypeError, ValueError):
             pass
     # space-separated: 2026-05-19 04:23:53
@@ -126,7 +134,7 @@ def _normalize_date_received_iso(value: Optional[str]) -> Optional[str]:
             if dt.tzinfo is None:
                 dt = dt.replace(tzinfo=local_tz)
                 dt = dt.astimezone(local_tz)
-            return dt.isoformat()
+            return dt.astimezone(timezone.utc).isoformat()
         except (TypeError, ValueError):
             pass
     # RFC 822 fallback (e.g. davmail 早期 path / 万一漏掉 normalize)
@@ -136,7 +144,7 @@ def _normalize_date_received_iso(value: Optional[str]) -> Optional[str]:
             return value
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=local_tz)
-        return dt.isoformat()
+        return dt.astimezone(timezone.utc).isoformat()
     except Exception:
         return value
 
