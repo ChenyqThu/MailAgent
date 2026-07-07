@@ -113,6 +113,9 @@ _MANAGED_ENV_KEYS: List[str] = [
     "LLM_SENT_PROMPT_PATH",
     "LLM_CACHE_ENABLED",
     "LLM_CACHE_TTL",
+    # — Web search (agent web_search provider). Tavily key（逗号分隔多 key 额度轮换）；
+    # 留空 → 回落 DuckDuckGo。web.py 经 get_settings() 读，TAVILY_API_KEY 入 _SECRET 脱敏。
+    "TAVILY_API_KEY",
     # — Notifications
     "FEISHU_NOTIFY_ENABLED",
     "FEISHU_APP_ID",
@@ -181,6 +184,9 @@ _SECRET_ENV_KEYS = {
     "MAILAGENT_CLI_API_KEY",
     "DAVMAIL_POC_CIPHER_KEY",
     "DAVMAIL_CIPHER_KEY",
+    # Tavily 搜索 key — IntegrationsTab「Web 搜索」Section 写 app .env; web.py 经
+    # get_settings() 读。脱敏不回 renderer (同其它 secret)。
+    "TAVILY_API_KEY",
     # KOS (gbrain) OAuth client_secret — IntegrationsTab KOS Section 写 app .env;
     # Python KOSClient os.getenv 读。脱敏不回 renderer (同其它 secret)。
     "KOS_OAUTH_CLIENT_SECRET",

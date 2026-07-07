@@ -17,8 +17,10 @@ TS 薄壳（``frontend/src/ai-gateway/tools/web.ts``）→ 本 Python 端点执�
   - redirect 不自动跟（``follow_redirects=False``）手动循环 ≤5 跳，**每跳重走全套校验**
   - size cap（流式边读边截 ~2 MiB）+ 总超时 ~15s + content-type 白名单（text/html/json/xml/plain）
 
-``/web/search`` 打**固定** DuckDuckGo HTML 端点（host 非用户控制 → 无 SSRF 面），只需超时 +
-size cap；解析 DDG HTML 的 title/url/snippet，DDG 的 ``/l/?uddg=`` 重定向包装解包成真实 URL。
+``/web/search`` provider（R7）：配了 ``TAVILY_API_KEY``（get_settings，非 os.getenv；支持逗号
+分隔多 key 额度轮换）→ 打**固定** api.tavily.com（国内可达）；空 → 回落**固定** DuckDuckGo HTML
+端点（墙外/VPN 可用）。两者 host 均非用户控制 → 无 SSRF 面，只需超时 + size cap。DDG 解析 HTML
+的 title/url/snippet 并解包 ``/l/?uddg=`` 重定向；Tavily 映射 JSON ``content`` → ``snippet``。
 
 鉴权与 domainClient 消费的既有端点一致（``verify_cf_access``：本地 token 腿 / CF JWT 腿）。
 无新增 pip 依赖（httpx / BeautifulSoup / markdownify 均已在 requirements）。
@@ -42,6 +44,7 @@ from pydantic import BaseModel, Field
 from src.agent_config.policy import _normalize_origin
 from src.api.app import APIError, success_envelope
 from src.api.auth import verify_cf_access
+from src.api.deps import get_settings
 from src.api.ssrf import check_ip as _check_ip
 from src.api.ssrf import default_addrinfo as _addrinfo
 from src.api.ssrf import host_port_scheme as _host_port_scheme
@@ -80,6 +83,16 @@ _UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 )
+# ── Tavily search provider（R7）─────────────────────────────────────────────────
+# agent web_search 的可选搜索后端：配了 TAVILY_API_KEY（经 get_settings，非 os.getenv）→ 走
+# Tavily（国内可达）；空 → 回落 DDG。api.tavily.com 是固定可信 host（无 SSRF 面）。状态码语义
+# 以官方 tavily-python SDK v0.7.26 为准（tavily/tavily.py:134-141）：
+#   200=成功 · 429=UsageLimitExceeded(额度用尽) · 401=InvalidAPIKey(无效)
+#   · 403/432/433=Forbidden(无权限) · 400=BadRequest(请求本身错，非 key 问题)。
+_TAVILY_SEARCH_URL = "https://api.tavily.com/search"
+_TAVILY_MAX_RESULTS = 20  # Tavily max_results 上限（docs：1–20）
+_TAVILY_USAGE_EXHAUSTED = 429  # 该 key 额度用尽 → 轮换下一个 key
+_TAVILY_KEY_REJECTED = frozenset({401, 403, 432, 433})  # key 无效/无权限 → 轮换
 
 
 class WebFetchRequest(BaseModel):
@@ -381,11 +394,11 @@ def _parse_ddg(html: str, limit: int) -> list[dict[str, str]]:
     return results
 
 
-def _do_search(query: str, limit: int) -> dict[str, Any]:
-    """同步执行 web_search（在 threadpool 跑）：打固定 DDG HTML 端点 + 解析 top-N。DDG host
+def _ddg_search(query: str, limit: int) -> dict[str, Any]:
+    """DuckDuckGo 回落搜索（在 threadpool 跑）：打固定 DDG HTML 端点 + 解析 top-N。DDG host
     非用户控制 → 无 SSRF 面，只需超时 + follow_redirects（DDG 自身可能跳）+ size cap（流式
     bounded 读，不全量 buffer；超顶截断后仍交给解析——结果页前部结构完整即可用）。异常/非
-    200 → 明确错误码，非静默空。"""
+    200 → 明确错误码，非静默空。无 Tavily key 时的默认路径（行为字节级同 S1）。"""
     try:
         with httpx.Client(
             trust_env=False, follow_redirects=True, timeout=_SEARCH_TIMEOUT_SEC
@@ -420,6 +433,121 @@ def _do_search(query: str, limit: int) -> dict[str, Any]:
     return {"query": query, "count": len(results), "results": results}
 
 
+def _map_tavily_results(query: str, limit: int, resp: httpx.Response) -> dict[str, Any]:
+    """映射 Tavily 200 响应 → 现有 ``{query,count,results:[{url,title,snippet}]}`` shape
+    （Tavily ``content`` → 我们的 ``snippet``）。防御性跳过缺 url 的条目，截 limit。"""
+    try:
+        payload = resp.json()
+    except ValueError as e:
+        raise APIError(
+            "E_UPSTREAM", f"Tavily 响应非合法 JSON: {e}", http_status=502, source="web"
+        ) from e
+    raw = payload.get("results") if isinstance(payload, dict) else None
+    results: list[dict[str, str]] = []
+    for item in raw or []:
+        if not isinstance(item, dict):
+            continue
+        url = item.get("url")
+        if not isinstance(url, str) or not url:
+            continue
+        title = item.get("title")
+        content = item.get("content")
+        results.append(
+            {
+                "title": title if isinstance(title, str) else "",
+                "url": url,
+                "snippet": content if isinstance(content, str) else "",
+            }
+        )
+        if len(results) >= limit:
+            break
+    return {"query": query, "count": len(results), "results": results}
+
+
+def _tavily_search(query: str, limit: int, keys: list[str]) -> dict[str, Any]:
+    """经 Tavily 执行 web_search（在 threadpool 跑），支持逗号分隔多 key 额度轮换（R7）。
+
+    按顺序遍历 ``keys``：某 key 200 → 立即映射返回；429 额度用尽 / 401·403·432·433 无效或
+    无权限 → 自动切下一个 key；400 或其他非 2xx（非 key 相关）/ 网络失败 → 立即报清晰错误。
+    全部 key 失败 → 清晰错误（区分「全部额度已用尽」vs「含无效/无权限 key」），**绝不静默
+    回落 DDG**（PRD R5/R7）。轮换在同一次请求内完成，对模型透明（只看到最终结果或最终错误）。
+
+    固定可信 host api.tavily.com → 无 SSRF 面，只需 Bearer 认证 + 超时。状态码语义以官方
+    tavily-python SDK v0.7.26 为准（``tavily/tavily.py:134-141``）。"""
+    max_results = max(1, min(limit, _TAVILY_MAX_RESULTS))
+    exhausted = 0  # 命中 429（额度用尽）的 key 数
+    rejected = 0  # 命中 401/403/432/433（无效/无权限）的 key 数
+    with httpx.Client(trust_env=False, timeout=_SEARCH_TIMEOUT_SEC) as client:
+        for key in keys:
+            try:
+                resp = client.post(
+                    _TAVILY_SEARCH_URL,
+                    headers={
+                        "Authorization": f"Bearer {key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={"query": query, "max_results": max_results},
+                )
+            except httpx.TimeoutException as e:
+                # 网络超时非 key 相关（同一 host，轮换无益）→ 立即清晰错误。
+                raise APIError(
+                    "E_UPSTREAM", f"Tavily 搜索超时: {e}", http_status=504, source="web"
+                ) from e
+            except httpx.HTTPError as e:
+                raise APIError(
+                    "E_UPSTREAM",
+                    f"Tavily 搜索连接失败（请检查网络）: {e}",
+                    http_status=502,
+                    source="web",
+                ) from e
+
+            if resp.status_code == 200:
+                return _map_tavily_results(query, limit, resp)
+            if resp.status_code == _TAVILY_USAGE_EXHAUSTED:
+                exhausted += 1
+                continue  # 该 key 额度用尽 → 切下一个
+            if resp.status_code in _TAVILY_KEY_REJECTED:
+                rejected += 1
+                continue  # 该 key 无效/无权限 → 切下一个
+            # 400（请求本身错）或其他非 2xx（5xx 等）非 key 相关 → 立即清晰错误，轮换无益。
+            raise APIError(
+                "E_UPSTREAM",
+                f"Tavily 搜索上游返回 {resp.status_code}",
+                http_status=502,
+                source="web",
+            )
+
+    # 所有 key 都试过、无一成功 → 按失败原因给清晰错误（区分额度用尽 vs 无效/无权限）。
+    if rejected == 0:
+        detail = "所有 Tavily key 额度已用尽（HTTP 429），请补充额度或在 Settings 更换 key"
+    elif exhausted == 0:
+        detail = (
+            "Tavily key 无效或无权限（HTTP 401/403），"
+            "请在 Settings → 集成 → Web 搜索 检查 Tavily key"
+        )
+    else:
+        detail = (
+            "所有 Tavily key 均不可用（含额度已用尽与无效/无权限 key），"
+            "请在 Settings → 集成 → Web 搜索 检查"
+        )
+    raise APIError("E_UPSTREAM", detail, http_status=502, source="web")
+
+
+def _do_search(query: str, limit: int) -> dict[str, Any]:
+    """web_search 分发器（在 threadpool 跑）。provider 选择（PRD R2 机制 A）：
+    ``get_settings().tavily_api_key`` 配了（逗号分隔多 key，去空）→ 走 Tavily（国内可达，
+    R7 额度轮换）；空 → 回落 DuckDuckGo（向后兼容，墙外/VPN 可用，行为字节级不变）。
+
+    key 经 ``get_settings()`` 读（**绝不 os.getenv** —— serve-api 不 load_dotenv，os.getenv
+    读不到 .env-only 值；Config(BaseSettings) 经 env_file 读是文档化 robust 路径，见
+    settings.py §.env merged read）。"""
+    raw_key = get_settings().tavily_api_key or ""
+    keys = [k.strip() for k in raw_key.split(",") if k.strip()]
+    if keys:
+        return _tavily_search(query, limit, keys)
+    return _ddg_search(query, limit)
+
+
 # ── endpoints ──────────────────────────────────────────────────────────────────
 
 
@@ -436,8 +564,9 @@ async def web_fetch(request: Request, body: WebFetchRequest):
 
 @router.post("/search", dependencies=[Depends(verify_cf_access)])
 async def web_search(request: Request, body: WebSearchRequest):
-    """DuckDuckGo HTML 搜索 top-N（title/url/snippet，uddg 解包）。best-effort（DDG 无官方 API，
-    限流/结构变动 → 明确错误码而非静默空）。执行在 threadpool。"""
+    """web 搜索 top-N（title/url/snippet）。provider = Tavily（配了 TAVILY_API_KEY，逗号分隔多
+    key 额度轮换）或 DuckDuckGo HTML（回落）。best-effort（DDG 无官方 API，限流/结构变动 → 明确
+    错误码而非静默空；Tavily 失败报清晰错误，不静默回落 DDG）。执行在 threadpool。"""
     result = await run_in_threadpool(_do_search, body.query, body.limit)
     return success_envelope(
         result, request=request, source="web", meta_extra={"best_effort": True}

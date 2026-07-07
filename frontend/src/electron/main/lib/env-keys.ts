@@ -106,6 +106,12 @@ export const MANAGED_ENV_KEYS = [
   // (EnvField markRestartRequired), 同 LLM_MODEL. CustomAiSection 的记忆抽取模型下拉写它.
   'MEMORY_CAPTURE_MODEL',
 
+  // — Web search (agent web_search provider). Tavily key (逗号分隔多 key 额度轮换);
+  // 留空 → 回落 DuckDuckGo. IntegrationsTab「Web 搜索」Section 经 env:set 写 app .env;
+  // config.py pydantic singleton (tavily_api_key) → web.py get_settings() 读, 改动需重启
+  // serve-api 生效 (EnvField markRestartRequired). TAVILY_API_KEY 入 SECRET_ENV_KEYS 脱敏.
+  'TAVILY_API_KEY',
+
   // — Notifications (PR D NotificationsTab)
   'FEISHU_NOTIFY_ENABLED',
   'FEISHU_APP_ID',
@@ -213,6 +219,9 @@ export const SECRET_ENV_KEYS: Set<string> = new Set<string>([
   'MAILAGENT_CLI_API_KEY',
   'DAVMAIL_POC_CIPHER_KEY',
   'DAVMAIL_CIPHER_KEY',
+  // Tavily 搜索 key — IntegrationsTab「Web 搜索」Section 写, Python web.py 从 config
+  // (get_settings) 读. 同其它 secret: env:get 脱敏不回 renderer。
+  'TAVILY_API_KEY',
   // KOS (gbrain) OAuth client_secret — IntegrationsTab KOS Section 写, Python
   // KOSClient 从 .env 读 (os.getenv). 同其它 secret: env:get 脱敏不回 renderer。
   'KOS_OAUTH_CLIENT_SECRET',

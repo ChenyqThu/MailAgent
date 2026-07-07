@@ -178,6 +178,29 @@ def allow_loopback(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(web, "_check_ip", _check)
 
 
+@pytest.fixture(autouse=True)
+def tavily_cfg(monkeypatch: pytest.MonkeyPatch):
+    """Stub ``web.get_settings()`` → 可设的 ``tavily_api_key``（默认 '' = DDG 回落路径）。
+
+    autouse 使所有 search 测试独立于真实 Config（CI 无 .env 也稳，复刻其它 get_settings-
+    消费端点测试的 stub 惯例）。fetch 测试不读它 → 无副作用。Tavily 测试把 ``holder['key']``
+    设成逗号分隔 key 串来走 Tavily 路径。"""
+    holder = {"key": ""}
+    monkeypatch.setattr(
+        web, "get_settings", lambda: types.SimpleNamespace(tavily_api_key=holder["key"])
+    )
+    return holder
+
+
+def _raise_boom(msg: str):
+    """返回一个被调用即 raise AssertionError 的桩 —— 断言某回落分支绝不被走到。"""
+
+    def _f(*args, **kwargs):
+        raise AssertionError(msg)
+
+    return _f
+
+
 # ===========================================================================
 # 1) SSRF 分类矩阵 — 直接单测真 validator（无 server / 无放行）
 # ===========================================================================
@@ -597,6 +620,210 @@ def test_search_size_cap_bounds_read(
     assert data["count"] == 2  # cap 生效：越界的 "Past Cap" result 被截掉
     assert data["results"][0]["title"] == "Q3 Plan Overview"
     assert all(r["url"] != "https://evil.test/past-cap" for r in data["results"])
+
+
+# ===========================================================================
+# 4b) search — Tavily provider (R7: 逗号分隔多 key 额度轮换) — mock httpx, 不打网络
+# ===========================================================================
+
+_TAVILY_PAYLOAD = {
+    "query": "q3 plan",
+    "results": [
+        {
+            "title": "Q3 Plan",
+            "url": "https://example.com/q3",
+            "content": "The Q3 plan ships with three milestones.",
+            "score": 0.9,
+        },
+        {
+            "title": "Roadmap",
+            "url": "https://example.org/roadmap",
+            "content": "Next milestones and dates.",
+            "score": 0.8,
+        },
+    ],
+}
+
+
+class _FakeTavilyResp:
+    """最小 httpx.Response 替身（只用 status_code + json()）。"""
+
+    def __init__(self, status_code: int, payload: Optional[dict] = None) -> None:
+        self.status_code = status_code
+        self._payload = payload
+
+    def json(self) -> dict:
+        if self._payload is None:
+            raise ValueError("no json body")
+        return self._payload
+
+
+def _install_fake_tavily(monkeypatch: pytest.MonkeyPatch, by_key: dict) -> list:
+    """Patch ``web.httpx.Client`` 使 ``_tavily_search`` 的 ``client.post`` 按 Bearer key 返回
+    预置响应（by_key: key → _FakeTavilyResp | Exception），并记录调用顺序。不打真实网络。"""
+    calls: list = []
+
+    class _Client:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args) -> bool:
+            return False
+
+        def post(self, url, headers=None, json=None):
+            token = (headers or {}).get("Authorization", "").replace("Bearer ", "", 1)
+            calls.append({"url": url, "key": token, "json": json})
+            outcome = by_key[token]
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
+
+    monkeypatch.setattr(web.httpx, "Client", _Client)
+    return calls
+
+
+def test_search_tavily_maps_results(
+    client: TestClient, tavily_cfg, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """配了单 key → 走 Tavily：结果映射（content→snippet），打 api.tavily.com（非 DDG），
+    Bearer 认证，max_results 映射 limit。"""
+    tavily_cfg["key"] = "tvly-a"
+    calls = _install_fake_tavily(monkeypatch, {"tvly-a": _FakeTavilyResp(200, _TAVILY_PAYLOAD)})
+    resp = client.post("/api/web/search", json={"query": "q3 plan", "limit": 5})
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["count"] == 2
+    first = data["results"][0]
+    assert first["title"] == "Q3 Plan"
+    assert first["url"] == "https://example.com/q3"
+    assert first["snippet"] == "The Q3 plan ships with three milestones."  # content→snippet
+    assert calls[0]["url"] == "https://api.tavily.com/search"
+    assert calls[0]["json"]["max_results"] == 5
+
+
+def test_search_tavily_single_key_success(
+    client: TestClient, tavily_cfg, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """单 key（无逗号）仍正常。"""
+    tavily_cfg["key"] = "tvly-solo"
+    _install_fake_tavily(monkeypatch, {"tvly-solo": _FakeTavilyResp(200, _TAVILY_PAYLOAD)})
+    resp = client.post("/api/web/search", json={"query": "x", "limit": 5})
+    assert resp.status_code == 200
+    assert resp.json()["data"]["count"] == 2
+
+
+def test_search_tavily_rotates_on_usage_exhausted(
+    client: TestClient, tavily_cfg, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """首个 key 429 额度用尽 → 自动切第二个成功；两 key 按序试过（含空格证明 strip）。"""
+    tavily_cfg["key"] = "tvly-a, tvly-b"
+    calls = _install_fake_tavily(
+        monkeypatch,
+        {"tvly-a": _FakeTavilyResp(429), "tvly-b": _FakeTavilyResp(200, _TAVILY_PAYLOAD)},
+    )
+    resp = client.post("/api/web/search", json={"query": "q3 plan", "limit": 5})
+    assert resp.status_code == 200
+    assert resp.json()["data"]["count"] == 2
+    assert [c["key"] for c in calls] == ["tvly-a", "tvly-b"]
+
+
+def test_search_tavily_rotates_on_invalid_key(
+    client: TestClient, tavily_cfg, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """首个 key 401 无效 → 也跳到下一个（成功）。"""
+    tavily_cfg["key"] = "tvly-bad,tvly-good"
+    calls = _install_fake_tavily(
+        monkeypatch,
+        {"tvly-bad": _FakeTavilyResp(401), "tvly-good": _FakeTavilyResp(200, _TAVILY_PAYLOAD)},
+    )
+    resp = client.post("/api/web/search", json={"query": "x", "limit": 3})
+    assert resp.status_code == 200
+    assert [c["key"] for c in calls] == ["tvly-bad", "tvly-good"]
+
+
+def test_search_tavily_all_exhausted_error(
+    client: TestClient, tavily_cfg, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """全部 key 429 → 「全部额度已用尽」清晰错误，绝不静默回落 DDG。"""
+    tavily_cfg["key"] = "tvly-a,tvly-b"
+    monkeypatch.setattr(web, "_ddg_search", _raise_boom("must not fall back to DDG"))
+    _install_fake_tavily(
+        monkeypatch, {"tvly-a": _FakeTavilyResp(429), "tvly-b": _FakeTavilyResp(429)}
+    )
+    resp = client.post("/api/web/search", json={"query": "x", "limit": 5})
+    assert resp.status_code == 502
+    err = resp.json()["error"]
+    assert err["code"] == "E_UPSTREAM"
+    assert "额度已用尽" in err["message"]
+
+
+def test_search_tavily_all_invalid_error(
+    client: TestClient, tavily_cfg, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """全部 key 401/403 → 「无效或无权限」清晰错误（区分 vs 额度用尽）。"""
+    tavily_cfg["key"] = "tvly-a,tvly-b"
+    _install_fake_tavily(
+        monkeypatch, {"tvly-a": _FakeTavilyResp(401), "tvly-b": _FakeTavilyResp(403)}
+    )
+    resp = client.post("/api/web/search", json={"query": "x", "limit": 5})
+    assert resp.status_code == 502
+    err = resp.json()["error"]
+    assert err["code"] == "E_UPSTREAM"
+    assert "无效或无权限" in err["message"]
+
+
+def test_search_tavily_mixed_failure_error(
+    client: TestClient, tavily_cfg, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """混合（429 + 401）→ 「均不可用」清晰错误。"""
+    tavily_cfg["key"] = "tvly-a,tvly-b"
+    _install_fake_tavily(
+        monkeypatch, {"tvly-a": _FakeTavilyResp(429), "tvly-b": _FakeTavilyResp(401)}
+    )
+    resp = client.post("/api/web/search", json={"query": "x", "limit": 5})
+    assert resp.status_code == 502
+    assert "均不可用" in resp.json()["error"]["message"]
+
+
+def test_search_tavily_timeout_no_ddg_fallback(
+    client: TestClient, tavily_cfg, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """网络超时（非 key 相关）→ 清晰 504，不静默回落 DDG。"""
+    tavily_cfg["key"] = "tvly-a"
+    monkeypatch.setattr(web, "_ddg_search", _raise_boom("must not fall back to DDG on network error"))
+    _install_fake_tavily(monkeypatch, {"tvly-a": web.httpx.TimeoutException("boom")})
+    resp = client.post("/api/web/search", json={"query": "x", "limit": 5})
+    assert resp.status_code == 504
+    assert resp.json()["error"]["code"] == "E_UPSTREAM"
+
+
+def test_search_empty_tavily_key_falls_back_to_ddg(
+    client: TestClient, fake_site: int, tavily_cfg, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """无 key → 走 DDG（非 Tavily）：断言 _tavily_search 绝不被调用、DDG fixture 正常解析。"""
+    tavily_cfg["key"] = ""  # 默认即空，显式声明
+    monkeypatch.setattr(web, "_DDG_HTML_URL", f"http://127.0.0.1:{fake_site}/ddg")
+    monkeypatch.setattr(web, "_tavily_search", _raise_boom("Tavily must not be called when key empty"))
+    resp = client.post("/api/web/search", json={"query": "q3 plan", "limit": 5})
+    assert resp.status_code == 200
+    assert resp.json()["data"]["count"] == 2  # DDG fixture 解析
+
+
+def test_search_reads_key_via_get_settings_not_os_getenv(
+    client: TestClient, fake_site: int, tavily_cfg, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """key 经 get_settings() 读、非 os.getenv：设 os.environ 但 get_settings 返回空 → 走 DDG
+    （证明 os.environ 不驱动 provider 选择，符合 serve-api 不 load_dotenv 的约束）。"""
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-from-os-environ")
+    tavily_cfg["key"] = ""  # get_settings 权威（空）
+    monkeypatch.setattr(web, "_DDG_HTML_URL", f"http://127.0.0.1:{fake_site}/ddg")
+    monkeypatch.setattr(web, "_tavily_search", _raise_boom("os.getenv must not drive provider selection"))
+    resp = client.post("/api/web/search", json={"query": "q3 plan", "limit": 5})
+    assert resp.status_code == 200
+    assert resp.json()["data"]["count"] == 2  # 走 DDG → 证明没读 os.environ
 
 
 # ===========================================================================

@@ -1842,6 +1842,14 @@
           "helper": "Depends on LibreOffice + python-calamine"
         }
       },
+      "websearch": {
+        "title": "Web search",
+        "helper": "The chat AI's web_search tool defaults to DuckDuckGo, which is blocked on mainland-China networks. Enter a Tavily API key to switch to Tavily (reachable in China); separate multiple keys with commas to auto-rotate when one runs out of quota. Leave empty to use DuckDuckGo.",
+        "tavily": {
+          "label": "Tavily API Key",
+          "helper": "Get one at tavily.com (tvly- prefix). Separate multiple keys with commas to auto-rotate on quota exhaustion. Stored only in the local .env, never returned to the UI. Requires a backend restart to take effect."
+        }
+      },
       "stats": {
         "title": "Runtime stats upload",
         "helper": "Periodically push sync / reverse / handler counters to the dashboard",

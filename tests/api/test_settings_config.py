@@ -512,13 +512,17 @@ def test_env_snapshot_missing_file_graceful(
 def test_env_snapshot_managed_secret_keys_match_ts() -> None:
     """受管 / secret key 数量与 TS SSoT 对齐（防漂移：env-keys.ts 改了这里也要改）。"""
     snap = settings_router._build_env_snapshot()
-    # SECRET_ENV_KEYS in env-keys.ts has exactly 13 entries (codex r4 [HIGH]
+    # SECRET_ENV_KEYS in env-keys.ts has exactly 14 entries (codex r4 [HIGH]
     # added ALERT_FEISHU_WEBHOOK_URL + REDIS_URL; KOS Settings added
-    # KOS_OAUTH_CLIENT_SECRET — gbrain OAuth secret written by IntegrationsTab).
-    assert len(snap["secretKeys"]) == 13
+    # KOS_OAUTH_CLIENT_SECRET — gbrain OAuth secret written by IntegrationsTab;
+    # Web search added TAVILY_API_KEY — Tavily search key written by IntegrationsTab).
+    assert len(snap["secretKeys"]) == 14
     # KOS OAuth secret: MANAGED (writable from Settings) but SECRET (redacted on read).
     assert "KOS_OAUTH_CLIENT_SECRET" in snap["secretKeys"]
     assert "KOS_OAUTH_CLIENT_SECRET" in snap["managedKeys"]
+    # Tavily search key: MANAGED (writable from Settings) but SECRET (redacted on read).
+    assert "TAVILY_API_KEY" in snap["secretKeys"]
+    assert "TAVILY_API_KEY" in snap["managedKeys"]
     # codex r4 [HIGH] — the two credential URLs are MANAGED (returned) but must
     # be SECRET (redacted). Assert they're in both sets so they never leak.
     assert "ALERT_FEISHU_WEBHOOK_URL" in snap["secretKeys"]

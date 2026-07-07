@@ -316,6 +316,14 @@ class Config(BaseSettings):
     llm_timeout_sec: int = Field(
         default=60, env="LLM_TIMEOUT_SEC", description="LLM 请求超时（秒）",
     )
+    tavily_api_key: str = Field(
+        default="", env="TAVILY_API_KEY",
+        description=(
+            "Tavily 搜索 API Key（agent 的 web_search 工具走 Tavily 而非 DuckDuckGo —— "
+            "DDG 国内被 GFW 阻断）。支持逗号分隔多 key（tvly-a,tvly-b），某 key 额度用尽自动"
+            "切下一个；留空则回落 DuckDuckGo。web.py 经 get_settings() 读（非 os.getenv）。"
+        ),
+    )
     llm_inbox_prompt_path: str = Field(
         default_factory=lambda: _under_data_root("prompts/email_inbox.md"), env="LLM_INBOX_PROMPT_PATH",
         description="收件箱 prompt md 路径（默认 DATA_ROOT/prompts/ 下；env 显式值原样透传，相对或绝对皆可）",
