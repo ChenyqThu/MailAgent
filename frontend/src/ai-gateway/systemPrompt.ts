@@ -68,7 +68,63 @@ export function buildGatewaySystemPrompt(args: {
   // byte-identical flag-off. This replaces the retired M2 per-query recall block.
   const stable = buildStableSystemPrompt(null, cfg, () => null)
   const contextBlock = args.contextSnapshot ? buildContextSystemBlock(args.contextSnapshot) : ''
-  // Order: stable (cacheable, incl. memory.md) → context (current view). Each segment is joined only
-  // when non-empty, so an empty contextBlock reproduces the stable prefix exactly.
-  return [stable, contextBlock].filter((s) => s.length > 0).join('\n\n')
+  // Order: stable (cacheable, incl. memory.md) → context (current view) → current-date (always). Each
+  // segment is joined only when non-empty; the date block is ALWAYS non-empty so both the general
+  // agent (empty contextBlock) and the email chat carry it. It is the LAST segment so the whole
+  // stable+context prefix stays a stable prompt-cache prefix — only the trailing date line changes,
+  // and at DATE granularity it changes at most once per day (no minute/second stamp that would bust
+  // the cache every turn).
+  const dateBlock = buildCurrentDateBlock(args.contextSnapshot)
+  return [stable, contextBlock, dateBlock].filter((s) => s.length > 0).join('\n\n')
+}
+
+/** Build the always-present "current date" segment appended last to the gateway system prompt.
+ *  Without this the model has no notion of "now" and defaults to its training cutoff (e.g. reads a
+ *  2026 date as 2025) — breaking "latest developments"-style questions in the general agent.
+ *
+ *  🔴 DATE granularity only (no clock time): this is a prompt-cache-prefix suffix, so a minute/
+ *     second stamp would invalidate the cache every turn. Formatted as
+ *     「当前日期：2026-07-07（星期二），时区 Asia/Shanghai」.
+ *
+ *  Timezone: the user's UI timezone from the context snapshot when present (so "today" matches what
+ *  the user sees), else the gateway process's resolved zone, else UTC. `tzCandidate` is passed to
+ *  Intl.DateTimeFormat, which throws RangeError on a non-IANA string — that both validates the zone
+ *  and defangs a crafted timezone value (garbage → skipped, never rendered into the prompt). `now`
+ *  is injectable for deterministic tests; production always uses the current instant. */
+export function buildCurrentDateBlock(
+  snapshot?: AgentContextSnapshot | null,
+  now: Date = new Date()
+): string {
+  const candidates: string[] = []
+  const fromSnapshot = snapshot?.uiState?.timezone
+  if (typeof fromSnapshot === 'string' && fromSnapshot.trim().length > 0) {
+    candidates.push(fromSnapshot.trim())
+  }
+  try {
+    const local = Intl.DateTimeFormat().resolvedOptions().timeZone
+    if (local && local.length > 0) candidates.push(local)
+  } catch {
+    /* resolvedOptions unavailable → fall through to UTC */
+  }
+  candidates.push('UTC')
+
+  for (const timeZone of candidates) {
+    try {
+      const parts = new Intl.DateTimeFormat('zh-CN', {
+        timeZone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        weekday: 'long'
+      }).formatToParts(now)
+      const get = (type: string): string => parts.find((p) => p.type === type)?.value ?? ''
+      const date = `${get('year')}-${get('month')}-${get('day')}`
+      const weekday = get('weekday')
+      return `当前日期：${date}（${weekday}），时区 ${timeZone}`
+    } catch {
+      /* invalid / unsupported timeZone (incl. a crafted snapshot value) → try the next candidate */
+    }
+  }
+  // UTC above cannot realistically throw; this only guards a fully Intl-less runtime.
+  return `当前日期：${now.toISOString().slice(0, 10)}，时区 UTC`
 }
