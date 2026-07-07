@@ -25,6 +25,29 @@ def _db_version(db):
         conn.close()
 
 
+def _drop_columns_portable(conn, table, cols):
+    """重建法删列模拟旧 schema。ALTER … DROP COLUMN 对「末列 + 尾部 -- 注释」的建表 SQL
+    在新版 SQLite（CI macos-14 image 20260629 起）schema 重解析报 incomplete input，
+    不可移植（同 tests/reports/test_preprocess_agent_v27.py 的教训）；重建保留 PK/NOT NULL/DEFAULT
+    （v31 seed 的 INSERT OR IGNORE 依赖 PK 去重）。"""
+    keep = [r for r in conn.execute(f"PRAGMA table_info({table})").fetchall() if r[1] not in cols]
+    defs = []
+    for _cid, name, ctype, notnull, dflt, pk in keep:
+        d = f"{name} {ctype}"
+        if pk:
+            d += " PRIMARY KEY"
+        if notnull:
+            d += " NOT NULL"
+        if dflt is not None:
+            d += f" DEFAULT {dflt}"
+        defs.append(d)
+    names = ", ".join(r[1] for r in keep)
+    conn.execute(f"ALTER TABLE {table} RENAME TO _mig_old")
+    conn.execute(f"CREATE TABLE {table} ({', '.join(defs)})")
+    conn.execute(f"INSERT INTO {table} ({names}) SELECT {names} FROM _mig_old")
+    conn.execute("DROP TABLE _mig_old")
+
+
 def test_fresh_db_is_current_version_with_new_columns(tmp_path):
     db = tmp_path / "s.db"
     SyncStore(str(db))
@@ -43,10 +66,8 @@ def test_v29_to_v30_migration_adds_columns(tmp_path):
     conn.execute(
         "INSERT INTO report_agent (id, type, enabled, title) VALUES ('keep', 'report', 1, '旧行')"
     )
-    for c in _RA_NEW:
-        conn.execute(f"ALTER TABLE report_agent DROP COLUMN {c}")
-    for c in _AJ_NEW:
-        conn.execute(f"ALTER TABLE async_jobs DROP COLUMN {c}")
+    _drop_columns_portable(conn, "report_agent", _RA_NEW)
+    _drop_columns_portable(conn, "async_jobs", _AJ_NEW)
     conn.execute("UPDATE sync_state SET value='29' WHERE key='db_version'")
     conn.commit()
     conn.close()
