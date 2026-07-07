@@ -58,6 +58,10 @@ import { registerServicesHandlers } from './handlers/services'
 // 是给 Settings UI read/write 的另一条路径, 跟启动 env 注入是两件事. 详见
 // lib/dotenv-bootstrap.ts header. 已 export 的 process.env 优先, 不被覆盖.
 import { bootstrapDotenv } from './lib/dotenv-bootstrap'
+// 已装用户兜底: .env 存在但缺 MAILAGENT_CLI_API_KEY (老 onboarding 没生成) →
+// 补生成一次, 否则所有 CLI 写命令被 require_auth 以 E_AUTH_FAILED 拒绝。幂等;
+// .env 不存在 (全新用户) 不动, 由 onboarding 写完核心配置后补。见 lib/cli-api-key。
+import { ensureCliApiKey } from './lib/cli-api-key'
 // 打包首次运行 seed 出厂 prompt 模板 → userData/prompts (后端 LLM 默认读它)。见 lib/seed-prompts。
 import { seedPromptTemplatesIfNeeded } from './lib/seed-prompts'
 // Sprint 19 island F6 — mailagent:// deeplink (灵动岛 open_mail/open_notion →
@@ -65,6 +69,7 @@ import { seedPromptTemplatesIfNeeded } from './lib/seed-prompts'
 import { dispatchDeeplink, extractDeeplinkFromArgv, setDeeplinkSink } from './deeplink'
 
 bootstrapDotenv()
+ensureCliApiKey()
 
 // F6 — 注册 mailagent:// custom protocol scheme. dev 模式 (electron-vite 跑
 // electron 二进制) 需带 execPath + script path, 否则系统注册的是 Electron.app 而非

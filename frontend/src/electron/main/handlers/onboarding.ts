@@ -54,6 +54,7 @@ import {
 } from '../backend_lifecycle'
 import { callCli, getMailagentBin } from '../cli_runner'
 import { getDb, resolveDataRoot, resolveDbPath } from '../db'
+import { ensureCliApiKey } from '../lib/cli-api-key'
 import { MANAGED_ENV_KEY_SET } from '../lib/env-keys'
 import { resolveEnvPath } from '../lib/env-path'
 import { MAIN_WINDOW } from '../lib/window-config'
@@ -805,6 +806,11 @@ async function handleComplete(
       return { ok: false, error: res.error ?? { code: 'E_WRITE', message: '.env 写入失败' } }
     }
 
+    // 补 CLI 写鉴权 key (向导不收集它; 缺失则所有 CLI 写命令 E_AUTH_FAILED)。
+    // 必须在起后端前写入 —— Python require_auth 的 expected 读同一份 .env。
+    // best-effort: 失败不阻断 onboarding, boot 兜底下次启动会重试。
+    ensureCliApiKey()
+
     // 起后端 + 等就绪 (打包模式; dev 走 pm2 不接管, 视为就绪)。
     registerBackendQuitHook()
     const mgr = getBackendLifecycle()
@@ -869,6 +875,10 @@ async function commitConfig(raw: unknown): Promise<OnboardingResult> {
     if (!res.ok) {
       return { ok: false, error: res.error ?? { code: 'E_WRITE', message: '.env 写入失败' } }
     }
+
+    // 补 CLI 写鉴权 key (向导不收集它; 缺失则 report 开关等 CLI 写命令 E_AUTH_FAILED)。
+    // 起后端前写入, Python require_auth 的 expected 读同一份 .env。best-effort。
+    ensureCliApiKey()
 
     // 起后端 + 等就绪 (打包模式; dev 走 pm2 不接管, 视为就绪)。
     registerBackendQuitHook()
@@ -1105,6 +1115,9 @@ async function legacyInherit(raw: unknown): Promise<LegacyInheritResult> {
         return { ok: false, error: wr.error ?? { code: 'E_WRITE', message: '.env 写入失败' } }
       }
     }
+
+    // 补 CLI 写鉴权 key (老 .env 若带 key 则只同步 process.env; 没带则生成)。
+    ensureCliApiKey()
 
     // 不起后端 (留给 legacyMigrate)。
     return { ok: true, backupPath }
