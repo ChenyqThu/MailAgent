@@ -1,0 +1,75 @@
+// Shared helpers for the Settings "Custom AI" section subfiles.
+//
+// resolveApiBaseUrl() + the /chat/config flag fetchers are used across multiple
+// custom-ai/* subfiles; they live here so each section file imports one source.
+
+// Resolve serve-api base URL for direct fetch calls (mirrors useLlmModels.ts resolveApiBaseUrl;
+// intentionally duplicated to avoid circular imports with the chat runtime).
+export function resolveApiBaseUrl(): string {
+  const env = (import.meta as unknown as { env?: Record<string, string | undefined> }).env
+  if (env?.VITE_BUILD_TARGET === 'web') {
+    return env.VITE_API_BASE_URL ?? '/api'
+  }
+  let port = 8200
+  try {
+    const raw = new URLSearchParams(window.location.search).get('apiPort')
+    const n = raw != null ? Number.parseInt(raw, 10) : NaN
+    if (Number.isFinite(n) && n > 0) port = n
+  } catch {
+    /* non-renderer test environment */
+  }
+  return `http://127.0.0.1:${port}/api`
+}
+
+/** Fetch userMdCompileEnabled from serve-api /chat/config (runtime flag, not vite define).
+ *  Returns false when not configured or the endpoint is unreachable. */
+export async function fetchUserMdCompileEnabled(): Promise<boolean> {
+  try {
+    const resp = await fetch(`${resolveApiBaseUrl()}/chat/config`, { credentials: 'include' })
+    if (!resp.ok) return false
+    const body = (await resp.json()) as { data?: { userMdCompileEnabled?: unknown } }
+    return body?.data?.userMdCompileEnabled === true
+  } catch {
+    return false
+  }
+}
+
+/** Fetch standingDocsEditorEnabled from serve-api /chat/config.
+ *  Returns true when not configured or endpoint is unreachable (default-ON flag). */
+export async function fetchStandingDocsEditorEnabled(): Promise<boolean> {
+  try {
+    const resp = await fetch(`${resolveApiBaseUrl()}/chat/config`, { credentials: 'include' })
+    if (!resp.ok) return true // default ON: show section when config unavailable
+    const body = (await resp.json()) as { data?: { standingDocsEditorEnabled?: unknown } }
+    // Explicit false → hide. undefined/null/true → show (default ON).
+    return body?.data?.standingDocsEditorEnabled !== false
+  } catch {
+    return true
+  }
+}
+
+/** Fetch execPolicyEnabled from serve-api /chat/config. Returns false (hide) when not configured
+ *  or unreachable — this flag is default-OFF (unlike standingDocs), so absence means "not enabled". */
+export async function fetchExecPolicyEnabled(): Promise<boolean> {
+  try {
+    const resp = await fetch(`${resolveApiBaseUrl()}/chat/config`, { credentials: 'include' })
+    if (!resp.ok) return false
+    const body = (await resp.json()) as { data?: { execPolicyEnabled?: unknown } }
+    return body?.data?.execPolicyEnabled === true
+  } catch {
+    return false
+  }
+}
+
+/** Fetch skillInstallEnabled from serve-api /chat/config. Returns false (hide) when not
+ *  configured or unreachable — default-OFF flag (same posture as fetchExecPolicyEnabled). */
+export async function fetchSkillInstallEnabled(): Promise<boolean> {
+  try {
+    const resp = await fetch(`${resolveApiBaseUrl()}/chat/config`, { credentials: 'include' })
+    if (!resp.ok) return false
+    const body = (await resp.json()) as { data?: { skillInstallEnabled?: unknown } }
+    return body?.data?.skillInstallEnabled === true
+  } catch {
+    return false
+  }
+}
