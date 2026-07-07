@@ -5,6 +5,7 @@
 // section 与其后续 email_item / callout / kos_context / action_suggestion 收拢进
 // 一个 <section> 容器（console+list → 收件箱式行组）。
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 
 import type {
   ReportBlock,
@@ -626,6 +627,7 @@ function SourceLink({
   onClick: (e: React.MouseEvent) => void
   label?: boolean
 }): React.ReactElement {
+  const { t } = useTranslation()
   return (
     <button
       type="button"
@@ -651,7 +653,7 @@ function SourceLink({
       }}
     >
       <ReportIcon name="external" size={11} />
-      {label && <span>溯源</span>}
+      {label && <span>{t('agents.block.source')}</span>}
     </button>
   )
 }
@@ -844,6 +846,7 @@ function ActionSuggestionBlock({
 }: {
   block: ReportActionSuggestionBlock
 }): React.ReactElement {
+  const { t } = useTranslation()
   return (
     <div
       style={{
@@ -879,7 +882,7 @@ function ActionSuggestionBlock({
           background: 'rgb(var(--ink-fg) / 0.04)'
         }}
       >
-        v1 暂不可执行
+        {t('agents.block.notExecutable')}
       </span>
     </div>
   )
@@ -981,6 +984,7 @@ function DividerBlock(): React.ReactElement {
 }
 
 function UnknownBlock({ block }: { block: ReportBlock }): React.ReactElement {
+  const { t } = useTranslation()
   const b = block as { type: string; text?: string; title?: string }
   return (
     <div
@@ -999,7 +1003,7 @@ function UnknownBlock({ block }: { block: ReportBlock }): React.ReactElement {
           marginBottom: 4
         }}
       >
-        未知块 · {b.type}
+        {t('agents.block.unknown', { type: b.type })}
       </div>
       {b.text && <div style={{ fontSize: 13, color: 'rgb(var(--ink-fg-1))' }}>{b.text}</div>}
       {b.title && <div style={{ fontSize: 13, color: 'rgb(var(--ink-fg-1))' }}>{b.title}</div>}
@@ -1053,6 +1057,7 @@ function SectionGroup({
   expanded: boolean
   onToggle: () => void
 }): React.ReactElement {
+  const { t } = useTranslation()
   const collapsed = !expanded
   const groupedList = ctx.rowStyle === 'list' && ctx.layout === 'console'
   const emails = items.filter((it) => it.type === 'email_item') as ReportEmailItemBlock[]
@@ -1079,7 +1084,8 @@ function SectionGroup({
               flexShrink: 0
             }}
           >
-            {total} 封{flagged > 0 ? ` · ${flagged} 重点` : ''}
+            {t('agents.block.emailCount', { total })}
+            {flagged > 0 ? ` · ${t('agents.block.flaggedCount', { flagged })}` : ''}
           </span>
           <ReportIcon
             name={collapsed ? 'chevrondown' : 'chevronup'}

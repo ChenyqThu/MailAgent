@@ -805,6 +805,178 @@
       "updatedDone": "已修改 {id}。",
       "failed": "操作失败，请重试或让助手重新发起。"
     },
+    "approvalShell": {
+      "phase": {
+        "pending": "待确认",
+        "authorized": "执行中",
+        "done": "已完成",
+        "rejected": "已取消",
+        "expired": "已过期",
+        "error": "失败"
+      },
+      "approve": "允许",
+      "cancel": "取消",
+      "actionFailed": "操作失败：{error}",
+      "rejectedBanner": "已取消，未执行该操作。",
+      "expiredBanner": "审批已过期，请让助手重新发起。"
+    },
+    "sendApprovalCard": {
+      "title": "发送邮件",
+      "to": "收件人",
+      "cc": "抄送",
+      "bcc": "密送",
+      "subject": "主题",
+      "body": "正文",
+      "bodyAria": "正文",
+      "toPlaceholder": "多个收件人用逗号分隔",
+      "optionalPlaceholder": "可留空",
+      "noRecipients": "请至少填写一个收件人",
+      "approve": "允许发送",
+      "sent": "邮件已发送。",
+      "sentArchived": "邮件已发送（已归入已发送）。",
+      "sentTo": "收件人：{to}",
+      "error": "发送失败，邮件未发出。请重试或让助手重新发起。",
+      "summary": "发送给 {to}：{subject}",
+      "noSubject": "（无主题）",
+      "externalWarn": "外部 / 个人邮箱收件人：{recipients} —— 请确认。",
+      "sensitiveWarn": "正文含敏感词：{terms} —— 发送前请再核对。",
+      "expired": "审批已过期，请让助手重新发起",
+      "countdown": "审批有效期 {time}"
+    },
+    "execApprovalCard": {
+      "title": {
+        "runCommand": "运行本机命令",
+        "fileRead": "读取本机文件",
+        "fileWrite": "写入本机文件",
+        "fallback": "本机操作确认"
+      },
+      "prompt": {
+        "runCommand": "将在本机运行以下命令（批准后无沙箱，以你的权限执行）：",
+        "fileRead": "将读取以下本机文件：",
+        "fileWrite": "将写入以下本机文件：",
+        "fallback": "将执行本机操作："
+      },
+      "allowHint": {
+        "runCommand": "总是允许运行这条完全一致的命令（免审批）",
+        "fileRead": "总是允许读取该文件所在目录下的文件（免审批）",
+        "fileWrite": "总是允许写入该文件所在目录下的文件（免审批）",
+        "fallback": "总是允许该操作（免审批）"
+      },
+      "allowWarn": "仅对你信任的操作勾选：本机执行没有沙箱。",
+      "approve": "允许并运行",
+      "emptyArgv": "(空)",
+      "writeMode": "写入模式：{mode}",
+      "exitCode": "退出码 {code}",
+      "bytesWritten": "已写入 {bytes} 字节",
+      "error": "操作失败，请重试或让助手重新发起。"
+    },
+    "systemDocApprovalCard": {
+      "doc": {
+        "soul": "SOUL（身份）",
+        "agent": "AGENT（操作笔记）",
+        "rules": "RULES（硬约束）",
+        "user": "USER（用户偏好）"
+      },
+      "title": "改写 Standing Context 文档",
+      "titleHighRisk": "⚠️ 改写身份 / 规则文档",
+      "lead": "Agent 提议改写 {label} 文档",
+      "highRiskWarn": "高危：这会改写你的身份 / 硬约束。安全底线（PRODUCT_SAFETY_FLOOR）结构上不可被弱化，越权措辞会被服务端拒绝。请逐字确认下方内容后再批准。",
+      "lengthNote": "{count} 字符（批准后按此写入；如需改动让 agent 重新提议或到 Settings 编辑）",
+      "done": "已更新 {label} 文档",
+      "error": "更新被拒绝或失败（rules 内容可能触发安全校验，或文档过大）。",
+      "summary": "改写 {label} 文档"
+    },
+    "skillInstallCard": {
+      "title": "下载 Skill 包（第一步）",
+      "unspecifiedSource": "(未指定来源)",
+      "fromUrl": "将从以下地址下载 skill 包：",
+      "fromLocal": "将导入以下本地 skill 包：",
+      "quarantineNote1": "本步只把包下载到隔离区做校验（hash / 清单 / 声明的密钥），",
+      "quarantineNoteEmphasis": "不会安装",
+      "quarantineNote2": "。校验结果会在下一步的确认卡上展示，由你再次确认后才真正安装。",
+      "approve": "允许下载",
+      "quarantinedWithFiles": "已入隔离区 {id}（{count} 个文件），等待第二步确认安装。",
+      "quarantined": "已入隔离区 {id}，等待第二步确认安装。",
+      "verified": "已完成下载校验，等待第二步确认安装。",
+      "error": "下载/校验失败（来源不可达、包非法或超限），未产生任何安装。"
+    },
+    "skillInstallConfirmCard": {
+      "title": "确认安装 Skill（第二步）",
+      "factsError": "无法取得隔离区事实（{detail}）——不应在无法审阅包内容时安装。",
+      "missingQid": "缺少隔离区标识",
+      "reject": "拒绝安装",
+      "verifying": "正在向服务端核验隔离区内容（重算 hash）…",
+      "lead": "将安装以下 skill（内容为服务端对隔离区实时重算的事实）：",
+      "unnamed": "(未命名)",
+      "packageHash": "sha256 {hash}… · {count} 个文件",
+      "moreFiles": "  … 等 {count} 个",
+      "secretsDeclared": "声明需要的密钥（安装后在设置里填写，值不会给模型）：",
+      "postInstallNote": "安装后其脚本仍需逐次经你批准才能执行（首次执行必弹确认）。",
+      "approve": "确认安装",
+      "installed": "已安装 {name}。",
+      "installExecuted": "安装已执行（{name}）。",
+      "error": "安装失败——常见原因是隔离区内容在预览后发生变化（hash 不符即拒装）。可让助手重新下载后再试。"
+    },
+    "skillUninstallCard": {
+      "title": "卸载 Skill",
+      "lead": "将完全卸载以下 skill（不可逆）：",
+      "unspecified": "(未指定)",
+      "scope": "删除范围：注册行 + 落盘目录 + 已存储的密钥",
+      "secretsUnavailable": "（密钥清单不可用，卸载仍会一并删除）",
+      "secretsLoading": "（正在取密钥清单…）",
+      "secretsNone": "（该 skill 未存储密钥）",
+      "secretsList": "（{names}）",
+      "approve": "确认卸载",
+      "removedWithSecrets": "已卸载 {name}（含 {count} 个密钥）。",
+      "removed": "已卸载 {name}。",
+      "notExist": "{name} 本就不存在（无需卸载）。",
+      "error": "卸载失败，请重试或到设置里手动移除。"
+    },
+    "skillToggleCard": {
+      "titleEnable": "启用技能",
+      "titleDisable": "停用技能",
+      "pendingEnable": "启用技能「{name}」（挂载其工具）",
+      "pendingDisable": "停用技能「{name}」（卸载其工具）",
+      "doneEnable": "已启用「{name}」",
+      "doneDisable": "已停用「{name}」",
+      "summaryEnable": "启用技能「{name}」",
+      "summaryDisable": "停用技能「{name}」",
+      "error": "操作失败，请重试。"
+    },
+    "simpleApprovalCard": {
+      "webFetch": {
+        "title": "联网抓取网页",
+        "label": "将联网抓取以下网页（需你批准）："
+      },
+      "webSearch": {
+        "title": "联网搜索",
+        "label": "将用以下关键词联网搜索（需你批准）："
+      },
+      "customAgentDelete": {
+        "title": "删除 Custom Agent",
+        "label": "将删除以下 Custom Agent（删除后不可恢复，需你批准）："
+      },
+      "customAgentRunNow": {
+        "title": "立即运行 Custom Agent",
+        "label": "将立即运行以下 Custom Agent（需你批准）："
+      },
+      "fallbackTitle": "操作确认",
+      "fallbackLabel": "将执行以下操作，需你批准：",
+      "noArgs": "(无参数)",
+      "error": "操作失败，请重试或让助手重新发起。"
+    },
+    "approvalActionCard": {
+      "title": {
+        "emailFlag": "更新邮件标记",
+        "emailArchive": "归档邮件",
+        "emailPin": "置顶/取消置顶",
+        "fallback": "写操作确认"
+      },
+      "summaryFallback": "执行写操作",
+      "emailRef": "邮件 #{id}",
+      "doneWithRef": "{summary}（邮件 #{id}）",
+      "error": "操作失败，请重试或让助手重新发起。"
+    },
     "attachment": {
       "add": "添加附件",
       "remove": "移除附件",
@@ -1369,7 +1541,115 @@
       "updatedBy": "修改者",
       "loading": "加载中…",
       "loadError": "加载失败",
-      "empty": "（空）"
+      "empty": "（空）",
+      "docLabels": {
+        "soul": "SOUL（身份）",
+        "agent": "AGENT（操作笔记）",
+        "rules": "RULES（硬约束）",
+        "user": "USER（用户偏好）",
+        "memory": "MEMORY（自动记忆）"
+      }
+    },
+    "execPolicy": {
+      "title": "自动化策略",
+      "helper": "助手运行命令 / 读写文件默认每次都需你审批。这里是你经「总是允许」为精确操作建立的白名单：命中的操作免审批直接执行，其余仍每次询问。放宽某条规则请删除后重新创建（不支持原地编辑，避免悄悄变宽）。",
+      "loadError": "加载策略失败。",
+      "loading": "加载中…",
+      "empty": "还没有自动化策略。在助手请求运行命令 / 读写文件时，勾选「总是允许」即可为该精确操作创建一条白名单，命中后免审批直接执行。",
+      "dangerous": "高危 · 非沙箱",
+      "hitCount": "命中 {count} 次",
+      "lastUsed": " · 最近 {time}",
+      "deleted": "已删除该策略",
+      "toggleAria": "启用/停用该策略",
+      "deleteAria": "删除该策略",
+      "capability": {
+        "exec": "运行命令",
+        "file_read": "读文件",
+        "file_write": "写文件",
+        "web": "联网"
+      },
+      "matcher": {
+        "any": "<任意>",
+        "dir": "（目录 {scope}）"
+      }
+    },
+    "skillPacks": {
+      "title": "Skill 安装",
+      "helper": "从 URL 或本地路径安装第三方 skill 包。两段式：先获取预览、人工审阅包内容与声明，再确认安装。已安装的 skill 会出现在上方技能列表（启用/停用），密钥与配置在下方逐项管理。",
+      "sourceType": {
+        "skill_pack": "skill 包",
+        "local_folder": "本地目录"
+      },
+      "installedNone": "还没有安装的 skill 包。",
+      "installedCount": "已安装 {count} 个 skill 包。",
+      "installButton": "安装 skill",
+      "dialog": {
+        "title": "安装 Skill",
+        "desc": "两段式安装：先获取包预览，人工审阅文件清单、密钥声明与 SKILL.md 节选，确认无误后再安装。第三方内容未经验签，请谨慎审阅。",
+        "staleError": "包内容在预览后被改动，已拒绝安装。请重新获取预览并再次审阅。",
+        "sourceLocal": "本地路径",
+        "localPlaceholder": "/path/to/skill.zip 或 skill 目录",
+        "fetching": "获取中…",
+        "fetch": "获取预览",
+        "fetchFailed": "获取预览失败",
+        "unnamed": "（未命名）",
+        "source": "来源：",
+        "packHash": "包 hash：",
+        "entryHint": "入口提示：",
+        "files": "文件（{count} 个）",
+        "declaredSecrets": "声明密钥",
+        "none": "无",
+        "skillMdExcerpt": "SKILL.md 节选（原文，未渲染）",
+        "empty": "（空）",
+        "back": "返回",
+        "confirming": "安装中…",
+        "confirm": "确认安装",
+        "installed": "已安装 {name}",
+        "installedSecretsHint": "该 skill 声明了 {count} 个密钥（{names}），请在其「配置」里设置。",
+        "installFailed": "安装失败"
+      },
+      "config": {
+        "jsonParseError": "JSON 解析失败：{message}",
+        "mustBeObject": "必须是 JSON 对象（'{ … }'）",
+        "saved": "已保存配置",
+        "saveFailed": "保存配置失败",
+        "saving": "保存中…",
+        "save": "保存配置",
+        "title": "config.json（非敏感配置，明文，与脚本共读）",
+        "loading": "加载中…"
+      },
+      "secret": {
+        "set": "已设置 {time}",
+        "replacePlaceholder": "输入新值以替换",
+        "save": "保存",
+        "deleteAria": "删除密钥 {name}",
+        "updated": "已更新密钥 {name}",
+        "updateFailed": "更新密钥失败",
+        "deleted": "已删除密钥 {name}",
+        "deleteFailed": "删除密钥失败",
+        "added": "已设置密钥 {name}",
+        "addFailed": "设置密钥失败",
+        "namePlaceholder": "密钥名（如 MY_API_KEY）",
+        "valuePlaceholder": "值",
+        "add": "添加",
+        "sectionTitle": "密钥",
+        "sectionDesc": "密钥只写不读：保存后不回显值，仅显示名称与更新时间。值加密存储，脚本执行时注入环境变量。",
+        "loading": "加载中…",
+        "empty": "尚无已存密钥。"
+      },
+      "pack": {
+        "configAria": "配置 {name}",
+        "uninstallAria": "卸载 {name}",
+        "uninstallWarning": "将删除该 skill 的落盘目录、注册行，并清除其全部已存密钥。此操作不可撤销。",
+        "loadingSecrets": "正在载入密钥清单…",
+        "noSecrets": "（无已存密钥）",
+        "willDeleteSecrets": "将删除密钥：",
+        "uninstalling": "卸载中…",
+        "confirmUninstall": "确认卸载",
+        "cancel": "取消",
+        "uninstalled": "已卸载 {name}",
+        "uninstallFailed": "卸载失败"
+      }
     },
     "themeMode": "主题模式",
     "themeModeHint": "Light / 跟随系统 / Dark",
@@ -2030,7 +2310,8 @@
       },
       "audience": {
         "label": "Application Audience Tag",
-        "helper": "Cloudflare Zero Trust → Access → 你的应用 → Overview 的 Audience (AUD) 标签"
+        "helper": "Cloudflare Zero Trust → Access → 你的应用 → Overview 的 Audience (AUD) 标签",
+        "placeholder": "e.g. 6f1d…（必填）"
       },
       "teamDomain": {
         "label": "团队域名",
@@ -2423,7 +2704,28 @@
       "empty": "这段时间没有新邮件",
       "emptyHint": "所选时间窗口内没有新邮件，无需生成报告。",
       "generatedAt": "生成于",
-      "backToList": "返回列表"
+      "backToList": "返回列表",
+      "weekday": {
+        "sun": "周日",
+        "mon": "周一",
+        "tue": "周二",
+        "wed": "周三",
+        "thu": "周四",
+        "fri": "周五",
+        "sat": "周六"
+      },
+      "count": {
+        "total": "{count} 封",
+        "urgent": "{count} 紧急",
+        "replied": "{count} 已回复"
+      }
+    },
+    "block": {
+      "source": "溯源",
+      "notExecutable": "v1 暂不可执行",
+      "unknown": "未知块 · {type}",
+      "emailCount": "{total} 封",
+      "flaggedCount": "{flagged} 重点"
     },
     "card": {
       "enabled": "已启用",
@@ -2486,6 +2788,12 @@
       "timezoneLocal": "（本地时区）",
       "bodyPriorities": "带正文的优先级",
       "bodyPrioritiesHint": "勾选的优先级邮件带完整正文，其余只摘要（不含附件）",
+      "priority": {
+        "critical": "🔴 紧急",
+        "important": "🟡 重要",
+        "normal": "🟢 一般",
+        "low": "⚪ 低"
+      },
       "aggregation": "数据来源",
       "aggWeekly": "周报自动综合过去 7 天已生成的日报；缺失的天会标注。",
       "aggMonthly": "月报自动综合上一个自然月已生成的日报；缺失的天会标注。",

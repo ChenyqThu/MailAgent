@@ -35,12 +35,12 @@ const MEMORY_DOC = 'memory'
 // Fallback budget if the backend omits budgetChars (config.memory_md_budget_chars default).
 const MEMORY_DEFAULT_BUDGET = 5000
 
-const DOC_LABELS: Record<string, string> = {
-  soul: 'SOUL（身份）',
-  agent: 'AGENT（操作笔记）',
-  rules: 'RULES（硬约束）',
-  user: 'USER（用户偏好）',
-  memory: 'MEMORY（自动记忆）'
+const DOC_LABEL_KEYS: Record<string, string> = {
+  soul: 'settings.standingDocs.docLabels.soul',
+  agent: 'settings.standingDocs.docLabels.agent',
+  rules: 'settings.standingDocs.docLabels.rules',
+  user: 'settings.standingDocs.docLabels.user',
+  memory: 'settings.standingDocs.docLabels.memory'
 }
 
 interface DocEntryProps {
@@ -63,7 +63,8 @@ function DocEntry({ doc, onRefetch }: DocEntryProps): React.ReactElement {
 
   const isHighRisk = HIGH_RISK_DOCS.has(doc.docName.toLowerCase())
   const isMemory = doc.docName.toLowerCase() === MEMORY_DOC
-  const label = DOC_LABELS[doc.docName.toLowerCase()] ?? doc.docName.toUpperCase()
+  const docKey = doc.docName.toLowerCase()
+  const label = docKey in DOC_LABEL_KEYS ? t(DOC_LABEL_KEYS[docKey]) : doc.docName.toUpperCase()
 
   // memory.md — Hermes 式有界记忆：恒注入每轮 prompt，有硬字符预算。编辑时按 draft 实时计数，
   // 否则按已存内容；超预算时后端拒存 → 前端也 disable 保存并红色提示（显著显示长度/占比）。

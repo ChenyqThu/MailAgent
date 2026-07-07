@@ -8,6 +8,7 @@
 // OFF) — flag-off renders nothing and the builtin SkillsSection is unchanged.
 
 import * as React from 'react'
+import { useTranslation } from 'react-i18next'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Download, KeyRound, Loader2, Package, Settings2, Trash2 } from 'lucide-react'
 
@@ -32,9 +33,9 @@ import { fetchSkillInstallEnabled } from './shared'
  *  local dir import → 'local_folder'); builtin / document / mcp rows are NOT packs. */
 const PACK_SOURCE_TYPES = new Set(['skill_pack', 'local_folder'])
 
-const PACK_SOURCE_LABELS: Record<string, string> = {
-  skill_pack: 'skill 包',
-  local_folder: '本地目录'
+const PACK_SOURCE_LABEL_KEYS: Record<string, string> = {
+  skill_pack: 'settings.skillPacks.sourceType.skill_pack',
+  local_folder: 'settings.skillPacks.sourceType.local_folder'
 }
 
 /** Structured ApiError → user-facing one-liner（code + message + hint）。 */
@@ -69,6 +70,7 @@ function SkillInstallDialog({
   onOpenChange: (open: boolean) => void
   onInstalled: () => void
 }): React.ReactElement {
+  const { t } = useTranslation()
   const api = useMailApi()
 
   const [source, setSource] = React.useState<'url' | 'local'>('url')
@@ -103,7 +105,7 @@ function SkillInstallDialog({
       )
       setPreview(p)
     } catch (err) {
-      toastError('获取预览失败', apiErrText(err))
+      toastError(t('settings.skillPacks.dialog.fetchFailed'), apiErrText(err))
     } finally {
       setFetching(false)
     }
@@ -121,9 +123,12 @@ function SkillInstallDialog({
         expectedFiles: preview.files
       })
       toastSuccess(
-        `已安装 ${result.name}`,
+        t('settings.skillPacks.dialog.installed', { name: result.name }),
         preview.secretNames.length > 0
-          ? `该 skill 声明了 ${preview.secretNames.length} 个密钥（${preview.secretNames.join('、')}），请在其「配置」里设置。`
+          ? t('settings.skillPacks.dialog.installedSecretsHint', {
+              count: preview.secretNames.length,
+              names: preview.secretNames.join('、')
+            })
           : undefined
       )
       onInstalled()
@@ -134,7 +139,7 @@ function SkillInstallDialog({
         setStaleError(true)
         setPreview(null)
       } else {
-        toastError('安装失败', apiErrText(err))
+        toastError(t('settings.skillPacks.dialog.installFailed'), apiErrText(err))
       }
     } finally {
       setConfirming(false)
@@ -147,16 +152,13 @@ function SkillInstallDialog({
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="max-w-xl max-h-[85vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>安装 Skill</DialogTitle>
-          <DialogDescription>
-            两段式安装：先获取包预览，人工审阅文件清单、密钥声明与 SKILL.md
-            节选，确认无误后再安装。第三方内容未经验签，请谨慎审阅。
-          </DialogDescription>
+          <DialogTitle>{t('settings.skillPacks.dialog.title')}</DialogTitle>
+          <DialogDescription>{t('settings.skillPacks.dialog.desc')}</DialogDescription>
         </DialogHeader>
 
         {staleError && (
           <div className="rounded-md border border-fail/30 bg-fail/10 px-2.5 py-1.5 text-aux text-fail">
-            包内容在预览后被改动，已拒绝安装。请重新获取预览并再次审阅。
+            {t('settings.skillPacks.dialog.staleError')}
           </div>
         )}
 
@@ -166,7 +168,7 @@ function SkillInstallDialog({
               {(
                 [
                   ['url', 'URL'],
-                  ['local', '本地路径']
+                  ['local', t('settings.skillPacks.dialog.sourceLocal')]
                 ] as const
               ).map(([key, label]) => (
                 <button
@@ -189,7 +191,7 @@ function SkillInstallDialog({
               placeholder={
                 source === 'url'
                   ? 'https://example.com/skill.zip'
-                  : '/path/to/skill.zip 或 skill 目录'
+                  : t('settings.skillPacks.dialog.localPlaceholder')
               }
               spellCheck={false}
             />
@@ -201,7 +203,9 @@ function SkillInstallDialog({
                 disabled={fetching || inputValue.trim() === ''}
               >
                 {fetching ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
-                {fetching ? '获取中…' : '获取预览'}
+                {fetching
+                  ? t('settings.skillPacks.dialog.fetching')
+                  : t('settings.skillPacks.dialog.fetch')}
               </Button>
             </DialogFooter>
           </div>
@@ -211,7 +215,9 @@ function SkillInstallDialog({
               <div className="px-3 py-2 flex items-center gap-2">
                 <Package className="size-3.5 shrink-0 text-ink-fg-2" />
                 <span className="font-medium text-ink-fg">
-                  {preview.manifest.title ?? preview.manifest.name ?? '（未命名）'}
+                  {preview.manifest.title ??
+                    preview.manifest.name ??
+                    t('settings.skillPacks.dialog.unnamed')}
                 </span>
                 <span className="font-mono text-micro text-ink-fg-3">
                   {preview.manifest.name}
@@ -224,26 +230,28 @@ function SkillInstallDialog({
               ) : null}
               <div className="px-3 py-2 space-y-1 text-aux">
                 <div className="text-ink-fg-3">
-                  来源：
+                  {t('settings.skillPacks.dialog.source')}
                   <span className="font-mono break-all text-ink-fg-2">
                     {preview.sourceUri ?? '—'}
                   </span>
                 </div>
                 <div className="text-ink-fg-3">
-                  包 hash：
+                  {t('settings.skillPacks.dialog.packHash')}
                   <span className="font-mono break-all text-ink-fg-2" title={preview.packageHash}>
                     {preview.packageHash}
                   </span>
                 </div>
                 {preview.manifest.entryHint ? (
                   <div className="text-ink-fg-3">
-                    入口提示：
+                    {t('settings.skillPacks.dialog.entryHint')}
                     <span className="font-mono text-ink-fg-2">{preview.manifest.entryHint}</span>
                   </div>
                 ) : null}
               </div>
               <div className="px-3 py-2">
-                <div className="text-aux text-ink-fg-3 mb-1">文件（{fileEntries.length} 个）</div>
+                <div className="text-aux text-ink-fg-3 mb-1">
+                  {t('settings.skillPacks.dialog.files', { count: fileEntries.length })}
+                </div>
                 <div className="max-h-28 overflow-auto rounded bg-ink-bg-2 p-1.5 font-mono text-micro text-ink-fg-2 space-y-0.5">
                   {fileEntries.map(([path, sha]) => (
                     <div key={path} className="flex justify-between gap-3">
@@ -256,9 +264,13 @@ function SkillInstallDialog({
                 </div>
               </div>
               <div className="px-3 py-2">
-                <div className="text-aux text-ink-fg-3 mb-1">声明密钥</div>
+                <div className="text-aux text-ink-fg-3 mb-1">
+                  {t('settings.skillPacks.dialog.declaredSecrets')}
+                </div>
                 {preview.secretNames.length === 0 ? (
-                  <span className="text-aux text-ink-fg-3 italic">无</span>
+                  <span className="text-aux text-ink-fg-3 italic">
+                    {t('settings.skillPacks.dialog.none')}
+                  </span>
                 ) : (
                   <div className="flex flex-wrap gap-1.5">
                     {preview.secretNames.map((n) => (
@@ -274,14 +286,18 @@ function SkillInstallDialog({
                 )}
               </div>
               <div className="px-3 py-2">
-                <div className="text-aux text-ink-fg-3 mb-1">SKILL.md 节选（原文，未渲染）</div>
+                <div className="text-aux text-ink-fg-3 mb-1">
+                  {t('settings.skillPacks.dialog.skillMdExcerpt')}
+                </div>
                 {/* 第三方 untrusted 文本：纯文本 <pre> 展示，绝不渲染 markdown/HTML。
                     节选可能含 CJK → text-aux（no-cjk-in-mono-size 铁律）。 */}
                 <pre className="max-h-40 overflow-auto rounded bg-ink-bg-2 p-2 font-mono text-aux text-ink-fg-2 whitespace-pre-wrap break-all leading-snug">
                   {preview.skillMdExcerpt.trim() !== '' ? (
                     preview.skillMdExcerpt
                   ) : (
-                    <span className="italic text-ink-fg-3">（空）</span>
+                    <span className="italic text-ink-fg-3">
+                      {t('settings.skillPacks.dialog.empty')}
+                    </span>
                   )}
                 </pre>
               </div>
@@ -293,7 +309,7 @@ function SkillInstallDialog({
                 onClick={() => setPreview(null)}
                 disabled={confirming}
               >
-                返回
+                {t('settings.skillPacks.dialog.back')}
               </Button>
               <Button
                 size="sm"
@@ -302,7 +318,9 @@ function SkillInstallDialog({
                 disabled={confirming}
               >
                 {confirming ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
-                {confirming ? '安装中…' : '确认安装'}
+                {confirming
+                  ? t('settings.skillPacks.dialog.confirming')
+                  : t('settings.skillPacks.dialog.confirm')}
               </Button>
             </DialogFooter>
           </div>
@@ -322,6 +340,7 @@ function SkillConfigEditor({
   initial: string
   onSaved: () => void
 }): React.ReactElement {
+  const { t } = useTranslation()
   const api = useMailApi()
   const [draft, setDraft] = React.useState(initial)
   const [jsonError, setJsonError] = React.useState<string | null>(null)
@@ -332,21 +351,23 @@ function SkillConfigEditor({
     try {
       parsed = JSON.parse(draft)
     } catch (err) {
-      setJsonError(`JSON 解析失败：${(err as Error).message}`)
+      setJsonError(
+        t('settings.skillPacks.config.jsonParseError', { message: (err as Error).message })
+      )
       return
     }
     if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      setJsonError('必须是 JSON 对象（{ … }）')
+      setJsonError(t('settings.skillPacks.config.mustBeObject'))
       return
     }
     setJsonError(null)
     setSaving(true)
     try {
       await api.chat.putSkillConfig(name, parsed as Record<string, unknown>)
-      toastSuccess('已保存配置')
+      toastSuccess(t('settings.skillPacks.config.saved'))
       onSaved()
     } catch (err) {
-      toastError('保存配置失败', apiErrText(err))
+      toastError(t('settings.skillPacks.config.saveFailed'), apiErrText(err))
     } finally {
       setSaving(false)
     }
@@ -370,7 +391,7 @@ function SkillConfigEditor({
       {jsonError && <div className="text-aux text-fail">{jsonError}</div>}
       <Button size="sm" variant="outline" onClick={() => void handleSave()} disabled={saving}>
         {saving ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
-        {saving ? '保存中…' : '保存配置'}
+        {saving ? t('settings.skillPacks.config.saving') : t('settings.skillPacks.config.save')}
       </Button>
     </div>
   )
@@ -386,6 +407,7 @@ function SkillSecretRow({
   secret: SkillSecretMeta
   onChanged: () => void
 }): React.ReactElement {
+  const { t } = useTranslation()
   const api = useMailApi()
   const [value, setValue] = React.useState('')
   const [busy, setBusy] = React.useState(false)
@@ -396,10 +418,10 @@ function SkillSecretRow({
     try {
       await api.chat.putSkillSecret(skillName, secret.name, value)
       setValue('') // write-only：保存即清空输入，永不回显
-      toastSuccess(`已更新密钥 ${secret.name}`)
+      toastSuccess(t('settings.skillPacks.secret.updated', { name: secret.name }))
       onChanged()
     } catch (err) {
-      toastError('更新密钥失败', apiErrText(err))
+      toastError(t('settings.skillPacks.secret.updateFailed'), apiErrText(err))
     } finally {
       setBusy(false)
     }
@@ -409,10 +431,10 @@ function SkillSecretRow({
     setBusy(true)
     try {
       await api.chat.deleteSkillSecret(skillName, secret.name)
-      toastSuccess(`已删除密钥 ${secret.name}`)
+      toastSuccess(t('settings.skillPacks.secret.deleted', { name: secret.name }))
       onChanged()
     } catch (err) {
-      toastError('删除密钥失败', apiErrText(err))
+      toastError(t('settings.skillPacks.secret.deleteFailed'), apiErrText(err))
     } finally {
       setBusy(false)
     }
@@ -422,13 +444,15 @@ function SkillSecretRow({
     <div className="flex items-center gap-2">
       <div className="min-w-0 flex-1">
         <div className="font-mono text-micro text-ink-fg break-all">{secret.name}</div>
-        <div className="text-aux text-ink-fg-3">已设置 {formatIsoShort(secret.updatedAt)}</div>
+        <div className="text-aux text-ink-fg-3">
+          {t('settings.skillPacks.secret.set', { time: formatIsoShort(secret.updatedAt) })}
+        </div>
       </div>
       <Input
         type="password"
         value={value}
         onChange={(e) => setValue(e.target.value)}
-        placeholder="输入新值以替换"
+        placeholder={t('settings.skillPacks.secret.replacePlaceholder')}
         autoComplete="new-password"
         spellCheck={false}
         className="h-7 w-40 text-aux"
@@ -439,14 +463,14 @@ function SkillSecretRow({
         onClick={() => void handleReplace()}
         disabled={busy || value === ''}
       >
-        保存
+        {t('settings.skillPacks.secret.save')}
       </Button>
       <Button
         size="sm"
         variant="ghost"
         onClick={() => void handleDelete()}
         disabled={busy}
-        aria-label={`删除密钥 ${secret.name}`}
+        aria-label={t('settings.skillPacks.secret.deleteAria', { name: secret.name })}
       >
         <Trash2 className="size-3.5" />
       </Button>
@@ -462,6 +486,7 @@ function PackRow({
   skill: SkillSummary
   onChanged: () => void
 }): React.ReactElement {
+  const { t } = useTranslation()
   const api = useMailApi()
   const qc = useQueryClient()
 
@@ -498,10 +523,10 @@ function PackRow({
       await api.chat.putSkillSecret(skill.name, name, newValue)
       setNewName('')
       setNewValue('') // write-only：保存即清空
-      toastSuccess(`已设置密钥 ${name}`)
+      toastSuccess(t('settings.skillPacks.secret.added', { name }))
       refetchSecrets()
     } catch (err) {
-      toastError('设置密钥失败', apiErrText(err))
+      toastError(t('settings.skillPacks.secret.addFailed'), apiErrText(err))
     } finally {
       setAddingSecret(false)
     }
@@ -512,10 +537,10 @@ function PackRow({
     try {
       // 全清端点（行 + 目录 + 密钥），绝不走旧 DELETE /agent/skills/{name}。
       await api.chat.uninstallSkillPack(skill.name)
-      toastSuccess(`已卸载 ${skill.name}`)
+      toastSuccess(t('settings.skillPacks.pack.uninstalled', { name: skill.name }))
       onChanged()
     } catch (err) {
-      toastError('卸载失败', apiErrText(err))
+      toastError(t('settings.skillPacks.pack.uninstallFailed'), apiErrText(err))
     } finally {
       setUninstalling(false)
     }
@@ -530,13 +555,15 @@ function PackRow({
           <span className="ml-2 font-mono text-micro text-ink-fg-3">{skill.name}</span>
         </div>
         <span className="inline-flex items-center rounded-full bg-ink-4 border border-ink-border px-1.5 py-0.5 text-micro text-ink-fg-2 shrink-0">
-          {PACK_SOURCE_LABELS[skill.sourceType] ?? skill.sourceType}
+          {skill.sourceType in PACK_SOURCE_LABEL_KEYS
+            ? t(PACK_SOURCE_LABEL_KEYS[skill.sourceType])
+            : skill.sourceType}
         </span>
         <Button
           size="sm"
           variant="ghost"
           onClick={() => setPanel(panel === 'config' ? 'none' : 'config')}
-          aria-label={`配置 ${skill.name}`}
+          aria-label={t('settings.skillPacks.pack.configAria', { name: skill.name })}
         >
           <Settings2 className="size-3.5" />
         </Button>
@@ -544,7 +571,7 @@ function PackRow({
           size="sm"
           variant="ghost"
           onClick={() => setPanel(panel === 'uninstall' ? 'none' : 'uninstall')}
-          aria-label={`卸载 ${skill.name}`}
+          aria-label={t('settings.skillPacks.pack.uninstallAria', { name: skill.name })}
         >
           <Trash2 className="size-3.5 text-fail" />
         </Button>
@@ -552,20 +579,18 @@ function PackRow({
 
       {panel === 'uninstall' && (
         <div className="rounded-md border border-fail/30 bg-fail/10 px-3 py-2 space-y-2">
-          <div className="text-aux text-fail">
-            将删除该 skill 的落盘目录、注册行，并清除其全部已存密钥。此操作不可撤销。
-          </div>
+          <div className="text-aux text-fail">{t('settings.skillPacks.pack.uninstallWarning')}</div>
           <div className="text-aux text-ink-fg-2">
             {secrets == null ? (
               <span className="inline-flex items-center gap-1.5">
                 <Loader2 className="size-3 animate-spin" />
-                正在载入密钥清单…
+                {t('settings.skillPacks.pack.loadingSecrets')}
               </span>
             ) : secrets.length === 0 ? (
-              '（无已存密钥）'
+              t('settings.skillPacks.pack.noSecrets')
             ) : (
               <span className="flex flex-wrap items-center gap-1.5">
-                将删除密钥：
+                {t('settings.skillPacks.pack.willDeleteSecrets')}
                 {secrets.map((s) => (
                   <span
                     key={s.name}
@@ -587,7 +612,9 @@ function PackRow({
               disabled={uninstalling}
             >
               {uninstalling ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
-              {uninstalling ? '卸载中…' : '确认卸载'}
+              {uninstalling
+                ? t('settings.skillPacks.pack.uninstalling')
+                : t('settings.skillPacks.pack.confirmUninstall')}
             </Button>
             <Button
               size="sm"
@@ -595,7 +622,7 @@ function PackRow({
               onClick={() => setPanel('none')}
               disabled={uninstalling}
             >
-              取消
+              {t('settings.skillPacks.pack.cancel')}
             </Button>
           </div>
         </div>
@@ -606,18 +633,20 @@ function PackRow({
           <div className="space-y-2">
             <div className="flex items-center gap-1.5 text-aux text-ink-fg">
               <KeyRound className="size-3.5 text-ink-fg-2" />
-              密钥
+              {t('settings.skillPacks.secret.sectionTitle')}
             </div>
             <div className="text-aux text-ink-fg-3">
-              密钥只写不读：保存后不回显值，仅显示名称与更新时间。值加密存储，脚本执行时注入环境变量。
+              {t('settings.skillPacks.secret.sectionDesc')}
             </div>
             {secrets == null ? (
               <div className="flex items-center gap-2 text-aux text-ink-fg-2">
                 <Loader2 className="size-3 animate-spin" />
-                加载中…
+                {t('settings.skillPacks.secret.loading')}
               </div>
             ) : secrets.length === 0 ? (
-              <div className="text-aux text-ink-fg-3 italic">尚无已存密钥。</div>
+              <div className="text-aux text-ink-fg-3 italic">
+                {t('settings.skillPacks.secret.empty')}
+              </div>
             ) : (
               <div className="space-y-2">
                 {secrets.map((s) => (
@@ -634,7 +663,7 @@ function PackRow({
               <Input
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
-                placeholder="密钥名（如 MY_API_KEY）"
+                placeholder={t('settings.skillPacks.secret.namePlaceholder')}
                 spellCheck={false}
                 className="h-7 w-44 font-mono text-aux"
               />
@@ -642,7 +671,7 @@ function PackRow({
                 type="password"
                 value={newValue}
                 onChange={(e) => setNewValue(e.target.value)}
-                placeholder="值"
+                placeholder={t('settings.skillPacks.secret.valuePlaceholder')}
                 autoComplete="new-password"
                 spellCheck={false}
                 className="h-7 flex-1 text-aux"
@@ -654,17 +683,17 @@ function PackRow({
                 disabled={addingSecret || newName.trim() === '' || newValue === ''}
               >
                 {addingSecret ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null}
-                添加
+                {t('settings.skillPacks.secret.add')}
               </Button>
             </div>
           </div>
 
           <div className="space-y-1.5">
-            <div className="text-aux text-ink-fg">config.json（非敏感配置，明文，与脚本共读）</div>
+            <div className="text-aux text-ink-fg">{t('settings.skillPacks.config.title')}</div>
             {configLoading || config == null ? (
               <div className="flex items-center gap-2 text-aux text-ink-fg-2">
                 <Loader2 className="size-3 animate-spin" />
-                加载中…
+                {t('settings.skillPacks.config.loading')}
               </div>
             ) : (
               <SkillConfigEditor
@@ -683,6 +712,7 @@ function PackRow({
 /** Skill 安装（supply chain）管理区。self-gates on skillInstallEnabled（default OFF → null，
  *  字节级不渲染；builtin SkillsSection 在 flag off 时行为零变化）。 */
 export function SkillPacksSection(): React.ReactElement | null {
+  const { t } = useTranslation()
   const api = useMailApi()
   const qc = useQueryClient()
 
@@ -712,17 +742,16 @@ export function SkillPacksSection(): React.ReactElement | null {
   }
 
   return (
-    <Section
-      title="Skill 安装"
-      helper="从 URL 或本地路径安装第三方 skill 包。两段式：先获取预览、人工审阅包内容与声明，再确认安装。已安装的 skill 会出现在上方技能列表（启用/停用），密钥与配置在下方逐项管理。"
-    >
+    <Section title={t('settings.skillPacks.title')} helper={t('settings.skillPacks.helper')}>
       <div className="flex items-center justify-between px-4 py-3">
         <span className="text-aux text-ink-fg-2">
-          {packs.length === 0 ? '还没有安装的 skill 包。' : `已安装 ${packs.length} 个 skill 包。`}
+          {packs.length === 0
+            ? t('settings.skillPacks.installedNone')
+            : t('settings.skillPacks.installedCount', { count: packs.length })}
         </span>
         <Button size="sm" variant="outline" onClick={() => setInstallOpen(true)}>
           <Download className="mr-1.5 size-3.5" />
-          安装 skill
+          {t('settings.skillPacks.installButton')}
         </Button>
       </div>
       {packs.map((skill) => (

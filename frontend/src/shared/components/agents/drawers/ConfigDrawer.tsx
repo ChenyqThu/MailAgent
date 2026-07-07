@@ -23,7 +23,14 @@ const WEEKDAY_OPTIONS = [0, 1, 2, 3, 4, 5, 6]
 // day_of_month：后端 worker 用 now.day 精确匹配、无月末回退 → 限 1–28，保证每月都触发。
 const DAY_OF_MONTH_OPTIONS = Array.from({ length: 28 }, (_, i) => i + 1)
 // 顺序固定，与 src/llm_agent/schema.py PRIORITY_ENUM 对齐 —— 勾选的优先级邮件带完整正文。
+// value 是与后端 body_full_priorities 配置比较的权威值（一字不改）；显示文案走 i18n key。
 const PRIORITY_ENUM = ['🔴 紧急', '🟡 重要', '🟢 一般', '⚪ 低'] as const
+const PRIORITY_LABEL_KEYS: Record<string, string> = {
+  '🔴 紧急': 'agents.config.priority.critical',
+  '🟡 重要': 'agents.config.priority.important',
+  '🟢 一般': 'agents.config.priority.normal',
+  '⚪ 低': 'agents.config.priority.low'
+}
 
 // ─── 配置 slide-over ─────────────────────────────────────────────────────────
 // export for component tests (tests/components/AgentsConfigDrawer.test.tsx);
@@ -464,7 +471,7 @@ export function ConfigDrawer({
                               'color 120ms cubic-bezier(0.4,0,0.2,1), background-color 120ms cubic-bezier(0.4,0,0.2,1), border-color 120ms cubic-bezier(0.4,0,0.2,1)'
                           }}
                         >
-                          {p}
+                          {p in PRIORITY_LABEL_KEYS ? t(PRIORITY_LABEL_KEYS[p]) : p}
                         </button>
                       )
                     })}

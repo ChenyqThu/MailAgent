@@ -6,6 +6,7 @@
 // approval, so enabling never silently grants a write.
 
 import { CheckCircle2 } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import type { ToolCallMessagePartProps } from '@assistant-ui/react'
 
 import { buildToolA2UIPayload, type SkillToggleCardProps } from '../a2ui'
@@ -27,16 +28,27 @@ function propsOf(toolName: string, args: unknown, result: unknown): SkillToggleC
 
 export function SkillToggleCard(props: ToolCallMessagePartProps): React.JSX.Element {
   const { toolName, args, result, respondToApproval } = props
+  const { t } = useTranslation()
   const phase = deriveCardPhase(props)
   const data = propsOf(toolName, args, result)
-  const verb = data.enabled ? '启用' : '停用'
-  const effect = data.enabled ? '挂载其工具' : '卸载其工具'
+  // enabled/disabled compose differently across languages ("启用技能" vs "Enable skill"), so each
+  // state gets a full phrase rather than concatenating a verb — {name} carries the skill name.
+  const en = data.enabled
+  const name = data.skillName
 
   return (
-    <CardFrame icon={<ApprovalIcon />} title={`${verb}技能`} phase={phase}>
+    <CardFrame
+      icon={<ApprovalIcon />}
+      title={t(en ? 'chat.skillToggleCard.titleEnable' : 'chat.skillToggleCard.titleDisable')}
+      phase={phase}
+    >
       {phase === 'pending' ? (
         <>
-          <div className="text-aux text-ink-fg">{`${verb}技能「${data.skillName}」（${effect}）`}</div>
+          <div className="text-aux text-ink-fg">
+            {t(en ? 'chat.skillToggleCard.pendingEnable' : 'chat.skillToggleCard.pendingDisable', {
+              name
+            })}
+          </div>
           <ApprovalActions
             onApprove={() => respondToApproval({ approved: true })}
             onReject={() => respondToApproval({ approved: false })}
@@ -45,13 +57,21 @@ export function SkillToggleCard(props: ToolCallMessagePartProps): React.JSX.Elem
       ) : phase === 'done' ? (
         <div className="flex items-center gap-1.5 text-aux text-ink-fg">
           <CheckCircle2 size={13} strokeWidth={2} className="shrink-0 text-ok" />
-          <span>{`已${verb}「${data.skillName}」`}</span>
+          <span>
+            {t(en ? 'chat.skillToggleCard.doneEnable' : 'chat.skillToggleCard.doneDisable', {
+              name
+            })}
+          </span>
         </div>
       ) : phase === 'error' ? (
-        <div className="text-aux text-fail">操作失败，请重试。</div>
+        <div className="text-aux text-fail">{t('chat.skillToggleCard.error')}</div>
       ) : (
         <>
-          <div className="text-aux text-ink-fg">{`${verb}技能「${data.skillName}」`}</div>
+          <div className="text-aux text-ink-fg">
+            {t(en ? 'chat.skillToggleCard.summaryEnable' : 'chat.skillToggleCard.summaryDisable', {
+              name
+            })}
+          </div>
           <TerminalBanner phase={phase} />
         </>
       )}

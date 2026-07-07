@@ -11,7 +11,10 @@ import { afterEach, describe, expect, test, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import type { ToolCallMessagePartProps } from '@assistant-ui/react'
 
+import i18n from '@shared/i18n'
 import { SimpleApprovalCard } from '@shared/assistant/tools/generic/SimpleApprovalCard'
+
+await i18n.changeLanguage('zh-CN')
 
 function mockProps(over: Partial<ToolCallMessagePartProps>): ToolCallMessagePartProps {
   return {

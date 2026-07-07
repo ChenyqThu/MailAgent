@@ -8,6 +8,7 @@
 
 import { useEffect, useState } from 'react'
 import { PackageX } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import type { ToolCallMessagePartProps } from '@assistant-ui/react'
 
 import { buildToolA2UIPayload, type SkillUninstallCardProps } from '../a2ui'
@@ -51,6 +52,7 @@ function propsOf(toolName: string, args: unknown, result: unknown): SkillUninsta
 
 export function SkillUninstallCard(props: ToolCallMessagePartProps): React.JSX.Element {
   const { toolName, args, result, respondToApproval } = props
+  const { t } = useTranslation()
   const phase = deriveCardPhase(props)
   const data = propsOf(toolName, args, result)
   const [secretNames, setSecretNames] = useState<string[] | null>(null)
@@ -72,39 +74,52 @@ export function SkillUninstallCard(props: ToolCallMessagePartProps): React.JSX.E
   }, [phase, data.skillName])
 
   return (
-    <CardFrame icon={<PackageX size={13} strokeWidth={2} />} title="卸载 Skill" phase={phase}>
+    <CardFrame
+      icon={<PackageX size={13} strokeWidth={2} />}
+      title={t('chat.skillUninstallCard.title')}
+      phase={phase}
+    >
       {phase === 'pending' ? (
         <>
-          <div className="text-aux text-ink-fg-2">将完全卸载以下 skill（不可逆）：</div>
-          <div className="mt-1 font-mono text-meta text-ink-fg">{data.skillName || '(未指定)'}</div>
+          <div className="text-aux text-ink-fg-2">{t('chat.skillUninstallCard.lead')}</div>
+          <div className="mt-1 font-mono text-meta text-ink-fg">
+            {data.skillName || t('chat.skillUninstallCard.unspecified')}
+          </div>
           <div className="mt-1.5 rounded-md border border-ink-border-soft bg-ink-2/60 px-2.5 py-1.5 text-aux text-ink-fg-3">
-            删除范围：注册行 + 落盘目录 + 已存储的密钥
+            {t('chat.skillUninstallCard.scope')}
             {secretNames === null ? (
               secretsError ? (
-                <span>（密钥清单不可用，卸载仍会一并删除）</span>
+                <span>{t('chat.skillUninstallCard.secretsUnavailable')}</span>
               ) : (
-                <span>（正在取密钥清单…）</span>
+                <span>{t('chat.skillUninstallCard.secretsLoading')}</span>
               )
             ) : secretNames.length > 0 ? (
-              <span className="font-mono text-meta">{`（${secretNames.join(' / ')}）`}</span>
+              <span className="font-mono text-meta">
+                {t('chat.skillUninstallCard.secretsList', { names: secretNames.join(' / ') })}
+              </span>
             ) : (
-              <span>（该 skill 未存储密钥）</span>
+              <span>{t('chat.skillUninstallCard.secretsNone')}</span>
             )}
           </div>
           <ApprovalActions
             onApprove={() => respondToApproval({ approved: true })}
             onReject={() => respondToApproval({ approved: false })}
-            approveLabel="确认卸载"
+            approveLabel={t('chat.skillUninstallCard.approve')}
           />
         </>
       ) : phase === 'done' ? (
         <div className="text-aux text-ink-fg-2">
           {data.removed
-            ? `已卸载 ${data.skillName}${typeof data.removedSecrets === 'number' && data.removedSecrets > 0 ? `（含 ${data.removedSecrets} 个密钥）` : ''}。`
-            : `${data.skillName} 本就不存在（无需卸载）。`}
+            ? typeof data.removedSecrets === 'number' && data.removedSecrets > 0
+              ? t('chat.skillUninstallCard.removedWithSecrets', {
+                  name: data.skillName,
+                  count: data.removedSecrets
+                })
+              : t('chat.skillUninstallCard.removed', { name: data.skillName })
+            : t('chat.skillUninstallCard.notExist', { name: data.skillName })}
         </div>
       ) : phase === 'error' ? (
-        <div className="text-aux text-fail">卸载失败，请重试或到设置里手动移除。</div>
+        <div className="text-aux text-fail">{t('chat.skillUninstallCard.error')}</div>
       ) : (
         <>
           <div className="font-mono text-meta text-ink-fg">{data.skillName}</div>

@@ -8,7 +8,10 @@ import { afterEach, describe, expect, test, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { ToolCallMessagePartProps } from '@assistant-ui/react'
 
+import i18n from '@shared/i18n'
 import { NotionSyncCard } from '@shared/assistant/tools/notion/NotionSyncCard'
+
+await i18n.changeLanguage('zh-CN')
 
 function mockProps(over: Partial<ToolCallMessagePartProps>): ToolCallMessagePartProps {
   return {

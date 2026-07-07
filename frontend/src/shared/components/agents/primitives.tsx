@@ -43,7 +43,7 @@ import {
 } from 'lucide-react'
 
 import type { ReportCadence, ReportStatus, ReportTone } from '@shared/api/types'
-import { STATUS_META, toneAlpha, toneColor, CADENCE_LABEL } from './lib'
+import { STATUS_META, toneAlpha, toneColor } from './lib'
 
 // 设计稿 icon name → lucide 组件。
 const ICON_MAP: Record<string, LucideIcon> = {
@@ -187,6 +187,7 @@ export function StatusBadge({
 }
 
 export function CadencePill({ cadence }: { cadence: ReportCadence }): React.ReactElement {
+  const { t } = useTranslation()
   return (
     <span
       style={{
@@ -200,7 +201,7 @@ export function CadencePill({ cadence }: { cadence: ReportCadence }): React.Reac
         border: '1px solid rgb(var(--ink-border))'
       }}
     >
-      {CADENCE_LABEL[cadence] ?? cadence}
+      {t(`agents.cadence.${cadence}`, { defaultValue: cadence })}
     </span>
   )
 }

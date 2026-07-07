@@ -174,14 +174,14 @@ describe('StandingDocsSection — flag-on', () => {
 
     // Wait for both queries to resolve: flag then docs
     await waitFor(() => {
-      expect(screen.getByText('SOUL（身份）')).toBeTruthy()
+      expect(screen.getByText('settings.standingDocs.docLabels.soul')).toBeTruthy()
     })
 
-    // 4 identity docs + memory should appear (DOC_LABELS map)
-    expect(screen.getByText('AGENT（操作笔记）')).toBeTruthy()
-    expect(screen.getByText('RULES（硬约束）')).toBeTruthy()
-    expect(screen.getByText('USER（用户偏好）')).toBeTruthy()
-    expect(screen.getByText('MEMORY（自动记忆）')).toBeTruthy()
+    // 4 identity docs + memory should appear (DOC_LABEL_KEYS map)
+    expect(screen.getByText('settings.standingDocs.docLabels.agent')).toBeTruthy()
+    expect(screen.getByText('settings.standingDocs.docLabels.rules')).toBeTruthy()
+    expect(screen.getByText('settings.standingDocs.docLabels.user')).toBeTruthy()
+    expect(screen.getByText('settings.standingDocs.docLabels.memory')).toBeTruthy()
 
     // The SKILLS projection should NOT be listed
     expect(screen.queryByText('SKILLS')).toBeNull()
@@ -199,10 +199,10 @@ describe('StandingDocsSection — flag-on', () => {
 
     renderUi()
 
-    await waitFor(() => expect(screen.getByText('MEMORY（自动记忆）')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('settings.standingDocs.docLabels.memory')).toBeTruthy())
 
     // Expand memory → budget usage label + auto-maintained note are visible.
-    fireEvent.click(screen.getByText('MEMORY（自动记忆）'))
+    fireEvent.click(screen.getByText('settings.standingDocs.docLabels.memory'))
     await waitFor(() => expect(screen.getByText('settings.standingDocs.budgetUsage')).toBeTruthy())
     expect(screen.getByText('settings.standingDocs.memoryNote')).toBeTruthy()
 
@@ -230,7 +230,7 @@ describe('StandingDocsSection — flag-on', () => {
 
     // Wait for docs to load (both queries must resolve)
     await waitFor(() => {
-      expect(screen.getByText('SOUL（身份）')).toBeTruthy()
+      expect(screen.getByText('settings.standingDocs.docLabels.soul')).toBeTruthy()
     })
 
     // 3 high-risk badges for soul/agent/rules
@@ -248,10 +248,10 @@ describe('StandingDocsSection — flag-on', () => {
 
     renderUi()
 
-    await waitFor(() => expect(screen.getByText('USER（用户偏好）')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('settings.standingDocs.docLabels.user')).toBeTruthy())
 
     // Expand the USER doc panel
-    fireEvent.click(screen.getByText('USER（用户偏好）'))
+    fireEvent.click(screen.getByText('settings.standingDocs.docLabels.user'))
 
     // Click Edit button
     await waitFor(() => expect(screen.getByText('settings.standingDocs.edit')).toBeTruthy())
@@ -294,10 +294,10 @@ describe('StandingDocsSection — flag-on', () => {
 
     renderUi()
 
-    await waitFor(() => expect(screen.getByText('RULES（硬约束）')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('settings.standingDocs.docLabels.rules')).toBeTruthy())
 
     // Expand the RULES doc panel
-    fireEvent.click(screen.getByText('RULES（硬约束）'))
+    fireEvent.click(screen.getByText('settings.standingDocs.docLabels.rules'))
 
     await waitFor(() => expect(screen.getByText('settings.standingDocs.edit')).toBeTruthy())
     fireEvent.click(screen.getByText('settings.standingDocs.edit'))

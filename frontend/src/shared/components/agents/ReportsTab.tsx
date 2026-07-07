@@ -37,7 +37,16 @@ function pressHandlers(): {
   }
 }
 
-const WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
+// Indexed by Date.getDay() (0 = Sunday … 6 = Saturday) → i18n key.
+const WEEKDAY_KEYS = [
+  'agents.reports.weekday.sun',
+  'agents.reports.weekday.mon',
+  'agents.reports.weekday.tue',
+  'agents.reports.weekday.wed',
+  'agents.reports.weekday.thu',
+  'agents.reports.weekday.fri',
+  'agents.reports.weekday.sat'
+]
 const CADENCE_FILTERS: Array<[string, string]> = [
   ['all', '全部'],
   ['daily', '日报'],
@@ -61,7 +70,7 @@ function ReportListRow({
   const [confirming, setConfirming] = useState(false)
   const weekday = (() => {
     const d = new Date(item.report_date)
-    return Number.isNaN(d.getTime()) ? '' : WEEKDAYS[d.getDay()]
+    return Number.isNaN(d.getTime()) ? '' : t(WEEKDAY_KEYS[d.getDay()])
   })()
   return (
     <div className="relative group">
@@ -143,17 +152,21 @@ function ReportListRow({
               color: 'rgb(var(--ink-fg-3))'
             }}
           >
-            <span>{item.counts.total ?? 0} 封</span>
+            <span>{t('agents.reports.count.total', { count: item.counts.total ?? 0 })}</span>
             {(item.counts.urgent ?? 0) > 0 && (
               <>
                 <span>·</span>
-                <span style={{ color: 'rgb(var(--c-crit))' }}>{item.counts.urgent} 紧急</span>
+                <span style={{ color: 'rgb(var(--c-crit))' }}>
+                  {t('agents.reports.count.urgent', { count: item.counts.urgent })}
+                </span>
               </>
             )}
             {(item.counts.replied ?? 0) > 0 && (
               <>
                 <span>·</span>
-                <span style={{ color: 'rgb(var(--c-ok))' }}>{item.counts.replied} 已回复</span>
+                <span style={{ color: 'rgb(var(--c-ok))' }}>
+                  {t('agents.reports.count.replied', { count: item.counts.replied })}
+                </span>
               </>
             )}
           </div>

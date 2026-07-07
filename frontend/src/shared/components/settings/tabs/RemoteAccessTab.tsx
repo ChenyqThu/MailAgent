@@ -274,7 +274,9 @@ export function RemoteAccessTab(): React.ReactElement {
             defaultValue:
               'Cloudflare Zero Trust → Access → 你的应用 → Overview 的 Audience (AUD) 标签'
           })}
-          placeholder="e.g. 6f1d…（必填）"
+          placeholder={t('settings.remote.audience.placeholder', {
+            defaultValue: 'e.g. 6f1d…（必填）'
+          })}
         />
         <EnvField
           envKey="CF_TEAM_DOMAIN"

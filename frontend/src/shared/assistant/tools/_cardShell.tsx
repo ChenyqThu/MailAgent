@@ -8,6 +8,7 @@
 
 import { useState } from 'react'
 import { Check, Loader2, ShieldQuestion, X } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import type { ToolCallMessagePartProps } from '@assistant-ui/react'
 
 import { cn } from '@shared/lib/cn'
@@ -72,13 +73,13 @@ export async function postApprovalEdit(
   }
 }
 
-const PHASE_PILL: Record<CardPhase, { label: string; klass: string }> = {
-  pending: { label: '待确认', klass: 'bg-coral/15 text-coral' },
-  authorized: { label: '执行中', klass: 'bg-info/15 text-info' },
-  done: { label: '已完成', klass: 'bg-ok/15 text-ok' },
-  rejected: { label: '已取消', klass: 'bg-ink-3 text-ink-fg-2' },
-  expired: { label: '已过期', klass: 'bg-ink-3 text-ink-fg-2' },
-  error: { label: '失败', klass: 'bg-fail/15 text-fail' }
+const PHASE_PILL: Record<CardPhase, { labelKey: string; klass: string }> = {
+  pending: { labelKey: 'chat.approvalShell.phase.pending', klass: 'bg-coral/15 text-coral' },
+  authorized: { labelKey: 'chat.approvalShell.phase.authorized', klass: 'bg-info/15 text-info' },
+  done: { labelKey: 'chat.approvalShell.phase.done', klass: 'bg-ok/15 text-ok' },
+  rejected: { labelKey: 'chat.approvalShell.phase.rejected', klass: 'bg-ink-3 text-ink-fg-2' },
+  expired: { labelKey: 'chat.approvalShell.phase.expired', klass: 'bg-ink-3 text-ink-fg-2' },
+  error: { labelKey: 'chat.approvalShell.phase.error', klass: 'bg-fail/15 text-fail' }
 }
 
 /** The shared card frame: an accent-bordered surface with an icon, title, the phase pill, and
@@ -94,6 +95,7 @@ export function CardFrame({
   phase: CardPhase
   children: React.ReactNode
 }): React.JSX.Element {
+  const { t } = useTranslation()
   const pill = PHASE_PILL[phase]
   return (
     <div className="my-1.5 min-w-0 overflow-hidden rounded-xl border border-ink-border-soft bg-ink-1">
@@ -103,7 +105,7 @@ export function CardFrame({
         </span>
         <span className="min-w-0 flex-1 truncate text-aux font-medium text-ink-fg">{title}</span>
         <span className={cn('shrink-0 rounded-full px-2 py-0.5 text-meta font-medium', pill.klass)}>
-          {pill.label}
+          {t(pill.labelKey)}
         </span>
       </div>
       <div className="px-3 py-2.5">{children}</div>
@@ -113,11 +115,11 @@ export function CardFrame({
 
 /** The approve / reject action row shown while a card is pending. `onApprove` may be async
  *  (edit-tier first POSTs the edit); a thrown error is surfaced inline and the approval is NOT
- *  sent. `approveLabel` defaults to 允许. */
+ *  sent. `approveLabel` defaults to the localized approve label (chat.approvalShell.approve). */
 export function ApprovalActions({
   onApprove,
   onReject,
-  approveLabel = '允许',
+  approveLabel,
   disabled
 }: {
   onApprove: () => void | Promise<void>
@@ -125,6 +127,7 @@ export function ApprovalActions({
   approveLabel?: string
   disabled?: boolean
 }): React.JSX.Element {
+  const { t } = useTranslation()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const handleApprove = async (): Promise<void> => {
@@ -141,7 +144,7 @@ export function ApprovalActions({
     <div className="mt-2.5">
       {error && (
         <div className="mb-2 rounded-md border border-fail/30 bg-fail/10 px-2.5 py-1.5 text-meta text-fail">
-          {`操作失败：${error}`}
+          {t('chat.approvalShell.actionFailed', { error })}
         </div>
       )}
       <div className="flex items-center justify-end gap-2">
@@ -158,7 +161,7 @@ export function ApprovalActions({
           )}
         >
           <X size={12} strokeWidth={2.5} />
-          取消
+          {t('chat.approvalShell.cancel')}
         </button>
         <button
           type="button"
@@ -175,7 +178,7 @@ export function ApprovalActions({
           ) : (
             <Check size={12} strokeWidth={2.5} />
           )}
-          {approveLabel}
+          {approveLabel ?? t('chat.approvalShell.approve')}
         </button>
       </div>
     </div>
@@ -184,11 +187,16 @@ export function ApprovalActions({
 
 /** A small terminal-state banner (rejected / expired) shown in place of the action row. */
 export function TerminalBanner({ phase }: { phase: CardPhase }): React.JSX.Element | null {
+  const { t } = useTranslation()
   if (phase === 'rejected') {
-    return <div className="mt-2 text-meta text-ink-fg-2">已取消，未执行该操作。</div>
+    return (
+      <div className="mt-2 text-meta text-ink-fg-2">{t('chat.approvalShell.rejectedBanner')}</div>
+    )
   }
   if (phase === 'expired') {
-    return <div className="mt-2 text-meta text-ink-fg-2">审批已过期，请让助手重新发起。</div>
+    return (
+      <div className="mt-2 text-meta text-ink-fg-2">{t('chat.approvalShell.expiredBanner')}</div>
+    )
   }
   return null
 }

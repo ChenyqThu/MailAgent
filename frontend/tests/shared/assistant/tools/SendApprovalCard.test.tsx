@@ -10,7 +10,10 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { ToolCallMessagePartProps } from '@assistant-ui/react'
 
+import i18n from '@shared/i18n'
 import { SendApprovalCard } from '@shared/assistant/tools/mail/SendApprovalCard'
+
+await i18n.changeLanguage('zh-CN')
 
 function mockProps(over: Partial<ToolCallMessagePartProps>): ToolCallMessagePartProps {
   return {
@@ -64,7 +67,7 @@ describe('SendApprovalCard — pending (approval-requested)', () => {
       'colleague@example-corp.test'
     )
     expect((screen.getByLabelText('主题') as HTMLInputElement).value).toBe('报价确认结论')
-    expect((screen.getByLabelText('send body') as HTMLTextAreaElement).value).toContain('单价 1280')
+    expect((screen.getByLabelText('正文') as HTMLTextAreaElement).value).toContain('单价 1280')
     expect(screen.getByText('允许发送')).toBeTruthy()
     expect(screen.getByText('取消')).toBeTruthy()
     expect(screen.getByText(/审批有效期/)).toBeTruthy()
@@ -104,7 +107,7 @@ describe('SendApprovalCard — pending (approval-requested)', () => {
     fireEvent.change(screen.getByLabelText('抄送'), {
       target: { value: 'manager@example-corp.test' }
     })
-    fireEvent.change(screen.getByLabelText('send body'), { target: { value: '最终正文' } })
+    fireEvent.change(screen.getByLabelText('正文'), { target: { value: '最终正文' } })
     fireEvent.click(screen.getByText('允许发送'))
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
@@ -129,7 +132,7 @@ describe('SendApprovalCard — pending (approval-requested)', () => {
       })
     )
     render(<SendApprovalCard {...mockProps({ respondToApproval })} />)
-    fireEvent.change(screen.getByLabelText('send body'), { target: { value: 'changed' } })
+    fireEvent.change(screen.getByLabelText('正文'), { target: { value: 'changed' } })
     fireEvent.click(screen.getByText('允许发送'))
     await waitFor(() => expect(screen.getByText(/E_APPROVAL_EXPIRED/)).toBeTruthy())
     expect(respondToApproval).not.toHaveBeenCalled()

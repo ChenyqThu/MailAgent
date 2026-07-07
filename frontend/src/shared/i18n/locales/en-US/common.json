@@ -805,6 +805,178 @@
       "updatedDone": "Updated {id}.",
       "failed": "The operation failed — retry or ask the assistant to start over."
     },
+    "approvalShell": {
+      "phase": {
+        "pending": "Pending",
+        "authorized": "Running",
+        "done": "Done",
+        "rejected": "Cancelled",
+        "expired": "Expired",
+        "error": "Failed"
+      },
+      "approve": "Allow",
+      "cancel": "Cancel",
+      "actionFailed": "Action failed: {error}",
+      "rejectedBanner": "Cancelled — the operation was not performed.",
+      "expiredBanner": "The approval expired — ask the assistant to start over."
+    },
+    "sendApprovalCard": {
+      "title": "Send email",
+      "to": "To",
+      "cc": "Cc",
+      "bcc": "Bcc",
+      "subject": "Subject",
+      "body": "Body",
+      "bodyAria": "Email body",
+      "toPlaceholder": "Separate multiple recipients with commas",
+      "optionalPlaceholder": "Optional",
+      "noRecipients": "Enter at least one recipient",
+      "approve": "Allow send",
+      "sent": "Email sent.",
+      "sentArchived": "Email sent (saved to Sent).",
+      "sentTo": "To: {to}",
+      "error": "Send failed — the email was not sent. Retry or ask the assistant to start over.",
+      "summary": "Send to {to}: {subject}",
+      "noSubject": "(no subject)",
+      "externalWarn": "External / personal-email recipients: {recipients} — please confirm.",
+      "sensitiveWarn": "Body contains sensitive terms: {terms} — double-check before sending.",
+      "expired": "Approval expired — ask the assistant to start over",
+      "countdown": "Approval valid for {time}"
+    },
+    "execApprovalCard": {
+      "title": {
+        "runCommand": "Run local command",
+        "fileRead": "Read local file",
+        "fileWrite": "Write local file",
+        "fallback": "Confirm local operation"
+      },
+      "prompt": {
+        "runCommand": "The following command will run on this machine (no sandbox once approved; runs with your privileges):",
+        "fileRead": "The following local file will be read:",
+        "fileWrite": "The following local file will be written:",
+        "fallback": "A local operation will be performed:"
+      },
+      "allowHint": {
+        "runCommand": "Always allow running this exact command (skip approval)",
+        "fileRead": "Always allow reading files in this file's directory (skip approval)",
+        "fileWrite": "Always allow writing files in this file's directory (skip approval)",
+        "fallback": "Always allow this operation (skip approval)"
+      },
+      "allowWarn": "Only tick this for operations you trust: local execution has no sandbox.",
+      "approve": "Allow and run",
+      "emptyArgv": "(empty)",
+      "writeMode": "Write mode: {mode}",
+      "exitCode": "Exit code {code}",
+      "bytesWritten": "Wrote {bytes, plural, one {# byte} other {# bytes}}",
+      "error": "The operation failed — retry or ask the assistant to start over."
+    },
+    "systemDocApprovalCard": {
+      "doc": {
+        "soul": "SOUL (identity)",
+        "agent": "AGENT (operating notes)",
+        "rules": "RULES (hard constraints)",
+        "user": "USER (user preferences)"
+      },
+      "title": "Edit Standing Context document",
+      "titleHighRisk": "⚠️ Rewrite identity / rules document",
+      "lead": "The agent proposes editing the {label} document",
+      "highRiskWarn": "High risk: this rewrites your identity / hard constraints. The safety floor (PRODUCT_SAFETY_FLOOR) cannot be structurally weakened, and privilege-escalating wording is rejected server-side. Review the content below word for word before approving.",
+      "lengthNote": "{count} characters (written as shown once approved; to change it, ask the agent to re-propose or edit it in Settings)",
+      "done": "Updated the {label} document",
+      "error": "The update was rejected or failed (the rules content may have triggered the safety check, or the document is too large).",
+      "summary": "Edit the {label} document"
+    },
+    "skillInstallCard": {
+      "title": "Download skill package (step 1)",
+      "unspecifiedSource": "(source unspecified)",
+      "fromUrl": "The skill package will be downloaded from:",
+      "fromLocal": "The following local skill package will be imported:",
+      "quarantineNote1": "This step only downloads the package to quarantine for verification (hash / manifest / declared secrets); it is",
+      "quarantineNoteEmphasis": " NOT installed",
+      "quarantineNote2": ". The verification results are shown on the next confirmation card, and it is installed only after you confirm again.",
+      "approve": "Allow download",
+      "quarantinedWithFiles": "Moved to quarantine {id} ({count, plural, one {# file} other {# files}}), awaiting step-two install confirmation.",
+      "quarantined": "Moved to quarantine {id}, awaiting step-two install confirmation.",
+      "verified": "Download verified, awaiting step-two install confirmation.",
+      "error": "Download/verification failed (source unreachable, package invalid, or over the limit); nothing was installed."
+    },
+    "skillInstallConfirmCard": {
+      "title": "Confirm skill install (step 2)",
+      "factsError": "Cannot obtain quarantine facts ({detail}) — you should not install when the package contents cannot be reviewed.",
+      "missingQid": "missing quarantine id",
+      "reject": "Reject install",
+      "verifying": "Verifying quarantine contents with the server (recomputing hash)…",
+      "lead": "The following skill will be installed (content is the server's live recomputation of the quarantine):",
+      "unnamed": "(unnamed)",
+      "packageHash": "sha256 {hash}… · {count, plural, one {# file} other {# files}}",
+      "moreFiles": "  … and {count} total",
+      "secretsDeclared": "Declared required secrets (fill them in Settings after install; values are never given to the model):",
+      "postInstallNote": "After install, its scripts still need your approval each time they run (the first run always prompts for confirmation).",
+      "approve": "Confirm install",
+      "installed": "Installed {name}.",
+      "installExecuted": "Install executed ({name}).",
+      "error": "Install failed — commonly because the quarantine contents changed after preview (a hash mismatch refuses the install). Ask the assistant to re-download and try again."
+    },
+    "skillUninstallCard": {
+      "title": "Uninstall skill",
+      "lead": "The following skill will be fully uninstalled (irreversible):",
+      "unspecified": "(unspecified)",
+      "scope": "Removal scope: registry row + on-disk directory + stored secrets",
+      "secretsUnavailable": "(secret list unavailable; uninstall still removes them)",
+      "secretsLoading": "(fetching secret list…)",
+      "secretsNone": "(this skill has no stored secrets)",
+      "secretsList": "({names})",
+      "approve": "Confirm uninstall",
+      "removedWithSecrets": "Uninstalled {name} ({count, plural, one {# secret} other {# secrets}}).",
+      "removed": "Uninstalled {name}.",
+      "notExist": "{name} did not exist (nothing to uninstall).",
+      "error": "Uninstall failed — retry or remove it manually in Settings."
+    },
+    "skillToggleCard": {
+      "titleEnable": "Enable skill",
+      "titleDisable": "Disable skill",
+      "pendingEnable": "Enable skill \"{name}\" (mount its tools)",
+      "pendingDisable": "Disable skill \"{name}\" (unmount its tools)",
+      "doneEnable": "Enabled \"{name}\"",
+      "doneDisable": "Disabled \"{name}\"",
+      "summaryEnable": "Enable skill \"{name}\"",
+      "summaryDisable": "Disable skill \"{name}\"",
+      "error": "The operation failed — please retry."
+    },
+    "simpleApprovalCard": {
+      "webFetch": {
+        "title": "Fetch web page",
+        "label": "The following web page will be fetched (needs your approval):"
+      },
+      "webSearch": {
+        "title": "Web search",
+        "label": "The following query will be searched on the web (needs your approval):"
+      },
+      "customAgentDelete": {
+        "title": "Delete custom agent",
+        "label": "The following custom agent will be deleted (irreversible; needs your approval):"
+      },
+      "customAgentRunNow": {
+        "title": "Run custom agent now",
+        "label": "The following custom agent will be run now (needs your approval):"
+      },
+      "fallbackTitle": "Confirm operation",
+      "fallbackLabel": "The following operation will run — needs your approval:",
+      "noArgs": "(no arguments)",
+      "error": "The operation failed — retry or ask the assistant to start over."
+    },
+    "approvalActionCard": {
+      "title": {
+        "emailFlag": "Update email flag",
+        "emailArchive": "Archive email",
+        "emailPin": "Pin / unpin",
+        "fallback": "Confirm write operation"
+      },
+      "summaryFallback": "Perform write operation",
+      "emailRef": "Email #{id}",
+      "doneWithRef": "{summary} (email #{id})",
+      "error": "The operation failed — retry or ask the assistant to start over."
+    },
     "attachment": {
       "add": "Attach a file",
       "remove": "Remove attachment",
@@ -1369,7 +1541,115 @@
       "updatedBy": "Changed by",
       "loading": "Loading…",
       "loadError": "Failed to load",
-      "empty": "(empty)"
+      "empty": "(empty)",
+      "docLabels": {
+        "soul": "SOUL (identity)",
+        "agent": "AGENT (operating notes)",
+        "rules": "RULES (hard constraints)",
+        "user": "USER (user preferences)",
+        "memory": "MEMORY (auto memory)"
+      }
+    },
+    "execPolicy": {
+      "title": "Automation policy",
+      "helper": "The assistant needs your approval every time it runs a command or reads/writes files. This is the allowlist you built via “Always allow” for exact operations: matching operations run without approval, everything else still prompts. To loosen a rule, delete and recreate it (in-place editing is not supported, to avoid silently widening scope).",
+      "loadError": "Failed to load policies.",
+      "loading": "Loading…",
+      "empty": "No automation policies yet. When the assistant asks to run a command or read/write files, tick “Always allow” to create an allowlist entry for that exact operation — matching operations then run without approval.",
+      "dangerous": "High risk · not sandboxed",
+      "hitCount": "{count, plural, one {# hit} other {# hits}}",
+      "lastUsed": " · last {time}",
+      "deleted": "Policy deleted",
+      "toggleAria": "Enable/disable this policy",
+      "deleteAria": "Delete this policy",
+      "capability": {
+        "exec": "Run command",
+        "file_read": "Read file",
+        "file_write": "Write file",
+        "web": "Web"
+      },
+      "matcher": {
+        "any": "<any>",
+        "dir": "(dir {scope})"
+      }
+    },
+    "skillPacks": {
+      "title": "Skill install",
+      "helper": "Install third-party skill packs from a URL or a local path. Two-phase: fetch a preview, review the pack contents and declarations, then confirm the install. Installed skills appear in the skills list above (enable/disable); secrets and config are managed per-pack below.",
+      "sourceType": {
+        "skill_pack": "skill pack",
+        "local_folder": "local folder"
+      },
+      "installedNone": "No skill packs installed yet.",
+      "installedCount": "{count, plural, one {# skill pack installed.} other {# skill packs installed.}}",
+      "installButton": "Install skill",
+      "dialog": {
+        "title": "Install Skill",
+        "desc": "Two-phase install: fetch a pack preview, manually review the file list, secret declarations and SKILL.md excerpt, then install once confirmed. Third-party content is unverified — review it carefully.",
+        "staleError": "The pack contents changed after the preview, so the install was rejected. Fetch a new preview and review again.",
+        "sourceLocal": "Local path",
+        "localPlaceholder": "/path/to/skill.zip or skill directory",
+        "fetching": "Fetching…",
+        "fetch": "Fetch preview",
+        "fetchFailed": "Failed to fetch preview",
+        "unnamed": "(unnamed)",
+        "source": "Source: ",
+        "packHash": "Pack hash: ",
+        "entryHint": "Entry hint: ",
+        "files": "{count, plural, one {Files (# file)} other {Files (# files)}}",
+        "declaredSecrets": "Declared secrets",
+        "none": "None",
+        "skillMdExcerpt": "SKILL.md excerpt (raw, not rendered)",
+        "empty": "(empty)",
+        "back": "Back",
+        "confirming": "Installing…",
+        "confirm": "Confirm install",
+        "installed": "Installed {name}",
+        "installedSecretsHint": "This skill declares {count} secret(s) ({names}); set them under its “Config”.",
+        "installFailed": "Install failed"
+      },
+      "config": {
+        "jsonParseError": "JSON parse failed: {message}",
+        "mustBeObject": "Must be a JSON object ('{ … }')",
+        "saved": "Config saved",
+        "saveFailed": "Failed to save config",
+        "saving": "Saving…",
+        "save": "Save config",
+        "title": "config.json (non-sensitive config, plaintext, shared with the script)",
+        "loading": "Loading…"
+      },
+      "secret": {
+        "set": "Set {time}",
+        "replacePlaceholder": "Enter a new value to replace",
+        "save": "Save",
+        "deleteAria": "Delete secret {name}",
+        "updated": "Secret {name} updated",
+        "updateFailed": "Failed to update secret",
+        "deleted": "Secret {name} deleted",
+        "deleteFailed": "Failed to delete secret",
+        "added": "Secret {name} set",
+        "addFailed": "Failed to set secret",
+        "namePlaceholder": "Secret name (e.g. MY_API_KEY)",
+        "valuePlaceholder": "Value",
+        "add": "Add",
+        "sectionTitle": "Secrets",
+        "sectionDesc": "Secrets are write-only: the value is never shown after saving, only the name and update time. Values are stored encrypted and injected as environment variables when the script runs.",
+        "loading": "Loading…",
+        "empty": "No secrets stored yet."
+      },
+      "pack": {
+        "configAria": "Configure {name}",
+        "uninstallAria": "Uninstall {name}",
+        "uninstallWarning": "This will delete the skill's on-disk directory, its registration row, and clear all of its stored secrets. This cannot be undone.",
+        "loadingSecrets": "Loading secret list…",
+        "noSecrets": "(no stored secrets)",
+        "willDeleteSecrets": "Will delete secrets:",
+        "uninstalling": "Uninstalling…",
+        "confirmUninstall": "Confirm uninstall",
+        "cancel": "Cancel",
+        "uninstalled": "Uninstalled {name}",
+        "uninstallFailed": "Uninstall failed"
+      }
     },
     "themeMode": "Theme",
     "themeModeHint": "Light / Follow system / Dark",
@@ -2030,7 +2310,8 @@
       },
       "audience": {
         "label": "Application Audience Tag",
-        "helper": "The Audience (AUD) tag from Cloudflare Zero Trust → Access → your app → Overview"
+        "helper": "The Audience (AUD) tag from Cloudflare Zero Trust → Access → your app → Overview",
+        "placeholder": "e.g. 6f1d… (required)"
       },
       "teamDomain": {
         "label": "Team domain",
@@ -2423,7 +2704,28 @@
       "empty": "No new email in this period",
       "emptyHint": "No new email in the selected time window — nothing to report.",
       "generatedAt": "Generated",
-      "backToList": "Back to list"
+      "backToList": "Back to list",
+      "weekday": {
+        "sun": "Sun",
+        "mon": "Mon",
+        "tue": "Tue",
+        "wed": "Wed",
+        "thu": "Thu",
+        "fri": "Fri",
+        "sat": "Sat"
+      },
+      "count": {
+        "total": "{count, plural, one {# email} other {# emails}}",
+        "urgent": "{count, plural, one {# urgent} other {# urgent}}",
+        "replied": "{count, plural, one {# replied} other {# replied}}"
+      }
+    },
+    "block": {
+      "source": "Source",
+      "notExecutable": "Not executable in v1",
+      "unknown": "Unknown block · {type}",
+      "emailCount": "{total, plural, one {# email} other {# emails}}",
+      "flaggedCount": "{flagged, plural, one {# flagged} other {# flagged}}"
     },
     "card": {
       "enabled": "Enabled",
@@ -2486,6 +2788,12 @@
       "timezoneLocal": "(Local)",
       "bodyPriorities": "Bodies for priorities",
       "bodyPrioritiesHint": "Checked priorities get full body; others summary-only (no attachments)",
+      "priority": {
+        "critical": "🔴 Urgent",
+        "important": "🟡 Important",
+        "normal": "🟢 Normal",
+        "low": "⚪ Low"
+      },
       "aggregation": "Data source",
       "aggWeekly": "Weekly auto-aggregates the past 7 days' daily reports; missing days are noted.",
       "aggMonthly": "Monthly auto-aggregates the prior natural month's daily reports; missing days are noted.",

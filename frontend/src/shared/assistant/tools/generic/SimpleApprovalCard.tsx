@@ -16,40 +16,25 @@
 // value the user sees is exactly what will run).
 
 import { Globe, Play, Search, Trash2 } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import type { ToolCallMessagePartProps } from '@assistant-ui/react'
 
 import { ApprovalActions, CardFrame, TerminalBanner, deriveCardPhase } from '../_cardShell'
 
-/** Per-tool copy: header title, the pending lead-in label, and which model-input field carries the
- *  pinned identity value the user reviews. (Icons live in `iconFor` — a render-time function, not a
- *  module-scope JSX const, mirroring ExecApprovalCard / ToolTraceCard.) */
+/** Per-tool copy: the i18n key suffix (title + label live under chat.simpleApprovalCard.<key>) and
+ *  which model-input field carries the pinned identity value the user reviews. (Icons live in
+ *  `iconFor` — a render-time function, not a module-scope JSX const, mirroring ExecApprovalCard /
+ *  ToolTraceCard.) */
 interface ToolSpec {
-  title: string
-  label: string
+  key: string
   field: string
 }
 
 const SPECS: Record<string, ToolSpec> = {
-  web_fetch: {
-    title: '联网抓取网页',
-    label: '将联网抓取以下网页（需你批准）：',
-    field: 'url'
-  },
-  web_search: {
-    title: '联网搜索',
-    label: '将用以下关键词联网搜索（需你批准）：',
-    field: 'query'
-  },
-  custom_agent_delete: {
-    title: '删除 Custom Agent',
-    label: '将删除以下 Custom Agent（删除后不可恢复，需你批准）：',
-    field: 'agent_id'
-  },
-  custom_agent_run_now: {
-    title: '立即运行 Custom Agent',
-    label: '将立即运行以下 Custom Agent（需你批准）：',
-    field: 'agent_id'
-  }
+  web_fetch: { key: 'webFetch', field: 'url' },
+  web_search: { key: 'webSearch', field: 'query' },
+  custom_agent_delete: { key: 'customAgentDelete', field: 'agent_id' },
+  custom_agent_run_now: { key: 'customAgentRunNow', field: 'agent_id' }
 }
 
 function iconFor(toolName: string): React.ReactNode {
@@ -72,9 +57,9 @@ function safeParse(text: string): Record<string, unknown> | null {
 }
 
 /** The pinned identity value to review — the tool's key arg (url / query / agent_id). Degrades to a
- *  compact JSON summary of the args when the expected field is absent, and to '(无参数)' when there
- *  is nothing — so the review surface is never blank. (Rendered as text → React auto-escapes; no
- *  sanitization needed for a DOM text node.) */
+ *  compact JSON summary of the args when the expected field is absent, and to '' when there is
+ *  nothing (the caller substitutes a localized "(no arguments)" so the review surface is never
+ *  blank). (Rendered as text → React auto-escapes; no sanitization needed for a DOM text node.) */
 function identityValue(
   spec: ToolSpec | undefined,
   args: unknown,
@@ -87,15 +72,18 @@ function identityValue(
     if (typeof v === 'number') return String(v)
   }
   if (obj && Object.keys(obj).length > 0) return JSON.stringify(obj)
-  return '(无参数)'
+  return ''
 }
 
 export function SimpleApprovalCard(props: ToolCallMessagePartProps): React.JSX.Element {
   const { toolName, args, argsText, respondToApproval } = props
+  const { t } = useTranslation()
   const spec = SPECS[toolName]
   const phase = deriveCardPhase(props)
-  const title = spec?.title ?? '操作确认'
-  const value = identityValue(spec, args, argsText)
+  const title = spec
+    ? t(`chat.simpleApprovalCard.${spec.key}.title`)
+    : t('chat.simpleApprovalCard.fallbackTitle')
+  const value = identityValue(spec, args, argsText) || t('chat.simpleApprovalCard.noArgs')
 
   const onApprove = (): void => respondToApproval({ approved: true })
   const onReject = (): void => respondToApproval({ approved: false })
@@ -105,10 +93,12 @@ export function SimpleApprovalCard(props: ToolCallMessagePartProps): React.JSX.E
       {phase === 'pending' ? (
         <>
           <div className="text-aux text-ink-fg-2">
-            {spec?.label ?? '将执行以下操作，需你批准：'}
+            {spec
+              ? t(`chat.simpleApprovalCard.${spec.key}.label`)
+              : t('chat.simpleApprovalCard.fallbackLabel')}
           </div>
           <div className="mt-1 break-all font-mono text-meta text-ink-fg">{value}</div>
-          <ApprovalActions onApprove={onApprove} onReject={onReject} approveLabel="允许" />
+          <ApprovalActions onApprove={onApprove} onReject={onReject} />
         </>
       ) : phase === 'rejected' || phase === 'expired' ? (
         <>
@@ -116,7 +106,7 @@ export function SimpleApprovalCard(props: ToolCallMessagePartProps): React.JSX.E
           <TerminalBanner phase={phase} />
         </>
       ) : phase === 'error' ? (
-        <div className="text-aux text-fail">操作失败，请重试或让助手重新发起。</div>
+        <div className="text-aux text-fail">{t('chat.simpleApprovalCard.error')}</div>
       ) : (
         // authorized (executing) / done — echo the pinned value; these tools' result bodies are
         // model-facing content (fenced web text / job id), not surfaced in the approval card.

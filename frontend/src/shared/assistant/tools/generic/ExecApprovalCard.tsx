@@ -12,6 +12,7 @@
 
 import { useState } from 'react'
 import { Terminal, FileText, FilePenLine } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import type { ToolCallMessagePartProps } from '@assistant-ui/react'
 
 import { buildToolA2UIPayload, type ExecApprovalCardProps } from '../a2ui'
@@ -44,10 +45,12 @@ async function postRememberExecPolicy(toolCallId: string): Promise<void> {
   }
 }
 
-const TITLES: Record<string, string> = {
-  run_command: '运行本机命令',
-  file_read: '读取本机文件',
-  file_write: '写入本机文件'
+// The i18n key suffix per exec kind — title / prompt-label / always-allow hint all keyed by it
+// under chat.execApprovalCard.<group>.<kind> (kind == toolName for these tools).
+const KIND_KEYS: Record<string, string> = {
+  run_command: 'runCommand',
+  file_read: 'fileRead',
+  file_write: 'fileWrite'
 }
 
 function iconFor(kind: string): React.ReactNode {
@@ -58,37 +61,28 @@ function iconFor(kind: string): React.ReactNode {
 
 function propsOf(toolName: string, args: unknown, result: unknown): ExecApprovalCardProps {
   const payload = buildToolA2UIPayload(toolName, { args, result })
+  // summary is not rendered by this card (it shows the exact argv/path), so the fallback is empty.
   return (payload?.props ?? {
     kind: 'run_command',
-    summary: '执行本机操作'
+    summary: ''
   }) as unknown as ExecApprovalCardProps
-}
-
-/** The "always allow" hint by kind — run pins the exact command, file pins the parent directory. */
-const ALLOW_HINT: Record<string, string> = {
-  run_command: '总是允许运行这条完全一致的命令（免审批）',
-  file_read: '总是允许读取该文件所在目录下的文件（免审批）',
-  file_write: '总是允许写入该文件所在目录下的文件（免审批）'
-}
-
-/** The Chinese lead-in label by kind (rendered at text-aux — CN never at mono/meta size). */
-const PROMPT_LABEL: Record<string, string> = {
-  run_command: '将在本机运行以下命令（批准后无沙箱，以你的权限执行）：',
-  file_read: '将读取以下本机文件：',
-  file_write: '将写入以下本机文件：'
-}
-
-/** The mono line (command / path — never CJK) shown under the label. */
-function monoLine(data: ExecApprovalCardProps): string {
-  if (data.kind === 'run_command') return data.argv?.join(' ') || '(空)'
-  return data.path ?? '?'
 }
 
 export function ExecApprovalCard(props: ToolCallMessagePartProps): React.JSX.Element {
   const { toolName, args, result, toolCallId, respondToApproval } = props
+  const { t } = useTranslation()
   const phase = deriveCardPhase(props)
   const data = propsOf(toolName, args, result)
-  const title = TITLES[toolName] ?? '本机操作确认'
+  const kindKey = KIND_KEYS[data.kind]
+  const title = KIND_KEYS[toolName]
+    ? t(`chat.execApprovalCard.title.${KIND_KEYS[toolName]}`)
+    : t('chat.execApprovalCard.title.fallback')
+  /** The mono line (command / path — never CJK) shown under the label. */
+  const monoLine = (): string => {
+    if (data.kind === 'run_command')
+      return data.argv?.join(' ') || t('chat.execApprovalCard.emptyArgv')
+    return data.path ?? '?'
+  }
   const [alwaysAllow, setAlwaysAllow] = useState(false)
 
   const onApprove = async (): Promise<void> => {
@@ -109,14 +103,18 @@ export function ExecApprovalCard(props: ToolCallMessagePartProps): React.JSX.Ele
       {phase === 'pending' ? (
         <>
           <div className="text-aux text-ink-fg-2">
-            {PROMPT_LABEL[data.kind] ?? '将执行本机操作：'}
+            {kindKey
+              ? t(`chat.execApprovalCard.prompt.${kindKey}`)
+              : t('chat.execApprovalCard.prompt.fallback')}
           </div>
-          <div className="mt-1 break-all font-mono text-meta text-ink-fg">{monoLine(data)}</div>
+          <div className="mt-1 break-all font-mono text-meta text-ink-fg">{monoLine()}</div>
           {data.kind === 'run_command' && data.cwd ? (
             <div className="mt-0.5 break-all font-mono text-meta text-ink-fg-3">{data.cwd}</div>
           ) : null}
           {data.kind === 'file_write' && data.mode ? (
-            <div className="mt-0.5 text-aux text-ink-fg-3">{`写入模式：${data.mode}`}</div>
+            <div className="mt-0.5 text-aux text-ink-fg-3">
+              {t('chat.execApprovalCard.writeMode', { mode: data.mode })}
+            </div>
           ) : null}
           <div className="mt-2 rounded-md border border-ink-border-soft bg-ink-2/60 px-2.5 py-2">
             <label className="flex cursor-pointer items-start gap-2">
@@ -127,30 +125,40 @@ export function ExecApprovalCard(props: ToolCallMessagePartProps): React.JSX.Ele
                 className="mt-0.5 size-3.5 shrink-0 accent-[rgb(var(--c-accent))]"
               />
               <span className="text-aux text-ink-fg-2">
-                {ALLOW_HINT[data.kind] ?? '总是允许该操作（免审批）'}
+                {kindKey
+                  ? t(`chat.execApprovalCard.allowHint.${kindKey}`)
+                  : t('chat.execApprovalCard.allowHint.fallback')}
                 <span className="mt-0.5 block text-ink-fg-3">
-                  仅对你信任的操作勾选：本机执行没有沙箱。
+                  {t('chat.execApprovalCard.allowWarn')}
                 </span>
               </span>
             </label>
           </div>
-          <ApprovalActions onApprove={onApprove} onReject={onReject} approveLabel="允许并运行" />
+          <ApprovalActions
+            onApprove={onApprove}
+            onReject={onReject}
+            approveLabel={t('chat.execApprovalCard.approve')}
+          />
         </>
       ) : phase === 'done' ? (
         <>
-          <div className="break-all font-mono text-meta text-ink-fg">{monoLine(data)}</div>
+          <div className="break-all font-mono text-meta text-ink-fg">{monoLine()}</div>
           {typeof data.exitCode === 'number' || typeof data.bytesWritten === 'number' ? (
             <div className="mt-0.5 text-aux text-ink-fg-2">
-              {typeof data.exitCode === 'number' ? `退出码 ${data.exitCode}` : ''}
-              {typeof data.bytesWritten === 'number' ? `已写入 ${data.bytesWritten} 字节` : ''}
+              {typeof data.exitCode === 'number'
+                ? t('chat.execApprovalCard.exitCode', { code: data.exitCode })
+                : ''}
+              {typeof data.bytesWritten === 'number'
+                ? t('chat.execApprovalCard.bytesWritten', { bytes: data.bytesWritten })
+                : ''}
             </div>
           ) : null}
         </>
       ) : phase === 'error' ? (
-        <div className="text-aux text-fail">操作失败，请重试或让助手重新发起。</div>
+        <div className="text-aux text-fail">{t('chat.execApprovalCard.error')}</div>
       ) : (
         <>
-          <div className="break-all font-mono text-meta text-ink-fg">{monoLine(data)}</div>
+          <div className="break-all font-mono text-meta text-ink-fg">{monoLine()}</div>
           <TerminalBanner phase={phase} />
         </>
       )}

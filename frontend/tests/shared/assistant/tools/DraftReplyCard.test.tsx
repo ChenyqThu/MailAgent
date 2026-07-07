@@ -10,7 +10,10 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { ToolCallMessagePartProps } from '@assistant-ui/react'
 
+import i18n from '@shared/i18n'
 import { DraftReplyCard } from '@shared/assistant/tools/mail/DraftReplyCard'
+
+await i18n.changeLanguage('zh-CN')
 
 function mockProps(over: Partial<ToolCallMessagePartProps>): ToolCallMessagePartProps {
   return {

@@ -7,6 +7,7 @@
 // approval time (editableFields), so what is shown here is the exact source that will be fetched.
 
 import { PackageSearch } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import type { ToolCallMessagePartProps } from '@assistant-ui/react'
 
 import { buildToolA2UIPayload, type SkillInstallCardProps } from '../a2ui'
@@ -19,26 +20,36 @@ function propsOf(toolName: string, args: unknown, result: unknown): SkillInstall
 
 export function SkillInstallCard(props: ToolCallMessagePartProps): React.JSX.Element {
   const { toolName, args, result, respondToApproval } = props
+  const { t } = useTranslation()
   const phase = deriveCardPhase(props)
   const data = propsOf(toolName, args, result)
-  const source = data.sourceUrl ?? data.localPath ?? '(未指定来源)'
+  const source = data.sourceUrl ?? data.localPath ?? t('chat.skillInstallCard.unspecifiedSource')
 
   return (
-    <CardFrame icon={<PackageSearch size={13} strokeWidth={2} />} title="下载 Skill 包（第一步）" phase={phase}>
+    <CardFrame
+      icon={<PackageSearch size={13} strokeWidth={2} />}
+      title={t('chat.skillInstallCard.title')}
+      phase={phase}
+    >
       {phase === 'pending' ? (
         <>
           <div className="text-aux text-ink-fg-2">
-            {data.sourceUrl ? '将从以下地址下载 skill 包：' : '将导入以下本地 skill 包：'}
+            {data.sourceUrl
+              ? t('chat.skillInstallCard.fromUrl')
+              : t('chat.skillInstallCard.fromLocal')}
           </div>
           <div className="mt-1 break-all font-mono text-meta text-ink-fg">{source}</div>
           <div className="mt-2 rounded-md border border-ink-border-soft bg-ink-2/60 px-2.5 py-2 text-aux text-ink-fg-3">
-            本步只把包下载到隔离区做校验（hash / 清单 / 声明的密钥），<span className="text-ink-fg-2">不会安装</span>。
-            校验结果会在下一步的确认卡上展示，由你再次确认后才真正安装。
+            {t('chat.skillInstallCard.quarantineNote1')}
+            <span className="text-ink-fg-2">
+              {t('chat.skillInstallCard.quarantineNoteEmphasis')}
+            </span>
+            {t('chat.skillInstallCard.quarantineNote2')}
           </div>
           <ApprovalActions
             onApprove={() => respondToApproval({ approved: true })}
             onReject={() => respondToApproval({ approved: false })}
-            approveLabel="允许下载"
+            approveLabel={t('chat.skillInstallCard.approve')}
           />
         </>
       ) : phase === 'done' ? (
@@ -46,12 +57,17 @@ export function SkillInstallCard(props: ToolCallMessagePartProps): React.JSX.Ele
           <div className="break-all font-mono text-meta text-ink-fg">{source}</div>
           <div className="mt-0.5 text-aux text-ink-fg-2">
             {data.quarantineId
-              ? `已入隔离区 ${data.quarantineId}${typeof data.fileCount === 'number' ? `（${data.fileCount} 个文件）` : ''}，等待第二步确认安装。`
-              : '已完成下载校验，等待第二步确认安装。'}
+              ? typeof data.fileCount === 'number'
+                ? t('chat.skillInstallCard.quarantinedWithFiles', {
+                    id: data.quarantineId,
+                    count: data.fileCount
+                  })
+                : t('chat.skillInstallCard.quarantined', { id: data.quarantineId })
+              : t('chat.skillInstallCard.verified')}
           </div>
         </>
       ) : phase === 'error' ? (
-        <div className="text-aux text-fail">下载/校验失败（来源不可达、包非法或超限），未产生任何安装。</div>
+        <div className="text-aux text-fail">{t('chat.skillInstallCard.error')}</div>
       ) : (
         <>
           <div className="break-all font-mono text-meta text-ink-fg">{source}</div>

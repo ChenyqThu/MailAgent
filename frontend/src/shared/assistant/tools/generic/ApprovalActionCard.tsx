@@ -6,6 +6,7 @@
 // fields (preview tier = approve/reject only).
 
 import { CheckCircle2 } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import type { ToolCallMessagePartProps } from '@assistant-ui/react'
 
 import { buildToolA2UIPayload, type ApprovalActionCardProps } from '../a2ui'
@@ -17,10 +18,12 @@ import {
   deriveCardPhase
 } from '../_cardShell'
 
-const TITLES: Record<string, string> = {
-  email_flag: '更新邮件标记',
-  email_archive: '归档邮件',
-  email_pin: '置顶/取消置顶'
+// tool name → title key suffix; the model-facing summary is a2ui data (out of i18n scope) so the
+// fallback below is an empty string localized at render time (data.summary || summaryFallback).
+const TITLE_KEYS: Record<string, string> = {
+  email_flag: 'emailFlag',
+  email_archive: 'emailArchive',
+  email_pin: 'emailPin'
 }
 
 function propsOf(toolName: string, args: unknown, result: unknown): ApprovalActionCardProps {
@@ -28,22 +31,28 @@ function propsOf(toolName: string, args: unknown, result: unknown): ApprovalActi
   return (payload?.props ?? {
     toolName,
     internalId: -1,
-    summary: '执行写操作'
+    summary: ''
   }) as unknown as ApprovalActionCardProps
 }
 
 export function ApprovalActionCard(props: ToolCallMessagePartProps): React.JSX.Element {
   const { toolName, args, result, respondToApproval } = props
+  const { t } = useTranslation()
   const phase = deriveCardPhase(props)
   const data = propsOf(toolName, args, result)
-  const title = TITLES[toolName] ?? '写操作确认'
+  const title = TITLE_KEYS[toolName]
+    ? t(`chat.approvalActionCard.title.${TITLE_KEYS[toolName]}`)
+    : t('chat.approvalActionCard.title.fallback')
+  const summary = data.summary || t('chat.approvalActionCard.summaryFallback')
 
   return (
     <CardFrame icon={<ApprovalIcon />} title={title} phase={phase}>
       {phase === 'pending' ? (
         <>
-          <div className="text-aux text-ink-fg">{data.summary}</div>
-          <div className="mt-0.5 text-meta text-ink-fg-2">{`邮件 #${data.internalId}`}</div>
+          <div className="text-aux text-ink-fg">{summary}</div>
+          <div className="mt-0.5 text-meta text-ink-fg-2">
+            {t('chat.approvalActionCard.emailRef', { id: data.internalId })}
+          </div>
           <ApprovalActions
             onApprove={() => respondToApproval({ approved: true })}
             onReject={() => respondToApproval({ approved: false })}
@@ -52,13 +61,13 @@ export function ApprovalActionCard(props: ToolCallMessagePartProps): React.JSX.E
       ) : phase === 'done' ? (
         <div className="flex items-center gap-1.5 text-aux text-ink-fg">
           <CheckCircle2 size={13} strokeWidth={2} className="shrink-0 text-ok" />
-          <span>{`${data.summary}（邮件 #${data.internalId}）`}</span>
+          <span>{t('chat.approvalActionCard.doneWithRef', { summary, id: data.internalId })}</span>
         </div>
       ) : phase === 'error' ? (
-        <div className="text-aux text-fail">操作失败，请重试或让助手重新发起。</div>
+        <div className="text-aux text-fail">{t('chat.approvalActionCard.error')}</div>
       ) : (
         <>
-          <div className="text-aux text-ink-fg">{data.summary}</div>
+          <div className="text-aux text-ink-fg">{summary}</div>
           <TerminalBanner phase={phase} />
         </>
       )}

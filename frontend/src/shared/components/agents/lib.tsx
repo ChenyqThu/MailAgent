@@ -6,7 +6,7 @@
 // 与现网 index.css token 一致，自动随 theme/accent 切换。
 import type { ReactNode } from 'react'
 
-import type { ReportCadence, ReportStatus, ReportTone } from '@shared/api/types'
+import type { ReportStatus, ReportTone } from '@shared/api/types'
 
 // ReportIcon 见 ./primitives（组件集中在那，本文件只放纯函数 helpers）。
 
@@ -167,12 +167,6 @@ export function fmtClock(iso: string | undefined): string {
   } catch {
     return iso
   }
-}
-
-export const CADENCE_LABEL: Record<ReportCadence, string> = {
-  daily: '日报',
-  weekly: '周报',
-  monthly: '月报'
 }
 
 export const STATUS_META: Record<ReportStatus, { tone: ReportTone }> = {
