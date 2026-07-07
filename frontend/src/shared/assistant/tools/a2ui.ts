@@ -116,7 +116,14 @@ export const A2UI_COMPONENTS = {
   // grants, exec + web-open red); for UPDATE the card fetches the agent's CURRENT row server-side
   // and renders a before/after grant/skill diff (the payload carries ONLY the model's patch —
   // "before" can never come from model input).
-  CustomAgentApprovalCard: 'CustomAgentApprovalCard'
+  CustomAgentApprovalCard: 'CustomAgentApprovalCard',
+  // 1.5.0 dogfood (task 07-07) — the identity-only edit-tier approval card shared by web_fetch /
+  // web_search / custom_agent_delete / custom_agent_run_now. These tools deliberately produce NO
+  // audited ui_payload (componentForTool returns null for them, unchanged), so this key is a
+  // ComponentRegistry key only — the card reads the tool args directly. It exists so islandless
+  // approval of these edit-tier tools has real approve/reject buttons instead of the buttonless
+  // ToolTraceCard (which showed the approval-paused state as a permanent spinner).
+  SimpleApprovalCard: 'SimpleApprovalCard'
 } as const
 
 /** Which A2UI component renders a given gateway write tool. Unknown / read tools → null
@@ -464,10 +471,9 @@ export function buildToolA2UIPayload(
   }
 
   if (component === A2UI_COMPONENTS.ExecApprovalCard) {
-    const kind = (toolName === 'file_read' || toolName === 'file_write' ? toolName : 'run_command') as
-      | 'run_command'
-      | 'file_read'
-      | 'file_write'
+    const kind = (
+      toolName === 'file_read' || toolName === 'file_write' ? toolName : 'run_command'
+    ) as 'run_command' | 'file_read' | 'file_write'
     const argv = asStrArray(args.argv)
     const path = asStr(args.path) ?? null
     const summary =
@@ -484,7 +490,8 @@ export function buildToolA2UIPayload(
       path,
       mode: asStr(args.mode) ?? null,
       exitCode: typeof result?.exit_code === 'number' ? (result.exit_code as number) : null,
-      bytesWritten: typeof result?.bytes_written === 'number' ? (result.bytes_written as number) : null
+      bytesWritten:
+        typeof result?.bytes_written === 'number' ? (result.bytes_written as number) : null
     }
     return {
       protocol: A2UI_PROTOCOL,
@@ -563,7 +570,8 @@ export function buildToolA2UIPayload(
     if (typeof args.model === 'string') props.model = args.model
     if (typeof args.enabled === 'boolean') props.enabled = args.enabled
     if ('trigger' in args) {
-      props.triggerSummary = args.trigger === null ? null : summarizeAgentTrigger(asObj(args.trigger))
+      props.triggerSummary =
+        args.trigger === null ? null : summarizeAgentTrigger(asObj(args.trigger))
     }
     if (Array.isArray(args.allowed_tools)) props.allowedTools = asStrArray(args.allowed_tools)
     if (typeof args.grant_exec === 'boolean') props.grantExec = args.grant_exec

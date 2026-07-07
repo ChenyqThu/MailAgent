@@ -22,6 +22,7 @@ import { SkillInstallCard } from './generic/SkillInstallCard'
 import { SkillInstallConfirmCard } from './generic/SkillInstallConfirmCard'
 import { SkillUninstallCard } from './generic/SkillUninstallCard'
 import { CustomAgentApprovalCard } from './generic/CustomAgentApprovalCard'
+import { SimpleApprovalCard } from './generic/SimpleApprovalCard'
 
 /** One registration: an A2UI component (by name) + the tool names that render through it. */
 export interface ToolUIRegistration {
@@ -125,5 +126,16 @@ export const componentRegistry: ComponentRegistry = createComponentRegistry([
     component: A2UI_COMPONENTS.CustomAgentApprovalCard,
     toolNames: ['custom_agent_create', 'custom_agent_update'],
     render: CustomAgentApprovalCard
+  },
+  // 1.5.0 dogfood (task 07-07) — identity-only edit-tier approval card for the four tools that were
+  // missing a rich card and so fell through to the buttonless ToolTraceCard (approval-paused shown
+  // as a永久 spinner, island-only approve). Registering them here gives islandless approve/reject
+  // (respondToApproval → 通道 A resume). Behind their own gateway flags (WEB_TOOLS / CUSTOM_AGENTS);
+  // a registration for a tool the gateway never emits is inert (the card only ever renders for a
+  // live tool part).
+  {
+    component: A2UI_COMPONENTS.SimpleApprovalCard,
+    toolNames: ['web_fetch', 'web_search', 'custom_agent_delete', 'custom_agent_run_now'],
+    render: SimpleApprovalCard
   }
 ])

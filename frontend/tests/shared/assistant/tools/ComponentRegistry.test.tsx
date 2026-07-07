@@ -41,9 +41,22 @@ describe('componentRegistry — resolution', () => {
     expect(componentRegistry.resolve('memory_delete')).toBeUndefined()
   })
 
-  test('byName covers the write/self-mount/exec/skill-supply/custom-agent tools; components covers the card names', () => {
+  test('web_fetch/web_search/custom_agent_delete/custom_agent_run_now resolve to the SimpleApprovalCard (islandless approve, task 07-07)', () => {
+    const webFetch = componentRegistry.resolve('web_fetch')
+    expect(webFetch).toBeTypeOf('function')
+    // all four share one component instance (they are one registration).
+    expect(componentRegistry.resolve('web_search')).toBe(webFetch)
+    expect(componentRegistry.resolve('custom_agent_delete')).toBe(webFetch)
+    expect(componentRegistry.resolve('custom_agent_run_now')).toBe(webFetch)
+    // and it is NOT the buttonless generic fallback.
+    expect(webFetch).not.toBe(ToolTraceCard)
+  })
+
+  test('byName covers the write/self-mount/exec/skill-supply/custom-agent/simple-approval tools; components covers the card names', () => {
     expect(Object.keys(componentRegistry.byName).sort()).toEqual([
       'custom_agent_create',
+      'custom_agent_delete',
+      'custom_agent_run_now',
       'custom_agent_update',
       'email_archive',
       'email_draft_reply',
@@ -58,7 +71,9 @@ describe('componentRegistry — resolution', () => {
       'skill_install',
       'skill_install_confirm',
       'skill_uninstall',
-      'update_system_md'
+      'update_system_md',
+      'web_fetch',
+      'web_search'
     ])
     expect(Object.keys(componentRegistry.components).sort()).toEqual([
       'ApprovalActionCard',
@@ -67,6 +82,7 @@ describe('componentRegistry — resolution', () => {
       'ExecApprovalCard',
       'NotionSyncCard',
       'SendApprovalCard',
+      'SimpleApprovalCard',
       'SkillInstallCard',
       'SkillInstallConfirmCard',
       'SkillToggleCard',
