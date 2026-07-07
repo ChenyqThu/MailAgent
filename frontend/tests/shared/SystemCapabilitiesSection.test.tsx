@@ -3,11 +3,14 @@
 // SystemCapabilitiesSection — R4 (task 07-05) 内置系统能力只读区 unit tests.
 //
 // Covers:
-//   1. All flags off/undefined → returns null (no section in DOM).
+//   1. All openness flags off → section STILL renders (764f7aa8: the web capability is
+//      an always-rendered writable toggle so users can turn it on) — no session/config
+//      locked cards, moreNote shown.
 //   2. Vacuum triad on (session/config/web) → 3 locked capability cards; each has a
 //      DISABLED + checked switch with NO onCheckedChange (not interactive); moreNote
 //      hidden when all three are on.
-//   3. Partial (only session on) → 1 card + moreNote shown.
+//   3. Partial (only session on) → session locked card + always-rendered web row +
+//      moreNote shown.
 //   4. Cross-ref rows (exec / skill-packs / custom-agents) render action buttons;
 //      custom-agents → navigate('/agents'); exec → scrollIntoView on the anchor.
 //   5. Locked switch is not interactive (disabled) — clicking triggers no navigation.
@@ -97,14 +100,21 @@ afterEach(() => {
 // Tests
 // ---------------------------------------------------------------------------
 
-describe('SystemCapabilitiesSection — flag-off', () => {
-  test('all flags off/undefined → returns null (no section title)', async () => {
+describe('SystemCapabilitiesSection — web always-on exception', () => {
+  test('all openness flags off → section still renders web toggle, no locked cards, moreNote shown', async () => {
     setFlags({ flags: {}, customAgents: false, skillInstall: false })
     renderUi()
 
-    // Give the skillInstall query a tick to settle (still false → nothing to show).
+    // Give the skillInstall query a tick to settle (still false → no skill-packs row).
     await waitFor(() => expect(mockFetch).toHaveBeenCalled())
-    expect(screen.queryByText('settings.systemCapabilities.title')).toBeNull()
+    // 764f7aa8: 联网卡是恒渲染的可写例外（用户要能从这里开启联网）→ section 不再 return null。
+    expect(screen.getByText('settings.systemCapabilities.title')).toBeTruthy()
+    expect(screen.getByText('settings.systemCapabilities.web.title')).toBeTruthy()
+    // session/config 只读锁定卡仅各自 flag===true 才渲染 → 全 off 时缺席。
+    expect(screen.queryByText('settings.systemCapabilities.session.title')).toBeNull()
+    expect(screen.queryByText('settings.systemCapabilities.config.title')).toBeNull()
+    // 锁定族未全开 → 尾部 moreNote 在场。
+    expect(screen.getByText('settings.systemCapabilities.moreNote')).toBeTruthy()
   })
 })
 
@@ -147,14 +157,16 @@ describe('SystemCapabilitiesSection — vacuum triad', () => {
     await waitFor(() =>
       expect(screen.getByText('settings.systemCapabilities.session.title')).toBeTruthy()
     )
-    const sw = screen.getByRole('switch')
+    // 现在 section 恒含联网真开关 → getByRole('switch') 会撞多个。收窄到锁定卡的 switch
+    // （LockedCapabilityControl 的 aria-label = lockedBadge）。
+    const sw = screen.getByLabelText('settings.systemCapabilities.lockedBadge')
     fireEvent.click(sw)
     // Disabled switch: no side effects (no navigate, still checked).
     expect(mockNavigate).not.toHaveBeenCalled()
     expect(sw.getAttribute('data-state')).toBe('checked')
   })
 
-  test('only session on → 1 card + moreNote shown (config/web off)', async () => {
+  test('session locked card + always-rendered web row + moreNote (config off)', async () => {
     setFlags({
       flags: { sessionToolsEnabled: true, configToolsEnabled: false, webToolsEnabled: false },
       customAgents: false,
@@ -166,7 +178,8 @@ describe('SystemCapabilitiesSection — vacuum triad', () => {
       expect(screen.getByText('settings.systemCapabilities.session.title')).toBeTruthy()
     )
     expect(screen.queryByText('settings.systemCapabilities.config.title')).toBeNull()
-    expect(screen.queryByText('settings.systemCapabilities.web.title')).toBeNull()
+    // 联网卡恒渲染 → 即便 webToolsEnabled flag 为 false 也在场（它读 .env 意图值非 flag）。
+    expect(screen.getByText('settings.systemCapabilities.web.title')).toBeTruthy()
     expect(screen.getByText('settings.systemCapabilities.moreNote')).toBeTruthy()
   })
 })
