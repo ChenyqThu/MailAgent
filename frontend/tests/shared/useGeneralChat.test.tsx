@@ -21,7 +21,7 @@ const { stableMailApi, mockListGeneralSessions, mockNewSession } = vi.hoisted(()
       listGeneralSessions: mockListGeneralSessions,
       listMessages: mockListMessages,
       newSession: mockNewSession,
-      deleteSession: vi.fn()
+      deleteSession: vi.fn<(sessionId: number) => Promise<void>>(async () => {})
     }
   }
   return { stableMailApi, mockListGeneralSessions, mockNewSession }

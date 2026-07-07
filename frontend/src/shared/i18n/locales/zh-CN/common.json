@@ -8,6 +8,8 @@
     "sent": "已发送"
   },
   "emailList": {
+    "loading": "加载中…",
+    "loadingMore": "— 正在加载更多…",
     "filter": {
       "unread": "未读",
       "flagged": "已标旗",
@@ -48,7 +50,8 @@
     },
     "folderCrumb": {
       "aria": "文件夹路径"
-    }
+    },
+    "resizeHandle": "调整列表宽度"
   },
   "emailDetail": {
     "loading": "加载中…",
@@ -78,7 +81,8 @@
     "archive": "归档",
     "deleteDraft": "删除草稿",
     "syncFailed": "同步失败",
-    "new": "新邮件"
+    "new": "新邮件",
+    "attachmentCount": "{count} 个附件"
   },
   "ai": {
     "compose": "起草回复",
@@ -237,6 +241,8 @@
     "resyncFailGeneric": "重传失败",
     "archiveOk": "已归档到存档",
     "archiveFail": "归档失败",
+    "deleteOk": "已删除（归档完成）",
+    "deleteFail": "删除失败",
     "llmOk": "AI 已重跑",
     "llmOkDry": "干跑成功 — 未实际写入",
     "llmFailGeneric": "AI 重跑失败",
@@ -537,7 +543,8 @@
       "expand": "展开",
       "collapse": "收起",
       "showMore": "展开更多（+{count}）",
-      "showLess": "折叠"
+      "showLess": "折叠",
+      "disabledTip": "等待文件夹信息加载后可点击"
     }
   },
   "sessions": {
@@ -799,7 +806,17 @@
       "failed": "操作失败，请重试或让助手重新发起。"
     },
     "attachment": {
-      "remove": "移除附件"
+      "add": "添加附件",
+      "remove": "移除附件",
+      "readFailed": "无法读取附件"
+    },
+    "kos": {
+      "save": "保存到 KOS",
+      "saved": "已保存到 KOS",
+      "saveFailed": "保存到 KOS 失败"
+    },
+    "session": {
+      "deleteFailed": "删除会话失败"
     },
     "mention": {
       "title": "引用邮件",
@@ -814,7 +831,8 @@
       "editing": "编辑消息",
       "editBlocked": "AI 正在回复 · 等回复完再编辑",
       "save": "保存并重发 · ⌘↩",
-      "cancel": "取消 · Esc"
+      "cancel": "取消 · Esc",
+      "update": "更新"
     },
     "composer": {
       "placeholder": "/命令 或对这封邮件提问… (⌘↩ 发送)",
@@ -1570,6 +1588,28 @@
           "helper": "把 Exchange 草稿箱同步进本地列表（仅本地，不进 Notion / AI / 飞书）。"
         }
       },
+      "calendar": {
+        "helperDavmail": "DavMail 经 CalDAV 把 Exchange 日历同步进本地（端口见上方「高级连接 · CalDAV 端口」）。",
+        "helperApplescript": "Mail.app 经 AppleScript / EventKit 读取本机 Calendar.app。",
+        "caldav": {
+          "enabled": {
+            "label": "启用 CalDAV 日历同步",
+            "helper": "开启后从 DavMail CalDAV 周期性拉取 Exchange 日历进本地。"
+          },
+          "poll": {
+            "label": "轮询间隔（秒）",
+            "helper": "每隔多少秒检查一次日历变化，默认 60。"
+          },
+          "pastDays": {
+            "label": "过去多少天",
+            "helper": "回溯历史事件窗口，默认 30。"
+          },
+          "futureDays": {
+            "label": "未来多少天",
+            "helper": "向前扩展窗口，默认 180。"
+          }
+        }
+      },
       "signature": {
         "title": "邮件签名",
         "helper": "撰写邮件时点工具栏「签名」按钮，在光标处插入。支持纯文本或 HTML。",
@@ -1736,6 +1776,12 @@
         "enabledHelper": "开启后首轮对话结束，用所选模型生成标题并写入；手动改名始终优先保留。",
         "modelLabel": "标题模型",
         "modelHelper": "生成标题用的模型，建议用快速便宜的小模型（如 haiku）。"
+      },
+      "approval": {
+        "title": "Agent 操作审批",
+        "helper": "Agent 执行写操作前是否需要逐个确认。发送邮件等不可逆操作始终需要确认。",
+        "autoReversibleLabel": "可逆操作免确认",
+        "autoReversibleHelper": "开启后，标记 / 归档 / 置顶 / 重传 Notion / 记忆读写等可逆操作直接执行，无需确认卡片；起草回复仍需确认，发送邮件（不可逆）始终需要确认。"
       },
       "cache": {
         "title": "Prompt 缓存",

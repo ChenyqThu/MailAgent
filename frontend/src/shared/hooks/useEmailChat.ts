@@ -20,6 +20,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 
 import { useMailApi } from './useMailApi'
 import type { ChatBackendKind, ChatMessage, ChatSession } from '../api/types'
+import { toastError } from '../state/toast'
+import i18n from '../i18n'
 
 export interface ChatError {
   code: string
@@ -281,8 +283,26 @@ export function useEmailChat(
         setMessagesSessionId(null)
         setError(null)
       }
-      mailApi.chat.deleteSession(sessionId)
       setAllSessions((cur) => cur.filter((s) => s.id !== sessionId))
+      // P2-4 — deleteSession is now Promise<void> (was void). On failure the optimistic
+      // removal above is wrong, so re-fetch this email's sessions to restore the row and
+      // surface the failure to the user (mirrors the toastError usage elsewhere in
+      // components consuming this hook's errors).
+      mailApi.chat.deleteSession(sessionId).catch((err) => {
+        const message = err instanceof Error ? err.message : String(err)
+        toastError(
+          i18n.t('chat.session.deleteFailed', { defaultValue: 'Delete conversation failed' }),
+          message
+        )
+        const emailId = emailIdRef.current
+        if (emailId === null) return
+        mailApi.chat
+          .listSessions(emailId)
+          .then((fetched) => {
+            if (mountedRef.current) setAllSessions(fetched)
+          })
+          .catch(() => undefined)
+      })
     },
     [mailApi]
   )

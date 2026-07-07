@@ -8,6 +8,8 @@
     "sent": "Sent"
   },
   "emailList": {
+    "loading": "Loading…",
+    "loadingMore": "— Loading more…",
     "filter": {
       "unread": "Unread",
       "flagged": "Flagged",
@@ -48,7 +50,8 @@
     },
     "folderCrumb": {
       "aria": "Folder path"
-    }
+    },
+    "resizeHandle": "Resize list width"
   },
   "emailDetail": {
     "loading": "Loading…",
@@ -78,7 +81,8 @@
     "archive": "Archive",
     "deleteDraft": "Delete draft",
     "syncFailed": "SYNC FAILED",
-    "new": "NEW"
+    "new": "NEW",
+    "attachmentCount": "{count, plural, one {# attachment} other {# attachments}}"
   },
   "ai": {
     "compose": "Draft reply",
@@ -237,6 +241,8 @@
     "resyncFailGeneric": "Resync failed",
     "archiveOk": "Archived",
     "archiveFail": "Archive failed",
+    "deleteOk": "Deleted (archived)",
+    "deleteFail": "Delete failed",
     "llmOk": "AI re-run complete",
     "llmOkDry": "Dry-run OK — nothing written",
     "llmFailGeneric": "AI re-run failed",
@@ -537,7 +543,8 @@
       "expand": "Expand",
       "collapse": "Collapse",
       "showMore": "Show more (+{count})",
-      "showLess": "Collapse"
+      "showLess": "Collapse",
+      "disabledTip": "Available once folder info finishes loading"
     }
   },
   "sessions": {
@@ -799,7 +806,17 @@
       "failed": "The operation failed — retry or ask the assistant to start over."
     },
     "attachment": {
-      "remove": "Remove attachment"
+      "add": "Attach a file",
+      "remove": "Remove attachment",
+      "readFailed": "Could not read attachment"
+    },
+    "kos": {
+      "save": "Save to KOS",
+      "saved": "Saved to KOS",
+      "saveFailed": "Save to KOS failed"
+    },
+    "session": {
+      "deleteFailed": "Delete conversation failed"
     },
     "mention": {
       "title": "Mention emails",
@@ -814,7 +831,8 @@
       "editing": "Editing message",
       "editBlocked": "Wait for the reply to finish before editing",
       "save": "Save & resend · ⌘↩",
-      "cancel": "Cancel · Esc"
+      "cancel": "Cancel · Esc",
+      "update": "Update"
     },
     "composer": {
       "placeholder": "/command or ask about this email… (⌘↩ send)",
@@ -1570,6 +1588,28 @@
           "helper": "Sync the Exchange Drafts folder into your local list (local only — no Notion / AI / Feishu)."
         }
       },
+      "calendar": {
+        "helperDavmail": "DavMail syncs your Exchange calendar into the local list over CalDAV (port under \"Advanced connection · CalDAV port\" above).",
+        "helperApplescript": "Mail.app reads the local Calendar.app via AppleScript / EventKit.",
+        "caldav": {
+          "enabled": {
+            "label": "Enable CalDAV calendar sync",
+            "helper": "When on, periodically pulls the Exchange calendar into the local list from DavMail CalDAV."
+          },
+          "poll": {
+            "label": "Poll interval (seconds)",
+            "helper": "How often to check for calendar changes, default 60."
+          },
+          "pastDays": {
+            "label": "Days in the past",
+            "helper": "Lookback window for past events, default 30."
+          },
+          "futureDays": {
+            "label": "Days in the future",
+            "helper": "Lookahead window, default 180."
+          }
+        }
+      },
       "signature": {
         "title": "Email signature",
         "helper": "Click the Signature button in the compose toolbar to insert at the cursor. Plain text or HTML.",
@@ -1736,6 +1776,12 @@
         "enabledHelper": "After the first turn, generate a title with the chosen model and save it; a manual rename always wins.",
         "modelLabel": "Title model",
         "modelHelper": "Model used to generate the title — a fast, cheap small model (e.g. haiku) is recommended."
+      },
+      "approval": {
+        "title": "Agent action approval",
+        "helper": "Whether the agent needs per-action confirmation before write operations. Irreversible actions like sending mail always require confirmation.",
+        "autoReversibleLabel": "Skip confirmation for reversible actions",
+        "autoReversibleHelper": "When on, reversible actions — flag / archive / pin / resync to Notion / memory read-write — run directly without a confirmation card; drafting a reply still requires confirmation, and sending mail (irreversible) always requires confirmation."
       },
       "cache": {
         "title": "Prompt cache",

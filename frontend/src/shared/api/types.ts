@@ -1574,11 +1574,13 @@ export interface ChatApi {
    */
   openPopout(emailId: number): void
   /**
-   * Sprint 14 PR J — delete a session + its message rows (CASCADE).
-   * Fire-and-forget; caller (useEmailChat.deleteSession) updates
-   * renderer state synchronously after dispatching.
+   * Sprint 14 PR J — delete a session + its message rows (CASCADE). Caller
+   * (useEmailChat.deleteSession) updates renderer state optimistically before
+   * dispatching, then awaits/catches this to toast + re-fetch sessions on
+   * failure (P2-4). Callers that don't need rollback (useGeneralChat) attach
+   * their own `.catch` to keep the previous warn-only fire-and-forget behavior.
    */
-  deleteSession(sessionId: number): void
+  deleteSession(sessionId: number): Promise<void>
   /**
    * Phase 10 (demo-fidelity) — set a session's title (manual rename, or the gateway's haiku
    * auto-title). PATCH /chat/sessions/{id}/title; deliberately does NOT bump updated_at (a rename

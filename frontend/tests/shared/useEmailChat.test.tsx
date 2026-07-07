@@ -18,7 +18,7 @@ import type { ChatBackendKind, ChatMessage, ChatSession } from '../../src/shared
 const { stableMailApi, mockListSessions, mockListMessages, mockDeleteSession } = vi.hoisted(() => {
   const mockListSessions = vi.fn<(emailId: number) => Promise<ChatSession[]>>()
   const mockListMessages = vi.fn<(id: number) => Promise<ChatMessage[]>>(async () => [])
-  const mockDeleteSession = vi.fn()
+  const mockDeleteSession = vi.fn<(sessionId: number) => Promise<void>>(async () => {})
   const stableMailApi = {
     chat: {
       listSessions: mockListSessions,

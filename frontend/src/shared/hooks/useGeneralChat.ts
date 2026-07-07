@@ -155,7 +155,12 @@ export function useGeneralChat(): UseGeneralChatReturn {
         setMessagesSessionId(null)
         setError(null)
       }
-      mailApi.chat.deleteSession(sessionId)
+      // P2-4 — deleteSession is now Promise<void> (was void); this hook doesn't roll back
+      // the optimistic removal on failure (see useEmailChat.deleteSession for that), just
+      // preserves the previous warn-only fire-and-forget behavior.
+      mailApi.chat.deleteSession(sessionId).catch((err) => {
+        console.warn('[chat] deleteSession failed', err)
+      })
       setSessions((cur) => cur.filter((s) => s.id !== sessionId))
     },
     [mailApi]

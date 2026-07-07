@@ -104,12 +104,15 @@ function VirtualRow({
   onToggleThread,
   onExpandThread
 }: RowComponentProps<RowProps>): React.ReactElement {
+  // Aliased `tRow` — the `email` branch below shadows `t` with `item.thread` (pre-existing,
+  // unrelated to i18n), so a plain `const { t } = useTranslation()` here would collide with it.
+  const { t: tRow } = useTranslation()
   const item = rows[index]
   if (!item) return <div style={style} />
   if (item.type === 'loader') {
     return (
       <div style={style} className="px-4 py-3 text-center text-meta font-mono text-ink-fg-3">
-        — loading more…
+        {tRow('emailList.loadingMore')}
       </div>
     )
   }
@@ -1346,8 +1349,6 @@ export function EmailList(): React.ReactElement {
     [rows.length, showLoader, fetchSnippetsUpTo]
   )
 
-  const visibleIds = useMemo(() => orderedIds, [orderedIds])
-
   return (
     <section
       aria-label="email-list"
@@ -1580,7 +1581,7 @@ export function EmailList(): React.ReactElement {
       <div className="flex-1 min-h-0">
         {isLoading && (
           <div className="p-6 text-aux text-ink-fg-2 animate-pulse motion-reduce:animate-none">
-            Loading…
+            {t('emailList.loading')}
           </div>
         )}
         {isError && (
@@ -1617,7 +1618,7 @@ export function EmailList(): React.ReactElement {
         )}
       </div>
 
-      <BatchActionBar visibleIds={visibleIds} selectedAllFlagged={selectedAllFlagged} />
+      <BatchActionBar visibleIds={orderedIds} selectedAllFlagged={selectedAllFlagged} />
     </section>
   )
 }

@@ -367,7 +367,10 @@ Electron main 收到响应 → 跳 Mail.app + 把 MailAgent 窗口 focus 到该�
 - **列表查询绝不读 body blob。** `email_body.body_markdown`(531MB) 的 `substr` 会把整块 blob 读进
   内存（800 行冷读 ~1.5s）。`listEnriched` 只返回 metadata + `has_body`(PK join 不触 blob, ~130ms)；
   正文 snippet 由 `email:listSnippets(ids)` **按可见行懒取**（react-window 只渲染 ~15-40 行，~12ms）。
-  行高基于 `has_body`（立即可知）而非 snippet 文本，避免懒取到达后行高跳变。
+  行高基于**合并后的 snippet 文本**（`e.snippet` 优先，为空则懒取的 `snippetMap[id]`，与 EmailRow
+  实际渲染口径一致），而非 `has_body`（Sprint 20 改）——`has_body=true` 但正文为空（会议「已接受/
+  已拒绝」通知）或懒取未到达时，旧口径会预留一行正文高度却不渲染内容；改用文本后行高自适应：
+  无文本即收缩，懒取到达再增高（单向增高，可接受）。
 - **批量优于扇出。** 跨邮箱线程补全用单条 `email:listByThreads(ids[])`（`WHERE thread_id IN(...)`），
   不要每条线程一次 `listByThread`（几百次 IPC 串在主进程上）。
 - **列表查询缓存拉长 + SSE 兜新鲜。** 邮件/folder 列表 query `staleTime 5min + gcTime 15min`：路由切走

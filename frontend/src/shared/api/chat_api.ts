@@ -77,13 +77,13 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
       return request(baseUrl, 'POST', '/chat/save-to-kos', { body: input })
     },
 
-    deleteSession(sessionId: number): void {
-      // fire-and-forget（ChatApi.deleteSession 返 void）。DELETE /chat/sessions/{id}（其消息 +
-      // 工具调用经 FK CASCADE 连带删）。renderer 已乐观移除该行；失败 warn 不回滚。
+    async deleteSession(sessionId: number): Promise<void> {
+      // DELETE /chat/sessions/{id}（其消息 + 工具调用经 FK CASCADE 连带删）。Awaited (P2-4,
+      // was fire-and-forget) so useEmailChat.deleteSession can catch a failure to toast +
+      // re-fetch sessions and undo its optimistic row removal. Callers that don't need
+      // rollback attach their own `.catch` (see useGeneralChat.deleteSession).
       if (!Number.isInteger(sessionId) || sessionId < 0) return
-      void request(baseUrl, 'DELETE', `/chat/sessions/${sessionId}`).catch((err) =>
-        console.warn('[chat] runtime deleteSession failed', err)
-      )
+      await request(baseUrl, 'DELETE', `/chat/sessions/${sessionId}`)
     },
 
     async updateSessionTitle(sessionId: number, title: string): Promise<void> {

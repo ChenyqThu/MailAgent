@@ -429,7 +429,7 @@ function EmailRowInner({
             {email.attach_count > 0 && (
               <span
                 className="ricon ricon-attach"
-                aria-label={`${email.attach_count} attachment${email.attach_count > 1 ? 's' : ''}`}
+                aria-label={t('emailRow.attachmentCount', { count: email.attach_count })}
               >
                 {attachSvg}
               </span>
@@ -497,8 +497,10 @@ function EmailRowInner({
 
 // Sprint 16 perf — 列表 ~1000 行时 5s SSE invalidate 后 React Query 全列 fresh
 // data 引用变, 不 memo 会触发全列 render. 自定义 equality 只比较 EmailRow 真正
-//用到的 email 字段 + 父级稳定 props; onSelect 是父用 useCallback 稳定化的引用,
-// 按引用比较即可.
+// 用到的 email 字段 + 父级稳定 props; onSelect 故意不比较引用 — VirtualRow 每帧
+// 重建 handleSelect 闭包 (:176-182), 但其行为只依赖 email.internal_id (已在下方
+// EMAIL_ROW_EMAIL_KEYS 逐字段比较中覆盖), internal_id 不变时新旧闭包行为等价,
+// 跳过比较不影响正确性 (与下方 threadChevronEqual 跳过 onToggle 同理).
 const EMAIL_ROW_EMAIL_KEYS = [
   'internal_id',
   'is_read',
@@ -534,7 +536,6 @@ function emailRowPropsEqual(prev: Props, next: Props): boolean {
   if (prev.isNew !== next.isNew) return false
   if (prev.noAvatar !== next.noAvatar) return false
   if (prev.compact !== next.compact) return false
-  if (prev.onSelect !== next.onSelect) return false
   if (!threadChevronEqual(prev.threadChevron, next.threadChevron)) return false
   const a = prev.email
   const b = next.email
