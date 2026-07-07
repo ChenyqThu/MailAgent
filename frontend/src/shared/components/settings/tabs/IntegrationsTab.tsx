@@ -120,25 +120,8 @@ export function IntegrationsTab(): React.ReactElement {
         </AdvancedDisclosure>
       </Section>
 
-      <Section
-        title={t('settings.integrations.websearch.title', { defaultValue: 'Web 搜索' })}
-        helper={t('settings.integrations.websearch.helper', {
-          defaultValue:
-            'AI 对话里的 web_search 工具默认走 DuckDuckGo，国内网络被阻断不可用。填入 Tavily API key 即改走 Tavily（国内可达）；多个 key 用逗号隔开，额度用完自动切换下一个；留空则用 DuckDuckGo。'
-        })}
-      >
-        <EnvField
-          envKey="TAVILY_API_KEY"
-          control="password"
-          label={t('settings.integrations.websearch.tavily.label', {
-            defaultValue: 'Tavily API Key'
-          })}
-          helper={t('settings.integrations.websearch.tavily.helper', {
-            defaultValue:
-              '在 tavily.com 申请（tvly- 前缀）。多个 key 逗号分隔，额度用尽自动轮换下一个；仅本机 .env 存储，不回传界面。修改后需重启后端生效。'
-          })}
-        />
-      </Section>
+      {/* Web 搜索（Tavily key）配置已随 task 07-07 R4 迁到 AI tab → 系统能力区「联网」卡
+          （SystemCapabilitiesSection 的 WebCapabilityRow：联网开关 ON 时联动显示）。此处不再重复。 */}
 
       {/* 项目周报同步 Section 已随 v1.3.0 dogfood 收编进 Agents 页的
           ProjectProgressConfigDrawer（活字段 SYNC_ENABLED / DATABASE_ID / FILTER_BU

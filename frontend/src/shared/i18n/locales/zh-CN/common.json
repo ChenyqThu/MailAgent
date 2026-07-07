@@ -1248,7 +1248,7 @@
     },
     "systemCapabilities": {
       "title": "系统能力",
-      "desc": "由环境变量启用的内置能力，恒定生效、不能在此关闭。",
+      "desc": "内置系统能力：多数由环境变量启用（恒定生效、不能在此关闭），联网可在此开关。",
       "lockedBadge": "系统能力 · 恒启用",
       "lockedTip": "该能力由环境变量控制启用，运行时不可在此切换。",
       "moreNote": "其余系统能力由环境变量控制启用。",
@@ -1262,7 +1262,14 @@
       },
       "web": {
         "title": "联网",
-        "desc": "让助手抓取网页并执行网络搜索（网页抓取 + 网络搜索）。"
+        "desc": "让助手抓取网页并执行网络搜索（网页抓取 + 网络搜索）。",
+        "switchLabel": "启用联网",
+        "restartHint": "修改后需重启后端生效。",
+        "tavily": {
+          "label": "Tavily API Key",
+          "helper": "web_search 默认走 DuckDuckGo，国内网络被阻断不可用；填入 Tavily API key 即改走 Tavily（国内可达）。多个 Tavily key 用逗号隔开，额度用完自动切换下一个；留空则用 DuckDuckGo（国内不可达）。仅本机 .env 存储，不回传界面。修改后需重启后端生效。",
+          "placeholder": "tvly-xxx，多个 key 用逗号隔开"
+        }
       },
       "crossRef": {
         "exec": {
@@ -1450,6 +1457,7 @@
       "secretUnset": "未设置",
       "reveal": "显示",
       "hide": "隐藏",
+      "clear": "清除",
       "secretSaved": "已写入 keychain + .env"
     },
     "env": {
@@ -1840,14 +1848,6 @@
         "enabled": {
           "label": "启用转换",
           "helper": "依赖 LibreOffice + python-calamine"
-        }
-      },
-      "websearch": {
-        "title": "Web 搜索",
-        "helper": "AI 对话里的 web_search 工具默认走 DuckDuckGo，国内网络被阻断不可用。填入 Tavily API key 即改走 Tavily（国内可达）；多个 key 用逗号隔开，额度用完自动切换下一个；留空则用 DuckDuckGo。",
-        "tavily": {
-          "label": "Tavily API Key",
-          "helper": "在 tavily.com 申请（tvly- 前缀）。多个 key 逗号分隔，额度用尽自动轮换下一个；仅本机 .env 存储，不回传界面。修改后需重启后端生效。"
         }
       },
       "stats": {

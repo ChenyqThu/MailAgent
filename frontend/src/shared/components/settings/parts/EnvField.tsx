@@ -16,7 +16,7 @@
 
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
-import { Eye, EyeOff, Loader2 } from 'lucide-react'
+import { Eye, EyeOff, Loader2, X } from 'lucide-react'
 
 import type { EnvSetResult } from '@shared/api/types'
 import { cn } from '@shared/lib/cn'
@@ -178,6 +178,17 @@ export function EnvField({
     void persist({ [envKey]: checked ? 'true' : 'false' })
   }
 
+  // password-only — explicit "clear" (env:set null → comments out the .env line).
+  // The plain blur-with-empty path is a no-op for secrets (line 166) so a set key
+  // can't be cleared by typing nothing; this CTA is the dedicated unset flow. Only
+  // rendered when a value is stored (hasStored) so it can't fire on an already-empty
+  // field. applyEnvPatch handles the null → unsetLocal optimistic drop.
+  function handleClear(): void {
+    void persist({ [envKey]: null })
+    setLocalValue('')
+    setRevealed(false)
+  }
+
   async function handleSelect(value: string): Promise<void> {
     void persist({ [envKey]: value })
   }
@@ -325,6 +336,10 @@ export function EnvField({
     }
     case 'password': {
       const hasStored = storeValue.length > 0
+      // Clear CTA only when a value is stored AND the field is writable (web is read-only,
+      // load-failed disables writes). Sits left of the reveal toggle; input reserves pr-16
+      // when both show, pr-9 when reveal-only (no stored value → nothing to clear).
+      const showClear = hasStored && !effectiveDisabled
       return (
         <Row label={label} helper={helperWithNotice} className={className}>
           <div className="relative w-[260px]">
@@ -339,9 +354,27 @@ export function EnvField({
                   : (placeholder ?? t('settings.envField.secretUnset'))
               }
               disabled={effectiveDisabled || submitting}
-              className="pr-9"
+              className={showClear ? 'pr-16' : 'pr-9'}
               aria-label={typeof label === 'string' ? label : envKey}
             />
+            {showClear && (
+              <button
+                type="button"
+                tabIndex={-1}
+                onClick={handleClear}
+                disabled={submitting}
+                aria-label={t('settings.envField.clear')}
+                title={t('settings.envField.clear')}
+                className={cn(
+                  'absolute right-9 top-1/2 -translate-y-1/2 inline-flex h-7 w-7 items-center justify-center rounded-md',
+                  'text-ink-fg-2 hover:bg-ink-3 hover:text-ink-fg',
+                  'transition-colors duration-fast ease-standard',
+                  'disabled:opacity-40 disabled:pointer-events-none'
+                )}
+              >
+                <X className="size-4" />
+              </button>
+            )}
             <button
               type="button"
               tabIndex={-1}
@@ -365,8 +398,6 @@ export function EnvField({
               </span>
             </button>
           </div>
-          {/* unset button reserved for PR E follow-up — for now blur with empty
-              keeps the value; explicit clear flow can grow into a separate CTA. */}
         </Row>
       )
     }

@@ -1,11 +1,8 @@
 // @vitest-environment happy-dom
 //
-// IntegrationsTab「Web 搜索」Section 测试 — Tavily API key 字段（07-07 web_search Tavily provider）。
-//
-// 覆盖：
-//   1. section 渲染（标题 + 字段 label）。
-//   2. Tavily 字段是 masked（type=password，不回显明文）。
-//   3. 配置态投影：值 '***'（已配置）→ secretSet placeholder；'' / 缺失（未配置）→ secretUnset。
+// IntegrationsTab 回归 — task 07-07 R4d：Tavily key 的「Web 搜索」Section 已从 IntegrationsTab
+// 移除，迁到 AI tab → 系统能力区「联网」卡（SystemCapabilitiesSection 的 WebCapabilityRow）。
+// 此处断言：IntegrationsTab 不再渲染「Web 搜索」Section / Tavily 字段，但其余集成区照常渲染。
 //
 // EnvSecretField（CLI key）用 useMailApi —— render 期不触发 IPC，mock 成空 stub 即可。
 
@@ -24,18 +21,16 @@ import { useEnvStore } from '@shared/state/env'
 
 await i18n.changeLanguage('zh-CN')
 
-function setEnv(tavilyValue: string | undefined): void {
-  const values: Record<string, string> = {}
-  if (tavilyValue !== undefined) values.TAVILY_API_KEY = tavilyValue
+function setReadyEnv(): void {
   useEnvStore.setState({
     state: {
       status: 'ready',
       snapshot: {
         path: '/tmp/.env',
         exists: true,
-        values,
-        managedKeys: ['TAVILY_API_KEY'],
-        secretKeys: ['TAVILY_API_KEY']
+        values: {},
+        managedKeys: [],
+        secretKeys: []
       }
     }
   })
@@ -47,30 +42,18 @@ afterEach(() => {
   useEnvStore.setState({ state: { status: 'idle' } })
 })
 
-describe('IntegrationsTab — Web 搜索 Section (Tavily key)', () => {
-  test('section + Tavily 字段渲染，输入为 masked(password)', () => {
-    setEnv('') // 未配置
+describe('IntegrationsTab — Web 搜索 Section 已迁出（R4d）', () => {
+  test('不再渲染「Web 搜索」Section / Tavily 字段', () => {
+    setReadyEnv()
     render(<IntegrationsTab />)
-    expect(screen.getByText('Web 搜索')).toBeTruthy()
-    const input = screen.getByLabelText('Tavily API Key') as HTMLInputElement
-    expect(input).toBeTruthy()
-    // masked：默认 type=password（不回显明文）。
-    expect(input.getAttribute('type')).toBe('password')
+    // 迁到系统能力区「联网」卡后，IntegrationsTab 不应再出现 Web 搜索 section 或 Tavily 字段。
+    expect(screen.queryByText('Web 搜索')).toBeNull()
+    expect(screen.queryByLabelText('Tavily API Key')).toBeNull()
   })
 
-  test('已配置（值 ***）→ secretSet placeholder（已设置态，不回显明文）', () => {
-    setEnv('***')
+  test('其余集成区照常渲染（KOS section 在场，证明只删了 Web 搜索）', () => {
+    setReadyEnv()
     render(<IntegrationsTab />)
-    const input = screen.getByLabelText('Tavily API Key') as HTMLInputElement
-    // 配置态：placeholder 显示「已设置」文案；value 恒空（renderer 从不持明文）。
-    expect(input.getAttribute('placeholder')).toBe(i18n.t('settings.envField.secretSet'))
-    expect(input.value).toBe('')
-  })
-
-  test('未配置（值空/缺失）→ secretUnset placeholder（未设置态）', () => {
-    setEnv(undefined) // 快照里无该 key
-    render(<IntegrationsTab />)
-    const input = screen.getByLabelText('Tavily API Key') as HTMLInputElement
-    expect(input.getAttribute('placeholder')).toBe(i18n.t('settings.envField.secretUnset'))
+    expect(screen.getByText('知识大脑 (KOS)')).toBeTruthy()
   })
 })

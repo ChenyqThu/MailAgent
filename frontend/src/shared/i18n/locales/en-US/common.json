@@ -1248,7 +1248,7 @@
     },
     "systemCapabilities": {
       "title": "System capabilities",
-      "desc": "Built-in capabilities enabled by environment variables — always active and cannot be turned off here.",
+      "desc": "Built-in system capabilities — most are enabled via environment variables (always active, not toggleable here); web access can be toggled here.",
       "lockedBadge": "System · Always on",
       "lockedTip": "This capability is toggled by an environment variable and cannot be switched here at runtime.",
       "moreNote": "Other system capabilities are enabled via environment variables.",
@@ -1262,7 +1262,14 @@
       },
       "web": {
         "title": "Web access",
-        "desc": "Lets the assistant fetch web pages and run web searches (web fetch + web search)."
+        "desc": "Lets the assistant fetch web pages and run web searches (web fetch + web search).",
+        "switchLabel": "Enable web access",
+        "restartHint": "Requires a backend restart to take effect.",
+        "tavily": {
+          "label": "Tavily API Key",
+          "helper": "web_search defaults to DuckDuckGo, which is blocked on mainland-China networks; enter a Tavily API key to switch to Tavily (reachable in China). Separate multiple Tavily keys with commas to auto-rotate when one runs out of quota; leave empty to use DuckDuckGo (unreachable in China). Stored only in the local .env, never returned to the UI. Requires a backend restart to take effect.",
+          "placeholder": "tvly-xxx, comma-separate multiple keys"
+        }
       },
       "crossRef": {
         "exec": {
@@ -1450,6 +1457,7 @@
       "secretUnset": "Not set",
       "reveal": "Show",
       "hide": "Hide",
+      "clear": "Clear",
       "secretSaved": "Written to keychain + .env"
     },
     "env": {
@@ -1840,14 +1848,6 @@
         "enabled": {
           "label": "Enable conversion",
           "helper": "Depends on LibreOffice + python-calamine"
-        }
-      },
-      "websearch": {
-        "title": "Web search",
-        "helper": "The chat AI's web_search tool defaults to DuckDuckGo, which is blocked on mainland-China networks. Enter a Tavily API key to switch to Tavily (reachable in China); separate multiple keys with commas to auto-rotate when one runs out of quota. Leave empty to use DuckDuckGo.",
-        "tavily": {
-          "label": "Tavily API Key",
-          "helper": "Get one at tavily.com (tvly- prefix). Separate multiple keys with commas to auto-rotate on quota exhaustion. Stored only in the local .env, never returned to the UI. Requires a backend restart to take effect."
         }
       },
       "stats": {

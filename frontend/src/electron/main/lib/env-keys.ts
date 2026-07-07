@@ -112,6 +112,13 @@ export const MANAGED_ENV_KEYS = [
   // serve-api 生效 (EnvField markRestartRequired). TAVILY_API_KEY 入 SECRET_ENV_KEYS 脱敏.
   'TAVILY_API_KEY',
 
+  // — 联网能力开关 (task 07-07 R4a)。原为 main-env-only flag（gateway 启动 envBool 读一次,
+  // ai_gateway_lifecycle.ts webToolsEnabled）→ Settings 系统能力区「联网」卡改真开关后纳入白名单,
+  // 好让用户从 UI 开关 web_fetch/web_search。默认 ON（E3 cutover），显式 false 应急回退。
+  // restart-required（gateway 启动读一次，翻它须重启后端才生效; EnvField/开关标 markRestartRequired）。
+  // 非 secret（普通 boolean flag）。
+  'MAILAGENT_OPENNESS_WEB_TOOLS',
+
   // — Notifications (PR D NotificationsTab)
   'FEISHU_NOTIFY_ENABLED',
   'FEISHU_APP_ID',

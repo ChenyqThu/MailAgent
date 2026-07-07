@@ -826,6 +826,145 @@ def test_search_reads_key_via_get_settings_not_os_getenv(
     assert resp.json()["data"]["count"] == 2  # 走 DDG → 证明没读 os.environ
 
 
+# ---------------------------------------------------------------------------
+# 4c) Tavily provider — R9 补测缺口（400/5xx 立即报错、432/433 归 rejected、
+#     畸形 JSON / 缺字段防御、trust_env=False）
+# ---------------------------------------------------------------------------
+
+
+def test_search_tavily_bad_request_immediate_error_no_rotation(
+    client: TestClient, tavily_cfg, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """400（请求本身错，非 key 问题）→ 立即清晰错误：绝不轮换下一个 key、绝不回落 DDG。"""
+    tavily_cfg["key"] = "tvly-a,tvly-b"
+    monkeypatch.setattr(web, "_ddg_search", _raise_boom("must not fall back to DDG on 400"))
+    calls = _install_fake_tavily(
+        monkeypatch,
+        {"tvly-a": _FakeTavilyResp(400), "tvly-b": _FakeTavilyResp(200, _TAVILY_PAYLOAD)},
+    )
+    resp = client.post("/api/web/search", json={"query": "x", "limit": 5})
+    assert resp.status_code == 502
+    err = resp.json()["error"]
+    assert err["code"] == "E_UPSTREAM"
+    assert "400" in err["message"]
+    # 只试了第一个 key（400 非 key 相关 → 轮换无益，立即报错，第二个 key 绝不被打）。
+    assert [c["key"] for c in calls] == ["tvly-a"]
+
+
+def test_search_tavily_5xx_immediate_error_no_rotation(
+    client: TestClient, tavily_cfg, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """5xx（服务端错，非 key 问题）→ 立即报错，不轮换、不回落 DDG（同 400 分支）。"""
+    tavily_cfg["key"] = "tvly-a,tvly-b"
+    monkeypatch.setattr(web, "_ddg_search", _raise_boom("must not fall back to DDG on 5xx"))
+    calls = _install_fake_tavily(
+        monkeypatch,
+        {"tvly-a": _FakeTavilyResp(503), "tvly-b": _FakeTavilyResp(200, _TAVILY_PAYLOAD)},
+    )
+    resp = client.post("/api/web/search", json={"query": "x", "limit": 5})
+    assert resp.status_code == 502
+    err = resp.json()["error"]
+    assert err["code"] == "E_UPSTREAM"
+    assert "503" in err["message"]
+    assert [c["key"] for c in calls] == ["tvly-a"]
+
+
+def test_search_tavily_rotates_on_432_433(
+    client: TestClient, tavily_cfg, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """432/433（Tavily 无权限码，∈ _TAVILY_KEY_REJECTED）→ 归 rejected，切下一个 key 直到成功。"""
+    tavily_cfg["key"] = "tvly-a,tvly-b,tvly-c"
+    calls = _install_fake_tavily(
+        monkeypatch,
+        {
+            "tvly-a": _FakeTavilyResp(432),
+            "tvly-b": _FakeTavilyResp(433),
+            "tvly-c": _FakeTavilyResp(200, _TAVILY_PAYLOAD),
+        },
+    )
+    resp = client.post("/api/web/search", json={"query": "x", "limit": 5})
+    assert resp.status_code == 200
+    assert resp.json()["data"]["count"] == 2
+    assert [c["key"] for c in calls] == ["tvly-a", "tvly-b", "tvly-c"]
+
+
+def test_search_tavily_malformed_json_200_errors(
+    client: TestClient, tavily_cfg, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """200 但 body 非合法 JSON → _map_tavily_results 防御报 E_UPSTREAM（含 JSON 提示），非静默空。"""
+    tavily_cfg["key"] = "tvly-a"
+    monkeypatch.setattr(web, "_ddg_search", _raise_boom("must not fall back to DDG"))
+    # payload=None → _FakeTavilyResp.json() raises ValueError → 映射层 catch → E_UPSTREAM。
+    _install_fake_tavily(monkeypatch, {"tvly-a": _FakeTavilyResp(200, None)})
+    resp = client.post("/api/web/search", json={"query": "x", "limit": 5})
+    assert resp.status_code == 502
+    err = resp.json()["error"]
+    assert err["code"] == "E_UPSTREAM"
+    assert "JSON" in err["message"]
+
+
+def test_search_tavily_missing_and_partial_fields_defensive(
+    client: TestClient, tavily_cfg, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """_map_tavily_results 防御：非 dict 条目 / 缺 url 条目跳过；缺 title/content 默认 ''。"""
+    tavily_cfg["key"] = "tvly-a"
+    payload = {
+        "results": [
+            "not-a-dict",  # 非 dict → 跳过
+            {"title": "No URL"},  # 缺 url → 跳过
+            {"url": "https://ok.test/a"},  # 缺 title/content → 默认 ''
+            {"url": "https://ok.test/b", "title": "B", "content": "snip"},
+        ]
+    }
+    _install_fake_tavily(monkeypatch, {"tvly-a": _FakeTavilyResp(200, payload)})
+    resp = client.post("/api/web/search", json={"query": "x", "limit": 10})
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["count"] == 2  # 两个非法条目被防御性跳过
+    assert data["results"][0] == {"title": "", "url": "https://ok.test/a", "snippet": ""}
+    assert data["results"][1]["title"] == "B"
+    assert data["results"][1]["snippet"] == "snip"
+
+
+def test_search_tavily_missing_results_key_is_empty(
+    client: TestClient, tavily_cfg, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """payload 是 dict 但无 results 键 → count 0（防御性，不抛）。"""
+    tavily_cfg["key"] = "tvly-a"
+    _install_fake_tavily(
+        monkeypatch, {"tvly-a": _FakeTavilyResp(200, {"answer": "no results field"})}
+    )
+    resp = client.post("/api/web/search", json={"query": "x", "limit": 5})
+    assert resp.status_code == 200
+    assert resp.json()["data"]["count"] == 0
+
+
+def test_search_tavily_client_uses_trust_env_false(
+    client: TestClient, tavily_cfg, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """httpx.Client 以 trust_env=False 构造（不吃系统代理，避 memory 记录的系统代理劫持坑）。"""
+    tavily_cfg["key"] = "tvly-a"
+    captured: dict = {}
+
+    class _Client:
+        def __init__(self, *args, **kwargs) -> None:
+            captured.update(kwargs)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a) -> bool:
+            return False
+
+        def post(self, url, headers=None, json=None):
+            return _FakeTavilyResp(200, _TAVILY_PAYLOAD)
+
+    monkeypatch.setattr(web.httpx, "Client", _Client)
+    resp = client.post("/api/web/search", json={"query": "x", "limit": 5})
+    assert resp.status_code == 200
+    assert captured.get("trust_env") is False
+
+
 # ===========================================================================
 # 5) 鉴权 — 关闭 bypass → 401（与 domainClient 消费的既有端点一致）
 # ===========================================================================

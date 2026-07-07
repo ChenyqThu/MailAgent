@@ -116,6 +116,10 @@ _MANAGED_ENV_KEYS: List[str] = [
     # — Web search (agent web_search provider). Tavily key（逗号分隔多 key 额度轮换）；
     # 留空 → 回落 DuckDuckGo。web.py 经 get_settings() 读，TAVILY_API_KEY 入 _SECRET 脱敏。
     "TAVILY_API_KEY",
+    # — 联网能力开关（task 07-07 R4a）。原 main-env-only flag（gateway envBool 读一次）→
+    # Settings 系统能力区「联网」卡改真开关后纳入受管键。默认 ON（E3 cutover），显式 false 回退。
+    # 非 secret；restart-required（gateway 启动读一次）。镜像 env-keys.ts MANAGED_ENV_KEYS。
+    "MAILAGENT_OPENNESS_WEB_TOOLS",
     # — Notifications
     "FEISHU_NOTIFY_ENABLED",
     "FEISHU_APP_ID",
