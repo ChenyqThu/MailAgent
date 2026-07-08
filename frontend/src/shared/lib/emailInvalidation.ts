@@ -1,0 +1,302 @@
+// Email query invalidation routing — pure, testable core for the SSE event
+// bridge (see ../hooks/useEventBridge.ts).
+//
+// Problem: every mailbox-level write event used to invalidate the whole
+// ['emails'] prefix, refetching all five active query families at once —
+// the primary mailbox list plus four enrichment ("supplement") families:
+// cross-mailbox, pinned-supplement, thread-batch, thread-enriched (all defined
+// in EmailList.tsx). better-sqlite3 runs those reads synchronously on the main
+// process, so one SSE burst serialised five list queries (~300ms+ of
+// main-process stall) even when the changed email only lived in the primary
+// list.
+//
+// This module routes each event to the minimal set of families:
+//   • the primary mailbox list always refetches (catches new arrivals + state
+//     changes to any visible row)
+//   • the four supplement families refetch ONLY when their current cache holds
+//     a changed internal_id that the main list does NOT already cover. In
+//     EmailList the merged view gives main-list rows precedence over every
+//     supplement (enrichedById: `all` wins; threadSupplement falls back to
+//     thread-enriched only when enrichedById misses), and thread-batch is
+//     structure-only — so a main-list-resident email's fresh state comes from
+//     the list refetch alone. The common inbox-email case therefore touches
+//     zero supplements (5 active families → 1 refetch); only a supplement-only
+//     email (an old pinned/thread member beyond the list window) pulls in its
+//     one owning supplement (→ 2).
+//
+// EmailRow.optimisticPatch keeps writing the full ['emails'] prefix via
+// setQueriesData (arrays only). That cache-WRITE surface is intentionally
+// decoupled from this refetch routing and is NOT touched here: an SSE event
+// that follows an optimistic patch still reconciles every cache the patch
+// could have reached, because the main list always refetches and any
+// supplement holding the id refetches via containment (a supplement that does
+// not hold the id was a no-op for the patch anyway).
+
+export const EMAIL_QUERY_ROOT = 'emails'
+
+// The 2nd queryKey element that marks a supplement (enrichment) query. The
+// primary mailbox list uses the EmailView string in this slot instead
+// (inbox / outbox / drafts / flagged / all), which never collides with these
+// tags. Keep these literals in sync with the useQuery callsites in
+// EmailList.tsx — the classifier below is the single authority for "is this an
+// enrichment query", so a rename there must land here too.
+export const EMAIL_SUPPLEMENT_TAG = {
+  cross: 'cross',
+  pinnedSupplement: 'pinned-supplement',
+  threadBatch: 'thread-batch',
+  threadEnriched: 'thread-enriched'
+} as const
+
+export type EmailSupplementTag = (typeof EMAIL_SUPPLEMENT_TAG)[keyof typeof EMAIL_SUPPLEMENT_TAG]
+
+const SUPPLEMENT_TAGS: ReadonlySet<string> = new Set(Object.values(EMAIL_SUPPLEMENT_TAG))
+
+export type EmailQueryFamily = 'main-list' | EmailSupplementTag
+
+type QueryKeyLike = readonly unknown[]
+
+/**
+ * Classify an ['emails', ...] queryKey into its family. Returns null for any
+ * key that is not rooted at 'emails'. Any 'emails'-rooted key whose 2nd element
+ * is not a reserved supplement tag is treated as the primary mailbox list.
+ */
+export function classifyEmailQueryKey(key: QueryKeyLike): EmailQueryFamily | null {
+  if (key[0] !== EMAIL_QUERY_ROOT) return null
+  const tag = key[1]
+  if (typeof tag === 'string' && SUPPLEMENT_TAGS.has(tag)) return tag as EmailSupplementTag
+  return 'main-list'
+}
+
+/** True for the primary mailbox list query (`['emails', view, ...]`). */
+export function isMainListKey(key: QueryKeyLike): boolean {
+  return classifyEmailQueryKey(key) === 'main-list'
+}
+
+/** True for any of the four enrichment families (cross / pinned / thread-*). */
+export function isEmailSupplementKey(key: QueryKeyLike): boolean {
+  const family = classifyEmailQueryKey(key)
+  return family !== null && family !== 'main-list'
+}
+
+/**
+ * Does a query's cached data currently hold any of the given internal_ids?
+ * Handles both the array-shaped supplement caches (EnrichedEmailMeta[] — cross,
+ * pinned-supplement, thread-enriched) and thread-batch's
+ * Record<threadId, EmailMeta[]> shape. Used to gate supplement refetches so a
+ * write event only touches a supplement that actually shows the changed email.
+ */
+export function queryDataHoldsAnyId(data: unknown, ids: ReadonlySet<number>): boolean {
+  if (ids.size === 0) return false
+  if (Array.isArray(data)) return arrayHoldsAnyId(data, ids)
+  if (data !== null && typeof data === 'object') {
+    for (const value of Object.values(data as Record<string, unknown>)) {
+      if (Array.isArray(value) && arrayHoldsAnyId(value, ids)) return true
+    }
+  }
+  return false
+}
+
+function arrayHoldsAnyId(rows: readonly unknown[], ids: ReadonlySet<number>): boolean {
+  for (const row of rows) {
+    if (row !== null && typeof row === 'object') {
+      const internalId = (row as { internal_id?: unknown }).internal_id
+      if (typeof internalId === 'number' && ids.has(internalId)) return true
+    }
+  }
+  return false
+}
+
+// ---- event → invalidation directive planner ----
+
+/**
+ * A single invalidation instruction. The event bridge translates each into a
+ * (debounced) queryClient.invalidateQueries call:
+ *   • 'main-list'    → predicate invalidate of the primary mailbox list family
+ *   • 'supplements'  → predicate invalidate of supplement families whose cache
+ *                      holds a changed internal_id (batched over the debounce
+ *                      window)
+ *   • 'key'          → prefix invalidate of an exact key (mailboxes / a single
+ *                      email detail / pinnedIds / folder)
+ */
+export type InvalidationDirective =
+  | { kind: 'main-list' }
+  | { kind: 'supplements' }
+  | { kind: 'key'; key: (string | number)[] }
+
+/**
+ * Map an SSE event_type (+ internal_id) to the invalidation directives the
+ * event bridge should run. Unhandled events (outbox.enqueued / outbox.failed /
+ * llm.failed / …) return [] — same as the previous no-op branch.
+ *
+ * A 'supplements' directive is only emitted when an internal_id is present to
+ * gate on; without one there is nothing to scope the containment check to, so
+ * the (rare) supplement-only staleness is left to the reactive query-key chain
+ * and the polling fallback.
+ */
+export function planInvalidation(
+  eventType: string,
+  internalId: number | null
+): InvalidationDirective[] {
+  switch (eventType) {
+    // Any mailbox-level write: list ordering / row state / mailbox counts can
+    // all move. Main list + counts always; the changed email's detail + any
+    // supplement holding it, id-gated.
+    case 'email.synced':
+    case 'email.failed':
+    case 'email.dead_letter':
+    case 'email.flag_changed': {
+      const out: InvalidationDirective[] = [
+        { kind: 'main-list' },
+        { kind: 'key', key: ['mailboxes'] }
+      ]
+      if (internalId != null) {
+        out.push({ kind: 'supplements' })
+        // Prefix invalidate — covers ['email', id] AND ['email', id, 'ai'] (and
+        // translation / body / thread-count for that id), matching the previous
+        // ['email', id] prefix call exactly.
+        out.push({ kind: 'key', key: ['email', internalId] })
+      }
+      return out
+    }
+    // pin / unpin: refresh ['pinnedIds'] → usePinnedSync updates the zustand
+    // mirror → pinnedList changes → the pinned-supplement queryKey changes and
+    // refetches on its own. Main list carries the pinned-bucket routing. The
+    // supplements directive reconciles an already-cached (e.g. just-unpinned)
+    // row directly instead of leaning solely on that reactive chain.
+    case 'email.pin_changed': {
+      const out: InvalidationDirective[] = [
+        { kind: 'main-list' },
+        { kind: 'key', key: ['pinnedIds'] }
+      ]
+      if (internalId != null) out.push({ kind: 'supplements' })
+      return out
+    }
+    // outbox fanout completed: derived Notion / Mail.app state on the email may
+    // have moved. Main list + any supplement holding the id.
+    case 'outbox.done': {
+      const out: InvalidationDirective[] = [{ kind: 'main-list' }]
+      if (internalId != null) out.push({ kind: 'supplements' })
+      return out
+    }
+    // LLM done: ai_priority / ai_action land on the single email (detail) and
+    // show in the list + thread-enriched rows.
+    case 'llm.success': {
+      const out: InvalidationDirective[] = [{ kind: 'main-list' }]
+      if (internalId != null) {
+        out.push({ kind: 'key', key: ['email', internalId, 'ai'] })
+        out.push({ kind: 'supplements' })
+      }
+      return out
+    }
+    // folder sync — unrelated to the ['emails'] fan-out, unchanged.
+    case 'folder.synced':
+      return [{ kind: 'key', key: ['folder'] }]
+    default:
+      return []
+  }
+}
+
+// ---- test / documentation resolver ----
+
+export interface EmailQueryCacheEntry {
+  queryKey: QueryKeyLike
+  data: unknown
+  /**
+   * Whether the query currently has active observers (is rendered). Coverage
+   * and refetch only consider active caches: TanStack's default
+   * refetchType='active' only refetches active queries, and an inactive
+   * historical view cache — e.g. a previously-viewed larger window still
+   * inside its gcTime — does NOT represent what is on screen. Counting such a
+   * cache toward main-list coverage would wrongly suppress an active
+   * supplement's refetch (it holds an id the visible list does not), leaving
+   * an optimistic patch unreconciled. Defaults to true when unspecified.
+   */
+  active?: boolean
+}
+
+function isActiveEntry(entry: EmailQueryCacheEntry): boolean {
+  return entry.active !== false
+}
+
+/**
+ * Gather every internal_id held by the ACTIVE main-list caches. A supplement
+ * refetch is unnecessary for any of these ids because the merged view renders
+ * the main-list row in preference to the supplement copy.
+ *
+ * Only active main-list entries count — inactive historical view caches do not
+ * represent the current display, so they must not participate in coverage
+ * (this is the fix for the inactive-cache-masks-coverage bug). The live
+ * useEventBridge path additionally pre-filters with `type: 'active'` on
+ * getQueriesData, since those tuples carry no active flag.
+ */
+export function collectMainListIds(caches: readonly EmailQueryCacheEntry[]): Set<number> {
+  const ids = new Set<number>()
+  for (const entry of caches) {
+    if (!isActiveEntry(entry) || !isMainListKey(entry.queryKey) || !Array.isArray(entry.data)) {
+      continue
+    }
+    for (const row of entry.data) {
+      if (row !== null && typeof row === 'object') {
+        const internalId = (row as { internal_id?: unknown }).internal_id
+        if (typeof internalId === 'number') ids.add(internalId)
+      }
+    }
+  }
+  return ids
+}
+
+/**
+ * Resolve one event against a snapshot of the ['emails'] query caches into the
+ * exact set of queryKeys that would be invalidated. Mirrors what
+ * useEventBridge does at flush time (main-list predicate + main-list-precedence
+ * supplement containment + exact keys) so tests can assert the real fan-out
+ * without a live QueryClient. 'key' directives contribute their (prefix) target
+ * key; family directives contribute the concrete matched cache keys.
+ */
+export function resolveInvalidatedKeys(
+  eventType: string,
+  internalId: number | null,
+  caches: readonly EmailQueryCacheEntry[]
+): QueryKeyLike[] {
+  const directives = planInvalidation(eventType, internalId)
+  const ids = internalId != null ? new Set([internalId]) : new Set<number>()
+  const out: QueryKeyLike[] = []
+  const seen = new Set<string>()
+  const push = (key: QueryKeyLike): void => {
+    const sig = JSON.stringify(key)
+    if (seen.has(sig)) return
+    seen.add(sig)
+    out.push(key)
+  }
+  for (const directive of directives) {
+    switch (directive.kind) {
+      case 'main-list':
+        // refetchType='active' — only active main-list queries refetch.
+        for (const entry of caches) {
+          if (isActiveEntry(entry) && isMainListKey(entry.queryKey)) push(entry.queryKey)
+        }
+        break
+      case 'supplements': {
+        // Coverage from active main lists only (collectMainListIds filters);
+        // refetch active supplements holding an uncovered id.
+        const mainListIds = collectMainListIds(caches)
+        const uncovered = new Set([...ids].filter((id) => !mainListIds.has(id)))
+        if (uncovered.size === 0) break
+        for (const entry of caches) {
+          if (
+            isActiveEntry(entry) &&
+            isEmailSupplementKey(entry.queryKey) &&
+            queryDataHoldsAnyId(entry.data, uncovered)
+          ) {
+            push(entry.queryKey)
+          }
+        }
+        break
+      }
+      case 'key':
+        push(directive.key)
+        break
+    }
+  }
+  return out
+}
