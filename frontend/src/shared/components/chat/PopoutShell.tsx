@@ -22,6 +22,7 @@ import { useActiveEmail } from '@shared/state/active-email'
 import { usePopoutMode } from '@shared/state/popout-mode'
 
 import { AIChatPanel } from '@shared/assistant/AiChatPanel'
+import { ChatPanelBoundary } from './ChatPanelBoundary'
 
 export function PopoutShell(): React.ReactElement {
   const emailId = usePopoutMode((s) => s.emailId)
@@ -39,7 +40,11 @@ export function PopoutShell(): React.ReactElement {
     // 主题 v2 — 去掉不透明 bg-ink-2: popout 窗同样走「一块玻璃」, 基底
     // tint 由 body::before 提供 (solid/降级路径它会画不透明 ink-0)。
     <div className="h-screen w-screen flex">
-      <AIChatPanel fullScreen />
+      {/* P2-9 — the popout IS the chat; a crash here used to hit the root
+          boundary and turn the whole window into a stack dump. */}
+      <ChatPanelBoundary>
+        <AIChatPanel fullScreen />
+      </ChatPanelBoundary>
     </div>
   )
 }

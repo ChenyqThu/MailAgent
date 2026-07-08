@@ -686,6 +686,11 @@
       "emailContextUntitled": "(no subject)"
     },
     "resizePanel": "Drag to resize panel",
+    "panelError": {
+      "title": "The AI chat panel ran into an error",
+      "hint": "Reset the panel to recover — your conversations are preserved.",
+      "reset": "Reset panel"
+    },
     "popout": {
       "button": "Open in window · ⇧⌥W",
       "close": "Close window"
@@ -2701,6 +2706,8 @@
       "failed": "Report generation failed",
       "failedHint": "LLM call errored, retry available.",
       "regenerate": "Regenerate",
+      "renderError": "Report failed to render",
+      "renderErrorRetry": "Retry",
       "empty": "No new email in this period",
       "emptyHint": "No new email in the selected time window — nothing to report.",
       "generatedAt": "Generated",

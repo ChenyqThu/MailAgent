@@ -14,6 +14,7 @@ import { ChevronLeft } from 'lucide-react'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { useGeneralChat } from '@shared/hooks/useGeneralChat'
 import { useAIChatPanel } from '@shared/state/ai-chat-panel'
+import { ChatPanelBoundary } from '@shared/components/chat/ChatPanelBoundary'
 
 import { AgentThreadList } from './AgentThreadList'
 import { AgentConversation } from './AgentConversation'
@@ -117,7 +118,13 @@ export function AgentViewLayout(): React.ReactElement {
 
   // The welcome heading + quick-action chips now live INSIDE AgentThread (demo layout: heading at the
   // viewport top, chips below the centered composer), so AgentConversation owns the empty state.
-  const conversation = <AgentConversation chat={chat} activeItem={activeItem} />
+  // P2-9 — local boundary: the list stays interactive when the conversation crashes, and picking
+  // another session auto-clears the held error via resetKeys.
+  const conversation = (
+    <ChatPanelBoundary resetKeys={[chat.activeSessionId]}>
+      <AgentConversation chat={chat} activeItem={activeItem} />
+    </ChatPanelBoundary>
+  )
 
   if (narrow) {
     return mobileDetail ? (

@@ -686,6 +686,11 @@
       "emailContextUntitled": "(无主题)"
     },
     "resizePanel": "拖动调整面板宽度",
+    "panelError": {
+      "title": "AI 对话面板出错了",
+      "hint": "重置面板即可恢复，会话记录不会丢失。",
+      "reset": "重置面板"
+    },
     "popout": {
       "button": "在独立窗口打开 · ⇧⌥W",
       "close": "关闭窗口"
@@ -2701,6 +2706,8 @@
       "failed": "报告生成失败",
       "failedHint": "LLM 调用出错，可重试。",
       "regenerate": "重新生成",
+      "renderError": "报告渲染出错",
+      "renderErrorRetry": "重试",
       "empty": "这段时间没有新邮件",
       "emptyHint": "所选时间窗口内没有新邮件，无需生成报告。",
       "generatedAt": "生成于",

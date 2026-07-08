@@ -8,6 +8,7 @@ import type { ReportCadence, ReportListItem } from '@shared/api/types'
 import { cn } from '@shared/lib/cn'
 import { SegmentedControl } from '@shared/components/ui/segmented'
 import { ShimmerText } from '@shared/components/ShimmerText'
+import { ErrorBoundary } from '@shared/components/ErrorBoundary'
 import { BlockRenderer } from './BlockRenderer'
 import { EmailSourcePanel } from './EmailSourcePanel'
 import { CadencePill, ReportIcon, StatusBadge } from './primitives'
@@ -416,6 +417,62 @@ function FailedState({
   )
 }
 
+// P2-9 — render-crash fallback for BlockRenderer (visual sibling of
+// FailedState, but retry = re-render the boundary, not regenerate).
+function RenderErrorState({ onRetry }: { onRetry: () => void }): React.ReactElement {
+  const { t } = useTranslation()
+  return (
+    <div
+      style={{
+        maxWidth: 520,
+        margin: '60px auto 0',
+        textAlign: 'center',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        gap: 14
+      }}
+    >
+      <span
+        style={{
+          width: 52,
+          height: 52,
+          borderRadius: 13,
+          display: 'grid',
+          placeItems: 'center',
+          background: 'rgb(var(--c-fail) / 0.12)',
+          color: 'rgb(var(--c-fail))'
+        }}
+      >
+        <ReportIcon name="alert" size={24} />
+      </span>
+      <h3 style={{ fontSize: 16, fontWeight: 600, color: 'rgb(var(--ink-fg))' }}>
+        {t('agents.reports.renderError')}
+      </h3>
+      <button
+        type="button"
+        onClick={onRetry}
+        className="flex items-center"
+        style={{
+          gap: 7,
+          padding: '8px 16px',
+          borderRadius: 8,
+          fontFamily: 'inherit',
+          fontSize: 13.5,
+          fontWeight: 500,
+          cursor: 'pointer',
+          color: 'rgb(var(--c-accent))',
+          background: 'rgb(var(--c-accent) / 0.10)',
+          border: '1px solid rgb(var(--c-accent) / 0.30)'
+        }}
+      >
+        <ReportIcon name="refresh" size={14} />
+        {t('agents.reports.renderErrorRetry')}
+      </button>
+    </div>
+  )
+}
+
 function EmptyState({ total }: { total: number }): React.ReactElement {
   const { t } = useTranslation()
   return (
@@ -549,7 +606,16 @@ function ReportDetailView({
             (isLoading ? (
               <GeneratingState />
             ) : report?.doc ? (
-              <BlockRenderer blocks={report.doc.blocks} ctx={ctx} />
+              // P2-9 — blocks are LLM-generated; a malformed block must not
+              // blank the whole window. resetKeys clears a held error when the
+              // user picks another report.
+              <ErrorBoundary
+                label="report-blocks"
+                resetKeys={[item.id]}
+                fallback={({ reset }) => <RenderErrorState onRetry={reset} />}
+              >
+                <BlockRenderer blocks={report.doc.blocks} ctx={ctx} />
+              </ErrorBoundary>
             ) : (
               <EmptyState total={item.counts?.total ?? 0} />
             ))}

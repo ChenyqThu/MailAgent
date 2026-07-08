@@ -43,6 +43,7 @@ import {
   type AssistantMode
 } from '@shared/state/ai-chat-panel'
 import { AgentConversation } from '@shared/components/agents/AgentConversation'
+import { ChatPanelBoundary } from '@shared/components/chat/ChatPanelBoundary'
 import { ChatModalHistoryDropdown } from './ChatModalHistoryDropdown'
 import { titleOf } from './sessionTitle'
 
@@ -338,12 +339,17 @@ function AssistantChatModalInner(): React.JSX.Element {
       </div>
       {/* body: 通用 agent 对话（三模式共享同一组件，welcomeAlign='left' 对齐截图）。 */}
       <div className="flex min-h-0 flex-1 flex-col">
-        <AgentConversation
-          chat={chat}
-          activeItem={activeItem}
-          welcomeAlign="left"
-          initialMentionEmailId={activeEmailId ?? undefined}
-        />
+        {/* P2-9 — local boundary: a streaming-render crash resets in place
+            instead of blanking the whole window; switching session while
+            crashed auto-clears via resetKeys. */}
+        <ChatPanelBoundary resetKeys={[chat.activeSessionId]}>
+          <AgentConversation
+            chat={chat}
+            activeItem={activeItem}
+            welcomeAlign="left"
+            initialMentionEmailId={activeEmailId ?? undefined}
+          />
+        </ChatPanelBoundary>
       </div>
     </div>
   )
