@@ -47,6 +47,7 @@ hooks/useEmailListRows.ts ~500 行（数据管线）
 
 ## 状态
 
-- [ ] A-1 落地
-- [ ] A-2 落地
-- [ ] 台账 P1-4 状态更新
+- [x] A-1 落地 `8c856c14`（1705→825，46 case 单测安全网，check 零缺陷）
+- [x] A-2 落地 `27c26305`（825→133 + hooks/useEmailListRows.ts 801 行；双重机械字节级比对零差异）
+- [x] Phase V 实渲染验证（2026-07-11，`--dir` 打包 + Playwright e2e：EmailList/inbox 面 12 用例全绿——boot/listEnriched/inbox 默认/详情/旗标筛选/深色/双语言截图；另 6 个失败为先存陈旧期望[Settings rail 化击穿 openSettings helper ×5 + ⌘L S3 退役残留 ×1]，与本拆分无因果，已开独立修复任务。⚠️ e2e 前必须退出生产 App——requestSingleInstanceLock 会让测试实例秒退造成 18 全挂假象）
+- [x] 台账 P1-4 状态更新（README 台账 ✅，2026-07-11）

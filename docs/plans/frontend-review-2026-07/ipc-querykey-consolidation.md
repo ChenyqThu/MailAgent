@@ -37,7 +37,7 @@ Lane C 必须在 Lane A（EmailList 拆分 A-1/A-2）合入后启动——错误
 
 ## 状态
 
-- [ ] ipcErrors.ts + 收编
-- [ ] queryKeys.ts + 收编
-- [ ] thread supplement SSE 路由修复
-- [ ] 台账 P2-7/P2-8 状态更新 + 新记录项（乐观回滚去重）
+- [x] ipcErrors.ts + 收编 `a0b7035f`（~34 三元 + ~20 强转 + asWriteError 双拷贝；余 7 处自定义 fallback 豁免；3 处误吞转 toast）
+- [x] queryKeys.ts + 收编 `a0b7035f`（~30 族 / ~90+ 点 / 48 文件；守护测试锚定字节一致；豁免 1 处 calendar spread）
+- [x] thread-members SSE 路由修复 `d8c2bbe7`（+6 case，check 核实守住 P1-2 分层）
+- [x] 台账 P2-7/P2-8 状态更新 + 新记录项（乐观回滚去重进"明确不做"，2026-07-11）
