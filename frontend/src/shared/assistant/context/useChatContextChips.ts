@@ -8,6 +8,7 @@
 // panels share the React Query cache (no double-fetch on the same email).
 
 import { useQuery } from '@tanstack/react-query'
+import { qk } from '@shared/lib/queryKeys'
 
 import type { AIFields, EmailDetail, EmailMeta } from '@shared/api/types'
 import { useMailApi } from '@shared/hooks/useMailApi'
@@ -39,7 +40,7 @@ export function useChatContextChips(activeInternalId: number | null): ChatContex
   const mailApi = useMailApi()
 
   const detailQ = useQuery({
-    queryKey: ['email', activeInternalId],
+    queryKey: qk.email.detail(activeInternalId),
     queryFn: () => mailApi.email.get(activeInternalId as number),
     enabled: activeInternalId !== null,
     staleTime: 30_000
@@ -47,14 +48,14 @@ export function useChatContextChips(activeInternalId: number | null): ChatContex
   const threadId = detailQ.data?.thread_id ?? null
 
   const aiQ = useQuery({
-    queryKey: ['email', activeInternalId, 'ai'],
+    queryKey: qk.email.ai(activeInternalId),
     queryFn: () => mailApi.email.aiFields(activeInternalId as number),
     enabled: activeInternalId !== null,
     staleTime: 30_000
   })
 
   const threadQ = useQuery({
-    queryKey: ['email', threadId, 'thread-count'],
+    queryKey: qk.email.threadCount(threadId),
     queryFn: () => mailApi.email.listByThread(threadId),
     enabled: threadId !== null,
     staleTime: 30_000,

@@ -20,6 +20,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
+import { qk } from '@shared/lib/queryKeys'
 import { History, Maximize2, Plus, Settings, Sparkles, X } from 'lucide-react'
 
 import type { SearchHit } from '@shared/api/types'
@@ -357,7 +358,7 @@ export function AIChatPanel({
 
   // Readiness = keychain llmApiKey present (the gateway reads the same slot in main).
   const secretsQ = useQuery({
-    queryKey: ['settings', 'secrets-status'],
+    queryKey: qk.settings.secretsStatus(),
     queryFn: () => mailApi.settings.secretsStatus(),
     staleTime: 30_000
   })
@@ -368,7 +369,7 @@ export function AIChatPanel({
   // longer degrades to another engine (none exists): the panel shows an error notice + retry below
   // and keeps the current session readable (ReadOnlyTranscript).
   const healthQ = useQuery({
-    queryKey: ['ai-gateway', 'health', gatewayBaseUrl],
+    queryKey: qk.aiGateway.health(gatewayBaseUrl),
     queryFn: async () => {
       const res = await fetch(`${gatewayBaseUrl}/health`)
       if (!res.ok) throw new Error('ai-gateway unhealthy')
@@ -398,13 +399,11 @@ export function AIChatPanel({
       ? chat.activeSessionId
       : null
   const pendingApprovalQ = useQuery({
-    queryKey: [
-      'ai-gateway',
-      'approval-pending',
+    queryKey: qk.aiGateway.approvalPending(
       gatewayBaseUrl,
       pendingApprovalSessionId,
       islandRefreshNonce
-    ],
+    ),
     queryFn: async (): Promise<{ pending: boolean; toolName?: string }> => {
       try {
         const res = await fetch(

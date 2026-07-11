@@ -17,6 +17,7 @@ import {
   SelectValue
 } from '@shared/components/ui/select'
 import { applyEnvPatch, useEnvStore } from '@shared/state/env'
+import { errorMessage } from '@shared/lib/ipcErrors'
 import { useRestartStore } from '@shared/state/restart'
 import { toastError, toastSuccess } from '@shared/state/toast'
 // v27 「AI 邮件预处理」配置抽屉内联复用身份文档正文编辑器（同组件不同入口）。
@@ -243,7 +244,7 @@ export function PreprocessConfigDrawer({
       })
       onClose()
     } catch (e: unknown) {
-      toastError(t('agents.preprocess.rowSaveError'), (e as Error).message)
+      toastError(t('agents.preprocess.rowSaveError'), errorMessage(e))
     }
   }
 

@@ -52,6 +52,8 @@ import { cn } from '@shared/lib/cn'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { toastError, toastSuccess } from '@shared/state/toast'
 import { useComposeStore } from '@shared/state/compose'
+import { asWriteError } from '@shared/lib/ipcErrors'
+import { qk } from '@shared/lib/queryKeys'
 import { sanitizeEmailHtml } from '@shared/lib/emailSanitize'
 import { classifyDraftHtml } from '@shared/lib/draftHtmlGate'
 import { plaintextToHtml } from '@shared/lib/plaintext_html'
@@ -71,18 +73,6 @@ import { DeleteDraftDialog, SendConfirmDialog } from './ComposeDialogs'
 
 /** Panel mode = UI ComposeMode + 草稿编辑态 + 写新邮件态。 */
 export type PanelMode = ComposeMode | 'draft-edit' | 'new'
-
-interface WriteErrorShape {
-  code?: string
-  message: string
-}
-
-function asWriteError(err: unknown): WriteErrorShape {
-  if (err instanceof Error) {
-    return { code: (err as Error & { code?: string }).code, message: err.message }
-  }
-  return { message: String(err) }
-}
 
 /** "name" <a@x>, b@y; c@z → ['a@x','b@y','c@z'] —— 草稿回填 to_addr/cc_addr 提纯。 */
 function parseAddrList(raw?: string | null): string[] {
@@ -262,7 +252,7 @@ export function ComposePanelInner({
 
   // Owner email (From, read-only) + 签名 — same query key as Sidebar / drawers.
   const settingsQ = useQuery({
-    queryKey: ['settings'],
+    queryKey: qk.settings.all(),
     queryFn: () => mailApi.settings.get(),
     staleTime: 60_000
   })
@@ -271,7 +261,7 @@ export function ComposePanelInner({
 
   // 预填数据源 ① reply/forward: draftPlan (dry-run)。
   const planQ = useQuery<DraftPlanResult>({
-    queryKey: ['compose', 'plan', internalId, mode],
+    queryKey: qk.compose.planMode(internalId, mode),
     queryFn: () => mailApi.email.draftPlan({ internalId, mode: mode as ComposeMode }),
     enabled: internalId >= 0 && !isDraftEdit,
     staleTime: Infinity,
@@ -282,7 +272,7 @@ export function ComposePanelInner({
   // 预填数据源 ② draft-edit: email.get (to/cc/subject/importance) + email.body html (正文)。
   // html 为空时再取 markdown (D5 回落: AppleScript 存量行 / dual-write 关闭期的行)。
   const draftQ = useQuery({
-    queryKey: ['compose', 'draft-edit', internalId],
+    queryKey: qk.compose.draftEdit(internalId),
     queryFn: async () => {
       const [detail, body] = await Promise.all([
         mailApi.email.get(internalId),
@@ -304,7 +294,7 @@ export function ComposePanelInner({
   // 引用块展开时才拉原邮件 detail (reply/forward only)。draft-edit 保真模式直接用
   // draftQ 已取的 detail (同一封邮件, 不再多拉一次)。
   const detailQ = useQuery({
-    queryKey: ['email', internalId],
+    queryKey: qk.email.detail(internalId),
     queryFn: () => mailApi.email.get(internalId),
     enabled: internalId >= 0 && !isDraftEdit && quoteOpen,
     staleTime: 60_000
@@ -455,8 +445,8 @@ export function ComposePanelInner({
 
   const queryClient = useQueryClient()
   const invalidateLists = useCallback(() => {
-    void queryClient.invalidateQueries({ queryKey: ['emails'] })
-    void queryClient.invalidateQueries({ queryKey: ['mailboxes'] })
+    void queryClient.invalidateQueries({ queryKey: qk.emails.all() })
+    void queryClient.invalidateQueries({ queryKey: qk.mailboxes() })
   }, [queryClient])
 
   const buildComposePayload = useCallback(async () => {
@@ -477,7 +467,7 @@ export function ComposePanelInner({
       let detail
       try {
         detail = await queryClient.ensureQueryData({
-          queryKey: ['email', internalId],
+          queryKey: qk.email.detail(internalId),
           queryFn: () => mailApi.email.get(internalId)
         })
       } catch (err) {

@@ -605,6 +605,7 @@
     "delete": "Delete",
     "archive": "Archive",
     "restore": "Restore",
+    "actionFail": "Action failed: {error}",
     "more": "More",
     "collapseSidebar": "Collapse / expand history",
     "historyTitle": "Chats",

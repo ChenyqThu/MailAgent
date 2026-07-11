@@ -605,6 +605,7 @@
     "delete": "删除",
     "archive": "归档",
     "restore": "恢复",
+    "actionFail": "操作失败：{error}",
     "more": "更多",
     "collapseSidebar": "折叠 / 展开会话历史",
     "historyTitle": "会话",

@@ -16,6 +16,7 @@ import { Activity, AlertCircle, CheckCircle2, Database, RefreshCw } from 'lucide
 
 import type { DeadLetterItem } from '@shared/api/types'
 import { useMailApi } from '@shared/hooks/useMailApi'
+import { qk } from '@shared/lib/queryKeys'
 import { cn } from '@shared/lib/cn'
 import { DavMailHealthCard } from '@shared/components/admin/DavMailHealthCard'
 import { EmptyState } from '@shared/components/feedback/EmptyState'
@@ -212,19 +213,19 @@ export function AdminPage(): React.ReactElement {
   const [retryPending, setRetryPending] = useState<Set<number>>(new Set())
 
   const healthQ = useQuery({
-    queryKey: ['admin', 'health'],
+    queryKey: qk.admin.health(),
     queryFn: () => mailApi.admin.health(),
     staleTime: 10_000,
     refetchInterval: 30_000
   })
   const statsQ = useQuery({
-    queryKey: ['admin', 'stats'],
+    queryKey: qk.admin.stats(),
     queryFn: () => mailApi.admin.stats(),
     staleTime: 10_000,
     refetchInterval: 30_000
   })
   const dlQ = useQuery({
-    queryKey: ['admin', 'deadLetter'],
+    queryKey: qk.admin.deadLetter(),
     queryFn: () => mailApi.admin.deadLetterList({ limit: 50 }),
     staleTime: 10_000
   })
@@ -236,8 +237,8 @@ export function AdminPage(): React.ReactElement {
     },
     onSuccess: (_data, id) => {
       toastSuccess(t('admin.retryOk', { id }))
-      void qc.invalidateQueries({ queryKey: ['admin', 'deadLetter'] })
-      void qc.invalidateQueries({ queryKey: ['admin', 'stats'] })
+      void qc.invalidateQueries({ queryKey: qk.admin.deadLetter() })
+      void qc.invalidateQueries({ queryKey: qk.admin.stats() })
     },
     onError: (err: unknown, id) => {
       const e = err as Error & { code?: string }

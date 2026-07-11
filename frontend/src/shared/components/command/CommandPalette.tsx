@@ -66,6 +66,8 @@ import {
 } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
+import { errorMessage } from '@shared/lib/ipcErrors'
+import { qk } from '@shared/lib/queryKeys'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 import { useFocusTrap } from '@shared/hooks/useFocusTrap'
@@ -329,7 +331,7 @@ export function CommandPalette(): React.ReactElement | null {
   const langLabel = lang === 'zh' ? t('palette.lang.zh') : t('palette.lang.en')
 
   const mailboxesQ = useQuery({
-    queryKey: ['mailboxes'],
+    queryKey: qk.mailboxes(),
     queryFn: () => mailApi.email.listMailboxes(),
     staleTime: 30_000,
     enabled: open
@@ -341,7 +343,7 @@ export function CommandPalette(): React.ReactElement | null {
   // palette to baseline-load total_indexed for the footer". The IPC handler
   // returns empty items + cached COUNT in ~1ms for blank queries.
   const searchQ = useQuery<SearchResult>({
-    queryKey: ['palette', 'search', normalised],
+    queryKey: qk.palette.search(normalised),
     queryFn: async () => {
       const isEmpty = normalised.length === 0
       const t0 = performance.now()
@@ -771,10 +773,10 @@ export function CommandPalette(): React.ReactElement | null {
               allowConcurrent: true
             })
             toastSuccess(t('palette.actions.doneToast', { n: dedupedHits.length }))
-            await queryClient.invalidateQueries({ queryKey: ['emails'] })
+            await queryClient.invalidateQueries({ queryKey: qk.emails.all() })
             closeCommandPalette()
           } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err)
+            const msg = errorMessage(err)
             toastError(t('palette.actions.errToast'), msg)
           } finally {
             setActionRunning(null)
@@ -803,10 +805,10 @@ export function CommandPalette(): React.ReactElement | null {
             } else {
               toastSuccess(t('palette.actions.doneToast', { n: ok }))
             }
-            await queryClient.invalidateQueries({ queryKey: ['emails'] })
+            await queryClient.invalidateQueries({ queryKey: qk.emails.all() })
             closeCommandPalette()
           } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err)
+            const msg = errorMessage(err)
             toastError(t('palette.actions.errToast'), msg)
           } finally {
             setActionRunning(null)

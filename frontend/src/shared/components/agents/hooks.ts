@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { resolveApiBaseUrl } from '@shared/hooks/useLlmModels'
+import { qk } from '@shared/lib/queryKeys'
 import type {
   AgentRunHistoryItem,
   AgentRunPendingCount,
@@ -21,8 +22,8 @@ import type {
 
 const EMPTY_PENDING_COUNT: AgentRunPendingCount = { total: 0, byAgent: {} }
 
-const LIST_KEY = ['report', 'list'] as const
-const CONFIG_KEY = ['report', 'config'] as const
+const LIST_KEY = qk.report.list()
+const CONFIG_KEY = qk.report.config()
 
 export function useReportList(cadence?: ReportCadence): {
   items: ReportListItem[]
@@ -30,7 +31,7 @@ export function useReportList(cadence?: ReportCadence): {
 } {
   const api = useMailApi()
   const q = useQuery({
-    queryKey: [...LIST_KEY, cadence ?? 'all'],
+    queryKey: qk.report.listCadence(cadence ?? 'all'),
     queryFn: () => api.report.list(cadence ? { cadence } : undefined),
     refetchOnWindowFocus: true
   })
@@ -43,7 +44,7 @@ export function useReport(reportId: string | null): {
 } {
   const api = useMailApi()
   const q = useQuery({
-    queryKey: ['report', 'get', reportId],
+    queryKey: qk.report.get(reportId),
     queryFn: () => (reportId ? api.report.get(reportId) : Promise.resolve(null)),
     enabled: !!reportId
   })
@@ -78,7 +79,7 @@ export function useRunNow(): {
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: LIST_KEY })
       // S5：custom agent run-now enqueue 后刷新 run 历史（前缀匹配 ['agent-runs', ...]）。
-      void qc.invalidateQueries({ queryKey: ['agent-runs'] })
+      void qc.invalidateQueries({ queryKey: qk.agentRuns.all() })
     }
   })
   return {
@@ -160,7 +161,7 @@ export function useSetConfig(): {
 export function useKosAvailable(): boolean {
   const api = useMailApi()
   const q = useQuery({
-    queryKey: ['chat', 'kosAvailable'],
+    queryKey: qk.chat.kosAvailable(),
     queryFn: () => api.chat.kosAvailable(),
     staleTime: Infinity
   })
@@ -203,7 +204,7 @@ async function fetchOpennessFlags(): Promise<ChatOpennessFlags> {
 
 export function useOpennessFlags(enabled: boolean): ChatOpennessFlags {
   const q = useQuery({
-    queryKey: ['chat', 'config', 'opennessFlags'],
+    queryKey: qk.chat.config('opennessFlags'),
     queryFn: fetchOpennessFlags,
     enabled,
     staleTime: 30_000,
@@ -214,7 +215,7 @@ export function useOpennessFlags(enabled: boolean): ChatOpennessFlags {
 
 export function useCustomAgentsEnabled(): boolean {
   const q = useQuery({
-    queryKey: ['chat', 'config', 'customAgentsEnabled'],
+    queryKey: qk.chat.config('customAgentsEnabled'),
     queryFn: fetchCustomAgentsEnabled,
     staleTime: 30_000,
     retry: false
@@ -228,7 +229,7 @@ export function useCustomAgentsEnabled(): boolean {
 export function useAgentPendingCount(enabled: boolean): AgentRunPendingCount {
   const api = useMailApi()
   const q = useQuery({
-    queryKey: ['agent-runs', 'pending-count'],
+    queryKey: qk.agentRuns.pendingCount(),
     queryFn: () => api.report.pendingCount(),
     enabled,
     staleTime: 4_000,
@@ -245,7 +246,7 @@ export function usePendingRuns(enabled: boolean): {
 } {
   const api = useMailApi()
   const q = useQuery({
-    queryKey: ['agent-runs', 'list', 'paused_pending'],
+    queryKey: qk.agentRuns.pausedPending(),
     queryFn: () => api.report.listRuns({ state: 'paused_pending', limit: 50 }),
     enabled,
     staleTime: 4_000
@@ -261,7 +262,7 @@ export function useAgentRuns(
 ): { runs: AgentRunHistoryItem[]; isLoading: boolean; refetch: () => void } {
   const api = useMailApi()
   const q = useQuery({
-    queryKey: ['agent-runs', agentId ?? 'all', limit],
+    queryKey: qk.agentRuns.list(agentId, limit),
     queryFn: () => api.report.listRuns({ agentId: agentId ?? undefined, limit }),
     enabled: agentId != null
   })
@@ -277,7 +278,7 @@ export function useProjectProgressRuns(
 ): { runs: ProjectProgressRunItem[]; isLoading: boolean } {
   const api = useMailApi()
   const q = useQuery({
-    queryKey: ['project-progress-runs', limit],
+    queryKey: qk.projectProgressRuns(limit),
     queryFn: () => api.report.projectProgressRuns(limit),
     enabled,
     staleTime: 4_000
@@ -297,7 +298,7 @@ export function useToolOptions(enabled: boolean): {
 } {
   const api = useMailApi()
   const q = useQuery({
-    queryKey: ['agent-runs', 'tool-options'],
+    queryKey: qk.agentRuns.toolOptions(),
     queryFn: () => api.report.toolOptions(),
     enabled,
     staleTime: 60_000

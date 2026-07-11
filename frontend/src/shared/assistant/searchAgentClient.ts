@@ -19,6 +19,7 @@
 
 import type { MailApi, SearchAgentInput, SearchAgentResult, SearchHit } from '../api/types'
 import { resolveAiGatewayBaseUrl } from './runtime/flags'
+import { errorMessage } from '@shared/lib/ipcErrors'
 
 // ── 内置默认搜索 prompt（legacy §3.3 同文；prompt=NULL 时用，{today}/{me} 由本客户端填）──
 // SSoT 迁址：legacy shared/chat/search_agent.ts 的同名常量随 W3 删除，AgentsTab 届时改
@@ -53,7 +54,7 @@ export async function runGatewaySearchAgent(
   try {
     return await runGatewaySearchAgentInner(reads, input)
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
+    const message = errorMessage(err)
     return { ok: false, hits: [], summary: null, error: { code: 'E_AGENT', message } }
   }
 }
@@ -143,7 +144,7 @@ async function runGatewaySearchAgentInner(
     const code = (err as { code?: unknown }).code
     harnessError = {
       code: typeof code === 'string' ? code : 'E_AGENT',
-      message: err instanceof Error ? err.message : String(err)
+      message: errorMessage(err)
     }
   }
 
@@ -263,7 +264,7 @@ async function fallbackToNlToDsl(
     if (dsl) out.fallbackDsl = dsl
     return out
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
+    const message = errorMessage(err)
     return {
       ok: false,
       hits: [],

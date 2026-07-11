@@ -14,6 +14,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { useMailApi } from './useMailApi'
+import { errorMessage } from '@shared/lib/ipcErrors'
 import type { ChatMessage, ChatSession } from '../api/types'
 import type { ChatError } from './useEmailChat'
 
@@ -121,7 +122,7 @@ export function useGeneralChat(): UseGeneralChatReturn {
         }
       } catch (err) {
         if (cancelled) return
-        const message = err instanceof Error ? err.message : String(err)
+        const message = errorMessage(err)
         setError({ code: 'E_LOAD', message })
       }
     })()
@@ -189,7 +190,7 @@ export function useGeneralChat(): UseGeneralChatReturn {
       try {
         await refresh(sessionId)
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
+        const message = errorMessage(err)
         setError({ code: 'E_LOAD', message })
       }
     },
@@ -205,7 +206,7 @@ export function useGeneralChat(): UseGeneralChatReturn {
     try {
       await refresh(sid)
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
+      const message = errorMessage(err)
       setError({ code: 'E_LOAD', message })
     }
   }, [refresh])

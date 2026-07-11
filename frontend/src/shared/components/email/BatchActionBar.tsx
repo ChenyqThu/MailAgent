@@ -15,6 +15,8 @@ import { Archive, CheckCircle2, Flag, Mail, RefreshCw, X } from 'lucide-react'
 
 import type { JobEnqueueResult } from '@shared/api/types'
 import { cn } from '@shared/lib/cn'
+import { errorMessage } from '@shared/lib/ipcErrors'
+import { qk } from '@shared/lib/queryKeys'
 import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 import { useBatch } from '@shared/state/batch'
 import { useMailApi } from '@shared/hooks/useMailApi'
@@ -96,10 +98,10 @@ export function BatchActionBar({
     } catch (err) {
       // Single CLI call → single failure surface (E_AUTH / E_PM2_RUNNING /
       // network). Whole batch failed; no partial state to report.
-      const msg = err instanceof Error ? err.message : String(err)
+      const msg = errorMessage(err)
       toastError(`${label} 失败`, msg)
     }
-    await queryClient.invalidateQueries({ queryKey: ['emails'] })
+    await queryClient.invalidateQueries({ queryKey: qk.emails.all() })
   }
 
   // D2b — 批量重传 Notion: 起一个 async_jobs resync job (后台串行), watchResyncJob
@@ -111,7 +113,7 @@ export function BatchActionBar({
       const res = (await mailApi.email.batchResync(ids)) as JobEnqueueResult
       watchResyncJob({ mailApi, queryClient, t, jobId: res.job_id, total: ids.length })
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
+      const msg = errorMessage(err)
       toastError(`${t('batchbar.resync')} 失败`, msg)
     }
   }

@@ -14,6 +14,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useQuery } from '@tanstack/react-query'
+import { qk } from '@shared/lib/queryKeys'
 import { useNavigate } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import { AlertTriangle, ArrowRight, Info, ShieldAlert } from 'lucide-react'
@@ -50,7 +51,7 @@ export function SystemAlertBadge(): React.ReactElement | null {
     enterDuration: DUR.fast
   })
   const q = useQuery({
-    queryKey: ['admin', 'systemAlerts'],
+    queryKey: qk.admin.systemAlerts(),
     queryFn: () => mailApi.admin.systemAlerts(),
     staleTime: 4_000,
     refetchInterval: 5_000

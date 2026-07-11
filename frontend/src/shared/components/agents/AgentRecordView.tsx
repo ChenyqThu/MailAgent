@@ -14,6 +14,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 
 import type { AgentRunState, ChatSessionListItem } from '@shared/api/types'
 import { useMailApi } from '@shared/hooks/useMailApi'
+import { qk } from '@shared/lib/queryKeys'
 import type { UseGeneralChatReturn } from '@shared/hooks/useGeneralChat'
 import { chatMessageToUIMessage } from '@shared/assistant/uiMessage'
 import { AiSdkRuntimeProvider } from '@shared/assistant/runtime/AiSdkRuntimeProvider'
@@ -30,10 +31,7 @@ import { ReportIcon } from './primitives'
 import { useAgentRuns, useReportConfig } from './hooks'
 
 /** ms → "刚刚 / N 分钟前 / N 小时前 / N 天前"。审批卡 ageMs / banner 触发时间共用。 */
-function ageLabel(
-  t: (k: string, o?: Record<string, unknown>) => string,
-  ms: number
-): string {
+function ageLabel(t: (k: string, o?: Record<string, unknown>) => string, ms: number): string {
   const mins = Math.max(0, Math.floor(ms / 60000))
   if (mins < 1) return t('agents.custom.runs.ageJustNow')
   if (mins < 60) return t('agents.custom.runs.ageMinutes', { n: mins })
@@ -98,7 +96,7 @@ export function InRecordApprovalPanel({
 }): React.ReactElement | null {
   const { t } = useTranslation()
   const qc = useQueryClient()
-  const pendingKey = ['agent-approval-pending', sessionId] as const
+  const pendingKey = qk.agentApprovalPending(sessionId)
   const q = useQuery({
     queryKey: pendingKey,
     queryFn: () => (sessionId == null ? Promise.resolve(null) : fetchPendingApproval(sessionId)),
@@ -111,7 +109,8 @@ export function InRecordApprovalPanel({
   // S6 W3-3 — the "总是允许该域名" web PIN affordance. ONLY for an agent-run web_fetch approval
   // (agentId present): a manual web_fetch never stashes / never runs policyEvaluate, so a per-agent
   // web rule built from a manual card would be a dead, misleading config. Gate the affordance on both.
-  const isAgentWebFetch = pending != null && pending.agentId != null && pending.toolName === 'web_fetch'
+  const isAgentWebFetch =
+    pending != null && pending.agentId != null && pending.toolName === 'web_fetch'
   const [rememberDomain, setRememberDomain] = useState(false)
 
   const decide = async (decision: 'approve' | 'reject'): Promise<void> => {
@@ -214,10 +213,11 @@ export function AgentRecordConversation({
 
   // banner 数据：名 = report config 缓存；run 态 + 触发时间 = 该 agent 的 run 历史里 jobId 命中行。
   const { agents } = useReportConfig()
-  const agentName = agents.find((a) => a.id === agentId)?.title ?? agentId ?? t('agents.custom.runs.unknownAgent')
+  const agentName =
+    agents.find((a) => a.id === agentId)?.title ?? agentId ?? t('agents.custom.runs.unknownAgent')
   const { runs } = useAgentRuns(agentId)
   const run = useMemo(
-    () => (jobId != null ? runs.find((r) => r.jobId === jobId) ?? null : null),
+    () => (jobId != null ? (runs.find((r) => r.jobId === jobId) ?? null) : null),
     [runs, jobId]
   )
   const runState = run?.state ?? null
@@ -228,7 +228,7 @@ export function AgentRecordConversation({
   const onDecided = (): void => {
     void chat.reloadActiveSession()
     setRefreshNonce((n) => n + 1)
-    void qc.invalidateQueries({ queryKey: ['agent-runs'] })
+    void qc.invalidateQueries({ queryKey: qk.agentRuns.all() })
   }
 
   // 桌面：岛/并发决策也会改这个 session 的 rows → 订阅 chat:session-updated 覆盖非本面发起的结算。
@@ -240,8 +240,8 @@ export function AgentRecordConversation({
       if (payload.sessionId !== activeSessionId) return
       void reloadActiveSession()
       setRefreshNonce((n) => n + 1)
-      void qc.invalidateQueries({ queryKey: ['agent-approval-pending', activeSessionId] })
-      void qc.invalidateQueries({ queryKey: ['agent-runs'] })
+      void qc.invalidateQueries({ queryKey: qk.agentApprovalPending(activeSessionId) })
+      void qc.invalidateQueries({ queryKey: qk.agentRuns.all() })
     })
     return dispose
   }, [mailApi, activeSessionId, reloadActiveSession, qc])

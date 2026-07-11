@@ -23,6 +23,7 @@
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
 import { useQuery } from '@tanstack/react-query'
+import { qk } from '@shared/lib/queryKeys'
 import { useNavigate } from '@tanstack/react-router'
 import {
   ArrowUpRight,
@@ -170,7 +171,7 @@ export function SystemCapabilitiesSection(): React.ReactElement {
 
   // 技能包管理面可见性（与 SkillPacksSection 共享同一 query cache，去重）。
   const { data: skillInstallEnabled } = useQuery<boolean>({
-    queryKey: ['chat', 'config', 'skillInstallEnabled'],
+    queryKey: qk.chat.config('skillInstallEnabled'),
     queryFn: fetchSkillInstallEnabled,
     staleTime: 30_000,
     retry: false

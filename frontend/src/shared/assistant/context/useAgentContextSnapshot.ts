@@ -14,6 +14,7 @@ import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 
 import { useMailApi } from '@shared/hooks/useMailApi'
+import { qk } from '@shared/lib/queryKeys'
 import type { EmailMeta } from '@shared/api/types'
 import {
   buildAgentContextSnapshot,
@@ -64,7 +65,7 @@ export function useAgentContextSnapshot(
   const active = enabled && activeInternalId !== null
 
   const detailQ = useQuery({
-    queryKey: ['email', activeInternalId],
+    queryKey: qk.email.detail(activeInternalId),
     queryFn: () => mailApi.email.get(activeInternalId as number),
     enabled: active,
     staleTime: 30_000
@@ -72,14 +73,14 @@ export function useAgentContextSnapshot(
   const threadId = detailQ.data?.thread_id ?? null
 
   const aiQ = useQuery({
-    queryKey: ['email', activeInternalId, 'ai'],
+    queryKey: qk.email.ai(activeInternalId),
     queryFn: () => mailApi.email.aiFields(activeInternalId as number),
     enabled: active,
     staleTime: 30_000
   })
 
   const threadQ = useQuery({
-    queryKey: ['email', threadId, 'thread-count'],
+    queryKey: qk.email.threadCount(threadId),
     queryFn: () => mailApi.email.listByThread(threadId),
     enabled: active && threadId !== null,
     staleTime: 30_000,
@@ -89,7 +90,7 @@ export function useAgentContextSnapshot(
   // Full body markdown (untruncated) — same endpoint the legacy EmailContext loader uses, but we
   // let the builder clip to the §6 budget so charsTotal is accurate.
   const bodyQ = useQuery({
-    queryKey: ['email', activeInternalId, 'body', 'markdown'],
+    queryKey: qk.email.body(activeInternalId, 'markdown'),
     queryFn: () => mailApi.email.body(activeInternalId as number, { format: 'markdown' }),
     enabled: active,
     staleTime: 30_000

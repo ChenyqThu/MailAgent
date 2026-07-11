@@ -6,6 +6,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 
 import type { ExecPolicyRule } from '@shared/api/types'
 import { useMailApi } from '@shared/hooks/useMailApi'
+import { qk } from '@shared/lib/queryKeys'
 import { Switch } from '../primitives'
 import {
   Select,
@@ -84,7 +85,7 @@ export function AutomationPolicySection({
   // skill 挂载多选数据源 = 统一 registry 投影（builtin + installed；owner 全局关掉的 skill 仍列出，
   // 但挂载不能复活它 —— fail 方向恒收窄，见 ADR §5.1）。graceful []（后端不可达 → 空态提示）。
   const skillsListQ = useQuery({
-    queryKey: ['agent', 'skills', 'registry'],
+    queryKey: qk.agent.skillsRegistry(),
     queryFn: () => api.chat.listSkills(),
     staleTime: 60_000
   })
@@ -96,18 +97,18 @@ export function AutomationPolicySection({
   )
 
   const rulesQ = useQuery({
-    queryKey: ['policy', 'rules', agentId],
+    queryKey: qk.policy.rules(agentId),
     queryFn: () => api.chat.listPolicyRules({ agentId })
   })
   const rules = rulesQ.data ?? []
   const refetchRules = (): void => {
-    void qc.invalidateQueries({ queryKey: ['policy', 'rules', agentId] })
+    void qc.invalidateQueries({ queryKey: qk.policy.rules(agentId) })
   }
 
   const [formOpen, setFormOpen] = useState(false)
   // entrypoint 候选仅建 exec 规则需要；graceful []（flag off / 无安装面 → 空态提示）。
   const entryQ = useQuery({
-    queryKey: ['policy', 'skill-entrypoints'],
+    queryKey: qk.policy.skillEntrypoints(),
     queryFn: () => api.chat.listSkillEntrypoints(),
     enabled: formOpen,
     staleTime: 60_000

@@ -16,6 +16,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { X } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
+import { qk } from '@shared/lib/queryKeys'
 
 import { cn } from '@shared/lib/cn'
 import { useMailApi } from '@shared/hooks/useMailApi'
@@ -101,7 +102,7 @@ export function RecipientField({
   // the dropdown only queries while the user is actively in the field. Stale
   // responses dedupe by queryKey, so no manual cancel flag is needed.
   const suggestQ = useQuery<ContactSuggestion[]>({
-    queryKey: ['contactSuggest', debounced, exclude],
+    queryKey: qk.contactSuggest(debounced, exclude),
     queryFn: () => mailApi.email.contactSuggest(debounced, SUGGEST_LIMIT, exclude),
     enabled: focused && debounced.length >= 1,
     staleTime: 30_000

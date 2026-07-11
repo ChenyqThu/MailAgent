@@ -32,6 +32,7 @@ import type {
   Status
 } from './ipc'
 import type { FolderInfo, FolderTreeNode } from '@shared/api/types'
+import { errorMessage } from '@shared/lib/ipcErrors'
 
 /* ════════════════════════════════════════════════════════════════════════
    Shared step state (lifted to OnboardingRoot)
@@ -883,7 +884,7 @@ export function StepConfig({
         }
         setCommitError({
           title: '提交出错',
-          message: err instanceof Error ? err.message : String(err)
+          message: errorMessage(err)
         })
         setBusy(false)
       })
@@ -1916,7 +1917,7 @@ export function StepDone({
           clearTimeout(reloadTimer.current)
           reloadTimer.current = null
         }
-        setError(`提交出错：${err instanceof Error ? err.message : String(err)}`)
+        setError(`提交出错：${errorMessage(err)}`)
         setBusy(false)
       })
   }

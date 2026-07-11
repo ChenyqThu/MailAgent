@@ -19,6 +19,7 @@ import type { EnvSnapshot, EnvSetResult } from '@shared/api/types'
 // hook from here trips react-hooks/rules-of-hooks. Reach for the factory
 // directly so the linter understands the call site is a plain function.
 import { makeMailApi } from '@shared/api/factory'
+import { errorMessage } from '@shared/lib/ipcErrors'
 
 export type EnvStoreState =
   | { status: 'idle' }
@@ -63,7 +64,7 @@ export const useEnvStore = create<EnvStore>((set, get) => ({
         const snap = await api.env.get()
         set({ state: { status: 'ready', snapshot: snap } })
       } catch (err) {
-        const message = (err as Error).message
+        const message = errorMessage(err)
         set({ state: { status: 'error', error: message } })
       } finally {
         _pending = null

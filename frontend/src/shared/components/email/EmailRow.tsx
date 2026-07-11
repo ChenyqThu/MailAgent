@@ -27,6 +27,8 @@ import { ChevronDown, Paperclip } from 'lucide-react'
 import { cn } from '@shared/lib/cn'
 import { actionLabelChinese } from '@shared/lib/ai_labels'
 import { parseSender, cleanSnippet } from '@shared/lib/mail_parse'
+import { errorMessage } from '@shared/lib/ipcErrors'
+import { qk } from '@shared/lib/queryKeys'
 import { formatRelativeTime } from '@shared/format'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { useTogglePin } from '@shared/hooks/usePinnedSync'
@@ -233,7 +235,7 @@ function EmailRowInner({
   }
 
   const invalidate = useCallback(async () => {
-    await queryClient.invalidateQueries({ queryKey: ['emails'] })
+    await queryClient.invalidateQueries({ queryKey: qk.emails.all() })
   }, [queryClient])
 
   // Sprint 15 D 块 — Optimistic UI helper.
@@ -249,7 +251,7 @@ function EmailRowInner({
   // 的 type predicate 让我们一次性命中所有.
   const optimisticPatch = useCallback(
     (patch: Partial<EnrichedEmailMeta>) => {
-      queryClient.setQueriesData<EnrichedEmailMeta[]>({ queryKey: ['emails'] }, (old) => {
+      queryClient.setQueriesData<EnrichedEmailMeta[]>({ queryKey: qk.emails.all() }, (old) => {
         if (!Array.isArray(old)) return old
         return old.map((e) => (e.internal_id === email.internal_id ? { ...e, ...patch } : e))
       })
@@ -285,7 +287,7 @@ function EmailRowInner({
     } catch (err) {
       // 失败: rollback cache 到 SQLite 真值 + toast
       await invalidate()
-      const msg = err instanceof Error ? err.message : String(err)
+      const msg = errorMessage(err)
       toastError('Flag toggle failed', msg)
     }
   }, [email.internal_id, flagState, invalidate, mailApi, optimisticPatch])
@@ -301,9 +303,9 @@ function EmailRowInner({
         // 列表行 + 侧边栏草稿数 badge 一起刷 (服务端 SSE 经 Redis, 未配
         // REDIS_URL 时发不出 — 本窗口自刷最可靠, codex review MEDIUM)。
         await invalidate()
-        await queryClient.invalidateQueries({ queryKey: ['mailboxes'] })
+        await queryClient.invalidateQueries({ queryKey: qk.mailboxes() })
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err)
+        const msg = errorMessage(err)
         toastError('Delete draft failed', msg)
       }
       return
@@ -317,7 +319,7 @@ function EmailRowInner({
       })
     } catch (err) {
       await invalidate()
-      const msg = err instanceof Error ? err.message : String(err)
+      const msg = errorMessage(err)
       toastError('Archive failed', msg)
     }
   }, [email.internal_id, invalidate, isDraft, mailApi, optimisticPatch, queryClient])

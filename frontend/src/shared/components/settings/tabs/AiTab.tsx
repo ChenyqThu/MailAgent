@@ -19,6 +19,8 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { useUpstreamModels, useEnabledModels, FALLBACK_MODELS } from '@shared/hooks/useLlmModels'
 import { applyEnvPatch, useEnvStore } from '@shared/state/env'
+import { errorMessage } from '@shared/lib/ipcErrors'
+import { qk } from '@shared/lib/queryKeys'
 import { Button } from '@shared/components/ui/button'
 import { Popover, PopoverTrigger, PopoverContent } from '@shared/components/ui/popover'
 import { Switch } from '@shared/components/ui/switch'
@@ -131,7 +133,7 @@ export function AiTab(): React.ReactElement {
       // Invalidate so chat picker and AgentsTab ConfigDrawer immediately reflect the change.
       // No success toast: checkbox state is immediate visual feedback; toasting every
       // checkbox click causes toast storms when enabling multiple models in a row.
-      await qc.invalidateQueries({ queryKey: ['chat', 'config', 'enabledModels'] })
+      await qc.invalidateQueries({ queryKey: qk.chat.config('enabledModels') })
     } else {
       toastError(
         t('settings.ai.enabledModels.saveFailed', { defaultValue: '保存失败' }),
@@ -177,7 +179,7 @@ export function AiTab(): React.ReactElement {
         toastError(t('settings.ai.testGateway.fail'), `${r.code ?? ''} ${r.detail ?? ''}`.trim())
       }
     } catch (err) {
-      toastError(t('settings.ai.testGateway.fail'), (err as Error).message)
+      toastError(t('settings.ai.testGateway.fail'), errorMessage(err))
     } finally {
       setTesting(false)
     }

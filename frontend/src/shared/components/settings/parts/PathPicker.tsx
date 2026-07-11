@@ -21,6 +21,7 @@ import { FolderOpen, Loader2 } from 'lucide-react'
 import { Button } from '@shared/components/ui/button'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { cn } from '@shared/lib/cn'
+import { errorMessage } from '@shared/lib/ipcErrors'
 import { toastError, toastSuccess } from '@shared/state/toast'
 
 import { Row } from './Row'
@@ -66,7 +67,7 @@ export function PathPicker({
       onPersisted(next[settingsKey])
       toastSuccess(savedToastTitle ?? (typeof label === 'string' ? label : settingsKey), picked)
     } catch (err) {
-      toastError(typeof label === 'string' ? label : settingsKey, (err as Error).message)
+      toastError(typeof label === 'string' ? label : settingsKey, errorMessage(err))
     } finally {
       setBusy(false)
     }

@@ -40,6 +40,7 @@ import type {
   RsvpResponse
 } from '@shared/api/types'
 import { cn } from '@shared/lib/cn'
+import { qk } from '@shared/lib/queryKeys'
 import { pad } from './lib/format'
 import { useUndoToastStore } from '@shared/state/calendar-undo'
 import { toastError, toastSuccess } from '@shared/state/toast'
@@ -203,7 +204,7 @@ export function EventDetailDrawer({ occurrence, onClose, onReopen }: Props): Rea
   // Phase 2.5 §11.6 — userEmail 用于判 isOwner. 跟 Sidebar 同 query key,
   // react-query 缓存 share, settings 不会因 drawer 反复重拉.
   const { data: settings } = useQuery({
-    queryKey: ['settings'],
+    queryKey: qk.settings.all(),
     queryFn: () => mailApi.settings.get(),
     staleTime: 5 * 60_000
   })
@@ -234,7 +235,7 @@ export function EventDetailDrawer({ occurrence, onClose, onReopen }: Props): Rea
       }
       toastSuccess(toastMap[response])
       void qc.invalidateQueries({ queryKey: CALENDAR_EVENTS_KEY })
-      void qc.invalidateQueries({ queryKey: ['calendar', 'event'] })
+      void qc.invalidateQueries({ queryKey: qk.calendar.event() })
     },
     onError: (err: unknown, response) => {
       const e = err as Error
@@ -277,7 +278,7 @@ export function EventDetailDrawer({ occurrence, onClose, onReopen }: Props): Rea
     onSuccess: () => {
       // toast 已经在 undo stack 走过 commit 流程, 这里只 invalidate
       void qc.invalidateQueries({ queryKey: CALENDAR_EVENTS_KEY })
-      void qc.invalidateQueries({ queryKey: ['calendar', 'event'] })
+      void qc.invalidateQueries({ queryKey: qk.calendar.event() })
     },
     onError: (err: unknown) => {
       const e = err as Error

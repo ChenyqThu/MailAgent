@@ -21,6 +21,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
+import { qk } from '@shared/lib/queryKeys'
 import {
   Check,
   ChevronDown,
@@ -173,7 +174,7 @@ function AssistantChatModalInner(): React.JSX.Element {
   // Unified history (email + general) — same query key as AgentViewLayout / ChatsTab → shared cache. The
   // active session's item drives AgentConversation's runtime + context routing (email vs general).
   const sessionsQ = useQuery({
-    queryKey: ['chat', 'allSessions'],
+    queryKey: qk.chat.allSessions(),
     queryFn: () => mailApi.chat.listAllSessions(true),
     staleTime: 10_000
   })

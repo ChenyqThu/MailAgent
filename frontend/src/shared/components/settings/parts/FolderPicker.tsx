@@ -39,6 +39,8 @@ import type { FolderCleanupResult, FolderInfo, FolderTreeNode } from '@shared/ap
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 import { useEnvStore } from '@shared/state/env'
+import { errorMessage as toErrorMessage } from '@shared/lib/ipcErrors'
+import { qk } from '@shared/lib/queryKeys'
 import { useEmailFilter } from '@shared/state/email-filter'
 import { useRestartStore } from '@shared/state/restart'
 import { toastError, toastSuccess } from '@shared/state/toast'
@@ -519,7 +521,7 @@ export function FolderPicker(): React.ReactElement {
   // envGated 短路)。retry:false 让 E_INVALID_ARG 立即落到 error → 兜底门控。无
   // refetchInterval → 不会有意外的后台刷新 clobber 用户选中态。
   const discoverQuery = useQuery({
-    queryKey: ['folder', 'discover'],
+    queryKey: qk.folder.discover(),
     queryFn: () => mailApi.folder.discover({ counts: true }),
     enabled: !envGated,
     staleTime: 10 * 60_000,
@@ -540,7 +542,7 @@ export function FolderPicker(): React.ReactElement {
   const isLoading = discoverQuery.isPending && discoverQuery.fetchStatus === 'fetching'
   const isFetching = discoverQuery.isFetching
   const isError = discoverQuery.isError && !gated
-  const errorMessage = isError ? (discoverQuery.error as Error).message : ''
+  const errorMessage = isError ? toErrorMessage(discoverQuery.error) : ''
   const isReady = discoverData !== undefined
   // useMemo 稳定引用 (discoverData?.x ?? [] 每次 render 新建空数组 → 下游 hook 依赖
   // 抖动)。仅在 discoverData 身份变 (refetch 落地) 时重算。
@@ -647,11 +649,11 @@ export function FolderPicker(): React.ReactElement {
       setCleanupPrompts(new Set())
       // 失效共享 folder 缓存 → SidebarFolderTree 的 ['folder','whitelist'] /
       // ['folder','discover'] 重拉, 否则其 staleTime(30s / 5min) 内滞后。
-      void qc.invalidateQueries({ queryKey: ['folder'] })
+      void qc.invalidateQueries({ queryKey: qk.folder.all() })
     } catch (e) {
       toastError(
         t('settings.folder.picker.saveFail', { defaultValue: '保存失败' }),
-        (e as Error).message
+        toErrorMessage(e)
       )
     } finally {
       setSaving(false)
@@ -680,11 +682,11 @@ export function FolderPicker(): React.ReactElement {
         )
         // 失效共享 folder 缓存 → 本组件 + sidebar 的 ['folder','discover'] 重拉
         // (本地行数已变)。re-seed effect 据新 whitelist 重置选中/展开态。
-        void qc.invalidateQueries({ queryKey: ['folder'] })
+        void qc.invalidateQueries({ queryKey: qk.folder.all() })
       } catch (e) {
         toastError(
           t('settings.folder.picker.manage.cleanupFail', { defaultValue: '清理本地副本失败' }),
-          (e as Error).message
+          toErrorMessage(e)
         )
       } finally {
         setCleanupBusy(null)
@@ -770,13 +772,13 @@ export function FolderPicker(): React.ReactElement {
       setEdit(null)
       // 成功后失效共享 folder 缓存 → discover 重拉 (拿到 Exchange 真实状态 + 新计数,
       // sidebar 同步)。re-seed effect 据新 whitelist 重置选中/展开态。
-      void qc.invalidateQueries({ queryKey: ['folder'] })
+      void qc.invalidateQueries({ queryKey: qk.folder.all() })
     } catch (e) {
       toastError(
         edit.mode === 'create'
           ? t('settings.folder.picker.manage.createFail', { defaultValue: '新建文件夹失败' })
           : t('settings.folder.picker.manage.renameFail', { defaultValue: '重命名失败' }),
-        (e as Error).message
+        toErrorMessage(e)
       )
     } finally {
       setEditBusy(false)
@@ -809,18 +811,18 @@ export function FolderPicker(): React.ReactElement {
       )
       // 成功后失效共享 folder 缓存 → discover 重拉 (本地树同步到 Exchange 真实状态,
       // sidebar 同步)。
-      void qc.invalidateQueries({ queryKey: ['folder'] })
+      void qc.invalidateQueries({ queryKey: qk.folder.all() })
     } catch (e) {
       // 失败: 后端已把本地树回滚到服务器真实状态; 关弹窗 + toast 提示回滚。
       setDeleteTarget(null)
       toastError(
         t('settings.folder.picker.manage.deleteFail', { defaultValue: '删除失败' }),
-        `${(e as Error).message} · ${t('settings.folder.picker.manage.deleteRollback', {
+        `${toErrorMessage(e)} · ${t('settings.folder.picker.manage.deleteRollback', {
           defaultValue: 'Exchange 操作失败，本地文件夹树已回滚到服务器真实状态。'
         })}`
       )
       // 回滚后失效缓存 refetch, 确保本地树与服务器一致。
-      void qc.invalidateQueries({ queryKey: ['folder'] })
+      void qc.invalidateQueries({ queryKey: qk.folder.all() })
     } finally {
       setDeleting(false)
     }

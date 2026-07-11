@@ -18,6 +18,7 @@ import { useMemo, useState } from 'react'
 import { Download, FileText, Image as ImageIcon, Paperclip } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
+import { errorMessage } from '@shared/lib/ipcErrors'
 import { formatFileSize } from '@shared/format'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import type { EmailDetail } from '@shared/api/types'
@@ -97,7 +98,7 @@ export function AttachmentList({ attachments }: Props): React.ReactElement | nul
       const basename = target.split('/').pop() ?? target
       setNotice({ tone: 'ok', text: `Saved to ~/Downloads/${basename}` })
     } catch (err) {
-      setNotice({ tone: 'err', text: err instanceof Error ? err.message : String(err) })
+      setNotice({ tone: 'err', text: errorMessage(err) })
     }
   }
 

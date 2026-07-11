@@ -14,6 +14,8 @@ import { Download, KeyRound, Loader2, Package, Settings2, Trash2 } from 'lucide-
 
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { toastError, toastSuccess } from '@shared/state/toast'
+import { errorMessage } from '@shared/lib/ipcErrors'
+import { qk } from '@shared/lib/queryKeys'
 import type { SkillPackPreview, SkillSecretMeta, SkillSummary } from '@shared/api/types'
 import { Button } from '@shared/components/ui/button'
 import { Input } from '@shared/components/ui/input'
@@ -351,9 +353,7 @@ function SkillConfigEditor({
     try {
       parsed = JSON.parse(draft)
     } catch (err) {
-      setJsonError(
-        t('settings.skillPacks.config.jsonParseError', { message: (err as Error).message })
-      )
+      setJsonError(t('settings.skillPacks.config.jsonParseError', { message: errorMessage(err) }))
       return
     }
     if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
@@ -498,20 +498,20 @@ function PackRow({
 
   // 配置抽屉与卸载确认共用：已存密钥 meta（只名 + 时间，永无值）。
   const { data: secrets } = useQuery<SkillSecretMeta[]>({
-    queryKey: ['skillSecrets', skill.name],
+    queryKey: qk.skillSecrets(skill.name),
     queryFn: () => api.chat.listSkillSecretMeta(skill.name),
     enabled: panel !== 'none'
   })
 
   const { data: config, isLoading: configLoading } = useQuery<Record<string, unknown>>({
-    queryKey: ['skillConfig', skill.name],
+    queryKey: qk.skillConfig(skill.name),
     queryFn: () => api.chat.getSkillConfig(skill.name),
     enabled: panel === 'config',
     retry: false
   })
 
   const refetchSecrets = (): void => {
-    void qc.invalidateQueries({ queryKey: ['skillSecrets', skill.name] })
+    void qc.invalidateQueries({ queryKey: qk.skillSecrets(skill.name) })
   }
 
   async function handleAddSecret(): Promise<void> {
@@ -699,7 +699,7 @@ function PackRow({
               <SkillConfigEditor
                 name={skill.name}
                 initial={JSON.stringify(config, null, 2)}
-                onSaved={() => void qc.invalidateQueries({ queryKey: ['skillConfig', skill.name] })}
+                onSaved={() => void qc.invalidateQueries({ queryKey: qk.skillConfig(skill.name) })}
               />
             )}
           </div>
@@ -717,7 +717,7 @@ export function SkillPacksSection(): React.ReactElement | null {
   const qc = useQueryClient()
 
   const { data: enabled } = useQuery<boolean>({
-    queryKey: ['chat', 'config', 'skillInstallEnabled'],
+    queryKey: qk.chat.config('skillInstallEnabled'),
     queryFn: fetchSkillInstallEnabled,
     staleTime: 30_000,
     retry: false
@@ -725,7 +725,7 @@ export function SkillPacksSection(): React.ReactElement | null {
 
   // 与 SkillsSection 共享 ['skills'] 缓存（同一 resolved 列表），此处只筛 pack 安装行。
   const { data: skills } = useQuery<SkillSummary[]>({
-    queryKey: ['skills'],
+    queryKey: qk.skills(),
     queryFn: () => api.chat.listSkills(),
     enabled: enabled === true
   })
@@ -738,7 +738,7 @@ export function SkillPacksSection(): React.ReactElement | null {
   const packs = (skills ?? []).filter((s) => PACK_SOURCE_TYPES.has(s.sourceType))
 
   const onChanged = (): void => {
-    void qc.invalidateQueries({ queryKey: ['skills'] })
+    void qc.invalidateQueries({ queryKey: qk.skills() })
   }
 
   return (

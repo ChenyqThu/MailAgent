@@ -22,6 +22,7 @@ import { useTranslation } from 'react-i18next'
 import { Eye, EyeOff, Loader2 } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
+import { errorMessage } from '@shared/lib/ipcErrors'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { Input } from '@shared/components/ui/input'
 import { toastError, toastSuccess } from '@shared/state/toast'
@@ -98,7 +99,7 @@ export function EnvSecretField({
         )
       }
     } catch (err) {
-      toastError(labelString(label, envKey), (err as Error).message)
+      toastError(labelString(label, envKey), errorMessage(err))
     } finally {
       // Clear plaintext from local state the moment we've handed it off.
       setLocal('')

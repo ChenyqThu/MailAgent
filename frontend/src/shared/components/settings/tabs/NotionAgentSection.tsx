@@ -20,6 +20,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, Check, Loader2, X } from 'lucide-react'
 
 import { useMailApi } from '@shared/hooks/useMailApi'
+import { qk } from '@shared/lib/queryKeys'
 import { Button } from '@shared/components/ui/button'
 import {
   Select,
@@ -81,7 +82,7 @@ export function NotionAgentSection(): React.ReactElement {
   const qc = useQueryClient()
 
   const configQ = useQuery({
-    queryKey: ['notionAgent', 'config'],
+    queryKey: qk.notionAgent.config(),
     queryFn: () => api.notionAgent.getConfig(),
     staleTime: 30_000
   })
@@ -89,14 +90,14 @@ export function NotionAgentSection(): React.ReactElement {
   const ready = config?.configured === true
 
   const modelsQ = useQuery({
-    queryKey: ['notionAgent', 'models'],
+    queryKey: qk.notionAgent.models(),
     queryFn: () => api.notionAgent.listModels(),
     staleTime: 60_000
   })
   // Custom Agents only load once the account is usable — listing them spawns
   // the CLI + hits Notion, pointless when there's no token.
   const agentsQ = useQuery({
-    queryKey: ['notionAgent', 'agents'],
+    queryKey: qk.notionAgent.agents(),
     queryFn: () => api.notionAgent.listAgents(),
     enabled: ready,
     staleTime: 5 * 60_000,
@@ -183,7 +184,7 @@ export function NotionAgentSection(): React.ReactElement {
     setSavingAgent(true)
     try {
       await api.notionAgent.setAgent(item.agent_page_id, item.name)
-      await qc.invalidateQueries({ queryKey: ['notionAgent', 'config'] })
+      await qc.invalidateQueries({ queryKey: qk.notionAgent.config() })
       toastSuccess(
         t('settings.ai.notionAgent.toast.agentSet', { defaultValue: '已切换绑定 Agent' }),
         item.name
@@ -202,7 +203,7 @@ export function NotionAgentSection(): React.ReactElement {
     setSavingModel(true)
     try {
       await api.notionAgent.setModel(alias)
-      await qc.invalidateQueries({ queryKey: ['notionAgent', 'config'] })
+      await qc.invalidateQueries({ queryKey: qk.notionAgent.config() })
       toastSuccess(
         t('settings.ai.notionAgent.toast.modelSet', { defaultValue: '已设默认模型' }),
         alias

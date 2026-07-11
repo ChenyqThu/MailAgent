@@ -13,6 +13,7 @@
 //   - null (gateway not injected / non-renderer) → treated as unavailable.
 
 import { resolveAiGatewayBaseUrl } from './runtime/flags'
+import { errorMessage } from '@shared/lib/ipcErrors'
 
 /** GET /api/ai/approval/pending hit body (miss → null). 🔴 NEVER carries the resumeToken — that
  *  capability leaves the gateway only through the serve-api announce leg. */
@@ -132,6 +133,6 @@ export async function postApprovalDecide(input: {
       ...(typeof body.error === 'string' ? { error: body.error } : {})
     }
   } catch (err) {
-    return { ok: false, status: 'error', error: err instanceof Error ? err.message : String(err) }
+    return { ok: false, status: 'error', error: errorMessage(err) }
   }
 }

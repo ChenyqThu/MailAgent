@@ -44,6 +44,7 @@ import { usePinnedSync } from '@shared/hooks/usePinnedSync'
 import { usePollingFallback } from '@shared/hooks/usePollingFallback'
 import { gsap, DUR } from '@shared/lib/gsap'
 import type { AIPriority, EmailMeta, EnrichedEmailMeta, ListOpts } from '@shared/api/types'
+import { qk } from '@shared/lib/queryKeys'
 import {
   applyChipFilter,
   applyMultiFilter,
@@ -185,7 +186,7 @@ export function useEmailListRows(): UseEmailListRowsReturn {
   // 70% 阈值预加载, 用户感知不到分页边界. (react-best-practices · Client
   // Data Fetching)
   const { data, isLoading, isError, error } = useQuery({
-    queryKey: ['emails', view, customMailbox, activeMailbox, fetchLimit],
+    queryKey: qk.emails.list(view, customMailbox, activeMailbox, fetchLimit),
     queryFn: () => mailApi.email.listEnriched(listOptsForView(view, fetchLimit, customMailbox)),
     refetchInterval: pollingInterval,
     refetchIntervalInBackground: false,
@@ -214,7 +215,7 @@ export function useEmailListRows(): UseEmailListRowsReturn {
         ? '收件箱'
         : null
   const crossQ = useQuery({
-    queryKey: ['emails', 'cross', crossMailbox, fetchLimit],
+    queryKey: qk.emails.cross(crossMailbox, fetchLimit),
     queryFn: () =>
       crossMailbox
         ? mailApi.email.listEnriched({ mailbox: crossMailbox, limit: fetchLimit })
@@ -235,7 +236,7 @@ export function useEmailListRows(): UseEmailListRowsReturn {
   // 后面 union 进 filtered 时 bypass 所有 view/tab/filter — pinned 语义就是
   // 无视过滤强制显示.
   const pinnedSupplementQ = useQuery({
-    queryKey: ['emails', 'pinned-supplement', pinnedList],
+    queryKey: qk.emails.pinnedSupplement(pinnedList),
     queryFn: () =>
       mailApi.email.listEnriched({
         internalIds: [...pinnedList],
@@ -409,7 +410,7 @@ export function useEmailListRows(): UseEmailListRowsReturn {
   // 期间旧补全 map 原地保留, 不闪空 (否则跨邮箱线程会瞬间塌成孤立一封)。
   const threadKey = useMemo(() => [...uniqueThreadIds].sort(), [uniqueThreadIds])
   const threadBatchQ = useQuery({
-    queryKey: ['emails', 'thread-batch', threadKey],
+    queryKey: qk.emails.threadBatch(threadKey),
     queryFn: () => mailApi.email.listByThreads(threadKey),
     enabled: threadKey.length > 0,
     staleTime: 60_000,
@@ -465,7 +466,7 @@ export function useEmailListRows(): UseEmailListRowsReturn {
     return Array.from(set).sort((a, b) => a - b)
   }, [threadBatch, uniqueThreadIds])
   const threadEnrichedQ = useQuery({
-    queryKey: ['emails', 'thread-enriched', threadMemberIds],
+    queryKey: qk.emails.threadEnriched(threadMemberIds),
     queryFn: () =>
       mailApi.email.listEnriched({
         internalIds: threadMemberIds,

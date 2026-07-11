@@ -8,6 +8,8 @@ import { AlertTriangle, Loader2, X } from 'lucide-react'
 
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { toastError, toastSuccess } from '@shared/state/toast'
+import { errorMessage } from '@shared/lib/ipcErrors'
+import { qk } from '@shared/lib/queryKeys'
 import { Switch } from '@shared/components/ui/switch'
 import { Button } from '@shared/components/ui/button'
 
@@ -60,14 +62,14 @@ export function ExecPolicySection(): React.ReactElement | null {
   const qc = useQueryClient()
 
   const { data: enabled } = useQuery<boolean>({
-    queryKey: ['chat', 'config', 'execPolicyEnabled'],
+    queryKey: qk.chat.config('execPolicyEnabled'),
     queryFn: fetchExecPolicyEnabled,
     staleTime: 30_000,
     retry: false
   })
 
   const { data: rules, isError } = useQuery<import('@shared/api/types').ExecPolicyRule[]>({
-    queryKey: ['execPolicy', 'rules'],
+    queryKey: qk.execPolicy.rules(),
     queryFn: () => api.chat.listPolicyRules(),
     enabled: enabled === true,
     staleTime: 10_000
@@ -77,7 +79,7 @@ export function ExecPolicySection(): React.ReactElement | null {
   if (!enabled) return null
 
   const refetch = (): void => {
-    void qc.invalidateQueries({ queryKey: ['execPolicy', 'rules'] })
+    void qc.invalidateQueries({ queryKey: qk.execPolicy.rules() })
   }
 
   const onToggle = async (id: number, next: boolean): Promise<void> => {
@@ -85,7 +87,7 @@ export function ExecPolicySection(): React.ReactElement | null {
       await api.chat.setPolicyRuleEnabled(id, next)
       refetch()
     } catch (err) {
-      toastError(t('settings.execPolicy.title'), (err as Error).message)
+      toastError(t('settings.execPolicy.title'), errorMessage(err))
     }
   }
   const onDelete = async (id: number): Promise<void> => {
@@ -94,7 +96,7 @@ export function ExecPolicySection(): React.ReactElement | null {
       toastSuccess(t('settings.execPolicy.deleted'))
       refetch()
     } catch (err) {
-      toastError(t('settings.execPolicy.title'), (err as Error).message)
+      toastError(t('settings.execPolicy.title'), errorMessage(err))
     }
   }
 

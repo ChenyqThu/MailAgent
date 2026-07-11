@@ -14,6 +14,7 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { qk } from '@shared/lib/queryKeys'
 import { Activity, Sparkles, Zap } from 'lucide-react'
 
 import type { LlmStatsData } from '@shared/api/types'
@@ -203,7 +204,7 @@ export function LlmDashboardPage(): React.ReactElement {
   const [selftestPending, setSelftestPending] = useState(false)
 
   const statsQ = useQuery({
-    queryKey: ['llm', 'stats', days],
+    queryKey: qk.llm.statsDays(days),
     queryFn: () => mailApi.llm.stats(days),
     staleTime: 30_000,
     refetchInterval: 60_000
@@ -218,7 +219,7 @@ export function LlmDashboardPage(): React.ReactElement {
       } else {
         toastError(t('llm.selftestFail'), data.detail)
       }
-      void qc.invalidateQueries({ queryKey: ['llm', 'stats'] })
+      void qc.invalidateQueries({ queryKey: qk.llm.stats() })
     },
     onError: (err: unknown) => {
       const e = err as Error & { code?: string }

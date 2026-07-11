@@ -17,8 +17,10 @@ import { useMailApi } from '@shared/hooks/useMailApi'
 import { usePollingFallback } from '@shared/hooks/usePollingFallback'
 import { usePinned } from '@shared/state/pinned'
 import { toastError } from '@shared/state/toast'
+import { errorMessage } from '@shared/lib/ipcErrors'
+import { qk } from '@shared/lib/queryKeys'
 
-const PINNED_KEY = ['pinnedIds'] as const
+const PINNED_KEY = qk.pinnedIds()
 
 /** Mount once (EmailList does this) — keeps the zustand mirror current. */
 export function usePinnedSync(): void {
@@ -75,7 +77,7 @@ export function useTogglePin(): (internalId: number) => Promise<void> {
     },
     onError: (err, _vars, ctx) => {
       if (ctx) ctx.rollback()
-      toastError('Pin toggle failed', err instanceof Error ? err.message : String(err))
+      toastError('Pin toggle failed', errorMessage(err))
     },
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: PINNED_KEY })

@@ -25,6 +25,7 @@ import { useTranslation } from 'react-i18next'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { SegmentedControl } from '@shared/components/ui/segmented'
 import { applyEnvPatch, useEnvStore } from '@shared/state/env'
+import { errorMessage } from '@shared/lib/ipcErrors'
 import { useRestartStore } from '@shared/state/restart'
 import { toastError, toastSuccess } from '@shared/state/toast'
 
@@ -465,7 +466,7 @@ function SignatureSection(): React.ReactElement {
     } catch (err) {
       toastError(
         t('settings.accounts.signature.saveFail', { defaultValue: '签名保存失败' }),
-        (err as Error).message
+        errorMessage(err)
       )
     } finally {
       setSaving(false)

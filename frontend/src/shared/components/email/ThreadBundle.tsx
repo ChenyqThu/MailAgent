@@ -21,6 +21,7 @@
 
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { qk } from '@shared/lib/queryKeys'
 import { useTranslation } from 'react-i18next'
 import { ChevronDown, ChevronRight, MessageSquare } from 'lucide-react'
 
@@ -55,7 +56,7 @@ function ThreadItem({ email, expanded, onToggle }: ItemProps): React.ReactElemen
   // chosen to expand this item.  enabled=expanded keeps the IPC traffic
   // proportional to interest.
   const detailQ = useQuery({
-    queryKey: ['email', email.internal_id],
+    queryKey: qk.email.detail(email.internal_id),
     queryFn: () => mailApi.email.get(email.internal_id),
     enabled: expanded,
     staleTime: 30_000
@@ -123,7 +124,7 @@ export function ThreadBundle({ threadId, currentInternalId }: Props): React.Reac
   const mailApi = useMailApi()
 
   const q = useQuery({
-    queryKey: ['email', 'thread', threadId],
+    queryKey: qk.email.thread(threadId),
     queryFn: () => mailApi.email.listByThread(threadId),
     enabled: typeof threadId === 'string' && threadId.length > 0,
     staleTime: 30_000

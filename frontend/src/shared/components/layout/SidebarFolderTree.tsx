@@ -14,6 +14,7 @@
 
 import * as React from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { qk } from '@shared/lib/queryKeys'
 import { useNavigate, useRouterState } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import { ChevronDown, ChevronRight } from 'lucide-react'
@@ -207,7 +208,7 @@ export function SidebarFolderTree(): React.ReactElement | null {
 
   // whitelist — 轻量 (.env 读), 常拉。空 → 不发 discover (省 IMAP LIST/STATUS)。
   const { data: whitelistData } = useQuery({
-    queryKey: ['folder', 'whitelist'],
+    queryKey: qk.folder.whitelist(),
     queryFn: () => mailApi.folder.getWhitelist(),
     staleTime: 30_000,
     refetchInterval: pollingInterval,
@@ -219,7 +220,7 @@ export function SidebarFolderTree(): React.ReactElement | null {
   // discover — 重 (IMAP LIST + STATUS), 仅在有白名单时拉, 长缓存。失败/门控静默
   // (folder 名仍可从 whitelist 兜底, 但无 display_name/count → 退化用 imap_name)。
   const { data: discoverData } = useQuery({
-    queryKey: ['folder', 'discover'],
+    queryKey: qk.folder.discover(),
     queryFn: () => mailApi.folder.discover({ counts: true }),
     enabled: hasWhitelist,
     staleTime: 5 * 60_000,

@@ -22,11 +22,13 @@ import type {
   SyncNowOpts
 } from '@shared/api/types'
 import { toastError, toastSuccess } from '@shared/state/toast'
+import { qk } from '@shared/lib/queryKeys'
 import { filterOccurrencesByCalendars } from '../lib/calendar-filter'
 
-export const CALENDAR_EVENTS_KEY = ['calendar', 'events'] as const
-export const CALENDAR_SYNC_STATUS_KEY = ['calendar', 'syncStatus'] as const
-export const CALENDAR_NAMES_KEY = ['calendar', 'names'] as const
+// Re-export from the queryKeys factory (single literal source, P2-8).
+export const CALENDAR_EVENTS_KEY = qk.calendar.events()
+export const CALENDAR_SYNC_STATUS_KEY = qk.calendar.syncStatus()
+export const CALENDAR_NAMES_KEY = qk.calendar.names()
 
 /** F6 — random jitter ±jitterMs around baseMs, 每 hook 实例 mount 时算一次
  *  (useState init lambda 让 jitter 在生命周期内固定). 多个 caller (Layout
@@ -88,7 +90,7 @@ export function useCalendarEvent(opts: EventGetOpts | null): {
 } {
   const mailApi = useMailApi()
   const q = useQuery({
-    queryKey: ['calendar', 'event', opts?.icalUid, opts?.recurrenceId, opts?.source],
+    queryKey: qk.calendar.eventDetail(opts?.icalUid, opts?.recurrenceId, opts?.source),
     queryFn: () => mailApi.calendar.eventGet(opts!),
     enabled: !!opts && !!opts.icalUid,
     staleTime: 60_000,

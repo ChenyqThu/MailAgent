@@ -16,6 +16,7 @@
 
 import { cloneElement, isValidElement, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { qk } from '@shared/lib/queryKeys'
 import { useNavigate, useRouterState } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import { ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react'
@@ -252,7 +253,7 @@ export function Sidebar(): React.ReactElement {
   // polling 作 SSE 断线 fallback.
   const pollingInterval = usePollingFallback()
   const { data } = useQuery({
-    queryKey: ['mailboxes'],
+    queryKey: qk.mailboxes(),
     queryFn: () => mailApi.email.listMailboxes(),
     staleTime: 30_000,
     refetchInterval: pollingInterval,
@@ -263,7 +264,7 @@ export function Sidebar(): React.ReactElement {
   // Settings — drives the account header (notionAgentName) + Notion Agent
   // online dot (presence of notionAgentPageId).
   const { data: settings } = useQuery({
-    queryKey: ['settings'],
+    queryKey: qk.settings.all(),
     queryFn: () => mailApi.settings.get(),
     staleTime: 60_000
   })

@@ -30,6 +30,7 @@ import { useGroupCollapse } from '@shared/state/group-collapse'
 import { useEmailKeyboardNav } from '@shared/hooks/useEmailKeyboardNav'
 import { useInboxActionShortcuts } from '@shared/hooks/useInboxActionShortcuts'
 import { useEmailListRows } from '@shared/hooks/useEmailListRows'
+import { errorMessage } from '@shared/lib/ipcErrors'
 
 import { BatchActionBar } from './BatchActionBar'
 import { EmailListHeader } from './EmailListHeader'
@@ -93,11 +94,7 @@ export function EmailList(): React.ReactElement {
             {t('emailList.loading')}
           </div>
         )}
-        {isError && (
-          <div className="p-6 text-aux text-fail">
-            {error instanceof Error ? error.message : String(error)}
-          </div>
-        )}
+        {isError && <div className="p-6 text-aux text-fail">{errorMessage(error)}</div>}
         {!isLoading && !isError && rows.length === 0 && (
           <div className="px-6 py-12 text-center text-aux text-ink-fg-2">
             <Mail size={20} strokeWidth={1.5} className="inline-block opacity-30 mb-2" />

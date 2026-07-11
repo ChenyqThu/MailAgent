@@ -23,6 +23,7 @@ import { AlertTriangle, Loader2, X } from 'lucide-react'
 import { Button } from '@shared/components/ui/button'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { cn } from '@shared/lib/cn'
+import { errorMessage } from '@shared/lib/ipcErrors'
 import { useRestartStore } from '@shared/state/restart'
 import { toastError, toastSuccess } from '@shared/state/toast'
 
@@ -107,7 +108,7 @@ export function RestartBanner(): React.ReactElement | null {
         setRestartError(message)
       }
     } catch (err) {
-      const message = (err as Error).message
+      const message = errorMessage(err)
       toastError(t('settings.restart.failed', { defaultValue: '重启失败' }), message)
       setRestartError(message)
     } finally {

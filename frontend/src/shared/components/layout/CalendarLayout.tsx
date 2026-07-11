@@ -15,6 +15,7 @@ import { Info } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 import { CalendarErrorBoundary } from '../calendar/CalendarErrorBoundary'
+import { qk } from '@shared/lib/queryKeys'
 import { CalendarPage } from '../calendar/CalendarPage'
 import { CalendarShortcutModal } from '../calendar/CalendarShortcutModal'
 import { CalendarToolbar, type CalendarView } from '../calendar/CalendarToolbar'
@@ -146,7 +147,7 @@ export function CalendarLayout(): React.ReactElement {
   const mailApi = useMailApi()
   const recurringSince = useMemo(() => isoDateOnly(-90), [])
   const { data: recurringList } = useQuery({
-    queryKey: ['calendar', 'recurring', 'status-90d', recurringSince],
+    queryKey: qk.calendar.recurringStatus90d(recurringSince),
     queryFn: () => mailApi.calendar.recurringDiscover({ since: recurringSince }),
     staleTime: 5 * 60_000
   })

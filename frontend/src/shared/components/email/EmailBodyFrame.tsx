@@ -13,6 +13,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useQueries, useQuery } from '@tanstack/react-query'
+import { qk } from '@shared/lib/queryKeys'
 import { useTranslation } from 'react-i18next'
 import DOMPurify from 'dompurify'
 import { Minus, Plus, RotateCw, X } from 'lucide-react'
@@ -237,7 +238,7 @@ export function EmailBodyFrame({
   const bodyLineHeight = useAppearance((s) => s.bodyLineHeight)
 
   const bodyQ = useQuery({
-    queryKey: ['email', internalId, 'body', 'html'],
+    queryKey: qk.email.body(internalId, 'html'),
     queryFn: async () => {
       const htmlBody = await mailApi.email.body(internalId, { format: 'html' })
       if (typeof htmlBody?.content === 'string' && htmlBody.content.length > 0) {
@@ -280,7 +281,7 @@ export function EmailBodyFrame({
 
   const dataUrlQueries = useQueries({
     queries: imageCandidates.map((a) => ({
-      queryKey: ['attachment', a.id, 'dataUrl'],
+      queryKey: qk.attachment.dataUrl(a.id),
       queryFn: () => mailApi.attachment.readDataUrl(a.id),
       staleTime: Infinity
     }))

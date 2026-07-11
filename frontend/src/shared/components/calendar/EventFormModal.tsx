@@ -21,6 +21,7 @@ import { resolveAttendeesUpdate } from './lib/attendees'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 import { cn } from '@shared/lib/cn'
+import { qk } from '@shared/lib/queryKeys'
 import { toastError, toastSuccess } from '@shared/state/toast'
 import type {
   CalendarEventOccurrence,
@@ -282,7 +283,7 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
           : t('calendar.form.toastCreated', '事件已创建, ~60s 内同步到本地视图')
       )
       void qc.invalidateQueries({ queryKey: CALENDAR_EVENTS_KEY })
-      void qc.invalidateQueries({ queryKey: ['calendar', 'event'] })
+      void qc.invalidateQueries({ queryKey: qk.calendar.event() })
       onClose()
     },
     onError: (err: unknown) => {

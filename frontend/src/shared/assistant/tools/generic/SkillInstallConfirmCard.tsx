@@ -18,6 +18,7 @@ import type { ToolCallMessagePartProps } from '@assistant-ui/react'
 
 import { buildToolA2UIPayload, type SkillInstallConfirmCardProps } from '../a2ui'
 import { ApprovalActions, CardFrame, TerminalBanner, deriveCardPhase } from '../_cardShell'
+import { errorMessage } from '@shared/lib/ipcErrors'
 
 // Resolve serve-api base URL for direct fetch calls (mirrors CustomAiSection.resolveApiBaseUrl;
 // intentionally duplicated to avoid coupling a shared tool card to the settings module).
@@ -92,7 +93,7 @@ export function SkillInstallConfirmCard(props: ToolCallMessagePartProps): React.
         if (!cancelled) setFacts(f)
       })
       .catch((e) => {
-        if (!cancelled) setFactsError(e instanceof Error ? e.message : String(e))
+        if (!cancelled) setFactsError(errorMessage(e))
       })
     return () => {
       cancelled = true

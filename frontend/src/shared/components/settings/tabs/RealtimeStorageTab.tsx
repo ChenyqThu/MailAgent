@@ -11,6 +11,7 @@ import { useTranslation } from 'react-i18next'
 import { Loader2, RefreshCw } from 'lucide-react'
 
 import { useEventsStatusStore } from '@shared/state/eventsStatus'
+import { errorMessage } from '@shared/lib/ipcErrors'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { toastError, toastSuccess } from '@shared/state/toast'
 import { cn } from '@shared/lib/cn'
@@ -90,7 +91,7 @@ export function RealtimeStorageTab(): React.ReactElement {
       await api.events.reconnect()
       toastSuccess(t('settings.realtime.reconnectRequested'))
     } catch (err) {
-      toastError(t('settings.realtime.reconnectFailed'), (err as Error).message)
+      toastError(t('settings.realtime.reconnectFailed'), errorMessage(err))
     } finally {
       // Small grace period so the spinner is visible even when the IPC is
       // near-instant — the renderer shouldn't blink the button state.

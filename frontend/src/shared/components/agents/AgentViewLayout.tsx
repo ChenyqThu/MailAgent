@@ -12,6 +12,9 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronLeft } from 'lucide-react'
 
 import { useMailApi } from '@shared/hooks/useMailApi'
+import { toastError } from '@shared/state/toast'
+import { errorMessage } from '@shared/lib/ipcErrors'
+import { qk } from '@shared/lib/queryKeys'
 import { useGeneralChat } from '@shared/hooks/useGeneralChat'
 import { useAIChatPanel } from '@shared/state/ai-chat-panel'
 import { ChatPanelBoundary } from '@shared/components/chat/ChatPanelBoundary'
@@ -20,7 +23,7 @@ import { AgentThreadList } from './AgentThreadList'
 import { AgentConversation } from './AgentConversation'
 import { useNarrow } from './hooks'
 
-const ALL_SESSIONS_KEY = ['chat', 'allSessions'] as const
+const ALL_SESSIONS_KEY = qk.chat.allSessions()
 
 export function AgentViewLayout(): React.ReactElement {
   const { t } = useTranslation()
@@ -94,21 +97,21 @@ export function AgentViewLayout(): React.ReactElement {
         void mailApi.chat
           .updateSessionTitle(id, title)
           .then(invalidateSessions)
-          .catch(() => undefined)
+          .catch((err) => toastError(t('agentView.actionFail', { error: errorMessage(err) })))
       }}
       onArchive={(id) => {
         // dogfood-2: 归档 = 软删(从日期分组移到底部「归档」组；行/消息保留)。serve-api → ai_chat.db，刷新。
         void mailApi.chat
           .updateSessionArchived(id, true)
           .then(invalidateSessions)
-          .catch(() => undefined)
+          .catch((err) => toastError(t('agentView.actionFail', { error: errorMessage(err) })))
       }}
       onRestore={(id) => {
         // dogfood-3: 恢复 = 取消归档(archived=false)，从「归档」组移回日期分组。
         void mailApi.chat
           .updateSessionArchived(id, false)
           .then(invalidateSessions)
-          .catch(() => undefined)
+          .catch((err) => toastError(t('agentView.actionFail', { error: errorMessage(err) })))
       }}
       collapsed={collapsed}
       onToggleCollapse={() => setCollapsed((c) => !c)}

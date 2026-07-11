@@ -19,6 +19,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 
 import { useMailApi } from './useMailApi'
+import { errorMessage } from '@shared/lib/ipcErrors'
 import type { ChatBackendKind, ChatMessage, ChatSession } from '../api/types'
 import { toastError } from '../state/toast'
 import i18n from '../i18n'
@@ -234,7 +235,7 @@ export function useEmailChat(
         await applyTarget(kindSessions)
       } catch (err) {
         if (cancelled) return
-        const message = err instanceof Error ? err.message : String(err)
+        const message = errorMessage(err)
         setError({ code: 'E_LOAD', message })
       }
     })()
@@ -289,7 +290,7 @@ export function useEmailChat(
       // surface the failure to the user (mirrors the toastError usage elsewhere in
       // components consuming this hook's errors).
       mailApi.chat.deleteSession(sessionId).catch((err) => {
-        const message = err instanceof Error ? err.message : String(err)
+        const message = errorMessage(err)
         toastError(
           i18n.t('chat.session.deleteFailed', { defaultValue: 'Delete conversation failed' }),
           message
@@ -322,7 +323,7 @@ export function useEmailChat(
       try {
         await refresh(sessionId)
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
+        const message = errorMessage(err)
         setError({ code: 'E_LOAD', message })
       }
     },
@@ -341,7 +342,7 @@ export function useEmailChat(
     try {
       await refresh(sid)
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
+      const message = errorMessage(err)
       setError({ code: 'E_LOAD', message })
     }
   }, [refresh])

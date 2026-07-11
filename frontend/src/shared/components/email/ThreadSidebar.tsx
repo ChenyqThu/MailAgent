@@ -20,6 +20,7 @@
 
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { qk } from '@shared/lib/queryKeys'
 import { useTranslation } from 'react-i18next'
 import { ChevronDown, ChevronRight, MessageSquare } from 'lucide-react'
 
@@ -87,7 +88,7 @@ export function ThreadSidebar({ threadId, currentInternalId }: Props): React.Rea
   const [expanded, setExpanded] = useState(true)
 
   const q = useQuery({
-    queryKey: ['email', 'thread', threadId],
+    queryKey: qk.email.thread(threadId),
     queryFn: () => mailApi.email.listByThread(threadId),
     enabled: typeof threadId === 'string' && threadId.length > 0,
     staleTime: 30_000

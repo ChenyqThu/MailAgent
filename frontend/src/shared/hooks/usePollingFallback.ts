@@ -21,6 +21,7 @@
 //                                   保留 60 的扩展空间; 缺省值取 60)
 
 import { useQuery } from '@tanstack/react-query'
+import { qk } from '@shared/lib/queryKeys'
 
 import { useMailApi } from './useMailApi'
 import { useEventsStatusStore } from '@shared/state/eventsStatus'
@@ -34,7 +35,7 @@ export function usePollingFallback(): number | false {
   const sseState = useEventsStatusStore((s) => s.status.state)
 
   const { data: settings } = useQuery<PersistentSettings>({
-    queryKey: ['settings'],
+    queryKey: qk.settings.all(),
     queryFn: () => mailApi.settings.get(),
     staleTime: 5 * 60_000 // settings 不常变, 5 分钟够
   })

@@ -14,6 +14,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useQuery } from '@tanstack/react-query'
+import { qk } from '@shared/lib/queryKeys'
 import { Loader2, Search } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
@@ -104,7 +105,7 @@ export function MentionPopover({
   // T3: CJK transform 统一到后端 smart 模式，前端只 trim。
   const normalised = debounced.trim()
   const searchQ = useQuery<SearchResult>({
-    queryKey: ['mention', 'search', normalised],
+    queryKey: qk.mention.search(normalised),
     queryFn: () => mailApi.email.search({ query: normalised, limit: 10 }),
     enabled: open && normalised.length > 0,
     staleTime: 30_000

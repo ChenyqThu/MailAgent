@@ -12,6 +12,8 @@ import { Loader2 } from 'lucide-react'
 
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { readSkillOverrides, writeSkillOverrides } from '@shared/lib/skill_overrides'
+import { errorMessage } from '@shared/lib/ipcErrors'
+import { qk } from '@shared/lib/queryKeys'
 import { toastError } from '@shared/state/toast'
 import type { MailApi, SkillSummary } from '@shared/api/types'
 import { Switch } from '@shared/components/ui/switch'
@@ -48,14 +50,14 @@ export function SkillsSection(): React.ReactElement {
   const qc = useQueryClient()
 
   const { data: skills, isLoading } = useQuery<SkillSummary[]>({
-    queryKey: ['skills'],
+    queryKey: qk.skills(),
     queryFn: () => api.chat.listSkills()
     // graceful: listSkills() degrades to [] when the backend is unreachable
   })
 
   // Run the one-time localStorage→backend override migration once on mount.
   React.useEffect(() => {
-    void migrateLocalSkillOverrides(api, () => qc.invalidateQueries({ queryKey: ['skills'] }))
+    void migrateLocalSkillOverrides(api, () => qc.invalidateQueries({ queryKey: qk.skills() }))
   }, [api, qc])
 
   async function handleToggle(skill: SkillSummary, next: boolean): Promise<void> {
@@ -63,9 +65,9 @@ export function SkillsSection(): React.ReactElement {
       await api.chat.setSkillEnabled(skill.name, next)
       // S3 — the gateway re-reads /chat/config on a 15s TTL, so the toggle reaches the
       // tool catalog without any client-side engine invalidation; just refetch the list.
-      await qc.invalidateQueries({ queryKey: ['skills'] })
+      await qc.invalidateQueries({ queryKey: qk.skills() })
     } catch (err) {
-      toastError(t('settings.skills.title'), (err as Error).message)
+      toastError(t('settings.skills.title'), errorMessage(err))
     }
   }
 

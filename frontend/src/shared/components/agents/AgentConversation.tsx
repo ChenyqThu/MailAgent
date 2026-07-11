@@ -20,6 +20,7 @@ import { Mail, Settings, X } from 'lucide-react'
 
 import type { ChatBackendKind, ChatSessionListItem, SearchHit } from '@shared/api/types'
 import { cn } from '@shared/lib/cn'
+import { qk } from '@shared/lib/queryKeys'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import type { UseGeneralChatReturn } from '@shared/hooks/useGeneralChat'
 import { type BackendChoice } from '@shared/components/chat/BackendSelector'
@@ -107,7 +108,7 @@ export function AgentConversation({
   // One sticky /health probe per mount. D7 — a definitive failure no longer degrades to another
   // engine (none exists): the error notice below offers a retry (refetch) instead.
   const healthQ = useQuery({
-    queryKey: ['ai-gateway', 'health', gatewayBaseUrl],
+    queryKey: qk.aiGateway.health(gatewayBaseUrl),
     queryFn: async () => {
       const res = await fetch(`${gatewayBaseUrl}/health`)
       if (!res.ok) throw new Error('ai-gateway unhealthy')
@@ -373,7 +374,7 @@ export function AgentConversation({
     if (sid == null) return
     if (!turnCompleteSeenRef.current.has(sid)) {
       turnCompleteSeenRef.current.add(sid)
-      void queryClient.invalidateQueries({ queryKey: ['chat', 'allSessions'] })
+      void queryClient.invalidateQueries({ queryKey: qk.chat.allSessions() })
     }
     if (gatewayBaseUrl == null) return
     // dogfood-3 (follow-ups) — generate next-question chips for the just-completed turn. Per-turn (NOT
@@ -398,7 +399,7 @@ export function AgentConversation({
       .then((r) => (r.ok ? (r.json() as Promise<{ title?: string | null }>) : null))
       .then((data) => {
         if (data && data.title) {
-          void queryClient.invalidateQueries({ queryKey: ['chat', 'allSessions'] })
+          void queryClient.invalidateQueries({ queryKey: qk.chat.allSessions() })
         }
       })
       .catch(() => {
@@ -409,7 +410,7 @@ export function AgentConversation({
 
   // Readiness = keychain llmApiKey present (the gateway reads the same slot in main).
   const secretsQ = useQuery({
-    queryKey: ['settings', 'secrets-status'],
+    queryKey: qk.settings.secretsStatus(),
     queryFn: () => mailApi.settings.secretsStatus(),
     staleTime: 30_000
   })

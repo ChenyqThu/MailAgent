@@ -20,6 +20,7 @@ import {
   useSetConfig
 } from './hooks'
 import { applyEnvPatch, useEnvStore } from '@shared/state/env'
+import { errorMessage } from '@shared/lib/ipcErrors'
 import { useRestartStore } from '@shared/state/restart'
 import { toastError } from '@shared/state/toast'
 import { IS_WEB, PRESS_SCALE, PROJECT_PROGRESS_AGENT_ID, envFlagOn, pressHandlers } from './shared'
@@ -914,7 +915,7 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
     try {
       await saveProgressRow(PROJECT_PROGRESS_AGENT_ID, { enabled: v })
     } catch (e: unknown) {
-      toastError(t('agents.projectProgress.rowSaveError'), (e as Error).message)
+      toastError(t('agents.projectProgress.rowSaveError'), errorMessage(e))
     }
   }
   // 预处理卡的启用态绑全局 env LLM_AGENT_ENABLED（响应式读，env 变即刷新徽标）。

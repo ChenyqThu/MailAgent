@@ -8,6 +8,7 @@
 // still on applescript backend don't see an empty card.
 
 import { useQuery } from '@tanstack/react-query'
+import { qk } from '@shared/lib/queryKeys'
 import {
   AlertCircle,
   AlertTriangle,
@@ -77,7 +78,7 @@ function formatRelativeShort(iso: string | null): string {
 export function DavMailHealthCard(): React.ReactElement | null {
   const mailApi = useMailApi()
   const q = useQuery({
-    queryKey: ['admin', 'davmailHealth'],
+    queryKey: qk.admin.davmailHealth(),
     queryFn: () => mailApi.admin.davmailHealth(),
     staleTime: 5_000,
     refetchInterval: 10_000

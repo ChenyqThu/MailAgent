@@ -7,6 +7,7 @@ import type { TFunction } from 'i18next'
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useQuery } from '@tanstack/react-query'
+import { qk } from '@shared/lib/queryKeys'
 import { useNavigate } from '@tanstack/react-router'
 import {
   ChevronLeft,
@@ -32,7 +33,7 @@ import { useNarrow } from './hooks'
 // redesign Phase 5 — notion-agent retired as a NEW-session backend; its history surfacing (the filter
 // tab + label) is removed here. Old notion-agent session ROWS stay readable via the per-email panel.
 type BackendFilter = 'all' | 'custom-api'
-const SESSIONS_QUERY_KEY = ['chat', 'allSessions'] as const
+const SESSIONS_QUERY_KEY = qk.chat.allSessions()
 
 function relTime(epochMs: number, t: TFunction): string {
   const diff = Date.now() - epochMs
@@ -228,7 +229,7 @@ function TranscriptPane({
   const navigate = useNavigate()
   const setActiveEmail = useActiveEmail((s) => s.setActive)
   const msgsQ = useQuery({
-    queryKey: ['chat', 'messages', session.id],
+    queryKey: qk.chat.messages(session.id),
     queryFn: () => mailApi.chat.listMessages(session.id),
     staleTime: 10_000
   })

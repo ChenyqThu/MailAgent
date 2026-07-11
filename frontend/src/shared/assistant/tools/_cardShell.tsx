@@ -12,6 +12,7 @@ import { useTranslation } from 'react-i18next'
 import type { ToolCallMessagePartProps } from '@assistant-ui/react'
 
 import { cn } from '@shared/lib/cn'
+import { errorMessage } from '@shared/lib/ipcErrors'
 import { resolveAiGatewayBaseUrl } from '../runtime/flags'
 
 /** The lifecycle phase a write-tool card is in, derived from the live tool part. Drives both
@@ -136,7 +137,7 @@ export function ApprovalActions({
     try {
       await onApprove()
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(errorMessage(e))
       setBusy(false)
     }
   }

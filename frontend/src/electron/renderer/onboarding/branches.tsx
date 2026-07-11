@@ -14,6 +14,7 @@
 import { useEffect, useRef, useState } from 'react'
 
 import { Banner, Icon, ProgressBar, type IconName } from './components'
+import { errorMessage } from '@shared/lib/ipcErrors'
 import * as ipc from './ipc'
 import type { CompleteConfig, DetectLegacyResult, VerifyCheck } from './ipc'
 
@@ -171,7 +172,7 @@ export function LegacyFlow({
       .catch((err: unknown) => {
         if (gen !== genRef.current) return
         clearStuck()
-        setError(`复制出错：${err instanceof Error ? err.message : String(err)}`)
+        setError(`复制出错：${errorMessage(err)}`)
         setBusy(false)
         setPhase('detect')
       })
@@ -219,7 +220,7 @@ export function LegacyFlow({
       .catch((err: unknown) => {
         if (gen !== genRef.current) return
         clearStuck()
-        setError(`迁移出错：${err instanceof Error ? err.message : String(err)}`)
+        setError(`迁移出错：${errorMessage(err)}`)
         setBusy(false)
         onRollback()
       })
@@ -248,7 +249,7 @@ export function LegacyFlow({
       })
       .catch((err: unknown) => {
         if (gen !== genRef.current) return
-        setError(`检查出错：${err instanceof Error ? err.message : String(err)}`)
+        setError(`检查出错：${errorMessage(err)}`)
         setBusy(false)
         setMigrating(true)
       })
@@ -279,7 +280,7 @@ export function LegacyFlow({
       .catch((err: unknown) => {
         if (gen !== genRef.current) return
         clearStuck()
-        setError(`校验出错：${err instanceof Error ? err.message : String(err)}`)
+        setError(`校验出错：${errorMessage(err)}`)
         setBusy(false)
         onRollback()
       })
@@ -703,7 +704,7 @@ export function HalfFlow({ onComplete }: HalfFlowProps): React.JSX.Element {
       .catch((err: unknown) => {
         if (!alive.current) return
         clearBootTimer()
-        setError(`启动出错：${err instanceof Error ? err.message : String(err)}`)
+        setError(`启动出错：${errorMessage(err)}`)
         setState('error')
       })
   }
@@ -911,7 +912,7 @@ export function RollbackScreen({ onRetry, onBack }: RollbackScreenProps): React.
       })
       .catch((err: unknown) => {
         if (!alive.current) return
-        setError(`回滚出错：${err instanceof Error ? err.message : String(err)}`)
+        setError(`回滚出错：${errorMessage(err)}`)
       })
       .finally(() => {
         clearIdle()

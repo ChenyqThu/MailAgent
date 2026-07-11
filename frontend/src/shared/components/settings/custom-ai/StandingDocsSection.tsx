@@ -24,6 +24,8 @@ import {
 
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { toastError, toastSuccess } from '@shared/state/toast'
+import { errorMessage } from '@shared/lib/ipcErrors'
+import { qk } from '@shared/lib/queryKeys'
 import type { AgentProfileDoc, AgentProfileHistoryEntry } from '@shared/api/types'
 import { Button } from '@shared/components/ui/button'
 
@@ -112,7 +114,7 @@ function DocEntry({ doc, onRefetch }: DocEntryProps): React.ReactElement {
       toastSuccess(t('settings.standingDocs.savedToast'))
     } catch (err: unknown) {
       // Keep editing=true so user can fix content (e.g. RULES validator rejection).
-      const msg = err instanceof Error ? err.message : String(err)
+      const msg = errorMessage(err)
       toastError(t('settings.standingDocs.saveError'), msg)
     } finally {
       setSaving(false)
@@ -145,7 +147,7 @@ function DocEntry({ doc, onRefetch }: DocEntryProps): React.ReactElement {
       await onRefetch()
       toastSuccess(t('settings.standingDocs.rolledBackToast'))
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err)
+      const msg = errorMessage(err)
       toastError(t('settings.standingDocs.rollbackError'), msg)
     } finally {
       setRollingBack(null)
@@ -374,14 +376,14 @@ export function StandingDocsSection(): React.ReactElement | null {
 
   // All hooks unconditional — flag check is data, not a conditional hook.
   const { data: enabled } = useQuery<boolean>({
-    queryKey: ['chat', 'config', 'standingDocsEditorEnabled'],
+    queryKey: qk.chat.config('standingDocsEditorEnabled'),
     queryFn: fetchStandingDocsEditorEnabled,
     staleTime: 30_000,
     retry: false
   })
 
   const { data: docs, isError } = useQuery<AgentProfileDoc[]>({
-    queryKey: ['standingDocs', 'list'],
+    queryKey: qk.standingDocs.list(),
     queryFn: () => api.chat.listProfileDocs(),
     enabled: enabled === true,
     staleTime: 10_000
@@ -421,7 +423,7 @@ export function StandingDocsSection(): React.ReactElement | null {
       <DocEntry
         key={doc.docName}
         doc={doc}
-        onRefetch={() => qc.invalidateQueries({ queryKey: ['standingDocs', 'list'] })}
+        onRefetch={() => qc.invalidateQueries({ queryKey: qk.standingDocs.list() })}
       />
     ))
   })()

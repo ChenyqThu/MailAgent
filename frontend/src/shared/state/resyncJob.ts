@@ -14,6 +14,7 @@
 // 终态谁处理 (settled 闸防双处理 + 互相 cleanup)。
 
 import type { QueryClient } from '@tanstack/react-query'
+import { qk } from '@shared/lib/queryKeys'
 
 import type { JobRecord, MailApi, SseEvent } from '@shared/api/types'
 import { useToastStore } from '@shared/state/toast'
@@ -116,7 +117,7 @@ export function watchResyncJob(deps: WatchResyncJobDeps): void {
         ttlMs: 5000
       })
     }
-    void queryClient.invalidateQueries({ queryKey: ['emails'] })
+    void queryClient.invalidateQueries({ queryKey: qk.emails.all() })
   }
 
   // ---- SSE job.* (Electron 实时; web onEvent → no-op unsub) ----

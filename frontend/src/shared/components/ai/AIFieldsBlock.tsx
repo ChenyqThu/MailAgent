@@ -51,6 +51,8 @@ import {
 } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
+import { asWriteError } from '@shared/lib/ipcErrors'
+import { qk } from '@shared/lib/queryKeys'
 import { actionLabelChinese } from '@shared/lib/ai_labels'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { toastError, toastSuccess } from '@shared/state/toast'
@@ -170,7 +172,7 @@ function ReplyDraftHero({
       await mailApi.email.createDraft({ internalId, body: effectiveBody })
       toastSuccess(t('chat.draftReply.toast.sendOk'))
     } catch (err) {
-      const e = err as { code?: string; message?: string }
+      const e = asWriteError(err)
       const key =
         e.code === 'E_AUTOMATION_DENIED'
           ? 'chat.draftReply.toast.sendFailAuto'
@@ -207,9 +209,9 @@ function ReplyDraftHero({
     setSaving(true)
     try {
       await mailApi.email.setReplySuggestion({ internalId, body: editedBody })
-      await queryClient.invalidateQueries({ queryKey: ['compose', 'plan', internalId] })
+      await queryClient.invalidateQueries({ queryKey: qk.compose.plan(internalId) })
     } catch (err) {
-      const e = err as { code?: string; message?: string }
+      const e = asWriteError(err)
       const detail = e.code ? `${e.code} · ${e.message ?? ''}` : (e.message ?? String(err))
       toastError(
         t('ai.replySuggestion.saveFail', {

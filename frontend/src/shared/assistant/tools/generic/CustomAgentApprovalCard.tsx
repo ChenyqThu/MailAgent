@@ -27,6 +27,7 @@ import type { ToolCallMessagePartProps } from '@assistant-ui/react'
 import type { ReportAgentConfig } from '@shared/api/types'
 import { buildToolA2UIPayload, type CustomAgentApprovalCardProps } from '../a2ui'
 import { ApprovalActions, CardFrame, TerminalBanner, deriveCardPhase } from '../_cardShell'
+import { errorMessage } from '@shared/lib/ipcErrors'
 
 // Resolve serve-api base URL for direct fetch calls (mirrors SkillInstallConfirmCard —
 // intentionally duplicated to avoid coupling a shared tool card to the settings module).
@@ -85,7 +86,10 @@ function permsOfRow(row: ReportAgentConfig | null): PermState {
 
 function propsOf(toolName: string, args: unknown, result: unknown): CustomAgentApprovalCardProps {
   const payload = buildToolA2UIPayload(toolName, { args, result })
-  return (payload?.props ?? { kind: 'create', agentId: '' }) as unknown as CustomAgentApprovalCardProps
+  return (payload?.props ?? {
+    kind: 'create',
+    agentId: ''
+  }) as unknown as CustomAgentApprovalCardProps
 }
 
 export function CustomAgentApprovalCard(props: ToolCallMessagePartProps): React.JSX.Element {
@@ -108,7 +112,7 @@ export function CustomAgentApprovalCard(props: ToolCallMessagePartProps): React.
         if (!cancelled) setFacts(row)
       })
       .catch((e) => {
-        if (!cancelled) setFactsError(e instanceof Error ? e.message : String(e))
+        if (!cancelled) setFactsError(errorMessage(e))
       })
     return () => {
       cancelled = true
@@ -129,7 +133,9 @@ export function CustomAgentApprovalCard(props: ToolCallMessagePartProps): React.
   const effectiveSkills = (skills: string[] | null): readonly string[] =>
     skills === null ? DEFAULT_MOUNTED_SKILLS : skills
 
-  const title = t(isUpdate ? 'chat.customAgentCard.titleUpdate' : 'chat.customAgentCard.titleCreate')
+  const title = t(
+    isUpdate ? 'chat.customAgentCard.titleUpdate' : 'chat.customAgentCard.titleCreate'
+  )
 
   // ── permission model: create diffs against the safe defaults; update against the SERVER row ──
   const before: PermState = isUpdate ? permsOfRow(facts) : { exec: false, web: 'off', skills: null }
@@ -185,7 +191,9 @@ export function CustomAgentApprovalCard(props: ToolCallMessagePartProps): React.
             <div className="text-aux text-ink-fg">
               <span className="text-ink-fg-3">{`${t('chat.customAgentCard.name')}：`}</span>
               <span className="font-medium">{data.title ?? data.agentId}</span>
-              {!isUpdate && <span className="font-mono text-meta text-ink-fg-3">{`  ${data.agentId}`}</span>}
+              {!isUpdate && (
+                <span className="font-mono text-meta text-ink-fg-3">{`  ${data.agentId}`}</span>
+              )}
             </div>
           )}
           {data.model !== undefined && (
@@ -281,7 +289,9 @@ export function CustomAgentApprovalCard(props: ToolCallMessagePartProps): React.
                 <div className="text-aux text-fail">{t('chat.customAgentCard.webOpenWarn')}</div>
               )}
               {after.web === 'gated' && (webEscalated || !isUpdate) && (
-                <div className="text-aux text-ink-fg-3">{t('chat.customAgentCard.webGatedNote')}</div>
+                <div className="text-aux text-ink-fg-3">
+                  {t('chat.customAgentCard.webGatedNote')}
+                </div>
               )}
             </div>
           )}

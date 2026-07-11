@@ -16,6 +16,7 @@ import { Loader2, RefreshCw, Download, RotateCcw } from 'lucide-react'
 
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { useIslandStore, setIslandStatus, islandStateI18nKey } from '@shared/state/island'
+import { errorMessage } from '@shared/lib/ipcErrors'
 import { useUpdaterStore } from '@shared/state/updater'
 import { toastError, toastSuccess } from '@shared/state/toast'
 import { cn } from '@shared/lib/cn'
@@ -98,7 +99,7 @@ function IslandSubsection(): React.ReactElement {
         toastError(t('settings.island.testFail'), next.lastError ?? next.state)
       }
     } catch (err) {
-      toastError(t('settings.island.testFail'), (err as Error).message)
+      toastError(t('settings.island.testFail'), errorMessage(err))
     } finally {
       setBusy(false)
     }
@@ -222,7 +223,7 @@ function UpdaterSubsection(): React.ReactElement {
       setAutoDownload(!next)
       toastError(
         t('settings.update.autoDownload', { defaultValue: '自动下载更新' }),
-        (err as Error).message
+        errorMessage(err)
       )
     } finally {
       setAutoDownloadBusy(false)

@@ -23,6 +23,8 @@ import { useQueryClient } from '@tanstack/react-query'
 import type { EmailFlagOpts, EnrichedEmailMeta } from '@shared/api/types'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { toastError } from '@shared/state/toast'
+import { errorMessage } from '@shared/lib/ipcErrors'
+import { qk } from '@shared/lib/queryKeys'
 
 import { useActiveEmail } from '../state/active-email'
 
@@ -42,7 +44,7 @@ export function useInboxActionShortcuts(): void {
       const id = useActiveEmail.getState().activeInternalId
       if (id == null) return null
       // ['emails', mailbox, view, …] — find the row across every cached list.
-      const entries = queryClient.getQueriesData<EnrichedEmailMeta[]>({ queryKey: ['emails'] })
+      const entries = queryClient.getQueriesData<EnrichedEmailMeta[]>({ queryKey: qk.emails.all() })
       for (const [, data] of entries) {
         if (!Array.isArray(data)) continue
         const hit = data.find((e) => e.internal_id === id)
@@ -52,7 +54,7 @@ export function useInboxActionShortcuts(): void {
     }
 
     function patchCache(id: number, patch: Partial<EnrichedEmailMeta>): void {
-      queryClient.setQueriesData<EnrichedEmailMeta[]>({ queryKey: ['emails'] }, (old) =>
+      queryClient.setQueriesData<EnrichedEmailMeta[]>({ queryKey: qk.emails.all() }, (old) =>
         Array.isArray(old) ? old.map((e) => (e.internal_id === id ? { ...e, ...patch } : e)) : old
       )
     }
@@ -69,8 +71,8 @@ export function useInboxActionShortcuts(): void {
         // 成功: CLI 已写 SQLite, EmailList 的 poll 会拉一致 state. 不主动 invalidate
         // 避免双重渲染; 失败时才回放真值 (与 EmailRow 一致)。
       } catch (err) {
-        await queryClient.invalidateQueries({ queryKey: ['emails'] })
-        toastError(failMsg, err instanceof Error ? err.message : String(err))
+        await queryClient.invalidateQueries({ queryKey: qk.emails.all() })
+        toastError(failMsg, errorMessage(err))
       }
     }
 

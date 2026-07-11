@@ -8,6 +8,7 @@ import { ReportIcon, Switch } from '../primitives'
 import { useProjectProgressRuns, useSetConfig } from '../hooks'
 import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 import { applyEnvPatch, useEnvStore } from '@shared/state/env'
+import { errorMessage } from '@shared/lib/ipcErrors'
 import { useRestartStore } from '@shared/state/restart'
 import { toastError } from '@shared/state/toast'
 import { IS_WEB, PROJECT_PROGRESS_AGENT_ID, envFlagOn } from '../shared'
@@ -305,7 +306,7 @@ export function ProjectProgressConfigDrawer({
       await save(PROJECT_PROGRESS_AGENT_ID, patch)
       onClose()
     } catch (e: unknown) {
-      setErr((e as Error).message)
+      setErr(errorMessage(e))
     }
   }
 

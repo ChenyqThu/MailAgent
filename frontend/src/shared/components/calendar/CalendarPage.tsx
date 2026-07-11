@@ -10,6 +10,7 @@ import { Calendar as CalendarIcon, RefreshCw } from 'lucide-react'
 import type { RecurringInviteItem } from '@shared/api/types'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { cn } from '@shared/lib/cn'
+import { qk } from '@shared/lib/queryKeys'
 import { EmptyState } from '@shared/components/feedback/EmptyState'
 import { SkeletonRow } from '@shared/components/feedback/LoadingSkeleton'
 import { toastError, toastSuccess } from '@shared/state/toast'
@@ -117,7 +118,7 @@ export function CalendarPage(): React.ReactElement {
   // Phase 1.5 (706788d) 之后 discover_recurring 改读 SQLite calendar_event ~0.5s,
   // 不再 davmail 慢路径; 改主动 fetch. [扫描] 按钮保留作强制 refresh / 急刷.
   const listQ = useQuery({
-    queryKey: ['calendar', 'recurring', since],
+    queryKey: qk.calendar.recurringSince(since),
     queryFn: () => mailApi.calendar.recurringDiscover({ since }),
     staleTime: 5 * 60_000, // 5min cache, recurring 列表变化慢
     refetchOnWindowFocus: false, // 不靠 focus 刷
@@ -132,7 +133,7 @@ export function CalendarPage(): React.ReactElement {
     onMutate: (icalUid) => setPending((s) => new Set(s).add(icalUid)),
     onSuccess: (_d, icalUid) => {
       toastSuccess(t('calendar.replayOk', { id: icalUid.slice(0, 32) }))
-      void qc.invalidateQueries({ queryKey: ['calendar', 'recurring'] })
+      void qc.invalidateQueries({ queryKey: qk.calendar.recurring() })
     },
     onError: (err: unknown, icalUid) => {
       const e = err as Error & { code?: string }

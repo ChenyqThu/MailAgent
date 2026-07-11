@@ -23,6 +23,8 @@ import { ShimmerText } from '@shared/components/ShimmerText'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { formatDate, formatRelativeTime } from '@shared/format'
 import { parseSender } from '@shared/lib/mail_parse'
+import { asWriteError } from '@shared/lib/ipcErrors'
+import { qk } from '@shared/lib/queryKeys'
 import { mapLanguage } from '@shared/lib/ai_mapping'
 import { useShortcut } from '@shared/hooks/useShortcut'
 import { useIsBelowLg } from '@shared/hooks/useMediaQuery'
@@ -189,18 +191,6 @@ const NO_PENDING: PendingMap = {
 
 const llmAgentUpgradeFired = new Set<number>()
 
-interface WriteErrorShape {
-  code?: string
-  message: string
-}
-
-function asWriteError(err: unknown): WriteErrorShape {
-  if (err instanceof Error) {
-    return { code: (err as Error & { code?: string }).code, message: err.message }
-  }
-  return { message: String(err) }
-}
-
 export function EmailDetail({ internalId }: Props): React.ReactElement {
   const { t } = useTranslation()
   const mailApi = useMailApi()
@@ -239,7 +229,7 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
   // 这种 ~200-1000ms 的卡顿. translationCacheQ 不加是因为它驱动 auto-on
   // effect, 旧 cache 不能漏给新邮件.
   const detailQ = useQuery({
-    queryKey: ['email', internalId],
+    queryKey: qk.email.detail(internalId),
     queryFn: () => mailApi.email.get(internalId as number),
     enabled: internalId !== null,
     staleTime: 30_000,
@@ -247,7 +237,7 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
   })
 
   const aiQ = useQuery({
-    queryKey: ['email', internalId, 'ai'],
+    queryKey: qk.email.ai(internalId),
     queryFn: () => mailApi.email.aiFields(internalId as number),
     enabled: internalId !== null,
     staleTime: 30_000,
@@ -273,7 +263,7 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
   // cache 命中 + langIsEn 时, useEffect 自动把 showTranslation 翻 true (默认开)。
 
   const translationCacheQ = useQuery({
-    queryKey: ['email', internalId, 'translation', 'zh'],
+    queryKey: qk.email.translation(internalId, 'zh'),
     queryFn: () => mailApi.ai.getCached(internalId as number, 'zh'),
     enabled: internalId !== null,
     staleTime: Infinity,
@@ -298,7 +288,7 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
       // 用 invalidate 让 cacheQ 重读保持口径一致。
       if (internalId !== null) {
         void queryClient.invalidateQueries({
-          queryKey: ['email', internalId, 'translation', 'zh']
+          queryKey: qk.email.translation(internalId, 'zh')
         })
       }
     },
@@ -320,7 +310,7 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
       setShowTranslation(true)
       if (internalId !== null) {
         void queryClient.invalidateQueries({
-          queryKey: ['email', internalId, 'translation', 'zh']
+          queryKey: qk.email.translation(internalId, 'zh')
         })
       }
     },
@@ -357,7 +347,7 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
       try {
         await mailApi.ai.translateBatch(internalId, 'zh')
         await queryClient.invalidateQueries({
-          queryKey: ['email', internalId, 'translation', 'zh']
+          queryKey: qk.email.translation(internalId, 'zh')
         })
       } catch (err) {
         console.warn('llm_agent translation cache upgrade failed', err)
@@ -488,7 +478,7 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
     const timer = setTimeout(() => {
       for (const mode of ['reply', 'reply-all'] as const) {
         void queryClient.prefetchQuery({
-          queryKey: ['compose', 'plan', id, mode],
+          queryKey: qk.compose.planMode(id, mode),
           queryFn: () => mailApi.email.draftPlan({ internalId: id, mode }),
           staleTime: Infinity,
           retry: false
@@ -511,8 +501,8 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
       toastSuccess(t('toolbarToast.archiveOk'))
       if (nextId !== null && nextId !== archivingId) setActive(nextId)
       else if (prevId !== null && prevId !== archivingId) setActive(prevId)
-      await queryClient.invalidateQueries({ queryKey: ['emails'] })
-      await queryClient.invalidateQueries({ queryKey: ['email', archivingId] })
+      await queryClient.invalidateQueries({ queryKey: qk.emails.all() })
+      await queryClient.invalidateQueries({ queryKey: qk.email.detail(archivingId) })
     } catch (err) {
       const e = asWriteError(err)
       toastError(t('toolbarToast.archiveFail'), e.code ? `${e.code} · ${e.message}` : e.message)
@@ -533,8 +523,8 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
       toastSuccess(t('toolbarToast.deleteOk', { defaultValue: '已删除（归档完成）' }))
       if (nextId !== null && nextId !== deletingId) setActive(nextId)
       else if (prevId !== null && prevId !== deletingId) setActive(prevId)
-      await queryClient.invalidateQueries({ queryKey: ['emails'] })
-      await queryClient.invalidateQueries({ queryKey: ['email', deletingId] })
+      await queryClient.invalidateQueries({ queryKey: qk.emails.all() })
+      await queryClient.invalidateQueries({ queryKey: qk.email.detail(deletingId) })
     } catch (err) {
       const e = asWriteError(err)
       toastError(
@@ -554,8 +544,8 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
         await mailApi.email.resync(internalId, { dryRun, replaceExisting: !dryRun })
         toastSuccess(t(dryRun ? 'toolbarToast.resyncOkDry' : 'toolbarToast.resyncOk'))
         if (!dryRun) {
-          await queryClient.invalidateQueries({ queryKey: ['email', internalId] })
-          await queryClient.invalidateQueries({ queryKey: ['email', internalId, 'ai'] })
+          await queryClient.invalidateQueries({ queryKey: qk.email.detail(internalId) })
+          await queryClient.invalidateQueries({ queryKey: qk.email.ai(internalId) })
         }
       } catch (err) {
         const e = asWriteError(err)
@@ -579,7 +569,7 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
     try {
       await mailApi.llm.run(internalId, { force: true })
       toastSuccess(t('toolbarToast.llmOk'))
-      await queryClient.invalidateQueries({ queryKey: ['email', internalId, 'ai'] })
+      await queryClient.invalidateQueries({ queryKey: qk.email.ai(internalId) })
     } catch (err) {
       const e = asWriteError(err)
       toastError(t('toolbarToast.llmFailGeneric'), e.code ? `${e.code} · ${e.message}` : e.message)
@@ -595,10 +585,10 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
   const optimisticDetail = useCallback(
     (patch: Record<string, unknown>) => {
       if (internalId === null) return
-      queryClient.setQueryData(['email', internalId], (old: unknown) =>
+      queryClient.setQueryData(qk.email.detail(internalId), (old: unknown) =>
         old && typeof old === 'object' ? { ...(old as object), ...patch } : old
       )
-      queryClient.setQueriesData({ queryKey: ['emails'] }, (old: unknown) => {
+      queryClient.setQueriesData({ queryKey: qk.emails.all() }, (old: unknown) => {
         if (!Array.isArray(old)) return old
         return old.map((e) =>
           e && typeof e === 'object' && (e as { internal_id?: number }).internal_id === internalId
@@ -621,8 +611,8 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
         toastSuccess(t('toolbarToast.flagOk'))
       } catch (err) {
         // Rollback — refetch to真实 SQLite state
-        await queryClient.invalidateQueries({ queryKey: ['email', internalId] })
-        await queryClient.invalidateQueries({ queryKey: ['email', internalId, 'ai'] })
+        await queryClient.invalidateQueries({ queryKey: qk.email.detail(internalId) })
+        await queryClient.invalidateQueries({ queryKey: qk.email.ai(internalId) })
         const e = asWriteError(err)
         toastError(
           t('toolbarToast.flagFailGeneric'),
@@ -645,8 +635,8 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
         await mailApi.email.flag(internalId, { isFlagged: target })
         toastSuccess(t('toolbarToast.flagOk'))
       } catch (err) {
-        await queryClient.invalidateQueries({ queryKey: ['email', internalId] })
-        await queryClient.invalidateQueries({ queryKey: ['email', internalId, 'ai'] })
+        await queryClient.invalidateQueries({ queryKey: qk.email.detail(internalId) })
+        await queryClient.invalidateQueries({ queryKey: qk.email.ai(internalId) })
         const e = asWriteError(err)
         toastError(
           t('toolbarToast.flagFailGeneric'),

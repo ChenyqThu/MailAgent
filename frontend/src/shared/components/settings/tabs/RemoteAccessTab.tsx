@@ -37,6 +37,7 @@ import {
 } from 'lucide-react'
 
 import { useEnvStore } from '@shared/state/env'
+import { errorMessage } from '@shared/lib/ipcErrors'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { toastError, toastSuccess } from '@shared/state/toast'
 import { cn } from '@shared/lib/cn'
@@ -201,7 +202,7 @@ export function RemoteAccessTab(): React.ReactElement {
         )
       }
     } catch (err) {
-      toastError(t('settings.remote.restart.failed'), (err as Error).message)
+      toastError(t('settings.remote.restart.failed'), errorMessage(err))
     } finally {
       setRestarting(false)
     }

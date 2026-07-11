@@ -6,6 +6,7 @@
 // import from here so the list only changes in one place.
 
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { qk } from '@shared/lib/queryKeys'
 import { useMailApi } from './useMailApi'
 
 export const FALLBACK_MODELS: string[] = [
@@ -27,7 +28,7 @@ export function useUpstreamModels(provider: 'main' | 'translate' = 'main'): {
   const qc = useQueryClient()
 
   const q = useQuery({
-    queryKey: ['llm', 'upstream-models', provider] as const,
+    queryKey: qk.llm.upstreamModels(provider),
     queryFn: () => api.llm.listUpstreamModels({ provider }),
     staleTime: 5 * 60 * 1_000, // 5 min mirrors server-side TTL
     retry: false
@@ -35,7 +36,7 @@ export function useUpstreamModels(provider: 'main' | 'translate' = 'main'): {
 
   const refresh = async (): Promise<void> => {
     await api.llm.listUpstreamModels({ refresh: true, provider })
-    await qc.invalidateQueries({ queryKey: ['llm', 'upstream-models', provider] })
+    await qc.invalidateQueries({ queryKey: qk.llm.upstreamModels(provider) })
   }
 
   return {
@@ -53,7 +54,7 @@ export function useEnabledModels(): { models: string[]; rawEnabled: string[] } {
   // calls invalidateQueries on this key after writing LLM_ENABLED_MODELS so
   // the chat picker reflects the new selection without a page reload.
   const q = useQuery({
-    queryKey: ['chat', 'config', 'enabledModels'] as const,
+    queryKey: qk.chat.config('enabledModels'),
     queryFn: fetchEnabledModels,
     staleTime: 30_000, // 30s — fast enough for post-save invalidation
     retry: false

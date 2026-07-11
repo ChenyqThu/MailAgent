@@ -8,6 +8,7 @@
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
 import { useQuery } from '@tanstack/react-query'
+import { qk } from '@shared/lib/queryKeys'
 
 import { useEnabledModels, FALLBACK_MODELS } from '@shared/hooks/useLlmModels'
 import { useEnvStore } from '@shared/state/env'
@@ -28,7 +29,7 @@ export function MemoryCaptureModelSection(): React.ReactElement | null {
   // capture model is part of the same advanced agent-config surface (task 07-01 step 3).
   // flag-off → return null (no DOM), like StandingDocsSection.
   const { data: editorEnabled } = useQuery<boolean>({
-    queryKey: ['chat', 'config', 'standingDocsEditorEnabled'],
+    queryKey: qk.chat.config('standingDocsEditorEnabled'),
     queryFn: fetchStandingDocsEditorEnabled,
     staleTime: 30_000,
     retry: false

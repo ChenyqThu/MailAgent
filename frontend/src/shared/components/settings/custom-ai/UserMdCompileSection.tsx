@@ -7,6 +7,8 @@ import { Loader2 } from 'lucide-react'
 
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { toastError, toastSuccess } from '@shared/state/toast'
+import { errorMessage } from '@shared/lib/ipcErrors'
+import { qk } from '@shared/lib/queryKeys'
 import type { CompileUserMdResult } from '@shared/api/types'
 import { Button } from '@shared/components/ui/button'
 
@@ -23,7 +25,7 @@ export function UserMdCompileSection(): React.ReactElement | null {
   const [rollingBack, setRollingBack] = React.useState(false)
 
   const { data: enabled } = useQuery<boolean>({
-    queryKey: ['chat', 'config', 'userMdCompileEnabled'],
+    queryKey: qk.chat.config('userMdCompileEnabled'),
     queryFn: fetchUserMdCompileEnabled,
     staleTime: 30_000,
     retry: false
@@ -39,7 +41,7 @@ export function UserMdCompileSection(): React.ReactElement | null {
       const r = await api.chat.compileUserMd()
       setResult(r)
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err)
+      const msg = errorMessage(err)
       toastError(t('settings.userMdCompile.compileError'), msg)
     } finally {
       setCompiling(false)
@@ -54,7 +56,7 @@ export function UserMdCompileSection(): React.ReactElement | null {
       setResult(null)
       toastSuccess(t('settings.userMdCompile.rolledBackToast'))
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err)
+      const msg = errorMessage(err)
       toastError(t('settings.userMdCompile.rollbackError'), msg)
     } finally {
       setRollingBack(false)
