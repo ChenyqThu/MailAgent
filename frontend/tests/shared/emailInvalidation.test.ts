@@ -12,6 +12,7 @@ import {
   classifyEmailQueryKey,
   isMainListKey,
   isEmailSupplementKey,
+  isThreadMembersKey,
   queryDataHoldsAnyId,
   collectMainListIds,
   planInvalidation,
@@ -144,6 +145,7 @@ describe('planInvalidation', () => {
         { kind: 'main-list' },
         { kind: 'key', key: ['mailboxes'] },
         { kind: 'supplements' },
+        { kind: 'thread-members' },
         { kind: 'key', key: ['email', 42] }
       ])
     }
@@ -162,7 +164,8 @@ describe('planInvalidation', () => {
     expect(planInvalidation('email.pin_changed', 7)).toEqual([
       { kind: 'main-list' },
       { kind: 'key', key: ['pinnedIds'] },
-      { kind: 'supplements' }
+      { kind: 'supplements' },
+      { kind: 'thread-members' }
     ])
     // No id → no supplements directive to gate on.
     expect(planInvalidation('email.pin_changed', null)).toEqual([
@@ -174,7 +177,8 @@ describe('planInvalidation', () => {
   test('outbox.done: main-list + supplements', () => {
     expect(planInvalidation('outbox.done', 7)).toEqual([
       { kind: 'main-list' },
-      { kind: 'supplements' }
+      { kind: 'supplements' },
+      { kind: 'thread-members' }
     ])
   })
 
@@ -182,7 +186,8 @@ describe('planInvalidation', () => {
     expect(planInvalidation('llm.success', 7)).toEqual([
       { kind: 'main-list' },
       { kind: 'key', key: ['email', 7, 'ai'] },
-      { kind: 'supplements' }
+      { kind: 'supplements' },
+      { kind: 'thread-members' }
     ])
   })
 
@@ -290,6 +295,70 @@ describe('resolveInvalidatedKeys — active-only coverage (High fix)', () => {
     ]
     const keys = resolveInvalidatedKeys('email.flag_changed', 9, caches)
     expect(emailFamilyKeys(keys)).not.toContainEqual(KEY.pinned)
+  })
+})
+
+describe('resolveInvalidatedKeys — thread-members routing (SSE gap fix)', () => {
+  // ThreadSidebar / ThreadBundle render a thread from their OWN
+  // ['email','thread',threadId] cache (EmailMeta[]), independent of the main
+  // list. Before this fix flag/read write events never invalidated it — it went
+  // stale for up to its 30s staleTime.
+  const threadKey = ['email', 'thread', 't1'] as const
+
+  test('isThreadMembersKey identifies the family and rejects the others', () => {
+    expect(isThreadMembersKey(threadKey)).toBe(true)
+    expect(isThreadMembersKey(['email', 7])).toBe(false)
+    expect(isThreadMembersKey(['email', 7, 'ai'])).toBe(false)
+    expect(isThreadMembersKey(KEY.mainList)).toBe(false)
+    expect(isThreadMembersKey(KEY.threadBatch)).toBe(false)
+  })
+
+  test('a thread cache holding the changed id refetches on flag_changed', () => {
+    const caches: EmailQueryCacheEntry[] = [
+      { queryKey: KEY.mainList, data: [row(2)], active: true },
+      { queryKey: threadKey, data: [row(1), row(5)], active: true }
+    ]
+    const keys = resolveInvalidatedKeys('email.flag_changed', 5, caches)
+    expect(keys).toContainEqual(threadKey)
+  })
+
+  test('NO main-list-precedence suppression: thread cache refetches even when the id is visible in the main list', () => {
+    // Unlike a supplement, the thread cache is not merged with the main list, so
+    // the main-list refetch does not reconcile it — it must refetch even though
+    // id 1 is covered by the main list.
+    const caches: EmailQueryCacheEntry[] = [
+      { queryKey: KEY.mainList, data: [row(1), row(2)], active: true },
+      { queryKey: threadKey, data: [row(1), row(5)], active: true }
+    ]
+    const keys = resolveInvalidatedKeys('email.flag_changed', 1, caches)
+    expect(keys).toContainEqual(threadKey)
+  })
+
+  test('a thread cache not holding the changed id is left alone', () => {
+    const caches: EmailQueryCacheEntry[] = [
+      { queryKey: KEY.mainList, data: [row(2)], active: true },
+      { queryKey: threadKey, data: [row(1), row(5)], active: true }
+    ]
+    const keys = resolveInvalidatedKeys('email.flag_changed', 99, caches)
+    expect(keys).not.toContainEqual(threadKey)
+  })
+
+  test('an inactive thread cache is not refetched (refetchType=active)', () => {
+    const caches: EmailQueryCacheEntry[] = [
+      { queryKey: KEY.mainList, data: [row(2)], active: true },
+      { queryKey: threadKey, data: [row(5)], active: false }
+    ]
+    const keys = resolveInvalidatedKeys('email.flag_changed', 5, caches)
+    expect(keys).not.toContainEqual(threadKey)
+  })
+
+  test('llm.success also refreshes a thread cache holding the id', () => {
+    const caches: EmailQueryCacheEntry[] = [
+      { queryKey: KEY.mainList, data: [row(2)], active: true },
+      { queryKey: threadKey, data: [row(5)], active: true }
+    ]
+    const keys = resolveInvalidatedKeys('llm.success', 5, caches)
+    expect(keys).toContainEqual(threadKey)
   })
 })
 

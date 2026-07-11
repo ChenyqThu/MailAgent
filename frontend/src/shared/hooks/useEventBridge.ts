@@ -28,6 +28,7 @@ import {
   planInvalidation,
   isMainListKey,
   isEmailSupplementKey,
+  isThreadMembersKey,
   queryDataHoldsAnyId,
   collectMainListIds
 } from '@shared/lib/emailInvalidation'
@@ -39,6 +40,7 @@ const DEBOUNCE_MS = 200
 // directives debounce under their own JSON.stringify(key).
 const MAIN_LIST_DEBOUNCE_KEY = 'emails:main-list'
 const SUPPLEMENTS_DEBOUNCE_KEY = 'emails:supplements'
+const THREAD_MEMBERS_DEBOUNCE_KEY = 'email:thread-members'
 
 /**
  * 单挂载 hook。组件 mount 时启动 SSE event 订阅 + status 同步,
@@ -101,6 +103,20 @@ export function useEventBridge(): void {
       })
     }
 
+    // thread-members 门控: 与 supplement 同款 id-containment, 但 **不做主列表覆盖
+    // 抑制** —— thread sidebar / bundle 的 ['email','thread',id] 缓存是独立视图,
+    // 不与主列表合并, 主列表 refetch 不会更新它, 故任何持有该 id 的线程缓存都要刷。
+    const threadMemberIds = new Set<number>()
+
+    function flushThreadMembers(): void {
+      const ids = new Set(threadMemberIds)
+      threadMemberIds.clear()
+      if (ids.size === 0) return
+      void queryClient.invalidateQueries({
+        predicate: (q) => isThreadMembersKey(q.queryKey) && queryDataHoldsAnyId(q.state.data, ids)
+      })
+    }
+
     // ---- directive executor ----
     function runDirective(
       directive: ReturnType<typeof planInvalidation>[number],
@@ -115,6 +131,10 @@ export function useEventBridge(): void {
         case 'supplements':
           if (internalId != null) supplementIds.add(internalId)
           debounceInvalidate(SUPPLEMENTS_DEBOUNCE_KEY, flushSupplements)
+          break
+        case 'thread-members':
+          if (internalId != null) threadMemberIds.add(internalId)
+          debounceInvalidate(THREAD_MEMBERS_DEBOUNCE_KEY, flushThreadMembers)
           break
         case 'key': {
           const key = directive.key

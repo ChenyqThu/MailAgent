@@ -79,6 +79,17 @@ export function isEmailSupplementKey(key: QueryKeyLike): boolean {
 }
 
 /**
+ * True for a thread-members query (`['email', 'thread', threadId]`) — the list
+ * of a thread's emails that ThreadSidebar / ThreadBundle render from their OWN
+ * cache, independent of the main mailbox list. Rooted at 'email' (singular), so
+ * it is not one of the 'emails' supplement families above and needs its own
+ * id-gated routing (see the 'thread-members' directive below).
+ */
+export function isThreadMembersKey(key: QueryKeyLike): boolean {
+  return key[0] === 'email' && key[1] === 'thread'
+}
+
+/**
  * Does a query's cached data currently hold any of the given internal_ids?
  * Handles both the array-shaped supplement caches (EnrichedEmailMeta[] — cross,
  * pinned-supplement, thread-enriched) and thread-batch's
@@ -111,16 +122,21 @@ function arrayHoldsAnyId(rows: readonly unknown[], ids: ReadonlySet<number>): bo
 /**
  * A single invalidation instruction. The event bridge translates each into a
  * (debounced) queryClient.invalidateQueries call:
- *   • 'main-list'    → predicate invalidate of the primary mailbox list family
- *   • 'supplements'  → predicate invalidate of supplement families whose cache
- *                      holds a changed internal_id (batched over the debounce
- *                      window)
- *   • 'key'          → prefix invalidate of an exact key (mailboxes / a single
- *                      email detail / pinnedIds / folder)
+ *   • 'main-list'     → predicate invalidate of the primary mailbox list family
+ *   • 'supplements'   → predicate invalidate of supplement families whose cache
+ *                       holds a changed internal_id (batched over the debounce
+ *                       window)
+ *   • 'thread-members'→ predicate invalidate of thread-members caches
+ *                       (['email','thread',id]) holding a changed internal_id,
+ *                       id-gated like supplements but WITHOUT main-list-precedence
+ *                       suppression (the thread view is independent, not merged)
+ *   • 'key'           → prefix invalidate of an exact key (mailboxes / a single
+ *                       email detail / pinnedIds / folder)
  */
 export type InvalidationDirective =
   | { kind: 'main-list' }
   | { kind: 'supplements' }
+  | { kind: 'thread-members' }
   | { kind: 'key'; key: (string | number)[] }
 
 /**
@@ -151,6 +167,7 @@ export function planInvalidation(
       ]
       if (internalId != null) {
         out.push({ kind: 'supplements' })
+        out.push({ kind: 'thread-members' })
         // Prefix invalidate — covers ['email', id] AND ['email', id, 'ai'] (and
         // translation / body / thread-count for that id), matching the previous
         // ['email', id] prefix call exactly.
@@ -168,14 +185,20 @@ export function planInvalidation(
         { kind: 'main-list' },
         { kind: 'key', key: ['pinnedIds'] }
       ]
-      if (internalId != null) out.push({ kind: 'supplements' })
+      if (internalId != null) {
+        out.push({ kind: 'supplements' })
+        out.push({ kind: 'thread-members' })
+      }
       return out
     }
     // outbox fanout completed: derived Notion / Mail.app state on the email may
     // have moved. Main list + any supplement holding the id.
     case 'outbox.done': {
       const out: InvalidationDirective[] = [{ kind: 'main-list' }]
-      if (internalId != null) out.push({ kind: 'supplements' })
+      if (internalId != null) {
+        out.push({ kind: 'supplements' })
+        out.push({ kind: 'thread-members' })
+      }
       return out
     }
     // LLM done: ai_priority / ai_action land on the single email (detail) and
@@ -185,6 +208,7 @@ export function planInvalidation(
       if (internalId != null) {
         out.push({ kind: 'key', key: ['email', internalId, 'ai'] })
         out.push({ kind: 'supplements' })
+        out.push({ kind: 'thread-members' })
       }
       return out
     }
@@ -287,6 +311,24 @@ export function resolveInvalidatedKeys(
             isActiveEntry(entry) &&
             isEmailSupplementKey(entry.queryKey) &&
             queryDataHoldsAnyId(entry.data, uncovered)
+          ) {
+            push(entry.queryKey)
+          }
+        }
+        break
+      }
+      case 'thread-members': {
+        // Thread sidebar / bundle render their members from an independent
+        // ['email','thread',id] cache — NOT merged with the main list, so unlike
+        // supplements there is NO main-list-precedence suppression: any active
+        // thread cache holding the changed id must refetch (its copy of that
+        // email's read/flag/ai state is otherwise left stale for up to 30s).
+        if (ids.size === 0) break
+        for (const entry of caches) {
+          if (
+            isActiveEntry(entry) &&
+            isThreadMembersKey(entry.queryKey) &&
+            queryDataHoldsAnyId(entry.data, ids)
           ) {
             push(entry.queryKey)
           }
