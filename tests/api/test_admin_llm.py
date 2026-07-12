@@ -57,6 +57,78 @@ def test_admin_health_envelope_and_version(client):
     assert "db_path" not in data
 
 
+def test_admin_health_workers_and_davmail_fields(client, tmp_path):
+    """E4 WP1/WP2: /api/admin/health 追加 workers 心跳 + davmail 摘要 + 动态 notes.
+
+    isolated DB (自建 sync_state + supervise/watchdog 键) → 断言字段反解与
+    CLI 面对齐; 纯诊断字段不改 healthy 计算语义。
+    """
+    from src.api.app import app
+
+    db = tmp_path / "health.db"
+    conn = sqlite3.connect(str(db))
+    conn.execute(
+        "CREATE TABLE sync_state (key TEXT PRIMARY KEY, value TEXT, updated_at REAL)"
+    )
+    now = time.time()
+    from src.mail.sync_store import SyncStore
+
+    for k, v in (
+        ("db_version", str(SyncStore.DB_VERSION)),
+        ("worker.fanout.status", "running"),
+        ("worker.fanout.restart_count", "1"),
+        ("worker.watcher.status", "crashloop_stopped"),
+        ("worker.watcher.last_error", "RuntimeError('boom')"),
+        ("davmail.last_probe_at", "2026-07-11T00:00:00+00:00"),
+        ("davmail.token_age_days", "85.3"),
+        ("davmail.imap_reachable", "1"),
+    ):
+        conn.execute(
+            "INSERT INTO sync_state (key, value, updated_at) VALUES (?,?,?)",
+            (k, v, now),
+        )
+    conn.commit()
+    conn.close()
+
+    repo = EmailRepository(
+        db_path=str(db),
+        attachment_store=AttachmentStore(base_dir=str(tmp_path / "att")),
+    )
+    app.dependency_overrides[get_repository] = lambda: repo
+    try:
+        r = client.get("/api/admin/health")
+    finally:
+        app.dependency_overrides.pop(get_repository, None)
+
+    assert r.status_code == 200
+    data = r.json()["data"]
+    # healthy 语义不变: 该 DB 缺 REQUIRED_TABLES → healthy false, 但与新字段无关
+    assert data["healthy"] is False
+
+    workers = data["workers"]
+    assert workers["fanout"]["status"] == "running"
+    assert workers["fanout"]["restart_count"] == 1
+    assert workers["watcher"]["status"] == "crashloop_stopped"
+
+    davmail = data["davmail"]
+    assert davmail["token_age_days"] == 85.3
+    assert davmail["imap_reachable"] is True
+
+    combined = " ".join(data["notes"])
+    assert "crash-loop 停摆" in combined
+    assert "85.3" in combined  # token 老化提示 (≥80d)
+
+
+def test_admin_health_workers_empty_on_trimmed_fixture(client):
+    """无 worker.% / davmail.* 键 → workers={} davmail=null notes=[] (不臆造)."""
+    r = client.get("/api/admin/health")
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data["workers"] == {}
+    assert data["davmail"] is None
+    assert data["notes"] == []
+
+
 def test_admin_health_redacts_db_path_on_error(client, tmp_path):
     """C9: a missing DB → error field carries a generic message with no path.
 

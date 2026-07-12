@@ -71,6 +71,75 @@ REQUIRED_TABLES = (
 )
 
 
+def _parse_worker_rows(rows) -> dict:
+    """sync_state 'worker.<name>.<field>' 行 → {name: {field: value}} (E4 WP1 心跳).
+
+    supervise (src/utils/supervise.py) 在状态跃迁时写这些键; 镜像
+    src/cli/commands/admin.py 同名 helper (本文件惯例: 平行实现不共享 import)。
+    """
+    workers: dict[str, dict] = {}
+    for key, value in rows:
+        rest = key[len("worker."):]
+        if "." not in rest:
+            continue
+        name, field = rest.rsplit(".", 1)
+        if field == "restart_count":
+            try:
+                value = int(value)
+            except (TypeError, ValueError):
+                pass
+        workers.setdefault(name, {})[field] = value
+    return workers
+
+
+def _build_davmail_summary(state: dict) -> Optional[dict]:
+    """davmail.* 键 → {token_age_days, imap_reachable, last_probe_at} 摘要 (E4 WP2).
+
+    watchdog 从未 tick (非 davmail 模式) → None; token_age_days "-1" 哨兵 → None。
+    """
+    if not state.get("davmail.last_probe_at"):
+        return None
+    token_age_days: Optional[float] = None
+    raw = state.get("davmail.token_age_days")
+    if raw is not None:
+        try:
+            parsed = float(raw)
+            token_age_days = None if parsed < 0 else parsed
+        except (TypeError, ValueError):
+            token_age_days = None
+    return {
+        "token_age_days": token_age_days,
+        "imap_reachable": state.get("davmail.imap_reachable") == "1",
+        "last_probe_at": state.get("davmail.last_probe_at"),
+    }
+
+
+def _compose_dynamic_health_notes(workers: dict, davmail_summary: Optional[dict]) -> list:
+    """crashloop 停摆 / token 老化 → 提示行 (E4 WP1/WP2, 不影响 healthy 语义).
+
+    与 CLI 面差异: CLI notes 还包含 E1 的静态 davmail watch note (那是 CLI-only
+    设计, web 面历史上无 notes 字段, 这里只发动态行)。_TOKEN_WARN_DAYS 定义在
+    下方 davmail-health 段 (模块级名, 调用期解析)。
+    """
+    notes: list = []
+    for wname in sorted(workers):
+        w = workers[wname]
+        if w.get("status") == "crashloop_stopped":
+            last_error = str(w.get("last_error") or "")[:120]
+            notes.append(
+                f"worker '{wname}' 已 crash-loop 停摆 (supervise 停止重启), "
+                f"该功能不可用直到服务重启 — last_error: {last_error}"
+            )
+    if davmail_summary is not None:
+        tad = davmail_summary.get("token_age_days")
+        if tad is not None and tad >= _TOKEN_WARN_DAYS:
+            notes.append(
+                f"DavMail OAuth token 已 {tad:.1f} 天未刷新 (≥{_TOKEN_WARN_DAYS:.0f}d)；"
+                "refresh_token 90 天有效期，接近时需重走 OAuth flow。"
+            )
+    return notes
+
+
 # ============================================================
 # GET /api/admin/health  (读, 直查 SQLite)
 # ============================================================
@@ -91,6 +160,11 @@ async def admin_health(
     C9 (redact host layout): **不回显绝对 ``db_path``** —— host 文件布局是部署细节,
     诊断只需 bool/version/表名。``error`` 字段同样不带路径: 文件缺失 → 固定文案
     "database file not found"; 其它故障 → 仅异常类名 (异常消息可能含路径/连接串)。
+
+    E4 WP1/WP2: 追加 ``workers`` (supervise 状态跃迁写的 sync_state 'worker.%' 键
+    → 「进程活着但某 worker 死了」跨进程可见) + ``davmail`` 摘要 (token_age_days /
+    imap_reachable, 读 watchdog 落盘的 davmail.* 键) + ``notes`` (crashloop 停摆 /
+    token 老化提示行)。均为纯诊断字段, **不改 healthy 计算语义**。
     """
     db_path = str(repo.db_path)
     db_accessible = False
@@ -98,6 +172,8 @@ async def admin_health(
     tables_present: list[str] = []
     error_message: Optional[str] = None
     expected = _expected_db_version()
+    workers: dict = {}
+    davmail_summary: Optional[dict] = None
 
     try:
         if not Path(db_path).exists():
@@ -120,6 +196,22 @@ async def admin_health(
                     "SELECT name FROM sqlite_master WHERE type IN ('table', 'view')"
                 ).fetchall()
             ]
+
+            # E4 WP1/WP2: worker 心跳 + davmail 摘要 (镜像 CLI admin health,
+            # sync_state 缺失 / 查询失败 → 静默空值, 不影响 healthy)。
+            try:
+                worker_rows = conn.execute(
+                    "SELECT key, value FROM sync_state WHERE key LIKE 'worker.%'"
+                ).fetchall()
+                workers = _parse_worker_rows(worker_rows)
+                davmail_rows = conn.execute(
+                    "SELECT key, value FROM sync_state WHERE key IN "
+                    "('davmail.last_probe_at', 'davmail.token_age_days', "
+                    "'davmail.imap_reachable')"
+                ).fetchall()
+                davmail_summary = _build_davmail_summary(dict(davmail_rows))
+            except sqlite3.Error:
+                workers, davmail_summary = {}, None
         finally:
             conn.close()
     except FileNotFoundError:
@@ -140,6 +232,9 @@ async def admin_health(
         "tables_present": tables_present,
         "tables_missing": missing,
         "healthy": healthy,
+        "workers": workers,
+        "davmail": davmail_summary,
+        "notes": _compose_dynamic_health_notes(workers, davmail_summary),
     }
     if error_message:
         data["error"] = error_message

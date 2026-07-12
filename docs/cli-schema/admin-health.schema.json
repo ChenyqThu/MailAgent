@@ -27,7 +27,29 @@
         "tables_missing": {"type": "array", "items": {"type": "string"}},
         "healthy": {"type": "boolean"},
         "error": {"type": "string"},
-        "notes": {"type": "array", "items": {"type": "string"}}
+        "notes": {"type": "array", "items": {"type": "string"}},
+        "workers": {
+          "description": "E4 WP1 — supervise 状态跃迁写的 worker 心跳 (sync_state 'worker.%' 键反解)",
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "status": {"type": "string"},
+              "last_started_at": {"type": "string"},
+              "restart_count": {"type": ["integer", "string"]},
+              "last_error": {"type": "string"}
+            }
+          }
+        },
+        "davmail": {
+          "description": "E4 WP2 — DavMailWatchdog 落盘摘要; 非 davmail 模式为 null",
+          "type": ["object", "null"],
+          "properties": {
+            "token_age_days": {"type": ["number", "null"]},
+            "imap_reachable": {"type": "boolean"},
+            "last_probe_at": {"type": ["string", "null"]}
+          }
+        }
       }
     },
     "meta": {"$ref": "_common.schema.json#/$defs/meta"}

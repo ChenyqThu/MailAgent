@@ -99,6 +99,103 @@ class TestAdminHealth:
         assert "note" in result.output
         assert "davmail" in result.output
 
+    def test_workers_empty_and_davmail_null_without_state_keys(
+        self, cli_runner, cli_env, seeded_db,
+    ):
+        """E4 WP1/WP2: 无 worker.% / davmail.* 键时新字段为空值, notes 不变."""
+        from src.cli.commands import admin
+
+        result = _invoke_admin(
+            cli_runner, "health", "-o", "json", db_path=seeded_db,
+        )
+        assert result.exit_code == 0, result.output
+        data = _extract_last_json_object(result.output)["data"]
+        assert data["workers"] == {}
+        assert data["davmail"] is None
+        assert data["notes"] == list(admin.HEALTH_WATCH_NOTES)
+
+    def test_workers_heartbeat_and_davmail_summary(
+        self, cli_runner, cli_env, seeded_db,
+    ):
+        """E4 WP1/WP2: supervise 心跳键 + davmail.* 键 → workers/davmail 字段 +
+        crashloop 停摆 / token 老化的动态 notes; healthy 语义不受影响."""
+        import sqlite3
+        import time
+
+        conn = sqlite3.connect(str(seeded_db))
+        now = time.time()
+        for k, v in (
+            ("worker.fanout.status", "running"),
+            ("worker.fanout.last_started_at", "2026-07-11T00:00:00+00:00"),
+            ("worker.fanout.restart_count", "2"),
+            ("worker.watcher.status", "crashloop_stopped"),
+            ("worker.watcher.last_error", "RuntimeError('boom')"),
+            ("davmail.last_probe_at", "2026-07-11T00:00:00+00:00"),
+            ("davmail.token_age_days", "85.3"),
+            ("davmail.imap_reachable", "1"),
+        ):
+            conn.execute(
+                "INSERT OR REPLACE INTO sync_state (key, value, updated_at) "
+                "VALUES (?,?,?)",
+                (k, v, now),
+            )
+        conn.commit()
+        conn.close()
+
+        result = _invoke_admin(
+            cli_runner, "health", "-o", "json", db_path=seeded_db,
+        )
+        assert result.exit_code == 0, result.output
+        data = _extract_last_json_object(result.output)["data"]
+        # 纯诊断字段, 不改 healthy 计算语义 (crashloop 也不翻 healthy)
+        assert data["healthy"] is True
+
+        workers = data["workers"]
+        assert workers["fanout"]["status"] == "running"
+        assert workers["fanout"]["restart_count"] == 2
+        assert workers["fanout"]["last_started_at"] == "2026-07-11T00:00:00+00:00"
+        assert workers["watcher"]["status"] == "crashloop_stopped"
+
+        davmail = data["davmail"]
+        assert davmail["token_age_days"] == 85.3
+        assert davmail["imap_reachable"] is True
+
+        combined = " ".join(data["notes"])
+        assert "crash-loop 停摆" in combined
+        assert "watcher" in combined
+        assert "85.3" in combined  # token 老化提示 (≥80d)
+
+    def test_davmail_token_age_sentinel_maps_to_null(
+        self, cli_runner, cli_env, seeded_db,
+    ):
+        """token_age_days 的 '-1' 哨兵 (token 文件不可读) → None, 不触发老化 note."""
+        import sqlite3
+        import time
+
+        conn = sqlite3.connect(str(seeded_db))
+        now = time.time()
+        for k, v in (
+            ("davmail.last_probe_at", "2026-07-11T00:00:00+00:00"),
+            ("davmail.token_age_days", "-1"),
+            ("davmail.imap_reachable", "0"),
+        ):
+            conn.execute(
+                "INSERT OR REPLACE INTO sync_state (key, value, updated_at) "
+                "VALUES (?,?,?)",
+                (k, v, now),
+            )
+        conn.commit()
+        conn.close()
+
+        result = _invoke_admin(
+            cli_runner, "health", "-o", "json", db_path=seeded_db,
+        )
+        assert result.exit_code == 0, result.output
+        data = _extract_last_json_object(result.output)["data"]
+        assert data["davmail"]["token_age_days"] is None
+        assert data["davmail"]["imap_reachable"] is False
+        assert not any("未刷新" in n for n in data["notes"])
+
 
 class TestAdminStats:
     def test_stats_json_full(self, cli_runner, cli_env, seeded_db):

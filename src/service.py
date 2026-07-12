@@ -39,6 +39,9 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 class EmailNotionSyncApp:
     """邮件同步应用主类"""
 
+    # E4 WP2: mail-sync 重启频次告警阈值 (roadmap §4.2 ">5/day")
+    RESTART_FREQ_THRESHOLD_PER_DAY = 5
+
     def __init__(self):
         # Sprint 16 dual-backend: 启动时按 cfg.mailagent_backend 创建 backend.
         # backend factory 内部 probe 失败时 raise BackendStartupError, 这里捕获后 print
@@ -262,6 +265,13 @@ class EmailNotionSyncApp:
             if self.alerter:
                 self.stats_reporter.add_collector("alerts", lambda: self.alerter.get_stats())
 
+            # E4 WP2: 重启频次维度 — 24h 内 service 启动次数 (跨重启,
+            # sync_state['service.start_history'] 持久化, _record_start_history 写入)
+            self.stats_reporter.add_collector(
+                "restarts",
+                lambda: {"count_24h": self._count_recent_starts(24 * 3600)},
+            )
+
         # roadmap §4.5.1 + §4.5.2 + §4.5.3 — DavMail backend 健康 watchdog
         # 仅 davmail mode 启动。failure / token expiry / EWS throttling 三类
         # 信号统一在这个 60s 循环里检测，状态落 sync_state['davmail.*']
@@ -367,6 +377,77 @@ class EmailNotionSyncApp:
             self.keep_alive.toggle()
             logger.info(f"Keep-alive toggled: forced={self.keep_alive.forced}")
 
+    def _spawn_supervised(self, coro_factory, name: str, *, one_shot: bool = False):
+        """E4 WP1: worker 协程包 supervise 后 create_task (顶层 task 统一入口).
+
+        挂 → 全栈日志 + (alerter 配置时) 飞书告警 + 指数退避重启; 连续
+        crash-loop → 停该 worker 保持醒目告警, 不拖垮进程。状态跃迁写
+        sync_state 'worker.<name>.*' 键, admin health 双面 (CLI /
+        /api/admin/health) 跨进程直读。
+        """
+        from src.utils.supervise import supervise
+
+        return asyncio.create_task(
+            supervise(
+                coro_factory,
+                name,
+                shutdown_event=self._shutdown_event,
+                alerter=self.alerter,
+                state_writer=self.watcher.sync_store.set_state,
+                one_shot=one_shot,
+            ),
+            name=f"supervise:{name}",
+        )
+
+    def _record_start_history(self) -> None:
+        """E4 WP2: 本次启动时间戳追加进 sync_state['service.start_history'].
+
+        JSON 数组 (unix 秒), 追加前裁剪 48h 之外的旧条目。_check_and_alert 的
+        重启频次检查 + stats_reporter 'restarts' collector 都从这里反查。
+        """
+        import json
+        import time as _time
+
+        now = _time.time()
+        raw = self.watcher.sync_store.get_state("service.start_history")
+        history: list = []
+        if raw:
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, list):
+                    history = parsed
+            except (ValueError, TypeError):
+                history = []
+        cutoff = now - 48 * 3600
+        history = [
+            float(t) for t in history
+            if isinstance(t, (int, float)) and float(t) >= cutoff
+        ]
+        history.append(now)
+        self.watcher.sync_store.set_state(
+            "service.start_history", json.dumps(history)
+        )
+
+    def _count_recent_starts(self, window_sec: int) -> int:
+        """E4 WP2: sync_state['service.start_history'] 里 window_sec 内的启动次数."""
+        import json
+        import time as _time
+
+        raw = self.watcher.sync_store.get_state("service.start_history")
+        if not raw:
+            return 0
+        try:
+            history = json.loads(raw)
+        except (ValueError, TypeError):
+            return 0
+        if not isinstance(history, list):
+            return 0
+        cutoff = _time.time() - window_sec
+        return sum(
+            1 for t in history
+            if isinstance(t, (int, float)) and float(t) >= cutoff
+        )
+
     async def start(self):
         """启动应用"""
         logger.info("=" * 60)
@@ -383,6 +464,13 @@ class EmailNotionSyncApp:
         if self.keep_alive:
             signal.signal(signal.SIGUSR1, self._handle_toggle_keep_alive)
 
+        # E4 WP2: 重启频次告警数据源 — 本次启动时间戳追加进
+        # sync_state['service.start_history'] (JSON 数组, 裁剪 48h)。绝不阻断启动。
+        try:
+            self._record_start_history()
+        except Exception as e:  # noqa: BLE001
+            logger.debug(f"[restart-history] record failed: {e}")
+
         try:
             # 启动防锁屏保活
             if self.keep_alive:
@@ -394,31 +482,56 @@ class EmailNotionSyncApp:
                 mailboxes = [mb.strip() for mb in config.sync_mailboxes.split(',') if mb.strip()]
                 await self.alerter.alert_service_started(mailboxes, config.radar_poll_interval)
 
+            # E4 WP1: service.py 顶层 worker task 全部收编进 supervise
+            # (挂 → 全栈日志 + 告警 + 退避重启; crash-loop → 停该 worker 不拖垮
+            # 进程; 状态跃迁写 sync_state 'worker.<name>.*' 键供 admin health 直读)。
+
             # 启动邮件监听器（在后台任务中运行）
-            watcher_task = asyncio.create_task(self.watcher.start())
+            def _watcher_factory():
+                # 重启可重入性: NewWatcher.start() 在 self._running=True 之后的
+                # pre-loop 段 (marker guard / baseline 恢复) 仍可能抛异常逃逸,
+                # 此时 _running 残留 True → 直接重调 start() 命中 "already
+                # running" 立即返回, 重启永远无效。supervise 只在上一个协程已
+                # 终止后才调 factory, 这里复位是安全的。
+                # 嵌套的 rollout flush loop 每 60s 才采样一次 _running, 而复位
+                # False→start() 重新置 True 的窗口只有 backoff 几秒 — 旧 loop
+                # 大概率醒来时又见 True 变僵尸双跑, 必须显式 cancel (其
+                # except CancelledError: break 分支保证干净退出)。
+                stale_flush = getattr(self.watcher, "_rollout_flush_task", None)
+                if stale_flush is not None and not stale_flush.done():
+                    stale_flush.cancel()
+                self.watcher._running = False
+                return self.watcher.start()
+
+            watcher_task = self._spawn_supervised(_watcher_factory, "watcher")
 
             # 启动反向同步循环
-            reverse_task = asyncio.create_task(self._reverse_sync_loop())
+            reverse_task = self._spawn_supervised(self._reverse_sync_loop, "reverse_sync")
 
             # 启动 Redis 事件消费（如果配置）
             redis_task = None
             if self.redis_consumer:
-                redis_task = asyncio.create_task(
-                    self.redis_consumer.start(shutdown_event=self._shutdown_event)
+                redis_task = self._spawn_supervised(
+                    lambda: self.redis_consumer.start(shutdown_event=self._shutdown_event),
+                    "redis_consumer",
                 )
 
             # 启动看板统计上报（如果配置）
             stats_task = None
             if self.stats_reporter:
-                stats_task = asyncio.create_task(self._stats_reporter_loop())
+                stats_task = self._spawn_supervised(
+                    self._stats_reporter_loop, "stats_reporter"
+                )
 
             # 启动告警检查循环（如果配置）
             alert_task = None
             if self.alerter:
-                alert_task = asyncio.create_task(self._alert_check_loop())
+                alert_task = self._spawn_supervised(self._alert_check_loop, "alert_check")
 
             # 启动周期会议滚动展开循环
-            expansion_task = asyncio.create_task(self._meeting_expansion_loop())
+            expansion_task = self._spawn_supervised(
+                self._meeting_expansion_loop, "meeting_expansion"
+            )
 
             # Phase C.1 — davmail mode 下 fire-and-forget backfill task, 把 applescript
             # 时代抓的存量邮件 imap_uid 副字段补齐 (DavMailBackend.fetch_email_by_id
@@ -426,21 +539,27 @@ class EmailNotionSyncApp:
             uid_backfill_task = None
             if self.backend.backend_origin == "davmail":
                 from src.mail.backend.davmail_uid_mapper import schedule_backfill_task
-                uid_backfill_task = asyncio.create_task(
-                    schedule_backfill_task(config, self.watcher.sync_store, delay_sec=10)
+                # one-shot: 跑完即终止, 重启没有意义 — supervise 只观测
+                # (completed/failed 终态 + 失败告警), 不进重启循环。
+                uid_backfill_task = self._spawn_supervised(
+                    lambda: schedule_backfill_task(
+                        config, self.watcher.sync_store, delay_sec=10
+                    ),
+                    "uid_backfill",
+                    one_shot=True,
                 )
 
             # roadmap §4.5.1-3 — davmail health watchdog (仅 davmail mode)
             davmail_watchdog_task = None
             if self.davmail_watchdog:
-                davmail_watchdog_task = asyncio.create_task(
-                    self.davmail_watchdog.run()
+                davmail_watchdog_task = self._spawn_supervised(
+                    self.davmail_watchdog.run, "davmail_watchdog"
                 )
 
             # Sprint 15: 启动 outbox FanoutWorker（如果配置开启）
             fanout_task = None
             if self.fanout_worker:
-                fanout_task = asyncio.create_task(self.fanout_worker.run())
+                fanout_task = self._spawn_supervised(self.fanout_worker.run, "fanout")
 
             # C1: 启动 async_jobs JobWorker（长任务 batch resync / backfill 统一执行器）。
             # 默认关闭灰度 (MAILAGENT_ASYNC_JOBS_ENABLED)；关闭时 POST /api/jobs 仍可
@@ -453,7 +572,7 @@ class EmailNotionSyncApp:
                     config=config,
                     poll_interval_sec=config.mailagent_async_jobs_poll_interval_sec,
                 )
-                job_worker_task = asyncio.create_task(self.job_worker.run())
+                job_worker_task = self._spawn_supervised(self.job_worker.run, "job_worker")
                 logger.info(
                     f"[job-worker] enabled "
                     f"(poll={config.mailagent_async_jobs_poll_interval_sec}s)"
@@ -485,8 +604,8 @@ class EmailNotionSyncApp:
                         full_sync_past_days=config.calendar_caldav_sync_window_past_days,
                         full_sync_window_days=config.calendar_caldav_sync_window_future_days,
                     )
-                    calendar_sync_task = asyncio.create_task(
-                        self.calendar_sync_worker.run()
+                    calendar_sync_task = self._spawn_supervised(
+                        self.calendar_sync_worker.run, "calendar_sync"
                     )
                     logger.info(
                         f"[calendar-sync] worker started "
@@ -528,21 +647,28 @@ class EmailNotionSyncApp:
             daily_digest_task = None
             if self.island_enabled:
                 from src.notify import island_reconnect, island_snooze
-                island_reconnect_task = asyncio.create_task(
-                    island_reconnect.reconnect_loop(shutdown_event=self._shutdown_event)
+                island_reconnect_task = self._spawn_supervised(
+                    lambda: island_reconnect.reconnect_loop(
+                        shutdown_event=self._shutdown_event
+                    ),
+                    "island_reconnect",
                 )
-                island_snooze_task = asyncio.create_task(
-                    island_snooze.tick_loop(shutdown_event=self._shutdown_event)
+                island_snooze_task = self._spawn_supervised(
+                    lambda: island_snooze.tick_loop(
+                        shutdown_event=self._shutdown_event
+                    ),
+                    "island_snooze",
                 )
                 # Phase 3 DailyDigest 每日巡检（island 开 + digest 开 才跑）
                 if config.mailagent_daily_digest_enabled:
                     from src.notify import daily_digest
-                    daily_digest_task = asyncio.create_task(
-                        daily_digest.tick_loop(
+                    daily_digest_task = self._spawn_supervised(
+                        lambda: daily_digest.tick_loop(
                             sync_store=self.watcher.sync_store,
                             run_once=self._run_daily_digest_once,
                             shutdown_event=self._shutdown_event,
-                        )
+                        ),
+                        "daily_digest",
                     )
                     logger.info(
                         f"[daily-digest] enabled "
@@ -569,13 +695,14 @@ class EmailNotionSyncApp:
                 has_enabled_report_agent = False
             if config.mailagent_report_agent_enabled or has_enabled_report_agent:
                 from src.reports import worker as report_worker
-                report_worker_task = asyncio.create_task(
-                    report_worker.tick_loop(
+                report_worker_task = self._spawn_supervised(
+                    lambda: report_worker.tick_loop(
                         sync_store=self.watcher.sync_store,
                         store=report_store,
                         db_path=report_db_path,
                         shutdown_event=self._shutdown_event,
-                    )
+                    ),
+                    "report_worker",
                 )
                 logger.info(
                     f"[report] worker enabled "
@@ -594,19 +721,22 @@ class EmailNotionSyncApp:
                 from src.agents import trigger_worker as agent_trigger_worker
                 from src.agents.run_worker import AgentRunWorker
                 from src.sync.async_jobs import AsyncJobRepository
-                agent_trigger_task = asyncio.create_task(
-                    agent_trigger_worker.tick_loop(
+                agent_trigger_task = self._spawn_supervised(
+                    lambda: agent_trigger_worker.tick_loop(
                         sync_store=self.watcher.sync_store,
                         store=report_store,
                         repo=AsyncJobRepository(report_db_path),
                         shutdown_event=self._shutdown_event,
-                    )
+                    ),
+                    "agent_trigger",
                 )
                 self.agent_run_worker = AgentRunWorker(
                     repo=AsyncJobRepository(report_db_path),
                     store=report_store,
                 )
-                agent_run_task = asyncio.create_task(self.agent_run_worker.run())
+                agent_run_task = self._spawn_supervised(
+                    self.agent_run_worker.run, "agent_run"
+                )
                 logger.info(
                     "[agent] custom agent trigger+run workers enabled "
                     "(MAILAGENT_CUSTOM_AGENTS_ENABLED)"
@@ -875,22 +1005,28 @@ class EmailNotionSyncApp:
 
         # 6. davmail fetch 突增 (Sprint 16 收尾): davmail mode 下检查最近 10min
         # 进入 fetch_failed 的邮件数, 超阈值 → 飞书告警 (alerter 内置 cooldown 防刷)
+        # E4 WP2: ① 裸 sqlite3.connect 包 asyncio.to_thread (timeout=5.0 意味 WAL
+        # 锁竞争下最坏阻塞事件循环 5s); ② 修真 bug: send_alert 签名是 content=,
+        # 原 message= kwarg 触发即 TypeError (该告警从未成功发出过)。
         if self.backend and self.backend.backend_origin == "davmail":
             try:
-                import sqlite3 as _sql
-                with _sql.connect(config.sync_store_db_path, timeout=5.0) as _conn:
-                    row = _conn.execute(
-                        "SELECT COUNT(*) FROM email_metadata "
-                        "WHERE sync_status='fetch_failed' "
-                        "  AND backend_origin='davmail' "
-                        "  AND updated_at > strftime('%s','now') - 600"
-                    ).fetchone()
-                    recent_fail = (row[0] if row else 0)
+                def _count_recent_fetch_failed() -> int:
+                    import sqlite3 as _sql
+                    with _sql.connect(config.sync_store_db_path, timeout=5.0) as _conn:
+                        row = _conn.execute(
+                            "SELECT COUNT(*) FROM email_metadata "
+                            "WHERE sync_status='fetch_failed' "
+                            "  AND backend_origin='davmail' "
+                            "  AND updated_at > strftime('%s','now') - 600"
+                        ).fetchone()
+                        return row[0] if row else 0
+
+                recent_fail = await asyncio.to_thread(_count_recent_fetch_failed)
                 if recent_fail >= 3:
                     await self.alerter.send_alert(
                         level="error",
                         title=f"DavMail fetch 突增: 最近 10min {recent_fail} 封 fetch_failed",
-                        message=(
+                        content=(
                             f"backend=davmail 最近 10min 共 {recent_fail} 封邮件 "
                             f"fetch_email_by_id 失败 (含 IMAP timeout / SELECT 失败 / "
                             f"UIDVALIDITY mismatch). 看 pm2 logs mail-sync | "
@@ -901,6 +1037,33 @@ class EmailNotionSyncApp:
                     )
             except Exception as e:
                 logger.debug(f"[alert] davmail fetch burst check failed: {e}")
+
+        # 7. outbox 积压 (E4 WP2): 行龄 ≥5min 仍 pending 的条目 (age_buckets 的
+        # lt_30m[5-30min] + gt_30m[>30min]) 超阈值 → FanoutWorker 可能卡死/落后。
+        # 检查点放这里而非 FanoutWorker tick (不碰热路径), 60s 频率与量级都可接受。
+        try:
+            outbox_stats = await asyncio.to_thread(self.outbox_repo.get_stats)
+            aged_pending = (
+                outbox_stats.age_buckets.get("lt_30m", 0)
+                + outbox_stats.age_buckets.get("gt_30m", 0)
+            )
+            if aged_pending > config.alert_outbox_backlog_threshold:
+                await self.alerter.alert_outbox_backlog(
+                    aged_pending, config.alert_outbox_backlog_threshold
+                )
+        except Exception as e:
+            logger.debug(f"[alert] outbox backlog check failed: {e}")
+
+        # 8. mail-sync 重启频次 (E4 WP2): 24h 内启动次数 > 阈值 → 进程级
+        # crash-loop / OOM / 外部反复重启的信号 (数据源 = _record_start_history)。
+        try:
+            count_24h = self._count_recent_starts(24 * 3600)
+            if count_24h > self.RESTART_FREQ_THRESHOLD_PER_DAY:
+                await self.alerter.alert_restart_frequency(
+                    count_24h, self.RESTART_FREQ_THRESHOLD_PER_DAY
+                )
+        except Exception as e:
+            logger.debug(f"[alert] restart frequency check failed: {e}")
 
     async def _stats_reporter_loop(self):
         """看板统计上报循环"""

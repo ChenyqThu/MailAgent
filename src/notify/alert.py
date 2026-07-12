@@ -347,6 +347,83 @@ class FeishuAlertNotifier:
             alert_key=f"recovery:{component}",
         )
 
+    # ── E4 WP1/WP2: worker 监督 + 服务级告警 ──────────────────────────
+
+    async def alert_worker_crashed(self, name: str, error: str, crash_count: int = 1):
+        """worker 协程非预期死亡 (supervise 捕获, 即将退避重启)"""
+        await self.send_alert(
+            level="error",
+            title=f"Worker 异常退出: {name}",
+            content=(
+                f"worker **{name}** 非预期死亡 (连续第 {crash_count} 次), "
+                "supervise 将按退避表自动重启。\n"
+                f"**错误**: {error[:300]}"
+            ),
+            source="supervise",
+            details={
+                "Worker": name,
+                "连续 crash": str(crash_count),
+                "排查命令": "`pm2 logs mail-sync --lines 50`",
+            },
+            alert_key=f"worker_crashed:{name}",
+        )
+
+    async def alert_worker_crashloop_stopped(self, name: str, crash_count: int):
+        """worker 连续 crash-loop, supervise 已停止重启 (功能停摆直到服务重启)"""
+        await self.send_alert(
+            level="critical",
+            title=f"Worker crash-loop 停摆: {name}",
+            content=(
+                f"worker **{name}** 连续 **{crash_count}** 次快速崩溃, "
+                "supervise 已停止重启 —— 该功能停摆, 其余 worker 不受影响。\n"
+                "**恢复**: 排查根因后 `pm2 restart mail-sync` (或重启 App)。"
+            ),
+            source="supervise",
+            details={
+                "Worker": name,
+                "连续 crash": str(crash_count),
+                "状态键": f"`worker.{name}.status=crashloop_stopped`",
+            },
+            alert_key=f"worker_crashloop_stopped:{name}",
+        )
+
+    async def alert_outbox_backlog(self, aged_pending: int, threshold: int):
+        """outbox 积压 — 行龄 ≥5min 的 pending 超阈值 (FanoutWorker 可能卡死/落后)"""
+        await self.send_alert(
+            level="warning",
+            title=f"Outbox 积压 ({aged_pending} 条 ≥5min 未派发)",
+            content=(
+                f"email_outbox 中行龄 ≥5min 仍为 pending 的条目达 **{aged_pending}** "
+                f"条 (阈值: {threshold})。FanoutWorker 可能卡死或严重落后。\n"
+                "**排查**: `mailagent admin stats --section outbox` + "
+                "`pm2 logs mail-sync | grep fanout-worker`。"
+            ),
+            source="outbox",
+            details={
+                "积压条数 (≥5min)": str(aged_pending),
+                "告警阈值": str(threshold),
+            },
+            alert_key="outbox_backlog",
+        )
+
+    async def alert_restart_frequency(self, count_24h: int, threshold: int):
+        """mail-sync 重启频次异常 — 24h 内启动次数超阈值 (crash-loop / 反复被杀)"""
+        await self.send_alert(
+            level="warning",
+            title=f"服务重启频繁 (24h 内 {count_24h} 次)",
+            content=(
+                f"mail-sync 最近 24h 内启动了 **{count_24h}** 次 (阈值: {threshold})。"
+                "可能是进程级 crash-loop / OOM / 外部反复重启。\n"
+                "**排查**: `pm2 logs mail-sync --lines 100` + 系统日志。"
+            ),
+            source="main",
+            details={
+                "24h 启动次数": str(count_24h),
+                "告警阈值": str(threshold),
+            },
+            alert_key="restart_frequency",
+        )
+
     # ── DavMail backend 健康告警 (roadmap §4.5.1 + §4.5.2 + §4.5.3) ─────
 
     async def alert_davmail_token_expiring(self, age_days: float):

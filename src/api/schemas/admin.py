@@ -29,6 +29,10 @@ class AdminHealthData(BaseModel):
     tables_missing: list[str]
     healthy: bool
     error: Optional[str] = None
+    # E4 WP1/WP2: worker 心跳 (sync_state 'worker.%') + davmail 摘要 + 动态提示行。
+    workers: Optional[dict[str, Any]] = None
+    davmail: Optional[dict[str, Any]] = None
+    notes: Optional[list[str]] = None
 
 
 # --- admin stats ------------------------------------------------------------
