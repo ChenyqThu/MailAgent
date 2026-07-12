@@ -68,6 +68,13 @@ All colors live as Tailwind tokens; production code references them by name
 via `theme.extend.colors`. **Never inline hex** outside the `:root` token
 definition.
 
+> **Live values: `index.css` is SSoT (updated past v1).** The hex tables in
+> §2.1–§2.5 capture the original v1 design *intent*; the authoritative live
+> token values now live in `frontend/src/electron/renderer/index.css` `:root`
+> (Sprint 4 a11y contrast retune + Theme v3 hex-collection — §18). When a hex
+> here disagrees with `index.css`, `index.css` wins. Don't re-tune these tables
+> by hand — read the CSS.
+
 ### 2.1 Window-chrome / surface tiers (6 levels)
 
 Dark, cool, desaturated. Selected for legibility under macOS dark menu bar
@@ -79,7 +86,7 @@ without ever going pure black.
 | `ink-1`            | `#15181D` | Sidebar; bottom status bar; batch bar              |
 | `ink-2`            | `#1A1E24` | Email list column; AI panel base                   |
 | `ink-3`            | `#1F242B` | Detail pane; hover surface for rows / buttons      |
-| `ink-4`            | `#262C35` | Selected row; AI user-bubble bg; raised affordance |
+| `ink-4`            | `#262C35` | AI user-bubble bg; raised affordance (v3: selected row → `--sel-wash` pill, no longer an `ink-4` flood — §18) |
 | `ink-5`            | `#2E343E` | Reserved — popover / menu surface above `ink-4`   |
 | `ink-border`       | `#2C323B` | Hairline between major panels                      |
 | `ink-border-soft`  | `#1F242B` | Row-internal divider (near-invisible)              |
@@ -382,16 +389,36 @@ If a future section header *must* be Chinese: bump to `text-aux` 14px (not
 
 ### 4.2 Radius
 
-| Token         | Value | Use                                          |
-|---------------|-------|----------------------------------------------|
-| `rounded`     | 4px   | Buttons, chips, kbd                          |
-| `rounded-md`  | 6px   | Cards (attachment, action item), inputs      |
-| `rounded-lg`  | 8px   | Major bordered blocks (AI Fields, draft card)|
-| `rounded-2xl` | 18px  | Dynamic Island pill (Apple system reference) |
-| `rounded-full`| 9999  | Dots, traffic lights, avatar circles         |
+> **Superseded by Theme v3 (2026-07, §18).** Radius now flows through four
+> CSS-variable tiers in `index.css` `:root` (SSoT), not the v1 Tailwind-radius
+> classes. The v3 tiers:
 
-**Forbidden**: 28px+ "soft-cushion" cards (banned in user brief). 14–16px
-radius reserved for the Dynamic Island only.
+| Token      | Value | Use                                                        |
+|------------|-------|------------------------------------------------------------|
+| `--r-ctl`  | 8px   | Controls — buttons, inputs, nav rows, toolbar icon buttons |
+| `--r-row`  | 9px   | List-row pill (EmailRow / chat SessionRow)                 |
+| `--r-card` | 12px  | Cards — AI Fields block, approval card, settings tile      |
+| `--r-pop`  | 14px  | Floating layers — `.glass-pop` (popover / menu / palette / modal) |
+
+Special cases (unchanged): capsule `999px` (pills / lang-pip / count badges);
+avatar circle `50%`. **Concentric-radius principle**: outer radius = inner
+radius + padding, so nested corners stay parallel (the pill row's compensated
+`calc()` radius — ARCHITECTURE §7.3 — is one application).
+
+**Forbidden** (carried from v1): 28px+ "soft-cushion" cards; radius > 18px is
+reserved for the Dynamic Island only.
+
+<details><summary>v1 Tailwind radius table (superseded)</summary>
+
+| Token         | Value | Use                                           |
+|---------------|-------|-----------------------------------------------|
+| `rounded`     | 4px   | Buttons, chips, kbd                           |
+| `rounded-md`  | 6px   | Cards (attachment, action item), inputs       |
+| `rounded-lg`  | 8px   | Major bordered blocks (AI Fields, draft card) |
+| `rounded-2xl` | 18px  | Dynamic Island pill (Apple system reference)  |
+| `rounded-full`| 9999  | Dots, traffic lights, avatar circles          |
+
+</details>
 
 ### 4.3 Shadow
 
@@ -454,6 +481,14 @@ in the mockup that translates to a shadcn-ui-extended React component.
 | **Dynamic Island states (8)** | dedicated `<Island.*>` SwiftUI | NOT a React component — see §7        |
 
 ### 5.1 Reference: `<EmailRow>`
+
+> **Illustrative v1 reference — selection/pill styling superseded by Theme v3
+> (§18).** Production `EmailRow` is a padding-box **pill** (ARCHITECTURE §7.3),
+> so selection is a `--sel-wash` gradient pill + 3px left bar (no glow), *not*
+> the `bg-ink-4` full-bleed row shown below. Unread text is `--ink-fg` weight
+> 650 + accent dot (the snippet already uses fg text — only the weight moved
+> from `font-semibold`/`font-medium` to 650/500). Component structure and class
+> names (`.row-selected`, `data-read`) are unchanged; only the CSS values moved.
 
 ```tsx
 // src/components/email/EmailRow.tsx
@@ -970,6 +1005,13 @@ scroll-jacking. This is a tool.
 > **曲线已收口为单 standard 曲线**：旧的第二曲线 `cubic-bezier(0.32,0.72,0,1)`
 > （曾散落于 drawer / efm-modal / batch-bar / undo-toast 等）已在 GSAP 引入时全部
 > 对齐到上面的 standard 曲线，不再使用第二曲线。
+
+> **Theme v3 (2026-07) — CSS-transition easing.** The "one curve" discipline
+> above governs **GSAP**. Theme v3 additionally defines two easing tokens for
+> **authored CSS transitions** (not GSAP): `--ease-out-strong`
+> (`cubic-bezier(0.23,1,0.32,1)`, UI-transition default) and `--ease-move`
+> (`cubic-bezier(0.77,0,0.175,1)`, move/morph). Existing GSAP orchestration is
+> not migrated — the two tracks coexist. See §18 + `docs/motion-gsap.md` §11.
 
 ---
 
@@ -1630,3 +1672,78 @@ process.exit(failed ? 1 : 0);  // 任何 violation fail CI
 > **§16 + §17 是与 §1-§15 同级的 V1 标准**。任何 Sprint 0 之后加入的组件如果忽略 i18n 或硬编码主题色，
 > code review 必须拒绝。CI 会自动 lint 这两层（[§14 lint 非协商项](#14-the-non-negotiables-lint-these-in-ci)
 > 第 9 / 10 条新增）。
+
+---
+
+## 18. Theme v3 — Native Material (2026-07)
+
+Theme v3 is the **noise-reduction evolution of the v2 frosted-glass theme**,
+not a rewrite. The material architecture (OS vibrancy as the sole blur layer +
+four-tier overlay + `data-glass` moods + solid fallback), the 6 accents, and
+light/dark all stay intact. Decision record + migration ledger:
+`docs/plans/theme-v3-native-material/README.md` (archived after landing). Live
+token values live in `frontend/src/electron/renderer/index.css` `:root` (SSoT);
+this section is the design-intent index.
+
+### 18.1 Change overview
+
+| # | Change | v2 → v3 |
+|---|---|---|
+| C1 | Noise layer (`.grain` SVG turbulence) | **Retired** — DOM mount + CSS rule + settings knob + i18n key all removed |
+| C2 | Specular highlight (`.specular::after`, titlebar top edge) | **Retired** |
+| C3 | Static decorative glow (selection bar / CTA outer glow / tab underline) | **Retired across the board.** Interaction-feedback glow (composer `BorderGlow`) is explicitly out of scope and stays |
+| C4 | Email-row selection | **Pill-shaped**: `--sel-wash` gradient clipped to a padding-box pill + 3px left bar (glow removed, bar retained). Implementation: ARCHITECTURE §7.3 |
+| C5 | Sidebar nav / settings-rail tab / chat SessionRow selection | Same `--sel-wash` pill + retained left bar — one cross-view selection signature |
+| C6 | Unread expression | Sender / subject → foreground (`--ink-fg`, weight 650); time → foreground weight 500; unread dot + count badge stay accent. Accent signals, never body-colors |
+| C7 | CTA button | Gradient + inset highlight kept; **outer glow removed**. (Solid-surface CTA keeps a byte-for-byte special-case — no drop shadow + softened inset; since glow is now globally gone, that special-case only differs on shadow/inset.) |
+| C8 | Radius | Unified four tiers — §4.2 / §18.3 |
+| C9 | Hardcoded hex | AI-strip priority colors + flag-done green + avatar gradients folded into tokens (§18.3) |
+
+**Retained (owner red lines):** the selected-item 3px left accent bar (sidebar
+/ email row / chat session row — global signature); every interaction animation
+(§18.2); layout structure untouched.
+
+### 18.2 Motion red lines (migration invariant — no batch may drop these)
+
+**Kept as-is:**
+- Animated-icon system (main menu / settings rail / email toolbar hover micro-motion).
+- Chat `AgentStrandsBackdrop` filament canvas backdrop.
+- Composer `BorderGlow` (hover mesh rainbow edge + glow ring) — interaction feedback, orthogonal to the C3 static-glow retirement.
+- `ShimmerText` (thinking shimmer), `DotMatrix` connecting dots, `ThinkingPhrases` rotation.
+- All GSAP orchestration: inbox-tab indicator slide, settings-panel fade-in, thinking-block height auto↔0, and everything in `docs/motion-gsap.md` §8.
+- Sidebar collapse `transition-[width]` (240↔56 / chat 260↔48) — layout-property animation is existing product behavior.
+- Row hover / press feedback; approval-card phase-pill state transitions.
+- List-performance rules (ARCHITECTURE §7.1) — unaffected by v3.
+
+**Allowed optimizations (params only, no behavior change):**
+- Easing unified: UI transitions → `--ease-out-strong`; move/morph → `--ease-move`. New code forbids `ease-in` / `transition: all` / bounce/overshoot. (CSS-transition track only; GSAP stays on its `standard` curve — see §8 + `docs/motion-gsap.md` §11.)
+- Durations snap to three tiers: fast 120 / base 220 / slow 380ms; UI animation < 300ms.
+- High-frequency keyboard actions (j/k nav, archive, session switch) stay zero-animation.
+
+### 18.3 v3 token name index
+
+All in `index.css` `:root` (SSoT). Names, not live values — read the CSS for values.
+
+**Radius:** `--r-ctl` 8 · `--r-row` 9 · `--r-card` 12 · `--r-pop` 14 (§4.2).
+
+**Selection:** `--sel-wash` (accent wash gradient — dark 16%→6%, light 13%→5%,
+theme-switched by the token itself) · `--sel-bar-w` 3px.
+
+**Easing:** `--ease-out-strong` `cubic-bezier(0.23,1,0.32,1)` (UI-transition
+default) · `--ease-move` `cubic-bezier(0.77,0,0.175,1)` (move/morph).
+
+**Hex-collection (batch 3, visual-zero):**
+- `--strip-crit / -urg / -impt / -norm / -low` — AI-strip priority colors.
+  ⚠️ **Historical fork, unification deferred.** Their values were copied
+  verbatim from the pre-Sprint-4 hardcoded hex and do **not** equal the current
+  `--c-crit / -urg / …` chip tokens (Sprint 4's a11y retune only touched the
+  chip tokens; these strip colors never followed). Kept as a separate variable
+  set to guarantee zero visual change; whether to merge back onto `--c-*` is an
+  open decision.
+- `--flag-done` — flag "done" / AI-done green (`93 186 140`); same fork story
+  vs `--c-ok`.
+- `--avatar-1a…6b / -ext-a / -ext-b` — 6-slot avatar gradient endpoints,
+  verbatim hex, purely detokenized (no visual change).
+
+> Not yet collected: the `fail` red family (`#e36262` — ai-failed / dot-err /
+> sync-pill pulse) is the symmetric un-tokenized family, left for a later batch.

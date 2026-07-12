@@ -167,3 +167,16 @@ loading 不该成为视觉焦点。**loading 只用三个词汇**（2026-06-13 �
 - 渐进式：数据切换/翻页/refetch 用 TanStack Query v5 `placeholderData: keepPreviousData`，旧数据留屏到新数据 ready，消除闪白/回顶。配合 `isLoading`（v5 下仅「首次无缓存」为 true）做骨架兜底——切换时 `isLoading=false` 走 isFetching，自然只在首次显骨架。
 - 已覆盖：EmailList / EmailDetail / FolderList（既有）+ Calendar 4 view + EventDetailDrawer + CommandPalette 搜索（本轮）。手写 `animate-pulse` 必带 `motion-reduce:animate-none`。
 - 延后（更大初衷）：邮件正文 HTML 流式 / 内联图懒加载 + allSettled 协调 / 附件缩略图。
+
+## 11. 主题 v3 CSS 过渡缓动 token（2026-07）
+
+主题 v3「原生材质」为 **CSS transition**（authored CSS，非 GSAP）新增两个缓动 token（`index.css` `:root`）：
+
+| Token | 值 | 用途 |
+|---|---|---|
+| `--ease-out-strong` | `cubic-bezier(0.23, 1, 0.32, 1)` | UI 过渡默认（hover / 选中 fade / 圆角态切换等 CSS transition） |
+| `--ease-move` | `cubic-bezier(0.77, 0, 0.175, 1)` | 位移 / morph 类 CSS transition |
+
+时长仍贴 §1 三档：fast 120 / base 220 / slow 380（tailwind duration token 同源，不发明第四档）。新代码禁 `ease-in` / `transition: all` / 回弹（bounce / overshoot），与 §1 红线一致。
+
+**与 GSAP 的边界（重要，勿混用）**：这两个 token 只服务 **CSS transition**。GSAP 的 `standard` 曲线（CustomEase `0.4,0,0.2,1`，§1 / §2）**不动** —— 既有 GSAP 编排全部保留、**不迁移**到 v3 曲线。即 authored-CSS 过渡走 v3 token、命令式 GSAP tween 走 standard，两套曲线并存、各管各的（同 §10 motion×GSAP 职责分离的精神）。此分工的 DESIGN.md 侧记录见 §8 末尾 + §18。

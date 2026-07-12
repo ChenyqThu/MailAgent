@@ -386,6 +386,35 @@ Electron main 收到响应 → 跳 Mail.app + 把 MailAgent 窗口 focus 到该�
 拦成**空白页**；故必须在 iframe 内**渲染层拦截点击**（捕获阶段 preventDefault）→ `shell:openExternal`，
 不能只靠主进程 `will-frame-navigate`。② ResizeObserver 回调要 rAF 包裹打断"测高→改高→再触发"同步环。
 
+### 7.3 主题 v3 药丸行实现要点（EmailRow）
+
+EmailRow 的选中 / 旗标 / hover「药丸」视觉靠**透明 border 造视觉内缩**实现，而**不动**
+react-window 给的 slot 几何（行高 / offset 由 virtualizer 独占，§7.1 铁律不碰）：`.email-row`
+加 `border: 1px solid transparent`（左右各 6px、上下各 1px）+ `background-clip: padding-box`，
+`box-sizing: border-box` 让 border box 仍撑满 slot，而内容盒缩进 6/1。这样全部状态背景
+（`hover` / `is-selected` 的 `--sel-wash` / `data-flag` wash / `data-thread=child` tint）自动被
+裁成内缩圆角药丸，**无需逐状态重写**。
+
+**为什么这么绕**：react-window slot 高度略大于内容真实高度，直接画 full-bleed 背景会在行间留
+透明带、且改 slot 几何会破坏 virtualizer 的定位。透明 border 是「零触碰 virtualizer 几何」下拿到
+内缩药丸的唯一便宜路子——相邻两行药丸间靠 1px 上 + 1px 下透明 border = 2px 缝分隔。
+
+- **补偿式圆角**：可见药丸圆角 = 外圈半径 − 该边 border 宽（CSS corner shaping），故 radius 写
+  `calc(var(--r-row) + 6px) / calc(var(--r-row) + 1px)`（横 +6、纵 +1 各补对应 border），可见圆角
+  才落在 `--r-row`(9px)。直接写 9px 会被 border 压成 3×8 椭圆。
+- **padding 反向补偿**：padding 由原 `9/14/10/8` 改 `8/8/9/2`（各减掉对应 border 宽），使 avatar /
+  sender / chevron 等流内内容的绝对坐标逐像素不变（与 group-header chevron 的 16px 对齐不破）。
+
+⚠️ **工程 gotcha（改 row border / padding 必读）**：绝对定位后代（`::before` 左条 / `::after` 未读点）
+的 containing block = **padding box**，原点随 border 内移 (+6, +1)。左条 `left:0` 落到药丸左内缘
+**是意图**（上下再各内缩 3px + radius 2px 胶囊端，与 sidebar `.row-selected::before` 同款）；未读点
+几何 SSoT `--unread-dot-{top,left}` 已从 slot 坐标 `36/17` **平移到 padding-box 坐标系 `35/11`**。
+**改 `.email-row` 的 border 宽或 padding 必须同步重算这两个未读点常量**，否则圆点漂移（没法纯 calc，
+因为依赖 inherited line-height resolution）。
+
+C10：药丸化后 per-row 底部 1px 分割线（`--row-divider` gradient）退役——行间靠 1px 缝 + wash 区分，
+分隔线仅保留在分组头 `.group-header`（`--row-divider` token 本体保留，folder / drafts 行仍消费）。
+
 ---
 
 ## 8. 测试策略

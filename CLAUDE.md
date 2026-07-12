@@ -40,6 +40,7 @@
 | 邮件搜索（**单核 CORE#1** + Query DSL + 多模式 FTS5 + agentic AI 搜索） | 改搜索语法 / 检索引擎 / agentic 前 | [`search/search-query-syntax.md`](./docs/reference/search/search-query-syntax.md) |
 | 灵动岛 Ping Island 集成 | 动通知/ack 中心前 | `~/.claude/plans/ultrathink-session-curious-cloud.md` |
 | 前端动效 + 列表性能铁律（Electron renderer：GSAP §8 动效 / snippet 懒取 / 线程批量 / 查询缓存 / 正文 iframe 链接） | 动前端列表/正文/动效前 | [`frontend/ARCHITECTURE.md`](./frontend/ARCHITECTURE.md) §7.1-7.2 + [`frontend/docs/motion-gsap.md`](./frontend/docs/motion-gsap.md) |
+| **前端设计体系 v3「原生材质」**（token SSoT=index.css：圆角四档 --r-ctl/8·--r-row/9·--r-card/12·--r-pop/14 + 选中签名 --sel-wash 药丸+3px 左条无辉光 + 未读前景色 650 + grain/specular/静态辉光已退役 + 动效红线清单；EmailRow 药丸=透明 border+clip+补偿圆角，见 ARCHITECTURE §7.3） | 改主题/token/选中态/圆角/装饰层前 | [`frontend/DESIGN.md`](./frontend/DESIGN.md)（v3 节）+ 落地台账 [`theme-v3-native-material/README.md`](./docs/plans/theme-v3-native-material/README.md) |
 | 桌面 App 打包 / 发布（一体化 .app + 版本号机制 + 签名闸 + 故障排查） | 出新版 / 发布 App 前 | [`packaging/packaging-release.md`](./docs/reference/packaging/packaging-release.md) |
 
 技能（按需触发，正文不常驻）：`/deploy`（部署验证）、`/debug`（系统化排查）、`/health`（健康巡检）、`/db-migration`（schema 升级）、`/sprint-handoff`（交接文档）。

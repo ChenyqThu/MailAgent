@@ -1,6 +1,7 @@
 # 主题 v3「原生材质」——设计规范调整 + 迁移清单 + 落地指导
 
-> **状态：已拍板（2026-07-12，owner「可以的，落地吧」，D1-D6 全按建议），落地中。** 批次进度见 §5 表格勾选。
+> **状态：批 0-5 全部落地（2026-07-12），待打包 dogfood + 发版；发版后本文件转 `docs/archive/2026-07/`。**
+> 常青规范已落稿：`frontend/DESIGN.md`（v3 节+动效红线）+ `frontend/ARCHITECTURE.md` §7.3（药丸行实现）+ `frontend/docs/motion-gsap.md`（缓动 token）。落地与本稿的出入见文末「落地实录」。
 > 来源：2026-07 设计风格调研（5 候选 → **B「原生材质」** 敲定）+ 两轮交互 prototype 确认（收件箱 / AI 会话 / 设置·外观 / 设置·AI × 毛玻璃/实色 × 6 accent × 亮暗）。
 > prototype 存档：`~/Downloads/mailagent-b-prototype.html`（自包含单文件，双击可开）。
 
@@ -159,14 +160,16 @@ shadcn 兼容变量区、settings 尺寸变量区。
 
 > 不做 feature flag：v2→v3 是同体系演进、纯前端 CSS/TS，**每批一个 atomic commit，应急回滚 = revert 对应 commit**。全程在 main 常规流程走（或单独 worktree 分支合入，随你习惯）。
 
-| 批 | 内容（对应 §3 行） | 验证 |
-|---|---|---|
-| 0 | Token 增量 + grain/specular/辉光退役 + CTA（1/4/5/6/7/13） | 截图矩阵：4 视图 × 亮暗 × 毛玻璃/实色 × coral/cobalt；`pnpm test`；`pnpm dev` 实机过一遍 |
-| 1 | EmailRow 药丸化 + 未读色 + wash（2） | 同上 + e2e 列表断言更新；light 模式 wash 上文字对比度 AA 复测 |
-| 2 | Sidebar / tabs / 工具栏（3/7） | 实机验证收起态 + 选中态 |
-| 3 | hex 收编 token（8/9）——**视觉零变化批** | 截图 pixel-diff 应为零；机械 review |
-| 4 | Chat / Settings / 浮层圆角对齐（10/11/12） | chat 动效逐项点验（§4 清单当 checklist 用） |
-| 5 | 官网 tokens 同步 + 常青文档落稿（15/16） | `pnpm check:tokens`；文档地图加行 |
+| 批 | 内容（对应 §3 行） | 验证 | 状态 |
+|---|---|---|---|
+| 0 | Token 增量 + grain/specular/辉光退役 + CTA（1/4/5/6/7/13） | 截图矩阵：4 视图 × 亮暗 × 毛玻璃/实色 × coral/cobalt；`pnpm test`；`pnpm dev` 实机过一遍 | ✅ `1a970dca` |
+| 1 | EmailRow 药丸化 + 未读色 + wash（2） | 同上 + e2e 列表断言更新；light 模式 wash 上文字对比度 AA 复测 | ✅ `a576bc48` |
+| 2 | Sidebar / tabs / 工具栏（3/7） | 实机验证收起态 + 选中态 | ✅ `59c938c5` |
+| 3 | hex 收编 token（8/9）——**视觉零变化批** | 截图 pixel-diff 应为零；机械 review | ✅ `739b8771` |
+| 4 | Chat / Settings / 浮层圆角对齐（10/11/12） | chat 动效逐项点验（§4 清单当 checklist 用） | ✅ `c4b89d92` |
+| 5 | 官网 tokens 同步 + 常青文档落稿（15/16） | `pnpm check:tokens`；文档地图加行 | ✅（check-tokens 零漂移=官网无需改） |
+
+实机验收方式（批 0-2 合并做一轮，批 3/4 用 DOM 计算值断言）：worktree 自起 dev serve-api（8210，生产库 `.backup` 热备快照）+ `pnpm dev:web` → 浏览器过 亮/暗 × 磨砂/实色 × 展开/收起 矩阵 + 逐项 computed-style 断言（border 1/6、补偿圆角 15/10、`--grain`/`--acc-glow` 零残留、未读点 11/35、四档 token 值、丝线 canvas/BorderGlow 存活）。vitest 191 文件 × 2233 用例每批全绿；e2e 为打包烟测（驱动 dist .app），归发版 dogfood 阶段。
 
 **每批仪式**（依既有项目纪律）：改动后 `pnpm dev` 实机验证渲染（不凭 CSS 原理宣布完成）→ vitest（含 electron-as-node runner）→ 涉及列表的批跑 e2e（跑前退生产 App，防单实例锁）→ atomic commit。
 **打包注意**：纯前端改动不需重 provision venv；发版仍走 CI tag 流程；跑过 `pnpm test` 后 build 前 `pnpm rebuild:electron`。
@@ -193,4 +196,21 @@ shadcn 兼容变量区、settings 尺寸变量区。
 
 ---
 
-*Review 通过后动作：按 D1-D6 拍板结果修订本文件 → 批 0 开工；`frontend/DESIGN.md` 等常青文档在批 5 随代码状态落稿，本文件转入 `docs/archive/` 存史。*
+---
+
+## 7. 落地实录（2026-07-12，与上文规范的实际出入）
+
+落地中发现的勘误与验收改判，均以 commit 为准：
+
+1. **勘误：inbox tabs indicator 本无辉光**（§2.1 参考位陈旧）——现状只有普通投影，无可删项；实际辉光在 `.acc-underline` 等配方处，已随 C3 清干净。
+2. **勘误：solid 档 CTA 特判保留**——它与基础规则的差异不止辉光（无投影 + 内高光减淡），删掉会让 solid 档 CTA 长出投影；只删了 4 处变 dead 的 `box-shadow:none` 覆盖，solid 档字节级现状不变。
+3. **`.glass-pop` 圆角改走 `:where()` 零特异性默认 14**（验收改判）——原方案「声明在 utilities 后压掉消费点 rounded-*」会把 tooltip 压成 14px 药丸、AssistantChatModal 16 被覆盖；改为默认值 + 批 4 逐消费点有意对齐。
+4. **EmailRow 药丸实现 = 透明 border + `background-clip: padding-box`，非 prototype 的 margin 位移**——守虚拟列表几何铁律 + 保 group-header chevron 对齐；两处验收修正：补偿式圆角 `calc(--r-row+6px)/calc(--r-row+1px)`（否则可见圆角被 border 压成 3×8 椭圆）、`--unread-dot-{top,left}` 平移到 padding-box 坐标系（36/17→35/11）。实现要点已落 `frontend/ARCHITECTURE.md` §7.3。
+5. **C9 收编发现历史分叉：AI-strip 5 色与旗标 done 绿 ≢ Sprint 4 AA 后的 `--c-*` token**（Sprint 4 只调了 chip token，这两处写死值从未跟迁）。按零视觉变化约束新建 `--strip-crit/-urg/-impt/-norm/-low` + `--flag-done`（值照抄）；**是否把 strip 色归一到 AA token 属可见视觉变化，留待 owner 后续拍板**（对照表在批 3 commit `739b8771` 附带的 agent 汇报里）。同族敞口：fail 红 `#e36262`（ai-failed/dot-err/sync-pill 脉冲）未收编，量级与 done 绿对称。
+6. **批 4 裁决**：AssistantChatModal 16→14（其自述注释即 popover 档）；Settings tile 8→12（本次落地唯一较显著的可见位移，符合卡片档意图）；`select/popover` 原语判菜单档 8；tooltip/HoverTip 维持小圆角不动；SessionRow 选中 wash 从中性灰收编 `--sel-wash`（跨视图签名统一，左条 span 保留）。
+7. **未读 `.row-time` weight 用 500 非 650**——mono 数字 650 过重，与 prototype 一致；sender/subject 严格 650。
+8. **动效红线全程零触碰核验**：丝线 canvas / BorderGlow / Shimmer / DotMatrix / GSAP 编排 / 侧栏 width 过渡 / 动态图标——批 0/1/2/4 汇报逐项声明 + 实机 DOM 断言（canvas + BorderGlow 元素存活）。
+
+遗留敞口（不阻塞发版，后续按需单开）：strip 色归一决策（见 5）、fail 红族收编、SessionRow 左条几何与 sidebar 配方微差、三 picker 菜单行 `bg-ink-4` 灰配方维持菜单语义（有意不改）。
+
+*发版后动作：打包 dogfood（e2e 烟测 + 实机过一遍 §5 矩阵）→ 本文件转 `docs/archive/2026-07/`。*
