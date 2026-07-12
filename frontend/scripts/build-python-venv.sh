@@ -96,6 +96,71 @@ rm -rf "$OUT/lib/python3.11/test" "$OUT/lib/python3.11/idlelib" \
 SP="$OUT/lib/python3.11/site-packages"
 rm -rf "$SP/pip" "$SP"/pip-*.dist-info 2>/dev/null || true
 
+# 4.4. (c-1) 清理 site-packages 内测试夹具目录 —— 只删目录名精确等于 tests/test 的子目录,
+#     绝不匹配 testing (sqlalchemy.testing / numpy.testing 是公开 API 命名空间, 非纯测试
+#     夹具, 见 venv-slim-audit.md §3.1)。实测收益 ~27.5MB。
+echo "[build-python-venv] 清理 site-packages tests/ 目录 ..."
+SP_BEFORE_KB=$(du -sk "$SP" | cut -f1)
+find "$SP" -mindepth 2 -type d \( -name "tests" -o -name "test" \) -prune -exec rm -rf {} + 2>/dev/null || true
+SP_AFTER_TESTS_KB=$(du -sk "$SP" | cut -f1)
+echo "  tests/ 清理: 省 $(( (SP_BEFORE_KB - SP_AFTER_TESTS_KB) / 1024 ))MB"
+
+# 4.5. (c-2) strip .so/.dylib 调试符号。afterPack.cjs 与 electron-builder 都会对
+#      Resources/python 下全部 Mach-O --force 全量重签, strip 造成的签名失效会被覆盖签名
+#      吸收, 无需额外处理 (见 venv-slim-audit.md §3.2)。单文件 strip 失败只警告不中断。
+echo "[build-python-venv] strip .so/.dylib 调试符号 ..."
+STRIP_BEFORE_BYTES=0
+STRIP_AFTER_BYTES=0
+STRIP_COUNT=0
+STRIP_FAIL=0
+while IFS= read -r -d '' f; do
+  sz_before=$(stat -f%z "$f" 2>/dev/null || echo 0)
+  if strip -x "$f" 2>/dev/null; then
+    STRIP_COUNT=$((STRIP_COUNT + 1))
+  else
+    echo "  [警告] strip 失败 (跳过): $f" >&2
+    STRIP_FAIL=$((STRIP_FAIL + 1))
+  fi
+  sz_after=$(stat -f%z "$f" 2>/dev/null || echo "$sz_before")
+  STRIP_BEFORE_BYTES=$((STRIP_BEFORE_BYTES + sz_before))
+  STRIP_AFTER_BYTES=$((STRIP_AFTER_BYTES + sz_after))
+done < <(find "$OUT" -type f \( -name "*.so" -o -name "*.dylib" \) -print0)
+echo "  strip 完成: $STRIP_COUNT 文件成功 / $STRIP_FAIL 失败, 省 $(( (STRIP_BEFORE_BYTES - STRIP_AFTER_BYTES) / 1024 / 1024 ))MB"
+
+# 4.6. (a) 生成体积审计快照 (每次 provision 覆写; 本地人工 git diff 审查后 commit, 不加
+#      CI 闸 —— 详见 venv-slim-audit.md §4)。落 frontend/scripts/ 下 (resources/python/
+#      整体 gitignore, 落在里面永远进不了 repo)。
+MANIFEST="$FRONTEND_DIR/scripts/venv-manifest.txt"
+echo "[build-python-venv] 生成 $MANIFEST ..."
+(
+  set +e +o pipefail
+  echo "# venv-manifest.txt — 嵌入式 CPython 运行时体积审计快照 (每次 provision 覆写, 由 build-python-venv.sh 生成)"
+  echo "generated_at: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  echo "arch: $ARCH"
+  echo "pbs_tag: $PBS_TAG"
+  echo "pyver: $PYVER"
+  echo "total_size: $(du -sh "$OUT" | cut -f1)"
+  echo ""
+  echo "## site-packages 包体积 top20 (du -sk, 降序)"
+  du -sk "$SP"/*/ 2>/dev/null | sort -rn | head -20 | while read -r kb path; do
+    printf "  %8dK  %s\n" "$kb" "$(basename "$path")"
+  done
+  echo ""
+  echo "## site-packages tests/test 残量 (预期 ≈0, 不含 testing/)"
+  TESTS_RESIDUAL_KB=0
+  TESTS_RESIDUAL_N=0
+  while IFS= read -r d; do
+    k=$(du -sk "$d" 2>/dev/null | cut -f1)
+    TESTS_RESIDUAL_KB=$((TESTS_RESIDUAL_KB + ${k:-0}))
+    TESTS_RESIDUAL_N=$((TESTS_RESIDUAL_N + 1))
+  done < <(find "$SP" -mindepth 2 -type d \( -name "tests" -o -name "test" \) 2>/dev/null)
+  echo "  ${TESTS_RESIDUAL_KB}K ($TESTS_RESIDUAL_N 项)"
+  echo ""
+  echo "## __pycache__ 目录数 (预期 =0)"
+  echo "  $(find "$OUT" -type d -name "__pycache__" 2>/dev/null | wc -l | tr -d ' ')"
+) > "$MANIFEST" || true
+echo "  manifest 已写入 $MANIFEST"
+
 # 5. 自检: 经 wrapper (sh → python3.11 → CLI) 跑通, 验证可重定位调用链。
 #    注: src.config 有模块级 config=Config() 单例, import 即需必填字段; 构建环境无
 #    .env, 故注入 dummy env 让单例构造成功 (仅自检用, 不写入产物)。
