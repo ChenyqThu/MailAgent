@@ -441,7 +441,8 @@ export function AIFieldsBlock({ fields, internalId }: Props): React.ReactElement
   return (
     <section
       aria-label="ai-fields"
-      className="ai-fields rounded-lg border border-ink-border overflow-hidden"
+      // 主题 v3 C8/批 4: 卡片档圆角 rounded-lg(8) → --r-card(12)
+      className="ai-fields rounded-[var(--r-card)] border border-ink-border overflow-hidden"
     >
       {/* Header — icon + "AI Fields · N" + reviewed chip + model name.
           主题 v2 round 5 续: title/底部汇总栏实底 (bg-ink-2/3) 在玻璃上

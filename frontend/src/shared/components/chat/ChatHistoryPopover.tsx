@@ -91,7 +91,8 @@ export function ChatHistoryPopover({
       aria-label={t('chat.sidebar.title')}
       className={cn(
         'absolute top-full right-1 mt-1 z-30 w-[262px] max-h-[360px] overflow-y-auto',
-        'rounded-xl glass-pop p-1.5',
+        // 主题 v3 C8/批 4: 内容浮层档 rounded-xl(12) → --r-pop(14)
+        'rounded-[var(--r-pop)] glass-pop p-1.5',
         // tailwindcss-animate entrance; reduced-motion drops it (and the
         // plugin already gates its utilities behind motion-safe).
         !reduceMotion && 'animate-in fade-in-0 zoom-in-95 duration-fast origin-top-right'

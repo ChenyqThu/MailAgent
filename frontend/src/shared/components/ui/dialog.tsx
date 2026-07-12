@@ -7,8 +7,8 @@
 //
 // Animation uses `data-[state=open]:animate-in` from tailwindcss-animate.
 // Overlay backdrop is `bg-ink-0/70 backdrop-blur-sm`, content rides
-// `glass-pop`. DESIGN.md §14 #4 (no rounded-3xl) is honored — using `rounded-lg`
-// (8px).
+// `glass-pop`. DESIGN.md §14 #4 (no rounded-3xl) is honored — 主题 v3 C8/批 4
+// 对齐内容浮层档 --r-pop(14)（原 rounded-lg 8px）。
 
 import * as React from 'react'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
@@ -48,7 +48,7 @@ export const DialogContent = React.forwardRef<
       ref={ref}
       className={cn(
         'fixed left-1/2 top-1/2 z-50 grid w-full max-w-lg -translate-x-1/2 -translate-y-1/2 gap-4',
-        'glass-pop border border-ink-border-soft rounded-lg p-6',
+        'glass-pop border border-ink-border-soft rounded-[var(--r-pop)] p-6',
         'shadow-[0_8px_24px_rgba(0,0,0,0.35)]',
         'data-[state=open]:animate-in data-[state=closed]:animate-out',
         'data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0',

@@ -294,8 +294,9 @@ function SessionRow({
   }
 
   if (renaming) {
+    // 主题 v3 C8/批 4: 会话行圆角 rounded-lg(8) → token 化 --r-ctl
     return (
-      <div className="relative flex items-center rounded-lg bg-ink-3 pl-2.5">
+      <div className="relative flex items-center rounded-[var(--r-ctl)] bg-ink-3 pl-2.5">
         <Icon size={13} strokeWidth={1.75} className="mr-2 shrink-0 text-ink-fg-3" />
         <input
           autoFocus
@@ -329,8 +330,11 @@ function SessionRow({
   return (
     <div
       className={cn(
-        'group relative flex items-center rounded-lg',
-        selected ? 'bg-ink-3' : 'hover:bg-ink-fg/[0.04]'
+        // 主题 v3 C8/批 4: 会话行圆角 rounded-lg(8) → token 化 --r-ctl
+        'group relative flex items-center rounded-[var(--r-ctl)]',
+        // 主题 v3 C5/批 4: 选中 wash 从中性灰 bg-ink-3 收编到 --sel-wash
+        // (与 Sidebar/EmailRow 跨视图同一选中签名); 左条 span 本体保留 (owner 红线)。
+        selected ? '[background-image:var(--sel-wash)]' : 'hover:bg-ink-fg/[0.04]'
       )}
     >
       {selected && (
@@ -342,7 +346,8 @@ function SessionRow({
       <button
         type="button"
         onClick={onSelect}
-        className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-lg pl-2.5 pr-10 text-left"
+        // 主题 v3 C8/批 4: 会话行点击面圆角 rounded-lg(8) → token 化 --r-ctl
+        className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-[var(--r-ctl)] pl-2.5 pr-10 text-left"
       >
         <Icon size={13} strokeWidth={1.75} className="shrink-0 text-ink-fg-3" />
         <span className="min-w-0 flex-1 truncate text-body text-ink-fg-1" title={title}>

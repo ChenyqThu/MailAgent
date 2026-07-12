@@ -91,7 +91,8 @@ export const SelectContent = React.forwardRef<
     <SelectPrimitive.Content
       ref={ref}
       className={cn(
-        'relative z-50 max-h-96 min-w-[8rem] overflow-hidden rounded-md',
+        // 主题 v3 C8/批 4: select 下拉 = 紧凑菜单档 rounded-md(6) → --r-ctl(8)
+        'relative z-50 max-h-96 min-w-[8rem] overflow-hidden rounded-[var(--r-ctl)]',
         'glass-pop text-ink-fg shadow-[0_8px_24px_rgba(0,0,0,0.35)]',
         'border border-ink-border-soft',
         'data-[state=open]:animate-in data-[state=closed]:animate-out',

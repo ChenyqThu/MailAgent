@@ -63,7 +63,8 @@ export function ComposeNewModal(): React.ReactElement | null {
         aria-label={t('nav.composeNew')}
         onClick={(e) => e.stopPropagation()}
         onKeyDown={(e) => handleTab(e)}
-        className="relative w-[720px] max-w-[92vw] h-[min(760px,86vh)] flex flex-col rounded-2xl glass-pop overflow-hidden"
+        // 主题 v3 C8/批 4: 模态浮窗 rounded-2xl(16) → --r-pop(14)
+        className="relative w-[720px] max-w-[92vw] h-[min(760px,86vh)] flex flex-col rounded-[var(--r-pop)] glass-pop overflow-hidden"
       >
         <ComposePanelInner
           key="new"

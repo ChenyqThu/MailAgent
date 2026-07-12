@@ -98,8 +98,9 @@ export function CardFrame({
 }): React.JSX.Element {
   const { t } = useTranslation()
   const pill = PHASE_PILL[phase]
+  // 主题 v3 C8/批 4: 卡片档圆角 rounded-xl(12) → token 化 --r-card
   return (
-    <div className="my-1.5 min-w-0 overflow-hidden rounded-xl border border-ink-border-soft bg-ink-1">
+    <div className="my-1.5 min-w-0 overflow-hidden rounded-[var(--r-card)] border border-ink-border-soft bg-ink-1">
       <div className="flex items-center gap-2 border-b border-ink-border-soft px-3 py-2">
         <span className="grid h-5 w-5 shrink-0 place-items-center rounded-md bg-ink-3 text-coral">
           {icon}

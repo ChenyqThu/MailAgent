@@ -219,9 +219,10 @@ export function EmailListHeader({
           <button
             type="button"
             className={
+              // 主题 v3 C8/批 4: 工具钮档 rounded-md(6) → token 化 --r-ctl
               batchMode === 'on'
-                ? 'w-7 h-7 rounded-md text-coral bg-coral/10 flex items-center justify-center transition-colors duration-fast'
-                : 'w-7 h-7 rounded-md text-ink-fg-2 hover:text-ink-fg hover:bg-ink-3 flex items-center justify-center transition-colors duration-fast'
+                ? 'w-7 h-7 rounded-[var(--r-ctl)] text-coral bg-coral/10 flex items-center justify-center transition-colors duration-fast'
+                : 'w-7 h-7 rounded-[var(--r-ctl)] text-ink-fg-2 hover:text-ink-fg hover:bg-ink-3 flex items-center justify-center transition-colors duration-fast'
             }
             title={batchMode === 'on' ? t('list.batch.exit') : t('list.batch.enter')}
             aria-label={batchMode === 'on' ? t('list.batch.exit') : t('list.batch.enter')}
@@ -233,7 +234,7 @@ export function EmailListHeader({
           <button
             ref={filterTriggerRef}
             type="button"
-            className="filter-btn w-7 h-7 rounded-md text-ink-fg-2 hover:text-ink-fg hover:bg-ink-3 flex items-center justify-center transition-colors duration-fast"
+            className="filter-btn w-7 h-7 rounded-[var(--r-ctl)] text-ink-fg-2 hover:text-ink-fg hover:bg-ink-3 flex items-center justify-center transition-colors duration-fast"
             title={t('list.filter.button')}
             aria-label={t('list.filter.button')}
             aria-haspopup="true"

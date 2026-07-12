@@ -68,7 +68,8 @@ export function AccountSwitcherPopover({
       aria-label={t('nav.account.tooltip', { email: account.localPart })}
       className={cn(
         'app-nav-account-popover glass-pop absolute z-50 left-2 right-2 top-[44px]',
-        'rounded-lg border border-ink-border py-1'
+        // 主题 v3 C8/批 4: 账户切换菜单容器 = 紧凑菜单档 rounded-lg(8) → token 化 --r-ctl
+        'rounded-[var(--r-ctl)] border border-ink-border py-1'
       )}
     >
       <div

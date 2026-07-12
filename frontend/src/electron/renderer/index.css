@@ -1137,7 +1137,8 @@ body::before {
   top: 44px;
   right: 12px;
   width: 264px;
-  border-radius: 12px;
+  /* 主题 v3 C8/批 4: theme/surface/accent picker = 内容浮层档 12px → --r-pop(14) */
+  border-radius: var(--r-pop);
   z-index: 60;
   overflow: hidden;
 }
@@ -2164,7 +2165,8 @@ body:not([data-batch-mode='true']) .email-row .cb {
   /* 主题 v2 — 真浮层走 .glass-pop 配方 (20px 上限) */
   background: color-mix(in srgb, var(--glass-base) 86%, transparent);
   border: 1px solid var(--hairline);
-  border-radius: 10px;
+  /* 主题 v3 C8/批 4: 内容浮层档 10px → --r-pop(14) */
+  border-radius: var(--r-pop);
   box-shadow: var(--pop-shadow);
   -webkit-backdrop-filter: blur(20px) saturate(var(--glass-sat));
   backdrop-filter: blur(20px) saturate(var(--glass-sat));
@@ -2417,7 +2419,8 @@ body:not([data-batch-mode='true']) .email-row .cb {
   z-index: 50;
   display: flex;
   flex-direction: column;
-  border-radius: 14px;
+  /* 主题 v3 C8/批 4: command palette = 内容浮层档，14px → token 化 --r-pop */
+  border-radius: var(--r-pop);
   overflow: hidden;
 }
 
@@ -3066,7 +3069,8 @@ body:not([data-batch-mode='true']) .email-row .cb {
   position: fixed;
   z-index: 80;
   width: 220px;
-  border-radius: 10px;
+  /* 主题 v3 C8/批 4: 溢出事件内容浮层 10px → --r-pop(14) */
+  border-radius: var(--r-pop);
   padding: 10px;
 }
 .more-pop .mp-head {
@@ -3490,7 +3494,8 @@ body:not([data-batch-mode='true']) .email-row .cb {
 .sk-modal {
   width: 420px;
   max-width: 92vw;
-  border-radius: 14px;
+  /* 主题 v3 C8/批 4: 模态浮窗 14px → token 化 --r-pop */
+  border-radius: var(--r-pop);
   padding: 20px 22px;
 }
 .sk-modal h3 {
@@ -3640,7 +3645,8 @@ body:not([data-batch-mode='true']) .email-row .cb {
   right: 0;
   width: 290px;
   z-index: 70;
-  border-radius: 10px;
+  /* 主题 v3 C8/批 4: 290px 富内容悬浮面板(非微型 tooltip) 10px → --r-pop(14) */
+  border-radius: var(--r-pop);
   padding: 11px 13px;
   opacity: 0;
   pointer-events: none;
@@ -3695,7 +3701,8 @@ body:not([data-batch-mode='true']) .email-row .cb {
   width: 500px;
   max-width: 94vw;
   max-height: 90vh;
-  border-radius: 12px;
+  /* 主题 v3 C8/批 4: 模态浮窗 12px → --r-pop(14) */
+  border-radius: var(--r-pop);
   display: flex;
   flex-direction: column;
 }
@@ -4068,7 +4075,8 @@ body:not([data-batch-mode='true']) .email-row .cb {
   position: relative;
   min-width: 300px;
   max-width: 380px;
-  border-radius: 11px;
+  /* 主题 v3 C8/批 4: glass-pop 浮动通知 11px → --r-pop(14) */
+  border-radius: var(--r-pop);
   padding: 12px 14px 13px;
   display: flex;
   align-items: center;
@@ -4193,7 +4201,8 @@ body:not([data-batch-mode='true']) .email-row .cb {
   bottom: calc(100% + 9px);
   right: -6px;
   width: 288px;
-  border-radius: 10px;
+  /* 主题 v3 C8/批 4: 288px 富内容悬浮面板(非微型 tooltip) 10px → --r-pop(14) */
+  border-radius: var(--r-pop);
   padding: 11px 13px;
   z-index: 80;
   opacity: 0;
@@ -4435,7 +4444,8 @@ body:not([data-batch-mode='true']) .email-row .cb {
   bottom: 10px;
   width: 26px;
   height: 26px;
-  border-radius: 6px;
+  /* 主题 v3 C8/批 4: 工具钮档 6px → --r-ctl(8)，与 .ricon-delete 对齐 */
+  border-radius: var(--r-ctl);
   color: rgb(var(--ink-fg-1));
   /* 主题 v2 — 非浮层去 blur, alpha 提到 0.97 遮底 */
   background: rgb(var(--ink-2) / 0.97);

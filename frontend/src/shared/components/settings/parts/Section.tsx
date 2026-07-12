@@ -49,7 +49,8 @@ export function Section({
           // `tile` 在 index.css 无对应 authored 规则（grep 全仓零定义），视觉全靠
           // border + divide-y；删掉这个 no-op 死类，避免误导维护者以为有一套 tile
           // 视觉规则。
-          'rounded-lg border border-ink-border-soft',
+          // 主题 v3 C8/批 4: 卡片档圆角 rounded-lg(8) → --r-card(12)
+          'rounded-[var(--r-card)] border border-ink-border-soft',
           'divide-y divide-ink-border-soft'
         )}
       >

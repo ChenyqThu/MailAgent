@@ -23,7 +23,8 @@ export const PopoverContent = React.forwardRef<
       align={align}
       sideOffset={sideOffset}
       className={cn(
-        'relative z-50 min-w-[8rem] overflow-hidden rounded-md',
+        // 主题 v3 C8/批 4: 与 select.tsx 同族的菜单/控件档浮层 rounded-md(6) → --r-ctl(8)
+        'relative z-50 min-w-[8rem] overflow-hidden rounded-[var(--r-ctl)]',
         'glass-pop text-ink-fg shadow-[0_8px_24px_rgba(0,0,0,0.35)]',
         'border border-ink-border-soft',
         'data-[state=open]:animate-in data-[state=closed]:animate-out',

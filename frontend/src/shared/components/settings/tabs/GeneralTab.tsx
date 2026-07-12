@@ -536,7 +536,7 @@ export function GeneralTab(): React.ReactElement {
           title={t('settings.accent', { defaultValue: '强调色' })}
           meta={t('settings.general.accent.meta', { defaultValue: '6 prebuilt' })}
         />
-        <div className="tile rounded-lg p-5 border border-ink-border-soft">
+        <div className="tile rounded-[var(--r-card)] p-5 border border-ink-border-soft">
           <div
             role="radiogroup"
             aria-label="accent"
@@ -588,7 +588,7 @@ export function GeneralTab(): React.ReactElement {
           role="radiogroup"
           aria-label="locale"
           onKeyDown={makeRovingKeyDown(localeValues, currentLocale, handleLocaleChange)}
-          className="tile rounded-lg border border-ink-border-soft divide-y divide-ink-border-soft"
+          className="tile rounded-[var(--r-card)] border border-ink-border-soft divide-y divide-ink-border-soft"
         >
           {LOCALE_ROWS.map(({ value, labelKey, metaKey, code }) => (
             <RadioRow
@@ -623,7 +623,7 @@ export function GeneralTab(): React.ReactElement {
           role="radiogroup"
           aria-label="theme"
           onKeyDown={makeRovingKeyDown(themeValues, themeMode, setThemeMode)}
-          className="tile rounded-lg border border-ink-border-soft divide-y divide-ink-border-soft"
+          className="tile rounded-[var(--r-card)] border border-ink-border-soft divide-y divide-ink-border-soft"
         >
           {THEME_ROWS.map(({ value, labelKey, metaKey, rightKey }) => (
             <RadioRow
@@ -648,7 +648,7 @@ export function GeneralTab(): React.ReactElement {
           role="radiogroup"
           aria-label="surface"
           onKeyDown={makeRovingKeyDown(surfaceValues, surface, setSurface)}
-          className="tile rounded-lg border border-ink-border-soft divide-y divide-ink-border-soft"
+          className="tile rounded-[var(--r-card)] border border-ink-border-soft divide-y divide-ink-border-soft"
         >
           {SURFACE_ROWS.map(({ value, labelKey, metaKey }) => (
             <RadioRow
@@ -678,7 +678,7 @@ export function GeneralTab(): React.ReactElement {
           role="radiogroup"
           aria-label="glass mood"
           onKeyDown={makeRovingKeyDown(glassMoodValues, glassMood, setGlassMood)}
-          className="tile rounded-lg border border-ink-border-soft divide-y divide-ink-border-soft"
+          className="tile rounded-[var(--r-card)] border border-ink-border-soft divide-y divide-ink-border-soft"
         >
           {GLASS_MOOD_ROWS.map(({ value, labelKey, metaKey, rightKey }) => (
             <RadioRow
@@ -719,7 +719,7 @@ export function GeneralTab(): React.ReactElement {
             </button>
           }
         />
-        <div className="tile rounded-lg border border-ink-border-soft divide-y divide-ink-border-soft">
+        <div className="tile rounded-[var(--r-card)] border border-ink-border-soft divide-y divide-ink-border-soft">
           {GLASS_KNOB_KEYS.map((key) => {
             const [min, max, step] = GLASS_KNOB_RANGE[key]
             const value = glassKnobs[key] ?? effectiveKnobs[key]
@@ -765,7 +765,7 @@ export function GeneralTab(): React.ReactElement {
           title={t('settings.general.bodyText.title', { defaultValue: '正文外观' })}
           meta={t('settings.general.bodyText.meta', { defaultValue: '仅邮件正文' })}
         />
-        <div className="tile rounded-lg border border-ink-border-soft divide-y divide-ink-border-soft">
+        <div className="tile rounded-[var(--r-card)] border border-ink-border-soft divide-y divide-ink-border-soft">
           {/* radiogroup 只包字体选项 — 不把下面的 Stepper 混进 radiogroup (a11y, codex Low)。 */}
           <div
             role="radiogroup"

@@ -721,7 +721,8 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
             if (e.target === e.currentTarget) setScopeDialogOpen(false)
           }}
         >
-          <div data-anim-card className="glass-pop p-5 rounded-xl max-w-[340px] mx-4">
+          {/* 主题 v3 C8/批 4: 模态确认浮窗 rounded-xl(12) → --r-pop(14) */}
+          <div data-anim-card className="glass-pop p-5 rounded-[var(--r-pop)] max-w-[340px] mx-4">
             <div className="text-lead text-ink-fg font-medium mb-1">
               {t('calendar.form.recurrenceScope.title', '周期事件')}
             </div>

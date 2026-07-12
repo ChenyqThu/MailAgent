@@ -357,7 +357,8 @@ function AgentModelPicker({
         <div
           role="menu"
           aria-label={t('chat.composer.model')}
-          className="glass-pop absolute bottom-full left-0 z-50 mb-1.5 min-w-[190px] rounded-lg py-1 shadow-md"
+          // 主题 v3 C8/批 4: 紧凑菜单档 rounded-lg(8) → token 化 --r-ctl
+          className="glass-pop absolute bottom-full left-0 z-50 mb-1.5 min-w-[190px] rounded-[var(--r-ctl)] py-1 shadow-md"
         >
           {controls.availableModels.map((m) => {
             const active = m === controls.model

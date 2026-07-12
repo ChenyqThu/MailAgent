@@ -231,7 +231,8 @@ function AssistantChatModalInner(): React.JSX.Element {
           // dogfood：bottom-8 对齐 FAB（bottom-8 right-5）—— 浮窗右下角锚点跟 FAB 一致，展开/收起视觉连续。
           'fixed bottom-8 right-5 z-40 flex h-[min(40rem,calc(100vh-7.5rem))] w-[min(28rem,calc(100vw-2.5rem))] flex-col',
           // 浮窗态：用 glass-pop（带 blur 的浮层玻璃，与 popover/menu 同档），保留圆角 + 投影
-          'rounded-2xl glass-pop shadow-[0_16px_48px_-16px_rgba(0,0,0,0.4)]'
+          // 主题 v3 C8/批 4: 浮层档圆角 rounded-2xl(16) → --r-pop(14)，与其自述「popover/menu 同档」一致
+          'rounded-[var(--r-pop)] glass-pop shadow-[0_16px_48px_-16px_rgba(0,0,0,0.4)]'
         )
 
   return (

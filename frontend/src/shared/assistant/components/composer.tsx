@@ -90,7 +90,8 @@ function ComposerModelPicker({
           role="menu"
           aria-label={t('chat.composer.model')}
           className={cn(
-            'absolute bottom-full left-0 z-50 mb-1.5 min-w-[160px] rounded-md py-1',
+            // 主题 v3 C8/批 4: 紧凑菜单档 rounded-md(6) → --r-ctl(8)
+            'absolute bottom-full left-0 z-50 mb-1.5 min-w-[160px] rounded-[var(--r-ctl)] py-1',
             'glass-pop shadow-[0_4px_12px_rgba(0,0,0,0.35)]'
           )}
         >

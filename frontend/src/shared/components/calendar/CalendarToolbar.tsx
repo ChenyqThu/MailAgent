@@ -249,7 +249,8 @@ export function CalendarToolbar({
           </button>
           {calFilterOpen && (
             <div
-              className="glass-pop absolute right-0 mt-1.5 z-30 min-w-[180px] max-w-[280px] p-1 rounded-lg"
+              // 主题 v3 C8/批 4: 紧凑菜单档 rounded-lg(8) → token 化 --r-ctl
+              className="glass-pop absolute right-0 mt-1.5 z-30 min-w-[180px] max-w-[280px] p-1 rounded-[var(--r-ctl)]"
               role="menu"
               aria-label={t('calendar.toolbar.calendarFilter.ariaLabel', '日历筛选')}
             >

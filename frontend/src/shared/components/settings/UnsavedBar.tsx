@@ -45,7 +45,8 @@ export function UnsavedBar({
       aria-live="polite"
       className={cn(
         'fixed left-1/2 -translate-x-1/2 z-40',
-        'glass-pop flex items-center gap-3 px-4 py-2.5 rounded-lg'
+        // 主题 v3 C8/批 4: glass-pop 浮动操作条 rounded-lg(8) → --r-pop(14)
+        'glass-pop flex items-center gap-3 px-4 py-2.5 rounded-[var(--r-pop)]'
       )}
       style={{ bottom: 'var(--save-bar-bottom, 2rem)' }}
     >

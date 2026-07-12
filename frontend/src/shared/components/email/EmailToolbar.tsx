@@ -412,7 +412,8 @@ function ComposeSplitButton({
             // 实心 bg-ink-2 (对齐 ResyncConfirmDialog 弹层底色): glass-pop 的
             // ink-2/0.82 半透明会透出底下标题/正文, 下拉菜单观感发脏 — 菜单是
             // 功能性弹层不是装饰玻璃, 用实心底保证可读.
-            'rounded-md bg-ink-2 border border-ink-border-soft py-1',
+            // 主题 v3 C8/批 4: 紧凑菜单档 rounded-md(6) → --r-ctl(8)
+            'rounded-[var(--r-ctl)] bg-ink-2 border border-ink-border-soft py-1',
             'shadow-[0_8px_24px_rgba(0,0,0,0.35)]'
           )}
         >
