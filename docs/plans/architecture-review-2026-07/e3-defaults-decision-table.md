@@ -22,6 +22,7 @@
 | `MAILAGENT_OPENNESS_SKILL_INSTALL` | `true`（Node + `_hot_bool`） | true | **翻 true** | skill 供应链 4 工具；**安全地板不变**：capability_change 安装恒 HITL、两段两卡、首跑闸 |
 | `MAILAGENT_CUSTOM_AGENTS_ENABLED` | `true`（Node + pydantic） | true | **翻 true** | custom agent 内核 + 产品化；**per-agent 仍需 `report_agent.enabled` + type='custom' 才激活，on 不配 grant/规则 = 恒 HITL**（per-agent opt-in = 天然开关）。显式 false → hook/worker/端点/CRUD 工具全灭字节级回 S4 前 |
 | `MAILAGENT_ISLAND_AGENT_ENABLED` | `true`（Node + pydantic alias） | userData true / 主仓缺（默认 false） | **翻 true（owner 终拍 2026-07-06）** | 无岛（Ping Island 未装/未跑）降级已验证优雅：fail-open 有直接单测、INFO 级 0 噪音、ack pending 有界自过期（≤500 行 30min TTL）、审批主链完全不受影响、agent 路径不入 reconnect 队列（见 [task research/island-no-island-degradation.md](../../../.trellis/tasks/07-06-e3-config-governance-flag-cutover/research/island-no-island-degradation.md)）。无岛用户翻 true = 无害空转（静默无功能，非报错）；有岛用户默认享受离岛 resume。显式 false → 字节级回退（guard 5min TTL、无 stash/announce） |
+| `NOTION_READ_FROM_SQLITE` | `true`（pydantic） | 主仓 `.env` true / userData 从未开 | **翻 true（观察窗口结束拍板 2026-07-11）** | 观察窗口 2026-07-05 17:00 → 2026-07-11 19:56（真生产 .app userData `.env` 显式 true 期间）：`v4_rollout_stats` 表 **263 hit / 0 fallback_miss / 0 fallback_error**，sync.log 零 `[v4]` warning，`route_latency` 含完整 Notion 页创建段（无读路径异常）。判据（sync/resync 正常 + miss fallback 行为正确 + 无 Notion 读退化）满额通过 → 收口翻默认，`.env` 显式 `false` 保留应急回退（miss fallback 老路径逻辑不变）。见 `.trellis/tasks/07-11-e4-batch1-reliability-supervise-alerts-blocking-io/research/wp0-notion-read-surface.md` |
 
 **安全地板不受默认翻转影响**：EXEC（无白名单恒 HITL）、SKILL_INSTALL（capability_change 恒 HITL）、WEB（外发恒人审）的 HITL 地板由工具 tool_class + 审批链决定，与「工具是否注册」正交。翻默认只是让工具默认可见，不放松任何审批。
 
@@ -29,11 +30,7 @@
 
 ## 2. 待定（验证进行中，本批不翻）
 
-> ISLAND 已于同日（2026-07-06）终拍翻默认，见 §1。本节仅剩 `NOTION_READ_FROM_SQLITE` 观察窗口中。
-
-| flag | 代码默认 | 生产实际 | 决策 | 依据 |
-|---|---|---|---|---|
-| `NOTION_READ_FROM_SQLITE` | `false`（pydantic） | 主仓 `.env` true / userData 从未开 | **观察窗口中，窗口结束后单独小 commit 拍板** | 真生产（.app userData `.env`）2026-07-06 起显式置 true 开观察窗口。判据 = sync/resync 正常、miss fallback 行为正确、无 Notion 读退化。**不阻塞 openness cutover 批**——独立于 openness，结论出来后单独翻或登记保留 |
+> ISLAND 已于同日（2026-07-06）终拍翻默认，`NOTION_READ_FROM_SQLITE` 已于 2026-07-11 观察窗口结束翻默认，均见 §1。本节当前为空。
 
 ---
 

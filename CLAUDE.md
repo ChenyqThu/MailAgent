@@ -74,7 +74,7 @@
 | `MAILAGENT_BACKEND` | `applescript` | ★ 生产 = `davmail`（Sprint 16 cutover 后） |
 | `DRAFTS_SYNC_ENABLED` | `true` | 草稿箱同步（davmail-only）：Exchange Drafts 全量 UID 对账进 `email_metadata`（mailbox='草稿箱'，编辑/发送/删除会同步删本地行），仅本地（列表/数量/正文/FTS），不进 Notion / LLM / 飞书 / KOS / 报告 |
 | `BODY_DUAL_WRITE_ENABLED` | `true` | v4 双写总开关；失败仅 warning 不阻断 |
-| `NOTION_READ_FROM_SQLITE` | `false` | v4 Phase 4 灰度；切 true 后 sync/resync 走 SQLite SSoT，miss fallback |
+| `NOTION_READ_FROM_SQLITE` | `true` | v4 Phase 4；2026-07-11 生产观察窗口拍板（07-05~07-11 263 hit / 0 fallback_miss / 0 fallback_error）默认翻 true，sync/resync 走 SQLite SSoT，miss fallback 老路径；`.env` 显式 false 应急回退 |
 | `SEARCH_TRIGRAM_ENABLED` | `true` | 中文子串全文检索（并行 trigram FTS5 表路由）；Phase A 起默认开，设 false 则 CJK 搜索退回 unicode61 + smart 字符级 fallback。详见 search-query-syntax.md §9 |
 | `LLM_AGENT_ENABLED` | `false` | 本地 LLM 分类总开关（启用前必看 llm-agent.md 防双跑）；模型/fallback 支持预处理 Agent 行级覆写（`report_agent.model` / `fallback_models_json`，空/NULL=跟随全局 `LLM_MODEL` / `LLM_FALLBACK_MODELS`，保存即生效） |
 | `CALENDAR_CALDAV_SYNC_ENABLED` | `false` | CalendarSyncWorker 总开关 |
