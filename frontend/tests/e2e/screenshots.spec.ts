@@ -52,8 +52,14 @@ async function openSettings(win: Page): Promise<void> {
   // string-matching fragility (the EN palette nav reads "Go · Settings",
   // the zh one reads "前往 · 设置"; a single keystroke skips both).
   await win.keyboard.press('Meta+,')
+  // Settings is now a SettingsRail/SettingsShell tabbed layout (rail 化, S18+),
+  // not the old single long-scroll page — ⌘, always lands on the `general` tab.
+  // Wait on structural aria-labels (PageFrame <main> + SettingsRail <aside>)
+  // which are tab/locale-agnostic; the previous "灵动岛集成" heading only exists
+  // inside the non-default island tab, so it never appears here and timed out.
+  await win.locator('main[aria-label="settings"]').waitFor({ state: 'visible', timeout: 10_000 })
   await win
-    .locator('text=/灵动岛集成|Dynamic Island integration/')
+    .locator('aside[aria-label="settings sections"]')
     .waitFor({ state: 'visible', timeout: 10_000 })
 }
 
@@ -100,7 +106,11 @@ test('04 command-palette-with-typed-query', async () => {
 
 test('05 settings-top', async () => {
   await openSettings(win)
-  // Scroll to top so Appearance / Inbox / AI backends fit in viewport.
+  // ⌘, lands on the `general` tab (appearance area: accent / language / theme /
+  // material / glass). The old single-page "Appearance / Inbox / AI backends in
+  // one viewport" no longer holds post rail 化 — Inbox/AI are now separate tabs.
+  // This shot captures the general tab's real top content; the narrowed scope is
+  // the expected rail 化 result, not a regression.
   await win.evaluate(() => window.scrollTo(0, 0))
   await win.waitForTimeout(200)
   await snap(win, '05-settings-top')
@@ -114,9 +124,15 @@ test('06 settings-full-page', async () => {
 
 test('07 settings-island-section', async () => {
   await openSettings(win)
+  // openSettings lands on the general tab; the "灵动岛集成" section lives inside
+  // the island tab's IslandSubsection. Radix TabsContent has no forceMount, so a
+  // non-active tab's content is absent from the DOM — click the rail's island tab
+  // first, then wait for its TabsContent to mount + GSAP autoAlpha fade to settle.
+  await win.getByRole('tab', { name: /灵动岛与更新|Island & Updates/ }).click()
   await win
     .locator('text=/灵动岛集成|Dynamic Island integration/')
-    .scrollIntoViewIfNeeded()
+    .waitFor({ state: 'visible', timeout: 10_000 })
+  await win.locator('text=/灵动岛集成|Dynamic Island integration/').scrollIntoViewIfNeeded()
   await win.waitForTimeout(200)
   await snap(win, '07-settings-island')
 })
@@ -139,14 +155,28 @@ test('09 settings-en-locale', async () => {
   await setLocale(win, 'zh-CN')
 })
 
-test('10a inbox-ai-panel-open', async () => {
-  // Verify AI Chat panel toggle works via ⌘L and the column appears.
-  await win.keyboard.press('Meta+L')
+test('10a inbox-ai-modal-open', async () => {
+  // ⌘L AiChatPanel was retired in S3 (07-02, legacy harness deletion) — the main
+  // window's AI surface is now the ⌘J AssistantChatModal (mirrors the W5 debt noted
+  // in smoke.spec.ts's header). Rewritten 2026-07-11 from ⌘L AiChatPanel → ⌘J modal.
+  // Select an email first (same row-picking loop as 02) so the modal carries email
+  // context, making the screenshot meaningful.
+  for (let i = 0; i < 10; i++) {
+    const btn = win.locator('[aria-label="email-list"] button[type="button"]').nth(i)
+    const txt = await btn.textContent().catch(() => '')
+    if (txt && !['Unread', 'Flagged', 'Failed', 'Latest'].some((s) => txt.includes(s))) {
+      await btn.click().catch(() => {})
+      break
+    }
+  }
+  await win.keyboard.press('Meta+J')
+  // AssistantChatModal toggles visibility via CSS class (not mount/unmount after the
+  // first open), so assert on visibility rather than mere presence.
   await win
-    .locator('aside[aria-label="ai-chat-panel"]')
+    .getByRole('dialog', { name: /AI 对话|AI chat/ })
     .waitFor({ state: 'visible', timeout: 5_000 })
   await win.waitForTimeout(400)
-  await snap(win, '10a-inbox-ai-panel-open')
+  await snap(win, '10a-inbox-ai-modal')
 })
 
 test('10b llm-dashboard', async () => {

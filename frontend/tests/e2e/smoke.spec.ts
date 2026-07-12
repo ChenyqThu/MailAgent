@@ -15,6 +15,7 @@
 //      packaged .app run to author against the real DOM.
 //   ⑥ Settings → 灵动岛 testConnection → connected (Sprint 10 §2.5.4-D)
 
+import fs from 'node:fs'
 import { test, expect, type Page } from '@playwright/test'
 import { launchApp, setLocale } from './electron-fixture'
 import type { ElectronApplication } from 'playwright'
@@ -51,9 +52,19 @@ test('② email.listEnriched IPC returns rows or empty-state', async () => {
   await expect(list.locator('text=/Loading…/').first()).toHaveCount(0, { timeout: 20_000 })
   // After load, one of these is true: there are rows OR there is the empty
   // state. A render where neither is present means the query crashed.
-  const hasRows = await list.locator('button[type="button"]').first().isVisible().catch(() => false)
-  const hasEmptyState = await list.locator('text=没有可显示的内容').isVisible().catch(() => false)
-  const hasError = await list.locator('.text-fail').isVisible().catch(() => false)
+  const hasRows = await list
+    .locator('button[type="button"]')
+    .first()
+    .isVisible()
+    .catch(() => false)
+  const hasEmptyState = await list
+    .locator('text=没有可显示的内容')
+    .isVisible()
+    .catch(() => false)
+  const hasError = await list
+    .locator('.text-fail')
+    .isVisible()
+    .catch(() => false)
   expect(hasError, 'EmailList rendered the error pane — IPC likely failed').toBe(false)
   expect(hasRows || hasEmptyState, 'EmailList rendered neither rows nor empty state').toBe(true)
 })
@@ -77,6 +88,10 @@ test('⑥ Settings → Island testConnection → connected (ping-island live)', 
   // Per Sprint 10 §6.1 environment-prereq: this smoke is meaningful only
   // when the env passes the precheck; otherwise we skip (env-dependent,
   // not a code regression).
+  test.skip(
+    !fs.existsSync('/tmp/island.sock'),
+    'ping-island socket absent — env-dependent, not a code regression'
+  )
   await expect(win.locator('[aria-label="email-list"]')).toBeVisible({ timeout: 20_000 })
 
   // Sprint 10 user-acceptance — use the ⌘, shortcut for a locale-agnostic
@@ -84,18 +99,24 @@ test('⑥ Settings → Island testConnection → connected (ping-island live)', 
   // brittle when prior specs left the locale as en-US.
   await win.keyboard.press('Meta+,')
 
-  // Settings page mounts a heading with i18n `settings.title` =
-  // "设置" / "Settings". Wait until the Island section heading is on-screen.
-  const islandHeading = win.locator(
-    'text=/灵动岛集成|Dynamic Island integration/'
-  )
+  // Settings is a SettingsRail/SettingsShell tabbed layout (rail 化, S18+) — ⌘,
+  // lands on the `general` tab. Wait on structural aria-labels first (PageFrame
+  // <main> + SettingsRail <aside>), then click the island tab; only then does the
+  // island TabsContent (with "灵动岛集成" heading) mount. Radix TabsContent has no
+  // forceMount, so the heading is absent until the tab is active.
+  await win.locator('main[aria-label="settings"]').waitFor({ state: 'visible', timeout: 10_000 })
+  await win
+    .locator('aside[aria-label="settings sections"]')
+    .waitFor({ state: 'visible', timeout: 10_000 })
+  await win.getByRole('tab', { name: /灵动岛与更新|Island & Updates/ }).click()
+  const islandHeading = win.locator('text=/灵动岛集成|Dynamic Island integration/')
   await expect(islandHeading).toBeVisible({ timeout: 10_000 })
 
   // Click "测试连接" / "Test connection". Match exact button text — the
   // hint phrasing nearby contains the same substring.
-  const testBtn = win.locator(
-    'button:has-text("测试连接"), button:has-text("Test connection")'
-  ).first()
+  const testBtn = win
+    .locator('button:has-text("测试连接"), button:has-text("Test connection")')
+    .first()
   await testBtn.click()
 
   // Pill should turn green = "已连接" / "Connected" within ~2s if
