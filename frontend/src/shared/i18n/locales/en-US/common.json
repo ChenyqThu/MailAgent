@@ -1741,6 +1741,17 @@
           "blurNote": "Blur is provided by the OS here; this slider only applies on platforms without native glass.",
           "note": "Switching mood resets tuning; Reset only clears the sliders, not the mood. Everything applies live and is stored locally."
         }
+      },
+      "diagnostics": {
+        "title": "Diagnostics",
+        "export": {
+          "label": "Export diagnostics bundle",
+          "helper": "Bundles the last 7 days of runtime logs plus a redacted config snapshot for troubleshooting. May take about a minute to generate.",
+          "cta": "Export bundle",
+          "busy": "Exporting… (~1 min)"
+        },
+        "saved": "Diagnostics bundle saved",
+        "failed": "Failed to export diagnostics bundle"
       }
     },
     "save": "Save",

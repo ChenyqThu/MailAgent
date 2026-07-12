@@ -16,6 +16,27 @@
   loop。当前事件 (email.synced / llm.* / job.*) 要么是 invalidation hint (前端宽 invalidate),
   要么有查询/轮询兜底 (如 job 走 ``/jobs/{id}`` 轮询)。**新增状态类事件必须自带查询/轮询
   兜底**, 不能假设 bus 不丢。
+
+跨进程盲区 (E4 §6.4 注记, 2026-07-11 核实; 症状驱动选型, 暂不动):
+- 投递前提是 publisher 与 sse_server 同进程同 loop (serve 进程)。**serve-api 进程**没有
+  sse_server, 其 InProcessEventBus 实例从未 ``bind_loop()`` —— serve-api 进程内代码调
+  ``publisher.safe_publish`` (无 Redis 的打包态) 落到本总线即 ``bus._loop=None → no-op``
+  (措辞见 ``src/events/publisher.py:safe_publish`` docstring, 与彼处保持术语一致):
+  连"丢弃"都算不上, 是从未真正投递, 由前端乐观回显 + 同步按钮(X) 兜底。
+- 当前受影响调用点 (2026-07-11 全量 grep ``safe_publish`` 逐点判定运行进程):
+  ① ``src/api/routers/jobs.py:87`` (job.enqueued, serve-api 原生 —— async_jobs 本就有
+  ``/jobs/{id}`` 轮询兜底, 符合上面的 lossy 纪律); ② ``src/services/mail_write.py``
+  set_flags / set_pin / delete_draft 三处 —— 服务层 in-process, 写经 serve-api HTTP
+  适配器时落 serve-api 进程 (CLI fork 适配器同理落 CLI 进程, 同样无 sse_server →
+  no-op); ③ ``src/sync/outbox.py`` enqueue (outbox.queued) —— 经 outbox_intents 被
+  ②的写路径同进程调到; ④ ``src/llm_agent/store.py`` mark_success / mark_failed ——
+  serve-api ``/api/llm/run`` 走 in-process LlmService 时同进程调到。其余调用面
+  (new_watcher / sync_store mark_synced_* / mailapp_fanout / notion_fanout /
+  outbox mark_done·mark_failed / job_worker —— JobWorker 只在 service.py 实例化)
+  全部只跑在 serve 进程, 不受影响。
+- 候选方案 (三选一, 均未选型): ① serve-api → serve 的 loopback 通知; ② SSE server 迁
+  serve-api 进程; ③ 正式化「乐观回显 + invalidate」为契约。与 #36 (面板 live-refresh
+  遗留) 关联 —— 等 #36 类症状出现再驱动选型。
 """
 from __future__ import annotations
 

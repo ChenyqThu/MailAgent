@@ -42,6 +42,7 @@ import {
   mkdirSync,
   readFileSync,
   renameSync,
+  unlinkSync,
   type WriteStream
 } from 'fs'
 import { get as httpGet } from 'http'
@@ -378,6 +379,41 @@ function resolveSpaDir(): string | null {
   return join(resourcesPath, 'web')
 }
 
+/** E4 §4.1 — 崩溃日志滚动保留代数: 保留最近 4 代 (`.1`~`.4`), 加当前活跃 log = 5 份。 */
+export const LOG_ROTATION_KEEP = 4
+
+/**
+ * E4 §4.1 — 崩溃日志无状态 shift 链轮转 (单代 `.prev` → 保留最近 LOG_ROTATION_KEEP 代)。
+ *
+ * spawn 前调用: `.KEEP` 删 → `.(KEEP-1)→.KEEP` → … → `.1→.2` → `log→.1` (每步存在才动)。
+ * 无状态 = 不持久化 spawn 计数器, 每次原地推链, 单元测试友好。升级兼容: E4 §4.1 前的
+ * 旧单代 `${log}.prev` 首次运行迁进链最老可用位 (它比当前 log 更老一代), 不留永久孤儿。
+ *
+ * 整条链包一层 try/catch —— rotate 失败绝不阻断 drain (宁丢历史证据, 也不能让 pipe 写满
+ * 把进程拖死, 见 attachLogDrain)。
+ */
+export function rotateLogChain(logPath: string): void {
+  try {
+    // 升级兼容: 旧单代 `.prev` 迁进 shift 链 —— 它比当前 <log> 更老一代, 先占 `.1`
+    // (随后 shift 会把它推到 `.2`); `.1` 已占则清掉孤儿, 不留永久残留。
+    const prev = `${logPath}.prev`
+    if (existsSync(prev)) {
+      if (!existsSync(`${logPath}.1`)) renameSync(prev, `${logPath}.1`)
+      else unlinkSync(prev)
+    }
+    // 无状态 shift 链: 最老一代删 → 逐代下推 → 当前 log 成 `.1`。
+    if (existsSync(`${logPath}.${LOG_ROTATION_KEEP}`)) {
+      unlinkSync(`${logPath}.${LOG_ROTATION_KEEP}`)
+    }
+    for (let i = LOG_ROTATION_KEEP - 1; i >= 1; i--) {
+      if (existsSync(`${logPath}.${i}`)) renameSync(`${logPath}.${i}`, `${logPath}.${i + 1}`)
+    }
+    if (existsSync(logPath)) renameSync(logPath, `${logPath}.1`)
+  } catch {
+    // rotate 失败不阻断 drain (宁丢历史证据, 也不能丢 pipe 抽干)
+  }
+}
+
 export class BackendLifecycleManager {
   /** service registry (替代旧的单 this.child)。serve 恒在; serve-api 由 enabled() 决定是否 spawn。 */
   private readonly services: ManagedService[] = [
@@ -644,10 +680,12 @@ export class BackendLifecycleManager {
    *
    * 多 service 各持独立流 + 独立文件名 (serve→backend-process.log / serve-api→
    * api-process.log), 决不共用一个 createWriteStream (会交错/竞争)。spawn 前把现有
-   * log 轮转成 .prev 再以截断模式 (flags:'w') 开新流 —— 07-03 bug3 教训: 纯截断把
-   * 上一代进程的崩溃/泄漏证据直接毁掉 (内存泄漏后用户重启 app = 证据清零, 无法定罪
-   * 泄漏进程); 只留一代 .prev, 总量仍封顶防无限增长。drain 接不上 (建目录/开流失败)
-   * 退化 resume() 丢弃 —— 宁丢诊断日志, 也不能让 pipe 写满把进程拖死。
+   * log 经无状态 shift 链轮转 (`.4` 删 → … → `log→.1`, 见 rotateLogChain) 再以截断
+   * 模式 (flags:'w') 开新流 —— 07-03 bug3 教训: 纯截断把上一代进程的崩溃/泄漏证据
+   * 直接毁掉 (内存泄漏后用户重启 app = 证据清零, 无法定罪泄漏进程); E4 §4.1 起保留
+   * 最近 4 代 (`.1`~`.4`, 旧单代 `.prev` 首次运行迁进链), 总量仍封顶防无限增长。
+   * drain 接不上 (建目录/开流失败) 退化 resume() 丢弃 —— 宁丢诊断日志, 也不能让 pipe
+   * 写满把进程拖死。
    */
   private attachLogDrain(svc: ManagedService, dataRoot: string): void {
     const child = svc.child
@@ -656,11 +694,9 @@ export class BackendLifecycleManager {
       const logDir = join(dataRoot, 'logs')
       mkdirSync(logDir, { recursive: true })
       const logPath = join(logDir, svc.logFile)
-      try {
-        if (existsSync(logPath)) renameSync(logPath, `${logPath}.prev`)
-      } catch {
-        // rotate 失败不阻断 drain (宁丢历史证据, 也不能丢 pipe 抽干)
-      }
+      // E4 §4.1 — 无状态 shift 链轮转 (保留最近 LOG_ROTATION_KEEP 代), 自带 try/catch
+      // 容错 (rotate 失败不阻断 drain, 见 rotateLogChain)。
+      rotateLogChain(logPath)
       const stream = createWriteStream(logPath, { flags: 'w' })
       svc.logStream = stream
       child.stdout?.on('data', (chunk: Buffer) => stream.write(chunk))

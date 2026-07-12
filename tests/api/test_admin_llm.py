@@ -119,6 +119,73 @@ def test_admin_health_workers_and_davmail_fields(client, tmp_path):
     assert "85.3" in combined  # token 老化提示 (≥80d)
 
 
+def test_admin_health_worker_staleness(client, tmp_path):
+    """E4 第二批 D3: last_started_at 早于 max(service.start_history) → stale:true;
+    晚于 / **boot 同一秒** → 不写字段; 缺 last_started_at / 垃圾值 → 不炸不标
+    (与 CLI 面对齐)."""
+    import json as _json
+    from datetime import datetime, timezone
+
+    from src.api.app import app
+    from src.mail.sync_store import SyncStore
+
+    db = tmp_path / "stale.db"
+    conn = sqlite3.connect(str(db))
+    conn.execute(
+        "CREATE TABLE sync_state (key TEXT PRIMARY KEY, value TEXT, updated_at REAL)"
+    )
+    now = time.time()
+    # 本次 boot = 1 分钟前, 强制带小数 (真实 time.time() 形态) —— 秒粒度对齐回归:
+    # worker 心跳 ISO 是整秒截断, float 直比会把 boot 同秒启动的 worker 误标 stale。
+    boot_at = int(now) - 60 + 0.7
+    before_boot = datetime.fromtimestamp(
+        boot_at - 3600, tz=timezone.utc,
+    ).isoformat(timespec="seconds")
+    after_boot = datetime.fromtimestamp(
+        boot_at + 30, tz=timezone.utc,
+    ).isoformat(timespec="seconds")
+    same_second = datetime.fromtimestamp(
+        int(boot_at), tz=timezone.utc,
+    ).isoformat(timespec="seconds")  # floor(boot_at) < boot_at, 但同一秒
+    for k, v in (
+        ("db_version", str(SyncStore.DB_VERSION)),
+        ("service.start_history", _json.dumps([boot_at - 7200, boot_at])),
+        ("worker.old_worker.status", "running"),
+        ("worker.old_worker.last_started_at", before_boot),
+        ("worker.fresh_worker.status", "running"),
+        ("worker.fresh_worker.last_started_at", after_boot),
+        ("worker.same_second.status", "running"),
+        ("worker.same_second.last_started_at", same_second),
+        ("worker.no_heartbeat.status", "running"),
+        ("worker.bad_ts.status", "running"),
+        ("worker.bad_ts.last_started_at", "not-a-timestamp"),
+    ):
+        conn.execute(
+            "INSERT INTO sync_state (key, value, updated_at) VALUES (?,?,?)",
+            (k, v, now),
+        )
+    conn.commit()
+    conn.close()
+
+    repo = EmailRepository(
+        db_path=str(db),
+        attachment_store=AttachmentStore(base_dir=str(tmp_path / "att")),
+    )
+    app.dependency_overrides[get_repository] = lambda: repo
+    try:
+        r = client.get("/api/admin/health")
+    finally:
+        app.dependency_overrides.pop(get_repository, None)
+
+    assert r.status_code == 200
+    workers = r.json()["data"]["workers"]
+    assert workers["old_worker"]["stale"] is True
+    assert "stale" not in workers["fresh_worker"]
+    assert "stale" not in workers["same_second"]
+    assert "stale" not in workers["no_heartbeat"]
+    assert "stale" not in workers["bad_ts"]
+
+
 def test_admin_health_workers_empty_on_trimmed_fixture(client):
     """无 worker.% / davmail.* 键 → workers={} davmail=null notes=[] (不臆造)."""
     r = client.get("/api/admin/health")

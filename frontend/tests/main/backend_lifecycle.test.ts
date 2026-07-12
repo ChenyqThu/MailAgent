@@ -13,7 +13,15 @@ import { EventEmitter } from 'events'
 // vi.mock('fs') 下面会 hoist; 这里 import 拿到的是 mock 版 (用于断言 drain 落盘调用)。
 // mkdtempSync/rmSync/writeFileSync 未被 mock 覆盖 (spread actual 透传) → 真实 fs,
 // 供 readDbIntegrityFailure 的真实临时文件测试用。
-import { createWriteStream, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
+import {
+  createWriteStream,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync
+} from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
@@ -177,8 +185,10 @@ const {
   REQUIRED_TABLES,
   DEFAULT_API_PORT,
   DB_INTEGRITY_MARKER_FILENAME,
+  LOG_ROTATION_KEEP,
   probeApiHealth,
   readDbIntegrityFailure,
+  rotateLogChain,
   registerBackendQuitHook,
   _resetBackendLifecycleForTests
 } = await import('../../src/electron/main/backend_lifecycle')
@@ -1309,5 +1319,76 @@ describe('readDbIntegrityFailure (E0-WP2 marker)', () => {
   test('marker 文件名与 Python 侧手抄一致', () => {
     // src/mail/db_safety.py INTEGRITY_MARKER_FILENAME 的镜像值 —— 改动必须两侧同步。
     expect(DB_INTEGRITY_MARKER_FILENAME).toBe('db_integrity_failure.json')
+  })
+})
+
+// ===========================================================================
+// E4 §4.1 — 崩溃日志滚动 shift 链 (单代 .prev → 保留最近 LOG_ROTATION_KEEP 代)
+// ===========================================================================
+//
+// 用真实临时文件测 (fs mock 只覆盖 mkdirSync/createWriteStream, existsSync/renameSync/
+// unlinkSync/readFileSync 透传真实 fs), 直接断言磁盘上各代文件的落位与内容流转。
+
+describe('rotateLogChain (E4 §4.1 崩溃日志滚动)', () => {
+  let dir: string
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'ma-log-rotate-'))
+  })
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  const write = (name: string, content: string): void => writeFileSync(join(dir, name), content)
+  const read = (name: string): string | null => {
+    const p = join(dir, name)
+    return existsSync(p) ? readFileSync(p, 'utf8') : null
+  }
+
+  test('保留代数 = 4 (加当前活跃 log = 5 份)', () => {
+    expect(LOG_ROTATION_KEEP).toBe(4)
+  })
+
+  test('shift 顺序正确: log→.1, 旧 .1→.2, 旧 .2→.3 (内容随代下推一位)', () => {
+    write('backend-process.log', 'LIVE')
+    write('backend-process.log.1', 'GEN1')
+    write('backend-process.log.2', 'GEN2')
+    rotateLogChain(join(dir, 'backend-process.log'))
+    expect(read('backend-process.log')).toBeNull() // 当前 log 已轮转走
+    expect(read('backend-process.log.1')).toBe('LIVE') // 当前 log → 最新一代
+    expect(read('backend-process.log.2')).toBe('GEN1') // 旧 .1 下推
+    expect(read('backend-process.log.3')).toBe('GEN2') // 旧 .2 下推
+  })
+
+  test('.4 (最老一代) 存在 → 被丢弃, 绝不产生 .5', () => {
+    write('api-process.log', 'LIVE')
+    write('api-process.log.1', 'G1')
+    write('api-process.log.2', 'G2')
+    write('api-process.log.3', 'G3')
+    write('api-process.log.4', 'G4-OLDEST')
+    rotateLogChain(join(dir, 'api-process.log'))
+    expect(read('api-process.log.5')).toBeNull() // 封顶: 不越过 .4
+    expect(read('api-process.log.1')).toBe('LIVE')
+    expect(read('api-process.log.4')).toBe('G3') // 旧 .3 顶上 .4
+    // 旧最老 G4-OLDEST 被删, 不再出现在任何一代。
+    for (let i = 1; i <= LOG_ROTATION_KEEP; i++) {
+      expect(read(`api-process.log.${i}`)).not.toBe('G4-OLDEST')
+    }
+  })
+
+  test('全部代文件不存在 → no-op (不新建文件, 不抛)', () => {
+    expect(() => rotateLogChain(join(dir, 'backend-process.log'))).not.toThrow()
+    expect(read('backend-process.log')).toBeNull()
+    expect(read('backend-process.log.1')).toBeNull()
+  })
+
+  test('升级兼容: 旧单代 .prev 迁进链 (.prev 比 log 老 → 落 .2), 不留永久孤儿', () => {
+    write('backend-process.log', 'LIVE')
+    write('backend-process.log.prev', 'OLD-PREV')
+    rotateLogChain(join(dir, 'backend-process.log'))
+    expect(read('backend-process.log.prev')).toBeNull() // 孤儿已迁走, 不永久残留
+    expect(read('backend-process.log.1')).toBe('LIVE') // 当前 log = 最新一代
+    expect(read('backend-process.log.2')).toBe('OLD-PREV') // .prev = 更老一代
   })
 })

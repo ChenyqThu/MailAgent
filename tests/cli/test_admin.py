@@ -165,6 +165,62 @@ class TestAdminHealth:
         assert "watcher" in combined
         assert "85.3" in combined  # token 老化提示 (≥80d)
 
+    def test_worker_staleness_from_start_history(
+        self, cli_runner, cli_env, seeded_db,
+    ):
+        """E4 第二批 D3: last_started_at 早于本次 boot → stale:true;
+        晚于 / **boot 同一秒** → 不写字段; 缺 last_started_at / 垃圾值 → 不炸不标."""
+        import json
+        import sqlite3
+        import time
+        from datetime import datetime, timezone
+
+        now = time.time()
+        # 本次 boot = 1 分钟前, 强制带小数 (真实 time.time() 形态) —— 秒粒度对齐
+        # 回归: 心跳 ISO 是整秒截断, float 直比会把同秒启动的 worker 误标 stale。
+        boot_at = int(now) - 60 + 0.7
+        before_boot = datetime.fromtimestamp(
+            boot_at - 3600, tz=timezone.utc,
+        ).isoformat(timespec="seconds")
+        after_boot = datetime.fromtimestamp(
+            boot_at + 30, tz=timezone.utc,
+        ).isoformat(timespec="seconds")
+        same_second = datetime.fromtimestamp(
+            int(boot_at), tz=timezone.utc,
+        ).isoformat(timespec="seconds")  # floor(boot_at) < boot_at, 但同一秒
+
+        conn = sqlite3.connect(str(seeded_db))
+        for k, v in (
+            ("service.start_history", json.dumps([boot_at - 7200, boot_at])),
+            ("worker.old_worker.status", "running"),
+            ("worker.old_worker.last_started_at", before_boot),
+            ("worker.fresh_worker.status", "running"),
+            ("worker.fresh_worker.last_started_at", after_boot),
+            ("worker.same_second.status", "running"),
+            ("worker.same_second.last_started_at", same_second),
+            ("worker.no_heartbeat.status", "running"),
+            ("worker.bad_ts.status", "running"),
+            ("worker.bad_ts.last_started_at", "not-a-timestamp"),
+        ):
+            conn.execute(
+                "INSERT OR REPLACE INTO sync_state (key, value, updated_at) "
+                "VALUES (?,?,?)",
+                (k, v, now),
+            )
+        conn.commit()
+        conn.close()
+
+        result = _invoke_admin(
+            cli_runner, "health", "-o", "json", db_path=seeded_db,
+        )
+        assert result.exit_code == 0, result.output
+        workers = _extract_last_json_object(result.output)["data"]["workers"]
+        assert workers["old_worker"]["stale"] is True
+        assert "stale" not in workers["fresh_worker"]
+        assert "stale" not in workers["same_second"]
+        assert "stale" not in workers["no_heartbeat"]
+        assert "stale" not in workers["bad_ts"]
+
     def test_davmail_token_age_sentinel_maps_to_null(
         self, cli_runner, cli_env, seeded_db,
     ):
@@ -195,6 +251,62 @@ class TestAdminHealth:
         assert data["davmail"]["token_age_days"] is None
         assert data["davmail"]["imap_reachable"] is False
         assert not any("未刷新" in n for n in data["notes"])
+
+
+class TestAdminExportDiagnostics:
+    def test_export_diagnostics_smoke(
+        self, cli_runner, cli_env, seeded_db, tmp_path, monkeypatch,
+    ):
+        """E4 第二批 D2 smoke: envelope data 形状 {zip_path,size_bytes,entry_count,
+        skipped} + zip 五件套 + config_snapshot 无明文邮箱 (cli_env USER_EMAIL)."""
+        import json as _json
+        import shutil
+        import zipfile
+        from pathlib import Path
+
+        logs_dir = tmp_path / "diag-logs"
+        logs_dir.mkdir()
+        (logs_dir / "sync.log").write_text("hello diagnostic log")
+        # log_file 定 DATA_ROOT/logs 派生根; 指到 tmp 免打包真实 repo logs/
+        monkeypatch.setenv("LOG_FILE", str(logs_dir / "sync.log"))
+
+        result = _invoke_admin(
+            cli_runner, "export-diagnostics",
+            "--app-version", "9.9.9", "--no-quick-check", "-o", "json",
+            db_path=seeded_db,
+        )
+        assert result.exit_code == 0, result.output
+        data = _extract_last_json_object(result.output)["data"]
+        assert set(data) == {"zip_path", "size_bytes", "entry_count", "skipped"}
+        zip_path = Path(data["zip_path"])
+        assert zip_path.exists()
+        assert data["size_bytes"] == zip_path.stat().st_size > 0
+        assert isinstance(data["entry_count"], int) and data["entry_count"] >= 5
+        assert isinstance(data["skipped"], list)
+
+        try:
+            with zipfile.ZipFile(zip_path) as zf:
+                names = set(zf.namelist())
+                for required in (
+                    "health.json", "config_snapshot.json",
+                    "db_check.json", "manifest.json",
+                ):
+                    assert required in names
+                assert "logs/sync.log" in names
+
+                manifest = _json.loads(zf.read("manifest.json"))
+                assert manifest["app_version"] == "9.9.9"
+
+                health = _json.loads(zf.read("health.json"))
+                assert health["healthy"] is True
+
+                # 值级邮箱脱敏: USER_EMAIL=test@example.com 绝不明文出现
+                snapshot_text = zf.read("config_snapshot.json").decode("utf-8")
+                assert "test@example.com" not in snapshot_text
+                assert "***@***" in snapshot_text
+        finally:
+            # zip 落在 mkdtemp (契约: 前端 copy 后清理); 测试自行清理
+            shutil.rmtree(zip_path.parent, ignore_errors=True)
 
 
 class TestAdminStats:

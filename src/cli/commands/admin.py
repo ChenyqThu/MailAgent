@@ -106,6 +106,46 @@ def _build_davmail_summary(state: dict) -> Optional[dict]:
     }
 
 
+def _mark_stale_workers(workers: dict, start_history_raw: Optional[str]) -> None:
+    """E4 第二批 (D3): last_started_at 早于本次 boot 的 worker 条目加 stale=True.
+
+    last_boot_at = max(sync_state['service.start_history']) (JSON 数组, epoch 秒,
+    service._record_start_history 每次 start() 追加)。worker 心跳的 last_started_at
+    是 ISO 8601 字符串 (supervise._utcnow_iso), fromisoformat→timestamp 转 epoch 后
+    比较。**秒粒度对齐**: 心跳 ISO 是 timespec="seconds" 截断值而 boot 是带小数的
+    time.time() —— worker 在 start() 后几 ms 内就启动, 直接 float 比较会把「boot
+    同一秒启动」的 worker 几乎恒误标 stale (floor(T+ms) < T), 故 boot 也 floor 到
+    整秒再比 (同秒 = 不 stale)。缺失 / parse 失败静默跳过 (health 绝不因此 500);
+    不 stale **不写字段** (减少噪音)。镜像 src/api/routers/admin.py 同名 helper
+    (平行实现不共享 import)。
+    """
+    import json as _json
+    from datetime import datetime as _datetime
+
+    if not start_history_raw:
+        return
+    try:
+        history = _json.loads(start_history_raw)
+    except (ValueError, TypeError):
+        return
+    if not isinstance(history, list):
+        return
+    epochs = [float(t) for t in history if isinstance(t, (int, float))]
+    if not epochs:
+        return
+    last_boot_sec = int(max(epochs))
+    for w in workers.values():
+        raw = w.get("last_started_at")
+        if not isinstance(raw, str):
+            continue
+        try:
+            started_at = _datetime.fromisoformat(raw).timestamp()
+        except (ValueError, TypeError, OverflowError, OSError):
+            continue
+        if started_at < last_boot_sec:
+            w["stale"] = True
+
+
 def _compose_health_notes(workers: dict, davmail_summary: Optional[dict]) -> list:
     """静态 watch note + 动态 (crashloop 停摆 / token 老化) 提示行 (E4 WP1/WP2).
 
@@ -265,15 +305,11 @@ def _render_stats_text(data: dict) -> None:
 # health (US-006)
 # ============================================================
 
-@app.command("health")
-def admin_health(
-    ctx: typer.Context,
-    output: Optional[str] = typer.Option(None, "-o", "--output"),
-) -> None:
-    """SQLite 连通性 + db_version + 必备表存在性检查."""
-    cli: "CliContext" = ctx.obj
-    apply_local_output(ctx, output)
+def _build_health_data(cli: "CliContext") -> dict:
+    """admin health 的 data 组装 (health 命令 + export-diagnostics 的 health.json 共用).
 
+    E4 第二批 (D2): 从 admin_health 抽出的纯组装函数, 命令层只做渲染 + 退出码。
+    """
     cfg = cli.cli_config
     db_path = cfg.sync_store_db_path
     db_accessible = False
@@ -311,6 +347,11 @@ def admin_health(
                     "SELECT key, value FROM sync_state WHERE key LIKE 'worker.%'"
                 ).fetchall()
                 workers = _parse_worker_rows(worker_rows)
+                # E4 第二批 (D3): last_started_at 早于本次 boot → stale 标记。
+                boot_row = conn.execute(
+                    "SELECT value FROM sync_state WHERE key='service.start_history'"
+                ).fetchone()
+                _mark_stale_workers(workers, boot_row[0] if boot_row else None)
                 davmail_rows = conn.execute(
                     "SELECT key, value FROM sync_state WHERE key IN "
                     "('davmail.last_probe_at', 'davmail.token_age_days', "
@@ -348,17 +389,32 @@ def admin_health(
     }
     if error_message:
         data["error"] = error_message
+    return data
+
+
+@app.command("health")
+def admin_health(
+    ctx: typer.Context,
+    output: Optional[str] = typer.Option(None, "-o", "--output"),
+) -> None:
+    """SQLite 连通性 + db_version + 必备表存在性检查."""
+    cli: "CliContext" = ctx.obj
+    apply_local_output(ctx, output)
+
+    data = _build_health_data(cli)
+    workers = data["workers"]
+    davmail_summary = data["davmail"]
 
     if cli.output.lower() == "text":
-        print(f"db_path        {db_path}")
-        print(f"db_accessible  {db_accessible}")
-        print(f"db_version     {db_version} (expected: {EXPECTED_DB_VERSION})")
-        print(f"schema_ok      {schema_ok}")
-        if missing:
-            print(f"tables_missing {missing}")
-        if error_message:
-            print(f"error          {error_message}")
-        print(f"healthy        {healthy}")
+        print(f"db_path        {data['db_path']}")
+        print(f"db_accessible  {data['db_accessible']}")
+        print(f"db_version     {data['db_version']} (expected: {data['db_version_expected']})")
+        print(f"schema_ok      {data['schema_ok']}")
+        if data["tables_missing"]:
+            print(f"tables_missing {data['tables_missing']}")
+        if data.get("error"):
+            print(f"error          {data['error']}")
+        print(f"healthy        {data['healthy']}")
         for wname in sorted(workers):
             w = workers[wname]
             print(
@@ -370,13 +426,79 @@ def admin_health(
                 f"davmail        token_age_days={davmail_summary['token_age_days']} "
                 f"imap_reachable={davmail_summary['imap_reachable']}"
             )
-        for note in notes:
+        for note in data["notes"]:
             print(f"note           {note}")
     else:
         emit(cli, data)
 
-    if not healthy:
+    if not data["healthy"]:
         raise typer.Exit(code=1)
+
+
+# ============================================================
+# export-diagnostics (E4 第二批 WP2a, 拍板 D2)
+# ============================================================
+
+@app.command("export-diagnostics")
+def admin_export_diagnostics(
+    ctx: typer.Context,
+    app_version: Optional[str] = typer.Option(
+        None, "--app-version",
+        help="前端传 app.getVersion() (Python pyproject 版本与发布 SSoT 脱节, 不自报); "
+             "未传则 manifest.app_version=null",
+    ),
+    quick_check: bool = typer.Option(
+        True, "--quick-check/--no-quick-check",
+        help="对 sync_store.db / agent_config.db 跑 PRAGMA quick_check "
+             "(大库最坏 ~24s/库; CLI 是 fork 子进程不卡 UI)",
+    ),
+    output: Optional[str] = typer.Option(None, "-o", "--output"),
+) -> None:
+    """打包诊断 zip: 近 7 天日志 + health + 脱敏配置快照 + DB quick_check + manifest.
+
+    读命令, 无 auth。zip 落 tempfile.mkdtemp(), 由前端 copy 到用户选择位置后清理。
+    契约 data = {zip_path, size_bytes, entry_count, skipped} (跨 lane 接口, 不得变形)。
+    """
+    cli: "CliContext" = ctx.obj
+    apply_local_output(ctx, output)
+
+    from src.agent_config.store import resolve_agent_config_db_path
+    from src.utils.diagnostics import build_diagnostic_bundle
+
+    cfg = cli.cli_config
+    logs_dir = Path(cfg.log_file).parent
+    db_paths = {
+        "sync_store.db": cfg.sync_store_db_path,
+        "agent_config.db": resolve_agent_config_db_path(cfg.sync_store_db_path),
+    }
+
+    # D2 防御基调: 单件组装失败 → 降级为错误注记, 不烧穿整个导出。
+    try:
+        health: Optional[dict] = _build_health_data(cli)
+    except Exception as exc:  # noqa: BLE001
+        health = {"_error": f"{type(exc).__name__}: {exc}"}
+    try:
+        config_snapshot: Optional[dict] = _collect_settings(cli, show_secrets=False)
+    except Exception as exc:  # noqa: BLE001
+        config_snapshot = {"_error": f"{type(exc).__name__}: {exc}"}
+
+    result = build_diagnostic_bundle(
+        logs_dir=logs_dir,
+        db_paths=db_paths,
+        health=health,
+        config_snapshot=config_snapshot,
+        app_version=app_version,
+        run_quick_check=quick_check,
+    )
+
+    if cli.output.lower() == "text":
+        print(f"zip_path       {result['zip_path']}")
+        print(f"size_bytes     {result['size_bytes']}")
+        print(f"entry_count    {result['entry_count']}")
+        for item in result["skipped"]:
+            print(f"skipped        {item}")
+    else:
+        emit(cli, result)
 
 
 # ============================================================

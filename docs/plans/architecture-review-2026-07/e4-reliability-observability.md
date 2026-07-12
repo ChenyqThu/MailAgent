@@ -11,7 +11,19 @@ task `07-11-e4-batch1-reliability-supervise-alerts-blocking-io`，commits `26b79
 - **§3**：五项里**三项写方案时已落地**（davmail 进程死亡 / EWS throttling burst / token 老化——全在 `davmail_watchdog.py`，方案的"至今 ❌"过期）。真缺口只有两项，已补：outbox 积压（`get_stats()` age_buckets 行龄≥5min pending > `ALERT_OUTBOX_BACKLOG_THRESHOLD`=100，`_alert_check_loop` 检查）+ 重启频次（sync_state `service.start_history` 裁 48h，24h>5 告警 + stats `restarts` collector）。token 老化补了"未进 admin health"的暴露缺口。**顺带修真 bug**：`service.py:894` `send_alert(message=)` 签名不符，TypeError 被自身 except 吞掉 → davmail fetch 突增告警自 Sprint 16 起从未发出过。
 - **登记不做**（本批明确豁免）：NewWatcher 内嵌第 18 个 `_flush_v4_rollout_stats_loop` 不收编（非关键路径、生命周期绑 watcher，factory 已显式 cancel 残留防僵尸双跑）；`davmail_watchdog` 50KB 日志读/stat 不 to_thread（量级可忽略）；sync_state worker 键无 TTL（flag 关掉的 worker 留 last-known 快照——§4 第二批前端呈现时结合 `last_started_at` 判 staleness）；watcher factory 复位逻辑无独立单测（start() 内闭包，supervise 本体已全测）；`alert.py` 两处预存 ruff（E741/F841，非本批 diff）。
 
-**剩余**：§4 诊断通道（崩溃日志已部分修复：07-03 起 `.prev` 轮转一份，方案描述过期；剩滚动扩份数 + 诊断包导出）、§5 venv 瘦身 a+c、§6 前端结构债（types.ts 已 2665 行 / chat_db.ts 1760 行，继续长胖中）。
+## 落地状态（2026-07-11 第二批：§4.1+§4.2+§5(a+c)+§6.2+§6.3+§6.4 ✅）
+
+task `07-11-e4-venv-a-c-types-chat-db-sse`，commits `046a838c`（§4.2 CLI 装配 + workers stale 标记 + §6.4 注记）/ `6d4dbca5`（§4.1 日志滚动 + §4.2 Settings 导出 UI）/ `170b8777`（§5 a+c）/ `c1b62d9d`（§6.3 chat_db 拆分）/ `69fdb5a2`（§6.2 types 拆分）。主 session 复跑全量 pytest + 前端 typecheck/lint/vitest 验收。落地时对本方案的**勘误与发现**：
+
+- **§4.1**：`.prev` 单代轮转 07-03 已在，本批扩为无状态 shift 链保 5 份（`.1`~`.4`），旧 `.prev` 升级自动并入。
+- **§4.2**：装配位置 = **CLI 子命令**（`mailagent admin export-diagnostics`）而非 serve-api 端点——本地 AdminApi 现状走 callCli fork（研究实证），照抄该模式最小新面；远程 web 本批不支持导出。三个方案没预见的坑：①版本号——Python 侧 `importlib.metadata` 读到 pyproject 脱节的 `3.0.0`，真实版本由前端 `--app-version app.getVersion()` 传入；②脱敏——`_collect_settings` 字段名黑名单漏 `user_email`/`project_progress_sender`，补**值级邮箱正则**第二道；③`db_safety.quick_check` 大库实测 ~24s/库，CLI fork 不卡 UI（timeoutMs=180s）。
+- **workers stale 标记**（第一批遗留收编）：不新增 key，读 `service.start_history` max 为 last_boot；check 抓修**同秒误标 bug**（心跳 ISO 秒截断 vs boot float epoch，`floor(T+ms)<T` 恒真 → 不修则每次 boot 全员误标 stale；修 = boot floor 整秒）。前端 `AdminHealthData` 原本**从未建模 workers**（第一批只加了 Python 面+schema），本批补 `workers?` 壳。
+- **§6.4**：「现状已核实」文字原已在 `publisher.py:safe_publish` docstring；但 E4 原文与 research 均误判「唯一受影响调用点 jobs.py:87」——check 全量判定 safe_publish 调用面，受影响实为**四组**（jobs.py + `services/mail_write.py` 3 处 + outbox enqueue + llm store 的 serve-api/CLI 进程路径），`inprocess_bus.py` 注记已按准确清单落。
+- **§5**：c-3（.dist-info 冗余）实测仅 0.2MB + LICENSE 合规顾虑，**放弃**；strip 实测省 22.3%/54MB **优于**方案估的 10-15%，合计 426M→**344M**（-19%）。附带发现：strip 使 wheel 自带 ad-hoc 签名失效，裸 venv 下 faiss import 会 SIGKILL（arm64 按页签名校验）——产品路径不受影响（afterPack/electron-builder 恒 `--force` 全量重签，实验证实恢复），但 **🔴 发版后应做一次打包态 mem0 capture dogfood smoke**（触发 faiss/onnxruntime import，裸 venv 自检覆盖不到该链路）。
+- **§6.2/§6.3**：方案行数快照过期（2415→2683 / 1599→1760）。两拆分均双重独立方法验证字节级等价（导出集合对称差为空、消费方零 diff、migrate() 780 行未内拆）。
+- **登记不做/既有暴露**（本批豁免）：自定义 `LOG_FILE` 到 DATA_ROOT 外时 Electron 侧 backend-process.log 不入诊断包（默认/打包态无此问题）；zip open/close 灾难级失败走 typer traceback（与 CLI 惯例一致）；`redis_url` 值内嵌密码不在字段名黑名单（既有暴露面）；`tests/main/backend_lifecycle.test.ts` 在 electron-as-node runner 下有一个 resourcesPath 预存环境假失败（其常规跑法 node runner 74/74 绿）。
+
+**剩余**：§6.1 typed IPC 契约层（2-3 天结构性改造，独立 batch）、§4.3 应用内健康页（可选）、§5b memory 栈按需下载（挂起，等真实抱怨驱动）。
 
 ## 1. worker 级监督（serve 进程）
 

@@ -469,6 +469,11 @@ class ElectronAdminApi implements AdminApi {
   async systemAlerts(): Promise<SystemAlertsData> {
     return (await invoker()('admin:systemAlerts')) as SystemAlertsData
   }
+  // E4 §4.2 — 导出诊断包 (仅 Electron: fork CLI 组装 tmp zip → showSaveDialog →
+  // copy 到用户选路径 / 取消清 tmp)。远程 HTTP AdminApi 不实现此可选方法。
+  async exportDiagnostics(): Promise<{ saved: boolean; path?: string }> {
+    return (await invoker()('admin:exportDiagnostics')) as { saved: boolean; path?: string }
+  }
 }
 
 class ElectronCalendarApi implements CalendarApi {
