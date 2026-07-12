@@ -9,9 +9,10 @@
 //   • cb checkbox visible in batch mode (CSS-gated via body[data-batch-mode]).
 //   • ricon-flag → 3-state cycle (none → flagged → done) via email.flag (Sprint 15).
 //   • ricon-pin → toggles SQLite-backed pinned set via useTogglePin (v8).
-//   • ricon-delete → marks processing_status='已完成' (archive semantics).
+//   • ricon-delete → 已退役 (主题 v3 2026-07-12 owner 拍板): 低频操作 + 悬浮
+//     行角易误点, 删除/归档统一走正文顶部工具栏 (草稿走 ComposePanel 删草稿)。
 //
-// Sprint 15 D 块 — 4 处 ricon-flag / ricon-delete callsite 已切到
+// Sprint 15 D 块 — ricon-flag callsite 已切到
 // `mailApi.email.flag(...)` (SSoT inversion: 写 SQLite intent + outbox 双 target,
 // FanoutWorker 异步派发 Mail.app + Notion). 回退路径见
 // `frontend/archive/2026-05/SPRINT15-D-FRONTEND-HANDOFF.md` §8 — 老 `mailApi.notion.updateFlag`
@@ -158,13 +159,6 @@ const importantSvg = (
     />
   </svg>
 )
-const deleteSvg = (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-    <polyline points="3 6 5 6 21 6" />
-    <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
-  </svg>
-)
-
 function EmailRowInner({
   email,
   selected,
@@ -292,38 +286,6 @@ function EmailRowInner({
     }
   }, [email.internal_id, flagState, invalidate, mailApi, optimisticPatch])
 
-  // 草稿行的删除按钮 = 真删除 (IMAP \Deleted+EXPUNGE + 本地行清理), 不是归档:
-  // 草稿没有"处理完成"语义, 旧的 flag→done 写法对草稿毫无可见效果 (行不消失,
-  // 用户: "点击不生效")。
-  const isDraft = ['草稿箱', '草稿', 'Drafts'].includes(email.mailbox ?? '')
-  const handleDeleteClick = useCallback(async () => {
-    if (isDraft) {
-      try {
-        await mailApi.email.deleteDraft(email.internal_id)
-        // 列表行 + 侧边栏草稿数 badge 一起刷 (服务端 SSE 经 Redis, 未配
-        // REDIS_URL 时发不出 — 本窗口自刷最可靠, codex review MEDIUM)。
-        await invalidate()
-        await queryClient.invalidateQueries({ queryKey: qk.mailboxes() })
-      } catch (err) {
-        const msg = errorMessage(err)
-        toastError('Delete draft failed', msg)
-      }
-      return
-    }
-    // Archive 语义同 flagged→done — 直接进 'done' 终态
-    optimisticPatch({ is_flagged: false, processing_status: '已完成' })
-    try {
-      await mailApi.email.flag(email.internal_id, {
-        isFlagged: false,
-        processingStatus: '已完成'
-      })
-    } catch (err) {
-      await invalidate()
-      const msg = errorMessage(err)
-      toastError('Archive failed', msg)
-    }
-  }, [email.internal_id, invalidate, isDraft, mailApi, optimisticPatch, queryClient])
-
   const cbClass = useMemo(() => cn('cb', batchIsSelected && 'cb-on'), [batchIsSelected])
 
   return (
@@ -441,14 +403,6 @@ function EmailRowInner({
                 {importantSvg}
               </span>
             )}
-            <button
-              type="button"
-              className="ricon ricon-delete"
-              aria-label={isDraft ? t('emailRow.deleteDraft') : t('emailRow.archive')}
-              onClick={stopAnd(() => void handleDeleteClick())}
-            >
-              {deleteSvg}
-            </button>
           </span>
         </div>
 

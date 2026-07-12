@@ -145,25 +145,6 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · selec
             />
           </svg>
         </span>
-        <button
-          aria-label="Archive"
-          class="ricon ricon-delete"
-          type="button"
-        >
-          <svg
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            viewBox="0 0 24 24"
-          >
-            <polyline
-              points="3 6 5 6 21 6"
-            />
-            <path
-              d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"
-            />
-          </svg>
-        </button>
       </span>
     </div>
     <div
@@ -370,25 +351,6 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · selec
             />
           </svg>
         </span>
-        <button
-          aria-label="Archive"
-          class="ricon ricon-delete"
-          type="button"
-        >
-          <svg
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            viewBox="0 0 24 24"
-          >
-            <polyline
-              points="3 6 5 6 21 6"
-            />
-            <path
-              d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"
-            />
-          </svg>
-        </button>
       </span>
     </div>
     <div
@@ -595,25 +557,6 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · unsel
             />
           </svg>
         </span>
-        <button
-          aria-label="Archive"
-          class="ricon ricon-delete"
-          type="button"
-        >
-          <svg
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            viewBox="0 0 24 24"
-          >
-            <polyline
-              points="3 6 5 6 21 6"
-            />
-            <path
-              d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"
-            />
-          </svg>
-        </button>
       </span>
     </div>
     <div
@@ -820,25 +763,6 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · unsel
             />
           </svg>
         </span>
-        <button
-          aria-label="Archive"
-          class="ricon ricon-delete"
-          type="button"
-        >
-          <svg
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            viewBox="0 0 24 24"
-          >
-            <polyline
-              points="3 6 5 6 21 6"
-            />
-            <path
-              d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"
-            />
-          </svg>
-        </button>
       </span>
     </div>
     <div
@@ -1055,25 +979,6 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · sele
             />
           </svg>
         </span>
-        <button
-          aria-label="Archive"
-          class="ricon ricon-delete"
-          type="button"
-        >
-          <svg
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            viewBox="0 0 24 24"
-          >
-            <polyline
-              points="3 6 5 6 21 6"
-            />
-            <path
-              d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"
-            />
-          </svg>
-        </button>
       </span>
     </div>
     <div
@@ -1280,25 +1185,6 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · sele
             />
           </svg>
         </span>
-        <button
-          aria-label="Archive"
-          class="ricon ricon-delete"
-          type="button"
-        >
-          <svg
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            viewBox="0 0 24 24"
-          >
-            <polyline
-              points="3 6 5 6 21 6"
-            />
-            <path
-              d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"
-            />
-          </svg>
-        </button>
       </span>
     </div>
     <div
@@ -1505,25 +1391,6 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · unse
             />
           </svg>
         </span>
-        <button
-          aria-label="Archive"
-          class="ricon ricon-delete"
-          type="button"
-        >
-          <svg
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            viewBox="0 0 24 24"
-          >
-            <polyline
-              points="3 6 5 6 21 6"
-            />
-            <path
-              d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"
-            />
-          </svg>
-        </button>
       </span>
     </div>
     <div
@@ -1730,25 +1597,6 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · unse
             />
           </svg>
         </span>
-        <button
-          aria-label="Archive"
-          class="ricon ricon-delete"
-          type="button"
-        >
-          <svg
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            viewBox="0 0 24 24"
-          >
-            <polyline
-              points="3 6 5 6 21 6"
-            />
-            <path
-              d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"
-            />
-          </svg>
-        </button>
       </span>
     </div>
     <div

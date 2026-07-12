@@ -1896,45 +1896,9 @@ body:not([data-batch-mode='true']) .email-row .cb {
   fill: currentColor;
   stroke: none;
 }
-/* Delete — floats out of the cluster into the row's bottom-right corner;
- * hidden by default, fades in on row-hover. */
-.ricon-delete {
-  position: absolute;
-  right: 12px;
-  bottom: 6px;
-  width: 26px;
-  height: 26px;
-  border-radius: var(--r-ctl);
-  color: rgb(var(--ink-fg-1));
-  /* 主题 v2 — 非浮层去 blur (红线: blur 只留真浮层), alpha 提到 0.97 遮底 */
-  background: rgb(var(--ink-2) / 0.97);
-  border: 1px solid rgb(var(--ink-border));
-  box-shadow: 0 2px 8px rgb(0 0 0 / 0.28);
-  opacity: 0;
-  transform: translateY(2px);
-  transition:
-    opacity 0.12s ease,
-    transform 0.12s ease,
-    color 0.12s,
-    background 0.12s;
-  z-index: 2;
-}
-.email-row:hover .ricon-delete {
-  opacity: 1;
-  transform: translateY(0);
-}
-.ricon-delete:active {
-  transform: translateY(0) scale(0.96);
-}
-.ricon-delete:hover {
-  color: #e5634f;
-  background: rgba(229, 99, 79, 0.14);
-  border-color: rgba(229, 99, 79, 0.4);
-}
-.row-actions .ricon-delete svg {
-  width: 13px;
-  height: 13px;
-}
+/* 列表悬浮删除钮 (.ricon-delete) — 已退役 (2026-07-12 owner 拍板): 删除/归档
+ * 是低频操作且悬浮在行右下角易误点, 统一走正文顶部工具栏 (非草稿=归档,
+ * 草稿=ComposePanel 删草稿)。原实现见 git 历史。 */
 
 /* ─── AI strip — one-line mono signal row ───────────────────────────── */
 .ai-strip {
@@ -4424,44 +4388,8 @@ body:not([data-batch-mode='true']) .email-row .cb {
 .fr-marks .mk-flag {
   color: rgb(var(--c-accent));
 }
-/* Floating delete — fades + lifts in on row hover (mockup .fr-delete). */
-.fr-delete {
-  position: absolute;
-  right: 12px;
-  bottom: 10px;
-  width: 26px;
-  height: 26px;
-  /* 主题 v3 C8/批 4: 工具钮档 6px → --r-ctl(8)，与 .ricon-delete 对齐 */
-  border-radius: var(--r-ctl);
-  color: rgb(var(--ink-fg-1));
-  /* 主题 v2 — 非浮层去 blur, alpha 提到 0.97 遮底 */
-  background: rgb(var(--ink-2) / 0.97);
-  border: 1px solid rgb(var(--ink-border));
-  box-shadow: 0 2px 8px rgb(0 0 0 / 0.28);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  opacity: 0;
-  transform: translateY(2px);
-  transition:
-    opacity 0.12s ease,
-    transform 0.12s ease,
-    color 0.12s,
-    background-color 0.12s,
-    border-color 0.12s;
-  z-index: 2;
-}
-.folder-row:hover .fr-delete,
-.fr-delete:focus-visible {
-  opacity: 1;
-  transform: translateY(0);
-}
-.fr-delete:hover,
-.fr-delete:focus-visible {
-  color: rgb(var(--c-fail));
-  background: rgb(var(--c-fail) / 0.14);
-  border-color: rgb(var(--c-fail) / 0.4);
-}
+/* 悬浮删除钮 (.fr-delete) — 已退役 (2026-07-12, 与 .ricon-delete 同批):
+ * mockup 时代遗留的死 CSS (TSX 无消费点), 随「列表悬浮删除」模式一并清除。 */
 
 /* ── Avatar — 34px disc; same hue ramp as inbox + blank (no-recipient). ──── */
 .folder-avatar {
@@ -5267,7 +5195,6 @@ body:not([data-batch-mode='true']) .email-row .cb {
 @media (prefers-reduced-motion: reduce) {
   .cb:active,
   .row-actions .ricon:active,
-  .ricon-delete:active,
   .btn-cta:active,
   .acc-cta:active,
   .evt:active,

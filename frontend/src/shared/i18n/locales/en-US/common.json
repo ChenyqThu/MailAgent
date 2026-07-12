@@ -78,8 +78,6 @@
     "toggleFlag": "Toggle flag",
     "togglePin": "Toggle pin",
     "important": "Important",
-    "archive": "Archive",
-    "deleteDraft": "Delete draft",
     "syncFailed": "SYNC FAILED",
     "new": "NEW",
     "attachmentCount": "{count, plural, one {# attachment} other {# attachments}}"
