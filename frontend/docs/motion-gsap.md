@@ -187,3 +187,5 @@ loading 不该成为视觉焦点。**loading 只用三个词汇**（2026-06-13 �
 |---|---|---|---|---|
 | `ui/drawer.tsx` | beui.dev `drawer.tsx`（MIT） | 抽屉面板进退场；backdrop 使用 `EASE_OUT` tween | `SPRING_PANEL` | 仅共享 Drawer 内部使用；业务抽屉只组合内容，不复制 `AnimatePresence` 或 spring 参数。 |
 | `ui/stateful-button.tsx` | beui.dev `stateful.tsx` + `base.tsx`（MIT） | 抽屉保存按钮 idle/loading/success/error 状态机与按压反馈 | `SPRING_PRESS` + `SPRING_SWAP` | 只由受控 `state` 驱动；业务调用点复用既有保存与错误状态，不内联 spring 参数或延迟关闭。 |
+| `ui/checkbox.tsx` | beui.dev `checkbox.tsx`（MIT） | 勾选/半选 draw-on 与按压反馈 | `SPRING_PRESS` | 保留原生 checkbox 输入语义；业务调用点只传受控值、disabled 与变更回调。 |
+| `ui/animated-badge.tsx` | beui.dev `animated-badge.tsx`（MIT） | 紧凑状态徽标的图标与文案槽位切换 | `SPRING_SWAP` | 仅使用现有语义色 token；running 可 pulse，reduced-motion 下停用持续动画。 |

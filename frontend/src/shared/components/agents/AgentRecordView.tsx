@@ -15,6 +15,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { AgentRunState, ChatSessionListItem } from '@shared/api/types'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { qk } from '@shared/lib/queryKeys'
+import { Checkbox } from '@shared/components/ui/checkbox'
 import type { UseGeneralChatReturn } from '@shared/hooks/useGeneralChat'
 import { chatMessageToUIMessage } from '@shared/assistant/uiMessage'
 import { AiSdkRuntimeProvider } from '@shared/assistant/runtime/AiSdkRuntimeProvider'
@@ -154,11 +155,10 @@ export function InRecordApprovalPanel({
         </div>
         {isAgentWebFetch && (
           <label className="mt-2 flex cursor-pointer items-start gap-2 rounded-md border border-ink-border-soft bg-ink-1/60 px-2.5 py-2">
-            <input
-              type="checkbox"
+            <Checkbox
               checked={rememberDomain}
-              onChange={(e) => setRememberDomain(e.target.checked)}
-              className="mt-0.5 size-3.5 shrink-0 accent-[rgb(var(--c-accent))]"
+              onCheckedChange={setRememberDomain}
+              className="mt-0.5"
             />
             <span className="text-aux text-ink-fg-2">
               {t('agents.custom.runs.rememberDomain')}

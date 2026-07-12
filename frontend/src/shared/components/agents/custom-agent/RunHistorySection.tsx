@@ -6,6 +6,10 @@ import { useTranslation } from 'react-i18next'
 import { useNavigate } from '@tanstack/react-router'
 
 import { requestOpenAgentSession } from '@shared/state/ai-chat-panel'
+import {
+  AnimatedBadge,
+  type AnimatedBadgeStatus
+} from '@shared/components/ui/animated-badge'
 import { PendingDot } from '../AgentPendingBadge'
 import type { AgentRunHistoryItem, AgentRunState } from '@shared/api/types'
 import { ReportIcon } from '../primitives'
@@ -49,9 +53,8 @@ function autoWhitelistBadges(
 
 interface RunVisual {
   labelKey: string
-  fg: string
-  bg: string
-  border: string
+  status: AnimatedBadgeStatus
+  pulse?: boolean
 }
 
 // 8 状态穷举视觉映射。**无 default**：switch 覆盖全部 AgentRunState 后由 assertNever
@@ -61,58 +64,43 @@ function runStateVisual(state: AgentRunState): RunVisual {
     case 'queued':
       return {
         labelKey: 'agents.custom.runs.state.queued',
-        fg: 'rgb(var(--ink-fg-3))',
-        bg: 'rgb(var(--ink-fg) / 0.05)',
-        border: 'rgb(var(--ink-border))'
+        status: 'neutral'
       }
     case 'running':
       return {
         labelKey: 'agents.custom.runs.state.running',
-        fg: 'rgb(var(--c-ai))',
-        bg: 'rgb(var(--c-ai) / 0.12)',
-        border: 'rgb(var(--c-ai) / 0.28)'
+        status: 'loading',
+        pulse: true
       }
     case 'completed':
       return {
         labelKey: 'agents.custom.runs.state.completed',
-        fg: 'rgb(var(--c-ok))',
-        bg: 'rgb(var(--c-ok) / 0.12)',
-        border: 'rgb(var(--c-ok) / 0.25)'
+        status: 'success'
       }
     case 'paused_pending':
       return {
         labelKey: 'agents.custom.runs.state.pausedPending',
-        fg: 'rgb(var(--c-warn))',
-        bg: 'rgb(var(--c-warn) / 0.14)',
-        border: 'rgb(var(--c-warn) / 0.3)'
+        status: 'warning'
       }
     case 'paused_expired':
       return {
         labelKey: 'agents.custom.runs.state.pausedExpired',
-        fg: 'rgb(var(--ink-fg-3))',
-        bg: 'rgb(var(--ink-fg) / 0.05)',
-        border: 'rgb(var(--ink-border))'
+        status: 'neutral'
       }
     case 'paused_approved':
       return {
         labelKey: 'agents.custom.runs.state.pausedApproved',
-        fg: 'rgb(var(--c-ok))',
-        bg: 'rgb(var(--c-ok) / 0.12)',
-        border: 'rgb(var(--c-ok) / 0.25)'
+        status: 'success'
       }
     case 'paused_rejected':
       return {
         labelKey: 'agents.custom.runs.state.pausedRejected',
-        fg: 'rgb(var(--c-fail))',
-        bg: 'rgb(var(--c-fail) / 0.10)',
-        border: 'rgb(var(--c-fail) / 0.25)'
+        status: 'danger'
       }
     case 'failed':
       return {
         labelKey: 'agents.custom.runs.state.failed',
-        fg: 'rgb(var(--c-fail))',
-        bg: 'rgb(var(--c-fail) / 0.10)',
-        border: 'rgb(var(--c-fail) / 0.25)'
+        status: 'danger'
       }
   }
   // 穷举兜底：AgentRunState 若新增成员，此处 state 非 never → tsc 报错，逼同步补 case。
@@ -127,22 +115,9 @@ export function RunStateBadge({ state }: { state: AgentRunState }): React.ReactE
   const { t } = useTranslation()
   const v = runStateVisual(state)
   return (
-    <span
-      style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        fontSize: 11,
-        fontWeight: 500,
-        padding: '2px 8px',
-        borderRadius: 5,
-        color: v.fg,
-        background: v.bg,
-        border: `1px solid ${v.border}`,
-        whiteSpace: 'nowrap'
-      }}
-    >
+    <AnimatedBadge status={v.status} pulse={v.pulse} contentKey={state}>
       {t(v.labelKey)}
-    </span>
+    </AnimatedBadge>
   )
 }
 

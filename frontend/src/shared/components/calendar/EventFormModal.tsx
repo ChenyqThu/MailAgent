@@ -21,6 +21,7 @@ import { resolveAttendeesUpdate } from './lib/attendees'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 import { cn } from '@shared/lib/cn'
+import { Checkbox } from '@shared/components/ui/checkbox'
 import { qk } from '@shared/lib/queryKeys'
 import { toastError, toastSuccess } from '@shared/state/toast'
 import type {
@@ -483,10 +484,9 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
             <div className="flex items-center justify-between">
               <label className="ef-label">{t('calendar.form.labelTime', '起止时间')}</label>
               <label className="flex items-center gap-1.5 text-aux text-ink-fg-1 cursor-pointer select-none">
-                <input
-                  type="checkbox"
+                <Checkbox
                   checked={isAllDay}
-                  onChange={(e) => setIsAllDay(e.target.checked)}
+                  onCheckedChange={setIsAllDay}
                 />
                 <span>{t('calendar.form.allDayToggle', '全天')}</span>
               </label>

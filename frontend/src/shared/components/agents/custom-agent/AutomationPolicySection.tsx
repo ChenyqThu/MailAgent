@@ -7,6 +7,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { ExecPolicyRule } from '@shared/api/types'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { qk } from '@shared/lib/queryKeys'
+import { Checkbox } from '@shared/components/ui/checkbox'
 import { Switch } from '../primitives'
 import {
   Select,
@@ -548,10 +549,9 @@ export function AutomationPolicySection({
                   className="flex items-center"
                   style={{ gap: 8, fontSize: 12, color: 'rgb(var(--ink-fg-2))', cursor: 'pointer' }}
                 >
-                  <input
-                    type="checkbox"
+                  <Checkbox
                     checked={pinCwd}
-                    onChange={(e) => setPinCwd(e.target.checked)}
+                    onCheckedChange={setPinCwd}
                   />
                   {t('agents.custom.policy.cwdPin')}
                 </label>

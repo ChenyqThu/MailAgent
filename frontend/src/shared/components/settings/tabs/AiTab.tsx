@@ -22,6 +22,7 @@ import { applyEnvPatch, useEnvStore } from '@shared/state/env'
 import { errorMessage } from '@shared/lib/ipcErrors'
 import { qk } from '@shared/lib/queryKeys'
 import { Button } from '@shared/components/ui/button'
+import { Checkbox } from '@shared/components/ui/checkbox'
 import { Popover, PopoverTrigger, PopoverContent } from '@shared/components/ui/popover'
 import { Switch } from '@shared/components/ui/switch'
 import {
@@ -297,12 +298,10 @@ export function AiTab(): React.ReactElement {
                         .join(' ')
                         .trim()}
                     >
-                      <input
-                        type="checkbox"
+                      <Checkbox
                         disabled={isWeb}
                         checked={rawEnabled.includes(id)}
-                        onChange={(e) => void handleToggleModel(id, e.target.checked)}
-                        className="accent-[rgb(var(--c-accent))] shrink-0"
+                        onCheckedChange={(checked) => void handleToggleModel(id, checked)}
                       />
                       <span className="font-mono text-[12px] truncate">{id}</span>
                     </label>
