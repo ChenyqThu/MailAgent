@@ -337,12 +337,16 @@
    * foreground luminance is dropped so chip text reads as AA over the
    * bg-X/15 wash (≈ 15% chip color over white). The neutral-on-neutral
    * pairs (norm / low) needed the steepest drop since gray-on-gray was
-   * the worst-offender baseline. */
-  --c-crit: 138 36 22;
-  --c-urg: 122 64 12;
-  --c-impt: 96 68 14;
-  --c-norm: 54 60 72;
-  --c-low: 38 42 50;
+   * the worst-offender baseline.
+   * v3 dogfood 轮5 (2026-07-12) — 五档优先级值整体回调: 旧值按 chip 底纹
+   * 校准矫枉过深 (裸文本 8-13:1), AI-strip 归一直接消费后浅色底显墨块;
+   * 新值裸文本 5.2-6.1:1 / chip 底纹 4.4-5.0:1 (仅 low chip 4.40 略低于
+   * AA, 为修 norm/low 层级倒挂的取舍), norm/low 恢复「低优先级更浅」。 */
+  --c-crit: 172 48 32;
+  --c-urg: 150 82 18;
+  --c-impt: 128 92 22;
+  --c-norm: 94 101 114;
+  --c-low: 98 104 116;
   --c-ok: 26 96 60;
   --c-warn: 102 70 18;
   --c-fail: 130 30 32;
