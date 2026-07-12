@@ -170,9 +170,9 @@ const GLASS_MOOD_ROWS: GlassMoodRow[] = [
   }
 ]
 
-/** 6 个高级玻璃调节滑杆的展示顺序 (规范 §3.5 控件表)。范围/步长读
- *  GLASS_KNOB_RANGE (滑杆范围即护栏, R5)。 */
-const GLASS_KNOB_KEYS: (keyof GlassKnobs)[] = ['alpha', 'blur', 'sat', 'mix', 'ambient', 'grain']
+/** 5 个高级玻璃调节滑杆的展示顺序 (规范 §3.5 控件表; 主题 v3/C1: grain
+ *  噪点 knob 随噪点层退役)。范围/步长读 GLASS_KNOB_RANGE (滑杆范围即护栏, R5)。 */
+const GLASS_KNOB_KEYS: (keyof GlassKnobs)[] = ['alpha', 'blur', 'sat', 'mix', 'ambient']
 
 function formatKnobValue(key: keyof GlassKnobs, v: number): string {
   switch (key) {
@@ -180,8 +180,6 @@ function formatKnobValue(key: keyof GlassKnobs, v: number): string {
       return `${Math.round(v)}px`
     case 'mix':
       return `${Math.round(v)}%`
-    case 'grain':
-      return v.toFixed(3)
     default:
       return v.toFixed(2)
   }

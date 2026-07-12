@@ -117,10 +117,6 @@ export default function App(): React.ReactElement {
             fire success/error/long-task toasts via the shared store.
             Toast is router-agnostic, so it stays outside the router. */}
         <ToastContainer />
-        {/* 主题 v2 — 静态噪点层 (fixed 全窗, mix-blend overlay/multiply)。
-            根级单挂一次覆盖主窗 + popout 两种 shell; solid / reduced-
-            transparency 下由 CSS display:none 关闭。🔴 禁止动画此层。 */}
-        <div className="grain" aria-hidden="true" />
       </QueryClientProvider>
     </ErrorBoundary>
   )

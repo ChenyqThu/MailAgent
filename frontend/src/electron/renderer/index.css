@@ -98,12 +98,33 @@
   --c-cta-bg-hover: var(--c-accent); /* deprecated (主题 v2) */
   --c-cta-fg: 255 255 255;
 
-  /* 主题 v2 — CTA 渐变端点 + 发光, 全部相对色法从 accent 派生, 换 accent
-   * 自动跟色 (theme-v2.css §root)。CTA 渐变底端白字全 6 色 ≥ 5.6:1。 */
+  /* 主题 v2 — CTA 渐变端点, 全部相对色法从 accent 派生, 换 accent
+   * 自动跟色 (theme-v2.css §root)。CTA 渐变底端白字全 6 色 ≥ 5.6:1。
+   * (主题 v3: --acc-glow 静态辉光已退役, C3。) */
   --A: rgb(var(--c-accent));
   --cta-top: oklch(from var(--A) 0.6 c h);
   --cta-bot: oklch(from var(--A) 0.49 calc(min(c, 0.12)) h);
-  --acc-glow: oklch(from var(--A) l c h / 0.3);
+
+  /* ── 主题 v3「原生材质」token (README §2.2) ──────────────────────────
+   * 圆角四档 — 全局唯一来源 (胶囊 999 / 头像 50% 特例不变)。 */
+  --r-ctl: 8px; /* 按钮/输入/nav 项/工具钮 */
+  --r-row: 9px; /* 列表行药丸 (邮件行/会话行) */
+  --r-card: 12px; /* AI Fields 卡/审批卡/tile */
+  --r-pop: 14px; /* .glass-pop 浮层 */
+
+  /* 主题 v3 — 选中态: 向右衰减 accent wash (暗 16%→6%, 亮色覆盖 13%→5%)
+   * + 3px 左条 (无辉光)。批 1/2 由 EmailRow / sidebar 消费。 */
+  --sel-wash: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--A) 16%, transparent),
+    color-mix(in srgb, var(--A) 6%, transparent)
+  );
+  --sel-bar-w: 3px;
+
+  /* 主题 v3 — 统一缓动 (README §4: UI 过渡 ease-out-strong; 位移/morph
+   * 用 ease-move。时长沿用 tailwind fast 120 / base 220 / slow 380)。 */
+  --ease-out-strong: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-move: cubic-bezier(0.77, 0, 0.175, 1);
 
   /* Chip palette — Sprint 4 a11y carry-forward (REVIEW-LOG H-01).
    *
@@ -156,7 +177,6 @@
   --glass-bright: 1.0;
   --glass-accent-mix: 16%; /* accent 揉进玻璃基色的比例 */
   --glass-white-mix: 0%; /* 亮砂档把基色抬向白 */
-  --grain: 0.07; /* 噪点层 opacity */
   --ambient: 0.2; /* 窗口左上 accent 氛围光强度 */
 
   /* 派生玻璃基色 — 不要手写色值, 一律从 ink-0 + accent 混出 */
@@ -337,8 +357,14 @@
   --glass-sat: 1.4;
   --glass-bright: 1.06;
   --glass-white-mix: 10%;
-  --grain: 0.07;
   --ambient: 0.16;
+
+  /* 主题 v3 — 选中 wash 亮色档 (README §2.2: 亮 13%→5%, 暗 16%→6%)。 */
+  --sel-wash: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--A) 13%, transparent),
+    color-mix(in srgb, var(--A) 5%, transparent)
+  );
 
   --tier-bar: rgb(255 255 255 / 0.38);
   --tier-side: transparent;
@@ -427,7 +453,6 @@
   --glass-alpha: 0.88;
   --glass-sat: 1.5;
   --ambient: 0;
-  --grain: 0.05;
 }
 :root[data-glass='bright'] {
   --glass-accent-mix: 6%;
@@ -436,18 +461,15 @@
   --glass-sat: 1.7;
   --glass-bright: 1.06;
   --ambient: 0.12;
-  --grain: 0.08;
 }
 :root[data-theme='light'][data-glass='neutral'] {
   --glass-alpha: 0.9;
   --glass-sat: 1.25;
-  --grain: 0.06;
 }
 :root[data-theme='light'][data-glass='bright'] {
   --glass-white-mix: 40%;
   --glass-alpha: 0.76;
   --glass-bright: 1.08;
-  --grain: 0.09;
 }
 
 /* Pre-paint anchors so the first frame doesn't show "Electron blue".
@@ -560,9 +582,10 @@ kbd,
   position: relative;
 }
 /* 主题 v2 — 选中左条升级为 .acc-bar 光条配方 (伪元素挂不了类, 配方内联;
- * 顶端提亮渐变 + 9px 辉光, solid 档辉光归零)。几何照 demo .it.on::before:
- * 上下 inset 6px + 圆角 2px 的「胶囊光条」, 区别于 EmailRow 的通高直角条
- * (demo .erow.sel::before 即通高, 两者有意不同)。 */
+ * 顶端提亮渐变; 主题 v3/C3: 9px 辉光退役, 左条本体保留 — owner 红线)。
+ * 几何照 demo .it.on::before: 上下 inset 6px + 圆角 2px 的「胶囊光条」,
+ * 区别于 EmailRow 的通高直角条 (demo .erow.sel::before 即通高, 两者有意
+ * 不同)。 */
 .row-selected::before,
 [data-orientation='vertical'] [role='tab'][data-state='active']::before {
   content: '';
@@ -573,7 +596,6 @@ kbd,
   width: 3px;
   border-radius: 2px;
   background: linear-gradient(180deg, oklch(from var(--A) calc(l + 0.1) c h), var(--A));
-  box-shadow: 0 0 9px rgb(var(--c-accent) / 0.55);
 }
 /* Sidebar / 设置 rail 内光条往左悬挂到行卡片外 (demo .it.on::before
  * left:-8px 同款): 条占 [-8,-5], 与 wash 圆角框之间留 5px 间距。行容器
@@ -584,10 +606,6 @@ kbd,
 .app-nav .row-selected::before,
 [data-orientation='vertical'] [role='tab'][data-state='active']::before {
   left: -8px;
-}
-:root[data-surface='solid'] .row-selected::before,
-:root[data-surface='solid'] [data-orientation='vertical'] [role='tab'][data-state='active']::before {
-  box-shadow: none;
 }
 
 /* ─── Language pip (EN / JP — never used for CJK content) ───────────── */
@@ -841,8 +859,8 @@ mark {
  * 自底向上: ① OS vibrancy/acrylic (整窗唯一一层重模糊, html 透明) →
  * ② body::before 玻璃 tint + 氛围光 (CSS 只画这一层, 无 backdrop-filter)
  * → ③ 面板 .glass-* — 一律【无 backdrop-filter】只叠 --tier-* overlay
- * (整窗深浅均匀) → ④ .grain 静态噪点 → ⑤ 内容。唯一保留自带 blur 的类
- * 是真浮层 .glass-pop (20px, 浮在内容上)。 */
+ * (整窗深浅均匀) → ④ 内容。唯一保留自带 blur 的类是真浮层 .glass-pop
+ * (20px, 浮在内容上)。(主题 v3: .grain 噪点层已退役, C1。) */
 html,
 body {
   background: transparent;
@@ -880,13 +898,19 @@ body::before {
 .glass-panel {
   background-color: var(--tier-panel);
 }
-/* 真浮层 (popover / menu / palette / drawer) — 唯一保留自带 blur 的层 */
+/* 真浮层 (popover / menu / palette / drawer) — 唯一保留自带 blur 的层。
+ * 主题 v3 (C8/§3-13): 浮层圆角默认 --r-pop, 走 :where() 零特异性 —
+ * 消费点显式 rounded-* 仍生效 (tooltip 等小浮层不被压成 14px 药丸),
+ * 各消费点对齐四档刻度由批 4 逐个收口。 */
 .glass-pop {
   background-color: color-mix(in srgb, var(--glass-base) 86%, transparent);
   -webkit-backdrop-filter: blur(20px) saturate(var(--glass-sat));
   backdrop-filter: blur(20px) saturate(var(--glass-sat));
   border: 1px solid var(--hairline);
   box-shadow: var(--pop-shadow);
+}
+:where(.glass-pop) {
+  border-radius: var(--r-pop);
 }
 /* 回退路径分层略加深保可读 (壁纸自己可控, 比真实桌面温和) */
 :root[data-vib='off'] .glass-3 {
@@ -896,48 +920,8 @@ body::before {
   background-color: rgb(255 255 255 / 0.66);
 }
 
-/* 噪点 — 一层静态 SVG turbulence (App 根挂载, fixed 全窗)。160px tile,
- * 零逐帧成本; 🔴 红线: 禁止动画此层。暗用 overlay / 亮用 multiply 混合。 */
-.grain {
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  opacity: var(--grain);
-  mix-blend-mode: overlay;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
-  background-size: 160px 160px;
-}
-:root[data-theme='light'] .grain {
-  mix-blend-mode: multiply;
-}
-
-/* 顶部镜面高光 — 标题栏上沿 1px, 唯一的「打光」装饰 (TitleBar 挂载)。 */
-.specular {
-  position: relative;
-}
-.specular::after {
-  content: '';
-  position: absolute;
-  inset: 0 0 auto 0;
-  height: 1px;
-  pointer-events: none;
-  background: linear-gradient(
-    90deg,
-    transparent 4%,
-    rgb(255 255 255 / 0.38) 42%,
-    rgb(255 255 255 / 0.16) 62%,
-    transparent 96%
-  );
-}
-:root[data-theme='light'] .specular::after {
-  background: linear-gradient(
-    90deg,
-    transparent 4%,
-    rgb(255 255 255 / 0.9) 42%,
-    rgb(255 255 255 / 0.45) 62%,
-    transparent 96%
-  );
-}
+/* 主题 v3 (C1/C2): .grain 静态噪点层与 .specular 标题栏镜面高光已退役
+ * (静态装饰降噪, README §1 决策总表)。 */
 
 /* 切档/换色过渡 — 只过渡颜色, 永不过渡 filter (红线 §4) */
 .glass,
@@ -949,12 +933,13 @@ body::before {
 }
 
 /* ─── 主题 v2 — accent 材质化表达 (theme-v2.css §accent 材质化) ──────
- * accent 预算规则不变 (每主界面 ≤4 处), 但每处从「平涂」升级为「发光体」。
- * 全部相对色法从 --c-accent 派生, 换色自动跟。辉光只许出现在这些配方类上,
- * 不得自行给新组件加 glow; solid 档辉光归零 (见下方 solid 覆盖块)。 */
+ * accent 预算规则不变 (每主界面 ≤4 处)。全部相对色法从 --c-accent 派生,
+ * 换色自动跟。主题 v3 (C3): 静态装饰辉光全线退役 — 这些配方类一律无 glow,
+ * 不得自行给新组件加 glow (交互反馈辉光如 composer BorderGlow 不在此列)。 */
 
-/* 主 CTA ("起草回复") — 纵向渐变 + 内顶白高光 + accent 辉光, 白字全 6 色
- * AA (≥5.6)。.btn-cta 是既有挂接点 (EmailToolbar), .acc-cta 同配方备用。
+/* 主 CTA ("起草回复") — 纵向渐变 + 内顶白高光 (主题 v3/C7: 外辉光退役,
+ * 渐变与 inset 高光保留), 白字全 6 色 AA (≥5.6)。.btn-cta 是既有挂接点
+ * (EmailToolbar), .acc-cta 同配方备用。
  * hover 用 filter 是「即时态」非过渡 — 红线: 永不 transition filter。 */
 .btn-cta,
 .acc-cta {
@@ -962,8 +947,7 @@ body::before {
   color: rgb(var(--c-cta-fg));
   box-shadow:
     inset 0 1px 0 rgb(255 255 255 / 0.22),
-    0 1px 3px rgb(0 0 0 / 0.35),
-    0 0 18px var(--acc-glow);
+    0 1px 3px rgb(0 0 0 / 0.35);
   /* 红线: 永不 transition filter — 只把 transform 纳入过渡, brightness hover
      维持「即时态」不进 transition。 */
   transition: transform 0.12s cubic-bezier(0.4, 0, 0.2, 1);
@@ -1008,13 +992,11 @@ body::before {
 }
 .acc-bar {
   background: linear-gradient(180deg, oklch(from var(--A) calc(l + 0.1) c h), var(--A));
-  box-shadow: 0 0 9px rgb(var(--c-accent) / 0.55);
 }
 
 /* 激活 tab 下划线 — 同样的光条语言 (当前无下划线式 tab 挂接点, 配方先就位)。 */
 .acc-underline {
   background: var(--A);
-  box-shadow: 0 0 8px rgb(var(--c-accent) / 0.6);
 }
 
 /* 计数 pill / 轻 chip (Sidebar 未读计数等) */
@@ -1050,17 +1032,15 @@ body::before {
   background-color: rgb(var(--ink-fg) / 0.1);
 }
 
-/* solid 档收掉发光 (实色 = 安静); 渐变与 wash 保留。 */
+/* solid 档 CTA 更安静 (实色 = 安静): 无投影 + 内高光减淡; 渐变与 wash
+ * 保留。(主题 v3: 辉光已全局退役, 此特判只剩投影/内高光差异 — 保留以维持
+ * solid 档字节级现状。) */
 :root[data-surface='solid'] .btn-cta,
 :root[data-surface='solid'] .acc-cta {
   box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.18);
 }
-:root[data-surface='solid'] .acc-bar,
-:root[data-surface='solid'] .acc-underline {
-  box-shadow: none;
-}
 /* Honour accessibility opt-outs — 等价 solid: 不透明 ink 梯度, 关掉一切
- * 玻璃装饰 (含基底 tint / 噪点 / specular)。Layout 与对比度不变。 */
+ * 玻璃装饰 (含基底 tint)。Layout 与对比度不变。 */
 @media (prefers-reduced-transparency: reduce) {
   body::before {
     background-color: rgb(var(--ink-0));
@@ -1086,17 +1066,13 @@ body::before {
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
   }
-  .grain,
-  .specular::after {
-    display: none;
-  }
 }
 
 /* ─── Surface (材质) 切换 — 主题 v2 两档 (液态档已删) ─────────────────
  * SurfacePickerPopover / 设置页写 :root[data-surface='solid'] (frosted 默
  * 认不写 attribute, base .glass-* 自然生效)。solid = 不透明 ink 梯度 +
- * 零 blur / 零辉光 / 零噪点 (实色 = 安静), 也是 reduced-transparency 的
- * 用户主动等价物。基底 tint 不画, 由不透明 ink-0 兜底。 */
+ * 零 blur (实色 = 安静), 也是 reduced-transparency 的用户主动等价物。
+ * 基底 tint 不画, 由不透明 ink-0 兜底。 */
 :root[data-surface='solid'] body::before {
   background-color: rgb(var(--ink-0));
   background-image: none;
@@ -1120,10 +1096,6 @@ body::before {
   background-color: rgb(var(--ink-2));
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
-}
-:root[data-surface='solid'] .grain,
-:root[data-surface='solid'] .specular::after {
-  display: none;
 }
 
 /* ─── Surface picker mini preview swatch (主题 v2 两档) ─────────────
@@ -1515,9 +1487,10 @@ body::before {
     100% 1px;
 }
 /* 选中 accent bar — ::before 常驻 (opacity:0)，选中时 fade-in (§4.5 降级方案:
-   不做行间滑动 Flip，虚拟列表内 fade 性价比更高)。主题 v2: accent 纯色 +
-   9px 辉光 (solid 档辉光收掉见下)。🔴 不要做垂直渐变: 线程展开时 bundle 内
-   多行的条上下拼接, 渐变会在每行交界处出现明暗拼缝, 整条线程看起来不连续。 */
+   不做行间滑动 Flip，虚拟列表内 fade 性价比更高)。主题 v2: accent 纯色;
+   主题 v3/C3: 9px 辉光退役, 左条本体保留 (owner 红线)。🔴 不要做垂直渐变:
+   线程展开时 bundle 内多行的条上下拼接, 渐变会在每行交界处出现明暗拼缝,
+   整条线程看起来不连续。 */
 .email-row::before {
   content: '';
   position: absolute;
@@ -1526,12 +1499,8 @@ body::before {
   bottom: 0;
   width: 3px;
   background: var(--A);
-  box-shadow: 0 0 9px rgb(var(--c-accent) / 0.55);
   opacity: 0;
   transition: opacity 0.12s cubic-bezier(0.4, 0, 0.2, 1);
-}
-:root[data-surface='solid'] .email-row::before {
-  box-shadow: none;
 }
 .email-row.is-selected::before {
   opacity: 1;

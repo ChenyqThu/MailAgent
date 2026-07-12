@@ -35,8 +35,8 @@ export function TitleBar(): React.ReactElement {
   return (
     <header
       className={cn(
-        // 主题 v2 — 标题栏走 .glass-bar tier + .specular 上沿 1px 镜面高光
-        'h-titlebar shrink-0 glass-bar specular border-b border-ink-border/60',
+        // 主题 v2 — 标题栏走 .glass-bar tier (主题 v3/C2: specular 镜面高光已退役)
+        'h-titlebar shrink-0 glass-bar border-b border-ink-border/60',
         'flex items-center px-3 select-none'
       )}
       style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
@@ -68,7 +68,7 @@ export function TitleBar(): React.ReactElement {
           title={t('search.title')}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           className={cn(
-            'group flex items-center gap-2 px-3 py-1 rounded-md text-aux text-ink-fg-2',
+            'group flex items-center gap-2 px-3 py-1 rounded-[var(--r-ctl)] text-aux text-ink-fg-2',
             'hover:text-ink-fg hover:bg-ink-3 transition-colors duration-fast'
           )}
         >

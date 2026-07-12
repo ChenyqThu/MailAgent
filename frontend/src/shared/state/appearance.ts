@@ -23,13 +23,14 @@ export type SurfaceStyle = 'frosted' | 'solid'
 // 用 getComputedStyle)。规范: HANDOFF-theme-spec-v2.md §3.1 / §3.5。
 export type GlassMood = 'neutral' | 'tinted' | 'bright'
 
+// 主题 v3 (C1): grain 噪点 knob 随 .grain 层整体退役 — localStorage 旧偏好
+// 对象里的 grain 键被 readGlassKnobs 的按表遍历自然忽略, 无需迁移。
 export interface GlassKnobs {
   alpha?: number
   blur?: number
   sat?: number
   mix?: number
   ambient?: number
-  grain?: number
 }
 
 /** knob → [CSS 变量, 单位]。设置页读生效值 / applyGlass 写覆写共用一张表。 */
@@ -38,8 +39,7 @@ export const GLASS_KNOB_VARS: Record<keyof GlassKnobs, [cssVar: string, unit: st
   blur: ['--glass-blur', 'px'],
   sat: ['--glass-sat', ''],
   mix: ['--glass-accent-mix', '%'],
-  ambient: ['--ambient', ''],
-  grain: ['--grain', '']
+  ambient: ['--ambient', '']
 }
 
 /** 滑杆范围即护栏 (规范 §3.5 R5) — read / set 双侧 clamp 防 localStorage 离谱值。 */
@@ -49,8 +49,7 @@ export const GLASS_KNOB_RANGE: Record<keyof GlassKnobs, [min: number, max: numbe
     blur: [8, 40, 1],
     sat: [1, 2.2, 0.05],
     mix: [0, 20, 1],
-    ambient: [0, 0.3, 0.01],
-    grain: [0, 0.12, 0.005]
+    ambient: [0, 0.3, 0.01]
   }
 
 /** 亮色主题下基底不透明度护栏 (规范 §3.1) — 应用时 clamp, 不改存储值。 */

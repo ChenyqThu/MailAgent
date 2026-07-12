@@ -1738,7 +1738,6 @@
           "sat": "Saturation boost",
           "mix": "Accent tint",
           "ambient": "Ambient light",
-          "grain": "Grain",
           "blurNote": "Blur is provided by the OS here; this slider only applies on platforms without native glass.",
           "note": "Switching mood resets tuning; Reset only clears the sliders, not the mood. Everything applies live and is stored locally."
         }
