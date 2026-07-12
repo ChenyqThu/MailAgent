@@ -118,7 +118,10 @@ export function EmailList(): React.ReactElement {
               onExpandThread: handleExpandThread
             }}
             onRowsRendered={handleRowsRendered}
-            className="scrollbar-thin"
+            // 主题 v3 tweak (2026-07-12): scrollbar-thin 的 8px 经典槽位即使
+            // thumb 透明也占布局 → 列表右缘留白。owner 拍板无滚动条设计:
+            // scrollbar-none 零槽位, 滚动靠触控板/j·k, 药丸右缘贴齐列表边。
+            className="scrollbar-none"
             style={{ height: '100%' }}
           />
         )}

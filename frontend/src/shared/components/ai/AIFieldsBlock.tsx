@@ -507,8 +507,11 @@ export function AIFieldsBlock({ fields, internalId }: Props): React.ReactElement
           空间不够 flex-wrap 换行. 之前 3-col grid 把每个 cell 撑成 padded box
           视觉太"窒息"; 新版只用一行 px-4 py-2 容器, gap-x-3 分隔 pair, items
           内 label-value 用 gap-1.5 紧靠. whitespace-nowrap 保证 pair 不被拆散. */}
+      {/* 主题 v3 tweak (2026-07-12): 去掉本行原有的 border-t hairline —
+          上方相邻区块 (summary / reply) 各自带 border-b, 再叠 border-t 就是
+          两条线摞成的「厚边框」(owner 实机 review 点名)。 */}
       {cells.length > 0 && (
-        <div className="px-4 py-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-aux text-ink-fg-1 border-t [border-top-color:var(--hairline)]">
+        <div className="px-4 py-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-aux text-ink-fg-1">
           {cells.map((cell, idx) => (
             <Fragment key={`${cell.label}-${idx}`}>
               {idx > 0 && (
