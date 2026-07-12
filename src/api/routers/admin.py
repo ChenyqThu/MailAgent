@@ -114,6 +114,46 @@ def _build_davmail_summary(state: dict) -> Optional[dict]:
     }
 
 
+def _mark_stale_workers(workers: dict, start_history_raw: Optional[str]) -> None:
+    """E4 第二批 (D3): last_started_at 早于本次 boot 的 worker 条目加 stale=True.
+
+    last_boot_at = max(sync_state['service.start_history']) (JSON 数组, epoch 秒,
+    service._record_start_history 每次 start() 追加)。worker 心跳的 last_started_at
+    是 ISO 8601 字符串 (supervise._utcnow_iso), fromisoformat→timestamp 转 epoch 后
+    比较。**秒粒度对齐**: 心跳 ISO 是 timespec="seconds" 截断值而 boot 是带小数的
+    time.time() —— worker 在 start() 后几 ms 内就启动, 直接 float 比较会把「boot
+    同一秒启动」的 worker 几乎恒误标 stale (floor(T+ms) < T), 故 boot 也 floor 到
+    整秒再比 (同秒 = 不 stale)。缺失 / parse 失败静默跳过 (health 绝不因此 500);
+    不 stale **不写字段** (减少噪音)。镜像 src/cli/commands/admin.py 同名 helper
+    (平行实现不共享 import)。
+    """
+    import json as _json
+    from datetime import datetime as _datetime
+
+    if not start_history_raw:
+        return
+    try:
+        history = _json.loads(start_history_raw)
+    except (ValueError, TypeError):
+        return
+    if not isinstance(history, list):
+        return
+    epochs = [float(t) for t in history if isinstance(t, (int, float))]
+    if not epochs:
+        return
+    last_boot_sec = int(max(epochs))
+    for w in workers.values():
+        raw = w.get("last_started_at")
+        if not isinstance(raw, str):
+            continue
+        try:
+            started_at = _datetime.fromisoformat(raw).timestamp()
+        except (ValueError, TypeError, OverflowError, OSError):
+            continue
+        if started_at < last_boot_sec:
+            w["stale"] = True
+
+
 def _compose_dynamic_health_notes(workers: dict, davmail_summary: Optional[dict]) -> list:
     """crashloop 停摆 / token 老化 → 提示行 (E4 WP1/WP2, 不影响 healthy 语义).
 
@@ -204,6 +244,11 @@ async def admin_health(
                     "SELECT key, value FROM sync_state WHERE key LIKE 'worker.%'"
                 ).fetchall()
                 workers = _parse_worker_rows(worker_rows)
+                # E4 第二批 (D3): last_started_at 早于本次 boot → stale 标记。
+                boot_row = conn.execute(
+                    "SELECT value FROM sync_state WHERE key='service.start_history'"
+                ).fetchone()
+                _mark_stale_workers(workers, boot_row[0] if boot_row else None)
                 davmail_rows = conn.execute(
                     "SELECT key, value FROM sync_state WHERE key IN "
                     "('davmail.last_probe_at', 'davmail.token_age_days', "

@@ -37,7 +37,8 @@
               "status": {"type": "string"},
               "last_started_at": {"type": "string"},
               "restart_count": {"type": ["integer", "string"]},
-              "last_error": {"type": "string"}
+              "last_error": {"type": "string"},
+              "stale": {"type": "boolean"}
             }
           }
         },
