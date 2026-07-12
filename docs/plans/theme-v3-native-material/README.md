@@ -211,7 +211,7 @@ shadcn 兼容变量区、settings 尺寸变量区。
 7. **未读 `.row-time` weight 用 500 非 650**——mono 数字 650 过重，与 prototype 一致；sender/subject 严格 650。
 8. **动效红线全程零触碰核验**：丝线 canvas / BorderGlow / Shimmer / DotMatrix / GSAP 编排 / 侧栏 width 过渡 / 动态图标——批 0/1/2/4 汇报逐项声明 + 实机 DOM 断言（canvas + BorderGlow 元素存活）。
 
-遗留敞口（不阻塞发版，后续按需单开）：strip 色归一决策（见 5）、fail 红族收编、SessionRow 左条几何与 sidebar 配方微差、三 picker 菜单行 `bg-ink-4` 灰配方维持菜单语义（有意不改）。
+遗留敞口（不阻塞发版，后续按需单开）：~~strip 色归一决策（见 5）~~ **已拍板方案 A 归一（2026-07-12）**——strip 五色/done 绿直接消费 `--c-*` AA token，批 3 过渡变量 `--strip-*`/`--flag-done` 删除；亮色可读性 2-3:1→4.5:1+，暗色转柔和 pastel（对比页存 `~/Downloads/mailagent-strip-color-decision.html`）。仍开：fail 红族收编、SessionRow 左条几何与 sidebar 配方微差、三 picker 菜单行 `bg-ink-4` 灰配方维持菜单语义（有意不改）。
 
 ### 7.1 Dogfood 修订（2026-07-12，owner 实机 review 四轮，落地后追加拍板）
 

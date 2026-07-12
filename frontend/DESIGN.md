@@ -1745,16 +1745,15 @@ theme-switched by the token itself) · `--sel-bar-w` 3px.
 **Easing:** `--ease-out-strong` `cubic-bezier(0.23,1,0.32,1)` (UI-transition
 default) · `--ease-move` `cubic-bezier(0.77,0,0.175,1)` (move/morph).
 
-**Hex-collection (batch 3, visual-zero):**
-- `--strip-crit / -urg / -impt / -norm / -low` — AI-strip priority colors.
-  ⚠️ **Historical fork, unification deferred.** Their values were copied
-  verbatim from the pre-Sprint-4 hardcoded hex and do **not** equal the current
-  `--c-crit / -urg / …` chip tokens (Sprint 4's a11y retune only touched the
-  chip tokens; these strip colors never followed). Kept as a separate variable
-  set to guarantee zero visual change; whether to merge back onto `--c-*` is an
-  open decision.
-- `--flag-done` — flag "done" / AI-done green (`93 186 140`); same fork story
-  vs `--c-ok`.
+**Hex-collection (batch 3) + unification (2026-07-12, owner picked plan A):**
+- AI-strip priority colors and the flag-done green now consume the
+  `--c-crit / -urg / -impt / -norm / -low / -ok` chip tokens **directly** —
+  the historical fork (pre-Sprint-4 hardcoded hex, single value across both
+  themes, light-theme contrast typically 2-3:1) is resolved. The interim
+  `--strip-*` / `--flag-done` variables from batch 3 are removed; the
+  before/after table lives in the theme-v3 ledger (§7 entry 5, commit
+  `739b8771`). Net effect: theme-aware AA colors everywhere; dark theme reads
+  softer/pastel, light theme gains full legibility.
 - `--avatar-1a…6b / -ext-a / -ext-b` — 6-slot avatar gradient endpoints,
   verbatim hex, purely detokenized (no visual change).
 
