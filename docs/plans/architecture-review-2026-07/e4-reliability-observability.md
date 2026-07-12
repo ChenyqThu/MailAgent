@@ -2,6 +2,17 @@
 
 > 所属：[架构 Review 2026-07](./README.md) 路线图 **Later** 阶段（3-6 月，按痛感排期，条目间无强依赖，可拆散机会主义地做）。
 
+## 落地状态（2026-07-11 第一批：§1+§2+§3 ✅）
+
+task `07-11-e4-batch1-reliability-supervise-alerts-blocking-io`，commits `26b79707`（§1+§3）/ `6a3cc8d0`(§2) / `36ecc067`(顺带收口 E3 遗留 NOTION_READ 观察窗口)。全量 pytest 4161 passed 零排除（基线 4093+）。落地前现状核查对本方案的**勘误**：
+
+- **§1**：写方案时 ~15 worker 已涨到 **17 个**（S4/S5 加 agent_trigger/agent_run）；且 15/17 已有 tick 级 try/except 自愈——supervise 真正的价值是防「**进入 while 循环之前**的启动态未捕获异常」（实证 3 处窗口：NewWatcher pre-loop / meeting_expansion last-run gate / calendar `_sync_window`）与「正常返回式自我放弃」（NewWatcher consecutive_errors≥5 路径）。落地 = `src/utils/supervise.py` + 17 task 全收编（uid_backfill one_shot）+ 心跳走 sync_state `worker.<name>.*`（跨进程唯一可行 pattern）→ `admin health` CLI/API 双面 `workers`+`davmail` 摘要。
+- **§2**：`new_watcher.py` 阻塞 fetch 实为 **4 处**（:706/:1404/:1436/:1449，`self.arm` 已改名 `self.backend`）；且 `mailapp_fanout.py` 既有 to_thread 用默认多线程池 + concurrency=3 = 并发打无锁 backend，「单线程保序」此前只靠 loop 单线程的隐式副作用维持。落地 = `serial_executor.py`（max_workers=1 "backend-io"）统一收编 4 fetch + 2 fanout 写；uid_mapper 3 处裸 sqlite 包普通 to_thread；慢 fetch 注入测试（全仓首例）。
+- **§3**：五项里**三项写方案时已落地**（davmail 进程死亡 / EWS throttling burst / token 老化——全在 `davmail_watchdog.py`，方案的"至今 ❌"过期）。真缺口只有两项，已补：outbox 积压（`get_stats()` age_buckets 行龄≥5min pending > `ALERT_OUTBOX_BACKLOG_THRESHOLD`=100，`_alert_check_loop` 检查）+ 重启频次（sync_state `service.start_history` 裁 48h，24h>5 告警 + stats `restarts` collector）。token 老化补了"未进 admin health"的暴露缺口。**顺带修真 bug**：`service.py:894` `send_alert(message=)` 签名不符，TypeError 被自身 except 吞掉 → davmail fetch 突增告警自 Sprint 16 起从未发出过。
+- **登记不做**（本批明确豁免）：NewWatcher 内嵌第 18 个 `_flush_v4_rollout_stats_loop` 不收编（非关键路径、生命周期绑 watcher，factory 已显式 cancel 残留防僵尸双跑）；`davmail_watchdog` 50KB 日志读/stat 不 to_thread（量级可忽略）；sync_state worker 键无 TTL（flag 关掉的 worker 留 last-known 快照——§4 第二批前端呈现时结合 `last_started_at` 判 staleness）；watcher factory 复位逻辑无独立单测（start() 内闭包，supervise 本体已全测）；`alert.py` 两处预存 ruff（E741/F841，非本批 diff）。
+
+**剩余**：§4 诊断通道（崩溃日志已部分修复：07-03 起 `.prev` 轮转一份，方案描述过期；剩滚动扩份数 + 诊断包导出）、§5 venv 瘦身 a+c、§6 前端结构债（types.ts 已 2665 行 / chat_db.ts 1760 行，继续长胖中）。
+
 ## 1. worker 级监督（serve 进程）
 
 **现状**：`src/service.py:402-588` 单 asyncio loop 拉起 ~15 个 env-gated worker task；某 worker 在 tick 外抛未捕获异常 → task 静默死、该功能停摆，但进程不退 → PM2/BackendLifecycle 都不会重启（它们只看进程级存活）。

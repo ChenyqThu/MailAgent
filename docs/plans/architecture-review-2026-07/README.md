@@ -76,8 +76,8 @@
 | **Now（≤2 周）** | E0 安全网 **✅ 已实施 + CI 首跑全绿**（2026-07-02/03，实施状态见 e0 §5） | CI 测试闸 + DB 备份/quick_check + 迁移守卫 + promote workflow + 依赖锁定 | ~1 周 | [e0](./e0-safety-net.md) |
 | **Next（1-2 月）** | E1 Backend 契约收口 **✅ 已实施**（2026-07-03，实施状态见 e1 §6：Protocol=17 方法真实面、影子 alias 退役、外围收编即修复 id-space 错配） | arm 面正式化为 Protocol、删影子 alias、外围入口收编 factory；davmail 上游 watch 提醒项 | 3-5 天 | [e1](./e1-backend-contract.md) |
 | **Next（1-2 月）** | E2 减法 Sprint **✅ B/C/D 已实施**（2026-07-03，实施状态见 e2 §8：outbox 恒启用+死分支删除、fork CLI 退役、反向写归一 `outbox_intents.py`，净 -1150 行；**子包 A 已移交 openness epic S3**，见 e2 §2） | 删 legacy harness + outbox 收口删死分支 + fork CLI 退役 + 反向写归一 | ~2 周（B/C/D） | [e2](./e2-subtraction-sprint.md) |
-| **Next（可并行）** | E3 配置治理 | 四项一致性校验测试进 CI → env-only 收编 → 偏离决策表 | ~1 周 | [e3](./e3-config-governance.md) |
-| **Later（3-6 月）** | E4 可靠性/观测 | worker supervise / to_thread / 告警落地 / 诊断包 / venv 审计 / typed IPC / 巨石拆分 | 按条目 | [e4](./e4-reliability-observability.md) |
+| **Next（可并行）** | E3 配置治理 **✅ 已实施**（2026-07-06 五项对账机器闸 + 六 flag cutover；遗留待决 NOTION_READ 观察窗口已于 2026-07-11 收口翻默认 `36ecc067`，**E3 全清零**） | 四项一致性校验测试进 CI → env-only 收编 → 偏离决策表 | ~1 周 | [e3](./e3-config-governance.md) + [决策表](./e3-defaults-decision-table.md) |
+| **Later（3-6 月）** | E4 可靠性/观测 **✅ 第一批已落地**（2026-07-11，§1 supervise+§2 to_thread+§3 告警，commits `26b79707`/`6a3cc8d0`；剩 §4 诊断包 / §5 venv 审计 / §6 前端结构债） | worker supervise / to_thread / 告警落地 / 诊断包 / venv 审计 / typed IPC / 巨石拆分 | 按条目 | [e4](./e4-reliability-observability.md) 顶部「落地状态」 |
 | **持续 watch** | davmail 上游 | 2026-08 起关注 davmail release（EWS→O365 标准接口），出新版按 [升级回归清单](./e1-backend-contract.md) 验证 | — | e1 §3.1 Step 4 |
 
 **明确不做**（避免过度设计）：微服务化拆分（单机单用户，进程内隔离足够）；换数据库（SQLite+WAL 完全胜任）；提前启动 Python→TS 大迁移（`docs/reference/packaging/04-tech-stack-unification.md` 维持 park，其「venv 体积全有或全无」铁律仍成立）；重写/下架 AppleScript fallback（EWS 过渡期内保留）；任何 Graph API / 应用注册相关工作（见 §0）。
