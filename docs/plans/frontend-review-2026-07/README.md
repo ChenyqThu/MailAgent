@@ -45,7 +45,7 @@ owner 拍板分批落地：**第一批**（快赢 + 审批卡/Settings i18n + �
 
 **uilib-eval 专项**：组件库不切换 / 不接 CLI / 不改 token（已否决，无改动）· 裸 `<button>` → `<Button>` 收编 🔲无排期
 
-**明确不做**：ThreadBundle.tsx 预存 dead code（指出不删）· shadcn CLI / token 改名（否决）· EmailRow.tsx 与 useInboxActionShortcuts.ts 各自实现同款"乐观 flag+回滚"（注释自认重复；第三批 R2 盘点发现，属写路径去重超出 P2-7 范畴，热路径不值当下动，记录）· 6 个陈旧 e2e 期望（Settings rail 化击穿 openSettings helper ×5 + ⌘L S3 退役残留 10a；已开独立修复任务）
+**明确不做**：ThreadBundle.tsx 预存 dead code（指出不删）· shadcn CLI / token 改名（否决）· EmailRow.tsx 与 useInboxActionShortcuts.ts 各自实现同款"乐观 flag+回滚"（注释自认重复；第三批 R2 盘点发现，属写路径去重超出 P2-7 范畴，热路径不值当下动，记录）· ~~6 个陈旧 e2e 期望~~ ✅ 已修（2026-07-11，task `07-11-e2e-settings-rail-opensettings-helper-l-10a`：openSettings helper 改结构 selector + 07/⑥ 补 island tab 导航 + ⑥ 补 island.sock precheck + 10a 改写 ⌘J AssistantChatModal；e2e 基线 17 passed / 3 skipped / 0 failed）
 
 ## 专题方案 doc 索引
 
