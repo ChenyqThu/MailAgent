@@ -567,13 +567,14 @@
 .ob .pbar-fill.indeterminate {
   width: 35% !important;
   animation: indet 1.3s ease-in-out infinite;
+  will-change: transform;
 }
 @keyframes indet {
   0% {
-    margin-left: -35%;
+    transform: translateX(-100%);
   }
   100% {
-    margin-left: 100%;
+    transform: translateX(285.72%);
   }
 }
 
@@ -697,9 +698,21 @@
   .ob .pbar-fill.indeterminate {
     animation: none !important;
   }
-  .ob * {
-    transition-duration: 0.01ms !important;
+  /* 只删位移，保留颜色/透明度反馈（AUDIT §6）。下列 4 处的 transition 含 transform，
+     用 transition-property 覆写摘除它；.sw::after 只有 transform → 直接 none。 */
+  .ob .chip-sel {
+    transition-property: background-color, border-color, color !important;
   }
+  .ob .opt-card {
+    transition-property: border-color, background-color, box-shadow !important;
+  }
+  .ob .btn-primary {
+    transition-property: background-color, color !important;
+  }
+  .ob .sw::after {
+    transition: none !important;
+  }
+  /* 按压位移抑制（既有规则，保留原样） */
   .ob .btn-primary:active,
   .ob .chip-sel:active,
   .ob .opt-card:active {
