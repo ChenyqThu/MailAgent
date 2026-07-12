@@ -6,6 +6,7 @@ import type { ReportAgentConfig, ReportCadence, ReportConfigPatch } from '@share
 import { CadencePill, ReportIcon, Switch } from '../primitives'
 import { useKosAvailable, useSetConfig } from '../hooks'
 import { Drawer } from '@shared/components/ui/drawer'
+import { StatefulButton } from '@shared/components/ui/stateful-button'
 import { useEnabledModels } from '@shared/hooks/useLlmModels'
 import {
   Select,
@@ -14,7 +15,7 @@ import {
   SelectTrigger,
   SelectValue
 } from '@shared/components/ui/select'
-import { PREPROCESS_DOCS, PRESS_SCALE } from '../shared'
+import { PREPROCESS_DOCS } from '../shared'
 import { Field } from './Field'
 
 const HOUR_OPTIONS = [6, 7, 8, 9, 10, 12, 18, 21]
@@ -50,6 +51,7 @@ export function ConfigDrawer({
 }): React.ReactElement | null {
   const { t } = useTranslation()
   const { save, isSaving } = useSetConfig()
+  const [saveFailed, setSaveFailed] = useState(false)
 
   // cadence + title 进 state（渲染期不读 cfg，退场时 cfg→null 也不崩）；useEffect 按 cfg 预填。
   const [cadence, setCadence] = useState<ReportCadence>('daily')
@@ -81,6 +83,7 @@ export function ConfigDrawer({
   // 不同 agent(cfg 变) 时重置；关闭时 if(!open) 提前返回，保留旧值供退场动画。
   useEffect(() => {
     if (!open || !cfg) return
+    setSaveFailed(false)
     // eslint-disable-next-line react-hooks/set-state-in-effect -- 模态打开按 cfg 预填表单（多字段响应 open&&cfg 变化）。React Compiler 迁移债：真重构需父组件 key 重置 remount + 预填逻辑搬 useState initializer，等价性风险（occurrence vs create defaults 各转换）高于收益。effect 合理保留。
     setCadence(cfg.schedule.cadence)
     setTitle(cfg.title)
@@ -115,6 +118,7 @@ export function ConfigDrawer({
 
   const onSave = (): void => {
     if (!cfg) return
+    setSaveFailed(false)
     const patch: ReportConfigPatch = {
       enabled,
       // prompt 未改且仍是默认态 → 传 null 保持"用默认"；改过 → 传文本。
@@ -138,7 +142,7 @@ export function ConfigDrawer({
       // 时区只在 natural_day 有意义；rolling_24h 固定回溯 24h、不读时区，显式清空。
       patch.timezone = triggerMode === 'natural_day' ? timezone.trim() : ''
     }
-    void save(cfg.id, patch).then(onClose)
+    void save(cfg.id, patch).then(onClose).catch(() => setSaveFailed(true))
   }
 
   return (
@@ -548,39 +552,14 @@ export function ConfigDrawer({
           >
             {t('agents.config.cancel')}
           </button>
-          <button
+          <StatefulButton
             type="button"
             onClick={onSave}
             disabled={isSaving}
-            style={{
-              fontFamily: 'inherit',
-              fontSize: 13.5,
-              fontWeight: 500,
-              padding: '8px 18px',
-              borderRadius: 8,
-              cursor: isSaving ? 'wait' : 'pointer',
-              color: 'rgb(var(--c-cta-fg))',
-              background: 'rgb(var(--c-cta-bg))',
-              border: 0,
-              transition:
-                'background-color 120ms cubic-bezier(0.4,0,0.2,1), transform 120ms cubic-bezier(0.4,0,0.2,1)'
-            }}
-            onMouseEnter={(e) => {
-              if (!isSaving) e.currentTarget.style.background = 'rgb(var(--c-cta-bg-hover))'
-            }}
-            onMouseDown={(e) => {
-              if (!isSaving) e.currentTarget.style.transform = PRESS_SCALE
-            }}
-            onMouseUp={(e) => {
-              e.currentTarget.style.transform = 'none'
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = 'rgb(var(--c-cta-bg))'
-              e.currentTarget.style.transform = 'none'
-            }}
+            state={isSaving ? 'loading' : saveFailed ? 'error' : 'idle'}
           >
             {t('agents.config.save')}
-          </button>
+          </StatefulButton>
         </footer>
     </Drawer>
   )

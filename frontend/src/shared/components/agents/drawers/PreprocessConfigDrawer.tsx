@@ -7,6 +7,7 @@ import type { ReportAgentConfig } from '@shared/api/types'
 import { ReportIcon, Switch } from '../primitives'
 import { useSetConfig } from '../hooks'
 import { Drawer } from '@shared/components/ui/drawer'
+import { StatefulButton } from '@shared/components/ui/stateful-button'
 import { useEnabledModels } from '@shared/hooks/useLlmModels'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import {
@@ -22,7 +23,7 @@ import { useRestartStore } from '@shared/state/restart'
 import { toastError, toastSuccess } from '@shared/state/toast'
 // v27 「AI 邮件预处理」配置抽屉内联复用身份文档正文编辑器（同组件不同入口）。
 import { StandingDocsSection } from '@shared/components/settings/CustomAiSection'
-import { IS_WEB, PREPROCESS_DOCS, PRESS_SCALE, envFlagOn } from '../shared'
+import { IS_WEB, PREPROCESS_DOCS, envFlagOn } from '../shared'
 import { Field } from './Field'
 
 // v27 「AI 邮件预处理」agent —— 后端 DB v27 播种单行（id 固定、type='preprocess'）。
@@ -89,6 +90,7 @@ export function PreprocessConfigDrawer({
   // 分类 prompt 编辑草稿（收件箱/发件箱 tab，textarea 可编辑，保存写回 .md 文件）——
   // 打开抽屉时经 mailApi.prompts.read 拉两份。
   const [promptDrafts, setPromptDrafts] = useState<PromptDrafts | 'loading' | 'error'>('loading')
+  const [saveFailed, setSaveFailed] = useState(false)
   const [promptTab, setPromptTab] = useState<'inbox' | 'sent'>('inbox')
   const { models: enabledModels } = useEnabledModels()
   // env store 状态（idle/loading 时 enable 不可编辑、保存不写 env）+ 响应式 env 值
@@ -111,6 +113,7 @@ export function PreprocessConfigDrawer({
   /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     if (!open || !cfg) return
+    setSaveFailed(false)
     setModel(cfg.model ?? '')
     // R2 #2 行级 fallback：null → 跟随全局哨兵、[] → 不设哨兵、[m,...] → 首个 m
     // （UI 单选，保存也只存单模型链 [m]）。
@@ -171,6 +174,7 @@ export function PreprocessConfigDrawer({
 
   const onSave = async (): Promise<void> => {
     if (!cfg) return
+    setSaveFailed(false)
     // 1) env 写：仅在 env 已就绪、非 web、且用户显式改过该字段（dirty）时写 —— 未触碰的
     //    enable 永不写，即使预填 stale（env idle）也不会把真实 .env 覆写掉（codex HIGH）。
     //    只写变更键，避免无谓触发重启横幅。（#8-ext 模型 / R2 #2 fallback 均不再写 env ——
@@ -189,6 +193,7 @@ export function PreprocessConfigDrawer({
           const r = await applyEnvPatch(envPatch)
           if (!r.ok) {
             toastError(t('agents.preprocess.envSaveError'), `${r.error.code}: ${r.error.message}`)
+            setSaveFailed(true)
             return
           }
           // 与 EnvField 一致：变更键挂重启横幅（LLM_AGENT_ENABLED 是 pydantic singleton）。
@@ -208,6 +213,7 @@ export function PreprocessConfigDrawer({
         const r = await api.prompts.write(slot, draft.content)
         if (!r.ok) {
           toastError(t('agents.preprocess.promptSaveError'), `${r.code}: ${r.message}`)
+          setSaveFailed(true)
           return
         }
         wrotePrompt = true
@@ -236,6 +242,7 @@ export function PreprocessConfigDrawer({
       onClose()
     } catch (e: unknown) {
       toastError(t('agents.preprocess.rowSaveError'), errorMessage(e))
+      setSaveFailed(true)
     }
   }
 
@@ -596,39 +603,14 @@ export function PreprocessConfigDrawer({
           >
             {t('agents.config.cancel')}
           </button>
-          <button
+          <StatefulButton
             type="button"
             onClick={() => void onSave()}
             disabled={busy}
-            style={{
-              fontFamily: 'inherit',
-              fontSize: 13.5,
-              fontWeight: 500,
-              padding: '8px 18px',
-              borderRadius: 8,
-              cursor: busy ? 'wait' : 'pointer',
-              color: 'rgb(var(--c-cta-fg))',
-              background: 'rgb(var(--c-cta-bg))',
-              border: 0,
-              transition:
-                'background-color 120ms cubic-bezier(0.4,0,0.2,1), transform 120ms cubic-bezier(0.4,0,0.2,1)'
-            }}
-            onMouseEnter={(e) => {
-              if (!busy) e.currentTarget.style.background = 'rgb(var(--c-cta-bg-hover))'
-            }}
-            onMouseDown={(e) => {
-              if (!busy) e.currentTarget.style.transform = PRESS_SCALE
-            }}
-            onMouseUp={(e) => {
-              e.currentTarget.style.transform = 'none'
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = 'rgb(var(--c-cta-bg))'
-              e.currentTarget.style.transform = 'none'
-            }}
+            state={busy ? 'loading' : saveFailed ? 'error' : 'idle'}
           >
             {t('agents.config.save')}
-          </button>
+          </StatefulButton>
         </footer>
     </Drawer>
   )

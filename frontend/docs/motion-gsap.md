@@ -186,3 +186,4 @@ loading 不该成为视觉焦点。**loading 只用三个词汇**（2026-06-13 �
 | 组件 | 收编来源 | motion 用途 | spring 预设 | 边界 |
 |---|---|---|---|---|
 | `ui/drawer.tsx` | beui.dev `drawer.tsx`（MIT） | 抽屉面板进退场；backdrop 使用 `EASE_OUT` tween | `SPRING_PANEL` | 仅共享 Drawer 内部使用；业务抽屉只组合内容，不复制 `AnimatePresence` 或 spring 参数。 |
+| `ui/stateful-button.tsx` | beui.dev `stateful.tsx` + `base.tsx`（MIT） | 抽屉保存按钮 idle/loading/success/error 状态机与按压反馈 | `SPRING_PRESS` + `SPRING_SWAP` | 只由受控 `state` 驱动；业务调用点复用既有保存与错误状态，不内联 spring 参数或延迟关闭。 |

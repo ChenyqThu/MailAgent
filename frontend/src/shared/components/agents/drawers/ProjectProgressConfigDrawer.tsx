@@ -7,6 +7,7 @@ import type { CustomAgentTrigger, ReportAgentConfig, ReportConfigPatch } from '@
 import { ReportIcon, Switch } from '../primitives'
 import { useProjectProgressRuns, useSetConfig } from '../hooks'
 import { Drawer } from '@shared/components/ui/drawer'
+import { StatefulButton } from '@shared/components/ui/stateful-button'
 import { applyEnvPatch, useEnvStore } from '@shared/state/env'
 import { errorMessage } from '@shared/lib/ipcErrors'
 import { useRestartStore } from '@shared/state/restart'
@@ -173,6 +174,7 @@ export function ProjectProgressConfigDrawer({
   const [subject, setSubject] = useState('')
   const [triggerDirty, setTriggerDirty] = useState(false)
   const [err, setErr] = useState<string | null>(null)
+  const [saveFailed, setSaveFailed] = useState(false)
   // env 三字段本地镜像（dirty 追踪；保存时只写显式改过且值变化的键）。
   const [master, setMaster] = useState(false)
   const [masterDirty, setMasterDirty] = useState(false)
@@ -213,6 +215,7 @@ export function ProjectProgressConfigDrawer({
     setDbIdDirty(false)
     setFilterBuDirty(false)
     setErr(null)
+    setSaveFailed(false)
   }, [open, cfg])
   // env 字段从就绪快照回填：仅在打开且用户未 dirty 该字段时同步（镜像 PreprocessConfigDrawer
   // —— env idle→ready 的迟到加载能纠正显示，但绝不覆盖用户在抽屉里的编辑）。
@@ -245,6 +248,7 @@ export function ProjectProgressConfigDrawer({
 
   const onSave = async (): Promise<void> => {
     if (!cfg) return
+    setSaveFailed(false)
     // 触发若被改过则一并提交；改成空触发（sender+subject 全空）= 永不匹配的死配置，
     // 后端 parse_trigger 会拒 —— 前端先给友好错误（要停用请用启用开关）。
     const patch: ReportConfigPatch = { enabled }
@@ -285,6 +289,7 @@ export function ProjectProgressConfigDrawer({
               t('agents.projectProgress.envSaveError'),
               `${r.error.code}: ${r.error.message}`
             )
+            setSaveFailed(true)
             return
           }
           if (r.changedKeys.length > 0) markRestartRequired(r.changedKeys)
@@ -299,6 +304,7 @@ export function ProjectProgressConfigDrawer({
       onClose()
     } catch (e: unknown) {
       setErr(errorMessage(e))
+      setSaveFailed(true)
     }
   }
 
@@ -575,24 +581,14 @@ export function ProjectProgressConfigDrawer({
           >
             {t('agents.config.cancel')}
           </button>
-          <button
+          <StatefulButton
             type="button"
             onClick={() => void onSave()}
             disabled={busy}
-            style={{
-              fontFamily: 'inherit',
-              fontSize: 13.5,
-              fontWeight: 500,
-              padding: '8px 18px',
-              borderRadius: 8,
-              cursor: busy ? 'wait' : 'pointer',
-              color: 'rgb(var(--c-cta-fg))',
-              background: 'rgb(var(--c-cta-bg))',
-              border: 0
-            }}
+            state={busy ? 'loading' : saveFailed ? 'error' : 'idle'}
           >
             {t('agents.config.save')}
-          </button>
+          </StatefulButton>
         </footer>
     </Drawer>
   )

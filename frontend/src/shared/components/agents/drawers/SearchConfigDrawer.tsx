@@ -8,6 +8,7 @@ import { DEFAULT_SEARCH_AGENT_PROMPT } from '@shared/assistant/searchAgentClient
 import { ReportIcon, Switch } from '../primitives'
 import { useCreateAgent, useDeleteAgent, useSetConfig } from '../hooks'
 import { Drawer } from '@shared/components/ui/drawer'
+import { StatefulButton } from '@shared/components/ui/stateful-button'
 import { useEnabledModels } from '@shared/hooks/useLlmModels'
 import {
   Select,
@@ -16,7 +17,7 @@ import {
   SelectTrigger,
   SelectValue
 } from '@shared/components/ui/select'
-import { PRESS_SCALE, pressHandlers } from '../shared'
+import { pressHandlers } from '../shared'
 import { Field } from './Field'
 
 // ─── Search Agent 配置抽屉 ───────────────────────────────────────────────────
@@ -64,6 +65,7 @@ export function SearchConfigDrawer({
   // 选中的工具集合（MVP 只有 email_search_fulltext）。
   const [tools, setTools] = useState<string[]>([...SEARCH_TOOLS])
   const [errKey, setErrKey] = useState<string | null>(null)
+  const [saveFailed, setSaveFailed] = useState(false)
   const [confirming, setConfirming] = useState(false)
 
   // 打开时按 cfg（编辑）/ 空态（新建）预填。依赖 [open, cfg, create]。同 ConfigDrawer 既有
@@ -73,6 +75,7 @@ export function SearchConfigDrawer({
   useEffect(() => {
     if (!open) return
     setErrKey(null)
+    setSaveFailed(false)
     setConfirming(false)
     if (create || !cfg) {
       setEnabled(true)
@@ -114,6 +117,7 @@ export function SearchConfigDrawer({
 
   const onSave = (): void => {
     setErrKey(null)
+    setSaveFailed(false)
     if (create) {
       const id = slugifyTitle(title)
       void createAgent({
@@ -131,6 +135,7 @@ export function SearchConfigDrawer({
           // 真实 Electron 路径错误码挂在 err.code（message 是人话不含码串）。
           const code = (e as { code?: string })?.code
           setErrKey(code === 'E_INVALID_ARG' ? 'errConflict' : 'errGeneric')
+          setSaveFailed(true)
         })
       return
     }
@@ -148,6 +153,7 @@ export function SearchConfigDrawer({
       .catch((e: unknown) => {
         console.warn('search agent save failed', e)
         setErrKey('errGeneric')
+        setSaveFailed(true)
       })
   }
 
@@ -408,39 +414,14 @@ export function SearchConfigDrawer({
           >
             {t('agents.config.cancel')}
           </button>
-          <button
+          <StatefulButton
             type="button"
             onClick={onSave}
             disabled={busy}
-            style={{
-              fontFamily: 'inherit',
-              fontSize: 13.5,
-              fontWeight: 500,
-              padding: '8px 18px',
-              borderRadius: 8,
-              cursor: busy ? 'wait' : 'pointer',
-              color: 'rgb(var(--c-cta-fg))',
-              background: 'rgb(var(--c-cta-bg))',
-              border: 0,
-              transition:
-                'background-color 120ms cubic-bezier(0.4,0,0.2,1), transform 120ms cubic-bezier(0.4,0,0.2,1)'
-            }}
-            onMouseEnter={(e) => {
-              if (!busy) e.currentTarget.style.background = 'rgb(var(--c-cta-bg-hover))'
-            }}
-            onMouseDown={(e) => {
-              if (!busy) e.currentTarget.style.transform = PRESS_SCALE
-            }}
-            onMouseUp={(e) => {
-              e.currentTarget.style.transform = 'none'
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = 'rgb(var(--c-cta-bg))'
-              e.currentTarget.style.transform = 'none'
-            }}
+            state={busy ? 'loading' : saveFailed ? 'error' : 'idle'}
           >
             {create ? t('agents.search.create') : t('agents.config.save')}
-          </button>
+          </StatefulButton>
         </footer>
     </Drawer>
   )

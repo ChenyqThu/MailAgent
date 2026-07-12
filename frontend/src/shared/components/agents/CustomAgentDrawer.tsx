@@ -32,6 +32,7 @@ import {
   SelectValue
 } from '@shared/components/ui/select'
 import { Drawer } from '@shared/components/ui/drawer'
+import { StatefulButton } from '@shared/components/ui/stateful-button'
 import { useEnabledModels } from '@shared/hooks/useLlmModels'
 import {
   useCreateAgent,
@@ -153,6 +154,7 @@ export function CustomAgentDrawer({
   const [maxRunsPerDay, setMaxRunsPerDay] = useState(DEFAULT_MAX_RUNS_PER_DAY)
   const [maxRunSeconds, setMaxRunSeconds] = useState(DEFAULT_MAX_RUN_SECONDS)
   const [err, setErr] = useState<string | null>(null)
+  const [saveFailed, setSaveFailed] = useState(false)
   const [confirming, setConfirming] = useState(false)
   // 两段式 create 的第一段成果（codex S5 复核 P2）：createAgent 成功即记 id——第二段
   // setConfig 失败后原地重试直接走 setConfig，不再重复 create（同 id 撞 409）。打开抽屉重置。
@@ -164,6 +166,7 @@ export function CustomAgentDrawer({
   useEffect(() => {
     if (!open) return
     setErr(null)
+    setSaveFailed(false)
     setConfirming(false)
     setCreatedId(null)
     if (create || !cfg) {
@@ -339,9 +342,11 @@ export function CustomAgentDrawer({
     const v = shallowValidate()
     if (v) {
       setErr(v)
+      setSaveFailed(true)
       return
     }
     setErr(null)
+    setSaveFailed(false)
     const trigger = buildTrigger()
     const budget = {
       v: 1 as const,
@@ -384,7 +389,10 @@ export function CustomAgentDrawer({
           })
         )
         .then(onClose)
-        .catch((e: unknown) => setErr(errText(e)))
+        .catch((e: unknown) => {
+          setErr(errText(e))
+          setSaveFailed(true)
+        })
       return
     }
     if (!cfg) return
@@ -414,7 +422,10 @@ export function CustomAgentDrawer({
     }
     void save(cfg.id, editPatch)
       .then(onClose)
-      .catch((e: unknown) => setErr(errText(e)))
+      .catch((e: unknown) => {
+        setErr(errText(e))
+        setSaveFailed(true)
+      })
   }
 
   const onDelete = (): void => {
@@ -962,24 +973,14 @@ export function CustomAgentDrawer({
           >
             {t('agents.config.cancel')}
           </button>
-          <button
+          <StatefulButton
             type="button"
             onClick={onSave}
             disabled={busy}
-            style={{
-              fontFamily: 'inherit',
-              fontSize: 13.5,
-              fontWeight: 500,
-              padding: '8px 18px',
-              borderRadius: 8,
-              cursor: busy ? 'wait' : 'pointer',
-              color: 'rgb(var(--c-cta-fg))',
-              background: 'rgb(var(--c-cta-bg))',
-              border: 0
-            }}
+            state={busy ? 'loading' : saveFailed ? 'error' : 'idle'}
           >
             {create ? t('agents.custom.create') : t('agents.config.save')}
-          </button>
+          </StatefulButton>
         </footer>
     </Drawer>
   )
