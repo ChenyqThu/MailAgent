@@ -81,11 +81,11 @@ export function MonthView({
       const target = e.target as (Node & { closest?: (s: string) => Element | null }) | null
       if (!target) return
       if (popRef.current && popRef.current.contains(target)) return
-      // F28 — 点击 drawer 内部 (含 backdrop) 时 drawer 自己负责关; popover
-      // 不应抢着 close 后让 drawer 关闭多一帧延迟. 排除 .drawer + .drawer-backdrop
-      // (内部 click 时 drawer.tsx 走 onClose, popover 自然下次 mousedown 关).
+      // F28 — 点击共享 Drawer 内部（含 backdrop）时 Drawer 自己负责关；popover
+      // 不应抢着 close 后让 Drawer 关闭多一帧延迟。依赖共享 Drawer 外层的
+      // data-ui-drawer 标记（内部 click 时 Drawer 走 onOpenChange）。
       if (typeof target.closest === 'function') {
-        const inDrawer = target.closest('.drawer, .drawer-backdrop')
+        const inDrawer = target.closest('[data-ui-drawer]')
         if (inDrawer) return
       }
       setPop(null)

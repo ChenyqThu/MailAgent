@@ -26,7 +26,7 @@ import {
   Video,
   X
 } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 
@@ -40,6 +40,7 @@ import type {
   RsvpResponse
 } from '@shared/api/types'
 import { cn } from '@shared/lib/cn'
+import { Drawer } from '@shared/components/ui/drawer'
 import { qk } from '@shared/lib/queryKeys'
 import { pad } from './lib/format'
 import { useUndoToastStore } from '@shared/state/calendar-undo'
@@ -313,16 +314,6 @@ export function EventDetailDrawer({ occurrence, onClose, onReopen }: Props): Rea
     })
   }
 
-  // ESC closes
-  useEffect(() => {
-    if (!open) return
-    const h = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', h)
-    return () => window.removeEventListener('keydown', h)
-  }, [open, onClose])
-
   const hasMeeting = !!(
     occurrence?.url || occurrence?.location?.toLowerCase().includes('teams.microsoft.com')
   )
@@ -335,13 +326,11 @@ export function EventDetailDrawer({ occurrence, onClose, onReopen }: Props): Rea
 
   return (
     <>
-      <div className={cn('drawer-backdrop', open && 'open')} onClick={onClose} aria-hidden />
-      <aside
-        className={cn('drawer', open && 'open')}
-        role="dialog"
-        aria-modal="true"
-        aria-hidden={!open}
-        aria-label={occurrence?.summary || t('calendar.drawer.ariaFallback', '事件详情')}
+      <Drawer
+        open={open}
+        onOpenChange={(nextOpen) => !nextOpen && onClose()}
+        ariaLabel={occurrence?.summary || t('calendar.drawer.ariaFallback', '事件详情')}
+        width={420}
       >
         {occurrence && (
           <>
@@ -653,7 +642,7 @@ export function EventDetailDrawer({ occurrence, onClose, onReopen }: Props): Rea
             </div>
           </>
         )}
-      </aside>
+      </Drawer>
 
       {/* Phase 2.3 — edit modal (occurrence 预填 = edit 语义) */}
       <EventFormModal

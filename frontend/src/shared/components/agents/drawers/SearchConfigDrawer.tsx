@@ -7,7 +7,7 @@ import type { ReportAgentConfig, ReportConfigPatch } from '@shared/api/types'
 import { DEFAULT_SEARCH_AGENT_PROMPT } from '@shared/assistant/searchAgentClient'
 import { ReportIcon, Switch } from '../primitives'
 import { useCreateAgent, useDeleteAgent, useSetConfig } from '../hooks'
-import { useExitAnimation } from '@shared/hooks/useExitAnimation'
+import { Drawer } from '@shared/components/ui/drawer'
 import { useEnabledModels } from '@shared/hooks/useLlmModels'
 import {
   Select,
@@ -55,13 +55,6 @@ export function SearchConfigDrawer({
   const { create: createAgent, isCreating } = useCreateAgent()
   const { remove, isDeleting } = useDeleteAgent()
 
-  // 进/退场动效：与 ConfigDrawer 同款（遮罩淡入 + 抽屉右滑同步）。
-  const { shouldRender, scopeRef } = useExitAnimation<HTMLDivElement>(open, {
-    card: 'aside',
-    from: { autoAlpha: 0, xPercent: 100 },
-    syncBackdrop: true
-  })
-
   const [enabled, setEnabled] = useState(true)
   const [title, setTitle] = useState('')
   const [prompt, setPrompt] = useState('')
@@ -101,8 +94,6 @@ export function SearchConfigDrawer({
     setTools(cfg.tools_json?.length ? cfg.tools_json : [...SEARCH_TOOLS])
   }, [open, cfg, create])
   /* eslint-enable react-hooks/set-state-in-effect */
-
-  if (!shouldRender) return null
 
   const busy = isSaving || isCreating || isDeleting
 
@@ -172,28 +163,7 @@ export function SearchConfigDrawer({
   }
 
   return (
-    <div
-      ref={scopeRef}
-      onClick={onClose}
-      style={{ position: 'absolute', inset: 0, zIndex: 60, background: 'rgb(0 0 0 / 0.4)' }}
-    >
-      <aside
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          position: 'absolute',
-          top: 0,
-          right: 0,
-          bottom: 0,
-          width: 480,
-          maxWidth: '92%',
-          zIndex: 61,
-          background: 'color-mix(in srgb, var(--glass-base) 94%, transparent)',
-          borderLeft: '1px solid var(--hairline-strong)',
-          boxShadow: 'var(--shadow-raised)',
-          display: 'flex',
-          flexDirection: 'column'
-        }}
-      >
+    <Drawer open={open} onOpenChange={(nextOpen) => !nextOpen && onClose()}>
         <header
           className="flex items-center"
           style={{
@@ -472,7 +442,6 @@ export function SearchConfigDrawer({
             {create ? t('agents.search.create') : t('agents.config.save')}
           </button>
         </footer>
-      </aside>
-    </div>
+    </Drawer>
   )
 }

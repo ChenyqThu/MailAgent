@@ -5,7 +5,7 @@ import { useTranslation } from 'react-i18next'
 import type { ReportAgentConfig, ReportCadence, ReportConfigPatch } from '@shared/api/types'
 import { CadencePill, ReportIcon, Switch } from '../primitives'
 import { useKosAvailable, useSetConfig } from '../hooks'
-import { useExitAnimation } from '@shared/hooks/useExitAnimation'
+import { Drawer } from '@shared/components/ui/drawer'
 import { useEnabledModels } from '@shared/hooks/useLlmModels'
 import {
   Select,
@@ -50,15 +50,6 @@ export function ConfigDrawer({
 }): React.ReactElement | null {
   const { t } = useTranslation()
   const { save, isSaving } = useSetConfig()
-
-  // 进/退场动效：遮罩与 aside 同步进退 —— 遮罩淡入与抽屉右滑同走 DUR.base、同 standard
-  // 曲线、同起止（syncBackdrop），避免"遮罩先啪一下、抽屉再慢慢滑"脱节；退场对称、
-  // 可中断、自动尊重 reduced-motion（DESIGN.md §8 / docs/motion-gsap.md）。
-  const { shouldRender, scopeRef } = useExitAnimation<HTMLDivElement>(open, {
-    card: 'aside',
-    from: { autoAlpha: 0, xPercent: 100 },
-    syncBackdrop: true
-  })
 
   // cadence + title 进 state（渲染期不读 cfg，退场时 cfg→null 也不崩）；useEffect 按 cfg 预填。
   const [cadence, setCadence] = useState<ReportCadence>('daily')
@@ -109,8 +100,6 @@ export function ConfigDrawer({
     setKosEnrich(cfg.kos_enrich)
   }, [open, cfg])
 
-  if (!shouldRender) return null
-
   const isDaily = cadence === 'daily'
 
   const inputStyle: React.CSSProperties = {
@@ -153,30 +142,7 @@ export function ConfigDrawer({
   }
 
   return (
-    <div
-      ref={scopeRef}
-      onClick={onClose}
-      style={{ position: 'absolute', inset: 0, zIndex: 60, background: 'rgb(0 0 0 / 0.4)' }}
-    >
-      <aside
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          position: 'absolute',
-          top: 0,
-          right: 0,
-          bottom: 0,
-          width: 480,
-          maxWidth: '92%',
-          zIndex: 61,
-          // 主题 v2 round 5 — 抽屉是真浮层: glass-base 高遮挡配方 (与窗口
-          // tint 同源), 不再用 ink 实底。
-          background: 'color-mix(in srgb, var(--glass-base) 94%, transparent)',
-          borderLeft: '1px solid var(--hairline-strong)',
-          boxShadow: 'var(--shadow-raised)',
-          display: 'flex',
-          flexDirection: 'column'
-        }}
-      >
+    <Drawer open={open} onOpenChange={(nextOpen) => !nextOpen && onClose()}>
         <header
           className="flex items-center"
           style={{
@@ -616,7 +582,6 @@ export function ConfigDrawer({
             {t('agents.config.save')}
           </button>
         </footer>
-      </aside>
-    </div>
+    </Drawer>
   )
 }

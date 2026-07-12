@@ -31,7 +31,7 @@ import {
   SelectTrigger,
   SelectValue
 } from '@shared/components/ui/select'
-import { useExitAnimation } from '@shared/hooks/useExitAnimation'
+import { Drawer } from '@shared/components/ui/drawer'
 import { useEnabledModels } from '@shared/hooks/useLlmModels'
 import {
   useCreateAgent,
@@ -119,12 +119,6 @@ export function CustomAgentDrawer({
   const { options: toolOptions } = useToolOptions(open)
   // R3 — openness flag 分面（webToolsEnabled/execToolsEnabled），驱动「额外能力」区禁用提示。
   const opennessFlags = useOpennessFlags(open)
-
-  const { shouldRender, scopeRef } = useExitAnimation<HTMLDivElement>(open, {
-    card: 'aside',
-    from: { autoAlpha: 0, xPercent: 100 },
-    syncBackdrop: true
-  })
 
   const [enabled, setEnabled] = useState(false)
   const [title, setTitle] = useState('')
@@ -267,8 +261,6 @@ export function CustomAgentDrawer({
     setSelectedTools([...toolOptions.defaults])
   }, [open, toolsMode, toolsDirty, toolOptions.defaults, create, cfg])
   /* eslint-enable react-hooks/set-state-in-effect */
-
-  if (!shouldRender) return null
 
   const busy = isSaving || isCreating || isDeleting
 
@@ -437,28 +429,7 @@ export function CustomAgentDrawer({
   const tzOptions = ['UTC', ...Intl.supportedValuesOf('timeZone').filter((z) => z !== 'UTC')]
 
   return (
-    <div
-      ref={scopeRef}
-      onClick={onClose}
-      style={{ position: 'absolute', inset: 0, zIndex: 60, background: 'rgb(0 0 0 / 0.4)' }}
-    >
-      <aside
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          position: 'absolute',
-          top: 0,
-          right: 0,
-          bottom: 0,
-          width: 480,
-          maxWidth: '92%',
-          zIndex: 61,
-          background: 'color-mix(in srgb, var(--glass-base) 94%, transparent)',
-          borderLeft: '1px solid var(--hairline-strong)',
-          boxShadow: 'var(--shadow-raised)',
-          display: 'flex',
-          flexDirection: 'column'
-        }}
-      >
+    <Drawer open={open} onOpenChange={(nextOpen) => !nextOpen && onClose()}>
         <header
           className="flex items-center"
           style={{
@@ -1010,7 +981,6 @@ export function CustomAgentDrawer({
             {create ? t('agents.custom.create') : t('agents.config.save')}
           </button>
         </footer>
-      </aside>
-    </div>
+    </Drawer>
   )
 }

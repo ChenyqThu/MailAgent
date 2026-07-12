@@ -6,7 +6,7 @@ import { useTranslation } from 'react-i18next'
 import type { CustomAgentTrigger, ReportAgentConfig, ReportConfigPatch } from '@shared/api/types'
 import { ReportIcon, Switch } from '../primitives'
 import { useProjectProgressRuns, useSetConfig } from '../hooks'
-import { useExitAnimation } from '@shared/hooks/useExitAnimation'
+import { Drawer } from '@shared/components/ui/drawer'
 import { applyEnvPatch, useEnvStore } from '@shared/state/env'
 import { errorMessage } from '@shared/lib/ipcErrors'
 import { useRestartStore } from '@shared/state/restart'
@@ -168,12 +168,6 @@ export function ProjectProgressConfigDrawer({
   const { save, isSaving } = useSetConfig()
   const markRestartRequired = useRestartStore((s) => s.markRestartRequired)
 
-  const { shouldRender, scopeRef } = useExitAnimation<HTMLDivElement>(open, {
-    card: 'aside',
-    from: { autoAlpha: 0, xPercent: 100 },
-    syncBackdrop: true
-  })
-
   const [enabled, setEnabled] = useState(false)
   const [sender, setSender] = useState('')
   const [subject, setSubject] = useState('')
@@ -235,8 +229,6 @@ export function ProjectProgressConfigDrawer({
     if (envFilterBuRaw !== null && !filterBuDirty) setFilterBu(envFilterBuRaw)
   }, [open, envFilterBuRaw, filterBuDirty])
   /* eslint-enable react-hooks/set-state-in-effect */
-
-  if (!shouldRender) return null
 
   const busy = isSaving || envSaving
 
@@ -311,28 +303,7 @@ export function ProjectProgressConfigDrawer({
   }
 
   return (
-    <div
-      ref={scopeRef}
-      onClick={onClose}
-      style={{ position: 'absolute', inset: 0, zIndex: 60, background: 'rgb(0 0 0 / 0.4)' }}
-    >
-      <aside
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          position: 'absolute',
-          top: 0,
-          right: 0,
-          bottom: 0,
-          width: 480,
-          maxWidth: '92%',
-          zIndex: 61,
-          background: 'color-mix(in srgb, var(--glass-base) 94%, transparent)',
-          borderLeft: '1px solid var(--hairline-strong)',
-          boxShadow: 'var(--shadow-raised)',
-          display: 'flex',
-          flexDirection: 'column'
-        }}
-      >
+    <Drawer open={open} onOpenChange={(nextOpen) => !nextOpen && onClose()}>
         <header
           className="flex items-center"
           style={{
@@ -623,7 +594,6 @@ export function ProjectProgressConfigDrawer({
             {t('agents.config.save')}
           </button>
         </footer>
-      </aside>
-    </div>
+    </Drawer>
   )
 }
