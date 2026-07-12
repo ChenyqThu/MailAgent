@@ -85,12 +85,15 @@ class DavMailUidMapper:
         resume_str = self.sync_store.get_state(_LAST_INTERNAL_ID_KEY)
         last_iid = int(resume_str) if resume_str and resume_str.isdigit() else 0
 
-        pending = self.count_pending()
+        # 裸 sqlite COUNT 全表扫 — 包 asyncio.to_thread 移出事件循环线程 (不进 backend
+        # 串行队列: 短 SQLite 查询, 避免被慢 IMAP fetch 队头阻塞)。
+        pending = await asyncio.to_thread(self.count_pending)
         logger.info(f"[davmail-uid-mapper] start backfill, pending={pending}, resume_from={last_iid}")
         self.sync_store.set_state(_PROGRESS_KEY, f"running:pending={pending}")
 
         while True:
-            batch = self._fetch_batch_to_backfill(last_iid)
+            # 裸 sqlite SELECT LIMIT — 同上, 包 asyncio.to_thread 移出事件循环线程。
+            batch = await asyncio.to_thread(self._fetch_batch_to_backfill, last_iid)
             if not batch:
                 break
 
@@ -282,7 +285,9 @@ async def schedule_backfill_task(cfg: "Config", sync_store: "SyncStore", delay_s
         batch_size=int(getattr(cfg, "davmail_uid_backfill_batch_size", _DEFAULT_BATCH_SIZE)),
         sleep_between_batches_sec=float(getattr(cfg, "davmail_uid_backfill_sleep_sec", _DEFAULT_SLEEP_BETWEEN_SEC)),
     )
-    pending = mapper.count_pending()
+    # 裸 sqlite COUNT — 同 run_backfill 内的调用点, 包 asyncio.to_thread 移出事件循环
+    # 线程 (不进 backend 串行队列: 短 SQLite 查询, 避免被慢 IMAP fetch 队头阻塞)。
+    pending = await asyncio.to_thread(mapper.count_pending)
     if pending == 0:
         logger.info("[davmail-uid-mapper] no pending emails, skip backfill")
         return

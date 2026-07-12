@@ -42,6 +42,7 @@ from src.repository import (
     build_storage_payloads,
 )
 from src.mail.backend.imap_client import parse_folder_csv_or_json
+from src.mail.backend.serial_executor import run_backend_io
 
 # 标准邮箱 (非自定义文件夹) —— L2/L3 gate 不影响这些; 自定义文件夹 = mailbox 不在此集合。
 # 注: "存档" **有意**不在此列 —— PRD §7 D7「存档/草稿箱并入白名单走主链路」, 存档作为可同步
@@ -703,7 +704,9 @@ class NewWatcher:
             logger.info(f"Syncing email {internal_id}: {email_meta.get('subject', '')[:50]}...")
 
             # 1. 通过 internal_id 获取完整邮件内容（127x 性能提升）
-            full_email = self.backend.fetch_email_content_by_id(internal_id, mailbox)
+            #    davmail 模式是网络 IMAP fetch（阻塞）—— 经单线程 backend-io executor
+            #    移出事件循环线程且保序, 一封慢邮件不再卡住 fanout/reverse/island 的 tick。
+            full_email = await run_backend_io(self.backend.fetch_email_content_by_id, internal_id, mailbox)
             if not full_email:
                 backend_name = type(self.backend).__name__
                 logger.warning(f"Failed to fetch email content by id {internal_id} (backend={backend_name})")
@@ -1401,7 +1404,7 @@ class NewWatcher:
             try:
                 if sync_status == 'fetch_failed':
                     # AppleScript 获取失败，需要重新获取
-                    full_email = self.backend.fetch_email_content_by_id(internal_id, mailbox)
+                    full_email = await run_backend_io(self.backend.fetch_email_content_by_id, internal_id, mailbox)
 
                     if not full_email:
                         backend_name = type(self.backend).__name__
@@ -1433,7 +1436,7 @@ class NewWatcher:
                     message_id = email_meta.get('message_id')
                     if not message_id:
                         # 没有 message_id，尝试重新获取
-                        full_email = self.backend.fetch_email_content_by_id(internal_id, mailbox)
+                        full_email = await run_backend_io(self.backend.fetch_email_content_by_id, internal_id, mailbox)
                         if not full_email:
                             self.sync_store.mark_fetch_failed(internal_id, "Cannot refetch for retry")
                             continue
@@ -1446,7 +1449,7 @@ class NewWatcher:
                         })
                     else:
                         # 有 message_id，通过 internal_id 重新获取
-                        full_email = self.backend.fetch_email_content_by_id(internal_id, mailbox)
+                        full_email = await run_backend_io(self.backend.fetch_email_content_by_id, internal_id, mailbox)
                         if not full_email:
                             self.sync_store.mark_fetch_failed(internal_id, "Cannot refetch for retry")
                             continue

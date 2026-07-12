@@ -6,19 +6,20 @@
   3. 否则调 backend mark_as_read_by_id / set_flag_by_id
   4. 成功后 update_local_flags 同步 SQLite (echo prevention)
 
-backend 写操作是 blocking IO (AppleScript subprocess ~1s / IMAP STORE)，在
-asyncio.to_thread 中执行避免阻塞其他 fanout（特别是 NotionFanout 也是网络阻塞）。
+backend 写操作是 blocking IO (AppleScript subprocess ~1s / IMAP STORE)，经单线程
+backend-io executor (run_backend_io) 执行：既避免阻塞其他 fanout（特别是 NotionFanout
+也是网络阻塞），又与所有 backend 调用串行保序（AppleScript / 单条 IMAP 非并发安全）。
 
 详见 SPRINT15-HANDOFF.md §3.3-§3.4 + plan Stage 1.3。
 """
 
 from __future__ import annotations
 
-import asyncio
 from typing import TYPE_CHECKING, Tuple
 
 from loguru import logger
 
+from src.mail.backend.serial_executor import run_backend_io
 from src.sync.outbox import OutboxEntry
 
 if TYPE_CHECKING:
@@ -71,13 +72,17 @@ class MailAppFanout:
         target_read = bool(payload["is_read"]) if has_read else None
         target_flagged = bool(payload["is_flagged"]) if has_flagged else None
 
-        # 调 backend（blocking IO） — 包到 to_thread 不阻塞 event loop
+        # 调 backend（blocking IO） — 经单线程 backend-io executor 执行:
+        # 既不阻塞 event loop, 又与其余所有 backend 调用 (new_watcher 的 fetch 等)
+        # 串行保序。此前用默认 asyncio.to_thread (多线程池) + concurrency=3 会并发
+        # 打同一个 backend 实例 (AppleScript / 单条 IMAP 均非并发安全), run_backend_io
+        # 统一收编消除该并发不一致。
         # 不做 SQLite-based idempotency: 写操作协议层幂等, 直接调更可靠
         errors = []
         ok = True
 
         if has_read:
-            success = await asyncio.to_thread(
+            success = await run_backend_io(
                 self.backend.mark_as_read_by_id, internal_id, target_read, mailbox
             )
             if not success:
@@ -85,7 +90,7 @@ class MailAppFanout:
                 errors.append(f"mark_as_read_by_id failed (target={target_read})")
 
         if has_flagged:
-            success = await asyncio.to_thread(
+            success = await run_backend_io(
                 self.backend.set_flag_by_id, internal_id, target_flagged, mailbox
             )
             if not success:
