@@ -24,7 +24,11 @@
 
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
+import { Download, Loader2 } from 'lucide-react'
 
+import { useMailApi } from '@shared/hooks/useMailApi'
+import { errorMessage } from '@shared/lib/ipcErrors'
+import { toastError, toastSuccess } from '@shared/state/toast'
 import {
   useAppearance,
   type AccentId,
@@ -522,6 +526,31 @@ export function GeneralTab(): React.ReactElement {
       typeof document !== 'undefined' && document.documentElement.getAttribute('data-vib') !== 'off'
   )
 
+  // ── 诊断 (E4 §4.2) — 导出诊断包。仅 Electron 本地 AdminApi 实现 exportDiagnostics
+  //    (远程 HTTP 实现不提供该可选方法), 故按方法存在性决定是否渲染诊断区。
+  const mailApi = useMailApi()
+  const canExportDiagnostics = typeof mailApi.admin.exportDiagnostics === 'function'
+  const [exportingDiagnostics, setExportingDiagnostics] = React.useState(false)
+
+  async function handleExportDiagnostics(): Promise<void> {
+    if (!mailApi.admin.exportDiagnostics) return
+    setExportingDiagnostics(true)
+    try {
+      const result = await mailApi.admin.exportDiagnostics()
+      if (result.saved) {
+        toastSuccess(t('settings.general.diagnostics.saved', { defaultValue: '诊断包已保存' }))
+      }
+      // saved=false 为用户取消保存对话框 — 静默, 不当错误。
+    } catch (err) {
+      toastError(
+        t('settings.general.diagnostics.failed', { defaultValue: '导出诊断包失败' }),
+        errorMessage(err)
+      )
+    } finally {
+      setExportingDiagnostics(false)
+    }
+  }
+
   return (
     <>
       <PageHeader
@@ -813,6 +842,50 @@ export function GeneralTab(): React.ReactElement {
           })}
         </p>
       </section>
+
+      {/* ── 6. Diagnostics — 诊断包导出 (E4 §4.2; 仅 Electron 环境, 远程 web 不渲染) ── */}
+      {canExportDiagnostics ? (
+        <section className="mb-[var(--settings-block-gap,1.75rem)]">
+          <BlockHeader title={t('settings.general.diagnostics.title', { defaultValue: '诊断' })} />
+          <div className="tile rounded-lg border border-ink-border-soft p-5">
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex-1 min-w-0">
+                <div className="text-aux font-medium text-ink-fg">
+                  {t('settings.general.diagnostics.export.label', { defaultValue: '导出诊断包' })}
+                </div>
+                <p className="text-meta text-ink-fg-2 mt-1 leading-relaxed">
+                  {t('settings.general.diagnostics.export.helper', {
+                    defaultValue:
+                      '打包近 7 天运行日志与脱敏配置快照，用于排查问题。生成可能需要约 1 分钟。'
+                  })}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => void handleExportDiagnostics()}
+                disabled={exportingDiagnostics}
+                className={cn(
+                  'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-aux shrink-0',
+                  'text-coral border border-coral/30 bg-coral/10 hover:bg-coral/15',
+                  'transition-colors duration-fast',
+                  'disabled:opacity-60 disabled:cursor-not-allowed'
+                )}
+              >
+                {exportingDiagnostics ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <Download className="size-3.5" />
+                )}
+                {exportingDiagnostics
+                  ? t('settings.general.diagnostics.export.busy', {
+                      defaultValue: '导出中…（约 1 分钟）'
+                    })
+                  : t('settings.general.diagnostics.export.cta', { defaultValue: '导出诊断包' })}
+              </button>
+            </div>
+          </div>
+        </section>
+      ) : null}
     </>
   )
 }

@@ -753,6 +753,20 @@ export interface AdminHealthData {
   tables_present: string[]
   tables_missing: string[]
   healthy: boolean
+  /** E4 §4 — supervise worker 心跳 (sync_state 'worker.%' 键反解), keyed by worker
+   *  name。镜像 docs/cli-schema/admin-health.schema.json 的 workers 子对象。当前无
+   *  前端展示消费, 仅建模后端返回面。`stale`=该 worker 的 last_started_at 早于本次
+   *  进程 boot (flag 关掉的 worker 留的旧快照, E4 §4 第二批新增, 非 stale 时不写)。 */
+  workers?: Record<
+    string,
+    {
+      status?: string
+      last_started_at?: string
+      restart_count?: number | string
+      last_error?: string
+      stale?: boolean
+    }
+  >
 }
 
 export interface AdminStatsData {
@@ -858,6 +872,10 @@ export interface AdminApi {
   /** Current active system alerts derived from davmail health + (future)
    *  other sources. Polled by SystemAlertBadge every 5s. */
   systemAlerts(): Promise<SystemAlertsData>
+  /** E4 §4.2 — 导出诊断包 (仅 Electron 本地: 打包近 7 天日志 + 脱敏配置快照 +
+   *  health/db_check/manifest, 弹保存对话框让用户选路径)。**可选方法** —— 远程 HTTP
+   *  实现不提供, Settings 按钮以此方法存在性判断是否渲染。saved=false 表示用户取消。 */
+  exportDiagnostics?(): Promise<{ saved: boolean; path?: string }>
 }
 
 // ---- Sprint 6 §2.2 — calendar (recurring meeting) surface -----------------

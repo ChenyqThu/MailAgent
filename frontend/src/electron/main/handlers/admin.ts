@@ -13,7 +13,9 @@
 // gets the structured `{ ok, data | code+message+hint }` shape that
 // survives the IPC boundary (Sprint 5 §2.2 envelope contract).
 
-import { ipcMain } from 'electron'
+import { app, dialog, ipcMain } from 'electron'
+import { copyFileSync, rmSync } from 'fs'
+import { basename, dirname } from 'path'
 
 import { callCli } from '../cli_runner'
 import { getDb } from '../db'
@@ -341,11 +343,75 @@ export function runSystemAlerts(): SystemAlertsData {
   }
 }
 
+// ── E4 §4.2 — 诊断包导出 (本地 Electron 专属) ────────────────────────────────
+//
+// fork `mailagent admin export-diagnostics` (读命令, 无 auth) 在 tmp 组装 zip
+// (近 7 天日志 + 脱敏配置快照 + health/db_check/manifest), 前端拿 zip_path 后弹保存
+// 对话框: 用户确认则 copy 到目标 + 清 tmp, 取消则直接清 tmp。quick_check 最坏 24s×2
+// (sync_store + agent_config), 故 callCli timeout 放大到 3min (远超默认 60s)。远程
+// web 不走此路 (HttpAdminApi 不实现 exportDiagnostics, AdminApi 该方法为 optional)。
+
+const DIAGNOSTICS_TIMEOUT_MS = 180_000
+
+export interface ExportDiagnosticsResult {
+  /** True when the user picked a save location and the zip was copied there. */
+  saved: boolean
+  /** Absolute path the zip was saved to (only when saved=true). */
+  path?: string
+}
+
+interface DiagnosticsCliData {
+  zip_path?: string
+  size_bytes?: number
+  entry_count?: number
+  skipped?: string[]
+}
+
+/** tmp zip 落在 Python `tempfile.mkdtemp()` 目录下 (该目录只含这一个 zip) → 删掉整个
+ *  临时目录即完整清理, best-effort (失败交给 OS tmp 回收)。 */
+function cleanupDiagnosticsTmp(zipPath: string): void {
+  try {
+    rmSync(dirname(zipPath), { recursive: true, force: true })
+  } catch {
+    /* 清理失败无所谓 — OS tmp 最终回收 */
+  }
+}
+
+export async function runExportDiagnostics(): Promise<ExportDiagnosticsResult> {
+  const data = (await callCli(['admin', 'export-diagnostics', '--app-version', app.getVersion()], {
+    timeoutMs: DIAGNOSTICS_TIMEOUT_MS
+  })) as DiagnosticsCliData
+  const zipPath = data?.zip_path
+  if (typeof zipPath !== 'string' || zipPath.length === 0) {
+    throw new Error('export-diagnostics 未返回 zip_path')
+  }
+  const result = await dialog.showSaveDialog({
+    title: '保存诊断包',
+    defaultPath: basename(zipPath),
+    filters: [{ name: 'Zip Archive', extensions: ['zip'] }]
+  })
+  if (result.canceled || !result.filePath) {
+    // 用户取消 → 清理 tmp zip, 不当错误。
+    cleanupDiagnosticsTmp(zipPath)
+    return { saved: false }
+  }
+  try {
+    copyFileSync(zipPath, result.filePath)
+  } finally {
+    cleanupDiagnosticsTmp(zipPath)
+  }
+  return { saved: true, path: result.filePath }
+}
+
 export function registerAdminHandlers(): void {
   ipcMain.handle('admin:health', async (): Promise<AdminHealthData> => runAdminHealth())
   ipcMain.handle('admin:stats', async (): Promise<AdminStatsData> => runAdminStats())
   ipcMain.handle('admin:davmailHealth', async (): Promise<DavMailHealthData> => runDavmailHealth())
   ipcMain.handle('admin:systemAlerts', async (): Promise<SystemAlertsData> => runSystemAlerts())
+  ipcMain.handle(
+    'admin:exportDiagnostics',
+    async (): Promise<ExportDiagnosticsResult> => runExportDiagnostics()
+  )
   ipcMain.handle(
     'admin:deadLetterList',
     async (_evt, opts: DeadLetterListOpts = {}): Promise<DeadLetterItem[]> => {
@@ -374,6 +440,7 @@ export const __testing = {
   runDeadLetterList,
   runDeadLetterRetry,
   runCleanupDeadLetter,
+  runExportDiagnostics,
   envelopeFromCli,
   ensureInternalId
 }
