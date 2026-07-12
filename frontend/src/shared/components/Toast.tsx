@@ -77,13 +77,23 @@ function ToastCard({ toast, exiting, onExited, onDismiss }: CardProps): React.Re
           onExited()
           return
         }
-        gsap.to(el, { autoAlpha: 0, x: 16, duration: DUR.fast, onComplete: onExited })
+        gsap.to(el, {
+          autoAlpha: 0,
+          x: 16,
+          duration: DUR.fast,
+          overwrite: 'auto',
+          onComplete: onExited
+        })
       } else {
         if (reduce) {
           gsap.set(el, { clearProps: 'opacity,visibility,transform' })
           return
         }
-        gsap.from(el, { autoAlpha: 0, x: 16, duration: DUR.base, clearProps: 'transform' })
+        gsap.fromTo(
+          el,
+          { autoAlpha: 0, x: 16 },
+          { autoAlpha: 1, x: 0, duration: DUR.base, clearProps: 'transform', overwrite: 'auto' }
+        )
       }
     },
     { dependencies: [exiting, reduce], scope: rootRef }

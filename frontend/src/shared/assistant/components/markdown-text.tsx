@@ -54,7 +54,12 @@ export function ReasoningText({ text, status }: ReasoningMessagePartProps): Reac
         gsap.set(el, { height: shown ? 'auto' : 0, opacity: shown ? 1 : 0 })
         return
       }
-      gsap.to(el, { height: shown ? 'auto' : 0, opacity: shown ? 1 : 0, duration: DUR.base })
+      gsap.to(el, {
+        height: shown ? 'auto' : 0,
+        opacity: shown ? 1 : 0,
+        duration: DUR.base,
+        overwrite: 'auto'
+      })
     },
     { dependencies: [shown, reduce] }
   )
