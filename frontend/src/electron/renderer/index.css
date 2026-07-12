@@ -151,7 +151,7 @@
   /* 主题 v3/C9 — AI-strip 优先级色与旗标 done 绿自 2026-07-12 起**直接消费
    * 上方 --c-* AA token**（owner 拍板方案 A 归一）：Sprint 3 写死 hex 与
    * Sprint 4 a11y 调过的 --c-* 是两支从未合流的分叉（strip 单值不分亮暗，
-   * 亮色底上对比度普遍 2-3:1）；批 3 曾按零视觉收编为 --strip-*/--flag-done
+   * 亮色底上对比度普遍 2-3:1）；批 3 曾按零视觉收编为 --strip-* 与 --flag-done
    * 专用变量留档，归一后已删。对照表存档：docs/plans/theme-v3-native-material
    * README §7 实录第 5 条 + commit 739b8771。 */
 
