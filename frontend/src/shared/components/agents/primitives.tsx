@@ -43,6 +43,7 @@ import {
 } from 'lucide-react'
 
 import type { ReportCadence, ReportStatus, ReportTone } from '@shared/api/types'
+import { useReducedMotion } from '@shared/hooks/useReducedMotion'
 import { STATUS_META, toneAlpha, toneColor } from './lib'
 
 // 设计稿 icon name → lucide 组件。
@@ -218,6 +219,7 @@ export function Switch({
   const w = size === 'sm' ? 34 : 40
   const h = size === 'sm' ? 20 : 23
   const k = h - 6
+  const reduce = useReducedMotion()
   return (
     <button
       type="button"
@@ -234,20 +236,21 @@ export function Switch({
         position: 'relative',
         flexShrink: 0,
         background: on ? 'rgb(var(--c-accent))' : 'rgb(var(--ink-5))',
-        transition: 'background 180ms'
+        transition: reduce ? 'none' : 'background 120ms cubic-bezier(0.4,0,0.2,1)'
       }}
     >
       <span
         style={{
           position: 'absolute',
           top: 3,
-          left: on ? w - k - 3 : 3,
+          left: 3,
           width: k,
           height: k,
           borderRadius: '50%',
           background: 'rgb(var(--c-accent-fg))',
           boxShadow: '0 1px 2px rgba(0,0,0,0.3)',
-          transition: 'left 180ms cubic-bezier(0.4,0,0.2,1)'
+          transform: on ? `translateX(${w - k - 6}px)` : 'translateX(0)',
+          transition: reduce ? 'none' : 'transform 120ms cubic-bezier(0.4,0,0.2,1)'
         }}
       />
     </button>

@@ -127,7 +127,7 @@ export function AgentThreadList(props: AgentThreadListProps): React.ReactElement
         fluid
           ? 'w-full'
           : cn(
-              'border-r border-ink-border transition-[width] duration-200',
+              'border-r border-ink-border transition-[width] duration-base ease-standard motion-reduce:transition-none',
               isRail ? 'w-12' : 'w-[260px]'
             )
       )}
