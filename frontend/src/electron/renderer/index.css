@@ -147,6 +147,20 @@
   --c-info: 184 214 244;
   --c-ai: 224 196 244;
 
+  /* 主题 v3/C9 批 3 — hex 收编（视觉零变化机械批，README §2.3/§3-8/9）。
+   * AI-strip 优先级色 (.email-row[data-priority=X] .pname/.pdot) 与旗标
+   * done 绿是 Sprint 3 时代遗留的写死值，逐色核对后与上方 --c-crit 等
+   * token 的当前值（含亮/暗两档）均不等——上方注释里 Sprint 4 a11y 调整
+   * 只改了 --c-* token 本身，这两处从未跟着迁移。为保证本批零渲染变化，
+   * 不强行复用 --c-*，改为新建专用变量，值逐字照抄原 hex（十进制 RGB
+   * triplet，供 rgb(var(--x)) / rgb(var(--x) / a) 消费）。 */
+  --strip-crit: 229 99 79; /* 原 #e5634f，即 --c-crit 当前 248 144 124(暗)/138 36 22(亮) */
+  --strip-urg: 232 155 74; /* 原 #e89b4a，即 --c-urg 当前 252 188 116(暗)/122 64 12(亮) */
+  --strip-impt: 212 165 61; /* 原 #d4a53d，即 --c-impt 当前 242 208 116(暗)/96 68 14(亮) */
+  --strip-norm: 122 127 138; /* 原 #7a7f8a，即 --c-norm 当前 192 198 210(暗)/54 60 72(亮) */
+  --strip-low: 90 94 104; /* 原 #5a5e68，即 --c-low 当前 174 180 194(暗)/38 42 50(亮) */
+  --flag-done: 93 186 140; /* 原 #5dba8c，即 --c-ok 当前 152 232 192(暗)/26 96 60(亮)，不等 */
+
   /* ── 主题 v2 — 「一块玻璃」材质 token (theme-v2.css §root 照搬) ─────
    * v1 的 --glass/--glass-lg (28/40px 全屏 blur) 永久退役: OS vibrancy/
    * acrylic 扛唯一一层重模糊, CSS 只画 tint + 氛围光; 面板差异只来自
@@ -1556,26 +1570,44 @@ body::before {
     0 1px 2px rgba(0, 0, 0, 0.25);
   user-select: none;
 }
+/* 主题 v3/C9 批 3 — 头像渐变 hex 收编（README §2.3/§3-9，视觉零变化）。
+ * 14 个端点值逐字照抄自上面的写死 hex，仅间接化成变量，渐变角度/结构不动。 */
+:root {
+  --avatar-1a: #6fa8dc;
+  --avatar-1b: #4a78e5;
+  --avatar-2a: #b58cdb;
+  --avatar-2b: #8060c0;
+  --avatar-3a: #e89b4a;
+  --avatar-3b: #c77b3a;
+  --avatar-4a: #5dba8c;
+  --avatar-4b: #3d8a6c;
+  --avatar-5a: #e5634f;
+  --avatar-5b: #c04e3a;
+  --avatar-6a: #db5b7c;
+  --avatar-6b: #b0405e;
+  --avatar-ext-a: #8c95a3;
+  --avatar-ext-b: #5a6172;
+}
 .avatar-1 {
-  background: linear-gradient(135deg, #6fa8dc, #4a78e5);
+  background: linear-gradient(135deg, var(--avatar-1a), var(--avatar-1b));
 }
 .avatar-2 {
-  background: linear-gradient(135deg, #b58cdb, #8060c0);
+  background: linear-gradient(135deg, var(--avatar-2a), var(--avatar-2b));
 }
 .avatar-3 {
-  background: linear-gradient(135deg, #e89b4a, #c77b3a);
+  background: linear-gradient(135deg, var(--avatar-3a), var(--avatar-3b));
 }
 .avatar-4 {
-  background: linear-gradient(135deg, #5dba8c, #3d8a6c);
+  background: linear-gradient(135deg, var(--avatar-4a), var(--avatar-4b));
 }
 .avatar-5 {
-  background: linear-gradient(135deg, #e5634f, #c04e3a);
+  background: linear-gradient(135deg, var(--avatar-5a), var(--avatar-5b));
 }
 .avatar-6 {
-  background: linear-gradient(135deg, #db5b7c, #b0405e);
+  background: linear-gradient(135deg, var(--avatar-6a), var(--avatar-6b));
 }
 .avatar-ext {
-  background: linear-gradient(135deg, #8c95a3, #5a6172);
+  background: linear-gradient(135deg, var(--avatar-ext-a), var(--avatar-ext-b));
 }
 body[data-batch-mode='true'] .email-row > .avatar {
   display: none;
@@ -1768,10 +1800,10 @@ body:not([data-batch-mode='true']) .email-row .cb {
   background-color: rgb(var(--c-accent) / 0.1);
 }
 .email-row[data-flag='done'] {
-  background-color: rgba(93, 186, 140, 0.05);
+  background-color: rgb(var(--flag-done) / 0.05);
 }
 .email-row[data-flag='done']:hover {
-  background-color: rgba(93, 186, 140, 0.1);
+  background-color: rgb(var(--flag-done) / 0.1);
 }
 .email-row[data-flag='done'] .subject-text {
   color: rgb(var(--ink-fg-2));
@@ -1842,7 +1874,7 @@ body:not([data-batch-mode='true']) .email-row .cb {
   fill: currentColor;
 }
 .ricon-flag[data-flag-state='2'] {
-  color: #5dba8c;
+  color: rgb(var(--flag-done));
   opacity: 1;
 }
 /* Pin — pressed = accent (主题 v2: 原写死钴蓝 #4a78e5, 改跟主题色;
@@ -1959,42 +1991,42 @@ body:not([data-batch-mode='true']) .email-row .cb {
   color: #e36262;
 }
 .ai-strip .ai-done {
-  color: #5dba8c;
+  color: rgb(var(--flag-done));
 }
 .email-row[data-priority='crit'] .pname,
 .email-row[data-priority='crit'] .pdot {
-  color: #e5634f;
+  color: rgb(var(--strip-crit));
 }
 .email-row[data-priority='crit'] .pdot {
-  background: #e5634f;
+  background: rgb(var(--strip-crit));
 }
 .email-row[data-priority='urg'] .pname,
 .email-row[data-priority='urg'] .pdot {
-  color: #e89b4a;
+  color: rgb(var(--strip-urg));
 }
 .email-row[data-priority='urg'] .pdot {
-  background: #e89b4a;
+  background: rgb(var(--strip-urg));
 }
 .email-row[data-priority='impt'] .pname,
 .email-row[data-priority='impt'] .pdot {
-  color: #d4a53d;
+  color: rgb(var(--strip-impt));
 }
 .email-row[data-priority='impt'] .pdot {
-  background: #d4a53d;
+  background: rgb(var(--strip-impt));
 }
 .email-row[data-priority='norm'] .pname,
 .email-row[data-priority='norm'] .pdot {
-  color: #7a7f8a;
+  color: rgb(var(--strip-norm));
 }
 .email-row[data-priority='norm'] .pdot {
-  background: #7a7f8a;
+  background: rgb(var(--strip-norm));
 }
 .email-row[data-priority='low'] .pname,
 .email-row[data-priority='low'] .pdot {
-  color: #5a5e68;
+  color: rgb(var(--strip-low));
 }
 .email-row[data-priority='low'] .pdot {
-  background: #5a5e68;
+  background: rgb(var(--strip-low));
 }
 
 /* ─── Group header — sticky date divider above row clusters ─────────── */
@@ -2284,7 +2316,7 @@ body:not([data-batch-mode='true']) .email-row .cb {
   width: 5px;
   height: 5px;
   border-radius: 50%;
-  background: #5dba8c;
+  background: rgb(var(--flag-done));
   flex-shrink: 0;
 }
 .ai-tool-row .dot-run {
