@@ -4073,7 +4073,9 @@ body:not([data-batch-mode='true']) .email-row .cb {
   background: transparent;
   border: 1px solid rgb(var(--c-accent) / 0.55);
   cursor: pointer;
-  transition: all 0.12s;
+  transition:
+    background 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+    border-color 0.12s cubic-bezier(0.4, 0, 0.2, 1);
   font-family: inherit;
 }
 .undo-btn:hover {
@@ -4136,7 +4138,9 @@ body:not([data-batch-mode='true']) .email-row .cb {
   border-radius: 5px;
   color: rgb(var(--ink-fg-3));
   cursor: default;
-  transition: all 0.12s;
+  transition:
+    background 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+    color 0.12s cubic-bezier(0.4, 0, 0.2, 1);
   border: 0;
   background: transparent;
   padding: 0;
@@ -4776,7 +4780,7 @@ body:not([data-batch-mode='true']) .email-row .cb {
 /* AI 思考态多段 phrase 轮播（ThinkingPhrases.tsx）：切换时 fade + 上移 enter（opacity/
    transform 合成器属性，合成层内可靠）。reduce 下由下方 @media 关闭。 */
 .thinking-phrases { display: inline-block; }
-.thinking-phrases-item { animation: phrase-in 0.34s ease both; }
+.thinking-phrases-item { animation: phrase-in 0.22s cubic-bezier(0.4, 0, 0.2, 1) both; }
 @keyframes phrase-in { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes chat-think-blink { 50% { opacity: 0; } }
 .think-caret {

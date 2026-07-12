@@ -346,7 +346,7 @@ function UpdaterSubsection(): React.ReactElement {
         <Row label={t('settings.update.downloading')}>
           <div className="w-[260px] h-2 rounded-full bg-ink-3 overflow-hidden">
             <div
-              className="h-full bg-coral/100 transition-all"
+              className="h-full bg-coral/100 transition-[width] duration-base ease-standard"
               style={{ width: `${Math.max(0, Math.min(100, status.downloadPercent))}%` }}
             />
           </div>

@@ -36,7 +36,7 @@ export function ChatModalFab(): React.JSX.Element | null {
       <span
         className={cn(
           'mr-2 flex max-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap rounded-full',
-          'text-meta text-ink-fg-1 opacity-0 transition-all duration-base ease-standard',
+          'text-meta text-ink-fg-1 opacity-0 transition-[max-width,padding,opacity,box-shadow,background-color] duration-base ease-standard',
           'group-hover:max-w-[16rem] group-hover:bg-ink-2 group-hover:px-3 group-hover:py-1.5',
           'group-hover:opacity-100 group-hover:shadow-md motion-reduce:transition-none'
         )}

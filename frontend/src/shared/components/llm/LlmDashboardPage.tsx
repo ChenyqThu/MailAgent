@@ -188,7 +188,10 @@ function CacheGauge({ pct }: { pct: number }): React.ReactElement {
       </div>
       <div className="h-2 rounded bg-ink-fg/10 overflow-hidden">
         <div
-          className={cn('h-full transition-all duration-fast', color)}
+          className={cn(
+            'h-full transition-[width,background-color] duration-fast ease-standard',
+            color
+          )}
           style={{ width: `${clamped}%` }}
         />
       </div>
