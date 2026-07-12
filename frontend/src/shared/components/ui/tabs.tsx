@@ -41,7 +41,7 @@ export const TabsTrigger = React.forwardRef<
   <TabsPrimitive.Trigger
     ref={ref}
     className={cn(
-      'relative inline-flex items-center whitespace-nowrap rounded-md',
+      'relative inline-flex items-center whitespace-nowrap rounded-[var(--r-ctl)]',
       // Sprint 18 review — 默认 font-normal, 选中态才加 font-medium. 旧版
       // 全 font-medium 让 SettingsRail 的 8 个 tab 都看起来加粗, 跟主
       // Sidebar 风格不一致 (Sidebar 默认 font-normal, selected 才 medium).

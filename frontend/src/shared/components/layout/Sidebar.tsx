@@ -137,7 +137,7 @@ function NavRow({
         tabIndex={-1}
         data-disabled="true"
         className={cn(
-          'row relative w-full flex items-center gap-2.5 px-2 py-1 rounded-md',
+          'row relative w-full flex items-center gap-2.5 px-2 py-1 rounded-[var(--r-ctl)]',
           'text-body text-left text-ink-fg-1 opacity-50 cursor-not-allowed'
         )}
       >
@@ -157,7 +157,7 @@ function NavRow({
       onFocus={() => setIconActive(true)}
       onBlur={() => setIconActive(false)}
       className={cn(
-        'row relative w-full flex items-center gap-2.5 px-2 py-1 rounded-md',
+        'row relative w-full flex items-center gap-2.5 px-2 py-1 rounded-[var(--r-ctl)]',
         'text-body text-left transition-colors duration-fast',
         // 主题 v2 — 选中行从 ink-4 平涂换 .acc-select accent wash
         // (左光条由 .row-selected::before 提供)。

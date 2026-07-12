@@ -118,7 +118,7 @@ function SidebarFolderRow({
           // 缩进用 paddingLeft (depth*14); 收起态 CSS 用 padding-inline 覆盖, 缩进自然消失。
           style={depth > 0 ? { paddingLeft: `${8 + depth * 14}px` } : undefined}
           className={cn(
-            'row relative w-full flex items-center gap-2.5 px-2 py-1 rounded-md',
+            'row relative w-full flex items-center gap-2.5 px-2 py-1 rounded-[var(--r-ctl)]',
             'text-body text-left transition-colors duration-fast',
             isDisabled
               ? 'opacity-50 cursor-not-allowed text-ink-fg-2'
@@ -302,7 +302,7 @@ export function SidebarFolderTree(): React.ReactElement | null {
         <button
           type="button"
           onClick={() => setShowAll((s) => !s)}
-          className="row w-full flex items-center gap-2.5 px-2 py-1 rounded-md text-body text-left text-ink-fg-2 hover:bg-ink-3 hover:text-ink-fg active:bg-ink-4 transition-colors duration-fast"
+          className="row w-full flex items-center gap-2.5 px-2 py-1 rounded-[var(--r-ctl)] text-body text-left text-ink-fg-2 hover:bg-ink-3 hover:text-ink-fg active:bg-ink-4 transition-colors duration-fast"
         >
           {showAll ? (
             <ChevronDown size={13} strokeWidth={2} className="shrink-0 rotate-180" />

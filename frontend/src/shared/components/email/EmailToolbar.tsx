@@ -203,7 +203,7 @@ function GhostBtn({
       data-disabled={isDisabled ? '' : undefined}
       tabIndex={isDisabled ? -1 : 0}
       className={cn(
-        'flex items-center gap-1.5 px-2 py-1.5 rounded-md text-aux',
+        'flex items-center gap-1.5 px-2 py-1.5 rounded-[var(--r-ctl)] text-aux',
         'transition-colors duration-fast',
         // active 态填充色走主题 accent (text-coral → --c-accent), 不再用固定
         // 语义色 text-urg (--c-urg 不随 accent 主题切换, 用户验收: 与 UI 规范不符)。
@@ -274,7 +274,7 @@ function PrimaryBtn({
       disabled={isDisabled}
       aria-label={label}
       className={cn(
-        'flex items-center justify-center rounded-md',
+        'flex items-center justify-center rounded-[var(--r-ctl)]',
         padClass,
         'text-aux font-medium transition-colors duration-fast',
         'disabled:opacity-70 disabled:cursor-not-allowed',
@@ -357,7 +357,7 @@ function ComposeSplitButton({
 
   return (
     <div ref={wrapRef} className="relative flex items-center">
-      <div className="flex items-stretch btn-cta rounded-md overflow-hidden">
+      <div className="flex items-stretch btn-cta rounded-[var(--r-ctl)] overflow-hidden">
         {/* Primary action — reply. */}
         <button
           type="button"
@@ -468,7 +468,7 @@ function IconOnlyBtn({
       data-disabled={isDisabled ? '' : undefined}
       tabIndex={isDisabled ? -1 : 0}
       className={cn(
-        'p-1.5 rounded transition-colors duration-fast',
+        'p-1.5 rounded-[var(--r-ctl)] transition-colors duration-fast',
         active
           ? 'text-coral bg-coral/10 hover:bg-coral/15'
           : 'text-ink-fg-2 hover:text-ink-fg hover:bg-ink-4',
@@ -517,7 +517,7 @@ function TranslateButton({
       onBlur={() => setIconActive(false)}
       aria-label={label}
       className={cn(
-        'flex items-center gap-1 px-2 py-1.5 rounded-md text-aux',
+        'flex items-center gap-1 px-2 py-1.5 rounded-[var(--r-ctl)] text-aux',
         'transition-colors duration-fast',
         isError
           ? 'text-fail hover:bg-fail/10'
@@ -745,7 +745,7 @@ export function EmailToolbar({
           type="button"
           onClick={onBack}
           aria-label={t('toolbar.backToList', { defaultValue: '返回列表' })}
-          className="lg:hidden shrink-0 p-1.5 -ml-0.5 mr-0.5 rounded text-ink-fg-2 hover:text-ink-fg hover:bg-ink-4 transition-colors duration-fast"
+          className="lg:hidden shrink-0 p-1.5 -ml-0.5 mr-0.5 rounded-[var(--r-ctl)] text-ink-fg-2 hover:text-ink-fg hover:bg-ink-4 transition-colors duration-fast"
         >
           <ArrowLeft size={16} strokeWidth={2} />
         </button>
@@ -834,7 +834,7 @@ export function EmailToolbar({
             role="img"
             aria-label={t('toolbar.important')}
             data-disabled=""
-            className="grid place-items-center w-7 h-7 rounded-md text-impt cursor-default"
+            className="grid place-items-center w-7 h-7 rounded-[var(--r-ctl)] text-impt cursor-default"
           >
             <AlertCircle size={13} strokeWidth={2} />
           </span>

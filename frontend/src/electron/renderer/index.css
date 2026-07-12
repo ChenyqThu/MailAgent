@@ -971,24 +971,12 @@ body::before {
  * 不要反过来内缩 wash (会把左侧圆角切成 hard edge)。 */
 /* 设置 rail 的 Radix Tabs (vertical) 选中行与主菜单同语言 (round 8) —
  * selector 并入下方各配方, data-state 挂不了类只能属性选择。tabs.tsx
- * 的 v1 bg-ink-4 灰白平涂已删。 */
+ * 的 v1 bg-ink-4 灰白平涂已删。主题 v3/C5 — wash 收编到 --sel-wash token
+ * (与 EmailRow/.email-row.is-selected 同一配方, 跨视图选中签名一致;
+ * 亮/暗档由 token 自身按 data-theme 切, 无需单独 light 覆盖)。 */
 .acc-select,
 [data-orientation='vertical'] [role='tab'][data-state='active'] {
-  background: linear-gradient(
-    90deg,
-    rgb(var(--c-accent) / 0.13),
-    rgb(var(--c-accent) / 0.035) 55%,
-    transparent 85%
-  );
-}
-:root[data-theme='light'] .acc-select,
-:root[data-theme='light'] [data-orientation='vertical'] [role='tab'][data-state='active'] {
-  background: linear-gradient(
-    90deg,
-    rgb(var(--c-accent) / 0.12),
-    rgb(var(--c-accent) / 0.03) 55%,
-    transparent 85%
-  );
+  background: var(--sel-wash);
 }
 [data-orientation='vertical'] [role='tab'] {
   position: relative;
@@ -1813,7 +1801,7 @@ body:not([data-batch-mode='true']) .email-row .cb {
   border: 0;
   padding: 0;
   cursor: pointer;
-  border-radius: 5px;
+  border-radius: var(--r-ctl);
   /* §8 对齐: flag/pin 三态 color/opacity 过渡补 standard 曲线（原缺显式曲线
      用默认 ease）。CSS 过渡比 GSAP 更省，且免去虚拟列表内 tween 随 unmount
      kill 的复杂度（§4.1/§4.3.1）。 */
@@ -1896,7 +1884,7 @@ body:not([data-batch-mode='true']) .email-row .cb {
   bottom: 6px;
   width: 26px;
   height: 26px;
-  border-radius: 6px;
+  border-radius: var(--r-ctl);
   color: rgb(var(--ink-fg-1));
   /* 主题 v2 — 非浮层去 blur (红线: blur 只留真浮层), alpha 提到 0.97 遮底 */
   background: rgb(var(--ink-2) / 0.97);
