@@ -14,7 +14,7 @@ GSAP 在本项目的角色 = **在 §8 克制约束内把该有的动画做对**
 |---|---|
 | 时长 | 只用 `DUR.fast=0.12` / `base=0.22` / `slow=0.38`（120/220/380ms）。不发明第四档。倒计时类（如 undo 5s）例外——那是功能计时，非 UI 过渡。 |
 | 曲线 | 只用 `standard`（CustomEase `0.4,0,0.2,1`）。`gsap.defaults` 已设默认，组件不传 ease 即合规。禁散落 `power*` / 裸 cubic-bezier。进度条倒计时用 `ease:'none'`（线性，非 UI 曲线）。 |
-| 禁止 | spring / bounce / elastic / overshoot（ease 不含 `back/elastic/bounce`）、parallax、scroll-jacking、confetti、particle。 |
+| spring 白名单 | 禁止业务代码内联 spring 参数；仅可从 `@shared/lib/motion-tokens` import 五个预设：`SPRING_PRESS`（按钮/可点击表面按压）、`SPRING_SWAP`（控件内部标签/图标切换）、`SPRING_PANEL`（显式召出的模态/抽屉）、`SPRING_LAYOUT`（pill/indicator/panel shared-layout 位移）、`SPRING_MOUSE`（magnetic/tilt/dock 装饰性鼠标跟随）。白名单外仍禁 spring / bounce / elastic / overshoot（ease 不含 `back/elastic/bounce`）、parallax、scroll-jacking、confetti、particle。 |
 | 淡入淡出 | 一律 `autoAlpha`（隐藏时自动 `visibility:hidden`，不挡点击），不用裸 `opacity`。 |
 | 虚拟列表 | `EmailList`（react-window v2）行内动画**只 transform/autoAlpha，绝不动 height**；tween 必随 unmount kill（用 `useGSAP({scope})`）。 |
 | Radix 托管 | `ui/dialog` / `ui/select` / `ui/tooltip` 已用 `tailwindcss-animate`，**不叠加 GSAP**。`ui/tabs`/`switch`/`radio`/`slider` 无内置动画，可安全集成。 |
@@ -155,8 +155,8 @@ loading 不该成为视觉焦点。**loading 只用三个词汇**（2026-06-13 �
 | reduced-motion | `useReducedMotion()`（`motion/react`），reduce 渲染静态分支 | `useReducedMotion()`（`src/shared/hooks`），reduce `duration:0`/return |
 
 **边界规则（违反即返工）**：
-1. **motion 只用于 icon / effect，绝不接管 overlay / 布局** —— 那是 GSAP 地盘。新 overlay 仍走 `useExitAnimation`，不用 motion 的 `AnimatePresence`。
-2. **motion 默认 transition 是 spring，直接违反 §1 禁 spring/bounce 红线** —— 所有 motion 动画必须显式传 `transition={{ type:'tween', duration:0.12, ease:[0.4,0,0.2,1] }}`（复刻 standard 曲线，不发明第四档）。lucide-animated 源码落地时逐个改掉默认 spring。code review grep `spring`/`stiffness`/`damping` 应为零。
+1. **motion 默认只用于 icon / effect，不接管通用 overlay / 布局** —— 通用 overlay 仍走 GSAP `useExitAnimation`。**浮层豁免面**仅限「beui 收编组件登记表」中明确登记的共享组件；这些组件可用 `AnimatePresence` + `SPRING_PANEL`，业务调用点不得自行复制实现。
+2. **motion 默认 transition 是 spring，禁止吃默认值或内联参数** —— tween 显式复用获批曲线；spring 只能 import `@shared/lib/motion-tokens` 的 §1 五预设，并严格按用途使用。code review grep `stiffness`/`damping` 应只命中 token 文件。
 3. **图标动画只动形状、不引入颜色** —— svg 用 `currentColor`，颜色仍由 className（`text-coral` 等）控制。
 4. **effect 的曲线/时长复用 §1 三档 + standard**，不另立第四档。Border Glow 是 authored CSS（写进 `index.css`，绕开 lint 的 hex/gradient/shadow 红线，用 `rgb(var(--c-accent)/…)`）；Strands 是 ogl WebGL。
 
@@ -180,3 +180,9 @@ loading 不该成为视觉焦点。**loading 只用三个词汇**（2026-06-13 �
 时长仍贴 §1 三档：fast 120 / base 220 / slow 380（tailwind duration token 同源，不发明第四档）。新代码禁 `ease-in` / `transition: all` / 回弹（bounce / overshoot），与 §1 红线一致。
 
 **与 GSAP 的边界（重要，勿混用）**：这两个 token 只服务 **CSS transition**。GSAP 的 `standard` 曲线（CustomEase `0.4,0,0.2,1`，§1 / §2）**不动** —— 既有 GSAP 编排全部保留、**不迁移**到 v3 曲线。即 authored-CSS 过渡走 v3 token、命令式 GSAP tween 走 standard，两套曲线并存、各管各的（同 §10 motion×GSAP 职责分离的精神）。此分工的 DESIGN.md 侧记录见 §8 末尾 + §18。
+
+## beui 收编组件登记表
+
+| 组件 | 收编来源 | motion 用途 | spring 预设 | 边界 |
+|---|---|---|---|---|
+| `ui/drawer.tsx` | beui.dev `drawer.tsx`（MIT） | 抽屉面板进退场；backdrop 使用 `EASE_OUT` tween | `SPRING_PANEL` | 仅共享 Drawer 内部使用；业务抽屉只组合内容，不复制 `AnimatePresence` 或 spring 参数。 |
