@@ -11,7 +11,7 @@
 //   │ AI summary, 2-3 lines, coral-tinted hero strip                  │
 //   ├─────────────────────────────────────────────────────────────────┤
 //   │ ✎ Reply Suggestion                                              │
-//   │ Markdown draft, dashed accent border, copy-to-clipboard          │
+//   │ Markdown draft, accent-tinted strip (v3: 无内圈 ring), copy      │
 //   ├─────────────────────────────────────────────────────────────────┤
 //   │ Priority · Action · Sender · Category · Project · Urgency       │
 //   │ (3-col grid, mockup divider style)                              │
@@ -236,11 +236,11 @@ function ReplyDraftHero({
 
   return (
     <div
+      // 主题 v3 tweak (2026-07-12 owner 实机 review): 去掉原 inset 1px accent
+      // ring — 它贴着外层 .ai-fields 卡边框叠成「双重边框」, 比 SUMMARY 区显厚。
+      // 区块身份只靠 accent 底色 + coral 标题表达。
       className="aif-reply px-4 py-2.5 border-b border-ink-border"
-      style={{
-        background: 'rgb(var(--c-accent) / 0.04)',
-        boxShadow: 'inset 0 0 0 1px rgb(var(--c-accent) / 0.12)'
-      }}
+      style={{ background: 'rgb(var(--c-accent) / 0.04)' }}
     >
       <div className={cn('flex items-center gap-2', !collapsed && 'mb-1')}>
         {/* Whole title strip is a single click target — chevron + icon +

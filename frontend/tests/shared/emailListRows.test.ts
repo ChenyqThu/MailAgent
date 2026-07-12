@@ -507,7 +507,7 @@ describe('flattenGroups', () => {
     expect(child.thread).toEqual({ isHead: false, threadId: 't1' })
   })
 
-  test('bundleSelected lights the WHOLE bundle whether activeId hits the head or a child', () => {
+  test('主题 v3 — expanded thread: only the row activeId hits is selected, not the whole bundle', () => {
     const buckets = emptyBuckets()
     buckets.today = [
       {
@@ -518,15 +518,33 @@ describe('flattenGroups', () => {
       },
       soloGroup(em({ internal_id: 5 }))
     ]
-    // activeId = child id 2 → head row AND child row both selected; the
-    // unrelated solitary row stays unselected.
+    // activeId = child id 2, thread expanded → ONLY the child row selected;
+    // head and the unrelated solitary row stay unselected (2026-07-12 owner
+    // 实机 review: 整 bundle 连坐高亮取消).
     const rows = flattenGroups(buckets, LABELS, notCollapsed, (tid) => tid === 't1', 2, false)
     const emails = rows.filter((r): r is Extract<ListRow, { type: 'email' }> => r.type === 'email')
     expect(emails.map((r) => [r.email.internal_id, r.bundleSelected])).toEqual([
-      [1, true],
+      [1, false],
       [2, true],
       [5, false]
     ])
+  })
+
+  test('主题 v3 — collapsed thread head stands in for a hidden selected child', () => {
+    const buckets = emptyBuckets()
+    buckets.today = [
+      {
+        threadId: 't1',
+        head: em({ internal_id: 1 }),
+        children: [em({ internal_id: 2 })],
+        anchorDate: null
+      }
+    ]
+    // activeId = child id 2 but the thread is COLLAPSED → the head row (the
+    // only visible representative of the bundle) carries the selection.
+    const rows = flattenGroups(buckets, LABELS, notCollapsed, notExpanded, 2, false)
+    const emails = rows.filter((r): r is Extract<ListRow, { type: 'email' }> => r.type === 'email')
+    expect(emails.map((r) => [r.email.internal_id, r.bundleSelected])).toEqual([[1, true]])
   })
 
   test('a solitary row is bundleSelected when activeId matches its head', () => {

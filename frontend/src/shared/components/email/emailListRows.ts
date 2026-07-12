@@ -36,10 +36,11 @@ export type ListRow =
       email: EnrichedEmailMeta
       groupKey: GroupKey
       thread?: ThreadRowInfo
-      /** Sprint 14 round 11 — true when the active email is part of
-       *  this row's thread bundle (head + every child).  Drives both
-       *  the wrapper selected wash and the coral accent bar so the
-       *  whole bundle reads as one selection unit. */
+      /** 主题 v3 (2026-07-12) — true only for the row activeId actually
+       *  hits (head or child), driving the selected wash pill.  Sole
+       *  exception: a COLLAPSED thread head is selected when activeId is
+       *  one of its hidden children (the head stands in for the bundle).
+       *  Historical name kept — pre-v3 it lit the whole bundle. */
       bundleSelected: boolean
     }
   | { type: 'loader' }
@@ -393,12 +394,14 @@ export function flattenGroups(
     for (const g of groupArr) {
       const isThreadHead = g.threadId !== null && g.children.length > 0
       const expanded = isThreadHead ? isThreadExpanded(g.threadId!) : false
-      // bundleSelected — does activeId belong anywhere in this thread?
-      // For solitary rows we still set it from the head id so the same
-      // wrapper chrome (wash + accent bar) covers solitary selections.
+      // bundleSelected — 主题 v3 tweak (2026-07-12 owner 实机 review): 只高亮
+      // activeId 命中的那一行, 不再整个 bundle 连坐。唯一例外: 线程**折叠**且
+      // activeId 是折叠里的 child 时, head 行代表整个 bundle 高亮 (否则选中态
+      // 在列表里不可见)。展开态下 head/child 各自严格按 internal_id 匹配。
       const bundleSelected =
         activeId !== null &&
-        (g.head.internal_id === activeId || g.children.some((c) => c.internal_id === activeId))
+        (g.head.internal_id === activeId ||
+          (!expanded && g.children.some((c) => c.internal_id === activeId)))
       out.push({
         type: 'email',
         email: g.head,
@@ -418,7 +421,7 @@ export function flattenGroups(
           out.push({
             type: 'email',
             email: child,
-            bundleSelected,
+            bundleSelected: child.internal_id === activeId,
             groupKey: key,
             thread: { isHead: false, threadId: g.threadId! }
           })

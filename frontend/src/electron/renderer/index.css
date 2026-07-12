@@ -112,8 +112,9 @@
   --r-card: 12px; /* AI Fields 卡/审批卡/tile */
   --r-pop: 14px; /* .glass-pop 浮层 */
 
-  /* 主题 v3 — 选中态: 向右衰减 accent wash (暗 16%→6%, 亮色覆盖 13%→5%)
-   * + 3px 左条 (无辉光)。批 1/2 由 EmailRow / sidebar 消费。 */
+  /* 主题 v3 — 选中态: 向右衰减 accent wash (暗 16%→6%, 亮色覆盖 13%→5%),
+   * EmailRow / sidebar / chat 会话行同源消费。--sel-bar-w 左条 = 导航面专属
+   * 签名 (sidebar/设置 rail/会话行); 邮件行 2026-07-12 owner 拍板去条只留 wash。 */
   --sel-wash: linear-gradient(
     90deg,
     color-mix(in srgb, var(--A) 16%, transparent),
@@ -534,21 +535,29 @@ body {
   text-rendering: optimizeLegibility;
 }
 
-/* ─── Slim scrollbar (Mimestream / Linear) ──────────────────────────── */
+/* ─── Slim scrollbar (macOS auto-hide 风) ───────────────────────────────
+ * 主题 v3 tweak (2026-07-12 owner 实机 review): 槽 10→8px + thumb 静止态
+ * 全透明 (视觉上无滚动条), hover 到滚动容器才浮现 4px thumb (8px 槽 −
+ * 2px×2 透明 border), thumb 自身 hover/拖拽再加深。轨道恒透明不占视觉。 */
 .scrollbar-thin::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: 8px;
+  height: 8px;
 }
 .scrollbar-thin::-webkit-scrollbar-track {
   background: transparent;
 }
 .scrollbar-thin::-webkit-scrollbar-thumb {
-  background: rgb(var(--ink-fg-3) / 0.3);
+  background: transparent;
   border: 2px solid transparent;
   background-clip: padding-box;
   border-radius: 8px;
 }
 .scrollbar-thin:hover::-webkit-scrollbar-thumb {
+  background: rgb(var(--ink-fg-3) / 0.35);
+  background-clip: padding-box;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb:hover,
+.scrollbar-thin::-webkit-scrollbar-thumb:active {
   background: rgb(var(--ink-fg-2) / 0.5);
   background-clip: padding-box;
 }
@@ -610,7 +619,8 @@ kbd,
   left: 0;
   top: 6px;
   bottom: 6px;
-  width: 3px;
+  /* --sel-bar-w: 左条签名自 2026-07-12 起为导航面专属 (邮件行药丸已去条) */
+  width: var(--sel-bar-w);
   border-radius: 2px;
   background: linear-gradient(180deg, oklch(from var(--A) calc(l + 0.1) c h), var(--A));
 }
@@ -1452,36 +1462,13 @@ body::before {
    * 的 divider gradient 层随 C10 一并退役。 */
   background-image: var(--sel-wash);
 }
-/* 选中 accent bar — ::before 常驻 (opacity:0)，选中时 fade-in (§4.5 降级方案:
-   不做行间滑动 Flip，虚拟列表内 fade 性价比更高)。主题 v2: accent 纯色;
-   主题 v3/C3: 9px 辉光退役, 左条本体保留 (owner 红线)。主题 v3/C4: 左条从
-   通高直角贴到药丸左内侧 — containing block = .email-row padding box (base 加
-   了透明 border), left:0 即药丸左内侧, top/bottom 再各内缩 3px 让条端「上下随
-   药丸留缝」, radius 2px 与 sidebar .row-selected::before 同款胶囊端。🔴 不要
-   做垂直渐变: 线程 bundle 内多行的条上下拼接, 渐变会在交界处出现明暗拼缝。 */
-.email-row::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 3px;
-  bottom: 3px;
-  width: var(--sel-bar-w);
-  border-radius: 2px;
-  background: var(--A);
-  opacity: 0;
-  transition: opacity 0.12s cubic-bezier(0.4, 0, 0.2, 1);
-}
-.email-row.is-selected::before {
-  opacity: 1;
-}
-@media (prefers-reduced-motion: reduce) {
-  .email-row::before {
-    transition: none;
-  }
-}
+/* 选中 accent 左条 — 已退役 (2026-07-12 owner 实机 review 拍板): 邮件行选中
+   只保留 --sel-wash 药丸, 不再画左侧实色条; 左条签名收敛为**导航面专属**
+   (sidebar / 设置 rail / chat 会话行的 .row-selected::before 保留)。原 ::before
+   实现 (opacity fade + padding-box 坐标) 见 git 历史 a576bc48。 */
 
 /* Sprint 17 — thread chevron 直接在 .email-row 第一格 grid cell 内, 不再
- * 需要外层 .thread-row-wrap. selected wash / accent bar / flag wash 都画在
+ * 需要外层 .thread-row-wrap. selected wash / flag wash 都画在
  * .email-row 上, 自然 cover chevron 区域. child row 的 subtle inset tint
  * 通过 data-thread='child' attribute 走 .email-row 自身的 selector. */
 .email-row[data-thread='child']:not(.is-selected) {
