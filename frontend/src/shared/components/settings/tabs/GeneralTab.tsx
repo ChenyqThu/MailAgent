@@ -2,7 +2,7 @@
 // Sprint 18 review — 完整按 mockup-settings.html §appearance 复刻三块:
 //
 //   1. 强调色 (Accent)
-//      - `tile rounded-lg p-5 border border-ink-border-soft`
+//      - `tile rounded-[var(--r-card)] p-5 border border-ink-border-soft`（主题 v3 批 4 起卡片档 12px，原 rounded-lg）
 //      - grid-cols-6 swatch grid, 每列 `flex flex-col items-center gap-1.5`
 //      - 44px swatch (mockup `.swatch-grid .swatch`) + 名字 label
 //        (`text-meta font-mono text-ink-fg-1` 选中 / `text-ink-fg-2` 非选)
@@ -11,7 +11,7 @@
 //      - 底部 helper note `text-meta text-ink-fg-2 leading-relaxed`
 //
 //   2. 语言 (Language) + 3. 主题 (Theme)
-//      - `tile rounded-lg border + divide-y`
+//      - `tile rounded-[var(--r-card)] border + divide-y`（同上，主题 v3 卡片档）
 //      - 每 row `flex items-center gap-3 px-4 py-3 cursor-pointer`
 //      - 左 14px 自定义 radio (`.rad` / `.rad-on` from index.css)
 //      - 中 label + meta 两行
@@ -845,7 +845,9 @@ export function GeneralTab(): React.ReactElement {
       {canExportDiagnostics ? (
         <section className="mb-[var(--settings-block-gap,1.75rem)]">
           <BlockHeader title={t('settings.general.diagnostics.title', { defaultValue: '诊断' })} />
-          <div className="tile rounded-lg border border-ink-border-soft p-5">
+          {/* 主题 v3 C8: tile 卡片档 --r-card / 按钮控件档 --r-ctl（此 tile 随 E4§4.2
+              在批 4 圆角收口后合入 main，merge 时补对齐） */}
+          <div className="tile rounded-[var(--r-card)] border border-ink-border-soft p-5">
             <div className="flex items-start justify-between gap-4">
               <div className="flex-1 min-w-0">
                 <div className="text-aux font-medium text-ink-fg">
@@ -863,7 +865,7 @@ export function GeneralTab(): React.ReactElement {
                 onClick={() => void handleExportDiagnostics()}
                 disabled={exportingDiagnostics}
                 className={cn(
-                  'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-aux shrink-0',
+                  'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-[var(--r-ctl)] text-aux shrink-0',
                   'text-coral border border-coral/30 bg-coral/10 hover:bg-coral/15',
                   'transition-colors duration-fast',
                   'disabled:opacity-60 disabled:cursor-not-allowed'
