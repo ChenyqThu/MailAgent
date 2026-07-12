@@ -484,11 +484,14 @@ in the mockup that translates to a shadcn-ui-extended React component.
 
 > **Illustrative v1 reference — selection/pill styling superseded by Theme v3
 > (§18).** Production `EmailRow` is a padding-box **pill** (ARCHITECTURE §7.3),
-> so selection is a `--sel-wash` gradient pill + 3px left bar (no glow), *not*
+> so selection is a `--sel-wash` gradient pill alone — the left accent bar was
+> retired from email rows in the 2026-07-12 dogfood (it stays a **nav-surface
+> signature**: sidebar / settings rail / chat session row), *not*
 > the `bg-ink-4` full-bleed row shown below. Unread text is `--ink-fg` weight
 > 650 + accent dot (the snippet already uses fg text — only the weight moved
-> from `font-semibold`/`font-medium` to 650/500). Component structure and class
-> names (`.row-selected`, `data-read`) are unchanged; only the CSS values moved.
+> from `font-semibold`/`font-medium` to 650/500). The hover delete button was
+> retired the same day (delete/archive lives in the detail toolbar). Component
+> structure and class names (`.row-selected`, `data-read`) are unchanged.
 
 ```tsx
 // src/components/email/EmailRow.tsx
@@ -1692,16 +1695,26 @@ this section is the design-intent index.
 | C1 | Noise layer (`.grain` SVG turbulence) | **Retired** — DOM mount + CSS rule + settings knob + i18n key all removed |
 | C2 | Specular highlight (`.specular::after`, titlebar top edge) | **Retired** |
 | C3 | Static decorative glow (selection bar / CTA outer glow / tab underline) | **Retired across the board.** Interaction-feedback glow (composer `BorderGlow`) is explicitly out of scope and stays |
-| C4 | Email-row selection | **Pill-shaped**: `--sel-wash` gradient clipped to a padding-box pill + 3px left bar (glow removed, bar retained). Implementation: ARCHITECTURE §7.3 |
-| C5 | Sidebar nav / settings-rail tab / chat SessionRow selection | Same `--sel-wash` pill + retained left bar — one cross-view selection signature |
+| C4 | Email-row selection | **Pill-shaped**: `--sel-wash` gradient clipped to a padding-box pill, wash alone (left bar retired in the 2026-07-12 dogfood; glow retired in v3). Selection lights **only the row activeId hits** — an expanded thread no longer lights the whole bundle (collapsed head stands in for a hidden selected child). Implementation: ARCHITECTURE §7.3 |
+| C5 | Sidebar nav / settings-rail tab / chat SessionRow selection | Same `--sel-wash` pill + retained 3px left bar (`--sel-bar-w`) — the bar is the **nav-surface** selection signature |
 | C6 | Unread expression | Sender / subject → foreground (`--ink-fg`, weight 650); time → foreground weight 500; unread dot + count badge stay accent. Accent signals, never body-colors |
 | C7 | CTA button | Gradient + inset highlight kept; **outer glow removed**. (Solid-surface CTA keeps a byte-for-byte special-case — no drop shadow + softened inset; since glow is now globally gone, that special-case only differs on shadow/inset.) |
 | C8 | Radius | Unified four tiers — §4.2 / §18.3 |
 | C9 | Hardcoded hex | AI-strip priority colors + flag-done green + avatar gradients folded into tokens (§18.3) |
 
-**Retained (owner red lines):** the selected-item 3px left accent bar (sidebar
-/ email row / chat session row — global signature); every interaction animation
-(§18.2); layout structure untouched.
+**Retained (owner red lines):** the selected-item 3px left accent bar on nav
+surfaces (sidebar / settings rail / chat session row); every interaction
+animation (§18.2); layout structure untouched.
+
+**Dogfood revisions (2026-07-12, owner live review after landing):** email-row
+left bar retired (wash pill alone; bar → nav-surface-only signature) · thread
+selection = single row, no bundle lighting · email list `scrollbar-none` (a
+styled classic scrollbar reserves gutter width even with a transparent thumb)
+· `.scrollbar-thin` → macOS-style auto-hide (8px, thumb visible on container
+hover only) · AI-fields card keeps a single hairline between sections (reply
+inset ring + attributes `border-t` removed) · list hover delete button retired
+across all mailboxes (delete/archive lives in the detail toolbar; drafts keep
+theirs in ComposePanel).
 
 ### 18.2 Motion red lines (migration invariant — no batch may drop these)
 

@@ -405,12 +405,13 @@ react-window 给的 slot 几何（行高 / offset 由 virtualizer 独占，§7.1
 - **padding 反向补偿**：padding 由原 `9/14/10/8` 改 `8/8/9/2`（各减掉对应 border 宽），使 avatar /
   sender / chevron 等流内内容的绝对坐标逐像素不变（与 group-header chevron 的 16px 对齐不破）。
 
-⚠️ **工程 gotcha（改 row border / padding 必读）**：绝对定位后代（`::before` 左条 / `::after` 未读点）
-的 containing block = **padding box**，原点随 border 内移 (+6, +1)。左条 `left:0` 落到药丸左内缘
-**是意图**（上下再各内缩 3px + radius 2px 胶囊端，与 sidebar `.row-selected::before` 同款）；未读点
-几何 SSoT `--unread-dot-{top,left}` 已从 slot 坐标 `36/17` **平移到 padding-box 坐标系 `35/11`**。
+⚠️ **工程 gotcha（改 row border / padding 必读）**：绝对定位后代（如 `::after` 未读点、`.ricon` 悬浮钮）
+的 containing block = **padding box**，原点随 border 内移 (+6, +1)。未读点几何 SSoT
+`--unread-dot-{top,left}` 已从 slot 坐标 `36/17` **平移到 padding-box 坐标系 `35/11`**。
 **改 `.email-row` 的 border 宽或 padding 必须同步重算这两个未读点常量**，否则圆点漂移（没法纯 calc，
-因为依赖 inherited line-height resolution）。
+因为依赖 inherited line-height resolution）。（原 `::before` 选中左条已于 2026-07-12 dogfood 退役——
+邮件行选中只留 wash 药丸，左条收敛为导航面专属签名；另注意 child tint 选择器特异性 (0,3,0) 会压过
+基础 `:hover` (0,2,0)，行级新状态背景要配同强度 hover 覆盖。）
 
 C10：药丸化后 per-row 底部 1px 分割线（`--row-divider` gradient）退役——行间靠 1px 缝 + wash 区分，
 分隔线仅保留在分组头 `.group-header`（`--row-divider` token 本体保留，folder / drafts 行仍消费）。

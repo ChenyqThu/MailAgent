@@ -1474,6 +1474,12 @@ body::before {
 .email-row[data-thread='child']:not(.is-selected) {
   background-color: rgb(var(--ink-1) / 0.35);
 }
+/* child tint 特异性 (0,3,0) 恒压基础 .email-row:hover (0,2,0) → 非旗标/done
+ * 的子邮件行 hover 无反馈 (2026-07-12 owner dogfood 抓的死角); 补同强度
+ * hover, 值与基础行 hover 一致。旗标/done 行自有 (0,3,0) hover 不受影响。 */
+.email-row[data-thread='child']:not(.is-selected):hover {
+  background-color: rgb(var(--ink-3) / 0.55);
+}
 
 /* Sprint 17 — thread chevron-cell 占第一格. 单封邮件 cell 内为空但保留宽度
  * (列对齐). thread head 显示可点 chevron, thread child 显示竖向 tether 线.

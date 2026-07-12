@@ -213,4 +213,15 @@ shadcn 兼容变量区、settings 尺寸变量区。
 
 遗留敞口（不阻塞发版，后续按需单开）：strip 色归一决策（见 5）、fail 红族收编、SessionRow 左条几何与 sidebar 配方微差、三 picker 菜单行 `bg-ink-4` 灰配方维持菜单语义（有意不改）。
 
+### 7.1 Dogfood 修订（2026-07-12，owner 实机 review 四轮，落地后追加拍板）
+
+| 轮 | commit | 改判 |
+|---|---|---|
+| 1 | `ac002c59` | ①线程选中不再整 bundle 连坐——展开态只高亮 activeId 命中行，折叠线程 head 代位隐藏选中 child；②**邮件行选中左条退役**（wash 药丸独立承担，左条收敛为导航面专属签名 sidebar/rail/会话行）；③`.scrollbar-thin` 改 macOS auto-hide（8px 静止透明 hover 浮现）；④reply suggestion 去 inset accent ring（与卡边框叠成双重边框） |
+| 2 | `8eef5f8c` | ①EmailList 切 `scrollbar-none`（经典滚动条槽位即使 thumb 透明也占 8px 布局=右缘留白根因）；②AI 卡属性区去 `border-t`（与上方区块 border-b 摞线） |
+| 3 | `75cdcd70` | 列表悬浮删除钮全线退役（`.ricon-delete` + 死 CSS `.fr-delete`）——低频操作易误点，删除/归档收敛正文工具栏，草稿走 ComposePanel（全列表一致） |
+| 4 | （随文档 commit） | 线程子邮件 hover 无反馈修复——child tint 特异性 (0,3,0) 恒压基础 :hover (0,2,0)，补同强度 hover；工程注记入 ARCHITECTURE §7.3 |
+
+常青文档（DESIGN.md §18.1/§5.1、ARCHITECTURE §7.3、CLAUDE.md 地图行）已随第 4 轮同步改判。
+
 *发版后动作：打包 dogfood（e2e 烟测 + 实机过一遍 §5 矩阵）→ 本文件转 `docs/archive/2026-07/`。*
