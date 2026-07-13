@@ -6,7 +6,7 @@
 //   3. TanStack Query provider — Sprint 2 adds it so EmailList's 5s poll
 //      and EmailDetail's cache-by-internal-id reads have a host.
 
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 import '@shared/i18n'
@@ -16,11 +16,17 @@ import { setUpdaterStatus } from '@shared/state/updater'
 import { setIslandStatus } from '@shared/state/island'
 import { AppRouter } from '@shared/router'
 import { ErrorBoundary } from '@shared/components/ErrorBoundary'
+import { Skeleton } from '@shared/components/feedback/LoadingSkeleton'
 import { ToastContainer } from '@shared/components/Toast'
 import { UpdateReadyBanner } from '@shared/components/UpdateReadyBanner'
-import { PopoutShell } from '@shared/components/chat/PopoutShell'
 import { useEventBridge } from '@shared/hooks/useEventBridge'
 import { usePopoutMode } from '@shared/state/popout-mode'
+
+const PopoutShell = lazy(() =>
+  import('@shared/components/chat/PopoutShell').then((module) => ({
+    default: module.PopoutShell
+  }))
+)
 
 /** Sprint 16 — must live inside QueryClientProvider because useEventBridge
  *  uses useQueryClient(). One mount per App lifetime; no UI of its own. */
@@ -95,7 +101,9 @@ export default function App(): React.ReactElement {
             so it stays here regardless of popout vs inbox shell. */}
         <EventBridgeMount />
         {isPopout ? (
-          <PopoutShell />
+          <Suspense fallback={<Skeleton rows={6} className="h-full w-full p-6" width="2/3" />}>
+            <PopoutShell />
+          </Suspense>
         ) : (
           <>
             {/* Sprint 7 D2 fix (Sprint 8 verify): GlobalShortcuts +

@@ -26,18 +26,14 @@ import {
   createRootRoute,
   createRoute,
   createRouter,
+  lazyRouteComponent,
   Outlet,
   redirect,
   useNavigate
 } from '@tanstack/react-router'
 
-import { AdminLayout } from './components/layout/AdminLayout'
-import { AgentsLayout } from './components/layout/AgentsLayout'
-import { CalendarLayout } from './components/layout/CalendarLayout'
 import { InboxLayout } from './components/layout/InboxLayout'
-import { LlmDashboardLayout } from './components/layout/LlmDashboardLayout'
-import { SessionsLayout } from './components/layout/SessionsLayout'
-import { SettingsLayout } from './components/layout/SettingsLayout'
+import { Skeleton } from './components/feedback/LoadingSkeleton'
 import { useActiveEmail } from './state/active-email'
 // Sprint 7 D2 — `?` / ⌘K / ⌘, bindings + the modals they open.
 // MUST mount inside `RouterProvider` (i.e. inside this rootRoute layout),
@@ -165,6 +161,10 @@ function RootLayout(): React.ReactElement {
   )
 }
 
+function RouteLoadingSkeleton(): React.ReactElement {
+  return <Skeleton rows={6} className="h-full w-full p-6" width="2/3" />
+}
+
 const rootRoute = createRootRoute({ component: RootLayout })
 
 // Sprint 11 V1.4 — Inbox `view` is the sidebar mailbox selector (in
@@ -204,7 +204,10 @@ const inboxRoute = createRoute({
 const sessionsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/sessions',
-  component: SessionsLayout
+  component: lazyRouteComponent(
+    () => import('./components/layout/SessionsLayout'),
+    'SessionsLayout'
+  )
 })
 
 // /agents — Custom AI Agents 区（Agents / 报告 / Chats）。?tab= 控制激活 tab，
@@ -214,7 +217,7 @@ const AGENTS_TABS = ['agents', 'reports', 'chats'] as const
 const agentsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/agents',
-  component: AgentsLayout,
+  component: lazyRouteComponent(() => import('./components/layout/AgentsLayout'), 'AgentsLayout'),
   validateSearch: (search: Record<string, unknown>): { tab: (typeof AGENTS_TABS)[number] } => {
     const tab = search.tab
     return {
@@ -251,13 +254,16 @@ const adminIndexRoute = createRoute({
 const adminLlmRoute = createRoute({
   getParentRoute: () => adminRoute,
   path: 'llm',
-  component: LlmDashboardLayout
+  component: lazyRouteComponent(
+    () => import('./components/layout/LlmDashboardLayout'),
+    'LlmDashboardLayout'
+  )
 })
 
 const adminKanbanRoute = createRoute({
   getParentRoute: () => adminRoute,
   path: 'kanban',
-  component: AdminLayout
+  component: lazyRouteComponent(() => import('./components/layout/AdminLayout'), 'AdminLayout')
 })
 
 // Phase 3 §3.3 — /admin/calendar?view=today|week|month|agenda|recurring.
@@ -268,7 +274,10 @@ export type CalendarView = (typeof CALENDAR_VIEWS)[number]
 const adminCalendarRoute = createRoute({
   getParentRoute: () => adminRoute,
   path: 'calendar',
-  component: CalendarLayout,
+  component: lazyRouteComponent(
+    () => import('./components/layout/CalendarLayout'),
+    'CalendarLayout'
+  ),
   validateSearch: (search: Record<string, unknown>): { view: CalendarView } => {
     const v = search.view
     if (typeof v === 'string' && (CALENDAR_VIEWS as readonly string[]).includes(v)) {
@@ -299,7 +308,10 @@ export type SettingsTab = (typeof SETTINGS_TABS)[number]
 const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/settings',
-  component: SettingsLayout,
+  component: lazyRouteComponent(
+    () => import('./components/layout/SettingsLayout'),
+    'SettingsLayout'
+  ),
   validateSearch: (search: Record<string, unknown>): { tab: SettingsTab } => {
     const t = search.tab
     if (typeof t === 'string' && (SETTINGS_TABS as readonly string[]).includes(t)) {
@@ -340,7 +352,8 @@ export const router = createRouter({
   ]),
   basepath: _routerBasepath,
   history: isPackagedFileProtocol ? createMemoryHistory({ initialEntries: ['/'] }) : undefined,
-  defaultPreload: false
+  defaultPreload: false,
+  defaultPendingComponent: RouteLoadingSkeleton
 })
 
 declare module '@tanstack/react-router' {
