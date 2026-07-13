@@ -22,6 +22,7 @@ import { useMailApi } from '@shared/hooks/useMailApi'
 import { cn } from '@shared/lib/cn'
 import { EmptyState } from '@shared/components/feedback/EmptyState'
 import { SkeletonCard } from '@shared/components/feedback/LoadingSkeleton'
+import { NumberTicker } from '@shared/components/ui/number-ticker'
 import { toastError, toastSuccess } from '@shared/state/toast'
 
 const RANGES: Array<{ label: string; days: number }> = [
@@ -53,7 +54,7 @@ function StatCard({
 }: {
   label: string
   value: React.ReactNode
-  hint?: string
+  hint?: React.ReactNode
   accent?: boolean
 }): React.ReactElement {
   return (
@@ -287,24 +288,24 @@ export function LlmDashboardPage(): React.ReactElement {
           <section className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <StatCard
               label={t('llm.processed')}
-              value={fmtNumber(data.total)}
+              value={<NumberTicker value={data.total} format={fmtNumber} />}
               hint={t('llm.days', { n: data.days })}
               accent
             />
             <StatCard
               label={t('llm.inputTokens')}
-              value={fmtTokens(cost.input_tokens)}
+              value={<NumberTicker value={cost.input_tokens} format={fmtTokens} />}
               hint={fmtNumber(cost.input_tokens)}
             />
             <StatCard
               label={t('llm.outputTokens')}
-              value={fmtTokens(cost.output_tokens)}
+              value={<NumberTicker value={cost.output_tokens} format={fmtTokens} />}
               hint={fmtNumber(cost.output_tokens)}
             />
             <StatCard
-              label={t('llm.avgLatency')}
-              value={fmtMs(cost.avg_latency_ms)}
-              hint={`over ${fmtNumber(cost.success_rows)} success`}
+              label={t('llm.success', { defaultValue: 'Success' })}
+              value={<NumberTicker value={cost.success_rows} format={fmtNumber} />}
+              hint={`${t('llm.avgLatency')}: ${fmtMs(cost.avg_latency_ms)}`}
             />
           </section>
 

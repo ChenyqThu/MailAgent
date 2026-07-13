@@ -330,6 +330,14 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
 
   const handleSubmit = (): void => {
     if (!validate()) {
+      requestAnimationFrame(() => {
+        const invalidInputs = modalRef.current?.querySelectorAll<HTMLElement>('.ef-input.invalid')
+        invalidInputs?.forEach((input) => {
+          input.classList.remove('ef-invalid-shake')
+          void input.offsetWidth
+          input.classList.add('ef-invalid-shake')
+        })
+      })
       if (!summary.trim()) titleRef.current?.focus()
       else startRef.current?.focus()
       return
@@ -484,10 +492,7 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
             <div className="flex items-center justify-between">
               <label className="ef-label">{t('calendar.form.labelTime', '起止时间')}</label>
               <label className="flex items-center gap-1.5 text-aux text-ink-fg-1 cursor-pointer select-none">
-                <Checkbox
-                  checked={isAllDay}
-                  onCheckedChange={setIsAllDay}
-                />
+                <Checkbox checked={isAllDay} onCheckedChange={setIsAllDay} />
                 <span>{t('calendar.form.allDayToggle', '全天')}</span>
               </label>
             </div>

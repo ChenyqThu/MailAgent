@@ -3559,6 +3559,23 @@ body:not([data-batch-mode='true']) .email-row .cb {
   70%  { box-shadow: 0 0 0 6px rgba(227, 98, 98, 0); }
   100% { box-shadow: 0 0 0 0 rgba(227, 98, 98, 0); }
 }
+
+html[data-theme-vt='circle-blur']::view-transition-old(root) {
+  animation: none;
+}
+html[data-theme-vt='circle-blur']::view-transition-new(root) {
+  animation: theme-circle-blur 700ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+@keyframes theme-circle-blur {
+  from {
+    clip-path: circle(0% at 100% 0%);
+    filter: blur(8px);
+  }
+  to {
+    clip-path: circle(150% at 100% 0%);
+    filter: blur(0);
+  }
+}
 .sync-tip {
   position: absolute;
   top: calc(100% + 8px);
@@ -3703,6 +3720,14 @@ body:not([data-batch-mode='true']) .email-row .cb {
 .ef-input.invalid, .chip-field.invalid {
   border-color: rgb(var(--c-accent));
   box-shadow: 0 0 0 3px rgb(var(--c-accent) / 0.16);
+}
+.ef-input.invalid.ef-invalid-shake {
+  animation: ef-invalid-shake 360ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+@keyframes ef-invalid-shake {
+  0%, 100% { transform: translateX(0); }
+  16.67%, 50%, 83.33% { transform: translateX(-4px); }
+  33.33%, 66.67% { transform: translateX(4px); }
 }
 .ef-err {
   display: none;
@@ -5151,6 +5176,7 @@ body:not([data-batch-mode='true']) .email-row .cb {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .ef-input.invalid.ef-invalid-shake { animation: none; }
   .spin > *, .shimmer, .email-flash, .think-caret { animation: none !important; }
   /* 字形流光 + phrase 轮播停帧：ShimmerText 在 reduce 下已渲染 shimmer-text-static
      （无 win/hi 层），此处再兜底关掉动画 + phrase enter（防 reduce 运行时切换残留）。 */

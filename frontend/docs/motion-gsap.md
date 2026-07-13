@@ -191,3 +191,6 @@ loading 不该成为视觉焦点。**loading 只用三个词汇**（2026-06-13 �
 | `ui/animated-badge.tsx` | beui.dev `animated-badge.tsx`（MIT） | 紧凑状态徽标的图标与文案槽位切换 | `SPRING_SWAP` | 仅使用现有语义色 token；running 可 pulse，reduced-motion 下停用持续动画。 |
 | `ui/tabs.tsx` indicator | beui.dev `tabs.tsx`（MIT） | horizontal 下划线与 Settings rail wash/左光条的 shared-layout 滑动 | `SPRING_LAYOUT` | 只镜像 Radix Root 当前 value，不改键盘/roving focus；vertical 终态配方仍由 `index.css` authored 规则定义，reduced-motion 跳变。 |
 | `ui/loader.tsx` | beui.dev `loader.tsx`（MIT） | spinner/dots/bars/dot-matrix 等待态；reduced-motion 退化为透明度脉冲 | — | `currentColor` + `size`，新代码等待态优先 `ui/loader`；存量内联 `Loader2` 不机械迁移。 |
+| `ui/number-ticker.tsx` | beui.dev `number-ticker.tsx`（MIT） | 数值变化时逐位滚动，格式化后的分隔符/单位保持静态 | — | 初次挂载与 reduced-motion 直接定位终值；仅用于大号统计数值，不迁移小徽标计数。 |
+| `EventFormModal` ef-shake | 本仓 authored CSS | 校验失败输入一次性水平 shake | — | 重复提交用 class remove → reflow → add 重启动画，不 remount 输入；reduced-motion 仅禁位移，既有 `errpulse` 保留。 |
+| `appearance` theme-vt | beui.dev `theme-toggle.tsx`（MIT） | 原生 View Transition circle-blur 从右上角展开 | — | 仅 resolved theme 真变化、浏览器支持且非 reduced-motion 时启用；glass/IPC/island commit 顺序保持不变。 |

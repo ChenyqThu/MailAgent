@@ -21,6 +21,7 @@ import { cn } from '@shared/lib/cn'
 import { DavMailHealthCard } from '@shared/components/admin/DavMailHealthCard'
 import { EmptyState } from '@shared/components/feedback/EmptyState'
 import { Loader } from '@shared/components/ui/loader'
+import { NumberTicker } from '@shared/components/ui/number-ticker'
 import { SkeletonRow } from '@shared/components/feedback/LoadingSkeleton'
 import { toastError, toastSuccess } from '@shared/state/toast'
 
@@ -97,7 +98,13 @@ function StatCard({
   return (
     <div className="rounded-md border border-coral/30 bg-coral/5 p-3">
       <div className="text-micro font-mono uppercase text-ink-fg-2 mb-1">{label}</div>
-      <div className="text-lead text-ink-fg tabular-nums">{value}</div>
+      <div className="text-lead text-ink-fg tabular-nums">
+        {typeof value === 'number' ? (
+          <NumberTicker value={value} format={(number) => number.toLocaleString('en-US')} />
+        ) : (
+          value
+        )}
+      </div>
       {hint && <div className="text-meta text-ink-fg-3 mt-1">{hint}</div>}
     </div>
   )
@@ -286,7 +293,7 @@ export function AdminPage(): React.ReactElement {
           />
           <StatCard
             label={t('admin.tables')}
-            value={`${healthQ.data.tables_present.length}`}
+            value={healthQ.data.tables_present.length}
             hint={
               healthQ.data.tables_missing.length === 0
                 ? t('admin.allTablesPresent')
@@ -307,10 +314,7 @@ export function AdminPage(): React.ReactElement {
         <section className="space-y-3">
           <h2 className="text-lead text-ink-fg font-medium">{t('admin.syncStore')}</h2>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <StatCard
-              label={t('admin.totalEmails')}
-              value={stats.total_emails.toLocaleString('en-US')}
-            />
+            <StatCard label={t('admin.totalEmails')} value={stats.total_emails} />
             <StatCard
               label={t('admin.failureQueue')}
               value={stats.failure_queue}
@@ -357,9 +361,9 @@ export function AdminPage(): React.ReactElement {
             {t('admin.v4Rollout')}
           </h2>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <StatCard label="from_sqlite_hit" value={v4.from_sqlite_hit.toLocaleString('en-US')} />
-            <StatCard label="fallback_miss" value={v4.fallback_miss.toLocaleString('en-US')} />
-            <StatCard label="fallback_error" value={v4.fallback_error.toLocaleString('en-US')} />
+            <StatCard label="from_sqlite_hit" value={v4.from_sqlite_hit} />
+            <StatCard label="fallback_miss" value={v4.fallback_miss} />
+            <StatCard label="fallback_error" value={v4.fallback_error} />
             <StatCard
               label="route_latency_p99_ms"
               value={`${v4.route_latency_p99_ms.toFixed(1)}ms`}

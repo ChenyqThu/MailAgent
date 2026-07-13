@@ -340,32 +340,48 @@ export function applyResolvedTheme(): void {
     const { themeMode } = useAppearance.getState()
     const resolved: 'dark' | 'light' = readResolved(themeMode)
     const root = document.documentElement
-    root.setAttribute('data-theme', resolved)
-    root.classList.toggle('dark', resolved === 'dark')
-    useAppearance.setState({ resolvedTheme: resolved })
-    // 主题 v2 — 主题翻转后重放 glass 覆写: 亮色 alpha 护栏 clamp 依赖
-    // resolvedTheme, 不重放的话「暗色调到 0.6 → 切亮色」会停在 0.6 漏过护栏。
-    const { glassMood, glassKnobs } = useAppearance.getState()
-    applyGlass(glassMood, glassKnobs)
-    // Electron IPC broadcast (no-op in Web build)
-    // `@electron-toolkit/preload`'s electronAPI exposes `ipcRenderer.send`,
-    // NOT `electron.send` directly. Sprint 1 had this typo'd — it never fired
-    // because Sprint 1 didn't really run the app; Sprint 2 surfaced it as
-    // "w.electron?.send is not a function" crashing the entire renderer tree.
-    const w = window as unknown as {
-      electron?: { ipcRenderer?: { send: (ch: string, v: unknown) => void } }
+    const previousResolved = useAppearance.getState().resolvedTheme
+
+    const commitTheme = (): void => {
+      root.setAttribute('data-theme', resolved)
+      root.classList.toggle('dark', resolved === 'dark')
+      useAppearance.setState({ resolvedTheme: resolved })
+      // 主题 v2 — 主题翻转后重放 glass 覆写: 亮色 alpha 护栏 clamp 依赖
+      // resolvedTheme, 不重放的话「暗色调到 0.6 → 切亮色」会停在 0.6 漏过护栏。
+      const { glassMood, glassKnobs } = useAppearance.getState()
+      applyGlass(glassMood, glassKnobs)
+      // Electron IPC broadcast (no-op in Web build)
+      // `@electron-toolkit/preload`'s electronAPI exposes `ipcRenderer.send`,
+      // NOT `electron.send` directly. Sprint 1 had this typo'd — it never fired
+      // because Sprint 1 didn't really run the app; Sprint 2 surfaced it as
+      // "w.electron?.send is not a function" crashing the entire renderer tree.
+      const w = window as unknown as {
+        electron?: { ipcRenderer?: { send: (ch: string, v: unknown) => void } }
+      }
+      w.electron?.ipcRenderer?.send('appearance:theme', resolved)
+      w.electron?.ipcRenderer?.send('appearance:nativeTheme', themeMode)
+      // Sprint 9 §2.3 — broadcast a combined (accent, theme) snapshot to the
+      // ping-island bridge. main/handlers/island.ts wraps this into a
+      // `AppearanceChange` envelope; ping-island's fork uses metadata.* to
+      // repaint accent + theme. The send is silently no-op'd by main when
+      // the integration is disabled / dev-disabled / disconnected, so the
+      // renderer never has to gate on connection state itself.
+      // Sprint 10 L7: coalesced via scheduleIslandAppearance() so back-to-back
+      // applyResolvedTheme + applyAccent in the same tick → one envelope.
+      scheduleIslandAppearance()
     }
-    w.electron?.ipcRenderer?.send('appearance:theme', resolved)
-    w.electron?.ipcRenderer?.send('appearance:nativeTheme', themeMode)
-    // Sprint 9 §2.3 — broadcast a combined (accent, theme) snapshot to the
-    // ping-island bridge. main/handlers/island.ts wraps this into a
-    // `AppearanceChange` envelope; ping-island's fork uses metadata.* to
-    // repaint accent + theme. The send is silently no-op'd by main when
-    // the integration is disabled / dev-disabled / disconnected, so the
-    // renderer never has to gate on connection state itself.
-    // Sprint 10 L7: coalesced via scheduleIslandAppearance() so back-to-back
-    // applyResolvedTheme + applyAccent in the same tick → one envelope.
-    scheduleIslandAppearance()
+
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    if (previousResolved === resolved || reduceMotion || !('startViewTransition' in document)) {
+      commitTheme()
+      return
+    }
+
+    root.dataset.themeVt = 'circle-blur'
+    const transition = document.startViewTransition(commitTheme)
+    void transition.finished.finally(() => {
+      delete root.dataset.themeVt
+    })
   })
 }
 
