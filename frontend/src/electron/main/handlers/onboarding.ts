@@ -60,6 +60,10 @@ import { MANAGED_ENV_KEY_SET } from '../lib/env-keys'
 import { resolveEnvPath } from '../lib/env-path'
 import { MAIN_WINDOW } from '../lib/window-config'
 import { detectUserState, ONBOARDING_REQUIRED_KEYS } from '../onboarding/detect'
+import {
+  findOnboardingLlmTemplate,
+  invalidCustomBaseUrlReason
+} from '@shared/onboarding/llmProviderTemplates'
 import { writePatch } from './env'
 
 // ---------------------------------------------------------------------------
@@ -1406,7 +1410,13 @@ function enterApp(evt: Electron.IpcMainInvokeEvent): { ok: boolean } {
 // onboarding:llmProvider* (07-12 P3b —「AI 模型 (可选)」步; daemon → serve-api
 // /api/llm/providers* 转发, 同 folder:* 的 Main→daemon 模式: 本地 token 只在 main,
 // onboarding renderer 经 IPC 间接调写端点。跳过该步 = 这三个 channel 一个都不调,
-// 零写入。)
+// 零写入。
+//
+// 批 2 review HIGH-3 (confused deputy): renderer 不再传 id/protocol/baseURL 组合 ——
+// 只传 templateKey, id/protocol/displayName/baseUrl 由 main 从模板单源
+// (@shared/onboarding/llmProviderTemplates) 解析; 仅 custom 两模板收用户 baseUrl
+// (http/https + 拒 userinfo); Test 只对本次 onboarding session 内经 Save 创建过的
+// provider id 放行 (main 内存记录, 重启即清)。)
 // ---------------------------------------------------------------------------
 
 export interface LlmProviderStatusResult {
@@ -1425,9 +1435,8 @@ async function llmProviderStatus(): Promise<LlmProviderStatusResult> {
 }
 
 export interface LlmProviderSaveArg {
-  id: string
-  protocol: string
-  displayName?: string
+  templateKey: string
+  /** 仅 custom 模板生效; 其余模板传非空值 → E_INVALID (fail-loud, 防混淆代理)。 */
   baseUrl?: string
   apiKey?: string
 }
@@ -1437,26 +1446,51 @@ export interface LlmProviderSaveResult {
   error?: { code: string; message: string }
 }
 
-/** 创建 provider 行 (POST /llm/providers); id 已存在 (本步内重存 / 回退再进) →
+/** llmProviderTest 白名单: 本次 onboarding session 内经 llmProviderSave 成功创建的
+ *  provider id (模板 key)。main 进程内存态, app 重启即清。 */
+const sessionSavedLlmProviderIds = new Set<string>()
+
+/** 按模板创建 provider 行 (POST /llm/providers); id 已存在 (本步内重存 / 回退再进) →
  *  PATCH 同 id upsert。apiKey 仅非空才随 PATCH 发 (空串对 PATCH 语义 = 清除 key)。 */
 async function llmProviderSave(raw: unknown): Promise<LlmProviderSaveResult> {
   try {
     const arg = raw as LlmProviderSaveArg | null
-    if (!arg || typeof arg.id !== 'string' || arg.id === '' || typeof arg.protocol !== 'string') {
+    if (!arg || typeof arg.templateKey !== 'string' || arg.templateKey === '') {
       return {
         ok: false,
-        error: { code: 'E_INVALID', message: 'llmProviderSave 需要 {id, protocol}' }
+        error: { code: 'E_INVALID', message: 'llmProviderSave 需要 {templateKey}' }
       }
     }
-    const displayName = typeof arg.displayName === 'string' ? arg.displayName.trim() : ''
-    const baseUrl = typeof arg.baseUrl === 'string' ? arg.baseUrl.trim() : ''
+    const tpl = findOnboardingLlmTemplate(arg.templateKey)
+    if (!tpl) {
+      return { ok: false, error: { code: 'E_INVALID', message: '未知的 provider 模板' } }
+    }
+    const rawBaseUrl = typeof arg.baseUrl === 'string' ? arg.baseUrl.trim() : ''
+    if (!tpl.allowCustomBaseUrl && rawBaseUrl !== '') {
+      return {
+        ok: false,
+        error: { code: 'E_INVALID', message: '该模板不接受自定义 API 地址' }
+      }
+    }
+    if (tpl.allowCustomBaseUrl) {
+      if (rawBaseUrl === '' && tpl.baseUrlRequired) {
+        return { ok: false, error: { code: 'E_INVALID', message: '该模板必须填写 API 地址' } }
+      }
+      if (rawBaseUrl !== '') {
+        const reason = invalidCustomBaseUrlReason(rawBaseUrl)
+        if (reason !== null) {
+          return { ok: false, error: { code: 'E_INVALID', message: reason } }
+        }
+      }
+    }
+    const baseUrl = tpl.allowCustomBaseUrl ? rawBaseUrl : tpl.baseUrl
     const apiKey = typeof arg.apiKey === 'string' ? arg.apiKey.trim() : ''
     try {
       await daemonRequest('POST', '/llm/providers', {
         body: {
-          id: arg.id,
-          protocol: arg.protocol,
-          displayName,
+          id: tpl.key,
+          protocol: tpl.protocol,
+          displayName: tpl.name,
           baseUrl,
           ...(apiKey !== '' ? { apiKey } : {}),
           enabled: true
@@ -1465,16 +1499,17 @@ async function llmProviderSave(raw: unknown): Promise<LlmProviderSaveResult> {
     } catch (err) {
       // id 已存在 → PATCH upsert; 其余错误原样收敛成 error 对象。
       if (!/already exists/i.test((err as Error).message ?? '')) throw err
-      await daemonRequest('PATCH', `/llm/providers/${encodeURIComponent(arg.id)}`, {
+      await daemonRequest('PATCH', `/llm/providers/${encodeURIComponent(tpl.key)}`, {
         body: {
-          protocol: arg.protocol,
-          displayName,
+          protocol: tpl.protocol,
+          displayName: tpl.name,
           baseUrl,
           ...(apiKey !== '' ? { apiKey } : {}),
           enabled: true
         }
       })
     }
+    sessionSavedLlmProviderIds.add(tpl.key)
     return { ok: true }
   } catch (err) {
     const e = err as Error & { code?: string }
@@ -1491,12 +1526,17 @@ export interface LlmProviderTestResult {
   error?: string
 }
 
-/** 连通性测试 (POST /llm/providers/{id}/test — serve-api 恒 200, data={ok,latencyMs,error})。 */
+/** 连通性测试 (POST /llm/providers/{id}/test — serve-api 恒 200, data={ok,latencyMs,error})。
+ *  仅放行本次 onboarding session 内 Save 过的 id —— 防 renderer 拿 main 的本地 token
+ *  权限对任意既有 provider (可能指向私网地址) 触发出网请求。 */
 async function llmProviderTest(raw: unknown): Promise<LlmProviderTestResult> {
   try {
     const id = (raw as { id?: unknown } | null)?.id
     if (typeof id !== 'string' || id === '') {
       return { ok: false, error: '缺少 provider id' }
+    }
+    if (!sessionSavedLlmProviderIds.has(id)) {
+      return { ok: false, error: '该 provider 不是本次引导中保存的，无法在此测试' }
     }
     const data = await daemonRequest<{
       ok?: boolean
@@ -1556,5 +1596,11 @@ export const __test__ = {
   buildClearPatch,
   isPathInside,
   pathsCollide,
-  PLUGIN_FLAG_MAP
+  PLUGIN_FLAG_MAP,
+  // HIGH-3: llmProvider IPC 收紧的可测面 (daemonRequest 由测试 mock)。
+  llmProviderSave,
+  llmProviderTest,
+  resetLlmProviderSession: (): void => {
+    sessionSavedLlmProviderIds.clear()
+  }
 }

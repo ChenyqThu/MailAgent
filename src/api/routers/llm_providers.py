@@ -3,12 +3,14 @@
 端点与鉴权分层（P3 收紧：prd「远程 web 对 provider 配置只读」落到 API 层）：
   - **读**（provider 列表 / per-provider 模型列表）= ``Depends(verify_cf_access)``（owner-only
     双腿：本地 token / CF JWT——远程可看）。列表/详情对 key 只回掩码（``hasKey`` +
-    ``keyLast4``），**永不回明文**。
-  - **写**（provider POST/PATCH/DELETE + model 行 PUT/DELETE + ``POST /{id}/test`` 连通性
-    测试）= ``Depends(verify_local_token)``（**仅**本地 ephemeral token，不接受 CF JWT）：
-    本地 renderer 经 chat_local_bridge webRequest 注入 local token 不受影响；远程 CF 会话
-    恒 403 → Settings 远程只读。test 归写面：它拿解密 key 发真实上游请求（探测面），
-    不该被远程会话驱动。
+    ``keyLast4``），**永不回明文**；自定义 header 同为 secret（review 批2 HIGH-1）——
+    CRUD 投影只回 ``headerNames``（名字列表），值 write-only、全值只经 snapshot。
+    ``GET /{id}/models`` 是**纯 SQLite 读**（零上游外呼，review 批2 HIGH-2）。
+  - **写**（provider POST/PATCH/DELETE + model 行 PUT/DELETE + ``POST /{id}/models/refresh``
+    上游拉取 + ``POST /{id}/test`` 连通性测试）= ``Depends(verify_local_token)``（**仅**本地
+    ephemeral token，不接受 CF JWT）：本地 renderer 经 chat_local_bridge webRequest 注入
+    local token 不受影响；远程 CF 会话恒 403 → Settings 远程只读。refresh/test 归写面：
+    它们拿解密 key 发真实上游请求（探测/出网面），不该被远程会话驱动。
   - **``GET /snapshot``** = ``Depends(verify_local_token)``（镜像 island announce / exec
     端点先例）：返回**解密后** key，仅供同机 loopback 的 embedded gateway 消费；远程 CF
     会话经代理路径不可达（403）。
@@ -105,7 +107,7 @@ def ensure_seeded_store() -> LlmProviderStore:
 
 
 # ---------------------------------------------------------------------------
-# 投影 helper（掩码纪律：CRUD 面永不回明文 key）
+# 投影 helper（掩码纪律：CRUD 面永不回明文 key，header 值 write-only）
 # ---------------------------------------------------------------------------
 
 
@@ -116,7 +118,9 @@ def _masked_provider_dict(store: LlmProviderStore, row: LlmProviderRow) -> Dict[
         "protocol": row.protocol,
         "displayName": row.display_name,
         "baseUrl": row.base_url,
-        "headers": row.headers,
+        # header 值同 key 是潜在 secret（Authorization/网关签名等，review 批2 HIGH-1）：
+        # CRUD 面只回名字；全值只经 snapshot（verify_local_token）供 gateway/runtime。
+        "headerNames": sorted(row.headers.keys()),
         "enabled": row.enabled,
         "sortOrder": row.sort_order,
         "hasKey": row.has_key,
@@ -152,6 +156,25 @@ def _require_provider(store: LlmProviderStore, provider_id: str) -> LlmProviderR
 
 def _resolve_base(protocol: str, base_url: str) -> str:
     return (base_url or "").strip() or _DEFAULT_BASES.get(protocol, "")
+
+
+def _outbound_base_problem(base: str) -> Optional[str]:
+    """出网 base_url 最小策略（review 批2 HIGH-2）：仅 http/https、拒 userinfo
+    （``user:pass@host`` 形态 URL）。返回可读错误；None = 通过。
+
+    刻意**不封私网 IP**——本地 ollama / 自建 one-api 是合法场景，且两个外呼端点
+    （/models/refresh + /test）已收紧 verify_local_token，远程面已消除。"""
+    try:
+        url = httpx.URL(base)
+    except Exception:  # noqa: BLE001 — 任何解析失败都按坏 URL 拒
+        return "base_url is not a valid URL"
+    if url.scheme not in ("http", "https"):
+        return f"base_url scheme must be http or https, got {url.scheme or '(none)'!r}"
+    if url.username or url.password:
+        return "base_url must not embed credentials (user:pass@host)"
+    if not url.host:
+        return "base_url is missing a host"
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -406,7 +429,9 @@ async def update_provider(
     body: Optional[Dict[str, Any]] = None,
     _: None = Depends(verify_local_token),
 ):
-    """部分更新（body 里出现的键才动）。``apiKey``：非空 str = 轮换；空串/null = 清除。"""
+    """部分更新（body 里出现的键才动）。``apiKey``：非空 str = 轮换；空串/null = 清除。
+    ``headers``：write-only 明文 map（响应只回 headerNames，HIGH-1），**全量替换**语义
+    ——省略 = 不改；``{}``/null = 清空。"""
     body = body or {}
     store = ensure_seeded_store()
     _require_provider(store, provider_id)
@@ -467,37 +492,59 @@ async def delete_provider(
 async def list_provider_models(
     provider_id: str,
     request: Request,
-    refresh: bool = Query(False),
     _: None = Depends(verify_cf_access),
 ):
-    """provider 的模型列表（``llm_model`` 表）。``?refresh=true`` → 先按 protocol 拉上游
-    ``/models`` merge 进表（新 id source='fetched' enabled=0；**不覆盖** manual 行与已有
-    enabled 状态），再返回。拉取失败 → 恒 200 + ``error`` 可读消息 + 现存行照常返回
-    （中转不透传 /models 时走手动添加兜底）。"""
+    """provider 的模型列表（``llm_model`` 表）——**纯 SQLite 读，零上游外呼**（review 批2
+    HIGH-2：cf_access 读端点不得驱动服务端出网/写表）。上游拉取拆去
+    ``POST /{id}/models/refresh``（verify_local_token）。旧 ``?refresh=true`` 入参直接
+    忽略（未声明的 query 参数 FastAPI 自然丢弃）——旧 UI 短暂共存期不 400。
+    响应形状保持 {provider, models, fetchedNew:0, error:null}（消费端零改）。"""
+    store = ensure_seeded_store()
+    _require_provider(store, provider_id)
+    models = [_model_dict(m) for m in store.list_models(provider_id)]
+    return success_envelope(
+        {"provider": provider_id, "models": models, "fetchedNew": 0, "error": None},
+        request=request,
+        source="sqlite",
+    )
+
+
+@router.post("/{provider_id}/models/refresh")
+async def refresh_provider_models(
+    provider_id: str,
+    request: Request,
+    _: None = Depends(verify_local_token),
+):
+    """按 protocol 拉上游 ``/models`` merge 进表（新 id source='fetched' enabled=0；
+    **不覆盖** manual 行与已有 enabled 状态），再返回全量模型行。归写面 =
+    verify_local_token（review 批2 HIGH-2：出网 + merge 写表，远程 CF 会话恒 403）。
+    拉取失败 → 恒 200 + ``error`` 可读消息 + 现存行照常返回（中转不透传 /models 时
+    走手动添加兜底）。响应形状与旧 ``GET ?refresh=true`` 一致。"""
     store = ensure_seeded_store()
     prov = _require_provider(store, provider_id)
     error: Optional[str] = None
     fetched_new = 0
-    if refresh:
-        base = _resolve_base(prov.protocol, prov.base_url)
-        if not base:
-            error = "base_url not configured for this provider"
-        else:
-            api_key = store.get_provider_api_key(provider_id) or ""
-            try:
-                ids = await _fetch_provider_models(
-                    prov.protocol, base, api_key, headers=prov.headers
-                )
-                fetched_new = store.merge_fetched_models(provider_id, ids)
-            except ValueError as exc:
-                error = str(exc)
-            except Exception:  # noqa: BLE001 — 防御兜底；不 5xx
-                error = "unexpected error while fetching upstream models"
+    base = _resolve_base(prov.protocol, prov.base_url)
+    if not base:
+        error = "base_url not configured for this provider"
+    else:
+        error = _outbound_base_problem(base)
+    if error is None:
+        api_key = store.get_provider_api_key(provider_id) or ""
+        try:
+            ids = await _fetch_provider_models(
+                prov.protocol, base, api_key, headers=prov.headers
+            )
+            fetched_new = store.merge_fetched_models(provider_id, ids)
+        except ValueError as exc:
+            error = str(exc)
+        except Exception:  # noqa: BLE001 — 防御兜底；不 5xx
+            error = "unexpected error while fetching upstream models"
     models = [_model_dict(m) for m in store.list_models(provider_id)]
     return success_envelope(
         {"provider": provider_id, "models": models, "fetchedNew": fetched_new, "error": error},
         request=request,
-        source="upstream" if refresh else "sqlite",
+        source="upstream",
     )
 
 
@@ -506,6 +553,11 @@ async def list_provider_models(
 # model_id 走 body/query 而非 path 段——OpenRouter 等家的 wire id 含 '/'（如
 # 'openai/gpt-4o'），进 path 段会撞路由分段。
 # ---------------------------------------------------------------------------
+
+# model upsert 的入参约束（review 批2 MEDIUM-6：拒未知字段与隐式类型转换）。
+_MODEL_UPSERT_KEYS = frozenset({"id", "displayName", "enabled", "capabilities", "maxOutput"})
+_CAPABILITY_KEYS = frozenset({"tools", "vision", "reasoning"})
+_MAX_OUTPUT_CEILING = 2_000_000
 
 
 @router.put("/{provider_id}/models")
@@ -520,8 +572,20 @@ async def upsert_provider_model(
     merge 语义：body 里出现的键才动，未出现的键保留现行值（store.upsert_model 是全字段
     覆盖 → 端点先读现行行回填，避免「勾启用」把 maxOutput/capabilities 清掉）。新行 =
     手动添加（source='manual'，enabled 缺省 True——owner 手动加模型就是为了用）。
+
+    严格校验（MEDIUM-6）：未知顶层字段 400；``enabled`` 必须 bool（不收 "false"/1）；
+    ``capabilities`` 只允许 tools/vision/reasoning 三键且值为 bool；``maxOutput`` =
+    null 或 1..2_000_000 正整数。
     """
     body = body or {}
+    unknown = set(body) - _MODEL_UPSERT_KEYS
+    if unknown:
+        raise APIError(
+            "E_INVALID_ARG",
+            f"unknown fields: {sorted(unknown)}",
+            hint=f"allowed: {sorted(_MODEL_UPSERT_KEYS)}",
+            source="sqlite",
+        )
     model_id = body.get("id")
     if not isinstance(model_id, str) or not model_id.strip():
         raise APIError("E_INVALID_ARG", "body must include string field 'id'", source="sqlite")
@@ -539,19 +603,38 @@ async def upsert_provider_model(
     if display_name is not None and not isinstance(display_name, str):
         raise APIError("E_INVALID_ARG", "'displayName' must be a string", source="sqlite")
     enabled = _pick("enabled", existing.enabled if existing else True)
+    if not isinstance(enabled, bool):
+        raise APIError("E_INVALID_ARG", "'enabled' must be a boolean", source="sqlite")
     capabilities = _pick("capabilities", existing.capabilities if existing else None)
-    if capabilities is not None and not isinstance(capabilities, dict):
-        raise APIError("E_INVALID_ARG", "'capabilities' must be an object", source="sqlite")
+    if capabilities is not None:
+        if not isinstance(capabilities, dict):
+            raise APIError("E_INVALID_ARG", "'capabilities' must be an object", source="sqlite")
+        if set(capabilities) - _CAPABILITY_KEYS or not all(
+            isinstance(v, bool) for v in capabilities.values()
+        ):
+            raise APIError(
+                "E_INVALID_ARG",
+                f"'capabilities' allows only boolean keys {sorted(_CAPABILITY_KEYS)}",
+                source="sqlite",
+            )
     max_output = _pick("maxOutput", existing.max_output if existing else None)
-    if max_output is not None and (isinstance(max_output, bool) or not isinstance(max_output, int)):
-        raise APIError("E_INVALID_ARG", "'maxOutput' must be an integer or null", source="sqlite")
+    if max_output is not None and (
+        isinstance(max_output, bool)
+        or not isinstance(max_output, int)
+        or not 1 <= max_output <= _MAX_OUTPUT_CEILING
+    ):
+        raise APIError(
+            "E_INVALID_ARG",
+            f"'maxOutput' must be null or an integer in 1..{_MAX_OUTPUT_CEILING}",
+            source="sqlite",
+        )
     try:
         row = store.upsert_model(
             provider_id,
             model_id,
             display_name=display_name,
             group_name=existing.group_name if existing else None,
-            enabled=bool(enabled),
+            enabled=enabled,
             capabilities=capabilities,
             max_output=max_output,
             source=existing.source if existing else "manual",
@@ -596,9 +679,12 @@ async def test_provider(
     store = ensure_seeded_store()
     prov = _require_provider(store, provider_id)
     base = _resolve_base(prov.protocol, prov.base_url)
-    if not base:
+    problem = (
+        "base_url not configured for this provider" if not base else _outbound_base_problem(base)
+    )
+    if problem:
         return success_envelope(
-            {"ok": False, "latencyMs": 0, "error": "base_url not configured for this provider"},
+            {"ok": False, "latencyMs": 0, "error": problem},
             request=request,
             source="upstream",
         )

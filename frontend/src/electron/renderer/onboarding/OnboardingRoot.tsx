@@ -91,8 +91,8 @@ export default function OnboardingRoot(): React.JSX.Element {
 
   // STEPS 随 backend 动态生成 (davmail 多一步「选择文件夹」)。backend 在 'backend' 步
   // (索引 2) 选定, 早于 config/folders, 所以 STEPS 增长时用户尚未走过 → 索引不漂移。
-  // aiStepEnabled 只会在用户停在 'sync' 步时翻 true (见下 effect 的迟到守卫), 插入点
-  // 在当前步之后 → 同样不漂移。
+  // aiStepEnabled 只在用户位于 AI 插入位 (sync 之后) 之前/之上时翻 true (见下 effect
+  // 的采纳守卫), 插入点恒在当前步之后 → 同样不漂移。
   const STEPS = useMemo<StepDef[]>(
     () => buildSteps(backend, aiStepEnabled),
     [backend, aiStepEnabled]
@@ -130,29 +130,67 @@ export default function OnboardingRoot(): React.JSX.Element {
     }
   }, [])
 
-  // 进入 'sync' 步 (commitConfig 已起后端) 时查 provider registry flag。迟到守卫:
-  // resolve 时用户已离开 sync 步 → 丢弃 (避免在其身后插步、把当前索引顶到 'ai')。
+  // 进入 'sync' 步 (commitConfig 已起后端) 时立即查 provider registry flag (批 2
+  // review MEDIUM-5)。结果不丢弃：
+  //   - 用户还停在插入位之前/之上 (ai 步插在 sync 之后) → 到达即采纳, 当前索引不漂移;
+  //   - 用户点「下一步」离开 sync 时查询仍 in-flight → await (上限 3s, 超时按 off 先
+  //     放行) 再算下一步, 保证 flag on 的用户不会因为点得快而看不到 AI 步;
+  //   - 超时放行后真实结果才到 → 结果留在 ref 里, 用户一旦回退到插入位之前再采纳
+  //     (越过插入位时插步会把当前索引顶到 'ai', 那一刻不动)。
   const stepKeyRef = useRef<string>('welcome')
   useEffect(() => {
     stepKeyRef.current = STEPS[step]?.key ?? 'welcome'
   })
+  const aiFlagRef = useRef<{ promise: Promise<boolean> | null; result: boolean | null }>({
+    promise: null,
+    result: null
+  })
+  const advancingRef = useRef(false)
+  const beforeAiInsertion = (): boolean => !['ai', 'plugins', 'done'].includes(stepKeyRef.current)
   useEffect(() => {
-    if (aiStepEnabled || STEPS[step]?.key !== 'sync') return
-    let alive = true
-    void ipc
-      .llmProviderStatus()
-      .then((r) => {
-        if (!alive || stepKeyRef.current !== 'sync') return
-        if (r?.enabled) setAiStepEnabled(true)
-      })
-      .catch(() => undefined)
-    return () => {
-      alive = false
+    if (aiStepEnabled) return
+    // 迟到结果的回补采纳 (超时放行后用户回退到插入位之前)。
+    if (aiFlagRef.current.result === true && beforeAiInsertion()) {
+      setAiStepEnabled(true)
+      return
     }
+    if (STEPS[step]?.key !== 'sync' || aiFlagRef.current.promise !== null) return
+    const promise = ipc
+      .llmProviderStatus()
+      .then((r) => r?.enabled === true)
+      .catch(() => false)
+    aiFlagRef.current.promise = promise
+    void promise.then((enabled) => {
+      aiFlagRef.current.result = enabled
+      if (enabled && beforeAiInsertion()) setAiStepEnabled(true)
+    })
   }, [step, STEPS, aiStepEnabled])
 
   const next = (): void => {
     setSubmitError(null)
+    const flag = aiFlagRef.current
+    if (
+      STEPS[step]?.key === 'sync' &&
+      !aiStepEnabled &&
+      flag.result === null &&
+      flag.promise !== null
+    ) {
+      // 离开 sync 时查询未决 → 等它 (上限 3s, 超时按 off) 再算下一步 key。
+      if (advancingRef.current) return
+      advancingRef.current = true
+      void Promise.race([
+        flag.promise,
+        new Promise<boolean>((res) => setTimeout(() => res(false), 3_000))
+      ])
+        .then((enabled) => {
+          if (enabled) setAiStepEnabled(true)
+          setStep((s) => s + 1)
+        })
+        .finally(() => {
+          advancingRef.current = false
+        })
+      return
+    }
     setStep((s) => Math.min(STEPS.length - 1, s + 1))
   }
   const back = (): void => setStep((s) => Math.max(0, s - 1))

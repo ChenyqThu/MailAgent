@@ -14,7 +14,7 @@ import { useQuery } from '@tanstack/react-query'
 import { request } from '@shared/api/http_client'
 import { qk } from '@shared/lib/queryKeys'
 
-import { resolveApiBaseUrl } from './useLlmModels'
+import { fetchChatConfigModelsProbe, resolveApiBaseUrl } from './useLlmModels'
 
 // ── wire 类型（镜像 llm_providers.py 的 _masked_provider_dict / _model_dict）──────────
 
@@ -31,7 +31,9 @@ export interface LlmProviderSummary {
   protocol: LlmProviderProtocol
   displayName: string
   baseUrl: string
-  headers: Record<string, string>
+  /** 自定义 header 只回名不回值（批 2 review HIGH-1：header 值按 secret 纪律 write-only，
+   *  明文仅在 snapshot（verify_local_token）面）。改值 = PATCH headers 明文 map 全量替换。 */
+  headerNames: string[]
   enabled: boolean
   sortOrder: number
   hasKey: boolean
@@ -101,6 +103,7 @@ export async function updateLlmProvider(
     baseUrl?: string
     /** 非空 = 轮换；'' / null = 清除（后端语义）。 */
     apiKey?: string | null
+    /** write-only 明文 map，全量替换：省略 = 不改，{} = 清空（跨 lane 契约）。 */
     headers?: Record<string, string>
     enabled?: boolean
     sortOrder?: number
@@ -115,15 +118,22 @@ export async function deleteLlmProvider(providerId: string): Promise<void> {
   await request(resolveApiBaseUrl(), 'DELETE', `/llm/providers/${encodeURIComponent(providerId)}`)
 }
 
-export async function listLlmProviderModels(
-  providerId: string,
-  opts?: { refresh?: boolean }
-): Promise<LlmProviderModelsData> {
+/** 纯读现存 model 行（批 2 review HIGH-2 后 GET 不再带 refresh —— 读端点不出网不写库）。 */
+export async function listLlmProviderModels(providerId: string): Promise<LlmProviderModelsData> {
   return request(
     resolveApiBaseUrl(),
     'GET',
-    `/llm/providers/${encodeURIComponent(providerId)}/models`,
-    opts?.refresh ? { query: { refresh: 'true' } } : undefined
+    `/llm/providers/${encodeURIComponent(providerId)}/models`
+  )
+}
+
+/** 上游拉取（出网 + merge 写库）→ 独立写端点 POST /models/refresh（verify_local_token，
+ *  远程 web 403 只读）。响应形状同旧 refresh=true（跨 lane 契约）。 */
+export async function refreshLlmProviderModels(providerId: string): Promise<LlmProviderModelsData> {
+  return request(
+    resolveApiBaseUrl(),
+    'POST',
+    `/llm/providers/${encodeURIComponent(providerId)}/models/refresh`
   )
 }
 
@@ -166,24 +176,14 @@ export async function deleteLlmProviderModel(providerId: string, modelId: string
 
 // ── React Query hooks ────────────────────────────────────────────────────────────────
 
-/** Fetch providerRegistryEnabled from serve-api /chat/config（运行时 flag，非 vite define）。
- *  default-OFF 姿态：未配置 / 不可达 → false（旧 UI 字节级现状），镜像 fetchExecPolicyEnabled。 */
-async function fetchProviderRegistryEnabled(): Promise<boolean> {
-  try {
-    const resp = await fetch(`${resolveApiBaseUrl()}/chat/config`, { credentials: 'include' })
-    if (!resp.ok) return false
-    const body = (await resp.json()) as { data?: { providerRegistryEnabled?: unknown } }
-    return body?.data?.providerRegistryEnabled === true
-  } catch {
-    return false
-  }
-}
-
-/** MAILAGENT_LLM_PROVIDER_REGISTRY 的前端可观测投影。false/加载中 → 旧 UI（字节级不变）。 */
+/** MAILAGENT_LLM_PROVIDER_REGISTRY 的前端可观测投影。false/加载中 → 旧 UI（字节级不变）。
+ *  复用 useEnabledModels 的同一 /chat/config query（同 queryKey + queryFn，select 投影
+ *  另一切片）——批 2 review LOW-7：flag off 打开 Settings/抽屉不得新增独立网络请求。 */
 export function useProviderRegistryEnabled(): boolean {
   const q = useQuery({
-    queryKey: qk.chat.config('providerRegistryEnabled'),
-    queryFn: fetchProviderRegistryEnabled,
+    queryKey: qk.chat.config('enabledModels'),
+    queryFn: fetchChatConfigModelsProbe,
+    select: (d) => d.providerRegistryEnabled,
     staleTime: 30_000,
     retry: false
   })

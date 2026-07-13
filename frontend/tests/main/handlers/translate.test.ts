@@ -26,13 +26,15 @@ const {
   mockGetLlmProviderModelResolver,
   mockGetLlmTranslateApiKey,
   mockIsLlmProviderRegistryEnabled,
-  mockResolveProviderModel
+  mockResolveProviderModel,
+  mockSanitizedUpstreamErrorMessage
 } = vi.hoisted(() => ({
   mockGenerateText: vi.fn(),
   mockGetLlmProviderModelResolver: vi.fn(),
   mockGetLlmTranslateApiKey: vi.fn(),
   mockIsLlmProviderRegistryEnabled: vi.fn(),
-  mockResolveProviderModel: vi.fn()
+  mockResolveProviderModel: vi.fn(),
+  mockSanitizedUpstreamErrorMessage: vi.fn(() => 'HTTP 401 APICallError')
 }))
 
 let fixtureDb: Database.Database
@@ -57,7 +59,8 @@ vi.mock('../../../src/electron/main/llm_settings', () => ({
 
 vi.mock('../../../src/electron/main/llm_provider_resolver', () => ({
   getLlmProviderModelResolver: mockGetLlmProviderModelResolver,
-  isLlmProviderRegistryEnabled: mockIsLlmProviderRegistryEnabled
+  isLlmProviderRegistryEnabled: mockIsLlmProviderRegistryEnabled,
+  sanitizedUpstreamErrorMessage: mockSanitizedUpstreamErrorMessage
 }))
 
 vi.mock('ai', () => ({
@@ -108,10 +111,8 @@ function buildDb(): Database.Database {
       FOREIGN KEY (internal_id) REFERENCES email_metadata(internal_id) ON DELETE CASCADE
     );
   `)
-  db.prepare('INSERT INTO email_metadata VALUES (?,?,?,?,?)')
-    .run(101, 'm101@x', 'pending', 1, 1)
-  db.prepare('INSERT INTO email_metadata VALUES (?,?,?,?,?)')
-    .run(102, 'm102@x', 'pending', 1, 1)
+  db.prepare('INSERT INTO email_metadata VALUES (?,?,?,?,?)').run(101, 'm101@x', 'pending', 1, 1)
+  db.prepare('INSERT INTO email_metadata VALUES (?,?,?,?,?)').run(102, 'm102@x', 'pending', 1, 1)
   db.prepare('INSERT INTO email_body VALUES (?,?,?)').run(101, EMAIL_BODY_HTML_3PARA, '')
   db.prepare('INSERT INTO email_body VALUES (?,?,?)').run(102, '', '')
   return db
@@ -160,7 +161,8 @@ function insertEmail(
   bodyHtml: string | null,
   bodyMarkdown: string | null = ''
 ): void {
-  fixtureDb.prepare('INSERT INTO email_metadata VALUES (?,?,?,?,?)')
+  fixtureDb
+    .prepare('INSERT INTO email_metadata VALUES (?,?,?,?,?)')
     .run(internalId, `m${internalId}@x`, 'pending', 1, 1)
   fixtureDb.prepare('INSERT INTO email_body VALUES (?,?,?)').run(internalId, bodyHtml, bodyMarkdown)
 }
@@ -209,9 +211,7 @@ function mockEchoTranslation(calls?: Array<{ count: number; chars: number }>): v
       count: segs.length,
       chars: segs.reduce((sum, s) => sum + s.text.length, 0)
     })
-    return Promise.resolve(
-      ok(JSON.stringify(segs.map((s, i) => ({ id: s.id, tgt: `译文 ${i}` }))))
-    )
+    return Promise.resolve(ok(JSON.stringify(segs.map((s, i) => ({ id: s.id, tgt: `译文 ${i}` })))))
   })
 }
 
@@ -296,6 +296,24 @@ describe('translateBatch', () => {
     expect(fetchMock).not.toHaveBeenCalled()
     expect(result.segments).toHaveLength(3)
     expect(result.model).toBe('gpt-5')
+  })
+
+  test('flag on upstream failure logs via the sanitizer, never the raw message (MEDIUM-4)', async () => {
+    mockIsLlmProviderRegistryEnabled.mockReturnValue(true)
+    mockResolveProviderModel.mockResolvedValue({
+      providerId: 'openai-main',
+      modelId: 'gpt-5',
+      model: { modelId: 'sdk-gpt-5' },
+      protocol: 'openai',
+      maxOutputTokens: 8192
+    })
+    const leaky = new Error('401 body echoed Authorization: Bearer sk-live-LEAK')
+    mockGenerateText.mockRejectedValue(leaky)
+
+    const result = await handler.translateBatch({ internalId: 101 })
+
+    expect(result.failedBatches).toBe(result.totalBatches)
+    expect(mockSanitizedUpstreamErrorMessage).toHaveBeenCalledWith(leaky)
   })
 
   test('explicit translate profile keeps legacy fetch priority when flag is on', async () => {
@@ -430,7 +448,7 @@ describe('translateBatch', () => {
   test('JSON parse fallback: malformed wrapper text recovers the inner [...]', async () => {
     fetchMock.mockImplementationOnce((_url, init) => {
       const segs = JSON.parse(
-        (JSON.parse((init as RequestInit).body as string).messages[0].content) as string
+        JSON.parse((init as RequestInit).body as string).messages[0].content as string
       ) as Array<{ id: string; text: string }>
       const inner = segs.map((s) => ({ id: s.id, tgt: 'tgt' }))
       // Wrap in chatter that JSON.parse cannot eat — regex fallback must recover.

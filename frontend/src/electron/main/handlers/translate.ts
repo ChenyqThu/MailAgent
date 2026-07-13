@@ -34,7 +34,8 @@ import { getDb, resolveDbPath } from '../db'
 import { extractBlocks, type ExtractedBlock } from '../lib/html-extractor'
 import {
   getLlmProviderModelResolver,
-  isLlmProviderRegistryEnabled
+  isLlmProviderRegistryEnabled,
+  sanitizedUpstreamErrorMessage
 } from '../llm_provider_resolver'
 import { plaintextToHtml } from '@shared/lib/plaintext_html'
 import {
@@ -503,8 +504,13 @@ async function runOneBatchWithProvider(
       logLine({ event: 'translate.batch_aborted', internalId })
       return { segments: [], modelReturned: model, ok: false }
     }
-    const msg = err instanceof Error ? err.message : String(err)
-    logLine({ event: 'translate.batch_fetch_failed', internalId, error: msg })
+    // AI SDK 路径：APICallError.message 可能含上游回显的凭证 → 固定形状脱敏后才进日志
+    // （批 2 review MEDIUM-4）。legacy runOneBatch（裸 fetch）的既有日志形状不动。
+    logLine({
+      event: 'translate.batch_fetch_failed',
+      internalId,
+      error: sanitizedUpstreamErrorMessage(err)
+    })
     return { segments: [], modelReturned: model, ok: false }
   } finally {
     clearTimeout(timer)

@@ -5,14 +5,22 @@
   2. provider CRUD（坏 protocol 400 / default 禁删 400 / 缺行 404 / key 轮换掩码）
   3. /snapshot 鉴权 = verify_local_token（CF JWT 恒 403，本地 token 200）
   4. /snapshot §4.3b 形状 + 解密 key + CRUD 后 version 递增 + 纯读不 bump
-  5. /{id}/models?refresh=true 上游 merge（fetched 不覆盖 manual/enabled）+ 失败可读 error
+  5. POST /{id}/models/refresh 上游 merge（fetched 不覆盖 manual/enabled）+ 失败可读
+     error + 鉴权 = verify_local_token；GET /{id}/models 纯 SQLite 读零外呼、旧
+     ?refresh=true 入参被忽略（批2 HIGH-2 拆分）
   6. /{id}/test 连通性探测（_probe_provider MockTransport 单元 + 端点转发）
   7. /chat/config enabledModels：flag off 字节级现状（表有行也不读）/ flag on 聚合投影
-  8. P3 写面鉴权收紧：provider POST/PATCH/DELETE + model PUT/DELETE + /test 全 =
-     verify_local_token（合法 CF JWT 恒 403 → 远程 Settings 只读）；GET 保持 cf_access
+  8. P3 写面鉴权收紧：provider POST/PATCH/DELETE + model PUT/DELETE + /models/refresh +
+     /test 全 = verify_local_token（合法 CF JWT 恒 403 → 远程 Settings 只读）；GET 保持
+     cf_access
   9. P3 model 行写端点：PUT merge 语义（未传键保留现行值）/ 手动添加默认 enabled /
-     DELETE 缺行 404
+     DELETE 缺行 404；批2 MEDIUM-6 严格校验（enabled 严格 bool / capabilities 三键 bool /
+     maxOutput 1..2M / 未知顶层字段 400）
  10. /chat/config providerRegistryEnabled 投影（UI 门控字段，off=false / on=true）
+ 11. 批2 HIGH-1：CRUD 投影只回 headerNames（header 值 write-only 不出 wire）；PATCH
+     省略/全量替换/{} 清空三语义；snapshot 仍含全值
+ 12. 批2 HIGH-2：两个外呼点（/models/refresh + /test）的 base_url 最小策略——仅
+     http/https、拒 userinfo；坏 base 零外呼；有意不封私网（本地 ollama 合法）
 
 隔离：每用例独立 agent_config.db（env 覆盖 + 单例 reset）+ keyfile master key（绝不弹真
 钥匙串，镜像 tests/agent_config/test_secrets.py）+ stub ``_resolve_seed_inputs``（seed 不
@@ -107,8 +115,10 @@ def test_list_lazily_seeds_default_and_masks_key(client: TestClient):
     assert prov["hasKey"] is True
     assert prov["keyLast4"] == "1234"
     assert prov["isDefault"] is True
-    # 明文 key 不出 CRUD wire（掩码纪律）
+    # 明文 key 不出 CRUD wire（掩码纪律）；header 投影 = 名字列表（HIGH-1，seed 无头 → []）
     assert SEED_KEY not in r.text
+    assert prov["headerNames"] == []
+    assert "headers" not in prov
     # seed 幂等：再读不重复
     r2 = client.get("/api/llm/providers")
     assert len(r2.json()["data"]["providers"]) == 1
@@ -165,6 +175,54 @@ def test_provider_crud_error_paths(client: TestClient):
     # 缺行 → 404
     assert client.delete("/api/llm/providers/nope").status_code == 404
     assert client.patch("/api/llm/providers/nope", json={"enabled": True}).status_code == 404
+
+
+# ── HIGH-1. header 值 write-only（CRUD 投影只回 headerNames）─────────────────────────
+
+
+def test_header_values_never_in_crud_projection(client: TestClient):
+    """HIGH-1：自定义 header 值同 key 是 secret——列表/create/patch 响应只回名字列表，
+    全文（含嵌套序列化）grep 不到任何 header 值；PATCH 三语义：省略=不改 / 传 map=
+    全量替换 / {}=清空；snapshot（verify_local_token 面）仍含全值。"""
+    sign_val = "gw-sign-secret-b2h1"
+    tenant_val = "tenant-value-b2h1"
+    r = client.post(
+        "/api/llm/providers",
+        json={
+            "id": "corp",
+            "protocol": "openai-compatible",
+            "baseUrl": "https://gw.example/v1",
+            "headers": {"X-Gw-Sign": sign_val, "X-Tenant": tenant_val},
+        },
+    )
+    assert r.status_code == 200
+    created = r.json()["data"]
+    assert created["headerNames"] == ["X-Gw-Sign", "X-Tenant"]
+    assert "headers" not in created
+    assert sign_val not in r.text and tenant_val not in r.text
+
+    # 列表响应全文无值
+    r = client.get("/api/llm/providers")
+    assert sign_val not in r.text and tenant_val not in r.text
+    corp = next(p for p in r.json()["data"]["providers"] if p["id"] == "corp")
+    assert corp["headerNames"] == ["X-Gw-Sign", "X-Tenant"]
+
+    # snapshot（local-token 消费面）仍含全值——gateway/runtime 靠它发请求
+    snap = client.get("/api/llm/providers/snapshot").json()["data"]
+    corp_snap = next(p for p in snap["providers"] if p["id"] == "corp")
+    assert corp_snap["headers"] == {"X-Gw-Sign": sign_val, "X-Tenant": tenant_val}
+
+    # PATCH 省略 headers = 不改
+    r = client.patch("/api/llm/providers/corp", json={"displayName": "Corp"})
+    assert r.json()["data"]["headerNames"] == ["X-Gw-Sign", "X-Tenant"]
+    # PATCH 传 map = 全量替换（不是逐键 merge）
+    replaced_val = "replaced-value-b2h1"
+    r = client.patch("/api/llm/providers/corp", json={"headers": {"X-Only": replaced_val}})
+    assert r.json()["data"]["headerNames"] == ["X-Only"]
+    assert replaced_val not in r.text
+    # PATCH {} = 清空
+    r = client.patch("/api/llm/providers/corp", json={"headers": {}})
+    assert r.json()["data"]["headerNames"] == []
 
 
 # ── 3. /snapshot 鉴权 = 仅本地 token ─────────────────────────────────────────────────
@@ -248,6 +306,13 @@ def test_write_endpoints_reject_cf_jwt_and_accept_local_token(client: TestClient
     assert (
         client.delete(
             f"/api/llm/providers/{DEFAULT_PROVIDER_ID}/models?modelId=m1", headers=CF_HEADERS
+        ).status_code
+        == 403
+    )
+    # HIGH-2：模型拉取（出网 + 写表）同为写面——远程 CF 会话不得驱动服务端外呼
+    assert (
+        client.post(
+            f"/api/llm/providers/{DEFAULT_PROVIDER_ID}/models/refresh", headers=CF_HEADERS
         ).status_code
         == 403
     )
@@ -348,6 +413,52 @@ def test_model_upsert_and_delete_error_paths(client: TestClient):
     assert "claude-sonnet-4-6" not in ids
 
 
+def test_model_upsert_strict_validation(client: TestClient):
+    """MEDIUM-6：enabled 严格 bool（拒 "false"/1 隐式转换）/ capabilities 只允许
+    tools·vision·reasoning 三键且值 bool / maxOutput = null 或 1..2_000_000 / 未知
+    顶层字段 400。"""
+    url = f"/api/llm/providers/{DEFAULT_PROVIDER_ID}/models"
+    client.get("/api/llm/providers")  # seed
+
+    def _put(payload):
+        return client.put(url, json={"id": "m-strict", **payload})
+
+    # enabled 严格 bool
+    assert _put({"enabled": "false"}).status_code == 400
+    assert _put({"enabled": 1}).status_code == 400
+    # capabilities：未知键 / 非 bool 值 → 400
+    assert _put({"capabilities": {"tools": True, "bogus": True}}).status_code == 400
+    assert _put({"capabilities": {"tools": "yes"}}).status_code == 400
+    # maxOutput：0 / 负数 / 超上限 / bool → 400
+    assert _put({"maxOutput": 0}).status_code == 400
+    assert _put({"maxOutput": -3}).status_code == 400
+    assert _put({"maxOutput": 2_000_001}).status_code == 400
+    assert _put({"maxOutput": True}).status_code == 400
+    # 未知顶层字段 → 400（source 是服务端派生列，不收）
+    assert _put({"source": "fetched"}).status_code == 400
+    # 以上全被拒 → 行未落库
+    ids = {
+        m["id"]
+        for m in client.get(f"/api/llm/providers/{DEFAULT_PROVIDER_ID}/models").json()["data"][
+            "models"
+        ]
+    }
+    assert "m-strict" not in ids
+    # 合法边界值通过
+    r = _put(
+        {
+            "enabled": False,
+            "maxOutput": 1,
+            "capabilities": {"tools": True, "vision": False, "reasoning": True},
+        }
+    )
+    assert r.status_code == 200
+    m = r.json()["data"]
+    assert m["enabled"] is False and m["maxOutput"] == 1
+    assert m["capabilities"] == {"tools": True, "vision": False, "reasoning": True}
+    assert _put({"maxOutput": 2_000_000}).json()["data"]["maxOutput"] == 2_000_000
+
+
 def test_model_id_with_slash_roundtrip(client: TestClient):
     """OpenRouter 式 wire id 含 '/'——走 body/query（非 path 段），必须整链可用。"""
     client.get("/api/llm/providers")  # seed
@@ -362,7 +473,7 @@ def test_model_id_with_slash_roundtrip(client: TestClient):
     assert r.status_code == 200
 
 
-# ── 5. /{id}/models 发现 ─────────────────────────────────────────────────────────────
+# ── 5. /{id}/models 发现（HIGH-2 拆分：GET 纯读 / POST refresh 出网）──────────────────
 
 
 def test_models_refresh_merges_fetched_without_touching_manual(client: TestClient, monkeypatch):
@@ -370,7 +481,7 @@ def test_models_refresh_merges_fetched_without_touching_manual(client: TestClien
         return ["claude-sonnet-4-6", "claude-new-model"]
 
     monkeypatch.setattr(lp_router, "_fetch_provider_models", _fake_fetch)
-    r = client.get(f"/api/llm/providers/{DEFAULT_PROVIDER_ID}/models?refresh=true")
+    r = client.post(f"/api/llm/providers/{DEFAULT_PROVIDER_ID}/models/refresh")
     assert r.status_code == 200
     data = r.json()["data"]
     assert data["error"] is None and data["fetchedNew"] == 1
@@ -382,14 +493,49 @@ def test_models_refresh_merges_fetched_without_touching_manual(client: TestClien
     assert by_id["claude-new-model"]["source"] == "fetched"
     assert by_id["claude-new-model"]["enabled"] is False
 
-    # 不带 refresh → 只读表，不调上游
-    async def _boom(*_a, **_k):
-        raise AssertionError("must not fetch upstream without refresh=true")
-
-    monkeypatch.setattr(lp_router, "_fetch_provider_models", _boom)
+    # GET 读到 merge 后的表（纯读，形状不变）
     r = client.get(f"/api/llm/providers/{DEFAULT_PROVIDER_ID}/models")
     assert r.status_code == 200
-    assert len(r.json()["data"]["models"]) == 3
+    data = r.json()["data"]
+    assert len(data["models"]) == 3
+    assert data["fetchedNew"] == 0 and data["error"] is None
+
+
+def test_models_get_is_pure_read_and_ignores_legacy_refresh_param(
+    client: TestClient, monkeypatch
+):
+    """HIGH-2：GET /models 纯 SQLite 读零外呼；旧 ``?refresh=true`` 入参直接忽略
+    （不 400 不外呼——旧 UI 短暂共存期兼容）。transport 级断言：整个请求期间
+    模块内不得构造任何 httpx 客户端。"""
+    client.get("/api/llm/providers")  # seed
+
+    class _NoNetwork:
+        def __init__(self, *_a, **_k):
+            raise AssertionError("GET /models must not construct an httpx client")
+
+    monkeypatch.setattr(lp_router.httpx, "AsyncClient", _NoNetwork)
+    r = client.get(f"/api/llm/providers/{DEFAULT_PROVIDER_ID}/models?refresh=true")
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert {m["id"] for m in data["models"]} == {"claude-sonnet-4-6", "gpt-5.5"}
+    assert data["fetchedNew"] == 0 and data["error"] is None
+
+
+def test_models_refresh_requires_local_token(client: TestClient, monkeypatch):
+    """HIGH-2：refresh = verify_local_token——合法 CF JWT（远程 owner 会话）恒 403，
+    本地 token 放行。"""
+    client.get("/api/llm/providers")  # AUTH_DISABLED 下先触发 seed
+    _arm_cf_jwt(monkeypatch)
+    monkeypatch.setattr(auth_mod, "_LOCAL_API_TOKEN", LOCAL_TOK)
+    url = f"/api/llm/providers/{DEFAULT_PROVIDER_ID}/models/refresh"
+    assert client.post(url).status_code == 403
+    assert client.post(url, headers=CF_HEADERS).status_code == 403
+
+    async def _fake(*_a, **_k) -> List[str]:
+        return []
+
+    monkeypatch.setattr(lp_router, "_fetch_provider_models", _fake)
+    assert client.post(url, headers=LOCAL_HEADERS).status_code == 200
 
 
 def test_models_refresh_failure_is_readable_not_5xx(client: TestClient, monkeypatch):
@@ -400,13 +546,65 @@ def test_models_refresh_failure_is_readable_not_5xx(client: TestClient, monkeypa
         )
 
     monkeypatch.setattr(lp_router, "_fetch_provider_models", _fail)
-    r = client.get(f"/api/llm/providers/{DEFAULT_PROVIDER_ID}/models?refresh=true")
+    r = client.post(f"/api/llm/providers/{DEFAULT_PROVIDER_ID}/models/refresh")
     assert r.status_code == 200
     data = r.json()["data"]
     assert "404" in data["error"]
     # 现存（seed）行照常返回
     assert {m["id"] for m in data["models"]} == {"claude-sonnet-4-6", "gpt-5.5"}
     assert client.get("/api/llm/providers/nope/models").status_code == 404
+    assert client.post("/api/llm/providers/nope/models/refresh").status_code == 404
+
+
+# ── HIGH-2：出网 base_url 最小策略（仅 http/https、拒 userinfo；不封私网）──────────────
+
+
+def test_outbound_base_problem_unit():
+    p = lp_router._outbound_base_problem
+    assert p("https://x.example/v1") is None
+    assert p("http://127.0.0.1:11434/v1") is None  # 本地 ollama 合法——有意不封私网
+    assert p("ftp://x.example") is not None
+    assert p("x.example/v1") is not None  # 无 scheme
+    assert p("https://user:pass@x.example/v1") is not None
+    assert p("https://user@x.example/v1") is not None
+
+
+def test_outbound_policy_blocks_refresh_and_test_without_network(
+    client: TestClient, monkeypatch
+):
+    """坏 scheme / userinfo 的 base_url：/models/refresh 与 /test 都恒 200 + 可读 error，
+    且零外呼（transport 级断言不构造 httpx 客户端）。"""
+    client.get("/api/llm/providers")  # seed
+    client.post(
+        "/api/llm/providers",
+        json={"id": "ftpish", "protocol": "openai-compatible", "baseUrl": "ftp://gw.example/v1"},
+    )
+    client.post(
+        "/api/llm/providers",
+        json={
+            "id": "userinfo",
+            "protocol": "openai-compatible",
+            "baseUrl": "https://u:p@gw.example/v1",
+        },
+    )
+
+    class _NoNetwork:
+        def __init__(self, *_a, **_k):
+            raise AssertionError("policy-rejected base_url must never reach the network")
+
+    monkeypatch.setattr(lp_router.httpx, "AsyncClient", _NoNetwork)
+
+    r = client.post("/api/llm/providers/ftpish/models/refresh")
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data["fetchedNew"] == 0 and "http or https" in data["error"]
+    r = client.post("/api/llm/providers/userinfo/models/refresh")
+    assert "credentials" in r.json()["data"]["error"]
+
+    data = client.post("/api/llm/providers/ftpish/test").json()["data"]
+    assert data["ok"] is False and "http or https" in data["error"]
+    data = client.post("/api/llm/providers/userinfo/test").json()["data"]
+    assert data["ok"] is False and "credentials" in data["error"]
 
 
 # ── 6. 连通性测试 ────────────────────────────────────────────────────────────────────
@@ -576,7 +774,7 @@ def test_models_refresh_passes_provider_headers(client: TestClient, monkeypatch)
         return []
 
     monkeypatch.setattr(lp_router, "_fetch_provider_models", _fake)
-    r = client.get("/api/llm/providers/corp/models?refresh=true")
+    r = client.post("/api/llm/providers/corp/models/refresh")
     assert r.status_code == 200
     assert seen.get("headers") == {"X-Tenant": "t1"}
 

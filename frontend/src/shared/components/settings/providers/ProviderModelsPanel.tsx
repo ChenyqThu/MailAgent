@@ -1,9 +1,10 @@
 // task 07-12 P3 — per-provider 模型管理面板（prd §4.5.3）。
 //
-// 「拉取模型列表」→ GET /{id}/models?refresh=true（上游 merge，失败恒 200 + 可读 error，
-// 中转不透传 /models 时走手动添加兜底）；启用勾选 / maxOutput 编辑 → PUT model 行
-// （后端 merge 语义，只动传的键）；手动添加默认 enabled。capabilities 为 null = 上游
-// 未标注 → 不渲染标签（勿当 false 渲染，prd §4.3b 注记②）。
+// 「拉取模型列表」→ POST /{id}/models/refresh（批 2 review HIGH-2 后独立写端点，
+// verify_local_token；上游 merge，失败恒 200 + 可读 error，中转不透传 /models 时走
+// 手动添加兜底）；启用勾选 / maxOutput 编辑 → PUT model 行（后端 merge 语义，只动
+// 传的键）；手动添加默认 enabled。capabilities 为 null = 上游未标注 → 不渲染标签
+// （勿当 false 渲染，prd §4.3b 注记②）。
 
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
@@ -12,7 +13,7 @@ import { Loader2, Plus, RefreshCw, X } from 'lucide-react'
 
 import {
   deleteLlmProviderModel,
-  listLlmProviderModels,
+  refreshLlmProviderModels,
   upsertLlmProviderModel,
   useLlmProviderModels,
   type LlmProviderModel
@@ -75,7 +76,7 @@ export function ProviderModelsPanel({
     setRefreshing(true)
     setFetchError(null)
     try {
-      const data = await listLlmProviderModels(providerId, { refresh: true })
+      const data = await refreshLlmProviderModels(providerId)
       setFetchError(data.error)
       await invalidate()
     } catch (err) {

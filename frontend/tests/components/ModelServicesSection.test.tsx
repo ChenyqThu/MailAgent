@@ -13,7 +13,7 @@
 // 纯 UI 测试（raw fetch 全局 stub 按 URL 路由）；i18n 真实 zh-CN 资源（spec i18n.md）。
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createElement } from 'react'
 
@@ -34,7 +34,8 @@ const DEFAULT_PROVIDER = {
   protocol: 'anthropic',
   displayName: 'CRS',
   baseUrl: 'https://crs.example.com/api',
-  headers: {},
+  // HIGH-1: header 值 write-only —— 列表投影只回名。
+  headerNames: ['X-Gw-Sign'],
   enabled: true,
   sortOrder: 0,
   hasKey: true,
@@ -235,16 +236,68 @@ describe('ModelServicesSection — 模型管理', () => {
     })
   })
 
-  test('拉取模型列表 → GET ?refresh=true', async () => {
+  test('拉取模型列表 → POST /models/refresh（HIGH-2 后独立写端点，GET 纯读）', async () => {
     renderUi()
     await expandDefault()
     fireEvent.click(await screen.findByText('拉取模型列表'))
     await waitFor(() => {
-      expect(
-        calls.some(
-          (c) => c.method === 'GET' && c.url.includes('/models') && c.url.includes('refresh=true')
-        )
-      ).toBe(true)
+      expect(calls.some((c) => c.method === 'POST' && c.url.endsWith('/models/refresh'))).toBe(true)
     })
+    // GET 面不再携带 refresh 参数（读端点不出网不写库）。
+    expect(calls.some((c) => c.method === 'GET' && c.url.includes('refresh='))).toBe(false)
+  })
+})
+
+describe('ModelServicesSection — headers write-only（HIGH-1）', () => {
+  test('已存 header 只显名 + •••• 占位，值不回显；输入新值保存 → PATCH 全量明文 map', async () => {
+    renderUi()
+    await expandDefault()
+    const input = (await screen.findByLabelText('X-Gw-Sign')) as HTMLInputElement
+    expect(input.type).toBe('password')
+    expect(input.value).toBe('')
+    expect(input.placeholder).toBe('••••')
+
+    fireEvent.change(input, { target: { value: 'gw-secret-2' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+    await waitFor(() => {
+      const patch = calls.find((c) => c.method === 'PATCH')
+      expect(patch).toBeTruthy()
+      expect(patch!.body).toEqual({ headers: { 'X-Gw-Sign': 'gw-secret-2' } })
+    })
+    // 保存成功后明文草稿清空、不残留 DOM。
+    await waitFor(() => {
+      expect((screen.getByLabelText('X-Gw-Sign') as HTMLInputElement).value).toBe('')
+    })
+    expect(document.body.textContent).not.toContain('gw-secret-2')
+  })
+
+  test('删除 header → 保存 → PATCH {headers:{}}（清空语义）', async () => {
+    renderUi()
+    await expandDefault()
+    await screen.findByLabelText('X-Gw-Sign')
+    fireEvent.click(screen.getByLabelText('删除 header X-Gw-Sign'))
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+    await waitFor(() => {
+      const patch = calls.find((c) => c.method === 'PATCH')
+      expect(patch).toBeTruthy()
+      expect(patch!.body).toEqual({ headers: {} })
+    })
+  })
+
+  test('未重输值的保留项挡住保存（write-only 构不出完整 map）', async () => {
+    renderUi()
+    await expandDefault()
+    await screen.findByLabelText('X-Gw-Sign')
+    // 新增一个 header（有值）→ 已存 X-Gw-Sign 未重输 → 保存禁用 + hint 在场。
+    const draftKeyInput = screen.getByPlaceholderText('Header 名')
+    fireEvent.change(draftKeyInput, { target: { value: 'X-New' } })
+    fireEvent.change(screen.getByPlaceholderText('值'), { target: { value: 'v1' } })
+    // 「添加」同名者有三（Section 头/HeadersEditor/模型手动添加）——按行内 scope 取。
+    const draftRow = draftKeyInput.closest('div') as HTMLElement
+    fireEvent.click(within(draftRow).getByRole('button', { name: '添加' }))
+    const save = screen.getByRole('button', { name: '保存' }) as HTMLButtonElement
+    expect(save.disabled).toBe(true)
+    expect(screen.getByText(/重新输入值/)).toBeTruthy()
+    expect(calls.some((c) => c.method === 'PATCH')).toBe(false)
   })
 })

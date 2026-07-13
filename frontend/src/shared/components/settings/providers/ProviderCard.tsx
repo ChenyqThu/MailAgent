@@ -2,8 +2,9 @@
 //
 // 折叠头 = displayName + protocol 徽标 + baseUrl 摘要 + 启停 Switch + 删除（default 禁删，
 // 后端 400 双保险）；展开 = 编辑面（displayName / baseUrl / apiKey 掩码轮换 / 自定义
-// headers 键值对 / 连通性测试）+ 模型管理面板。所有编辑 blur → PATCH（EnvField 同款
-// 心智）；secret 永不回显明文——列表只给 hasKey + keyLast4。
+// headers（write-only 草稿 + 显式保存，见 HeadersEditor）/ 连通性测试）+ 模型管理面板。
+// 普通字段 blur → PATCH（EnvField 同款心智）；secret 永不回显明文——apiKey 只给
+// hasKey + keyLast4，header 只给名（headerNames）。
 
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
@@ -43,58 +44,112 @@ function FieldRow({
   )
 }
 
-/** headers 键值对编辑器：整表提交（任一行 blur/删除 → PATCH 完整 headers 对象）。 */
+/** headers 编辑器（write-only，批 2 review HIGH-1）：服务端只回 header 名不回值——
+ *  已存行显示名 + '••••' 占位，值永不回显。任何改动（改值/增/删）进入草稿态，「保存」=
+ *  PATCH 完整明文 map 全量替换（后端契约：省略 = 不改，{} = 清空）。因为服务端不回值，
+ *  提交前所有保留的 header 都必须重新输入值（hint 提示），否则构不出完整 map。 */
 function HeadersEditor({
-  headers,
+  headerNames,
   readOnly,
   onCommit
 }: {
-  headers: Record<string, string>
+  headerNames: string[]
   readOnly: boolean
-  onCommit: (next: Record<string, string>) => void
+  /** 返回是否成功；成功才清明文草稿（失败保留输入让用户改后重试）。 */
+  onCommit: (next: Record<string, string>) => Promise<boolean>
 }): React.ReactElement {
   const { t } = useTranslation()
-  const entries = Object.entries(headers)
+  // 草稿态（本 session 输入的明文；保存/取消后即清）。名集变化时的复位由调用方
+  // key={headerNames.join('\n')} 触发 remount 完成（不在 effect 里 setState）。
+  const [values, setValues] = React.useState<Record<string, string>>({})
+  const [removed, setRemoved] = React.useState<ReadonlySet<string>>(new Set())
+  // 不变式：added 只含 headerNames 之外的新名（addDraft 分支保证）。
+  const [added, setAdded] = React.useState<string[]>([])
   const [draftKey, setDraftKey] = React.useState('')
   const [draftValue, setDraftValue] = React.useState('')
 
+  const keptExisting = headerNames.filter((n) => !removed.has(n))
+  const keptAll = [...keptExisting, ...added]
+  const dirty =
+    removed.size > 0 || added.length > 0 || keptExisting.some((n) => (values[n] ?? '').length > 0)
+  const missingValue = keptAll.filter((n) => (values[n] ?? '').length === 0)
+  const canCommit = dirty && missingValue.length === 0
+
   function addDraft(): void {
     const k = draftKey.trim()
-    if (!k) return
-    onCommit({ ...headers, [k]: draftValue })
+    if (!k || draftValue.length === 0) return
+    if (headerNames.includes(k)) {
+      // 同名已存在：视作为该行填值（若曾标删则恢复）。
+      setRemoved((r) => {
+        const next = new Set(r)
+        next.delete(k)
+        return next
+      })
+    } else if (!added.includes(k)) {
+      setAdded((a) => [...a, k])
+    }
+    setValues((v) => ({ ...v, [k]: draftValue }))
     setDraftKey('')
     setDraftValue('')
   }
 
+  function removeName(k: string): void {
+    if (headerNames.includes(k)) {
+      setRemoved((r) => new Set(r).add(k))
+    } else {
+      setAdded((a) => a.filter((n) => n !== k))
+    }
+    setValues((v) => {
+      const next = { ...v }
+      delete next[k]
+      return next
+    })
+  }
+
+  function reset(): void {
+    setValues({})
+    setRemoved(new Set())
+    setAdded([])
+    setDraftKey('')
+    setDraftValue('')
+  }
+
+  function commit(): void {
+    if (!canCommit) return
+    void onCommit(Object.fromEntries(keptAll.map((n) => [n, values[n]]))).then((ok) => {
+      // 同名集不变时 namesSignature 不动、复位 effect 不触发 → 成功后在这里清草稿。
+      if (ok) reset()
+    })
+  }
+
+  const rowFor = (k: string): React.ReactElement => (
+    <div key={k} className="flex items-center gap-1.5">
+      <span className="w-[140px] truncate font-mono text-[12px] text-ink-fg-2">{k}</span>
+      <Input
+        type="password"
+        disabled={readOnly}
+        value={values[k] ?? ''}
+        placeholder="••••"
+        onChange={(e) => setValues((v) => ({ ...v, [k]: e.target.value }))}
+        className="h-6 flex-1 font-mono text-[12px]"
+        aria-label={k}
+      />
+      {!readOnly && (
+        <button
+          onClick={() => removeName(k)}
+          aria-label={t('settings.providers.headers.deleteAria', { name: k })}
+          className="rounded p-0.5 text-ink-fg-3 transition-colors hover:bg-ink-3 hover:text-ink-fg"
+        >
+          <X className="size-3.5" />
+        </button>
+      )}
+    </div>
+  )
+
   return (
     <div className="flex flex-col gap-1">
-      {entries.map(([k, v]) => (
-        <div key={k} className="flex items-center gap-1.5">
-          <span className="w-[140px] truncate font-mono text-[12px] text-ink-fg-2">{k}</span>
-          <Input
-            disabled={readOnly}
-            defaultValue={v}
-            onBlur={(e) => {
-              if (e.target.value !== v) onCommit({ ...headers, [k]: e.target.value })
-            }}
-            className="h-6 flex-1 font-mono text-[12px]"
-            aria-label={k}
-          />
-          {!readOnly && (
-            <button
-              onClick={() => {
-                const next = { ...headers }
-                delete next[k]
-                onCommit(next)
-              }}
-              aria-label={t('settings.providers.headers.deleteAria', { name: k })}
-              className="rounded p-0.5 text-ink-fg-3 transition-colors hover:bg-ink-3 hover:text-ink-fg"
-            >
-              <X className="size-3.5" />
-            </button>
-          )}
-        </div>
-      ))}
+      {keptExisting.map(rowFor)}
+      {added.map(rowFor)}
       {!readOnly && (
         <div className="flex items-center gap-1.5">
           <Input
@@ -104,6 +159,7 @@ function HeadersEditor({
             className="h-6 w-[140px] font-mono text-[12px]"
           />
           <Input
+            type="password"
             value={draftValue}
             onChange={(e) => setDraftValue(e.target.value)}
             placeholder={t('settings.providers.headers.valuePlaceholder')}
@@ -112,11 +168,26 @@ function HeadersEditor({
           <Button
             variant="ghost"
             size="sm"
-            disabled={draftKey.trim().length === 0}
+            disabled={draftKey.trim().length === 0 || draftValue.length === 0}
             onClick={addDraft}
           >
             {t('settings.providers.headers.add')}
           </Button>
+        </div>
+      )}
+      {dirty && !readOnly && (
+        <div className="flex items-center gap-1.5 pt-0.5">
+          <Button variant="secondary" size="sm" disabled={!canCommit} onClick={commit}>
+            {t('settings.providers.headers.save')}
+          </Button>
+          <Button variant="ghost" size="sm" onClick={reset}>
+            {t('settings.providers.headers.cancel')}
+          </Button>
+          {missingValue.length > 0 && (
+            <span className="text-aux text-ink-fg-3">
+              {t('settings.providers.headers.reenterHint')}
+            </span>
+          )}
         </div>
       )}
     </div>
@@ -147,13 +218,16 @@ export function ProviderCard({
     await qc.invalidateQueries({ queryKey: qk.chat.config('enabledModels') })
   }
 
-  async function patch(patchBody: Parameters<typeof updateLlmProvider>[1]): Promise<void> {
+  /** 返回是否成功（HeadersEditor 据此决定要不要清明文草稿：失败保留已输值让用户重试）。 */
+  async function patch(patchBody: Parameters<typeof updateLlmProvider>[1]): Promise<boolean> {
     setBusy(true)
     try {
       await updateLlmProvider(provider.id, patchBody)
       await invalidate()
+      return true
     } catch (err) {
       toastError(provider.displayName || provider.id, errorMessage(err))
+      return false
     } finally {
       setBusy(false)
     }
@@ -304,9 +378,10 @@ export function ProviderCard({
           <FieldRow label={t('settings.providers.headers.label')}>
             <div className="w-[320px]">
               <HeadersEditor
-                headers={provider.headers}
+                key={provider.headerNames.join('\n')}
+                headerNames={provider.headerNames}
                 readOnly={readOnly || busy}
-                onCommit={(next) => void patch({ headers: next })}
+                onCommit={(next) => patch({ headers: next })}
               />
             </div>
           </FieldRow>

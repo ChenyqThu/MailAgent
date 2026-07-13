@@ -81,6 +81,7 @@ const mockEnabledModels = vi.fn(() => ({
 }))
 
 vi.mock('@shared/hooks/useLlmModels', () => ({
+  fetchChatConfigModelsProbe: async () => ({ enabledModels: [], providerRegistryEnabled: false }),
   FALLBACK_MODELS: ['claude-sonnet-4-6', 'claude-opus-4-8', 'claude-fable-5', 'gpt-5.5'],
   useEnabledModels: () => mockEnabledModels(),
   useUpstreamModels: () => ({ models: [], isLoading: false, error: undefined, refresh: vi.fn() })

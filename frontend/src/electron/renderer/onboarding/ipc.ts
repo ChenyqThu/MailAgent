@@ -280,10 +280,11 @@ export interface LlmProviderStatusResult {
   enabled: boolean
 }
 
+/** HIGH-3 收紧后的形状: renderer 只挑模板 —— id/protocol/displayName/baseUrl 由 main
+ *  从模板单源 (@shared/onboarding/llmProviderTemplates) 解析; baseUrl 仅 custom
+ *  两模板生效 (main 校验 http/https + 拒 userinfo, 其余模板传值 = E_INVALID)。 */
 export interface LlmProviderSaveArg {
-  id: string
-  protocol: string
-  displayName?: string
+  templateKey: string
   baseUrl?: string
   apiKey?: string
 }
@@ -304,12 +305,13 @@ export function llmProviderStatus(): Promise<LlmProviderStatusResult> {
   return getInvoke()('onboarding:llmProviderStatus') as Promise<LlmProviderStatusResult>
 }
 
-/** 创建 (或同 id upsert) provider 行。跳过该步 = 不调 = 零写入。 */
+/** 按模板创建 (或同 id upsert) provider 行。跳过该步 = 不调 = 零写入。 */
 export function llmProviderSave(arg: LlmProviderSaveArg): Promise<LlmProviderSaveResult> {
   return getInvoke()('onboarding:llmProviderSave', arg) as Promise<LlmProviderSaveResult>
 }
 
-/** 连通性测试 (先存后测; serve-api 恒 200 + {ok,latencyMs,error})。 */
+/** 连通性测试 (先存后测; serve-api 恒 200 + {ok,latencyMs,error})。main 只放行
+ *  本次引导内 Save 过的 id (HIGH-3: 防对任意既有 provider 触发出网请求)。 */
 export function llmProviderTest(id: string): Promise<LlmProviderTestResult> {
   return getInvoke()('onboarding:llmProviderTest', { id }) as Promise<LlmProviderTestResult>
 }

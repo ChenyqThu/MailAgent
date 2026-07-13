@@ -5,13 +5,15 @@ const {
   mockGetLlmApiKey,
   mockGetLlmProviderModelResolver,
   mockIsLlmProviderRegistryEnabled,
-  mockResolveProviderModel
+  mockResolveProviderModel,
+  mockSanitizedUpstreamErrorMessage
 } = vi.hoisted(() => ({
   mockGenerateText: vi.fn(),
   mockGetLlmApiKey: vi.fn(),
   mockGetLlmProviderModelResolver: vi.fn(),
   mockIsLlmProviderRegistryEnabled: vi.fn(),
-  mockResolveProviderModel: vi.fn()
+  mockResolveProviderModel: vi.fn(),
+  mockSanitizedUpstreamErrorMessage: vi.fn(() => 'HTTP 401 APICallError')
 }))
 
 vi.mock('electron', () => ({ ipcMain: { handle: vi.fn() } }))
@@ -24,7 +26,8 @@ vi.mock('../../../src/electron/main/llm_settings', () => ({
 
 vi.mock('../../../src/electron/main/llm_provider_resolver', () => ({
   getLlmProviderModelResolver: mockGetLlmProviderModelResolver,
-  isLlmProviderRegistryEnabled: mockIsLlmProviderRegistryEnabled
+  isLlmProviderRegistryEnabled: mockIsLlmProviderRegistryEnabled,
+  sanitizedUpstreamErrorMessage: mockSanitizedUpstreamErrorMessage
 }))
 
 vi.mock('ai', () => ({ generateText: mockGenerateText }))
@@ -101,5 +104,29 @@ describe('nlToDsl provider registry routing', () => {
       })
     )
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  test('flag on upstream failure returns the sanitized message, never err.message (MEDIUM-4)', async () => {
+    mockIsLlmProviderRegistryEnabled.mockReturnValue(true)
+    const leaky = new Error('401 body echoed Authorization: Bearer sk-live-LEAK')
+    mockGenerateText.mockRejectedValue(leaky)
+
+    const result = await handler.nlToDsl('echo 发来的未读合同')
+
+    expect(result.error).toBe('E_UPSTREAM')
+    expect(mockSanitizedUpstreamErrorMessage).toHaveBeenCalledWith(leaky)
+    expect(result.message).toBe('HTTP 401 APICallError')
+    expect(result.message).not.toContain('sk-live-LEAK')
+  })
+
+  test('flag off keeps the legacy raw fetch-failure message shape', async () => {
+    mockIsLlmProviderRegistryEnabled.mockReturnValue(false)
+    fetchMock.mockRejectedValue(new Error('socket hang up'))
+
+    const result = await handler.nlToDsl('echo 发来的未读合同')
+
+    expect(result.error).toBe('E_UPSTREAM')
+    expect(result.message).toBe('LLM fetch failed: socket hang up')
+    expect(mockSanitizedUpstreamErrorMessage).not.toHaveBeenCalled()
   })
 })

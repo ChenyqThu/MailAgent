@@ -1,3 +1,5 @@
+import { APICallError } from 'ai'
+
 import type {
   ProviderModelResolver,
   ProviderSnapshot,
@@ -8,6 +10,20 @@ import { daemonRequest } from './daemon_api'
 import { getLlmApiKey, getLlmBaseUrl } from './llm_settings'
 
 const MAX_OUTPUT_TOKENS = 64_000
+
+/** AI SDK 上游错误 → 固定形状文案（批 2 review MEDIUM-4）。绝不透传 err.message ——
+ *  中转的错误体可能回显 Authorization / 自定义 header 值，err.message 会带上它们。
+ *  APICallError → 'HTTP <status> APICallError'；其余 → 错误类名 + 固定文案。
+ *  仅供 AI SDK（provider registry）调用路径；flag off 裸 fetch 路径的既有错误处理不走它。 */
+export function sanitizedUpstreamErrorMessage(err: unknown): string {
+  if (APICallError.isInstance(err)) {
+    return err.statusCode != null
+      ? `HTTP ${err.statusCode} ${err.name}`
+      : `${err.name}: upstream LLM call failed`
+  }
+  if (err instanceof Error) return `${err.name}: upstream LLM call failed`
+  return 'unknown upstream LLM error'
+}
 
 export interface MainProcessResolvedProviderModel extends ResolvedProviderModel {
   maxOutputTokens: number
@@ -55,9 +71,7 @@ export async function getLlmProviderModelResolver(): Promise<MainProcessProvider
           return {
             ...resolved,
             maxOutputTokens:
-              configuredMax == null
-                ? MAX_OUTPUT_TOKENS
-                : Math.min(MAX_OUTPUT_TOKENS, configuredMax)
+              configuredMax == null ? MAX_OUTPUT_TOKENS : Math.min(MAX_OUTPUT_TOKENS, configuredMax)
           }
         }
       }

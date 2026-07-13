@@ -20,7 +20,8 @@ import { isProviderCredentialsError } from '../../../ai-gateway/providerRef'
 import { getLlmApiKey, getLlmBaseUrl, getLlmModel } from '../llm_settings'
 import {
   getLlmProviderModelResolver,
-  isLlmProviderRegistryEnabled
+  isLlmProviderRegistryEnabled,
+  sanitizedUpstreamErrorMessage
 } from '../llm_provider_resolver'
 
 export interface NlToDslResult {
@@ -223,6 +224,11 @@ export async function nlToDsl(nl: string): Promise<NlToDslResult> {
     }
     if (err instanceof Error && (err.name === 'AbortError' || ac.signal.aborted)) {
       return { dsl: '', error: 'E_TIMEOUT', message: 'LLM request timed out' }
+    }
+    if (providerRegistryEnabled) {
+      // AI SDK 路径：APICallError.message 可能含上游回显的凭证 → 固定形状脱敏
+      // （批 2 review MEDIUM-4）。flag off 裸 fetch 路径的既有 message 形状不动。
+      return { dsl: '', error: 'E_UPSTREAM', message: sanitizedUpstreamErrorMessage(err) }
     }
     return {
       dsl: '',

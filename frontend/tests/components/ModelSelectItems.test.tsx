@@ -32,6 +32,8 @@ vi.mock('@shared/components/ui/select', () => ({
 
 import i18n from '@shared/i18n'
 import { ModelSelectItems } from '../../src/shared/components/agents/drawers/ModelSelectItems'
+import { useEnabledModels } from '@shared/hooks/useLlmModels'
+import { useProviderRegistryEnabled } from '@shared/hooks/useLlmProviders'
 
 await i18n.changeLanguage('zh-CN')
 
@@ -42,7 +44,7 @@ const mockFetch = vi.fn(async (input: RequestInfo | URL) => {
   return {
     ok: true,
     status: 200,
-    // request() 消费 text()；fetchProviderRegistryEnabled 消费 json() —— 两面都给。
+    // request() 消费 text()；/chat/config 模型面探针消费 json() —— 两面都给。
     text: async () => JSON.stringify({ status: 'success', data }),
     json: async () => ({ status: 'success', data })
   } as unknown as Response
@@ -106,5 +108,36 @@ describe('ModelSelectItems — flag on（分组）', () => {
       .find((el) => el.getAttribute('data-value') === 'dash:qwen-gone')
     expect(orphan?.textContent).toContain('qwen-gone')
     expect(orphan?.textContent).toContain('（未启用）')
+  })
+})
+
+describe('/chat/config 探针共享（批 2 review LOW-7）', () => {
+  test('flag 探针与 enabledModels 共用同一 query —— 双 hook 同挂只发一次 /chat/config', async () => {
+    registryEnabled = false
+    // 模拟 AiTab / 抽屉的真实组合：模型列表 hook + flag 探针 hook 同时在场。
+    function Probe(): React.ReactElement {
+      const { models } = useEnabledModels()
+      const enabled = useProviderRegistryEnabled()
+      return (
+        <div data-testid="probe" data-enabled={String(enabled)} data-models={models.length} />
+      )
+    }
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })
+    render(
+      createElement(
+        QueryClientProvider,
+        { client: qc },
+        <>
+          <Probe />
+          <ModelSelectItems models={['claude-sonnet-4-6']} current={null} />
+        </>
+      )
+    )
+    await screen.findByTestId('probe')
+    await screen.findAllByTestId('item')
+    const chatConfigCalls = mockFetch.mock.calls.filter(([input]) =>
+      String(input).includes('/chat/config')
+    )
+    expect(chatConfigCalls).toHaveLength(1)
   })
 })

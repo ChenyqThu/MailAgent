@@ -1609,7 +1609,10 @@
         "keyPlaceholder": "Header 名",
         "valuePlaceholder": "值",
         "add": "添加",
-        "deleteAria": "删除 header {name}"
+        "deleteAria": "删除 header {name}",
+        "save": "保存",
+        "cancel": "取消",
+        "reenterHint": "安全起见服务端不回显 header 值——保存前需为所有保留项重新输入值"
       },
       "test": {
         "label": "连通性测试",

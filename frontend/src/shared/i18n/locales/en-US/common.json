@@ -1609,7 +1609,10 @@
         "keyPlaceholder": "Header name",
         "valuePlaceholder": "Value",
         "add": "Add",
-        "deleteAria": "Delete header {name}"
+        "deleteAria": "Delete header {name}",
+        "save": "Save",
+        "cancel": "Cancel",
+        "reenterHint": "Header values are write-only — re-enter every kept value before saving"
       },
       "test": {
         "label": "Connectivity test",

@@ -33,6 +33,11 @@ import type {
 } from './ipc'
 import type { FolderInfo, FolderTreeNode } from '@shared/api/types'
 import { errorMessage } from '@shared/lib/ipcErrors'
+import {
+  findOnboardingLlmTemplate,
+  invalidCustomBaseUrlReason,
+  ONBOARDING_LLM_TEMPLATES
+} from '@shared/onboarding/llmProviderTemplates'
 
 /* ════════════════════════════════════════════════════════════════════════
    Shared step state (lifted to OnboardingRoot)
@@ -1811,73 +1816,15 @@ export function StepPlugins({
 /* ─── Step 5.5 · AI 模型 (可选, 07-12 P3b) ─────────────────────────────────────
    provider registry flag on (onboarding:llmProviderStatus → /chat/config
    .providerRegistryEnabled) 时才由 OnboardingRoot 插入本步 (plugins 步之前 —— 此时
-   commitConfig 已起后端, provider REST 可用)。极简 provider 表单: 内置模板 (只预填
-   protocol + baseURL) + baseURL / apiKey + 保存/连通性测试。与 Settings 的 provider
-   管理组件有意隔离 (onboarding Chinese-only 无 i18n、零共用组件约定), 但共用同一
-   REST 端点 (经 main 的 daemon 转发, 本地 token 不进 renderer)。跳过 = 零写入。 */
+   commitConfig 已起后端, provider REST 可用)。极简 provider 表单: 模板 + apiKey
+   (+ 仅 custom 模板的 baseURL) + 保存/连通性测试。与 Settings 的 provider 管理组件
+   有意隔离 (onboarding Chinese-only 无 i18n、零共用组件约定), 但共用同一 REST 端点
+   (经 main 的 daemon 转发, 本地 token 不进 renderer)。跳过 = 零写入。
 
-interface AiTemplate {
-  /** provider id (slug, 服务端 _PROVIDER_ID_RE: 小写字母开头 + [a-z0-9_-]) */
-  key: string
-  name: string
-  protocol: string
-  /** '' = 官方默认端点 (anthropic/openai/deepseek/openrouter 服务端有默认表) */
-  baseUrl: string
-  /** openai-compatible 无官方默认 → baseURL 必填 */
-  baseRequired?: boolean
-}
-
-/** 模板只预填 protocol + baseURL (prd §4.5); baseURL 实测口径见 research/02 §3-4。 */
-const AI_TEMPLATES: AiTemplate[] = [
-  { key: 'anthropic', name: 'Anthropic 官方', protocol: 'anthropic', baseUrl: '' },
-  { key: 'openai', name: 'OpenAI', protocol: 'openai', baseUrl: '' },
-  { key: 'deepseek', name: 'DeepSeek', protocol: 'deepseek', baseUrl: '' },
-  {
-    key: 'dashscope',
-    name: '通义千问 Qwen (DashScope)',
-    protocol: 'openai-compatible',
-    baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1'
-  },
-  {
-    key: 'zhipu',
-    name: '智谱 GLM',
-    protocol: 'openai-compatible',
-    baseUrl: 'https://open.bigmodel.cn/api/paas/v4'
-  },
-  {
-    key: 'moonshot',
-    name: 'Kimi (月之暗面)',
-    protocol: 'openai-compatible',
-    baseUrl: 'https://api.moonshot.cn/v1'
-  },
-  {
-    key: 'minimax',
-    name: 'MiniMax',
-    protocol: 'openai-compatible',
-    baseUrl: 'https://api.minimaxi.com/v1'
-  },
-  {
-    key: 'doubao',
-    name: '豆包 (火山方舟)',
-    protocol: 'openai-compatible',
-    baseUrl: 'https://ark.cn-beijing.volces.com/api/v3'
-  },
-  {
-    key: 'siliconflow',
-    name: 'SiliconFlow',
-    protocol: 'openai-compatible',
-    baseUrl: 'https://api.siliconflow.cn/v1'
-  },
-  { key: 'openrouter', name: 'OpenRouter', protocol: 'openrouter', baseUrl: '' },
-  {
-    key: 'custom-openai',
-    name: '自定义 (OpenAI 兼容)',
-    protocol: 'openai-compatible',
-    baseUrl: '',
-    baseRequired: true
-  },
-  { key: 'custom-anthropic', name: '自定义 (Anthropic 兼容)', protocol: 'anthropic', baseUrl: '' }
-]
+   批 2 review HIGH-3: 模板单源在 @shared/onboarding/llmProviderTemplates (main 侧
+   llmProviderSave 以它为权威解析 id/protocol/displayName/baseUrl, renderer 这里只
+   投影下拉列表 + 传 templateKey); 非 custom 模板的 baseUrl 只读展示, custom 模板
+   的 baseUrl 由 main 校验 http/https + 拒 userinfo (这里复用同一校验做即时反馈)。 */
 
 export interface StepAiModelProps {
   onNext: () => void
@@ -1885,10 +1832,9 @@ export interface StepAiModelProps {
 }
 
 export function StepAiModel({ onNext, onBack }: StepAiModelProps): React.JSX.Element {
-  const [tplKey, setTplKey] = useState<string>(AI_TEMPLATES[0].key)
-  const tpl = AI_TEMPLATES.find((t) => t.key === tplKey) ?? AI_TEMPLATES[0]
-  const [displayName, setDisplayName] = useState(AI_TEMPLATES[0].name)
-  const [baseUrl, setBaseUrl] = useState(AI_TEMPLATES[0].baseUrl)
+  const [tplKey, setTplKey] = useState<string>(ONBOARDING_LLM_TEMPLATES[0].key)
+  const tpl = findOnboardingLlmTemplate(tplKey) ?? ONBOARDING_LLM_TEMPLATES[0]
+  const [customBaseUrl, setCustomBaseUrl] = useState('')
   const [apiKey, setApiKey] = useState('')
   const [busy, setBusy] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
@@ -1902,27 +1848,34 @@ export function StepAiModel({ onNext, onBack }: StepAiModelProps): React.JSX.Ele
   }, [])
 
   const pickTemplate = (key: string): void => {
-    const next = AI_TEMPLATES.find((t) => t.key === key)
+    const next = findOnboardingLlmTemplate(key)
     if (!next) return
     setTplKey(key)
-    setDisplayName(next.name)
-    setBaseUrl(next.baseUrl)
+    setCustomBaseUrl('')
     setSaveError(null)
     setTestResult(null)
   }
 
-  // 保存前置条件: key 必填; openai-compatible 自定义还需 baseURL (服务端无默认端点)。
-  const canSave = apiKey.trim() !== '' && (!tpl.baseRequired || baseUrl.trim() !== '')
+  // 即时校验 (main 侧 llmProviderSave 是权威, 这里只提前反馈)。
+  const customBaseUrlProblem =
+    tpl.allowCustomBaseUrl && customBaseUrl.trim() !== ''
+      ? invalidCustomBaseUrlReason(customBaseUrl.trim())
+      : null
+  // 保存前置条件: key 必填; custom openai-compatible 还需合法 baseURL (服务端无默认端点)。
+  const canSave =
+    apiKey.trim() !== '' &&
+    customBaseUrlProblem === null &&
+    (!tpl.baseUrlRequired || customBaseUrl.trim() !== '')
 
   /** 创建/upsert provider 行; 失败 → saveError, 返回 false。 */
   const doSave = async (): Promise<boolean> => {
     setSaveError(null)
     try {
       const res = await ipc.llmProviderSave({
-        id: tpl.key,
-        protocol: tpl.protocol,
-        displayName: displayName.trim() || tpl.name,
-        baseUrl: baseUrl.trim(),
+        templateKey: tpl.key,
+        ...(tpl.allowCustomBaseUrl && customBaseUrl.trim() !== ''
+          ? { baseUrl: customBaseUrl.trim() }
+          : {}),
         apiKey: apiKey.trim()
       })
       if (!res?.ok) {
@@ -2005,10 +1958,10 @@ export function StepAiModel({ onNext, onBack }: StepAiModelProps): React.JSX.Ele
         )}
 
         <div className="flex flex-col gap-4 mt-5">
-          <Field label="服务商" icon="spark" hint="模板只预填协议与端点，凭证由你提供">
+          <Field label="服务商" icon="spark" hint="模板固定协议与端点，凭证由你提供">
             <div className="selwrap">
               <select className="fld" value={tplKey} onChange={(e) => pickTemplate(e.target.value)}>
-                {AI_TEMPLATES.map((t) => (
+                {ONBOARDING_LLM_TEMPLATES.map((t) => (
                   <option key={t.key} value={t.key}>
                     {t.name}
                   </option>
@@ -2017,31 +1970,34 @@ export function StepAiModel({ onNext, onBack }: StepAiModelProps): React.JSX.Ele
             </div>
           </Field>
 
-          <Field label="显示名称" icon="settings">
-            <input
-              className="fld"
-              value={displayName}
-              onChange={(e) => setDisplayName(e.target.value)}
-            />
-          </Field>
-
-          <Field
-            label="API 地址 (Base URL)"
-            icon="server"
-            required={Boolean(tpl.baseRequired)}
-            hint={
-              tpl.baseRequired
-                ? '自定义服务必填，例如 https://your-relay.example.com/v1'
-                : '留空使用官方默认端点'
-            }
-          >
-            <input
-              className="fld mono"
-              placeholder={tpl.baseRequired ? 'https://…/v1' : '留空 = 官方默认'}
-              value={baseUrl}
-              onChange={(e) => setBaseUrl(e.target.value)}
-            />
-          </Field>
+          {tpl.allowCustomBaseUrl ? (
+            <Field
+              label="API 地址 (Base URL)"
+              icon="server"
+              required={Boolean(tpl.baseUrlRequired)}
+              hint={
+                customBaseUrlProblem ??
+                (tpl.baseUrlRequired
+                  ? '自定义服务必填，例如 https://your-relay.example.com/v1'
+                  : '留空使用官方默认端点')
+              }
+            >
+              <input
+                className="fld mono"
+                placeholder={tpl.baseUrlRequired ? 'https://…/v1' : '留空 = 官方默认'}
+                value={customBaseUrl}
+                onChange={(e) => setCustomBaseUrl(e.target.value)}
+              />
+            </Field>
+          ) : (
+            <Field
+              label="API 地址 (Base URL)"
+              icon="server"
+              hint="内置模板端点固定；要接自建中转请选「自定义」模板"
+            >
+              <input className="fld mono" value={tpl.baseUrl || '官方默认端点'} disabled />
+            </Field>
+          )}
 
           <Field label="API Key" icon="key" required hint="仅存本机（加密落盘），不上传第三方">
             <input
