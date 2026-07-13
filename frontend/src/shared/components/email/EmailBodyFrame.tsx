@@ -231,21 +231,27 @@ export function EmailBodyFrame({
   translations
 }: Props): React.ReactElement {
   const mailApi = useMailApi()
+  const { t } = useTranslation()
+  const [expandedInternalId, setExpandedInternalId] = useState<number | null>(null)
+  const showFullBody = expandedInternalId === internalId
   const resolvedTheme = useAppearance((s) => s.resolvedTheme)
   // 正文外观 (设置面板「正文外观」可调) — 注入 srcDoc <html> 的 CSS 变量。
   const bodyFont = useAppearance((s) => s.bodyFont)
   const bodyFontSize = useAppearance((s) => s.bodyFontSize)
   const bodyLineHeight = useAppearance((s) => s.bodyLineHeight)
 
-  const bodyQ = useQuery({
-    queryKey: qk.email.body(internalId, 'html'),
+  const previewBodyQ = useQuery({
+    queryKey: qk.email.bodyPreview(internalId, 'html'),
     queryFn: async () => {
-      const htmlBody = await mailApi.email.body(internalId, { format: 'html' })
+      const htmlBody = await mailApi.email.body(internalId, { format: 'html', mode: 'preview' })
       if (typeof htmlBody?.content === 'string' && htmlBody.content.length > 0) {
         return htmlBody
       }
 
-      const markdownBody = await mailApi.email.body(internalId, { format: 'markdown' })
+      const markdownBody = await mailApi.email.body(internalId, {
+        format: 'markdown',
+        mode: 'preview'
+      })
       if (typeof markdownBody?.content !== 'string' || markdownBody.content.length === 0) {
         return htmlBody ?? markdownBody
       }
@@ -258,6 +264,28 @@ export function EmailBodyFrame({
     },
     staleTime: Infinity
   })
+  const fullBodyQ = useQuery({
+    queryKey: qk.email.body(internalId, 'html'),
+    queryFn: async () => {
+      const htmlBody = await mailApi.email.body(internalId, { format: 'html', mode: 'full' })
+      if (typeof htmlBody?.content === 'string' && htmlBody.content.length > 0) {
+        return htmlBody
+      }
+      const markdownBody = await mailApi.email.body(internalId, {
+        format: 'markdown',
+        mode: 'full'
+      })
+      if (typeof markdownBody?.content !== 'string' || markdownBody.content.length === 0) {
+        return htmlBody ?? markdownBody
+      }
+      const content = plaintextToHtml(markdownBody.content)
+      if (content.length === 0) return htmlBody ?? markdownBody
+      return { ...markdownBody, format: 'html' as const, content }
+    },
+    enabled: showFullBody,
+    staleTime: Infinity
+  })
+  const bodyQ = showFullBody && fullBodyQ.data ? fullBodyQ : previewBodyQ
 
   // Sprint 13 — every image-typed attachment is a *candidate* for inline
   // replacement, not just rows with is_inline=true. Reader sometimes
@@ -412,14 +440,15 @@ export function EmailBodyFrame({
   const handleImageClick = useCallback((src: string) => setPreviewSrc(src), [])
   const closePreview = useCallback(() => setPreviewSrc(null), [])
 
-  if (bodyQ.isError) {
+  if (previewBodyQ.isError || fullBodyQ.isError) {
+    const bodyError = fullBodyQ.error ?? previewBodyQ.error
     return (
       <div className="text-aux text-fail">
-        {bodyQ.error instanceof Error ? bodyQ.error.message : 'Body load failed.'}
+        {bodyError instanceof Error ? bodyError.message : 'Body load failed.'}
       </div>
     )
   }
-  if (bodyQ.isLoading) {
+  if (previewBodyQ.isLoading) {
     // 正文加载骨架: 模拟段落 + 留白的占位, 比单行 "Loading…" 更接近最终布局,
     // 减少加载→正文的跳变感。Skeleton 自带 animate-pulse motion-reduce:animate-none。
     return (
@@ -441,6 +470,21 @@ export function EmailBodyFrame({
         translations={translations ?? null}
         onImageClick={handleImageClick}
       />
+      {previewBodyQ.data?.truncated && !fullBodyQ.data && (
+        <div className="mt-4 flex items-center justify-between gap-4 rounded-lg border border-ink-border-soft bg-ink-2/40 px-4 py-3">
+          <p className="text-aux text-ink-fg-2">{t('emailDetail.bodyPreviewTruncated')}</p>
+          <button
+            type="button"
+            className="shrink-0 rounded-md border border-ink-border-soft px-3 py-1.5 text-aux text-ink-fg transition-colors hover:bg-ink-3 disabled:cursor-wait disabled:opacity-60"
+            disabled={fullBodyQ.isFetching}
+            onClick={() => setExpandedInternalId(internalId)}
+          >
+            {fullBodyQ.isFetching
+              ? t('emailDetail.bodyLoadingFull')
+              : t('emailDetail.bodyShowFull')}
+          </button>
+        </div>
+      )}
       {previewSrc !== null && <ImageLightbox src={previewSrc} onClose={closePreview} />}
     </>
   )

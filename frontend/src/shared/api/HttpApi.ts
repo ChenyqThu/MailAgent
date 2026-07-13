@@ -185,10 +185,10 @@ export class HttpApi implements MailApi {
 
     get: async (internalId: number): Promise<EmailDetail | null> => {
       try {
-        // include body summary + attachments to match the Electron `get`
-        // which returns them inline. `data.body` is a SUMMARY, not content.
+        // Body content and summary are intentionally excluded from detail reads;
+        // EmailBodyFrame loads preview/full content through email.body on demand.
         return await this.req<EmailDetail>('GET', `/email/${internalId}`, {
-          query: { include: 'body,attachments' }
+          query: { include: 'attachments' }
         })
       } catch (e) {
         if (isNotFound(e)) return null
@@ -199,7 +199,7 @@ export class HttpApi implements MailApi {
     body: async (internalId: number, opts?: BodyOpts): Promise<EmailBody | null> => {
       try {
         return await this.req<EmailBody>('GET', `/email/${internalId}/body`, {
-          query: { format: opts?.format ?? 'markdown' }
+          query: { format: opts?.format ?? 'markdown', mode: opts?.mode ?? 'full' }
         })
       } catch (e) {
         // No body row OR that format is null → server 404s → null.

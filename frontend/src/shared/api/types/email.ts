@@ -101,6 +101,7 @@ export interface ListOpts {
 
 export interface BodyOpts {
   format?: 'markdown' | 'html' | 'raw'
+  mode?: 'preview' | 'full'
 }
 
 export interface SearchOpts {

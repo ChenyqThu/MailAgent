@@ -39,12 +39,13 @@ describe('qk.emails — primary list + supplements', () => {
 })
 
 describe('qk.email — single-email families (singular root)', () => {
-  test('detail / ai / translation / body / threadCount / thread', () => {
+  test('detail / ai / translation / body / bodyPreview / threadCount / thread', () => {
     expect(qk.email.detail(7)).toEqual(['email', 7])
     expect(qk.email.ai(7)).toEqual(['email', 7, 'ai'])
     expect(qk.email.translation(7, 'zh')).toEqual(['email', 7, 'translation', 'zh'])
     expect(qk.email.body(7, 'html')).toEqual(['email', 7, 'body', 'html'])
     expect(qk.email.body(7, 'markdown')).toEqual(['email', 7, 'body', 'markdown'])
+    expect(qk.email.bodyPreview(7, 'html')).toEqual(['email', 7, 'body-preview', 'html'])
     expect(qk.email.threadCount('t1')).toEqual(['email', 't1', 'thread-count'])
     expect(qk.email.thread('t1')).toEqual(['email', 'thread', 't1'])
   })

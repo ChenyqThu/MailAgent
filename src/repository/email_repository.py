@@ -97,6 +97,15 @@ class EmailBodyRecord:
 
 
 @dataclass
+class EmailBodyContentRecord:
+    internal_id: int
+    content: Optional[str]
+    body_size_bytes: int
+    fetched_at: float
+    fetched_source: str
+
+
+@dataclass
 class EmailMetadataRecord:
     """email_metadata 行 dataclass 投影 (替代 Dict 出口, 用于 CLI / EmailFull)."""
     internal_id: int
@@ -713,6 +722,71 @@ class EmailRepository:
                 body_size_bytes=row["body_size_bytes"] or 0,
                 has_inline_images=bool(row["has_inline_images"]),
                 raw_mime_sha256=row["raw_mime_sha256"],
+                fetched_at=row["fetched_at"],
+                fetched_source=row["fetched_source"],
+            )
+        finally:
+            conn.close()
+
+    def get_body_summary(self, internal_id: int) -> Optional[EmailBodyRecord]:
+        """Read body metadata without loading either large content column."""
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                """SELECT internal_id, message_id, body_format, body_size_bytes,
+                          has_inline_images, raw_mime_sha256, fetched_at, fetched_source
+                   FROM email_body WHERE internal_id = ?""",
+                (internal_id,),
+            ).fetchone()
+            if not row:
+                return None
+            return EmailBodyRecord(
+                internal_id=row["internal_id"],
+                message_id=row["message_id"],
+                html=None,
+                markdown=None,
+                body_format=row["body_format"] or "html",
+                body_size_bytes=row["body_size_bytes"] or 0,
+                has_inline_images=bool(row["has_inline_images"]),
+                raw_mime_sha256=row["raw_mime_sha256"],
+                fetched_at=row["fetched_at"],
+                fetched_source=row["fetched_source"],
+            )
+        finally:
+            conn.close()
+
+    def get_body_content(
+        self,
+        internal_id: int,
+        format_: str,
+        *,
+        max_chars: int = -1,
+    ) -> Optional[EmailBodyContentRecord]:
+        """Read exactly one requested content column, optionally as a SQL prefix."""
+        columns = {
+            "markdown": "body_markdown",
+            "html": "body_html",
+            "raw": "raw_mime_sha256",
+        }
+        column = columns.get(format_)
+        if column is None:
+            raise ValueError(f"unsupported body format: {format_!r}")
+        expression = f"substr({column}, 1, ?)" if max_chars > 0 else column
+        params = (max_chars, internal_id) if max_chars > 0 else (internal_id,)
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                f"""SELECT internal_id, {expression} AS content, body_size_bytes,
+                           fetched_at, fetched_source
+                    FROM email_body WHERE internal_id = ?""",
+                params,
+            ).fetchone()
+            if not row:
+                return None
+            return EmailBodyContentRecord(
+                internal_id=row["internal_id"],
+                content=row["content"],
+                body_size_bytes=row["body_size_bytes"] or 0,
                 fetched_at=row["fetched_at"],
                 fetched_source=row["fetched_source"],
             )

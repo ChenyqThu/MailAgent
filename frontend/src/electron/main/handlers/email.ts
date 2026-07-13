@@ -25,6 +25,12 @@ import type {
   AttachmentList_AttachmentItem,
   MailagentEmailBody
 } from '@shared/types/cli.gen'
+import {
+  EMAIL_BODY_HTML_SOURCE_CHARS,
+  EMAIL_BODY_PREVIEW_CHARS,
+  EMAIL_BODY_PREVIEW_THRESHOLD_BYTES,
+  previewHtml
+} from '../lib/email-body-preview'
 
 // ---- request shapes (renderer-side mirrors shared/api/types.ts) -------------
 
@@ -47,6 +53,7 @@ export interface ListOpts {
 
 export interface BodyOpts {
   format?: 'markdown' | 'html' | 'raw'
+  mode?: 'preview' | 'full'
 }
 
 // Frontend-only enriched view shapes (NOT in cli.gen.ts) live in
@@ -79,14 +86,10 @@ interface EmailMetadataRow {
   snippet: string | null
 }
 
-interface EmailBodyRow {
+interface EmailBodyContentRow {
   internal_id: number
-  body_html: string | null
-  body_markdown: string | null
-  body_format: string | null
+  content: string | null
   body_size_bytes: number | null
-  has_inline_images: number | null
-  raw_mime_sha256: string | null
   fetched_at: number | null
   fetched_source: string | null
 }
@@ -179,25 +182,8 @@ function shapeAttachment(row: AttachmentRow): AttachmentList_AttachmentItem {
   }
 }
 
-type RecordBody = NonNullable<EmailGet_EmailRecord['body']>
-type BodyFormat = RecordBody['format']
-
-function shapeBodySummary(row: EmailBodyRow | undefined): RecordBody | null {
-  if (!row) return null
-  const fmt = (row.body_format ?? 'empty') as BodyFormat
-  return {
-    format: fmt,
-    size_bytes: row.body_size_bytes ?? 0,
-    has_inline_images: asBool(row.has_inline_images),
-    fetched_at: row.fetched_at,
-    fetched_source: row.fetched_source,
-    raw_mime_sha256: row.raw_mime_sha256
-  }
-}
-
 function shapeFullRecord(
   meta: EmailMetadataRow,
-  body: EmailBodyRow | undefined,
   attachments: AttachmentRow[]
 ): EmailGet_EmailRecord {
   return {
@@ -219,7 +205,7 @@ function shapeFullRecord(
     notion_url: notionUrl(meta.notion_page_id),
     sync_error: meta.sync_error,
     retry_count: meta.retry_count ?? 0,
-    body: shapeBodySummary(body),
+    body: null,
     attachments: attachments.map(shapeAttachment)
   }
 }
@@ -297,11 +283,6 @@ const LIST_COLS = `
     is_important,
     sync_status, notion_page_id, notion_thread_id, sync_error, retry_count,
     snippet
-`
-
-const BODY_COLS = `
-    internal_id, body_html, body_markdown, body_format, body_size_bytes,
-    has_inline_images, raw_mime_sha256, fetched_at, fetched_source
 `
 
 const ATTACHMENT_COLS = `
@@ -408,41 +389,48 @@ export function getEmail(internalId: number): EmailGet_EmailRecord | null {
     internalId
   ) as EmailMetadataRow | undefined
   if (!meta) return null
-  const body = prep(db, `SELECT ${BODY_COLS} FROM email_body WHERE internal_id = ?`).get(
-    internalId
-  ) as EmailBodyRow | undefined
   const attachments = prep(
     db,
     `SELECT ${ATTACHMENT_COLS} FROM email_attachment WHERE internal_id = ? ORDER BY id ASC`
   ).all(internalId) as AttachmentRow[]
-  return shapeFullRecord(meta, body, attachments)
+  return shapeFullRecord(meta, attachments)
 }
 
 export function getEmailBody(
   internalId: number,
-  format: BodyOpts['format'] = 'markdown'
+  format: BodyOpts['format'] = 'markdown',
+  mode: BodyOpts['mode'] = 'full'
 ): MailagentEmailBody['data'] | null {
   const db = getDb()
-  const row = prep(db, `SELECT ${BODY_COLS} FROM email_body WHERE internal_id = ?`).get(
-    internalId
-  ) as EmailBodyRow | undefined
+  const column =
+    format === 'raw' ? 'raw_mime_sha256' : format === 'html' ? 'body_html' : 'body_markdown'
+  const previewChars = format === 'html' ? EMAIL_BODY_HTML_SOURCE_CHARS : EMAIL_BODY_PREVIEW_CHARS
+  const contentSql =
+    mode === 'preview' && format !== 'raw'
+      ? `CASE WHEN body_size_bytes > ? THEN substr(${column}, 1, ?) ELSE ${column} END`
+      : column
+  const params =
+    mode === 'preview' && format !== 'raw'
+      ? [EMAIL_BODY_PREVIEW_THRESHOLD_BYTES, previewChars, internalId]
+      : [internalId]
+  const row = prep(
+    db,
+    `SELECT internal_id, ${contentSql} AS content, body_size_bytes, fetched_at, fetched_source
+       FROM email_body WHERE internal_id = ?`
+  ).get(...params) as EmailBodyContentRow | undefined
   if (!row) return null
-  let content: string | null
-  if (format === 'raw') {
-    // raw mode returns only the sha256 hash per email-body.schema.json — the
-    // bytes themselves never round-trip through IPC (they live in MIME source
-    // we no longer keep around).
-    content = row.raw_mime_sha256
-  } else if (format === 'html') {
-    content = row.body_html
-  } else {
-    content = row.body_markdown
-  }
+  const truncated =
+    mode === 'preview' &&
+    format !== 'raw' &&
+    (row.body_size_bytes ?? 0) > EMAIL_BODY_PREVIEW_THRESHOLD_BYTES
+  const content =
+    truncated && format === 'html' && row.content ? previewHtml(row.content) : row.content
   return {
     internal_id: internalId,
     format,
     content,
     size_bytes: row.body_size_bytes ?? 0,
+    truncated,
     fetched_at: row.fetched_at,
     fetched_source: row.fetched_source
   }
@@ -696,7 +684,7 @@ export function registerEmailHandlers(): void {
     if (!Number.isInteger(internalId) || internalId < 0) {
       throw new TypeError(`email:body expected non-negative integer, got ${String(internalId)}`)
     }
-    return getEmailBody(internalId, opts?.format ?? 'markdown')
+    return getEmailBody(internalId, opts?.format ?? 'markdown', opts?.mode ?? 'full')
   })
   ipcMain.handle('email:listByThread', (_evt, threadId: string | null) =>
     listEmailsByThread(threadId)

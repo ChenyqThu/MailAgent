@@ -63,6 +63,9 @@
     "fewerProps": "收起属性",
     "more": "more",
     "less": "less",
+    "bodyPreviewTruncated": "正文较大，当前仅显示预览。",
+    "bodyShowFull": "显示完整正文",
+    "bodyLoadingFull": "正在加载…",
     "lightbox": {
       "ariaLabel": "图片预览",
       "zoomIn": "放大",

@@ -516,12 +516,12 @@ export class MailAgentDomainClient {
     })
   }
 
-  /** email_get — single email metadata. GET /email/{id}?include=body,attachments.
+  /** email_get — single email metadata. GET /email/{id}?include=attachments.
    *  E_NOT_FOUND → null (mirrors httpApi.email.get). */
   async getEmail(internalId: number, signal?: AbortSignal): Promise<EmailGet_EmailRecord | null> {
     try {
       return await this._req<EmailGet_EmailRecord>('GET', `/email/${internalId}`, {
-        query: { include: 'body,attachments' },
+        query: { include: 'attachments' },
         signal
       })
     } catch (e) {
@@ -1153,11 +1153,10 @@ export class MailAgentDomainClient {
     patch: ReportConfigPatch,
     signal?: AbortSignal
   ): Promise<ReportAgentConfig> {
-    return this._req<ReportAgentConfig>(
-      'PUT',
-      `/report-agents/${encodeURIComponent(agentId)}`,
-      { body: patch, signal }
-    )
+    return this._req<ReportAgentConfig>('PUT', `/report-agents/${encodeURIComponent(agentId)}`, {
+      body: patch,
+      signal
+    })
   }
 
   /** custom_agent_delete — delete an agent row. DELETE /report-agents/{id}. Missing → E_NOT_FOUND. */

@@ -63,6 +63,9 @@
     "fewerProps": "Fewer properties",
     "more": "more",
     "less": "less",
+    "bodyPreviewTruncated": "This message is large, so only a preview is shown.",
+    "bodyShowFull": "Show full message",
+    "bodyLoadingFull": "Loading…",
     "lightbox": {
       "ariaLabel": "Image preview",
       "zoomIn": "Zoom in",

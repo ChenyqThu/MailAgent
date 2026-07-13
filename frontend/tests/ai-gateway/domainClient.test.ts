@@ -109,7 +109,7 @@ describe('MailAgentDomainClient — wire-param fidelity', () => {
     expect(url).not.toContain('sinceDate=')
   })
 
-  test('getEmail → include=body,attachments; E_NOT_FOUND → null', async () => {
+  test('getEmail → include=attachments without body summary; E_NOT_FOUND → null', async () => {
     const { fetchImpl, calls } = recordingFetch((url) =>
       url.includes('/email/1')
         ? success({ internal_id: 1, subject: 'hi' })
@@ -117,7 +117,8 @@ describe('MailAgentDomainClient — wire-param fidelity', () => {
     )
     const found = await client(fetchImpl).getEmail(1)
     expect(found).toMatchObject({ internal_id: 1 })
-    expect(decodeURIComponent(calls[0].url)).toContain('include=body,attachments')
+    expect(decodeURIComponent(calls[0].url)).toContain('include=attachments')
+    expect(decodeURIComponent(calls[0].url)).not.toContain('body,attachments')
 
     const missing = await client(fetchImpl).getEmail(999)
     expect(missing).toBeNull()

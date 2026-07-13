@@ -12,12 +12,13 @@
     "data": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["internal_id", "format", "content", "size_bytes"],
+      "required": ["internal_id", "format", "content", "size_bytes", "truncated"],
       "properties": {
         "internal_id": {"type": "integer", "minimum": 0},
         "format": {"type": "string", "enum": ["markdown", "html", "raw"]},
         "content": {"type": ["string", "null"], "description": "raw 模式仅 raw_mime_sha256 哈希"},
         "size_bytes": {"type": "integer", "minimum": 0},
+        "truncated": {"type": "boolean", "description": "preview 模式下正文是否因超大而截断"},
         "fetched_at": {"type": ["number", "null"]},
         "fetched_source": {"type": ["string", "null"]}
       }

@@ -20,8 +20,14 @@ import { buildFixtureDb } from '../../fixtures/sync-store-fixture'
 // db instead of the production resolveDbPath() which would try to open
 // ~/Documents/MailAgent/data/sync_store.db.
 let fixtureDb: Database.Database
+const preparedSql: string[] = []
 vi.mock('../../../src/electron/main/db', () => ({
-  getDb: () => fixtureDb,
+  getDb: () => ({
+    prepare: (sql: string) => {
+      preparedSql.push(sql)
+      return fixtureDb.prepare(sql)
+    }
+  }),
   closeDb: () => {},
   resolveDbPath: () => ':memory:'
 }))
@@ -142,10 +148,11 @@ describe('listEmails', () => {
 })
 
 describe('getEmail', () => {
-  test('returns full record with body summary and attachments', () => {
+  test('returns metadata and attachments without querying email_body', () => {
+    preparedSql.length = 0
     const rec = handlers.getEmail(101)
     expect(rec).not.toBeNull()
-    expect(rec?.body?.format).toBe('html')
+    expect(rec?.body).toBeNull()
     expect(rec?.attachments).toHaveLength(2)
     const [, derived] = rec!.attachments!
     expect(derived.derived_from).not.toBeNull()
@@ -154,6 +161,7 @@ describe('getEmail', () => {
     const ok = validateGet(wrap(rec))
     if (!ok) console.error('schema errors:', validateGet.errors)
     expect(ok).toBe(true)
+    expect(preparedSql.some((sql) => sql.includes('FROM email_body'))).toBe(false)
   })
 
   test('returns null when internal_id missing', () => {
@@ -169,16 +177,25 @@ describe('getEmail', () => {
 
 describe('getEmailBody', () => {
   test('markdown format returns body_markdown content', () => {
+    preparedSql.length = 0
     const body = handlers.getEmailBody(101, 'markdown')
     expect(body?.format).toBe('markdown')
     expect(body?.content).toContain('redis client')
     expect(validateBody(wrap(body))).toBe(true)
+    const sql = preparedSql.find((item) => item.includes('FROM email_body')) ?? ''
+    expect(sql).toContain('body_markdown AS content')
+    expect(sql).not.toContain('body_html')
+    expect(body?.truncated).toBe(false)
   })
 
   test('html format returns body_html content', () => {
+    preparedSql.length = 0
     const body = handlers.getEmailBody(101, 'html')
     expect(body?.format).toBe('html')
     expect(body?.content).toContain('<p>')
+    const sql = preparedSql.find((item) => item.includes('FROM email_body')) ?? ''
+    expect(sql).toContain('body_html AS content')
+    expect(sql).not.toContain('body_markdown')
   })
 
   test('raw format returns only the sha256 hash', () => {
@@ -189,6 +206,29 @@ describe('getEmailBody', () => {
 
   test('missing internal_id returns null', () => {
     expect(handlers.getEmailBody(99_999, 'markdown')).toBeNull()
+  })
+
+  test('preview truncates oversized markdown while full mode returns all content', () => {
+    const content = 'A'.repeat(300_000)
+    fixtureDb
+      .prepare(
+        'UPDATE email_body SET body_markdown = ?, body_size_bytes = ? WHERE internal_id = 101'
+      )
+      .run(content, 300_000)
+    try {
+      const preview = handlers.getEmailBody(101, 'markdown', 'preview')
+      const full = handlers.getEmailBody(101, 'markdown', 'full')
+      expect(preview?.truncated).toBe(true)
+      expect(preview?.content).toHaveLength(64 * 1024)
+      expect(full?.truncated).toBe(false)
+      expect(full?.content).toHaveLength(300_000)
+    } finally {
+      fixtureDb
+        .prepare(
+          'UPDATE email_body SET body_markdown = ?, body_size_bytes = ? WHERE internal_id = 101'
+        )
+        .run('Hey, the redis client keeps timing out after 5s.', 57)
+    }
   })
 })
 
@@ -232,7 +272,6 @@ describe('listEmailsEnriched', () => {
     expect(rows[3].snippet).toBeNull()
     expect(rows[3].lang).toBe('unknown')
     expect(rows[3].ai_priority).toBeNull()
-
   })
 
   test('mailbox filter does not trip the JOIN ambiguity (m.mailbox vs llm.mailbox)', () => {

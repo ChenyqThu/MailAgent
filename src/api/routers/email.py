@@ -6,8 +6,8 @@
 本 router 端点:
   GET  /api/email/list                  — repo.list_metadata        (EmailMeta[])
   GET  /api/email/pinned-ids            — repo.list_pinned_ids       (PinnedIds)
-  GET  /api/email/{internal_id}         — repo.get_email_full/get_metadata (EmailFull)
-  GET  /api/email/{internal_id}/body    — repo.get_body             (EmailBody)
+  GET  /api/email/{internal_id}         — repo metadata/body-summary/attachments projection
+  GET  /api/email/{internal_id}/body    — repo.get_body_content      (EmailBody)
   GET  /api/email/search                — repo.search_email_bodies  (SearchResult)
   GET  /api/email/contacts              — repo.suggest_contacts     (ContactSuggestResult)
   POST /api/email/draft                 — service MailWriteService.compose_draft (DraftResult)
@@ -52,6 +52,12 @@ from src.api.auth import verify_cf_access
 from src.api.deps import get_repository, get_service_ctx
 from src.services import wire
 from src.services.errors import ServiceError
+from src.services.email_body_preview import (
+    EMAIL_BODY_HTML_SOURCE_CHARS,
+    EMAIL_BODY_PREVIEW_CHARS,
+    EMAIL_BODY_PREVIEW_THRESHOLD_BYTES,
+    preview_html,
+)
 from src.services.guards import Actor
 from src.services.mail_write import MailWriteService
 
@@ -234,7 +240,7 @@ async def get_email(
 ):
     """获取单封邮件 metadata + 可选 body 摘要 / attachments。
 
-    ?include=body,attachments → 一次聚合 (repo.get_email_full)。data 形状镜像
+    ?include=body,attachments → 分别读取轻量 body summary / attachments。data 形状镜像
     `email get` (email-get.schema.json email_record): 始终含 ``body`` (摘要 | null)
     + ``attachments`` (list | [])。404 (E_NOT_FOUND) 当 metadata 缺失。
     body 是 SUMMARY (format/size_bytes/...), 非内容 — 内容走 /body 端点。
@@ -242,18 +248,22 @@ async def get_email(
     parts = _parse_include(include)
 
     if parts:
-        full = repo.get_email_full(internal_id)
-        if full is None:
+        meta = repo.get_metadata(internal_id)
+        if meta is None:
             raise APIError(
                 "E_NOT_FOUND",
                 f"Email with internal_id={internal_id} not found",
                 hint="Use GET /api/email/list to find available IDs",
                 source="sqlite",
             )
-        data = wire.meta_to_dict(full.metadata, include_important=True)
-        data["body"] = wire.body_summary(full.body) if "body" in parts else None
+        data = wire.meta_to_dict(meta, include_important=True)
+        data["body"] = (
+            wire.body_summary(repo.get_body_summary(internal_id))
+            if "body" in parts
+            else None
+        )
         data["attachments"] = (
-            [wire.attachment_to_dict(a) for a in full.attachments]
+            [wire.attachment_to_dict(a) for a in repo.get_attachments(internal_id)]
             if "attachments" in parts
             else []
         )
@@ -284,12 +294,13 @@ async def get_email_body(
     internal_id: int,
     repo: "EmailRepository" = Depends(get_repository),
     format: str = Query("markdown", description="markdown (default) / html / raw"),
+    mode: str = Query("full", description="full (default) / preview"),
 ):
     """返回邮件正文 — markdown / html / raw (raw → content=raw_mime_sha256, 仅哈希)。
 
     data = EmailBody (email-body.schema.json): {internal_id, format, content,
-    size_bytes, fetched_at, fetched_source}。镜像 CLI `email body`:
-    单次 get_body 后挑字段 (一次往返拿到 size_bytes/fetched_at)。
+    size_bytes, truncated, fetched_at, fetched_source}。正文只投影请求格式单列；
+    preview 模式对超大正文先在 SQL 层限制读取前缀。
     404 (E_NOT_FOUND) 当无 body 行 或 该 format 字段为 None。
     """
     fmt = format.lower()
@@ -299,9 +310,15 @@ async def get_email_body(
             f"format must be one of {sorted(VALID_BODY_FORMATS)}, got {format!r}",
             source="sqlite",
         )
+    if mode not in {"full", "preview"}:
+        raise APIError(
+            "E_INVALID_ARG",
+            f"mode must be one of ['full', 'preview'], got {mode!r}",
+            source="sqlite",
+        )
 
-    body_record = repo.get_body(internal_id)
-    if body_record is None:
+    summary = repo.get_body_summary(internal_id)
+    if summary is None:
         raise APIError(
             "E_NOT_FOUND",
             f"No body in SQLite for internal_id={internal_id}",
@@ -309,12 +326,25 @@ async def get_email_body(
             source="sqlite",
         )
 
-    if fmt == "markdown":
-        content = body_record.markdown
-    elif fmt == "html":
-        content = body_record.html
-    else:  # raw — 只返回 raw MIME 哈希 (不含正文)
-        content = body_record.raw_mime_sha256
+    truncated = (
+        mode == "preview"
+        and fmt != "raw"
+        and summary.body_size_bytes > EMAIL_BODY_PREVIEW_THRESHOLD_BYTES
+    )
+    max_chars = 0
+    if truncated:
+        max_chars = (
+            EMAIL_BODY_HTML_SOURCE_CHARS if fmt == "html" else EMAIL_BODY_PREVIEW_CHARS
+        )
+    body_record = repo.get_body_content(internal_id, fmt, max_chars=max_chars)
+    if body_record is None:
+        raise APIError(
+            "E_NOT_FOUND",
+            f"No body in SQLite for internal_id={internal_id}",
+            hint="可能未经 v4 双写; 后台跑 backfill body 回填",
+            source="sqlite",
+        )
+    content = body_record.content
 
     if content is None:
         raise APIError(
@@ -327,10 +357,11 @@ async def get_email_body(
     data = {
         "internal_id": internal_id,
         "format": fmt,
-        "content": content,
+        "content": preview_html(content) if truncated and fmt == "html" else content,
         "size_bytes": (
             body_record.body_size_bytes if fmt != "raw" else len(content)
         ),
+        "truncated": truncated,
         "fetched_at": body_record.fetched_at,
         "fetched_source": body_record.fetched_source,
     }

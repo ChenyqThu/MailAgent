@@ -227,6 +227,7 @@ def email_body(
             body_record.body_size_bytes
             if fmt != "raw" else len(content) if content else 0
         ),
+        "truncated": False,
         "fetched_at": body_record.fetched_at,
         "fetched_source": body_record.fetched_source,
     }

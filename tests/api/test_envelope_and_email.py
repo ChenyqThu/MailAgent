@@ -7,6 +7,8 @@ from BACKEND-INTERFACES §2.4 against the temp-DB fixture.
 
 from __future__ import annotations
 
+from bs4 import BeautifulSoup
+
 from tests.api.conftest import (
     EMAIL_ID,
     EMAIL_NO_BODY_ID,
@@ -149,7 +151,17 @@ def test_email_get_metadata_only(client):
     assert data["attachments"] == []
 
 
-def test_email_get_with_body_and_attachments(client):
+def test_email_get_with_body_and_attachments(client, repo, monkeypatch):
+    monkeypatch.setattr(
+        repo,
+        "get_email_full",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("full body read")),
+    )
+    monkeypatch.setattr(
+        repo,
+        "get_body",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("body blob read")),
+    )
     r = client.get(f"/api/email/{EMAIL_ID}", params={"include": "body,attachments"})
     assert r.status_code == 200
     data = r.json()["data"]
@@ -207,6 +219,7 @@ def test_email_body_markdown_default(client):
     assert data["format"] == "markdown"
     assert data["content"] == "Hello **redis** timeout body"
     assert data["fetched_source"] == "davmail"
+    assert data["truncated"] is False
 
 
 def test_email_body_html(client):
@@ -225,10 +238,73 @@ def test_email_body_raw_returns_hash(client):
     # raw → content is the raw_mime_sha256 (64 hex chars), size_bytes = len(hash).
     assert data["content"] == "a" * 64
     assert data["size_bytes"] == 64
+    assert data["truncated"] is False
+
+
+def test_email_body_preview_and_full_modes(client, repo):
+    markdown = "A" * 300_000
+    html = f"<section><p>{'B' * 300_000}</p><p>tail</p></section>"
+    conn = repo._connect()
+    try:
+        conn.execute(
+            """UPDATE email_body
+               SET body_markdown = ?, body_html = ?, body_size_bytes = ?
+               WHERE internal_id = ?""",
+            (markdown, html, 300_000, EMAIL_ID),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    try:
+        preview = client.get(
+            f"/api/email/{EMAIL_ID}/body",
+            params={"format": "markdown", "mode": "preview"},
+        ).json()["data"]
+        full = client.get(
+            f"/api/email/{EMAIL_ID}/body",
+            params={"format": "markdown", "mode": "full"},
+        ).json()["data"]
+        html_preview = client.get(
+            f"/api/email/{EMAIL_ID}/body",
+            params={"format": "html", "mode": "preview"},
+        ).json()["data"]
+
+        assert preview["truncated"] is True
+        assert len(preview["content"]) == 64 * 1024
+        assert full["truncated"] is False
+        assert len(full["content"]) == 300_000
+        assert html_preview["truncated"] is True
+        assert html_preview["content"].endswith("</p></section>")
+        assert len("".join(BeautifulSoup(html_preview["content"], "lxml").stripped_strings)) == 64 * 1024
+        assert len(html_preview["content"]) < len(html)
+    finally:
+        conn = repo._connect()
+        try:
+            conn.execute(
+                """UPDATE email_body
+                   SET body_markdown = ?, body_html = ?, body_size_bytes = ?
+                   WHERE internal_id = ?""",
+                (
+                    "Hello **redis** timeout body",
+                    "<p>Hello <b>redis</b> timeout body</p>",
+                    38,
+                    EMAIL_ID,
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
 
 
 def test_email_body_invalid_format_400(client):
     r = client.get(f"/api/email/{EMAIL_ID}/body", params={"format": "pdf"})
+    assert r.status_code == 400
+    _assert_error_envelope(r.json(), code="E_INVALID_ARG")
+
+
+def test_email_body_invalid_mode_400(client):
+    r = client.get(f"/api/email/{EMAIL_ID}/body", params={"mode": "chunked"})
     assert r.status_code == 400
     _assert_error_envelope(r.json(), code="E_INVALID_ARG")
 

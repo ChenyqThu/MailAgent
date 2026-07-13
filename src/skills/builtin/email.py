@@ -36,13 +36,15 @@ def _email_get(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
     parts = _parse_include(str(params.get("include") or ""))
     repo = ctx.repo()
     if parts:
-        full = repo.get_email_full(internal_id)
-        if full is None:
+        meta = repo.get_metadata(internal_id)
+        if meta is None:
             raise SkillError("E_NOT_FOUND", f"email {internal_id} not found", http_status=404)
-        data = wire.meta_to_dict(full.metadata, include_important=True)
-        data["body"] = wire.body_summary(full.body) if "body" in parts else None
+        data = wire.meta_to_dict(meta, include_important=True)
+        data["body"] = wire.body_summary(repo.get_body_summary(internal_id)) if "body" in parts else None
         data["attachments"] = (
-            [wire.attachment_to_dict(a) for a in full.attachments] if "attachments" in parts else []
+            [wire.attachment_to_dict(a) for a in repo.get_attachments(internal_id)]
+            if "attachments" in parts
+            else []
         )
     else:
         meta = repo.get_metadata(internal_id)
@@ -70,6 +72,7 @@ def _email_body(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
         "format": fmt,
         "content": content,
         "size_bytes": rec.body_size_bytes if fmt != "raw" else len(content),
+        "truncated": False,
         "fetched_at": rec.fetched_at,
         "fetched_source": rec.fetched_source,
     }

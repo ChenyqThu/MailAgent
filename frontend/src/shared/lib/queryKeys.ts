@@ -44,6 +44,8 @@ export const qk = {
     ai: (id: number | null) => ['email', id, 'ai'] as const,
     translation: (id: number | null, lang: string) => ['email', id, 'translation', lang] as const,
     body: (id: number | null, format: string) => ['email', id, 'body', format] as const,
+    bodyPreview: (id: number | null, format: string) =>
+      ['email', id, 'body-preview', format] as const,
     threadCount: (threadId: string | null) => ['email', threadId, 'thread-count'] as const,
     thread: (threadId: string | null) => ['email', 'thread', threadId] as const
   },
