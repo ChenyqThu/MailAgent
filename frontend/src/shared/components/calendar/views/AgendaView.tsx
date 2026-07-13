@@ -13,6 +13,7 @@ import {
   addDays
 } from '../hooks/useCalendarEvents'
 import type { CalendarEventOccurrence } from '@shared/api/types'
+import { CalendarQueryError } from '../CalendarQueryError'
 import { shortTime, ymd } from '../lib/format'
 import { EmptyState } from '@shared/components/feedback/EmptyState'
 import { SkeletonRow } from '@shared/components/feedback/LoadingSkeleton'
@@ -67,7 +68,7 @@ export function AgendaView({
   const { t } = useTranslation()
   const start = todayStartLocal()
   const end = addDays(start, rangeDays)
-  const { data, isLoading } = useCalendarEventsInWindow(
+  const { data, isLoading, isError, refetch } = useCalendarEventsInWindow(
     {
       fromIso: start.toISOString(),
       toIso: end.toISOString(),
@@ -104,6 +105,16 @@ export function AgendaView({
           <SkeletonRow />
           <SkeletonRow />
         </div>
+      </div>
+    )
+  }
+
+  // F21 — query reject 不再伪装成空态; 仅在无可显示数据时换错误屏
+  // (keepPreviousData 下后台 refetch 偶发失败, 已在屏的旧数据继续留屏).
+  if (isError && (!data || data.length === 0)) {
+    return (
+      <div className="cal-agenda">
+        <CalendarQueryError onRetry={refetch} />
       </div>
     )
   }

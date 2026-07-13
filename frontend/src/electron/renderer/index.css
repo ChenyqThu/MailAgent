@@ -2576,12 +2576,19 @@ body:not([data-batch-mode='true']) .email-row .cb {
  * ═══════════════════════════════════════════════════════════════════════ */
 
 /* ── Week / Day view: timeline ──────────────────────────────────── */
-.cal-week { display: flex; flex-direction: column; height: 100%; }
-/* padding-right: 10px 补偿 wk-body 的 .scrollbar-thin (line 328 width:10px) —
+.cal-week {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  /* F2: 必须与 .scrollbar-thin 槽宽 (:570, v3 起 8px) 一致 — 表头补偿与
+   * wk-body 的 scrollbar-gutter 预留同源, 否则表头列与滚动区列基准漂移. */
+  --cal-scrollbar-w: 8px;
+}
+/* padding-right 补偿 wk-body 的 .scrollbar-thin 槽宽 —
  * 配合下方 .wk-body { scrollbar-gutter: stable } 后, wk-body 内的 wk-grid
  * 与 wk-headrow/wk-alldayrow 的内部 grid 宽度严格相等, 7 列不再累积漂移. */
 .wk-headrow,
-.wk-alldayrow { display: grid; flex-shrink: 0; padding-right: 10px; box-sizing: border-box; }
+.wk-alldayrow { display: grid; flex-shrink: 0; padding-right: var(--cal-scrollbar-w); box-sizing: border-box; }
 
 .wk-corner {
   border-bottom: 1px solid rgb(var(--ink-border));
@@ -3038,8 +3045,9 @@ body:not([data-batch-mode='true']) .email-row .cb {
   letter-spacing: 0.04em;
 }
 
-/* event chip (month / agenda all-day strip / week all-day) */
-.chip {
+/* event chip (month / agenda all-day strip / week all-day)
+ * F1: 改名 .cal-chip 消除与表单 attendee .chip (:3838) 的全局撞名 */
+.cal-chip {
   display: flex;
   align-items: center;
   gap: 5px;
@@ -3054,15 +3062,15 @@ body:not([data-batch-mode='true']) .email-row .cb {
   width: 100%;
   text-align: left;
 }
-.chip:hover { background: rgb(var(--c-accent) / 0.22); }
-.chip .c-dot {
+.cal-chip:hover { background: rgb(var(--c-accent) / 0.22); }
+.cal-chip .c-dot {
   width: 5px;
   height: 5px;
   border-radius: 50%;
   background: rgb(var(--c-accent));
   flex-shrink: 0;
 }
-.chip .c-time {
+.cal-chip .c-time {
   font-family: ui-monospace, 'SF Mono', monospace;
   font-size: 10px;
   color: rgb(var(--c-accent));
@@ -3070,22 +3078,22 @@ body:not([data-batch-mode='true']) .email-row .cb {
   flex-shrink: 0;
   font-weight: 600;
 }
-.chip .c-title {
+.cal-chip .c-title {
   font-size: 11.5px;
   color: rgb(var(--ink-fg));
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.chip[data-resp='TENTATIVE'] { opacity: 0.72; }
-.chip[data-resp='DECLINED']  { opacity: 0.5; }
-.chip[data-resp='DECLINED'] .c-title { text-decoration: line-through; }
-.chip[data-resp='NEEDS-ACTION'] {
+.cal-chip[data-resp='TENTATIVE'] { opacity: 0.72; }
+.cal-chip[data-resp='DECLINED']  { opacity: 0.5; }
+.cal-chip[data-resp='DECLINED'] .c-title { text-decoration: line-through; }
+.cal-chip[data-resp='NEEDS-ACTION'] {
   border: 1px solid rgb(var(--c-accent));
   background: transparent;
 }
-.chip[data-status='CANCELLED'] { opacity: 0.4; }
-.chip[data-status='CANCELLED'] .c-title { text-decoration: line-through; }
+.cal-chip[data-status='CANCELLED'] { opacity: 0.4; }
+.cal-chip[data-status='CANCELLED'] .c-title { text-decoration: line-through; }
 
 .more-btn {
   font-size: 11px;
@@ -3385,6 +3393,13 @@ body:not([data-batch-mode='true']) .email-row .cb {
   word-break: break-all;
 }
 .link-row:hover { text-decoration: underline; }
+/* F13: 关联邮件死链改 button — 复用 .link-row 视觉, 只清默认 button 外观 */
+.cal-linkbtn {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font-family: inherit;
+}
 
 .desc-box {
   font-size: 13px;

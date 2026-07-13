@@ -9,6 +9,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Calendar as CalendarIcon, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
+import { CalendarQueryError } from '../CalendarQueryError'
 import { EventBlock } from '../EventBlock'
 import { isTodayLocal, pad, shortTime, ymd } from '../lib/format'
 import {
@@ -162,7 +163,12 @@ export function DayView({
   }, [selectedDate])
   const dayEnd = useMemo(() => addDays(dayStart, 1), [dayStart])
 
-  const { data: dayEventsRaw, isLoading } = useCalendarEventsInWindow(
+  const {
+    data: dayEventsRaw,
+    isLoading,
+    isError,
+    refetch
+  } = useCalendarEventsInWindow(
     {
       fromIso: dayStart.toISOString(),
       toIso: dayEnd.toISOString(),
@@ -289,6 +295,9 @@ export function DayView({
             经 keepPreviousData 留屏直到新日 ready, isLoading=false 不显骨架. */}
         {isLoading ? (
           <Skeleton rows={8} className="p-6" />
+        ) : isError && total === 0 ? (
+          // F21 — query reject 不再伪装成空态; 仅在无可显示数据时换错误屏.
+          <CalendarQueryError onRetry={refetch} />
         ) : total === 0 ? (
           <EmptyState
             icon={<CalendarIcon size={20} strokeWidth={1.75} className="text-ink-fg-3" />}

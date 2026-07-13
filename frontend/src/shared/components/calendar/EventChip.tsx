@@ -1,6 +1,6 @@
 // 视觉复刻 mockup-calendar.html §.chip (2026-05-23) —
 // 月视图单格 + agenda all-day strip 的紧凑 event chip.
-// 用 .chip + data-resp / data-status 走 CSS 渲染 4 种 response + cancelled.
+// 用 .cal-chip + data-resp / data-status 走 CSS 渲染 4 种 response + cancelled.
 
 import { useTranslation } from 'react-i18next'
 
@@ -27,7 +27,7 @@ export function EventChip({ event, compact = false, onClick }: EventChipProps): 
   return (
     <button
       type="button"
-      className="chip"
+      className="cal-chip"
       data-resp={(event.response_status || '').toUpperCase()}
       data-status={(event.status || '').toUpperCase()}
       onClick={onClick}

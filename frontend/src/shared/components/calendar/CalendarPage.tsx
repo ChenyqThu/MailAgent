@@ -14,6 +14,7 @@ import { qk } from '@shared/lib/queryKeys'
 import { EmptyState } from '@shared/components/feedback/EmptyState'
 import { SkeletonRow } from '@shared/components/feedback/LoadingSkeleton'
 import { toastError, toastSuccess } from '@shared/state/toast'
+import { CalendarQueryError } from './CalendarQueryError'
 
 const RANGES: Array<{ label: string; offsetDays: number }> = [
   { label: '30d', offsetDays: 30 },
@@ -188,6 +189,10 @@ export function CalendarPage(): React.ReactElement {
             <SkeletonRow />
             <SkeletonRow />
           </div>
+        ) : listQ.isError && (!listQ.data || listQ.data.length === 0) ? (
+          // F21 — query reject 不再伪装成「未发现周期会议」假空态 (远程 web
+          // stub 接口下 100% 触发); 仅在无可显示数据时换错误屏.
+          <CalendarQueryError onRetry={() => void listQ.refetch()} />
         ) : !listQ.data || listQ.data.length === 0 ? (
           <EmptyState
             icon={<CalendarIcon size={20} strokeWidth={1.75} className="text-ink-fg-3" />}

@@ -1256,6 +1256,7 @@
     },
     "drawer": {
       "closeTitle": "关闭 (Esc)",
+      "openInboxTitle": "回到收件箱",
       "noRelatedEmail": "无关联邮件",
       "teamsMeeting": "Teams 会议",
       "me": "(我)",
@@ -1387,6 +1388,11 @@
     "errorBoundary": {
       "title": "{view} 加载失败",
       "hint": "切换视图或点 [重试] 重新加载. 详情见 DevTools console.",
+      "retry": "重试"
+    },
+    "error": {
+      "title": "日历数据加载失败",
+      "hint": "获取日程失败, 可能是后端服务暂不可用.",
       "retry": "重试"
     },
     "relTime": {

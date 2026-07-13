@@ -1258,6 +1258,7 @@
     },
     "drawer": {
       "closeTitle": "Close (Esc)",
+      "openInboxTitle": "Back to inbox",
       "noRelatedEmail": "No related email",
       "teamsMeeting": "Teams meeting",
       "me": "(me)",
@@ -1387,6 +1388,11 @@
     "errorBoundary": {
       "title": "{view} failed to load",
       "hint": "Switch view or click Retry to reload. See DevTools console for details.",
+      "retry": "Retry"
+    },
+    "error": {
+      "title": "Failed to load calendar data",
+      "hint": "Could not fetch events — the backend may be temporarily unavailable.",
       "retry": "Retry"
     },
     "relTime": {

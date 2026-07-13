@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Calendar as CalendarIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
+import { CalendarQueryError } from '../CalendarQueryError'
 import { EventBlock } from '../EventBlock'
 import { isTodayLocal, pad, ymd } from '../lib/format'
 import {
@@ -62,7 +63,7 @@ export function WeekView({
     [weekStart]
   )
 
-  const { data, isLoading } = useCalendarEventsInWindow(
+  const { data, isLoading, isError, refetch } = useCalendarEventsInWindow(
     {
       fromIso: weekStart.toISOString(),
       toIso: weekEnd.toISOString(),
@@ -90,6 +91,15 @@ export function WeekView({
   }
 
   const events = data ?? []
+  // F21 — query reject 不再伪装成空态; 仅在无可显示数据时换错误屏
+  // (keepPreviousData 下后台 refetch 偶发失败, 已在屏的旧数据继续留屏).
+  if (isError && events.length === 0) {
+    return (
+      <div className="cal-week">
+        <CalendarQueryError onRetry={refetch} />
+      </div>
+    )
+  }
   if (events.length === 0) {
     return (
       <div className="cal-week">

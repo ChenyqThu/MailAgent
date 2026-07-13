@@ -28,6 +28,7 @@ import {
 } from 'lucide-react'
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useNavigate } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 
 import { EventFormModal } from './EventFormModal'
@@ -201,6 +202,7 @@ export function EventDetailDrawer({ occurrence, onClose, onReopen }: Props): Rea
 
   const mailApi = useMailApi()
   const qc = useQueryClient()
+  const navigate = useNavigate()
 
   // Phase 2.5 §11.6 — userEmail 用于判 isOwner. 跟 Sidebar 同 query key,
   // react-query 缓存 share, settings 不会因 drawer 反复重拉.
@@ -481,14 +483,17 @@ export function EventDetailDrawer({ occurrence, onClose, onReopen }: Props): Rea
                 label={t('calendar.drawer.meta.relatedEmail', '关联邮件')}
               >
                 {occurrence.related_email_internal_id ? (
-                  <a
-                    className="link-row"
-                    href={`/?internal_id=${occurrence.related_email_internal_id}`}
-                    title="跳到 inbox 选中该邮件"
+                  // F13 止血: 原生 <a href> 在打包 app 是主框架 file:// 真导航 → 白屏.
+                  // 先走应用内路由回 inbox; 真·邮件定位联动阶段 2 接.
+                  <button
+                    type="button"
+                    className="link-row cal-linkbtn"
+                    onClick={() => void navigate({ to: '/' })}
+                    title={t('calendar.drawer.openInboxTitle', '回到收件箱')}
                   >
                     #{occurrence.related_email_internal_id}
                     <ExternalLink size={11} strokeWidth={2} />
-                  </a>
+                  </button>
                 ) : (
                   <span className="empty-field">
                     {t('calendar.drawer.noRelatedEmail', '无关联邮件')}
