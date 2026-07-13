@@ -98,6 +98,8 @@ afterEach(() => {
   cleanup()
   eventCreate.mockReset().mockResolvedValue({})
   eventUpdate.mockReset().mockResolvedValue({})
+  // 阶段1·1.4 测试会改 description; 保持引用稳定只重置字段
+  stableDetail.description = ''
 })
 
 describe('EventFormModal — create 触摸链', () => {
@@ -153,5 +155,40 @@ describe('EventFormModal — edit 与会者 dirty (Phase 4·#4 数据安全)', (
     const opts = eventUpdate.mock.calls[0][0]
     expect(opts.attendees).toEqual([{ email: 'bob@x.com' }])
     expect(opts).not.toHaveProperty('clearAttendees')
+  })
+})
+
+describe('EventFormModal — edit 描述回填 + dirty (阶段1·1.4 F15 数据安全)', () => {
+  function descBox(): HTMLTextAreaElement {
+    return screen.getByPlaceholderText('议程、备注、相关链接…') as HTMLTextAreaElement
+  }
+
+  test('detail.description 回填描述框; 不碰 → eventUpdate description=undefined (保留)', async () => {
+    stableDetail.description = '原有议程'
+    renderModal(makeOccurrence())
+    await waitFor(() => expect(descBox().value).toBe('原有议程'))
+    fireEvent.click(screen.getByText('保存'))
+    await waitFor(() => expect(eventUpdate).toHaveBeenCalledTimes(1))
+    expect(eventUpdate.mock.calls[0][0].description).toBeUndefined()
+  })
+
+  test('改描述 → eventUpdate 收到新值 (dirty 后回填不覆盖)', async () => {
+    stableDetail.description = '原有议程'
+    renderModal(makeOccurrence())
+    await waitFor(() => expect(descBox().value).toBe('原有议程'))
+    fireEvent.change(descBox(), { target: { value: '新议程' } })
+    fireEvent.click(screen.getByText('保存'))
+    await waitFor(() => expect(eventUpdate).toHaveBeenCalledTimes(1))
+    expect(eventUpdate.mock.calls[0][0].description).toBe('新议程')
+  })
+
+  test('回填后删光描述 → eventUpdate description="" (显式清空, 非静默保留)', async () => {
+    stableDetail.description = '原有议程'
+    renderModal(makeOccurrence())
+    await waitFor(() => expect(descBox().value).toBe('原有议程'))
+    fireEvent.change(descBox(), { target: { value: '' } })
+    fireEvent.click(screen.getByText('保存'))
+    await waitFor(() => expect(eventUpdate).toHaveBeenCalledTimes(1))
+    expect(eventUpdate.mock.calls[0][0].description).toBe('')
   })
 })

@@ -1,6 +1,10 @@
 // 视觉复刻 mockup-calendar.html §agenda (2026-05-23) —
 // 按日期 group, 每 group sticky ah-head, 行 grid 110px/1fr (time / main).
 // Toolbar 已接管 "N 个日程 + 刷新", 这里专注内容呈现.
+//
+// F22/S6 — 跨天事件按 overlap 展开: 与该日窗口重叠的每一天都出一行, 标
+// 「第 n/m 天」; 时间列显示当日实际覆盖段 (首日=开始时间→, 中间日=全天,
+// 末日=→结束时间).
 
 import { useRef } from 'react'
 import { Calendar as CalendarIcon, Video } from 'lucide-react'
@@ -8,9 +12,10 @@ import { useTranslation } from 'react-i18next'
 
 import {
   useCalendarEventsInWindow,
-  groupOccurrencesByLocalDay,
+  expandOccurrencesByLocalDayOverlap,
   todayStartLocal,
-  addDays
+  addDays,
+  type AgendaDayEntry
 } from '../hooks/useCalendarEvents'
 import type { CalendarEventOccurrence } from '@shared/api/types'
 import { CalendarQueryError } from '../CalendarQueryError'
@@ -28,6 +33,9 @@ interface Props {
   selectedCalendars?: string[]
   /** F5 — view 上提选中事件给 CalendarLayout. */
   onSelect: (occ: CalendarEventOccurrence) => void
+  /** F4/Q13 — selected event key (= ``${id}-${occurrence_start_iso}``) 由
+   *  Layout 传, 行比对高亮 drawer 当前 occurrence (跨天事件的每个日行同亮). */
+  selectedKey?: string | null
 }
 
 // F32 — pad/ymd/shortTime 抽到 ../lib/format
@@ -63,7 +71,8 @@ export function AgendaView({
   rangeDays = 14,
   calendarName,
   selectedCalendars,
-  onSelect
+  onSelect,
+  selectedKey = null
 }: Props): React.ReactElement {
   const { t } = useTranslation()
   const start = todayStartLocal()
@@ -131,16 +140,36 @@ export function AgendaView({
     )
   }
 
-  const grouped = groupOccurrencesByLocalDay(data)
-  const sortedKeys = Array.from(grouped.keys()).sort()
+  // F22/S6 — overlap 展开可能产出窗口外的 key (跨天事件起于窗口前/止于窗口
+  // 后), 按 [start, end) 过滤; YYYY-MM-DD 字符串序即日期序.
+  const grouped = expandOccurrencesByLocalDayOverlap(data)
+  const startKey = ymd(start)
+  const endKey = ymd(end)
+  const sortedKeys = Array.from(grouped.keys())
+    .filter((k) => k >= startKey && k < endKey)
+    .sort()
+
+  /** 时间列 — 当日实际覆盖段: all-day 恒「全天」; 跨天 timed 首日显开始
+   *  (14:00 →), 中间日全天, 末日显结束 (→ 16:00); 单日 timed 显起止. */
+  function timeLabel(entry: AgendaDayEntry): string {
+    const { occ, dayIndex, totalDays } = entry
+    const allDayLabel = t('calendar.shared.allDay', '全天')
+    if (occ.is_all_day) return allDayLabel
+    if (totalDays === 1)
+      return `${shortTime(occ.occurrence_start_iso)} – ${shortTime(occ.occurrence_end_iso)}`
+    if (dayIndex === 1) return `${shortTime(occ.occurrence_start_iso)} →`
+    if (dayIndex === totalDays) return `→ ${shortTime(occ.occurrence_end_iso)}`
+    return allDayLabel
+  }
 
   return (
     <div ref={agendaRef} className="cal-agenda scrollbar-thin">
       {sortedKeys.map((key) => {
         const lbl = headerLabels(key)
         const items = (grouped.get(key) ?? []).slice().sort((a, b) => {
-          if (a.is_all_day !== b.is_all_day) return a.is_all_day ? -1 : 1
-          return Date.parse(a.occurrence_start_iso) - Date.parse(b.occurrence_start_iso)
+          if (a.occ.is_all_day !== b.occ.is_all_day) return a.occ.is_all_day ? -1 : 1
+          // 当日覆盖段起点排序 — 跨午夜 continuation (00:00 起) 排当日最前.
+          return a.segStartMs - b.segStartMs
         })
         return (
           <section key={key} className="ag-group">
@@ -148,20 +177,22 @@ export function AgendaView({
               <span className="ah-day">{lbl.ahDay}</span>
               <span className="ah-date">{lbl.ahDate}</span>
             </div>
-            {items.map((occ) => {
-              const allDay = occ.is_all_day
-              const timeTxt = allDay
-                ? t('calendar.shared.allDay', '全天')
-                : `${shortTime(occ.occurrence_start_iso)} – ${shortTime(occ.occurrence_end_iso)}`
+            {items.map((entry) => {
+              const occ = entry.occ
+              const timeTxt = timeLabel(entry)
               const meeting = hasMeetingLink(occ)
               const showLoc =
                 occ.location && !occ.location.toLowerCase().includes('teams.microsoft.com')
               const untitled = t('calendar.shared.untitled', '未命名事件')
+              const multiDay = entry.totalDays > 1
               return (
                 <button
                   key={`${occ.id}-${occ.occurrence_start_iso}`}
                   type="button"
-                  className="ag-row"
+                  className={cn(
+                    'ag-row',
+                    selectedKey === `${occ.id}-${occ.occurrence_start_iso}` && 'is-selected'
+                  )}
                   data-resp={(occ.response_status || '').toUpperCase()}
                   data-status={(occ.status || '').toUpperCase()}
                   onClick={() => onSelect(occ)}
@@ -173,6 +204,14 @@ export function AgendaView({
                     <span className={cn('ag-title', !occ.summary && 'empty-field')}>
                       {occ.summary || untitled}
                     </span>
+                    {multiDay && (
+                      <span className="cal-day-badge">
+                        {t('calendar.view.agenda.dayOfSpan', '第 {n}/{m} 天', {
+                          n: entry.dayIndex,
+                          m: entry.totalDays
+                        })}
+                      </span>
+                    )}
                     {meeting && <Video className="teams-i" size={11} strokeWidth={2} aria-hidden />}
                     {showLoc && <span className="ag-loc">{occ.location}</span>}
                   </div>

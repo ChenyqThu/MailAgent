@@ -2704,6 +2704,17 @@ body:not([data-batch-mode='true']) .email-row .cb {
   border-bottom: 1px solid rgb(var(--ink-border-soft) / 0.6);
 }
 
+/* F23 — Week/Day 结构化加载骨架 (TimelineSkeleton.tsx) 的 ghost 事件块:
+ * 形状对齐 .evt (列内绝对定位), 无内容, pulse 走 tailwind (同 MonthView
+ * 网格骨架惯例). */
+.cal-skel-evt {
+  position: absolute;
+  left: 3px;
+  right: 3px;
+  border-radius: 6px;
+  background: rgb(var(--ink-3) / 0.8);
+}
+
 /* event block (timeline) */
 .evt {
   position: absolute;
@@ -2714,7 +2725,11 @@ body:not([data-batch-mode='true']) .email-row .cb {
   background: rgb(var(--c-accent) / 0.14);
   border: 1px solid rgb(var(--c-accent) / 0.28);
   border-left: 3px solid rgb(var(--c-accent));
-  transition: background 0.12s, box-shadow 0.12s, transform 0.08s;
+  /* F8 — 散装 0.12s/0.08s 收编 fast(120ms) + standard 曲线 */
+  transition:
+    background 120ms cubic-bezier(0.4, 0, 0.2, 1),
+    box-shadow 120ms cubic-bezier(0.4, 0, 0.2, 1),
+    transform 120ms cubic-bezier(0.4, 0, 0.2, 1);
   z-index: 2;
   text-align: left;
 }
@@ -2946,6 +2961,9 @@ body:not([data-batch-mode='true']) .email-row .cb {
   text-align: left;
 }
 .dr-row:hover { background: rgb(var(--ink-3) / 0.6); }
+/* F4/Q13 — 选中锚点: --sel-wash 签名 (对齐邮件列表选中语义); 后置声明压过
+ * 同特异性 hover. */
+.dr-row.is-selected { background: var(--sel-wash); }
 .dr-bar {
   width: 3px;
   align-self: stretch;
@@ -3056,13 +3074,21 @@ body:not([data-batch-mode='true']) .email-row .cb {
   cursor: pointer;
   min-height: 20px;
   background: rgb(var(--c-accent) / 0.13);
-  transition: background 0.1s;
+  /* F8 — 散装 0.1s 收编 fast(120ms) + standard 曲线 */
+  transition: background 120ms cubic-bezier(0.4, 0, 0.2, 1);
   overflow: hidden;
   border: 0;
   width: 100%;
   text-align: left;
 }
 .cal-chip:hover { background: rgb(var(--c-accent) / 0.22); }
+/* F4/Q13 — 选中锚点 (drawer 当前 occurrence): wash 签名; chip 底色本就是
+ * accent 平涂 (hover 22% 比 wash 更深), 单靠 wash 不可辨 → 叠 .evt.is-selected
+ * 同语言的 accent ring (chip 尺寸小, 1.5px 减重). */
+.cal-chip.is-selected {
+  background: var(--sel-wash);
+  box-shadow: 0 0 0 1.5px rgb(var(--c-accent) / 0.5);
+}
 .cal-chip .c-dot {
   width: 5px;
   height: 5px;
@@ -3117,6 +3143,8 @@ body:not([data-batch-mode='true']) .email-row .cb {
   /* 主题 v3 C8/批 4: 溢出事件内容浮层 10px → --r-pop(14) */
   border-radius: var(--r-pop);
   padding: 10px;
+  /* Q11 — MonthView 传 maxHeight (到 viewport 边缘的可用高度), 超出滚动 */
+  overflow-y: auto;
 }
 .more-pop .mp-head {
   font-size: 13px;
@@ -3173,6 +3201,9 @@ body:not([data-batch-mode='true']) .email-row .cb {
   text-align: left;
 }
 .ag-row:hover { background: rgb(var(--ink-3) / 0.55); }
+/* F4/Q13 — 选中锚点: --sel-wash 签名 (对齐邮件列表选中语义); 后置声明压过
+ * 同特异性 hover. 跨天事件展开的每个日行同 key 同亮. */
+.ag-row.is-selected { background: var(--sel-wash); }
 .ag-time {
   font-family: ui-monospace, 'SF Mono', monospace;
   font-size: 12px;
@@ -3209,6 +3240,18 @@ body:not([data-batch-mode='true']) .email-row .cb {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* F22/S6 — agenda 跨天事件「第 n/m 天」标注 (mono 微标签, 同 .m-today-tag
+ * 语言的 accent 轻底) */
+.cal-day-badge {
+  flex-shrink: 0;
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: rgb(var(--c-accent));
+  background: rgb(var(--c-accent) / 0.1);
+  padding: 1px 5px;
+  border-radius: 4px;
 }
 .ag-row[data-resp='DECLINED'] .ag-title {
   text-decoration: line-through;
@@ -3517,6 +3560,28 @@ body:not([data-batch-mode='true']) .email-row .cb {
   color: rgb(var(--ink-fg));
   margin: 0 0 4px;
 }
+/* 阶段1·1.9 (F7/Q12) — 标题行 + 关闭钮 (focus trap 需要 ≥1 focusable;
+   视觉同 .dw-close / .efm-close). */
+.cal-sk-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+.cal-sk-close {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: rgb(var(--ink-fg-2));
+  cursor: pointer;
+  border: 0;
+  background: transparent;
+}
+.cal-sk-close:hover { background: rgb(var(--ink-3)); color: rgb(var(--ink-fg)); }
 .sk-sub {
   font-size: 12px;
   color: rgb(var(--ink-fg-2));
@@ -3681,7 +3746,10 @@ html[data-theme-vt='circle-blur']::view-transition-new(root) {
   opacity: 0;
   pointer-events: none;
   transform: translateY(-4px);
-  transition: opacity 0.14s, transform 0.14s;
+  /* F8 — 散装 0.14s 收编 fast(120ms) + standard 曲线 */
+  transition:
+    opacity 120ms cubic-bezier(0.4, 0, 0.2, 1),
+    transform 120ms cubic-bezier(0.4, 0, 0.2, 1);
   text-align: left;
 }
 .sync-pill:hover .sync-tip {
@@ -4250,7 +4318,10 @@ html[data-theme-vt='circle-blur']::view-transition-new(root) {
   opacity: 0;
   pointer-events: none;
   transform: translateY(4px);
-  transition: opacity 0.14s, transform 0.14s;
+  /* F8 — 散装 0.14s 收编 fast(120ms) + standard 曲线 */
+  transition:
+    opacity 120ms cubic-bezier(0.4, 0, 0.2, 1),
+    transform 120ms cubic-bezier(0.4, 0, 0.2, 1);
   text-align: left;
 }
 .sb-info:hover .sb-pop, .sb-info:focus .sb-pop, .sb-info:focus-within .sb-pop {

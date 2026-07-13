@@ -228,12 +228,17 @@ export function CalendarLayout(): React.ReactElement {
                   date={currentDate}
                   selectedCalendars={selectedCalendars}
                   onSelect={setActive}
+                  selectedKey={selectedKey}
                 />
               </CalendarErrorBoundary>
             )}
             {view === 'agenda' && (
               <CalendarErrorBoundary viewName={t('calendar.toolbar.viewAgenda', 'Agenda')}>
-                <AgendaView selectedCalendars={selectedCalendars} onSelect={setActive} />
+                <AgendaView
+                  selectedCalendars={selectedCalendars}
+                  onSelect={setActive}
+                  selectedKey={selectedKey}
+                />
               </CalendarErrorBoundary>
             )}
             {view === 'recurring' && (

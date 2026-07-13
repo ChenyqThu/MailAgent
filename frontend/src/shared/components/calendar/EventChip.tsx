@@ -11,6 +11,8 @@ interface EventChipProps {
   event: CalendarEventOccurrence
   /** compact = 不显示时间, 只 dot + title (week all-day strip 用). */
   compact?: boolean
+  /** F4/Q13 — drawer 打开的 occurrence 锚点高亮 (.is-selected). */
+  selected?: boolean
   onClick?: () => void
 }
 
@@ -19,7 +21,12 @@ function localTimeShort(iso: string): string {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
-export function EventChip({ event, compact = false, onClick }: EventChipProps): React.ReactElement {
+export function EventChip({
+  event,
+  compact = false,
+  selected = false,
+  onClick
+}: EventChipProps): React.ReactElement {
   const { t } = useTranslation()
   const allDayLabel = t('calendar.shared.allDay', '全天')
   const untitled = t('calendar.shared.untitled', '未命名事件')
@@ -27,7 +34,7 @@ export function EventChip({ event, compact = false, onClick }: EventChipProps): 
   return (
     <button
       type="button"
-      className="cal-chip"
+      className={cn('cal-chip', selected && 'is-selected')}
       data-resp={(event.response_status || '').toUpperCase()}
       data-status={(event.status || '').toUpperCase()}
       onClick={onClick}

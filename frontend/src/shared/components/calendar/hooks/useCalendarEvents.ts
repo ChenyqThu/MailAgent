@@ -244,17 +244,56 @@ export function useNowTick(tickMs = 30_000): number {
   return now
 }
 
-/** 工具: 按本地日期 group occurrences (key=YYYY-MM-DD). */
-export function groupOccurrencesByLocalDay(
+/** F22/S6 — agenda 单日条目: 跨天事件按 overlap 展开后, 每天一条.
+ *  dayIndex/totalDays 按事件**完整跨度**算 (1-based), 与查询窗口裁剪无关 —
+ *  窗口只截到出差第 3 天时仍标「第 3/5 天」. totalDays===1 即单日事件. */
+export interface AgendaDayEntry {
+  occ: CalendarEventOccurrence
+  /** 该 occurrence 在此日的序数 (1-based). */
+  dayIndex: number
+  /** 事件完整跨度覆盖的本地日数. */
+  totalDays: number
+  /** 该日内实际覆盖段起点 ms — 排序用 (首日=事件开始, 后续日=当日 00:00). */
+  segStartMs: number
+}
+
+/** 防脏数据 (end 远超 start) 撑爆展开的安全上限. */
+const MAX_EXPAND_DAYS = 60
+
+/** F22/S6 — 按「与每个本地日 overlap」展开 occurrences (key=YYYY-MM-DD).
+ *  跨天事件 (all-day 或跨午夜 timed) 在其覆盖的每一天各出一条 entry;
+ *  结束恰在 00:00 边界的不占用结束日 (all-day 事件 end 惯例为次日 00:00).
+ *  替代旧 groupOccurrencesByLocalDay (只按 start 单键分组 → 跨天事件第
+ *  2..n 天在 agenda 缺席, F22). 展开可能产生查询窗口外的 key (事件起于
+ *  窗口前/止于窗口后), caller 自行按窗口过滤. */
+export function expandOccurrencesByLocalDayOverlap(
   occs: CalendarEventOccurrence[]
-): Map<string, CalendarEventOccurrence[]> {
-  const m = new Map<string, CalendarEventOccurrence[]>()
+): Map<string, AgendaDayEntry[]> {
+  const m = new Map<string, AgendaDayEntry[]>()
   for (const occ of occs) {
-    const d = new Date(occ.occurrence_start_iso)
-    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-    const arr = m.get(key) ?? []
-    arr.push(occ)
-    m.set(key, arr)
+    const startMs = Date.parse(occ.occurrence_start_iso)
+    const endMs = Date.parse(occ.occurrence_end_iso)
+    const start = new Date(startMs)
+    const firstDay = new Date(start.getFullYear(), start.getMonth(), start.getDate())
+    // endMs-1: 结束恰为 00:00 时归前一日; 零长/倒挂事件退化为单日.
+    const lastRef = new Date(Math.max(endMs - 1, startMs))
+    const lastDay = new Date(lastRef.getFullYear(), lastRef.getMonth(), lastRef.getDate())
+    // 日历天差用 round 而非 floor — 跨 DST 的 23/25h 日差仍取整数天.
+    const totalDays = Math.round((lastDay.getTime() - firstDay.getTime()) / 86_400_000) + 1
+    const expandDays = Math.min(totalDays, MAX_EXPAND_DAYS)
+    for (let i = 0; i < expandDays; i++) {
+      // 本地日历算术 (setDate 溢出进位), 不做 ms 加法 — DST 安全.
+      const day = new Date(firstDay.getFullYear(), firstDay.getMonth(), firstDay.getDate() + i)
+      const key = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, '0')}-${String(day.getDate()).padStart(2, '0')}`
+      const arr = m.get(key) ?? []
+      arr.push({
+        occ,
+        dayIndex: i + 1,
+        totalDays,
+        segStartMs: i === 0 ? startMs : day.getTime()
+      })
+      m.set(key, arr)
+    }
   }
   return m
 }

@@ -1193,7 +1193,11 @@
       "month": "No events this month",
       "agenda": "No events in the next {n} days",
       "recurring": "No recurring meetings found",
-      "syncHint": "Calendar sync isn't ready yet — try again later or contact your admin"
+      "syncHint": "Calendar sync isn't ready yet — try again later or contact your admin",
+      "neverSynced": "Calendar hasn't synced yet",
+      "neverSyncedHint": "Click the sync button in the toolbar to fetch calendar events",
+      "syncFailed": "Calendar sync failed",
+      "syncFailedHint": "The last sync errored — hover the ℹ️ in the bottom status bar for details"
     },
     "emptyHint": "Widen the time range, or confirm .ics invites synced.",
     "syncTriggered": "Calendar sync triggered",
@@ -1308,8 +1312,10 @@
         "toastTentative": "RSVP Tentative sent to organizer",
         "toastDeclined": "RSVP Declined sent to organizer",
         "toastErr": "Failed to send RSVP ({response})",
-        "confirmTitle": "Confirm [{action}] and send response to organizer?",
-        "confirmBody": "This will immediately email the organizer via DavMail SMTP and cannot be undone.\n\nEvent: {summary}\nOrganizer: {organizer}"
+        "confirmTitle": "Send RSVP reply",
+        "confirmBody": "This sends an \"{action}\" RSVP reply email (iTIP REPLY) to the organizer. It cannot be undone.",
+        "confirmEvent": "Event",
+        "confirmSend": "Send reply"
       }
     },
     "form": {
@@ -1393,7 +1399,8 @@
     "error": {
       "title": "Failed to load calendar data",
       "hint": "Could not fetch events — the backend may be temporarily unavailable.",
-      "retry": "Retry"
+      "retry": "Retry",
+      "loadShort": "Failed to load"
     },
     "relTime": {
       "justNow": "just now",
@@ -1420,6 +1427,9 @@
         "moreBtn": "+{n} more",
         "today": "Today",
         "popEventCount": "{n} events"
+      },
+      "agenda": {
+        "dayOfSpan": "Day {n}/{m}"
       }
     },
     "shortcut": {
@@ -1429,6 +1439,7 @@
       "weekView": "Week view",
       "monthView": "Month view",
       "agendaView": "Agenda view",
+      "recurringView": "Recurring invites view",
       "prevNext": "Previous / Next",
       "today": "Go to today",
       "sync": "Sync",

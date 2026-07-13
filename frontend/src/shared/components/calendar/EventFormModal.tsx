@@ -141,6 +141,9 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
   // Phase 4·#4 — 用户主动改与会者 (加/删 chip) 才置 true. 未 dirty 提交不传
   // attendees → 后端保留原与会者 + partstat (防退化); dirty + 删光 → clearAttendees.
   const [attendeesDirty, setAttendeesDirty] = useState(false)
+  // 阶段1·1.4 (F15) — 用户主动改过描述才置 true. 未 dirty: edit 提交不传 description
+  // (后端保留原值), detail 异步到达时允许回填; dirty 后回填不再覆盖用户输入.
+  const [descriptionDirty, setDescriptionDirty] = useState(false)
   // inline 验证 (替代之前的 toastError, mockup §11.1)
   const [errTitle, setErrTitle] = useState(false)
   const [errTime, setErrTime] = useState(false)
@@ -181,6 +184,7 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
       )
       setLocation(occurrence.location || '')
       setCalendarName(occurrence.calendar_name || '')
+      // description 不在 occurrence 上, 由下方 detail effect 异步回填 (F15)
       setDescription('')
       setChips(
         (occurrence.attendees || []).map((a) => ({
@@ -212,6 +216,7 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
     setRruleState(defaultRRuleState())
     setRruleDirty(false)
     setAttendeesDirty(false)
+    setDescriptionDirty(false)
     // focus 标题 (mockup setTimeout 60 让 transition 先跑)
     const id = window.setTimeout(() => titleRef.current?.focus(), 60)
     return () => window.clearTimeout(id)
@@ -226,6 +231,15 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
       setRruleState(parseRRule(detail.rrule))
     }
   }, [open, occurrence, detail, rruleDirty])
+
+  // 阶段1·1.4 (F15) — detail.description 到了回填描述框 (仅 edit + 未 dirty,
+  // 防覆盖用户已输入). 照上方 rrule effect 模式.
+  useEffect(() => {
+    if (open && occurrence && detail && !descriptionDirty) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- detail.description 异步到达后回填描述框（仅 edit+未 dirty），同上方 rrule effect。React Compiler 迁移债。
+      setDescription(detail.description || '')
+    }
+  }, [open, occurrence, detail, descriptionDirty])
 
   const mut = useMutation({
     mutationFn: async (scope?: 'this' | 'all' | 'future') => {
@@ -243,7 +257,10 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
           startIso,
           endIso,
           location: location || undefined,
-          description: description || undefined,
+          // 阶段1·1.4 (F15) — dirty 才传: 未动 = undefined = 后端保留原值 (含
+          // detail 未到就保存的窗口, 不误清); 动了原样传, '' = 显式清空 (IPC 层
+          // !== undefined 才加 --description, writer 空串跳过 DESCRIPTION 行).
+          description: descriptionDirty ? description : undefined,
           isAllDay
         }
         if (scope === 'this' || scope === 'future') {
@@ -677,7 +694,10 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
               id="ef-desc"
               className="ef-textarea"
               value={description}
-              onChange={(e) => setDescription(e.target.value)}
+              onChange={(e) => {
+                setDescription(e.target.value)
+                setDescriptionDirty(true)
+              }}
               placeholder={t('calendar.form.placeholderDescription', '议程、备注、相关链接…')}
               maxLength={2000}
             />

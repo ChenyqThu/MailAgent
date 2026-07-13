@@ -1,5 +1,5 @@
 // mockup-calendar.html §keyboard shortcuts 实现 —
-// G+D/W/M/A (G prefix 800ms 内接视图键) / T 跳今天 / ← → step / ⌘R (或 Ctrl+R)
+// G+D/W/M/A/R (G prefix 800ms 内接视图键) / T 跳今天 / ← → step / ⌘R (或 Ctrl+R)
 // 触发 sync / ? 开 help modal / Esc 关弹层.
 //
 // 排除 INPUT / TEXTAREA / contentEditable target, 避免劫持表单输入.
@@ -61,7 +61,7 @@ export function useCalendarShortcuts(opts: ShortcutOpts): void {
         return
       }
 
-      // G prefix: 800ms 内接 d/w/m/a
+      // G prefix: 800ms 内接 d/w/m/a/r
       if (gPressed) {
         clearG()
         const k = e.key.toLowerCase()
@@ -69,6 +69,8 @@ export function useCalendarShortcuts(opts: ShortcutOpts): void {
         else if (k === 'w') onView('week')
         else if (k === 'm') onView('month')
         else if (k === 'a') onView('agenda')
+        // 阶段1·1.9 (F18/Q12) — recurring 视图此前无键达
+        else if (k === 'r') onView('recurring')
         return
       }
       if (e.key === 'g' || e.key === 'G') {

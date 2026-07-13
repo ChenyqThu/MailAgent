@@ -1193,7 +1193,11 @@
       "month": "本月无日程",
       "agenda": "未来 {n} 天无日程",
       "recurring": "未发现周期会议",
-      "syncHint": "日历同步尚未就绪，请稍后重试或联系管理员"
+      "syncHint": "日历同步尚未就绪，请稍后重试或联系管理员",
+      "neverSynced": "日历尚未同步",
+      "neverSyncedHint": "点击工具栏的同步按钮拉取日历事件",
+      "syncFailed": "日历同步失败",
+      "syncFailedHint": "上次同步出错——悬停底部状态栏的 ℹ️ 查看错误详情"
     },
     "emptyHint": "调整时间范围或确认 .ics 邀请已被同步",
     "replay": "重放",
@@ -1306,8 +1310,10 @@
         "toastTentative": "RSVP 暂定 已发送给组织者",
         "toastDeclined": "RSVP 已拒绝 已发送给组织者",
         "toastErr": "发送 RSVP ({response}) 失败",
-        "confirmTitle": "确认 [{action}] 并把回应发回组织者?",
-        "confirmBody": "此操作会通过 DavMail SMTP 立即发邮件给组织者, 不可撤销.\n\n事件: {summary}\n组织者: {organizer}"
+        "confirmTitle": "发送 RSVP 回复",
+        "confirmBody": "将向组织者发送「{action}」回复邮件 (iTIP REPLY), 该操作不可撤回。",
+        "confirmEvent": "事件",
+        "confirmSend": "发送回复"
       }
     },
     "form": {
@@ -1393,7 +1399,8 @@
     "error": {
       "title": "日历数据加载失败",
       "hint": "获取日程失败, 可能是后端服务暂不可用.",
-      "retry": "重试"
+      "retry": "重试",
+      "loadShort": "加载失败"
     },
     "relTime": {
       "justNow": "刚刚",
@@ -1420,6 +1427,9 @@
         "moreBtn": "+{n} 更多",
         "today": "今天",
         "popEventCount": "{n} 个事件"
+      },
+      "agenda": {
+        "dayOfSpan": "第 {n}/{m} 天"
       }
     },
     "shortcut": {
@@ -1429,6 +1439,7 @@
       "weekView": "周视图",
       "monthView": "月视图",
       "agendaView": "Agenda 视图",
+      "recurringView": "定期邀请视图",
       "prevNext": "上一段 / 下一段",
       "today": "跳到今天",
       "sync": "同步",
