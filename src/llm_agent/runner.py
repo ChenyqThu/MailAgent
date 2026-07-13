@@ -19,6 +19,7 @@ from typing import Any, Dict, Optional
 from loguru import logger
 
 from src.config import config as cfg
+from src.config import notion_enabled
 from src.mail.applescript_arm import AppleScriptArm
 from src.mail.reader import EmailReader
 from src.repository import AttachmentStore, EmailRepository, TranslationRepository
@@ -158,10 +159,14 @@ class LLMRunner:
         is_flagged = bool(meta.get("is_flagged"))
 
         if not notion_page_id:
-            return {
-                "ok": False, "internal_id": internal_id,
-                "error": "email not synced to Notion yet (notion_page_id empty)",
-            }
+            # Notion 可选化（task 07-12 P3b 方案 C）：未配置 Notion 时本地-only 邮件
+            # 天然无 page_id —— 分类照跑（SQLite 腿：labels/翻译/岛/飞书都消费 SQLite），
+            # 仅跳过下方 Notion AI 字段回写腿。Notion 已配置时保持原语义（页未建先拒）。
+            if notion_enabled():
+                return {
+                    "ok": False, "internal_id": internal_id,
+                    "error": "email not synced to Notion yet (notion_page_id empty)",
+                }
 
         if not force:
             existing = self._store.get(internal_id)
@@ -222,17 +227,21 @@ class LLMRunner:
             return {"ok": False, "internal_id": internal_id, "error": repr(e), **info}
 
         # --- 4. write Notion (unless dry-run) ---
-        try:
-            summary = await self._writer.write(
-                notion_page_id, labels, overwrite=overwrite, dry_run=dry_run
-            )
-        except Exception as e:
-            info = self._store.mark_failed(
-                internal_id, f"notion write failed: {e!r}",
-                max_retries=cfg.llm_max_retries,
-            )
-            logger.warning(f"[llm-runner] Notion write failed: {info}")
-            return {"ok": False, "internal_id": internal_id, "error": repr(e), **info}
+        # page_id 空仅在 Notion disabled 时可达（enabled+空已在上方早退）→ 跳过回写腿。
+        if notion_page_id:
+            try:
+                summary = await self._writer.write(
+                    notion_page_id, labels, overwrite=overwrite, dry_run=dry_run
+                )
+            except Exception as e:
+                info = self._store.mark_failed(
+                    internal_id, f"notion write failed: {e!r}",
+                    max_retries=cfg.llm_max_retries,
+                )
+                logger.warning(f"[llm-runner] Notion write failed: {info}")
+                return {"ok": False, "internal_id": internal_id, "error": repr(e), **info}
+        else:
+            summary = {"skipped": "notion_disabled"}
 
         if not dry_run:
             self._store.mark_success(internal_id, labels, page_id=notion_page_id)

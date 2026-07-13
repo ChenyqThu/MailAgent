@@ -21,6 +21,7 @@
 import * as React from 'react'
 import { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { AlertTriangle } from 'lucide-react'
 
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { SegmentedControl } from '@shared/components/ui/segmented'
@@ -41,6 +42,32 @@ type MailBackend = 'applescript' | 'davmail'
 function useEnvValue(key: string): string {
   return useEnvStore((s) =>
     s.state.status === 'ready' ? (s.state.snapshot.values[key] ?? '') : ''
+  )
+}
+
+/** Notion 未配置提示 (07-12 P3b 方案 C 状态显式化)。token 或邮件库 ID 空 → Notion
+ *  镜像/项目周报/日历同步停用, 显式告知避免被误判成同步故障。仅 env store ready 后
+ *  判定 (防加载态误闪)。NOTION_TOKEN 是 secret key: env:get 已设时回 '***'、未设回
+ *  ''—— 空值判定不受脱敏影响。判据与后端 config.notion_enabled() 同口径 (双非空)。 */
+function NotionDisabledNotice(): React.ReactElement | null {
+  const { t } = useTranslation()
+  const ready = useEnvStore((s) => s.state.status === 'ready')
+  const token = useEnvValue('NOTION_TOKEN')
+  const dbId = useEnvValue('EMAIL_DATABASE_ID')
+  if (!ready || (token.trim() !== '' && dbId.trim() !== '')) return null
+  return (
+    <div
+      role="status"
+      className="flex items-start gap-2.5 rounded-lg border border-warn/30 bg-warn/10 px-3 py-2.5"
+    >
+      <AlertTriangle size={14} className="shrink-0 mt-0.5 text-warn" aria-hidden="true" />
+      <p className="text-aux text-ink-fg-1 leading-relaxed">
+        {t('settings.accounts.notion.disabledNotice', {
+          defaultValue:
+            'Notion 未配置：镜像同步 / 项目周报 / 日历同步已停用，邮件仅在本地同步（列表、搜索、AI 分类等本地功能不受影响）。填齐 Token 与邮件数据库 ID 并重启后启用。'
+        })}
+      </p>
+    </div>
   )
 }
 
@@ -511,6 +538,7 @@ export function AccountsTab(): React.ReactElement {
         })}
       />
       <Section title={t('settings.accounts.notion.title')}>
+        <NotionDisabledNotice />
         <EnvField
           envKey="NOTION_TOKEN"
           control="password"

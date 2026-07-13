@@ -31,6 +31,7 @@ from typing import List, Dict, Optional, Any
 from loguru import logger
 
 from src.config import config as settings
+from src.config import notion_enabled
 from src.models import Email
 from src.mail.sync_store import DRAFT_MAILBOX_LABELS, SyncStore
 from src.notion.sync import NotionSync
@@ -178,9 +179,12 @@ class NewWatcher:
         # 总闸 = env PROJECT_PROGRESS_SYNC_ENABLED + 配置了项目进度库 ID（runner 需要，非事件热读项）。
         # 具体触发（enabled + sender/subject）每封邮件从 report_agent 行**热读**（Settings 改即生效）；
         # 行不存在（老库未跑 v31）→ 回退 env 构造（行为等价窗口）。db_path 供 hook 裸 sqlite3 热读。
+        # + notion_enabled 门（07-12 P3b）: 项目周报 runner 写 Notion 项目库，
+        # 无 NOTION_TOKEN 时整个钩子无意义 → 不激活。
         self._progress_hook_active = bool(
             getattr(settings, "project_progress_sync_enabled", False)
             and getattr(settings, "project_progress_database_id", "")
+            and notion_enabled()
         )
         self._agent_db_path = str(self.sync_store.db_path)
         if self._progress_hook_active:
@@ -790,6 +794,24 @@ class NewWatcher:
             # 详见 docs/reference/architecture/architecture_v4_sqlite_ssot.md
             # 失败仅 warning，主流程继续走 Notion sync
             self._maybe_dual_write_body(email_obj, internal_id, full_email.get("source"))
+
+            # 5.7 Notion 可选化（task 07-12 P3b 方案 C）：未配置 NOTION_TOKEN/
+            # EMAIL_DATABASE_ID 时跳过 Notion 页创建，邮件走 mark_synced_local
+            # （草稿箱先例：synced + notion_page_id=NULL），5 个事件钩子以 page_id=""
+            # 照常派发（岛/KOS/feishu 对空 page_id 已容忍；周报钩子在
+            # _progress_hook_active 里被 notion_enabled 再门掉——它本身写 Notion 库）。
+            # enabled 路径（下方 步骤6-12）一字不动 —— 本分支是纯新增，存量
+            # （三键非空）行为零漂移。
+            if not notion_enabled():
+                self.sync_store.mark_synced_local(internal_id)
+                self._stats["emails_synced"] += 1
+                logger.info(f"Email synced (local-only, Notion disabled): {internal_id}")
+                self._maybe_trigger_project_progress_hook(email_obj, internal_id, "")
+                self._maybe_trigger_llm_hook(email_obj, internal_id, "")
+                self._maybe_trigger_kos_hook(email_obj, internal_id, "")
+                self._maybe_dispatch_island_received(email_obj, internal_id, "")
+                self._maybe_trigger_custom_agents(email_obj, internal_id)
+                return
 
             # 6. 同步到 Notion
             page_id = await self.notion_sync.create_email_page_v2(
@@ -1483,6 +1505,16 @@ class NewWatcher:
                 self._maybe_dual_write_body(
                     email_obj, internal_id, full_email.get("source")
                 )
+
+                # Notion 可选化（与 _sync_single_email_v3 5.7 一致）: disabled 时
+                # 本地-only synced, 不再产生 failed/dead_letter。retry 路径与
+                # enabled 主路径同样不派发事件钩子（现状 parity）。
+                if not notion_enabled():
+                    self.sync_store.mark_synced_local(internal_id)
+                    self._stats["retries_succeeded"] += 1
+                    self._stats["emails_synced"] += 1
+                    logger.info(f"Retry succeeded (local-only, Notion disabled): {internal_id}")
+                    continue
 
                 # 同步到 Notion
                 page_id = await self.notion_sync.create_email_page_v2(email_obj)

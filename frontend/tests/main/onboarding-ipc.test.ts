@@ -26,19 +26,28 @@ describe('buildCompletePatch', () => {
     USER_EMAIL: 'a@b.com'
   }
 
-  it('reports missing required keys when absent', () => {
+  it('reports missing required keys when absent (07-12 P3b: only USER_EMAIL required)', () => {
     const { missing } = buildCompletePatch({ NOTION_TOKEN: 'x' })
-    expect(missing.sort()).toEqual(['EMAIL_DATABASE_ID', 'USER_EMAIL'].sort())
+    expect(missing).toEqual(['USER_EMAIL'])
   })
 
   it('treats whitespace-only required values as missing', () => {
-    const { patch, missing } = buildCompletePatch({
-      NOTION_TOKEN: '  ',
+    const { missing } = buildCompletePatch({
+      NOTION_TOKEN: 'ntn_x',
       EMAIL_DATABASE_ID: 'db',
-      USER_EMAIL: 'a@b.com'
+      USER_EMAIL: '  '
     })
-    expect(missing).toEqual(['NOTION_TOKEN'])
+    expect(missing).toEqual(['USER_EMAIL'])
+  })
+
+  // 07-12 P3b Notion 可选化 pin: Notion 两键留空 → missing 为空 (可提交) 且 patch
+  // 里不出现空值行 (与 detect.ts「仅 USER_EMAIL」判据成对, 防循环弹向导)。
+  it('allows submitting without Notion keys and never writes empty-valued lines', () => {
+    const { patch, missing } = buildCompletePatch({ USER_EMAIL: 'a@b.com', NOTION_TOKEN: '  ' })
+    expect(missing).toEqual([])
     expect(patch['NOTION_TOKEN']).toBeUndefined()
+    expect(patch['EMAIL_DATABASE_ID']).toBeUndefined()
+    expect(patch['USER_EMAIL']).toBe('a@b.com')
   })
 
   it('trims core account fields', () => {
@@ -63,16 +72,18 @@ describe('buildCompletePatch', () => {
   })
 
   it('honors davmail backend selection', () => {
-    expect(buildCompletePatch({ ...full, MAILAGENT_BACKEND: 'davmail' }).patch['MAILAGENT_BACKEND']).toBe(
-      'davmail'
-    )
+    expect(
+      buildCompletePatch({ ...full, MAILAGENT_BACKEND: 'davmail' }).patch['MAILAGENT_BACKEND']
+    ).toBe('davmail')
   })
 
   it('passes through SYNC_MAILBOXES trimmed, omits when blank', () => {
-    expect(buildCompletePatch({ ...full, SYNC_MAILBOXES: ' 收件箱,已发送 ' }).patch['SYNC_MAILBOXES']).toBe(
-      '收件箱,已发送'
-    )
-    expect(buildCompletePatch({ ...full, SYNC_MAILBOXES: '   ' }).patch['SYNC_MAILBOXES']).toBeUndefined()
+    expect(
+      buildCompletePatch({ ...full, SYNC_MAILBOXES: ' 收件箱,已发送 ' }).patch['SYNC_MAILBOXES']
+    ).toBe('收件箱,已发送')
+    expect(
+      buildCompletePatch({ ...full, SYNC_MAILBOXES: '   ' }).patch['SYNC_MAILBOXES']
+    ).toBeUndefined()
   })
 
   it('maps every plugin to its env flag, writing explicit true/false', () => {
@@ -185,15 +196,17 @@ describe('buildCompletePatch — davmail branch', () => {
     expect(cipherAuth.missing).not.toContain('DAVMAIL_AUTH')
   })
 
-  it('still reports missing core keys in davmail mode (does not require MAIL_ACCOUNT_NAME)', () => {
+  it('davmail mode with USER_EMAIL only is complete (Notion optional, no MAIL_ACCOUNT_NAME)', () => {
     const { missing } = buildCompletePatch({
       USER_EMAIL: 'a@b.com',
       MAILAGENT_BACKEND: 'davmail',
       DAVMAIL_POC_MODE: 'true'
     })
-    expect(missing.sort()).toEqual(['EMAIL_DATABASE_ID', 'NOTION_TOKEN'].sort())
-    // MAIL_ACCOUNT_NAME is never required.
-    expect(missing).not.toContain('MAIL_ACCOUNT_NAME')
+    expect(missing).toEqual([])
+    // 缺 USER_EMAIL 才 missing。
+    const noEmail = buildCompletePatch({ MAILAGENT_BACKEND: 'davmail', DAVMAIL_POC_MODE: 'true' })
+    expect(noEmail.missing).toEqual(['USER_EMAIL'])
+    expect(noEmail.missing).not.toContain('MAIL_ACCOUNT_NAME')
   })
 })
 
@@ -241,7 +254,7 @@ describe('parseActiveEnvKeys', () => {
 })
 
 describe('buildClearPatch', () => {
-  it('nulls the three required keys so detect returns "new"', () => {
+  it('nulls the core account keys so detect returns "new"', () => {
     const patch = buildClearPatch()
     expect(patch['NOTION_TOKEN']).toBeNull()
     expect(patch['EMAIL_DATABASE_ID']).toBeNull()
@@ -284,9 +297,9 @@ describe('buildClearPatch', () => {
 // ── LEGACY 安全守卫: 同路径 / 子树包含判定 (防 rmSync/cpSync 落到老原件) ──
 describe('isPathInside', () => {
   it('treats an exact path as inside itself', () => {
-    expect(isPathInside('/Users/x/Documents/MailAgent/data', '/Users/x/Documents/MailAgent/data')).toBe(
-      true
-    )
+    expect(
+      isPathInside('/Users/x/Documents/MailAgent/data', '/Users/x/Documents/MailAgent/data')
+    ).toBe(true)
   })
   it('detects a child path inside a parent', () => {
     expect(isPathInside('/a/b/c', '/a/b')).toBe(true)

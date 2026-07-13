@@ -1793,6 +1793,7 @@
     "accounts": {
       "notion": {
         "title": "Notion integration",
+        "disabledNotice": "Notion is not configured: mirror sync, project weekly reports, and calendar sync are disabled. Emails sync locally only (list, search, and AI classification still work). Fill in the token and email database ID, then restart to enable.",
         "token": {
           "label": "Notion token",
           "helper": "Integration token, starts with ntn_ or secret_",

@@ -274,6 +274,46 @@ export function enterApp(): Promise<{ ok: boolean }> {
   return getInvoke()('onboarding:enterApp') as Promise<{ ok: boolean }>
 }
 
+// ─── AI 模型 (可选) 步 (07-12 P3b) — provider registry 显隐 / 保存 / 连通性测试 ───
+
+export interface LlmProviderStatusResult {
+  enabled: boolean
+}
+
+export interface LlmProviderSaveArg {
+  id: string
+  protocol: string
+  displayName?: string
+  baseUrl?: string
+  apiKey?: string
+}
+
+export interface LlmProviderSaveResult {
+  ok: boolean
+  error?: IpcError
+}
+
+export interface LlmProviderTestResult {
+  ok: boolean
+  latencyMs?: number
+  error?: string
+}
+
+/** provider registry flag 可观测 (后端未起 / flag off → {enabled:false} 隐藏该步)。 */
+export function llmProviderStatus(): Promise<LlmProviderStatusResult> {
+  return getInvoke()('onboarding:llmProviderStatus') as Promise<LlmProviderStatusResult>
+}
+
+/** 创建 (或同 id upsert) provider 行。跳过该步 = 不调 = 零写入。 */
+export function llmProviderSave(arg: LlmProviderSaveArg): Promise<LlmProviderSaveResult> {
+  return getInvoke()('onboarding:llmProviderSave', arg) as Promise<LlmProviderSaveResult>
+}
+
+/** 连通性测试 (先存后测; serve-api 恒 200 + {ok,latencyMs,error})。 */
+export function llmProviderTest(id: string): Promise<LlmProviderTestResult> {
+  return getInvoke()('onboarding:llmProviderTest', { id }) as Promise<LlmProviderTestResult>
+}
+
 // ─── 多文件夹同步 (P4) — onboarding 「选择文件夹」步骤 ──────────────────────────
 //
 // 复用 handlers/folder.ts 已注册的 folder:discover / folder:setWhitelist 通道

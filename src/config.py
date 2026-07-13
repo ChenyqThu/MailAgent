@@ -71,9 +71,11 @@ class Config(BaseSettings):
         extra="ignore",
     )
 
-    # Notion 配置
-    notion_token: str = Field(..., env="NOTION_TOKEN")
-    email_database_id: str = Field(..., env="EMAIL_DATABASE_ID")
+    # Notion 配置（task 07-12 P3b 方案 C：可选化 —— 空 = Notion 面停用，邮件走本地-only
+    # 同步 mark_synced_local。运行时判定统一走模块级 notion_enabled() /
+    # calendar_notion_enabled()，勿在消费点各自 if config.notion_token 漂移）
+    notion_token: str = Field(default="", env="NOTION_TOKEN")
+    email_database_id: str = Field(default="", env="EMAIL_DATABASE_ID")
 
     # 用户配置
     user_email: str = Field(..., env="USER_EMAIL")
@@ -860,3 +862,33 @@ class Config(BaseSettings):
 
 # 全局配置实例
 config = Config()
+
+
+# =============================================================================
+# Notion 可选化判定（task 07-12 P3b 方案 C）—— 四面共用的单一判据 helper，
+# 防止 watcher / service / meeting_sync / hooks 各自 `if config.notion_token` 漂移。
+# cfg 参数供测试注入；缺省读全局单例（call-time 取值，import 顺序无关）。
+# =============================================================================
+
+
+def notion_enabled(cfg: "Config | None" = None) -> bool:
+    """邮件镜像面是否启用：NOTION_TOKEN 与 EMAIL_DATABASE_ID 双非空。
+
+    False = 本地-only 模式：new_watcher 主链跳过 Notion 页创建（mark_synced_local）、
+    reverse sync loop / 项目周报不启动；LLM 分类等钩子照跑（SQLite 腿不受影响）。
+    """
+    c = cfg if cfg is not None else config
+    return bool(
+        (c.notion_token or "").strip() and (c.email_database_id or "").strip()
+    )
+
+
+def calendar_notion_enabled(cfg: "Config | None" = None) -> bool:
+    """日历 Notion 面是否启用：NOTION_TOKEN 与 CALENDAR_DATABASE_ID 双非空。
+
+    False = 会议邀请→Notion 日程同步 + meeting expansion loop 跳过（本地邮件同步不受影响）。
+    """
+    c = cfg if cfg is not None else config
+    return bool(
+        (c.notion_token or "").strip() and (c.calendar_database_id or "").strip()
+    )

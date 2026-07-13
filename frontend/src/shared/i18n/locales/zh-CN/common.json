@@ -1793,6 +1793,7 @@
     "accounts": {
       "notion": {
         "title": "Notion 集成",
+        "disabledNotice": "Notion 未配置：镜像同步 / 项目周报 / 日历同步已停用，邮件仅在本地同步（列表、搜索、AI 分类等本地功能不受影响）。填齐 Token 与邮件数据库 ID 并重启后启用。",
         "token": {
           "label": "Notion Token",
           "helper": "Integration token,以 ntn_ 或 secret_ 开头",

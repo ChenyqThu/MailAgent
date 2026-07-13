@@ -53,6 +53,7 @@ import {
   resolveApiPort
 } from '../backend_lifecycle'
 import { callCli, getMailagentBin } from '../cli_runner'
+import { daemonRequest } from '../daemon_api'
 import { getDb, resolveDataRoot, resolveDbPath } from '../db'
 import { ensureCliApiKey } from '../lib/cli-api-key'
 import { MANAGED_ENV_KEY_SET } from '../lib/env-keys'
@@ -255,9 +256,11 @@ export function buildCompletePatch(cfg: OnboardingCompleteCfg): {
     patch[flagKey] = plugins[pk] === true ? 'true' : 'false'
   }
 
-  // 6) 必填校验。两后端都要核心三项 (NOTION_TOKEN/EMAIL_DATABASE_ID/USER_EMAIL)。
-  //    davmail 额外要求一种认证方式 (POC 默认密钥 或 非空 cipher), 否则
-  //    DavMailConnectionError —— 加一项可读 missing 提示。
+  // 6) 必填校验。两后端都只强制 USER_EMAIL (07-12 P3b: Notion 可选化 ——
+  //    NOTION_TOKEN/EMAIL_DATABASE_ID 空 = 本地-only 模式, 空值在步骤 1 已被丢弃
+  //    不写行, 与 detect.ts 判据一致防循环弹向导)。davmail 额外要求一种认证方式
+  //    (POC 默认密钥 或 非空 cipher), 否则 DavMailConnectionError —— 加一项可读
+  //    missing 提示。
   const missing: string[] = ONBOARDING_REQUIRED_KEYS.filter((k) => !patch[k])
   if (isDavmail) {
     const hasAuth = patch['DAVMAIL_POC_MODE'] === 'true' || !!patch['DAVMAIL_POC_CIPHER_KEY']
@@ -997,7 +1000,8 @@ function detectLegacy(): DetectLegacyResult {
   }
 }
 
-/** 老 .env 是否含 NOTION_TOKEN + EMAIL_DATABASE_ID + USER_EMAIL 非空值。 */
+/** 老 .env 是否含必填键 (ONBOARDING_REQUIRED_KEYS; 07-12 P3b 起仅 USER_EMAIL ——
+ *  Notion 键可选) 非空值。 */
 function legacyEnvHasConfig(): boolean {
   try {
     const p = legacyOldEnvPath()
@@ -1071,8 +1075,7 @@ async function legacyInherit(raw: unknown): Promise<LegacyInheritResult> {
         ok: false,
         error: {
           code: 'E_MISSING_CONFIG',
-          message:
-            '未在旧目录找到完整配置 (Notion Token / 邮件库 ID / 邮箱)。请先用新用户向导填写配置, 再迁移。'
+          message: '未在旧目录找到完整配置 (用户邮箱)。请先用新用户向导填写配置, 再迁移。'
         }
       }
     }
@@ -1400,6 +1403,113 @@ function enterApp(evt: Electron.IpcMainInvokeEvent): { ok: boolean } {
 }
 
 // ---------------------------------------------------------------------------
+// onboarding:llmProvider* (07-12 P3b —「AI 模型 (可选)」步; daemon → serve-api
+// /api/llm/providers* 转发, 同 folder:* 的 Main→daemon 模式: 本地 token 只在 main,
+// onboarding renderer 经 IPC 间接调写端点。跳过该步 = 这三个 channel 一个都不调,
+// 零写入。)
+// ---------------------------------------------------------------------------
+
+export interface LlmProviderStatusResult {
+  enabled: boolean
+}
+
+/** provider registry flag 可观测 (决定「AI 模型」步显隐)。后端未起 / flag off /
+ *  字段缺失 (老 serve-api) → 一律 {enabled:false} fail-closed 隐藏该步。 */
+async function llmProviderStatus(): Promise<LlmProviderStatusResult> {
+  try {
+    const cfg = await daemonRequest<{ providerRegistryEnabled?: boolean }>('GET', '/chat/config')
+    return { enabled: cfg?.providerRegistryEnabled === true }
+  } catch {
+    return { enabled: false }
+  }
+}
+
+export interface LlmProviderSaveArg {
+  id: string
+  protocol: string
+  displayName?: string
+  baseUrl?: string
+  apiKey?: string
+}
+
+export interface LlmProviderSaveResult {
+  ok: boolean
+  error?: { code: string; message: string }
+}
+
+/** 创建 provider 行 (POST /llm/providers); id 已存在 (本步内重存 / 回退再进) →
+ *  PATCH 同 id upsert。apiKey 仅非空才随 PATCH 发 (空串对 PATCH 语义 = 清除 key)。 */
+async function llmProviderSave(raw: unknown): Promise<LlmProviderSaveResult> {
+  try {
+    const arg = raw as LlmProviderSaveArg | null
+    if (!arg || typeof arg.id !== 'string' || arg.id === '' || typeof arg.protocol !== 'string') {
+      return {
+        ok: false,
+        error: { code: 'E_INVALID', message: 'llmProviderSave 需要 {id, protocol}' }
+      }
+    }
+    const displayName = typeof arg.displayName === 'string' ? arg.displayName.trim() : ''
+    const baseUrl = typeof arg.baseUrl === 'string' ? arg.baseUrl.trim() : ''
+    const apiKey = typeof arg.apiKey === 'string' ? arg.apiKey.trim() : ''
+    try {
+      await daemonRequest('POST', '/llm/providers', {
+        body: {
+          id: arg.id,
+          protocol: arg.protocol,
+          displayName,
+          baseUrl,
+          ...(apiKey !== '' ? { apiKey } : {}),
+          enabled: true
+        }
+      })
+    } catch (err) {
+      // id 已存在 → PATCH upsert; 其余错误原样收敛成 error 对象。
+      if (!/already exists/i.test((err as Error).message ?? '')) throw err
+      await daemonRequest('PATCH', `/llm/providers/${encodeURIComponent(arg.id)}`, {
+        body: {
+          protocol: arg.protocol,
+          displayName,
+          baseUrl,
+          ...(apiKey !== '' ? { apiKey } : {}),
+          enabled: true
+        }
+      })
+    }
+    return { ok: true }
+  } catch (err) {
+    const e = err as Error & { code?: string }
+    return {
+      ok: false,
+      error: { code: e.code ?? 'E_GENERIC', message: e.message ?? 'provider 保存失败' }
+    }
+  }
+}
+
+export interface LlmProviderTestResult {
+  ok: boolean
+  latencyMs?: number
+  error?: string
+}
+
+/** 连通性测试 (POST /llm/providers/{id}/test — serve-api 恒 200, data={ok,latencyMs,error})。 */
+async function llmProviderTest(raw: unknown): Promise<LlmProviderTestResult> {
+  try {
+    const id = (raw as { id?: unknown } | null)?.id
+    if (typeof id !== 'string' || id === '') {
+      return { ok: false, error: '缺少 provider id' }
+    }
+    const data = await daemonRequest<{
+      ok?: boolean
+      latencyMs?: number
+      error?: string | null
+    }>('POST', `/llm/providers/${encodeURIComponent(id)}/test`)
+    return { ok: data?.ok === true, latencyMs: data?.latencyMs, error: data?.error ?? undefined }
+  } catch (err) {
+    return { ok: false, error: (err as Error).message ?? '连通性测试失败' }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // 注册
 // ---------------------------------------------------------------------------
 
@@ -1415,6 +1525,11 @@ export function registerOnboardingHandlers(): void {
   // 写 plugin flag + reload 进 app。让 StepSync 能轮询真实后端进度。
   ipcMain.handle('onboarding:commitConfig', (_evt, arg: unknown) => commitConfig(arg))
   ipcMain.handle('onboarding:finalize', (evt, arg: unknown) => finalize(evt, arg))
+
+  // 「AI 模型 (可选)」步 (07-12 P3b): provider registry 显隐 + 保存 + 连通性测试。
+  ipcMain.handle('onboarding:llmProviderStatus', () => llmProviderStatus())
+  ipcMain.handle('onboarding:llmProviderSave', (_evt, arg: unknown) => llmProviderSave(arg))
+  ipcMain.handle('onboarding:llmProviderTest', (_evt, arg: unknown) => llmProviderTest(arg))
 
   // LEGACY 全量迁移。
   ipcMain.handle('onboarding:detectLegacy', () => detectLegacy())

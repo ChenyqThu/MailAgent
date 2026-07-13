@@ -29,7 +29,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from loguru import logger
-from src.config import config
+from src.config import calendar_notion_enabled, config, notion_enabled
 from src.utils.logger import setup_logger
 
 # 仓库根 (src/service.py → 上跳一层). 原 main.py 用 __file__ 推 davmail-poc / scripts
@@ -505,8 +505,16 @@ class EmailNotionSyncApp:
 
             watcher_task = self._spawn_supervised(_watcher_factory, "watcher")
 
-            # 启动反向同步循环
-            reverse_task = self._spawn_supervised(self._reverse_sync_loop, "reverse_sync")
+            # 启动反向同步循环（Notion 可选化 07-12 P3b: 未配置 → 不起，免 30s tick
+            # 打空 API 刷错误日志；邮件走本地-only 同步，见 new_watcher 5.7 分支）
+            reverse_task = None
+            if notion_enabled():
+                reverse_task = self._spawn_supervised(self._reverse_sync_loop, "reverse_sync")
+            else:
+                logger.info(
+                    "[notion] disabled (NOTION_TOKEN/EMAIL_DATABASE_ID empty) — "
+                    "reverse_sync loop not started; emails sync local-only"
+                )
 
             # 启动 Redis 事件消费（如果配置）
             redis_task = None
@@ -528,10 +536,18 @@ class EmailNotionSyncApp:
             if self.alerter:
                 alert_task = self._spawn_supervised(self._alert_check_loop, "alert_check")
 
-            # 启动周期会议滚动展开循环
-            expansion_task = self._spawn_supervised(
-                self._meeting_expansion_loop, "meeting_expansion"
-            )
+            # 启动周期会议滚动展开循环（Notion 日历面未配置 → 不起：expansion tick
+            # 的 occurrence 写全打 Notion 日程库，无 token/无 db_id 只会空转失败）
+            expansion_task = None
+            if calendar_notion_enabled():
+                expansion_task = self._spawn_supervised(
+                    self._meeting_expansion_loop, "meeting_expansion"
+                )
+            else:
+                logger.info(
+                    "[notion] calendar face disabled (NOTION_TOKEN/CALENDAR_DATABASE_ID "
+                    "empty) — meeting_expansion loop not started"
+                )
 
             # Phase C.1 — davmail mode 下 fire-and-forget backfill task, 把 applescript
             # 时代抓的存量邮件 imap_uid 副字段补齐 (DavMailBackend.fetch_email_by_id
@@ -767,7 +783,11 @@ class EmailNotionSyncApp:
                 await self.alerter.alert_service_stopped("收到关闭信号")
 
             # 取消任务
-            tasks = [watcher_task, reverse_task, expansion_task]
+            tasks = [watcher_task]
+            if reverse_task:
+                tasks.append(reverse_task)
+            if expansion_task:
+                tasks.append(expansion_task)
             if uid_backfill_task:
                 tasks.append(uid_backfill_task)
             if redis_task:
