@@ -57,6 +57,8 @@ import { daemonRequest } from '../daemon_api'
 import { getDb, resolveDataRoot, resolveDbPath } from '../db'
 import { ensureCliApiKey } from '../lib/cli-api-key'
 import { MANAGED_ENV_KEY_SET } from '../lib/env-keys'
+// ESM-safe __dirname (main 是 ESM bundle, 分包后无 shim banner; 恒锚 entry chunk)。
+import { mainDirname } from '../lib/esm-paths'
 import { resolveEnvPath } from '../lib/env-path'
 import { MAIN_WINDOW } from '../lib/window-config'
 import { detectUserState, ONBOARDING_REQUIRED_KEYS } from '../onboarding/detect'
@@ -969,7 +971,7 @@ function reloadToMain(evt: Electron.IpcMainInvokeEvent): void {
     // MAILAGENT_API_PORT 覆盖时 onboarding 完成进入的窗口 ElectronApi.chat 丢端口
     // 静默回退 8200（codex 3c-3 MEDIUM）。端口同源 resolveApiPort（= serve-api 实际端口）。
     const search = new URLSearchParams({ apiPort: String(resolveApiPort()) }).toString()
-    void win.loadFile(join(__dirname, '../renderer/index.html'), { search })
+    void win.loadFile(join(mainDirname, '../renderer/index.html'), { search })
   } catch {
     /* 窗口已销毁等边界情况, 不阻断 complete 成功返回。 */
   }

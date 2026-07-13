@@ -64,6 +64,11 @@ import { bootstrapDotenv } from './lib/dotenv-bootstrap'
 import { ensureCliApiKey } from './lib/cli-api-key'
 // 打包首次运行 seed 出厂 prompt 模板 → userData/prompts (后端 LLM 默认读它)。见 lib/seed-prompts。
 import { seedPromptTemplatesIfNeeded } from './lib/seed-prompts'
+// ESM-safe __dirname/require 单源 (main 是 ESM bundle; provider-registry epic 的
+// lazy import 让 rollup 分包后 electron-vite 不再注入 CJS shim banner, 裸
+// __dirname/require 会在运行时 ReferenceError 直接 startup 死)。🔴 必须保持这条
+// 静态 import — 它把 esm-paths 钉进 entry chunk, mainDirname 才恒等于 out/main。
+import { mainDirname, requireFromMain } from './lib/esm-paths'
 // Sprint 19 island F6 — mailagent:// deeplink (灵动岛 open_mail/open_notion →
 // 打开前端对应邮件/视图). 解析 + cold-start buffer 在 ./deeplink.
 import { dispatchDeeplink, extractDeeplinkFromArgv, setDeeplinkSink } from './deeplink'
@@ -175,7 +180,7 @@ function createWindow(opts: { onboarding?: boolean } = {}): void {
       // never existed → preload silently failed to load → window.electron
       // was undefined → every IPC call from Sprint 2 onward threw
       // "ipcRenderer.invoke missing — preload not loaded".
-      preload: join(__dirname, '../preload/index.mjs'),
+      preload: join(mainDirname, '../preload/index.mjs'),
       sandbox: false
     }
   })
@@ -220,7 +225,10 @@ function createWindow(opts: { onboarding?: boolean } = {}): void {
         : process.env['ELECTRON_RENDERER_URL']
     )
   } else {
-    mainWindow.loadFile(join(__dirname, '../renderer/index.html'), search ? { search } : undefined)
+    mainWindow.loadFile(
+      join(mainDirname, '../renderer/index.html'),
+      search ? { search } : undefined
+    )
   }
 }
 
@@ -243,7 +251,7 @@ function createPopoutWindow(emailId: number): void {
     // 任何不透明锚 (alpha 被丢弃会盖死 vibrancy, 见 createWindow 注释)。
     ...surfaceWindowOptions(),
     webPreferences: {
-      preload: join(__dirname, '../preload/index.mjs'),
+      preload: join(mainDirname, '../preload/index.mjs'),
       sandbox: false
     }
   })
@@ -278,7 +286,7 @@ function createPopoutWindow(emailId: number): void {
     // as `?popout=1&email=N` in window.location.search inside the
     // renderer — same shape the dev loadURL path produces, so the
     // bootPopoutModeFromQuery parser handles both transparently.
-    popout.loadFile(join(__dirname, '../renderer/index.html'), { search })
+    popout.loadFile(join(mainDirname, '../renderer/index.html'), { search })
   }
 }
 
@@ -292,7 +300,7 @@ app.whenReady().then(async () => {
   // PNG path is more reliable than .icns for app.dock.setIcon on macOS in
   // dev mode (some macOS versions silently ignore .icns runtime overrides).
   if (process.platform === 'darwin' && app.dock && is.dev) {
-    const iconPath = join(__dirname, '../../build/icons/1024.png')
+    const iconPath = join(mainDirname, '../../build/icons/1024.png')
     try {
       app.dock.setIcon(iconPath)
       console.log('[dock] dev icon set:', iconPath)
@@ -431,8 +439,7 @@ app.whenReady().then(async () => {
   // shows the dev sentinel instead of throwing on `updater:status`.
   let updaterStub: import('./handlers/updater').AutoUpdaterLike | undefined
   if (!is.dev) {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { autoUpdater } = require('electron-updater') as typeof import('electron-updater')
+    const { autoUpdater } = requireFromMain('electron-updater') as typeof import('electron-updater')
     updaterStub = autoUpdater as unknown as import('./handlers/updater').AutoUpdaterLike
   }
   registerUpdaterHandlers({ updater: updaterStub })
