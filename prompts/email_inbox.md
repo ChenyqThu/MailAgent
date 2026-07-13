@@ -49,7 +49,7 @@
 
 ## Sender Priority
 参照 reference context 里的 Sender Priority 映射。不在映射里的：
-- `@tp-link.com.hk` / `@tp-link.com` 且未明确 → 按职能推断（从 sender_name / 邮件正文推断角色）。
+- 公司内部域名且未明确 → 按职能推断（从 sender_name / 邮件正文推断角色）。
 - 外部邮箱且未明确 → `外部联系人`。
 - 自动发信域名（`noreply`、`notifications`、`jira` 等）→ `系统`。
 
@@ -118,7 +118,7 @@
 Hi team,
 
 We need to align on the Q3 roadmap before Friday.
-The deadline cannot slip — Alice already committed to the customer.
+The deadline cannot slip — the project manager already committed to the customer.
 
 Please review the attached spec and reply with comments.
 ```
@@ -128,7 +128,7 @@ Please review the attached spec and reply with comments.
 [
   {"src": "Hi team,", "tgt": "团队你好，"},
   {"src": "We need to align on the Q3 roadmap before Friday.", "tgt": "我们需要在周五之前对齐 Q3 路线图。"},
-  {"src": "The deadline cannot slip — Alice already committed to the customer.", "tgt": "deadline 不能推迟 —— Alice 已经向客户承诺过了。"},
+  {"src": "The deadline cannot slip — the project manager already committed to the customer.", "tgt": "截止时间不能推迟——项目经理已经向客户承诺过了。"},
   {"src": "Please review the attached spec and reply with comments.", "tgt": "请评审附件中的规格说明并回复意见。"}
 ]
 ```
@@ -185,7 +185,7 @@ Please review the attached spec and reply with comments.
 ]
 ```
 
-**张三："周五会议你能来吗？"**（简单 Y/N）：
+**某同事："周五会议你能来吗？"**（简单 Y/N）：
 ```json
 "recommended_actions": [
   {"id": "quick_reply_yes", "title": "快速回复 是", "detail": "起草 可以 草稿", "confidence": 0.85},

@@ -42,7 +42,7 @@ Already constrained elsewhere — don't repeat:
 `LLM_CONTEXT_PAGE_ID` (a Notion page) is loaded once per 30 min and prepended to system prompt with `cache_control: ephemeral`. Put stable per-user knowledge there:
 - Your role / company / products
 - Current focus projects (list your own focus projects here)
-- Sender Priority mapping (e.g. Alice = 管理层)
+- Sender Priority mapping (e.g. direct manager = 管理层)
 - Timezone / language preferences
 - Email signature style
 

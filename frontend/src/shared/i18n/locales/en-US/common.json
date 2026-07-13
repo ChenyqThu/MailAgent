@@ -414,7 +414,7 @@
     },
     "actions": {
       "subtitle": "on {n, plural, one {# result} other {# results}}",
-      "aside": "Notion Agent · Jarvis",
+      "aside": "Notion Agent · AI assistant",
       "markAllRead": "Mark all as read",
       "markAllReadMeta": "{n, plural, one {# email} other {# emails}} · instant local · syncs to Mail.app + Notion",
       "reRunAi": "Re-run AI classify",
@@ -718,7 +718,7 @@
       "retiredNotice": "Migrated to a tool · view only",
       "customApi": "Custom Agent",
       "selectorLabel": "Backend",
-      "agentSuffix": "· Jarvis",
+      "agentSuffix": "· AI assistant",
       "modelsLabel": "Models",
       "openSettings": "Manage AI backends · Settings → AI"
     },
@@ -1907,7 +1907,7 @@
       "signature": {
         "title": "Email signature",
         "helper": "Click the Signature button in the compose toolbar to insert at the cursor. Plain text or HTML.",
-        "placeholder": "e.g.\nLucien Chen\nOmada Networks",
+        "placeholder": "e.g.\n<Your name>\n<Company or team>",
         "saved": "Signature saved",
         "saveFail": "Failed to save signature"
       },
@@ -2711,7 +2711,7 @@
       "none": "No reports yet",
       "selectHint": "Select a report on the left",
       "generating": "Generating report…",
-      "generatingHint": "Jarvis is reviewing your mail and curating. Usually 20–40s.",
+      "generatingHint": "The AI assistant is reviewing your mail and curating. Usually 20–40s.",
       "failed": "Report generation failed",
       "failedHint": "LLM call errored, retry available.",
       "regenerate": "Regenerate",

@@ -488,7 +488,7 @@ function SignatureSection(): React.ReactElement {
         rows={5}
         placeholder={
           t('settings.accounts.signature.placeholder', {
-            defaultValue: '例如：\nLucien Chen\nOmada Networks'
+            defaultValue: '例如：\n<用户姓名>\n<公司或团队名称>'
           }) ?? undefined
         }
         aria-label={t('settings.accounts.signature.title', { defaultValue: '邮件签名' })}

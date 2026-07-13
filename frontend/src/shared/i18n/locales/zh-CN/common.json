@@ -414,7 +414,7 @@
     },
     "actions": {
       "subtitle": "对当前 {n, plural, one {# 个结果} other {# 个结果}}",
-      "aside": "Notion Agent · Jarvis",
+      "aside": "Notion Agent · AI 助手",
       "markAllRead": "全部标为已读",
       "markAllReadMeta": "{n, plural, other {# 封}} · 本地即时 · 同步至 Mail.app + Notion",
       "reRunAi": "重跑 AI 分类",
@@ -718,7 +718,7 @@
       "retiredNotice": "已迁移为工具 · 仅供查看",
       "customApi": "Custom Agent",
       "selectorLabel": "Backend",
-      "agentSuffix": "· Jarvis",
+      "agentSuffix": "· AI 助手",
       "modelsLabel": "模型",
       "openSettings": "管理 AI 后端 · 设置 → AI"
     },
@@ -1907,7 +1907,7 @@
       "signature": {
         "title": "邮件签名",
         "helper": "撰写邮件时点工具栏「签名」按钮，在光标处插入。支持纯文本或 HTML。",
-        "placeholder": "例如：\nLucien Chen\nOmada Networks",
+        "placeholder": "例如：\n<用户姓名>\n<公司或团队名称>",
         "saved": "签名已保存",
         "saveFail": "签名保存失败"
       },
@@ -2711,7 +2711,7 @@
       "none": "暂无报告",
       "selectHint": "选择左侧一份报告查看",
       "generating": "正在生成报告…",
-      "generatingHint": "Jarvis 正在回顾邮件并策展。通常需要 20–40 秒。",
+      "generatingHint": "AI 助手正在回顾邮件并策展。通常需要 20–40 秒。",
       "failed": "报告生成失败",
       "failedHint": "LLM 调用出错，可重试。",
       "regenerate": "重新生成",
