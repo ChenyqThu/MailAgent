@@ -208,6 +208,7 @@ def test_outbox_backlog_no_alert_at_threshold():
 
 
 def test_restart_frequency_alert_fires_above_threshold():
+    """① 首次超阈值 (无冷却 state) → 发送, 且写回 episode 冷却时间戳."""
     now = time.time()
     history = [now - i * 600 for i in range(6)]  # 24h 内 6 次 > 阈值 5
     alerter = _SignatureFakeAlerter()
@@ -217,6 +218,68 @@ def test_restart_frequency_alert_fires_above_threshold():
     )
     asyncio.run(app._check_and_alert())
     assert ("alert_restart_frequency", 6, 5) in alerter.method_calls
+    stored = app.watcher.sync_store.state.get("service.restart_freq_last_alert")
+    assert stored is not None
+    assert abs(float(stored) - time.time()) < 60  # 写回的是"现在"
+
+
+def test_restart_frequency_suppressed_within_episode_cooldown():
+    """② 冷却时间戳 < 24h → 不重发 (episode 内静默), 且不覆盖时间戳."""
+    now = time.time()
+    history = [now - i * 600 for i in range(6)]
+    last_alert = now - 3600  # 1h 前刚发过
+    alerter = _SignatureFakeAlerter()
+    app = _build_app(
+        alerter=alerter,
+        state={
+            "service.start_history": json.dumps(history),
+            "service.restart_freq_last_alert": str(last_alert),
+        },
+    )
+    asyncio.run(app._check_and_alert())
+    assert alerter.method_calls == []
+    assert app.watcher.sync_store.state[
+        "service.restart_freq_last_alert"
+    ] == str(last_alert)
+
+
+def test_restart_frequency_resends_after_24h_cooldown():
+    """③ 冷却时间戳 > 24h → 重新发送, 并刷新时间戳."""
+    now = time.time()
+    history = [now - i * 600 for i in range(6)]
+    last_alert = now - 25 * 3600  # 上次告警已过 24h
+    alerter = _SignatureFakeAlerter()
+    app = _build_app(
+        alerter=alerter,
+        state={
+            "service.start_history": json.dumps(history),
+            "service.restart_freq_last_alert": str(last_alert),
+        },
+    )
+    asyncio.run(app._check_and_alert())
+    assert ("alert_restart_frequency", 6, 5) in alerter.method_calls
+    stored = float(
+        app.watcher.sync_store.state["service.restart_freq_last_alert"]
+    )
+    assert stored > last_alert  # 已刷新为本次发送时间
+
+
+def test_restart_frequency_garbage_cooldown_state_fails_open():
+    """④ 冷却 state 值损坏 (非数字) → 视为可发送, 不抛异常."""
+    now = time.time()
+    history = [now - i * 600 for i in range(6)]
+    alerter = _SignatureFakeAlerter()
+    app = _build_app(
+        alerter=alerter,
+        state={
+            "service.start_history": json.dumps(history),
+            "service.restart_freq_last_alert": "not-a-number",
+        },
+    )
+    asyncio.run(app._check_and_alert())
+    assert ("alert_restart_frequency", 6, 5) in alerter.method_calls
+    # 写回后覆盖为合法时间戳
+    float(app.watcher.sync_store.state["service.restart_freq_last_alert"])
 
 
 def test_restart_frequency_old_entries_outside_24h_not_counted():

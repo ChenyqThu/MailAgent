@@ -1056,12 +1056,38 @@ class EmailNotionSyncApp:
 
         # 8. mail-sync 重启频次 (E4 WP2): 24h 内启动次数 > 阈值 → 进程级
         # crash-loop / OOM / 外部反复重启的信号 (数据源 = _record_start_history)。
+        # episode 级持久冷却 (2026-07-12): 条件基于 24h 滑动窗口, 一旦为真会持续
+        # 为真长达 24h; 而 AlertNotifier 的通用冷却是进程内存态 (默认 300s + 每次
+        # 重启清零) → 装机日重启 N 次会刷屏几十条。这里把上次发送时间持久化进
+        # sync_state['service.restart_freq_last_alert'], 同一 episode 24h 内最多
+        # 发一次, 跨进程重启依然生效。键缺失/解析失败视为 0 (fail-open 可发送)。
         try:
+            import time as _time
+
             count_24h = self._count_recent_starts(24 * 3600)
             if count_24h > self.RESTART_FREQ_THRESHOLD_PER_DAY:
-                await self.alerter.alert_restart_frequency(
-                    count_24h, self.RESTART_FREQ_THRESHOLD_PER_DAY
+                now = _time.time()
+                last_alert_ts = 0.0
+                raw_last = self.watcher.sync_store.get_state(
+                    "service.restart_freq_last_alert"
                 )
+                if raw_last:
+                    try:
+                        last_alert_ts = float(raw_last)
+                    except (ValueError, TypeError):
+                        last_alert_ts = 0.0  # 值损坏 → 视为可发送
+                if now - last_alert_ts >= 24 * 3600:
+                    await self.alerter.alert_restart_frequency(
+                        count_24h, self.RESTART_FREQ_THRESHOLD_PER_DAY
+                    )
+                    try:
+                        self.watcher.sync_store.set_state(
+                            "service.restart_freq_last_alert", str(now)
+                        )
+                    except Exception as we:
+                        logger.debug(
+                            f"[alert] restart frequency cooldown write failed: {we}"
+                        )
         except Exception as e:
             logger.debug(f"[alert] restart frequency check failed: {e}")
 
