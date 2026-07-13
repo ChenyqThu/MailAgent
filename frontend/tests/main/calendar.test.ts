@@ -13,9 +13,11 @@ vi.mock('../../src/electron/main/cli_runner', async () => {
 })
 
 import { CliError } from '../../src/electron/main/cli_runner'
+import type { DbCalendarRow } from '../../src/electron/main/handlers/calendar-shared'
 import {
   __safeSenderTesting,
   __testing,
+  expandInWindow,
   runCalendarExpand,
   runEventCreate,
   runEventDelete,
@@ -528,6 +530,86 @@ describe('calendar — envelope', () => {
   test('rolls success into ok:true', async () => {
     const env = await __testing.envelopeFromCli(Promise.resolve({ replayed: 1 }))
     expect(env).toEqual({ ok: true, data: { replayed: 1 } })
+  })
+})
+
+// ============================================================
+// P1-1 — expandInWindow duration 语义对齐 src/calendar_sync/expander.py
+// (仅 dtend <= dtstart 时兜底 1h; 短于 1h 的周期事件用真实时长)
+// ============================================================
+describe('calendar — expandInWindow duration (P1-1)', () => {
+  // Mon 2026-01-05T09:00Z 起, 30min 周会
+  const dtstartUtc = Date.UTC(2026, 0, 5, 9, 0, 0) / 1000
+  const windowStartMs = Date.UTC(2026, 0, 5)
+  const windowEndMs = Date.UTC(2026, 0, 19)
+
+  function calRow(overrides: Partial<DbCalendarRow> = {}): DbCalendarRow {
+    return {
+      id: 1,
+      ical_uid: 'uid-standup',
+      recurrence_id: null,
+      sequence: 0,
+      summary: 'Standup',
+      description: null,
+      location: null,
+      organizer: null,
+      attendees_json: null,
+      dtstart_utc: dtstartUtc,
+      dtend_utc: dtstartUtc + 30 * 60,
+      is_all_day: 0,
+      rrule: 'FREQ=WEEKLY;BYDAY=MO',
+      exdates_json: null,
+      rdates_json: null,
+      status: null,
+      response_status: null,
+      url: null,
+      ics_raw: null,
+      source: 'caldav',
+      notion_page_id: null,
+      related_email_internal_id: null,
+      calendar_name: '日历',
+      ...overrides
+    }
+  }
+
+  test('30min RRULE 事件: 每个 occurrence 恰 30 分钟, 不再被拉成 1h', () => {
+    const out = expandInWindow(calRow(), windowStartMs, windowEndMs, true)
+    expect(out).toHaveLength(2)
+    expect(out[0]?.start.toISOString()).toBe('2026-01-05T09:00:00.000Z')
+    expect(out[1]?.start.toISOString()).toBe('2026-01-12T09:00:00.000Z')
+    for (const occ of out) {
+      expect(occ.end.getTime() - occ.start.getTime()).toBe(30 * 60 * 1000)
+      expect(occ.isRecurrence).toBe(true)
+    }
+  })
+
+  test('dtend == dtstart 的 RRULE 事件兜底 1h', () => {
+    const out = expandInWindow(calRow({ dtend_utc: dtstartUtc }), windowStartMs, windowEndMs, true)
+    expect(out).toHaveLength(2)
+    for (const occ of out) {
+      expect(occ.end.getTime() - occ.start.getTime()).toBe(60 * 60 * 1000)
+    }
+  })
+
+  test('缺 dtend (null) 的 RRULE 事件兜底 1h', () => {
+    const out = expandInWindow(calRow({ dtend_utc: null }), windowStartMs, windowEndMs, true)
+    expect(out).toHaveLength(2)
+    for (const occ of out) {
+      expect(occ.end.getTime() - occ.start.getTime()).toBe(60 * 60 * 1000)
+    }
+  })
+
+  test('dtend < dtstart 的 RRULE 事件兜底 1h', () => {
+    const out = expandInWindow(
+      calRow({ dtend_utc: dtstartUtc - 10 * 60 }),
+      windowStartMs,
+      windowEndMs,
+      true
+    )
+    expect(out).toHaveLength(2)
+    for (const occ of out) {
+      expect(occ.end.getTime() - occ.start.getTime()).toBe(60 * 60 * 1000)
+    }
   })
 })
 

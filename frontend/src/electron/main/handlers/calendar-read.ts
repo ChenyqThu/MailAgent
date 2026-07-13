@@ -190,7 +190,8 @@ export function expandInWindow(
 ): Array<{ start: Date; end: Date; isRecurrence: boolean }> {
   const dtstartMs = row.dtstart_utc * 1000
   const dtendMs = row.dtend_utc != null ? row.dtend_utc * 1000 : dtstartMs + 60 * 60 * 1000
-  const durationMs = Math.max(dtendMs - dtstartMs, 60 * 60 * 1000)
+  // 对齐 expander.py:75 — 仅 dtend<=dtstart 时兜底 1h, 短于 1h 的周期事件用真实时长
+  const durationMs = dtendMs > dtstartMs ? dtendMs - dtstartMs : 60 * 60 * 1000
 
   if (!row.rrule || !expandRecurrences) {
     if (dtstartMs < windowEndMs && dtendMs > windowStartMs) {
