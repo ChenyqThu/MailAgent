@@ -1,8 +1,9 @@
 // Sprint 11 V1.4 — DESIGN.md §2.7 / §2.11 — TitleBar Accent picker.
 //
 // Trigger button: small coral dot + current accent label. Click opens a
-// 264px popover with a 3×2 grid of 36px swatches (coral / cobalt / teal /
-// rose / slate / olive). Selecting a swatch fires `useAppearance.setAccent`
+// 264px popover with a 3×3 grid of 36px swatches (coral / cobalt / teal /
+// rose / slate / olive / amber / emerald / violet). Selecting a swatch fires
+// `useAppearance.setAccent`
 // — appearance.ts immediately flips `:root[data-accent]` and broadcasts
 // over IPC to the Island, so the live preview is automatic.
 //
@@ -25,9 +26,22 @@ const ACCENT_LABEL: Record<AccentId, string> = {
   teal: 'Teal',
   rose: 'Rose',
   slate: 'Slate',
-  olive: 'Olive'
+  olive: 'Olive',
+  amber: 'Amber',
+  emerald: 'Emerald',
+  violet: 'Violet'
 }
-const ACCENT_ORDER: ReadonlyArray<AccentId> = ['coral', 'cobalt', 'teal', 'rose', 'slate', 'olive']
+const ACCENT_ORDER: ReadonlyArray<AccentId> = [
+  'coral',
+  'cobalt',
+  'teal',
+  'rose',
+  'slate',
+  'olive',
+  'amber',
+  'emerald',
+  'violet'
+]
 
 export function AccentPickerPopover(): React.ReactElement {
   const { t } = useTranslation()

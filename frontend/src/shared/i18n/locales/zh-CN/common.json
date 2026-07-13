@@ -1671,7 +1671,7 @@
         "title": "通用"
       },
       "accent": {
-        "meta": "6 prebuilt",
+        "meta": "9 prebuilt",
         "note": "同步至灵动岛通知边框、收件列表选中条、AI 起草按钮、批量栏徽章。每次切换都会广播到 ping-island 桥接。"
       },
       "language": {

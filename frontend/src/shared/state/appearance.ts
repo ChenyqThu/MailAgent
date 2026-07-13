@@ -1,11 +1,20 @@
-// Three-state theme + 6-swatch accent (DESIGN.md §17 + §2.7).
+// Three-state theme + 9-swatch accent (DESIGN.md §17 + §2.7).
 // REVIEW-LOG C-06 fix: op-id + rAF coalescing so manual setThemeMode and OS
 // prefers-color-scheme change never both commit to DOM in the same frame.
 
 import { create } from 'zustand'
 
 export type ThemeMode = 'system' | 'dark' | 'light'
-export type AccentId = 'coral' | 'cobalt' | 'teal' | 'rose' | 'slate' | 'olive'
+export type AccentId =
+  | 'coral'
+  | 'cobalt'
+  | 'teal'
+  | 'rose'
+  | 'slate'
+  | 'olive'
+  | 'amber'
+  | 'emerald'
+  | 'violet'
 // Sprint 18 #4 — 表面材质风格. 跟 themeMode / accent 平行的第三个独立维度,
 // 让用户在主题色之外也能控制 glass-*  的视觉:
 //   frosted (默认): 「一块玻璃」— OS vibrancy/acrylic 扛唯一一层重模糊,
@@ -123,7 +132,10 @@ function readAccent(): AccentId {
       v === 'teal' ||
       v === 'rose' ||
       v === 'slate' ||
-      v === 'olive'
+      v === 'olive' ||
+      v === 'amber' ||
+      v === 'emerald' ||
+      v === 'violet'
     ) {
       return v
     }

@@ -395,7 +395,8 @@
 }
 
 /* Per-accent dark-mode swatches — accent v2 (oklch .75 .135 h 导出;
- * slate C=.035 / olive C=.105 / teal C=.125 刻意压低彩度)。 */
+ * slate C=.035 / olive C=.105 / teal C=.125 刻意压低彩度)。
+ * 2026-07 扩展 amber(h75) / emerald(h150) / violet(h300): 暗档 L .75/.70/.47。 */
 :root[data-accent='cobalt'] {
   --c-accent: 126 173 255;
   --c-accent-hi: 111 157 242;
@@ -421,9 +422,26 @@
   --c-accent-hi: 147 169 92;
   --c-accent-dim: 81 99 18;
 }
+:root[data-accent='amber'] {
+  --c-accent: 223 160 60;
+  --c-accent-hi: 207 145 40;
+  --c-accent-dim: 126 80 0;
+}
+:root[data-accent='emerald'] {
+  --c-accent: 105 198 127;
+  --c-accent-hi: 88 182 112;
+  --c-accent-dim: 32 107 56;
+}
+:root[data-accent='violet'] {
+  --c-accent: 187 153 246;
+  --c-accent-hi: 172 138 229;
+  --c-accent-dim: 101 74 143;
+}
 
 /* Light-mode accent overrides — accent v2 (oklch .50 .14 h 导出, teal 用
- * L .485 过 AA)。对 ink-1/2/3 全部 ≥ 4.75:1。 */
+ * L .485 过 AA)。对 ink-1/2/3 全部 ≥ 4.75:1。
+ * 2026-07 扩展: 亮档 L .50/.44/.36; amber 黄区压彩度 C .105/.09 (同 teal
+ * 先例), emerald 用 L .49 提对比度余量。 */
 :root[data-theme='light']:not([data-accent]),
 :root[data-theme='light'][data-accent='coral'] {
   --c-accent: 164 60 51;
@@ -454,6 +472,21 @@
   --c-accent: 89 108 23;
   --c-accent-hi: 73 91 0;
   --c-accent-dim: 53 68 0;
+}
+:root[data-theme='light'][data-accent='amber'] {
+  --c-accent: 134 89 1;
+  --c-accent-hi: 115 72 0;
+  --c-accent-dim: 88 52 0;
+}
+:root[data-theme='light'][data-accent='emerald'] {
+  --c-accent: 0 117 49;
+  --c-accent-hi: 0 102 34;
+  --c-accent-dim: 0 75 30;
+}
+:root[data-theme='light'][data-accent='violet'] {
+  --c-accent: 113 76 166;
+  --c-accent-hi: 96 59 147;
+  --c-accent-dim: 70 46 105;
 }
 
 /* ── 主题 v2 — 玻璃气质 data-glass (用户设置, 默认 tinted) ─────────────
@@ -850,7 +883,7 @@ mark {
  *
  * The currently-active accent drives --c-accent at :root via data-accent
  * (see top of this file); these swatch classes always render their own
- * accent regardless of active state so the picker UI shows all 6 options
+ * accent regardless of active state so the picker UI shows all 9 options
  * side-by-side. rgb() values mirror the data-accent={x} --c-accent stop
  * upstream (channels-only triplets above) into a 135deg gradient with a
  * 10% darken stop for dimension.
@@ -875,6 +908,15 @@ mark {
 }
 .swatch-olive {
   background: linear-gradient(135deg, rgb(163, 185, 108), rgb(147, 169, 92));
+}
+.swatch-amber {
+  background: linear-gradient(135deg, rgb(223, 160, 60), rgb(207, 145, 40));
+}
+.swatch-emerald {
+  background: linear-gradient(135deg, rgb(105, 198, 127), rgb(88, 182, 112));
+}
+.swatch-violet {
+  background: linear-gradient(135deg, rgb(187, 153, 246), rgb(172, 138, 229));
 }
 
 /* ─── 主题 v2 —「一块玻璃」材质结构 (theme-v2.css §材质结构) ──────────

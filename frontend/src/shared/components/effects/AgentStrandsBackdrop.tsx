@@ -14,8 +14,8 @@ import Strands from './Strands'
  * - Intentionally subdued defaults so the backdrop stays atmospheric, not distracting.
  */
 
-// dogfood：调色板 = 当前强调色（固定）+ 从其余 5 个主题色随机选 3（用户：不固定白、主色固定、其余随机）。当前色读
-// --c-accent（准确跟随明暗 + 6 强调色切换）；其余主题色 JS 读不到（CSS 只暴露当前 --c-accent），故镜像
+// dogfood：调色板 = 当前强调色（固定）+ 从其余 8 个主题色随机选 3（用户：不固定白、主色固定、其余随机）。当前色读
+// --c-accent（准确跟随明暗 + 9 强调色切换）；其余主题色 JS 读不到（CSS 只暴露当前 --c-accent），故镜像
 // 一份全集（明暗各一套）。🔴 镜像自 index.css accent override（暗 = :root[data-accent]；亮 =
 // :root[data-theme='light'][data-accent]）—— 那边改强调色 RGB 需同步这里。不读 --ink-fg-3（暗色下是浅灰
 // → 丝线偏白「看不出颜色」）。
@@ -25,7 +25,10 @@ const ACCENT_SET_DARK: Record<string, string> = {
   teal: '55 199 174',
   rose: '241 136 175',
   slate: '158 176 196',
-  olive: '163 185 108'
+  olive: '163 185 108',
+  amber: '223 160 60',
+  emerald: '105 198 127',
+  violet: '187 153 246'
 }
 const ACCENT_SET_LIGHT: Record<string, string> = {
   coral: '164 60 51',
@@ -33,7 +36,10 @@ const ACCENT_SET_LIGHT: Record<string, string> = {
   teal: '0 117 95',
   rose: '158 58 100',
   slate: '82 101 122',
-  olive: '89 108 23'
+  olive: '89 108 23',
+  amber: '134 89 1',
+  emerald: '0 117 49',
+  violet: '113 76 166'
 }
 
 function readTokenColors(): string[] {

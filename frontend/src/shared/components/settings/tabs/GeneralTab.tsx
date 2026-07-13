@@ -74,7 +74,10 @@ const ACCENT_LIST: AccentMeta[] = [
   { id: 'teal', label: 'Teal', hex: '#37C7AE' },
   { id: 'rose', label: 'Rose', hex: '#F188AF' },
   { id: 'slate', label: 'Slate', hex: '#9EB0C4' },
-  { id: 'olive', label: 'Olive', hex: '#A3B96C' }
+  { id: 'olive', label: 'Olive', hex: '#A3B96C' },
+  { id: 'amber', label: 'Amber', hex: '#DFA03C' },
+  { id: 'emerald', label: 'Emerald', hex: '#69C67F' },
+  { id: 'violet', label: 'Violet', hex: '#BB99F6' }
 ]
 /* eslint-enable mailagent/no-raw-hex */
 
@@ -563,7 +566,7 @@ export function GeneralTab(): React.ReactElement {
       <section className="mb-[var(--settings-block-gap,1.75rem)]">
         <BlockHeader
           title={t('settings.accent', { defaultValue: '强调色' })}
-          meta={t('settings.general.accent.meta', { defaultValue: '6 prebuilt' })}
+          meta={t('settings.general.accent.meta', { defaultValue: '9 prebuilt' })}
         />
         <div className="tile rounded-[var(--r-card)] p-5 border border-ink-border-soft">
           <div

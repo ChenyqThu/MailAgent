@@ -1671,7 +1671,7 @@
         "title": "General"
       },
       "accent": {
-        "meta": "6 prebuilt",
+        "meta": "9 prebuilt",
         "note": "Drives the toolbar, selected row, status chips, Island accent and batch-bar badge. Each change broadcasts to the ping-island bridge."
       },
       "language": {
