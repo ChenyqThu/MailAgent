@@ -1,34 +1,84 @@
 // Part B (island live-refresh) — the mid-stream guard's pure logic, split from
 // ThreadRunningBridge.tsx so that file only exports its component
 // (react-refresh/only-export-components). The bridge senses via
-// threadMessageAwaitsApproval; the panel decides via makeSessionSettledHandler.
+// threadMessagesAwaitApproval; the panel decides via makeSessionSettledHandler.
 
 import { getExternalStoreMessages, type ThreadMessage } from '@assistant-ui/react'
 
 /**
- * True when a thread message is PAUSED at an approval gate: one of its ORIGINAL AI SDK UIMessages
- * (bound onto the ThreadMessage by the react-ai-sdk converter; retrieved via
- * getExternalStoreMessages) carries a tool part still in the ai@6 `approval-requested` state. Same
- * structural narrowing as the gateway's responseMessageAwaitsApproval (chatRun.ts), applied on the
- * renderer side. A message without a bound original (legacy adapter, optimistic placeholder) → []
- * → false, so the guard degrades to bare isRunning — never weaker than the pre-fix sensor.
+ * True when a thread message's most recent semantic ORIGINAL AI SDK UIMessage is PAUSED at an
+ * approval gate. react-ai-sdk may merge adjacent assistant originals into one ThreadMessage, so the
+ * scan runs newest-first and skips only empty/data placeholders before matching the ai@6
+ * `approval-requested` state. A message without a bound original → false, so the guard degrades to
+ * bare isRunning — never weaker than the pre-fix sensor.
  */
+type OriginalMessageVerdict = 'approval' | 'placeholder' | 'semantic'
+
+function originalMessageVerdict(original: unknown): OriginalMessageVerdict {
+  const parts = (original as { parts?: unknown } | null)?.parts
+  if (!Array.isArray(parts)) return 'semantic'
+  for (const part of parts) {
+    if (part == null || typeof part !== 'object') continue
+    const candidate = part as { type?: unknown; state?: unknown }
+    if (
+      typeof candidate.type === 'string' &&
+      candidate.type.startsWith('tool-') &&
+      candidate.state === 'approval-requested'
+    ) {
+      return 'approval'
+    }
+  }
+  const isPlaceholder = parts.every((part) => {
+    if (part == null || typeof part !== 'object') return false
+    const candidate = part as { type?: unknown; text?: unknown }
+    if (candidate.type === 'step-start') return true
+    if (candidate.type === 'text' || candidate.type === 'reasoning') {
+      return typeof candidate.text === 'string' && candidate.text.trim().length === 0
+    }
+    return typeof candidate.type === 'string' && candidate.type.startsWith('data-')
+  })
+  return isPlaceholder ? 'placeholder' : 'semantic'
+}
+
 export function threadMessageAwaitsApproval(message: ThreadMessage | undefined): boolean {
   if (message == null || message.role !== 'assistant') return false
-  for (const original of getExternalStoreMessages<unknown>(message)) {
-    const parts = (original as { parts?: unknown } | null)?.parts
-    if (!Array.isArray(parts)) continue
-    for (const part of parts) {
-      if (part == null || typeof part !== 'object') continue
-      const p = part as { type?: unknown; state?: unknown }
-      if (
-        typeof p.type === 'string' &&
-        p.type.startsWith('tool-') &&
-        p.state === 'approval-requested'
-      ) {
-        return true
-      }
-    }
+  const originals = getExternalStoreMessages<unknown>(message)
+  for (let index = originals.length - 1; index >= 0; index -= 1) {
+    const verdict = originalMessageVerdict(originals[index])
+    if (verdict === 'approval') return true
+    if (verdict === 'placeholder') continue
+    return false
+  }
+  return false
+}
+
+/**
+ * True when an assistant message is a non-turn placeholder that may trail the real paused turn.
+ * Empty assistant messages and data-only follow-up/recommendation messages carry no generated
+ * content or tool work, so they must not hide an earlier approval gate. Missing external-store
+ * bindings fail closed (false): without the original AI SDK parts we cannot safely distinguish a
+ * placeholder from a genuinely streaming message.
+ */
+function threadMessageIsTrailingPlaceholder(message: ThreadMessage): boolean {
+  if (message.role !== 'assistant') return false
+  const originals = getExternalStoreMessages<unknown>(message)
+  if (originals.length === 0) return false
+  return originals.every((original) => originalMessageVerdict(original) === 'placeholder')
+}
+
+/**
+ * Find the most recent semantic thread message, skipping only known empty/data placeholders. A
+ * pending approval there neutralizes assistant-ui's paused-state isRunning over-report. Any user,
+ * system, meaningful assistant, or unbound message stops the scan so genuine streaming remains
+ * guarded.
+ */
+export function threadMessagesAwaitApproval(messages: readonly ThreadMessage[]): boolean {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]
+    if (message == null) continue
+    if (threadMessageAwaitsApproval(message)) return true
+    if (threadMessageIsTrailingPlaceholder(message)) continue
+    return false
   }
   return false
 }

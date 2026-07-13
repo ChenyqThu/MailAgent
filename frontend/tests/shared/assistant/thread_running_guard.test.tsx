@@ -21,11 +21,14 @@
 import { afterEach, beforeAll, describe, expect, test, vi } from 'vitest'
 import { cleanup, render, waitFor } from '@testing-library/react'
 
-import { AssistantRuntimeProvider } from '@assistant-ui/react'
+import { AssistantRuntimeProvider, type ThreadMessage } from '@assistant-ui/react'
 import { useAISDKRuntime } from '@assistant-ui/react-ai-sdk'
 
 import { ThreadRunningBridge } from '@shared/assistant/runtime/ThreadRunningBridge'
-import { makeSessionSettledHandler } from '@shared/assistant/runtime/threadRunningGuard'
+import {
+  makeSessionSettledHandler,
+  threadMessagesAwaitApproval
+} from '@shared/assistant/runtime/threadRunningGuard'
 
 beforeAll(() => {
   // assistant-ui internals reference observers happy-dom lacks; stub them.
@@ -74,6 +77,16 @@ describe('ThreadRunningBridge × real ai-sdk runtime — approval-paused vs mid-
     id: 'a-live',
     role: 'assistant',
     parts: [{ type: 'text', text: '正在草拟…' }]
+  }
+  const EMPTY_ASSISTANT_PLACEHOLDER = {
+    id: 'a-empty-placeholder',
+    role: 'assistant',
+    parts: []
+  }
+  const RECOMMENDATION_PLACEHOLDER = {
+    id: 'a-recommendation-placeholder',
+    role: 'assistant',
+    parts: [{ type: 'data-followups', data: ['继续分析风险', '生成回复草稿'] }]
   }
 
   /** Minimal ai@6 useChat surface the runtime touches at render time (status/messages/error);
@@ -139,12 +152,77 @@ describe('ThreadRunningBridge × real ai-sdk runtime — approval-paused vs mid-
     await waitFor(() => expect(onReloaded).toHaveBeenCalledTimes(1))
   })
 
-  test('genuinely mid-stream (no approval gate) → settle stays blocked (turn not aborted)', async () => {
+  test('approval pause + trailing empty assistant placeholder → settle reloads', async () => {
+    const runningRef = { current: true }
+    render(
+      <AiSdkGuardHarness
+        status="streaming"
+        messages={[USER_MSG, PAUSED_ASSISTANT, EMPTY_ASSISTANT_PLACEHOLDER]}
+        runningRef={runningRef}
+      />
+    )
+    await waitFor(() => expect(runningRef.current).toBe(false))
+
+    const reload = vi.fn().mockResolvedValue(undefined)
+    const onReloaded = vi.fn()
+    makeSessionSettledHandler({
+      runningRef,
+      activeSessionId: 7,
+      reload,
+      onReloaded
+    })({ sessionId: 7 })
+    expect(reload).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(onReloaded).toHaveBeenCalledTimes(1))
+  })
+
+  test('approval pause + trailing recommendation placeholder → settle reloads', async () => {
+    const runningRef = { current: true }
+    render(
+      <AiSdkGuardHarness
+        status="streaming"
+        messages={[USER_MSG, PAUSED_ASSISTANT, RECOMMENDATION_PLACEHOLDER]}
+        runningRef={runningRef}
+      />
+    )
+    await waitFor(() => expect(runningRef.current).toBe(false))
+
+    const reload = vi.fn().mockResolvedValue(undefined)
+    const onReloaded = vi.fn()
+    makeSessionSettledHandler({
+      runningRef,
+      activeSessionId: 7,
+      reload,
+      onReloaded
+    })({ sessionId: 7 })
+    expect(reload).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(onReloaded).toHaveBeenCalledTimes(1))
+  })
+
+  test('external-store binding missing → fails closed without crashing', () => {
+    const unboundEmptyAssistant = {
+      id: 'a-unbound',
+      role: 'assistant',
+      content: [],
+      status: { type: 'running' },
+      metadata: {
+        unstable_state: null,
+        unstable_annotations: [],
+        unstable_data: [],
+        steps: [],
+        custom: {}
+      }
+    } as unknown as ThreadMessage
+
+    expect(() => threadMessagesAwaitApproval([unboundEmptyAssistant])).not.toThrow()
+    expect(threadMessagesAwaitApproval([unboundEmptyAssistant])).toBe(false)
+  })
+
+  test('approval pause + genuinely streaming assistant → settle stays blocked', async () => {
     const runningRef = { current: false }
     render(
       <AiSdkGuardHarness
         status="streaming"
-        messages={[USER_MSG, STREAMING_ASSISTANT]}
+        messages={[USER_MSG, PAUSED_ASSISTANT, STREAMING_ASSISTANT]}
         runningRef={runningRef}
       />
     )

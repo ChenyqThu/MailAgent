@@ -26,13 +26,11 @@
 import { useEffect } from 'react'
 import { useThread } from '@assistant-ui/react'
 
-import { threadMessageAwaitsApproval } from './threadRunningGuard'
+import { threadMessagesAwaitApproval } from './threadRunningGuard'
 
 export function ThreadRunningBridge({ runningRef }: { runningRef: { current: boolean } }): null {
   // Single boolean selector: re-renders only when the mid-stream verdict flips, not per delta.
-  const isMidStream = useThread(
-    (t) => t.isRunning && !threadMessageAwaitsApproval(t.messages[t.messages.length - 1])
-  )
+  const isMidStream = useThread((t) => t.isRunning && !threadMessagesAwaitApproval(t.messages))
   useEffect(() => {
     runningRef.current = isMidStream
     return (): void => {
