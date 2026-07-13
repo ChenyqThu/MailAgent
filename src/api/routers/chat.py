@@ -282,6 +282,33 @@ async def chat_config(request: Request):
     except Exception:  # noqa: BLE001 — best-effort; never fail /config
         enabled_models = []
         env_vals = {}
+    # task 07-12 P0 (LLM 多 provider 化) — flag on 时 enabledModels 改为聚合 agent_config.db
+    # 的 llm_provider/llm_model 表：全部 enabled provider 的 enabled 模型；default provider
+    # 输出裸 model id（legacy 兼容——chat 面板 localStorage 偏好 / report_agent 行零迁移），
+    # 其余输出 'providerId:modelId'（providerRef，prd §4.3b）。default 恒排最前。
+    # flag off（默认，pydantic 冻结单例读——翻 flag 需重启 serve-api）→ 上面的 .env 热读路径
+    # 字节级不变；聚合失败 → 回退 env 值（never fail /config）。getattr 防御老 stub cfg。
+    if getattr(cfg, "llm_provider_registry_enabled", False):
+        try:
+            from src.agent_config.llm_providers import DEFAULT_PROVIDER_ID
+            from src.api.routers.llm_providers import ensure_seeded_store
+
+            _pstore = ensure_seeded_store()
+            _default_models: list = []
+            _other_models: list = []
+            for _prov in _pstore.list_providers():
+                if not _prov.enabled:
+                    continue
+                for _m in _pstore.list_models(_prov.id):
+                    if not _m.enabled:
+                        continue
+                    if _prov.id == DEFAULT_PROVIDER_ID:
+                        _default_models.append(_m.model_id)
+                    else:
+                        _other_models.append(f"{_prov.id}:{_m.model_id}")
+            enabled_models = _default_models + _other_models
+        except Exception:  # noqa: BLE001 — best-effort; fall back to the env-read list
+            pass
     kos_consumer = _hot_bool(env_vals, "MAILAGENT_KOS_CONSUMER_ENABLED", cfg.kos_consumer_enabled)
     kos_l1_hot = _hot_bool(env_vals, "MAILAGENT_KOS_L1_HOT_BLOCK_ENABLED", cfg.kos_l1_hot_block_enabled)
     kos_time_decay = _hot_bool(env_vals, "MAILAGENT_KOS_TIME_DECAY_ENABLED", cfg.kos_time_decay_enabled)
