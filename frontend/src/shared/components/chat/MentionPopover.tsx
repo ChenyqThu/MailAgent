@@ -15,10 +15,11 @@ import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useQuery } from '@tanstack/react-query'
 import { qk } from '@shared/lib/queryKeys'
-import { Loader2, Search } from 'lucide-react'
+import { Search } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
 import { DUR } from '@shared/lib/gsap'
+import { Loader } from '@shared/components/ui/loader'
 import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import type { SearchHit, SearchResult } from '@shared/api/types'
@@ -174,7 +175,11 @@ export function MentionPopover({
           )}
         />
         {isSearching && (
-          <Loader2 size={11} strokeWidth={2} className="text-ink-fg-3 animate-spin shrink-0" />
+          <Loader
+            size={11}
+            className="text-ink-fg-3 shrink-0"
+            label={t('chat.mention.searchAria')}
+          />
         )}
       </div>
       {normalised.length === 0 ? (

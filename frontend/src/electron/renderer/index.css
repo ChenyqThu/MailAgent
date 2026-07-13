@@ -610,7 +610,7 @@ kbd,
  * 区别于 EmailRow 的通高直角条 (demo .erow.sel::before 即通高, 两者有意
  * 不同)。 */
 .row-selected::before,
-[data-orientation='vertical'] [role='tab'][data-state='active']::before {
+[data-orientation='vertical'] .tabs-indicator::before {
   content: '';
   position: absolute;
   left: 0;
@@ -628,7 +628,7 @@ kbd,
  * popover (SurfacePicker 等) 的选项行贴容器边 + overflow hidden,
  * 悬挂会被裁掉。 */
 .app-nav .row-selected::before,
-[data-orientation='vertical'] [role='tab'][data-state='active']::before {
+[data-orientation='vertical'] .tabs-indicator::before {
   left: -8px;
 }
 
@@ -991,12 +991,14 @@ body::before {
  * 光条往左悬挂实现 (.app-nav 内 left:-8px, 见 .row-selected::before),
  * 不要反过来内缩 wash (会把左侧圆角切成 hard edge)。 */
 /* 设置 rail 的 Radix Tabs (vertical) 选中行与主菜单同语言 (round 8) —
- * selector 并入下方各配方, data-state 挂不了类只能属性选择。tabs.tsx
- * 的 v1 bg-ink-4 灰白平涂已删。主题 v3/C5 — wash 收编到 --sel-wash token
+ * tabs.tsx 的 layoutId indicator 挂裸 `.tabs-indicator` marker，由下方
+ * orientation authored 配方统一绘制 wash + 左光条，避免 active 态与
+ * 滑动层双影。
+ * 主题 v3/C5 — wash 收编到 --sel-wash token
  * (与 EmailRow/.email-row.is-selected 同一配方, 跨视图选中签名一致;
  * 亮/暗档由 token 自身按 data-theme 切, 无需单独 light 覆盖)。 */
 .acc-select,
-[data-orientation='vertical'] [role='tab'][data-state='active'] {
+[data-orientation='vertical'] .tabs-indicator {
   background: var(--sel-wash);
 }
 [data-orientation='vertical'] [role='tab'] {
@@ -1008,6 +1010,9 @@ body::before {
 
 /* 激活 tab 下划线 — 同样的光条语言 (当前无下划线式 tab 挂接点, 配方先就位)。 */
 .acc-underline {
+  background: var(--A);
+}
+[data-orientation='horizontal'] .tabs-indicator {
   background: var(--A);
 }
 

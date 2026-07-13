@@ -23,6 +23,7 @@ import { errorMessage } from '@shared/lib/ipcErrors'
 import { qk } from '@shared/lib/queryKeys'
 import { Button } from '@shared/components/ui/button'
 import { Checkbox } from '@shared/components/ui/checkbox'
+import { Loader } from '@shared/components/ui/loader'
 import { Popover, PopoverTrigger, PopoverContent } from '@shared/components/ui/popover'
 import { Switch } from '@shared/components/ui/switch'
 import {
@@ -242,7 +243,7 @@ export function AiTab(): React.ReactElement {
                 <span className="line-clamp-1">
                   {upstreamLoading ? (
                     <span className="flex items-center gap-1">
-                      <Loader2 className="size-3 animate-spin" />
+                      <Loader size={12} label={t('settings.ai.enabledModels.loading')} />
                       {t('settings.ai.enabledModels.loading', { defaultValue: '加载中…' })}
                     </span>
                   ) : rawEnabled.length === 0 ? (

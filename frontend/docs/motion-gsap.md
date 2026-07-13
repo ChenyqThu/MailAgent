@@ -189,3 +189,5 @@ loading 不该成为视觉焦点。**loading 只用三个词汇**（2026-06-13 �
 | `ui/stateful-button.tsx` | beui.dev `stateful.tsx` + `base.tsx`（MIT） | 抽屉保存按钮 idle/loading/success/error 状态机与按压反馈 | `SPRING_PRESS` + `SPRING_SWAP` | 只由受控 `state` 驱动；业务调用点复用既有保存与错误状态，不内联 spring 参数或延迟关闭。 |
 | `ui/checkbox.tsx` | beui.dev `checkbox.tsx`（MIT） | 勾选/半选 draw-on 与按压反馈 | `SPRING_PRESS` | 保留原生 checkbox 输入语义；业务调用点只传受控值、disabled 与变更回调。 |
 | `ui/animated-badge.tsx` | beui.dev `animated-badge.tsx`（MIT） | 紧凑状态徽标的图标与文案槽位切换 | `SPRING_SWAP` | 仅使用现有语义色 token；running 可 pulse，reduced-motion 下停用持续动画。 |
+| `ui/tabs.tsx` indicator | beui.dev `tabs.tsx`（MIT） | horizontal 下划线与 Settings rail wash/左光条的 shared-layout 滑动 | `SPRING_LAYOUT` | 只镜像 Radix Root 当前 value，不改键盘/roving focus；vertical 终态配方仍由 `index.css` authored 规则定义，reduced-motion 跳变。 |
+| `ui/loader.tsx` | beui.dev `loader.tsx`（MIT） | spinner/dots/bars/dot-matrix 等待态；reduced-motion 退化为透明度脉冲 | — | `currentColor` + `size`，新代码等待态优先 `ui/loader`；存量内联 `Loader2` 不机械迁移。 |

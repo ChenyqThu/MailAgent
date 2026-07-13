@@ -20,6 +20,7 @@ import { qk } from '@shared/lib/queryKeys'
 import { cn } from '@shared/lib/cn'
 import { DavMailHealthCard } from '@shared/components/admin/DavMailHealthCard'
 import { EmptyState } from '@shared/components/feedback/EmptyState'
+import { Loader } from '@shared/components/ui/loader'
 import { SkeletonRow } from '@shared/components/feedback/LoadingSkeleton'
 import { toastError, toastSuccess } from '@shared/state/toast'
 
@@ -271,6 +272,11 @@ export function AdminPage(): React.ReactElement {
       <DavMailHealthCard />
 
       {/* Health detail strip */}
+      {healthQ.isLoading && (
+        <div className="flex min-h-20 items-center justify-center text-ink-fg-3">
+          <Loader variant="dots" size={20} label={t('admin.title')} />
+        </div>
+      )}
       {healthQ.data && (
         <section className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <StatCard
