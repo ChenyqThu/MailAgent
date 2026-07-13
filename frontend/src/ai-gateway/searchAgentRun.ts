@@ -163,8 +163,11 @@ export async function runHeadlessSearchAgent(
 
   let steps = 0
   try {
+    const resolvedModel = await resolveModelFactory(cfg)(
+      opts.model && opts.model.length > 0 ? opts.model : cfg.model
+    )
     const result = await generateText({
-      model: resolveModelFactory(cfg)(opts.model && opts.model.length > 0 ? opts.model : cfg.model),
+      model: resolvedModel.model,
       messages: [{ role: 'user', content: opts.userContent }],
       tools,
       stopWhen: [stepCountIs(SEARCH_AGENT_MAX_ITER), hasToolCall('present_results')],
@@ -173,10 +176,7 @@ export async function runHeadlessSearchAgent(
         for (const tr of step.toolResults) {
           if (tr.toolName === 'email_search_fulltext') mergeSearchHits(pool, tr.output)
         }
-        if (
-          !sawSearchPhase &&
-          step.toolCalls.some((c) => c.toolName === 'email_search_fulltext')
-        ) {
+        if (!sawSearchPhase && step.toolCalls.some((c) => c.toolName === 'email_search_fulltext')) {
           sawSearchPhase = true
           onPhase?.('searching')
         }
@@ -187,7 +187,12 @@ export async function runHeadlessSearchAgent(
     // User cancel (client disconnect → req close → abort): the caller can't write to a
     // closed response anyway; the code mirrors the legacy f-bis contract.
     if (abortSignal.aborted && !presented) {
-      return { ok: false, hits: [], summary: null, error: { code: 'E_ABORTED', message: 'cancelled' } }
+      return {
+        ok: false,
+        hits: [],
+        summary: null,
+        error: { code: 'E_ABORTED', message: 'cancelled' }
+      }
     }
     // Upstream/loop failure with hits already pooled → best-effort (legacy f-ter served
     // the pool even after a harness error); empty pool → normalized error code.

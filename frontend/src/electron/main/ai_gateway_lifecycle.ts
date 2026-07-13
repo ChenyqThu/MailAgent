@@ -54,6 +54,8 @@ import { deriveExecRule, ExecRuleDeriveError } from './exec_policy_matcher'
 // /chat/config, projecting the system-prompt fields for the gateway.
 import { request } from '@shared/api/http_client'
 import type { GatewaySystemPromptConfig } from '../../ai-gateway/systemPrompt'
+import { createProviderModelResolver, type ProviderSnapshot } from '../../ai-gateway/providers'
+import { daemonRequest } from './daemon_api'
 
 /** The /chat/config response fields the gateway projects into GatewaySystemPromptConfig
  *  (was typed via the legacy HttpPlatformConfig until S3 deleted the legacy engine). */
@@ -252,6 +254,14 @@ async function getSystemPromptConfig(
 export async function startEmbeddedAiGateway(): Promise<number | null> {
   if (_handle) return _handle.port
   const apiKey = await getLlmApiKey()
+  const llmBaseUrl = getLlmBaseUrl()
+  const providerRegistryEnabled = envBool('MAILAGENT_LLM_PROVIDER_REGISTRY', false)
+  const providerModelResolver = providerRegistryEnabled
+    ? createProviderModelResolver({
+        fetchSnapshot: () => daemonRequest<ProviderSnapshot>('GET', '/llm/providers/snapshot'),
+        legacy: { apiKey, baseUrl: llmBaseUrl }
+      })
+    : undefined
   // Phase 03a — domain client → Python serve-api READ endpoints (loopback +
   // same-machine local token, mirrors the renderer's auth leg). The read-tool
   // registry binds to it; the gateway core never reaches SQLite directly.
@@ -420,9 +430,11 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
 
   const handle = await startAiGatewayServer({
     port: resolveAiGatewayPort(),
-    baseUrl: getLlmBaseUrl(),
+    baseUrl: llmBaseUrl,
     apiKey,
     model: getLlmModel(),
+    providerRegistryEnabled,
+    providerModelResolver,
     // #12 (dogfood session-history) — eager-persist: write the user message at turn START so the
     // session appears in history even when the first turn is HITL-paused and onFinish skips
     // persistTurn. eagerWrittenUserMessages（module-level Set，keyed `${sessionId}:${messageId}`）

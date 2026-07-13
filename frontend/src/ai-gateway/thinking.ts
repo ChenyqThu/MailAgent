@@ -10,6 +10,8 @@
 
 import type { JSONValue } from 'ai'
 
+import type { ProviderProtocol } from './providers'
+
 const THINKING_BUDGET_TOKENS = 16_000
 const THINKING_EFFORT = 'high' as const
 
@@ -29,9 +31,10 @@ function modelSupportsManualThinking(model: string): boolean {
  *  opus-4-7/4-8/fable. The shape matches AnthropicProviderOptions (thinking union + effort enum). */
 export function thinkingProviderOptions(
   model: string,
-  enabled: boolean
+  enabled: boolean,
+  protocol: ProviderProtocol = 'anthropic'
 ): Record<string, Record<string, JSONValue>> | undefined {
-  if (!enabled) return undefined
+  if (!enabled || protocol !== 'anthropic') return undefined
   const anthropic: Record<string, JSONValue> = modelSupportsManualThinking(model)
     ? { thinking: { type: 'enabled', budgetTokens: THINKING_BUDGET_TOKENS } }
     : { thinking: { type: 'adaptive' }, effort: THINKING_EFFORT }

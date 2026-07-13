@@ -14,7 +14,6 @@ import {
   smoothStream,
   stepCountIs,
   streamText,
-  type LanguageModel,
   type ModelMessage,
   type StreamTextResult,
   type ToolSet,
@@ -23,6 +22,7 @@ import {
 
 import { anthropicBaseUrl, type AiGatewayConfig, type PersistTurnInput } from './config'
 import { createAnthropic } from '@ai-sdk/anthropic'
+import { parseProviderRef, type ResolvedProviderModel } from './providers'
 import type { GatewayApprovalMode, GatewayToolAuditEntry } from './tools/types'
 // S2 W0 (ADR-001 D1) — the run's context mode is a TRUSTED prepareChatRun parameter asserted by
 // each entrypoint in its own code. It is NEVER read from the request body (a client cannot claim
@@ -43,13 +43,28 @@ export const DEFAULT_MAX_STEPS = 8
 
 /** Resolve the LanguageModel factory: injected (tests / mock) else the default @ai-sdk/anthropic
  *  provider wired to the normalized baseURL + key. */
-export function resolveModelFactory(cfg: AiGatewayConfig): (modelId: string) => LanguageModel {
-  if (cfg.createModel) return cfg.createModel
+export function resolveModelFactory(
+  cfg: AiGatewayConfig
+): (modelId: string) => ResolvedProviderModel | Promise<ResolvedProviderModel> {
+  if (cfg.createModel) {
+    return (modelId: string) => ({
+      ...parseProviderRef(modelId),
+      model: cfg.createModel!(modelId),
+      protocol: 'anthropic'
+    })
+  }
+  if (cfg.providerRegistryEnabled && cfg.providerModelResolver) {
+    return (modelId: string) => cfg.providerModelResolver!.resolve(modelId)
+  }
   const anthropic = createAnthropic({
     apiKey: cfg.apiKey ?? '',
     baseURL: anthropicBaseUrl(cfg.baseUrl)
   })
-  return (modelId: string) => anthropic(modelId)
+  return (modelId: string) => ({
+    ...parseProviderRef(modelId),
+    model: anthropic(modelId),
+    protocol: 'anthropic'
+  })
 }
 
 /** Pick the last user UIMessage of an incoming turn (the fresh message we persist alongside the
@@ -157,7 +172,12 @@ export async function prepareChatRun(
   // chat-panel P4 composer-parity C1-① — per-turn extended-thinking toggle. body.thinking===true →
   // inject providerOptions by the model-family matrix (./thinking); absent/false → undefined →
   // providerOptions omitted below, byte-identical to the pre-toggle no-thinking streamText call.
-  const thinkingProviderOpts = thinkingProviderOptions(modelId, body.thinking === true)
+  const resolvedModel = await resolveModelFactory(cfg)(modelId)
+  const thinkingProviderOpts = thinkingProviderOptions(
+    resolvedModel.modelId,
+    body.thinking === true,
+    resolvedModel.protocol
+  )
 
   // System prompt. With the injection provider set (always injected since S3) assemble
   // from standing-context + the typed snapshot, reusing the legacy stable prefix
@@ -239,7 +259,7 @@ export async function prepareChatRun(
   const hasTools = tools != null && Object.keys(tools).length > 0
 
   const result = streamText({
-    model: resolveModelFactory(cfg)(modelId),
+    model: resolvedModel.model,
     system,
     messages: modelMessages,
     abortSignal,
@@ -641,8 +661,9 @@ export async function generateSessionTitle(
   abortSignal?: AbortSignal
 ): Promise<string | null> {
   const factory = resolveModelFactory(cfg)
+  const resolvedModel = await factory(modelId)
   const { text } = await generateText({
-    model: factory(modelId),
+    model: resolvedModel.model,
     prompt: buildTitlePrompt(firstUserText),
     maxOutputTokens: 64,
     abortSignal
@@ -724,8 +745,9 @@ export async function generateFollowups(
   abortSignal?: AbortSignal
 ): Promise<string[]> {
   const factory = resolveModelFactory(cfg)
+  const resolvedModel = await factory(modelId)
   const { text } = await generateText({
-    model: factory(modelId),
+    model: resolvedModel.model,
     prompt: buildFollowupsPrompt(userText, assistantText),
     maxOutputTokens: 200,
     abortSignal

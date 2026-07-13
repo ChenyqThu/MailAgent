@@ -36,4 +36,11 @@ describe('thinkingProviderOptions', () => {
       anthropic: { thinking: { type: 'enabled', budgetTokens: 16_000 } }
     })
   })
+
+  test.each(['openai', 'openai-compatible', 'deepseek', 'google', 'openrouter'] as const)(
+    '%s protocol → undefined (Anthropic providerOptions omitted)',
+    (protocol) => {
+      expect(thinkingProviderOptions('any-model', true, protocol)).toBeUndefined()
+    }
+  )
 })
