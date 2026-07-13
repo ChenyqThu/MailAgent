@@ -86,7 +86,7 @@ without ever going pure black.
 | `ink-1`            | `#15181D` | Sidebar; bottom status bar; batch bar              |
 | `ink-2`            | `#1A1E24` | Email list column; AI panel base                   |
 | `ink-3`            | `#1F242B` | Detail pane; hover surface for rows / buttons      |
-| `ink-4`            | `#262C35` | AI user-bubble bg; raised affordance (v3: selected row → `--sel-wash` pill, no longer an `ink-4` flood — §18) |
+| `ink-4`            | `#262C35` | AI user-bubble bg; raised affordance (v3: selected row → `--sel-wash` wash, no longer an `ink-4` flood — §18) |
 | `ink-5`            | `#2E343E` | Reserved — popover / menu surface above `ink-4`   |
 | `ink-border`       | `#2C323B` | Hairline between major panels                      |
 | `ink-border-soft`  | `#1F242B` | Row-internal divider (near-invisible)              |
@@ -396,7 +396,7 @@ If a future section header *must* be Chinese: bump to `text-aux` 14px (not
 | Token      | Value | Use                                                        |
 |------------|-------|------------------------------------------------------------|
 | `--r-ctl`  | 8px   | Controls — buttons, inputs, nav rows, toolbar icon buttons |
-| `--r-row`  | 9px   | List-row pill (EmailRow / chat SessionRow)                 |
+| `--r-row`  | 9px   | List-row pill (chat SessionRow; EmailRow reverted to full-row wash 2026-07-12) |
 | `--r-card` | 12px  | Cards — AI Fields block, approval card, settings tile      |
 | `--r-pop`  | 14px  | Floating layers — `.glass-pop` (popover / menu / palette / modal) |
 
@@ -482,11 +482,11 @@ in the mockup that translates to a shadcn-ui-extended React component.
 
 ### 5.1 Reference: `<EmailRow>`
 
-> **Illustrative v1 reference — selection/pill styling superseded by Theme v3
-> (§18).** Production `EmailRow` is a padding-box **pill** (ARCHITECTURE §7.3),
-> so selection is a `--sel-wash` gradient pill alone — the left accent bar was
-> retired from email rows in the 2026-07-12 dogfood (it stays a **nav-surface
-> signature**: sidebar / settings rail / chat session row), *not*
+> **Illustrative v1 reference — selection styling superseded by Theme v3
+> (§18).** Production `EmailRow` selection is a **full-row `--sel-wash`
+> gradient wash + 3px full-height left accent bar** over the per-row 1px
+> divider (ARCHITECTURE §7.3; the interim batch-1 padding-box pill was
+> reverted in the 2026-07-12 second live review), *not*
 > the `bg-ink-4` full-bleed row shown below. Unread text is `--ink-fg` weight
 > 650 + accent dot (the snippet already uses fg text — only the weight moved
 > from `font-semibold`/`font-medium` to 650/500). The hover delete button was
@@ -1695,19 +1695,21 @@ this section is the design-intent index.
 | C1 | Noise layer (`.grain` SVG turbulence) | **Retired** — DOM mount + CSS rule + settings knob + i18n key all removed |
 | C2 | Specular highlight (`.specular::after`, titlebar top edge) | **Retired** |
 | C3 | Static decorative glow (selection bar / CTA outer glow / tab underline) | **Retired across the board.** Interaction-feedback glow (composer `BorderGlow`) is explicitly out of scope and stays |
-| C4 | Email-row selection | **Pill-shaped**: `--sel-wash` gradient clipped to a padding-box pill, wash alone (left bar retired in the 2026-07-12 dogfood; glow retired in v3). Selection lights **only the row activeId hits** — an expanded thread no longer lights the whole bundle (collapsed head stands in for a hidden selected child). Implementation: ARCHITECTURE §7.3 |
-| C5 | Sidebar nav / settings-rail tab / chat SessionRow selection | Same `--sel-wash` pill + retained 3px left bar (`--sel-bar-w`) — the bar is the **nav-surface** selection signature |
+| C4 | Email-row selection | **Full-row `--sel-wash` wash + 3px full-height left bar** over the per-row divider (glow retired in v3; the interim batch-1 padding-box pill was reverted in the 2026-07-12 second live review). Selection lights **only the row activeId hits** — an expanded thread no longer lights the whole bundle (collapsed head stands in for a hidden selected child). Implementation: ARCHITECTURE §7.3 |
+| C5 | Sidebar nav / settings-rail tab / chat SessionRow selection | Same `--sel-wash` pill + retained 3px left bar (`--sel-bar-w`) — email rows share the wash + bar signature (full-row, not pill) |
 | C6 | Unread expression | Sender / subject → foreground (`--ink-fg`, weight 650); time → foreground weight 500; unread dot + count badge stay accent. Accent signals, never body-colors |
 | C7 | CTA button | Gradient + inset highlight kept; **outer glow removed**. (Solid-surface CTA keeps a byte-for-byte special-case — no drop shadow + softened inset; since glow is now globally gone, that special-case only differs on shadow/inset.) |
 | C8 | Radius | Unified four tiers — §4.2 / §18.3 |
 | C9 | Hardcoded hex | AI-strip priority colors + flag-done green + avatar gradients folded into tokens (§18.3) |
 
-**Retained (owner red lines):** the selected-item 3px left accent bar on nav
-surfaces (sidebar / settings rail / chat session row); every interaction
-animation (§18.2); layout structure untouched.
+**Retained (owner red lines):** the selected-item 3px left accent bar
+(nav surfaces — sidebar / settings rail / chat session row — and email rows);
+every interaction animation (§18.2); layout structure untouched.
 
 **Dogfood revisions (2026-07-12, owner live review after landing):** email-row
-left bar retired (wash pill alone; bar → nav-surface-only signature) · thread
+selection reverted to the v2 look — full-row wash + full-height left bar +
+per-row divider (the batch-1 pill and the interim bar retirement are both
+undone; second review verdict) · thread
 selection = single row, no bundle lighting · email list `scrollbar-none` (a
 styled classic scrollbar reserves gutter width even with a transparent thumb)
 · `.scrollbar-thin` → macOS-style auto-hide (8px, thumb visible on container

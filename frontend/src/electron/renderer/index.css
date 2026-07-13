@@ -108,13 +108,14 @@
   /* ── 主题 v3「原生材质」token (README §2.2) ──────────────────────────
    * 圆角四档 — 全局唯一来源 (胶囊 999 / 头像 50% 特例不变)。 */
   --r-ctl: 8px; /* 按钮/输入/nav 项/工具钮 */
-  --r-row: 9px; /* 列表行药丸 (邮件行/会话行) */
+  --r-row: 9px; /* 列表行药丸 (会话行; 邮件行 2026-07-12 二次拍板回归整行 wash, 不消费) */
   --r-card: 12px; /* AI Fields 卡/审批卡/tile */
   --r-pop: 14px; /* .glass-pop 浮层 */
 
   /* 主题 v3 — 选中态: 向右衰减 accent wash (暗 16%→6%, 亮色覆盖 13%→5%),
-   * EmailRow / sidebar / chat 会话行同源消费。--sel-bar-w 左条 = 导航面专属
-   * 签名 (sidebar/设置 rail/会话行); 邮件行 2026-07-12 owner 拍板去条只留 wash。 */
+   * EmailRow / sidebar / chat 会话行同源消费。--sel-bar-w 左条 = 导航面
+   * (sidebar/设置 rail/会话行) 与邮件行共用宽度 token (2026-07-12 owner 二次
+   * 拍板: 邮件行回归 v2 整行 wash + 通高左条, 药丸退役)。 */
   --sel-wash: linear-gradient(
     90deg,
     color-mix(in srgb, var(--A) 16%, transparent),
@@ -215,19 +216,16 @@
    *
    * --unread-dot-{top,left}: 未读 dot (6×6) 直接的 CSS top/left 值
    * (已经 = subject 行垂直中心 - dot 半径, 写绝对值避免 dot rule 里再
-   * calc(- 3px) 与直径耦合). 🔴 坐标系 = .email-row 的 padding box —
-   * 主题 v3/C4 药丸化给行加了透明 border (左右 6 / 上下 1), 绝对定位
-   * 伪元素的原点随之内移, 故从 slot 坐标 (36/17) 平移为 (35/11):
-   * top 35 = [row-pt 9 + sender-line(13.5×1.35≈18) + subject-row.mt 2
-   * + subject 行高/2(13.5×1.4/2≈9.5) - dot.r 3] - border-top 1.
-   * left 11 = [row-pl 8 + chevron-col-w 24 / 2 - dot.r 3] - border-left 6.
-   * row padding / border / 字号 改变 → 这两个值要同步重算 (没法纯 calc
-   * 因为依赖 inherited line-height resolution). */
+   * calc(- 3px) 与直径耦合). top 36 ≈ row-pt 9 + sender-line(13.5×1.35
+   * ≈18) + subject-row.mt 2 + subject 行高/2(13.5×1.4/2 ≈9.5) - dot.r 3.
+   * left 17 = row-pl 8 + chevron-col-w 24 / 2 - dot.r 3. row padding 或
+   * 字号 改变 → 这两个值要同步重算 (没法纯 calc 因为依赖 inherited
+   * line-height resolution). */
   --avatar-size: 32px;
   --avatar-mt: 2px;
   --chevron-col-w: 24px;
-  --unread-dot-top: 35px;
-  --unread-dot-left: 11px;
+  --unread-dot-top: 36px;
+  --unread-dot-left: 17px;
 
   /* Sprint 18 — Settings 三列 + Tile + Control 几何 SSoT.
    * mockup-settings.html 的数值集中在此, parts/EnvField / parts/Section /
@@ -616,7 +614,7 @@ kbd,
   left: 0;
   top: 6px;
   bottom: 6px;
-  /* --sel-bar-w: 左条签名自 2026-07-12 起为导航面专属 (邮件行药丸已去条) */
+  /* --sel-bar-w: 宽度 token 与 .email-row::before (通高直角条) 共用 */
   width: var(--sel-bar-w);
   border-radius: 2px;
   background: linear-gradient(180deg, oklch(from var(--A) calc(l + 0.1) c h), var(--A));
@@ -1419,33 +1417,35 @@ body::before {
   position: relative;
   /* react-window 给的 row slot 高度 (100/84/78/60) 略大于 article 内容真实
    * 高度 (padding + grid tracks ≈ 92/77/72/56), 不撑满会在每行底部留 ~5-7px
-   * 透明带. height:100% 让药丸背景填满整个 slot, 相邻两行药丸间靠 1px 上 +
-   * 1px 下 透明 border = 2px 缝分隔。多余 slot 余白作为 grid track 余白留在
-   * 底部 (align-content: normal → start), 各 grid item 几何不变. */
+   * 透明带 — thread child 的 wash / data-flag wash / is-selected accent bar
+   * 都画在 article 上, 透明带导致左侧深色点缀栏在 bundle 展开时不连续.
+   * height:100% 让背景填满整个 slot, 多余空间作为 grid track 余白留在底部
+   * (align-content: normal → start), 各 grid item 几何不变.
+   * (主题 v3 批1 曾药丸化 — 透明 border 内缩 + padding-box clip + 补偿圆角;
+   * 2026-07-12 owner 二次拍板退役, 回归 v2 整行 wash, 实现见 git a576bc48。) */
   height: 100%;
   display: grid;
   grid-template-columns: var(--chevron-col-w) var(--avatar-size) 1fr;
   gap: 0 8px;
-  /* 主题 v3/C4 药丸化 — 用透明 border 造「视觉内缩」(左右各 6px / 上下各
-   * 1px) 而不动 react-window slot 几何: box-sizing border-box → border-box
-   * 仍撑满 slot (行高 / offset 由 virtualizer 控, 铁律不碰), 内容盒缩进。
-   * background-clip: padding-box + border-radius 让全部状态背景 (hover /
-   * is-selected wash / data-flag wash / data-thread=child tint) 自动裁成内缩
-   * 圆角药丸, 无需逐状态重写。可见药丸 = padding box, 其圆角 = 外圈半径 -
-   * 对应边 border 宽 (CSS corner shaping), 故 radius 写补偿式 calc(横 +6 /
-   * 纵 +1) 才能让可见圆角落在 --r-row。padding 反向补偿 border (原 9/14/10/8
-   * → 8/8/9/2) 使 avatar / sender / chevron 等流内内容的绝对坐标逐像素不变
-   * (与 group-header chevron 的 16px 对齐不破)。⚠️ 绝对定位后代 (::before
-   * 左条 / ::after 未读点) 的 containing block = padding box, 原点随 border
-   * 内移 (+6,+1) — 左条落到药丸内缘正是意图; 未读点已在几何 SSoT 段平移补偿。
-   * C10: 原 per-row 底部 1px 分割线 (--row-divider gradient) 退役 — 药丸化后
-   * 行间靠 1px 缝 + wash 区分, 分隔线仅保留在分组头 (.group-header)。 */
-  border: 1px solid transparent;
-  border-left-width: 6px;
-  border-right-width: 6px;
-  border-radius: calc(var(--r-row) + 6px) / calc(var(--r-row) + 1px);
-  background-clip: padding-box;
-  padding: 8px 8px 9px 2px;
+  padding: 9px 14px 10px 8px;
+  /* 行间分割线从 chevron 列之后开始, 让 thread child / flagged / selected
+   * 的深色 wash 在左侧 chevron-col 区域 (24px) 跨行连续. 直接 border-bottom
+   * 会贯穿整行 1px 把 wash 切断, 改用 linear-gradient 背景画底部 1px 横线
+   * 仅覆盖 avatar + content 区段, 视觉等同 border-bottom 但 thread bundle
+   * 内的"深色点缀栏"完全连续.
+   * 注: 因为这里用 background-image, 下方所有状态 (hover/selected/data-flag/
+   * data-thread='child') 必须用 background-color 而非 background shorthand,
+   * 否则会被 shorthand 重置 → 分割线消失. */
+  background-image: linear-gradient(
+    to right,
+    transparent 0,
+    transparent var(--chevron-col-w),
+    var(--row-divider) var(--chevron-col-w),
+    var(--row-divider) 100%
+  );
+  background-repeat: no-repeat;
+  background-position: 0 100%;
+  background-size: 100% 1px;
   cursor: pointer;
   transition: background-color 120ms ease;
 }
@@ -1457,20 +1457,56 @@ body::before {
  * background-image 上 (见上方注释), wash 也是 gradient → 必须把两层合进
  * 同一组 background-* longhand, 否则 wash 会把分割线整组重置掉。 */
 .email-row.is-selected {
-  /* 主题 v3/C4 — 选中 wash 收编到 --sel-wash token (亮 13%→5% / 暗 16%→6%,
+  /* 主题 v3 — 选中 wash 收编 --sel-wash token (亮 13%→5% / 暗 16%→6%,
    * README §2.2, 亮/暗档由 token 自身按 data-theme 切, 无需单独 light 覆盖)。
-   * 用 background-image longhand (非 background shorthand) 保住 base 的
-   * background-clip: padding-box → wash 自动裁成内缩圆角药丸; 原叠在 wash 下
-   * 的 divider gradient 层随 C10 一并退役。 */
-  background-image: var(--sel-wash);
+   * 2026-07-12 owner 二次拍板: 回归 v2 整行 wash + 底部 divider 双层。
+   * longhand (repeat/position/size) 必须两层数组完整写 — 只覆 image 不覆
+   * size 会让数组错位、分割线被拉成整块。 */
+  background-image:
+    var(--sel-wash),
+    linear-gradient(
+      to right,
+      transparent 0,
+      transparent var(--chevron-col-w),
+      var(--row-divider) var(--chevron-col-w),
+      var(--row-divider) 100%
+    );
+  background-repeat: no-repeat, no-repeat;
+  background-position:
+    0 0,
+    0 100%;
+  background-size:
+    100% 100%,
+    100% 1px;
 }
-/* 选中 accent 左条 — 已退役 (2026-07-12 owner 实机 review 拍板): 邮件行选中
-   只保留 --sel-wash 药丸, 不再画左侧实色条; 左条签名收敛为**导航面专属**
-   (sidebar / 设置 rail / chat 会话行的 .row-selected::before 保留)。原 ::before
-   实现 (opacity fade + padding-box 坐标) 见 git 历史 a576bc48。 */
+/* 选中 accent bar — ::before 常驻 (opacity:0)，选中时 fade-in (§4.5 降级方案:
+   不做行间滑动 Flip，虚拟列表内 fade 性价比更高)。主题 v2: accent 纯色;
+   主题 v3/C3: 9px 辉光退役, 左条本体保留。2026-07-12 owner 二次拍板: 药丸
+   退役后左条回归通高直角 (坐标系 = 无 border 的 .email-row 原始 containing
+   block)。🔴 不要做垂直渐变: 线程展开时 bundle 内多行的条上下拼接, 渐变会在
+   每行交界处出现明暗拼缝, 整条线程看起来不连续。 */
+.email-row::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: var(--sel-bar-w);
+  background: var(--A);
+  opacity: 0;
+  transition: opacity 0.12s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.email-row.is-selected::before {
+  opacity: 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  .email-row::before {
+    transition: none;
+  }
+}
 
 /* Sprint 17 — thread chevron 直接在 .email-row 第一格 grid cell 内, 不再
- * 需要外层 .thread-row-wrap. selected wash / flag wash 都画在
+ * 需要外层 .thread-row-wrap. selected wash / accent bar / flag wash 都画在
  * .email-row 上, 自然 cover chevron 区域. child row 的 subtle inset tint
  * 通过 data-thread='child' attribute 走 .email-row 自身的 selector. */
 .email-row[data-thread='child']:not(.is-selected) {
@@ -1785,10 +1821,10 @@ body:not([data-batch-mode='true']) .email-row .cb {
 }
 
 /* Flag state row washes — subtle, never compete with selection.
- * background-color (not shorthand) — base 的 background-clip: padding-box 让这
- * 些 wash 自动裁成内缩圆角药丸 (C4), 与 selected wash 对齐; C10 后已无底部
- * divider。主题 v2: 旗标 wash 从写死的 v1 coral 改 accent 派生, 换主题色自动
- * 跟; done 绿是「完成」语义色, 不跟 accent (绿 hex 收编待 C9 批)。 */
+ * background-color (not shorthand) — 见 .email-row base 注释, divider 画在
+ * background-image 层, 二者天然共存 (保留底部 gradient 分割线)。主题 v2:
+ * 旗标 wash 从写死的 v1 coral 改 accent 派生, 换主题色自动跟; done 绿走
+ * --c-ok 语义色, 不跟 accent。 */
 .email-row[data-flag='flagged'] {
   background-color: rgb(var(--c-accent) / 0.05);
 }

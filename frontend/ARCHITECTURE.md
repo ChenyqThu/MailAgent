@@ -386,35 +386,28 @@ Electron main 收到响应 → 跳 Mail.app + 把 MailAgent 窗口 focus 到该�
 拦成**空白页**；故必须在 iframe 内**渲染层拦截点击**（捕获阶段 preventDefault）→ `shell:openExternal`，
 不能只靠主进程 `will-frame-navigate`。② ResizeObserver 回调要 rAF 包裹打断"测高→改高→再触发"同步环。
 
-### 7.3 主题 v3 药丸行实现要点（EmailRow）
+### 7.3 EmailRow 选中 / 状态背景实现要点
 
-EmailRow 的选中 / 旗标 / hover「药丸」视觉靠**透明 border 造视觉内缩**实现，而**不动**
-react-window 给的 slot 几何（行高 / offset 由 virtualizer 独占，§7.1 铁律不碰）：`.email-row`
-加 `border: 1px solid transparent`（左右各 6px、上下各 1px）+ `background-clip: padding-box`，
-`box-sizing: border-box` 让 border box 仍撑满 slot，而内容盒缩进 6/1。这样全部状态背景
-（`hover` / `is-selected` 的 `--sel-wash` / `data-flag` wash / `data-thread=child` tint）自动被
-裁成内缩圆角药丸，**无需逐状态重写**。
+EmailRow 的行间分割线画在 **`background-image`**（底部 1px linear-gradient，从 chevron 列之后开始，
+让 thread child / flagged / selected 的 wash 在左侧 chevron 区跨行连续——直接 `border-bottom` 会贯穿
+整行把 wash 切断）。由此派生一条铁律：**行内所有状态背景（`hover` / `data-flag` wash /
+`data-thread=child` tint）必须用 `background-color` 而非 background shorthand**，否则 shorthand 会把
+divider 层整组重置掉。唯一例外是 `.is-selected`——选中 wash 本身也是 gradient，必须与 divider 合进
+同一组 `background-*` longhand 双层数组（`var(--sel-wash)` + divider，repeat / position / size 两层
+完整写；只覆 image 不覆 size 会让数组错位、分割线被拉成整块）。
 
-**为什么这么绕**：react-window slot 高度略大于内容真实高度，直接画 full-bleed 背景会在行间留
-透明带、且改 slot 几何会破坏 virtualizer 的定位。透明 border 是「零触碰 virtualizer 几何」下拿到
-内缩药丸的唯一便宜路子——相邻两行药丸间靠 1px 上 + 1px 下透明 border = 2px 缝分隔。
+选中签名 = **整行 `--sel-wash`（明暗档由 token 自身按 data-theme 切）+ 3px 通高左条**
+（`::before` 常驻 `opacity:0`、选中 fade-in，宽度吃 `--sel-bar-w`，坐标系 = 无 border 的
+`.email-row` 原始 containing block）。react-window slot 高度略大于内容真实高度，`height:100%`
+让背景 / 左条填满整个 slot（slot 几何 / 行高 / offset 由 virtualizer 独占，§7.1 铁律不碰）。
+未读点几何 SSoT `--unread-dot-{top,left}` = slot 坐标 `36/17`；**改 `.email-row` 的 padding /
+字号必须同步重算这两个常量**（没法纯 calc，依赖 inherited line-height resolution）。另注意
+child tint 选择器特异性 (0,3,0) 会压过基础 `:hover` (0,2,0)，行级新状态背景要配同强度 hover 覆盖。
 
-- **补偿式圆角**：可见药丸圆角 = 外圈半径 − 该边 border 宽（CSS corner shaping），故 radius 写
-  `calc(var(--r-row) + 6px) / calc(var(--r-row) + 1px)`（横 +6、纵 +1 各补对应 border），可见圆角
-  才落在 `--r-row`(9px)。直接写 9px 会被 border 压成 3×8 椭圆。
-- **padding 反向补偿**：padding 由原 `9/14/10/8` 改 `8/8/9/2`（各减掉对应 border 宽），使 avatar /
-  sender / chevron 等流内内容的绝对坐标逐像素不变（与 group-header chevron 的 16px 对齐不破）。
-
-⚠️ **工程 gotcha（改 row border / padding 必读）**：绝对定位后代（如 `::after` 未读点、`.ricon` 悬浮钮）
-的 containing block = **padding box**，原点随 border 内移 (+6, +1)。未读点几何 SSoT
-`--unread-dot-{top,left}` 已从 slot 坐标 `36/17` **平移到 padding-box 坐标系 `35/11`**。
-**改 `.email-row` 的 border 宽或 padding 必须同步重算这两个未读点常量**，否则圆点漂移（没法纯 calc，
-因为依赖 inherited line-height resolution）。（原 `::before` 选中左条已于 2026-07-12 dogfood 退役——
-邮件行选中只留 wash 药丸，左条收敛为导航面专属签名；另注意 child tint 选择器特异性 (0,3,0) 会压过
-基础 `:hover` (0,2,0)，行级新状态背景要配同强度 hover 覆盖。）
-
-C10：药丸化后 per-row 底部 1px 分割线（`--row-divider` gradient）退役——行间靠 1px 缝 + wash 区分，
-分隔线仅保留在分组头 `.group-header`（`--row-divider` token 本体保留，folder / drafts 行仍消费）。
+历史：主题 v3 批1 曾把行「药丸化」（透明 border 视觉内缩 + `background-clip: padding-box` +
+补偿式圆角 + divider 退役），2026-07-12 owner 二次实机 review 拍板退役、回归 v2 整行 wash + 左条 +
+per-row divider；药丸实现全文见 git `a576bc48` / `ac002c59`。线程**单行选中**（不整 bundle 连坐）
+保留不回退。
 
 ---
 
