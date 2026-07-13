@@ -798,12 +798,20 @@ describe('serve-api env 注入 — MAILAGENT_DATA_ROOT / CF_* / MAILAGENT_SPA_DI
   test('process.resourcesPath 缺失 (非 Electron 环境) → 不注入 MAILAGENT_SPA_DIR (不崩)', () => {
     appMock.isPackaged = true
     enableGate()
-    // vitest 下 process.resourcesPath 本就 undefined; 断言 serve-api 不因此抛 + 不注入 SPA。
-    const mgr = new BackendLifecycleManager(fastApiOpts())
-    expect(() => mgr.start()).not.toThrow()
-    const apiCall = spawnCalls.find((c) => c.args[0] === 'serve-api')!
-    const env = apiCall.opts.env as NodeJS.ProcessEnv
-    expect(env.MAILAGENT_SPA_DIR).toBeUndefined()
+    // 显式模拟缺失（镜像上一个测试的 defineProperty 手法）：node runner 下
+    // process.resourcesPath 本就 undefined，但 electron-as-node runner 会注入真值 →
+    // 不显式清掉则本用例 runner 相关（曾是全量 electron-as-node 跑的预存假失败）。
+    const orig = process.resourcesPath
+    Object.defineProperty(process, 'resourcesPath', { value: undefined, configurable: true })
+    try {
+      const mgr = new BackendLifecycleManager(fastApiOpts())
+      expect(() => mgr.start()).not.toThrow()
+      const apiCall = spawnCalls.find((c) => c.args[0] === 'serve-api')!
+      const env = apiCall.opts.env as NodeJS.ProcessEnv
+      expect(env.MAILAGENT_SPA_DIR).toBeUndefined()
+    } finally {
+      Object.defineProperty(process, 'resourcesPath', { value: orig, configurable: true })
+    }
   })
 
   test('memleak-orphan: serve + serve-api 都注入 MAILAGENT_PARENT_WATCHDOG=1 + MAILAGENT_MEM_LIMIT_MB 默认 4096', () => {
