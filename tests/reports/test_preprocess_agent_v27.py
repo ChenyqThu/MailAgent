@@ -252,7 +252,17 @@ def test_upgrade_from_v31_adds_mark_read_column_and_backfills_true(tmp_path):
     p = str(tmp_path / "v31.db")
     SyncStore(p)
     conn = sqlite3.connect(p)
-    conn.execute("ALTER TABLE report_agent DROP COLUMN mark_read_after_processing")
+    old_columns = [
+        row[1]
+        for row in conn.execute("PRAGMA table_info(report_agent)").fetchall()
+        if row[1] != "mark_read_after_processing"
+    ]
+    column_list = ", ".join(old_columns)
+    conn.execute(
+        f"CREATE TABLE report_agent_v31 AS SELECT {column_list} FROM report_agent"
+    )
+    conn.execute("DROP TABLE report_agent")
+    conn.execute("ALTER TABLE report_agent_v31 RENAME TO report_agent")
     conn.execute("UPDATE sync_state SET value='31' WHERE key='db_version'")
     conn.commit()
     conn.close()

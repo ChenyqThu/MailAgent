@@ -31,7 +31,19 @@ def test_v33_adds_and_backfills_snippet_idempotently(tmp_path):
             "VALUES (1, ?, 1, 'test')",
             (markdown,),
         )
-        conn.execute("ALTER TABLE email_metadata DROP COLUMN snippet")
+        old_columns = [
+            row[1]
+            for row in conn.execute("PRAGMA table_info(email_metadata)").fetchall()
+            if row[1] != "snippet"
+        ]
+        column_list = ", ".join(old_columns)
+        conn.execute("PRAGMA legacy_alter_table=ON")
+        conn.execute(
+            f"CREATE TABLE email_metadata_v32 AS "
+            f"SELECT {column_list} FROM email_metadata"
+        )
+        conn.execute("DROP TABLE email_metadata")
+        conn.execute("ALTER TABLE email_metadata_v32 RENAME TO email_metadata")
         conn.execute("UPDATE sync_state SET value='32' WHERE key='db_version'")
         conn.commit()
     finally:
