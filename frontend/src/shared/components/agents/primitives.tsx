@@ -210,11 +210,13 @@ export function CadencePill({ cadence }: { cadence: ReportCadence }): React.Reac
 export function Switch({
   on,
   onChange,
-  size = 'md'
+  size = 'md',
+  ariaLabel
 }: {
   on: boolean
   onChange: (v: boolean) => void
   size?: 'sm' | 'md'
+  ariaLabel?: string
 }): React.ReactElement {
   const w = size === 'sm' ? 34 : 40
   const h = size === 'sm' ? 20 : 23
@@ -225,6 +227,7 @@ export function Switch({
       type="button"
       role="switch"
       aria-checked={on}
+      aria-label={ariaLabel}
       onClick={() => onChange(!on)}
       style={{
         width: w,

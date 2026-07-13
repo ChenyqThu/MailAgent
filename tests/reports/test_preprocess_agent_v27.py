@@ -30,6 +30,7 @@ def test_fresh_db_has_column_and_preprocess_seed(db_path):
     assert agent["type"] == "preprocess"
     assert agent["enabled"] == 0  # 占位（真开关走全局 env）
     assert agent["context_docs_json"] == '["soul", "user"]'
+    assert agent["mark_read_after_processing"] == 1
 
 
 def test_double_init_idempotent(tmp_path):
@@ -92,6 +93,7 @@ def test_get_preprocess_config_default_seed(db_path):
     assert pp.context_docs == ["soul", "user"]
     assert pp.model == ""  # 种子未设模型 → 跟随全局 LLM_MODEL
     assert pp.fallback_models is None  # v29 种子未设 fallback → 跟随全局 LLM_FALLBACK_MODELS
+    assert pp.mark_read_after_processing is True
 
 
 def test_get_preprocess_config_after_edit(db_path):
@@ -118,6 +120,7 @@ def test_get_preprocess_config_missing_db_graceful(tmp_path):
     pp = get_preprocess_config(str(tmp_path / "nope.db"))
     assert pp.model == ""
     assert pp.context_docs is None  # 缺库 → None → 运行时回退默认文档集
+    assert pp.mark_read_after_processing is True
 
 
 def test_resolve_agent_null_docs_defaults_for_preprocess(db_path):
@@ -240,3 +243,65 @@ def test_get_preprocess_config_fallback_three_states(db_path):
     assert get_preprocess_config(db_path).fallback_models == []
     store.update_agent(PREPROCESS_AGENT_ID, wire.config_patch_to_db({"fallback_models": None}))
     assert get_preprocess_config(db_path).fallback_models is None
+
+
+# ─── v32: 预处理完成后自动标已读（issue #19 owner 决策）──────────────────────
+
+
+def test_upgrade_from_v31_adds_mark_read_column_and_backfills_true(tmp_path):
+    p = str(tmp_path / "v31.db")
+    SyncStore(p)
+    conn = sqlite3.connect(p)
+    conn.execute("ALTER TABLE report_agent DROP COLUMN mark_read_after_processing")
+    conn.execute("UPDATE sync_state SET value='31' WHERE key='db_version'")
+    conn.commit()
+    conn.close()
+
+    SyncStore(p)
+    conn = sqlite3.connect(p)
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(report_agent)").fetchall()}
+        row = conn.execute(
+            "SELECT mark_read_after_processing FROM report_agent WHERE id = ?",
+            (PREPROCESS_AGENT_ID,),
+        ).fetchone()
+        version = conn.execute(
+            "SELECT value FROM sync_state WHERE key='db_version'"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    assert "mark_read_after_processing" in cols
+    assert row == (1,)
+    assert version == "32"
+
+
+def test_v32_migration_idempotent(tmp_path):
+    p = str(tmp_path / "v32.db")
+    SyncStore(p)
+    SyncStore(p)
+    agent = ReportStore(p).get_agent(PREPROCESS_AGENT_ID)
+    assert agent["mark_read_after_processing"] == 1
+
+
+def test_mark_read_config_roundtrip_and_runtime_hot_read(db_path):
+    store = ReportStore(db_path)
+    assert wire.resolve_agent(store.get_agent(PREPROCESS_AGENT_ID))[
+        "mark_read_after_processing"
+    ] is True
+    store.update_agent(
+        PREPROCESS_AGENT_ID,
+        wire.config_patch_to_db({"mark_read_after_processing": False}),
+    )
+    assert wire.resolve_agent(store.get_agent(PREPROCESS_AGENT_ID))[
+        "mark_read_after_processing"
+    ] is False
+    assert get_preprocess_config(db_path).mark_read_after_processing is False
+
+
+def test_mark_read_null_graceful_defaults_true(db_path):
+    store = ReportStore(db_path)
+    store.update_agent(PREPROCESS_AGENT_ID, {"mark_read_after_processing": None})
+    assert wire.resolve_agent(store.get_agent(PREPROCESS_AGENT_ID))[
+        "mark_read_after_processing"
+    ] is True
+    assert get_preprocess_config(db_path).mark_read_after_processing is True

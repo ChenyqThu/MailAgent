@@ -18,6 +18,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from src.llm_agent.preprocess_config import PreprocessConfig
 from src.mail.reverse_sync import NotionToMailSync
 
 
@@ -125,6 +126,20 @@ class TestComputePayload:
         assert payload == {"is_read": True}
         assert (tr, tf) == (True, False)
 
+    def test_toggle_off_preserves_read_and_flag_payload(self, notion_sync, sync_store, outbox_repo):
+        s = _make_sync(notion_sync, sync_store, outbox_repo)
+        payload, tr, tf = s._compute_payload_and_target(
+            "需要回复", {"is_read": False, "is_flagged": False}, False
+        )
+        assert payload == {"is_flagged": True}
+        assert (tr, tf) == (False, True)
+
+        payload, tr, tf = s._compute_payload_and_target(
+            "仅供参考", {"is_read": False, "is_flagged": True}, False
+        )
+        assert payload == {}
+        assert (tr, tf) == (False, True)
+
 
 # ============================================================
 # sync_single_page — outbox 路径
@@ -166,6 +181,35 @@ class TestOutboxPath:
         await s.sync_single_page(_page(ai_action="仅供参考"))
         kwargs = outbox_repo.enqueue.call_args.kwargs
         assert kwargs["payload"] == {"is_read": True}
+
+    async def test_toggle_off_flag_action_enqueues_flag_only(
+        self, notion_sync, sync_store, outbox_repo, monkeypatch
+    ):
+        monkeypatch.setattr(
+            "src.mail.reverse_sync.get_preprocess_config",
+            lambda _path: PreprocessConfig(mark_read_after_processing=False),
+        )
+        s = _make_sync(notion_sync, sync_store, outbox_repo)
+        await s.sync_single_page(_page(ai_action="需要回复"))
+        assert outbox_repo.enqueue.call_args.kwargs["payload"] == {"is_flagged": True}
+        sync_store.update_local_flags.assert_called_once_with(
+            1001, False, True, processing_status="已同步"
+        )
+
+    async def test_toggle_off_read_action_skips_mailapp_intent(
+        self, notion_sync, sync_store, outbox_repo, monkeypatch
+    ):
+        monkeypatch.setattr(
+            "src.mail.reverse_sync.get_preprocess_config",
+            lambda _path: PreprocessConfig(mark_read_after_processing=False),
+        )
+        sync_store.get.return_value = {"is_read": False, "is_flagged": True}
+        s = _make_sync(notion_sync, sync_store, outbox_repo)
+        await s.sync_single_page(_page(ai_action="仅供参考"))
+        outbox_repo.enqueue.assert_not_called()
+        sync_store.update_local_flags.assert_called_once_with(
+            1001, False, True, processing_status="已同步"
+        )
 
     async def test_email_not_found_skips_outbox(
         self, notion_sync, sync_store, outbox_repo,

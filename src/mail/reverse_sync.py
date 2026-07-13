@@ -22,9 +22,11 @@ Sprint 15 起 (架构纯净化, hotfix 2) + E2-B 收口 (2026-07, outbox 恒启�
 """
 
 from datetime import datetime
+import asyncio
 from typing import Any, Dict, Optional, Tuple
 from loguru import logger
 
+from src.llm_agent.preprocess_config import get_preprocess_config
 from src.mail.sync_store import SyncStore
 from src.mail.sqlite_radar import SQLiteRadar
 from src.notion.sync import NotionSync
@@ -162,7 +164,15 @@ class NotionToMailSync:
             return True
 
         # Sprint 15 SSoT inversion (E2-B 起唯一路径): 写 intent + outbox, fanout 异步派发
-        success = self._enqueue_outbox(internal_id, ai_action, msg_short)
+        preprocess_config = await asyncio.to_thread(
+            get_preprocess_config, self.sync_store.db_path
+        )
+        success = self._enqueue_outbox(
+            internal_id,
+            ai_action,
+            msg_short,
+            mark_read_after_processing=preprocess_config.mark_read_after_processing,
+        )
 
         # 操作失败（邮件可能已被删除），仍标记已同步防止无限重试
         if not success:
@@ -212,24 +222,39 @@ class NotionToMailSync:
         return True
 
     def _compute_payload_and_target(
-        self, ai_action: str, record: Optional[Dict]
+        self,
+        ai_action: str,
+        record: Optional[Dict],
+        mark_read_after_processing: bool = True,
     ) -> Tuple[Dict[str, bool], bool, bool]:
         """ai_action + 当前 SQLite state → outbox payload + 目标 (is_read, is_flagged).
 
-        - FLAG_ACTIONS: payload {is_read:True, is_flagged:True}, target 双 True
-        - READ_ACTIONS / 未知 / 空: payload {is_read:True}, is_flagged 保留 current
+        - toggle=true: 保持既有行为，FLAG_ACTIONS 双 True；其余仅 is_read=True
+        - toggle=false: payload 不含 is_read，target_read 保留当前 SQLite 状态
 
         payload 只含真要改的字段; MailAppFanout 看 payload 决定调哪个 AppleScript.
         target 用于 update_local_flags 立即写 SQLite intent (echo prevention).
         """
+        current_read = bool(record.get("is_read", False)) if record else False
         current_flagged = bool(record.get("is_flagged", False)) if record else False
 
         if ai_action in self.FLAG_ACTIONS:
-            return {"is_read": True, "is_flagged": True}, True, True
-        # READ_ACTIONS / 未知 → 仅标已读, is_flagged 不动
-        return {"is_read": True}, True, current_flagged
+            payload = {"is_flagged": True}
+            if mark_read_after_processing:
+                payload = {"is_read": True, **payload}
+            return payload, True if mark_read_after_processing else current_read, True
+        if mark_read_after_processing:
+            return {"is_read": True}, True, current_flagged
+        return {}, current_read, current_flagged
 
-    def _enqueue_outbox(self, internal_id: int, ai_action: str, msg_short: str) -> bool:
+    def _enqueue_outbox(
+        self,
+        internal_id: int,
+        ai_action: str,
+        msg_short: str,
+        *,
+        mark_read_after_processing: bool = True,
+    ) -> bool:
         """outbox 路径: update_local_flags (echo prevention) + enqueue outbox.
 
         与 handle_ai_reviewed (source='ai_reviewed_handler') / handle_flag_changed
@@ -243,7 +268,7 @@ class NotionToMailSync:
         try:
             record = self.sync_store.get(internal_id) if self.sync_store else None
             payload, target_read, target_flagged = self._compute_payload_and_target(
-                ai_action, record
+                ai_action, record, mark_read_after_processing
             )
 
             # mirror_and_enqueue_flag_sync = update_local_flags (echo prevention,

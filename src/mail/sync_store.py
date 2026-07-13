@@ -375,7 +375,12 @@ class SyncStore:
     #                非 LLM 执行体, 项目周报只把触发配置搬进行, 执行仍 Python 直调)。
     #                幂等: INSERT OR IGNORE (旧库已有则跳过、不覆盖用户改过的 enabled/trigger)。
     #                回滚 (回退 v31): DELETE FROM report_agent WHERE id='project_progress_sync'; 必要时降 db_version。
-    DB_VERSION = 31  # v31: report_agent seed type='project_progress' 单例行（S5 W5a 项目周报迁入框架）
+    # v32 (issue #19 产品化, 2026-07): report_agent 加 mark_read_after_processing INTEGER。
+    #                仅 type='preprocess' 使用：1 = AI 预处理完成后自动标已读，0 = 保持当前
+    #                未读状态。NULL / 缺列按 1 解释，升级迁移同时把 preprocess 行 NULL 回填 1，
+    #                保持既有行为零变化。幂等: ALTER 前 PRAGMA 检查 + UPDATE ... IS NULL。
+    #                回滚 (回退 v32): 列可留（旧代码无害）或手动 DROP；必要时降 db_version。
+    DB_VERSION = 32  # v32: preprocess 行级「处理后自动标已读」开关（默认 true）
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -1233,7 +1238,8 @@ class SyncStore:
                 fallback_models_json TEXT,     -- v29: preprocess 行级 fallback 链 JSON 数组（NULL=跟随全局 LLM_FALLBACK_MODELS）
                 trigger_json TEXT,             -- v30: custom agent 触发判别式（{"v":1,"kind":"cron"|"email_filter",...}；NULL=非事件型，既有三 type 不用）
                 tool_policy_json TEXT,         -- v30: custom agent 工具收窄（{"v":1,"allowed_tools":[...]}；NULL=不额外收窄）
-                budget_json TEXT               -- v30: custom agent 预算（{"v":1,"max_steps","max_runs_per_day","max_run_seconds"}；NULL=全默认）；末列对齐 ALTER 追加位置
+                budget_json TEXT,              -- v30: custom agent 预算（{"v":1,"max_steps","max_runs_per_day","max_run_seconds"}；NULL=全默认）
+                mark_read_after_processing INTEGER -- v32: preprocess 处理后自动标已读（NULL=默认 true）；末列对齐 ALTER 追加位置
             )
         """)
         # report: ReportDoc 块模型 SSoT（blocks_json）+ 列表展示冗余字段。
@@ -1769,6 +1775,32 @@ class SyncStore:
                 f"v31 migration: project_progress_sync seeded "
                 f"(enabled={_pp_enabled}, subject={_pp_subject!r}, sender={_pp_sender!r})"
             )
+
+        # === v32: preprocess 行级「处理后自动标已读」开关 ===
+        # 新库 CREATE 已含 → PRAGMA 跳过；旧库补 INTEGER 列。NULL 语义仍是默认 true，
+        # 但对固定 preprocess 行显式回填 1，便于 Settings 读写与数据审计。UPDATE 幂等。
+        if current_version < 32:
+            try:
+                _pa_cols = {r[1] for r in cursor.execute("PRAGMA table_info(report_agent)").fetchall()}
+                if "mark_read_after_processing" not in _pa_cols:
+                    cursor.execute(
+                        "ALTER TABLE report_agent ADD COLUMN mark_read_after_processing INTEGER"
+                    )
+                    logger.info("v32 migration: report_agent +mark_read_after_processing")
+            except sqlite3.OperationalError as e:
+                _migration_guard_columns(
+                    cursor,
+                    "report_agent",
+                    {"mark_read_after_processing"},
+                    "v32 migration",
+                    e,
+                )
+            cursor.execute(
+                "UPDATE report_agent SET mark_read_after_processing = 1 "
+                "WHERE id = 'email_preprocess_agent' "
+                "AND mark_read_after_processing IS NULL"
+            )
+            logger.info("v32 migration: preprocess mark_read_after_processing defaulted to 1")
 
         # 更新数据库版本 —— E0-WP3: 只有**全部迁移成功**才会执行到这里。任何迁移块
         # 真失败都会 raise (见 _migration_guard_columns/_migration_guard_index),

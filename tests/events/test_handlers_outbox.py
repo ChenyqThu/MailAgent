@@ -23,6 +23,7 @@ import pytest
 
 from src.events.handlers import EventHandlers
 from src.mail.sync_store import SyncStore
+from src.reports.store import ReportStore
 from src.sync.outbox import OutboxRepository
 
 
@@ -334,6 +335,58 @@ class TestAiReviewedWithOutbox:
         rows = outbox_repo.list_by_internal_id(5001)
         mailapp_row = next(r for r in rows if r.target == "mailapp")
         assert mailapp_row.payload == {"is_read": True, "is_flagged": False}
+
+    async def test_mark_read_toggle_off_preserves_unread_and_flag_flow(
+        self, handlers_with_outbox, outbox_repo, sync_store
+    ):
+        ReportStore(str(sync_store.db_path)).update_agent(
+            "email_preprocess_agent", {"mark_read_after_processing": 0}
+        )
+
+        await handlers_with_outbox.handle_ai_reviewed({
+            "page_id": "page-uuid-abc",
+            "properties": {
+                "message_id": "<msg-uuid@example.com>",
+                "ai_action": "需要回复",
+                "ai_priority": "🟢 普通",
+                "mailbox": "收件箱",
+            },
+        })
+
+        rows = outbox_repo.list_by_internal_id(5001)
+        mailapp_row = next(r for r in rows if r.target == "mailapp")
+        notion_row = next(r for r in rows if r.target == "notion")
+        assert mailapp_row.payload == {"is_flagged": True}
+        assert notion_row.payload == {
+            "is_flagged": True,
+            "processing_status": "已同步",
+        }
+        record = sync_store.get(5001)
+        assert record["is_read"] == 0
+        assert record["is_flagged"] == 1
+        assert record["processing_status"] == "已同步"
+
+    async def test_mark_read_toggle_off_missing_email_omits_notion_read(
+        self, handlers_with_outbox, notion_sync, sync_store
+    ):
+        ReportStore(str(sync_store.db_path)).update_agent(
+            "email_preprocess_agent", {"mark_read_after_processing": 0}
+        )
+        await handlers_with_outbox.handle_ai_reviewed({
+            "page_id": "page-missing",
+            "properties": {
+                "message_id": "<missing@example.com>",
+                "ai_action": "需要回复",
+                "ai_priority": "🟢 普通",
+                "mailbox": "收件箱",
+            },
+        })
+        notion_sync.update_email_flags.assert_called_once_with(
+            "page-missing",
+            is_read=None,
+            is_flagged=True,
+            processing_status="已同步",
+        )
 
 
 # ============================================================

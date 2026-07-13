@@ -157,10 +157,12 @@ pending → fetch_failed → (重试) → synced
 
 **反向同步 Action Type 映射（Sprint 15 后 outbox 路径）：**
 
-| Action Type | Outbox payload (target=mailapp) | 飞书通知 |
-|------------|---------------------------------|---------|
-| 需要回复/需要决策/需要Review/需要会议/需要跟进/等待响应 | `{is_read: true, is_flagged: true}` | 紧急/重要时推送卡片（含「✨ 优化回复」「📝 创建草稿」按钮 → Openclaw） |
-| 仅供参考/已完结 | `{is_read: true}` (is_flagged 不动) | 否 |
+| Action Type | 默认 payload（`mark_read_after_processing=true`） | 开关关闭时 | 飞书通知 |
+|------------|---------------------------------|---------|---------|
+| 需要回复/需要决策/需要Review/需要会议/需要跟进/等待响应 | `{is_read: true, is_flagged: true}` | `{is_flagged: true}`，保留当前 `is_read` | 紧急/重要时推送卡片（含「✨ 优化回复」「📝 创建草稿」按钮 → Openclaw） |
+| 仅供参考/已完结 | `{is_read: true}` (is_flagged 不动) | mailapp payload 为空，保留当前 `is_read/is_flagged` | 否 |
+
+`mark_read_after_processing` 是 `report_agent(id='email_preprocess_agent')` 的行级配置（DB v32，`NULL` 也按 true）；仅约束 AI 预处理完成后的两条反向链路，不影响前端/CLI 主动标已读或 `is_read=false` 写面。
 
 **双向完成闭环：**
 - Mail.app 取消旗标 → 正向同步 → Notion `Is Flagged=False` + `Processing Status=已完成`

@@ -86,6 +86,13 @@ def resolve_agent(agent: Dict[str, Any]) -> Dict[str, Any]:
         fallback_models = [str(x) for x in _parsed_fb]
     else:
         fallback_models = None
+    # v32: preprocess 行级「处理后自动标已读」。NULL / 缺列默认 true，保证升级前后
+    # 行为零变化；非 preprocess 不暴露此语义，投影也保持 true 便于前端类型稳定。
+    mark_read_after_processing = (
+        bool(agent.get("mark_read_after_processing"))
+        if agent_type == "preprocess" and agent.get("mark_read_after_processing") is not None
+        else True
+    )
     # tools_json → list（DB 存 JSON 串）。NULL/非法：type='search' 回退默认搜索工具,
     # 其余（report）回退空 list（report agent 历史上 tools_json 全 NULL, 不破坏其投影）。
     _tools_default = ["email_search_fulltext"] if agent_type == "search" else []
@@ -135,6 +142,7 @@ def resolve_agent(agent: Dict[str, Any]) -> Dict[str, Any]:
         "body_full_priorities": body_full_priorities,
         "context_docs": context_docs,  # v27: 文档勾选（preprocess + report 增量 2）
         "fallback_models": fallback_models,  # v29: preprocess 行级 fallback（null=跟随全局）
+        "mark_read_after_processing": mark_read_after_processing,
         "trigger": trigger,  # v30: custom agent 触发判别式（null=非事件型）
         "tool_policy": tool_policy,  # v30: custom agent 工具收窄（null=不额外收窄）
         "budget": budget,  # v30: custom agent 预算（null=全默认）
@@ -221,6 +229,11 @@ def config_patch_to_db(raw: Dict[str, Any]) -> Dict[str, Any]:
             )
         else:
             raise ValueError("fallback_models must be list or null")
+    if "mark_read_after_processing" in raw:
+        value = raw["mark_read_after_processing"]
+        if not isinstance(value, bool):
+            raise ValueError("mark_read_after_processing must be bool")
+        db_patch["mark_read_after_processing"] = 1 if value else 0
     # v30: custom agent 三列（trigger/tool_policy/budget）。dict → JSON 串；None → SQL NULL
     # （清空该配置）；非 dict → ValueError（结构闸）。深校验（trigger 判别式 / cron 合法性 /
     # ReDoS 长度）由 set_config(REST)/CLI config-set 的 validate_agent_config_patch → parse_trigger

@@ -3,8 +3,9 @@
 预处理 = Agents 页 type='preprocess' 的 Custom Agent（id='email_preprocess_agent'）。
 它的模型（model 列，空 = 跟随全局 LLM_MODEL）+ 文档勾选（context_docs_json 列）+
 fallback 链（fallback_models_json 列，v29：NULL = 跟随全局 LLM_FALLBACK_MODELS）存在
-report_agent 表（sync_store.db）。开关走全局 env（LLM_AGENT_ENABLED）。本模块只取
-model/docs/fallback 供 LLMProcessor 叠加 —— 不填 = 字节级回退全局默认。
+report_agent 表（sync_store.db）。处理后自动标已读开关（mark_read_after_processing，v32）
+也在同一行，NULL / 缺列 = true。全局启用开关仍走 env（LLM_AGENT_ENABLED）。本模块取
+model/docs/fallback/mark-read 供运行链热读 —— 不填 = 字节级回退既有默认。
 
 v1.1.0 dogfood 起 persona 层已移除：身份/偏好由 Standing Context 文档注入
 （context_docs 勾选 soul/user 等），不再有独立 persona 覆写；旧行残留的 prompt
@@ -17,6 +18,7 @@ v1.1.0 dogfood 起 persona 层已移除：身份/偏好由 Standing Context 文�
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from dataclasses import dataclass
 from typing import List, Optional
@@ -38,16 +40,21 @@ class PreprocessConfig:
     # fallback_models_json 列（v29）—— None = 跟随全局 LLM_FALLBACK_MODELS；
     # [] = 显式不设兜底；[m, ...] = 预处理专用 fallback 链。
     fallback_models: Optional[List[str]] = None
+    # mark_read_after_processing 列（v32）—— NULL / 缺列 = 默认 true。
+    mark_read_after_processing: bool = True
 
 
-def get_preprocess_config(db_path: str) -> PreprocessConfig:
+def get_preprocess_config(db_path: str | os.PathLike[str]) -> PreprocessConfig:
     """读 report_agent 的 preprocess 行 → model + context_docs + fallback。任何缺失 graceful 空。"""
+    if not isinstance(db_path, (str, os.PathLike)):
+        return PreprocessConfig()
     try:
         conn = sqlite3.connect(db_path, timeout=5.0)
         try:
             conn.row_factory = sqlite3.Row
             row = conn.execute(
-                "SELECT model, context_docs_json, fallback_models_json "
+                "SELECT model, context_docs_json, fallback_models_json, "
+                "mark_read_after_processing "
                 "FROM report_agent WHERE id = ?",
                 (PREPROCESS_AGENT_ID,),
             ).fetchone()
@@ -81,5 +88,12 @@ def get_preprocess_config(db_path: str) -> PreprocessConfig:
         except (json.JSONDecodeError, TypeError):
             fallback_models = None
     return PreprocessConfig(
-        model=model, context_docs=context_docs, fallback_models=fallback_models
+        model=model,
+        context_docs=context_docs,
+        fallback_models=fallback_models,
+        mark_read_after_processing=(
+            True
+            if row["mark_read_after_processing"] is None
+            else bool(row["mark_read_after_processing"])
+        ),
     )

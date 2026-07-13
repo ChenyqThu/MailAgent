@@ -85,6 +85,7 @@ export function PreprocessConfigDrawer({
   const [modelDirty, setModelDirty] = useState(false)
   const [fallbackModel, setFallbackModel] = useState<string>(FALLBACK_FOLLOW_GLOBAL)
   const [fallbackModelDirty, setFallbackModelDirty] = useState(false)
+  const [markReadAfterProcessing, setMarkReadAfterProcessing] = useState(true)
   const [contextDocs, setContextDocs] = useState<string[]>([])
   const [envSaving, setEnvSaving] = useState(false)
   // 分类 prompt 编辑草稿（收件箱/发件箱 tab，textarea 可编辑，保存写回 .md 文件）——
@@ -125,6 +126,7 @@ export function PreprocessConfigDrawer({
           : cfg.fallback_models[0]
     )
     setContextDocs(cfg.context_docs ?? [])
+    setMarkReadAfterProcessing(cfg.mark_read_after_processing ?? true)
     setEnabledDirty(false)
     setModelDirty(false)
     setFallbackModelDirty(false)
@@ -222,7 +224,7 @@ export function PreprocessConfigDrawer({
     }
     // 3) row 保存：模型（#8-ext 行级 model 列；空串 = 跟随全局 LLM_MODEL，config_patch_to_db
     //    原样落列、resolve_agent 非 report 不回填默认）+ fallback（R2 #2 行级列；null =
-    //    重置回跟随全局、[] = 显式不设、[m] = 单模型链）+ 文档勾选。改行级值立即生效
+    //    重置回跟随全局、[] = 显式不设、[m] = 单模型链）+ 自动标已读 + 文档勾选。改行级值立即生效
     //    （分类每封邮件重读 preprocess 行），无需重启。
     try {
       await save(PREPROCESS_AGENT_ID, {
@@ -237,7 +239,8 @@ export function PreprocessConfigDrawer({
                     : [fallbackModel]
             }
           : {}),
-        context_docs: contextDocs
+        context_docs: contextDocs,
+        mark_read_after_processing: markReadAfterProcessing
       })
       onClose()
     } catch (e: unknown) {
@@ -347,12 +350,38 @@ export function PreprocessConfigDrawer({
               >
                 <Switch
                   on={enabled}
+                  ariaLabel={t('agents.preprocess.enable')}
                   onChange={(v) => {
                     setEnabled(v)
                     setEnabledDirty(true)
                   }}
                 />
               </span>
+            </div>
+
+            <div
+              className="flex items-center"
+              style={{
+                gap: 12,
+                padding: '13px 14px',
+                borderRadius: 10,
+                background: 'rgb(var(--ink-2) / 0.55)',
+                border: '1px solid rgb(var(--ink-border))'
+              }}
+            >
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 13.5, fontWeight: 500, color: 'rgb(var(--ink-fg))' }}>
+                  {t('agents.preprocess.markReadAfterProcessing')}
+                </div>
+                <div style={{ fontSize: 12, color: 'rgb(var(--ink-fg-3))', marginTop: 2 }}>
+                  {t('agents.preprocess.markReadAfterProcessingHint')}
+                </div>
+              </div>
+              <Switch
+                on={markReadAfterProcessing}
+                ariaLabel={t('agents.preprocess.markReadAfterProcessing')}
+                onChange={setMarkReadAfterProcessing}
+              />
             </div>
 
             {/* 模型（row.model，PATCH 保存立即生效）—— #8-ext：与 chat 的全局默认（LLM_MODEL）

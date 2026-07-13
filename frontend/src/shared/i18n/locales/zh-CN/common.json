@@ -2866,6 +2866,8 @@
       "viewStats": "查看处理统计",
       "enable": "启用邮件预处理",
       "enableHint": "开启本地 LLM 对新邮件自动分类（全局开关 LLM_AGENT_ENABLED）。需重启服务后生效。",
+      "markReadAfterProcessing": "预处理完成后自动标已读",
+      "markReadAfterProcessingHint": "关闭后，AI 仍会分类、标旗并更新处理状态，但不会改变邮件当前的已读/未读状态。保存即生效。",
       "restartHint": "需重启生效",
       "modelHint": "预处理专用模型，保存即生效（不影响 Chat）；「跟随全局」= 用全局默认模型",
       "modelFollowGlobal": "跟随全局默认（{model}）",

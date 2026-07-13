@@ -28,6 +28,7 @@ _AGENT_PATCH_FIELDS = {
     "body_full_priorities",
     "context_docs_json",  # v27: preprocess agent 的文档勾选（JSON 数组 of profile-doc 名）
     "fallback_models_json",  # v29: preprocess 行级 fallback 链（JSON 数组；NULL=跟随全局）
+    "mark_read_after_processing",  # v32: preprocess 处理后自动标已读（0/1）
     "trigger_json",  # v30: custom agent 触发判别式（cron|email_filter；NULL=非事件型）
     "tool_policy_json",  # v30: custom agent 工具收窄（allowed_tools 交集；NULL=不额外收窄）
     "budget_json",  # v30: custom agent 预算（max_steps/runs_per_day/run_seconds；NULL=全默认）

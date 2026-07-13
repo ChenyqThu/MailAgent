@@ -323,16 +323,16 @@ class QueryOps:
     async def update_email_flags(
         self,
         page_id: str,
-        is_read: bool,
+        is_read: Optional[bool],
         is_flagged: bool,
         processing_status: str = ""
     ):
         """更新邮件的 Is Read / Is Flagged 状态到 Notion"""
         try:
-            properties = {
-                "Is Read": {"checkbox": is_read},
-                "Is Flagged": {"checkbox": is_flagged},
-            }
+            properties = {}
+            if is_read is not None:
+                properties["Is Read"] = {"checkbox": is_read}
+            properties["Is Flagged"] = {"checkbox": is_flagged}
             if processing_status:
                 properties["Processing Status"] = {"select": {"name": processing_status}}
 
@@ -341,7 +341,7 @@ class QueryOps:
                 properties=properties
             )
 
-            logger.debug(f"Flags updated for {page_id}: read={is_read}, flagged={is_flagged}, status={processing_status or 'unchanged'}")
+            logger.debug(f"Flags updated for {page_id}: read={is_read if is_read is not None else 'unchanged'}, flagged={is_flagged}, status={processing_status or 'unchanged'}")
 
         except Exception as e:
             logger.error(f"Failed to update flags for {page_id}: {e}")

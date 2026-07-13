@@ -2866,6 +2866,8 @@
       "viewStats": "View processing stats",
       "enable": "Enable email preprocessing",
       "enableHint": "Turn on local LLM auto-classification for new mail (global switch LLM_AGENT_ENABLED). Requires a service restart to take effect.",
+      "markReadAfterProcessing": "Mark as read after preprocessing",
+      "markReadAfterProcessingHint": "When off, AI still classifies, flags, and updates processing status without changing the message's current read state. Effective on save.",
       "restartHint": "Restart required",
       "modelHint": "Dedicated preprocessing model, effective on save (does not affect Chat); \"Follow global\" = use the global default model",
       "modelFollowGlobal": "Follow global default ({model})",

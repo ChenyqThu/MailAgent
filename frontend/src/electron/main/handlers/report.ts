@@ -86,6 +86,7 @@ interface AgentRow {
   body_full_priorities?: string | null
   context_docs_json?: string | null
   fallback_models_json?: string | null
+  mark_read_after_processing?: number | null
   // v30 custom agent 三列（仅 type='custom' 解析，对齐 wire.resolve_agent）。
   trigger_json?: string | null
   tool_policy_json?: string | null
@@ -137,6 +138,9 @@ function _toAgentConfig(row: AgentRow): ReportAgentConfig {
       row.type === 'preprocess'
         ? _parseJson<string[] | null>(row.fallback_models_json, null)
         : null,
+    // v32 preprocess：NULL/缺列默认 true，保持升级前行为；非 preprocess 也投影 true 保持类型稳定。
+    mark_read_after_processing:
+      row.type === 'preprocess' ? row.mark_read_after_processing !== 0 : true,
     // v30/v31：trigger 对 custom + project_progress 解析（其余恒 null）；tool_policy/budget 仅 custom。
     trigger: projectsTrigger ? _parseJson<CustomAgentTrigger | null>(row.trigger_json, null) : null,
     tool_policy: isCustom

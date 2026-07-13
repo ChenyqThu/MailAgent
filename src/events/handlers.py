@@ -16,6 +16,7 @@ import time
 from typing import TYPE_CHECKING, Awaitable, Callable, Dict, Optional
 from loguru import logger
 
+from src.llm_agent.preprocess_config import get_preprocess_config
 from src.mail.charset_utils import decode_mime_bytes
 from src.mail.sync_store import SyncStore
 from src.notify.feishu import FeishuNotifier
@@ -245,6 +246,10 @@ class EventHandlers:
             record = self.sync_store.get_by_message_id(message_id)
             if record:
                 internal_id = record.get('internal_id') if isinstance(record, dict) else getattr(record, 'internal_id', None)
+        preprocess_config = await asyncio.to_thread(
+            get_preprocess_config, self.sync_store.db_path
+        )
+        mark_read_after_processing = preprocess_config.mark_read_after_processing
 
         # Mail.app 标旗/已读
         # Sprint 15: 写 outbox(target='mailapp', source='ai_reviewed_handler')
@@ -256,12 +261,15 @@ class EventHandlers:
         # SQLite 看不到状态). 跟 update_email_flags Notion 端写的'已同步'口径一致.
         if internal_id:
             target_flagged = ai_action in self.FLAG_ACTIONS
-            payload = {'is_read': True, 'is_flagged': target_flagged}
+            current_read = bool(record.get('is_read', False)) if isinstance(record, dict) else False
+            payload = {'is_flagged': target_flagged}
+            if mark_read_after_processing:
+                payload = {'is_read': True, **payload}
             result = mirror_and_enqueue_flag_sync(
                 self.sync_store,
                 self.outbox_repo,
                 internal_id,
-                local_read=True,
+                local_read=True if mark_read_after_processing else current_read,
                 local_flagged=target_flagged,
                 local_processing_status='已同步',
                 mailapp_payload=payload,
@@ -329,10 +337,11 @@ class EventHandlers:
 
                 if internal_id:
                     notion_payload = {
-                        'is_read': True,
                         'is_flagged': is_flagged_for_notion,
                         'processing_status': '已同步',
                     }
+                    if mark_read_after_processing:
+                        notion_payload = {'is_read': True, **notion_payload}
                     # 只入队不重复镜像 — SQLite mirror 已在上方 Mail.app leg 做过。
                     enqueue_flag_sync(
                         self.outbox_repo,
@@ -349,7 +358,7 @@ class EventHandlers:
                     # Notion 端 flags 直接 API 更新（非灰度回退, outbox=on 一直可达）。
                     await self.notion_sync.update_email_flags(
                         page_id,
-                        is_read=True,
+                        is_read=True if mark_read_after_processing else None,
                         is_flagged=is_flagged_for_notion,
                         processing_status="已同步"
                     )

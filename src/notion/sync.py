@@ -271,7 +271,7 @@ class NotionSync:
     async def update_email_flags(
         self,
         page_id: str,
-        is_read: bool,
+        is_read: Optional[bool],
         is_flagged: bool,
         processing_status: str = ""
     ):

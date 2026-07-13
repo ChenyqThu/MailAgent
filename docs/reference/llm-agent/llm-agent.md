@@ -52,10 +52,11 @@ AI 邮件预处理在前端是 Agents 页的一张 Custom Agent 卡片（`report
 
 - **模型行级覆写**：`report_agent.model` 列，空 = 跟随全局 `LLM_MODEL`。chat gateway 的默认模型与预处理自此解耦（改 chat 默认模型不再影响分类）。
 - **fallback 行级三态**（`fallback_models_json` 列，DB v29）：`NULL` = 跟随全局 `LLM_FALLBACK_MODELS`；`[]` = 显式不设兜底；`[m, ...]` = 预处理专用 fallback 链。
+- **处理后自动标已读**（`mark_read_after_processing` 列，DB v32）：默认/`NULL`/`1` = 保持既有语义，AI Reviewed 后同步 `is_read=true`；`0` = 只同步旗标与 `Processing Status='已同步'`，SQLite、Mail.app/Exchange、Notion 均保留邮件当前已读状态。Settings 保存即热生效。
 - **model_chain 构造**（`processor.py:process_email`）：model 空 + fallback NULL（双跟随）→ 传 `None` 走 `classify` 内建全局链，行为字节级同拆分前；任一被定制 → 显式链 `[行模型 or LLM_MODEL, *有效 fallback]`。
 - **身份文档勾选**（`context_docs_json` 列，DB v27）：`NULL` = 默认注入 soul+user（`build_task_identity_context` 默认）；`[]` = 不注入任何身份文档。**persona 覆写层已随 v1.1.0 移除** —— 身份/偏好统一由 Standing Context 文档注入，旧行残留的 `prompt` 列值一律忽略。
 - **分类 prompt 编辑**（v1.3.0 dogfood 起可写）：预处理抽屉内 inbox/sent tab 直接编辑，桌面走 `prompts:read/write` IPC、远程 web 走 `GET/PUT /api/prompts/{slot}`（settings router，路径 clamp 在 data root）。文件仍是 SSoT（`prompts/*.md` 或 `LLM_INBOX_PROMPT_PATH` / `LLM_SENT_PROMPT_PATH`，PromptLoader mtime 热加载 —— 保存即生效无需重启）。旧只读端点 `GET /api/llm/preprocess-prompts` 已删除。
-- **PATCH 面**：`src/reports/store.py` 的 `_AGENT_PATCH_FIELDS` 白名单含 `model` / `context_docs_json` / `fallback_models_json`。
+- **PATCH 面**：`src/reports/store.py` 的 `_AGENT_PATCH_FIELDS` 白名单含 `model` / `context_docs_json` / `fallback_models_json` / `mark_read_after_processing`。
 
 ## 模块结构
 
