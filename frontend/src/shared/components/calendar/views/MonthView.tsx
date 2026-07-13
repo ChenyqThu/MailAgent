@@ -9,6 +9,7 @@ import { useTranslation } from 'react-i18next'
 import { CalendarQueryError } from '../CalendarQueryError'
 import { EventChip } from '../EventChip'
 import { isTodayLocal, ymd } from '../lib/format'
+import { DOW_EN } from '../lib/weekdays'
 import {
   useCalendarEventsInWindow,
   startOfMonth,
@@ -34,7 +35,6 @@ interface Props {
   selectedKey?: string | null
 }
 
-const DOW_EN = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN']
 const MAX_VISIBLE = 3
 
 // F32 — ymd/isTodayLocal 抽到 ../lib/format
@@ -262,7 +262,11 @@ export function MonthView({
                       maxHeight: Math.max(120, Math.floor((flip ? spaceAbove : spaceBelow) - 8)),
                       flip,
                       items: sorted,
-                      dayLabel: `${monthN} 月 ${d.getDate()} 日`,
+                      // F26 — more-pop 日期标签 t() 化 (批 2 落地时仍硬编码)
+                      dayLabel: t('calendar.view.month.popDayLabel', '{m} 月 {d} 日', {
+                        m: monthN,
+                        d: d.getDate()
+                      }),
                       ...(flip
                         ? { bottom: window.innerHeight - rect.top + 6 }
                         : { top: rect.bottom + 6 })

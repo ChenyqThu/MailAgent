@@ -15,7 +15,7 @@ import { AlertTriangle, Calendar as CalendarIcon, RefreshCw } from 'lucide-react
 import { useTranslation } from 'react-i18next'
 
 import { EmptyState } from '@shared/components/feedback/EmptyState'
-import { useCalendarSyncStatus } from '../hooks/useCalendarEvents'
+import { pickSyncHead, useCalendarSyncStatus } from '../hooks/useCalendarEvents'
 
 interface Props {
   /** 正常空态标题 (视图各自的「本周/本日无日程」). */
@@ -25,7 +25,8 @@ interface Props {
 export function CalendarViewEmpty({ emptyTitle }: Props): React.ReactElement {
   const { t } = useTranslation()
   const { data: syncStatus, isLoading } = useCalendarSyncStatus()
-  const head = syncStatus?.find((s) => !s.last_error) ?? syncStatus?.[0]
+  // F19/Q6 — 健康优先选行统一走 pickSyncHead (与 Toolbar sync-pill / Layout 同源).
+  const head = pickSyncHead(syncStatus)
   const syncFailed = !!head?.last_error
   const neverSynced =
     !isLoading &&

@@ -10,15 +10,20 @@
 import { useEffect, useRef, useState } from 'react'
 import { Check, ChevronLeft, ChevronRight, ListFilter, Plus, RefreshCw } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import type { TFunction } from 'i18next'
 
 import { gsap, useGSAP, DUR } from '@shared/lib/gsap'
 import { useReducedMotion } from '@shared/hooks/useReducedMotion'
 
 import { EventFormModal } from './EventFormModal'
+import { IS_WEB_BUILD } from './lib/capabilities'
+import { weekdayLong } from './lib/weekdays'
 import {
   useCalendarSyncTrigger,
   useCalendarSyncStatus,
+  pickSyncHead,
   startOfWeek,
+  stepViewDate,
   addDays,
   relativeTime,
   useNowTick
@@ -29,26 +34,21 @@ import { type CalendarView } from '@shared/router-instance'
 // 兼容旧 import — 历史代码 `import { type CalendarView } from './CalendarToolbar'`
 export type { CalendarView }
 
-const WEEK_CHAR = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
-
-function fmtRangeLabel(view: CalendarView, d: Date): string {
-  if (view === 'today') return `${d.getMonth() + 1}/${d.getDate()} ${WEEK_CHAR[d.getDay()]}`
+// F26 (阶段1·1.7) — 硬编码中文 t() 化; 周几走 weekdayLong 单源 (lib/weekdays).
+function fmtRangeLabel(t: TFunction, view: CalendarView, d: Date): string {
+  if (view === 'today') return `${d.getMonth() + 1}/${d.getDate()} ${weekdayLong(t, d.getDay())}`
   if (view === 'week') {
     const start = startOfWeek(d)
     const end = addDays(start, 6)
     return `${start.getMonth() + 1}/${start.getDate()} – ${end.getMonth() + 1}/${end.getDate()}`
   }
-  if (view === 'month') return `${d.getFullYear()} 年 ${d.getMonth() + 1} 月`
-  if (view === 'agenda') return '未来 14 天'
-  return '全部定期事件'
-}
-
-function step(view: CalendarView, dir: 1 | -1, base: Date): Date {
-  const d = new Date(base)
-  if (view === 'today') d.setDate(d.getDate() + dir)
-  else if (view === 'week') d.setDate(d.getDate() + dir * 7)
-  else if (view === 'month') d.setMonth(d.getMonth() + dir)
-  return d
+  if (view === 'month')
+    return t('calendar.shared.yearMonth', '{y} 年 {m} 月', {
+      y: d.getFullYear(),
+      m: d.getMonth() + 1
+    })
+  if (view === 'agenda') return t('calendar.toolbar.range.agenda', '未来 14 天')
+  return t('calendar.toolbar.range.recurring', '全部定期事件')
 }
 
 interface Props {
@@ -149,15 +149,14 @@ export function CalendarToolbar({
   }
 
   const showDateNav = view === 'today' || view === 'week' || view === 'month'
-  // 健康优先选行：有任一无错误的日历就显绿，避免后端残留的孤儿行（端口配错期间用
-  // fallback 假名 'calendar' 建的行带旧错，字母序排在真实 '日历' 前）被盲取 [0] →
-  // sync-pill 常红。后端 clear_stale_errors 清孤儿根治；此处兜底，新孤儿出现也不误报。
-  const head = syncStatus?.find((s) => !s.last_error) ?? syncStatus?.[0]
+  // F19/Q6 — 健康优先选行统一走 pickSyncHead (与 Layout 副 status bar /
+  // CalendarViewEmpty 同源, 孤儿行场景不再上绿下红).
+  const head = pickSyncHead(syncStatus)
   const lastIso = head?.last_incremental_sync_at_iso ?? head?.last_full_sync_at_iso ?? null
   const lastDate = lastIso ? new Date(lastIso) : null
   const lastError = head?.last_error ?? null
   const hasErr = !!lastError
-  const rangeLabel = fmtRangeLabel(view, currentDate)
+  const rangeLabel = fmtRangeLabel(t, view, currentDate)
 
   return (
     <div className="shrink-0 px-5 pt-4 pb-3 flex items-center gap-4 flex-wrap">
@@ -177,7 +176,7 @@ export function CalendarToolbar({
           <button
             type="button"
             className="nav-btn"
-            onClick={() => onDateChange(step(view, -1, currentDate))}
+            onClick={() => onDateChange(stepViewDate(view, -1, currentDate))}
             aria-label={t('calendar.toolbar.prevAria', '上一段')}
             title={t('calendar.toolbar.prevTitle', '上一段 (←)')}
           >
@@ -194,7 +193,7 @@ export function CalendarToolbar({
           <button
             type="button"
             className="nav-btn"
-            onClick={() => onDateChange(step(view, 1, currentDate))}
+            onClick={() => onDateChange(stepViewDate(view, 1, currentDate))}
             aria-label={t('calendar.toolbar.nextAria', '下一段')}
             title={t('calendar.toolbar.nextTitle', '下一段 (→)')}
           >
@@ -289,16 +288,19 @@ export function CalendarToolbar({
         </div>
       )}
 
-      {/* Phase 2.5 §11.1 — [+ 新建] coral primary (跟 mockup-event-form §toolbar 一致) */}
-      <button
-        type="button"
-        className="btn-coral"
-        onClick={() => setCreateModalOpen(true)}
-        title={t('calendar.toolbar.newTitle', '新建事件 — 直接写到 Exchange (CalDAV PUT)')}
-      >
-        <Plus size={14} strokeWidth={2.4} />
-        <span>{t('calendar.toolbar.newBtn', '新建')}</span>
-      </button>
+      {/* Phase 2.5 §11.1 — [+ 新建] coral primary (跟 mockup-event-form §toolbar 一致)
+          F14/Q9 — 远程 web 隐藏 (eventCreate 是 HttpApi stub); 阶段 3 能力表替换. */}
+      {!IS_WEB_BUILD && (
+        <button
+          type="button"
+          className="btn-coral"
+          onClick={() => setCreateModalOpen(true)}
+          title={t('calendar.toolbar.newTitle', '新建事件 — 直接写到 Exchange (CalDAV PUT)')}
+        >
+          <Plus size={14} strokeWidth={2.4} />
+          <span>{t('calendar.toolbar.newBtn', '新建')}</span>
+        </button>
+      )}
 
       {/* sync — nav-btn 拉宽 (mockup inline style) + sync-pill CSS-only hover tip */}
       <div className="flex items-center gap-2">

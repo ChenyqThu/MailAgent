@@ -23,6 +23,8 @@ import type {
 } from '@shared/api/types'
 import { toastError, toastSuccess } from '@shared/state/toast'
 import { qk } from '@shared/lib/queryKeys'
+// type-only: router-instance ↔ calendar 组件间已有类型环 (CalendarToolbar 同款), 编译期擦除.
+import type { CalendarView } from '@shared/router-instance'
 import { filterOccurrencesByCalendars } from '../lib/calendar-filter'
 
 // Re-export from the queryKeys factory (single literal source, P2-8).
@@ -122,6 +124,18 @@ export function useCalendarSyncStatus(): {
   }
 }
 
+/** F19/Q6 (阶段1·1.8) — sync 状态「健康优先选行」单源: 有任一无错误的日历行就
+ *  选它, 避免后端残留的孤儿行 (端口配错期间用 fallback 假名 'calendar' 建的行带
+ *  旧错, 字母序排在真实 '日历' 前) 被盲取 [0] → 指示灯误报常红. 后端
+ *  clear_stale_errors 清孤儿根治; 此处兜底, 新孤儿出现也不误报.
+ *  Toolbar sync-pill / Layout 副 status bar / CalendarViewEmpty 三处消费必须
+ *  同源 (F19: 曾各写一遍, 孤儿行场景 sync-pill 绿 · status bar 红同屏矛盾). */
+export function pickSyncHead(
+  syncStatus: CalendarSyncStateItem[] | undefined
+): CalendarSyncStateItem | undefined {
+  return syncStatus?.find((s) => !s.last_error) ?? syncStatus?.[0]
+}
+
 export function useCalendarNames(): {
   data: string[] | undefined
   isLoading: boolean
@@ -199,6 +213,17 @@ export function endOfMonth(date: Date): Date {
 export function addDays(date: Date, n: number): Date {
   const d = new Date(date)
   d.setDate(d.getDate() + n)
+  return d
+}
+
+/** F25 (阶段1·1.11) — 视图日期步进 (← / → / 快捷键): day ±1 天 / week ±7 天 /
+ *  month ±1 月; agenda / recurring 无步进语义, 原样返回副本.
+ *  CalendarToolbar 与 CalendarLayout 共用 (曾逐字重复两份). */
+export function stepViewDate(view: CalendarView, dir: 1 | -1, base: Date): Date {
+  const d = new Date(base)
+  if (view === 'today') d.setDate(d.getDate() + dir)
+  else if (view === 'week') d.setDate(d.getDate() + dir * 7)
+  else if (view === 'month') d.setMonth(d.getMonth() + dir)
   return d
 }
 

@@ -727,7 +727,7 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
         {isEdit && occurrence && (
           <div
             className="px-5 pb-3 text-[11px] text-ink-fg-3 font-mono break-all"
-            aria-label="事件 UID"
+            aria-label={t('calendar.form.uidAria', '事件 UID')}
           >
             UID: {occurrence.ical_uid.slice(0, 64)}
             {occurrence.ical_uid.length > 64 ? '…' : ''}

@@ -8,6 +8,7 @@ import { useTranslation } from 'react-i18next'
 import { CalendarQueryError } from '../CalendarQueryError'
 import { EventBlock } from '../EventBlock'
 import { isTodayLocal, pad, ymd } from '../lib/format'
+import { DOW_EN } from '../lib/weekdays'
 import {
   useCalendarEventsInWindow,
   addDays,
@@ -34,7 +35,6 @@ interface Props {
 }
 
 const HOUR_PX = 48
-const DOW_EN = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN']
 const GRID_COLS = '56px repeat(7, 1fr)'
 
 // F32 — ymd/pad/isSameDay/isTodayLocal 抽到 ../lib/format

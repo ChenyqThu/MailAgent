@@ -23,7 +23,9 @@ import { EventDetailDrawer } from '../calendar/EventDetailDrawer'
 import { UndoToastStack } from '../calendar/UndoToastStack'
 import { useCalendarShortcuts } from '../calendar/hooks/useCalendarShortcuts'
 import {
+  pickSyncHead,
   relativeTime,
+  stepViewDate,
   useCalendarEventsInWindow,
   useCalendarNames,
   useCalendarSyncStatus,
@@ -47,14 +49,6 @@ import { PageFrame } from './PageFrame'
 // x:+16 进), 后退 dir=-1 (从左). 切 view 时内部 view 分支整段 remount, 外层
 // 包裹 div (持 ref) key 不变 → 对包裹做新内容入场 fromTo (旧 DOM 已被 React
 // 同步替换, 无法退场动画; 入场淡入替换符合 §4.5 内容区瞬切语义).
-
-function step(view: CalendarView, dir: 1 | -1, base: Date): Date {
-  const d = new Date(base)
-  if (view === 'today') d.setDate(d.getDate() + dir)
-  else if (view === 'week') d.setDate(d.getDate() + dir * 7)
-  else if (view === 'month') d.setMonth(d.getMonth() + dir)
-  return d
-}
 
 /** YYYY-MM-DD (本地) → 该日 00:00 (UTC) ISO. 用于副 status bar 宽窗口 events 计数. */
 function isoOffsetDays(daysFromToday: number): string {
@@ -153,7 +147,9 @@ export function CalendarLayout(): React.ReactElement {
   })
   const recurringCount = recurringList?.length ?? null
 
-  const head = syncStatus?.[0]
+  // F19/Q6 — 健康优先选行统一走 pickSyncHead (与 Toolbar sync-pill /
+  // CalendarViewEmpty 同源, 孤儿行场景不再上绿下红同屏矛盾).
+  const head = pickSyncHead(syncStatus)
   const ctag = head?.ctag ?? null
   const lastIso = head?.last_incremental_sync_at_iso ?? head?.last_full_sync_at_iso ?? null
   const lastDate = lastIso ? new Date(lastIso) : null
@@ -162,13 +158,13 @@ export function CalendarLayout(): React.ReactElement {
     : t('calendar.statusbar.noSync', '尚未同步')
   const lastError = head?.last_error ?? null
   const hasErr = !!lastError
-  const calendarsLabel = head?.calendar_name ?? '日历'
+  const calendarsLabel = head?.calendar_name ?? t('calendar.statusbar.calendarFallback', '日历')
 
   // useCallback 包 callback — 让 useCalendarShortcuts 的 keydown listener 不会
   // 每次 CalendarLayout re-render 都 unbind+re-bind (闭包问题 §4.5)
   const handleToday = useCallback(() => setCurrentDate(new Date()), [])
-  const handlePrev = useCallback(() => setCurrentDate((d) => step(view, -1, d)), [view])
-  const handleNext = useCallback(() => setCurrentDate((d) => step(view, 1, d)), [view])
+  const handlePrev = useCallback(() => setCurrentDate((d) => stepViewDate(view, -1, d)), [view])
+  const handleNext = useCallback(() => setCurrentDate((d) => stepViewDate(view, 1, d)), [view])
   const handleSync = useCallback(() => triggerSync({ full: true }), [triggerSync])
   const handleHelp = useCallback(() => setShortcutOpen((v) => !v), [])
   const handleEsc = useCallback(() => setShortcutOpen(false), [])

@@ -9,6 +9,7 @@
 import { useRef } from 'react'
 import { Calendar as CalendarIcon, Video } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import type { TFunction } from 'i18next'
 
 import {
   useCalendarEventsInWindow,
@@ -20,6 +21,7 @@ import {
 import type { CalendarEventOccurrence } from '@shared/api/types'
 import { CalendarQueryError } from '../CalendarQueryError'
 import { shortTime, ymd } from '../lib/format'
+import { weekdayLong } from '../lib/weekdays'
 import { EmptyState } from '@shared/components/feedback/EmptyState'
 import { SkeletonRow } from '@shared/components/feedback/LoadingSkeleton'
 import { cn } from '@shared/lib/cn'
@@ -46,19 +48,20 @@ interface HeaderLabels {
   isToday: boolean
 }
 
-function headerLabels(key: string): HeaderLabels {
+// F26 (阶段1·1.7) — 硬编码中文 t() 化; 周几走 weekdayLong 单源 (lib/weekdays).
+function headerLabels(t: TFunction, key: string): HeaderLabels {
   const [y, m, d] = key.split('-').map(Number)
   const target = new Date(y, m - 1, d)
   const today = todayStartLocal()
   const tomorrow = addDays(today, 1)
   const tKey = ymd(today)
   const tomKey = ymd(tomorrow)
-  const weekDays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
-  const wd = weekDays[target.getDay()]
+  const wd = weekdayLong(t, target.getDay())
   const ahDate = `${m}/${d} ${wd}`
-  if (key === tKey) return { ahDay: '今天', ahDate, isToday: true }
-  if (key === tomKey) return { ahDay: '明天', ahDate, isToday: false }
-  return { ahDay: `${d}日`, ahDate, isToday: false }
+  if (key === tKey) return { ahDay: t('calendar.view.agenda.today', '今天'), ahDate, isToday: true }
+  if (key === tomKey)
+    return { ahDay: t('calendar.view.agenda.tomorrow', '明天'), ahDate, isToday: false }
+  return { ahDay: t('calendar.view.agenda.dayNum', '{d}日', { d }), ahDate, isToday: false }
 }
 
 function hasMeetingLink(occ: CalendarEventOccurrence): boolean {
@@ -165,7 +168,7 @@ export function AgendaView({
   return (
     <div ref={agendaRef} className="cal-agenda scrollbar-thin">
       {sortedKeys.map((key) => {
-        const lbl = headerLabels(key)
+        const lbl = headerLabels(t, key)
         const items = (grouped.get(key) ?? []).slice().sort((a, b) => {
           if (a.occ.is_all_day !== b.occ.is_all_day) return a.occ.is_all_day ? -1 : 1
           // 当日覆盖段起点排序 — 跨午夜 continuation (00:00 起) 排当日最前.

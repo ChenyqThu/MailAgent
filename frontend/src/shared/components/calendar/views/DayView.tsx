@@ -12,6 +12,7 @@ import { useTranslation } from 'react-i18next'
 import { CalendarQueryError } from '../CalendarQueryError'
 import { EventBlock } from '../EventBlock'
 import { isTodayLocal, pad, shortTime, ymd } from '../lib/format'
+import { DOW_EN_FULL, weekdayMin } from '../lib/weekdays'
 import {
   addDays,
   layoutDay,
@@ -41,8 +42,6 @@ interface Props {
 
 const HOUR_PX = 48
 const GRID_COLS_ONE = '56px 1fr'
-const DOW_EN_FULL = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT']
-const MM_DOW = ['一', '二', '三', '四', '五', '六', '日']
 
 // F32 — pad/ymd/shortTime/isSameDay/isTodayLocal 抽到 ../lib/format
 
@@ -78,7 +77,10 @@ function MiniMonth({
     <>
       <div className="mm-head">
         <span className="mm-title">
-          {monthStart.getFullYear()} 年 {monthStart.getMonth() + 1} 月
+          {t('calendar.shared.yearMonth', '{y} 年 {m} 月', {
+            y: monthStart.getFullYear(),
+            m: monthStart.getMonth() + 1
+          })}
         </span>
         <div className="mm-nav">
           <button type="button" onClick={onPrev} title={prevMonthLabel} aria-label={prevMonthLabel}>
@@ -90,9 +92,10 @@ function MiniMonth({
         </div>
       </div>
       <div className="mm-grid">
-        {MM_DOW.map((d) => (
-          <div key={d} className="mm-dow">
-            {d}
+        {/* F25/F26 — 列头走 weekdayMin 单源; key 用索引 (en 单字母 T/S 会重复). */}
+        {Array.from({ length: 7 }, (_, i) => (
+          <div key={i} className="mm-dow">
+            {weekdayMin(t, i)}
           </div>
         ))}
         {cells.map((c, i) => {

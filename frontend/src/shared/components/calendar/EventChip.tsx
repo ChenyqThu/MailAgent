@@ -9,8 +9,6 @@ import { cn } from '@shared/lib/cn'
 
 interface EventChipProps {
   event: CalendarEventOccurrence
-  /** compact = 不显示时间, 只 dot + title (week all-day strip 用). */
-  compact?: boolean
   /** F4/Q13 — drawer 打开的 occurrence 锚点高亮 (.is-selected). */
   selected?: boolean
   onClick?: () => void
@@ -23,7 +21,6 @@ function localTimeShort(iso: string): string {
 
 export function EventChip({
   event,
-  compact = false,
   selected = false,
   onClick
 }: EventChipProps): React.ReactElement {
@@ -41,8 +38,7 @@ export function EventChip({
       title={event.summary || untitled}
     >
       <span className="c-dot" aria-hidden />
-      {!compact && !event.is_all_day && <span className="c-time">{startTxt}</span>}
-      {compact && event.is_all_day && <span className="c-time">{allDayLabel}</span>}
+      {!event.is_all_day && <span className="c-time">{startTxt}</span>}
       <span className={cn('c-title', !event.summary && 'empty-field')}>
         {event.summary || untitled}
       </span>

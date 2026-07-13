@@ -1203,6 +1203,14 @@
     "replay": "重放",
     "replayOk": "邮件 #{id} 重放完成",
     "replayFail": "邮件 #{id} 重放失败",
+    "recurring": {
+      "scan": "扫描",
+      "scanning": "扫描中…",
+      "scanTitle": "扫描邮件中带 RRULE 的会议邀请 (davmail 模式可能需要数分钟)",
+      "scanRangeTitle": "扫描最近 {range}",
+      "replayTitle": "重放 — 重导出到 Notion (基于 SQLite calendar_event)",
+      "replayNoUid": "缺少 ical_uid — 无法 replay (数据异常?)"
+    },
     "col": {
       "subject": "标题",
       "organizer": "组织者",
@@ -1212,13 +1220,34 @@
       "count": "次数",
       "action": "操作"
     },
+    "weekday": {
+      "long": {
+        "sun": "周日",
+        "mon": "周一",
+        "tue": "周二",
+        "wed": "周三",
+        "thu": "周四",
+        "fri": "周五",
+        "sat": "周六"
+      },
+      "min": {
+        "mon": "一",
+        "tue": "二",
+        "wed": "三",
+        "thu": "四",
+        "fri": "五",
+        "sat": "六",
+        "sun": "日"
+      }
+    },
     "shared": {
       "untitled": "未命名事件",
       "allDay": "全天",
       "loading": "加载中…",
       "cancel": "取消",
       "close": "关闭 (Esc)",
-      "closeAria": "关闭"
+      "closeAria": "关闭",
+      "yearMonth": "{y} 年 {m} 月"
     },
     "toolbar": {
       "title": "日历",
@@ -1245,6 +1274,10 @@
       "syncTipErr": "DavMail · 同步失败",
       "syncTipNoRecord": "尚无 sync_state 记录 — 启用 CALENDAR_CALDAV_SYNC_ENABLED 后等 60s",
       "syncTipUnknownErr": "未知错误",
+      "range": {
+        "agenda": "未来 14 天",
+        "recurring": "全部定期事件"
+      },
       "calendarFilter": {
         "title": "按日历筛选",
         "all": "全部日历",
@@ -1256,7 +1289,8 @@
       "autoSync": "自动同步",
       "popoverAria": "同步与后台详情",
       "popoverTitle": "同步与后台",
-      "noSync": "尚未同步"
+      "noSync": "尚未同步",
+      "calendarFallback": "日历"
     },
     "drawer": {
       "closeTitle": "关闭 (Esc)",
@@ -1268,6 +1302,8 @@
       "moreAttendees": "… 还有 {n} 位",
       "rruleInstance": "RRULE 实例",
       "ariaFallback": "事件详情",
+      "spanDays": "· 跨 {n} 天",
+      "sourceLabel": "源",
       "role": {
         "owner": "组织者",
         "attendee": "与会者"
@@ -1334,6 +1370,7 @@
       "placeholderLocation": "会议室 / Teams 链接 / 地址",
       "labelDescription": "描述",
       "placeholderDescription": "议程、备注、相关链接…",
+      "uidAria": "事件 UID",
       "repeat": {
         "label": "重复",
         "freqNone": "不重复",
@@ -1426,10 +1463,14 @@
       "month": {
         "moreBtn": "+{n} 更多",
         "today": "今天",
-        "popEventCount": "{n} 个事件"
+        "popEventCount": "{n} 个事件",
+        "popDayLabel": "{m} 月 {d} 日"
       },
       "agenda": {
-        "dayOfSpan": "第 {n}/{m} 天"
+        "dayOfSpan": "第 {n}/{m} 天",
+        "today": "今天",
+        "tomorrow": "明天",
+        "dayNum": "{d}日"
       }
     },
     "shortcut": {

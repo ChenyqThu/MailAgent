@@ -15,6 +15,7 @@ import { EmptyState } from '@shared/components/feedback/EmptyState'
 import { SkeletonRow } from '@shared/components/feedback/LoadingSkeleton'
 import { toastError, toastSuccess } from '@shared/state/toast'
 import { CalendarQueryError } from './CalendarQueryError'
+import { IS_WEB_BUILD } from './lib/capabilities'
 
 const RANGES: Array<{ label: string; offsetDays: number }> = [
   { label: '30d', offsetDays: 30 },
@@ -78,7 +79,11 @@ function Row({ item, onReplay, pending }: RowProps): React.ReactElement {
         {/* mockup §recurring 操作列是静态弱化 span. Phase 2.4 后任何 source 都能
             Replay (calendar:eventReplay 走 SQLite calendar_event 重导出 Notion),
             视觉上保持 mockup 简洁 link 风格. */}
-        {canReplay ? (
+        {IS_WEB_BUILD ? (
+          // F14/Q9 — 远程 web 隐藏 Replay 入口 (eventReplay 是 HttpApi stub);
+          // 阶段 3 能力表替换.
+          <span className="empty-field">—</span>
+        ) : canReplay ? (
           <button
             type="button"
             disabled={pending}
@@ -88,7 +93,10 @@ function Row({ item, onReplay, pending }: RowProps): React.ReactElement {
               'text-coral hover:underline',
               'disabled:opacity-60 disabled:cursor-wait disabled:no-underline'
             )}
-            title={`${t('calendar.replay')} — 重导出到 Notion (基于 SQLite calendar_event)`}
+            title={t(
+              'calendar.recurring.replayTitle',
+              '重放 — 重导出到 Notion (基于 SQLite calendar_event)'
+            )}
           >
             {pending && <RefreshCw size={11} strokeWidth={2} className="animate-spin" />}
             {t('calendar.replay')}
@@ -96,7 +104,7 @@ function Row({ item, onReplay, pending }: RowProps): React.ReactElement {
         ) : (
           <span
             className="text-ink-fg-3 text-[12px]"
-            title="缺少 ical_uid — 无法 replay (数据异常?)"
+            title={t('calendar.recurring.replayNoUid', '缺少 ical_uid — 无法 replay (数据异常?)')}
           >
             Replay
           </span>
@@ -162,22 +170,37 @@ export function CalendarPage(): React.ReactElement {
               type="button"
               onClick={() => setDays(r.offsetDays)}
               className={cn('view-chip', r.offsetDays === days && 'is-active')}
-              title={`扫描最近 ${r.label}`}
+              title={t('calendar.recurring.scanRangeTitle', '扫描最近 {range}', {
+                range: r.label
+              })}
             >
               {r.label}
             </button>
           ))}
         </div>
-        <button
-          type="button"
-          onClick={() => void listQ.refetch()}
-          disabled={listQ.isFetching}
-          className="today-btn ml-auto"
-          title="扫描邮件中带 RRULE 的会议邀请 (davmail 模式可能需要数分钟)"
-        >
-          <RefreshCw size={13} strokeWidth={2} className={cn(listQ.isFetching && 'animate-spin')} />
-          {listQ.isFetching ? '扫描中…' : '扫描'}
-        </button>
+        {/* F14/Q9 — 远程 web 隐藏扫描按钮 (recurringDiscover 是 HttpApi stub);
+            阶段 3 能力表替换. */}
+        {!IS_WEB_BUILD && (
+          <button
+            type="button"
+            onClick={() => void listQ.refetch()}
+            disabled={listQ.isFetching}
+            className="today-btn ml-auto"
+            title={t(
+              'calendar.recurring.scanTitle',
+              '扫描邮件中带 RRULE 的会议邀请 (davmail 模式可能需要数分钟)'
+            )}
+          >
+            <RefreshCw
+              size={13}
+              strokeWidth={2}
+              className={cn(listQ.isFetching && 'animate-spin')}
+            />
+            {listQ.isFetching
+              ? t('calendar.recurring.scanning', '扫描中…')
+              : t('calendar.recurring.scan', '扫描')}
+          </button>
+        )}
       </div>
 
       {/* table — sticky header via .rec-table th CSS */}

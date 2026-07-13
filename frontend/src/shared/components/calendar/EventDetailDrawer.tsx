@@ -30,8 +30,10 @@ import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
+import type { TFunction } from 'i18next'
 
 import { EventFormModal } from './EventFormModal'
+import { IS_WEB_BUILD } from './lib/capabilities'
 import { CALENDAR_EVENTS_KEY, useCalendarEvent } from './hooks/useCalendarEvents'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { useExitAnimation } from '@shared/hooks/useExitAnimation'
@@ -64,18 +66,15 @@ interface Props {
 
 // F32 — pad 抽到 ./lib/format
 
-function formatRange(
-  startIso: string,
-  endIso: string,
-  isAllDay: boolean,
-  allDayLabel: string
-): string {
+function formatRange(t: TFunction, startIso: string, endIso: string, isAllDay: boolean): string {
   const s = new Date(startIso)
   const e = new Date(endIso)
   const dateStr = `${s.getFullYear()}-${pad(s.getMonth() + 1)}-${pad(s.getDate())}`
   if (isAllDay) {
+    const allDayLabel = t('calendar.shared.allDay', '全天')
     const days = Math.round((e.getTime() - s.getTime()) / 86400_000)
-    return `${dateStr} ${allDayLabel}${days > 1 ? ` · 跨 ${days} 天` : ''}`
+    const span = days > 1 ? ` ${t('calendar.drawer.spanDays', '· 跨 {n} 天', { n: days })}` : ''
+    return `${dateStr} ${allDayLabel}${span}`
   }
   const t1 = `${pad(s.getHours())}:${pad(s.getMinutes())}`
   const t2 = `${pad(e.getHours())}:${pad(e.getMinutes())}`
@@ -336,8 +335,6 @@ export function EventDetailDrawer({ occurrence, onClose, onReopen }: Props): Rea
   const myResp = (occurrence?.response_status || '').toUpperCase()
   const isNeedsAction = myResp === 'NEEDS-ACTION'
 
-  const allDayLabel = t('calendar.shared.allDay', '全天')
-
   return (
     <>
       <Drawer
@@ -388,10 +385,10 @@ export function EventDetailDrawer({ occurrence, onClose, onReopen }: Props): Rea
               <MetaRow label={t('calendar.drawer.meta.time', '时间')}>
                 <span className="meta-v mono">
                   {formatRange(
+                    t,
                     occurrence.occurrence_start_iso,
                     occurrence.occurrence_end_iso,
-                    occurrence.is_all_day,
-                    allDayLabel
+                    occurrence.is_all_day
                   )}
                 </span>
               </MetaRow>
@@ -535,9 +532,11 @@ export function EventDetailDrawer({ occurrence, onClose, onReopen }: Props): Rea
               ) : null}
             </div>
 
-            {/* ═══ Phase 2.5 §11.6 — dw-foot RSVP vs owner 分流 ═══ */}
+            {/* ═══ Phase 2.5 §11.6 — dw-foot RSVP vs owner 分流 ═══
+                F14/Q9 — 远程 web 隐藏整个操作区 (eventRsvp/eventUpdate/eventDelete
+                均为 HttpApi stub), 只留 .fm 元信息; 阶段 3 能力表替换. */}
             <div className="dw-foot">
-              {isOwner ? (
+              {IS_WEB_BUILD ? null : isOwner ? (
                 /* owner: 单行 [编辑.btn-op.edit] [删除.btn-op.delete] */
                 <div className="owner-ops-row">
                   <button
@@ -652,7 +651,7 @@ export function EventDetailDrawer({ occurrence, onClose, onReopen }: Props): Rea
               <div className="fm">
                 UID: {occurrence.ical_uid}
                 <br />
-                源: {occurrence.source}
+                {t('calendar.drawer.sourceLabel', '源')}: {occurrence.source}
                 {occurrence.is_recurrence_instance &&
                   ' · ' + t('calendar.drawer.rruleInstance', 'RRULE 实例')}
               </div>

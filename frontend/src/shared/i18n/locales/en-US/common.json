@@ -1205,6 +1205,14 @@
     "replay": "Replay",
     "replayOk": "Email #{id} replayed",
     "replayFail": "Email #{id} replay failed",
+    "recurring": {
+      "scan": "Scan",
+      "scanning": "Scanning…",
+      "scanTitle": "Scan mail for RRULE-bearing meeting invites (davmail mode may take minutes)",
+      "scanRangeTitle": "Scan last {range}",
+      "replayTitle": "Replay — re-export to Notion (from SQLite calendar_event)",
+      "replayNoUid": "Missing ical_uid — cannot replay (data anomaly?)"
+    },
     "col": {
       "subject": "Subject",
       "organizer": "Organizer",
@@ -1214,13 +1222,34 @@
       "count": "Count",
       "action": "Action"
     },
+    "weekday": {
+      "long": {
+        "sun": "Sun",
+        "mon": "Mon",
+        "tue": "Tue",
+        "wed": "Wed",
+        "thu": "Thu",
+        "fri": "Fri",
+        "sat": "Sat"
+      },
+      "min": {
+        "mon": "M",
+        "tue": "T",
+        "wed": "W",
+        "thu": "T",
+        "fri": "F",
+        "sat": "S",
+        "sun": "S"
+      }
+    },
     "shared": {
       "untitled": "Untitled event",
       "allDay": "All day",
       "loading": "Loading…",
       "cancel": "Cancel",
       "close": "Close (Esc)",
-      "closeAria": "Close"
+      "closeAria": "Close",
+      "yearMonth": "{m}/{y}"
     },
     "toolbar": {
       "title": "Calendar",
@@ -1247,6 +1276,10 @@
       "syncTipErr": "DavMail · Sync failed",
       "syncTipNoRecord": "No sync_state records yet — enable CALENDAR_CALDAV_SYNC_ENABLED and wait 60s",
       "syncTipUnknownErr": "Unknown error",
+      "range": {
+        "agenda": "Next 14 days",
+        "recurring": "All recurring events"
+      },
       "calendarFilter": {
         "title": "Filter by calendar",
         "all": "All calendars",
@@ -1258,7 +1291,8 @@
       "autoSync": "Auto sync",
       "popoverAria": "Sync & backend details",
       "popoverTitle": "Sync & backend",
-      "noSync": "Never synced"
+      "noSync": "Never synced",
+      "calendarFallback": "Calendar"
     },
     "drawer": {
       "closeTitle": "Close (Esc)",
@@ -1270,6 +1304,8 @@
       "moreAttendees": "… {n} more",
       "rruleInstance": "RRULE instance",
       "ariaFallback": "Event details",
+      "spanDays": "· {n} days",
+      "sourceLabel": "Source",
       "role": {
         "owner": "Organizer",
         "attendee": "Attendee"
@@ -1336,6 +1372,7 @@
       "placeholderLocation": "Room / Teams link / Address",
       "labelDescription": "Description",
       "placeholderDescription": "Agenda, notes, links…",
+      "uidAria": "Event UID",
       "repeat": {
         "label": "Repeat",
         "freqNone": "Does not repeat",
@@ -1426,10 +1463,14 @@
       "month": {
         "moreBtn": "+{n} more",
         "today": "Today",
-        "popEventCount": "{n} events"
+        "popEventCount": "{n} events",
+        "popDayLabel": "{m}/{d}"
       },
       "agenda": {
-        "dayOfSpan": "Day {n}/{m}"
+        "dayOfSpan": "Day {n}/{m}",
+        "today": "Today",
+        "tomorrow": "Tomorrow",
+        "dayNum": "{d}"
       }
     },
     "shortcut": {
