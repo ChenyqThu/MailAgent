@@ -46,7 +46,8 @@ export function buildFixtureDb(): Database.Database {
       -- 渲染 + searchEmails palette 不再绕 llm_processing.labels_json
       -- (see d0a8086). fixture 之前漏 sync → searchEmails 测试全 fail.
       ai_priority TEXT,
-      ai_action TEXT
+      ai_action TEXT,
+      snippet TEXT
     );
     CREATE INDEX idx_email_date ON email_metadata(date_received DESC);
     CREATE INDEX idx_email_sync_status ON email_metadata(sync_status);
@@ -236,6 +237,14 @@ export function buildFixtureDb(): Database.Database {
     fetched_at: now - 3500,
     fetched_source: 'applescript'
   })
+  db.prepare('UPDATE email_metadata SET snippet = ? WHERE internal_id = ?').run(
+    'Hey, the redis client keeps timing out after 5s.',
+    101
+  )
+  db.prepare('UPDATE email_metadata SET snippet = ? WHERE internal_id = ?').run(
+    '本周 *产品* 评审议程：Notion 集成进度',
+    102
+  )
   insertBody.run({
     internal_id: 102,
     message_id: '<msg-102@example.com>',

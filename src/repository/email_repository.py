@@ -3047,6 +3047,10 @@ class EmailRepository:
                     body.fetched_source,
                 ),
             )
+            conn.execute(
+                "UPDATE email_metadata SET snippet = substr(?, 1, 100) WHERE internal_id = ?",
+                (body.markdown, internal_id),
+            )
 
             # 删除老的 attachment 行（重新 commit 时避免重复）
             conn.execute(

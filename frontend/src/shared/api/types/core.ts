@@ -20,7 +20,9 @@ import type {
   MailagentEmailResync
 } from '@shared/types/cli.gen'
 
-export type EmailMeta = EmailList_EmailListItem
+export type EmailMeta = EmailList_EmailListItem & {
+  snippet: string | null
+}
 /**
  * EmailDetail = schema-typed EmailGet_EmailRecord + the fields the Electron
  * main handler returns that the cli-schema codegen doesn't yet expose.

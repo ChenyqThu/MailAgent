@@ -43,17 +43,14 @@ def test_list_enriched_shape_and_degraded_ai(client):
     item = next(row for row in data if row["internal_id"] == EMAIL_ID)
     # EnrichedEmailMeta = list-item + enriched extras.
     for key in (
-        "snippet", "has_body", "lang", "ai_priority", "ai_action",
+        "snippet", "lang", "ai_priority", "ai_action",
         "ai_category", "attach_count", "is_important", "processing_status",
         "notion_url", "subject", "sender", "is_read", "is_flagged",
     ):
         assert key in item, f"missing enriched key {key!r}"
-    # Sprint 19 — snippet always lazy-null on the list query.
-    assert item["snippet"] is None
-    # EMAIL_ID has a body row → has_body true; EMAIL_NO_BODY_ID has none.
-    assert item["has_body"] is True
+    assert item["snippet"].startswith("Hello **redis**")
     no_body = next(row for row in data if row["internal_id"] == EMAIL_NO_BODY_ID)
-    assert no_body["has_body"] is False
+    assert no_body["snippet"] is None
     # attach_count excludes inline (all 3 fixture attachments are is_inline=0).
     assert item["attach_count"] == 3
     # is_important promoted from the column.
@@ -104,6 +101,11 @@ def test_list_enriched_limit_out_of_range_422(client):
     assert r.status_code == 422
 
 
+def test_snippets_endpoint_removed(client):
+    r = client.post("/api/email/snippets", json={"internalIds": [EMAIL_ID]})
+    assert r.status_code == 404
+
+
 # ---------------------------------------------------------------------------
 # GET /api/email/mailboxes
 # ---------------------------------------------------------------------------
@@ -141,6 +143,7 @@ def test_list_by_thread(client):
     # list-item shape (no to_addr).
     assert "to_addr" not in data[0]
     assert "notion_url" in data[0]
+    assert data[0]["snippet"].startswith("Hello **redis**")
 
 
 def test_list_by_thread_unknown_empty(client):
@@ -165,6 +168,7 @@ def test_list_by_threads_batch(client):
     # Map keyed by thread_id; only thread-A has rows.
     assert set(data.keys()) == {"thread-A"}
     assert [row["internal_id"] for row in data["thread-A"]] == [EMAIL_ID]
+    assert data["thread-A"][0]["snippet"].startswith("Hello **redis**")
 
 
 def test_list_by_threads_empty_input(client):
@@ -175,33 +179,6 @@ def test_list_by_threads_empty_input(client):
     r2 = client.post("/api/email/threads", json={})
     assert r2.status_code == 200
     assert r2.json()["data"] == {}
-
-
-# ---------------------------------------------------------------------------
-# POST /api/email/snippets
-# ---------------------------------------------------------------------------
-
-
-def test_list_snippets(client):
-    r = client.post(
-        "/api/email/snippets",
-        json={"internalIds": [EMAIL_ID, EMAIL_NO_BODY_ID]},
-    )
-    assert r.status_code == 200
-    body = r.json()
-    _ok_envelope(body)
-    data = body["data"]
-    # Map keyed by stringified internal_id (JSON object keys are strings).
-    assert str(EMAIL_ID) in data
-    assert data[str(EMAIL_ID)].startswith("Hello **redis**")
-    # EMAIL_NO_BODY_ID has no body row → absent from map.
-    assert str(EMAIL_NO_BODY_ID) not in data
-
-
-def test_list_snippets_empty_input(client):
-    r = client.post("/api/email/snippets", json={"internalIds": []})
-    assert r.status_code == 200
-    assert r.json()["data"] == {}
 
 
 # ---------------------------------------------------------------------------
@@ -249,21 +226,13 @@ def test_ai_fields_empty_input(client):
 
 
 # ---------------------------------------------------------------------------
-# C10 — batch size cap on IN(...) endpoints (threads / snippets / ai-fields /
+# C10 — batch size cap on IN(...) endpoints (threads / ai-fields /
 # list-enriched internalIds). Over BATCH_IDS_MAX → 400 E_INVALID_ARG, before SQL.
 # ---------------------------------------------------------------------------
 
 from src.api.routers.email_views import BATCH_IDS_MAX  # noqa: E402
 
 _OVER = BATCH_IDS_MAX + 1
-
-
-def test_snippets_oversized_batch_400(client):
-    r = client.post(
-        "/api/email/snippets", json={"internalIds": list(range(_OVER))}
-    )
-    assert r.status_code == 400
-    assert r.json()["error"]["code"] == "E_INVALID_ARG"
 
 
 def test_ai_fields_oversized_batch_400(client):
@@ -288,15 +257,6 @@ def test_list_enriched_oversized_internalids_400(client):
     r = client.get("/api/email/list-enriched", params={"internalIds": ids})
     assert r.status_code == 400
     assert r.json()["error"]["code"] == "E_INVALID_ARG"
-
-
-def test_snippets_at_cap_boundary_ok(client):
-    # Exactly BATCH_IDS_MAX ids is allowed (none seeded → empty map, but 200).
-    r = client.post(
-        "/api/email/snippets", json={"internalIds": list(range(BATCH_IDS_MAX))}
-    )
-    assert r.status_code == 200
-    assert r.json()["status"] == "success"
 
 
 def test_threads_dedupe_under_cap_ok(client):

@@ -42,7 +42,8 @@
         "is_flagged": {"type": "boolean"},
         "sync_status": {"$ref": "_common.schema.json#/$defs/sync_status"},
         "notion_page_id": {"type": ["string", "null"]},
-        "notion_url": {"type": ["string", "null"]}
+        "notion_url": {"type": ["string", "null"]},
+        "snippet": {"type": ["string", "null"]}
       }
     }
   }

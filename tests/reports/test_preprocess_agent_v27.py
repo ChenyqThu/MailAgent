@@ -272,7 +272,7 @@ def test_upgrade_from_v31_adds_mark_read_column_and_backfills_true(tmp_path):
         conn.close()
     assert "mark_read_after_processing" in cols
     assert row == (1,)
-    assert version == "32"
+    assert version == str(SyncStore.DB_VERSION)
 
 
 def test_v32_migration_idempotent(tmp_path):

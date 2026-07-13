@@ -380,7 +380,12 @@ class SyncStore:
     #                未读状态。NULL / 缺列按 1 解释，升级迁移同时把 preprocess 行 NULL 回填 1，
     #                保持既有行为零变化。幂等: ALTER 前 PRAGMA 检查 + UPDATE ... IS NULL。
     #                回滚 (回退 v32): 列可留（旧代码无害）或手动 DROP；必要时降 db_version。
-    DB_VERSION = 32  # v32: preprocess 行级「处理后自动标已读」开关（默认 true）
+    # v33 (issue #12, 2026-07): email_metadata 加 snippet TEXT，正文前 100 字符去规范化。
+    #                升级时从 email_body.body_markdown 一次性回填；后续正文提交事务同步刷新，
+    #                让列表查询彻底不 JOIN / 不读取 email_body blob。幂等: ALTER 前 PRAGMA
+    #                检查 + 仅回填 snippet IS NULL 行。SQLite substr(TEXT, 1, 100) 按字符截断。
+    #                回滚 (回退 v33): 列可留（旧代码无害）或手动 DROP；必要时降 db_version。
+    DB_VERSION = 33  # v33: email_metadata.snippet 去规范化正文预览
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -520,7 +525,8 @@ class SyncStore:
                 is_important INTEGER DEFAULT 0,
                 imap_uidvalidity INTEGER,
                 imap_uid INTEGER,
-                backend_origin TEXT DEFAULT 'applescript'
+                backend_origin TEXT DEFAULT 'applescript',
+                snippet TEXT
             )
         """)
 
@@ -1801,6 +1807,33 @@ class SyncStore:
                 "AND mark_read_after_processing IS NULL"
             )
             logger.info("v32 migration: preprocess mark_read_after_processing defaulted to 1")
+
+        # === v33: email_metadata.snippet 去规范化正文预览 ===
+        if current_version < 33:
+            try:
+                cursor.execute("PRAGMA table_info(email_metadata)")
+                columns = {row[1] for row in cursor.fetchall()}
+                if "snippet" not in columns:
+                    cursor.execute("ALTER TABLE email_metadata ADD COLUMN snippet TEXT")
+                    logger.info("v33 migration: email_metadata +snippet")
+            except sqlite3.OperationalError as e:
+                _migration_guard_columns(
+                    cursor, "email_metadata", {"snippet"}, "v33 migration", e,
+                )
+            cursor.execute("""
+                UPDATE email_metadata
+                   SET snippet = (
+                       SELECT substr(b.body_markdown, 1, 100)
+                         FROM email_body b
+                        WHERE b.internal_id = email_metadata.internal_id
+                   )
+                 WHERE snippet IS NULL
+                   AND EXISTS (
+                       SELECT 1 FROM email_body b
+                        WHERE b.internal_id = email_metadata.internal_id
+                   )
+            """)
+            logger.info("v33 migration: email_metadata.snippet backfilled")
 
         # 更新数据库版本 —— E0-WP3: 只有**全部迁移成功**才会执行到这里。任何迁移块
         # 真失败都会 raise (见 _migration_guard_columns/_migration_guard_index),

@@ -206,10 +206,8 @@ describe('listEmailsEnriched', () => {
     const rows = handlers.listEmailsEnriched({ limit: 10 })
     expect(rows.map((r) => r.internal_id)).toEqual([101, 102, 103, 201])
 
-    // 101 — has body + full LLM labels + 2 non-inline attachments (orig + derived)
-    // Sprint 19: listEnriched 不再读 body blob → snippet 恒 null (懒取);
-    // 内容断言迁到本 describe 末尾的 listEmailSnippets。
-    expect(rows[0].snippet).toBeNull()
+    // 101 — denormalized snippet + full LLM labels + 2 non-inline attachments.
+    expect(rows[0].snippet).toMatch(/^Hey, the redis client/)
     expect(rows[0].lang).toBe('en')
     expect(rows[0].ai_priority).toBe('critical') // mapped from "🔴 紧急"
     expect(rows[0].ai_action).toBe('需要回复')
@@ -217,7 +215,7 @@ describe('listEmailsEnriched', () => {
 
     // 102 — has CN body + partial LLM labels + only an inline (cid:) attachment
     // The inline image must NOT bump the user-visible attach_count.
-    expect(rows[1].snippet).toBeNull() // Sprint 19 懒取, 内容见末尾 listEmailSnippets
+    expect(rows[1].snippet?.startsWith('本周 *产品*')).toBe(true)
     expect(rows[1].lang).toBe('zh')
     expect(rows[1].ai_priority).toBe('important') // mapped from "🟡 重要"
     expect(rows[1].ai_action).toBe('需要决策')
@@ -230,19 +228,11 @@ describe('listEmailsEnriched', () => {
     expect(rows[2].ai_action).toBeNull()
     expect(rows[2].attach_count).toBe(0)
 
-    // 201 — sent box, has body? no body seeded → snippet null; no LLM row either
+    // 201 — no body/snippet seeded; no LLM row either
     expect(rows[3].snippet).toBeNull()
     expect(rows[3].lang).toBe('unknown')
     expect(rows[3].ai_priority).toBeNull()
 
-    // Sprint 19 — snippet 内容由 listEmailSnippets 懒取提供 (listEnriched 只给 null
-    // 占位)。把原先挂在 listEnriched 上的内容断言迁来, 保住覆盖 + 验证懒取路径:
-    // 有 body 的 101/102 返回内容; 无 body 的 103/201 不进 map。
-    const snippets = handlers.listEmailSnippets([101, 102, 103, 201])
-    expect(snippets[101]).toMatch(/^Hey, the redis client/)
-    expect(snippets[102]?.startsWith('本周 *产品*')).toBe(true)
-    expect(snippets[103]).toBeUndefined()
-    expect(snippets[201]).toBeUndefined()
   })
 
   test('mailbox filter does not trip the JOIN ambiguity (m.mailbox vs llm.mailbox)', () => {
@@ -327,6 +317,7 @@ describe('listEmailsByThread', () => {
       expect(rows[0].thread_id).toBe('thread-A')
       expect(rows[0].notion_url).toMatch(/^https:\/\/www\.notion\.so\/[a-f0-9]{32}$/)
       expect(typeof rows[0].is_read).toBe('boolean')
+      expect(rows[1].snippet).toMatch(/^Hey, the redis client/)
     } finally {
       db.prepare('DELETE FROM email_metadata WHERE internal_id IN (100, 104)').run()
     }
@@ -336,6 +327,15 @@ describe('listEmailsByThread', () => {
     const rows = handlers.listEmailsByThread('thread-B')
     expect(rows).toHaveLength(1)
     expect(rows[0].internal_id).toBe(102)
+    expect(rows[0].snippet?.startsWith('本周 *产品*')).toBe(true)
+  })
+
+  test('batch thread rows include denormalized snippets', () => {
+    const rows = handlers.listEmailsByThreads(['thread-A', 'thread-B'])
+    expect(rows['thread-A']?.find((row) => row.internal_id === 101)?.snippet).toMatch(
+      /^Hey, the redis client/
+    )
+    expect(rows['thread-B']?.[0]?.snippet?.startsWith('本周 *产品*')).toBe(true)
   })
 
   test('unknown thread_id returns empty list (not null)', () => {

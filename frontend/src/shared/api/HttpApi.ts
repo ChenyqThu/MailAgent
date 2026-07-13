@@ -183,15 +183,6 @@ export class HttpApi implements MailApi {
       })
     },
 
-    listSnippets: (internalIds: number[]): Promise<Record<number, string>> => {
-      if (!internalIds || internalIds.length === 0) return Promise.resolve({})
-      // Wire keys are strings (JSON object keys); semantically equal to the
-      // IPC number-keyed map. `result[id]` / `result[String(id)]` both work.
-      return this.req<Record<number, string>>('POST', '/email/snippets', {
-        body: { internalIds }
-      })
-    },
-
     get: async (internalId: number): Promise<EmailDetail | null> => {
       try {
         // include body summary + attachments to match the Electron `get`

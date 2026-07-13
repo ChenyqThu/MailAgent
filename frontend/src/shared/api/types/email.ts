@@ -1,4 +1,3 @@
-import type { EmailList_EmailListItem } from '@shared/types/cli.gen'
 import type {
   ContactSuggestion,
   EmailBody,
@@ -23,15 +22,7 @@ import type { JobEnqueueResult } from './jobs'
 /** DESIGN.md §2.3 / §5.2 — 5-tier priority enum used by <AIBadge> variant. */
 export type AIPriority = 'critical' | 'urgent' | 'important' | 'normal' | 'low'
 
-export interface EnrichedEmailMeta extends EmailList_EmailListItem {
-  /** First ~100 chars of `email_body.body_markdown`. Sprint 19: listEnriched
-   *  no longer reads the body blob (perf — 800-row blob read froze the sync
-   *  main process ~1.5s); this arrives as `null` and is filled lazily for
-   *  visible rows via `listSnippets`. */
-  snippet: string | null
-  /** Sprint 19 — does a body row exist (cheap PK join, no blob read). Drives
-   *  EmailList row height so it stays stable before the lazy snippet lands. */
-  has_body: boolean
+export interface EnrichedEmailMeta extends EmailMeta {
   /** ISO 2-letter from `labels_json.language`. `'unknown'` if LLM hasn't seen it. */
   lang: 'zh' | 'en' | 'unknown'
   /** Mapped from `labels_json.priority` (emoji-Chinese) to the 5-slug enum. */
@@ -316,11 +307,6 @@ export interface EmailApi {
    *  by thread_id; each value is the same ascending-date EmailMeta[] shape
    *  listByThread returns. Threads with no rows are absent from the map. */
   listByThreads(threadIds: string[]): Promise<Record<string, EmailMeta[]>>
-  /** Sprint 19 — batch body-snippet fetch for visible list rows. listEnriched
-   *  dropped the body-blob read for perf; the renderer lazily fetches snippets
-   *  for the ~15-40 rows actually on screen. Returns {internal_id: snippet};
-   *  ids with no body / empty snippet are absent from the map. */
-  listSnippets(internalIds: number[]): Promise<Record<number, string>>
   get(internalId: number): Promise<EmailDetail | null>
   body(internalId: number, opts?: BodyOpts): Promise<EmailBody | null>
   /** Sprint 2 — joined LLM labels + processing_status for <AIFieldsBlock>. */

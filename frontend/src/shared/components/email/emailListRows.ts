@@ -47,8 +47,7 @@ export type ListRow =
 
 export function computeRowHeight(
   r: ListRow | undefined,
-  newIds: ReadonlySet<number>,
-  snippets: Record<number, string>
+  newIds: ReadonlySet<number>
 ): number {
   if (!r) return 28
   if (r.type === 'header') return 28
@@ -60,20 +59,7 @@ export function computeRowHeight(
   // supplement-only children (listByThread, no snippet / AI) fall
   // through to the 60px no-snippet branch naturally.
   const e = r.email
-  // Sprint 20 — 行高跟 EmailRow 实际渲染口径一致: 用「合并后的 snippet 文本」
-  // (e.snippet 优先, 空则懒取 snippetMap[id], 与 VirtualRow liveSnippet 合并同源)
-  // 而非 has_body。原用 has_body 预留正文行的副作用: has_body=true 但 markdown 实际
-  // 为空 (会议「已接受/已拒绝」通知) 或 snippet 尚未懒取到时, EmailRow 不渲染正文行
-  // (:453 靠文本), 行高却已预留一行 → 视觉「少一行内容却占 4 行高」。改用文本后行高
-  // 自适应: 无正文文本即收缩, 懒取到达再增高 (单向增高, 可接受)。
-  const liveSnippet = snippets[e.internal_id]
-  const snippetText =
-    e.snippet && e.snippet.length > 0
-      ? e.snippet
-      : liveSnippet && liveSnippet.length > 0
-        ? liveSnippet
-        : ''
-  const hasSnippet = snippetText.length > 0
+  const hasSnippet = Boolean(e.snippet && e.snippet.length > 0)
   // `isNew` flips ai-strip on (renders "NEW" chip in EmailRow). Must mirror
   // EmailRow.tsx aiStripVisible exactly — otherwise the slot under-counts and
   // the chip clips into the next row's separator.

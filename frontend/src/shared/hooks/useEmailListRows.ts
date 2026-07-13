@@ -6,7 +6,6 @@
 //   • derivation chain: enrichedById → threadSupplement → filtered →
 //     threadGroups → orderedIds → buckets → rows → rowHeights (+ counts)
 //   • paging / silent prefetch (pageCount + lastView render-phase sentinel)
-//   • snippet lazy-fetch (snippetMap / snippetReqRef / fetchSnippetsUpTo)
 //   • scroll anchoring (listRef / scrollAnchorRef / isAnchoringRef +
 //     the two useLayoutEffects) — kept in the same closure as
 //     handleRowsRendered because isAnchoringRef is the anchoring↔paging
@@ -94,8 +93,6 @@ export interface UseEmailListRowsReturn {
   orderedIds: number[]
   activeId: number | null
   newIds: ReadonlySet<number>
-  /** Sprint 19 — lazily fetched body snippets (internal_id → 前 100 字). */
-  snippetMap: Record<number, string>
   counts: { all: number; unread: number; flagged: number; failed: number }
   categoryCounts: Record<EmailCategory, number>
   priorityCounts: Record<AIPriority, number>
@@ -144,12 +141,6 @@ export function useEmailListRows(): UseEmailListRowsReturn {
   const selectedIds = useBatch((s) => s.selectedIds)
 
   const [pageCount, setPageCount] = useState(1)
-  // Sprint 19 — 懒取的正文 snippet (internal_id → 前 100 字)。listEnriched 不再
-  // 读 body blob (~1.5s @800 行 阻塞主进程), 改对可见行调 email:listSnippets。
-  // snippet 按 internal_id 不可变, map 跨 view/mailbox 累积无需重置; snippetReqRef
-  // 去重已请求过的 id (含失败/空), 避免重复 IPC。
-  const [snippetMap, setSnippetMap] = useState<Record<number, string>>({})
-  const snippetReqRef = useRef<Set<number>>(new Set())
   // React 19 "Adjusting state on prop change" pattern — paging resets on
   // view transition without scheduling an effect (see EmailDetail.tsx for
   // the same pattern).
@@ -450,7 +441,7 @@ export function useEmailListRows(): UseEmailListRowsReturn {
     [selectedIds, enrichedById]
   )
   // Sprint 20 — 线程子邮件 enriched 补全。listByThreads 返回 bare EmailMeta
-  // (无 has_body / ai_* / snippet)。大线程里老的、或被分页 / focused·other tab
+  // (无 ai_* / snippet)。大线程里老的、或被分页 / focused·other tab
   // 过滤出当前 listEnriched(all) 的成员, enrichedById 命中不到 → 落 enrichDefaults
   // 空壳 → 列表只剩发件人+标题两行, 即便 SQLite 里 body / AI 齐备 (金样本: 收件箱
   // 1000000760, synced + md1749 + 🟡重要, 属 15 封大线程却只显两行)。这里对所有
@@ -508,7 +499,7 @@ export function useEmailListRows(): UseEmailListRowsReturn {
         ? groupBySentAnchor(filtered, threadSupplement)
         : // 标旗视图: 标旗邮件离散分布在各线程, threadSupplement 补进来的非标旗
           // 邮件既不在 all (仅标旗) 也无 cross 源 (crossMailbox=null) → enrichDefaults
-          // 兜底成 bare (has_body=false / ai_priority=null), 一旦它是线程最新邮件就
+          // 兜底成 bare (snippet/ai fields 为空), 一旦它是线程最新邮件就
           // 被 groupByThread 选成 head → "非置顶标旗邮件矮行 + 无 AI strip"。标旗
           // 视图语义=只看我标的邮件, 故线程只在标旗邮件之间聚合 (head 必为标旗邮件,
           // enriched 完整), 不 merge 跨邮件补充。草稿视图同理: 每条草稿独立成行
@@ -569,15 +560,14 @@ export function useEmailListRows(): UseEmailListRowsReturn {
   // 会对所有 row 调一遍 rowHeight 算 total height. 之前 rowHeight 函数内联
   // cleanSnippet (11 段正则) + AI strip check, 500 行级别累积 ≥ 200ms 触发
   // macOS wait cursor. 这里一把 useMemo 算好高度数组, rowHeight 改成 O(1)
-  // 查表; deps 含 newIds ("NEW" chip 影响 ai-strip) 与 snippetMap (Sprint 20 行高
-  // 改用懒取 snippet 文本判正文行, 文本到达后须重算高度让行随内容自适应)。
+  // 查表; deps 含 newIds ("NEW" chip 影响 ai-strip)。
   const rowHeights = useMemo(() => {
     const arr = new Array<number>(rows.length)
     for (let i = 0; i < rows.length; i++) {
-      arr[i] = computeRowHeight(rows[i], newIds, snippetMap)
+      arr[i] = computeRowHeight(rows[i], newIds)
     }
     return arr
-  }, [rows, newIds, snippetMap])
+  }, [rows, newIds])
   const getRowHeight = useCallback((index: number): number => rowHeights[index] ?? 28, [rowHeights])
 
   // 滚动锚定: 展开 B 时手风琴折叠上方长线程 A → B 及下方行整体上移, 但 react-window
@@ -694,45 +684,8 @@ export function useEmailListRows(): UseEmailListRowsReturn {
     })
   }, [navTargetId, rows, rowHeights, clearNavTarget])
 
-  // Sprint 19 — 对【已滚动到的】has_body 行按需取 snippet (email:listSnippets)。
-  // stopIndex 随滚动增长 → 分批懒取经过的行; 首屏 ~15 行 12ms, 永不一次拉 800 行
-  // 的 body blob。snippetReqRef 去重, 无 body 的行跳过 (子邮件 / 纯元数据)。
-  const fetchSnippetsUpTo = useCallback(
-    (stopIndex: number): void => {
-      const limit = Math.min(stopIndex + 12, rows.length)
-      const need: number[] = []
-      for (let i = 0; i < limit; i++) {
-        const r = rows[i]
-        if (r?.type !== 'email' || !r.email.has_body) continue
-        const id = r.email.internal_id
-        if (snippetReqRef.current.has(id)) continue
-        snippetReqRef.current.add(id)
-        need.push(id)
-      }
-      if (need.length === 0) return
-      void mailApi.email
-        .listSnippets(need)
-        .then((m) => {
-          if (m && Object.keys(m).length > 0) setSnippetMap((prev) => ({ ...prev, ...m }))
-        })
-        .catch(() => {
-          // 取 snippet 失败不致命 (列表已渲染, 仅缺预览行文本); 解除请求标记以便重试。
-          for (const id of need) snippetReqRef.current.delete(id)
-        })
-    },
-    [rows, mailApi]
-  )
-
-  // 首屏 snippet — onRowsRendered 在挂载时也会触发, 但加一道兜底确保第一屏总有
-  // 预览 (rows 变化即尝试, snippetReqRef 去重故重复调用廉价)。
-  useEffect(() => {
-    if (rows.length > 0) fetchSnippetsUpTo(20)
-  }, [rows, fetchSnippetsUpTo])
-
   const handleRowsRendered = useCallback(
     (range: { stopIndex: number }) => {
-      // 懒取经过的行的 snippet (与分页无关, !showLoader 时也要取)。
-      fetchSnippetsUpTo(range.stopIndex)
       // 滚到 ~70% 或距底 8 行 (取更早) 就预取下一页. 配合上面 keepPreviousData,
       // limit 升级期间旧 rows 保留挂载, 新结果到达后 React Query 原地替换, 用户
       // 不会看到 spinner / 列表抖动 / 回顶部.
@@ -744,7 +697,7 @@ export function useEmailListRows(): UseEmailListRowsReturn {
         setPageCount((c) => Math.min(c + 1, MAX_PAGES))
       }
     },
-    [rows.length, showLoader, fetchSnippetsUpTo]
+    [rows.length, showLoader]
   )
 
   return {
@@ -753,7 +706,6 @@ export function useEmailListRows(): UseEmailListRowsReturn {
     orderedIds,
     activeId,
     newIds,
-    snippetMap,
     counts,
     categoryCounts,
     priorityCounts,
@@ -776,19 +728,14 @@ function allIdsFirstPage(all: ReadonlyArray<EnrichedEmailMeta>): number[] {
   return all.slice(0, PAGE_SIZE).map((r) => r.internal_id)
 }
 
-// Sprint 14 round 11 — listByThread returns the bare EmailMeta shape
-// (no snippet / ai_* fields).  Thread children are rendered with the
+// Sprint 14 round 11 — listByThread returns EmailMeta without AI fields.
+// Thread children are rendered with the
 // same EmailRow component used by the head, so we widen each row to
 // EnrichedEmailMeta with safe defaults.  The empty AI fields make the
-// child rows render the simpler 60-78px layout (no ai-strip / snippet)
-// which reads well under the head.
+// child rows render the simpler layout unless their metadata snippet is present.
 function enrichDefaults(m: EmailMeta): EnrichedEmailMeta {
   return {
     ...m,
-    snippet: null,
-    // listByThread 补全的子邮件不带 body 信息 → has_body=false (保持原 60-78px
-    // 紧凑行高, 不为它们懒取 snippet, 与改造前行为一致)。
-    has_body: false,
     lang: 'unknown',
     ai_priority: null,
     ai_action: null,

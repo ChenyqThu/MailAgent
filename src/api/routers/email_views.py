@@ -1,20 +1,19 @@
 """email enriched 视图路由 — /api/email/* (enriched 读端点)。
 
 与 routers/email.py **同 prefix 不同文件**: email.py 装 CLI-契约镜像的 CRUD/搜索/写端点，
-本文件专装收件箱 UI 主力的 **enriched 读视图** (email_metadata + email_body +
+本文件专装收件箱 UI 主力的 **enriched 读视图** (email_metadata +
 llm_processing 的 JOIN，非 repo-backed 单表)。tags=['email-enriched'] 便于 OpenAPI 分组。
 
-实现的 6 端点 (handoff §2 + gotcha #4):
-  GET  /api/email/list-enriched        — listEnriched (snippet+AI chip JOIN，**本 sprint 必须**)
+实现的 5 端点 (handoff §2 + gotcha #4):
+  GET  /api/email/list-enriched        — listEnriched (metadata snippet + AI chip JOIN)
   GET  /api/email/mailboxes            — listMailboxes (mailbox 汇总计数，**本 sprint 必须**)
   GET  /api/email/thread/{thread_id}   — listByThread (单线程兄弟邮件，ASC)
   POST /api/email/threads              — listByThreads (批量线程 → {thread_id: items[]})
-  POST /api/email/snippets             — listSnippets (ids → {id: snippet}，懒取正文摘要)
   POST /api/email/ai-fields            — aiFields (ids → {id: AIFields}，LLM 标签 JOIN)
 
 这些视图的 wire ``data`` 形状 1:1 镜像 **Electron 主进程 handler**
 (frontend/src/electron/main/handlers/email.ts 的 listEmailsEnriched / listMailboxes /
-listEmailsByThread(s) / listEmailSnippets / getAIFields)，让 web HttpApi 能与
+listEmailsByThread(s) / getAIFields)，让 web HttpApi 能与
 ElectronApi 同形复用 EnrichedEmailMeta / MailboxSummary / AIFields
 (frontend/src/shared/api/types.ts) 类型，无须跨 main/renderer 边界。
 
@@ -48,7 +47,7 @@ if TYPE_CHECKING:
 
 router = APIRouter(prefix="/api/email", tags=["email-enriched"])
 
-# C10: batch 端点 (threads / snippets / ai-fields / list-enriched internalIds) 从请求体/
+# C10: batch 端点 (threads / ai-fields / list-enriched internalIds) 从请求体/
 # query 构 ``IN (...)`` SQL。无界列表会撑爆 SQLite 变量上限 (SQLITE_MAX_VARIABLE_NUMBER,
 # 默认 999) 并阻塞连接。统一 cap 批量基数 ≤500 (远低于变量上限, 留余量给其它绑定参数),
 # 超限 → 400 E_INVALID_ARG (调用方应分页/分批)。
@@ -233,7 +232,13 @@ def _shape_list_item(row: sqlite3.Row) -> dict[str, Any]:
         "sync_status": row["sync_status"],
         "notion_page_id": row["notion_page_id"],
         "notion_url": _notion_url(row["notion_page_id"]),
+        "snippet": row["snippet"],
     }
+
+
+def _list_item_meta_cols(meta_cols: set[str]) -> str:
+    snippet_expr = "snippet" if "snippet" in meta_cols else "NULL"
+    return f"{_LIST_ITEM_META_COLS}, {snippet_expr} AS snippet"
 
 
 def _build_enriched_where(opts: dict[str, Any]) -> tuple[list[str], list[Any]]:
@@ -316,13 +321,13 @@ async def list_enriched(
     limit: int = Query(100, ge=1, le=ENRICHED_LIMIT_MAX),
     offset: int = Query(0, ge=0),
 ):
-    """收件箱 enriched 列表 — metadata + snippet(懒) + AI chip + attach_count + 线程。
+    """收件箱 enriched 列表 — metadata + snippet + AI chip + attach_count + 线程。
 
-    data = EnrichedEmailMeta[] (types.ts): EmailMeta + {snippet(null,懒取)/has_body/
+    data = EnrichedEmailMeta[] (types.ts): EmailMeta + {snippet/
     lang/ai_priority/ai_action/ai_category/attach_count/is_important/processing_status}。
     1:1 镜像 handlers/email.ts::listEmailsEnriched —— 含 ``skipped`` 守卫 (调用方未显式
-    查 status 时排除陈旧/过滤行，与 mailbox 计数口径一致) + Sprint19 snippet 懒取
-    (列表查询不读 body blob，snippet=null，前端对可见行调 /snippets)。
+    查 status 时排除陈旧/过滤行，与 mailbox 计数口径一致)。snippet 直接读取
+    email_metadata 去规范化列，列表查询不 JOIN / 不读取 email_body blob。
 
     AI 字段经 ``llm_processing.labels_json`` LEFT JOIN + 主表 ai_priority/ai_action
     COALESCE 提升 (v14)。schema 缺这些列/表时 (旧/裸/测试库) 降级 NULL，列表仍出数据。
@@ -361,6 +366,7 @@ async def list_enriched(
     has_processing = "processing_status" in meta_cols
     has_ai_priority = "ai_priority" in meta_cols
     has_ai_action = "ai_action" in meta_cols
+    has_snippet = "snippet" in meta_cols
 
     clauses, params = _build_enriched_where(opts)
 
@@ -386,7 +392,6 @@ async def list_enriched(
 
     # AI 字段: labels_json 经 json_valid 守卫 (malformed JSON 否则整 query 抛 →
     # 列表整页崩)；priority/action 走主表列 COALESCE fallback labels_json (v14)。
-    # has_body: 只判 body 行存在 (PK join，不读 blob → Sprint19 perf)。
     if has_llm:
         lang_expr = (
             "CASE WHEN json_valid(l.labels_json) "
@@ -418,8 +423,9 @@ async def list_enriched(
         else labels_action
     )
 
+    snippet_expr = "m.snippet" if has_snippet else "NULL"
     extra_cols = (
-        "(b.internal_id IS NOT NULL) AS has_body_raw, "
+        f"{snippet_expr} AS snippet, "
         f"{lang_expr} AS lang_raw, "
         f"{priority_expr} AS priority_raw, "
         f"{action_expr} AS action_raw, "
@@ -436,7 +442,6 @@ async def list_enriched(
     sql = f"""
         SELECT {enriched_meta_cols}, {extra_cols}
           FROM email_metadata m
-          LEFT JOIN email_body b ON b.internal_id = m.internal_id
           {llm_join}
           LEFT JOIN (
             SELECT internal_id, COUNT(*) AS attach_count
@@ -466,15 +471,14 @@ async def list_enriched(
 def _shape_enriched_item(row: sqlite3.Row) -> dict[str, Any]:
     """enriched 行 → EnrichedEmailMeta wire dict。镜像 handlers/email.ts::shapeEnrichedItem。
 
-    snippet 恒 null (Sprint19 懒取，前端对可见行调 /snippets)；has_body 立即可知
-    (行高稳定)；lang/ai_priority 经映射；ai_action/ai_category 原样透传 (中文 label)。
+    snippet 直接来自 email_metadata 去规范化列；lang/ai_priority 经映射；
+    ai_action/ai_category 原样透传 (中文 label)。
     """
     base = _shape_list_item(row)
     base.update(
         {
             "is_important": _as_bool(row["is_important"]),
-            "snippet": None,
-            "has_body": row["has_body_raw"] == 1,
+            "snippet": row["snippet"],
             "lang": _map_language(row["lang_raw"]),
             "ai_priority": _map_priority(row["priority_raw"]),
             "ai_action": row["action_raw"] if row["action_raw"] is not None else None,
@@ -566,8 +570,9 @@ async def list_by_thread(
             [], request=request, source="sqlite", meta_extra={"count": 0}
         )
 
+    schema = _probe_schema(repo)
     sql = f"""
-        SELECT {_LIST_ITEM_META_COLS}
+        SELECT {_list_item_meta_cols(schema["meta_cols"])}
           FROM email_metadata
          WHERE thread_id = ?
            AND (mailbox IS NULL OR mailbox NOT IN ('草稿箱', '草稿', 'Drafts'))
@@ -625,8 +630,9 @@ async def list_by_threads(
     _reject_oversized_batch(len(ids), field="threadIds")
 
     placeholders = ",".join("?" for _ in ids)
+    schema = _probe_schema(repo)
     sql = f"""
-        SELECT {_LIST_ITEM_META_COLS}
+        SELECT {_list_item_meta_cols(schema["meta_cols"])}
           FROM email_metadata
          WHERE thread_id IN ({placeholders})
            AND (mailbox IS NULL OR mailbox NOT IN ('草稿箱', '草稿', 'Drafts'))
@@ -645,71 +651,6 @@ async def list_by_threads(
         if not tid:
             continue
         out.setdefault(tid, []).append(item)
-    return success_envelope(
-        out, request=request, source="sqlite", meta_extra={"count": len(out)}
-    )
-
-
-# ===========================================================================
-# POST /api/email/snippets — listSnippets (ids → {id: snippet}，懒取)
-# ===========================================================================
-
-
-@router.post("/snippets", dependencies=[Depends(verify_cf_access)])
-async def list_snippets(
-    request: Request,
-    repo: "EmailRepository" = Depends(get_repository),
-    body: dict[str, Any] = Body(
-        default={},
-        description='{"internalIds": [1001, ...]} — 按 id 批量取正文 snippet',
-    ),
-):
-    """按 internal_id 批量取正文 snippet (body_markdown 前 100 字) — Sprint19 懒取。
-
-    body = {internalIds: number[]}；data = {internal_id(str): snippet}。
-    1:1 镜像 handlers/email.ts::listEmailSnippets —— list-enriched 不读 body blob，
-    前端对【可见行】调本接口懒取。无 body / 空 snippet 的 id 不出现在 map。
-    空/非法输入 → {}。
-
-    NOTE: JSON object 键必为 string，故 map 键是 ``"1001"`` 形 (前端按 String(id)
-    取，与 IPC 的 number 键语义等价)。
-    """
-    ids_raw = body.get("internalIds") if isinstance(body, dict) else None
-    if not isinstance(ids_raw, list):
-        return success_envelope(
-            {}, request=request, source="sqlite", meta_extra={"count": 0}
-        )
-    seen: set[int] = set()
-    ids: list[int] = []
-    for n in ids_raw:
-        if isinstance(n, bool):
-            continue  # bool 是 int 子类，排除
-        if isinstance(n, int) and n >= 0 and n not in seen:
-            seen.add(n)
-            ids.append(n)
-    if not ids:
-        return success_envelope(
-            {}, request=request, source="sqlite", meta_extra={"count": 0}
-        )
-    # C10: cap the IN(...) batch size (de-duped count) before SQL.
-    _reject_oversized_batch(len(ids), field="internalIds")
-
-    placeholders = ",".join("?" for _ in ids)
-    sql = (
-        "SELECT internal_id, substr(body_markdown, 1, 100) AS snippet "
-        f"FROM email_body WHERE internal_id IN ({placeholders})"
-    )
-    conn = repo._connect()
-    try:
-        rows = conn.execute(sql, ids).fetchall()
-    finally:
-        conn.close()
-
-    out: dict[str, str] = {}
-    for r in rows:
-        snip = r["snippet"]
-        if isinstance(snip, str) and snip:
-            out[str(r["internal_id"])] = snip
     return success_envelope(
         out, request=request, source="sqlite", meta_extra={"count": len(out)}
     )

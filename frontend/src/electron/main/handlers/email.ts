@@ -19,9 +19,8 @@ import {
   mapSentiment,
   parseLabels
 } from '@shared/lib/ai_mapping'
-import type { AIFields, EnrichedEmailMeta, MailboxSummary } from '@shared/api/types'
+import type { AIFields, EmailMeta, EnrichedEmailMeta, MailboxSummary } from '@shared/api/types'
 import type {
-  EmailList_EmailListItem,
   EmailGet_EmailRecord,
   AttachmentList_AttachmentItem,
   MailagentEmailBody
@@ -77,6 +76,7 @@ interface EmailMetadataRow {
   notion_thread_id: string | null
   sync_error: string | null
   retry_count: number | null
+  snippet: string | null
 }
 
 interface EmailBodyRow {
@@ -120,7 +120,7 @@ const SYNC_STATUSES = new Set([
 ])
 
 // EmailGet_EmailRecord declares sync_status as required (string | null), while
-// EmailList_EmailListItem leaves it optional. Pick the stricter shape so the
+// EmailMeta leaves it optional. Pick the stricter shape so the
 // DAO never returns `undefined` — the list shape is a superset and remains
 // assignable.
 type SyncStatus = EmailGet_EmailRecord['sync_status']
@@ -143,7 +143,7 @@ function notionUrl(pageId: string | null): string | null {
   return `https://www.notion.so/${pageId.replace(/-/g, '')}`
 }
 
-function shapeListItem(row: EmailMetadataRow): EmailList_EmailListItem {
+function shapeListItem(row: EmailMetadataRow): EmailMeta {
   return {
     internal_id: row.internal_id,
     message_id: row.message_id,
@@ -157,7 +157,8 @@ function shapeListItem(row: EmailMetadataRow): EmailList_EmailListItem {
     is_flagged: asBool(row.is_flagged),
     sync_status: asSyncStatus(row.sync_status),
     notion_page_id: row.notion_page_id,
-    notion_url: notionUrl(row.notion_page_id)
+    notion_url: notionUrl(row.notion_page_id),
+    snippet: row.snippet
   }
 }
 
@@ -294,7 +295,8 @@ const LIST_COLS = `
     internal_id, message_id, thread_id, subject, sender, sender_name,
     to_addr, cc_addr, date_received, mailbox, is_read, is_flagged,
     is_important,
-    sync_status, notion_page_id, notion_thread_id, sync_error, retry_count
+    sync_status, notion_page_id, notion_thread_id, sync_error, retry_count,
+    snippet
 `
 
 const BODY_COLS = `
@@ -328,7 +330,7 @@ function prep(db: Database, sql: string): Statement {
  * Ascending date order so the conversation reads top-to-bottom (mockup
  * §sidebar).
  */
-export function listEmailsByThread(threadId: string | null | undefined): EmailList_EmailListItem[] {
+export function listEmailsByThread(threadId: string | null | undefined): EmailMeta[] {
   if (typeof threadId !== 'string' || threadId.length === 0) return []
   const db = getDb()
   const rows = prep(
@@ -354,7 +356,7 @@ export function listEmailsByThread(threadId: string | null | undefined): EmailLi
  */
 export function listEmailsByThreads(
   threadIds: ReadonlyArray<string> | null | undefined
-): Record<string, EmailList_EmailListItem[]> {
+): Record<string, EmailMeta[]> {
   if (!Array.isArray(threadIds)) return {}
   // De-dupe + drop empties — don't trust the caller to pre-clean; keeps the
   // IN(...) placeholder count tight and the statement-cache slots bounded.
@@ -372,7 +374,7 @@ export function listEmailsByThreads(
         AND ${DRAFTS_EXCLUDE_SQL}
       ORDER BY thread_id ASC, date_received ASC NULLS LAST, internal_id ASC`
   ).all(...ids) as EmailMetadataRow[]
-  const out: Record<string, EmailList_EmailListItem[]> = {}
+  const out: Record<string, EmailMeta[]> = {}
   for (const row of rows) {
     const item = shapeListItem(row)
     const tid = item.thread_id
@@ -382,7 +384,7 @@ export function listEmailsByThreads(
   return out
 }
 
-export function listEmails(opts: ListOpts): EmailList_EmailListItem[] {
+export function listEmails(opts: ListOpts): EmailMeta[] {
   const db = getDb()
   const where = buildListWhere(opts)
   // 前端 EmailList.MAX_PAGES * PAGE_SIZE = 3000, backend cap 必须 ≥ 它,
@@ -449,11 +451,7 @@ export function getEmailBody(
 // ---- Enriched list + mailbox + AI fields (renderer-only views) -------------
 
 interface EnrichedRow extends EmailMetadataRow {
-  // Sprint 19 perf — list query no longer reads the body_markdown blob for a
-  // snippet (substr 仍要把整块 blob 读进内存; 800 行 → ~1.5s 阻塞同步主进程,
-  // 列表/archive/全局卡顿主因). 改成只判断 body 行是否存在 (PK join, 不读 blob,
-  // ~100ms), snippet 由 email:listSnippets 按可见行懒取。
-  has_body_raw: number | null
+  snippet: string | null
   lang_raw: string | null
   priority_raw: string | null
   action_raw: string | null
@@ -497,9 +495,8 @@ const ENRICHED_LIST_COLS = `
 // "malformed JSON" 整个 query 失败 → listEnriched 整页崩, 前端永远拉不到数据.
 // 加 json_valid 包一层, 非法 row 返回 NULL (该行 AI 字段空着, 但不影响其他行).
 const ENRICHED_EXTRA_COLS = `
-    -- Sprint 19 perf: 不再 substr(body_markdown) (读整块 blob, 800 行 ~1.5s);
-    -- 只判存在 (b.internal_id PK join, 不触 blob). snippet 走 email:listSnippets 懒取。
-    (b.internal_id IS NOT NULL) AS has_body_raw,
+    -- v33: snippet 去规范化在 email_metadata，列表不再 JOIN / 读取 email_body blob。
+    m.snippet,
     CASE WHEN json_valid(l.labels_json) THEN json_extract(l.labels_json, '$.language')   END AS lang_raw,
     -- v14: priority / action_type 走主表列 (走索引) + COALESCE fallback labels_json
     -- 兼容存量未 backfill 邮件. 全量 backfill 后 json_extract 路径可退役.
@@ -535,10 +532,7 @@ function shapeEnrichedItem(row: EnrichedRow): EnrichedEmailMeta {
     // v9 — 邮件原生 Importance/X-Priority 头部归一化（reader._parse_importance），
     // 给 EmailRow 的 ❗ 角标用，不再从 ai_priority 推断。
     is_important: asBool(row.is_important),
-    // Sprint 19 — snippet 懒取 (email:listSnippets), 列表查询不再读 body blob。
-    // has_body 立即可知, 用于 EmailList 行高 (避免 snippet 到达后行高跳变)。
-    snippet: null,
-    has_body: row.has_body_raw === 1,
+    snippet: row.snippet,
     lang: mapLanguage(row.lang_raw),
     ai_priority: mapPriority(row.priority_raw),
     ai_action: row.action_raw ?? null,
@@ -574,7 +568,6 @@ export function listEmailsEnriched(opts: ListOpts): EnrichedEmailMeta[] {
   const offset = Math.max(opts.offset ?? 0, 0)
   const sql = `SELECT ${ENRICHED_LIST_COLS}, ${ENRICHED_EXTRA_COLS}
                FROM email_metadata m
-               LEFT JOIN email_body b      ON b.internal_id = m.internal_id
                LEFT JOIN llm_processing l ON l.internal_id = m.internal_id
                LEFT JOIN (
                  SELECT internal_id, COUNT(*) AS attach_count
@@ -586,35 +579,6 @@ export function listEmailsEnriched(opts: ListOpts): EnrichedEmailMeta[] {
                LIMIT ? OFFSET ?`
   const rows = prep(db, sql).all(...where.params, limit, offset) as EnrichedRow[]
   return rows.map(shapeEnrichedItem)
-}
-
-/**
- * Sprint 19 — 按 internal_id 批量取正文 snippet (substr body_markdown 前 100 字)。
- * listEnriched 已不再读 body blob (~1.5s @800 行, 阻塞同步主进程), 前端改对
- * 【可见行】调本接口懒取 (~15-40 行 ~12ms), 列表秒出、卡顿消除。返回
- * {internal_id: snippet} map; 无 body / 空 snippet 的 id 不出现在 map 里。
- */
-export function listEmailSnippets(
-  internalIds: ReadonlyArray<number> | null | undefined
-): Record<number, string> {
-  if (!Array.isArray(internalIds)) return {}
-  const ids = Array.from(
-    new Set(internalIds.filter((n): n is number => Number.isInteger(n) && n >= 0))
-  )
-  if (ids.length === 0) return {}
-  const db = getDb()
-  const placeholders = ids.map(() => '?').join(',')
-  const rows = prep(
-    db,
-    `SELECT internal_id, substr(body_markdown, 1, 100) AS snippet
-       FROM email_body
-      WHERE internal_id IN (${placeholders})`
-  ).all(...ids) as Array<{ internal_id: number; snippet: string | null }>
-  const out: Record<number, string> = {}
-  for (const r of rows) {
-    if (typeof r.snippet === 'string' && r.snippet.length > 0) out[r.internal_id] = r.snippet
-  }
-  return out
 }
 
 export function listMailboxes(): MailboxSummary[] {
@@ -739,9 +703,6 @@ export function registerEmailHandlers(): void {
   )
   ipcMain.handle('email:listByThreads', (_evt, threadIds: string[] | null) =>
     listEmailsByThreads(threadIds)
-  )
-  ipcMain.handle('email:listSnippets', (_evt, internalIds: number[] | null) =>
-    listEmailSnippets(internalIds)
   )
   // v8 — listPinnedIds is a readonly SQLite SELECT, wired here. The
   // write path (email:pin / email:unpin) lives in write_ops.ts and forks

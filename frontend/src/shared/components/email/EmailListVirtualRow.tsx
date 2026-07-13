@@ -15,9 +15,6 @@ export interface RowProps {
   rows: ReadonlyArray<ListRow>
   activeId: number | null
   newIds: ReadonlySet<number>
-  /** Sprint 19 — 懒取的正文 snippet (internal_id → 前 100 字)。listEnriched 不再
-   *  读 body blob, 这里按可见行填充; VirtualRow 合并进 email.snippet 渲染预览。 */
-  snippets: Record<number, string>
   onSelect(id: number): void
   onToggleGroup(key: GroupKey): void
   onToggleThread(threadId: string): void
@@ -32,7 +29,6 @@ export function VirtualRow({
   // row component itself only needs the rest.  The prop stays in
   // RowProps so the List parent re-renders rows when active changes.
   newIds,
-  snippets,
   onSelect,
   onToggleGroup,
   onToggleThread,
@@ -117,15 +113,10 @@ export function VirtualRow({
           onExpandThread(t.threadId, item.email.internal_id)
         }
       : () => onSelect(item.email.internal_id)
-  // Sprint 19 — 合并懒取的 snippet。仅当原 email 无 snippet 且 map 有值时新建对象,
-  // 否则复用原引用 (EmailRow memo 按字段比较, snippet 变化才重渲该行)。
-  const liveSnippet = snippets[item.email.internal_id]
-  const emailForRow =
-    liveSnippet && !item.email.snippet ? { ...item.email, snippet: liveSnippet } : item.email
   return (
     <div style={style}>
       <EmailRow
-        email={emailForRow}
+        email={item.email}
         selected={item.bundleSelected}
         isNew={newIds.has(item.email.internal_id)}
         noAvatar={isChild}

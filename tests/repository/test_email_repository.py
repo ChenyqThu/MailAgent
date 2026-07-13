@@ -100,6 +100,14 @@ class TestCommitEmailWithBody:
         assert b.markdown == "hi"
         assert b.body_format == "html"
         assert b.raw_mime_sha256 == "abc"
+        conn = sqlite3.connect(str(fresh_db))
+        try:
+            snippet = conn.execute(
+                "SELECT snippet FROM email_metadata WHERE internal_id = 100"
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        assert snippet == "hi"
 
         # 读 attachment
         ats = repo.get_attachments(100)
@@ -117,6 +125,33 @@ class TestCommitEmailWithBody:
         repo.commit_email_with_body(101, body_v2, [])
         b = repo.get_body(101)
         assert b.markdown == "v2"
+        conn = sqlite3.connect(str(fresh_db))
+        try:
+            snippet = conn.execute(
+                "SELECT snippet FROM email_metadata WHERE internal_id = 101"
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        assert snippet == "v2"
+
+    def test_commit_truncates_snippet_to_100_unicode_characters(
+        self, repo: EmailRepository, fresh_db: Path
+    ):
+        _insert_metadata(fresh_db, 107)
+        markdown = "邮件正文🙂" * 30
+        repo.commit_email_with_body(
+            107,
+            BodyPayload(html="", markdown=markdown, body_format="text"),
+            [],
+        )
+        conn = sqlite3.connect(str(fresh_db))
+        try:
+            snippet = conn.execute(
+                "SELECT snippet FROM email_metadata WHERE internal_id = 107"
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        assert snippet == markdown[:100]
 
     def test_commit_clears_old_attachments(self, repo: EmailRepository, fresh_db: Path):
         """第二次 commit 会先 DELETE 老 attachment 行。"""

@@ -49,7 +49,6 @@ function em(over: Partial<EnrichedEmailMeta> & { internal_id: number }): Enriche
     thread_id: null,
     date_received: null,
     snippet: null,
-    has_body: false,
     lang: 'unknown',
     ai_priority: null,
     ai_action: null,
@@ -70,7 +69,6 @@ function emailRow(
 
 const NO_SUPPLEMENT: ReadonlyMap<string, ReadonlyArray<EnrichedEmailMeta>> = new Map()
 const NO_NEW: ReadonlySet<number> = new Set()
-const NO_SNIPPETS: Record<number, string> = {}
 
 const LABELS: Record<GroupKey, string> = {
   pinned: 'PINNED',
@@ -278,6 +276,34 @@ describe('groupByThread', () => {
     expect(groups[0]!.head.internal_id).toBe(9) // supplement sent reply leads
     expect(groups[0]!.children.map((c) => c.internal_id)).toEqual([1, 2])
     expect(groups[0]!.anchorDate).toBe('2026-07-08T10:00:00') // newest visible, not 07-10
+  })
+
+  test('supplement-only rows retain metadata snippets for preview height', () => {
+    const supplement = new Map([
+      [
+        't1',
+        [
+          em({
+            internal_id: 9,
+            thread_id: 't1',
+            date_received: '2026-07-07T09:00:00',
+            snippet: 'supplement body preview'
+          })
+        ]
+      ]
+    ])
+    const groups = groupByThread(
+      [em({ internal_id: 1, thread_id: 't1', date_received: '2026-07-08T10:00:00' })],
+      supplement
+    )
+    const child = groups[0]!.children.find((row) => row.internal_id === 9)
+    expect(child?.snippet).toBe('supplement body preview')
+    expect(
+      computeRowHeight(
+        child ? emailRow(child, { thread: { threadId: 't1', isHead: false } }) : undefined,
+        NO_NEW
+      )
+    ).toBe(84)
   })
 
   test('groups sort by anchorDate DESC — supplement messages do not bump thread order', () => {
@@ -564,59 +590,46 @@ describe('flattenGroups', () => {
 
 describe('computeRowHeight', () => {
   test('undefined row → 28, header → 28, loader → 44', () => {
-    expect(computeRowHeight(undefined, NO_NEW, NO_SNIPPETS)).toBe(28)
+    expect(computeRowHeight(undefined, NO_NEW)).toBe(28)
     expect(
       computeRowHeight(
         { type: 'header', key: 'today', label: 'TODAY', count: 1, collapsed: false },
-        NO_NEW,
-        NO_SNIPPETS
+        NO_NEW
       )
     ).toBe(28)
-    expect(computeRowHeight({ type: 'loader' }, NO_NEW, NO_SNIPPETS)).toBe(44)
+    expect(computeRowHeight({ type: 'loader' }, NO_NEW)).toBe(44)
   })
 
   test('no snippet text + no ai strip → 60', () => {
-    expect(computeRowHeight(emailRow(em({ internal_id: 1 })), NO_NEW, NO_SNIPPETS)).toBe(60)
-  })
-
-  test('Sprint 20 semantics: has_body=true but NO snippet text reserves no body line (60, not 84)', () => {
-    // Meeting "accepted/declined" notices: body row exists, markdown empty.
-    const row = emailRow(em({ internal_id: 1, has_body: true, snippet: null }))
-    expect(computeRowHeight(row, NO_NEW, NO_SNIPPETS)).toBe(60)
+    expect(computeRowHeight(emailRow(em({ internal_id: 1 })), NO_NEW)).toBe(60)
   })
 
   test('ai strip alone → 78 (via ai_priority / ai_action / failed sync / NEW chip)', () => {
     expect(
-      computeRowHeight(emailRow(em({ internal_id: 1, ai_priority: 'urgent' })), NO_NEW, NO_SNIPPETS)
+      computeRowHeight(emailRow(em({ internal_id: 1, ai_priority: 'urgent' })), NO_NEW)
     ).toBe(78)
     expect(
-      computeRowHeight(emailRow(em({ internal_id: 1, ai_action: '需要回复' })), NO_NEW, NO_SNIPPETS)
+      computeRowHeight(emailRow(em({ internal_id: 1, ai_action: '需要回复' })), NO_NEW)
     ).toBe(78)
     expect(
       computeRowHeight(
         emailRow(em({ internal_id: 1, sync_status: 'dead_letter' })),
-        NO_NEW,
-        NO_SNIPPETS
+        NO_NEW
       )
     ).toBe(78)
     // `isNew` mirrors EmailRow's aiStripVisible — newIds membership alone flips the strip.
-    expect(computeRowHeight(emailRow(em({ internal_id: 7 })), new Set([7]), NO_SNIPPETS)).toBe(78)
+    expect(computeRowHeight(emailRow(em({ internal_id: 7 })), new Set([7]))).toBe(78)
   })
 
   test('snippet text alone → 84 (own e.snippet takes precedence)', () => {
     expect(
-      computeRowHeight(emailRow(em({ internal_id: 1, snippet: 'hello body' })), NO_NEW, NO_SNIPPETS)
+      computeRowHeight(emailRow(em({ internal_id: 1, snippet: 'hello body' })), NO_NEW)
     ).toBe(84)
-  })
-
-  test('lazily-fetched snippet from the map counts when e.snippet is empty', () => {
-    const row = emailRow(em({ internal_id: 1, has_body: true, snippet: null }))
-    expect(computeRowHeight(row, NO_NEW, { 1: 'lazy snippet text' })).toBe(84)
   })
 
   test('snippet + ai strip → 100', () => {
     const row = emailRow(em({ internal_id: 1, snippet: 'hello', ai_priority: 'important' }))
-    expect(computeRowHeight(row, NO_NEW, NO_SNIPPETS)).toBe(100)
+    expect(computeRowHeight(row, NO_NEW)).toBe(100)
   })
 })
 

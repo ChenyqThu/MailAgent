@@ -92,7 +92,8 @@ CREATE TABLE email_metadata (
     updated_at REAL,
     is_pinned INTEGER DEFAULT 0,
     pinned_at REAL,
-    is_important INTEGER DEFAULT 0
+    is_important INTEGER DEFAULT 0,
+    snippet TEXT
 );
 
 CREATE TABLE email_body (
@@ -165,15 +166,15 @@ def _seed(db_path: Path, attach_dir: Path) -> None:
                 to_addr, cc_addr, date_received, mailbox, is_read, is_flagged,
                 sync_status, notion_page_id, notion_thread_id, sync_error,
                 retry_count, next_retry_at, created_at, updated_at,
-                is_pinned, pinned_at, is_important)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                is_pinned, pinned_at, is_important, snippet)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 EMAIL_ID, "<msg-1001@example.com>", "thread-A",
                 "Quarterly redis timeout review", "alice@example.com", "Alice",
                 "bob@example.com", "cc@example.com", "2026-05-01 09:00:00",
                 "收件箱", 0, 1, "synced",
                 "31a15375830d81798e75fcfce933808b", None, None,
-                0, None, now, now, 0, None, 1,
+                0, None, now, now, 0, None, 1, "Hello **redis** timeout body",
             ),
         )
         conn.execute(
