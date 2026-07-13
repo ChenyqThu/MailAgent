@@ -273,6 +273,66 @@ def test_loop_explicit_ref_route_error_falls_back(monkeypatch):
     assert len(fake.requests) == 1 and fake.requests[0]["json"]["model"] == "qwen-max"
 
 
+DEEPSEEK_ROUTE = ProviderRoute(
+    provider_id="deepseek",
+    protocol="deepseek",
+    base_url="https://api.deepseek.com",
+    api_key="sk-d",
+    model_id="deepseek-v4-pro",
+    model_ref="deepseek:deepseek-v4-pro",
+)
+
+
+def _client_deepseek(turns, monkeypatch):
+    monkeypatch.setattr(client_mod.provider_routing, "registry_enabled", lambda: True)
+    monkeypatch.setattr(
+        client_mod.provider_routing, "resolve_route",
+        lambda ref: {"deepseek:deepseek-v4-pro": DEEPSEEK_ROUTE}.get(ref),
+    )
+    client = LLMClient()
+    fake = _FakeHttp(turns)
+    client._http_by_provider[DEEPSEEK_ROUTE.provider_id] = (
+        client._route_sig(DEEPSEEK_ROUTE), fake
+    )
+    return client, fake
+
+
+def test_loop_deepseek_forced_final_injects_thinking_disabled(monkeypatch):
+    """P5 dogfood quirk：deepseek 强制轮（最后一轮 forced final_tool）body 注入
+    {"thinking":{"type":"disabled"}}（thinking 下强制 tool_choice 400）。"""
+    client, fake = _client_deepseek([_turn_final()], monkeypatch)
+    res = _run(client, model_chain=["deepseek:deepseek-v4-pro"], max_iter=1)
+    assert res.final_input == {"headline": "H"}
+    body = fake.requests[0]["json"]
+    assert body["tool_choice"] == {
+        "type": "function", "function": {"name": "build_report"}
+    }
+    assert body["thinking"] == {"type": "disabled"}
+
+
+def test_loop_deepseek_auto_turn_keeps_thinking(monkeypatch):
+    """auto 轮不注入（保留 thinking 推理能力）；同一 loop 的最后强制轮才注入。"""
+    client, fake = _client_deepseek(
+        [_turn_tool_call_fragmented(), _turn_final()], monkeypatch
+    )
+    res = _run(
+        client, model_chain=["deepseek:deepseek-v4-pro"], max_iter=2,
+        tool_handlers={"search_emails": lambda i: "ok"},
+    )
+    assert res.final_input == {"headline": "H"}
+    auto_body = fake.requests[0]["json"]
+    forced_body = fake.requests[1]["json"]
+    assert auto_body["tool_choice"] == "auto" and "thinking" not in auto_body
+    assert forced_body["thinking"] == {"type": "disabled"}
+
+
+def test_loop_non_deepseek_forced_final_no_thinking(monkeypatch):
+    """非 deepseek 协议（dashscope openai-compatible）强制轮不注入 thinking 键。"""
+    client, fake = _client_with([_turn_final()], monkeypatch)
+    _run(client, max_iter=1)
+    assert "thinking" not in fake.requests[0]["json"]
+
+
 def test_loop_missing_id_backfilled_consistently(monkeypatch):
     """个别实现单 tool call 省 id → 补确定性 id，assistant 重放与 role:"tool" 对齐。"""
     no_id_turn = _FakeResp([

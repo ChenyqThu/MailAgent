@@ -243,6 +243,12 @@ sqlite3 "$DB" "SELECT value FROM llm_provider_meta WHERE key='snapshot_version'"
   接入时选非 thinking 模型或走其 anthropic-compat 端点）。
 - **openai 系 `reasoningEffort` 未注入**：per-protocol thinking 当前 = anthropic-only 注入，
   其他协议无 providerOptions（防静默失效的保守面；按需再补）。
+- **DeepSeek forced-tool-call quirk 仅覆盖 `protocol='deepseek'` 行**：DeepSeek 官方端点
+  （实测 2026-07-13，deepseek-v4 系全默认 thinking）在 thinking 模式下拒绝强制指名
+  tool_choice（400）。Python 腿在强制轮（classify 恒强制 / tool loop 最后一轮）自动注入
+  `{"thinking": {"type": "disabled"}}`（单源 `provider_routing.forced_tool_choice_extra_body`；
+  auto 轮不注入，保留 thinking 推理）。经 openai-compatible 中转接 DeepSeek 的行**不覆盖**
+  此 quirk（协议判不出上游是 DeepSeek）——遇同款 400 时改用官方 deepseek protocol 行接入。
 - **chat 面板模型选择器无分组**：跨 provider 聚合后仍是扁平列表（Agents 抽屉已分组）；
   mid-conversation 跨 provider 切换也无「建议新开会话」提示（tool-use 历史跨家续接可能被 id
   校验拒，遇到即新开会话）。

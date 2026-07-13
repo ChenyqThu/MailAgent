@@ -155,6 +155,30 @@ def clamp_max_tokens(requested: int, route: Optional[ProviderRoute]) -> int:
     return int(requested)
 
 
+# per-protocol quirk：强制 tool_choice 轮须额外注入的请求体字段（P5 dogfood 实测）。
+_FORCED_TOOL_CHOICE_EXTRA_BODY: Dict[str, Dict[str, Any]] = {
+    "deepseek": {"thinking": {"type": "disabled"}},
+}
+
+
+def forced_tool_choice_extra_body(protocol: Optional[str]) -> Dict[str, Any]:
+    """强制 tool_choice 时须 merge 进请求体的 per-protocol extra body（quirk 单源）。
+
+    DeepSeek 官方端点实测（2026-07-13，api.deepseek.com，deepseek-v4-flash/-pro）：
+    当前模型全系默认 thinking 模式，thinking 下强制指名 tool_choice
+    （``{"type":"function","function":{...}}`` 与 ``"required"`` 同拒）→ 400
+    "Thinking mode does not support this tool_choice"；``enable_thinking:false``
+    不被识别；唯一可行解 = 请求体加 ``{"thinking": {"type": "disabled"}}``。
+
+    语义注记：强制结构化输出本就不需要 thinking，禁用同时省 token。仅
+    ``protocol='deepseek'`` 生效——经 openai-compatible 中转接 DeepSeek 的行不覆盖
+    （协议判不出上游是 DeepSeek），作为已知限制记录在
+    docs/reference/llm-agent/llm-provider-registry.md §11。auto 轮不注入（保留
+    thinking 推理能力），由调用方（client.py）保证。
+    """
+    return dict(_FORCED_TOOL_CHOICE_EXTRA_BODY.get(protocol or "", {}))
+
+
 # ---------------------------------------------------------------------------
 # 快照 TTL 缓存（30s；读失败沿用旧值 fail-open，且刷新时间戳防 per-call 重试风暴）
 # ---------------------------------------------------------------------------

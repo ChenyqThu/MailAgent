@@ -306,3 +306,21 @@ def test_snapshot_failure_keeps_stale_snapshot(monkeypatch):
     monkeypatch.setattr(pr, "get_llm_provider_store", _boom)
     monkeypatch.setattr(pr, "_SNAPSHOT_TTL_SEC", 0.0)  # 强制过期 → 每次都尝试重读（失败）
     assert pr.resolve_route("dashscope:m") is not None  # 旧快照 fail-open 续用
+
+
+# ── forced tool_choice per-protocol quirk（P5 dogfood：deepseek thinking×forced 400）───
+
+
+def test_forced_tool_choice_extra_body_matrix():
+    assert pr.forced_tool_choice_extra_body("deepseek") == {
+        "thinking": {"type": "disabled"}
+    }
+    # 其余协议（含 legacy 的 None / 空串）恒空 dict——merge 是 no-op
+    for proto in ("anthropic", "openai", "openai-compatible", "openrouter", "google", "", None):
+        assert pr.forced_tool_choice_extra_body(proto) == {}
+    # 返回副本：调用方 mutate 不污染单源表
+    leaked = pr.forced_tool_choice_extra_body("deepseek")
+    leaked["extra"] = 1
+    assert pr.forced_tool_choice_extra_body("deepseek") == {
+        "thinking": {"type": "disabled"}
+    }

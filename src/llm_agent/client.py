@@ -468,6 +468,10 @@ class LLMClient:
             "tools": [_to_openai_tool(tool_schema)],
             "tool_choice": {"type": "function", "function": {"name": tool_name}},
         }
+        # classify 恒强制 tool_choice → 恒 merge per-protocol quirk（deepseek 须禁
+        # thinking 否则 400）。route=None（legacy 前缀路由）不注入，字节级不变。
+        if route is not None:
+            body.update(provider_routing.forced_tool_choice_extra_body(route.protocol))
 
         t0 = time.monotonic()
         tool_args = ""
@@ -896,9 +900,10 @@ class LLMClient:
 
         for it in range(max_iter):
             # 最后一轮强制收尾（复用 classify 的 forced-function 形状），否则 auto。
+            forced_final = it == max_iter - 1
             tool_choice: Union[str, Dict[str, Any]] = (
                 {"type": "function", "function": {"name": final_tool}}
-                if it == max_iter - 1
+                if forced_final
                 else "auto"
             )
             body: Dict[str, Any] = {
@@ -909,6 +914,12 @@ class LLMClient:
                 "tools": tools_payload,
                 "tool_choice": tool_choice,
             }
+            # 仅强制轮 merge per-protocol quirk（deepseek 禁 thinking）；auto 轮不注入
+            # ——保留 thinking 给推理用。route=None（legacy）不注入。
+            if forced_final and route is not None:
+                body.update(
+                    provider_routing.forced_tool_choice_extra_body(route.protocol)
+                )
             turn = await self._openai_stream_turn(
                 http=http, path=path, body=body, model=model, ctx=f"iter={it}", route=route
             )

@@ -210,6 +210,47 @@ def test_classify_routed_openai_normalized_base_and_clamp(monkeypatch):
     assert req["json"]["max_tokens"] == 8000
 
 
+def test_classify_deepseek_forced_tool_choice_injects_thinking_disabled(monkeypatch):
+    """P5 dogfood quirk：deepseek 协议（thinking 下强制指名 tool_choice 400）——classify
+    恒强制 tool_choice → body 恒注入 {"thinking":{"type":"disabled"}}。"""
+    route = _route(pid="deepseek", protocol="deepseek",
+                   base="https://api.deepseek.com", model_id="deepseek-v4-pro")
+    _patch_routes(monkeypatch, {"deepseek:deepseek-v4-pro": route})
+    fake = _FakeHttp([_FakeResp(_classify_lines())])
+    client = LLMClient()
+    _inject_http(client, route, fake)
+
+    result = _classify(client, ["deepseek:deepseek-v4-pro"])
+    assert result.tool_input == {"ok": True}
+    body = fake.requests[0]["json"]
+    assert body["thinking"] == {"type": "disabled"}
+    assert body["tool_choice"] == {
+        "type": "function", "function": {"name": "classify_email"}
+    }
+
+
+def test_classify_non_deepseek_protocols_no_thinking_key(monkeypatch):
+    """openai / openrouter / openai-compatible 协议不注入 quirk（body 无 thinking 键）。"""
+    for proto in ("openai", "openrouter", "openai-compatible"):
+        route = _route(pid=f"p-{proto}", protocol=proto,
+                       base="https://x.example/v1", model_id="m")
+        _patch_routes(monkeypatch, {f"p-{proto}:m": route})
+        fake = _FakeHttp([_FakeResp(_classify_lines())])
+        client = LLMClient()
+        _inject_http(client, route, fake)
+        _classify(client, [f"p-{proto}:m"])
+        assert "thinking" not in fake.requests[0]["json"], proto
+
+
+def test_classify_legacy_openai_no_thinking_key():
+    """route=None（flag off legacy 前缀路由）不注入 quirk——请求体字节级不变。"""
+    fake = _FakeHttp([_FakeResp(_classify_lines())])
+    client = LLMClient()
+    client._http = fake
+    _classify(client, ["gpt-5.4"])
+    assert "thinking" not in fake.requests[0]["json"]
+
+
 def test_classify_google_skipped_falls_back(monkeypatch):
     g = _route(pid="gem", protocol="google", model_id="gemini-3")
     _patch_routes(monkeypatch, {"gem:gemini-3": g})
