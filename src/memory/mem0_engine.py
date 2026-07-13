@@ -91,7 +91,18 @@ def _capture_llm_config(extraction_model: str) -> Dict[str, Any]:
 
     from src.llm_agent import provider_routing
 
-    route = provider_routing.resolve_route(extraction_model)
+    try:
+        route = provider_routing.resolve_route(extraction_model)
+    except provider_routing.ProviderRouteError as e:
+        # 显式 providerRef 路由失败（provider 缺失/禁用，MEDIUM-4）：capture 是 best-effort
+        # 后台任务，warning 记结构化原因后回退 legacy 网关（不 crash、不丢本轮 capture）。
+        logger.warning(
+            "[mem0] provider route failed for capture model {} — falling back to the "
+            "global anthropic gateway: {}",
+            extraction_model,
+            e,
+        )
+        route = None
     if route is not None and route.protocol in provider_routing.OPENAI_FAMILY_PROTOCOLS:
         # openai 系 → mem0 openai provider。openai_base_url 用统一归一 helper（含 /vN，
         # openai SDK 对 base 追加 /chat/completions）。8192 非流式 clamp 两腿都保持
@@ -106,16 +117,16 @@ def _capture_llm_config(extraction_model: str) -> Dict[str, Any]:
             },
         }
     if route is not None and route.protocol == "anthropic":
-        # per-provider anthropic 腿：anthropic_base_url 不含 /v1（SDK 自动加 /v1/messages），
-        # 行 base 原样；空 = 官方默认（省略该 key 走 SDK 默认 base）。temperature None 语义
-        # 同 legacy 分支（见下）。
+        # per-provider anthropic 腿：anthropic_base_url = canonical_root（剥尾部 /vN，
+        # SDK 自动加 /v1/messages —— 归一单源 = provider_routing，review HIGH-2）；
+        # 空 = 官方默认（省略该 key 走 SDK 默认 base）。temperature None 语义同 legacy 分支（见下）。
         conf: Dict[str, Any] = {
             "model": route.model_id,
             "api_key": route.api_key,
             "max_tokens": provider_routing.clamp_max_tokens(CAPTURE_MAX_TOKENS, route),
             "temperature": None,
         }
-        base = (route.base_url or "").rstrip("/")
+        base = provider_routing.normalize_anthropic_base(route.base_url)
         if base:
             conf["anthropic_base_url"] = base
         return {"provider": "anthropic", "config": conf}

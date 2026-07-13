@@ -54,6 +54,7 @@ vi.mock('ai', () => ({
 import {
   buildProviderRegistry,
   createProviderModelResolver,
+  isProviderCredentialsError,
   parseProviderRef,
   resolveProviderModel,
   type ProviderSnapshot,
@@ -109,6 +110,8 @@ describe('buildProviderRegistry', () => {
 
     buildProviderRegistry(snapshot(1, providers))
 
+    // HIGH-2 URL 契约：anthropic = canonical_root + '/v1'；openai 家族 = canonical_api_base
+    // （无 /vN 结尾则补 /v1）；google 非空原样。
     expect(mocks.createAnthropic).toHaveBeenCalledWith({
       apiKey: 'anthropic-id-key',
       baseURL: 'https://anthropic.test/api/v1',
@@ -116,19 +119,19 @@ describe('buildProviderRegistry', () => {
     })
     expect(mocks.createOpenAI).toHaveBeenCalledWith({
       apiKey: 'openai-id-key',
-      baseURL: 'https://openai-id.example.test',
+      baseURL: 'https://openai-id.example.test/v1',
       headers: { 'x-provider': 'openai-id' }
     })
     expect(mocks.createOpenAICompatible).toHaveBeenCalledWith({
       apiKey: 'compat-id-key',
-      baseURL: 'https://compat-id.example.test',
+      baseURL: 'https://compat-id.example.test/v1',
       headers: { 'x-provider': 'compat-id' },
       name: 'compat-id',
       includeUsage: true
     })
     expect(mocks.createDeepSeek).toHaveBeenCalledWith({
       apiKey: 'deepseek-id-key',
-      baseURL: 'https://deepseek-id.example.test',
+      baseURL: 'https://deepseek-id.example.test/v1',
       headers: { 'x-provider': 'deepseek-id' }
     })
     expect(mocks.createGoogleGenerativeAI).toHaveBeenCalledWith({
@@ -138,9 +141,39 @@ describe('buildProviderRegistry', () => {
     })
     expect(mocks.createOpenRouter).toHaveBeenCalledWith({
       apiKey: 'openrouter-id-key',
-      baseURL: 'https://openrouter-id.example.test',
+      baseURL: 'https://openrouter-id.example.test/v1',
       headers: { 'x-provider': 'openrouter-id' }
     })
+  })
+
+  it('HIGH-2 — a base already ending in /v1 and its bare root produce the SAME final URL', () => {
+    buildProviderRegistry(
+      snapshot(1, [
+        provider('anthropic-v1', 'anthropic', { baseUrl: 'https://anthropic.test/api/v1' }),
+        provider('anthropic-root', 'anthropic', { baseUrl: 'https://anthropic.test/api' }),
+        provider('dashscope', 'openai-compatible', {
+          baseUrl: 'https://dashscope.test/compatible-mode/v1'
+        }),
+        provider('dashscope-bare', 'openai-compatible', {
+          baseUrl: 'https://dashscope.test/compatible-mode'
+        })
+      ])
+    )
+
+    const anthropicBases = mocks.createAnthropic.mock.calls.map(
+      (c) => (c[0] as { baseURL?: string }).baseURL
+    )
+    expect(anthropicBases).toEqual([
+      'https://anthropic.test/api/v1',
+      'https://anthropic.test/api/v1'
+    ])
+    const compatBases = mocks.createOpenAICompatible.mock.calls.map(
+      (c) => (c[0] as { baseURL?: string }).baseURL
+    )
+    expect(compatBases).toEqual([
+      'https://dashscope.test/compatible-mode/v1',
+      'https://dashscope.test/compatible-mode/v1'
+    ])
   })
 
   it('skips disabled and unsupported providers without failing the registry', () => {
@@ -233,6 +266,31 @@ describe('buildProviderRegistry', () => {
     expect(mocks.defaultSettingsMiddleware).not.toHaveBeenCalled()
     expect(mocks.wrapLanguageModel).not.toHaveBeenCalled()
   })
+
+  it('HIGH-1 — a key-requiring provider row with no key fails typed at resolve time', () => {
+    const built = buildProviderRegistry(
+      snapshot(1, [provider('dashscope', 'anthropic', { apiKey: '' })])
+    )
+
+    let thrown: unknown
+    try {
+      resolveProviderModel(built, 'dashscope:qwen-max')
+    } catch (e) {
+      thrown = e
+    }
+    expect(isProviderCredentialsError(thrown)).toBe(true)
+    expect((thrown as Error).message).toContain('dashscope')
+  })
+
+  it('HIGH-1 — openai-compatible rows may run keyless (local unauthenticated services)', () => {
+    const built = buildProviderRegistry(
+      snapshot(1, [provider('local', 'openai-compatible', { apiKey: '' })])
+    )
+
+    const resolved = resolveProviderModel(built, 'local:qwen3')
+
+    expect(resolved.protocol).toBe('openai-compatible')
+  })
 })
 
 describe('createProviderModelResolver', () => {
@@ -303,5 +361,17 @@ describe('createProviderModelResolver', () => {
     })
     expect(fetchSnapshot).toHaveBeenCalledOnce()
     expect(warn).toHaveBeenCalledOnce()
+  })
+
+  it('HIGH-1 — the fail-open legacy leg with an EMPTY legacy key fails typed, not keyless', async () => {
+    const fetchSnapshot = vi.fn().mockRejectedValue(new Error('offline'))
+    const resolver = createProviderModelResolver({
+      fetchSnapshot,
+      legacy: { apiKey: null, baseUrl: 'https://legacy.test/api' },
+      logger: { warn: vi.fn() }
+    })
+
+    await expect(resolver.resolve('claude-legacy')).rejects.toSatisfy(isProviderCredentialsError)
+    expect(mocks.createAnthropic).not.toHaveBeenCalled()
   })
 })

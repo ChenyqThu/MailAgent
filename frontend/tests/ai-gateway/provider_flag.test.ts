@@ -9,7 +9,12 @@ vi.mock('@ai-sdk/anthropic', () => ({
   createAnthropic: anthropicMocks.createAnthropic
 }))
 
-import { resolveModelFactory } from '../../src/ai-gateway/chatRun'
+import {
+  llmCredentialsMissing,
+  prepareChatRun,
+  resolveModelFactory
+} from '../../src/ai-gateway/chatRun'
+import { ProviderCredentialsError } from '../../src/ai-gateway/providerRef'
 import type { AiGatewayConfig } from '../../src/ai-gateway/config'
 
 function config(overrides: Partial<AiGatewayConfig> = {}): AiGatewayConfig {
@@ -79,5 +84,52 @@ describe('resolveModelFactory provider registry flag', () => {
     expect(providerModelResolver.resolve).toHaveBeenCalledWith('legacy-model')
     expect(resolved).toBe(expected)
     expect(anthropicMocks.createAnthropic).not.toHaveBeenCalled()
+  })
+})
+
+describe('llmCredentialsMissing credential pre-gate (HIGH-1)', () => {
+  it('flag OFF keeps the legacy global-key gate (empty key → missing)', () => {
+    expect(llmCredentialsMissing(config({ apiKey: null }))).toBe(true)
+    expect(llmCredentialsMissing(config({ apiKey: '' }))).toBe(true)
+    expect(llmCredentialsMissing(config())).toBe(false)
+  })
+
+  it('registry path (flag + resolver) skips the global gate — provider rows are the authority', () => {
+    const providerModelResolver = { resolve: vi.fn() }
+    expect(
+      llmCredentialsMissing(
+        config({ apiKey: null, providerRegistryEnabled: true, providerModelResolver })
+      )
+    ).toBe(false)
+  })
+
+  it('flag on WITHOUT a resolver still gates on the legacy key (mirrors resolveModelFactory)', () => {
+    expect(llmCredentialsMissing(config({ apiKey: null, providerRegistryEnabled: true }))).toBe(
+      true
+    )
+  })
+})
+
+describe('prepareChatRun registry credential failure mapping (HIGH-1)', () => {
+  it('maps the resolver ProviderCredentialsError to 503 E_NO_LLM_KEY with the readable hint', async () => {
+    const providerModelResolver = {
+      resolve: vi
+        .fn()
+        .mockRejectedValue(new ProviderCredentialsError('LLM provider dashscope 缺少 API key'))
+    }
+    const cfg = config({ apiKey: null, providerRegistryEnabled: true, providerModelResolver })
+    const body = {
+      messages: [{ id: 'u1', role: 'user', parts: [{ type: 'text', text: 'hi' }] }]
+    }
+
+    const outcome = await prepareChatRun(body, cfg, new AbortController().signal, 'manual_chat')
+
+    expect(outcome.ok).toBe(false)
+    if (!outcome.ok) {
+      expect(outcome.status).toBe(503)
+      expect(outcome.body.error).toBe('E_NO_LLM_KEY')
+      expect(outcome.body.hint).toContain('dashscope')
+    }
+    expect(providerModelResolver.resolve).toHaveBeenCalledWith('claude-sonnet-4-6')
   })
 })

@@ -237,6 +237,36 @@ def test_capture_llm_config_anthropic_route(monkeypatch, tmp_path):
     monkeypatch.setattr(pr, "resolve_route", lambda ref: empty_base)
     assert "anthropic_base_url" not in me.build_mem0_config()["llm"]["config"]
 
+    # HIGH-2：行 base 含 /v1 尾段（用户抄厂商文档）→ canonical_root 剥掉（SDK 自补 /v1/messages）
+    v1_base = _provider_route(provider_id="glm", protocol="anthropic",
+                              base_url="https://open.bigmodel.cn/api/anthropic/v1",
+                              model_id="glm-4.6", model_ref="glm:glm-4.6")
+    monkeypatch.setattr(pr, "resolve_route", lambda ref: v1_base)
+    assert (
+        me.build_mem0_config()["llm"]["config"]["anthropic_base_url"]
+        == "https://open.bigmodel.cn/api/anthropic"
+    )
+
+
+def test_capture_llm_config_route_error_falls_back_to_legacy(monkeypatch, tmp_path):
+    # MEDIUM-4：显式 providerRef 路由失败（provider 缺失/禁用）→ warning + 回退 legacy 网关
+    # （capture 是 best-effort 后台任务，不 crash 不丢本轮 capture）。
+    from src.llm_agent import provider_routing as pr
+
+    monkeypatch.setattr(me, "_mem0_root", lambda: str(tmp_path / "mem0"))
+    monkeypatch.setattr(me, "cfg", _fake_cfg(memory_capture_model="missing:m"))
+
+    def _raise(ref):
+        raise pr.ProviderRouteError(
+            "provider 'missing' referenced by model 'missing:m' is not available"
+        )
+
+    monkeypatch.setattr(pr, "resolve_route", _raise)
+    llm = me.build_mem0_config()["llm"]
+    assert llm["provider"] == "anthropic"
+    assert llm["config"]["anthropic_base_url"] == "https://crs.chenge.ink/api"
+    assert llm["config"]["api_key"] == "sk-test"
+
 
 def test_capture_llm_config_google_falls_back_to_legacy(monkeypatch, tmp_path):
     # google 协议不支持 → warning + 回退全局 anthropic 网关（legacy 形状）。

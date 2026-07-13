@@ -324,6 +324,107 @@ async def test_probe_404_without_model_is_readable():
     assert err is not None and "add a model" in err
 
 
+@pytest.mark.anyio
+async def test_probe_completion_failure_allowlists_and_redacts():
+    """HIGH-3：补全探测失败不透传任意上游正文——只回状态码 + allowlist 字段
+    （error.type/code/message），且先过 redactor（key 明文绝不出响应）。"""
+    key = "sk-leak-me-1234"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/models"):
+            return httpx.Response(404)
+        return httpx.Response(
+            400,
+            json={"error": {
+                "type": "invalid_request_error",
+                "message": f"auth was Bearer {key}",
+                "debug_echo": f"x-api-key: {key}",
+                "request_dump": "POST /chat/completions ...",
+            }},
+        )
+
+    err = await lp_router._probe_provider(
+        "openai-compatible", "https://x.example/v1", key, "m1",
+        transport=_mock_transport(handler),
+    )
+    assert err is not None and "400" in err
+    assert key not in err  # redactor：message 里的 key 被 ***
+    assert "invalid_request_error" in err  # allowlist：type 透出
+    assert "debug_echo" not in err and "request_dump" not in err  # 非 allowlist 字段不透传
+
+
+@pytest.mark.anyio
+async def test_probe_completion_failure_non_json_body_never_leaked():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/models"):
+            return httpx.Response(404)
+        return httpx.Response(502, text="<html>proxy dump: Authorization: Bearer sk-leak-x</html>")
+
+    err = await lp_router._probe_provider(
+        "openai-compatible", "https://x.example/v1", "sk-leak-x", "m1",
+        transport=_mock_transport(handler),
+    )
+    assert err is not None and "502" in err
+    assert "sk-leak-x" not in err and "html" not in err  # 非 JSON 正文整体不透传
+
+
+# ── MEDIUM-5：provider 自定义 headers 进探测面（系统鉴权头优先）─────────────────────────
+
+
+def test_models_and_completion_requests_merge_provider_headers():
+    url, headers = lp_router._models_request(
+        "openai-compatible", "https://x.example", "sk-k",
+        {"X-Tenant": "t1", "authorization": "user-key-override"},
+    )
+    assert url == "https://x.example/v1/models"  # canonical_api_base 补 /v1（HIGH-2 单源）
+    assert headers["X-Tenant"] == "t1"
+    assert headers["Authorization"] == "Bearer sk-k"
+    assert "authorization" not in headers  # 系统鉴权头大小写不敏感地赢
+
+    curl, cheaders, body = lp_router._completion_request(
+        "anthropic", "https://crs.example.com/api/v1", "sk-k", "m",
+        {"X-Tenant": "t1", "X-API-Key": "evil-override"},
+    )
+    assert curl == "https://crs.example.com/api/v1/messages"  # canonical_root 剥 /v1 再拼探测路径
+    assert cheaders["x-api-key"] == "sk-k"
+    assert "X-API-Key" not in cheaders  # 同名（大小写不敏感）用户头被系统鉴权头顶掉
+    assert cheaders["X-Tenant"] == "t1"
+    assert body["max_tokens"] == 1
+
+
+@pytest.mark.anyio
+async def test_probe_sends_provider_custom_headers():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers.get("x-tenant") == "t1"
+        assert request.headers.get("authorization") == "Bearer sk-k"
+        return httpx.Response(200, json={"data": []})
+
+    err = await lp_router._probe_provider(
+        "openai-compatible", "https://x.example/v1", "sk-k", None,
+        headers={"X-Tenant": "t1", "Authorization": "should-be-overridden"},
+        transport=_mock_transport(handler),
+    )
+    assert err is None
+
+
+def test_models_refresh_passes_provider_headers(client: TestClient, monkeypatch):
+    client.post(
+        "/api/llm/providers",
+        json={"id": "corp", "protocol": "openai-compatible",
+              "baseUrl": "https://gw.example/v1", "headers": {"X-Tenant": "t1"}},
+    )
+    seen: Dict[str, Any] = {}
+
+    async def _fake(protocol: str, base: str, api_key: str, **kw) -> List[str]:
+        seen.update(kw)
+        return []
+
+    monkeypatch.setattr(lp_router, "_fetch_provider_models", _fake)
+    r = client.get("/api/llm/providers/corp/models?refresh=true")
+    assert r.status_code == 200
+    assert seen.get("headers") == {"X-Tenant": "t1"}
+
+
 def test_test_endpoint_shapes(client: TestClient, monkeypatch):
     async def _ok(*_a, **_k) -> Optional[str]:
         return None

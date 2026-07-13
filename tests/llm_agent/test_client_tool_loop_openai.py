@@ -28,9 +28,10 @@ ROUTE = ProviderRoute(
 
 
 class _FakeResp:
-    def __init__(self, lines, status=200):
+    def __init__(self, lines, status=200, err=b"upstream error"):
         self._lines = lines
         self.status_code = status
+        self._err = err
 
     async def __aenter__(self):
         return self
@@ -39,7 +40,7 @@ class _FakeResp:
         return None
 
     async def aread(self):
-        return b"upstream error"
+        return self._err
 
     async def aiter_lines(self):
         for line in self._lines:
@@ -237,6 +238,39 @@ def test_loop_exhausted_raises(monkeypatch):
     client, _fake = _client_with(turns, monkeypatch)
     with pytest.raises(LLMCallError, match="exhausted"):
         _run(client, max_iter=2, tool_handlers={"search_emails": lambda i: "ok"})
+
+
+def test_loop_http_error_redacts_provider_secrets(monkeypatch):
+    """HIGH-3：loop 腿（_openai_stream_turn）的上游错误正文同样过 redactor。"""
+    err = b"gateway echo Authorization: Bearer sk-x full-dump"
+    client, _fake = _client_with([_FakeResp([], status=500, err=err)], monkeypatch)
+    with pytest.raises(LLMCallError) as ei:
+        _run(client)
+    msg = str(ei.value)
+    assert "sk-x" not in msg  # ROUTE.api_key
+    assert "500" in msg and "***" in msg
+
+
+def test_loop_explicit_ref_route_error_falls_back(monkeypatch):
+    """MEDIUM-4：链里显式 ref 路由失败（provider 缺失/禁用）→ warning + 跳下一个模型，
+    不静默把 missing:m 改道全局网关。"""
+
+    def _resolve(ref):
+        if ref == "missing:m":
+            raise client_mod.provider_routing.ProviderRouteError(
+                "provider 'missing' referenced by model 'missing:m' is not available"
+            )
+        return {"dashscope:qwen-max": ROUTE}.get(ref)
+
+    monkeypatch.setattr(client_mod.provider_routing, "registry_enabled", lambda: True)
+    monkeypatch.setattr(client_mod.provider_routing, "resolve_route", _resolve)
+    client = LLMClient()
+    fake = _FakeHttp([_turn_final()])
+    client._http_by_provider[ROUTE.provider_id] = (client._route_sig(ROUTE), fake)
+
+    res = _run(client, model_chain=["missing:m", "dashscope:qwen-max"])
+    assert res.final_input == {"headline": "H"}
+    assert len(fake.requests) == 1 and fake.requests[0]["json"]["model"] == "qwen-max"
 
 
 def test_loop_missing_id_backfilled_consistently(monkeypatch):

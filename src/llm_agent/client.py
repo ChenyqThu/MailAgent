@@ -102,6 +102,26 @@ def _is_openai_proto(model: str) -> bool:
     return model.lower().startswith(_OPENAI_PROTO_PREFIXES)
 
 
+def _route_or_raise(model: str) -> Optional[provider_routing.ProviderRoute]:
+    """resolve_route + MEDIUM-4 语义翻译：显式 providerRef 路由失败（provider 缺失/禁用）
+    → 可读 LLMCallError（调用方只捕它），让 fallback 链明确跳下一个模型 + warning。
+    None 仍表示 fail-open（flag off / 快照不可读 / 无冒号 legacy id）→ legacy 前缀路由。"""
+    try:
+        return provider_routing.resolve_route(model)
+    except provider_routing.ProviderRouteError as e:
+        raise LLMCallError(str(e)) from e
+
+
+def _redact_upstream(text: str, route: Optional[provider_routing.ProviderRoute]) -> str:
+    """上游错误正文脱敏（review HIGH-3）：当前腿的 api_key + 自定义 header 值 → ``***``。
+    legacy 腿（route=None）只有全局 key。调用方先脱敏**再**截断（反了会漏 key 前缀）。"""
+    if route is not None:
+        return provider_routing.redact_secrets(
+            text, api_key=route.api_key, headers=route.headers
+        )
+    return provider_routing.redact_secrets(text, api_key=cfg.llm_api_key or "")
+
+
 def _resolve_model_chain(override: Optional[List[str]] = None) -> List[str]:
     """Return [primary, *fallbacks] from config (or `override`), de-duplicated."""
     if override is not None:
@@ -243,8 +263,10 @@ class LLMClient:
         if cached is not None and cached[0] == sig:
             return cached[1]
         if not route.api_key:
+            # 行无 key = 未配置 或 Fernet 解密失败（store 解密失败按 absent 投影）。
             raise LLMCallError(
-                f"provider '{route.provider_id}' has no API key; cannot call LLM"
+                f"provider '{route.provider_id}' has no API key "
+                "(not configured, or it failed to decrypt); cannot call LLM"
             )
         inst = AsyncAnthropic(
             api_key=route.api_key,
@@ -302,8 +324,9 @@ class LLMClient:
         last_err: Optional[BaseException] = None
         for i, model in enumerate(chain):
             try:
-                # flag off / fail-open → route=None → legacy 前缀路由（现状字节级）。
-                route = provider_routing.resolve_route(model)
+                # flag off / fail-open → route=None → legacy 前缀路由（现状字节级）；
+                # 显式 ref 路由失败 → LLMCallError → 本 except 走 fallback（MEDIUM-4）。
+                route = _route_or_raise(model)
                 leg = _leg_for(model, route)
                 if leg == "unsupported":
                     raise LLMCallError(
@@ -462,7 +485,8 @@ class LLMClient:
                 if resp.status_code >= 400:
                     err_body = (await resp.aread()).decode("utf-8", errors="replace")
                     raise LLMCallError(
-                        f"OpenAI HTTP {resp.status_code} (model={model}): {err_body[:300]}"
+                        f"OpenAI HTTP {resp.status_code} (model={model}): "
+                        f"{_redact_upstream(err_body, route)[:300]}"
                     )
 
                 async for line in resp.aiter_lines():
@@ -478,7 +502,8 @@ class LLMClient:
 
                     if isinstance(evt, dict) and evt.get("error"):
                         raise LLMCallError(
-                            f"OpenAI stream error (model={model}): {evt['error']}"
+                            f"OpenAI stream error (model={model}): "
+                            f"{_redact_upstream(str(evt['error']), route)}"
                         )
 
                     choices = evt.get("choices") or []
@@ -569,7 +594,12 @@ class LLMClient:
         if provider_routing.registry_enabled():
             chain = []
             for m in _resolve_model_chain(model_chain):
-                r = provider_routing.resolve_route(m)
+                try:
+                    r = provider_routing.resolve_route(m)
+                except provider_routing.ProviderRouteError:
+                    # 显式 ref 路由失败：留在链里，由主循环按模型失败处理（fallback + warning）。
+                    chain.append(m)
+                    continue
                 if r is not None and r.protocol == "google":
                     logger.warning(
                         f"[llm] loop skipping model={m}: provider protocol 'google' "
@@ -590,7 +620,7 @@ class LLMClient:
         last_err: Optional[BaseException] = None
         for i, model in enumerate(chain):
             try:
-                route = provider_routing.resolve_route(model)
+                route = _route_or_raise(model)
                 leg = _leg_for(model, route)
                 if leg == "unsupported":
                     # TTL 快照在过滤后刷新把协议翻成 google 的窗口 → 防御性跳过（走 fallback）。
@@ -756,6 +786,7 @@ class LLMClient:
         body: Dict[str, Any],
         model: str,
         ctx: str,
+        route: Optional[provider_routing.ProviderRoute] = None,
     ) -> Dict[str, Any]:
         """单轮 OpenAI Chat Completions 流式请求 → 聚合 {text, tool_calls, finish_reason, tokens}。
 
@@ -774,7 +805,8 @@ class LLMClient:
                 if resp.status_code >= 400:
                     err_body = (await resp.aread()).decode("utf-8", errors="replace")
                     raise LLMCallError(
-                        f"OpenAI HTTP {resp.status_code} (model={model}, {ctx}): {err_body[:300]}"
+                        f"OpenAI HTTP {resp.status_code} (model={model}, {ctx}): "
+                        f"{_redact_upstream(err_body, route)[:300]}"
                     )
                 async for line in resp.aiter_lines():
                     if not line or not line.startswith("data:"):
@@ -788,7 +820,8 @@ class LLMClient:
                         continue
                     if isinstance(evt, dict) and evt.get("error"):
                         raise LLMCallError(
-                            f"OpenAI stream error (model={model}, {ctx}): {evt['error']}"
+                            f"OpenAI stream error (model={model}, {ctx}): "
+                            f"{_redact_upstream(str(evt['error']), route)}"
                         )
                     choices = evt.get("choices") or []
                     if choices:
@@ -877,7 +910,7 @@ class LLMClient:
                 "tool_choice": tool_choice,
             }
             turn = await self._openai_stream_turn(
-                http=http, path=path, body=body, model=model, ctx=f"iter={it}"
+                http=http, path=path, body=body, model=model, ctx=f"iter={it}", route=route
             )
             total_in += turn["prompt_tokens"]
             total_out += turn["completion_tokens"]

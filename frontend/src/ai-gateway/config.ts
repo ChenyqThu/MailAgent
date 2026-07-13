@@ -31,7 +31,9 @@ import type { ApprovalRunStash } from './approvalStash'
 // 🔴 type-only (erased) — S4 W3 headless custom-agent run. The spec type is the wire contract the
 // gateway pulls from serve-api; config.ts stays type-only so the S4 chunk isn't pulled when off.
 import type { AgentRunSpec } from '@shared/api/types'
-import type { ProviderModelResolver } from './providers'
+// MEDIUM-6 — type-only + from the SDK-free providerRef: providers.ts (six provider SDK imports)
+// must only ever load via the lifecycle's flag-on dynamic import.
+import type { ProviderModelResolver } from './providerRef'
 
 /** Part B — what makePersistOnFinish tells the lifecycle when a turn pauses at an island-eligible
  *  approval gate (announce → serve-api). NO token/secret in here beyond the resumeToken, which is the
@@ -106,7 +108,9 @@ export interface AiGatewayConfig {
   port: number
   /** LLM gateway base URL (e.g. https://crs.chenge.ink/api). Normalized via anthropicBaseUrl. */
   baseUrl: string
-  /** LLM API key. null/empty → /api/ai/chat returns 503 E_NO_LLM_KEY (renderer never sees it). */
+  /** LLM API key. null/empty → /api/ai/chat returns 503 E_NO_LLM_KEY (renderer never sees it).
+   *  HIGH-1: with the provider registry on (flag + resolver) this global gate is skipped — the
+   *  resolver enforces per-provider keys instead (llmCredentialsMissing in chatRun.ts). */
   apiKey: string | null
   /** Default model id (e.g. claude-sonnet-4-6). */
   model: string

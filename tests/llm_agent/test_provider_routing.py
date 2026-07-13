@@ -64,16 +64,105 @@ def test_normalize_openai_base_all_shapes():
     assert pr.normalize_openai_base("") == ""
 
 
-def test_normalize_anthropic_base():
+def test_normalize_anthropic_base_canonical_root():
     assert pr.normalize_anthropic_base("https://crs.chenge.ink/api/") == "https://crs.chenge.ink/api"
-    # anthropic-compat 端点（DeepSeek/Kimi/GLM）行值原样（SDK 自动加 /v1/messages）
+    # anthropic-compat 端点（DeepSeek/Kimi/GLM）不含 /vN → 原样（SDK 自动加 /v1/messages）
     assert (
         pr.normalize_anthropic_base("https://api.deepseek.com/anthropic")
         == "https://api.deepseek.com/anthropic"
     )
+    # HIGH-2：用户从厂商文档抄来的含 /vN 地址 → 剥尾段（canonical_root，防 SDK 叠成 /v1/v1）
+    assert pr.normalize_anthropic_base("https://crs.chenge.ink/api/v1") == "https://crs.chenge.ink/api"
+    assert pr.normalize_anthropic_base("https://x.example/v1/") == "https://x.example"
+    assert pr.normalize_anthropic_base("https://x.example/v2") == "https://x.example"
+    # 形似非版本段（/v1beta、/verify）不剥
+    assert pr.normalize_anthropic_base("https://x.example/v1beta") == "https://x.example/v1beta"
+    assert pr.normalize_anthropic_base("https://x.example/verify") == "https://x.example/verify"
     # 空 = 官方默认 → None（AsyncAnthropic 自带 api.anthropic.com）
     assert pr.normalize_anthropic_base("") is None
     assert pr.normalize_anthropic_base("   ") is None
+
+
+def test_url_contract_across_runtime_and_probe_faces():
+    """HIGH-2 契约表：同一 provider 行值 × anthropic/openai 两协议 × runtime/probe 两消费面，
+    推导出的最终 wire URL 必须一致（单源 = provider_routing 的 canonical_root /
+    canonical_api_base；probe 面 = llm_providers router 的 _models_request/_completion_request）。"""
+    from src.api.routers.llm_providers import (
+        _completion_request,
+        _models_request,
+        _resolve_base,
+    )
+
+    # anthropic 协议：(行值, canonical_root)。runtime = AsyncAnthropic base（SDK 自补
+    # /v1/messages）；probe = root + /v1/models、root + /v1/messages。
+    anthropic_cases = [
+        ("https://crs.chenge.ink/api", "https://crs.chenge.ink/api"),
+        ("https://crs.chenge.ink/api/v1", "https://crs.chenge.ink/api"),
+        ("https://crs.chenge.ink/api/v1/", "https://crs.chenge.ink/api"),
+        ("https://api.deepseek.com/anthropic", "https://api.deepseek.com/anthropic"),
+        ("https://host.example", "https://host.example"),
+    ]
+    for raw, root in anthropic_cases:
+        assert pr.normalize_anthropic_base(raw) == root, raw
+        murl, _h = _models_request("anthropic", raw, "sk-k")
+        assert murl == f"{root}/v1/models", raw
+        curl, _h2, _b = _completion_request("anthropic", raw, "sk-k", "m")
+        assert curl == f"{root}/v1/messages", raw
+    # 空行值：runtime → None（SDK 官方默认 api.anthropic.com/v1/messages）；probe 经
+    # _resolve_base 补官方默认 → 同一 host 的 /v1/models。
+    assert pr.normalize_anthropic_base("") is None
+    murl, _h = _models_request("anthropic", _resolve_base("anthropic", ""), "sk-k")
+    assert murl == "https://api.anthropic.com/v1/models"
+
+    # openai 家族：(行值, canonical_api_base)。runtime = base + /chat/completions；
+    # probe = base + /models。
+    openai_cases = [
+        (
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        ),
+        (
+            "https://dashscope.aliyuncs.com/compatible-mode",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        ),
+        ("https://api.deepseek.com", "https://api.deepseek.com/v1"),
+        ("https://x.example/v2/", "https://x.example/v2"),
+    ]
+    for raw, api_base in openai_cases:
+        assert pr.normalize_openai_base(raw) == api_base, raw
+        route = pr.ProviderRoute(
+            provider_id="p", protocol="openai-compatible", base_url=raw, api_key="k"
+        )
+        assert pr.openai_base_for(route) == api_base, raw  # runtime httpx base
+        murl, _h = _models_request("openai-compatible", raw, "sk-k")
+        assert murl == f"{api_base}/models", raw
+        curl, _h2, _b = _completion_request("openai-compatible", raw, "sk-k", "m")
+        assert curl == f"{api_base}/chat/completions", raw
+    # 空行值 + openai-compatible = 配置错误：runtime ''（调用方报错走 fallback 链）；
+    # probe 端点在 _resolve_base 后同样拿到 ''（返回可读 error，不发请求）。
+    empty = pr.ProviderRoute(
+        provider_id="p", protocol="openai-compatible", base_url="", api_key="k"
+    )
+    assert pr.openai_base_for(empty) == ""
+    assert _resolve_base("openai-compatible", "") == ""
+
+
+def test_redact_secrets_masks_key_and_header_values():
+    """HIGH-3：api_key + 全部自定义 header 值 → ***；短值（<4）不换（不误伤状态码等）。"""
+    text = "denied; echo Authorization: Bearer sk-secret-key-123; X-Corp: tok-abcdef; flag=1"
+    out = pr.redact_secrets(
+        text, api_key="sk-secret-key-123", headers={"X-Corp": "tok-abcdef", "X-Flag": "1"}
+    )
+    assert "sk-secret-key-123" not in out
+    assert "tok-abcdef" not in out
+    assert "***" in out
+    assert "flag=1" in out  # 短值不换
+    # 长值先换（防 header 值恰是 key 前缀时把长 key 打断泄漏后缀）
+    out2 = pr.redact_secrets(
+        "k=sk-secret-key-123", api_key="sk-secret-key-123", headers={"H": "sk-secret"}
+    )
+    assert out2 == "k=***"
+    assert pr.redact_secrets("", api_key="sk-anything") == ""
 
 
 def test_openai_base_for_protocol_defaults():
@@ -155,24 +244,40 @@ def test_resolve_non_default_provider_with_model_row(monkeypatch):
     assert r2 is not None and r2.model_id == "qwen:max-2026" and r2.max_output is None
 
 
-def test_resolve_fail_open_missing_or_disabled(monkeypatch):
+def test_resolve_explicit_ref_missing_or_disabled_raises(monkeypatch):
+    """MEDIUM-4：显式带冒号 ref 的 provider 缺失/禁用（snapshot 只含 enabled 行）→ 抛可读
+    ProviderRouteError（含 provider id），不再静默降级到全局网关。"""
     _flag(monkeypatch, True)
     st = get_llm_provider_store()
     st.create_provider("kimi", protocol="openai-compatible", base_url="https://api.moonshot.cn/v1")
     st.update_provider("kimi", enabled=False)
     pr.reset_provider_route_cache()
-    # 行缺失 / 禁用（snapshot 只含 enabled 行）→ None（回退全局配置 + 前缀路由）
-    assert pr.resolve_route("missing:m") is None
-    assert pr.resolve_route("kimi:kimi-k2") is None
+    with pytest.raises(pr.ProviderRouteError, match="'missing'"):
+        pr.resolve_route("missing:m")
+    with pytest.raises(pr.ProviderRouteError, match="'kimi'"):
+        pr.resolve_route("kimi:kimi-k2")
+
+
+def test_resolve_legacy_bare_id_fail_open(monkeypatch):
+    """MEDIUM-4 fail-open 情形②：无冒号 legacy id 查不到 default 行 → None
+    （回退全局 env 配置 + 前缀路由，老配置引用天然归全局网关）。"""
+    _flag(monkeypatch, True)
+    st = get_llm_provider_store()
+    st.create_provider("kimi", protocol="openai-compatible", base_url="https://api.moonshot.cn/v1")
+    pr.reset_provider_route_cache()
+    assert pr.resolve_route("claude-sonnet-4-6") is None
 
 
 def test_snapshot_ttl_caches_and_reset(monkeypatch):
     _flag(monkeypatch, True)
     st = get_llm_provider_store()
-    assert pr.resolve_route("glm:glm-4.6") is None  # 冷读 → 空表快照进缓存
+    # 冷读 → 空表快照进缓存（显式 ref 查不到 → raise，MEDIUM-4）
+    with pytest.raises(pr.ProviderRouteError):
+        pr.resolve_route("glm:glm-4.6")
     st.create_provider("glm", protocol="openai-compatible", base_url="https://open.bigmodel.cn/api/paas/v4")
-    # TTL 内仍用旧快照（30s 热读语义）
-    assert pr.resolve_route("glm:glm-4.6") is None
+    # TTL 内仍用旧快照（30s 热读语义）→ 仍查不到
+    with pytest.raises(pr.ProviderRouteError):
+        pr.resolve_route("glm:glm-4.6")
     pr.reset_provider_route_cache()
     assert pr.resolve_route("glm:glm-4.6") is not None
 

@@ -189,7 +189,7 @@ def test_classify_routed_anthropic_builds_per_provider_client(monkeypatch):
 
     assert result.tool_input == {"ok": True}
     assert ctor["api_key"] == "sk-kimi"
-    assert ctor["base_url"] == "https://api.moonshot.cn/anthropic"  # 行值原样只去尾 /
+    assert ctor["base_url"] == "https://api.moonshot.cn/anthropic"  # canonical_root（无 /vN 尾段 → 只去尾 /）
     assert ctor["default_headers"]["X-Corp"] == "1"  # 自定义头合入
     assert calls[0]["model"] == "kimi-k2"  # wire id = 冒号后段
     assert calls[0]["max_tokens"] == 4000  # min(64000, per-model max_output)
@@ -222,15 +222,48 @@ def test_classify_google_skipped_falls_back(monkeypatch):
     assert len(calls) == 1 and calls[0]["model"] == "claude-sonnet-4-6"  # google 被跳过
 
 
-def test_classify_unknown_provider_fail_open_prefix_routing(monkeypatch):
-    _patch_routes(monkeypatch, {})  # 全部查不到 → route None
+def test_classify_snapshot_unreadable_fail_open_prefix_routing(monkeypatch):
+    """MEDIUM-4 fail-open 情形①：快照整体不可读（resolve_route → None）→ 整串按 legacy
+    前缀路由（非 gpt-/gemini-/codex- → anthropic 腿 + 全局配置），保 chat 不死。"""
+    _patch_routes(monkeypatch, {})  # resolve_route 恒 None = 快照不可读语义
     calls: list = []
     client = LLMClient()
     client._client = NS(messages=_FakeMessages(calls))
     result = _classify(client, ["unknown:some-model"])
-    # fail-open：整串按 legacy 前缀路由（非 gpt-/gemini-/codex- → anthropic 腿 + 全局配置）
     assert result.tool_input == {"ok": True}
     assert calls[0]["model"] == "unknown:some-model"
+
+
+def _patch_route_error(monkeypatch, failing_ref, mapping=None):
+    """resolve_route stub：failing_ref → 抛真实 ProviderRouteError；其余查 mapping。"""
+
+    def _resolve(ref):
+        if ref == failing_ref:
+            raise client_mod.provider_routing.ProviderRouteError(
+                f"provider 'missing' referenced by model '{ref}' is not available "
+                "(missing or disabled in the provider registry)"
+            )
+        return (mapping or {}).get(ref)
+
+    monkeypatch.setattr(client_mod.provider_routing, "resolve_route", _resolve)
+
+
+def test_classify_explicit_ref_route_error_falls_back_next_model(monkeypatch):
+    """MEDIUM-4：显式 ref 路由失败 → LLMCallError 翻译 → fallback 链明确跳下一个模型。"""
+    _patch_route_error(monkeypatch, "missing:m")
+    calls: list = []
+    client = LLMClient()
+    client._client = NS(messages=_FakeMessages(calls))
+    result = _classify(client, ["missing:m", "claude-opus-4-7"])
+    assert result.tool_input == {"ok": True}
+    assert calls[0]["model"] == "claude-opus-4-7"  # 未静默改道全局网关跑 missing:m
+
+
+def test_classify_explicit_ref_route_error_last_in_chain_raises(monkeypatch):
+    _patch_route_error(monkeypatch, "missing:m")
+    client = LLMClient()
+    with pytest.raises(LLMCallError, match="'missing'"):
+        _classify(client, ["missing:m"])
 
 
 def test_classify_mixed_chain_provider_fail_then_legacy_fallback(monkeypatch):
@@ -259,6 +292,49 @@ def test_classify_flag_off_legacy_openai_path_unchanged(monkeypatch):
     assert req["path"] == "/v1/chat/completions"  # legacy 路径（base 不含 /vN）
     assert req["json"]["model"] == "gpt-5.4"
     assert req["json"]["max_tokens"] == client_mod.cfg.llm_max_tokens
+
+
+# ── HIGH-3：上游错误正文脱敏（key / 自定义 header 值不进 LLMCallError）──────────────────
+
+
+def test_classify_openai_http_error_redacts_secrets(monkeypatch):
+    route = _route(key="sk-super-secret-key", headers={"X-Corp": "corp-token-9"})
+    _patch_routes(monkeypatch, {"dashscope:qwen-max": route})
+    err = b"denied; proxy echo Authorization: Bearer sk-super-secret-key X-Corp: corp-token-9"
+    fake = _FakeHttp([_FakeResp([], status=401, err=err)])
+    client = LLMClient()
+    _inject_http(client, route, fake)
+    with pytest.raises(LLMCallError) as ei:
+        _classify(client, ["dashscope:qwen-max"])
+    msg = str(ei.value)
+    assert "sk-super-secret-key" not in msg and "corp-token-9" not in msg
+    assert "401" in msg and "***" in msg
+
+
+def test_classify_openai_stream_error_redacts_secrets(monkeypatch):
+    route = _route(key="sk-super-secret-key")
+    _patch_routes(monkeypatch, {"dashscope:qwen-max": route})
+    lines = [_sse({"error": {"message": "bad key sk-super-secret-key"}})]
+    fake = _FakeHttp([_FakeResp(lines)])
+    client = LLMClient()
+    _inject_http(client, route, fake)
+    with pytest.raises(LLMCallError) as ei:
+        _classify(client, ["dashscope:qwen-max"])
+    msg = str(ei.value)
+    assert "sk-super-secret-key" not in msg and "stream error" in msg
+
+
+def test_classify_legacy_openai_error_redacts_global_key(monkeypatch):
+    """legacy 腿（route=None）：全局 LLM_API_KEY 同样被脱敏。"""
+    monkeypatch.setattr(
+        client_mod, "cfg", NS(llm_api_key="sk-global-secret-key", llm_max_tokens=64000)
+    )
+    fake = _FakeHttp([_FakeResp([], status=500, err=b"proxy dump: sk-global-secret-key")])
+    client = LLMClient()
+    client._http = fake
+    with pytest.raises(LLMCallError) as ei:
+        _classify(client, ["gpt-5.4"])
+    assert "sk-global-secret-key" not in str(ei.value)
 
 
 # ── per-provider 客户端构造细节 ───────────────────────────────────────────────────────

@@ -28,10 +28,14 @@ import {
   generateFollowups,
   generateSessionTitle,
   lastUserMessage,
+  llmCredentialsMissing,
   makeIdGenerator,
   makePersistOnFinish,
   prepareChatRun
 } from './chatRun'
+// HIGH-1 (batch1 review) — SDK-free typed credentials error (the registry resolver throws it when
+// the selected provider row lacks a required key); mapped back to 503 E_NO_LLM_KEY below.
+import { isProviderCredentialsError } from './providerRef'
 import {
   corsHeadersFor,
   delay,
@@ -339,7 +343,9 @@ async function handleTitle(
     writeJson(res, 501, { error: 'E_NOT_IMPLEMENTED', hint: 'auto-title not enabled' })
     return
   }
-  if (!cfg.apiKey || cfg.apiKey.length === 0) {
+  // HIGH-1 — shared credential pre-gate: flag-off byte-identical; registry path defers to the
+  // resolver (typed failure mapped in the catch below).
+  if (llmCredentialsMissing(cfg)) {
     writeJson(res, 503, { error: 'E_NO_LLM_KEY', hint: '设置 LLM_API_KEY 后重试' })
     return
   }
@@ -377,6 +383,10 @@ async function handleTitle(
       writeJson(res, 200, { title: null, skipped: true })
     }
   } catch (e) {
+    if (isProviderCredentialsError(e)) {
+      writeJson(res, 503, { error: 'E_NO_LLM_KEY', hint: e.message })
+      return
+    }
     const message = e instanceof Error ? e.message : String(e)
     console.error('[ai-gateway] /api/ai/title failed', e)
     writeJson(res, 502, { error: 'E_UPSTREAM', hint: message })
@@ -400,7 +410,8 @@ async function handleFollowups(
     writeJson(res, 501, { error: 'E_NOT_IMPLEMENTED', hint: 'follow-ups not enabled' })
     return
   }
-  if (!cfg.apiKey || cfg.apiKey.length === 0) {
+  // HIGH-1 — shared credential pre-gate (same rationale as handleTitle).
+  if (llmCredentialsMissing(cfg)) {
     writeJson(res, 503, { error: 'E_NO_LLM_KEY', hint: '设置 LLM_API_KEY 后重试' })
     return
   }
@@ -430,6 +441,10 @@ async function handleFollowups(
     )
     writeJson(res, 200, { followups })
   } catch (e) {
+    if (isProviderCredentialsError(e)) {
+      writeJson(res, 503, { error: 'E_NO_LLM_KEY', hint: e.message })
+      return
+    }
     const message = e instanceof Error ? e.message : String(e)
     console.error('[ai-gateway] /api/ai/followups failed', e)
     writeJson(res, 502, { error: 'E_UPSTREAM', hint: message })
@@ -452,7 +467,10 @@ async function handleSearchAgent(
   res: ServerResponse,
   cfg: AiGatewayConfig
 ): Promise<void> {
-  if (!cfg.apiKey || cfg.apiKey.length === 0) {
+  // HIGH-1 — shared credential pre-gate: flag-off byte-identical. On the registry path the SSE has
+  // already started when the resolver runs, so a per-provider key failure surfaces as the terminal
+  // {type:'result'} error frame (normalizeLoopError maps it to code E_NO_LLM_KEY).
+  if (llmCredentialsMissing(cfg)) {
     writeJson(res, 503, { error: 'E_NO_LLM_KEY', hint: '设置 LLM_API_KEY 后重试' })
     return
   }

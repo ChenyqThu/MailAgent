@@ -17,7 +17,6 @@ Seed（prd §4.1）：读端点惰性触发 ``ensure_seeded_store()`` —— 表
 
 from __future__ import annotations
 
-import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -38,6 +37,14 @@ from src.api.app import APIError, success_envelope
 from src.api.auth import verify_cf_access, verify_local_token
 from src.api.deps import get_env_file_path, get_settings
 
+# URL 归一 + 脱敏单源 = provider_routing（review HIGH-2/HIGH-3：探测面与 runtime 面
+# 必须推导出同一 wire URL，禁止 router 里复制实现）。
+from src.llm_agent.provider_routing import (
+    normalize_anthropic_base,
+    normalize_openai_base,
+    redact_secrets,
+)
+
 router = APIRouter(prefix="/api/llm/providers", tags=["llm-providers"])
 
 _UPSTREAM_TIMEOUT = httpx.Timeout(connect=10.0, read=10.0, write=10.0, pool=10.0)
@@ -51,16 +58,6 @@ _DEFAULT_BASES: Dict[str, str] = {
     "openrouter": "https://openrouter.ai/api/v1",
     "google": "https://generativelanguage.googleapis.com/v1beta/openai",
 }
-
-# anthropic baseURL 归一：末尾非 /vN 则补 /v1（镜像 frontend config.ts anthropicBaseUrl 语义
-# —— CRS 存储值不含 /v1，wire 端点在 {base}/v1/models 与 {base}/v1/messages）。
-_V_SUFFIX_RE = re.compile(r"/v\d+$")
-
-
-def _anthropic_v1_base(base: str) -> str:
-    b = base.rstrip("/")
-    return b if _V_SUFFIX_RE.search(b) else f"{b}/v1"
-
 
 # ---------------------------------------------------------------------------
 # seed（惰性，chat.py flag-on 投影复用）
@@ -167,16 +164,38 @@ def _parse_models_payload(body: Any) -> List[str]:
     return [i["id"] for i in data if isinstance(i, dict) and isinstance(i.get("id"), str)]
 
 
-def _models_request(protocol: str, base: str, api_key: str) -> Tuple[str, Dict[str, str]]:
-    """按 protocol 组装模型发现请求（url, headers）。anthropic 腿 x-api-key + version 头；
-    openai 系（含 openrouter/google/deepseek/openai-compatible）Bearer。"""
+def _merge_headers(
+    provider_headers: Optional[Dict[str, str]], system: Dict[str, str]
+) -> Dict[str, str]:
+    """provider 自定义头 + 系统生成头合并（review MEDIUM-5）。同名（大小写不敏感）时
+    系统鉴权头赢——防用户自定义 header 意外顶掉真实 key。"""
+    system_lower = {k.lower() for k in system}
+    merged = {
+        k: v for k, v in (provider_headers or {}).items() if k.lower() not in system_lower
+    }
+    merged.update(system)
+    return merged
+
+
+def _models_request(
+    protocol: str,
+    base: str,
+    api_key: str,
+    headers: Optional[Dict[str, str]] = None,
+) -> Tuple[str, Dict[str, str]]:
+    """按 protocol 组装模型发现请求（url, headers）。URL 归一与 runtime 同源
+    （provider_routing，review HIGH-2）：anthropic = canonical_root + ``/v1/models``；
+    openai 家族 = canonical_api_base + ``/models``。google 的 OpenAI 兼容面挂在
+    ``/v1beta/openai`` 下（无 /vN 尾段，Python runtime 无 google 腿）→ 原样拼接。
+    provider 自定义 header 合入、系统鉴权头优先（MEDIUM-5）。"""
     if protocol == "anthropic":
-        return (
-            f"{_anthropic_v1_base(base)}/models",
-            {"x-api-key": api_key, "anthropic-version": "2023-06-01"},
-        )
-    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-    return f"{base.rstrip('/')}/models", headers
+        root = normalize_anthropic_base(base) or ""
+        auth = {"x-api-key": api_key, "anthropic-version": "2023-06-01"}
+        return f"{root}/v1/models", _merge_headers(headers, auth)
+    auth = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    if protocol == "google":
+        return f"{base.rstrip('/')}/models", _merge_headers(headers, auth)
+    return f"{normalize_openai_base(base)}/models", _merge_headers(headers, auth)
 
 
 async def _fetch_provider_models(
@@ -184,17 +203,19 @@ async def _fetch_provider_models(
     base: str,
     api_key: str,
     *,
+    headers: Optional[Dict[str, str]] = None,
     transport: Optional[httpx.AsyncBaseTransport] = None,
 ) -> List[str]:
     """按 protocol 拉上游模型列表。anthropic 腿 401 时再退 Bearer 一轮（CRS 类中转两种
     鉴权头都存在，镜像 llm.py 双协议探测风格）。失败抛 ValueError（消息可读、不含 key），
     由端点转成 payload 的 error 字段（不 5xx —— 中转不透传 /models 时手动添加是正路）。"""
-    url, headers = _models_request(protocol, base, api_key)
+    url, req_headers = _models_request(protocol, base, api_key, headers)
     async with httpx.AsyncClient(timeout=_UPSTREAM_TIMEOUT, transport=transport) as client:
         try:
-            r = await client.get(url, headers=headers)
+            r = await client.get(url, headers=req_headers)
             if protocol == "anthropic" and r.status_code == 401 and api_key:
-                r = await client.get(url, headers={"Authorization": f"Bearer {api_key}"})
+                retry = _merge_headers(headers, {"Authorization": f"Bearer {api_key}"})
+                r = await client.get(url, headers=retry)
         except httpx.HTTPError as exc:
             raise ValueError(f"connection failed: {exc.__class__.__name__}") from exc
     if r.status_code in (401, 403):
@@ -214,21 +235,47 @@ async def _fetch_provider_models(
 
 
 def _completion_request(
-    protocol: str, base: str, api_key: str, model_id: str
+    protocol: str,
+    base: str,
+    api_key: str,
+    model_id: str,
+    headers: Optional[Dict[str, str]] = None,
 ) -> Tuple[str, Dict[str, str], Dict[str, Any]]:
-    """max_tokens=1 的最小补全请求（连通性测试兜底，/models 不透传时用）。"""
-    messages = [{"role": "user", "content": "ping"}]
+    """max_tokens=1 的最小补全请求（连通性测试兜底，/models 不透传时用）。URL 归一与
+    runtime 同源（HIGH-2）、header 合并同 ``_models_request``（MEDIUM-5）。"""
+    body = {"model": model_id, "max_tokens": 1, "messages": [{"role": "user", "content": "ping"}]}
     if protocol == "anthropic":
-        return (
-            f"{_anthropic_v1_base(base)}/messages",
-            {"x-api-key": api_key, "anthropic-version": "2023-06-01"},
-            {"model": model_id, "max_tokens": 1, "messages": messages},
-        )
-    return (
-        f"{base.rstrip('/')}/chat/completions",
-        {"Authorization": f"Bearer {api_key}"} if api_key else {},
-        {"model": model_id, "max_tokens": 1, "messages": messages},
-    )
+        root = normalize_anthropic_base(base) or ""
+        auth = {"x-api-key": api_key, "anthropic-version": "2023-06-01"}
+        return f"{root}/v1/messages", _merge_headers(headers, auth), body
+    auth = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    if protocol == "google":
+        return f"{base.rstrip('/')}/chat/completions", _merge_headers(headers, auth), body
+    return f"{normalize_openai_base(base)}/chat/completions", _merge_headers(headers, auth), body
+
+
+def _upstream_error_detail(
+    resp: httpx.Response, *, api_key: str, headers: Optional[Dict[str, str]]
+) -> str:
+    """上游错误的 allowlist 摘要（review HIGH-3）：只提 JSON ``error`` 的 type/code/message
+    三字段（或纯字符串 error），过 redact_secrets 再截断——**绝不**透传任意上游正文
+    （自建中转/调试代理可能在正文回显 Authorization / key / 自定义签名头）。
+    非 JSON / 无 error 字段 → ''（调用方只报状态码）。"""
+    try:
+        body = resp.json()
+    except ValueError:
+        return ""
+    err = body.get("error") if isinstance(body, dict) else None
+    parts: List[str] = []
+    if isinstance(err, str):
+        parts.append(err)
+    elif isinstance(err, dict):
+        for k in ("type", "code", "message"):
+            v = err.get(k)
+            if isinstance(v, (str, int)) and str(v).strip():
+                parts.append(f"{k}={v}")
+    detail = redact_secrets("; ".join(parts), api_key=api_key, headers=headers)
+    return detail[:200]
 
 
 async def _probe_provider(
@@ -237,14 +284,16 @@ async def _probe_provider(
     api_key: str,
     probe_model: Optional[str],
     *,
+    headers: Optional[Dict[str, str]] = None,
     transport: Optional[httpx.AsyncBaseTransport] = None,
 ) -> Optional[str]:
     """连通性测试：先试 models 端点，404 再发 max_tokens=1 最小补全（业界三家标配的
-    check 语义）。返回 None = ok；str = 可读错误（**不含 key**，网络异常只报异常类名）。"""
-    url, headers = _models_request(protocol, base, api_key)
+    check 语义）。返回 None = ok；str = 可读错误 = 状态码 + 异常类名 + allowlist 字段
+    （HIGH-3：**不含 key / 不透传任意上游正文**）。"""
+    url, req_headers = _models_request(protocol, base, api_key, headers)
     async with httpx.AsyncClient(timeout=_UPSTREAM_TIMEOUT, transport=transport) as client:
         try:
-            r = await client.get(url, headers=headers)
+            r = await client.get(url, headers=req_headers)
         except httpx.HTTPError as exc:
             return f"connection failed: {exc.__class__.__name__}"
         if r.is_success:
@@ -259,7 +308,7 @@ async def _probe_provider(
                 "models endpoint not available (HTTP 404) and no model configured for a "
                 "completion probe — add a model to this provider first"
             )
-        curl, cheaders, cbody = _completion_request(protocol, base, api_key, probe_model)
+        curl, cheaders, cbody = _completion_request(protocol, base, api_key, probe_model, headers)
         try:
             cr = await client.post(curl, headers=cheaders, json=cbody)
         except httpx.HTTPError as exc:
@@ -268,8 +317,9 @@ async def _probe_provider(
             return None
         if cr.status_code in (401, 403):
             return f"authentication failed (HTTP {cr.status_code}) — check the API key"
-        snippet = (cr.text or "")[:200]
-        return f"completion probe failed (HTTP {cr.status_code}): {snippet}"
+        detail = _upstream_error_detail(cr, api_key=api_key, headers=headers)
+        suffix = f": {detail}" if detail else ""
+        return f"completion probe failed (HTTP {cr.status_code}){suffix}"
 
 
 # ---------------------------------------------------------------------------
@@ -430,7 +480,9 @@ async def list_provider_models(
         else:
             api_key = store.get_provider_api_key(provider_id) or ""
             try:
-                ids = await _fetch_provider_models(prov.protocol, base, api_key)
+                ids = await _fetch_provider_models(
+                    prov.protocol, base, api_key, headers=prov.headers
+                )
                 fetched_new = store.merge_fetched_models(provider_id, ids)
             except ValueError as exc:
                 error = str(exc)
@@ -473,7 +525,9 @@ async def test_provider(
     )
     t0 = time.monotonic()
     try:
-        error = await _probe_provider(prov.protocol, base, api_key, probe_model)
+        error = await _probe_provider(
+            prov.protocol, base, api_key, probe_model, headers=prov.headers
+        )
     except Exception:  # noqa: BLE001 — 防御兜底；不 5xx（error 恒可读）
         error = "unexpected error during connectivity test"
     latency_ms = int((time.monotonic() - t0) * 1000)

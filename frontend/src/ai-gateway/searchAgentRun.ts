@@ -24,6 +24,9 @@ import { z } from 'zod'
 
 import type { AiGatewayConfig } from './config'
 import { resolveModelFactory } from './chatRun'
+// HIGH-1 (batch1 review) — SDK-free typed credentials error from the registry resolver; mapped to
+// the E_NO_LLM_KEY vocabulary in normalizeLoopError (the SSE is already open when resolve runs).
+import { isProviderCredentialsError } from './providerRef'
 // Relative type-only import (erased) — same discipline as tools/email.ts's relative
 // runtime import: the pure-Node poc harness (tsx) must be able to load this module.
 import type { SearchAgentPhase, SearchHit } from '../shared/api/types'
@@ -109,6 +112,11 @@ export function pickSearchAgentTools(all: ToolSet): ToolSet {
  *  formats: HTTP 429 → E_QUOTA, other upstream API errors → E_UPSTREAM, anything
  *  else → E_AGENT. */
 function normalizeLoopError(err: unknown): { code: string; message: string } {
+  // HIGH-1 — registry-path credential failure keeps the gateway-wide E_NO_LLM_KEY code (the
+  // renderer client already maps it, see searchAgentClient.ts).
+  if (isProviderCredentialsError(err)) {
+    return { code: 'E_NO_LLM_KEY', message: err.message }
+  }
   if (APICallError.isInstance(err)) {
     const code = err.statusCode === 429 ? 'E_QUOTA' : 'E_UPSTREAM'
     return { code, message: err.message }

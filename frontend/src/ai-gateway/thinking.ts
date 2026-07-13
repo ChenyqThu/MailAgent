@@ -10,7 +10,8 @@
 
 import type { JSONValue } from 'ai'
 
-import type { ProviderProtocol } from './providers'
+// MEDIUM-6 — type from the SDK-free providerRef (providers.ts only loads behind the flag).
+import type { ProviderProtocol } from './providerRef'
 
 const THINKING_BUDGET_TOKENS = 16_000
 const THINKING_EFFORT = 'high' as const

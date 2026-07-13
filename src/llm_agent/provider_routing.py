@@ -9,16 +9,19 @@ on 时：``parse_provider_ref`` 切 ``providerId:modelId``（无冒号 → defau
 serve-api 热读先例 —— 不进 pydantic 冻结单例，CRUD 后 ≤30s 生效，勿每 call 开 DB）→ 产出
 ``ProviderRoute``（协议 + per-provider base/key/headers 解密值 + per-model max_output）。
 
-fail-open（prd §4.3，保 chat 不死）：provider 行缺失 / 被禁用（snapshot 只含 enabled 行）/
-快照读失败 → None，调用方回退全局 env 配置 + 前缀路由。
+fail-open（prd §4.3，保 chat 不死）仅两种情形（review MEDIUM-4）：①快照整体不可读
+②无冒号 legacy id 查不到 default 行。显式带冒号的 ref 在 provider 缺失/禁用时抛
+``ProviderRouteError``（调用方按该模型失败处理走 fallback 链），绝不静默降级到全局网关。
 
-baseURL 归一（research/01 §7「三种拼接规则」的统一点，本模块是双腿共用单源）：
-  - anthropic 腿：AsyncAnthropic 自动追加 ``/v1/messages`` —— 行值**原样**（只去尾 ``/``）。
-    CRS ``https://crs.chenge.ink/api`` 与 DeepSeek/Kimi/GLM 的 anthropic-compat 端点
-    ``https://api.deepseek.com/anthropic`` 同语义。空 → None（SDK 官方默认 api.anthropic.com）。
-  - openai 腿：行值已以 ``/v<N>`` 结尾（dashscope ``.../compatible-mode/v1``）→ 原样；否则补
-    ``/v1``（裸域名 ``https://api.deepseek.com`` / CRS ``.../api``）。返回值 +
-    ``/chat/completions`` 即 wire URL。
+baseURL 归一（review HIGH-2 统一契约，本模块是 runtime/probe/TS 三消费面共用单源；
+DB 行存用户原始输入，只在写入时 trim + 去尾 ``/``）：
+  - **canonical_root**（anthropic 协议）= 行值去尾部 ``/v<N>``（若有）。Python
+    AsyncAnthropic / mem0 传 canonical_root（SDK 自补 ``/v1/messages``）；probe 打
+    ``canonical_root + '/v1/models'``。用户从厂商文档抄来的含 ``/v1`` 地址不再叠成
+    ``/v1/v1``。空 → None（SDK 官方默认 api.anthropic.com）。
+  - **canonical_api_base**（openai 家族）= 行值已以 ``/v<N>`` 结尾（dashscope
+    ``.../compatible-mode/v1``）→ 原样；否则补 ``/v1``（裸域名 ``https://api.deepseek.com``
+    / CRS ``.../api``）。runtime 拼 ``+ '/chat/completions'``；probe 打 ``+ '/models'``。
 """
 
 from __future__ import annotations
@@ -72,21 +75,37 @@ class ProviderRoute:
         return self.provider_id == DEFAULT_PROVIDER_ID
 
 
+class ProviderRouteError(RuntimeError):
+    """显式 providerRef 无法按 provider 行路由（provider 缺失/禁用，review MEDIUM-4）。
+
+    调用方须把它当**该模型失败**处理（fallback 链跳下一个 / mem0 回退 legacy 并 warning），
+    不得静默降级成全局 env 配置——那会把请求送去非预期网关（数据边界/费用/模型偏差）。
+    """
+
+
 def registry_enabled() -> bool:
     """flag 读取单点（pydantic 冻结单例，翻转需重启 —— 镜像其它 pydantic flag 纪律）。"""
     return bool(getattr(cfg, "llm_provider_registry_enabled", False))
 
 
 def normalize_anthropic_base(base_url: str) -> Optional[str]:
-    """anthropic 腿 base：行值原样（只去尾 ``/``）；空 → None（AsyncAnthropic 官方默认）。"""
+    """anthropic 腿 canonical_root（review HIGH-2）：去尾 ``/`` 再剥尾部 ``/v<N>``（若有）；
+    空 → None（AsyncAnthropic 官方默认）。
+
+    runtime（AsyncAnthropic / mem0 ``anthropic_base_url``）直接吃 canonical_root（SDK 自补
+    ``/v1/messages``）；probe 面用 ``canonical_root + '/v1/...'``——三面共享本函数，用户抄来
+    含 ``/v1`` 的地址不会被 SDK 叠成 ``/v1/v1/messages``。
+    """
     base = (base_url or "").strip().rstrip("/")
+    base = _V_SUFFIX_RE.sub("", base)
     return base or None
 
 
 def normalize_openai_base(base_url: str) -> str:
-    """openai 腿 base 归一：已以 ``/v<N>`` 结尾 → 原样；否则补 ``/v1``；空 → ''。
+    """openai 家族 canonical_api_base（review HIGH-2）：已以 ``/v<N>`` 结尾 → 原样；
+    否则补 ``/v1``；空 → ''。
 
-    返回值即 httpx base_url，POST 路径恒 ``/chat/completions``。
+    runtime 拼 ``+ '/chat/completions'``；probe 拼 ``+ '/models'``——两面共享本函数。
     """
     base = (base_url or "").strip().rstrip("/")
     if not base:
@@ -101,6 +120,32 @@ def openai_base_for(route: ProviderRoute) -> str:
     openai-compatible 无官方默认 → ''（配置错误，调用方对该模型报错走 fallback 链）。"""
     raw = (route.base_url or "").strip() or _PROTOCOL_DEFAULT_BASE.get(route.protocol, "")
     return normalize_openai_base(raw)
+
+
+_REDACTED = "***"
+# 短于此长度的值不替换：信息量趋零，且会误伤状态码/布尔标志等正常文本。
+_MIN_SECRET_LEN = 4
+
+
+def redact_secrets(
+    text: str, *, api_key: str = "", headers: Optional[Dict[str, str]] = None
+) -> str:
+    """把当前 provider 的秘密值（api_key + 全部自定义 header 值）从文本里替换为 ``***``。
+
+    上游错误正文可能回显请求头（自建中转 / 调试代理 / 恶意 provider——review HIGH-3），
+    任何要进 LLMCallError / API 响应 / 日志的上游正文摘要必须先过这里、再截断（顺序反了
+    会让被截断的 key 前缀漏网）。按值长度降序替换，防长值先被其前缀短值打断（镜像 S2
+    skill secret 脱敏纪律）。
+    """
+    if not text:
+        return text
+    values = {api_key or ""}
+    values.update((headers or {}).values())
+    out = text
+    for v in sorted(values, key=len, reverse=True):
+        if len(v) >= _MIN_SECRET_LEN:
+            out = out.replace(v, _REDACTED)
+    return out
 
 
 def clamp_max_tokens(requested: int, route: Optional[ProviderRoute]) -> int:
@@ -149,20 +194,31 @@ def reset_provider_route_cache() -> None:
 def resolve_route(model_ref: str) -> Optional[ProviderRoute]:
     """providerRef → ProviderRoute；None = 走 legacy 路径（flag off / fail-open）。
 
+    fail-open（回退全局 env + 前缀路由）仅两种情形（review MEDIUM-4）：①flag off / 快照
+    整体不可读（配置面挂了不挡 LLM）②无冒号 legacy id 查不到 default 行（老配置引用天然
+    归全局网关）。显式带冒号的 ref 在 provider 缺失/禁用时抛 ``ProviderRouteError``——
+    拼错 id / 禁用 provider / 解密失败致行不可用都必须可见，不得静默改道全局网关。
+
     模型行不存在也可路由（手填 ref 合法，max_output=None 不 clamp）；模型行 enabled 只驱动
     选择器可选集，不在此处拦截（直填配置串仍可用）。
     """
     if not registry_enabled():
         return None
-    provider_id, model_id = parse_provider_ref(model_ref or "")
+    ref = model_ref or ""
+    provider_id, model_id = parse_provider_ref(ref)
     snap = _snapshot()
     if not snap:
-        return None
+        return None  # ① 快照整体不可读 → fail-open（含显式 ref）
     provider = next(
         (p for p in snap.get("providers") or [] if p.get("id") == provider_id), None
     )
     if provider is None:
-        return None  # fail-open：行缺失/禁用 → 全局配置 + 前缀路由
+        if ":" in ref:
+            raise ProviderRouteError(
+                f"provider '{provider_id}' referenced by model '{ref}' is not available "
+                "(missing or disabled in the provider registry)"
+            )
+        return None  # ② 无冒号 legacy id → fail-open（default 行未 seed 等）
     max_output: Optional[int] = None
     for m in provider.get("models") or []:
         if m.get("id") == model_id:
