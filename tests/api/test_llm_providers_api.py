@@ -8,6 +8,11 @@
   5. /{id}/models?refresh=true 上游 merge（fetched 不覆盖 manual/enabled）+ 失败可读 error
   6. /{id}/test 连通性探测（_probe_provider MockTransport 单元 + 端点转发）
   7. /chat/config enabledModels：flag off 字节级现状（表有行也不读）/ flag on 聚合投影
+  8. P3 写面鉴权收紧：provider POST/PATCH/DELETE + model PUT/DELETE + /test 全 =
+     verify_local_token（合法 CF JWT 恒 403 → 远程 Settings 只读）；GET 保持 cf_access
+  9. P3 model 行写端点：PUT merge 语义（未传键保留现行值）/ 手动添加默认 enabled /
+     DELETE 缺行 404
+ 10. /chat/config providerRegistryEnabled 投影（UI 门控字段，off=false / on=true）
 
 隔离：每用例独立 agent_config.db（env 覆盖 + 单例 reset）+ keyfile master key（绝不弹真
 钥匙串，镜像 tests/agent_config/test_secrets.py）+ stub ``_resolve_seed_inputs``（seed 不
@@ -204,6 +209,157 @@ def test_snapshot_shape_and_version_increments_on_crud(client: TestClient):
     # CRUD 写后 +1
     client.patch(f"/api/llm/providers/{DEFAULT_PROVIDER_ID}", json={"displayName": "CRS"})
     assert client.get("/api/llm/providers/snapshot").json()["data"]["version"] == v0 + 1
+
+
+# ── P3-8. 写面鉴权收紧（prd「远程 web 对 provider 配置只读」落 API 层）──────────────────
+
+
+def test_write_endpoints_reject_cf_jwt_and_accept_local_token(client: TestClient, monkeypatch):
+    """写端点挂 verify_local_token：合法 CF JWT（远程 owner 会话）恒 403、本地 token 放行；
+    GET 列表/模型保持 cf_access（远程可看）。"""
+    client.get("/api/llm/providers")  # AUTH_DISABLED 下先触发 seed
+    _arm_cf_jwt(monkeypatch)
+    monkeypatch.setattr(auth_mod, "_LOCAL_API_TOKEN", LOCAL_TOK)
+
+    create_body = {"id": "dash", "protocol": "openai-compatible", "baseUrl": "https://d/v1"}
+    # 有效 CF JWT → 全部写端点 403（远程只读）
+    assert client.post("/api/llm/providers", json=create_body, headers=CF_HEADERS).status_code == 403
+    assert (
+        client.patch(
+            f"/api/llm/providers/{DEFAULT_PROVIDER_ID}", json={"enabled": True}, headers=CF_HEADERS
+        ).status_code
+        == 403
+    )
+    assert client.delete("/api/llm/providers/dash", headers=CF_HEADERS).status_code == 403
+    assert (
+        client.post(
+            f"/api/llm/providers/{DEFAULT_PROVIDER_ID}/test", headers=CF_HEADERS
+        ).status_code
+        == 403
+    )
+    assert (
+        client.put(
+            f"/api/llm/providers/{DEFAULT_PROVIDER_ID}/models",
+            json={"id": "m1"},
+            headers=CF_HEADERS,
+        ).status_code
+        == 403
+    )
+    assert (
+        client.delete(
+            f"/api/llm/providers/{DEFAULT_PROVIDER_ID}/models?modelId=m1", headers=CF_HEADERS
+        ).status_code
+        == 403
+    )
+    # GET 读面对同一 CF JWT 照常放行（远程可看）
+    assert client.get("/api/llm/providers", headers=CF_HEADERS).status_code == 200
+    assert (
+        client.get(
+            f"/api/llm/providers/{DEFAULT_PROVIDER_ID}/models", headers=CF_HEADERS
+        ).status_code
+        == 200
+    )
+    # 本地 token → 写端点放行（本地 renderer 经 webRequest 注入同 header）
+    r = client.post("/api/llm/providers", json=create_body, headers=LOCAL_HEADERS)
+    assert r.status_code == 200
+    assert (
+        client.patch(
+            "/api/llm/providers/dash", json={"displayName": "D"}, headers=LOCAL_HEADERS
+        ).status_code
+        == 200
+    )
+    assert client.delete("/api/llm/providers/dash", headers=LOCAL_HEADERS).status_code == 200
+
+
+# ── P3-9. model 行写端点（Settings 模型管理）────────────────────────────────────────────
+
+
+def test_model_upsert_manual_add_and_merge_semantics(client: TestClient):
+    # 手动添加：新行默认 enabled=True + source='manual'
+    r = client.put(
+        f"/api/llm/providers/{DEFAULT_PROVIDER_ID}/models",
+        json={"id": "claude-manual-1", "maxOutput": 32000},
+    )
+    assert r.status_code == 200
+    m = r.json()["data"]
+    assert m["id"] == "claude-manual-1"
+    assert m["enabled"] is True
+    assert m["source"] == "manual"
+    assert m["maxOutput"] == 32000
+    assert m["capabilities"] is None  # 不臆造能力位
+
+    # merge 语义：只传 enabled=False，maxOutput/其余键保留现行值
+    r = client.put(
+        f"/api/llm/providers/{DEFAULT_PROVIDER_ID}/models",
+        json={"id": "claude-manual-1", "enabled": False},
+    )
+    assert r.status_code == 200
+    m = r.json()["data"]
+    assert m["enabled"] is False
+    assert m["maxOutput"] == 32000
+    assert m["source"] == "manual"
+
+    # capabilities 可标注；再次只动 maxOutput 时保留
+    r = client.put(
+        f"/api/llm/providers/{DEFAULT_PROVIDER_ID}/models",
+        json={"id": "claude-manual-1", "capabilities": {"tools": True, "vision": False}},
+    )
+    assert r.json()["data"]["capabilities"] == {"tools": True, "vision": False}
+    r = client.put(
+        f"/api/llm/providers/{DEFAULT_PROVIDER_ID}/models",
+        json={"id": "claude-manual-1", "maxOutput": None},
+    )
+    m = r.json()["data"]
+    assert m["maxOutput"] is None
+    assert m["capabilities"] == {"tools": True, "vision": False}
+
+
+def test_model_upsert_and_delete_error_paths(client: TestClient):
+    # 缺 id / 坏类型 → 400
+    r = client.put(f"/api/llm/providers/{DEFAULT_PROVIDER_ID}/models", json={})
+    assert r.status_code == 400
+    r = client.put(
+        f"/api/llm/providers/{DEFAULT_PROVIDER_ID}/models",
+        json={"id": "m1", "maxOutput": "64k"},
+    )
+    assert r.status_code == 400
+    r = client.put(
+        f"/api/llm/providers/{DEFAULT_PROVIDER_ID}/models",
+        json={"id": "m1", "capabilities": ["tools"]},
+    )
+    assert r.status_code == 400
+    # 缺 provider → 404
+    assert client.put("/api/llm/providers/nope/models", json={"id": "m1"}).status_code == 404
+    # DELETE：缺行 404 / 命中 200（seed 行 claude-sonnet-4-6 可删）
+    assert (
+        client.delete(f"/api/llm/providers/{DEFAULT_PROVIDER_ID}/models?modelId=nope").status_code
+        == 404
+    )
+    r = client.delete(
+        f"/api/llm/providers/{DEFAULT_PROVIDER_ID}/models?modelId=claude-sonnet-4-6"
+    )
+    assert r.status_code == 200
+    ids = {
+        m["id"]
+        for m in client.get(f"/api/llm/providers/{DEFAULT_PROVIDER_ID}/models").json()["data"][
+            "models"
+        ]
+    }
+    assert "claude-sonnet-4-6" not in ids
+
+
+def test_model_id_with_slash_roundtrip(client: TestClient):
+    """OpenRouter 式 wire id 含 '/'——走 body/query（非 path 段），必须整链可用。"""
+    client.get("/api/llm/providers")  # seed
+    slash_id = "openai/gpt-4o"
+    r = client.put(
+        f"/api/llm/providers/{DEFAULT_PROVIDER_ID}/models", json={"id": slash_id}
+    )
+    assert r.status_code == 200 and r.json()["data"]["id"] == slash_id
+    r = client.delete(
+        f"/api/llm/providers/{DEFAULT_PROVIDER_ID}/models", params={"modelId": slash_id}
+    )
+    assert r.status_code == 200
 
 
 # ── 5. /{id}/models 发现 ─────────────────────────────────────────────────────────────
@@ -532,3 +688,20 @@ def test_chat_config_flag_on_store_failure_falls_back_to_env(monkeypatch):
         r = c.get("/api/chat/config")
     assert r.status_code == 200
     assert r.json()["data"]["enabledModels"] == ["env-model-a", "env-model-b"]
+
+
+# ── P3-10. /chat/config providerRegistryEnabled（Settings 模型服务区门控字段）───────────
+
+
+def test_chat_config_provider_registry_enabled_projection(monkeypatch):
+    """UI 门控字段与 enabledModels 聚合投影同源（pydantic 冻结单例）：off=false / on=true。"""
+    _stub_chat_config(monkeypatch, _ChatCfg())
+    with TestClient(app, raise_server_exceptions=False) as c:
+        assert c.get("/api/chat/config").json()["data"]["providerRegistryEnabled"] is False
+
+    class _FlagOnCfg(_ChatCfg):
+        llm_provider_registry_enabled = True
+
+    _stub_chat_config(monkeypatch, _FlagOnCfg())
+    with TestClient(app, raise_server_exceptions=False) as c:
+        assert c.get("/api/chat/config").json()["data"]["providerRegistryEnabled"] is True

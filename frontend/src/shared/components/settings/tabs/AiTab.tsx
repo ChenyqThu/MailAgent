@@ -18,6 +18,7 @@ import { useQueryClient } from '@tanstack/react-query'
 
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { useUpstreamModels, useEnabledModels, FALLBACK_MODELS } from '@shared/hooks/useLlmModels'
+import { useProviderRegistryEnabled } from '@shared/hooks/useLlmProviders'
 import { applyEnvPatch, useEnvStore } from '@shared/state/env'
 import { errorMessage } from '@shared/lib/ipcErrors'
 import { qk } from '@shared/lib/queryKeys'
@@ -49,6 +50,8 @@ import { Row } from '../parts/Row'
 import { EnvField } from '../parts/EnvField'
 import { EnvSecretField } from '../parts/EnvSecretField'
 import { PromptEditorDialog } from '../parts/PromptEditorDialog'
+import { ModelServicesSection } from '../providers/ModelServicesSection'
+import { buildModelOptionGroups } from '../providers/modelOptionGroups'
 import { NotionAgentSection } from './NotionAgentSection'
 import { CustomAiSection } from '../CustomAiSection'
 
@@ -106,6 +109,48 @@ export function AiTab(): React.ReactElement {
   const isWeb =
     (import.meta as unknown as { env?: { VITE_BUILD_TARGET?: string } }).env?.VITE_BUILD_TARGET ===
     'web'
+
+  // task 07-12 P3 — provider registry 门控（/chat/config.providerRegistryEnabled，与后端
+  // enabledModels 聚合投影同源）。off（默认/加载中/不可达）→ 下方旧「LLM 网关」区字节级
+  // 不变；on → LLM_API_BASE/KEY + 启用模型勾选区被「模型服务」section 取代，模型下拉
+  // 选项按 provider 分组（值仍写原 env 键——providerRef 向后兼容由 P1/P2 消化）。
+  const providerRegistryEnabled = useProviderRegistryEnabled()
+
+  // flag on 时三个功能位下拉的分组选项（flag off 恒 undefined → EnvField 走旧扁平渲染）。
+  const notEnabledSuffix = t('settings.ai.enabledModels.notEnabled')
+  const llmModelGroups = React.useMemo(() => {
+    if (!providerRegistryEnabled) return undefined
+    const base = enabledModels.length > 0 ? enabledModels : FALLBACK_MODELS
+    const withOrphan =
+      currentLlmModel && !base.includes(currentLlmModel) ? [...base, currentLlmModel] : base
+    return buildModelOptionGroups(withOrphan, t, (id, display) =>
+      id === currentLlmModel && !base.includes(id) ? `${display} ${notEnabledSuffix}` : display
+    )
+  }, [providerRegistryEnabled, enabledModels, currentLlmModel, t, notEnabledSuffix])
+  const llmFallbackGroups = React.useMemo(() => {
+    if (!providerRegistryEnabled) return undefined
+    const base = enabledModels.length > 0 ? enabledModels : FALLBACK_MODELS
+    const withOrphan =
+      currentLlmFallback && !base.includes(currentLlmFallback)
+        ? [...base, currentLlmFallback]
+        : base
+    return buildModelOptionGroups(withOrphan, t, (id, display) =>
+      id === currentLlmFallback && !base.includes(id) ? `${display} ${notEnabledSuffix}` : display
+    )
+  }, [providerRegistryEnabled, enabledModels, currentLlmFallback, t, notEnabledSuffix])
+  // 翻译模型：flag on 选项源从 translate 上游列表升级为聚合 enabledModels（跨 provider）。
+  const translateModelGroups = React.useMemo(() => {
+    if (!providerRegistryEnabled) return undefined
+    const base = enabledModels.length > 0 ? enabledModels : FALLBACK_MODELS
+    const withOrphan =
+      currentTranslateModel && !base.includes(currentTranslateModel)
+        ? [...base, currentTranslateModel]
+        : base
+    const notInList = t('settings.ai.translateModel.notInList', { defaultValue: '（不在列表）' })
+    return buildModelOptionGroups(withOrphan, t, (id, display) =>
+      id === currentTranslateModel && !base.includes(id) ? `${display} ${notInList}` : display
+    )
+  }, [providerRegistryEnabled, enabledModels, currentTranslateModel, t])
 
   async function handleRefreshUpstream(): Promise<void> {
     setRefreshing(true)
@@ -197,170 +242,200 @@ export function AiTab(): React.ReactElement {
         })}
       />
 
+      {/* task 07-12 P3 — provider registry on 时「模型服务」区取代下方 LLM_API_BASE/KEY +
+          启用模型勾选（prd §4.5.6）；off（默认）字节级现状。 */}
+      {providerRegistryEnabled && <ModelServicesSection />}
+
       {/* LLM_AGENT_ENABLED 已收敛到 Agents 页预处理 Agent 配置抽屉（不再两处）。LLM_MODEL /
           LLM_FALLBACK_MODELS 保留在此作全局语义——chat gateway 默认模型 + 后台 AI 任务兜底/
           兜底链（R2 #2：预处理的模型与 fallback 均已拆到行级列，默认跟随这里的全局值）。
           其余为网关基建（API base/key、启用模型列表、test gateway），translate 等沿用不变。 */}
       <Section title={t('settings.ai.title')} helper={t('settings.ai.helper')}>
-        <EnvField
-          envKey="LLM_API_BASE"
-          control="text"
-          label={t('settings.ai.apiBase.label')}
-          helper={t('settings.ai.apiBase.helper')}
-          placeholder="https://crs.chenge.ink/api"
-        />
-        <EnvSecretField
-          envKey="LLM_API_KEY"
-          keytarSlot="llmApiKey"
-          label={t('settings.ai.apiKey.label')}
-          helper={t('settings.ai.apiKey.helper')}
-        />
+        {!providerRegistryEnabled && (
+          <EnvField
+            envKey="LLM_API_BASE"
+            control="text"
+            label={t('settings.ai.apiBase.label')}
+            helper={t('settings.ai.apiBase.helper')}
+            placeholder="https://crs.chenge.ink/api"
+          />
+        )}
+        {!providerRegistryEnabled && (
+          <EnvSecretField
+            envKey="LLM_API_KEY"
+            keytarSlot="llmApiKey"
+            label={t('settings.ai.apiKey.label')}
+            helper={t('settings.ai.apiKey.helper')}
+          />
+        )}
         {/* 启用模型列表 — LLM_ENABLED_MODELS (comma-separated). Serve-api hot-reads
             this key via dotenv_values; no restart needed after changes. This is an
             intentional departure from other EnvField rows that call markRestartRequired
             on write — see comment in handleToggleModel above.
             UI = popover multi-select: trigger shows a summary badge, content has a
-            refresh button + scrollable checkbox list. Width matches SelectTrigger (w-[200px]). */}
-        <Row
-          label={t('settings.ai.enabledModels.label', { defaultValue: '启用模型列表' })}
-          helper={t('settings.ai.enabledModels.helper', {
-            defaultValue:
-              '勾选后三处模型选项（chat picker / 报告 agent / 主备模型下拉）同步显示已启用集合；未勾选时自动 fallback 到默认四模型。'
-          })}
-        >
-          <Popover>
-            <PopoverTrigger asChild>
-              <button
-                disabled={isWeb}
-                className={[
-                  'flex h-8 w-[200px] items-center justify-between gap-2 rounded-md border border-ink-border bg-ink-2 px-3',
-                  'text-aux text-ink-fg',
-                  'transition-colors duration-fast ease-standard',
-                  'focus:outline-none focus:ring-2 focus:ring-coral/70 focus:border-coral/60',
-                  'disabled:cursor-not-allowed disabled:opacity-50'
-                ].join(' ')}
-              >
-                <span className="line-clamp-1">
-                  {upstreamLoading ? (
-                    <span className="flex items-center gap-1">
-                      <Loader size={12} label={t('settings.ai.enabledModels.loading')} />
-                      {t('settings.ai.enabledModels.loading', { defaultValue: '加载中…' })}
-                    </span>
-                  ) : rawEnabled.length === 0 ? (
-                    t('settings.ai.enabledModels.allDefault', { defaultValue: '全部默认' })
-                  ) : (
-                    t('settings.ai.enabledModels.countEnabled', {
-                      count: rawEnabled.length,
-                      defaultValue: '已启用 {count} 个模型'
-                    })
-                  )}
-                </span>
-                <ChevronDown className="size-4 opacity-60 shrink-0" />
-              </button>
-            </PopoverTrigger>
-            <PopoverContent className="w-[280px] p-2">
-              {/* Refresh row */}
-              <div className="flex items-center justify-between mb-2 pb-2 border-b border-ink-border-soft">
-                <span className="text-meta text-ink-fg-2 uppercase tracking-wider font-mono">
-                  {t('settings.ai.enabledModels.label', { defaultValue: '启用模型列表' })}
-                </span>
+            refresh button + scrollable checkbox list. Width matches SelectTrigger (w-[200px]).
+            registry on 时该区被「模型服务」per-provider 启用勾选取代（P3）。 */}
+        {!providerRegistryEnabled && (
+          <Row
+            label={t('settings.ai.enabledModels.label', { defaultValue: '启用模型列表' })}
+            helper={t('settings.ai.enabledModels.helper', {
+              defaultValue:
+                '勾选后三处模型选项（chat picker / 报告 agent / 主备模型下拉）同步显示已启用集合；未勾选时自动 fallback 到默认四模型。'
+            })}
+          >
+            <Popover>
+              <PopoverTrigger asChild>
                 <button
-                  onClick={() => void handleRefreshUpstream()}
-                  disabled={refreshing || upstreamLoading || isWeb}
-                  className="flex items-center gap-1 text-xs text-ink-fg-2 hover:text-ink-fg disabled:opacity-40 transition-colors"
+                  disabled={isWeb}
+                  className={[
+                    'flex h-8 w-[200px] items-center justify-between gap-2 rounded-md border border-ink-border bg-ink-2 px-3',
+                    'text-aux text-ink-fg',
+                    'transition-colors duration-fast ease-standard',
+                    'focus:outline-none focus:ring-2 focus:ring-coral/70 focus:border-coral/60',
+                    'disabled:cursor-not-allowed disabled:opacity-50'
+                  ].join(' ')}
                 >
-                  {refreshing || upstreamLoading ? (
-                    <Loader2 className="size-3 animate-spin" />
-                  ) : (
-                    <RefreshCw className="size-3" />
-                  )}
-                  {refreshing
-                    ? t('settings.ai.enabledModels.refreshing', { defaultValue: '刷新中…' })
-                    : t('settings.ai.enabledModels.refresh', { defaultValue: '刷新模型列表' })}
-                </button>
-              </div>
-              {/* Model list */}
-              <div className="max-h-[240px] overflow-y-auto flex flex-col gap-0.5">
-                {upstreamModels.length === 0 ? (
-                  <span className="px-1 py-2 text-xs text-ink-fg-3">
-                    {t('settings.ai.enabledModels.noModels', {
-                      defaultValue: '未拉取到模型列表，请检查 API Base / Key 后刷新。'
-                    })}
+                  <span className="line-clamp-1">
+                    {upstreamLoading ? (
+                      <span className="flex items-center gap-1">
+                        <Loader size={12} label={t('settings.ai.enabledModels.loading')} />
+                        {t('settings.ai.enabledModels.loading', { defaultValue: '加载中…' })}
+                      </span>
+                    ) : rawEnabled.length === 0 ? (
+                      t('settings.ai.enabledModels.allDefault', { defaultValue: '全部默认' })
+                    ) : (
+                      t('settings.ai.enabledModels.countEnabled', {
+                        count: rawEnabled.length,
+                        defaultValue: '已启用 {count} 个模型'
+                      })
+                    )}
                   </span>
-                ) : (
-                  upstreamModels.map((id) => (
-                    <label
-                      key={id}
-                      className={[
-                        'flex items-center gap-2 px-1 py-1 rounded-sm text-aux text-ink-fg',
-                        'hover:bg-ink-3 cursor-pointer select-none',
-                        isWeb ? 'opacity-50 pointer-events-none' : ''
-                      ]
-                        .join(' ')
-                        .trim()}
-                    >
-                      <Checkbox
-                        disabled={isWeb}
-                        checked={rawEnabled.includes(id)}
-                        onCheckedChange={(checked) => void handleToggleModel(id, checked)}
-                      />
-                      <span className="font-mono text-[12px] truncate">{id}</span>
-                    </label>
-                  ))
-                )}
-              </div>
-            </PopoverContent>
-          </Popover>
-        </Row>
+                  <ChevronDown className="size-4 opacity-60 shrink-0" />
+                </button>
+              </PopoverTrigger>
+              <PopoverContent className="w-[280px] p-2">
+                {/* Refresh row */}
+                <div className="flex items-center justify-between mb-2 pb-2 border-b border-ink-border-soft">
+                  <span className="text-meta text-ink-fg-2 uppercase tracking-wider font-mono">
+                    {t('settings.ai.enabledModels.label', { defaultValue: '启用模型列表' })}
+                  </span>
+                  <button
+                    onClick={() => void handleRefreshUpstream()}
+                    disabled={refreshing || upstreamLoading || isWeb}
+                    className="flex items-center gap-1 text-xs text-ink-fg-2 hover:text-ink-fg disabled:opacity-40 transition-colors"
+                  >
+                    {refreshing || upstreamLoading ? (
+                      <Loader2 className="size-3 animate-spin" />
+                    ) : (
+                      <RefreshCw className="size-3" />
+                    )}
+                    {refreshing
+                      ? t('settings.ai.enabledModels.refreshing', { defaultValue: '刷新中…' })
+                      : t('settings.ai.enabledModels.refresh', { defaultValue: '刷新模型列表' })}
+                  </button>
+                </div>
+                {/* Model list */}
+                <div className="max-h-[240px] overflow-y-auto flex flex-col gap-0.5">
+                  {upstreamModels.length === 0 ? (
+                    <span className="px-1 py-2 text-xs text-ink-fg-3">
+                      {t('settings.ai.enabledModels.noModels', {
+                        defaultValue: '未拉取到模型列表，请检查 API Base / Key 后刷新。'
+                      })}
+                    </span>
+                  ) : (
+                    upstreamModels.map((id) => (
+                      <label
+                        key={id}
+                        className={[
+                          'flex items-center gap-2 px-1 py-1 rounded-sm text-aux text-ink-fg',
+                          'hover:bg-ink-3 cursor-pointer select-none',
+                          isWeb ? 'opacity-50 pointer-events-none' : ''
+                        ]
+                          .join(' ')
+                          .trim()}
+                      >
+                        <Checkbox
+                          disabled={isWeb}
+                          checked={rawEnabled.includes(id)}
+                          onCheckedChange={(checked) => void handleToggleModel(id, checked)}
+                        />
+                        <span className="font-mono text-[12px] truncate">{id}</span>
+                      </label>
+                    ))
+                  )}
+                </div>
+              </PopoverContent>
+            </Popover>
+          </Row>
+        )}
         {/* LLM_MODEL: 全局默认模型（chat gateway 默认 + 后台任务兜底）。single-select from
-            enabled list (+ current value if orphan) —— 保存值不在启用列表时追加显示，避免下拉空白。 */}
+            enabled list (+ current value if orphan) —— 保存值不在启用列表时追加显示，避免下拉空白。
+            registry on → optionGroups 分组（值仍写 LLM_MODEL env 键）。 */}
         <EnvField
           envKey="LLM_MODEL"
           control="select"
           label={t('settings.ai.model.label')}
           helper={t('settings.ai.model.helper')}
-          options={(() => {
-            const base = enabledModels.length > 0 ? enabledModels : FALLBACK_MODELS
-            const withOrphan =
-              currentLlmModel && !base.includes(currentLlmModel) ? [...base, currentLlmModel] : base
-            return withOrphan.map((id) => ({
-              value: id,
-              label:
-                id === currentLlmModel && !base.includes(id)
-                  ? `${id} ${t('settings.ai.enabledModels.notEnabled')}`
-                  : id
-            }))
-          })()}
+          options={
+            providerRegistryEnabled
+              ? undefined
+              : (() => {
+                  const base = enabledModels.length > 0 ? enabledModels : FALLBACK_MODELS
+                  const withOrphan =
+                    currentLlmModel && !base.includes(currentLlmModel)
+                      ? [...base, currentLlmModel]
+                      : base
+                  return withOrphan.map((id) => ({
+                    value: id,
+                    label:
+                      id === currentLlmModel && !base.includes(id)
+                        ? `${id} ${t('settings.ai.enabledModels.notEnabled')}`
+                        : id
+                  }))
+                })()
+          }
+          optionGroups={llmModelGroups}
         />
         {/* LLM_FALLBACK_MODELS: single-select (user decided no multi-select ranking).
             Python reads it as comma-separated fallback chain; single value works fine.
             Same orphan handling: if the saved value is not in the enabled list, append it.
-            全局兜底链——邮件预处理可在其 Agent 卡单独设置行级 fallback（默认跟随这里）。 */}
+            全局兜底链——邮件预处理可在其 Agent 卡单独设置行级 fallback（默认跟随这里）。
+            registry on →「不设」空值哨兵留在未分组区、模型按 provider 分组。 */}
         <EnvField
           envKey="LLM_FALLBACK_MODELS"
           control="select"
           label={t('settings.ai.fallbacks.label')}
           helper={t('settings.ai.fallbacks.helper')}
-          options={(() => {
-            const base = enabledModels.length > 0 ? enabledModels : FALLBACK_MODELS
-            const withOrphan =
-              currentLlmFallback && !base.includes(currentLlmFallback)
-                ? [...base, currentLlmFallback]
-                : base
-            return [
-              {
-                value: '',
-                label: t('settings.ai.fallbacks.none', { defaultValue: '（不设备模型）' })
-              },
-              ...withOrphan.map((id) => ({
-                value: id,
-                label:
-                  id === currentLlmFallback && !base.includes(id)
-                    ? `${id} ${t('settings.ai.enabledModels.notEnabled')}`
-                    : id
-              }))
-            ]
-          })()}
+          options={
+            providerRegistryEnabled
+              ? [
+                  {
+                    value: '',
+                    label: t('settings.ai.fallbacks.none', { defaultValue: '（不设备模型）' })
+                  }
+                ]
+              : (() => {
+                  const base = enabledModels.length > 0 ? enabledModels : FALLBACK_MODELS
+                  const withOrphan =
+                    currentLlmFallback && !base.includes(currentLlmFallback)
+                      ? [...base, currentLlmFallback]
+                      : base
+                  return [
+                    {
+                      value: '',
+                      label: t('settings.ai.fallbacks.none', { defaultValue: '（不设备模型）' })
+                    },
+                    ...withOrphan.map((id) => ({
+                      value: id,
+                      label:
+                        id === currentLlmFallback && !base.includes(id)
+                          ? `${id} ${t('settings.ai.enabledModels.notEnabled')}`
+                          : id
+                    }))
+                  ]
+                })()
+          }
+          optionGroups={llmFallbackGroups}
         />
         <Row
           label={t('settings.ai.testGateway.label')}
@@ -468,53 +543,62 @@ export function AiTab(): React.ReactElement {
         />
         {/* LLM_TRANSLATE_MODEL: single-select from translate provider's upstream list.
             Falls back to showing the current value if not in the list (orphan).
-            Refresh button pulls fresh list from the translate provider endpoint. */}
+            Refresh button pulls fresh list from the translate provider endpoint.
+            registry on → 选项源升级为聚合 enabledModels 分组（P3 §4.5.4），translate
+            上游拉取列表不再喂本下拉 → 刷新行一并隐藏（避免误导性的死按钮）。 */}
         <EnvField
           envKey="LLM_TRANSLATE_MODEL"
           control="select"
           label={t('settings.ai.translateModel.label')}
           helper={t('settings.ai.translateModel.helper')}
-          options={(() => {
-            const base = translateModels.length > 0 ? translateModels : []
-            const withOrphan =
-              currentTranslateModel && !base.includes(currentTranslateModel)
-                ? [...base, currentTranslateModel]
-                : base.length > 0
-                  ? base
-                  : currentTranslateModel
-                    ? [currentTranslateModel]
-                    : ['claude-haiku-4-5']
-            return withOrphan.map((id) => ({
-              value: id,
-              label:
-                id === currentTranslateModel && base.length > 0 && !base.includes(id)
-                  ? `${id} ${t('settings.ai.translateModel.notInList', { defaultValue: '（不在列表）' })}`
-                  : id
-            }))
-          })()}
+          options={
+            providerRegistryEnabled
+              ? undefined
+              : (() => {
+                  const base = translateModels.length > 0 ? translateModels : []
+                  const withOrphan =
+                    currentTranslateModel && !base.includes(currentTranslateModel)
+                      ? [...base, currentTranslateModel]
+                      : base.length > 0
+                        ? base
+                        : currentTranslateModel
+                          ? [currentTranslateModel]
+                          : ['claude-haiku-4-5']
+                  return withOrphan.map((id) => ({
+                    value: id,
+                    label:
+                      id === currentTranslateModel && base.length > 0 && !base.includes(id)
+                        ? `${id} ${t('settings.ai.translateModel.notInList', { defaultValue: '（不在列表）' })}`
+                        : id
+                  }))
+                })()
+          }
+          optionGroups={translateModelGroups}
           placeholder="claude-haiku-4-5"
         />
-        <Row
-          label=""
-          helper={t('settings.ai.translateModel.refreshHelper', {
-            defaultValue: '从翻译 provider 拉取最新模型列表'
-          })}
-        >
-          <button
-            onClick={() => void handleRefreshTranslate()}
-            disabled={translateRefreshing || translateModelsLoading || isWeb}
-            className="flex items-center gap-1.5 text-xs text-ink-fg-2 hover:text-ink-fg disabled:opacity-40 transition-colors"
+        {!providerRegistryEnabled && (
+          <Row
+            label=""
+            helper={t('settings.ai.translateModel.refreshHelper', {
+              defaultValue: '从翻译 provider 拉取最新模型列表'
+            })}
           >
-            {translateRefreshing || translateModelsLoading ? (
-              <Loader2 className="size-3 animate-spin" />
-            ) : (
-              <RefreshCw className="size-3" />
-            )}
-            {translateRefreshing
-              ? t('settings.ai.translateModel.refreshing', { defaultValue: '刷新中…' })
-              : t('settings.ai.translateModel.refresh', { defaultValue: '刷新模型列表' })}
-          </button>
-        </Row>
+            <button
+              onClick={() => void handleRefreshTranslate()}
+              disabled={translateRefreshing || translateModelsLoading || isWeb}
+              className="flex items-center gap-1.5 text-xs text-ink-fg-2 hover:text-ink-fg disabled:opacity-40 transition-colors"
+            >
+              {translateRefreshing || translateModelsLoading ? (
+                <Loader2 className="size-3 animate-spin" />
+              ) : (
+                <RefreshCw className="size-3" />
+              )}
+              {translateRefreshing
+                ? t('settings.ai.translateModel.refreshing', { defaultValue: '刷新中…' })
+                : t('settings.ai.translateModel.refresh', { defaultValue: '刷新模型列表' })}
+            </button>
+          </Row>
+        )}
       </Section>
 
       <Section title={t('settings.ai.cache.title')} helper={t('settings.ai.cache.helper')}>

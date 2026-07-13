@@ -25,6 +25,7 @@ import { toastError, toastSuccess } from '@shared/state/toast'
 import { StandingDocsSection } from '@shared/components/settings/CustomAiSection'
 import { IS_WEB, PREPROCESS_DOCS, envFlagOn } from '../shared'
 import { Field } from './Field'
+import { ModelSelectItems } from './ModelSelectItems'
 
 // v27 「AI 邮件预处理」agent —— 后端 DB v27 播种单行（id 固定、type='preprocess'）。
 // 双源绑定：启用/模型走全局 env（LLM_AGENT_ENABLED / LLM_MODEL，pydantic singleton→需重启
@@ -251,396 +252,360 @@ export function PreprocessConfigDrawer({
 
   return (
     <Drawer open={open} onOpenChange={(nextOpen) => !nextOpen && onClose()}>
-        <header
+      <header
+        className="flex items-center"
+        style={{
+          gap: 10,
+          padding: '15px 18px',
+          borderBottom: '1px solid rgb(var(--ink-border-soft))',
+          flexShrink: 0
+        }}
+      >
+        <span style={{ color: 'rgb(var(--c-accent))', display: 'flex' }}>
+          <ReportIcon name="zap" size={16} />
+        </span>
+        <h2 style={{ fontSize: 15, fontWeight: 600, color: 'rgb(var(--ink-fg))', flex: 1 }}>
+          {t('agents.preprocess.configTitle', { title: cfg?.title ?? '' })}
+        </h2>
+        {/* R5 — 「查看处理统计」→ 跳 LLM 仪表盘（预处理执行情况 = per-email 分类聚合）。 */}
+        <button
+          type="button"
+          onClick={() => void navigate({ to: '/admin/llm' })}
           className="flex items-center"
           style={{
-            gap: 10,
-            padding: '15px 18px',
-            borderBottom: '1px solid rgb(var(--ink-border-soft))',
-            flexShrink: 0
+            gap: 5,
+            fontFamily: 'inherit',
+            fontSize: 12,
+            padding: '5px 10px',
+            borderRadius: 7,
+            cursor: 'pointer',
+            color: 'rgb(var(--ink-fg-2))',
+            background: 'rgb(var(--ink-fg) / 0.05)',
+            border: '1px solid rgb(var(--ink-border-soft))'
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.color = 'rgb(var(--c-accent))')}
+          onMouseLeave={(e) => (e.currentTarget.style.color = 'rgb(var(--ink-fg-2))')}
+        >
+          <ReportIcon name="barchart" size={13} />
+          {t('agents.preprocess.viewStats')}
+        </button>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label={t('agents.source.close')}
+          style={{
+            display: 'grid',
+            placeItems: 'center',
+            width: 28,
+            height: 28,
+            borderRadius: 7,
+            background: 'transparent',
+            border: 0,
+            cursor: 'pointer',
+            color: 'rgb(var(--ink-fg-2))'
           }}
         >
-          <span style={{ color: 'rgb(var(--c-accent))', display: 'flex' }}>
-            <ReportIcon name="zap" size={16} />
-          </span>
-          <h2 style={{ fontSize: 15, fontWeight: 600, color: 'rgb(var(--ink-fg))', flex: 1 }}>
-            {t('agents.preprocess.configTitle', { title: cfg?.title ?? '' })}
-          </h2>
-          {/* R5 — 「查看处理统计」→ 跳 LLM 仪表盘（预处理执行情况 = per-email 分类聚合）。 */}
-          <button
-            type="button"
-            onClick={() => void navigate({ to: '/admin/llm' })}
+          <ReportIcon name="x" size={16} />
+        </button>
+      </header>
+
+      <div className="scrollbar-thin" style={{ flex: 1, overflowY: 'auto', padding: 18 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+          {/* 远程 web 只读提示（env 写不可用；persona / 文档仍可改） */}
+          {IS_WEB && (
+            <div
+              style={{
+                fontSize: 12.5,
+                color: 'rgb(var(--ink-fg-2))',
+                padding: '10px 12px',
+                borderRadius: 9,
+                background: 'rgb(var(--ink-1) / 0.5)',
+                border: '1px solid rgb(var(--ink-border-soft))'
+              }}
+            >
+              {t('agents.preprocess.webReadOnly')}
+            </div>
+          )}
+
+          {/* 启用（env LLM_AGENT_ENABLED）—— 需重启生效 */}
+          <div
             className="flex items-center"
             style={{
-              gap: 5,
-              fontFamily: 'inherit',
-              fontSize: 12,
-              padding: '5px 10px',
-              borderRadius: 7,
-              cursor: 'pointer',
-              color: 'rgb(var(--ink-fg-2))',
-              background: 'rgb(var(--ink-fg) / 0.05)',
-              border: '1px solid rgb(var(--ink-border-soft))'
-            }}
-            onMouseEnter={(e) => (e.currentTarget.style.color = 'rgb(var(--c-accent))')}
-            onMouseLeave={(e) => (e.currentTarget.style.color = 'rgb(var(--ink-fg-2))')}
-          >
-            <ReportIcon name="barchart" size={13} />
-            {t('agents.preprocess.viewStats')}
-          </button>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label={t('agents.source.close')}
-            style={{
-              display: 'grid',
-              placeItems: 'center',
-              width: 28,
-              height: 28,
-              borderRadius: 7,
-              background: 'transparent',
-              border: 0,
-              cursor: 'pointer',
-              color: 'rgb(var(--ink-fg-2))'
+              gap: 12,
+              padding: '13px 14px',
+              borderRadius: 10,
+              background: 'rgb(var(--ink-2) / 0.55)',
+              border: '1px solid rgb(var(--ink-border))'
             }}
           >
-            <ReportIcon name="x" size={16} />
-          </button>
-        </header>
-
-        <div className="scrollbar-thin" style={{ flex: 1, overflowY: 'auto', padding: 18 }}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-            {/* 远程 web 只读提示（env 写不可用；persona / 文档仍可改） */}
-            {IS_WEB && (
-              <div
-                style={{
-                  fontSize: 12.5,
-                  color: 'rgb(var(--ink-fg-2))',
-                  padding: '10px 12px',
-                  borderRadius: 9,
-                  background: 'rgb(var(--ink-1) / 0.5)',
-                  border: '1px solid rgb(var(--ink-border-soft))'
-                }}
-              >
-                {t('agents.preprocess.webReadOnly')}
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 13.5, fontWeight: 500, color: 'rgb(var(--ink-fg))' }}>
+                {t('agents.preprocess.enable')}
               </div>
-            )}
-
-            {/* 启用（env LLM_AGENT_ENABLED）—— 需重启生效 */}
-            <div
-              className="flex items-center"
-              style={{
-                gap: 12,
-                padding: '13px 14px',
-                borderRadius: 10,
-                background: 'rgb(var(--ink-2) / 0.55)',
-                border: '1px solid rgb(var(--ink-border))'
-              }}
-            >
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 13.5, fontWeight: 500, color: 'rgb(var(--ink-fg))' }}>
-                  {t('agents.preprocess.enable')}
-                </div>
-                <div style={{ fontSize: 12, color: 'rgb(var(--ink-fg-3))', marginTop: 2 }}>
-                  {t('agents.preprocess.enableHint')}
-                </div>
+              <div style={{ fontSize: 12, color: 'rgb(var(--ink-fg-3))', marginTop: 2 }}>
+                {t('agents.preprocess.enableHint')}
               </div>
-              <span
-                style={!envReady || IS_WEB ? { opacity: 0.5, pointerEvents: 'none' } : undefined}
-              >
-                <Switch
-                  on={enabled}
-                  ariaLabel={t('agents.preprocess.enable')}
-                  onChange={(v) => {
-                    setEnabled(v)
-                    setEnabledDirty(true)
-                  }}
-                />
-              </span>
             </div>
-
-            <div
-              className="flex items-center"
-              style={{
-                gap: 12,
-                padding: '13px 14px',
-                borderRadius: 10,
-                background: 'rgb(var(--ink-2) / 0.55)',
-                border: '1px solid rgb(var(--ink-border))'
-              }}
-            >
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 13.5, fontWeight: 500, color: 'rgb(var(--ink-fg))' }}>
-                  {t('agents.preprocess.markReadAfterProcessing')}
-                </div>
-                <div style={{ fontSize: 12, color: 'rgb(var(--ink-fg-3))', marginTop: 2 }}>
-                  {t('agents.preprocess.markReadAfterProcessingHint')}
-                </div>
-              </div>
+            <span style={!envReady || IS_WEB ? { opacity: 0.5, pointerEvents: 'none' } : undefined}>
               <Switch
-                on={markReadAfterProcessing}
-                ariaLabel={t('agents.preprocess.markReadAfterProcessing')}
-                onChange={setMarkReadAfterProcessing}
-              />
-            </div>
-
-            {/* 模型（row.model，PATCH 保存立即生效）—— #8-ext：与 chat 的全局默认（LLM_MODEL）
-                拆分；「跟随全局」哨兵 = 行级空串。enabledModels + orphan 兜底同 ConfigDrawer。 */}
-            <Field label={t('agents.config.model')} hint={t('agents.preprocess.modelHint')}>
-              <Select
-                value={model || FOLLOW_GLOBAL_MODEL}
-                onValueChange={(v) => {
-                  setModel(v === FOLLOW_GLOBAL_MODEL ? '' : v)
-                  setModelDirty(true)
+                on={enabled}
+                ariaLabel={t('agents.preprocess.enable')}
+                onChange={(v) => {
+                  setEnabled(v)
+                  setEnabledDirty(true)
                 }}
-                disabled={busy}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent className="z-[70]">
-                  <SelectItem value={FOLLOW_GLOBAL_MODEL}>
-                    {t('agents.preprocess.modelFollowGlobal', {
-                      model: envModelRaw || 'claude-sonnet-4-6'
-                    })}
-                  </SelectItem>
-                  {(model && !enabledModels.includes(model)
-                    ? [...enabledModels, model]
-                    : enabledModels
-                  ).map((id) => {
-                    const isOrphan = !enabledModels.includes(id)
-                    return (
-                      <SelectItem key={id} value={id}>
-                        {id}
-                        {isOrphan && (
-                          <span style={{ color: 'rgb(var(--ink-fg-3))', marginLeft: 6 }}>
-                            {t('settings.ai.enabledModels.notEnabled', {
-                              defaultValue: '（未启用）'
-                            })}
-                          </span>
-                        )}
-                      </SelectItem>
-                    )
-                  })}
-                </SelectContent>
-              </Select>
-            </Field>
+              />
+            </span>
+          </div>
 
-            {/* fallback 模型（row.fallback_models_json，R2 #2 行级，PATCH 保存立即生效）——
+          <div
+            className="flex items-center"
+            style={{
+              gap: 12,
+              padding: '13px 14px',
+              borderRadius: 10,
+              background: 'rgb(var(--ink-2) / 0.55)',
+              border: '1px solid rgb(var(--ink-border))'
+            }}
+          >
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 13.5, fontWeight: 500, color: 'rgb(var(--ink-fg))' }}>
+                {t('agents.preprocess.markReadAfterProcessing')}
+              </div>
+              <div style={{ fontSize: 12, color: 'rgb(var(--ink-fg-3))', marginTop: 2 }}>
+                {t('agents.preprocess.markReadAfterProcessingHint')}
+              </div>
+            </div>
+            <Switch
+              on={markReadAfterProcessing}
+              ariaLabel={t('agents.preprocess.markReadAfterProcessing')}
+              onChange={setMarkReadAfterProcessing}
+            />
+          </div>
+
+          {/* 模型（row.model，PATCH 保存立即生效）—— #8-ext：与 chat 的全局默认（LLM_MODEL）
+                拆分；「跟随全局」哨兵 = 行级空串。enabledModels + orphan 兜底同 ConfigDrawer。 */}
+          <Field label={t('agents.config.model')} hint={t('agents.preprocess.modelHint')}>
+            <Select
+              value={model || FOLLOW_GLOBAL_MODEL}
+              onValueChange={(v) => {
+                setModel(v === FOLLOW_GLOBAL_MODEL ? '' : v)
+                setModelDirty(true)
+              }}
+              disabled={busy}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent className="z-[70]">
+                <SelectItem value={FOLLOW_GLOBAL_MODEL}>
+                  {t('agents.preprocess.modelFollowGlobal', {
+                    model: envModelRaw || 'claude-sonnet-4-6'
+                  })}
+                </SelectItem>
+                <ModelSelectItems models={enabledModels} current={model || null} />
+              </SelectContent>
+            </Select>
+          </Field>
+
+          {/* fallback 模型（row.fallback_models_json，R2 #2 行级，PATCH 保存立即生效）——
                 主模型失败时兜底。「跟随全局」哨兵 = 行 NULL（用全局 LLM_FALLBACK_MODELS）、
                 「不设」哨兵 = 行 '[]'（显式无兜底）。 */}
-            <Field
-              label={t('agents.preprocess.fallback')}
-              hint={t('agents.preprocess.fallbackHint')}
+          <Field label={t('agents.preprocess.fallback')} hint={t('agents.preprocess.fallbackHint')}>
+            <Select
+              value={fallbackModel}
+              onValueChange={(v) => {
+                setFallbackModel(v)
+                setFallbackModelDirty(true)
+              }}
+              disabled={busy}
             >
-              <Select
-                value={fallbackModel}
-                onValueChange={(v) => {
-                  setFallbackModel(v)
-                  setFallbackModelDirty(true)
-                }}
-                disabled={busy}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent className="z-[70]">
-                  <SelectItem value={FALLBACK_FOLLOW_GLOBAL}>
-                    {t('agents.preprocess.fallbackFollowGlobal', {
-                      model: envFallbackRaw || t('agents.preprocess.fallbackGlobalUnset')
-                    })}
-                  </SelectItem>
-                  <SelectItem value={FALLBACK_NONE}>
-                    {t('agents.preprocess.fallbackNone')}
-                  </SelectItem>
-                  {(fallbackModel !== FALLBACK_FOLLOW_GLOBAL &&
-                  fallbackModel !== FALLBACK_NONE &&
-                  !enabledModels.includes(fallbackModel)
-                    ? [...enabledModels, fallbackModel]
-                    : enabledModels
-                  ).map((id) => {
-                    const isOrphan = !enabledModels.includes(id)
-                    return (
-                      <SelectItem key={id} value={id}>
-                        {id}
-                        {isOrphan && (
-                          <span style={{ color: 'rgb(var(--ink-fg-3))', marginLeft: 6 }}>
-                            {t('settings.ai.enabledModels.notEnabled', {
-                              defaultValue: '（未启用）'
-                            })}
-                          </span>
-                        )}
-                      </SelectItem>
-                    )
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent className="z-[70]">
+                <SelectItem value={FALLBACK_FOLLOW_GLOBAL}>
+                  {t('agents.preprocess.fallbackFollowGlobal', {
+                    model: envFallbackRaw || t('agents.preprocess.fallbackGlobalUnset')
                   })}
-                </SelectContent>
-              </Select>
-            </Field>
+                </SelectItem>
+                <SelectItem value={FALLBACK_NONE}>{t('agents.preprocess.fallbackNone')}</SelectItem>
+                <ModelSelectItems
+                  models={enabledModels}
+                  current={
+                    fallbackModel !== FALLBACK_FOLLOW_GLOBAL && fallbackModel !== FALLBACK_NONE
+                      ? fallbackModel
+                      : null
+                  }
+                />
+              </SelectContent>
+            </Select>
+          </Field>
 
-            {/* 分类 prompt 编辑（v1.3.0 dogfood：只读 → 可编辑）—— 收件箱/发件箱 .md 与
+          {/* 分类 prompt 编辑（v1.3.0 dogfood：只读 → 可编辑）—— 收件箱/发件箱 .md 与
                 运行时同源（PromptLoader mtime 热加载同两份文件），保存即生效无需重启。
                 persona 输入已移除：身份/偏好由上方勾选的 Standing Context 文档注入。 */}
-            <Field
-              label={t('agents.preprocess.promptView')}
-              hint={t('agents.preprocess.promptViewHint')}
-            >
-              <div className="flex items-center" style={{ gap: 8, marginBottom: 8 }}>
-                {(['inbox', 'sent'] as const).map((tab) => {
-                  const on = promptTab === tab
-                  return (
-                    <button
-                      key={tab}
-                      type="button"
-                      aria-pressed={on}
-                      onClick={() => setPromptTab(tab)}
-                      style={{
-                        padding: '5px 12px',
-                        borderRadius: 8,
-                        fontFamily: 'inherit',
-                        fontSize: 12.5,
-                        cursor: 'pointer',
-                        color: on ? 'rgb(var(--c-accent))' : 'rgb(var(--ink-fg-2))',
-                        background: on ? 'rgb(var(--c-accent) / 0.14)' : 'rgb(var(--ink-1) / 0.5)',
-                        border: `1px solid ${on ? 'rgb(var(--c-accent))' : 'rgb(var(--ink-border))'}`,
-                        transition:
-                          'color 120ms cubic-bezier(0.4,0,0.2,1), background-color 120ms cubic-bezier(0.4,0,0.2,1), border-color 120ms cubic-bezier(0.4,0,0.2,1)'
-                      }}
-                    >
-                      {t(`agents.preprocess.promptTab.${tab}`)}
-                    </button>
-                  )
-                })}
-              </div>
-              {promptDrafts === 'loading' ? (
-                <div style={{ ...inputStyle, color: 'rgb(var(--ink-fg-3))' }}>…</div>
-              ) : promptDrafts === 'error' ? (
-                <div style={{ ...inputStyle, color: 'rgb(var(--ink-fg-3))' }}>
-                  {t('agents.preprocess.promptLoadError')}
-                </div>
-              ) : (
-                <>
-                  <textarea
-                    value={promptDrafts[promptTab].content}
-                    onChange={(e) => {
-                      const next = e.target.value
-                      setPromptDrafts((prev) =>
-                        prev === 'loading' || prev === 'error'
-                          ? prev
-                          : {
-                              ...prev,
-                              [promptTab]: { ...prev[promptTab], content: next, dirty: true }
-                            }
-                      )
-                    }}
-                    spellCheck={false}
-                    placeholder={t('agents.preprocess.promptEmpty')}
-                    className="scrollbar-thin"
+          <Field
+            label={t('agents.preprocess.promptView')}
+            hint={t('agents.preprocess.promptViewHint')}
+          >
+            <div className="flex items-center" style={{ gap: 8, marginBottom: 8 }}>
+              {(['inbox', 'sent'] as const).map((tab) => {
+                const on = promptTab === tab
+                return (
+                  <button
+                    key={tab}
+                    type="button"
+                    aria-pressed={on}
+                    onClick={() => setPromptTab(tab)}
                     style={{
-                      ...inputStyle,
-                      fontFamily: 'var(--font-mono, monospace)',
-                      fontSize: 12,
-                      lineHeight: 1.6,
-                      minHeight: 220,
-                      resize: 'vertical'
+                      padding: '5px 12px',
+                      borderRadius: 8,
+                      fontFamily: 'inherit',
+                      fontSize: 12.5,
+                      cursor: 'pointer',
+                      color: on ? 'rgb(var(--c-accent))' : 'rgb(var(--ink-fg-2))',
+                      background: on ? 'rgb(var(--c-accent) / 0.14)' : 'rgb(var(--ink-1) / 0.5)',
+                      border: `1px solid ${on ? 'rgb(var(--c-accent))' : 'rgb(var(--ink-border))'}`,
+                      transition:
+                        'color 120ms cubic-bezier(0.4,0,0.2,1), background-color 120ms cubic-bezier(0.4,0,0.2,1), border-color 120ms cubic-bezier(0.4,0,0.2,1)'
                     }}
-                  />
-                  {promptDrafts[promptTab].path && (
-                    <div
-                      style={{
-                        fontSize: 11,
-                        color: 'rgb(var(--ink-fg-3))',
-                        marginTop: 6,
-                        wordBreak: 'break-all'
-                      }}
-                    >
-                      {promptDrafts[promptTab].path}
-                    </div>
-                  )}
-                </>
-              )}
-            </Field>
+                  >
+                    {t(`agents.preprocess.promptTab.${tab}`)}
+                  </button>
+                )
+              })}
+            </div>
+            {promptDrafts === 'loading' ? (
+              <div style={{ ...inputStyle, color: 'rgb(var(--ink-fg-3))' }}>…</div>
+            ) : promptDrafts === 'error' ? (
+              <div style={{ ...inputStyle, color: 'rgb(var(--ink-fg-3))' }}>
+                {t('agents.preprocess.promptLoadError')}
+              </div>
+            ) : (
+              <>
+                <textarea
+                  value={promptDrafts[promptTab].content}
+                  onChange={(e) => {
+                    const next = e.target.value
+                    setPromptDrafts((prev) =>
+                      prev === 'loading' || prev === 'error'
+                        ? prev
+                        : {
+                            ...prev,
+                            [promptTab]: { ...prev[promptTab], content: next, dirty: true }
+                          }
+                    )
+                  }}
+                  spellCheck={false}
+                  placeholder={t('agents.preprocess.promptEmpty')}
+                  className="scrollbar-thin"
+                  style={{
+                    ...inputStyle,
+                    fontFamily: 'var(--font-mono, monospace)',
+                    fontSize: 12,
+                    lineHeight: 1.6,
+                    minHeight: 220,
+                    resize: 'vertical'
+                  }}
+                />
+                {promptDrafts[promptTab].path && (
+                  <div
+                    style={{
+                      fontSize: 11,
+                      color: 'rgb(var(--ink-fg-3))',
+                      marginTop: 6,
+                      wordBreak: 'break-all'
+                    }}
+                  >
+                    {promptDrafts[promptTab].path}
+                  </div>
+                )}
+              </>
+            )}
+          </Field>
 
-            {/* 文档勾选（cfg.context_docs）—— 注入分类 system prompt 的身份文档 */}
-            <Field
-              label={t('agents.preprocess.contextDocs')}
-              hint={t('agents.preprocess.contextDocsHint')}
+          {/* 文档勾选（cfg.context_docs）—— 注入分类 system prompt 的身份文档 */}
+          <Field
+            label={t('agents.preprocess.contextDocs')}
+            hint={t('agents.preprocess.contextDocsHint')}
+          >
+            <div className="flex items-center" style={{ gap: 8, flexWrap: 'wrap' }}>
+              {PREPROCESS_DOCS.map((doc) => {
+                const on = contextDocs.includes(doc)
+                return (
+                  <button
+                    key={doc}
+                    type="button"
+                    aria-pressed={on}
+                    onClick={() =>
+                      setContextDocs((prev) =>
+                        prev.includes(doc) ? prev.filter((x) => x !== doc) : [...prev, doc]
+                      )
+                    }
+                    style={{
+                      padding: '6px 12px',
+                      borderRadius: 8,
+                      fontFamily: 'inherit',
+                      fontSize: 13,
+                      cursor: 'pointer',
+                      color: on ? 'rgb(var(--c-accent))' : 'rgb(var(--ink-fg-2))',
+                      background: on ? 'rgb(var(--c-accent) / 0.14)' : 'rgb(var(--ink-1) / 0.5)',
+                      border: `1px solid ${on ? 'rgb(var(--c-accent))' : 'rgb(var(--ink-border))'}`,
+                      transition:
+                        'color 120ms cubic-bezier(0.4,0,0.2,1), background-color 120ms cubic-bezier(0.4,0,0.2,1), border-color 120ms cubic-bezier(0.4,0,0.2,1)'
+                    }}
+                  >
+                    {t(`agents.preprocess.doc.${doc}`)}
+                  </button>
+                )
+              })}
+            </div>
+            <div
+              style={{
+                fontSize: 11.5,
+                color: 'rgb(var(--ink-fg-3))',
+                marginTop: 7,
+                lineHeight: 1.5
+              }}
             >
-              <div className="flex items-center" style={{ gap: 8, flexWrap: 'wrap' }}>
-                {PREPROCESS_DOCS.map((doc) => {
-                  const on = contextDocs.includes(doc)
-                  return (
-                    <button
-                      key={doc}
-                      type="button"
-                      aria-pressed={on}
-                      onClick={() =>
-                        setContextDocs((prev) =>
-                          prev.includes(doc) ? prev.filter((x) => x !== doc) : [...prev, doc]
-                        )
-                      }
-                      style={{
-                        padding: '6px 12px',
-                        borderRadius: 8,
-                        fontFamily: 'inherit',
-                        fontSize: 13,
-                        cursor: 'pointer',
-                        color: on ? 'rgb(var(--c-accent))' : 'rgb(var(--ink-fg-2))',
-                        background: on ? 'rgb(var(--c-accent) / 0.14)' : 'rgb(var(--ink-1) / 0.5)',
-                        border: `1px solid ${on ? 'rgb(var(--c-accent))' : 'rgb(var(--ink-border))'}`,
-                        transition:
-                          'color 120ms cubic-bezier(0.4,0,0.2,1), background-color 120ms cubic-bezier(0.4,0,0.2,1), border-color 120ms cubic-bezier(0.4,0,0.2,1)'
-                      }}
-                    >
-                      {t(`agents.preprocess.doc.${doc}`)}
-                    </button>
-                  )
-                })}
-              </div>
-              <div
-                style={{
-                  fontSize: 11.5,
-                  color: 'rgb(var(--ink-fg-3))',
-                  marginTop: 7,
-                  lineHeight: 1.5
-                }}
-              >
-                {t('agents.preprocess.contextDocsNote')}
-              </div>
-            </Field>
+              {t('agents.preprocess.contextDocsNote')}
+            </div>
+          </Field>
 
-            {/* 身份文档正文编辑：内联复用 Settings 的 StandingDocsSection（自渲染标题 + 自 flag 门控，
+          {/* 身份文档正文编辑：内联复用 Settings 的 StandingDocsSection（自渲染标题 + 自 flag 门控，
                 flag-off / 未加载时返回 null，不留空占位）。 */}
-            <StandingDocsSection />
-          </div>
+          <StandingDocsSection />
         </div>
+      </div>
 
-        <footer
-          className="flex items-center"
-          style={{
-            gap: 10,
-            padding: '13px 18px',
-            borderTop: '1px solid rgb(var(--ink-border-soft))',
-            flexShrink: 0,
-            justifyContent: 'flex-end'
-          }}
+      <footer
+        className="flex items-center"
+        style={{
+          gap: 10,
+          padding: '13px 18px',
+          borderTop: '1px solid rgb(var(--ink-border-soft))',
+          flexShrink: 0,
+          justifyContent: 'flex-end'
+        }}
+      >
+        <button
+          type="button"
+          onClick={onClose}
+          className="btn-ghost"
+          style={{ fontFamily: 'inherit' }}
         >
-          <button
-            type="button"
-            onClick={onClose}
-            className="btn-ghost"
-            style={{ fontFamily: 'inherit' }}
-          >
-            {t('agents.config.cancel')}
-          </button>
-          <StatefulButton
-            type="button"
-            onClick={() => void onSave()}
-            disabled={busy}
-            state={busy ? 'loading' : saveFailed ? 'error' : 'idle'}
-          >
-            {t('agents.config.save')}
-          </StatefulButton>
-        </footer>
+          {t('agents.config.cancel')}
+        </button>
+        <StatefulButton
+          type="button"
+          onClick={() => void onSave()}
+          disabled={busy}
+          state={busy ? 'loading' : saveFailed ? 'error' : 'idle'}
+        >
+          {t('agents.config.save')}
+        </StatefulButton>
+      </footer>
     </Drawer>
   )
 }

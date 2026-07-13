@@ -111,7 +111,10 @@ export const qk = {
   llm: {
     upstreamModels: (provider: string) => ['llm', 'upstream-models', provider] as const,
     stats: () => ['llm', 'stats'] as const,
-    statsDays: (days: number) => ['llm', 'stats', days] as const
+    statsDays: (days: number) => ['llm', 'stats', days] as const,
+    // task 07-12 P3 — Settings「模型服务」区（provider 管理 + per-provider 模型行）。
+    providers: () => ['llm', 'providers'] as const,
+    providerModels: (providerId: string) => ['llm', 'providers', providerId, 'models'] as const
   },
 
   admin: {

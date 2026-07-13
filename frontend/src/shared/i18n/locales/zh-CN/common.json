@@ -1580,6 +1580,79 @@
         "dir": "（目录 {scope}）"
       }
     },
+    "providers": {
+      "title": "模型服务",
+      "helper": "管理 LLM 上游 provider：官方模型 / OpenAI 兼容中转 / Anthropic 兼容中转可多家并存。default provider 承接旧网关配置（legacy 模型引用零迁移）。",
+      "loading": "加载中…",
+      "loadError": "加载 provider 列表失败。",
+      "empty": "还没有 provider。点右上「添加」从模板创建。",
+      "addButton": "添加",
+      "addTitle": "添加 provider",
+      "added": "已添加 {name}",
+      "deleted": "已删除 {name}",
+      "defaultBadge": "默认",
+      "expandAria": "展开 {name}",
+      "enabledAria": "启用/停用 {name}",
+      "deleteAria": "删除 {name}",
+      "displayName": "名称",
+      "baseUrl": "API 地址",
+      "baseUrlPlaceholder": "留空 = 官方默认端点",
+      "apiKey": {
+        "label": "API Key",
+        "set": "已设置（····{last4}），输入新值可轮换",
+        "unset": "未设置",
+        "clear": "清除",
+        "clearAria": "清除 API Key"
+      },
+      "headers": {
+        "label": "自定义 Header",
+        "keyPlaceholder": "Header 名",
+        "valuePlaceholder": "值",
+        "add": "添加",
+        "deleteAria": "删除 header {name}"
+      },
+      "test": {
+        "label": "连通性测试",
+        "button": "测试连接",
+        "running": "测试中…",
+        "ok": "连接正常（{ms}ms）",
+        "fail": "连接失败"
+      },
+      "models": {
+        "title": "模型",
+        "refresh": "拉取模型列表",
+        "refreshing": "拉取中…",
+        "loading": "加载中…",
+        "empty": "还没有模型。点「拉取模型列表」从上游获取，或在下方手动添加（中转不透传 /models 时的兜底）。",
+        "manualBadge": "手动",
+        "manualPlaceholder": "手动添加模型 id（wire id）",
+        "manualAdd": "添加",
+        "maxOutputPlaceholder": "maxOutput",
+        "maxOutputAria": "{model} 的 max output tokens",
+        "deleteAria": "删除模型 {model}",
+        "cap": {
+          "tools": "工具",
+          "vision": "视觉",
+          "reasoning": "推理"
+        }
+      },
+      "template": {
+        "custom-openai": "自定义 OpenAI-compatible",
+        "custom-anthropic": "自定义 Anthropic-compatible"
+      },
+      "add": {
+        "template": "模板",
+        "id": "ID（slug）",
+        "idPlaceholder": "小写字母开头，可含数字/-/_",
+        "idInvalid": "非法 slug",
+        "baseUrlRequired": "必填（该协议无官方默认端点）",
+        "submit": "创建",
+        "cancel": "取消"
+      },
+      "group": {
+        "default": "default（主网关）"
+      }
+    },
     "skillPacks": {
       "title": "Skill 安装",
       "helper": "从 URL 或本地路径安装第三方 skill 包。两段式：先获取预览、人工审阅包内容与声明，再确认安装。已安装的 skill 会出现在上方技能列表（启用/停用），密钥与配置在下方逐项管理。",

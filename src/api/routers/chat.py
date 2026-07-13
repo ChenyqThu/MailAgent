@@ -505,6 +505,13 @@ async def chat_config(request: Request):
             "sessionToolsEnabled": _hot_bool(env_vals, "MAILAGENT_OPENNESS_SESSION_TOOLS", True),
             "configToolsEnabled": _hot_bool(env_vals, "MAILAGENT_OPENNESS_CONFIG_TOOLS", True),
             "webToolsEnabled": _hot_bool(env_vals, "MAILAGENT_OPENNESS_WEB_TOOLS", True),
+            # task 07-12 P3 — Settings「模型服务」区（provider 管理 UI）+ 功能位选择器分组
+            # 显隐 gate。与上面 enabledModels 的聚合投影**同源同语义**（pydantic 冻结单例读，
+            # 翻 MAILAGENT_LLM_PROVIDER_REGISTRY 需重启 serve-api）——UI 门控与投影行为
+            # 永不劈叉。flag off（默认）→ 前端渲染旧 LLM 网关区，字节级现状。
+            "providerRegistryEnabled": bool(
+                getattr(cfg, "llm_provider_registry_enabled", False)
+            ),
         },
         request=request,
         source="config",

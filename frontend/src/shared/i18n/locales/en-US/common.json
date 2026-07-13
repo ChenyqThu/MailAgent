@@ -1580,6 +1580,79 @@
         "dir": "(dir {scope})"
       }
     },
+    "providers": {
+      "title": "Model services",
+      "helper": "Manage LLM upstream providers: official models, OpenAI-compatible relays and Anthropic-compatible relays can coexist. The default provider carries over the legacy gateway config (legacy model refs need no migration).",
+      "loading": "Loading…",
+      "loadError": "Failed to load providers.",
+      "empty": "No providers yet. Click “Add” in the corner to create one from a template.",
+      "addButton": "Add",
+      "addTitle": "Add provider",
+      "added": "Added {name}",
+      "deleted": "Deleted {name}",
+      "defaultBadge": "default",
+      "expandAria": "Expand {name}",
+      "enabledAria": "Enable/disable {name}",
+      "deleteAria": "Delete {name}",
+      "displayName": "Name",
+      "baseUrl": "API base URL",
+      "baseUrlPlaceholder": "Empty = official default endpoint",
+      "apiKey": {
+        "label": "API key",
+        "set": "Set (····{last4}) — type a new value to rotate",
+        "unset": "Not set",
+        "clear": "Clear",
+        "clearAria": "Clear API key"
+      },
+      "headers": {
+        "label": "Custom headers",
+        "keyPlaceholder": "Header name",
+        "valuePlaceholder": "Value",
+        "add": "Add",
+        "deleteAria": "Delete header {name}"
+      },
+      "test": {
+        "label": "Connectivity test",
+        "button": "Test connection",
+        "running": "Testing…",
+        "ok": "Connected ({ms}ms)",
+        "fail": "Connection failed"
+      },
+      "models": {
+        "title": "Models",
+        "refresh": "Fetch model list",
+        "refreshing": "Fetching…",
+        "loading": "Loading…",
+        "empty": "No models yet. Click “Fetch model list” to pull from upstream, or add one manually below (fallback for relays that don't expose /models).",
+        "manualBadge": "manual",
+        "manualPlaceholder": "Add a model id manually (wire id)",
+        "manualAdd": "Add",
+        "maxOutputPlaceholder": "maxOutput",
+        "maxOutputAria": "Max output tokens for {model}",
+        "deleteAria": "Delete model {model}",
+        "cap": {
+          "tools": "tools",
+          "vision": "vision",
+          "reasoning": "reasoning"
+        }
+      },
+      "template": {
+        "custom-openai": "Custom OpenAI-compatible",
+        "custom-anthropic": "Custom Anthropic-compatible"
+      },
+      "add": {
+        "template": "Template",
+        "id": "ID (slug)",
+        "idPlaceholder": "Lowercase letter first; digits/-/_ allowed",
+        "idInvalid": "Invalid slug",
+        "baseUrlRequired": "Required (this protocol has no official default endpoint)",
+        "submit": "Create",
+        "cancel": "Cancel"
+      },
+      "group": {
+        "default": "default (main gateway)"
+      }
+    },
     "skillPacks": {
       "title": "Skill install",
       "helper": "Install third-party skill packs from a URL or a local path. Two-phase: fetch a preview, review the pack contents and declarations, then confirm the install. Installed skills appear in the skills list above (enable/disable); secrets and config are managed per-pack below.",

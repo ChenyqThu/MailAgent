@@ -1,12 +1,17 @@
 """LLM provider 配置面路由 — /api/llm/providers*（task 07-12 P0，prd §4.3b/§4.4）。
 
-端点与鉴权分层：
-  - **CRUD + models 发现 + 连通性测试** = ``Depends(verify_cf_access)``（owner-only 双腿：
-    本地 token / CF JWT——镜像 agent.py profile/skills 写端点先例）。列表/详情对 key 只回
-    掩码（``hasKey`` + ``keyLast4``），**永不回明文**。
-  - **``GET /snapshot``** = ``Depends(verify_local_token)``（**仅**本地 ephemeral token，
-    不接受 CF JWT——镜像 island announce / exec 端点先例）：返回**解密后** key，仅供同机
-    loopback 的 embedded gateway 消费；远程 CF 会话经代理路径不可达（403）。
+端点与鉴权分层（P3 收紧：prd「远程 web 对 provider 配置只读」落到 API 层）：
+  - **读**（provider 列表 / per-provider 模型列表）= ``Depends(verify_cf_access)``（owner-only
+    双腿：本地 token / CF JWT——远程可看）。列表/详情对 key 只回掩码（``hasKey`` +
+    ``keyLast4``），**永不回明文**。
+  - **写**（provider POST/PATCH/DELETE + model 行 PUT/DELETE + ``POST /{id}/test`` 连通性
+    测试）= ``Depends(verify_local_token)``（**仅**本地 ephemeral token，不接受 CF JWT）：
+    本地 renderer 经 chat_local_bridge webRequest 注入 local token 不受影响；远程 CF 会话
+    恒 403 → Settings 远程只读。test 归写面：它拿解密 key 发真实上游请求（探测面），
+    不该被远程会话驱动。
+  - **``GET /snapshot``** = ``Depends(verify_local_token)``（镜像 island announce / exec
+    端点先例）：返回**解密后** key，仅供同机 loopback 的 embedded gateway 消费；远程 CF
+    会话经代理路径不可达（403）。
 
 Seed（prd §4.1）：读端点惰性触发 ``ensure_seeded_store()`` —— 表空时把现有 env 配置
 （LLM_API_BASE/KEY/MODEL + 热读 .env 的 LLM_ENABLED_MODELS）落成 ``default`` provider 行；
@@ -360,7 +365,7 @@ async def list_providers(request: Request, _: None = Depends(verify_cf_access)):
 async def create_provider(
     request: Request,
     body: Optional[Dict[str, Any]] = None,
-    _: None = Depends(verify_cf_access),
+    _: None = Depends(verify_local_token),
 ):
     """新建 provider。body: {id, protocol, displayName?, baseUrl?, apiKey?, headers?,
     enabled?, sortOrder?}。apiKey 明文入参 → 落库即 Fernet 密文；响应恒掩码。"""
@@ -399,7 +404,7 @@ async def update_provider(
     provider_id: str,
     request: Request,
     body: Optional[Dict[str, Any]] = None,
-    _: None = Depends(verify_cf_access),
+    _: None = Depends(verify_local_token),
 ):
     """部分更新（body 里出现的键才动）。``apiKey``：非空 str = 轮换；空串/null = 清除。"""
     body = body or {}
@@ -438,7 +443,7 @@ async def update_provider(
 async def delete_provider(
     provider_id: str,
     request: Request,
-    _: None = Depends(verify_cf_access),
+    _: None = Depends(verify_local_token),
 ):
     """删 provider（级联删其模型行）。``default`` 行禁删（legacy providerRef 落点）→ 400。"""
     store = ensure_seeded_store()
@@ -497,6 +502,85 @@ async def list_provider_models(
 
 
 # ---------------------------------------------------------------------------
+# model 行写面（P3：Settings 模型管理的启用勾选 / 手动添加 / maxOutput 编辑）。
+# model_id 走 body/query 而非 path 段——OpenRouter 等家的 wire id 含 '/'（如
+# 'openai/gpt-4o'），进 path 段会撞路由分段。
+# ---------------------------------------------------------------------------
+
+
+@router.put("/{provider_id}/models")
+async def upsert_provider_model(
+    provider_id: str,
+    request: Request,
+    body: Optional[Dict[str, Any]] = None,
+    _: None = Depends(verify_local_token),
+):
+    """model 行 upsert。body: {id, displayName?, enabled?, capabilities?, maxOutput?}。
+
+    merge 语义：body 里出现的键才动，未出现的键保留现行值（store.upsert_model 是全字段
+    覆盖 → 端点先读现行行回填，避免「勾启用」把 maxOutput/capabilities 清掉）。新行 =
+    手动添加（source='manual'，enabled 缺省 True——owner 手动加模型就是为了用）。
+    """
+    body = body or {}
+    model_id = body.get("id")
+    if not isinstance(model_id, str) or not model_id.strip():
+        raise APIError("E_INVALID_ARG", "body must include string field 'id'", source="sqlite")
+    model_id = model_id.strip()
+    store = ensure_seeded_store()
+    _require_provider(store, provider_id)
+    existing = next(
+        (m for m in store.list_models(provider_id) if m.model_id == model_id), None
+    )
+
+    def _pick(key: str, current: Any) -> Any:
+        return body[key] if key in body else current
+
+    display_name = _pick("displayName", existing.display_name if existing else None)
+    if display_name is not None and not isinstance(display_name, str):
+        raise APIError("E_INVALID_ARG", "'displayName' must be a string", source="sqlite")
+    enabled = _pick("enabled", existing.enabled if existing else True)
+    capabilities = _pick("capabilities", existing.capabilities if existing else None)
+    if capabilities is not None and not isinstance(capabilities, dict):
+        raise APIError("E_INVALID_ARG", "'capabilities' must be an object", source="sqlite")
+    max_output = _pick("maxOutput", existing.max_output if existing else None)
+    if max_output is not None and (isinstance(max_output, bool) or not isinstance(max_output, int)):
+        raise APIError("E_INVALID_ARG", "'maxOutput' must be an integer or null", source="sqlite")
+    try:
+        row = store.upsert_model(
+            provider_id,
+            model_id,
+            display_name=display_name,
+            group_name=existing.group_name if existing else None,
+            enabled=bool(enabled),
+            capabilities=capabilities,
+            max_output=max_output,
+            source=existing.source if existing else "manual",
+        )
+    except ValueError as exc:
+        raise APIError("E_INVALID_ARG", str(exc), source="sqlite") from exc
+    return success_envelope(_model_dict(row), request=request, source="sqlite")
+
+
+@router.delete("/{provider_id}/models")
+async def delete_provider_model(
+    provider_id: str,
+    request: Request,
+    model_id: str = Query(..., alias="modelId"),
+    _: None = Depends(verify_local_token),
+):
+    """删一个 model 行（query ``modelId``，理由同上——wire id 可含 '/'）。缺行 → 404。"""
+    store = ensure_seeded_store()
+    _require_provider(store, provider_id)
+    if not store.delete_model(provider_id, model_id):
+        raise APIError(
+            "E_NOT_FOUND",
+            f"model not found: {model_id!r} (provider {provider_id!r})",
+            source="sqlite",
+        )
+    return success_envelope({"deleted": model_id}, request=request, source="sqlite")
+
+
+# ---------------------------------------------------------------------------
 # 连通性测试（prd §4.5：Settings 编辑面的 check 按钮）
 # ---------------------------------------------------------------------------
 
@@ -505,7 +589,7 @@ async def list_provider_models(
 async def test_provider(
     provider_id: str,
     request: Request,
-    _: None = Depends(verify_cf_access),
+    _: None = Depends(verify_local_token),
 ):
     """连通性测试：先试 models 端点，404 再发 max_tokens=1 最小补全。恒 200，
     data = {ok, latencyMs, error?}（error 可读、不泄 key）。"""

@@ -42,6 +42,7 @@ import {
   useToolOptions
 } from './hooks'
 import { groupToolOptions } from './toolGroups'
+import { ModelSelectItems } from './drawers/ModelSelectItems'
 import { errText, type WebGrant } from './custom-agent/shared'
 import { RunHistorySection } from './custom-agent/RunHistorySection'
 import { AutomationPolicySection } from './custom-agent/AutomationPolicySection'
@@ -441,547 +442,530 @@ export function CustomAgentDrawer({
 
   return (
     <Drawer open={open} onOpenChange={(nextOpen) => !nextOpen && onClose()}>
-        <header
-          className="flex items-center"
+      <header
+        className="flex items-center"
+        style={{
+          gap: 10,
+          padding: '15px 18px',
+          borderBottom: '1px solid rgb(var(--ink-border-soft))',
+          flexShrink: 0
+        }}
+      >
+        <span style={{ color: 'rgb(var(--c-accent))', display: 'flex' }}>
+          <ReportIcon name="cog" size={16} />
+        </span>
+        <h2 style={{ fontSize: 15, fontWeight: 600, color: 'rgb(var(--ink-fg))', flex: 1 }}>
+          {create ? t('agents.custom.newTitle') : t('agents.custom.configTitle', { title })}
+        </h2>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label={t('agents.source.close')}
           style={{
-            gap: 10,
-            padding: '15px 18px',
-            borderBottom: '1px solid rgb(var(--ink-border-soft))',
-            flexShrink: 0
+            display: 'grid',
+            placeItems: 'center',
+            width: 28,
+            height: 28,
+            borderRadius: 7,
+            background: 'transparent',
+            border: 0,
+            cursor: 'pointer',
+            color: 'rgb(var(--ink-fg-2))'
           }}
         >
-          <span style={{ color: 'rgb(var(--c-accent))', display: 'flex' }}>
-            <ReportIcon name="cog" size={16} />
-          </span>
-          <h2 style={{ fontSize: 15, fontWeight: 600, color: 'rgb(var(--ink-fg))', flex: 1 }}>
-            {create ? t('agents.custom.newTitle') : t('agents.custom.configTitle', { title })}
-          </h2>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label={t('agents.source.close')}
+          <ReportIcon name="x" size={16} />
+        </button>
+      </header>
+
+      <div className="scrollbar-thin" style={{ flex: 1, overflowY: 'auto', padding: 18 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+          {/* enable */}
+          <div
+            className="flex items-center"
             style={{
-              display: 'grid',
-              placeItems: 'center',
-              width: 28,
-              height: 28,
-              borderRadius: 7,
-              background: 'transparent',
-              border: 0,
-              cursor: 'pointer',
-              color: 'rgb(var(--ink-fg-2))'
+              gap: 12,
+              padding: '13px 14px',
+              borderRadius: 10,
+              background: 'rgb(var(--ink-2) / 0.55)',
+              border: '1px solid rgb(var(--ink-border))'
             }}
           >
-            <ReportIcon name="x" size={16} />
-          </button>
-        </header>
-
-        <div className="scrollbar-thin" style={{ flex: 1, overflowY: 'auto', padding: 18 }}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-            {/* enable */}
-            <div
-              className="flex items-center"
-              style={{
-                gap: 12,
-                padding: '13px 14px',
-                borderRadius: 10,
-                background: 'rgb(var(--ink-2) / 0.55)',
-                border: '1px solid rgb(var(--ink-border))'
-              }}
-            >
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 13.5, fontWeight: 500, color: 'rgb(var(--ink-fg))' }}>
-                  {t('agents.config.enable')}
-                </div>
-                <div style={{ fontSize: 12, color: 'rgb(var(--ink-fg-3))', marginTop: 2 }}>
-                  {t('agents.custom.enableHint')}
-                </div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 13.5, fontWeight: 500, color: 'rgb(var(--ink-fg))' }}>
+                {t('agents.config.enable')}
               </div>
-              <Switch on={enabled} onChange={setEnabled} />
+              <div style={{ fontSize: 12, color: 'rgb(var(--ink-fg-3))', marginTop: 2 }}>
+                {t('agents.custom.enableHint')}
+              </div>
+            </div>
+            <Switch on={enabled} onChange={setEnabled} />
+          </div>
+
+          {/* title */}
+          <Field label={t('agents.custom.titleLabel')}>
+            <input
+              type="text"
+              value={title}
+              placeholder={t('agents.custom.titlePlaceholder')}
+              onChange={(e) => setTitle(e.target.value)}
+              style={inputStyle}
+            />
+          </Field>
+
+          {/* prompt (task) */}
+          <Field label={t('agents.custom.promptLabel')} hint={t('agents.custom.promptHint')}>
+            <textarea
+              value={prompt}
+              placeholder={t('agents.custom.promptPlaceholder')}
+              onChange={(e) => {
+                setPrompt(e.target.value)
+                setPromptDirty(true)
+              }}
+              rows={8}
+              className="scrollbar-thin"
+              style={{
+                ...inputStyle,
+                resize: 'vertical',
+                lineHeight: 1.6,
+                fontSize: 13,
+                minHeight: 150
+              }}
+            />
+          </Field>
+
+          {/* model */}
+          <Field label={t('agents.config.model')}>
+            <Select value={model || undefined} onValueChange={setModel}>
+              <SelectTrigger>
+                <SelectValue placeholder={t('agents.config.model')} />
+              </SelectTrigger>
+              <SelectContent className="z-[70]">
+                <ModelSelectItems models={enabledModels} current={model || null} />
+              </SelectContent>
+            </Select>
+          </Field>
+
+          {/* trigger 判别式 —— seg 控件（非空 sentinel，避 radix SelectItem 空串崩） */}
+          <Field label={t('agents.custom.trigger.label')} hint={t('agents.custom.trigger.hint')}>
+            <div className="seg" style={{ width: '100%' }}>
+              {TRIGGER_KINDS.map((k) => (
+                <button
+                  key={k}
+                  type="button"
+                  className={triggerKind === k ? 'on' : ''}
+                  style={{ flex: 1, justifyContent: 'center' }}
+                  onClick={() => setTriggerKind(k)}
+                >
+                  {t(`agents.custom.trigger.kind.${k}`)}
+                </button>
+              ))}
             </div>
 
-            {/* title */}
-            <Field label={t('agents.custom.titleLabel')}>
-              <input
-                type="text"
-                value={title}
-                placeholder={t('agents.custom.titlePlaceholder')}
-                onChange={(e) => setTitle(e.target.value)}
-                style={inputStyle}
-              />
-            </Field>
-
-            {/* prompt (task) */}
-            <Field label={t('agents.custom.promptLabel')} hint={t('agents.custom.promptHint')}>
-              <textarea
-                value={prompt}
-                placeholder={t('agents.custom.promptPlaceholder')}
-                onChange={(e) => {
-                  setPrompt(e.target.value)
-                  setPromptDirty(true)
-                }}
-                rows={8}
-                className="scrollbar-thin"
+            {triggerKind === 'none' && (
+              <div
                 style={{
-                  ...inputStyle,
-                  resize: 'vertical',
-                  lineHeight: 1.6,
-                  fontSize: 13,
-                  minHeight: 150
+                  fontSize: 11.5,
+                  color: 'rgb(var(--ink-fg-3))',
+                  marginTop: 8,
+                  lineHeight: 1.5
                 }}
-              />
-            </Field>
-
-            {/* model */}
-            <Field label={t('agents.config.model')}>
-              <Select value={model || undefined} onValueChange={setModel}>
-                <SelectTrigger>
-                  <SelectValue placeholder={t('agents.config.model')} />
-                </SelectTrigger>
-                <SelectContent className="z-[70]">
-                  {(model && !enabledModels.includes(model)
-                    ? [...enabledModels, model]
-                    : enabledModels
-                  ).map((id) => {
-                    const isOrphan = !enabledModels.includes(id)
-                    return (
-                      <SelectItem key={id} value={id}>
-                        {id}
-                        {isOrphan && (
-                          <span style={{ color: 'rgb(var(--ink-fg-3))', marginLeft: 6 }}>
-                            {t('settings.ai.enabledModels.notEnabled', {
-                              defaultValue: '（未启用）'
-                            })}
-                          </span>
-                        )}
-                      </SelectItem>
-                    )
-                  })}
-                </SelectContent>
-              </Select>
-            </Field>
-
-            {/* trigger 判别式 —— seg 控件（非空 sentinel，避 radix SelectItem 空串崩） */}
-            <Field label={t('agents.custom.trigger.label')} hint={t('agents.custom.trigger.hint')}>
-              <div className="seg" style={{ width: '100%' }}>
-                {TRIGGER_KINDS.map((k) => (
-                  <button
-                    key={k}
-                    type="button"
-                    className={triggerKind === k ? 'on' : ''}
-                    style={{ flex: 1, justifyContent: 'center' }}
-                    onClick={() => setTriggerKind(k)}
-                  >
-                    {t(`agents.custom.trigger.kind.${k}`)}
-                  </button>
-                ))}
+              >
+                {t('agents.custom.trigger.noneHint')}
               </div>
+            )}
 
-              {triggerKind === 'none' && (
-                <div
-                  style={{
-                    fontSize: 11.5,
-                    color: 'rgb(var(--ink-fg-3))',
-                    marginTop: 8,
-                    lineHeight: 1.5
-                  }}
-                >
-                  {t('agents.custom.trigger.noneHint')}
-                </div>
-              )}
-
-              {triggerKind === 'cron' && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 10 }}>
-                  <div>
-                    <input
-                      type="text"
-                      value={cron}
-                      placeholder="0 9 * * 1-5"
-                      onChange={(e) => setCron(e.target.value)}
-                      style={{ ...inputStyle, fontFamily: 'var(--font-mono, monospace)' }}
-                    />
-                    <div
-                      style={{
-                        fontSize: 11.5,
-                        color: 'rgb(var(--ink-fg-3))',
-                        marginTop: 6,
-                        lineHeight: 1.5
-                      }}
-                    >
-                      {t('agents.custom.trigger.cronHint')}
-                    </div>
-                  </div>
-                  <Select value={triggerTz} onValueChange={setTriggerTz}>
-                    <SelectTrigger>
-                      <SelectValue placeholder={t('agents.custom.trigger.tz')} />
-                    </SelectTrigger>
-                    <SelectContent className="z-[70]">
-                      {tzOptions.map((tz) => (
-                        <SelectItem key={tz} value={tz}>
-                          {tz}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              )}
-
-              {triggerKind === 'email_filter' && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 10 }}>
-                  <input
-                    type="text"
-                    value={senderPattern}
-                    placeholder={t('agents.custom.trigger.senderPlaceholder')}
-                    onChange={(e) => setSenderPattern(e.target.value)}
-                    style={{ ...inputStyle, fontFamily: 'var(--font-mono, monospace)' }}
-                  />
-                  <input
-                    type="text"
-                    value={subjectPattern}
-                    placeholder={t('agents.custom.trigger.subjectPlaceholder')}
-                    onChange={(e) => setSubjectPattern(e.target.value)}
-                    style={{ ...inputStyle, fontFamily: 'var(--font-mono, monospace)' }}
-                  />
-                  <input
-                    type="text"
-                    value={folders}
-                    placeholder={t('agents.custom.trigger.foldersPlaceholder')}
-                    onChange={(e) => setFolders(e.target.value)}
-                    style={inputStyle}
-                  />
-                  <div style={{ fontSize: 11.5, color: 'rgb(var(--ink-fg-3))', lineHeight: 1.5 }}>
-                    {t('agents.custom.trigger.emailHint')}
-                  </div>
-                </div>
-              )}
-            </Field>
-
-            {/* allowed_tools 多选 */}
-            <Field label={t('agents.custom.tools.label')} hint={t('agents.custom.tools.hint')}>
-              {toolOptions.tools.length === 0 ? (
-                // 工具清单无法加载（端点未就绪 / flag off）→ 禁用该区编辑（无可点 chip →
-                // toolsDirty 永不置真 → 编辑保存省略 tool_policy，绝不在信息缺失下写错集合）。
-                // 已有显式集合只读展示，让用户看清当前配置。
+            {triggerKind === 'cron' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 10 }}>
                 <div>
+                  <input
+                    type="text"
+                    value={cron}
+                    placeholder="0 9 * * 1-5"
+                    onChange={(e) => setCron(e.target.value)}
+                    style={{ ...inputStyle, fontFamily: 'var(--font-mono, monospace)' }}
+                  />
                   <div
                     style={{
-                      fontSize: 12.5,
+                      fontSize: 11.5,
                       color: 'rgb(var(--ink-fg-3))',
-                      padding: '11px 13px',
-                      borderRadius: 9,
-                      background: 'rgb(var(--ink-1) / 0.5)',
-                      border: '1px solid rgb(var(--ink-border-soft))'
+                      marginTop: 6,
+                      lineHeight: 1.5
                     }}
                   >
-                    {t('agents.custom.tools.unavailable')}
+                    {t('agents.custom.trigger.cronHint')}
                   </div>
-                  {selectedTools.length > 0 && (
-                    <div
-                      className="flex items-center"
-                      style={{ gap: 6, flexWrap: 'wrap', marginTop: 8 }}
-                    >
-                      {selectedTools.map((name) => (
+                </div>
+                <Select value={triggerTz} onValueChange={setTriggerTz}>
+                  <SelectTrigger>
+                    <SelectValue placeholder={t('agents.custom.trigger.tz')} />
+                  </SelectTrigger>
+                  <SelectContent className="z-[70]">
+                    {tzOptions.map((tz) => (
+                      <SelectItem key={tz} value={tz}>
+                        {tz}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
+            {triggerKind === 'email_filter' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 10 }}>
+                <input
+                  type="text"
+                  value={senderPattern}
+                  placeholder={t('agents.custom.trigger.senderPlaceholder')}
+                  onChange={(e) => setSenderPattern(e.target.value)}
+                  style={{ ...inputStyle, fontFamily: 'var(--font-mono, monospace)' }}
+                />
+                <input
+                  type="text"
+                  value={subjectPattern}
+                  placeholder={t('agents.custom.trigger.subjectPlaceholder')}
+                  onChange={(e) => setSubjectPattern(e.target.value)}
+                  style={{ ...inputStyle, fontFamily: 'var(--font-mono, monospace)' }}
+                />
+                <input
+                  type="text"
+                  value={folders}
+                  placeholder={t('agents.custom.trigger.foldersPlaceholder')}
+                  onChange={(e) => setFolders(e.target.value)}
+                  style={inputStyle}
+                />
+                <div style={{ fontSize: 11.5, color: 'rgb(var(--ink-fg-3))', lineHeight: 1.5 }}>
+                  {t('agents.custom.trigger.emailHint')}
+                </div>
+              </div>
+            )}
+          </Field>
+
+          {/* allowed_tools 多选 */}
+          <Field label={t('agents.custom.tools.label')} hint={t('agents.custom.tools.hint')}>
+            {toolOptions.tools.length === 0 ? (
+              // 工具清单无法加载（端点未就绪 / flag off）→ 禁用该区编辑（无可点 chip →
+              // toolsDirty 永不置真 → 编辑保存省略 tool_policy，绝不在信息缺失下写错集合）。
+              // 已有显式集合只读展示，让用户看清当前配置。
+              <div>
+                <div
+                  style={{
+                    fontSize: 12.5,
+                    color: 'rgb(var(--ink-fg-3))',
+                    padding: '11px 13px',
+                    borderRadius: 9,
+                    background: 'rgb(var(--ink-1) / 0.5)',
+                    border: '1px solid rgb(var(--ink-border-soft))'
+                  }}
+                >
+                  {t('agents.custom.tools.unavailable')}
+                </div>
+                {selectedTools.length > 0 && (
+                  <div
+                    className="flex items-center"
+                    style={{ gap: 6, flexWrap: 'wrap', marginTop: 8 }}
+                  >
+                    {selectedTools.map((name) => (
+                      <span
+                        key={name}
+                        style={{
+                          padding: '5px 10px',
+                          borderRadius: 8,
+                          fontFamily: 'var(--font-mono, monospace)',
+                          fontSize: 12,
+                          color: 'rgb(var(--ink-fg-2))',
+                          background: 'rgb(var(--ink-1) / 0.5)',
+                          border: '1px solid rgb(var(--ink-border))'
+                        }}
+                      >
+                        {name}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : (
+              // R3 — 按家族分组渲染（toolGroups.ts 常量；未映射工具落「其他」组不静默丢）。
+              // 组级批量 = 全选/清空（走 setGroupTools，同 toolsDirty 纪律）；组内 chip 单控不变。
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                {groupToolOptions(toolOptions.tools).map((group) => {
+                  const names = group.tools.map((tl) => tl.name)
+                  const selectedCount = names.filter((n) => selectedTools.includes(n)).length
+                  return (
+                    <div key={group.id}>
+                      <div className="flex items-center" style={{ gap: 8, marginBottom: 6 }}>
                         <span
-                          key={name}
+                          style={{ fontSize: 12, fontWeight: 500, color: 'rgb(var(--ink-fg-2))' }}
+                        >
+                          {t(`agents.custom.tools.group.${group.id}`)}
+                        </span>
+                        <span style={{ fontSize: 11, color: 'rgb(var(--ink-fg-3))' }}>
+                          {selectedCount}/{names.length}
+                        </span>
+                        <span style={{ flex: 1 }} />
+                        <button
+                          type="button"
+                          onClick={() => setGroupTools(names, true)}
                           style={{
-                            padding: '5px 10px',
-                            borderRadius: 8,
-                            fontFamily: 'var(--font-mono, monospace)',
-                            fontSize: 12,
+                            fontFamily: 'inherit',
+                            fontSize: 11.5,
+                            padding: '2px 8px',
+                            borderRadius: 6,
+                            cursor: 'pointer',
                             color: 'rgb(var(--ink-fg-2))',
-                            background: 'rgb(var(--ink-1) / 0.5)',
+                            background: 'transparent',
                             border: '1px solid rgb(var(--ink-border))'
                           }}
                         >
-                          {name}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              ) : (
-                // R3 — 按家族分组渲染（toolGroups.ts 常量；未映射工具落「其他」组不静默丢）。
-                // 组级批量 = 全选/清空（走 setGroupTools，同 toolsDirty 纪律）；组内 chip 单控不变。
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-                  {groupToolOptions(toolOptions.tools).map((group) => {
-                    const names = group.tools.map((tl) => tl.name)
-                    const selectedCount = names.filter((n) => selectedTools.includes(n)).length
-                    return (
-                      <div key={group.id}>
-                        <div className="flex items-center" style={{ gap: 8, marginBottom: 6 }}>
-                          <span
-                            style={{ fontSize: 12, fontWeight: 500, color: 'rgb(var(--ink-fg-2))' }}
-                          >
-                            {t(`agents.custom.tools.group.${group.id}`)}
-                          </span>
-                          <span style={{ fontSize: 11, color: 'rgb(var(--ink-fg-3))' }}>
-                            {selectedCount}/{names.length}
-                          </span>
-                          <span style={{ flex: 1 }} />
-                          <button
-                            type="button"
-                            onClick={() => setGroupTools(names, true)}
-                            style={{
-                              fontFamily: 'inherit',
-                              fontSize: 11.5,
-                              padding: '2px 8px',
-                              borderRadius: 6,
-                              cursor: 'pointer',
-                              color: 'rgb(var(--ink-fg-2))',
-                              background: 'transparent',
-                              border: '1px solid rgb(var(--ink-border))'
-                            }}
-                          >
-                            {t('agents.custom.tools.groupSelectAll')}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setGroupTools(names, false)}
-                            style={{
-                              fontFamily: 'inherit',
-                              fontSize: 11.5,
-                              padding: '2px 8px',
-                              borderRadius: 6,
-                              cursor: 'pointer',
-                              color: 'rgb(var(--ink-fg-2))',
-                              background: 'transparent',
-                              border: '1px solid rgb(var(--ink-border))'
-                            }}
-                          >
-                            {t('agents.custom.tools.groupClearAll')}
-                          </button>
-                        </div>
-                        <div className="flex items-center" style={{ gap: 8, flexWrap: 'wrap' }}>
-                          {group.tools.map((tool) => {
-                            const on = selectedTools.includes(tool.name)
-                            const isWrite = tool.class === 'domain_write'
-                            return (
-                              <button
-                                key={tool.name}
-                                type="button"
-                                aria-pressed={on}
-                                onClick={() => toggleTool(tool.name)}
-                                title={isWrite ? t('agents.custom.tools.writeTag') : undefined}
-                                style={{
-                                  display: 'inline-flex',
-                                  alignItems: 'center',
-                                  gap: 5,
-                                  padding: '6px 11px',
-                                  borderRadius: 8,
-                                  fontFamily: 'var(--font-mono, monospace)',
-                                  fontSize: 12.5,
-                                  cursor: 'pointer',
-                                  color: on ? 'rgb(var(--c-accent))' : 'rgb(var(--ink-fg-2))',
-                                  background: on
-                                    ? 'rgb(var(--c-accent) / 0.14)'
-                                    : 'rgb(var(--ink-1) / 0.5)',
-                                  border: `1px solid ${on ? 'rgb(var(--c-accent))' : 'rgb(var(--ink-border))'}`
-                                }}
-                              >
-                                {tool.name}
-                                {isWrite && (
-                                  <span
-                                    style={{
-                                      fontSize: 10,
-                                      fontFamily: 'inherit',
-                                      color: 'rgb(var(--c-warn))'
-                                    }}
-                                  >
-                                    {t('agents.custom.tools.writeBadge')}
-                                  </span>
-                                )}
-                              </button>
-                            )
-                          })}
-                        </div>
+                          {t('agents.custom.tools.groupSelectAll')}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setGroupTools(names, false)}
+                          style={{
+                            fontFamily: 'inherit',
+                            fontSize: 11.5,
+                            padding: '2px 8px',
+                            borderRadius: 6,
+                            cursor: 'pointer',
+                            color: 'rgb(var(--ink-fg-2))',
+                            background: 'transparent',
+                            border: '1px solid rgb(var(--ink-border))'
+                          }}
+                        >
+                          {t('agents.custom.tools.groupClearAll')}
+                        </button>
                       </div>
-                    )
-                  })}
-                </div>
-              )}
-            </Field>
+                      <div className="flex items-center" style={{ gap: 8, flexWrap: 'wrap' }}>
+                        {group.tools.map((tool) => {
+                          const on = selectedTools.includes(tool.name)
+                          const isWrite = tool.class === 'domain_write'
+                          return (
+                            <button
+                              key={tool.name}
+                              type="button"
+                              aria-pressed={on}
+                              onClick={() => toggleTool(tool.name)}
+                              title={isWrite ? t('agents.custom.tools.writeTag') : undefined}
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: 5,
+                                padding: '6px 11px',
+                                borderRadius: 8,
+                                fontFamily: 'var(--font-mono, monospace)',
+                                fontSize: 12.5,
+                                cursor: 'pointer',
+                                color: on ? 'rgb(var(--c-accent))' : 'rgb(var(--ink-fg-2))',
+                                background: on
+                                  ? 'rgb(var(--c-accent) / 0.14)'
+                                  : 'rgb(var(--ink-1) / 0.5)',
+                                border: `1px solid ${on ? 'rgb(var(--c-accent))' : 'rgb(var(--ink-border))'}`
+                              }}
+                            >
+                              {tool.name}
+                              {isWrite && (
+                                <span
+                                  style={{
+                                    fontSize: 10,
+                                    fontFamily: 'inherit',
+                                    color: 'rgb(var(--c-warn))'
+                                  }}
+                                >
+                                  {t('agents.custom.tools.writeBadge')}
+                                </span>
+                              )}
+                            </button>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </Field>
 
-            {/* 额外能力（R3）：grant_web / grant_exec 授权 —— 工具白名单之外的能力面，
+          {/* 额外能力（R3）：grant_web / grant_exec 授权 —— 工具白名单之外的能力面，
                 紧邻工具区提升可发现性；新建模式也渲染（create 二段 setConfig 接受 grant 键）。 */}
-            <ExtraCapabilitiesSection
-              agentTitle={title.trim() || (cfg ? cfg.title : t('agents.custom.newTitle'))}
-              triggerKind={create ? triggerKind : (cfg?.trigger?.kind ?? null)}
-              grantExec={grantExec}
-              onGrantChange={(next) => {
-                setGrantExec(next)
-                setGrantDirty(true)
+          <ExtraCapabilitiesSection
+            agentTitle={title.trim() || (cfg ? cfg.title : t('agents.custom.newTitle'))}
+            triggerKind={create ? triggerKind : (cfg?.trigger?.kind ?? null)}
+            grantExec={grantExec}
+            onGrantChange={(next) => {
+              setGrantExec(next)
+              setGrantDirty(true)
+            }}
+            grantWeb={grantWeb}
+            onWebChange={(next) => {
+              setGrantWeb(next)
+              setWebDirty(true)
+            }}
+            flags={opennessFlags}
+          />
+
+          {/* budget 三门 */}
+          <Field label={t('agents.custom.budget.label')} hint={t('agents.custom.budget.hint')}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div className="flex items-center" style={{ gap: 10 }}>
+                <span style={{ fontSize: 12.5, color: 'rgb(var(--ink-fg-2))', flex: 1 }}>
+                  {t('agents.custom.budget.maxSteps', { max: MAX_STEPS_CEILING })}
+                </span>
+                <input
+                  type="number"
+                  min={1}
+                  max={MAX_STEPS_CEILING}
+                  value={maxSteps}
+                  onChange={(e) => setMaxSteps(Number(e.target.value))}
+                  style={{ ...inputStyle, width: 110 }}
+                />
+              </div>
+              <div className="flex items-center" style={{ gap: 10 }}>
+                <span style={{ fontSize: 12.5, color: 'rgb(var(--ink-fg-2))', flex: 1 }}>
+                  {t('agents.custom.budget.maxRunsPerDay')}
+                </span>
+                <input
+                  type="number"
+                  min={0}
+                  value={maxRunsPerDay}
+                  onChange={(e) => setMaxRunsPerDay(Number(e.target.value))}
+                  style={{ ...inputStyle, width: 110 }}
+                />
+              </div>
+              <div className="flex items-center" style={{ gap: 10 }}>
+                <span style={{ fontSize: 12.5, color: 'rgb(var(--ink-fg-2))', flex: 1 }}>
+                  {t('agents.custom.budget.maxRunSeconds', { max: MAX_RUN_SECONDS_CEILING })}
+                </span>
+                <input
+                  type="number"
+                  min={1}
+                  max={MAX_RUN_SECONDS_CEILING}
+                  value={maxRunSeconds}
+                  onChange={(e) => setMaxRunSeconds(Number(e.target.value))}
+                  style={{ ...inputStyle, width: 110 }}
+                />
+              </div>
+            </div>
+          </Field>
+
+          {/* 自动化策略（S5 W5b；仅编辑既有时 —— 建规归属校验要求 agent 行已存在） */}
+          {!create && cfg && (
+            <AutomationPolicySection
+              agentId={cfg.id}
+              agentTitle={title.trim() || cfg.title}
+              triggerKind={cfg.trigger?.kind ?? null}
+              writeToolChoices={toolOptions.tools
+                .filter((tl) => tl.class === 'domain_write' && selectedTools.includes(tl.name))
+                .map((tl) => tl.name)}
+              mountedSkills={mountedSkills}
+              skillsMode={skillsMode}
+              onSkillsChange={(next) => {
+                setMountedSkills(next)
+                setSkillsDirty(true)
+                setSkillsMode('explicit')
               }}
-              grantWeb={grantWeb}
-              onWebChange={(next) => {
-                setGrantWeb(next)
-                setWebDirty(true)
-              }}
-              flags={opennessFlags}
             />
+          )}
 
-            {/* budget 三门 */}
-            <Field label={t('agents.custom.budget.label')} hint={t('agents.custom.budget.hint')}>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                <div className="flex items-center" style={{ gap: 10 }}>
-                  <span style={{ fontSize: 12.5, color: 'rgb(var(--ink-fg-2))', flex: 1 }}>
-                    {t('agents.custom.budget.maxSteps', { max: MAX_STEPS_CEILING })}
-                  </span>
-                  <input
-                    type="number"
-                    min={1}
-                    max={MAX_STEPS_CEILING}
-                    value={maxSteps}
-                    onChange={(e) => setMaxSteps(Number(e.target.value))}
-                    style={{ ...inputStyle, width: 110 }}
-                  />
-                </div>
-                <div className="flex items-center" style={{ gap: 10 }}>
-                  <span style={{ fontSize: 12.5, color: 'rgb(var(--ink-fg-2))', flex: 1 }}>
-                    {t('agents.custom.budget.maxRunsPerDay')}
-                  </span>
-                  <input
-                    type="number"
-                    min={0}
-                    value={maxRunsPerDay}
-                    onChange={(e) => setMaxRunsPerDay(Number(e.target.value))}
-                    style={{ ...inputStyle, width: 110 }}
-                  />
-                </div>
-                <div className="flex items-center" style={{ gap: 10 }}>
-                  <span style={{ fontSize: 12.5, color: 'rgb(var(--ink-fg-2))', flex: 1 }}>
-                    {t('agents.custom.budget.maxRunSeconds', { max: MAX_RUN_SECONDS_CEILING })}
-                  </span>
-                  <input
-                    type="number"
-                    min={1}
-                    max={MAX_RUN_SECONDS_CEILING}
-                    value={maxRunSeconds}
-                    onChange={(e) => setMaxRunSeconds(Number(e.target.value))}
-                    style={{ ...inputStyle, width: 110 }}
-                  />
-                </div>
-              </div>
-            </Field>
+          {/* run 历史（仅编辑既有时；新建时 agent 尚未存在） */}
+          {!create && cfg && <RunHistorySection agentId={cfg.id} />}
 
-            {/* 自动化策略（S5 W5b；仅编辑既有时 —— 建规归属校验要求 agent 行已存在） */}
-            {!create && cfg && (
-              <AutomationPolicySection
-                agentId={cfg.id}
-                agentTitle={title.trim() || cfg.title}
-                triggerKind={cfg.trigger?.kind ?? null}
-                writeToolChoices={toolOptions.tools
-                  .filter((tl) => tl.class === 'domain_write' && selectedTools.includes(tl.name))
-                  .map((tl) => tl.name)}
-                mountedSkills={mountedSkills}
-                skillsMode={skillsMode}
-                onSkillsChange={(next) => {
-                  setMountedSkills(next)
-                  setSkillsDirty(true)
-                  setSkillsMode('explicit')
-                }}
-              />
-            )}
-
-            {/* run 历史（仅编辑既有时；新建时 agent 尚未存在） */}
-            {!create && cfg && <RunHistorySection agentId={cfg.id} />}
-
-            {err && (
-              <div
-                style={{
-                  fontSize: 12.5,
-                  color: 'rgb(var(--c-fail))',
-                  padding: '10px 12px',
-                  borderRadius: 9,
-                  background: 'rgb(var(--c-fail) / 0.10)',
-                  border: '1px solid rgb(var(--c-fail) / 0.25)',
-                  wordBreak: 'break-word'
-                }}
-              >
-                {err}
-              </div>
-            )}
-          </div>
+          {err && (
+            <div
+              style={{
+                fontSize: 12.5,
+                color: 'rgb(var(--c-fail))',
+                padding: '10px 12px',
+                borderRadius: 9,
+                background: 'rgb(var(--c-fail) / 0.10)',
+                border: '1px solid rgb(var(--c-fail) / 0.25)',
+                wordBreak: 'break-word'
+              }}
+            >
+              {err}
+            </div>
+          )}
         </div>
+      </div>
 
-        <footer
-          className="flex items-center"
-          style={{
-            gap: 10,
-            padding: '13px 18px',
-            borderTop: '1px solid rgb(var(--ink-border-soft))',
-            flexShrink: 0
-          }}
-        >
-          {/* 删除：仅编辑既有时；两步确认（同 SearchConfigDrawer 风格）。 */}
-          {!create &&
-            cfg &&
-            (confirming ? (
-              <span className="flex items-center" style={{ gap: 6 }}>
-                <button
-                  type="button"
-                  onClick={onDelete}
-                  disabled={busy}
-                  style={{
-                    fontFamily: 'inherit',
-                    fontSize: 13,
-                    padding: '7px 12px',
-                    borderRadius: 8,
-                    cursor: busy ? 'wait' : 'pointer',
-                    color: 'rgb(var(--c-fail))',
-                    background: 'rgb(var(--c-fail) / 0.12)',
-                    border: '1px solid rgb(var(--c-fail) / 0.3)'
-                  }}
-                >
-                  {t('agents.search.deleteConfirm')}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setConfirming(false)}
-                  className="btn-ghost"
-                  style={{ fontFamily: 'inherit' }}
-                >
-                  {t('agents.search.deleteCancel')}
-                </button>
-              </span>
-            ) : (
+      <footer
+        className="flex items-center"
+        style={{
+          gap: 10,
+          padding: '13px 18px',
+          borderTop: '1px solid rgb(var(--ink-border-soft))',
+          flexShrink: 0
+        }}
+      >
+        {/* 删除：仅编辑既有时；两步确认（同 SearchConfigDrawer 风格）。 */}
+        {!create &&
+          cfg &&
+          (confirming ? (
+            <span className="flex items-center" style={{ gap: 6 }}>
               <button
                 type="button"
-                onClick={() => setConfirming(true)}
-                className="flex items-center"
+                onClick={onDelete}
+                disabled={busy}
                 style={{
-                  gap: 6,
                   fontFamily: 'inherit',
                   fontSize: 13,
-                  padding: '8px 14px',
+                  padding: '7px 12px',
                   borderRadius: 8,
-                  cursor: 'pointer',
+                  cursor: busy ? 'wait' : 'pointer',
                   color: 'rgb(var(--c-fail))',
-                  background: 'transparent',
+                  background: 'rgb(var(--c-fail) / 0.12)',
                   border: '1px solid rgb(var(--c-fail) / 0.3)'
                 }}
               >
-                <ReportIcon name="x" size={14} />
-                {t('agents.search.delete')}
+                {t('agents.search.deleteConfirm')}
               </button>
-            ))}
-          <span style={{ flex: 1 }} />
-          <button
-            type="button"
-            onClick={onClose}
-            className="btn-ghost"
-            style={{ fontFamily: 'inherit' }}
-          >
-            {t('agents.config.cancel')}
-          </button>
-          <StatefulButton
-            type="button"
-            onClick={onSave}
-            disabled={busy}
-            state={busy ? 'loading' : saveFailed ? 'error' : 'idle'}
-          >
-            {create ? t('agents.custom.create') : t('agents.config.save')}
-          </StatefulButton>
-        </footer>
+              <button
+                type="button"
+                onClick={() => setConfirming(false)}
+                className="btn-ghost"
+                style={{ fontFamily: 'inherit' }}
+              >
+                {t('agents.search.deleteCancel')}
+              </button>
+            </span>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setConfirming(true)}
+              className="flex items-center"
+              style={{
+                gap: 6,
+                fontFamily: 'inherit',
+                fontSize: 13,
+                padding: '8px 14px',
+                borderRadius: 8,
+                cursor: 'pointer',
+                color: 'rgb(var(--c-fail))',
+                background: 'transparent',
+                border: '1px solid rgb(var(--c-fail) / 0.3)'
+              }}
+            >
+              <ReportIcon name="x" size={14} />
+              {t('agents.search.delete')}
+            </button>
+          ))}
+        <span style={{ flex: 1 }} />
+        <button
+          type="button"
+          onClick={onClose}
+          className="btn-ghost"
+          style={{ fontFamily: 'inherit' }}
+        >
+          {t('agents.config.cancel')}
+        </button>
+        <StatefulButton
+          type="button"
+          onClick={onSave}
+          disabled={busy}
+          state={busy ? 'loading' : saveFailed ? 'error' : 'idle'}
+        >
+          {create ? t('agents.custom.create') : t('agents.config.save')}
+        </StatefulButton>
+      </footer>
     </Drawer>
   )
 }

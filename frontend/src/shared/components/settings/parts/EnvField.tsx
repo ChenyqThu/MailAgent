@@ -25,7 +25,9 @@ import { Switch } from '@shared/components/ui/switch'
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue
 } from '@shared/components/ui/select'
@@ -59,6 +61,14 @@ interface EnvFieldOption {
   label: React.ReactNode
 }
 
+/** select-only（task 07-12 P3）：分组选项（provider registry on 时功能位选择器按
+ *  provider 分组）。与 `options` 可并存——`options` 先渲染为未分组项（如「不设备
+ *  模型」空值哨兵），组随后。不传 = 旧扁平渲染，字节级不变。 */
+interface EnvFieldOptionGroup {
+  label: React.ReactNode
+  options: EnvFieldOption[]
+}
+
 interface EnvFieldProps {
   envKey: string
   control: EnvFieldControl
@@ -66,6 +76,8 @@ interface EnvFieldProps {
   helper?: React.ReactNode
   /** Required for control="select". */
   options?: EnvFieldOption[]
+  /** select-only：分组选项，见 EnvFieldOptionGroup。 */
+  optionGroups?: EnvFieldOptionGroup[]
   /** Optional placeholder for text/number/password. */
   placeholder?: string
   /** number-only — UI lets the user type within these bounds but server
@@ -99,6 +111,7 @@ export function EnvField({
   label,
   helper,
   options,
+  optionGroups,
   placeholder,
   min,
   max,
@@ -287,6 +300,16 @@ export function EnvField({
                   <SelectItem key={toDisplay(o.value)} value={toDisplay(o.value)}>
                     {o.label}
                   </SelectItem>
+                ))}
+                {(optionGroups ?? []).map((g, gi) => (
+                  <SelectGroup key={gi}>
+                    <SelectLabel>{g.label}</SelectLabel>
+                    {g.options.map((o) => (
+                      <SelectItem key={toDisplay(o.value)} value={toDisplay(o.value)}>
+                        {o.label}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
                 ))}
               </SelectContent>
             </Select>
