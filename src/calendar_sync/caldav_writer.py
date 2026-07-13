@@ -659,6 +659,8 @@ class CalDAVWriter:
           也不继承到新 series. 用户可后续给新 series 设结束.
         - 老 master 的 detached overrides 保留; split 点后的 override 成孤儿 (老
           series UNTIL 截断后不展开), 罕见.
+        - 两步 PUT 非原子 (P1-2): 第 2 步失败时 best-effort 回滚老 master 后仍
+          向上抛; 回滚也失败则异常信息带原 RRULE 供人工修复.
 
         Raises:
             ValueError: UID not found / 非周期 series (master 无 RRULE)
@@ -703,6 +705,10 @@ class CalDAVWriter:
         )
         m_attendees = _extract_attendees_from_vevent(master)
 
+        # 改前序列化整个老 master 资源 (含 detached overrides), 供第 2 步失败时
+        # best-effort 回滚 (P1-2: 两步 PUT 非原子, 否则「改未来」变「删未来」)
+        orig_master_data = vcal.serialize()
+
         # 1. 截断老 master: in-place 改 RRULE 加 UNTIL (保留 detached overrides)
         until = split_recurrence_id_utc - timedelta(seconds=1)
         master.rrule.value = _rrule_set_until(orig_rrule, until)
@@ -740,8 +746,20 @@ class CalDAVWriter:
         try:
             cal.save_event(new_body)
         except Exception as e:
+            # 第 1 步截断已 PUT 生效, 不恢复则未来 occurrence 全丢; 无论恢复成败
+            # 都向上抛 (操作没完成, 调用方必须知道)
+            try:
+                evt.data = orig_master_data
+                evt.save()
+            except Exception as restore_exc:
+                raise RuntimeError(
+                    f"CalDAV PUT failed creating new series after split: {e}; "
+                    f"回滚老 master 也失败 ({restore_exc}) — Exchange 端处于截断态 "
+                    f"(uid={ical_uid!r}), 需人工恢复原 RRULE: {orig_rrule}"
+                ) from e
             raise RuntimeError(
-                f"CalDAV PUT failed creating new series after split: {e}"
+                f"CalDAV PUT failed creating new series after split "
+                f"(已回滚老 master 原 RRULE): {e}"
             ) from e
 
         logger.info(
