@@ -14,8 +14,14 @@
 // 永不抛到 IPC 边界外。
 
 import { ipcMain } from 'electron'
+import { generateText } from 'ai'
 
+import { isProviderCredentialsError } from '../../../ai-gateway/providerRef'
 import { getLlmApiKey, getLlmBaseUrl, getLlmModel } from '../llm_settings'
+import {
+  getLlmProviderModelResolver,
+  isLlmProviderRegistryEnabled
+} from '../llm_provider_resolver'
 
 export interface NlToDslResult {
   /** 翻译出的 DSL；error 非空时为 ''。 */
@@ -146,8 +152,9 @@ export async function nlToDsl(nl: string): Promise<NlToDslResult> {
     return { dsl: '', error: 'E_EMPTY', message: 'empty natural-language query' }
   }
 
-  const apiKey = await getLlmApiKey()
-  if (!apiKey) {
+  const providerRegistryEnabled = isLlmProviderRegistryEnabled()
+  const apiKey = (await getLlmApiKey()) ?? ''
+  if (!providerRegistryEnabled && !apiKey) {
     return {
       dsl: '',
       error: 'E_NO_LLM_KEY',
@@ -160,6 +167,25 @@ export async function nlToDsl(nl: string): Promise<NlToDslResult> {
   const ac = new AbortController()
   const timer = setTimeout(() => ac.abort(), REQUEST_TIMEOUT_MS)
   try {
+    if (providerRegistryEnabled) {
+      const resolver = await getLlmProviderModelResolver()
+      const resolved = await resolver.resolve(model)
+      const result = await generateText({
+        model: resolved.model,
+        maxOutputTokens: resolved.maxOutputTokens,
+        system: buildSystemPrompt(),
+        prompt: input,
+        abortSignal: ac.signal
+      })
+      if (result.text.trim().length === 0) {
+        return { dsl: '', error: 'E_NO_OUTPUT', message: 'LLM returned no text' }
+      }
+      const dsl = sanitizeDsl(result.text)
+      if (dsl.length === 0) {
+        return { dsl: '', error: 'E_NO_OUTPUT', message: 'LLM produced an empty DSL' }
+      }
+      return { dsl }
+    }
     const response = await fetch(`${baseUrl}/v1/messages`, {
       method: 'POST',
       headers: {
@@ -192,6 +218,9 @@ export async function nlToDsl(nl: string): Promise<NlToDslResult> {
     }
     return { dsl }
   } catch (err) {
+    if (isProviderCredentialsError(err)) {
+      return { dsl: '', error: 'E_NO_LLM_KEY', message: err.message }
+    }
     if (err instanceof Error && (err.name === 'AbortError' || ac.signal.aborted)) {
       return { dsl: '', error: 'E_TIMEOUT', message: 'LLM request timed out' }
     }

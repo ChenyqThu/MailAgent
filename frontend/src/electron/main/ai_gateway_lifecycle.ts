@@ -59,8 +59,11 @@ import type { GatewaySystemPromptConfig } from '../../ai-gateway/systemPrompt'
 // import inside startEmbeddedAiGateway: MAILAGENT_LLM_PROVIDER_REGISTRY off keeps the module
 // graph free of the new SDKs (a broken provider package can't take down the flag-off gateway).
 // Pinned by tests/ai-gateway/provider_lazy_import.test.ts.
-import type { ProviderModelResolver, ProviderSnapshot } from '../../ai-gateway/providerRef'
-import { daemonRequest } from './daemon_api'
+import type { ProviderModelResolver } from '../../ai-gateway/providerRef'
+import {
+  getLlmProviderModelResolver,
+  isLlmProviderRegistryEnabled
+} from './llm_provider_resolver'
 
 /** The /chat/config response fields the gateway projects into GatewaySystemPromptConfig
  *  (was typed via the legacy HttpPlatformConfig until S3 deleted the legacy engine). */
@@ -260,16 +263,12 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
   if (_handle) return _handle.port
   const apiKey = await getLlmApiKey()
   const llmBaseUrl = getLlmBaseUrl()
-  const providerRegistryEnabled = envBool('MAILAGENT_LLM_PROVIDER_REGISTRY', false)
-  // MEDIUM-6 — flag-on-only dynamic import: this is the ONLY runtime entry into providers.ts (and
-  // thus the six provider SDK packages). Flag off → the chunk never loads (lazy rollback intact).
+  const providerRegistryEnabled = isLlmProviderRegistryEnabled()
+  // MEDIUM-6 — the shared main-process resolver keeps providers.ts (and thus the six provider SDK
+  // packages) behind a flag-on dynamic import. Flag off → the chunk never loads.
   let providerModelResolver: ProviderModelResolver | undefined
   if (providerRegistryEnabled) {
-    const { createProviderModelResolver } = await import('../../ai-gateway/providers')
-    providerModelResolver = createProviderModelResolver({
-      fetchSnapshot: () => daemonRequest<ProviderSnapshot>('GET', '/llm/providers/snapshot'),
-      legacy: { apiKey, baseUrl: llmBaseUrl }
-    })
+    providerModelResolver = await getLlmProviderModelResolver()
   }
   // Phase 03a — domain client → Python serve-api READ endpoints (loopback +
   // same-machine local token, mirrors the renderer's auth leg). The read-tool
