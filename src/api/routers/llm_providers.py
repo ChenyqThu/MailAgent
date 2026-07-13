@@ -384,6 +384,73 @@ async def list_providers(request: Request, _: None = Depends(verify_cf_access)):
     )
 
 
+# provider create/PATCH 的严格入参约束（终审 MEDIUM-4：对齐 model upsert 的 MEDIUM-6 纪律，
+# 拒未知字段与隐式类型转换——`enabled:"false"` 曾被 bool() 转成 True 写成相反状态、拼错的
+# 字段名被静默忽略、对象值曾被 str() 字符串化入库或在 SQLite 绑定阶段炸成未捕获 500）。
+_PROVIDER_CREATE_KEYS = frozenset(
+    {"id", "protocol", "displayName", "baseUrl", "apiKey", "headers", "enabled", "sortOrder"}
+)
+_PROVIDER_PATCH_KEYS = frozenset(_PROVIDER_CREATE_KEYS - {"id"})
+_SORT_ORDER_CEILING = 10_000
+
+
+def _validate_provider_body(body: Dict[str, Any], *, allowed: frozenset) -> None:
+    """create/PATCH 共用的严格 schema 闸（出现的键才校验——PATCH 省略=不改语义不受影响）。
+
+    - 未知顶层字段 400；`protocol` 枚举；`displayName`/`baseUrl` 严格 string（清空传 ''，
+      不收 null）；`apiKey` string 或 null（null = 无 key / PATCH 清除，前端契约）；
+    - `headers` 平坦 string→string map 或 null（null/{} = 清空，全量替换语义不变）；
+    - `enabled` 严格 bool；`sortOrder` 0..10000 有界整数（bool 是 int 子类，显式拒）。
+    """
+    unknown = set(body) - allowed
+    if unknown:
+        raise APIError(
+            "E_INVALID_ARG",
+            f"unknown fields: {sorted(unknown)}",
+            hint=f"allowed: {sorted(allowed)}",
+            source="sqlite",
+        )
+    if "protocol" in body and body["protocol"] not in PROVIDER_PROTOCOLS:
+        raise APIError(
+            "E_INVALID_ARG",
+            f"'protocol' must be one of {PROVIDER_PROTOCOLS}",
+            source="sqlite",
+        )
+    for key in ("displayName", "baseUrl"):
+        if key in body and not isinstance(body[key], str):
+            raise APIError(
+                "E_INVALID_ARG", f"'{key}' must be a string (use '' to clear)", source="sqlite"
+            )
+    if "apiKey" in body and body["apiKey"] is not None and not isinstance(body["apiKey"], str):
+        raise APIError(
+            "E_INVALID_ARG", "'apiKey' must be a string (null clears the key)", source="sqlite"
+        )
+    if "headers" in body and body["headers"] is not None:
+        headers = body["headers"]
+        if not isinstance(headers, dict) or not all(
+            isinstance(k, str) and isinstance(v, str) for k, v in headers.items()
+        ):
+            raise APIError(
+                "E_INVALID_ARG",
+                "'headers' must be a flat string→string object (null/{} clears)",
+                source="sqlite",
+            )
+    if "enabled" in body and not isinstance(body["enabled"], bool):
+        raise APIError("E_INVALID_ARG", "'enabled' must be a boolean", source="sqlite")
+    if "sortOrder" in body:
+        sort_order = body["sortOrder"]
+        if (
+            isinstance(sort_order, bool)
+            or not isinstance(sort_order, int)
+            or not 0 <= sort_order <= _SORT_ORDER_CEILING
+        ):
+            raise APIError(
+                "E_INVALID_ARG",
+                f"'sortOrder' must be an integer in 0..{_SORT_ORDER_CEILING}",
+                source="sqlite",
+            )
+
+
 @router.post("")
 async def create_provider(
     request: Request,
@@ -391,8 +458,10 @@ async def create_provider(
     _: None = Depends(verify_local_token),
 ):
     """新建 provider。body: {id, protocol, displayName?, baseUrl?, apiKey?, headers?,
-    enabled?, sortOrder?}。apiKey 明文入参 → 落库即 Fernet 密文；响应恒掩码。"""
+    enabled?, sortOrder?}。apiKey 明文入参 → 落库即 Fernet 密文；响应恒掩码。
+    严格 schema 见 ``_validate_provider_body``（终审 MEDIUM-4）。"""
     body = body or {}
+    _validate_provider_body(body, allowed=_PROVIDER_CREATE_KEYS)
     provider_id = body.get("id")
     protocol = body.get("protocol")
     if not isinstance(provider_id, str) or not isinstance(protocol, str):
@@ -402,20 +471,17 @@ async def create_provider(
             hint=f"protocol ∈ {PROVIDER_PROTOCOLS}",
             source="sqlite",
         )
-    api_key = body.get("apiKey")
-    if api_key is not None and not isinstance(api_key, str):
-        raise APIError("E_INVALID_ARG", "'apiKey' must be a string", source="sqlite")
     store = ensure_seeded_store()
     try:
         row = store.create_provider(
             provider_id,
             protocol=protocol,
-            display_name=str(body.get("displayName") or ""),
-            base_url=str(body.get("baseUrl") or ""),
-            api_key=api_key,
+            display_name=body.get("displayName") or "",
+            base_url=body.get("baseUrl") or "",
+            api_key=body.get("apiKey"),
             headers=body.get("headers"),
-            enabled=bool(body.get("enabled", True)),
-            sort_order=int(body.get("sortOrder") or 0),
+            enabled=body.get("enabled", True),
+            sort_order=body.get("sortOrder", 0),
         )
     except ValueError as exc:
         raise APIError("E_INVALID_ARG", str(exc), source="sqlite") from exc
@@ -431,8 +497,10 @@ async def update_provider(
 ):
     """部分更新（body 里出现的键才动）。``apiKey``：非空 str = 轮换；空串/null = 清除。
     ``headers``：write-only 明文 map（响应只回 headerNames，HIGH-1），**全量替换**语义
-    ——省略 = 不改；``{}``/null = 清空。"""
+    ——省略 = 不改；``{}``/null = 清空。严格 schema 见 ``_validate_provider_body``
+    （终审 MEDIUM-4）。"""
     body = body or {}
+    _validate_provider_body(body, allowed=_PROVIDER_PATCH_KEYS)
     store = ensure_seeded_store()
     _require_provider(store, provider_id)
     kwargs: Dict[str, Any] = {}
@@ -443,14 +511,11 @@ async def update_provider(
     if "baseUrl" in body:
         kwargs["base_url"] = body["baseUrl"]
     if "apiKey" in body:
-        api_key = body["apiKey"]
-        if api_key is not None and not isinstance(api_key, str):
-            raise APIError("E_INVALID_ARG", "'apiKey' must be a string", source="sqlite")
-        kwargs["api_key"] = api_key
+        kwargs["api_key"] = body["apiKey"]
     if "headers" in body:
         kwargs["headers"] = body["headers"]
     if "enabled" in body:
-        kwargs["enabled"] = bool(body["enabled"])
+        kwargs["enabled"] = body["enabled"]
     if "sortOrder" in body:
         kwargs["sort_order"] = body["sortOrder"]
     try:

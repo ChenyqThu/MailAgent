@@ -61,6 +61,7 @@ import type { GatewaySystemPromptConfig } from '../../ai-gateway/systemPrompt'
 // Pinned by tests/ai-gateway/provider_lazy_import.test.ts.
 import type { ProviderModelResolver } from '../../ai-gateway/providerRef'
 import {
+  backfillLegacyDefaultProviderKey,
   getLlmProviderModelResolver,
   isLlmProviderRegistryEnabled
 } from './llm_provider_resolver'
@@ -268,6 +269,9 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
   // packages) behind a flag-on dynamic import. Flag off → the chunk never loads.
   let providerModelResolver: ProviderModelResolver | undefined
   if (providerRegistryEnabled) {
+    // 发版终审 HIGH-1 — keytar-only 旧 key 回填必须先于 resolver 构建：resolver 首拉快照
+    // 即拿到回填后的 default 行（version 已 bump），无需强制刷新。失败仅 warning 不阻断。
+    await backfillLegacyDefaultProviderKey()
     providerModelResolver = await getLlmProviderModelResolver()
   }
   // Phase 03a — domain client → Python serve-api READ endpoints (loopback +

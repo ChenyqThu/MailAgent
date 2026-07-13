@@ -25,6 +25,7 @@ const {
   mockGenerateText,
   mockGetLlmProviderModelResolver,
   mockGetLlmTranslateApiKey,
+  mockHasLlmTranslateKeytarKey,
   mockIsLlmProviderRegistryEnabled,
   mockResolveProviderModel,
   mockSanitizedUpstreamErrorMessage
@@ -32,6 +33,7 @@ const {
   mockGenerateText: vi.fn(),
   mockGetLlmProviderModelResolver: vi.fn(),
   mockGetLlmTranslateApiKey: vi.fn(),
+  mockHasLlmTranslateKeytarKey: vi.fn(),
   mockIsLlmProviderRegistryEnabled: vi.fn(),
   mockResolveProviderModel: vi.fn(),
   mockSanitizedUpstreamErrorMessage: vi.fn(() => 'HTTP 401 APICallError')
@@ -54,7 +56,8 @@ vi.mock('../../../src/electron/main/db', () => ({
 vi.mock('../../../src/electron/main/llm_settings', () => ({
   getLlmTranslateApiKey: mockGetLlmTranslateApiKey,
   getLlmTranslateBaseUrl: () => 'https://test.llm',
-  getLlmTranslateModel: () => 'test-model'
+  getLlmTranslateModel: () => 'test-model',
+  hasLlmTranslateKeytarKey: mockHasLlmTranslateKeytarKey
 }))
 
 vi.mock('../../../src/electron/main/llm_provider_resolver', () => ({
@@ -126,6 +129,7 @@ beforeEach(() => {
   delete process.env.LLM_TRANSLATE_API_KEY
   delete process.env.LLM_TRANSLATE_BASE_URL
   mockGetLlmTranslateApiKey.mockResolvedValue('test-key')
+  mockHasLlmTranslateKeytarKey.mockResolvedValue(false)
   mockIsLlmProviderRegistryEnabled.mockReturnValue(false)
   mockResolveProviderModel.mockResolvedValue({
     providerId: 'default',
@@ -326,6 +330,28 @@ describe('translateBatch', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(mockGetLlmProviderModelResolver).not.toHaveBeenCalled()
     expect(mockGenerateText).not.toHaveBeenCalled()
+  })
+
+  test('keytar-only translate key also counts as an explicit profile when flag is on (HIGH-1)', async () => {
+    // env 两键都缺、但 keytar translate slot 有值（未 dual-write 的旧专用 key）——
+    // 同样不得被 registry 顶掉，仍走 legacy fetch 路径。
+    mockIsLlmProviderRegistryEnabled.mockReturnValue(true)
+    mockHasLlmTranslateKeytarKey.mockResolvedValue(true)
+    mockEchoTranslation()
+
+    await handler.translateBatch({ internalId: 101 })
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(mockGetLlmProviderModelResolver).not.toHaveBeenCalled()
+    expect(mockGenerateText).not.toHaveBeenCalled()
+  })
+
+  test('flag off never probes the translate keytar slot (byte-identical discipline)', async () => {
+    mockEchoTranslation()
+
+    await handler.translateBatch({ internalId: 101 })
+
+    expect(mockHasLlmTranslateKeytarKey).not.toHaveBeenCalled()
   })
 
   test('happy path: returns segments matching extracted blocks + writes cache', async () => {

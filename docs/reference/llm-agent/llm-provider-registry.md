@@ -74,8 +74,9 @@ models=`LLM_ENABLED_MODELS`∪`LLM_MODEL`，enabled=1/source='manual'）。
 
 | 端点 | 鉴权 | 说明 |
 |---|---|---|
-| `GET ''` / `GET /{id}/models` | `verify_cf_access`（本地 token / CF JWT 双腿，远程可看） | 列表对 key 只回掩码（`hasKey` + `keyLast4`），**永不回明文**；`?refresh=true` 按 protocol 拉上游 `/models` merge 进表，拉取失败恒 200 + `error` 可读消息（中转不透传 /models → 手动添加兜底） |
-| `POST ''` / `PATCH /{id}` / `DELETE /{id}` | `verify_local_token`（**仅**本地 token） | provider CRUD；PATCH 部分更新（`api_key` 传非空=重加密替换、传 None/空=清除） |
+| `GET ''` / `GET /{id}/models` | `verify_cf_access`（本地 token / CF JWT 双腿，远程可看） | 列表对 key 只回掩码（`hasKey` + `keyLast4`），**永不回明文**；`GET /{id}/models` = **纯 SQLite 读、零上游外呼**（旧 `?refresh=true` 入参被忽略——上游拉取拆去下面的 POST refresh，批 2 HIGH-2） |
+| `POST /{id}/models/refresh` | `verify_local_token`（**仅**本地 token） | 按 protocol 拉上游 `/models` merge 进表（出网 + 写表归写面，远程 CF 会话 403）；拉取失败恒 200 + `error` 可读消息（中转不透传 /models → 手动添加兜底）；base_url 仅 http/https、拒 userinfo |
+| `POST ''` / `PATCH /{id}` / `DELETE /{id}` | `verify_local_token`（**仅**本地 token） | provider CRUD；PATCH 部分更新（`api_key` 传非空=重加密替换、传 None/空=清除）；create/PATCH 严格 schema（拒未知字段/隐式类型转换，终审 MEDIUM-4） |
 | `PUT /{id}/models` / `DELETE /{id}/models` | `verify_local_token` | model 行写面（P3）：PUT merge 语义——body 出现的键才动（防「勾启用」清掉 maxOutput）；model_id 走 body 防含 `/` 的 wire id 撞路由 |
 | `POST /{id}/test` | `verify_local_token` | 连通性测试（拿解密 key 发极小上游请求，探测面不给远程会话驱动） |
 | `GET /snapshot` | `verify_local_token` | **返回解密后 key**，仅供同机 loopback gateway 消费 |
@@ -150,7 +151,9 @@ flag off 的现状路径。
   `openai_base_url`；anthropic → `anthropic_base_url`（canonical_root，SDK 自补 /v1）。8192
   非流式 clamp 两面都保持（`clamp_max_tokens(CAPTURE_MAX_TOKENS, route)`）。
 - **max_tokens clamp**：`clamp_max_tokens(requested, route)` = 行值非 NULL →
-  `min(requested, max_output)`，classify 与 tool loop 均过。
+  `min(requested, max_output)`，classify 与 tool loop 均过。给国产模型跑报告 Agent 前先在
+  模型管理里填该模型的 `maxOutput`（tool loop 默认按 64k 请求，DeepSeek/Qwen/GLM 等多家
+  上限 8k-32k，行值 NULL 不 clamp → 上游 400 拒）。
 
 ## 8. URL canonical 规则表（HIGH-2 双端契约）
 
@@ -227,8 +230,9 @@ sqlite3 "$DB" "SELECT value FROM llm_provider_meta WHERE key='snapshot_version'"
 
 ### 应急回退
 
-- `.env` 置 `MAILAGENT_LLM_PROVIDER_REGISTRY=false`（或删键）+ 重启 → 双端字节级回老路径。
-  表行原样留存无行为（additive，回退不丢数据）；再翻回 on 时行权威立即恢复。
+- `.env` **显式置** `MAILAGENT_LLM_PROVIDER_REGISTRY=false` + 重启 → 双端字节级回老路径
+  （cutover 翻默认 on 后**删键 = on**，勿以删键当回退）。表行原样留存无行为（additive，
+  回退不丢数据）；再翻回 on 时行权威立即恢复。
 - 只回退某一 provider：Settings 停用该行（enabled=0）→ 其模型从选择器消失；引用它的显式 ref
   按「该模型失败」走 fallback 链（不静默改道）。
 - 配置面挂了（agent_config.db 损坏）：双端 fail-open——gateway 用旧快照/冷启回 env legacy 腿，
@@ -252,5 +256,8 @@ sqlite3 "$DB" "SELECT value FROM llm_provider_meta WHERE key='snapshot_version'"
 - **chat 面板模型选择器无分组**：跨 provider 聚合后仍是扁平列表（Agents 抽屉已分组）；
   mid-conversation 跨 provider 切换也无「建议新开会话」提示（tool-use 历史跨家续接可能被 id
   校验拒，遇到即新开会话）。
+- **后补 Notion 仅同步新邮件**（P3b Notion 可选化的关联限制）：onboarding 跳过
+  NOTION_TOKEN 后补配置，只从配置时起同步新邮件，历史邮件不回填——用
+  `mailagent email resync <id>` 逐封补（见 `.env.example` Notion 区注释）。
 - 不做 per-model 计费/成本核算、多 key 轮询/负载均衡（PRD 非目标）。
 - usage 统计的 cache tokens 列在 openai 面恒 0（`llm_processing` 列语义不变）。

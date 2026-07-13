@@ -41,7 +41,8 @@ import { plaintextToHtml } from '@shared/lib/plaintext_html'
 import {
   getLlmTranslateApiKey,
   getLlmTranslateBaseUrl,
-  getLlmTranslateModel
+  getLlmTranslateModel,
+  hasLlmTranslateKeytarKey
 } from '../llm_settings'
 
 export type TargetLang = 'zh' | 'en'
@@ -442,8 +443,12 @@ interface BatchOutcome {
   ok: boolean
 }
 
-function hasExplicitTranslateProfile(): boolean {
-  return Boolean(process.env['LLM_TRANSLATE_BASE_URL'] || process.env['LLM_TRANSLATE_API_KEY'])
+/** 发版终审 HIGH-1 — 显式 translate profile 探测补 keytar 腿：env 缺位但 keytar translate
+ *  slot 有值（未 dual-write 到 .env 的旧 translate 专用 key）同样算显式 profile，registry
+ *  flag on 时不被顶掉。仅在 flag on 时被调用（调用点 && 短路）→ flag off 零 keytar 触碰。 */
+async function hasExplicitTranslateProfile(): Promise<boolean> {
+  if (process.env['LLM_TRANSLATE_BASE_URL'] || process.env['LLM_TRANSLATE_API_KEY']) return true
+  return hasLlmTranslateKeytarKey()
 }
 
 async function runOneBatchWithProvider(
@@ -702,7 +707,7 @@ export async function translateBatch(opts: TranslateBatchOpts): Promise<Translat
   const providerRegistryEnabled = isLlmProviderRegistryEnabled()
   // v1 keeps an explicitly configured translate-only gateway outside the registry. Its dedicated
   // base/key semantics take precedence even when the registry flag is on.
-  const useProviderRegistry = providerRegistryEnabled && !hasExplicitTranslateProfile()
+  const useProviderRegistry = providerRegistryEnabled && !(await hasExplicitTranslateProfile())
   const apiKey = (await getLlmTranslateApiKey()) ?? ''
   if (!useProviderRegistry && !apiKey) {
     throw new TranslateError(

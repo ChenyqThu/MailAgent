@@ -91,8 +91,9 @@ export default function OnboardingRoot(): React.JSX.Element {
 
   // STEPS 随 backend 动态生成 (davmail 多一步「选择文件夹」)。backend 在 'backend' 步
   // (索引 2) 选定, 早于 config/folders, 所以 STEPS 增长时用户尚未走过 → 索引不漂移。
-  // aiStepEnabled 只在用户位于 AI 插入位 (sync 之后) 之前/之上时翻 true (见下 effect
-  // 的采纳守卫), 插入点恒在当前步之后 → 同样不漂移。
+  // aiStepEnabled 翻 true 时: 用户在插入位之前/之上 → 插入点在当前步之后, 索引不漂移;
+  // 用户正停在 plugins (超时放行后迟到 true, 发版终审 M1) → 当前索引原地变成 'ai'
+  // (plugins 顺移一位) = 有意的「跳转到 AI 步」, plugins 仍是下一步。done 步不采纳。
   const STEPS = useMemo<StepDef[]>(
     () => buildSteps(backend, aiStepEnabled),
     [backend, aiStepEnabled]
@@ -131,12 +132,13 @@ export default function OnboardingRoot(): React.JSX.Element {
   }, [])
 
   // 进入 'sync' 步 (commitConfig 已起后端) 时立即查 provider registry flag (批 2
-  // review MEDIUM-5)。结果不丢弃：
+  // review MEDIUM-5 + 发版终审 M1)。结果不丢弃：
   //   - 用户还停在插入位之前/之上 (ai 步插在 sync 之后) → 到达即采纳, 当前索引不漂移;
   //   - 用户点「下一步」离开 sync 时查询仍 in-flight → await (上限 3s, 超时按 off 先
   //     放行) 再算下一步, 保证 flag on 的用户不会因为点得快而看不到 AI 步;
-  //   - 超时放行后真实结果才到 → 结果留在 ref 里, 用户一旦回退到插入位之前再采纳
-  //     (越过插入位时插步会把当前索引顶到 'ai', 那一刻不动)。
+  //   - 超时放行后真实结果才到 (M1: serve-api 冷启动 / seed 慢过 3s) → 只要 onboarding
+  //     还没走到 'done' 就采纳: 用户停在 plugins 时插步 = 当前索引原地变成 'ai' (等价
+  //     跳转, plugins 仍是下一步); 更早的步 → 正常插在后面。'done' 才永久放弃。
   const stepKeyRef = useRef<string>('welcome')
   useEffect(() => {
     stepKeyRef.current = STEPS[step]?.key ?? 'welcome'
@@ -146,11 +148,13 @@ export default function OnboardingRoot(): React.JSX.Element {
     result: null
   })
   const advancingRef = useRef(false)
-  const beforeAiInsertion = (): boolean => !['ai', 'plugins', 'done'].includes(stepKeyRef.current)
+  // M1 — 迟到 true 的采纳窗口 = 尚未到 'done' (StepDone 提交/启动, 那之后不再动步序)。
+  // 'ai' 不可能是未插入时的当前步; 'plugins' 时采纳即原地跳转 (见上)。
+  const canAdoptAiStep = (): boolean => stepKeyRef.current !== 'done'
   useEffect(() => {
     if (aiStepEnabled) return
-    // 迟到结果的回补采纳 (超时放行后用户回退到插入位之前)。
-    if (aiFlagRef.current.result === true && beforeAiInsertion()) {
+    // 迟到结果的回补采纳 (超时放行后, 用户仍未提交完成)。
+    if (aiFlagRef.current.result === true && canAdoptAiStep()) {
       setAiStepEnabled(true)
       return
     }
@@ -162,7 +166,7 @@ export default function OnboardingRoot(): React.JSX.Element {
     aiFlagRef.current.promise = promise
     void promise.then((enabled) => {
       aiFlagRef.current.result = enabled
-      if (enabled && beforeAiInsertion()) setAiStepEnabled(true)
+      if (enabled && canAdoptAiStep()) setAiStepEnabled(true)
     })
   }, [step, STEPS, aiStepEnabled])
 

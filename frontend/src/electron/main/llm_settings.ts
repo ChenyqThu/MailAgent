@@ -92,6 +92,17 @@ export function getLlmTranslateBaseUrl(): string {
 }
 
 /**
+ * 发版终审 HIGH-1 — translate 专用 keytar slot 探测（**不** fallback 主 key）。
+ * translate.ts 的 hasExplicitTranslateProfile 用它判「用户配过 translate 专用 profile」：
+ * env 缺位但 keytar translate slot 有值（未 dual-write 到 .env 的旧 key）同样算显式
+ * profile，registry flag on 时不被 provider registry 顶掉。
+ */
+export async function hasLlmTranslateKeytarKey(): Promise<boolean> {
+  const fromKey = await keytar.getPassword(SERVICE, ACCOUNT_LLM_TRANSLATE)
+  return Boolean(fromKey && fromKey.length > 0)
+}
+
+/**
  * Translate-specific API key. Tries keychain (translate slot) first, then
  * `LLM_TRANSLATE_API_KEY` env, then the main LLM key. Lets users use a
  * dedicated key for translation; null only when the main key is also unset.

@@ -47,6 +47,9 @@ import {
 } from './httpUtil'
 import { handleAguiChat } from './agui/aguiRoute'
 import { resumeApprovalRun } from './approvalResume'
+// 发版终审 M3 — registry 语境下 title/followups 的 E_UPSTREAM hint + 日志走固定形状脱敏
+// （上游错误正文可能回显凭证）；flag off 保持原 message 形状（字节级纪律）。
+import { sanitizedUpstreamErrorMessage } from './upstreamError'
 import { runHeadlessSearchAgent } from './searchAgentRun'
 import { runHeadlessAgent } from './agentRun'
 import type { HeadlessAgentResult } from '../shared/api/types'
@@ -387,6 +390,14 @@ async function handleTitle(
       writeJson(res, 503, { error: 'E_NO_LLM_KEY', hint: e.message })
       return
     }
+    // M3 — registry 路径：hint 与日志都不得携带上游错误原文（可能回显凭证）；flag off
+    // 保持既有 message/完整错误对象日志形状（nl_search.ts 同款分叉手法）。
+    if (cfg.providerRegistryEnabled) {
+      const sanitized = sanitizedUpstreamErrorMessage(e)
+      console.error('[ai-gateway] /api/ai/title failed:', sanitized)
+      writeJson(res, 502, { error: 'E_UPSTREAM', hint: sanitized })
+      return
+    }
     const message = e instanceof Error ? e.message : String(e)
     console.error('[ai-gateway] /api/ai/title failed', e)
     writeJson(res, 502, { error: 'E_UPSTREAM', hint: message })
@@ -443,6 +454,13 @@ async function handleFollowups(
   } catch (e) {
     if (isProviderCredentialsError(e)) {
       writeJson(res, 503, { error: 'E_NO_LLM_KEY', hint: e.message })
+      return
+    }
+    // M3 — 同 handleTitle：registry 路径 hint/日志走固定形状脱敏，flag off 字节级不动。
+    if (cfg.providerRegistryEnabled) {
+      const sanitized = sanitizedUpstreamErrorMessage(e)
+      console.error('[ai-gateway] /api/ai/followups failed:', sanitized)
+      writeJson(res, 502, { error: 'E_UPSTREAM', hint: sanitized })
       return
     }
     const message = e instanceof Error ? e.message : String(e)

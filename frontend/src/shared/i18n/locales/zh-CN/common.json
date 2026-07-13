@@ -1869,7 +1869,7 @@
     "accounts": {
       "notion": {
         "title": "Notion 集成",
-        "disabledNotice": "Notion 未配置：镜像同步 / 项目周报 / 日历同步已停用，邮件仅在本地同步（列表、搜索、AI 分类等本地功能不受影响）。填齐 Token 与邮件数据库 ID 并重启后启用。",
+        "disabledNotice": "Notion 未配置：镜像同步 / 项目周报 / 日历同步已停用，邮件仅在本地同步（列表、搜索、AI 分类等本地功能不受影响）。填齐 Token 与邮件数据库 ID 并重启后启用。后补配置只同步新邮件，历史邮件不回填（可用 mailagent email resync 逐封补推）。",
         "token": {
           "label": "Notion Token",
           "helper": "Integration token,以 ntn_ 或 secret_ 开头",

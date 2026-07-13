@@ -176,6 +176,41 @@ describe('buildProviderRegistry', () => {
     ])
   })
 
+  it('M2 — strips custom auth headers (case-insensitive) so the system apiKey always wins', () => {
+    buildProviderRegistry(
+      snapshot(1, [
+        provider('gw', 'openai-compatible', {
+          headers: { Authorization: 'Bearer custom', 'X-API-Key': 'custom', 'x-tenant': 't1' }
+        }),
+        provider('crs', 'anthropic', {
+          headers: { 'x-api-key': 'custom', 'anthropic-beta': 'keep-me' }
+        })
+      ])
+    )
+
+    expect(mocks.createOpenAICompatible).toHaveBeenCalledWith(
+      expect.objectContaining({ apiKey: 'gw-key', headers: { 'x-tenant': 't1' } })
+    )
+    expect(mocks.createAnthropic).toHaveBeenCalledWith(
+      expect.objectContaining({ apiKey: 'crs-key', headers: { 'anthropic-beta': 'keep-me' } })
+    )
+  })
+
+  it('M2 — a keyless openai-compatible row keeps its custom Authorization (the only credential)', () => {
+    buildProviderRegistry(
+      snapshot(1, [
+        provider('lan', 'openai-compatible', {
+          apiKey: '',
+          headers: { Authorization: 'Bearer fixed-token' }
+        })
+      ])
+    )
+
+    expect(mocks.createOpenAICompatible).toHaveBeenCalledWith(
+      expect.objectContaining({ headers: { Authorization: 'Bearer fixed-token' } })
+    )
+  })
+
   it('skips disabled and unsupported providers without failing the registry', () => {
     const warn = vi.fn()
     const built = buildProviderRegistry(

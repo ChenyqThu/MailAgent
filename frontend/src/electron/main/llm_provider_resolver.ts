@@ -1,5 +1,3 @@
-import { APICallError } from 'ai'
-
 import type {
   ProviderModelResolver,
   ProviderSnapshot,
@@ -9,21 +7,12 @@ import type {
 import { daemonRequest } from './daemon_api'
 import { getLlmApiKey, getLlmBaseUrl } from './llm_settings'
 
-const MAX_OUTPUT_TOKENS = 64_000
+// 批 2 review MEDIUM-4 → 发版终审 M3 下沉：实现移到 gateway core（server.ts /
+// searchAgentRun.ts 同源消费）；这里 re-export 保兼容（translate/nl_search + 单测都从
+// 本模块取用）。
+export { sanitizedUpstreamErrorMessage } from '../../ai-gateway/upstreamError'
 
-/** AI SDK 上游错误 → 固定形状文案（批 2 review MEDIUM-4）。绝不透传 err.message ——
- *  中转的错误体可能回显 Authorization / 自定义 header 值，err.message 会带上它们。
- *  APICallError → 'HTTP <status> APICallError'；其余 → 错误类名 + 固定文案。
- *  仅供 AI SDK（provider registry）调用路径；flag off 裸 fetch 路径的既有错误处理不走它。 */
-export function sanitizedUpstreamErrorMessage(err: unknown): string {
-  if (APICallError.isInstance(err)) {
-    return err.statusCode != null
-      ? `HTTP ${err.statusCode} ${err.name}`
-      : `${err.name}: upstream LLM call failed`
-  }
-  if (err instanceof Error) return `${err.name}: upstream LLM call failed`
-  return 'unknown upstream LLM error'
-}
+const MAX_OUTPUT_TOKENS = 64_000
 
 export interface MainProcessResolvedProviderModel extends ResolvedProviderModel {
   maxOutputTokens: number
@@ -34,6 +23,31 @@ export interface MainProcessProviderModelResolver extends ProviderModelResolver 
 }
 
 let sharedResolverPromise: Promise<MainProcessProviderModelResolver> | null = null
+
+/**
+ * 发版终审 HIGH-1（fable）— keytar-only 旧 LLM key 一次性回填。
+ *
+ * Python seed 只读 .env：key 只存在 macOS Keychain（keytar slot、未 dual-write 到 .env）
+ * 的存量用户，seed 出的 default provider 行密文为空 → flag on 后五个 LLM 入口全 503。
+ * 修法：flag-on 启动时（resolver 构建**之前**，见 ai_gateway_lifecycle 调用点）拉一次
+ * snapshot——default 行无 key（snapshot 返回解密 key 字段，判空即可）且 legacy 链
+ * （getLlmApiKey：env → keytar）有值 → PATCH 回填；serve-api 落库即 bump version，后建的
+ * resolver 首拉快照天然拿到新 key。幂等（default 行已有 key 恒 no-op）；任何失败仅
+ * warning，绝不阻断 gateway 启动（fail-open 腿仍可用 legacy env key 兜底）。
+ */
+export async function backfillLegacyDefaultProviderKey(): Promise<void> {
+  try {
+    const snapshot = await daemonRequest<ProviderSnapshot>('GET', '/llm/providers/snapshot')
+    const defaultRow = snapshot.providers.find((provider) => provider.id === 'default')
+    if (!defaultRow || defaultRow.apiKey) return
+    const legacyKey = await getLlmApiKey()
+    if (!legacyKey) return
+    await daemonRequest('PATCH', '/llm/providers/default', { body: { apiKey: legacyKey } })
+    console.log('[ai-gateway] backfilled the keytar-only LLM key into the default provider row')
+  } catch (err) {
+    console.warn('[ai-gateway] legacy LLM key backfill skipped (non-fatal)', err)
+  }
+}
 
 /** Mirror electron readEnvBool: only '1'/'true' (case-insensitive) → true. */
 export function isLlmProviderRegistryEnabled(): boolean {

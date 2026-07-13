@@ -69,6 +69,24 @@ const MAX_OUTPUT_CEILING = 64_000
 // the registry path is on; Python provider_routing carries the same semantics.
 const KEY_OPTIONAL_PROTOCOLS: ReadonlySet<string> = new Set(['openai-compatible'])
 
+// 发版终审 M2（codex）— 自定义 header 与系统鉴权头碰撞时系统 apiKey 恒赢（大小写不敏感），
+// 对齐 Python probe `_merge_headers` 的既有语义（llm_providers.py）：锁定版本的各 AI SDK 在
+// 系统鉴权头**之后**展开自定义 headers，自定义 `Authorization`/`X-API-Key` 会顶掉 apiKey →
+// 出现「Settings 测试成功但 chat 失败」。剔除仅在行 key 非空时做——keyless openai-compatible
+// （LAN 网关）可能以自定义 Authorization 作唯一凭证（Python 侧 api_key 为空时 auth={}，
+// 自定义头同样存活），与可达路径上的 Python 行为逐一对齐。
+const AUTH_HEADER_NAMES: ReadonlySet<string> = new Set(['authorization', 'x-api-key'])
+
+function sanitizeProviderHeaders(provider: ProviderSnapshotProvider): Record<string, string> {
+  if (!provider.apiKey) return provider.headers
+  const out: Record<string, string> = {}
+  for (const [name, value] of Object.entries(provider.headers)) {
+    if (AUTH_HEADER_NAMES.has(name.toLowerCase())) continue
+    out[name] = value
+  }
+  return out
+}
+
 function createProvider(
   provider: ProviderSnapshotProvider,
   logger: ProviderRegistryLogger
@@ -76,7 +94,7 @@ function createProvider(
   const rawBaseUrl = provider.baseUrl.trim()
   const options = {
     apiKey: provider.apiKey,
-    headers: provider.headers
+    headers: sanitizeProviderHeaders(provider)
   }
 
   // HIGH-2 — per-protocol baseURL canonicalization (双端契约, mirrored by Python provider_routing):

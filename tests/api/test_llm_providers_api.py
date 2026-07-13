@@ -21,6 +21,9 @@
      省略/全量替换/{} 清空三语义；snapshot 仍含全值
  12. 批2 HIGH-2：两个外呼点（/models/refresh + /test）的 base_url 最小策略——仅
      http/https、拒 userinfo；坏 base 零外呼；有意不封私网（本地 ollama 合法）
+ 13. 终审 MEDIUM-4：provider create/PATCH 严格 schema（对齐 model upsert）——未知顶层
+     字段 400 / enabled 严格 bool / displayName·baseUrl·apiKey 严格 string / protocol
+     枚举 / sortOrder 0..10000 / headers 平坦 string→string；PATCH 省略=不改语义保持
 
 隔离：每用例独立 agent_config.db（env 覆盖 + 单例 reset）+ keyfile master key（绝不弹真
 钥匙串，镜像 tests/agent_config/test_secrets.py）+ stub ``_resolve_seed_inputs``（seed 不
@@ -175,6 +178,106 @@ def test_provider_crud_error_paths(client: TestClient):
     # 缺行 → 404
     assert client.delete("/api/llm/providers/nope").status_code == 404
     assert client.patch("/api/llm/providers/nope", json={"enabled": True}).status_code == 404
+
+
+# ── MEDIUM-4（终审）. provider create/PATCH 严格 schema ─────────────────────────────────
+
+
+def test_provider_create_strict_validation(client: TestClient):
+    """终审 MEDIUM-4：create 对齐 model upsert 的严格 schema——未知顶层字段 400（拼错
+    字段名不再被静默忽略）；enabled 严格 bool（``"false"`` 曾被 bool() 转成 True 写成
+    相反状态）；字符串字段拒对象/数字（曾被 str() 字符串化入库）；protocol 枚举；
+    sortOrder 0..10000（bool 显式拒）；headers 平坦 string→string。"""
+
+    def _post(payload):
+        return client.post(
+            "/api/llm/providers", json={"id": "strict1", "protocol": "openai", **payload}
+        )
+
+    # 未知顶层字段（如 camelCase 拼错成 baseURL）
+    r = _post({"baseURL": "https://x.example"})
+    assert r.status_code == 400 and r.json()["error"]["code"] == "E_INVALID_ARG"
+    # enabled 隐式转换
+    assert _post({"enabled": "false"}).status_code == 400
+    assert _post({"enabled": 1}).status_code == 400
+    # 字符串字段严格（含 null——清空传 ''）
+    assert _post({"displayName": {"nested": True}}).status_code == 400
+    assert _post({"displayName": None}).status_code == 400
+    assert _post({"baseUrl": 42}).status_code == 400
+    assert _post({"apiKey": 123}).status_code == 400
+    # protocol 枚举（endpoint 层，非法值不触达 store）
+    assert (
+        client.post("/api/llm/providers", json={"id": "strict1", "protocol": "grpc"}).status_code
+        == 400
+    )
+    # sortOrder：字符串 / 负数 / 超界 / bool
+    assert _post({"sortOrder": "5"}).status_code == 400
+    assert _post({"sortOrder": -1}).status_code == 400
+    assert _post({"sortOrder": 10_001}).status_code == 400
+    assert _post({"sortOrder": True}).status_code == 400
+    # headers：非 dict / 嵌套 / 非 string 值
+    assert _post({"headers": ["X-A"]}).status_code == 400
+    assert _post({"headers": {"X-A": {"nested": "v"}}}).status_code == 400
+    assert _post({"headers": {"X-A": 1}}).status_code == 400
+    # 以上全被拒 → 行未落库
+    ids = [p["id"] for p in client.get("/api/llm/providers").json()["data"]["providers"]]
+    assert "strict1" not in ids
+    # 合法边界值通过：sortOrder 0/10000、apiKey null = 无 key、enabled 严格 bool
+    r = _post({"sortOrder": 0, "apiKey": None, "enabled": False})
+    assert r.status_code == 200
+    created = r.json()["data"]
+    assert created["enabled"] is False and created["sortOrder"] == 0
+    assert created["hasKey"] is False
+    r = client.post(
+        "/api/llm/providers", json={"id": "strict2", "protocol": "openai", "sortOrder": 10_000}
+    )
+    assert r.status_code == 200 and r.json()["data"]["sortOrder"] == 10_000
+
+
+def test_provider_patch_strict_validation(client: TestClient):
+    """终审 MEDIUM-4：PATCH 同套严格 schema（对象值曾在 SQLite 绑定阶段炸成未捕获 500）；
+    语义保持——省略 = 不改、apiKey null = 清除、protocol 合法枚举仍可改（onboarding
+    PATCH upsert 路径带 protocol）。"""
+    client.get("/api/llm/providers")  # seed
+    r = client.post(
+        "/api/llm/providers",
+        json={
+            "id": "p1",
+            "protocol": "openai-compatible",
+            "displayName": "P1",
+            "baseUrl": "https://p1.example/v1",
+            "apiKey": "sk-p1-secret-7777",
+            "sortOrder": 3,
+        },
+    )
+    assert r.status_code == 200
+
+    url = "/api/llm/providers/p1"
+    # 未知字段（snake_case 拼法）/ 隐式转换 / 对象值 / null 字符串字段 → 全 400
+    assert client.patch(url, json={"display_name": "snake"}).status_code == 400
+    assert client.patch(url, json={"enabled": 1}).status_code == 400
+    assert client.patch(url, json={"displayName": {"x": 1}}).status_code == 400
+    assert client.patch(url, json={"baseUrl": None}).status_code == 400
+    assert client.patch(url, json={"sortOrder": "5"}).status_code == 400
+    assert client.patch(url, json={"sortOrder": 10_001}).status_code == 400
+    assert client.patch(url, json={"headers": {"X-A": 1}}).status_code == 400
+    assert client.patch(url, json={"protocol": "grpc"}).status_code == 400
+    # 以上全被拒 → 行原样
+    row = next(
+        p for p in client.get("/api/llm/providers").json()["data"]["providers"] if p["id"] == "p1"
+    )
+    assert row["displayName"] == "P1" and row["sortOrder"] == 3 and row["enabled"] is True
+    assert row["keyLast4"] == "7777"
+    # 省略 = 不改：只动 enabled，其余字段保持
+    patched = client.patch(url, json={"enabled": False}).json()["data"]
+    assert patched["enabled"] is False
+    assert patched["displayName"] == "P1" and patched["sortOrder"] == 3
+    assert patched["keyLast4"] == "7777"
+    # apiKey null = 清除（前端契约 string|null）
+    r = client.patch(url, json={"apiKey": None})
+    assert r.status_code == 200 and r.json()["data"]["hasKey"] is False
+    # protocol 合法枚举可改
+    assert client.patch(url, json={"protocol": "openai"}).json()["data"]["protocol"] == "openai"
 
 
 # ── HIGH-1. header 值 write-only（CRUD 投影只回 headerNames）─────────────────────────

@@ -203,7 +203,11 @@ def test_capture_llm_config_openai_family_route(monkeypatch, tmp_path):
     assert llm["config"]["api_key"] == "sk-qwen"
     assert llm["config"]["openai_base_url"] == "https://dashscope.aliyuncs.com/compatible-mode/v1"
     assert llm["config"]["max_tokens"] == me.CAPTURE_MAX_TOKENS  # 8192 非流式 clamp 保持
-    assert "temperature" not in llm["config"]  # None hack 是 anthropic 专属
+    # 终审 LOW-①（钉死有意行为）：openai 分支刻意不传 temperature=None——mem0 OpenAILLM 走
+    # base _get_common_params，temperature 键无条件进请求参数（AnthropicLLM 的 override 才会
+    # 在 None 时省略字段），显式 None 会被 openai SDK 序列化成 wire 上的 "temperature": null
+    # （官方接受、严格 openai-compatible 上游可能 400）。省略键 = mem0 默认 0.1。
+    assert "temperature" not in llm["config"]
 
     # per-model max_output 更小 → 再收紧
     monkeypatch.setattr(pr, "resolve_route", lambda ref: _provider_route(max_output=4000))
@@ -248,9 +252,11 @@ def test_capture_llm_config_anthropic_route(monkeypatch, tmp_path):
     )
 
 
-def test_capture_llm_config_route_error_falls_back_to_legacy(monkeypatch, tmp_path):
-    # MEDIUM-4：显式 providerRef 路由失败（provider 缺失/禁用）→ warning + 回退 legacy 网关
-    # （capture 是 best-effort 后台任务，不 crash 不丢本轮 capture）。
+def test_capture_llm_config_route_error_skips_capture(monkeypatch, tmp_path):
+    # 终审 LOW-②：显式 providerRef 路由失败（provider 缺失/禁用）→ 跳过本轮 capture
+    # （Mem0CaptureSkip），而非回退 legacy 网关发 'missing:m' 这类注定 404 的 bogus-model 请求。
+    import pytest
+
     from src.llm_agent import provider_routing as pr
 
     monkeypatch.setattr(me, "_mem0_root", lambda: str(tmp_path / "mem0"))
@@ -262,10 +268,27 @@ def test_capture_llm_config_route_error_falls_back_to_legacy(monkeypatch, tmp_pa
         )
 
     monkeypatch.setattr(pr, "resolve_route", _raise)
-    llm = me.build_mem0_config()["llm"]
-    assert llm["provider"] == "anthropic"
-    assert llm["config"]["anthropic_base_url"] == "https://crs.chenge.ink/api"
-    assert llm["config"]["api_key"] == "sk-test"
+    with pytest.raises(me.Mem0CaptureSkip, match="missing"):
+        me.build_mem0_config()
+
+
+def test_capture_llm_config_keyless_openai_provider_skips_capture(monkeypatch, tmp_path):
+    # 终审 LOW-③：keyless openai 系 provider（本地 Ollama 等）作 capture 模型 → 跳过 + warning
+    # ——mem0 OpenAILLM 空 key 会回退 env OPENAI_API_KEY 构造客户端（凭证错配/外泄）。
+    import pytest
+
+    from src.llm_agent import provider_routing as pr
+
+    monkeypatch.setattr(me, "_mem0_root", lambda: str(tmp_path / "mem0"))
+    monkeypatch.setattr(me, "cfg", _fake_cfg(memory_capture_model="ollama:qwen3"))
+    route = _provider_route(
+        provider_id="ollama", protocol="openai-compatible",
+        base_url="http://127.0.0.1:11434/v1", api_key="",
+        model_id="qwen3", model_ref="ollama:qwen3",
+    )
+    monkeypatch.setattr(pr, "resolve_route", lambda ref: route)
+    with pytest.raises(me.Mem0CaptureSkip, match="ollama"):
+        me.build_mem0_config()
 
 
 def test_capture_llm_config_google_falls_back_to_legacy(monkeypatch, tmp_path):
