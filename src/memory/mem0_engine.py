@@ -80,34 +80,85 @@ def _mem0_root() -> str:
     return os.path.join(DATA_ROOT, "mem0")
 
 
+def _capture_llm_config(extraction_model: str) -> Dict[str, Any]:
+    """mem0 `llm` 段（task 07-12 P2）：抽取模型支持 providerRef，按 provider 行 protocol 映射。
+
+    flag `MAILAGENT_LLM_PROVIDER_REGISTRY` off（默认）/ provider 查不到（fail-open）→
+    legacy 分支：anthropic provider + 全局 env 网关，字节级不变。
+    """
+    # 轻量纯配置解析（无 mem0/fastembed 重依赖）；函数级 import 镜像本文件懒加载纪律。
+    from loguru import logger
+
+    from src.llm_agent import provider_routing
+
+    route = provider_routing.resolve_route(extraction_model)
+    if route is not None and route.protocol in provider_routing.OPENAI_FAMILY_PROTOCOLS:
+        # openai 系 → mem0 openai provider。openai_base_url 用统一归一 helper（含 /vN，
+        # openai SDK 对 base 追加 /chat/completions）。8192 非流式 clamp 两腿都保持
+        # （per-model max_output 更小则再收紧）。
+        return {
+            "provider": "openai",
+            "config": {
+                "model": route.model_id,
+                "api_key": route.api_key,
+                "openai_base_url": provider_routing.openai_base_for(route),
+                "max_tokens": provider_routing.clamp_max_tokens(CAPTURE_MAX_TOKENS, route),
+            },
+        }
+    if route is not None and route.protocol == "anthropic":
+        # per-provider anthropic 腿：anthropic_base_url 不含 /v1（SDK 自动加 /v1/messages），
+        # 行 base 原样；空 = 官方默认（省略该 key 走 SDK 默认 base）。temperature None 语义
+        # 同 legacy 分支（见下）。
+        conf: Dict[str, Any] = {
+            "model": route.model_id,
+            "api_key": route.api_key,
+            "max_tokens": provider_routing.clamp_max_tokens(CAPTURE_MAX_TOKENS, route),
+            "temperature": None,
+        }
+        base = (route.base_url or "").rstrip("/")
+        if base:
+            conf["anthropic_base_url"] = base
+        return {"provider": "anthropic", "config": conf}
+    if route is not None:
+        logger.warning(
+            "[mem0] provider protocol {} not supported for memory capture "
+            "(model={}) — falling back to the global anthropic gateway",
+            route.protocol,
+            extraction_model,
+        )
+    # legacy（flag off / fail-open / 不支持的协议回退）：现状字节级。
+    base = (cfg.llm_api_base or "").rstrip("/")
+    return {
+        # anthropic provider 经 CRS 的 anthropic 腿（/v1/messages）：claude 返回标准 text，
+        # 不像 OpenAI 腿（强制 stream + 把 claude 转译成非标准 list 让 mem0 解析失败）。
+        # anthropic_base_url 不含 /v1（anthropic SDK 自动加 /v1/messages），复用 client.py 同款语义。
+        "provider": "anthropic",
+        "config": {
+            "model": extraction_model,
+            "api_key": cfg.llm_api_key,
+            "anthropic_base_url": base,
+            "max_tokens": CAPTURE_MAX_TOKENS,
+            # 显式传 None 覆盖 AnthropicConfig 的默认 temperature=0.1。
+            # claude-opus-4-8 等模型弃用 temperature 参数（400 invalid_request_error）；
+            # mem0 AnthropicConfig.__init__ 默认 0.1，仅省略 key 不够—必须传 None 让
+            # _get_common_params 的 `has_temperature = self.config.temperature is not None`
+            # 判为 False，才能不向 API 发送 temperature 字段。
+            "temperature": None,
+        },
+    }
+
+
 def build_mem0_config(model: Optional[str] = None) -> Dict[str, Any]:
     """组装 mem0 `Memory.from_config` 的 config dict（纯函数，不 import mem0）。
 
-    抽取 model 优先级：显式 `model` > `MEMORY_CAPTURE_MODEL` > `LLM_MODEL`。
+    抽取 model 优先级：显式 `model` > `MEMORY_CAPTURE_MODEL` > `LLM_MODEL`。支持
+    providerRef（`providerId:modelId`，task 07-12 P2）——协议映射见 `_capture_llm_config`。
     """
     root = _mem0_root()
     extraction_model = model or cfg.memory_capture_model or cfg.llm_model
-    base = (cfg.llm_api_base or "").rstrip("/")
     return {
         "version": "v1.1",
-        "llm": {
-            # anthropic provider 经 CRS 的 anthropic 腿（/v1/messages）：claude 返回标准 text，
-            # 不像 OpenAI 腿（强制 stream + 把 claude 转译成非标准 list 让 mem0 解析失败）。
-            # anthropic_base_url 不含 /v1（anthropic SDK 自动加 /v1/messages），复用 client.py 同款语义。
-            "provider": "anthropic",
-            "config": {
-                "model": extraction_model,
-                "api_key": cfg.llm_api_key,
-                "anthropic_base_url": base,
-                "max_tokens": CAPTURE_MAX_TOKENS,
-                # 显式传 None 覆盖 AnthropicConfig 的默认 temperature=0.1。
-                # claude-opus-4-8 等模型弃用 temperature 参数（400 invalid_request_error）；
-                # mem0 AnthropicConfig.__init__ 默认 0.1，仅省略 key 不够—必须传 None 让
-                # _get_common_params 的 `has_temperature = self.config.temperature is not None`
-                # 判为 False，才能不向 API 发送 temperature 字段。
-                "temperature": None,
-            },
-        },
+        "llm": _capture_llm_config(extraction_model),
         "embedder": {
             "provider": "fastembed",
             "config": {"model": BGE_MODEL, "embedding_dims": BGE_DIMS},

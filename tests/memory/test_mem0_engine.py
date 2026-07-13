@@ -177,6 +177,84 @@ def test_capture_instructions_untrusted_framing(monkeypatch, tmp_path):
     assert "auto-approve" in low or "approval" in low  # 不存审批/安全相关「偏好」
 
 
+def _provider_route(**over):
+    from src.llm_agent.provider_routing import ProviderRoute
+
+    base = dict(
+        provider_id="dashscope", protocol="openai-compatible",
+        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        api_key="sk-qwen", model_id="qwen-max", model_ref="dashscope:qwen-max",
+    )
+    base.update(over)
+    return ProviderRoute(**base)
+
+
+def test_capture_llm_config_openai_family_route(monkeypatch, tmp_path):
+    # task 07-12 P2：flag on + openai 系 provider → mem0 openai provider + 归一 base（含 /vN）。
+    from src.llm_agent import provider_routing as pr
+
+    monkeypatch.setattr(me, "_mem0_root", lambda: str(tmp_path / "mem0"))
+    monkeypatch.setattr(me, "cfg", _fake_cfg(memory_capture_model="dashscope:qwen-max"))
+    monkeypatch.setattr(pr, "resolve_route", lambda ref: _provider_route())
+
+    llm = me.build_mem0_config()["llm"]
+    assert llm["provider"] == "openai"
+    assert llm["config"]["model"] == "qwen-max"  # wire id（冒号后段）
+    assert llm["config"]["api_key"] == "sk-qwen"
+    assert llm["config"]["openai_base_url"] == "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    assert llm["config"]["max_tokens"] == me.CAPTURE_MAX_TOKENS  # 8192 非流式 clamp 保持
+    assert "temperature" not in llm["config"]  # None hack 是 anthropic 专属
+
+    # per-model max_output 更小 → 再收紧
+    monkeypatch.setattr(pr, "resolve_route", lambda ref: _provider_route(max_output=4000))
+    assert me.build_mem0_config()["llm"]["config"]["max_tokens"] == 4000
+
+
+def test_capture_llm_config_anthropic_route(monkeypatch, tmp_path):
+    # flag on + anthropic 协议 provider（Kimi anthropic-compat 类）→ 行 base 原样、8192 保持。
+    from src.llm_agent import provider_routing as pr
+
+    monkeypatch.setattr(me, "_mem0_root", lambda: str(tmp_path / "mem0"))
+    monkeypatch.setattr(me, "cfg", _fake_cfg(memory_capture_model="kimi:kimi-k2"))
+    route = _provider_route(
+        provider_id="kimi", protocol="anthropic",
+        base_url="https://api.moonshot.cn/anthropic/", api_key="sk-kimi",
+        model_id="kimi-k2", model_ref="kimi:kimi-k2",
+    )
+    monkeypatch.setattr(pr, "resolve_route", lambda ref: route)
+
+    llm = me.build_mem0_config()["llm"]
+    assert llm["provider"] == "anthropic"
+    assert llm["config"]["model"] == "kimi-k2"
+    assert llm["config"]["api_key"] == "sk-kimi"
+    assert llm["config"]["anthropic_base_url"] == "https://api.moonshot.cn/anthropic"
+    assert llm["config"]["max_tokens"] == me.CAPTURE_MAX_TOKENS
+    assert llm["config"]["temperature"] is None  # 同 legacy 语义
+
+    # 行 base 空 = 官方默认 → 省略 anthropic_base_url（SDK 默认 api.anthropic.com）
+    empty_base = _provider_route(provider_id="anthro", protocol="anthropic",
+                                 base_url="", model_id="claude-x", model_ref="anthro:claude-x")
+    monkeypatch.setattr(pr, "resolve_route", lambda ref: empty_base)
+    assert "anthropic_base_url" not in me.build_mem0_config()["llm"]["config"]
+
+
+def test_capture_llm_config_google_falls_back_to_legacy(monkeypatch, tmp_path):
+    # google 协议不支持 → warning + 回退全局 anthropic 网关（legacy 形状）。
+    from src.llm_agent import provider_routing as pr
+
+    monkeypatch.setattr(me, "_mem0_root", lambda: str(tmp_path / "mem0"))
+    monkeypatch.setattr(me, "cfg", _fake_cfg(memory_capture_model="gem:gemini-3"))
+    route = _provider_route(provider_id="gem", protocol="google",
+                            model_id="gemini-3", model_ref="gem:gemini-3")
+    monkeypatch.setattr(pr, "resolve_route", lambda ref: route)
+
+    llm = me.build_mem0_config()["llm"]
+    assert llm["provider"] == "anthropic"
+    assert llm["config"]["model"] == "gem:gemini-3"  # legacy：整串 + 全局网关
+    assert llm["config"]["anthropic_base_url"] == "https://crs.chenge.ink/api"
+    assert llm["config"]["api_key"] == "sk-test"
+
+
 def test_package_lazy_export():
     # LOW-2（codex）：from src.memory import <符号> 经 __getattr__ 懒解析仍可用（import 包本身
     # 不拉 src.config / 重依赖）；未知属性照常 AttributeError。
