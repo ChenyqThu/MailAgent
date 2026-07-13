@@ -54,25 +54,30 @@ CREATE UNIQUE INDEX idx_calendar_event_unique
 ```
 
 `source` 三态共存:
-- `caldav` — CalendarSyncWorker 从 DavMail CalDAV 拉的 (主路径)
-- `email_ics` — meeting_sync.py 从邮件 .ics 派生 (`related_email_internal_id` 关联)
+- `caldav` — CalendarSyncWorker 从 DavMail CalDAV 拉的 (主路径, 全仓唯一活跃写入方)
+- `email_ics` — **预留枚举, 从未实现写入** (生产 0 行, 2026-07 epic 正式判死; `src/mail/meeting_sync.py` 只写 Notion + `recurring_series`, 不写本表)。邮件 ↔ 日历联动的正解 = 按 `ical_uid` 反查 caldav 行 (`idx_calendar_event_uid` 索引现成, epic 阶段 2 落地), 不要再补 email_ics 写入
 - `legacy_calendar_app` — Phase 3 已下线 (2026-05-25); 枚举值保留作 backward compat, 不再写新行
 
 ## 模块结构
 
 ```
-src/calendar_sync/  (Phase 1 新模块, ~900 LOC)
+src/calendar_sync/  (Phase 1 起新模块; Phase 2/3/4 写能力齐备)
   __init__.py
   repository.py     CalendarEventRepository CRUD + 时间窗口查询 (含 RRULE 展开)
   expander.py       expand_in_window (dateutil.rrule + EXDATE/RDATE/max_count cap)
   reconciler.py     reconcile_full_window (软删除检测) + reconcile_incremental
-  worker.py         CalendarSyncWorker asyncio loop (60s ctag 轮询; ctag 不可用 1h time-fallback)
+  worker.py         CalendarSyncWorker asyncio loop (60s ctag 轮询; ctag 取不到 1h time-fallback 兜底)
+  caldav_reader.py  CalDAVReader (Phase 3 从 calendar_notion 迁入; cal.search(expand=False) 返 master + RRULE)
+  caldav_writer.py  Phase 2/4 — CalDAV PUT/DELETE (create/update/update_occurrence/split_series/delete)
+  rsvp.py           Phase 2.1 — RSVP orchestration (读行 → iTIP REPLY → SMTP → 回写 response_status)
+  itip_reply.py     Phase 2.1 — iTIP REPLY (RFC 5546) MIME 拼装 + DavMail SMTP 发送
+  service.py        Phase 3 — CalendarService facade (CLI / IPC / HTTP 共用业务入口)
+  _common.py        跨模块共享 const/helper (SOURCES_TRY_ORDER, RFC 5545 escape, UTC 格式化)
 
 src/calendar_notion/
-  caldav_reader.py  CalDAVReader (Phase 1.5: cal.search(expand=False) 返 master + RRULE)
-  meeting_sync.py   邮件 .ics → calendar_event (source='email_ics')
   recurring_invite.py  discover_recurring (Phase 1.5: 改读 calendar_event WHERE rrule != '')
   sync.py           CalendarNotionSync (Notion 镜像)
+  (注: meeting_sync.py 在 src/mail/, 只写 Notion + recurring_series, 不写 calendar_event)
 
 frontend/src/shared/components/calendar/
   CalendarToolbar.tsx   顶部 toolbar (视图切换 + 日期导航 + 同步按钮)
@@ -83,9 +88,11 @@ frontend/src/shared/components/calendar/
   hooks/useCalendarEvents.ts  react-query + 时间窗口计算
   views/{Day,Week,Month,Agenda}View.tsx
 
-frontend/src/electron/main/handlers/calendar.ts
-  5 个新 IPC: events:list / events:get / sync:status / sync:trigger / calendarNames
-  + 3 个老 IPC: recurringDiscover / recurringReplay / expand
+frontend/src/electron/main/handlers/calendar.ts  (注册; 实现拆在 calendar-{read,write,sync,shared}.ts)
+  13 个 IPC 通道:
+  - 4 个 SQLite 直读: eventsList / eventGet / syncStatus / calendarNames
+  - 9 个写/替身 (经 CLI 子进程): recurringDiscover / recurringReplay / expand /
+    syncTrigger / eventReplay / eventRsvp / eventCreate / eventUpdate / eventDelete
 ```
 
 ## CLI 命令
@@ -119,10 +126,10 @@ mailagent calendar expand --no-dry-run             # 周期会议 Notion 镜像 
 
 ## 已知限制
 
-1. **CTag 取不到**: DavMail 6.7 PROPFIND getctag XML 格式跟 caldav lib 不一致, ctag 始终 null. worker 走 1h time-fallback 兜底. 用户改日历最多 1h 延迟; 急用按 [同步] 按钮.
+1. ~~**CTag 取不到**~~ **已修复** (`e2526373`, caldav 3.x BaseElement 取法): 生产 ctag 有值, 60s 轮询 ctag 变更即增量 sync; 1h time-fallback 只剩 ctag 偶发取不到时的兜底角色.
 2. **caldav-only events `related_email_internal_id=0`**: Replay 按钮无效, Phase 2 改"基于 calendar_event 重导出 Notion"语义.
 3. **窗口外 master 也保留**: `expand=False` 后, 即使 master dtstart 在 2025 年, 只要 RRULE 在 2026 仍 valid, 行都保留. 客户端 expander 按窗口过滤显示.
-4. **多 calendar 支持有限**: 当前只默认 `日历` (Outlook 默认 calendar name 中文). 共享日历需 toolbar chip + worker 拉所有 calendars.
+4. ~~**多 calendar 支持有限**~~ **已解决** (worker F8): 启动即 discover 全部 calendars, 之后每 ~1h (60 ticks) 重 list + diff (新增 cal 单独全量 sync, 移除 cal 保留行); 前端 toolbar 有多日历 chips.
 
 ## 重启 / 验收命令
 

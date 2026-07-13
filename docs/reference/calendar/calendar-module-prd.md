@@ -286,11 +286,13 @@ URL 形态: `/admin/calendar?view=<view>` (TanStack Router)
 
 - [ ] **EventFormModal 视觉 polish** (§11.1) — 当前 inline Tailwind 简洁但糙; 抽
       .modal-* class + attendees chip 输入 + 改 datetime picker
-- [ ] **删除 undo toast** (§11.2) — 5s 撤销窗口 (替代 native confirm)
+- [x] **删除 undo toast** (§11.2) — 5s 撤销窗口 (替代 native confirm); 已 ship
+      `UndoToastStack.tsx` + `shared/state/calendar-undo.ts`
 - [ ] **light 主题验证** (§11.3) — Phase 2 全程 dark first 设计, light 主题没实测
 - [ ] **EventChip empty title 兜底** (§11.4) — `(无标题)` 改 italic 灰 `未命名事件`
 - [ ] **副 status bar 视觉重做** (§11.5) — 用户向 vs 运维向元数据分离
-- [ ] **RSVP vs owner ops 视觉分流** (§11.6) — `organizer === user.email` 时隐藏 RSVP
+- [x] **RSVP vs owner ops 视觉分流** (§11.6) — 已 ship: `EventDetailDrawer.tsx`
+      isOwner (organizer === user.email) 二分 owner 操作行 vs RSVP 行 + dw-role badge
 
 ### Phase 3: legacy 下线 (Phase 2 跑稳 2-4 周后)
 
@@ -302,12 +304,14 @@ URL 形态: `/admin/calendar?view=<view>` (TanStack Router)
 
 - [ ] **CTag fallback 优化**: 换 sync-token (RFC 6578) 或 IMAP IDLE 信号 (当前 1h
       time-fallback, 用户改日历最多 1h 才同步)
-- [ ] **多 calendar 支持** (★ 高优先级, §11.7) — toolbar 加 calendar chip 切换器;
-      useCalendarNames 已 ship; EventFormModal create 加 calendar 选择
-- [ ] **全天事件 + 跨时区** (§11.8) — EventFormModal 加 [全天] toggle + tz select;
-      CalDAV 全天用 DATE 而非 DATE-TIME
-- [ ] **周期事件创建/编辑 (RRULE)** (§11.9) — EventFormModal 加 "重复" 段;
-      编辑 RRULE 事件分 "改这一次 / 改未来 / 改整个系列" (Outlook/Google 标准 3 模式)
+- [x] **多 calendar 支持** (★ 高优先级, §11.7) — 已 ship: toolbar 多日历 chips
+      (`CalendarToolbar` selectedCalendars) + EventFormModal create calendar 选择 +
+      worker F8 自动拉全部 calendars
+- [x] **全天事件** (§11.8 前半) — 已 ship: EventFormModal [全天] toggle + CalDAV
+      `VALUE=DATE`; **跨时区 tz select 未做** (= issue #10, icebox)
+- [x] **周期事件创建/编辑 (RRULE)** (§11.9) — 已 ship: EventFormModal "重复" 段
+      (`RRuleEditor.tsx`) + 编辑分 "改这一次 / 改未来 / 改整个系列" 3 模式
+      (update_occurrence / split_series)
 - [ ] **FTS5 搜索**: `calendar_event_fts` 表 + 顶栏 ⌘K 搜会议
 - [ ] **右键菜单** (§11.10) — EventBlock/Chip 右键弹 [打开/复制链接/跳邮件/复制 UID/删除]
 
@@ -397,16 +401,16 @@ URL 形态: `/admin/calendar?view=<view>` (TanStack Router)
 
 ### Phase 2.5 UI polish (待 mockup 引领, §11/§12 详)
 - [ ] EventFormModal 视觉 polish (§11.1)
-- [ ] 删除 undo toast (§11.2)
+- [x] 删除 undo toast (§11.2) — `UndoToastStack.tsx` + `calendar-undo.ts`
 - [ ] light 主题验证 (§11.3)
 - [ ] EventChip empty title fallback (§11.4)
 - [ ] 副 status bar 视觉重做 (§11.5)
-- [ ] RSVP vs owner ops 视觉分流 (§11.6)
+- [x] RSVP vs owner ops 视觉分流 (§11.6) — EventDetailDrawer isOwner 二分
 
 ### Phase 4 (待 mockup + impl)
-- [ ] 多 calendar chip 切换器 (§11.7)
-- [ ] 全天事件 + 跨时区 (§11.8)
-- [ ] 周期事件 RRULE 创建/编辑 (§11.9)
+- [x] 多 calendar chip 切换器 (§11.7) — CalendarToolbar selectedCalendars chips
+- [x] 全天事件 (§11.8 前半) — [全天] toggle + `VALUE=DATE`; 跨时区 tz select 未做 (= #10)
+- [x] 周期事件 RRULE 创建/编辑 (§11.9) — `RRuleEditor.tsx` + 改这一次/改未来/改整系列
 
 ---
 

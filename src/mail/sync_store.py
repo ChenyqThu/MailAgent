@@ -1053,7 +1053,8 @@ class SyncStore:
         # 单一数据源. PK=id (AUTOINCREMENT), 业务唯一性靠 UNIQUE(ical_uid, recurrence_id, source).
         # 同一 ical_uid 可能跨 source 各有一行 (灰度期 caldav / legacy_calendar_app 共存):
         #   - 'caldav': CalendarSyncWorker 从 DavMail CalDAV 拉的 (Phase 1 主路径)
-        #   - 'email_ics': meeting_sync.py 解析邮件邀请的 .ics 派生 (related_email_internal_id 关联)
+        #   - 'email_ics': 预留枚举, 从未实现写入 (meeting_sync 只写 Notion +
+        #     recurring_series; 详见 calendar-ops.md)
         #   - 'legacy_calendar_app': calendar_main.py / src/calendar/ 老 EventKit / AppleScript
         #     路径写入 (Phase 1 灰度期保留, 2-4 周对账后下线)
         # 时间字段全部 UTC epoch (REAL), 跨时区 / DST 统一; 前端 toLocaleString 转本地展示.
