@@ -331,6 +331,12 @@ CAL_NAME = "Work"
 # Window the seeded event falls in (UTC).
 CAL_WINDOW_FROM = "2026-06-01"
 CAL_WINDOW_TO = "2026-06-03"
+# 阶段 2.1 (P1-3) — email_meeting 映射 (email-link / source-email 端点)。
+CAL_INVITE_EMAIL_ID = 9001           # 最新 REQUEST 邀请邮件 → CAL_EVENT_UID
+CAL_INVITE_EMAIL_OLD_ID = 9002       # 同 uid 更早一封 (CANCEL)
+CAL_PLAIN_EMAIL_ID = 9003            # 无会议映射的普通邮件 → email-link 404
+CAL_NOCAL_EMAIL_ID = 9004            # 映射到无日历行的 uid
+CAL_NOCAL_UID = "uid-no-cal"
 
 
 def _seed_cal_folder(db_path: Path) -> None:
@@ -381,6 +387,40 @@ def _seed_cal_folder(db_path: Path) -> None:
                VALUES (?,?,?,?,?,?,?,?)""",
             (CAL_NAME, "ctag-1", "tok-1", now, now, None, now, now),
         )
+        # 阶段 2.1 (P1-3) — email_meeting 映射 + 邮件元数据 (email-link /
+        # source-email 端点)。9001=最新 REQUEST → CAL_EVENT_UID; 9002=同 uid 更早
+        # CANCEL; 9003=无映射普通邮件; 9004=映射到无日历行的 uid。
+        emails = [
+            (CAL_INVITE_EMAIL_ID, "<invite-new@x>", "Sprint Planning invite",
+             "2026-06-01T09:00:00+08:00"),
+            (CAL_INVITE_EMAIL_OLD_ID, "<invite-old@x>", "Sprint Planning cancel",
+             "2026-05-30T09:00:00+08:00"),
+            (CAL_PLAIN_EMAIL_ID, "<plain@x>", "Plain email",
+             "2026-06-01T10:00:00+08:00"),
+            (CAL_NOCAL_EMAIL_ID, "<nocal@x>", "Orphan invite",
+             "2026-06-01T11:00:00+08:00"),
+        ]
+        for iid, mid, subject, date in emails:
+            conn.execute(
+                "INSERT INTO email_metadata (internal_id, message_id, subject, "
+                "sender, sender_name, date_received, mailbox, sync_status, "
+                "created_at, updated_at) "
+                "VALUES (?, ?, ?, 'boss@example.com', 'Boss', ?, '收件箱', "
+                "'synced', ?, ?)",
+                (iid, mid, subject, date, now, now),
+            )
+        meetings = [
+            (CAL_INVITE_EMAIL_ID, CAL_EVENT_UID, "REQUEST"),
+            (CAL_INVITE_EMAIL_OLD_ID, CAL_EVENT_UID, "CANCEL"),
+            (CAL_NOCAL_EMAIL_ID, CAL_NOCAL_UID, "REQUEST"),
+        ]
+        for iid, uid, method in meetings:
+            conn.execute(
+                "INSERT INTO email_meeting (internal_id, ical_uid, method, "
+                "sequence, is_recurring, created_at, updated_at) "
+                "VALUES (?, ?, ?, 0, 0, ?, ?)",
+                (iid, uid, method, now, now),
+            )
         conn.commit()
     finally:
         conn.close()

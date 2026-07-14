@@ -461,6 +461,32 @@ class CalendarEventRepository:
             row = conn.execute(sql, params).fetchone()
         return _row_to_dataclass(row) if row else None
 
+    def get_master_by_uid(self, ical_uid: str) -> Optional[CalendarEventRow]:
+        """按 uid 找代表性 master 行 (阶段 2.1 邮件→日历互跳).
+
+        同一 ical_uid 可能有多行 (跨 source 灰度共存 + occurrence 跳脱):
+        - recurrence_id IS NULL (真 master) 优先于跳脱 occurrence
+        - source 按 SOURCES_TRY_ORDER (caldav → email_ics → legacy) 优先
+        - 再按 dtstart 最早; 软删除行不参与
+        """
+        with self._conn_ctx() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM calendar_event
+                WHERE ical_uid = ? AND deleted_at IS NULL
+                ORDER BY (recurrence_id IS NULL) DESC,
+                         CASE source
+                             WHEN 'caldav' THEN 0
+                             WHEN 'email_ics' THEN 1
+                             ELSE 2
+                         END,
+                         dtstart_utc ASC
+                LIMIT 1
+                """,
+                (ical_uid,),
+            ).fetchone()
+        return _row_to_dataclass(row) if row else None
+
     def list_event_rows(
         self,
         *,

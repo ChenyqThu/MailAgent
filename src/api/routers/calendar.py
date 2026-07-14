@@ -1,8 +1,13 @@
-"""calendar 路由 — /api/calendar/* (4 读端点 + sync-trigger 写)。
+"""calendar 路由 — /api/calendar/* (6 读端点 + sync-trigger 写)。
 
-填充 4 个读端点 (handoff §2) + 远程手动同步触发 (syncTrigger; 其余写端点仍 defer):
+填充读端点 (handoff §2 + 阶段 2.1 P1-3 双向反查) + 远程手动同步触发
+(syncTrigger; 其余写端点仍 defer):
   GET  /api/calendar/events             — eventsList   (→ CalendarEventOccurrence[])
   GET  /api/calendar/events/{event_id}  — eventGet     (→ CalendarEventDetail | null, 404→null)
+  GET  /api/calendar/email-link/{internal_id}
+                                        — emailCalendarLink (→ EmailCalendarLink | null, 404→null)
+  GET  /api/calendar/events/{event_id}/source-email
+                                        — eventSourceEmail (→ EventSourceEmail | null, 404→null)
   GET  /api/calendar/sync-status        — syncStatus   (→ CalendarSyncStateItem[])
   GET  /api/calendar/names              — calendarNames (→ string[])
   POST /api/calendar/sync-trigger       — syncTrigger  (CalDAV→SQLite, to_thread, →unknown)
@@ -206,6 +211,74 @@ async def get_event(
 
     # C7: 解开 service 的 {event: <row>} wrapper，返裸 detail (CalendarEventDetail)。
     return success_envelope(data["event"], request=request, source="sqlite")
+
+
+# ===========================================================================
+# GET /api/calendar/email-link/{internal_id} — CalendarService.get_email_calendar_link
+# (阶段 2.1 P1-3 方向 A: 邮件 → .ics uid + 日历 master 行)
+# ===========================================================================
+
+
+@router.get("/email-link/{internal_id}", dependencies=[Depends(verify_cf_access)])
+async def email_calendar_link(
+    request: Request,
+    internal_id: int,
+    cfg: "Config" = Depends(get_settings),
+):
+    """按邮件 internal_id 查它携带的 .ics uid + 对应 calendar_event master 行。
+
+    **C7**: ``data`` = 单个 ``EmailCalendarLink`` (裸对象, 对齐 frontend
+    ``CalendarApi.emailCalendarLink`` 返回 ``EmailCalendarLink | null``)。
+    404 (E_NOT_FOUND) 当该邮件无会议映射 (非会议邀请 / v34 前旧邮件未回填) ——
+    HttpApi 把 404 转 null。``event`` 为 null + in_calendar=false 表示 uid 在
+    日历中 (已) 不存在, 仍是 200 (映射本身命中)。
+    """
+    svc = _build_service(cfg)
+    try:
+        data = svc.get_email_calendar_link(internal_id=internal_id)
+    except ValueError as exc:
+        raise APIError(
+            "E_NOT_FOUND",
+            str(exc),
+            hint="email has no meeting mapping (not an invite, or synced before v34)",
+            source="sqlite",
+        ) from exc
+    return success_envelope(data, request=request, source="sqlite")
+
+
+# ===========================================================================
+# GET /api/calendar/events/{event_id}/source-email — CalendarService.get_event_source_email
+# (阶段 2.1 P1-3 方向 B: ical_uid → 来源邀请邮件)
+# ===========================================================================
+
+
+@router.get(
+    "/events/{event_id}/source-email", dependencies=[Depends(verify_cf_access)]
+)
+async def event_source_email(
+    request: Request,
+    event_id: str,
+    cfg: "Config" = Depends(get_settings),
+):
+    """按 ical_uid 反查来源邀请邮件 (event_id = ical_uid, 同 eventGet 路径参数)。
+
+    **C7**: ``data`` = 单个 ``EventSourceEmail`` (裸对象, 对齐 frontend
+    ``CalendarApi.eventSourceEmail`` 返回 ``EventSourceEmail | null``)。多封同
+    uid 邮件时优先最新 METHOD:REQUEST, 无 REQUEST 时最新任意一封。404
+    (E_NOT_FOUND) 当该 uid 无映射邮件 (caldav-only 事件 / 旧邮件未回填)。
+    """
+    svc = _build_service(cfg)
+    try:
+        data = svc.get_event_source_email(ical_uid=event_id)
+    except ValueError as exc:
+        raise APIError(
+            "E_NOT_FOUND",
+            str(exc),
+            hint="no invite email mapped to this uid (caldav-only event, "
+            "or emails synced before v34)",
+            source="sqlite",
+        ) from exc
+    return success_envelope(data, request=request, source="sqlite")
 
 
 # ===========================================================================

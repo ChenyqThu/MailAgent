@@ -375,6 +375,152 @@ export function runEventGet(opts: EventGetOpts): CalendarEventRow | null {
   return row ? rowToCalendarEventRow(row) : null
 }
 
+// ============================================================
+// 阶段 2.1 (P1-3) — 邮件 ↔ 日历 ical_uid 双向反查 (email_meeting 映射表, DB v34)
+// ============================================================
+
+/** 方向 A: 邮件 internal_id → .ics uid + 日历 master 行 (「查看日程」入口). */
+export interface EmailCalendarLink {
+  internal_id: number
+  ical_uid: string
+  /** REQUEST / CANCEL / REPLY; null = v34 回填行 (method 不可考). */
+  method: string | null
+  /** override 邀请的目标时间 ISO; null = master/单次. */
+  recurrence_id: string | null
+  sequence: number
+  is_recurring: boolean
+  /** calendar_event 里存在该 uid 的未删行? false = 邀请未进日历/已删. */
+  in_calendar: boolean
+  /** 代表 master 行 (caldav 优先); occurrence 展开由消费方走 eventsList. */
+  event: CalendarEventRow | null
+}
+
+/** 方向 B: ical_uid → 来源邀请邮件 (drawer「关联邮件」反查). */
+export interface EventSourceEmail {
+  ical_uid: string
+  internal_id: number
+  subject: string | null
+  sender: string | null
+  sender_name: string | null
+  date_received: string | null
+  mailbox: string | null
+  method: string | null
+  /** 携带该 uid 的映射邮件总数 (周期会议 update/cancel 各一封). */
+  linked_email_count: number
+}
+
+const CALENDAR_EVENT_COLUMNS = `id, ical_uid, recurrence_id, sequence, summary, description, location,
+       organizer, attendees_json, dtstart_utc, dtend_utc, is_all_day,
+       rrule, exdates_json, rdates_json, status, response_status, url,
+       ics_raw, source, notion_page_id, related_email_internal_id, calendar_name`
+
+export function runEmailCalendarLink(internalId: number): EmailCalendarLink | null {
+  const db = getDb()
+  let meeting:
+    | {
+        internal_id: number
+        ical_uid: string
+        method: string | null
+        recurrence_id: string | null
+        sequence: number
+        is_recurring: number
+      }
+    | undefined
+  try {
+    meeting = db
+      .prepare(
+        `SELECT internal_id, ical_uid, method, recurrence_id, sequence, is_recurring
+         FROM email_meeting WHERE internal_id = ?`
+      )
+      .get(internalId) as typeof meeting
+  } catch (e) {
+    console.warn('[calendar:emailCalendarLink] query failed (email_meeting table missing?):', e)
+    return null
+  }
+  if (!meeting) return null
+
+  // 代表 master 行: 真 master (recurrence_id NULL) 优先 → source 按 caldav →
+  // email_ics → legacy → dtstart 最早; 软删除行不参与 (对齐 Python
+  // CalendarEventRepository.get_master_by_uid).
+  let eventRow: DbCalendarRow | undefined
+  try {
+    eventRow = db
+      .prepare(
+        `SELECT ${CALENDAR_EVENT_COLUMNS}
+         FROM calendar_event
+         WHERE ical_uid = ? AND deleted_at IS NULL
+         ORDER BY (recurrence_id IS NULL) DESC,
+                  CASE source WHEN 'caldav' THEN 0 WHEN 'email_ics' THEN 1 ELSE 2 END,
+                  dtstart_utc ASC
+         LIMIT 1`
+      )
+      .get(meeting.ical_uid) as DbCalendarRow | undefined
+  } catch (e) {
+    console.warn('[calendar:emailCalendarLink] calendar_event query failed:', e)
+    eventRow = undefined
+  }
+
+  return {
+    internal_id: meeting.internal_id,
+    ical_uid: meeting.ical_uid,
+    method: meeting.method,
+    recurrence_id: meeting.recurrence_id,
+    sequence: meeting.sequence ?? 0,
+    is_recurring: !!meeting.is_recurring,
+    in_calendar: !!eventRow,
+    event: eventRow ? rowToCalendarEventRow(eventRow) : null
+  }
+}
+
+export function runEventSourceEmail(icalUid: string): EventSourceEmail | null {
+  const db = getDb()
+  try {
+    // 多封同 uid 邮件时优先最新 METHOD:REQUEST (date_received DESC);
+    // 无 REQUEST 时最新任意 method 一封 (含 v34 回填的 method=NULL 行)。
+    const row = db
+      .prepare(
+        `SELECT m.ical_uid, m.internal_id, m.method,
+                e.subject, e.sender, e.sender_name, e.date_received, e.mailbox
+         FROM email_meeting m
+         JOIN email_metadata e ON e.internal_id = m.internal_id
+         WHERE m.ical_uid = ?
+         ORDER BY (CASE WHEN m.method = 'REQUEST' THEN 1 ELSE 0 END) DESC,
+                  e.date_received DESC
+         LIMIT 1`
+      )
+      .get(icalUid) as
+      | {
+          ical_uid: string
+          internal_id: number
+          method: string | null
+          subject: string | null
+          sender: string | null
+          sender_name: string | null
+          date_received: string | null
+          mailbox: string | null
+        }
+      | undefined
+    if (!row) return null
+    const count = db
+      .prepare('SELECT COUNT(*) AS n FROM email_meeting WHERE ical_uid = ?')
+      .get(icalUid) as { n: number }
+    return {
+      ical_uid: row.ical_uid,
+      internal_id: row.internal_id,
+      subject: row.subject,
+      sender: row.sender,
+      sender_name: row.sender_name,
+      date_received: row.date_received,
+      mailbox: row.mailbox,
+      method: row.method,
+      linked_email_count: count?.n ?? 1
+    }
+  } catch (e) {
+    console.warn('[calendar:eventSourceEmail] query failed (email_meeting table missing?):', e)
+    return null
+  }
+}
+
 export function runSyncStatus(): CalendarSyncStateItem[] {
   const db = getDb()
   try {

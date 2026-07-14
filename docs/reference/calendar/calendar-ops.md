@@ -55,8 +55,35 @@ CREATE UNIQUE INDEX idx_calendar_event_unique
 
 `source` 三态共存:
 - `caldav` — CalendarSyncWorker 从 DavMail CalDAV 拉的 (主路径, 全仓唯一活跃写入方)
-- `email_ics` — **预留枚举, 从未实现写入** (生产 0 行, 2026-07 epic 正式判死; `src/mail/meeting_sync.py` 只写 Notion + `recurring_series`, 不写本表)。邮件 ↔ 日历联动的正解 = 按 `ical_uid` 反查 caldav 行 (`idx_calendar_event_uid` 索引现成, epic 阶段 2 落地), 不要再补 email_ics 写入
+- `email_ics` — **预留枚举, 从未实现写入** (生产 0 行, 2026-07 epic 正式判死; `src/mail/meeting_sync.py` 只写 Notion + `recurring_series`, 不写本表)。邮件 ↔ 日历联动的正解 = 按 `ical_uid` 反查 caldav 行 (`idx_calendar_event_uid` 索引现成, **epic 阶段 2.1 已落地, 见下方 email_meeting**), 不要再补 email_ics 写入
 - `legacy_calendar_app` — Phase 3 已下线 (2026-05-25); 枚举值保留作 backward compat, 不再写新行
+
+### email_meeting — 邮件 ↔ 日历 ical_uid 映射 (DB v34, epic 阶段 2.1 / P1-3)
+
+一封会议邀请邮件 ↔ 它携带的 vEvent UID。此前 uid 只进 Notion + `recurring_series`
+(仅周期会议), raw MIME 不持久化、.ics 附件被 reader skip → 无法事后解析, 双向互跳必须落存储:
+
+```sql
+CREATE TABLE email_meeting (
+    internal_id INTEGER PRIMARY KEY,          -- FK → email_metadata ON DELETE CASCADE
+    ical_uid TEXT NOT NULL,                   -- idx_email_meeting_uid
+    method TEXT,                              -- REQUEST/CANCEL/REPLY; NULL = v34 回填行 (不可考)
+    recurrence_id TEXT,                       -- override 邀请目标时间 ISO; NULL = master/单次
+    sequence INTEGER, is_recurring INTEGER,
+    created_at REAL, updated_at REAL
+);
+```
+
+- **写入方**: `new_watcher` 会议检测 hook (每封解析出 invite 的新邮件, 与 Notion sync 成败无关) +
+  `recurring_invite.replay_one` (`mailagent calendar recurring replay` 重新 fetch+解析时顺路补写 = 存量幂等回填路径)。
+- **v34 迁移回填覆盖**: 存量周期会议 best-effort (每 series 的 `last_seen_message_id` 那一封, method=NULL);
+  存量非周期邀请**不可回填** (无源可解析)。新邮件 (含 SYNC_FOLDERS 自定义文件夹主链路) 全覆盖。
+- **查询面** (三面, 全只读): 方向 A 邮件→日历 = uid + 代表 master 行 (`recurrence_id IS NULL` 优先 →
+  source 按 caldav→email_ics→legacy → dtstart 最早) + `in_calendar`; 方向 B uid→来源邀请邮件
+  (多封同 uid 优先最新 METHOD:REQUEST, 无 REQUEST 取最新任意一封)。
+  - Electron IPC: `calendar:emailCalendarLink(internalId)` / `calendar:eventSourceEmail(icalUid)` (better-sqlite3 直读)
+  - HTTP: `GET /api/calendar/email-link/{internal_id}` / `GET /api/calendar/events/{event_id}/source-email` (404→前端 null)
+  - Service: `CalendarService.get_email_calendar_link` / `get_event_source_email` (+ `CalendarEventRepository.get_master_by_uid`)
 
 ## 模块结构
 
@@ -89,8 +116,9 @@ frontend/src/shared/components/calendar/
   views/{Day,Week,Month,Agenda}View.tsx
 
 frontend/src/electron/main/handlers/calendar.ts  (注册; 实现拆在 calendar-{read,write,sync,shared}.ts)
-  13 个 IPC 通道:
-  - 4 个 SQLite 直读: eventsList / eventGet / syncStatus / calendarNames
+  15 个 IPC 通道:
+  - 6 个 SQLite 直读: eventsList / eventGet / syncStatus / calendarNames /
+    emailCalendarLink / eventSourceEmail (后两个 = 阶段 2.1 email_meeting 双向反查)
   - 9 个写/替身 (经 CLI 子进程): recurringDiscover / recurringReplay / expand /
     syncTrigger / eventReplay / eventRsvp / eventCreate / eventUpdate / eventDelete
 ```

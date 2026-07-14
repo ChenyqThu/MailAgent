@@ -63,7 +63,8 @@ def test_v33_adds_and_backfills_snippet_idempotently(tmp_path):
     assert "snippet" in columns
     row = _fetchone(db, "SELECT snippet FROM email_metadata WHERE internal_id=1")
     assert row[0] == markdown[:100]
+    # 重新 init 后版本推进到当前 DB_VERSION (v34+ 后续迁移也会跑, 断言随 bump 前进)
     assert (
         int(_fetchone(db, "SELECT value FROM sync_state WHERE key='db_version'")[0])
-        == 33
+        == SyncStore.DB_VERSION
     )

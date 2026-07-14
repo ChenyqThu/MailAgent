@@ -385,7 +385,18 @@ class SyncStore:
     #                让列表查询彻底不 JOIN / 不读取 email_body blob。幂等: ALTER 前 PRAGMA
     #                检查 + 仅回填 snippet IS NULL 行。SQLite substr(TEXT, 1, 100) 按字符截断。
     #                回滚 (回退 v33): 列可留（旧代码无害）或手动 DROP；必要时降 db_version。
-    DB_VERSION = 33  # v33: email_metadata.snippet 去规范化正文预览
+    # v34 (日历 epic 阶段 2.1 P1-3, 2026-07): 新增 email_meeting 映射表 (internal_id PK →
+    #                ical_uid + method/recurrence_id/sequence/is_recurring)。邮件 .ics 的 uid
+    #                此前只进 Notion + recurring_series (仅周期会议), raw MIME 不持久化、.ics
+    #                附件被 reader skip → 无法事后解析, 邮件↔日历互跳 (按 ical_uid join
+    #                calendar_event) 必须落存储。写入方: new_watcher 会议检测 hook (每封含
+    #                invite 的新邮件) + recurring_invite.replay_one (手动 replay 顺路补写)。
+    #                升级回填: 从 recurring_series (series_uid + last_seen_message_id join
+    #                email_metadata.message_id) best-effort 回填, method 记 NULL (series 行
+    #                的 last_seen 可能是 REQUEST 或 CANCEL, 不可考)。存量非周期邀请不可回填。
+    #                幂等: CREATE TABLE IF NOT EXISTS + INSERT OR IGNORE 回填。
+    #                回滚 (回退 v34): DROP TABLE email_meeting; 必要时降 db_version。
+    DB_VERSION = 34  # v34: email_meeting 邮件↔日历 ical_uid 映射表
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -1140,6 +1151,31 @@ class SyncStore:
             )
         """)
 
+        # ==================== v34: email_meeting 邮件↔日历 ical_uid 映射 ====================
+        # 一封会议邀请邮件 ↔ 它携带的 vEvent UID (RFC 5545)。消费方按 ical_uid join
+        # calendar_event (idx_calendar_event_uid) 实现双向互跳:
+        #   方向 A: 邮件 internal_id → uid → 日历 master 行 (「查看日程」)
+        #   方向 B: ical_uid → 来源邀请邮件 (drawer 反查, 多封时优先最新 METHOD:REQUEST)
+        # PK=internal_id (icalendar_parser 单 invite 语义, 一封邮件最多一条);
+        # method NULL = v34 回填行 (recurring_series.last_seen 不可考 REQUEST/CANCEL)。
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS email_meeting (
+                internal_id INTEGER PRIMARY KEY,
+                ical_uid TEXT NOT NULL,
+                method TEXT,
+                recurrence_id TEXT,
+                sequence INTEGER NOT NULL DEFAULT 0,
+                is_recurring INTEGER NOT NULL DEFAULT 0,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                FOREIGN KEY (internal_id) REFERENCES email_metadata(internal_id) ON DELETE CASCADE
+            )
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_email_meeting_uid
+            ON email_meeting(ical_uid)
+        """)
+
         # ==================== v16: 附件文本索引 (PR-2b, Sprint 19 M2) ====================
         # 把 PDF / docx / pptx / xlsx 附件文本抽出 → FTS5 索引, 让 chat agent /
         # LLM tool 跨附件检索 ('合同条款里 redis timeout 提到过吗').
@@ -1835,6 +1871,33 @@ class SyncStore:
                    )
             """)
             logger.info("v33 migration: email_metadata.snippet backfilled")
+
+        # === v34: email_meeting 回填 (recurring_series → email_meeting best-effort) ===
+        # 表本身由上面 CREATE TABLE IF NOT EXISTS 建 (新/旧库均生效)。这里只做存量
+        # 回填: 每个 recurring_series 的 last_seen_message_id 对应邮件写一条映射行,
+        # method=NULL (series 行的 last_seen 可能是 REQUEST 或 CANCEL, 不可考),
+        # is_recurring=1。存量非周期邀请无 uid 可回填 (raw MIME 未存)。
+        if current_version < 34:
+            # 数据回填是 best-effort (映射缺失 = 查询面 404, 可经 replay 路径补),
+            # 不同于 schema 建表 (fail-loud): 异常降级 warning 不中断迁移链。
+            try:
+                cursor.execute("""
+                    INSERT OR IGNORE INTO email_meeting (
+                        internal_id, ical_uid, method, recurrence_id,
+                        sequence, is_recurring, created_at, updated_at
+                    )
+                    SELECT em.internal_id, rs.series_uid, NULL, NULL,
+                           COALESCE(rs.last_sequence, 0), 1, ?, ?
+                    FROM recurring_series rs
+                    JOIN email_metadata em ON em.message_id = rs.last_seen_message_id
+                    WHERE rs.last_seen_message_id IS NOT NULL
+                """, (time.time(), time.time()))
+                logger.info(
+                    f"v34 migration: email_meeting backfilled from recurring_series "
+                    f"({cursor.rowcount} rows)"
+                )
+            except sqlite3.Error as e:
+                logger.warning(f"v34 migration: email_meeting backfill skipped: {e}")
 
         # 更新数据库版本 —— E0-WP3: 只有**全部迁移成功**才会执行到这里。任何迁移块
         # 真失败都会 raise (见 _migration_guard_columns/_migration_guard_index),
@@ -4141,6 +4204,72 @@ class SyncStore:
             except sqlite3.Error as e:
                 logger.error(f"Failed to iter_series_needing_expansion: {e}")
                 return
+
+    # ============================================================
+    # v34: email_meeting (邮件 ↔ 日历 ical_uid 映射)
+    # ============================================================
+
+    def upsert_email_meeting(
+        self,
+        internal_id: int,
+        *,
+        ical_uid: str,
+        method: Optional[str] = None,
+        recurrence_id: Optional[str] = None,
+        sequence: int = 0,
+        is_recurring: bool = False,
+    ) -> bool:
+        """写入/更新一封邮件的会议 uid 映射行 (PK=internal_id, upsert)。
+
+        new_watcher 会议检测 hook / recurring_invite.replay_one 调用。
+        失败仅记 error 不抛 (映射是旁路增强, 不阻断主 sync 流程)。
+        """
+        if not ical_uid:
+            return False
+        now = time.time()
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute(
+                    """
+                    INSERT INTO email_meeting (
+                        internal_id, ical_uid, method, recurrence_id,
+                        sequence, is_recurring, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT (internal_id) DO UPDATE SET
+                        ical_uid      = excluded.ical_uid,
+                        method        = excluded.method,
+                        recurrence_id = excluded.recurrence_id,
+                        sequence      = excluded.sequence,
+                        is_recurring  = excluded.is_recurring,
+                        updated_at    = excluded.updated_at
+                    """,
+                    (
+                        internal_id, ical_uid, method, recurrence_id,
+                        int(sequence or 0), int(bool(is_recurring)), now, now,
+                    ),
+                )
+                conn.commit()
+                return True
+            except sqlite3.Error as e:
+                logger.error(f"Failed to upsert_email_meeting {internal_id}: {e}")
+                conn.rollback()
+                return False
+
+    def get_email_meeting(self, internal_id: int) -> Optional[Dict[str, Any]]:
+        """读取一封邮件的会议 uid 映射行。"""
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute(
+                    "SELECT * FROM email_meeting WHERE internal_id = ?",
+                    (internal_id,),
+                )
+                row = cursor.fetchone()
+                return dict(row) if row else None
+            except sqlite3.Error as e:
+                logger.error(f"Failed to get_email_meeting {internal_id}: {e}")
+                return None
 
     # ============================================================
     # v6: cli_checkpoints (PR-4 长任务 checkpoint / resume)

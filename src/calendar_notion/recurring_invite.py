@@ -170,6 +170,20 @@ async def replay_one(
         logger.warning(f"id={internal_id}: no invite extracted")
         return None
 
+    # 阶段 2.1 (P1-3): replay 重新 fetch + 解析了 .ics, 顺路补写 email_meeting
+    # 映射 (存量邮件的幂等回填路径 — v34 migration 只覆盖 recurring_series 可考的行)。
+    if invite.uid:
+        sync_store.upsert_email_meeting(
+            internal_id,
+            ical_uid=invite.uid,
+            method=(invite.method or "REQUEST").upper(),
+            recurrence_id=(
+                invite.recurrence_id.isoformat() if invite.recurrence_id else None
+            ),
+            sequence=invite.sequence,
+            is_recurring=bool(invite.recurrence_rule),
+        )
+
     # 输出统计
     stats = meeting_sync.get_stats()
     logger.info(

@@ -17,7 +17,11 @@ from __future__ import annotations
 from tests.api.conftest import (
     CAL_DELETED_UID,
     CAL_EVENT_UID,
+    CAL_INVITE_EMAIL_ID,
     CAL_NAME,
+    CAL_NOCAL_EMAIL_ID,
+    CAL_NOCAL_UID,
+    CAL_PLAIN_EMAIL_ID,
     CAL_WINDOW_FROM,
     CAL_WINDOW_TO,
 )
@@ -142,6 +146,68 @@ def test_calendar_event_get_bad_source_400(cal_folder_client):
     )
     assert r.status_code == 400
     _err(r.json(), code="E_INVALID_ARG")
+
+
+# ===========================================================================
+# GET /api/calendar/email-link/{internal_id} (阶段 2.1 P1-3 方向 A)
+# ===========================================================================
+
+
+def test_calendar_email_link(cal_folder_client):
+    r = cal_folder_client.get(f"/api/calendar/email-link/{CAL_INVITE_EMAIL_ID}")
+    assert r.status_code == 200
+    body = r.json()
+    _ok_envelope(body)
+    # C7: data is the bare EmailCalendarLink object.
+    link = body["data"]
+    assert link["internal_id"] == CAL_INVITE_EMAIL_ID
+    assert link["ical_uid"] == CAL_EVENT_UID
+    assert link["method"] == "REQUEST"
+    assert link["in_calendar"] is True
+    assert link["event"]["ical_uid"] == CAL_EVENT_UID
+    assert link["event"]["summary"] == "Sprint Planning"
+
+
+def test_calendar_email_link_uid_without_calendar_row(cal_folder_client):
+    # 映射命中但 uid 无 calendar_event 行 → 200 + in_calendar=false + event=null
+    r = cal_folder_client.get(f"/api/calendar/email-link/{CAL_NOCAL_EMAIL_ID}")
+    assert r.status_code == 200
+    link = r.json()["data"]
+    assert link["ical_uid"] == CAL_NOCAL_UID
+    assert link["in_calendar"] is False
+    assert link["event"] is None
+
+
+def test_calendar_email_link_plain_email_404(cal_folder_client):
+    r = cal_folder_client.get(f"/api/calendar/email-link/{CAL_PLAIN_EMAIL_ID}")
+    assert r.status_code == 404
+    _err(r.json(), code="E_NOT_FOUND")
+
+
+# ===========================================================================
+# GET /api/calendar/events/{event_id}/source-email (阶段 2.1 P1-3 方向 B)
+# ===========================================================================
+
+
+def test_calendar_event_source_email_prefers_latest_request(cal_folder_client):
+    r = cal_folder_client.get(f"/api/calendar/events/{CAL_EVENT_UID}/source-email")
+    assert r.status_code == 200
+    body = r.json()
+    _ok_envelope(body)
+    # C7: data is the bare EventSourceEmail object. 两封同 uid (REQUEST 新 +
+    # CANCEL 旧) → 选最新 REQUEST。
+    src = body["data"]
+    assert src["ical_uid"] == CAL_EVENT_UID
+    assert src["internal_id"] == CAL_INVITE_EMAIL_ID
+    assert src["method"] == "REQUEST"
+    assert src["subject"] == "Sprint Planning invite"
+    assert src["linked_email_count"] == 2
+
+
+def test_calendar_event_source_email_missing_404(cal_folder_client):
+    r = cal_folder_client.get("/api/calendar/events/uid-caldav-only/source-email")
+    assert r.status_code == 404
+    _err(r.json(), code="E_NOT_FOUND")
 
 
 # ===========================================================================

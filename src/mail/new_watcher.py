@@ -747,6 +747,22 @@ class NewWatcher:
             meeting_invite = None
             if self.meeting_sync.has_meeting_invite(source):
                 calendar_page_id, meeting_invite = await self.meeting_sync.process_email(source, message_id)
+                # 阶段 2.1 (P1-3): 邮件 ↔ 日历 ical_uid 映射落 email_meeting,
+                # 供「邮件详情 → 查看日程」/「drawer → 来源邀请邮件」双向反查。
+                # 只要解析出 invite 就写 (与 Notion sync 成败无关 — 映射表达的是
+                # "这封邮件携带该 uid" 这一事实)。
+                if meeting_invite is not None and meeting_invite.uid:
+                    self.sync_store.upsert_email_meeting(
+                        internal_id,
+                        ical_uid=meeting_invite.uid,
+                        method=(meeting_invite.method or "REQUEST").upper(),
+                        recurrence_id=(
+                            meeting_invite.recurrence_id.isoformat()
+                            if meeting_invite.recurrence_id else None
+                        ),
+                        sequence=meeting_invite.sequence,
+                        is_recurring=bool(meeting_invite.recurrence_rule),
+                    )
                 if calendar_page_id:
                     self._stats["meeting_invites"] += 1
                     logger.info(f"Meeting invite synced to calendar: {calendar_page_id}")

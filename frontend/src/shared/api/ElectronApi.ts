@@ -22,9 +22,11 @@ import type {
   CalendarEventOccurrence,
   CalendarExpandOpts,
   CalendarSyncStateItem,
+  EmailCalendarLink,
   EventCreateOpts,
   EventDeleteOpts,
   EventGetOpts,
+  EventSourceEmail,
   EventReplayOpts,
   EventRsvpOpts,
   EventUpdateOpts,
@@ -498,6 +500,14 @@ class ElectronCalendarApi implements CalendarApi {
   }
   async calendarNames(): Promise<string[]> {
     return (await invoker()('calendar:calendarNames')) as string[]
+  }
+
+  // 阶段 2.1 (P1-3) — 邮件 ↔ 日历 ical_uid 双向反查
+  async emailCalendarLink(internalId: number): Promise<EmailCalendarLink | null> {
+    return (await invoker()('calendar:emailCalendarLink', internalId)) as EmailCalendarLink | null
+  }
+  async eventSourceEmail(icalUid: string): Promise<EventSourceEmail | null> {
+    return (await invoker()('calendar:eventSourceEmail', icalUid)) as EventSourceEmail | null
   }
   async syncTrigger(opts: SyncNowOpts = {}): Promise<unknown> {
     const env = (await invoker()('calendar:syncTrigger', opts)) as WriteEnvelope<unknown>

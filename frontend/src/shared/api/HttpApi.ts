@@ -43,7 +43,9 @@ import type {
   CalendarEventOccurrence,
   CalendarSyncStateItem,
   ChatApi,
+  EmailCalendarLink,
   EventGetOpts,
+  EventSourceEmail,
   EventsListOpts,
   SyncNowOpts,
   CleanupDeadLetterOpts,
@@ -602,6 +604,31 @@ export class HttpApi implements MailApi {
       // （total/worker_enabled 落 meta）。req() 已解到 .data。
       const data = await this.req<CalendarSyncStateItem[]>('GET', '/calendar/sync-status')
       return data ?? []
+    },
+
+    // 阶段 2.1 (P1-3) — 邮件 ↔ 日历 ical_uid 双向反查。C7: serve-api 返裸
+    // EmailCalendarLink / EventSourceEmail 进 envelope.data; 404 (无映射) → null。
+    emailCalendarLink: async (internalId: number): Promise<EmailCalendarLink | null> => {
+      try {
+        const data = await this.req<EmailCalendarLink>('GET', `/calendar/email-link/${internalId}`)
+        return data ?? null
+      } catch (e) {
+        if (isNotFound(e)) return null
+        throw e
+      }
+    },
+
+    eventSourceEmail: async (icalUid: string): Promise<EventSourceEmail | null> => {
+      try {
+        const data = await this.req<EventSourceEmail>(
+          'GET',
+          `/calendar/events/${encodeURIComponent(icalUid)}/source-email`
+        )
+        return data ?? null
+      } catch (e) {
+        if (isNotFound(e)) return null
+        throw e
+      }
     },
 
     calendarNames: (): Promise<string[]> => this.req<string[]>('GET', '/calendar/names'),

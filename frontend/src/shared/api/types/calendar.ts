@@ -110,6 +110,38 @@ export interface CalendarSyncStateItem {
   last_error: string | null
 }
 
+// 阶段 2.1 (P1-3) — 邮件 ↔ 日历 ical_uid 双向反查 (email_meeting 映射, DB v34).
+
+/** 方向 A: 邮件 internal_id → .ics uid + 日历 master 行 (「查看日程」入口). */
+export interface EmailCalendarLink {
+  internal_id: number
+  ical_uid: string
+  /** REQUEST / CANCEL / REPLY; null = v34 回填行 (method 不可考). */
+  method: string | null
+  /** override 邀请的目标时间 ISO; null = master/单次. */
+  recurrence_id: string | null
+  sequence: number
+  is_recurring: boolean
+  /** calendar_event 里存在该 uid 的未删行? false = 邀请未进日历/已删. */
+  in_calendar: boolean
+  /** 代表 master 行 (caldav 优先); occurrence 展开由消费方走 eventsList. */
+  event: CalendarEventDetail | null
+}
+
+/** 方向 B: ical_uid → 来源邀请邮件 (drawer「关联邮件」反查). */
+export interface EventSourceEmail {
+  ical_uid: string
+  internal_id: number
+  subject: string | null
+  sender: string | null
+  sender_name: string | null
+  date_received: string | null
+  mailbox: string | null
+  method: string | null
+  /** 携带该 uid 的映射邮件总数 (周期会议 update/cancel 各一封). */
+  linked_email_count: number
+}
+
 export interface EventsListOpts {
   /** Window start (ISO datetime, UTC). Default = today 00:00 UTC. */
   fromIso?: string
@@ -231,6 +263,10 @@ export interface CalendarApi {
   syncStatus(): Promise<CalendarSyncStateItem[]>
   calendarNames(): Promise<string[]>
   syncTrigger(opts?: SyncNowOpts): Promise<unknown>
+
+  // 阶段 2.1 (P1-3) — 邮件 ↔ 日历 ical_uid 双向反查 (null = 无映射/不是会议邀请)
+  emailCalendarLink(internalId: number): Promise<EmailCalendarLink | null>
+  eventSourceEmail(icalUid: string): Promise<EventSourceEmail | null>
 
   // Phase 2.4 — 重导出 calendar_event 行到 Notion (any source)
   eventReplay(opts: EventReplayOpts): Promise<unknown>
