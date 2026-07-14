@@ -28,6 +28,7 @@ from src.calendar_sync.reconciler import CalendarReconciler
 
 if TYPE_CHECKING:
     from src.calendar_sync.caldav_reader import CalDAVReader
+    from src.calendar_sync.reconciler import ReconcileStats
     from src.calendar_sync.repository import CalendarEventRepository
     from src.config import Config
 
@@ -204,6 +205,8 @@ class CalendarSyncWorker:
                 self.repo.upsert_sync_state(
                     cal_name, ctag=ctag, full_sync=True, last_error=None
                 )
+                # backend 重启期间的变更也推给已开着的 renderer (冷启动无订阅者=drop)
+                self._emit_calendar_changed(cal_name, stats)
                 logger.info(
                     f"[calendar-sync-worker] full sync done for {cal_name!r}: "
                     f"upserted={stats.upserted} soft_deleted={stats.soft_deleted}"
@@ -334,6 +337,7 @@ class CalendarSyncWorker:
                 self.repo.upsert_sync_state(
                     cal_name, ctag=ctag, full_sync=True, last_error=None
                 )
+                self._emit_calendar_changed(cal_name, stats)
                 logger.info(
                     f"[calendar-sync-worker] new calendar {cal_name!r} initial "
                     f"sync: upserted={stats.upserted}"
@@ -390,12 +394,13 @@ class CalendarSyncWorker:
 
         if new_token is not None and (changed or deleted):
             # 增量路径成功
-            self.reconciler.reconcile_incremental(
+            stats = self.reconciler.reconcile_incremental(
                 changed, deleted, calendar_name=cal_name
             )
             self.repo.upsert_sync_state(
                 cal_name, ctag=new_ctag, sync_token=new_token, last_error=None
             )
+            self._emit_calendar_changed(cal_name, stats)
             return
 
         # 3. 增量不可用 / 空结果 — 降级到全窗口 re-read
@@ -410,13 +415,36 @@ class CalendarSyncWorker:
             window_end,
             calendar_name=cal_name,
         )
-        self.reconciler.reconcile_full_window(
+        stats = self.reconciler.reconcile_full_window(
             events,
             calendar_name=cal_name,
             window_start=window_start,
             window_end=window_end,
         )
         self.repo.upsert_sync_state(cal_name, ctag=new_ctag, last_error=None)
+        self._emit_calendar_changed(cal_name, stats)
+
+    def _emit_calendar_changed(self, cal_name: str, stats: "ReconcileStats") -> None:
+        """落库有实际变化时推 `calendar.synced` SSE 事件; 无变化不发 (防空 invalidate).
+
+        链路与邮件事件同通道 (dogfood #4b 进程内总线模式): safe_publish → 无
+        Redis 时 InProcessEventBus → sse_server → Electron main events_bridge
+        → renderer useEventBridge invalidate ['calendar'] 前缀。lossy bus —
+        前端 refetchInterval 轮询仍是兜底 (远程 web 无桥也靠它)。
+        """
+        if stats.upserted + stats.soft_deleted <= 0:
+            return
+        from src.events.publisher import safe_publish
+
+        safe_publish(
+            "calendar.synced",
+            data={
+                "calendar": cal_name,
+                "upserted": stats.upserted,
+                "soft_deleted": stats.soft_deleted,
+            },
+            source="calendar-sync",
+        )
 
     def _sync_window(self) -> tuple[datetime, datetime]:
         """计算当前 sync 窗口 [today - past_days, today + future_days)."""

@@ -241,3 +241,99 @@ class TestRefreshCalendars:
         # warning 日志出现
         combined = " ".join(warning_calls)
         assert "refresh_calendars" in combined or "CalDAV unreachable" in combined
+
+
+# ============================================================
+# 阶段 2.4: calendar.synced SSE emit (有变化发 / 无变化不发)
+# ============================================================
+
+class TestEmitCalendarSynced:
+    """_tick_one_calendar 落库有实际变化 → safe_publish('calendar.synced');
+    无变化 (空 reconcile / ctag 未变) → 不发, 防每 tick 空 invalidate."""
+
+    def _make_worker(self, fresh_db, reader):
+        repo = CalendarEventRepository(fresh_db)
+        worker = CalendarSyncWorker(
+            cfg=_cfg(enabled=True), reader=reader, repo=repo, poll_interval=60.0,
+        )
+        return worker, repo
+
+    @pytest.mark.asyncio
+    async def test_full_reread_with_changes_emits(self, fresh_db):
+        """ctag 变了 + 增量不可用 → 全窗口 re-read 落 1 个 upsert → 发一次."""
+        from unittest.mock import patch
+
+        reader = MagicMock()
+        reader.get_collection_ctag.return_value = "ctag-new"
+        reader.sync_collection.return_value = ([], [], None)  # 增量不可用
+        reader.list_events_with_full_detail.return_value = [_make_event("ev-1")]
+
+        worker, repo = self._make_worker(fresh_db, reader)
+        repo.upsert_sync_state("Personal", ctag="ctag-old")
+
+        with patch("src.events.publisher.safe_publish") as mock_pub:
+            await worker._tick_one_calendar("Personal")
+
+        assert mock_pub.call_count == 1
+        args, kwargs = mock_pub.call_args
+        assert args[0] == "calendar.synced"
+        assert kwargs["data"] == {
+            "calendar": "Personal", "upserted": 1, "soft_deleted": 0,
+        }
+        assert kwargs["source"] == "calendar-sync"
+
+    @pytest.mark.asyncio
+    async def test_incremental_with_changes_emits(self, fresh_db):
+        """sync-collection 增量路径返回 1 个 changed → 发一次."""
+        from unittest.mock import patch
+
+        reader = MagicMock()
+        reader.get_collection_ctag.return_value = "ctag-new"
+        reader.sync_collection.return_value = ([_make_event("ev-inc")], [], "tok-1")
+
+        worker, repo = self._make_worker(fresh_db, reader)
+        repo.upsert_sync_state("Personal", ctag="ctag-old")
+
+        with patch("src.events.publisher.safe_publish") as mock_pub:
+            await worker._tick_one_calendar("Personal")
+
+        assert mock_pub.call_count == 1
+        assert mock_pub.call_args.args[0] == "calendar.synced"
+        assert mock_pub.call_args.kwargs["data"]["upserted"] == 1
+        # 增量成功后不该降级全窗口 re-read
+        reader.list_events_with_full_detail.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_full_reread_without_changes_no_emit(self, fresh_db):
+        """ctag 变了但 re-read 结果空 + 库也空 → stats 全 0 → 不发."""
+        from unittest.mock import patch
+
+        reader = MagicMock()
+        reader.get_collection_ctag.return_value = "ctag-new"
+        reader.sync_collection.return_value = ([], [], None)
+        reader.list_events_with_full_detail.return_value = []
+
+        worker, repo = self._make_worker(fresh_db, reader)
+        repo.upsert_sync_state("Personal", ctag="ctag-old")
+
+        with patch("src.events.publisher.safe_publish") as mock_pub:
+            await worker._tick_one_calendar("Personal")
+
+        mock_pub.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_ctag_unchanged_no_emit(self, fresh_db):
+        """ctag 没变 → 提前 return, 不 reconcile 也不发."""
+        from unittest.mock import patch
+
+        reader = MagicMock()
+        reader.get_collection_ctag.return_value = "ctag-stable"
+
+        worker, repo = self._make_worker(fresh_db, reader)
+        repo.upsert_sync_state("Personal", ctag="ctag-stable")
+
+        with patch("src.events.publisher.safe_publish") as mock_pub:
+            await worker._tick_one_calendar("Personal")
+
+        mock_pub.assert_not_called()
+        reader.sync_collection.assert_not_called()

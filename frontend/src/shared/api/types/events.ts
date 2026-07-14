@@ -16,6 +16,7 @@ export type SseEventType =
   | 'llm.failed'
   | 'llm.gave_up'
   | 'folder.synced'
+  | 'calendar.synced'
 
 export interface SseEvent {
   event_type: SseEventType | string

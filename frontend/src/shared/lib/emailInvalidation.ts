@@ -215,6 +215,12 @@ export function planInvalidation(
     // folder sync — unrelated to the ['emails'] fan-out, unchanged.
     case 'folder.synced':
       return [{ kind: 'key', key: ['folder'] }]
+    // calendar sync tick landed changes (CalendarSyncWorker) — prefix
+    // invalidate every ['calendar', …] family (events / syncStatus / names /
+    // event detail / recurring). While the calendar pane is closed this only
+    // marks inactive queries stale (refetchType 'active'), so it is free.
+    case 'calendar.synced':
+      return [{ kind: 'key', key: ['calendar'] }]
     default:
       return []
   }
