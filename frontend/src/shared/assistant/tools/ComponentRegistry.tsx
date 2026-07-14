@@ -23,6 +23,7 @@ import { SkillInstallConfirmCard } from './generic/SkillInstallConfirmCard'
 import { SkillUninstallCard } from './generic/SkillUninstallCard'
 import { CustomAgentApprovalCard } from './generic/CustomAgentApprovalCard'
 import { SimpleApprovalCard } from './generic/SimpleApprovalCard'
+import { CalendarApprovalCard } from './calendar/CalendarApprovalCard'
 
 /** One registration: an A2UI component (by name) + the tool names that render through it. */
 export interface ToolUIRegistration {
@@ -137,5 +138,13 @@ export const componentRegistry: ComponentRegistry = createComponentRegistry([
     component: A2UI_COMPONENTS.SimpleApprovalCard,
     toolNames: ['web_fetch', 'web_search', 'custom_agent_delete', 'custom_agent_run_now'],
     render: SimpleApprovalCard
+  },
+  // calendar epic 4.2 — the calendar write approval card (behind MAILAGENT_CALENDAR_AGENT_TOOLS).
+  // Reschedule renders a server-fact before→after time diff; rsvp/delete carry the irrevocable
+  // warnings. Registered here so islandless approval has real approve/reject buttons (v1.5.0 教训).
+  {
+    component: A2UI_COMPONENTS.CalendarApprovalCard,
+    toolNames: ['calendar_event_reschedule', 'calendar_event_rsvp', 'calendar_event_delete'],
+    render: CalendarApprovalCard
   }
 ])

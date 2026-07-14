@@ -1195,4 +1195,93 @@ export class MailAgentDomainClient {
       signal
     })
   }
+
+  // ── calendar primitives (calendar epic 4.1/4.2) — the local calendar SSoT reads + the CalDAV/
+  //    iTIP writes via serve-api /calendar/* (routers/calendar.py is the business authority: CLI-
+  //    mirrored branch semantics, strict tz-aware ISO validation, audit line per write) → remote
+  //    parity for free. The tools that call these are only registered when
+  //    MAILAGENT_CALENDAR_AGENT_TOOLS is on; the three writes are edit-tier (always ask, D4 恒 HITL).
+
+  /** calendar_events_list — occurrences in a window (RRULE expanded server-side). GET
+   *  /calendar/events (camelCase alias query; C7: data = the bare occurrence array). fromIso/toIso
+   *  are FULL tz-aware ISO datetimes — the TOOL computes them from tz-local wall dates (P2-4), so
+   *  the server's UTC-midnight default window is never consulted. */
+  calendarEventsList(
+    opts: { fromIso: string; toIso: string; calendarName?: string; limit?: number },
+    signal?: AbortSignal
+  ): Promise<Array<Record<string, unknown>>> {
+    return this._req<Array<Record<string, unknown>>>('GET', '/calendar/events', {
+      query: {
+        fromIso: opts.fromIso,
+        toIso: opts.toIso,
+        calendarName: opts.calendarName,
+        limit: opts.limit
+      },
+      signal
+    })
+  }
+
+  /** calendar_event_get — one event's full row by iCalendar UID. GET /calendar/events/{uid}
+   *  (?source&recurrenceId; C7: data = the bare detail object). E_NOT_FOUND → null. */
+  async calendarEventGet(
+    eventId: string,
+    opts: { source?: string; recurrenceId?: string } = {},
+    signal?: AbortSignal
+  ): Promise<Record<string, unknown> | null> {
+    try {
+      return await this._req<Record<string, unknown>>(
+        'GET',
+        `/calendar/events/${encodeURIComponent(eventId)}`,
+        { query: { source: opts.source, recurrenceId: opts.recurrenceId }, signal }
+      )
+    } catch (e) {
+      if (e instanceof DomainError && e.code === 'E_NOT_FOUND') return null
+      throw e
+    }
+  }
+
+  /** calendar_event_reschedule — CalDAV update. PATCH /calendar/events/{uid}; the body's
+   *  recurrenceId/splitFuture combination selects the CLI-mirrored branch (整系列 / 改这一次
+   *  detached / 改未来 split). startIso/endIso must be tz-aware (the server rejects naive). */
+  calendarEventUpdate(
+    eventId: string,
+    body: Record<string, unknown>,
+    signal?: AbortSignal
+  ): Promise<Record<string, unknown>> {
+    return this._req<Record<string, unknown>>(
+      'PATCH',
+      `/calendar/events/${encodeURIComponent(eventId)}`,
+      { body, signal }
+    )
+  }
+
+  /** calendar_event_rsvp — send the IRREVOCABLE iTIP REPLY to the organizer (recipient is derived
+   *  from the event row SERVER-SIDE — never a caller field). POST /calendar/events/{uid}/rsvp. */
+  calendarEventRsvp(
+    eventId: string,
+    body: { response: string; recurrenceId?: string },
+    signal?: AbortSignal
+  ): Promise<Record<string, unknown>> {
+    const wire: Record<string, unknown> = { response: body.response }
+    if (body.recurrenceId !== undefined) wire.recurrenceId = body.recurrenceId
+    return this._req<Record<string, unknown>>(
+      'POST',
+      `/calendar/events/${encodeURIComponent(eventId)}/rsvp`,
+      { body: wire, signal }
+    )
+  }
+
+  /** calendar_event_delete — CalDAV DELETE (irreversible; the HTTP request IS the confirmation —
+   *  the gateway approval card is the human gate). DELETE /calendar/events/{uid}?calendarName=. */
+  calendarEventDelete(
+    eventId: string,
+    calendarName?: string,
+    signal?: AbortSignal
+  ): Promise<Record<string, unknown>> {
+    return this._req<Record<string, unknown>>(
+      'DELETE',
+      `/calendar/events/${encodeURIComponent(eventId)}`,
+      { query: { calendarName }, signal }
+    )
+  }
 }

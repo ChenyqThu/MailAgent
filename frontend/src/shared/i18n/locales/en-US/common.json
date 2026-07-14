@@ -987,6 +987,33 @@
       "noArgs": "(no arguments)",
       "error": "The operation failed — retry or ask the assistant to start over."
     },
+    "calendarApprovalCard": {
+      "reschedule": { "title": "Reschedule event" },
+      "rsvp": { "title": "Reply to meeting invite (RSVP)" },
+      "delete": { "title": "Delete event" },
+      "event": "Event",
+      "before": "Current time",
+      "after": "New time",
+      "time": "Time",
+      "scope": "Scope",
+      "scopes": {
+        "series": "Whole series",
+        "occurrence": "This occurrence only",
+        "future": "This and following"
+      },
+      "organizer": "Organizer",
+      "response": "Response",
+      "responses": {
+        "accept": "Accept",
+        "tentative": "Tentative",
+        "decline": "Decline"
+      },
+      "rsvpWarning": "Approving sends an IRREVOCABLE iTIP REPLY email to the organizer.",
+      "deleteWarning": "Deletion cannot be undone; a recurring event is removed with ALL its occurrences.",
+      "factsMissing": "This event was not found in the local calendar (deleted or wrong UID) — showing the assistant's raw proposal below.",
+      "factsError": "Could not load the event's current details — showing the assistant's raw proposal; the server still validates on approval.",
+      "error": "The operation failed — retry or ask the assistant to start over."
+    },
     "approvalActionCard": {
       "title": {
         "emailFlag": "Update email flag",

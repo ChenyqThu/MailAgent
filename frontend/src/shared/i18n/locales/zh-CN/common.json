@@ -987,6 +987,33 @@
       "noArgs": "(无参数)",
       "error": "操作失败，请重试或让助手重新发起。"
     },
+    "calendarApprovalCard": {
+      "reschedule": { "title": "改期日程" },
+      "rsvp": { "title": "回复会议邀请（RSVP）" },
+      "delete": { "title": "删除日程" },
+      "event": "日程",
+      "before": "原时间",
+      "after": "新时间",
+      "time": "时间",
+      "scope": "范围",
+      "scopes": {
+        "series": "整个系列",
+        "occurrence": "仅这一次",
+        "future": "这次及以后"
+      },
+      "organizer": "组织者",
+      "response": "回复",
+      "responses": {
+        "accept": "接受",
+        "tentative": "暂定",
+        "decline": "拒绝"
+      },
+      "rsvpWarning": "批准后将向组织者发送一封不可撤回的 iTIP REPLY 回执邮件。",
+      "deleteWarning": "删除不可恢复；周期日程将连同全部重复实例一并删除。",
+      "factsMissing": "在本地日历中找不到该日程（可能已删除或 UID 有误）——以下为助手提交的原始参数。",
+      "factsError": "无法读取该日程的当前信息——以下为助手提交的原始参数，批准后服务端仍会校验。",
+      "error": "操作失败，请重试或让助手重新发起。"
+    },
     "approvalActionCard": {
       "title": {
         "emailFlag": "更新邮件标记",

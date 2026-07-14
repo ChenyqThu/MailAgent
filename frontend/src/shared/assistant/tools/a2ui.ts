@@ -123,7 +123,12 @@ export const A2UI_COMPONENTS = {
   // ComponentRegistry key only — the card reads the tool args directly. It exists so islandless
   // approval of these edit-tier tools has real approve/reject buttons instead of the buttonless
   // ToolTraceCard (which showed the approval-paused state as a permanent spinner).
-  SimpleApprovalCard: 'SimpleApprovalCard'
+  SimpleApprovalCard: 'SimpleApprovalCard',
+  // calendar epic 4.2 — calendar write approval card (reschedule / rsvp / delete, edit tier +
+  // 恒 HITL). Reschedule renders a before→after time diff whose "before" is fetched live from
+  // serve-api (never the model's args — CustomAgentApprovalCard precedent); rsvp carries the
+  // "irrevocable iTIP REPLY to the organizer" warning; delete the irreversible warning.
+  CalendarApprovalCard: 'CalendarApprovalCard'
 } as const
 
 /** Which A2UI component renders a given gateway write tool. Unknown / read tools → null
@@ -157,6 +162,10 @@ export function componentForTool(toolName: string): string | null {
     case 'custom_agent_create':
     case 'custom_agent_update':
       return A2UI_COMPONENTS.CustomAgentApprovalCard
+    case 'calendar_event_reschedule':
+    case 'calendar_event_rsvp':
+    case 'calendar_event_delete':
+      return A2UI_COMPONENTS.CalendarApprovalCard
     // discover_skills / skill_read are silent reads → no card (generic ToolTraceCard);
     // custom_agent_delete / run_now keep the generic approval shell (identity-only inputs).
     default:
@@ -296,6 +305,28 @@ export interface CustomAgentApprovalCardProps {
   grantWeb?: 'off' | 'gated' | 'open'
   skills?: string[]
   /** Result echoes (land after execute). */
+  applied?: boolean
+}
+
+/** calendar_event_reschedule / calendar_event_rsvp / calendar_event_delete (edit tier, 恒 HITL).
+ *  The props carry ONLY the model's proposed input (event id + new times / response) plus result
+ *  echoes — the "before" facts (current title / times / organizer) are fetched live from serve-api
+ *  by the card (GET /calendar/events/{uid}), never projected from model args, so a model lying
+ *  about the current schedule changes nothing the user reviews. */
+export interface CalendarApprovalCardProps {
+  kind: 'reschedule' | 'rsvp' | 'delete'
+  eventId: string
+  /** reschedule only. */
+  scope?: 'series' | 'occurrence' | 'future'
+  recurrenceId?: string | null
+  newStart?: string | null
+  newEnd?: string | null
+  timezone?: string | null
+  /** rsvp only. */
+  response?: 'accept' | 'tentative' | 'decline'
+  /** delete only. */
+  calendarName?: string | null
+  /** Result echo (lands after execute). */
   applied?: boolean
 }
 
@@ -579,6 +610,45 @@ export function buildToolA2UIPayload(
     if (gw === 'off' || gw === 'gated' || gw === 'open') props.grantWeb = gw
     if (Array.isArray(args.skills)) props.skills = asStrArray(args.skills)
     if (result) props.applied = result.created === true || result.updated === true
+    return {
+      protocol: A2UI_PROTOCOL,
+      version: A2UI_VERSION,
+      component,
+      props: props as unknown as Record<string, unknown>,
+      audit: { risk: io.risk ?? 'edit', requiresApproval }
+    }
+  }
+
+  if (component === A2UI_COMPONENTS.CalendarApprovalCard) {
+    // props = the model's PROPOSAL only (new times / response / target id) — the card fetches the
+    // current event facts server-side (SkillInstallConfirmCard / CustomAgentApprovalCard 先例).
+    const kind =
+      toolName === 'calendar_event_rsvp'
+        ? ('rsvp' as const)
+        : toolName === 'calendar_event_delete'
+          ? ('delete' as const)
+          : ('reschedule' as const)
+    const props: CalendarApprovalCardProps = {
+      kind,
+      eventId: asStr(args.event_id) ?? ''
+    }
+    if (kind === 'reschedule') {
+      const scope = asStr(args.scope)
+      props.scope = scope === 'occurrence' || scope === 'future' ? scope : ('series' as const)
+      props.recurrenceId = asStr(args.recurrence_id) ?? null
+      props.newStart = asStr(args.new_start) ?? null
+      props.newEnd = asStr(args.new_end) ?? null
+      props.timezone = asStr(args.timezone) ?? null
+    }
+    if (kind === 'rsvp') {
+      const r = asStr(args.response)
+      if (r === 'accept' || r === 'tentative' || r === 'decline') props.response = r
+    }
+    if (kind === 'delete') props.calendarName = asStr(args.calendar_name) ?? null
+    if (result) {
+      props.applied =
+        result.rescheduled === true || result.rsvp_sent === true || result.deleted === true
+    }
     return {
       protocol: A2UI_PROTOCOL,
       version: A2UI_VERSION,

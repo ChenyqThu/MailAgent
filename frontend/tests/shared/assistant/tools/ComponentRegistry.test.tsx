@@ -52,8 +52,11 @@ describe('componentRegistry — resolution', () => {
     expect(webFetch).not.toBe(ToolTraceCard)
   })
 
-  test('byName covers the write/self-mount/exec/skill-supply/custom-agent/simple-approval tools; components covers the card names', () => {
+  test('byName covers the write/self-mount/exec/skill-supply/custom-agent/simple-approval/calendar tools; components covers the card names', () => {
     expect(Object.keys(componentRegistry.byName).sort()).toEqual([
+      'calendar_event_delete',
+      'calendar_event_reschedule',
+      'calendar_event_rsvp',
       'custom_agent_create',
       'custom_agent_delete',
       'custom_agent_run_now',
@@ -77,6 +80,7 @@ describe('componentRegistry — resolution', () => {
     ])
     expect(Object.keys(componentRegistry.components).sort()).toEqual([
       'ApprovalActionCard',
+      'CalendarApprovalCard',
       'CustomAgentApprovalCard',
       'DraftReplyCard',
       'ExecApprovalCard',
@@ -89,6 +93,14 @@ describe('componentRegistry — resolution', () => {
       'SkillUninstallCard',
       'SystemDocApprovalCard'
     ])
+  })
+
+  test('the three calendar write tools share one component instance (CalendarApprovalCard)', () => {
+    const resched = componentRegistry.resolve('calendar_event_reschedule')
+    expect(resched).toBeTypeOf('function')
+    expect(componentRegistry.resolve('calendar_event_rsvp')).toBe(resched)
+    expect(componentRegistry.resolve('calendar_event_delete')).toBe(resched)
+    expect(resched).not.toBe(ToolTraceCard)
   })
 
   test('the three flag/archive/pin tools share one component instance (ApprovalActionCard)', () => {

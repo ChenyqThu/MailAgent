@@ -44,6 +44,9 @@ function buildAllTools() {
     skillInstallToolsEnabled: true,
     // S5 W3 — custom-agent CRUD tools (MAILAGENT_CUSTOM_AGENTS_ENABLED), same rationale (CORE_UNGATED).
     customAgentToolsEnabled: true,
+    // calendar epic 4.1/4.2 — calendar tools (MAILAGENT_CALENDAR_AGENT_TOOLS), same rationale
+    // (classified CORE_UNGATED).
+    calendarToolsEnabled: true,
     // S2 W0 — the drift guard reasons over the MANUAL-session universe (fail-closed default is
     // 'untrusted_trigger', which strips capability_change/outbound and would blind the guard).
     contextMode: 'manual_chat'
@@ -172,7 +175,12 @@ describe('buildGatewayTools per-agent mount gating (S6 W3-1b)', () => {
       expect(tools[n]).toBeDefined()
     }
     // unmounted families → ABSENT (absence, not an error — the model never sees them)
-    for (const n of ['email_search_fulltext', 'email_search_attachments', 'report_list', 'report_get']) {
+    for (const n of [
+      'email_search_fulltext',
+      'email_search_attachments',
+      'report_list',
+      'report_get'
+    ]) {
       expect(tools[n]).toBeUndefined()
     }
     expect(tools.email_search).toBeDefined() // collision-exempt floor: never mount-gated
@@ -192,6 +200,7 @@ describe('buildGatewayTools per-agent mount gating (S6 W3-1b)', () => {
       execToolsEnabled: true,
       skillInstallToolsEnabled: true,
       customAgentToolsEnabled: true,
+      calendarToolsEnabled: true,
       contextMode: 'manual_chat', // manual probe isolates the mount gate from the mode floor
       agentRunContext: { agentId: 'dms', skills: [] }
     })

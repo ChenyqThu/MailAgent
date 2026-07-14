@@ -441,3 +441,56 @@ export const customAgentRunNowSchema = z.object({
   agent_id: z.string().min(1).max(128)
 })
 export type CustomAgentRunNowInput = z.infer<typeof customAgentRunNowSchema>
+
+// ── calendar schemas (calendar epic 4.1/4.2) — the agent reads the local calendar SSoT and
+//    proposes reschedule / RSVP / delete. Behind MAILAGENT_CALENDAR_AGENT_TOOLS. Reads are silent
+//    (summary/description/location/organizer come back CALENDAR_EVENT-fenced — meeting invites are
+//    externally-authored text); the three writes are edit-tier, ALWAYS ask (D4: 恒 HITL — never
+//    auto-approved, no whitelist hook). P2-4: date/datetime params accept an IANA `timezone` and
+//    date-only / offset-less values are interpreted in it (default: the machine's local timezone,
+//    NEVER UTC — a UTC "today" is 7-8h off for a US-west user). ──────────────────────────────────
+
+/** calendar_events_list — occurrences in a window (RRULE expanded server-side). */
+export const calendarEventsListSchema = z.object({
+  from_date: z.string().min(1).max(64).optional(),
+  to_date: z.string().min(1).max(64).optional(),
+  days: z.number().int().min(1).max(60).default(7),
+  timezone: z.string().min(1).max(64).optional(),
+  calendar_name: z.string().min(1).max(200).optional(),
+  limit: z.number().int().min(1).max(200).default(50)
+})
+export type CalendarEventsListInput = z.infer<typeof calendarEventsListSchema>
+
+/** calendar_event_get — one event's full detail by iCalendar UID. */
+export const calendarEventGetSchema = z.object({
+  event_id: z.string().min(1).max(512),
+  source: z.enum(['caldav', 'email_ics', 'legacy_calendar_app']).default('caldav'),
+  recurrence_id: z.string().min(1).max(64).optional()
+})
+export type CalendarEventGetInput = z.infer<typeof calendarEventGetSchema>
+
+/** calendar_event_reschedule — move an event (whole series / this occurrence / this-and-future). */
+export const calendarEventRescheduleSchema = z.object({
+  event_id: z.string().min(1).max(512),
+  new_start: z.string().min(1).max(64),
+  new_end: z.string().min(1).max(64),
+  scope: z.enum(['series', 'occurrence', 'future']).default('series'),
+  recurrence_id: z.string().min(1).max(64).optional(),
+  timezone: z.string().min(1).max(64).optional()
+})
+export type CalendarEventRescheduleInput = z.infer<typeof calendarEventRescheduleSchema>
+
+/** calendar_event_rsvp — send the IRREVOCABLE iTIP REPLY to the organizer. */
+export const calendarEventRsvpSchema = z.object({
+  event_id: z.string().min(1).max(512),
+  response: z.enum(['accept', 'tentative', 'decline']),
+  recurrence_id: z.string().min(1).max(64).optional()
+})
+export type CalendarEventRsvpInput = z.infer<typeof calendarEventRsvpSchema>
+
+/** calendar_event_delete — CalDAV DELETE (irreversible). */
+export const calendarEventDeleteSchema = z.object({
+  event_id: z.string().min(1).max(512),
+  calendar_name: z.string().min(1).max(200).optional()
+})
+export type CalendarEventDeleteInput = z.infer<typeof calendarEventDeleteSchema>

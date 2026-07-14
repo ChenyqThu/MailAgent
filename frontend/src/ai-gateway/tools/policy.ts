@@ -115,6 +115,20 @@ export const GATEWAY_TOOL_CLASSES: Record<string, GatewayToolClass> = {
   custom_agent_run_now: 'capability_change',
   // S2 W4 — skill_read is a silent read (its third-party content is SKILL_DOC-fenced at the tool).
   skill_read: 'read',
+  // calendar epic 4.1 — calendar reads (event text is CALENDAR_EVENT-fenced at the tool).
+  calendar_events_list: 'read',
+  calendar_event_get: 'read',
+  // calendar epic 4.2 — calendar writes: in-domain CalDAV/iTIP mutations of the owner's own
+  // calendar. domain_write keeps them REGISTERED in headless runs where the always-ask edit tier
+  // stashes → paused_handoff (the D4 headless semantics); they can never auto-approve because all
+  // three are edit-tier (mayAutoApprove additionally requires preview) AND their factory wires no
+  // policyEvaluate — no whitelist/免卡 channel exists (恒 HITL). The RSVP's outbound iTIP REPLY is
+  // recipient-pinned server-side (organizer from the event row; the model has no recipient field),
+  // which is why it is not class 'outbound' (that row would unregister it headless and remove the
+  // paused_handoff path entirely).
+  calendar_event_reschedule: 'domain_write',
+  calendar_event_rsvp: 'domain_write',
+  calendar_event_delete: 'domain_write',
   // web — outbound network reads (S6 W3, ADR-004 rev3.1 §3.1: migrated OUT of 'outbound' so the
   // per-agent `web` grant maps 1:1 to a class without ever admitting send). Both edit-tier
   // always-ask in manual; in a headless agent run they register only under grant_web∈{gated,open}

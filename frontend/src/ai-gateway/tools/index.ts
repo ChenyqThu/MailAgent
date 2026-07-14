@@ -26,6 +26,7 @@ import { createWebTools } from './web'
 import { createExecTools } from './exec'
 import { createSkillSupplyTools } from './skill_supply'
 import { createCustomAgentTools } from './agents'
+import { createCalendarReadTools, createCalendarWriteTools } from './calendar'
 import {
   applyContextModePolicy,
   normalizeContextMode,
@@ -114,6 +115,12 @@ export interface BuildGatewayToolsOpts {
    *  The SAME flag gates the S4 headless kernel, so off (default) → not added → ToolSet byte-identical
    *  to the S4 set. */
   customAgentToolsEnabled?: boolean
+  /** calendar epic 4.1/4.2 (MAILAGENT_CALENDAR_AGENT_TOOLS) — when true AND approvalGuard is
+   *  supplied, the five calendar tools are added: calendar_events_list / calendar_event_get
+   *  (silent reads; event text comes back CALENDAR_EVENT-fenced) + calendar_event_reschedule /
+   *  calendar_event_rsvp / calendar_event_delete (edit-tier writes, D4 恒 HITL — always ask, no
+   *  whitelist/免卡 channel). Off → not added → ToolSet byte-identical to the pre-epic set. */
+  calendarToolsEnabled?: boolean
   /** S2 W0 (ADR-001 D1/D3) — the run's server-asserted context mode, threaded from
    *  prepareChatRun's trustedContextMode. Governs (a) the auto-approve predicate (a reversible
    *  domain write may only skip the card in manual_chat) and (b) the LAST assembly step
@@ -295,6 +302,26 @@ export function buildGatewayTools(
     Object.assign(
       tools,
       createCustomAgentTools(opts.domain, collector, opts.approvalGuard, {
+        a2uiEnabled: opts.a2uiEnabled,
+        approvalMode: opts.approvalMode,
+        oneShot: opts.oneShotWrites,
+        contextMode
+      })
+    )
+  }
+  // calendar epic 4.1/4.2 — calendar tools behind MAILAGENT_CALENDAR_AGENT_TOOLS. Mixed set
+  // (2 silent reads + 3 edit-tier writes) → all-or-nothing on flag + guard (profile-config 先例:
+  // a write tool cannot exist without its guard, and registering only the reads would advertise a
+  // half capability). CORE (no skill ownership) so applySkillGating below never drops them; class
+  // domain_write (policy.ts) so a headless run keeps them registered and the always-ask edit tier
+  // stashes → paused_handoff. NO agentRunContext is threaded — the factory wires no policyEvaluate,
+  // so no per-agent whitelist can ever免卡 a calendar write (D4 恒 HITL). flag-off → not added →
+  // byte-identical to the pre-epic set.
+  if (opts.calendarToolsEnabled && opts.approvalGuard) {
+    Object.assign(tools, createCalendarReadTools(opts.domain, collector))
+    Object.assign(
+      tools,
+      createCalendarWriteTools(opts.domain, collector, opts.approvalGuard, {
         a2uiEnabled: opts.a2uiEnabled,
         approvalMode: opts.approvalMode,
         oneShot: opts.oneShotWrites,
