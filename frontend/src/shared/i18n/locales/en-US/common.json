@@ -77,6 +77,7 @@
     },
     "attachmentBar": {
       "title": "Thread attachments",
+      "thisMessage": "This message",
       "downloadAll": "Download all",
       "loading": "Loading…",
       "preview": "Preview",

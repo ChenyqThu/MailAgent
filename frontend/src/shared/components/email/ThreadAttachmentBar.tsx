@@ -3,11 +3,16 @@
 // The detail pane only shows ONE message (the thread is folded in the list, not
 // stacked here — see EmailDetail's "ThreadBundle 撤出" note), so attachments
 // scattered across older replies are otherwise invisible until you click each
-// message. This strip aggregates every non-inline attachment across the whole
-// thread into one horizontally-scrollable row:
+// message. This strip aggregates the non-inline attachments the open message
+// could actually have known about into one horizontally-scrollable row:
 //
+//   - scope = the active message + every thread member dated at or before it.
+//     A later reply was not part of this message's context, so its attachments
+//     must NOT show up here (reading the 4/22 mail never surfaces the 5/21
+//     file). See `priorSiblingIds` for the rule + its unknown-date edges;
+//   - cards run newest message first (left) → oldest last (right);
 //   - the active message's attachments come from props (already in hand);
-//   - every other thread member is fetched lazily via `attachment.list(id)`
+//   - each in-scope sibling is fetched lazily via `attachment.list(id)`
 //     (metadata only, no body) and rendered incrementally as each resolves —
 //     a long thread doesn't block the strip on its slowest member;
 //   - image originals ≤ THUMBNAIL_MAX_BYTES show a real thumbnail (the first
@@ -73,6 +78,45 @@ function senderLabel(name: string | null, sender: string): string {
   return parsed.name || parsed.email || sender
 }
 
+// `date_received` is ISO 8601 (tz-aware preferred) or bare "YYYY-MM-DD HH:MM:SS".
+// Parse to epoch ms so mixed shapes order correctly — a raw string compare would
+// mis-rank a tz-suffixed stamp against a bare one. Unparseable → null.
+function toTime(iso: string | null): number | null {
+  if (iso == null || iso === '') return null
+  const t = Date.parse(iso)
+  return Number.isNaN(t) ? null : t
+}
+
+// THE scope rule — the render path and "Download all" both call this, because if
+// they disagreed the strip would download files it never showed (an H1-class
+// "what you see ≠ what you get" bug).
+//
+// Scope = active message + every sibling dated at or before it; equal timestamps
+// count as "current and past" (<=). Edges:
+//   - active date unknown → we can't order the thread at all, so keep every
+//     sibling (prior behaviour) rather than blanking the strip;
+//   - sibling date unknown → it can't be placed on the timeline, so exclude it
+//     rather than risk surfacing a future reply's attachment.
+function priorSiblingIds(
+  members: ReadonlyArray<{ internal_id: number; date_received?: string | null }>,
+  activeInternalId: number,
+  activeDate: string | null
+): number[] {
+  const activeTime = toTime(activeDate)
+  const out: number[] = []
+  for (const m of members) {
+    if (m.internal_id === activeInternalId) continue
+    if (activeTime === null) {
+      out.push(m.internal_id)
+      continue
+    }
+    const t = toTime(m.date_received ?? null)
+    if (t === null || t > activeTime) continue
+    out.push(m.internal_id)
+  }
+  return out
+}
+
 export function ThreadAttachmentBar({
   threadId,
   activeInternalId,
@@ -100,25 +144,31 @@ export function ThreadAttachmentBar({
   })
 
   const members = useMemo(() => threadQ.data ?? [], [threadQ.data])
+  // Filtering to in-scope siblings HERE (not at render) means a future reply's
+  // attachment list is never even fetched — fewer requests, and the M3 thumbnail
+  // fan-out narrows naturally.
   const siblingIds = useMemo(
-    () => members.map((m) => m.internal_id).filter((id) => id !== activeInternalId),
-    [members, activeInternalId]
+    () => priorSiblingIds(members, activeInternalId, activeDate),
+    [members, activeInternalId, activeDate]
   )
 
-  // internal_id → source label + date, covering the active message (from props)
-  // and every sibling (from the thread list).
+  // internal_id → source label + date + parsed time (drives card ordering),
+  // covering the active message and every sibling. Active is set LAST so its
+  // props (from the authoritative detail record) win over the thread-list row.
   const sourceById = useMemo(() => {
-    const map = new Map<number, { label: string; date: string | null }>()
-    map.set(activeInternalId, {
-      label: senderLabel(activeSenderName, activeSender),
-      date: activeDate
-    })
+    const map = new Map<number, { label: string; date: string | null; time: number | null }>()
     for (const m of members) {
       map.set(m.internal_id, {
         label: senderLabel(m.sender_name ?? null, m.sender),
-        date: m.date_received ?? null
+        date: m.date_received ?? null,
+        time: toTime(m.date_received ?? null)
       })
     }
+    map.set(activeInternalId, {
+      label: senderLabel(activeSenderName, activeSender),
+      date: activeDate,
+      time: toTime(activeDate)
+    })
     return map
   }, [members, activeInternalId, activeSenderName, activeSender, activeDate])
 
@@ -138,7 +188,7 @@ export function ThreadAttachmentBar({
     (!threadEnabled || threadQ.isSuccess || threadQ.isError) &&
     siblingAttQueries.every((q) => !q.isPending)
 
-  // Active message's attachments first (in hand), then each sibling as its list
+  // Active message's attachments (in hand) + each in-scope sibling as its list
   // resolves — siblings still loading are simply skipped this render.
   const cards = useMemo(() => {
     const out: CardItem[] = []
@@ -152,8 +202,19 @@ export function ThreadAttachmentBar({
         if (isVisibleAttachment(a)) out.push({ att: a, sourceId: id })
       }
     })
-    return out
-  }, [activeAttachments, activeInternalId, siblingIds, siblingAttQueries])
+    // Newest message first (left) → oldest last (right). Ties broken by newer
+    // internal_id; within one message, attachment id ascending so a message's
+    // own files keep a stable order as other members stream in.
+    return out.sort((x, y) => {
+      if (x.sourceId === y.sourceId) return x.att.id - y.att.id
+      // Undated sources sort last — only reachable via the activeDate-null
+      // fallback, where the thread can't be ordered at all.
+      const tx = sourceById.get(x.sourceId)?.time ?? -Infinity
+      const ty = sourceById.get(y.sourceId)?.time ?? -Infinity
+      if (tx !== ty) return ty - tx
+      return y.sourceId - x.sourceId
+    })
+  }, [activeAttachments, activeInternalId, siblingIds, siblingAttQueries, sourceById])
 
   // Thumbnails for the first N image originals under the cap (M3 — bound the
   // readDataUrl fan-out). The rest keep the type icon; preview still reads on
@@ -256,7 +317,9 @@ export function ThreadAttachmentBar({
           queryFn: () => mailApi.email.listByThread(threadId),
           staleTime: 60_000
         })
-        sibIds = (rows ?? []).map((m) => m.internal_id).filter((id) => id !== activeInternalId)
+        // Same scope rule as the render path — otherwise "Download all" would
+        // save attachments from future replies the strip never displayed.
+        sibIds = priorSiblingIds(rows ?? [], activeInternalId, activeDate)
       } catch {
         failed = true
       }
@@ -298,6 +361,7 @@ export function ThreadAttachmentBar({
     queryClient,
     mailApi,
     activeInternalId,
+    activeDate,
     activeAttachments,
     download,
     t
@@ -345,12 +409,22 @@ export function ThreadAttachmentBar({
           const thumbUrl = thumbFailed.has(a.id) ? undefined : thumbById.get(a.id)
           const tone = pickIconTone(a)
           const I = tone.Icon
+          // The open message's own files vs. everything inherited from earlier
+          // replies. Marked with the accent border + a "this message" source
+          // label (theme v3: accent reads from --c-accent, so both themes and
+          // every accent swap follow for free). Deliberately NOT --sel-wash —
+          // that token is the *selection* signature (rows / nav), and these
+          // cards aren't selectable; reusing it would blur the vocabulary.
+          // Past cards keep their existing neutral treatment untouched.
+          const isActiveSource = c.sourceId === activeInternalId
           return (
             <div
               key={`${c.sourceId}-${a.id}`}
               className={cn(
-                'group relative flex flex-col w-44 shrink-0 rounded-md overflow-hidden',
-                'border border-ink-border bg-ink-2'
+                'group relative flex flex-col w-44 shrink-0 overflow-hidden bg-ink-2',
+                // Card tier radius (§18.3 --r-card = tile/card).
+                'rounded-[var(--r-card)] border',
+                isActiveSource ? 'border-coral/45' : 'border-ink-border'
               )}
             >
               <button
@@ -394,11 +468,20 @@ export function ThreadAttachmentBar({
                   <div className="text-meta font-mono text-ink-fg-2 tabular-nums truncate">
                     {a.size_bytes != null ? formatFileSize(a.size_bytes) : '—'}
                   </div>
-                  {src && (
-                    <div className="mt-0.5 text-meta text-ink-fg-3 truncate">
-                      {src.label}
-                      {src.date && <span> · {formatRelativeTime(src.date)}</span>}
+                  {/* Source line. For the open message, sender · date is
+                      redundant (the detail header right above already shows
+                      From / Date), so it's replaced by the explicit marker. */}
+                  {isActiveSource ? (
+                    <div className="mt-0.5 text-meta text-coral truncate">
+                      {t('emailDetail.attachmentBar.thisMessage')}
                     </div>
+                  ) : (
+                    src && (
+                      <div className="mt-0.5 text-meta text-ink-fg-3 truncate">
+                        {src.label}
+                        {src.date && <span> · {formatRelativeTime(src.date)}</span>}
+                      </div>
+                    )
                   )}
                 </div>
               </button>

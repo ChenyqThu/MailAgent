@@ -77,6 +77,7 @@
     },
     "attachmentBar": {
       "title": "本对话附件",
+      "thisMessage": "本封",
       "downloadAll": "全部下载",
       "loading": "加载中…",
       "preview": "预览",
