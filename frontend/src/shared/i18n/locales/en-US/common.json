@@ -150,6 +150,7 @@
     "attach": "Attach",
     "attachmentRemove": "Remove {name}",
     "attachmentFailed": "Upload failed",
+    "dropHint": "Drop files to attach",
     "richPreserveHint": "Rich-format original preserved as-is; appended after your new content on send",
     "loadingPlan": "Loading…",
     "planError": "Pre-fill failed",

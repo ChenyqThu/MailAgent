@@ -150,6 +150,7 @@
     "attach": "附件",
     "attachmentRemove": "移除 {name}",
     "attachmentFailed": "上传失败",
+    "dropHint": "松开以添加附件",
     "richPreserveHint": "复杂格式原文已保真保留，发送时自动附在新内容之后",
     "loadingPlan": "加载中…",
     "planError": "预填加载失败",

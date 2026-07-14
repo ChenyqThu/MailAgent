@@ -233,6 +233,10 @@ export function ComposePanelInner({
   const [attachList, setAttachList] = useState<ComposeAttachmentChip[]>([])
   const attachSeq = useRef(0)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
+  // L0 — 拖拽附件: 拖文件到 composer 卡片任意位置即可添加。dragDepth 计数法消除
+  // 子元素 dragenter/dragleave 抖动 (提示层 pointer-events-none 不参与计数)。
+  const [isDragActive, setIsDragActive] = useState(false)
+  const dragDepth = useRef(0)
 
   const editor = useEditor({
     // TextStyle 必须在 Color/FontFamily/FontSize/BackgroundColor 之前 (它们扩展 textStyle
@@ -574,6 +578,42 @@ export function ComposePanelInner({
 
   const busy = saveMut.isPending || sendMut.isPending || deleteMut.isPending
 
+  // L0 — 拖拽附件事件面: 只认真实文件拖入 (types 含 'Files'); 文本/HTML 拖拽不激活、
+  // 不 preventDefault → 落回 TipTap 原生行为。drop 复用 handleFilesSelected 管线
+  // (20MB 校验 → staging 上传 → chip), 零逻辑复制。busy 时不收 (对齐附件按钮 disabled)。
+  const handleDragEnter = useCallback(
+    (e: React.DragEvent) => {
+      if (busy || !e.dataTransfer.types.includes('Files')) return
+      dragDepth.current += 1
+      setIsDragActive(true)
+    },
+    [busy]
+  )
+  const handleDragOver = useCallback(
+    (e: React.DragEvent) => {
+      if (busy || !e.dataTransfer.types.includes('Files')) return
+      // preventDefault = 声明本区域可 drop (Chromium 默认 = 拒收/导航)。
+      e.preventDefault()
+      e.dataTransfer.dropEffect = 'copy'
+    },
+    [busy]
+  )
+  const handleDragLeave = useCallback(() => {
+    if (dragDepth.current === 0) return
+    dragDepth.current -= 1
+    if (dragDepth.current === 0) setIsDragActive(false)
+  }, [])
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      dragDepth.current = 0
+      setIsDragActive(false)
+      if (busy || !e.dataTransfer.types.includes('Files')) return
+      e.preventDefault()
+      handleFilesSelected(e.dataTransfer.files)
+    },
+    [busy, handleFilesSelected]
+  )
+
   // forward / draft-edit / 写新邮件 必须有收件人; reply/reply-all 可空 (后端推导)。
   // 附件上传中也不许发/存 (stage_id 未回执, 发出去就丢附件)。
   const requiresRecipient = mode === 'forward' || isDraftEdit || isNew
@@ -622,13 +662,32 @@ export function ComposePanelInner({
   return (
     <main
       aria-label="compose-panel"
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
       className={cn(
-        'flex flex-col min-h-0',
+        // L0 — relative: 拖拽 drop 提示层 (absolute inset-0) 的定位上下文。
+        'relative flex flex-col min-h-0',
         // column: 占满 detail 列 (glass-3 半透明作列背景)。
         // modal: 撑满 ComposeNewModal 卡片 (背景/圆角/阴影由外壳给, 这里只布局)。
         variant === 'modal' ? 'h-full' : 'flex-1 min-w-0 glass-3'
       )}
     >
+      {/* L0 — 文件拖入提示层。pointer-events-none 让 drag/drop 事件全部落在
+          <main> 本体 (提示层不吞事件、不扰动 dragDepth 计数); accent 低透明浮层
+          配方 (bg/描边走 --c-accent token), 圆角走 --r-card 档。 */}
+      {isDragActive && (
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-0 z-40 flex items-center justify-center rounded-[var(--r-card)] border-2 border-dashed border-coral/50 bg-coral/10"
+        >
+          <span className="inline-flex items-center gap-2 text-aux font-medium text-coral">
+            <Paperclip size={16} strokeWidth={2} />
+            {t('compose.dropHint')}
+          </span>
+        </div>
+      )}
       {/* 顶部动作工具栏 (Outlook 式) — 替代旧 mode 徽头 + 底部 send dock。 */}
       <header className="h-12 shrink-0 border-b border-ink-border/60 flex items-center gap-1.5 px-3">
         <button
