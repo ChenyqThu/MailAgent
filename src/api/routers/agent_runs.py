@@ -52,11 +52,15 @@ router = APIRouter(prefix="/api/agent-runs", tags=["agent-runs"])
 # 「Settings 模板不勾 kos_query」挡不住 API 直建/空策略行，收窄必须是投影层结构性保证）。
 # 排除在默认集外（owner 显式勾选才有）：kos_query（trusted-sink 残余面）、chat_session_*
 # （历史会话=二阶注入面）、agent_profile_read/history（身份文档不进 untrusted 上下文）、
-# discover_skills / skill_read / report_*（headless 默认无需求）。
+# discover_skills / skill_read / report_*（headless 默认无需求）、calendar 三写
+# （calendar_event_reschedule/rsvp/delete —— 恒卡不免审，但删除不可恢复 / rsvp 真发不可撤回
+# 的回执信，默认工具面不该自带不可逆提案权，读可默认写不默认）。
 DEFAULT_CUSTOM_AGENT_ALLOWED_TOOLS: tuple[str, ...] = (
     # email 读族（headless agent 的最小工作集）
     "email_search", "email_search_fulltext", "email_get", "email_body",
     "email_list_thread", "email_search_attachments",
+    # calendar 读族（日历 epic 4.1：silent 读 + CALENDAR_EVENT 围栏，日报/简报类 agent 直接可用）
+    "calendar_events_list", "calendar_event_get",
     # domain_write 族（注册 ≠ 免卡：无 D1 规则时仍恒岛卡）
     "email_flag", "email_archive", "email_pin", "email_resync", "email_draft_reply",
 )
@@ -90,6 +94,8 @@ def resolve_mounted_skills(agent: Optional[dict[str, Any]]) -> frozenset[str]:
 HEADLESS_TOOL_OPTIONS: tuple[tuple[str, str], ...] = (
     ("agent_profile_history", "read"),
     ("agent_profile_read", "read"),
+    ("calendar_event_get", "read"),
+    ("calendar_events_list", "read"),
     ("chat_session_get", "read"),
     ("chat_session_list", "read"),
     ("chat_session_search", "read"),
@@ -104,6 +110,11 @@ HEADLESS_TOOL_OPTIONS: tuple[tuple[str, str], ...] = (
     ("report_get", "read"),
     ("report_list", "read"),
     ("skill_read", "read"),
+    # calendar 三写（日历 epic 4.2）：class=domain_write —— headless 保注册、edit-tier 恒卡
+    # （工厂无 policyEvaluate ⇒ 连 D1 规则免卡通道都不存在，批准前只会 paused_handoff）。
+    ("calendar_event_delete", "domain_write"),
+    ("calendar_event_reschedule", "domain_write"),
+    ("calendar_event_rsvp", "domain_write"),
     ("email_archive", "domain_write"),
     ("email_draft_reply", "domain_write"),
     ("email_flag", "domain_write"),

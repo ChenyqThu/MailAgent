@@ -3113,6 +3113,7 @@
         "group": {
           "emailRead": "Email reading",
           "emailWrite": "Email actions",
+          "calendar": "Calendar",
           "report": "Reports",
           "session": "Sessions & identity",
           "knowledge": "Skills & knowledge",

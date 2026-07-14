@@ -3113,6 +3113,7 @@
         "group": {
           "emailRead": "邮件读取",
           "emailWrite": "邮件操作",
+          "calendar": "日历",
           "report": "报告",
           "session": "会话与身份",
           "knowledge": "技能与知识",
