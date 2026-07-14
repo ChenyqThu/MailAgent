@@ -730,3 +730,97 @@ def test_writer_update_event_preserves_attendee_partstat():
     line = next(L for L in evt.data.splitlines() if L.startswith("ATTENDEE"))
     assert "PARTSTAT=ACCEPTED" in line, f"PARTSTAT lost! got: {line}"
     assert "PARTSTAT=NEEDS-ACTION" not in line
+
+
+# ---------------------------------------------------------------------------
+# _connect — timeout (对齐 reader task 06-10)
+# ---------------------------------------------------------------------------
+
+def test_writer_connect_passes_timeout():
+    """#9 真日历验证实测: 无 timeout 的 DAVClient 在 DavMail 响应挂起时把调用
+    线程永久吊死在 sock_recv (reader 在 task 06-10 已加 timeout=30, writer 漏配)."""
+    w = CalDAVWriter(_mock_cfg())
+    with patch("caldav.DAVClient") as client_cls:
+        w._connect()
+    assert client_cls.call_args.kwargs.get("timeout") == 30
+
+
+# ---------------------------------------------------------------------------
+# _save_existing_event — DavMail 200-OK workaround (#9 真日历验证)
+# ---------------------------------------------------------------------------
+
+def _put_error(status_line: str):
+    from caldav.lib.error import PutError
+    return PutError(f"{status_line}\n\n<raw body>")
+
+
+def test_save_existing_event_swallows_200_puterror():
+    """DavMail 更新已存在事件返 200 OK, caldav 3.2.0 只认 201/204 误抛 PutError
+    — 服务端实际已应用, 必须当成功."""
+    from src.calendar_sync.caldav_writer import _save_existing_event
+    evt = MagicMock()
+    evt.save.side_effect = _put_error("200 OK")
+    _save_existing_event(evt)  # 不抛
+    evt.save.assert_called_once()
+
+
+def test_save_existing_event_reraises_non_200_puterror():
+    from src.calendar_sync.caldav_writer import _save_existing_event
+    from caldav.lib.error import PutError
+    evt = MagicMock()
+    evt.save.side_effect = _put_error("507 Insufficient Storage")
+    with pytest.raises(PutError):
+        _save_existing_event(evt)
+
+
+def test_save_existing_event_normal_save_passthrough():
+    from src.calendar_sync.caldav_writer import _save_existing_event
+    evt = MagicMock()
+    _save_existing_event(evt)
+    evt.save.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# update_event — VALARM 保留 (F3, #9 真日历验证)
+# ---------------------------------------------------------------------------
+
+_VALARM_TEXT = (
+    "BEGIN:VALARM\r\nACTION:DISPLAY\r\nDESCRIPTION:reminder\r\n"
+    "TRIGGER:-PT15M\r\nEND:VALARM\r\n"
+)
+
+
+def test_writer_update_event_preserves_valarm():
+    """#9 真日历验证实测: VALARM 活过 Exchange round-trip, 但 build_vevent 白名单
+    重建把它剥掉 → 改一次事件 = 用户提醒被静默删除. update_event 必须搬运原 VALARM."""
+    evt = _mock_event_with_vevent(summary="有提醒的会")
+    evt.vobject_instance.vevent.valarm_list = [
+        SimpleNamespace(serialize=lambda: _VALARM_TEXT),
+    ]
+    cal = MagicMock()
+    cal.name = "日历"
+    cal.event_by_uid.return_value = evt
+    principal = MagicMock()
+    principal.calendars.return_value = [cal]
+    w = _writer_with_mock_principal(principal)
+
+    w.update_event(ical_uid="uid-valarm", summary="改了标题")
+
+    assert "BEGIN:VALARM" in evt.data and "TRIGGER:-PT15M" in evt.data
+    # VALARM 块必须在 VEVENT 内部 (END:VEVENT 之前)
+    assert evt.data.index("END:VALARM") < evt.data.index("END:VEVENT")
+
+
+def test_writer_update_event_no_valarm_body_unchanged():
+    """无 VALARM 的事件 update 后 body 不含 VALARM (搬运逻辑零副作用)."""
+    evt = _mock_event_with_vevent(summary="无提醒的会")
+    cal = MagicMock()
+    cal.name = "日历"
+    cal.event_by_uid.return_value = evt
+    principal = MagicMock()
+    principal.calendars.return_value = [cal]
+    w = _writer_with_mock_principal(principal)
+
+    w.update_event(ical_uid="uid-novalarm", summary="改了标题")
+
+    assert "VALARM" not in evt.data

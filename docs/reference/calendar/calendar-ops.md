@@ -148,9 +148,28 @@ mailagent calendar expand --no-dry-run             # 周期会议 Notion 镜像 
 | `CALENDAR_CALDAV_SYNC_POLL_INTERVAL_SEC` | `60` | ctag 轮询间隔 |
 | `CALENDAR_CALDAV_SYNC_WINDOW_PAST_DAYS` | `30` | 全量 sync 窗口左边界 (今天 - N 天) |
 | `CALENDAR_CALDAV_SYNC_WINDOW_FUTURE_DAYS` | `180` | 全量 sync 窗口右边界 |
-| `FRONTEND_CALENDAR_V2_ENABLED` | `false` | 前端日历模块灰度开关 (Phase 4 用) |
 | `DAVMAIL_CALDAV_PORT` | `1080` | DavMail CalDAV 端口 |
 | `LLM_CALDAV_CONTEXT_ENABLED` | `false` | LLM agent 注入"今日日程" context |
+
+## 双端可写 lost-update 语义 (P2-7, 2026-07 epic 阶段 3.4 文档化)
+
+写路径 (`caldav_writer.py` 直接 PUT + #11 起的远程 HTTP 写端点) 与 Outlook/OWA 端
+同时可写同一事件, 而 CalDAV PUT 是**整资源替换**且我们**不带 If-Match/ETag 条件头**
+(库源码层面核实: caldav 3.2.0 `_put` 在 Event 对象携带 etag 时**会**自动发 If-Match,
+但我们的读回路径 `event_by_uid` 走 REPORT calendar-query 只请求 calendar-data 不请求
+getetag → `.etag` 恒 None → 恒无条件 PUT; 未来做条件写第一步就是读回时补 getetag prop):
+`update_event` 先读原 VEVENT 字段再合并整体 PUT, 两次操作之间服务端若被另一端改过,
+后写方会用自己读到的旧快照覆盖 → **last-writer-wins, 静默丢字段**。典型场景: 用户在
+OWA 改了地点, 几秒内又在 MailAgent 改标题 —— MailAgent PUT 携带的是读取时的旧地点,
+OWA 那次修改被无声回退。同理反向 (MailAgent 写完、下一个 60s sync 窗口内 OWA 覆盖)。
+
+**ETag 条件写 (If-Match) 判 icebox, 理由**:
+① 冲突窗口实际是"读-改-写"的秒级窗口 × 单用户双端同时编辑同一事件, 概率极低, 且
+worker 60s 轮询会把服务端最新态拉回 SQLite (最终一致, 丢的是并发那一次修改而非持续
+漂移); ② DavMail 桥的 ETag 支持度未经验证 (getctag 都需要 BaseElement workaround,
+见上), 做条件写需先补一轮真日历验证 + 409 冲突的 UI 交互 (重读/重试/合并提示), 成本
+与收益不成比例。若未来出现真实 dogfood 冲突案例或多写入端 (agent 写工具高频化), 再
+从 `evt.save()` 前捕获 ETag + If-Match 头做起。
 
 ## 已知限制
 
@@ -158,6 +177,9 @@ mailagent calendar expand --no-dry-run             # 周期会议 Notion 镜像 
 2. **caldav-only events `related_email_internal_id=0`**: Replay 按钮无效, Phase 2 改"基于 calendar_event 重导出 Notion"语义.
 3. **窗口外 master 也保留**: `expand=False` 后, 即使 master dtstart 在 2025 年, 只要 RRULE 在 2026 仍 valid, 行都保留. 客户端 expander 按窗口过滤显示.
 4. ~~**多 calendar 支持有限**~~ **已解决** (worker F8): 启动即 discover 全部 calendars, 之后每 ~1h (60 ticks) 重 list + diff (新增 cal 单独全量 sync, 移除 cal 保留行); 前端 toolbar 有多日历 chips.
+5. **DavMail 更新 PUT 返 200** (2026-07-14 #9 真日历验证实锤): caldav 3.2.0 只认 201/204, 会先盲重 PUT 一次再误抛 PutError → writer 已内置 `_save_existing_event` workaround (200 吞成功). 副作用: 每次更新实际 PUT 两次, DavMail 日志成对 `Overwritten event` WARN 是正常指纹非异常.
+6. **写路径时区错位两连 (真 bug, 待 tzid task 修)**: ① `update_occurrence` 的 override DTSTART 裸 `Z` 时间被 DavMail→EWS 当邮箱本地墙钟解释 (实测 +7h 错位); ② `split_series` 的 UNTIL 被 Exchange 归一成日期粒度 EndDate → split 后头 1-2 天新老系列重叠重复. 且 **CalDAV 返 200 ≠ EWS 端成功** (DavMail 吞 EWS 业务错误照返 200, 如 DAILY 系列 ErrorOccurrenceCrossingBoundary). 详见 `.trellis/tasks/07-13-epic-issue-ui-ux/research/real-calendar-verification.md` (F1/F2/F6).
+7. **CalDAV 调用可能被 EWS 挂起永久吊死**: caldav 传的 `timeout=30` 保护不到响应 body 读 (niquests/urllib3-future 裸 `sock.recv`), EWS 节流/挂起时调用线程无限等 (实测 17 分钟). worker/CLI/serve-api 写路径共享此暴露面; 加固方向见验证报告 F5.
 
 ## 重启 / 验收命令
 

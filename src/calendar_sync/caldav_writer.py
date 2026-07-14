@@ -193,6 +193,25 @@ def build_vevent(
     return "\r\n".join(lines) + "\r\n"
 
 
+def _save_existing_event(evt: Any) -> None:
+    """``evt.save()`` + DavMail 200-OK workaround (#9 真日历验证实锤).
+
+    RFC 4918 §9.7 允许 PUT 更新已存在资源返 200; DavMail 即返 200 OK 且服务端
+    已成功应用. caldav 3.2.0 ``_post_put`` 只认 201/204 → 误判失败 (内部还盲目
+    重 PUT 一次) 抛 PutError. 未打补丁前 update_event / update_occurrence /
+    split_series 所有"改现有事件"路径对真 DavMail **全部失败** (mock 单测测不出).
+    这里把 status=200 的 PutError 当成功吞掉; 其他错误原样上抛.
+    """
+    from caldav.lib.error import PutError
+
+    try:
+        evt.save()
+    except PutError as e:
+        # DAVError.url 携带 errmsg(r) = "<status> <reason>\n\n<raw>"
+        if not str(getattr(e, "url", "") or "").startswith("200 "):
+            raise
+
+
 def _extract_attendees_from_vevent(v: Any) -> List[Dict[str, Any]]:
     """从 vobject vevent 提取 attendees → ``[{email, name?, partstat?, role?, rsvp?}]``.
 
@@ -282,8 +301,12 @@ class CalDAVWriter:
         base_url = f"http://{self.host}:{self.port}/"
         logger.info(f"[caldav-writer] connecting {base_url} as {self.user!r}")
         try:
+            # timeout=30 与 reader 对齐 (task 06-10): DavMail 响应可能无限挂起,
+            # 无 timeout 的 socket recv 会把调用线程永久吊死 (#9 真日历验证
+            # 实测 harness 主线程卡死在 sock_recv → poll).
             self._client = caldav.DAVClient(
                 url=base_url, username=self.user, password=self.password,
+                timeout=30,
             )
             self._principal = self._client.principal()
         except Exception as e:
@@ -454,6 +477,13 @@ class CalDAVWriter:
         orig_recurrence_id = (
             _to_utc(orig_recurrence_id_raw) if orig_recurrence_id_raw is not None else None
         )
+        # F3 (#9 真日历验证实锤): build_vevent 白名单重建不含 VALARM, 整资源 PUT
+        # 把用户提醒静默删掉 (Exchange round-trip 本身保留 VALARM). 原样搬运原
+        # VEVENT 的 VALARM 块. X-props 不搬: X-MICROSOFT-* Exchange 自行重建,
+        # 自定义 X-prop 它本来就不保留.
+        orig_valarms = "".join(
+            a.serialize() for a in (getattr(v, "valarm_list", None) or [])
+        )
 
         # 合并 — 显式 None = 保留 (绝大多数 Optional 字段), 显式值 = 覆盖
         new_summary = summary if summary is not None else orig_summary
@@ -495,9 +525,11 @@ class CalDAVWriter:
             recurrence_id=orig_recurrence_id,
             is_all_day=new_is_all_day,
         )
+        if orig_valarms:
+            body = body.replace("END:VEVENT", orig_valarms + "END:VEVENT", 1)
         evt.data = body
         try:
-            evt.save()
+            _save_existing_event(evt)
         except Exception as e:
             raise RuntimeError(f"CalDAV PUT failed for update {ical_uid!r}: {e}") from e
         logger.info(
@@ -616,7 +648,7 @@ class CalDAVWriter:
 
         evt.data = vcal.serialize()
         try:
-            evt.save()
+            _save_existing_event(evt)
         except Exception as e:
             raise RuntimeError(
                 f"CalDAV PUT failed for occurrence override "
@@ -719,7 +751,7 @@ class CalDAVWriter:
                 pass
         evt.data = vcal.serialize()
         try:
-            evt.save()
+            _save_existing_event(evt)
         except Exception as e:
             raise RuntimeError(
                 f"CalDAV PUT failed truncating old series {ical_uid!r}: {e}"
@@ -750,7 +782,7 @@ class CalDAVWriter:
             # 都向上抛 (操作没完成, 调用方必须知道)
             try:
                 evt.data = orig_master_data
-                evt.save()
+                _save_existing_event(evt)
             except Exception as restore_exc:
                 raise RuntimeError(
                     f"CalDAV PUT failed creating new series after split: {e}; "
