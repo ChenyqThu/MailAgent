@@ -518,6 +518,39 @@ class FeishuAlertNotifier:
             alert_key=f"davmail_process_recovered:{proto}",
         )
 
+    async def alert_davmail_login_degraded(
+        self, consecutive_fails: int, threshold: int
+    ):
+        """IMAP LOGIN 持续失败 (TCP 可达) — token 劣化「能发不能收」(L2a)"""
+        await self.send_alert(
+            level="critical",
+            title="DavMail IMAP LOGIN 持续失败（token 劣化）",
+            content=(
+                f"IMAP 端口 TCP 可达但 LOGIN 已连续 **{consecutive_fails}** 次失败"
+                f"（阈值 {threshold}）。SMTP 可能仍正常 ——「能发不能收」，疑似 "
+                "DavMail 内部 token 状态劣化（如 AADSTS700003 / JVM 长跑劣化）。\n"
+                "**建议操作**: `pm2 restart davmail-poc`；重启后仍失败则重走 "
+                "O365Manual OAuth flow。"
+            ),
+            source="davmail_watchdog",
+            details={
+                "连续失败": str(consecutive_fails),
+                "阈值": str(threshold),
+                "重启命令": "`pm2 restart davmail-poc`",
+            },
+            alert_key="davmail_login_degraded",
+        )
+
+    async def alert_davmail_login_recovered(self):
+        """IMAP LOGIN 恢复 (L2a)"""
+        await self.send_alert(
+            level="info",
+            title="DavMail IMAP LOGIN 已恢复",
+            content="IMAP LOGIN 探测恢复成功，token 劣化状态解除。",
+            source="davmail_watchdog",
+            alert_key="davmail_login_recovered",
+        )
+
     async def alert_davmail_ews_throttling(self, count: int):
         """EWS throttling burst — 5min 内 ≥3 次 EWSThrottlingException"""
         await self.send_alert(

@@ -12,11 +12,17 @@
        / AADSTS5017x / AADSTS7000x → OAuth failure critical
      - EWSThrottlingException 5min 内 ≥3 → warning + 自动暂停
        uid-mapper backfill (写 sync_state['davmail_uid_backfill_paused']='true')
+  4. IMAP LOGIN 探测 (L2a, fork 31a50011 上游化) — TCP 可达时真实 LOGIN 一次,
+     抓「端口活 / SMTP 正常但 IMAP LOGIN 持续失败」的 token 劣化形态
+     (2026-06-12 事故 / AADSTS700003, 纯 TCP probe 抓不到)。连续 ≥阈值 →
+     critical + 飞书告警。需注入 cfg (user_email + cipher key), 留 None 跳过。
 
 sync_state key 约定 (frontend 通过 better-sqlite3 直读)：
   davmail.last_probe_at           ISO 时间戳
   davmail.imap_reachable          '0' / '1'
   davmail.smtp_reachable          '0' / '1'
+  davmail.imap_login_ok           '1' / '0' / '' (TCP 不可达/未注入 cfg/开关关 → 跳过)
+  davmail.consecutive_login_failures  连续 LOGIN 失败计数
   davmail.token_age_days          浮点字符串，token.dat 不存在为 '-1'
   davmail.token_mtime_iso         ISO 时间戳
   davmail.consecutive_imap_failures   连续失败计数
@@ -39,6 +45,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 from loguru import logger
 
 if TYPE_CHECKING:
+    from src.config import Config
     from src.mail.sync_store import SyncStore
     from src.notify.alert import FeishuAlertNotifier
 
@@ -64,6 +71,10 @@ _THROTTLE_WINDOW_SECS = 5 * 60
 _PROCESS_DOWN_THRESHOLD = 3  # 连续失败次数
 _TOKEN_WARN_DAYS = 80.0
 _TOKEN_CRITICAL_DAYS = 87.0
+# IMAP LOGIN 健康探测 (L2a) 默认值 — 可经 config 覆盖 (DAVMAIL_LOGIN_*)。
+# admin router / electron 的 level 重算就地复刻阈值 3 (同 token 阈值套路)。
+_LOGIN_FAIL_THRESHOLD = 3
+_LOGIN_PROBE_TIMEOUT_SECS = 15
 
 
 class DavMailWatchdog:
@@ -80,6 +91,10 @@ class DavMailWatchdog:
         smtp_port: int = 1025,
         poll_interval: int = 60,
         probe_timeout: float = 3.0,
+        cfg: Optional["Config"] = None,
+        login_probe_enabled: bool = True,
+        login_probe_timeout: int = _LOGIN_PROBE_TIMEOUT_SECS,
+        login_fail_threshold: int = _LOGIN_FAIL_THRESHOLD,
     ) -> None:
         self.sync_store = sync_store
         self.alerter = alerter
@@ -91,21 +106,30 @@ class DavMailWatchdog:
         self.smtp_port = smtp_port
         self.poll_interval = poll_interval
         self.probe_timeout = probe_timeout
+        # IMAP LOGIN 探测 (L2a) 需要 cfg (user_email + cipher key)；留 None 跳过
+        # (老调用方零行为变化)。
+        self.cfg = cfg
+        self.login_probe_enabled = login_probe_enabled
+        self.login_probe_timeout = login_probe_timeout
+        self.login_fail_threshold = login_fail_threshold
 
         self._stop = False
         # 用于跃迁检测：上一轮状态
         self._prev: Dict[str, Any] = {}
         self._consecutive_imap_fails = 0
         self._consecutive_smtp_fails = 0
+        self._consecutive_login_fails = 0
         # 已告警的"门槛"标记，避免每轮重发（alerter 自己也有 cooldown 兜底）
         self._announced_process_down_imap = False
         self._announced_process_down_smtp = False
         self._announced_throttle_burst = False
+        self._announced_login_degraded = False
         # 累计指标 (stats_reporter 用)
         self._counters = {
             "probe_cycles": 0,
             "imap_probe_failures_total": 0,
             "smtp_probe_failures_total": 0,
+            "imap_login_failures_total": 0,
             "oauth_failures_detected_total": 0,
             "throttle_events_detected_total": 0,
         }
@@ -161,6 +185,17 @@ class DavMailWatchdog:
             self._consecutive_smtp_fails += 1
             self._counters["smtp_probe_failures_total"] += 1
 
+        # IMAP LOGIN 探测 (L2a): 只在 TCP 可达 + 注入 cfg + 开关开时跑
+        # (进程死亡是另一条告警路径, 不混入 token 劣化判定)。
+        login_ok: Optional[bool] = None
+        if imap_ok and self.cfg is not None and self.login_probe_enabled:
+            login_ok = await asyncio.to_thread(self._probe_imap_login)
+            if login_ok:
+                self._consecutive_login_fails = 0
+            else:
+                self._consecutive_login_fails += 1
+                self._counters["imap_login_failures_total"] += 1
+
         token_age_days, token_mtime = self._compute_token_age()
         oauth_error, throttle_count = self._scan_log_tail()
         if oauth_error and oauth_error != self._prev.get("oauth_error"):
@@ -176,6 +211,7 @@ class DavMailWatchdog:
             token_age_days=token_age_days,
             oauth_error_active=bool(oauth_error),
             throttle_burst=throttle_count >= 3,
+            login_degraded=self._consecutive_login_fails >= self.login_fail_threshold,
         )
 
         # ── 落盘 sync_state ───────────────────────────────────────────
@@ -184,6 +220,7 @@ class DavMailWatchdog:
             now_iso=now_iso,
             imap_ok=imap_ok,
             smtp_ok=smtp_ok,
+            login_ok=login_ok,
             token_age_days=token_age_days,
             token_mtime=token_mtime,
             oauth_error=oauth_error,
@@ -204,6 +241,8 @@ class DavMailWatchdog:
             ),
             "consecutive_imap_failures": self._consecutive_imap_fails,
             "consecutive_smtp_failures": self._consecutive_smtp_fails,
+            "imap_login_ok": login_ok,
+            "consecutive_login_failures": self._consecutive_login_fails,
             "throttle_events_5min": throttle_count,
             "last_oauth_error": oauth_error,
             "uid_backfill_paused": self._announced_throttle_burst,
@@ -214,6 +253,7 @@ class DavMailWatchdog:
         await self._evaluate_alerts(
             imap_ok=imap_ok,
             smtp_ok=smtp_ok,
+            login_ok=login_ok,
             token_age_days=token_age_days,
             oauth_error=oauth_error,
             throttle_count=throttle_count,
@@ -241,6 +281,32 @@ class DavMailWatchdog:
             return True
         except (asyncio.TimeoutError, ConnectionRefusedError, OSError):
             return False
+
+    def _probe_imap_login(self) -> bool:
+        """真实 IMAP LOGIN 一次 (asyncio.to_thread 里跑, imaplib 是阻塞库)。
+
+        TCP 可达但 LOGIN 失败 = davmail 内部 token 状态劣化 (SMTP 可能仍正常,
+        「能发不能收」), 纯 TCP probe 抓不到。复用 imap_client 连接工厂 —— 每次
+        全新短命 session (DavMailBackend 每 op 也各自建连), 不干扰主同步。
+        """
+        # 局部 import: 避免 watchdog 模块 import 期拉 imap_client 重依赖
+        from src.mail.backend.imap_client import DavMailConnectionError, imap_connect
+
+        try:
+            imap = imap_connect(self.cfg, timeout=self.login_probe_timeout)
+        except DavMailConnectionError as e:
+            logger.warning(f"[davmail-watchdog] IMAP login probe failed: {e}")
+            return False
+        except Exception as e:  # noqa: BLE001 — 探测不能挂 watchdog
+            logger.warning(
+                f"[davmail-watchdog] IMAP login probe error: {type(e).__name__}: {e}"
+            )
+            return False
+        try:
+            imap.logout()
+        except Exception:
+            pass
+        return True
 
     def _compute_token_age(self) -> tuple[Optional[float], Optional[float]]:
         """返回 (age_days, mtime_epoch)；token.dat 不存在返回 (None, None)。"""
@@ -309,10 +375,14 @@ class DavMailWatchdog:
         token_age_days: Optional[float],
         oauth_error_active: bool,
         throttle_burst: bool,
+        login_degraded: bool = False,
     ) -> str:
         if oauth_error_active:
             return "critical"
         if not imap_ok or not smtp_ok:
+            return "critical"
+        if login_degraded:
+            # TCP 可达但 IMAP LOGIN 连续失败 = token 劣化 (能发不能收)
             return "critical"
         if token_age_days is not None and token_age_days >= _TOKEN_CRITICAL_DAYS:
             return "critical"
@@ -328,6 +398,7 @@ class DavMailWatchdog:
         now_iso: str,
         imap_ok: bool,
         smtp_ok: bool,
+        login_ok: Optional[bool],
         token_age_days: Optional[float],
         token_mtime: Optional[float],
         oauth_error: Optional[str],
@@ -337,6 +408,13 @@ class DavMailWatchdog:
         ss.set_state("davmail.last_probe_at", now_iso)
         ss.set_state("davmail.imap_reachable", "1" if imap_ok else "0")
         ss.set_state("davmail.smtp_reachable", "1" if smtp_ok else "0")
+        ss.set_state(
+            "davmail.imap_login_ok",
+            "" if login_ok is None else ("1" if login_ok else "0"),
+        )
+        ss.set_state(
+            "davmail.consecutive_login_failures", str(self._consecutive_login_fails)
+        )
         ss.set_state(
             "davmail.consecutive_imap_failures", str(self._consecutive_imap_fails)
         )
@@ -364,6 +442,7 @@ class DavMailWatchdog:
         *,
         imap_ok: bool,
         smtp_ok: bool,
+        login_ok: Optional[bool],
         token_age_days: Optional[float],
         oauth_error: Optional[str],
         throttle_count: int,
@@ -391,6 +470,18 @@ class DavMailWatchdog:
         elif smtp_ok and self._announced_process_down_smtp:
             await self.alerter.alert_davmail_process_recovered("SMTP")
             self._announced_process_down_smtp = False
+
+        # 1b. IMAP LOGIN 劣化 (L2a): 连续 ≥阈值失败一次性告警, 恢复后通知
+        #     (announce-once-until-cleared, 镜像进程 down/recovered 模式)
+        if self._consecutive_login_fails >= self.login_fail_threshold:
+            if not self._announced_login_degraded:
+                await self.alerter.alert_davmail_login_degraded(
+                    self._consecutive_login_fails, self.login_fail_threshold
+                )
+                self._announced_login_degraded = True
+        elif login_ok and self._announced_login_degraded:
+            await self.alerter.alert_davmail_login_recovered()
+            self._announced_login_degraded = False
 
         # 2. Token 过期门槛
         if token_age_days is not None:

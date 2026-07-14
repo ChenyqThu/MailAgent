@@ -293,6 +293,11 @@ class EmailNotionSyncApp:
                 imap_host=config.davmail_imap_host,
                 imap_port=config.davmail_imap_port,
                 smtp_port=config.davmail_smtp_port,
+                # L2a: IMAP LOGIN 健康探测 (真实 LOGIN 验 token, 纯 TCP 抓不到劣化)
+                cfg=config,
+                login_probe_enabled=config.davmail_login_probe_enabled,
+                login_probe_timeout=config.davmail_login_probe_timeout_sec,
+                login_fail_threshold=config.davmail_login_fail_threshold,
             )
             if self.stats_reporter:
                 self.stats_reporter.add_collector(

@@ -6,9 +6,7 @@
 from __future__ import annotations
 
 import asyncio
-import unittest.mock as um
 
-import pytest
 
 from src.notify.alert import FeishuAlertNotifier
 
@@ -85,6 +83,24 @@ def test_alert_davmail_ews_throttling_is_warning(monkeypatch):
     card = sent[0]
     assert card["header"]["template"] == "yellow"
     assert "5" in card["elements"][0]["content"]
+
+
+def test_alert_davmail_login_degraded_is_critical(monkeypatch):
+    """L2a: IMAP LOGIN 持续失败 (token 劣化) → critical + 计数/阈值入内容."""
+    n, sent = _make_notifier(monkeypatch)
+    _run(n.alert_davmail_login_degraded(3, 3))
+    assert len(sent) == 1
+    card = sent[0]
+    assert card["header"]["template"] == "red"
+    assert "LOGIN" in card["header"]["title"]["content"]
+    assert "3" in card["elements"][0]["content"]
+
+
+def test_alert_davmail_login_recovered_is_info(monkeypatch):
+    n, sent = _make_notifier(monkeypatch)
+    _run(n.alert_davmail_login_recovered())
+    assert len(sent) == 1
+    assert sent[0]["header"]["template"] == "blue"
 
 
 def test_cooldown_dedupes_repeat_same_key(monkeypatch):

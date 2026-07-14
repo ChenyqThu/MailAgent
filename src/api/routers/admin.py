@@ -532,6 +532,9 @@ async def admin_cleanup_dead_letter(
 # router 只需两个标量, 故就地复刻)。
 _TOKEN_WARN_DAYS = 80.0
 _TOKEN_CRITICAL_DAYS = 87.0
+# L2a: 镜像 davmail_watchdog._LOGIN_FAIL_THRESHOLD (默认 3)。watchdog 可经
+# DAVMAIL_LOGIN_FAIL_THRESHOLD 覆盖, 覆盖非默认值时这里的展示判定会漂移。
+_LOGIN_FAIL_THRESHOLD = 3
 
 
 def _read_davmail_state(repo: "EmailRepository") -> dict[str, str]:
@@ -564,11 +567,15 @@ def _compute_level(
     token_age_days: Optional[float],
     oauth_error_active: bool,
     throttle_burst: bool,
+    login_degraded: bool = False,
 ) -> str:
     """重算 overall level (镜像 davmail_watchdog._compute_overall_level)。"""
     if oauth_error_active:
         return "critical"
     if not imap_ok or not smtp_ok:
+        return "critical"
+    if login_degraded:
+        # TCP 可达但 IMAP LOGIN 连续失败 = token 劣化 (能发不能收)
         return "critical"
     if token_age_days is not None and token_age_days >= _TOKEN_CRITICAL_DAYS:
         return "critical"
@@ -612,6 +619,12 @@ def _build_davmail_health(state: dict[str, str]) -> dict:
     throttle_5min = _as_int("davmail.throttle_events_5min")
     uid_backfill_paused = state.get("davmail_uid_backfill_paused") == "true"
 
+    # L2a: '' = 该轮跳过 login 探测 (TCP 不可达/未注入 cfg/开关关) → None
+    imap_login_raw = state.get("davmail.imap_login_ok")
+    imap_login_ok = None if not imap_login_raw else imap_login_raw == "1"
+    consecutive_login_failures = _as_int("davmail.consecutive_login_failures")
+    login_degraded = consecutive_login_failures >= _LOGIN_FAIL_THRESHOLD
+
     if not enabled:
         level = "unknown"
     else:
@@ -621,6 +634,7 @@ def _build_davmail_health(state: dict[str, str]) -> dict:
             token_age_days=token_age_days,
             oauth_error_active=bool(last_oauth_error),
             throttle_burst=throttle_5min >= 3,
+            login_degraded=login_degraded,
         )
 
     return {
@@ -631,6 +645,8 @@ def _build_davmail_health(state: dict[str, str]) -> dict:
         "smtp_reachable": smtp_ok,
         "consecutive_imap_failures": _as_int("davmail.consecutive_imap_failures"),
         "consecutive_smtp_failures": _as_int("davmail.consecutive_smtp_failures"),
+        "imap_login_ok": imap_login_ok,
+        "consecutive_login_failures": consecutive_login_failures,
         "token_age_days": token_age_days,
         "token_mtime_iso": token_mtime_iso,
         "throttle_events_5min": throttle_5min,
@@ -704,6 +720,17 @@ async def admin_system_alerts(
                 "message": (
                     "SMTP probe (127.0.0.1:1025) failing; "
                     f"{health['consecutive_smtp_failures']} consecutive failures."
+                ),
+                "ts": probe_at,
+            })
+        if health["consecutive_login_failures"] >= _LOGIN_FAIL_THRESHOLD:
+            alerts.append({
+                "level": "critical", "source": "davmail",
+                "title": "DavMail IMAP LOGIN failing",
+                "message": (
+                    "IMAP port reachable but LOGIN failing "
+                    f"({health['consecutive_login_failures']} consecutive failures) "
+                    "— token degraded (can send, can't receive)."
                 ),
                 "ts": probe_at,
             })

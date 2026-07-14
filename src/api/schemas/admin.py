@@ -129,6 +129,10 @@ class DavMailHealthData(BaseModel):
     smtp_reachable: bool
     consecutive_imap_failures: int
     consecutive_smtp_failures: int
+    # L2a: 真实 IMAP LOGIN 探测。None = 该轮跳过 (TCP 不可达/未注入 cfg/开关关/
+    # 老后端未写键)。
+    imap_login_ok: Optional[bool] = None
+    consecutive_login_failures: int = 0
     token_age_days: Optional[float] = None
     token_mtime_iso: Optional[str] = None
     throttle_events_5min: int

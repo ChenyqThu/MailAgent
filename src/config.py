@@ -823,6 +823,27 @@ class Config(BaseSettings):
             "AppleScript backend 仍走 radar_poll_interval (默认 5s)."
         ),
     )
+    davmail_login_probe_enabled: bool = Field(
+        default=True, env="DAVMAIL_LOGIN_PROBE_ENABLED",
+        description=(
+            "watchdog 每轮 (60s) 在 IMAP TCP 可达时做一次真实 IMAP LOGIN 探测 — 抓"
+            "「端口活 / SMTP 正常但 IMAP LOGIN 持续失败」的 token 劣化形态 "
+            "(2026-06-12 事故特征, 纯 TCP probe 抓不到)。显式 false = 回退 "
+            "TCP/token 年龄/日志三信号老行为 (应急)。"
+        ),
+    )
+    davmail_login_probe_timeout_sec: int = Field(
+        default=15, env="DAVMAIL_LOGIN_PROBE_TIMEOUT_SEC",
+        description="IMAP LOGIN 健康探测超时 (秒)。",
+    )
+    davmail_login_fail_threshold: int = Field(
+        default=3, env="DAVMAIL_LOGIN_FAIL_THRESHOLD",
+        description=(
+            "连续 LOGIN 失败达此阈值 → level critical + 飞书告警 (login degraded)。"
+            "admin router / electron 的 level 重算就地复刻默认值 3 (同 token 阈值"
+            "套路), 改非默认值时展示端判定会漂移。"
+        ),
+    )
     davmail_caldav_port: int = Field(
         default=1080, env="DAVMAIL_CALDAV_PORT",
         description="DavMail CalDAV 端口 (Phase C.2 — LLM agent 拿日程 context)",

@@ -86,6 +86,11 @@ export interface DavMailHealthData {
   smtp_reachable: boolean
   consecutive_imap_failures: number
   consecutive_smtp_failures: number
+  /** L2a — real IMAP LOGIN probe result. Null/undefined when the probe was
+   *  skipped (TCP down / probe disabled / cfg not injected / older backend). */
+  imap_login_ok?: boolean | null
+  /** Consecutive LOGIN failures; >= 3 drives level critical (token degraded). */
+  consecutive_login_failures?: number
   /** Days since token.dat mtime. Null when token.dat missing. */
   token_age_days: number | null
   token_mtime_iso: string | null

@@ -142,6 +142,9 @@ export interface DavMailHealthData {
   smtp_reachable: boolean
   consecutive_imap_failures: number
   consecutive_smtp_failures: number
+  /** L2a — real IMAP LOGIN probe. Null when skipped (TCP down / disabled). */
+  imap_login_ok?: boolean | null
+  consecutive_login_failures?: number
   token_age_days: number | null
   token_mtime_iso: string | null
   throttle_events_5min: number
@@ -190,6 +193,8 @@ export function runDavmailHealth(): DavMailHealthData {
       smtp_reachable: false,
       consecutive_imap_failures: 0,
       consecutive_smtp_failures: 0,
+      imap_login_ok: null,
+      consecutive_login_failures: 0,
       token_age_days: null,
       token_mtime_iso: null,
       throttle_events_5min: 0,
@@ -209,6 +214,8 @@ export function runDavmailHealth(): DavMailHealthData {
       smtp_reachable: false,
       consecutive_imap_failures: 0,
       consecutive_smtp_failures: 0,
+      imap_login_ok: null,
+      consecutive_login_failures: 0,
       token_age_days: null,
       token_mtime_iso: null,
       throttle_events_5min: 0,
@@ -223,6 +230,10 @@ export function runDavmailHealth(): DavMailHealthData {
   const smtpOk = state['davmail.smtp_reachable'] === '1'
   const imapFails = parseInt(state['davmail.consecutive_imap_failures'] || '0', 10)
   const smtpFails = parseInt(state['davmail.consecutive_smtp_failures'] || '0', 10)
+  // L2a: '' = 该轮跳过 login 探测 (TCP down / 开关关 / 未注入 cfg) → null
+  const loginRaw = state['davmail.imap_login_ok']
+  const loginOk = loginRaw === '1' ? true : loginRaw === '0' ? false : null
+  const loginFails = parseInt(state['davmail.consecutive_login_failures'] || '0', 10)
   const throttleCount = parseInt(state['davmail.throttle_events_5min'] || '0', 10)
   const lastOAuthErr = state['davmail.last_oauth_error'] || null
   const lastOAuthAt = state['davmail.last_oauth_error_at'] || null
@@ -232,6 +243,8 @@ export function runDavmailHealth(): DavMailHealthData {
   if (oauthRecent) level = 'critical'
   else if (!imapOk && imapFails >= 3) level = 'critical'
   else if (!smtpOk && smtpFails >= 3) level = 'critical'
+  // L2a: TCP 可达但 LOGIN 连续失败 = token 劣化 (镜像 watchdog 阈值 3)
+  else if (loginFails >= 3) level = 'critical'
   else if (tokenAge >= 87) level = 'critical'
   else if (tokenAge >= 80) level = 'warning'
   else if (throttleCount >= 3) level = 'warning'
@@ -245,6 +258,8 @@ export function runDavmailHealth(): DavMailHealthData {
     smtp_reachable: smtpOk,
     consecutive_imap_failures: imapFails,
     consecutive_smtp_failures: smtpFails,
+    imap_login_ok: loginOk,
+    consecutive_login_failures: loginFails,
     token_age_days: tokenAge >= 0 ? tokenAge : null,
     token_mtime_iso: state['davmail.token_mtime_iso'] || null,
     throttle_events_5min: throttleCount,
@@ -325,6 +340,16 @@ export function runSystemAlerts(): SystemAlertsData {
         ts: h.last_probe_at
       })
     }
+  }
+  // L2a: TCP 可达但 IMAP LOGIN 连续失败 = token 劣化 (能发不能收)
+  if (h.enabled && (h.consecutive_login_failures ?? 0) >= 3) {
+    alerts.push({
+      level: 'critical',
+      source: 'davmail',
+      title: 'DavMail IMAP LOGIN 持续失败',
+      message: `端口可达但 LOGIN 连续 ${h.consecutive_login_failures} 次失败 — token 劣化 (能发不能收), 建议 pm2 restart davmail-poc`,
+      ts: h.last_probe_at
+    })
   }
   if (h.enabled && h.throttle_events_5min >= 3) {
     alerts.push({

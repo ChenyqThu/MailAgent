@@ -8,16 +8,26 @@
 //   - deadLetterList normalizes both `[...]` and `{items: [...]}` CLI shapes
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
+import Database from 'better-sqlite3'
 
 const { mockCallCli } = vi.hoisted(() => ({ mockCallCli: vi.fn() }))
 
 vi.mock('../../src/electron/main/cli_runner', async () => {
-  const actual =
-    await vi.importActual<typeof import('../../src/electron/main/cli_runner')>(
-      '../../src/electron/main/cli_runner'
-    )
+  const actual = await vi.importActual<typeof import('../../src/electron/main/cli_runner')>(
+    '../../src/electron/main/cli_runner'
+  )
   return { ...actual, callCli: mockCallCli }
 })
+
+// runDavmailHealth/runSystemAlerts 直读 better-sqlite3 (不走 callCli) — 换成
+// in-memory fixture db (contact_suggest.test.ts 同款套路)。
+let fixtureDb: Database.Database | null = null
+
+vi.mock('../../src/electron/main/db', () => ({
+  getDb: () => fixtureDb as Database.Database,
+  closeDb: () => {},
+  resolveDbPath: () => ':memory:'
+}))
 
 import { CliError } from '../../src/electron/main/cli_runner'
 import {
@@ -25,8 +35,10 @@ import {
   runAdminHealth,
   runAdminStats,
   runCleanupDeadLetter,
+  runDavmailHealth,
   runDeadLetterList,
-  runDeadLetterRetry
+  runDeadLetterRetry,
+  runSystemAlerts
 } from '../../src/electron/main/handlers/admin'
 
 beforeEach(() => {
@@ -137,5 +149,75 @@ describe('admin handlers — envelope + validation', () => {
 
   test('ensureInternalId passes valid integer', () => {
     expect(__testing.ensureInternalId(42, 'admin:deadLetterRetry')).toBe(42)
+  })
+})
+
+describe('admin handlers — davmail health (L2a IMAP LOGIN probe)', () => {
+  function seedSyncState(rows: Record<string, string>): void {
+    fixtureDb = new Database(':memory:')
+    fixtureDb.exec('CREATE TABLE sync_state (key TEXT PRIMARY KEY, value TEXT)')
+    const insert = fixtureDb.prepare('INSERT INTO sync_state (key, value) VALUES (?, ?)')
+    for (const [k, v] of Object.entries(rows)) insert.run(k, v)
+  }
+
+  afterEach(() => {
+    fixtureDb?.close()
+    fixtureDb = null
+  })
+
+  const baseHealthy = {
+    'davmail.last_probe_at': '2026-07-14T10:00:00',
+    'davmail.imap_reachable': '1',
+    'davmail.smtp_reachable': '1',
+    'davmail.token_age_days': '5.00'
+  }
+
+  test('login degraded (>=3 consecutive failures) drives level critical', () => {
+    seedSyncState({
+      ...baseHealthy,
+      'davmail.imap_login_ok': '0',
+      'davmail.consecutive_login_failures': '3'
+    })
+    const h = runDavmailHealth()
+    expect(h.level).toBe('critical')
+    expect(h.imap_login_ok).toBe(false)
+    expect(h.consecutive_login_failures).toBe(3)
+  })
+
+  test('login ok / skipped ("" → null) keep level ok', () => {
+    seedSyncState({
+      ...baseHealthy,
+      'davmail.imap_login_ok': '1',
+      'davmail.consecutive_login_failures': '0'
+    })
+    let h = runDavmailHealth()
+    expect(h.level).toBe('ok')
+    expect(h.imap_login_ok).toBe(true)
+
+    seedSyncState({ ...baseHealthy, 'davmail.imap_login_ok': '' })
+    h = runDavmailHealth()
+    expect(h.level).toBe('ok')
+    expect(h.imap_login_ok).toBeNull()
+  })
+
+  test('missing login keys (older backend) parse as null/0 without breaking', () => {
+    seedSyncState(baseHealthy)
+    const h = runDavmailHealth()
+    expect(h.level).toBe('ok')
+    expect(h.imap_login_ok).toBeNull()
+    expect(h.consecutive_login_failures).toBe(0)
+  })
+
+  test('runSystemAlerts synthesizes critical item on login degraded', () => {
+    seedSyncState({
+      ...baseHealthy,
+      'davmail.imap_login_ok': '0',
+      'davmail.consecutive_login_failures': '4'
+    })
+    const alerts = runSystemAlerts()
+    const login = alerts.alerts.find((a) => a.title === 'DavMail IMAP LOGIN 持续失败')
+    expect(login).toBeDefined()
+    expect(login?.level).toBe('critical')
+    expect(alerts.critical_count).toBeGreaterThanOrEqual(1)
   })
 })

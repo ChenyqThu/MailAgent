@@ -336,6 +336,8 @@ async def test_tick_writes_all_sync_state_keys(
         "davmail.token_mtime_iso",
         "davmail.consecutive_imap_failures",
         "davmail.consecutive_smtp_failures",
+        "davmail.imap_login_ok",
+        "davmail.consecutive_login_failures",
         "davmail.throttle_events_5min",
     ):
         assert sync_store.get_state(key) is not None, f"missing key {key}"
@@ -436,3 +438,183 @@ async def test_oauth_alert_dedupes_repeat_same_error(
     await wd._tick()  # 同样的 error 不应重复发
     oauth_calls = [c for c in alerter.calls if c[0] == "alert_davmail_oauth_failure"]
     assert len(oauth_calls) == 1
+
+
+# ────────────────────────────────────────────────────────────────
+# IMAP LOGIN 探测 (L2a, fork 31a50011 上游化)
+# ────────────────────────────────────────────────────────────────
+
+
+def _make_login_wd(
+    sync_store: SyncStore,
+    davmail_root: Path,
+    alerter=None,
+    *,
+    login_ok: bool = False,
+    **kw,
+):
+    """构造带 cfg 的 watchdog (启用 login 探测), login 探测打桩."""
+    wd = DavMailWatchdog(
+        sync_store=sync_store,
+        alerter=alerter,  # type: ignore[arg-type]
+        davmail_root=davmail_root,
+        cfg=object(),  # type: ignore[arg-type] — 仅需非 None 启用 login 探测
+        **kw,
+    )
+    wd._probe_imap_login = lambda: login_ok  # type: ignore[method-assign]
+    return wd
+
+
+async def test_login_success_resets_failure_counter(
+    sync_store: SyncStore, davmail_root: Path
+):
+    wd = _make_login_wd(sync_store, davmail_root, login_ok=False)
+    await _patch_probe(wd, imap_ok=True, smtp_ok=True)
+    await wd._tick()
+    await wd._tick()
+    assert wd._consecutive_login_fails == 2
+    assert sync_store.get_state("davmail.imap_login_ok") == "0"
+    assert sync_store.get_state("davmail.consecutive_login_failures") == "2"
+
+    wd._probe_imap_login = lambda: True  # type: ignore[method-assign]
+    await wd._tick()
+    assert wd._consecutive_login_fails == 0
+    assert sync_store.get_state("davmail.imap_login_ok") == "1"
+    assert sync_store.get_state("davmail.consecutive_login_failures") == "0"
+
+
+async def test_consecutive_login_failures_drive_critical_and_alert_once(
+    sync_store: SyncStore, davmail_root: Path, write_token
+):
+    write_token(age_seconds=86400 * 5)  # token 新鲜, critical 只能来自 login
+    alerter = _FakeAlerter()
+    wd = _make_login_wd(sync_store, davmail_root, alerter, login_ok=False)
+    await _patch_probe(wd, imap_ok=True, smtp_ok=True)
+
+    await wd._tick()
+    await wd._tick()
+    degraded = [c for c in alerter.calls if c[0] == "alert_davmail_login_degraded"]
+    assert degraded == [], "未达阈值 (2 次) 不应告警"
+    assert wd.get_snapshot()["level"] == "ok"
+
+    await wd._tick()  # 第 3 次 → 阈值
+    degraded = [c for c in alerter.calls if c[0] == "alert_davmail_login_degraded"]
+    assert len(degraded) == 1, "达阈值应告警一次"
+    assert degraded[0][1] == (3, 3)  # (consecutive_fails, threshold)
+    assert wd.get_snapshot()["level"] == "critical"
+
+    await wd._tick()  # 第 4 次持续失败不重发
+    degraded = [c for c in alerter.calls if c[0] == "alert_davmail_login_degraded"]
+    assert len(degraded) == 1, "持续劣化不应重发 (announce-once-until-cleared)"
+
+
+async def test_login_recovery_announces_and_resets(
+    sync_store: SyncStore, davmail_root: Path, write_token
+):
+    write_token(age_seconds=86400 * 5)
+    alerter = _FakeAlerter()
+    wd = _make_login_wd(sync_store, davmail_root, alerter, login_ok=False)
+    await _patch_probe(wd, imap_ok=True, smtp_ok=True)
+    for _ in range(3):
+        await wd._tick()
+
+    wd._probe_imap_login = lambda: True  # type: ignore[method-assign]
+    await wd._tick()
+    recovered = [c for c in alerter.calls if c[0] == "alert_davmail_login_recovered"]
+    assert len(recovered) == 1
+    assert wd._consecutive_login_fails == 0
+    assert wd.get_snapshot()["level"] == "ok"
+
+
+async def test_login_probe_skipped_when_tcp_down(
+    sync_store: SyncStore, davmail_root: Path
+):
+    """TCP 不可达时跳过 login 探测 (进程死亡走独立告警路径, 不误判 token 劣化)."""
+    wd = _make_login_wd(sync_store, davmail_root)
+
+    def boom():
+        raise AssertionError("TCP down 时不应跑 login 探测")
+
+    wd._probe_imap_login = boom  # type: ignore[method-assign]
+    await _patch_probe(wd, imap_ok=False, smtp_ok=True)
+    await wd._tick()
+    assert sync_store.get_state("davmail.imap_login_ok") == ""
+
+
+async def test_login_probe_skipped_without_cfg(
+    sync_store: SyncStore, davmail_root: Path
+):
+    """未注入 cfg (老调用方) → 不跑 login 探测, 行为与改动前一致."""
+    wd = DavMailWatchdog(
+        sync_store=sync_store, alerter=None, davmail_root=davmail_root
+    )
+
+    def boom():
+        raise AssertionError("cfg=None 时不应跑 login 探测")
+
+    wd._probe_imap_login = boom  # type: ignore[method-assign]
+    await _patch_probe(wd, imap_ok=True, smtp_ok=True)
+    await wd._tick()
+    assert sync_store.get_state("davmail.imap_login_ok") == ""
+
+
+async def test_login_probe_skipped_when_disabled(
+    sync_store: SyncStore, davmail_root: Path
+):
+    """DAVMAIL_LOGIN_PROBE_ENABLED=false → 不探测 (应急回退老三信号)."""
+    wd = _make_login_wd(sync_store, davmail_root, login_probe_enabled=False)
+
+    def boom():
+        raise AssertionError("开关关时不应跑 login 探测")
+
+    wd._probe_imap_login = boom  # type: ignore[method-assign]
+    await _patch_probe(wd, imap_ok=True, smtp_ok=True)
+    await wd._tick()
+    assert sync_store.get_state("davmail.imap_login_ok") == ""
+
+
+def test_login_degraded_drives_level_critical(
+    sync_store: SyncStore, davmail_root: Path
+):
+    wd = DavMailWatchdog(
+        sync_store=sync_store, alerter=None, davmail_root=davmail_root
+    )
+    level = wd._compute_overall_level(
+        imap_ok=True,
+        smtp_ok=True,
+        token_age_days=5.0,
+        oauth_error_active=False,
+        throttle_burst=False,
+        login_degraded=True,
+    )
+    assert level == "critical"
+
+
+def test_probe_imap_login_success_and_failure(
+    sync_store: SyncStore, davmail_root: Path, monkeypatch
+):
+    """真实现: imap_connect 成功 → True; DavMailConnectionError → False (不冒泡)."""
+    import src.mail.backend.imap_client as imap_client_mod
+    from src.mail.backend.imap_client import DavMailConnectionError
+
+    wd = DavMailWatchdog(
+        sync_store=sync_store,
+        alerter=None,
+        davmail_root=davmail_root,
+        cfg=object(),  # type: ignore[arg-type]
+    )
+
+    class _FakeImap:
+        def logout(self):
+            pass
+
+    monkeypatch.setattr(
+        imap_client_mod, "imap_connect", lambda cfg, *, timeout: _FakeImap()
+    )
+    assert wd._probe_imap_login() is True
+
+    def _raise(cfg, *, timeout):
+        raise DavMailConnectionError("IMAP LOGIN error: token expired")
+
+    monkeypatch.setattr(imap_client_mod, "imap_connect", _raise)
+    assert wd._probe_imap_login() is False

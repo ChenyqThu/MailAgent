@@ -157,6 +157,50 @@ def test_davmail_health_token_age_sentinel_minus1_is_null(davmail_client_factory
     assert data["level"] == "ok"
 
 
+def test_davmail_health_critical_on_login_degraded(davmail_client_factory):
+    # L2a: TCP 可达但 IMAP LOGIN 连续 >=3 次失败 → token 劣化 critical
+    # (「能发不能收」形态, 纯 TCP 信号全绿也必须翻脸)。
+    c = davmail_client_factory({
+        "davmail.last_probe_at": "2026-05-31T10:00:00+00:00",
+        "davmail.imap_reachable": "1",
+        "davmail.smtp_reachable": "1",
+        "davmail.token_age_days": "5",
+        "davmail.imap_login_ok": "0",
+        "davmail.consecutive_login_failures": "3",
+    })
+    data = c.get("/api/admin/davmail-health").json()["data"]
+    assert data["level"] == "critical"
+    assert data["imap_login_ok"] is False
+    assert data["consecutive_login_failures"] == 3
+
+
+def test_davmail_health_login_ok_and_skip_semantics(davmail_client_factory):
+    # '1' → true; '' (该轮跳过探测) → null。均不影响 level ok。
+    c = davmail_client_factory({
+        "davmail.last_probe_at": "2026-05-31T10:00:00+00:00",
+        "davmail.imap_reachable": "1",
+        "davmail.smtp_reachable": "1",
+        "davmail.token_age_days": "5",
+        "davmail.imap_login_ok": "1",
+        "davmail.consecutive_login_failures": "0",
+    })
+    data = c.get("/api/admin/davmail-health").json()["data"]
+    assert data["level"] == "ok"
+    assert data["imap_login_ok"] is True
+    assert data["consecutive_login_failures"] == 0
+
+    c2 = davmail_client_factory({
+        "davmail.last_probe_at": "2026-05-31T10:00:00+00:00",
+        "davmail.imap_reachable": "1",
+        "davmail.smtp_reachable": "1",
+        "davmail.token_age_days": "5",
+        "davmail.imap_login_ok": "",
+    })
+    data2 = c2.get("/api/admin/davmail-health").json()["data"]
+    assert data2["level"] == "ok"
+    assert data2["imap_login_ok"] is None
+
+
 # ===========================================================================
 # GET /api/admin/system-alerts
 # ===========================================================================
@@ -207,6 +251,22 @@ def test_system_alerts_warning_token_and_throttle(davmail_client_factory):
     assert "warning" in levels
     assert data["warning_count"] >= 2  # token aging + throttling.
     assert data["critical_count"] == 0
+
+
+def test_system_alerts_critical_on_login_degraded(davmail_client_factory):
+    # L2a: 端口全绿但 LOGIN 连续失败 → 合成 critical 告警 (badge 与 level 一致)。
+    c = davmail_client_factory({
+        "davmail.last_probe_at": "2026-05-31T10:00:00+00:00",
+        "davmail.imap_reachable": "1",
+        "davmail.smtp_reachable": "1",
+        "davmail.token_age_days": "5",
+        "davmail.imap_login_ok": "0",
+        "davmail.consecutive_login_failures": "4",
+    })
+    data = c.get("/api/admin/system-alerts").json()["data"]
+    titles = [a["title"] for a in data["alerts"]]
+    assert "DavMail IMAP LOGIN failing" in titles
+    assert data["critical_count"] >= 1
 
 
 # ===========================================================================
