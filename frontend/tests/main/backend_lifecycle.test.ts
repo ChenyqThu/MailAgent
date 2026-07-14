@@ -24,6 +24,7 @@ import {
 } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
+import { fileURLToPath } from 'url'
 
 // ---- electron app mock (isPackaged 可切换) ---------------------------------
 
@@ -83,6 +84,11 @@ vi.mock('child_process', () => ({
     lastChild = makeFakeChild()
     childByArgs.set(args[0], lastChild)
     return lastChild
+  }),
+  // killStaleBackendListeners 默认 io.run = execFileSync (真实 lsof/ps)。单测全部注入
+  // io.run, 此 mock 仅保证「谁忘了注入」会拿到可断言的 vi.fn 而非真跑系统命令。
+  execFileSync: vi.fn(() => {
+    throw new Error('execFileSync mocked: inject io.run in tests')
   })
 }))
 
@@ -184,10 +190,14 @@ const {
   EXPECTED_DB_VERSION,
   REQUIRED_TABLES,
   DEFAULT_API_PORT,
+  DEFAULT_SSE_PORT,
   DB_INTEGRITY_MARKER_FILENAME,
   LOG_ROTATION_KEEP,
+  STALE_CMD_MARKER,
+  killStaleBackendListeners,
   probeApiHealth,
   readDbIntegrityFailure,
+  resolveSsePort,
   rotateLogChain,
   registerBackendQuitHook,
   _resetBackendLifecycleForTests
@@ -220,6 +230,7 @@ beforeEach(() => {
 afterEach(() => {
   delete process.env.MAILAGENT_REMOTE_ACCESS_ENABLED
   delete process.env.MAILAGENT_API_PORT
+  delete process.env.SSE_LOCAL_PORT
   delete process.env.CF_AUDIENCE
   delete process.env.CF_TEAM_DOMAIN
   delete process.env.MAILAGENT_API_ALLOWED_EMAIL
@@ -1398,5 +1409,154 @@ describe('rotateLogChain (E4 §4.1 崩溃日志滚动)', () => {
     expect(read('backend-process.log.prev')).toBeNull() // 孤儿已迁走, 不永久残留
     expect(read('backend-process.log.1')).toBe('LIVE') // 当前 log = 最新一代
     expect(read('backend-process.log.2')).toBe('OLD-PREV') // .prev = 更老一代
+  })
+})
+
+// ===========================================================================
+// 启动自愈 — spawn 前清理残留 mailagent 进程 (L4 stale-listener sweep)
+// (fork 02fa941c 只取这一半; quit-hook 本仓已有更完整实现, 不回港)
+// ===========================================================================
+
+describe('启动自愈 — start() spawn 前扫残留端口', () => {
+  test('packaged: spawn 前以 [SSE, API] 端口调用 staleSweep (先扫后 spawn)', () => {
+    appMock.isPackaged = true
+    const sweep = vi.fn((_ports: number[]) => {
+      expect(spawnCalls).toHaveLength(0) // 必须先扫后 spawn
+      return []
+    })
+    const mgr = new BackendLifecycleManager({ staleSweep: sweep })
+    mgr.start()
+    expect(sweep).toHaveBeenCalledWith([DEFAULT_SSE_PORT, DEFAULT_API_PORT])
+    expect(spawnCalls.length).toBeGreaterThan(0)
+  })
+
+  test('dev: 不扫描 (pnpm dev 蹭 8200 不受影响)', () => {
+    appMock.isPackaged = false
+    const sweep = vi.fn(() => [])
+    new BackendLifecycleManager({ staleSweep: sweep }).start()
+    expect(sweep).not.toHaveBeenCalled()
+    expect(spawnCalls).toHaveLength(0)
+  })
+
+  test('扫描抛错不阻断 spawn (fail-open, 自愈是 best-effort)', () => {
+    appMock.isPackaged = true
+    const sweep = vi.fn(() => {
+      throw new Error('lsof unavailable')
+    })
+    const mgr = new BackendLifecycleManager({ staleSweep: sweep })
+    mgr.start()
+    expect(spawnCalls.filter((c) => c.args[0] === 'serve')).toHaveLength(1)
+  })
+
+  test('resolveSsePort: 默认 9200, SSE_LOCAL_PORT 可覆盖, 非法值回退默认', () => {
+    expect(resolveSsePort()).toBe(9200)
+    process.env.SSE_LOCAL_PORT = '9300'
+    expect(resolveSsePort()).toBe(9300)
+    process.env.SSE_LOCAL_PORT = 'not-a-number'
+    expect(resolveSsePort()).toBe(9200)
+  })
+})
+
+describe('killStaleBackendListeners — lsof/ps/kill 注入单测', () => {
+  // 打包态孤儿的真实命令行形状 (ps -o command= 输出): wrapper exec 后 argv 拼接。
+  const MAILAGENT_CMD =
+    '/Applications/MailAgent.app/Contents/Resources/python/bin/python3.11 -B -P -c ' +
+    "from src.cli.main import app; app(prog_name='mailagent') serve\n"
+
+  test('孤儿响应 SIGTERM → 短等内回收, 不升级 SIGKILL', () => {
+    let terminated = false
+    const io = {
+      run: vi.fn((cmd: string) => (cmd === 'lsof' ? '1234\n' : MAILAGENT_CMD)),
+      kill: vi.fn((_pid: number, sig: NodeJS.Signals | number) => {
+        if (sig === 'SIGTERM') terminated = true
+        else if (sig === 0 && terminated) throw new Error('ESRCH') // 探活: 已死
+      }),
+      sleep: vi.fn()
+    }
+    expect(killStaleBackendListeners([9200], io)).toEqual([1234])
+    expect(io.kill).toHaveBeenCalledWith(1234, 'SIGTERM')
+    expect(io.kill).not.toHaveBeenCalledWith(1234, 'SIGKILL')
+  })
+
+  test('孤儿无视 SIGTERM (graceful >11s) → 短等超时升级 SIGKILL + 等回收', () => {
+    let sigkilled = false
+    const io = {
+      run: vi.fn((cmd: string) => (cmd === 'lsof' ? '1234\n' : MAILAGENT_CMD)),
+      kill: vi.fn((_pid: number, sig: NodeJS.Signals | number) => {
+        if (sig === 'SIGKILL') sigkilled = true
+        else if (sig === 0 && sigkilled) throw new Error('ESRCH') // SIGKILL 后才死
+      }),
+      sleep: vi.fn()
+    }
+    expect(killStaleBackendListeners([9200], io)).toEqual([1234])
+    expect(io.kill).toHaveBeenCalledWith(1234, 'SIGTERM')
+    expect(io.kill).toHaveBeenCalledWith(1234, 'SIGKILL')
+    // SIGTERM 短等: 5 次 100ms 探活轮询都走满 (sleep 被调 ≥5 次)
+    expect(io.sleep.mock.calls.length).toBeGreaterThanOrEqual(5)
+  })
+
+  test('端口被非 mailagent 进程占用 → 不动它 (连 SIGTERM 都不发)', () => {
+    const io = {
+      run: vi.fn((cmd: string) => (cmd === 'lsof' ? '4321\n' : '/usr/bin/some-other-server\n')),
+      kill: vi.fn(),
+      sleep: vi.fn()
+    }
+    expect(killStaleBackendListeners([9200], io)).toEqual([])
+    expect(io.kill).not.toHaveBeenCalled()
+  })
+
+  test('ps 失败 (进程已消失) → 判定不明, 跳过绝不 kill', () => {
+    const io = {
+      run: vi.fn((cmd: string) => {
+        if (cmd === 'lsof') return '999\n'
+        throw new Error('ps: no such process')
+      }),
+      kill: vi.fn(),
+      sleep: vi.fn()
+    }
+    expect(killStaleBackendListeners([9200], io)).toEqual([])
+    expect(io.kill).not.toHaveBeenCalled()
+  })
+
+  test('无监听者 (lsof 非零退出抛错, 常态) → 空结果不抛、零 kill', () => {
+    const io = {
+      run: vi.fn(() => {
+        throw new Error('lsof exit 1')
+      }),
+      kill: vi.fn(),
+      sleep: vi.fn()
+    }
+    expect(killStaleBackendListeners([9200, 8200], io)).toEqual([])
+    expect(io.kill).not.toHaveBeenCalled()
+    expect(io.sleep).not.toHaveBeenCalled() // 无残留时零耗时
+  })
+
+  test('两端口各有一个孤儿 → 都清掉; 端口去重 (lsof 各跑一次)', () => {
+    const pidByPort: Record<string, string> = { 'tcp:9200': '111\n', 'tcp:8200': '222\n' }
+    const io = {
+      run: vi.fn((cmd: string, args: string[]) => {
+        if (cmd === 'lsof') return pidByPort[args[1]] ?? ''
+        return MAILAGENT_CMD
+      }),
+      kill: vi.fn((_pid: number, sig: NodeJS.Signals | number) => {
+        if (sig === 0) throw new Error('ESRCH') // SIGTERM 后立即视为已回收
+      }),
+      sleep: vi.fn()
+    }
+    expect(killStaleBackendListeners([9200, 8200, 9200], io)).toEqual([111, 222])
+    expect(io.run.mock.calls.filter((c) => c[0] === 'lsof')).toHaveLength(2)
+  })
+})
+
+describe('STALE_CMD_MARKER ↔ 打包 wrapper 一致性', () => {
+  test('build-python-venv.sh 生成的 wrapper 命令行含 marker (改 wrapper 必同步 sweep)', () => {
+    // marker 是 sweep 归属判定的唯一安全判据, 与 build-python-venv.sh 的 wrapper 强耦合:
+    // wrapper 改掉 prog_name='mailagent' 会让 sweep 静默失效 (不误杀但也不清理)。
+    // 此测试把「改了忘同步」变成红灯。readFileSync 未被 fs mock 覆盖 (spread actual)。
+    const script = readFileSync(
+      fileURLToPath(new URL('../../scripts/build-python-venv.sh', import.meta.url)),
+      'utf8'
+    )
+    expect(script).toContain(STALE_CMD_MARKER)
   })
 })
