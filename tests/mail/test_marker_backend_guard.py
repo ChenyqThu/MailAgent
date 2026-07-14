@@ -63,6 +63,8 @@ def test_reset_on_first_guard_run_with_backend_switch(store: SyncStore):
     store.set_last_max_row_id(127743)  # applescript ROWID 空间的 marker
     assert store.reconcile_marker_backend("davmail") == "reset"
     assert store.get_last_max_row_id() == 0
+    # finding F1: reset 必须删键（非置 0），否则上层「键存在即恢复」会把 0 当合法 baseline
+    assert store.get_state("last_max_row_id") is None
     assert store.get_state("marker_backend") == "davmail"
 
 
@@ -90,7 +92,8 @@ def test_reset_on_cross_backend_switch(store: SyncStore):
     store.set_last_max_row_id(127743)
     store.set_state("marker_backend", "applescript")
     assert store.reconcile_marker_backend("davmail") == "reset"
-    assert store.get_last_max_row_id() == 0  # 清零 → 上层落 first-run baseline
+    assert store.get_last_max_row_id() == 0  # 删键 → 上层落 first-run baseline
+    assert store.get_state("last_max_row_id") is None  # finding F1: 删键非置 0
     assert store.get_state("marker_backend") == "davmail"
 
 
@@ -100,6 +103,7 @@ def test_reset_reverse_direction(store: SyncStore):
     store.set_state("marker_backend", "davmail")
     assert store.reconcile_marker_backend("applescript") == "reset"
     assert store.get_last_max_row_id() == 0
+    assert store.get_state("last_max_row_id") is None  # finding F1: 删键非置 0
     assert store.get_state("marker_backend") == "applescript"
 
 

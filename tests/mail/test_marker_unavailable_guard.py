@@ -90,11 +90,13 @@ class _MarkerBackend:
     def __init__(self, results):
         self._results = list(results)
         self.set_marker_calls = []
+        self.get_current_max_calls = 0
 
     def is_available(self):
         return True
 
     def get_current_max_row_id(self):
+        self.get_current_max_calls += 1
         r = self._results.pop(0)
         if isinstance(r, Exception):
             raise r
@@ -174,3 +176,55 @@ def test_first_run_baseline_accepts_genuine_zero(tmp_path):
     asyncio.run(w.start())
     assert w.sync_store.get_state("last_max_row_id") == "0"  # 真实 0 已持久化
     assert backend.set_marker_calls == [0]
+
+
+# =========================================================================
+# finding F1 (GPT-5.6 review MED): 合法持久化的 '0' 重启不得被误判首次运行。
+#
+# 洞: get_last_max_row_id() 对「键缺失」和「存了 '0'」都返回 0; 旧 new_watcher 用
+# `if last_max_row_id > 0` 判首次 → applescript 空邮箱 baseline 0 重启后落 else 重定
+# 基线 → 停机期间到达的首封邮件被静默跳过。修: 首次运行判定改「键是否存在」;
+# #34 reset 从 set 0 改删键 (否则「键存在即恢复」会把 reset 写的 0 当合法 baseline
+# 恢复 → 跨 backend 复用外来 id 空间, 重演 #34 storm)。
+# =========================================================================
+
+
+def test_persisted_zero_restart_restores_without_rebaseline(tmp_path):
+    """① 合法持久化 '0' + 同 backend 重启 → 恢复 0, 绝不重定基线 (backend 不被查)."""
+    from src.config import config
+    current = getattr(config, "mailagent_backend", "applescript")
+    backend = _MarkerBackend([9999])  # 若误重定基线会取到这个大值 (探针)
+    w = _baseline_watcher(tmp_path, backend)
+    w.sync_store.set_last_max_row_id(0)          # 空邮箱 baseline 的合法 '0'
+    w.sync_store.set_state("marker_backend", current)  # 归属已盖 → guard noop
+    asyncio.run(w.start())
+    assert backend.get_current_max_calls == 0    # 未重定基线
+    assert backend.set_marker_calls == [0]       # 恢复到 0
+    assert w.sync_store.get_state("last_max_row_id") == "0"  # marker 未被改写
+
+
+def test_marker_guard_reset_still_goes_first_run_baseline(tmp_path):
+    """② #34 跨 backend reset (删键) → 上层键缺失 → 走 first-run baseline 重定."""
+    from src.config import config
+    current = getattr(config, "mailagent_backend", "applescript")
+    foreign = "davmail" if current != "davmail" else "applescript"
+    backend = _MarkerBackend([250_000])          # 新 backend 空间的 baseline
+    w = _baseline_watcher(tmp_path, backend)
+    w.sync_store.set_last_max_row_id(127_743)     # 外来 id 空间 marker
+    w.sync_store.set_state("marker_backend", foreign)  # 与 current 不同 → guard reset
+    asyncio.run(w.start())
+    assert backend.get_current_max_calls == 1     # reset 后确实走了 baseline
+    assert backend.set_marker_calls == [250_000]
+    assert w.sync_store.get_last_max_row_id() == 250_000  # 新空间基线
+    assert w.sync_store.get_state("marker_backend") == current
+
+
+def test_missing_marker_key_goes_first_run_baseline(tmp_path):
+    """③ 真·首次 (marker 键缺失) → 走 first-run baseline (键存在判定的下边界)."""
+    backend = _MarkerBackend([777])
+    w = _baseline_watcher(tmp_path, backend)
+    assert w.sync_store.get_state("last_max_row_id") is None  # 键缺失
+    asyncio.run(w.start())
+    assert backend.get_current_max_calls == 1     # 首次 → baseline
+    assert backend.set_marker_calls == [777]
+    assert w.sync_store.get_last_max_row_id() == 777

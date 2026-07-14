@@ -358,8 +358,12 @@ class NewWatcher:
                 )
 
         # 初始化：从 SyncStore 恢复 last_max_row_id
-        last_max_row_id = self.sync_store.get_last_max_row_id()
-        if last_max_row_id > 0:
+        # finding F1: 首次运行判定必须用「marker 键是否存在」而非「值 > 0」——
+        # get_last_max_row_id() 对「键缺失」和「合法持久化的 '0'」都返回 0，applescript
+        # 空邮箱 baseline 0 会被误判首次 → 重定基线 → 停机期间到达的首封邮件被静默跳过。
+        # 键存在即恢复（哪怕值是 0）；#34 reset 走删键 → 键缺失 → 落 first-run baseline。
+        if self.sync_store.has_last_max_row_id():
+            last_max_row_id = self.sync_store.get_last_max_row_id()
             self.backend.set_last_max_row_id(last_max_row_id)
             logger.info(f"Restored last_max_row_id from SyncStore: {last_max_row_id}")
         else:
