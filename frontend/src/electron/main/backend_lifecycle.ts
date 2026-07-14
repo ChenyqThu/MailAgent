@@ -296,8 +296,9 @@ export interface LifecycleOptions {
   crashBackoffMs?: number[]
   /** crash-loop 断路器上限: 连续崩溃达此数 (中间无一次 ready) → 放弃自拉起 (可注入; 默认 MAX_CRASH_RESTARTS)。 */
   maxCrashRestarts?: number
-  /** 启动自愈扫描 (可注入便于单测; 默认 killStaleBackendListeners → 真实 lsof/ps/kill)。 */
-  staleSweep?: (ports: number[]) => number[]
+  /** 启动自愈扫描 (可注入便于单测; 默认 killStaleBackendListeners → 真实 lsof/ps/kill)。
+   *  第二参 = 排除名单 (本 manager 自家活子进程 pid, F2 防御, 见 killStaleBackendListeners)。 */
+  staleSweep?: (ports: number[], excludePids?: ReadonlySet<number>) => number[]
 }
 
 export type BackendState = 'idle' | 'starting' | 'ready' | 'stopped' | 'failed'
@@ -429,9 +430,17 @@ export interface StaleSweepIO {
  * SIGKILL (孤儿 graceful 关闭实测 >11s, 启动路径等不起; SQLite 全程 WAL, SIGKILL
  * 崩溃安全) → 再等内核真正回收 (否则随后 spawn 的新 serve 仍可能撞 bind)。
  *
+ * @param excludePids 排除名单 (F2 防御): 本 manager 当前持有的**活子进程** pid ——
+ *   它们命令行同样含 marker 且占着 8200/9200, 二次 start() (onboarding 重试 / 重复
+ *   IPC) 时绝不能被当残留杀掉 (杀了之后 spawnService 因 child ref 仍在会幂等跳过,
+ *   exit 事件还会误计 crash 耗 crash-loop 额度)。命中即跳过 + 日志。
  * @returns 实际清理的 pid 列表 (日志/断言用)。
  */
-export function killStaleBackendListeners(ports: number[], io: StaleSweepIO = {}): number[] {
+export function killStaleBackendListeners(
+  ports: number[],
+  io: StaleSweepIO = {},
+  excludePids: ReadonlySet<number> = new Set()
+): number[] {
   const run =
     io.run ??
     ((cmd: string, args: string[]) =>
@@ -466,6 +475,13 @@ export function killStaleBackendListeners(ports: number[], io: StaleSweepIO = {}
     for (const line of out.split('\n')) {
       const pid = Number.parseInt(line.trim(), 10)
       if (!Number.isFinite(pid) || pid <= 0 || pid === process.pid) continue
+      if (excludePids.has(pid)) {
+        // F2: 本 manager 自家的活子进程 (二次 start() 场景) — 不是残留, 跳过。
+        console.warn(
+          `[backend_lifecycle] 端口 ${port} 监听者 pid=${pid} 是本 manager 托管的活子进程, 跳过 (skip own child)`
+        )
+        continue
+      }
       let cmd = ''
       try {
         cmd = run('ps', ['-o', 'command=', '-p', String(pid)])
@@ -589,7 +605,7 @@ export class BackendLifecycleManager {
   private readonly apiProbe: (port: number) => Promise<boolean>
   private readonly crashBackoffMs: number[]
   private readonly maxCrashRestarts: number
-  private readonly staleSweep: (ports: number[]) => number[]
+  private readonly staleSweep: (ports: number[], excludePids?: ReadonlySet<number>) => number[]
 
   constructor(opts: LifecycleOptions = {}) {
     this.pollIntervalMs = opts.pollIntervalMs ?? 500
@@ -600,7 +616,10 @@ export class BackendLifecycleManager {
     this.apiProbe = opts.apiProbe ?? probeApiHealth
     this.crashBackoffMs = opts.crashBackoffMs ?? CRASH_RESTART_BACKOFF_MS
     this.maxCrashRestarts = opts.maxCrashRestarts ?? MAX_CRASH_RESTARTS
-    this.staleSweep = opts.staleSweep ?? killStaleBackendListeners
+    this.staleSweep =
+      opts.staleSweep ??
+      ((ports: number[], excludePids?: ReadonlySet<number>) =>
+        killStaleBackendListeners(ports, {}, excludePids))
   }
 
   /**
@@ -657,8 +676,17 @@ export class BackendLifecycleManager {
     // 启动自愈: 上次退出可能留下孤儿 mailagent (占 9200/8200), 先清掉再 spawn ——
     // 防新 serve SSE bind 失败静默降级 polling + 双进程同写 DB / serve-api crash-loop。
     // fail-open: 扫描自身出错只 warn, 绝不阻断启动。
+    // F2 防御: 收集本 manager 当前活着的子进程 pid 作排除名单 —— start() 被二次调用
+    // (onboarding 重试 / 重复 IPC) 时, sweep 不得把自家健康子进程当残留杀掉 (它们同样
+    // 含 marker 且占 8200/9200; 杀了之后 spawnService 因 child ref 仍在会幂等跳过,
+    // exit 又误计 crash)。不依赖「调用方只调一次」的约定。
+    const ownPids = new Set<number>()
+    for (const svc of this.services) {
+      const pid = svc.child && !svc.child.killed ? svc.child.pid : undefined
+      if (typeof pid === 'number') ownPids.add(pid)
+    }
     try {
-      this.staleSweep([resolveSsePort(), resolveApiPort()])
+      this.staleSweep([resolveSsePort(), resolveApiPort()], ownPids)
     } catch (err) {
       console.warn('[backend_lifecycle] 启动自愈扫描失败 (继续 spawn)', err)
     }

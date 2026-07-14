@@ -44,6 +44,8 @@ vi.mock('electron', () => ({ app: appMock }))
 interface FakeChild extends EventEmitter {
   kill: ReturnType<typeof vi.fn>
   killed: boolean
+  /** 仿真实 ChildProcess.pid — F2 排除名单 (start() 收集自家活子进程 pid) 断言用。 */
+  pid: number
   /** 仿真实 ChildProcess: stdio=['ignore','pipe','pipe'] → stdout/stderr 是可读流。
    *  attachLogDrain 必须挂 .on('data') 抽干它们 (防 pipe 背压死锁), 测试据此断言消费。 */
   stdout: EventEmitter
@@ -60,8 +62,11 @@ function childFor(arg: 'serve' | 'serve-api'): FakeChild {
   return c
 }
 
+let _nextFakePid = 40_000
+
 function makeFakeChild(): FakeChild {
   const ee = new EventEmitter() as FakeChild
+  ee.pid = _nextFakePid++
   // 仿真实 Node: kill() 成功发出信号后把 killed 置 true (表示"信号已发送", 不是
   // "进程已退出")。stop() 必须靠 'exit' 事件而非 child.killed 判断进程是否真退出 —
   // 这个 fake 行为能抓住误用 child.killed 做 SIGKILL 升级条件的回归 (codex #4)。
@@ -1426,7 +1431,8 @@ describe('启动自愈 — start() spawn 前扫残留端口', () => {
     })
     const mgr = new BackendLifecycleManager({ staleSweep: sweep })
     mgr.start()
-    expect(sweep).toHaveBeenCalledWith([DEFAULT_SSE_PORT, DEFAULT_API_PORT])
+    // F2: 第二参 = 自家活子进程排除名单; 首启尚无子进程 → 空 Set。
+    expect(sweep).toHaveBeenCalledWith([DEFAULT_SSE_PORT, DEFAULT_API_PORT], new Set())
     expect(spawnCalls.length).toBeGreaterThan(0)
   })
 
@@ -1454,6 +1460,23 @@ describe('启动自愈 — start() spawn 前扫残留端口', () => {
     expect(resolveSsePort()).toBe(9300)
     process.env.SSE_LOCAL_PORT = 'not-a-number'
     expect(resolveSsePort()).toBe(9200)
+  })
+
+  test('F2: 二次 start() 把自家活子进程 pid 传进排除名单 (不会被当残留杀掉)', () => {
+    appMock.isPackaged = true
+    const excludeSeen: Array<number[]> = []
+    const sweep = vi.fn((_ports: number[], exclude?: ReadonlySet<number>) => {
+      excludeSeen.push([...(exclude ?? new Set<number>())])
+      return []
+    })
+    const mgr = new BackendLifecycleManager({ staleSweep: sweep })
+    mgr.start()
+    expect(excludeSeen[0]).toEqual([]) // 首启: 尚无自家子进程, 排除名单空
+    const serveChild = childFor('serve')
+    const firstSpawnCount = spawnCalls.length
+    mgr.start() // 二次调用 (onboarding 重试 / 重复 IPC)
+    expect(spawnCalls.length).toBe(firstSpawnCount) // 幂等: 不重复 spawn
+    expect(excludeSeen[1]).toContain(serveChild.pid) // 自家活子进程进排除名单
   })
 })
 
@@ -1529,6 +1552,18 @@ describe('killStaleBackendListeners — lsof/ps/kill 注入单测', () => {
     expect(killStaleBackendListeners([9200, 8200], io)).toEqual([])
     expect(io.kill).not.toHaveBeenCalled()
     expect(io.sleep).not.toHaveBeenCalled() // 无残留时零耗时
+  })
+
+  test('F2: excludePids 命中 (自家活子进程) → 跳过, 连 ps/kill 都不发', () => {
+    const io = {
+      run: vi.fn((cmd: string) => (cmd === 'lsof' ? '5555\n' : MAILAGENT_CMD)),
+      kill: vi.fn(),
+      sleep: vi.fn()
+    }
+    // pid=5555 含 marker 且占端口, 但在排除名单 (本 manager 自家子进程) → 绝不动它。
+    expect(killStaleBackendListeners([9200], io, new Set([5555]))).toEqual([])
+    expect(io.kill).not.toHaveBeenCalled()
+    expect(io.run.mock.calls.filter((c) => c[0] === 'ps')).toHaveLength(0) // 连 ps 都不查
   })
 
   test('两端口各有一个孤儿 → 都清掉; 端口去重 (lsof 各跑一次)', () => {
