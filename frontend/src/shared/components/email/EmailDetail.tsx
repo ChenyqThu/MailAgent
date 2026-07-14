@@ -36,6 +36,7 @@ import { usePinned } from '@shared/state/pinned'
 import { EmailBodyFrame } from './EmailBodyFrame'
 import { EmailToolbar, type TranslateStatus } from './EmailToolbar'
 import { AttachmentList } from './AttachmentList'
+import { ThreadAttachmentBar } from './ThreadAttachmentBar'
 import { AIFieldsBlock } from '../ai/AIFieldsBlock'
 import { ComposePanel, ComposePanelInner } from './compose/ComposePanel'
 import { closeCompose, useComposeStore } from '@shared/state/compose'
@@ -1085,6 +1086,20 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
               <AIFieldsBlock fields={ai} internalId={email.internal_id} />
             </div>
           )}
+
+          {/* Thread-wide attachment strip — aggregates non-inline attachments
+              across every message in the thread (the detail pane only renders
+              one message, so replies' attachments are otherwise hidden). Owns
+              its own top margin because it renders null when the thread has no
+              attachments (an unconditional wrapper would leave a blank gap). */}
+          <ThreadAttachmentBar
+            threadId={email.thread_id ?? null}
+            activeInternalId={email.internal_id}
+            activeSenderName={email.sender_name ?? null}
+            activeSender={email.sender}
+            activeDate={email.date_received ?? null}
+            activeAttachments={allAttachments}
+          />
 
           {/* Sprint 13 round 6 user feedback: thread sidebar removed.
               Outlook-style "older messages collapsed under the latest"

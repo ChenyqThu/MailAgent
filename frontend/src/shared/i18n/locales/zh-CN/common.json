@@ -73,6 +73,15 @@
       "rotate": "旋转",
       "reset": "重置",
       "close": "关闭"
+    },
+    "attachmentBar": {
+      "title": "本对话附件",
+      "downloadAll": "全部下载",
+      "preview": "预览",
+      "download": "下载",
+      "savedTo": "已保存到 ~/Downloads/{name}",
+      "missing": "附件文件在磁盘上缺失。",
+      "previewFailed": "无法加载预览。"
     }
   },
   "emailRow": {

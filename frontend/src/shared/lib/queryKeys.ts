@@ -177,6 +177,10 @@ export const qk = {
     ['contactSuggest', debounced, exclude] as const,
 
   attachment: {
+    // Attachment-only list for one email (no body read) — thread-wide
+    // attachment aggregation (ThreadAttachmentBar) fans one of these out per
+    // thread member. Shares React-Query cache with anything else on the id.
+    list: (id: number) => ['attachment', id, 'list'] as const,
     dataUrl: (id: string | number) => ['attachment', id, 'dataUrl'] as const
   }
 } as const

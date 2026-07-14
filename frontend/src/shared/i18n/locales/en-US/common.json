@@ -73,6 +73,15 @@
       "rotate": "Rotate",
       "reset": "Reset",
       "close": "Close"
+    },
+    "attachmentBar": {
+      "title": "Thread attachments",
+      "downloadAll": "Download all",
+      "preview": "Preview",
+      "download": "Download",
+      "savedTo": "Saved to ~/Downloads/{name}",
+      "missing": "Attachment file is missing on disk.",
+      "previewFailed": "Couldn't load preview."
     }
   },
   "emailRow": {

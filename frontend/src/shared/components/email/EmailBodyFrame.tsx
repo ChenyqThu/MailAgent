@@ -726,7 +726,10 @@ interface ImageLightboxProps {
   onClose: () => void
 }
 
-function ImageLightbox({ src, onClose }: ImageLightboxProps): React.ReactPortal | null {
+// Exported so the attachment surfaces (AttachmentList / ThreadAttachmentBar)
+// reuse the exact same zoom/rotate/pan lightbox for image previews instead of
+// forking a second one.
+export function ImageLightbox({ src, onClose }: ImageLightboxProps): React.ReactPortal | null {
   const { t } = useTranslation()
   const [scale, setScale] = useState(1)
   const [rotation, setRotation] = useState(0)
