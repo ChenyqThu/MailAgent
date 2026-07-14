@@ -15,6 +15,7 @@
 // while exposing the conversion artefact when the user wants it.
 
 import { useMemo, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Download, Eye, Paperclip } from 'lucide-react'
 import { useQueries, useQueryClient } from '@tanstack/react-query'
 
@@ -26,7 +27,14 @@ import { qk } from '@shared/lib/queryKeys'
 import type { EmailDetail } from '@shared/api/types'
 
 import { ImageLightbox } from './EmailBodyFrame'
-import { isImageAttachment, pickIconTone, THUMBNAIL_MAX_BYTES } from './attachmentPreview'
+import {
+  canPreviewImage,
+  isImageAttachment,
+  pickIconTone,
+  readDataUrlOrThrow,
+  THUMBNAIL_MAX_BYTES,
+  THUMBNAIL_RENDER_LIMIT
+} from './attachmentPreview'
 
 type Attachment = NonNullable<EmailDetail['attachments']>[number]
 
@@ -38,6 +46,7 @@ interface Props {
 }
 
 export function AttachmentList({ attachments }: Props): React.ReactElement | null {
+  const { t } = useTranslation()
   const mailApi = useMailApi()
   const queryClient = useQueryClient()
   const [notice, setNotice] = useState<{ tone: 'ok' | 'err'; text: string } | null>(null)
@@ -65,21 +74,23 @@ export function AttachmentList({ attachments }: Props): React.ReactElement | nul
     return { visible, derivedByParent }
   }, [attachments])
 
-  // Prefetch thumbnails for image originals under the size cap. Non-images and
-  // oversized images render the type icon (no fetch). `qk.attachment.dataUrl` +
-  // staleTime:Infinity shares the cache with EmailBodyFrame's inline-image
-  // reads and ThreadAttachmentBar, so a given id hits disk at most once.
+  // Prefetch thumbnails for the first N image originals under the size cap.
+  // Non-images / oversized / the overflow render the type icon (no fetch),
+  // bounding the readDataUrl fan-out. `qk.attachment.dataUrl` + staleTime:
+  // Infinity shares the cache with EmailBodyFrame and ThreadAttachmentBar;
+  // `readDataUrlOrThrow` makes a null read a retryable error (not a stuck
+  // success) so a late-landing file recovers.
   const thumbTargets = useMemo(
     () =>
-      visible.filter(
-        (a) => isImageAttachment(a) && (a.size_bytes ?? Infinity) <= THUMBNAIL_MAX_BYTES
-      ),
+      visible
+        .filter((a) => isImageAttachment(a) && (a.size_bytes ?? Infinity) <= THUMBNAIL_MAX_BYTES)
+        .slice(0, THUMBNAIL_RENDER_LIMIT),
     [visible]
   )
   const thumbQueries = useQueries({
     queries: thumbTargets.map((a) => ({
       queryKey: qk.attachment.dataUrl(a.id),
-      queryFn: () => mailApi.attachment.readDataUrl(a.id),
+      queryFn: () => readDataUrlOrThrow((i) => mailApi.attachment.readDataUrl(i), a.id),
       staleTime: Infinity
     }))
   })
@@ -107,36 +118,45 @@ export function AttachmentList({ attachments }: Props): React.ReactElement | nul
     try {
       const target = await mailApi.attachment.download(id)
       if (target === null) {
-        setNotice({ tone: 'err', text: 'Attachment file is missing on disk.' })
+        setNotice({ tone: 'err', text: t('emailDetail.attachmentBar.missing') })
         return
       }
       const basename = target.split('/').pop() ?? target
-      setNotice({ tone: 'ok', text: `Saved to ~/Downloads/${basename}` })
+      setNotice({ tone: 'ok', text: t('emailDetail.attachmentBar.savedTo', { name: basename }) })
     } catch (err) {
       setNotice({ tone: 'err', text: errorMessage(err) })
     }
   }
 
-  // Open the zoom/rotate lightbox (shared with EmailBodyFrame). Reuse the
-  // already-cached thumbnail data URL when present; otherwise read on demand so
-  // images above the thumbnail cap can still be previewed full-size.
-  async function preview(id: number): Promise<void> {
+  // Open the zoom/rotate lightbox (shared with EmailBodyFrame). Guards:
+  //   - a thumbnail that failed to decode won't preview the same broken bytes;
+  //   - only images with a known size within the preview cap are read (never an
+  //     unbounded full-file read for a huge / unknown-size image).
+  // Reuse the cached thumbnail when present; otherwise read on demand.
+  async function preview(a: Attachment): Promise<void> {
     setNotice(null)
-    const cached = thumbById.get(id)
+    if (thumbFailed.has(a.id)) {
+      setNotice({ tone: 'err', text: t('emailDetail.attachmentBar.previewFailed') })
+      return
+    }
+    if (!canPreviewImage(a)) {
+      setNotice({ tone: 'err', text: t('emailDetail.attachmentBar.tooLarge') })
+      return
+    }
+    const cached = thumbById.get(a.id)
     if (cached) {
       setPreviewSrc(cached)
       return
     }
     try {
       const url = await queryClient.fetchQuery({
-        queryKey: qk.attachment.dataUrl(id),
-        queryFn: () => mailApi.attachment.readDataUrl(id),
+        queryKey: qk.attachment.dataUrl(a.id),
+        queryFn: () => readDataUrlOrThrow((i) => mailApi.attachment.readDataUrl(i), a.id),
         staleTime: Infinity
       })
-      if (typeof url === 'string' && url.length > 0) setPreviewSrc(url)
-      else setNotice({ tone: 'err', text: 'Attachment file is missing on disk.' })
-    } catch (err) {
-      setNotice({ tone: 'err', text: errorMessage(err) })
+      setPreviewSrc(url)
+    } catch {
+      setNotice({ tone: 'err', text: t('emailDetail.attachmentBar.previewFailed') })
     }
   }
 
@@ -166,15 +186,14 @@ export function AttachmentList({ attachments }: Props): React.ReactElement | nul
           const isImage = isImageAttachment(a)
           const thumbUrl = thumbFailed.has(a.id) ? undefined : thumbById.get(a.id)
           return (
-            <button
+            // Non-interactive container: the tile is NOT a button, so the
+            // explicit preview / download / derived controls below are real,
+            // non-nested <button>s (valid DOM + one Tab stop each).
+            <div
               key={a.id}
-              type="button"
-              onClick={() => void download(a.id)}
               className={cn(
-                'group flex items-start gap-3 px-3 py-2.5 rounded-md',
-                'border border-ink-border bg-ink-2',
-                'hover:bg-ink-4 hover:border-ink-fg-3',
-                'transition-colors duration-fast text-left'
+                'flex items-start gap-3 px-3 py-2.5 rounded-md',
+                'border border-ink-border bg-ink-2'
               )}
             >
               {thumbUrl ? (
@@ -216,26 +235,14 @@ export function AttachmentList({ attachments }: Props): React.ReactElement | nul
                 {derivedKids.length > 0 && (
                   // Office → PDF / xlsx → CSV conversion artefact. Backend
                   // wrote it as a sibling row; we surface it as a one-tap
-                  // chip so the user doesn't have to open the original
-                  // first. Stop propagation so the parent tile's click
-                  // doesn't also fire (would open the original instead).
+                  // chip so the user doesn't have to open the original first.
                   <div className="mt-1 flex flex-wrap items-center gap-1.5 text-meta font-mono">
                     <span className="text-ink-fg-3">→</span>
                     {derivedKids.map((d) => (
-                      <span
+                      <button
                         key={d.id}
-                        role="link"
-                        tabIndex={0}
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          void download(d.id)
-                        }}
-                        onKeyDown={(e) => {
-                          if (e.key !== 'Enter' && e.key !== ' ') return
-                          e.preventDefault()
-                          e.stopPropagation()
-                          void download(d.id)
-                        }}
+                        type="button"
+                        onClick={() => void download(d.id)}
                         className={cn(
                           'inline-flex items-center gap-1 px-1.5 py-0.5 rounded',
                           'text-ok bg-ok/10 border border-ok/25',
@@ -246,33 +253,20 @@ export function AttachmentList({ attachments }: Props): React.ReactElement | nul
                         {d.size_bytes != null && (
                           <span className="text-ok/70">{formatFileSize(d.size_bytes)}</span>
                         )}
-                      </span>
+                      </button>
                     ))}
                   </div>
                 )}
               </div>
-              {/* Persistent (no longer hover-only) actions: preview images in
-                  the lightbox, download anything. Rendered as role=button spans
-                  — same pattern as the derived chips above — so they can live
-                  inside the tile <button> and stop propagation to avoid the
-                  tile's own download click. */}
+              {/* Persistent (no longer hover-only) actions — real, non-nested
+                  buttons: preview images in the lightbox, download anything. */}
               <div className="flex items-center gap-0.5 self-center shrink-0">
                 {isImage && (
-                  <span
-                    role="button"
-                    tabIndex={0}
-                    aria-label="Preview attachment"
-                    title="Preview"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      void preview(a.id)
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key !== 'Enter' && e.key !== ' ') return
-                      e.preventDefault()
-                      e.stopPropagation()
-                      void preview(a.id)
-                    }}
+                  <button
+                    type="button"
+                    aria-label={t('emailDetail.attachmentBar.preview')}
+                    title={t('emailDetail.attachmentBar.preview')}
+                    onClick={() => void preview(a)}
                     className={cn(
                       'grid place-items-center w-6 h-6 rounded cursor-pointer',
                       'text-ink-fg-3 hover:text-ink-fg-1 hover:bg-ink-4',
@@ -280,23 +274,13 @@ export function AttachmentList({ attachments }: Props): React.ReactElement | nul
                     )}
                   >
                     <Eye size={13} strokeWidth={2} />
-                  </span>
+                  </button>
                 )}
-                <span
-                  role="button"
-                  tabIndex={0}
-                  aria-label="Download attachment"
-                  title="Download"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    void download(a.id)
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key !== 'Enter' && e.key !== ' ') return
-                    e.preventDefault()
-                    e.stopPropagation()
-                    void download(a.id)
-                  }}
+                <button
+                  type="button"
+                  aria-label={t('emailDetail.attachmentBar.download')}
+                  title={t('emailDetail.attachmentBar.download')}
+                  onClick={() => void download(a.id)}
                   className={cn(
                     'grid place-items-center w-6 h-6 rounded cursor-pointer',
                     'text-ink-fg-3 hover:text-ink-fg-1 hover:bg-ink-4',
@@ -304,9 +288,9 @@ export function AttachmentList({ attachments }: Props): React.ReactElement | nul
                   )}
                 >
                   <Download size={13} strokeWidth={2} />
-                </span>
+                </button>
               </div>
-            </button>
+            </div>
           )
         })}
       </div>

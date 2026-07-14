@@ -72,16 +72,21 @@
       "zoomOut": "Zoom out",
       "rotate": "Rotate",
       "reset": "Reset",
-      "close": "Close"
+      "close": "Close",
+      "loadError": "Couldn't load image."
     },
     "attachmentBar": {
       "title": "Thread attachments",
       "downloadAll": "Download all",
+      "loading": "Loading…",
       "preview": "Preview",
       "download": "Download",
       "savedTo": "Saved to ~/Downloads/{name}",
+      "savedAll": "Saved {n, plural, =1 {1 attachment} other {# attachments}} to ~/Downloads",
       "missing": "Attachment file is missing on disk.",
-      "previewFailed": "Couldn't load preview."
+      "previewFailed": "Couldn't load preview.",
+      "tooLarge": "File too large to preview — download instead.",
+      "partialFailed": "Some attachments couldn't be loaded."
     }
   },
   "emailRow": {

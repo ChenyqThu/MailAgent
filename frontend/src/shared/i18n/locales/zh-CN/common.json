@@ -72,16 +72,21 @@
       "zoomOut": "缩小",
       "rotate": "旋转",
       "reset": "重置",
-      "close": "关闭"
+      "close": "关闭",
+      "loadError": "无法加载图片。"
     },
     "attachmentBar": {
       "title": "本对话附件",
       "downloadAll": "全部下载",
+      "loading": "加载中…",
       "preview": "预览",
       "download": "下载",
       "savedTo": "已保存到 ~/Downloads/{name}",
+      "savedAll": "已保存 {n} 个附件到 ~/Downloads",
       "missing": "附件文件在磁盘上缺失。",
-      "previewFailed": "无法加载预览。"
+      "previewFailed": "无法加载预览。",
+      "tooLarge": "文件过大，无法预览，请下载查看。",
+      "partialFailed": "部分附件加载失败。"
     }
   },
   "emailRow": {

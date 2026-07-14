@@ -10,9 +10,9 @@
 //   - every other thread member is fetched lazily via `attachment.list(id)`
 //     (metadata only, no body) and rendered incrementally as each resolves —
 //     a long thread doesn't block the strip on its slowest member;
-//   - image originals ≤ THUMBNAIL_MAX_BYTES show a real thumbnail (shared
-//     `qk.attachment.dataUrl` cache); larger images / non-images show a type
-//     icon;
+//   - image originals ≤ THUMBNAIL_MAX_BYTES show a real thumbnail (the first
+//     THUMBNAIL_RENDER_LIMIT of them, to bound the readDataUrl fan-out); larger
+//     images / the rest / non-images show a type icon and read on preview-click;
 //   - each card labels its source (sender · relative time), jumps to that
 //     message on click, and offers persistent preview (lightbox) + download.
 //
@@ -34,7 +34,14 @@ import { toastError, toastSuccess } from '@shared/state/toast'
 import type { EmailDetail } from '@shared/api/types'
 
 import { ImageLightbox } from './EmailBodyFrame'
-import { isImageAttachment, pickIconTone, THUMBNAIL_MAX_BYTES } from './attachmentPreview'
+import {
+  canPreviewImage,
+  isImageAttachment,
+  pickIconTone,
+  readDataUrlOrThrow,
+  THUMBNAIL_MAX_BYTES,
+  THUMBNAIL_RENDER_LIMIT
+} from './attachmentPreview'
 
 type Attachment = NonNullable<EmailDetail['attachments']>[number]
 
@@ -125,6 +132,12 @@ export function ThreadAttachmentBar({
     }))
   })
 
+  // Everything settled? (thread list + every sibling list resolved or errored).
+  // Gates "Download all" so it never treats a mid-load snapshot as the full set.
+  const fullyLoaded =
+    (!threadEnabled || threadQ.isSuccess || threadQ.isError) &&
+    siblingAttQueries.every((q) => !q.isPending)
+
   // Active message's attachments first (in hand), then each sibling as its list
   // resolves — siblings still loading are simply skipped this render.
   const cards = useMemo(() => {
@@ -142,18 +155,23 @@ export function ThreadAttachmentBar({
     return out
   }, [activeAttachments, activeInternalId, siblingIds, siblingAttQueries])
 
-  // Thumbnails for image originals under the cap (same rule as AttachmentList).
+  // Thumbnails for the first N image originals under the cap (M3 — bound the
+  // readDataUrl fan-out). The rest keep the type icon; preview still reads on
+  // demand. `readDataUrlOrThrow` makes a null read a retryable error, not a
+  // stuck success (M5); a decode failure falls the card back to its icon (M4).
   const thumbTargets = useMemo(
     () =>
-      cards.filter(
-        (c) => isImageAttachment(c.att) && (c.att.size_bytes ?? Infinity) <= THUMBNAIL_MAX_BYTES
-      ),
+      cards
+        .filter(
+          (c) => isImageAttachment(c.att) && (c.att.size_bytes ?? Infinity) <= THUMBNAIL_MAX_BYTES
+        )
+        .slice(0, THUMBNAIL_RENDER_LIMIT),
     [cards]
   )
   const thumbQueries = useQueries({
     queries: thumbTargets.map((c) => ({
       queryKey: qk.attachment.dataUrl(c.att.id),
-      queryFn: () => mailApi.attachment.readDataUrl(c.att.id),
+      queryFn: () => readDataUrlOrThrow((i) => mailApi.attachment.readDataUrl(i), c.att.id),
       staleTime: Infinity
     }))
   })
@@ -166,52 +184,124 @@ export function ThreadAttachmentBar({
     return m
   }, [thumbTargets, thumbQueries])
 
+  // Returns whether the save succeeded so bulk download can summarise. `silent`
+  // suppresses the per-file success toast during "Download all" (one summary
+  // toast instead of N).
   const download = useCallback(
-    async (id: number): Promise<void> => {
+    async (id: number, opts?: { silent?: boolean }): Promise<boolean> => {
       try {
         const target = await mailApi.attachment.download(id)
         if (target === null) {
           toastError(t('emailDetail.attachmentBar.missing'))
-          return
+          return false
         }
-        const basename = target.split('/').pop() ?? target
-        toastSuccess(t('emailDetail.attachmentBar.savedTo', { name: basename }))
+        if (!opts?.silent) {
+          const basename = target.split('/').pop() ?? target
+          toastSuccess(t('emailDetail.attachmentBar.savedTo', { name: basename }))
+        }
+        return true
       } catch (err) {
         toastError(errorMessage(err))
+        return false
       }
     },
     [mailApi, t]
   )
 
   const preview = useCallback(
-    async (id: number): Promise<void> => {
-      const cached = thumbById.get(id)
+    async (a: Attachment): Promise<void> => {
+      // A thumbnail that failed to decode (HEIC / corrupt) already fell back to
+      // its icon — don't open the lightbox on the same broken bytes (M4).
+      if (thumbFailed.has(a.id)) {
+        toastError(t('emailDetail.attachmentBar.previewFailed'))
+        return
+      }
+      // Never issue an unbounded full-file read for a huge / unknown-size image
+      // (H2) — point the user at download instead.
+      if (!canPreviewImage(a)) {
+        toastError(t('emailDetail.attachmentBar.tooLarge'))
+        return
+      }
+      const cached = thumbById.get(a.id)
       if (cached) {
         setPreviewSrc(cached)
         return
       }
       try {
         const url = await queryClient.fetchQuery({
-          queryKey: qk.attachment.dataUrl(id),
-          queryFn: () => mailApi.attachment.readDataUrl(id),
+          queryKey: qk.attachment.dataUrl(a.id),
+          queryFn: () => readDataUrlOrThrow((i) => mailApi.attachment.readDataUrl(i), a.id),
           staleTime: Infinity
         })
-        if (typeof url === 'string' && url.length > 0) setPreviewSrc(url)
-        else toastError(t('emailDetail.attachmentBar.previewFailed'))
+        setPreviewSrc(url)
       } catch {
         toastError(t('emailDetail.attachmentBar.previewFailed'))
       }
     },
-    [thumbById, queryClient, mailApi, t]
+    [thumbFailed, thumbById, queryClient, mailApi, t]
   )
 
+  // "Download all" resolves the COMPLETE thread first (thread list + every
+  // sibling's attachment.list via fetchQuery), then downloads — so nothing that
+  // was still loading (or errored) at click time is silently dropped (H1). The
+  // trigger button is also disabled until `fullyLoaded`, so this is belt +
+  // suspenders; if any fetch fails the user gets an explicit partial warning.
   const downloadAll = useCallback(async (): Promise<void> => {
-    // Sequential on purpose: keeps the ~/Downloads collision-rename
-    // deterministic; there's no bulk/zip IPC.
-    for (const c of cards) {
-      await download(c.att.id)
+    let failed = false
+    let sibIds = siblingIds
+    if (threadEnabled) {
+      try {
+        const rows = await queryClient.fetchQuery({
+          queryKey: qk.email.thread(threadId),
+          queryFn: () => mailApi.email.listByThread(threadId),
+          staleTime: 60_000
+        })
+        sibIds = (rows ?? []).map((m) => m.internal_id).filter((id) => id !== activeInternalId)
+      } catch {
+        failed = true
+      }
     }
-  }, [cards, download])
+    const ids: number[] = []
+    for (const a of activeAttachments) {
+      if (isVisibleAttachment(a)) ids.push(a.id)
+    }
+    const results = await Promise.allSettled(
+      sibIds.map((id) =>
+        queryClient.fetchQuery({
+          queryKey: qk.attachment.list(id),
+          queryFn: () => mailApi.attachment.list(id),
+          staleTime: 60_000
+        })
+      )
+    )
+    results.forEach((r) => {
+      if (r.status === 'rejected') {
+        failed = true
+        return
+      }
+      for (const a of r.value ?? []) {
+        if (isVisibleAttachment(a)) ids.push(a.id)
+      }
+    })
+    // Sequential: keeps the ~/Downloads collision-rename deterministic; there's
+    // no bulk/zip IPC. Silent per file → one summary toast, not N.
+    let saved = 0
+    for (const id of ids) {
+      if (await download(id, { silent: true })) saved += 1
+    }
+    if (failed || saved < ids.length) toastError(t('emailDetail.attachmentBar.partialFailed'))
+    else if (saved > 0) toastSuccess(t('emailDetail.attachmentBar.savedAll', { n: saved }))
+  }, [
+    siblingIds,
+    threadEnabled,
+    threadId,
+    queryClient,
+    mailApi,
+    activeInternalId,
+    activeAttachments,
+    download,
+    t
+  ])
 
   if (cards.length === 0) return null
 
@@ -227,18 +317,23 @@ export function ThreadAttachmentBar({
           style={{ letterSpacing: '0.06em' }}
         >
           {t('emailDetail.attachmentBar.title')} · {cards.length}
+          {!fullyLoaded && <span className="text-ink-fg-3"> …</span>}
         </span>
         <button
           type="button"
           onClick={() => void downloadAll()}
+          disabled={!fullyLoaded}
           className={cn(
             'ml-auto inline-flex items-center gap-1 px-2 py-1 rounded',
             'text-meta text-ink-fg-2 hover:text-ink-fg-1 hover:bg-ink-4',
-            'transition-colors duration-fast'
+            'transition-colors duration-fast',
+            'disabled:opacity-50 disabled:cursor-wait disabled:hover:bg-transparent disabled:hover:text-ink-fg-2'
           )}
         >
           <Download size={12} strokeWidth={2} />
-          {t('emailDetail.attachmentBar.downloadAll')}
+          {fullyLoaded
+            ? t('emailDetail.attachmentBar.downloadAll')
+            : t('emailDetail.attachmentBar.loading')}
         </button>
       </div>
 
@@ -313,7 +408,7 @@ export function ThreadAttachmentBar({
                     type="button"
                     aria-label={t('emailDetail.attachmentBar.preview')}
                     title={t('emailDetail.attachmentBar.preview')}
-                    onClick={() => void preview(a.id)}
+                    onClick={() => void preview(a)}
                     className={cn(
                       'grid place-items-center w-6 h-6 rounded cursor-pointer',
                       'text-ink-fg-3 hover:text-ink-fg-1 hover:bg-ink-4',
