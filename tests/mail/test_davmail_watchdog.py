@@ -618,3 +618,169 @@ def test_probe_imap_login_success_and_failure(
 
     monkeypatch.setattr(imap_client_mod, "imap_connect", _raise)
     assert wd._probe_imap_login() is False
+
+
+# ────────────────────────────────────────────────────────────────
+# 自动恢复 restart_callback (L2b)
+# ────────────────────────────────────────────────────────────────
+
+
+def _make_restart_wd(
+    sync_store: SyncStore,
+    davmail_root: Path,
+    alerter=None,
+    *,
+    restart_ok: bool = True,
+    **kw,
+):
+    """构造带注入 restart_callback 的 watchdog (login 恒失败), 返回 (wd, 调用记录)."""
+    restart_calls: list[float] = []
+
+    async def fake_restart():
+        restart_calls.append(time.time())
+        return (restart_ok, "exit 0" if restart_ok else "exit 1: boom")
+
+    wd = _make_login_wd(
+        sync_store,
+        davmail_root,
+        alerter,
+        login_ok=False,
+        restart_callback=fake_restart,
+        **kw,
+    )
+    return wd, restart_calls
+
+
+async def test_auto_restart_callback_invoked_on_threshold(
+    sync_store: SyncStore, davmail_root: Path
+):
+    alerter = _FakeAlerter()
+    wd, restart_calls = _make_restart_wd(sync_store, davmail_root, alerter)
+    await _patch_probe(wd, imap_ok=True, smtp_ok=True)
+
+    await wd._tick()
+    await wd._tick()
+    assert restart_calls == [], "未达阈值 (2 次) 不应重启"
+    await wd._tick()
+    assert len(restart_calls) == 1, "第 3 次连续失败应触发重启"
+
+    # 成功重启 → 计数清零 (下一轮真实探测重新说话) + 时间戳落盘
+    assert wd._consecutive_login_fails == 0
+    assert sync_store.get_state("davmail.last_auto_restart_at")
+    restart_alerts = [
+        c for c in alerter.calls if c[0] == "alert_davmail_auto_restart"
+    ]
+    assert len(restart_alerts) == 1
+    assert restart_alerts[0][1][0] is True  # ok=True → warning 级
+
+
+async def test_auto_restart_cooldown_prevents_flapping(
+    sync_store: SyncStore, davmail_root: Path
+):
+    """冷却期内即使继续 LOGIN 失败也不再触发第二次重启 (成败都进冷却)."""
+    wd, restart_calls = _make_restart_wd(sync_store, davmail_root, restart_ok=False)
+    await _patch_probe(wd, imap_ok=True, smtp_ok=True)
+
+    for _ in range(3):
+        await wd._tick()
+    assert len(restart_calls) == 1
+    assert wd._consecutive_login_fails == 3, "重启失败不清零计数"
+
+    for _ in range(5):
+        await wd._tick()
+    assert len(restart_calls) == 1, "冷却期 (600s) 内不应重复重启"
+
+    # 把上次重启时间拨出冷却期 → 持续失败应再触发
+    wd._last_auto_restart_ts = time.time() - 700
+    await wd._tick()
+    assert len(restart_calls) == 2, "冷却期过后持续失败应再次重启"
+
+
+async def test_auto_restart_max_per_day_stops_and_alerts_critical(
+    sync_store: SyncStore, davmail_root: Path
+):
+    """24h 滚动窗口达上限 → 停自动重启 + 风暴告警一次 (镜像 crashloop_stopped)."""
+    alerter = _FakeAlerter()
+    wd, restart_calls = _make_restart_wd(
+        sync_store,
+        davmail_root,
+        alerter,
+        restart_ok=False,
+        auto_restart_cooldown=0,  # 关冷却, 单测风暴上限
+        auto_restart_max_per_day=2,
+    )
+    await _patch_probe(wd, imap_ok=True, smtp_ok=True)
+
+    for _ in range(6):
+        await wd._tick()
+    assert len(restart_calls) == 2, "达 max_per_day 后停止自动重启"
+    storm = [c for c in alerter.calls if c[0] == "alert_davmail_restart_storm"]
+    assert len(storm) == 1, "风暴告警只发一次"
+    assert storm[0][1] == (2, 2)  # (count_24h, max_per_day)
+
+
+async def test_no_callback_alert_only(
+    sync_store: SyncStore, davmail_root: Path
+):
+    """默认 restart_callback=None → 仅 degraded 告警, 无重启动作/无落盘时间戳."""
+    alerter = _FakeAlerter()
+    wd = _make_login_wd(sync_store, davmail_root, alerter, login_ok=False)
+    await _patch_probe(wd, imap_ok=True, smtp_ok=True)
+    for _ in range(4):
+        await wd._tick()
+    degraded = [c for c in alerter.calls if c[0] == "alert_davmail_login_degraded"]
+    assert len(degraded) == 1
+    restart_alerts = [
+        c for c in alerter.calls if c[0] == "alert_davmail_auto_restart"
+    ]
+    assert restart_alerts == []
+    assert sync_store.get_state("davmail.last_auto_restart_at") is None
+
+
+async def test_restart_callback_exception_treated_as_failure(
+    sync_store: SyncStore, davmail_root: Path
+):
+    """callback 抛异常 → 按失败处理 (计数保留 + critical 告警), 不挂 watchdog."""
+    alerter = _FakeAlerter()
+
+    async def boom():
+        raise RuntimeError("pm2 exploded")
+
+    wd = _make_login_wd(
+        sync_store, davmail_root, alerter, login_ok=False, restart_callback=boom
+    )
+    await _patch_probe(wd, imap_ok=True, smtp_ok=True)
+    for _ in range(3):
+        await wd._tick()  # 不抛
+    assert wd._consecutive_login_fails == 3
+    restart_alerts = [
+        c for c in alerter.calls if c[0] == "alert_davmail_auto_restart"
+    ]
+    assert len(restart_alerts) == 1
+    assert restart_alerts[0][1][0] is False  # ok=False → critical 级
+
+
+def test_auto_restart_disabled_no_callback():
+    """DAVMAIL_AUTO_RESTART_ENABLED=false (默认) → 不注入 callback; true → 注入."""
+    from src.mail.davmail_restart import (
+        build_restart_callback,
+        restart_davmail_via_pm2,
+    )
+
+    class _Cfg:
+        davmail_auto_restart_enabled = False
+
+    assert build_restart_callback(_Cfg()) is None
+    _Cfg.davmail_auto_restart_enabled = True
+    assert build_restart_callback(_Cfg()) is restart_davmail_via_pm2
+
+
+async def test_restart_davmail_via_pm2_not_found(monkeypatch):
+    """pm2 解析不到 (纯 .app 无 node bin) → (False, 'pm2 not found...') 降级仅告警."""
+    import src.mail.davmail_restart as dr
+
+    monkeypatch.setattr(dr.shutil, "which", lambda name: None)
+    monkeypatch.setattr(dr, "_PM2_FALLBACK_PATHS", ())
+    ok, detail = await dr.restart_davmail_via_pm2()
+    assert ok is False
+    assert "pm2 not found" in detail

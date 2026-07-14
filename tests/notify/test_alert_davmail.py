@@ -103,6 +103,26 @@ def test_alert_davmail_login_recovered_is_info(monkeypatch):
     assert sent[0]["header"]["template"] == "blue"
 
 
+def test_alert_davmail_auto_restart_success_warning_failure_critical(monkeypatch):
+    """L2b: 自动重启成功 → warning; 失败 → critical (需人工介入)."""
+    n, sent = _make_notifier(monkeypatch)
+    _run(n.alert_davmail_auto_restart(True, "exit 0", 3, 10))
+    _run(n.alert_davmail_auto_restart(False, "exit 1: boom", 3, 10))
+    assert len(sent) == 2
+    assert sent[0]["header"]["template"] == "yellow"  # 成功 = warning
+    assert sent[1]["header"]["template"] == "red"  # 失败 = critical
+    assert "boom" in sent[1]["elements"][0]["content"]
+
+
+def test_alert_davmail_restart_storm_is_critical(monkeypatch):
+    n, sent = _make_notifier(monkeypatch)
+    _run(n.alert_davmail_restart_storm(6, 6))
+    assert len(sent) == 1
+    card = sent[0]
+    assert card["header"]["template"] == "red"
+    assert "6" in card["elements"][0]["content"]
+
+
 def test_cooldown_dedupes_repeat_same_key(monkeypatch):
     """同一 alert_key 在 cooldown 期内只发一次 (复用现有 cooldown 语义)."""
     n = FeishuAlertNotifier(

@@ -278,6 +278,7 @@ class EmailNotionSyncApp:
         # 让 frontend / dashboard 直读，跃迁时调 alerter 发飞书。
         self.davmail_watchdog = None
         if self.backend.backend_origin == "davmail":
+            from src.mail.davmail_restart import build_restart_callback
             from src.mail.davmail_watchdog import DavMailWatchdog
             # DAVMAIL_ROOT 显式配置优先 — 打包 .app 里 _REPO_ROOT 解析进
             # site-packages, token.dat/davmail.log 都找不到 (看板 token 恒'未知')。
@@ -298,6 +299,11 @@ class EmailNotionSyncApp:
                 login_probe_enabled=config.davmail_login_probe_enabled,
                 login_probe_timeout=config.davmail_login_probe_timeout_sec,
                 login_fail_threshold=config.davmail_login_fail_threshold,
+                # L2b: 自动恢复 — DAVMAIL_AUTO_RESTART_ENABLED (默认 false) gate,
+                # 关 = None = 仅告警; 开 = pm2 restart (解析不到 pm2 时自身降级)
+                restart_callback=build_restart_callback(config),
+                auto_restart_cooldown=config.davmail_auto_restart_cooldown_sec,
+                auto_restart_max_per_day=config.davmail_auto_restart_max_per_day,
             )
             if self.stats_reporter:
                 self.stats_reporter.add_collector(

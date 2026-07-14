@@ -551,6 +551,47 @@ class FeishuAlertNotifier:
             alert_key="davmail_login_recovered",
         )
 
+    async def alert_davmail_auto_restart(
+        self, ok: bool, detail: str, consecutive_fails: int, cooldown_min: int
+    ):
+        """watchdog 自动恢复 davmail (token 劣化自愈) 结果 (L2b) — 成败分级"""
+        await self.send_alert(
+            level="warning" if ok else "critical",
+            title=f"DavMail 自动重启{'成功' if ok else '失败'}（IMAP LOGIN 持续失败）",
+            content=(
+                f"IMAP LOGIN 连续 **{consecutive_fails}** 次失败且端口可达 "
+                "(token 劣化,「能发不能收」), watchdog 已执行自动恢复: "
+                f"{'成功' if ok else f'失败 ({detail}), 需人工介入'}。"
+                f"冷却期 {cooldown_min} 分钟。"
+            ),
+            source="davmail_watchdog",
+            details={
+                "结果": "成功" if ok else f"失败: {detail[:80]}",
+                "连续 LOGIN 失败": str(consecutive_fails),
+            },
+            alert_key="davmail_auto_restart",
+        )
+
+    async def alert_davmail_restart_storm(self, count_24h: int, max_per_day: int):
+        """自动重启风暴 — 24h 窗口达上限, 已停自动重启 (L2b, 镜像 crashloop_stopped)"""
+        await self.send_alert(
+            level="critical",
+            title=f"DavMail 自动重启风暴 (24h 内 {count_24h} 次)",
+            content=(
+                f"watchdog 24h 滚动窗口内已自动重启 davmail **{count_24h}** 次"
+                f"（上限 {max_per_day}），自动重启已暂停 —— 反复重启说明 token "
+                "劣化根因未解, 需人工排查 (重走 O365Manual OAuth flow / 查 "
+                "davmail 日志)。窗口滚出后自动恢复。"
+            ),
+            source="davmail_watchdog",
+            details={
+                "24h 重启次数": str(count_24h),
+                "上限": str(max_per_day),
+                "排查命令": "`pm2 logs davmail-poc --lines 50`",
+            },
+            alert_key="davmail_restart_storm",
+        )
+
     async def alert_davmail_ews_throttling(self, count: int):
         """EWS throttling burst — 5min 内 ≥3 次 EWSThrottlingException"""
         await self.send_alert(

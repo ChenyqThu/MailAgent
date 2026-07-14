@@ -844,6 +844,27 @@ class Config(BaseSettings):
             "套路), 改非默认值时展示端判定会漂移。"
         ),
     )
+    davmail_auto_restart_enabled: bool = Field(
+        default=False, env="DAVMAIL_AUTO_RESTART_ENABLED",
+        description=(
+            "L2b: LOGIN 连续失败达阈值后是否自动 `pm2 restart davmail-poc` 自愈。"
+            "默认关 (重启中断在途 IMAP 会话, 破坏性动作保守默认), owner 显式开。"
+            "关 = watchdog 仅告警。开着但 pm2 解析不到 (纯 .app 无 node bin) 时 "
+            "callback 自身降级为仅告警, 不误伤。"
+        ),
+    )
+    davmail_auto_restart_cooldown_sec: int = Field(
+        default=600, env="DAVMAIL_AUTO_RESTART_COOLDOWN_SEC",
+        description="两次自动重启最小间隔 (秒), 防 flap; 重启成败都进冷却。",
+    )
+    davmail_auto_restart_max_per_day: int = Field(
+        default=6, env="DAVMAIL_AUTO_RESTART_MAX_PER_DAY",
+        description=(
+            "24h 滚动窗口内自动重启上限。达上限 → 停自动重启 + critical 告警 "
+            "(镜像 supervise crashloop_stopped 语义: 反复重启说明根因未解须人工), "
+            "窗口滚出后自动恢复。"
+        ),
+    )
     davmail_caldav_port: int = Field(
         default=1080, env="DAVMAIL_CALDAV_PORT",
         description="DavMail CalDAV 端口 (Phase C.2 — LLM agent 拿日程 context)",
