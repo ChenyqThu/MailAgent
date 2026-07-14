@@ -32,7 +32,9 @@ import {
   useCalendarSyncTrigger,
   useNowTick
 } from '../calendar/hooks/useCalendarEvents'
-import { IS_WEB_BUILD } from '../calendar/lib/capabilities'
+import { calendarCapabilities } from '../calendar/lib/capabilities'
+
+const caps = calendarCapabilities()
 import {
   buildKeyNavSequence,
   keyNavWindow,
@@ -292,8 +294,8 @@ export function CalendarLayout(): React.ReactElement {
     onSync: handleSync,
     onHelp: handleHelp,
     onEsc: handleEsc,
-    // 远程 web 写入口门控 (F14/Q9) — 与 Toolbar [+ 新建] 按钮同一判定.
-    onNew: IS_WEB_BUILD ? undefined : handleNewEvent,
+    // 阶段 3 (#11) — caps.write 门控, 与 Toolbar [+ 新建] 按钮同一判定.
+    onNew: caps.write ? handleNewEvent : undefined,
     onNextEvent: handleNextEvent,
     onPrevEvent: handlePrevEvent,
     onOpenSelected: handleOpenSelected

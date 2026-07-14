@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 // 阶段2·2.7 (F18/UX-P0④) — useCalendarShortcuts 新增 n/j/k/Enter 的契约:
-//   - n → onNew (未接线时 no-op, 对应远程 web IS_WEB_BUILD 门控)
+//   - n → onNew (未接线时 no-op, 对应 calendarCapabilities().write 门控)
 //   - j/k → onNextEvent/onPrevEvent (只动锚点, 不触发 onOpenSelected)
 //   - Enter → onOpenSelected; 焦点在按钮/链接上让位原生激活
 //   - INPUT/TEXTAREA/contentEditable 聚焦不劫持 (既有 guard 覆盖新键)

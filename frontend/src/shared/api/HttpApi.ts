@@ -13,10 +13,12 @@
 //
 // Methods listed in the 减法清单 (stub_keep) stay as notImplemented/noop:
 // chat.*, ai.translateBatch/abortTranslate, email.createDraft, calendar
-// WRITES, folder WRITES, settings WRITE/secret, updater.*, env.set, services.*,
+// recurringDiscover/recurringReplay/expand (legacy Notion-mirror 运维面),
+// folder WRITES, settings WRITE/secret, updater.*, env.set, services.*,
 // notionAgent WRITES, island.*, notion.updateFlag, events.status/
 // reconnect. Implemented surfaces: email/attachment (full read + write),
-// ai.getCached/deleteCached, llm.run/stats/selftest, admin.*, calendar READS,
+// ai.getCached/deleteCached, llm.run/stats/selftest, admin.*, calendar READS
+// + event WRITES (阶段 3.1 #11: create/update/delete/rsvp/replay),
 // folder READS, env.get (read-only .env snapshot), prompts.list/read/write,
 // notionAgent.getConfig/listModels/listAgents, settings.get/secretsStatus.
 
@@ -44,9 +46,14 @@ import type {
   CalendarSyncStateItem,
   ChatApi,
   EmailCalendarLink,
+  EventCreateOpts,
+  EventDeleteOpts,
   EventGetOpts,
+  EventReplayOpts,
+  EventRsvpOpts,
   EventSourceEmail,
   EventsListOpts,
+  EventUpdateOpts,
   SyncNowOpts,
   CleanupDeadLetterOpts,
   ComposeDraftOpts,
@@ -640,11 +647,42 @@ export class HttpApi implements MailApi {
       this.req<unknown>('POST', '/calendar/sync-trigger', {
         body: { full: opts.full, calendarName: opts.calendarName }
       }),
-    eventReplay: () => notImplemented('calendar.eventReplay'),
-    eventRsvp: () => notImplemented('calendar.eventRsvp'),
-    eventCreate: () => notImplemented('calendar.eventCreate'),
-    eventUpdate: () => notImplemented('calendar.eventUpdate'),
-    eventDelete: () => notImplemented('calendar.eventDelete')
+
+    // 阶段 3.1 (#11) — event 写路径 (serve-api calendar 写端点)。契约与
+    // ElectronApi (calendar-write IPC → fork CLI) 1:1: body 原样 camelCase 透传,
+    // 服务端逐字镜像 CLI `calendar create/update/delete/rsvp/replay` 语义
+    // (update 三分支 recurrenceId/splitFuture、attendees 三态 [缺席/空数组=不动,
+    // clearAttendees=清空, 列表=替换]、rrule ''=删除、isAllDay VALUE=DATE、
+    // rsvp response alias→PARTSTAT)。返回 envelope.data = CLI emit 的 data。
+    eventReplay: (opts: EventReplayOpts): Promise<unknown> =>
+      this.req<unknown>('POST', `/calendar/events/${encodeURIComponent(opts.icalUid)}/replay`, {
+        body: { recurrenceId: opts.recurrenceId, source: opts.source, dryRun: opts.dryRun }
+      }),
+
+    eventRsvp: (opts: EventRsvpOpts): Promise<unknown> =>
+      // ⚠️ 非 dry-run = 真发 iTIP REPLY 信给组织者, 不可撤回 (调用侧确认卡把关)。
+      this.req<unknown>('POST', `/calendar/events/${encodeURIComponent(opts.icalUid)}/rsvp`, {
+        body: {
+          response: opts.response,
+          recurrenceId: opts.recurrenceId,
+          source: opts.source,
+          dryRun: opts.dryRun
+        }
+      }),
+
+    eventCreate: (opts: EventCreateOpts): Promise<unknown> =>
+      this.req<unknown>('POST', '/calendar/events', { body: opts }),
+
+    eventUpdate: (opts: EventUpdateOpts): Promise<unknown> => {
+      const { icalUid, ...body } = opts
+      return this.req<unknown>('PATCH', `/calendar/events/${encodeURIComponent(icalUid)}`, { body })
+    },
+
+    eventDelete: (opts: EventDeleteOpts): Promise<unknown> =>
+      // 硬删 (CalDAV DELETE); 5 秒撤销窗口在调用侧, 发出即确认 (= CLI --yes)。
+      this.req<unknown>('DELETE', `/calendar/events/${encodeURIComponent(opts.icalUid)}`, {
+        query: { calendarName: opts.calendarName }
+      })
   }
 
   // task 06-08-chat 第二波 — 远程 config: 只读配置端点接线（serve-api 读 host .env）。

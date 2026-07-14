@@ -17,7 +17,9 @@ import { useReducedMotion } from '@shared/hooks/useReducedMotion'
 
 import { CalendarStatusLegend } from './CalendarStatusLegend'
 import { EventFormModal } from './EventFormModal'
-import { IS_WEB_BUILD } from './lib/capabilities'
+import { calendarCapabilities } from './lib/capabilities'
+
+const caps = calendarCapabilities()
 import { weekdayLong } from './lib/weekdays'
 import {
   useCalendarSyncTrigger,
@@ -292,8 +294,8 @@ export function CalendarToolbar({
       )}
 
       {/* Phase 2.5 §11.1 — [+ 新建] coral primary (跟 mockup-event-form §toolbar 一致)
-          F14/Q9 — 远程 web 隐藏 (eventCreate 是 HttpApi stub); 阶段 3 能力表替换. */}
-      {!IS_WEB_BUILD && (
+          阶段 3 (#11) — caps.write 门控 (serve-api 写端点就绪后两端可用). */}
+      {caps.write && (
         <button
           type="button"
           className="btn-coral"

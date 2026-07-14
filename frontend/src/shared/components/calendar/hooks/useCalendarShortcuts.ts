@@ -18,7 +18,7 @@ interface ShortcutOpts {
   onSync: () => void
   onHelp: () => void
   onEsc: () => void
-  /** 2.7 — n 新建事件; 远程 web (IS_WEB_BUILD 写入口门控) 由 caller 不传关掉. */
+  /** 2.7 — n 新建事件; caller 按 calendarCapabilities().write 不传即关掉. */
   onNew?: () => void
   /** 2.7 — j 选中下一个事件 (只动锚点, 不开抽屉). */
   onNextEvent?: () => void

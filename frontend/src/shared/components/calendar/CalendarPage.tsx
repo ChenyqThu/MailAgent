@@ -15,7 +15,9 @@ import { EmptyState } from '@shared/components/feedback/EmptyState'
 import { SkeletonRow } from '@shared/components/feedback/LoadingSkeleton'
 import { toastError, toastSuccess } from '@shared/state/toast'
 import { CalendarQueryError } from './CalendarQueryError'
-import { IS_WEB_BUILD } from './lib/capabilities'
+import { calendarCapabilities } from './lib/capabilities'
+
+const caps = calendarCapabilities()
 
 const RANGES: Array<{ label: string; offsetDays: number }> = [
   { label: '30d', offsetDays: 30 },
@@ -79,9 +81,8 @@ function Row({ item, onReplay, pending }: RowProps): React.ReactElement {
         {/* mockup §recurring 操作列是静态弱化 span. Phase 2.4 后任何 source 都能
             Replay (calendar:eventReplay 走 SQLite calendar_event 重导出 Notion),
             视觉上保持 mockup 简洁 link 风格. */}
-        {IS_WEB_BUILD ? (
-          // F14/Q9 — 远程 web 隐藏 Replay 入口 (eventReplay 是 HttpApi stub);
-          // 阶段 3 能力表替换.
+        {!caps.replay ? (
+          // 阶段 3 (#11) — caps.replay 门控 (HttpApi eventReplay 已接通, 两端 true).
           <span className="empty-field">—</span>
         ) : canReplay ? (
           <button
@@ -178,9 +179,9 @@ export function CalendarPage(): React.ReactElement {
             </button>
           ))}
         </div>
-        {/* F14/Q9 — 远程 web 隐藏扫描按钮 (recurringDiscover 是 HttpApi stub);
-            阶段 3 能力表替换. */}
-        {!IS_WEB_BUILD && (
+        {/* 阶段 3 (#11) — caps.discover 门控: recurringDiscover 在 HttpApi 仍是
+            stub (legacy Notion-mirror 运维面), web 下继续隐藏扫描按钮. */}
+        {caps.discover && (
           <button
             type="button"
             onClick={() => void listQ.refetch()}

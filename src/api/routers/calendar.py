@@ -1,16 +1,40 @@
-"""calendar 路由 — /api/calendar/* (6 读端点 + sync-trigger 写)。
+"""calendar 路由 — /api/calendar/* (6 读端点 + 6 写端点)。
 
 填充读端点 (handoff §2 + 阶段 2.1 P1-3 双向反查) + 远程手动同步触发
-(syncTrigger; 其余写端点仍 defer):
-  GET  /api/calendar/events             — eventsList   (→ CalendarEventOccurrence[])
-  GET  /api/calendar/events/{event_id}  — eventGet     (→ CalendarEventDetail | null, 404→null)
-  GET  /api/calendar/email-link/{internal_id}
-                                        — emailCalendarLink (→ EmailCalendarLink | null, 404→null)
-  GET  /api/calendar/events/{event_id}/source-email
-                                        — eventSourceEmail (→ EventSourceEmail | null, 404→null)
-  GET  /api/calendar/sync-status        — syncStatus   (→ CalendarSyncStateItem[])
-  GET  /api/calendar/names              — calendarNames (→ string[])
-  POST /api/calendar/sync-trigger       — syncTrigger  (CalDAV→SQLite, to_thread, →unknown)
+(syncTrigger) + 阶段 3.1 (#11) 事件写路径 (create/update/delete/rsvp/replay):
+  GET    /api/calendar/events             — eventsList   (→ CalendarEventOccurrence[])
+  GET    /api/calendar/events/{event_id}  — eventGet     (→ CalendarEventDetail | null, 404→null)
+  GET    /api/calendar/email-link/{internal_id}
+                                          — emailCalendarLink (→ EmailCalendarLink | null, 404→null)
+  GET    /api/calendar/events/{event_id}/source-email
+                                          — eventSourceEmail (→ EventSourceEmail | null, 404→null)
+  GET    /api/calendar/sync-status        — syncStatus   (→ CalendarSyncStateItem[])
+  GET    /api/calendar/names              — calendarNames (→ string[])
+  POST   /api/calendar/sync-trigger       — syncTrigger  (CalDAV→SQLite, to_thread, →unknown)
+  POST   /api/calendar/events             — eventCreate  (CalDAV PUT, to_thread)
+  PATCH  /api/calendar/events/{event_id}  — eventUpdate  (三分支: 整系列 / 改这次 detached /
+                                            改未来 split; 语义逐字镜像 CLI `calendar update`)
+  DELETE /api/calendar/events/{event_id}  — eventDelete  (CalDAV DELETE; 前端 5s undo 后才发,
+                                            即 CLI --yes 的确认语义)
+  POST   /api/calendar/events/{event_id}/rsvp   — eventRsvp   (iTIP REPLY via SMTP)
+  POST   /api/calendar/events/{event_id}/replay — eventReplay (重导出 Notion mirror)
+
+写端点纪律 (阶段 3.1, 对齐 email 写面):
+  - 鉴权同 email 写端点: ``Depends(verify_cf_access)`` (CF Access JWT L2 + 本地
+    ephemeral token 双腿合一, src/api/auth.py)。dry-run 也过传输鉴权 (email 面同款:
+    dry-run 跳过的是 service 层 auth, 不是传输层)。
+  - 审计: email 写面把 ``Actor(kind='http', label='cf-access')`` 传进 service;
+    CalendarService 写方法无 actor 参数 (不动内核), 对等物 = 本 router 成功后
+    ``_audit_write()`` 落一行结构化 log (actor=request.state.user_email)。
+    远程写 = 过 CF Access 的浏览器可改真日历 + 发 RSVP 信 (PRD 风险表), 不可弱化。
+  - 阻塞 CalDAV/SMTP/Notion 调用一律 ``asyncio.to_thread`` (同 sync-trigger)。
+  - body = camelCase dict + 手动校验 (镜像 email.py 写端点模式; 本文件
+    ``from __future__ import annotations`` 下不用 pydantic 参数注解, 见 sync-trigger 注)。
+  - 错误映射逐字对齐 CLI `calendar create/update/delete/rsvp/replay`:
+    ValueError "not found" → 404 E_NOT_FOUND; 其它 ValueError → 400 E_INVALID_ARG;
+    其余异常 → 502 (CalDAV 写=E_CALDAV, SMTP/Notion 上游=E_UPSTREAM) + CLI 同款 hint。
+  - data 形状 = CLI 同名命令 emit 的 data (HttpApi 直接透传, 与 ElectronApi fork CLI
+    的 WriteEnvelope data 1:1)。
 
 实现纪律:
   - 全部经 ``CalendarService`` (src/calendar_sync/service.py) 直读 ``calendar_event`` /
@@ -38,6 +62,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Optional
 
@@ -50,6 +75,9 @@ from src.api.deps import get_settings
 if TYPE_CHECKING:
     from src.calendar_sync.service import CalendarService
     from src.config import Config
+
+# 写端点审计 (docstring「写端点纪律」): 成功后落一行 actor+action+uid。
+logger = logging.getLogger("mailagent.api.calendar")
 
 router = APIRouter(prefix="/api/calendar", tags=["calendar"])
 
@@ -398,4 +426,510 @@ async def sync_trigger(
             http_status=502, source="cli",
         ) from exc
 
+    return success_envelope(data, request=request, source="cli")
+
+
+# ===========================================================================
+# 阶段 3.1 (#11) — 写端点共用 helpers
+# ===========================================================================
+
+
+async def _read_body_object(request: Request) -> dict:
+    """request body → dict; 空 body → {}; 非 JSON object → 400 (镜像 sync-trigger)。"""
+    try:
+        raw = await request.json()
+    except Exception:
+        raw = {}
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise APIError(
+            "E_INVALID_ARG", "body must be a JSON object",
+            http_status=400, source="cli",
+        )
+    return raw
+
+
+def _opt_str(raw: dict, key: str) -> Optional[str]:
+    """body.{key} → str | None (缺席/null=None); 非 str → 400。
+
+    空串**原样保留** — CLI 语义区分 None(不动) 与 ''(如 rrule='' 删除 RRULE)。
+    """
+    value = raw.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise APIError(
+            "E_INVALID_ARG", f"body.{key} must be a string", source="cli",
+        )
+    return value
+
+
+def _opt_bool(raw: dict, key: str) -> Optional[bool]:
+    """body.{key} → bool | None (缺席/null=None); 非 bool → 400。"""
+    value = raw.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, bool):
+        raise APIError(
+            "E_INVALID_ARG", f"body.{key} must be a JSON boolean", source="cli",
+        )
+    return value
+
+
+def _parse_iso_datetime_strict(value: str, *, field: str) -> datetime:
+    """ISO datetime 必须带 tz; naive 拒绝; 'Z' 后缀 → '+00:00'; 归一 UTC。
+
+    镜像 CLI calendar.py::_parse_iso_datetime_strict (Electron 面把 startIso 原样
+    传给 CLI --start, 这里必须同样严格, 否则两端时区语义漂移)。
+    """
+    s_clean = value.strip()
+    if s_clean.endswith("Z"):
+        s_clean = s_clean[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(s_clean)
+    except ValueError as exc:
+        raise APIError(
+            "E_INVALID_ARG",
+            f"{field}={value!r} not valid ISO datetime "
+            f"(e.g. '2026-05-30T14:00:00+08:00' or '2026-05-30T06:00:00Z')",
+            source="cli",
+        ) from exc
+    if dt.tzinfo is None:
+        raise APIError(
+            "E_INVALID_ARG",
+            f"{field}={value!r} naive datetime not allowed; must include tz "
+            f"offset, e.g. '2026-05-30T14:00:00+08:00'",
+            source="cli",
+        )
+    return dt.astimezone(timezone.utc)
+
+
+def _parse_attendees_body(raw_list: object, *, field: str) -> list[dict]:
+    """body attendees ([{email, name?}]) → service attendees list。
+
+    校验镜像 CLI _parse_attendees: email 必填且含 '@'; name 可选非空 str。
+    """
+    if not isinstance(raw_list, list):
+        raise APIError(
+            "E_INVALID_ARG",
+            f"body.{field} must be a list of {{email, name?}} objects",
+            source="cli",
+        )
+    out: list[dict] = []
+    for item in raw_list:
+        if not isinstance(item, dict):
+            raise APIError(
+                "E_INVALID_ARG",
+                f"body.{field}[] items must be objects with an 'email' key",
+                source="cli",
+            )
+        email = item.get("email")
+        email = email.strip() if isinstance(email, str) else ""
+        if not email or "@" not in email:
+            raise APIError(
+                "E_INVALID_ARG",
+                f"body.{field}[] entry {item!r} not valid; expected "
+                "{'email': 'a@b', 'name'?: '...'}",
+                source="cli",
+            )
+        entry: dict = {"email": email}
+        name = item.get("name")
+        if isinstance(name, str) and name.strip():
+            entry["name"] = name.strip()
+        out.append(entry)
+    return out
+
+
+def _audit_write(request: Request, action: str, **fields: object) -> None:
+    """写操作审计行 (docstring「写端点纪律」— email 写面 Actor(label) 的对等物)。
+
+    actor = 已过 verify_cf_access 的 request.state.user_email
+    (CF 腿 = verified JWT claims email; 本地 token 腿 = 配置身份)。
+    """
+    actor = getattr(request.state, "user_email", None) or "?"
+    detail = " ".join(f"{k}={v!r}" for k, v in fields.items() if v is not None)
+    logger.info("[calendar-write] action=%s actor=%s %s", action, actor, detail)
+
+
+# ===========================================================================
+# POST /api/calendar/events — CalendarService.create_event (CalDAV PUT)
+# ===========================================================================
+
+
+@router.post("/events", dependencies=[Depends(verify_cf_access)])
+async def create_event(
+    request: Request,
+    cfg: "Config" = Depends(get_settings),
+):
+    """CalDAV PUT 创建事件 (CLI `calendar create` / Electron `calendar:eventCreate`)。
+
+    body (EventCreateOpts, camelCase): {summary, startIso, endIso, location?,
+    description?, attendees?: [{email, name?}], calendarName?, status?=CONFIRMED,
+    rrule?, isAllDay?=false}。startIso/endIso 必须带 tz (naive 400); 全天事件
+    isAllDay=true → writer 端 DTSTART/DTEND 用 VALUE=DATE (end exclusive)。
+    data = writer 结果 dict (ical_uid / calendar_name / dtstart_iso / ...) 透传。
+    """
+    raw = await _read_body_object(request)
+
+    summary = raw.get("summary")
+    if not isinstance(summary, str) or not summary.strip():
+        raise APIError(
+            "E_INVALID_ARG", "body.summary is required (non-empty string)",
+            source="cli",
+        )
+    start_iso = _opt_str(raw, "startIso")
+    end_iso = _opt_str(raw, "endIso")
+    if not start_iso or not end_iso:
+        raise APIError(
+            "E_INVALID_ARG", "body.startIso and body.endIso are required",
+            source="cli",
+        )
+    dtstart_utc = _parse_iso_datetime_strict(start_iso, field="startIso")
+    dtend_utc = _parse_iso_datetime_strict(end_iso, field="endIso")
+
+    status = _opt_str(raw, "status") or "CONFIRMED"
+    is_all_day = _opt_bool(raw, "isAllDay") or False
+    attendees = (
+        _parse_attendees_body(raw.get("attendees"), field="attendees")
+        if raw.get("attendees") is not None
+        else []
+    )
+
+    svc = _build_service(cfg)
+    try:
+        data = await asyncio.to_thread(
+            svc.create_event,
+            summary=summary,
+            dtstart_utc=dtstart_utc,
+            dtend_utc=dtend_utc,
+            location=_opt_str(raw, "location"),
+            description=_opt_str(raw, "description"),
+            attendees=attendees,
+            calendar_name=_opt_str(raw, "calendarName"),
+            status=status,
+            rrule=_opt_str(raw, "rrule"),
+            is_all_day=is_all_day,
+        )
+    except ValueError as exc:
+        # status 非法 / dtend ≤ dtstart (对齐 CLI create: 全部 → invalid arg)
+        raise APIError("E_INVALID_ARG", str(exc), source="cli") from exc
+    except Exception as exc:
+        raise APIError(
+            "E_CALDAV", f"calendar create failed: {exc}",
+            hint="检查 DavMail CalDAV (1080) 可达 + cipher key + calendar 名是否存在",
+            http_status=502, source="cli",
+        ) from exc
+
+    _audit_write(request, "create", uid=data.get("ical_uid"), summary=summary)
+    return success_envelope(data, request=request, source="cli")
+
+
+# ===========================================================================
+# PATCH /api/calendar/events/{event_id} — update 三分支 (CLI `calendar update`)
+# ===========================================================================
+
+
+@router.patch("/events/{event_id}", dependencies=[Depends(verify_cf_access)])
+async def update_event(
+    request: Request,
+    event_id: str,
+    cfg: "Config" = Depends(get_settings),
+):
+    """CalDAV PUT update (event_id = ical_uid); 分支逐字镜像 CLI `calendar update`:
+
+    - recurrenceId + splitFuture → **改未来** split_series (老 series 截断 + 新 series);
+    - recurrenceId (无 splitFuture) → **改这一次** update_occurrence (detached
+      override; 忽略 rrule/isAllDay/attendees/noSequenceBump, 同 CLI);
+    - 都不传 → **改整系列** update_event。
+
+    body (EventUpdateOpts, camelCase, 全可选=保留原值): {summary?, startIso?,
+    endIso?, location?, description?, attendees?, clearAttendees?, status?,
+    calendarName?, rrule?, isAllDay?, recurrenceId?, splitFuture?, noSequenceBump?}。
+
+    attendees 三态 (⚠️ 逐字对齐 Electron 面 runEventUpdate — `opts.attendees || []`
+    循环零次 = 不传 --attendee):
+      缺席/null/**空数组** → None 保留原与会者 (清空必须走 clearAttendees, 空数组
+      不是清空); clearAttendees=true → [] 清空; 非空列表 → 整表替换。
+    rrule: 缺席=保留; 'FREQ=...'=覆盖; ''=删除 RRULE (周期→单次)。
+    """
+    raw = await _read_body_object(request)
+
+    clear_attendees = _opt_bool(raw, "clearAttendees") or False
+    split_future = _opt_bool(raw, "splitFuture") or False
+    no_sequence_bump = _opt_bool(raw, "noSequenceBump") or False
+    is_all_day = _opt_bool(raw, "isAllDay")
+    recurrence_id = _opt_str(raw, "recurrenceId")
+
+    raw_attendees = raw.get("attendees")
+    # 互斥校验 — 文案照 CLI calendar update
+    if clear_attendees and isinstance(raw_attendees, list) and len(raw_attendees) > 0:
+        raise APIError(
+            "E_INVALID_ARG",
+            "clearAttendees 与 attendees 互斥: 要么清空, 要么用 attendees 替换",
+            source="cli",
+        )
+    if clear_attendees and recurrence_id:
+        raise APIError(
+            "E_INVALID_ARG",
+            "clearAttendees 不支持 recurrenceId: occurrence override (改这一次) "
+            "继承 master 与会者, 不改单次. 清空整系列与会者请去掉 recurrenceId",
+            source="cli",
+        )
+
+    dtstart_utc = None
+    dtend_utc = None
+    start_iso = _opt_str(raw, "startIso")
+    end_iso = _opt_str(raw, "endIso")
+    if start_iso:
+        dtstart_utc = _parse_iso_datetime_strict(start_iso, field="startIso")
+    if end_iso:
+        dtend_utc = _parse_iso_datetime_strict(end_iso, field="endIso")
+
+    # attendees 三态: clear → []; 非空列表 → 替换; 缺席/null/空数组 → None 保留。
+    attendees: Optional[list[dict]] = None
+    if clear_attendees:
+        attendees = []
+    elif isinstance(raw_attendees, list) and len(raw_attendees) > 0:
+        attendees = _parse_attendees_body(raw_attendees, field="attendees")
+    elif raw_attendees is not None and not isinstance(raw_attendees, list):
+        raise APIError(
+            "E_INVALID_ARG",
+            "body.attendees must be a list of {email, name?} objects",
+            source="cli",
+        )
+
+    rid_utc = None
+    if recurrence_id:
+        rid_utc = _parse_iso_datetime_strict(recurrence_id, field="recurrenceId")
+
+    common = dict(
+        ical_uid=event_id,
+        summary=_opt_str(raw, "summary"),
+        dtstart_utc=dtstart_utc,
+        dtend_utc=dtend_utc,
+        location=_opt_str(raw, "location"),
+        description=_opt_str(raw, "description"),
+        status=_opt_str(raw, "status"),
+        calendar_name=_opt_str(raw, "calendarName"),
+    )
+
+    svc = _build_service(cfg)
+    try:
+        if rid_utc is not None and split_future:
+            data = await asyncio.to_thread(
+                svc.split_series, split_recurrence_id_utc=rid_utc, **common,
+            )
+            action = "update-split-future"
+        elif rid_utc is not None:
+            data = await asyncio.to_thread(
+                svc.update_occurrence, recurrence_id_utc=rid_utc, **common,
+            )
+            action = "update-occurrence"
+        else:
+            data = await asyncio.to_thread(
+                svc.update_event,
+                attendees=attendees,
+                sequence_bump=not no_sequence_bump,
+                rrule=_opt_str(raw, "rrule"),
+                is_all_day=is_all_day,
+                **common,
+            )
+            action = "update"
+    except ValueError as exc:
+        msg = str(exc)
+        if "not found" in msg:
+            raise APIError(
+                "E_NOT_FOUND", msg,
+                hint="检查 ical_uid 存在 + DavMail CalDAV 可达", source="cli",
+            ) from exc
+        raise APIError("E_INVALID_ARG", msg, source="cli") from exc
+    except Exception as exc:
+        raise APIError(
+            "E_CALDAV", f"calendar update failed: {exc}",
+            hint="检查 ical_uid 存在 + DavMail CalDAV 可达",
+            http_status=502, source="cli",
+        ) from exc
+
+    _audit_write(request, action, uid=event_id, recurrence_id=recurrence_id)
+    return success_envelope(data, request=request, source="cli")
+
+
+# ===========================================================================
+# DELETE /api/calendar/events/{event_id} — CalendarService.delete_event
+# ===========================================================================
+
+
+@router.delete("/events/{event_id}", dependencies=[Depends(verify_cf_access)])
+async def delete_event(
+    request: Request,
+    event_id: str,
+    cfg: "Config" = Depends(get_settings),
+    calendar_name: Optional[str] = Query(None, alias="calendarName"),
+):
+    """CalDAV DELETE 删除事件 (event_id = ical_uid), 不可撤销。
+
+    确认语义 = CLI --yes / Electron runEventDelete 恒 --yes: 前端在 5 秒撤销窗口
+    之后才发本请求, HTTP 请求本身即确认。本地行软删由下轮 CalDAV sync reconcile。
+    data = {action:'deleted', ical_uid, calendar_name} 透传。
+    """
+    svc = _build_service(cfg)
+    try:
+        data = await asyncio.to_thread(
+            svc.delete_event, ical_uid=event_id, calendar_name=calendar_name,
+        )
+    except ValueError as exc:
+        # CLI delete: 全部 ValueError → not found (writer 只在 UID 缺失时抛)
+        raise APIError(
+            "E_NOT_FOUND", str(exc),
+            hint="检查 ical_uid 存在 + DavMail CalDAV 可达", source="cli",
+        ) from exc
+    except Exception as exc:
+        raise APIError(
+            "E_CALDAV", f"calendar delete failed: {exc}",
+            hint="检查 ical_uid 存在 + DavMail CalDAV 可达",
+            http_status=502, source="cli",
+        ) from exc
+
+    _audit_write(request, "delete", uid=event_id, calendar_name=calendar_name)
+    return success_envelope(data, request=request, source="cli")
+
+
+# ===========================================================================
+# POST /api/calendar/events/{event_id}/rsvp — CalendarService.send_rsvp (iTIP REPLY)
+# ===========================================================================
+
+
+@router.post("/events/{event_id}/rsvp", dependencies=[Depends(verify_cf_access)])
+async def event_rsvp(
+    request: Request,
+    event_id: str,
+    cfg: "Config" = Depends(get_settings),
+):
+    """发 iTIP REPLY 给 organizer (event_id = ical_uid; CLI `calendar rsvp`)。
+
+    body (EventRsvpOpts): {response, recurrenceId?, source?, dryRun?}。
+    response 大小写不敏感 + 同义词 (RSVP_RESPONSE_ALIAS: accept/yes → ACCEPTED,
+    tentative/maybe → TENTATIVE, decline/no/reject → DECLINED — PARTSTAT 三值域)。
+    dryRun=true → 查 row + 拼 plan (含 body_preview), 不发 SMTP。
+    ⚠️ 非 dry-run = 真发 RSVP 信, 不可撤回 (前端确认卡把关, D1)。
+    data 形状 = CLI rsvp emit: {action, ical_uid, recurrence_id, source,
+    response_status, to_email, dry_run, body_preview?, organizer_freshness_warning?}。
+    """
+    from src.calendar_sync.service import RSVP_RESPONSE_ALIAS
+
+    raw = await _read_body_object(request)
+
+    response = _opt_str(raw, "response")
+    response_key = (response or "").strip().lower()
+    response_status = RSVP_RESPONSE_ALIAS.get(response_key)
+    if response_status is None:
+        raise APIError(
+            "E_INVALID_ARG",
+            f"body.response={response!r} unknown; valid: "
+            f"{sorted(set(RSVP_RESPONSE_ALIAS.keys()))}",
+            source="cli",
+        )
+    recurrence_id = _opt_str(raw, "recurrenceId")
+    source = _opt_str(raw, "source")
+    dry_run = _opt_bool(raw, "dryRun") or False
+
+    svc = _build_service(cfg)
+    try:
+        result = await asyncio.to_thread(
+            svc.send_rsvp,
+            ical_uid=event_id,
+            response_status=response_status,
+            recurrence_id=recurrence_id,
+            source=source,
+            dry_run=dry_run,
+        )
+    except ValueError as exc:
+        msg = str(exc)
+        if "not found" in msg or "missing" in msg.lower():
+            raise APIError("E_NOT_FOUND", msg, source="cli") from exc
+        raise APIError("E_INVALID_ARG", msg, source="cli") from exc
+    except Exception as exc:
+        raise APIError(
+            "E_UPSTREAM", f"rsvp failed: {exc}",
+            hint="检查 DavMail SMTP 端口可达 (127.0.0.1:1025) + cipher key 正确 "
+            "+ organizer 邮箱有效",
+            http_status=502, source="cli",
+        ) from exc
+
+    # data 拼装照 CLI rsvp (body_preview / freshness warning 仅非空时带)。
+    data = {
+        "action": result["action"],
+        "ical_uid": result["ical_uid"],
+        "recurrence_id": result["recurrence_id"],
+        "source": result["source"],
+        "response_status": result["response_status"],
+        "to_email": result["to_email"],
+        "dry_run": result.get("dry_run", False),
+    }
+    if result.get("body_preview"):
+        data["body_preview"] = result["body_preview"]
+    if result.get("organizer_freshness_warning"):
+        data["organizer_freshness_warning"] = result["organizer_freshness_warning"]
+
+    if not dry_run:
+        _audit_write(
+            request, "rsvp",
+            uid=event_id,
+            response_status=response_status,
+            to_email=result.get("to_email"),
+        )
+    return success_envelope(data, request=request, source="cli")
+
+
+# ===========================================================================
+# POST /api/calendar/events/{event_id}/replay — CalendarService.replay_event_to_notion
+# ===========================================================================
+
+
+@router.post("/events/{event_id}/replay", dependencies=[Depends(verify_cf_access)])
+async def event_replay(
+    request: Request,
+    event_id: str,
+    cfg: "Config" = Depends(get_settings),
+):
+    """重导出 calendar_event 行到 Notion mirror (event_id = ical_uid; CLI `calendar replay`)。
+
+    body (EventReplayOpts): {recurrenceId?, source?, dryRun?}。source 留空 =
+    caldav → email_ics → legacy 顺序自动查。dryRun=true → 仅查 row + 拼 plan。
+    data = service 结果 dict 透传 (executed {action, page_id, ...} | dry-run plan)。
+    """
+    raw = await _read_body_object(request)
+
+    recurrence_id = _opt_str(raw, "recurrenceId")
+    source = _opt_str(raw, "source")
+    dry_run = _opt_bool(raw, "dryRun") or False
+
+    svc = _build_service(cfg)
+    try:
+        data = await asyncio.to_thread(
+            svc.replay_event_to_notion,
+            ical_uid=event_id,
+            recurrence_id=recurrence_id,
+            source=source,
+            dry_run=dry_run,
+        )
+    except ValueError as exc:
+        msg = str(exc)
+        if "not found" in msg:
+            raise APIError(
+                "E_NOT_FOUND", msg,
+                hint="check `mailagent calendar event-get` or run sync-now first",
+                source="cli",
+            ) from exc
+        raise APIError("E_INVALID_ARG", msg, source="cli") from exc
+    except Exception as exc:
+        raise APIError(
+            "E_UPSTREAM", f"replay failed: {exc}",
+            hint="检查 Notion token / 网络 / calendar_event row 完整性",
+            http_status=502, source="cli",
+        ) from exc
+
+    if not dry_run:
+        _audit_write(request, "replay", uid=event_id, page_id=data.get("page_id"))
     return success_envelope(data, request=request, source="cli")

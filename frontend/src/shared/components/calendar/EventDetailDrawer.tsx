@@ -33,7 +33,9 @@ import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
 
 import { EventFormModal } from './EventFormModal'
-import { IS_WEB_BUILD } from './lib/capabilities'
+import { calendarCapabilities } from './lib/capabilities'
+
+const caps = calendarCapabilities()
 import { extractMeetingLink, MEETING_PROVIDER_LABEL, openMeetingLink } from './lib/meeting-link'
 import { CALENDAR_EVENTS_KEY, useCalendarEvent } from './hooks/useCalendarEvents'
 import { useMailApi } from '@shared/hooks/useMailApi'
@@ -610,120 +612,124 @@ export function EventDetailDrawer({ occurrence, onClose, onReopen }: Props): Rea
             </div>
 
             {/* ═══ Phase 2.5 §11.6 — dw-foot RSVP vs owner 分流 ═══
-                F14/Q9 — 远程 web 隐藏整个操作区 (eventRsvp/eventUpdate/eventDelete
-                均为 HttpApi stub), 只留 .fm 元信息; 阶段 3 能力表替换. */}
+                阶段 3 (#11) — 能力表门控: owner 编辑/删除区走 caps.write,
+                attendee RSVP 区走 caps.rsvp (写端点就绪后两端 true). */}
             <div className="dw-foot">
-              {IS_WEB_BUILD ? null : isOwner ? (
-                /* owner: 单行 [编辑.btn-op.edit] [删除.btn-op.delete] */
-                <div className="owner-ops-row">
-                  <button
-                    type="button"
-                    className="btn-op edit"
-                    onClick={() => setEditModalOpen(true)}
-                    title={t(
-                      'calendar.drawer.ops.editTitle',
-                      '编辑事件 — 通过 CalDAV PUT 改 Exchange 端'
-                    )}
-                  >
-                    <Pencil size={13} strokeWidth={2} />
-                    {t('calendar.drawer.ops.edit', '编辑')}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn-op delete"
-                    onClick={handleDelete}
-                    title={t(
-                      'calendar.drawer.ops.deleteTitle',
-                      '删除事件 — 5 秒撤销窗口后通过 CalDAV DELETE'
-                    )}
-                  >
-                    <Trash2 size={13} strokeWidth={2} />
-                    {t('calendar.drawer.ops.delete', '删除')}
-                  </button>
-                </div>
-              ) : (
-                /* attendee: RSVP 高亮 + 第二行 disabled owner ops + 🔒 note */
-                <>
-                  <div className="rsvp-label">
-                    <Check size={11} strokeWidth={2} />
-                    {t('calendar.drawer.rsvp.label', '我的回复')}
-                    {isNeedsAction ? ' ' + t('calendar.drawer.rsvp.labelPending', '· 待回复') : ''}
-                  </div>
-                  <div className="rsvp-row">
-                    <button
-                      type="button"
-                      className={cn('btn-rsvp', myResp === 'ACCEPTED' && 'sel')}
-                      disabled={rsvpMut.isPending}
-                      onClick={() => handleRsvp('accept')}
-                      title={t(
-                        'calendar.drawer.rsvp.acceptTitle',
-                        '接受邀请 — 发 iTIP REPLY (PARTSTAT=ACCEPTED) 给组织者'
-                      )}
-                    >
-                      {rsvpMut.isPending && rsvpMut.variables === 'accept' ? (
-                        <Loader2 size={13} strokeWidth={2} className="animate-spin" />
-                      ) : (
-                        <Check size={13} strokeWidth={2} />
-                      )}
-                      {t('calendar.drawer.rsvp.accept', '接受')}
-                    </button>
-                    <button
-                      type="button"
-                      className={cn('btn-rsvp', myResp === 'TENTATIVE' && 'sel')}
-                      disabled={rsvpMut.isPending}
-                      onClick={() => handleRsvp('tentative')}
-                      title={t(
-                        'calendar.drawer.rsvp.tentativeTitle',
-                        '暂定 — 发 iTIP REPLY (PARTSTAT=TENTATIVE) 给组织者'
-                      )}
-                    >
-                      {rsvpMut.isPending && rsvpMut.variables === 'tentative' && (
-                        <Loader2 size={13} strokeWidth={2} className="animate-spin" />
-                      )}
-                      {t('calendar.drawer.rsvp.tentative', '暂定')}
-                    </button>
-                    <button
-                      type="button"
-                      className={cn('btn-rsvp', myResp === 'DECLINED' && 'sel')}
-                      disabled={rsvpMut.isPending}
-                      onClick={() => handleRsvp('decline')}
-                      title={t(
-                        'calendar.drawer.rsvp.declineTitle',
-                        '拒绝邀请 — 发 iTIP REPLY (PARTSTAT=DECLINED) 给组织者'
-                      )}
-                    >
-                      {rsvpMut.isPending && rsvpMut.variables === 'decline' && (
-                        <Loader2 size={13} strokeWidth={2} className="animate-spin" />
-                      )}
-                      {t('calendar.drawer.rsvp.decline', '拒绝')}
-                    </button>
-                  </div>
-                  <div className="owner-ops-row secondary">
-                    <button
-                      type="button"
-                      className="btn-op"
-                      disabled
-                      title={t('calendar.drawer.ops.ownerOnly', '只能由组织者修改')}
-                    >
-                      <Pencil size={13} strokeWidth={2} />
-                      {t('calendar.drawer.ops.edit', '编辑')}
-                    </button>
-                    <button
-                      type="button"
-                      className="btn-op"
-                      disabled
-                      title={t('calendar.drawer.ops.ownerOnly', '只能由组织者修改')}
-                    >
-                      <Trash2 size={13} strokeWidth={2} />
-                      {t('calendar.drawer.ops.delete', '删除')}
-                    </button>
-                  </div>
-                  <div className="ops-note">
-                    <Lock size={11} strokeWidth={2} />
-                    {t('calendar.drawer.ops.ownerOnly', '只能由组织者修改')}
-                  </div>
-                </>
-              )}
+              {isOwner
+                ? caps.write && (
+                    /* owner: 单行 [编辑.btn-op.edit] [删除.btn-op.delete] */
+                    <div className="owner-ops-row">
+                      <button
+                        type="button"
+                        className="btn-op edit"
+                        onClick={() => setEditModalOpen(true)}
+                        title={t(
+                          'calendar.drawer.ops.editTitle',
+                          '编辑事件 — 通过 CalDAV PUT 改 Exchange 端'
+                        )}
+                      >
+                        <Pencil size={13} strokeWidth={2} />
+                        {t('calendar.drawer.ops.edit', '编辑')}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-op delete"
+                        onClick={handleDelete}
+                        title={t(
+                          'calendar.drawer.ops.deleteTitle',
+                          '删除事件 — 5 秒撤销窗口后通过 CalDAV DELETE'
+                        )}
+                      >
+                        <Trash2 size={13} strokeWidth={2} />
+                        {t('calendar.drawer.ops.delete', '删除')}
+                      </button>
+                    </div>
+                  )
+                : /* attendee: RSVP 高亮 + 第二行 disabled owner ops + 🔒 note */
+                  caps.rsvp && (
+                    <>
+                      <div className="rsvp-label">
+                        <Check size={11} strokeWidth={2} />
+                        {t('calendar.drawer.rsvp.label', '我的回复')}
+                        {isNeedsAction
+                          ? ' ' + t('calendar.drawer.rsvp.labelPending', '· 待回复')
+                          : ''}
+                      </div>
+                      <div className="rsvp-row">
+                        <button
+                          type="button"
+                          className={cn('btn-rsvp', myResp === 'ACCEPTED' && 'sel')}
+                          disabled={rsvpMut.isPending}
+                          onClick={() => handleRsvp('accept')}
+                          title={t(
+                            'calendar.drawer.rsvp.acceptTitle',
+                            '接受邀请 — 发 iTIP REPLY (PARTSTAT=ACCEPTED) 给组织者'
+                          )}
+                        >
+                          {rsvpMut.isPending && rsvpMut.variables === 'accept' ? (
+                            <Loader2 size={13} strokeWidth={2} className="animate-spin" />
+                          ) : (
+                            <Check size={13} strokeWidth={2} />
+                          )}
+                          {t('calendar.drawer.rsvp.accept', '接受')}
+                        </button>
+                        <button
+                          type="button"
+                          className={cn('btn-rsvp', myResp === 'TENTATIVE' && 'sel')}
+                          disabled={rsvpMut.isPending}
+                          onClick={() => handleRsvp('tentative')}
+                          title={t(
+                            'calendar.drawer.rsvp.tentativeTitle',
+                            '暂定 — 发 iTIP REPLY (PARTSTAT=TENTATIVE) 给组织者'
+                          )}
+                        >
+                          {rsvpMut.isPending && rsvpMut.variables === 'tentative' && (
+                            <Loader2 size={13} strokeWidth={2} className="animate-spin" />
+                          )}
+                          {t('calendar.drawer.rsvp.tentative', '暂定')}
+                        </button>
+                        <button
+                          type="button"
+                          className={cn('btn-rsvp', myResp === 'DECLINED' && 'sel')}
+                          disabled={rsvpMut.isPending}
+                          onClick={() => handleRsvp('decline')}
+                          title={t(
+                            'calendar.drawer.rsvp.declineTitle',
+                            '拒绝邀请 — 发 iTIP REPLY (PARTSTAT=DECLINED) 给组织者'
+                          )}
+                        >
+                          {rsvpMut.isPending && rsvpMut.variables === 'decline' && (
+                            <Loader2 size={13} strokeWidth={2} className="animate-spin" />
+                          )}
+                          {t('calendar.drawer.rsvp.decline', '拒绝')}
+                        </button>
+                      </div>
+                      <div className="owner-ops-row secondary">
+                        <button
+                          type="button"
+                          className="btn-op"
+                          disabled
+                          title={t('calendar.drawer.ops.ownerOnly', '只能由组织者修改')}
+                        >
+                          <Pencil size={13} strokeWidth={2} />
+                          {t('calendar.drawer.ops.edit', '编辑')}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-op"
+                          disabled
+                          title={t('calendar.drawer.ops.ownerOnly', '只能由组织者修改')}
+                        >
+                          <Trash2 size={13} strokeWidth={2} />
+                          {t('calendar.drawer.ops.delete', '删除')}
+                        </button>
+                      </div>
+                      <div className="ops-note">
+                        <Lock size={11} strokeWidth={2} />
+                        {t('calendar.drawer.ops.ownerOnly', '只能由组织者修改')}
+                      </div>
+                    </>
+                  )}
 
               <div className="fm">
                 UID: {occurrence.ical_uid}

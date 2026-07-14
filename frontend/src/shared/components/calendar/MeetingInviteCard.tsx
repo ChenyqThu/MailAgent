@@ -8,7 +8,7 @@
 // method 语义: REQUEST/null=正常邀请; CANCEL=已取消态 (无 RSVP 键);
 // link.recurrence_id 非空 = override 邀请 (标「本次例外」)。
 // in_calendar=false → RSVP 三键禁用 + 「尚未同步到日历」提示。
-// IS_WEB_BUILD → 隐藏 RSVP 三键 (HttpApi eventRsvp 是 stub), 信息区保留。
+// RSVP 三键受 calendarCapabilities().rsvp 门控 (阶段 3 #11 起两端 true), 信息区恒渲染。
 //
 // 组件放 calendar/ 目录 (而非 email/): RSVP/冲突/能力门控/类型全是日历域,
 // EmailDetail 只是挂载点; cal- 前缀样式与日历面同族, 便于后续与 drawer 收敛。
@@ -31,7 +31,9 @@ import {
   Users
 } from 'lucide-react'
 
-import { IS_WEB_BUILD } from './lib/capabilities'
+import { calendarCapabilities } from './lib/capabilities'
+
+const caps = calendarCapabilities()
 import { pad } from './lib/format'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { useExitAnimation } from '@shared/hooks/useExitAnimation'
@@ -322,8 +324,8 @@ export function MeetingInviteCard({ internalId }: Props): React.ReactElement | n
         )}
 
         <div className="cal-invite-foot">
-          {/* F14/Q9 — 远程 web 隐藏 RSVP 三键 (HttpApi eventRsvp stub), 阶段 3 能力表替换 */}
-          {!isCancelled && !IS_WEB_BUILD && (
+          {/* 阶段 3 (#11) — caps.rsvp 门控 (HttpApi eventRsvp 已接通, 两端 true) */}
+          {!isCancelled && caps.rsvp && (
             <>
               <div className="cal-invite-rsvp">
                 <button

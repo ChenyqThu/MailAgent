@@ -300,6 +300,109 @@ describe('HttpApi — email.search mode→raw 映射', () => {
   })
 })
 
+// 阶段 3.1 (#11) — calendar 写方法去 notImplemented: 契约与 ElectronApi
+// (calendar-write IPC → fork CLI) 1:1, body 原样 camelCase 透传给 serve-api
+// (服务端逐字镜像 CLI calendar create/update/delete/rsvp/replay 语义)。
+describe('HttpApi — calendar 写方法 (阶段 3.1 #11)', () => {
+  const api = new HttpApi('/api')
+
+  function calledBody(): unknown {
+    const init = fetchMock.mock.calls[0][1] as RequestInit
+    return JSON.parse(String(init.body))
+  }
+
+  test('eventCreate → POST /calendar/events + body 全字段透传', async () => {
+    fetchMock.mockResolvedValue(envelopeResponse({ ical_uid: 'uid-new' }))
+    const out = await api.calendar.eventCreate({
+      summary: 'Design review',
+      startIso: '2026-06-01T10:00:00+08:00',
+      endIso: '2026-06-01T11:00:00+08:00',
+      attendees: [{ email: 'a@example.com', name: 'Alice' }],
+      calendarName: 'Work',
+      rrule: 'FREQ=WEEKLY;BYDAY=MO',
+      isAllDay: false
+    })
+    expect(calledMethod()).toBe('POST')
+    expect(calledUrl()).toContain('/api/calendar/events')
+    expect(calledBody()).toMatchObject({
+      summary: 'Design review',
+      startIso: '2026-06-01T10:00:00+08:00',
+      attendees: [{ email: 'a@example.com', name: 'Alice' }],
+      calendarName: 'Work',
+      rrule: 'FREQ=WEEKLY;BYDAY=MO'
+    })
+    expect(out).toEqual({ ical_uid: 'uid-new' })
+  })
+
+  test('eventUpdate → PATCH /calendar/events/{uid}; icalUid 只进 URL 不进 body; 周期参数透传', async () => {
+    fetchMock.mockResolvedValue(envelopeResponse({ action: 'split_series' }))
+    await api.calendar.eventUpdate({
+      icalUid: 'uid a/b',
+      summary: 'moved',
+      recurrenceId: '2026-06-08T02:00:00Z',
+      splitFuture: true,
+      clearAttendees: true
+    })
+    expect(calledMethod()).toBe('PATCH')
+    // uid URL-encode (空格/斜杠不能撕裂路径段)。
+    expect(calledUrl()).toContain('/api/calendar/events/uid%20a%2Fb')
+    const body = calledBody() as Record<string, unknown>
+    expect(body).toMatchObject({
+      summary: 'moved',
+      recurrenceId: '2026-06-08T02:00:00Z',
+      splitFuture: true,
+      clearAttendees: true
+    })
+    expect(body).not.toHaveProperty('icalUid')
+  })
+
+  test('eventDelete → DELETE /calendar/events/{uid}?calendarName=…', async () => {
+    fetchMock.mockResolvedValue(envelopeResponse({ action: 'deleted' }))
+    await api.calendar.eventDelete({ icalUid: 'uid-1', calendarName: 'Work' })
+    expect(calledMethod()).toBe('DELETE')
+    expect(calledUrl()).toContain('/api/calendar/events/uid-1')
+    expect(calledUrl()).toContain('calendarName=Work')
+  })
+
+  test('eventRsvp → POST /calendar/events/{uid}/rsvp + response/dryRun 透传', async () => {
+    fetchMock.mockResolvedValue(
+      envelopeResponse({ response_status: 'ACCEPTED', to_email: 'boss@example.com' })
+    )
+    const out = await api.calendar.eventRsvp({
+      icalUid: 'uid-1',
+      response: 'accept',
+      dryRun: true
+    })
+    expect(calledUrl()).toContain('/api/calendar/events/uid-1/rsvp')
+    expect(calledBody()).toMatchObject({ response: 'accept', dryRun: true })
+    expect(out).toMatchObject({ response_status: 'ACCEPTED' })
+  })
+
+  test('eventReplay → POST /calendar/events/{uid}/replay + source 透传', async () => {
+    fetchMock.mockResolvedValue(envelopeResponse({ action: 'updated', page_id: 'pg-1' }))
+    await api.calendar.eventReplay({ icalUid: 'uid-1', source: 'caldav' })
+    expect(calledUrl()).toContain('/api/calendar/events/uid-1/replay')
+    expect(calledBody()).toMatchObject({ source: 'caldav' })
+  })
+
+  test('eventUpdate error envelope → throw err.code (E_NOT_FOUND)', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          status: 'error',
+          schema_version: 1,
+          data: null,
+          error: { code: 'E_NOT_FOUND', message: 'event not found by UID' }
+        }),
+        { status: 404, headers: { 'content-type': 'application/json' } }
+      )
+    )
+    await expect(
+      api.calendar.eventUpdate({ icalUid: 'uid-x', summary: 'y' })
+    ).rejects.toMatchObject({ code: 'E_NOT_FOUND' })
+  })
+})
+
 // #5 远程日历空 bug 回归 — serve-api 已按 C7 契约把裸数组/对象放进 envelope.data
 // （total/window/filters/worker_enabled 落 meta）。HttpApi 不可再取 .events/.event/
 // .calendars，否则对裸数组求属性永远 undefined → 远程日历永远空（本地 Electron 走
