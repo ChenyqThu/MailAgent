@@ -384,17 +384,18 @@ class Config(BaseSettings):
             "正则剥 HTML。设 false 退回 Phase 1 之前的正则行为。"
         ),
     )
-    # ---- LLM 多 Provider 化（task 07-12；默认 off 灰度）----
+    # ---- LLM 多 Provider 化（task 07-12；默认 on，2026-07-13 cutover）----
     # 🔴 字段名 llm_provider_registry_enabled ≠ env MAILAGENT_LLM_PROVIDER_REGISTRY → 必须
     #    validation_alias（pydantic v2 忽略 Field(env=)，见本类顶 model_config 注释）。
     llm_provider_registry_enabled: bool = Field(
-        default=False, validation_alias="MAILAGENT_LLM_PROVIDER_REGISTRY",
+        default=True, validation_alias="MAILAGENT_LLM_PROVIDER_REGISTRY",
         description=(
             "LLM 上游多 provider 体系总开关（agent_config.db 的 llm_provider/llm_model 表，"
-            "prd 07-12）。P0 阶段仅影响 /chat/config 的 enabledModels 投影：on = 聚合全部 "
-            "enabled provider 的 enabled 模型（default provider 输出裸 model id 保持兼容，"
-            "其余输出 'providerId:modelId'）；off（默认）= 现状 .env LLM_ENABLED_MODELS "
-            "热读，字节级不变。Node gateway 侧读同名 env（main-env-only，P1）。"
+            "prd 07-12）。on（默认，2026-07-13 cutover；删键 = on）= /chat/config "
+            "enabledModels 聚合双表（default provider 输出裸 model id 保持兼容，其余输出 "
+            "'providerId:modelId'）+ Python protocol 路由（provider_routing）；env 显式 "
+            "false 应急回退 = 现状 .env LLM_ENABLED_MODELS 热读 + 前缀路由，字节级不变。"
+            "Node gateway 侧读同名 env（main-env-only，同语义：显式 false 才 off）。"
         ),
     )
     memory_capture_model: str = Field(

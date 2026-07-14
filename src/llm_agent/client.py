@@ -587,8 +587,9 @@ class LLMClient:
         消费，如 build_report → ReportDraft）。``tool_choice=auto``（最后一轮强制 final_tool
         保证收尾），与 classify 的单次强制调用不同。
 
-        走 fallback chain。flag off（默认）：**只在 Anthropic 前缀模型上**跑（现状字节级，
-        OpenAI proto 从链里过滤）；flag on：按 provider 协议分发（openai 系走
+        走 fallback chain。flag off（显式 false 应急回退）：**只在 Anthropic 前缀模型上**
+        跑（现状字节级，OpenAI proto 从链里过滤）；flag on（默认，2026-07-13 cutover）：
+        按 provider 协议分发（openai 系走
         ``_run_loop_openai`` 多轮 tool_calls 协议），仅 google 协议被过滤 + warning。
         cache_control：anthropic 腿复用 caller 设的 breakpoints；openai 腿在 system 打平
         时自然丢弃（现状语义）。

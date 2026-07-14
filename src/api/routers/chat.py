@@ -286,8 +286,9 @@ async def chat_config(request: Request):
     # 的 llm_provider/llm_model 表：全部 enabled provider 的 enabled 模型；default provider
     # 输出裸 model id（legacy 兼容——chat 面板 localStorage 偏好 / report_agent 行零迁移），
     # 其余输出 'providerId:modelId'（providerRef，prd §4.3b）。default 恒排最前。
-    # flag off（默认，pydantic 冻结单例读——翻 flag 需重启 serve-api）→ 上面的 .env 热读路径
-    # 字节级不变；聚合失败 → 回退 env 值（never fail /config）。getattr 防御老 stub cfg。
+    # flag off（显式 false 应急回退——默认 on 自 2026-07-13 cutover；pydantic 冻结单例读，
+    # 翻 flag 需重启 serve-api）→ 上面的 .env 热读路径字节级不变；聚合失败 → 回退 env 值
+    # （never fail /config）。getattr 防御老 stub cfg（fallback 取 False = fail-safe 走 legacy）。
     if getattr(cfg, "llm_provider_registry_enabled", False):
         try:
             from src.agent_config.llm_providers import DEFAULT_PROVIDER_ID
@@ -508,7 +509,8 @@ async def chat_config(request: Request):
             # task 07-12 P3 — Settings「模型服务」区（provider 管理 UI）+ 功能位选择器分组
             # 显隐 gate。与上面 enabledModels 的聚合投影**同源同语义**（pydantic 冻结单例读，
             # 翻 MAILAGENT_LLM_PROVIDER_REGISTRY 需重启 serve-api）——UI 门控与投影行为
-            # 永不劈叉。flag off（默认）→ 前端渲染旧 LLM 网关区，字节级现状。
+            # 永不劈叉。flag off（显式 false 应急回退；默认 on 自 2026-07-13 cutover）→
+            # 前端渲染旧 LLM 网关区，字节级现状。
             "providerRegistryEnabled": bool(
                 getattr(cfg, "llm_provider_registry_enabled", False)
             ),

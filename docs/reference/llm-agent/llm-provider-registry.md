@@ -5,7 +5,7 @@
 > （`provider_routing.py`/`client.py` 双腿）· 各功能位模型选择链 · `MAILAGENT_LLM_PROVIDER_REGISTRY` 前。
 >
 > 状态：批 1（P0-P2 后端能力）+ 批 2（P3 Settings UI / P3b Onboarding+Notion 可选化 / P4 收编）已全部
-> 合 main（2026-07-13，commit `1e4b8be8`→`341f7091`），**flag 默认 off 灰度中**，待 dogfood 后 cutover。
+> 合 main（2026-07-13，commit `1e4b8be8`→`341f7091`），**flag 已 cutover 默认 on（2026-07-13）**，env 显式 false 应急回退（删键 = on）。
 > 方案 SSoT = `.trellis/tasks/07-12-llm-provider-registry-ai-sdk/prd.md`（含 research/01-04）。
 > 本文是**运行语义**常青参考，以代码实态为准。
 
@@ -184,10 +184,12 @@ DB 行存**用户原始输入**（写入仅 trim + 去尾 `/`）；归一化由�
 
 ## 10. Flag、fail-open 与 Settings/远程面
 
-- **`MAILAGENT_LLM_PROVIDER_REGISTRY`（默认 off）**：Python = pydantic
-  `llm_provider_registry_enabled`（`validation_alias`，翻转需重启 serve-api）；Node = main env
-  直读 `isLlmProviderRegistryEnabled()`（不加 vite define，重启 app 生效）。off = gateway 老
-  `createAnthropic` 单例 + Python 前缀路由 + Settings 旧 LLM 网关区，字节级现状（双端有测试断言）。
+- **`MAILAGENT_LLM_PROVIDER_REGISTRY`（默认 on——2026-07-13 cutover；显式 false 应急回退，
+  删键 = on）**：Python = pydantic `llm_provider_registry_enabled`（`validation_alias`，翻转需
+  重启 serve-api）；Node = main env 直读 `isLlmProviderRegistryEnabled()`（不加 vite define，
+  重启 app 生效；镜像 envBool(key, true) island 先例——缺省 = on，显式仅 '1'/'true' 判 on）。
+  off（显式 false）= gateway 老 `createAnthropic` 单例 + Python 前缀路由 + Settings 旧 LLM
+  网关区，字节级现状（双端有测试断言，显式 off 跑）。
 - **/chat/config**：`enabledModels` flag on 改为聚合双表（default provider 输出裸 id 保持兼容、
   其余 `providerId:modelId`、default 恒排最前；聚合失败回退 env 值 never-fail）+
   `providerRegistryEnabled` 字段驱动前端显隐（UI 门控与投影同源同语义，永不劈叉）。
@@ -217,10 +219,10 @@ sqlite3 "$DB" "SELECT value FROM llm_provider_meta WHERE key='snapshot_version'"
 # sqlite3 "$DB" "DELETE FROM llm_model; DELETE FROM llm_provider; DELETE FROM llm_provider_meta"
 ```
 
-### flag 翻转步骤
+### flag 翻转步骤（cutover 后默认已 on；仅此前显式置 false 回退过的环境需要）
 
-1. `.env` 加 `MAILAGENT_LLM_PROVIDER_REGISTRY=true` → **重启 app**（打包态；dev 另重启
-   serve-api——Python pydantic 与 Node main env 都是启动读）。
+1. `.env` 删 `MAILAGENT_LLM_PROVIDER_REGISTRY=false` 键（或改 `true`）→ **重启 app**
+   （打包态；dev 另重启 serve-api——Python pydantic 与 Node main env 都是启动读）。
 2. 首次任一 provider 读端点触发 seed → Settings「模型服务」区应显示 `default` 行 = 老
    `LLM_API_BASE`/key/启用模型（验收标准 6：老值正确显示）。
 3. 验证等价性：chat 发一条（default provider 模型，请求应与 flag off 逐字节等价）+

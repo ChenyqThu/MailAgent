@@ -939,7 +939,8 @@ def _stub_chat_config(monkeypatch, cfg) -> None:
 
 
 def test_chat_config_flag_off_keeps_env_projection(monkeypatch):
-    """flag off（默认）：即便 provider 表已有行，enabledModels 仍 = .env 热读值（字节级现状）。"""
+    """flag 显式 off（cutover 2026-07-13 后默认 on）：即便 provider 表已有行，
+    enabledModels 仍 = .env 热读值（应急回退字节级现状）。"""
     # 先让表里有行（且与 env 值不同），证明 off 路径不读表
     store = get_llm_provider_store()
     store.seed_default_from_env(

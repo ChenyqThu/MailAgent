@@ -49,10 +49,15 @@ export async function backfillLegacyDefaultProviderKey(): Promise<void> {
   }
 }
 
-/** Mirror electron readEnvBool: only '1'/'true' (case-insensitive) → true. */
+/**
+ * Default ON（2026-07-13 cutover）——镜像 ai_gateway_lifecycle 的 envBool(key, true)
+ * 先例（MAILAGENT_ISLAND_AGENT_ENABLED）：缺省/空串 = on（删键 = on）；显式值仅
+ * '1'/'true'（trim + 大小写不敏感）→ on，其余（'false'/'0' 等）→ off 应急回退——
+ * 与 Python pydantic 对 'false'/'0' 的 bool 解析同向（显式 false 才 off）。
+ */
 export function isLlmProviderRegistryEnabled(): boolean {
   const raw = process.env['MAILAGENT_LLM_PROVIDER_REGISTRY']
-  if (raw == null || raw === '') return false
+  if (raw == null || raw === '') return true
   const value = raw.trim().toLowerCase()
   return value === '1' || value === 'true'
 }

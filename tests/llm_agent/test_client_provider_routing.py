@@ -323,7 +323,11 @@ def test_classify_mixed_chain_provider_fail_then_legacy_fallback(monkeypatch):
 
 
 def test_classify_flag_off_legacy_openai_path_unchanged(monkeypatch):
-    """flag off（真实 resolve_route + 默认 flag False）：legacy openai 腿路径/形状不变。"""
+    """flag 显式 off（cutover 2026-07-13 后默认 on）+ 真实 resolve_route：
+    legacy openai 腿路径/形状字节级不变（应急回退等价性 pin）。"""
+    monkeypatch.setattr(
+        client_mod.provider_routing, "cfg", NS(llm_provider_registry_enabled=False)
+    )
     fake = _FakeHttp([_FakeResp(_classify_lines())])
     client = LLMClient()
     client._http = fake  # legacy 全局 http 单例

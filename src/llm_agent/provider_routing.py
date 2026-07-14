@@ -1,8 +1,8 @@
 """providerRef → 上游 provider 路由解析（task 07-12 P2，prd §4.3 / §4.3b）。
 
 flag ``MAILAGENT_LLM_PROVIDER_REGISTRY``（pydantic ``cfg.llm_provider_registry_enabled``，
-默认 off）关闭时 ``resolve_route`` 恒返回 None —— 消费端（client.py / mem0_engine.py）走
-legacy 前缀路由 + 全局 env 配置，字节级不变。
+默认 on —— 2026-07-13 cutover，env 显式 false 应急回退）关闭时 ``resolve_route`` 恒返回
+None —— 消费端（client.py / mem0_engine.py）走 legacy 前缀路由 + 全局 env 配置，字节级不变。
 
 on 时：``parse_provider_ref`` 切 ``providerId:modelId``（无冒号 → default，legacy 兼容）→
 查 ``agent_config.db`` 的 ``llm_provider``/``llm_model`` 表（**30s TTL 快照热读**，镜像

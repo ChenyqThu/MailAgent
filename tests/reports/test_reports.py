@@ -803,8 +803,18 @@ class TestToolLoop:
             for mm in replayed
         )
 
-    def test_loop_requires_anthropic_model(self):
+    def test_loop_requires_anthropic_model(self, monkeypatch):
+        # flag 显式 off（cutover 2026-07-13 后默认 on；on 时 openai proto 不再从链里过滤，
+        # 由 test_client_tool_loop_openai.py 覆盖）——pin 应急回退的 anthropic-only 语义。
+        from types import SimpleNamespace
+
+        from src.llm_agent import provider_routing
         from src.llm_agent.client import LLMCallError, LLMClient
+
+        monkeypatch.setattr(
+            provider_routing, "cfg",
+            SimpleNamespace(llm_provider_registry_enabled=False),
+        )
         with pytest.raises(LLMCallError):
             asyncio.run(LLMClient().run_tool_loop(
                 system_blocks=[], user_content="u", tools=[], tool_handlers={},

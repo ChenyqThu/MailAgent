@@ -343,8 +343,10 @@ def test_chat_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
         "sessionToolsEnabled": True,
         "configToolsEnabled": True,
         "webToolsEnabled": True,
-        # task 07-12 P3 — Settings「模型服务」区门控（MAILAGENT_LLM_PROVIDER_REGISTRY，
-        # 默认 off 灰度；stub 无该字段 → getattr 兜底 False）。
+        # task 07-12 P3/P5 — Settings「模型服务」区门控（MAILAGENT_LLM_PROVIDER_REGISTRY，
+        # pydantic 默认已 cutover 翻 on 2026-07-13；此处 pin 的是 getattr 的 stub 兜底：
+        # stub 无该字段 → False（fail-safe 走 legacy 投影，真实 config 恒有字段）。
+        # pydantic 默认值本身由 test_provider_routing.test_flag_default_on_after_cutover pin。
         "providerRegistryEnabled": False,
     }
 

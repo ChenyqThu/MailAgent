@@ -198,6 +198,15 @@ def test_flag_off_returns_none(monkeypatch):
     assert pr.resolve_route("dashscope:qwen-max") is None
 
 
+def test_flag_default_on_after_cutover():
+    """cutover 2026-07-13：MAILAGENT_LLM_PROVIDER_REGISTRY 缺省 = on（pydantic 默认
+    True，env 显式 false 才应急回退）。直接 pin Field 默认值——不实例化 Config（会读
+    进程 env/.env，机器相关）。"""
+    from src.config import Config
+
+    assert Config.model_fields["llm_provider_registry_enabled"].default is True
+
+
 def test_resolve_seeded_default_provider(monkeypatch):
     _flag(monkeypatch, True)
     st = get_llm_provider_store()
