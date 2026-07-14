@@ -81,6 +81,10 @@ export const qk = {
     emailLink: (internalId: number) => ['calendar', 'email-link', internalId] as const,
     inviteConflicts: (fromIso: string, toIso: string) =>
       ['calendar', 'events', 'invite-conflict', fromIso, toIso] as const,
+    // 收尾批 (Lane G) — 周期系列邀请 (is_recurring 且无 recurrence_id) 查
+    // [现在, +60d] 窗口的下一次 occurrence, 替代显示 master 首次时间。
+    nextOccurrence: (icalUid: string) =>
+      ['calendar', 'events', 'next-occurrence', icalUid] as const,
     recurring: () => ['calendar', 'recurring'] as const,
     recurringSince: (since: string) => ['calendar', 'recurring', since] as const,
     recurringStatus90d: (recurringSince: string) =>

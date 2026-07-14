@@ -1223,6 +1223,7 @@
       "conflictNone": "No conflicts",
       "conflictCount": "Overlaps {n} events",
       "notInCalendar": "Not synced to calendar yet",
+      "seriesEnded": "No upcoming occurrences — showing first occurrence",
       "viewInCalendar": "View in calendar"
     },
     "syncTriggered": "Calendar sync triggered",

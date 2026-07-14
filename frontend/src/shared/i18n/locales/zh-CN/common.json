@@ -1470,6 +1470,7 @@
       "conflictNone": "无冲突",
       "conflictCount": "与 {n} 场日程重叠",
       "notInCalendar": "尚未同步到日历",
+      "seriesEnded": "系列近期无场次, 显示首次时间",
       "viewInCalendar": "在日历中查看"
     },
     "syncTriggered": "已触发日历同步",

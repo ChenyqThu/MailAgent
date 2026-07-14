@@ -13,7 +13,7 @@
 // 组件放 calendar/ 目录 (而非 email/): RSVP/冲突/能力门控/类型全是日历域,
 // EmailDetail 只是挂载点; cal- 前缀样式与日历面同族, 便于后续与 drawer 收敛。
 
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
@@ -35,8 +35,8 @@ import { calendarCapabilities } from './lib/capabilities'
 
 const caps = calendarCapabilities()
 import { pad } from './lib/format'
+import { RsvpConfirmDialog } from './RsvpConfirmDialog'
 import { useMailApi } from '@shared/hooks/useMailApi'
-import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 import { cn } from '@shared/lib/cn'
 import { qk } from '@shared/lib/queryKeys'
 import { toastError, toastSuccess } from '@shared/state/toast'
@@ -75,7 +75,12 @@ interface OccWindow {
 /** 邀请指向的 occurrence 起止窗。override 邀请 (link.recurrence_id 非空):
  *  event 行本身就是 detached 行时直接用其时间; event 是 master (caldav 代表行
  *  优先) 时用 recurrence_id (目标次原始 dtstart) + master duration 推算。
- *  其余 (单次/整系列邀请) 用 master dtstart/dtend —— 周期系列显示首次。 */
+ *  其余 (单次/整系列邀请) 用 master dtstart/dtend。
+ *
+ *  收尾批 (Lane G) — 「整系列邀请」(is_recurring 且无 recurrence_id) 用 master
+ *  首次时间是错的 (老周期会议显示几个月前的日期); 调用方 (MeetingInviteCard)
+ *  对这一分支改用 nextOccQ 查到的下一次 occurrence 覆盖此函数的返回值, 此函数
+ *  本身只在「未查到下一次 occurrence / 查询未完成」时充当回退基线。 */
 function deriveOccWindow(link: EmailCalendarLink): OccWindow | null {
   const ev = link.event
   if (!ev?.dtstart_iso || !ev.dtend_iso) return null
@@ -139,7 +144,45 @@ export function MeetingInviteCard({ internalId }: Props): React.ReactElement | n
     (link?.method ?? '').toUpperCase() === 'CANCEL' ||
     (event?.status ?? '').toUpperCase() === 'CANCELLED'
 
-  const occWindow = useMemo(() => (link ? deriveOccWindow(link) : null), [link])
+  // 收尾批 (Lane G) — 整系列邀请 (is_recurring 且无 recurrence_id): 查
+  // [现在, +60d] 窗口该 uid 的下一次 occurrence 覆盖 master 首次时间。窗口
+  // 边界只算一次 (session 内粗粒度 "现在" 足够), staleTime/无显式 retry 对齐
+  // 组件内既有 conflictQ 同款 eventsList 查询。lazy useState 初始化 (同
+  // useCalendarEvents.useNowTick 同款写法) — react-hooks/purity 禁止 render
+  // 期间调 Date.now() 等 impure 函数, useState 的 lazy initializer 是例外。
+  const seriesInvite = !!link && link.is_recurring && !link.recurrence_id
+  const [seriesLookahead] = useState(() => ({
+    fromIso: new Date().toISOString(),
+    toIso: new Date(Date.now() + 60 * 86400_000).toISOString()
+  }))
+  const nextOccQ = useQuery({
+    queryKey: qk.calendar.nextOccurrence(link?.ical_uid ?? ''),
+    queryFn: () => mailApi.calendar.eventsList(seriesLookahead),
+    enabled: seriesInvite,
+    staleTime: 60_000
+  })
+  const nextOcc = useMemo(() => {
+    if (!seriesInvite || !link || !nextOccQ.data) return null
+    const hits = nextOccQ.data
+      .filter((o) => o.ical_uid === link.ical_uid && (o.status || '').toUpperCase() !== 'CANCELLED')
+      .sort((a, b) => Date.parse(a.occurrence_start_iso) - Date.parse(b.occurrence_start_iso))
+    return hits[0] ?? null
+  }, [seriesInvite, link, nextOccQ.data])
+  // 查询已完成但 60 天窗口内无命中 = 系列已结束/近期无场次 (区别于「查询还
+  // 没跑完」, 避免加载中就先闪一下「系列已结束」提示).
+  const seriesEnded = seriesInvite && nextOccQ.isSuccess && !nextOcc
+
+  const occWindow = useMemo(() => {
+    if (!link) return null
+    if (seriesInvite && nextOcc) {
+      return {
+        startIso: nextOcc.occurrence_start_iso,
+        endIso: nextOcc.occurrence_end_iso,
+        isAllDay: nextOcc.is_all_day
+      }
+    }
+    return deriveOccWindow(link)
+  }, [link, seriesInvite, nextOcc])
 
   // 当日冲突 chip — 以邀请起止窗查 occurrences (eventsList 返回窗口重叠项),
   // 排除自身 uid 与已取消事件, 前端再做一次严格 overlap 复核。
@@ -195,33 +238,10 @@ export function MeetingInviteCard({ internalId }: Props): React.ReactElement | n
     }
   })
 
-  // 待收敛 — RSVP 确认卡 (D1 拍板恒确认) 与 EventDetailDrawer 1.5 内嵌实现同款:
-  // drawer 版是其文件内私有 JSX 且属他 lane 改动面, 抽共享组件留给主 session
-  // 阶段 2 收尾; 此处内嵌同款 (开合 state + useExitAnimation + Esc capture)。
+  // 收尾批 (Lane G) — RSVP 确认卡 (D1 拍板恒确认) 收敛进 RsvpConfirmDialog
+  // 共享组件 (与 EventDetailDrawer 同款), 此处只留开合状态接线。
   const [pendingRsvp, setPendingRsvp] = useState<RsvpResponse | null>(null)
   const [rsvpDialogOpen, setRsvpDialogOpen] = useState(false)
-  const { shouldRender: rsvpDlgRender, scopeRef: rsvpDlgRef } = useExitAnimation<HTMLDivElement>(
-    rsvpDialogOpen,
-    { card: '[data-anim-card]' }
-  )
-  const rsvpActionLabels: Record<RsvpResponse, string> = {
-    accept: t('calendar.drawer.rsvp.accept', '接受'),
-    tentative: t('calendar.drawer.rsvp.tentative', '暂定'),
-    decline: t('calendar.drawer.rsvp.decline', '拒绝')
-  }
-
-  // 确认卡开着时 capture 期拦 Esc 只关卡 — 不让 EmailDetail 面的全局 keydown
-  // 消费者 (快捷键/compose) 收到本次 Esc。
-  useEffect(() => {
-    if (!rsvpDialogOpen) return
-    const handle = (e: KeyboardEvent): void => {
-      if (e.key !== 'Escape') return
-      e.stopPropagation()
-      setRsvpDialogOpen(false)
-    }
-    window.addEventListener('keydown', handle, true)
-    return () => window.removeEventListener('keydown', handle, true)
-  }, [rsvpDialogOpen])
 
   if (!link) return null
 
@@ -293,6 +313,12 @@ export function MeetingInviteCard({ internalId }: Props): React.ReactElement | n
                 <span className="cal-invite-time">
                   {formatInviteRange(t, occWindow.startIso, occWindow.endIso, occWindow.isAllDay)}
                 </span>
+                {seriesEnded && (
+                  <span className="cal-invite-note">
+                    <Info size={11} strokeWidth={2} />
+                    {t('calendar.invite.seriesEnded', '系列近期无场次, 显示首次时间')}
+                  </span>
+                )}
               </div>
             )}
             {event?.location && (
@@ -396,62 +422,23 @@ export function MeetingInviteCard({ internalId }: Props): React.ReactElement | n
         </div>
       </section>
 
-      {/* 待收敛 — RSVP 确认卡, 与 EventDetailDrawer 1.5 同款 (glass-pop + --r-pop);
-          z-[70] 与 drawer 版对齐 (邮件面无 Drawer 竞争, 保持同层级习惯)。 */}
-      {rsvpDlgRender && pendingRsvp && (
-        <div
-          ref={rsvpDlgRef}
-          className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="cal-invite-rsvp-confirm-title"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setRsvpDialogOpen(false)
-          }}
-        >
-          <div data-anim-card className="glass-pop p-5 rounded-[var(--r-pop)] max-w-[360px] mx-4">
-            <div
-              id="cal-invite-rsvp-confirm-title"
-              className="text-lead text-ink-fg font-medium mb-1"
-            >
-              {t('calendar.drawer.rsvp.confirmTitle', '发送 RSVP 回复')}
-            </div>
-            <div className="text-aux text-ink-fg-2 mb-3">
-              {t(
-                'calendar.drawer.rsvp.confirmBody',
-                '将向组织者发送「{action}」回复邮件 (iTIP REPLY), 该操作不可撤回。',
-                { action: rsvpActionLabels[pendingRsvp] }
-              )}
-            </div>
-            <div className="text-aux text-ink-fg-2 mb-4 space-y-0.5">
-              <div className="truncate">
-                {t('calendar.drawer.rsvp.confirmEvent', '事件')}:{' '}
-                {event?.summary || t('calendar.shared.untitled', '未命名事件')}
-              </div>
-              <div className="truncate font-mono text-[12px]">
-                {t('calendar.drawer.meta.organizer', '组织者')}:{' '}
-                {normalizeEmail(event?.organizer) || '—'}
-              </div>
-            </div>
-            <div className="flex justify-end gap-2">
-              <button type="button" className="btn-ghost" onClick={() => setRsvpDialogOpen(false)}>
-                {t('calendar.shared.cancel', '取消')}
-              </button>
-              <button
-                type="button"
-                className="btn-primary"
-                disabled={rsvpMut.isPending}
-                onClick={() => {
-                  setRsvpDialogOpen(false)
-                  rsvpMut.mutate(pendingRsvp)
-                }}
-              >
-                {t('calendar.drawer.rsvp.confirmSend', '发送回复')}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* 收尾批 (Lane G) — RSVP 确认卡, 收敛进 RsvpConfirmDialog 共享组件
+          (与 EventDetailDrawer 同款). titleId 保持原 "cal-invite-rsvp-confirm-title"
+          不变. */}
+      <RsvpConfirmDialog
+        open={rsvpDialogOpen}
+        pendingResponse={pendingRsvp}
+        eventSummary={event?.summary}
+        organizer={normalizeEmail(event?.organizer) || null}
+        onCancel={() => setRsvpDialogOpen(false)}
+        onConfirm={() => {
+          if (!pendingRsvp) return
+          setRsvpDialogOpen(false)
+          rsvpMut.mutate(pendingRsvp)
+        }}
+        confirmPending={rsvpMut.isPending}
+        titleId="cal-invite-rsvp-confirm-title"
+      />
     </>
   )
 }

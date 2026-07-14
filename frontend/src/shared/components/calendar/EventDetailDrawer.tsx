@@ -26,20 +26,20 @@ import {
   Video,
   X
 } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
 
 import { EventFormModal } from './EventFormModal'
+import { RsvpConfirmDialog } from './RsvpConfirmDialog'
 import { calendarCapabilities } from './lib/capabilities'
 
 const caps = calendarCapabilities()
 import { extractMeetingLink, MEETING_PROVIDER_LABEL, openMeetingLink } from './lib/meeting-link'
 import { CALENDAR_EVENTS_KEY, useCalendarEvent } from './hooks/useCalendarEvents'
 import { useMailApi } from '@shared/hooks/useMailApi'
-import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 import { useActiveEmail } from '@shared/state/active-email'
 import { useMailbox } from '@shared/state/mailbox'
 import { useEmailFilter, type EmailView } from '@shared/state/email-filter'
@@ -291,37 +291,16 @@ export function EventDetailDrawer({ occurrence, onClose, onReopen }: Props): Rea
 
   // 阶段1·1.5 (F16/D1 拍板) — RSVP 确认卡替代原生 window.confirm (照 EventFormModal
   // scope-dialog 模式). 开合由 rsvpDialogOpen 驱动; pendingRsvp 关卡后保留, 让退场
-  // 动画期间卡内容不塌.
+  // 动画期间卡内容不塌. 卡片本体 (useExitAnimation + Esc capture) 收敛进
+  // RsvpConfirmDialog 共享组件, 此处只留状态接线.
   const [pendingRsvp, setPendingRsvp] = useState<RsvpResponse | null>(null)
   const [rsvpDialogOpen, setRsvpDialogOpen] = useState(false)
-  const { shouldRender: rsvpDlgRender, scopeRef: rsvpDlgRef } = useExitAnimation<HTMLDivElement>(
-    rsvpDialogOpen,
-    { card: '[data-anim-card]' }
-  )
-  const rsvpActionLabels: Record<RsvpResponse, string> = {
-    accept: t('calendar.drawer.rsvp.accept', '接受'),
-    tentative: t('calendar.drawer.rsvp.tentative', '暂定'),
-    decline: t('calendar.drawer.rsvp.decline', '拒绝')
-  }
 
   const handleRsvp = (response: RsvpResponse): void => {
     if (!occurrence) return
     setPendingRsvp(response)
     setRsvpDialogOpen(true)
   }
-
-  // 确认卡开着时在 capture 期拦 Esc: 只关卡, 不让 Drawer 的 window keydown listener
-  // 把抽屉一起关掉 (两者都挂 window, bubble 期 Drawer 先注册先跑, 只能 capture 拦).
-  useEffect(() => {
-    if (!rsvpDialogOpen) return
-    const handle = (e: KeyboardEvent): void => {
-      if (e.key !== 'Escape') return
-      e.stopPropagation()
-      setRsvpDialogOpen(false)
-    }
-    window.addEventListener('keydown', handle, true)
-    return () => window.removeEventListener('keydown', handle, true)
-  }, [rsvpDialogOpen])
 
   // Phase 2.5 §11.2 — 删除流程: 关 drawer + push 到 calendar-undo store,
   // 5s 后真发 CalDAV DELETE. 不再 window.confirm.
@@ -750,59 +729,23 @@ export function EventDetailDrawer({ occurrence, onClose, onReopen }: Props): Rea
         occurrence={editModalOpen ? occurrence : null}
       />
 
-      {/* 阶段1·1.5 (F16/D1) — RSVP 确认卡. z-[70] 盖过 Drawer aside 的 z-[61];
-          视觉照 EventFormModal scope-dialog (glass-pop + --r-pop). */}
-      {rsvpDlgRender && pendingRsvp && (
-        <div
-          ref={rsvpDlgRef}
-          className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="cal-rsvp-confirm-title"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setRsvpDialogOpen(false)
-          }}
-        >
-          <div data-anim-card className="glass-pop p-5 rounded-[var(--r-pop)] max-w-[360px] mx-4">
-            <div id="cal-rsvp-confirm-title" className="text-lead text-ink-fg font-medium mb-1">
-              {t('calendar.drawer.rsvp.confirmTitle', '发送 RSVP 回复')}
-            </div>
-            <div className="text-aux text-ink-fg-2 mb-3">
-              {t(
-                'calendar.drawer.rsvp.confirmBody',
-                '将向组织者发送「{action}」回复邮件 (iTIP REPLY), 该操作不可撤回。',
-                { action: rsvpActionLabels[pendingRsvp] }
-              )}
-            </div>
-            <div className="text-aux text-ink-fg-2 mb-4 space-y-0.5">
-              <div className="truncate">
-                {t('calendar.drawer.rsvp.confirmEvent', '事件')}:{' '}
-                {occurrence?.summary || t('calendar.shared.untitled', '未命名事件')}
-              </div>
-              <div className="truncate font-mono text-[12px]">
-                {t('calendar.drawer.meta.organizer', '组织者')}:{' '}
-                {normalizeEmail(occurrence?.organizer) || '—'}
-              </div>
-            </div>
-            <div className="flex justify-end gap-2">
-              <button type="button" className="btn-ghost" onClick={() => setRsvpDialogOpen(false)}>
-                {t('calendar.shared.cancel', '取消')}
-              </button>
-              <button
-                type="button"
-                className="btn-primary"
-                disabled={rsvpMut.isPending}
-                onClick={() => {
-                  setRsvpDialogOpen(false)
-                  rsvpMut.mutate(pendingRsvp)
-                }}
-              >
-                {t('calendar.drawer.rsvp.confirmSend', '发送回复')}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* 阶段1·1.5 (F16/D1) — RSVP 确认卡, 收敛进 RsvpConfirmDialog 共享组件
+          (与 MeetingInviteCard 同款). titleId 保持 e2e (calendar-roundtrip.spec.ts)
+          依赖的 "cal-rsvp-confirm-title" 不变. */}
+      <RsvpConfirmDialog
+        open={rsvpDialogOpen}
+        pendingResponse={pendingRsvp}
+        eventSummary={occurrence?.summary}
+        organizer={normalizeEmail(occurrence?.organizer) || null}
+        onCancel={() => setRsvpDialogOpen(false)}
+        onConfirm={() => {
+          if (!pendingRsvp) return
+          setRsvpDialogOpen(false)
+          rsvpMut.mutate(pendingRsvp)
+        }}
+        confirmPending={rsvpMut.isPending}
+        titleId="cal-rsvp-confirm-title"
+      />
     </>
   )
 }
