@@ -42,6 +42,7 @@ from src.repository import (
     EmailRepository,
     build_storage_payloads,
 )
+from src.mail.backend.base import MarkerUnavailableError
 from src.mail.backend.imap_client import parse_folder_csv_or_json
 from src.mail.backend.serial_executor import run_backend_io
 
@@ -362,8 +363,24 @@ class NewWatcher:
             self.backend.set_last_max_row_id(last_max_row_id)
             logger.info(f"Restored last_max_row_id from SyncStore: {last_max_row_id}")
         else:
-            # 首次运行，获取当前 max_row_id 作为基线
-            current_max = self.backend.get_current_max_row_id()
+            # 首次运行，获取当前 max_row_id 作为基线。
+            # 🔴 查询失败绝不能落 0 (task 07-14 L3): 下轮 check_for_changes 拿真实
+            # UIDNEXT 与 0 求差 → 误判几十万封 → get_new_emails(0) 发 UID 1:* 全量
+            # 重刷。带 backoff 重试 (probe 刚过, 多为 STATUS 瞬时慢); 仍失败宁可
+            # 不启动 (raise, 复用上面 health check 失败的 RuntimeError 范式)。
+            current_max = None
+            for attempt in range(3):
+                try:
+                    current_max = self.backend.get_current_max_row_id()
+                    break
+                except MarkerUnavailableError as e:
+                    logger.warning(f"Baseline marker query failed ({attempt + 1}/3): {e}")
+                    await asyncio.sleep(2)
+            if current_max is None:  # 真实 0 (applescript 空邮箱) 合法, 不算失败
+                raise RuntimeError(
+                    "Cannot establish baseline marker (backend marker query "
+                    "unavailable), refusing to start with poisoned marker=0"
+                )
             self.backend.set_last_max_row_id(current_max)
             self.sync_store.set_last_max_row_id(current_max)
             # issue #34: 盖上 marker 归属，供下次启动的 guard 比对（reset 后重定基线也走这里）

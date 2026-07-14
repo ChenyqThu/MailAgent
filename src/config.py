@@ -758,6 +758,16 @@ class Config(BaseSettings):
             "极端大邮件 (~MB attachment) 可适当调大到 180s."
         ),
     )
+    davmail_status_timeout_sec: int = Field(
+        default=30, env="DAVMAIL_STATUS_TIMEOUT_SEC",
+        description=(
+            "DavMail INBOX STATUS(UIDNEXT) 查询 timeout (秒), 默认 30. "
+            "超大 INBOX (7万+) 的 STATUS 偶发慢过 30s → 查询失败 (raise "
+            "MarkerUnavailableError, 不再塌成 marker 0, 见 task 07-14 L3); "
+            "大邮箱可调到 90. check_for_changes 每轮同步阻塞调用此查询, "
+            "故默认保守 30 不拖慢全体轮询, 由大邮箱部署按需上调."
+        ),
+    )
     davmail_uid_backfill_enabled: bool = Field(
         default=True, env="DAVMAIL_UID_BACKFILL_ENABLED",
         description=(
