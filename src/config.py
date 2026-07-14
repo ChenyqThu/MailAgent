@@ -844,14 +844,6 @@ class Config(BaseSettings):
             "无岛时静默 fail-open."
         ),
     )
-    frontend_calendar_v2_enabled: bool = Field(
-        default=False, env="FRONTEND_CALENDAR_V2_ENABLED",
-        description=(
-            "前端日历模块 V2 灰度开关. False = /calendar 路由还是显示老的 recurring "
-            "invite 表 (CalendarPage.tsx); True = 切到新月/周/日/agenda 视图. "
-            "灰度切换期间随时可回切. 详见 plan §Phase 4."
-        ),
-    )
 
 # 全局配置实例
 config = Config()

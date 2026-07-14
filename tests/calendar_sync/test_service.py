@@ -14,7 +14,6 @@ service facade 是否正确把参数 forward 到底层 + dict 输出 shape.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -220,6 +219,48 @@ def test_list_calendar_names_distinct_sorted(
 
     names = svc.list_calendar_names()
     assert names == ["Family", "Personal", "Work"]
+
+
+def test_list_calendar_names_hides_ghost_calendar(
+    repo: CalendarEventRepository, make_event
+):
+    """P2-8 — worker 停止摸的日历 (last_incremental_sync_at 冻结超阈值) 从
+    chip 列表隐藏, 但底层 calendar_event 行仍在 (数据不丢)。"""
+    import sqlite3
+
+    svc = CalendarService(db_path=str(repo.db_path))
+    repo.upsert_from_caldav_event(make_event(uid="c1", calendar_name="Active"))
+    repo.upsert_from_caldav_event(make_event(uid="c2", calendar_name="Ghost"))
+    repo.upsert_sync_state("Active", full_sync=True)
+    repo.upsert_sync_state("Ghost", full_sync=True)
+
+    # 手动把 Ghost 的 sync_state 冻结在阈值之外 (worker 早就不再摸它了).
+    stale_epoch = (
+        datetime.now(timezone.utc)
+        - timedelta(days=90)
+    ).timestamp()
+    conn = sqlite3.connect(str(repo.db_path))
+    conn.execute(
+        "UPDATE calendar_sync_state SET last_full_sync_at = ?, "
+        "last_incremental_sync_at = ? WHERE calendar_name = 'Ghost'",
+        (stale_epoch, stale_epoch),
+    )
+    conn.commit()
+    conn.close()
+
+    assert svc.list_calendar_names() == ["Active"]
+    # 底层事件行未被触碰.
+    assert repo.list_calendar_names() == ["Active", "Ghost"]
+
+
+def test_list_calendar_names_keeps_names_without_sync_state(
+    repo: CalendarEventRepository, make_event
+):
+    """从未进过 calendar_sync_state 的日历名 (无 worker 数据可判断) 保守放行。"""
+    svc = CalendarService(db_path=str(repo.db_path))
+    repo.upsert_from_caldav_event(make_event(uid="c1", calendar_name="NoSyncState"))
+
+    assert svc.list_calendar_names() == ["NoSyncState"]
 
 
 # ============================================================

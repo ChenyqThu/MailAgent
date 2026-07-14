@@ -54,6 +54,12 @@ if TYPE_CHECKING:
 VALID_EVENT_SOURCES = ("caldav", "email_ics", "legacy_calendar_app")
 VALID_EVENT_STATUS = ("CONFIRMED", "TENTATIVE", "CANCELLED")
 
+# P2-8 — worker 移除 CalDAV calendar 时有意不软删其历史事件行 (worker.py
+# _refresh_calendars rationale: 共享日历可能临时不可访问), 这会让"幽灵日历"永久
+# 占前端 chip。list_calendar_names() 按此阈值过滤: 超过这么多天没被 worker
+# 摸过 (last_incremental_sync_at 冻结) 的日历名从列表隐藏。
+GHOST_CALENDAR_STALE_DAYS = 30
+
 RSVP_RESPONSE_ALIAS = {
     "accept": "ACCEPTED",
     "accepted": "ACCEPTED",
@@ -354,13 +360,35 @@ class CalendarService:
         """SQL distinct calendar_name (历史中出现过, 非空, deleted_at IS NULL).
 
         给前端 toolbar chip / event-form 下拉用. 不调 CalDAV (那是 sync-now 的事).
+
+        P2-8 — 按 calendar_sync_state 过滤幽灵日历: 超过
+        ``GHOST_CALENDAR_STALE_DAYS`` 天未被 worker 摸过 (last_incremental_sync_at
+        冻结, 说明该日历已从 CalDAV calendar 列表消失) 的日历名从结果隐藏。底层
+        calendar_event 行不动, 数据不丢 —— 日历若恢复同步, 下次 tick 更新
+        sync_state 后自动重新出现。从未进过 calendar_sync_state 的日历名 (如没
+        经过 worker 的纯 email_ics 来源) 保守放行, 不参与此过滤。
         """
         conn = sqlite3.connect(self.db_path)
         try:
+            cutoff_epoch = (
+                datetime.now(timezone.utc) - timedelta(days=GHOST_CALENDAR_STALE_DAYS)
+            ).timestamp()
             rows = conn.execute(
-                "SELECT DISTINCT calendar_name FROM calendar_event "
-                "WHERE deleted_at IS NULL AND calendar_name IS NOT NULL "
-                "AND calendar_name != '' ORDER BY calendar_name"
+                """
+                SELECT DISTINCT ce.calendar_name FROM calendar_event ce
+                LEFT JOIN calendar_sync_state cs
+                    ON cs.calendar_name = ce.calendar_name
+                WHERE ce.deleted_at IS NULL AND ce.calendar_name IS NOT NULL
+                    AND ce.calendar_name != ''
+                    AND (
+                        cs.calendar_name IS NULL
+                        OR COALESCE(
+                            cs.last_incremental_sync_at, cs.last_full_sync_at
+                        ) >= ?
+                    )
+                ORDER BY ce.calendar_name
+                """,
+                (cutoff_epoch,),
             ).fetchall()
             return [r[0] for r in rows]
         finally:
