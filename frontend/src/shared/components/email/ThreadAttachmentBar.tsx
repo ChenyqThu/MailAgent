@@ -26,7 +26,7 @@
 import { useCallback, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Download, Eye, Paperclip } from 'lucide-react'
+import { ChevronDown, Download, Eye, Paperclip } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
 import { errorMessage } from '@shared/lib/ipcErrors'
@@ -131,6 +131,16 @@ export function ThreadAttachmentBar({
   const setActive = useActiveEmail((s) => s.setActive)
   const [previewSrc, setPreviewSrc] = useState<string | null>(null)
   const [thumbFailed, setThumbFailed] = useState<ReadonlySet<number>>(() => new Set())
+  // Collapsed by default — the strip is a discoverability affordance, not the
+  // main event, and collapsing keeps it (and its thumbnail reads) out of the way
+  // until asked for. Re-collapses when the user moves to another message
+  // (render-phase reset per React docs — no effect, no cascading-render lint).
+  const [expanded, setExpanded] = useState(false)
+  const [expandedFor, setExpandedFor] = useState(activeInternalId)
+  if (activeInternalId !== expandedFor) {
+    setExpandedFor(activeInternalId)
+    setExpanded(false)
+  }
 
   // Thread members. `EmailMeta` carries no attachment info (research §2), so the
   // list only tells us WHICH siblings to probe, plus their sender/date for the
@@ -222,12 +232,18 @@ export function ThreadAttachmentBar({
   // stuck success (M5); a decode failure falls the card back to its icon (M4).
   const thumbTargets = useMemo(
     () =>
-      cards
-        .filter(
-          (c) => isImageAttachment(c.att) && (c.att.size_bytes ?? Infinity) <= THUMBNAIL_MAX_BYTES
-        )
-        .slice(0, THUMBNAIL_RENDER_LIMIT),
-    [cards]
+      // Collapsed → read nothing. Default-collapsed has to save the IPC, not
+      // just the pixels, or the M3 fan-out work is half wasted. (`attachment.list`
+      // still runs — the collapsed row shows the count.)
+      expanded
+        ? cards
+            .filter(
+              (c) =>
+                isImageAttachment(c.att) && (c.att.size_bytes ?? Infinity) <= THUMBNAIL_MAX_BYTES
+            )
+            .slice(0, THUMBNAIL_RENDER_LIMIT)
+        : [],
+    [cards, expanded]
   )
   const thumbQueries = useQueries({
     queries: thumbTargets.map((c) => ({
@@ -372,153 +388,185 @@ export function ThreadAttachmentBar({
   return (
     <section
       aria-label="thread-attachments"
-      className="mt-6 rounded-lg border border-ink-border bg-ink-2/40 px-3 py-2.5"
+      className="mt-3 rounded-lg border border-ink-border bg-ink-2/40 px-3 py-2"
     >
-      <div className="flex items-center gap-2 mb-2">
-        <Paperclip size={13} strokeWidth={2} className="text-ink-fg-2" />
-        <span
-          className="text-meta font-mono uppercase text-ink-fg-1"
-          style={{ letterSpacing: '0.06em' }}
-        >
-          {t('emailDetail.attachmentBar.title')} · {cards.length}
-          {!fullyLoaded && <span className="text-ink-fg-3"> …</span>}
-        </span>
+      <div className="flex items-center gap-2">
+        {/* Whole header row toggles (flex-1), not just the chevron. "Download
+            all" sits outside it as a sibling so we never nest buttons; when
+            collapsed it's hidden and the toggle spans the full row. */}
         <button
           type="button"
-          onClick={() => void downloadAll()}
-          disabled={!fullyLoaded}
+          onClick={() => setExpanded((v) => !v)}
+          aria-expanded={expanded}
           className={cn(
-            'ml-auto inline-flex items-center gap-1 px-2 py-1 rounded',
-            'text-meta text-ink-fg-2 hover:text-ink-fg-1 hover:bg-ink-4',
-            'transition-colors duration-fast',
-            'disabled:opacity-50 disabled:cursor-wait disabled:hover:bg-transparent disabled:hover:text-ink-fg-2'
+            'flex flex-1 min-w-0 items-center gap-2 text-left rounded',
+            'transition-colors duration-fast'
           )}
         >
-          <Download size={12} strokeWidth={2} />
-          {fullyLoaded
-            ? t('emailDetail.attachmentBar.downloadAll')
-            : t('emailDetail.attachmentBar.loading')}
+          <Paperclip size={13} strokeWidth={2} className="text-ink-fg-2 shrink-0" />
+          <span
+            className="text-meta font-mono uppercase text-ink-fg-1 truncate"
+            style={{ letterSpacing: '0.06em' }}
+          >
+            {t('emailDetail.attachmentBar.title')} · {cards.length}
+            {!fullyLoaded && <span className="text-ink-fg-3"> …</span>}
+          </span>
+          <ChevronDown
+            size={12}
+            strokeWidth={2}
+            className={cn(
+              'text-ink-fg-3 shrink-0 transition-transform duration-base ease-out',
+              expanded && 'rotate-180'
+            )}
+          />
         </button>
+        {expanded && (
+          <button
+            type="button"
+            onClick={() => void downloadAll()}
+            disabled={!fullyLoaded}
+            className={cn(
+              'shrink-0 inline-flex items-center gap-1 px-2 py-1 rounded',
+              'text-meta text-ink-fg-2 hover:text-ink-fg-1 hover:bg-ink-4',
+              'transition-colors duration-fast',
+              'disabled:opacity-50 disabled:cursor-wait disabled:hover:bg-transparent disabled:hover:text-ink-fg-2'
+            )}
+          >
+            <Download size={12} strokeWidth={2} />
+            {fullyLoaded
+              ? t('emailDetail.attachmentBar.downloadAll')
+              : t('emailDetail.attachmentBar.loading')}
+          </button>
+        )}
       </div>
 
-      <div className="flex gap-2 overflow-x-auto scrollbar-thin pb-1">
-        {cards.map((c) => {
-          const a = c.att
-          const src = sourceById.get(c.sourceId)
-          const isImage = isImageAttachment(a)
-          const thumbUrl = thumbFailed.has(a.id) ? undefined : thumbById.get(a.id)
-          const tone = pickIconTone(a)
-          const I = tone.Icon
-          // The open message's own files vs. everything inherited from earlier
-          // replies. Marked with the accent border + a "this message" source
-          // label (theme v3: accent reads from --c-accent, so both themes and
-          // every accent swap follow for free). Deliberately NOT --sel-wash —
-          // that token is the *selection* signature (rows / nav), and these
-          // cards aren't selectable; reusing it would blur the vocabulary.
-          // Past cards keep their existing neutral treatment untouched.
-          const isActiveSource = c.sourceId === activeInternalId
-          return (
-            <div
-              key={`${c.sourceId}-${a.id}`}
-              className={cn(
-                'group relative flex flex-col w-44 shrink-0 overflow-hidden bg-ink-2',
-                // Card tier radius (§18.3 --r-card = tile/card).
-                'rounded-[var(--r-card)] border',
-                isActiveSource ? 'border-coral/45' : 'border-ink-border'
-              )}
-            >
-              <button
-                type="button"
-                onClick={() => setActive(c.sourceId, { navTarget: true })}
-                title={a.filename}
+      {expanded && (
+        <div className="mt-2 flex gap-2 overflow-x-auto scrollbar-thin pb-1">
+          {cards.map((c) => {
+            const a = c.att
+            const src = sourceById.get(c.sourceId)
+            const isImage = isImageAttachment(a)
+            const thumbUrl = thumbFailed.has(a.id) ? undefined : thumbById.get(a.id)
+            const tone = pickIconTone(a)
+            const I = tone.Icon
+            // The open message's own files vs. everything inherited from earlier
+            // replies. Marked with the accent border + a "this message" source
+            // label (theme v3: accent reads from --c-accent, so both themes and
+            // every accent swap follow for free). Deliberately NOT --sel-wash —
+            // that token is the *selection* signature (rows / nav), and these
+            // cards aren't selectable; reusing it would blur the vocabulary.
+            // Past cards keep their existing neutral treatment untouched.
+            const isActiveSource = c.sourceId === activeInternalId
+            return (
+              <div
+                key={`${c.sourceId}-${a.id}`}
                 className={cn(
-                  'flex flex-col text-left w-full',
-                  'hover:bg-ink-4 transition-colors duration-fast'
+                  // w-32 (128px): compact end of the mac-mail attachment-strip
+                  // scale; still ~14 chars of filename at text-aux before
+                  // truncating, and fits both 24px action buttons comfortably.
+                  'group relative flex flex-col w-32 shrink-0 overflow-hidden bg-ink-2',
+                  // Card tier radius (§18.3 --r-card = tile/card).
+                  'rounded-[var(--r-card)] border',
+                  isActiveSource ? 'border-coral/45' : 'border-ink-border'
                 )}
               >
-                <div className="h-20 w-full bg-ink-1/60 grid place-items-center overflow-hidden">
-                  {thumbUrl ? (
-                    <img
-                      src={thumbUrl}
-                      alt=""
-                      loading="lazy"
-                      onError={() =>
-                        setThumbFailed((prev) => {
-                          const next = new Set(prev)
-                          next.add(a.id)
-                          return next
-                        })
-                      }
-                      className="h-full w-full object-cover"
-                    />
-                  ) : (
-                    <div
-                      className={cn(
-                        'w-10 h-10 rounded-md grid place-items-center border',
-                        tone.bg,
-                        tone.border
-                      )}
-                    >
-                      <I size={18} strokeWidth={2} className={tone.text} />
-                    </div>
+                <button
+                  type="button"
+                  onClick={() => setActive(c.sourceId, { navTarget: true })}
+                  title={a.filename}
+                  className={cn(
+                    'flex flex-col text-left w-full',
+                    'hover:bg-ink-4 transition-colors duration-fast'
                   )}
-                </div>
-                <div className="px-2 pt-1.5">
-                  <div className="text-aux text-ink-fg font-medium truncate">{a.filename}</div>
-                  <div className="text-meta font-mono text-ink-fg-2 tabular-nums truncate">
-                    {a.size_bytes != null ? formatFileSize(a.size_bytes) : '—'}
+                >
+                  {/* h-14 (56px): enough to recognise a thumbnail, ~30% of the
+                      old 80px card height reclaimed. */}
+                  <div className="h-14 w-full bg-ink-1/60 grid place-items-center overflow-hidden">
+                    {thumbUrl ? (
+                      <img
+                        src={thumbUrl}
+                        alt=""
+                        loading="lazy"
+                        onError={() =>
+                          setThumbFailed((prev) => {
+                            const next = new Set(prev)
+                            next.add(a.id)
+                            return next
+                          })
+                        }
+                        className="h-full w-full object-cover"
+                      />
+                    ) : (
+                      <div
+                        className={cn(
+                          'w-8 h-8 rounded-md grid place-items-center border',
+                          tone.bg,
+                          tone.border
+                        )}
+                      >
+                        <I size={16} strokeWidth={2} className={tone.text} />
+                      </div>
+                    )}
                   </div>
-                  {/* Source line. For the open message, sender · date is
+                  <div className="px-2 pt-1">
+                    <div className="text-aux text-ink-fg font-medium truncate">{a.filename}</div>
+                    <div className="text-meta font-mono text-ink-fg-2 tabular-nums truncate">
+                      {a.size_bytes != null ? formatFileSize(a.size_bytes) : '—'}
+                    </div>
+                    {/* Source line. For the open message, sender · date is
                       redundant (the detail header right above already shows
                       From / Date), so it's replaced by the explicit marker. */}
-                  {isActiveSource ? (
-                    <div className="mt-0.5 text-meta text-coral truncate">
-                      {t('emailDetail.attachmentBar.thisMessage')}
-                    </div>
-                  ) : (
-                    src && (
-                      <div className="mt-0.5 text-meta text-ink-fg-3 truncate">
-                        {src.label}
-                        {src.date && <span> · {formatRelativeTime(src.date)}</span>}
+                    {isActiveSource ? (
+                      <div className="mt-0.5 text-meta text-coral truncate">
+                        {t('emailDetail.attachmentBar.thisMessage')}
                       </div>
-                    )
+                    ) : (
+                      src && (
+                        <div className="mt-0.5 text-meta text-ink-fg-3 truncate">
+                          {src.label}
+                          {src.date && <span> · {formatRelativeTime(src.date)}</span>}
+                        </div>
+                      )
+                    )}
+                  </div>
+                </button>
+                {/* Buttons stay w-6/h-6 (24px) — compaction must not shrink the
+                  hit area below the a11y floor. */}
+                <div className="flex items-center gap-0.5 px-1.5 pb-1 pt-0.5">
+                  {isImage && (
+                    <button
+                      type="button"
+                      aria-label={t('emailDetail.attachmentBar.preview')}
+                      title={t('emailDetail.attachmentBar.preview')}
+                      onClick={() => void preview(a)}
+                      className={cn(
+                        'grid place-items-center w-6 h-6 rounded cursor-pointer',
+                        'text-ink-fg-3 hover:text-ink-fg-1 hover:bg-ink-4',
+                        'transition-colors duration-fast'
+                      )}
+                    >
+                      <Eye size={13} strokeWidth={2} />
+                    </button>
                   )}
-                </div>
-              </button>
-              <div className="flex items-center gap-0.5 px-2 pb-1.5 pt-1">
-                {isImage && (
                   <button
                     type="button"
-                    aria-label={t('emailDetail.attachmentBar.preview')}
-                    title={t('emailDetail.attachmentBar.preview')}
-                    onClick={() => void preview(a)}
+                    aria-label={t('emailDetail.attachmentBar.download')}
+                    title={t('emailDetail.attachmentBar.download')}
+                    onClick={() => void download(a.id)}
                     className={cn(
                       'grid place-items-center w-6 h-6 rounded cursor-pointer',
                       'text-ink-fg-3 hover:text-ink-fg-1 hover:bg-ink-4',
                       'transition-colors duration-fast'
                     )}
                   >
-                    <Eye size={13} strokeWidth={2} />
+                    <Download size={13} strokeWidth={2} />
                   </button>
-                )}
-                <button
-                  type="button"
-                  aria-label={t('emailDetail.attachmentBar.download')}
-                  title={t('emailDetail.attachmentBar.download')}
-                  onClick={() => void download(a.id)}
-                  className={cn(
-                    'grid place-items-center w-6 h-6 rounded cursor-pointer',
-                    'text-ink-fg-3 hover:text-ink-fg-1 hover:bg-ink-4',
-                    'transition-colors duration-fast'
-                  )}
-                >
-                  <Download size={13} strokeWidth={2} />
-                </button>
+                </div>
               </div>
-            </div>
-          )
-        })}
-      </div>
+            )
+          })}
+        </div>
+      )}
 
       {previewSrc !== null && (
         <ImageLightbox src={previewSrc} onClose={() => setPreviewSrc(null)} />

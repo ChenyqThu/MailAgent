@@ -2,6 +2,9 @@
 //
 // Thread attachment strip. Pins the product semantics + the codex review
 // hardening:
+//   - [collapse] collapsed by default — the count row shows (discoverability),
+//     the cards don't, and NO thumbnail read is issued until expanded; the whole
+//     header row toggles; switching message re-collapses;
 //   - [scope] aggregates the OPEN message + every thread member dated at or
 //     before it; a later reply's attachments never appear (and are never even
 //     fetched). Unknown-date edges: active date null → keep all (fallback);
@@ -21,6 +24,9 @@
 //     failed sibling list surfaces an explicit partial warning;
 //   - [H2] oversized images warn instead of an unbounded full-file read;
 //   - [M4] a failed thumbnail blocks preview; [M5] a null read falls to icon.
+//
+// NB: the strip is collapsed by default, so any test asserting card content must
+// `await expandBar()` first — do NOT flip the default to make tests pass.
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
@@ -99,6 +105,13 @@ const baseProps = {
   activeDate: '2026-07-02T00:00:00Z'
 }
 
+const ACTIVE_PDF = att({
+  id: 10,
+  internal_id: 1,
+  filename: 'active.pdf',
+  content_type: 'application/pdf'
+})
+
 // ── owner's dogfood thread (KL1PR04MB7243… "Omada app 官网 landing page 更新") ──
 // Opening 52030 (Karol, 4/23, no attachments of its own) must surface exactly
 // the 7 that already existed — 51003's 3 then 49179's 4 — and never the 9 from
@@ -137,14 +150,30 @@ const OPEN_52030 = {
   activeAttachments: []
 }
 
-function renderBar(props: Record<string, unknown>): ReturnType<typeof render> {
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })
-  return render(
+function wrap(props: Record<string, unknown>, qc: QueryClient): React.ReactElement {
+  return (
     <QueryClientProvider client={qc}>
       {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
       <ThreadAttachmentBar {...(props as any)} />
     </QueryClientProvider>
   )
+}
+
+function renderBar(props: Record<string, unknown>): ReturnType<typeof render> {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })
+  return render(wrap(props, qc))
+}
+
+// The header toggle is the only control carrying aria-expanded, so role+expanded
+// finds it regardless of the label text / count.
+function toggleButton(expanded: boolean): HTMLButtonElement {
+  return screen.getByRole('button', { expanded }) as HTMLButtonElement
+}
+
+// Collapsed by default — open the strip before asserting card content.
+async function expandBar(): Promise<void> {
+  const toggle = await screen.findByRole('button', { expanded: false })
+  fireEvent.click(toggle)
 }
 
 // Card jump buttons carry title={filename}; the two action buttons carry the
@@ -176,12 +205,106 @@ afterEach(() => {
   cleanup()
 })
 
+describe('ThreadAttachmentBar — collapse', () => {
+  test('[collapse] defaults to collapsed: count row shows, cards do not, no thumbnail read', async () => {
+    mockListByThread.mockResolvedValue([member(1, 'Alice'), member(2, 'Bob')])
+    mockAttList.mockResolvedValue([
+      att({ id: 20, filename: 'reply.png', size_bytes: 500, content_type: 'image/png' })
+    ])
+
+    renderBar({ ...baseProps, activeAttachments: [ACTIVE_PDF] })
+
+    // The count survives collapse — that IS the discoverability signal. It also
+    // proves attachment.list still runs while collapsed (1 active + 1 sibling).
+    await waitFor(() => expect(toggleButton(false).textContent).toContain('· 2'))
+    expect(toggleButton(false).textContent).toContain('Thread attachments')
+    expect(mockAttList).toHaveBeenCalledWith(2)
+
+    // No cards, and "Download all" is hidden while collapsed.
+    expect(cardTitlesInOrder()).toHaveLength(0)
+    expect(screen.queryByText('active.pdf')).toBeNull()
+    expect(screen.queryByText('reply.png')).toBeNull()
+    expect(downloadAllButton()).toBeUndefined()
+
+    // Collapsed must save the IPC, not just the pixels: reply.png is a 500-byte
+    // image that WOULD be thumbnailed if expanded.
+    expect(mockReadDataUrl).not.toHaveBeenCalled()
+  })
+
+  test('[collapse] clicking the header row expands, and only then reads thumbnails', async () => {
+    mockListByThread.mockResolvedValue([member(1, 'Alice'), member(2, 'Bob')])
+    mockAttList.mockResolvedValue([
+      att({ id: 20, filename: 'reply.png', size_bytes: 500, content_type: 'image/png' })
+    ])
+
+    renderBar({ ...baseProps, activeAttachments: [ACTIVE_PDF] })
+
+    await waitFor(() => expect(toggleButton(false).textContent).toContain('· 2'))
+    expect(mockReadDataUrl).not.toHaveBeenCalled()
+
+    await expandBar()
+
+    expect(await screen.findByText('active.pdf')).toBeTruthy()
+    expect(await screen.findByText('reply.png')).toBeTruthy()
+    expect(toggleButton(true)).toBeTruthy()
+    // "Download all" only appears once expanded.
+    expect(downloadAllButton()).toBeTruthy()
+    await waitFor(() => expect(mockReadDataUrl).toHaveBeenCalledWith(20))
+  })
+
+  test('[collapse] collapsing again hides the cards', async () => {
+    mockListByThread.mockResolvedValue([member(1, 'Alice'), member(2, 'Bob')])
+    mockAttList.mockResolvedValue([])
+
+    renderBar({ ...baseProps, activeAttachments: [ACTIVE_PDF] })
+
+    await expandBar()
+    expect(await screen.findByText('active.pdf')).toBeTruthy()
+
+    fireEvent.click(toggleButton(true))
+    expect(screen.queryByText('active.pdf')).toBeNull()
+    expect(cardTitlesInOrder()).toHaveLength(0)
+  })
+
+  test('[collapse] switching to another message resets to collapsed', async () => {
+    mockListByThread.mockResolvedValue([member(1, 'Alice'), member(2, 'Bob')])
+    mockAttList.mockResolvedValue([])
+
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })
+    const { rerender } = render(wrap({ ...baseProps, activeAttachments: [ACTIVE_PDF] }, qc))
+
+    await expandBar()
+    expect(await screen.findByText('active.pdf')).toBeTruthy()
+
+    // Move to another message in the thread — it has its own attachment, so the
+    // strip still renders; it must come back collapsed.
+    rerender(
+      wrap(
+        {
+          ...baseProps,
+          activeInternalId: 2,
+          activeDate: '2026-07-03T00:00:00Z',
+          activeAttachments: [
+            att({ id: 30, internal_id: 2, filename: 'second.pdf', content_type: 'application/pdf' })
+          ]
+        },
+        qc
+      )
+    )
+
+    expect(toggleButton(false)).toBeTruthy()
+    expect(cardTitlesInOrder()).toHaveLength(0)
+    expect(screen.queryByText('second.pdf')).toBeNull()
+  })
+})
+
 describe('ThreadAttachmentBar — scope + order', () => {
   test('[scope+order] opening a mid-thread message shows only its own + earlier attachments, newest first', async () => {
     mockListByThread.mockResolvedValue(realMembers())
     mockAttList.mockImplementation((id: number) => Promise.resolve(realAttsFor(id)))
 
     renderBar(OPEN_52030)
+    await expandBar()
 
     // 51003's 3 + 49179's 4 = 7 — NOT 16. The two later replies contribute none.
     await waitFor(() => expect(cardTitlesInOrder()).toHaveLength(7))
@@ -206,6 +329,7 @@ describe('ThreadAttachmentBar — scope + order', () => {
     mockAttList.mockImplementation((id: number) => Promise.resolve(realAttsFor(id)))
 
     renderBar(OPEN_52030)
+    await expandBar()
 
     await waitFor(() => expect(cardTitlesInOrder()).toHaveLength(7))
     await waitFor(() => expect(downloadAllButton().disabled).toBe(false))
@@ -221,14 +345,10 @@ describe('ThreadAttachmentBar — scope + order', () => {
     mockListByThread.mockResolvedValue([member(1, 'Alice'), member(2, 'Bob', null)])
     mockAttList.mockResolvedValue([att({ id: 20, filename: 'undated.pdf' })])
 
-    renderBar({
-      ...baseProps,
-      activeAttachments: [
-        att({ id: 10, internal_id: 1, filename: 'mine.pdf', content_type: 'application/pdf' })
-      ]
-    })
+    renderBar({ ...baseProps, activeAttachments: [ACTIVE_PDF] })
+    await expandBar()
 
-    await screen.findByText('mine.pdf')
+    await screen.findByText('active.pdf')
     expect(screen.queryByText('undated.pdf')).toBeNull()
     expect(mockAttList).not.toHaveBeenCalledWith(2)
   })
@@ -245,6 +365,7 @@ describe('ThreadAttachmentBar — scope + order', () => {
     ])
 
     renderBar({ ...baseProps, activeDate: null, activeAttachments: [] })
+    await expandBar()
 
     expect(await screen.findByText('future.pdf')).toBeTruthy()
   })
@@ -261,12 +382,11 @@ describe('ThreadAttachmentBar — scope + order', () => {
     renderBar({
       ...baseProps,
       activeDate: '2026-04-23T06:09:00Z',
-      activeAttachments: [
-        att({ id: 10, internal_id: 1, filename: 'mine.pdf', content_type: 'application/pdf' })
-      ]
+      activeAttachments: [ACTIVE_PDF]
     })
+    await expandBar()
 
-    const mine = await screen.findByTitle('mine.pdf')
+    const mine = await screen.findByTitle('active.pdf')
     const old = await screen.findByTitle('old.pdf')
 
     // Marker label rides only the open message's card.
@@ -289,12 +409,8 @@ describe('ThreadAttachmentBar', () => {
       att({ id: 22, filename: 'sheet.csv', derived_from: 20, content_type: 'text/csv' })
     ])
 
-    renderBar({
-      ...baseProps,
-      activeAttachments: [
-        att({ id: 10, internal_id: 1, filename: 'active.pdf', content_type: 'application/pdf' })
-      ]
-    })
+    renderBar({ ...baseProps, activeAttachments: [ACTIVE_PDF] })
+    await expandBar()
 
     expect(await screen.findByText('active.pdf')).toBeTruthy()
     expect(await screen.findByText('reply.png')).toBeTruthy()
@@ -313,12 +429,8 @@ describe('ThreadAttachmentBar', () => {
     mockListByThread.mockResolvedValue([member(1, 'Alice'), member(2, 'Bob')])
     mockAttList.mockReturnValue(new Promise(() => {}))
 
-    renderBar({
-      ...baseProps,
-      activeAttachments: [
-        att({ id: 10, internal_id: 1, filename: 'active.pdf', content_type: 'application/pdf' })
-      ]
-    })
+    renderBar({ ...baseProps, activeAttachments: [ACTIVE_PDF] })
+    await expandBar()
 
     expect(await screen.findByText('active.pdf')).toBeTruthy()
   })
@@ -330,6 +442,7 @@ describe('ThreadAttachmentBar', () => {
     ])
 
     renderBar({ ...baseProps, activeAttachments: [] })
+    await expandBar()
 
     expect(await screen.findByText('huge.png')).toBeTruthy()
     expect(mockReadDataUrl).not.toHaveBeenCalled()
@@ -353,6 +466,7 @@ describe('ThreadAttachmentBar', () => {
     ])
 
     renderBar({ ...baseProps, activeAttachments: [] })
+    await expandBar()
 
     const card = await screen.findByTitle('reply.png')
     fireEvent.click(card)
@@ -364,12 +478,8 @@ describe('ThreadAttachmentBar', () => {
     mockListByThread.mockResolvedValue([member(1, 'Alice'), member(2, 'Bob')])
     mockAttList.mockReturnValue(new Promise(() => {})) // never settles
 
-    renderBar({
-      ...baseProps,
-      activeAttachments: [
-        att({ id: 10, internal_id: 1, filename: 'active.pdf', content_type: 'application/pdf' })
-      ]
-    })
+    renderBar({ ...baseProps, activeAttachments: [ACTIVE_PDF] })
+    await expandBar()
 
     await screen.findByText('active.pdf')
     expect(downloadAllButton().disabled).toBe(true)
@@ -381,12 +491,8 @@ describe('ThreadAttachmentBar', () => {
       att({ id: 20, filename: 'reply.png', size_bytes: 500, content_type: 'image/png' })
     ])
 
-    renderBar({
-      ...baseProps,
-      activeAttachments: [
-        att({ id: 10, internal_id: 1, filename: 'active.pdf', content_type: 'application/pdf' })
-      ]
-    })
+    renderBar({ ...baseProps, activeAttachments: [ACTIVE_PDF] })
+    await expandBar()
 
     await screen.findByText('reply.png')
     await waitFor(() => expect(downloadAllButton().disabled).toBe(false))
@@ -402,12 +508,8 @@ describe('ThreadAttachmentBar', () => {
     mockListByThread.mockResolvedValue([member(1, 'Alice'), member(2, 'Bob')])
     mockAttList.mockRejectedValue(new Error('boom'))
 
-    renderBar({
-      ...baseProps,
-      activeAttachments: [
-        att({ id: 10, internal_id: 1, filename: 'active.pdf', content_type: 'application/pdf' })
-      ]
-    })
+    renderBar({ ...baseProps, activeAttachments: [ACTIVE_PDF] })
+    await expandBar()
 
     await screen.findByText('active.pdf')
     await waitFor(() => expect(downloadAllButton().disabled).toBe(false))
@@ -434,6 +536,7 @@ describe('ThreadAttachmentBar', () => {
         })
       ]
     })
+    await expandBar()
 
     const preview = await screen.findByRole('button', { name: 'Preview' })
     fireEvent.click(preview)
@@ -459,6 +562,7 @@ describe('ThreadAttachmentBar', () => {
         })
       ]
     })
+    await expandBar()
 
     // Decorative thumbnails use alt="" (role presentation), so query the DOM.
     await waitFor(() => expect(document.querySelector('img')).not.toBeNull())
@@ -486,6 +590,7 @@ describe('ThreadAttachmentBar', () => {
         })
       ]
     })
+    await expandBar()
 
     expect(await screen.findByText('ghost.png')).toBeTruthy()
     await waitFor(() => expect(mockReadDataUrl).toHaveBeenCalledWith(10))
