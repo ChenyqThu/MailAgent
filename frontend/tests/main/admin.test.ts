@@ -220,4 +220,43 @@ describe('admin handlers — davmail health (L2a IMAP LOGIN probe)', () => {
     expect(login?.level).toBe('critical')
     expect(alerts.critical_count).toBeGreaterThanOrEqual(1)
   })
+
+  // F5 — 阈值经 sync_state davmail.login_fail_threshold 传播, 不再硬编码 3
+  test('F5: non-default threshold (5) — 4 fails stays ok, 5 goes critical', () => {
+    seedSyncState({
+      ...baseHealthy,
+      'davmail.login_fail_threshold': '5',
+      'davmail.imap_login_ok': '0',
+      'davmail.consecutive_login_failures': '4'
+    })
+    expect(runDavmailHealth().level).toBe('ok')
+
+    seedSyncState({
+      ...baseHealthy,
+      'davmail.login_fail_threshold': '5',
+      'davmail.imap_login_ok': '0',
+      'davmail.consecutive_login_failures': '5'
+    })
+    expect(runDavmailHealth().level).toBe('critical')
+  })
+
+  test('F5: missing threshold key falls back to 3 (older backend)', () => {
+    seedSyncState({
+      ...baseHealthy,
+      'davmail.imap_login_ok': '0',
+      'davmail.consecutive_login_failures': '3'
+    })
+    expect(runDavmailHealth().level).toBe('critical')
+  })
+
+  test('F5: runSystemAlerts respects propagated threshold (5) — 4 fails no alert', () => {
+    seedSyncState({
+      ...baseHealthy,
+      'davmail.login_fail_threshold': '5',
+      'davmail.imap_login_ok': '0',
+      'davmail.consecutive_login_failures': '4'
+    })
+    const login = runSystemAlerts().alerts.find((a) => a.title === 'DavMail IMAP LOGIN 持续失败')
+    expect(login).toBeUndefined()
+  })
 })

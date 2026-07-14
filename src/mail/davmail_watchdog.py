@@ -25,7 +25,9 @@ sync_state key 约定 (frontend 通过 better-sqlite3 直读)：
   davmail.smtp_reachable          '0' / '1'
   davmail.imap_login_ok           '1' / '0' / '' (TCP 不可达/未注入 cfg/开关关 → 跳过)
   davmail.consecutive_login_failures  连续 LOGIN 失败计数
+  davmail.login_fail_threshold    生效的 login 失败阈值 (F5, 传播到 admin/electron 防漂移)
   davmail.last_auto_restart_at    最近一次自动重启 ISO 时间戳 (L2b, 从未重启则无此键)
+  davmail.auto_restart_times      JSON epoch 数组: 24h 窗口内重启时间戳 (F4, 跨进程重启存活)
   davmail.token_age_days          浮点字符串，token.dat 不存在为 '-1'
   davmail.token_mtime_iso         ISO 时间戳
   davmail.consecutive_imap_failures   连续失败计数
@@ -39,6 +41,7 @@ sync_state key 约定 (frontend 通过 better-sqlite3 直读)：
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import time
 from datetime import datetime
@@ -140,9 +143,12 @@ class DavMailWatchdog:
         self._announced_process_down_smtp = False
         self._announced_throttle_burst = False
         self._announced_login_degraded = False
-        # L2b: 自动重启风暴防护状态
-        self._last_auto_restart_ts = 0.0
-        self._restart_times: list[float] = []  # 24h 滚动窗口内的重启时间戳
+        # L2b: 自动重启风暴防护状态 (F4: 从 sync_state 回种, 跨 MailAgent 进程重启
+        # 存活 —— 否则风暴停止后重启进程即清零内存计数, 声明的 24h max_per_day 上限被
+        # 绕过, 又能再重启一整轮)。
+        last_ts, restart_times = self._load_restart_state()
+        self._last_auto_restart_ts = last_ts
+        self._restart_times: list[float] = restart_times  # 24h 滚动窗口内的重启时间戳
         self._announced_restart_storm = False
         # 累计指标 (stats_reporter 用)
         self._counters = {
@@ -339,6 +345,38 @@ class DavMailWatchdog:
             pass
         return True
 
+    def _load_restart_state(self) -> tuple[float, list[float]]:
+        """F4: 从 sync_state 回种自动重启风暴防护状态 (跨进程重启存活)。
+
+        - ``davmail.last_auto_restart_at`` (ISO) → 冷却基准时间戳。
+        - ``davmail.auto_restart_times`` (JSON epoch 数组) → 24h 滚动窗口计数,
+          load 时顺手 prune 掉窗口外的时间戳。
+        坏数据 (JSON 解析失败 / 键缺失 / 类型错) 一律 fail-open 按空/0, 不挂 watchdog。
+        """
+        now = time.time()
+        last_ts = 0.0
+        raw_last = self.sync_store.get_state("davmail.last_auto_restart_at")
+        if raw_last:
+            try:
+                last_ts = datetime.fromisoformat(raw_last).timestamp()
+            except (ValueError, OSError):
+                last_ts = 0.0
+        restart_times: list[float] = []
+        raw_times = self.sync_store.get_state("davmail.auto_restart_times")
+        if raw_times:
+            try:
+                parsed = json.loads(raw_times)
+                if isinstance(parsed, list):
+                    restart_times = [
+                        float(t)
+                        for t in parsed
+                        if isinstance(t, (int, float))
+                        and now - float(t) < _RESTART_WINDOW_SECS
+                    ]
+            except (ValueError, TypeError):
+                restart_times = []
+        return last_ts, restart_times
+
     async def _maybe_auto_restart(self, now: float) -> None:
         """L2b: LOGIN 连续失败达阈值 → 调注入的 restart_callback (带风暴防护)。
 
@@ -390,6 +428,10 @@ class DavMailWatchdog:
         self.sync_store.set_state(
             "davmail.last_auto_restart_at",
             datetime.fromtimestamp(now).isoformat(timespec="seconds"),
+        )
+        # F4: 同步把 24h 窗口计数落盘, 跨进程重启存活 (max_per_day 上限不被绕过)
+        self.sync_store.set_state(
+            "davmail.auto_restart_times", json.dumps(self._restart_times)
         )
         if ok:
             self._consecutive_login_fails = 0
@@ -510,6 +552,11 @@ class DavMailWatchdog:
         )
         ss.set_state(
             "davmail.consecutive_login_failures", str(self._consecutive_login_fails)
+        )
+        # F5: 生效的 login 失败阈值传播到 admin router / electron 展示端,
+        # 根治「四个健康读面各自硬编码 3, 设非默认值时判定漂移」。
+        ss.set_state(
+            "davmail.login_fail_threshold", str(self.login_fail_threshold)
         )
         ss.set_state(
             "davmail.consecutive_imap_failures", str(self._consecutive_imap_fails)

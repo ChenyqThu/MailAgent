@@ -145,6 +145,8 @@ export interface DavMailHealthData {
   /** L2a — real IMAP LOGIN probe. Null when skipped (TCP down / disabled). */
   imap_login_ok?: boolean | null
   consecutive_login_failures?: number
+  /** F5 — effective login-fail threshold, propagated via sync_state (fallback 3). */
+  login_fail_threshold?: number
   token_age_days: number | null
   token_mtime_iso: string | null
   throttle_events_5min: number
@@ -234,6 +236,8 @@ export function runDavmailHealth(): DavMailHealthData {
   const loginRaw = state['davmail.imap_login_ok']
   const loginOk = loginRaw === '1' ? true : loginRaw === '0' ? false : null
   const loginFails = parseInt(state['davmail.consecutive_login_failures'] || '0', 10)
+  // F5: 阈值经 sync_state 传播 (watchdog 落盘), 缺失 (老数据) fallback 3
+  const loginThreshold = parseInt(state['davmail.login_fail_threshold'] || '', 10) || 3
   const throttleCount = parseInt(state['davmail.throttle_events_5min'] || '0', 10)
   const lastOAuthErr = state['davmail.last_oauth_error'] || null
   const lastOAuthAt = state['davmail.last_oauth_error_at'] || null
@@ -243,8 +247,8 @@ export function runDavmailHealth(): DavMailHealthData {
   if (oauthRecent) level = 'critical'
   else if (!imapOk && imapFails >= 3) level = 'critical'
   else if (!smtpOk && smtpFails >= 3) level = 'critical'
-  // L2a: TCP 可达但 LOGIN 连续失败 = token 劣化 (镜像 watchdog 阈值 3)
-  else if (loginFails >= 3) level = 'critical'
+  // L2a: TCP 可达但 LOGIN 连续失败 = token 劣化 (F5: 阈值随 watchdog 生效值)
+  else if (loginFails >= loginThreshold) level = 'critical'
   else if (tokenAge >= 87) level = 'critical'
   else if (tokenAge >= 80) level = 'warning'
   else if (throttleCount >= 3) level = 'warning'
@@ -260,6 +264,7 @@ export function runDavmailHealth(): DavMailHealthData {
     consecutive_smtp_failures: smtpFails,
     imap_login_ok: loginOk,
     consecutive_login_failures: loginFails,
+    login_fail_threshold: loginThreshold,
     token_age_days: tokenAge >= 0 ? tokenAge : null,
     token_mtime_iso: state['davmail.token_mtime_iso'] || null,
     throttle_events_5min: throttleCount,
@@ -342,7 +347,8 @@ export function runSystemAlerts(): SystemAlertsData {
     }
   }
   // L2a: TCP 可达但 IMAP LOGIN 连续失败 = token 劣化 (能发不能收)
-  if (h.enabled && (h.consecutive_login_failures ?? 0) >= 3) {
+  // F5: 阈值随 watchdog 生效值 (runDavmailHealth 已从 sync_state 解析), 缺失 fallback 3
+  if (h.enabled && (h.consecutive_login_failures ?? 0) >= (h.login_fail_threshold ?? 3)) {
     alerts.push({
       level: 'critical',
       source: 'davmail',

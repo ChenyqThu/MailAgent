@@ -13,9 +13,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import time
 import unittest.mock as um
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -784,3 +786,149 @@ async def test_restart_davmail_via_pm2_not_found(monkeypatch):
     ok, detail = await dr.restart_davmail_via_pm2()
     assert ok is False
     assert "pm2 not found" in detail
+
+
+# ────────────────────────────────────────────────────────────────
+# F3: pm2 子进程 PATH 前置 (launchd 起 .app 时 env 找不到 node → exit 127)
+# ────────────────────────────────────────────────────────────────
+
+
+def test_subprocess_env_prepends_pm2_paths(monkeypatch):
+    """F3: _subprocess_env 把 node/pm2 常见目录前置到 PATH, 保留原 PATH 在后。"""
+    import src.mail.davmail_restart as dr
+
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    env = dr._subprocess_env()
+    assert env["PATH"].startswith("/opt/homebrew/bin:/usr/local/bin:")
+    assert env["PATH"].endswith("/usr/bin:/bin")
+
+
+async def test_restart_passes_env_to_subprocess(monkeypatch):
+    """F3 接线: restart_davmail_via_pm2 把 _subprocess_env() 传给 create_subprocess_exec
+    (否则打包 .app 经 launchd 起 pm2 shebang 找不到 node → 恒 exit 127)。"""
+    import src.mail.davmail_restart as dr
+
+    monkeypatch.setattr(dr, "_resolve_pm2", lambda: "/opt/homebrew/bin/pm2")
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+
+    captured: dict = {}
+
+    class _FakeProc:
+        returncode = 0
+
+        async def communicate(self):
+            return (b"", b"")
+
+    async def fake_exec(*args, **kwargs):
+        captured["kwargs"] = kwargs
+        return _FakeProc()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    ok, _ = await dr.restart_davmail_via_pm2()
+    assert ok is True
+    assert "env" in captured["kwargs"], "必须传 env= 否则 launchd PATH 找不到 node"
+    assert captured["kwargs"]["env"]["PATH"].startswith(
+        "/opt/homebrew/bin:/usr/local/bin:"
+    )
+
+
+# ────────────────────────────────────────────────────────────────
+# F4: 风暴防护状态持久化 (跨 MailAgent 进程重启存活)
+# ────────────────────────────────────────────────────────────────
+
+
+def test_restart_state_reseeds_from_sync_state(
+    sync_store: SyncStore, davmail_root: Path
+):
+    """F4: 构造 watchdog 时从 sync_state 回种冷却时间戳 + 24h 窗口计数,
+    load 时 prune 掉窗口外的时间戳。"""
+    now = time.time()
+    sync_store.set_state(
+        "davmail.last_auto_restart_at",
+        datetime.fromtimestamp(now - 100).isoformat(timespec="seconds"),
+    )
+    # 两个近期 + 一个 25h 前 (窗口外, 应被 prune)
+    sync_store.set_state(
+        "davmail.auto_restart_times",
+        json.dumps([now - 100, now - 200, now - 25 * 3600]),
+    )
+    wd = DavMailWatchdog(
+        sync_store=sync_store, alerter=None, davmail_root=davmail_root
+    )
+    assert abs(wd._last_auto_restart_ts - (now - 100)) < 2  # ISO 秒精度
+    assert len(wd._restart_times) == 2, "25h 前的应被 prune 出 24h 窗口"
+
+
+async def test_restart_times_persisted_after_restart(
+    sync_store: SyncStore, davmail_root: Path
+):
+    """F4: 每次自动重启后把 24h 窗口计数落盘 davmail.auto_restart_times (JSON)。"""
+    wd, restart_calls = _make_restart_wd(sync_store, davmail_root)
+    await _patch_probe(wd, imap_ok=True, smtp_ok=True)
+    for _ in range(3):
+        await wd._tick()
+    assert len(restart_calls) == 1
+    raw = sync_store.get_state("davmail.auto_restart_times")
+    assert raw is not None
+    parsed = json.loads(raw)
+    assert isinstance(parsed, list) and len(parsed) == 1
+
+
+def test_restart_state_bad_json_fail_open(
+    sync_store: SyncStore, davmail_root: Path
+):
+    """F4: 坏 JSON / 坏 ISO 一律 fail-open 按空/0, 不挂 watchdog 构造。"""
+    sync_store.set_state("davmail.auto_restart_times", "{not valid json")
+    sync_store.set_state("davmail.last_auto_restart_at", "garbage-not-iso")
+    wd = DavMailWatchdog(
+        sync_store=sync_store, alerter=None, davmail_root=davmail_root
+    )
+    assert wd._restart_times == []
+    assert wd._last_auto_restart_ts == 0.0
+
+
+async def test_restart_storm_survives_process_restart(
+    sync_store: SyncStore, davmail_root: Path
+):
+    """F4 的价值: 上一进程已达 max_per_day → 回种后本进程立即在风暴上限,
+    不再重启 + 风暴告警 (内存清零绕过上限的 bug 被根治)。"""
+    now = time.time()
+    sync_store.set_state(
+        "davmail.auto_restart_times", json.dumps([now - 300, now - 100])
+    )
+    alerter = _FakeAlerter()
+    wd, restart_calls = _make_restart_wd(
+        sync_store,
+        davmail_root,
+        alerter,
+        restart_ok=False,
+        auto_restart_cooldown=0,
+        auto_restart_max_per_day=2,
+    )
+    await _patch_probe(wd, imap_ok=True, smtp_ok=True)
+    for _ in range(4):
+        await wd._tick()
+    assert restart_calls == [], "回种的 2 次已达上限, 本进程不应再重启"
+    storm = [c for c in alerter.calls if c[0] == "alert_davmail_restart_storm"]
+    assert len(storm) == 1
+
+
+# ────────────────────────────────────────────────────────────────
+# F5: 生效阈值经 sync_state 传播
+# ────────────────────────────────────────────────────────────────
+
+
+async def test_write_state_persists_login_fail_threshold(
+    sync_store: SyncStore, davmail_root: Path
+):
+    """F5: watchdog 每轮把生效 login 阈值落盘 davmail.login_fail_threshold,
+    供 admin router / electron 读同一值 (不再各自硬编码 3)。"""
+    wd = DavMailWatchdog(
+        sync_store=sync_store,
+        alerter=None,
+        davmail_root=davmail_root,
+        login_fail_threshold=5,
+    )
+    await _patch_probe(wd, imap_ok=True, smtp_ok=True)
+    await wd._tick()
+    assert sync_store.get_state("davmail.login_fail_threshold") == "5"

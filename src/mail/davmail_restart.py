@@ -12,6 +12,7 @@ callback 返回 ``(False, "pm2 not found...")`` → watchdog 降级为仅告警,
 from __future__ import annotations
 
 import asyncio
+import os
 import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING, Awaitable, Callable, Optional
@@ -38,6 +39,20 @@ def _resolve_pm2() -> Optional[str]:
     return None
 
 
+def _subprocess_env() -> dict[str, str]:
+    """pm2 执行环境 — PATH 前置 node/pm2 常见目录 (F3).
+
+    pm2 是 ``#!/usr/bin/env node`` shebang 脚本 (实测 /opt/homebrew/bin/pm2):
+    打包 .app 经 launchd 启动时 PATH 只有系统路径, ``env`` 找不到 node →
+    ``pm2 restart`` 恒 exit 127。node 与 pm2 同目录, 前置 fallback 目录即可。
+    """
+    env = dict(os.environ)
+    prefix = ":".join(str(Path(p).parent) for p in _PM2_FALLBACK_PATHS)
+    cur = env.get("PATH", "")
+    env["PATH"] = f"{prefix}:{cur}" if cur else prefix
+    return env
+
+
 async def restart_davmail_via_pm2(
     process_name: str = _PM2_PROCESS_NAME,
 ) -> tuple[bool, str]:
@@ -54,6 +69,7 @@ async def restart_davmail_via_pm2(
             process_name,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=_subprocess_env(),
         )
         try:
             _, stderr = await asyncio.wait_for(

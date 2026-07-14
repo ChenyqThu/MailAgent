@@ -532,9 +532,19 @@ async def admin_cleanup_dead_letter(
 # router 只需两个标量, 故就地复刻)。
 _TOKEN_WARN_DAYS = 80.0
 _TOKEN_CRITICAL_DAYS = 87.0
-# L2a: 镜像 davmail_watchdog._LOGIN_FAIL_THRESHOLD (默认 3)。watchdog 可经
-# DAVMAIL_LOGIN_FAIL_THRESHOLD 覆盖, 覆盖非默认值时这里的展示判定会漂移。
-_LOGIN_FAIL_THRESHOLD = 3
+# F5: login 失败阈值改由 watchdog 每轮经 sync_state davmail.login_fail_threshold
+# 传播 (生效值单源), 根治「四个健康读面各自硬编码 3, 设 DAVMAIL_LOGIN_FAIL_THRESHOLD
+# 非默认值时判定漂移」。键缺失 (老数据 / watchdog 未升级) fallback 默认 3。
+_DEFAULT_LOGIN_FAIL_THRESHOLD = 3
+
+
+def _login_fail_threshold(state: dict[str, str]) -> int:
+    """当前生效的 login 失败阈值 (watchdog 落盘)；缺失 / 坏值 fallback 3。"""
+    try:
+        val = int(state.get("davmail.login_fail_threshold", ""))
+        return val if val > 0 else _DEFAULT_LOGIN_FAIL_THRESHOLD
+    except (TypeError, ValueError):
+        return _DEFAULT_LOGIN_FAIL_THRESHOLD
 
 
 def _read_davmail_state(repo: "EmailRepository") -> dict[str, str]:
@@ -623,7 +633,7 @@ def _build_davmail_health(state: dict[str, str]) -> dict:
     imap_login_raw = state.get("davmail.imap_login_ok")
     imap_login_ok = None if not imap_login_raw else imap_login_raw == "1"
     consecutive_login_failures = _as_int("davmail.consecutive_login_failures")
-    login_degraded = consecutive_login_failures >= _LOGIN_FAIL_THRESHOLD
+    login_degraded = consecutive_login_failures >= _login_fail_threshold(state)
 
     if not enabled:
         level = "unknown"
@@ -723,7 +733,7 @@ async def admin_system_alerts(
                 ),
                 "ts": probe_at,
             })
-        if health["consecutive_login_failures"] >= _LOGIN_FAIL_THRESHOLD:
+        if health["consecutive_login_failures"] >= _login_fail_threshold(state):
             alerts.append({
                 "level": "critical", "source": "davmail",
                 "title": "DavMail IMAP LOGIN failing",

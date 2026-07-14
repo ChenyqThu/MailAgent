@@ -840,8 +840,8 @@ class Config(BaseSettings):
         default=3, env="DAVMAIL_LOGIN_FAIL_THRESHOLD",
         description=(
             "连续 LOGIN 失败达此阈值 → level critical + 飞书告警 (login degraded)。"
-            "admin router / electron 的 level 重算就地复刻默认值 3 (同 token 阈值"
-            "套路), 改非默认值时展示端判定会漂移。"
+            "watchdog 每轮把生效值经 sync_state davmail.login_fail_threshold 传播到"
+            "展示端 (admin router / electron), 四个健康读面读同一值, 改非默认值不再漂移。"
         ),
     )
     davmail_auto_restart_enabled: bool = Field(
