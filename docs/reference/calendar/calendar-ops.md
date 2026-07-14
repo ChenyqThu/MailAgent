@@ -180,6 +180,7 @@ worker 60s 轮询会把服务端最新态拉回 SQLite (最终一致, 丢的是�
 5. **DavMail 更新 PUT 返 200** (2026-07-14 #9 真日历验证实锤): caldav 3.2.0 只认 201/204, 会先盲重 PUT 一次再误抛 PutError → writer 已内置 `_save_existing_event` workaround (200 吞成功). 副作用: 每次更新实际 PUT 两次, DavMail 日志成对 `Overwritten event` WARN 是正常指纹非异常.
 6. **写路径时区错位两连 (真 bug, 待 tzid task 修)**: ① `update_occurrence` 的 override DTSTART 裸 `Z` 时间被 DavMail→EWS 当邮箱本地墙钟解释 (实测 +7h 错位); ② `split_series` 的 UNTIL 被 Exchange 归一成日期粒度 EndDate → split 后头 1-2 天新老系列重叠重复. 且 **CalDAV 返 200 ≠ EWS 端成功** (DavMail 吞 EWS 业务错误照返 200, 如 DAILY 系列 ErrorOccurrenceCrossingBoundary). 详见 `.trellis/tasks/07-13-epic-issue-ui-ux/research/real-calendar-verification.md` (F1/F2/F6).
 7. **CalDAV 调用可能被 EWS 挂起永久吊死**: caldav 传的 `timeout=30` 保护不到响应 body 读 (niquests/urllib3-future 裸 `sock.recv`), EWS 节流/挂起时调用线程无限等 (实测 17 分钟). worker/CLI/serve-api 写路径共享此暴露面; 加固方向见验证报告 F5.
+8. **RSVP 只通知组织者、不回写自己副本** (2026-07-14 真实邀请实测): `send_rsvp` 发 iTIP REPLY 后, 自己 Exchange 日历副本的 PARTSTAT 仍 `NEEDS-ACTION` → MailAgent 本地显示「已接受」而 Outlook/OWA 显示「未响应」, 且下轮 60s sync 会把服务端 NEEDS-ACTION 拉回盖掉本地 ACCEPTED. 真闭环需追加"写回自身 PARTSTAT"(DavMail 支持度待验) 或 EWS AcceptItem. 详见验证报告 F7.
 
 ## 重启 / 验收命令
 
