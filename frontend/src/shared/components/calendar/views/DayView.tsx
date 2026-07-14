@@ -265,6 +265,7 @@ export function DayView({
                 selectedKey === `${occ.id}-${occ.occurrence_start_iso}` && 'is-selected'
               )}
               data-resp={(occ.response_status || '').toUpperCase()}
+              data-status={(occ.status || '').toUpperCase()}
               onClick={() => onSelect(occ)}
               title={occ.summary || t('calendar.shared.untitled', '未命名事件')}
             >
@@ -286,6 +287,7 @@ export function DayView({
                 selectedKey === `${occ.id}-${occ.occurrence_start_iso}` && 'is-selected'
               )}
               data-resp={(occ.response_status || '').toUpperCase()}
+              data-status={(occ.status || '').toUpperCase()}
               onClick={() => onSelect(occ)}
               title={occ.summary || t('calendar.shared.untitled', '未命名事件')}
             >

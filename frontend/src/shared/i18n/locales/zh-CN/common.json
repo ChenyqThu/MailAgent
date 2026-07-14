@@ -1283,6 +1283,18 @@
         "all": "全部日历",
         "selected": "{n} 个日历",
         "ariaLabel": "日历筛选"
+      },
+      "legend": {
+        "aria": "事件状态图例",
+        "title": "事件状态图例",
+        "tentative": "暂定",
+        "tentativeShape": "斜纹填充",
+        "needsAction": "待回复",
+        "needsActionShape": "空心描边",
+        "declined": "已拒绝",
+        "declinedShape": "删除线 + 灰",
+        "cancelled": "已取消",
+        "cancelledShape": "删除线 + 深灰"
       }
     },
     "statusbar": {

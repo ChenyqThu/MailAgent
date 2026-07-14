@@ -15,6 +15,7 @@ import type { TFunction } from 'i18next'
 import { gsap, useGSAP, DUR } from '@shared/lib/gsap'
 import { useReducedMotion } from '@shared/hooks/useReducedMotion'
 
+import { CalendarStatusLegend } from './CalendarStatusLegend'
 import { EventFormModal } from './EventFormModal'
 import { IS_WEB_BUILD } from './lib/capabilities'
 import { weekdayLong } from './lib/weekdays'
@@ -358,6 +359,8 @@ export function CalendarToolbar({
             </div>
           </div>
         </div>
+        {/* F3 (阶段2·2.6) — 状态形态图例入口 (hover/focus 显示 tip) */}
+        <CalendarStatusLegend />
       </div>
 
       {/* Phase 2.2 — create modal (occurrence=null = create 语义) */}

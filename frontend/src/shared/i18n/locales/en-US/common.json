@@ -1285,6 +1285,18 @@
         "all": "All calendars",
         "selected": "{n} calendars",
         "ariaLabel": "Calendar filter"
+      },
+      "legend": {
+        "aria": "Event status legend",
+        "title": "Event status legend",
+        "tentative": "Tentative",
+        "tentativeShape": "Striped fill",
+        "needsAction": "Needs action",
+        "needsActionShape": "Outlined",
+        "declined": "Declined",
+        "declinedShape": "Strikethrough + gray",
+        "cancelled": "Cancelled",
+        "cancelledShape": "Strikethrough + dimmed"
       }
     },
     "statusbar": {
