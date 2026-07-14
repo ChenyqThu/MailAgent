@@ -20,6 +20,7 @@ import {
 } from '../hooks/useCalendarEvents'
 import type { CalendarEventOccurrence } from '@shared/api/types'
 import { CalendarQueryError } from '../CalendarQueryError'
+import { extractMeetingLink, MEETING_PROVIDER_LABEL, openMeetingLink } from '../lib/meeting-link'
 import { shortTime, ymd } from '../lib/format'
 import { weekdayLong } from '../lib/weekdays'
 import { EmptyState } from '@shared/components/feedback/EmptyState'
@@ -184,14 +185,19 @@ export function AgendaView({
               const occ = entry.occ
               const timeTxt = timeLabel(entry)
               const meeting = hasMeetingLink(occ)
+              // 阶段2·2.5 — 行尾 Join (有可识别链接的行才出).
+              const joinLink = extractMeetingLink({ url: occ.url, location: occ.location })
               const showLoc =
                 occ.location && !occ.location.toLowerCase().includes('teams.microsoft.com')
               const untitled = t('calendar.shared.untitled', '未命名事件')
               const multiDay = entry.totalDays > 1
               return (
-                <button
+                // 2.5 — 行根从 <button> 改 <div role="button"> (EmailRow 同款):
+                // 行尾 Join 是真 <button>, 嵌套 button 非法.
+                <div
                   key={`${occ.id}-${occ.occurrence_start_iso}`}
-                  type="button"
+                  role="button"
+                  tabIndex={0}
                   className={cn(
                     'ag-row',
                     selectedKey === `${occ.id}-${occ.occurrence_start_iso}` && 'is-selected'
@@ -199,6 +205,12 @@ export function AgendaView({
                   data-resp={(occ.response_status || '').toUpperCase()}
                   data-status={(occ.status || '').toUpperCase()}
                   onClick={() => onSelect(occ)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault()
+                      onSelect(occ)
+                    }
+                  }}
                   title={occ.summary || untitled}
                 >
                   <div className="ag-time">{timeTxt}</div>
@@ -217,8 +229,24 @@ export function AgendaView({
                     )}
                     {meeting && <Video className="teams-i" size={11} strokeWidth={2} aria-hidden />}
                     {showLoc && <span className="ag-loc">{occ.location}</span>}
+                    {joinLink && (
+                      <button
+                        type="button"
+                        className="ag-join"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          openMeetingLink(joinLink)
+                        }}
+                        title={t('calendar.join.title', '加入会议 — 在 {p} 中打开', {
+                          p: MEETING_PROVIDER_LABEL[joinLink.provider]
+                        })}
+                      >
+                        <Video size={10} strokeWidth={2.4} aria-hidden />
+                        {t('calendar.join.short', 'Join')}
+                      </button>
+                    )}
                   </div>
-                </button>
+                </div>
               )
             })}
           </section>

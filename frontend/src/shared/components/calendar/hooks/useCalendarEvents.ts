@@ -44,10 +44,15 @@ function useJitteredInterval(baseMs: number, jitterMs: number): number {
 
 export function useCalendarEventsInWindow(
   opts: EventsListOpts,
-  selectedCalendars?: string[]
+  selectedCalendars?: string[],
+  /** 2.7 — Layout j/k 巡航复用本 hook, recurring 视图无窗口语义时置 false 不发查询. */
+  enabled = true
 ): {
   data: CalendarEventOccurrence[] | undefined
   isLoading: boolean
+  /** 2.7 — keepPreviousData 下切窗口时 data 是旧窗口留屏数据; 需要判断
+   *  "数据对应当前窗口" 的 caller (跨面定位匹配) 用 isFetching 区分. */
+  isFetching: boolean
   isError: boolean
   refetch: () => void
 } {
@@ -55,6 +60,7 @@ export function useCalendarEventsInWindow(
   // F6 — 60s ± 15s jitter (effective 45-75s) 避免 thundering herd
   const refetchIntervalMs = useJitteredInterval(60_000, 15_000)
   const q = useQuery({
+    enabled,
     queryKey: [
       ...CALENDAR_EVENTS_KEY,
       opts.fromIso,
@@ -81,6 +87,7 @@ export function useCalendarEventsInWindow(
   return {
     data: q.data,
     isLoading: q.isLoading,
+    isFetching: q.isFetching,
     isError: q.isError,
     refetch: () => void q.refetch()
   }

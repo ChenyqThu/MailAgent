@@ -205,6 +205,54 @@ def test_dead_letter_accum_session_key(patch_send, fake_store):
     assert env.metadata["mailagent.deadLetterCount"] == "7"
 
 
+def test_meeting_reminder_envelope_shape(patch_send, fake_store):
+    """阶段2·2.5 — 会前提醒卡: session_key 按 occurrence, 无按钮, joinUrl 进
+    preview 文案 + metadata (卡片能力以既有 announce 为准, 不扩协议)."""
+    captured, _ = patch_send
+    island_dispatch.init(enabled=True, sync_store=fake_store)
+    join = "https://teams.microsoft.com/l/meetup-join/19%3am%40thread.v2/0"
+
+    async def _scenario():
+        island_dispatch.dispatch_meeting_reminder(
+            ical_uid="uid-remind-1",
+            occurrence_start_iso="2026-07-14T10:00:00+00:00",
+            summary="架构评审",
+            time_range_text="10:00 – 11:00",
+            join_url=join,
+            location="Teams",
+        )
+        await asyncio.sleep(0.05)
+
+    asyncio.run(_scenario())
+    assert len(captured) == 1
+    env = captured[0]
+    assert env.event_type == "MeetingReminder"
+    assert env.session_key == "mailagent:calendar:uid-remind-1:2026-07-14T10:00:00+00:00"
+    assert env.intervention is None
+    assert env.expects_response is False
+    assert env.status_kind == "notification"
+    assert "架构评审" in env.title
+    assert "10:00 – 11:00" in env.preview
+    assert join in env.preview
+    assert env.metadata["mailagent.joinUrl"] == join
+    assert env.metadata["mailagent.scenario"] == "MeetingReminder"
+    # SQLite dispatch 记录在位 (持久去重依赖它)
+    assert fake_store.rows[0]["event_type"] == "MeetingReminder"
+
+
+def test_meeting_reminder_disabled_noop(patch_send, fake_store):
+    captured, _ = patch_send
+    island_dispatch.init(enabled=False, sync_store=fake_store)
+    island_dispatch.dispatch_meeting_reminder(
+        ical_uid="uid-remind-2",
+        occurrence_start_iso="2026-07-14T10:00:00+00:00",
+        summary="x",
+        time_range_text="10:00 – 11:00",
+    )
+    assert captured == []
+    assert fake_store.rows == []
+
+
 def test_failed_send_enqueues_to_reconnect_backlog(monkeypatch, fake_store):
     """ping-island 离线 → send 返回 ok=False → envelope bytes 应入 reconnect 队列."""
     island_reconnect.clear_queue()

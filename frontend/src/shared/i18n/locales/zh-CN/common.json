@@ -342,7 +342,8 @@
       "global": "全局",
       "inbox": "收件箱",
       "row": "邮件行",
-      "chat": "AI 对话"
+      "chat": "AI 对话",
+      "calendar": "日历"
     },
     "binding": {
       "commandPalette": "命令面板",
@@ -365,7 +366,21 @@
       "newChat": "新建 AI 对话",
       "toggleIsland": "切换灵动岛",
       "toggleNav": "折叠/展开导航",
-      "toggleLocale": "切换语言"
+      "toggleLocale": "切换语言",
+      "calViewDay": "日视图",
+      "calViewWeek": "周视图",
+      "calViewMonth": "月视图",
+      "calViewAgenda": "Agenda 视图",
+      "calViewRecurring": "定期邀请视图",
+      "calPrevNext": "上一段 / 下一段",
+      "calToday": "跳到今天",
+      "calSync": "同步",
+      "calNewEvent": "新建事件",
+      "calNextEvent": "选中下一个事件",
+      "calPrevEvent": "选中上一个事件",
+      "calOpenSelected": "打开选中事件",
+      "calClose": "关闭抽屉 / 弹层",
+      "calHelp": "打开 / 关闭快捷键帮助"
     }
   },
   "palette": {
@@ -1304,10 +1319,19 @@
       "noSync": "尚未同步",
       "calendarFallback": "日历"
     },
+    "join": {
+      "button": "加入会议",
+      "short": "Join",
+      "title": "加入会议 — 在 {p} 中打开"
+    },
     "drawer": {
       "closeTitle": "关闭 (Esc)",
-      "openInboxTitle": "回到收件箱",
       "noRelatedEmail": "无关联邮件",
+      "sourceEmail": {
+        "openTitle": "在收件箱中定位该邮件",
+        "noSubject": "(无主题)",
+        "linkedCount": "共 {n} 封"
+      },
       "teamsMeeting": "Teams 会议",
       "me": "(我)",
       "attendeeCount": "{n} 人",
@@ -1438,6 +1462,16 @@
       "toastErrCreate": "创建事件失败",
       "toastErrUpdate": "更新事件失败"
     },
+    "invite": {
+      "title": "会议邀请",
+      "cancelled": "会议已取消",
+      "recurringBadge": "周期会议",
+      "exceptionBadge": "本次例外",
+      "conflictNone": "无冲突",
+      "conflictCount": "与 {n} 场日程重叠",
+      "notInCalendar": "尚未同步到日历",
+      "viewInCalendar": "在日历中查看"
+    },
     "syncTriggered": "已触发日历同步",
     "syncTriggerFail": "日历同步失败",
     "errorBoundary": {
@@ -1487,17 +1521,7 @@
     },
     "shortcut": {
       "title": "键盘快捷键",
-      "subtitle": "G 开头为视图跳转 (先按 G 再按视图键, 800ms 内有效)",
-      "dayView": "日视图",
-      "weekView": "周视图",
-      "monthView": "月视图",
-      "agendaView": "Agenda 视图",
-      "recurringView": "定期邀请视图",
-      "prevNext": "上一段 / 下一段",
-      "today": "跳到今天",
-      "sync": "同步",
-      "close": "关闭抽屉 / 弹层",
-      "help": "打开 / 关闭本帮助"
+      "subtitle": "G 开头为视图跳转 (先按 G 再按视图键, 800ms 内有效)"
     }
   },
   "settings": {

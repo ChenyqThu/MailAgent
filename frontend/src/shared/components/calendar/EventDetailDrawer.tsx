@@ -34,13 +34,18 @@ import type { TFunction } from 'i18next'
 
 import { EventFormModal } from './EventFormModal'
 import { IS_WEB_BUILD } from './lib/capabilities'
+import { extractMeetingLink, MEETING_PROVIDER_LABEL, openMeetingLink } from './lib/meeting-link'
 import { CALENDAR_EVENTS_KEY, useCalendarEvent } from './hooks/useCalendarEvents'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { useExitAnimation } from '@shared/hooks/useExitAnimation'
+import { useActiveEmail } from '@shared/state/active-email'
+import { useMailbox } from '@shared/state/mailbox'
+import { useEmailFilter, type EmailView } from '@shared/state/email-filter'
 import type {
   CalendarEventAttendee,
   CalendarEventOccurrence,
   CalendarEventSource,
+  EventSourceEmail,
   RsvpResponse
 } from '@shared/api/types'
 import { cn } from '@shared/lib/cn'
@@ -218,6 +223,39 @@ export function EventDetailDrawer({ occurrence, onClose, onReopen }: Props): Rea
     normalizeEmail(occurrence.organizer) === normalizeEmail(userEmail)
   )
 
+  // 阶段2·2.3 — 「关联邮件」真联动: ical_uid → email_meeting 反查来源邀请邮件
+  // (批1 地基 eventSourceEmail; occurrence.related_email_internal_id 恒 NULL,
+  // 调研 P1-3 定罪后弃用). null = 无映射 (纯 caldav 事件), 渲染既有空态.
+  const { data: sourceEmail, isLoading: sourceEmailLoading } = useQuery({
+    queryKey: qk.calendar.sourceEmail(occurrence?.ical_uid),
+    queryFn: () => mailApi.calendar.eventSourceEmail(occurrence!.ical_uid),
+    enabled: open,
+    staleTime: 60_000
+  })
+
+  const setActiveEmail = useActiveEmail((s) => s.setActive)
+  const setActiveMailbox = useMailbox((s) => s.setActive)
+  const setEmailView = useEmailFilter((s) => s.setView)
+
+  // 跳转复用 CommandPalette.activateHit 同款机制: 先同步 EmailList 的 view +
+  // mailbox 让目标行真的会出现在列表, 再 setActive(navTarget) —— navTarget 豁免
+  // EmailList active-reset 并触发滚动定位 (useEmailListRows 滚动 effect).
+  const openSourceEmailInInbox = (src: EventSourceEmail): void => {
+    const view: EmailView =
+      src.mailbox === '收件箱'
+        ? 'inbox'
+        : src.mailbox === '发件箱'
+          ? 'outbox'
+          : src.mailbox === '草稿箱'
+            ? 'drafts'
+            : 'all'
+    if (src.mailbox) setActiveMailbox(src.mailbox)
+    setEmailView(view)
+    setActiveEmail(src.internal_id, { navTarget: true })
+    onClose()
+    void navigate({ to: '/', search: { view } })
+  }
+
   // Phase 2.1 — RSVP mutation. 走 mailApi.calendar.eventRsvp → DavMail SMTP
   // submission → Outlook Calendar Assistant 异步更新 organizer 端 PARTSTAT.
   const rsvpMut = useMutation({
@@ -327,8 +365,17 @@ export function EventDetailDrawer({ occurrence, onClose, onReopen }: Props): Rea
     })
   }
 
+  // 阶段2·2.5 — Join: url/location/description 按序提取 Teams/Zoom/Meet 链接.
+  // description 在 detail (event-get) 里, 加载完成前 Join 仅凭 url/location 判定.
+  const meetingLink = extractMeetingLink({
+    url: occurrence?.url,
+    location: occurrence?.location,
+    description: detail?.description
+  })
   const hasMeeting = !!(
-    occurrence?.url || occurrence?.location?.toLowerCase().includes('teams.microsoft.com')
+    meetingLink ||
+    occurrence?.url ||
+    occurrence?.location?.toLowerCase().includes('teams.microsoft.com')
   )
 
   // 当前 response_status (用于 RSVP button .sel 高亮 + label "待回复" 提示)
@@ -462,6 +509,19 @@ export function EventDetailDrawer({ occurrence, onClose, onReopen }: Props): Rea
                   icon={<Video size={13} strokeWidth={2} />}
                   label={t('calendar.drawer.meta.meetingLink', '会议链接')}
                 >
+                  {meetingLink && (
+                    <button
+                      type="button"
+                      className="cal-join-btn"
+                      onClick={() => openMeetingLink(meetingLink)}
+                      title={t('calendar.join.title', '加入会议 — 在 {p} 中打开', {
+                        p: MEETING_PROVIDER_LABEL[meetingLink.provider]
+                      })}
+                    >
+                      <Video size={13} strokeWidth={2.2} />
+                      {t('calendar.join.button', '加入会议')}
+                    </button>
+                  )}
                   {occurrence.url ? (
                     <a
                       href={occurrence.url}
@@ -476,14 +536,14 @@ export function EventDetailDrawer({ occurrence, onClose, onReopen }: Props): Rea
                       </span>
                       <ExternalLink size={11} strokeWidth={2} />
                     </a>
-                  ) : (
+                  ) : !meetingLink ? (
                     <span className="link-row">
                       <Video size={11} strokeWidth={2} />
                       <span className="text-aux">
                         {t('calendar.drawer.teamsMeeting', 'Teams 会议')}
                       </span>
                     </span>
-                  )}
+                  ) : null}
                 </MetaRow>
               )}
 
@@ -491,18 +551,35 @@ export function EventDetailDrawer({ occurrence, onClose, onReopen }: Props): Rea
                 icon={<Mail size={13} strokeWidth={2} />}
                 label={t('calendar.drawer.meta.relatedEmail', '关联邮件')}
               >
-                {occurrence.related_email_internal_id ? (
-                  // F13 止血: 原生 <a href> 在打包 app 是主框架 file:// 真导航 → 白屏.
-                  // 先走应用内路由回 inbox; 真·邮件定位联动阶段 2 接.
+                {sourceEmail ? (
+                  // 阶段2·2.3 — 来源邀请邮件摘要卡: 点击跳 inbox 并选中定位该行
+                  // (F13 阶段0 只回 inbox 不定位, 此处接真联动).
                   <button
                     type="button"
-                    className="link-row cal-linkbtn"
-                    onClick={() => void navigate({ to: '/' })}
-                    title={t('calendar.drawer.openInboxTitle', '回到收件箱')}
+                    className="cal-srcmail"
+                    onClick={() => openSourceEmailInInbox(sourceEmail)}
+                    title={t('calendar.drawer.sourceEmail.openTitle', '在收件箱中定位该邮件')}
                   >
-                    #{occurrence.related_email_internal_id}
-                    <ExternalLink size={11} strokeWidth={2} />
+                    <span className="cal-srcmail-subject truncate">
+                      {sourceEmail.subject ||
+                        t('calendar.drawer.sourceEmail.noSubject', '(无主题)')}
+                    </span>
+                    <span className="cal-srcmail-meta truncate">
+                      {sourceEmail.sender_name || sourceEmail.sender || '—'}
+                      {sourceEmail.date_received
+                        ? ' · ' + sourceEmail.date_received.slice(0, 10)
+                        : ''}
+                      {sourceEmail.linked_email_count > 1
+                        ? ' · ' +
+                          t('calendar.drawer.sourceEmail.linkedCount', '共 {n} 封', {
+                            n: sourceEmail.linked_email_count
+                          })
+                        : ''}
+                    </span>
+                    <ExternalLink size={11} strokeWidth={2} className="cal-srcmail-ext" />
                   </button>
+                ) : sourceEmailLoading ? (
+                  <span className="skel" style={{ width: '60%' }} />
                 ) : (
                   <span className="empty-field">
                     {t('calendar.drawer.noRelatedEmail', '无关联邮件')}

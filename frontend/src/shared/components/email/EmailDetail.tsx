@@ -37,6 +37,7 @@ import { EmailBodyFrame } from './EmailBodyFrame'
 import { EmailToolbar, type TranslateStatus } from './EmailToolbar'
 import { AttachmentList } from './AttachmentList'
 import { AIFieldsBlock } from '../ai/AIFieldsBlock'
+import { MeetingInviteCard } from '../calendar/MeetingInviteCard'
 import { ComposePanel, ComposePanelInner } from './compose/ComposePanel'
 import { closeCompose, useComposeStore } from '@shared/state/compose'
 import type { ComposeMode } from '@shared/api/types'
@@ -1076,6 +1077,11 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
               </>
             )
           })()}
+
+          {/* 阶段 2.2 (UX-P0①) — 会议邀请卡片: emailCalendarLink (2.1 数据桥)
+              命中才渲染; 非会议/加载中/错误在卡内自查全静默, 不占位 (margin
+              在 .cal-invite 自身, 无空 wrapper 残留)。 */}
+          <MeetingInviteCard internalId={email.internal_id} />
 
           {/* AI Fields — 草稿不渲染: 未发出的邮件不会被 AI 处理 (gate 在
               watcher 草稿分支), `ai` 对存在的行恒非 null (LEFT JOIN 投影),

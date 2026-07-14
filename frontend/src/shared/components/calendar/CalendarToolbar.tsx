@@ -63,6 +63,9 @@ interface Props {
   selectedCalendars: string[]
   /** Phase 4·#1 — 选择变化回调. */
   onSelectedCalendarsChange: (next: string[]) => void
+  /** 2.7 — create modal 状态上提到 Layout (n 快捷键与 [+ 新建] 按钮共用). */
+  createOpen: boolean
+  onCreateOpenChange: (open: boolean) => void
 }
 
 export function CalendarToolbar({
@@ -72,7 +75,9 @@ export function CalendarToolbar({
   onDateChange,
   calendars,
   selectedCalendars,
-  onSelectedCalendarsChange
+  onSelectedCalendarsChange,
+  createOpen,
+  onCreateOpenChange
 }: Props): React.ReactElement {
   const { t } = useTranslation()
   const { trigger, isPending } = useCalendarSyncTrigger()
@@ -80,9 +85,6 @@ export function CalendarToolbar({
   // 30s tick — 让 sync-pill 的 "上次同步 N 秒前" 字串自然走时, 不靠 syncStatus
   // 数据引用变化也能刷.
   useNowTick()
-
-  // Phase 2.2 — [+ 新建] 按钮 → 弹 EventFormModal (occurrence=null = create 语义)
-  const [createModalOpen, setCreateModalOpen] = useState(false)
 
   // §8 滑动 indicator — 激活 view-chip 的 bg/border 移到一个绝对定位元素, 随 view
   // 变化 tween x/width (DUR.fast)。首次挂载 gsap.set 直接定位无动画, 之后才滑。
@@ -295,7 +297,7 @@ export function CalendarToolbar({
         <button
           type="button"
           className="btn-coral"
-          onClick={() => setCreateModalOpen(true)}
+          onClick={() => onCreateOpenChange(true)}
           title={t('calendar.toolbar.newTitle', '新建事件 — 直接写到 Exchange (CalDAV PUT)')}
         >
           <Plus size={14} strokeWidth={2.4} />
@@ -363,10 +365,12 @@ export function CalendarToolbar({
         <CalendarStatusLegend />
       </div>
 
-      {/* Phase 2.2 — create modal (occurrence=null = create 语义) */}
+      {/* Phase 2.2 — create modal (occurrence=null = create 语义); 2.7 状态上提
+          Layout (n 快捷键与按钮共用入口). 远程 web 下按钮隐藏 + Layout 不接 n,
+          createOpen 恒 false, modal 不渲染. */}
       <EventFormModal
-        open={createModalOpen}
-        onClose={() => setCreateModalOpen(false)}
+        open={createOpen}
+        onClose={() => onCreateOpenChange(false)}
         occurrence={null}
       />
     </div>

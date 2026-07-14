@@ -342,7 +342,8 @@
       "global": "Global",
       "inbox": "Inbox",
       "row": "Row",
-      "chat": "AI chat"
+      "chat": "AI chat",
+      "calendar": "Calendar"
     },
     "binding": {
       "commandPalette": "Command palette",
@@ -365,7 +366,21 @@
       "newChat": "New AI conversation",
       "toggleIsland": "Toggle Dynamic Island",
       "toggleNav": "Toggle navigation",
-      "toggleLocale": "Toggle language"
+      "toggleLocale": "Toggle language",
+      "calViewDay": "Day view",
+      "calViewWeek": "Week view",
+      "calViewMonth": "Month view",
+      "calViewAgenda": "Agenda view",
+      "calViewRecurring": "Recurring invites view",
+      "calPrevNext": "Previous / next range",
+      "calToday": "Go to today",
+      "calSync": "Sync",
+      "calNewEvent": "New event",
+      "calNextEvent": "Select next event",
+      "calPrevEvent": "Select previous event",
+      "calOpenSelected": "Open selected event",
+      "calClose": "Close drawer / modal",
+      "calHelp": "Open / close shortcut help"
     }
   },
   "palette": {
@@ -1200,6 +1215,16 @@
       "syncFailedHint": "The last sync errored — hover the ℹ️ in the bottom status bar for details"
     },
     "emptyHint": "Widen the time range, or confirm .ics invites synced.",
+    "invite": {
+      "title": "Meeting invitation",
+      "cancelled": "Meeting cancelled",
+      "recurringBadge": "Recurring",
+      "exceptionBadge": "This occurrence",
+      "conflictNone": "No conflicts",
+      "conflictCount": "Overlaps {n} events",
+      "notInCalendar": "Not synced to calendar yet",
+      "viewInCalendar": "View in calendar"
+    },
     "syncTriggered": "Calendar sync triggered",
     "syncTriggerFail": "Calendar sync failed",
     "replay": "Replay",
@@ -1306,10 +1331,19 @@
       "noSync": "Never synced",
       "calendarFallback": "Calendar"
     },
+    "join": {
+      "button": "Join meeting",
+      "short": "Join",
+      "title": "Join meeting — opens in {p}"
+    },
     "drawer": {
       "closeTitle": "Close (Esc)",
-      "openInboxTitle": "Back to inbox",
       "noRelatedEmail": "No related email",
+      "sourceEmail": {
+        "openTitle": "Locate this email in the inbox",
+        "noSubject": "(no subject)",
+        "linkedCount": "{n} linked emails"
+      },
       "teamsMeeting": "Teams meeting",
       "me": "(me)",
       "attendeeCount": "{n} attendees",
@@ -1487,17 +1521,7 @@
     },
     "shortcut": {
       "title": "Keyboard shortcuts",
-      "subtitle": "G-prefixed shortcuts switch views (press G then view key within 800 ms)",
-      "dayView": "Day view",
-      "weekView": "Week view",
-      "monthView": "Month view",
-      "agendaView": "Agenda view",
-      "recurringView": "Recurring invites view",
-      "prevNext": "Previous / Next",
-      "today": "Go to today",
-      "sync": "Sync",
-      "close": "Close drawer / modal",
-      "help": "Open / close this help"
+      "subtitle": "G-prefixed shortcuts switch views (press G then view key within 800 ms)"
     }
   },
   "settings": {

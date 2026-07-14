@@ -724,6 +724,82 @@ def dispatch_action_acked(
     _fire(env, internal_id=internal_id)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 阶段2·2.5 — 会前提醒 (CalendarSyncWorker → calendar_sync/reminder.py 调用)。
+# 文案内联双语, 不走 island_i18n key: locale 是 per-user 外部文件且 bootstrap
+# _write_if_missing 不回填新 key → 已装机器会把新 key 渲染成裸 key (island_agent
+# 同款理由, 见其 _AGENT_STRINGS 注释)。
+# ─────────────────────────────────────────────────────────────────────────────
+
+_MEETING_REMINDER_STRINGS = {
+    "zh-CN": {"title": "会议即将开始", "untitled": "未命名事件"},
+    "en-US": {"title": "Meeting starting soon", "untitled": "Untitled event"},
+}
+
+
+def _meeting_str(key: str) -> str:
+    lang = island_i18n.resolve_lang()
+    table = _MEETING_REMINDER_STRINGS.get(lang) or _MEETING_REMINDER_STRINGS["en-US"]
+    return table.get(key) or _MEETING_REMINDER_STRINGS["en-US"][key]
+
+
+def dispatch_meeting_reminder(
+    *,
+    ical_uid: str,
+    occurrence_start_iso: str,
+    summary: str,
+    time_range_text: str,
+    join_url: str = "",
+    location: str = "",
+) -> None:
+    """会前 N 分钟提醒 → emit ``MeetingReminder`` (notification, 无 intervention).
+
+    卡片能力以既有 announce 为准 (不扩 Ping Island 协议): Join 链接进 preview
+    文案 + ``mailagent.joinUrl`` metadata (fork 日后想做点击动作时字段已在)。
+    session_key 按 occurrence (uid + 开始时间) — dedup 粒度 = 单次发生, 配合
+    §9-2 持久去重, 重启 5 分钟窗口内不重发。
+    """
+    if not _state.enabled:
+        return
+    summary_disp = _one_line(summary) or _meeting_str("untitled")
+    preview_parts = [time_range_text]
+    if join_url:
+        preview_parts.append(join_url)
+    elif location:
+        preview_parts.append(_one_line(location, max_len=80))
+    meta: Dict[str, str] = {
+        **_state.extra_metadata,
+        "mailagent.lang": island_i18n.resolve_lang(),
+        "mailagent.theme": _state.theme,
+        "mailagent.accent": _state.accent,
+        "mailagent.scenario": "MeetingReminder",
+        "mailagent.mascot": "default",
+        "mailagent.icalUid": ical_uid,
+        "mailagent.occurrenceStart": occurrence_start_iso,
+        "mailagent.summary": summary_disp,
+        # fork makeClientInfo brand 推导 — 见 _base_metadata 同段注释
+        "client_kind": "mailagent",
+        "client_name": "MailAgent",
+        "client_origin": "plugin",
+        "client_originator": "MailAgent",
+        "thread_source": "mailagent-hooks",
+    }
+    if join_url:
+        meta["mailagent.joinUrl"] = join_url
+    if location:
+        meta["mailagent.location"] = _one_line(location)
+    env = BridgeEnvelope(
+        event_type="MeetingReminder",
+        session_key=f"mailagent:calendar:{ical_uid}:{occurrence_start_iso}",
+        title=f"{_meeting_str('title')} / {summary_disp}",
+        preview=_one_line(" · ".join(preview_parts)),
+        status_kind="notification",
+        metadata=meta,
+        expects_response=False,
+    )
+    _fire(env, internal_id=None)
+
+
 def dispatch_dead_letter_accum(*, count: int, threshold: int = 0) -> None:
     """死信累积告警 → emit ``DeadLetterAccum``."""
     if not _state.enabled:

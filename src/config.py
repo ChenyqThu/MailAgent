@@ -836,6 +836,14 @@ class Config(BaseSettings):
         default=180, env="CALENDAR_CALDAV_SYNC_WINDOW_FUTURE_DAYS",
         description="CalendarSyncWorker 全量 sync 窗口右边界 (今天 + N 天). 默认 180.",
     )
+    calendar_reminder_lead_minutes: int = Field(
+        default=10, env="CALENDAR_REMINDER_LEAD_MINUTES",
+        description=(
+            "会前灵动岛提醒提前量 (分钟, epic 阶段2·2.5). 挂 CalendarSyncWorker "
+            "60s poll 顺路检查, 同 occurrence 只提醒一次; PING_ISLAND_ENABLED 关 / "
+            "无岛时静默 fail-open."
+        ),
+    )
     frontend_calendar_v2_enabled: bool = Field(
         default=False, env="FRONTEND_CALENDAR_V2_ENABLED",
         description=(

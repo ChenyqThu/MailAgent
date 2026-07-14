@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING
 from loguru import logger
 
 from src.calendar_sync.reconciler import CalendarReconciler
+from src.calendar_sync.reminder import MeetingReminder
 
 if TYPE_CHECKING:
     from src.calendar_sync.caldav_reader import CalDAVReader
@@ -75,6 +76,12 @@ class CalendarSyncWorker:
         self.reader = reader
         self.repo = repo
         self.reconciler = CalendarReconciler(repo)
+        # 阶段2·2.5 — 会前岛提醒: 复用本 worker 的 60s poll 顺路检查 (不开新
+        # loop 家族); 门控/幂等语义见 reminder.py 模块注释.
+        self.reminder = MeetingReminder(
+            repo,
+            lead_minutes=getattr(cfg, "calendar_reminder_lead_minutes", 10),
+        )
         self.poll_interval = poll_interval
         self.full_sync_window_days = full_sync_window_days
         self.full_sync_past_days = full_sync_past_days
@@ -250,6 +257,13 @@ class CalendarSyncWorker:
                     f"[calendar-sync-worker] tick_one {cal_name!r} failed: {e}"
                 )
                 self.repo.upsert_sync_state(cal_name, last_error=str(e)[:500])
+
+        # 阶段2·2.5 — 会前岛提醒顺路检查 (SQLite 只读 ~ms 级, 不 to_thread).
+        # 自身 fail-open, 这里再兜一层防 reminder bug 连坐 sync loop.
+        try:
+            self.reminder.tick()
+        except Exception as e:
+            logger.debug(f"[calendar-reminder] tick failed (fail-open): {e}")
 
     async def _refresh_calendars(self) -> None:
         """F8 — 重 list CalDAV calendars + diff vs self._calendars.

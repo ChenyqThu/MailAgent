@@ -1,6 +1,7 @@
 // mockup-calendar.html §keyboard shortcuts 实现 —
 // G+D/W/M/A/R (G prefix 800ms 内接视图键) / T 跳今天 / ← → step / ⌘R (或 Ctrl+R)
 // 触发 sync / ? 开 help modal / Esc 关弹层.
+// 阶段2·2.7 (F18/UX-P0④) — N 新建 / J·K 巡航选中 / Enter 打开选中.
 //
 // 排除 INPUT / TEXTAREA / contentEditable target, 避免劫持表单输入.
 // CalendarLayout mount 一次, view-agnostic.
@@ -17,10 +18,19 @@ interface ShortcutOpts {
   onSync: () => void
   onHelp: () => void
   onEsc: () => void
+  /** 2.7 — n 新建事件; 远程 web (IS_WEB_BUILD 写入口门控) 由 caller 不传关掉. */
+  onNew?: () => void
+  /** 2.7 — j 选中下一个事件 (只动锚点, 不开抽屉). */
+  onNextEvent?: () => void
+  /** 2.7 — k 选中上一个事件. */
+  onPrevEvent?: () => void
+  /** 2.7 — Enter 打开当前选中事件的 drawer. */
+  onOpenSelected?: () => void
 }
 
 export function useCalendarShortcuts(opts: ShortcutOpts): void {
   const { onView, onToday, onPrev, onNext, onSync, onHelp, onEsc } = opts
+  const { onNew, onNextEvent, onPrevEvent, onOpenSelected } = opts
 
   useEffect(() => {
     let gPressed = false
@@ -88,6 +98,36 @@ export function useCalendarShortcuts(opts: ShortcutOpts): void {
         return
       }
 
+      // 阶段2·2.7 — N 新建 / J·K 巡航 / Enter 打开选中. 带 ⌘/Ctrl/⌥ 时让位
+      // (⌘J chat modal / ⌘N compose 等全局绑定同键, 不可劫持).
+      const plain = !e.metaKey && !e.ctrlKey && !e.altKey
+      if (plain && (e.key === 'n' || e.key === 'N')) {
+        onNew?.()
+        return
+      }
+      if (plain && (e.key === 'j' || e.key === 'J')) {
+        onNextEvent?.()
+        return
+      }
+      if (plain && (e.key === 'k' || e.key === 'K')) {
+        onPrevEvent?.()
+        return
+      }
+      if (plain && e.key === 'Enter') {
+        // 焦点在按钮/链接等可交互元素上时让位原生激活 (Enter=click), 只在
+        // 无焦点语境 (body / 容器) 下打开选中事件.
+        if (
+          tag === 'BUTTON' ||
+          tag === 'A' ||
+          tag === 'SELECT' ||
+          target?.getAttribute?.('role') === 'button'
+        ) {
+          return
+        }
+        onOpenSelected?.()
+        return
+      }
+
       // ← / → = step
       if (e.key === 'ArrowLeft') {
         onPrev()
@@ -104,5 +144,17 @@ export function useCalendarShortcuts(opts: ShortcutOpts): void {
       window.removeEventListener('keydown', handler)
       clearG()
     }
-  }, [onView, onToday, onPrev, onNext, onSync, onHelp, onEsc])
+  }, [
+    onView,
+    onToday,
+    onPrev,
+    onNext,
+    onSync,
+    onHelp,
+    onEsc,
+    onNew,
+    onNextEvent,
+    onPrevEvent,
+    onOpenSelected
+  ])
 }
