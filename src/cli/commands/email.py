@@ -1190,6 +1190,7 @@ def _build_compose_request(
     cc: Optional[str],
     bcc: Optional[str],
     subject: Optional[str],
+    force_subject: bool = False,
     attach: Optional[list[str]] = None,
 ) -> Any:
     """读 ``--body-file`` / ``--body-html-file`` 成字符串, 构造 ``ComposeRequest``。
@@ -1227,6 +1228,7 @@ def _build_compose_request(
         extra_to=extra_to, extra_cc=extra_cc,
         body_text=body_text, body_html=body_html,
         to=to, cc=cc, bcc=bcc, subject=subject,
+        force_subject=force_subject,
         attachments=attachments,
     )
 
@@ -1267,6 +1269,10 @@ def email_draft(
         None, "--subject",
         help="完整主题 (提供时覆盖 Re:/Fwd: 自动前缀) — 前端 compose 编辑后的",
     ),
+    force_subject: bool = typer.Option(
+        False, "--force-subject",
+        help="reply/reply-all 下允许 --subject 改成与原主题不同 (默认拒绝: 改主题断线程)",
+    ),
     attach: list[str] = typer.Option(
         None, "--attach",
         help="附加本地文件为附件 (可重复; in-process 直读 bytes, 总大小 cap 20MB)",
@@ -1304,6 +1310,7 @@ def email_draft(
             extra_to=extra_to, extra_cc=extra_cc,
             body_file=body_file, body_html_file=body_html_file,
             to=to, cc=cc, bcc=bcc, subject=subject,
+            force_subject=force_subject,
             attach=attach,
         )
     except CliError as e:
@@ -1400,6 +1407,10 @@ def email_send(
         None, "--subject",
         help="完整主题 (提供时覆盖 Re:/Fwd: 自动前缀) — 前端 compose 编辑后的",
     ),
+    force_subject: bool = typer.Option(
+        False, "--force-subject",
+        help="reply/reply-all 下允许 --subject 改成与原主题不同 (默认拒绝: 改主题断线程)",
+    ),
     attach: list[str] = typer.Option(
         None, "--attach",
         help="附加本地文件为附件 (可重复; in-process 直读 bytes, 总大小 cap 20MB)",
@@ -1434,6 +1445,7 @@ def email_send(
             extra_to=extra_to, extra_cc=extra_cc,
             body_file=body_file, body_html_file=body_html_file,
             to=to, cc=cc, bcc=bcc, subject=subject,
+            force_subject=force_subject,
             attach=attach,
         )
     except CliError as e:

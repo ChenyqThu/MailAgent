@@ -668,6 +668,20 @@ def test_compose_draft_no_body_html_is_none(client, svc_spy):
     assert r.status_code == 200
     _, req, _ = _last(svc_spy)
     assert req.body_html is None
+    # forceSubject 缺省 → False (agent/CLI 路径默认受改主题守卫约束)
+    assert req.force_subject is False
+
+
+def test_compose_draft_force_subject_passthrough(client, svc_spy):
+    # 前端 composer 恒传 forceSubject: true (用户改题是明确意图) → ComposeRequest.force_subject
+    r = client.post(
+        "/api/email/draft",
+        json={"internalId": EMAIL_ID, "mode": "reply", "subject": "改过的主题", "forceSubject": True},
+    )
+    assert r.status_code == 200
+    _, req, _ = _last(svc_spy)
+    assert req.subject == "改过的主题"
+    assert req.force_subject is True
 
 
 def test_compose_draft_camel_keys_not_leaked(client, svc_spy):

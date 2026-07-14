@@ -491,6 +491,8 @@ export function ComposePanelInner({
       cc,
       bcc,
       subject,
+      // UI 里改主题是用户明确意图 — 跳过服务层 reply 改主题断线程守卫 (守卫防 agent/CLI 误用)
+      forceSubject: true,
       bodyHtml: getSanitizedHtml(),
       importance,
       ...(attachments.length > 0 ? { attachments } : {})

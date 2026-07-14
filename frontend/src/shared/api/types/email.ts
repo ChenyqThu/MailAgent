@@ -219,6 +219,9 @@ export interface ComposeDraftOpts {
   cc?: string[]
   bcc?: string[]
   subject?: string
+  /** reply/reply-all 改主题断线程守卫的逃生口 (服务层默认拒绝与原主题规范化后不同的
+   *  subject)。UI composer 恒传 true — 用户在主题框里改是明确意图; 守卫防 agent/CLI 误用。 */
+  forceSubject?: boolean
   bodyHtml?: string
   /** 纯文本/markdown 正文 (serve-api `_compose_request_from_body` 读 `bodyText`)。
    *  "只给纯回复正文、服务端推导收件人 + 拼引用原文" 的调用方 (正文 Craft / chat

@@ -994,6 +994,9 @@ def _compose_request_from_body(internal_id: int, opts: dict[str, Any]):
         cc=_join(opts.get("cc")),
         bcc=_join(opts.get("bcc")),
         subject=subject if isinstance(subject, str) else None,
+        # forceSubject: reply/reply-all 改主题断线程守卫的逃生口 — 前端 composer 恒传
+        # true (用户在主题框里改是明确意图; 守卫防 agent/CLI 误用)。
+        force_subject=bool(opts.get("forceSubject")),
         body_html=body_html if isinstance(body_html, str) and body_html else None,
         body_text=body_text if isinstance(body_text, str) and body_text else None,
         # quoteOriginal=True → 即便传显式正文也在其下拼原文引用 (chat email_draft_reply /
