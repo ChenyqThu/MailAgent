@@ -13,7 +13,7 @@
 // ESC (ComposePanelInner window keydown → onClose) / 发送成功 / 放弃。挂载在
 // RootLayout (router-instance.tsx) 全局一次，任意路由都能由侧边栏按钮或 ⌘N 打开。
 
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import { Maximize2, Minimize2, PenLine, X } from 'lucide-react'
@@ -49,6 +49,14 @@ export function ComposeNewModal(): React.ReactElement | null {
   const [maximized, setMaximized] = useState(false)
   const [pos, setPos] = useState({ x: 0, y: 0 })
   const dragRef = useRef<{ sx: number; sy: number; px: number; py: number } | null>(null)
+  // codex F9 — 在途拖拽的 window 监听清理句柄: mousedown 后组件卸载 (发送成功关闭 /
+  // 退场动画结束) mousemove 不能存活继续 setPos; 最大化切换也终止在途拖拽。
+  const endDragRef = useRef<(() => void) | null>(null)
+  useEffect(() => () => endDragRef.current?.(), [])
+  const toggleMaximized = useCallback(() => {
+    endDragRef.current?.()
+    setMaximized((v) => !v)
+  }, [])
   // 进退场动效 (root=scrim + 卡片 data-anim-card)。shouldRender 在退场动画播完前
   // 保持 true, 卡片卸载推迟到动画结束。
   const { shouldRender, scopeRef } = useExitAnimation<HTMLDivElement>(open, {
@@ -58,7 +66,14 @@ export function ComposeNewModal(): React.ReactElement | null {
   // tabIndex=-1) 作 fallback 焦点目标。初始 focus 若已被面板内 autoFocus (To 字段)
   // 占住则不抢 (useFocusTrap 的 contains(activeElement) 守卫)。ESC 关闭由
   // ComposePanelInner 的 window keydown handler 接管 (此处 onKeyDown 只管 Tab)。
-  const { dialogRef, handleTab } = useFocusTrap({ open, fallbackRef: scopeRef })
+  // ignoreOutsideTargets (codex F3): 面板内的 Radix 子弹窗 (UnsavedChanges/
+  // SendConfirm/DeleteDraft) portal 到 body, 其 Tab 经 React 树冒泡到浮窗 —— 不
+  // 接管, 否则 snap-back 会把子弹窗焦点拖回背景 composer (双焦点陷阱互抢)。
+  const { dialogRef, handleTab } = useFocusTrap({
+    open,
+    fallbackRef: scopeRef,
+    ignoreOutsideTargets: true
+  })
 
   // 标题栏拖动 (design/app.jsx FloatingShell.onHeaderDown): mousedown 记起点,
   // window mousemove 更新 translate, mouseup 摘监听。最大化时不可拖。
@@ -66,19 +81,22 @@ export function ComposeNewModal(): React.ReactElement | null {
     if (maximized) return
     // 标题栏里的按钮 (最大化/关闭) 不触发拖动。
     if ((e.target as HTMLElement).closest('button')) return
+    endDragRef.current?.() // 防重: 上一段在途拖拽先终止 (F9)
     dragRef.current = { sx: e.clientX, sy: e.clientY, px: pos.x, py: pos.y }
     const move = (ev: MouseEvent): void => {
       const d = dragRef.current
       if (!d) return
       setPos({ x: d.px + (ev.clientX - d.sx), y: d.py + (ev.clientY - d.sy) })
     }
-    const up = (): void => {
+    const end = (): void => {
       dragRef.current = null
       window.removeEventListener('mousemove', move)
-      window.removeEventListener('mouseup', up)
+      window.removeEventListener('mouseup', end)
+      endDragRef.current = null
     }
+    endDragRef.current = end
     window.addEventListener('mousemove', move)
-    window.addEventListener('mouseup', up)
+    window.addEventListener('mouseup', end)
   }
 
   if (!shouldRender) return null
@@ -113,7 +131,7 @@ export function ComposeNewModal(): React.ReactElement | null {
           {/* 标题栏 — 拖动手柄 + 双击最大化 (design FloatingShell cmp-float-header)。 */}
           <div
             onMouseDown={onHeaderMouseDown}
-            onDoubleClick={() => setMaximized((v) => !v)}
+            onDoubleClick={toggleMaximized}
             className={cn(
               'h-10 shrink-0 flex items-center gap-2 px-3.5 border-b border-ink-border/60 select-none',
               !maximized && 'cursor-move'
@@ -126,7 +144,7 @@ export function ComposeNewModal(): React.ReactElement | null {
                 type="button"
                 aria-label={maximized ? t('compose.floatRestore') : t('compose.floatMaximize')}
                 title={maximized ? t('compose.floatRestore') : t('compose.floatMaximize')}
-                onClick={() => setMaximized((v) => !v)}
+                onClick={toggleMaximized}
                 className="w-7 h-7 grid place-items-center rounded-[var(--r-ctl)] text-ink-fg-2 hover:text-ink-fg hover:bg-ink-3/60 transition-colors duration-fast"
               >
                 {maximized ? (

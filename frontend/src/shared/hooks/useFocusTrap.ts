@@ -37,6 +37,14 @@ export interface UseFocusTrapOpts {
    *  carry `tabIndex={-1}` on the JSX so it's programmatically focusable
    *  but not part of the Tab order. Usually the backdrop ref. */
   fallbackRef?: React.RefObject<HTMLElement | null>
+  /** 忽略 target 不在 dialog 容器内的 Tab 事件 (codex F3)。React portal 场景:
+   *  容器内组件把子弹窗 (如 Radix Dialog) portal 到 body — DOM 上不在容器内,
+   *  但 React 合成事件仍沿组件树冒泡回容器 onKeyDown, 默认的 snap-back
+   *  (`!root.contains(active)`) 会把子弹窗里的焦点拖回背景容器 (双焦点陷阱互抢)。
+   *  开启后这类事件直接放行 (返回 false, 子弹窗自管焦点)。可选参数, 缺省 false =
+   *  既有调用方 (KeyboardHelpModal / CommandPalette / ResyncConfirmDialog)
+   *  行为逐字节不变。 */
+  ignoreOutsideTargets?: boolean
 }
 
 export interface UseFocusTrapReturn {
@@ -47,7 +55,11 @@ export interface UseFocusTrapReturn {
   handleTab(e: React.KeyboardEvent<HTMLDivElement>): boolean
 }
 
-export function useFocusTrap({ open, fallbackRef }: UseFocusTrapOpts): UseFocusTrapReturn {
+export function useFocusTrap({
+  open,
+  fallbackRef,
+  ignoreOutsideTargets
+}: UseFocusTrapOpts): UseFocusTrapReturn {
   const dialogRef = useRef<HTMLDivElement>(null)
 
   // Initial focus on open. The fallback path keeps onKeyDown alive even
@@ -75,37 +87,45 @@ export function useFocusTrap({ open, fallbackRef }: UseFocusTrapOpts): UseFocusT
     }
   }, [open, fallbackRef])
 
-  const handleTab = useCallback((e: React.KeyboardEvent<HTMLDivElement>): boolean => {
-    if (e.key !== 'Tab') return false
-    const root = dialogRef.current
-    if (!root) return false
-    const focusables = Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(
-      (el) => !(el as HTMLButtonElement).disabled && el.tabIndex !== -1
-    )
-    if (focusables.length === 0) return false
-    const first = focusables[0]
-    const last = focusables[focusables.length - 1]
-    const active = document.activeElement as HTMLElement | null
-    // `!root.contains(active)` snaps focus back into the dialog when it
-    // escaped the trap (e.g. user clicked outside then tabbed). Both ends
-    // wrap to keep Tab and Shift-Tab symmetric — previously
-    // KeyboardHelpModal lacked the shift-side guard and a stranded focus
-    // would not return.
-    if (e.shiftKey) {
-      if (active === first || !root.contains(active)) {
-        e.preventDefault()
-        last.focus()
-        return true
+  const handleTab = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>): boolean => {
+      if (e.key !== 'Tab') return false
+      const root = dialogRef.current
+      if (!root) return false
+      // codex F3 — portal 到 body 的子弹窗 (Radix Dialog 等) 的 Tab 经 React 树
+      // 冒泡到这里, target 不在容器 DOM 内 → 不接管, 焦点留给子弹窗自己的 trap。
+      if (ignoreOutsideTargets && e.target instanceof Node && !root.contains(e.target)) {
+        return false
       }
-    } else {
-      if (active === last || !root.contains(active)) {
-        e.preventDefault()
-        first.focus()
-        return true
+      const focusables = Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(
+        (el) => !(el as HTMLButtonElement).disabled && el.tabIndex !== -1
+      )
+      if (focusables.length === 0) return false
+      const first = focusables[0]
+      const last = focusables[focusables.length - 1]
+      const active = document.activeElement as HTMLElement | null
+      // `!root.contains(active)` snaps focus back into the dialog when it
+      // escaped the trap (e.g. user clicked outside then tabbed). Both ends
+      // wrap to keep Tab and Shift-Tab symmetric — previously
+      // KeyboardHelpModal lacked the shift-side guard and a stranded focus
+      // would not return.
+      if (e.shiftKey) {
+        if (active === first || !root.contains(active)) {
+          e.preventDefault()
+          last.focus()
+          return true
+        }
+      } else {
+        if (active === last || !root.contains(active)) {
+          e.preventDefault()
+          first.focus()
+          return true
+        }
       }
-    }
-    return false
-  }, [])
+      return false
+    },
+    [ignoreOutsideTargets]
+  )
 
   return { dialogRef, handleTab }
 }

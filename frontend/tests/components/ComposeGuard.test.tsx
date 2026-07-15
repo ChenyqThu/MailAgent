@@ -295,4 +295,22 @@ describe('ComposeNewModal 离开守卫 — scrim/× 经守卫桥', () => {
     expect(await screen.findByText('未保存的更改')).toBeTruthy()
     expect(useComposeNewStore.getState().open).toBe(true)
   })
+
+  test('守卫弹窗 (portal 到 body) 内 Tab → 浮窗 trap 不抢焦点 (codex F3)', async () => {
+    await openNewModalReady()
+    fireEvent.change(screen.getByLabelText('主题'), { target: { value: '新邮件主题' } })
+    fireEvent.click(screen.getByLabelText('关闭'))
+    expect(await screen.findByText('未保存的更改')).toBeTruthy()
+    // Radix 弹窗 portal 到 body (DOM 不在浮窗容器内), 但 Tab 合成事件仍沿 React
+    // 树冒泡到浮窗 onKeyDown —— 修复前浮窗 trap 会 preventDefault + 把焦点拖回
+    // 背景 composer (Radix 自己的 trapped focusin 守卫随即拉回 → 真实表现为 Tab
+    // 永远不前进/焦点闪烁, activeElement 终态分辨不出, 故断言 defaultPrevented:
+    // fireEvent 返回 false = 事件被取消 = 外层 trap 接管过)。
+    const guardDialog = screen.getByText('未保存的更改').closest('[role="dialog"]') as HTMLElement
+    const cancelBtn = within(guardDialog).getByRole('button', { name: '继续编辑' })
+    act(() => cancelBtn.focus())
+    const notCanceled = fireEvent.keyDown(cancelBtn, { key: 'Tab' })
+    expect(notCanceled).toBe(true) // 外层 trap 不接管 portaled 子弹窗的 Tab
+    expect(document.activeElement).toBe(cancelBtn)
+  })
 })
