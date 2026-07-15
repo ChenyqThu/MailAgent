@@ -24,6 +24,10 @@
 
       img-src whitelist (review round 9):
         - 'self' / data: / file:     本地资源 / inline data URI / 本地附件
+        - blob:                      compose staged 附件缩略预览
+                                     (URL.createObjectURL — 只有本 renderer
+                                     自己创建的 blob 能被引用, 不开远程口子;
+                                     缺它则拖入图片附件预览被 CSP 拦成裂图)
         - https://*.onecdn.static.microsoft  Office/Outlook 邮件正文里嵌的
                                               sysfile.svg 等附件类型图标
                                               (line 16 起源全是 Microsoft CDN)
@@ -34,7 +38,7 @@
     -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self' 'sha256-+/aDVUkVEjs5BEmxhoHnyHv2iuPqBLuJRmkC6F2x0WY='; style-src 'self' 'unsafe-inline'; img-src 'self' data: file: https://*.onecdn.static.microsoft; connect-src 'self' ws://localhost:* http://localhost:* http://127.0.0.1:*"
+      content="default-src 'self'; script-src 'self' 'sha256-+/aDVUkVEjs5BEmxhoHnyHv2iuPqBLuJRmkC6F2x0WY='; style-src 'self' 'unsafe-inline'; img-src 'self' data: file: blob: https://*.onecdn.static.microsoft; connect-src 'self' ws://localhost:* http://localhost:* http://127.0.0.1:*"
     />
     <!--
       Theme bootstrap (REVIEW-LOG C-07): set data-theme + dark class on <html>

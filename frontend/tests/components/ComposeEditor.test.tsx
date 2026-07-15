@@ -179,24 +179,24 @@ describe('ComposeFormatToolbar — 命令接线（新装配）', () => {
       editor.commands.selectAll()
     })
     fireEvent.click(screen.getByLabelText('字体颜色'))
-    fireEvent.click(await screen.findByTitle('#E5654B'))
+    fireEvent.click(await screen.findByTitle('#4DA6F0'))
     // 断言按文档状态（swatch 应用后选区可能落到空段, getAttributes 读光标处）。
-    expect(editor.getHTML()).toContain('#E5654B')
+    expect(editor.getHTML()).toContain('#4DA6F0')
   })
 
   // 同 heading：happy-dom 下 radix Popover 二次打开即卸载 → 清除档拆独立测试。
   test('文字颜色 swatch：清除档还原默认色', async () => {
     const editor = renderEditor()
     act(() => {
-      editor.chain().selectAll().setColor('#E5654B').run()
+      editor.chain().selectAll().setColor('#4DA6F0').run()
     })
-    expect(editor.getHTML()).toContain('#E5654B')
+    expect(editor.getHTML()).toContain('#4DA6F0')
     act(() => {
       editor.commands.selectAll()
     })
     fireEvent.click(screen.getByLabelText('字体颜色'))
     fireEvent.click(await screen.findByLabelText('默认'))
-    expect(editor.getHTML()).not.toContain('#E5654B')
+    expect(editor.getHTML()).not.toContain('#4DA6F0')
   })
 
   test('高亮 swatch（新装配）走 Highlight multicolor mark', async () => {

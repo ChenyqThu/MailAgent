@@ -170,8 +170,7 @@
       "summary": "{n} attachment(s) · {size}",
       "add": "Add",
       "uploading": "Uploading",
-      "uploadFailed": "Upload failed",
-      "dropzoneHint": "Drop files here, or click to add attachments"
+      "uploadFailed": "Upload failed"
     },
     "ccCollapse": "Hide Cc",
     "bccCollapse": "Hide Bcc",
@@ -219,6 +218,8 @@
       "image": "Insert image",
       "imageUrl": "Image URL",
       "imageApply": "Insert",
+      "imageFromFile": "Insert image from file",
+      "imageTooLarge": "Image {name} exceeds {max}MB — send it as an attachment instead",
       "mention": "Mention someone @",
       "undo": "Undo",
       "redo": "Redo",

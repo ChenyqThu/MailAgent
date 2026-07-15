@@ -572,6 +572,7 @@ export function RecipientField({
           })}
           <input
             ref={inputRef}
+            className="recipient-inline-input"
             value={input}
             placeholder={values.length === 0 ? placeholder : ''}
             onChange={(e) => {

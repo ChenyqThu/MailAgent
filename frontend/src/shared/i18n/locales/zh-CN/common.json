@@ -170,8 +170,7 @@
       "summary": "{n} 个附件 · {size}",
       "add": "添加",
       "uploading": "上传中",
-      "uploadFailed": "上传失败",
-      "dropzoneHint": "拖拽文件到此，或点击添加附件"
+      "uploadFailed": "上传失败"
     },
     "ccCollapse": "收起抄送",
     "bccCollapse": "收起密送",
@@ -219,6 +218,8 @@
       "image": "插入图片",
       "imageUrl": "图片地址",
       "imageApply": "插入",
+      "imageFromFile": "从文件选择图片",
+      "imageTooLarge": "图片 {name} 超过 {max}MB，请改用附件发送",
       "mention": "提及某人 @",
       "undo": "撤销",
       "redo": "重做",

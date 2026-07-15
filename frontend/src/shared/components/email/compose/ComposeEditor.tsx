@@ -11,11 +11,12 @@
 // 正常工作 —— 高亮按钮在无 Highlight 扩展的旧装配上回退 textStyle backgroundColor。
 // The parent owns the Editor instance (so it can read getHTML() on send/save).
 
-import { useCallback, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { EditorContent, useEditorState, type Editor } from '@tiptap/react'
 import {
   AtSign,
+  Ban,
   Baseline,
   Bold,
   Check,
@@ -23,6 +24,7 @@ import {
   Code,
   Highlighter,
   ImagePlus,
+  ImageUp,
   Italic,
   Link2,
   List,
@@ -34,12 +36,16 @@ import {
   TextQuote,
   Underline as UnderlineIcon,
   Undo2,
-  Unlink,
-  X
+  Unlink
 } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
+import { toastError } from '@shared/state/toast'
 import { Popover, PopoverContent, PopoverTrigger } from '@shared/components/ui/popover'
+
+// 内联图片(data URL 直嵌正文)的单张上限 — data URL 会把字节膨胀 ~1.37×,
+// 大图该走附件而不是正文内联。与粘贴图片同一下游 (data: 直存 HTML)。
+const MAX_INLINE_IMAGE_BYTES = 4 * 1024 * 1024
 
 function FmtBtn({
   icon,
@@ -81,31 +87,72 @@ function FmtSep(): React.ReactElement {
   return <span className="w-px h-5 bg-ink-border-soft mx-1" aria-hidden />
 }
 
-// 设计稿 swatch 色板（design/editor.jsx TEXT_COLORS / HL_COLORS）—— 内容色常量，
-// 非 UI token（写进邮件正文 inline style 的颜色值）。
+// Outlook 式预设色板（dogfood 反馈: 原设计稿 6 色太少）—— 内容色常量，非 UI
+// token（写进邮件正文 inline style 的颜色值）。6 hue 列 × 浅→深 4 行 + 末行
+// 中性色（清除格 + 灰阶）。
 /* eslint-disable mailagent/no-raw-hex -- swatch 色板是邮件内容色常量（随正文发出），非 theme token。 */
 const TEXT_COLORS: readonly string[] = [
-  '#E5654B', // 珊瑚
-  '#E59B4A', // 琥珀
-  '#3E9E6E', // 绿
-  '#4A78E5', // 蓝
-  '#6E5AD6', // 靛
-  '#6B7280' // 灰
+  // 蓝        绿        黄        橙        红        紫  (浅 → 深)
+  '#4DA6F0',
+  '#5EC26A',
+  '#F2D440',
+  '#F2913D',
+  '#EE6B60',
+  '#B76BE0',
+  '#1667C2',
+  '#188A3C',
+  '#D4B016',
+  '#DB6B10',
+  '#CC2F24',
+  '#8833B8',
+  '#10498C',
+  '#0F6129',
+  '#9C8010',
+  '#A34F0C',
+  '#941F17',
+  '#622585',
+  '#0A2B57',
+  '#093D1B',
+  '#6B570B',
+  '#6E3508',
+  '#611410',
+  '#3F1857'
 ]
+/** 末行中性色（首格是「清除」，随后 5 格）。 */
+const TEXT_NEUTRALS: readonly string[] = ['#D9D9D9', '#A6A6A6', '#737373', '#404040', '#000000']
 const HL_COLORS: readonly string[] = [
-  '#FCE7A2', // 黄
-  '#C6EBCB', // 绿
-  '#C9E0FB', // 蓝
-  '#F7CFE0', // 粉
-  '#FBDCB6' // 橙
+  // 黄        绿        蓝        粉        橙        青  (淡 → 艳)
+  '#FCE7A2',
+  '#C6EBCB',
+  '#C9E0FB',
+  '#F7CFE0',
+  '#FBDCB6',
+  '#C9EFEF',
+  '#F8D866',
+  '#9FDCAA',
+  '#9CC7F7',
+  '#F2A8C8',
+  '#F7BE7E',
+  '#9FE3E3',
+  '#F5E342',
+  '#6FD383',
+  '#6FAEF2',
+  '#EE7FB2',
+  '#F5A44A',
+  '#5ED3D3'
 ]
+const HL_NEUTRALS: readonly string[] = ['#FFFFFF', '#EBEBEB', '#D6D6D6', '#BFBFBF', '#A8A8A8']
 /* eslint-enable mailagent/no-raw-hex */
 
-/** swatch 色板按钮：首格「清除」（× 圆格），后随设计稿色板；「更多颜色」原生取色器兜底。 */
+/** swatch 色板按钮：6 列网格（hue 列 × 浅→深行）+ 末行「清除」格 + 中性色；
+ *  「更多颜色」触发原生取色器。取色 input 挂在 Popover 外 —— 系统取色面板
+ *  打开会让 popover 关闭, input 若在 PopoverContent 里会随之卸载, onChange
+ *  永远收不到（dogfood「更多颜色点击没反应」的根因）。 */
 function SwatchPopoverButton({
   icon,
   title,
   colors,
+  neutrals,
   current,
   onPick,
   clearTitle,
@@ -113,7 +160,10 @@ function SwatchPopoverButton({
 }: {
   icon: React.ReactNode
   title: string
+  /** 主网格色板（6 的倍数, 按 hue 列排布）。 */
   colors: readonly string[]
+  /** 末行中性色（跟在「清除」格后, ≤5 个）。 */
+  neutrals: readonly string[]
   /** 当前应用色（'' = 未设置）。 */
   current: string
   /** null = 清除。 */
@@ -122,61 +172,83 @@ function SwatchPopoverButton({
   moreLabel: string
 }): React.ReactElement {
   const [open, setOpen] = useState(false)
+  const moreInputRef = useRef<HTMLInputElement>(null)
   const pick = (c: string | null): void => {
     onPick(c)
     setOpen(false)
   }
+  const swatch = (c: string): React.ReactElement => (
+    <button
+      key={c}
+      type="button"
+      title={c}
+      aria-label={c}
+      onClick={() => pick(c)}
+      className={cn(
+        'size-5 rounded-full border transition-transform duration-fast hover:scale-110',
+        current.toLowerCase() === c.toLowerCase()
+          ? 'border-coral ring-1 ring-coral'
+          : 'border-ink-border/40'
+      )}
+      style={{ background: c }}
+    />
+  )
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          title={title}
-          aria-label={title}
-          onMouseDown={(e) => e.preventDefault()}
-          className={cn('folder-editor-btn', current && 'is-on')}
-        >
-          {icon}
-        </button>
-      </PopoverTrigger>
-      <PopoverContent
-        align="start"
-        sideOffset={6}
-        onMouseDown={(e) => e.preventDefault()}
-        className="w-auto p-2"
-      >
-        <div className="flex items-center gap-1.5">
+    <>
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
           <button
             type="button"
-            title={clearTitle}
-            aria-label={clearTitle}
-            onClick={() => pick(null)}
-            className="size-5 rounded-full border border-ink-border/60 grid place-items-center text-ink-fg-3 transition-transform duration-fast hover:scale-110"
+            title={title}
+            aria-label={title}
+            onMouseDown={(e) => e.preventDefault()}
+            className={cn('folder-editor-btn', current && 'is-on')}
           >
-            <X size={11} strokeWidth={2} />
+            {icon}
           </button>
-          {colors.map((c) => (
+        </PopoverTrigger>
+        <PopoverContent
+          align="start"
+          sideOffset={6}
+          onMouseDown={(e) => e.preventDefault()}
+          className="w-auto p-2"
+        >
+          <div className="grid grid-cols-6 gap-1.5">
+            {colors.map(swatch)}
             <button
-              key={c}
               type="button"
-              title={c}
-              onClick={() => pick(c)}
-              className={cn(
-                'size-5 rounded-full border transition-transform duration-fast hover:scale-110',
-                current.toLowerCase() === c.toLowerCase()
-                  ? 'border-coral ring-1 ring-coral'
-                  : 'border-ink-border/40'
-              )}
-              style={{ background: c }}
-            />
-          ))}
-        </div>
-        <label className="mt-2 flex cursor-pointer items-center justify-center rounded-md border border-ink-border/60 py-1 text-meta text-ink-fg-2 transition-colors duration-fast hover:bg-ink-3">
-          {moreLabel}
-          <input type="color" className="sr-only" onChange={(e) => pick(e.target.value)} />
-        </label>
-      </PopoverContent>
-    </Popover>
+              title={clearTitle}
+              aria-label={clearTitle}
+              onClick={() => pick(null)}
+              className="size-5 rounded-full border border-ink-border/60 grid place-items-center text-ink-fg-3 transition-transform duration-fast hover:scale-110"
+            >
+              <Ban size={13} strokeWidth={1.8} />
+            </button>
+            {neutrals.map(swatch)}
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false)
+              moreInputRef.current?.click()
+            }}
+            className="mt-2 flex w-full cursor-pointer items-center justify-center rounded-md border border-ink-border/60 py-1 text-meta text-ink-fg-2 transition-colors duration-fast hover:bg-ink-3"
+          >
+            {moreLabel}
+          </button>
+        </PopoverContent>
+      </Popover>
+      {/* 原生取色器载体 — 常驻挂载 (见组件头注释), sr-only 不可见但可编程 click。 */}
+      <input
+        ref={moreInputRef}
+        type="color"
+        tabIndex={-1}
+        aria-hidden="true"
+        defaultValue="#000000"
+        className="sr-only"
+        onChange={(e) => onPick(e.target.value)}
+      />
+    </>
   )
 }
 
@@ -398,6 +470,28 @@ export function ComposeFormatToolbar({ editor }: { editor: Editor }): React.Reac
     editor.chain().focus().setImage({ src: url }).run()
   }, [editor, imageValue])
 
+  // 从文件插入内联图 — FileReader → data URL → setImage。与粘贴图片同一
+  // 下游 (data: 直嵌正文 HTML), 超上限提示走附件。
+  const imageFileRef = useRef<HTMLInputElement>(null)
+  const insertImageFile = useCallback(
+    (file: File | undefined) => {
+      setImageOpen(false)
+      setImageValue('')
+      if (!file) return
+      if (file.size > MAX_INLINE_IMAGE_BYTES) {
+        toastError(t('compose.editor.imageTooLarge', { name: file.name, max: 4 }))
+        return
+      }
+      const reader = new FileReader()
+      reader.onload = () => {
+        const src = typeof reader.result === 'string' ? reader.result : ''
+        if (src) editor.chain().focus().setImage({ src }).run()
+      }
+      reader.readAsDataURL(file)
+    },
+    [editor, t]
+  )
+
   /** 高亮（multicolor）— 无 Highlight 扩展时回退 textStyle backgroundColor。 */
   const applyHighlight = useCallback(
     (color: string | null) => {
@@ -511,6 +605,7 @@ export function ComposeFormatToolbar({ editor }: { editor: Editor }): React.Reac
         title={t('compose.editor.textColor')}
         icon={<Baseline size={13} strokeWidth={2} style={{ color: fmt.color || undefined }} />}
         colors={TEXT_COLORS}
+        neutrals={TEXT_NEUTRALS}
         current={fmt.color}
         clearTitle={t('compose.editor.colorDefault')}
         moreLabel={t('compose.editor.moreColor')}
@@ -525,6 +620,7 @@ export function ComposeFormatToolbar({ editor }: { editor: Editor }): React.Reac
           <Highlighter size={13} strokeWidth={2} style={{ color: fmt.highlight || undefined }} />
         }
         colors={HL_COLORS}
+        neutrals={HL_NEUTRALS}
         current={fmt.highlight}
         clearTitle={t('compose.editor.highlightNone')}
         moreLabel={t('compose.editor.moreColor')}
@@ -629,7 +725,8 @@ export function ComposeFormatToolbar({ editor }: { editor: Editor }): React.Reac
           }
         />
       )}
-      {/* 图片 URL 输入弹框 — 插入内联图（上传附件走附件条，不在此处）。 */}
+      {/* 图片 URL 输入弹框 — 插入内联图（上传附件走附件条，不在此处）;
+          extra 按钮 = 从本地文件选图 (data URL 内联, 与粘贴同下游)。 */}
       {imageOpen && (
         <InlineInputBox
           value={imageValue}
@@ -638,8 +735,34 @@ export function ComposeFormatToolbar({ editor }: { editor: Editor }): React.Reac
           onChange={setImageValue}
           onApply={applyImage}
           onClose={() => setImageOpen(false)}
+          extra={
+            <button
+              type="button"
+              title={t('compose.editor.imageFromFile')}
+              aria-label={t('compose.editor.imageFromFile')}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => imageFileRef.current?.click()}
+              className="folder-editor-btn"
+            >
+              <ImageUp size={13} strokeWidth={2} />
+            </button>
+          }
         />
       )}
+      {/* 从文件插图的载体 input — 常驻挂载 (弹框关掉后系统文件对话框的 onChange
+          仍要能送达), 选完清 value 让同一文件可重复选择。 */}
+      <input
+        ref={imageFileRef}
+        type="file"
+        accept="image/*"
+        hidden
+        aria-hidden="true"
+        tabIndex={-1}
+        onChange={(e) => {
+          insertImageFile(e.currentTarget.files?.[0])
+          e.currentTarget.value = ''
+        }}
+      />
     </div>
   )
 }

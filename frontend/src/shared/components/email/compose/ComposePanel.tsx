@@ -59,7 +59,7 @@ import { ComposeEditor, ComposeFormatToolbar } from './ComposeEditor'
 import { DeleteDraftDialog, SendConfirmDialog, UnsavedChangesDialog } from './ComposeDialogs'
 import { useComposeGuard, type ComposeGuardHandle } from './useComposeGuard'
 import { buildComposeExtensions } from './editor-extensions'
-import { AttachmentDropzone, AttachmentTray, kindFromName } from './AttachmentTray'
+import { AttachmentTray, kindFromName } from './AttachmentTray'
 
 /** Panel mode = UI ComposeMode + 草稿编辑态 + 写新邮件态。 */
 export type PanelMode = ComposeMode | 'draft-edit' | 'new'
@@ -1155,9 +1155,9 @@ export function ComposePanelInner({
       )}
 
       {/* D6/T3 — 附件区: 缩略图卡片 tray (staged 上传 / draft-edit 已有附件 /
-          forward hydrate 的原附件), 空态 dropzone (点击 = 打开文件选择; 拖拽仍走
-          整窗 useAttachmentDrop 等价逻辑, 不重复拦截同一次 drop)。 */}
-      {attachList.length > 0 ? (
+          forward hydrate 的原附件)。空态不渲染任何占位 (dogfood: 顶部已有附件入口
+          且整窗可拖拽落文件, 底部空态 dropzone 冗余已移除)。 */}
+      {attachList.length > 0 && (
         <div className="border-t border-ink-border/60 bg-ink-2/40 shrink-0">
           <AttachmentTray
             items={attachList.map((a) => ({
@@ -1170,10 +1170,6 @@ export function ComposePanelInner({
             onAdd={() => fileInputRef.current?.click()}
             onRemove={removeAttachment}
           />
-        </div>
-      ) : (
-        <div className="border-t border-ink-border/60 shrink-0 pt-2">
-          <AttachmentDropzone onAdd={() => fileInputRef.current?.click()} />
         </div>
       )}
 
