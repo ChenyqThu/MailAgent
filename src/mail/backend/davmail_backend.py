@@ -1463,12 +1463,30 @@ class DavMailBackend(IMailBackend):
                 # 快照推进 (uidnext)。对账期间新 APPEND 的 race 由下 cycle STATUS
                 # 差异自愈 (messages/uidnext 再变 → 再对账)。
                 self._set_drafts_uidnext(uidnext)
+            # 草稿线程 linkage (D1 Bug A): 把 _parse_batch_headers 已解析的
+            # in_reply_to_raw/references_raw 持久化进 draft_* 列 (经 new_watcher
+            # save_email 落库), 并按 in_reply_to 反查原邮件行回填
+            # draft_source_internal_id — 覆盖 webhook _create_draft_via_imap 等
+            # 一切不走 _mirror_draft_locally 的草稿来源, 统一自愈。RFC 2047 decode
+            # 同 thread_id 口径 (干净 ASCII 是 no-op), 防 encoded-word 链存进列。
+            # ⚠️ 必须先于下方同 Message-ID 分类 (codex finding 2): 编辑草稿走
+            # _update_draft_row_uid in-place 更新不进 save_email, linkage 后解析
+            # 会被整个丢掉 (NULL 永不愈合 / 头变化则 stale)。
+            for item in to_add:
+                irt = _decode_mime_header(item.get("in_reply_to_raw")).strip().strip("<>")
+                if not irt:
+                    continue
+                item["draft_in_reply_to"] = irt
+                refs = " ".join(_decode_mime_header(item.get("references_raw")).split())
+                item["draft_references"] = refs or None
+                item["draft_source_internal_id"] = self._lookup_internal_id_by_message_id(irt)
             # 同 Message-ID 替换 (OWA/Outlook 编辑草稿 = 新 UID 同 Message-ID):
             # 不能走 to_add+to_delete — save_email 的 cross-backend merge guard
             # 会把 to_add 合并进旧行不建新行, 随后 to_delete 删旧行 → 刚 merge 的
             # 行被删 (草稿闪没 + internal_id 漂移); 旧行在 grace 内则保留 synced
             # + 旧正文永久陈旧 (codex review HIGH)。拆成 to_update: 直接更新旧行
-            # UID/UIDVALIDITY + 置 pending 让 watcher 重 fetch 新正文。
+            # UID/UIDVALIDITY + 置 pending 让 watcher 重 fetch 新正文; linkage
+            # (thread_id + draft_* 三列, 上方已解析进 item) 一并原子刷新。
             if to_add:
                 mid_to_iid = self._draft_message_id_map(label)
                 if mid_to_iid:
@@ -1488,20 +1506,6 @@ class DavMailBackend(IMailBackend):
                         )
                         to_add = kept_add
                         to_delete = [i for i in to_delete if i in delete_set]
-            # 草稿线程 linkage (D1 Bug A): 把 _parse_batch_headers 已解析的
-            # in_reply_to_raw/references_raw 持久化进 draft_* 列 (经 new_watcher
-            # save_email 落库), 并按 in_reply_to 反查原邮件行回填
-            # draft_source_internal_id — 覆盖 webhook _create_draft_via_imap 等
-            # 一切不走 _mirror_draft_locally 的草稿来源, 统一自愈。RFC 2047 decode
-            # 同 thread_id 口径 (干净 ASCII 是 no-op), 防 encoded-word 链存进列。
-            for item in to_add:
-                irt = _decode_mime_header(item.get("in_reply_to_raw")).strip().strip("<>")
-                if not irt:
-                    continue
-                item["draft_in_reply_to"] = irt
-                refs = " ".join(_decode_mime_header(item.get("references_raw")).split())
-                item["draft_references"] = refs or None
-                item["draft_source_internal_id"] = self._lookup_internal_id_by_message_id(irt)
             # Grace window: compose_draft 即时落库的新行, davmail 端 folder 缓存
             # 可能尚未反映 (SELECT 后 SEARCH 仍 stale 数分钟) → 远端"看不到"该 UID
             # 会被误判已删除。创建 < 120s 的行不删, 留给后续 cycle 确认
@@ -1573,7 +1577,13 @@ class DavMailBackend(IMailBackend):
         return None
 
     def _update_draft_row_uid(self, internal_id: int, item: dict) -> None:
-        """草稿编辑 in-place 更新: 新 UID/UIDVALIDITY/subject + 置 pending 重 fetch 正文。"""
+        """草稿编辑 in-place 更新: 新 UID/UIDVALIDITY/subject + 置 pending 重 fetch 正文。
+
+        codex finding 2: thread_id + draft_* 三列随 UID 一并原子刷新 —— 值取自新
+        MIME 头 (reconcile 已解析进 item; 缺失键 = 新头没有该值 → **显式清 NULL**,
+        不留 stale)。语义 = 与"删旧行 + save_email 新行"等价的 linkage 结果, 只是
+        保住 internal_id 不漂移。
+        """
         try:
             conn = sqlite3.connect(str(self.sync_store.db_path), timeout=10.0)
             try:
@@ -1581,6 +1591,8 @@ class DavMailBackend(IMailBackend):
                     "UPDATE email_metadata SET imap_uid = ?, "
                     "imap_uidvalidity = COALESCE(?, imap_uidvalidity), "
                     "subject = COALESCE(NULLIF(?, ''), subject), "
+                    "thread_id = ?, draft_in_reply_to = ?, "
+                    "draft_references = ?, draft_source_internal_id = ?, "
                     "sync_status = 'pending', sync_error = NULL, "
                     "next_retry_at = NULL, updated_at = ? "
                     "WHERE internal_id = ?",
@@ -1588,6 +1600,10 @@ class DavMailBackend(IMailBackend):
                         item.get("imap_uid"),
                         item.get("imap_uidvalidity"),
                         item.get("subject") or "",
+                        item.get("thread_id"),
+                        item.get("draft_in_reply_to"),
+                        item.get("draft_references"),
+                        item.get("draft_source_internal_id"),
                         time.time(),
                         internal_id,
                     ),

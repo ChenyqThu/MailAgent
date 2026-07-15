@@ -236,6 +236,85 @@ def test_edit_same_message_id_updates_in_place(patch_session):
     assert item["imap_uid"] == 102
 
 
+def test_edit_same_message_id_passes_linkage_to_update(patch_session):
+    """codex finding 2: 同 Message-ID 编辑 (换 UID) 时 linkage 必须在分类前解析并
+    随 UID 更新一并传入 — 修复前 item 在进 linkage 循环前就被摘出 to_add, 新解析
+    的头被整个丢弃 (NULL 永不愈合 / 头变化则 stale)。"""
+    fake = FakeImap(7, [102], {102: ("m1", "d1-edited")})
+    fake.extra_headers[102] = (
+        "In-Reply-To: <orig@x>\r\n"
+        "References: <head@x> <orig@x>\r\n"
+    )
+    kv = {"folder_uidvalidity:Drafts": "7", "drafts_uidnext": "102"}
+    b = _backend(fake, local={101: 11}, kv=kv)
+    b._draft_message_id_map = MagicMock(return_value={"m1": 11})
+    b.sync_store.get_by_message_id = MagicMock(
+        return_value={"internal_id": 42, "message_id": "orig@x"}
+    )
+    patch_session(b)
+    to_add, to_delete = b.reconcile_drafts()
+    assert to_add == [] and to_delete == []  # 既有 in-place 语义不变
+    b._update_draft_row_uid.assert_called_once()
+    old_iid, item = b._update_draft_row_uid.call_args[0]
+    assert old_iid == 11
+    assert item["imap_uid"] == 102
+    # 新解析的 linkage 一并传入 (修复前这些键不存在)
+    assert item["draft_in_reply_to"] == "orig@x"
+    assert item["draft_references"] == "<head@x> <orig@x>"
+    assert item["draft_source_internal_id"] == 42
+    assert item["thread_id"] == "head@x"
+
+
+def test_update_draft_row_uid_refreshes_linkage(tmp_path):
+    """codex finding 2 落库面: _update_draft_row_uid 原子刷新 thread_id + draft_*
+    三列 (真 SyncStore, 头变化 → 旧值被新值覆盖)。"""
+    store = SyncStore(str(tmp_path / "t.db"))
+    store.save_email({
+        "internal_id": 1_000_000_011, "message_id": "m1", "subject": "d1",
+        "sender": "me@x.com", "mailbox": "草稿箱", "sync_status": "synced",
+        "backend_origin": "davmail", "imap_uid": 101,
+        "thread_id": "old-head@x", "draft_in_reply_to": "old@x",
+        "draft_references": "<old-head@x> <old@x>", "draft_source_internal_id": 5,
+    })
+    b = DavMailBackend.__new__(DavMailBackend)
+    b.sync_store = store
+    b._update_draft_row_uid(1_000_000_011, {
+        "imap_uid": 102, "imap_uidvalidity": 7, "subject": "d1-edited",
+        "thread_id": "head@x", "draft_in_reply_to": "orig@x",
+        "draft_references": "<head@x> <orig@x>", "draft_source_internal_id": 42,
+    })
+    row = store.get(1_000_000_011)
+    assert row["imap_uid"] == 102
+    assert row["sync_status"] == "pending"          # 既有语义: 重 fetch 正文
+    assert row["thread_id"] == "head@x"             # 头变化 → 刷新, 不留 stale
+    assert row["draft_in_reply_to"] == "orig@x"
+    assert row["draft_references"] == "<head@x> <orig@x>"
+    assert row["draft_source_internal_id"] == 42
+
+
+def test_update_draft_row_uid_clears_stale_linkage(tmp_path):
+    """codex finding 2 显式清 NULL: 编辑后的新头没有 threading (item 缺 draft_* 键)
+    → 三列 + thread_id 清空, 不留 stale linkage。"""
+    store = SyncStore(str(tmp_path / "t.db"))
+    store.save_email({
+        "internal_id": 1_000_000_012, "message_id": "m2", "subject": "d2",
+        "sender": "me@x.com", "mailbox": "草稿箱", "sync_status": "synced",
+        "backend_origin": "davmail", "imap_uid": 103,
+        "thread_id": "head@x", "draft_in_reply_to": "orig@x",
+        "draft_references": "<head@x> <orig@x>", "draft_source_internal_id": 42,
+    })
+    b = DavMailBackend.__new__(DavMailBackend)
+    b.sync_store = store
+    b._update_draft_row_uid(1_000_000_012, {
+        "imap_uid": 104, "subject": "d2-standalone", "thread_id": None,
+    })
+    row = store.get(1_000_000_012)
+    assert row["thread_id"] is None
+    assert row["draft_in_reply_to"] is None
+    assert row["draft_references"] is None
+    assert row["draft_source_internal_id"] is None
+
+
 def test_reconcile_persists_draft_linkage(patch_session):
     """D1 Bug A: to_add 带 draft_in_reply_to/draft_references (解析自 raw 头) +
     据 in_reply_to 反查原行回填 draft_source_internal_id。"""

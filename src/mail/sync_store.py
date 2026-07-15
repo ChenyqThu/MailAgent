@@ -2677,6 +2677,47 @@ class SyncStore:
                 conn.rollback()
                 return False
 
+    def update_draft_linkage(
+        self,
+        internal_id: int,
+        *,
+        draft_in_reply_to: Optional[str],
+        draft_references: Optional[str],
+        draft_source_internal_id: Optional[int],
+        thread_id: Optional[str] = None,
+    ) -> bool:
+        """草稿行 linkage 懒自愈回写 (compose 优化 epic, codex finding 1)。
+
+        v36 迁移前的存量草稿行 draft_* 三列全 NULL 且 reconcile 永不回填 —— 消费端
+        (MailWriteService._heal_draft_linkage) 从 davmail 取草稿 MIME 头解析出
+        linkage 后调本方法落列。draft_* 三列按参数直写; ``thread_id`` 走 COALESCE
+        只填空 (不覆写既有线程归属)。
+
+        Returns: True=更新成功; False=SQL 错误 (调用方仅 warning, 自愈是 best-effort)。
+        """
+        with self._connection() as conn:
+            try:
+                conn.execute(
+                    "UPDATE email_metadata SET draft_in_reply_to = ?, "
+                    "draft_references = ?, draft_source_internal_id = ?, "
+                    "thread_id = COALESCE(thread_id, ?), updated_at = ? "
+                    "WHERE internal_id = ?",
+                    (
+                        draft_in_reply_to,
+                        draft_references,
+                        draft_source_internal_id,
+                        thread_id,
+                        time.time(),
+                        internal_id,
+                    ),
+                )
+                conn.commit()
+                return True
+            except sqlite3.Error as e:
+                logger.error(f"Failed to update draft linkage for {internal_id}: {e}")
+                conn.rollback()
+                return False
+
     def toggle_pin(self, internal_id: int) -> Optional[bool]:
         """翻转置顶状态。
 
