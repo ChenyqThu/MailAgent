@@ -5,7 +5,7 @@
 // 驱动，不 mock 编辑器内核；mention 数据源注入 stub（不打真实 IPC/HTTP）。
 
 import { afterEach, describe, expect, test, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { useEffect } from 'react'
 import { useEditor, type Editor, type Extensions } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
@@ -106,6 +106,15 @@ function legacyPanelExtensions(): Extensions {
     BackgroundColor,
     Image.configure({ inline: true, allowBase64: true })
   ]
+}
+
+/** 手动 resolve 的 deferred promise — mention 异步守卫的生命周期测试用。 */
+function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
+  let resolve!: (v: T) => void
+  const promise = new Promise<T>((r) => {
+    resolve = r
+  })
+  return { promise, resolve }
 }
 
 afterEach(() => {
@@ -360,6 +369,50 @@ describe('@mention', () => {
       expect(key('Enter')).toBe(true)
     })
     expect(command).toHaveBeenCalledWith({ id: 'bob@acme.test', label: 'Bob Li' })
+  })
+
+  test('items()：慢的旧请求后到 → 代际丢弃，不覆盖新查询的结果', async () => {
+    const d1 = deferred<ContactSuggestion[]>()
+    const d2 = deferred<ContactSuggestion[]>()
+    const queue = [d1.promise, d2.promise]
+    const fetchContacts = vi.fn((_q: string) => queue.shift()!)
+    const sugg = createMentionSuggestion({ fetchContacts })
+    const p1 = sugg.items!({ query: 'ali', editor: null as never })
+    const p2 = sugg.items!({ query: 'bob', editor: null as never })
+    d2.resolve([CONTACTS[1]]) // 新查询（bob）先回
+    await expect(p2).resolves.toEqual([CONTACTS[1]])
+    d1.resolve([CONTACTS[0]]) // 旧查询（ali）的慢包后到
+    await expect(p1).resolves.toEqual([CONTACTS[1]]) // 旧包被丢弃，返回已知最新结果
+  })
+
+  test('@ 触发（控制组）：pending 回包后菜单正常渲染到 body', async () => {
+    const d = deferred<ContactSuggestion[]>()
+    const editor = renderEditor({ options: { fetchContacts: () => d.promise } })
+    await act(async () => {
+      editor.chain().focus('end').insertContent(' @').run()
+    })
+    d.resolve(CONTACTS)
+    await waitFor(() => expect(screen.getByText('Alice Chen')).toBeTruthy())
+    act(() => {
+      editor.destroy() // 收场：卸掉挂在 body 上的浮层
+    })
+  })
+
+  test('editor destroy 后 pending 回包 → 不渲染菜单、不向 body 挂浮层', async () => {
+    const d = deferred<ContactSuggestion[]>()
+    const editor = renderEditor({ options: { fetchContacts: () => d.promise } })
+    await act(async () => {
+      editor.chain().focus('end').insertContent(' @').run()
+    })
+    act(() => {
+      editor.destroy() // composer 关闭；suggestion 的 items() 仍在途
+    })
+    await act(async () => {
+      d.resolve(CONTACTS)
+      await new Promise((r) => setTimeout(r, 0))
+    })
+    expect(screen.queryByText('Alice Chen')).toBeNull()
+    expect(document.body.querySelector('.react-renderer')).toBeNull()
   })
 
   test('mention 节点插入：label=姓名 id=email，序列化为 @姓名', () => {

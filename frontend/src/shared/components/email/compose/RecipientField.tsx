@@ -57,14 +57,38 @@ interface Props {
 const SUGGEST_DEBOUNCE_MS = 130
 const SUGGEST_LIMIT = 8
 
-// Extracts every address from a blob (paste / comma-typed multi). Kept loose so
-// "Name <a@x.com>, b@y.com" yields both; angle brackets stripped on add.
-const EMAIL_RE = /[^\s,;<>]+@[^\s,;<>]+\.[^\s,;<>]+/g
-// A single token that already looks like a complete address (raw-add gate).
+// Address-looking token finder (paste / comma-typed multi). Parens / quotes /
+// square brackets are excluded from tokens so "Alice (alice@example.com)"
+// yields the bare address; apostrophes stay in (o'brien@x.com is legal) and
+// get edge-trimmed by canonicalizeEmail.
+const EMAIL_RE = /[^\s,;<>()"[\]]+@[^\s,;<>()"[\]]+\.[^\s,;<>()"[\]]+/g
+// A cleaned token that looks like a complete address.
 const SINGLE_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+// Stray wrapping punctuation around a pasted/typed token (quotes, brackets,
+// trailing prose dots/commas).
+const EDGE_TRIM_RE = /^[\s"'<>()[\]{},;:.]+|[\s"'<>()[\]{},;:.]+$/g
+// Junk that must not survive inside an address (RFC quoted-local exotica is
+// out of scope for a compose chip field).
+const INNER_JUNK_RE = /["<>()[\]{}]/
+
+/**
+ * 单一 canonical 入口（codex review Finding 6）：规整前后引号/括号/尖括号/标点
+ * → 形状校验；返回 null = 拒收。粘贴 / 输入提交 / blur 提交 / chip 编辑四条
+ * 提交路全走它（去重统一在 addTokens / commitChipEdit 按 lower-case 比对）。
+ */
+function canonicalizeEmail(raw: string): string | null {
+  const stripped = raw.replace(EDGE_TRIM_RE, '')
+  if (!stripped || INNER_JUNK_RE.test(stripped)) return null
+  return SINGLE_EMAIL_RE.test(stripped) ? stripped : null
+}
 
 function extractEmails(raw: string): string[] {
-  return (raw.match(EMAIL_RE) ?? []).map((s) => s.replace(/[<>]/g, '').trim()).filter(Boolean)
+  const out: string[] = []
+  for (const token of raw.match(EMAIL_RE) ?? []) {
+    const email = canonicalizeEmail(token)
+    if (email) out.push(email)
+  }
+  return out
 }
 
 function localPart(addr: string): string {
@@ -209,13 +233,14 @@ export function RecipientField({
   }, [suggestions, valuesLowerSet])
 
   const trimmed = input.trim()
-  // The raw-add row ("添加 xxx") shows when the input is a complete address not
-  // already suggested or picked or blocked.
+  // The raw-add row ("添加 xxx") shows when the canonicalized input is a complete
+  // address not already suggested or picked or blocked.
+  const canonicalInput = canonicalizeEmail(trimmed)
   const rawAddVisible =
-    SINGLE_EMAIL_RE.test(trimmed) &&
-    !suggestions.some((c) => c.email.toLowerCase() === trimmed.toLowerCase()) &&
-    !valuesLowerSet.has(trimmed.toLowerCase()) &&
-    !blockedSet.has(trimmed.toLowerCase())
+    canonicalInput !== null &&
+    !suggestions.some((c) => c.email.toLowerCase() === canonicalInput.toLowerCase()) &&
+    !valuesLowerSet.has(canonicalInput.toLowerCase()) &&
+    !blockedSet.has(canonicalInput.toLowerCase())
 
   const optionCount = suggestions.length + (rawAddVisible ? 1 : 0)
   const dropdownOpen = focused && !dismissed && optionCount > 0
@@ -266,16 +291,42 @@ export function RecipientField({
   )
 
   const pickRawAdd = useCallback(() => {
-    addTokens([trimmed])
+    if (!canonicalInput) return
+    addTokens([canonicalInput])
     setInput('')
     setDebounced('')
     setHighlightedIndex(0)
     inputRef.current?.focus()
-  }, [trimmed, addTokens])
+  }, [canonicalInput, addTokens])
 
   const removeAt = useCallback(
     (idx: number) => onChange(values.filter((_, i) => i !== idx)),
     [values, onChange]
+  )
+
+  // 行内 chip 编辑提交（blur / Enter）：与其余三条提交路同走 canonicalizeEmail，
+  // 非法输入保留原 chip；编辑成已存在/被屏蔽地址 → 合并去重（移除本 chip）。
+  const commitChipEdit = useCallback(
+    (idx: number, raw: string) => {
+      setEditingIdx(null)
+      const v = raw.trim()
+      if (!v) {
+        onChange(values.filter((_, j) => j !== idx))
+        return
+      }
+      const canonical = canonicalizeEmail(v)
+      if (!canonical) return
+      const lower = canonical.toLowerCase()
+      if (values.some((x, j) => j !== idx && x.toLowerCase() === lower) || blockedSet.has(lower)) {
+        onChange(values.filter((_, j) => j !== idx))
+        return
+      }
+      if (values[idx] === canonical) return
+      const next = [...values]
+      next[idx] = canonical
+      onChange(next)
+    },
+    [values, onChange, blockedSet]
   )
 
   const openDetailAt = useCallback((idx: number) => {
@@ -458,14 +509,7 @@ export function RecipientField({
                   defaultValue={addr}
                   aria-label={`edit ${addr}`}
                   className="recipient-chip !bg-ink-3 min-w-[160px] outline-none"
-                  onBlur={(e) => {
-                    const v = e.target.value.trim()
-                    const next = [...values]
-                    if (v) next[i] = v
-                    else next.splice(i, 1)
-                    onChange(next)
-                    setEditingIdx(null)
-                  }}
+                  onBlur={(e) => commitChipEdit(i, e.target.value)}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') e.currentTarget.blur()
                     if (e.key === 'Escape') {
@@ -631,7 +675,7 @@ export function RecipientField({
                     <Plus size={15} />
                   </span>
                   <span className="flex flex-col min-w-0">
-                    <span className="text-meta text-ink-fg truncate">添加 “{trimmed}”</span>
+                    <span className="text-meta text-ink-fg truncate">添加 “{canonicalInput}”</span>
                     <span className="text-micro font-mono text-ink-fg-3 truncate">
                       使用这个邮箱地址
                     </span>

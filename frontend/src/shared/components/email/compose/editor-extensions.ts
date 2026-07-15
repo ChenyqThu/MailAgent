@@ -81,6 +81,11 @@ export function createSuggestionRender<I, S, P extends SuggestRenderBaseProps<I,
     }
 
     const create = (props: SuggestionProps<I, S>): void => {
+      // Suggestion 插件的 update 是 async 的（await items()）：composer 关闭后
+      // pending 请求回来仍会走到 onStart/onUpdate —— 已销毁的 editor 上不再挂
+      // 浮层（ReactRenderer 走 editor.contentComponent portal，销毁后只会往
+      // body 泄一个永远没人收的空壳 div）。
+      if (props.editor.isDestroyed) return
       renderer = new ReactRenderer<SuggestMenuHandle, Record<string, unknown>>(
         Component as unknown as React.FunctionComponent<Record<string, unknown>>,
         {
@@ -105,6 +110,10 @@ export function createSuggestionRender<I, S, P extends SuggestRenderBaseProps<I,
     return {
       onStart: create,
       onUpdate: (props: SuggestionProps<I, S>): void => {
+        if (props.editor.isDestroyed) {
+          destroy()
+          return
+        }
         if (!renderer) {
           create(props)
           return
@@ -260,15 +269,24 @@ export function createMentionSuggestion(
     options.fetchContacts ??
     ((query: string): Promise<ContactSuggestion[]> =>
       makeMailApi().email.contactSuggest(query, MENTION_CONTACT_LIMIT))
+  // 查询代际守卫：suggestion 插件的 update 是 async 的，两次 update 可交错 ——
+  // 慢的旧请求（@ali）后到会把旧结果交给 onUpdate 覆盖新菜单（@bob），Enter 选错人。
+  // 每次调用领取递增代际；await 回来若已有更新代际发出，丢弃自己的结果、返回当前
+  // 已知的最新结果（最终渲染由最新在途请求负责），旧包永远覆盖不了新菜单。
+  let generation = 0
+  let latestItems: ContactSuggestion[] = []
   return {
     char: '@',
     items: async ({ query }): Promise<ContactSuggestion[]> => {
+      const gen = ++generation
       // 数据源失败（离线/后端异常）不能炸编辑器 → 静默空列表（菜单隐藏）。
       try {
-        return (await fetchContacts(query)).slice(0, MENTION_CONTACT_LIMIT)
+        const result = (await fetchContacts(query)).slice(0, MENTION_CONTACT_LIMIT)
+        if (gen === generation) latestItems = result
       } catch {
-        return []
+        if (gen === generation) latestItems = []
       }
+      return latestItems
     },
     render: createSuggestionRender(MentionMenu, { onPick: options.onMentionPick })
   }

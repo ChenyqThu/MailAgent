@@ -91,6 +91,68 @@ describe('RecipientField — paste split', () => {
   })
 })
 
+describe('RecipientField — canonical address parsing (codex Finding 6)', () => {
+  test('pasting a display-name parens form yields the bare address (no stray parens)', () => {
+    const { onChange, input } = setup()
+    fireEvent.focus(input)
+    fireEvent.paste(input, {
+      clipboardData: { getData: () => 'Alice (alice@example.com)' }
+    })
+    expect(onChange).toHaveBeenCalledWith(['alice@example.com'])
+  })
+
+  test('pasting quoted and Name <a@b.c> forms yields bare addresses', () => {
+    const { onChange, input } = setup()
+    fireEvent.focus(input)
+    fireEvent.paste(input, {
+      clipboardData: { getData: () => `"Bob Li" <bob@y.com>; 'carol@z.org'` }
+    })
+    expect(onChange).toHaveBeenCalledWith(['bob@y.com', 'carol@z.org'])
+  })
+
+  test('typing Name <a@b.c> and committing with Enter yields the bare address', () => {
+    const { onChange, input } = setup()
+    fireEvent.focus(input)
+    fireEvent.change(input, { target: { value: 'Dave <dave@x.com>' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(onChange).toHaveBeenCalledWith(['dave@x.com'])
+  })
+
+  test('chip edit into an already-present address dedups (chip removed, case-insensitive)', async () => {
+    const { onChange } = setup({ values: ['a@x.com', 'b@x.com'] })
+    fireEvent.click(screen.getByTitle('b@x.com'))
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.click(within(dialog).getByText('编辑'))
+    const editInput = (await screen.findByLabelText('edit b@x.com')) as HTMLInputElement
+    fireEvent.change(editInput, { target: { value: 'A@X.com' } })
+    fireEvent.blur(editInput)
+    expect(onChange).toHaveBeenCalledWith(['a@x.com'])
+  })
+
+  test('chip edit into an invalid value keeps the original chip (no garbage commit)', async () => {
+    const { onChange } = setup({ values: ['a@x.com'] })
+    fireEvent.click(screen.getByTitle('a@x.com'))
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.click(within(dialog).getByText('编辑'))
+    const editInput = (await screen.findByLabelText('edit a@x.com')) as HTMLInputElement
+    fireEvent.change(editInput, { target: { value: 'not-an-email' } })
+    fireEvent.blur(editInput)
+    expect(onChange).not.toHaveBeenCalled()
+    expect(screen.getByTitle('a@x.com')).toBeTruthy()
+  })
+
+  test('chip edit trims wrapping punctuation before committing', async () => {
+    const { onChange } = setup({ values: ['a@x.com'] })
+    fireEvent.click(screen.getByTitle('a@x.com'))
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.click(within(dialog).getByText('编辑'))
+    const editInput = (await screen.findByLabelText('edit a@x.com')) as HTMLInputElement
+    fireEvent.change(editInput, { target: { value: '(alan@x.com)' } })
+    fireEvent.blur(editInput)
+    expect(onChange).toHaveBeenCalledWith(['alan@x.com'])
+  })
+})
+
 describe('RecipientField — internal / external', () => {
   test('an out-of-domain chip shows the external marker; an internal one does not', () => {
     // external

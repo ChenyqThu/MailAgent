@@ -27,9 +27,11 @@ export interface MentionSelectAttrs {
   label: string
 }
 
+// 阴影由 .glass-pop 自带的 --pop-shadow 提供（index.css 浮层材质），不叠 ad-hoc shadow
+// （与 RecipientField 下拉同一配方，避免与材质体系漂移）。
 const MENU_SURFACE = cn(
   'rounded-[var(--r-ctl)] glass-pop border border-ink-border-soft',
-  'shadow-[0_8px_24px_rgba(0,0,0,0.35)] py-1 overflow-y-auto scrollbar-thin'
+  'py-1 overflow-y-auto scrollbar-thin'
 )
 
 const ITEM_ROW = cn(
