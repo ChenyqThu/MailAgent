@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MailAgent · 发件重做</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="theme-v2.css" />
+<link rel="stylesheet" href="compose.css" />
+<template id="__bundler_thumbnail"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" fill="#345FB2"/><g fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><path d="M30 70 L70 30"/><path d="M70 30 L58 74 L48 52 L30 42 Z" fill="#fff" stroke="#fff"/></g></svg></template>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<!-- TipTap engine (ESM) → exposed on window.TT -->
+<script type="module">
+const V = '2.27.2';
+// Share ONE @tiptap/core + @tiptap/pm across every extension, or ProseMirror
+// plugin keys collide ("Adding different instances of a keyed plugin").
+const cdn = (p) => `https://esm.sh/${p}@${V}?deps=@tiptap/core@${V},@tiptap/pm@${V}`;
+try {
+  const { Editor, Extension } = await import(cdn('@tiptap/core'));
+  const StarterKit = (await import(cdn('@tiptap/starter-kit'))).default;
+  const Underline = (await import(cdn('@tiptap/extension-underline'))).default;
+  const Link = (await import(cdn('@tiptap/extension-link'))).default;
+  const Image = (await import(cdn('@tiptap/extension-image'))).default;
+  const TextStyle = (await import(cdn('@tiptap/extension-text-style'))).default;
+  const Color = (await import(cdn('@tiptap/extension-color'))).default;
+  const Highlight = (await import(cdn('@tiptap/extension-highlight'))).default;
+  const Placeholder = (await import(cdn('@tiptap/extension-placeholder'))).default;
+  const Mention = (await import(cdn('@tiptap/extension-mention'))).default;
+  const Suggestion = (await import(cdn('@tiptap/suggestion'))).default;
+
+  // custom font-size (rides on textStyle)
+  const FontSize = Extension.create({
+    name: 'fontSize',
+    addOptions() { return { types: ['textStyle'] }; },
+    addGlobalAttributes() {
+      return [{ types: this.options.types, attributes: { fontSize: {
+        default: null,
+        parseHTML: (el) => el.style.fontSize || null,
+        renderHTML: (attrs) => (attrs.fontSize ? { style: `font-size:${attrs.fontSize}` } : {}),
+      } } }];
+    },
+    addCommands() {
+      return {
+        setFontSize: (size) => ({ chain }) => chain().setMark('textStyle', { fontSize: size }).run(),
+        unsetFontSize: () => ({ chain }) => chain().setMark('textStyle', { fontSize: null }).removeEmptyTextStyle().run(),
+      };
+    },
+  });
+
+  // suggestion bridge → React (installed by editor.jsx)
+  window.__ttSuggest = window.__ttSuggest || {};
+  const makeRender = (type) => () => ({
+    onStart: (p) => window.__ttSuggest[type]?.start?.(p),
+    onUpdate: (p) => window.__ttSuggest[type]?.update?.(p),
+    onKeyDown: (p) => window.__ttSuggest[type]?.keydown?.(p) || false,
+    onExit: (p) => window.__ttSuggest[type]?.exit?.(p),
+  });
+
+  // slash commands
+  const SLASH_ITEMS = [
+    { id: 'h1', title: '标题 1', subtitle: '大号章节标题', icon: 'heading', kw: ['h1', 'title', 'biaoti'], run: ({ editor, range }) => editor.chain().focus().deleteRange(range).setNode('heading', { level: 1 }).run() },
+    { id: 'h2', title: '标题 2', subtitle: '中号小标题', icon: 'heading', kw: ['h2'], run: ({ editor, range }) => editor.chain().focus().deleteRange(range).setNode('heading', { level: 2 }).run() },
+    { id: 'h3', title: '标题 3', subtitle: '小标题', icon: 'heading', kw: ['h3'], run: ({ editor, range }) => editor.chain().focus().deleteRange(range).setNode('heading', { level: 3 }).run() },
+    { id: 'ul', title: '无序列表', subtitle: '圆点项目符号', icon: 'listUl', kw: ['ul', 'bullet', 'list'], run: ({ editor, range }) => editor.chain().focus().deleteRange(range).toggleBulletList().run() },
+    { id: 'ol', title: '有序列表', subtitle: '编号列表', icon: 'listOl', kw: ['ol', 'number'], run: ({ editor, range }) => editor.chain().focus().deleteRange(range).toggleOrderedList().run() },
+    { id: 'quote', title: '引用', subtitle: '引用块 blockquote', icon: 'quote', kw: ['quote', 'yinyong'], run: ({ editor, range }) => editor.chain().focus().deleteRange(range).toggleBlockquote().run() },
+    { id: 'code', title: '代码块', subtitle: '等宽代码', icon: 'codeBlock', kw: ['code', 'daima'], run: ({ editor, range }) => editor.chain().focus().deleteRange(range).toggleCodeBlock().run() },
+    { id: 'hr', title: '分割线', subtitle: '水平分隔线', icon: 'divider', kw: ['hr', 'divider', 'fenge'], run: ({ editor, range }) => editor.chain().focus().deleteRange(range).setHorizontalRule().run() },
+    { id: 'img', title: '图片', subtitle: '插入图片 URL', icon: 'image', kw: ['image', 'img', 'tupian'], run: ({ editor, range }) => { editor.chain().focus().deleteRange(range).run(); window.__composeInsertImage?.(editor); } },
+  ];
+  const SlashCommand = Extension.create({
+    name: 'slashCommand',
+    addProseMirrorPlugins() {
+      return [Suggestion({
+        editor: this.editor,
+        char: '/',
+        allowSpaces: false,
+        startOfLine: false,
+        command: ({ editor, range, props }) => props.run({ editor, range }),
+        items: ({ query }) => {
+          const q = query.toLowerCase();
+          return SLASH_ITEMS.filter((it) => !q || it.title.toLowerCase().includes(q) || it.kw.some((k) => k.includes(q)));
+        },
+        render: makeRender('slash'),
+      })];
+    },
+  });
+
+  const buildExtensions = (placeholder) => [
+    StarterKit.configure({ heading: { levels: [1, 2, 3] } }),
+    Underline,
+    Link.configure({ openOnClick: false, autolink: true, HTMLAttributes: { rel: 'noopener', target: '_blank' } }),
+    Image.configure({ inline: false, HTMLAttributes: { class: 'rt-img' } }),
+    TextStyle, Color, FontSize,
+    Highlight.configure({ multicolor: true }),
+    Placeholder.configure({ placeholder, showOnlyWhenEditable: true }),
+    Mention.configure({
+      HTMLAttributes: { class: 'rt-mention' },
+      renderLabel: ({ node }) => `@${node.attrs.label ?? node.attrs.id}`,
+      suggestion: {
+        char: '@',
+        items: ({ query }) => {
+          const pool = window.MENTION_POOL || [];
+          const q = query.toLowerCase();
+          return pool.filter((c) => !q || (c.name || '').toLowerCase().includes(q) || c.email.toLowerCase().includes(q)).slice(0, 6);
+        },
+        render: makeRender('mention'),
+      },
+    }),
+    SlashCommand,
+  ];
+
+  window.TT = { Editor, buildExtensions };
+  window.__ttReady = true;
+  window.dispatchEvent(new Event('tt-ready'));
+} catch (err) {
+  window.__ttError = err;
+  const el = document.getElementById('root');
+  if (el) el.innerHTML = '<div style="padding:40px;font-family:monospace;color:#c33">TipTap 加载失败：' + err.message + '</div>';
+  console.error(err);
+}
+</script>
+
+<script type="text/babel" src="tweaks-panel.jsx"></script>
+<script type="text/babel" src="data.jsx"></script>
+<script type="text/babel" src="icons.jsx"></script>
+<script type="text/babel" src="recipients.jsx"></script>
+<script type="text/babel" src="attachments.jsx"></script>
+<script type="text/babel" src="editor.jsx"></script>
+<script type="text/babel" src="fauxapp.jsx"></script>
+<script type="text/babel" src="app.jsx"></script>
+<script type="text/babel">
+window.TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "mode": "fullwindow",
+  "editorStyle": "classic",
+  "theme": "light",
+  "accent": "cobalt",
+  "surface": "frosted"
+}/*EDITMODE-END*/;
+ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(App));
+</script>
+</body>
+</html>
