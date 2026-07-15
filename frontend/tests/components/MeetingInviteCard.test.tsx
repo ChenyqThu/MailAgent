@@ -19,10 +19,11 @@ import type {
   EmailCalendarLink
 } from '../../src/shared/api/types'
 
-const { emailCalendarLink, eventsList, eventRsvp, navigateSpy } = vi.hoisted(() => ({
+const { emailCalendarLink, eventsList, eventRsvp, settingsGet, navigateSpy } = vi.hoisted(() => ({
   emailCalendarLink: vi.fn(),
   eventsList: vi.fn(),
   eventRsvp: vi.fn(),
+  settingsGet: vi.fn(),
   navigateSpy: vi.fn()
 }))
 
@@ -48,6 +49,7 @@ vi.mock('@tanstack/react-router', () => ({
 
 vi.mock('@shared/hooks/useMailApi', () => ({
   useMailApi: () => ({
+    settings: { get: settingsGet },
     calendar: { emailCalendarLink, eventsList, eventRsvp }
   })
 }))
@@ -152,6 +154,7 @@ afterEach(() => {
   emailCalendarLink.mockReset()
   eventsList.mockReset().mockResolvedValue([])
   eventRsvp.mockReset().mockResolvedValue({})
+  settingsGet.mockReset().mockResolvedValue({ userEmail: 'me@example.test' })
   navigateSpy.mockReset()
 })
 
@@ -236,5 +239,26 @@ describe('MeetingInviteCard (阶段 2.2)', () => {
     eventsList.mockResolvedValue([])
     renderCard()
     expect(await screen.findByText('无冲突')).toBeTruthy()
+  })
+
+  // task 07-15 问题2 — RSVP 门控 (canRsvpFor 单源): 空 organizer / organizer=
+  // 自己 → 整个三键区不渲染 (自建事件经 Exchange 回读 organizer 为空, 点击必
+  // 失败)。organizer=他人的行为不变红线由上方「REQUEST 全要素」用例覆盖。
+  test('organizer 为空 → RSVP 三键整体不渲染, 信息区/在日历中查看保留', async () => {
+    emailCalendarLink.mockResolvedValue(makeLink({ event: makeEvent({ organizer: '' }) }))
+    const { container } = renderCard()
+    expect(await screen.findByText('会议邀请')).toBeTruthy()
+    await waitFor(() => expect(container.querySelector('.btn-rsvp')).toBeNull())
+    expect(screen.getByRole('button', { name: /在日历中查看/ })).toBeTruthy()
+  })
+
+  test('organizer = 自己 → 无 RSVP 三键', async () => {
+    emailCalendarLink.mockResolvedValue(
+      makeLink({ event: makeEvent({ organizer: 'mailto:ME@example.test' }) })
+    )
+    const { container } = renderCard()
+    expect(await screen.findByText('会议邀请')).toBeTruthy()
+    // settings 异步返回 me@example.test 后三键消失 (加载完成前的瞬时态豁免)
+    await waitFor(() => expect(container.querySelector('.btn-rsvp')).toBeNull())
   })
 })

@@ -224,7 +224,15 @@ def send_rsvp(
             f"recurrence_id={recurrence_id!r} sources_tried=[{sources_str}]"
         )
 
-    # 2. 提取 organizer email
+    # 2. 提取 organizer email。task 07-15 问题2 — 空 organizer 入口显式拒绝:
+    #    owner 自建事件经 Exchange 回读 organizer 可能为空串, 该类事件本就不该
+    #    有 RSVP (前端已门控, 这里兜底)。专用文案不含 'not found'/'missing',
+    #    serve-api / CLI 的 ValueError 分流按此走 400 E_INVALID_ARG (非 404)。
+    if not (row.organizer or "").strip():
+        raise ValueError(
+            f"事件无组织者, 无法发送 RSVP (ical_uid={ical_uid!r} 的 organizer 为空; "
+            "自建事件经 Exchange 回读 organizer 可能为空)"
+        )
     to_email = _extract_organizer_email(row.organizer or "")
     if to_email is None:
         raise ValueError(

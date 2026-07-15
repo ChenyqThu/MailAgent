@@ -35,6 +35,7 @@ import type { TFunction } from 'i18next'
 import { EventFormModal } from './EventFormModal'
 import { RsvpConfirmDialog } from './RsvpConfirmDialog'
 import { calendarCapabilities } from './lib/capabilities'
+import { canRsvpFor, normalizeEmail } from './lib/rsvp'
 
 const caps = calendarCapabilities()
 import { extractMeetingLink, MEETING_PROVIDER_LABEL, openMeetingLink } from './lib/meeting-link'
@@ -86,15 +87,6 @@ function formatRange(t: TFunction, startIso: string, endIso: string, isAllDay: b
   const t1 = `${pad(s.getHours())}:${pad(s.getMinutes())}`
   const t2 = `${pad(e.getHours())}:${pad(e.getMinutes())}`
   return `${dateStr}  ${t1} → ${t2}`
-}
-
-/** Normalize organizer/userEmail for case-insensitive compare; strips
- *  "mailto:" prefix CalDAV ICS 出 organizer 时常带. */
-function normalizeEmail(s: string | null | undefined): string {
-  return (s || '')
-    .trim()
-    .toLowerCase()
-    .replace(/^mailto:/, '')
 }
 
 /** F27 — runtime narrow ``occurrence.source`` (string) → CalendarEventSource.
@@ -219,11 +211,11 @@ export function EventDetailDrawer({ occurrence, onClose, onReopen }: Props): Rea
     staleTime: 5 * 60_000
   })
   const userEmail = settings?.userEmail ?? null
-  const isOwner = !!(
-    occurrence &&
-    userEmail &&
-    normalizeEmail(occurrence.organizer) === normalizeEmail(userEmail)
-  )
+  // task 07-15 问题2 — RSVP 门控单源 canRsvpFor: organizer 非空且 ≠ 自己才有
+  // RSVP; 空 organizer (自建事件经 Exchange 回读被吃掉) 按 owner 渲染, 编辑/
+  // 删除照常, 不给必失败的 RSVP 三键。
+  const canRsvp = canRsvpFor(occurrence?.organizer, userEmail)
+  const isOwner = !!occurrence && !canRsvp
 
   // 阶段2·2.3 — 「关联邮件」真联动: ical_uid → email_meeting 反查来源邀请邮件
   // (批1 地基 eventSourceEmail; occurrence.related_email_internal_id 恒 NULL,

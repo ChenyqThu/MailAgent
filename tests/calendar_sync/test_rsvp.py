@@ -133,11 +133,29 @@ def test_send_rsvp_row_not_found_raises_lists_sources():
 
 
 def test_send_rsvp_organizer_empty_raises():
+    """task 07-15 问题2 — 空 organizer 入口显式拒绝, 专用文案。
+
+    文案不得含 'not found'/'missing' — serve-api / CLI 的 ValueError 分流按
+    这两个词映射 404 / CliNotFoundError, 空 organizer 必须走 400 E_INVALID_ARG。
+    """
     row = _make_row(organizer="")
     repo = MagicMock()
     repo.get_by_ical_uid.return_value = row
     cfg = _mock_cfg()
-    with pytest.raises(ValueError, match="organizer email missing"):
+    with pytest.raises(ValueError) as ei:
+        send_rsvp(repo, cfg, ical_uid="x", response_status="ACCEPTED")
+    msg = str(ei.value)
+    assert "事件无组织者" in msg
+    assert "missing" not in msg.lower()
+    assert "not found" not in msg
+
+
+def test_send_rsvp_organizer_whitespace_raises_same():
+    row = _make_row(organizer="   ")
+    repo = MagicMock()
+    repo.get_by_ical_uid.return_value = row
+    cfg = _mock_cfg()
+    with pytest.raises(ValueError, match="事件无组织者"):
         send_rsvp(repo, cfg, ical_uid="x", response_status="ACCEPTED")
 
 

@@ -75,16 +75,19 @@ function makeOccurrence(over: Partial<CalendarEventOccurrence> = {}): CalendarEv
   }
 }
 
-function renderDrawer(onClose: () => void = () => {}): void {
+function renderDrawer(
+  onClose: () => void = () => {},
+  occurrence: CalendarEventOccurrence = makeOccurrence()
+): { container: HTMLElement } {
   const qc = new QueryClient({
     defaultOptions: {
       queries: { retry: false, gcTime: 0 },
       mutations: { retry: false }
     }
   })
-  render(
+  return render(
     <QueryClientProvider client={qc}>
-      <EventDetailDrawer occurrence={makeOccurrence()} onClose={onClose} />
+      <EventDetailDrawer occurrence={occurrence} onClose={onClose} />
     </QueryClientProvider>
   )
 }
@@ -134,5 +137,36 @@ describe('EventDetailDrawer — RSVP 确认卡 (F16)', () => {
     expect(screen.queryByText('发送 RSVP 回复')).toBeNull()
     expect(onClose).not.toHaveBeenCalled()
     expect(eventRsvp).not.toHaveBeenCalled()
+  })
+})
+
+// task 07-15 问题2 — RSVP 门控三态 (canRsvpFor 单源): 空 organizer 按 owner
+// 渲染 (自建事件经 Exchange 回读 organizer 为空的形态), organizer=自己 owner,
+// organizer=他人才有 RSVP 三键。
+describe('EventDetailDrawer — RSVP 门控 (空/自身 organizer)', () => {
+  test('organizer 为空 → 按 owner 渲染: 无 .btn-rsvp, 编辑/删除可用', async () => {
+    const { container } = renderDrawer(() => {}, makeOccurrence({ organizer: '' }))
+    await waitFor(() => expect(container.querySelector('.dw-role.owner')).toBeTruthy())
+    expect(container.querySelector('.btn-rsvp')).toBeNull()
+    const edit = screen.getByRole('button', { name: '编辑' }) as HTMLButtonElement
+    const del = screen.getByRole('button', { name: '删除' }) as HTMLButtonElement
+    expect(edit.disabled).toBe(false)
+    expect(del.disabled).toBe(false)
+  })
+
+  test('organizer = 自己 → owner, 无 RSVP 三键', async () => {
+    const { container } = renderDrawer(
+      () => {},
+      makeOccurrence({ organizer: 'mailto:ME@example.test' })
+    )
+    // settings 异步返回 me@example.test 后翻 owner (未加载完的瞬时 attendee 态豁免)
+    await waitFor(() => expect(container.querySelector('.dw-role.owner')).toBeTruthy())
+    expect(container.querySelector('.btn-rsvp')).toBeNull()
+  })
+
+  test('organizer = 他人 → attendee, RSVP 三键在 (行为不变红线)', async () => {
+    const { container } = renderDrawer() // 默认 fixture organizer=boss@example.test
+    await waitFor(() => expect(container.querySelectorAll('.btn-rsvp').length).toBe(3))
+    expect(container.querySelector('.dw-role.attendee')).toBeTruthy()
   })
 })

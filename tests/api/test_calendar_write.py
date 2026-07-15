@@ -335,6 +335,27 @@ def test_delete_not_found_404(cal_folder_client, monkeypatch):
     _err(r.json(), code="E_NOT_FOUND")
 
 
+def test_delete_caldav_timeout_502_e_caldav(cal_folder_client, monkeypatch):
+    """task 07-15 (#37) — per-op 超时 → 502 E_CALDAV, message 透传「可能仍在执行」。
+
+    被放弃线程可能事后完成操作 (生产实锤: 删除盲挂 7.5min 后真执行了), 所以
+    错误面必须保留「操作可能仍在执行, 请稍后重试」语义给前端 toast / CLI。
+    """
+    from src.calendar_sync._common import CalDAVTimeoutError
+
+    def hang(self, **kw):
+        raise CalDAVTimeoutError(
+            "日历服务响应超时 (delete_event > 60s), 操作可能仍在执行, 请稍后刷新或重试"
+        )
+
+    monkeypatch.setattr(CalendarService, "delete_event", hang)
+    r = cal_folder_client.delete("/api/calendar/events/uid-hang")
+    assert r.status_code == 502
+    body = r.json()
+    _err(body, code="E_CALDAV")
+    assert "可能仍在执行" in body["error"]["message"]
+
+
 # ===========================================================================
 # POST /api/calendar/events/{uid}/rsvp
 # ===========================================================================
@@ -444,6 +465,28 @@ def test_rsvp_smtp_fail_502_upstream(cal_folder_client, monkeypatch):
     )
     assert r.status_code == 502
     _err(r.json(), code="E_UPSTREAM")
+
+
+def test_rsvp_empty_organizer_400_invalid_arg(cal_folder_client, monkeypatch):
+    """task 07-15 问题2 — 空 organizer 的入口拒绝走 400 E_INVALID_ARG (非 404)。
+
+    消息 = rsvp.send_rsvp 的真实文案 (不含 'not found'/'missing'), 断言 router
+    的 ValueError 分流不会把它误映射成 E_NOT_FOUND。
+    """
+    def no_organizer(self, **kw):
+        raise ValueError(
+            "事件无组织者, 无法发送 RSVP (ical_uid='uid-1' 的 organizer 为空; "
+            "自建事件经 Exchange 回读 organizer 可能为空)"
+        )
+
+    monkeypatch.setattr(CalendarService, "send_rsvp", no_organizer)
+    r = cal_folder_client.post(
+        "/api/calendar/events/uid-1/rsvp", json={"response": "accept"}
+    )
+    assert r.status_code == 400
+    body = r.json()
+    _err(body, code="E_INVALID_ARG")
+    assert "事件无组织者" in body["error"]["message"]
 
 
 # ===========================================================================

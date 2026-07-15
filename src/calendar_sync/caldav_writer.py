@@ -21,6 +21,7 @@ API:
 """
 from __future__ import annotations
 
+import functools
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
@@ -31,7 +32,12 @@ from loguru import logger
 # module 反向 import 私有 _.
 from src.calendar_sync._common import escape_text as _escape_text
 from src.calendar_sync._common import fmt_utc_compact as _fmt_utc
-from src.calendar_sync._common import local_olson_tzid, normalize_tzid, resolve_zoneinfo
+from src.calendar_sync._common import (
+    local_olson_tzid,
+    normalize_tzid,
+    resolve_zoneinfo,
+    run_with_caldav_timeout,
+)
 from src.calendar_sync.expander import expand_in_window
 from src.mail.backend.imap_client import get_cipher_key
 
@@ -42,6 +48,28 @@ if TYPE_CHECKING:
 # Sentinel for "调用方没传, 保留原值" vs 显式 None / []. 用 object identity
 # 比较 (`is _UNSET`). Python 标准 "省略 vs 显式 None" 区分模式.
 _UNSET: Any = object()
+
+
+def _caldav_op_timeout(op_name: str):
+    """CalDAVWriter 公开操作的 per-op 超时装饰器 (task 07-15, #37 最小修).
+
+    整个操作 (lazy connect + UID 查找 + PUT/DELETE) 共享一个超时预算
+    (``cfg.caldav_op_timeout_seconds``, 默认 60s)。超时抛 CalDAVTimeoutError —
+    被放弃线程可能事后完成操作, 语义见 ``run_with_caldav_timeout`` docstring。
+    timeout 不触发时返回值/异常同对象透传, 零行为差。
+    """
+    def deco(method):
+        @functools.wraps(method)
+        def wrapper(self: "CalDAVWriter", *args, **kwargs):
+            return run_with_caldav_timeout(
+                lambda: method(self, *args, **kwargs),
+                # getattr 兜底: 测试常用 __new__ 绕 __init__ 造实例 (roundtrip
+                # fixtures), 缺属性时回默认 60s 而非 AttributeError。
+                timeout_s=getattr(self, "op_timeout_s", 60.0),
+                op_name=op_name,
+            )
+        return wrapper
+    return deco
 
 
 def generate_uid() -> str:
@@ -372,6 +400,10 @@ class CalDAVWriter:
         self.port = int(getattr(cfg, "davmail_caldav_port", 0) or 1080)
         self.user = cfg.user_email
         self.password = get_cipher_key(cfg)
+        # task 07-15 (#37) — 公开操作 per-op 超时预算 (秒); 见 _caldav_op_timeout。
+        self.op_timeout_s = float(
+            getattr(cfg, "caldav_op_timeout_seconds", 0) or 60
+        )
         self._client = None
         self._principal = None
 
@@ -439,6 +471,7 @@ class CalDAVWriter:
     # Public ops
     # --------------------------------------------------------
 
+    @_caldav_op_timeout("create_event")
     def create_event(
         self,
         *,
@@ -490,6 +523,7 @@ class CalDAVWriter:
             "dtend_iso": dtend_utc.isoformat(),
         }
 
+    @_caldav_op_timeout("update_event")
     def update_event(
         self,
         *,
@@ -632,6 +666,7 @@ class CalDAVWriter:
             "sequence": new_sequence,
         }
 
+    @_caldav_op_timeout("update_occurrence")
     def update_occurrence(
         self,
         *,
@@ -760,6 +795,7 @@ class CalDAVWriter:
             "dtend_iso": new_dtend.isoformat(),
         }
 
+    @_caldav_op_timeout("split_series")
     def split_series(
         self,
         *,
@@ -936,6 +972,7 @@ class CalDAVWriter:
             "new_dtstart_iso": new_dtstart.isoformat(),
         }
 
+    @_caldav_op_timeout("delete_event")
     def delete_event(
         self,
         *,

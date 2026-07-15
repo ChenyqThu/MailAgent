@@ -925,6 +925,16 @@ class Config(BaseSettings):
             "无岛时静默 fail-open."
         ),
     )
+    caldav_op_timeout_seconds: int = Field(
+        default=60, env="CALDAV_OP_TIMEOUT_SECONDS",
+        description=(
+            "CalDAV 单次操作 per-op 超时 (秒, task 07-15 / #37 最小修). caldav lib "
+            "的 timeout=30 保护不到响应 body 读 (niquests 裸 sock.recv), EWS 节流"
+            "窗口内写操作会盲挂数分钟; 超过此值抛 CalDAVTimeoutError. 被放弃线程"
+            "可能事后完成操作, 错误文案为「可能仍在执行」. EWS 慢时合法操作数秒~"
+            "数十秒, 60s 之外几乎必是节流挂死."
+        ),
+    )
 
 # 全局配置实例
 config = Config()

@@ -35,6 +35,7 @@ import { calendarCapabilities } from './lib/capabilities'
 
 const caps = calendarCapabilities()
 import { pad } from './lib/format'
+import { canRsvpFor, normalizeEmail } from './lib/rsvp'
 import { RsvpConfirmDialog } from './RsvpConfirmDialog'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { cn } from '@shared/lib/cn'
@@ -56,14 +57,6 @@ function narrowSource(s: string | null | undefined): CalendarEventSource | undef
   if (_VALID_SOURCES.has(s)) return s as CalendarEventSource
   console.warn(`[calendar] unknown event source=${JSON.stringify(s)}, falling back`)
   return undefined
-}
-
-/** 待收敛 — 与 EventDetailDrawer.normalizeEmail 同款: 去 "mailto:" + lowercase. */
-function normalizeEmail(s: string | null | undefined): string {
-  return (s || '')
-    .trim()
-    .toLowerCase()
-    .replace(/^mailto:/, '')
 }
 
 interface OccWindow {
@@ -138,6 +131,15 @@ export function MeetingInviteCard({ internalId }: Props): React.ReactElement | n
     staleTime: 60_000,
     retry: false
   })
+
+  // task 07-15 问题2 — userEmail 用于 RSVP 门控 (canRsvpFor 单源)。与 drawer /
+  // Sidebar 同 query key, react-query 缓存共享, 不因卡片反复重拉。
+  const { data: settings } = useQuery({
+    queryKey: qk.settings.all(),
+    queryFn: () => mailApi.settings.get(),
+    staleTime: 5 * 60_000
+  })
+  const userEmail = settings?.userEmail ?? null
   const link = linkQ.data ?? null
   const event = link?.event ?? null
   const isCancelled =
@@ -246,6 +248,10 @@ export function MeetingInviteCard({ internalId }: Props): React.ReactElement | n
   if (!link) return null
 
   const myResp = (event?.response_status || '').toUpperCase()
+  // task 07-15 问题2 — event 行在库时按 organizer 门控 RSVP 区渲染 (canRsvpFor
+  // 单源): 空 organizer / organizer=自己 → 整个三键区不渲染 (点击必失败)。
+  // event=null (尚未同步到日历) 时 organizer 未知, 保留原禁用三键 + 提示。
+  const rsvpEligible = !event || canRsvpFor(event.organizer, userEmail)
   const canRsvp = link.in_calendar && !!event
   const attNames = (event?.attendees ?? []).map((a) => a.name || a.email).filter(Boolean)
 
@@ -350,8 +356,9 @@ export function MeetingInviteCard({ internalId }: Props): React.ReactElement | n
         )}
 
         <div className="cal-invite-foot">
-          {/* 阶段 3 (#11) — caps.rsvp 门控 (HttpApi eventRsvp 已接通, 两端 true) */}
-          {!isCancelled && caps.rsvp && (
+          {/* 阶段 3 (#11) — caps.rsvp 门控 (HttpApi eventRsvp 已接通, 两端 true);
+              task 07-15 — 叠加 rsvpEligible (空/自身 organizer 不渲染三键) */}
+          {!isCancelled && caps.rsvp && rsvpEligible && (
             <>
               <div className="cal-invite-rsvp">
                 <button
