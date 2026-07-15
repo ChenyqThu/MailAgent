@@ -1,9 +1,13 @@
-"""expand_in_window — RRULE 展开测试."""
+"""expand_in_window — RRULE 展开测试.
+
+TestTzidWallClock (#10 tzid 半步) 的 DST 跨界夹具与前端
+frontend/tests/main/calendar.test.ts 「expandInWindow tzid 墙钟展开」describe
+钉的是**同一组期望值** — 单改一侧必漂移 (P1-1 教训), 改夹具必须双侧同步。
+"""
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-import pytest
 
 from src.calendar_sync import expand_in_window
 
@@ -211,3 +215,106 @@ class TestMaxCountCap:
             max_count=10,
         )
         assert len(occs) <= 10
+
+
+# ============================================================
+# #10 tzid 半步 — 墙钟展开 (DST 跨界夹具, 与 TS calendar.test.ts 钉同组值)
+# ============================================================
+
+class TestTzidWallClock:
+    def test_la_spring_forward_wall_clock_constant(self):
+        """LA 2026-03-08 春令跳变: 09:00 墙钟恒定, UTC 侧 17:00Z→16:00Z."""
+        occs = expand_in_window(
+            dtstart=_utc(2026, 3, 4, 17), dtend=_utc(2026, 3, 4, 17, 30),
+            rrule="FREQ=WEEKLY;COUNT=3", exdates_iso=[], rdates_iso=[],
+            window_start=_utc(2026, 3, 1), window_end=_utc(2026, 4, 1),
+            tzid="America/Los_Angeles",
+        )
+        assert [s.isoformat() for s, _ in occs] == [
+            "2026-03-04T17:00:00+00:00",
+            "2026-03-11T16:00:00+00:00",
+            "2026-03-18T16:00:00+00:00",
+        ]
+        # duration 保持 30min
+        assert all(e - s == timedelta(minutes=30) for s, e in occs)
+
+    def test_la_fall_back_wall_clock_constant(self):
+        """LA 2026-11-01 冬令回拨: 09:00 墙钟恒定, UTC 侧 16:00Z→17:00Z."""
+        occs = expand_in_window(
+            dtstart=_utc(2026, 10, 28, 16), dtend=_utc(2026, 10, 28, 17),
+            rrule="FREQ=WEEKLY;COUNT=2", exdates_iso=[], rdates_iso=[],
+            window_start=_utc(2026, 10, 25), window_end=_utc(2026, 11, 10),
+            tzid="America/Los_Angeles",
+        )
+        assert [s.isoformat() for s, _ in occs] == [
+            "2026-10-28T16:00:00+00:00",
+            "2026-11-04T17:00:00+00:00",
+        ]
+
+    def test_shanghai_no_dst_control(self):
+        """Asia/Shanghai 无 DST 对照: UTC 时刻恒定 (跨 3 月 LA DST 边界不受扰)."""
+        occs = expand_in_window(
+            dtstart=_utc(2026, 3, 4, 1), dtend=_utc(2026, 3, 4, 2),
+            rrule="FREQ=WEEKLY;COUNT=3", exdates_iso=[], rdates_iso=[],
+            window_start=_utc(2026, 3, 1), window_end=_utc(2026, 4, 1),
+            tzid="Asia/Shanghai",
+        )
+        assert [s.isoformat() for s, _ in occs] == [
+            "2026-03-04T01:00:00+00:00",
+            "2026-03-11T01:00:00+00:00",
+            "2026-03-18T01:00:00+00:00",
+        ]
+
+    def test_tzid_none_keeps_utc_grid(self):
+        """tzid=None (v35 前旧行 / 裸 Z): 现状 UTC 展开, 跨 DST 不偏移."""
+        occs = expand_in_window(
+            dtstart=_utc(2026, 3, 4, 17), dtend=_utc(2026, 3, 4, 17, 30),
+            rrule="FREQ=WEEKLY;COUNT=3", exdates_iso=[], rdates_iso=[],
+            window_start=_utc(2026, 3, 1), window_end=_utc(2026, 4, 1),
+        )
+        assert [s.isoformat() for s, _ in occs] == [
+            "2026-03-04T17:00:00+00:00",
+            "2026-03-11T17:00:00+00:00",
+            "2026-03-18T17:00:00+00:00",
+        ]
+
+    def test_unresolvable_tzid_falls_back_to_utc(self):
+        occs = expand_in_window(
+            dtstart=_utc(2026, 3, 4, 17), dtend=_utc(2026, 3, 4, 17, 30),
+            rrule="FREQ=WEEKLY;COUNT=3", exdates_iso=[], rdates_iso=[],
+            window_start=_utc(2026, 3, 1), window_end=_utc(2026, 4, 1),
+            tzid="Fake/Zone",
+        )
+        assert [s.isoformat() for s, _ in occs] == [
+            "2026-03-04T17:00:00+00:00",
+            "2026-03-11T17:00:00+00:00",
+            "2026-03-18T17:00:00+00:00",
+        ]
+
+    def test_until_absolute_utc_semantics_with_tzid(self):
+        """UNTIL=Z 在 tzid 路径按绝对时刻裁剪 (TS 侧摘出后置过滤对齐此语义)."""
+        occs = expand_in_window(
+            dtstart=_utc(2026, 9, 4, 1), dtend=_utc(2026, 9, 4, 2),
+            rrule="FREQ=DAILY;UNTIL=20260906T010000Z", exdates_iso=[], rdates_iso=[],
+            window_start=_utc(2026, 9, 1), window_end=_utc(2026, 9, 30),
+            tzid="America/Los_Angeles",
+        )
+        assert [s.isoformat() for s, _ in occs] == [
+            "2026-09-04T01:00:00+00:00",
+            "2026-09-05T01:00:00+00:00",
+            "2026-09-06T01:00:00+00:00",
+        ]
+
+    def test_exdate_matches_in_utc_with_tzid(self):
+        """EXDATE 按 UTC 时刻匹配 (跨 DST 后的 16:00Z occurrence 可被剔除)."""
+        occs = expand_in_window(
+            dtstart=_utc(2026, 3, 4, 17), dtend=_utc(2026, 3, 4, 17, 30),
+            rrule="FREQ=WEEKLY;COUNT=3",
+            exdates_iso=["2026-03-11T16:00:00+00:00"], rdates_iso=[],
+            window_start=_utc(2026, 3, 1), window_end=_utc(2026, 4, 1),
+            tzid="America/Los_Angeles",
+        )
+        assert [s.isoformat() for s, _ in occs] == [
+            "2026-03-04T17:00:00+00:00",
+            "2026-03-18T16:00:00+00:00",
+        ]

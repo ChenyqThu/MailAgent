@@ -24,6 +24,8 @@ export interface DbCalendarRow {
   rrule: string | null
   exdates_json: string | null
   rdates_json: string | null
+  /** v35 (#10 tzid 半步): DTSTART TZID 归一 Olson 名; null = 裸 Z/floating/全天. */
+  tzid: string | null
   status: string | null
   response_status: string | null
   url: string | null

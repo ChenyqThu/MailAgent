@@ -5,10 +5,9 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 const { mockCallCli } = vi.hoisted(() => ({ mockCallCli: vi.fn() }))
 
 vi.mock('../../src/electron/main/cli_runner', async () => {
-  const actual =
-    await vi.importActual<typeof import('../../src/electron/main/cli_runner')>(
-      '../../src/electron/main/cli_runner'
-    )
+  const actual = await vi.importActual<typeof import('../../src/electron/main/cli_runner')>(
+    '../../src/electron/main/cli_runner'
+  )
   return { ...actual, callCli: mockCallCli }
 })
 
@@ -173,10 +172,11 @@ describe('calendar — runEventReplay', () => {
   test('icalUid only: positional + write+auth + 120s', async () => {
     mockCallCli.mockResolvedValue({ action: 'created', page_id: 'p1' })
     await runEventReplay({ icalUid: 'uid-abc' })
-    expect(mockCallCli).toHaveBeenCalledWith(
-      ['calendar', 'replay', 'uid-abc'],
-      { write: true, needsAuth: true, timeoutMs: 120_000 }
-    )
+    expect(mockCallCli).toHaveBeenCalledWith(['calendar', 'replay', 'uid-abc'], {
+      write: true,
+      needsAuth: true,
+      timeoutMs: 120_000
+    })
   })
 
   test('with recurrenceId + source', async () => {
@@ -203,19 +203,21 @@ describe('calendar — runEventReplay', () => {
   test('dry-run skips write+auth + adds --dry-run', async () => {
     mockCallCli.mockResolvedValue({})
     await runEventReplay({ icalUid: 'uid-x', dryRun: true })
-    expect(mockCallCli).toHaveBeenCalledWith(
-      ['calendar', 'replay', 'uid-x', '--dry-run'],
-      { write: false, needsAuth: false, timeoutMs: 120_000 }
-    )
+    expect(mockCallCli).toHaveBeenCalledWith(['calendar', 'replay', 'uid-x', '--dry-run'], {
+      write: false,
+      needsAuth: false,
+      timeoutMs: 120_000
+    })
   })
 
   test('source=email_ics is passed through', async () => {
     mockCallCli.mockResolvedValue({})
     await runEventReplay({ icalUid: 'u', source: 'email_ics' })
-    expect(mockCallCli).toHaveBeenCalledWith(
-      ['calendar', 'replay', 'u', '--source', 'email_ics'],
-      { write: true, needsAuth: true, timeoutMs: 120_000 }
-    )
+    expect(mockCallCli).toHaveBeenCalledWith(['calendar', 'replay', 'u', '--source', 'email_ics'], {
+      write: true,
+      needsAuth: true,
+      timeoutMs: 120_000
+    })
   })
 })
 
@@ -224,10 +226,11 @@ describe('calendar — runEventRsvp', () => {
   test('accept: positional + write+auth + 120s', async () => {
     mockCallCli.mockResolvedValue({ action: 'sent', to_email: 'org@x.com' })
     await runEventRsvp({ icalUid: 'uid-a', response: 'accept' })
-    expect(mockCallCli).toHaveBeenCalledWith(
-      ['calendar', 'rsvp', 'uid-a', 'accept'],
-      { write: true, needsAuth: true, timeoutMs: 120_000 }
-    )
+    expect(mockCallCli).toHaveBeenCalledWith(['calendar', 'rsvp', 'uid-a', 'accept'], {
+      write: true,
+      needsAuth: true,
+      timeoutMs: 120_000
+    })
   })
 
   test('decline with recurrenceId + source', async () => {
@@ -297,23 +300,30 @@ describe('calendar — runEventCreate', () => {
       description: 'Q1 plan',
       status: 'TENTATIVE',
       calendarName: 'Work',
-      attendees: [
-        { email: 'a@x.com', name: 'Alice' },
-        { email: 'b@x.com' }
-      ]
+      attendees: [{ email: 'a@x.com', name: 'Alice' }, { email: 'b@x.com' }]
     })
     expect(mockCallCli).toHaveBeenCalledWith(
       [
-        'calendar', 'create',
-        '--summary', 'Sync',
-        '--start', '2026-05-30T14:00:00Z',
-        '--end', '2026-05-30T15:00:00Z',
-        '--location', 'Room A',
-        '--description', 'Q1 plan',
-        '--calendar', 'Work',
-        '--status', 'TENTATIVE',
-        '--attendee', 'a@x.com,Alice',
-        '--attendee', 'b@x.com'
+        'calendar',
+        'create',
+        '--summary',
+        'Sync',
+        '--start',
+        '2026-05-30T14:00:00Z',
+        '--end',
+        '2026-05-30T15:00:00Z',
+        '--location',
+        'Room A',
+        '--description',
+        'Q1 plan',
+        '--calendar',
+        'Work',
+        '--status',
+        'TENTATIVE',
+        '--attendee',
+        'a@x.com,Alice',
+        '--attendee',
+        'b@x.com'
       ],
       { write: true, needsAuth: true, timeoutMs: 120_000 }
     )
@@ -381,12 +391,19 @@ describe('calendar — runEventUpdate', () => {
     })
     expect(mockCallCli).toHaveBeenCalledWith(
       [
-        'calendar', 'update', 'uid-x',
-        '--summary', 'New',
-        '--start', '2026-05-30T14:00:00Z',
-        '--end', '2026-05-30T15:00:00Z',
-        '--location', 'Room B',
-        '--status', 'CANCELLED',
+        'calendar',
+        'update',
+        'uid-x',
+        '--summary',
+        'New',
+        '--start',
+        '2026-05-30T14:00:00Z',
+        '--end',
+        '2026-05-30T15:00:00Z',
+        '--location',
+        'Room B',
+        '--status',
+        'CANCELLED',
         '--no-sequence-bump'
       ],
       { write: true, needsAuth: true, timeoutMs: 120_000 }
@@ -396,10 +413,11 @@ describe('calendar — runEventUpdate', () => {
   test('empty location explicitly passes empty string', async () => {
     mockCallCli.mockResolvedValue({})
     await runEventUpdate({ icalUid: 'uid-x', location: '' })
-    expect(mockCallCli).toHaveBeenCalledWith(
-      ['calendar', 'update', 'uid-x', '--location', ''],
-      { write: true, needsAuth: true, timeoutMs: 120_000 }
-    )
+    expect(mockCallCli).toHaveBeenCalledWith(['calendar', 'update', 'uid-x', '--location', ''], {
+      write: true,
+      needsAuth: true,
+      timeoutMs: 120_000
+    })
   })
 
   test('Phase 4·#3 — rrule 覆盖拼进 --rrule arg (改整系列)', async () => {
@@ -414,10 +432,11 @@ describe('calendar — runEventUpdate', () => {
   test('Phase 4·#3 — rrule="" 显式空串透传 (删除 RRULE 周期变单次)', async () => {
     mockCallCli.mockResolvedValue({})
     await runEventUpdate({ icalUid: 'uid-x', rrule: '' })
-    expect(mockCallCli).toHaveBeenCalledWith(
-      ['calendar', 'update', 'uid-x', '--rrule', ''],
-      { write: true, needsAuth: true, timeoutMs: 120_000 }
-    )
+    expect(mockCallCli).toHaveBeenCalledWith(['calendar', 'update', 'uid-x', '--rrule', ''], {
+      write: true,
+      needsAuth: true,
+      timeoutMs: 120_000
+    })
   })
 
   test('Phase 4·#2 — isAllDay=true 拼 --all-day', async () => {
@@ -482,10 +501,11 @@ describe('calendar — runEventDelete', () => {
   test('uid + --yes always passed', async () => {
     mockCallCli.mockResolvedValue({})
     await runEventDelete({ icalUid: 'uid-x' })
-    expect(mockCallCli).toHaveBeenCalledWith(
-      ['calendar', 'delete', 'uid-x', '--yes'],
-      { write: true, needsAuth: true, timeoutMs: 120_000 }
-    )
+    expect(mockCallCli).toHaveBeenCalledWith(['calendar', 'delete', 'uid-x', '--yes'], {
+      write: true,
+      needsAuth: true,
+      timeoutMs: 120_000
+    })
   })
 
   test('with calendarName flag', async () => {
@@ -560,6 +580,7 @@ describe('calendar — expandInWindow duration (P1-1)', () => {
       rrule: 'FREQ=WEEKLY;BYDAY=MO',
       exdates_json: null,
       rdates_json: null,
+      tzid: null,
       status: null,
       response_status: null,
       url: null,
@@ -614,6 +635,140 @@ describe('calendar — expandInWindow duration (P1-1)', () => {
 })
 
 // ============================================================
+// #10 tzid 半步 — expandInWindow 墙钟展开 (DST 跨界夹具与 Python
+// tests/calendar_sync/test_expander.py TestTzidWallClock 钉同一组期望值,
+// 单改一侧必漂移 P1-1; 改夹具必须双侧同步)
+// ============================================================
+describe('calendar — expandInWindow tzid 墙钟展开 (#10)', () => {
+  function tzRow(overrides: Partial<DbCalendarRow> = {}): DbCalendarRow {
+    return {
+      id: 2,
+      ical_uid: 'uid-tz',
+      recurrence_id: null,
+      sequence: 0,
+      summary: 'TZ series',
+      description: null,
+      location: null,
+      organizer: null,
+      attendees_json: null,
+      dtstart_utc: Date.UTC(2026, 2, 4, 17, 0, 0) / 1000, // 2026-03-04T17:00Z = 09:00 PST
+      dtend_utc: Date.UTC(2026, 2, 4, 17, 30, 0) / 1000,
+      is_all_day: 0,
+      rrule: 'FREQ=WEEKLY;COUNT=3',
+      exdates_json: null,
+      rdates_json: null,
+      tzid: 'America/Los_Angeles',
+      status: null,
+      response_status: null,
+      url: null,
+      ics_raw: null,
+      source: 'caldav',
+      notion_page_id: null,
+      related_email_internal_id: null,
+      calendar_name: '日历',
+      ...overrides
+    }
+  }
+  const marchWindow: [number, number] = [Date.UTC(2026, 2, 1), Date.UTC(2026, 3, 1)]
+
+  test('LA 春令跳变: 09:00 墙钟恒定, UTC 侧 17:00Z→16:00Z, duration 保持', () => {
+    const out = expandInWindow(tzRow(), marchWindow[0], marchWindow[1], true)
+    expect(out.map((o) => o.start.toISOString())).toEqual([
+      '2026-03-04T17:00:00.000Z',
+      '2026-03-11T16:00:00.000Z',
+      '2026-03-18T16:00:00.000Z'
+    ])
+    for (const occ of out) {
+      expect(occ.end.getTime() - occ.start.getTime()).toBe(30 * 60 * 1000)
+    }
+  })
+
+  test('LA 冬令回拨: UTC 侧 16:00Z→17:00Z', () => {
+    const out = expandInWindow(
+      tzRow({
+        dtstart_utc: Date.UTC(2026, 9, 28, 16, 0, 0) / 1000, // 09:00 PDT
+        dtend_utc: Date.UTC(2026, 9, 28, 17, 0, 0) / 1000,
+        rrule: 'FREQ=WEEKLY;COUNT=2'
+      }),
+      Date.UTC(2026, 9, 25),
+      Date.UTC(2026, 10, 10),
+      true
+    )
+    expect(out.map((o) => o.start.toISOString())).toEqual([
+      '2026-10-28T16:00:00.000Z',
+      '2026-11-04T17:00:00.000Z'
+    ])
+  })
+
+  test('Asia/Shanghai 无 DST 对照: UTC 时刻恒定', () => {
+    const out = expandInWindow(
+      tzRow({
+        dtstart_utc: Date.UTC(2026, 2, 4, 1, 0, 0) / 1000,
+        dtend_utc: Date.UTC(2026, 2, 4, 2, 0, 0) / 1000,
+        tzid: 'Asia/Shanghai'
+      }),
+      marchWindow[0],
+      marchWindow[1],
+      true
+    )
+    expect(out.map((o) => o.start.toISOString())).toEqual([
+      '2026-03-04T01:00:00.000Z',
+      '2026-03-11T01:00:00.000Z',
+      '2026-03-18T01:00:00.000Z'
+    ])
+  })
+
+  test('tzid=null (v35 前旧行): 现状 UTC 展开不偏移', () => {
+    const out = expandInWindow(tzRow({ tzid: null }), marchWindow[0], marchWindow[1], true)
+    expect(out.map((o) => o.start.toISOString())).toEqual([
+      '2026-03-04T17:00:00.000Z',
+      '2026-03-11T17:00:00.000Z',
+      '2026-03-18T17:00:00.000Z'
+    ])
+  })
+
+  test('unresolvable tzid: fallback UTC 展开', () => {
+    const out = expandInWindow(tzRow({ tzid: 'Fake/Zone' }), marchWindow[0], marchWindow[1], true)
+    expect(out.map((o) => o.start.toISOString())).toEqual([
+      '2026-03-04T17:00:00.000Z',
+      '2026-03-11T17:00:00.000Z',
+      '2026-03-18T17:00:00.000Z'
+    ])
+  })
+
+  test('UNTIL=Z 在 tzid 路径按绝对时刻裁剪 (摘出后置过滤)', () => {
+    const out = expandInWindow(
+      tzRow({
+        dtstart_utc: Date.UTC(2026, 8, 4, 1, 0, 0) / 1000,
+        dtend_utc: Date.UTC(2026, 8, 4, 2, 0, 0) / 1000,
+        rrule: 'FREQ=DAILY;UNTIL=20260906T010000Z'
+      }),
+      Date.UTC(2026, 8, 1),
+      Date.UTC(2026, 8, 30),
+      true
+    )
+    expect(out.map((o) => o.start.toISOString())).toEqual([
+      '2026-09-04T01:00:00.000Z',
+      '2026-09-05T01:00:00.000Z',
+      '2026-09-06T01:00:00.000Z'
+    ])
+  })
+
+  test('EXDATE 按 UTC 时刻匹配 (剔除跨 DST 后的 16:00Z occurrence)', () => {
+    const out = expandInWindow(
+      tzRow({ exdates_json: '["2026-03-11T16:00:00+00:00"]' }),
+      marchWindow[0],
+      marchWindow[1],
+      true
+    )
+    expect(out.map((o) => o.start.toISOString())).toEqual([
+      '2026-03-04T17:00:00.000Z',
+      '2026-03-18T16:00:00.000Z'
+    ])
+  })
+})
+
+// ============================================================
 // F4 + F17 — assertSafeSender IPC sender frame URL allowlist
 // ============================================================
 describe('calendar — assertSafeSender (F4 + F17)', () => {
@@ -645,21 +800,21 @@ describe('calendar — assertSafeSender (F4 + F17)', () => {
   })
 
   test('reject http://evil.com (non-allowlist origin)', () => {
-    expect(() =>
-      assertSafeSender(fakeEvent('http://evil.com/'), 'calendar:test')
-    ).toThrow(/Rejected unexpected IPC sender/)
+    expect(() => assertSafeSender(fakeEvent('http://evil.com/'), 'calendar:test')).toThrow(
+      /Rejected unexpected IPC sender/
+    )
   })
 
   test('reject empty URL (F17 — Electron lifecycle 早期 / about:blank 中转防护)', () => {
-    expect(() =>
-      assertSafeSender(fakeEvent(''), 'calendar:test')
-    ).toThrow(/Rejected unexpected IPC sender/)
+    expect(() => assertSafeSender(fakeEvent(''), 'calendar:test')).toThrow(
+      /Rejected unexpected IPC sender/
+    )
   })
 
   test('reject null senderFrame (F17 — same defense)', () => {
-    expect(() =>
-      assertSafeSender(fakeEvent(undefined), 'calendar:test')
-    ).toThrow(/Rejected unexpected IPC sender/)
+    expect(() => assertSafeSender(fakeEvent(undefined), 'calendar:test')).toThrow(
+      /Rejected unexpected IPC sender/
+    )
   })
 
   test('reject https:// off allowlist (e.g. malicious link in webview)', () => {

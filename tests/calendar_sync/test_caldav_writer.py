@@ -824,3 +824,165 @@ def test_writer_update_event_no_valarm_body_unchanged():
     w.update_event(ical_uid="uid-novalarm", summary="改了标题")
 
     assert "VALARM" not in evt.data
+
+
+# ---------------------------------------------------------------------------
+# F1/F2 (#10 tzid 半步) — TZID 输出 + split UNTIL 本地日界
+# ---------------------------------------------------------------------------
+
+def test_build_vevent_tzid_emits_local_time_and_vtimezone():
+    """tzid 非空: DTSTART/DTEND 以 TZID= 本地墙钟输出 + 附 VTIMEZONE;
+    RECURRENCE-ID 恒 UTC Z (#9 实锤 DavMail 对 Z 的 RECURRENCE-ID 匹配正确)."""
+    body = build_vevent(
+        ical_uid="tz@mailagent.local",
+        summary="override",
+        dtstart_utc=datetime(2026, 9, 11, 3, 0, tzinfo=timezone.utc),
+        dtend_utc=datetime(2026, 9, 11, 3, 30, tzinfo=timezone.utc),
+        organizer_email="me@example.com",
+        recurrence_id=datetime(2026, 9, 11, 1, 0, tzinfo=timezone.utc),
+        tzid="America/Los_Angeles",
+    )
+    # 03:00Z = 09-10 20:00 PDT
+    assert "DTSTART;TZID=America/Los_Angeles:20260910T200000" in body
+    assert "DTEND;TZID=America/Los_Angeles:20260910T203000" in body
+    assert "BEGIN:VTIMEZONE" in body
+    assert "TZID:America/Los_Angeles" in body
+    assert "RECURRENCE-ID:20260911T010000Z" in body
+    import vobject
+    parsed = vobject.readOne(body)  # 可解析且 tz 正确
+    ov = parsed.vevent
+    assert ov.dtstart.value.astimezone(timezone.utc) == datetime(
+        2026, 9, 11, 3, 0, tzinfo=timezone.utc
+    )
+
+
+def test_build_vevent_unresolvable_tzid_falls_back_to_z():
+    body = build_vevent(
+        ical_uid="tz@mailagent.local",
+        summary="t",
+        dtstart_utc=datetime(2026, 9, 11, 3, 0, tzinfo=timezone.utc),
+        dtend_utc=datetime(2026, 9, 11, 4, 0, tzinfo=timezone.utc),
+        organizer_email="me@example.com",
+        tzid="Fake/Zone",
+    )
+    assert "DTSTART:20260911T030000Z" in body
+    assert "BEGIN:VTIMEZONE" not in body
+
+
+def test_build_vevent_all_day_ignores_tzid():
+    body = build_vevent(
+        ical_uid="ad@mailagent.local",
+        summary="allday",
+        dtstart_utc=datetime(2026, 9, 11, tzinfo=timezone.utc),
+        dtend_utc=datetime(2026, 9, 12, tzinfo=timezone.utc),
+        organizer_email="me@example.com",
+        is_all_day=True,
+        tzid="America/Los_Angeles",
+    )
+    assert "DTSTART;VALUE=DATE:20260911" in body
+    assert "TZID" not in body
+
+
+def _writer_with_vcal(master_body: str):
+    import vobject
+    vcal = vobject.readOne(master_body)
+    mock_evt = MagicMock()
+    mock_evt.vobject_instance = vcal
+    mock_cal = MagicMock()
+    writer = CalDAVWriter.__new__(CalDAVWriter)
+    writer.user = "me@example.com"
+    writer._find_event_by_uid = MagicMock(return_value=(mock_cal, mock_evt))
+    return writer, mock_evt, mock_cal
+
+
+def test_update_occurrence_bare_z_master_falls_back_local_tz(monkeypatch):
+    """F1: 裸 Z master → fallback 本机时区 (monkeypatch 钉 LA), override 带 TZID 本地时间."""
+    monkeypatch.setattr(
+        "src.calendar_sync.caldav_writer.local_olson_tzid",
+        lambda: "America/Los_Angeles",
+    )
+    master_body = build_vevent(
+        ical_uid="series@mailagent.local", summary="Standup",
+        dtstart_utc=datetime(2026, 8, 28, 1, 0, tzinfo=timezone.utc),
+        dtend_utc=datetime(2026, 8, 28, 1, 30, tzinfo=timezone.utc),
+        organizer_email="me@example.com", rrule="FREQ=WEEKLY;COUNT=5",
+    )
+    writer, mock_evt, _ = _writer_with_vcal(master_body)
+    occ3 = datetime(2026, 9, 11, 1, 0, tzinfo=timezone.utc)
+    writer.update_occurrence(
+        ical_uid="series@mailagent.local", recurrence_id_utc=occ3,
+        dtstart_utc=datetime(2026, 9, 11, 3, 0, tzinfo=timezone.utc),
+    )
+    out = mock_evt.data
+    # override 本地墙钟 + VTIMEZONE; master 裸 Z 原样; RECURRENCE-ID 恒 Z
+    assert "DTSTART;TZID=America/Los_Angeles:20260910T200000" in out
+    assert "BEGIN:VTIMEZONE" in out
+    assert "DTSTART:20260828T010000Z" in out
+    assert "RECURRENCE-ID:20260911T010000Z" in out
+
+
+def test_update_occurrence_inherits_master_tzid():
+    """F1: master 自带 TZID (真 Exchange 事件) → override 直接继承, 不走本机 fallback."""
+    master_body = build_vevent(
+        ical_uid="cn@mailagent.local", summary="深圳周会",
+        dtstart_utc=datetime(2026, 9, 4, 8, 0, tzinfo=timezone.utc),  # 16:00 CST
+        dtend_utc=datetime(2026, 9, 4, 9, 0, tzinfo=timezone.utc),
+        organizer_email="me@example.com", rrule="FREQ=WEEKLY;COUNT=5",
+        tzid="Asia/Shanghai",
+    )
+    writer, mock_evt, _ = _writer_with_vcal(master_body)
+    occ2 = datetime(2026, 9, 11, 8, 0, tzinfo=timezone.utc)
+    writer.update_occurrence(
+        ical_uid="cn@mailagent.local", recurrence_id_utc=occ2,
+        dtstart_utc=datetime(2026, 9, 11, 10, 0, tzinfo=timezone.utc),  # 18:00 CST
+    )
+    assert "DTSTART;TZID=Asia/Shanghai:20260911T180000" in mock_evt.data
+
+
+def test_split_series_until_uses_local_date_boundary(monkeypatch):
+    """F2 (#9 实锤复现型): DAILY 01:00Z 系列 (LA 本地前一日 18:00), split 第 4 次 —
+    UNTIL 必须写「最后保留 occurrence 的本地日期 23:59:59Z」(20260905T235959Z),
+    而非 split-1s (20260907T005959Z, 会被 EWS 日期粒度 EndDate 多留 2 天)."""
+    monkeypatch.setattr(
+        "src.calendar_sync.caldav_writer.local_olson_tzid",
+        lambda: "America/Los_Angeles",
+    )
+    master_body = build_vevent(
+        ical_uid="split@mailagent.local", summary="daily",
+        dtstart_utc=datetime(2026, 9, 4, 1, 0, tzinfo=timezone.utc),
+        dtend_utc=datetime(2026, 9, 4, 2, 0, tzinfo=timezone.utc),
+        organizer_email="me@example.com", rrule="FREQ=DAILY;COUNT=8",
+    )
+    writer, mock_evt, mock_cal = _writer_with_vcal(master_body)
+    result = writer.split_series(
+        ical_uid="split@mailagent.local",
+        split_recurrence_id_utc=datetime(2026, 9, 7, 1, 0, tzinfo=timezone.utc),
+    )
+    import vobject
+    old_rrule = vobject.readOne(mock_evt.data).vevent.rrule.value
+    assert "UNTIL=20260905T235959Z" in old_rrule
+    assert "COUNT" not in old_rrule
+    # 新系列照旧: 去 UNTIL/COUNT + 从 split 点起
+    new_body = mock_cal.save_event.call_args[0][0]
+    assert "UNTIL" not in vobject.readOne(new_body).vevent.rrule.value
+    assert result["until_iso"] == "2026-09-05T23:59:59+00:00"
+
+
+def test_split_series_until_same_local_and_utc_date():
+    """F2 对照: 系列时区本地日期 == UTC 日期 (Shanghai 16:00 local = 08:00Z) 时,
+    UNTIL 字面日期即最后保留 occurrence 当日."""
+    master_body = build_vevent(
+        ical_uid="cn-split@mailagent.local", summary="daily-cn",
+        dtstart_utc=datetime(2026, 9, 4, 8, 0, tzinfo=timezone.utc),
+        dtend_utc=datetime(2026, 9, 4, 9, 0, tzinfo=timezone.utc),
+        organizer_email="me@example.com", rrule="FREQ=DAILY;COUNT=8",
+        tzid="Asia/Shanghai",
+    )
+    writer, mock_evt, _ = _writer_with_vcal(master_body)
+    writer.split_series(
+        ical_uid="cn-split@mailagent.local",
+        split_recurrence_id_utc=datetime(2026, 9, 7, 8, 0, tzinfo=timezone.utc),
+    )
+    import vobject
+    old_rrule = vobject.readOne(mock_evt.data).vevent.rrule.value
+    assert "UNTIL=20260906T235959Z" in old_rrule

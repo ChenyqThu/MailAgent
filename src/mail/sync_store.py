@@ -396,7 +396,15 @@ class SyncStore:
     #                的 last_seen 可能是 REQUEST 或 CANCEL, 不可考)。存量非周期邀请不可回填。
     #                幂等: CREATE TABLE IF NOT EXISTS + INSERT OR IGNORE 回填。
     #                回滚 (回退 v34): DROP TABLE email_meeting; 必要时降 db_version。
-    DB_VERSION = 34  # v34: email_meeting 邮件↔日历 ical_uid 映射表
+    # v35 (日历 epic 5.1 #10 tzid 半步, 2026-07): calendar_event 加 tzid TEXT NULL —— DTSTART 的
+    #                TZID 参数归一 Olson 名 (DavMail 别名如 Asia/Beijing→Asia/Shanghai, 见
+    #                calendar_sync/_common.normalize_tzid)。NULL = 裸 Z/floating/全天 (现状 UTC 语义);
+    #                非空 = 双展开器 (Python expander / TS calendar-read) 按该时区墙钟展开 (DST 边界
+    #                occurrence 本地时刻不变), 写路径 (caldav_writer F1/F2) 以其决定 override 的
+    #                TZID 输出与 split UNTIL 的本地日界。无历史回填: NULL 行为 = 修复前语义, 下轮
+    #                全量 CalDAV sync 重新 upsert 自然补齐。
+    #                回滚 (回退 v35): 列可留 (旧代码无害) 或手动 DROP; 必要时降 db_version。
+    DB_VERSION = 35  # v35: calendar_event.tzid (#10 tzid 半步)
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -1100,6 +1108,7 @@ class SyncStore:
                 deleted_at REAL,
                 created_at REAL NOT NULL,
                 updated_at REAL NOT NULL,
+                tzid TEXT,  -- v35: DTSTART TZID 归一 Olson 名 (NULL=裸 Z/floating/全天); 末列对齐 ALTER 追加位置
                 CHECK (source IN ('caldav', 'email_ics', 'legacy_calendar_app'))
             )
         """)
@@ -1898,6 +1907,20 @@ class SyncStore:
                 )
             except sqlite3.Error as e:
                 logger.warning(f"v34 migration: email_meeting backfill skipped: {e}")
+
+        # === v35: calendar_event.tzid (#10 tzid 半步) ===
+        # 旧库补列 (新库 CREATE 已含 → PRAGMA 跳过)。无数据回填: NULL = 修复前
+        # UTC 语义, 下轮全量 CalDAV sync 重新 upsert 自然带上 tzid。
+        if current_version < 35:
+            try:
+                _ce_cols = {r[1] for r in cursor.execute("PRAGMA table_info(calendar_event)").fetchall()}
+                if "tzid" not in _ce_cols:
+                    cursor.execute("ALTER TABLE calendar_event ADD COLUMN tzid TEXT")
+                    logger.info("v35 migration: calendar_event +tzid")
+            except sqlite3.OperationalError as e:
+                _migration_guard_columns(
+                    cursor, "calendar_event", {"tzid"}, "v35 migration", e,
+                )
 
         # 更新数据库版本 —— E0-WP3: 只有**全部迁移成功**才会执行到这里。任何迁移块
         # 真失败都会 raise (见 _migration_guard_columns/_migration_guard_index),

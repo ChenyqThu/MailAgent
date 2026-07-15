@@ -126,6 +126,8 @@ export interface CalendarEventRow {
   rrule: string
   exdates: string[]
   rdates: string[]
+  /** v35 (#10 tzid 半步): DTSTART TZID 归一 Olson 名; null = 裸 Z/floating/全天. */
+  tzid: string | null
   status: string
   response_status: string
   url: string
@@ -162,6 +164,7 @@ function rowToCalendarEventRow(r: DbCalendarRow): CalendarEventRow {
     rrule: r.rrule ?? '',
     exdates: parseJsonArray<string>(r.exdates_json),
     rdates: parseJsonArray<string>(r.rdates_json),
+    tzid: r.tzid ?? null,
     status: r.status ?? '',
     response_status: r.response_status ?? '',
     url: r.url ?? '',
@@ -173,12 +176,96 @@ function rowToCalendarEventRow(r: DbCalendarRow): CalendarEventRow {
   }
 }
 
+// ---- #10 tzid 半步: 墙钟 ↔ UTC 换算 helpers ----
+// npm rrule 的 tzid 选项有已知 DST bug (内部按固定 offset 折算), 不用; 改
+// 「假 UTC 墙钟帧展开 + 逐 occurrence 墙钟→真 UTC 校正」等价实现, DST gap/
+// ambiguous 语义对齐 Python zoneinfo fold=0 (双侧单测钉同一组 DST 夹具).
+
+const DAY_MS = 24 * 60 * 60 * 1000
+
+const tzFormatterCache = new Map<string, Intl.DateTimeFormat>()
+
+function resolveTzFormatter(tzid: string | null): Intl.DateTimeFormat | null {
+  if (!tzid) return null
+  const cached = tzFormatterCache.get(tzid)
+  if (cached) return cached
+  try {
+    const fmt = new Intl.DateTimeFormat('en-US', {
+      timeZone: tzid,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hourCycle: 'h23'
+    })
+    tzFormatterCache.set(tzid, fmt)
+    return fmt
+  } catch {
+    console.warn(`[calendar:expand] unresolvable tzid=${tzid} — fallback UTC 展开`)
+    return null
+  }
+}
+
+/** utcMs 时刻在该时区的 UTC offset (ms). */
+function tzOffsetMs(utcMs: number, fmt: Intl.DateTimeFormat): number {
+  const p: Record<string, number> = {}
+  for (const part of fmt.formatToParts(utcMs)) {
+    if (part.type !== 'literal') p[part.type] = Number(part.value)
+  }
+  return Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second) - utcMs
+}
+
+/** 真 UTC ms → 墙钟假 UTC ms (本地墙钟分量按 UTC 编码). */
+function utcToWallMs(utcMs: number, fmt: Intl.DateTimeFormat): number {
+  return utcMs + tzOffsetMs(utcMs, fmt)
+}
+
+/** 墙钟假 UTC ms → 真 UTC ms. DST gap (墙钟不存在) 取过渡前 (更小) offset —
+ *  对齐 Python zoneinfo fold=0; ambiguous (墙钟重复) 两轮收敛到首次出现. */
+function wallToUtcMs(wallMs: number, fmt: Intl.DateTimeFormat): number {
+  const o1 = tzOffsetMs(wallMs, fmt)
+  const utc1 = wallMs - o1
+  const o2 = tzOffsetMs(utc1, fmt)
+  if (o2 === o1) return utc1
+  const utc2 = wallMs - o2
+  if (tzOffsetMs(utc2, fmt) === o2) return utc2
+  return wallMs - Math.min(o1, o2)
+}
+
+/** RRULE 摘出 UNTIL → 真 UTC ms (无 UNTIL → null) + 去 UNTIL 的 RRULE 串.
+ *  墙钟帧里 rrule lib 会把 UNTIL 的 Z 值当假 UTC 比较 (帧错位), tzid 路径必须
+ *  摘出后按真 UTC 后置过滤 — Python dateutil 对 aware dtstart 原生做绝对时刻
+ *  比较, 两侧以此对齐. */
+function extractUntil(rruleStr: string): { rule: string; untilUtcMs: number | null } {
+  let untilUtcMs: number | null = null
+  const parts = rruleStr.split(';').filter((seg) => {
+    const m = /^\s*UNTIL=(\d{8})(?:T(\d{6})Z?)?\s*$/i.exec(seg)
+    if (!m) return true
+    const d = m[1]
+    const t = m[2] ?? '235959'
+    untilUtcMs = Date.UTC(
+      Number(d.slice(0, 4)),
+      Number(d.slice(4, 6)) - 1,
+      Number(d.slice(6, 8)),
+      Number(t.slice(0, 2)),
+      Number(t.slice(2, 4)),
+      Number(t.slice(4, 6))
+    )
+    return false
+  })
+  return { rule: parts.join(';'), untilUtcMs }
+}
+
 /**
  * 展开单 row 的 RRULE 到窗口内 occurrences.
  *
  * 跟 src/calendar_sync/expander.py 的 expand_in_window 等价行为:
  * - 无 RRULE → 单次 event, overlap 窗口才返
  * - 有 RRULE → rrule lib 展开, 套用 EXDATE 跳过, RDATE 额外加, MAX_COUNT 保护
+ * - row.tzid 非空 (v35, #10 tzid 半步) → 按该时区墙钟展开: DST 边界处
+ *   occurrence 本地时刻不变 (09:00 LA 恒 09:00, UTC 侧 17:00Z→16:00Z)
  */
 const MAX_OCCURRENCES_PER_RRULE = 500
 
@@ -204,9 +291,22 @@ export function expandInWindow(
   if (rruleStr.toUpperCase().startsWith('RRULE:')) {
     rruleStr = rruleStr.slice(6)
   }
+
+  // tzid 墙钟帧 (见文件头 helpers): dtstart 换成假 UTC 墙钟, UNTIL 摘出改真 UTC 后置过滤
+  const tzFmt = resolveTzFormatter(row.tzid ?? null)
+  let ruleStr = rruleStr
+  let untilUtcMs: number | null = null
+  if (tzFmt) {
+    const extracted = extractUntil(rruleStr)
+    ruleStr = extracted.rule
+    untilUtcMs = extracted.untilUtcMs
+  }
+
   let rule: ReturnType<typeof rrulestr>
   try {
-    rule = rrulestr(`RRULE:${rruleStr}`, { dtstart: new Date(dtstartMs) })
+    rule = rrulestr(`RRULE:${ruleStr}`, {
+      dtstart: new Date(tzFmt ? utcToWallMs(dtstartMs, tzFmt) : dtstartMs)
+    })
   } catch {
     if (dtstartMs < windowEndMs && dtendMs > windowStartMs) {
       return [{ start: new Date(dtstartMs), end: new Date(dtendMs), isRecurrence: false }]
@@ -214,11 +314,22 @@ export function expandInWindow(
     return []
   }
 
-  const expandAfter = new Date(windowStartMs - durationMs)
-  const expandBefore = new Date(windowEndMs)
   let candidates: Date[] = []
   try {
-    candidates = rule.between(expandAfter, expandBefore, true)
+    if (tzFmt) {
+      // 墙钟帧 between 边界 ±1 天冗余 (帧偏移 ≤14h); 真 UTC overlap 终判在下方共享段
+      const wallAfter = new Date(utcToWallMs(windowStartMs, tzFmt) - durationMs - DAY_MS)
+      const wallBefore = new Date(utcToWallMs(windowEndMs, tzFmt) + DAY_MS)
+      candidates = rule
+        .between(wallAfter, wallBefore, true)
+        .map((d) => new Date(wallToUtcMs(d.getTime(), tzFmt)))
+      if (untilUtcMs != null) {
+        const cutoff = untilUtcMs
+        candidates = candidates.filter((d) => d.getTime() <= cutoff)
+      }
+    } else {
+      candidates = rule.between(new Date(windowStartMs - durationMs), new Date(windowEndMs), true)
+    }
   } catch {
     candidates = []
   }
@@ -295,7 +406,7 @@ export function runEventsList(opts: EventsListOpts = {}): CalendarEventOccurrenc
   const sql = `
     SELECT id, ical_uid, recurrence_id, sequence, summary, description, location,
            organizer, attendees_json, dtstart_utc, dtend_utc, is_all_day,
-           rrule, exdates_json, rdates_json, status, response_status, url,
+           rrule, exdates_json, rdates_json, tzid, status, response_status, url,
            ics_raw, source, notion_page_id, related_email_internal_id, calendar_name
     FROM calendar_event WHERE ${clauses.join(' AND ')}
     ORDER BY dtstart_utc ASC
@@ -359,7 +470,7 @@ export function runEventGet(opts: EventGetOpts): CalendarEventRow | null {
       .prepare(
         `SELECT id, ical_uid, recurrence_id, sequence, summary, description, location,
                 organizer, attendees_json, dtstart_utc, dtend_utc, is_all_day,
-                rrule, exdates_json, rdates_json, status, response_status, url,
+                rrule, exdates_json, rdates_json, tzid, status, response_status, url,
                 ics_raw, source, notion_page_id, related_email_internal_id, calendar_name
          FROM calendar_event
          WHERE ical_uid = ? AND source = ?
@@ -411,7 +522,7 @@ export interface EventSourceEmail {
 
 const CALENDAR_EVENT_COLUMNS = `id, ical_uid, recurrence_id, sequence, summary, description, location,
        organizer, attendees_json, dtstart_utc, dtend_utc, is_all_day,
-       rrule, exdates_json, rdates_json, status, response_status, url,
+       rrule, exdates_json, rdates_json, tzid, status, response_status, url,
        ics_raw, source, notion_page_id, related_email_internal_id, calendar_name`
 
 export function runEmailCalendarLink(internalId: number): EmailCalendarLink | null {

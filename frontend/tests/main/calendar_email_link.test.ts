@@ -68,7 +68,8 @@ function buildDb(): Database.Database {
       last_synced_at REAL NOT NULL,
       deleted_at REAL,
       created_at REAL NOT NULL,
-      updated_at REAL NOT NULL
+      updated_at REAL NOT NULL,
+      tzid TEXT
     );
   `)
 

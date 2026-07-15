@@ -9,7 +9,12 @@ ISO list), 而不是 ICalendarParser.Invite 对象.
   时间已经归一 UTC, 没有 tz blob 可用.
 - 调用语义不同: recurrence.py 输出 dt list (无 end), expander 输出 (start, end) 元组对.
 
-DST 处理: dateutil rrulestr 接受 tz-aware dtstart 时自动处理 DST 滚动.
+DST 处理 (#10 tzid 半步): tzid 非空且可解析时, dtstart 先换到该时区再喂 dateutil —
+dateutil 对 tz-aware dtstart 做「naive 分量递增 + tzinfo 附着」的墙钟算术, BYDAY/
+BYHOUR 按本地墙钟求值, DST 边界处 occurrence 本地时刻不变 (09:00 LA 恒 09:00,
+UTC 侧 17:00Z→16:00Z)。tzid 空/None = 现状 UTC 展开 (老行为逐字节保留)。
+前端 TS 展开器 (calendar-read.ts expandInWindow) 是等价实现, 两侧单测钉同一组
+DST 跨界夹具 — 单改一侧必漂移 (P1-1 教训)。
 """
 from __future__ import annotations
 
@@ -17,6 +22,9 @@ from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Tuple
 
 from loguru import logger
+
+from src.calendar_sync._common import resolve_zoneinfo
+
 
 
 def _parse_iso(iso: str) -> Optional[datetime]:
@@ -46,6 +54,7 @@ def expand_in_window(
     window_start: datetime,
     window_end: datetime,
     max_count: int = 500,
+    tzid: Optional[str] = None,
 ) -> List[Tuple[datetime, datetime]]:
     """展开 RRULE 在 [window_start, window_end) 内的所有 occurrences.
 
@@ -57,6 +66,8 @@ def expand_in_window(
         rdates_iso: 额外发生日期 list (ISO 字符串).
         window_start / window_end: 窗口边界 (tz-aware UTC).
         max_count: 安全上限 — 防 RRULE 无 UNTIL/COUNT 时无限展开撑爆内存.
+        tzid: Olson 时区名 (calendar_event.tzid, DB v35); 非空时按该时区做墙钟
+            展开 (见模块 docstring), 空/解析失败 fallback UTC 展开并 warning.
 
     Returns:
         List of (occ_start_utc, occ_end_utc) 元组对, 按 occ_start 升序.
@@ -102,8 +113,21 @@ def expand_in_window(
             dtstart < window_end and dtstart + duration > window_start
         ) else []
 
+    # tzid 墙钟展开: dtstart 换到事件时区, dateutil 按本地墙钟递增 (occurrence
+    # 是「同墙钟 + tz 附着」的 aware datetime, 下方统一 astimezone(utc) 归一;
+    # DST gap/ambiguous 走 zoneinfo fold=0 语义, TS 侧 wallToUtcMs 对齐).
+    rrule_dtstart = dtstart
+    if tzid:
+        tz = resolve_zoneinfo(tzid)
+        if tz is not None:
+            rrule_dtstart = dtstart.astimezone(tz)
+        else:
+            logger.warning(
+                f"[expander] unresolvable tzid={tzid!r} — fallback UTC 展开"
+            )
+
     try:
-        rule = rrulestr(rrule_str, dtstart=dtstart)
+        rule = rrulestr(rrule_str, dtstart=rrule_dtstart)
     except (ValueError, TypeError) as e:
         logger.warning(
             f"[expander] rrulestr failed for {rrule!r}: {e} — fallback to single occurrence"
