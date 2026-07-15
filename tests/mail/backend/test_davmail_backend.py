@@ -955,3 +955,77 @@ def test_thread_id_from_headers_clean_header_is_noop():
     assert _thread_id_from_headers("", "", "self@c.com") == "self@c.com"
     assert _thread_id_from_headers("", "", "") is None
     assert _thread_id_from_headers(None, None, "") is None
+
+
+# --------- fetch update_uid gate (compose_plan dry-run 无侧写封口, codex 批次3) ---------
+
+
+def _patch_imap_session(monkeypatch, fake_imap):
+    """把 davmail_backend.imap_session 换成 yield fake_imap 的 context manager."""
+    from contextlib import contextmanager
+
+    @contextmanager
+    def fake_session(*args, **kwargs):
+        yield fake_imap
+
+    monkeypatch.setattr(
+        "src.mail.backend.davmail_backend.imap_session", fake_session,
+    )
+
+
+def _fake_imap_msgid_fallback(uid_found=555):
+    """无快路径 UID → message_id SEARCH 命中 uid_found → FETCH 返回可解析 MIME 的 fake imap。
+
+    这是 fetch_email_by_id 走 message_id fallback (进而回写 _update_sync_store_uid) 的场景。
+    """
+    fake = MagicMock()
+    fake.select.return_value = ("OK", [b"OK"])
+    fake.untagged_responses = {"UIDVALIDITY": [b"12345"]}
+    fake.uid.side_effect = [
+        ("OK", [str(uid_found).encode()]),  # UID SEARCH HEADER Message-ID
+        ("OK", [  # UID FETCH BODY[]
+            (
+                f"1 (UID {uid_found} FLAGS () RFC822.SIZE 40 BODY[] {{60}}".encode(),
+                b"Message-ID: <m@x>\r\nSubject: hi\r\n"
+                b"Date: 1 Jan 2026 00:00:00 +0000\r\n\r\nbody",
+            ),
+            b")",
+        ]),
+    ]
+    return fake
+
+
+def _make_fallback_backend(monkeypatch, uid_found=555):
+    """构造 backend: 记录无 imap_uid (强制 message_id fallback), spy _update_sync_store_uid。"""
+    backend = _make_backend()
+    backend.cfg.davmail_fetch_timeout_sec = 120  # int() 而非 MagicMock, 否则 fetch 早退 None
+    backend.drafts_folder = "Drafts"
+    backend.sync_store.get = MagicMock(return_value={
+        "internal_id": 1_000_000_001,
+        "message_id": "m@x",
+        "mailbox": "草稿箱",
+        # 无 imap_uid → fetch_email_by_id 直接走 message_id 反查分支
+    })
+    backend._update_sync_store_uid = MagicMock()
+    _patch_imap_session(monkeypatch, _fake_imap_msgid_fallback(uid_found))
+    return backend
+
+
+def test_fetch_update_uid_false_skips_sync_store_write(monkeypatch):
+    """update_uid=False (dry-run 懒自愈): message_id fallback 命中也不回写 UID 元数据。"""
+    backend = _make_fallback_backend(monkeypatch)
+    result = backend.fetch_email_content_by_id(1_000_000_001, update_uid=False)
+    assert result is not None  # 取件解析照旧成功
+    assert result["message_id"] == "m@x"
+    backend._update_sync_store_uid.assert_not_called()  # 零侧写
+
+
+def test_fetch_update_uid_true_writes_sync_store(monkeypatch):
+    """默认 update_uid=True (正向 sync / retry): fallback 命中后回写 UID — 既有语义锁定。"""
+    backend = _make_fallback_backend(monkeypatch)
+    result = backend.fetch_email_content_by_id(1_000_000_001)  # 默认 update_uid=True
+    assert result is not None
+    backend._update_sync_store_uid.assert_called_once()
+    args = backend._update_sync_store_uid.call_args.args
+    assert args[0] == 1_000_000_001  # internal_id
+    assert args[1] == 555  # 反查命中的 uid

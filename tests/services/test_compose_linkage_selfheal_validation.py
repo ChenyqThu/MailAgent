@@ -181,7 +181,8 @@ def test_selfheal_restores_threading_and_writes_back(tmp_path):
     assert draft.in_reply_to == "<orig@x>"
     assert draft.references == "<head@x> <orig@x>"
     assert draft.internal_id_for_threading == 42
-    svc._ctx.backend.fetch_email_content_by_id.assert_called_once_with(iid)
+    # 执行路径 persist_heal=True → 取件带 update_uid=True (davmail 命中 fallback 回填 UID)
+    svc._ctx.backend.fetch_email_content_by_id.assert_called_once_with(iid, update_uid=True)
 
     # 回写: draft_* 三列 + thread_id 落库
     row = store.get(iid)
@@ -410,6 +411,9 @@ def test_compose_plan_selfheal_does_not_write_db(tmp_path, monkeypatch):
 
     assert plan["dry_run"] is True
     assert plan["in_reply_to"] == "<orig@x>"  # 本次使用照旧
+    # 取件侧也必须无写: dry-run 懒自愈把 update_uid=False 透传到 backend, 使 davmail
+    # message_id fallback 命中后不回写 imap_uid 元数据 (codex 批次3 finding 封口)。
+    svc._ctx.backend.fetch_email_content_by_id.assert_called_once_with(iid, update_uid=False)
     spy.assert_not_called()  # 零写库
     row = store.get(iid)
     assert row["draft_in_reply_to"] is None

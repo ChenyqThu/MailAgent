@@ -1792,7 +1792,11 @@ class MailWriteService:
             fetch = getattr(self._ctx.backend, "fetch_email_content_by_id", None)
             if not callable(fetch):
                 return None
-            content = fetch(internal_id) or {}
+            # persist=False (compose_plan dry-run) → update_uid=False: 取件即便走
+            # message_id fallback 命中也不回写 imap_uid 元数据 (codex 批次3 finding —
+            # persist_heal=False 已不写 linkage, 但取件侧 _update_sync_store_uid 仍会
+            # 侧写 SQLite, 违反 compose_plan「无写」契约字面)。persist=True 保持现状回填。
+            content = fetch(internal_id, update_uid=persist) or {}
             source = content.get("source") or ""
             if not source:
                 return None

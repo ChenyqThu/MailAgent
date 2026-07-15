@@ -135,13 +135,18 @@ class IMailBackend(Protocol):
     # =========================================================================
 
     def fetch_email_content_by_id(
-        self, internal_id: int, mailbox: Optional[str] = None
+        self, internal_id: int, mailbox: Optional[str] = None, *, update_uid: bool = True
     ) -> Optional[dict]:
         """通过 SyncStore internal_id 抓单封邮件完整内容 (legacy dict).
 
         AppleScript: `whose id is <internal_id>` (~1s, v3 快路径).
         DavMail: SyncStore (imap_uidvalidity, imap_uid) → UID FETCH BODY.PEEK[];
         miss 时 message_id IMAP SEARCH 反查 + 回写 sync_store.
+
+        ``update_uid=False`` (compose_plan dry-run 懒自愈): davmail message_id fallback
+        命中后**跳过** imap_uid/uidvalidity 元数据回写 — 守住 dry-run「无 auth/写」契约。
+        默认 True 时既有调用方 (正向 sync / retry) 逐字节不变; applescript 无 UID 元数据
+        回写, 参数仅满足契约被忽略。
 
         失败返回 None (不抛异常, 让上层走 retry queue).
         """

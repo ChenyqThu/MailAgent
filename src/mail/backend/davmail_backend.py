@@ -385,7 +385,7 @@ class DavMailBackend(IMailBackend):
     # =========================================================================
 
     def fetch_email_by_id(
-        self, internal_id: int, *, mailbox: Optional[str] = None
+        self, internal_id: int, *, mailbox: Optional[str] = None, update_uid: bool = True
     ) -> Optional[EmailContent]:
         """查 SyncStore 拿 (uidvalidity, uid) 或 message_id, 然后 IMAP UID FETCH BODY[].
 
@@ -394,6 +394,9 @@ class DavMailBackend(IMailBackend):
         - MEDIUM: imap_uid > 0 才走快路径, ``-1`` (backfill 标记的 permanent miss) 直接
           fallback message_id 反查
         - MEDIUM: lookup_uid_by_message_id 命中后回写 sync_store 让下次走快路径
+
+        ``update_uid=False`` (compose_plan dry-run 懒自愈): message_id fallback 命中后
+        跳过 ``_update_sync_store_uid`` 回写 — dry-run 取件解析照旧, 但不产生 SQLite 侧写。
         """
         record = self.sync_store.get(internal_id)
         if not record:
@@ -448,13 +451,16 @@ class DavMailBackend(IMailBackend):
                     imap_uid = self._lookup_uid_by_message_id(imap, message_id)
                     if not imap_uid:
                         return None
-                    # 命中后回写 sync_store 让下次走快路径 (review MEDIUM)
-                    try:
-                        self._update_sync_store_uid(internal_id, imap_uid, current_uv)
-                    except Exception as e:
-                        logger.warning(
-                            f"[davmail-backend] update_sync_store_uid failed (non-fatal): {e}"
-                        )
+                    # 命中后回写 sync_store 让下次走快路径 (review MEDIUM)。
+                    # update_uid=False (compose_plan dry-run 懒自愈) 跳过回写 — 守住
+                    # dry-run「无写」契约 (codex 批次3 finding)。
+                    if update_uid:
+                        try:
+                            self._update_sync_store_uid(internal_id, imap_uid, current_uv)
+                        except Exception as e:
+                            logger.warning(
+                                f"[davmail-backend] update_sync_store_uid failed (non-fatal): {e}"
+                            )
 
                 # FETCH BODY[]
                 t0 = time.time()
@@ -499,13 +505,15 @@ class DavMailBackend(IMailBackend):
                 if not new_uid or new_uid == imap_uid:
                     return None  # 反查也失败 / 跟原来一样 (邮件确实没了)
 
-                # 命中新 UID, 回写 sync_store, 再 fetch
-                try:
-                    self._update_sync_store_uid(internal_id, new_uid, current_uv)
-                except Exception as e:
-                    logger.warning(
-                        f"[davmail-backend] update_sync_store_uid failed (non-fatal): {e}"
-                    )
+                # 命中新 UID, 回写 sync_store, 再 fetch。update_uid=False (dry-run 懒自愈)
+                # 跳过回写, 仅本次取件解析 (codex 批次3 finding)。
+                if update_uid:
+                    try:
+                        self._update_sync_store_uid(internal_id, new_uid, current_uv)
+                    except Exception as e:
+                        logger.warning(
+                            f"[davmail-backend] update_sync_store_uid failed (non-fatal): {e}"
+                        )
                 typ, data = imap.uid(
                     "fetch", str(new_uid),
                     "(UID INTERNALDATE FLAGS RFC822.SIZE BODY.PEEK[])",
@@ -968,10 +976,15 @@ class DavMailBackend(IMailBackend):
     # =========================================================================
 
     def fetch_email_content_by_id(
-        self, internal_id: int, mailbox: Optional[str] = None
+        self, internal_id: int, mailbox: Optional[str] = None, *, update_uid: bool = True
     ) -> Optional[dict]:
-        """单封抓取 (legacy dict) — 委托内部 typed fetch_email_by_id."""
-        ec = self.fetch_email_by_id(internal_id, mailbox=mailbox)
+        """单封抓取 (legacy dict) — 委托内部 typed fetch_email_by_id.
+
+        ``update_uid=False`` (compose_plan dry-run 懒自愈): message_id fallback 命中后
+        **不回写** imap_uid/uidvalidity 元数据, 守住 dry-run「无写」契约 (codex 批次3
+        finding)。默认 True 时既有调用方 (正向 sync / retry) 逐字节不变。
+        """
+        ec = self.fetch_email_by_id(internal_id, mailbox=mailbox, update_uid=update_uid)
         return ec.to_legacy_dict() if ec else None
 
     def fetch_email_by_message_id(
