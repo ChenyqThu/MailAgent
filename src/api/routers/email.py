@@ -987,6 +987,12 @@ def _compose_request_from_body(internal_id: int, opts: dict[str, Any]):
     subject = opts.get("subject")
     body_html = opts.get("bodyHtml")
     body_text = opts.get("bodyText")
+    # sourceDraftId (D1 Bug A): mode='new' (草稿编辑发送/保存) 传草稿行自己的
+    # internal_id → service 读 draft_* linkage 列恢复 threading。非 int 静默置 None
+    # (对齐本函数其余字段的宽松形状处理)。
+    source_draft_id = opts.get("sourceDraftId")
+    if not isinstance(source_draft_id, int) or isinstance(source_draft_id, bool):
+        source_draft_id = None
     return ComposeRequest(
         internal_id=internal_id,
         mode=_validate_compose_mode(opts.get("mode")),
@@ -1005,6 +1011,7 @@ def _compose_request_from_body(internal_id: int, opts: dict[str, Any]):
         quote_original=bool(opts.get("quoteOriginal", False)),
         importance=opts.get("importance") if isinstance(opts.get("importance"), str) else None,
         attachments=_parse_compose_attachments(opts),
+        source_draft_id=source_draft_id,
     )
 
 

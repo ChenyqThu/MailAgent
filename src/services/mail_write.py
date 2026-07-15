@@ -159,6 +159,13 @@ class AiFieldsResult:
 # 上限 25-35MB.
 MAX_COMPOSE_ATTACH_BYTES = 20 * 1024 * 1024
 
+# 引用分离 marker (D2 Bug B): _build_reply_quote / _build_forward_intro 产出的引用块
+# 整体包 <div data-ma-quote="1">…</div> (含「在…写道：」/ Forwarded message 头行 +
+# blockquote/正文全部)。前端 draft-edit 回填按该属性切分: marker 前段进 editor,
+# marker 段 (含) 进折叠 quote 区; 无 marker 回退全量分流。wrapper div 对收件方渲染
+# 无害 (落盘草稿与发送 MIME 都带)。TS 侧同名常量在 frontend/src/shared/lib/quoteSplit.ts。
+QUOTE_MARKER_ATTR = "data-ma-quote"
+
 
 @dataclass
 class ComposeRequest:
@@ -198,6 +205,11 @@ class ComposeRequest:
     # None = 未提供 (forward 保持自动收集原附件); 显式提供 (含 []) 时为权威列表,
     # forward 不再自动收集 (语义同 to_override 覆盖推导)。
     attachments: Optional[list[dict]] = None
+    # source_draft_id (D1 Bug A): mode='new' (草稿编辑发送/保存) 时给出草稿行自己的
+    # internal_id → service 读该行 draft_in_reply_to/draft_references/thread_id
+    # linkage, 恢复 threading 头 (In-Reply-To/References) 不再丢线程。行不存在或
+    # linkage 空 → 回退现状零派生。HTTP body key "sourceDraftId"; 其余模式忽略。
+    source_draft_id: Optional[int] = None
 
 
 @dataclass
@@ -312,6 +324,7 @@ def _compose_reply_draft(
     attachments: Optional[list] = None,
     self_email: Optional[str] = None,
     importance: Optional[str] = None,
+    source_linkage: Optional[dict] = None,
 ):
     """从原邮件 metadata + reply 内容构造 DraftRequest.
 
@@ -340,14 +353,37 @@ def _compose_reply_draft(
     orig_subj = record.get("subject", "") or ""
 
     if mode == "new":
-        # 独立新邮件 (草稿编辑): 显式收件人/主题/正文, 零线程派生 (无 Re:/Fwd: 前缀,
-        # 不设 in_reply_to/references), 不依赖 record (internal_id 是草稿自己).
+        # 独立新邮件 (草稿编辑): 显式收件人/主题/正文, 不依赖 record (internal_id 是
+        # 草稿自己)。默认零线程派生 (无 Re:/Fwd: 前缀, 不设 in_reply_to/references);
+        # source_linkage (D1 Bug A, 来自草稿行 draft_* 列) 非空时恢复 threading 头 —
+        # 从回复草稿发送不再丢线程。references 缺失时按既有 reply 分支同构派生
+        # (thread_id + in_reply_to 拼链); internal_id_for_threading = 原邮件行
+        # internal_id (语义对齐 reply 分支, 反查不到时 None)。
+        in_reply_to: Optional[str] = None
+        references: Optional[str] = None
+        iid_for_threading: Optional[int] = None
+        linkage_mid = str((source_linkage or {}).get("in_reply_to") or "").strip().strip("<>")
+        if linkage_mid:
+            in_reply_to = f"<{linkage_mid}>"
+            refs = " ".join(str((source_linkage or {}).get("references") or "").split())
+            if refs:
+                references = refs
+            else:
+                tid = str((source_linkage or {}).get("thread_id") or "").strip().strip("<>")
+                chunks: list[str] = []
+                if tid and tid != linkage_mid:
+                    chunks.append(f"<{tid}>")
+                chunks.append(in_reply_to)
+                references = " ".join(chunks)
+            src_iid = (source_linkage or {}).get("source_internal_id")
+            if isinstance(src_iid, int) and not isinstance(src_iid, bool):
+                iid_for_threading = src_iid
         to_list = list(dict.fromkeys(_split_addrs(to_override or "")))
         cc_list = list(dict.fromkeys(_split_addrs(cc_override or "")))
         subject = subject_override if subject_override is not None else "(no subject)"
         return DraftRequest(
             mode="new",
-            internal_id_for_threading=None,
+            internal_id_for_threading=iid_for_threading,
             to=to_list, cc=cc_list, bcc=bcc_list,
             subject=subject or "(no subject)",
             # 写新邮件正文来自用户显式输入 — 空就是空, 不塞 "(rich text body)" 占位
@@ -355,6 +391,8 @@ def _compose_reply_draft(
             #  客户端)。sender.py 对真空 plain part 另有 "(empty body)" 兜底。
             reply_text=reply_text or "",
             reply_html=reply_html,
+            in_reply_to=in_reply_to,
+            references=references,
             attachments=attachments or [],
             importance=importance,
         )
@@ -476,7 +514,12 @@ def _build_forward_intro(
         f"Subject: {_html.escape(subj)}<br>"
         f"To: {_html.escape(to)}</div>"
     )
-    intro_html = header_html + (body_html or f"<pre>{_html.escape(body_text or '')}</pre>")
+    intro_html = (
+        f'<div {QUOTE_MARKER_ATTR}="1">'
+        + header_html
+        + (body_html or f"<pre>{_html.escape(body_text or '')}</pre>")
+        + "</div>"
+    )
     return intro_text, intro_html
 
 
@@ -501,10 +544,11 @@ def _build_reply_quote(
     )
     quoted = body_html or f"<pre>{_html.escape(body_text or '')}</pre>"
     intro_html = (
+        f'<div {QUOTE_MARKER_ATTR}="1">'
         f"{header_html}"
         '<blockquote style="margin:8px 0 0;padding-left:12px;'
         'border-left:2px solid #ccc;color:#555">'
-        f"{quoted}</blockquote>"
+        f"{quoted}</blockquote></div>"
     )
     return intro_text, intro_html
 
@@ -1517,6 +1561,20 @@ class MailWriteService:
                 f"Email metadata not found for internal_id={internal_id}"
             )
 
+        # source_draft_id (D1 Bug A): mode='new' 且给了草稿行 id → 读该行 draft_*
+        # linkage 列, 交 _compose_reply_draft 恢复 threading 头。行不存在 / 列空
+        # (存量草稿 / 非回复草稿) → None, 回退现状零派生。
+        source_linkage: Optional[dict] = None
+        if mode == "new" and request.source_draft_id is not None:
+            draft_row = self._ctx.sync_store.get(request.source_draft_id) or {}
+            if (draft_row.get("draft_in_reply_to") or "").strip():
+                source_linkage = {
+                    "in_reply_to": draft_row.get("draft_in_reply_to"),
+                    "references": draft_row.get("draft_references"),
+                    "thread_id": draft_row.get("thread_id"),
+                    "source_internal_id": draft_row.get("draft_source_internal_id"),
+                }
+
         # explicit_body: 调用方传了完整正文 (前端 compose 发送 / 用户 body_text)。forward 时
         # 已含引用块 (dry-run 预填阶段拼进 editor 后随 body_html 传回), 不能再单独构造
         # forward_intro — 否则 build_outgoing_mime 二次 append 致引用块重复。
@@ -1600,6 +1658,7 @@ class MailWriteService:
             attachments=attachments,
             self_email=self._ctx.config.user_email,
             importance=request.importance,
+            source_linkage=source_linkage,
         )
         return draft, warnings, quote
 
@@ -1700,6 +1759,19 @@ class MailWriteService:
 
             store = self._ctx.sync_store
             internal_id = store.allocate_davmail_internal_id()
+            # 草稿线程 linkage (D1 Bug A): 有 threading 头 (reply/reply-all, 或
+            # source_draft_id 恢复过 linkage 的 mode='new') 就持久化 — 发送时
+            # _prepare_draft 按 source_draft_id 读回, 恢复 In-Reply-To/References。
+            # thread_id 从 References 首元素派生 (= 原邮件 record.thread_id, 原邮件
+            # 是线程根时 = 其 message_id) — 与 reconcile 的 _thread_id_from_headers
+            # 口径一致, 对账自愈不漂移; forward/new 无 threading 头 → 维持 None。
+            in_reply_to_mid = (draft.in_reply_to or "").strip().strip("<>") or None
+            references_chain = " ".join((draft.references or "").split()) or None
+            thread_id = None
+            if references_chain:
+                thread_id = references_chain.split()[0].strip("<>") or None
+            elif in_reply_to_mid:
+                thread_id = in_reply_to_mid
             payload = {
                 "internal_id": internal_id,
                 "message_id": result.message_id,
@@ -1712,11 +1784,15 @@ class MailWriteService:
                 "mailbox": "草稿箱",
                 "is_read": True,
                 "is_flagged": False,
-                "thread_id": None,
+                "thread_id": thread_id,
                 "sync_status": "pending",
                 "backend_origin": "davmail",
                 "imap_uid": result.appended_uid,
             }
+            if in_reply_to_mid:
+                payload["draft_in_reply_to"] = in_reply_to_mid
+                payload["draft_references"] = references_chain
+                payload["draft_source_internal_id"] = draft.internal_id_for_threading
             if result.appended_uidvalidity is not None:
                 payload["imap_uidvalidity"] = result.appended_uidvalidity
             store.save_email(payload)
