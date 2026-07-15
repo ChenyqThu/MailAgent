@@ -83,6 +83,8 @@ export type {
   CalendarEventOccurrence,
   CalendarEventDetail,
   CalendarSyncStateItem,
+  EmailCalendarLink,
+  EventSourceEmail,
   EventsListOpts,
   EventGetOpts,
   SyncNowOpts,

@@ -6,11 +6,13 @@
 // CalendarLayout 已配套传 setCurrentDate.
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Calendar as CalendarIcon, ChevronLeft, ChevronRight } from 'lucide-react'
+import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
+import { CalendarQueryError } from '../CalendarQueryError'
 import { EventBlock } from '../EventBlock'
 import { isTodayLocal, pad, shortTime, ymd } from '../lib/format'
+import { DOW_EN_FULL, weekdayMin } from '../lib/weekdays'
 import {
   addDays,
   layoutDay,
@@ -20,9 +22,10 @@ import {
   useCalendarEventsInWindow
 } from '../hooks/useCalendarEvents'
 import type { CalendarEventOccurrence } from '@shared/api/types'
-import { EmptyState } from '@shared/components/feedback/EmptyState'
-import { Skeleton } from '@shared/components/feedback/LoadingSkeleton'
 import { cn } from '@shared/lib/cn'
+
+import { CalendarViewEmpty } from './CalendarViewEmpty'
+import { TimelineSkeleton } from './TimelineSkeleton'
 
 interface Props {
   date?: Date
@@ -33,14 +36,12 @@ interface Props {
   /** F5 — Layout 持单一 active + Drawer, view 上提选中事件. */
   onSelect: (occ: CalendarEventOccurrence) => void
   /** F5 — selected event key (= ``${id}-${occurrence_start_iso}``) 用于
-   *  EventBlock selected 高亮. */
+   *  EventBlock selected 高亮 + F4/Q13 rail 行锚点. */
   selectedKey?: string | null
 }
 
 const HOUR_PX = 48
 const GRID_COLS_ONE = '56px 1fr'
-const DOW_EN_FULL = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT']
-const MM_DOW = ['一', '二', '三', '四', '五', '六', '日']
 
 // F32 — pad/ymd/shortTime/isSameDay/isTodayLocal 抽到 ../lib/format
 
@@ -76,7 +77,10 @@ function MiniMonth({
     <>
       <div className="mm-head">
         <span className="mm-title">
-          {monthStart.getFullYear()} 年 {monthStart.getMonth() + 1} 月
+          {t('calendar.shared.yearMonth', '{y} 年 {m} 月', {
+            y: monthStart.getFullYear(),
+            m: monthStart.getMonth() + 1
+          })}
         </span>
         <div className="mm-nav">
           <button type="button" onClick={onPrev} title={prevMonthLabel} aria-label={prevMonthLabel}>
@@ -88,9 +92,10 @@ function MiniMonth({
         </div>
       </div>
       <div className="mm-grid">
-        {MM_DOW.map((d) => (
-          <div key={d} className="mm-dow">
-            {d}
+        {/* F25/F26 — 列头走 weekdayMin 单源; key 用索引 (en 单字母 T/S 会重复). */}
+        {Array.from({ length: 7 }, (_, i) => (
+          <div key={i} className="mm-dow">
+            {weekdayMin(t, i)}
           </div>
         ))}
         {cells.map((c, i) => {
@@ -162,7 +167,12 @@ export function DayView({
   }, [selectedDate])
   const dayEnd = useMemo(() => addDays(dayStart, 1), [dayStart])
 
-  const { data: dayEventsRaw, isLoading } = useCalendarEventsInWindow(
+  const {
+    data: dayEventsRaw,
+    isLoading,
+    isError,
+    refetch
+  } = useCalendarEventsInWindow(
     {
       fromIso: dayStart.toISOString(),
       toIso: dayEnd.toISOString(),
@@ -223,6 +233,15 @@ export function DayView({
     (a, b) => Date.parse(a.occurrence_start_iso) - Date.parse(b.occurrence_start_iso)
   )
 
+  // 1.13 尾巴 — 主区已换错误屏时 rail 计数不再谎报「本日无日程」.
+  const railCountTxt = isLoading
+    ? t('calendar.shared.loading', '加载中…')
+    : isError && total === 0
+      ? t('calendar.error.loadShort', '加载失败')
+      : total > 0
+        ? t('calendar.view.day.count', '{n} 个日程', { n: total })
+        : t('calendar.empty.day', '本日无日程')
+
   return (
     <div className="day-view">
       <aside className="day-rail scrollbar-thin">
@@ -235,20 +254,18 @@ export function DayView({
           onNext={() => navMonth(1)}
         />
         <div className="dr-summary">{dayLabel}</div>
-        <div className="dr-count">
-          {isLoading
-            ? t('calendar.shared.loading', '加载中…')
-            : total > 0
-              ? t('calendar.view.day.count', '{n} 个日程', { n: total })
-              : t('calendar.empty.day', '本日无日程')}
-        </div>
+        <div className="dr-count">{railCountTxt}</div>
         <div>
           {allDay.map((occ) => (
             <button
               key={`ad-${occ.id}-${occ.occurrence_start_iso}`}
               type="button"
-              className="dr-row"
+              className={cn(
+                'dr-row',
+                selectedKey === `${occ.id}-${occ.occurrence_start_iso}` && 'is-selected'
+              )}
               data-resp={(occ.response_status || '').toUpperCase()}
+              data-status={(occ.status || '').toUpperCase()}
               onClick={() => onSelect(occ)}
               title={occ.summary || t('calendar.shared.untitled', '未命名事件')}
             >
@@ -265,8 +282,12 @@ export function DayView({
             <button
               key={`t-${occ.id}-${occ.occurrence_start_iso}`}
               type="button"
-              className="dr-row"
+              className={cn(
+                'dr-row',
+                selectedKey === `${occ.id}-${occ.occurrence_start_iso}` && 'is-selected'
+              )}
               data-resp={(occ.response_status || '').toUpperCase()}
+              data-status={(occ.status || '').toUpperCase()}
               onClick={() => onSelect(occ)}
               title={occ.summary || t('calendar.shared.untitled', '未命名事件')}
             >
@@ -286,14 +307,16 @@ export function DayView({
 
       <div className="day-main">
         {/* 首次加载 (无 keepPreviousData 旧数据) 才显骨架; 切日时旧日 timeline
-            经 keepPreviousData 留屏直到新日 ready, isLoading=false 不显骨架. */}
+            经 keepPreviousData 留屏直到新日 ready, isLoading=false 不显骨架.
+            F23 — 结构化 timeline 骨架替代通用灰条. */}
         {isLoading ? (
-          <Skeleton rows={8} className="p-6" />
+          <TimelineSkeleton cols={1} />
+        ) : isError && total === 0 ? (
+          // F21 — query reject 不再伪装成空态; 仅在无可显示数据时换错误屏.
+          <CalendarQueryError onRetry={refetch} />
         ) : total === 0 ? (
-          <EmptyState
-            icon={<CalendarIcon size={20} strokeWidth={1.75} className="text-ink-fg-3" />}
-            title={t('calendar.empty.day', '本日无日程')}
-          />
+          // S7 — 空态三语义 (无事件/从未同步/同步失败) 由 CalendarViewEmpty 判定.
+          <CalendarViewEmpty emptyTitle={t('calendar.empty.day', '本日无日程')} />
         ) : (
           <div className="cal-week">
             <div className="wk-headrow" style={{ gridTemplateColumns: GRID_COLS_ONE }}>

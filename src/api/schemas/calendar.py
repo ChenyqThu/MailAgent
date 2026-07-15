@@ -144,6 +144,50 @@ class CalendarEventGetData(BaseModel):
     event: CalendarEventDetail
 
 
+# --- email ↔ event link (阶段 2.1 P1-3) --------------------------------------
+class EmailCalendarLink(BaseModel):
+    """方向 A: 邮件 internal_id → .ics uid + 日历 master 行.
+
+    **C7**: ``GET /api/calendar/email-link/{internal_id}`` 的 envelope ``data``
+    就是这个裸对象 (frontend alias: EmailCalendarLink; 404→null)。``event`` 是
+    该 uid 的代表 master 行 (caldav 优先), 日历中不存在时 null + in_calendar=false;
+    occurrence 展开由消费方用既有 eventsList 窗口查询完成。
+    """
+
+    model_config = {"extra": "allow"}
+
+    internal_id: int = Field(..., ge=1)
+    ical_uid: str
+    method: Optional[str] = None
+    recurrence_id: Optional[str] = None
+    sequence: int = Field(..., ge=0)
+    is_recurring: bool
+    in_calendar: bool
+    event: Optional[CalendarEventDetail] = None
+
+
+class EventSourceEmail(BaseModel):
+    """方向 B: ical_uid → 来源邀请邮件.
+
+    **C7**: ``GET /api/calendar/events/{event_id}/source-email`` 的 envelope
+    ``data`` 就是这个裸对象 (frontend alias: EventSourceEmail; 404→null)。
+    多封同 uid 邮件时优先最新 METHOD:REQUEST, 无 REQUEST 时最新任意一封;
+    linked_email_count = 携带该 uid 的映射邮件总数。
+    """
+
+    model_config = {"extra": "allow"}
+
+    ical_uid: str
+    internal_id: int = Field(..., ge=1)
+    subject: Optional[str] = None
+    sender: Optional[str] = None
+    sender_name: Optional[str] = None
+    date_received: Optional[str] = None
+    mailbox: Optional[str] = None
+    method: Optional[str] = None
+    linked_email_count: int = Field(..., ge=1)
+
+
 # --- sync status ------------------------------------------------------------
 class CalendarSyncStateItem(BaseModel):
     """One calendar's CalDAV sync state (calendar-sync-status.schema.json).
@@ -177,5 +221,6 @@ __all__ = [
     "CalendarOccurrence", "CalendarWindow", "CalendarFilters",
     "CalendarEventsListData",
     "CalendarEventDetail", "CalendarEventGetData",
+    "EmailCalendarLink", "EventSourceEmail",
     "CalendarSyncStateItem", "CalendarSyncStatusData",
 ]

@@ -358,7 +358,8 @@
       "global": "全局",
       "inbox": "收件箱",
       "row": "邮件行",
-      "chat": "AI 对话"
+      "chat": "AI 对话",
+      "calendar": "日历"
     },
     "binding": {
       "commandPalette": "命令面板",
@@ -381,7 +382,21 @@
       "newChat": "新建 AI 对话",
       "toggleIsland": "切换灵动岛",
       "toggleNav": "折叠/展开导航",
-      "toggleLocale": "切换语言"
+      "toggleLocale": "切换语言",
+      "calViewDay": "日视图",
+      "calViewWeek": "周视图",
+      "calViewMonth": "月视图",
+      "calViewAgenda": "Agenda 视图",
+      "calViewRecurring": "定期邀请视图",
+      "calPrevNext": "上一段 / 下一段",
+      "calToday": "跳到今天",
+      "calSync": "同步",
+      "calNewEvent": "新建事件",
+      "calNextEvent": "选中下一个事件",
+      "calPrevEvent": "选中上一个事件",
+      "calOpenSelected": "打开选中事件",
+      "calClose": "关闭抽屉 / 弹层",
+      "calHelp": "打开 / 关闭快捷键帮助"
     }
   },
   "palette": {
@@ -988,6 +1003,33 @@
       "noArgs": "(无参数)",
       "error": "操作失败，请重试或让助手重新发起。"
     },
+    "calendarApprovalCard": {
+      "reschedule": { "title": "改期日程" },
+      "rsvp": { "title": "回复会议邀请（RSVP）" },
+      "delete": { "title": "删除日程" },
+      "event": "日程",
+      "before": "原时间",
+      "after": "新时间",
+      "time": "时间",
+      "scope": "范围",
+      "scopes": {
+        "series": "整个系列",
+        "occurrence": "仅这一次",
+        "future": "这次及以后"
+      },
+      "organizer": "组织者",
+      "response": "回复",
+      "responses": {
+        "accept": "接受",
+        "tentative": "暂定",
+        "decline": "拒绝"
+      },
+      "rsvpWarning": "批准后将向组织者发送一封不可撤回的 iTIP REPLY 回执邮件。",
+      "deleteWarning": "删除不可恢复；周期日程将连同全部重复实例一并删除。",
+      "factsMissing": "在本地日历中找不到该日程（可能已删除或 UID 有误）——以下为助手提交的原始参数。",
+      "factsError": "无法读取该日程的当前信息——以下为助手提交的原始参数，批准后服务端仍会校验。",
+      "error": "操作失败，请重试或让助手重新发起。"
+    },
     "approvalActionCard": {
       "title": {
         "emailFlag": "更新邮件标记",
@@ -1218,12 +1260,24 @@
       "month": "本月无日程",
       "agenda": "未来 {n} 天无日程",
       "recurring": "未发现周期会议",
-      "syncHint": "日历同步尚未就绪，请稍后重试或联系管理员"
+      "syncHint": "日历同步尚未就绪，请稍后重试或联系管理员",
+      "neverSynced": "日历尚未同步",
+      "neverSyncedHint": "点击工具栏的同步按钮拉取日历事件",
+      "syncFailed": "日历同步失败",
+      "syncFailedHint": "上次同步出错——悬停底部状态栏的 ℹ️ 查看错误详情"
     },
     "emptyHint": "调整时间范围或确认 .ics 邀请已被同步",
     "replay": "重放",
     "replayOk": "邮件 #{id} 重放完成",
     "replayFail": "邮件 #{id} 重放失败",
+    "recurring": {
+      "scan": "扫描",
+      "scanning": "扫描中…",
+      "scanTitle": "扫描邮件中带 RRULE 的会议邀请 (davmail 模式可能需要数分钟)",
+      "scanRangeTitle": "扫描最近 {range}",
+      "replayTitle": "重放 — 重导出到 Notion (基于 SQLite calendar_event)",
+      "replayNoUid": "缺少 ical_uid — 无法 replay (数据异常?)"
+    },
     "col": {
       "subject": "标题",
       "organizer": "组织者",
@@ -1233,13 +1287,34 @@
       "count": "次数",
       "action": "操作"
     },
+    "weekday": {
+      "long": {
+        "sun": "周日",
+        "mon": "周一",
+        "tue": "周二",
+        "wed": "周三",
+        "thu": "周四",
+        "fri": "周五",
+        "sat": "周六"
+      },
+      "min": {
+        "mon": "一",
+        "tue": "二",
+        "wed": "三",
+        "thu": "四",
+        "fri": "五",
+        "sat": "六",
+        "sun": "日"
+      }
+    },
     "shared": {
       "untitled": "未命名事件",
       "allDay": "全天",
       "loading": "加载中…",
       "cancel": "取消",
       "close": "关闭 (Esc)",
-      "closeAria": "关闭"
+      "closeAria": "关闭",
+      "yearMonth": "{y} 年 {m} 月"
     },
     "toolbar": {
       "title": "日历",
@@ -1266,28 +1341,57 @@
       "syncTipErr": "DavMail · 同步失败",
       "syncTipNoRecord": "尚无 sync_state 记录 — 启用 CALENDAR_CALDAV_SYNC_ENABLED 后等 60s",
       "syncTipUnknownErr": "未知错误",
+      "range": {
+        "agenda": "未来 14 天",
+        "recurring": "全部定期事件"
+      },
       "calendarFilter": {
         "title": "按日历筛选",
         "all": "全部日历",
         "selected": "{n} 个日历",
         "ariaLabel": "日历筛选"
+      },
+      "legend": {
+        "aria": "事件状态图例",
+        "title": "事件状态图例",
+        "tentative": "暂定",
+        "tentativeShape": "斜纹填充",
+        "needsAction": "待回复",
+        "needsActionShape": "空心描边",
+        "declined": "已拒绝",
+        "declinedShape": "删除线 + 灰",
+        "cancelled": "已取消",
+        "cancelledShape": "删除线 + 深灰"
       }
     },
     "statusbar": {
       "autoSync": "自动同步",
       "popoverAria": "同步与后台详情",
       "popoverTitle": "同步与后台",
-      "noSync": "尚未同步"
+      "noSync": "尚未同步",
+      "calendarFallback": "日历"
+    },
+    "join": {
+      "button": "加入会议",
+      "short": "Join",
+      "title": "加入会议 — 在 {p} 中打开"
     },
     "drawer": {
       "closeTitle": "关闭 (Esc)",
       "noRelatedEmail": "无关联邮件",
+      "sourceEmail": {
+        "openTitle": "在收件箱中定位该邮件",
+        "noSubject": "(无主题)",
+        "linkedCount": "共 {n} 封"
+      },
       "teamsMeeting": "Teams 会议",
       "me": "(我)",
       "attendeeCount": "{n} 人",
       "moreAttendees": "… 还有 {n} 位",
       "rruleInstance": "RRULE 实例",
       "ariaFallback": "事件详情",
+      "spanDays": "· 跨 {n} 天",
+      "sourceLabel": "源",
       "role": {
         "owner": "组织者",
         "attendee": "与会者"
@@ -1330,8 +1434,10 @@
         "toastTentative": "RSVP 暂定 已发送给组织者",
         "toastDeclined": "RSVP 已拒绝 已发送给组织者",
         "toastErr": "发送 RSVP ({response}) 失败",
-        "confirmTitle": "确认 [{action}] 并把回应发回组织者?",
-        "confirmBody": "此操作会通过 DavMail SMTP 立即发邮件给组织者, 不可撤销.\n\n事件: {summary}\n组织者: {organizer}"
+        "confirmTitle": "发送 RSVP 回复",
+        "confirmBody": "将向组织者发送「{action}」回复邮件 (iTIP REPLY), 该操作不可撤回。",
+        "confirmEvent": "事件",
+        "confirmSend": "发送回复"
       }
     },
     "form": {
@@ -1352,6 +1458,7 @@
       "placeholderLocation": "会议室 / Teams 链接 / 地址",
       "labelDescription": "描述",
       "placeholderDescription": "议程、备注、相关链接…",
+      "uidAria": "事件 UID",
       "repeat": {
         "label": "重复",
         "freqNone": "不重复",
@@ -1407,12 +1514,29 @@
       "toastErrCreate": "创建事件失败",
       "toastErrUpdate": "更新事件失败"
     },
+    "invite": {
+      "title": "会议邀请",
+      "cancelled": "会议已取消",
+      "recurringBadge": "周期会议",
+      "exceptionBadge": "本次例外",
+      "conflictNone": "无冲突",
+      "conflictCount": "与 {n} 场日程重叠",
+      "notInCalendar": "尚未同步到日历",
+      "seriesEnded": "系列近期无场次, 显示首次时间",
+      "viewInCalendar": "在日历中查看"
+    },
     "syncTriggered": "已触发日历同步",
     "syncTriggerFail": "日历同步失败",
     "errorBoundary": {
       "title": "{view} 加载失败",
       "hint": "切换视图或点 [重试] 重新加载. 详情见 DevTools console.",
       "retry": "重试"
+    },
+    "error": {
+      "title": "日历数据加载失败",
+      "hint": "获取日程失败, 可能是后端服务暂不可用.",
+      "retry": "重试",
+      "loadShort": "加载失败"
     },
     "relTime": {
       "justNow": "刚刚",
@@ -1438,21 +1562,19 @@
       "month": {
         "moreBtn": "+{n} 更多",
         "today": "今天",
-        "popEventCount": "{n} 个事件"
+        "popEventCount": "{n} 个事件",
+        "popDayLabel": "{m} 月 {d} 日"
+      },
+      "agenda": {
+        "dayOfSpan": "第 {n}/{m} 天",
+        "today": "今天",
+        "tomorrow": "明天",
+        "dayNum": "{d}日"
       }
     },
     "shortcut": {
       "title": "键盘快捷键",
-      "subtitle": "G 开头为视图跳转 (先按 G 再按视图键, 800ms 内有效)",
-      "dayView": "日视图",
-      "weekView": "周视图",
-      "monthView": "月视图",
-      "agendaView": "Agenda 视图",
-      "prevNext": "上一段 / 下一段",
-      "today": "跳到今天",
-      "sync": "同步",
-      "close": "关闭抽屉 / 弹层",
-      "help": "打开 / 关闭本帮助"
+      "subtitle": "G 开头为视图跳转 (先按 G 再按视图键, 800ms 内有效)"
     }
   },
   "settings": {
@@ -3093,6 +3215,7 @@
         "group": {
           "emailRead": "邮件读取",
           "emailWrite": "邮件操作",
+          "calendar": "日历",
           "report": "报告",
           "session": "会话与身份",
           "knowledge": "技能与知识",

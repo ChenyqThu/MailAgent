@@ -195,6 +195,12 @@ describe('planInvalidation', () => {
     expect(planInvalidation('folder.synced', null)).toEqual([{ kind: 'key', key: ['folder'] }])
   })
 
+  test('calendar.synced invalidates the whole calendar prefix once', () => {
+    // One ['calendar'] prefix directive covers events / syncStatus / names /
+    // event detail / recurring (every qk.calendar.* key starts with 'calendar').
+    expect(planInvalidation('calendar.synced', null)).toEqual([{ kind: 'key', key: ['calendar'] }])
+  })
+
   test('unhandled events are no-ops (matches the old silent branch)', () => {
     for (const t of ['outbox.enqueued', 'outbox.failed', 'llm.failed', 'llm.gave_up', 'nonsense']) {
       expect(planInvalidation(t, 7)).toEqual([])

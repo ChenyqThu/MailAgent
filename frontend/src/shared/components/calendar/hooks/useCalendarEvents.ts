@@ -23,6 +23,8 @@ import type {
 } from '@shared/api/types'
 import { toastError, toastSuccess } from '@shared/state/toast'
 import { qk } from '@shared/lib/queryKeys'
+// type-only: router-instance ↔ calendar 组件间已有类型环 (CalendarToolbar 同款), 编译期擦除.
+import type { CalendarView } from '@shared/router-instance'
 import { filterOccurrencesByCalendars } from '../lib/calendar-filter'
 
 // Re-export from the queryKeys factory (single literal source, P2-8).
@@ -42,10 +44,15 @@ function useJitteredInterval(baseMs: number, jitterMs: number): number {
 
 export function useCalendarEventsInWindow(
   opts: EventsListOpts,
-  selectedCalendars?: string[]
+  selectedCalendars?: string[],
+  /** 2.7 — Layout j/k 巡航复用本 hook, recurring 视图无窗口语义时置 false 不发查询. */
+  enabled = true
 ): {
   data: CalendarEventOccurrence[] | undefined
   isLoading: boolean
+  /** 2.7 — keepPreviousData 下切窗口时 data 是旧窗口留屏数据; 需要判断
+   *  "数据对应当前窗口" 的 caller (跨面定位匹配) 用 isFetching 区分. */
+  isFetching: boolean
   isError: boolean
   refetch: () => void
 } {
@@ -53,6 +60,7 @@ export function useCalendarEventsInWindow(
   // F6 — 60s ± 15s jitter (effective 45-75s) 避免 thundering herd
   const refetchIntervalMs = useJitteredInterval(60_000, 15_000)
   const q = useQuery({
+    enabled,
     queryKey: [
       ...CALENDAR_EVENTS_KEY,
       opts.fromIso,
@@ -79,6 +87,7 @@ export function useCalendarEventsInWindow(
   return {
     data: q.data,
     isLoading: q.isLoading,
+    isFetching: q.isFetching,
     isError: q.isError,
     refetch: () => void q.refetch()
   }
@@ -120,6 +129,18 @@ export function useCalendarSyncStatus(): {
     isLoading: q.isLoading,
     refetch: () => void q.refetch()
   }
+}
+
+/** F19/Q6 (阶段1·1.8) — sync 状态「健康优先选行」单源: 有任一无错误的日历行就
+ *  选它, 避免后端残留的孤儿行 (端口配错期间用 fallback 假名 'calendar' 建的行带
+ *  旧错, 字母序排在真实 '日历' 前) 被盲取 [0] → 指示灯误报常红. 后端
+ *  clear_stale_errors 清孤儿根治; 此处兜底, 新孤儿出现也不误报.
+ *  Toolbar sync-pill / Layout 副 status bar / CalendarViewEmpty 三处消费必须
+ *  同源 (F19: 曾各写一遍, 孤儿行场景 sync-pill 绿 · status bar 红同屏矛盾). */
+export function pickSyncHead(
+  syncStatus: CalendarSyncStateItem[] | undefined
+): CalendarSyncStateItem | undefined {
+  return syncStatus?.find((s) => !s.last_error) ?? syncStatus?.[0]
 }
 
 export function useCalendarNames(): {
@@ -202,6 +223,17 @@ export function addDays(date: Date, n: number): Date {
   return d
 }
 
+/** F25 (阶段1·1.11) — 视图日期步进 (← / → / 快捷键): day ±1 天 / week ±7 天 /
+ *  month ±1 月; agenda / recurring 无步进语义, 原样返回副本.
+ *  CalendarToolbar 与 CalendarLayout 共用 (曾逐字重复两份). */
+export function stepViewDate(view: CalendarView, dir: 1 | -1, base: Date): Date {
+  const d = new Date(base)
+  if (view === 'today') d.setDate(d.getDate() + dir)
+  else if (view === 'week') d.setDate(d.getDate() + dir * 7)
+  else if (view === 'month') d.setMonth(d.getMonth() + dir)
+  return d
+}
+
 /** 把本地 Date 转 ISO 字符串 (with TZ offset, rrule lib 友好). */
 export function toIsoWithOffset(d: Date): string {
   return d.toISOString()
@@ -244,17 +276,56 @@ export function useNowTick(tickMs = 30_000): number {
   return now
 }
 
-/** 工具: 按本地日期 group occurrences (key=YYYY-MM-DD). */
-export function groupOccurrencesByLocalDay(
+/** F22/S6 — agenda 单日条目: 跨天事件按 overlap 展开后, 每天一条.
+ *  dayIndex/totalDays 按事件**完整跨度**算 (1-based), 与查询窗口裁剪无关 —
+ *  窗口只截到出差第 3 天时仍标「第 3/5 天」. totalDays===1 即单日事件. */
+export interface AgendaDayEntry {
+  occ: CalendarEventOccurrence
+  /** 该 occurrence 在此日的序数 (1-based). */
+  dayIndex: number
+  /** 事件完整跨度覆盖的本地日数. */
+  totalDays: number
+  /** 该日内实际覆盖段起点 ms — 排序用 (首日=事件开始, 后续日=当日 00:00). */
+  segStartMs: number
+}
+
+/** 防脏数据 (end 远超 start) 撑爆展开的安全上限. */
+const MAX_EXPAND_DAYS = 60
+
+/** F22/S6 — 按「与每个本地日 overlap」展开 occurrences (key=YYYY-MM-DD).
+ *  跨天事件 (all-day 或跨午夜 timed) 在其覆盖的每一天各出一条 entry;
+ *  结束恰在 00:00 边界的不占用结束日 (all-day 事件 end 惯例为次日 00:00).
+ *  替代旧 groupOccurrencesByLocalDay (只按 start 单键分组 → 跨天事件第
+ *  2..n 天在 agenda 缺席, F22). 展开可能产生查询窗口外的 key (事件起于
+ *  窗口前/止于窗口后), caller 自行按窗口过滤. */
+export function expandOccurrencesByLocalDayOverlap(
   occs: CalendarEventOccurrence[]
-): Map<string, CalendarEventOccurrence[]> {
-  const m = new Map<string, CalendarEventOccurrence[]>()
+): Map<string, AgendaDayEntry[]> {
+  const m = new Map<string, AgendaDayEntry[]>()
   for (const occ of occs) {
-    const d = new Date(occ.occurrence_start_iso)
-    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-    const arr = m.get(key) ?? []
-    arr.push(occ)
-    m.set(key, arr)
+    const startMs = Date.parse(occ.occurrence_start_iso)
+    const endMs = Date.parse(occ.occurrence_end_iso)
+    const start = new Date(startMs)
+    const firstDay = new Date(start.getFullYear(), start.getMonth(), start.getDate())
+    // endMs-1: 结束恰为 00:00 时归前一日; 零长/倒挂事件退化为单日.
+    const lastRef = new Date(Math.max(endMs - 1, startMs))
+    const lastDay = new Date(lastRef.getFullYear(), lastRef.getMonth(), lastRef.getDate())
+    // 日历天差用 round 而非 floor — 跨 DST 的 23/25h 日差仍取整数天.
+    const totalDays = Math.round((lastDay.getTime() - firstDay.getTime()) / 86_400_000) + 1
+    const expandDays = Math.min(totalDays, MAX_EXPAND_DAYS)
+    for (let i = 0; i < expandDays; i++) {
+      // 本地日历算术 (setDate 溢出进位), 不做 ms 加法 — DST 安全.
+      const day = new Date(firstDay.getFullYear(), firstDay.getMonth(), firstDay.getDate() + i)
+      const key = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, '0')}-${String(day.getDate()).padStart(2, '0')}`
+      const arr = m.get(key) ?? []
+      arr.push({
+        occ,
+        dayIndex: i + 1,
+        totalDays,
+        segStartMs: i === 0 ? startMs : day.getTime()
+      })
+      m.set(key, arr)
+    }
   }
   return m
 }

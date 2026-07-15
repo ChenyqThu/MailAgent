@@ -358,7 +358,8 @@
       "global": "Global",
       "inbox": "Inbox",
       "row": "Row",
-      "chat": "AI chat"
+      "chat": "AI chat",
+      "calendar": "Calendar"
     },
     "binding": {
       "commandPalette": "Command palette",
@@ -381,7 +382,21 @@
       "newChat": "New AI conversation",
       "toggleIsland": "Toggle Dynamic Island",
       "toggleNav": "Toggle navigation",
-      "toggleLocale": "Toggle language"
+      "toggleLocale": "Toggle language",
+      "calViewDay": "Day view",
+      "calViewWeek": "Week view",
+      "calViewMonth": "Month view",
+      "calViewAgenda": "Agenda view",
+      "calViewRecurring": "Recurring invites view",
+      "calPrevNext": "Previous / next range",
+      "calToday": "Go to today",
+      "calSync": "Sync",
+      "calNewEvent": "New event",
+      "calNextEvent": "Select next event",
+      "calPrevEvent": "Select previous event",
+      "calOpenSelected": "Open selected event",
+      "calClose": "Close drawer / modal",
+      "calHelp": "Open / close shortcut help"
     }
   },
   "palette": {
@@ -988,6 +1003,33 @@
       "noArgs": "(no arguments)",
       "error": "The operation failed — retry or ask the assistant to start over."
     },
+    "calendarApprovalCard": {
+      "reschedule": { "title": "Reschedule event" },
+      "rsvp": { "title": "Reply to meeting invite (RSVP)" },
+      "delete": { "title": "Delete event" },
+      "event": "Event",
+      "before": "Current time",
+      "after": "New time",
+      "time": "Time",
+      "scope": "Scope",
+      "scopes": {
+        "series": "Whole series",
+        "occurrence": "This occurrence only",
+        "future": "This and following"
+      },
+      "organizer": "Organizer",
+      "response": "Response",
+      "responses": {
+        "accept": "Accept",
+        "tentative": "Tentative",
+        "decline": "Decline"
+      },
+      "rsvpWarning": "Approving sends an IRREVOCABLE iTIP REPLY email to the organizer.",
+      "deleteWarning": "Deletion cannot be undone; a recurring event is removed with ALL its occurrences.",
+      "factsMissing": "This event was not found in the local calendar (deleted or wrong UID) — showing the assistant's raw proposal below.",
+      "factsError": "Could not load the event's current details — showing the assistant's raw proposal; the server still validates on approval.",
+      "error": "The operation failed — retry or ask the assistant to start over."
+    },
     "approvalActionCard": {
       "title": {
         "emailFlag": "Update email flag",
@@ -1218,14 +1260,37 @@
       "month": "No events this month",
       "agenda": "No events in the next {n} days",
       "recurring": "No recurring meetings found",
-      "syncHint": "Calendar sync isn't ready yet — try again later or contact your admin"
+      "syncHint": "Calendar sync isn't ready yet — try again later or contact your admin",
+      "neverSynced": "Calendar hasn't synced yet",
+      "neverSyncedHint": "Click the sync button in the toolbar to fetch calendar events",
+      "syncFailed": "Calendar sync failed",
+      "syncFailedHint": "The last sync errored — hover the ℹ️ in the bottom status bar for details"
     },
     "emptyHint": "Widen the time range, or confirm .ics invites synced.",
+    "invite": {
+      "title": "Meeting invitation",
+      "cancelled": "Meeting cancelled",
+      "recurringBadge": "Recurring",
+      "exceptionBadge": "This occurrence",
+      "conflictNone": "No conflicts",
+      "conflictCount": "Overlaps {n} events",
+      "notInCalendar": "Not synced to calendar yet",
+      "seriesEnded": "No upcoming occurrences — showing first occurrence",
+      "viewInCalendar": "View in calendar"
+    },
     "syncTriggered": "Calendar sync triggered",
     "syncTriggerFail": "Calendar sync failed",
     "replay": "Replay",
     "replayOk": "Email #{id} replayed",
     "replayFail": "Email #{id} replay failed",
+    "recurring": {
+      "scan": "Scan",
+      "scanning": "Scanning…",
+      "scanTitle": "Scan mail for RRULE-bearing meeting invites (davmail mode may take minutes)",
+      "scanRangeTitle": "Scan last {range}",
+      "replayTitle": "Replay — re-export to Notion (from SQLite calendar_event)",
+      "replayNoUid": "Missing ical_uid — cannot replay (data anomaly?)"
+    },
     "col": {
       "subject": "Subject",
       "organizer": "Organizer",
@@ -1235,13 +1300,34 @@
       "count": "Count",
       "action": "Action"
     },
+    "weekday": {
+      "long": {
+        "sun": "Sun",
+        "mon": "Mon",
+        "tue": "Tue",
+        "wed": "Wed",
+        "thu": "Thu",
+        "fri": "Fri",
+        "sat": "Sat"
+      },
+      "min": {
+        "mon": "M",
+        "tue": "T",
+        "wed": "W",
+        "thu": "T",
+        "fri": "F",
+        "sat": "S",
+        "sun": "S"
+      }
+    },
     "shared": {
       "untitled": "Untitled event",
       "allDay": "All day",
       "loading": "Loading…",
       "cancel": "Cancel",
       "close": "Close (Esc)",
-      "closeAria": "Close"
+      "closeAria": "Close",
+      "yearMonth": "{m}/{y}"
     },
     "toolbar": {
       "title": "Calendar",
@@ -1268,28 +1354,57 @@
       "syncTipErr": "DavMail · Sync failed",
       "syncTipNoRecord": "No sync_state records yet — enable CALENDAR_CALDAV_SYNC_ENABLED and wait 60s",
       "syncTipUnknownErr": "Unknown error",
+      "range": {
+        "agenda": "Next 14 days",
+        "recurring": "All recurring events"
+      },
       "calendarFilter": {
         "title": "Filter by calendar",
         "all": "All calendars",
         "selected": "{n} calendars",
         "ariaLabel": "Calendar filter"
+      },
+      "legend": {
+        "aria": "Event status legend",
+        "title": "Event status legend",
+        "tentative": "Tentative",
+        "tentativeShape": "Striped fill",
+        "needsAction": "Needs action",
+        "needsActionShape": "Outlined",
+        "declined": "Declined",
+        "declinedShape": "Strikethrough + gray",
+        "cancelled": "Cancelled",
+        "cancelledShape": "Strikethrough + dimmed"
       }
     },
     "statusbar": {
       "autoSync": "Auto sync",
       "popoverAria": "Sync & backend details",
       "popoverTitle": "Sync & backend",
-      "noSync": "Never synced"
+      "noSync": "Never synced",
+      "calendarFallback": "Calendar"
+    },
+    "join": {
+      "button": "Join meeting",
+      "short": "Join",
+      "title": "Join meeting — opens in {p}"
     },
     "drawer": {
       "closeTitle": "Close (Esc)",
       "noRelatedEmail": "No related email",
+      "sourceEmail": {
+        "openTitle": "Locate this email in the inbox",
+        "noSubject": "(no subject)",
+        "linkedCount": "{n} linked emails"
+      },
       "teamsMeeting": "Teams meeting",
       "me": "(me)",
       "attendeeCount": "{n} attendees",
       "moreAttendees": "… {n} more",
       "rruleInstance": "RRULE instance",
       "ariaFallback": "Event details",
+      "spanDays": "· {n} days",
+      "sourceLabel": "Source",
       "role": {
         "owner": "Organizer",
         "attendee": "Attendee"
@@ -1332,8 +1447,10 @@
         "toastTentative": "RSVP Tentative sent to organizer",
         "toastDeclined": "RSVP Declined sent to organizer",
         "toastErr": "Failed to send RSVP ({response})",
-        "confirmTitle": "Confirm [{action}] and send response to organizer?",
-        "confirmBody": "This will immediately email the organizer via DavMail SMTP and cannot be undone.\n\nEvent: {summary}\nOrganizer: {organizer}"
+        "confirmTitle": "Send RSVP reply",
+        "confirmBody": "This sends an \"{action}\" RSVP reply email (iTIP REPLY) to the organizer. It cannot be undone.",
+        "confirmEvent": "Event",
+        "confirmSend": "Send reply"
       }
     },
     "form": {
@@ -1354,6 +1471,7 @@
       "placeholderLocation": "Room / Teams link / Address",
       "labelDescription": "Description",
       "placeholderDescription": "Agenda, notes, links…",
+      "uidAria": "Event UID",
       "repeat": {
         "label": "Repeat",
         "freqNone": "Does not repeat",
@@ -1414,6 +1532,12 @@
       "hint": "Switch view or click Retry to reload. See DevTools console for details.",
       "retry": "Retry"
     },
+    "error": {
+      "title": "Failed to load calendar data",
+      "hint": "Could not fetch events — the backend may be temporarily unavailable.",
+      "retry": "Retry",
+      "loadShort": "Failed to load"
+    },
     "relTime": {
       "justNow": "just now",
       "secondsAgo": "{n}s ago",
@@ -1438,21 +1562,19 @@
       "month": {
         "moreBtn": "+{n} more",
         "today": "Today",
-        "popEventCount": "{n} events"
+        "popEventCount": "{n} events",
+        "popDayLabel": "{m}/{d}"
+      },
+      "agenda": {
+        "dayOfSpan": "Day {n}/{m}",
+        "today": "Today",
+        "tomorrow": "Tomorrow",
+        "dayNum": "{d}"
       }
     },
     "shortcut": {
       "title": "Keyboard shortcuts",
-      "subtitle": "G-prefixed shortcuts switch views (press G then view key within 800 ms)",
-      "dayView": "Day view",
-      "weekView": "Week view",
-      "monthView": "Month view",
-      "agendaView": "Agenda view",
-      "prevNext": "Previous / Next",
-      "today": "Go to today",
-      "sync": "Sync",
-      "close": "Close drawer / modal",
-      "help": "Open / close this help"
+      "subtitle": "G-prefixed shortcuts switch views (press G then view key within 800 ms)"
     }
   },
   "settings": {
@@ -3093,6 +3215,7 @@
         "group": {
           "emailRead": "Email reading",
           "emailWrite": "Email actions",
+          "calendar": "Calendar",
           "report": "Reports",
           "session": "Sessions & identity",
           "knowledge": "Skills & knowledge",

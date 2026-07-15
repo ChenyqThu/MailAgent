@@ -55,6 +55,10 @@ _WIRE_EVENT_MAP: Dict[str, str] = {
     # P0-4: subprocess 完成回流 — fork 端读 metadata.mailagent.actionAcked* 决定 UI
     "ActionAcked": "Notification",
 
+    # 阶段2·2.5: 会前提醒 (CalendarSyncWorker → MeetingReminder.tick)。无按钮
+    # notification 卡; Join 链接在 preview 文案 + metadata.mailagent.joinUrl。
+    "MeetingReminder": "Notification",
+
     # Part B: harness agent 上岛（前端 chat 多轮 agent 的 session/审批）。fork
     # MailAgentSessionView 读 metadata.mailagent.scenario 选 agent* 布局；wire 层同样一律
     # "Notification" 让 fork dispatcher 接住。AgentApproval 带 intervention(approve/reject)

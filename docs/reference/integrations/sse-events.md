@@ -90,6 +90,12 @@ es.addEventListener('mailagent', e => {
 | `llm.failed` | `mark_failed` 重试中 | `{retry_count, next_retry_at, error}` |
 | `llm.gave_up` | `mark_failed` 达上限 | `{retry_count, error}` |
 
+### 日历同步
+
+| event_type | 触发 | data 字段 |
+|---|---|---|
+| `calendar.synced` | `CalendarSyncWorker` reconcile 落库有实际变化（upsert/软删 > 0；无变化不发） | `{calendar: str, upserted: int, soft_deleted: int}` |
+
 ## 客户端断线 / 重连
 
 服务端 **不保留** 历史事件 — at-most-once 语义。客户端断连后重连漏掉的事件需要

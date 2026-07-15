@@ -54,6 +54,12 @@ if TYPE_CHECKING:
 VALID_EVENT_SOURCES = ("caldav", "email_ics", "legacy_calendar_app")
 VALID_EVENT_STATUS = ("CONFIRMED", "TENTATIVE", "CANCELLED")
 
+# P2-8 — worker 移除 CalDAV calendar 时有意不软删其历史事件行 (worker.py
+# _refresh_calendars rationale: 共享日历可能临时不可访问), 这会让"幽灵日历"永久
+# 占前端 chip。list_calendar_names() 按此阈值过滤: 超过这么多天没被 worker
+# 摸过 (last_incremental_sync_at 冻结) 的日历名从列表隐藏。
+GHOST_CALENDAR_STALE_DAYS = 30
+
 RSVP_RESPONSE_ALIAS = {
     "accept": "ACCEPTED",
     "accepted": "ACCEPTED",
@@ -354,17 +360,141 @@ class CalendarService:
         """SQL distinct calendar_name (历史中出现过, 非空, deleted_at IS NULL).
 
         给前端 toolbar chip / event-form 下拉用. 不调 CalDAV (那是 sync-now 的事).
+
+        P2-8 — 按 calendar_sync_state 过滤幽灵日历: 超过
+        ``GHOST_CALENDAR_STALE_DAYS`` 天未被 worker 摸过 (last_incremental_sync_at
+        冻结, 说明该日历已从 CalDAV calendar 列表消失) 的日历名从结果隐藏。底层
+        calendar_event 行不动, 数据不丢 —— 日历若恢复同步, 下次 tick 更新
+        sync_state 后自动重新出现。从未进过 calendar_sync_state 的日历名 (如没
+        经过 worker 的纯 email_ics 来源) 保守放行, 不参与此过滤。
         """
         conn = sqlite3.connect(self.db_path)
         try:
+            cutoff_epoch = (
+                datetime.now(timezone.utc) - timedelta(days=GHOST_CALENDAR_STALE_DAYS)
+            ).timestamp()
             rows = conn.execute(
-                "SELECT DISTINCT calendar_name FROM calendar_event "
-                "WHERE deleted_at IS NULL AND calendar_name IS NOT NULL "
-                "AND calendar_name != '' ORDER BY calendar_name"
+                """
+                SELECT DISTINCT ce.calendar_name FROM calendar_event ce
+                LEFT JOIN calendar_sync_state cs
+                    ON cs.calendar_name = ce.calendar_name
+                WHERE ce.deleted_at IS NULL AND ce.calendar_name IS NOT NULL
+                    AND ce.calendar_name != ''
+                    AND (
+                        cs.calendar_name IS NULL
+                        OR COALESCE(
+                            cs.last_incremental_sync_at, cs.last_full_sync_at
+                        ) >= ?
+                    )
+                ORDER BY ce.calendar_name
+                """,
+                (cutoff_epoch,),
             ).fetchall()
             return [r[0] for r in rows]
         finally:
             conn.close()
+
+    # ============================================================
+    # 阶段 2.1 (P1-3) — 邮件 ↔ 日历 ical_uid 双向反查
+    # ============================================================
+
+    def get_email_calendar_link(self, *, internal_id: int) -> Dict[str, Any]:
+        """方向 A: 邮件 internal_id → 它携带的 .ics uid + 日历 master 行.
+
+        读 email_meeting 映射 (v34, new_watcher 会议检测 hook 写入), 再按
+        ical_uid 反查 calendar_event 代表 master 行 (occurrence 展开由消费方
+        用既有 events 窗口查询完成)。
+
+        Returns:
+            dict — 前端 EmailCalendarLink 形状 (C7 裸对象):
+            internal_id / ical_uid / method / recurrence_id / sequence /
+            is_recurring / in_calendar / event (CalendarEventDetail | None)
+
+        Raises:
+            ValueError: 该邮件无会议映射 (非会议邀请 / v34 前旧邮件未回填) —
+                caller map 成 404
+        """
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute(
+                "SELECT internal_id, ical_uid, method, recurrence_id, "
+                "sequence, is_recurring FROM email_meeting WHERE internal_id = ?",
+                (internal_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+        if row is None:
+            raise ValueError(
+                f"email_meeting not found: internal_id={internal_id}"
+            )
+
+        master = self.repo.get_master_by_uid(row["ical_uid"])
+        return {
+            "internal_id": int(row["internal_id"]),
+            "ical_uid": row["ical_uid"],
+            "method": row["method"],
+            "recurrence_id": row["recurrence_id"],
+            "sequence": int(row["sequence"] or 0),
+            "is_recurring": bool(row["is_recurring"]),
+            "in_calendar": master is not None,
+            "event": row_to_dict(master) if master else None,
+        }
+
+    def get_event_source_email(self, *, ical_uid: str) -> Dict[str, Any]:
+        """方向 B: ical_uid → 来源邀请邮件 (drawer「关联邮件」反查).
+
+        多封邮件携带同一 uid 时 (周期会议 update / cancel 各来一封):
+        优先最新一封 METHOD:REQUEST (date_received DESC); 没有 REQUEST 时取
+        最新一封任意 method (含 v34 回填的 method=NULL 行)。
+
+        Returns:
+            dict — 前端 EventSourceEmail 形状 (C7 裸对象):
+            ical_uid / internal_id / subject / sender / sender_name /
+            date_received / mailbox / method / linked_email_count
+
+        Raises:
+            ValueError: 该 uid 无任何映射邮件 (caldav-only 事件 / 旧邮件未回填) —
+                caller map 成 404
+        """
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute(
+                """
+                SELECT m.ical_uid, m.internal_id, m.method,
+                       e.subject, e.sender, e.sender_name,
+                       e.date_received, e.mailbox
+                FROM email_meeting m
+                JOIN email_metadata e ON e.internal_id = m.internal_id
+                WHERE m.ical_uid = ?
+                ORDER BY (CASE WHEN m.method = 'REQUEST' THEN 1 ELSE 0 END) DESC,
+                         e.date_received DESC
+                LIMIT 1
+                """,
+                (ical_uid,),
+            ).fetchone()
+            count = conn.execute(
+                "SELECT COUNT(*) FROM email_meeting WHERE ical_uid = ?",
+                (ical_uid,),
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        if row is None:
+            raise ValueError(
+                f"source email not found: ical_uid={ical_uid!r}"
+            )
+        return {
+            "ical_uid": row["ical_uid"],
+            "internal_id": int(row["internal_id"]),
+            "subject": row["subject"],
+            "sender": row["sender"],
+            "sender_name": row["sender_name"],
+            "date_received": row["date_received"],
+            "mailbox": row["mailbox"],
+            "method": row["method"],
+            "linked_email_count": int(count),
+        }
 
     # ============================================================
     # Recurring discover — group-by-uid + master pick

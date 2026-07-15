@@ -2576,12 +2576,19 @@ body:not([data-batch-mode='true']) .email-row .cb {
  * ═══════════════════════════════════════════════════════════════════════ */
 
 /* ── Week / Day view: timeline ──────────────────────────────────── */
-.cal-week { display: flex; flex-direction: column; height: 100%; }
-/* padding-right: 10px 补偿 wk-body 的 .scrollbar-thin (line 328 width:10px) —
+.cal-week {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  /* F2: 必须与 .scrollbar-thin 槽宽 (:570, v3 起 8px) 一致 — 表头补偿与
+   * wk-body 的 scrollbar-gutter 预留同源, 否则表头列与滚动区列基准漂移. */
+  --cal-scrollbar-w: 8px;
+}
+/* padding-right 补偿 wk-body 的 .scrollbar-thin 槽宽 —
  * 配合下方 .wk-body { scrollbar-gutter: stable } 后, wk-body 内的 wk-grid
  * 与 wk-headrow/wk-alldayrow 的内部 grid 宽度严格相等, 7 列不再累积漂移. */
 .wk-headrow,
-.wk-alldayrow { display: grid; flex-shrink: 0; padding-right: 10px; box-sizing: border-box; }
+.wk-alldayrow { display: grid; flex-shrink: 0; padding-right: var(--cal-scrollbar-w); box-sizing: border-box; }
 
 .wk-corner {
   border-bottom: 1px solid rgb(var(--ink-border));
@@ -2665,9 +2672,33 @@ body:not([data-batch-mode='true']) .email-row .cb {
   text-align: left;
 }
 .allday-evt:hover { background: rgb(var(--c-accent) / 0.24); }
-.allday-evt[data-resp='DECLINED'] { opacity: 0.5; text-decoration: line-through; }
-.allday-evt[data-resp='TENTATIVE'] { opacity: 0.75; }
-.allday-evt[data-status='CANCELLED'] { opacity: 0.4; text-decoration: line-through; }
+/* F3 (阶段2·2.6) — 状态形态化: 透明度编码 → 形态编码 (斜纹/空心/删除线+
+ * 中性灰), 前景全走 --c-* AA token; 图例见 toolbar .cal-legend。五消费面
+ * (.allday-evt/.evt/.dr-row/.cal-chip/.ag-row) 同语义。 */
+.allday-evt[data-resp='TENTATIVE'] {
+  background: repeating-linear-gradient(
+    135deg,
+    rgb(var(--c-accent) / 0.2) 0 3px,
+    rgb(var(--c-accent) / 0.05) 3px 7px
+  );
+  border-style: dashed;
+}
+.allday-evt[data-resp='NEEDS-ACTION'] {
+  background: transparent;
+  border-color: rgb(var(--c-accent));
+}
+.allday-evt[data-resp='DECLINED'] {
+  text-decoration: line-through;
+  background: rgb(var(--c-norm) / 0.12);
+  border-color: rgb(var(--c-norm) / 0.3);
+  color: rgb(var(--c-norm));
+}
+.allday-evt[data-status='CANCELLED'] {
+  text-decoration: line-through;
+  background: rgb(var(--c-low) / 0.07);
+  border-color: rgb(var(--c-low) / 0.22);
+  color: rgb(var(--c-low));
+}
 
 /* timeline body */
 /* scrollbar-gutter: stable — 即使无 events / 数据未撑满 viewport, 也预留 10px
@@ -2697,6 +2728,17 @@ body:not([data-batch-mode='true']) .email-row .cb {
   border-bottom: 1px solid rgb(var(--ink-border-soft) / 0.6);
 }
 
+/* F23 — Week/Day 结构化加载骨架 (TimelineSkeleton.tsx) 的 ghost 事件块:
+ * 形状对齐 .evt (列内绝对定位), 无内容, pulse 走 tailwind (同 MonthView
+ * 网格骨架惯例). */
+.cal-skel-evt {
+  position: absolute;
+  left: 3px;
+  right: 3px;
+  border-radius: 6px;
+  background: rgb(var(--ink-3) / 0.8);
+}
+
 /* event block (timeline) */
 .evt {
   position: absolute;
@@ -2707,7 +2749,11 @@ body:not([data-batch-mode='true']) .email-row .cb {
   background: rgb(var(--c-accent) / 0.14);
   border: 1px solid rgb(var(--c-accent) / 0.28);
   border-left: 3px solid rgb(var(--c-accent));
-  transition: background 0.12s, box-shadow 0.12s, transform 0.08s;
+  /* F8 — 散装 0.12s/0.08s 收编 fast(120ms) + standard 曲线 */
+  transition:
+    background 120ms cubic-bezier(0.4, 0, 0.2, 1),
+    box-shadow 120ms cubic-bezier(0.4, 0, 0.2, 1),
+    transform 120ms cubic-bezier(0.4, 0, 0.2, 1);
   z-index: 2;
   text-align: left;
 }
@@ -2746,18 +2792,83 @@ body:not([data-batch-mode='true']) .email-row .cb {
   box-shadow: 0 0 0 2px rgb(var(--c-accent) / 0.5);
   z-index: 6;
 }
-.evt[data-resp='TENTATIVE'] { opacity: 0.75; border-style: dashed; }
-.evt[data-resp='DECLINED'] { opacity: 0.5; }
-.evt[data-resp='DECLINED'] .e-title { text-decoration: line-through; }
+/* F3 (阶段2·2.6) — 状态形态化 (见 .allday-evt 区注)。这些规则后置于
+ * :hover/.is-selected → 状态底纹压过两者的 background, 形态不被洗掉;
+ * 选中可辨恒由 .is-selected 的 accent ring (box-shadow) 承担, hover
+ * 反馈由各状态的 :hover 变体补回。 */
+.evt[data-resp='TENTATIVE'] {
+  background: repeating-linear-gradient(
+    135deg,
+    rgb(var(--c-accent) / 0.2) 0 3px,
+    rgb(var(--c-accent) / 0.05) 3px 7px
+  );
+  border-style: dashed;
+}
+.evt[data-resp='TENTATIVE']:hover {
+  background: repeating-linear-gradient(
+    135deg,
+    rgb(var(--c-accent) / 0.28) 0 3px,
+    rgb(var(--c-accent) / 0.1) 3px 7px
+  );
+}
 .evt[data-resp='NEEDS-ACTION'] {
   border: 1.5px solid rgb(var(--c-accent));
   border-left-width: 3px;
-  background: rgb(var(--c-accent) / 0.1);
+  background: transparent;
 }
-.evt[data-status='CANCELLED'] { opacity: 0.4; }
-.evt[data-status='CANCELLED'] .e-title { text-decoration: line-through; }
+.evt[data-resp='NEEDS-ACTION']:hover { background: rgb(var(--c-accent) / 0.08); }
+.evt[data-resp='DECLINED'] {
+  background: rgb(var(--c-norm) / 0.1);
+  border-color: rgb(var(--c-norm) / 0.3);
+  border-left-color: rgb(var(--c-norm));
+}
+.evt[data-resp='DECLINED']:hover { background: rgb(var(--c-norm) / 0.18); }
+.evt[data-resp='DECLINED'] .e-time { color: rgb(var(--c-norm)); }
+.evt[data-resp='DECLINED'] .e-title {
+  text-decoration: line-through;
+  color: rgb(var(--c-norm));
+}
+.evt[data-status='CANCELLED'] {
+  background: rgb(var(--c-low) / 0.06);
+  border-color: rgb(var(--c-low) / 0.22);
+  border-left-color: rgb(var(--c-low) / 0.55);
+}
+.evt[data-status='CANCELLED']:hover { background: rgb(var(--c-low) / 0.12); }
+.evt[data-status='CANCELLED'] .e-time { color: rgb(var(--c-low)); }
+.evt[data-status='CANCELLED'] .e-title {
+  text-decoration: line-through;
+  color: rgb(var(--c-low));
+}
 .evt.is-past { opacity: 0.55; }
 .evt.is-past.is-selected { opacity: 1; }
+/* 阶段2·2.5 — timeline 块 hover 浮出的 Join 小钮 (右上角). 隐藏态 pointer-events
+ * none 不挡「点块开抽屉」; 键盘 tab 到时同样浮出 (focus-visible). */
+.evt-join {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: var(--r-ctl);
+  background: rgb(var(--c-accent));
+  color: rgb(var(--c-accent-fg));
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.4;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.evt:hover .evt-join,
+.evt-join:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
 .teams-i { color: rgb(var(--ink-fg-2)); flex-shrink: 0; }
 
 /* now line + bubble (今天列内, 跟时间线漂浮) */
@@ -2939,6 +3050,9 @@ body:not([data-batch-mode='true']) .email-row .cb {
   text-align: left;
 }
 .dr-row:hover { background: rgb(var(--ink-3) / 0.6); }
+/* F4/Q13 — 选中锚点: --sel-wash 签名 (对齐邮件列表选中语义); 后置声明压过
+ * 同特异性 hover. */
+.dr-row.is-selected { background: var(--sel-wash); }
 .dr-bar {
   width: 3px;
   align-self: stretch;
@@ -2959,13 +3073,32 @@ body:not([data-batch-mode='true']) .email-row .cb {
   line-height: 1.3;
   margin-top: 1px;
 }
+/* F3 (阶段2·2.6) — 状态形态化 (见 .allday-evt 区注)。列表行的形态承载
+ * 元素 = 左 bar + title: 斜纹落 bar (3px 宽上呈虚线段), 空心 = 行级 inset
+ * 描边 (box-shadow 不占布局, 与 hover/--sel-wash 的 background 正交共存)。 */
+.dr-row[data-resp='TENTATIVE'] .dr-bar {
+  background: repeating-linear-gradient(
+    135deg,
+    rgb(var(--c-accent)) 0 3px,
+    rgb(var(--c-accent) / 0.25) 3px 6px
+  );
+}
+.dr-row[data-resp='NEEDS-ACTION'] {
+  box-shadow: inset 0 0 0 1px rgb(var(--c-accent) / 0.6);
+}
+.dr-row[data-resp='NEEDS-ACTION'] .dr-bar {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px rgb(var(--c-accent));
+}
+.dr-row[data-resp='DECLINED'] .dr-bar { background: rgb(var(--c-norm)); }
 .dr-row[data-resp='DECLINED'] .dr-title {
   text-decoration: line-through;
-  opacity: 0.6;
+  color: rgb(var(--c-norm));
 }
-.dr-row[data-resp='TENTATIVE'] { opacity: 0.8; }
-.dr-row[data-resp='NEEDS-ACTION'] .dr-bar {
-  box-shadow: 0 0 0 1px rgb(var(--c-accent));
+.dr-row[data-status='CANCELLED'] .dr-bar { background: rgb(var(--c-low) / 0.55); }
+.dr-row[data-status='CANCELLED'] .dr-title {
+  text-decoration: line-through;
+  color: rgb(var(--c-low));
 }
 
 /* ── Month view ─────────────────────────────────────────────────── */
@@ -3038,8 +3171,9 @@ body:not([data-batch-mode='true']) .email-row .cb {
   letter-spacing: 0.04em;
 }
 
-/* event chip (month / agenda all-day strip / week all-day) */
-.chip {
+/* event chip (month / agenda all-day strip / week all-day)
+ * F1: 改名 .cal-chip 消除与表单 attendee .chip (:3838) 的全局撞名 */
+.cal-chip {
   display: flex;
   align-items: center;
   gap: 5px;
@@ -3048,21 +3182,29 @@ body:not([data-batch-mode='true']) .email-row .cb {
   cursor: pointer;
   min-height: 20px;
   background: rgb(var(--c-accent) / 0.13);
-  transition: background 0.1s;
+  /* F8 — 散装 0.1s 收编 fast(120ms) + standard 曲线 */
+  transition: background 120ms cubic-bezier(0.4, 0, 0.2, 1);
   overflow: hidden;
   border: 0;
   width: 100%;
   text-align: left;
 }
-.chip:hover { background: rgb(var(--c-accent) / 0.22); }
-.chip .c-dot {
+.cal-chip:hover { background: rgb(var(--c-accent) / 0.22); }
+/* F4/Q13 — 选中锚点 (drawer 当前 occurrence): wash 签名; chip 底色本就是
+ * accent 平涂 (hover 22% 比 wash 更深), 单靠 wash 不可辨 → 叠 .evt.is-selected
+ * 同语言的 accent ring (chip 尺寸小, 1.5px 减重). */
+.cal-chip.is-selected {
+  background: var(--sel-wash);
+  box-shadow: 0 0 0 1.5px rgb(var(--c-accent) / 0.5);
+}
+.cal-chip .c-dot {
   width: 5px;
   height: 5px;
   border-radius: 50%;
   background: rgb(var(--c-accent));
   flex-shrink: 0;
 }
-.chip .c-time {
+.cal-chip .c-time {
   font-family: ui-monospace, 'SF Mono', monospace;
   font-size: 10px;
   color: rgb(var(--c-accent));
@@ -3070,22 +3212,55 @@ body:not([data-batch-mode='true']) .email-row .cb {
   flex-shrink: 0;
   font-weight: 600;
 }
-.chip .c-title {
+.cal-chip .c-title {
   font-size: 11.5px;
   color: rgb(var(--ink-fg));
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.chip[data-resp='TENTATIVE'] { opacity: 0.72; }
-.chip[data-resp='DECLINED']  { opacity: 0.5; }
-.chip[data-resp='DECLINED'] .c-title { text-decoration: line-through; }
-.chip[data-resp='NEEDS-ACTION'] {
+/* F3 (阶段2·2.6) — 状态形态化 (见 .allday-evt 区注)。规则后置于
+ * :hover/.is-selected → 状态底纹不被洗掉, 选中恒由 ring 承担。 */
+.cal-chip[data-resp='TENTATIVE'] {
+  background: repeating-linear-gradient(
+    135deg,
+    rgb(var(--c-accent) / 0.2) 0 3px,
+    rgb(var(--c-accent) / 0.05) 3px 7px
+  );
+}
+.cal-chip[data-resp='TENTATIVE']:hover {
+  background: repeating-linear-gradient(
+    135deg,
+    rgb(var(--c-accent) / 0.28) 0 3px,
+    rgb(var(--c-accent) / 0.1) 3px 7px
+  );
+}
+.cal-chip[data-resp='NEEDS-ACTION'] {
   border: 1px solid rgb(var(--c-accent));
   background: transparent;
 }
-.chip[data-status='CANCELLED'] { opacity: 0.4; }
-.chip[data-status='CANCELLED'] .c-title { text-decoration: line-through; }
+.cal-chip[data-resp='NEEDS-ACTION']:hover { background: rgb(var(--c-accent) / 0.08); }
+.cal-chip[data-resp='NEEDS-ACTION'] .c-dot {
+  background: transparent;
+  box-sizing: border-box;
+  border: 1.5px solid rgb(var(--c-accent));
+}
+.cal-chip[data-resp='DECLINED'] { background: rgb(var(--c-norm) / 0.12); }
+.cal-chip[data-resp='DECLINED']:hover { background: rgb(var(--c-norm) / 0.2); }
+.cal-chip[data-resp='DECLINED'] .c-dot { background: rgb(var(--c-norm)); }
+.cal-chip[data-resp='DECLINED'] .c-time { color: rgb(var(--c-norm)); }
+.cal-chip[data-resp='DECLINED'] .c-title {
+  text-decoration: line-through;
+  color: rgb(var(--c-norm));
+}
+.cal-chip[data-status='CANCELLED'] { background: rgb(var(--c-low) / 0.07); }
+.cal-chip[data-status='CANCELLED']:hover { background: rgb(var(--c-low) / 0.14); }
+.cal-chip[data-status='CANCELLED'] .c-dot { background: rgb(var(--c-low) / 0.55); }
+.cal-chip[data-status='CANCELLED'] .c-time { color: rgb(var(--c-low)); }
+.cal-chip[data-status='CANCELLED'] .c-title {
+  text-decoration: line-through;
+  color: rgb(var(--c-low));
+}
 
 .more-btn {
   font-size: 11px;
@@ -3109,6 +3284,8 @@ body:not([data-batch-mode='true']) .email-row .cb {
   /* 主题 v3 C8/批 4: 溢出事件内容浮层 10px → --r-pop(14) */
   border-radius: var(--r-pop);
   padding: 10px;
+  /* Q11 — MonthView 传 maxHeight (到 viewport 边缘的可用高度), 超出滚动 */
+  overflow-y: auto;
 }
 .more-pop .mp-head {
   font-size: 13px;
@@ -3165,6 +3342,9 @@ body:not([data-batch-mode='true']) .email-row .cb {
   text-align: left;
 }
 .ag-row:hover { background: rgb(var(--ink-3) / 0.55); }
+/* F4/Q13 — 选中锚点: --sel-wash 签名 (对齐邮件列表选中语义); 后置声明压过
+ * 同特异性 hover. 跨天事件展开的每个日行同 key 同亮. */
+.ag-row.is-selected { background: var(--sel-wash); }
 .ag-time {
   font-family: ui-monospace, 'SF Mono', monospace;
   font-size: 12px;
@@ -3202,14 +3382,68 @@ body:not([data-batch-mode='true']) .email-row .cb {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* F22/S6 — agenda 跨天事件「第 n/m 天」标注 (mono 微标签, 同 .m-today-tag
+ * 语言的 accent 轻底) */
+.cal-day-badge {
+  flex-shrink: 0;
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: rgb(var(--c-accent));
+  background: rgb(var(--c-accent) / 0.1);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+/* 阶段2·2.5 — agenda 行尾 Join (常显轻量 accent, 与 .cal-day-badge 同语言;
+ * agenda = 「接下来要开的会」清单, Join 是首要动作故不做 hover-reveal). */
+.ag-join {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 1px solid rgb(var(--c-accent) / 0.35);
+  border-radius: var(--r-ctl);
+  background: rgb(var(--c-accent) / 0.1);
+  color: rgb(var(--c-accent));
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+    border-color 0.12s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.ag-join:hover {
+  background: rgb(var(--c-accent) / 0.2);
+  border-color: rgb(var(--c-accent) / 0.6);
+}
+/* F3 (阶段2·2.6) — 状态形态化 (见 .dr-row 区注, 行语义相同)。 */
+.ag-row[data-resp='TENTATIVE'] .ag-bar {
+  background: repeating-linear-gradient(
+    135deg,
+    rgb(var(--c-accent)) 0 3px,
+    rgb(var(--c-accent) / 0.25) 3px 6px
+  );
+}
+.ag-row[data-resp='NEEDS-ACTION'] {
+  box-shadow: inset 0 0 0 1px rgb(var(--c-accent) / 0.6);
+}
+.ag-row[data-resp='NEEDS-ACTION'] .ag-bar {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px rgb(var(--c-accent));
+}
+.ag-row[data-resp='DECLINED'] .ag-bar { background: rgb(var(--c-norm)); }
+.ag-row[data-resp='DECLINED'] .ag-time { color: rgb(var(--c-norm)); }
 .ag-row[data-resp='DECLINED'] .ag-title {
   text-decoration: line-through;
-  opacity: 0.6;
+  color: rgb(var(--c-norm));
 }
-.ag-row[data-resp='TENTATIVE'] { opacity: 0.78; }
+.ag-row[data-status='CANCELLED'] .ag-bar { background: rgb(var(--c-low) / 0.55); }
+.ag-row[data-status='CANCELLED'] .ag-time { color: rgb(var(--c-low)); }
 .ag-row[data-status='CANCELLED'] .ag-title {
   text-decoration: line-through;
-  opacity: 0.5;
+  color: rgb(var(--c-low));
 }
 
 /* ── Recurring view (table) ─────────────────────────────────────── */
@@ -3385,6 +3619,81 @@ body:not([data-batch-mode='true']) .email-row .cb {
   word-break: break-all;
 }
 .link-row:hover { text-decoration: underline; }
+/* F13: 关联邮件死链改 button — 复用 .link-row 视觉, 只清默认 button 外观 */
+.cal-linkbtn {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font-family: inherit;
+}
+
+/* 阶段2·2.5 — drawer 显著 Join 按钮 (.btn-op.edit 的 accent 实底语言, 不占满行) */
+.cal-join-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 14px;
+  margin-bottom: 6px;
+  border: 1px solid rgb(var(--c-accent-hi));
+  border-radius: var(--r-ctl);
+  background: rgb(var(--c-accent));
+  color: rgb(var(--c-accent-fg));
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+    transform 0.08s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.cal-join-btn:hover { background: rgb(var(--c-accent-hi)); }
+.cal-join-btn:active { transform: scale(0.98); }
+
+/* 阶段2·2.3 — drawer 关联邮件摘要卡: 主题 + 发件人/日期两行 + 外跳角标,
+ * 点击跳 inbox 选中定位来源邀请邮件. */
+.cal-srcmail {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-rows: auto auto;
+  column-gap: 8px;
+  row-gap: 2px;
+  align-items: center;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid rgb(var(--ink-border));
+  border-radius: var(--r-ctl);
+  background: rgb(var(--ink-3) / 0.35);
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  transition:
+    background 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+    border-color 0.12s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.cal-srcmail:hover {
+  background: rgb(var(--ink-3) / 0.7);
+  border-color: rgb(var(--c-accent) / 0.45);
+}
+.cal-srcmail-subject {
+  grid-column: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 500;
+  color: rgb(var(--ink-fg));
+}
+.cal-srcmail-meta {
+  grid-column: 1;
+  min-width: 0;
+  font-size: 11.5px;
+  color: rgb(var(--ink-fg-2));
+}
+.cal-srcmail-ext {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  color: rgb(var(--ink-fg-3));
+  flex-shrink: 0;
+}
 
 .desc-box {
   font-size: 13px;
@@ -3410,48 +3719,6 @@ body:not([data-batch-mode='true']) .email-row .cb {
   line-height: 1.6;
   word-break: break-all;
 }
-.dw-actions { display: flex; gap: 8px; margin-bottom: 8px; }
-/* Phase 2.1 — 3 个 RSVP button (接受/暂定/拒绝). data-current='true' 高亮当前
- * response_status; :disabled 标 RSVP mutation 进行中 (cursor: wait). */
-.dw-act {
-  flex: 1;
-  height: 32px;
-  border-radius: 7px;
-  font-size: 13px;
-  border: 1px solid rgb(var(--ink-border));
-  background: rgb(var(--ink-3) / 0.5);
-  color: rgb(var(--ink-fg));
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 5px;
-  padding: 0 8px;
-  font-family: inherit;
-  transition:
-    background 0.12s cubic-bezier(0.4, 0, 0.2, 1),
-    border-color 0.12s cubic-bezier(0.4, 0, 0.2, 1),
-    color 0.12s cubic-bezier(0.4, 0, 0.2, 1),
-    transform 0.12s cubic-bezier(0.4, 0, 0.2, 1);
-}
-.dw-act:hover:not(:disabled):not([data-current='true']) {
-  background: rgb(var(--ink-3) / 0.85);
-  border-color: rgb(var(--ink-border) / 1.4);
-}
-.dw-act:active:not(:disabled) {
-  transform: scale(0.98);
-}
-.dw-act:disabled {
-  opacity: 0.55;
-  cursor: wait;
-}
-.dw-act[data-current='true'] {
-  background: rgb(var(--c-accent) / 0.16);
-  border-color: rgb(var(--c-accent) / 0.4);
-  color: rgb(var(--c-accent));
-  font-weight: 600;
-}
-
 .empty-field {
   color: rgb(var(--ink-fg-3));
   font-style: italic;
@@ -3502,6 +3769,28 @@ body:not([data-batch-mode='true']) .email-row .cb {
   color: rgb(var(--ink-fg));
   margin: 0 0 4px;
 }
+/* 阶段1·1.9 (F7/Q12) — 标题行 + 关闭钮 (focus trap 需要 ≥1 focusable;
+   视觉同 .dw-close / .efm-close). */
+.cal-sk-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+.cal-sk-close {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: rgb(var(--ink-fg-2));
+  cursor: pointer;
+  border: 0;
+  background: transparent;
+}
+.cal-sk-close:hover { background: rgb(var(--ink-3)); color: rgb(var(--ink-fg)); }
 .sk-sub {
   font-size: 12px;
   color: rgb(var(--ink-fg-2));
@@ -3666,7 +3955,10 @@ html[data-theme-vt='circle-blur']::view-transition-new(root) {
   opacity: 0;
   pointer-events: none;
   transform: translateY(-4px);
-  transition: opacity 0.14s, transform 0.14s;
+  /* F8 — 散装 0.14s 收编 fast(120ms) + standard 曲线 */
+  transition:
+    opacity 120ms cubic-bezier(0.4, 0, 0.2, 1),
+    transform 120ms cubic-bezier(0.4, 0, 0.2, 1);
   text-align: left;
 }
 .sync-pill:hover .sync-tip {
@@ -3674,23 +3966,85 @@ html[data-theme-vt='circle-blur']::view-transition-new(root) {
   transform: translateY(0);
 }
 
-/* ── Calendar inner status bar (cal-card footer) ─────────────────── */
-.cal-statusbar {
-  height: 26px;
-  flex-shrink: 0;
-  border-top: 1px solid rgb(var(--ink-border) / 0.6);
-  background: rgb(var(--ink-2) / 0.4);
+/* F3 (阶段2·2.6) — 事件状态图例: toolbar sync-pill 旁 info 入口, 复刻
+ * .sync-pill/.sync-tip 的 CSS-only hover tip 模式 (加 :focus-within 键盘
+ * 可达)。swatch 用与消费面同款形态配方, 图例即样本。 */
+.cal-legend { position: relative; }
+.cal-legend-tip {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 230px;
+  z-index: 70;
+  border-radius: var(--r-pop);
+  padding: 11px 13px;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-4px);
+  transition:
+    opacity 120ms cubic-bezier(0.4, 0, 0.2, 1),
+    transform 120ms cubic-bezier(0.4, 0, 0.2, 1);
+  text-align: left;
+}
+.cal-legend:hover .cal-legend-tip,
+.cal-legend:focus-within .cal-legend-tip {
+  opacity: 1;
+  transform: translateY(0);
+}
+.cal-legend-row {
   display: flex;
   align-items: center;
-  padding: 0 14px;
-  gap: 10px;
-  font-family: ui-monospace, 'SF Mono', monospace;
+  gap: 8px;
+  padding: 3px 0;
+}
+.cal-legend-swatch {
+  width: 24px;
+  height: 13px;
+  border-radius: 3px;
+  flex-shrink: 0;
+  box-sizing: border-box;
+}
+.cal-legend-swatch[data-kind='tentative'] {
+  background: repeating-linear-gradient(
+    135deg,
+    rgb(var(--c-accent) / 0.2) 0 3px,
+    rgb(var(--c-accent) / 0.05) 3px 7px
+  );
+  border: 1px dashed rgb(var(--c-accent) / 0.5);
+}
+.cal-legend-swatch[data-kind='needs-action'] {
+  background: transparent;
+  border: 1.5px solid rgb(var(--c-accent));
+}
+.cal-legend-swatch[data-kind='declined'] {
+  background: rgb(var(--c-norm) / 0.12);
+  border: 1px solid rgb(var(--c-norm) / 0.3);
+  border-left: 3px solid rgb(var(--c-norm));
+}
+.cal-legend-swatch[data-kind='cancelled'] {
+  background: rgb(var(--c-low) / 0.07);
+  border: 1px solid rgb(var(--c-low) / 0.22);
+  border-left: 3px solid rgb(var(--c-low) / 0.55);
+}
+.cal-legend-label {
+  font-size: 12px;
+  color: rgb(var(--ink-fg));
+  white-space: nowrap;
+}
+.cal-legend-label[data-kind='declined'] {
+  text-decoration: line-through;
+  color: rgb(var(--c-norm));
+}
+.cal-legend-label[data-kind='cancelled'] {
+  text-decoration: line-through;
+  color: rgb(var(--c-low));
+}
+.cal-legend-shape {
   font-size: 11px;
   color: rgb(var(--ink-fg-2));
-  line-height: 1;
+  margin-left: auto;
+  white-space: nowrap;
 }
-.cal-statusbar .sep { color: rgb(var(--ink-fg-3)); }
-.cal-statusbar .right { margin-left: auto; color: rgb(var(--ink-fg-3)); }
 
 /* ═══════════════════════════════════════════════════════════════════
  * Phase 2.5 — Calendar UI polish (1:1 mockup-event-form.html +
@@ -4235,7 +4589,10 @@ html[data-theme-vt='circle-blur']::view-transition-new(root) {
   opacity: 0;
   pointer-events: none;
   transform: translateY(4px);
-  transition: opacity 0.14s, transform 0.14s;
+  /* F8 — 散装 0.14s 收编 fast(120ms) + standard 曲线 */
+  transition:
+    opacity 120ms cubic-bezier(0.4, 0, 0.2, 1),
+    transform 120ms cubic-bezier(0.4, 0, 0.2, 1);
   text-align: left;
 }
 .sb-info:hover .sb-pop, .sb-info:focus .sb-pop, .sb-info:focus-within .sb-pop {
@@ -5277,10 +5634,118 @@ html[data-theme-vt='circle-blur']::view-transition-new(root) {
   .evt:active,
   .btn-rsvp:active:not(:disabled),
   .btn-op:active:not(:disabled),
-  .dw-act:active:not(:disabled),
   .qchip:active,
   .gbtn:active:not(:disabled),
   [class*='active:scale-']:active {
     transform: none;
   }
+}
+
+/* ── 阶段2.2 (UX-P0①) — 邮件详情会议邀请卡片 .cal-invite ─────────────────
+ * 挂在 EmailDetail meta 区下方 (MeetingInviteCard.tsx)。RSVP 键复用 .btn-rsvp,
+ * 「在日历中查看」复用 .link-row/.cal-linkbtn; 本块只补卡片壳/行区/chip。
+ * 无新增动画/transform — 悬浮反馈全部来自被复用类, 时长在其定义处受控。 */
+.cal-invite {
+  margin-top: 20px;
+  padding: 13px 16px 14px;
+  border: 1px solid rgb(var(--ink-border));
+  border-radius: var(--r-card);
+  background: rgb(var(--ink-fg) / 0.03);
+}
+.cal-invite-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.cal-invite-head > svg {
+  flex: none;
+  color: rgb(var(--c-accent));
+}
+.cal-invite[data-cancelled='true'] .cal-invite-head > svg,
+.cal-invite[data-cancelled='true'] .cal-invite-title {
+  color: rgb(var(--c-fail));
+}
+.cal-invite-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: rgb(var(--ink-fg));
+}
+.cal-invite-badge,
+.cal-invite-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-size: 10.5px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  color: rgb(var(--ink-fg-1));
+  background: rgb(var(--ink-fg) / 0.06);
+  border: 1px solid rgb(var(--ink-border));
+}
+.cal-invite-chip {
+  margin-left: auto;
+}
+.cal-invite-chip[data-tone='warn'] {
+  color: rgb(var(--c-warn));
+  background: rgb(var(--c-warn) / 0.12);
+  border-color: rgb(var(--c-warn) / 0.35);
+}
+.cal-invite-chip[data-tone='ok'] {
+  color: rgb(var(--ink-fg-2));
+}
+.cal-invite-rows {
+  margin-top: 10px;
+  display: grid;
+  gap: 6px;
+}
+.cal-invite-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: rgb(var(--ink-fg-1));
+}
+.cal-invite-row > svg {
+  flex: none;
+  margin-top: 3px;
+  color: rgb(var(--ink-fg-3));
+}
+.cal-invite-time,
+.cal-invite-mono {
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-size: 12.5px;
+  color: rgb(var(--ink-fg));
+}
+.cal-invite-mono {
+  color: rgb(var(--ink-fg-1));
+}
+.cal-invite-attnames {
+  color: rgb(var(--ink-fg-2));
+}
+.cal-invite-foot {
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.cal-invite-rsvp {
+  display: flex;
+  gap: 8px;
+  flex: 1;
+  max-width: 360px;
+}
+.cal-invite-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  color: rgb(var(--ink-fg-3));
+}
+.cal-invite-view {
+  margin-left: auto;
+  font-size: 12.5px;
 }

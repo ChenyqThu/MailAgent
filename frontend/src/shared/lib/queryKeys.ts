@@ -74,6 +74,17 @@ export const qk = {
     event: () => ['calendar', 'event'] as const,
     eventDetail: (icalUid?: string, recurrenceId?: string | null, source?: string) =>
       ['calendar', 'event', icalUid, recurrenceId, source] as const,
+    sourceEmail: (icalUid?: string) => ['calendar', 'sourceEmail', icalUid] as const,
+    // 阶段 2.2 — 邮件详情邀请卡片: emailCalendarLink 反查 + 邀请窗口冲突查询。
+    // inviteConflicts 挂在 'events' 前缀下, 日历写后/同步后的 events 族
+    // invalidate 顺带刷新冲突 chip。
+    emailLink: (internalId: number) => ['calendar', 'email-link', internalId] as const,
+    inviteConflicts: (fromIso: string, toIso: string) =>
+      ['calendar', 'events', 'invite-conflict', fromIso, toIso] as const,
+    // 收尾批 (Lane G) — 周期系列邀请 (is_recurring 且无 recurrence_id) 查
+    // [现在, +60d] 窗口的下一次 occurrence, 替代显示 master 首次时间。
+    nextOccurrence: (icalUid: string) =>
+      ['calendar', 'events', 'next-occurrence', icalUid] as const,
     recurring: () => ['calendar', 'recurring'] as const,
     recurringSince: (since: string) => ['calendar', 'recurring', since] as const,
     recurringStatus90d: (recurringSince: string) =>

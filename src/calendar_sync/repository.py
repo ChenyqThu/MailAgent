@@ -73,6 +73,9 @@ class CalendarEventRow:
     deleted_at: Optional[datetime]
     created_at: datetime
     updated_at: datetime
+    # #10 tzid 半步 (DB v35): DTSTART 的 TZID 归一 Olson 名; None = 裸 Z/floating/
+    # 全天 → expander 走现状 UTC 语义。带默认值放末尾 (老调用方按位构造不破)。
+    tzid: Optional[str] = None
 
 
 @dataclass
@@ -288,7 +291,7 @@ class CalendarEventRepository:
                 INSERT INTO calendar_event (
                     ical_uid, recurrence_id, sequence, calendar_name,
                     summary, description, location, organizer, attendees_json,
-                    dtstart_utc, dtend_utc, is_all_day,
+                    dtstart_utc, dtend_utc, is_all_day, tzid,
                     rrule, exdates_json, rdates_json,
                     status, response_status, url, ics_raw,
                     source, notion_page_id, related_email_internal_id,
@@ -296,7 +299,7 @@ class CalendarEventRepository:
                 ) VALUES (
                     ?, ?, ?, ?,
                     ?, ?, ?, ?, ?,
-                    ?, ?, ?,
+                    ?, ?, ?, ?,
                     ?, ?, ?,
                     ?, ?, ?, ?,
                     ?, NULL, ?,
@@ -313,6 +316,7 @@ class CalendarEventRepository:
                     dtstart_utc    = excluded.dtstart_utc,
                     dtend_utc      = excluded.dtend_utc,
                     is_all_day     = excluded.is_all_day,
+                    tzid           = excluded.tzid,
                     rrule          = excluded.rrule,
                     exdates_json   = excluded.exdates_json,
                     rdates_json    = excluded.rdates_json,
@@ -344,6 +348,7 @@ class CalendarEventRepository:
                     _to_epoch(event.start),
                     _to_epoch(event.end),
                     int(bool(event.is_all_day)),
+                    event.tzid or None,
                     event.rrule or "",
                     _json_list(event.exdates or []),
                     _json_list(event.rdates or []),
@@ -461,6 +466,32 @@ class CalendarEventRepository:
             row = conn.execute(sql, params).fetchone()
         return _row_to_dataclass(row) if row else None
 
+    def get_master_by_uid(self, ical_uid: str) -> Optional[CalendarEventRow]:
+        """按 uid 找代表性 master 行 (阶段 2.1 邮件→日历互跳).
+
+        同一 ical_uid 可能有多行 (跨 source 灰度共存 + occurrence 跳脱):
+        - recurrence_id IS NULL (真 master) 优先于跳脱 occurrence
+        - source 按 SOURCES_TRY_ORDER (caldav → email_ics → legacy) 优先
+        - 再按 dtstart 最早; 软删除行不参与
+        """
+        with self._conn_ctx() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM calendar_event
+                WHERE ical_uid = ? AND deleted_at IS NULL
+                ORDER BY (recurrence_id IS NULL) DESC,
+                         CASE source
+                             WHEN 'caldav' THEN 0
+                             WHEN 'email_ics' THEN 1
+                             ELSE 2
+                         END,
+                         dtstart_utc ASC
+                LIMIT 1
+                """,
+                (ical_uid,),
+            ).fetchone()
+        return _row_to_dataclass(row) if row else None
+
     def list_event_rows(
         self,
         *,
@@ -560,6 +591,7 @@ class CalendarEventRepository:
                     window_start=start_utc,
                     window_end=end_utc,
                     max_count=max_per_series,
+                    tzid=r.tzid,
                 )
                 for occ_start, occ_end in expanded:
                     occurrences.append(CalendarEventOccurrence(
@@ -758,4 +790,5 @@ def _row_to_dataclass(row: sqlite3.Row) -> CalendarEventRow:
         deleted_at=_from_epoch(row["deleted_at"]),
         created_at=_from_epoch(row["created_at"]) or datetime.fromtimestamp(0, tz=timezone.utc),
         updated_at=_from_epoch(row["updated_at"]) or datetime.fromtimestamp(0, tz=timezone.utc),
+        tzid=row["tzid"],
     )

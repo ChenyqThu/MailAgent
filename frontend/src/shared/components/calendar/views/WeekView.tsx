@@ -3,11 +3,12 @@
 // HOUR_PX=48, 7 列 (Mon-Sun) × 24h. now-line + now-bubble 跟今天列漂浮.
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Calendar as CalendarIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
+import { CalendarQueryError } from '../CalendarQueryError'
 import { EventBlock } from '../EventBlock'
 import { isTodayLocal, pad, ymd } from '../lib/format'
+import { DOW_EN } from '../lib/weekdays'
 import {
   useCalendarEventsInWindow,
   addDays,
@@ -15,9 +16,10 @@ import {
   layoutDay
 } from '../hooks/useCalendarEvents'
 import type { CalendarEventOccurrence } from '@shared/api/types'
-import { EmptyState } from '@shared/components/feedback/EmptyState'
-import { Skeleton } from '@shared/components/feedback/LoadingSkeleton'
 import { cn } from '@shared/lib/cn'
+
+import { CalendarViewEmpty } from './CalendarViewEmpty'
+import { TimelineSkeleton } from './TimelineSkeleton'
 
 interface Props {
   date?: Date
@@ -33,7 +35,6 @@ interface Props {
 }
 
 const HOUR_PX = 48
-const DOW_EN = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN']
 const GRID_COLS = '56px repeat(7, 1fr)'
 
 // F32 — ymd/pad/isSameDay/isTodayLocal 抽到 ../lib/format
@@ -62,7 +63,7 @@ export function WeekView({
     [weekStart]
   )
 
-  const { data, isLoading } = useCalendarEventsInWindow(
+  const { data, isLoading, isError, refetch } = useCalendarEventsInWindow(
     {
       fromIso: weekStart.toISOString(),
       toIso: weekEnd.toISOString(),
@@ -81,23 +82,26 @@ export function WeekView({
 
   // 首次加载 (无 placeholderData 旧数据可借) 才显骨架; 切周时 isLoading=false,
   // 旧周事件经 keepPreviousData 留屏直到新周 ready, 不显骨架不闪白.
+  // F23 — 结构化 timeline 骨架替代通用灰条.
   if (isLoading) {
-    return (
-      <div className="cal-week" aria-busy="true">
-        <Skeleton rows={8} className="p-6" />
-      </div>
-    )
+    return <TimelineSkeleton cols={7} />
   }
 
   const events = data ?? []
-  if (events.length === 0) {
+  // F21 — query reject 不再伪装成空态; 仅在无可显示数据时换错误屏
+  // (keepPreviousData 下后台 refetch 偶发失败, 已在屏的旧数据继续留屏).
+  if (isError && events.length === 0) {
     return (
       <div className="cal-week">
-        <EmptyState
-          icon={<CalendarIcon size={20} strokeWidth={1.75} className="text-ink-fg-3" />}
-          title={t('calendar.empty.week', '本周无日程')}
-          hint={t('calendar.empty.syncHint')}
-        />
+        <CalendarQueryError onRetry={refetch} />
+      </div>
+    )
+  }
+  if (events.length === 0) {
+    // S7 — 空态三语义 (无事件/从未同步/同步失败) 由 CalendarViewEmpty 判定.
+    return (
+      <div className="cal-week">
+        <CalendarViewEmpty emptyTitle={t('calendar.empty.week', '本周无日程')} />
       </div>
     )
   }

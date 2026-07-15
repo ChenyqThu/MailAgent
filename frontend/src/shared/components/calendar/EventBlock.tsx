@@ -12,6 +12,7 @@ import { useTranslation } from 'react-i18next'
 import type { CalendarEventOccurrence } from '@shared/api/types'
 import { cn } from '@shared/lib/cn'
 import { shortTime } from './lib/format'
+import { extractMeetingLink, openMeetingLink } from './lib/meeting-link'
 
 interface EventBlockProps {
   event: CalendarEventOccurrence
@@ -52,13 +53,18 @@ export function EventBlock({
   const short = h <= 30
   const isPast = new Date(event.occurrence_end_iso) < new Date()
   const meeting = hasMeetingLink(event)
+  // 阶段2·2.5 — hover 浮出 Join 小钮 (occurrence 无 description, 凭 url/location).
+  const joinLink = extractMeetingLink({ url: event.url, location: event.location })
   const startTxt = shortTime(event.occurrence_start_iso)
   const endTxt = shortTime(event.occurrence_end_iso)
   const titleAttr = `${event.summary || untitled}\n${startTxt} – ${endTxt}${event.location ? '\n' + event.location : ''}`
 
   return (
-    <button
-      type="button"
+    // 2.5 — 根从 <button> 改 <div role="button"> (EmailRow 同款): Join 需要
+    // 内嵌真 <button>, 嵌套 button 非法. Enter/Space 激活语义手动补齐.
+    <div
+      role="button"
+      tabIndex={0}
       className={cn('evt', selected && 'is-selected', isPast && 'is-past')}
       data-resp={(event.response_status || '').toUpperCase()}
       data-status={(event.status || '').toUpperCase()}
@@ -69,6 +75,12 @@ export function EventBlock({
         width: `calc(${widthPct}% - 4px)`
       }}
       onClick={onClick}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          onClick?.()
+        }
+      }}
       title={titleAttr}
     >
       <div className="e-time">
@@ -82,6 +94,21 @@ export function EventBlock({
         {event.summary || untitled}
       </div>
       {!short && h > 52 && event.location && <div className="e-loc">{event.location}</div>}
-    </button>
+      {joinLink && (
+        <button
+          type="button"
+          className="evt-join"
+          onClick={(e) => {
+            e.stopPropagation()
+            openMeetingLink(joinLink)
+          }}
+          title={t('calendar.join.button', '加入会议')}
+          aria-label={t('calendar.join.button', '加入会议')}
+        >
+          <Video size={10} strokeWidth={2.4} aria-hidden />
+          {t('calendar.join.short', 'Join')}
+        </button>
+      )}
+    </div>
   )
 }

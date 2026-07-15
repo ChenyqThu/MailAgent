@@ -126,6 +126,8 @@ export interface CalendarEventRow {
   rrule: string
   exdates: string[]
   rdates: string[]
+  /** v35 (#10 tzid 半步): DTSTART TZID 归一 Olson 名; null = 裸 Z/floating/全天. */
+  tzid: string | null
   status: string
   response_status: string
   url: string
@@ -162,6 +164,7 @@ function rowToCalendarEventRow(r: DbCalendarRow): CalendarEventRow {
     rrule: r.rrule ?? '',
     exdates: parseJsonArray<string>(r.exdates_json),
     rdates: parseJsonArray<string>(r.rdates_json),
+    tzid: r.tzid ?? null,
     status: r.status ?? '',
     response_status: r.response_status ?? '',
     url: r.url ?? '',
@@ -173,12 +176,96 @@ function rowToCalendarEventRow(r: DbCalendarRow): CalendarEventRow {
   }
 }
 
+// ---- #10 tzid 半步: 墙钟 ↔ UTC 换算 helpers ----
+// npm rrule 的 tzid 选项有已知 DST bug (内部按固定 offset 折算), 不用; 改
+// 「假 UTC 墙钟帧展开 + 逐 occurrence 墙钟→真 UTC 校正」等价实现, DST gap/
+// ambiguous 语义对齐 Python zoneinfo fold=0 (双侧单测钉同一组 DST 夹具).
+
+const DAY_MS = 24 * 60 * 60 * 1000
+
+const tzFormatterCache = new Map<string, Intl.DateTimeFormat>()
+
+function resolveTzFormatter(tzid: string | null): Intl.DateTimeFormat | null {
+  if (!tzid) return null
+  const cached = tzFormatterCache.get(tzid)
+  if (cached) return cached
+  try {
+    const fmt = new Intl.DateTimeFormat('en-US', {
+      timeZone: tzid,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hourCycle: 'h23'
+    })
+    tzFormatterCache.set(tzid, fmt)
+    return fmt
+  } catch {
+    console.warn(`[calendar:expand] unresolvable tzid=${tzid} — fallback UTC 展开`)
+    return null
+  }
+}
+
+/** utcMs 时刻在该时区的 UTC offset (ms). */
+function tzOffsetMs(utcMs: number, fmt: Intl.DateTimeFormat): number {
+  const p: Record<string, number> = {}
+  for (const part of fmt.formatToParts(utcMs)) {
+    if (part.type !== 'literal') p[part.type] = Number(part.value)
+  }
+  return Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second) - utcMs
+}
+
+/** 真 UTC ms → 墙钟假 UTC ms (本地墙钟分量按 UTC 编码). */
+function utcToWallMs(utcMs: number, fmt: Intl.DateTimeFormat): number {
+  return utcMs + tzOffsetMs(utcMs, fmt)
+}
+
+/** 墙钟假 UTC ms → 真 UTC ms. DST gap (墙钟不存在) 取过渡前 (更小) offset —
+ *  对齐 Python zoneinfo fold=0; ambiguous (墙钟重复) 两轮收敛到首次出现. */
+function wallToUtcMs(wallMs: number, fmt: Intl.DateTimeFormat): number {
+  const o1 = tzOffsetMs(wallMs, fmt)
+  const utc1 = wallMs - o1
+  const o2 = tzOffsetMs(utc1, fmt)
+  if (o2 === o1) return utc1
+  const utc2 = wallMs - o2
+  if (tzOffsetMs(utc2, fmt) === o2) return utc2
+  return wallMs - Math.min(o1, o2)
+}
+
+/** RRULE 摘出 UNTIL → 真 UTC ms (无 UNTIL → null) + 去 UNTIL 的 RRULE 串.
+ *  墙钟帧里 rrule lib 会把 UNTIL 的 Z 值当假 UTC 比较 (帧错位), tzid 路径必须
+ *  摘出后按真 UTC 后置过滤 — Python dateutil 对 aware dtstart 原生做绝对时刻
+ *  比较, 两侧以此对齐. */
+function extractUntil(rruleStr: string): { rule: string; untilUtcMs: number | null } {
+  let untilUtcMs: number | null = null
+  const parts = rruleStr.split(';').filter((seg) => {
+    const m = /^\s*UNTIL=(\d{8})(?:T(\d{6})Z?)?\s*$/i.exec(seg)
+    if (!m) return true
+    const d = m[1]
+    const t = m[2] ?? '235959'
+    untilUtcMs = Date.UTC(
+      Number(d.slice(0, 4)),
+      Number(d.slice(4, 6)) - 1,
+      Number(d.slice(6, 8)),
+      Number(t.slice(0, 2)),
+      Number(t.slice(2, 4)),
+      Number(t.slice(4, 6))
+    )
+    return false
+  })
+  return { rule: parts.join(';'), untilUtcMs }
+}
+
 /**
  * 展开单 row 的 RRULE 到窗口内 occurrences.
  *
  * 跟 src/calendar_sync/expander.py 的 expand_in_window 等价行为:
  * - 无 RRULE → 单次 event, overlap 窗口才返
  * - 有 RRULE → rrule lib 展开, 套用 EXDATE 跳过, RDATE 额外加, MAX_COUNT 保护
+ * - row.tzid 非空 (v35, #10 tzid 半步) → 按该时区墙钟展开: DST 边界处
+ *   occurrence 本地时刻不变 (09:00 LA 恒 09:00, UTC 侧 17:00Z→16:00Z)
  */
 const MAX_OCCURRENCES_PER_RRULE = 500
 
@@ -190,7 +277,8 @@ export function expandInWindow(
 ): Array<{ start: Date; end: Date; isRecurrence: boolean }> {
   const dtstartMs = row.dtstart_utc * 1000
   const dtendMs = row.dtend_utc != null ? row.dtend_utc * 1000 : dtstartMs + 60 * 60 * 1000
-  const durationMs = Math.max(dtendMs - dtstartMs, 60 * 60 * 1000)
+  // 对齐 expander.py:75 — 仅 dtend<=dtstart 时兜底 1h, 短于 1h 的周期事件用真实时长
+  const durationMs = dtendMs > dtstartMs ? dtendMs - dtstartMs : 60 * 60 * 1000
 
   if (!row.rrule || !expandRecurrences) {
     if (dtstartMs < windowEndMs && dtendMs > windowStartMs) {
@@ -203,9 +291,22 @@ export function expandInWindow(
   if (rruleStr.toUpperCase().startsWith('RRULE:')) {
     rruleStr = rruleStr.slice(6)
   }
+
+  // tzid 墙钟帧 (见文件头 helpers): dtstart 换成假 UTC 墙钟, UNTIL 摘出改真 UTC 后置过滤
+  const tzFmt = resolveTzFormatter(row.tzid ?? null)
+  let ruleStr = rruleStr
+  let untilUtcMs: number | null = null
+  if (tzFmt) {
+    const extracted = extractUntil(rruleStr)
+    ruleStr = extracted.rule
+    untilUtcMs = extracted.untilUtcMs
+  }
+
   let rule: ReturnType<typeof rrulestr>
   try {
-    rule = rrulestr(`RRULE:${rruleStr}`, { dtstart: new Date(dtstartMs) })
+    rule = rrulestr(`RRULE:${ruleStr}`, {
+      dtstart: new Date(tzFmt ? utcToWallMs(dtstartMs, tzFmt) : dtstartMs)
+    })
   } catch {
     if (dtstartMs < windowEndMs && dtendMs > windowStartMs) {
       return [{ start: new Date(dtstartMs), end: new Date(dtendMs), isRecurrence: false }]
@@ -213,11 +314,22 @@ export function expandInWindow(
     return []
   }
 
-  const expandAfter = new Date(windowStartMs - durationMs)
-  const expandBefore = new Date(windowEndMs)
   let candidates: Date[] = []
   try {
-    candidates = rule.between(expandAfter, expandBefore, true)
+    if (tzFmt) {
+      // 墙钟帧 between 边界 ±1 天冗余 (帧偏移 ≤14h); 真 UTC overlap 终判在下方共享段
+      const wallAfter = new Date(utcToWallMs(windowStartMs, tzFmt) - durationMs - DAY_MS)
+      const wallBefore = new Date(utcToWallMs(windowEndMs, tzFmt) + DAY_MS)
+      candidates = rule
+        .between(wallAfter, wallBefore, true)
+        .map((d) => new Date(wallToUtcMs(d.getTime(), tzFmt)))
+      if (untilUtcMs != null) {
+        const cutoff = untilUtcMs
+        candidates = candidates.filter((d) => d.getTime() <= cutoff)
+      }
+    } else {
+      candidates = rule.between(new Date(windowStartMs - durationMs), new Date(windowEndMs), true)
+    }
   } catch {
     candidates = []
   }
@@ -294,7 +406,7 @@ export function runEventsList(opts: EventsListOpts = {}): CalendarEventOccurrenc
   const sql = `
     SELECT id, ical_uid, recurrence_id, sequence, summary, description, location,
            organizer, attendees_json, dtstart_utc, dtend_utc, is_all_day,
-           rrule, exdates_json, rdates_json, status, response_status, url,
+           rrule, exdates_json, rdates_json, tzid, status, response_status, url,
            ics_raw, source, notion_page_id, related_email_internal_id, calendar_name
     FROM calendar_event WHERE ${clauses.join(' AND ')}
     ORDER BY dtstart_utc ASC
@@ -358,7 +470,7 @@ export function runEventGet(opts: EventGetOpts): CalendarEventRow | null {
       .prepare(
         `SELECT id, ical_uid, recurrence_id, sequence, summary, description, location,
                 organizer, attendees_json, dtstart_utc, dtend_utc, is_all_day,
-                rrule, exdates_json, rdates_json, status, response_status, url,
+                rrule, exdates_json, rdates_json, tzid, status, response_status, url,
                 ics_raw, source, notion_page_id, related_email_internal_id, calendar_name
          FROM calendar_event
          WHERE ical_uid = ? AND source = ?
@@ -372,6 +484,152 @@ export function runEventGet(opts: EventGetOpts): CalendarEventRow | null {
     return null
   }
   return row ? rowToCalendarEventRow(row) : null
+}
+
+// ============================================================
+// 阶段 2.1 (P1-3) — 邮件 ↔ 日历 ical_uid 双向反查 (email_meeting 映射表, DB v34)
+// ============================================================
+
+/** 方向 A: 邮件 internal_id → .ics uid + 日历 master 行 (「查看日程」入口). */
+export interface EmailCalendarLink {
+  internal_id: number
+  ical_uid: string
+  /** REQUEST / CANCEL / REPLY; null = v34 回填行 (method 不可考). */
+  method: string | null
+  /** override 邀请的目标时间 ISO; null = master/单次. */
+  recurrence_id: string | null
+  sequence: number
+  is_recurring: boolean
+  /** calendar_event 里存在该 uid 的未删行? false = 邀请未进日历/已删. */
+  in_calendar: boolean
+  /** 代表 master 行 (caldav 优先); occurrence 展开由消费方走 eventsList. */
+  event: CalendarEventRow | null
+}
+
+/** 方向 B: ical_uid → 来源邀请邮件 (drawer「关联邮件」反查). */
+export interface EventSourceEmail {
+  ical_uid: string
+  internal_id: number
+  subject: string | null
+  sender: string | null
+  sender_name: string | null
+  date_received: string | null
+  mailbox: string | null
+  method: string | null
+  /** 携带该 uid 的映射邮件总数 (周期会议 update/cancel 各一封). */
+  linked_email_count: number
+}
+
+const CALENDAR_EVENT_COLUMNS = `id, ical_uid, recurrence_id, sequence, summary, description, location,
+       organizer, attendees_json, dtstart_utc, dtend_utc, is_all_day,
+       rrule, exdates_json, rdates_json, tzid, status, response_status, url,
+       ics_raw, source, notion_page_id, related_email_internal_id, calendar_name`
+
+export function runEmailCalendarLink(internalId: number): EmailCalendarLink | null {
+  const db = getDb()
+  let meeting:
+    | {
+        internal_id: number
+        ical_uid: string
+        method: string | null
+        recurrence_id: string | null
+        sequence: number
+        is_recurring: number
+      }
+    | undefined
+  try {
+    meeting = db
+      .prepare(
+        `SELECT internal_id, ical_uid, method, recurrence_id, sequence, is_recurring
+         FROM email_meeting WHERE internal_id = ?`
+      )
+      .get(internalId) as typeof meeting
+  } catch (e) {
+    console.warn('[calendar:emailCalendarLink] query failed (email_meeting table missing?):', e)
+    return null
+  }
+  if (!meeting) return null
+
+  // 代表 master 行: 真 master (recurrence_id NULL) 优先 → source 按 caldav →
+  // email_ics → legacy → dtstart 最早; 软删除行不参与 (对齐 Python
+  // CalendarEventRepository.get_master_by_uid).
+  let eventRow: DbCalendarRow | undefined
+  try {
+    eventRow = db
+      .prepare(
+        `SELECT ${CALENDAR_EVENT_COLUMNS}
+         FROM calendar_event
+         WHERE ical_uid = ? AND deleted_at IS NULL
+         ORDER BY (recurrence_id IS NULL) DESC,
+                  CASE source WHEN 'caldav' THEN 0 WHEN 'email_ics' THEN 1 ELSE 2 END,
+                  dtstart_utc ASC
+         LIMIT 1`
+      )
+      .get(meeting.ical_uid) as DbCalendarRow | undefined
+  } catch (e) {
+    console.warn('[calendar:emailCalendarLink] calendar_event query failed:', e)
+    eventRow = undefined
+  }
+
+  return {
+    internal_id: meeting.internal_id,
+    ical_uid: meeting.ical_uid,
+    method: meeting.method,
+    recurrence_id: meeting.recurrence_id,
+    sequence: meeting.sequence ?? 0,
+    is_recurring: !!meeting.is_recurring,
+    in_calendar: !!eventRow,
+    event: eventRow ? rowToCalendarEventRow(eventRow) : null
+  }
+}
+
+export function runEventSourceEmail(icalUid: string): EventSourceEmail | null {
+  const db = getDb()
+  try {
+    // 多封同 uid 邮件时优先最新 METHOD:REQUEST (date_received DESC);
+    // 无 REQUEST 时最新任意 method 一封 (含 v34 回填的 method=NULL 行)。
+    const row = db
+      .prepare(
+        `SELECT m.ical_uid, m.internal_id, m.method,
+                e.subject, e.sender, e.sender_name, e.date_received, e.mailbox
+         FROM email_meeting m
+         JOIN email_metadata e ON e.internal_id = m.internal_id
+         WHERE m.ical_uid = ?
+         ORDER BY (CASE WHEN m.method = 'REQUEST' THEN 1 ELSE 0 END) DESC,
+                  e.date_received DESC
+         LIMIT 1`
+      )
+      .get(icalUid) as
+      | {
+          ical_uid: string
+          internal_id: number
+          method: string | null
+          subject: string | null
+          sender: string | null
+          sender_name: string | null
+          date_received: string | null
+          mailbox: string | null
+        }
+      | undefined
+    if (!row) return null
+    const count = db
+      .prepare('SELECT COUNT(*) AS n FROM email_meeting WHERE ical_uid = ?')
+      .get(icalUid) as { n: number }
+    return {
+      ical_uid: row.ical_uid,
+      internal_id: row.internal_id,
+      subject: row.subject,
+      sender: row.sender,
+      sender_name: row.sender_name,
+      date_received: row.date_received,
+      mailbox: row.mailbox,
+      method: row.method,
+      linked_email_count: count?.n ?? 1
+    }
+  } catch (e) {
+    console.warn('[calendar:eventSourceEmail] query failed (email_meeting table missing?):', e)
+    return null
+  }
 }
 
 export function runSyncStatus(): CalendarSyncStateItem[] {

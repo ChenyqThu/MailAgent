@@ -20,6 +20,8 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from loguru import logger
 
+from src.calendar_sync._common import normalize_tzid
+
 if TYPE_CHECKING:
     from src.config import Config
 
@@ -144,6 +146,7 @@ class CalendarEvent:
     rdates: list[str] = field(default_factory=list)
     status: str = ""  # CONFIRMED / TENTATIVE / CANCELLED
     response_status: str = ""  # 当前用户 PARTSTAT (ACCEPTED / DECLINED / TENTATIVE / NEEDS-ACTION)
+    tzid: Optional[str] = None  # #10 tzid 半步: DTSTART 的 TZID 参数归一 Olson 名; None = 裸 Z/floating/全天
     attendees_detail: list[dict] = field(default_factory=list)
     # ↑ 完整 attendee 信息 [{email, name, response, role}], attendees 字段是简化版
     calendar_name: str = ""  # CalDAV calendar 名 (多日历支持)
@@ -514,6 +517,22 @@ class CalDAVReader:
             if dtstart_raw is None:
                 return None
             is_all_day = not isinstance(dtstart_raw, datetime)
+            # #10 tzid 半步: DTSTART 的 TZID 参数 → 归一 Olson 名落库 (DavMail 别名
+            # 如 Asia/Beijing→Asia/Shanghai)。vobject 解析后原始 TZID 移进
+            # X-VOBJ-ORIGINAL-TZID param; 裸 Z / floating / 全天无 TZID → None
+            # (UTC 语义, expander 走现状路径)。
+            tzid: Optional[str] = None
+            if not is_all_day:
+                try:
+                    _dt_params = getattr(vevent.dtstart, "params", {}) or {}
+                    _raw_tzid = _dt_params.get("TZID") or _dt_params.get(
+                        "X-VOBJ-ORIGINAL-TZID"
+                    )
+                    if isinstance(_raw_tzid, list):
+                        _raw_tzid = _raw_tzid[0] if _raw_tzid else None
+                    tzid = normalize_tzid(_raw_tzid)
+                except Exception:
+                    tzid = None
             dtstart = _coerce_aware(dtstart_raw)
             # dtend 缺失常见 (RFC 5545 允许), 用 dtstart + 1h 兜底
             dtend = _coerce_aware(dtend_raw) if dtend_raw is not None else None
@@ -649,6 +668,7 @@ class CalDAVReader:
                 ical_uid=ical_uid, sequence=sequence, recurrence_id=recurrence_id,
                 rrule=rrule, exdates=exdates, rdates=rdates,
                 status=status, response_status=response_status,
+                tzid=tzid,
                 attendees_detail=attendees_detail,
                 calendar_name=calendar_name, ics_raw=ics_raw,
             )

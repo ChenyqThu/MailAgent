@@ -9,7 +9,7 @@
 // 成 flex-col overflow-hidden 让 cal-card own scroll, 避免双滚动条.
 
 import { useNavigate, useSearch } from '@tanstack/react-router'
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Info } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -23,13 +23,26 @@ import { EventDetailDrawer } from '../calendar/EventDetailDrawer'
 import { UndoToastStack } from '../calendar/UndoToastStack'
 import { useCalendarShortcuts } from '../calendar/hooks/useCalendarShortcuts'
 import {
+  pickSyncHead,
   relativeTime,
+  stepViewDate,
   useCalendarEventsInWindow,
   useCalendarNames,
   useCalendarSyncStatus,
   useCalendarSyncTrigger,
   useNowTick
 } from '../calendar/hooks/useCalendarEvents'
+import { calendarCapabilities } from '../calendar/lib/capabilities'
+
+const caps = calendarCapabilities()
+import {
+  buildKeyNavSequence,
+  keyNavWindow,
+  matchFocusTarget,
+  occurrenceKey,
+  stepAnchor
+} from '../calendar/lib/key-nav'
+import { useCalendarFocus, type CalendarFocusTarget } from '@shared/state/calendar-focus'
 import { AgendaView } from '../calendar/views/AgendaView'
 import { DayView } from '../calendar/views/DayView'
 import { MonthView } from '../calendar/views/MonthView'
@@ -47,14 +60,6 @@ import { PageFrame } from './PageFrame'
 // x:+16 进), 后退 dir=-1 (从左). 切 view 时内部 view 分支整段 remount, 外层
 // 包裹 div (持 ref) key 不变 → 对包裹做新内容入场 fromTo (旧 DOM 已被 React
 // 同步替换, 无法退场动画; 入场淡入替换符合 §4.5 内容区瞬切语义).
-
-function step(view: CalendarView, dir: 1 | -1, base: Date): Date {
-  const d = new Date(base)
-  if (view === 'today') d.setDate(d.getDate() + dir)
-  else if (view === 'week') d.setDate(d.getDate() + dir * 7)
-  else if (view === 'month') d.setMonth(d.getMonth() + dir)
-  return d
-}
 
 /** YYYY-MM-DD (本地) → 该日 00:00 (UTC) ISO. 用于副 status bar 宽窗口 events 计数. */
 function isoOffsetDays(daysFromToday: number): string {
@@ -90,13 +95,25 @@ export function CalendarLayout(): React.ReactElement {
   // Drawer 跟着挂在 Layout 层 (单 mount), 切 view 不丢, deleteMut hook 不
   // unmount → 修 Critical #4 deleteMut stale closure + 撤销可 reopen drawer.
   const [active, setActive] = useState<CalendarEventOccurrence | null>(null)
-  const selectedKey = active ? `${active.id}-${active.occurrence_start_iso}` : null
+  // 2.7 (F18/UX-P0④) — j/k 巡航锚点, 与 active (drawer) 解耦: j/k 只动锚点
+  // 不开抽屉, Enter 才把锚点提升为 active. 点击事件两者同落 (j/k 从点击处续航).
+  const [anchor, setAnchor] = useState<CalendarEventOccurrence | null>(null)
+  const selectedKey = anchor ? occurrenceKey(anchor) : active ? occurrenceKey(active) : null
+
+  const handleSelect = useCallback((occ: CalendarEventOccurrence): void => {
+    setAnchor(occ)
+    setActive(occ)
+  }, [])
+
+  // 2.7 — Toolbar [+ 新建] modal 状态上提到 Layout, n 快捷键共用同一入口.
+  const [createOpen, setCreateOpen] = useState(false)
 
   const setView = useCallback(
     (v: CalendarView): void => {
       // F26 — 切 view 时 reset active. 月选中事件切到周时 drawer 可能显示
       // 跨当前窗口外事件 (UX 怪), 切 view 时强制关闭让用户重新选.
       setActive(null)
+      setAnchor(null)
       void navigate({ search: { view: v } })
     },
     [navigate]
@@ -153,7 +170,9 @@ export function CalendarLayout(): React.ReactElement {
   })
   const recurringCount = recurringList?.length ?? null
 
-  const head = syncStatus?.[0]
+  // F19/Q6 — 健康优先选行统一走 pickSyncHead (与 Toolbar sync-pill /
+  // CalendarViewEmpty 同源, 孤儿行场景不再上绿下红同屏矛盾).
+  const head = pickSyncHead(syncStatus)
   const ctag = head?.ctag ?? null
   const lastIso = head?.last_incremental_sync_at_iso ?? head?.last_full_sync_at_iso ?? null
   const lastDate = lastIso ? new Date(lastIso) : null
@@ -162,16 +181,110 @@ export function CalendarLayout(): React.ReactElement {
     : t('calendar.statusbar.noSync', '尚未同步')
   const lastError = head?.last_error ?? null
   const hasErr = !!lastError
-  const calendarsLabel = head?.calendar_name ?? '日历'
+  const calendarsLabel = head?.calendar_name ?? t('calendar.statusbar.calendarFallback', '日历')
+
+  // 2.7 — j/k 巡航序列: Layout 用与当前视图相同的窗口参数跑同一
+  // useCalendarEventsInWindow (同 queryKey → react-query 缓存命中, 零额外
+  // IPC); recurring 无时间轴, enabled=false 不发查询也不参与巡航.
+  const navWindow = useMemo(() => keyNavWindow(view, currentDate), [view, currentDate])
+  const { data: navEvents, isFetching: navFetching } = useCalendarEventsInWindow(
+    { fromIso: navWindow?.fromIso ?? '', toIso: navWindow?.toIso ?? '' },
+    selectedCalendars,
+    navWindow !== null
+  )
+  const navSeq = useMemo(
+    () => (navWindow && navEvents ? buildKeyNavSequence(view, navEvents) : []),
+    [view, navWindow, navEvents]
+  )
+  // 序列/锚点走 ref — j/k handler 保持稳定引用, keydown listener 不随数据
+  // refetch / 每次巡航 re-bind.
+  const navSeqRef = useRef<CalendarEventOccurrence[]>([])
+  useEffect(() => {
+    navSeqRef.current = navSeq
+  }, [navSeq])
+  const anchorRef = useRef<CalendarEventOccurrence | null>(null)
+  useEffect(() => {
+    anchorRef.current = anchor
+  }, [anchor])
+
+  // 2.7 — j/k 选中变化把目标滚进视口. 四视图选中元素统一 .is-selected 标记
+  // (EventBlock/EventChip/agenda 行/day rail), Layout 层 querySelector 即可
+  // 不碰视图文件; agenda 跨天多命中取首个 (最早一天).
+  useEffect(() => {
+    if (!anchor) return
+    viewScopeRef.current
+      ?.querySelector('.is-selected')
+      ?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  }, [anchor])
+
+  // 2.2↔2.7 —「在日历中查看」跨面定位读侧: MeetingInviteCard 写 pending
+  // target (calendar-focus store) 后 navigate 过来; 此处 consume (单次消费)
+  // → 日期跳转, 匹配交给下方 effect. 视图不切 — 写侧 navigate 已显式带
+  // view ('today': 小时级 timeline 定位最准), 读侧不二次决策.
+  const pendingFocus = useCalendarFocus((s) => s.pending)
+  const [focusTarget, setFocusTarget] = useState<CalendarFocusTarget | null>(null)
+  useEffect(() => {
+    if (!pendingFocus) return
+    const target = useCalendarFocus.getState().consume()
+    if (!target) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- 跨面 one-shot 信号消费 (照 AiChatPanel 先例): consume() 带清空 store 副作用, 只能在 effect 做, 消费结果落两个本地 state.
+    setFocusTarget(target)
+    setCurrentDate(new Date(target.dateIso))
+  }, [pendingFocus])
+
+  // 匹配: 等当前视图窗口覆盖目标日期且数据就位 (isFetching 排除
+  // keepPreviousData 旧窗口留屏) 再按 uid/recurrence_id 找; 找到只设选中
+  // 锚点 + 滚动跟随, 不强开抽屉 (「查看」语义是定位上下文, 详情已在邮件
+  // 卡片看过; Enter 一键可开). 成败都清 target — uid 不在窗口 = 事件过期/
+  // 被删, 静默放弃.
+  useEffect(() => {
+    if (!focusTarget || !navWindow || navFetching || !navEvents) return
+    const targetMs = Date.parse(focusTarget.dateIso)
+    if (targetMs < Date.parse(navWindow.fromIso) || targetMs >= Date.parse(navWindow.toIso)) return
+    const match = matchFocusTarget(navSeq, focusTarget, Date.now())
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot: 异步 query 数据到达后的单次匹配落锚 + 清 target, 非派生状态.
+    if (match) setAnchor(match)
+    setFocusTarget(null)
+  }, [focusTarget, navWindow, navFetching, navEvents, navSeq])
 
   // useCallback 包 callback — 让 useCalendarShortcuts 的 keydown listener 不会
   // 每次 CalendarLayout re-render 都 unbind+re-bind (闭包问题 §4.5)
-  const handleToday = useCallback(() => setCurrentDate(new Date()), [])
-  const handlePrev = useCallback(() => setCurrentDate((d) => step(view, -1, d)), [view])
-  const handleNext = useCallback(() => setCurrentDate((d) => step(view, 1, d)), [view])
+  // 2.7 — 日期步进/跳今天清巡航锚点 (窗口变了, 旧锚点大概率不在序列);
+  // active (drawer) 沿用现语义不动.
+  const handleToday = useCallback(() => {
+    setAnchor(null)
+    setCurrentDate(new Date())
+  }, [])
+  const handlePrev = useCallback(() => {
+    setAnchor(null)
+    setCurrentDate((d) => stepViewDate(view, -1, d))
+  }, [view])
+  const handleNext = useCallback(() => {
+    setAnchor(null)
+    setCurrentDate((d) => stepViewDate(view, 1, d))
+  }, [view])
+  const handleDateChange = useCallback((d: Date) => {
+    setAnchor(null)
+    setCurrentDate(d)
+  }, [])
   const handleSync = useCallback(() => triggerSync({ full: true }), [triggerSync])
   const handleHelp = useCallback(() => setShortcutOpen((v) => !v), [])
   const handleEsc = useCallback(() => setShortcutOpen(false), [])
+  const handleNewEvent = useCallback(() => setCreateOpen(true), [])
+  const handleNextEvent = useCallback(() => {
+    const cur = anchorRef.current
+    const next = stepAnchor(navSeqRef.current, cur ? occurrenceKey(cur) : null, 1, Date.now())
+    if (next) setAnchor(next)
+  }, [])
+  const handlePrevEvent = useCallback(() => {
+    const cur = anchorRef.current
+    const next = stepAnchor(navSeqRef.current, cur ? occurrenceKey(cur) : null, -1, Date.now())
+    if (next) setAnchor(next)
+  }, [])
+  const handleOpenSelected = useCallback(() => {
+    const cur = anchorRef.current
+    if (cur) setActive(cur)
+  }, [])
 
   useCalendarShortcuts({
     onView: setView,
@@ -180,7 +293,12 @@ export function CalendarLayout(): React.ReactElement {
     onNext: handleNext,
     onSync: handleSync,
     onHelp: handleHelp,
-    onEsc: handleEsc
+    onEsc: handleEsc,
+    // 阶段 3 (#11) — caps.write 门控, 与 Toolbar [+ 新建] 按钮同一判定.
+    onNew: caps.write ? handleNewEvent : undefined,
+    onNextEvent: handleNextEvent,
+    onPrevEvent: handlePrevEvent,
+    onOpenSelected: handleOpenSelected
   })
 
   return (
@@ -189,10 +307,12 @@ export function CalendarLayout(): React.ReactElement {
         view={view}
         onViewChange={setView}
         currentDate={currentDate}
-        onDateChange={setCurrentDate}
+        onDateChange={handleDateChange}
         calendars={calendars}
         selectedCalendars={selectedCalendars}
         onSelectedCalendarsChange={setSelectedCalendars}
+        createOpen={createOpen}
+        onCreateOpenChange={setCreateOpen}
       />
       {/* CALENDAR-02 — 窄屏收窄横向 padding 多给 grid 空间 (week/month 7 列)。 */}
       <div className="flex-1 min-h-0 px-2 sm:px-5 pb-4">
@@ -205,9 +325,9 @@ export function CalendarLayout(): React.ReactElement {
               <CalendarErrorBoundary viewName={t('calendar.toolbar.viewDay', '日')}>
                 <DayView
                   date={currentDate}
-                  onDateChange={setCurrentDate}
+                  onDateChange={handleDateChange}
                   selectedCalendars={selectedCalendars}
-                  onSelect={setActive}
+                  onSelect={handleSelect}
                   selectedKey={selectedKey}
                 />
               </CalendarErrorBoundary>
@@ -217,7 +337,7 @@ export function CalendarLayout(): React.ReactElement {
                 <WeekView
                   date={currentDate}
                   selectedCalendars={selectedCalendars}
-                  onSelect={setActive}
+                  onSelect={handleSelect}
                   selectedKey={selectedKey}
                 />
               </CalendarErrorBoundary>
@@ -227,13 +347,18 @@ export function CalendarLayout(): React.ReactElement {
                 <MonthView
                   date={currentDate}
                   selectedCalendars={selectedCalendars}
-                  onSelect={setActive}
+                  onSelect={handleSelect}
+                  selectedKey={selectedKey}
                 />
               </CalendarErrorBoundary>
             )}
             {view === 'agenda' && (
               <CalendarErrorBoundary viewName={t('calendar.toolbar.viewAgenda', 'Agenda')}>
-                <AgendaView selectedCalendars={selectedCalendars} onSelect={setActive} />
+                <AgendaView
+                  selectedCalendars={selectedCalendars}
+                  onSelect={handleSelect}
+                  selectedKey={selectedKey}
+                />
               </CalendarErrorBoundary>
             )}
             {view === 'recurring' && (
@@ -321,7 +446,7 @@ export function CalendarLayout(): React.ReactElement {
       <EventDetailDrawer
         occurrence={active}
         onClose={() => setActive(null)}
-        onReopen={(occ) => setActive(occ)}
+        onReopen={(occ) => handleSelect(occ)}
       />
 
       {/* §11.2 — undo toast stack: fixed 定位脱离 layout flow, 出现在底部居中 */}

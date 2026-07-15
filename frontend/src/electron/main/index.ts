@@ -100,8 +100,10 @@ app.on('open-url', (event, url) => {
 // navigate 覆盖所有框架(含 iframe): 子框架要导航到外部 scheme 时拦下, 改用系统
 // 默认浏览器 / 邮件客户端打开。主框架(isMainFrame)导航不碰 —— dev HMR reload /
 // 应用自身路由都走主框架, 误拦会破坏热重载。
+// msteams: 日历 Join 按钮的 Teams deeplink (阶段2·2.5), 与 https 同级放行 —
+// 邮件正文里的 msteams:// 链接同样交系统打开 (等价 mailto/tel 的外部协议语义)。
 function isExternalNavUrl(url: string): boolean {
-  return /^(?:https?|mailto|tel|callto|sms):/i.test(url)
+  return /^(?:https?|mailto|tel|callto|sms|msteams):/i.test(url)
 }
 
 function attachExternalLinkGuard(contents: Electron.WebContents): void {

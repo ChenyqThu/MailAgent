@@ -653,3 +653,44 @@ def test_split_series_rejects_non_recurring():
             ical_uid="single@mailagent.local",
             split_recurrence_id_utc=datetime(2026, 1, 5, 9, tzinfo=timezone.utc),
         )
+
+
+def test_split_series_step2_failure_rolls_back_old_master():
+    """P1-2: 第 2 步 (新 series PUT) 失败 → best-effort 恢复老 master 原 RRULE
+    (再 PUT 一次改前内容) + 原异常向上抛, 信息注明已回滚."""
+    writer, mock_evt = _writer_with_recurring_master("FREQ=WEEKLY;BYDAY=MO")
+    mock_cal = MagicMock()
+    mock_cal.save_event.side_effect = RuntimeError("boom: new series PUT failed")
+    writer._find_event_by_uid = MagicMock(return_value=(mock_cal, mock_evt))
+    with pytest.raises(RuntimeError, match="已回滚老 master") as excinfo:
+        writer.split_series(
+            ical_uid="series@mailagent.local",
+            split_recurrence_id_utc=datetime(2026, 2, 2, 9, 0, tzinfo=timezone.utc),
+        )
+    # 原异常链保留 (调用方可辨根因)
+    assert "boom: new series PUT failed" in str(excinfo.value)
+    # 恢复 PUT 发生: save 两次 (第 1 步截断 + 回滚), evt.data 是改前内容 (原 RRULE 无 UNTIL)
+    assert mock_evt.save.call_count == 2
+    restored = vobject.readOne(mock_evt.data)
+    assert restored.vevent.rrule.value == "FREQ=WEEKLY;BYDAY=MO"
+    assert "UNTIL=" not in restored.vevent.rrule.value
+
+
+def test_split_series_step2_and_rollback_both_fail_reports_orig_rrule():
+    """P1-2: 第 2 步失败 + 回滚 PUT 也失败 → 异常信息带原 RRULE 字符串
+    (供人工修复) 并注明 Exchange 端处于截断态."""
+    writer, mock_evt = _writer_with_recurring_master("FREQ=WEEKLY;BYDAY=MO")
+    mock_cal = MagicMock()
+    mock_cal.save_event.side_effect = RuntimeError("boom: new series PUT failed")
+    # 第 1 次 save (截断) 成功, 第 2 次 save (回滚) 失败
+    mock_evt.save.side_effect = [None, RuntimeError("restore PUT failed")]
+    writer._find_event_by_uid = MagicMock(return_value=(mock_cal, mock_evt))
+    with pytest.raises(RuntimeError, match="截断态") as excinfo:
+        writer.split_series(
+            ical_uid="series@mailagent.local",
+            split_recurrence_id_utc=datetime(2026, 2, 2, 9, 0, tzinfo=timezone.utc),
+        )
+    msg = str(excinfo.value)
+    assert "FREQ=WEEKLY;BYDAY=MO" in msg  # 原 RRULE 供人工修复
+    assert "boom: new series PUT failed" in msg
+    assert "restore PUT failed" in msg

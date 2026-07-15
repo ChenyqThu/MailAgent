@@ -23,7 +23,7 @@ describe('SHORTCUTS catalog', () => {
       expect(def.id).toBeTruthy()
       expect(def.spec).toBeTruthy()
       expect(def.display).toBeTruthy()
-      expect(['global', 'inbox', 'row', 'chat']).toContain(def.scope)
+      expect(['global', 'inbox', 'row', 'chat', 'calendar']).toContain(def.scope)
       expect(def.labelKey).toMatch(/^shortcutHelp\.binding\./)
       expect(typeof def.wired).toBe('boolean')
     }
@@ -49,14 +49,12 @@ describe('SHORTCUTS catalog', () => {
 
   test('groupByScope splits by ShortcutScope without losing entries', () => {
     const grouped = groupByScope()
-    const total = SCOPE_ORDER.reduce(
-      (sum, scope: ShortcutScope) => sum + grouped[scope].length,
-      0
-    )
+    const total = SCOPE_ORDER.reduce((sum, scope: ShortcutScope) => sum + grouped[scope].length, 0)
     expect(total).toBe(SHORTCUTS.length)
   })
 
   test('SCOPE_ORDER is exhaustive', () => {
-    expect(SCOPE_ORDER).toEqual(['global', 'inbox', 'row', 'chat'])
+    // 阶段2·2.7 — calendar scope 收编进统一登记面 (ux-benchmark §五-5)
+    expect(SCOPE_ORDER).toEqual(['global', 'inbox', 'row', 'chat', 'calendar'])
   })
 })

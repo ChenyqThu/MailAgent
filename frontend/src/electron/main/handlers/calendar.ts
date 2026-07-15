@@ -24,14 +24,18 @@ import { envelopeFromCli, type WriteEnvelope } from '../lib/envelope'
 import {
   expandInWindow,
   runCalendarNames,
+  runEmailCalendarLink,
   runEventGet,
   runEventsList,
+  runEventSourceEmail,
   runRecurringDiscover,
   runSyncStatus,
   type CalendarEventOccurrence,
   type CalendarEventRow,
   type CalendarSyncStateItem,
+  type EmailCalendarLink,
   type EventGetOpts,
+  type EventSourceEmail,
   type EventsListOpts,
   type RecurringDiscoverOpts,
   type RecurringInviteItem
@@ -68,12 +72,14 @@ export {
   expandInWindow,
   runCalendarExpand,
   runCalendarNames,
+  runEmailCalendarLink,
   runEventCreate,
   runEventDelete,
   runEventGet,
   runEventReplay,
   runEventRsvp,
   runEventsList,
+  runEventSourceEmail,
   runEventUpdate,
   runRecurringDiscover,
   runRecurringReplay,
@@ -86,12 +92,14 @@ export type {
   CalendarEventRow,
   CalendarExpandOpts,
   CalendarSyncStateItem,
+  EmailCalendarLink,
   EventAttendeeInput,
   EventCreateOpts,
   EventDeleteOpts,
   EventGetOpts,
   EventReplayOpts,
   EventRsvpOpts,
+  EventSourceEmail,
   EventUpdateOpts,
   EventsListOpts,
   RecurringDiscoverOpts,
@@ -136,6 +144,23 @@ export function registerCalendarHandlers(): void {
   })
   safeIpcHandle('calendar:syncStatus', async () => runSyncStatus())
   safeIpcHandle('calendar:calendarNames', async () => runCalendarNames())
+  // 阶段 2.1 (P1-3) — 邮件 ↔ 日历 ical_uid 双向反查 (email_meeting 直读)
+  safeIpcHandle(
+    'calendar:emailCalendarLink',
+    async (_evt, ...args): Promise<EmailCalendarLink | null> => {
+      const internalId = args[0]
+      if (typeof internalId !== 'number' || !Number.isFinite(internalId)) return null
+      return runEmailCalendarLink(internalId)
+    }
+  )
+  safeIpcHandle(
+    'calendar:eventSourceEmail',
+    async (_evt, ...args): Promise<EventSourceEmail | null> => {
+      const icalUid = args[0]
+      if (typeof icalUid !== 'string' || !icalUid) return null
+      return runEventSourceEmail(icalUid)
+    }
+  )
   safeIpcHandle(
     'calendar:syncTrigger',
     async (_evt, ...args): Promise<WriteEnvelope<unknown>> =>
@@ -219,6 +244,8 @@ export const __testing = {
   runCalendarExpand,
   runEventsList,
   runEventGet,
+  runEmailCalendarLink,
+  runEventSourceEmail,
   runSyncStatus,
   runCalendarNames,
   runSyncNow,

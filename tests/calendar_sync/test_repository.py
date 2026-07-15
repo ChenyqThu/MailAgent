@@ -482,3 +482,42 @@ class TestUpsertConcurrent:
         final_repo = CalendarEventRepository(fresh_db)
         rows = final_repo.list_event_rows(source="caldav")
         assert len(rows) == 8
+
+
+# ============================================================
+# #10 tzid 半步 (DB v35) — tzid 落库 roundtrip + 展开按 tzid
+# ============================================================
+
+class TestTzidPersistence:
+    def test_upsert_roundtrip_tzid(self, repo, make_event):
+        ev = make_event("uid-tz")
+        ev.tzid = "Asia/Shanghai"
+        repo.upsert_from_caldav_event(ev, source="caldav")
+        row = repo.get_by_ical_uid("uid-tz")
+        assert row is not None
+        assert row.tzid == "Asia/Shanghai"
+        # upsert 覆盖 (下轮 sync tzid 变化跟随)
+        ev.tzid = None
+        repo.upsert_from_caldav_event(ev, source="caldav")
+        assert repo.get_by_ical_uid("uid-tz").tzid is None
+
+    def test_occurrences_expand_with_tzid_across_dst(self, repo, make_event):
+        """master 带 tzid=LA: 展开跨 2026-03-08 DST 边界, UTC 侧 17:00Z→16:00Z
+        (与 test_expander.TestTzidWallClock 同夹具)."""
+        from datetime import datetime, timezone
+        ev = make_event(
+            "uid-la-weekly",
+            start=datetime(2026, 3, 4, 17, 0, tzinfo=timezone.utc),
+            rrule="FREQ=WEEKLY;COUNT=3",
+        )
+        ev.tzid = "America/Los_Angeles"
+        repo.upsert_from_caldav_event(ev, source="caldav")
+        occs = repo.list_event_occurrences(
+            datetime(2026, 3, 1, tzinfo=timezone.utc),
+            datetime(2026, 4, 1, tzinfo=timezone.utc),
+        )
+        assert [o.occurrence_start_utc.isoformat() for o in occs] == [
+            "2026-03-04T17:00:00+00:00",
+            "2026-03-11T16:00:00+00:00",
+            "2026-03-18T16:00:00+00:00",
+        ]

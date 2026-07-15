@@ -26,6 +26,10 @@ export type ShortcutScope =
   | 'chat'
   /** Active when the row has focus (X toggle select). */
   | 'row'
+  /** Active when the calendar page is mounted (CalendarLayout's
+   *  useCalendarShortcuts window listener; CalendarShortcutModal derives
+   *  its rows from this scope). */
+  | 'calendar'
 
 export interface ShortcutDef {
   /** Stable id used by tests + telemetry. */
@@ -229,6 +233,123 @@ export const SHORTCUTS: ReadonlyArray<ShortcutDef> = [
     scope: 'global',
     labelKey: 'shortcutHelp.binding.toggleLocale',
     wired: true
+  },
+  // ── Calendar (阶段2·2.7, ux-benchmark §五-5 统一登记) ─────────────────
+  // Registration lives in `useCalendarShortcuts` (its own window listener
+  // with G-prefix two-key sequences + editable-target guard), NOT
+  // `useShortcut`; sequence specs use space-separated notation ("g d").
+  // Display 空格分段被 CalendarShortcutModal 渲染成多枚 kbd ("G D" → G·D).
+  {
+    id: 'calViewDay',
+    spec: 'g d',
+    display: 'G D',
+    scope: 'calendar',
+    labelKey: 'shortcutHelp.binding.calViewDay',
+    wired: true
+  },
+  {
+    id: 'calViewWeek',
+    spec: 'g w',
+    display: 'G W',
+    scope: 'calendar',
+    labelKey: 'shortcutHelp.binding.calViewWeek',
+    wired: true
+  },
+  {
+    id: 'calViewMonth',
+    spec: 'g m',
+    display: 'G M',
+    scope: 'calendar',
+    labelKey: 'shortcutHelp.binding.calViewMonth',
+    wired: true
+  },
+  {
+    id: 'calViewAgenda',
+    spec: 'g a',
+    display: 'G A',
+    scope: 'calendar',
+    labelKey: 'shortcutHelp.binding.calViewAgenda',
+    wired: true
+  },
+  {
+    id: 'calViewRecurring',
+    spec: 'g r',
+    display: 'G R',
+    scope: 'calendar',
+    labelKey: 'shortcutHelp.binding.calViewRecurring',
+    wired: true
+  },
+  {
+    id: 'calPrevNext',
+    spec: 'left right',
+    display: '← →',
+    scope: 'calendar',
+    labelKey: 'shortcutHelp.binding.calPrevNext',
+    wired: true
+  },
+  {
+    id: 'calToday',
+    spec: 't',
+    display: 'T',
+    scope: 'calendar',
+    labelKey: 'shortcutHelp.binding.calToday',
+    wired: true
+  },
+  {
+    id: 'calSync',
+    spec: 'cmd+r',
+    display: '⌘R',
+    scope: 'calendar',
+    labelKey: 'shortcutHelp.binding.calSync',
+    wired: true
+  },
+  {
+    id: 'calNewEvent',
+    spec: 'n',
+    display: 'N',
+    scope: 'calendar',
+    labelKey: 'shortcutHelp.binding.calNewEvent',
+    wired: true
+  },
+  {
+    id: 'calNextEvent',
+    spec: 'j',
+    display: 'J',
+    scope: 'calendar',
+    labelKey: 'shortcutHelp.binding.calNextEvent',
+    wired: true
+  },
+  {
+    id: 'calPrevEvent',
+    spec: 'k',
+    display: 'K',
+    scope: 'calendar',
+    labelKey: 'shortcutHelp.binding.calPrevEvent',
+    wired: true
+  },
+  {
+    id: 'calOpenSelected',
+    spec: 'enter',
+    display: '↩',
+    scope: 'calendar',
+    labelKey: 'shortcutHelp.binding.calOpenSelected',
+    wired: true
+  },
+  {
+    id: 'calClose',
+    spec: 'esc',
+    display: 'Esc',
+    scope: 'calendar',
+    labelKey: 'shortcutHelp.binding.calClose',
+    wired: true
+  },
+  {
+    id: 'calHelp',
+    spec: '?',
+    display: '?',
+    scope: 'calendar',
+    labelKey: 'shortcutHelp.binding.calHelp',
+    wired: true
   }
 ] as const
 
@@ -244,11 +365,18 @@ export function groupByScope(): Record<ShortcutScope, ShortcutDef[]> {
     global: [],
     inbox: [],
     row: [],
-    chat: []
+    chat: [],
+    calendar: []
   }
   for (const s of SHORTCUTS) out[s.scope].push(s)
   return out
 }
 
 /** Section ordering used by the help modal. */
-export const SCOPE_ORDER: ReadonlyArray<ShortcutScope> = ['global', 'inbox', 'row', 'chat']
+export const SCOPE_ORDER: ReadonlyArray<ShortcutScope> = [
+  'global',
+  'inbox',
+  'row',
+  'chat',
+  'calendar'
+]

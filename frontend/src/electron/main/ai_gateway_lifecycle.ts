@@ -392,6 +392,14 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
   // are 恒 HITL (never auto-approved). main-env-only, NO vite define (mirrors the other openness
   // flags). Explicit false → buildGatewayTools output byte-identical to pre-cutover (v1.2.0).
   const skillInstallToolsEnabled = envBool('MAILAGENT_OPENNESS_SKILL_INSTALL', true)
+  // calendar epic 4.1/4.2 — MAILAGENT_CALENDAR_AGENT_TOOLS gates the five calendar tools
+  // (calendar_events_list / calendar_event_get silent reads with CALENDAR_EVENT-fenced event text +
+  // calendar_event_reschedule / calendar_event_rsvp / calendar_event_delete, all edit-tier writes —
+  // D4 恒 HITL: always ask, no whitelist/免卡 channel, rich CalendarApprovalCard registered).
+  // Default ON; an explicit env false is the emergency rollback (kill-switch). main-env-only, NO
+  // vite define (mirrors the openness flags). Explicit false → buildGatewayTools output
+  // byte-identical to the pre-epic set.
+  const calendarToolsEnabled = envBool('MAILAGENT_CALENDAR_AGENT_TOOLS', true)
   // S4 W3 — MAILAGENT_CUSTOM_AGENTS_ENABLED gates the headless custom-agent fresh-spawn endpoint
   // (POST /api/ai/agent-run): its two cfg hooks (fetchAgentRunSpec + createAgentSession) are wired
   // only when on → an explicit env false → the endpoint 404s, byte-identical to S3. This wave adds
@@ -690,6 +698,8 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
           execToolsEnabled,
           // S2 W4 — skill-supply tools (MAILAGENT_OPENNESS_SKILL_INSTALL, default off).
           skillInstallToolsEnabled,
+          // calendar epic 4.1/4.2 — calendar tools (MAILAGENT_CALENDAR_AGENT_TOOLS, default on).
+          calendarToolsEnabled,
           // S5 W3 — conversational custom-agent CRUD tools (MAILAGENT_CUSTOM_AGENTS_ENABLED, the same
           // flag that gates the S4 headless kernel; default off → byte-identical to the S4 set).
           customAgentToolsEnabled: customAgentsEnabled,

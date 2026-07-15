@@ -31,6 +31,8 @@ from loguru import logger
 # module 反向 import 私有 _.
 from src.calendar_sync._common import escape_text as _escape_text
 from src.calendar_sync._common import fmt_utc_compact as _fmt_utc
+from src.calendar_sync._common import local_olson_tzid, normalize_tzid, resolve_zoneinfo
+from src.calendar_sync.expander import expand_in_window
 from src.mail.backend.imap_client import get_cipher_key
 
 if TYPE_CHECKING:
@@ -86,6 +88,7 @@ def build_vevent(
     exdates: Optional[List[datetime]] = None,
     rdates: Optional[List[datetime]] = None,
     recurrence_id: Optional[datetime] = None,
+    tzid: Optional[str] = None,
 ) -> str:
     """拼 VCALENDAR with single VEVENT for CalDAV PUT.
 
@@ -102,6 +105,10 @@ def build_vevent(
         is_all_day: True → DTSTART/DTEND 用 VALUE=DATE (RFC 5545 §3.6.1, Phase
             4·#2); dtend_utc 是 exclusive end date (调用方负责 inclusive → exclusive)
         now_utc: 测试 fixture (固定 DTSTAMP)
+        tzid: Olson 时区名 (F1, #10 tzid 半步)。非空且非全天 → DTSTART/DTEND 以
+            ``TZID=<tzid>`` 本地墙钟输出并附 VTIMEZONE (绕开 DavMail 对裸 Z 的
+            误解释); RECURRENCE-ID 恒 UTC Z (#9 实锤 DavMail 对 Z 的 RECURRENCE-ID
+            匹配换算正确, 只有 override DTSTART/DTEND 会错位)
 
     Returns:
         VCALENDAR 文本 (RFC 5545 CRLF 行尾)
@@ -125,10 +132,22 @@ def build_vevent(
     # Phase 4·#2 — all-day: VALUE=DATE (RFC 5545 §3.6.1). 取 date 部分; DTEND 已是
     # exclusive (后端全程 exclusive, inclusive → exclusive 转换在前端一处做). 全天
     # 用 UTC midnight Z 传 floating date, .strftime('%Y%m%d') 提取无时区漂移.
+    tz = None
+    if tzid and not is_all_day:
+        tz = resolve_zoneinfo(tzid)
+        if tz is None:
+            logger.warning(
+                f"[caldav-writer] build_vevent: unresolvable tzid={tzid!r} — 退回 UTC Z 输出"
+            )
     if is_all_day:
         dt_lines = [
             f"DTSTART;VALUE=DATE:{dtstart_utc.strftime('%Y%m%d')}",
             f"DTEND;VALUE=DATE:{dtend_utc.strftime('%Y%m%d')}",
+        ]
+    elif tz is not None:
+        dt_lines = [
+            f"DTSTART;TZID={tzid}:{_fmt_local_compact(dtstart_utc, tz)}",
+            f"DTEND;TZID={tzid}:{_fmt_local_compact(dtend_utc, tz)}",
         ]
     else:
         dt_lines = [
@@ -140,6 +159,10 @@ def build_vevent(
         "BEGIN:VCALENDAR",
         "PRODID:-//MailAgent//Phase2.2 CalDAV writer//EN",
         "VERSION:2.0",
+    ]
+    if tz is not None:
+        lines.extend(_build_vtimezone_block(tzid).splitlines())
+    lines += [
         "BEGIN:VEVENT",
         f"UID:{ical_uid}",
         f"DTSTAMP:{dtstamp}",
@@ -191,6 +214,89 @@ def build_vevent(
 
     lines.extend(["END:VEVENT", "END:VCALENDAR"])
     return "\r\n".join(lines) + "\r\n"
+
+
+def _save_existing_event(evt: Any) -> None:
+    """``evt.save()`` + DavMail 200-OK workaround (#9 真日历验证实锤).
+
+    RFC 4918 §9.7 允许 PUT 更新已存在资源返 200; DavMail 即返 200 OK 且服务端
+    已成功应用. caldav 3.2.0 ``_post_put`` 只认 201/204 → 误判失败 (内部还盲目
+    重 PUT 一次) 抛 PutError. 未打补丁前 update_event / update_occurrence /
+    split_series 所有"改现有事件"路径对真 DavMail **全部失败** (mock 单测测不出).
+    这里把 status=200 的 PutError 当成功吞掉; 其他错误原样上抛.
+    """
+    from caldav.lib.error import PutError
+
+    try:
+        evt.save()
+    except PutError as e:
+        # DAVError.url 携带 errmsg(r) = "<status> <reason>\n\n<raw>"
+        if not str(getattr(e, "url", "") or "").startswith("200 "):
+            raise
+
+
+# ---------------------------------------------------------------------------
+# F1/F2 (#9 真日历验证实锤 → #10 tzid 半步) — 时区输出 helpers
+# ---------------------------------------------------------------------------
+
+_vtimezone_cache: Dict[str, str] = {}
+
+
+def _fmt_local_compact(dt: datetime, tz: Any) -> str:
+    """UTC datetime → tz 本地墙钟 RFC 5545 form ``YYYYMMDDTHHMMSS`` (无 Z, 配 TZID= 参数)."""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(tz).strftime("%Y%m%dT%H%M%S")
+
+
+def _build_vtimezone_block(tzid: str) -> str:
+    """Olson tzid → VTIMEZONE 文本块 (vobject TimezoneComponent 从 ZoneInfo 推 DST RRULE).
+
+    F1: override 以 ``TZID=<tzid>`` 本地时间输出时, 资源内附对应 VTIMEZONE
+    (RFC 5545 §3.6.5)。TimezoneComponent 默认 pickTzid 用 tzname 缩写 (如 PST),
+    覆写成 Olson 名与 TZID 参数一致。tzid 解析失败返回 '' (调用方均传归一后的名)。
+    """
+    cached = _vtimezone_cache.get(tzid)
+    if cached is not None:
+        return cached
+    tz = resolve_zoneinfo(tzid)
+    if tz is None:
+        return ""
+    import vobject
+
+    comp = vobject.icalendar.TimezoneComponent(tzinfo=tz)
+    comp.tzid.value = tzid
+    block = comp.serialize()
+    _vtimezone_cache[tzid] = block
+    return block
+
+
+def _event_tzid_or_local(vevent: Any, *, op: str) -> Optional[str]:
+    """VEVENT DTSTART 的 TZID 参数 → 归一 Olson 名; 无 TZID 时 fallback 本机时区.
+
+    F1 根因: DavMail→EWS 在「修改 occurrence」路径把裸 ``Z`` DTSTART 当邮箱本地
+    墙钟解释 (实测 +7h 错位), 输出必须带 TZID。事件自身无 tzid (老版写入的裸 Z
+    master) 时用本机 Olson 名近似邮箱时区 (owner 单机场景一致) 并记 warning;
+    连本机都拿不到 → None (调用方退回裸 Z 现状)。与 caldav_reader 落库的
+    calendar_event.tzid 同源 (都取 DTSTART TZID 参数 + normalize_tzid 归一)。
+    """
+    params = getattr(getattr(vevent, "dtstart", None), "params", {}) or {}
+    raw = params.get("TZID") or params.get("X-VOBJ-ORIGINAL-TZID")
+    if isinstance(raw, list):
+        raw = raw[0] if raw else None
+    tzid = normalize_tzid(raw)
+    if tzid:
+        return tzid
+    tzid = local_olson_tzid()
+    if tzid:
+        logger.warning(
+            f"[caldav-writer] {op}: 事件无 TZID (裸 Z/floating) — fallback 本机时区 {tzid}"
+        )
+    else:
+        logger.warning(
+            f"[caldav-writer] {op}: 事件无 TZID 且本机时区不可解析 — 退回 UTC Z 输出"
+        )
+    return tzid
 
 
 def _extract_attendees_from_vevent(v: Any) -> List[Dict[str, Any]]:
@@ -282,8 +388,12 @@ class CalDAVWriter:
         base_url = f"http://{self.host}:{self.port}/"
         logger.info(f"[caldav-writer] connecting {base_url} as {self.user!r}")
         try:
+            # timeout=30 与 reader 对齐 (task 06-10): DavMail 响应可能无限挂起,
+            # 无 timeout 的 socket recv 会把调用线程永久吊死 (#9 真日历验证
+            # 实测 harness 主线程卡死在 sock_recv → poll).
             self._client = caldav.DAVClient(
                 url=base_url, username=self.user, password=self.password,
+                timeout=30,
             )
             self._principal = self._client.principal()
         except Exception as e:
@@ -454,6 +564,13 @@ class CalDAVWriter:
         orig_recurrence_id = (
             _to_utc(orig_recurrence_id_raw) if orig_recurrence_id_raw is not None else None
         )
+        # F3 (#9 真日历验证实锤): build_vevent 白名单重建不含 VALARM, 整资源 PUT
+        # 把用户提醒静默删掉 (Exchange round-trip 本身保留 VALARM). 原样搬运原
+        # VEVENT 的 VALARM 块. X-props 不搬: X-MICROSOFT-* Exchange 自行重建,
+        # 自定义 X-prop 它本来就不保留.
+        orig_valarms = "".join(
+            a.serialize() for a in (getattr(v, "valarm_list", None) or [])
+        )
 
         # 合并 — 显式 None = 保留 (绝大多数 Optional 字段), 显式值 = 覆盖
         new_summary = summary if summary is not None else orig_summary
@@ -495,9 +612,11 @@ class CalDAVWriter:
             recurrence_id=orig_recurrence_id,
             is_all_day=new_is_all_day,
         )
+        if orig_valarms:
+            body = body.replace("END:VEVENT", orig_valarms + "END:VEVENT", 1)
         evt.data = body
         try:
-            evt.save()
+            _save_existing_event(evt)
         except Exception as e:
             raise RuntimeError(f"CalDAV PUT failed for update {ical_uid!r}: {e}") from e
         logger.info(
@@ -600,6 +719,11 @@ class CalDAVWriter:
         new_dtstart = dtstart_utc if dtstart_utc is not None else recurrence_id_utc
         new_dtend = dtend_utc if dtend_utc is not None else (new_dtstart + m_duration)
 
+        # F1 (#9 实锤): override DTSTART/DTEND 必须带 TZID 本地时间 — 裸 Z 会被
+        # DavMail→EWS 当邮箱本地墙钟解释 (+7h 级错位)。tzid 取 master DTSTART
+        # 参数 (与 calendar_event.tzid 落库值同源), 裸 Z master fallback 本机时区。
+        override_tzid = _event_tzid_or_local(master, op="update_occurrence")
+
         override_text = build_vevent(
             ical_uid=ical_uid,
             summary=summary if summary is not None else m_summary,
@@ -610,13 +734,14 @@ class CalDAVWriter:
             description=description if description is not None else m_description,
             status=status if status is not None else m_status,
             recurrence_id=recurrence_id_utc,
+            tzid=override_tzid,
         )
         override_vevent = vobject.readOne(override_text).vevent
         vcal.add(override_vevent)
 
         evt.data = vcal.serialize()
         try:
-            evt.save()
+            _save_existing_event(evt)
         except Exception as e:
             raise RuntimeError(
                 f"CalDAV PUT failed for occurrence override "
@@ -650,15 +775,19 @@ class CalDAVWriter:
     ) -> Dict[str, Any]:
         """Phase 4·#3d — 改未来 (this and following): split recurring series.
 
-        老 master RRULE 加 UNTIL = split 前一刻 (in-place 截断, 保留 detached
-        overrides); 新建 event (新 UID) 从 split occurrence 起带新字段 + 继承
-        FREQ/INTERVAL/BYDAY. = Outlook "此事件及以后".
+        老 master RRULE 加 UNTIL = 最后保留 occurrence 的**系列时区本地日期**
+        23:59:59Z (F2: EWS EndDate 日期粒度 + DavMail 取 UNTIL 日期部分字面值,
+        split-1s 的 UTC 时刻会多留 1-2 天重叠; 详见截断处注释), in-place 截断,
+        保留 detached overrides; 新建 event (新 UID) 从 split occurrence 起带
+        新字段 + 继承 FREQ/INTERVAL/BYDAY. = Outlook "此事件及以后".
 
         注 (近似 / caveat):
         - COUNT-based series 新 series 不继承 COUNT (变无限); UNTIL-based 老 UNTIL
           也不继承到新 series. 用户可后续给新 series 设结束.
         - 老 master 的 detached overrides 保留; split 点后的 override 成孤儿 (老
           series UNTIL 截断后不展开), 罕见.
+        - 两步 PUT 非原子 (P1-2): 第 2 步失败时 best-effort 回滚老 master 后仍
+          向上抛; 回滚也失败则异常信息带原 RRULE 供人工修复.
 
         Raises:
             ValueError: UID not found / 非周期 series (master 无 RRULE)
@@ -703,8 +832,46 @@ class CalDAVWriter:
         )
         m_attendees = _extract_attendees_from_vevent(master)
 
-        # 1. 截断老 master: in-place 改 RRULE 加 UNTIL (保留 detached overrides)
-        until = split_recurrence_id_utc - timedelta(seconds=1)
+        # 改前序列化整个老 master 资源 (含 detached overrides), 供第 2 步失败时
+        # best-effort 回滚 (P1-2: 两步 PUT 非原子, 否则「改未来」变「删未来」)
+        orig_master_data = vcal.serialize()
+
+        # 1. 截断老 master (F2, #9 真日历验证实锤): EWS 的 recurrence 结束是
+        # **日期粒度** EndDate, 且 DavMail 取我们 UNTIL 的日期部分**字面值**
+        # (不做 UTC→本地换算)。老写法 UNTIL=split-1s 在「occurrence 本地日期 <
+        # UTC 日期」时让老系列多留 1-2 天与新系列重叠。正确算法: 展开出 split
+        # 点前最后保留的 occurrence → 换算到系列时区 (无 tzid fallback 本机 ≈
+        # 邮箱时区) 的本地日期 → UNTIL 写该日期 23:59:59Z, 字面日期即期望
+        # EndDate。服务端读回会归一成「最后 occurrence 的 UTC start」, 本地
+        # SQLite 行随下轮 sync 对齐; 写后到 sync 前窗口内, 对该 UNTIL 的 RFC
+        # 严格展开可能暂时少显示最后一个保留 occurrence (transient, 优于重叠)。
+        split_tzid = _event_tzid_or_local(master, op="split_series")
+        split_tz = resolve_zoneinfo(split_tzid) or timezone.utc
+        kept = expand_in_window(
+            dtstart=m_dtstart,
+            dtend=None,
+            rrule=orig_rrule,
+            exdates_iso=[],
+            rdates_iso=[],
+            window_start=m_dtstart - timedelta(days=1),
+            window_end=split_recurrence_id_utc,
+            max_count=5000,
+            tzid=split_tzid,
+        )
+        if kept:
+            last_kept_local = kept[-1][0].astimezone(split_tz)
+        else:
+            # split 点在首个 occurrence (或之前): 老系列清空, EndDate 取系列起点前一天
+            last_kept_local = m_dtstart.astimezone(split_tz) - timedelta(days=1)
+        if last_kept_local.date() >= split_recurrence_id_utc.astimezone(split_tz).date():
+            logger.warning(
+                f"[caldav-writer] split_series {ical_uid!r}: 最后保留 occurrence 与 "
+                f"split 点同本地日 — EWS EndDate 日期粒度无法分割, 老系列当日可能残留"
+            )
+        until = datetime(
+            last_kept_local.year, last_kept_local.month, last_kept_local.day,
+            23, 59, 59, tzinfo=timezone.utc,
+        )
         master.rrule.value = _rrule_set_until(orig_rrule, until)
         if hasattr(master, "sequence") and master.sequence:
             try:
@@ -713,7 +880,7 @@ class CalDAVWriter:
                 pass
         evt.data = vcal.serialize()
         try:
-            evt.save()
+            _save_existing_event(evt)
         except Exception as e:
             raise RuntimeError(
                 f"CalDAV PUT failed truncating old series {ical_uid!r}: {e}"
@@ -740,8 +907,20 @@ class CalDAVWriter:
         try:
             cal.save_event(new_body)
         except Exception as e:
+            # 第 1 步截断已 PUT 生效, 不恢复则未来 occurrence 全丢; 无论恢复成败
+            # 都向上抛 (操作没完成, 调用方必须知道)
+            try:
+                evt.data = orig_master_data
+                _save_existing_event(evt)
+            except Exception as restore_exc:
+                raise RuntimeError(
+                    f"CalDAV PUT failed creating new series after split: {e}; "
+                    f"回滚老 master 也失败 ({restore_exc}) — Exchange 端处于截断态 "
+                    f"(uid={ical_uid!r}), 需人工恢复原 RRULE: {orig_rrule}"
+                ) from e
             raise RuntimeError(
-                f"CalDAV PUT failed creating new series after split: {e}"
+                f"CalDAV PUT failed creating new series after split "
+                f"(已回滚老 master 原 RRULE): {e}"
             ) from e
 
         logger.info(

@@ -6,8 +6,10 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Calendar as CalendarIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
+import { CalendarQueryError } from '../CalendarQueryError'
 import { EventChip } from '../EventChip'
 import { isTodayLocal, ymd } from '../lib/format'
+import { DOW_EN } from '../lib/weekdays'
 import {
   useCalendarEventsInWindow,
   startOfMonth,
@@ -16,7 +18,10 @@ import {
 } from '../hooks/useCalendarEvents'
 import type { CalendarEventOccurrence } from '@shared/api/types'
 import { EmptyState } from '@shared/components/feedback/EmptyState'
+import { useExitAnimation } from '@shared/hooks/useExitAnimation'
+import { useFocusTrap } from '@shared/hooks/useFocusTrap'
 import { cn } from '@shared/lib/cn'
+import { DUR } from '@shared/lib/gsap'
 
 interface Props {
   date?: Date
@@ -25,31 +30,65 @@ interface Props {
   selectedCalendars?: string[]
   /** F5 — view 上提选中事件给 CalendarLayout. */
   onSelect: (occ: CalendarEventOccurrence) => void
+  /** F4/Q13 — selected event key (= ``${id}-${occurrence_start_iso}``) 由
+   *  Layout 传, chip 比对高亮 drawer 当前 occurrence. */
+  selectedKey?: string | null
 }
 
-const DOW_EN = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN']
 const MAX_VISIBLE = 3
 
 // F32 — ymd/isTodayLocal 抽到 ../lib/format
 
 interface PopState {
-  top: number
+  /** 下方展开时的 top; flip 时改用 bottom 锚定 (实际高度未知, 向上生长). */
+  top?: number
+  bottom?: number
   left: number
+  /** 到 viewport 边缘的可用高度, 超出走 overflow-y (index.css .more-pop). */
+  maxHeight: number
+  /** Q11 — 下方空间不足且上方更宽裕时向上翻. */
+  flip: boolean
   items: CalendarEventOccurrence[]
   dayLabel: string
+}
+
+/** more-pop 高度估算 (flip 判定用): padding 20 + head ~24 + 每 chip 24. */
+function estimatePopHeight(itemCount: number): number {
+  return 44 + itemCount * 24
 }
 
 export function MonthView({
   date,
   calendarName,
   selectedCalendars,
-  onSelect
+  onSelect,
+  selectedKey = null
 }: Props): React.ReactElement {
   const { t } = useTranslation()
   const [pop, setPop] = useState<PopState | null>(null)
   // F11 — popover click-outside 用 ref + capture phase mousedown 判断, 不靠
   // 内部元素 stopPropagation (脆弱: 漏一处就闪一下消失).
   const popRef = useRef<HTMLDivElement | null>(null)
+  // Q11 — 退场动画期间 pop 已置 null, lastPop 保留最后内容渲染到播完
+  // (state 而非 ref: render 期间读 ref 违反 react-hooks/refs).
+  const [lastPop, setLastPop] = useState<PopState | null>(null)
+  const renderPop = pop ?? lastPop
+
+  // Q11/F7 — 出入场收编 useExitAnimation popover 模式 (无 backdrop, 从锚点
+  // 侧微展开); flip 时生长方向/origin 镜像.
+  const { shouldRender, scopeRef } = useExitAnimation<HTMLDivElement>(pop !== null, {
+    backdrop: false,
+    from: {
+      autoAlpha: 0,
+      y: renderPop?.flip ? 6 : -6,
+      scale: 0.97,
+      transformOrigin: renderPop?.flip ? 'bottom left' : 'top left'
+    },
+    enterDuration: DUR.fast
+  })
+  // Q11 — focus trap (共享 useFocusTrap, 同 KeyboardHelpModal); Esc 走下方
+  // 既有 window keydown.
+  const { dialogRef, handleTab } = useFocusTrap({ open: pop !== null })
 
   const monthStart = useMemo(() => startOfMonth(date ?? new Date()), [date])
   const gridStart = useMemo(() => startOfWeek(monthStart), [monthStart])
@@ -60,7 +99,7 @@ export function MonthView({
   )
   const currentMonth = monthStart.getMonth()
 
-  const { data, isLoading } = useCalendarEventsInWindow(
+  const { data, isLoading, isError, refetch } = useCalendarEventsInWindow(
     {
       fromIso: gridStart.toISOString(),
       toIso: gridEnd.toISOString(),
@@ -121,6 +160,15 @@ export function MonthView({
   }
 
   const events = data ?? []
+  // F21 — query reject 不再伪装成空态; 仅在无可显示数据时换错误屏
+  // (keepPreviousData 下后台 refetch 偶发失败, 已在屏的旧数据继续留屏).
+  if (isError && events.length === 0) {
+    return (
+      <div className="cal-month">
+        <CalendarQueryError onRetry={refetch} />
+      </div>
+    )
+  }
   if (events.length === 0) {
     return (
       <div className="cal-month">
@@ -191,6 +239,7 @@ export function MonthView({
                 <EventChip
                   key={`${occ.id}-${occ.occurrence_start_iso}`}
                   event={occ}
+                  selected={selectedKey === `${occ.id}-${occ.occurrence_start_iso}`}
                   onClick={() => onSelect(occ)}
                 />
               ))}
@@ -201,12 +250,29 @@ export function MonthView({
                   onClick={(ev) => {
                     ev.stopPropagation()
                     const rect = (ev.currentTarget as HTMLElement).getBoundingClientRect()
-                    setPop({
-                      top: rect.bottom + 6,
+                    // Q11 — 垂直 flip: 下方剩余空间放不下估算高度且上方更宽裕
+                    // 时, 改 bottom 锚定向上生长; maxHeight 兜住极端格 (超出
+                    // 滚动, 不溢出 viewport).
+                    const spaceBelow = window.innerHeight - rect.bottom - 6
+                    const spaceAbove = rect.top - 6
+                    const flip =
+                      estimatePopHeight(sorted.length) > spaceBelow && spaceAbove > spaceBelow
+                    const next: PopState = {
                       left: Math.min(rect.left, window.innerWidth - 240),
+                      maxHeight: Math.max(120, Math.floor((flip ? spaceAbove : spaceBelow) - 8)),
+                      flip,
                       items: sorted,
-                      dayLabel: `${monthN} 月 ${d.getDate()} 日`
-                    })
+                      // F26 — more-pop 日期标签 t() 化 (批 2 落地时仍硬编码)
+                      dayLabel: t('calendar.view.month.popDayLabel', '{m} 月 {d} 日', {
+                        m: monthN,
+                        d: d.getDate()
+                      }),
+                      ...(flip
+                        ? { bottom: window.innerHeight - rect.top + 6 }
+                        : { top: rect.bottom + 6 })
+                    }
+                    setLastPop(next)
+                    setPop(next)
                   }}
                 >
                   {t('calendar.view.month.moreBtn', '+{n} 更多', { n: moreCount })}
@@ -217,19 +283,38 @@ export function MonthView({
         })}
       </div>
 
-      {pop && (
-        <div ref={popRef} className="more-pop glass-pop" style={{ top: pop.top, left: pop.left }}>
+      {shouldRender && renderPop && (
+        <div
+          ref={(el) => {
+            popRef.current = el
+            scopeRef.current = el
+            dialogRef.current = el
+          }}
+          role="dialog"
+          aria-label={renderPop.dayLabel}
+          className="more-pop glass-pop scrollbar-thin"
+          style={{
+            top: renderPop.top,
+            bottom: renderPop.bottom,
+            left: renderPop.left,
+            maxHeight: renderPop.maxHeight
+          }}
+          onKeyDown={(e) => {
+            handleTab(e)
+          }}
+        >
           <div className="mp-head">
-            <span>{pop.dayLabel}</span>
+            <span>{renderPop.dayLabel}</span>
             <span className="mp-date">
-              {t('calendar.view.month.popEventCount', '{n} 个事件', { n: pop.items.length })}
+              {t('calendar.view.month.popEventCount', '{n} 个事件', { n: renderPop.items.length })}
             </span>
           </div>
           <div className="space-y-1">
-            {pop.items.map((occ, idx) => (
+            {renderPop.items.map((occ, idx) => (
               <EventChip
                 key={`${occ.id}-${occ.occurrence_start_iso}-${idx}`}
                 event={occ}
+                selected={selectedKey === `${occ.id}-${occ.occurrence_start_iso}`}
                 onClick={() => {
                   onSelect(occ)
                   setPop(null)

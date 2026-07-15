@@ -13,11 +13,13 @@ import {
 import enCommon from '../../src/shared/i18n/locales/en-US/common.json'
 import zhCommon from '../../src/shared/i18n/locales/zh-CN/common.json'
 
-// 镜像 src/api/routers/agent_runs.py::HEADLESS_TOOL_OPTIONS（21 个，/tool-options 契约冻结）。
+// 镜像 src/api/routers/agent_runs.py::HEADLESS_TOOL_OPTIONS（26 个，/tool-options 契约冻结）。
 // 后端加工具 → 此 fixture 必须跟着补（连同 TOOL_GROUPS 归属），否则首个用例红。
 const HEADLESS_TOOL_OPTIONS: AgentRunToolOption[] = [
   { name: 'agent_profile_history', class: 'read' },
   { name: 'agent_profile_read', class: 'read' },
+  { name: 'calendar_event_get', class: 'read' },
+  { name: 'calendar_events_list', class: 'read' },
   { name: 'chat_session_get', class: 'read' },
   { name: 'chat_session_list', class: 'read' },
   { name: 'chat_session_search', class: 'read' },
@@ -32,6 +34,9 @@ const HEADLESS_TOOL_OPTIONS: AgentRunToolOption[] = [
   { name: 'report_get', class: 'read' },
   { name: 'report_list', class: 'read' },
   { name: 'skill_read', class: 'read' },
+  { name: 'calendar_event_delete', class: 'domain_write' },
+  { name: 'calendar_event_reschedule', class: 'domain_write' },
+  { name: 'calendar_event_rsvp', class: 'domain_write' },
   { name: 'email_archive', class: 'domain_write' },
   { name: 'email_draft_reply', class: 'domain_write' },
   { name: 'email_flag', class: 'domain_write' },
@@ -40,7 +45,7 @@ const HEADLESS_TOOL_OPTIONS: AgentRunToolOption[] = [
 ]
 
 describe('toolGroups — R3 工具分组常量', () => {
-  test('当前 21 个 headless 工具全部有家族归属（无一落 fallback）且无一丢失', () => {
+  test('当前 26 个 headless 工具全部有家族归属（无一落 fallback）且无一丢失', () => {
     const groups = groupToolOptions(HEADLESS_TOOL_OPTIONS)
     expect(groups.find((g) => g.id === FALLBACK_TOOL_GROUP_ID)).toBeUndefined()
     const grouped = groups.flatMap((g) => g.tools.map((t) => t.name)).sort()

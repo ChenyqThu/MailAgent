@@ -87,7 +87,15 @@ export const CORE_UNGATED_GATEWAY_TOOLS: ReadonlySet<string> = new Set([
   'custom_agent_create',
   'custom_agent_update',
   'custom_agent_delete',
-  'custom_agent_run_now'
+  'custom_agent_run_now',
+  // calendar epic 4.1/4.2 日历工具（behind MAILAGENT_CALENDAR_AGENT_TOOLS）—— 开关权在独立 flag
+  // 非 skill 门控（S1 openness 先例；Python builtin calendar skill 管的是 CLI/manifest 面，与
+  // gateway 工具集无映射），永不 skill-gated（读输出恒 CALENDAR_EVENT 围栏；写 edit-tier 恒人审）。
+  'calendar_events_list',
+  'calendar_event_get',
+  'calendar_event_reschedule',
+  'calendar_event_rsvp',
+  'calendar_event_delete'
 ])
 
 /** 删掉「归属 skill ∉ advertisedSkills 且无任一 advertised skill 仍拥有它 且非 collision-exempt」的

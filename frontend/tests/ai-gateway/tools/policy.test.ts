@@ -53,6 +53,9 @@ function buildAllTools(contextMode?: AgentContextMode) {
     // S5 W3 — custom-agent CRUD tools (MAILAGENT_CUSTOM_AGENTS_ENABLED), all classified
     // capability_change (2 silent reads + 4 edit writes).
     customAgentToolsEnabled: true,
+    // calendar epic 4.1/4.2 — calendar tools (MAILAGENT_CALENDAR_AGENT_TOOLS), classified read
+    // (2 silent reads) + domain_write (3 edit writes, 恒 HITL).
+    calendarToolsEnabled: true,
     ...(contextMode !== undefined ? { contextMode } : {})
   })
 }
@@ -184,9 +187,10 @@ describe('matrix — 3-axis (class × mode × grants, ADR-004)', () => {
                 : cls === 'web'
                   ? webGranted
                   : false // capability_change + outbound (send):恒 false under ANY grants
-        expect(isToolClassAllowedInMode(cls, mode, grants), `${cls} × ${mode} × ${JSON.stringify(grants)}`).toBe(
-          expected
-        )
+        expect(
+          isToolClassAllowedInMode(cls, mode, grants),
+          `${cls} × ${mode} × ${JSON.stringify(grants)}`
+        ).toBe(expected)
       }
     }
   })
@@ -203,7 +207,10 @@ describe('matrix — 3-axis (class × mode × grants, ADR-004)', () => {
         ...CLASSES_OF('web'),
         ...CLASSES_OF('outbound')
       ]) {
-        expect(filtered[name], `${name} must stay stripped in ${mode} despite the grant`).toBeUndefined()
+        expect(
+          filtered[name],
+          `${name} must stay stripped in ${mode} despite the grant`
+        ).toBeUndefined()
       }
     }
   })
@@ -222,7 +229,10 @@ describe('matrix — 3-axis (class × mode × grants, ADR-004)', () => {
           ...CLASSES_OF('capability_change'),
           ...CLASSES_OF('outbound')
         ]) {
-          expect(filtered[name], `${name} must stay stripped in ${mode} despite the web grant`).toBeUndefined()
+          expect(
+            filtered[name],
+            `${name} must stay stripped in ${mode} despite the web grant`
+          ).toBeUndefined()
         }
       }
     }
@@ -283,7 +293,23 @@ describe('parseWebGrant — fail-closed literal discrimination', () => {
   })
 
   test("everything else collapses to 'off' (never a raw passthrough)", () => {
-    for (const v of [undefined, null, '', 'off', true, false, 1, 0, 'yes', 'OPEN', ' open', 'Gated', {}, [], ['open']]) {
+    for (const v of [
+      undefined,
+      null,
+      '',
+      'off',
+      true,
+      false,
+      1,
+      0,
+      'yes',
+      'OPEN',
+      ' open',
+      'Gated',
+      {},
+      [],
+      ['open']
+    ]) {
       expect(parseWebGrant(v), JSON.stringify(v)).toBe('off')
     }
   })
@@ -327,7 +353,7 @@ describe('applyContextModePolicy', () => {
 })
 
 describe('buildGatewayTools × contextMode (registration-time filter wiring)', () => {
-  test("manual_chat → the FULL flag-on set (byte-identical keys to the pre-W0 assembly — W0 adds/removes no tool)", () => {
+  test('manual_chat → the FULL flag-on set (byte-identical keys to the pre-W0 assembly — W0 adds/removes no tool)', () => {
     const keys = Object.keys(buildAllTools('manual_chat')).sort()
     // The 30 gateway tools of the current full flag-on set = exactly the classified universe
     // (27 pre-W1 + the 3 S2 W1 exec tools).
