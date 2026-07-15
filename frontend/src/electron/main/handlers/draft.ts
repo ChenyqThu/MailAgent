@@ -376,6 +376,18 @@ function validateComposeOpts(
       message: `${channel}: mode must be reply|reply-all|forward|new, got ${String(opts.mode)}`
     }
   }
+  // sourceDraftId (D1 Bug A): draft-edit 保存/发送带草稿行自己的 internal_id, 服务端
+  // 据此恢复回复线程 (mail_write._prepare_draft)。可选; 给了就必须是非负 int ——
+  // 哨兵坑教训: 三层校验 (HTTP/service 由 T4 放行, 此处是 IPC 层) 缺一层就断线。
+  if (opts.sourceDraftId !== undefined) {
+    if (!Number.isInteger(opts.sourceDraftId) || opts.sourceDraftId < 0) {
+      return {
+        ok: false,
+        code: 'E_INVALID_ARG',
+        message: `${channel}: sourceDraftId must be a non-negative integer, got ${String(opts.sourceDraftId)}`
+      }
+    }
+  }
   return opts
 }
 

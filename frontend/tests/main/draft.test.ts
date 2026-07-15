@@ -155,4 +155,34 @@ describe('validateComposeOpts', () => {
     const r = validateComposeOpts({ internalId: 1.5, mode: 'new' } as never, 'email:draft')
     expect((r as { ok: boolean }).ok).toBe(false)
   })
+
+  // D1 Bug A — sourceDraftId (草稿行自己的 internal_id, draft-edit 保存/发送带上,
+  // 服务端恢复线程 linkage)。IPC 层是三层校验之一: 可选、给了必须是非负 int。
+  test('sourceDraftId: 合法 int 放行且原样透传', () => {
+    const r = validateComposeOpts(
+      { internalId: -1, mode: 'new', sourceDraftId: 99 } as never,
+      'email:draft'
+    )
+    expect('ok' in r).toBe(false)
+    expect((r as { sourceDraftId: number }).sourceDraftId).toBe(99)
+  })
+
+  test('sourceDraftId: 缺省 (undefined) 不拦', () => {
+    const r = validateComposeOpts(
+      { internalId: -1, mode: 'new', to: ['x@y.com'] } as never,
+      'email:draft'
+    )
+    expect('ok' in r).toBe(false)
+  })
+
+  test('sourceDraftId: 非整数 / 负数 → E_INVALID_ARG', () => {
+    for (const bad of [1.5, -1, 'abc', null]) {
+      const r = validateComposeOpts(
+        { internalId: -1, mode: 'new', sourceDraftId: bad } as never,
+        'email:draft'
+      )
+      expect((r as { ok: boolean }).ok).toBe(false)
+      expect((r as { code: string }).code).toBe('E_INVALID_ARG')
+    }
+  })
 })
