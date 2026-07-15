@@ -90,6 +90,8 @@ describe('ComposePanel — 草稿编辑态 (draft-edit)', () => {
     const arg = mockSend.mock.calls[0][0]
     // wire mode = 'new' (零线程派生); is_important=true → importance='high'
     expect(arg).toMatchObject({ internalId: 99, mode: 'new', importance: 'high' })
+    // D1 Bug A — draft-edit 发送带草稿行自己的 id, 服务端据此恢复回复线程 linkage。
+    expect(arg.sourceDraftId).toBe(99)
     expect(arg.to).toEqual(['chenyq.thu@gmail.com'])
     // 发送成功后删原草稿 (替换语义) + 关闭
     await waitFor(() => expect(mockDeleteDraft).toHaveBeenCalledWith(99))
@@ -109,6 +111,49 @@ describe('ComposePanel — 草稿编辑态 (draft-edit)', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: /^删除$/ }))
     await waitFor(() => expect(mockDeleteDraft).toHaveBeenCalledWith(99))
     await waitFor(() => expect(onClose).toHaveBeenCalled())
+  })
+})
+
+describe('ComposePanel — D2 marker 拆分回填 (draft-edit)', () => {
+  const MARKER_BODY =
+    '<p>回复段REPLY</p>' +
+    '<div data-ma-quote="1"><p>在 2026年7月8日写道：</p><blockquote>引用段QUOTE</blockquote></div>'
+
+  test('有 marker → 回复段进编辑器, 引用段进折叠引用区, 发送拼回且 marker 保留', async () => {
+    mockEmailBody.mockResolvedValue({ content: MARKER_BODY, format: 'html' })
+    renderWithClient(<ComposePanelInner internalId={99} mode="draft-edit" onClose={() => {}} />)
+    await waitFor(() => expect(screen.getByText('chenyq.thu@gmail.com')).toBeTruthy())
+    // 折叠引用区出现 (拆分回填标签「引用原文」, 非保真「原文」+ hint)
+    expect(screen.getByText('引用原文')).toBeTruthy()
+    expect(screen.queryByText(/保真保留/)).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /^发送$/ }))
+    fireEvent.click(screen.getByRole('button', { name: /确认发送/ }))
+    await waitFor(() => expect(mockSend).toHaveBeenCalledTimes(1))
+    const body = mockSend.mock.calls[0][0].bodyHtml as string
+    expect(body).toContain('回复段REPLY') // 编辑器段
+    expect(body).toContain('引用段QUOTE') // 引用区拼回
+    expect(body).toContain('data-ma-quote') // 🔴 marker 经 sanitize 拼回后保留
+    // 引用段只此一份 (没有同时灌进编辑器)
+    expect(body.indexOf('引用段QUOTE')).toBe(body.lastIndexOf('引用段QUOTE'))
+  })
+
+  test('marker + 回复段是 complex (table) → 整块保真, 编辑器留空, 零丢字节', async () => {
+    mockEmailBody.mockResolvedValue({
+      content: `<table><tr><td>表格回复段TBL</td></tr></table>${'<div data-ma-quote="1"><blockquote>引用段QX</blockquote></div>'}`,
+      format: 'html'
+    })
+    renderWithClient(<ComposePanelInner internalId={99} mode="draft-edit" onClose={() => {}} />)
+    await waitFor(() => expect(screen.getByText('chenyq.thu@gmail.com')).toBeTruthy())
+    // 走保真通路: 「原文」标签 + hint
+    expect(screen.getByText('原文')).toBeTruthy()
+    expect(screen.getByText(/保真保留/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: /^发送$/ }))
+    fireEvent.click(screen.getByRole('button', { name: /确认发送/ }))
+    await waitFor(() => expect(mockSend).toHaveBeenCalledTimes(1))
+    const body = mockSend.mock.calls[0][0].bodyHtml as string
+    expect(body).toContain('表格回复段TBL')
+    expect(body).toContain('引用段QX')
+    expect(body.indexOf('引用段QX')).toBe(body.lastIndexOf('引用段QX'))
   })
 })
 

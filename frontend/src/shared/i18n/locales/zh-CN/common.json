@@ -165,6 +165,17 @@
     "attach": "附件",
     "attachmentRemove": "移除 {name}",
     "attachmentFailed": "上传失败",
+    "attachTray": {
+      "summary": "{n} 个附件 · {size}",
+      "add": "添加",
+      "uploading": "上传中",
+      "uploadFailed": "上传失败",
+      "dropzoneHint": "拖拽文件到此，或点击添加附件"
+    },
+    "ccCollapse": "收起抄送",
+    "bccCollapse": "收起密送",
+    "floatMaximize": "最大化",
+    "floatRestore": "还原",
     "dropHint": "松开以添加附件",
     "richPreserveHint": "复杂格式原文已保真保留，发送时自动附在新内容之后",
     "loadingPlan": "加载中…",

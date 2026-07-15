@@ -10,12 +10,16 @@
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 
+import i18n from '@shared/i18n'
 import {
   AttachmentDropzone,
   AttachmentTray,
   kindFromName,
   type AttachmentTrayItem
 } from '../../src/shared/components/email/compose/AttachmentTray'
+
+// T5 接线后组件文案走 i18n (compose.attachTray.*) — 断言按 zh-CN 文案。
+await i18n.changeLanguage('zh-CN')
 
 afterEach(() => cleanup())
 

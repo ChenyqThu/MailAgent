@@ -165,6 +165,17 @@
     "attach": "Attach",
     "attachmentRemove": "Remove {name}",
     "attachmentFailed": "Upload failed",
+    "attachTray": {
+      "summary": "{n} attachment(s) · {size}",
+      "add": "Add",
+      "uploading": "Uploading",
+      "uploadFailed": "Upload failed",
+      "dropzoneHint": "Drop files here, or click to add attachments"
+    },
+    "ccCollapse": "Hide Cc",
+    "bccCollapse": "Hide Bcc",
+    "floatMaximize": "Maximize",
+    "floatRestore": "Restore",
     "dropHint": "Drop files to attach",
     "richPreserveHint": "Rich-format original preserved as-is; appended after your new content on send",
     "loadingPlan": "Loading…",

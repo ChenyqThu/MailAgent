@@ -20,20 +20,6 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEditor } from '@tiptap/react'
-import StarterKit from '@tiptap/starter-kit'
-// #9 富文本扩展 — 全部来自 @tiptap/extension-text-style@3.23.6 (与核心同版本, 无 skew)：
-// TextStyle 基座 + Color(字体颜色)/FontFamily(字体)/FontSize(字号, 官方)/BackgroundColor
-// (字体底色)。StarterKit v3 已 bundle Bold/Italic/Underline/Strike/Link/Code/List。
-import {
-  TextStyle,
-  Color,
-  FontFamily,
-  FontSize,
-  BackgroundColor
-} from '@tiptap/extension-text-style'
-// D5 — Image (同 3.23.6): 保住简单富文本草稿里的 http(s)/data: 内联图, setContent
-// 不再把 <img> 剥掉。inline 模式贴近邮件正文里图文混排的实际形态。
-import Image from '@tiptap/extension-image'
 import DOMPurify from 'dompurify'
 import {
   ChevronDown,
@@ -57,12 +43,13 @@ import { qk } from '@shared/lib/queryKeys'
 import { sanitizeEmailHtml } from '@shared/lib/emailSanitize'
 import { classifyDraftHtml } from '@shared/lib/draftHtmlGate'
 import { plaintextToHtml } from '@shared/lib/plaintext_html'
-import { formatFileSize } from '@shared/format'
+import { splitQuoteHtml } from '@shared/lib/quoteSplit'
 import type {
   ComposeAttachmentRef,
   ComposeImportance,
   ComposeMode,
   ComposeWireMode,
+  ContactSuggestion,
   DraftPlanResult
 } from '@shared/api/types'
 
@@ -70,6 +57,8 @@ import { EmailBodyFrame } from '../EmailBodyFrame'
 import { RecipientField } from './RecipientField'
 import { ComposeEditor, ComposeFormatToolbar } from './ComposeEditor'
 import { DeleteDraftDialog, SendConfirmDialog } from './ComposeDialogs'
+import { buildComposeExtensions } from './editor-extensions'
+import { AttachmentDropzone, AttachmentTray, kindFromName } from './AttachmentTray'
 
 /** Panel mode = UI ComposeMode + 草稿编辑态 + 写新邮件态。 */
 export type PanelMode = ComposeMode | 'draft-edit' | 'new'
@@ -112,6 +101,8 @@ interface ComposeAttachmentChip {
   status: 'uploading' | 'done' | 'error'
   stageId?: string
   attachmentId?: number
+  /** staged 图片的本地缩略预览 (URL.createObjectURL); 移除/卸载时 revoke。 */
+  previewUrl?: string
 }
 
 /** 重要性下拉 — 主题行右侧 (Outlook 同位)。high 用 warn 色旗标, low 灰旗, normal 朴素。 */
@@ -135,7 +126,7 @@ function ImportanceSelect({
         aria-expanded={open}
         title={t('compose.importance')}
         className={cn(
-          'inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-meta font-mono',
+          'inline-flex items-center gap-1 rounded-[var(--r-ctl)] px-1.5 py-0.5 text-meta font-mono',
           'hover:bg-ink-3/60 transition-colors duration-fast',
           tone
         )}
@@ -147,7 +138,7 @@ function ImportanceSelect({
       {open && (
         <ul
           role="listbox"
-          className="absolute right-0 top-full mt-1 z-50 w-28 rounded-lg border border-ink-border bg-ink-2 shadow-md py-1"
+          className="absolute right-0 top-full mt-1 z-50 w-28 rounded-[var(--r-ctl)] border border-ink-border bg-ink-2 shadow-md py-1"
         >
           {IMPORTANCE_OPTS.map((o) => (
             <li key={o.value} role="option" aria-selected={o.value === value}>
@@ -229,27 +220,50 @@ export function ComposePanelInner({
   // D5 — draft-edit 复杂富文本 (table/cid/Outlook 汤) 保真模式: 原文整块进上面的
   // quoteHtml iframe (不灌 TipTap 防剥离), 编辑器只写顶部新增, 发送时拼回。
   const [preserveOriginal, setPreserveOriginal] = useState(false)
+  // D2 Bug B — draft-edit 按 data-ma-quote marker 拆分成功: 回复段在编辑器里,
+  // 引用段在下方折叠引用区 (quoteHtml), 发送时原样拼回 (marker 保留)。
+  const [splitQuote, setSplitQuote] = useState(false)
   // D6 — 附件 chips (staged 上传 + draft-edit 回填的库内已有附件)。
   const [attachList, setAttachList] = useState<ComposeAttachmentChip[]>([])
   const attachSeq = useRef(0)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
+  // staged 图片缩略预览的 objectURL 台账 — 单删时逐个 revoke, 卸载时兜底全量 revoke。
+  const previewUrlsRef = useRef<Set<string>>(new Set())
+  useEffect(() => {
+    const urls = previewUrlsRef.current
+    return () => {
+      for (const u of urls) URL.revokeObjectURL(u)
+    }
+  }, [])
   // L0 — 拖拽附件: 拖文件到 composer 卡片任意位置即可添加。dragDepth 计数法消除
   // 子元素 dragenter/dragleave 抖动 (提示层 pointer-events-none 不参与计数)。
   const [isDragActive, setIsDragActive] = useState(false)
   const dragDepth = useRef(0)
 
+  // @mention 选中联系人 → 不在任何收件人字段时自动加进 To (契约 D4)。extensions 在
+  // useEditor 初始化时装配一次; 选中回调是纯事件时序 (suggestion 菜单点击/回车),
+  // 经 ref 间接调用最新处理器, 闭包不过期 (react-hooks/refs: effect 里同步, 不在
+  // render 期读写)。
+  const mentionPickRef = useRef<(contact: ContactSuggestion) => void>(() => {})
+  useEffect(() => {
+    mentionPickRef.current = (contact: ContactSuggestion): void => {
+      const addr = contact.email.trim()
+      if (!addr) return
+      const lower = addr.toLowerCase()
+      if ([...to, ...cc, ...bcc].some((v) => v.toLowerCase() === lower)) return
+      setTo((prev) => (prev.some((v) => v.toLowerCase() === lower) ? prev : [...prev, addr]))
+    }
+  }, [to, cc, bcc])
+
+  // T2 装配工厂 (editor-extensions.ts): StarterKit + TextStyle 族 + Image + Highlight
+  // + Mention(@联系人) + slash 块菜单。切换后工具栏高亮走真 Highlight mark
+  // (ComposeFormatToolbar 的 hasHighlight 兼容闸自动生效)。
+  // eslint-disable-next-line react-hooks/refs -- onMentionPick 只在 suggestion 菜单选中事件触发 (纯事件时序), buildComposeExtensions 构造期不调用它; ref 间接层保证读到最新处理器。
+  const [extensions] = useState(() =>
+    buildComposeExtensions({ onMentionPick: (contact) => mentionPickRef.current(contact) })
+  )
   const editor = useEditor({
-    // TextStyle 必须在 Color/FontFamily/FontSize/BackgroundColor 之前 (它们扩展 textStyle
-    // mark 的属性)。这些 mark 经 getHTML() 落 inline style, 发送/存草稿原样保留。
-    extensions: [
-      StarterKit.configure({ link: { openOnClick: false } }),
-      TextStyle,
-      Color,
-      FontFamily,
-      FontSize,
-      BackgroundColor,
-      Image.configure({ inline: true, allowBase64: true })
-    ],
+    extensions,
     content: '',
     immediatelyRender: false
   })
@@ -324,14 +338,32 @@ export function ComposePanelInner({
       // Outlook 汤, TipTap 会剥离) → 原文整块进折叠 iframe 保真 + 编辑器留空写新增,
       // 发送时 getSanitizedHtml 拼回 (原文只进 quoteHtml 一处, 防双份);
       // empty → markdown 回落 (plaintext 降级灌入, 不在前端造 md 渲染器)。
-      const cls = classifyDraftHtml(d.html)
-      if (cls === 'simple') {
-        editor.commands.setContent(d.html)
-      } else if (cls === 'complex') {
-        setQuoteHtml(d.html)
-        setPreserveOriginal(true)
-      } else if (d.markdown) {
-        editor.commands.setContent(plaintextToHtml(d.markdown))
+      // D2 Bug B — 先按 data-ma-quote marker 拆分: 回复段进编辑器 (仍过富文本混合门),
+      // 引用段进折叠引用区 (发送时 getSanitizedHtml 原样拼回, marker 保留)。无 marker
+      // (存量草稿 / 外部客户端草稿) → 回退现状全量分流。
+      const { reply, quote } = splitQuoteHtml(d.html)
+      if (quote !== null) {
+        setSplitQuote(true)
+        const replyCls = classifyDraftHtml(reply)
+        if (replyCls === 'complex') {
+          // 回复段编辑器表达不了 (table/cid/Outlook 汤) → 与引用段一起整块保真,
+          // 编辑器留空写新增 — 零丢字节优先于可行内编辑。
+          setQuoteHtml(reply + quote)
+          setPreserveOriginal(true)
+        } else {
+          setQuoteHtml(quote)
+          if (replyCls === 'simple') editor.commands.setContent(reply)
+        }
+      } else {
+        const cls = classifyDraftHtml(d.html)
+        if (cls === 'simple') {
+          editor.commands.setContent(d.html)
+        } else if (cls === 'complex') {
+          setQuoteHtml(d.html)
+          setPreserveOriginal(true)
+        } else if (d.markdown) {
+          editor.commands.setContent(plaintextToHtml(d.markdown))
+        }
       }
       // 草稿已有附件 (OWA 建的带附件草稿) → attachment_id 引用 chips: draft-edit
       // 发送是 mode='new' 新邮件, 不引用原草稿附件发出去就丢了。inline/derived 行
@@ -395,9 +427,15 @@ export function ComposePanelInner({
   const uploadAttachment = useCallback(
     async (file: File) => {
       const localId = ++attachSeq.current
+      // 图片附件生成本地缩略预览 (AttachmentTray 卡片); objectURL 在移除/卸载时 revoke。
+      let previewUrl: string | undefined
+      if (file.type.startsWith('image/') || kindFromName(file.name) === 'image') {
+        previewUrl = URL.createObjectURL(file)
+        previewUrlsRef.current.add(previewUrl)
+      }
       setAttachList((prev) => [
         ...prev,
-        { localId, filename: file.name, size: file.size, status: 'uploading' }
+        { localId, filename: file.name, size: file.size, status: 'uploading', previewUrl }
       ])
       try {
         const bytes = await file.arrayBuffer()
@@ -439,10 +477,18 @@ export function ComposePanelInner({
     [uploadAttachment, t]
   )
 
-  const removeAttachment = useCallback((localId: number) => {
-    // 只移除本地引用; staging 残留由服务端 TTL/send 后清理, 无需删端点。
-    setAttachList((prev) => prev.filter((a) => a.localId !== localId))
-  }, [])
+  const removeAttachment = useCallback(
+    (localId: number) => {
+      // 只移除本地引用; staging 残留由服务端 TTL/send 后清理, 无需删端点。
+      const hit = attachList.find((a) => a.localId === localId)
+      if (hit?.previewUrl) {
+        URL.revokeObjectURL(hit.previewUrl)
+        previewUrlsRef.current.delete(hit.previewUrl)
+      }
+      setAttachList((prev) => prev.filter((a) => a.localId !== localId))
+    },
+    [attachList]
+  )
 
   const uploadsPending = attachList.some((a) => a.status === 'uploading')
   const readyAttachments = attachList.filter((a) => a.status === 'done')
@@ -495,12 +541,16 @@ export function ComposePanelInner({
       forceSubject: true,
       bodyHtml: getSanitizedHtml(),
       importance,
-      ...(attachments.length > 0 ? { attachments } : {})
+      ...(attachments.length > 0 ? { attachments } : {}),
+      // D1 Bug A — draft-edit 保存/发送带草稿行自己的 id: 服务端读该行 draft_in_reply_to/
+      // draft_references/thread_id 恢复回复线程, linkage 空回退零派生 (契约 sourceDraftId)。
+      ...(isDraftEdit ? { sourceDraftId: internalId } : {})
     }
   }, [
     internalId,
     wireMode,
     mode,
+    isDraftEdit,
     to,
     cc,
     bcc,
@@ -821,6 +871,8 @@ export function ComposePanelInner({
             placeholder={t('compose.toPlaceholder')}
             onChange={(next) => setTo(next)}
             selfEmail={selfEmail}
+            excludeEmails={[...cc, ...bcc]}
+            autoFocus={isNew}
           />
           {(!ccVisible || !bccVisible) && (
             <div className="absolute right-3 top-2 flex items-center gap-1 text-meta font-mono text-ink-fg-2">
@@ -848,22 +900,53 @@ export function ComposePanelInner({
         </div>
 
         {ccVisible && (
-          <RecipientField
-            label={t('compose.cc')}
-            values={cc}
-            placeholder={t('compose.ccPlaceholder')}
-            onChange={(next) => setCc(next)}
-            selfEmail={selfEmail}
-          />
+          <div className="relative">
+            <RecipientField
+              label={t('compose.cc')}
+              values={cc}
+              placeholder={t('compose.ccPlaceholder')}
+              onChange={(next) => setCc(next)}
+              selfEmail={selfEmail}
+              excludeEmails={[...to, ...bcc]}
+            />
+            {/* × 收起并清空 (design/app.jsx ComposeFields cmp-fieldx)。 */}
+            <button
+              type="button"
+              aria-label={t('compose.ccCollapse')}
+              title={t('compose.ccCollapse')}
+              onClick={() => {
+                setCc([])
+                setCcVisible(false)
+              }}
+              className="absolute right-3 top-2.5 p-1 rounded-[var(--r-ctl)] text-ink-fg-3 hover:text-ink-fg hover:bg-ink-3/60 transition-colors duration-fast"
+            >
+              <X size={13} strokeWidth={2} />
+            </button>
+          </div>
         )}
         {bccVisible && (
-          <RecipientField
-            label={t('compose.bcc')}
-            values={bcc}
-            placeholder={t('compose.bccPlaceholder')}
-            onChange={(next) => setBcc(next)}
-            selfEmail={selfEmail}
-          />
+          <div className="relative">
+            <RecipientField
+              label={t('compose.bcc')}
+              values={bcc}
+              placeholder={t('compose.bccPlaceholder')}
+              onChange={(next) => setBcc(next)}
+              selfEmail={selfEmail}
+              excludeEmails={[...to, ...cc]}
+            />
+            <button
+              type="button"
+              aria-label={t('compose.bccCollapse')}
+              title={t('compose.bccCollapse')}
+              onClick={() => {
+                setBcc([])
+                setBccVisible(false)
+              }}
+              className="absolute right-3 top-2.5 p-1 rounded-[var(--r-ctl)] text-ink-fg-3 hover:text-ink-fg hover:bg-ink-3/60 transition-colors duration-fast"
+            >
+              <X size={13} strokeWidth={2} />
+            </button>
+          </div>
         )}
 
         <div className="folder-field-row">
@@ -887,7 +970,7 @@ export function ComposePanelInner({
 
       {/* 原文引用块 — reply/forward 的引用原文, 或 draft-edit 保真模式 (D5 complex)
           的原草稿富文本。同一 iframe + 发送时拼回机制。 */}
-      {quoteHtml && (!isDraftEdit || preserveOriginal) && (
+      {quoteHtml && (!isDraftEdit || preserveOriginal || splitQuote) && (
         <div className="border-t border-ink-border/60 bg-ink-2/40 shrink-0 min-h-0 flex flex-col">
           <div className="shrink-0 flex items-center gap-1.5 pr-3">
             <button
@@ -903,7 +986,9 @@ export function ComposePanelInner({
               />
               {t(
                 isDraftEdit
-                  ? 'compose.quote.original'
+                  ? preserveOriginal
+                    ? 'compose.quote.original'
+                    : 'compose.quote.reply'
                   : mode === 'forward'
                     ? 'compose.quote.forward'
                     : 'compose.quote.reply'
@@ -918,44 +1003,40 @@ export function ComposePanelInner({
           {quoteOpen && (
             <div className="min-h-0 max-h-[36vh] overflow-y-auto px-3 pb-3">
               <div className="border border-ink-border-soft rounded-md bg-ink-2/40 px-4 py-3.5">
-                <EmailBodyFrame internalId={internalId} attachments={quoteAttachments} />
+                {/* draft-edit: 引用区只展示 quoteHtml 段 (htmlOverride), 不按 id 重拉全文 —
+                    marker 拆分后编辑器已有回复段, 全文渲染会视觉重复。reply/forward 维持
+                    现状按原邮件 id 取正文。 */}
+                <EmailBodyFrame
+                  internalId={internalId}
+                  attachments={quoteAttachments}
+                  htmlOverride={isDraftEdit ? quoteHtml : undefined}
+                />
               </div>
             </div>
           )}
         </div>
       )}
 
-      {/* D6 — 附件 chips (staged 上传 / draft-edit 已有附件)。 */}
-      {attachList.length > 0 && (
-        <div className="border-t border-ink-border/60 bg-ink-2/40 px-3 py-2 shrink-0 flex flex-wrap items-center gap-1.5">
-          {attachList.map((a) => (
-            <span
-              key={a.localId}
-              className={cn(
-                'inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-meta font-mono',
-                a.status === 'error'
-                  ? 'border-fail/40 text-fail bg-fail/10'
-                  : 'border-ink-border-soft text-ink-fg-2 bg-ink-2/60'
-              )}
-              title={a.status === 'error' ? t('compose.attachmentFailed') : a.filename}
-            >
-              {a.status === 'uploading' ? (
-                <Loader2 size={11} strokeWidth={2} className="animate-spin" />
-              ) : (
-                <Paperclip size={11} strokeWidth={2} />
-              )}
-              <span className="max-w-[180px] truncate">{a.filename}</span>
-              {a.size != null && <span className="text-ink-fg-3">{formatFileSize(a.size)}</span>}
-              <button
-                type="button"
-                aria-label={t('compose.attachmentRemove', { name: a.filename })}
-                onClick={() => removeAttachment(a.localId)}
-                className="hover:text-ink-fg transition-colors duration-fast"
-              >
-                <X size={11} strokeWidth={2} />
-              </button>
-            </span>
-          ))}
+      {/* D6/T3 — 附件区: 缩略图卡片 tray (staged 上传 / draft-edit 已有附件),
+          空态 dropzone (点击 = 打开文件选择; 拖拽仍走整窗 useAttachmentDrop 等价逻辑,
+          不重复拦截同一次 drop)。 */}
+      {attachList.length > 0 ? (
+        <div className="border-t border-ink-border/60 bg-ink-2/40 shrink-0">
+          <AttachmentTray
+            items={attachList.map((a) => ({
+              localId: a.localId,
+              filename: a.filename,
+              size: a.size,
+              status: a.status,
+              previewUrl: a.previewUrl
+            }))}
+            onAdd={() => fileInputRef.current?.click()}
+            onRemove={removeAttachment}
+          />
+        </div>
+      ) : (
+        <div className="border-t border-ink-border/60 shrink-0 pt-2">
+          <AttachmentDropzone onAdd={() => fileInputRef.current?.click()} />
         </div>
       )}
 

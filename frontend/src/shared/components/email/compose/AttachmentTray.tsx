@@ -10,13 +10,12 @@
 // design/compose.css `.att-*` 段。生产版: 类名用 Tailwind + v3 token (--r-ctl/--r-card),
 // 图标换用项目既有 lucide-react 体系 (design demo 手写 SVG 集不引入)。
 //
-// 🔴 i18n 缺口 (flag, 未处理): 组件当前文案硬编码中文字面量, 未过 react-i18next。
-// 本 lane 的文件所有权只到 AttachmentTray.tsx + 其测试, 新增 i18n key 要改共享
-// `src/shared/i18n/locales/*/common.json` (T1/T2 并行 lane 也在改, 越界易冲突),
-// 故未加。已存在的 `compose.attachmentRemove` 等 key 属于 ComposePanel 现有 chip UI,
-// 与此组件不共享调用点。T5 接线时按 `compose.*` 既有命名空间补 key、替换硬编码文案。
+// i18n: T3 落地时缺口已由 T5 接线补齐 — 文案走 `compose.attachTray.*` (summary/add/
+// uploading/uploadFailed/dropzoneHint) + 复用既有 `compose.attachmentRemove`,
+// zh-CN / en-US 两份 locales 均有 key (ICU 单花括号插值)。
 
 import { useCallback, useMemo, useRef, useState, type DragEvent } from 'react'
+import { useTranslation } from 'react-i18next'
 import {
   File as FileIcon,
   FileArchive,
@@ -76,6 +75,7 @@ export interface AttachmentDropzoneProps {
 
 /** 图标 + 角标色元数据。色值暂沿用 design KIND_META 的 hex —— TODO: token 化
  *  (design/compose-handoff.md §7: 「附件角标色 KIND_META 是例外, 可后续 token 化」)。 */
+/* eslint-disable mailagent/no-raw-hex -- KIND_META 角标色是契约 D4 明示的暂存例外 (附件类型内容色, 非 theme token), 待后续 token 化。 */
 const KIND_META: Record<AttachmentKind, { Icon: typeof FileText; color: string }> = {
   pdf: { Icon: FileText, color: '#E5654B' },
   sheet: { Icon: FileSpreadsheet, color: '#5DBA8C' },
@@ -85,8 +85,10 @@ const KIND_META: Record<AttachmentKind, { Icon: typeof FileText; color: string }
   text: { Icon: FileCode, color: '#7A8090' },
   file: { Icon: FileIcon, color: '#7A8090' }
 }
+/* eslint-enable mailagent/no-raw-hex */
 
 /** 按扩展名判定附件类型桶 — 逐字对齐 design/attachments.jsx `kindFromName`。 */
+// eslint-disable-next-line react-refresh/only-export-components -- 附件类型判定纯函数与展示组件同源 (ComposePanel 接线复用: staged 图片 previewUrl 判定), 拆文件反而割裂 KIND_META 语义。
 export function kindFromName(name: string): AttachmentKind {
   const ext = (name.split('.').pop() ?? '').toLowerCase()
   if (ext === 'pdf') return 'pdf'
@@ -110,6 +112,7 @@ function AttachCard({
   item: AttachmentTrayItem
   onRemove: (localId: number) => void
 }): React.ReactElement {
+  const { t } = useTranslation()
   const kind = kindFromName(item.filename)
   const meta = KIND_META[kind]
   const Icon = meta.Icon
@@ -124,7 +127,11 @@ function AttachCard({
           ? 'border-fail/40 bg-fail/5'
           : 'border-ink-border-soft bg-ink-fg/[0.02] hover:border-ink-border'
       )}
-      title={item.status === 'error' ? `${item.filename} · 上传失败` : item.filename}
+      title={
+        item.status === 'error'
+          ? `${item.filename} · ${t('compose.attachTray.uploadFailed')}`
+          : item.filename
+      }
       data-kind={kind}
       data-status={item.status}
     >
@@ -151,7 +158,7 @@ function AttachCard({
 
         <button
           type="button"
-          aria-label={`移除 ${item.filename}`}
+          aria-label={t('compose.attachmentRemove', { name: item.filename })}
           onClick={() => onRemove(item.localId)}
           className={cn(
             'absolute top-1.5 right-1.5 w-5 h-5 rounded-full grid place-items-center',
@@ -166,13 +173,13 @@ function AttachCard({
           <div
             className="absolute left-0 right-0 bottom-0 h-[3px] bg-ink-fg/[0.12]"
             role="progressbar"
-            aria-label={`${item.filename} 上传中`}
+            aria-label={`${item.filename} · ${t('compose.attachTray.uploading')}`}
             {...(pct != null
               ? { 'aria-valuenow': pct, 'aria-valuemin': 0, 'aria-valuemax': 100 }
               : {})}
           >
             <span
-              className={cn('block h-full bg-coral', pct == null && 'w-2/5 animate-pulse')}
+              className={cn('block h-full bg-coral/100', pct == null && 'w-2/5 animate-pulse')}
               style={pct != null ? { width: `${pct}%` } : undefined}
             />
           </div>
@@ -184,7 +191,7 @@ function AttachCard({
       </div>
       <div className="px-[9px] pb-2 text-meta font-mono text-ink-fg-2">
         {item.size != null ? formatFileSize(item.size) : ''}
-        {uploading ? ' · 上传中' : ''}
+        {uploading ? ` · ${t('compose.attachTray.uploading')}` : ''}
       </div>
     </div>
   )
@@ -197,6 +204,7 @@ export function AttachmentTray({
   onRemove,
   className
 }: AttachmentTrayProps): React.ReactElement | null {
+  const { t } = useTranslation()
   const totalSize = useMemo(() => items.reduce((sum, it) => sum + (it.size ?? 0), 0), [items])
   if (items.length === 0) return null
 
@@ -205,7 +213,7 @@ export function AttachmentTray({
       <div className="flex items-center justify-between mb-2.5">
         <span className="inline-flex items-center gap-[7px] text-meta font-mono text-ink-fg-2">
           <Paperclip size={13} strokeWidth={2} />
-          {items.length} 个附件 · {formatFileSize(totalSize)}
+          {t('compose.attachTray.summary', { n: items.length, size: formatFileSize(totalSize) })}
         </span>
         <button
           type="button"
@@ -213,7 +221,7 @@ export function AttachmentTray({
           className="inline-flex items-center gap-[5px] text-meta text-coral px-2.5 py-[5px] rounded-[var(--r-ctl)] hover:bg-coral/10 transition-colors duration-fast"
         >
           <Plus size={13} strokeWidth={2} />
-          添加
+          {t('compose.attachTray.add')}
         </button>
       </div>
       <div
@@ -237,6 +245,7 @@ export function AttachmentDropzone({
   onFilesDropped,
   className
 }: AttachmentDropzoneProps): React.ReactElement {
+  const { t } = useTranslation()
   const [dragActive, setDragActive] = useState(false)
   const dragDepth = useRef(0)
 
@@ -298,7 +307,7 @@ export function AttachmentDropzone({
       )}
     >
       <Paperclip size={18} strokeWidth={1.8} />
-      <span className="text-aux">拖拽文件到此，或点击添加附件</span>
+      <span className="text-aux">{t('compose.attachTray.dropzoneHint')}</span>
     </div>
   )
 }
