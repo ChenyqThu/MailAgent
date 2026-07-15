@@ -56,6 +56,9 @@ export function useFocusTrap({ open, fallbackRef }: UseFocusTrapOpts): UseFocusT
   useEffect(() => {
     if (!open) return
     const root = dialogRef.current
+    // 对话框内已有焦点 (子组件 autoFocus, 如 compose-new 的 To 字段) → 不抢。
+    // 子组件 effect 先于父级 effect 执行, 此守卫判定是确定性的。
+    if (root && root.contains(document.activeElement)) return
     // 跳过 disabled / tabindex=-1 (与下方 handleTab 的过滤一致): 首个 selector 命中
     // 可能是 disabled 控件 (如 compose-new 打开时收件人为空→发送按钮 disabled),
     // 对它 .focus() 无效会让焦点留在 dialog 外、onKeyDown 收不到 Tab。取首个真正
