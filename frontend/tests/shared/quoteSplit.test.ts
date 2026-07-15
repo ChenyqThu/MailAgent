@@ -50,12 +50,22 @@ describe('splitQuoteHtml — marker 拆分', () => {
     expect(quote).toContain('第二段Q3b')
   })
 
-  test('marker 被 wrapper 嵌套 → 按 marker 所在层级切分 (防御)', () => {
+  test('marker 被 wrapper 嵌套 → 克隆祖先壳切分, reply 保留 marker 前内容 (防御)', () => {
     const html = `<div><p>R4</p>${QUOTE_BLOCK}</div>`
     const { reply, quote } = splitQuoteHtml(html)
     expect(reply).toContain('R4')
     expect(reply).not.toContain('原引用内容Q1')
     expect(quote).toContain('原引用内容Q1')
+  })
+
+  test('嵌套 marker + 顶层尾随内容 → 按文档序归 quote, 克隆 wrapper 层级 (codex F8)', () => {
+    const html = '<section><p>回复R7</p><div data-ma-quote="1">引用Q7</div></section><p>尾随T7</p>'
+    const { reply, quote } = splitQuoteHtml(html)
+    // reply = marker 之前的所有内容, 原 wrapper 保留原位。
+    expect(reply).toBe('<section><p>回复R7</p></section>')
+    // quote = marker 起按文档序的所有内容: marker 段克隆 <section> 壳保住包裹结构,
+    // 顶层尾随 <p> 归 quote (旧实现会错留在 reply)。
+    expect(quote).toBe('<section><div data-ma-quote="1">引用Q7</div></section><p>尾随T7</p>')
   })
 })
 
@@ -73,6 +83,13 @@ describe('splitQuoteHtml — 无 marker 回退', () => {
 
   test('marker 只是正文文本字样 (非元素属性) → 不切', () => {
     const html = '<p>代码示例: data-ma-quote 属性</p>'
+    const { reply, quote } = splitQuoteHtml(html)
+    expect(quote).toBeNull()
+    expect(reply).toBe(html)
+  })
+
+  test('非 "1" 的 data-ma-quote 值 (用户/外来 HTML) → 不切分 (codex F7)', () => {
+    const html = '<p>R8</p><div data-ma-quote="preview"><p>预览块P8</p></div>'
     const { reply, quote } = splitQuoteHtml(html)
     expect(quote).toBeNull()
     expect(reply).toBe(html)
