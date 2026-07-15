@@ -639,6 +639,14 @@ class NewWatcher:
                     payload['imap_uid'] = email_meta.get('imap_uid')
                 if email_meta.get('imap_uidvalidity') is not None:
                     payload['imap_uidvalidity'] = email_meta.get('imap_uidvalidity')
+                # 草稿线程 linkage 透传 (D1 Bug A, reconcile_drafts 已解析/反查)
+                for key in (
+                    'draft_source_internal_id',
+                    'draft_in_reply_to',
+                    'draft_references',
+                ):
+                    if email_meta.get(key) is not None:
+                        payload[key] = email_meta.get(key)
                 self.sync_store.save_email(payload)
                 logger.debug(f"[drafts] added draft {internal_id} (pending)")
             except Exception as e:

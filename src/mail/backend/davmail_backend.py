@@ -1488,6 +1488,20 @@ class DavMailBackend(IMailBackend):
                         )
                         to_add = kept_add
                         to_delete = [i for i in to_delete if i in delete_set]
+            # 草稿线程 linkage (D1 Bug A): 把 _parse_batch_headers 已解析的
+            # in_reply_to_raw/references_raw 持久化进 draft_* 列 (经 new_watcher
+            # save_email 落库), 并按 in_reply_to 反查原邮件行回填
+            # draft_source_internal_id — 覆盖 webhook _create_draft_via_imap 等
+            # 一切不走 _mirror_draft_locally 的草稿来源, 统一自愈。RFC 2047 decode
+            # 同 thread_id 口径 (干净 ASCII 是 no-op), 防 encoded-word 链存进列。
+            for item in to_add:
+                irt = _decode_mime_header(item.get("in_reply_to_raw")).strip().strip("<>")
+                if not irt:
+                    continue
+                item["draft_in_reply_to"] = irt
+                refs = " ".join(_decode_mime_header(item.get("references_raw")).split())
+                item["draft_references"] = refs or None
+                item["draft_source_internal_id"] = self._lookup_internal_id_by_message_id(irt)
             # Grace window: compose_draft 即时落库的新行, davmail 端 folder 缓存
             # 可能尚未反映 (SELECT 后 SEARCH 仍 stale 数分钟) → 远端"看不到"该 UID
             # 会被误判已删除。创建 < 120s 的行不删, 留给后续 cycle 确认
@@ -1540,6 +1554,23 @@ class DavMailBackend(IMailBackend):
         except Exception as e:
             logger.warning(f"[davmail-backend] _draft_message_id_map failed: {e}")
             return {}
+
+    def _lookup_internal_id_by_message_id(self, message_id: str) -> Optional[int]:
+        """按 message_id 反查 email_metadata 原行 internal_id (草稿 linkage 回填用)。
+
+        查不到 / 返回形状异常 (测试里 sync_store 常是 MagicMock) → None, 列留空。
+        """
+        try:
+            record = self.sync_store.get_by_message_id(message_id)
+            if isinstance(record, dict):
+                iid = record.get("internal_id")
+                if isinstance(iid, int) and not isinstance(iid, bool):
+                    return iid
+        except Exception as e:
+            logger.debug(
+                f"[davmail-backend] linkage source lookup failed mid={message_id[:40]!r}: {e}"
+            )
+        return None
 
     def _update_draft_row_uid(self, internal_id: int, item: dict) -> None:
         """草稿编辑 in-place 更新: 新 UID/UIDVALIDITY/subject + 置 pending 重 fetch 正文。"""
@@ -1829,8 +1860,9 @@ class DavMailBackend(IMailBackend):
                 "thread_id": thread_id,
                 "imap_uid": uid,
                 "imap_uidvalidity": uidvalidity if uidvalidity is not None else self.inbox_uidvalidity,
-                # references_raw / in_reply_to_raw: 当前无消费者 (死字段), 保留原
-                # raw 语义不变; thread_id 已在上方走 _thread_id_from_headers 解码.
+                # references_raw / in_reply_to_raw: reconcile_drafts 消费 (草稿
+                # linkage 持久化, D1 Bug A); 此处保留原 raw 语义 (decode 在消费点);
+                # thread_id 已在上方走 _thread_id_from_headers 解码.
                 "references_raw": (msg.get("References") or "").strip() or None,
                 "in_reply_to_raw": (msg.get("In-Reply-To") or "").strip().strip("<>") or None,
             })
