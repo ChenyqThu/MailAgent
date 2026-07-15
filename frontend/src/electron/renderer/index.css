@@ -4681,7 +4681,7 @@ html[data-theme-vt='circle-blur']::view-transition-new(root) {
   font-size: 12.5px;
   background: rgb(var(--ink-fg) / 0.06);
   border: 1px solid rgb(var(--ink-border));
-  border-radius: 6px;
+  border-radius: var(--r-ctl);
   padding: 12px 14px;
   overflow-x: auto;
   color: rgb(var(--ink-fg-1));
@@ -5090,7 +5090,7 @@ html[data-theme-vt='circle-blur']::view-transition-new(root) {
 .folder-editor-btn {
   width: 28px;
   height: 28px;
-  border-radius: 6px;
+  border-radius: var(--r-ctl);
   display: inline-flex;
   align-items: center;
   justify-content: center;

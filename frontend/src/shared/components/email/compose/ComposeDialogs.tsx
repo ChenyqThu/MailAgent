@@ -66,7 +66,7 @@ export function SendConfirmDialog({
           <div className="flex items-start gap-4">
             <div
               className={cn(
-                'w-[42px] h-[42px] rounded-[11px] grid place-items-center shrink-0',
+                'w-[42px] h-[42px] rounded-[var(--r-card)] grid place-items-center shrink-0',
                 'text-coral bg-coral/[0.12] border border-coral/30'
               )}
             >
@@ -149,7 +149,7 @@ export function DeleteDraftDialog({
           <div className="flex items-start gap-4">
             <div
               className={cn(
-                'w-[42px] h-[42px] rounded-[11px] grid place-items-center shrink-0',
+                'w-[42px] h-[42px] rounded-[var(--r-card)] grid place-items-center shrink-0',
                 'text-fail bg-fail/10 border border-fail/30'
               )}
             >
