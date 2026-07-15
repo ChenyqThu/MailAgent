@@ -371,18 +371,43 @@ describe('@mention', () => {
     expect(command).toHaveBeenCalledWith({ id: 'bob@acme.test', label: 'Bob Li' })
   })
 
-  test('items()：慢的旧请求后到 → 代际丢弃，不覆盖新查询的结果', async () => {
+  test('异步乱序（codex F2）：慢的旧 update 整体丢弃，不安装旧 command/range', async () => {
     const d1 = deferred<ContactSuggestion[]>()
     const d2 = deferred<ContactSuggestion[]>()
     const queue = [d1.promise, d2.promise]
     const fetchContacts = vi.fn((_q: string) => queue.shift()!)
-    const sugg = createMentionSuggestion({ fetchContacts })
-    const p1 = sugg.items!({ query: 'ali', editor: null as never })
-    const p2 = sugg.items!({ query: 'bob', editor: null as never })
-    d2.resolve([CONTACTS[1]]) // 新查询（bob）先回
-    await expect(p2).resolves.toEqual([CONTACTS[1]])
-    d1.resolve([CONTACTS[0]]) // 旧查询（ali）的慢包后到
-    await expect(p1).resolves.toEqual([CONTACTS[1]]) // 旧包被丢弃，返回已知最新结果
+    const editor = renderEditor({ options: { fetchContacts } })
+    // update A：query 'al'（d1 慢包在途）→ update B：query 'ali'（d2 快包）。
+    await act(async () => {
+      editor.chain().focus('end').insertContent(' @al').run()
+    })
+    await act(async () => {
+      editor.commands.insertContent('i')
+    })
+    // 新代际（B）先回 → 菜单按 B 渲染。
+    await act(async () => {
+      d2.resolve([CONTACTS[1]])
+      await new Promise((r) => setTimeout(r, 0))
+    })
+    await waitFor(() => expect(screen.getByText('Bob Li')).toBeTruthy())
+    // 旧代际（A）慢包后到 → 整个 update（items+command+range+query）被丢弃：
+    // 菜单不被旧结果覆盖，旧 range 的 command 不上位。
+    await act(async () => {
+      d1.resolve([CONTACTS[0]])
+      await new Promise((r) => setTimeout(r, 0))
+    })
+    expect(screen.queryByText('Alice Chen')).toBeNull()
+    expect(screen.getByText('Bob Li')).toBeTruthy()
+    // 选中 → 走的是新代际 command（range 覆盖 '@ali' 全量）：无查询文本残留
+    //（若旧代际 range（只盖 '@al'）上位，会留下孤儿 'i'）。
+    await act(async () => {
+      fireEvent.click(screen.getByText('Bob Li'))
+    })
+    expect(editor.getHTML()).toContain('data-id="bob@acme.test"')
+    expect(editor.getText().trim()).toBe('hello world @Bob Li')
+    act(() => {
+      editor.destroy() // 收场：卸掉挂在 body 上的浮层
+    })
   })
 
   test('@ 触发（控制组）：pending 回包后菜单正常渲染到 body', async () => {

@@ -61,10 +61,16 @@ interface SuggestRenderBaseProps<I, S> {
  * clamp）+ 键盘转发（↑/↓/Enter 走组件句柄，Escape 直接销毁浮层）。契约 D4：
  * 不用 demo 的 window.__ttSuggest 全局桥、不引 tippy.js。
  * `staticProps` 在整个 suggestion 生命周期不变（如 MentionMenu 的 onPick）。
+ * `guards.isStale`（codex F2）：suggestion 插件的 update 是 async 的（await
+ * items()），两次 update 可交错乱序到达 —— 迟到回调携带的 items 可能不是最新一次
+ * items() 的结果（未 await 完的占位 [] / exit 后残留的旧代际数组），只在 items()
+ * 里去重挡不住这些 stale 回调。isStale 返回 true 时丢弃整个更新（不是只丢
+ * items），配合 create() 幂等化（见下），最终安装的 command/items 恒为最新代际。
  */
 export function createSuggestionRender<I, S, P extends SuggestRenderBaseProps<I, S>>(
   Component: React.ComponentType<P>,
-  staticProps?: Omit<P, keyof SuggestRenderBaseProps<I, S>>
+  staticProps?: Omit<P, keyof SuggestRenderBaseProps<I, S>>,
+  guards?: { isStale?: (props: SuggestionProps<I, S>) => boolean }
 ): NonNullable<SuggestionOptions<I, S>['render']> {
   return () => {
     let renderer: ReactRenderer<SuggestMenuHandle, Record<string, unknown>> | null = null
@@ -86,6 +92,15 @@ export function createSuggestionRender<I, S, P extends SuggestRenderBaseProps<I,
       // 浮层（ReactRenderer 走 editor.contentComponent portal，销毁后只会往
       // body 泄一个永远没人收的空壳 div）。
       if (props.editor.isDestroyed) return
+      // 幂等化（codex F2）：A 慢 B 快时，B 的 onUpdate 已先建了浮层，A 的 onStart
+      // 迟到再 create 会覆盖 renderer 引用 —— 旧浮层永远没人销毁（泄漏 + 双菜单）。
+      // 已有浮层时收敛为 updateProps（此时 props 是插件闭包共享变量，恒为最新
+      // update 的对象，装的仍是最新 command/items）。
+      if (renderer) {
+        renderer.updateProps({ items: props.items, command: props.command, query: props.query })
+        position(props.clientRect)
+        return
+      }
       renderer = new ReactRenderer<SuggestMenuHandle, Record<string, unknown>>(
         Component as unknown as React.FunctionComponent<Record<string, unknown>>,
         {
@@ -108,18 +123,20 @@ export function createSuggestionRender<I, S, P extends SuggestRenderBaseProps<I,
     }
 
     return {
-      onStart: create,
+      onStart: (props: SuggestionProps<I, S>): void => {
+        // stale 回调整体丢弃 (不是只丢 items) — 携带占位 []/旧代际 items 的迟到
+        // onStart 不得建浮层 (exit 后菜单复活 / 空菜单闪烁)。
+        if (guards?.isStale?.(props)) return
+        create(props)
+      },
       onUpdate: (props: SuggestionProps<I, S>): void => {
         if (props.editor.isDestroyed) {
           destroy()
           return
         }
-        if (!renderer) {
-          create(props)
-          return
-        }
-        renderer.updateProps({ items: props.items, command: props.command, query: props.query })
-        position(props.clientRect)
+        // 丢弃整个 stale 更新 (items/command/query 全套), 不只是 items。
+        if (guards?.isStale?.(props)) return
+        create(props)
       },
       onKeyDown: (props: SuggestionKeyDownProps): boolean => {
         if (props.event.key === 'Escape') {
@@ -269,26 +286,36 @@ export function createMentionSuggestion(
     options.fetchContacts ??
     ((query: string): Promise<ContactSuggestion[]> =>
       makeMailApi().email.contactSuggest(query, MENTION_CONTACT_LIMIT))
-  // 查询代际守卫：suggestion 插件的 update 是 async 的，两次 update 可交错 ——
-  // 慢的旧请求（@ali）后到会把旧结果交给 onUpdate 覆盖新菜单（@bob），Enter 选错人。
-  // 每次调用领取递增代际；await 回来若已有更新代际发出，丢弃自己的结果、返回当前
-  // 已知的最新结果（最终渲染由最新在途请求负责），旧包永远覆盖不了新菜单。
+  // 查询代际守卫（codex F2）：suggestion 插件的 update 是 async 的（await items()），
+  // 两次 update 可交错乱序 —— 实测 v3.23.6 的 props 是插件闭包共享变量（每次 update
+  // 整体覆写），迟到回调拿到的对象本身是最新的，但危害有二：① 迟到 onStart 在
+  // onUpdate 已建浮层后二次 create（旧浮层泄漏 + 双菜单，Enter 语义分裂）；② 回调
+  // 携带的 items 可能是未 await 完的占位 [] / exit 后残留的旧代际数组（菜单复活/
+  // 闪烁）。只在 items() 里去重返回最新结果挡不住这些 stale 回调。修法：items()
+  // 每次调用领取递增代际并把返回数组登记进 WeakMap；render 桥（guards.isStale）在
+  // onStart/onUpdate 比对 props.items 的代际，非最新则丢弃整个更新（不是只丢
+  // items），配合 create() 幂等化 —— 最终安装的 command/items 恒为最新代际。
   let generation = 0
-  let latestItems: ContactSuggestion[] = []
+  const itemsGeneration = new WeakMap<ContactSuggestion[], number>()
   return {
     char: '@',
     items: async ({ query }): Promise<ContactSuggestion[]> => {
       const gen = ++generation
       // 数据源失败（离线/后端异常）不能炸编辑器 → 静默空列表（菜单隐藏）。
+      let result: ContactSuggestion[]
       try {
-        const result = (await fetchContacts(query)).slice(0, MENTION_CONTACT_LIMIT)
-        if (gen === generation) latestItems = result
+        result = (await fetchContacts(query)).slice(0, MENTION_CONTACT_LIMIT)
       } catch {
-        if (gen === generation) latestItems = []
+        result = []
       }
-      return latestItems
+      itemsGeneration.set(result, gen)
+      return result
     },
-    render: createSuggestionRender(MentionMenu, { onPick: options.onMentionPick })
+    render: createSuggestionRender(
+      MentionMenu,
+      { onPick: options.onMentionPick },
+      { isStale: (props) => itemsGeneration.get(props.items) !== generation }
+    )
   }
 }
 
