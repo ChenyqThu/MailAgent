@@ -69,11 +69,13 @@ def test_alert_davmail_process_down_includes_port_and_proto(monkeypatch):
     assert "IMAP" in title
 
 
-def test_alert_davmail_process_recovered_is_info(monkeypatch):
+def test_alert_davmail_process_recovered_is_warning(monkeypatch):
+    """task 07-14: 从 info(blue) 提到 warning(yellow) —— alert_levels 默认不含
+    info, 原 info 级恢复通知一条都发不出去 (投递闸见 test_alert_worker_methods)。"""
     n, sent = _make_notifier(monkeypatch)
     _run(n.alert_davmail_process_recovered("IMAP"))
     assert len(sent) == 1
-    assert sent[0]["header"]["template"] == "blue"
+    assert sent[0]["header"]["template"] == "yellow"
 
 
 def test_alert_davmail_ews_throttling_is_warning(monkeypatch):
@@ -96,11 +98,12 @@ def test_alert_davmail_login_degraded_is_critical(monkeypatch):
     assert "3" in card["elements"][0]["content"]
 
 
-def test_alert_davmail_login_recovered_is_info(monkeypatch):
+def test_alert_davmail_login_recovered_is_warning(monkeypatch):
+    """task 07-14: 同上, info → warning 才发得出去 (L2a 恢复通知)."""
     n, sent = _make_notifier(monkeypatch)
     _run(n.alert_davmail_login_recovered())
     assert len(sent) == 1
-    assert sent[0]["header"]["template"] == "blue"
+    assert sent[0]["header"]["template"] == "yellow"
 
 
 def test_alert_davmail_auto_restart_success_warning_failure_critical(monkeypatch):

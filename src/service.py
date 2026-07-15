@@ -30,6 +30,8 @@ from pathlib import Path
 
 from loguru import logger
 from src.config import calendar_notion_enabled, config, notion_enabled
+from src.notify import episode as episode_mod
+from src.notify.episode import AlertEpisodeTracker
 from src.utils.logger import setup_logger
 
 # 仓库根 (src/service.py → 上跳一层). 原 main.py 用 __file__ 推 davmail-poc / scripts
@@ -304,6 +306,11 @@ class EmailNotionSyncApp:
                 restart_callback=build_restart_callback(config),
                 auto_restart_cooldown=config.davmail_auto_restart_cooldown_sec,
                 auto_restart_max_per_day=config.davmail_auto_restart_max_per_day,
+                # task 07-14: token 门槛告警 episode 化 (进门槛告一次而非每 5min
+                # 刷一条); flag off → disabled tracker = 老行为
+                episodes=AlertEpisodeTracker(
+                    self.watcher.sync_store, enabled=config.alert_episode_enabled
+                ),
             )
             if self.stats_reporter:
                 self.stats_reporter.add_collector(
@@ -995,36 +1002,70 @@ class EmailNotionSyncApp:
 
         stats = self.watcher.get_stats()
 
-        # 1. 连续错误检查
+        # task 07-14: 状态型告警 (判据成立后不会自行消失) 走 episode 状态机 —
+        # 进入告一次 → 静默 → 值翻倍才再告 → 恢复告一次并复位 (状态落
+        # sync_state['alert.*'], 跨进程重启存活)。tracker 无内存态, 每轮新建即可。
+        # flag off → 判据成立就告, 字节级回退。
+        # 🔴 两阶段提交: evaluate 只判定, 必须**投递成功** (alert_* 返回 True) 才
+        # commit —— send_alert 会因 level 门 / 300s cooldown 门 / 网络失败静默返回
+        # False, 判定时就落盘 = 这条告警永久标成「已告警」却从未送达 = 永久漏告警。
+        episodes = AlertEpisodeTracker(
+            self.watcher.sync_store, enabled=config.alert_episode_enabled
+        )
+
+        # 1. 连续错误检查 (半状态型: 成功即归零 → 不接 episode, 行为不变)
         consecutive = stats.get("consecutive_errors", 0)
         if consecutive >= 3:
             last_err = ""
             await self.alerter.alert_consecutive_errors(consecutive, last_err)
 
-        # 2. 服务不健康
-        if not stats.get("healthy", True):
-            await self.alerter.alert_service_unhealthy(consecutive)
+        # 2. 服务不健康 (布尔态 → 纯 edge-triggered, 只有 ENTER/SILENT/RECOVER)
+        action = episodes.evaluate_flag(
+            "service_unhealthy", not stats.get("healthy", True)
+        )
+        if action == episode_mod.ENTER:
+            if await self.alerter.alert_service_unhealthy(consecutive):
+                episodes.commit("service_unhealthy", action, 1.0)
+        elif action == episode_mod.RECOVER:
+            if await self.alerter.alert_recovery("服务健康检查"):
+                episodes.commit("service_unhealthy", action, 0.0)
 
         # 3. dead_letter 累积
         sync_store_stats = stats.get("sync_store", {})
         dead_count = sync_store_stats.get("dead_letter", 0)
-        if dead_count >= config.alert_dead_letter_threshold:
-            await self.alerter.alert_dead_letters(dead_count, config.alert_dead_letter_threshold)
-            # ping-island DeadLetterAccum hook（fail-open）
-            try:
-                from src.notify import island_dispatch
-                if island_dispatch.is_enabled():
-                    island_dispatch.dispatch_dead_letter_accum(
-                        count=dead_count,
-                        threshold=config.alert_dead_letter_threshold,
-                    )
-            except Exception as e:
-                logger.debug(f"[island-hook] dead_letter dispatch failed: {e}")
+        action = episodes.evaluate(
+            "dead_letters", dead_count, config.alert_dead_letter_threshold
+        )
+        if action in (episode_mod.ENTER, episode_mod.ESCALATE):
+            if await self.alerter.alert_dead_letters(
+                dead_count, config.alert_dead_letter_threshold
+            ):
+                episodes.commit("dead_letters", action, dead_count)
+                # ping-island DeadLetterAccum hook（fail-open）— 与告警同源收敛,
+                # 不独立刷屏 (R3)。放在 commit 后同一条件下: 投递失败时本轮不
+                # commit → 下轮会重新判定重发, 岛卡若不跟着 gate 就会每轮刷一张。
+                try:
+                    from src.notify import island_dispatch
+                    if island_dispatch.is_enabled():
+                        island_dispatch.dispatch_dead_letter_accum(
+                            count=dead_count,
+                            threshold=config.alert_dead_letter_threshold,
+                        )
+                except Exception as e:
+                    logger.debug(f"[island-hook] dead_letter dispatch failed: {e}")
+        elif action == episode_mod.RECOVER:
+            if await self.alerter.alert_recovery("死信队列"):
+                episodes.commit("dead_letters", action, dead_count)
 
-        # 4. 雷达不可用
+        # 4. 雷达不可用 (布尔态 → 纯 edge-triggered)
         radar_available = stats.get("radar", {}).get("available", True)
-        if not radar_available:
-            await self.alerter.alert_radar_unavailable()
+        action = episodes.evaluate_flag("radar_unavailable", not radar_available)
+        if action == episode_mod.ENTER:
+            if await self.alerter.alert_radar_unavailable():
+                episodes.commit("radar_unavailable", action, 1.0)
+        elif action == episode_mod.RECOVER:
+            if await self.alerter.alert_recovery("SQLite 雷达"):
+                episodes.commit("radar_unavailable", action, 0.0)
 
         # 5. Redis 断连检查
         if self.redis_consumer:
@@ -1078,10 +1119,21 @@ class EmailNotionSyncApp:
                 outbox_stats.age_buckets.get("lt_30m", 0)
                 + outbox_stats.age_buckets.get("gt_30m", 0)
             )
-            if aged_pending > config.alert_outbox_backlog_threshold:
-                await self.alerter.alert_outbox_backlog(
+            # 判据历来是 > 阈值 (不是 >=) → tracker 门槛 +1, 触发边界逐字不变
+            # (告警文案里的阈值仍是配置原值)。
+            action = episodes.evaluate(
+                "outbox_backlog",
+                aged_pending,
+                config.alert_outbox_backlog_threshold + 1,
+            )
+            if action in (episode_mod.ENTER, episode_mod.ESCALATE):
+                if await self.alerter.alert_outbox_backlog(
                     aged_pending, config.alert_outbox_backlog_threshold
-                )
+                ):
+                    episodes.commit("outbox_backlog", action, aged_pending)
+            elif action == episode_mod.RECOVER:
+                if await self.alerter.alert_recovery("Outbox 积压"):
+                    episodes.commit("outbox_backlog", action, aged_pending)
         except Exception as e:
             logger.debug(f"[alert] outbox backlog check failed: {e}")
 
@@ -1092,6 +1144,9 @@ class EmailNotionSyncApp:
         # 重启清零) → 装机日重启 N 次会刷屏几十条。这里把上次发送时间持久化进
         # sync_state['service.restart_freq_last_alert'], 同一 episode 24h 内最多
         # 发一次, 跨进程重启依然生效。键缺失/解析失败视为 0 (fail-open 可发送)。
+        # 注: task 07-14 的通用 episode tracker **有意不接管这里** —— 本分支已自带
+        # 持久去重 (不属 episode 化要修的刷屏病根), 迁移只会让 flag-off 退回 300s
+        # 内存冷却 = 比现状更吵, 违反「flag-off 字节级回退」纪律。
         try:
             import time as _time
 

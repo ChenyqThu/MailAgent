@@ -28,6 +28,7 @@ from src.mail.davmail_watchdog import (
     _OAUTH_FAIL_RE,
 )
 from src.mail.sync_store import SyncStore
+from src.notify.episode import AlertEpisodeTracker
 
 
 # ────────────────────────────────────────────────────────────────
@@ -77,14 +78,21 @@ def sync_store(tmp_path: Path) -> SyncStore:
 
 
 class _FakeAlerter:
-    """记录所有调用而不真发送."""
+    """记录所有调用而不真发送.
 
-    def __init__(self):
+    task 07-14: 真实 ``alert_*`` 现在返回投递结果 bool (token 告警的两阶段提交
+    靠它决定是否 commit) → 这里跟着返回 ``self.delivered``; 置 False 可模拟
+    投递失败 (飞书挂 / level 门 / cooldown 门)。其余告警不读返回值, 不受影响。
+    """
+
+    def __init__(self, delivered: bool = True):
         self.calls: list[tuple[str, tuple, dict]] = []
+        self.delivered = delivered
 
     def __getattr__(self, name):
         async def _cap(*args, **kwargs):
             self.calls.append((name, args, kwargs))
+            return self.delivered
         return _cap
 
 
@@ -398,6 +406,162 @@ async def test_process_recovery_alert(
     await wd._tick()
     recovery_calls = [c for c in alerter.calls if c[0] == "alert_davmail_process_recovered"]
     assert len(recovery_calls) == 1
+
+
+async def test_token_alert_repeats_every_tick_without_episode_tracker(
+    sync_store: SyncStore, davmail_root: Path, write_token
+):
+    """task 07-14: 未注入 episodes (老调用方 / flag off) → 逐字老行为 = 每轮都告."""
+    write_token(age_seconds=82 * 86400)
+    alerter = _FakeAlerter()
+    wd = DavMailWatchdog(
+        sync_store=sync_store, alerter=alerter, davmail_root=davmail_root  # type: ignore[arg-type]
+    )
+    await _patch_probe(wd, imap_ok=True, smtp_ok=True)
+    for _ in range(3):
+        await wd._tick()
+    calls = [c for c in alerter.calls if c[0] == "alert_davmail_token_expiring"]
+    assert len(calls) == 3
+
+
+async def test_token_alert_episode_fires_once_then_silent(
+    sync_store: SyncStore, davmail_root: Path, write_token
+):
+    """task 07-14: 注入 tracker → 进门槛告一次, 后续静默 (老实现每 5min 一条)."""
+    write_token(age_seconds=82 * 86400)
+    alerter = _FakeAlerter()
+    wd = DavMailWatchdog(
+        sync_store=sync_store, alerter=alerter, davmail_root=davmail_root,  # type: ignore[arg-type]
+        episodes=AlertEpisodeTracker(sync_store),
+    )
+    await _patch_probe(wd, imap_ok=True, smtp_ok=True)
+    for _ in range(4):
+        await wd._tick()
+    calls = [c for c in alerter.calls if c[0] == "alert_davmail_token_expiring"]
+    assert len(calls) == 1
+
+
+async def test_token_episode_critical_supersedes_expiring_and_recovers(
+    sync_store: SyncStore, davmail_root: Path, write_token
+):
+    """critical 活跃期间不发 warning 级; 重新 OAuth (age 归零) → 恢复通知 + 复位."""
+    write_token(age_seconds=89 * 86400)
+    alerter = _FakeAlerter()
+    wd = DavMailWatchdog(
+        sync_store=sync_store, alerter=alerter, davmail_root=davmail_root,  # type: ignore[arg-type]
+        episodes=AlertEpisodeTracker(sync_store),
+    )
+    await _patch_probe(wd, imap_ok=True, smtp_ok=True)
+    await wd._tick()
+    await wd._tick()
+    assert len([c for c in alerter.calls if c[0] == "alert_davmail_token_critical"]) == 1
+    assert [c for c in alerter.calls if c[0] == "alert_davmail_token_expiring"] == []
+
+    # 重新走 O365Manual OAuth → token.dat 刷新, age 归零
+    write_token(age_seconds=0)
+    await wd._tick()
+    assert len([c for c in alerter.calls if c[0] == "alert_recovery"]) == 1
+    assert sync_store.get_state("alert.davmail_token_critical.active") == "0"
+    assert sync_store.get_state("alert.davmail_token.active") == "0"
+
+    # 复位后再次劣化 → 新 episode 能重新告警 (episode 没卡在 active)
+    write_token(age_seconds=82 * 86400)
+    await wd._tick()
+    assert len([c for c in alerter.calls if c[0] == "alert_davmail_token_expiring"]) == 1
+
+
+async def test_token_critical_downgrade_to_warning_zone_is_not_a_recovery(
+    sync_store: SyncStore, davmail_root: Path, write_token
+):
+    """🔴 HIGH-3: 89 → 82 (仍在 ≥80 warning 区间) 绝不能报「token 已恢复」.
+
+    两个平级 episode 的写法下, 89 时 critical/expiring 都被标 active, 82 时
+    critical 判 RECOVER → 误发恢复通知, 而 token 其实还在告警区间。
+    """
+    write_token(age_seconds=89 * 86400)
+    alerter = _FakeAlerter()
+    wd = DavMailWatchdog(
+        sync_store=sync_store, alerter=alerter, davmail_root=davmail_root,  # type: ignore[arg-type]
+        episodes=AlertEpisodeTracker(sync_store),
+    )
+    await _patch_probe(wd, imap_ok=True, smtp_ok=True)
+    await wd._tick()
+    assert len([c for c in alerter.calls if c[0] == "alert_davmail_token_critical"]) == 1
+
+    # age 降到 82: 严重度回落但仍在 warning 区间 → 不是恢复
+    write_token(age_seconds=82 * 86400)
+    await wd._tick()
+    assert [c for c in alerter.calls if c[0] == "alert_recovery"] == [], (
+        "token 仍 ≥80 天, 不得报恢复"
+    )
+    # episode 本体仍 active (用户已知情), 只有 severity marker 复位
+    assert sync_store.get_state("alert.davmail_token.active") == "1"
+    assert sync_store.get_state("alert.davmail_token_critical.active") == "0"
+
+    # 真正重走 OAuth (age→0) 才发恢复, 且只发一条
+    write_token(age_seconds=0)
+    await wd._tick()
+    assert len([c for c in alerter.calls if c[0] == "alert_recovery"]) == 1
+
+
+async def test_token_warning_then_critical_then_downgrade_then_recover(
+    sync_store: SyncStore, davmail_root: Path, write_token
+):
+    """HIGH-3 全序列 82 → 89 → 82 → 0: 各阶段恰好一条消息, 无重复无假恢复."""
+    alerter = _FakeAlerter()
+    wd = DavMailWatchdog(
+        sync_store=sync_store, alerter=alerter, davmail_root=davmail_root,  # type: ignore[arg-type]
+        episodes=AlertEpisodeTracker(sync_store),
+    )
+    await _patch_probe(wd, imap_ok=True, smtp_ok=True)
+
+    def _names():
+        return [c[0] for c in alerter.calls if c[0].startswith(("alert_davmail_token", "alert_recovery"))]
+
+    write_token(age_seconds=82 * 86400)
+    await wd._tick()
+    await wd._tick()  # 第二轮静默
+    assert _names() == ["alert_davmail_token_expiring"]
+
+    write_token(age_seconds=89 * 86400)  # 升级到 critical
+    await wd._tick()
+    await wd._tick()
+    assert _names() == ["alert_davmail_token_expiring", "alert_davmail_token_critical"]
+
+    write_token(age_seconds=82 * 86400)  # 降级回 warning 区间 → 静默, 无假恢复
+    await wd._tick()
+    assert _names() == ["alert_davmail_token_expiring", "alert_davmail_token_critical"]
+
+    write_token(age_seconds=0)  # 重走 OAuth → 真恢复
+    await wd._tick()
+    await wd._tick()
+    assert _names() == [
+        "alert_davmail_token_expiring",
+        "alert_davmail_token_critical",
+        "alert_recovery",
+    ]
+
+
+async def test_token_alert_undelivered_is_retried_not_silenced(
+    sync_store: SyncStore, davmail_root: Path, write_token
+):
+    """HIGH-1 (watchdog 侧): token 告警投递失败 → 不提交 → 下轮重发."""
+    write_token(age_seconds=82 * 86400)
+    alerter = _FakeAlerter(delivered=False)
+    wd = DavMailWatchdog(
+        sync_store=sync_store, alerter=alerter, davmail_root=davmail_root,  # type: ignore[arg-type]
+        episodes=AlertEpisodeTracker(sync_store),
+    )
+    await _patch_probe(wd, imap_ok=True, smtp_ok=True)
+    for _ in range(3):
+        await wd._tick()
+    assert len([c for c in alerter.calls if c[0] == "alert_davmail_token_expiring"]) == 3
+    assert sync_store.get_state("alert.davmail_token.active") in (None, "")
+
+    alerter.delivered = True
+    await wd._tick()
+    await wd._tick()  # 投递成功后才静默
+    assert len([c for c in alerter.calls if c[0] == "alert_davmail_token_expiring"]) == 4
 
 
 async def test_ews_throttle_burst_pauses_uid_backfill(

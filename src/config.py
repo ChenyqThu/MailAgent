@@ -233,6 +233,19 @@ class Config(BaseSettings):
     alert_levels: str = Field(default="critical,error,warning", env="ALERT_LEVELS", description="告警级别（逗号分隔）")
     alert_cooldown: int = Field(default=300, env="ALERT_COOLDOWN", description="同类告警冷却时间(秒)")
     alert_dead_letter_threshold: int = Field(default=5, env="ALERT_DEAD_LETTER_THRESHOLD", description="dead_letter 累积告警阈值")
+    # task 07-14: 状态型告警 episode 化。🔴 字段名 ≠ env 键 → 必须 validation_alias
+    # (pydantic v2 忽略 Field(env=)，见本类顶 model_config 注释)。
+    alert_episode_enabled: bool = Field(
+        default=True, validation_alias="MAILAGENT_ALERT_EPISODE",
+        description=(
+            "状态型告警（判据成立后不会自行消失：死信/不健康/雷达/outbox 积压/"
+            "davmail token age）的 episode 语义总开关。on（默认）= 进入异常态告一次 → 中间"
+            "静默 → 值翻倍才再告 → 恢复时告一次并复位，状态落 sync_state['alert.*']（跨"
+            "进程重启存活，且告警**投递成功**才落）。env 显式 false = 应急回退，判据成立"
+            "就告（仅剩 Alerter 的 ALERT_COOLDOWN 内存冷却兜底），字节级回到 episode 化"
+            "之前的行为。注：restart_frequency 不受本开关管辖 —— 它自带 24h 持久冷却。"
+        ),
+    )
     # E4 WP2: outbox 积压告警 — 行龄 ≥5min 仍 pending 的条目数超过该值触发 warning
     alert_outbox_backlog_threshold: int = Field(default=100, env="ALERT_OUTBOX_BACKLOG_THRESHOLD", description="outbox 积压告警阈值（行龄≥5min 的 pending 条数）")
 

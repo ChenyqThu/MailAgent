@@ -50,6 +50,9 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, Optional
 
 from loguru import logger
 
+from src.notify import episode
+from src.notify.episode import AlertEpisodeTracker
+
 if TYPE_CHECKING:
     from src.config import Config
     from src.mail.sync_store import SyncStore
@@ -109,8 +112,13 @@ class DavMailWatchdog:
         restart_callback: Optional[Callable[[], Awaitable[tuple[bool, str]]]] = None,
         auto_restart_cooldown: int = _AUTO_RESTART_COOLDOWN_SECS,
         auto_restart_max_per_day: int = _AUTO_RESTART_MAX_PER_DAY,
+        episodes: Optional[AlertEpisodeTracker] = None,
     ) -> None:
         self.sync_store = sync_store
+        # task 07-14: token 门槛告警的 episode 判定器 (由 service.py 注入, 带
+        # MAILAGENT_ALERT_EPISODE flag)。未注入 (老调用方 / 单测) → disabled
+        # tracker = 判据成立就告 = 老行为, 零行为变化。
+        self.episodes = episodes or AlertEpisodeTracker(sync_store, enabled=False)
         self.alerter = alerter
         self.davmail_root = Path(davmail_root)
         self.token_path = self.davmail_root / "token" / "token.dat"
@@ -626,12 +634,50 @@ class DavMailWatchdog:
             await self.alerter.alert_davmail_login_recovered()
             self._announced_login_degraded = False
 
-        # 2. Token 过期门槛
+        # 2. Token 过期门槛 — episode 化 (task 07-14): 原来每轮 (60s) 都告, 只靠
+        #    alerter 的 300s 内存冷却 → age 一旦越 80d 就每 5min 一条刷到重新
+        #    OAuth 为止 (且进程重启即复发)。
+        #
+        #    🔴 建模成**一个 episode + 一个 severity marker**, 不是两个平级 episode:
+        #      - `davmail_token`          (门槛 80d) = episode 本体, 负责「告知一次」
+        #                                  与「恢复一次」的生命周期。
+        #      - `davmail_token_critical` (门槛 87d) = 严重度升级标记, 只决定这条
+        #                                  消息用 critical 还是 warning 措辞。
+        #    两个平级 episode 会打架: age 首次 89 时两边都 active, 之后 age 降到 82
+        #    (仍在 warning 区间!) → critical episode 判 RECOVER → 误报「token 已恢复」。
+        #    现在 82 只让 severity marker 复位 (无消息, 因为情况是变好且 token
+        #    episode 仍 active 用户早已知情), 恢复通知**只在 age < 80 时**发。
+        #
+        #    投递成功才 commit (两阶段提交, 理由见 episode.py 模块 docstring)。
         if token_age_days is not None:
-            if token_age_days >= _TOKEN_CRITICAL_DAYS:
-                await self.alerter.alert_davmail_token_critical(token_age_days)
-            elif token_age_days >= _TOKEN_WARN_DAYS:
-                await self.alerter.alert_davmail_token_expiring(token_age_days)
+            crit = self.episodes.evaluate(
+                "davmail_token_critical", token_age_days, _TOKEN_CRITICAL_DAYS
+            )
+            warn = self.episodes.evaluate(
+                "davmail_token", token_age_days, _TOKEN_WARN_DAYS
+            )
+            if crit in (episode.ENTER, episode.ESCALATE):
+                if await self.alerter.alert_davmail_token_critical(token_age_days):
+                    self.episodes.commit(
+                        "davmail_token_critical", crit, token_age_days
+                    )
+                    # 这条 critical 消息**同时就是** token episode 的告知 (严重度
+                    # 更高, 不再另发 expiring) → 一并标记 episode 已告知; 否则它
+                    # 永远 inactive, 将来 age 归零就发不出恢复通知。
+                    if warn in (episode.ENTER, episode.ESCALATE):
+                        self.episodes.commit("davmail_token", warn, token_age_days)
+            elif warn in (episode.ENTER, episode.ESCALATE):
+                if await self.alerter.alert_davmail_token_expiring(token_age_days):
+                    self.episodes.commit("davmail_token", warn, token_age_days)
+
+            # 严重度回落 (≥87 → [80,87)): 不是恢复, 不发消息, 只复位 marker 让它
+            # 将来能重新升级告警。无投递 → 无需 gate。
+            if crit == episode.RECOVER:
+                self.episodes.commit("davmail_token_critical", crit, token_age_days)
+            # 真·恢复: age < 80 (重走 OAuth 后 token.dat 刷新 → age 归零) 才发。
+            if warn == episode.RECOVER:
+                if await self.alerter.alert_recovery("DavMail OAuth token"):
+                    self.episodes.commit("davmail_token", warn, token_age_days)
 
         # 3. OAuth 失败：只在出现新错误时报（同一行不重复）
         if oauth_error and oauth_error != self._prev.get("oauth_error"):
