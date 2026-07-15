@@ -32,6 +32,8 @@ class FakeImap:
         self.uidvalidity = uidvalidity
         self.uids = list(uids)
         self.messages = messages
+        # uid -> 额外 raw 头行 (如 In-Reply-To/References, 已含 \r\n 结尾), 可选
+        self.extra_headers: dict[int, str] = {}
         self.untagged_responses = {}
         self.select_calls: list[str] = []
         self.status_calls: list[str] = []
@@ -80,7 +82,8 @@ class FakeImap:
                 body = (
                     f"Message-ID: <{msgid}>\r\n"
                     f"Subject: {subj}\r\n"
-                    f"Date: Sat, 1 Jan 2026 10:00:00 +0000\r\n\r\n"
+                    f"Date: Sat, 1 Jan 2026 10:00:00 +0000\r\n"
+                    f"{self.extra_headers.get(u, '')}\r\n"
                 ).encode()
                 data.append((meta, body))
             return ("OK", data)
@@ -231,6 +234,134 @@ def test_edit_same_message_id_updates_in_place(patch_session):
     old_iid, item = b._update_draft_row_uid.call_args[0]
     assert old_iid == 11
     assert item["imap_uid"] == 102
+
+
+def test_edit_same_message_id_passes_linkage_to_update(patch_session):
+    """codex finding 2: 同 Message-ID 编辑 (换 UID) 时 linkage 必须在分类前解析并
+    随 UID 更新一并传入 — 修复前 item 在进 linkage 循环前就被摘出 to_add, 新解析
+    的头被整个丢弃 (NULL 永不愈合 / 头变化则 stale)。"""
+    fake = FakeImap(7, [102], {102: ("m1", "d1-edited")})
+    fake.extra_headers[102] = (
+        "In-Reply-To: <orig@x>\r\n"
+        "References: <head@x> <orig@x>\r\n"
+    )
+    kv = {"folder_uidvalidity:Drafts": "7", "drafts_uidnext": "102"}
+    b = _backend(fake, local={101: 11}, kv=kv)
+    b._draft_message_id_map = MagicMock(return_value={"m1": 11})
+    b.sync_store.get_by_message_id = MagicMock(
+        return_value={"internal_id": 42, "message_id": "orig@x"}
+    )
+    patch_session(b)
+    to_add, to_delete = b.reconcile_drafts()
+    assert to_add == [] and to_delete == []  # 既有 in-place 语义不变
+    b._update_draft_row_uid.assert_called_once()
+    old_iid, item = b._update_draft_row_uid.call_args[0]
+    assert old_iid == 11
+    assert item["imap_uid"] == 102
+    # 新解析的 linkage 一并传入 (修复前这些键不存在)
+    assert item["draft_in_reply_to"] == "orig@x"
+    assert item["draft_references"] == "<head@x> <orig@x>"
+    assert item["draft_source_internal_id"] == 42
+    assert item["thread_id"] == "head@x"
+
+
+def test_update_draft_row_uid_refreshes_linkage(tmp_path):
+    """codex finding 2 落库面: _update_draft_row_uid 原子刷新 thread_id + draft_*
+    三列 (真 SyncStore, 头变化 → 旧值被新值覆盖)。"""
+    store = SyncStore(str(tmp_path / "t.db"))
+    store.save_email({
+        "internal_id": 1_000_000_011, "message_id": "m1", "subject": "d1",
+        "sender": "me@x.com", "mailbox": "草稿箱", "sync_status": "synced",
+        "backend_origin": "davmail", "imap_uid": 101,
+        "thread_id": "old-head@x", "draft_in_reply_to": "old@x",
+        "draft_references": "<old-head@x> <old@x>", "draft_source_internal_id": 5,
+    })
+    b = DavMailBackend.__new__(DavMailBackend)
+    b.sync_store = store
+    b._update_draft_row_uid(1_000_000_011, {
+        "imap_uid": 102, "imap_uidvalidity": 7, "subject": "d1-edited",
+        "thread_id": "head@x", "draft_in_reply_to": "orig@x",
+        "draft_references": "<head@x> <orig@x>", "draft_source_internal_id": 42,
+    })
+    row = store.get(1_000_000_011)
+    assert row["imap_uid"] == 102
+    assert row["sync_status"] == "pending"          # 既有语义: 重 fetch 正文
+    assert row["thread_id"] == "head@x"             # 头变化 → 刷新, 不留 stale
+    assert row["draft_in_reply_to"] == "orig@x"
+    assert row["draft_references"] == "<head@x> <orig@x>"
+    assert row["draft_source_internal_id"] == 42
+
+
+def test_update_draft_row_uid_clears_stale_linkage(tmp_path):
+    """codex finding 2 显式清 NULL: 编辑后的新头没有 threading (item 缺 draft_* 键)
+    → 三列 + thread_id 清空, 不留 stale linkage。"""
+    store = SyncStore(str(tmp_path / "t.db"))
+    store.save_email({
+        "internal_id": 1_000_000_012, "message_id": "m2", "subject": "d2",
+        "sender": "me@x.com", "mailbox": "草稿箱", "sync_status": "synced",
+        "backend_origin": "davmail", "imap_uid": 103,
+        "thread_id": "head@x", "draft_in_reply_to": "orig@x",
+        "draft_references": "<head@x> <orig@x>", "draft_source_internal_id": 42,
+    })
+    b = DavMailBackend.__new__(DavMailBackend)
+    b.sync_store = store
+    b._update_draft_row_uid(1_000_000_012, {
+        "imap_uid": 104, "subject": "d2-standalone", "thread_id": None,
+    })
+    row = store.get(1_000_000_012)
+    assert row["thread_id"] is None
+    assert row["draft_in_reply_to"] is None
+    assert row["draft_references"] is None
+    assert row["draft_source_internal_id"] is None
+
+
+def test_reconcile_persists_draft_linkage(patch_session):
+    """D1 Bug A: to_add 带 draft_in_reply_to/draft_references (解析自 raw 头) +
+    据 in_reply_to 反查原行回填 draft_source_internal_id。"""
+    fake = FakeImap(7, [105], {105: ("m5", "d5")})
+    fake.extra_headers[105] = (
+        "In-Reply-To: <orig@x>\r\n"
+        "References: <head@x> <orig@x>\r\n"
+    )
+    kv = {"folder_uidvalidity:Drafts": "7", "drafts_uidnext": "105"}
+    b = _backend(fake, local={}, kv=kv)
+    b.sync_store.get_by_message_id = MagicMock(
+        return_value={"internal_id": 42, "message_id": "orig@x"}
+    )
+    patch_session(b)
+    to_add, _ = b.reconcile_drafts()
+    assert len(to_add) == 1
+    item = to_add[0]
+    assert item["draft_in_reply_to"] == "orig@x"
+    assert item["draft_references"] == "<head@x> <orig@x>"
+    assert item["draft_source_internal_id"] == 42
+    b.sync_store.get_by_message_id.assert_called_once_with("orig@x")
+
+
+def test_reconcile_linkage_lookup_miss_leaves_source_none(patch_session):
+    """反查不到原行 (已删/外部线程) → draft_source_internal_id 留空, 其余照写。
+    默认 MagicMock sync_store 返回非 dict → helper 类型校验兜底 None。"""
+    fake = FakeImap(7, [106], {106: ("m6", "d6")})
+    fake.extra_headers[106] = "In-Reply-To: <gone@x>\r\n"
+    kv = {"folder_uidvalidity:Drafts": "7", "drafts_uidnext": "106"}
+    b = _backend(fake, local={}, kv=kv)
+    patch_session(b)
+    to_add, _ = b.reconcile_drafts()
+    item = to_add[0]
+    assert item["draft_in_reply_to"] == "gone@x"
+    assert item["draft_references"] is None  # 无 References 头
+    assert item["draft_source_internal_id"] is None
+
+
+def test_reconcile_no_threading_headers_no_linkage(patch_session):
+    """非回复草稿 (无 In-Reply-To) → 不加 draft_* 键 (行为同修复前)。"""
+    fake = FakeImap(7, [107], {107: ("m7", "d7")})
+    kv = {"folder_uidvalidity:Drafts": "7", "drafts_uidnext": "107"}
+    b = _backend(fake, local={}, kv=kv)
+    patch_session(b)
+    to_add, _ = b.reconcile_drafts()
+    assert "draft_in_reply_to" not in to_add[0]
+    assert "draft_source_internal_id" not in to_add[0]
 
 
 def test_uidvalidity_change_full_rebuild(patch_session):
@@ -461,6 +592,43 @@ def test_watcher_reconcile_adds_and_deletes(tmp_path):
     w.email_repo.delete_email_full.assert_called_once_with(999)
 
 
+def test_watcher_passes_draft_linkage_through(tmp_path):
+    """D1: reconcile to_add 的 draft_* 键经 watcher payload 透传落库。"""
+    w = _watcher(tmp_path)
+    # 原邮件行 (被回复的那封)
+    w.sync_store.save_email({
+        "internal_id": 42, "message_id": "orig@x", "subject": "orig",
+        "sender": "a@x", "mailbox": "收件箱", "sync_status": "synced",
+    })
+    to_add = [{
+        "internal_id": 1_000_000_002,
+        "message_id": "<m6>",
+        "subject": "re: orig",
+        "sender": "me@x.com",
+        "date_received": "2026-01-01T10:00:00+00:00",
+        "mailbox": "草稿箱",
+        "is_read": True,
+        "thread_id": "head@x",
+        "backend_origin": "davmail",
+        "imap_uid": 106,
+        "draft_in_reply_to": "orig@x",
+        "draft_references": "<head@x> <orig@x>",
+        "draft_source_internal_id": 42,
+    }]
+
+    class _Backend:
+        def reconcile_drafts(self):
+            return to_add, []
+
+    w.backend = _Backend()
+    asyncio.run(w._reconcile_drafts())
+    row = w.sync_store.get(1_000_000_002)
+    assert row["draft_in_reply_to"] == "orig@x"
+    assert row["draft_references"] == "<head@x> <orig@x>"
+    assert row["draft_source_internal_id"] == 42
+    assert row["thread_id"] == "head@x"
+
+
 def test_watcher_skips_delete_of_promoted_row(tmp_path):
     """Fix B 纵深防御: to_delete 里的行若已被 Draft→Sent 提升为发件箱 → 不删。
 
@@ -674,6 +842,70 @@ def test_mirror_draft_locally_saves_row(tmp_path):
     assert row["imap_uid"] == 42
     assert row["message_id"] == "mid-1"
     assert row["sender"] == "me@x.com"
+
+
+def test_mirror_draft_locally_writes_linkage_and_thread_id(tmp_path):
+    """D1 Bug A: reply 草稿即时落库带 draft_* linkage; thread_id 从 References 首
+    元素派生 (= 原邮件 thread_id) 不再硬编码 None。"""
+    from src.mail.backend.types import DraftAppendResult, DraftRequest
+
+    svc = _mirror_service(tmp_path)
+    draft = DraftRequest(
+        mode="reply-all", internal_id_for_threading=42,
+        to=["a@x.com"], subject="Re: hi",
+        in_reply_to="<orig@x>", references="<head@x> <orig@x>",
+    )
+    result = DraftAppendResult(
+        success=True, drafts_folder="Drafts", appended_uid=43,
+        message_id="draft-mid", appended_uidvalidity=7,
+    )
+    svc._mirror_draft_locally(draft, result)
+    rows = svc._ctx.sync_store.get_pending_emails(limit=10)
+    row = svc._ctx.sync_store.get(rows[0]["internal_id"])
+    assert row["draft_in_reply_to"] == "orig@x"
+    assert row["draft_references"] == "<head@x> <orig@x>"
+    assert row["draft_source_internal_id"] == 42
+    assert row["thread_id"] == "head@x"
+
+
+def test_mirror_draft_locally_thread_root_reply(tmp_path):
+    """回复线程根 (References 只有原邮件自己) → thread_id = 原邮件 message_id。"""
+    from src.mail.backend.types import DraftAppendResult, DraftRequest
+
+    svc = _mirror_service(tmp_path)
+    draft = DraftRequest(
+        mode="reply", internal_id_for_threading=7,
+        to=["a@x.com"], subject="Re: root",
+        in_reply_to="<root@x>", references="<root@x>",
+    )
+    result = DraftAppendResult(
+        success=True, drafts_folder="Drafts", appended_uid=44,
+        message_id="draft-mid-2", appended_uidvalidity=7,
+    )
+    svc._mirror_draft_locally(draft, result)
+    rows = svc._ctx.sync_store.get_pending_emails(limit=10)
+    row = svc._ctx.sync_store.get(rows[0]["internal_id"])
+    assert row["thread_id"] == "root@x"
+    assert row["draft_in_reply_to"] == "root@x"
+
+
+def test_mirror_draft_locally_new_mode_no_linkage(tmp_path):
+    """mode='new' 无 threading 头 → linkage 列 NULL + thread_id 维持 None (现状)。"""
+    from src.mail.backend.types import DraftAppendResult, DraftRequest
+
+    svc = _mirror_service(tmp_path)
+    draft = DraftRequest(mode="new", to=["a@x.com"], subject="hi")
+    result = DraftAppendResult(
+        success=True, drafts_folder="Drafts", appended_uid=45,
+        message_id="draft-mid-3", appended_uidvalidity=7,
+    )
+    svc._mirror_draft_locally(draft, result)
+    rows = svc._ctx.sync_store.get_pending_emails(limit=10)
+    row = svc._ctx.sync_store.get(rows[0]["internal_id"])
+    assert row["thread_id"] is None
+    assert row["draft_in_reply_to"] is None
+    assert row["draft_references"] is None
+    assert row["draft_source_internal_id"] is None
 
 
 def test_mirror_draft_skips_without_uid(tmp_path):

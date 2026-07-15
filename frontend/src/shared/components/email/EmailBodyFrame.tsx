@@ -35,6 +35,10 @@ interface Props {
    *  in-place to insert a translated `<div>` after each matched block. Switch
    *  to null to clear all injected translations and show the original. */
   translations?: TranslationSegment[] | null
+  /** 直接渲染这段 HTML (跳过按 internalId 拉正文的 query)。compose draft-edit 的
+   *  引用区用: marker 拆分后编辑器已有回复段, 引用区只渲染 quote 段, 按 id 全量
+   *  重拉会视觉重复。仍走同一 sanitize + cid 重写 + 暗色适配管线。 */
+  htmlOverride?: string | null
 }
 
 // 消毒配置已抽到 @shared/lib/emailSanitize (EMAIL_PURIFY_OPTS) —— 阅读区与 compose
@@ -228,8 +232,10 @@ const BODY_FONT_STACK: Record<BodyFont, string> = {
 export function EmailBodyFrame({
   internalId,
   attachments,
-  translations
+  translations,
+  htmlOverride
 }: Props): React.ReactElement {
+  const hasOverride = typeof htmlOverride === 'string' && htmlOverride.length > 0
   const mailApi = useMailApi()
   const { t } = useTranslation()
   const [expandedInternalId, setExpandedInternalId] = useState<number | null>(null)
@@ -262,6 +268,8 @@ export function EmailBodyFrame({
       if (content.length === 0) return htmlBody ?? markdownBody
       return { ...markdownBody, format: 'html' as const, content }
     },
+    // htmlOverride 直供内容 → 不拉正文 (compose draft-edit 引用区)。
+    enabled: !hasOverride,
     staleTime: Infinity
   })
   const fullBodyQ = useQuery({
@@ -282,7 +290,7 @@ export function EmailBodyFrame({
       if (content.length === 0) return htmlBody ?? markdownBody
       return { ...markdownBody, format: 'html' as const, content }
     },
-    enabled: showFullBody,
+    enabled: showFullBody && !hasOverride,
     staleTime: Infinity
   })
   const bodyQ = showFullBody && fullBodyQ.data ? fullBodyQ : previewBodyQ
@@ -341,7 +349,7 @@ export function EmailBodyFrame({
   }, [imageCandidates, dataUrlQueries])
 
   const srcDoc = useMemo(() => {
-    const html = bodyQ.data?.content
+    const html = hasOverride ? htmlOverride : bodyQ.data?.content
     if (typeof html !== 'string' || html.length === 0) return null
     let sanitized = DOMPurify.sanitize(html, EMAIL_PURIFY_OPTS)
     // Sprint 13 — single-pass rewrite of EVERY `cid:...` in the body so
@@ -426,6 +434,8 @@ export function EmailBodyFrame({
 <body>${sanitized}</body>
 </html>`
   }, [
+    hasOverride,
+    htmlOverride,
     bodyQ.data,
     byCid,
     byBaseName,

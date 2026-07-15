@@ -25,7 +25,8 @@ vi.mock('@shared/hooks/useMailApi', () => ({
     email: {
       send: mockSend,
       uploadComposeAttachment: mockUpload,
-      // forward 权威列表补齐: 发送时经 ensureQueryData(['email', id]) 补拉原邮件附件。
+      // forward 权威列表 (codex F1): 打开即经 ensureQueryData(['email', id]) 补拉
+      // 原邮件附件 hydrate 成可移除 chips。
       draftPlan: mockDraftPlan,
       get: mockEmailGet
     },
@@ -178,8 +179,8 @@ describe('ComposePanel — D6 附件面 (mode=new)', () => {
   })
 })
 
-describe('ComposePanel — forward 附件权威列表 (契约缝修复)', () => {
-  // forward 预填走 draftPlan → 等主题落地表示表单就绪。
+describe('ComposePanel — forward 附件权威列表 (codex F1)', () => {
+  // forward 预填走 draftPlan → 等主题落地表示表单就绪; 打开即 hydrate 原附件 chips。
   async function renderForwardAndWait(): Promise<void> {
     renderWithClient(<ComposePanelInner internalId={42} mode="forward" onClose={() => {}} />)
     await waitFor(() =>
@@ -187,19 +188,64 @@ describe('ComposePanel — forward 附件权威列表 (契约缝修复)', () => 
     )
   }
 
+  async function waitForHydrated(): Promise<void> {
+    await waitFor(() => expect(screen.getByText('orig1.pdf')).toBeTruthy())
+  }
+
   async function confirmSend(): Promise<void> {
     fireEvent.click(screen.getByRole('button', { name: /^发送$/ }))
     fireEvent.click(screen.getByRole('button', { name: /确认发送/ }))
   }
 
-  test('① forward + 新增附件 → payload 前置原邮件非 inline 附件 (含 derived) + staged', async () => {
+  test('① 打开即 hydrate: 原邮件非 inline 附件 (含 derived) 成可移除 chips', async () => {
     await renderForwardAndWait()
+    await waitForHydrated()
+    // 101 常规 + 103 derived (只滤 is_inline, 与服务端 _collect_forward_attachments
+    // 同口径), inline 102 排除; 打开阶段即补拉一次 detail。
+    expect(screen.getByText('orig2.csv')).toBeTruthy()
+    expect(screen.queryByText('inline.png')).toBeNull()
+    expect(mockEmailGet).toHaveBeenCalledTimes(1)
+    expect(screen.getByLabelText('移除 orig1.pdf')).toBeTruthy()
+    expect(screen.getByLabelText('移除 orig2.csv')).toBeTruthy()
+  })
+
+  test('② 无操作发送 → 恒发显式全量列表 (不再省略键交给服务端 auto-collect)', async () => {
+    await renderForwardAndWait()
+    await waitForHydrated()
+    await confirmSend()
+    await waitFor(() => expect(mockSend).toHaveBeenCalledTimes(1))
+    expect(mockSend.mock.calls[0][0].attachments).toEqual([
+      { attachment_id: 101 },
+      { attachment_id: 103 }
+    ])
+  })
+
+  test('③ 移除单个原附件 → 权威列表不含它', async () => {
+    await renderForwardAndWait()
+    await waitForHydrated()
+    fireEvent.click(screen.getByLabelText('移除 orig1.pdf'))
+    await confirmSend()
+    await waitFor(() => expect(mockSend).toHaveBeenCalledTimes(1))
+    expect(mockSend.mock.calls[0][0].attachments).toEqual([{ attachment_id: 103 }])
+  })
+
+  test('④ 全移除后发送 → 显式空数组 [] (旧实现省略键 → auto-collect 静默恢复全部)', async () => {
+    await renderForwardAndWait()
+    await waitForHydrated()
+    fireEvent.click(screen.getByLabelText('移除 orig1.pdf'))
+    fireEvent.click(screen.getByLabelText('移除 orig2.csv'))
+    await confirmSend()
+    await waitFor(() => expect(mockSend).toHaveBeenCalledTimes(1))
+    expect(mockSend.mock.calls[0][0].attachments).toEqual([])
+  })
+
+  test('⑤ 新增 staged → 原附件前置 + staged 追加 (权威全量列表)', async () => {
+    await renderForwardAndWait()
+    await waitForHydrated()
     pickFiles(makeFile('extra.pdf', [7]))
     await waitFor(() => expect(screen.getByText('extra.pdf')).toBeTruthy())
     await confirmSend()
     await waitFor(() => expect(mockSend).toHaveBeenCalledTimes(1))
-    // 101 常规 + 103 derived (只滤 is_inline, 与服务端 _collect_forward_attachments 同口径),
-    // inline 102 排除; 用户新上传 staged st-1 追加在后。
     expect(mockSend.mock.calls[0][0].attachments).toEqual([
       { attachment_id: 101 },
       { attachment_id: 103 },
@@ -207,32 +253,22 @@ describe('ComposePanel — forward 附件权威列表 (契约缝修复)', () => 
     ])
   })
 
-  test('② forward 无新增附件 → 不带 attachments 键 (服务端自动收集), 不补拉', async () => {
+  test('⑥ hydrate 失败 → 错误条 + 发送硬阻断; 重试成功后恢复', async () => {
+    mockEmailGet.mockRejectedValueOnce(new Error('network down'))
     await renderForwardAndWait()
-    await confirmSend()
-    await waitFor(() => expect(mockSend).toHaveBeenCalledTimes(1))
-    expect(mockSend.mock.calls[0][0].attachments).toBeUndefined()
-    expect(mockEmailGet).not.toHaveBeenCalled()
-  })
-
-  test('③ 原邮件 detail 未加载 (引用块未展开) → 发送时补拉一次', async () => {
-    await renderForwardAndWait()
-    pickFiles(makeFile('extra.pdf', [7]))
-    await waitFor(() => expect(screen.getByText('extra.pdf')).toBeTruthy())
-    // 引用块从未展开 → 预填阶段不拉 detail。
-    expect(mockEmailGet).not.toHaveBeenCalled()
-    await confirmSend()
-    await waitFor(() => expect(mockSend).toHaveBeenCalledTimes(1))
-    expect(mockEmailGet).toHaveBeenCalledTimes(1)
-  })
-
-  test('④ detail 补拉失败 → 阻断发送 + 报错, 绝不静默丢原附件', async () => {
-    mockEmailGet.mockRejectedValue(new Error('network down'))
-    await renderForwardAndWait()
-    pickFiles(makeFile('extra.pdf', [7]))
-    await waitFor(() => expect(screen.getByText('extra.pdf')).toBeTruthy())
-    await confirmSend()
-    await waitFor(() => expect(mockToastError).toHaveBeenCalled())
+    await waitFor(() =>
+      expect(screen.getByText('原邮件附件加载失败，重试成功前无法发送')).toBeTruthy()
+    )
+    // 发送/保存草稿按钮均禁用 (硬阻断, 绝不静默丢原附件)。
+    const sendBtn = screen.getByRole('button', { name: /^发送$/ }) as HTMLButtonElement
+    expect(sendBtn.disabled).toBe(true)
+    expect((screen.getByRole('button', { name: /保存草稿/ }) as HTMLButtonElement).disabled).toBe(
+      true
+    )
     expect(mockSend).not.toHaveBeenCalled()
+    // 重试 → hydrate 成功 → chips 出现, 发送恢复可用。
+    fireEvent.click(screen.getByRole('button', { name: /重试/ }))
+    await waitForHydrated()
+    await waitFor(() => expect(sendBtn.disabled).toBe(false))
   })
 })

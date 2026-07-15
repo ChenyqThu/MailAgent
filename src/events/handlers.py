@@ -720,6 +720,24 @@ class EventHandlers:
                 from src.converter.markdown_to_html import md_to_html
                 html = md_to_html(reply_suggestion)
 
+            # 3b. 引用块 (D2 Bug B): 与路径 C (_prepare_draft split_quote=False) 同构 —
+            # AI 建议之下拼原邮件引用 (带 data-ma-quote marker), 统一「AI 草稿打开有
+            # 引用可看」体验。原文从 SQLite SSoT (email_repo) 取; repo 缺席 / 正文
+            # 未双写 → 跳过 (维持原行为), 失败不影响草稿创建。
+            if mode in ("reply", "reply-all") and record and self.email_repo is not None:
+                try:
+                    from src.services.mail_write import _build_reply_quote
+                    orig_md = self.email_repo.get_body_markdown(internal_id) or ""
+                    orig_html = self.email_repo.get_body_html(internal_id)
+                    if orig_md or orig_html:
+                        q_text, q_html = _build_reply_quote(record, orig_md, orig_html)
+                        plain_text = (
+                            f"{plain_text}\n\n{q_text}" if plain_text.strip() else q_text
+                        )
+                        html = f"{html}{q_html}" if html else q_html
+                except Exception as e:
+                    logger.warning(f"create_draft (davmail): quote build skipped: {e}")
+
             # In-Reply-To: 原邮件 Message-ID 加 <> 包裹
             in_reply_to: Optional[str] = None
             references: Optional[str] = None

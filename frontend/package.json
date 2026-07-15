@@ -35,8 +35,13 @@
   "dependencies": {
     "@electron-toolkit/preload": "^3.0.2",
     "@electron-toolkit/utils": "^4.0.0",
+    "@tiptap/extension-highlight": "^3.23.6",
     "@tiptap/extension-image": "^3.23.6",
+    "@tiptap/extension-mention": "^3.23.6",
     "@tiptap/extension-text-style": "^3.23.6",
+    "@tiptap/extensions": "^3.23.6",
+    "@tiptap/pm": "^3.23.6",
+    "@tiptap/suggestion": "^3.23.6",
     "better-sqlite3": "^12.10.0",
     "electron-updater": "^6.8.3",
     "execa": "^9.6.1",

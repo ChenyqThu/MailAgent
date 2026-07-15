@@ -98,8 +98,10 @@ class AppleScriptBackend(IMailBackend):
     # =========================================================================
 
     def fetch_email_content_by_id(
-        self, internal_id: int, mailbox: Optional[str] = None
+        self, internal_id: int, mailbox: Optional[str] = None, *, update_uid: bool = True
     ) -> Optional[dict]:
+        # update_uid: applescript 路径无 imap_uid/uidvalidity 元数据回写, 参数仅为满足
+        # IMailBackend 契约 (davmail dry-run 懒自愈用), 此处忽略。
         return self.arm.fetch_email_content_by_id(internal_id, mailbox=mailbox)
 
     def fetch_email_by_message_id(

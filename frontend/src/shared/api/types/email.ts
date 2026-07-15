@@ -235,6 +235,11 @@ export interface ComposeDraftOpts {
   /** D1 — 附件引用列表 (staging 上传 / 库内已有)。缺省 = 无附件 (forward 的原邮件附件
    *  仍由服务端自动收集, 不在此列表重复引用, 防双份)。 */
   attachments?: ComposeAttachmentRef[]
+  /** D1 Bug A — 草稿行自己的 internal_id, 仅 mode='new' (draft-edit 保存/发送) 有意义:
+   *  服务端读该行 draft_in_reply_to/draft_references/thread_id 恢复回复线程头,
+   *  linkage 空则回退现状零派生。HTTP body key 逐字 `sourceDraftId` (serve-api
+   *  _compose_request_from_body 直读; 非 int 静默置 None)。 */
+  sourceDraftId?: number
 }
 
 /** Send 与 draft 同形 (内部 IPC handler 给 send 追加 --yes)。 */

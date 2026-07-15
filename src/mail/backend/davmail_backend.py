@@ -385,7 +385,7 @@ class DavMailBackend(IMailBackend):
     # =========================================================================
 
     def fetch_email_by_id(
-        self, internal_id: int, *, mailbox: Optional[str] = None
+        self, internal_id: int, *, mailbox: Optional[str] = None, update_uid: bool = True
     ) -> Optional[EmailContent]:
         """查 SyncStore 拿 (uidvalidity, uid) 或 message_id, 然后 IMAP UID FETCH BODY[].
 
@@ -394,6 +394,9 @@ class DavMailBackend(IMailBackend):
         - MEDIUM: imap_uid > 0 才走快路径, ``-1`` (backfill 标记的 permanent miss) 直接
           fallback message_id 反查
         - MEDIUM: lookup_uid_by_message_id 命中后回写 sync_store 让下次走快路径
+
+        ``update_uid=False`` (compose_plan dry-run 懒自愈): message_id fallback 命中后
+        跳过 ``_update_sync_store_uid`` 回写 — dry-run 取件解析照旧, 但不产生 SQLite 侧写。
         """
         record = self.sync_store.get(internal_id)
         if not record:
@@ -448,13 +451,16 @@ class DavMailBackend(IMailBackend):
                     imap_uid = self._lookup_uid_by_message_id(imap, message_id)
                     if not imap_uid:
                         return None
-                    # 命中后回写 sync_store 让下次走快路径 (review MEDIUM)
-                    try:
-                        self._update_sync_store_uid(internal_id, imap_uid, current_uv)
-                    except Exception as e:
-                        logger.warning(
-                            f"[davmail-backend] update_sync_store_uid failed (non-fatal): {e}"
-                        )
+                    # 命中后回写 sync_store 让下次走快路径 (review MEDIUM)。
+                    # update_uid=False (compose_plan dry-run 懒自愈) 跳过回写 — 守住
+                    # dry-run「无写」契约 (codex 批次3 finding)。
+                    if update_uid:
+                        try:
+                            self._update_sync_store_uid(internal_id, imap_uid, current_uv)
+                        except Exception as e:
+                            logger.warning(
+                                f"[davmail-backend] update_sync_store_uid failed (non-fatal): {e}"
+                            )
 
                 # FETCH BODY[]
                 t0 = time.time()
@@ -499,13 +505,15 @@ class DavMailBackend(IMailBackend):
                 if not new_uid or new_uid == imap_uid:
                     return None  # 反查也失败 / 跟原来一样 (邮件确实没了)
 
-                # 命中新 UID, 回写 sync_store, 再 fetch
-                try:
-                    self._update_sync_store_uid(internal_id, new_uid, current_uv)
-                except Exception as e:
-                    logger.warning(
-                        f"[davmail-backend] update_sync_store_uid failed (non-fatal): {e}"
-                    )
+                # 命中新 UID, 回写 sync_store, 再 fetch。update_uid=False (dry-run 懒自愈)
+                # 跳过回写, 仅本次取件解析 (codex 批次3 finding)。
+                if update_uid:
+                    try:
+                        self._update_sync_store_uid(internal_id, new_uid, current_uv)
+                    except Exception as e:
+                        logger.warning(
+                            f"[davmail-backend] update_sync_store_uid failed (non-fatal): {e}"
+                        )
                 typ, data = imap.uid(
                     "fetch", str(new_uid),
                     "(UID INTERNALDATE FLAGS RFC822.SIZE BODY.PEEK[])",
@@ -968,10 +976,15 @@ class DavMailBackend(IMailBackend):
     # =========================================================================
 
     def fetch_email_content_by_id(
-        self, internal_id: int, mailbox: Optional[str] = None
+        self, internal_id: int, mailbox: Optional[str] = None, *, update_uid: bool = True
     ) -> Optional[dict]:
-        """单封抓取 (legacy dict) — 委托内部 typed fetch_email_by_id."""
-        ec = self.fetch_email_by_id(internal_id, mailbox=mailbox)
+        """单封抓取 (legacy dict) — 委托内部 typed fetch_email_by_id.
+
+        ``update_uid=False`` (compose_plan dry-run 懒自愈): message_id fallback 命中后
+        **不回写** imap_uid/uidvalidity 元数据, 守住 dry-run「无写」契约 (codex 批次3
+        finding)。默认 True 时既有调用方 (正向 sync / retry) 逐字节不变。
+        """
+        ec = self.fetch_email_by_id(internal_id, mailbox=mailbox, update_uid=update_uid)
         return ec.to_legacy_dict() if ec else None
 
     def fetch_email_by_message_id(
@@ -1463,12 +1476,30 @@ class DavMailBackend(IMailBackend):
                 # 快照推进 (uidnext)。对账期间新 APPEND 的 race 由下 cycle STATUS
                 # 差异自愈 (messages/uidnext 再变 → 再对账)。
                 self._set_drafts_uidnext(uidnext)
+            # 草稿线程 linkage (D1 Bug A): 把 _parse_batch_headers 已解析的
+            # in_reply_to_raw/references_raw 持久化进 draft_* 列 (经 new_watcher
+            # save_email 落库), 并按 in_reply_to 反查原邮件行回填
+            # draft_source_internal_id — 覆盖 webhook _create_draft_via_imap 等
+            # 一切不走 _mirror_draft_locally 的草稿来源, 统一自愈。RFC 2047 decode
+            # 同 thread_id 口径 (干净 ASCII 是 no-op), 防 encoded-word 链存进列。
+            # ⚠️ 必须先于下方同 Message-ID 分类 (codex finding 2): 编辑草稿走
+            # _update_draft_row_uid in-place 更新不进 save_email, linkage 后解析
+            # 会被整个丢掉 (NULL 永不愈合 / 头变化则 stale)。
+            for item in to_add:
+                irt = _decode_mime_header(item.get("in_reply_to_raw")).strip().strip("<>")
+                if not irt:
+                    continue
+                item["draft_in_reply_to"] = irt
+                refs = " ".join(_decode_mime_header(item.get("references_raw")).split())
+                item["draft_references"] = refs or None
+                item["draft_source_internal_id"] = self._lookup_internal_id_by_message_id(irt)
             # 同 Message-ID 替换 (OWA/Outlook 编辑草稿 = 新 UID 同 Message-ID):
             # 不能走 to_add+to_delete — save_email 的 cross-backend merge guard
             # 会把 to_add 合并进旧行不建新行, 随后 to_delete 删旧行 → 刚 merge 的
             # 行被删 (草稿闪没 + internal_id 漂移); 旧行在 grace 内则保留 synced
             # + 旧正文永久陈旧 (codex review HIGH)。拆成 to_update: 直接更新旧行
-            # UID/UIDVALIDITY + 置 pending 让 watcher 重 fetch 新正文。
+            # UID/UIDVALIDITY + 置 pending 让 watcher 重 fetch 新正文; linkage
+            # (thread_id + draft_* 三列, 上方已解析进 item) 一并原子刷新。
             if to_add:
                 mid_to_iid = self._draft_message_id_map(label)
                 if mid_to_iid:
@@ -1541,8 +1572,31 @@ class DavMailBackend(IMailBackend):
             logger.warning(f"[davmail-backend] _draft_message_id_map failed: {e}")
             return {}
 
+    def _lookup_internal_id_by_message_id(self, message_id: str) -> Optional[int]:
+        """按 message_id 反查 email_metadata 原行 internal_id (草稿 linkage 回填用)。
+
+        查不到 / 返回形状异常 (测试里 sync_store 常是 MagicMock) → None, 列留空。
+        """
+        try:
+            record = self.sync_store.get_by_message_id(message_id)
+            if isinstance(record, dict):
+                iid = record.get("internal_id")
+                if isinstance(iid, int) and not isinstance(iid, bool):
+                    return iid
+        except Exception as e:
+            logger.debug(
+                f"[davmail-backend] linkage source lookup failed mid={message_id[:40]!r}: {e}"
+            )
+        return None
+
     def _update_draft_row_uid(self, internal_id: int, item: dict) -> None:
-        """草稿编辑 in-place 更新: 新 UID/UIDVALIDITY/subject + 置 pending 重 fetch 正文。"""
+        """草稿编辑 in-place 更新: 新 UID/UIDVALIDITY/subject + 置 pending 重 fetch 正文。
+
+        codex finding 2: thread_id + draft_* 三列随 UID 一并原子刷新 —— 值取自新
+        MIME 头 (reconcile 已解析进 item; 缺失键 = 新头没有该值 → **显式清 NULL**,
+        不留 stale)。语义 = 与"删旧行 + save_email 新行"等价的 linkage 结果, 只是
+        保住 internal_id 不漂移。
+        """
         try:
             conn = sqlite3.connect(str(self.sync_store.db_path), timeout=10.0)
             try:
@@ -1550,6 +1604,8 @@ class DavMailBackend(IMailBackend):
                     "UPDATE email_metadata SET imap_uid = ?, "
                     "imap_uidvalidity = COALESCE(?, imap_uidvalidity), "
                     "subject = COALESCE(NULLIF(?, ''), subject), "
+                    "thread_id = ?, draft_in_reply_to = ?, "
+                    "draft_references = ?, draft_source_internal_id = ?, "
                     "sync_status = 'pending', sync_error = NULL, "
                     "next_retry_at = NULL, updated_at = ? "
                     "WHERE internal_id = ?",
@@ -1557,6 +1613,10 @@ class DavMailBackend(IMailBackend):
                         item.get("imap_uid"),
                         item.get("imap_uidvalidity"),
                         item.get("subject") or "",
+                        item.get("thread_id"),
+                        item.get("draft_in_reply_to"),
+                        item.get("draft_references"),
+                        item.get("draft_source_internal_id"),
                         time.time(),
                         internal_id,
                     ),
@@ -1829,8 +1889,9 @@ class DavMailBackend(IMailBackend):
                 "thread_id": thread_id,
                 "imap_uid": uid,
                 "imap_uidvalidity": uidvalidity if uidvalidity is not None else self.inbox_uidvalidity,
-                # references_raw / in_reply_to_raw: 当前无消费者 (死字段), 保留原
-                # raw 语义不变; thread_id 已在上方走 _thread_id_from_headers 解码.
+                # references_raw / in_reply_to_raw: reconcile_drafts 消费 (草稿
+                # linkage 持久化, D1 Bug A); 此处保留原 raw 语义 (decode 在消费点);
+                # thread_id 已在上方走 _thread_id_from_headers 解码.
                 "references_raw": (msg.get("References") or "").strip() or None,
                 "in_reply_to_raw": (msg.get("In-Reply-To") or "").strip().strip("<>") or None,
             })

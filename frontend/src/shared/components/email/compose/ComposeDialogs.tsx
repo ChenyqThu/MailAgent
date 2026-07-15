@@ -8,7 +8,7 @@
 
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Send, Trash2 } from 'lucide-react'
+import { Loader2, Save, Send, Trash2 } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
 import {
@@ -66,7 +66,7 @@ export function SendConfirmDialog({
           <div className="flex items-start gap-4">
             <div
               className={cn(
-                'w-[42px] h-[42px] rounded-[11px] grid place-items-center shrink-0',
+                'w-[42px] h-[42px] rounded-[var(--r-card)] grid place-items-center shrink-0',
                 'text-coral bg-coral/[0.12] border border-coral/30'
               )}
             >
@@ -149,7 +149,7 @@ export function DeleteDraftDialog({
           <div className="flex items-start gap-4">
             <div
               className={cn(
-                'w-[42px] h-[42px] rounded-[11px] grid place-items-center shrink-0',
+                'w-[42px] h-[42px] rounded-[var(--r-card)] grid place-items-center shrink-0',
                 'text-fail bg-fail/10 border border-fail/30'
               )}
             >
@@ -175,6 +175,76 @@ export function DeleteDraftDialog({
           >
             <Trash2 size={13} strokeWidth={2} />
             {t('compose.deleteConfirm.confirm')}
+          </button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+interface UnsavedProps {
+  open: boolean
+  /** save-draft-then-proceed in flight — disables all three actions + spins Save. */
+  pending: boolean
+  onSave: () => void
+  onDiscard: () => void
+  onCancel: () => void
+}
+
+/** 离开确认 (Bug C / T6) — composer 有未保存更改时, 关闭 (ESC / 丢弃 / 切邮件 /
+ *  新邮件浮窗 scrim·×) 前弹此三键确认: 保存草稿 (存后继续原动作) / 丢弃 (直接继续) /
+ *  取消 (留在 composer)。与 SendConfirmDialog 同 glass-pop + --r-pop 材质。overlay/ESC
+ *  点击关闭 = 取消语义 (onOpenChange → onCancel)。 */
+export function UnsavedChangesDialog({
+  open,
+  pending,
+  onSave,
+  onDiscard,
+  onCancel
+}: UnsavedProps): React.ReactElement {
+  const { t } = useTranslation()
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && onCancel()}>
+      <DialogContent className="max-w-[460px]">
+        <DialogHeader>
+          <div className="flex items-start gap-4">
+            <div
+              className={cn(
+                'w-[42px] h-[42px] rounded-[var(--r-card)] grid place-items-center shrink-0',
+                'text-warn bg-warn/[0.12] border border-warn/30'
+              )}
+            >
+              <Save size={20} strokeWidth={1.9} />
+            </div>
+            <div className="min-w-0">
+              <DialogTitle>{t('compose.unsaved.title')}</DialogTitle>
+              <DialogDescription className="mt-1.5 leading-relaxed">
+                {t('compose.unsaved.body')}
+              </DialogDescription>
+            </div>
+          </div>
+        </DialogHeader>
+        <DialogFooter>
+          {/* 丢弃 = 危险 (bare, 但 danger 前景) 靠左; 取消居中; 保存草稿主行动靠右。 */}
+          <button
+            type="button"
+            className="gbtn gbtn-bare text-fail mr-auto"
+            onClick={onDiscard}
+            disabled={pending}
+          >
+            <Trash2 size={13} strokeWidth={2} />
+            {t('compose.unsaved.discard')}
+          </button>
+          <button type="button" className="gbtn gbtn-bare" onClick={onCancel} disabled={pending}>
+            {t('compose.unsaved.cancel')}
+          </button>
+          <button type="button" className="gbtn gbtn-primary" onClick={onSave} disabled={pending}>
+            {pending ? (
+              <Loader2 size={13} strokeWidth={2} className="animate-spin" />
+            ) : (
+              <Save size={13} strokeWidth={2} />
+            )}
+            {t('compose.unsaved.save')}
           </button>
         </DialogFooter>
       </DialogContent>

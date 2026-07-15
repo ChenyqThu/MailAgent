@@ -425,7 +425,17 @@ class SyncStore:
     #                TZID 输出与 split UNTIL 的本地日界。无历史回填: NULL 行为 = 修复前语义, 下轮
     #                全量 CalDAV sync 重新 upsert 自然补齐。
     #                回滚 (回退 v35): 列可留 (旧代码无害) 或手动 DROP; 必要时降 db_version。
-    DB_VERSION = 35  # v35: calendar_event.tzid (#10 tzid 半步)
+    # v36 (compose epic D1 草稿线程 linkage, 2026-07): email_metadata 加 3 列 (全可空,
+    #                仅 mailbox='草稿箱' 行使用): draft_source_internal_id INTEGER (原邮件行
+    #                internal_id, 反查得不到则 NULL) / draft_in_reply_to TEXT (原邮件
+    #                Message-ID, 去尖括号) / draft_references TEXT (空格分隔 msg-id 链,
+    #                含尖括号)。写入方: mail_write._mirror_draft_locally (compose 即时落库)
+    #                + davmail_backend.reconcile_drafts (对账自愈, 覆盖 webhook 等一切草稿
+    #                来源)。消费方: _prepare_draft 的 source_draft_id 复用 (从草稿发送时恢复
+    #                In-Reply-To/References/thread_id, 修 Bug A 丢线程)。无历史回填: 存量
+    #                草稿行 NULL = 修复前语义 (发送不带 threading), reconcile 只对新增行生效。
+    #                回滚 (回退 v36): 列可留 (旧代码无害) 或手动 DROP; 必要时降 db_version。
+    DB_VERSION = 36  # v36: email_metadata draft linkage 3 列 (compose Bug A)
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -566,7 +576,10 @@ class SyncStore:
                 imap_uidvalidity INTEGER,
                 imap_uid INTEGER,
                 backend_origin TEXT DEFAULT 'applescript',
-                snippet TEXT
+                snippet TEXT,
+                draft_source_internal_id INTEGER,
+                draft_in_reply_to TEXT,
+                draft_references TEXT
             )
         """)
 
@@ -1943,6 +1956,29 @@ class SyncStore:
                     cursor, "calendar_event", {"tzid"}, "v35 migration", e,
                 )
 
+        # === v36: email_metadata 草稿线程 linkage 3 列 (compose Bug A) ===
+        # 旧库补列 (新库 CREATE 已含 → PRAGMA 跳过)。无数据回填: 存量草稿行 NULL =
+        # 修复前语义 (发送不带 threading), 新草稿由 mirror/reconcile 写入。
+        if current_version < 36:
+            _draft_cols = {
+                "draft_source_internal_id": "INTEGER",
+                "draft_in_reply_to": "TEXT",
+                "draft_references": "TEXT",
+            }
+            try:
+                cursor.execute("PRAGMA table_info(email_metadata)")
+                _em_cols = {row[1] for row in cursor.fetchall()}
+                for _col, _typ in _draft_cols.items():
+                    if _col not in _em_cols:
+                        cursor.execute(
+                            f"ALTER TABLE email_metadata ADD COLUMN {_col} {_typ}"
+                        )
+                        logger.info(f"v36 migration: email_metadata +{_col}")
+            except sqlite3.OperationalError as e:
+                _migration_guard_columns(
+                    cursor, "email_metadata", set(_draft_cols), "v36 migration", e,
+                )
+
         # 更新数据库版本 —— E0-WP3: 只有**全部迁移成功**才会执行到这里。任何迁移块
         # 真失败都会 raise (见 _migration_guard_columns/_migration_guard_index),
         # 沿栈中断本函数 → 本 INSERT 与末尾 commit 都不执行, version 停在旧值 →
@@ -2641,6 +2677,54 @@ class SyncStore:
                 conn.rollback()
                 return False
 
+    def update_draft_linkage(
+        self,
+        internal_id: int,
+        *,
+        draft_in_reply_to: Optional[str],
+        draft_references: Optional[str],
+        draft_source_internal_id: Optional[int],
+        thread_id: Optional[str] = None,
+        overwrite_thread_id: bool = False,
+    ) -> bool:
+        """草稿行 linkage 懒自愈回写 (compose 优化 epic, codex finding 1)。
+
+        v36 迁移前的存量草稿行 draft_* 三列全 NULL 且 reconcile 永不回填 —— 消费端
+        (MailWriteService._heal_draft_linkage) 从 davmail 取草稿 MIME 头解析出
+        linkage 后调本方法落列。draft_* 三列按参数直写; ``thread_id`` 默认走
+        COALESCE 只填空。``overwrite_thread_id=True`` (自愈回写, codex 批次2
+        finding 6) 直写覆盖 —— healed 头派生的 root 为权威, 存量行的 RFC2047 碎片
+        等坏 thread_id 不再被 COALESCE 保留。
+
+        Returns: True=更新成功; False=SQL 错误 (调用方仅 warning, 自愈是 best-effort)。
+        """
+        thread_sql = (
+            "thread_id = ?" if overwrite_thread_id
+            else "thread_id = COALESCE(thread_id, ?)"
+        )
+        with self._connection() as conn:
+            try:
+                conn.execute(
+                    "UPDATE email_metadata SET draft_in_reply_to = ?, "
+                    "draft_references = ?, draft_source_internal_id = ?, "
+                    f"{thread_sql}, updated_at = ? "
+                    "WHERE internal_id = ?",
+                    (
+                        draft_in_reply_to,
+                        draft_references,
+                        draft_source_internal_id,
+                        thread_id,
+                        time.time(),
+                        internal_id,
+                    ),
+                )
+                conn.commit()
+                return True
+            except sqlite3.Error as e:
+                logger.error(f"Failed to update draft linkage for {internal_id}: {e}")
+                conn.rollback()
+                return False
+
     def toggle_pin(self, internal_id: int) -> Optional[bool]:
         """翻转置顶状态。
 
@@ -2937,8 +3021,10 @@ class SyncStore:
                      is_read, is_flagged, sync_status, notion_page_id,
                      notion_thread_id, sync_error, retry_count, next_retry_at,
                      imap_uidvalidity, imap_uid, backend_origin,
+                     draft_source_internal_id, draft_in_reply_to, draft_references,
                      created_at, updated_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                            ?, ?, ?,
                             ?, ?, ?,
                             COALESCE((SELECT created_at FROM email_metadata WHERE internal_id = ?), ?),
                             ?)
@@ -2964,6 +3050,9 @@ class SyncStore:
                     email.get('imap_uidvalidity'),
                     email.get('imap_uid'),
                     email.get('backend_origin', 'applescript'),
+                    email.get('draft_source_internal_id'),
+                    email.get('draft_in_reply_to'),
+                    email.get('draft_references'),
                     internal_id,
                     now,
                     now
