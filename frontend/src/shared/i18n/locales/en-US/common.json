@@ -165,6 +165,7 @@
     "attach": "Attach",
     "attachmentRemove": "Remove {name}",
     "attachmentFailed": "Upload failed",
+    "forwardAttachError": "Failed to load the original email's attachments; sending is blocked until retry succeeds",
     "attachTray": {
       "summary": "{n} attachment(s) · {size}",
       "add": "Add",

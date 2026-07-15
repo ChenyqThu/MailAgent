@@ -233,8 +233,14 @@ export function ComposePanelInner({
   // D2 Bug B — draft-edit 按 data-ma-quote marker 拆分成功: 回复段在编辑器里,
   // 引用段在下方折叠引用区 (quoteHtml), 发送时原样拼回 (marker 保留)。
   const [splitQuote, setSplitQuote] = useState(false)
-  // D6 — 附件 chips (staged 上传 + draft-edit 回填的库内已有附件)。
+  // D6 — 附件 chips (staged 上传 + draft-edit 回填 + forward hydrate 的库内已有附件)。
   const [attachList, setAttachList] = useState<ComposeAttachmentChip[]>([])
+  // codex F1 — forward 原附件 hydration 状态机: 打开即补拉原邮件非 inline 附件成
+  // 可移除 {attachment_id} chips (显式权威列表契约); pending/error 期间发送硬阻断,
+  // error 给错误条 + 重试 (置回 'pending' 重跑 effect)。非 forward 恒 'done' 不参与。
+  const [fwdAttachState, setFwdAttachState] = useState<'pending' | 'done' | 'error'>(() =>
+    mode === 'forward' ? 'pending' : 'done'
+  )
   const attachSeq = useRef(0)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   // staged 图片缩略预览的 objectURL 台账 — 单删时逐个 revoke, 卸载时兜底全量 revoke。
@@ -537,37 +543,60 @@ export function ComposePanelInner({
     void queryClient.invalidateQueries({ queryKey: qk.mailboxes() })
   }, [queryClient])
 
-  const buildComposePayload = useCallback(async () => {
+  // codex F1 — forward 打开即 hydrate: 原邮件非 inline 附件进 attachList 成可移除
+  // tray 卡片。口径对齐服务端 _collect_forward_attachments (只滤 is_inline, 不滤
+  // derived); detail 走 ensureQueryData (引用块已拉过时命中缓存)。hydrate 不标
+  // dirty (等同预填)。失败 → 'error' (错误条 + 重试), 发送前未成功一律硬阻断,
+  // 绝不静默丢原附件 (契约 D4 附件铁律)。
+  useEffect(() => {
+    if (mode !== 'forward' || fwdAttachState !== 'pending') return
+    let cancelled = false
+    void (async () => {
+      try {
+        const detail = await queryClient.ensureQueryData({
+          queryKey: qk.email.detail(internalId),
+          queryFn: () => mailApi.email.get(internalId)
+        })
+        if (cancelled) return
+        const chips: ComposeAttachmentChip[] = (detail?.attachments ?? [])
+          .filter((a) => !a.is_inline)
+          .map((a) => ({
+            localId: ++attachSeq.current,
+            filename: a.filename,
+            size: a.size_bytes ?? null,
+            status: 'done' as const,
+            attachmentId: a.id
+          }))
+        // 原附件前置 (hydrate 落地前用户已 staged 的文件保持在后)。
+        setAttachList((prev) => [...chips, ...prev])
+        setFwdAttachState('done')
+      } catch {
+        if (!cancelled) setFwdAttachState('error')
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [mode, fwdAttachState, internalId, queryClient, mailApi])
+
+  const buildComposePayload = useCallback(() => {
+    // codex F1 — forward 附件权威列表契约: 原邮件非 inline 附件在打开时已 hydrate 进
+    // attachList (可移除 chips), 此处恒发显式 attachments (含空数组 []) —— 服务端收到
+    // 显式列表即跳过 auto-collect, 用户移除任一/全部原附件的意图得以表达 (旧实现列表
+    // 为空省略键 → 服务端 auto-collect 静默恢复全部原附件)。不发键 = 服务端缺省
+    // auto-collect, 那是 CLI/ping-island 的语义; 其他模式 (reply/new/draft-edit)
+    // 空列表仍省略键, 语义不变。未 hydrate 成功 → 硬阻断 (绝不静默丢原附件)。
+    if (mode === 'forward' && fwdAttachState !== 'done') {
+      throw Object.assign(new Error(t('compose.toast.forwardAttachLoadFail')), {
+        code: 'E_FORWARD_ATTACH'
+      })
+    }
     // D1 refs: staged → {stage_id}, 库内已有 → {attachment_id} (snake_case 契约字面)。
     const refs: ComposeAttachmentRef[] = attachList
       .filter((a) => a.status === 'done')
       .map((a) =>
         a.stageId != null ? { stage_id: a.stageId } : { attachment_id: a.attachmentId as number }
       )
-    // forward 权威列表补齐: 服务端 (mail_write.py:1506) 一旦收到显式 attachments 列表就
-    // 跳过原邮件附件自动收集 —— 用户新增附件 (refs 非空) 时若只带 staged refs, 原转发
-    // 附件会静默丢失。故把原邮件非 inline 附件 (口径对齐服务端 _collect_forward_attachments:
-    // 只滤 is_inline, 不滤 derived) 以 {attachment_id} 前置并入, 组成权威全量列表。原邮件
-    // detail 若尚未加载 (引用块未展开) 则补拉; 补拉失败硬报错阻断, 绝不静默丢原附件。
-    // forward 无 staged refs → 留空 → 服务端仍自动收集 (现状不变)。
-    let attachments = refs
-    if (mode === 'forward' && refs.length > 0) {
-      let detail
-      try {
-        detail = await queryClient.ensureQueryData({
-          queryKey: qk.email.detail(internalId),
-          queryFn: () => mailApi.email.get(internalId)
-        })
-      } catch (err) {
-        throw Object.assign(new Error(t('compose.toast.forwardAttachLoadFail')), {
-          code: asWriteError(err).code ?? 'E_FORWARD_ATTACH'
-        })
-      }
-      const original: ComposeAttachmentRef[] = (detail?.attachments ?? [])
-        .filter((a) => !a.is_inline)
-        .map((a) => ({ attachment_id: a.id }))
-      attachments = [...original, ...refs]
-    }
     return {
       internalId,
       mode: wireMode,
@@ -579,7 +608,7 @@ export function ComposePanelInner({
       forceSubject: true,
       bodyHtml: getSanitizedHtml(),
       importance,
-      ...(attachments.length > 0 ? { attachments } : {}),
+      ...(mode === 'forward' || refs.length > 0 ? { attachments: refs } : {}),
       // D1 Bug A — draft-edit 保存/发送带草稿行自己的 id: 服务端读该行 draft_in_reply_to/
       // draft_references/thread_id 恢复回复线程, linkage 空回退零派生 (契约 sourceDraftId)。
       ...(isDraftEdit ? { sourceDraftId: internalId } : {})
@@ -596,8 +625,7 @@ export function ComposePanelInner({
     getSanitizedHtml,
     importance,
     attachList,
-    queryClient,
-    mailApi,
+    fwdAttachState,
     t
   ])
 
@@ -737,7 +765,11 @@ export function ComposePanelInner({
   // forward / draft-edit / 写新邮件 必须有收件人; reply/reply-all 可空 (后端推导)。
   // 附件上传中也不许发/存 (stage_id 未回执, 发出去就丢附件)。
   const requiresRecipient = mode === 'forward' || isDraftEdit || isNew
-  const sendDisabled = busy || uploadsPending || (requiresRecipient && to.length === 0)
+  // codex F1 — forward 原附件未 hydrate 成功 (pending/error) 期间发/存硬阻断,
+  // 权威列表不完整就发会静默丢原附件。
+  const fwdAttachBlocked = mode === 'forward' && fwdAttachState !== 'done'
+  const sendDisabled =
+    busy || uploadsPending || fwdAttachBlocked || (requiresRecipient && to.length === 0)
 
   const handleSendClick = useCallback(() => {
     if (requiresRecipient && to.length === 0) {
@@ -844,7 +876,7 @@ export function ComposePanelInner({
           <button
             type="button"
             onClick={() => saveMut.mutate(undefined, { onSuccess: () => onClose() })}
-            disabled={busy || uploadsPending}
+            disabled={busy || uploadsPending || fwdAttachBlocked}
             className="gbtn"
             style={{ height: '34px' }}
           >
@@ -1106,9 +1138,25 @@ export function ComposePanelInner({
         </div>
       )}
 
-      {/* D6/T3 — 附件区: 缩略图卡片 tray (staged 上传 / draft-edit 已有附件),
-          空态 dropzone (点击 = 打开文件选择; 拖拽仍走整窗 useAttachmentDrop 等价逻辑,
-          不重复拦截同一次 drop)。 */}
+      {/* codex F1 — forward 原附件 hydrate 失败: 错误条 + 重试; 未成功前发送硬阻断
+          (权威列表不完整就发会静默丢原附件)。样式对齐上方 planQ 失败 banner。 */}
+      {mode === 'forward' && fwdAttachState === 'error' && (
+        <div className="border-t border-ink-border/60 shrink-0 px-4 py-2.5 flex items-center gap-3 bg-fail/10">
+          <div className="flex-1 text-aux text-fail">{t('compose.forwardAttachError')}</div>
+          <button
+            type="button"
+            onClick={() => setFwdAttachState('pending')}
+            className="shrink-0 px-2.5 py-1.5 rounded text-aux text-fail hover:bg-fail/15 transition-colors duration-fast inline-flex items-center gap-1.5"
+          >
+            <RotateCcw size={11} strokeWidth={2} />
+            {t('compose.planRetry')}
+          </button>
+        </div>
+      )}
+
+      {/* D6/T3 — 附件区: 缩略图卡片 tray (staged 上传 / draft-edit 已有附件 /
+          forward hydrate 的原附件), 空态 dropzone (点击 = 打开文件选择; 拖拽仍走
+          整窗 useAttachmentDrop 等价逻辑, 不重复拦截同一次 drop)。 */}
       {attachList.length > 0 ? (
         <div className="border-t border-ink-border/60 bg-ink-2/40 shrink-0">
           <AttachmentTray
@@ -1129,8 +1177,9 @@ export function ComposePanelInner({
         </div>
       )}
 
-      {/* 附件提示 (reply/forward 原邮件附件不重传) */}
-      {!isDraftEdit && planAttachments > 0 && (
+      {/* 附件提示 (reply 原邮件附件不重传)。forward 不再提示 — 原附件已 hydrate
+          成上方 tray 的可移除 chips (codex F1), 计数条会跟 chips 双重呈现。 */}
+      {!isDraftEdit && mode !== 'forward' && planAttachments > 0 && (
         <div className="border-t border-ink-border/60 bg-ink-2/40 px-3 py-2 shrink-0 text-meta font-mono text-ink-fg-2">
           {t('compose.attachmentsNote', { n: planAttachments })}
         </div>
@@ -1141,7 +1190,9 @@ export function ComposePanelInner({
         to={to}
         cc={cc}
         bcc={bcc}
-        attachments={planAttachments + readyAttachments.length}
+        // forward 原附件已 hydrate 进 readyAttachments (F1), 再加 planAttachments
+        // 会双重计数; reply 维持现状 (planAttachments 是"不重传"提示对应的原附件数)。
+        attachments={(mode === 'forward' ? 0 : planAttachments) + readyAttachments.length}
         pending={sendMut.isPending}
         onConfirm={() => sendMut.mutate()}
         onCancel={() => setSendOpen(false)}

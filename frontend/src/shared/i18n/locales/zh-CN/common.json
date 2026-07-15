@@ -165,6 +165,7 @@
     "attach": "附件",
     "attachmentRemove": "移除 {name}",
     "attachmentFailed": "上传失败",
+    "forwardAttachError": "原邮件附件加载失败，重试成功前无法发送",
     "attachTray": {
       "summary": "{n} 个附件 · {size}",
       "add": "添加",
