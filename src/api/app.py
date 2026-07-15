@@ -384,6 +384,7 @@ from src.api.routers import (  # noqa: E402
     island,
     jobs,
     llm,
+    llm_providers,
     reports,
     settings,
     skills,
@@ -393,6 +394,10 @@ from src.api.routers import (  # noqa: E402
 app.include_router(email.router)
 app.include_router(attachment.router)
 app.include_router(llm.router)
+# task 07-12 P0 (LLM 多 provider 化) — /api/llm/providers* CRUD（key 掩码, verify_cf_access）
+# + /snapshot（verify_local_token, 解密 key 仅供同机 embedded gateway）+ per-provider 模型
+# 发现 / 连通性测试。seed 迁移惰性触发（表空时把 env 老配置落成 default provider 行）。
+app.include_router(llm_providers.router)
 app.include_router(admin.router)
 app.include_router(calendar.router)
 app.include_router(folder.router)

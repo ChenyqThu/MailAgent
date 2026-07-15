@@ -7,8 +7,12 @@
 告警级别：
 - critical (红色): 服务崩溃、健康检查失败、服务停止
 - error (橙色): 同步失败、API 错误、连续错误
-- warning (黄色): 重试失败、组件降级、dead_letter 累积
-- info (蓝色): 服务启动、里程碑、恢复通知
+- warning (黄色): 重试失败、组件降级、dead_letter 累积、**恢复通知**
+- info (蓝色): 服务启动、里程碑
+
+🔴 恢复通知走 warning 而非 info: enabled_levels 默认 "critical,error,warning"
+不含 info, info 级会被 send_alert 的 level 门挡掉 (task 07-14 实测 davmail 恢复
+两次、通知零发出)。新增恢复类通知一律 ≥ warning, 与其对应的告警同级。
 """
 
 import hashlib
@@ -257,7 +261,7 @@ class FeishuAlertNotifier:
 
     async def alert_service_unhealthy(self, consecutive_errors: int):
         """服务不健康告警"""
-        await self.send_alert(
+        return await self.send_alert(
             level="critical",
             title="服务健康检查失败",
             content=f"连续 **{consecutive_errors}** 次错误，服务已停止运行。\n请检查 Mail.app 和系统权限。",
@@ -280,7 +284,7 @@ class FeishuAlertNotifier:
 
     async def alert_dead_letters(self, count: int, threshold: int):
         """dead_letter 累积告警"""
-        await self.send_alert(
+        return await self.send_alert(
             level="warning",
             title=f"死信队列累积 ({count} 封)",
             content=f"有 **{count}** 封邮件超过最大重试次数进入死信队列（阈值: {threshold}）。\n需要人工排查处理。",
@@ -319,7 +323,7 @@ class FeishuAlertNotifier:
 
     async def alert_radar_unavailable(self):
         """SQLite 雷达不可用告警"""
-        await self.send_alert(
+        return await self.send_alert(
             level="warning",
             title="SQLite 雷达不可用",
             content="SQLite 雷达组件不可用，新邮件检测降级。\n请检查 Full Disk Access 权限。",
@@ -338,9 +342,15 @@ class FeishuAlertNotifier:
         )
 
     async def alert_recovery(self, component: str):
-        """恢复通知"""
-        await self.send_alert(
-            level="info",
+        """恢复通知
+
+        🔴 level 必须 ≥ warning: alert_levels 默认 "critical,error,warning" 不含
+        info → info 级恢复通知会被 send_alert 的 level 门直接挡掉一条都发不出
+        (task 07-14 实测)。episode 两端必须同级 —— 对应告警是 warning 能发,
+        恢复也得 warning 才发得出, 否则只收到坏消息收不到「已解除」。
+        """
+        return await self.send_alert(
+            level="warning",
             title=f"{component} 已恢复",
             content=f"**{component}** 已恢复正常运行。",
             source=component.lower(),
@@ -389,7 +399,7 @@ class FeishuAlertNotifier:
 
     async def alert_outbox_backlog(self, aged_pending: int, threshold: int):
         """outbox 积压 — 行龄 ≥5min 的 pending 超阈值 (FanoutWorker 可能卡死/落后)"""
-        await self.send_alert(
+        return await self.send_alert(
             level="warning",
             title=f"Outbox 积压 ({aged_pending} 条 ≥5min 未派发)",
             content=(
@@ -429,7 +439,7 @@ class FeishuAlertNotifier:
     async def alert_davmail_token_expiring(self, age_days: float):
         """DavMail OAuth refresh_token 接近过期 (≥80 天没 refresh)"""
         days_left = max(0.0, 90.0 - age_days)
-        await self.send_alert(
+        return await self.send_alert(
             level="warning",
             title="DavMail OAuth token 即将过期",
             content=(
@@ -450,7 +460,7 @@ class FeishuAlertNotifier:
     async def alert_davmail_token_critical(self, age_days: float):
         """DavMail OAuth refresh_token 极接近过期 (≥87 天)"""
         days_left = max(0.0, 90.0 - age_days)
-        await self.send_alert(
+        return await self.send_alert(
             level="critical",
             title="DavMail OAuth token 即将失效（紧急）",
             content=(
@@ -509,13 +519,87 @@ class FeishuAlertNotifier:
         )
 
     async def alert_davmail_process_recovered(self, proto: str = "IMAP"):
-        """davmail-poc 进程恢复"""
+        """davmail-poc 进程恢复 (level ≥ warning 的理由见 alert_recovery)"""
         await self.send_alert(
-            level="info",
+            level="warning",
             title=f"DavMail {proto} 已恢复",
             content=f"davmail-poc {proto} 端口已恢复响应。",
             source="davmail_watchdog",
             alert_key=f"davmail_process_recovered:{proto}",
+        )
+
+    async def alert_davmail_login_degraded(
+        self, consecutive_fails: int, threshold: int
+    ):
+        """IMAP LOGIN 持续失败 (TCP 可达) — token 劣化「能发不能收」(L2a)"""
+        await self.send_alert(
+            level="critical",
+            title="DavMail IMAP LOGIN 持续失败（token 劣化）",
+            content=(
+                f"IMAP 端口 TCP 可达但 LOGIN 已连续 **{consecutive_fails}** 次失败"
+                f"（阈值 {threshold}）。SMTP 可能仍正常 ——「能发不能收」，疑似 "
+                "DavMail 内部 token 状态劣化（如 AADSTS700003 / JVM 长跑劣化）。\n"
+                "**建议操作**: `pm2 restart davmail-poc`；重启后仍失败则重走 "
+                "O365Manual OAuth flow。"
+            ),
+            source="davmail_watchdog",
+            details={
+                "连续失败": str(consecutive_fails),
+                "阈值": str(threshold),
+                "重启命令": "`pm2 restart davmail-poc`",
+            },
+            alert_key="davmail_login_degraded",
+        )
+
+    async def alert_davmail_login_recovered(self):
+        """IMAP LOGIN 恢复 (L2a; level ≥ warning 的理由见 alert_recovery)"""
+        await self.send_alert(
+            level="warning",
+            title="DavMail IMAP LOGIN 已恢复",
+            content="IMAP LOGIN 探测恢复成功，token 劣化状态解除。",
+            source="davmail_watchdog",
+            alert_key="davmail_login_recovered",
+        )
+
+    async def alert_davmail_auto_restart(
+        self, ok: bool, detail: str, consecutive_fails: int, cooldown_min: int
+    ):
+        """watchdog 自动恢复 davmail (token 劣化自愈) 结果 (L2b) — 成败分级"""
+        await self.send_alert(
+            level="warning" if ok else "critical",
+            title=f"DavMail 自动重启{'成功' if ok else '失败'}（IMAP LOGIN 持续失败）",
+            content=(
+                f"IMAP LOGIN 连续 **{consecutive_fails}** 次失败且端口可达 "
+                "(token 劣化,「能发不能收」), watchdog 已执行自动恢复: "
+                f"{'成功' if ok else f'失败 ({detail}), 需人工介入'}。"
+                f"冷却期 {cooldown_min} 分钟。"
+            ),
+            source="davmail_watchdog",
+            details={
+                "结果": "成功" if ok else f"失败: {detail[:80]}",
+                "连续 LOGIN 失败": str(consecutive_fails),
+            },
+            alert_key="davmail_auto_restart",
+        )
+
+    async def alert_davmail_restart_storm(self, count_24h: int, max_per_day: int):
+        """自动重启风暴 — 24h 窗口达上限, 已停自动重启 (L2b, 镜像 crashloop_stopped)"""
+        await self.send_alert(
+            level="critical",
+            title=f"DavMail 自动重启风暴 (24h 内 {count_24h} 次)",
+            content=(
+                f"watchdog 24h 滚动窗口内已自动重启 davmail **{count_24h}** 次"
+                f"（上限 {max_per_day}），自动重启已暂停 —— 反复重启说明 token "
+                "劣化根因未解, 需人工排查 (重走 O365Manual OAuth flow / 查 "
+                "davmail 日志)。窗口滚出后自动恢复。"
+            ),
+            source="davmail_watchdog",
+            details={
+                "24h 重启次数": str(count_24h),
+                "上限": str(max_per_day),
+                "排查命令": "`pm2 logs davmail-poc --lines 50`",
+            },
+            alert_key="davmail_restart_storm",
         )
 
     async def alert_davmail_ews_throttling(self, count: int):

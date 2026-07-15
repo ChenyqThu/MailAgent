@@ -14,7 +14,6 @@ import {
   smoothStream,
   stepCountIs,
   streamText,
-  type LanguageModel,
   type ModelMessage,
   type StreamTextResult,
   type ToolSet,
@@ -23,6 +22,14 @@ import {
 
 import { anthropicBaseUrl, type AiGatewayConfig, type PersistTurnInput } from './config'
 import { createAnthropic } from '@ai-sdk/anthropic'
+// 🔴 MEDIUM-6 (batch1 review) — import from the SDK-free providerRef, NEVER from providers.ts
+// (whose top level pulls six provider SDK packages; it only loads via the lifecycle's flag-on
+// dynamic import). Pinned by tests/ai-gateway/provider_lazy_import.test.ts.
+import {
+  isProviderCredentialsError,
+  parseProviderRef,
+  type ResolvedProviderModel
+} from './providerRef'
 import type { GatewayApprovalMode, GatewayToolAuditEntry } from './tools/types'
 // S2 W0 (ADR-001 D1) — the run's context mode is a TRUSTED prepareChatRun parameter asserted by
 // each entrypoint in its own code. It is NEVER read from the request body (a client cannot claim
@@ -41,15 +48,46 @@ import {
 /** Default tool-loop ceiling (matches the legacy harness AGENT_MAX_ITER default). */
 export const DEFAULT_MAX_STEPS = 8
 
+/**
+ * HIGH-1 (batch1 review) — the ONE credential pre-gate all four LLM entrypoints share
+ * (prepareChatRun + /api/ai/title + /api/ai/followups + /api/ai/search-agent).
+ *
+ * Flag OFF (or no resolver): the legacy global-key gate, byte-identical — an empty cfg.apiKey is
+ * 503 E_NO_LLM_KEY before anything runs. Registry path ON (flag + resolver): the gate is skipped —
+ * per-provider keys live in the snapshot, so the RESOLVER is the credential authority: a selected
+ * provider row missing a required key throws the typed ProviderCredentialsError (openai-compatible
+ * rows may run keyless), which the entrypoints map back to the same 503 E_NO_LLM_KEY wire shape.
+ * The condition mirrors resolveModelFactory's registry branch exactly.
+ */
+export function llmCredentialsMissing(cfg: AiGatewayConfig): boolean {
+  if (cfg.providerRegistryEnabled && cfg.providerModelResolver) return false
+  return !cfg.apiKey || cfg.apiKey.length === 0
+}
+
 /** Resolve the LanguageModel factory: injected (tests / mock) else the default @ai-sdk/anthropic
  *  provider wired to the normalized baseURL + key. */
-export function resolveModelFactory(cfg: AiGatewayConfig): (modelId: string) => LanguageModel {
-  if (cfg.createModel) return cfg.createModel
+export function resolveModelFactory(
+  cfg: AiGatewayConfig
+): (modelId: string) => ResolvedProviderModel | Promise<ResolvedProviderModel> {
+  if (cfg.createModel) {
+    return (modelId: string) => ({
+      ...parseProviderRef(modelId),
+      model: cfg.createModel!(modelId),
+      protocol: 'anthropic'
+    })
+  }
+  if (cfg.providerRegistryEnabled && cfg.providerModelResolver) {
+    return (modelId: string) => cfg.providerModelResolver!.resolve(modelId)
+  }
   const anthropic = createAnthropic({
     apiKey: cfg.apiKey ?? '',
     baseURL: anthropicBaseUrl(cfg.baseUrl)
   })
-  return (modelId: string) => anthropic(modelId)
+  return (modelId: string) => ({
+    ...parseProviderRef(modelId),
+    model: anthropic(modelId),
+    protocol: 'anthropic'
+  })
 }
 
 /** Pick the last user UIMessage of an incoming turn (the fresh message we persist alongside the
@@ -140,7 +178,9 @@ export async function prepareChatRun(
   abortSignal: AbortSignal,
   trustedContextMode?: AgentContextMode
 ): Promise<PrepareChatOutcome> {
-  if (!cfg.apiKey || cfg.apiKey.length === 0) {
+  // HIGH-1 — flag-off keeps the legacy global-key gate byte-identical; the registry path defers
+  // to the resolver (per-provider keys), whose typed failure is mapped right below.
+  if (llmCredentialsMissing(cfg)) {
     return {
       ok: false,
       status: 503,
@@ -157,7 +197,23 @@ export async function prepareChatRun(
   // chat-panel P4 composer-parity C1-① — per-turn extended-thinking toggle. body.thinking===true →
   // inject providerOptions by the model-family matrix (./thinking); absent/false → undefined →
   // providerOptions omitted below, byte-identical to the pre-toggle no-thinking streamText call.
-  const thinkingProviderOpts = thinkingProviderOptions(modelId, body.thinking === true)
+  // HIGH-1 — registry-path credential failures (selected provider row lacks a required key /
+  // fail-open leg with no legacy key) surface here as the typed error → same 503 wire shape the
+  // legacy gate produced. Any other resolver failure propagates unchanged.
+  let resolvedModel: ResolvedProviderModel
+  try {
+    resolvedModel = await resolveModelFactory(cfg)(modelId)
+  } catch (e) {
+    if (isProviderCredentialsError(e)) {
+      return { ok: false, status: 503, body: { error: 'E_NO_LLM_KEY', hint: e.message } }
+    }
+    throw e
+  }
+  const thinkingProviderOpts = thinkingProviderOptions(
+    resolvedModel.modelId,
+    body.thinking === true,
+    resolvedModel.protocol
+  )
 
   // System prompt. With the injection provider set (always injected since S3) assemble
   // from standing-context + the typed snapshot, reusing the legacy stable prefix
@@ -239,7 +295,7 @@ export async function prepareChatRun(
   const hasTools = tools != null && Object.keys(tools).length > 0
 
   const result = streamText({
-    model: resolveModelFactory(cfg)(modelId),
+    model: resolvedModel.model,
     system,
     messages: modelMessages,
     abortSignal,
@@ -641,8 +697,9 @@ export async function generateSessionTitle(
   abortSignal?: AbortSignal
 ): Promise<string | null> {
   const factory = resolveModelFactory(cfg)
+  const resolvedModel = await factory(modelId)
   const { text } = await generateText({
-    model: factory(modelId),
+    model: resolvedModel.model,
     prompt: buildTitlePrompt(firstUserText),
     maxOutputTokens: 64,
     abortSignal
@@ -724,8 +781,9 @@ export async function generateFollowups(
   abortSignal?: AbortSignal
 ): Promise<string[]> {
   const factory = resolveModelFactory(cfg)
+  const resolvedModel = await factory(modelId)
   const { text } = await generateText({
-    model: factory(modelId),
+    model: resolvedModel.model,
     prompt: buildFollowupsPrompt(userText, assistantText),
     maxOutputTokens: 200,
     abortSignal

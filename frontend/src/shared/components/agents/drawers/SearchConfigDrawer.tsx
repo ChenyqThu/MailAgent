@@ -10,14 +10,9 @@ import { useCreateAgent, useDeleteAgent, useSetConfig } from '../hooks'
 import { Drawer } from '@shared/components/ui/drawer'
 import { StatefulButton } from '@shared/components/ui/stateful-button'
 import { useEnabledModels } from '@shared/hooks/useLlmModels'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue
-} from '@shared/components/ui/select'
+import { Select, SelectContent, SelectTrigger, SelectValue } from '@shared/components/ui/select'
 import { pressHandlers } from '../shared'
+import { ModelSelectItems } from './ModelSelectItems'
 import { Field } from './Field'
 
 // ─── Search Agent 配置抽屉 ───────────────────────────────────────────────────
@@ -170,259 +165,242 @@ export function SearchConfigDrawer({
 
   return (
     <Drawer open={open} onOpenChange={(nextOpen) => !nextOpen && onClose()}>
-        <header
-          className="flex items-center"
+      <header
+        className="flex items-center"
+        style={{
+          gap: 10,
+          padding: '15px 18px',
+          borderBottom: '1px solid rgb(var(--ink-border-soft))',
+          flexShrink: 0
+        }}
+      >
+        <span style={{ color: 'rgb(var(--c-accent))', display: 'flex' }}>
+          <ReportIcon name="search" size={16} />
+        </span>
+        <h2 style={{ fontSize: 15, fontWeight: 600, color: 'rgb(var(--ink-fg))', flex: 1 }}>
+          {create ? t('agents.search.newTitle') : t('agents.search.configTitle', { title })}
+        </h2>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label={t('agents.source.close')}
           style={{
-            gap: 10,
-            padding: '15px 18px',
-            borderBottom: '1px solid rgb(var(--ink-border-soft))',
-            flexShrink: 0
+            display: 'grid',
+            placeItems: 'center',
+            width: 28,
+            height: 28,
+            borderRadius: 7,
+            background: 'transparent',
+            border: 0,
+            cursor: 'pointer',
+            color: 'rgb(var(--ink-fg-2))'
           }}
         >
-          <span style={{ color: 'rgb(var(--c-accent))', display: 'flex' }}>
-            <ReportIcon name="search" size={16} />
-          </span>
-          <h2 style={{ fontSize: 15, fontWeight: 600, color: 'rgb(var(--ink-fg))', flex: 1 }}>
-            {create ? t('agents.search.newTitle') : t('agents.search.configTitle', { title })}
-          </h2>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label={t('agents.source.close')}
+          <ReportIcon name="x" size={16} />
+        </button>
+      </header>
+
+      <div className="scrollbar-thin" style={{ flex: 1, overflowY: 'auto', padding: 18 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+          {/* enable */}
+          <div
+            className="flex items-center"
             style={{
-              display: 'grid',
-              placeItems: 'center',
-              width: 28,
-              height: 28,
-              borderRadius: 7,
-              background: 'transparent',
-              border: 0,
-              cursor: 'pointer',
-              color: 'rgb(var(--ink-fg-2))'
+              gap: 12,
+              padding: '13px 14px',
+              borderRadius: 10,
+              background: 'rgb(var(--ink-2) / 0.55)',
+              border: '1px solid rgb(var(--ink-border))'
             }}
           >
-            <ReportIcon name="x" size={16} />
-          </button>
-        </header>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 13.5, fontWeight: 500, color: 'rgb(var(--ink-fg))' }}>
+                {t('agents.config.enable')}
+              </div>
+              <div style={{ fontSize: 12, color: 'rgb(var(--ink-fg-3))', marginTop: 2 }}>
+                {t('agents.search.sectionHint')}
+              </div>
+            </div>
+            <Switch on={enabled} onChange={setEnabled} />
+          </div>
 
-        <div className="scrollbar-thin" style={{ flex: 1, overflowY: 'auto', padding: 18 }}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-            {/* enable */}
-            <div
-              className="flex items-center"
+          {/* title */}
+          <Field label={t('agents.search.titleLabel')}>
+            <input
+              type="text"
+              value={title}
+              placeholder={t('agents.search.titlePlaceholder')}
+              onChange={(e) => setTitle(e.target.value)}
+              style={inputStyle}
+            />
+          </Field>
+
+          {/* prompt */}
+          <Field label={t('agents.search.promptLabel')} hint={t('agents.search.promptHint')}>
+            <textarea
+              value={prompt}
+              placeholder={t('agents.search.promptPlaceholder')}
+              onChange={(e) => {
+                setPrompt(e.target.value)
+                setPromptDirty(true)
+              }}
+              rows={9}
+              className="scrollbar-thin"
               style={{
-                gap: 12,
-                padding: '13px 14px',
-                borderRadius: 10,
-                background: 'rgb(var(--ink-2) / 0.55)',
-                border: '1px solid rgb(var(--ink-border))'
+                ...inputStyle,
+                resize: 'vertical',
+                lineHeight: 1.6,
+                fontSize: 13,
+                minHeight: 160
+              }}
+            />
+          </Field>
+
+          {/* model（抄 ConfigDrawer 的 enabledModels + orphan 兜底） */}
+          <Field label={t('agents.config.model')}>
+            <Select value={model || undefined} onValueChange={setModel}>
+              <SelectTrigger>
+                <SelectValue placeholder={t('agents.config.model')} />
+              </SelectTrigger>
+              <SelectContent className="z-[70]">
+                <ModelSelectItems models={enabledModels} current={model || null} />
+              </SelectContent>
+            </Select>
+          </Field>
+
+          {/* tools — MVP 只有 email_search_fulltext，多选 chip（存 patch.tools） */}
+          <Field label={t('agents.search.tools')} hint={t('agents.search.toolsHint')}>
+            <div className="flex items-center" style={{ gap: 8, flexWrap: 'wrap' }}>
+              {SEARCH_TOOLS.map((tool) => {
+                const on = tools.includes(tool)
+                return (
+                  <button
+                    key={tool}
+                    type="button"
+                    aria-pressed={on}
+                    onClick={() => toggleTool(tool)}
+                    style={{
+                      padding: '6px 12px',
+                      borderRadius: 8,
+                      fontFamily: 'inherit',
+                      fontSize: 13,
+                      cursor: 'pointer',
+                      color: on ? 'rgb(var(--c-accent))' : 'rgb(var(--ink-fg-2))',
+                      background: on ? 'rgb(var(--c-accent) / 0.14)' : 'rgb(var(--ink-1) / 0.5)',
+                      border: `1px solid ${on ? 'rgb(var(--c-accent))' : 'rgb(var(--ink-border))'}`,
+                      transition:
+                        'color 120ms cubic-bezier(0.4,0,0.2,1), background-color 120ms cubic-bezier(0.4,0,0.2,1), border-color 120ms cubic-bezier(0.4,0,0.2,1)'
+                    }}
+                  >
+                    {t(`agents.search.tool.${tool}`)}
+                  </button>
+                )
+              })}
+            </div>
+          </Field>
+
+          {errKey && (
+            <div
+              style={{
+                fontSize: 12.5,
+                color: 'rgb(var(--c-fail))',
+                padding: '10px 12px',
+                borderRadius: 9,
+                background: 'rgb(var(--c-fail) / 0.10)',
+                border: '1px solid rgb(var(--c-fail) / 0.25)'
               }}
             >
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 13.5, fontWeight: 500, color: 'rgb(var(--ink-fg))' }}>
-                  {t('agents.config.enable')}
-                </div>
-                <div style={{ fontSize: 12, color: 'rgb(var(--ink-fg-3))', marginTop: 2 }}>
-                  {t('agents.search.sectionHint')}
-                </div>
-              </div>
-              <Switch on={enabled} onChange={setEnabled} />
+              {t(`agents.search.${errKey}`)}
             </div>
-
-            {/* title */}
-            <Field label={t('agents.search.titleLabel')}>
-              <input
-                type="text"
-                value={title}
-                placeholder={t('agents.search.titlePlaceholder')}
-                onChange={(e) => setTitle(e.target.value)}
-                style={inputStyle}
-              />
-            </Field>
-
-            {/* prompt */}
-            <Field label={t('agents.search.promptLabel')} hint={t('agents.search.promptHint')}>
-              <textarea
-                value={prompt}
-                placeholder={t('agents.search.promptPlaceholder')}
-                onChange={(e) => {
-                  setPrompt(e.target.value)
-                  setPromptDirty(true)
-                }}
-                rows={9}
-                className="scrollbar-thin"
-                style={{
-                  ...inputStyle,
-                  resize: 'vertical',
-                  lineHeight: 1.6,
-                  fontSize: 13,
-                  minHeight: 160
-                }}
-              />
-            </Field>
-
-            {/* model（抄 ConfigDrawer 的 enabledModels + orphan 兜底） */}
-            <Field label={t('agents.config.model')}>
-              <Select value={model || undefined} onValueChange={setModel}>
-                <SelectTrigger>
-                  <SelectValue placeholder={t('agents.config.model')} />
-                </SelectTrigger>
-                <SelectContent className="z-[70]">
-                  {(model && !enabledModels.includes(model)
-                    ? [...enabledModels, model]
-                    : enabledModels
-                  ).map((id) => {
-                    const isOrphan = !enabledModels.includes(id)
-                    return (
-                      <SelectItem key={id} value={id}>
-                        {id}
-                        {isOrphan && (
-                          <span style={{ color: 'rgb(var(--ink-fg-3))', marginLeft: 6 }}>
-                            {t('settings.ai.enabledModels.notEnabled', {
-                              defaultValue: '（未启用）'
-                            })}
-                          </span>
-                        )}
-                      </SelectItem>
-                    )
-                  })}
-                </SelectContent>
-              </Select>
-            </Field>
-
-            {/* tools — MVP 只有 email_search_fulltext，多选 chip（存 patch.tools） */}
-            <Field label={t('agents.search.tools')} hint={t('agents.search.toolsHint')}>
-              <div className="flex items-center" style={{ gap: 8, flexWrap: 'wrap' }}>
-                {SEARCH_TOOLS.map((tool) => {
-                  const on = tools.includes(tool)
-                  return (
-                    <button
-                      key={tool}
-                      type="button"
-                      aria-pressed={on}
-                      onClick={() => toggleTool(tool)}
-                      style={{
-                        padding: '6px 12px',
-                        borderRadius: 8,
-                        fontFamily: 'inherit',
-                        fontSize: 13,
-                        cursor: 'pointer',
-                        color: on ? 'rgb(var(--c-accent))' : 'rgb(var(--ink-fg-2))',
-                        background: on ? 'rgb(var(--c-accent) / 0.14)' : 'rgb(var(--ink-1) / 0.5)',
-                        border: `1px solid ${on ? 'rgb(var(--c-accent))' : 'rgb(var(--ink-border))'}`,
-                        transition:
-                          'color 120ms cubic-bezier(0.4,0,0.2,1), background-color 120ms cubic-bezier(0.4,0,0.2,1), border-color 120ms cubic-bezier(0.4,0,0.2,1)'
-                      }}
-                    >
-                      {t(`agents.search.tool.${tool}`)}
-                    </button>
-                  )
-                })}
-              </div>
-            </Field>
-
-            {errKey && (
-              <div
-                style={{
-                  fontSize: 12.5,
-                  color: 'rgb(var(--c-fail))',
-                  padding: '10px 12px',
-                  borderRadius: 9,
-                  background: 'rgb(var(--c-fail) / 0.10)',
-                  border: '1px solid rgb(var(--c-fail) / 0.25)'
-                }}
-              >
-                {t(`agents.search.${errKey}`)}
-              </div>
-            )}
-          </div>
+          )}
         </div>
+      </div>
 
-        <footer
-          className="flex items-center"
-          style={{
-            gap: 10,
-            padding: '13px 18px',
-            borderTop: '1px solid rgb(var(--ink-border-soft))',
-            flexShrink: 0
-          }}
-        >
-          {/* 删除：仅编辑既有时显示；两步确认（同 ReportsTab/SessionsPage 风格）。 */}
-          {!create &&
-            cfg &&
-            (confirming ? (
-              <span className="flex items-center" style={{ gap: 6 }}>
-                <button
-                  type="button"
-                  onClick={onDelete}
-                  disabled={busy}
-                  className="flex items-center"
-                  style={{
-                    gap: 6,
-                    fontFamily: 'inherit',
-                    fontSize: 13,
-                    padding: '7px 12px',
-                    borderRadius: 8,
-                    cursor: busy ? 'wait' : 'pointer',
-                    color: 'rgb(var(--c-fail))',
-                    background: 'rgb(var(--c-fail) / 0.12)',
-                    border: '1px solid rgb(var(--c-fail) / 0.3)',
-                    transition: 'transform 120ms cubic-bezier(0.4,0,0.2,1)'
-                  }}
-                  {...pressHandlers()}
-                >
-                  {t('agents.search.deleteConfirm')}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setConfirming(false)}
-                  className="btn-ghost"
-                  style={{ fontFamily: 'inherit' }}
-                >
-                  {t('agents.search.deleteCancel')}
-                </button>
-              </span>
-            ) : (
+      <footer
+        className="flex items-center"
+        style={{
+          gap: 10,
+          padding: '13px 18px',
+          borderTop: '1px solid rgb(var(--ink-border-soft))',
+          flexShrink: 0
+        }}
+      >
+        {/* 删除：仅编辑既有时显示；两步确认（同 ReportsTab/SessionsPage 风格）。 */}
+        {!create &&
+          cfg &&
+          (confirming ? (
+            <span className="flex items-center" style={{ gap: 6 }}>
               <button
                 type="button"
-                onClick={() => setConfirming(true)}
+                onClick={onDelete}
+                disabled={busy}
                 className="flex items-center"
                 style={{
                   gap: 6,
                   fontFamily: 'inherit',
                   fontSize: 13,
-                  padding: '8px 14px',
+                  padding: '7px 12px',
                   borderRadius: 8,
-                  cursor: 'pointer',
+                  cursor: busy ? 'wait' : 'pointer',
                   color: 'rgb(var(--c-fail))',
-                  background: 'transparent',
+                  background: 'rgb(var(--c-fail) / 0.12)',
                   border: '1px solid rgb(var(--c-fail) / 0.3)',
                   transition: 'transform 120ms cubic-bezier(0.4,0,0.2,1)'
                 }}
                 {...pressHandlers()}
               >
-                <ReportIcon name="x" size={14} />
-                {t('agents.search.delete')}
+                {t('agents.search.deleteConfirm')}
               </button>
-            ))}
-          <span style={{ flex: 1 }} />
-          <button
-            type="button"
-            onClick={onClose}
-            className="btn-ghost"
-            style={{ fontFamily: 'inherit' }}
-          >
-            {t('agents.config.cancel')}
-          </button>
-          <StatefulButton
-            type="button"
-            onClick={onSave}
-            disabled={busy}
-            state={busy ? 'loading' : saveFailed ? 'error' : 'idle'}
-          >
-            {create ? t('agents.search.create') : t('agents.config.save')}
-          </StatefulButton>
-        </footer>
+              <button
+                type="button"
+                onClick={() => setConfirming(false)}
+                className="btn-ghost"
+                style={{ fontFamily: 'inherit' }}
+              >
+                {t('agents.search.deleteCancel')}
+              </button>
+            </span>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setConfirming(true)}
+              className="flex items-center"
+              style={{
+                gap: 6,
+                fontFamily: 'inherit',
+                fontSize: 13,
+                padding: '8px 14px',
+                borderRadius: 8,
+                cursor: 'pointer',
+                color: 'rgb(var(--c-fail))',
+                background: 'transparent',
+                border: '1px solid rgb(var(--c-fail) / 0.3)',
+                transition: 'transform 120ms cubic-bezier(0.4,0,0.2,1)'
+              }}
+              {...pressHandlers()}
+            >
+              <ReportIcon name="x" size={14} />
+              {t('agents.search.delete')}
+            </button>
+          ))}
+        <span style={{ flex: 1 }} />
+        <button
+          type="button"
+          onClick={onClose}
+          className="btn-ghost"
+          style={{ fontFamily: 'inherit' }}
+        >
+          {t('agents.config.cancel')}
+        </button>
+        <StatefulButton
+          type="button"
+          onClick={onSave}
+          disabled={busy}
+          state={busy ? 'loading' : saveFailed ? 'error' : 'idle'}
+        >
+          {create ? t('agents.search.create') : t('agents.config.save')}
+        </StatefulButton>
+      </footer>
     </Drawer>
   )
 }

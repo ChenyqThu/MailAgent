@@ -12,11 +12,22 @@
        / AADSTS5017x / AADSTS7000x → OAuth failure critical
      - EWSThrottlingException 5min 内 ≥3 → warning + 自动暂停
        uid-mapper backfill (写 sync_state['davmail_uid_backfill_paused']='true')
+  4. IMAP LOGIN 探测 (L2a, fork 31a50011 上游化) — TCP 可达时真实 LOGIN 一次,
+     抓「端口活 / SMTP 正常但 IMAP LOGIN 持续失败」的 token 劣化形态
+     (2026-06-12 事故 / AADSTS700003, 纯 TCP probe 抓不到)。连续 ≥阈值 →
+     critical + 飞书告警。需注入 cfg (user_email + cipher key), 留 None 跳过。
+     L2b: 达阈值后可选自动恢复 — 经注入的 restart_callback (默认 None = 仅告警;
+     pm2 形态实现见 src/mail/davmail_restart.py), 冷却 + 24h 滚动窗口上限防风暴。
 
 sync_state key 约定 (frontend 通过 better-sqlite3 直读)：
   davmail.last_probe_at           ISO 时间戳
   davmail.imap_reachable          '0' / '1'
   davmail.smtp_reachable          '0' / '1'
+  davmail.imap_login_ok           '1' / '0' / '' (TCP 不可达/未注入 cfg/开关关 → 跳过)
+  davmail.consecutive_login_failures  连续 LOGIN 失败计数
+  davmail.login_fail_threshold    生效的 login 失败阈值 (F5, 传播到 admin/electron 防漂移)
+  davmail.last_auto_restart_at    最近一次自动重启 ISO 时间戳 (L2b, 从未重启则无此键)
+  davmail.auto_restart_times      JSON epoch 数组: 24h 窗口内重启时间戳 (F4, 跨进程重启存活)
   davmail.token_age_days          浮点字符串，token.dat 不存在为 '-1'
   davmail.token_mtime_iso         ISO 时间戳
   davmail.consecutive_imap_failures   连续失败计数
@@ -30,15 +41,20 @@ sync_state key 约定 (frontend 通过 better-sqlite3 直读)：
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, Optional
 
 from loguru import logger
 
+from src.notify import episode
+from src.notify.episode import AlertEpisodeTracker
+
 if TYPE_CHECKING:
+    from src.config import Config
     from src.mail.sync_store import SyncStore
     from src.notify.alert import FeishuAlertNotifier
 
@@ -64,6 +80,15 @@ _THROTTLE_WINDOW_SECS = 5 * 60
 _PROCESS_DOWN_THRESHOLD = 3  # 连续失败次数
 _TOKEN_WARN_DAYS = 80.0
 _TOKEN_CRITICAL_DAYS = 87.0
+# IMAP LOGIN 健康探测 (L2a) 默认值 — 可经 config 覆盖 (DAVMAIL_LOGIN_*)。
+# admin router / electron 的 level 重算就地复刻阈值 3 (同 token 阈值套路)。
+_LOGIN_FAIL_THRESHOLD = 3
+_LOGIN_PROBE_TIMEOUT_SECS = 15
+# 自动恢复 (L2b) 默认值 — 可经 config 覆盖 (DAVMAIL_AUTO_RESTART_*)。
+# 冷却防 flap (成败都进冷却) + 24h 滚动窗口上限防重启风暴 (根因未解须人工)。
+_AUTO_RESTART_COOLDOWN_SECS = 600
+_AUTO_RESTART_MAX_PER_DAY = 6
+_RESTART_WINDOW_SECS = 24 * 3600
 
 
 class DavMailWatchdog:
@@ -80,8 +105,20 @@ class DavMailWatchdog:
         smtp_port: int = 1025,
         poll_interval: int = 60,
         probe_timeout: float = 3.0,
+        cfg: Optional["Config"] = None,
+        login_probe_enabled: bool = True,
+        login_probe_timeout: int = _LOGIN_PROBE_TIMEOUT_SECS,
+        login_fail_threshold: int = _LOGIN_FAIL_THRESHOLD,
+        restart_callback: Optional[Callable[[], Awaitable[tuple[bool, str]]]] = None,
+        auto_restart_cooldown: int = _AUTO_RESTART_COOLDOWN_SECS,
+        auto_restart_max_per_day: int = _AUTO_RESTART_MAX_PER_DAY,
+        episodes: Optional[AlertEpisodeTracker] = None,
     ) -> None:
         self.sync_store = sync_store
+        # task 07-14: token 门槛告警的 episode 判定器 (由 service.py 注入, 带
+        # MAILAGENT_ALERT_EPISODE flag)。未注入 (老调用方 / 单测) → disabled
+        # tracker = 判据成立就告 = 老行为, 零行为变化。
+        self.episodes = episodes or AlertEpisodeTracker(sync_store, enabled=False)
         self.alerter = alerter
         self.davmail_root = Path(davmail_root)
         self.token_path = self.davmail_root / "token" / "token.dat"
@@ -91,21 +128,43 @@ class DavMailWatchdog:
         self.smtp_port = smtp_port
         self.poll_interval = poll_interval
         self.probe_timeout = probe_timeout
+        # IMAP LOGIN 探测 (L2a) 需要 cfg (user_email + cipher key)；留 None 跳过
+        # (老调用方零行为变化)。
+        self.cfg = cfg
+        self.login_probe_enabled = login_probe_enabled
+        self.login_probe_timeout = login_probe_timeout
+        self.login_fail_threshold = login_fail_threshold
+        # L2b: 恢复策略 — 可注入 callback (默认 None = 仅告警不重启)。
+        # 不硬编码 pm2: pm2 形态的实现见 src/mail/davmail_restart.py。
+        self.restart_callback = restart_callback
+        self.auto_restart_cooldown = auto_restart_cooldown
+        self.auto_restart_max_per_day = auto_restart_max_per_day
 
         self._stop = False
         # 用于跃迁检测：上一轮状态
         self._prev: Dict[str, Any] = {}
         self._consecutive_imap_fails = 0
         self._consecutive_smtp_fails = 0
+        self._consecutive_login_fails = 0
         # 已告警的"门槛"标记，避免每轮重发（alerter 自己也有 cooldown 兜底）
         self._announced_process_down_imap = False
         self._announced_process_down_smtp = False
         self._announced_throttle_burst = False
+        self._announced_login_degraded = False
+        # L2b: 自动重启风暴防护状态 (F4: 从 sync_state 回种, 跨 MailAgent 进程重启
+        # 存活 —— 否则风暴停止后重启进程即清零内存计数, 声明的 24h max_per_day 上限被
+        # 绕过, 又能再重启一整轮)。
+        last_ts, restart_times = self._load_restart_state()
+        self._last_auto_restart_ts = last_ts
+        self._restart_times: list[float] = restart_times  # 24h 滚动窗口内的重启时间戳
+        self._announced_restart_storm = False
         # 累计指标 (stats_reporter 用)
         self._counters = {
             "probe_cycles": 0,
             "imap_probe_failures_total": 0,
             "smtp_probe_failures_total": 0,
+            "imap_login_failures_total": 0,
+            "auto_restarts_total": 0,
             "oauth_failures_detected_total": 0,
             "throttle_events_detected_total": 0,
         }
@@ -161,6 +220,17 @@ class DavMailWatchdog:
             self._consecutive_smtp_fails += 1
             self._counters["smtp_probe_failures_total"] += 1
 
+        # IMAP LOGIN 探测 (L2a): 只在 TCP 可达 + 注入 cfg + 开关开时跑
+        # (进程死亡是另一条告警路径, 不混入 token 劣化判定)。
+        login_ok: Optional[bool] = None
+        if imap_ok and self.cfg is not None and self.login_probe_enabled:
+            login_ok = await asyncio.to_thread(self._probe_imap_login)
+            if login_ok:
+                self._consecutive_login_fails = 0
+            else:
+                self._consecutive_login_fails += 1
+                self._counters["imap_login_failures_total"] += 1
+
         token_age_days, token_mtime = self._compute_token_age()
         oauth_error, throttle_count = self._scan_log_tail()
         if oauth_error and oauth_error != self._prev.get("oauth_error"):
@@ -176,6 +246,7 @@ class DavMailWatchdog:
             token_age_days=token_age_days,
             oauth_error_active=bool(oauth_error),
             throttle_burst=throttle_count >= 3,
+            login_degraded=self._consecutive_login_fails >= self.login_fail_threshold,
         )
 
         # ── 落盘 sync_state ───────────────────────────────────────────
@@ -184,6 +255,7 @@ class DavMailWatchdog:
             now_iso=now_iso,
             imap_ok=imap_ok,
             smtp_ok=smtp_ok,
+            login_ok=login_ok,
             token_age_days=token_age_days,
             token_mtime=token_mtime,
             oauth_error=oauth_error,
@@ -204,6 +276,15 @@ class DavMailWatchdog:
             ),
             "consecutive_imap_failures": self._consecutive_imap_fails,
             "consecutive_smtp_failures": self._consecutive_smtp_fails,
+            "imap_login_ok": login_ok,
+            "consecutive_login_failures": self._consecutive_login_fails,
+            "last_auto_restart_at": (
+                datetime.fromtimestamp(self._last_auto_restart_ts).isoformat(
+                    timespec="seconds"
+                )
+                if self._last_auto_restart_ts
+                else None
+            ),
             "throttle_events_5min": throttle_count,
             "last_oauth_error": oauth_error,
             "uid_backfill_paused": self._announced_throttle_burst,
@@ -214,10 +295,14 @@ class DavMailWatchdog:
         await self._evaluate_alerts(
             imap_ok=imap_ok,
             smtp_ok=smtp_ok,
+            login_ok=login_ok,
             token_age_days=token_age_days,
             oauth_error=oauth_error,
             throttle_count=throttle_count,
         )
+
+        # ── L2b: token 劣化自动恢复 (degraded 告警之后跑, 保证告警先出) ──
+        await self._maybe_auto_restart(now)
 
         self._prev = {
             "imap_ok": imap_ok,
@@ -241,6 +326,133 @@ class DavMailWatchdog:
             return True
         except (asyncio.TimeoutError, ConnectionRefusedError, OSError):
             return False
+
+    def _probe_imap_login(self) -> bool:
+        """真实 IMAP LOGIN 一次 (asyncio.to_thread 里跑, imaplib 是阻塞库)。
+
+        TCP 可达但 LOGIN 失败 = davmail 内部 token 状态劣化 (SMTP 可能仍正常,
+        「能发不能收」), 纯 TCP probe 抓不到。复用 imap_client 连接工厂 —— 每次
+        全新短命 session (DavMailBackend 每 op 也各自建连), 不干扰主同步。
+        """
+        # 局部 import: 避免 watchdog 模块 import 期拉 imap_client 重依赖
+        from src.mail.backend.imap_client import DavMailConnectionError, imap_connect
+
+        try:
+            imap = imap_connect(self.cfg, timeout=self.login_probe_timeout)
+        except DavMailConnectionError as e:
+            logger.warning(f"[davmail-watchdog] IMAP login probe failed: {e}")
+            return False
+        except Exception as e:  # noqa: BLE001 — 探测不能挂 watchdog
+            logger.warning(
+                f"[davmail-watchdog] IMAP login probe error: {type(e).__name__}: {e}"
+            )
+            return False
+        try:
+            imap.logout()
+        except Exception:
+            pass
+        return True
+
+    def _load_restart_state(self) -> tuple[float, list[float]]:
+        """F4: 从 sync_state 回种自动重启风暴防护状态 (跨进程重启存活)。
+
+        - ``davmail.last_auto_restart_at`` (ISO) → 冷却基准时间戳。
+        - ``davmail.auto_restart_times`` (JSON epoch 数组) → 24h 滚动窗口计数,
+          load 时顺手 prune 掉窗口外的时间戳。
+        坏数据 (JSON 解析失败 / 键缺失 / 类型错) 一律 fail-open 按空/0, 不挂 watchdog。
+        """
+        now = time.time()
+        last_ts = 0.0
+        raw_last = self.sync_store.get_state("davmail.last_auto_restart_at")
+        if raw_last:
+            try:
+                last_ts = datetime.fromisoformat(raw_last).timestamp()
+            except (ValueError, OSError):
+                last_ts = 0.0
+        restart_times: list[float] = []
+        raw_times = self.sync_store.get_state("davmail.auto_restart_times")
+        if raw_times:
+            try:
+                parsed = json.loads(raw_times)
+                if isinstance(parsed, list):
+                    restart_times = [
+                        float(t)
+                        for t in parsed
+                        if isinstance(t, (int, float))
+                        and now - float(t) < _RESTART_WINDOW_SECS
+                    ]
+            except (ValueError, TypeError):
+                restart_times = []
+        return last_ts, restart_times
+
+    async def _maybe_auto_restart(self, now: float) -> None:
+        """L2b: LOGIN 连续失败达阈值 → 调注入的 restart_callback (带风暴防护)。
+
+        - callback 未注入 (默认) → no-op, 仅靠 _evaluate_alerts 的 degraded 告警。
+        - 冷却: 两次重启间隔 ≥auto_restart_cooldown, 成败都进冷却 (防 flap)。
+        - 风暴防护: 24h 滚动窗口内重启 ≥auto_restart_max_per_day → 停自动重启 +
+          critical 告警一次 (镜像 supervise crashloop_stopped 语义), 窗口滚出后
+          自动恢复。
+        - 重启成功 → 计数清零 (下一轮真实探测重新说话); 失败 → 计数保留。
+        """
+        if self.restart_callback is None:
+            return
+        if self._consecutive_login_fails < self.login_fail_threshold:
+            return
+        if now - self._last_auto_restart_ts < self.auto_restart_cooldown:
+            return
+
+        self._restart_times = [
+            t for t in self._restart_times if now - t < _RESTART_WINDOW_SECS
+        ]
+        if len(self._restart_times) >= self.auto_restart_max_per_day:
+            if not self._announced_restart_storm:
+                logger.error(
+                    f"[davmail-watchdog] 自动重启风暴: 24h 内已重启 "
+                    f"{len(self._restart_times)} 次 (上限 "
+                    f"{self.auto_restart_max_per_day}) — 停自动重启, 需人工排查"
+                )
+                if self.alerter is not None:
+                    await self.alerter.alert_davmail_restart_storm(
+                        len(self._restart_times), self.auto_restart_max_per_day
+                    )
+                self._announced_restart_storm = True
+            return
+        self._announced_restart_storm = False
+
+        # 成败都进冷却: callback 失败时避免每轮 (60s) 刷重启
+        self._last_auto_restart_ts = now
+        self._restart_times.append(now)
+        self._counters["auto_restarts_total"] += 1
+        fails = self._consecutive_login_fails
+        logger.warning(
+            f"[davmail-watchdog] IMAP LOGIN 连续 {fails} 次失败且 TCP 可达 — "
+            f"判定 token 劣化, 执行自动恢复 callback"
+        )
+        try:
+            ok, detail = await self.restart_callback()
+        except Exception as e:  # noqa: BLE001 — 自愈动作失败不能挂 watchdog
+            ok, detail = False, f"{type(e).__name__}: {e}"
+        self.sync_store.set_state(
+            "davmail.last_auto_restart_at",
+            datetime.fromtimestamp(now).isoformat(timespec="seconds"),
+        )
+        # F4: 同步把 24h 窗口计数落盘, 跨进程重启存活 (max_per_day 上限不被绕过)
+        self.sync_store.set_state(
+            "davmail.auto_restart_times", json.dumps(self._restart_times)
+        )
+        if ok:
+            self._consecutive_login_fails = 0
+            logger.warning(
+                f"[davmail-watchdog] 自动恢复成功 ({detail}) — 冷却 "
+                f"{self.auto_restart_cooldown // 60} 分钟内不再触发"
+            )
+        else:
+            logger.error(f"[davmail-watchdog] 自动恢复失败: {detail}")
+        if self.alerter is not None:
+            await self.alerter.alert_davmail_auto_restart(
+                ok, detail, fails, self.auto_restart_cooldown // 60
+            )
 
     def _compute_token_age(self) -> tuple[Optional[float], Optional[float]]:
         """返回 (age_days, mtime_epoch)；token.dat 不存在返回 (None, None)。"""
@@ -309,10 +521,14 @@ class DavMailWatchdog:
         token_age_days: Optional[float],
         oauth_error_active: bool,
         throttle_burst: bool,
+        login_degraded: bool = False,
     ) -> str:
         if oauth_error_active:
             return "critical"
         if not imap_ok or not smtp_ok:
+            return "critical"
+        if login_degraded:
+            # TCP 可达但 IMAP LOGIN 连续失败 = token 劣化 (能发不能收)
             return "critical"
         if token_age_days is not None and token_age_days >= _TOKEN_CRITICAL_DAYS:
             return "critical"
@@ -328,6 +544,7 @@ class DavMailWatchdog:
         now_iso: str,
         imap_ok: bool,
         smtp_ok: bool,
+        login_ok: Optional[bool],
         token_age_days: Optional[float],
         token_mtime: Optional[float],
         oauth_error: Optional[str],
@@ -337,6 +554,18 @@ class DavMailWatchdog:
         ss.set_state("davmail.last_probe_at", now_iso)
         ss.set_state("davmail.imap_reachable", "1" if imap_ok else "0")
         ss.set_state("davmail.smtp_reachable", "1" if smtp_ok else "0")
+        ss.set_state(
+            "davmail.imap_login_ok",
+            "" if login_ok is None else ("1" if login_ok else "0"),
+        )
+        ss.set_state(
+            "davmail.consecutive_login_failures", str(self._consecutive_login_fails)
+        )
+        # F5: 生效的 login 失败阈值传播到 admin router / electron 展示端,
+        # 根治「四个健康读面各自硬编码 3, 设非默认值时判定漂移」。
+        ss.set_state(
+            "davmail.login_fail_threshold", str(self.login_fail_threshold)
+        )
         ss.set_state(
             "davmail.consecutive_imap_failures", str(self._consecutive_imap_fails)
         )
@@ -364,6 +593,7 @@ class DavMailWatchdog:
         *,
         imap_ok: bool,
         smtp_ok: bool,
+        login_ok: Optional[bool],
         token_age_days: Optional[float],
         oauth_error: Optional[str],
         throttle_count: int,
@@ -392,12 +622,62 @@ class DavMailWatchdog:
             await self.alerter.alert_davmail_process_recovered("SMTP")
             self._announced_process_down_smtp = False
 
-        # 2. Token 过期门槛
+        # 1b. IMAP LOGIN 劣化 (L2a): 连续 ≥阈值失败一次性告警, 恢复后通知
+        #     (announce-once-until-cleared, 镜像进程 down/recovered 模式)
+        if self._consecutive_login_fails >= self.login_fail_threshold:
+            if not self._announced_login_degraded:
+                await self.alerter.alert_davmail_login_degraded(
+                    self._consecutive_login_fails, self.login_fail_threshold
+                )
+                self._announced_login_degraded = True
+        elif login_ok and self._announced_login_degraded:
+            await self.alerter.alert_davmail_login_recovered()
+            self._announced_login_degraded = False
+
+        # 2. Token 过期门槛 — episode 化 (task 07-14): 原来每轮 (60s) 都告, 只靠
+        #    alerter 的 300s 内存冷却 → age 一旦越 80d 就每 5min 一条刷到重新
+        #    OAuth 为止 (且进程重启即复发)。
+        #
+        #    🔴 建模成**一个 episode + 一个 severity marker**, 不是两个平级 episode:
+        #      - `davmail_token`          (门槛 80d) = episode 本体, 负责「告知一次」
+        #                                  与「恢复一次」的生命周期。
+        #      - `davmail_token_critical` (门槛 87d) = 严重度升级标记, 只决定这条
+        #                                  消息用 critical 还是 warning 措辞。
+        #    两个平级 episode 会打架: age 首次 89 时两边都 active, 之后 age 降到 82
+        #    (仍在 warning 区间!) → critical episode 判 RECOVER → 误报「token 已恢复」。
+        #    现在 82 只让 severity marker 复位 (无消息, 因为情况是变好且 token
+        #    episode 仍 active 用户早已知情), 恢复通知**只在 age < 80 时**发。
+        #
+        #    投递成功才 commit (两阶段提交, 理由见 episode.py 模块 docstring)。
         if token_age_days is not None:
-            if token_age_days >= _TOKEN_CRITICAL_DAYS:
-                await self.alerter.alert_davmail_token_critical(token_age_days)
-            elif token_age_days >= _TOKEN_WARN_DAYS:
-                await self.alerter.alert_davmail_token_expiring(token_age_days)
+            crit = self.episodes.evaluate(
+                "davmail_token_critical", token_age_days, _TOKEN_CRITICAL_DAYS
+            )
+            warn = self.episodes.evaluate(
+                "davmail_token", token_age_days, _TOKEN_WARN_DAYS
+            )
+            if crit in (episode.ENTER, episode.ESCALATE):
+                if await self.alerter.alert_davmail_token_critical(token_age_days):
+                    self.episodes.commit(
+                        "davmail_token_critical", crit, token_age_days
+                    )
+                    # 这条 critical 消息**同时就是** token episode 的告知 (严重度
+                    # 更高, 不再另发 expiring) → 一并标记 episode 已告知; 否则它
+                    # 永远 inactive, 将来 age 归零就发不出恢复通知。
+                    if warn in (episode.ENTER, episode.ESCALATE):
+                        self.episodes.commit("davmail_token", warn, token_age_days)
+            elif warn in (episode.ENTER, episode.ESCALATE):
+                if await self.alerter.alert_davmail_token_expiring(token_age_days):
+                    self.episodes.commit("davmail_token", warn, token_age_days)
+
+            # 严重度回落 (≥87 → [80,87)): 不是恢复, 不发消息, 只复位 marker 让它
+            # 将来能重新升级告警。无投递 → 无需 gate。
+            if crit == episode.RECOVER:
+                self.episodes.commit("davmail_token_critical", crit, token_age_days)
+            # 真·恢复: age < 80 (重走 OAuth 后 token.dat 刷新 → age 归零) 才发。
+            if warn == episode.RECOVER:
+                if await self.alerter.alert_recovery("DavMail OAuth token"):
+                    self.episodes.commit("davmail_token", warn, token_age_days)
 
         # 3. OAuth 失败：只在出现新错误时报（同一行不重复）
         if oauth_error and oauth_error != self._prev.get("oauth_error"):

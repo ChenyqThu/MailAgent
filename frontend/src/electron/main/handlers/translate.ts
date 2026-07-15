@@ -27,14 +27,22 @@ import Database from 'better-sqlite3'
 import { app, ipcMain } from 'electron'
 import { appendFileSync, existsSync, mkdirSync } from 'fs'
 import { join } from 'path'
+import { generateText } from 'ai'
 
+import { isProviderCredentialsError } from '../../../ai-gateway/providerRef'
 import { getDb, resolveDbPath } from '../db'
 import { extractBlocks, type ExtractedBlock } from '../lib/html-extractor'
+import {
+  getLlmProviderModelResolver,
+  isLlmProviderRegistryEnabled,
+  sanitizedUpstreamErrorMessage
+} from '../llm_provider_resolver'
 import { plaintextToHtml } from '@shared/lib/plaintext_html'
 import {
   getLlmTranslateApiKey,
   getLlmTranslateBaseUrl,
-  getLlmTranslateModel
+  getLlmTranslateModel,
+  hasLlmTranslateKeytarKey
 } from '../llm_settings'
 
 export type TargetLang = 'zh' | 'en'
@@ -435,6 +443,87 @@ interface BatchOutcome {
   ok: boolean
 }
 
+/** 发版终审 HIGH-1 — 显式 translate profile 探测补 keytar 腿：env 缺位但 keytar translate
+ *  slot 有值（未 dual-write 到 .env 的旧 translate 专用 key）同样算显式 profile，registry
+ *  flag on 时不被顶掉。仅在 flag on 时被调用（调用点 && 短路）→ flag off 零 keytar 触碰。 */
+async function hasExplicitTranslateProfile(): Promise<boolean> {
+  if (process.env['LLM_TRANSLATE_BASE_URL'] || process.env['LLM_TRANSLATE_API_KEY']) return true
+  return hasLlmTranslateKeytarKey()
+}
+
+async function runOneBatchWithProvider(
+  batch: ExtractedBlock[],
+  targetLang: TargetLang,
+  model: string,
+  internalId: number,
+  parentAc: AbortController
+): Promise<BatchOutcome> {
+  const idText = batch.map((b) => ({ id: b.id, text: b.text }))
+  const batchTextChars = batch.reduce((sum, b) => sum + b.text.length, 0)
+  const ac = new AbortController()
+  const onParentAbort = (): void => ac.abort()
+  parentAc.signal.addEventListener('abort', onParentAbort, { once: true })
+  registerAbort(internalId, ac)
+  const timer = setTimeout(() => ac.abort(), FETCH_TIMEOUT_MS)
+  try {
+    const resolver = await getLlmProviderModelResolver()
+    const resolved = await resolver.resolve(model)
+    const result = await generateText({
+      model: resolved.model,
+      maxOutputTokens: resolved.maxOutputTokens,
+      system: batchSystemPromptFor(targetLang),
+      prompt: JSON.stringify(idText),
+      abortSignal: ac.signal
+    })
+    if (result.finishReason === 'length') {
+      logLine({
+        event: 'translate.batch_truncated',
+        internalId,
+        batchBlocks: batch.length,
+        batchChars: batchTextChars
+      })
+    }
+    const text = result.text
+    if (text.trim().length === 0) {
+      logLine({ event: 'translate.batch_empty', internalId })
+      return { segments: [], modelReturned: resolved.modelId, ok: false }
+    }
+    const parsed = parseBatchJson(text.trim())
+    if (parsed === null) {
+      logLine({ event: 'translate.batch_parse_failed', internalId, raw: text.slice(0, 200) })
+      return { segments: [], modelReturned: resolved.modelId, ok: false }
+    }
+    const tgtMap = new Map<string, string>()
+    for (const p of parsed) tgtMap.set(p.id, p.tgt)
+    const segments: TranslationSegment[] = []
+    for (const b of batch) {
+      const tgt = tgtMap.get(b.id)
+      if (tgt && tgt.length > 0) segments.push({ src: b.text, tgt })
+    }
+    return { segments, modelReturned: resolved.modelId, ok: true }
+  } catch (err) {
+    if (isProviderCredentialsError(err)) {
+      throw new TranslateError('E_NO_LLM_KEY', err.message)
+    }
+    if (err instanceof Error && (err.name === 'AbortError' || ac.signal.aborted)) {
+      logLine({ event: 'translate.batch_aborted', internalId })
+      return { segments: [], modelReturned: model, ok: false }
+    }
+    // AI SDK 路径：APICallError.message 可能含上游回显的凭证 → 固定形状脱敏后才进日志
+    // （批 2 review MEDIUM-4）。legacy runOneBatch（裸 fetch）的既有日志形状不动。
+    logLine({
+      event: 'translate.batch_fetch_failed',
+      internalId,
+      error: sanitizedUpstreamErrorMessage(err)
+    })
+    return { segments: [], modelReturned: model, ok: false }
+  } finally {
+    clearTimeout(timer)
+    parentAc.signal.removeEventListener('abort', onParentAbort)
+    unregisterAbort(internalId, ac)
+  }
+}
+
 async function runOneBatch(
   batch: ExtractedBlock[],
   targetLang: TargetLang,
@@ -615,8 +704,12 @@ export async function translateBatch(opts: TranslateBatchOpts): Promise<Translat
     }
   }
 
-  const apiKey = await getLlmTranslateApiKey()
-  if (!apiKey) {
+  const providerRegistryEnabled = isLlmProviderRegistryEnabled()
+  // v1 keeps an explicitly configured translate-only gateway outside the registry. Its dedicated
+  // base/key semantics take precedence even when the registry flag is on.
+  const useProviderRegistry = providerRegistryEnabled && !(await hasExplicitTranslateProfile())
+  const apiKey = (await getLlmTranslateApiKey()) ?? ''
+  if (!useProviderRegistry && !apiKey) {
     throw new TranslateError(
       'E_NO_LLM_KEY',
       'LLM translate API key not configured — set it in Settings or LLM_TRANSLATE_API_KEY env'
@@ -647,7 +740,9 @@ export async function translateBatch(opts: TranslateBatchOpts): Promise<Translat
 
   try {
     const outcomes = await withConcurrency(batches, CONCURRENCY, (batch) =>
-      runOneBatch(batch, targetLang, baseUrl, apiKey, model, internalId, parentAc)
+      useProviderRegistry
+        ? runOneBatchWithProvider(batch, targetLang, model, internalId, parentAc)
+        : runOneBatch(batch, targetLang, baseUrl, apiKey, model, internalId, parentAc)
     )
 
     // Stitch in batch order so segment order matches DOM order.

@@ -72,7 +72,22 @@
       "zoomOut": "缩小",
       "rotate": "旋转",
       "reset": "重置",
-      "close": "关闭"
+      "close": "关闭",
+      "loadError": "无法加载图片。"
+    },
+    "attachmentBar": {
+      "title": "本对话附件",
+      "thisMessage": "本封",
+      "downloadAll": "全部下载",
+      "loading": "加载中…",
+      "preview": "预览",
+      "download": "下载",
+      "savedTo": "已保存到 ~/Downloads/{name}",
+      "savedAll": "已保存 {n} 个附件到 ~/Downloads",
+      "missing": "附件文件在磁盘上缺失。",
+      "previewFailed": "无法加载预览。",
+      "tooLarge": "文件过大，无法预览，请下载查看。",
+      "partialFailed": "部分附件加载失败。"
     }
   },
   "emailRow": {
@@ -150,6 +165,7 @@
     "attach": "附件",
     "attachmentRemove": "移除 {name}",
     "attachmentFailed": "上传失败",
+    "dropHint": "松开以添加附件",
     "richPreserveHint": "复杂格式原文已保真保留，发送时自动附在新内容之后",
     "loadingPlan": "加载中…",
     "planError": "预填加载失败",
@@ -1702,6 +1718,82 @@
         "dir": "（目录 {scope}）"
       }
     },
+    "providers": {
+      "title": "模型服务",
+      "helper": "管理 LLM 上游 provider：官方模型 / OpenAI 兼容中转 / Anthropic 兼容中转可多家并存。default provider 承接旧网关配置（legacy 模型引用零迁移）。",
+      "loading": "加载中…",
+      "loadError": "加载 provider 列表失败。",
+      "empty": "还没有 provider。点右上「添加」从模板创建。",
+      "addButton": "添加",
+      "addTitle": "添加 provider",
+      "added": "已添加 {name}",
+      "deleted": "已删除 {name}",
+      "defaultBadge": "默认",
+      "expandAria": "展开 {name}",
+      "enabledAria": "启用/停用 {name}",
+      "deleteAria": "删除 {name}",
+      "displayName": "名称",
+      "baseUrl": "API 地址",
+      "baseUrlPlaceholder": "留空 = 官方默认端点",
+      "apiKey": {
+        "label": "API Key",
+        "set": "已设置（····{last4}），输入新值可轮换",
+        "unset": "未设置",
+        "clear": "清除",
+        "clearAria": "清除 API Key"
+      },
+      "headers": {
+        "label": "自定义 Header",
+        "keyPlaceholder": "Header 名",
+        "valuePlaceholder": "值",
+        "add": "添加",
+        "deleteAria": "删除 header {name}",
+        "save": "保存",
+        "cancel": "取消",
+        "reenterHint": "安全起见服务端不回显 header 值——保存前需为所有保留项重新输入值"
+      },
+      "test": {
+        "label": "连通性测试",
+        "button": "测试连接",
+        "running": "测试中…",
+        "ok": "连接正常（{ms}ms）",
+        "fail": "连接失败"
+      },
+      "models": {
+        "title": "模型",
+        "refresh": "拉取模型列表",
+        "refreshing": "拉取中…",
+        "loading": "加载中…",
+        "empty": "还没有模型。点「拉取模型列表」从上游获取，或在下方手动添加（中转不透传 /models 时的兜底）。",
+        "manualBadge": "手动",
+        "manualPlaceholder": "手动添加模型 id（wire id）",
+        "manualAdd": "添加",
+        "maxOutputPlaceholder": "maxOutput",
+        "maxOutputAria": "{model} 的 max output tokens",
+        "deleteAria": "删除模型 {model}",
+        "cap": {
+          "tools": "工具",
+          "vision": "视觉",
+          "reasoning": "推理"
+        }
+      },
+      "template": {
+        "custom-openai": "自定义 OpenAI-compatible",
+        "custom-anthropic": "自定义 Anthropic-compatible"
+      },
+      "add": {
+        "template": "模板",
+        "id": "ID（slug）",
+        "idPlaceholder": "小写字母开头，可含数字/-/_",
+        "idInvalid": "非法 slug",
+        "baseUrlRequired": "必填（该协议无官方默认端点）",
+        "submit": "创建",
+        "cancel": "取消"
+      },
+      "group": {
+        "default": "default（主网关）"
+      }
+    },
     "skillPacks": {
       "title": "Skill 安装",
       "helper": "从 URL 或本地路径安装第三方 skill 包。两段式：先获取预览、人工审阅包内容与声明，再确认安装。已安装的 skill 会出现在上方技能列表（启用/停用），密钥与配置在下方逐项管理。",
@@ -1915,6 +2007,7 @@
     "accounts": {
       "notion": {
         "title": "Notion 集成",
+        "disabledNotice": "Notion 未配置：镜像同步 / 项目周报 / 日历同步已停用，邮件仅在本地同步（列表、搜索、AI 分类等本地功能不受影响）。填齐 Token 与邮件数据库 ID 并重启后启用。后补配置只同步新邮件，历史邮件不回填（可用 mailagent email resync 逐封补推）。",
         "token": {
           "label": "Notion Token",
           "helper": "Integration token,以 ntn_ 或 secret_ 开头",

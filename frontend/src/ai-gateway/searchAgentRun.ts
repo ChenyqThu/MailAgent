@@ -24,6 +24,12 @@ import { z } from 'zod'
 
 import type { AiGatewayConfig } from './config'
 import { resolveModelFactory } from './chatRun'
+// HIGH-1 (batch1 review) — SDK-free typed credentials error from the registry resolver; mapped to
+// the E_NO_LLM_KEY vocabulary in normalizeLoopError (the SSE is already open when resolve runs).
+import { isProviderCredentialsError } from './providerRef'
+// 发版终审 M3 — registry 语境下 normalizeLoopError 的 message 走固定形状脱敏（上游错误正文
+// 可能回显凭证，会经 SSE result 帧进 renderer）；flag off 保持原 message 形状（字节级纪律）。
+import { sanitizedUpstreamErrorMessage } from './upstreamError'
 // Relative type-only import (erased) — same discipline as tools/email.ts's relative
 // runtime import: the pure-Node poc harness (tsx) must be able to load this module.
 import type { SearchAgentPhase, SearchHit } from '../shared/api/types'
@@ -107,13 +113,29 @@ export function pickSearchAgentTools(all: ToolSet): ToolSet {
 
 /** Map a loop failure to the legacy harness error vocabulary the palette already
  *  formats: HTTP 429 → E_QUOTA, other upstream API errors → E_UPSTREAM, anything
- *  else → E_AGENT. */
-function normalizeLoopError(err: unknown): { code: string; message: string } {
+ *  else → E_AGENT. M3 — `sanitizeUpstream`（= cfg.providerRegistryEnabled）时 message 走
+ *  固定形状脱敏（凭证错误除外——那是我们自己构造的 typed 文案，安全）；off 字节级不动。 */
+function normalizeLoopError(
+  err: unknown,
+  sanitizeUpstream: boolean
+): { code: string; message: string } {
+  // HIGH-1 — registry-path credential failure keeps the gateway-wide E_NO_LLM_KEY code (the
+  // renderer client already maps it, see searchAgentClient.ts).
+  if (isProviderCredentialsError(err)) {
+    return { code: 'E_NO_LLM_KEY', message: err.message }
+  }
   if (APICallError.isInstance(err)) {
     const code = err.statusCode === 429 ? 'E_QUOTA' : 'E_UPSTREAM'
-    return { code, message: err.message }
+    return { code, message: sanitizeUpstream ? sanitizedUpstreamErrorMessage(err) : err.message }
   }
-  return { code: 'E_AGENT', message: err instanceof Error ? err.message : String(err) }
+  return {
+    code: 'E_AGENT',
+    message: sanitizeUpstream
+      ? sanitizedUpstreamErrorMessage(err)
+      : err instanceof Error
+        ? err.message
+        : String(err)
+  }
 }
 
 /**
@@ -163,8 +185,11 @@ export async function runHeadlessSearchAgent(
 
   let steps = 0
   try {
+    const resolvedModel = await resolveModelFactory(cfg)(
+      opts.model && opts.model.length > 0 ? opts.model : cfg.model
+    )
     const result = await generateText({
-      model: resolveModelFactory(cfg)(opts.model && opts.model.length > 0 ? opts.model : cfg.model),
+      model: resolvedModel.model,
       messages: [{ role: 'user', content: opts.userContent }],
       tools,
       stopWhen: [stepCountIs(SEARCH_AGENT_MAX_ITER), hasToolCall('present_results')],
@@ -173,10 +198,7 @@ export async function runHeadlessSearchAgent(
         for (const tr of step.toolResults) {
           if (tr.toolName === 'email_search_fulltext') mergeSearchHits(pool, tr.output)
         }
-        if (
-          !sawSearchPhase &&
-          step.toolCalls.some((c) => c.toolName === 'email_search_fulltext')
-        ) {
+        if (!sawSearchPhase && step.toolCalls.some((c) => c.toolName === 'email_search_fulltext')) {
           sawSearchPhase = true
           onPhase?.('searching')
         }
@@ -187,14 +209,19 @@ export async function runHeadlessSearchAgent(
     // User cancel (client disconnect → req close → abort): the caller can't write to a
     // closed response anyway; the code mirrors the legacy f-bis contract.
     if (abortSignal.aborted && !presented) {
-      return { ok: false, hits: [], summary: null, error: { code: 'E_ABORTED', message: 'cancelled' } }
+      return {
+        ok: false,
+        hits: [],
+        summary: null,
+        error: { code: 'E_ABORTED', message: 'cancelled' }
+      }
     }
     // Upstream/loop failure with hits already pooled → best-effort (legacy f-ter served
     // the pool even after a harness error); empty pool → normalized error code.
     if (!presented) {
       const bestEffort = assembleBestEffort(pool, opts.mailbox)
       if (bestEffort.length > 0) return { ok: true, hits: bestEffort, summary: null }
-      const { code, message } = normalizeLoopError(err)
+      const { code, message } = normalizeLoopError(err, cfg.providerRegistryEnabled === true)
       return { ok: false, hits: [], summary: null, error: { code, message } }
     }
   }

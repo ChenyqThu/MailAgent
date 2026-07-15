@@ -34,7 +34,7 @@
 // serve-api (gate off) 时行为与改造前逐字节一致。cloudflared **不**纳入 lifecycle (依赖
 // 用户环境态 + 该独立于 Electron 常驻, 由 runbook 教用户 pm2 托管)。
 
-import { spawn, type ChildProcess } from 'child_process'
+import { execFileSync, spawn, type ChildProcess } from 'child_process'
 import { app } from 'electron'
 import {
   createWriteStream,
@@ -296,6 +296,9 @@ export interface LifecycleOptions {
   crashBackoffMs?: number[]
   /** crash-loop 断路器上限: 连续崩溃达此数 (中间无一次 ready) → 放弃自拉起 (可注入; 默认 MAX_CRASH_RESTARTS)。 */
   maxCrashRestarts?: number
+  /** 启动自愈扫描 (可注入便于单测; 默认 killStaleBackendListeners → 真实 lsof/ps/kill)。
+   *  第二参 = 排除名单 (本 manager 自家活子进程 pid, F2 防御, 见 killStaleBackendListeners)。 */
+  staleSweep?: (ports: number[], excludePids?: ReadonlySet<number>) => number[]
 }
 
 export type BackendState = 'idle' | 'starting' | 'ready' | 'stopped' | 'failed'
@@ -358,6 +361,161 @@ export function resolveApiPort(): number {
   const raw = process.env.MAILAGENT_API_PORT
   const n = raw != null ? Number.parseInt(raw, 10) : NaN
   return Number.isFinite(n) && n > 0 ? n : DEFAULT_API_PORT
+}
+
+/** serve 进程内 SSE server 的默认端口 (与 src/config.py:207 `sse_local_port` env=SSE_LOCAL_PORT 一致)。 */
+export const DEFAULT_SSE_PORT = 9200
+
+/** serve 的 SSE 端口 (env SSE_LOCAL_PORT, 默认 9200) — 启动自愈扫描用。 */
+export function resolveSsePort(): number {
+  const raw = process.env.SSE_LOCAL_PORT
+  const n = raw != null ? Number.parseInt(raw, 10) : NaN
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_SSE_PORT
+}
+
+// ---------------------------------------------------------------------------
+// 启动自愈 — spawn 前清理上次退出残留的孤儿 mailagent 进程 (占 9200/8200)
+//
+// 为什么会有残留 (parent_watchdog / quit-hook 盖不住的三种残余场景, 见
+// .trellis/tasks/07-14-fork-commits-imap-uidnext-listener-composer/research/L4-stale-listener.md §1.5):
+//   1. 旧版本 (pre-v0.6.4, 无 parent_watchdog 注入) 升级遗留的孤儿 → 永久占端口;
+//   2. watchdog 5s 轮询窗口: main 死后 child 最长 5s 才自杀, 崩溃后快速重启撞窗口;
+//   3. 高内存/swap 抖动拖住 watchdog 线程调度 (17GB 孤儿事故同款场景)。
+// 后果: 9200 被占 → 新 serve SSE bind 失败**只 warning** (src/service.py:646-658)
+// 静默降级 polling + 双 serve 同写 sync_store.db; 8200 被占 → serve-api crash-loop
+// 至断路器。两者都不会自愈 → spawn 前确定性清掉。
+// ---------------------------------------------------------------------------
+
+/** 残留进程识别标记: 打包 bin/mailagent wrapper 经
+ *  `python3.11 -B -P -c "from src.cli.main import app; app(prog_name='mailagent')"` exec
+ *  (frontend/scripts/build-python-venv.sh:85 生成), 此串只出现在打包态后端进程的命令行里。
+ *  dev 侧 venv/bin/mailagent 是 pip console_scripts shim (`sys.exit(app())`, 无 prog_name),
+ *  pm2 后端是 `python3 main.py` —— 都不含此 marker → pnpm dev 蹭 8200 时不会被误杀。
+ *  🔴 与 build-python-venv.sh 的 wrapper 强耦合: 改 wrapper 必同步此 marker (有单测断言
+ *  wrapper 脚本文本含此串, 改了忘同步会红灯而非静默失效)。 */
+export const STALE_CMD_MARKER = "prog_name='mailagent'"
+
+/** 探活轮询间隔 (ms)。 */
+const STALE_POLL_MS = 100
+/** SIGTERM 后短等上限: 5 × 100ms = 500ms (给孤儿一个自清机会, 但 start() 阻塞开窗等不起
+ *  graceful 的 >11s, 落不到就升级 SIGKILL)。 */
+const STALE_TERM_POLL_MAX = 5
+/** SIGKILL 后等内核回收上限: 10 × 100ms = 1s (正常毫秒级, 上限防极端僵死拖死启动)。 */
+const STALE_KILL_POLL_MAX = 10
+
+/** start() 是同步路径, 等进程回收用 Atomics.wait 同步睡 (Node 主线程允许; 单次 ≤100ms)。 */
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+}
+
+/** 可注入的系统调用面 (单测不碰真实进程)。 */
+export interface StaleSweepIO {
+  /** 跑外部命令取 stdout。默认 execFileSync (timeout 5s 兜底); 命令非零退出
+   *  (lsof 无监听者是常态) 会 throw。 */
+  run?: (cmd: string, args: string[]) => string
+  /** 发信号 (含 signal=0 探活)。默认 process.kill。 */
+  kill?: (pid: number, signal: NodeJS.Signals | number) => void
+  sleep?: (ms: number) => void
+}
+
+/**
+ * 启动自愈: 扫描 ports 上 LISTEN 的残留 mailagent 进程, SIGTERM→短等(≤500ms)→SIGKILL。
+ *
+ * 安全判据 (绝不误杀): `lsof -ti tcp:<port> -sTCP:LISTEN` 拿 pid → `ps -o command=` 读
+ * 命令行 → **只**处理含 STALE_CMD_MARKER 的进程; 任何判定不明 (ps 失败 / 进程消失 /
+ * 非 marker) 一律跳过 + 记日志, 不替别人的进程做决定 (端口被无关程序占用时留给 serve
+ * 自己的 bind 失败 warning)。全程 fail-open: lsof/ps 不可用只跳过, 不阻断启动。
+ *
+ * kill 策略: 先 SIGTERM 短等 (marker 确认是自家残留, 给一个自清机会) → 仍活着才
+ * SIGKILL (孤儿 graceful 关闭实测 >11s, 启动路径等不起; SQLite 全程 WAL, SIGKILL
+ * 崩溃安全) → 再等内核真正回收 (否则随后 spawn 的新 serve 仍可能撞 bind)。
+ *
+ * @param excludePids 排除名单 (F2 防御): 本 manager 当前持有的**活子进程** pid ——
+ *   它们命令行同样含 marker 且占着 8200/9200, 二次 start() (onboarding 重试 / 重复
+ *   IPC) 时绝不能被当残留杀掉 (杀了之后 spawnService 因 child ref 仍在会幂等跳过,
+ *   exit 事件还会误计 crash 耗 crash-loop 额度)。命中即跳过 + 日志。
+ * @returns 实际清理的 pid 列表 (日志/断言用)。
+ */
+export function killStaleBackendListeners(
+  ports: number[],
+  io: StaleSweepIO = {},
+  excludePids: ReadonlySet<number> = new Set()
+): number[] {
+  const run =
+    io.run ??
+    ((cmd: string, args: string[]) =>
+      execFileSync(cmd, args, { encoding: 'utf8', timeout: 5_000 }) as string)
+  const kill = io.kill ?? ((pid: number, sig: NodeJS.Signals | number) => process.kill(pid, sig))
+  const sleep = io.sleep ?? sleepSync
+  const alive = (pid: number): boolean => {
+    try {
+      kill(pid, 0)
+      return true
+    } catch {
+      return false
+    }
+  }
+  /** 探活轮询直到进程消失或次数用尽; 返回「是否已消失」。无残留时零耗时 (首查即返)。 */
+  const waitGone = (pid: number, maxPolls: number): boolean => {
+    for (let i = 0; i < maxPolls; i++) {
+      if (!alive(pid)) return true
+      sleep(STALE_POLL_MS)
+    }
+    return !alive(pid)
+  }
+  const killed: number[] = []
+  for (const port of [...new Set(ports)]) {
+    let out = ''
+    try {
+      // -t: 只输出 pid; -sTCP:LISTEN: 只看监听者 (连过来的 client 不算)。
+      out = run('lsof', ['-ti', `tcp:${port}`, '-sTCP:LISTEN'])
+    } catch {
+      continue // 无监听者 (lsof exit 1, 常态) / lsof 不可用 → 该端口跳过
+    }
+    for (const line of out.split('\n')) {
+      const pid = Number.parseInt(line.trim(), 10)
+      if (!Number.isFinite(pid) || pid <= 0 || pid === process.pid) continue
+      if (excludePids.has(pid)) {
+        // F2: 本 manager 自家的活子进程 (二次 start() 场景) — 不是残留, 跳过。
+        console.warn(
+          `[backend_lifecycle] 端口 ${port} 监听者 pid=${pid} 是本 manager 托管的活子进程, 跳过 (skip own child)`
+        )
+        continue
+      }
+      let cmd = ''
+      try {
+        cmd = run('ps', ['-o', 'command=', '-p', String(pid)])
+      } catch {
+        continue // 进程已消失 / ps 失败 → 判定不明, 跳过 (绝不 kill)
+      }
+      if (!cmd.includes(STALE_CMD_MARKER)) {
+        console.warn(
+          `[backend_lifecycle] 端口 ${port} 被非 mailagent 进程占用 (pid=${pid}), 不清理; ` +
+            'serve 将按现状降级 (SSE→polling / serve-api bind 失败)。'
+        )
+        continue
+      }
+      try {
+        kill(pid, 'SIGTERM')
+      } catch {
+        continue // 已退出 / 无权限 → 不动
+      }
+      if (!waitGone(pid, STALE_TERM_POLL_MAX)) {
+        // SIGTERM 短等未回收 → 升级 SIGKILL。竞态 (恰好退了) 抛 ESRCH 视为已回收。
+        try {
+          kill(pid, 'SIGKILL')
+        } catch {
+          /* 已退出 */
+        }
+        waitGone(pid, STALE_KILL_POLL_MAX)
+      }
+      killed.push(pid)
+      console.warn(
+        `[backend_lifecycle] 启动自愈: 清理残留 mailagent 进程 pid=${pid} (占端口 ${port})`
+      )
+    }
+  }
+  return killed
 }
 
 /**
@@ -447,6 +605,7 @@ export class BackendLifecycleManager {
   private readonly apiProbe: (port: number) => Promise<boolean>
   private readonly crashBackoffMs: number[]
   private readonly maxCrashRestarts: number
+  private readonly staleSweep: (ports: number[], excludePids?: ReadonlySet<number>) => number[]
 
   constructor(opts: LifecycleOptions = {}) {
     this.pollIntervalMs = opts.pollIntervalMs ?? 500
@@ -457,6 +616,10 @@ export class BackendLifecycleManager {
     this.apiProbe = opts.apiProbe ?? probeApiHealth
     this.crashBackoffMs = opts.crashBackoffMs ?? CRASH_RESTART_BACKOFF_MS
     this.maxCrashRestarts = opts.maxCrashRestarts ?? MAX_CRASH_RESTARTS
+    this.staleSweep =
+      opts.staleSweep ??
+      ((ports: number[], excludePids?: ReadonlySet<number>) =>
+        killStaleBackendListeners(ports, {}, excludePids))
   }
 
   /**
@@ -509,6 +672,23 @@ export class BackendLifecycleManager {
     if (!this.safeIsPackaged()) {
       // dev / 服务器部署: 后端由 pm2 托管, 不接管。
       return
+    }
+    // 启动自愈: 上次退出可能留下孤儿 mailagent (占 9200/8200), 先清掉再 spawn ——
+    // 防新 serve SSE bind 失败静默降级 polling + 双进程同写 DB / serve-api crash-loop。
+    // fail-open: 扫描自身出错只 warn, 绝不阻断启动。
+    // F2 防御: 收集本 manager 当前活着的子进程 pid 作排除名单 —— start() 被二次调用
+    // (onboarding 重试 / 重复 IPC) 时, sweep 不得把自家健康子进程当残留杀掉 (它们同样
+    // 含 marker 且占 8200/9200; 杀了之后 spawnService 因 child ref 仍在会幂等跳过,
+    // exit 又误计 crash)。不依赖「调用方只调一次」的约定。
+    const ownPids = new Set<number>()
+    for (const svc of this.services) {
+      const pid = svc.child && !svc.child.killed ? svc.child.pid : undefined
+      if (typeof pid === 'number') ownPids.add(pid)
+    }
+    try {
+      this.staleSweep([resolveSsePort(), resolveApiPort()], ownPids)
+    } catch (err) {
+      console.warn('[backend_lifecycle] 启动自愈扫描失败 (继续 spawn)', err)
     }
     const dataRoot = resolveDataRoot()
     const baseEnv = this.buildBaseEnv(dataRoot)

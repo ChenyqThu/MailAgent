@@ -131,6 +131,13 @@ export function DavMailHealthCard(): React.ReactElement | null {
               连续失败 {h.consecutive_imap_failures} 次
             </div>
           )}
+          {/* L2a: TCP 可达但 LOGIN 失败 = token 劣化 (能发不能收) */}
+          {h.imap_login_ok === false && (
+            <div className="text-aux text-fail mt-1">
+              LOGIN 失败
+              {(h.consecutive_login_failures ?? 0) > 0 && ` ×${h.consecutive_login_failures}`}
+            </div>
+          )}
         </div>
 
         {/* SMTP probe */}

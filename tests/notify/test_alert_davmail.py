@@ -6,9 +6,7 @@
 from __future__ import annotations
 
 import asyncio
-import unittest.mock as um
 
-import pytest
 
 from src.notify.alert import FeishuAlertNotifier
 
@@ -71,11 +69,13 @@ def test_alert_davmail_process_down_includes_port_and_proto(monkeypatch):
     assert "IMAP" in title
 
 
-def test_alert_davmail_process_recovered_is_info(monkeypatch):
+def test_alert_davmail_process_recovered_is_warning(monkeypatch):
+    """task 07-14: 从 info(blue) 提到 warning(yellow) —— alert_levels 默认不含
+    info, 原 info 级恢复通知一条都发不出去 (投递闸见 test_alert_worker_methods)。"""
     n, sent = _make_notifier(monkeypatch)
     _run(n.alert_davmail_process_recovered("IMAP"))
     assert len(sent) == 1
-    assert sent[0]["header"]["template"] == "blue"
+    assert sent[0]["header"]["template"] == "yellow"
 
 
 def test_alert_davmail_ews_throttling_is_warning(monkeypatch):
@@ -85,6 +85,45 @@ def test_alert_davmail_ews_throttling_is_warning(monkeypatch):
     card = sent[0]
     assert card["header"]["template"] == "yellow"
     assert "5" in card["elements"][0]["content"]
+
+
+def test_alert_davmail_login_degraded_is_critical(monkeypatch):
+    """L2a: IMAP LOGIN 持续失败 (token 劣化) → critical + 计数/阈值入内容."""
+    n, sent = _make_notifier(monkeypatch)
+    _run(n.alert_davmail_login_degraded(3, 3))
+    assert len(sent) == 1
+    card = sent[0]
+    assert card["header"]["template"] == "red"
+    assert "LOGIN" in card["header"]["title"]["content"]
+    assert "3" in card["elements"][0]["content"]
+
+
+def test_alert_davmail_login_recovered_is_warning(monkeypatch):
+    """task 07-14: 同上, info → warning 才发得出去 (L2a 恢复通知)."""
+    n, sent = _make_notifier(monkeypatch)
+    _run(n.alert_davmail_login_recovered())
+    assert len(sent) == 1
+    assert sent[0]["header"]["template"] == "yellow"
+
+
+def test_alert_davmail_auto_restart_success_warning_failure_critical(monkeypatch):
+    """L2b: 自动重启成功 → warning; 失败 → critical (需人工介入)."""
+    n, sent = _make_notifier(monkeypatch)
+    _run(n.alert_davmail_auto_restart(True, "exit 0", 3, 10))
+    _run(n.alert_davmail_auto_restart(False, "exit 1: boom", 3, 10))
+    assert len(sent) == 2
+    assert sent[0]["header"]["template"] == "yellow"  # 成功 = warning
+    assert sent[1]["header"]["template"] == "red"  # 失败 = critical
+    assert "boom" in sent[1]["elements"][0]["content"]
+
+
+def test_alert_davmail_restart_storm_is_critical(monkeypatch):
+    n, sent = _make_notifier(monkeypatch)
+    _run(n.alert_davmail_restart_storm(6, 6))
+    assert len(sent) == 1
+    card = sent[0]
+    assert card["header"]["template"] == "red"
+    assert "6" in card["elements"][0]["content"]
 
 
 def test_cooldown_dedupes_repeat_same_key(monkeypatch):

@@ -11,6 +11,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 import '@shared/i18n'
 import { bootAppearance } from '@shared/state/appearance'
+import { installFileDropGuard } from '@shared/lib/fileDropGuard'
 import { makeMailApi } from '@shared/api/factory'
 import { setUpdaterStatus } from '@shared/state/updater'
 import { setIslandStatus } from '@shared/state/island'
@@ -58,6 +59,12 @@ export default function App(): React.ReactElement {
   useEffect(() => {
     bootAppearance()
   }, [])
+
+  // L0 — composer 拖拽附件的全局配套: 拖文件脱靶到 composer 外时, Chromium 默认
+  // 会把窗口导航到 file:// (毁掉 app)。document 级兜底只阻断文件拖放的默认导航;
+  // composer 内 drop 在其 <main> 上先于 document 冒泡处理, 文本拖拽不含 Files 不拦。
+  // installFileDropGuard 返回卸载函数, 直接作 effect cleanup (StrictMode 双挂安全)。
+  useEffect(() => installFileDropGuard(), [])
 
   // 应用级单次订阅 updater / island 事件 → 写入对应 zustand store。
   // 之前每个路由的 StatusBar 各自订阅一份, 路由切换 remount 导致 ipcRenderer

@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, Optional, Union
 
 from loguru import logger
 
-from src.mail.backend.base import IMailBackend
+from src.mail.backend.base import IMailBackend, MarkerUnavailableError
 from src.mail.backend.imap_client import (
     DavMailConnectionError,
     discover_drafts_folder,
@@ -1044,9 +1044,15 @@ class DavMailBackend(IMailBackend):
         DavMail marker = uidnext (int). uidvalidity 内部缓存在 self.inbox_uidvalidity,
         变化时 check_for_changes 会 log warning. 主循环用 uidnext 作为
         SyncStore.last_max_row_id 持久化.
+
+        超时/失败 raise MarkerUnavailableError — IMAP UIDNEXT 恒 >= 1, 修复前失败
+        return 0 会被首次 baseline 持久化 → 下轮 get_new_emails(0) 对 INBOX 发
+        `UID 1:*` 全量重刷 (7万+ INBOX 的 STATUS 实测慢过 30s, task 07-14 L3)。
+        timeout 可配 DAVMAIL_STATUS_TIMEOUT_SEC (默认 30, 大邮箱调 90)。
         """
+        timeout = int(getattr(self.cfg, "davmail_status_timeout_sec", 30))
         try:
-            with imap_session(self.cfg, timeout=30) as imap:
+            with imap_session(self.cfg, timeout=timeout) as imap:
                 typ, data = imap.status("INBOX", "(UIDNEXT UIDVALIDITY)")
                 if typ == "OK" and data:
                     uidnext = self._extract_status_value(data[0], "UIDNEXT")
@@ -1057,7 +1063,12 @@ class DavMailBackend(IMailBackend):
                         return int(uidnext)
         except Exception as e:
             logger.warning(f"[davmail-backend] get_current_max_row_id failed: {e}")
-        return 0
+            raise MarkerUnavailableError(
+                f"INBOX STATUS(UIDNEXT) failed (timeout={timeout}s): {e}"
+            ) from e
+        raise MarkerUnavailableError(
+            f"INBOX STATUS(UIDNEXT) returned no usable data (typ={typ!r})"
+        )
 
     def _resolve_imap_box(self, mailbox: Optional[str]) -> str:
         """中文 mailbox → IMAP folder 原始名 (modified-UTF7), 优先用 probe 探测到的实际名。
@@ -1117,8 +1128,13 @@ class DavMailBackend(IMailBackend):
 
         Returns: (has_new, inbox_uidnext, estimated_new_count)
         """
-        current = self.get_current_max_row_id()
-        if current == 0:
+        try:
+            current = self.get_current_max_row_id()
+        except MarkerUnavailableError as e:
+            # fail-safe: 本轮按「无新邮件」跳过, marker 不动, 下轮 IMAP 恢复自愈;
+            # 在此吞掉不外冒 → 不污染 _poll_cycle 的 consecutive_errors 健康计数
+            # (STATUS 偶发慢不等于服务不健康)。
+            logger.warning(f"[davmail-backend] check_for_changes skipped this cycle: {e}")
             return (False, last_max_row_id, 0)
         inbox_new = max(0, current - int(last_max_row_id or 0))
         sent_new = 0

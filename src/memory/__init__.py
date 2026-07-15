@@ -7,10 +7,11 @@ CI 的 import self-check 下，顶层 re-export 会过早触发它（codex revie
 """
 from typing import TYPE_CHECKING, Any
 
-__all__ = ["Mem0Engine", "build_mem0_config", "get_mem0_engine"]
+__all__ = ["Mem0CaptureSkip", "Mem0Engine", "build_mem0_config", "get_mem0_engine"]
 
 if TYPE_CHECKING:  # 仅类型检查期可见；运行时不 import（不触发 src.config / 重依赖）
     from src.memory.mem0_engine import (
+        Mem0CaptureSkip,
         Mem0Engine,
         build_mem0_config,
         get_mem0_engine,

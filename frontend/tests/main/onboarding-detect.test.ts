@@ -23,12 +23,12 @@ describe('detectUserState', () => {
   })
 
   it('returns "config-incomplete" when required keys missing', () => {
-    writeFileSync(envPath, 'USER_EMAIL=a@b.com\n# 缺 NOTION_TOKEN / EMAIL_DATABASE_ID\n')
+    writeFileSync(envPath, 'NOTION_TOKEN=ntn_x\n# 缺 USER_EMAIL\n')
     expect(detectUserState({ envPath })).toBe('config-incomplete')
   })
 
   it('returns "config-incomplete" when a required key is present but empty', () => {
-    writeFileSync(envPath, 'NOTION_TOKEN=\nEMAIL_DATABASE_ID=db\nUSER_EMAIL=a@b.com\n')
+    writeFileSync(envPath, 'USER_EMAIL=\nNOTION_TOKEN=ntn_x\n')
     expect(detectUserState({ envPath })).toBe('config-incomplete')
   })
 
@@ -40,8 +40,15 @@ describe('detectUserState', () => {
     expect(detectUserState({ envPath })).toBe('configured')
   })
 
+  // 07-12 P3b Notion 可选化 pin: 只有 USER_EMAIL 也算 configured (跳过 Notion 的
+  // 用户不会循环弹向导 —— 与 buildCompletePatch 的「空值丢弃不写行」约定成对)。
+  it('returns "configured" without any Notion keys (Notion optional)', () => {
+    writeFileSync(envPath, 'USER_EMAIL=a@b.com\n')
+    expect(detectUserState({ envPath })).toBe('configured')
+  })
+
   it('ignores comments and blank lines, treats quoted-empty as empty', () => {
-    writeFileSync(envPath, 'NOTION_TOKEN=""\nEMAIL_DATABASE_ID=db\nUSER_EMAIL=a@b.com\n')
+    writeFileSync(envPath, 'USER_EMAIL=""\nNOTION_TOKEN=ntn_x\n')
     expect(detectUserState({ envPath })).toBe('config-incomplete')
   })
 })

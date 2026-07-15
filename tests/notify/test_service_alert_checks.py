@@ -37,11 +37,16 @@ class _SignatureFakeAlerter:
     通用 ``__getattr__`` 动态 mock 会吞掉任意 kwargs — 旧代码的 ``message=``
     错误关键字在那种 mock 下不报错, 测不出 TypeError bug。这里签名逐字对齐
     FeishuAlertNotifier.send_alert, 传错 kwarg 立即 TypeError。
+
+    task 07-14: 状态型告警的 ``alert_*`` 现在**返回投递结果 bool**(两阶段提交靠
+    它决定要不要 commit) → 这里逐字对齐, 并可用 ``delivered=False`` 模拟投递失败
+    (飞书挂 / level 门 / cooldown 门)。
     """
 
-    def __init__(self):
+    def __init__(self, delivered: bool = True):
         self.send_alert_calls: list[dict] = []
         self.method_calls: list[tuple] = []
+        self.delivered = delivered
 
     async def send_alert(
         self, level, title, content,
@@ -55,9 +60,30 @@ class _SignatureFakeAlerter:
 
     async def alert_outbox_backlog(self, aged_pending, threshold):
         self.method_calls.append(("alert_outbox_backlog", aged_pending, threshold))
+        return self.delivered
 
     async def alert_restart_frequency(self, count_24h, threshold):
+        # 未接 episode (自带 24h 持久冷却) → 调用方不读返回值, 与真实签名一致
         self.method_calls.append(("alert_restart_frequency", count_24h, threshold))
+
+    async def alert_dead_letters(self, count, threshold):
+        self.method_calls.append(("alert_dead_letters", count, threshold))
+        return self.delivered
+
+    async def alert_service_unhealthy(self, consecutive_errors):
+        self.method_calls.append(("alert_service_unhealthy", consecutive_errors))
+        return self.delivered
+
+    async def alert_radar_unavailable(self):
+        self.method_calls.append(("alert_radar_unavailable",))
+        return self.delivered
+
+    async def alert_consecutive_errors(self, count, last_error):
+        self.method_calls.append(("alert_consecutive_errors", count, last_error))
+
+    async def alert_recovery(self, component):
+        self.method_calls.append(("alert_recovery", component))
+        return self.delivered
 
 
 class _FakeStateStore:
@@ -84,7 +110,7 @@ def _outbox_stats(lt_30m: int = 0, gt_30m: int = 0):
 
 def _build_app(
     *, alerter, backend_origin="applescript",
-    outbox_stats=None, state=None,
+    outbox_stats=None, state=None, watcher_stats=None,
 ):
     """EmailNotionSyncApp.__new__ + 只挂 _check_and_alert 需要的属性
     (镜像 tests/mail/test_expansion_loop.py 的既有 pattern)。"""
@@ -93,7 +119,7 @@ def _build_app(
     app = EmailNotionSyncApp.__new__(EmailNotionSyncApp)
     app.alerter = alerter
     watcher = MagicMock()
-    watcher.get_stats.return_value = {
+    watcher.get_stats.return_value = watcher_stats or {
         "consecutive_errors": 0,
         "healthy": True,
         "sync_store": {"dead_letter": 0},
@@ -204,6 +230,8 @@ def test_outbox_backlog_no_alert_at_threshold():
 
 # ---------------------------------------------------------------------------
 # 重启频次 (E4 WP2)
+# 注: 本分支自带 24h 持久冷却, task 07-14 的 episode tracker 有意不接管 —— 下面
+# 4 条断言的就是那套专用冷却, 保持原样即是「不迁移」的回归闸。
 # ---------------------------------------------------------------------------
 
 
@@ -292,6 +320,248 @@ def test_restart_frequency_old_entries_outside_24h_not_counted():
     )
     asyncio.run(app._check_and_alert())
     assert alerter.method_calls == []
+
+
+# ---------------------------------------------------------------------------
+# task 07-14 — 状态型告警 episode 化 (_check_and_alert 接线)
+# ---------------------------------------------------------------------------
+
+
+def _stats(*, dead_letter=0, healthy=True, radar_available=True, consecutive=0):
+    return {
+        "consecutive_errors": consecutive,
+        "healthy": healthy,
+        "sync_store": {"dead_letter": dead_letter},
+        "radar": {"available": radar_available},
+    }
+
+
+def test_dead_letters_constant_count_alerts_once_then_silent():
+    """🔴 owner 病根: 死信恒定 10 封 → 只首告一次, 后续每轮静默 (老实现每 5min 一条)."""
+    alerter = _SignatureFakeAlerter()
+    app = _build_app(alerter=alerter, watcher_stats=_stats(dead_letter=10))
+
+    asyncio.run(app._check_and_alert())
+    assert ("alert_dead_letters", 10, 5) in alerter.method_calls
+
+    alerter.method_calls.clear()
+    for _ in range(5):  # 5 轮健康检查
+        asyncio.run(app._check_and_alert())
+    assert alerter.method_calls == []
+
+
+def test_dead_letters_no_realert_after_process_restart():
+    """🔴 持久化: 重启 (新 app 实例, 只共享 sync_state) 后数量未变 → 不重新告警."""
+    alerter = _SignatureFakeAlerter()
+    app = _build_app(alerter=alerter, watcher_stats=_stats(dead_letter=10))
+    asyncio.run(app._check_and_alert())
+    assert ("alert_dead_letters", 10, 5) in alerter.method_calls
+
+    # 进程重启: 全新 app + 全新 alerter (=_cooldown_map 清空), 只有 sync_state 存活
+    survived_state = dict(app.watcher.sync_store.state)
+    alerter2 = _SignatureFakeAlerter()
+    app2 = _build_app(
+        alerter=alerter2,
+        watcher_stats=_stats(dead_letter=10),
+        state=survived_state,
+    )
+    asyncio.run(app2._check_and_alert())
+    assert alerter2.method_calls == []
+
+
+def test_dead_letters_escalate_on_doubling():
+    alerter = _SignatureFakeAlerter()
+    app = _build_app(
+        alerter=alerter,
+        watcher_stats=_stats(dead_letter=20),
+        state={
+            "alert.dead_letters.active": "1",
+            "alert.dead_letters.last_alerted_value": "10.0",
+        },
+    )
+    asyncio.run(app._check_and_alert())
+    assert ("alert_dead_letters", 20, 5) in alerter.method_calls
+
+
+def test_dead_letters_recovery_notice_and_reset():
+    """回落到阈值下 → 恢复通知 + 复位 (复位后再越阈值能重新 enter)."""
+    alerter = _SignatureFakeAlerter()
+    app = _build_app(
+        alerter=alerter,
+        watcher_stats=_stats(dead_letter=0),
+        state={
+            "alert.dead_letters.active": "1",
+            "alert.dead_letters.last_alerted_value": "10.0",
+        },
+    )
+    asyncio.run(app._check_and_alert())
+    assert ("alert_recovery", "死信队列") in alerter.method_calls
+    assert app.watcher.sync_store.state["alert.dead_letters.active"] == "0"
+
+    # 复位后再次累积 → 新 episode 能正常告警
+    app.watcher.get_stats.return_value = _stats(dead_letter=6)
+    alerter.method_calls.clear()
+    asyncio.run(app._check_and_alert())
+    assert ("alert_dead_letters", 6, 5) in alerter.method_calls
+
+
+def test_dead_letters_undelivered_alert_is_retried_not_silenced():
+    """🔴 HIGH-1: 首告投递失败 (飞书挂 / level 门 / cooldown 门 → send_alert 返回
+    False) 绝不能提交 episode, 否则这条告警永久标"已告警"却从未送达 = 永久漏告警。
+    """
+    alerter = _SignatureFakeAlerter(delivered=False)
+    app = _build_app(alerter=alerter, watcher_stats=_stats(dead_letter=10))
+    for _ in range(3):
+        asyncio.run(app._check_and_alert())
+    assert alerter.method_calls.count(("alert_dead_letters", 10, 5)) == 3, (
+        "投递失败必须每轮重试; 若 evaluate 内部就落盘, 这里只会有 1 次"
+    )
+    assert app.watcher.sync_store.state == {}, "投递失败不得留下 episode 状态"
+
+    # 飞书恢复 → 投递成功 → 提交 → 之后才静默
+    alerter.delivered = True
+    asyncio.run(app._check_and_alert())
+    assert alerter.method_calls.count(("alert_dead_letters", 10, 5)) == 4
+    alerter.method_calls.clear()
+    asyncio.run(app._check_and_alert())
+    assert alerter.method_calls == []
+
+
+def test_flag_alerts_undelivered_are_retried_not_silenced():
+    """HIGH-1 的布尔态版本 (service_unhealthy / radar_unavailable)."""
+    alerter = _SignatureFakeAlerter(delivered=False)
+    app = _build_app(
+        alerter=alerter,
+        watcher_stats=_stats(healthy=False, radar_available=False),
+    )
+    for _ in range(3):
+        asyncio.run(app._check_and_alert())
+    assert alerter.method_calls.count(("alert_service_unhealthy", 0)) == 3
+    assert alerter.method_calls.count(("alert_radar_unavailable",)) == 3
+    assert app.watcher.sync_store.state == {}
+
+
+def test_flag_alerts_with_corrupt_baseline_still_alert():
+    """🔴 HIGH-2: active=1 但 last_alerted_value 缺失 (commit 部分写入) 时,
+    布尔调用方必须仍然告警 —— 修复前 evaluate 返回 ESCALATE 而调用方只认 ENTER
+    → 不告警却写好基准 → 之后永久静默。
+    """
+    alerter = _SignatureFakeAlerter()
+    app = _build_app(
+        alerter=alerter,
+        watcher_stats=_stats(healthy=False, radar_available=False),
+        state={
+            "alert.service_unhealthy.active": "1",
+            "alert.radar_unavailable.active": "1",
+            # last_alerted_value 缺失 = 部分写入残留
+        },
+    )
+    asyncio.run(app._check_and_alert())
+    assert ("alert_service_unhealthy", 0) in alerter.method_calls
+    assert ("alert_radar_unavailable",) in alerter.method_calls
+    # 自愈: 基准补齐后回到静默
+    alerter.method_calls.clear()
+    asyncio.run(app._check_and_alert())
+    assert alerter.method_calls == []
+
+
+def test_island_dead_letter_card_converges_with_alert(monkeypatch):
+    """R3: 灵动岛 DeadLetterAccum 与告警同源 —— 静默轮不得独立刷屏."""
+    from src.notify import island_dispatch
+
+    dispatched: list[tuple] = []
+    monkeypatch.setattr(island_dispatch, "is_enabled", lambda: True)
+    monkeypatch.setattr(
+        island_dispatch,
+        "dispatch_dead_letter_accum",
+        lambda *, count, threshold: dispatched.append((count, threshold)),
+    )
+
+    alerter = _SignatureFakeAlerter()
+    app = _build_app(alerter=alerter, watcher_stats=_stats(dead_letter=10))
+    for _ in range(4):
+        asyncio.run(app._check_and_alert())
+    assert dispatched == [(10, 5)], "岛卡只应在 episode 进入时发一次"
+
+
+def test_service_unhealthy_and_radar_are_edge_triggered():
+    """布尔态: 进入告一次 → 静默 → 恢复告一次."""
+    alerter = _SignatureFakeAlerter()
+    app = _build_app(
+        alerter=alerter,
+        watcher_stats=_stats(healthy=False, radar_available=False),
+    )
+    asyncio.run(app._check_and_alert())
+    assert ("alert_service_unhealthy", 0) in alerter.method_calls
+    assert ("alert_radar_unavailable",) in alerter.method_calls
+
+    alerter.method_calls.clear()
+    asyncio.run(app._check_and_alert())
+    assert alerter.method_calls == []  # 仍不健康 → 静默
+
+    app.watcher.get_stats.return_value = _stats()
+    alerter.method_calls.clear()
+    asyncio.run(app._check_and_alert())
+    assert ("alert_recovery", "服务健康检查") in alerter.method_calls
+    assert ("alert_recovery", "SQLite 雷达") in alerter.method_calls
+
+
+def test_episode_flag_off_alerts_every_round(monkeypatch):
+    """MAILAGENT_ALERT_EPISODE=false → 字节级回退: 每轮都告, 不碰 sync_state."""
+    from src import service as service_module
+
+    monkeypatch.setattr(service_module.config, "alert_episode_enabled", False)
+    alerter = _SignatureFakeAlerter()
+    app = _build_app(
+        alerter=alerter,
+        watcher_stats=_stats(dead_letter=10, healthy=False, radar_available=False),
+    )
+    for _ in range(3):
+        asyncio.run(app._check_and_alert())
+
+    assert alerter.method_calls.count(("alert_dead_letters", 10, 5)) == 3
+    assert alerter.method_calls.count(("alert_service_unhealthy", 0)) == 3
+    assert alerter.method_calls.count(("alert_radar_unavailable",)) == 3
+    assert not any(c[0] == "alert_recovery" for c in alerter.method_calls)
+    assert app.watcher.sync_store.state == {}
+
+
+def test_consecutive_errors_not_episode_gated():
+    """半状态型 (成功即归零) → 不接 tracker, 行为不变: 每轮都告."""
+    alerter = _SignatureFakeAlerter()
+    app = _build_app(alerter=alerter, watcher_stats=_stats(consecutive=3))
+    for _ in range(3):
+        asyncio.run(app._check_and_alert())
+    assert alerter.method_calls.count(("alert_consecutive_errors", 3, "")) == 3
+
+
+def test_davmail_fetch_burst_not_episode_gated(tmp_path, monkeypatch):
+    """非状态型告警 (davmail_fetch_burst) 不接 tracker → 行为字节级不变: 每轮都发,
+    去重仍归 Alerter 的内存冷却。"""
+    from src import service as service_module
+
+    db = tmp_path / "sync_store.db"
+    conn = sqlite3.connect(str(db))
+    conn.execute(
+        "CREATE TABLE email_metadata ("
+        "internal_id INTEGER PRIMARY KEY, sync_status TEXT, "
+        "backend_origin TEXT, updated_at REAL)"
+    )
+    now = time.time()
+    for i in range(3):
+        conn.execute(
+            "INSERT INTO email_metadata VALUES (?, 'fetch_failed', 'davmail', ?)",
+            (i + 1, now),
+        )
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(service_module.config, "sync_store_db_path", str(db))
+
+    alerter = _SignatureFakeAlerter()
+    app = _build_app(alerter=alerter, backend_origin="davmail")
+    for _ in range(3):
+        asyncio.run(app._check_and_alert())
+    assert len(alerter.send_alert_calls) == 3
 
 
 # ---------------------------------------------------------------------------

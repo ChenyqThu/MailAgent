@@ -122,7 +122,10 @@ export const qk = {
   llm: {
     upstreamModels: (provider: string) => ['llm', 'upstream-models', provider] as const,
     stats: () => ['llm', 'stats'] as const,
-    statsDays: (days: number) => ['llm', 'stats', days] as const
+    statsDays: (days: number) => ['llm', 'stats', days] as const,
+    // task 07-12 P3 — Settings「模型服务」区（provider 管理 + per-provider 模型行）。
+    providers: () => ['llm', 'providers'] as const,
+    providerModels: (providerId: string) => ['llm', 'providers', providerId, 'models'] as const
   },
 
   admin: {
@@ -185,6 +188,10 @@ export const qk = {
     ['contactSuggest', debounced, exclude] as const,
 
   attachment: {
+    // Attachment-only list for one email (no body read) — thread-wide
+    // attachment aggregation (ThreadAttachmentBar) fans one of these out per
+    // thread member. Shares React-Query cache with anything else on the id.
+    list: (id: number) => ['attachment', id, 'list'] as const,
     dataUrl: (id: string | number) => ['attachment', id, 'dataUrl'] as const
   }
 } as const

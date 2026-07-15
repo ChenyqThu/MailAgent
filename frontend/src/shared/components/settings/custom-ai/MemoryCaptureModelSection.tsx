@@ -11,10 +11,12 @@ import { useQuery } from '@tanstack/react-query'
 import { qk } from '@shared/lib/queryKeys'
 
 import { useEnabledModels, FALLBACK_MODELS } from '@shared/hooks/useLlmModels'
+import { useProviderRegistryEnabled } from '@shared/hooks/useLlmProviders'
 import { useEnvStore } from '@shared/state/env'
 
 import { Section } from '../parts/Section'
 import { EnvField } from '../parts/EnvField'
+import { buildModelOptionGroups } from '../providers/modelOptionGroups'
 import { fetchStandingDocsEditorEnabled } from './shared'
 
 const MEMORY_CAPTURE_DEFAULT_MODEL = 'claude-haiku-4-5'
@@ -22,6 +24,9 @@ const MEMORY_CAPTURE_DEFAULT_MODEL = 'claude-haiku-4-5'
 export function MemoryCaptureModelSection(): React.ReactElement | null {
   const { t } = useTranslation()
   const { models: enabledModels } = useEnabledModels()
+  // task 07-12 P3 — provider registry on 时选项按 provider 分组（值仍是 providerRef 全串，
+  // 写入面 MEMORY_CAPTURE_MODEL 不变）；off（默认）→ 下方扁平 options 路径字节级现状。
+  const registryEnabled = useProviderRegistryEnabled()
   const currentModel = useEnvStore((s) =>
     s.state.status === 'ready' ? (s.state.snapshot.values['MEMORY_CAPTURE_MODEL'] ?? '') : ''
   )
@@ -35,7 +40,7 @@ export function MemoryCaptureModelSection(): React.ReactElement | null {
     retry: false
   })
 
-  const options = React.useMemo(() => {
+  const { options, optionGroups } = React.useMemo(() => {
     const base = enabledModels.length > 0 ? enabledModels : FALLBACK_MODELS
     // Always offer the recommended haiku default (it isn't in FALLBACK_MODELS), then append
     // the current .env value as an orphan if it's set and not already listed (mirrors AiTab
@@ -47,8 +52,11 @@ export function MemoryCaptureModelSection(): React.ReactElement | null {
       currentModel && !withDefault.includes(currentModel)
         ? [...withDefault, currentModel]
         : withDefault
-    return withOrphan.map((id) => ({ value: id, label: id }))
-  }, [enabledModels, currentModel])
+    if (registryEnabled) {
+      return { options: undefined, optionGroups: buildModelOptionGroups(withOrphan, t) }
+    }
+    return { options: withOrphan.map((id) => ({ value: id, label: id })), optionGroups: undefined }
+  }, [enabledModels, currentModel, registryEnabled, t])
 
   if (!editorEnabled) return null
 
@@ -63,6 +71,7 @@ export function MemoryCaptureModelSection(): React.ReactElement | null {
         label={t('settings.memoryCaptureModel.label')}
         helper={t('settings.memoryCaptureModel.helper')}
         options={options}
+        optionGroups={optionGroups}
         placeholder={MEMORY_CAPTURE_DEFAULT_MODEL}
       />
     </Section>

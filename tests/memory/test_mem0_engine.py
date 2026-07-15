@@ -177,6 +177,137 @@ def test_capture_instructions_untrusted_framing(monkeypatch, tmp_path):
     assert "auto-approve" in low or "approval" in low  # 不存审批/安全相关「偏好」
 
 
+def _provider_route(**over):
+    from src.llm_agent.provider_routing import ProviderRoute
+
+    base = dict(
+        provider_id="dashscope", protocol="openai-compatible",
+        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        api_key="sk-qwen", model_id="qwen-max", model_ref="dashscope:qwen-max",
+    )
+    base.update(over)
+    return ProviderRoute(**base)
+
+
+def test_capture_llm_config_openai_family_route(monkeypatch, tmp_path):
+    # task 07-12 P2：flag on + openai 系 provider → mem0 openai provider + 归一 base（含 /vN）。
+    from src.llm_agent import provider_routing as pr
+
+    monkeypatch.setattr(me, "_mem0_root", lambda: str(tmp_path / "mem0"))
+    monkeypatch.setattr(me, "cfg", _fake_cfg(memory_capture_model="dashscope:qwen-max"))
+    monkeypatch.setattr(pr, "resolve_route", lambda ref: _provider_route())
+
+    llm = me.build_mem0_config()["llm"]
+    assert llm["provider"] == "openai"
+    assert llm["config"]["model"] == "qwen-max"  # wire id（冒号后段）
+    assert llm["config"]["api_key"] == "sk-qwen"
+    assert llm["config"]["openai_base_url"] == "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    assert llm["config"]["max_tokens"] == me.CAPTURE_MAX_TOKENS  # 8192 非流式 clamp 保持
+    # 终审 LOW-①（钉死有意行为）：openai 分支刻意不传 temperature=None——mem0 OpenAILLM 走
+    # base _get_common_params，temperature 键无条件进请求参数（AnthropicLLM 的 override 才会
+    # 在 None 时省略字段），显式 None 会被 openai SDK 序列化成 wire 上的 "temperature": null
+    # （官方接受、严格 openai-compatible 上游可能 400）。省略键 = mem0 默认 0.1。
+    assert "temperature" not in llm["config"]
+
+    # per-model max_output 更小 → 再收紧
+    monkeypatch.setattr(pr, "resolve_route", lambda ref: _provider_route(max_output=4000))
+    assert me.build_mem0_config()["llm"]["config"]["max_tokens"] == 4000
+
+
+def test_capture_llm_config_anthropic_route(monkeypatch, tmp_path):
+    # flag on + anthropic 协议 provider（Kimi anthropic-compat 类）→ 行 base 原样、8192 保持。
+    from src.llm_agent import provider_routing as pr
+
+    monkeypatch.setattr(me, "_mem0_root", lambda: str(tmp_path / "mem0"))
+    monkeypatch.setattr(me, "cfg", _fake_cfg(memory_capture_model="kimi:kimi-k2"))
+    route = _provider_route(
+        provider_id="kimi", protocol="anthropic",
+        base_url="https://api.moonshot.cn/anthropic/", api_key="sk-kimi",
+        model_id="kimi-k2", model_ref="kimi:kimi-k2",
+    )
+    monkeypatch.setattr(pr, "resolve_route", lambda ref: route)
+
+    llm = me.build_mem0_config()["llm"]
+    assert llm["provider"] == "anthropic"
+    assert llm["config"]["model"] == "kimi-k2"
+    assert llm["config"]["api_key"] == "sk-kimi"
+    assert llm["config"]["anthropic_base_url"] == "https://api.moonshot.cn/anthropic"
+    assert llm["config"]["max_tokens"] == me.CAPTURE_MAX_TOKENS
+    assert llm["config"]["temperature"] is None  # 同 legacy 语义
+
+    # 行 base 空 = 官方默认 → 省略 anthropic_base_url（SDK 默认 api.anthropic.com）
+    empty_base = _provider_route(provider_id="anthro", protocol="anthropic",
+                                 base_url="", model_id="claude-x", model_ref="anthro:claude-x")
+    monkeypatch.setattr(pr, "resolve_route", lambda ref: empty_base)
+    assert "anthropic_base_url" not in me.build_mem0_config()["llm"]["config"]
+
+    # HIGH-2：行 base 含 /v1 尾段（用户抄厂商文档）→ canonical_root 剥掉（SDK 自补 /v1/messages）
+    v1_base = _provider_route(provider_id="glm", protocol="anthropic",
+                              base_url="https://open.bigmodel.cn/api/anthropic/v1",
+                              model_id="glm-4.6", model_ref="glm:glm-4.6")
+    monkeypatch.setattr(pr, "resolve_route", lambda ref: v1_base)
+    assert (
+        me.build_mem0_config()["llm"]["config"]["anthropic_base_url"]
+        == "https://open.bigmodel.cn/api/anthropic"
+    )
+
+
+def test_capture_llm_config_route_error_skips_capture(monkeypatch, tmp_path):
+    # 终审 LOW-②：显式 providerRef 路由失败（provider 缺失/禁用）→ 跳过本轮 capture
+    # （Mem0CaptureSkip），而非回退 legacy 网关发 'missing:m' 这类注定 404 的 bogus-model 请求。
+    import pytest
+
+    from src.llm_agent import provider_routing as pr
+
+    monkeypatch.setattr(me, "_mem0_root", lambda: str(tmp_path / "mem0"))
+    monkeypatch.setattr(me, "cfg", _fake_cfg(memory_capture_model="missing:m"))
+
+    def _raise(ref):
+        raise pr.ProviderRouteError(
+            "provider 'missing' referenced by model 'missing:m' is not available"
+        )
+
+    monkeypatch.setattr(pr, "resolve_route", _raise)
+    with pytest.raises(me.Mem0CaptureSkip, match="missing"):
+        me.build_mem0_config()
+
+
+def test_capture_llm_config_keyless_openai_provider_skips_capture(monkeypatch, tmp_path):
+    # 终审 LOW-③：keyless openai 系 provider（本地 Ollama 等）作 capture 模型 → 跳过 + warning
+    # ——mem0 OpenAILLM 空 key 会回退 env OPENAI_API_KEY 构造客户端（凭证错配/外泄）。
+    import pytest
+
+    from src.llm_agent import provider_routing as pr
+
+    monkeypatch.setattr(me, "_mem0_root", lambda: str(tmp_path / "mem0"))
+    monkeypatch.setattr(me, "cfg", _fake_cfg(memory_capture_model="ollama:qwen3"))
+    route = _provider_route(
+        provider_id="ollama", protocol="openai-compatible",
+        base_url="http://127.0.0.1:11434/v1", api_key="",
+        model_id="qwen3", model_ref="ollama:qwen3",
+    )
+    monkeypatch.setattr(pr, "resolve_route", lambda ref: route)
+    with pytest.raises(me.Mem0CaptureSkip, match="ollama"):
+        me.build_mem0_config()
+
+
+def test_capture_llm_config_google_falls_back_to_legacy(monkeypatch, tmp_path):
+    # google 协议不支持 → warning + 回退全局 anthropic 网关（legacy 形状）。
+    from src.llm_agent import provider_routing as pr
+
+    monkeypatch.setattr(me, "_mem0_root", lambda: str(tmp_path / "mem0"))
+    monkeypatch.setattr(me, "cfg", _fake_cfg(memory_capture_model="gem:gemini-3"))
+    route = _provider_route(provider_id="gem", protocol="google",
+                            model_id="gemini-3", model_ref="gem:gemini-3")
+    monkeypatch.setattr(pr, "resolve_route", lambda ref: route)
+
+    llm = me.build_mem0_config()["llm"]
+    assert llm["provider"] == "anthropic"
+    assert llm["config"]["model"] == "gem:gemini-3"  # legacy：整串 + 全局网关
+    assert llm["config"]["anthropic_base_url"] == "https://crs.chenge.ink/api"
+    assert llm["config"]["api_key"] == "sk-test"
+
+
 def test_package_lazy_export():
     # LOW-2（codex）：from src.memory import <符号> 经 __getattr__ 懒解析仍可用（import 包本身
     # 不拉 src.config / 重依赖）；未知属性照常 AttributeError。

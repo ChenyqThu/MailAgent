@@ -28,10 +28,14 @@ import {
   generateFollowups,
   generateSessionTitle,
   lastUserMessage,
+  llmCredentialsMissing,
   makeIdGenerator,
   makePersistOnFinish,
   prepareChatRun
 } from './chatRun'
+// HIGH-1 (batch1 review) — SDK-free typed credentials error (the registry resolver throws it when
+// the selected provider row lacks a required key); mapped back to 503 E_NO_LLM_KEY below.
+import { isProviderCredentialsError } from './providerRef'
 import {
   corsHeadersFor,
   delay,
@@ -43,6 +47,9 @@ import {
 } from './httpUtil'
 import { handleAguiChat } from './agui/aguiRoute'
 import { resumeApprovalRun } from './approvalResume'
+// 发版终审 M3 — registry 语境下 title/followups 的 E_UPSTREAM hint + 日志走固定形状脱敏
+// （上游错误正文可能回显凭证）；flag off 保持原 message 形状（字节级纪律）。
+import { sanitizedUpstreamErrorMessage } from './upstreamError'
 import { runHeadlessSearchAgent } from './searchAgentRun'
 import { runHeadlessAgent } from './agentRun'
 import type { HeadlessAgentResult } from '../shared/api/types'
@@ -339,7 +346,9 @@ async function handleTitle(
     writeJson(res, 501, { error: 'E_NOT_IMPLEMENTED', hint: 'auto-title not enabled' })
     return
   }
-  if (!cfg.apiKey || cfg.apiKey.length === 0) {
+  // HIGH-1 — shared credential pre-gate: flag-off byte-identical; registry path defers to the
+  // resolver (typed failure mapped in the catch below).
+  if (llmCredentialsMissing(cfg)) {
     writeJson(res, 503, { error: 'E_NO_LLM_KEY', hint: '设置 LLM_API_KEY 后重试' })
     return
   }
@@ -377,6 +386,18 @@ async function handleTitle(
       writeJson(res, 200, { title: null, skipped: true })
     }
   } catch (e) {
+    if (isProviderCredentialsError(e)) {
+      writeJson(res, 503, { error: 'E_NO_LLM_KEY', hint: e.message })
+      return
+    }
+    // M3 — registry 路径：hint 与日志都不得携带上游错误原文（可能回显凭证）；flag off
+    // 保持既有 message/完整错误对象日志形状（nl_search.ts 同款分叉手法）。
+    if (cfg.providerRegistryEnabled) {
+      const sanitized = sanitizedUpstreamErrorMessage(e)
+      console.error('[ai-gateway] /api/ai/title failed:', sanitized)
+      writeJson(res, 502, { error: 'E_UPSTREAM', hint: sanitized })
+      return
+    }
     const message = e instanceof Error ? e.message : String(e)
     console.error('[ai-gateway] /api/ai/title failed', e)
     writeJson(res, 502, { error: 'E_UPSTREAM', hint: message })
@@ -400,7 +421,8 @@ async function handleFollowups(
     writeJson(res, 501, { error: 'E_NOT_IMPLEMENTED', hint: 'follow-ups not enabled' })
     return
   }
-  if (!cfg.apiKey || cfg.apiKey.length === 0) {
+  // HIGH-1 — shared credential pre-gate (same rationale as handleTitle).
+  if (llmCredentialsMissing(cfg)) {
     writeJson(res, 503, { error: 'E_NO_LLM_KEY', hint: '设置 LLM_API_KEY 后重试' })
     return
   }
@@ -430,6 +452,17 @@ async function handleFollowups(
     )
     writeJson(res, 200, { followups })
   } catch (e) {
+    if (isProviderCredentialsError(e)) {
+      writeJson(res, 503, { error: 'E_NO_LLM_KEY', hint: e.message })
+      return
+    }
+    // M3 — 同 handleTitle：registry 路径 hint/日志走固定形状脱敏，flag off 字节级不动。
+    if (cfg.providerRegistryEnabled) {
+      const sanitized = sanitizedUpstreamErrorMessage(e)
+      console.error('[ai-gateway] /api/ai/followups failed:', sanitized)
+      writeJson(res, 502, { error: 'E_UPSTREAM', hint: sanitized })
+      return
+    }
     const message = e instanceof Error ? e.message : String(e)
     console.error('[ai-gateway] /api/ai/followups failed', e)
     writeJson(res, 502, { error: 'E_UPSTREAM', hint: message })
@@ -452,7 +485,10 @@ async function handleSearchAgent(
   res: ServerResponse,
   cfg: AiGatewayConfig
 ): Promise<void> {
-  if (!cfg.apiKey || cfg.apiKey.length === 0) {
+  // HIGH-1 — shared credential pre-gate: flag-off byte-identical. On the registry path the SSE has
+  // already started when the resolver runs, so a per-provider key failure surfaces as the terminal
+  // {type:'result'} error frame (normalizeLoopError maps it to code E_NO_LLM_KEY).
+  if (llmCredentialsMissing(cfg)) {
     writeJson(res, 503, { error: 'E_NO_LLM_KEY', hint: '设置 LLM_API_KEY 后重试' })
     return
   }

@@ -24,6 +24,7 @@ golden 锚定: tests/cli/test_service_parity.py)。方法同步; serve-api 经
 from __future__ import annotations
 
 import asyncio
+import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -179,6 +180,9 @@ class ComposeRequest:
     cc: Optional[str] = None  # 完整抄送覆盖 (--cc)
     bcc: Optional[str] = None  # 密送 (--bcc)
     subject: Optional[str] = None  # 完整主题覆盖 (--subject)
+    # reply/reply-all 改主题断线程守卫的逃生口 (--force-subject / 前端 forceSubject):
+    # 默认 False → subject 与原主题规范化后不同时 service 拒绝 (E_INVALID_ARG)。
+    force_subject: bool = False
     importance: Optional[str] = None  # 重要性 high/normal/low (写 MIME Importance 头)
     # quote_original: 显式正文 (body_text/body_html) 也强制在下方附原邮件引用
     # (reply/reply-all) 或转发引用 (forward)。默认 False 保持既有语义: 前端 TipTap
@@ -261,6 +265,26 @@ def _split_addrs(addrs: str) -> list[str]:
     return out
 
 
+# reply 前缀 (Re:/回复:/答复:, 半/全角冒号, 大小写不敏感) —— 规范化比较时反复剥除。
+# 故意不剥 Fwd:/Fw: (转发前缀属主题本体: 回复一封转发邮件, 两侧都保留 Fwd 才相等)。
+_REPLY_PREFIX_RE = re.compile(r"^(re|回复|答复)\s*[:：]\s*", re.IGNORECASE)  # ： = 全角冒号
+
+
+def _normalize_reply_subject(subject: str) -> str:
+    """主题规范化: 剥 Re:/回复:/答复: 前缀 (可叠加) + 压空白 + lower。
+
+    用于 reply/reply-all 改主题守卫的「是否同主题」判定 —— Exchange/Outlook 按
+    ConversationTopic (即规范化主题) 分组, Gmail 同理, 改主题即断线程。
+    """
+    s = (subject or "").strip()
+    while True:
+        stripped = _REPLY_PREFIX_RE.sub("", s, count=1)
+        if stripped == s:
+            break
+        s = stripped.strip()
+    return " ".join(s.split()).lower()
+
+
 def _reply_md_to_html(reply_md: str) -> str:
     """markdown reply_suggestion → HTML。md_to_html 已抽到 src/converter (随
     site-packages 必然打进 .app)。"""
@@ -282,6 +306,7 @@ def _compose_reply_draft(
     cc_override: Optional[str] = None,
     bcc: Optional[str] = None,
     subject_override: Optional[str] = None,
+    force_subject: bool = False,
     forward_intro_text: Optional[str] = None,
     forward_intro_html: Optional[str] = None,
     attachments: Optional[list] = None,
@@ -296,6 +321,10 @@ def _compose_reply_draft(
     - 否则 reply/reply-all 推导原收件人 + ``extra_to``/``extra_cc`` 追加; forward 用
       ``extra_to`` 作收件人本体.
     ``bcc`` 总是直接 split. forward: Fwd: 前缀 + 独立邮件 (无 threading) + intro + 附件.
+
+    主题语义: reply/reply-all 下 ``subject_override`` 与原主题规范化后不同 (剥
+    Re:/回复:/答复: 前缀) → 默认 raise ``ServiceInvalidArgError`` (改主题断线程守卫),
+    ``force_subject=True`` 放行; forward/new 不受限.
 
     ``self_email`` (reply-all 排除自己用): service 调用方传 ``ctx.config.user_email``
     (尊重各传输持有的 cfg, 不读全局); 缺省 None → 读全局 config (纯函数测试便利)。
@@ -372,6 +401,21 @@ def _compose_reply_draft(
             cc_list = [a for a in orig_cc if a.lower() != self_email]
         to_list = list(dict.fromkeys(to_list + extra_to_list))  # dedup 保序
         cc_list = list(dict.fromkeys(cc_list + extra_cc_list))
+
+    # 改主题断线程守卫 (fork aad6a203 回港): reply/reply-all 下 subject_override 与原主题
+    # 规范化后不同 → Exchange/Outlook (ConversationTopic) / Gmail 都判为新会话, 收件人
+    # 看到的是一封脱离线程的新邮件。默认拒绝; 前端 composer (用户显式改题) 恒传
+    # force_subject=True 放行, agent/CLI 须显式 --force-subject / forceSubject。
+    if (
+        subject_override is not None
+        and not force_subject
+        and _normalize_reply_subject(subject_override) != _normalize_reply_subject(orig_subj)
+    ):
+        raise ServiceInvalidArgError(
+            f"reply/reply-all 修改主题会断开会话线程 (Outlook/Gmail 按主题分组): "
+            f"subject {subject_override!r} != 原主题 {orig_subj!r}",
+            hint="确需改主题: 用 --mode forward 发独立邮件, 或加 --force-subject 强制",
+        )
 
     subject = subject_override if subject_override is not None else (
         orig_subj if orig_subj.lower().startswith("re:") else f"Re: {orig_subj}"
@@ -1550,6 +1594,7 @@ class MailWriteService:
             extra_to=request.extra_to, extra_cc=request.extra_cc,
             to_override=request.to, cc_override=request.cc, bcc=request.bcc,
             subject_override=request.subject,
+            force_subject=request.force_subject,
             forward_intro_text=forward_intro_text,
             forward_intro_html=forward_intro_html,
             attachments=attachments,

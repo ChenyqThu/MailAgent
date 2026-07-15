@@ -31,6 +31,7 @@ from typing import List, Dict, Optional, Any
 from loguru import logger
 
 from src.config import config as settings
+from src.config import notion_enabled
 from src.models import Email
 from src.mail.sync_store import DRAFT_MAILBOX_LABELS, SyncStore
 from src.notion.sync import NotionSync
@@ -41,6 +42,7 @@ from src.repository import (
     EmailRepository,
     build_storage_payloads,
 )
+from src.mail.backend.base import MarkerUnavailableError
 from src.mail.backend.imap_client import parse_folder_csv_or_json
 from src.mail.backend.serial_executor import run_backend_io
 
@@ -178,9 +180,12 @@ class NewWatcher:
         # 总闸 = env PROJECT_PROGRESS_SYNC_ENABLED + 配置了项目进度库 ID（runner 需要，非事件热读项）。
         # 具体触发（enabled + sender/subject）每封邮件从 report_agent 行**热读**（Settings 改即生效）；
         # 行不存在（老库未跑 v31）→ 回退 env 构造（行为等价窗口）。db_path 供 hook 裸 sqlite3 热读。
+        # + notion_enabled 门（07-12 P3b）: 项目周报 runner 写 Notion 项目库，
+        # 无 NOTION_TOKEN 时整个钩子无意义 → 不激活。
         self._progress_hook_active = bool(
             getattr(settings, "project_progress_sync_enabled", False)
             and getattr(settings, "project_progress_database_id", "")
+            and notion_enabled()
         )
         self._agent_db_path = str(self.sync_store.db_path)
         if self._progress_hook_active:
@@ -353,13 +358,33 @@ class NewWatcher:
                 )
 
         # 初始化：从 SyncStore 恢复 last_max_row_id
-        last_max_row_id = self.sync_store.get_last_max_row_id()
-        if last_max_row_id > 0:
+        # finding F1: 首次运行判定必须用「marker 键是否存在」而非「值 > 0」——
+        # get_last_max_row_id() 对「键缺失」和「合法持久化的 '0'」都返回 0，applescript
+        # 空邮箱 baseline 0 会被误判首次 → 重定基线 → 停机期间到达的首封邮件被静默跳过。
+        # 键存在即恢复（哪怕值是 0）；#34 reset 走删键 → 键缺失 → 落 first-run baseline。
+        if self.sync_store.has_last_max_row_id():
+            last_max_row_id = self.sync_store.get_last_max_row_id()
             self.backend.set_last_max_row_id(last_max_row_id)
             logger.info(f"Restored last_max_row_id from SyncStore: {last_max_row_id}")
         else:
-            # 首次运行，获取当前 max_row_id 作为基线
-            current_max = self.backend.get_current_max_row_id()
+            # 首次运行，获取当前 max_row_id 作为基线。
+            # 🔴 查询失败绝不能落 0 (task 07-14 L3): 下轮 check_for_changes 拿真实
+            # UIDNEXT 与 0 求差 → 误判几十万封 → get_new_emails(0) 发 UID 1:* 全量
+            # 重刷。带 backoff 重试 (probe 刚过, 多为 STATUS 瞬时慢); 仍失败宁可
+            # 不启动 (raise, 复用上面 health check 失败的 RuntimeError 范式)。
+            current_max = None
+            for attempt in range(3):
+                try:
+                    current_max = self.backend.get_current_max_row_id()
+                    break
+                except MarkerUnavailableError as e:
+                    logger.warning(f"Baseline marker query failed ({attempt + 1}/3): {e}")
+                    await asyncio.sleep(2)
+            if current_max is None:  # 真实 0 (applescript 空邮箱) 合法, 不算失败
+                raise RuntimeError(
+                    "Cannot establish baseline marker (backend marker query "
+                    "unavailable), refusing to start with poisoned marker=0"
+                )
             self.backend.set_last_max_row_id(current_max)
             self.sync_store.set_last_max_row_id(current_max)
             # issue #34: 盖上 marker 归属，供下次启动的 guard 比对（reset 后重定基线也走这里）
@@ -806,6 +831,24 @@ class NewWatcher:
             # 详见 docs/reference/architecture/architecture_v4_sqlite_ssot.md
             # 失败仅 warning，主流程继续走 Notion sync
             self._maybe_dual_write_body(email_obj, internal_id, full_email.get("source"))
+
+            # 5.7 Notion 可选化（task 07-12 P3b 方案 C）：未配置 NOTION_TOKEN/
+            # EMAIL_DATABASE_ID 时跳过 Notion 页创建，邮件走 mark_synced_local
+            # （草稿箱先例：synced + notion_page_id=NULL），5 个事件钩子以 page_id=""
+            # 照常派发（岛/KOS/feishu 对空 page_id 已容忍；周报钩子在
+            # _progress_hook_active 里被 notion_enabled 再门掉——它本身写 Notion 库）。
+            # enabled 路径（下方 步骤6-12）一字不动 —— 本分支是纯新增，存量
+            # （三键非空）行为零漂移。
+            if not notion_enabled():
+                self.sync_store.mark_synced_local(internal_id)
+                self._stats["emails_synced"] += 1
+                logger.info(f"Email synced (local-only, Notion disabled): {internal_id}")
+                self._maybe_trigger_project_progress_hook(email_obj, internal_id, "")
+                self._maybe_trigger_llm_hook(email_obj, internal_id, "")
+                self._maybe_trigger_kos_hook(email_obj, internal_id, "")
+                self._maybe_dispatch_island_received(email_obj, internal_id, "")
+                self._maybe_trigger_custom_agents(email_obj, internal_id)
+                return
 
             # 6. 同步到 Notion
             page_id = await self.notion_sync.create_email_page_v2(
@@ -1499,6 +1542,16 @@ class NewWatcher:
                 self._maybe_dual_write_body(
                     email_obj, internal_id, full_email.get("source")
                 )
+
+                # Notion 可选化（与 _sync_single_email_v3 5.7 一致）: disabled 时
+                # 本地-only synced, 不再产生 failed/dead_letter。retry 路径与
+                # enabled 主路径同样不派发事件钩子（现状 parity）。
+                if not notion_enabled():
+                    self.sync_store.mark_synced_local(internal_id)
+                    self._stats["retries_succeeded"] += 1
+                    self._stats["emails_synced"] += 1
+                    logger.info(f"Retry succeeded (local-only, Notion disabled): {internal_id}")
+                    continue
 
                 # 同步到 Notion
                 page_id = await self.notion_sync.create_email_page_v2(email_obj)

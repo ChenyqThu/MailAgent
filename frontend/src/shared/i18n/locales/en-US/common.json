@@ -72,7 +72,22 @@
       "zoomOut": "Zoom out",
       "rotate": "Rotate",
       "reset": "Reset",
-      "close": "Close"
+      "close": "Close",
+      "loadError": "Couldn't load image."
+    },
+    "attachmentBar": {
+      "title": "Thread attachments",
+      "thisMessage": "This message",
+      "downloadAll": "Download all",
+      "loading": "Loading…",
+      "preview": "Preview",
+      "download": "Download",
+      "savedTo": "Saved to ~/Downloads/{name}",
+      "savedAll": "Saved {n, plural, =1 {1 attachment} other {# attachments}} to ~/Downloads",
+      "missing": "Attachment file is missing on disk.",
+      "previewFailed": "Couldn't load preview.",
+      "tooLarge": "File too large to preview — download instead.",
+      "partialFailed": "Some attachments couldn't be loaded."
     }
   },
   "emailRow": {
@@ -150,6 +165,7 @@
     "attach": "Attach",
     "attachmentRemove": "Remove {name}",
     "attachmentFailed": "Upload failed",
+    "dropHint": "Drop files to attach",
     "richPreserveHint": "Rich-format original preserved as-is; appended after your new content on send",
     "loadingPlan": "Loading…",
     "planError": "Pre-fill failed",
@@ -1702,6 +1718,82 @@
         "dir": "(dir {scope})"
       }
     },
+    "providers": {
+      "title": "Model services",
+      "helper": "Manage LLM upstream providers: official models, OpenAI-compatible relays and Anthropic-compatible relays can coexist. The default provider carries over the legacy gateway config (legacy model refs need no migration).",
+      "loading": "Loading…",
+      "loadError": "Failed to load providers.",
+      "empty": "No providers yet. Click “Add” in the corner to create one from a template.",
+      "addButton": "Add",
+      "addTitle": "Add provider",
+      "added": "Added {name}",
+      "deleted": "Deleted {name}",
+      "defaultBadge": "default",
+      "expandAria": "Expand {name}",
+      "enabledAria": "Enable/disable {name}",
+      "deleteAria": "Delete {name}",
+      "displayName": "Name",
+      "baseUrl": "API base URL",
+      "baseUrlPlaceholder": "Empty = official default endpoint",
+      "apiKey": {
+        "label": "API key",
+        "set": "Set (····{last4}) — type a new value to rotate",
+        "unset": "Not set",
+        "clear": "Clear",
+        "clearAria": "Clear API key"
+      },
+      "headers": {
+        "label": "Custom headers",
+        "keyPlaceholder": "Header name",
+        "valuePlaceholder": "Value",
+        "add": "Add",
+        "deleteAria": "Delete header {name}",
+        "save": "Save",
+        "cancel": "Cancel",
+        "reenterHint": "Header values are write-only — re-enter every kept value before saving"
+      },
+      "test": {
+        "label": "Connectivity test",
+        "button": "Test connection",
+        "running": "Testing…",
+        "ok": "Connected ({ms}ms)",
+        "fail": "Connection failed"
+      },
+      "models": {
+        "title": "Models",
+        "refresh": "Fetch model list",
+        "refreshing": "Fetching…",
+        "loading": "Loading…",
+        "empty": "No models yet. Click “Fetch model list” to pull from upstream, or add one manually below (fallback for relays that don't expose /models).",
+        "manualBadge": "manual",
+        "manualPlaceholder": "Add a model id manually (wire id)",
+        "manualAdd": "Add",
+        "maxOutputPlaceholder": "maxOutput",
+        "maxOutputAria": "Max output tokens for {model}",
+        "deleteAria": "Delete model {model}",
+        "cap": {
+          "tools": "tools",
+          "vision": "vision",
+          "reasoning": "reasoning"
+        }
+      },
+      "template": {
+        "custom-openai": "Custom OpenAI-compatible",
+        "custom-anthropic": "Custom Anthropic-compatible"
+      },
+      "add": {
+        "template": "Template",
+        "id": "ID (slug)",
+        "idPlaceholder": "Lowercase letter first; digits/-/_ allowed",
+        "idInvalid": "Invalid slug",
+        "baseUrlRequired": "Required (this protocol has no official default endpoint)",
+        "submit": "Create",
+        "cancel": "Cancel"
+      },
+      "group": {
+        "default": "default (main gateway)"
+      }
+    },
     "skillPacks": {
       "title": "Skill install",
       "helper": "Install third-party skill packs from a URL or a local path. Two-phase: fetch a preview, review the pack contents and declarations, then confirm the install. Installed skills appear in the skills list above (enable/disable); secrets and config are managed per-pack below.",
@@ -1915,6 +2007,7 @@
     "accounts": {
       "notion": {
         "title": "Notion integration",
+        "disabledNotice": "Notion is not configured: mirror sync, project weekly reports, and calendar sync are disabled. Emails sync locally only (list, search, and AI classification still work). Fill in the token and email database ID, then restart to enable. Configuring later only syncs new emails; historical emails are not backfilled (use mailagent email resync to push them individually).",
         "token": {
           "label": "Notion token",
           "helper": "Integration token, starts with ntn_ or secret_",

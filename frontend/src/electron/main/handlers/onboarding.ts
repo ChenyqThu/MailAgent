@@ -53,12 +53,19 @@ import {
   resolveApiPort
 } from '../backend_lifecycle'
 import { callCli, getMailagentBin } from '../cli_runner'
+import { daemonRequest } from '../daemon_api'
 import { getDb, resolveDataRoot, resolveDbPath } from '../db'
 import { ensureCliApiKey } from '../lib/cli-api-key'
 import { MANAGED_ENV_KEY_SET } from '../lib/env-keys'
+// ESM-safe __dirname (main 是 ESM bundle, 分包后无 shim banner; 恒锚 entry chunk)。
+import { mainDirname } from '../lib/esm-paths'
 import { resolveEnvPath } from '../lib/env-path'
 import { MAIN_WINDOW } from '../lib/window-config'
 import { detectUserState, ONBOARDING_REQUIRED_KEYS } from '../onboarding/detect'
+import {
+  findOnboardingLlmTemplate,
+  invalidCustomBaseUrlReason
+} from '@shared/onboarding/llmProviderTemplates'
 import { writePatch } from './env'
 
 // ---------------------------------------------------------------------------
@@ -255,9 +262,11 @@ export function buildCompletePatch(cfg: OnboardingCompleteCfg): {
     patch[flagKey] = plugins[pk] === true ? 'true' : 'false'
   }
 
-  // 6) 必填校验。两后端都要核心三项 (NOTION_TOKEN/EMAIL_DATABASE_ID/USER_EMAIL)。
-  //    davmail 额外要求一种认证方式 (POC 默认密钥 或 非空 cipher), 否则
-  //    DavMailConnectionError —— 加一项可读 missing 提示。
+  // 6) 必填校验。两后端都只强制 USER_EMAIL (07-12 P3b: Notion 可选化 ——
+  //    NOTION_TOKEN/EMAIL_DATABASE_ID 空 = 本地-only 模式, 空值在步骤 1 已被丢弃
+  //    不写行, 与 detect.ts 判据一致防循环弹向导)。davmail 额外要求一种认证方式
+  //    (POC 默认密钥 或 非空 cipher), 否则 DavMailConnectionError —— 加一项可读
+  //    missing 提示。
   const missing: string[] = ONBOARDING_REQUIRED_KEYS.filter((k) => !patch[k])
   if (isDavmail) {
     const hasAuth = patch['DAVMAIL_POC_MODE'] === 'true' || !!patch['DAVMAIL_POC_CIPHER_KEY']
@@ -962,7 +971,7 @@ function reloadToMain(evt: Electron.IpcMainInvokeEvent): void {
     // MAILAGENT_API_PORT 覆盖时 onboarding 完成进入的窗口 ElectronApi.chat 丢端口
     // 静默回退 8200（codex 3c-3 MEDIUM）。端口同源 resolveApiPort（= serve-api 实际端口）。
     const search = new URLSearchParams({ apiPort: String(resolveApiPort()) }).toString()
-    void win.loadFile(join(__dirname, '../renderer/index.html'), { search })
+    void win.loadFile(join(mainDirname, '../renderer/index.html'), { search })
   } catch {
     /* 窗口已销毁等边界情况, 不阻断 complete 成功返回。 */
   }
@@ -997,7 +1006,8 @@ function detectLegacy(): DetectLegacyResult {
   }
 }
 
-/** 老 .env 是否含 NOTION_TOKEN + EMAIL_DATABASE_ID + USER_EMAIL 非空值。 */
+/** 老 .env 是否含必填键 (ONBOARDING_REQUIRED_KEYS; 07-12 P3b 起仅 USER_EMAIL ——
+ *  Notion 键可选) 非空值。 */
 function legacyEnvHasConfig(): boolean {
   try {
     const p = legacyOldEnvPath()
@@ -1071,8 +1081,7 @@ async function legacyInherit(raw: unknown): Promise<LegacyInheritResult> {
         ok: false,
         error: {
           code: 'E_MISSING_CONFIG',
-          message:
-            '未在旧目录找到完整配置 (Notion Token / 邮件库 ID / 邮箱)。请先用新用户向导填写配置, 再迁移。'
+          message: '未在旧目录找到完整配置 (用户邮箱)。请先用新用户向导填写配置, 再迁移。'
         }
       }
     }
@@ -1400,6 +1409,149 @@ function enterApp(evt: Electron.IpcMainInvokeEvent): { ok: boolean } {
 }
 
 // ---------------------------------------------------------------------------
+// onboarding:llmProvider* (07-12 P3b —「AI 模型 (可选)」步; daemon → serve-api
+// /api/llm/providers* 转发, 同 folder:* 的 Main→daemon 模式: 本地 token 只在 main,
+// onboarding renderer 经 IPC 间接调写端点。跳过该步 = 这三个 channel 一个都不调,
+// 零写入。
+//
+// 批 2 review HIGH-3 (confused deputy): renderer 不再传 id/protocol/baseURL 组合 ——
+// 只传 templateKey, id/protocol/displayName/baseUrl 由 main 从模板单源
+// (@shared/onboarding/llmProviderTemplates) 解析; 仅 custom 两模板收用户 baseUrl
+// (http/https + 拒 userinfo); Test 只对本次 onboarding session 内经 Save 创建过的
+// provider id 放行 (main 内存记录, 重启即清)。)
+// ---------------------------------------------------------------------------
+
+export interface LlmProviderStatusResult {
+  enabled: boolean
+}
+
+/** provider registry flag 可观测 (决定「AI 模型」步显隐)。后端未起 / flag off /
+ *  字段缺失 (老 serve-api) → 一律 {enabled:false} fail-closed 隐藏该步。 */
+async function llmProviderStatus(): Promise<LlmProviderStatusResult> {
+  try {
+    const cfg = await daemonRequest<{ providerRegistryEnabled?: boolean }>('GET', '/chat/config')
+    return { enabled: cfg?.providerRegistryEnabled === true }
+  } catch {
+    return { enabled: false }
+  }
+}
+
+export interface LlmProviderSaveArg {
+  templateKey: string
+  /** 仅 custom 模板生效; 其余模板传非空值 → E_INVALID (fail-loud, 防混淆代理)。 */
+  baseUrl?: string
+  apiKey?: string
+}
+
+export interface LlmProviderSaveResult {
+  ok: boolean
+  error?: { code: string; message: string }
+}
+
+/** llmProviderTest 白名单: 本次 onboarding session 内经 llmProviderSave 成功创建的
+ *  provider id (模板 key)。main 进程内存态, app 重启即清。 */
+const sessionSavedLlmProviderIds = new Set<string>()
+
+/** 按模板创建 provider 行 (POST /llm/providers); id 已存在 (本步内重存 / 回退再进) →
+ *  PATCH 同 id upsert。apiKey 仅非空才随 PATCH 发 (空串对 PATCH 语义 = 清除 key)。 */
+async function llmProviderSave(raw: unknown): Promise<LlmProviderSaveResult> {
+  try {
+    const arg = raw as LlmProviderSaveArg | null
+    if (!arg || typeof arg.templateKey !== 'string' || arg.templateKey === '') {
+      return {
+        ok: false,
+        error: { code: 'E_INVALID', message: 'llmProviderSave 需要 {templateKey}' }
+      }
+    }
+    const tpl = findOnboardingLlmTemplate(arg.templateKey)
+    if (!tpl) {
+      return { ok: false, error: { code: 'E_INVALID', message: '未知的 provider 模板' } }
+    }
+    const rawBaseUrl = typeof arg.baseUrl === 'string' ? arg.baseUrl.trim() : ''
+    if (!tpl.allowCustomBaseUrl && rawBaseUrl !== '') {
+      return {
+        ok: false,
+        error: { code: 'E_INVALID', message: '该模板不接受自定义 API 地址' }
+      }
+    }
+    if (tpl.allowCustomBaseUrl) {
+      if (rawBaseUrl === '' && tpl.baseUrlRequired) {
+        return { ok: false, error: { code: 'E_INVALID', message: '该模板必须填写 API 地址' } }
+      }
+      if (rawBaseUrl !== '') {
+        const reason = invalidCustomBaseUrlReason(rawBaseUrl)
+        if (reason !== null) {
+          return { ok: false, error: { code: 'E_INVALID', message: reason } }
+        }
+      }
+    }
+    const baseUrl = tpl.allowCustomBaseUrl ? rawBaseUrl : tpl.baseUrl
+    const apiKey = typeof arg.apiKey === 'string' ? arg.apiKey.trim() : ''
+    try {
+      await daemonRequest('POST', '/llm/providers', {
+        body: {
+          id: tpl.key,
+          protocol: tpl.protocol,
+          displayName: tpl.name,
+          baseUrl,
+          ...(apiKey !== '' ? { apiKey } : {}),
+          enabled: true
+        }
+      })
+    } catch (err) {
+      // id 已存在 → PATCH upsert; 其余错误原样收敛成 error 对象。
+      if (!/already exists/i.test((err as Error).message ?? '')) throw err
+      await daemonRequest('PATCH', `/llm/providers/${encodeURIComponent(tpl.key)}`, {
+        body: {
+          protocol: tpl.protocol,
+          displayName: tpl.name,
+          baseUrl,
+          ...(apiKey !== '' ? { apiKey } : {}),
+          enabled: true
+        }
+      })
+    }
+    sessionSavedLlmProviderIds.add(tpl.key)
+    return { ok: true }
+  } catch (err) {
+    const e = err as Error & { code?: string }
+    return {
+      ok: false,
+      error: { code: e.code ?? 'E_GENERIC', message: e.message ?? 'provider 保存失败' }
+    }
+  }
+}
+
+export interface LlmProviderTestResult {
+  ok: boolean
+  latencyMs?: number
+  error?: string
+}
+
+/** 连通性测试 (POST /llm/providers/{id}/test — serve-api 恒 200, data={ok,latencyMs,error})。
+ *  仅放行本次 onboarding session 内 Save 过的 id —— 防 renderer 拿 main 的本地 token
+ *  权限对任意既有 provider (可能指向私网地址) 触发出网请求。 */
+async function llmProviderTest(raw: unknown): Promise<LlmProviderTestResult> {
+  try {
+    const id = (raw as { id?: unknown } | null)?.id
+    if (typeof id !== 'string' || id === '') {
+      return { ok: false, error: '缺少 provider id' }
+    }
+    if (!sessionSavedLlmProviderIds.has(id)) {
+      return { ok: false, error: '该 provider 不是本次引导中保存的，无法在此测试' }
+    }
+    const data = await daemonRequest<{
+      ok?: boolean
+      latencyMs?: number
+      error?: string | null
+    }>('POST', `/llm/providers/${encodeURIComponent(id)}/test`)
+    return { ok: data?.ok === true, latencyMs: data?.latencyMs, error: data?.error ?? undefined }
+  } catch (err) {
+    return { ok: false, error: (err as Error).message ?? '连通性测试失败' }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // 注册
 // ---------------------------------------------------------------------------
 
@@ -1415,6 +1567,11 @@ export function registerOnboardingHandlers(): void {
   // 写 plugin flag + reload 进 app。让 StepSync 能轮询真实后端进度。
   ipcMain.handle('onboarding:commitConfig', (_evt, arg: unknown) => commitConfig(arg))
   ipcMain.handle('onboarding:finalize', (evt, arg: unknown) => finalize(evt, arg))
+
+  // 「AI 模型 (可选)」步 (07-12 P3b): provider registry 显隐 + 保存 + 连通性测试。
+  ipcMain.handle('onboarding:llmProviderStatus', () => llmProviderStatus())
+  ipcMain.handle('onboarding:llmProviderSave', (_evt, arg: unknown) => llmProviderSave(arg))
+  ipcMain.handle('onboarding:llmProviderTest', (_evt, arg: unknown) => llmProviderTest(arg))
 
   // LEGACY 全量迁移。
   ipcMain.handle('onboarding:detectLegacy', () => detectLegacy())
@@ -1441,5 +1598,11 @@ export const __test__ = {
   buildClearPatch,
   isPathInside,
   pathsCollide,
-  PLUGIN_FLAG_MAP
+  PLUGIN_FLAG_MAP,
+  // HIGH-3: llmProvider IPC 收紧的可测面 (daemonRequest 由测试 mock)。
+  llmProviderSave,
+  llmProviderTest,
+  resetLlmProviderSession: (): void => {
+    sessionSavedLlmProviderIds.clear()
+  }
 }

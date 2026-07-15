@@ -19,6 +19,7 @@ from typing import Dict, List, Optional, Tuple
 
 from loguru import logger
 
+from src.mail.backend.base import MarkerUnavailableError
 from src.mail.constants import get_sqlite_patterns
 
 
@@ -148,10 +149,14 @@ class SQLiteRadar:
         """Get the current maximum row_id from the database.
 
         Returns:
-            Maximum row_id, or 0 if not available.
+            Maximum row_id (真实空邮箱 = 0, 合法值).
+
+        Raises:
+            MarkerUnavailableError: Envelope Index 打不开/查询失败 — 不再塌成 0
+                伪装成功 (首次 baseline 落 0 会触发误判, task 07-14 L3)。
         """
         if not self.db_path:
-            return 0
+            raise MarkerUnavailableError("Envelope Index db_path not configured")
 
         try:
             with self._connection() as conn:
@@ -172,7 +177,9 @@ class SQLiteRadar:
 
         except Exception as e:
             logger.error(f"Failed to get max row_id: {e}")
-            return 0
+            raise MarkerUnavailableError(
+                f"Envelope Index max_row_id query failed: {e}"
+            ) from e
 
     def get_email_count(self) -> Dict[str, int]:
         """Get current email count per mailbox.
@@ -220,7 +227,12 @@ class SQLiteRadar:
         Returns:
             Tuple of (has_changes, current_max_row_id, estimated_new_count)
         """
-        current_max = self.get_current_max_row_id()
+        try:
+            current_max = self.get_current_max_row_id()
+        except MarkerUnavailableError as e:
+            # fail-safe: 查询失败按「本轮无新邮件」跳过, marker 不动, 下轮自愈。
+            logger.warning(f"check_for_changes skipped this cycle: {e}")
+            return False, last_max_row_id, 0
 
         if current_max > last_max_row_id:
             estimated_new = current_max - last_max_row_id

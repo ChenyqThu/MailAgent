@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
+from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING
 
 from loguru import logger
 
@@ -33,8 +33,8 @@ from src.calendar_notion.recurrence import (
     mint_event_id,
 )
 from src.calendar_notion.sync import CalendarNotionSync
+from src.config import calendar_notion_enabled
 from src.mail.icalendar_parser import ICalendarParser, MeetingInvite
-from src.models import CalendarEvent
 
 if TYPE_CHECKING:
     from src.mail.sync_store import SyncStore
@@ -94,6 +94,17 @@ class MeetingInviteSync:
         invite = self.parser.extract_from_email_source(email_source)
         if not invite:
             return None, None
+
+        # Notion 日历面守卫（task 07-12 P3b）：NOTION_TOKEN / CALENDAR_DATABASE_ID
+        # 任一为空 → 跳过日程同步（此前是带着空 db_id 打 Notion API 失败进 errors）。
+        # 仍返回 invite —— 邮件页的会议信息渲染（create_email_page_v2 meeting_invite
+        # 参数）不受影响，与旧的失败路径返回形状一致。
+        if not calendar_notion_enabled():
+            logger.debug(
+                "[meeting] Notion calendar not configured; skipping calendar sync "
+                f"(UID: {invite.uid[:40]}...)"
+            )
+            return None, invite
 
         self._stats["invites_detected"] += 1
         msg_id_short = (message_id or "unknown")[:40]

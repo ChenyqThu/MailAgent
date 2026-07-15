@@ -33,6 +33,11 @@ import type {
 } from './ipc'
 import type { FolderInfo, FolderTreeNode } from '@shared/api/types'
 import { errorMessage } from '@shared/lib/ipcErrors'
+import {
+  findOnboardingLlmTemplate,
+  invalidCustomBaseUrlReason,
+  ONBOARDING_LLM_TEMPLATES
+} from '@shared/onboarding/llmProviderTemplates'
 
 /* ════════════════════════════════════════════════════════════════════════
    Shared step state (lifted to OnboardingRoot)
@@ -895,8 +900,9 @@ export function StepConfig({
   const errs: Record<string, string> = {}
   if (!form.USER_EMAIL) errs.USER_EMAIL = '必填项'
   else if (!EMAIL_RE.test(form.USER_EMAIL)) errs.USER_EMAIL = '邮箱格式不正确'
-  if (!form.NOTION_TOKEN) errs.NOTION_TOKEN = '必填项'
-  if (!form.EMAIL_DATABASE_ID) errs.EMAIL_DATABASE_ID = '必填项'
+  // 07-12 P3b: NOTION_TOKEN / EMAIL_DATABASE_ID 改可选 —— 空 = 仅本地模式
+  // (Notion 镜像/周报/日历同步停用), 不再阻断「开始同步」。commitConfig 的
+  // missing 闸 (ONBOARDING_REQUIRED_KEYS) 已同批放开, 前后两道门保持一致。
   if (isDavmail) {
     // davmail 不要求 MAIL_ACCOUNT_NAME (USER_EMAIL 即登录名); 但要求一种认证方式:
     // PoC 默认密钥 或 非空 cipher。
@@ -914,6 +920,11 @@ export function StepConfig({
     warns.EMAIL_DATABASE_ID = '数据库 ID 通常为 32 位十六进制'
   if (form.CALENDAR_DATABASE_ID && !HEX32.test(form.CALENDAR_DATABASE_ID.replace(/-/g, '')))
     warns.CALENDAR_DATABASE_ID = '日历 DB ID 通常为 32 位十六进制'
+  // Notion 两键成对才生效 (后端 notion_enabled = 双非空); 只填一个 → 非阻断提醒。
+  if (form.NOTION_TOKEN && !form.EMAIL_DATABASE_ID && !warns.EMAIL_DATABASE_ID)
+    warns.EMAIL_DATABASE_ID = '已填 Token 未填库 ID —— 两者都填才会启用 Notion 同步'
+  if (!form.NOTION_TOKEN && form.EMAIL_DATABASE_ID && !warns.NOTION_TOKEN)
+    warns.NOTION_TOKEN = '已填库 ID 未填 Token —— 两者都填才会启用 Notion 同步'
 
   const valid = Object.keys(errs).length === 0
   const showErr = (k: string): string | undefined => (touched[k] ? errs[k] : undefined)
@@ -925,7 +936,9 @@ export function StepConfig({
         <div className="eyebrow">Step 3 — 邮件同步配置</div>
         <h1 className="wiz-h1">连接 Notion 与邮箱</h1>
         <p className="wiz-lede">
-          填写后写入 DATA_ROOT/.env（行级原子写，不破坏注释）。Token 会镜像到系统钥匙串。
+          填写后写入 DATA_ROOT/.env（行级原子写，不破坏注释）。Token 会镜像到系统钥匙串。 Notion
+          为可选 —— 留空则以仅本地模式运行（Notion 镜像 / 项目周报 / 日历同步停用，
+          稍后可在设置里补）。
         </p>
 
         {submitError && (
@@ -1036,12 +1049,12 @@ export function StepConfig({
           <Field
             label="Notion Token"
             icon="key"
-            required
             error={showErr('NOTION_TOKEN')}
             warn={warns.NOTION_TOKEN}
             hint={
               <span>
-                在 Notion → Settings → Connections 创建 Integration，粘贴 secret。
+                选填 · 跳过则仅本地模式。在 Notion → Settings → Connections 创建 Integration，粘贴
+                secret。
                 <span className="help-link">如何创建？</span>
               </span>
             }
@@ -1060,10 +1073,9 @@ export function StepConfig({
           <Field
             label="邮件数据库 ID"
             icon="database"
-            required
             error={showErr('EMAIL_DATABASE_ID')}
             warn={warns.EMAIL_DATABASE_ID}
-            hint="打开你的邮件数据库 → 复制 URL 里的 32 位 ID"
+            hint="选填 · 打开你的邮件数据库 → 复制 URL 里的 32 位 ID"
           >
             <input
               className={`fld mono ${showErr('EMAIL_DATABASE_ID') ? 'err' : ''}`}
@@ -1094,9 +1106,8 @@ export function StepConfig({
         onNext={() => {
           setTouched({
             USER_EMAIL: true,
-            NOTION_TOKEN: true,
-            EMAIL_DATABASE_ID: true,
             // davmail 不要求账户名, 但要求 cipher (非 PoC 模式时); applescript 反之。
+            // Notion 两键已改选填 (07-12 P3b), 不再进 touched/errs。
             MAIL_ACCOUNT_NAME: !isDavmail,
             DAVMAIL_POC_CIPHER_KEY: isDavmail
           })
@@ -1798,6 +1809,237 @@ export function StepPlugins({
         </div>
       </div>
       <WizFooter onBack={onBack} onNext={onNext} nextLabel="完成设置" nextIcon="arrowRight" />
+    </>
+  )
+}
+
+/* ─── Step 5.5 · AI 模型 (可选, 07-12 P3b) ─────────────────────────────────────
+   provider registry flag on (onboarding:llmProviderStatus → /chat/config
+   .providerRegistryEnabled) 时才由 OnboardingRoot 插入本步 (plugins 步之前 —— 此时
+   commitConfig 已起后端, provider REST 可用)。极简 provider 表单: 模板 + apiKey
+   (+ 仅 custom 模板的 baseURL) + 保存/连通性测试。与 Settings 的 provider 管理组件
+   有意隔离 (onboarding Chinese-only 无 i18n、零共用组件约定), 但共用同一 REST 端点
+   (经 main 的 daemon 转发, 本地 token 不进 renderer)。跳过 = 零写入。
+
+   批 2 review HIGH-3: 模板单源在 @shared/onboarding/llmProviderTemplates (main 侧
+   llmProviderSave 以它为权威解析 id/protocol/displayName/baseUrl, renderer 这里只
+   投影下拉列表 + 传 templateKey); 非 custom 模板的 baseUrl 只读展示, custom 模板
+   的 baseUrl 由 main 校验 http/https + 拒 userinfo (这里复用同一校验做即时反馈)。 */
+
+export interface StepAiModelProps {
+  onNext: () => void
+  onBack: () => void
+}
+
+export function StepAiModel({ onNext, onBack }: StepAiModelProps): React.JSX.Element {
+  const [tplKey, setTplKey] = useState<string>(ONBOARDING_LLM_TEMPLATES[0].key)
+  const tpl = findOnboardingLlmTemplate(tplKey) ?? ONBOARDING_LLM_TEMPLATES[0]
+  const [customBaseUrl, setCustomBaseUrl] = useState('')
+  const [apiKey, setApiKey] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const [testResult, setTestResult] = useState<ipc.LlmProviderTestResult | null>(null)
+  const alive = useRef(true)
+  useEffect(() => {
+    alive.current = true
+    return () => {
+      alive.current = false
+    }
+  }, [])
+
+  const pickTemplate = (key: string): void => {
+    const next = findOnboardingLlmTemplate(key)
+    if (!next) return
+    setTplKey(key)
+    setCustomBaseUrl('')
+    setSaveError(null)
+    setTestResult(null)
+  }
+
+  // 即时校验 (main 侧 llmProviderSave 是权威, 这里只提前反馈)。
+  const customBaseUrlProblem =
+    tpl.allowCustomBaseUrl && customBaseUrl.trim() !== ''
+      ? invalidCustomBaseUrlReason(customBaseUrl.trim())
+      : null
+  // 保存前置条件: key 必填; custom openai-compatible 还需合法 baseURL (服务端无默认端点)。
+  const canSave =
+    apiKey.trim() !== '' &&
+    customBaseUrlProblem === null &&
+    (!tpl.baseUrlRequired || customBaseUrl.trim() !== '')
+
+  /** 创建/upsert provider 行; 失败 → saveError, 返回 false。 */
+  const doSave = async (): Promise<boolean> => {
+    setSaveError(null)
+    try {
+      const res = await ipc.llmProviderSave({
+        templateKey: tpl.key,
+        ...(tpl.allowCustomBaseUrl && customBaseUrl.trim() !== ''
+          ? { baseUrl: customBaseUrl.trim() }
+          : {}),
+        apiKey: apiKey.trim()
+      })
+      if (!res?.ok) {
+        if (alive.current) setSaveError(res?.error?.message ?? '保存失败，请重试。')
+        return false
+      }
+      return true
+    } catch (err) {
+      if (alive.current) setSaveError(errorMessage(err))
+      return false
+    }
+  }
+
+  const testConnection = (): void => {
+    if (!canSave || busy) return
+    setBusy(true)
+    setTestResult(null)
+    void (async () => {
+      const saved = await doSave()
+      if (!saved) {
+        if (alive.current) setBusy(false)
+        return
+      }
+      try {
+        const r = await ipc.llmProviderTest(tpl.key)
+        if (alive.current) setTestResult(r ?? { ok: false, error: '测试无响应' })
+      } catch (err) {
+        if (alive.current) setTestResult({ ok: false, error: errorMessage(err) })
+      } finally {
+        if (alive.current) setBusy(false)
+      }
+    })()
+  }
+
+  const saveAndNext = (): void => {
+    if (!canSave || busy) return
+    setBusy(true)
+    void (async () => {
+      const saved = await doSave()
+      if (alive.current) setBusy(false)
+      if (saved) onNext()
+    })()
+  }
+
+  return (
+    <>
+      <div className="wiz-body scrollbar-thin step-enter">
+        <div className="eyebrow">Step — AI 模型（可选）</div>
+        <h1 className="wiz-h1">接入你的模型服务</h1>
+        <p className="wiz-lede">
+          为 AI 分类与对话配置一个模型服务商（官方 API 或自建中转）。此步可跳过 —— 稍后在「设置 →
+          AI」里随时添加与管理。
+        </p>
+
+        {saveError && (
+          <div className="mt-4">
+            <Banner kind="fail">
+              <div className="font-semibold text-[13px] mb-0.5">保存失败</div>
+              <div className="text-[12.5px] text-ink-fg-1">{saveError}</div>
+            </Banner>
+          </div>
+        )}
+        {testResult && !saveError && (
+          <div className="mt-4">
+            {testResult.ok ? (
+              <Banner kind="info" icon="check">
+                连接正常
+                {typeof testResult.latencyMs === 'number' ? `（${testResult.latencyMs}ms）` : ''}
+                ，配置已保存。
+              </Banner>
+            ) : (
+              <Banner kind="warn">
+                <div className="font-semibold text-[13px] mb-0.5">连接测试未通过</div>
+                <div className="text-[12.5px] text-ink-fg-1">
+                  {testResult.error ?? '未知错误'} —— 配置已保存，可修正后重测或稍后在设置里排查。
+                </div>
+              </Banner>
+            )}
+          </div>
+        )}
+
+        <div className="flex flex-col gap-4 mt-5">
+          <Field label="服务商" icon="spark" hint="模板固定协议与端点，凭证由你提供">
+            <div className="selwrap">
+              <select className="fld" value={tplKey} onChange={(e) => pickTemplate(e.target.value)}>
+                {ONBOARDING_LLM_TEMPLATES.map((t) => (
+                  <option key={t.key} value={t.key}>
+                    {t.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </Field>
+
+          {tpl.allowCustomBaseUrl ? (
+            <Field
+              label="API 地址 (Base URL)"
+              icon="server"
+              required={Boolean(tpl.baseUrlRequired)}
+              hint={
+                customBaseUrlProblem ??
+                (tpl.baseUrlRequired
+                  ? '自定义服务必填，例如 https://your-relay.example.com/v1'
+                  : '留空使用官方默认端点')
+              }
+            >
+              <input
+                className="fld mono"
+                placeholder={tpl.baseUrlRequired ? 'https://…/v1' : '留空 = 官方默认'}
+                value={customBaseUrl}
+                onChange={(e) => setCustomBaseUrl(e.target.value)}
+              />
+            </Field>
+          ) : (
+            <Field
+              label="API 地址 (Base URL)"
+              icon="server"
+              hint="内置模板端点固定；要接自建中转请选「自定义」模板"
+            >
+              <input className="fld mono" value={tpl.baseUrl || '官方默认端点'} disabled />
+            </Field>
+          )}
+
+          <Field label="API Key" icon="key" required hint="仅存本机（加密落盘），不上传第三方">
+            <input
+              className="fld mono"
+              type="password"
+              placeholder="sk-…"
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+              autoComplete="off"
+            />
+          </Field>
+
+          <div>
+            <button
+              type="button"
+              className="btn-sec"
+              onClick={testConnection}
+              disabled={!canSave || busy}
+            >
+              {busy ? (
+                <Icon name="refresh" size={14} cls="spin" />
+              ) : (
+                <Icon name="spark" size={14} />
+              )}
+              测试连接
+            </button>
+          </div>
+        </div>
+      </div>
+      <WizFooter
+        onBack={busy ? null : onBack}
+        secondary={
+          <button className="btn-link" onClick={onNext} disabled={busy}>
+            跳过此步
+          </button>
+        }
+        onNext={saveAndNext}
+        nextDisabled={!canSave}
+        nextLabel="保存并继续"
+        nextIcon="arrowRight"
+        busy={busy}
+      />
     </>
   )
 }

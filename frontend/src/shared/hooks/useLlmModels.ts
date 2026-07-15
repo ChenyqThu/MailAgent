@@ -49,13 +49,23 @@ export function useUpstreamModels(provider: 'main' | 'translate' = 'main'): {
 
 // ── enabled models (LLM_ENABLED_MODELS, hot-read from /chat/config) ─────────
 
+/** /chat/config 的模型面投影（enabledModels + provider registry flag）——一次 fetch
+ *  两个消费 hook 共享（批 2 review LOW-7：flag 探针不得为同一端点另开独立 query/fetch）。
+ *  useEnabledModels / useProviderRegistryEnabled 用同一 queryKey + queryFn，各自 select
+ *  投影一个切片，React Query 按 key 去重 → 打开 Settings/抽屉只发一次 /chat/config。 */
+export interface ChatConfigModelsProbe {
+  enabledModels: string[]
+  providerRegistryEnabled: boolean
+}
+
 export function useEnabledModels(): { models: string[]; rawEnabled: string[] } {
   // queryKey ['chat','config','enabledModels']: AiTab's checkbox handler
   // calls invalidateQueries on this key after writing LLM_ENABLED_MODELS so
   // the chat picker reflects the new selection without a page reload.
   const q = useQuery({
     queryKey: qk.chat.config('enabledModels'),
-    queryFn: fetchEnabledModels,
+    queryFn: fetchChatConfigModelsProbe,
+    select: (d) => d.enabledModels,
     staleTime: 30_000, // 30s — fast enough for post-save invalidation
     retry: false
   })
@@ -67,18 +77,25 @@ export function useEnabledModels(): { models: string[]; rawEnabled: string[] } {
   }
 }
 
-/** Fetch LLM_ENABLED_MODELS from serve-api /chat/config (dotenv_values hot-read).
- *  Returns [] when not configured or the endpoint is unreachable. */
-async function fetchEnabledModels(): Promise<string[]> {
+/** Fetch the models-facing slice of serve-api /chat/config (dotenv_values hot-read).
+ *  Unreachable / not configured → all-off defaults（flag-off 姿态，旧 UI 字节级现状）。 */
+export async function fetchChatConfigModelsProbe(): Promise<ChatConfigModelsProbe> {
   try {
     const baseUrl = resolveApiBaseUrl()
     const resp = await fetch(`${baseUrl}/chat/config`, { credentials: 'include' })
-    if (!resp.ok) return []
-    const body = (await resp.json()) as { data?: { enabledModels?: unknown } }
+    if (!resp.ok) return { enabledModels: [], providerRegistryEnabled: false }
+    const body = (await resp.json()) as {
+      data?: { enabledModels?: unknown; providerRegistryEnabled?: unknown }
+    }
     const raw = body?.data?.enabledModels
-    return Array.isArray(raw) ? raw.filter((s): s is string => typeof s === 'string') : []
+    return {
+      enabledModels: Array.isArray(raw)
+        ? raw.filter((s): s is string => typeof s === 'string')
+        : [],
+      providerRegistryEnabled: body?.data?.providerRegistryEnabled === true
+    }
   } catch {
-    return []
+    return { enabledModels: [], providerRegistryEnabled: false }
   }
 }
 

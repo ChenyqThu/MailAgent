@@ -12,7 +12,12 @@ from __future__ import annotations
 
 import pytest
 
-from src.services.mail_write import _compose_reply_draft, _split_addrs
+from src.services.errors import ServiceInvalidArgError
+from src.services.mail_write import (
+    _compose_reply_draft,
+    _normalize_reply_subject,
+    _split_addrs,
+)
 from tests.cli.conftest import extract_last_json_object as _last_json
 
 
@@ -110,6 +115,72 @@ def test_compose_subject_keeps_existing_re():
         reply_text="ok", reply_html=None, extra_to=None, extra_cc=None,
     )
     assert draft.subject == "Re: Hello"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 改主题断线程守卫 (fork aad6a203 回港: reply/reply-all + 新 subject →
+# Outlook/Gmail 按规范化主题 (ConversationTopic) 分组, 改主题即断线程)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_normalize_reply_subject_strips_prefixes():
+    assert _normalize_reply_subject("Re: Hello") == "hello"
+    assert _normalize_reply_subject("RE: re: Hello") == "hello"
+    assert _normalize_reply_subject("回复：Hello") == "hello"
+    assert _normalize_reply_subject("答复: 回复: Hello  World") == "hello world"
+    # Fwd 前缀属主题本体, 不剥 (回复一封转发邮件, 两侧都保留 Fwd 才相等)
+    assert _normalize_reply_subject("Re: Fwd: Hello") == "fwd: hello"
+    assert _normalize_reply_subject("") == ""
+    assert _normalize_reply_subject(None) == ""  # type: ignore[arg-type]
+
+
+def test_compose_reply_all_subject_override_different_rejected():
+    with pytest.raises(ServiceInvalidArgError):
+        _compose_reply_draft(
+            _record(subject="PCI compliance"), internal_id=1, mode="reply-all",
+            reply_text="ok", reply_html=None, extra_to=None, extra_cc=None,
+            subject_override="全新主题",
+        )
+
+
+def test_compose_reply_subject_override_re_prefix_variant_allowed():
+    # 规范化等价 (Re: 前缀 / 大小写 / 空白差异) 不拦 — 普通 reply 预填不误伤
+    draft = _compose_reply_draft(
+        _record(subject="Hello"), internal_id=1, mode="reply",
+        reply_text="ok", reply_html=None, extra_to=None, extra_cc=None,
+        subject_override="RE:  hello",
+    )
+    assert draft.subject == "RE:  hello"
+
+
+def test_compose_reply_all_subject_override_forced_allowed():
+    draft = _compose_reply_draft(
+        _record(subject="PCI compliance"), internal_id=1, mode="reply-all",
+        reply_text="ok", reply_html=None, extra_to=None, extra_cc=None,
+        subject_override="全新主题", force_subject=True,
+    )
+    assert draft.subject == "全新主题"
+
+
+def test_compose_forward_subject_override_not_guarded():
+    draft = _compose_reply_draft(
+        _record(subject="PCI compliance"), internal_id=1, mode="forward",
+        reply_text="ok", reply_html=None,
+        extra_to="dave@example.com", extra_cc=None,
+        subject_override="全新主题",
+    )
+    assert draft.subject == "全新主题"
+
+
+def test_compose_new_subject_not_guarded():
+    # mode='new' 无源邮件, 主题任意 — 守卫只管 reply/reply-all
+    draft = _compose_reply_draft(
+        _record(), internal_id=-1, mode="new",
+        reply_text="ok", reply_html=None, extra_to=None, extra_cc=None,
+        to_override="dave@example.com",
+        subject_override="全新主题",
+    )
+    assert draft.subject == "全新主题"
 
 
 def test_compose_in_reply_to_and_references():
@@ -414,6 +485,37 @@ def test_draft_dry_run_emits_plan(cli_runner, seeded_db):
     assert "alice@example.com" in plan["to"]
     assert plan["subject"] == "Re: Hello Test"
     assert plan["reply_source"] == "sqlite:llm_processing.labels_json"
+
+
+def test_draft_subject_override_different_rejected_even_dry_run(cli_runner, seeded_db):
+    # 改主题断线程守卫: dry-run 也拦 (agent 在 plan 阶段就拿到反馈)
+    _seed_reply_suggestion(seeded_db, 12345, _REPLY_MD)
+    r = _invoke(cli_runner, "email", "draft", "12345", "--dry-run",
+                "--subject", "全新主题", "-o", "json", db_path=seeded_db)
+    data = _last_json(r.output)
+    assert data["status"] == "error"
+    assert data["error"]["code"] == "E_INVALID_ARG"
+    assert "force-subject" in data["error"].get("hint", "")
+
+
+def test_draft_subject_override_forced_dry_run_ok(cli_runner, seeded_db):
+    _seed_reply_suggestion(seeded_db, 12345, _REPLY_MD)
+    r = _invoke(cli_runner, "email", "draft", "12345", "--dry-run",
+                "--subject", "全新主题", "--force-subject",
+                "-o", "json", db_path=seeded_db)
+    data = _last_json(r.output)
+    assert data["status"] == "success", r.output
+    assert data["data"]["subject"] == "全新主题"
+
+
+def test_draft_subject_override_equivalent_dry_run_ok(cli_runner, seeded_db):
+    # 规范化等价 (加 Re: 前缀 / 大小写差异) 不拦 — 无需 --force-subject
+    _seed_reply_suggestion(seeded_db, 12345, _REPLY_MD)
+    r = _invoke(cli_runner, "email", "draft", "12345", "--dry-run",
+                "--subject", "RE: hello test", "-o", "json", db_path=seeded_db)
+    data = _last_json(r.output)
+    assert data["status"] == "success", r.output
+    assert data["data"]["subject"] == "RE: hello test"
 
 
 def test_draft_real_create_invokes_append_draft(cli_runner, seeded_db, monkeypatch):

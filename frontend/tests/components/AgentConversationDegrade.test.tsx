@@ -40,6 +40,7 @@ vi.mock('@shared/hooks/useMailApi', () => ({
 }))
 // Model list rides its own hook — stub it so the test doesn't depend on its query shape.
 vi.mock('@shared/hooks/useLlmModels', () => ({
+  fetchChatConfigModelsProbe: async () => ({ enabledModels: [], providerRegistryEnabled: false }),
   useEnabledModels: () => ({ models: ['claude-sonnet-4-6'] })
 }))
 

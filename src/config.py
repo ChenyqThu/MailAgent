@@ -71,9 +71,11 @@ class Config(BaseSettings):
         extra="ignore",
     )
 
-    # Notion 配置
-    notion_token: str = Field(..., env="NOTION_TOKEN")
-    email_database_id: str = Field(..., env="EMAIL_DATABASE_ID")
+    # Notion 配置（task 07-12 P3b 方案 C：可选化 —— 空 = Notion 面停用，邮件走本地-only
+    # 同步 mark_synced_local。运行时判定统一走模块级 notion_enabled() /
+    # calendar_notion_enabled()，勿在消费点各自 if config.notion_token 漂移）
+    notion_token: str = Field(default="", env="NOTION_TOKEN")
+    email_database_id: str = Field(default="", env="EMAIL_DATABASE_ID")
 
     # 用户配置
     user_email: str = Field(..., env="USER_EMAIL")
@@ -231,6 +233,19 @@ class Config(BaseSettings):
     alert_levels: str = Field(default="critical,error,warning", env="ALERT_LEVELS", description="告警级别（逗号分隔）")
     alert_cooldown: int = Field(default=300, env="ALERT_COOLDOWN", description="同类告警冷却时间(秒)")
     alert_dead_letter_threshold: int = Field(default=5, env="ALERT_DEAD_LETTER_THRESHOLD", description="dead_letter 累积告警阈值")
+    # task 07-14: 状态型告警 episode 化。🔴 字段名 ≠ env 键 → 必须 validation_alias
+    # (pydantic v2 忽略 Field(env=)，见本类顶 model_config 注释)。
+    alert_episode_enabled: bool = Field(
+        default=True, validation_alias="MAILAGENT_ALERT_EPISODE",
+        description=(
+            "状态型告警（判据成立后不会自行消失：死信/不健康/雷达/outbox 积压/"
+            "davmail token age）的 episode 语义总开关。on（默认）= 进入异常态告一次 → 中间"
+            "静默 → 值翻倍才再告 → 恢复时告一次并复位，状态落 sync_state['alert.*']（跨"
+            "进程重启存活，且告警**投递成功**才落）。env 显式 false = 应急回退，判据成立"
+            "就告（仅剩 Alerter 的 ALERT_COOLDOWN 内存冷却兜底），字节级回到 episode 化"
+            "之前的行为。注：restart_frequency 不受本开关管辖 —— 它自带 24h 持久冷却。"
+        ),
+    )
     # E4 WP2: outbox 积压告警 — 行龄 ≥5min 仍 pending 的条目数超过该值触发 warning
     alert_outbox_backlog_threshold: int = Field(default=100, env="ALERT_OUTBOX_BACKLOG_THRESHOLD", description="outbox 积压告警阈值（行龄≥5min 的 pending 条数）")
 
@@ -380,6 +395,20 @@ class Config(BaseSettings):
         description=(
             "LLM 处理时优先从 SQLite 读 markdown body (v4 SSoT)；miss 时回退到 "
             "正则剥 HTML。设 false 退回 Phase 1 之前的正则行为。"
+        ),
+    )
+    # ---- LLM 多 Provider 化（task 07-12；默认 on，2026-07-13 cutover）----
+    # 🔴 字段名 llm_provider_registry_enabled ≠ env MAILAGENT_LLM_PROVIDER_REGISTRY → 必须
+    #    validation_alias（pydantic v2 忽略 Field(env=)，见本类顶 model_config 注释）。
+    llm_provider_registry_enabled: bool = Field(
+        default=True, validation_alias="MAILAGENT_LLM_PROVIDER_REGISTRY",
+        description=(
+            "LLM 上游多 provider 体系总开关（agent_config.db 的 llm_provider/llm_model 表，"
+            "prd 07-12）。on（默认，2026-07-13 cutover；删键 = on）= /chat/config "
+            "enabledModels 聚合双表（default provider 输出裸 model id 保持兼容，其余输出 "
+            "'providerId:modelId'）+ Python protocol 路由（provider_routing）；env 显式 "
+            "false 应急回退 = 现状 .env LLM_ENABLED_MODELS 热读 + 前缀路由，字节级不变。"
+            "Node gateway 侧读同名 env（main-env-only，同语义：显式 false 才 off）。"
         ),
     )
     memory_capture_model: str = Field(
@@ -742,6 +771,16 @@ class Config(BaseSettings):
             "极端大邮件 (~MB attachment) 可适当调大到 180s."
         ),
     )
+    davmail_status_timeout_sec: int = Field(
+        default=30, env="DAVMAIL_STATUS_TIMEOUT_SEC",
+        description=(
+            "DavMail INBOX STATUS(UIDNEXT) 查询 timeout (秒), 默认 30. "
+            "超大 INBOX (7万+) 的 STATUS 偶发慢过 30s → 查询失败 (raise "
+            "MarkerUnavailableError, 不再塌成 marker 0, 见 task 07-14 L3); "
+            "大邮箱可调到 90. check_for_changes 每轮同步阻塞调用此查询, "
+            "故默认保守 30 不拖慢全体轮询, 由大邮箱部署按需上调."
+        ),
+    )
     davmail_uid_backfill_enabled: bool = Field(
         default=True, env="DAVMAIL_UID_BACKFILL_ENABLED",
         description=(
@@ -797,6 +836,48 @@ class Config(BaseSettings):
             "AppleScript backend 仍走 radar_poll_interval (默认 5s)."
         ),
     )
+    davmail_login_probe_enabled: bool = Field(
+        default=True, env="DAVMAIL_LOGIN_PROBE_ENABLED",
+        description=(
+            "watchdog 每轮 (60s) 在 IMAP TCP 可达时做一次真实 IMAP LOGIN 探测 — 抓"
+            "「端口活 / SMTP 正常但 IMAP LOGIN 持续失败」的 token 劣化形态 "
+            "(2026-06-12 事故特征, 纯 TCP probe 抓不到)。显式 false = 回退 "
+            "TCP/token 年龄/日志三信号老行为 (应急)。"
+        ),
+    )
+    davmail_login_probe_timeout_sec: int = Field(
+        default=15, env="DAVMAIL_LOGIN_PROBE_TIMEOUT_SEC",
+        description="IMAP LOGIN 健康探测超时 (秒)。",
+    )
+    davmail_login_fail_threshold: int = Field(
+        default=3, env="DAVMAIL_LOGIN_FAIL_THRESHOLD",
+        description=(
+            "连续 LOGIN 失败达此阈值 → level critical + 飞书告警 (login degraded)。"
+            "watchdog 每轮把生效值经 sync_state davmail.login_fail_threshold 传播到"
+            "展示端 (admin router / electron), 四个健康读面读同一值, 改非默认值不再漂移。"
+        ),
+    )
+    davmail_auto_restart_enabled: bool = Field(
+        default=False, env="DAVMAIL_AUTO_RESTART_ENABLED",
+        description=(
+            "L2b: LOGIN 连续失败达阈值后是否自动 `pm2 restart davmail-poc` 自愈。"
+            "默认关 (重启中断在途 IMAP 会话, 破坏性动作保守默认), owner 显式开。"
+            "关 = watchdog 仅告警。开着但 pm2 解析不到 (纯 .app 无 node bin) 时 "
+            "callback 自身降级为仅告警, 不误伤。"
+        ),
+    )
+    davmail_auto_restart_cooldown_sec: int = Field(
+        default=600, env="DAVMAIL_AUTO_RESTART_COOLDOWN_SEC",
+        description="两次自动重启最小间隔 (秒), 防 flap; 重启成败都进冷却。",
+    )
+    davmail_auto_restart_max_per_day: int = Field(
+        default=6, env="DAVMAIL_AUTO_RESTART_MAX_PER_DAY",
+        description=(
+            "24h 滚动窗口内自动重启上限。达上限 → 停自动重启 + critical 告警 "
+            "(镜像 supervise crashloop_stopped 语义: 反复重启说明根因未解须人工), "
+            "窗口滚出后自动恢复。"
+        ),
+    )
     davmail_caldav_port: int = Field(
         default=1080, env="DAVMAIL_CALDAV_PORT",
         description="DavMail CalDAV 端口 (Phase C.2 — LLM agent 拿日程 context)",
@@ -847,3 +928,33 @@ class Config(BaseSettings):
 
 # 全局配置实例
 config = Config()
+
+
+# =============================================================================
+# Notion 可选化判定（task 07-12 P3b 方案 C）—— 四面共用的单一判据 helper，
+# 防止 watcher / service / meeting_sync / hooks 各自 `if config.notion_token` 漂移。
+# cfg 参数供测试注入；缺省读全局单例（call-time 取值，import 顺序无关）。
+# =============================================================================
+
+
+def notion_enabled(cfg: "Config | None" = None) -> bool:
+    """邮件镜像面是否启用：NOTION_TOKEN 与 EMAIL_DATABASE_ID 双非空。
+
+    False = 本地-only 模式：new_watcher 主链跳过 Notion 页创建（mark_synced_local）、
+    reverse sync loop / 项目周报不启动；LLM 分类等钩子照跑（SQLite 腿不受影响）。
+    """
+    c = cfg if cfg is not None else config
+    return bool(
+        (c.notion_token or "").strip() and (c.email_database_id or "").strip()
+    )
+
+
+def calendar_notion_enabled(cfg: "Config | None" = None) -> bool:
+    """日历 Notion 面是否启用：NOTION_TOKEN 与 CALENDAR_DATABASE_ID 双非空。
+
+    False = 会议邀请→Notion 日程同步 + meeting expansion loop 跳过（本地邮件同步不受影响）。
+    """
+    c = cfg if cfg is not None else config
+    return bool(
+        (c.notion_token or "").strip() and (c.calendar_database_id or "").strip()
+    )

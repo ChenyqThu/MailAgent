@@ -54,6 +54,17 @@ import { deriveExecRule, ExecRuleDeriveError } from './exec_policy_matcher'
 // /chat/config, projecting the system-prompt fields for the gateway.
 import { request } from '@shared/api/http_client'
 import type { GatewaySystemPromptConfig } from '../../ai-gateway/systemPrompt'
+// 🔴 MEDIUM-6 (batch1 review) — type-only imports from the SDK-FREE providerRef. providers.ts
+// top-level imports six provider SDK packages, so it is loaded ONLY via the flag-on dynamic
+// import inside startEmbeddedAiGateway: MAILAGENT_LLM_PROVIDER_REGISTRY off keeps the module
+// graph free of the new SDKs (a broken provider package can't take down the flag-off gateway).
+// Pinned by tests/ai-gateway/provider_lazy_import.test.ts.
+import type { ProviderModelResolver } from '../../ai-gateway/providerRef'
+import {
+  backfillLegacyDefaultProviderKey,
+  getLlmProviderModelResolver,
+  isLlmProviderRegistryEnabled
+} from './llm_provider_resolver'
 
 /** The /chat/config response fields the gateway projects into GatewaySystemPromptConfig
  *  (was typed via the legacy HttpPlatformConfig until S3 deleted the legacy engine). */
@@ -252,6 +263,17 @@ async function getSystemPromptConfig(
 export async function startEmbeddedAiGateway(): Promise<number | null> {
   if (_handle) return _handle.port
   const apiKey = await getLlmApiKey()
+  const llmBaseUrl = getLlmBaseUrl()
+  const providerRegistryEnabled = isLlmProviderRegistryEnabled()
+  // MEDIUM-6 — the shared main-process resolver keeps providers.ts (and thus the six provider SDK
+  // packages) behind a flag-on dynamic import. Flag off → the chunk never loads.
+  let providerModelResolver: ProviderModelResolver | undefined
+  if (providerRegistryEnabled) {
+    // 发版终审 HIGH-1 — keytar-only 旧 key 回填必须先于 resolver 构建：resolver 首拉快照
+    // 即拿到回填后的 default 行（version 已 bump），无需强制刷新。失败仅 warning 不阻断。
+    await backfillLegacyDefaultProviderKey()
+    providerModelResolver = await getLlmProviderModelResolver()
+  }
   // Phase 03a — domain client → Python serve-api READ endpoints (loopback +
   // same-machine local token, mirrors the renderer's auth leg). The read-tool
   // registry binds to it; the gateway core never reaches SQLite directly.
@@ -428,9 +450,11 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
 
   const handle = await startAiGatewayServer({
     port: resolveAiGatewayPort(),
-    baseUrl: getLlmBaseUrl(),
+    baseUrl: llmBaseUrl,
     apiKey,
     model: getLlmModel(),
+    providerRegistryEnabled,
+    providerModelResolver,
     // #12 (dogfood session-history) — eager-persist: write the user message at turn START so the
     // session appears in history even when the first turn is HITL-paused and onFinish skips
     // persistTurn. eagerWrittenUserMessages（module-level Set，keyed `${sessionId}:${messageId}`）

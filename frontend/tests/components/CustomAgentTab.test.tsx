@@ -35,6 +35,7 @@ vi.mock('@shared/hooks/useExitAnimation', () => ({
 }))
 
 vi.mock('@shared/hooks/useLlmModels', () => ({
+  fetchChatConfigModelsProbe: async () => ({ enabledModels: [], providerRegistryEnabled: false }),
   FALLBACK_MODELS: ['claude-opus-4-8', 'claude-fable-5'],
   useEnabledModels: () => ({
     models: ['claude-opus-4-8', 'claude-fable-5'],

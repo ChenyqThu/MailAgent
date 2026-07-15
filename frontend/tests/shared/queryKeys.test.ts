@@ -135,6 +135,8 @@ describe('qk — settings / skill / notionAgent / policy / llm / admin', () => {
     expect(qk.llm.upstreamModels('anthropic')).toEqual(['llm', 'upstream-models', 'anthropic'])
     expect(qk.llm.stats()).toEqual(['llm', 'stats'])
     expect(qk.llm.statsDays(7)).toEqual(['llm', 'stats', 7])
+    expect(qk.llm.providers()).toEqual(['llm', 'providers'])
+    expect(qk.llm.providerModels('dash')).toEqual(['llm', 'providers', 'dash', 'models'])
     expect(qk.admin.stats()).toEqual(['admin', 'stats'])
     expect(qk.admin.deadLetter()).toEqual(['admin', 'deadLetter'])
     expect(qk.admin.systemAlerts()).toEqual(['admin', 'systemAlerts'])

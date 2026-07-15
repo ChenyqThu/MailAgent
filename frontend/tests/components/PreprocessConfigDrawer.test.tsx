@@ -13,6 +13,7 @@ vi.mock('../../src/shared/components/agents/hooks', () => ({
   useSetConfig: () => ({ save: mockSave, isSaving: false })
 }))
 vi.mock('@shared/hooks/useLlmModels', () => ({
+  fetchChatConfigModelsProbe: async () => ({ enabledModels: [], providerRegistryEnabled: false }),
   useEnabledModels: () => ({ models: ['claude-sonnet-4-6'] })
 }))
 vi.mock('@shared/hooks/useMailApi', () => ({

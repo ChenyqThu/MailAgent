@@ -20,6 +20,7 @@ vi.mock('@shared/hooks/useExitAnimation', () => ({
 }))
 
 vi.mock('@shared/hooks/useLlmModels', () => ({
+  fetchChatConfigModelsProbe: async () => ({ enabledModels: [], providerRegistryEnabled: false }),
   FALLBACK_MODELS: [],
   useEnabledModels: () => ({ models: [], rawEnabled: [] }),
   useUpstreamModels: () => ({ models: [], isLoading: false, error: undefined, refresh: vi.fn() }),

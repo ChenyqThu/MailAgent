@@ -8,15 +8,10 @@ import { useKosAvailable, useSetConfig } from '../hooks'
 import { Drawer } from '@shared/components/ui/drawer'
 import { StatefulButton } from '@shared/components/ui/stateful-button'
 import { useEnabledModels } from '@shared/hooks/useLlmModels'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue
-} from '@shared/components/ui/select'
+import { Select, SelectContent, SelectTrigger, SelectValue } from '@shared/components/ui/select'
 import { PREPROCESS_DOCS } from '../shared'
 import { Field } from './Field'
+import { ModelSelectItems } from './ModelSelectItems'
 
 const HOUR_OPTIONS = [6, 7, 8, 9, 10, 12, 18, 21]
 // weekday：与后端 worker.py 一致，Python datetime.weekday() 口径 0=周一 … 6=周日。
@@ -142,114 +137,224 @@ export function ConfigDrawer({
       // 时区只在 natural_day 有意义；rolling_24h 固定回溯 24h、不读时区，显式清空。
       patch.timezone = triggerMode === 'natural_day' ? timezone.trim() : ''
     }
-    void save(cfg.id, patch).then(onClose).catch(() => setSaveFailed(true))
+    void save(cfg.id, patch)
+      .then(onClose)
+      .catch(() => setSaveFailed(true))
   }
 
   return (
     <Drawer open={open} onOpenChange={(nextOpen) => !nextOpen && onClose()}>
-        <header
-          className="flex items-center"
-          style={{
-            gap: 10,
-            padding: '15px 18px',
-            borderBottom: '1px solid rgb(var(--ink-border-soft))',
-            flexShrink: 0
-          }}
-        >
-          <span style={{ color: 'rgb(var(--c-accent))', display: 'flex' }}>
-            <ReportIcon name="cog" size={16} />
-          </span>
-          <h2 style={{ fontSize: 15, fontWeight: 600, color: 'rgb(var(--ink-fg))', flex: 1 }}>
-            {t('agents.config.title', { title })}
-          </h2>
-          {/* R5 — 「查看全部历史」→ 跳报告 tab 浏览完整执行记录（含失败态）。切 tab 会卸载
+      <header
+        className="flex items-center"
+        style={{
+          gap: 10,
+          padding: '15px 18px',
+          borderBottom: '1px solid rgb(var(--ink-border-soft))',
+          flexShrink: 0
+        }}
+      >
+        <span style={{ color: 'rgb(var(--c-accent))', display: 'flex' }}>
+          <ReportIcon name="cog" size={16} />
+        </span>
+        <h2 style={{ fontSize: 15, fontWeight: 600, color: 'rgb(var(--ink-fg))', flex: 1 }}>
+          {t('agents.config.title', { title })}
+        </h2>
+        {/* R5 — 「查看全部历史」→ 跳报告 tab 浏览完整执行记录（含失败态）。切 tab 会卸载
               本抽屉所在的 agents tab，无需先播退场动画。onOpenReports 缺省时不渲染。 */}
-          {onOpenReports && (
-            <button
-              type="button"
-              onClick={onOpenReports}
-              className="flex items-center"
-              style={{
-                gap: 5,
-                fontFamily: 'inherit',
-                fontSize: 12,
-                padding: '5px 10px',
-                borderRadius: 7,
-                cursor: 'pointer',
-                color: 'rgb(var(--ink-fg-2))',
-                background: 'rgb(var(--ink-fg) / 0.05)',
-                border: '1px solid rgb(var(--ink-border-soft))'
-              }}
-              onMouseEnter={(e) => (e.currentTarget.style.color = 'rgb(var(--c-accent))')}
-              onMouseLeave={(e) => (e.currentTarget.style.color = 'rgb(var(--ink-fg-2))')}
-            >
-              <ReportIcon name="clock" size={13} />
-              {t('agents.config.viewHistory')}
-            </button>
-          )}
+        {onOpenReports && (
           <button
             type="button"
-            onClick={onClose}
-            aria-label={t('agents.source.close')}
+            onClick={onOpenReports}
+            className="flex items-center"
             style={{
-              display: 'grid',
-              placeItems: 'center',
-              width: 28,
-              height: 28,
+              gap: 5,
+              fontFamily: 'inherit',
+              fontSize: 12,
+              padding: '5px 10px',
               borderRadius: 7,
-              background: 'transparent',
-              border: 0,
               cursor: 'pointer',
-              color: 'rgb(var(--ink-fg-2))'
+              color: 'rgb(var(--ink-fg-2))',
+              background: 'rgb(var(--ink-fg) / 0.05)',
+              border: '1px solid rgb(var(--ink-border-soft))'
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.color = 'rgb(var(--c-accent))')}
+            onMouseLeave={(e) => (e.currentTarget.style.color = 'rgb(var(--ink-fg-2))')}
+          >
+            <ReportIcon name="clock" size={13} />
+            {t('agents.config.viewHistory')}
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label={t('agents.source.close')}
+          style={{
+            display: 'grid',
+            placeItems: 'center',
+            width: 28,
+            height: 28,
+            borderRadius: 7,
+            background: 'transparent',
+            border: 0,
+            cursor: 'pointer',
+            color: 'rgb(var(--ink-fg-2))'
+          }}
+        >
+          <ReportIcon name="x" size={16} />
+        </button>
+      </header>
+
+      <div className="scrollbar-thin" style={{ flex: 1, overflowY: 'auto', padding: 18 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+          {/* enable */}
+          <div
+            className="flex items-center"
+            style={{
+              gap: 12,
+              padding: '13px 14px',
+              borderRadius: 10,
+              background: 'rgb(var(--ink-2) / 0.55)',
+              border: '1px solid rgb(var(--ink-border))'
             }}
           >
-            <ReportIcon name="x" size={16} />
-          </button>
-        </header>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 13.5, fontWeight: 500, color: 'rgb(var(--ink-fg))' }}>
+                {t('agents.config.enable')}
+              </div>
+              <div style={{ fontSize: 12, color: 'rgb(var(--ink-fg-3))', marginTop: 2 }}>
+                {t('agents.config.enableHint')}
+              </div>
+            </div>
+            <Switch on={enabled} onChange={setEnabled} />
+          </div>
 
-        <div className="scrollbar-thin" style={{ flex: 1, overflowY: 'auto', padding: 18 }}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-            {/* enable */}
-            <div
-              className="flex items-center"
+          {/* prompt */}
+          <Field label={t('agents.config.prompt')} hint={t('agents.config.promptHint')}>
+            <textarea
+              value={prompt}
+              placeholder={t('agents.config.promptPlaceholder')}
+              onChange={(e) => {
+                setPrompt(e.target.value)
+                setPromptDirty(true)
+              }}
+              rows={11}
+              className="scrollbar-thin"
               style={{
-                gap: 12,
-                padding: '13px 14px',
-                borderRadius: 10,
-                background: 'rgb(var(--ink-2) / 0.55)',
-                border: '1px solid rgb(var(--ink-border))'
+                ...inputStyle,
+                resize: 'vertical',
+                lineHeight: 1.6,
+                fontSize: 13,
+                minHeight: 200
+              }}
+            />
+            <div
+              style={{
+                fontSize: 11.5,
+                color: 'rgb(var(--ink-fg-3))',
+                marginTop: 6,
+                lineHeight: 1.5
               }}
             >
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 13.5, fontWeight: 500, color: 'rgb(var(--ink-fg))' }}>
-                  {t('agents.config.enable')}
-                </div>
-                <div style={{ fontSize: 12, color: 'rgb(var(--ink-fg-3))', marginTop: 2 }}>
-                  {t('agents.config.enableHint')}
-                </div>
-              </div>
-              <Switch on={enabled} onChange={setEnabled} />
+              {t('agents.config.promptNote')}
             </div>
+          </Field>
 
-            {/* prompt */}
-            <Field label={t('agents.config.prompt')} hint={t('agents.config.promptHint')}>
-              <textarea
-                value={prompt}
-                placeholder={t('agents.config.promptPlaceholder')}
-                onChange={(e) => {
-                  setPrompt(e.target.value)
-                  setPromptDirty(true)
-                }}
-                rows={11}
-                className="scrollbar-thin"
-                style={{
-                  ...inputStyle,
-                  resize: 'vertical',
-                  lineHeight: 1.6,
-                  fontSize: 13,
-                  minHeight: 200
-                }}
-              />
+          {/* 文档勾选（cfg.context_docs）—— 注入报告 system prompt 的身份文档（增量 2，
+                与 PreprocessConfigDrawer 同款 chips + 同语义：[] = 显式不注入） */}
+          <Field label={t('agents.config.contextDocs')} hint={t('agents.config.contextDocsHint')}>
+            <div className="flex items-center" style={{ gap: 8, flexWrap: 'wrap' }}>
+              {PREPROCESS_DOCS.map((doc) => {
+                const on = contextDocs.includes(doc)
+                return (
+                  <button
+                    key={doc}
+                    type="button"
+                    aria-pressed={on}
+                    onClick={() =>
+                      setContextDocs((prev) =>
+                        prev.includes(doc) ? prev.filter((x) => x !== doc) : [...prev, doc]
+                      )
+                    }
+                    style={{
+                      padding: '6px 12px',
+                      borderRadius: 8,
+                      fontFamily: 'inherit',
+                      fontSize: 13,
+                      cursor: 'pointer',
+                      color: on ? 'rgb(var(--c-accent))' : 'rgb(var(--ink-fg-2))',
+                      background: on ? 'rgb(var(--c-accent) / 0.14)' : 'rgb(var(--ink-1) / 0.5)',
+                      border: `1px solid ${on ? 'rgb(var(--c-accent))' : 'rgb(var(--ink-border))'}`,
+                      transition:
+                        'color 120ms cubic-bezier(0.4,0,0.2,1), background-color 120ms cubic-bezier(0.4,0,0.2,1), border-color 120ms cubic-bezier(0.4,0,0.2,1)'
+                    }}
+                  >
+                    {t(`agents.preprocess.doc.${doc}`)}
+                  </button>
+                )
+              })}
+            </div>
+            <div
+              style={{
+                fontSize: 11.5,
+                color: 'rgb(var(--ink-fg-3))',
+                marginTop: 7,
+                lineHeight: 1.5
+              }}
+            >
+              {t('agents.config.contextDocsNote')}
+            </div>
+          </Field>
+
+          {/* schedule：daily 只选时点；weekly 选周几 + 时点；monthly 选每月几日 + 时点 */}
+          <Field label={t('agents.config.schedule')}>
+            <div className="flex items-center" style={{ gap: 10, flexWrap: 'wrap' }}>
+              <CadencePill cadence={cadence} />
+              {cadence === 'daily' && (
+                <span style={{ fontSize: 13, color: 'rgb(var(--ink-fg-2))' }}>
+                  {t('agents.config.at')}
+                </span>
+              )}
+              {cadence === 'weekly' && (
+                <select
+                  value={weekday}
+                  onChange={(e) => setWeekday(Number(e.target.value))}
+                  style={{ ...inputStyle, width: 'auto' }}
+                  aria-label={t('agents.config.weekdayLabel')}
+                >
+                  {WEEKDAY_OPTIONS.map((d) => (
+                    <option key={d} value={d}>
+                      {t(`agents.config.weekday.${d}`)}
+                    </option>
+                  ))}
+                </select>
+              )}
+              {cadence === 'monthly' && (
+                <select
+                  value={dayOfMonth}
+                  onChange={(e) => setDayOfMonth(Number(e.target.value))}
+                  style={{ ...inputStyle, width: 'auto' }}
+                  aria-label={t('agents.config.dayOfMonthLabel')}
+                >
+                  {DAY_OF_MONTH_OPTIONS.map((d) => (
+                    <option key={d} value={d}>
+                      {t('agents.config.dayOfMonthN', { day: d })}
+                    </option>
+                  ))}
+                </select>
+              )}
+              <select
+                value={hour}
+                onChange={(e) => setHour(Number(e.target.value))}
+                style={{ ...inputStyle, width: 'auto', flex: 1 }}
+              >
+                {HOUR_OPTIONS.map((h) => (
+                  <option key={h} value={h}>
+                    {String(h).padStart(2, '0')}:00
+                  </option>
+                ))}
+              </select>
+            </div>
+            {cadence === 'monthly' && (
               <div
                 style={{
                   fontSize: 11.5,
@@ -258,309 +363,184 @@ export function ConfigDrawer({
                   lineHeight: 1.5
                 }}
               >
-                {t('agents.config.promptNote')}
+                {t('agents.config.dayOfMonthHint')}
               </div>
-            </Field>
+            )}
+          </Field>
 
-            {/* 文档勾选（cfg.context_docs）—— 注入报告 system prompt 的身份文档（增量 2，
-                与 PreprocessConfigDrawer 同款 chips + 同语义：[] = 显式不注入） */}
-            <Field label={t('agents.config.contextDocs')} hint={t('agents.config.contextDocsHint')}>
-              <div className="flex items-center" style={{ gap: 8, flexWrap: 'wrap' }}>
-                {PREPROCESS_DOCS.map((doc) => {
-                  const on = contextDocs.includes(doc)
-                  return (
+          {isDaily ? (
+            <>
+              {/* 触发模式 */}
+              <Field label={t('agents.config.triggerMode')} hint={t('agents.config.triggerHint')}>
+                <div className="seg" style={{ width: '100%' }}>
+                  {(['rolling_24h', 'natural_day'] as const).map((mode) => (
                     <button
-                      key={doc}
+                      key={mode}
                       type="button"
-                      aria-pressed={on}
-                      onClick={() =>
-                        setContextDocs((prev) =>
-                          prev.includes(doc) ? prev.filter((x) => x !== doc) : [...prev, doc]
-                        )
-                      }
-                      style={{
-                        padding: '6px 12px',
-                        borderRadius: 8,
-                        fontFamily: 'inherit',
-                        fontSize: 13,
-                        cursor: 'pointer',
-                        color: on ? 'rgb(var(--c-accent))' : 'rgb(var(--ink-fg-2))',
-                        background: on ? 'rgb(var(--c-accent) / 0.14)' : 'rgb(var(--ink-1) / 0.5)',
-                        border: `1px solid ${on ? 'rgb(var(--c-accent))' : 'rgb(var(--ink-border))'}`,
-                        transition:
-                          'color 120ms cubic-bezier(0.4,0,0.2,1), background-color 120ms cubic-bezier(0.4,0,0.2,1), border-color 120ms cubic-bezier(0.4,0,0.2,1)'
-                      }}
+                      className={triggerMode === mode ? 'on' : ''}
+                      style={{ flex: 1, justifyContent: 'center' }}
+                      onClick={() => setTriggerMode(mode)}
                     >
-                      {t(`agents.preprocess.doc.${doc}`)}
+                      {t(`agents.config.trigger.${mode}`)}
                     </button>
-                  )
-                })}
-              </div>
-              <div
-                style={{
-                  fontSize: 11.5,
-                  color: 'rgb(var(--ink-fg-3))',
-                  marginTop: 7,
-                  lineHeight: 1.5
-                }}
-              >
-                {t('agents.config.contextDocsNote')}
-              </div>
-            </Field>
-
-            {/* schedule：daily 只选时点；weekly 选周几 + 时点；monthly 选每月几日 + 时点 */}
-            <Field label={t('agents.config.schedule')}>
-              <div className="flex items-center" style={{ gap: 10, flexWrap: 'wrap' }}>
-                <CadencePill cadence={cadence} />
-                {cadence === 'daily' && (
-                  <span style={{ fontSize: 13, color: 'rgb(var(--ink-fg-2))' }}>
-                    {t('agents.config.at')}
-                  </span>
-                )}
-                {cadence === 'weekly' && (
-                  <select
-                    value={weekday}
-                    onChange={(e) => setWeekday(Number(e.target.value))}
-                    style={{ ...inputStyle, width: 'auto' }}
-                    aria-label={t('agents.config.weekdayLabel')}
-                  >
-                    {WEEKDAY_OPTIONS.map((d) => (
-                      <option key={d} value={d}>
-                        {t(`agents.config.weekday.${d}`)}
-                      </option>
-                    ))}
-                  </select>
-                )}
-                {cadence === 'monthly' && (
-                  <select
-                    value={dayOfMonth}
-                    onChange={(e) => setDayOfMonth(Number(e.target.value))}
-                    style={{ ...inputStyle, width: 'auto' }}
-                    aria-label={t('agents.config.dayOfMonthLabel')}
-                  >
-                    {DAY_OF_MONTH_OPTIONS.map((d) => (
-                      <option key={d} value={d}>
-                        {t('agents.config.dayOfMonthN', { day: d })}
-                      </option>
-                    ))}
-                  </select>
-                )}
-                <select
-                  value={hour}
-                  onChange={(e) => setHour(Number(e.target.value))}
-                  style={{ ...inputStyle, width: 'auto', flex: 1 }}
-                >
-                  {HOUR_OPTIONS.map((h) => (
-                    <option key={h} value={h}>
-                      {String(h).padStart(2, '0')}:00
-                    </option>
                   ))}
-                </select>
-              </div>
-              {cadence === 'monthly' && (
-                <div
-                  style={{
-                    fontSize: 11.5,
-                    color: 'rgb(var(--ink-fg-3))',
-                    marginTop: 6,
-                    lineHeight: 1.5
-                  }}
-                >
-                  {t('agents.config.dayOfMonthHint')}
-                </div>
-              )}
-            </Field>
-
-            {isDaily ? (
-              <>
-                {/* 触发模式 */}
-                <Field label={t('agents.config.triggerMode')} hint={t('agents.config.triggerHint')}>
-                  <div className="seg" style={{ width: '100%' }}>
-                    {(['rolling_24h', 'natural_day'] as const).map((mode) => (
-                      <button
-                        key={mode}
-                        type="button"
-                        className={triggerMode === mode ? 'on' : ''}
-                        style={{ flex: 1, justifyContent: 'center' }}
-                        onClick={() => setTriggerMode(mode)}
-                      >
-                        {t(`agents.config.trigger.${mode}`)}
-                      </button>
-                    ))}
-                  </div>
-                </Field>
-
-                {/* 时区（仅 natural_day：rolling_24h 固定回溯 24h、不需要时区） */}
-                {triggerMode === 'natural_day' && (
-                  <Field label={t('agents.config.timezone')} hint={t('agents.config.timezoneHint')}>
-                    <select
-                      value={timezone}
-                      onChange={(e) => setTimezone(e.target.value)}
-                      style={inputStyle}
-                    >
-                      <option value="">{t('agents.config.timezoneLocal')}</option>
-                      {Intl.supportedValuesOf('timeZone').map((tz) => (
-                        <option key={tz} value={tz}>
-                          {tz}
-                        </option>
-                      ))}
-                    </select>
-                  </Field>
-                )}
-
-                {/* 带正文的优先级（多选 chip）—— 命中的邮件带完整正文，其余只摘要、不带附件 */}
-                <Field
-                  label={t('agents.config.bodyPriorities')}
-                  hint={t('agents.config.bodyPrioritiesHint')}
-                >
-                  <div className="flex items-center" style={{ gap: 8, flexWrap: 'wrap' }}>
-                    {PRIORITY_ENUM.map((p) => {
-                      const on = bodyPriorities.includes(p)
-                      return (
-                        <button
-                          key={p}
-                          type="button"
-                          aria-pressed={on}
-                          onClick={() =>
-                            setBodyPriorities((prev) =>
-                              prev.includes(p) ? prev.filter((x) => x !== p) : [...prev, p]
-                            )
-                          }
-                          style={{
-                            padding: '6px 12px',
-                            borderRadius: 8,
-                            fontFamily: 'inherit',
-                            fontSize: 13,
-                            cursor: 'pointer',
-                            color: on ? 'rgb(var(--c-accent))' : 'rgb(var(--ink-fg-2))',
-                            background: on
-                              ? 'rgb(var(--c-accent) / 0.14)'
-                              : 'rgb(var(--ink-1) / 0.5)',
-                            border: `1px solid ${on ? 'rgb(var(--c-accent))' : 'rgb(var(--ink-border))'}`,
-                            transition:
-                              'color 120ms cubic-bezier(0.4,0,0.2,1), background-color 120ms cubic-bezier(0.4,0,0.2,1), border-color 120ms cubic-bezier(0.4,0,0.2,1)'
-                          }}
-                        >
-                          {p in PRIORITY_LABEL_KEYS ? t(PRIORITY_LABEL_KEYS[p]) : p}
-                        </button>
-                      )
-                    })}
-                  </div>
-                </Field>
-              </>
-            ) : (
-              <Field label={t('agents.config.aggregation')}>
-                <div
-                  style={{
-                    fontSize: 12.5,
-                    lineHeight: 1.6,
-                    color: 'rgb(var(--ink-fg-2))',
-                    padding: '11px 13px',
-                    borderRadius: 9,
-                    background: 'rgb(var(--ink-1) / 0.5)',
-                    border: '1px solid rgb(var(--ink-border-soft))'
-                  }}
-                >
-                  {cadence === 'weekly'
-                    ? t('agents.config.aggWeekly')
-                    : t('agents.config.aggMonthly')}
                 </div>
               </Field>
-            )}
 
-            {/* model — single-select dropdown. Options = enabled set, plus the
+              {/* 时区（仅 natural_day：rolling_24h 固定回溯 24h、不需要时区） */}
+              {triggerMode === 'natural_day' && (
+                <Field label={t('agents.config.timezone')} hint={t('agents.config.timezoneHint')}>
+                  <select
+                    value={timezone}
+                    onChange={(e) => setTimezone(e.target.value)}
+                    style={inputStyle}
+                  >
+                    <option value="">{t('agents.config.timezoneLocal')}</option>
+                    {Intl.supportedValuesOf('timeZone').map((tz) => (
+                      <option key={tz} value={tz}>
+                        {tz}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+              )}
+
+              {/* 带正文的优先级（多选 chip）—— 命中的邮件带完整正文，其余只摘要、不带附件 */}
+              <Field
+                label={t('agents.config.bodyPriorities')}
+                hint={t('agents.config.bodyPrioritiesHint')}
+              >
+                <div className="flex items-center" style={{ gap: 8, flexWrap: 'wrap' }}>
+                  {PRIORITY_ENUM.map((p) => {
+                    const on = bodyPriorities.includes(p)
+                    return (
+                      <button
+                        key={p}
+                        type="button"
+                        aria-pressed={on}
+                        onClick={() =>
+                          setBodyPriorities((prev) =>
+                            prev.includes(p) ? prev.filter((x) => x !== p) : [...prev, p]
+                          )
+                        }
+                        style={{
+                          padding: '6px 12px',
+                          borderRadius: 8,
+                          fontFamily: 'inherit',
+                          fontSize: 13,
+                          cursor: 'pointer',
+                          color: on ? 'rgb(var(--c-accent))' : 'rgb(var(--ink-fg-2))',
+                          background: on
+                            ? 'rgb(var(--c-accent) / 0.14)'
+                            : 'rgb(var(--ink-1) / 0.5)',
+                          border: `1px solid ${on ? 'rgb(var(--c-accent))' : 'rgb(var(--ink-border))'}`,
+                          transition:
+                            'color 120ms cubic-bezier(0.4,0,0.2,1), background-color 120ms cubic-bezier(0.4,0,0.2,1), border-color 120ms cubic-bezier(0.4,0,0.2,1)'
+                        }}
+                      >
+                        {p in PRIORITY_LABEL_KEYS ? t(PRIORITY_LABEL_KEYS[p]) : p}
+                      </button>
+                    )
+                  })}
+                </div>
+              </Field>
+            </>
+          ) : (
+            <Field label={t('agents.config.aggregation')}>
+              <div
+                style={{
+                  fontSize: 12.5,
+                  lineHeight: 1.6,
+                  color: 'rgb(var(--ink-fg-2))',
+                  padding: '11px 13px',
+                  borderRadius: 9,
+                  background: 'rgb(var(--ink-1) / 0.5)',
+                  border: '1px solid rgb(var(--ink-border-soft))'
+                }}
+              >
+                {cadence === 'weekly'
+                  ? t('agents.config.aggWeekly')
+                  : t('agents.config.aggMonthly')}
+              </div>
+            </Field>
+          )}
+
+          {/* model — single-select dropdown. Options = enabled set, plus the
                 current value appended as an orphan (annotated「（未启用）」) when it
                 is no longer in the enabled list, so the select still shows the
                 actual saved value instead of going blank. Mirrors AiTab's
                 LLM_MODEL select shape. */}
-            <Field label={t('agents.config.model')}>
-              <Select value={model || undefined} onValueChange={setModel}>
-                <SelectTrigger>
-                  <SelectValue placeholder={t('agents.config.model')} />
-                </SelectTrigger>
-                {/* z-[70]: 本抽屉 (ConfigDrawer) backdrop/panel 是 z-60/61，高于 Radix
+          <Field label={t('agents.config.model')}>
+            <Select value={model || undefined} onValueChange={setModel}>
+              <SelectTrigger>
+                <SelectValue placeholder={t('agents.config.model')} />
+              </SelectTrigger>
+              {/* z-[70]: 本抽屉 (ConfigDrawer) backdrop/panel 是 z-60/61，高于 Radix
                     Select content 默认的 z-50 (popover 约定层，仅够 clear z-40 的 Settings
                     Dialog)。不抬高 → 下拉 portal 到 body 后落在抽屉之下被 glass 面板挡住，
                     表现为「点不开/无法切换」。70 介于抽屉(61)与 lightbox(100)之间。 */}
-                <SelectContent className="z-[70]">
-                  {(model && !enabledModels.includes(model)
-                    ? [...enabledModels, model]
-                    : enabledModels
-                  ).map((id) => {
-                    const isOrphan = !enabledModels.includes(id)
-                    return (
-                      <SelectItem key={id} value={id}>
-                        {id}
-                        {isOrphan && (
-                          <span style={{ color: 'rgb(var(--ink-fg-3))', marginLeft: 6 }}>
-                            {t('settings.ai.enabledModels.notEnabled', {
-                              defaultValue: '（未启用）'
-                            })}
-                          </span>
-                        )}
-                      </SelectItem>
-                    )
-                  })}
-                </SelectContent>
-              </Select>
-            </Field>
+              <SelectContent className="z-[70]">
+                <ModelSelectItems models={enabledModels} current={model || null} />
+              </SelectContent>
+            </Select>
+          </Field>
 
-            {/* kos enrich —— 仅 Gbrain 已配好时展示 */}
-            {kosAvailable && (
-              <div
-                className="flex items-center"
-                style={{
-                  gap: 12,
-                  padding: '13px 14px',
-                  borderRadius: 10,
-                  background: 'rgb(var(--c-ai) / 0.06)',
-                  border: '1px solid rgb(var(--c-ai) / 0.22)'
-                }}
-              >
-                <span style={{ color: 'rgb(var(--c-ai))', flexShrink: 0 }}>
-                  <ReportIcon name="database" size={16} />
-                </span>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 13.5, fontWeight: 500, color: 'rgb(var(--ink-fg))' }}>
-                    {t('agents.config.kos')}
-                  </div>
-                  <div style={{ fontSize: 12, color: 'rgb(var(--ink-fg-3))', marginTop: 2 }}>
-                    {t('agents.config.kosHint')}
-                  </div>
+          {/* kos enrich —— 仅 Gbrain 已配好时展示 */}
+          {kosAvailable && (
+            <div
+              className="flex items-center"
+              style={{
+                gap: 12,
+                padding: '13px 14px',
+                borderRadius: 10,
+                background: 'rgb(var(--c-ai) / 0.06)',
+                border: '1px solid rgb(var(--c-ai) / 0.22)'
+              }}
+            >
+              <span style={{ color: 'rgb(var(--c-ai))', flexShrink: 0 }}>
+                <ReportIcon name="database" size={16} />
+              </span>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 13.5, fontWeight: 500, color: 'rgb(var(--ink-fg))' }}>
+                  {t('agents.config.kos')}
                 </div>
-                <Switch on={kosEnrich} onChange={setKosEnrich} />
+                <div style={{ fontSize: 12, color: 'rgb(var(--ink-fg-3))', marginTop: 2 }}>
+                  {t('agents.config.kosHint')}
+                </div>
               </div>
-            )}
-          </div>
+              <Switch on={kosEnrich} onChange={setKosEnrich} />
+            </div>
+          )}
         </div>
+      </div>
 
-        <footer
-          className="flex items-center"
-          style={{
-            gap: 10,
-            padding: '13px 18px',
-            borderTop: '1px solid rgb(var(--ink-border-soft))',
-            flexShrink: 0,
-            justifyContent: 'flex-end'
-          }}
+      <footer
+        className="flex items-center"
+        style={{
+          gap: 10,
+          padding: '13px 18px',
+          borderTop: '1px solid rgb(var(--ink-border-soft))',
+          flexShrink: 0,
+          justifyContent: 'flex-end'
+        }}
+      >
+        <button
+          type="button"
+          onClick={onClose}
+          className="btn-ghost"
+          style={{ fontFamily: 'inherit' }}
         >
-          <button
-            type="button"
-            onClick={onClose}
-            className="btn-ghost"
-            style={{ fontFamily: 'inherit' }}
-          >
-            {t('agents.config.cancel')}
-          </button>
-          <StatefulButton
-            type="button"
-            onClick={onSave}
-            disabled={isSaving}
-            state={isSaving ? 'loading' : saveFailed ? 'error' : 'idle'}
-          >
-            {t('agents.config.save')}
-          </StatefulButton>
-        </footer>
+          {t('agents.config.cancel')}
+        </button>
+        <StatefulButton
+          type="button"
+          onClick={onSave}
+          disabled={isSaving}
+          state={isSaving ? 'loading' : saveFailed ? 'error' : 'idle'}
+        >
+          {t('agents.config.save')}
+        </StatefulButton>
+      </footer>
     </Drawer>
   )
 }

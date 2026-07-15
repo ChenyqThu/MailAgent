@@ -142,6 +142,43 @@ pending → fetch_failed → (重试) → synced
 - 发件箱 `fetch_failed` 用尽重试 → 降级为 `skipped`（`sync_error="Skipped (sent box unreachable): ..."`），不进死信。原因：发件箱里 row_id 在 SQLite radar 检测到之后被 Mail.app 重排/清理，AppleScript `whose id = N` 找不到；发件箱漏一封不致命，硬重试只刷告警。逻辑在 `sync_store._update_for_retry`。
 - HTML 转 Notion blocks 时 `link.url` 必须是 ASCII + 协议白名单（http/https/mailto/tel）+ 不含空白；非法 URL 被 `html_converter._sanitize_link_url` 退化成纯文本，避免 Notion API 抛 `Invalid URL for link` 把整封邮件卡进死信。
 
+## 状态型告警的 episode 语义（2026-07，`MAILAGENT_ALERT_EPISODE` 默认开）
+
+**问题**：**状态型告警** = 判据成立后不会自行消失的告警。以死信为例，`dead_count >= threshold` 在人工清理前**恒为真** → `_check_and_alert`（60s 一轮）每轮都调 `alert_dead_letters()`，仅靠 `FeishuAlertNotifier._cooldown_map`（**纯内存**，`ALERT_COOLDOWN` 默认 300s）限流 → 每 5 分钟一条刷到人工干预为止；且冷却是内存态，**进程重启即清空** → 重启后立刻复发。
+
+**方案**：`src/notify/episode.py` 的 `AlertEpisodeTracker` 把 davmail watchdog 已验证的「**调用方持有状态 + 落盘 sync_state**」范式（`_announced_*` + `_write_state`）下沉成通用能力。`Alerter` 的**投递/冷却语义一行不改**（`send_alert` / `_check_cooldown` / `_cooldown_map` 原样，300s 冷却继续作兜底防抖）；alert.py 的改动仅限：三个 recovery 通知的 level（info→warning，见下）+ 给本机制用到的 7 个 `alert_*` 方法补 `return`（纯增量，原返回 `None` 且无人读）。
+
+**🔴 两阶段提交（evaluate → 投递 → commit）**：`evaluate()` **只判定不落盘**，调用方必须在告警**真的投递成功后**（`alert_*` 返回 `True`）才调 `commit()`。因为 `send_alert()` 会在三种情况下静默返回 `False` —— level 门 / 300s cooldown 门 / 网络失败 —— 若判定时就落盘，这条告警就被永久标成「已告警」，value 恒定则之后永远 SILENT，**首告从未送达 = 永久漏告警**。投递失败 → 不 commit → 下轮重新判定重发。
+
+`evaluate(key, value, threshold)` 的四分支（`evaluate_flag(key, bad)` = 布尔态糖，退化为纯 edge-triggered，**对外只暴露 ENTER/SILENT/RECOVER** —— ESCALATE 归一成 ENTER，否则状态残缺时只认 ENTER 的调用方会不告警却写好基准 → 永久静默）：
+
+| 判定 | 条件 | 动作 |
+|---|---|---|
+| `enter` | 首次 `value >= threshold` 且未 active | 发告警，记 `last_alerted_value=value` |
+| `silent` | active 且 `value < last_alerted_value * 2` | **不发**（修掉刷屏的关键分支） |
+| `escalate` | active 且 `value >= last_alerted_value * 2` | 再发一次，基准抬到 `value` |
+| `recover` | active 且 `value < threshold` | 发恢复通知（`alert_recovery`），复位 |
+
+- **调用方每轮都要调 `evaluate`**（即使判据不成立），否则 episode 永不复位、下次恶化判据失效。
+- 失败一律 **fail-open**（读写 sync_state 出错 / 状态损坏 / 多键部分写入 → 倾向发告警）：误判 silent = 漏告警，比刷屏危险。唯一例外是非有限观测值（`NaN`/`inf` → 一律 SILENT 保持 active 原样，因为 `nan >= threshold` 恒 `False` 会把活动 episode 误判成 RECOVER = 假恢复）。
+- 状态落 `sync_state` 表，键 `alert.<key>.{active,last_alerted_value,entered_at}`（镜像 `davmail.*` 键先例 → **非 schema 变更，不 bump `DB_VERSION`**）→ 跨进程（serve / serve-api）共享 + 跨重启存活。多键**部分写入是安全的**：所有残缺组合下一轮都 fail-open 落到「发告警」并在下次 commit 时自愈 —— 故未引入单事务/单 JSON 值（那会牺牲逐字段可观测性，而这正是 `davmail.*` 键先例的价值）。
+
+**接入面**：`service.py:_check_and_alert` 的 `dead_letters` / `service_unhealthy` / `radar_unavailable` / `outbox_backlog`，+ `davmail_watchdog._evaluate_alerts` 的 token 门槛告警（tracker 由 service.py 注入，未注入 = disabled = 老行为）。灵动岛 `dispatch_dead_letter_accum` 与告警**同源同生命周期**（在同一个「投递成功 → commit」分支内），不独立刷屏。
+
+**davmail token 是「一个 episode + 一个 severity marker」，不是两个平级 episode**：
+- `alert.davmail_token.*`（门槛 80d）= episode 本体，负责「告知一次」与「恢复一次」的生命周期。
+- `alert.davmail_token_critical.*`（门槛 87d）= 严重度升级标记，只决定消息用 critical 还是 warning 措辞。
+
+两个平级 episode 会打架：age 首次 89 时两边都 active，之后 age 降到 82（**仍在 warning 区间**）→ critical episode 判 RECOVER → **误报「token 已恢复」**。现在 82 只让 severity marker 复位（不发消息 —— 情况变好且 episode 本体仍 active，用户早已知情），恢复通知**只在 age < 80 时**发。critical 消息同时充当 episode 本体的告知（投递成功时一并 commit 本体），否则本体永远 inactive → 将来 age 归零发不出恢复通知。
+
+**不接**（行为字节级不变）：
+- 非状态型告警 `sync_error:{id}` / `notion_error:{op}` / `worker_crashed:{name}` / `davmail_fetch_burst` / `service_started` 等；`consecutive_errors` 为半状态型（成功即归零），保持每轮告。
+- **`restart_frequency` 有意不接** —— 它已自带持久去重（E4 `f4612a47`，`sync_state['service.restart_freq_last_alert']`，24h 内最多一条），不属 episode 化要修的刷屏病根；迁移只会让 flag-off 退回 300s 内存冷却 = 比现状更吵，违反「flag-off 字节级回退」纪律。
+
+> `outbox_backlog` 的判据历来是 `> 阈值`（不是 `>=`）→ 调 `evaluate` 时门槛传 `阈值 + 1`，触发边界逐字不变（告警文案里的阈值仍是配置原值）。
+
+**🔴 恢复通知的 level 地板**：`alert_levels` 默认 `critical,error,warning` **不含 info** → info 级通知会被 `send_alert` 的 level 门直接挡掉。故 `alert_recovery` / `alert_davmail_process_recovered` / `alert_davmail_login_recovered` 一律 **warning**（2026-07-14 前是 info → 恢复通知从未发出过，实测 davmail 恢复两次零通知）。新增恢复类通知必须与其对应告警同级（≥ warning），回归闸在 `tests/notify/test_alert_worker_methods.py`（用**生产默认** `enabled_levels` 构造，勿在闸里显式打开 info）。`alert_service_started` 不是恢复通知，保持 info。
+
 ## Processing Status 生命周期（双向同步）
 
 ```

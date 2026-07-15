@@ -43,6 +43,17 @@ class BackendStartupError(RuntimeError):
         super().__init__(f"[{backend}] backend 启动失败: {reason}")
 
 
+class MarkerUnavailableError(Exception):
+    """marker (get_current_max_row_id) 查询失败时抛出.
+
+    修复前失败塌成 return 0, 与「真实 marker 0」(applescript 空邮箱) 不可区分;
+    首次 baseline 会把 0 持久化成 marker → 下轮 get_new_emails(0) 对 INBOX 发
+    `UID 1:*` 全量重刷 (7万+ 封实测 STATUS 超时触发过, 见 task 07-14 L3)。
+    调用方语义: check_for_changes 捕获后按「本轮无新邮件」fail-safe (marker 不动,
+    下轮自愈); 首次 baseline 捕获后重试, 仍失败宁可不启动也不落 0。
+    """
+
+
 @runtime_checkable
 class IMailBackend(Protocol):
     """邮件后端协议 — 真实消费面 (17 方法).
@@ -86,7 +97,11 @@ class IMailBackend(Protocol):
         ...
 
     def get_current_max_row_id(self) -> int:
-        """当前 marker (启动 baseline / 首次运行定基线用). 失败返回 0."""
+        """当前 marker (启动 baseline / 首次运行定基线用).
+
+        成功返回真实 marker (applescript 空邮箱可为 0; davmail UIDNEXT 恒 >= 1);
+        查询失败 raise MarkerUnavailableError (不得以 0 伪装成功, 见该异常 docstring)。
+        """
         ...
 
     def check_for_changes(self, last_max_row_id: int) -> tuple[bool, int, int]:

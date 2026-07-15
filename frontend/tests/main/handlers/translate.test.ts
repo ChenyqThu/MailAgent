@@ -21,8 +21,22 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-const { mockGetLlmTranslateApiKey } = vi.hoisted(() => ({
-  mockGetLlmTranslateApiKey: vi.fn()
+const {
+  mockGenerateText,
+  mockGetLlmProviderModelResolver,
+  mockGetLlmTranslateApiKey,
+  mockHasLlmTranslateKeytarKey,
+  mockIsLlmProviderRegistryEnabled,
+  mockResolveProviderModel,
+  mockSanitizedUpstreamErrorMessage
+} = vi.hoisted(() => ({
+  mockGenerateText: vi.fn(),
+  mockGetLlmProviderModelResolver: vi.fn(),
+  mockGetLlmTranslateApiKey: vi.fn(),
+  mockHasLlmTranslateKeytarKey: vi.fn(),
+  mockIsLlmProviderRegistryEnabled: vi.fn(),
+  mockResolveProviderModel: vi.fn(),
+  mockSanitizedUpstreamErrorMessage: vi.fn(() => 'HTTP 401 APICallError')
 }))
 
 let fixtureDb: Database.Database
@@ -42,7 +56,18 @@ vi.mock('../../../src/electron/main/db', () => ({
 vi.mock('../../../src/electron/main/llm_settings', () => ({
   getLlmTranslateApiKey: mockGetLlmTranslateApiKey,
   getLlmTranslateBaseUrl: () => 'https://test.llm',
-  getLlmTranslateModel: () => 'test-model'
+  getLlmTranslateModel: () => 'test-model',
+  hasLlmTranslateKeytarKey: mockHasLlmTranslateKeytarKey
+}))
+
+vi.mock('../../../src/electron/main/llm_provider_resolver', () => ({
+  getLlmProviderModelResolver: mockGetLlmProviderModelResolver,
+  isLlmProviderRegistryEnabled: mockIsLlmProviderRegistryEnabled,
+  sanitizedUpstreamErrorMessage: mockSanitizedUpstreamErrorMessage
+}))
+
+vi.mock('ai', () => ({
+  generateText: mockGenerateText
 }))
 
 vi.mock('electron', () => ({
@@ -89,10 +114,8 @@ function buildDb(): Database.Database {
       FOREIGN KEY (internal_id) REFERENCES email_metadata(internal_id) ON DELETE CASCADE
     );
   `)
-  db.prepare('INSERT INTO email_metadata VALUES (?,?,?,?,?)')
-    .run(101, 'm101@x', 'pending', 1, 1)
-  db.prepare('INSERT INTO email_metadata VALUES (?,?,?,?,?)')
-    .run(102, 'm102@x', 'pending', 1, 1)
+  db.prepare('INSERT INTO email_metadata VALUES (?,?,?,?,?)').run(101, 'm101@x', 'pending', 1, 1)
+  db.prepare('INSERT INTO email_metadata VALUES (?,?,?,?,?)').run(102, 'm102@x', 'pending', 1, 1)
   db.prepare('INSERT INTO email_body VALUES (?,?,?)').run(101, EMAIL_BODY_HTML_3PARA, '')
   db.prepare('INSERT INTO email_body VALUES (?,?,?)').run(102, '', '')
   return db
@@ -103,7 +126,19 @@ beforeEach(() => {
   dbPath = join(dbDir, 'sync_store.db')
   fixtureDb = buildDb()
   vi.clearAllMocks()
+  delete process.env.LLM_TRANSLATE_API_KEY
+  delete process.env.LLM_TRANSLATE_BASE_URL
   mockGetLlmTranslateApiKey.mockResolvedValue('test-key')
+  mockHasLlmTranslateKeytarKey.mockResolvedValue(false)
+  mockIsLlmProviderRegistryEnabled.mockReturnValue(false)
+  mockResolveProviderModel.mockResolvedValue({
+    providerId: 'default',
+    modelId: 'test-model',
+    model: { modelId: 'sdk-test-model' },
+    protocol: 'anthropic',
+    maxOutputTokens: 64_000
+  })
+  mockGetLlmProviderModelResolver.mockResolvedValue({ resolve: mockResolveProviderModel })
 })
 
 afterEach(() => {
@@ -130,7 +165,8 @@ function insertEmail(
   bodyHtml: string | null,
   bodyMarkdown: string | null = ''
 ): void {
-  fixtureDb.prepare('INSERT INTO email_metadata VALUES (?,?,?,?,?)')
+  fixtureDb
+    .prepare('INSERT INTO email_metadata VALUES (?,?,?,?,?)')
     .run(internalId, `m${internalId}@x`, 'pending', 1, 1)
   fixtureDb.prepare('INSERT INTO email_body VALUES (?,?,?)').run(internalId, bodyHtml, bodyMarkdown)
 }
@@ -179,13 +215,145 @@ function mockEchoTranslation(calls?: Array<{ count: number; chars: number }>): v
       count: segs.length,
       chars: segs.reduce((sum, s) => sum + s.text.length, 0)
     })
-    return Promise.resolve(
-      ok(JSON.stringify(segs.map((s, i) => ({ id: s.id, tgt: `译文 ${i}` }))))
-    )
+    return Promise.resolve(ok(JSON.stringify(segs.map((s, i) => ({ id: s.id, tgt: `译文 ${i}` })))))
   })
 }
 
 describe('translateBatch', () => {
+  test('flag off preserves the exact legacy Anthropic request wire', async () => {
+    fetchMock.mockImplementationOnce((_url, init) => {
+      const request = init as RequestInit
+      const body = JSON.parse(request.body as string) as {
+        messages: Array<{ content: string }>
+      }
+      const inputs = JSON.parse(body.messages[0].content) as Array<{ id: string; text: string }>
+      return Promise.resolve(
+        ok(JSON.stringify(inputs.map((item) => ({ id: item.id, tgt: `译文 ${item.id}` }))))
+      )
+    })
+
+    await handler.translateBatch({ internalId: 101 })
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const input = JSON.stringify([
+      { id: 'c53385e8', text: 'Hello team this is a real paragraph one.' },
+      { id: 'af7b4dd6', text: 'Please review the attached document soon.' },
+      { id: '09430846', text: 'Thanks for your prompt response on this.' }
+    ])
+    expect(url).toBe('https://test.llm/v1/messages')
+    expect(init.method).toBe('POST')
+    expect(init.headers).toEqual({
+      'content-type': 'application/json',
+      'x-api-key': 'test-key',
+      'anthropic-version': '2023-06-01',
+      'user-agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/146.0.0.0 Safari/537.36'
+    })
+    expect(init.body).toBe(
+      JSON.stringify({
+        model: 'test-model',
+        max_tokens: 64_000,
+        system: [
+          'You translate email paragraphs into fluent natural Simplified Chinese (mainland usage).',
+          'Input is a JSON array of {"id": "...", "text": "..."} — one entry per paragraph.',
+          'Output STRICTLY a JSON array of {"id": "...", "tgt": "..."} — one entry per input,',
+          'matching by id; same length and same order as the input. Rules:',
+          '- Preserve URLs, email addresses, code identifiers, product names, and people names verbatim.',
+          '- Translate the FULL meaning of each text into the target language, not literal word-for-word.',
+          '- If a paragraph is already in the target language, output it verbatim as tgt.',
+          '- **CRITICAL JSON SAFETY**: tgt strings MUST NOT contain raw ASCII double quotes (").',
+          '  If you need to quote a phrase, use Chinese 「」 quotes for Chinese tgt, or escape as \\".',
+          '  Unescaped " inside tgt breaks JSON parsing and the whole batch is lost.',
+          '- Output ONLY the JSON array. No preamble, no commentary, no ```json fence, no trailing prose.'
+        ].join('\n'),
+        messages: [{ role: 'user', content: input }]
+      })
+    )
+  })
+
+  test('flag on resolves providerRef and uses AI SDK without fetch', async () => {
+    mockIsLlmProviderRegistryEnabled.mockReturnValue(true)
+    mockResolveProviderModel.mockResolvedValue({
+      providerId: 'openai-main',
+      modelId: 'gpt-5',
+      model: { modelId: 'sdk-gpt-5' },
+      protocol: 'openai',
+      maxOutputTokens: 8192
+    })
+    mockGenerateText.mockImplementation(async ({ prompt }) => {
+      const inputs = JSON.parse(prompt as string) as Array<{ id: string; text: string }>
+      return {
+        text: JSON.stringify(inputs.map((item) => ({ id: item.id, tgt: `译文 ${item.id}` }))),
+        finishReason: 'stop'
+      }
+    })
+
+    const result = await handler.translateBatch({ internalId: 101 })
+
+    expect(mockResolveProviderModel).toHaveBeenCalledWith('test-model')
+    expect(mockGenerateText).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: { modelId: 'sdk-gpt-5' },
+        maxOutputTokens: 8192
+      })
+    )
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(result.segments).toHaveLength(3)
+    expect(result.model).toBe('gpt-5')
+  })
+
+  test('flag on upstream failure logs via the sanitizer, never the raw message (MEDIUM-4)', async () => {
+    mockIsLlmProviderRegistryEnabled.mockReturnValue(true)
+    mockResolveProviderModel.mockResolvedValue({
+      providerId: 'openai-main',
+      modelId: 'gpt-5',
+      model: { modelId: 'sdk-gpt-5' },
+      protocol: 'openai',
+      maxOutputTokens: 8192
+    })
+    const leaky = new Error('401 body echoed Authorization: Bearer sk-live-LEAK')
+    mockGenerateText.mockRejectedValue(leaky)
+
+    const result = await handler.translateBatch({ internalId: 101 })
+
+    expect(result.failedBatches).toBe(result.totalBatches)
+    expect(mockSanitizedUpstreamErrorMessage).toHaveBeenCalledWith(leaky)
+  })
+
+  test('explicit translate profile keeps legacy fetch priority when flag is on', async () => {
+    mockIsLlmProviderRegistryEnabled.mockReturnValue(true)
+    process.env.LLM_TRANSLATE_BASE_URL = 'https://translate-only.example'
+    mockEchoTranslation()
+
+    await handler.translateBatch({ internalId: 101 })
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(mockGetLlmProviderModelResolver).not.toHaveBeenCalled()
+    expect(mockGenerateText).not.toHaveBeenCalled()
+  })
+
+  test('keytar-only translate key also counts as an explicit profile when flag is on (HIGH-1)', async () => {
+    // env 两键都缺、但 keytar translate slot 有值（未 dual-write 的旧专用 key）——
+    // 同样不得被 registry 顶掉，仍走 legacy fetch 路径。
+    mockIsLlmProviderRegistryEnabled.mockReturnValue(true)
+    mockHasLlmTranslateKeytarKey.mockResolvedValue(true)
+    mockEchoTranslation()
+
+    await handler.translateBatch({ internalId: 101 })
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(mockGetLlmProviderModelResolver).not.toHaveBeenCalled()
+    expect(mockGenerateText).not.toHaveBeenCalled()
+  })
+
+  test('flag off never probes the translate keytar slot (byte-identical discipline)', async () => {
+    mockEchoTranslation()
+
+    await handler.translateBatch({ internalId: 101 })
+
+    expect(mockHasLlmTranslateKeytarKey).not.toHaveBeenCalled()
+  })
+
   test('happy path: returns segments matching extracted blocks + writes cache', async () => {
     // The handler builds the user JSON [{id, text}, ...]; the LLM must echo
     // ids back. We capture the request to recover the ids it generated.
@@ -306,7 +474,7 @@ describe('translateBatch', () => {
   test('JSON parse fallback: malformed wrapper text recovers the inner [...]', async () => {
     fetchMock.mockImplementationOnce((_url, init) => {
       const segs = JSON.parse(
-        (JSON.parse((init as RequestInit).body as string).messages[0].content) as string
+        JSON.parse((init as RequestInit).body as string).messages[0].content as string
       ) as Array<{ id: string; text: string }>
       const inner = segs.map((s) => ({ id: s.id, tgt: 'tgt' }))
       // Wrap in chatter that JSON.parse cannot eat — regex fallback must recover.

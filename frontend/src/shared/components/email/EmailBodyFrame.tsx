@@ -726,11 +726,24 @@ interface ImageLightboxProps {
   onClose: () => void
 }
 
-function ImageLightbox({ src, onClose }: ImageLightboxProps): React.ReactPortal | null {
+// Exported so the attachment surfaces (AttachmentList / ThreadAttachmentBar)
+// reuse the exact same zoom/rotate/pan lightbox for image previews instead of
+// forking a second one.
+export function ImageLightbox({ src, onClose }: ImageLightboxProps): React.ReactPortal | null {
   const { t } = useTranslation()
   const [scale, setScale] = useState(1)
   const [rotation, setRotation] = useState(0)
   const [pan, setPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 })
+  // The image can fail to decode (corrupt / unsupported like some HEIC). Show a
+  // dismissable error instead of a broken-image glyph. Reset when `src` changes
+  // (render-phase reset per React docs — no effect, no cascading-render lint) so
+  // reusing the lightbox for a good image recovers.
+  const [imgError, setImgError] = useState(false)
+  const [imgErrorSrc, setImgErrorSrc] = useState(src)
+  if (src !== imgErrorSrc) {
+    setImgErrorSrc(src)
+    setImgError(false)
+  }
   const dragRef = useRef<{ startX: number; startY: number; panX: number; panY: number } | null>(
     null
   )
@@ -799,25 +812,36 @@ function ImageLightbox({ src, onClose }: ImageLightboxProps): React.ReactPortal 
       onClick={onBackdropClick}
       onWheel={onWheel}
     >
-      <img
-        src={src}
-        alt=""
-        draggable={false}
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp}
-        onPointerCancel={onPointerUp}
-        style={{
-          transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale}) rotate(${rotation}deg)`,
-          // eslint-disable-next-line react-hooks/refs -- lightbox 拖拽时即时跟手(transition:none)、松手恢复 120ms 过渡。dragRef 存拖拽态避免每次 pointermove re-render（性能）；render 读 ref 决定 transition 是有意权衡。真重构 ref→state 会每拖拽帧 re-render。React Compiler 迁移债。
-          transition: dragRef.current ? 'none' : 'transform 120ms ease',
-          maxWidth: '92vw',
-          maxHeight: '88vh',
-          cursor: scale > 1 ? 'grab' : 'default',
-          userSelect: 'none',
-          willChange: 'transform'
-        }}
-      />
+      {imgError ? (
+        <div
+          role="alert"
+          className="px-6 text-center text-aux text-ink-fg-1"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {t('emailDetail.lightbox.loadError')}
+        </div>
+      ) : (
+        <img
+          src={src}
+          alt=""
+          draggable={false}
+          onError={() => setImgError(true)}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+          onPointerCancel={onPointerUp}
+          style={{
+            transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale}) rotate(${rotation}deg)`,
+            // eslint-disable-next-line react-hooks/refs -- lightbox 拖拽时即时跟手(transition:none)、松手恢复 120ms 过渡。dragRef 存拖拽态避免每次 pointermove re-render（性能）；render 读 ref 决定 transition 是有意权衡。真重构 ref→state 会每拖拽帧 re-render。React Compiler 迁移债。
+            transition: dragRef.current ? 'none' : 'transform 120ms ease',
+            maxWidth: '92vw',
+            maxHeight: '88vh',
+            cursor: scale > 1 ? 'grab' : 'default',
+            userSelect: 'none',
+            willChange: 'transform'
+          }}
+        />
+      )}
       <div
         className="pointer-events-auto absolute bottom-6 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded-full border border-ink-border-soft bg-ink-1/85 px-2 py-1.5 shadow-[0_8px_24px_rgba(0,0,0,0.4)] backdrop-blur-md"
         onClick={(e) => e.stopPropagation()}

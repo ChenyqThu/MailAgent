@@ -185,8 +185,18 @@ def test_normalize_origin_idn_match_via_rule():
     assert P._match_web(m, {"url": "https://buecher.example/"}) is False
 
 
-def test_normalize_origin_single_source_with_web_router():
+def test_normalize_origin_single_source_with_web_router(monkeypatch):
     """跨消费面一致性（D-fix-4 ④）：web.py redirect 检查侧与策略匹配侧是**同一个函数对象**。"""
+    # standalone 跑 tests/agent_config 时本测试是 src.api 的首个进入点，需自备两个
+    # 全量跑时由别处满足的前置（全量跑时 tests/api/conftest 收集期 export auth env +
+    # 先加载过 src.api.app，本测试命中 sys.modules 缓存，以下两步均 inert）：
+    # ① src.api.auth 有 import-time fail-fast（一种鉴权方式都没配即 RuntimeError）——
+    #    喂 dummy 本地 token 过闸（不走 dev bypass，鉴权语义不在断言面内）；
+    # ② app↔routers 的环设计上只支持 app 为入口（app.py 底部回头 include_router(web)，
+    #    以 web 为入口会撞半初始化模块）——先 import app 固定入口方向。
+    monkeypatch.setenv("MAILAGENT_LOCAL_API_TOKEN", "test-order-independence")
+    import src.api.app  # noqa: F401
+
     import src.api.routers.web as web_router
 
     assert web_router._normalize_origin is P._normalize_origin

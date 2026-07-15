@@ -1997,6 +1997,33 @@ class SyncStore:
         """设置最大 row_id"""
         return self.set_state('last_max_row_id', str(row_id))
 
+    def has_last_max_row_id(self) -> bool:
+        """marker 键是否已持久化（区分「真·首次运行」与「合法持久化的 0」, finding F1）。
+
+        get_last_max_row_id() 对「键缺失」和「存了 '0'」都返回 0，无法区分。new_watcher
+        首次运行判定必须用本方法——键存在即恢复（哪怕值是 0）：否则 applescript 空邮箱
+        baseline 0 重启后被误判首次 → 重定基线 → 停机期间到达的首封邮件被静默跳过。
+        """
+        return self.get_state('last_max_row_id') is not None
+
+    def clear_last_max_row_id(self) -> bool:
+        """删除 marker 键（issue #34 reset：强制上层走 first-run baseline）。
+
+        不能用 set_last_max_row_id(0)：F1 修复后「键存在即恢复」会把 reset 写的 0 当合法
+        baseline 恢复 → 跨 backend 沿用外来 id 空间 → 重演 silent-loss/deadlock。删键后
+        has_last_max_row_id() 返回 False，上层在当前 backend 重定基线。
+        """
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute("DELETE FROM sync_state WHERE key = 'last_max_row_id'")
+                conn.commit()
+                return True
+            except sqlite3.Error as e:
+                logger.error(f"Failed to clear last_max_row_id: {e}")
+                conn.rollback()
+                return False
+
     def reconcile_marker_backend(self, current_backend: str) -> str:
         """issue #34: 防跨 backend 复用 last_max_row_id（不同 id 空间）。
 
@@ -2013,12 +2040,14 @@ class SyncStore:
           'adopt'  — 本 guard 首次部署遇到既有 marker：认领为当前 backend、不重置
                      （不扰动存量稳态用户）。
           'noop'   — marker 已属当前 backend，无需动。
-          'reset'  — marker 属于别的 backend（外来 id 空间）→ 清零，强制上层走 first-run
+          'reset'  — marker 属于别的 backend（外来 id 空间）→ 删键，强制上层走 first-run
                      baseline，在新空间重新定基线（只向前，不回捞历史 gap）。
         """
-        stored_marker = self.get_last_max_row_id()
         marker_backend = self.get_state('marker_backend')
-        if stored_marker <= 0:
+        if self.get_state('last_max_row_id') is None:
+            # 真·首次运行：无 marker（键缺失）。合法持久化的 '0'（空邮箱 baseline）不再
+            # 短路成 'first'——否则跨 backend 的 '0' marker 会绕过下面的归属校验，被上层
+            # 「键存在即恢复」(finding F1) 当合法 baseline 恢复 → 重演 #34 id-space 混用。
             return 'first'
         if marker_backend is None:
             # 本 guard 首次部署遇到既有 marker（升级前写的、无归属记录）。**不能盲目认领**当前
@@ -2034,14 +2063,14 @@ class SyncStore:
                 self.set_state('marker_backend', current_backend)
                 return 'adopt'
             if self._has_any_email_rows():
-                self.set_last_max_row_id(0)
+                self.clear_last_max_row_id()
                 self.set_state('marker_backend', current_backend)
                 return 'reset'
             self.set_state('marker_backend', current_backend)
             return 'adopt'
         if marker_backend == current_backend:
             return 'noop'
-        self.set_last_max_row_id(0)
+        self.clear_last_max_row_id()
         self.set_state('marker_backend', current_backend)
         return 'reset'
 

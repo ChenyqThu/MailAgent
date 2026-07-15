@@ -738,6 +738,110 @@ def test_check_for_changes_detects_sent_advance(monkeypatch):
     assert count == 9  # 4310 - (4300+1)
 
 
+# --------- L3 (task 07-14, fork d9b90ecb): marker 查询失败不得伪装成 0 ---------
+
+
+def test_get_current_max_row_id_raises_on_timeout(monkeypatch):
+    """STATUS 超时 → raise MarkerUnavailableError (修复前 return 0 会毒化首次 baseline)."""
+    import pytest
+    from contextlib import contextmanager
+    from src.mail.backend.base import MarkerUnavailableError
+
+    backend = _make_backend()
+    backend.cfg.davmail_status_timeout_sec = 30
+
+    @contextmanager
+    def broken_session(*args, **kwargs):
+        raise TimeoutError("imap connect timeout")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(
+        "src.mail.backend.davmail_backend.imap_session", broken_session,
+    )
+    with pytest.raises(MarkerUnavailableError):
+        backend.get_current_max_row_id()
+
+
+def test_get_current_max_row_id_uses_configured_timeout(monkeypatch):
+    """timeout 走 DAVMAIL_STATUS_TIMEOUT_SEC (原硬编码 30; 7万+ INBOX 可调 90)."""
+    from contextlib import contextmanager
+
+    backend = _make_backend()
+    backend.cfg.davmail_status_timeout_sec = 90
+    seen = {}
+
+    @contextmanager
+    def fake_session(cfg, *, timeout):
+        seen["timeout"] = timeout
+        imap = MagicMock()
+        imap.status.return_value = ("OK", [b"INBOX (UIDNEXT 251 UIDVALIDITY 7)"])
+        yield imap
+
+    monkeypatch.setattr(
+        "src.mail.backend.davmail_backend.imap_session", fake_session,
+    )
+    assert backend.get_current_max_row_id() == 251
+    assert seen["timeout"] == 90
+    assert backend.inbox_uidvalidity == 7
+
+
+def test_get_current_max_row_id_default_timeout_30(monkeypatch):
+    """未配置时默认 30 — 逐字节保持原行为 (默认不拖慢全体轮询)."""
+    from contextlib import contextmanager
+
+    backend = _make_backend()
+    # MagicMock 属性删除 → 访问 raise AttributeError → 代码 getattr fallback 30
+    del backend.cfg.davmail_status_timeout_sec
+    seen = {}
+
+    @contextmanager
+    def fake_session(cfg, *, timeout):
+        seen["timeout"] = timeout
+        imap = MagicMock()
+        imap.status.return_value = ("OK", [b"INBOX (UIDNEXT 42 UIDVALIDITY 7)"])
+        yield imap
+
+    monkeypatch.setattr(
+        "src.mail.backend.davmail_backend.imap_session", fake_session,
+    )
+    assert backend.get_current_max_row_id() == 42
+    assert seen["timeout"] == 30
+
+
+def test_get_current_max_row_id_raises_on_non_ok_status(monkeypatch):
+    """STATUS 返回非 OK / 无 UIDNEXT → 同样按失败 raise (IMAP UIDNEXT 恒 >=1, 0 无合法来源)."""
+    import pytest
+    from contextlib import contextmanager
+    from src.mail.backend.base import MarkerUnavailableError
+
+    backend = _make_backend()
+    backend.cfg.davmail_status_timeout_sec = 30
+
+    @contextmanager
+    def fake_session(cfg, *, timeout):
+        imap = MagicMock()
+        imap.status.return_value = ("NO", [b""])
+        yield imap
+
+    monkeypatch.setattr(
+        "src.mail.backend.davmail_backend.imap_session", fake_session,
+    )
+    with pytest.raises(MarkerUnavailableError):
+        backend.get_current_max_row_id()
+
+
+def test_check_for_changes_failsafe_on_marker_unavailable():
+    """marker 查询失败 → 本轮按「无新邮件」跳过 (marker 不动), 异常不外冒到 _poll_cycle."""
+    from src.mail.backend.base import MarkerUnavailableError
+
+    backend = _make_backend()
+    backend.get_current_max_row_id = MagicMock(
+        side_effect=MarkerUnavailableError("STATUS timeout")
+    )
+    has_new, marker, count = backend.check_for_changes(last_max_row_id=500)
+    assert (has_new, marker, count) == (False, 500, 0)
+
+
 # --------- helpers ---------
 
 def _make_backend(uidvalidity=12345):
