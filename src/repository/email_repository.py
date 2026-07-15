@@ -3351,3 +3351,33 @@ class EmailRepository:
         finally:
             conn.close()
         self.attachment_store.delete_email_dir(internal_id)
+
+    def delete_email_full_if_status(
+        self, internal_id: int, expected_status: str
+    ) -> bool:
+        """带 sync_status 谓词的 delete_email_full 变体: 仅当行仍是 expected_status 才删。
+
+        消除 AdminService.delete_dead_letter 的 TOCTOU —— SELECT status(连接 A) 与删除
+        (连接 B) 之间, 并发 admin 面若把该行 retry 成 pending/synced, 通用
+        delete_email_full 会删掉一封刚复活的真邮件。把状态判定并入删除事务的 WHERE 谓词,
+        rowcount==0 = 状态在窗口内已变 → 不删, 返回 False。CASCADE + 附件目录清理与
+        delete_email_full 一致(仅当确实删了才清附件目录)。
+
+        Returns:
+            True  行已删除(+ 附件目录已清)
+            False 行不存在或 sync_status 已变(未删任何东西)
+        """
+        conn = self._connect()
+        try:
+            conn.execute("BEGIN")
+            cur = conn.execute(
+                "DELETE FROM email_metadata WHERE internal_id = ? AND sync_status = ?",
+                (internal_id, expected_status),
+            )
+            deleted = cur.rowcount == 1
+            conn.commit()
+        finally:
+            conn.close()
+        if deleted:
+            self.attachment_store.delete_email_dir(internal_id)
+        return deleted

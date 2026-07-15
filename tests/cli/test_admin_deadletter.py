@@ -129,6 +129,98 @@ class TestDeadLetterRetry:
         assert payload["error"]["code"] == "E_INVALID_ARG"
 
 
+class TestDeadLetterDelete:
+    def test_delete_requires_yes(
+        self, cli_runner, cli_env, seeded_db, monkeypatch,
+    ):
+        monkeypatch.setenv("MAILAGENT_CLI_ALLOW_UNAUTH_WRITES", "true")
+        _seed_dead_letter(seeded_db, 20001)
+        result = _invoke(
+            cli_runner, "dead-letter", "delete", "20001",
+            "-o", "json", db_path=seeded_db,
+        )
+        assert result.exit_code == 2
+        payload = _xj(result.output)
+        assert payload["error"]["code"] == "E_INVALID_ARG"
+        # 未删除
+        conn = sqlite3.connect(str(seeded_db))
+        try:
+            still = conn.execute(
+                "SELECT COUNT(*) FROM email_metadata WHERE internal_id=20001"
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        assert still == 1
+
+    def test_delete_requires_auth(
+        self, cli_runner, cli_env, seeded_db, monkeypatch,
+    ):
+        monkeypatch.delenv("MAILAGENT_CLI_API_KEY", raising=False)
+        monkeypatch.delenv("MAILAGENT_CLI_ALLOW_UNAUTH_WRITES", raising=False)
+        _seed_dead_letter(seeded_db, 20001)
+        result = _invoke(
+            cli_runner, "dead-letter", "delete", "20001", "--yes",
+            "-o", "json", db_path=seeded_db,
+        )
+        assert result.exit_code == 4
+
+    def test_delete_removes_dead_letter(
+        self, cli_runner, cli_env, seeded_db, monkeypatch,
+    ):
+        monkeypatch.setenv("MAILAGENT_CLI_ALLOW_UNAUTH_WRITES", "true")
+        _seed_dead_letter(seeded_db, 20001)
+        result = _invoke(
+            cli_runner, "dead-letter", "delete", "20001", "--yes",
+            "-o", "json", db_path=seeded_db,
+        )
+        assert result.exit_code == 0, result.output
+        payload = _xj(result.output)
+        assert payload["data"]["deleted"] is True
+        assert payload["data"]["old_status"] == "dead_letter"
+        conn = sqlite3.connect(str(seeded_db))
+        try:
+            still = conn.execute(
+                "SELECT COUNT(*) FROM email_metadata WHERE internal_id=20001"
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        assert still == 0
+
+    def test_delete_refuses_non_dead_letter(
+        self, cli_runner, cli_env, seeded_db, monkeypatch,
+    ):
+        """铁律: 非 dead_letter 行 (seeded_db 的 12345 是 synced) 拒删。"""
+        monkeypatch.setenv("MAILAGENT_CLI_ALLOW_UNAUTH_WRITES", "true")
+        result = _invoke(
+            cli_runner, "dead-letter", "delete", "12345", "--yes",
+            "-o", "json", db_path=seeded_db,
+        )
+        assert result.exit_code == 2
+        payload = _xj(result.output)
+        assert payload["error"]["code"] == "E_INVALID_ARG"
+        # 真身仍在
+        conn = sqlite3.connect(str(seeded_db))
+        try:
+            still = conn.execute(
+                "SELECT COUNT(*) FROM email_metadata WHERE internal_id=12345"
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        assert still == 1
+
+    def test_delete_not_found(
+        self, cli_runner, cli_env, seeded_db, monkeypatch,
+    ):
+        monkeypatch.setenv("MAILAGENT_CLI_ALLOW_UNAUTH_WRITES", "true")
+        result = _invoke(
+            cli_runner, "dead-letter", "delete", "99999", "--yes",
+            "-o", "json", db_path=seeded_db,
+        )
+        assert result.exit_code == 2
+        payload = _xj(result.output)
+        assert payload["error"]["code"] == "E_INVALID_ARG"
+
+
 class TestCleanupDeadletter:
     def test_dry_run_lists_candidates(
         self, cli_runner, cli_env, seeded_db,

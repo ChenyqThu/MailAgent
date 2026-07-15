@@ -60,7 +60,10 @@ export interface DeadLetterItem {
   retry_count: number
   sync_status: string
   sync_error: string | null
-  updated_at: string | null
+  /** Raw float epoch **seconds** (the DB column `email_metadata.updated_at =
+   *  time.time()`), surfaced verbatim by both the CLI list + serve-api. NOT an
+   *  ISO string — `formatRelative` branches on the number type to render it. */
+  updated_at: number | null
 }
 
 export interface DeadLetterListOpts {
@@ -125,6 +128,10 @@ export interface AdminApi {
   /** Re-arms a dead-letter email for retry (write+auth). Throws Error & { code }
    *  on failure exactly like the other write methods. */
   deadLetterRetry(internalId: number): Promise<unknown>
+  /** Permanently deletes a dead-letter email (write+auth, irreversible). Goes
+   *  through delete_email_full → CASCADE (body/attachment/outbox) + local dir.
+   *  The UI must gate this behind a confirm dialog. */
+  deadLetterDelete(internalId: number): Promise<unknown>
   /** Run the cleanup-deadletter command (write+auth unless dryRun). */
   cleanupDeadLetter(opts?: CleanupDeadLetterOpts): Promise<unknown>
   /** roadmap §4.5 — current davmail backend health snapshot (direct SQLite

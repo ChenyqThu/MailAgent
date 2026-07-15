@@ -139,3 +139,163 @@ def test_cleanup_real_delete_removes_only_stale_dead_letters(svc, db_path):
 def test_cleanup_requires_authenticated_actor(svc):
     with pytest.raises(ServiceAuthError):
         svc.cleanup_dead_letter(actor=UNAUTHED)
+
+
+# ---------------------------------------------------------------------------
+# delete_dead_letter (需求 3) — full v4 schema so CASCADE (body/attachment/
+# outbox) is real. 铁律断言: 只删 dead_letter 行, 真身 synced 零误伤。
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def full_schema_svc(tmp_path: Path):
+    """SyncStore-initialised v4 DB (含 email_body / email_attachment / email_outbox
+    的 ON DELETE CASCADE 外键) + AdminService。返回 (svc, db_path)。"""
+    from src.mail.sync_store import SyncStore
+
+    db = tmp_path / "sync_store.db"
+    SyncStore(str(db))  # 建全套 v4 schema
+
+    now = time.time()
+    conn = sqlite3.connect(str(db))
+    conn.execute("PRAGMA foreign_keys=ON")
+    try:
+        # id=1: 幽灵行 dead_letter — 带 body + attachment + outbox 子行
+        # id=2: 真身 synced (有 Notion 页) — 任何情况都不该被触碰
+        conn.execute(
+            "INSERT INTO email_metadata "
+            "(internal_id, message_id, subject, sender, mailbox, sync_status, "
+            " retry_count, created_at, updated_at) "
+            "VALUES (1, '<ghost@localhost>', 'ghost', '', '收件箱', 'dead_letter', 9, ?, ?)",
+            (now, now),
+        )
+        conn.execute(
+            "INSERT INTO email_metadata "
+            "(internal_id, message_id, subject, sender, mailbox, sync_status, "
+            " retry_count, notion_page_id, created_at, updated_at) "
+            "VALUES (2, '<real@x.com>', 'real', 'real@x.com', '收件箱', 'synced', "
+            " 0, 'page-real', ?, ?)",
+            (now, now),
+        )
+        conn.execute(
+            "INSERT INTO email_body "
+            "(internal_id, body_markdown, fetched_at, fetched_source) "
+            "VALUES (1, 'ghost body', ?, 'test')",
+            (now,),
+        )
+        conn.execute(
+            "INSERT INTO email_attachment "
+            "(internal_id, filename, created_at) VALUES (1, 'img.png', ?)",
+            (now,),
+        )
+        conn.execute(
+            "INSERT INTO email_outbox "
+            "(internal_id, op_type, target, payload_json, status, created_at, updated_at) "
+            "VALUES (1, 'flag', 'notion', '{}', 'pending', ?, ?)",
+            (now, now),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    cfg = load_cli_config(flag_overrides={"sync_store_db_path": str(db)})
+    return AdminService(ServiceContext(cfg)), db
+
+
+def _count(db_path: Path, table: str, internal_id: int) -> int:
+    conn = sqlite3.connect(str(db_path))
+    try:
+        return conn.execute(
+            f"SELECT COUNT(*) FROM {table} WHERE internal_id=?", (internal_id,)
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+
+def test_delete_dead_letter_cascades_body_attachment_outbox(full_schema_svc):
+    svc, db_path = full_schema_svc
+    # 前置: 子行都在
+    assert _count(db_path, "email_body", 1) == 1
+    assert _count(db_path, "email_attachment", 1) == 1
+    assert _count(db_path, "email_outbox", 1) == 1
+
+    result = svc.delete_dead_letter(1, actor=AUTHED)
+    assert result == {"internal_id": 1, "old_status": "dead_letter", "deleted": True}
+
+    # CASCADE 清空 metadata + body + attachment + outbox
+    assert _count(db_path, "email_metadata", 1) == 0
+    assert _count(db_path, "email_body", 1) == 0
+    assert _count(db_path, "email_attachment", 1) == 0
+    assert _count(db_path, "email_outbox", 1) == 0
+
+
+def test_delete_dead_letter_leaves_synced_real_email_untouched(full_schema_svc):
+    """铁律: 真身 (synced, 有 Notion 页) 零误伤。"""
+    svc, db_path = full_schema_svc
+    svc.delete_dead_letter(1, actor=AUTHED)
+    assert _count(db_path, "email_metadata", 2) == 1
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        row = conn.execute(
+            "SELECT sync_status, notion_page_id FROM email_metadata WHERE internal_id=2"
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row == ("synced", "page-real")
+
+
+def test_delete_dead_letter_refuses_non_dead_letter_row(full_schema_svc):
+    """铁律: 非 dead_letter 行 (真身 synced) 拒删, 不误伤。"""
+    svc, db_path = full_schema_svc
+    with pytest.raises(ServiceInvalidArgError):
+        svc.delete_dead_letter(2, actor=AUTHED)
+    # 拒删后行仍在
+    assert _count(db_path, "email_metadata", 2) == 1
+
+
+def test_delete_dead_letter_unknown_id_raises_invalid_arg(full_schema_svc):
+    svc, _ = full_schema_svc
+    with pytest.raises(ServiceInvalidArgError):
+        svc.delete_dead_letter(999, actor=AUTHED)
+
+
+def test_delete_dead_letter_requires_authenticated_actor(full_schema_svc):
+    svc, db_path = full_schema_svc
+    with pytest.raises(ServiceAuthError):
+        svc.delete_dead_letter(1, actor=UNAUTHED)
+    # 鉴权失败时不得删除
+    assert _count(db_path, "email_metadata", 1) == 1
+
+
+def test_delete_dead_letter_refuses_after_concurrent_status_change(full_schema_svc):
+    """TOCTOU: 预检 SELECT 通过后, 窗口内行被并发 retry 成 pending → 带谓词的删除
+    rowcount==0 → 拒删, 刚复活的真邮件 + 其下游子行零误伤。"""
+    svc, db_path = full_schema_svc
+
+    # 触发 email_repo 懒创建并缓存, 再打桩其删除方法模拟「预检与删除之间」的并发改态。
+    real_delete = svc._ctx.email_repo.delete_email_full_if_status
+
+    def _flip_then_delete(internal_id: int, expected_status: str) -> bool:
+        # 模拟并发窗口: 预检已通过, 此刻另一 admin 面把行 retry 成 pending。
+        conn = sqlite3.connect(str(db_path))
+        try:
+            conn.execute(
+                "UPDATE email_metadata SET sync_status='pending' WHERE internal_id=?",
+                (internal_id,),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return real_delete(internal_id, expected_status)
+
+    svc._ctx.email_repo.delete_email_full_if_status = _flip_then_delete
+
+    with pytest.raises(ServiceInvalidArgError):
+        svc.delete_dead_letter(1, actor=AUTHED)
+
+    # 复活的行 + 其下游子行全部保留 (谓词删除挡住 = 未误删)
+    assert _count(db_path, "email_metadata", 1) == 1
+    assert _count(db_path, "email_body", 1) == 1
+    assert _count(db_path, "email_attachment", 1) == 1
+    assert _count(db_path, "email_outbox", 1) == 1

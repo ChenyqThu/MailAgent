@@ -456,6 +456,10 @@ class ElectronAdminApi implements AdminApi {
     const env = (await invoker()('admin:deadLetterRetry', internalId)) as WriteEnvelope<unknown>
     return unwrap(env)
   }
+  async deadLetterDelete(internalId: number): Promise<unknown> {
+    const env = (await invoker()('admin:deadLetterDelete', internalId)) as WriteEnvelope<unknown>
+    return unwrap(env)
+  }
   async cleanupDeadLetter(opts?: CleanupDeadLetterOpts): Promise<unknown> {
     const env = (await invoker()('admin:cleanupDeadLetter', opts ?? {})) as WriteEnvelope<unknown>
     return unwrap(env)

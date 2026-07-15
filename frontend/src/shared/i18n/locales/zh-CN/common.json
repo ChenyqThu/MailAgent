@@ -1146,6 +1146,15 @@
     "retry": "重试",
     "retryOk": "邮件 #{id} 已重新入队",
     "retryFail": "邮件 #{id} 重试失败",
+    "delete": "删除",
+    "deleteOk": "邮件 #{id} 已删除",
+    "deleteFail": "邮件 #{id} 删除失败",
+    "deleteConfirm": {
+      "title": "删除死信邮件？",
+      "body": "将永久删除「{subject}」及其正文、附件与同步记录，操作不可撤销。请确认已在邮件服务器 / Notion 中处置该邮件。",
+      "confirm": "删除",
+      "cancel": "取消"
+    },
     "timeAgo": {
       "seconds": "{n} 秒前",
       "minutes": "{n} 分钟前",

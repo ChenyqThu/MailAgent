@@ -59,6 +59,7 @@ mailagent --help                 # 列 10 个 group (email/admin/attachment/llm/
 | `calendar recurring replay [--internal-id N \| --ids LIST --dry-run]` | 重跑指定 internal_id 的邀请 |
 | `admin dead-letter list [--limit/--mailbox]` | 列 dead_letter 邮件 (PR-4 读命令, 无 auth) |
 | `admin dead-letter retry <internal_id>` | 重置 dead_letter 为 pending (PR-4) |
+| `admin dead-letter delete <internal_id> --yes` | 单条删除 dead_letter 邮件 (人工确认已处置后清条目, 走 `delete_email_full` CASCADE 清 body/attachment/outbox + 本地附件目录; 非 dead_letter 行拒删。写命令, 需 auth + PM2 检测) |
 | `admin cleanup-deadletter [--older-than N --no-dry-run --yes]` | 清理超 N 天的 dead_letter (PR-4, 内置) |
 | `admin cleanup-syncstore [--no-dry-run --yes]` | dry-run → show_stats; --no-dry-run --yes → reset_sync_status (PR-5 inline) |
 | `admin cleanup-duplicates [--no-dry-run --yes]` | 扫 message_id 重复的 Notion page → archive 重复 (PR-5 inline) |

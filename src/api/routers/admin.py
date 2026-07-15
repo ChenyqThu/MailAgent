@@ -4,7 +4,7 @@
 ``Depends(get_repository)`` 拿 EmailRepository 复用 _connect() 直查 SQLite
 (meta.source='sqlite'), 镜像 ``mailagent admin health`` / ``admin stats``
 (sync_store section) / ``admin dead-letter list`` 的查询。
-写端点 (dead-letter retry / cleanup-dead-letter) E2-C 起经进程内 ``AdminService``
+写端点 (dead-letter retry / dead-letter delete / cleanup-dead-letter) 经进程内 ``AdminService``
 (``src/services/admin_service.py``, 不再 fork CLI), meta.source='cli'（历史沿用命名,
 语义是「CLI 等价写语义」而非字面传输方式）。两端点均不做 PM2 冲突检测 —— 迁移前
 路由恒对 CLI 传 ``--allow-concurrent`` 绕过该检测, service 层原样不设这道闸。
@@ -477,6 +477,36 @@ async def admin_dead_letter_retry(
     svc = AdminService(get_service_ctx())
     try:
         data = svc.retry_dead_letter(
+            internal_id,
+            actor=Actor(kind="http", authenticated=True, label="cf-access"),
+        )
+    except ServiceError as exc:
+        _raise_from_service_error(exc)
+
+    return success_envelope(data, request=request, source="cli")
+
+
+# ============================================================
+# POST /api/admin/dead-letter/{internal_id}/delete  (写, in-process AdminService)
+# ============================================================
+@router.post("/dead-letter/{internal_id}/delete")
+async def admin_dead_letter_delete(
+    internal_id: int,
+    request: Request,
+    _: None = Depends(verify_cf_access),
+):
+    """彻底删除单封 dead_letter 邮件 (人工确认已处置后清条目)。
+
+    镜像 ``mailagent admin dead-letter delete {id} --yes`` (写命令), 与 retry 同款
+    进程内直调 ``AdminService``。不可逆 —— 二次确认由调用方 (admin 面板弹窗) 负责,
+    HTTP 层不设 dry-run (retry/cleanup 的既有分工: 面板确认 → 端点直接执行)。
+
+    data 形状 {internal_id, old_status, deleted} (DeadLetterDeleteResult)。
+    internal_id 不存在 / 不是 dead_letter → E_INVALID_ARG (400)。
+    """
+    svc = AdminService(get_service_ctx())
+    try:
+        data = svc.delete_dead_letter(
             internal_id,
             actor=Actor(kind="http", authenticated=True, label="cf-access"),
         )

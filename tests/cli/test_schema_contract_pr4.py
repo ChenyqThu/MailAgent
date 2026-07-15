@@ -210,6 +210,39 @@ class TestPR4SchemaContract:
         schema, registry = schema_loader("admin-dead-letter.schema.json")
         validate(instance=payload, schema=schema, registry=registry)
 
+    def test_admin_dead_letter_delete(
+        self, cli_runner, cli_env, seeded_db, schema_loader, monkeypatch,
+    ):
+        """delete_success variant (物理删除单条死信) 对 schema 的契约校验。"""
+        import sqlite3
+        import time as _time
+
+        from jsonschema import validate
+
+        now = _time.time()
+        conn = sqlite3.connect(str(seeded_db))
+        try:
+            conn.execute(
+                "INSERT INTO email_metadata "
+                "(internal_id, subject, sender, mailbox, sync_status, "
+                " retry_count, sync_error, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, 'dead_letter', 5, 'x', ?, ?)",
+                (30001, "sub-30001", "a@x.com", "收件箱", now, now),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        monkeypatch.setenv("MAILAGENT_CLI_ALLOW_UNAUTH_WRITES", "true")
+        result = _invoke(
+            cli_runner, "admin", "dead-letter", "delete", "30001", "--yes",
+            "-o", "json", db_path=seeded_db,
+        )
+        assert result.exit_code == 0, result.output
+        payload = _last_json(result.output)
+        schema, registry = schema_loader("admin-dead-letter.schema.json")
+        validate(instance=payload, schema=schema, registry=registry)
+
     # ---- admin cleanup ----
 
     def test_admin_cleanup_deadletter_dry_run(

@@ -43,6 +43,12 @@ class _AdminSvcSpy:
             raise _AdminSvcSpy._raise
         return {"internal_id": internal_id, "old_status": "dead_letter", "new_status": "pending"}
 
+    def delete_dead_letter(self, internal_id: int, *, actor):
+        self.calls.append(("delete_dead_letter", internal_id, {"actor": actor}))
+        if _AdminSvcSpy._raise is not None:
+            raise _AdminSvcSpy._raise
+        return {"internal_id": internal_id, "old_status": "dead_letter", "deleted": True}
+
     def cleanup_dead_letter(self, *, older_than: int = 30, dry_run: bool = True, actor):
         self.calls.append((
             "cleanup_dead_letter", None,
@@ -153,6 +159,37 @@ def test_dead_letter_retry_not_found_maps_400(client, admin_svc_spy):
     admin_svc_spy._raise = ServiceInvalidArgError("internal_id 999999 not found")
 
     r = client.post("/api/admin/dead-letter/999999/retry")
+
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "E_INVALID_ARG"
+
+
+# ---------------------------------------------------------------------------
+# POST /api/admin/dead-letter/{internal_id}/delete
+# ---------------------------------------------------------------------------
+
+
+def test_dead_letter_delete_success_passthrough(client, admin_svc_spy):
+    r = client.post("/api/admin/dead-letter/53675/delete")
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "success"
+    assert body["data"] == {
+        "internal_id": 53675, "old_status": "dead_letter", "deleted": True,
+    }
+
+    method, target, kw = _last(admin_svc_spy)
+    assert method == "delete_dead_letter"
+    assert target == 53675
+    assert kw["actor"].authenticated is True
+    assert kw["actor"].kind == "http"
+
+
+def test_dead_letter_delete_non_dead_letter_maps_400(client, admin_svc_spy):
+    admin_svc_spy._raise = ServiceInvalidArgError("internal_id 2 is sync_status='synced'")
+
+    r = client.post("/api/admin/dead-letter/2/delete")
 
     assert r.status_code == 400
     assert r.json()["error"]["code"] == "E_INVALID_ARG"

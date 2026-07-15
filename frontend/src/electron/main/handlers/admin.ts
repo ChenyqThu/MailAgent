@@ -5,6 +5,7 @@
 //   - admin:stats            — `mailagent admin stats -o json` (read, no auth)
 //   - admin:deadLetterList   — `mailagent admin dead-letter list --limit N` (read)
 //   - admin:deadLetterRetry  — `mailagent admin dead-letter retry <id>` (write+auth)
+//   - admin:deadLetterDelete — `mailagent admin dead-letter delete <id> --yes` (write+auth)
 //   - admin:cleanupDeadLetter — `mailagent admin cleanup-deadletter --older-than N`
 //                              + `--no-dry-run --yes` (write+auth)
 //
@@ -70,7 +71,10 @@ export interface DeadLetterItem {
   retry_count: number
   sync_status: string
   sync_error: string | null
-  updated_at: string | null
+  /** Raw float epoch **seconds** (the DB column `email_metadata.updated_at =
+   *  time.time()`), surfaced verbatim by the CLI list. NOT an ISO string —
+   *  the renderer's `formatRelative` branches on the number type. */
+  updated_at: number | null
 }
 
 export async function runAdminHealth(): Promise<AdminHealthData> {
@@ -103,6 +107,17 @@ export async function runDeadLetterList(opts: DeadLetterListOpts = {}): Promise<
 
 export async function runDeadLetterRetry(internalId: number): Promise<unknown> {
   return callCli(['admin', 'dead-letter', 'retry', String(internalId)], {
+    write: true,
+    needsAuth: true,
+    timeoutMs: WRITE_TIMEOUT_MS
+  })
+}
+
+export async function runDeadLetterDelete(internalId: number): Promise<unknown> {
+  // Irreversible — the CLI requires --yes (the UI's confirm dialog is the human
+  // gate). Goes through delete_email_full → CASCADE (body/attachment/outbox) +
+  // local attachment dir cleanup; only dead_letter rows are accepted.
+  return callCli(['admin', 'dead-letter', 'delete', String(internalId), '--yes'], {
     write: true,
     needsAuth: true,
     timeoutMs: WRITE_TIMEOUT_MS
@@ -458,6 +473,14 @@ export function registerAdminHandlers(): void {
     }
   )
   ipcMain.handle(
+    'admin:deadLetterDelete',
+    async (_evt, internalId: unknown): Promise<WriteEnvelope<unknown>> => {
+      const idOrErr = ensureInternalId(internalId, 'admin:deadLetterDelete')
+      if (typeof idOrErr !== 'number') return idOrErr
+      return envelopeFromCli(runDeadLetterDelete(idOrErr))
+    }
+  )
+  ipcMain.handle(
     'admin:cleanupDeadLetter',
     async (_evt, opts: CleanupDeadLetterOpts = {}): Promise<WriteEnvelope<unknown>> => {
       return envelopeFromCli(runCleanupDeadLetter(opts ?? {}))
@@ -470,6 +493,7 @@ export const __testing = {
   runAdminStats,
   runDeadLetterList,
   runDeadLetterRetry,
+  runDeadLetterDelete,
   runCleanupDeadLetter,
   runExportDiagnostics,
   envelopeFromCli,

@@ -570,7 +570,7 @@ def admin_db_version(
 # ============================================================
 
 dead_letter_app = typer.Typer(
-    name="dead-letter", help="dead_letter 队列 list / retry",
+    name="dead-letter", help="dead_letter 队列 list / retry / delete",
     no_args_is_help=True,
 )
 
@@ -690,6 +690,49 @@ def admin_dead_letter_retry(
     }
     if cli.output.lower() == "text":
         print(f"reset {internal_id}: {old_status} → pending")
+    else:
+        emit(cli, data)
+
+
+@dead_letter_app.command("delete")
+def admin_dead_letter_delete(
+    ctx: typer.Context,
+    internal_id: int = typer.Argument(..., help="dead_letter 邮件 internal_id"),
+    yes: bool = typer.Option(False, "--yes", help="确认删除 (不可逆, 缺省拒绝)"),
+    allow_concurrent: bool = typer.Option(
+        False, "--allow-concurrent",
+        help="跳过 PM2 mail-sync 冲突检测 (写命令默认拒并行)",
+    ),
+    output: Optional[str] = typer.Option(None, "-o", "--output"),
+) -> None:
+    """彻底删除单封 dead_letter 邮件 (人工确认已处置后清条目). 写命令, 需 auth + PM2 检测.
+
+    与 ``cleanup-deadletter`` (按时间批量) 的区别: 这里是单条、人工点名。
+    删除经 ``AdminService.delete_dead_letter`` → ``EmailRepository.delete_email_full``
+    (CASCADE 清 body/attachment/outbox + 删本地附件目录)。非 dead_letter 行拒删。
+    """
+    cli: "CliContext" = ctx.obj
+    apply_local_output(ctx, output)
+    if not yes:
+        raise emit_cli_error(cli, CliInvalidArgError(
+            "dead-letter delete is irreversible and requires --yes",
+            hint="--yes",
+        ))
+    _common_cleanup_auth(cli, dry_run=False, allow_concurrent=allow_concurrent)
+
+    from src.services.admin_service import AdminService
+    from src.services.errors import ServiceError
+    from src.services.guards import Actor
+
+    try:
+        data = AdminService(cli).delete_dead_letter(
+            internal_id, actor=Actor(kind="cli", authenticated=True, label="cli"),
+        )
+    except ServiceError as e:
+        raise emit_cli_error(cli, e)
+
+    if cli.output.lower() == "text":
+        print(f"deleted {internal_id} (was {data['old_status']})")
     else:
         emit(cli, data)
 

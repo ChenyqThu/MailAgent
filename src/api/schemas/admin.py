@@ -103,6 +103,16 @@ class DeadLetterRetryResult(BaseModel):
     new_status: str
 
 
+class DeadLetterDeleteResult(BaseModel):
+    """`POST /api/admin/dead-letter/{id}/delete` (admin-dead-letter delete_success)."""
+
+    model_config = {"extra": "allow"}
+
+    internal_id: int
+    old_status: str
+    deleted: bool
+
+
 class CleanupDeadLetterResult(BaseModel):
     """`POST /api/admin/cleanup-dead-letter` — loose CLI data passthrough."""
 
@@ -163,7 +173,8 @@ class SystemAlertsData(BaseModel):
 
 __all__ = [
     "AdminHealthData", "SyncStoreSection", "AdminStatsData",
-    "DeadLetterItem", "DeadLetterRetryResult", "CleanupDeadLetterResult",
+    "DeadLetterItem", "DeadLetterRetryResult", "DeadLetterDeleteResult",
+    "CleanupDeadLetterResult",
     "DavMailLevel", "DavMailHealthData",
     "SystemAlertItem", "SystemAlertsData",
 ]

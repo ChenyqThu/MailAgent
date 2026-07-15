@@ -1146,6 +1146,15 @@
     "retry": "Retry",
     "retryOk": "Email #{id} re-queued",
     "retryFail": "Email #{id} retry failed",
+    "delete": "Delete",
+    "deleteOk": "Email #{id} deleted",
+    "deleteFail": "Email #{id} delete failed",
+    "deleteConfirm": {
+      "title": "Delete dead-letter email?",
+      "body": "This permanently removes “{subject}” along with its body, attachments and sync records. It cannot be undone — confirm you have already handled the email on the mail server / Notion.",
+      "confirm": "Delete",
+      "cancel": "Cancel"
+    },
     "timeAgo": {
       "seconds": "{n}s ago",
       "minutes": "{n}m ago",

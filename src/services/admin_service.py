@@ -28,11 +28,12 @@ if TYPE_CHECKING:
 
 
 class AdminService:
-    """admin 写操作的应用服务 (E2-C 范围: dead-letter retry / cleanup)。
+    """admin 写操作的应用服务 (dead-letter retry / delete / cleanup)。
 
     ``ctx`` 是 ``ServiceDeps`` —— 经 ``ctx.config.sync_store_db_path`` 直连 SQLite,
     与 CLI 命令体 (src/cli/commands/admin.py) 用同一张 ``email_metadata`` 表、同一套
-    SQL (逐字段对齐, 仅错误类型改用 Service* 体系)。
+    SQL (逐字段对齐, 仅错误类型改用 Service* 体系)。``delete_dead_letter`` 例外:
+    经 ``ctx.email_repo`` 走 ``delete_email_full`` (要 CASCADE + 附件目录清理)。
     """
 
     def __init__(self, ctx: "ServiceDeps") -> None:
@@ -76,6 +77,70 @@ class AdminService:
             "internal_id": internal_id,
             "old_status": old_status,
             "new_status": "pending",
+        }
+
+    def delete_dead_letter(self, internal_id: int, *, actor: Actor) -> dict[str, Any]:
+        """彻底删除单封 dead_letter 邮件 (人工确认邮件已处置后清条目)。
+
+        ``cleanup_dead_letter`` 是**按时间批量**清理; 这里是「人工确认某条后单独清掉」
+        (admin 面板每行的删除按钮)。
+
+        走 ``EmailRepository.delete_email_full_if_status`` 而非裸 ``DELETE FROM
+        email_metadata``: repo 的连接开了 ``PRAGMA foreign_keys=ON``, 删主行才会 CASCADE
+        掉 email_body / email_attachment / email_outbox 并清本地附件目录; sqlite3 默认
+        foreign_keys=OFF, 裸 DELETE 会留一堆孤儿行。
+
+        **只删 dead_letter 行**: 行不存在 → ``ServiceInvalidArgError`` (与 retry 一致);
+        行存在但不是 dead_letter → 同样拒绝 —— 这个入口的语义是「清死信队列条目」,
+        不是通用删邮件, 拒掉能挡住「误删一封正常邮件」。
+
+        TOCTOU: 下面的 SELECT(连接 A)只用于友好报错, **实际删除**走带 dead_letter 谓词的
+        ``delete_email_full_if_status``(把状态判定并入删除事务的 WHERE) —— 若并发 admin 面
+        在 SELECT 与删除之间把该行 retry 成 pending/synced, 谓词删除 rowcount==0 → 拒删,
+        不会误删一封刚复活的真邮件。
+        """
+        require_write_auth(actor)
+
+        db_path = self._ctx.config.sync_store_db_path
+        try:
+            conn = sqlite3.connect(db_path, timeout=5.0)
+            try:
+                cur = conn.execute(
+                    "SELECT sync_status FROM email_metadata WHERE internal_id = ?",
+                    (internal_id,),
+                ).fetchone()
+            finally:
+                conn.close()
+        except sqlite3.Error as exc:
+            raise ServiceSchemaError(f"dead-letter delete lookup failed: {exc}") from exc
+
+        if cur is None:
+            raise ServiceInvalidArgError(
+                f"internal_id={internal_id} not found in email_metadata"
+            )
+        status = cur[0]
+        if status != "dead_letter":
+            raise ServiceInvalidArgError(
+                f"internal_id={internal_id} is sync_status={status!r}, not dead_letter",
+                hint="only dead_letter rows can be deleted through this endpoint",
+            )
+
+        # CASCADE (body / attachment / outbox) + 本地附件目录一并清。谓词删除消除 TOCTOU:
+        # 窗口内被并发 retry 成非 dead_letter → rowcount==0 → 拒删(不误伤复活的真邮件)。
+        deleted = self._ctx.email_repo.delete_email_full_if_status(
+            internal_id, "dead_letter"
+        )
+        if not deleted:
+            raise ServiceInvalidArgError(
+                f"internal_id={internal_id} is no longer dead_letter "
+                f"(status changed concurrently); refused to delete",
+                hint="the row was retried/resynced between check and delete",
+            )
+
+        return {
+            "internal_id": internal_id,
+            "old_status": status,
+            "deleted": True,
         }
 
     def cleanup_dead_letter(

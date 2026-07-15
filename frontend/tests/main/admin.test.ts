@@ -95,6 +95,16 @@ describe('admin handlers — write', () => {
     })
   })
 
+  test('runDeadLetterDelete runs write+auth path with --yes + 60s timeout', async () => {
+    mockCallCli.mockResolvedValue({ deleted: true })
+    await __testing.runDeadLetterDelete(53675)
+    expect(mockCallCli).toHaveBeenCalledWith(['admin', 'dead-letter', 'delete', '53675', '--yes'], {
+      write: true,
+      needsAuth: true,
+      timeoutMs: 60_000
+    })
+  })
+
   test('runCleanupDeadLetter dry-run skips auth + skips --no-dry-run', async () => {
     mockCallCli.mockResolvedValue({})
     await runCleanupDeadLetter({ dryRun: true })

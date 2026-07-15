@@ -545,6 +545,9 @@ export class HttpApi implements MailApi {
     deadLetterRetry: (internalId: number): Promise<unknown> =>
       this.req<unknown>('POST', `/admin/dead-letter/${internalId}/retry`, { body: {} }),
 
+    deadLetterDelete: (internalId: number): Promise<unknown> =>
+      this.req<unknown>('POST', `/admin/dead-letter/${internalId}/delete`, { body: {} }),
+
     cleanupDeadLetter: (opts?: CleanupDeadLetterOpts): Promise<unknown> =>
       // May return HTTP 207 partial_failure → request() returns the data block.
       this.req<unknown>('POST', '/admin/cleanup-dead-letter', {

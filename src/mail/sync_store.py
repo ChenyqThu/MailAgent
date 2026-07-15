@@ -11,6 +11,7 @@ v3 架构变更：
     pending -> fetch_failed -> (retry) -> synced/failed
     pending -> synced
     pending -> failed -> (retry) -> synced/dead_letter
+    * -> (物理删除)  (message_id 撞上已 synced 的真身 = 重复行, 见 update_after_fetch)
 
 Usage:
     store = SyncStore("data/sync_store.db")
@@ -43,6 +44,7 @@ import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
+from enum import Enum
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Any, Iterator, TypedDict
 from loguru import logger
@@ -55,6 +57,25 @@ from loguru import logger
 DRAFT_MAILBOX_LABELS = frozenset({'草稿箱'})
 SENT_MAILBOX_LABELS = frozenset({'发件箱', '已发送', '已发送邮件'})
 SENT_CANONICAL_LABEL = '发件箱'
+
+
+class UpdateAfterFetchResult(Enum):
+    """``update_after_fetch`` 的结果三态（2026-07-14 幽灵行事故后引入）。
+
+    老实现返回 bool 且三个调用点都不看返回值 —— message_id 撞 UNIQUE 被静默吞掉,
+    是幽灵行永久卡死的病根之一。调用方必须区分 DUPLICATE(中止本封) 与 FAILED。
+
+    OK: 元数据已写入。
+    DUPLICATE: 目标 message_id 已被另一条 **已 synced** 的行(真身)占用 → 当前行是
+        重复行(幽灵行), 已被 **物理删除**(CASCADE 清 body/attachment/outbox, 见
+        _resolve_message_id_conflict)。调用方必须中止本封邮件的后续同步(行已不存在)。
+    FAILED: 写入失败 —— DB 错误, 或 message_id 撞上一条 **未** synced 的行(无法判定
+        谁是真身 → 按铁律谁都不动, 留人工处置)。调用方不得静默吞掉。
+    """
+
+    OK = 'ok'
+    DUPLICATE = 'duplicate'
+    FAILED = 'failed'
 
 
 def _local_tz():
@@ -2109,20 +2130,41 @@ class SyncStore:
                 conn.rollback()
                 return False
 
-    def update_after_fetch(self, internal_id: int, data: Dict[str, Any]) -> bool:
+    def update_after_fetch(
+        self, internal_id: int, data: Dict[str, Any]
+    ) -> UpdateAfterFetchResult:
         """AppleScript 获取成功后更新元数据
 
         用于 v3 架构：AppleScript 获取成功后，用准确的数据刷新 SyncStore。
+
+        ## message_id UNIQUE 冲突 = 「当前行是重复行」（2026-07-14 幽灵行事故）
+
+        ``email_metadata.message_id`` 是 ``TEXT UNIQUE`` **列约束**（走 sqlite_autoindex,
+        在 sqlite_master 里 grep index 的 sql 看不到它）。老实现把 message_id /
+        thread_id / subject / sender 拼成一条 UPDATE 直接执行 —— message_id 撞上既有
+        行 → **整条 UPDATE 回滚** → 连 sender 都没写进去 → 下游 create_email_page_
+        from_sqlite 读 SQLite 拿到 sender='' → Notion 400 → 重试 → 而每轮重试在 400
+        之前会先把附件重传一遍（实测 image001_2.png → image001_3.png 后缀递增）。
+
+        冲突不是"写失败重试就好": 语义上等价于「这封邮件已存在, 当前行是重复行」。
+        判定对齐 _save_email_v3 的 cross-backend merge guard —— 写之前先按 message_id
+        SELECT 真身, 而不是撞了再收拾。
+
+        🔴 铁律: 只有真身 **存在且已 synced** 才认定当前行是重复行 → 物理删除幽灵行
+        （CASCADE 清 body/attachment/outbox, 不进 pending/retry 队列, 不污染死信告警）。
+        真身未 synced = 无法判定谁是真身 → 谁都不动, 返回 FAILED 留人工处置。宁可留一行
+        垃圾, 不能吞一封真邮件。
 
         Args:
             internal_id: 邮件内部 ID
             data: 要更新的字段（message_id, subject, sender, date_received, thread_id 等）
 
         Returns:
-            是否成功
+            UpdateAfterFetchResult —— 调用方必须区分 DUPLICATE（中止本封, 勿再
+            mark_failed 把它拉回重试队列）与 FAILED（不得静默吞掉）。
         """
         if not data:
-            return True
+            return UpdateAfterFetchResult.OK
 
         now = time.time()
 
@@ -2145,16 +2187,32 @@ class SyncStore:
                     values.append(value)
 
         if not set_parts:
-            return True
+            return UpdateAfterFetchResult.OK
 
         set_parts.append("updated_at = ?")
         values.append(now)
         values.append(internal_id)
 
+        new_message_id = data.get('message_id')
+
         with self._connection() as conn:
             cursor = conn.cursor()
 
             try:
+                # === message_id UNIQUE 冲突 guard（对齐 _save_email_v3 的 cross-backend
+                # merge: 写之前先 SELECT 真身）===
+                # 仅 message_id 非空时检查（None 不触发 UNIQUE 约束, 是 v3 pending 邮件）。
+                if new_message_id:
+                    owner = cursor.execute(
+                        "SELECT internal_id, sync_status, notion_page_id "
+                        "FROM email_metadata WHERE message_id = ?",
+                        (new_message_id,),
+                    ).fetchone()
+                    if owner is not None and owner['internal_id'] != internal_id:
+                        return self._resolve_message_id_conflict(
+                            conn, cursor, internal_id, new_message_id, owner
+                        )
+
                 query = f"""
                     UPDATE email_metadata
                     SET {', '.join(set_parts)}
@@ -2163,12 +2221,63 @@ class SyncStore:
                 cursor.execute(query, values)
                 conn.commit()
                 logger.debug(f"Updated email after fetch: internal_id={internal_id}")
-                return True
+                return UpdateAfterFetchResult.OK
 
             except sqlite3.Error as e:
                 logger.error(f"Failed to update after fetch: {e}")
                 conn.rollback()
-                return False
+                return UpdateAfterFetchResult.FAILED
+
+    def _resolve_message_id_conflict(
+        self,
+        conn: sqlite3.Connection,
+        cursor: sqlite3.Cursor,
+        internal_id: int,
+        message_id: str,
+        owner: sqlite3.Row,
+    ) -> UpdateAfterFetchResult:
+        """update_after_fetch 撞 message_id UNIQUE 时的判定 + 终结。
+
+        判据见 update_after_fetch 文档: 真身已 synced 才敢认定当前行是重复行。
+        两个分支都留下可事后追溯"是哪两行撞了"的日志。
+
+        DUPLICATE 分支物理删除幽灵行（Fable review 2026-07-15）: 标 skipped 会留三条
+        尾巴 —— 列表默认不按 sync_status 过滤(幽灵行与真身并排重复显示)、email_body
+        双写在库致 FTS5 双命中、skipped 不进死信面板故需求 3 的删除按钮够不到。改为
+        DELETE 靠 _get_connection 的 foreign_keys=ON CASCADE 一并清 body/attachment/
+        outbox。判据已严到确证是垃圾行 → 与 owner 2026-07-15 手动清 10 行(同走
+        delete_email_full)一致。**只删幽灵行**, 真身零触碰。
+        """
+        owner_iid = owner['internal_id']
+        owner_status = owner['sync_status']
+
+        if owner_status != 'synced':
+            # 真身未 synced → 两行都可能是真邮件 → 不可判定 → 谁都不动, 留人工处置。
+            logger.error(
+                f"[sync_store] update_after_fetch message_id conflict: "
+                f"message_id={message_id[:60]!r} owned by internal_id={owner_iid} "
+                f"(sync_status={owner_status!r} — not synced, cannot tell which row is "
+                f"real); refusing to touch either row, internal_id={internal_id} left "
+                f"for manual triage"
+            )
+            return UpdateAfterFetchResult.FAILED
+
+        # 真身存在且已 synced → 当前行是重复行（幽灵行）→ 物理删除。
+        # 只删幽灵行(WHERE internal_id = 当前行): 真身那一行零触碰。
+        # foreign_keys=ON (_get_connection 开) → CASCADE 清 body/attachment/outbox。
+        cursor.execute(
+            "DELETE FROM email_metadata WHERE internal_id = ?",
+            (internal_id,),
+        )
+        conn.commit()
+        logger.warning(
+            f"[sync_store] duplicate row resolved: message_id={message_id[:60]!r} "
+            f"already at internal_id={owner_iid} (sync_status='synced', "
+            f"notion_page_id={owner['notion_page_id']!r}); physically deleted "
+            f"duplicate internal_id={internal_id} (CASCADE body/attachment/outbox) "
+            f"— no further retry"
+        )
+        return UpdateAfterFetchResult.DUPLICATE
 
     def mark_fetch_failed(self, internal_id: int, error: str) -> bool:
         """标记 AppleScript 获取失败

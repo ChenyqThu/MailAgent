@@ -33,7 +33,11 @@ from loguru import logger
 from src.config import config as settings
 from src.config import notion_enabled
 from src.models import Email
-from src.mail.sync_store import DRAFT_MAILBOX_LABELS, SyncStore
+from src.mail.sync_store import (
+    DRAFT_MAILBOX_LABELS,
+    SyncStore,
+    UpdateAfterFetchResult,
+)
 from src.notion.sync import NotionSync
 from src.mail.reader import EmailReader
 from src.mail.meeting_sync import MeetingInviteSync
@@ -713,6 +717,47 @@ class NewWatcher:
                     "Failed to persist parsed metadata for %s: %s", internal_id, exc
                 )
 
+    def _abort_after_fetch(
+        self,
+        internal_id: int,
+        result: UpdateAfterFetchResult,
+        context: str,
+    ) -> bool:
+        """判定 update_after_fetch 的结果, 需要中止本封邮件时返回 True.
+
+        幽灵行事故 (2026-07-14): update_after_fetch 撞 message_id UNIQUE 时只
+        logger.error + return False, 而三个写 message_id 的调用点都不看返回值 →
+        冲突被吞 → 整条 UPDATE 回滚, 连 sender 都没写进去 → 下游读 SQLite 得
+        sender='' → Notion 400 → 重试 → 每轮重试在 400 之前先把附件重传一遍
+        (实测 image001_2.png → image001_3.png 递增)。所以中止必须发生在建 Notion
+        页 / 传附件之前。
+
+        DUPLICATE: 真身已 synced, 当前行是重复行 (sync_store 已物理删除幽灵行 +
+            CASCADE body/attachment/outbox) → 中止本封即可, **不能**再 mark_failed_v3
+            (行已不存在, 且会凭空重建一条 failed 行拉回重试队列)。
+        FAILED: 真失败 (DB 错误 / 冲突但无法判定真身) → mark_failed_v3 走既有退避 +
+            死信, 不静默吞。
+
+        放在这里而不是每个调用点 inline: 正向 sync + 两条 retry 路径共三个调用点,
+        语义必须一致 (同 _persist_email_metadata_after_parse 的理由)。
+        """
+        if result is UpdateAfterFetchResult.DUPLICATE:
+            self._stats["emails_skipped"] += 1
+            logger.info(
+                f"Duplicate row resolved, aborting sync ({context}): "
+                f"internal_id={internal_id} (see sync_store log for the twin)"
+            )
+            return True
+
+        if result is UpdateAfterFetchResult.FAILED:
+            self.sync_store.mark_failed_v3(
+                internal_id,
+                f"update_after_fetch failed ({context}); see sync_store log",
+            )
+            return True
+
+        return False
+
     async def _sync_single_email_v3(self, email_meta: Dict[str, Any]):
         """同步单封邮件（v3 架构）
 
@@ -742,12 +787,16 @@ class NewWatcher:
             message_id = full_email.get('message_id')
             thread_id = full_email.get('thread_id')
 
-            self.sync_store.update_after_fetch(internal_id, {
+            fetch_result = self.sync_store.update_after_fetch(internal_id, {
                 'message_id': message_id,
                 'thread_id': thread_id,
                 'subject': full_email.get('subject'),
                 'sender': full_email.get('sender')
             })
+            # message_id 撞 UNIQUE 必须在这里终结 (见 _abort_after_fetch):
+            # 重复行继续往下走 = 每轮重试都往 Notion 重传一遍附件。
+            if self._abort_after_fetch(internal_id, fetch_result, "sync"):
+                return
 
             # 2.5 草稿箱分支: 仅落本地 (SQLite body + FTS), 不进 Notion / 会议检测 /
             # LLM / 飞书 / KOS, 也不做日期过滤 (草稿无论多老都保留 — reconcile 全量
@@ -1458,12 +1507,14 @@ class NewWatcher:
                     # 获取成功，更新元数据
                     message_id = full_email.get('message_id')
                     thread_id = full_email.get('thread_id')
-                    self.sync_store.update_after_fetch(internal_id, {
+                    fetch_result = self.sync_store.update_after_fetch(internal_id, {
                         'message_id': message_id,
                         'thread_id': thread_id,
                         'subject': full_email.get('subject'),
                         'sender': full_email.get('sender')
                     })
+                    if self._abort_after_fetch(internal_id, fetch_result, "retry"):
+                        continue
 
                     # 构建 Email 对象
                     email_obj = await self._build_email_object(full_email, mailbox)
@@ -1484,17 +1535,33 @@ class NewWatcher:
                             self.sync_store.mark_fetch_failed(internal_id, "Cannot refetch for retry")
                             continue
                         message_id = full_email.get('message_id')
-                        self.sync_store.update_after_fetch(internal_id, {
+                        fetch_result = self.sync_store.update_after_fetch(internal_id, {
                             'message_id': message_id,
                             'thread_id': full_email.get('thread_id'),
                             'subject': full_email.get('subject'),
                             'sender': full_email.get('sender')
                         })
+                        if self._abort_after_fetch(internal_id, fetch_result, "retry"):
+                            continue
                     else:
                         # 有 message_id，通过 internal_id 重新获取
                         full_email = await run_backend_io(self.backend.fetch_email_content_by_id, internal_id, mailbox)
                         if not full_email:
                             self.sync_store.mark_fetch_failed(internal_id, "Cannot refetch for retry")
+                            continue
+
+                        # 幽灵行常态: 带假 @localhost message_id(非 NULL)恰落本分支。refetch
+                        # 拿回真实 message_id 写回 → 撞真身 UNIQUE → 必须走冲突 guard 终结,
+                        # 否则每轮读空 sender → Notion 400 → 先灌一遍重复附件。与另两个 refetch
+                        # 分支语义一致 (见 _abort_after_fetch docstring: 三入口必须一致)。
+                        message_id = full_email.get('message_id')
+                        fetch_result = self.sync_store.update_after_fetch(internal_id, {
+                            'message_id': message_id,
+                            'thread_id': full_email.get('thread_id'),
+                            'subject': full_email.get('subject'),
+                            'sender': full_email.get('sender')
+                        })
+                        if self._abort_after_fetch(internal_id, fetch_result, "retry"):
                             continue
 
                     email_obj = await self._build_email_object(full_email, mailbox)

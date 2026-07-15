@@ -12,7 +12,7 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Activity, AlertCircle, CheckCircle2, Database, RefreshCw } from 'lucide-react'
+import { Activity, AlertCircle, CheckCircle2, Database, RefreshCw, Trash2 } from 'lucide-react'
 
 import type { DeadLetterItem } from '@shared/api/types'
 import { useMailApi } from '@shared/hooks/useMailApi'
@@ -23,6 +23,14 @@ import { EmptyState } from '@shared/components/feedback/EmptyState'
 import { Loader } from '@shared/components/ui/loader'
 import { NumberTicker } from '@shared/components/ui/number-ticker'
 import { SkeletonRow } from '@shared/components/feedback/LoadingSkeleton'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle
+} from '@shared/components/ui/dialog'
 import { toastError, toastSuccess } from '@shared/state/toast'
 
 function formatBytes(bytes: number): string {
@@ -38,13 +46,21 @@ function formatBytes(bytes: number): string {
 // "Xs" is acceptable as-is for a stats card), so we hand the count + unit
 // to `t()` and let the locale's `admin.timeAgo.{seconds,minutes,hours,days}`
 // template do the formatting.
+//
+// Accepts BOTH shapes flowing into this card:
+//   - dead-letter `updated_at` — a raw float epoch **seconds** (the DB column
+//     `email_metadata.updated_at = time.time()`, surfaced verbatim by both the
+//     CLI list + serve-api). `Date.parse(number)` coerces to a string and yields
+//     NaN → the old code printed the raw `1784081913.9` on screen (the bug).
+//   - `last_sync_time` — an ISO string (`datetime.now().isoformat()`).
+// So branch on the runtime type: number → ×1000 to ms; string → Date.parse.
 function formatRelative(
-  iso: string | null,
+  value: string | number | null,
   t: (key: string, vars?: Record<string, unknown>) => string
 ): string {
-  if (!iso) return '—'
-  const ts = Date.parse(iso)
-  if (Number.isNaN(ts)) return iso
+  if (value == null) return '—'
+  const ts = typeof value === 'number' ? value * 1000 : Date.parse(value)
+  if (Number.isNaN(ts)) return String(value)
   const delta = Date.now() - ts
   const seconds = Math.floor(delta / 1000)
   if (seconds < 60) return t('admin.timeAgo.seconds', { n: seconds })
@@ -161,10 +177,18 @@ function StatusHistogram({ counts }: { counts: Record<string, number> }): React.
 interface DeadLetterRowProps {
   item: DeadLetterItem
   onRetry: (id: number) => void
+  onDelete: (item: DeadLetterItem) => void
   pending: boolean
+  deleting: boolean
 }
 
-function DeadLetterRow({ item, onRetry, pending }: DeadLetterRowProps): React.ReactElement {
+function DeadLetterRow({
+  item,
+  onRetry,
+  onDelete,
+  pending,
+  deleting
+}: DeadLetterRowProps): React.ReactElement {
   const { t } = useTranslation()
   return (
     <tr className="border-b border-ink-border-soft hover:bg-ink-2/60">
@@ -195,22 +219,96 @@ function DeadLetterRow({ item, onRetry, pending }: DeadLetterRowProps): React.Re
       </td>
       <td className="px-3 py-2 text-aux text-ink-fg-2">{formatRelative(item.updated_at, t)}</td>
       <td className="px-3 py-2 text-right">
-        <button
-          type="button"
-          disabled={pending}
-          onClick={(): void => onRetry(item.internal_id)}
-          className={cn(
-            'inline-flex items-center gap-1 px-2 py-1 rounded text-aux',
-            'text-coral border border-coral/30 hover:bg-coral/10',
-            'transition-colors duration-fast',
-            'disabled:opacity-60 disabled:cursor-not-allowed'
-          )}
-        >
-          <RefreshCw size={12} strokeWidth={2} className={pending ? 'animate-spin' : undefined} />
-          {t('admin.retry')}
-        </button>
+        <div className="inline-flex items-center gap-1.5">
+          <button
+            type="button"
+            disabled={pending || deleting}
+            onClick={(): void => onRetry(item.internal_id)}
+            className={cn(
+              'inline-flex items-center gap-1 px-2 py-1 rounded text-aux',
+              'text-coral border border-coral/30 hover:bg-coral/10',
+              'transition-colors duration-fast',
+              'disabled:opacity-60 disabled:cursor-not-allowed'
+            )}
+          >
+            <RefreshCw size={12} strokeWidth={2} className={pending ? 'animate-spin' : undefined} />
+            {t('admin.retry')}
+          </button>
+          <button
+            type="button"
+            disabled={pending || deleting}
+            onClick={(): void => onDelete(item)}
+            className={cn(
+              'inline-flex items-center gap-1 px-2 py-1 rounded text-aux',
+              'text-fail border border-fail/30 hover:bg-fail/10',
+              'transition-colors duration-fast',
+              'disabled:opacity-60 disabled:cursor-not-allowed'
+            )}
+          >
+            <Trash2 size={12} strokeWidth={2} className={deleting ? 'animate-pulse' : undefined} />
+            {t('admin.delete')}
+          </button>
+        </div>
       </td>
     </tr>
+  )
+}
+
+interface DeleteDeadLetterDialogProps {
+  item: DeadLetterItem | null
+  pending: boolean
+  onConfirm: () => void
+  onCancel: () => void
+}
+
+/** Dead-letter 单条删除二次确认 — 走 delete_email_full (CASCADE body/attachment/
+ *  outbox + 删本地附件目录), 不可逆。仅在人工确认邮件已处置后清条目。 */
+function DeleteDeadLetterDialog({
+  item,
+  pending,
+  onConfirm,
+  onCancel
+}: DeleteDeadLetterDialogProps): React.ReactElement {
+  const { t } = useTranslation()
+  return (
+    <Dialog open={item !== null} onOpenChange={(o) => !o && onCancel()}>
+      <DialogContent className="max-w-[460px]">
+        <DialogHeader>
+          <div className="flex items-start gap-4">
+            <div
+              className={cn(
+                'w-[42px] h-[42px] rounded-[11px] grid place-items-center shrink-0',
+                'text-fail bg-fail/10 border border-fail/30'
+              )}
+            >
+              <Trash2 size={20} strokeWidth={1.9} />
+            </div>
+            <div className="min-w-0">
+              <DialogTitle>{t('admin.deleteConfirm.title')}</DialogTitle>
+              <DialogDescription className="mt-1.5 leading-relaxed">
+                {t('admin.deleteConfirm.body', {
+                  subject: item?.subject || `#${item?.internal_id}`
+                })}
+              </DialogDescription>
+            </div>
+          </div>
+        </DialogHeader>
+        <DialogFooter>
+          <button type="button" className="gbtn gbtn-bare" onClick={onCancel} disabled={pending}>
+            {t('admin.deleteConfirm.cancel')}
+          </button>
+          <button
+            type="button"
+            className="gbtn gbtn-danger-solid"
+            onClick={onConfirm}
+            disabled={pending}
+          >
+            <Trash2 size={13} strokeWidth={2} />
+            {t('admin.deleteConfirm.confirm')}
+          </button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -219,6 +317,9 @@ export function AdminPage(): React.ReactElement {
   const mailApi = useMailApi()
   const qc = useQueryClient()
   const [retryPending, setRetryPending] = useState<Set<number>>(new Set())
+  const [deletePending, setDeletePending] = useState<Set<number>>(new Set())
+  // Row awaiting the delete confirm dialog (null = dialog closed).
+  const [deleteTarget, setDeleteTarget] = useState<DeadLetterItem | null>(null)
 
   const healthQ = useQuery({
     queryKey: qk.admin.health(),
@@ -254,6 +355,29 @@ export function AdminPage(): React.ReactElement {
     },
     onSettled: (_data, _err, id) => {
       setRetryPending((prev) => {
+        const next = new Set(prev)
+        next.delete(id)
+        return next
+      })
+    }
+  })
+
+  const deleteMut = useMutation({
+    mutationFn: (id: number) => mailApi.admin.deadLetterDelete(id),
+    onMutate: (id) => {
+      setDeletePending((prev) => new Set(prev).add(id))
+    },
+    onSuccess: (_data, id) => {
+      toastSuccess(t('admin.deleteOk', { id }))
+      void qc.invalidateQueries({ queryKey: qk.admin.deadLetter() })
+      void qc.invalidateQueries({ queryKey: qk.admin.stats() })
+    },
+    onError: (err: unknown, id) => {
+      const e = err as Error & { code?: string }
+      toastError(t('admin.deleteFail', { id }), e.message)
+    },
+    onSettled: (_data, _err, id) => {
+      setDeletePending((prev) => {
         const next = new Set(prev)
         next.delete(id)
         return next
@@ -417,7 +541,9 @@ export function AdminPage(): React.ReactElement {
                     key={item.internal_id}
                     item={item}
                     onRetry={(id) => retryMut.mutate(id)}
+                    onDelete={(row) => setDeleteTarget(row)}
                     pending={retryPending.has(item.internal_id)}
+                    deleting={deletePending.has(item.internal_id)}
                   />
                 ))}
               </tbody>
@@ -425,6 +551,17 @@ export function AdminPage(): React.ReactElement {
           )}
         </div>
       </section>
+
+      <DeleteDeadLetterDialog
+        item={deleteTarget}
+        pending={deleteTarget ? deletePending.has(deleteTarget.internal_id) : false}
+        onConfirm={() => {
+          if (!deleteTarget) return
+          deleteMut.mutate(deleteTarget.internal_id)
+          setDeleteTarget(null)
+        }}
+        onCancel={() => setDeleteTarget(null)}
+      />
     </div>
   )
 }
