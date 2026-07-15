@@ -212,6 +212,13 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
   const composeGuardRef = useRef<ComposeGuardHandle | null>(null)
   const [composeHeldFor, setComposeHeldFor] = useState<number | null>(null)
   const [composerDirty, setComposerDirty] = useState(false)
+  // T9 同款 hold 模型扩到 draft-edit 分支 (下方草稿点开即编辑, 非 store 驱动: EmailDetail
+  // 直接渲染 ComposePanelInner mode='draft-edit')。切走时若草稿编辑处于 dirty 会直接 unmount
+  // 丢字节 —— 该分支上报 dirty (draftEditDirty) 后把被编辑的草稿钉住 (draftEditHeldFor),
+  // 让切邮件 effect 经守卫句柄 (draftEditGuardRef) 弹确认再放行新 active。clean → 直接切走。
+  const draftEditGuardRef = useRef<ComposeGuardHandle | null>(null)
+  const [draftEditHeldFor, setDraftEditHeldFor] = useState<number | null>(null)
+  const [draftEditDirty, setDraftEditDirty] = useState(false)
   // React 19 "Adjusting state on prop change" pattern (react.dev/learn/you-might-not-need-an-effect):
   // resetting derived state on a prop transition is a render-time concern,
   // not an effect concern.
@@ -234,6 +241,17 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
         setComposeHeldFor(null)
       }
     }
+    // draft-edit hold (T9): 上一屏 (lastInternalId) 是脏草稿编辑 iff draftEditDirty —
+    // 钉住它让下方 effect 弹守卫, 而非直接 unmount 丢字节。`heldFor === null` 守卫防覆盖
+    // 已有钉住 (连切多封保留最先钉住的那封); clean 草稿编辑不钉 (切走即 unmount, 无字节可丢)。
+    if (draftEditDirty && draftEditHeldFor === null && lastInternalId !== null) {
+      setDraftEditHeldFor(lastInternalId)
+    }
+  }
+  // T9 自愈 — 又切回被钉草稿 (heldFor === internalId): 钉住已无意义, 渲染期复位, 免得之后
+  // 一次 clean 切走还拿旧 id 误钉。同 "adjusting state on prop change" 模式 (非 effect 职责)。
+  if (draftEditHeldFor !== null && draftEditHeldFor === internalId) {
+    setDraftEditHeldFor(null)
   }
 
   // The cleanup is a real side-effect (renderer → main IPC), so it stays
@@ -461,6 +479,26 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
     if (guard) guard.attemptClose(proceed)
     else proceed()
   }, [composeHeldFor, internalId])
+  // T9 draft-edit hold 收敛 (镜像上方 overlay effect)。脏草稿编辑被钉住 (draftEditHeldFor)
+  // 且 active 已切走时, 经该草稿面板的守卫弹确认: 保存/丢弃 → proceed (放钉 → 新 active 渲染);
+  // 取消 → 钉住保留, 面板继续渲染被钉草稿 (列表选中与详情短暂不一致, 与 overlay 路径同语义)。
+  useEffect(() => {
+    if (draftEditHeldFor === null || draftEditHeldFor === internalId) return
+    const guard = draftEditGuardRef.current
+    const proceed = (): void => {
+      setDraftEditHeldFor(null)
+      setDraftEditDirty(false)
+    }
+    if (guard) guard.attemptClose(proceed)
+    else proceed()
+  }, [draftEditHeldFor, internalId])
+  // draft-edit 面板关闭 (放弃删草稿/发送成功, 或钉住被放行强关): 放钉 + 复位 dirty, 再回落
+  // mailbox 分支原 onClose 语义 (取消选中)。两处 draft-edit 渲染共用, 保持行为一致。
+  const handleDraftEditClose = useCallback((): void => {
+    setDraftEditHeldFor(null)
+    setDraftEditDirty(false)
+    setActive(null)
+  }, [setActive])
 
   // B1 — compose overlay 进/退场. backdrop:false (root 即铺满整个详情区的覆盖层,
   // 非居中卡片). 整列覆盖面板用「淡入 + 上滑」(y:20, 无 scale) —— scale 适合居中小卡片,
@@ -694,6 +732,22 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
     })
   }, [internalId, detailQ.data, mailApi, optimisticDetail])
 
+  // T9 — 脏草稿编辑被钉住 (active 已切走): 继续渲染被钉草稿 (独立于新 active 的加载/mailbox
+  // 态), 直到守卫弹窗 (上方 effect) 放行。与下方 mailbox 分支同 key → 面板实例 (+ 其编辑器)
+  // 跨切换存活, 编辑增量不丢。放在所有早退 (null/loading/error) 之前, 让钉住不被新 active 态干扰。
+  if (draftEditHeldFor !== null && draftEditHeldFor !== internalId) {
+    return (
+      <ComposePanelInner
+        key={`draft-${draftEditHeldFor}`}
+        internalId={draftEditHeldFor}
+        mode="draft-edit"
+        onClose={handleDraftEditClose}
+        guardRef={draftEditGuardRef}
+        onDirtyChange={setDraftEditDirty}
+      />
+    )
+  }
+
   if (internalId === null) {
     return (
       <EmptyShell>
@@ -734,7 +788,9 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
         key={`draft-${email.internal_id}`}
         internalId={email.internal_id}
         mode="draft-edit"
-        onClose={() => setActive(null)}
+        onClose={handleDraftEditClose}
+        guardRef={draftEditGuardRef}
+        onDirtyChange={setDraftEditDirty}
       />
     )
   }
