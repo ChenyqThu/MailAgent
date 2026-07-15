@@ -1,5 +1,6 @@
-"""Compose 优化 epic T7 — codex 交叉 review finding 1/4 修复回归。
+"""Compose 优化 epic T7/T10 — codex 交叉 review finding 修复回归。
 
+批次 1 (T7):
 - finding 1 (HIGH) 存量草稿 linkage 懒自愈: v36 迁移前的草稿行 draft_* 全 NULL 且
   reconcile 稳态短路永不回填 → source_draft_id 恢复分支消费时按行从 davmail 取草稿
   MIME 头 (复用 fetch_email_content_by_id), 解析/校验后当场使用并回写 draft_* 三列。
@@ -7,6 +8,15 @@
 - finding 4 (MED) linkage 消费校验: _sanitize_draft_linkage — msg-id 形状规整
   (含 @、无空白/尖括号)、References 逐 token 校验畸形丢弃、拒自引用
   (in_reply_to == 草稿行自己的 message_id); 不合法 → 回退零派生。
+
+批次 2 (T10):
+- finding 4 (MED) compose_plan 只读: dry-run 触发懒自愈时 persist_heal=False —
+  取件解析本次使用照旧, update_draft_linkage 零调用 (不写库)。
+- finding 5 (MED) source_draft_id 绑定校验: 必须 == request.internal_id (draft-edit
+  语义 = 草稿行自己) 且该行 mailbox 是草稿箱; 不满足 → 忽略 linkage 回退零派生。
+- finding 6 (MED) 懒自愈 thread_id 以 healed 头为权威: 派生 root 覆盖存量坏
+  thread_id (RFC2047 碎片等), 一致才等价保留; update_draft_linkage 自愈路
+  overwrite_thread_id=True。
 """
 
 from __future__ import annotations
@@ -136,9 +146,12 @@ def _seed_original(store, internal_id=42, message_id="orig@x"):
     })
 
 
-def _new_request(source_draft_id):
+def _new_request(source_draft_id, *, internal_id=None):
+    """draft-edit 语义 (批次2 finding 5): 前端恒双份传草稿行自己的 id —
+    internal_id == sourceDraftId。绑定校验测试可用 internal_id 参数造 mismatch。"""
     return ComposeRequest(
-        internal_id=-1, mode="new",
+        internal_id=source_draft_id if internal_id is None else internal_id,
+        mode="new",
         to="a@x.com", subject="Re: orig",
         body_html="<p>edited</p>",
         source_draft_id=source_draft_id,
@@ -199,12 +212,21 @@ def test_selfheal_source_lookup_miss_leaves_none(tmp_path):
     assert svc._ctx.sync_store.get(iid)["draft_source_internal_id"] is None
 
 
-def test_selfheal_preserves_existing_thread_id(tmp_path):
-    """行已有 thread_id (COALESCE 只填空) → 回写不覆写既有线程归属。"""
+def test_selfheal_overwrites_stale_thread_id(tmp_path):
+    """批次2 finding 6: 存量行坏 thread_id (RFC2047 碎片等) 与 healed 链派生 root
+    不一致 → **覆盖** — 否则后续 References 链会拼出 ``<坏id> <合法父>``。"""
     svc = _service(tmp_path)
-    iid = _seed_legacy_draft(svc._ctx.sync_store, thread_id="existing@x")
+    iid = _seed_legacy_draft(svc._ctx.sync_store, thread_id="=?utf-8?q?frag")
     _prepare(svc, iid)
-    assert svc._ctx.sync_store.get(iid)["thread_id"] == "existing@x"
+    assert svc._ctx.sync_store.get(iid)["thread_id"] == "head@x"
+
+
+def test_selfheal_keeps_thread_id_matching_healed_root(tmp_path):
+    """既有 thread_id == healed 链派生 root → 保留 (覆盖写等价值)。"""
+    svc = _service(tmp_path)
+    iid = _seed_legacy_draft(svc._ctx.sync_store, thread_id="head@x")
+    _prepare(svc, iid)
+    assert svc._ctx.sync_store.get(iid)["thread_id"] == "head@x"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -314,6 +336,104 @@ def test_consume_drops_malformed_reference_tokens(tmp_path):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 批次2 finding 5: source_draft_id 绑定校验 (已存 linkage 与懒自愈两条路都过闸)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_binding_rejects_mismatched_source_draft_id(tmp_path):
+    """source_draft_id != request.internal_id (如新邮件哨兵 -1 指向别的草稿行) →
+    忽略 linkage 回退零派生, 且不取件 — 懒自愈路也被闸住。"""
+    svc = _service(tmp_path)
+    iid = _seed_legacy_draft(svc._ctx.sync_store)
+    draft, _, _ = svc._prepare_draft(
+        _new_request(iid, internal_id=-1),
+        allow_missing_reply=False, split_quote=False,
+    )
+    _assert_zero_derivation(draft)
+    svc._ctx.backend.fetch_email_content_by_id.assert_not_called()
+
+
+def test_binding_rejects_mismatch_even_with_stored_linkage(tmp_path):
+    """行已有合法 draft_* 列 (已存 linkage 路) 但 id 不绑定 → 同样拒。"""
+    svc = _service(tmp_path)
+    iid = _seed_legacy_draft(
+        svc._ctx.sync_store,
+        draft_in_reply_to="orig@x",
+        draft_references="<head@x> <orig@x>",
+        draft_source_internal_id=42,
+    )
+    draft, _, _ = svc._prepare_draft(
+        _new_request(iid, internal_id=iid + 1),
+        allow_missing_reply=False, split_quote=False,
+    )
+    _assert_zero_derivation(draft)
+
+
+def test_binding_rejects_non_draft_row_with_stored_linkage(tmp_path):
+    """id 绑定但行不是草稿箱 (mailbox='收件箱', 哪怕列上有 linkage) → 拒 —
+    与 _heal gate 共用 _is_draft_mailbox_row 口径。"""
+    svc = _service(tmp_path)
+    iid = _seed_legacy_draft(
+        svc._ctx.sync_store,
+        mailbox="收件箱",
+        draft_in_reply_to="orig@x",
+        draft_references="<head@x> <orig@x>",
+    )
+    draft, _, _ = _prepare(svc, iid)
+    _assert_zero_derivation(draft)
+
+
+def test_binding_rejects_missing_row(tmp_path):
+    """行不存在 → 绑定闸拒 (空行不可能是草稿箱行), 零派生不报错。"""
+    svc = _service(tmp_path)
+    draft, _, _ = _prepare(svc, 999_999)
+    _assert_zero_derivation(draft)
+    svc._ctx.backend.fetch_email_content_by_id.assert_not_called()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 批次2 finding 4: compose_plan dry-run 只读 (懒自愈不落库)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_compose_plan_selfheal_does_not_write_db(tmp_path, monkeypatch):
+    """dry-run 触发懒自愈: threading 头照常进 plan, 但 update_draft_linkage 零调用、
+    draft_*/thread_id 列保持 NULL — compose_plan 守住「无 auth/写」契约。"""
+    svc = _service(tmp_path)
+    store = svc._ctx.sync_store
+    _seed_original(store)
+    iid = _seed_legacy_draft(store)
+    spy = MagicMock(wraps=store.update_draft_linkage)
+    monkeypatch.setattr(store, "update_draft_linkage", spy)
+
+    plan = svc.compose_plan(_new_request(iid))
+
+    assert plan["dry_run"] is True
+    assert plan["in_reply_to"] == "<orig@x>"  # 本次使用照旧
+    spy.assert_not_called()  # 零写库
+    row = store.get(iid)
+    assert row["draft_in_reply_to"] is None
+    assert row["draft_references"] is None
+    assert row["thread_id"] is None
+
+
+def test_compose_plan_then_execute_still_heals_and_persists(tmp_path):
+    """plan (只读) 不毒化自愈路: 之后执行路径消费仍取件回写 (fetch 共 2 次)。"""
+    svc = _service(tmp_path)
+    store = svc._ctx.sync_store
+    _seed_original(store)
+    iid = _seed_legacy_draft(store)
+
+    svc.compose_plan(_new_request(iid))
+    assert store.get(iid)["draft_in_reply_to"] is None
+
+    draft, _, _ = _prepare(svc, iid)  # 执行路径 (persist_heal 默认 True)
+    assert draft.in_reply_to == "<orig@x>"
+    assert store.get(iid)["draft_in_reply_to"] == "orig@x"
+    assert svc._ctx.backend.fetch_email_content_by_id.call_count == 2
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # SyncStore.update_draft_linkage (自愈回写原语)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -346,4 +466,19 @@ def test_update_draft_linkage_does_not_overwrite_thread(tmp_path):
         draft_source_internal_id=None,
         thread_id="head@x",
     )
-    assert store.get(DRAFT_IID)["thread_id"] == "existing@x"  # COALESCE 只填空
+    assert store.get(DRAFT_IID)["thread_id"] == "existing@x"  # 默认 COALESCE 只填空
+
+
+def test_update_draft_linkage_overwrite_thread_id(tmp_path):
+    """批次2 finding 6: overwrite_thread_id=True (自愈回写路) 直写覆盖坏 root。"""
+    store = SyncStore(str(tmp_path / "t.db"))
+    _seed_legacy_draft(store, thread_id="stale-frag")
+    store.update_draft_linkage(
+        DRAFT_IID,
+        draft_in_reply_to="orig@x",
+        draft_references="<head@x> <orig@x>",
+        draft_source_internal_id=42,
+        thread_id="head@x",
+        overwrite_thread_id=True,
+    )
+    assert store.get(DRAFT_IID)["thread_id"] == "head@x"

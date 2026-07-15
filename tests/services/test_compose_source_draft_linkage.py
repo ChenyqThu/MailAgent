@@ -125,8 +125,10 @@ def _seed_draft_row(store, internal_id=1_000_000_001, **overrides):
 
 
 def _new_request(source_draft_id):
+    # draft-edit 语义 (批次2 finding 5 绑定校验): 前端恒双份传草稿行自己的 id —
+    # request.internal_id == sourceDraftId, 否则 linkage 被绑定闸拒。
     return ComposeRequest(
-        internal_id=-1, mode="new",
+        internal_id=source_draft_id, mode="new",
         to="a@x.com", subject="Re: orig",
         body_html="<p>edited</p>",
         source_draft_id=source_draft_id,

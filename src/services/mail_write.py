@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from loguru import logger
 
+from src.mail.sync_store import DRAFT_MAILBOX_LABELS
 from src.services.errors import (
     ServiceError,
     ServiceInvalidArgError,
@@ -207,8 +208,10 @@ class ComposeRequest:
     attachments: Optional[list[dict]] = None
     # source_draft_id (D1 Bug A): mode='new' (草稿编辑发送/保存) 时给出草稿行自己的
     # internal_id → service 读该行 draft_in_reply_to/draft_references/thread_id
-    # linkage, 恢复 threading 头 (In-Reply-To/References) 不再丢线程。行不存在或
-    # linkage 空 → 回退现状零派生。HTTP body key "sourceDraftId"; 其余模式忽略。
+    # linkage, 恢复 threading 头 (In-Reply-To/References) 不再丢线程。绑定校验
+    # (codex 批次2 finding 5): 必须 == internal_id (草稿行自己) 且该行是草稿箱行,
+    # 否则忽略 linkage。行不存在或 linkage 空 → 回退现状零派生。HTTP body key
+    # "sourceDraftId"; 其余模式忽略。
     source_draft_id: Optional[int] = None
 
 
@@ -344,6 +347,16 @@ def _sanitize_draft_linkage(
         if _is_wellformed_msgid(t):
             tokens.append(f"<{t}>")
     return irt, (" ".join(tokens) or None)
+
+
+def _is_draft_mailbox_row(row: dict) -> bool:
+    """行是否草稿箱行 — mailbox 口径单源 ``DRAFT_MAILBOX_LABELS`` (='草稿箱')。
+
+    与两处落库值一致: mirror (``_mirror_draft_locally`` 直写 '草稿箱') + reconcile
+    (davmail_backend ``DRAFTS_MAILBOX_LABEL`` = '草稿箱')。source_draft_id 绑定校验
+    (codex 批次2 finding 5) 与懒自愈 gate 共用本判定。
+    """
+    return (row.get("mailbox") or "") in DRAFT_MAILBOX_LABELS
 
 
 def _compose_reply_draft(
@@ -1582,13 +1595,16 @@ class MailWriteService:
         *,
         allow_missing_reply: bool,
         split_quote: bool,
+        persist_heal: bool = True,
     ) -> tuple[Any, list[str], Optional[dict]]:
         """构造 DraftRequest (compose_draft + send 共用)。搬自 CLI ``_prepare_draft`` 行 1508-1623。
 
         正文优先级: ``body_html`` (字符串) > ``body_text`` (markdown 字符串) > SQLite
         reply_suggestion_md。``split_quote=True`` (dry-run 预填): 引用块单独作第 3 个返回值
         ``quote`` 不并进正文; False (执行路径): 引用块并进 reply_html/forward_intro。
-        meta 不存在 → ``ServiceNotFoundError``。
+        ``persist_heal=False`` (compose_plan dry-run): linkage 懒自愈只取件解析本次
+        使用, **不回写库** — 保 compose_plan 文档化的「无 auth/写」契约 (codex 批次2
+        finding 4)。meta 不存在 → ``ServiceNotFoundError``。
         """
         internal_id = request.internal_id
         mode = request.mode
@@ -1605,38 +1621,57 @@ class MailWriteService:
         # source_draft_id (D1 Bug A): mode='new' 且给了草稿行 id → 读该行 draft_*
         # linkage 列, 交 _compose_reply_draft 恢复 threading 头。行不存在 / 列空
         # (非回复草稿) → None, 回退现状零派生。
+        # - 绑定校验 (codex 批次2 finding 5): source_draft_id 必须 == request.
+        #   internal_id (draft-edit 语义 = 草稿行自己, 前端恒双份传同一 id) 且该行
+        #   mailbox 是草稿箱 (_is_draft_mailbox_row, 口径同懒自愈 gate)。不满足 →
+        #   忽略 linkage 回退零派生 + warning (不报错) — 防错误客户端拿任意 id 把
+        #   无关邮件线程接到别的草稿的源下。已存 linkage 与懒自愈两条路都过此闸。
         # - 懒自愈 (codex finding 1): 存量草稿行 (v36 迁移前入库, draft_* 全 NULL,
         #   reconcile 稳态短路永不回填) → 消费时按 imap_uid 从 davmail 取草稿 MIME
-        #   头解析 In-Reply-To/References, 当场使用并回写 draft_* 列。
+        #   头解析 In-Reply-To/References, 当场使用并回写 draft_* 列 (persist_heal=
+        #   False 的 dry-run 只用不写)。
         # - 消费校验 (codex finding 4): 列值须过 _sanitize_draft_linkage (msg-id
         #   形状 + 拒自引用), 不合法 → 回退零派生。
         source_linkage: Optional[dict] = None
         if mode == "new" and request.source_draft_id is not None:
             draft_row = self._ctx.sync_store.get(request.source_draft_id) or {}
-            if draft_row and not (draft_row.get("draft_in_reply_to") or "").strip():
-                healed = self._heal_draft_linkage(request.source_draft_id, draft_row)
-                if healed:
-                    draft_row = {**draft_row, **healed}
-            raw_irt = (draft_row.get("draft_in_reply_to") or "").strip()
-            if raw_irt:
-                irt, refs = _sanitize_draft_linkage(
-                    raw_irt,
-                    draft_row.get("draft_references"),
-                    own_message_id=draft_row.get("message_id"),
+            if request.source_draft_id != internal_id or not _is_draft_mailbox_row(
+                draft_row
+            ):
+                logger.warning(
+                    f"[compose] source_draft_id={request.source_draft_id} 绑定校验"
+                    f"不过 (internal_id={internal_id}, mailbox="
+                    f"{draft_row.get('mailbox')!r}) — 忽略 linkage 回退零线程派生"
                 )
-                if irt:
-                    source_linkage = {
-                        "in_reply_to": irt,
-                        "references": refs,
-                        "thread_id": draft_row.get("thread_id"),
-                        "source_internal_id": draft_row.get("draft_source_internal_id"),
-                    }
-                else:
-                    logger.warning(
-                        f"[compose] source_draft_id={request.source_draft_id} linkage "
-                        f"invalid (malformed / self-referencing In-Reply-To="
-                        f"{raw_irt[:60]!r}) — 回退零线程派生"
+            else:
+                if not (draft_row.get("draft_in_reply_to") or "").strip():
+                    healed = self._heal_draft_linkage(
+                        request.source_draft_id, draft_row, persist=persist_heal
                     )
+                    if healed:
+                        draft_row = {**draft_row, **healed}
+                raw_irt = (draft_row.get("draft_in_reply_to") or "").strip()
+                if raw_irt:
+                    irt, refs = _sanitize_draft_linkage(
+                        raw_irt,
+                        draft_row.get("draft_references"),
+                        own_message_id=draft_row.get("message_id"),
+                    )
+                    if irt:
+                        source_linkage = {
+                            "in_reply_to": irt,
+                            "references": refs,
+                            "thread_id": draft_row.get("thread_id"),
+                            "source_internal_id": draft_row.get(
+                                "draft_source_internal_id"
+                            ),
+                        }
+                    else:
+                        logger.warning(
+                            f"[compose] source_draft_id={request.source_draft_id} "
+                            f"linkage invalid (malformed / self-referencing "
+                            f"In-Reply-To={raw_irt[:60]!r}) — 回退零线程派生"
+                        )
 
         # explicit_body: 调用方传了完整正文 (前端 compose 发送 / 用户 body_text)。forward 时
         # 已含引用块 (dry-run 预填阶段拼进 editor 后随 body_html 传回), 不能再单独构造
@@ -1726,7 +1761,7 @@ class MailWriteService:
         return draft, warnings, quote
 
     def _heal_draft_linkage(
-        self, internal_id: int, draft_row: dict
+        self, internal_id: int, draft_row: dict, *, persist: bool = True
     ) -> Optional[dict]:
         """存量草稿 linkage 懒自愈 (codex finding 1)。
 
@@ -1735,14 +1770,21 @@ class MailWriteService:
         修法: 消费时 (source_draft_id 恢复分支) 发现列空 → 按该行从 davmail 取草稿
         MIME (复用 backend.fetch_email_content_by_id 的 imap_uid 快路径), 解析
         In-Reply-To/References (RFC 2047 decode 口径与 reconcile 一致), 过
-        _sanitize_draft_linkage 校验后**当场使用并回写** draft_* 三列 + thread_id
-        (COALESCE 只填空)。下次消费直接命中列, 不再取件。
+        _sanitize_draft_linkage 校验后**当场使用并回写** draft_* 三列 + thread_id。
+        下次消费直接命中列, 不再取件。
+
+        - ``persist=False`` (compose_plan dry-run, codex 批次2 finding 4): 取件 +
+          解析 + 本次使用照旧, **跳过回写** — dry-run 不落库。
+        - thread_id 以 healed 头为权威 (codex 批次2 finding 6): 从解码后的
+          References/In-Reply-To 派生 root (_thread_id_from_headers 口径); 既有
+          thread_id 与派生 root 一致才等价保留, 否则覆盖 — 存量行的 RFC2047 碎片等
+          坏 root 不再被 COALESCE 保下来拼出 ``<坏id> <合法父>`` 链。
 
         仅 davmail backend 可用时走 (applescript fallback 无草稿同步 → 直接回退);
         取件失败 / 无 threading 头 / 校验不过 → None (回退现状零派生, 不报错)。
         """
         try:
-            if (draft_row.get("mailbox") or "") != "草稿箱":
+            if not _is_draft_mailbox_row(draft_row):
                 return None
             cfg = self._ctx.config
             if getattr(cfg, "mailagent_backend", "applescript") != "davmail":
@@ -1782,22 +1824,25 @@ class MailWriteService:
                 "draft_in_reply_to": irt,
                 "draft_references": refs,
                 "draft_source_internal_id": src_iid,
-                "thread_id": draft_row.get("thread_id")
-                or _thread_id_from_headers(refs, irt),
+                # healed 头为权威 (批次2 finding 6): root 从解码后的链派生, 与既有
+                # thread_id 不一致 (坏 root / RFC2047 碎片) 就覆盖, 一致则值等价。
+                "thread_id": _thread_id_from_headers(refs, irt),
             }
-            try:
-                self._ctx.sync_store.update_draft_linkage(
-                    internal_id,
-                    draft_in_reply_to=irt,
-                    draft_references=refs,
-                    draft_source_internal_id=src_iid,
-                    thread_id=healed["thread_id"],
-                )
-            except Exception as e:  # noqa: BLE001 — 回写失败不影响当场使用
-                logger.warning(
-                    f"[compose] draft linkage self-heal write-back failed "
-                    f"internal_id={internal_id}: {e}"
-                )
+            if persist:
+                try:
+                    self._ctx.sync_store.update_draft_linkage(
+                        internal_id,
+                        draft_in_reply_to=irt,
+                        draft_references=refs,
+                        draft_source_internal_id=src_iid,
+                        thread_id=healed["thread_id"],
+                        overwrite_thread_id=True,
+                    )
+                except Exception as e:  # noqa: BLE001 — 回写失败不影响当场使用
+                    logger.warning(
+                        f"[compose] draft linkage self-heal write-back failed "
+                        f"internal_id={internal_id}: {e}"
+                    )
             logger.info(
                 f"[compose] draft linkage self-healed internal_id={internal_id} "
                 f"in_reply_to={irt[:60]!r}"
@@ -1813,12 +1858,14 @@ class MailWriteService:
         """dry-run 预览 (无 auth/写)。形状 = ``email_draft`` 的 dry-run plan 分支。
 
         ``allow_missing_reply=True`` (前端预填无 reply_suggestion 也返回收件人) +
-        ``split_quote=True`` (引用块单独给前端折叠展示, TipTap 只载建议)。
+        ``split_quote=True`` (引用块单独给前端折叠展示, TipTap 只载建议) +
+        ``persist_heal=False`` (codex 批次2 finding 4: linkage 懒自愈只取件解析
+        本次使用不回写库 — CLI --dry-run / 灵动岛消费者不得意外写库)。
         """
         internal_id = request.internal_id
         mode = request.mode
         draft, warnings, quote = self._prepare_draft(
-            request, allow_missing_reply=True, split_quote=True
+            request, allow_missing_reply=True, split_quote=True, persist_heal=False
         )
         quote_html = (quote or {}).get("html", "") or ""
         quote_text = (quote or {}).get("text", "") or ""

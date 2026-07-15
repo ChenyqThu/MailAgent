@@ -2685,22 +2685,29 @@ class SyncStore:
         draft_references: Optional[str],
         draft_source_internal_id: Optional[int],
         thread_id: Optional[str] = None,
+        overwrite_thread_id: bool = False,
     ) -> bool:
         """草稿行 linkage 懒自愈回写 (compose 优化 epic, codex finding 1)。
 
         v36 迁移前的存量草稿行 draft_* 三列全 NULL 且 reconcile 永不回填 —— 消费端
         (MailWriteService._heal_draft_linkage) 从 davmail 取草稿 MIME 头解析出
-        linkage 后调本方法落列。draft_* 三列按参数直写; ``thread_id`` 走 COALESCE
-        只填空 (不覆写既有线程归属)。
+        linkage 后调本方法落列。draft_* 三列按参数直写; ``thread_id`` 默认走
+        COALESCE 只填空。``overwrite_thread_id=True`` (自愈回写, codex 批次2
+        finding 6) 直写覆盖 —— healed 头派生的 root 为权威, 存量行的 RFC2047 碎片
+        等坏 thread_id 不再被 COALESCE 保留。
 
         Returns: True=更新成功; False=SQL 错误 (调用方仅 warning, 自愈是 best-effort)。
         """
+        thread_sql = (
+            "thread_id = ?" if overwrite_thread_id
+            else "thread_id = COALESCE(thread_id, ?)"
+        )
         with self._connection() as conn:
             try:
                 conn.execute(
                     "UPDATE email_metadata SET draft_in_reply_to = ?, "
                     "draft_references = ?, draft_source_internal_id = ?, "
-                    "thread_id = COALESCE(thread_id, ?), updated_at = ? "
+                    f"{thread_sql}, updated_at = ? "
                     "WHERE internal_id = ?",
                     (
                         draft_in_reply_to,
