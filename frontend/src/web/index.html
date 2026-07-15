@@ -18,9 +18,10 @@
         - worker-src 'self' so the service worker (sw.js, same-origin) can
           register under CSP.
         - img-src keeps data: (cid: inline images are base64 data: URLs,
-          mirroring Electron readDataUrl) + the Microsoft Office CDN icon
-          allowance from the renderer. file: is dropped — there is no
-          file:// origin in the browser.
+          mirroring Electron readDataUrl) + blob: (compose staged attachment
+          thumbnails via URL.createObjectURL, same-renderer-only) + the
+          Microsoft Office CDN icon allowance from the renderer. file: is
+          dropped — there is no file:// origin in the browser.
 
       The inline FOUC bootstrap below is byte-identical to the Electron
       renderer's, so its sha256 hash is unchanged. If that script changes,
@@ -28,7 +29,7 @@
     -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self' 'sha256-+/aDVUkVEjs5BEmxhoHnyHv2iuPqBLuJRmkC6F2x0WY='; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.onecdn.static.microsoft; connect-src 'self' ws://localhost:* http://localhost:*; manifest-src 'self'; worker-src 'self'"
+      content="default-src 'self'; script-src 'self' 'sha256-+/aDVUkVEjs5BEmxhoHnyHv2iuPqBLuJRmkC6F2x0WY='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://*.onecdn.static.microsoft; connect-src 'self' ws://localhost:* http://localhost:*; manifest-src 'self'; worker-src 'self'"
     />
 
     <!-- PWA: manifest + theme color (REMOTE-ACCESS §7.1). base is /app/ so

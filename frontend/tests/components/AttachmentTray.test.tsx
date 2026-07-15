@@ -5,14 +5,13 @@
 //   - kind 判定 (kindFromName): 按扩展名分桶 (pdf/sheet/doc/zip/image/text/file)
 //   - 删除回调: 点击卡片删除钮 → onRemove(localId)
 //   - 上传中: 底部进度条 (有 progress% → 定值宽度; 无 → 不定态)
-//   - 空态: AttachmentDropzone 点击 → onAdd; 拖拽落地文件 → onFilesDropped
+//   (空态 AttachmentDropzone 已随组件移除 — dogfood: 底部空态占位冗余)
 
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 
 import i18n from '@shared/i18n'
 import {
-  AttachmentDropzone,
   AttachmentTray,
   kindFromName,
   type AttachmentTrayItem
@@ -173,43 +172,5 @@ describe('AttachmentTray — 卡片', () => {
       />
     )
     expect(screen.queryByRole('progressbar')).toBeNull()
-  })
-})
-
-describe('AttachmentDropzone — 空态', () => {
-  test('点击触发 onAdd', () => {
-    const onAdd = vi.fn()
-    render(<AttachmentDropzone onAdd={onAdd} />)
-    fireEvent.click(screen.getByText('拖拽文件到此，或点击添加附件'))
-    expect(onAdd).toHaveBeenCalledTimes(1)
-  })
-
-  test('Enter/Space 键盘触发 onAdd (role=button)', () => {
-    const onAdd = vi.fn()
-    render(<AttachmentDropzone onAdd={onAdd} />)
-    const zone = screen.getByRole('button')
-    fireEvent.keyDown(zone, { key: 'Enter' })
-    expect(onAdd).toHaveBeenCalledTimes(1)
-    fireEvent.keyDown(zone, { key: ' ' })
-    expect(onAdd).toHaveBeenCalledTimes(2)
-  })
-
-  test('未传 onFilesDropped 时 drop 不触发任何回调 (不抢父层整窗 dropzone)', () => {
-    const onAdd = vi.fn()
-    render(<AttachmentDropzone onAdd={onAdd} />)
-    const zone = screen.getByRole('button')
-    fireEvent.drop(zone, { dataTransfer: { files: [new File(['x'], 'a.txt')], types: ['Files'] } })
-    expect(onAdd).not.toHaveBeenCalled()
-  })
-
-  test('传 onFilesDropped 时 drop 触发, dragEnter/Leave 切换激活态文案不变但不崩溃', () => {
-    const onFilesDropped = vi.fn()
-    render(<AttachmentDropzone onAdd={vi.fn()} onFilesDropped={onFilesDropped} />)
-    const zone = screen.getByRole('button')
-    const file = new File(['x'], 'a.txt')
-    fireEvent.dragEnter(zone, { dataTransfer: { files: [], types: ['Files'] } })
-    fireEvent.drop(zone, { dataTransfer: { files: [file], types: ['Files'] } })
-    expect(onFilesDropped).toHaveBeenCalledTimes(1)
-    expect(onFilesDropped.mock.calls[0][0][0]).toBe(file)
   })
 })

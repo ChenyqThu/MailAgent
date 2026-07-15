@@ -14,7 +14,7 @@
 // uploading/uploadFailed/dropzoneHint) + 复用既有 `compose.attachmentRemove`,
 // zh-CN / en-US 两份 locales 均有 key (ICU 单花括号插值)。
 
-import { useCallback, useMemo, useRef, useState, type DragEvent } from 'react'
+import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   File as FileIcon,
@@ -60,16 +60,6 @@ export interface AttachmentTrayProps {
   onAdd: () => void
   /** 卡片 hover 删除钮回调, 传 item.localId。 */
   onRemove: (localId: number) => void
-  className?: string
-}
-
-export interface AttachmentDropzoneProps {
-  /** 点击空态区域 → 同 AttachmentTray 顶部「添加」按钮语义。 */
-  onAdd: () => void
-  /** 整窗/区域拖拽落地文件时触发 — 是否处理拖拽由父层决定 (此组件只负责空态展示 +
-   *  可选的自身拖拽热区); 父层若已有整窗 dropzone (如 ComposePanel 现有 useAttachmentDrop
-   *  等价逻辑) 可以不传, 仅用点击语义。 */
-  onFilesDropped?: (files: FileList) => void
   className?: string
 }
 
@@ -236,78 +226,5 @@ export function AttachmentTray({
   )
 }
 
-/** 空态拖拽区 — 「拖拽文件到此，或点击添加附件」。是否渲染由父层决定 (通常
- *  `items.length === 0` 时用它替代 AttachmentTray)。可选接住自身范围内的拖拽事件;
- *  若父层已有整窗 dropzone (ComposePanel 现有 dragDepth 计数逻辑), 可以只传 onAdd
- *  做点击语义、不传 onFilesDropped, 避免重复拦截同一次 drop。 */
-export function AttachmentDropzone({
-  onAdd,
-  onFilesDropped,
-  className
-}: AttachmentDropzoneProps): React.ReactElement {
-  const { t } = useTranslation()
-  const [dragActive, setDragActive] = useState(false)
-  const dragDepth = useRef(0)
-
-  const handleDragEnter = useCallback(
-    (e: DragEvent<HTMLDivElement>) => {
-      if (!onFilesDropped) return
-      if (!Array.from(e.dataTransfer.types).includes('Files')) return
-      dragDepth.current += 1
-      setDragActive(true)
-    },
-    [onFilesDropped]
-  )
-  const handleDragOver = useCallback(
-    (e: DragEvent<HTMLDivElement>) => {
-      if (!onFilesDropped) return
-      e.preventDefault()
-    },
-    [onFilesDropped]
-  )
-  const handleDragLeave = useCallback(() => {
-    if (!onFilesDropped) return
-    if (dragDepth.current === 0) return
-    dragDepth.current -= 1
-    if (dragDepth.current === 0) setDragActive(false)
-  }, [onFilesDropped])
-  const handleDrop = useCallback(
-    (e: DragEvent<HTMLDivElement>) => {
-      if (!onFilesDropped) return
-      e.preventDefault()
-      dragDepth.current = 0
-      setDragActive(false)
-      if (e.dataTransfer.files.length > 0) onFilesDropped(e.dataTransfer.files)
-    },
-    [onFilesDropped]
-  )
-
-  return (
-    <div
-      role="button"
-      tabIndex={0}
-      onClick={onAdd}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault()
-          onAdd()
-        }
-      }}
-      onDragEnter={handleDragEnter}
-      onDragOver={handleDragOver}
-      onDragLeave={handleDragLeave}
-      onDrop={handleDrop}
-      className={cn(
-        'mx-[22px] mb-2 flex flex-col items-center justify-center gap-2 py-8',
-        'rounded-[var(--r-card)] border-2 border-dashed cursor-pointer transition-colors duration-fast',
-        dragActive
-          ? 'border-coral bg-coral/10'
-          : 'border-ink-border-soft hover:border-ink-border text-ink-fg-2',
-        className
-      )}
-    >
-      <Paperclip size={18} strokeWidth={1.8} />
-      <span className="text-aux">{t('compose.attachTray.dropzoneHint')}</span>
-    </div>
-  )
-}
+// (原空态 AttachmentDropzone 已移除 — dogfood 反馈: 顶部已有附件入口且整窗可
+//  拖拽落文件, 底部空态占位冗余。)

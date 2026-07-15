@@ -5085,6 +5085,13 @@ html[data-theme-vt='circle-blur']::view-transition-new(root) {
 .folder-field-row input::placeholder {
   color: rgb(var(--ink-fg-3));
 }
+/* 收件人行内输入: 与 chips 同行续排 (width:100% 会把它挤成独占一行 —— dogfood
+   反馈"只能在换行的地方输入")。flex 填满 chips 之后的剩余空间, 不够 96px 才换行。 */
+.folder-field-row .recipient-inline-input {
+  width: auto;
+  flex: 1 1 96px;
+  min-width: 96px;
+}
 
 /* ── Composer format toolbar buttons (mockup .editor-btn). ───────────────── */
 .folder-editor-btn {
