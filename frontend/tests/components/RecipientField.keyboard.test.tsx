@@ -182,7 +182,7 @@ describe('RecipientField — internal / external', () => {
     expect(screen.queryByTitle('外部联系人')).toBeNull()
   })
 
-  test('falls back to the owner domain when no internalDomains prop is given', () => {
+  test('falls back to the fixed org whitelist when no internalDomains prop is given', () => {
     const onChange = vi.fn()
     renderWithClient(
       <RecipientField
@@ -190,10 +190,22 @@ describe('RecipientField — internal / external', () => {
         values={['stranger@elsewhere.com']}
         placeholder="add"
         onChange={onChange}
-        selfEmail="me@acme.com"
+        selfEmail="me@omadanetworks.com"
       />
     )
     expect(screen.getByTitle('外部联系人')).toBeTruthy()
+    cleanup()
+
+    // all three org domains classify as internal by default
+    renderWithClient(
+      <RecipientField
+        label="To"
+        values={['a@tp-link.com', 'b@tp-link.com.hk', 'c@omadanetworks.com']}
+        placeholder="add"
+        onChange={onChange}
+      />
+    )
+    expect(screen.queryByTitle('外部联系人')).toBeNull()
   })
 })
 

@@ -20,7 +20,8 @@
 //                                 into one chip each.
 //  5. internal / external       — external chips take a --c-warn wash + border +
 //                                 yellow dot; internal domains come from the
-//                                 `internalDomains` prop, else the owner's domain.
+//                                 `internalDomains` prop, else the fixed org
+//                                 whitelist (DEFAULT_INTERNAL_DOMAINS).
 //  6. chip detail popover       — avatar / name / email / badge + edit·copy·remove
 //                                 (RecipientDetailPopover, .glass-pop material).
 //  7. cross-field dedup         — `excludeEmails` is filtered from suggestions and
@@ -46,7 +47,7 @@ interface Props {
   selfEmail?: string | null
   /** Cross-field dedup: excluded from suggestions AND blocked from being added. */
   excludeEmails?: string[]
-  /** Domains treated as internal; default = the owner's domain (from selfEmail). */
+  /** Domains treated as internal; default = DEFAULT_INTERNAL_DOMAINS. */
   internalDomains?: string[]
   /** Focus the input on mount (new-compose To field). */
   autoFocus?: boolean
@@ -56,6 +57,10 @@ interface Props {
 // keystroke-tight, still coarse enough to skip a query per keypress.
 const SUGGEST_DEBOUNCE_MS = 130
 const SUGGEST_LIMIT = 8
+
+// Fixed org whitelist for internal/external classification (owner decision,
+// 2026-07-15). Overridable per-instance via the `internalDomains` prop.
+export const DEFAULT_INTERNAL_DOMAINS = ['tp-link.com', 'tp-link.com.hk', 'omadanetworks.com']
 
 // Address-looking token finder (paste / comma-typed multi). Parens / quotes /
 // square brackets are excluded from tokens so "Alice (alice@example.com)"
@@ -175,17 +180,12 @@ export function RecipientField({
   )
   const exclude = useMemo(() => [...blockedSet, ...valuesLower], [blockedSet, valuesLower])
 
-  // Internal domains: explicit prop wins; otherwise fall back to the owner's own
-  // domain. When neither is known we can't classify, so nothing is flagged.
+  // Internal domains: explicit prop wins; otherwise the fixed org whitelist.
   const internalDomainSet = useMemo(() => {
     const list =
-      internalDomains && internalDomains.length > 0
-        ? internalDomains
-        : normalizedSelf
-          ? [normalizedSelf.split('@')[1] ?? '']
-          : []
+      internalDomains && internalDomains.length > 0 ? internalDomains : DEFAULT_INTERNAL_DOMAINS
     return new Set(list.map((d) => d.trim().toLowerCase()).filter(Boolean))
-  }, [internalDomains, normalizedSelf])
+  }, [internalDomains])
 
   const isExternal = useCallback(
     (email: string): boolean => {
