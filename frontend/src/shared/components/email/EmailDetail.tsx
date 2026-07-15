@@ -40,6 +40,7 @@ import { ThreadAttachmentBar } from './ThreadAttachmentBar'
 import { AIFieldsBlock } from '../ai/AIFieldsBlock'
 import { MeetingInviteCard } from '../calendar/MeetingInviteCard'
 import { ComposePanel, ComposePanelInner } from './compose/ComposePanel'
+import type { ComposeGuardHandle } from './compose/useComposeGuard'
 import { closeCompose, useComposeStore } from '@shared/state/compose'
 import type { ComposeMode } from '@shared/api/types'
 
@@ -204,6 +205,13 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
   const togglePin = useTogglePin()
   const isPinned = usePinned((s) => (internalId !== null ? s.isPinned(internalId) : false))
   const [lastInternalId, setLastInternalId] = useState<number | null>(internalId)
+  // T6 离开守卫 — 切邮件时若 overlay composer (reply/forward) 有未保存更改, 不静默丢:
+  // 渲染期同步把它的 overlay 钉在新详情上 (composeHeldFor, 防止 useExitAnimation 抢先
+  // 卸载/闪一下), 由下方 effect 经守卫句柄弹确认。dirty 走 composerDirty 反应态 (render
+  // 期不能读 ref); composeGuardRef 仅供 effect 里 attemptClose (ComposePanel 经 guardRef 挂上)。
+  const composeGuardRef = useRef<ComposeGuardHandle | null>(null)
+  const [composeHeldFor, setComposeHeldFor] = useState<number | null>(null)
+  const [composerDirty, setComposerDirty] = useState(false)
   // React 19 "Adjusting state on prop change" pattern (react.dev/learn/you-might-not-need-an-effect):
   // resetting derived state on a prop transition is a render-time concern,
   // not an effect concern.
@@ -212,9 +220,20 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
     setShowTranslation(false)
     setPending(NO_PENDING)
     setPropsExpanded(false)
-    // Switching emails closes any open composer so it can't write to the
-    // wrong source message (the store is single-composer per window).
-    closeCompose()
+    // Switching emails closes any open composer so it can't write to the wrong
+    // source message (single-composer per window) — UNLESS it has unsaved edits
+    // (composerDirty, reported up by the panel), in which case we pin its overlay
+    // open (composeHeldFor) so the switch effect below can prompt (T6 guard)
+    // instead of silently dropping the draft.
+    const cs = useComposeStore.getState()
+    if (cs.open && cs.internalId !== internalId) {
+      if (composerDirty) {
+        setComposeHeldFor(cs.internalId)
+      } else {
+        closeCompose()
+        setComposeHeldFor(null)
+      }
+    }
   }
 
   // The cleanup is a real side-effect (renderer → main IPC), so it stays
@@ -426,15 +445,22 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
   // 的 bg-ink-3 实心层会盖在任何后续详情上 (用户: 草稿箱↔收件箱往返后正文蒙灰白)。
   // 双保险: ① overlay 只在 store.internalId === 当前详情时渲染 (scope 校验);
   // ② 切邮件时把 stale 的 open store 清掉, 防止切回原邮件时 compose 凭空弹回。
-  const composeOpenHere = composeOpen && composeFor === internalId
+  const composeOpenHere =
+    composeOpen &&
+    (composeFor === internalId || (composeHeldFor !== null && composeFor === composeHeldFor))
+  // 切邮件后, 若渲染期把 dirty overlay composer 钉住了 (composeHeldFor), 用它的守卫句柄
+  // 弹确认: 保存/丢弃 → proceed (closeCompose + 清 hold); 取消 → hold 保留, overlay 继续
+  // 钉在新详情上让用户接着编辑。clean composer 已在渲染期同步关掉, 这里只处理 dirty 的。
   useEffect(() => {
-    if (composeOpen && composeFor !== internalId) {
+    if (composeHeldFor === null || composeHeldFor === internalId) return
+    const guard = composeGuardRef.current
+    const proceed = (): void => {
       useComposeStore.getState().closeCompose()
+      setComposeHeldFor(null)
     }
-    // composeOpen/composeFor 故意不进依赖 — 只在切邮件 (internalId 变) 时清
-    // stale store, 打开瞬间 (open 变 true 且 composeFor === internalId) 不触发。
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [internalId])
+    if (guard) guard.attemptClose(proceed)
+    else proceed()
+  }, [composeHeldFor, internalId])
 
   // B1 — compose overlay 进/退场. backdrop:false (root 即铺满整个详情区的覆盖层,
   // 非居中卡片). 整列覆盖面板用「淡入 + 上滑」(y:20, 无 scale) —— scale 适合居中小卡片,
@@ -749,7 +775,7 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
           "遮盖详情列", 加实心 ink-3 底 (= 详情列标称色) 既挡住正文又保留面板玻璃层次. */}
       {composeShouldRender && (
         <div ref={composeScopeRef} className="absolute inset-0 z-20 flex flex-col bg-ink-3">
-          <ComposePanel />
+          <ComposePanel guardRef={composeGuardRef} onDirtyChange={setComposerDirty} />
         </div>
       )}
       <EmailToolbar

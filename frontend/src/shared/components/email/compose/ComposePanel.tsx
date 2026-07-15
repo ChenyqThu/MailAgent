@@ -56,7 +56,8 @@ import type {
 import { EmailBodyFrame } from '../EmailBodyFrame'
 import { RecipientField } from './RecipientField'
 import { ComposeEditor, ComposeFormatToolbar } from './ComposeEditor'
-import { DeleteDraftDialog, SendConfirmDialog } from './ComposeDialogs'
+import { DeleteDraftDialog, SendConfirmDialog, UnsavedChangesDialog } from './ComposeDialogs'
+import { useComposeGuard, type ComposeGuardHandle } from './useComposeGuard'
 import { buildComposeExtensions } from './editor-extensions'
 import { AttachmentDropzone, AttachmentTray, kindFromName } from './AttachmentTray'
 
@@ -184,6 +185,13 @@ interface Props {
   /** 'column' (默认) = 占满 detail 列 (reply/forward/draft-edit overlay);
    *  'modal' = 居中模态卡片内 (写新邮件，外壳 ComposeNewModal 提供遮罩/卡框)。 */
   variant?: 'column' | 'modal'
+  /** T6 离开守卫句柄出口 —— 外部关闭方 (新邮件浮窗 scrim·× / EmailDetail 切邮件) 持有此
+   *  ref, 经 handle.attemptClose 走同一守卫 (dirty → 弹确认)。内部 ESC/丢弃直接用
+   *  guard.guardClose, 不经此 ref。 */
+  guardRef?: React.MutableRefObject<ComposeGuardHandle | null>
+  /** T6 —— 把 dirty 态上报给父级 (overlay: EmailDetail 切邮件时据此在渲染期同步决定
+   *  是否钉住 overlay + 弹守卫; 不用 guardRef.isDirty 是因为 render 期不能读 ref)。 */
+  onDirtyChange?: (dirty: boolean) => void
 }
 
 /** Inner panel — keyed on (internalId, mode) by the caller so a mode switch
@@ -192,7 +200,9 @@ export function ComposePanelInner({
   internalId,
   mode,
   onClose,
-  variant = 'column'
+  variant = 'column',
+  guardRef,
+  onDirtyChange
 }: Props): React.ReactElement {
   const { t } = useTranslation()
   const mailApi = useMailApi()
@@ -239,6 +249,17 @@ export function ComposePanelInner({
   // 子元素 dragenter/dragleave 抖动 (提示层 pointer-events-none 不参与计数)。
   const [isDragActive, setIsDragActive] = useState(false)
   const dragDepth = useRef(0)
+
+  // T6 Bug C — dirty 跟踪: baseline = 预填完成 (planApplied) 之后的变更才算脏。
+  // 预填的 setContent / setTo 等一律不标脏 —— 彻底规避 6 月「预填误标 dirty」旧坑:
+  // editor 'update' 监听在 planApplied 之后才挂 (预填 setContent 发生在此之前),
+  // 字段 setter 经 markDirty 且被 baselineReadyRef 二次闸住。保存/发送成功后复位。
+  const [dirty, setDirty] = useState(false)
+  const baselineReadyRef = useRef(false)
+  const markDirty = useCallback(() => {
+    if (!baselineReadyRef.current) return
+    setDirty((d) => (d ? d : true))
+  }, [])
 
   // @mention 选中联系人 → 不在任何收件人字段时自动加进 To (契约 D4)。extensions 在
   // useEditor 初始化时装配一次; 选中回调是纯事件时序 (suggestion 菜单点击/回车),
@@ -408,6 +429,21 @@ export function ComposePanelInner({
     setPlanApplied(true)
   }, [planApplied, isDraftEdit, isNew, draftQ.data, planQ.data, editor, mode])
 
+  // 预填完成 → 开放 dirty 判定 (字段 setter 的 baseline 闸)。
+  useEffect(() => {
+    if (planApplied) baselineReadyRef.current = true
+  }, [planApplied])
+  // editor 内容变更 → 标脏。监听在 planApplied 之后才注册: 预填 setContent 发生在
+  // planApplied 翻 true 之前, 那一刻监听尚未挂上, 故预填不会误标脏 (旧坑根因)。
+  useEffect(() => {
+    if (!editor || !planApplied) return
+    const onUpdate = (): void => markDirty()
+    editor.on('update', onUpdate)
+    return () => {
+      editor.off('update', onUpdate)
+    }
+  }, [editor, planApplied, markDirty])
+
   // 发送/存草稿正文 = 编辑器内容 + 原文引用块 (拼回)。
   const getSanitizedHtml = useCallback((): string => {
     const body = DOMPurify.sanitize(editor?.getHTML() ?? '')
@@ -471,10 +507,11 @@ export function ComposePanelInner({
           toastError(t('compose.toast.attachmentTooLarge', { name: file.name, max: 20 }))
           continue
         }
+        markDirty()
         void uploadAttachment(file)
       }
     },
-    [uploadAttachment, t]
+    [uploadAttachment, t, markDirty]
   )
 
   const removeAttachment = useCallback(
@@ -486,8 +523,9 @@ export function ComposePanelInner({
         previewUrlsRef.current.delete(hit.previewUrl)
       }
       setAttachList((prev) => prev.filter((a) => a.localId !== localId))
+      markDirty()
     },
-    [attachList]
+    [attachList, markDirty]
   )
 
   const uploadsPending = attachList.some((a) => a.status === 'uploading')
@@ -565,10 +603,13 @@ export function ComposePanelInner({
 
   const saveMut = useMutation({
     mutationFn: async () => mailApi.email.draft(await buildComposePayload()),
+    // 不在此处 onClose —— 关闭由调用方决定: 顶部「保存草稿」按钮存后关闭 (per-call
+    // onSuccess), 离开守卫「保存草稿」存后继续原动作 (mutateAsync resolve → proceed)。
+    // 存成功即 baseline 复位 (dirty=false), 守卫 mutateAsync 才能干净地续跑。
     onSuccess: () => {
       toastSuccess(t('compose.toast.draftOk'))
       invalidateLists()
-      onClose()
+      setDirty(false)
     },
     onError: (err: unknown) => {
       const e = asWriteError(err)
@@ -587,6 +628,7 @@ export function ComposePanelInner({
     onSuccess: async () => {
       toastSuccess(t('compose.toast.sendOk'))
       setSendOpen(false)
+      setDirty(false)
       // draft-edit 发送成功后删掉原草稿 (替换语义: 发出的是 mode='new' 独立邮件, 原草稿仍在)。
       if (isDraftEdit) {
         try {
@@ -627,6 +669,32 @@ export function ComposePanelInner({
       )
     }
   })
+
+  // T6 Bug C — 离开守卫。saveDraft=mutateAsync (resolve=成功续跑, reject=留守)。
+  // 解构出稳定成员 (guardClose/handle/回调 稳定引用, unsavedOpen/saving 是值) 供 hook 依赖。
+  const saveDraftAsync = useCallback(() => saveMut.mutateAsync(), [saveMut])
+  const {
+    guardClose,
+    handle: guardHandle,
+    unsavedOpen: guardUnsavedOpen,
+    saving: guardSaving,
+    onSaveDraft: onGuardSave,
+    onDiscard: onGuardDiscard,
+    onCancel: onGuardCancel
+  } = useComposeGuard({ dirty, saveDraft: saveDraftAsync })
+  // 把守卫句柄挂到外部关闭方传入的 ref (新邮件浮窗 scrim·× / EmailDetail 切邮件),
+  // 让它们经同一守卫走; 内部 ESC/丢弃直接调 guardClose。handle 引用稳定, 只挂一次。
+  useEffect(() => {
+    if (!guardRef) return
+    guardRef.current = guardHandle
+    return () => {
+      if (guardRef) guardRef.current = null
+    }
+  }, [guardRef, guardHandle])
+  // 上报 dirty 给父级 (overlay 场景 EmailDetail 用它做切邮件的渲染期拦截决定)。
+  useEffect(() => {
+    onDirtyChange?.(dirty)
+  }, [dirty, onDirtyChange])
 
   const busy = saveMut.isPending || sendMut.isPending || deleteMut.isPending
 
@@ -679,28 +747,29 @@ export function ComposePanelInner({
     setSendOpen(true)
   }, [requiresRecipient, to.length, t])
 
-  // 顶部「放弃/删除」: reply/forward 的「丢弃」= 临时撰写内容, 未持久化任何东西 →
-  // 直接关闭, 不二次确认 (避免刚打开就被 setContent 标 dirty 还要确认)。draft-edit 的
-  // 「删除」= 改 DB (IMAP \\Deleted + 本地行清理), 不可逆 → 走 DeleteDraftDialog 二次确认。
+  // 顶部「放弃/删除」: reply/forward 的「丢弃」经离开守卫 —— 有未保存更改 (dirty) 才
+  // 弹 UnsavedChangesDialog, 否则直接关闭 (预填不标脏 → 刚打开即丢弃不会误弹)。draft-edit
+  // 的「删除」= 改 DB (IMAP \\Deleted + 本地行清理), 不可逆 → 仍走 DeleteDraftDialog 二次确认。
   const handleDiscard = useCallback(() => {
     if (isDraftEdit) {
       setDeleteConfirmOpen(true)
       return
     }
-    onClose()
-  }, [isDraftEdit, onClose])
+    guardClose(onClose)
+  }, [isDraftEdit, onClose, guardClose])
 
-  // ESC: 两态都直接关闭 (draft-edit 回列表不删草稿; reply/forward 丢弃不确认)。
+  // ESC: 经离开守卫关闭 (dirty 弹确认, 否则直接关)。守卫弹窗已开时 ESC 交给 Radix
+  // (onOpenChange → onCancel), 此处 bail 防重复触发。
   useEffect(() => {
     const handler = (e: KeyboardEvent): void => {
       if (e.key !== 'Escape') return
-      if (sendOpen || deleteConfirmOpen) return
+      if (sendOpen || deleteConfirmOpen || guardUnsavedOpen) return
       e.preventDefault()
-      onClose()
+      guardClose(onClose)
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [sendOpen, deleteConfirmOpen, onClose])
+  }, [sendOpen, deleteConfirmOpen, guardUnsavedOpen, guardClose, onClose])
 
   const headerHint =
     isDraftEdit || isNew
@@ -774,7 +843,7 @@ export function ComposePanelInner({
         {!isDraftEdit && (
           <button
             type="button"
-            onClick={() => saveMut.mutate()}
+            onClick={() => saveMut.mutate(undefined, { onSuccess: () => onClose() })}
             disabled={busy || uploadsPending}
             className="gbtn"
             style={{ height: '34px' }}
@@ -869,7 +938,10 @@ export function ComposePanelInner({
             label={t('compose.to')}
             values={to}
             placeholder={t('compose.toPlaceholder')}
-            onChange={(next) => setTo(next)}
+            onChange={(next) => {
+              setTo(next)
+              markDirty()
+            }}
             selfEmail={selfEmail}
             excludeEmails={[...cc, ...bcc]}
             autoFocus={isNew}
@@ -905,7 +977,10 @@ export function ComposePanelInner({
               label={t('compose.cc')}
               values={cc}
               placeholder={t('compose.ccPlaceholder')}
-              onChange={(next) => setCc(next)}
+              onChange={(next) => {
+                setCc(next)
+                markDirty()
+              }}
               selfEmail={selfEmail}
               excludeEmails={[...to, ...bcc]}
             />
@@ -917,6 +992,7 @@ export function ComposePanelInner({
               onClick={() => {
                 setCc([])
                 setCcVisible(false)
+                markDirty()
               }}
               className="absolute right-3 top-2.5 p-1 rounded-[var(--r-ctl)] text-ink-fg-3 hover:text-ink-fg hover:bg-ink-3/60 transition-colors duration-fast"
             >
@@ -930,7 +1006,10 @@ export function ComposePanelInner({
               label={t('compose.bcc')}
               values={bcc}
               placeholder={t('compose.bccPlaceholder')}
-              onChange={(next) => setBcc(next)}
+              onChange={(next) => {
+                setBcc(next)
+                markDirty()
+              }}
               selfEmail={selfEmail}
               excludeEmails={[...to, ...cc]}
             />
@@ -941,6 +1020,7 @@ export function ComposePanelInner({
               onClick={() => {
                 setBcc([])
                 setBccVisible(false)
+                markDirty()
               }}
               className="absolute right-3 top-2.5 p-1 rounded-[var(--r-ctl)] text-ink-fg-3 hover:text-ink-fg hover:bg-ink-3/60 transition-colors duration-fast"
             >
@@ -955,10 +1035,19 @@ export function ComposePanelInner({
             className="text-aux font-medium"
             value={subject}
             placeholder={t('compose.subjectPlaceholder')}
-            onChange={(e) => setSubject(e.target.value)}
+            onChange={(e) => {
+              setSubject(e.target.value)
+              markDirty()
+            }}
             aria-label={t('compose.subject')}
           />
-          <ImportanceSelect value={importance} onChange={(v) => setImportance(v)} />
+          <ImportanceSelect
+            value={importance}
+            onChange={(v) => {
+              setImportance(v)
+              markDirty()
+            }}
+          />
         </div>
       </div>
 
@@ -1063,13 +1152,27 @@ export function ComposePanelInner({
         onConfirm={() => deleteMut.mutate()}
         onCancel={() => setDeleteConfirmOpen(false)}
       />
+      <UnsavedChangesDialog
+        open={guardUnsavedOpen}
+        pending={guardSaving}
+        onSave={onGuardSave}
+        onDiscard={onGuardDiscard}
+        onCancel={onGuardCancel}
+      />
     </main>
   )
 }
 
 /** Store-driven wrapper (reply / reply-all / forward overlay). 草稿编辑态由 EmailDetail
- *  直接渲染 ComposePanelInner (mode='draft-edit'), 不走此 store。 */
-export function ComposePanel(): React.ReactElement | null {
+ *  直接渲染 ComposePanelInner (mode='draft-edit'), 不走此 store。guardRef 由 EmailDetail
+ *  传入, 让切邮件时能经离开守卫拦截 (T6)。 */
+export function ComposePanel({
+  guardRef,
+  onDirtyChange
+}: {
+  guardRef?: React.MutableRefObject<ComposeGuardHandle | null>
+  onDirtyChange?: (dirty: boolean) => void
+} = {}): React.ReactElement | null {
   const open = useComposeStore((s) => s.open)
   const internalId = useComposeStore((s) => s.internalId)
   const mode = useComposeStore((s) => s.mode)
@@ -1082,6 +1185,8 @@ export function ComposePanel(): React.ReactElement | null {
       internalId={internalId}
       mode={mode}
       onClose={closeCompose}
+      guardRef={guardRef}
+      onDirtyChange={onDirtyChange}
     />
   )
 }

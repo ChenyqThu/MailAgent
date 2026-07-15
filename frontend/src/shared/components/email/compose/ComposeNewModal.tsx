@@ -13,7 +13,7 @@
 // ESC (ComposePanelInner window keydown → onClose) / 发送成功 / 放弃。挂载在
 // RootLayout (router-instance.tsx) 全局一次，任意路由都能由侧边栏按钮或 ⌘N 打开。
 
-import { useRef, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import { Maximize2, Minimize2, PenLine, X } from 'lucide-react'
@@ -24,6 +24,7 @@ import { useFocusTrap } from '@shared/hooks/useFocusTrap'
 import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 
 import { ComposePanelInner } from './ComposePanel'
+import type { ComposeGuardHandle } from './useComposeGuard'
 
 /** 写新邮件用的哨兵 internalId — 无对应 email_metadata 行。draft.ts / serve-api
  *  adapter 与 service _prepare_draft 对 mode='new' 放宽 record 强制 (sync_store.get(-1)
@@ -35,6 +36,15 @@ export function ComposeNewModal(): React.ReactElement | null {
   const { t } = useTranslation()
   const open = useComposeNewStore((s) => s.open)
   const close = useComposeNewStore((s) => s.close)
+  // T6 离开守卫: scrim / 标题栏 × 关闭前先问 ComposePanelInner (经 guardRef) 有没有
+  // 未保存更改 —— 有则弹确认 (保存草稿/丢弃/取消), 无则直接关。ComposePanelInner 内部
+  // ESC/丢弃走 onClose=close (自身已守卫), 不经此 ref, 故两侧不会双重弹窗。
+  const guardRef = useRef<ComposeGuardHandle | null>(null)
+  const guardedClose = useCallback(() => {
+    const g = guardRef.current
+    if (g) g.attemptClose(close)
+    else close()
+  }, [close])
   // 最大化 / 拖拽位移 — 浮窗形态状态。关闭卸载后 store 重开会重挂 (状态自然复位)。
   const [maximized, setMaximized] = useState(false)
   const [pos, setPos] = useState({ x: 0, y: 0 })
@@ -77,7 +87,7 @@ export function ComposeNewModal(): React.ReactElement | null {
     <div
       ref={scopeRef}
       tabIndex={-1}
-      onClick={close}
+      onClick={guardedClose}
       className="fixed inset-0 z-50 flex items-start justify-center px-4 py-[6vh] bg-black/40 focus:outline-none"
     >
       {/* 拖拽位移层 — 独立于 GSAP 动画目标 (data-anim-card), 见文件头注释。 */}
@@ -129,7 +139,7 @@ export function ComposeNewModal(): React.ReactElement | null {
                 type="button"
                 aria-label={t('compose.close')}
                 title={t('compose.close')}
-                onClick={close}
+                onClick={guardedClose}
                 className="w-7 h-7 grid place-items-center rounded-[var(--r-ctl)] text-ink-fg-2 hover:text-ink-fg hover:bg-ink-3/60 transition-colors duration-fast"
               >
                 <X size={14} strokeWidth={2} />
@@ -142,6 +152,7 @@ export function ComposeNewModal(): React.ReactElement | null {
             mode="new"
             variant="modal"
             onClose={close}
+            guardRef={guardRef}
           />
         </div>
       </div>

@@ -243,6 +243,13 @@
       "body": "Unsaved changes will be lost and cannot be recovered.",
       "confirm": "Discard"
     },
+    "unsaved": {
+      "title": "Unsaved changes",
+      "body": "This message has unsaved changes. Save it as a draft first?",
+      "save": "Save draft",
+      "discard": "Discard changes",
+      "cancel": "Keep editing"
+    },
     "deleteConfirm": {
       "title": "Delete draft?",
       "body": "This draft will be permanently removed from Drafts and cannot be recovered.",
