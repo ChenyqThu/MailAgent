@@ -225,6 +225,84 @@ async def test_create_draft_via_imap_new_mode_uses_explicit_to(
 
 
 @pytest.mark.asyncio
+async def test_create_draft_via_imap_appends_quote_block(monkeypatch):
+    """D2 Bug B: webhook 路径正文 = AI 建议 + 原文引用块 (带 data-ma-quote marker),
+    与路径 C (_prepare_draft split_quote=False) 同构。"""
+    from src.services.mail_write import QUOTE_MARKER_ATTR
+
+    sync_store = MagicMock()
+    backend = MagicMock()
+    backend.backend_origin = "davmail"
+    email_repo = MagicMock()
+    email_repo.get_body_markdown.return_value = "orig body"
+    email_repo.get_body_html.return_value = "<p>orig body</p>"
+    notion_sync = MagicMock()
+    notion_sync.update_page_mail_sync_status = AsyncMock()
+    h = EventHandlers(
+        backend=backend, sync_store=sync_store, feishu=None,
+        notion_sync=notion_sync, result_callback=AsyncMock(),
+        email_repo=email_repo, outbox_repo=MagicMock(),
+    )
+
+    from src.config import config as cfg
+    monkeypatch.setattr(cfg, "user_email", "me@x.com", raising=False)
+
+    sync_store.get = MagicMock(return_value={
+        "internal_id": 42, "sender": "boss@x.com", "to_addr": "me@x.com",
+        "cc_addr": "", "subject": "Question", "thread_id": "head@x",
+        "date_received": "2026-01-01T10:00:00+00:00",
+    })
+    backend.append_draft = MagicMock(return_value=DraftAppendResult(
+        success=True, drafts_folder="Drafts", appended_uid=777,
+    ))
+
+    event = {"id": "e", "page_id": "p", "properties": {"reply_suggestion": "Sure!"}}
+    await h._create_draft_via_imap(
+        event=event, event_id="e", page_id="p",
+        internal_id=42, message_id="orig@x",
+        reply_suggestion="Sure!", reply_suggestion_rich=None,
+        props=event["properties"], mailbox="收件箱", _t0=0.0,
+    )
+
+    draft: DraftRequest = backend.append_draft.call_args.args[0]
+    marker = f'{QUOTE_MARKER_ATTR}="1"'
+    assert marker in (draft.reply_html or "")
+    assert "orig body" in draft.reply_html
+    # AI 建议在引用块之上
+    assert draft.reply_html.index("Sure!") < draft.reply_html.index(marker)
+    assert "写道" in draft.reply_text
+    assert "orig body" in draft.reply_text
+
+
+@pytest.mark.asyncio
+async def test_create_draft_via_imap_no_repo_skips_quote(
+    handlers_with_mock_backend, monkeypatch
+):
+    """email_repo 缺席 (老接线) → 跳过引用块, 行为同修复前不炸。"""
+    h, backend, sync_store, _ = handlers_with_mock_backend
+    from src.config import config as cfg
+    monkeypatch.setattr(cfg, "user_email", "me@x.com", raising=False)
+
+    sync_store.get = MagicMock(return_value={
+        "internal_id": 1, "sender": "a@x", "to_addr": "me@x.com",
+        "cc_addr": "", "subject": "X", "thread_id": None,
+    })
+    backend.append_draft = MagicMock(return_value=DraftAppendResult(
+        success=True, drafts_folder="Drafts",
+    ))
+    event = {"id": "e", "page_id": "p", "properties": {"reply_suggestion": "OK"}}
+    await h._create_draft_via_imap(
+        event=event, event_id="e", page_id="p",
+        internal_id=1, message_id="m@x",
+        reply_suggestion="OK", reply_suggestion_rich=None,
+        props=event["properties"], mailbox="收件箱", _t0=0.0,
+    )
+    draft = backend.append_draft.call_args.args[0]
+    assert "data-ma-quote" not in (draft.reply_html or "")
+    assert h._stats["create_draft_success"] == 1
+
+
+@pytest.mark.asyncio
 async def test_create_draft_via_imap_append_failure(
     handlers_with_mock_backend, monkeypatch
 ):
