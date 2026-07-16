@@ -16,28 +16,13 @@ import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ComposerPrimitive, MessagePrimitive } from '@assistant-ui/react'
 
-import { DotMatrix } from '@shared/components/ui/DotMatrix'
 import { MessageTiming } from '@shared/assistant/components/MessageTiming'
-import { ThinkingPhrases } from '@shared/components/chat/ThinkingPhrases'
+import { TurnStatusLine } from '@shared/assistant/components/TurnStatusLine'
 import { getAssistantPartComponents } from '@shared/assistant/tools/registerToolUIs'
 import { AssistantActionBar, UserActionBar } from '@shared/assistant/components/action-bar'
 
 // SystemMessage reuses the shared renderer; EditComposer is demo-fidelity in-place (defined below).
 export { SystemMessage } from '@shared/assistant/components/message'
-
-/** Working indicator — assistant-ui renders the Empty part slot while a (streaming) assistant message
- *  has no content yet (the pre-first-token moment); once a part streams in, Empty is replaced by the
- *  real content. dogfood-3: DotMatrix「connecting」点阵动画（demo idiom）+ 轮换流光短句 ThinkingPhrases
- *  （复用 chat 面板的 i18n chat.thinkingPhrases 轮播 + ShimmerText 字形流光）—— 用户要的「动态 icon +
- *  多句轮换 shimmer」，取代 dogfood-2 的静态单句。 */
-function AgentWorkingIndicator(): React.JSX.Element {
-  return (
-    <span className="inline-flex items-center gap-2 align-middle text-ink-fg-3">
-      <DotMatrix state="connecting" aria-hidden />
-      <ThinkingPhrases />
-    </span>
-  )
-}
 
 export function AgentUserMessage(): React.JSX.Element {
   return (
@@ -56,10 +41,12 @@ export function AgentUserMessage(): React.JSX.Element {
 }
 
 export function AgentAssistantMessage(): React.JSX.Element {
-  // part components (generic ToolTraceCard fallback; A2UI by_name rich cards always on since S3
-  // is on) + a working-indicator Empty slot. Memoized once per mount so the reference stays stable.
+  // part components (generic ToolTraceCard fallback; A2UI by_name rich cards always on since S3;
+  // consecutive tool calls folded by ToolGroupCard via getAssistantPartComponents) + the truth-
+  // driven TurnStatusLine on the Empty slot (replaces the永动 ThinkingPhrases rotation — harness-chat
+  // lane B). Memoized once per mount so the reference stays stable.
   const partComponents = useMemo(
-    () => ({ ...getAssistantPartComponents(), Empty: AgentWorkingIndicator }),
+    () => ({ ...getAssistantPartComponents(), Empty: TurnStatusLine }),
     []
   )
   return (

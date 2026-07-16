@@ -13,6 +13,7 @@
 import { MarkdownText, ReasoningText } from '../components/markdown-text'
 import { SourcePart } from '../components/sources'
 import { ToolTraceCard } from './generic/ToolTraceCard'
+import { ToolGroupCard } from './generic/ToolGroupCard'
 import { componentRegistry } from './ComponentRegistry'
 
 /** The assistant message-part component map passed to MessagePrimitive.Parts `components`. */
@@ -21,6 +22,9 @@ type AssistantPartComponentMap = {
   Reasoning: typeof ReasoningText
   Source: typeof SourcePart
   tools: { Fallback: typeof ToolTraceCard; by_name: typeof componentRegistry.byName }
+  // harness-chat lane B — fold consecutive tool calls into one collapsible group. Registered
+  // here so both chat surfaces (email panel message.tsx + agent panel AgentMessage.tsx) share it.
+  ToolGroup: typeof ToolGroupCard
 }
 
 /** The part components: rich per-tool cards (by_name) + ToolTraceCard fallback. Keys not
@@ -31,7 +35,8 @@ export const assistantPartComponents: AssistantPartComponentMap = {
   // dogfood-3 — render AI SDK source-url / source-document parts (web-search-style tools) as link pills.
   // Additive: a turn with no source parts renders nothing here (no visual change for the email surface).
   Source: SourcePart,
-  tools: { by_name: componentRegistry.byName, Fallback: ToolTraceCard }
+  tools: { by_name: componentRegistry.byName, Fallback: ToolTraceCard },
+  ToolGroup: ToolGroupCard
 }
 
 /** The part components for MessagePrimitive.Parts. Kept as a function for call-site

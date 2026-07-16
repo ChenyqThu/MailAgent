@@ -844,7 +844,9 @@
     },
     "toolGroup": {
       "using": "使用了 {n} 个工具",
-      "running": "正在使用工具…"
+      "running": "正在使用工具…",
+      "errored": "{n} 个工具 · 有失败",
+      "awaiting": "等待授权"
     },
     "toolStep": {
       "request": "Request",
@@ -1156,7 +1158,10 @@
       "streaming": "回复中…",
       "complete": "完成",
       "aborted": "已取消",
-      "error": "出错"
+      "error": "响应出错",
+      "callingTool": "正在调用 {tool}…",
+      "waiting": "仍在等待响应…",
+      "waitingLong": "仍在等待响应（可点停止中断）…"
     },
     "thinking": {
       "label": "思考过程",
@@ -1208,23 +1213,7 @@
       "decidedOk": "已授权 · 收到回调，开始执行",
       "decidedNo": "已拒绝 · 未对邮箱做任何改动"
     },
-    "truncated": "已截断早期 {n, plural, =1 {1 条消息} other {# 条消息}}",
-    "thinkingPhrases": [
-      "正在思考…",
-      "理解你的问题…",
-      "检索相关邮件…",
-      "翻阅你的邮箱…",
-      "核对发件人与时间…",
-      "梳理上下文…",
-      "拼接线索…",
-      "查阅知识库…",
-      "整理思路…",
-      "权衡措辞…",
-      "归纳重点…",
-      "组织回答…",
-      "斟酌回复…",
-      "校对要点…"
-    ]
+    "truncated": "已截断早期 {n, plural, =1 {1 条消息} other {# 条消息}}"
   },
   "admin": {
     "title": "看板",

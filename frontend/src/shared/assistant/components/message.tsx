@@ -15,6 +15,7 @@ import { ComposerPrimitive, MessagePrimitive } from '@assistant-ui/react'
 import { cn } from '@shared/lib/cn'
 
 import { getAssistantPartComponents } from '../tools/registerToolUIs'
+import { TurnStatusLine } from './TurnStatusLine'
 import { AssistantActionBar, UserActionBar } from './action-bar'
 
 export function UserMessage(): React.JSX.Element {
@@ -30,10 +31,14 @@ export function UserMessage(): React.JSX.Element {
 
 export function AssistantMessage(): React.JSX.Element {
   // Phase 04a — flag-aware part components (generic ToolTraceCard fallback always; A2UI
-  // per-tool cards added as tools.by_name — rich cards always on since S3). Memoized
-  // once per mount so the object reference stays stable across re-renders. flag-off → the
-  // Phase 01 object verbatim.
-  const partComponents = useMemo(() => getAssistantPartComponents(), [])
+  // per-tool cards added as tools.by_name — rich cards always on since S3; consecutive tool
+  // calls folded by ToolGroupCard). harness-chat lane B — TurnStatusLine on the Empty slot so
+  // the email panel gets the same truth-driven status line the agent panel has. Memoized once
+  // per mount so the object reference stays stable across re-renders.
+  const partComponents = useMemo(
+    () => ({ ...getAssistantPartComponents(), Empty: TurnStatusLine }),
+    []
+  )
   return (
     <MessagePrimitive.Root className="group mb-4 flex w-full justify-start">
       <div className="min-w-0 max-w-[85%] space-y-1.5 rounded-2xl rounded-bl-md border border-[var(--hairline)] bg-ink-3 px-3.5 py-2 text-body leading-relaxed text-ink-fg">

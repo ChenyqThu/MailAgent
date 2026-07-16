@@ -844,7 +844,9 @@
     },
     "toolGroup": {
       "using": "Used {n} tools",
-      "running": "Using tools…"
+      "running": "Using tools…",
+      "errored": "{n} tools · error",
+      "awaiting": "Awaiting approval"
     },
     "toolStep": {
       "request": "Request",
@@ -1156,7 +1158,10 @@
       "streaming": "Streaming…",
       "complete": "Complete",
       "aborted": "Aborted",
-      "error": "Error"
+      "error": "Response failed",
+      "callingTool": "Calling {tool}…",
+      "waiting": "Still waiting for a response…",
+      "waitingLong": "Still waiting — you can stop the turn…"
     },
     "thinking": {
       "label": "Thinking",
@@ -1208,23 +1213,7 @@
       "decidedOk": "Authorized · callback received, executing",
       "decidedNo": "Rejected · no changes made to your mailbox"
     },
-    "truncated": "Earlier {n, plural, =1 {1 message} other {# messages}} truncated",
-    "thinkingPhrases": [
-      "Thinking…",
-      "Understanding your question…",
-      "Searching your emails…",
-      "Skimming your inbox…",
-      "Checking senders and dates…",
-      "Piecing together context…",
-      "Connecting the dots…",
-      "Consulting the knowledge base…",
-      "Organizing thoughts…",
-      "Weighing the wording…",
-      "Distilling key points…",
-      "Composing a reply…",
-      "Refining the response…",
-      "Proofreading the details…"
-    ]
+    "truncated": "Earlier {n, plural, =1 {1 message} other {# messages}} truncated"
   },
   "admin": {
     "title": "Admin",
