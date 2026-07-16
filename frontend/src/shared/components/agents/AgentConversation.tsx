@@ -39,6 +39,7 @@ import { AiSdkRuntimeProvider } from '@shared/assistant/runtime/AiSdkRuntimeProv
 import { ThreadRunningBridge } from '@shared/assistant/runtime/ThreadRunningBridge'
 import { makeSessionSettledHandler } from '@shared/assistant/runtime/threadRunningGuard'
 import { useBackgroundChatRun } from '@shared/assistant/runtime/useBackgroundChatRun'
+import { useApprovalDecideBusy } from '@shared/assistant/useApprovalDecideBusy'
 import { PendingApprovalPanel } from '@shared/assistant/PendingApprovalPanel'
 import { resolveAiGatewayBaseUrl } from '@shared/assistant/runtime/flags'
 import {
@@ -264,6 +265,13 @@ export function AgentConversation({
     }
   }, [initialMentionEmailId, chatIsEmpty, mailApi])
 
+  // P1-2 (07-15 codex r1) — an in-panel approval decide runs the server-side resume synchronously
+  // and holds that session's run lease; disable the composer for its duration (a send would 409).
+  // codex r2 [E] — SESSION-scoped: only the deciding session's composer is fenced; switching to
+  // another session unlocks immediately (the original request settles on its own).
+  const { sendDisabled: approvalSendDisabled, onDecideBusyChange } = useApprovalDecideBusy(
+    chat.activeSessionId
+  )
   const composerControls = useMemo<ChatComposerControls>(
     () => ({
       // No thinking toggle in the agent view (去思考开关) — thinkingActive follows the model;
@@ -275,6 +283,7 @@ export function AgentConversation({
       availableModels,
       onModelChange,
       modelPickerDisabled: false,
+      sendDisabled: approvalSendDisabled,
       mentions,
       onAddMention,
       onRemoveMention,
@@ -288,6 +297,7 @@ export function AgentConversation({
       model,
       availableModels,
       onModelChange,
+      approvalSendDisabled,
       mentions,
       onAddMention,
       onRemoveMention,
@@ -412,6 +422,7 @@ export function AgentConversation({
         onDecided={() => {
           void chatReloadActiveSession().then(() => setRefreshNonce((n) => n + 1))
         }}
+        onDecideBusyChange={onDecideBusyChange}
       />
     ) : undefined
   const backgroundRunNotice = backgroundActive ? (

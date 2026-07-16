@@ -311,16 +311,28 @@ function ComposerChips({ controls }: { controls: ChatComposerControls }): React.
 export function ThreadComposer(): React.JSX.Element {
   const { t } = useTranslation()
   const controls = useChatComposerControls()
+  // codex r2 [D] — sendDisabled must gate the REAL submit path, not just the Send button: the
+  // assistant-ui Input's Enter requestSubmit()s the Root form, whose composed handler calls send()
+  // unless the user handler prevented default (radix composeEventHandlers checks defaultPrevented).
+  // The Input itself is disabled too (typing fenced while the approval resume holds the lease).
+  const sendDisabled = controls?.sendDisabled === true
   return (
-    <ComposerPrimitive.Root className="flex flex-col gap-2 border-t border-[var(--hairline)] bg-ink-2 px-3 py-2.5">
+    <ComposerPrimitive.Root
+      onSubmit={(e) => {
+        if (sendDisabled) e.preventDefault()
+      }}
+      className="flex flex-col gap-2 border-t border-[var(--hairline)] bg-ink-2 px-3 py-2.5"
+    >
       {controls && <ComposerChips controls={controls} />}
       <ComposerPrimitive.Input
         placeholder={t('chat.composer.placeholder')}
         aria-label={t('chat.composer.placeholder')}
+        disabled={sendDisabled}
         className={cn(
           'scrollbar-thin max-h-32 w-full resize-none rounded-lg border bg-ink-3 px-3 py-2',
           'text-body leading-snug text-ink-fg outline-none placeholder:text-ink-fg-3',
-          'border-[rgb(var(--ink-border))] focus-visible:border-[rgb(var(--c-accent))]'
+          'border-[rgb(var(--ink-border))] focus-visible:border-[rgb(var(--c-accent))]',
+          sendDisabled && 'opacity-60'
         )}
         rows={1}
         autoFocus
@@ -339,6 +351,8 @@ export function ThreadComposer(): React.JSX.Element {
             <ComposerPrimitive.Send
               aria-label={t('chat.composer.send', { defaultValue: 'Send' })}
               title={`${t('chat.composer.send', { defaultValue: 'Send' })} (⌘↩)`}
+              // P1-2 — an approval decide holds the session's run lease; sending would 409.
+              disabled={sendDisabled}
               className={cn(
                 'grid h-9 w-9 shrink-0 place-items-center rounded-lg',
                 'bg-[rgb(var(--c-accent))] text-[rgb(var(--c-accent-fg))]',

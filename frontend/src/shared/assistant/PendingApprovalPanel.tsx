@@ -45,7 +45,8 @@ export function PendingApprovalPanel({
   agentName = null,
   showExpiredState = false,
   refreshKey = 0,
-  onDecided
+  onDecided,
+  onDecideBusyChange
 }: {
   sessionId: number | null
   /** Custom-agent display name for the body copy; null → manual-chat copy. */
@@ -56,6 +57,13 @@ export function PendingApprovalPanel({
   /** Folded into the query key so a settle-driven remount/nonce re-probes deterministically. */
   refreshKey?: number
   onDecided: () => void
+  /** P1-2 (codex r1) — decide-in-flight signal: /decide runs the server-side resume synchronously
+   *  and holds the session lease for its whole duration, so the parent disables its composer while
+   *  true (a send would 409 E_RUN_ACTIVE anyway — this makes the fence visible instead of an
+   *  error). codex r2 [E] — carries the DECIDING session's id (captured at decide start) so the
+   *  parent scopes the disable to that session only (useApprovalDecideBusy): switching sessions
+   *  must not lock an unrelated composer. Optional: the record view has no composer. */
+  onDecideBusyChange?: (busy: boolean, sessionId: number | null) => void
 }): React.ReactElement | null {
   const { t } = useTranslation()
   const qc = useQueryClient()
@@ -80,20 +88,32 @@ export function PendingApprovalPanel({
 
   const decide = async (decision: 'approve' | 'reject'): Promise<void> => {
     if (!pending) return
-    // Best-effort PIN BEFORE /decide (peek is read-only; /decide claims + consumes the stash — so the
-    // rule must derive from the still-live entry first). A rule-creation failure must not block the
-    // approve the owner already made.
-    if (decision === 'approve' && rememberDomain && isAgentWebFetch) {
-      await postRememberWebPolicy(pending.approvalId)
-    }
-    const res = await postApprovalDecide({ approvalId: pending.approvalId, decision })
-    // 决策后：card 立即失活（re-query → miss），并让父层 reload 消息 + 刷新计数/历史。
-    await qc.invalidateQueries({ queryKey: qk.agentApprovalPending(sessionId) })
-    onDecided()
-    if (!res.ok && res.status !== 'not_found') {
-      // 非 not_found 的失败（gateway 不可达等）→ 抛给 ApprovalActions 展示。not_found = 已被
-      // 其它面处理（并发），静默失活即可。
-      throw new Error(res.error ?? t('agents.custom.runs.decideFailed'))
+    // codex r2 [E] — capture the deciding session NOW: the prop can move to another session while
+    // the resume is in flight (panel-level component, session switch re-renders it), and the finally
+    // must clear the busy entry of the session that STARTED the decide, not the one now displayed.
+    const decideSessionId = sessionId
+    onDecideBusyChange?.(true, decideSessionId)
+    try {
+      // Best-effort PIN BEFORE /decide (peek is read-only; /decide claims + consumes the stash — so the
+      // rule must derive from the still-live entry first). A rule-creation failure must not block the
+      // approve the owner already made.
+      if (decision === 'approve' && rememberDomain && isAgentWebFetch) {
+        await postRememberWebPolicy(pending.approvalId)
+      }
+      const res = await postApprovalDecide({ approvalId: pending.approvalId, decision })
+      // P2-1 (codex r1) — judge the result FIRST: a non-not_found failure (gateway unreachable /
+      // 500 / resume tool error / P1-2's 409 lease miss) throws to ApprovalActions' inline error
+      // state and the card STAYS live — the approval did NOT happen, and destroying the card (the
+      // old invalidate+onDecided-before-check order) would hide exactly that. not_found = already
+      // handled on another surface (concurrency) → benign deactivation.
+      if (!res.ok && res.status !== 'not_found') {
+        throw new Error(res.error ?? t('agents.custom.runs.decideFailed'))
+      }
+      // ok / not_found：card 失活（re-query → miss），并让父层 reload 消息 + 刷新计数/历史。
+      await qc.invalidateQueries({ queryKey: qk.agentApprovalPending(sessionId) })
+      onDecided()
+    } finally {
+      onDecideBusyChange?.(false, decideSessionId)
     }
   }
 
@@ -135,7 +155,9 @@ export function PendingApprovalPanel({
         <ApprovalActions
           approveLabel={t('agents.custom.runs.approveLabel')}
           onApprove={() => decide('approve')}
-          onReject={() => void decide('reject')}
+          // P2-1 — returned (not void'd) so ApprovalActions' shared machine awaits it: a reject
+          // failure enters the same busy/error state instead of an unhandled rejection.
+          onReject={() => decide('reject')}
         />
       </div>
     )

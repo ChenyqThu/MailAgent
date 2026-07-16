@@ -91,6 +91,78 @@ describe('PendingApprovalPanel — manual session (agentName null)', () => {
     )
   })
 
+  // P2-1 (codex r1) — judge the decide result BEFORE deactivating the card: a real failure keeps
+  // the card alive with an inline error (the approval did NOT happen); only ok / not_found (handled
+  // on another surface) invalidates + onDecided. The reject path rides the SAME async machine.
+  test('approve failure (gateway error) → card STAYS, inline error, onDecided NOT called', async () => {
+    mockFetchPending.mockResolvedValue(MANUAL_HIT)
+    mockPostDecide.mockResolvedValue({ ok: false, status: 'error', error: 'resume blew up' })
+    const onDecided = vi.fn()
+    withQuery(<PendingApprovalPanel sessionId={9} onDecided={onDecided} />)
+    fireEvent.click(await screen.findByRole('button', { name: '批准' }))
+    await waitFor(() => expect(mockPostDecide).toHaveBeenCalled())
+    // inline error surfaced through ApprovalActions' shared machine…
+    expect(await screen.findByText(/resume blew up/)).toBeTruthy()
+    // …the card is still live (NOT invalidated/remounted away) and the parent was never told "done".
+    expect(document.querySelector('[data-in-record-approval-card]')).not.toBeNull()
+    expect(onDecided).not.toHaveBeenCalled()
+  })
+
+  test('reject failure → same machine: inline error, card stays, no unhandled rejection', async () => {
+    mockFetchPending.mockResolvedValue(MANUAL_HIT)
+    mockPostDecide.mockResolvedValue({ ok: false, status: 'error', error: 'gateway unreachable' })
+    const onDecided = vi.fn()
+    withQuery(<PendingApprovalPanel sessionId={9} onDecided={onDecided} />)
+    fireEvent.click(await screen.findByRole('button', { name: '取消' }))
+    await waitFor(() =>
+      expect(mockPostDecide).toHaveBeenCalledWith({ approvalId: 'ap_m1', decision: 'reject' })
+    )
+    expect(await screen.findByText(/gateway unreachable/)).toBeTruthy()
+    expect(document.querySelector('[data-in-record-approval-card]')).not.toBeNull()
+    expect(onDecided).not.toHaveBeenCalled()
+  })
+
+  test('not_found (already handled on another surface) → benign deactivation: onDecided fires, no error', async () => {
+    mockFetchPending.mockResolvedValue(MANUAL_HIT)
+    mockPostDecide.mockResolvedValue({ ok: false, status: 'not_found' })
+    const onDecided = vi.fn()
+    withQuery(<PendingApprovalPanel sessionId={9} onDecided={onDecided} />)
+    fireEvent.click(await screen.findByRole('button', { name: '批准' }))
+    await waitFor(() => expect(onDecided).toHaveBeenCalled())
+    expect(screen.queryByText(/操作失败|failed/i)).toBeNull()
+  })
+
+  // P1-2 — the decide-busy signal the parents use to disable their composer while the server-side
+  // resume holds the session lease: true on click, false after the decide settles (either way).
+  // codex r2 [E] — the signal carries the DECIDING session's id (captured at decide start) so the
+  // parent (useApprovalDecideBusy) scopes the fence to that session only.
+  test('onDecideBusyChange: (true, sessionId) while the decide POST is in flight, (false, sessionId) after', async () => {
+    mockFetchPending.mockResolvedValue(MANUAL_HIT)
+    let resolveDecide!: (v: unknown) => void
+    mockPostDecide.mockReturnValue(
+      new Promise((r) => {
+        resolveDecide = r
+      })
+    )
+    const busyCalls: Array<[boolean, number | null]> = []
+    withQuery(
+      <PendingApprovalPanel
+        sessionId={9}
+        onDecided={vi.fn()}
+        onDecideBusyChange={(b, sid) => busyCalls.push([b, sid])}
+      />
+    )
+    fireEvent.click(await screen.findByRole('button', { name: '批准' }))
+    await waitFor(() => expect(busyCalls).toEqual([[true, 9]]))
+    resolveDecide({ ok: true, status: 'completed' })
+    await waitFor(() =>
+      expect(busyCalls).toEqual([
+        [true, 9],
+        [false, 9]
+      ])
+    )
+  })
+
   test('manual web_fetch (agentId null) → no "always allow domain" affordance', async () => {
     mockFetchPending.mockResolvedValue({
       ...MANUAL_HIT,

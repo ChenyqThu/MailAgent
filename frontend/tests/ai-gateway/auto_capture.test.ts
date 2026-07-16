@@ -33,11 +33,11 @@ function makeRun(over: Partial<PreparedChatRun> = {}): PreparedChatRun {
   }
 }
 
-// onFinish's argument carries more than these two fields, but makePersistOnFinish only reads
-// responseMessage + isAborted — so a narrowed literal cast keeps the test readable.
+// onFinish's argument carries more than these fields, but makePersistOnFinish only reads
+// responseMessage + isAborted + finishReason — so a narrowed literal cast keeps the test readable.
 function fire(
   onFinish: ReturnType<typeof makePersistOnFinish>,
-  args: { responseMessage: MailAgentUIMessage; isAborted: boolean }
+  args: { responseMessage: MailAgentUIMessage; isAborted: boolean; finishReason?: string }
 ): Promise<void> {
   return onFinish(args as unknown as Parameters<typeof onFinish>[0])
 }
@@ -214,6 +214,52 @@ describe('makePersistOnFinish — 07-15 lane C capture ↔ explicit-edit mutual 
       captureTurnMemory: (t: PersistTurnInput) => captured.push(t)
     } as AiGatewayConfig
     await fire(makePersistOnFinish(cfg, makeRun()), { responseMessage: asst, isAborted: false })
+    expect(captured).toHaveLength(1)
+  })
+})
+
+// ── P2-2 (codex r1) — a finishReason=length turn never reaches memory capture ────────────────────
+//
+// The truncated turn's persisted responseMessage carries the appended LENGTH_TRUNCATION_WARNING_TEXT
+// (lane C fail-loud); letting captureTurnMemory run would fossilize the half-finished inference AND
+// the literal warning line into memory.md's stable prefix. persistTurn still fires (the fail-loud
+// history stays) — ONLY capture is gated.
+
+describe('makePersistOnFinish — P2-2 finishReason=length skips capture', () => {
+  test('finishReason=length → persistTurn fires (with the warning), captureTurnMemory does NOT', async () => {
+    const persisted: PersistTurnInput[] = []
+    const captured: PersistTurnInput[] = []
+    const cfg = {
+      persistTurn: (t: PersistTurnInput) => {
+        persisted.push(t)
+      },
+      captureTurnMemory: (t: PersistTurnInput) => captured.push(t)
+    } as AiGatewayConfig
+    await fire(makePersistOnFinish(cfg, makeRun()), {
+      responseMessage: asst,
+      isAborted: false,
+      finishReason: 'length'
+    })
+    expect(persisted).toHaveLength(1)
+    const text = persisted[0].responseMessage.parts
+      .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
+      .map((p) => p.text)
+      .join('')
+    expect(text).toContain('截断') // the fail-loud warning IS persisted…
+    expect(captured).toHaveLength(0) // …but never captured into memory
+  })
+
+  test('finishReason=stop (normal completion) still captures', async () => {
+    const captured: PersistTurnInput[] = []
+    const cfg = {
+      persistTurn: () => {},
+      captureTurnMemory: (t: PersistTurnInput) => captured.push(t)
+    } as AiGatewayConfig
+    await fire(makePersistOnFinish(cfg, makeRun()), {
+      responseMessage: asst,
+      isAborted: false,
+      finishReason: 'stop'
+    })
     expect(captured).toHaveLength(1)
   })
 })

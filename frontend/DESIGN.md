@@ -1724,7 +1724,7 @@ theirs in ComposePanel).
 - Animated-icon system (main menu / settings rail / email toolbar hover micro-motion).
 - Chat `AgentStrandsBackdrop` filament canvas backdrop.
 - Composer `BorderGlow` (hover mesh rainbow edge + glow ring) — interaction feedback, orthogonal to the C3 static-glow retirement.
-- `ShimmerText` (thinking shimmer), `DotMatrix` connecting dots, `ThinkingPhrases` rotation.
+- `ShimmerText` (thinking shimmer), `DotMatrix` connecting dots. (**2026-07-15 update, harness-chat lane B:** the random-rotation `ThinkingPhrases` component was retired — the chat status line is now truth-driven via `TurnStatusLine`/`useTurnStage` [stops on idle/writing/awaiting-approval, never spins while stalled/errored] and consecutive tool calls fold into `ToolGroupCard`; both still use only `ShimmerText`/`DotMatrix`, no new vocabulary — see `docs/motion-gsap.md` §9.1.)
 - All GSAP orchestration: inbox-tab indicator slide, settings-panel fade-in, thinking-block height auto↔0, and everything in `docs/motion-gsap.md` §8.
 - Sidebar collapse `transition-[width]` (240↔56 / chat 260↔48) — layout-property animation is existing product behavior.
 - Row hover / press feedback; approval-card phase-pill state transitions.

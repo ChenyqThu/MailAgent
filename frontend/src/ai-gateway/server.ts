@@ -106,6 +106,33 @@ async function handleChat(
   res: ServerResponse,
   cfg: AiGatewayConfig
 ): Promise<void> {
+  const controller = new AbortController()
+  // B1 (harness-chat lane A, MAILAGENT_CHAT_DETACHED_RUNS) — detach-tolerant runs: with the flag on
+  // (and the registry wired) a client disconnect NO LONGER aborts the upstream LLM call; the run
+  // drains server-side to onFinish → persistTurn, so a session switch / popout close never loses the
+  // turn. The explicit stop channel is POST /api/ai/run/stop. Flag off (env explicit false) → the
+  // legacy close→abort DRAIN BEHAVIOUR below; the flag only governs the drain shape, not the
+  // ActiveRunRegistry — codex r2 [A]: the registry is always created (approval-resume mutex), so
+  // the off branch still takes the per-session slot (released on response close/abort) and keeps
+  // the /decide↔chat 409 fence + /run/active truth (see CLAUDE.md 开关表 MAILAGENT_CHAT_DETACHED_RUNS).
+  const detached = cfg.detachedRunsEnabled === true && cfg.activeRuns != null
+  // P1-3 (codex r1) — arm client-disconnect tracking BEFORE the first await. A window closed while
+  // the handler is still inside readJsonBody / prepareChatRun emits 'close' during those awaits; a
+  // listener installed only at drain time would miss it, leave clientGone false, and the drain would
+  // then wait forever on a 'drain'/'close' that already fired (res.write on a destroyed response
+  // returns false) — stream unconsumed, onFinish/persistTurn never run, the registry slot wedged
+  // until the stale sweep. Initial state honours a response already gone at dispatch time.
+  let clientGone = false
+  if (detached) {
+    clientGone = res.destroyed || res.writableEnded
+    res.on('close', () => {
+      if (!res.writableFinished) clientGone = true
+    })
+    // A write racing a disconnect surfaces as a response 'error' — swallow it (the drain keeps going).
+    res.on('error', () => {
+      clientGone = true
+    })
+  }
   const body = await readJsonBody(req)
   // Phase 06-parity — session reload + a 12k context snapshot can push a legit turn past the old
   // 64KB cap; answer an explicit 413 rather than a misleading "messages[] required" 400 (codex review).
@@ -116,24 +143,22 @@ async function handleChat(
     })
     return
   }
-  const controller = new AbortController()
-  // B1 (harness-chat lane A, MAILAGENT_CHAT_DETACHED_RUNS) — detach-tolerant runs: with the flag on
-  // (and the registry wired) a client disconnect NO LONGER aborts the upstream LLM call; the run
-  // drains server-side to onFinish → persistTurn, so a session switch / popout close never loses the
-  // turn. The explicit stop channel is POST /api/ai/run/stop. Flag off (env explicit false) → the
-  // legacy close→abort wiring below, byte-identical.
-  const detached = cfg.detachedRunsEnabled === true && cfg.activeRuns != null
   if (!detached) {
-    // abort: client disconnect (or the renderer AbortController) cancels the upstream call.
+    // abort: client disconnect (or the renderer AbortController) cancels the upstream call — the
+    // legacy close→abort drain behaviour (flag off governs ONLY this drain shape; the registry
+    // slot below is taken either way and released on response close/abort, keeping the approval
+    // mutex + 409 fence in the rollback configuration — codex r2 [A]).
     req.on('close', () => controller.abort())
   }
 
   // B1 — same-session concurrency fast-reject BEFORE prepareChatRun (streamText fires the upstream
   // call at prepare time, so a doomed second POST must be answered before we spend a model call).
-  // register() below is the atomic gate; this is only the cheap pre-check.
+  // register() below is the atomic gate; this is only the cheap pre-check. codex r2 [A] — keyed on
+  // the registry's PRESENCE, not the detached flag: the lease is the always-on approval-resume
+  // mutex, so a detached-off (rollback) gateway keeps the same 409 fence.
   const bodySessionId =
     typeof body.sessionId === 'number' && Number.isInteger(body.sessionId) ? body.sessionId : null
-  if (detached && bodySessionId != null && cfg.activeRuns!.hasActive(bodySessionId)) {
+  if (cfg.activeRuns && bodySessionId != null && cfg.activeRuns.hasActive(bodySessionId)) {
     writeJson(res, 409, {
       error: 'E_RUN_ACTIVE',
       hint: 'a chat run is already streaming for this session'
@@ -154,9 +179,13 @@ async function handleChat(
   // B1 — atomic same-session gate. A concurrent second POST that raced past the pre-check loses
   // here: its just-started upstream call is aborted and it answers 409 (封 §3.2 的行序交错 —
   // switching back mid-run and sending again must not interleave two turns' persistence).
+  // codex r2 [A] — registered whenever the registry is wired (detached OR off): the slot is the
+  // approval-resume mutex, which must hold in the rollback configuration too. From here on EVERY
+  // early throw/return must release the slot (off branch: response 'close' + sync-throw catch;
+  // detached branch: the try/finally below).
   let runToken: { runId: string } | null = null
-  if (detached && run.sessionId != null) {
-    runToken = cfg.activeRuns!.register(run.sessionId, controller)
+  if (cfg.activeRuns && run.sessionId != null) {
+    runToken = cfg.activeRuns.register(run.sessionId, controller)
     if (runToken == null) {
       controller.abort()
       writeJson(res, 409, {
@@ -165,6 +194,9 @@ async function handleChat(
       })
       return
     }
+    // codex r2 [C] — stamp the lease onto the run so makePersistOnFinish forwards it to the
+    // 'chat:turn-persisted' broadcast (per-run settle dedup in the renderer).
+    run.runId = runToken.runId
   }
   // #12 (dogfood session-history) — eager-persist: write the user message at turn START so the
   // session row appears in history even when the first turn is HITL-paused and onFinish skips
@@ -245,13 +277,50 @@ async function handleChat(
     onFinish: makePersistOnFinish(cfg, run)
   }
 
+  // codex r2 [C] — the response advertises the run's lease id so the renderer transport can record
+  // its OWN runs (own-run attribution for the settle door). Exposed for CORS readers (the local
+  // renderer origin + dev server are cross-origin to the loopback gateway).
+  const runIdHeaders: Record<string, string> = runToken
+    ? {
+        'x-mailagent-run-id': runToken.runId,
+        'access-control-expose-headers': 'x-mailagent-run-id'
+      }
+    : {}
+
   if (!detached) {
-    run.result.pipeUIMessageStreamToResponse(res, {
-      ...streamOptions,
-      // Phase 06a — loopback-only CORS on the main chat stream too (the AI SDK pipe sets no ACAO by
-      // default; reflect the renderer's loopback / null origin, omit for a remote cross-origin page).
-      headers: corsHeadersFor(req.headers.origin)
-    })
+    // codex r2 [A] — off-branch slot lifecycle: attached mode couples the run to the response
+    // (completion ends res; a client disconnect fires close→abort above), so the response 'close'
+    // is the single release point — abort 即释放, the session is immediately free for a fresh turn.
+    // A client that disconnected DURING the prepare awaits already emitted 'close' before we could
+    // listen → release inline (the req-close abort already cancelled the upstream call).
+    if (runToken != null && run.sessionId != null) {
+      const releaseSessionId = run.sessionId
+      const releaseRunId = runToken.runId
+      const release = (): void => cfg.activeRuns!.release(releaseSessionId, releaseRunId)
+      if (res.destroyed || res.writableEnded) release()
+      else res.on('close', release)
+    }
+    try {
+      run.result.pipeUIMessageStreamToResponse(res, {
+        ...streamOptions,
+        // Phase 06a — loopback-only CORS on the main chat stream too (the AI SDK pipe sets no ACAO by
+        // default; reflect the renderer's loopback / null origin, omit for a remote cross-origin page).
+        headers: { ...corsHeadersFor(req.headers.origin), ...runIdHeaders }
+      })
+    } catch (err) {
+      // codex r2 [B]-adjacent — a sync pipe throw must not strand the slot until the client socket
+      // times out: release now, abort the upstream call, and tear the response down.
+      console.error('[ai-gateway] /api/ai/chat pipe failed', err)
+      if (runToken != null && run.sessionId != null) {
+        cfg.activeRuns!.release(run.sessionId, runToken.runId)
+      }
+      controller.abort()
+      try {
+        res.destroy()
+      } catch {
+        /* already gone */
+      }
+    }
     return
   }
 
@@ -262,23 +331,48 @@ async function handleChat(
   // completion (driving the tool loop + onFinish → persistTurn) and writes SSE frames only while the
   // client is still connected. Wire format is byte-identical to the pipe (UI_MESSAGE_STREAM_HEADERS +
   // `data: {json}\n\n` frames + terminal `data: [DONE]`; JsonToSseTransformStream's encoding).
-  const stream = run.result.toUIMessageStream(streamOptions)
-  res.writeHead(200, { ...UI_MESSAGE_STREAM_HEADERS, ...corsHeadersFor(req.headers.origin) })
-  let clientGone = false
-  res.on('close', () => {
-    if (!res.writableFinished) clientGone = true
-  })
-  // A write racing a disconnect surfaces as a response 'error' — swallow it (the drain keeps going).
-  res.on('error', () => {
-    clientGone = true
-  })
+  // P1-3 (codex r1) — writeHead + the whole drain live inside one try/finally so the registry slot
+  // is ALWAYS released (a wedged slot would 409 the session for 15 min). The 'close'/'error'
+  // listeners were armed at the top of the handler (before any await) so a pre-header disconnect is
+  // already reflected in clientGone here. codex r2 [B] — toUIMessageStream() itself lives INSIDE
+  // the protected region too: a synchronous throw from it (post-register, pre-drain) previously
+  // skipped the finally and stranded the slot for 15 min.
   try {
+    const stream = run.result.toUIMessageStream(streamOptions)
+    // A client gone before headers → skip writeHead entirely (writing a header to a destroyed
+    // socket is pointless and may throw); a racing destroy that still slips through must NOT kill
+    // the drain — the whole point is that the stream keeps draining to onFinish → persistTurn
+    // without a client.
+    try {
+      if (!clientGone && !res.destroyed) {
+        res.writeHead(200, {
+          ...UI_MESSAGE_STREAM_HEADERS,
+          ...corsHeadersFor(req.headers.origin),
+          ...runIdHeaders
+        })
+      } else {
+        clientGone = true
+      }
+    } catch {
+      clientGone = true
+    }
     for await (const chunk of stream) {
-      if (clientGone) continue
-      const ok = res.write(`data: ${JSON.stringify(chunk)}\n\n`)
-      if (!ok && !clientGone) {
+      if (clientGone || res.destroyed || res.writableEnded) {
+        clientGone = true
+        continue
+      }
+      let ok = true
+      try {
+        ok = res.write(`data: ${JSON.stringify(chunk)}\n\n`)
+      } catch {
+        // write on a just-destroyed response — treat as disconnect, keep draining.
+        clientGone = true
+        continue
+      }
+      if (!ok && !clientGone && !res.destroyed) {
         // Backpressure parity with writeToServerResponse — but a disconnect mid-wait must not hang
-        // the drain ('drain' never fires on a destroyed response), so 'close' also resolves.
+        // the drain ('drain' never fires on a destroyed response), so 'close' also resolves. The
+        // destroyed re-check above (and the loop guard on the next iteration) brackets the wait.
         await new Promise<void>((resolve) => {
           const settle = (): void => {
             res.off('drain', settle)
@@ -290,7 +384,7 @@ async function handleChat(
         })
       }
     }
-    if (!clientGone) res.write('data: [DONE]\n\n')
+    if (!clientGone && !res.destroyed) res.write('data: [DONE]\n\n')
   } catch (err) {
     console.error('[ai-gateway] /api/ai/chat detached drain failed', err)
   } finally {
@@ -335,8 +429,9 @@ function handleRunActive(res: ServerResponse, cfg: AiGatewayConfig, url: string)
  * fetch-abort no longer cancels the upstream call, so the composer stop button's transport wrapper
  * POSTs here: the registry aborts the run's controller (streamText aborts → onFinish isAborted →
  * nothing persisted) and frees the session for a fresh turn. Registered unconditionally;
- * cfg.activeRuns gates it (404 when detached runs are off — the legacy close→abort already stopped
- * the run, so the renderer's best-effort POST is harmless there).
+ * cfg.activeRuns gates it (404 only when the registry is unwired — hand-built harness cfgs; codex
+ * r2 [A] made the production registry unconditional, and in detached-off the stop is equivalent to
+ * the close→abort the legacy wiring already performs).
  */
 async function handleRunStop(
   req: IncomingMessage,
@@ -799,15 +894,35 @@ async function handleApprovalDecide(
     return
   }
   const body = await readJsonBody(req)
-  const decision = body.decision === 'reject' ? 'reject' : 'approve'
+  // P1-1 (codex r1) — the decision is a fail-closed security floor: ONLY the exact strings
+  // 'approve' / 'reject' are accepted. Everything else — a missing field, 'rejected', case variants
+  // ('Approve'), or a proxy-mangled value — answers 400 WITHOUT touching the stash (still claimable
+  // by a corrected retry). The previous `=== 'reject' ? 'reject' : 'approve'` defaulted every
+  // unknown shape to APPROVE, which with the always-on /pending + serverResumeEnabled would execute
+  // a real write tool off a malformed request.
+  const decision: 'approve' | 'reject' | null =
+    body.decision === 'approve' ? 'approve' : body.decision === 'reject' ? 'reject' : null
+  if (decision == null) {
+    writeJson(res, 400, {
+      error: 'E_INVALID_ARG',
+      hint: "decision must be exactly 'approve' or 'reject'"
+    })
+    return
+  }
   const toolCallId = typeof body.toolCallId === 'string' ? body.toolCallId : ''
   const resumeToken = typeof body.resumeToken === 'string' ? body.resumeToken : ''
   const approvalId = typeof body.approvalId === 'string' ? body.approvalId : ''
   // Resolve to the island shape { toolCallId, resumeToken } either from the body (island) or from the
   // stash by approvalId (in-record — the token is read from the entry, never sent by the caller).
+  // Strict discriminated shapes: island requires BOTH toolCallId and resumeToken; in-record requires
+  // approvalId; anything else (partial island shape without approvalId) → 400.
   let resolved: { toolCallId: string; resumeToken: string } | null = null
+  // P1-2 — the entry PEEKED (never claimed) so the session lease below can key off its sessionId; a
+  // lease rejection must leave the stash claimable for a later retry.
+  let peeked: ReturnType<typeof stash.peek> = null
   if (toolCallId && resumeToken) {
     resolved = { toolCallId, resumeToken }
+    peeked = stash.peek(toolCallId)
   } else if (approvalId) {
     const entry = stash.peekByApprovalId(approvalId)
     // miss / wrong approvalId → fail-closed (no live claimable approval): 404 not_found, same shape the
@@ -817,6 +932,7 @@ async function handleApprovalDecide(
       return
     }
     resolved = { toolCallId: entry.toolCallId, resumeToken: entry.resumeToken }
+    peeked = entry
   } else {
     writeJson(res, 400, {
       error: 'E_INVALID_ARG',
@@ -829,10 +945,37 @@ async function handleApprovalDecide(
   // disconnects.
   const controller = new AbortController()
   req.on('close', () => controller.abort())
+  // P1-2 (codex r1) — the resume drives the SAME streamText + persistTurn pipeline as a normal
+  // /api/ai/chat turn, so it must hold the SAME per-session lease (ActiveRunRegistry). Take the slot
+  // BEFORE resumeApprovalRun claims the stash: a lease miss (a chat run is streaming for this
+  // session) answers 409 with the stash INTACT — the decision is retryable once the run settles —
+  // and while the resume runs, /run/active truthfully reports it (409-fencing new same-session
+  // POSTs via handleChat's gate + driving the panel's background placeholder). The finally releases
+  // by runId (runId-matched → a stale release can never evict a newer run). Registry unwired
+  // (detached runs off) or an unsaved/unknown session → no lease domain, pre-P1-2 flow unchanged.
+  const resumeSessionId = peeked?.sessionId ?? null
+  let leaseToken: { runId: string } | null = null
+  if (cfg.activeRuns && resumeSessionId != null) {
+    leaseToken = cfg.activeRuns.register(resumeSessionId, controller)
+    if (leaseToken == null) {
+      writeJson(res, 409, {
+        ok: false,
+        status: 'error',
+        error: 'E_RUN_ACTIVE: a chat run is already streaming for this session'
+      })
+      return
+    }
+  }
   try {
     const result = await resumeApprovalRun(
       cfg,
-      { toolCallId: resolved.toolCallId, decision, resumeToken: resolved.resumeToken },
+      {
+        toolCallId: resolved.toolCallId,
+        decision,
+        resumeToken: resolved.resumeToken,
+        // codex r2 [C] — the resume's persists broadcast under the lease's runId (per-run dedup).
+        runId: leaseToken?.runId
+      },
       controller.signal
     )
     // Part B (dogfood live-refresh) — a TERMINAL settle (completed / rejected / error) on a persisted
@@ -856,6 +999,10 @@ async function handleApprovalDecide(
     const message = err instanceof Error ? err.message : String(err)
     console.error('[ai-gateway] /api/ai/approval/decide failed', err)
     writeJson(res, 500, { ok: false, status: 'error', error: message })
+  } finally {
+    if (leaseToken && resumeSessionId != null) {
+      cfg.activeRuns!.release(resumeSessionId, leaseToken.runId)
+    }
   }
 }
 

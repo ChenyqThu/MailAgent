@@ -104,6 +104,11 @@ export interface PersistTurnInput {
    *  write tools carry their tier + approval audit + (04a) the A2UI ui_payload_json.
    *  Empty / omitted when no tools ran. */
   toolCalls?: GatewayToolAuditEntry[]
+  /** codex r2 [C] — the ActiveRunRegistry runId of the run this turn belongs to (set by
+   *  /api/ai/chat's register / the /decide resume lease via PreparedChatRun.runId). The lifecycle
+   *  forwards it on the 'chat:turn-persisted' broadcast so the renderer settle door dedups per RUN
+   *  (never by time window). null/omitted = unleased persist (headless agent run / harness cfg). */
+  runId?: string | null
 }
 
 export interface AiGatewayConfig {
@@ -249,7 +254,10 @@ export interface AiGatewayConfig {
   persistPausedAssistant?: (
     sessionId: number | null,
     redactedMessage: MailAgentUIMessage,
-    modelId: string
+    modelId: string,
+    /** codex r2 [C] — the pausing run's ActiveRunRegistry runId (PreparedChatRun.runId), forwarded
+     *  on the 'paused' broadcast for per-run settle dedup. undefined = unleased run. */
+    runId?: string | null
   ) => void
 
   // ── harness-chat lane A (B1, task 07-15) — detach-tolerant chat runs ─────────────────────────────
@@ -257,13 +265,18 @@ export interface AiGatewayConfig {
    *  (AND cfg.activeRuns is wired) /api/ai/chat no longer aborts the upstream LLM call on client
    *  disconnect: the run drains server-side to onFinish → persistTurn, so switching sessions /
    *  closing the popout never loses the turn. The composer stop button goes through the EXPLICIT
-   *  POST /api/ai/run/stop channel instead. Off → the legacy close→abort wiring, byte-identical. */
+   *  POST /api/ai/run/stop channel instead. Off → the legacy close→abort DRAIN wiring returns;
+   *  codex r2 [A]: off no longer unwires the registry — chat runs still take the per-session slot
+   *  (release = response 'close', i.e. abort 即释放) so the approval-resume mutex + /run/active
+   *  truth stay live in the rollback configuration. */
   detachedRunsEnabled?: boolean
-  /** B1 — the per-gateway registry of in-flight detached chat runs (activeRuns.ts). Injected by the
-   *  lifecycle (constructed once, like the ApprovalRunStash). Provides the explicit-stop channel
+  /** B1 — the per-gateway registry of in-flight chat runs (activeRuns.ts). Injected by the
+   *  lifecycle (constructed once, like the ApprovalRunStash) — codex r2 [A]: ALWAYS, independent of
+   *  detachedRunsEnabled, because it is the per-session mutex of the always-on approval-resume
+   *  chain (resume × new-turn interleaving) as well as the explicit-stop channel
    *  (POST /api/ai/run/stop), the "AI 仍在后台输出" truth probe (GET /api/ai/run/active) and the
-   *  same-session 409 concurrency gate. Omitted → both endpoints 404 and /api/ai/chat keeps the
-   *  legacy close→abort wiring regardless of detachedRunsEnabled. */
+   *  same-session 409 concurrency gate. Omitted (hand-built harness cfgs only) → both endpoints
+   *  404 and /api/ai/chat runs without a lease domain. */
   activeRuns?: ActiveRunRegistry
 
   // ── Part B (harness agent 上岛) — full-offline island approval resume ────────────────────────────

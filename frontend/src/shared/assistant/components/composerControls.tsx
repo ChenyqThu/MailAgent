@@ -29,6 +29,14 @@ export interface ChatComposerControls {
   onModelChange: (model: string) => void
   /** Disable the picker (e.g. a turn is streaming) — mirror of legacy modelPickerDisabled. */
   modelPickerDisabled: boolean
+  /** P1-2 (07-15 codex r1) — hard-disable SENDING while an approval decide → server-side resume
+   *  holds this session's run lease (a send would 409 E_RUN_ACTIVE). codex r2 [D] — consumed as
+   *  the composer's real submit gate, not just the Send button: Input disabled + Root submit
+   *  preventDefault (ThreadComposer), Lexical submitMode 'none' + slash execute guard
+   *  (AgentComposer), quick-action Suggestion disabled (AgentQuickActions). codex r2 [E] — the
+   *  value is session-scoped by useApprovalDecideBusy (only the deciding session is fenced).
+   *  Optional: absent/undefined → byte-identical to the pre-P1-2 composer. */
+  sendDisabled?: boolean
   // C2-① @mention — referenced-email chips. The panel resolves each chip's body excerpt at SEND time
   // (buildMentionContext) and prepends an untrusted-framed block to the turn; chips clear after send.
   mentions: ReadonlyArray<SearchHit>

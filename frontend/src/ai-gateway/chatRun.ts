@@ -153,6 +153,11 @@ export interface PreparedChatRun {
    *  (absent fail-closes to 'untrusted_trigger' wherever it is consumed — the stash freeze in
    *  maybeStashAndAnnounceApproval). */
   contextMode?: AgentContextMode
+  /** codex r2 [C] — the ActiveRunRegistry runId this run holds (stamped by server.ts after
+   *  register(): /api/ai/chat's slot or the /decide resume lease). Read by makePersistOnFinish so
+   *  the persisted turn / paused persist carry it into the 'chat:turn-persisted' broadcast for
+   *  per-run settle dedup. undefined = unleased (headless agent run / no registry / null session). */
+  runId?: string
 }
 
 export type PrepareChatOutcome =
@@ -669,7 +674,9 @@ export function makePersistOnFinish(
       if (cfg.persistPausedAssistant) {
         try {
           const redacted = redactApprovalRequestedParts(responseMessage as MailAgentUIMessage)
-          if (redacted) cfg.persistPausedAssistant(run.sessionId, redacted, run.modelId)
+          if (redacted) {
+            cfg.persistPausedAssistant(run.sessionId, redacted, run.modelId, run.runId ?? null)
+          }
         } catch (err) {
           console.error('[ai-gateway] persistPausedAssistant failed (pause still streamed OK)', err)
         }
@@ -707,7 +714,9 @@ export function makePersistOnFinish(
       usage: usage
         ? { inputTokens: usage.inputTokens ?? null, outputTokens: usage.outputTokens ?? null }
         : undefined,
-      toolCalls: run.auditEntries
+      toolCalls: run.auditEntries,
+      // codex r2 [C] — per-run settle dedup: the broadcast carries this runId to the renderer.
+      runId: run.runId ?? null
     }
     try {
       await cfg.persistTurn(turn)
@@ -727,7 +736,13 @@ export function makePersistOnFinish(
     // memory.md via an approved tool call, and a ~20-25s-later capture re-digest would otherwise
     // silently reword/shrink what they just approved. The Python half (capture_turn's cooldown
     // window) is the second, cross-session layer — this one only covers THIS turn.
-    if (!runHasSuccessfulMemoryWrite(run)) {
+    //
+    // P2-2 (codex r1) — a finishReason==='length' turn is a TRUNCATED reply, and `turn` above
+    // carries the appended UI warning text: neither the half-finished inference nor the literal
+    // warning line may be distilled into memory.md (mem0 would fossilize them into the stable
+    // prefix injected on every future turn). Skip capture for the truncated turn entirely —
+    // persistTurn above still ran, so the fail-loud history is intact.
+    if (!runHasSuccessfulMemoryWrite(run) && finishReason !== 'length') {
       try {
         cfg.captureTurnMemory?.(turn)
       } catch (err) {

@@ -10,6 +10,7 @@ import { ThreadPrimitive } from '@assistant-ui/react'
 import { FileText, ListChecks, PenLine, Reply, Search, type LucideIcon } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
+import { useChatComposerControls } from '@shared/assistant/components/composerControls'
 
 interface Category {
   key: string
@@ -34,6 +35,10 @@ export function AgentQuickActions(): React.JSX.Element {
   const { t } = useTranslation()
   const [expanded, setExpanded] = useState<string | null>(null)
   const active = CATEGORIES.find((c) => c.key === expanded) ?? null
+  // codex r2 [D] — quick actions autoSend through the thread (bypassing the composer form), so they
+  // honour the same sendDisabled fence (approval decide → server resume holds the session lease).
+  const controls = useChatComposerControls()
+  const sendDisabled = controls?.sendDisabled === true
 
   return (
     <div className="flex w-full flex-col gap-2">
@@ -73,7 +78,8 @@ export function AgentQuickActions(): React.JSX.Element {
                   key={optKey}
                   prompt={text}
                   autoSend
-                  className={chipClass}
+                  disabled={sendDisabled}
+                  className={cn(chipClass, sendDisabled && 'cursor-not-allowed opacity-50')}
                 >
                   {text}
                 </ThreadPrimitive.Suggestion>

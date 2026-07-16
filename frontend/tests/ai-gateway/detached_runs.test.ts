@@ -71,8 +71,12 @@ function baseCfg(opts: {
     persistTurn: (t) => {
       opts.persisted.push(t)
     },
-    ...(opts.detached
-      ? { detachedRunsEnabled: true, activeRuns: opts.registry ?? new ActiveRunRegistry() }
+    // codex r2 [A] — a registry may now ride along with detached OFF (the production rollback
+    // shape: the lifecycle builds it unconditionally). No registry + no detached = the registry-
+    // unwired harness shape (endpoints 404, no lease domain).
+    ...(opts.detached ? { detachedRunsEnabled: true } : {}),
+    ...(opts.detached || opts.registry
+      ? { activeRuns: opts.registry ?? new ActiveRunRegistry() }
       : {})
   }
 }
@@ -178,6 +182,10 @@ describe('B1 — detached runs (flag ON): client disconnect never loses the turn
     await vi.waitFor(() => expect(persisted).toHaveLength(1), { timeout: 3000 })
     const turn = persisted[0]
     expect(turn.sessionId).toBe(11)
+    // codex r2 [C] — the persisted turn carries the run's lease id (the 'chat:turn-persisted'
+    // broadcast's per-run dedup key), matching the response's own-run attribution header.
+    expect(turn.runId).toBe(res.headers.get('x-mailagent-run-id'))
+    expect(turn.runId).toBeTruthy()
     const text = turn.responseMessage.parts
       .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
       .map((p) => p.text)
@@ -202,7 +210,12 @@ describe('B1 — detached runs (flag ON): client disconnect never loses the turn
     // headers arrived → the run is registered; the stream is still delaying chunks.
     const during = await runActive(h.port, 12)
     expect(during.status).toBe(200)
-    expect(((await during.json()) as { active: boolean }).active).toBe(true)
+    const duringBody = (await during.json()) as { active: boolean; runId?: string }
+    expect(duringBody.active).toBe(true)
+    // codex r2 [C] — the response advertises the lease id (own-run attribution for the renderer's
+    // settle door) and exposes it for CORS readers; it matches the /run/active truth.
+    expect(res.headers.get('x-mailagent-run-id')).toBe(duringBody.runId)
+    expect(res.headers.get('access-control-expose-headers')).toContain('x-mailagent-run-id')
 
     await drainText(res)
     await vi.waitFor(() => expect(persisted).toHaveLength(1), { timeout: 3000 })
@@ -210,6 +223,62 @@ describe('B1 — detached runs (flag ON): client disconnect never loses the turn
     expect(after.status).toBe(404)
     expect(((await after.json()) as { active: boolean }).active).toBe(false)
     expect(registry.size()).toBe(0)
+  })
+})
+
+// P1-3 (codex r1) — a client that disconnects BEFORE the response headers (i.e. during the
+// readJsonBody / prepareChatRun awaits) must not wedge the drain: the 'close'/'error' listeners are
+// armed before the first await, so clientGone is already true when the drain starts — it skips
+// writeHead, drains the stream to onFinish → persistTurn, and the finally releases the slot. With
+// the pre-fix listener placement (installed at drain time) this test hangs forever: the missed
+// 'close' left clientGone false → res.write on the destroyed response returned false → the drain
+// awaited a 'drain'/'close' that never fires → persist never ran, the slot wedged 15 min.
+describe('P1-3 — pre-header client abort never wedges the detached drain', () => {
+  test('abort during the prepare awaits → drain completes, persistTurn fires, slot released', async () => {
+    const persisted: PersistTurnInput[] = []
+    const registry = new ActiveRunRegistry()
+    // Gate INSIDE prepareChatRun (systemPromptProvider is awaited there): the handler parks past
+    // the listener arming but before writeHead, giving a deterministic pre-header abort window.
+    let releaseGate!: () => void
+    const gate = new Promise<void>((r) => {
+      releaseGate = r
+    })
+    let signalReached!: () => void
+    const reached = new Promise<void>((r) => {
+      signalReached = r
+    })
+    const h = await start({
+      ...baseCfg({
+        model: slowTextModel(['一', '二', '三'], 5),
+        persisted,
+        detached: true,
+        registry
+      }),
+      systemPromptProvider: async () => {
+        signalReached()
+        await gate
+        return null // context-light fallback — fine for a mock-model turn
+      }
+    })
+    const ac = new AbortController()
+    // Headers never arrive → the fetch rejects with AbortError; swallow it.
+    const resP = postChat(h.port, 41, ac.signal).catch(() => null)
+    await reached // the handler is parked inside prepareChatRun (post-arming, pre-header)
+    ac.abort() // client disconnect BEFORE any response headers
+    await new Promise((r) => setTimeout(r, 50)) // let the socket close propagate to 'close'
+    releaseGate()
+
+    // The turn still persists in full and the registry slot is released (no 15-min wedge).
+    await vi.waitFor(() => expect(persisted).toHaveLength(1), { timeout: 3000 })
+    const text = persisted[0].responseMessage.parts
+      .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
+      .map((p) => p.text)
+      .join('')
+    expect(text).toBe('一二三')
+    expect(registry.size()).toBe(0)
+    const after = await runActive(h.port, 41)
+    expect(after.status).toBe(404)
+    await resP
   })
 })
 
@@ -241,6 +310,76 @@ describe('B1 — flag OFF baseline (research §3.1 step-0 fixation): close → a
     const stop = await runStop(h.port, 1)
     expect(stop.status).toBe(404)
     expect(((await stop.json()) as { error: string }).error).toBe('E_NOT_IMPLEMENTED')
+  })
+})
+
+// codex r2 [A] — the PRODUCTION rollback shape: MAILAGENT_CHAT_DETACHED_RUNS=false with the
+// registry still wired (the lifecycle now builds the ActiveRunRegistry unconditionally — it is the
+// always-on approval-resume mutex, not a detached-runs feature). Pins the off-branch slot lifecycle:
+// an attached run takes the session slot, /run/active reports it truthfully, and BOTH exits
+// (client disconnect→abort, normal completion) release it promptly — abort 即释放, a fresh turn is
+// never fenced by a dead run.
+describe('detached-OFF with the registry wired (production rollback shape)', () => {
+  test('disconnect aborts (legacy drain, turn lost) AND releases the slot; a fresh POST then succeeds', async () => {
+    const persisted: PersistTurnInput[] = []
+    const registry = new ActiveRunRegistry()
+    const h = await start(
+      baseCfg({
+        model: slowTextModel(['一', '二', '三', '四', '五'], 30),
+        persisted,
+        detached: false,
+        registry
+      })
+    )
+    const ac = new AbortController()
+    const res = await postChat(h.port, 51, ac.signal)
+    expect(res.status).toBe(200)
+    // the attached run holds the slot while streaming
+    expect(registry.hasActive(51)).toBe(true)
+    const during = await runActive(h.port, 51)
+    expect(during.status).toBe(200)
+    await readSomeThenAbort(res, ac, 2)
+
+    // legacy close→abort drain semantics preserved: nothing persists…
+    await new Promise((r) => setTimeout(r, 400))
+    expect(persisted).toHaveLength(0)
+    // …and the slot was released on the response close (no 15-min wedge in the rollback shape).
+    await vi.waitFor(() => expect(registry.size()).toBe(0), { timeout: 3000 })
+
+    // the session is immediately free for a fresh turn (the original P1-2 would 409 on a leak).
+    const res2 = await postChat(h.port, 51)
+    expect(res2.status).toBe(200)
+    await drainText(res2)
+    await vi.waitFor(() => expect(persisted).toHaveLength(1), { timeout: 3000 })
+    expect(registry.size()).toBe(0)
+  })
+
+  test('normal completion releases the slot; same-session concurrency still 409s while streaming', async () => {
+    const persisted: PersistTurnInput[] = []
+    const registry = new ActiveRunRegistry()
+    const h = await start(
+      baseCfg({
+        model: slowTextModel(['一', '二', '三', '四', '五'], 60),
+        persisted,
+        detached: false,
+        registry
+      })
+    )
+    const res1 = await postChat(h.port, 52)
+    expect(res1.status).toBe(200)
+    // codex r2 [C] — the attached pipe advertises the lease id too (same own-run attribution).
+    expect(res1.headers.get('x-mailagent-run-id')).toBeTruthy()
+    // the off-branch keeps the same-session 409 fence (the mutex is flag-independent)…
+    const raced = await postChat(h.port, 52)
+    expect(raced.status).toBe(409)
+    expect(((await raced.json()) as { error: string }).error).toBe('E_RUN_ACTIVE')
+    // …and a different session streams fine.
+    const other = await postChat(h.port, 53)
+    expect(other.status).toBe(200)
+
+    await Promise.all([drainText(res1), drainText(other)])
+    await vi.waitFor(() => expect(persisted).toHaveLength(2), { timeout: 3000 })
+    await vi.waitFor(() => expect(registry.size()).toBe(0), { timeout: 3000 })
   })
 })
 

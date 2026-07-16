@@ -216,8 +216,18 @@ function persistTurn(turn: PersistTurnInput): void {
   // the history lists' unread badges (updated_at just bumped). A NEW event (not
   // 'chat:session-updated') so the island-settle handler's 3-value status union stays untouched.
   // Best-effort: a broadcast failure never breaks the persist that already landed.
+  //
+  // codex r2 [C] — the payload carries the run's ActiveRunRegistry runId (threaded through
+  // PersistTurnInput from the /api/ai/chat register / the /decide resume lease) so the renderer's
+  // settle door can dedup PER RUN instead of by time window (two legit consecutive settles both
+  // reload). null = an unleased persist (headless agent run / hand-built harness cfg) — the
+  // renderer then never drops it.
   try {
-    broadcastChatEvent('chat:turn-persisted', { sessionId: turn.sessionId, status: 'finished' })
+    broadcastChatEvent('chat:turn-persisted', {
+      sessionId: turn.sessionId,
+      status: 'finished',
+      runId: turn.runId ?? null
+    })
   } catch (err) {
     console.error('[ai-gateway] chat:turn-persisted broadcast failed (persist landed OK)', err)
   }
@@ -351,11 +361,20 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
   // harness-chat lane A (B1) — MAILAGENT_CHAT_DETACHED_RUNS gates detach-tolerant chat runs: client
   // disconnect no longer aborts /api/ai/chat's upstream call (the gateway drains server-side to
   // persistTurn); the composer stop goes through POST /api/ai/run/stop. Default ON; an explicit env
-  // false is the emergency rollback → registry unwired → close→abort wiring byte-identical (and the
-  // run endpoints 404). main-env-only, NO vite define (the renderer never reads it — it just calls
-  // the endpoints best-effort).
+  // false is the emergency rollback. main-env-only, NO vite define (the renderer never reads it — it
+  // just calls the endpoints best-effort).
+  //
+  // 🔴 codex r2 [A] — the ActiveRunRegistry is DECOUPLED from the flag and always built: it serves
+  // the per-session run mutex of the ALWAYS-ON approval-resume chain (a /decide resume and a new
+  // /api/ai/chat turn for the same session must never interleave their persistence) plus the
+  // /run/active truth probe, so its presence is a safety property, not a detached-runs feature.
+  // The flag now gates ONLY the drain behaviour (detached server-side drain vs legacy close→abort).
+  // Off-branch semantics (documented, no longer byte-identical): a chat run still takes the session
+  // slot; a client disconnect aborts the run AND releases the slot immediately (abort 即释放, wired
+  // on the response 'close' in server.ts), so the rollback target is "old drain behaviour + the
+  // approval-resume mutex kept". CLAUDE.md 开关表 carries the same wording.
   const detachedRunsEnabled = envBool('MAILAGENT_CHAT_DETACHED_RUNS', true)
-  const activeRuns = detachedRunsEnabled ? new ActiveRunRegistry() : undefined
+  const activeRuns = new ActiveRunRegistry()
   // Set after the server listens (chicken-and-egg: the announce needs the gateway's own port, known
   // only post-listen; a paused approval fires well after startup so this is populated by then).
   let gatewayPort = 0
@@ -528,7 +547,7 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     // R2-3 — 审批暂停轮的 assistant 消息 eager 落库（chatRun 已剥离 approval-requested part 的
     // display-safe 副本）。upsert by UIMessage id：resume 的 persistTurn 以同一 merged id REPLACE
     // 该行 → 无重复行、无僵死「待确认」卡；user 行已由 onTurnStart eager 写过。best-effort。
-    persistPausedAssistant: (sessionId, redactedMessage, modelId) => {
+    persistPausedAssistant: (sessionId, redactedMessage, modelId, runId) => {
       if (sessionId == null) return
       try {
         const existing = findAssistantMessageRowIdByUiId(sessionId, redactedMessage.id)
@@ -550,8 +569,13 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
         }
         // B2 — a pause is ALSO new content (the redacted turn + a claimable approval): broadcast
         // status:'paused' so an open panel re-probes /approval/pending (in-panel card, B3) and the
-        // history lists refresh their unread badges.
-        broadcastChatEvent('chat:turn-persisted', { sessionId, status: 'paused' })
+        // history lists refresh their unread badges. codex r2 [C] — runId rides along (see the
+        // persistTurn broadcast above) so the renderer settle door dedups per run.
+        broadcastChatEvent('chat:turn-persisted', {
+          sessionId,
+          status: 'paused',
+          runId: runId ?? null
+        })
       } catch (err) {
         console.error('[ai-gateway] persistPausedAssistant write failed (best-effort)', err)
       }

@@ -45,6 +45,7 @@ import { AiSdkRuntimeProvider } from './runtime/AiSdkRuntimeProvider'
 import { ThreadRunningBridge } from './runtime/ThreadRunningBridge'
 import { makeSessionSettledHandler } from './runtime/threadRunningGuard'
 import { useBackgroundChatRun } from './runtime/useBackgroundChatRun'
+import { useApprovalDecideBusy } from './useApprovalDecideBusy'
 import { PendingApprovalPanel } from './PendingApprovalPanel'
 import { resolveAiGatewayBaseUrl } from './runtime/flags'
 import { AssistantThread } from './components/thread'
@@ -158,6 +159,13 @@ export function AIChatPanel({
   }, [])
   const thinkingSupported = backendSupportsThinking(backend)
   const thinkingActive = thinkingSupported && thinkingEnabled
+  // P1-2 (07-15 codex r1) — an in-panel approval decide runs the server-side resume synchronously
+  // and holds that session's run lease; disable the composer for its duration (a send would 409).
+  // codex r2 [E] — SESSION-scoped: only the deciding session's composer is fenced; switching to
+  // another session unlocks immediately (the original request settles on its own).
+  const { sendDisabled: approvalSendDisabled, onDecideBusyChange } = useApprovalDecideBusy(
+    chat.activeSessionId
+  )
   // PART 2 — auto-approval mode (Settings → AI), threaded into the ai-sdk runtime body.
   const approvalMode = useApprovalMode()
   const { models: availableModels } = useEnabledModels()
@@ -205,6 +213,7 @@ export function AIChatPanel({
       availableModels,
       onModelChange,
       modelPickerDisabled: false,
+      sendDisabled: approvalSendDisabled,
       mentions,
       onAddMention,
       onRemoveMention,
@@ -219,6 +228,7 @@ export function AIChatPanel({
       backend.model,
       availableModels,
       onModelChange,
+      approvalSendDisabled,
       mentions,
       onAddMention,
       onRemoveMention,
@@ -442,6 +452,7 @@ export function AIChatPanel({
         onDecided={() => {
           void chatReloadActiveSession().then(() => setIslandRefreshNonce((n) => n + 1))
         }}
+        onDecideBusyChange={onDecideBusyChange}
       />
     ) : undefined
   // B1 — "AI 仍在后台输出" placeholder while a detached run streams for this session (truth =

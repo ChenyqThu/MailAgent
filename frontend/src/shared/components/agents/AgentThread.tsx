@@ -15,6 +15,7 @@ import { ArrowDown, CornerDownRight } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 import { cn } from '@shared/lib/cn'
+import { useChatComposerControls } from '@shared/assistant/components/composerControls'
 
 const AgentStrandsBackdrop = lazy(() =>
   import('@shared/components/effects/AgentStrandsBackdrop').then((m) => ({
@@ -70,6 +71,11 @@ export function AgentThread({
   contextChip
 }: AgentThreadProps): React.JSX.Element {
   const isEmpty = useAuiState(isNewChatView)
+  // codex r3 P2 — follow-up chips autoSend through the thread (bypassing the composer form), so
+  // they honour the same sendDisabled fence as Enter/Send/slash/quick-actions (an approval decide
+  // → server resume holds the session's run lease; a send would 409).
+  const controls = useChatComposerControls()
+  const sendDisabled = controls?.sendDisabled === true
   return (
     <ThreadPrimitive.Root
       className="relative isolate flex min-h-0 flex-1 flex-col glass-3 text-ink-fg"
@@ -127,7 +133,11 @@ export function AgentThread({
                     key={`${i}-${fu}`}
                     prompt={fu}
                     autoSend
-                    className="inline-flex items-center gap-1.5 rounded-full border border-ink-border-soft bg-ink-2 px-3 py-1.5 text-aux text-ink-fg-1 transition-colors duration-fast hover:bg-ink-3"
+                    disabled={sendDisabled}
+                    className={cn(
+                      'inline-flex items-center gap-1.5 rounded-full border border-ink-border-soft bg-ink-2 px-3 py-1.5 text-aux text-ink-fg-1 transition-colors duration-fast hover:bg-ink-3',
+                      sendDisabled && 'cursor-not-allowed opacity-50'
+                    )}
                   >
                     <CornerDownRight size={13} strokeWidth={1.75} className="shrink-0 text-coral" />
                     {fu}

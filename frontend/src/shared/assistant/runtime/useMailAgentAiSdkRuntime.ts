@@ -19,12 +19,14 @@
 // (chatMessageToUIMessage → useChatRuntime({ messages }), architecture §13.8.5). S3 — context
 // injection is always on (the CONTEXT_INJECTION flag was GA'd away).
 
-import { useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { AssistantRuntime } from '@assistant-ui/react'
 import { AssistantChatTransport, useChatRuntime } from '@assistant-ui/react-ai-sdk'
 
 import type { AgentContextSnapshot } from '@shared/assistant/context/contextSnapshot'
 import type { MailAgentUIMessage } from '@shared/assistant/uiMessage'
+
+import { recordOwnRun, registerOwnRunOwner, type OwnRunOwner } from './ownRuns'
 
 type AiSdkMessageLike = { role?: unknown; parts?: unknown[] }
 type AiSdkToolPartLike = { type: string; state?: unknown }
@@ -158,6 +160,15 @@ export function useMailAgentAiSdkRuntime(opts: UseMailAgentAiSdkRuntimeOptions):
     approvalMode
   } = opts
 
+  // codex r3 P1 — own-run ownership is scoped to THIS runtime instance (the mount that actually
+  // holds the attached stream), not the renderer. useState's lazy init mints the token exactly once
+  // per instance (pure identity, never set again); it survives StrictMode's effect replay (same
+  // instance → same token → re-register restores liveness), while a REAL unmount (session switch →
+  // keyed provider remount) releases it, so a still-streaming run degrades to a background run that
+  // a later mount witnesses + settles normally (ownRuns.ts).
+  const [ownRunOwner] = useState<OwnRunOwner>(() => ({}))
+  useEffect(() => registerOwnRunOwner(ownRunOwner), [ownRunOwner])
+
   // Phase 06a — per-thread session-id latch. Seeded from the sessionId prop (reload → an existing id;
   // a new conversation → null, created lazily on the first send). The panel remounts this provider
   // keyed by (email, session), so within a mount the prop is stable and the latch owns the
@@ -214,7 +225,19 @@ export function useMailAgentAiSdkRuntime(opts: UseMailAgentAiSdkRuntimeOptions):
             { once: true }
           )
         }
-        return fetch(input, init)
+        // codex r2 [C] — own-run attribution: the gateway stamps each leased chat response with
+        // its ActiveRunRegistry runId; recording it lets useBackgroundChatRun's settle door tell
+        // our own turn's persist broadcast from a genuine background settle (per-run, replacing
+        // the r1 time-window heuristics). Headers arrive at stream START (well before the persist
+        // broadcast) so the record is never late. Absent header (older gateway / unleased run) →
+        // no record, the poll-mask degrade path handles it. codex r3 P1 — recorded under THIS
+        // runtime instance's owner token: the mask holds only while this mount is alive; a header
+        // landing after unmount records against a released owner = background from the start.
+        return fetch(input, init).then((res) => {
+          const runId = res.headers.get('x-mailagent-run-id')
+          if (runId) recordOwnRun(ownRunOwner, runId)
+          return res
+        })
       },
       body: async () => {
         const sid = await resolveAiSdkSessionId(latchRef.current, sessionId, onEnsureSession)
@@ -243,8 +266,18 @@ export function useMailAgentAiSdkRuntime(opts: UseMailAgentAiSdkRuntimeOptions):
       }
     })
     // sessionId intentionally excluded from deps — owned by latchRef (see comment above).
+    // ownRunOwner is a stable per-instance token (never changes within a mount) → never rebuilds.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gatewayBaseUrl, model, system, thinking, approvalMode, contextSnapshot, onEnsureSession])
+  }, [
+    gatewayBaseUrl,
+    model,
+    system,
+    thinking,
+    approvalMode,
+    contextSnapshot,
+    onEnsureSession,
+    ownRunOwner
+  ])
 
   return useChatRuntime({
     transport,

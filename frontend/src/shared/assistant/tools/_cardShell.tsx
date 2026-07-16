@@ -117,7 +117,10 @@ export function CardFrame({
 
 /** The approve / reject action row shown while a card is pending. `onApprove` may be async
  *  (edit-tier first POSTs the edit); a thrown error is surfaced inline and the approval is NOT
- *  sent. `approveLabel` defaults to the localized approve label (chat.approvalShell.approve). */
+ *  sent. P2-1 (codex r1) — `onReject` may be async too (server-side /decide): BOTH buttons route
+ *  through the SAME busy/error state machine, so a rejected reject-Promise surfaces inline instead
+ *  of becoming an unhandled rejection while the card silently stays live. `approveLabel` defaults
+ *  to the localized approve label (chat.approvalShell.approve). */
 export function ApprovalActions({
   onApprove,
   onReject,
@@ -125,18 +128,20 @@ export function ApprovalActions({
   disabled
 }: {
   onApprove: () => void | Promise<void>
-  onReject: () => void
+  onReject: () => void | Promise<void>
   approveLabel?: string
   disabled?: boolean
 }): React.JSX.Element {
   const { t } = useTranslation()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const handleApprove = async (): Promise<void> => {
+  // Shared async action machine: busy disables the pair while either action is in flight; a throw
+  // renders inline and re-enables. On success busy stays latched — the card transitions/unmounts.
+  const runAction = async (action: () => void | Promise<void>): Promise<void> => {
     setBusy(true)
     setError(null)
     try {
-      await onApprove()
+      await action()
     } catch (e) {
       setError(errorMessage(e))
       setBusy(false)
@@ -152,7 +157,7 @@ export function ApprovalActions({
       <div className="flex items-center justify-end gap-2">
         <button
           type="button"
-          onClick={onReject}
+          onClick={() => void runAction(onReject)}
           disabled={busy || disabled}
           className={cn(
             // leading-none: text-aux 的 20px 行高在 28px 按钮里因 CJK half-leading 视觉偏高，
@@ -167,7 +172,7 @@ export function ApprovalActions({
         </button>
         <button
           type="button"
-          onClick={() => void handleApprove()}
+          onClick={() => void runAction(onApprove)}
           disabled={busy || disabled}
           className={cn(
             'inline-flex h-7 items-center justify-center gap-1 rounded-md px-3 text-aux font-medium leading-none',

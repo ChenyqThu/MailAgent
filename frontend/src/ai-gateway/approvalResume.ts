@@ -39,6 +39,11 @@ export interface ResumeDecideInput {
   toolCallId: string
   decision: 'approve' | 'reject'
   resumeToken: string
+  /** codex r2 [C] — the ActiveRunRegistry lease held by handleApprovalDecide for this resume.
+   *  Stamped onto the PreparedChatRun so the resume's persists (completed turn / re-pause) carry
+   *  it into the 'chat:turn-persisted' broadcast (per-run settle dedup). undefined = no lease
+   *  (registry unwired / unknown session). */
+  runId?: string
 }
 
 export interface ResumeResult {
@@ -162,6 +167,8 @@ export async function resumeApprovalRun(
     return { ok: false, status: 'error', sessionId: entry.sessionId, error: prepared.body.error }
   }
   const run = prepared.run
+  // codex r2 [C] — carry the /decide lease into the persist path (broadcast per-run dedup).
+  run.runId = input.runId
 
   // Drain the stream server-side (no client to pipe to). This drives the tool loop (execute →
   // guard.verify/consume → write). Wrap the shared persist so we can observe whether the resumed run

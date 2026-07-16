@@ -639,8 +639,15 @@ export interface ChatApi {
    * (updated_at just bumped). Deliberately a NEW event — 'chat:session-updated' keeps its 3-value
    * island-settle union untouched. Electron-only; optional — web (HttpApi) omits it and degrades to
    * the /api/ai/run/active poll. Returns an unsubscribe function.
+   *
+   * codex r2 [C] — `runId` is the run's gateway ActiveRunRegistry id (per-run settle dedup +
+   * own-run attribution in useBackgroundChatRun); null = an unleased persist (headless agent run).
    */
   onTurnPersisted?(
-    handler: (payload: { sessionId: number; status: 'finished' | 'paused' }) => void
+    handler: (payload: {
+      sessionId: number
+      status: 'finished' | 'paused'
+      runId: string | null
+    }) => void
   ): () => void
 }

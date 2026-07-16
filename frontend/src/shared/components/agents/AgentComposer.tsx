@@ -428,6 +428,11 @@ export function AgentComposer(): React.JSX.Element {
   const aui = useAui()
   const controls = useChatComposerControls()
   const mention = useEmailMentionAdapter(controls)
+  // codex r2 [D] — sendDisabled gates EVERY send path, not just the Send button: the Lexical
+  // input's Enter calls aui.composer().send() directly (submitMode 'none' turns it off), slash
+  // commands append through the thread (guarded in execute below), and the Root form gate covers
+  // any residual requestSubmit.
+  const sendDisabled = controls?.sendDisabled === true
 
   // Privacy guard (codex HIGH-1): the in-field @ inserts a directive chip AND records the email in
   // controls.mentions (the send-time buildMentionContext source). Lexical exposes no "directive removed"
@@ -454,6 +459,8 @@ export function AgentComposer(): React.JSX.Element {
   }, [composerText, controls])
 
   // / slash commands — each sends a representative quick-action prompt through the active runtime.
+  // codex r2 [D] — execute is busy-gated: a slash command appends straight through the thread
+  // (bypassing the form), so it must honour the same sendDisabled fence as Enter/Send.
   const slashCommands = useMemo<Unstable_SlashCommand[]>(
     () =>
       SLASH_DEFS.map((d) => ({
@@ -461,6 +468,7 @@ export function AgentComposer(): React.JSX.Element {
         label: t(d.labelKey),
         icon: d.icon,
         execute: () => {
+          if (sendDisabled) return
           const thread = aui.thread()
           if (thread.getState().isRunning) return
           thread.append({
@@ -469,7 +477,7 @@ export function AgentComposer(): React.JSX.Element {
           })
         }
       })),
-    [t, aui]
+    [t, aui, sendDisabled]
   )
   const slash = unstable_useSlashCommandAdapter({
     commands: slashCommands,
@@ -480,7 +488,14 @@ export function AgentComposer(): React.JSX.Element {
 
   return (
     <ComposerPrimitive.Unstable_TriggerPopoverRoot>
-      <ComposerPrimitive.Root className="relative flex w-full flex-col">
+      {/* codex r2 [D] — the Root gate blocks any residual form submit while busy (radix
+          composeEventHandlers skips assistant-ui's send when defaultPrevented). */}
+      <ComposerPrimitive.Root
+        onSubmit={(e) => {
+          if (sendDisabled) e.preventDefault()
+        }}
+        className="relative flex w-full flex-col"
+      >
         {/* AI 对话框 — reactbits 官方 BorderGlow 包裹（卡片自带 bg/border/圆角 + hover mesh 彩虹边框 +
             edge-light 辉光环；inner 容器只提供 flex + 内边距，去掉旧 shell 的 bg/rounded/accent 描边以免
             双层）。glowRadius 20（< 官方 40）控外扩，避免窄浮窗里 edge-light 撑出横向滚动条。 */}
@@ -490,6 +505,9 @@ export function AgentComposer(): React.JSX.Element {
             <LexicalComposerInput
               directiveChip={AgentDirectiveChip}
               placeholder={isEmptyThread ? t('agentView.composer.placeholder') : ''}
+              // codex r2 [D] — the Lexical Enter path calls aui.composer().send() DIRECTLY (no form
+              // submit to gate), so busy turns Enter-submit off entirely.
+              submitMode={sendDisabled ? 'none' : 'enter'}
               autoFocus
               className="scrollbar-thin relative max-h-32 min-h-[2.5rem] w-full resize-none bg-transparent px-2.5 py-1 text-body leading-snug text-ink-fg outline-none [&_.aui-lexical-input]:min-h-lh [&_.aui-lexical-input]:outline-none [&_.aui-lexical-placeholder]:pointer-events-none [&_.aui-lexical-placeholder]:absolute [&_.aui-lexical-placeholder]:left-0 [&_.aui-lexical-placeholder]:right-0 [&_.aui-lexical-placeholder]:top-0 [&_.aui-lexical-placeholder]:truncate [&_.aui-lexical-placeholder]:px-2.5 [&_.aui-lexical-placeholder]:py-1 [&_.aui-lexical-placeholder]:text-ink-fg-3"
             />
@@ -503,6 +521,8 @@ export function AgentComposer(): React.JSX.Element {
                   <ComposerPrimitive.Send
                     aria-label={t('chat.composer.send')}
                     title={t('chat.composer.send')}
+                    // P1-2 — an approval decide holds the session's run lease; sending would 409.
+                    disabled={sendDisabled}
                     className="grid size-8 shrink-0 place-items-center rounded-full bg-[rgb(var(--c-accent))] text-[rgb(var(--c-accent-fg))] transition-opacity duration-fast hover:opacity-90 disabled:opacity-40"
                   >
                     <ArrowUp size={17} strokeWidth={2.5} />
