@@ -19,7 +19,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from '@tanstack/react-router'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { qk } from '@shared/lib/queryKeys'
 import { History, Maximize2, Plus, Settings, Sparkles, X } from 'lucide-react'
 
@@ -44,6 +44,8 @@ import { useApprovalMode } from '@shared/lib/approvalMode'
 import { AiSdkRuntimeProvider } from './runtime/AiSdkRuntimeProvider'
 import { ThreadRunningBridge } from './runtime/ThreadRunningBridge'
 import { makeSessionSettledHandler } from './runtime/threadRunningGuard'
+import { useBackgroundChatRun } from './runtime/useBackgroundChatRun'
+import { PendingApprovalPanel } from './PendingApprovalPanel'
 import { resolveAiGatewayBaseUrl } from './runtime/flags'
 import { AssistantThread } from './components/thread'
 import {
@@ -283,6 +285,10 @@ export function AIChatPanel({
   // listener 泄漏 + StrictMode 双订阅）。onSessionUpdated 是 optional（web HttpApi 缺省）→ ?. 。
   const [islandRefreshNonce, setIslandRefreshNonce] = useState(0)
   const aiSdkRunningRef = useRef(false)
+  // harness-chat lane A (07-15) — reactive mirror of the mid-stream verdict (ThreadRunningBridge
+  // onRunningChange) for the background-run placeholder (an own attached stream must not read as a
+  // background run).
+  const [aiSdkRunning, setAiSdkRunning] = useState(false)
   const chatReloadActiveSession = chat.reloadActiveSession
   const chatActiveSessionId = chat.activeSessionId
   useEffect(() => {
@@ -299,6 +305,36 @@ export function AIChatPanel({
     )
     return dispose
   }, [contextInjectionOn, mailApi, chatActiveSessionId, chatReloadActiveSession])
+
+  // harness-chat lane A (B1/B2/B4) — detached-run awareness: probes /api/ai/run/active for THIS
+  // session, shows the placeholder while a background run streams, reloads + re-seeds when it
+  // settles, and (broadcast glue) refreshes unread badges + marks the watched session read on every
+  // 'chat:turn-persisted'. onSessionsTouched refreshes the popover's local session rows (badge
+  // source for the email-scoped history list).
+  const chatRefreshSessions = chat.refreshSessions
+  const { backgroundActive } = useBackgroundChatRun({
+    gatewayBaseUrl,
+    sessionId: chatActiveSessionId,
+    enabled: contextInjectionOn,
+    refreshNonce: islandRefreshNonce,
+    localRunning: aiSdkRunning,
+    onSettled: () => {
+      void chatReloadActiveSession().then(() => setIslandRefreshNonce((n) => n + 1))
+    },
+    onSessionsTouched: () => {
+      void chatRefreshSessions()
+    }
+  })
+
+  // B4 — read watermark: whenever the ACTIVE session's rows are (re)loaded the user is looking at
+  // them → mark read (fire-and-forget) + refresh the unified history so its badge clears.
+  const queryClientForRead = useQueryClient()
+  useEffect(() => {
+    if (chatActiveSessionId == null || chat.messagesSessionId !== chatActiveSessionId) return
+    void mailApi.chat.markSessionRead(chatActiveSessionId).then(() => {
+      void queryClientForRead.invalidateQueries({ queryKey: qk.chat.allSessions() })
+    })
+  }, [chatActiveSessionId, chat.messagesSessionId, mailApi, queryClientForRead])
 
   // ── old-session re-scope ────────────────────────────────────────────────────
   // Alias the two chat members the pendingOpen effect reads so exhaustive-deps tracks each as a
@@ -386,54 +422,45 @@ export function AIChatPanel({
   // The live runtime needs the base URL discovered AND a healthy probe.
   const gatewayUnavailable = !aiSdkEnabled || gatewayDegraded
 
-  // Part B follow-up (paused-session reload notice) — after seeding a HISTORY session (non-empty
-  // initialMessages), probe the gateway once for a still-live stashed approval belonging to it. The
-  // paused turn is persisted REDACTED (R2-3: a reloaded session must not render a dead approval
-  // card), so without this probe the user sees only the pre-approval text and has no cue the
-  // approval is still actionable on the island. islandRefreshNonce keys the probe so the
-  // settle-driven reload re-queries (→ pending:false → the notice clears). Any failure (web HttpApi
-  // where the gateway isn't reachable, gateway down, island agent off → {pending:false}) resolves
-  // silent-false — the notice is best-effort UX, never an error surface.
+  // B3 (harness-chat lane A, 07-15 owner拍板：无灵动岛方案优先) — the ACTIONABLE in-panel approval
+  // card replaces the old informational "act on the island" notice (backlog A2 closed). After
+  // seeding a HISTORY session (non-empty initialMessages — the paused turn persists REDACTED per
+  // R2-3, so the card is the only actionable surface), the shared PendingApprovalPanel live-probes
+  // the gateway stash and renders an approve/reject card on a hit; decisions ride the SAME
+  // /api/ai/approval/decide the record view uses (island-independent). Decide → reload + re-seed
+  // through the existing islandRefreshNonce machinery; miss → renders nothing (manual sessions have
+  // no run read-state to derive an honest expired notice from).
   const pendingApprovalSessionId =
     contextInjectionOn && gatewayBaseUrl != null && initialMessages && initialMessages.length > 0
       ? chat.activeSessionId
       : null
-  const pendingApprovalQ = useQuery({
-    queryKey: qk.aiGateway.approvalPending(
-      gatewayBaseUrl,
-      pendingApprovalSessionId,
-      islandRefreshNonce
-    ),
-    queryFn: async (): Promise<{ pending: boolean; toolName?: string }> => {
-      try {
-        const res = await fetch(
-          `${gatewayBaseUrl}/api/ai/approval/pending?sessionId=${pendingApprovalSessionId}`
-        )
-        if (!res.ok) return { pending: false }
-        const body = (await res.json()) as { pending?: unknown; toolName?: unknown }
-        return body.pending === true
-          ? {
-              pending: true,
-              ...(typeof body.toolName === 'string' ? { toolName: body.toolName } : {})
-            }
-          : { pending: false }
-      } catch {
-        return { pending: false }
-      }
-    },
-    enabled: pendingApprovalSessionId !== null,
-    retry: false,
-    refetchOnWindowFocus: false
-  })
-  // Rendered via AssistantThread's pendingSlot (inside the viewport, after the messages) — the same
-  // spot the legacy path shows its pending-confirmation dialog, so the notice scrolls with the
-  // conversation and reads as part of it. Informational only: approving happens on the island
-  // (in-panel approve is backlog A2).
-  const pendingApprovalNotice =
-    pendingApprovalQ.data?.pending === true ? (
-      <div className="mt-2 shrink-0 rounded-md border border-ink-border bg-ink-3/70 px-3 py-2 text-aux text-ink-fg-2">
-        {t('chat.aiSdk.pendingApproval', { toolName: pendingApprovalQ.data.toolName ?? '' })}
-      </div>
+  const pendingApprovalCard =
+    pendingApprovalSessionId !== null ? (
+      <PendingApprovalPanel
+        sessionId={pendingApprovalSessionId}
+        refreshKey={islandRefreshNonce}
+        onDecided={() => {
+          void chatReloadActiveSession().then(() => setIslandRefreshNonce((n) => n + 1))
+        }}
+      />
+    ) : undefined
+  // B1 — "AI 仍在后台输出" placeholder while a detached run streams for this session (truth =
+  // /api/ai/run/active); the settle transition reloads + re-seeds automatically.
+  const backgroundRunNotice = backgroundActive ? (
+    <div
+      data-background-run-notice
+      className="mt-2 flex shrink-0 items-center gap-2 rounded-md border border-ink-border bg-ink-3/70 px-3 py-2 text-aux text-ink-fg-2"
+    >
+      <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-coral/100" aria-hidden />
+      {t('chat.aiSdk.backgroundRunning')}
+    </div>
+  ) : undefined
+  const pendingSlotContent =
+    pendingApprovalCard || backgroundRunNotice ? (
+      <>
+        {backgroundRunNotice}
+        {pendingApprovalCard}
+      </>
     ) : undefined
 
   // Sidebar session preview cache (lazy on open).
@@ -743,12 +770,16 @@ export function AIChatPanel({
                       initialMessages={initialMessages}
                       onEnsureSession={onEnsureSession}
                     >
-                      {/* Part B — feeds the mid-stream guard above (renders nothing). */}
-                      <ThreadRunningBridge runningRef={aiSdkRunningRef} />
-                      {/* pendingSlot — the reloaded-session "approval still live on the island"
-                          notice (undefined when nothing pending → byte-identical thread). */}
+                      {/* Part B — feeds the mid-stream guard above (renders nothing); 07-15 also
+                          mirrors the verdict into state for the background-run placeholder. */}
+                      <ThreadRunningBridge
+                        runningRef={aiSdkRunningRef}
+                        onRunningChange={setAiSdkRunning}
+                      />
+                      {/* pendingSlot — B1 background-run placeholder + B3 in-panel approval card
+                          (undefined when neither applies → byte-identical thread). */}
                       <AssistantThread
-                        pendingSlot={pendingApprovalNotice}
+                        pendingSlot={pendingSlotContent}
                         emptyState={emptyMessages}
                       />
                     </AiSdkRuntimeProvider>

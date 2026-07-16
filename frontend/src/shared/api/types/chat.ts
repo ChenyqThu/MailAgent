@@ -131,6 +131,11 @@ export interface ChatSession {
   origin?: string | null
   agent_id?: string | null
   agent_job_id?: string | null
+  // harness-chat lane A B4 (task 07-15) — per-session read watermark (ai_chat.db v20 additive
+  // column). NULL/undefined = never marked read → no unread badge; unread derives as
+  // updated_at > last_read_at (see shared/lib/chatUnread.ts). Optional so pre-v20 rows (and the
+  // Python mirror running against a not-yet-migrated DB) stay valid.
+  last_read_at?: number | null
 }
 
 // Row of the global "AI 会话历史" page (chat.listAllSessions). A ChatSession
@@ -399,6 +404,13 @@ export interface ChatApi {
    */
   updateSessionArchived(sessionId: number, archived: boolean): Promise<void>
   /**
+   * harness-chat lane A B4 (task 07-15) — mark a session read: PATCH /chat/sessions/{id}/read sets
+   * last_read_at=now (ai_chat.db v20). Does NOT bump updated_at (a read never reorders history).
+   * Best-effort UX face: NEVER throws (a pre-v20 DB / unreachable serve-api degrades to no-op —
+   * the unread badge just doesn't clear until the next successful mark).
+   */
+  markSessionRead(sessionId: number): Promise<void>
+  /**
    * Sprint 19 / S3 — INSERT a fresh ai_chat_sessions row, bypassing the
    * (email_id, backend_kind, backend_agent_page_id) reuse lookup. The ai-sdk
    * runtime's onEnsureSession creates the session row through this BEFORE the
@@ -618,5 +630,17 @@ export interface ChatApi {
    */
   onSessionUpdated?(
     handler: (payload: { sessionId: number; status: 'completed' | 'rejected' | 'error' }) => void
+  ): () => void
+  /**
+   * harness-chat lane A B2 (task 07-15) — subscribe to gateway turn persists
+   * (`chat:turn-persisted` main→renderer broadcast): EVERY completed-turn persist ('finished') and
+   * every approval-pause eager persist ('paused') fires it, so a panel can refresh a session whose
+   * DETACHED run settled in the background, and the history lists can refresh unread badges
+   * (updated_at just bumped). Deliberately a NEW event — 'chat:session-updated' keeps its 3-value
+   * island-settle union untouched. Electron-only; optional — web (HttpApi) omits it and degrades to
+   * the /api/ai/run/active poll. Returns an unsubscribe function.
+   */
+  onTurnPersisted?(
+    handler: (payload: { sessionId: number; status: 'finished' | 'paused' }) => void
   ): () => void
 }

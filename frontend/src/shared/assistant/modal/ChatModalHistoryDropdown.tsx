@@ -11,6 +11,7 @@ import { Mail, MessagesSquare } from 'lucide-react'
 
 import type { ChatSessionListItem } from '@shared/api/types'
 import { cn } from '@shared/lib/cn'
+import { isSessionUnread } from '@shared/lib/chatUnread'
 
 import { titleOf } from './sessionTitle'
 
@@ -75,6 +76,9 @@ export function ChatModalHistoryDropdown({
                     const Icon = s.anchor_type === 'email' ? Mail : MessagesSquare
                     const selected = s.id === activeSessionId
                     const title = titleOf(s, t)
+                    // B4 (07-15) — unread dot: background persist landed after the last read; the
+                    // selected row never badges (the user is looking at it).
+                    const unread = !selected && isSessionUnread(s)
                     return (
                       <button
                         key={s.id}
@@ -90,11 +94,21 @@ export function ChatModalHistoryDropdown({
                       >
                         <Icon size={13} strokeWidth={1.75} className="shrink-0 text-ink-fg-3" />
                         <span
-                          className="min-w-0 flex-1 truncate text-meta text-ink-fg-1"
+                          className={cn(
+                            'min-w-0 flex-1 truncate text-meta',
+                            unread ? 'font-semibold text-ink-fg' : 'text-ink-fg-1'
+                          )}
                           title={title}
                         >
                           {title}
                         </span>
+                        {unread && (
+                          <span
+                            data-session-unread-dot
+                            aria-label={t('chat.sidebar.unread')}
+                            className="size-1.5 shrink-0 rounded-full bg-coral/100"
+                          />
+                        )}
                       </button>
                     )
                   })}

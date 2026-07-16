@@ -30,6 +30,7 @@ import { MailAgentDomainClient } from '../../ai-gateway/python/domainClient'
 import { buildGatewayTools } from '../../ai-gateway/tools'
 import { ApprovalGuard } from '../../ai-gateway/security/approval'
 import { ApprovalRunStash, DEFAULT_STASH_TTL_MS } from '../../ai-gateway/approvalStash'
+import { ActiveRunRegistry } from '../../ai-gateway/activeRuns'
 import { extractApprovalStashInput } from '../../ai-gateway/chatRun'
 import { buildToolA2UIPayload } from '../../shared/assistant/tools/a2ui'
 import { extractTextFromUIMessage } from '@shared/assistant/uiMessage'
@@ -99,6 +100,21 @@ function envBool(key: string, def: boolean): boolean {
   if (raw == null || raw === '') return def
   const v = raw.trim().toLowerCase()
   return v === '1' || v === 'true'
+}
+
+/** harness-chat lane A (B2) — broadcast a chat event to every renderer window (the same
+ *  BrowserWindow loop onServerResumeSettled used inline; extracted so persistTurn /
+ *  persistPausedAssistant / the settle hook share one emitter). Best-effort: a torn-down
+ *  renderer never breaks the persist that triggered the broadcast. */
+function broadcastChatEvent(channel: string, payload: Record<string, unknown>): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.isDestroyed()) continue
+    try {
+      win.webContents.send(channel, payload)
+    } catch {
+      /* renderer torn down mid-send — ignore */
+    }
+  }
 }
 
 /**
@@ -194,6 +210,16 @@ function persistTurn(turn: PersistTurnInput): void {
       // S2 W1 — exec whitelist rule id (approval_status='auto_whitelist').
       ...(tc.whitelistRuleId !== undefined ? { whitelistRuleId: tc.whitelistRuleId } : {})
     })
+  }
+  // harness-chat lane A (B2) — every COMPLETED-turn persist broadcasts 'chat:turn-persisted' so a
+  // renderer can (a) reload a session whose detached run finished in the background and (b) refresh
+  // the history lists' unread badges (updated_at just bumped). A NEW event (not
+  // 'chat:session-updated') so the island-settle handler's 3-value status union stays untouched.
+  // Best-effort: a broadcast failure never breaks the persist that already landed.
+  try {
+    broadcastChatEvent('chat:turn-persisted', { sessionId: turn.sessionId, status: 'finished' })
+  } catch (err) {
+    console.error('[ai-gateway] chat:turn-persisted broadcast failed (persist landed OK)', err)
   }
 }
 
@@ -302,28 +328,34 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
   // errors. An explicit env false is the emergency rollback — the guard then keeps its 5-min TTL
   // (byte-identical to pre-cutover).
   const islandAgentEnabled = envBool('MAILAGENT_ISLAND_AGENT_ENABLED', true)
-  // S6 W2 (PRD P8) — the SERVER-SIDE approval resume infra (stash + extended guard TTL + settle hook)
-  // follows EITHER flag, not just the island: a headless custom-agent run (MAILAGENT_CUSTOM_AGENTS_
-  // ENABLED) that pauses at an approval must be claimable IN-APP (the record view's /decide) even with
-  // the island off ("内部审批优先"). Only the announce LEG (pushing an island card) stays island-only,
-  // gated below. Both flags off → serverResumeEnabled false → no stash, 5-min guard TTL, /pending +
-  // /decide 404 → byte-identical to pre-S6. (customAgentsEnabled is re-read for the endpoint gating
-  // comment at the agent-run wiring below; one envBool per key is cheap.)
-  // Default ON since E3 cutover (2026-07-06; v1.4.0 dogfood 全 flag-on 通过 R1-R5) — an explicit
-  // env false is the emergency rollback (kill-switch). The Python side reads the SAME env via
-  // pydantic (custom_agents_enabled, default True) — both sides flip together (E3 WP4).
+  // 07-15 owner拍板（无灵动岛方案优先，task 07-15-harness-chat lane A）— the SERVER-SIDE approval
+  // resume infra (stash + extended guard TTL + /pending + /decide + settle broadcast) is now
+  // UNCONDITIONAL: the in-panel approval card (chat 面板内可批卡) is the PRIMARY approval surface and
+  // must work with BOTH MAILAGENT_ISLAND_AGENT_ENABLED and MAILAGENT_CUSTOM_AGENTS_ENABLED explicitly
+  // false — the island is an optional overlay notification face that may be removed. Only the island
+  // ANNOUNCE leg (+ the island result cards) stays island-gated below. Security posture is unchanged:
+  // /decide stays fail-closed (one-shot claim, approvalId/token-matched), the guard stays hash-bound
+  // one-shot, and cross-surface single-resolver semantics (oneShotWrites / isApprovalResolved /
+  // rejectApproval / serverResumeEnabled in chatRun) are now ALWAYS live — a strictly stricter write
+  // gate than the old flag-gated wiring. (customAgentsEnabled still gates the S4 headless agent-run
+  // endpoint + job settle below; default ON since E3 cutover, env explicit false = kill-switch.)
   const customAgentsEnabled = envBool('MAILAGENT_CUSTOM_AGENTS_ENABLED', true)
-  const serverResumeEnabled = islandAgentEnabled || customAgentsEnabled
+  const serverResumeEnabled = true
   // The guard record must outlive the stash window so a verify()/consume() on the eventual in-app (or
-  // island) approve doesn't expire first — extend it whenever server-side resume is live.
-  const approvalGuard = serverResumeEnabled
-    ? new ApprovalGuard({ ttlMs: DEFAULT_STASH_TTL_MS })
-    : new ApprovalGuard()
-  // Part B / S6 W2 — per-gateway stash of paused approval runs (server-side resume source). Built when
-  // EITHER server-resume flag is on; both off → undefined → chatRun's stash block is inert + /pending +
-  // /decide 404 (byte-identical to pre-S6). The stash's PRESENCE (not the island flag) is now the
-  // gate everywhere downstream.
-  const approvalStash = serverResumeEnabled ? new ApprovalRunStash() : undefined
+  // island) approve doesn't expire first — extended TTL whenever server-side resume is live (always).
+  const approvalGuard = new ApprovalGuard({ ttlMs: DEFAULT_STASH_TTL_MS })
+  // Part B / S6 W2 / 07-15 — per-gateway stash of paused approval runs (server-side resume source).
+  // Always built: the stash's PRESENCE is the gate everywhere downstream (/pending + /decide + the
+  // chatRun stash leg), and it must hold with both flags off (in-panel card is the primary surface).
+  const approvalStash: ApprovalRunStash | undefined = new ApprovalRunStash()
+  // harness-chat lane A (B1) — MAILAGENT_CHAT_DETACHED_RUNS gates detach-tolerant chat runs: client
+  // disconnect no longer aborts /api/ai/chat's upstream call (the gateway drains server-side to
+  // persistTurn); the composer stop goes through POST /api/ai/run/stop. Default ON; an explicit env
+  // false is the emergency rollback → registry unwired → close→abort wiring byte-identical (and the
+  // run endpoints 404). main-env-only, NO vite define (the renderer never reads it — it just calls
+  // the endpoints best-effort).
+  const detachedRunsEnabled = envBool('MAILAGENT_CHAT_DETACHED_RUNS', true)
+  const activeRuns = detachedRunsEnabled ? new ActiveRunRegistry() : undefined
   // Set after the server listens (chicken-and-egg: the announce needs the gateway's own port, known
   // only post-listen; a paused approval fires well after startup so this is populated by then).
   let gatewayPort = 0
@@ -516,6 +548,10 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
             uiMessageJson: JSON.stringify(redactedMessage)
           })
         }
+        // B2 — a pause is ALSO new content (the redacted turn + a claimable approval): broadcast
+        // status:'paused' so an open panel re-probes /approval/pending (in-panel card, B3) and the
+        // history lists refresh their unread badges.
+        broadcastChatEvent('chat:turn-persisted', { sessionId, status: 'paused' })
       } catch (err) {
         console.error('[ai-gateway] persistPausedAssistant write failed (best-effort)', err)
       }
@@ -685,9 +721,10 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
           // byte-identical.
           skillGatingEnabled,
           advertisedSkills: _systemPromptCache?.value?.advertisedSkills ?? null,
-          // Part B — make preview/edit writes one-shot when island agent is on, so an island-resumed
-          // approval and a renderer-resumed approval never double-execute. Off → byte-identical.
-          oneShotWrites: islandAgentEnabled,
+          // Part B / 07-15 — one-shot preview/edit writes whenever server-side resume is live
+          // (always since the owner拍板): an in-panel/island-resumed approval and a renderer-resumed
+          // approval must never double-execute, independent of the island flag.
+          oneShotWrites: serverResumeEnabled,
           // S1 R1 — chat-session read tools (MAILAGENT_OPENNESS_SESSION_TOOLS, default off).
           sessionToolsEnabled,
           // S1 R2 — profile-config tools (MAILAGENT_OPENNESS_CONFIG_TOOLS, default off).
@@ -725,22 +762,24 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     // dynamic next-question suggestions. Always wired; the route is per-turn best-effort (the renderer
     // POSTs after each completed turn, ai-sdk path only).
     getFollowupContext: (sessionId) => getLastTurnTexts(sessionId),
-    // Part B (harness 上岛, MAILAGENT_ISLAND_AGENT_ENABLED) — server-side island approval resume.
-    // All undefined when off (default) → chatRun's stash/announce block is inert + /api/ai/approval/
-    // decide 404s + write tools keep their pre-Part-B one-call verify, byte-identical.
+    // Part B (harness 上岛) + 07-15 owner拍板 — the island flag now ONLY gates the announce leg
+    // (island card push); the stash + cross-surface single-resolver hooks are ALWAYS wired so the
+    // in-panel approval card works with the island (and custom agents) explicitly off.
     islandAgentEnabled,
+    serverResumeEnabled,
     approvalStash,
+    // B1 — detach-tolerant chat runs (MAILAGENT_CHAT_DETACHED_RUNS, default on). Registry undefined
+    // when the env kill-switch is false → /api/ai/chat keeps close→abort + run endpoints 404.
+    detachedRunsEnabled,
+    activeRuns,
     announceApprovalToIsland: islandAgentEnabled ? announceApprovalToIsland : undefined,
     // /decide short-circuit vs a renderer that won the race: has THIS approval already reached a
     // terminal decision (executed OR rejected) on the other surface? If so, resumeApprovalRun does
-    // not re-run (no double execute / persist; a renderer reject also blocks a later island approve).
-    isApprovalResolved: islandAgentEnabled
-      ? (toolCallId: string) => approvalGuard.isResolved(toolCallId)
-      : undefined,
+    // not re-run (no double execute / persist; a renderer reject also blocks a later in-panel/island
+    // approve). Always wired (07-15): the in-panel decide card is a second surface regardless of flags.
+    isApprovalResolved: (toolCallId: string) => approvalGuard.isResolved(toolCallId),
     // Tombstone an approval as rejected so the other surface can't approve+execute it afterwards.
-    rejectApproval: islandAgentEnabled
-      ? (toolCallId: string) => approvalGuard.reject(toolCallId)
-      : undefined,
+    rejectApproval: (toolCallId: string) => approvalGuard.reject(toolCallId),
     // Part B (dogfood live-refresh) — an island /decide server-side resume settled a persisted
     // session (completed / rejected / error). Broadcast to every renderer window (events_bridge
     // 同款 broadcast 手法) so an OPEN chat panel showing the stale approval card reloads its
@@ -759,14 +798,7 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     // undefined → server.ts's ?. short-circuits (byte-identical).
     onServerResumeSettled: serverResumeEnabled
       ? (sessionId: number, status: 'completed' | 'rejected' | 'error') => {
-          for (const win of BrowserWindow.getAllWindows()) {
-            if (win.isDestroyed()) continue
-            try {
-              win.webContents.send('chat:session-updated', { sessionId, status })
-            } catch {
-              /* renderer torn down mid-send — ignore */
-            }
-          }
+          broadcastChatEvent('chat:session-updated', { sessionId, status })
           if (customAgentsEnabled) {
             try {
               const session = getSession(sessionId)

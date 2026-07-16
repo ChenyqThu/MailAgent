@@ -189,6 +189,33 @@ export function useMailAgentAiSdkRuntime(opts: UseMailAgentAiSdkRuntimeOptions):
     const enabledSkills = contextSnapshot?.capabilities.enabledSkills ?? []
     return new AssistantChatTransport({
       api: `${gatewayBaseUrl}/api/ai/chat`,
+      // harness-chat lane A B1 (task 07-15) — explicit-stop side-channel. With detached runs the
+      // gateway no longer aborts the upstream call on client disconnect, so the composer stop button
+      // (assistant-ui cancel → useChat.stop() → fetch abort) needs a server-visible signal: hook the
+      // request's abort and best-effort POST /api/ai/run/stop for this session. Fires ONLY on an
+      // explicit stop — a keyed remount does NOT abort the in-flight fetch (library-verified, research
+      // §3.1), so a session switch keeps the run alive. Flag-off gateway answers 404 → harmless.
+      fetch: (input: RequestInfo | URL, init?: RequestInit) => {
+        const signal = init?.signal
+        if (signal && !signal.aborted) {
+          signal.addEventListener(
+            'abort',
+            () => {
+              const sid = latchRef.current.id
+              if (sid == null) return
+              void fetch(`${gatewayBaseUrl}/api/ai/run/stop`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ sessionId: sid })
+              }).catch(() => {
+                /* best-effort — flag off / gateway gone */
+              })
+            },
+            { once: true }
+          )
+        }
+        return fetch(input, init)
+      },
       body: async () => {
         const sid = await resolveAiSdkSessionId(latchRef.current, sessionId, onEnsureSession)
         // composer-parity C2 — resolve the mention/attachment prefix at send time (async: mention

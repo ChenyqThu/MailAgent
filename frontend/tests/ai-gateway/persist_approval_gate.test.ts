@@ -448,3 +448,67 @@ describe('makePersistOnFinish — pause branch runs BOTH hooks (R2-3 redact + Pa
     expect(entry?.body).toEqual(ORIGINAL_BODY)
   })
 })
+
+// harness-chat lane A (task 07-15, owner拍板「无灵动岛方案优先」) — the cross-surface single-resolver
+// side effects (finding 1 tombstone + finding 2 duplicate-persist skip) now key off
+// cfg.serverResumeEnabled (the lifecycle sets it unconditionally; the in-panel decide card is a second
+// approval surface even with the island flag OFF). islandAgentEnabled stays a legacy fallback gate —
+// the Part B suite above pins that path unchanged.
+describe('makePersistOnFinish — serverResumeEnabled gates the cross-surface semantics (island OFF)', () => {
+  const rejectedResumeRaw = [
+    USER,
+    {
+      id: 'a-rej',
+      role: 'assistant',
+      parts: [
+        {
+          type: 'tool-email_draft_reply',
+          toolCallId: 't2',
+          state: 'approval-responded',
+          approval: { id: 'ap1', approved: false }
+        }
+      ]
+    }
+  ] as unknown as PreparedChatRun['rawMessages']
+  const rejectDone = {
+    id: 'a-rej-done',
+    role: 'assistant',
+    parts: [{ type: 'text', text: '已取消。' }]
+  } as unknown as MailAgentUIMessage
+
+  test('finding 1 under serverResumeEnabled (islandAgentEnabled ABSENT) — reject still tombstones', async () => {
+    const persisted: PersistTurnInput[] = []
+    const rejected: string[] = []
+    const cfg = {
+      serverResumeEnabled: true,
+      persistTurn: (t: PersistTurnInput) => persisted.push(t),
+      rejectApproval: (tc: string) => rejected.push(tc)
+    } as AiGatewayConfig
+    await fire(makePersistOnFinish(cfg, makeRun(rejectedResumeRaw)), rejectDone)
+    expect(rejected).toEqual(['t2'])
+    expect(persisted).toHaveLength(1)
+  })
+
+  test('finding 2 under serverResumeEnabled (islandAgentEnabled ABSENT) — E_APPROVAL_USED still skips persist', async () => {
+    const persisted: PersistTurnInput[] = []
+    const cfg = {
+      serverResumeEnabled: true,
+      persistTurn: (t: PersistTurnInput) => persisted.push(t)
+    } as AiGatewayConfig
+    const run = makeRun(resumeTurn().rawMessages, { auditEntries: [approvalUsedAudit('t2')] })
+    await fire(makePersistOnFinish(cfg, run), draftDone)
+    expect(persisted).toHaveLength(0)
+  })
+
+  test('BOTH gates off → byte-identical legacy behavior (no tombstone, persist proceeds)', async () => {
+    const persisted: PersistTurnInput[] = []
+    const rejected: string[] = []
+    const cfg = {
+      persistTurn: (t: PersistTurnInput) => persisted.push(t),
+      rejectApproval: (tc: string) => rejected.push(tc)
+    } as AiGatewayConfig
+    await fire(makePersistOnFinish(cfg, makeRun(rejectedResumeRaw)), rejectDone)
+    expect(rejected).toHaveLength(0)
+    expect(persisted).toHaveLength(1)
+  })
+})

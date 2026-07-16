@@ -118,7 +118,7 @@ describe('chat_db — v6 → v7 anchor migration', () => {
     // v16 — DROP agent_memory_kv, M5b physical retirement; v17 — ai_chat_messages_fts, S1 R1;
     // v18 — chat_tool_call.whitelist_rule_id, S2 W1 exec whitelist audit;
     // v19 — ai_chat_sessions.origin/agent_id/agent_job_id, S4 W3 headless agent sessions).
-    expect(ver).toBe('19')
+    expect(ver).toBe('20')
 
     // Anchor columns added + backfilled for the pre-existing email row.
     const row = db.prepare('SELECT * FROM ai_chat_sessions WHERE id = 1').get() as {

@@ -67,6 +67,9 @@ export interface ChatSession {
   origin?: string | null
   agent_id?: string | null
   agent_job_id?: string | null
+  // harness-chat lane A B4 (task 07-15) — per-session read watermark (ai_chat.db v20 additive
+  // column). NULL/undefined = never marked read (no badge); unread = updated_at > last_read_at.
+  last_read_at?: number | null
 }
 
 // Global session-history row. Unlike `ChatSession` (per-email, used by the

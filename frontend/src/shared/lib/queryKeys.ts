@@ -155,7 +155,14 @@ export const qk = {
       gatewayBaseUrl: string | null,
       sessionId: string | number | null,
       islandRefreshNonce: number
-    ) => ['ai-gateway', 'approval-pending', gatewayBaseUrl, sessionId, islandRefreshNonce] as const
+    ) => ['ai-gateway', 'approval-pending', gatewayBaseUrl, sessionId, islandRefreshNonce] as const,
+    // harness-chat lane A B1 — detached-run truth probe (GET /api/ai/run/active). refreshNonce keys
+    // the settle-driven re-probe (same discipline as approvalPending's islandRefreshNonce).
+    runActive: (
+      gatewayBaseUrl: string | null,
+      sessionId: string | number | null,
+      refreshNonce: number
+    ) => ['ai-gateway', 'run-active', gatewayBaseUrl, sessionId, refreshNonce] as const
   },
 
   agentApprovalPending: (sessionId: string | number | null) =>

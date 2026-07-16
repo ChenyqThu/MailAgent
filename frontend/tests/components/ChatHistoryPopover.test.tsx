@@ -351,3 +351,30 @@ describe('ChatHistoryPopover — relative time formatter', () => {
     expect(screen.getByText(i18n.t('chat.sidebar.daysAgo', { n: 2 }))).toBeTruthy()
   })
 })
+
+// harness-chat lane A B4 (task 07-15) — unread badge derivation on the popover rows.
+describe('ChatHistoryPopover — unread badge (B4)', () => {
+  test('dot only when updated_at > last_read_at; active row + never-read rows stay clean', () => {
+    const sessions = [
+      fakeSession({ id: 1, updated_at: 2000, last_read_at: 1000 }), // unread → dot
+      fakeSession({ id: 2, updated_at: 2000, last_read_at: 3000 }), // read → no dot
+      fakeSession({ id: 3, updated_at: 2000 }), // never read (legacy NULL) → no dot
+      fakeSession({ id: 4, updated_at: 2000, last_read_at: 1000 }) // unread but ACTIVE → no dot
+    ]
+    render(
+      <ChatHistoryPopover
+        backendKind="custom-api"
+        sessions={sessions}
+        activeSessionId={4}
+        onSelectSession={vi.fn()}
+        onNewSession={vi.fn()}
+        onClose={vi.fn()}
+      />
+    )
+    const dots = document.querySelectorAll('[data-session-unread-dot]')
+    expect(dots).toHaveLength(1)
+    // the dot sits on session 1's row (the only truly-unread, non-active one)
+    const row = dots[0]!.closest('li')
+    expect(row?.textContent ?? '').toContain('claude-sonnet-4-6')
+  })
+})

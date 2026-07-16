@@ -580,8 +580,10 @@ export function makePersistOnFinish(
     // INDEPENDENT of whether THIS turn then re-pauses at ANOTHER approval gate — so it must run BEFORE
     // the re-pause early return below. (codex re-review edge case: a reject-of-A whose resume immediately
     // requests approval-B would otherwise skip tombstoning A → a stale island approve of A slips
-    // through.) Gated by islandAgentEnabled + `?.`, so flag-off is byte-identical.
-    if (cfg.islandAgentEnabled) {
+    // through.) 07-15 owner拍板 (island-independent approvals): gated by serverResumeEnabled (the
+    // lifecycle sets it unconditionally — the in-panel decide card is a second approval surface even
+    // with the island off) with islandAgentEnabled kept as the legacy fallback gate.
+    if (cfg.serverResumeEnabled || cfg.islandAgentEnabled) {
       for (const id of collectRejectedApprovalToolCallIds(run.rawMessages)) cfg.rejectApproval?.(id)
     }
     // dogfood #3 (HITL 授权重复/卡 loading) — a turn PAUSED at an approval gate still finishes the
@@ -621,8 +623,10 @@ export function makePersistOnFinish(
     // Part B (harness 上岛, finding 2) — if the one-shot guard.consume rejected this turn's tool
     // (E_APPROVAL_USED audit), the OTHER surface already executed + persisted the authoritative turn →
     // skip this duplicate error persist (and capture). Only relevant for a COMPLETED turn: a re-paused
-    // turn already returned above without persisting. Gated by islandAgentEnabled (flag-off byte-identical).
-    if (cfg.islandAgentEnabled && runHasApprovalUsedError(run)) return
+    // turn already returned above without persisting. 07-15 — gated by serverResumeEnabled (see the
+    // tombstone gate above; one-shot consume is live whenever server-side resume is), islandAgentEnabled
+    // kept as the legacy fallback gate.
+    if ((cfg.serverResumeEnabled || cfg.islandAgentEnabled) && runHasApprovalUsedError(run)) return
     const usage = await Promise.resolve(run.result.usage).catch(() => undefined)
     const turn: PersistTurnInput = {
       sessionId: run.sessionId,

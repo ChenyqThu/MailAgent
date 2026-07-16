@@ -28,14 +28,26 @@ import { useThread } from '@assistant-ui/react'
 
 import { threadMessagesAwaitApproval } from './threadRunningGuard'
 
-export function ThreadRunningBridge({ runningRef }: { runningRef: { current: boolean } }): null {
+export function ThreadRunningBridge({
+  runningRef,
+  onRunningChange
+}: {
+  runningRef: { current: boolean }
+  /** harness-chat lane A (07-15) — optional REACTIVE mirror of the same mid-stream verdict, for
+   *  callers that need it as state (useBackgroundChatRun's localRunning: the "AI 仍在后台输出"
+   *  placeholder must not render over the panel's OWN attached stream). The ref stays the guard's
+   *  source (non-reactive by design); omitted → byte-identical. */
+  onRunningChange?: (running: boolean) => void
+}): null {
   // Single boolean selector: re-renders only when the mid-stream verdict flips, not per delta.
   const isMidStream = useThread((t) => t.isRunning && !threadMessagesAwaitApproval(t.messages))
   useEffect(() => {
     runningRef.current = isMidStream
+    onRunningChange?.(isMidStream)
     return (): void => {
       runningRef.current = false
+      onRunningChange?.(false)
     }
-  }, [isMidStream, runningRef])
+  }, [isMidStream, runningRef, onRunningChange])
   return null
 }

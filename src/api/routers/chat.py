@@ -638,6 +638,15 @@ async def update_session_title(
     return success_envelope({"updated": True}, request=request, source="sqlite")
 
 
+@router.patch("/sessions/{session_id:int}/read", dependencies=[Depends(verify_cf_access)])
+async def update_session_read(request: Request, session_id: int):
+    """markSessionRead（harness-chat lane A B4，task 07-15）：置 last_read_at=now（ai_chat.db v20）。
+    未读徽标判定 = updated_at > last_read_at；刻意不 bump updated_at（已读不重排历史）。
+    改不存在的 id / pre-v20 库缺列均静默返 {updated: True}（best-effort UX 面，绝不 500）。"""
+    get_chat_db().update_session_last_read(session_id)
+    return success_envelope({"updated": True}, request=request, source="sqlite")
+
+
 @router.patch("/sessions/{session_id:int}/archived", dependencies=[Depends(verify_cf_access)])
 async def update_session_archived(
     request: Request, session_id: int, body: Optional[Dict[str, Any]] = None

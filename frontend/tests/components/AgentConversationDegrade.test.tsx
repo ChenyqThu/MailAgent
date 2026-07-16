@@ -29,7 +29,13 @@ vi.mock('@tanstack/react-router', () => ({
 const { stableMailApi } = vi.hoisted(() => {
   const stableMailApi = {
     settings: { secretsStatus: vi.fn(async () => ({ llmApiKey: true })) },
-    chat: { newSession: vi.fn() },
+    // harness-chat lane A (07-15) — markSessionRead (B4 read watermark, fired on session load) +
+    // onTurnPersisted (B2 broadcast; optional in prod, stubbed here so the subscription disposes).
+    chat: {
+      newSession: vi.fn(),
+      markSessionRead: vi.fn(async () => {}),
+      onTurnPersisted: vi.fn(() => () => {})
+    },
     email: { get: vi.fn(), body: vi.fn() },
     llm: { upstreamModels: vi.fn(async () => []), enabledModels: vi.fn(async () => []) }
   }
@@ -150,9 +156,7 @@ describe('AgentConversation — D7 gateway unavailable (error face, no silent en
     // gatewayUnavailable. Before S3 this silently dropped to the legacy engine; now
     // the notice carries the state and nothing sendable mounts.
     mount(fakeChat(), null)
-    await waitFor(() =>
-      expect(document.querySelector('[data-gateway-error-notice]')).toBeTruthy()
-    )
+    await waitFor(() => expect(document.querySelector('[data-gateway-error-notice]')).toBeTruthy())
     expect(screen.getByText(i18n.t('chat.aiSdk.degraded'))).toBeTruthy()
     // No probe available (base URL null) → no retry button.
     expect(screen.queryByText(i18n.t('chat.aiSdk.retryProbe'))).toBeNull()

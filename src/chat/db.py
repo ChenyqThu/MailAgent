@@ -1,6 +1,12 @@
 """ai_chat.db 读 + 写访问 —— serve-api 远程 chat 端点（V2.1 阶段 2 读 + 阶段 3 3b-3 写）。
 
-ai_chat.db = 前端 owned schema（``frontend/src/electron/main/chat_db.ts``，CHAT_DB_VERSION 19）。
+ai_chat.db = 前端 owned schema（``frontend/src/electron/main/chat_db.ts``，CHAT_DB_VERSION 20）。
+v20（harness-chat lane A B4，task 07-15）= ``ai_chat_sessions.last_read_at``：未读徽标的
+per-session 已读水位（NULL = 旧行/从未打开 → 不打点；未读判定 = updated_at > last_read_at）。
+写经本文件 ``update_session_last_read``（serve-api PATCH /chat/sessions/{id}/read，远程 parity），
+刻意不 bump updated_at（已读绝不重排历史）；读走 ``SELECT *`` 自动带回 + list_all_sessions 显式列
+已加 s.last_read_at。additive ALTER（schema 归 chat_db connection.ts ``migrate``，本文件不建表）。
+NOT EXPECTED_DB_VERSION。
 v19（S4 W3，task 07-02-s4-custom-agent-core）= ``ai_chat_sessions.origin`` + ``agent_id`` +
 ``agent_job_id``：headless custom-agent run（cron/email 触发，ADR-003 D3）落一个一等会话行，
 origin='agent' 标记（交互会话 NULL），agent_id/agent_job_id 回链 report_agent + async_jobs
@@ -250,13 +256,16 @@ class ChatDb:
         """跨邮件 session 历史（含 first_user_message 预览 + message_count，排除无消息 session）。
         镜像 listAllSessions → ChatSessionSummary[]。
         include_archived=False（默认）只返回活跃会话（archived=0）；
-        include_archived=True 返回全部含归档会话（用于归档分组视图）。"""
+        include_archived=True 返回全部含归档会话（用于归档分组视图）。
+
+        v20 起用 ``s.*``（TS 侧仍显式列）：serve-api 可能先于前端 migrate 跑到（启动竞态 /
+        旧库），显式引用 last_read_at 会在 pre-v20 库上 OperationalError → _read_all 吞成 []
+        = 整个历史列表被清空。``s.*`` 两个世界都成立：列在 → 带回（未读徽标），列不在 →
+        缺键（前端按 undefined = 无徽标处理）。"""
         archived_clause = "" if include_archived else "s.archived = 0 AND "
         return self._read_all(
             f"""SELECT
-                 s.id, s.email_id, s.anchor_type, s.anchor_id, s.backend_kind, s.backend_model,
-                 s.backend_agent_page_id, s.title, s.archived, s.created_at, s.updated_at,
-                 s.origin, s.agent_id, s.agent_job_id,
+                 s.*,
                  (SELECT substr(m.content, 1, 500) FROM ai_chat_messages m
                     WHERE m.session_id = s.id AND m.role = 'user'
                     ORDER BY m.created_at ASC LIMIT 1) AS first_user_message,
@@ -589,6 +598,24 @@ class ChatDb:
                 "UPDATE ai_chat_sessions SET archived = ? WHERE id = ?",
                 (1 if archived else 0, session_id),
             )
+
+    def update_session_last_read(self, session_id: int, at_ms: Optional[int] = None) -> None:
+        """harness-chat lane A B4（task 07-15）— 置 session 已读水位 last_read_at=now（v20 列）。
+
+        刻意不 bump updated_at（已读绝不重排历史）；未读判定 = updated_at > last_read_at。
+        改不存在的 id 是 no-op。pre-v20 库（前端尚未迁移 / 启动竞态）缺列 → 静默 no-op：
+        已读是 best-effort UX 面，绝不该 500（写约束的「缺 schema = 真配置错」对本列例外，
+        因为 serve-api 可能先于前端 migrate 服务请求）。"""
+        now = at_ms if at_ms is not None else _now_ms()
+        try:
+            with self._write_connection() as conn:
+                conn.execute(
+                    "UPDATE ai_chat_sessions SET last_read_at = ? WHERE id = ?",
+                    (now, session_id),
+                )
+        except sqlite3.OperationalError:
+            # pre-v20 ai_chat.db（no such column: last_read_at）→ best-effort no-op。
+            pass
 
     # ── messages（写 + 单读，3b-3）─────────────────────────────────────────
 

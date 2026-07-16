@@ -27,6 +27,7 @@ import {
 
 import type { ChatSessionListItem } from '@shared/api/types'
 import { cn } from '@shared/lib/cn'
+import { isSessionUnread } from '@shared/lib/chatUnread'
 import { Popover, PopoverContent, PopoverTrigger } from '@shared/components/ui/popover'
 
 export interface AgentThreadListProps {
@@ -218,6 +219,7 @@ export function AgentThreadList(props: AgentThreadListProps): React.ReactElement
                         title={titleOf(s, t)}
                         isEmail={s.anchor_type === 'email'}
                         isArchived={g === 'archived'}
+                        unread={s.id !== activeSessionId && isSessionUnread(s)}
                         selected={s.id === activeSessionId}
                         onSelect={() => onSelect(s.id)}
                         renaming={renamingId === s.id}
@@ -248,6 +250,7 @@ function SessionRow({
   title,
   isEmail,
   isArchived,
+  unread,
   selected,
   renaming,
   onSelect,
@@ -262,6 +265,8 @@ function SessionRow({
   title: string
   isEmail: boolean
   isArchived: boolean
+  /** B4 (07-15) — unread badge: content persisted after the last read (never on the selected row). */
+  unread: boolean
   selected: boolean
   renaming: boolean
   onSelect: () => void
@@ -350,9 +355,22 @@ function SessionRow({
         className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-[var(--r-ctl)] pl-2.5 pr-10 text-left"
       >
         <Icon size={13} strokeWidth={1.75} className="shrink-0 text-ink-fg-3" />
-        <span className="min-w-0 flex-1 truncate text-body text-ink-fg-1" title={title}>
+        <span
+          className={cn(
+            'min-w-0 flex-1 truncate text-body',
+            unread ? 'font-semibold text-ink-fg' : 'text-ink-fg-1'
+          )}
+          title={title}
+        >
           {title}
         </span>
+        {unread && (
+          <span
+            data-session-unread-dot
+            aria-label={t('chat.sidebar.unread')}
+            className="size-1.5 shrink-0 rounded-full bg-coral/100"
+          />
+        )}
       </button>
       <SessionRowMenu
         onRename={onStartRename}

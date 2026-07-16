@@ -25,6 +25,7 @@ import { Check, Plus, Trash2, X } from 'lucide-react'
 
 import type { ChatBackendKind, ChatSession } from '@shared/api/types'
 import { cn } from '@shared/lib/cn'
+import { isSessionUnread } from '@shared/lib/chatUnread'
 import { HoverTip } from '@shared/components/ui/HoverTip'
 import { useReducedMotion } from '@shared/hooks/useReducedMotion'
 
@@ -177,6 +178,9 @@ function HistoryItem({
   const time = formatRelativeTime(session.updated_at, t)
   const hasPreview = typeof preview === 'string' && preview.length > 0
   const primary = hasPreview ? preview : backendLabel
+  // B4 (07-15) — unread badge: new content landed after the last read (background persist while the
+  // user was elsewhere). The ACTIVE row never badges (the user is looking at it).
+  const unread = !active && isSessionUnread(session)
   // Inline delete confirm — first trash click flips into a check + X pair;
   // the check commits, the X (or Escape) reverts. Same safety as the old
   // ChatSidebar without a heavyweight modal.
@@ -207,11 +211,24 @@ function HistoryItem({
               r5 user feedback — "再小一号" to 10px. This is below the DESIGN.md
               §14 11px CJK floor; user explicitly approved the deviation (title
               may be a CJK user-message preview). */}
-          <span
-            className={cn('text-[10px] truncate', active && 'text-coral font-semibold')}
-            title={primary}
-          >
-            {primary}
+          <span className="flex min-w-0 items-center gap-1.5">
+            {unread && (
+              <span
+                data-session-unread-dot
+                aria-label={t('chat.sidebar.unread')}
+                className="size-1.5 shrink-0 rounded-full bg-coral/100"
+              />
+            )}
+            <span
+              className={cn(
+                'text-[10px] truncate',
+                active && 'text-coral font-semibold',
+                unread && 'font-semibold text-ink-fg'
+              )}
+              title={primary}
+            >
+              {primary}
+            </span>
           </span>
           {/* §14 fix (codex r4) — `time` is localized (刚刚 / {n} 分钟前 …) = CJK,
               so the whole meta line is SANS, not font-mono. */}

@@ -117,7 +117,15 @@ import { resolveDataRoot } from '../db'
 // the engine is the same, only the initiator differs). Three plain additive ALTERs, hasColumn
 // idempotency guard (same discipline as v5..v12). ai_chat.db has its own version ladder; this bump
 // does NOT touch backend_lifecycle.EXPECTED_DB_VERSION. 🔴 bump 同步刷 src/chat/db.py 头注释。
-const CHAT_DB_VERSION = 19
+// v20 (harness-chat lane A B4, task 07-15) — ai_chat_sessions.last_read_at: the per-session read
+// watermark behind the history-list unread badge. NULL (legacy rows / never-opened sessions) = no
+// badge; the renderer marks a session read (serve-api PATCH /chat/sessions/{id}/read →
+// src/chat/db.py update_session_last_read) whenever it seeds/reloads it, and unread derives as
+// updated_at > last_read_at (appendMessage bumps updated_at on every persisted turn, incl. the
+// paused-turn eager persist). Plain additive ALTER, hasColumn idempotency guard (same discipline as
+// v5..v19). ai_chat.db has its own version ladder; this bump does NOT touch
+// backend_lifecycle.EXPECTED_DB_VERSION. 🔴 bump 同步刷 src/chat/db.py 头注释。
+const CHAT_DB_VERSION = 20
 
 export function resolveChatDbPath(): string {
   const fromEnv = process.env['AI_CHAT_DB_PATH']
@@ -999,6 +1007,29 @@ function migrate(db: Database.Database): void {
       }
       db.prepare(
         "INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', '19')"
+      ).run()
+      db.exec('COMMIT')
+    } catch (err) {
+      db.exec('ROLLBACK')
+      throw err
+    }
+  }
+
+  // v19 → v20 — harness-chat lane A B4 (task 07-15) unread badge. Add ai_chat_sessions.last_read_at:
+  // the per-session read watermark (NULL for legacy rows / never-opened sessions → no badge; unread
+  // derives as updated_at > last_read_at). Written via serve-api PATCH /chat/sessions/{id}/read
+  // (src/chat/db.py update_session_last_read — remote-web parity), deliberately NOT bumping
+  // updated_at (a read must never reorder the history list). Plain additive ALTER, hasColumn
+  // idempotency guard (same discipline as v5..v19). ai_chat.db has its own version ladder; this bump
+  // does NOT touch backend_lifecycle.EXPECTED_DB_VERSION.
+  if (current < 20) {
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      if (!hasColumn(db, 'ai_chat_sessions', 'last_read_at')) {
+        db.exec('ALTER TABLE ai_chat_sessions ADD COLUMN last_read_at INTEGER')
+      }
+      db.prepare(
+        "INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', '20')"
       ).run()
       db.exec('COMMIT')
     } catch (err) {

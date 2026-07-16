@@ -24,6 +24,10 @@ gateway 的 chatRun.ts/streamText（经代理透传），不在 Python 重写引
                                    web 打开 agent 执行记录时 live 查 stash → 命中富化 / miss 404）
   - POST /api/ai/approval/decide   非流式 JSON（S6 W1：记录内审批决策 → 服务端 resume；与岛
                                    共用同一 gateway decide 通道，远程 web parity）
+  - GET  /api/ai/run/active        非流式 JSON（07-15 lane A B1：detached run 真值探针，
+                                   ?sessionId= 随 query 透传；miss/未启用 → gateway 404 透传）
+  - POST /api/ai/run/stop          非流式 JSON（07-15 lane A B1：显式停止通道 —— detached 模式
+                                   下 client abort 不再中止上游，composer 停止按钮经此）
   - GET  /api/ai/config            非流式 JSON
   - GET  /health                   **裸路径**（非 /api/ai）：renderer 健康探针打
                                    ``${base}/health`` → 代理到 gateway /health。鉴权豁免（纯
@@ -275,6 +279,32 @@ async def proxy_approval_decide(
     gateway）。非 2xx（404 未接线 / 400 缺参 / 500 resume 失败）原样透传。gateway 门控（approvalStash
     在场，S6 W2 P8 起 = island OR custom-agents flag）off → 404，代理透传。"""
     return await _proxy_buffered(request, "/api/ai/approval/decide")
+
+
+@router.get("/api/ai/run/active")
+async def proxy_run_active(
+    request: Request, _: None = Depends(verify_cf_access)
+) -> Response:
+    """代理 GET /api/ai/run/active → gateway（07-15 lane A B1，远程 web parity）。
+
+    detached chat run 真值探针：面板切回会话时查「AI 是否仍在后台输出」→ 命中 200 {active:true,
+    ageMs} / miss 404 {active:false}（fail-closed 真值，MAILAGENT_CHAT_DETACHED_RUNS off 时 gateway
+    恒 404，代理透传）。查询串（?sessionId=）随 request.url 透传。"""
+    target = request.url.path
+    if request.url.query:
+        target = f"{target}?{request.url.query}"
+    return await _proxy_buffered(request, target)
+
+
+@router.post("/api/ai/run/stop")
+async def proxy_run_stop(
+    request: Request, _: None = Depends(verify_cf_access)
+) -> Response:
+    """代理 POST /api/ai/run/stop → gateway（07-15 lane A B1，远程 web parity）。
+
+    detached 模式下 client fetch-abort 不再中止上游 LLM 调用；composer 停止按钮的显式停止通道
+    经此打到 gateway（abort 该 session 的 active run → 不落库）。off → gateway 404 透传。"""
+    return await _proxy_buffered(request, "/api/ai/run/stop")
 
 
 @router.get("/api/ai/config")

@@ -56,6 +56,11 @@ export interface UseEmailChatReturn {
    *  same refresh() the session-switch load uses; no-op when no session is active. Best-effort:
    *  a load failure surfaces via `error` like any other refresh. */
   reloadActiveSession: () => Promise<void>
+  /** harness-chat lane A B4 (07-15) — re-pull the current email's session rows (all kinds) so the
+   *  history popover's unread badges reflect a background persist ('chat:turn-persisted'). No-op
+   *  without an email; nav-generation guarded like every other load. Mirror of
+   *  useGeneralChat.refreshSessions. */
+  refreshSessions: () => Promise<void>
   /** Fold a session the AI SDK path created out-of-band (renderer IPC,
    *  backend_kind='ai-sdk') into the hook state: prepend it to `sessions`,
    *  point `activeSessionId` + `messagesSessionId` at it, and reset messages
@@ -347,6 +352,24 @@ export function useEmailChat(
     }
   }, [refresh])
 
+  // B4 (07-15) — re-pull this email's session rows in place (unread badges read last_read_at /
+  // updated_at off these rows). Best-effort: the history list is non-critical, failures are
+  // swallowed (mirror of useGeneralChat.refreshSessions).
+  const refreshSessions = useCallback(async (): Promise<void> => {
+    const emailId = emailIdRef.current
+    if (emailId === null) return
+    const gen = navGenerationRef.current
+    try {
+      const fetched = await mailApi.chat.listSessions(emailId)
+      if (!mountedRef.current || gen !== navGenerationRef.current) return
+      if (emailIdRef.current !== emailId) return
+      allSessionsEmailRef.current = emailId
+      setAllSessions(fetched)
+    } catch {
+      /* non-critical list refresh */
+    }
+  }, [mailApi])
+
   // Adopt an ai-sdk session the panel created out-of-band (renderer IPC,
   // backend_kind='ai-sdk'). No IPC / refresh: the session is freshly created +
   // empty (0 rows) and the AI SDK runtime owns the live turns;
@@ -371,6 +394,7 @@ export function useEmailChat(
     sessions,
     selectSession,
     reloadActiveSession,
+    refreshSessions,
     adoptSession,
     deleteSession
   }

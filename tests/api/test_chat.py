@@ -43,6 +43,7 @@ CREATE TABLE ai_chat_sessions (
     origin TEXT,
     agent_id TEXT,
     agent_job_id TEXT,
+    last_read_at INTEGER,
     CHECK (
         (anchor_type = 'email' AND email_id IS NOT NULL AND anchor_id = email_id)
         OR
@@ -1077,6 +1078,70 @@ def test_update_session_archived_invalid_body_400(chat_client: TestClient) -> No
     r = chat_client.patch(f"/api/chat/sessions/{SESSION_ID}/archived", json={"archived": "yes"})
     assert r.status_code == 400
     assert r.json()["error"]["code"] == "E_INVALID_ARG"
+
+
+# ── mark-read（harness-chat lane A B4，task 07-15，ai_chat.db v20）─────────────
+
+
+def test_update_session_read_sets_watermark_without_reorder(chat_client: TestClient) -> None:
+    """PATCH /sessions/{id}/read → last_read_at=now；刻意不 bump updated_at（已读不重排历史）。
+    未读判定 = updated_at > last_read_at → 标读后应为「已读」。"""
+    import sqlite3 as _sqlite3
+    import src.api.routers.chat as _chat_router
+
+    db = _chat_router.get_chat_db()
+    conn = _sqlite3.connect(db.db_path)
+    before = conn.execute(
+        "SELECT updated_at, last_read_at FROM ai_chat_sessions WHERE id = ?", (SESSION_ID,)
+    ).fetchone()
+    conn.close()
+    assert before[1] is None  # seed 行从未标读
+
+    r = chat_client.patch(f"/api/chat/sessions/{SESSION_ID}/read")
+    assert r.status_code == 200
+    assert r.json()["data"] == {"updated": True}
+
+    conn = _sqlite3.connect(db.db_path)
+    after = conn.execute(
+        "SELECT updated_at, last_read_at FROM ai_chat_sessions WHERE id = ?", (SESSION_ID,)
+    ).fetchone()
+    conn.close()
+    assert after[1] is not None and after[1] >= before[0]  # 水位落在（≥ 最后活动时间）
+    assert after[0] == before[0]  # updated_at 未动 → 历史序不变
+
+
+def test_update_session_read_nonexistent_id_is_noop(chat_client: TestClient) -> None:
+    """改不存在的 id 是 no-op（UPDATE 匹配 0 行）→ 仍 200（best-effort UX 面）。"""
+    r = chat_client.patch("/api/chat/sessions/424242/read")
+    assert r.status_code == 200
+    assert r.json()["data"] == {"updated": True}
+
+
+def test_list_all_sessions_carries_last_read_at(chat_client: TestClient) -> None:
+    """list_all_sessions（s.*）带回 last_read_at → 前端未读徽标的数据面。"""
+    chat_client.patch(f"/api/chat/sessions/{SESSION_ID}/read")
+    r = chat_client.get("/api/chat/sessions/all")
+    assert r.status_code == 200
+    row = next(s for s in r.json()["data"] if s["id"] == SESSION_ID)
+    assert row["last_read_at"] is not None
+
+
+def test_update_session_read_pre_v20_db_is_graceful(tmp_path: Path) -> None:
+    """pre-v20 库（缺 last_read_at 列，前端尚未迁移/启动竞态）→ 静默 no-op，不抛不 500。"""
+    db_path = tmp_path / "old_ai_chat.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.executescript(
+        "CREATE TABLE ai_chat_sessions (id INTEGER PRIMARY KEY, email_id INTEGER, "
+        "backend_kind TEXT, created_at INTEGER, updated_at INTEGER);"
+    )
+    conn.execute(
+        "INSERT INTO ai_chat_sessions (id, email_id, backend_kind, created_at, updated_at) "
+        "VALUES (1, 1001, 'ai-sdk', 0, 0)"
+    )
+    conn.commit()
+    conn.close()
+    old_db = ChatDb(str(db_path))
+    old_db.update_session_last_read(1)  # 不得抛（OperationalError 被吞成 no-op）
 
 
 def test_open_session_invalid_backend_kind(chat_client: TestClient) -> None:

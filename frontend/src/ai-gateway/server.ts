@@ -20,6 +20,11 @@
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 
+// B1 (detached runs) — the exact header set ai@7's pipeUIMessageStreamToResponse sends, so the manual
+// server-side drain below stays wire-identical for the client (content-type text/event-stream +
+// x-vercel-ai-ui-message-stream: v1 + no-buffering hints).
+import { UI_MESSAGE_STREAM_HEADERS } from 'ai'
+
 import type { AiGatewayConfig } from './config'
 import type { MailAgentUIMessageMetadata } from '@shared/assistant/uiMessage'
 import {
@@ -111,9 +116,30 @@ async function handleChat(
     })
     return
   }
-  // abort: client disconnect (or the renderer AbortController) cancels the upstream call.
   const controller = new AbortController()
-  req.on('close', () => controller.abort())
+  // B1 (harness-chat lane A, MAILAGENT_CHAT_DETACHED_RUNS) — detach-tolerant runs: with the flag on
+  // (and the registry wired) a client disconnect NO LONGER aborts the upstream LLM call; the run
+  // drains server-side to onFinish → persistTurn, so a session switch / popout close never loses the
+  // turn. The explicit stop channel is POST /api/ai/run/stop. Flag off (env explicit false) → the
+  // legacy close→abort wiring below, byte-identical.
+  const detached = cfg.detachedRunsEnabled === true && cfg.activeRuns != null
+  if (!detached) {
+    // abort: client disconnect (or the renderer AbortController) cancels the upstream call.
+    req.on('close', () => controller.abort())
+  }
+
+  // B1 — same-session concurrency fast-reject BEFORE prepareChatRun (streamText fires the upstream
+  // call at prepare time, so a doomed second POST must be answered before we spend a model call).
+  // register() below is the atomic gate; this is only the cheap pre-check.
+  const bodySessionId =
+    typeof body.sessionId === 'number' && Number.isInteger(body.sessionId) ? body.sessionId : null
+  if (detached && bodySessionId != null && cfg.activeRuns!.hasActive(bodySessionId)) {
+    writeJson(res, 409, {
+      error: 'E_RUN_ACTIVE',
+      hint: 'a chat run is already streaming for this session'
+    })
+    return
+  }
 
   // S2 W0 (ADR-001 D1) — /api/ai/chat is an owner-driven surface (local renderer direct on
   // loopback, or remote web through serve-api's owner-authenticated proxy): assert 'manual_chat'
@@ -124,6 +150,22 @@ async function handleChat(
     return
   }
   const run = prepared.run
+
+  // B1 — atomic same-session gate. A concurrent second POST that raced past the pre-check loses
+  // here: its just-started upstream call is aborted and it answers 409 (封 §3.2 的行序交错 —
+  // switching back mid-run and sending again must not interleave two turns' persistence).
+  let runToken: { runId: string } | null = null
+  if (detached && run.sessionId != null) {
+    runToken = cfg.activeRuns!.register(run.sessionId, controller)
+    if (runToken == null) {
+      controller.abort()
+      writeJson(res, 409, {
+        error: 'E_RUN_ACTIVE',
+        hint: 'a chat run is already streaming for this session'
+      })
+      return
+    }
+  }
   // #12 (dogfood session-history) — eager-persist: write the user message at turn START so the
   // session row appears in history even when the first turn is HITL-paused and onFinish skips
   // persistTurn. Best-effort: a failure is logged and the stream continues (persistTurn's onFinish
@@ -149,10 +191,16 @@ async function handleChat(
   let totalChunks = 0
   let outputChars = 0
   const timingToolCallIds = new Set<string>()
-  run.result.pipeUIMessageStreamToResponse(res, {
+  // Shared between the legacy pipe and the B1 detached drain so both paths carry identical
+  // messageMetadata / reasoning / error semantics.
+  const streamOptions = {
     originalMessages: run.rawMessages,
     generateMessageId: makeIdGenerator(),
-    messageMetadata: ({ part }): MailAgentUIMessageMetadata | undefined => {
+    messageMetadata: ({
+      part
+    }: {
+      part: { type: string }
+    }): MailAgentUIMessageMetadata | undefined => {
       if (part.type === 'text-delta') {
         totalChunks += 1
         if ('text' in part && typeof part.text === 'string') outputChars += part.text.length
@@ -194,11 +242,120 @@ async function handleChat(
       console.error('[ai-gateway] /api/ai/chat stream error', error)
       return msg
     },
-    onFinish: makePersistOnFinish(cfg, run),
-    // Phase 06a — loopback-only CORS on the main chat stream too (the AI SDK pipe sets no ACAO by
-    // default; reflect the renderer's loopback / null origin, omit for a remote cross-origin page).
-    headers: corsHeadersFor(req.headers.origin)
+    onFinish: makePersistOnFinish(cfg, run)
+  }
+
+  if (!detached) {
+    run.result.pipeUIMessageStreamToResponse(res, {
+      ...streamOptions,
+      // Phase 06a — loopback-only CORS on the main chat stream too (the AI SDK pipe sets no ACAO by
+      // default; reflect the renderer's loopback / null origin, omit for a remote cross-origin page).
+      headers: corsHeadersFor(req.headers.origin)
+    })
+    return
+  }
+
+  // B1 — detached drain. ai@7's pipeUIMessageStreamToResponse stops consuming (and can wedge on a
+  // never-firing 'drain') once the client is gone, which would leave streamText unconsumed and
+  // onFinish never firing — exactly the data loss this mode exists to prevent. So the gateway owns
+  // the drain (mirrors approvalResume's server-side drain): it consumes the UIMessage stream to
+  // completion (driving the tool loop + onFinish → persistTurn) and writes SSE frames only while the
+  // client is still connected. Wire format is byte-identical to the pipe (UI_MESSAGE_STREAM_HEADERS +
+  // `data: {json}\n\n` frames + terminal `data: [DONE]`; JsonToSseTransformStream's encoding).
+  const stream = run.result.toUIMessageStream(streamOptions)
+  res.writeHead(200, { ...UI_MESSAGE_STREAM_HEADERS, ...corsHeadersFor(req.headers.origin) })
+  let clientGone = false
+  res.on('close', () => {
+    if (!res.writableFinished) clientGone = true
   })
+  // A write racing a disconnect surfaces as a response 'error' — swallow it (the drain keeps going).
+  res.on('error', () => {
+    clientGone = true
+  })
+  try {
+    for await (const chunk of stream) {
+      if (clientGone) continue
+      const ok = res.write(`data: ${JSON.stringify(chunk)}\n\n`)
+      if (!ok && !clientGone) {
+        // Backpressure parity with writeToServerResponse — but a disconnect mid-wait must not hang
+        // the drain ('drain' never fires on a destroyed response), so 'close' also resolves.
+        await new Promise<void>((resolve) => {
+          const settle = (): void => {
+            res.off('drain', settle)
+            res.off('close', settle)
+            resolve()
+          }
+          res.once('drain', settle)
+          res.once('close', settle)
+        })
+      }
+    }
+    if (!clientGone) res.write('data: [DONE]\n\n')
+  } catch (err) {
+    console.error('[ai-gateway] /api/ai/chat detached drain failed', err)
+  } finally {
+    if (runToken && run.sessionId != null) {
+      cfg.activeRuns!.release(run.sessionId, runToken.runId)
+    }
+    try {
+      res.end()
+    } catch {
+      /* already destroyed */
+    }
+  }
+}
+
+/**
+ * `GET /api/ai/run/active?sessionId=N` — B1 truth probe: is a detached chat run still streaming for
+ * this session? A panel remounting a session uses it to render the "AI 仍在后台输出…" placeholder and
+ * to reload when the run settles (active→gone transition). Read-only. miss (nothing running /
+ * registry unwired) → 404 { active:false } — the fail-closed truth, mirroring /approval/pending.
+ */
+function handleRunActive(res: ServerResponse, cfg: AiGatewayConfig, url: string): void {
+  const raw = new URL(url, 'http://127.0.0.1').searchParams.get('sessionId')
+  const sessionId = raw != null && /^-?\d+$/.test(raw) ? Number(raw) : null
+  if (sessionId == null) {
+    writeJson(res, 400, { error: 'E_INVALID_ARG', hint: 'sessionId (integer) required' })
+    return
+  }
+  const entry = cfg.activeRuns ? cfg.activeRuns.getActive(sessionId) : null
+  if (!entry) {
+    writeJson(res, 404, { active: false })
+    return
+  }
+  writeJson(res, 200, {
+    active: true,
+    runId: entry.runId,
+    ageMs: Date.now() - entry.startedAt
+  })
+}
+
+/**
+ * `POST /api/ai/run/stop { sessionId }` — B1 explicit stop channel. With detached runs a client
+ * fetch-abort no longer cancels the upstream call, so the composer stop button's transport wrapper
+ * POSTs here: the registry aborts the run's controller (streamText aborts → onFinish isAborted →
+ * nothing persisted) and frees the session for a fresh turn. Registered unconditionally;
+ * cfg.activeRuns gates it (404 when detached runs are off — the legacy close→abort already stopped
+ * the run, so the renderer's best-effort POST is harmless there).
+ */
+async function handleRunStop(
+  req: IncomingMessage,
+  res: ServerResponse,
+  cfg: AiGatewayConfig
+): Promise<void> {
+  if (!cfg.activeRuns) {
+    writeJson(res, 404, { error: 'E_NOT_IMPLEMENTED', hint: 'detached chat runs not enabled' })
+    return
+  }
+  const body = await readJsonBody(req)
+  const sessionId =
+    typeof body.sessionId === 'number' && Number.isInteger(body.sessionId) ? body.sessionId : null
+  if (sessionId == null) {
+    writeJson(res, 400, { error: 'E_INVALID_ARG', hint: 'sessionId (integer) required' })
+    return
+  }
+  const out = cfg.activeRuns.stop(sessionId)
+  writeJson(res, 200, { stopped: out.stopped })
 }
 
 /** Map an ApprovalError-shaped `.code` to an HTTP status for the resolve endpoint. */
@@ -841,10 +998,21 @@ export function createAiGatewayServer(cfg: AiGatewayConfig): Server {
     }
 
     // Part B follow-up + S6 W1 — pending-approval truth probe. Registered unconditionally; a miss
-    // (island agent off / nothing stashed) → 404 { pending:false } (fail-closed truth), a hit → the
-    // enriched decide-card body (never the resumeToken).
+    // (nothing stashed) → 404 { pending:false } (fail-closed truth), a hit → the enriched
+    // decide-card body (never the resumeToken).
     if (method === 'GET' && path === '/api/ai/approval/pending') {
       handleApprovalPending(res, cfg, url)
+      return
+    }
+
+    // B1 (harness-chat lane A) — detached-run truth probe + explicit stop channel. Registered
+    // unconditionally; cfg.activeRuns gates them (miss/404 when detached runs are off).
+    if (method === 'GET' && path === '/api/ai/run/active') {
+      handleRunActive(res, cfg, url)
+      return
+    }
+    if (method === 'POST' && path === '/api/ai/run/stop') {
+      void handleRunStop(req, res, cfg)
       return
     }
 

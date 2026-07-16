@@ -133,7 +133,8 @@ describe('chat_db — path + schema bootstrap', () => {
     // S1 R1 (07-02 openness wave1): bumped to 17 — ai_chat_messages_fts.
     // S2 W1 (07-02-s2-exec-skill-install): bumped to 18 — chat_tool_call.whitelist_rule_id.
     // S4 W3 (07-02-s4-custom-agent-core): bumped to 19 — ai_chat_sessions.origin/agent_id/agent_job_id.
-    expect(ver.value).toBe('19')
+    // harness-chat lane A B4 (07-15): bumped to 20 — ai_chat_sessions.last_read_at (unread badge).
+    expect(ver.value).toBe('20')
   })
 
   test('fresh DB schema includes the v2 metadata column', () => {
@@ -241,7 +242,36 @@ describe('chat_db — path + schema bootstrap', () => {
     const ver = db.prepare("SELECT value FROM chat_db_meta WHERE key = 'schema_version'").get() as {
       value: string
     }
-    expect(ver.value).toBe('19')
+    expect(ver.value).toBe('20')
+  })
+
+  test('fresh DB v20 — ai_chat_sessions gains last_read_at (unread watermark)', () => {
+    const db = getChatDb()
+    const cols = db.prepare('PRAGMA table_info(ai_chat_sessions)').all() as Array<{ name: string }>
+    expect(cols.map((c) => c.name)).toContain('last_read_at')
+    // NULL for a fresh session (never marked read → no badge); listAllSessions carries it.
+    const session = getOrCreateSession({ emailId: 6161, backendKind: 'ai-sdk' })
+    const row = db
+      .prepare('SELECT last_read_at FROM ai_chat_sessions WHERE id = ?')
+      .get(session.id) as { last_read_at: number | null }
+    expect(row.last_read_at).toBeNull()
+  })
+
+  test('v19→v20 forward migration is idempotent (crash-after-ALTER re-entry converges)', () => {
+    // Build the fully-migrated DB, then roll ONLY the meta back to 19 — the hasColumn guard must
+    // skip the duplicate ALTER and still advance schema_version to 20 (same discipline as v5..v19).
+    const db = getChatDb()
+    db.prepare("UPDATE chat_db_meta SET value = '19' WHERE key = 'schema_version'").run()
+    closeChatDb()
+    const reopened = getChatDb()
+    const ver = reopened
+      .prepare("SELECT value FROM chat_db_meta WHERE key='schema_version'")
+      .get() as { value: string }
+    expect(ver.value).toBe('20')
+    const cols = reopened.prepare('PRAGMA table_info(ai_chat_sessions)').all() as Array<{
+      name: string
+    }>
+    expect(cols.filter((c) => c.name === 'last_read_at')).toHaveLength(1)
   })
 
   test('v1-version DB ALTERs in the metadata column on first open (forward migration)', () => {
@@ -295,7 +325,7 @@ describe('chat_db — path + schema bootstrap', () => {
     // Sprint 19 (PR-1a → bug-fix): v1 DB jumped to v4; task 06-08-chat Bug 2
     // bumped to v5; 需求 5 bumped to v6; P2a → v8; P4 Phase 02 → v9 → a v1 DB now
     // climbs the whole ladder to v17.
-    expect(ver.value).toBe('19')
+    expect(ver.value).toBe('20')
     const cols = db.prepare('PRAGMA table_info(ai_chat_messages)').all() as Array<{ name: string }>
     expect(cols.map((c) => c.name)).toContain('metadata')
     // v6 column present after climbing from v1.
@@ -400,7 +430,7 @@ describe('chat_db — path + schema bootstrap', () => {
           value: string
         }
       ).value
-    ).toBe('19')
+    ).toBe('20')
     // Narrow CHECK gone, widened CHECK in place.
     const sql = (
       db
@@ -445,7 +475,7 @@ describe('chat_db — path + schema bootstrap', () => {
           value: string
         }
       ).value
-    ).toBe('19')
+    ).toBe('20')
     // Simulate the crash window: roll the meta back to v3 while the physical
     // schema (content_offset + thinking columns, v4 table shape) stays at v6.
     db.prepare("UPDATE chat_db_meta SET value = '3' WHERE key = 'schema_version'").run()
@@ -457,7 +487,7 @@ describe('chat_db — path + schema bootstrap', () => {
     const ver = reopened
       .prepare("SELECT value FROM chat_db_meta WHERE key='schema_version'")
       .get() as { value: string }
-    expect(ver.value).toBe('19')
+    expect(ver.value).toBe('20')
     // Columns are still present exactly once (no duplication, no loss).
     const msgCols = reopened.prepare('PRAGMA table_info(ai_chat_messages)').all() as Array<{
       name: string
@@ -1127,7 +1157,7 @@ describe('chat_db — v3 → v4 migration (drop UNIQUE on ai_chat_sessions)', ()
     const ver = db.prepare("SELECT value FROM chat_db_meta WHERE key = 'schema_version'").get() as {
       value: string
     }
-    expect(ver.value).toBe('19')
+    expect(ver.value).toBe('20')
     // UNIQUE gone — CREATE TABLE SQL no longer contains UNIQUE clause on
     // (email_id, backend_kind, backend_agent_page_id).
     const tableSql = (
@@ -1270,7 +1300,7 @@ describe('chat_db — v4 → v5 migration (chat_tool_call.content_offset)', () =
       value: string
     }
     // v4 DB now climbs the whole ladder to v17 (content_offset added at v5).
-    expect(ver.value).toBe('19')
+    expect(ver.value).toBe('20')
     // Column present, pre-existing row reads NULL (degrade path in renderer).
     const cols = db.prepare('PRAGMA table_info(chat_tool_call)').all() as Array<{ name: string }>
     expect(cols.map((c) => c.name)).toContain('content_offset')
@@ -1332,7 +1362,7 @@ describe('chat_db — v5 → v6 migration (ai_chat_messages.thinking)', () => {
     const ver = db.prepare("SELECT value FROM chat_db_meta WHERE key = 'schema_version'").get() as {
       value: string
     }
-    expect(ver.value).toBe('19')
+    expect(ver.value).toBe('20')
     // Column present, pre-existing row reads NULL (no thinking block in renderer).
     const cols = db.prepare('PRAGMA table_info(ai_chat_messages)').all() as Array<{ name: string }>
     expect(cols.map((c) => c.name)).toContain('thinking')
@@ -1630,7 +1660,7 @@ describe('chat_db — v16 → v17 migration (ai_chat_messages_fts)', () => {
           value: string
         }
       ).value
-    ).toBe('19')
+    ).toBe('20')
     // The 'rebuild' backfill indexed the pre-existing row: trigram CJK substring hits.
     expect(ftsHits('超时复盘')).toBe(1)
     expect(ftsHits('redis')).toBe(1)
@@ -1680,7 +1710,7 @@ describe('chat_db — v16 → v17 migration (ai_chat_messages_fts)', () => {
     const ver = getChatDb()
       .prepare("SELECT value FROM chat_db_meta WHERE key='schema_version'")
       .get() as { value: string }
-    expect(ver.value).toBe('19')
+    expect(ver.value).toBe('20')
     // Rebuild is idempotent — the row is indexed exactly once.
     expect(ftsHits('重入收敛')).toBe(1)
   })
@@ -1691,9 +1721,9 @@ describe('chat_db — v16 → v17 migration (ai_chat_messages_fts)', () => {
 // rule id). Plain additive ALTER, same idempotency discipline as v10–v12.
 describe('chat_db — v17 → v18 migration (chat_tool_call.whitelist_rule_id)', () => {
   const hasCol = (): boolean =>
-    (getChatDb().prepare('PRAGMA table_info(chat_tool_call)').all() as Array<{ name: string }>).some(
-      (c) => c.name === 'whitelist_rule_id'
-    )
+    (
+      getChatDb().prepare('PRAGMA table_info(chat_tool_call)').all() as Array<{ name: string }>
+    ).some((c) => c.name === 'whitelist_rule_id')
 
   test('fresh DB carries the whitelist_rule_id column', () => {
     getChatDb()
@@ -1702,7 +1732,12 @@ describe('chat_db — v17 → v18 migration (chat_tool_call.whitelist_rule_id)',
 
   test('append defaults whitelist_rule_id NULL; update records auto_whitelist + the rule id', () => {
     const s = createNewSession({ emailId: 900, backendKind: 'ai-sdk' })
-    const m = appendMessage({ sessionId: s.id, role: 'assistant', content: 'ran it', status: 'complete' })
+    const m = appendMessage({
+      sessionId: s.id,
+      role: 'assistant',
+      content: 'ran it',
+      status: 'complete'
+    })
     const tc = appendToolCall({
       messageId: m.id,
       toolUseId: 'tu-exec-1',
@@ -1766,10 +1801,12 @@ describe('chat_db — v17 → v18 migration (chat_tool_call.whitelist_rule_id)',
 
     const db = getChatDb()
     expect(
-      (db.prepare("SELECT value FROM chat_db_meta WHERE key='schema_version'").get() as {
-        value: string
-      }).value
-    ).toBe('19')
+      (
+        db.prepare("SELECT value FROM chat_db_meta WHERE key='schema_version'").get() as {
+          value: string
+        }
+      ).value
+    ).toBe('20')
     expect(hasCol()).toBe(true)
   })
 
@@ -1782,7 +1819,7 @@ describe('chat_db — v17 → v18 migration (chat_tool_call.whitelist_rule_id)',
     const ver = getChatDb()
       .prepare("SELECT value FROM chat_db_meta WHERE key='schema_version'")
       .get() as { value: string }
-    expect(ver.value).toBe('19')
+    expect(ver.value).toBe('20')
     expect(hasCol()).toBe(true)
   })
 })

@@ -108,17 +108,12 @@ function AssistantChatModalInner(): React.JSX.Element {
   const [historyOpen, setHistoryOpen] = useState(false)
   const sidebar = mode === 'sidebar'
 
-  // 每次唤出（FAB / ⌘J，最小化→展开）都开一段「关于当前邮件」的新对话 —— 用户：默认新会话 + 默认带当前这封，
-  // 不是上一封。AgentConversation 的 email-context effect 随后在空会话上 seed 当前 activeEmailId。mode 切换
-  // （floating↔sidebar）走 setMode 不改 visible → 不触发这里 → 切模式不重开、不丢流。历史仍可从标题下拉进。
-  const prevVisibleRef = useRef(visible)
-  useEffect(() => {
-    const justOpened = visible && !prevVisibleRef.current
-    prevVisibleRef.current = visible
-    if (justOpened) chat.newSession()
-    // chat.newSession 稳定（useCallback）；只在 visible 上升沿开新会话。
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible])
+  // harness-chat lane A（07-15 owner 需求「切出回来原样呈现」）— 唤出（FAB / ⌘J，最小化→展开）
+  // **恢复上次活跃会话**，不再在 visible 上升沿强开新会话（旧行为把最小化→展开也当"新对话"，
+  // 正在后台输出/待审批的会话被丢在视野外）。body 是 mount-once + CSS 隐藏，useGeneralChat 状态
+  // 跨最小化存活 → 什么都不做就是"原样恢复"。显式「新对话」入口保留（header PenSquare 按钮 →
+  // chat.newSession）。首次打开天然是空会话；AgentConversation 的 email-context effect 仍只在
+  // 空会话上 seed 当前 activeEmailId（chatIsEmpty 门未变）。
 
   // sidebar 内嵌可调宽：宽度 state + 左缘拖拽手柄（仅 sidebar 模式；floating 用固定尺寸）。拖拽中直接写
   // inline width 跟手（不走 React state 避免每帧 re-render），mouseup 才落 state + localStorage。teardown

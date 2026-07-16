@@ -28,6 +28,9 @@ import type { GatewaySystemPromptConfig } from './systemPrompt'
 // lifecycle (which constructs it) + approvalResume; config.ts stays type-only so flag-off keeps zero
 // runtime pull of the Part B chunk.
 import type { ApprovalRunStash } from './approvalStash'
+// 🔴 type-only — harness-chat lane A (B1). The registry is constructed by the lifecycle and injected;
+// config.ts stays type-only (same erasure discipline as ApprovalRunStash).
+import type { ActiveRunRegistry } from './activeRuns'
 // 🔴 type-only (erased) — S4 W3 headless custom-agent run. The spec type is the wire contract the
 // gateway pulls from serve-api; config.ts stays type-only so the S4 chunk isn't pulled when off.
 import type { AgentRunSpec } from '@shared/api/types'
@@ -249,11 +252,33 @@ export interface AiGatewayConfig {
     modelId: string
   ) => void
 
+  // ── harness-chat lane A (B1, task 07-15) — detach-tolerant chat runs ─────────────────────────────
+  /** MAILAGENT_CHAT_DETACHED_RUNS (default ON; env explicit false = emergency rollback). When true
+   *  (AND cfg.activeRuns is wired) /api/ai/chat no longer aborts the upstream LLM call on client
+   *  disconnect: the run drains server-side to onFinish → persistTurn, so switching sessions /
+   *  closing the popout never loses the turn. The composer stop button goes through the EXPLICIT
+   *  POST /api/ai/run/stop channel instead. Off → the legacy close→abort wiring, byte-identical. */
+  detachedRunsEnabled?: boolean
+  /** B1 — the per-gateway registry of in-flight detached chat runs (activeRuns.ts). Injected by the
+   *  lifecycle (constructed once, like the ApprovalRunStash). Provides the explicit-stop channel
+   *  (POST /api/ai/run/stop), the "AI 仍在后台输出" truth probe (GET /api/ai/run/active) and the
+   *  same-session 409 concurrency gate. Omitted → both endpoints 404 and /api/ai/chat keeps the
+   *  legacy close→abort wiring regardless of detachedRunsEnabled. */
+  activeRuns?: ActiveRunRegistry
+
   // ── Part B (harness agent 上岛) — full-offline island approval resume ────────────────────────────
-  /** MAILAGENT_ISLAND_AGENT_ENABLED. Gates the whole Part B path: makePersistOnFinish only stashes +
-   *  announces a paused approval when true; POST /api/ai/approval/decide 404s when false; the write
-   *  tools become one-shot (see below). Off (default) → renderer-driven resume only, byte-identical. */
+  /** MAILAGENT_ISLAND_AGENT_ENABLED. Since the 2026-07-15 owner拍板 (island-independent approvals)
+   *  this flag ONLY gates the island ANNOUNCE leg (the optional overlay notification face): the
+   *  approval stash / pending probe / decide / server-side resume chain runs under
+   *  serverResumeEnabled below and works with the island off. */
   islandAgentEnabled?: boolean
+  /** 07-15 owner拍板 (无灵动岛方案优先) — cross-surface single-resolver semantics: gates the
+   *  renderer-reject guard tombstone + the E_APPROVAL_USED duplicate-persist skip in
+   *  makePersistOnFinish (they used to key off islandAgentEnabled). The lifecycle sets it TRUE
+   *  unconditionally (the in-panel decide card is a first-class second approval surface, so the
+   *  cross-surface protections must always be live); islandAgentEnabled is kept as a fallback gate
+   *  for hand-built test cfgs that predate this field. */
+  serverResumeEnabled?: boolean
   /** Part B — the per-gateway stash of paused approval runs (approvalStash.ts). Injected by the
    *  lifecycle (constructed once, like the ApprovalGuard). makePersistOnFinish stashes into it when a
    *  turn pauses awaiting approval; POST /api/ai/approval/decide claims + resumes from it. Omitted →

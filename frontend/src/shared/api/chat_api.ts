@@ -104,6 +104,19 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
       })
     },
 
+    async markSessionRead(sessionId: number): Promise<void> {
+      // harness-chat lane A B4 — read watermark: PATCH /chat/sessions/{id}/read (serve-api →
+      // src/chat/db.py update_session_last_read; no updated_at bump → no reorder). Best-effort:
+      // NEVER throws — an unreachable serve-api / pre-v20 DB just leaves the badge until the next
+      // successful mark.
+      if (!Number.isInteger(sessionId) || sessionId < 0) return
+      try {
+        await request(baseUrl, 'PATCH', `/chat/sessions/${sessionId}/read`, { body: {} })
+      } catch {
+        /* best-effort */
+      }
+    },
+
     openPopout(_emailId: number): void {
       // Electron BrowserWindow 能力（开独立 chat 窗口）—— shared runtime 无第二窗口（web 无此
       // 场景）→ no-op。electron 由 ElectronApi override 注入真实 window:openChatPopout IPC。

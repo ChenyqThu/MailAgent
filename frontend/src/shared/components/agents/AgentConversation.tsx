@@ -36,6 +36,10 @@ import { readAutoTitleSettings } from '@shared/lib/autoTitle'
 import { useApprovalMode } from '@shared/lib/approvalMode'
 
 import { AiSdkRuntimeProvider } from '@shared/assistant/runtime/AiSdkRuntimeProvider'
+import { ThreadRunningBridge } from '@shared/assistant/runtime/ThreadRunningBridge'
+import { makeSessionSettledHandler } from '@shared/assistant/runtime/threadRunningGuard'
+import { useBackgroundChatRun } from '@shared/assistant/runtime/useBackgroundChatRun'
+import { PendingApprovalPanel } from '@shared/assistant/PendingApprovalPanel'
 import { resolveAiGatewayBaseUrl } from '@shared/assistant/runtime/flags'
 import {
   ChatComposerControlsProvider,
@@ -325,6 +329,53 @@ export function AgentConversation({
   })
   // PART 2 — auto-approval mode (Settings → AI), threaded into the ai-sdk runtime body.
   const approvalMode = useApprovalMode()
+  // ── harness-chat lane A (07-15) — session-switch persistence awareness ──────
+  // refreshNonce re-keys the runtime after an out-of-band settle (island resume / detached run) so
+  // the reloaded rows actually re-seed the thread (starts at 0 → byte-identical key until the first
+  // settle; mirrors AiChatPanel's islandRefreshNonce).
+  const [refreshNonce, setRefreshNonce] = useState(0)
+  const aiSdkRunningRef = useRef(false)
+  const [aiSdkRunning, setAiSdkRunning] = useState(false)
+  const chatReloadActiveSession = chat.reloadActiveSession
+  const chatActiveSessionId = chat.activeSessionId
+  const chatRefreshGeneralSessions = chat.refreshSessions
+  // Island/server-resume settles ('chat:session-updated') — this MANUAL surface never subscribed
+  // before (research gap): an island-approved HITL turn resumed server-side left the open modal
+  // stale. Same guard decision as AiChatPanel (skip other sessions / skip mid-stream).
+  useEffect(() => {
+    if (!useAiSdkRuntime) return undefined
+    const dispose = mailApi.chat.onSessionUpdated?.(
+      makeSessionSettledHandler({
+        runningRef: aiSdkRunningRef,
+        activeSessionId: chatActiveSessionId,
+        reload: chatReloadActiveSession,
+        onReloaded: () => setRefreshNonce((n) => n + 1)
+      })
+    )
+    return dispose
+  }, [useAiSdkRuntime, mailApi, chatActiveSessionId, chatReloadActiveSession])
+  // B1/B2/B4 — detached-run probe + placeholder + settle reload + unread-badge broadcast glue.
+  const { backgroundActive } = useBackgroundChatRun({
+    gatewayBaseUrl,
+    sessionId: chatActiveSessionId,
+    enabled: useAiSdkRuntime,
+    refreshNonce,
+    localRunning: aiSdkRunning,
+    onSettled: () => {
+      void chatReloadActiveSession().then(() => setRefreshNonce((n) => n + 1))
+    },
+    onSessionsTouched: () => {
+      void chatRefreshGeneralSessions()
+    }
+  })
+  // B4 — read watermark: the active session's rows just (re)loaded → the user is reading them.
+  useEffect(() => {
+    if (chatActiveSessionId == null || chat.messagesSessionId !== chatActiveSessionId) return
+    void mailApi.chat.markSessionRead(chatActiveSessionId).then(() => {
+      void queryClient.invalidateQueries({ queryKey: qk.chat.allSessions() })
+    })
+  }, [chatActiveSessionId, chat.messagesSessionId, mailApi, queryClient])
+
   // Session reload: seed the ai-sdk runtime with the active session's prior messages once they reflect
   // it (messagesSessionId gate). Empty matters — a freshly-adopted session has 0 rows and `:new` keying.
   // The D6 read-only branch shares this gate (its seed must not be stale either).
@@ -345,6 +396,40 @@ export function AgentConversation({
         : undefined,
     [isLegacySession, reloadMessagesReady, chat.messages]
   )
+
+  // B3 (07-15, 无灵动岛方案优先) — the actionable in-panel approval card for a reloaded MANUAL
+  // session whose paused approval is still live in the gateway stash; B1 — the background-run
+  // placeholder while a detached run streams. Both ride AgentThread's pendingSlot.
+  const pendingApprovalCard =
+    useAiSdkRuntime &&
+    gatewayBaseUrl != null &&
+    chatActiveSessionId != null &&
+    initialMessages &&
+    initialMessages.length > 0 ? (
+      <PendingApprovalPanel
+        sessionId={chatActiveSessionId}
+        refreshKey={refreshNonce}
+        onDecided={() => {
+          void chatReloadActiveSession().then(() => setRefreshNonce((n) => n + 1))
+        }}
+      />
+    ) : undefined
+  const backgroundRunNotice = backgroundActive ? (
+    <div
+      data-background-run-notice
+      className="mx-auto flex w-full max-w-[var(--thread-max-width)] items-center gap-2 rounded-md border border-ink-border bg-ink-3/70 px-3 py-2 text-aux text-ink-fg-2"
+    >
+      <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-coral/100" aria-hidden />
+      {t('chat.aiSdk.backgroundRunning')}
+    </div>
+  ) : undefined
+  const pendingSlotContent =
+    pendingApprovalCard || backgroundRunNotice ? (
+      <>
+        {backgroundRunNotice}
+        {pendingApprovalCard}
+      </>
+    ) : undefined
 
   // ai-sdk: create the backend_kind='ai-sdk' general session on the first send, adopt it (history /
   // reload), and hand the id to the gateway latch for the dual-write.
@@ -534,9 +619,11 @@ export function AgentConversation({
                 // navEpoch makes "new chat" / "switch session" remount the runtime so the ai-sdk thread
                 // (owned by useChatRuntime, NOT by chat.messages) is cleared / reloaded. navEpoch does
                 // NOT bump on the first-send adoptSession, so a fresh chat getting its id mid-stream
-                // never remounts.
+                // never remounts. 07-15 — `:rN` suffix only after an out-of-band settle reload
+                // (refreshNonce starts at 0 → byte-identical key until the first settle) so the
+                // provider remounts re-seeded with the reloaded messages (AiChatPanel 同款).
                 contextInjectionOn
-                  ? `general:${chat.navEpoch}:${initialMessages && initialMessages.length > 0 ? chat.activeSessionId : 'new'}`
+                  ? `general:${chat.navEpoch}:${initialMessages && initialMessages.length > 0 ? chat.activeSessionId : 'new'}${refreshNonce > 0 ? `:r${refreshNonce}` : ''}`
                   : `general:${chat.navEpoch}`
               }
               gatewayBaseUrl={gatewayBaseUrl}
@@ -550,12 +637,16 @@ export function AgentConversation({
               initialMessages={initialMessages}
               onEnsureSession={onEnsureSession}
             >
+              {/* 07-15 — feeds the settle handler's mid-stream guard + the background-run
+                  placeholder's own-stream mask (renders nothing). */}
+              <ThreadRunningBridge runningRef={aiSdkRunningRef} onRunningChange={setAiSdkRunning} />
               <AgentThread
                 quickActions={<AgentQuickActions />}
                 onTurnComplete={handleTurnComplete}
                 followUps={followups}
                 welcomeAlign={welcomeAlign}
                 contextChip={emailContextChip}
+                pendingSlot={pendingSlotContent}
               />
             </AiSdkRuntimeProvider>
           )

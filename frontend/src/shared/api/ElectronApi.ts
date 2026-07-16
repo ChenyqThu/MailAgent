@@ -681,6 +681,23 @@ function createElectronChatRuntime(): ChatApi {
           handler({ sessionId: p.sessionId, status: p.status })
         }
       })
+    },
+    // harness-chat lane A B2 — gateway turn-persist broadcast（lifecycle persistTurn /
+    // persistPausedAssistant 落库后广播）。运行时窄化与发射端两值联合同步（'finished'|'paused'）；
+    // 值域不符静默丢弃。web (HttpApi) 无此通道（optional 方法缺省 → 轮询降级）。
+    onTurnPersisted(
+      handler: (payload: { sessionId: number; status: 'finished' | 'paused' }) => void
+    ): () => void {
+      return subscribe('chat:turn-persisted', (...args: unknown[]) => {
+        const p = args[0] as { sessionId?: unknown; status?: unknown } | undefined
+        if (
+          p &&
+          typeof p.sessionId === 'number' &&
+          (p.status === 'finished' || p.status === 'paused')
+        ) {
+          handler({ sessionId: p.sessionId, status: p.status })
+        }
+      })
     }
   }
 }
