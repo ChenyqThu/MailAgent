@@ -481,6 +481,15 @@ class NewWatcher:
         """
         self._stats["polls"] += 1
 
+        # EWS 限流退避: davmail_watchdog 检测到 Microsoft EWS 限流 (throttle burst)
+        # 时会把 sync_state['davmail_uid_backfill_paused'] 置 'true'。限流时整轮跳过 —
+        # check_for_changes 的 STATUS、pending fetch、retry 都不发 IMAP, 最大化减压
+        # 让 EWS 配额恢复; watchdog 检测到限流解除后复位 flag, 下一轮 poll 自然继续。
+        # applescript 模式无 watchdog → flag 恒非 'true' → 行为不变。
+        if self.sync_store.get_state("davmail_uid_backfill_paused") == "true":
+            logger.warning("[watcher] EWS throttling active — 跳过本轮 poll (等配额恢复)")
+            return
+
         # 1. 雷达检测新邮件并直接获取元数据
         if self.backend.is_available():
             last_max_row_id = self.sync_store.get_last_max_row_id()
