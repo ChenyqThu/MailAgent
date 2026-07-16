@@ -355,6 +355,12 @@ export interface CompileUserMdResult {
   itemCount: number
 }
 
+/** 07-16 approval-mode switcher — the owner-global chat approval mode (mirrors the gateway's
+ *  tools/types.GlobalApprovalMode; no cross-boundary import — the api types stay gateway-free).
+ *  'manual' = per-tool HITL (default, byte-identical现状); 'acceptEdits' = edits/web auto-approve
+ *  (send/exec 非白名单/skill 安装/日历三写 keep HITL); 'bypass' = everything auto-approves. */
+export type GlobalApprovalMode = 'manual' | 'acceptEdits' | 'bypass'
+
 /** S3 (07-02) — the serve-api fetch face of chat. The legacy engine methods
  *  (start/editMessage/abort/confirmTool/onStream/runSearchAgent/invalidateConfig)
  *  were deleted with the legacy runtime: chat turns run exclusively on the embedded
@@ -488,6 +494,24 @@ export interface ChatApi {
    * on failure (E_NOT_FOUND for an unknown skill, E_INVALID_ARG for a bad arg).
    */
   setSkillEnabled(name: string, enabled: boolean): Promise<void>
+  /**
+   * 07-16 approval-mode switcher — read the owner-global chat approval mode
+   * (GET /api/agent/approval-mode; persisted in backend agent_config.db so desktop and the
+   * remote web share ONE value). 🔴 THROWS when unreachable (codex r1 P1-1: the UI must render
+   * an explicit unknown state + retry — it must never claim Manual while the persisted mode
+   * could be bypass). An out-of-domain value in a successful envelope folds to 'manual'
+   * (server semantics: dirty rows read as manual).
+   */
+  getApprovalMode(): Promise<GlobalApprovalMode>
+  /**
+   * 07-16 — switch the owner-global chat approval mode (PUT /api/agent/approval-mode). Owner
+   * UI ONLY (composer chip) — the model has no tool that reaches this endpoint. The gateway
+   * hot-reads the mode per manual run (short TTL), so a switch applies to the next turn without
+   * restart and persists across app restarts / new sessions. Returns the SERVER-CANONICAL mode
+   * echoed by the PUT (the pessimistic store displays only confirmed values, codex r1 P1-2);
+   * throws Error&{code} on failure (the store re-GETs to converge).
+   */
+  setApprovalMode(mode: GlobalApprovalMode): Promise<GlobalApprovalMode>
   /**
    * S2 W1 — list the exec automation-policy rules for the Settings 「自动化策略」 page
    * (GET /agent/policy/rules). Structured whitelist rules the owner created via the exec

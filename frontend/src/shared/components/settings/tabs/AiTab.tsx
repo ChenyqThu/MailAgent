@@ -43,6 +43,7 @@ import {
   type AutoTitleMode
 } from '@shared/lib/autoTitle'
 import { readApprovalMode, writeApprovalMode, type ApprovalMode } from '@shared/lib/approvalMode'
+import { useGlobalApprovalMode } from '@shared/lib/globalApprovalMode'
 
 import { PageHeader } from '../parts/PageHeader'
 import { Section } from '../parts/Section'
@@ -76,6 +77,8 @@ export function AiTab(): React.ReactElement {
   // a confirmation card; edit-tier (draft reply) + the irreversible send ALWAYS ask. Only the desktop
   // ai-sdk gateway path acts on it (rides the chat body).
   const [approvalMode, setApprovalMode] = React.useState<ApprovalMode>(() => readApprovalMode())
+  // 07-16 — owner-global 授权模式（backend 持久化）：非 Manual 时上面的旧 Switch 被接管（置灰）。
+  const { mode: globalApprovalMode } = useGlobalApprovalMode()
 
   // dynamic-models (main provider — for enabled list / model popover)
   const {
@@ -684,13 +687,31 @@ export function AiTab(): React.ReactElement {
       >
         <Row
           label={t('settings.ai.approval.autoReversibleLabel', { defaultValue: '可逆操作免确认' })}
-          helper={t('settings.ai.approval.autoReversibleHelper', {
-            defaultValue:
-              '开启后，标记 / 归档 / 置顶 / 重传 Notion / 记忆读写等可逆操作直接执行，无需确认卡片；起草回复仍需确认，发送邮件（不可逆）始终需要确认。'
-          })}
+          helper={
+            // 07-16 approval-mode switcher — 全局授权模式非 Manual 时，本开关被模式接管
+            //（gateway 在 acceptEdits/bypass 下不再走 auto-reversible 分支）：置灰 + 注明来源。
+            // codex r1 P1-1 — null = 服务端模式未知（读失败/未返回）：同样置灰（fail-safe，
+            // 真实模式可能是 bypass），但注明「未知」而非冒充某个模式。
+            globalApprovalMode === null
+              ? t('settings.ai.approval.modeUnknown', {
+                  defaultValue:
+                    '无法读取当前授权模式（后端暂不可达，聚焦窗口时自动重试）；确认为「手动授权」后此开关生效。'
+                })
+              : globalApprovalMode !== 'manual'
+                ? t('settings.ai.approval.managedByMode', {
+                    mode: t(`chat.approvalMode.${globalApprovalMode}.title`),
+                    defaultValue:
+                      '当前授权模式为「{{mode}}」（对话框左下角可切换），已接管审批放行；切回「手动授权」后此开关生效。'
+                  })
+                : t('settings.ai.approval.autoReversibleHelper', {
+                    defaultValue:
+                      '开启后，标记 / 归档 / 置顶 / 重传 Notion / 记忆读写等可逆操作直接执行，无需确认卡片；起草回复仍需确认，发送邮件（不可逆）始终需要确认。'
+                  })
+          }
         >
           <Switch
             checked={approvalMode === 'auto-reversible'}
+            disabled={globalApprovalMode !== 'manual'}
             onCheckedChange={(checked) => {
               const next: ApprovalMode = checked ? 'auto-reversible' : 'always'
               setApprovalMode(next)

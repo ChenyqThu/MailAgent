@@ -14,6 +14,7 @@ import os
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, Query, Request
+from loguru import logger
 
 from src.agent_config.projections import (
     resolved_skills,
@@ -226,6 +227,46 @@ async def rollback_profile_doc(name: str, request: Request, body: Optional[dict[
     if name == MEMORY_DOC_NAME:
         return success_envelope(_memory_doc_dict(doc), request=request, source="sqlite")
     return success_envelope(_editable_doc_dict(doc), request=request, source="sqlite")
+
+
+# ── chat 授权模式（07-16 approval-mode switcher）─────────────────────────────────────
+#
+# owner 级全局设置：manual（默认，字节级现状）/ acceptEdits（编辑放行）/ bypass（完全授权）。
+# 持久真源 = agent_config.db owner_settings 行；gateway 判定时经 GET 热读（读失败 fail-closed
+# 回落 manual）。写入**只**来自 owner UI（verify_cf_access 双腿：本地 token + CF JWT，桌面与
+# 远程 web 同端点）——刻意不暴露任何 gateway 工具（防注入自我提权，policy_rules 同款纪律）。
+
+CHAT_APPROVAL_MODES: tuple[str, ...] = ("manual", "acceptEdits", "bypass")
+_APPROVAL_MODE_KEY = "chat_approval_mode"
+
+
+@router.get("/approval-mode", dependencies=[Depends(verify_cf_access)])
+async def get_approval_mode(request: Request):
+    """读全局 chat 授权模式。无行 / 脏值 → 'manual'（fail-closed 默认）。"""
+    raw = get_agent_config_store().get_owner_setting(_APPROVAL_MODE_KEY)
+    mode = raw if raw in CHAT_APPROVAL_MODES else "manual"
+    return success_envelope({"mode": mode}, request=request, source="sqlite")
+
+
+@router.put("/approval-mode", dependencies=[Depends(verify_cf_access)])
+async def set_approval_mode(request: Request, body: Optional[dict[str, Any]] = None):
+    """写全局 chat 授权模式。body = {mode: 'manual'|'acceptEdits'|'bypass'}；越域值 400。
+
+    切换（尤其 bypass）落一条 INFO 审计日志 —— 这是所有 HITL 弹卡语义的全局越权开关。"""
+    mode = (body or {}).get("mode")
+    if mode not in CHAT_APPROVAL_MODES:
+        raise APIError(
+            "E_INVALID_ARG",
+            f"body.mode must be one of {CHAT_APPROVAL_MODES}",
+            http_status=400,
+            source="sqlite",
+        )
+    store = get_agent_config_store()
+    previous = store.get_owner_setting(_APPROVAL_MODE_KEY) or "manual"
+    store.set_owner_setting(_APPROVAL_MODE_KEY, mode)
+
+    logger.info(f"chat approval mode switched: {previous} → {mode} (owner UI)")
+    return success_envelope({"mode": mode}, request=request, source="sqlite")
 
 
 # ── skill 管理（PR5 —— enablement 迁后端 + install/uninstall）────────────────────────

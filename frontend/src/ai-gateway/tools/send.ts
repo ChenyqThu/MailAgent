@@ -20,7 +20,7 @@ import { DomainError, type MailAgentDomainClient } from '../python/domainClient'
 import type { ApprovalGuard } from '../security/approval'
 import { hashOutbound, signSendApprovalToken } from '../security/sendToken'
 import type { OutboundPayload } from '../../shared/assistant/tools/security/hashOutboundPayload'
-import { auditedSendTool, type GatewayToolAuditCollector } from './types'
+import { auditedSendTool, type GatewayApprovalMode, type GatewayToolAuditCollector } from './types'
 import type { AgentContextMode } from './policy'
 import { emailPrepareSendSchema, type EmailPrepareSendInput } from './schemas'
 
@@ -63,7 +63,15 @@ export function createSendTools(
   domain: MailAgentDomainClient,
   collector: GatewayToolAuditCollector,
   guard: ApprovalGuard,
-  opts: { signingSecret: string; a2uiEnabled?: boolean; contextMode?: AgentContextMode }
+  opts: {
+    signingSecret: string
+    a2uiEnabled?: boolean
+    contextMode?: AgentContextMode
+    /** 07-16 approval-mode switcher — the run's effective approval mode. ONLY the exact 'bypass'
+     *  literal has any effect here (narrowed below into auditedSendTool's `bypassMode` param);
+     *  'always'/'auto-reversible'/'acceptEdits' keep the hard always-ask floor byte-identical. */
+    approvalMode?: GatewayApprovalMode
+  }
 ): Record<string, Tool> {
   const email_prepare_send = auditedSendTool<EmailPrepareSendInput>(
     {
@@ -76,6 +84,9 @@ export function createSendTools(
       a2uiEnabled: opts.a2uiEnabled,
       // S2 W0 — class outbound: outside manual_chat the send neither registers nor executes.
       contextMode: opts.contextMode,
+      // 07-16 — bypass (owner-global, server-resolved, manual_chat-gated) is the ONLY value that
+      // ever skips the send card; the double guard (consume + content hash + Python ledger) stays.
+      bypassMode: opts.approvalMode === 'bypass' ? 'bypass' : undefined,
       run: async (input, { signal, record }) => {
         const payload = outboundFromInput(input)
         if (payload.to.length === 0) {

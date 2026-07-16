@@ -1134,6 +1134,33 @@
       "model": "切换模型",
       "modelHint": "在 Backend selector 中切换模型 (Alt 行 chip)"
     },
+    "approvalMode": {
+      "label": "授权模式",
+      "manual": {
+        "title": "手动授权",
+        "desc": "每个写操作都先弹卡确认（默认）"
+      },
+      "acceptEdits": {
+        "title": "编辑放行",
+        "desc": "编辑 / 联网自动执行；发信、本地命令、日历改动、Skill 安装、Agent 改动仍需确认"
+      },
+      "bypass": {
+        "title": "完全授权",
+        "desc": "所有操作直接执行，不再询问"
+      },
+      "unknown": {
+        "title": "状态未知"
+      },
+      "unknownHint": "无法读取当前授权模式（后端暂不可达，聚焦窗口时自动重试）；选择一项可直接设置。",
+      "bypassConfirmTitle": "切换到完全授权？",
+      "bypassConfirmBody": "包括真实发信、本地命令执行、Skill 安装与日历改动在内的所有操作都将不再弹卡确认，且对之后的所有会话生效。",
+      "confirm": "确认切换",
+      "cancel": "取消",
+      "switching": "切换中…",
+      "saved": "已切换到「{{mode}}」",
+      "savedDetail": "数秒内对新操作生效",
+      "saveFailed": "授权模式保存失败"
+    },
     "draftReply": {
       "header": "草稿回复",
       "send": "发送",
@@ -2339,7 +2366,9 @@
         "title": "Agent 操作审批",
         "helper": "Agent 执行写操作前是否需要逐个确认。发送邮件等不可逆操作始终需要确认。",
         "autoReversibleLabel": "可逆操作免确认",
-        "autoReversibleHelper": "开启后，标记 / 归档 / 置顶 / 重传 Notion / 记忆读写等可逆操作直接执行，无需确认卡片；起草回复仍需确认，发送邮件（不可逆）始终需要确认。"
+        "autoReversibleHelper": "开启后，标记 / 归档 / 置顶 / 重传 Notion / 记忆读写等可逆操作直接执行，无需确认卡片；起草回复仍需确认，发送邮件（不可逆）始终需要确认。",
+        "managedByMode": "当前授权模式为「{{mode}}」（对话框左下角可切换），已接管审批放行；切回「手动授权」后此开关生效。",
+        "modeUnknown": "无法读取当前授权模式（后端暂不可达，聚焦窗口时自动重试）；确认为「手动授权」后此开关生效。"
       },
       "cache": {
         "title": "Prompt 缓存",

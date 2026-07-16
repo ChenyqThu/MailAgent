@@ -1134,6 +1134,33 @@
       "model": "Switch model",
       "modelHint": "Switch model in the Backend selector (Alt row chips)"
     },
+    "approvalMode": {
+      "label": "Permission mode",
+      "manual": {
+        "title": "Manual",
+        "desc": "Every write asks for approval first (default)"
+      },
+      "acceptEdits": {
+        "title": "Accept edits",
+        "desc": "Edits & web run automatically; sends, local commands, calendar changes, skill installs and agent changes still ask"
+      },
+      "bypass": {
+        "title": "Bypass permissions",
+        "desc": "Everything runs without asking"
+      },
+      "unknown": {
+        "title": "Mode unknown"
+      },
+      "unknownHint": "Can't read the current permission mode (backend unreachable; retries when the window is focused). Pick a mode to set it directly.",
+      "bypassConfirmTitle": "Switch to bypass permissions?",
+      "bypassConfirmBody": "All actions — including real email sends, local command execution, skill installs and calendar changes — will run without a confirmation card, and this applies to all future sessions.",
+      "confirm": "Switch",
+      "cancel": "Cancel",
+      "switching": "Switching…",
+      "saved": "Switched to \"{{mode}}\"",
+      "savedDetail": "Takes effect on new actions within a few seconds",
+      "saveFailed": "Failed to save the permission mode"
+    },
     "draftReply": {
       "header": "Draft reply",
       "send": "Send",
@@ -2339,7 +2366,9 @@
         "title": "Agent action approval",
         "helper": "Whether the agent needs per-action confirmation before write operations. Irreversible actions like sending mail always require confirmation.",
         "autoReversibleLabel": "Skip confirmation for reversible actions",
-        "autoReversibleHelper": "When on, reversible actions — flag / archive / pin / resync to Notion / memory read-write — run directly without a confirmation card; drafting a reply still requires confirmation, and sending mail (irreversible) always requires confirmation."
+        "autoReversibleHelper": "When on, reversible actions — flag / archive / pin / resync to Notion / memory read-write — run directly without a confirmation card; drafting a reply still requires confirmation, and sending mail (irreversible) always requires confirmation.",
+        "managedByMode": "The permission mode is currently \"{{mode}}\" (switchable at the composer's bottom-left) and overrides this toggle; it takes effect again under \"Manual\".",
+        "modeUnknown": "Can't read the current permission mode (backend unreachable; retries when the window is focused). This toggle applies once the mode is confirmed as \"Manual\"."
       },
       "cache": {
         "title": "Prompt cache",

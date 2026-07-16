@@ -1172,3 +1172,24 @@ epic Q4=A 兑现——per-agent 全自动 = owner 显式 opt-in 的独立最小�
 - **`finishReason==='length'` fail-loud**：`appendLengthTruncationWarning`（`chatRun.ts`）在持久化前，给 `finishReason==='length'` 的轮次追加一个可见 warning text part（落库进 `ui_message_json`，硬编码中文——它是消息内容不是 renderer UI label，无 i18n key）。受 AI SDK UI message stream 生命周期的结构性限制，这个警告**只影响下次重新加载会话时看到的持久化内容，不影响当轮已经流出去的 SSE 内容**（`onFinish` 在流的 `flush()` 阶段触发，此时所有 chunk 均已 enqueue 完毕）；如需当轮实时可见需要走 `messageMetadata` + 前端渲染的更大改动，本批未做。
 - **横向 sweep 结论**：`update_system_md`/`setProfileDoc`/`file_write`/compose 草稿/报告生成等同类长内容写工具经排查判定不属于同一失败类（不共享 gateway `streamText` 的单一 `maxOutputTokens` 短板），未发现需要同批修复的第二个截断点；owner 生产 `memory.md` 经核实未被截断写坏，无需修复内容。
 - **agent_eval 覆盖**：新增 curated task `AGT-SAFETY-012`（`must_use=[agent_profile_read, agent_memory_update]`，先读后写 + 提案 ≤ budget_chars 的叙事顺序在 synthetic trace 里体现——R1-R8 硬闸不核顺序/数值合规，task notes 与 `test_memory_write_coverage.py` docstring 均已披露这一边界，不假装验证了没验证的东西）；`tests/agent_eval -q` 136→139，`run_baseline --compare` 无回归。
+## 13.23 全局授权模式切换：Manual / Accept Edits / Bypass（2026-07-16，task 07-16-approval-mode-switcher）
+
+Claude Code permission-mode 同款的 owner 级全局审批模式，三值 `manual | acceptEdits | bypass`，缺省 `manual`。
+
+### 13.23.1 语义（owner 拍板 2026-07-16）
+
+| 模式 | 语义 |
+|---|---|
+| `manual`（默认） | **字节级现状**：沿用既有 per-request `'always'|'auto-reversible'`（AiTab「可逆操作免确认」Switch 仅此模式下生效，非 Manual 置灰注明被接管） |
+| `acceptEdits` | **fail-closed 正向白名单**（codex r1 P1-3 由 deny-list 反转）：只有按名 allow-list `ACCEPT_EDITS_AUTO_APPROVE_TOOLS`（`tools/policy.ts`）里的写工具免卡自动执行——email 五写（flag/archive/pin/resync/draft_reply）+ 身份/记忆/skill 开关（update_system_md/agent_memory_update/agent_profile_restore/set_skill_enabled）+ web 双工具 + file_read/file_write；**未列名（含未来新增）的写工具一律照旧弹卡**。显式 ask 声明集 `ACCEPT_EDITS_ASK_TOOLS`（文档/完备性记账用，运行时不查）：calendar 三写（reschedule/rsvp/delete）+ `run_command`（白名单命中仍免卡，非白名单弹卡）+ skill 供应链（install/confirm/uninstall）+ custom_agent 四写（create/update/delete/run_now——ADR-004 rev3.1 §7 允许模型提案 grant_web 'open'/grant_exec/cron 的前提是「防线在恒人审卡」，acceptEdits 放行 = 注入可铸造 cron+open-web 的持久免卡外传后门，07-16 check 改判保留）+ send（结构性恒问，工厂不查任何集合）。完备性闸（`approval_mode.test.ts`）遍历 `tool_catalog.json` 全部 `write:true` 工具断言恰在两集之一——新增写工具漏声明必红。按名集而非 (tier,class) 判据——calendar 三写与 `email_draft_reply` 签名相同、`run_command` 与 `file_write` 同 class，轴上不可表达 |
+| `bypass` | 无例外全放行（含 send / exec / skill 安装 / 日历写）。guard 链（register→verify→one-shot consume→content hash + Python send ledger）在免卡路径下完整不变——bypass 去掉的是卡，不是双 guard |
+
+### 13.23.2 结构
+
+- **持久化**：backend `agent_config.db` 新表 `owner_settings`（kv，`chat_approval_mode` 行）；serve-api `GET/PUT /api/agent/approval-mode`（`verify_cf_access` 双腿 → 桌面与远程 web 同端点同值）；**不暴露任何 gateway 工具**（防注入自我提权，policy_rules 同款纪律），切换落 INFO 审计日志。
+- **注入点单点收口**：`chatRun.ts` prepareChatRun 的 approvalMode 归一处——`cfg.resolveGlobalApprovalMode`（lifecycle 注入：domainClient GET + 3s TTL cache + 2s timeout，任何失败 → `'manual'` fail-closed）**只在 `trustedContextMode==='manual_chat'` 时才调用**；headless custom-agent 走同一函数但永远读不到全局模式（只受 per-agent grants 矩阵管，有测试钉死 resolver not called）。`GatewayApprovalMode` 值域扩为 `'always'|'auto-reversible'|'acceptEdits'|'bypass'`，后两值只能由服务端注入，body 带上会被归一掉（有测试）。
+- **消费点**：`tools/types.ts` 两工厂 needsApproval——`auditedWriteTool` 在 guard.register 之后、policyEvaluate 分支**之前**判 bypass/acceptEdits（顺序 load-bearing：bypass 免 exec 白名单 RTT；acceptEdits 下 file_read/file_write 直放而 run_command 落回白名单路径；acceptEdits 只认 `ACCEPT_EDITS_AUTO_APPROVE_TOOLS` allow-list，未列名 fail-closed 弹卡）+ 消费侧再验 `contextMode==='manual_chat'`（双保险）。`auditedSendTool` 新增窄类型参数 `bypassMode?: 'bypass'`（类型上只接受该字面量，结构性无法接到 acceptEdits）。exec/skill_supply/agents 三个原先「刻意不 threading approvalMode」的工厂现已 threading（注释同步更新）。
+- **审计区分**（codex r1 P2-4）：跳卡执行**不再**记 `approval_status='approved'`（'approved'/'edited' 专指真实人工卡决定）——acceptEdits 跳卡记 `auto_accept_edits`、bypass 跳卡记 `auto_bypass`（send 含）、既有可逆免卡路径记 `auto_reversible`（原先不可区分地记 'approved'，同批修正）；exec 白名单免卡照旧 `auto_whitelist`。`chat_tool_call.approval_status` 是自由 TEXT（v10 无 CHECK）——新值零迁移，`auto_whitelist` 先例。
+- **UI**：`ApprovalModePicker`（`shared/assistant/components/`，icon/chip 双 variant）落 ThreadComposer + AgentComposer；bypass 常驻 `--c-fail` 警示色 + 菜单内联确认步。状态经 `shared/lib/globalApprovalMode.ts`（module store + useSyncExternalStore）。**真值纪律**（codex r1 P1-1/P1-2）：`mode` 只显示服务端确认值——读失败 = 显式 unknown 态（`--c-warn` + ShieldQuestion，绝不冒充 Manual）+ 定时重试 + window focus/visibilitychange re-GET（跨窗口/远程 web 改模式的收敛粒度 = focus 刷新）；切换**全 pessimistic 且串行**（PUT 返回服务端 canonical 值才更新显示，保存期间菜单禁用显示「切换中…」，成功 toast 注明「数秒内生效」= gateway 3s TTL），失败落 unknown + re-GET 收敛。
+- **红线注记**：ADR-001 §9「capability_change NEVER auto-approved」描述的是 Manual 缺省态；acceptEdits/bypass 是 owner 全局显式越权，headless「非 manual 永久 deny」半边不动（ADR 文件已加注记）。agent_eval recorder-contract 已注记**录制必须 Manual**（免卡执行无 `pending_confirmation` → R5 必红）。
+- **回退**：无 env flag——模式本身运行时可切，`manual` 即现状；resolver 缺席（测试/harness cfg）与读失败均回落 manual 语义。

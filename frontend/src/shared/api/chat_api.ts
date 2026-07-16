@@ -26,6 +26,7 @@ import type {
   CompileUserMdResult,
   CreatePolicyRuleInput,
   ExecPolicyRule,
+  GlobalApprovalMode,
   SkillConfirmResult,
   SkillEntrypoints,
   SkillPackPreview,
@@ -205,6 +206,37 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
       await request(baseUrl, 'POST', `/agent/skills/${encodeURIComponent(name)}/enabled`, {
         body: { enabled }
       })
+    },
+
+    async getApprovalMode(): Promise<GlobalApprovalMode> {
+      // 07-16 approval-mode switcher — read the owner-global mode (GET /agent/approval-mode).
+      // 🔴 codex r1 P1-1: a transport failure THROWS (it must NOT fold to 'manual' — the chip
+      // would claim Manual while the persisted mode could be bypass; the renderer store renders
+      // an explicit "unknown" state + retries instead). A SUCCESSFUL envelope with an
+      // out-of-domain value still folds to 'manual' (server semantics: dirty rows read as manual).
+      const data = await request<{ mode: GlobalApprovalMode }>(
+        baseUrl,
+        'GET',
+        '/agent/approval-mode'
+      )
+      return data.mode === 'acceptEdits' || data.mode === 'bypass' ? data.mode : 'manual'
+    },
+
+    async setApprovalMode(mode: GlobalApprovalMode): Promise<GlobalApprovalMode> {
+      // 07-16 — switch the owner-global mode (PUT /agent/approval-mode). Owner UI only; throws
+      // Error&{code} on failure. Returns the SERVER-CANONICAL mode echoed by the PUT so the store
+      // converges on what actually persisted (pessimistic UI, codex r1 P1-2) — an unexpected
+      // response shape throws too (indeterminate persist → the store re-GETs to converge).
+      const data = await request<{ mode: GlobalApprovalMode }>(
+        baseUrl,
+        'PUT',
+        '/agent/approval-mode',
+        { body: { mode } }
+      )
+      if (data.mode !== 'manual' && data.mode !== 'acceptEdits' && data.mode !== 'bypass') {
+        throw new Error(`unexpected approval-mode response: ${String(data.mode)}`)
+      }
+      return data.mode
     },
 
     async listPolicyRules(params?: { agentId?: string }): Promise<ExecPolicyRule[]> {

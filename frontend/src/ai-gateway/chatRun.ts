@@ -303,11 +303,27 @@ export async function prepareChatRun(
   // Auto-approval mode (PART 2) — body.approvalMode threads into the write/memory tools'
   // needsApproval. Only the two recognized values are honored; anything else (incl. absent) →
   // 'always', so a malformed body never silently relaxes approval (byte-identical to pre-toggle).
-  const approvalMode: GatewayApprovalMode =
-    body.approvalMode === 'auto-reversible' ? 'auto-reversible' : 'always'
   // S2 W0 — normalize the TRUSTED mode (never from body) once; it feeds buildTools (registration
   // filter + auto-approve predicate) and is frozen into the run for the island stash.
   const contextMode = normalizeContextMode(trustedContextMode)
+  let approvalMode: GatewayApprovalMode =
+    body.approvalMode === 'auto-reversible' ? 'auto-reversible' : 'always'
+  // 07-16 approval-mode switcher — overlay the owner-global mode (agent_config.db, hot-read via
+  // the injected resolver; NEVER from the request body). 🔴 MANUAL_CHAT-GATED: headless custom-
+  // agent runs reach prepareChatRun too (agentRun.ts) and must never see the global mode — they
+  // are governed solely by their per-agent grants matrix, so the resolver is not even called for
+  // them. 'manual' (default) keeps the request-level value above byte-identical; a resume of a
+  // stashed MANUAL run re-resolves here, so the mode in effect at approval time is the owner's
+  // CURRENT one (consistent with "hot-read at decision time"). Resolver absent (harness/test
+  // cfgs) or failing → the request-level mode stands (fail-closed to manual semantics).
+  if (contextMode === 'manual_chat' && cfg.resolveGlobalApprovalMode) {
+    try {
+      const globalMode = await cfg.resolveGlobalApprovalMode()
+      if (globalMode === 'acceptEdits' || globalMode === 'bypass') approvalMode = globalMode
+    } catch {
+      /* fail-closed — keep the request-level ('manual') semantics */
+    }
+  }
   const auditEntries: GatewayToolAuditEntry[] = []
   const tools = cfg.buildTools?.(auditEntries, approvalMode, contextMode)
   const hasTools = tools != null && Object.keys(tools).length > 0

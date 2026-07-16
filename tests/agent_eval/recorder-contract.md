@@ -34,6 +34,13 @@ The one recorder, `recorder/ai_sdk_adapter.ts`, maps `ai@6` `ToolUIPart` states 
 that file's header comment for the exact per-state mapping table; this doc still owns the
 target trace schema below that any recorder's output must land on.
 
+### 🔴 Recording MUST run under approval mode Manual (07-16)
+The owner-global chat approval mode (composer chip / `GET /api/agent/approval-mode`) must be
+`manual` while recording. Under `acceptEdits`/`bypass` the gateway executes writes WITHOUT a
+`pending_confirmation` event — R5 (`write dispatched without confirmation`) would flag every such
+write, red by construction, not a product regression. Baseline + fixtures are Manual-semantics
+frozen; a recorder should assert the mode (or set it) before capturing.
+
 ### Normalization the recorder MUST do (so hard rules apply cleanly)
 1. **config hashes are real**: fill `agent_profile_hash` / `installed_skills_hash` / `active_skills_hash`
    from `GET /chat/config` (+ client `activeSkillsHash`). For `source="recorded"` these MUST be 64-hex

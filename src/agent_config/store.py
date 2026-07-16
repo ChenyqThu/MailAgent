@@ -251,6 +251,15 @@ CREATE INDEX IF NOT EXISTS idx_policy_rules_lookup
 CREATE INDEX IF NOT EXISTS idx_policy_rules_agent
     ON policy_rules(capability, context_mode, agent_id, enabled);
 
+-- 07-16 approval-mode switcher：owner 级全局设置 kv（首个键 chat_approval_mode ——
+-- chat 授权模式 manual/acceptEdits/bypass 的持久真源）。镜像 policy_rules 纪律：值**只**由
+-- owner 显式 UI 动作写入（serve-api verify_cf_access 端点），模型无任何 gateway 工具通道。
+CREATE TABLE IF NOT EXISTS owner_settings (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS agent_profile_docs (
     doc_name     TEXT PRIMARY KEY,
     content      TEXT NOT NULL,
@@ -954,6 +963,33 @@ class AgentConfigStore:
             conn.execute(
                 "UPDATE policy_rules SET last_used_at = ?, use_count = use_count + 1 WHERE id = ?",
                 (_now_iso(), rule_id),
+            )
+            conn.commit()
+
+    # ======================================================================
+    # owner 级全局设置（owner_settings，07-16 approval-mode switcher）
+    # ======================================================================
+
+    def get_owner_setting(self, key: str) -> Optional[str]:
+        """读一个 owner 设置值；无行 → None（调用方自带默认，如 approval mode 回落 manual）。"""
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT value FROM owner_settings WHERE key = ?", (key,)
+            ).fetchone()
+        return row["value"] if row else None
+
+    def set_owner_setting(self, key: str, value: str) -> None:
+        """写/覆盖一个 owner 设置值（upsert）。合法性（值域校验）由 API 层把关，本层只落盘。"""
+        if not isinstance(key, str) or not key.strip():
+            raise ValueError("owner setting key must be a non-empty string")
+        if not isinstance(value, str):
+            raise ValueError("owner setting value must be a string")
+        with self._connection() as conn:
+            conn.execute(
+                "INSERT INTO owner_settings (key, value, updated_at) VALUES (?,?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value, "
+                " updated_at=excluded.updated_at",
+                (key, value, _now_iso()),
             )
             conn.commit()
 

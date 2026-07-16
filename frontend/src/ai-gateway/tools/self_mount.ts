@@ -3,7 +3,8 @@
 // 三个 meta 工具，让 agent 在对话内 (b) 提议改自己的 Standing Context 身份/规则文档，
 // (c) 发现未激活的能力并提议挂载 —— 闭合「发现4」之上的「自我挂载」愿景：
 //   - update_system_md (M4b, EDIT-tier 写)：提议覆写 soul/agent/rules/user 文档。EDIT-tier →
-//     **恒人审**（edit-tier 在 auto-reversible 模式也不跳卡），用户始终审一次对身份/规则的改动；
+//     Manual/auto-reversible 下**恒人审**（edit-tier 在 auto-reversible 模式也不跳卡）；07-16 起
+//     owner 全局 acceptEdits/bypass 模式（显式越权）下可自动执行（policy.ts allow-list）；
 //     rules 内容由 Python 端点 validate_rules_content 服务端校验（jailbreak/越权措辞 → E_INVALID_ARG
 //     → tool-error，模型读到被拒）；PRODUCT_SAFETY_FLOOR 结构上不可弱化。可经 Settings rollback。
 //   - discover_skills (M4c, SILENT 读)：列所有 skill 的 enabled/available/unavailableReason/toolCount，
@@ -84,8 +85,10 @@ export function createSelfMountTools(
       guard
     )
 
-  // M4b — propose an edit to a Standing Context doc. EDIT tier → always asks (never auto-approves,
-  // even in auto-reversible mode) → the user reviews every change to the agent's identity/rules.
+  // M4b — propose an edit to a Standing Context doc. EDIT tier → always asks under
+  // Manual/auto-reversible (edit tier never auto-approves there) → the user reviews every change
+  // to the agent's identity/rules. 07-16: the owner-global acceptEdits/bypass modes (explicit
+  // owner override) may auto-execute it — see ACCEPT_EDITS_AUTO_APPROVE_TOOLS (policy.ts).
   const update_system_md = makeWrite({
     name: 'update_system_md',
     description:
@@ -100,12 +103,14 @@ export function createSelfMountTools(
       'or rejects it; nothing changes without their approval. Editing `rules` is high-risk: ' +
       'jailbreak / safety-override phrasing is rejected by a server-side validator and the ' +
       'product safety floor can never be weakened. Reversible (the user can roll back from ' +
-      'Settings). Edit tier — always asks.',
+      'Settings). Edit tier — always asks under the Manual/auto-reversible modes; only the ' +
+      'owner-set global acceptEdits/bypass permission mode can auto-execute it.',
     inputSchema: updateSystemMdSchema,
     risk: 'edit',
     // No editableFields → the card is approve/reject only (no edit UI); doc_name AND content are both
-    // pinned. risk:'edit' keeps it ALWAYS-ask (never auto-approves, even in auto-reversible mode) —
-    // the safety property for an identity / rules change.
+    // pinned. risk:'edit' keeps it ALWAYS-ask under Manual/auto-reversible (edit tier never
+    // auto-approves there) — the safety property for an identity / rules change; the owner-global
+    // acceptEdits/bypass modes are the only (explicit, owner-set) auto-execute path.
     run: async (input, { userEdited, signal }) => {
       if (input.content.trim().length === 0) invalidArg('content required (non-empty)')
       const data = await domain.setProfileDoc(

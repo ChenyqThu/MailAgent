@@ -942,6 +942,17 @@ export class MailAgentDomainClient {
     if (audit?.agentId != null) body.agent_id = audit.agentId
   }
 
+  // ── approval mode (07-16 approval-mode switcher) ─────────────────────────────────────────────
+
+  /** GET /agent/approval-mode → the owner-global chat approval mode row
+   *  ({mode: 'manual'|'acceptEdits'|'bypass'}, serve-api fail-closes dirty rows to 'manual').
+   *  Consulted by the lifecycle's resolveGlobalApprovalMode (short-TTL cache + bounded timeout,
+   *  any failure → 'manual'). READ-ONLY from the gateway: mode switching is an owner UI action
+   *  (verify_cf_access endpoint) — no gateway tool can reach the PUT. */
+  getApprovalMode(signal?: AbortSignal): Promise<{ mode: string }> {
+    return this._req<{ mode: string }>('GET', '/agent/approval-mode', { signal })
+  }
+
   // ── policy primitives (S2 W1) — the structured whitelist. evaluate is consulted by the exec
   //    tools' needsApproval (auto_allow → skip card); the CRUD methods back the Settings automation
   //    policy page + the approval-card "always allow" affordance (rule creation is an OWNER action

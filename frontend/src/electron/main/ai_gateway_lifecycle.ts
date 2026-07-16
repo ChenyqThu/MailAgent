@@ -28,6 +28,7 @@ import {
 } from '../../ai-gateway/config'
 import { MailAgentDomainClient } from '../../ai-gateway/python/domainClient'
 import { buildGatewayTools } from '../../ai-gateway/tools'
+import type { GlobalApprovalMode } from '../../ai-gateway/tools/types'
 import { ApprovalGuard } from '../../ai-gateway/security/approval'
 import { ApprovalRunStash, DEFAULT_STASH_TTL_MS } from '../../ai-gateway/approvalStash'
 import { ActiveRunRegistry } from '../../ai-gateway/activeRuns'
@@ -467,6 +468,30 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     await getSystemPromptConfig(apiBase, getLocalApiToken())
   }
 
+  // 07-16 approval-mode switcher — the owner-global chat approval mode resolver prepareChatRun
+  // hot-reads per MANUAL run (headless runs never call it). Short TTL (a Settings/composer switch
+  // takes effect within seconds without a per-turn loopback storm) + bounded timeout; CONTRACTED
+  // to resolve 'manual' on ANY failure (fail-closed — an unreachable serve-api / dirty row can
+  // only ever mean "current HITL behaviour", never a silent relaxation). The renderer PUTs the
+  // mode straight to serve-api (owner UI), so there is no gateway-side write face to wire.
+  const APPROVAL_MODE_TTL_MS = 3_000
+  let _approvalModeCache: { at: number; value: GlobalApprovalMode } | null = null
+  const resolveGlobalApprovalMode = async (): Promise<GlobalApprovalMode> => {
+    const now = Date.now()
+    if (_approvalModeCache && now - _approvalModeCache.at < APPROVAL_MODE_TTL_MS) {
+      return _approvalModeCache.value
+    }
+    let value: GlobalApprovalMode = 'manual'
+    try {
+      const r = await domain.getApprovalMode(AbortSignal.timeout(2_000))
+      if (r.mode === 'acceptEdits' || r.mode === 'bypass') value = r.mode
+    } catch {
+      value = 'manual' // fail-closed
+    }
+    _approvalModeCache = { at: now, value }
+    return value
+  }
+
   // Part B (harness 上岛) — fire-and-forget announce a paused approval to the island via serve-api
   // /api/island/agent/announce. Enriches `risk` from the ApprovalGuard (main owns it) and stamps THIS
   // gateway's port so serve-api's ack → /api/ai/approval/decide callback reaches us. Local-token
@@ -604,6 +629,9 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
             })
         }
       : undefined,
+    // 07-16 approval-mode switcher — the owner-global mode resolver (short-TTL cached, fail-closed
+    // 'manual'; see its construction above). prepareChatRun consults it per manual run only.
+    resolveGlobalApprovalMode,
     // 07-01 — M2 per-query recall (retrieveMemory → /chat/memory/search) is retired. The bounded
     // memory.md is now injected into the cacheable stable prefix via /chat/config.memorySummary
     // (getSystemPromptConfig above already carries it, on a 15s TTL — NOT frozen per session), so

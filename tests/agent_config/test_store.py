@@ -343,3 +343,31 @@ def test_path_resolution_env_override(tmp_path, monkeypatch):
     ss = str(tmp_path / "data" / "sync_store.db")
     assert resolve_agent_config_db_path(ss) == agent_config_db_for(ss)
     assert agent_config_db_for(ss).endswith("agent_config.db")
+
+
+# ---------------------------------------------------------------------------
+# owner_settings（07-16 approval-mode switcher）
+# ---------------------------------------------------------------------------
+def test_owner_setting_absent_returns_none(tmp_path):
+    st = _store(tmp_path)
+    assert st.get_owner_setting("chat_approval_mode") is None
+
+
+def test_owner_setting_set_get_overwrite_and_persistence(tmp_path):
+    st = _store(tmp_path)
+    st.set_owner_setting("chat_approval_mode", "acceptEdits")
+    assert st.get_owner_setting("chat_approval_mode") == "acceptEdits"
+    # 覆盖（upsert）
+    st.set_owner_setting("chat_approval_mode", "bypass")
+    assert st.get_owner_setting("chat_approval_mode") == "bypass"
+    # 跨 store 实例存活（同一 db 路径 = 重启存活的持久语义）
+    st2 = _store(tmp_path)
+    assert st2.get_owner_setting("chat_approval_mode") == "bypass"
+
+
+def test_owner_setting_rejects_bad_key_or_value(tmp_path):
+    st = _store(tmp_path)
+    with pytest.raises(ValueError):
+        st.set_owner_setting("", "x")
+    with pytest.raises(ValueError):
+        st.set_owner_setting("k", None)  # type: ignore[arg-type]

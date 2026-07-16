@@ -14,7 +14,7 @@ import type { MailAgentUIMessage } from '@shared/assistant/uiMessage'
 // tools/types (which DOES import `tool` from 'ai'). index.ts statically imports
 // config.ts for resolveAiGatewayPort; this must never pull the heavy `ai` chunk into
 // the main bundle when MAILAGENT_AI_SDK_GATEWAY is off (Phase 02 invariant).
-import type { GatewayApprovalMode, GatewayToolAuditEntry } from './tools/types'
+import type { GatewayApprovalMode, GatewayToolAuditEntry, GlobalApprovalMode } from './tools/types'
 // 🔴 type-only — same erasure discipline. The runtime policy functions live in tools/policy.ts
 // (pure, type-only `ai` import) and are consumed by chatRun/tools, never here.
 import type { AgentContextMode, AgentRunContext } from './tools/policy'
@@ -167,6 +167,15 @@ export interface AiGatewayConfig {
   ) => ToolSet
   /** Max tool-loop steps (stopWhen: stepCountIs). Default 8 (legacy AGENT_MAX_ITER). */
   maxSteps?: number
+  /** 07-16 approval-mode switcher — hot-read the owner-global chat approval mode
+   *  ('manual'|'acceptEdits'|'bypass', persisted in agent_config.db owner_settings). Called by
+   *  prepareChatRun ONCE per run and ONLY for manual_chat runs (headless custom-agent runs never
+   *  consult it — they are governed solely by their per-agent grants matrix). The Electron
+   *  wrapper implements it as a short-TTL-cached GET /api/agent/approval-mode with a bounded
+   *  timeout, CONTRACTED to resolve 'manual' on any failure (fail-closed); prepareChatRun guards
+   *  with its own try/catch anyway. Omitted (harness/test cfgs) → the request-level
+   *  'always'|'auto-reversible' semantics apply unchanged, byte-identical. */
+  resolveGlobalApprovalMode?: () => Promise<GlobalApprovalMode> | GlobalApprovalMode
   /** Phase 04a — apply a UI edit to a pending edit-tier approval (POST /api/ai/approval/resolve).
    *  The Electron wrapper implements this as `approvalGuard.applyEdit(toolCallId, editedFields)`:
    *  it overlays the editable fields onto the original input (identity pinned) so the next

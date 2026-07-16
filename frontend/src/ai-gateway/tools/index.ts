@@ -61,7 +61,9 @@ export interface BuildGatewayToolsOpts {
   /** Auto-approval mode (body.approvalMode, default 'always'). 'auto-reversible' lets reversible
    *  preview-tier writes (flag/archive/pin/resync) execute without a card;
    *  edit-tier + the blocking send still ask. Threaded into the write tools' needsApproval.
-   *  Absent / 'always' → every write asks (current behaviour, byte-identical). */
+   *  Absent / 'always' → every write asks (current behaviour, byte-identical).
+   *  07-16 — may also carry the SERVER-injected owner-global 'acceptEdits'/'bypass' overlay
+   *  (prepareChatRun, manual_chat-gated); see types.ts GlobalApprovalMode. */
   approvalMode?: GatewayApprovalMode
   /** M4a (MAILAGENT_SKILL_SELF_MOUNT) — when true AND advertisedSkills is provided (non-null),
    *  drop the read tools of any email/search/report skill NOT in advertisedSkills (skill→tool
@@ -200,7 +202,11 @@ export function buildGatewayTools(
         createSendTools(opts.domain, collector, opts.approvalGuard, {
           signingSecret: opts.sendSigningSecret,
           a2uiEnabled: opts.a2uiEnabled,
-          contextMode
+          contextMode,
+          // 07-16 approval-mode switcher — only the exact 'bypass' literal relaxes the send card
+          // (the factory narrows it into auditedSendTool's bypassMode); every other mode keeps
+          // the hard always-ask floor byte-identical.
+          approvalMode: opts.approvalMode
         })
       )
     }

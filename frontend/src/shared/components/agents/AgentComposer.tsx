@@ -50,6 +50,7 @@ import {
   useChatComposerControls,
   type ChatComposerControls
 } from '@shared/assistant/components/composerControls'
+import { ApprovalModePicker } from '@shared/assistant/components/ApprovalModePicker'
 
 import { AgentDirectiveChip, AgentTriggerPopover } from './AgentTriggerPopover'
 
@@ -515,6 +516,8 @@ export function AgentComposer(): React.JSX.Element {
               <div className="flex items-center gap-0.5">
                 {controls && <AgentAttachmentButton controls={controls} />}
                 {controls && <AgentModelPicker controls={controls} />}
+                {/* 07-16 — owner-global 授权模式切换 chip（Manual/Accept Edits/Bypass）。 */}
+                {controls && <ApprovalModePicker variant="chip" />}
               </div>
               <div className="flex items-center">
                 <ThreadPrimitive.If running={false}>

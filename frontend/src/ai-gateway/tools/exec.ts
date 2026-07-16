@@ -110,7 +110,13 @@ export function createExecTools(
         risk: 'edit',
         editableFields: toolOpts.editableFields,
         a2uiEnabled: opts.a2uiEnabled,
-        // approvalMode is intentionally NOT threaded — exec tools relax ONLY via policyEvaluate.
+        // 07-16 approval-mode switcher — approvalMode is now threaded, but ONLY the owner-global
+        // modes can ever relax an exec tool ('auto-reversible' still can't: exec is edit-tier +
+        // class exec). 'bypass' skips the card for all three; 'acceptEdits' skips it for
+        // file_read/file_write (in the fail-closed ACCEPT_EDITS_AUTO_APPROVE_TOOLS allow-list,
+        // policy.ts) while run_command is deliberately NOT listed and keeps the whitelist-or-card
+        // path below (exec 非白名单恒 HITL, owner 拍板).
+        approvalMode: opts.approvalMode,
         oneShot: opts.oneShot,
         // S2 W0 — class exec (policy.ts): manual_chat-only unless per-agent granted (ADR-004 D2).
         contextMode: opts.contextMode,

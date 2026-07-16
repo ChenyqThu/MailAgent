@@ -28,6 +28,7 @@ import { type ApprovalGuard, type ApprovalRecord, type ApprovalRisk } from '../s
 // MODE, and a capability_change/exec/outbound tool hard-rejects at execute time outside a manual
 // session (runtime double-insurance behind the registration-time filter in tools/index.ts).
 import {
+  ACCEPT_EDITS_AUTO_APPROVE_TOOLS,
   classOfTool,
   isToolClassAllowedInMode,
   mayAutoApprove,
@@ -66,11 +67,24 @@ export interface GatewayToolAuditEntry {
   durationMs: number
   /** Phase 03b — 'preview' | 'edit' for write tools; omitted → 'silent' (read). */
   confirmationTier?: 'silent' | 'preview' | 'edit'
-  /** Phase 03b — write-tool approval outcome: 'approved'/'edited' = guard passed and
+  /** Phase 03b — write-tool approval outcome: 'approved'/'edited' = a HUMAN passed the card and
    *  the write executed; 'rejected' = approval guard rejected (not executed). Omitted
    *  for read tools (no approval). S2 W1 adds 'auto_whitelist' — an exec tool executed
-   *  without a card because a structured PolicyRule matched (whitelistRuleId carries which). */
-  approvalStatus?: 'approved' | 'edited' | 'rejected' | 'auto_whitelist'
+   *  without a card because a structured PolicyRule matched (whitelistRuleId carries which).
+   *  07-16 (codex r1 P2-4) — card-skipped executions are audited DISTINCTLY, never as 'approved'
+   *  ('approved'/'edited' now mean a real human decision, load-bearing for incident forensics):
+   *  'auto_accept_edits' / 'auto_bypass' = the owner-global mode skipped the card;
+   *  'auto_reversible' = the pre-existing reversible-preview skip (approvalMode 'auto-reversible',
+   *  previously indistinguishably audited 'approved'). chat_tool_call.approval_status is free-form
+   *  TEXT (v10, no CHECK) — the new values need no schema migration, mirroring 'auto_whitelist'. */
+  approvalStatus?:
+    | 'approved'
+    | 'edited'
+    | 'rejected'
+    | 'auto_whitelist'
+    | 'auto_accept_edits'
+    | 'auto_bypass'
+    | 'auto_reversible'
   /** S2 W1 — exec-tool whitelist audit (chat_tool_call.whitelist_rule_id): the PolicyRule id that
    *  auto-allowed this run without a card (approvalStatus='auto_whitelist'). null/omitted otherwise. */
   whitelistRuleId?: number | null
@@ -95,14 +109,31 @@ export interface GatewayToolAuditEntry {
  *  request and binds into the tools (closure). Drained in onFinish. */
 export type GatewayToolAuditCollector = GatewayToolAuditEntry[]
 
+/** The owner-global chat approval mode (07-16 approval-mode switcher) — persisted in
+ *  agent_config.db (owner_settings), switched ONLY through the owner UI (composer chip /
+ *  serve-api verify_cf_access endpoint; no gateway tool can switch it), and hot-read by the
+ *  gateway per run (cfg.resolveGlobalApprovalMode — any read failure fail-closes to 'manual').
+ *   - 'manual'      (DEFAULT) — byte-identical current behaviour: the per-request
+ *                   'always'|'auto-reversible' semantics apply unchanged.
+ *   - 'acceptEdits' — ONLY the by-name allow-list (policy.ts ACCEPT_EDITS_AUTO_APPROVE_TOOLS)
+ *                   auto-approves; anything unlisted — send included — keeps asking (fail-closed).
+ *   - 'bypass'      — everything auto-approves, send/exec/skill-install included (owner 拍板:
+ *                   无例外; Claude Code bypassPermissions semantics).
+ *  Both overrides apply ONLY to manual_chat runs (injection gated in prepareChatRun AND
+ *  re-checked at each consumption point) — headless custom-agent runs never see them. */
+export type GlobalApprovalMode = 'manual' | 'acceptEdits' | 'bypass'
+
 /** Auto-approval mode threaded from the request body (body.approvalMode) → buildGatewayTools →
  *  each write tool's needsApproval. Mirrors the renderer's @shared/lib/approvalMode.ApprovalMode
  *  (a string union — no shared import, so the gateway core stays harness-testable / @shared-free).
  *   - 'always'          (DEFAULT, absent body field) — every write tool asks (current behaviour).
  *   - 'auto-reversible'                              — reversible preview-tier writes execute
  *                                                     without a card; edit + blocking still ask.
- *  🔴 The high-risk blocking send (auditedSendTool) IGNORES this and always asks (safety floor). */
-export type GatewayApprovalMode = 'always' | 'auto-reversible'
+ *   - 'acceptEdits' / 'bypass' (07-16) — the owner-global mode overlay, injected SERVER-SIDE by
+ *     prepareChatRun (never from the body) and only for manual_chat runs; see GlobalApprovalMode.
+ *  🔴 The high-risk blocking send (auditedSendTool) ignores everything except the explicit
+ *     'bypass' literal, wired through its own narrowly-typed factory param (safety floor). */
+export type GatewayApprovalMode = 'always' | 'auto-reversible' | 'acceptEdits' | 'bypass'
 
 /** True for an abort/cancel error — let it propagate untouched so the AI SDK
  *  treats the run as aborted (not as a tool error). */
@@ -233,7 +264,12 @@ export function auditedWriteTool<I>(
      *  the audit need it), so the only change is whether needsApproval returns true.
      *  S2 W0 (ADR-001 D3): auto-reversible additionally requires class==='domain_write' AND
      *  contextMode==='manual_chat' — a preview-tier capability change (set_skill_enabled) always
-     *  asks now. */
+     *  asks now.
+     *  07-16 — may also carry the SERVER-injected owner-global modes (never from a body):
+     *  'acceptEdits' skips the card ONLY for writes in ACCEPT_EDITS_AUTO_APPROVE_TOOLS
+     *  (fail-closed allow-list — an unlisted tool asks); 'bypass' skips it for every write. Both
+     *  require contextMode==='manual_chat' at this consumption point too (defense in depth behind
+     *  the prepareChatRun injection gate). */
     approvalMode?: GatewayApprovalMode
     /** S2 W0 (ADR-001 D2) — TEST-ONLY override of the tool's policy class. Production ALWAYS resolves
      *  the class from the policy.ts single-source map by name (a name missing there fail-closes to
@@ -300,6 +336,11 @@ export function auditedWriteTool<I>(
   // whitelist-skipped", so execute overrides the default 'approved' audit. Cleared on read.
   const whitelistRuleIdByCall = new Map<string, number | null>()
 
+  // 07-16 (codex r1 P2-4) — same idiom for the card-skip paths of needsApproval: stash WHY the
+  // card was skipped so execute audits a distinct approval_status ('auto_accept_edits' /
+  // 'auto_bypass' / 'auto_reversible') instead of the human-decision 'approved'. Cleared on read.
+  const autoSkipByCall = new Map<string, 'auto_accept_edits' | 'auto_bypass' | 'auto_reversible'>()
+
   return makeTool({
     description: opts.description,
     inputSchema: opts.inputSchema,
@@ -321,6 +362,27 @@ export function auditedWriteTool<I>(
       // hard-reject (tool-error the model can read).
       if (modeDenied) return false
       guard.register(toolCallId, opts.name, opts.risk, input, opts.editableFields)
+      // 07-16 approval-mode switcher — the owner-global overrides, BEFORE the policyEvaluate
+      // branch (so 'bypass' releases exec without a whitelist round-trip, and 'acceptEdits'
+      // releases file_read/file_write while run_command — in the by-name retain set — still
+      // falls through to the whitelist-or-card path). Both are double-gated on manual_chat:
+      // prepareChatRun only injects them for manual runs, and this consumption-side re-check
+      // (mayAutoApprove precedent) keeps a mis-threaded headless run fail-closed. The approval
+      // record above is registered regardless — execute's guard.verify + the audit need it, so
+      // the authoritative write-gate chain (verify/consume/audit) is intact on every skip.
+      if (contextMode === 'manual_chat') {
+        if (opts.approvalMode === 'bypass') {
+          autoSkipByCall.set(toolCallId, 'auto_bypass')
+          return false
+        }
+        // codex r1 P1-3 — fail-closed ALLOW-list (inverted from the original deny-list): only a
+        // tool explicitly named in ACCEPT_EDITS_AUTO_APPROVE_TOOLS skips the card; any unlisted
+        // (including future/unclassified) write falls through to the unchanged ask paths below.
+        if (opts.approvalMode === 'acceptEdits' && ACCEPT_EDITS_AUTO_APPROVE_TOOLS.has(opts.name)) {
+          autoSkipByCall.set(toolCallId, 'auto_accept_edits')
+          return false
+        }
+      }
       // S2 W1 — exec tools consult the structured whitelist instead of the approvalMode path. A
       // matching rule (auto_allow) skips the card (stash the rule id for execute's audit); any
       // other verdict OR an error → the card (fail-closed). Returns a Promise (ai@6 awaits it).
@@ -341,6 +403,7 @@ export function auditedWriteTool<I>(
         opts.risk === 'preview' &&
         mayAutoApprove(toolClass, contextMode)
       ) {
+        autoSkipByCall.set(toolCallId, 'auto_reversible')
         return false
       }
       return true
@@ -397,10 +460,18 @@ export function auditedWriteTool<I>(
       }
       // S2 W1 — an exec run the whitelist auto-allowed (needsApproval skipped the card) audits as
       // 'auto_whitelist' + the matched rule id, distinct from the human-approved 'approved'/'edited'.
+      // 07-16 (codex r1 P2-4) — likewise a mode/auto-reversible skip audits its stashed reason;
+      // 'approved'/'edited' are reserved for a real human card decision.
       const wasWhitelisted = whitelistRuleIdByCall.has(toolCallId)
-      const whitelistRuleId = wasWhitelisted ? whitelistRuleIdByCall.get(toolCallId) ?? null : null
+      const whitelistRuleId = wasWhitelisted
+        ? (whitelistRuleIdByCall.get(toolCallId) ?? null)
+        : null
       whitelistRuleIdByCall.delete(toolCallId)
-      const approvalStatus = wasWhitelisted ? 'auto_whitelist' : userEdited ? 'edited' : 'approved'
+      const autoSkip = autoSkipByCall.get(toolCallId)
+      autoSkipByCall.delete(toolCallId)
+      const approvalStatus = wasWhitelisted
+        ? 'auto_whitelist'
+        : (autoSkip ?? (userEdited ? 'edited' : 'approved'))
       // userEditedInputJson records the EXECUTED (effective) input when edited; input_json
       // stays the model-proposed (history) input — matching the legacy audit shape.
       const userEditedJson = userEdited ? safeJson(effectiveInput) : null
@@ -475,6 +546,16 @@ export function auditedSendTool<I>(
      *  needsApproval stays a hard `true` regardless — there is deliberately still no path to
      *  auto-approve a send. Absent/unknown fail-closes to 'untrusted_trigger'. */
     contextMode?: AgentContextMode
+    /** 07-16 approval-mode switcher — the ONE deliberate breach of the "no path to auto-approve
+     *  a send" contract above, and it is as narrow as the type system allows: the param accepts
+     *  ONLY the literal 'bypass' (owner 拍板 2026-07-16: bypass = 无例外全放行, Claude Code
+     *  bypassPermissions semantics). It can structurally never be wired to 'always' /
+     *  'auto-reversible' / 'acceptEdits' — those modes keep the hard-true floor. Set by
+     *  createSendTools from the SERVER-resolved global mode (prepareChatRun, manual_chat-gated),
+     *  never from a request body; needsApproval additionally re-checks manual_chat. The guard
+     *  chain (register → verify → one-shot consume → content hash + Python send ledger) runs
+     *  unchanged on the skip — bypass removes the card, never the double guard. */
+    bypassMode?: 'bypass'
     /** Compute the content hash, sign the token, perform the real send via the domain client, and
      *  return the model-facing output + the content hash for audit. Receives the verified
      *  approval record (its idempotencyKey + expiry feed the signed token). */
@@ -501,15 +582,25 @@ export function auditedSendTool<I>(
   const contextMode = normalizeContextMode(opts.contextMode)
   const modeDenied = !isToolClassAllowedInMode('outbound', contextMode)
 
+  // 07-16 (codex r1 P2-4) — calls whose card was skipped by the owner-global bypass mode, so
+  // execute audits approval_status='auto_bypass' (never the human-decision 'approved').
+  const bypassSkippedCalls = new Set<string>()
+
   return makeTool({
     description: opts.description,
     inputSchema: opts.inputSchema,
     // 🔴 The high-risk outbound send ALWAYS asks — it hard-returns true regardless of approvalMode
     // ('auto-reversible' relaxes only reversible preview writes, never an irreversible send). This is
     // the safety floor; auditedSendTool intentionally takes no approvalMode param so it can never be
-    // wired to skip approval.
+    // wired to skip approval. 07-16 — the single exception is the owner-global 'bypass' mode via the
+    // narrowly-typed bypassMode param (see its doc above): manual_chat-only, register/verify/consume
+    // and the Python-side double guard all still run — only the card is skipped.
     needsApproval: (input, { toolCallId }) => {
       guard.register(toolCallId, opts.name, RISK, input, opts.editableFields)
+      if (opts.bypassMode === 'bypass' && contextMode === 'manual_chat') {
+        bypassSkippedCalls.add(toolCallId)
+        return false
+      }
       return true
     },
     execute: async (input, { toolCallId, abortSignal }) => {
@@ -556,7 +647,11 @@ export function auditedSendTool<I>(
         })
         throw new ToolExecutionError(code, message)
       }
-      const approvalStatus = userEdited ? 'edited' : 'approved'
+      const approvalStatus = bypassSkippedCalls.delete(toolCallId)
+        ? 'auto_bypass'
+        : userEdited
+          ? 'edited'
+          : 'approved'
       const userEditedJson = userEdited ? safeJson(effectiveInput) : null
       try {
         const { output, contentHash } = await opts.run(effectiveInput as I, {

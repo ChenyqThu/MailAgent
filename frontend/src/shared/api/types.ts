@@ -148,6 +148,7 @@ export type {
   SkillUninstallResult,
   SkillSecretMeta,
   CompileUserMdResult,
+  GlobalApprovalMode,
   ChatApi
 } from './types/chat'
 export type { SearchAgentPhase, SearchAgentInput, SearchAgentResult } from './types/search-agent'

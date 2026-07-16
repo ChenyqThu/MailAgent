@@ -8,12 +8,13 @@
 //   - agent_profile_read    — silent read: full content + version info of one doc
 //                             (soul/agent/rules/user/memory)
 //   - agent_profile_history — silent read: version history (newest first)
-//   - agent_profile_restore — EDIT-tier write (always asks, approve/reject only): roll a doc
-//                             back to a history version. NOT the legacy name
+//   - agent_profile_restore — EDIT-tier write (asks under Manual/auto-reversible; the owner-global
+//                             acceptEdits/bypass modes may auto-execute — 07-16, approve/reject
+//                             only): roll a doc back to a history version. NOT the legacy name
 //                             `agent_profile_rollback` — legacy is preview-tier; this is
-//                             edit-tier (identity/rules change ⇒ never auto-approves), so a
-//                             new name keeps the eval catalog tier truth single-valued.
-//   - agent_memory_update   — EDIT-tier write (always asks): overwrite memory.md. Deliberately
+//                             edit-tier (identity/rules change ⇒ auto-reversible never relaxes
+//                             it), so a new name keeps the eval catalog tier truth single-valued.
+//   - agent_memory_update   — EDIT-tier write (same approval semantics): overwrite memory.md. Deliberately
 //                             NOT a new doc_name on update_system_md (identity 边界: memory ≠
 //                             身份文档 — separate tool, separate semantics; the Python budget
 //                             clamp is the authority).
@@ -84,7 +85,8 @@ function isoOrNull(v: string | number | null | undefined): string | null {
 /**
  * Build the S1 R2 profile-config tools bound to the injected domain client + audit collector +
  * approval guard. agent_profile_read / agent_profile_history are silent reads;
- * agent_profile_restore / agent_memory_update are edit-tier writes (always ask).
+ * agent_profile_restore / agent_memory_update are edit-tier writes (always ask under
+ * Manual/auto-reversible; the owner-global acceptEdits/bypass modes may auto-execute them).
  */
 export function createProfileTools(
   domain: MailAgentDomainClient,
@@ -114,8 +116,11 @@ export function createProfileTools(
         a2uiEnabled: opts.a2uiEnabled,
         approvalMode: opts.approvalMode,
         oneShot: opts.oneShot,
-        // S2 W0 — both writes here are class capability_change (policy.ts): never auto-approved,
-        // manual_chat-only.
+        // S2 W0 + 07-16 modes — both writes here are class capability_change (policy.ts):
+        // manual_chat-only (never registered/executed headless). Approval: asks under
+        // Manual/auto-reversible; both are ACCEPT_EDITS_AUTO_APPROVE_TOOLS members (owner 拍板
+        // 「编辑放行」, ADR-001 §9 mode 注记), so the owner-global acceptEdits AND bypass modes
+        // auto-execute them.
         contextMode: opts.contextMode
       },
       collector,
@@ -191,8 +196,9 @@ export function createProfileTools(
     collector
   )
 
-  // EDIT-tier write — roll a doc back to a history version. Always asks (never auto-approves,
-  // even in auto-reversible mode); no editableFields → the card is approve/reject only, so
+  // EDIT-tier write — roll a doc back to a history version. Asks under Manual/auto-reversible
+  // (edit tier never auto-approves there; the owner-global acceptEdits/bypass modes may
+  // auto-execute — 07-16); no editableFields → the card is approve/reject only, so
   // doc_name AND target_hash are both pinned (an approved restore cannot be retargeted).
   const agent_profile_restore = makeWrite({
     name: 'agent_profile_restore',
@@ -203,7 +209,8 @@ export function createProfileTools(
       '`rules` is high-risk: the target version is re-checked by the server-side safety ' +
       'validator, so a version containing jailbreak / safety-override phrasing is rejected ' +
       'even if it once existed. The restore itself is recorded in history (it can be rolled ' +
-      'back again). Edit tier — always asks.',
+      'back again). Edit tier — always asks under the Manual/auto-reversible modes; only the ' +
+      'owner-set global acceptEdits/bypass permission mode can auto-execute it.',
     inputSchema: agentProfileRestoreSchema,
     risk: 'edit',
     // No editableFields → approve/reject only; identity (doc_name + target_hash) pinned —
@@ -221,7 +228,8 @@ export function createProfileTools(
     }
   })
 
-  // EDIT-tier write — overwrite memory.md. Always asks. Deliberately separate from
+  // EDIT-tier write — overwrite memory.md. Asks under Manual/auto-reversible (the owner-global
+  // acceptEdits/bypass modes may auto-execute — 07-16). Deliberately separate from
   // update_system_md (whose doc_name enum stays soul/agent/rules/user): memory is bounded
   // auto-captured background, not an identity doc.
   const agent_memory_update = makeWrite({
@@ -234,7 +242,8 @@ export function createProfileTools(
       'proposing. Use this for pruning stale or wrong memories or consolidating duplicates; ' +
       'do NOT use it for identity documents (soul/agent/rules/user — that is update_system_md). ' +
       'The user approves or rejects the change; it is versioned and can be rolled back. ' +
-      'Edit tier — always asks.',
+      'Edit tier — always asks under the Manual/auto-reversible modes; only the owner-set ' +
+      'global acceptEdits/bypass permission mode can auto-execute it.',
     inputSchema: agentMemoryUpdateSchema,
     risk: 'edit',
     // No editableFields → approve/reject only (S1 has no rich card; generic approval only).

@@ -22,6 +22,7 @@ import { formatAttachmentSize, readAttachment } from '@shared/lib/chat-attachmen
 import { toastError } from '@shared/state/toast'
 
 import { useChatComposerControls, type ChatComposerControls } from './composerControls'
+import { ApprovalModePicker } from './ApprovalModePicker'
 
 const ICON_BTN =
   'grid h-7 w-7 place-items-center rounded-md transition-[color,background-color,transform] duration-fast'
@@ -344,6 +345,9 @@ export function ThreadComposer(): React.JSX.Element {
             <ComposerAttachmentButton controls={controls} />
             <ComposerModelPicker controls={controls} />
             <ComposerThinkingToggle controls={controls} />
+            {/* 07-16 — owner-global 授权模式切换（Manual/Accept Edits/Bypass；backend 持久化，
+                双 composer + 远程 web 同组件）。 */}
+            <ApprovalModePicker variant="icon" />
           </>
         )}
         <div className="ml-auto flex items-center">

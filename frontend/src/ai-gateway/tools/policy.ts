@@ -93,6 +93,14 @@ export const GATEWAY_TOOL_CLASSES: Record<string, GatewayToolClass> = {
   email_draft_reply: 'domain_write',
   // capability_change — changes the agent's own capability/identity surface. NEVER auto-approved,
   // manual_chat-only, in every future mode permanently denied (ADR-001 §9 red line).
+  // 07-16 approval-mode 注记: the §9 red line describes the MANUAL default state. The owner-global
+  // approval mode (agent_config.db, Settings/composer UI only — no gateway tool can switch it) is
+  // an explicit owner-wide override: 'acceptEdits' auto-approves ONLY the by-name allow-list
+  // ACCEPT_EDITS_AUTO_APPROVE_TOOLS below (identity/memory/skill-toggle edits are in it; the
+  // skill supply chain + custom_agent CRUD are NOT — they stay HITL, fail-closed for anything
+  // unlisted); 'bypass' auto-approves everything. Both apply ONLY in manual_chat (injection +
+  // consumption gated) — the headless "permanently denied outside manual" half of the red line is
+  // untouched.
   set_skill_enabled: 'capability_change',
   update_system_md: 'capability_change',
   agent_profile_restore: 'capability_change',
@@ -235,6 +243,78 @@ export function isToolClassAllowedInMode(
 export function mayAutoApprove(toolClass: GatewayToolClass, mode: AgentContextMode): boolean {
   return toolClass === 'domain_write' && mode === 'manual_chat'
 }
+
+/** 07-16 approval-mode switcher (codex r1 P1-3: inverted from a deny-list to this allow-list) —
+ *  the by-name AUTO-APPROVE set of the owner-global 'acceptEdits' mode (owner 拍板 2026-07-16).
+ *  🔴 FAIL-CLOSED: this is the ONLY set the runtime consults — under acceptEdits a write tool
+ *  auto-approves IFF its name is listed here; anything else (including every FUTURE write tool
+ *  that forgets to declare itself) keeps its current approval semantics (card, or the exec
+ *  structured-whitelist path). A new destructive/outbound/supply-chain tool can therefore never
+ *  slip into card-free execution by omission — the failure mode of the original deny-list.
+ *
+ *  🔴 A by-NAME set, not a (tier,class) predicate, because the boundary is not expressible in
+ *  those axes: the calendar three writes share email_draft_reply's exact (edit, domain_write)
+ *  signature yet stay HITL (ACCEPT_EDITS_ASK_TOOLS below), and file_read/file_write auto-approve
+ *  while their class-sibling run_command stays whitelist-or-card (Claude Code acceptEdits
+ *  semantics: file edits yes, commands no).
+ *
+ *  Membership = owner 拍板「编辑/联网放行」: reversible email domain writes + draft, the agent's
+ *  own identity/memory/skill-toggle edits (capability_change「编辑放行」, ADR-001 §9 mode 注记),
+ *  web fetch/search, and file read/write. Everything else asks — see ACCEPT_EDITS_ASK_TOOLS for
+ *  the explicit rationale per retained tool. */
+export const ACCEPT_EDITS_AUTO_APPROVE_TOOLS: ReadonlySet<string> = new Set([
+  'email_flag',
+  'email_archive',
+  'email_pin',
+  'email_resync',
+  'email_draft_reply',
+  'update_system_md',
+  'set_skill_enabled',
+  'agent_profile_restore',
+  'agent_memory_update',
+  'web_fetch',
+  'web_search',
+  'file_read',
+  'file_write'
+])
+
+/** The explicit KEEP-ASKING declarations of 'acceptEdits' — documentation + completeness
+ *  accounting ONLY (the runtime never consults this set: an unlisted tool already asks because
+ *  the allow-list above is fail-closed). Together with ACCEPT_EDITS_AUTO_APPROVE_TOOLS this must
+ *  PARTITION the write-tool universe: the approval_mode.test.ts completeness gate walks every
+ *  `write:true` tool in tests/agent_eval/tool_catalog.json and turns red unless it sits in
+ *  exactly one of the two sets — so a new write tool forces a deliberate acceptEdits decision.
+ *
+ *  - calendar reschedule/rsvp/delete: irreversible-outbound/destructive (D4 拍板 恒 HITL).
+ *  - run_command: whitelist-or-card stays (owner 拍板: exec 非白名单恒 HITL; a structured
+ *    PolicyRule hit still skips the card as before).
+ *  - skill_install/confirm/uninstall: the supply chain is capability_change with two HITL cards
+ *    per install (ADR-002) — acceptEdits keeps all three (uninstall rides with its family);
+ *    only 'bypass' (owner 拍板: 无例外) releases them.
+ *  - custom_agent create/update/delete/run_now (07-16 check 改判): the ADR-004 rev3.1 §7 field
+ *    allowlist lets the model PROPOSE grants (grant_web 'open' / grant_exec / skills / cron)
+ *    precisely because "the defense moved … to the always-human approval card" (agents.ts header).
+ *    Auto-approving create/update would let injected chat content mint a cron agent with
+ *    grant_web:'open' — whose headless web_fetch is card-free by grant (web.ts) — i.e. a
+ *    persistent, zero-card exfil backdoor. That defeats the card the grant vocabulary leans on,
+ *    so all four stay HITL under acceptEdits; only 'bypass' releases them.
+ *  - email_prepare_send: listed for accounting only — the send tool never consults either set;
+ *    auditedSendTool's needsApproval only ever relaxes under the explicit 'bypass' literal
+ *    (types.ts bypassMode param). */
+export const ACCEPT_EDITS_ASK_TOOLS: ReadonlySet<string> = new Set([
+  'calendar_event_reschedule',
+  'calendar_event_rsvp',
+  'calendar_event_delete',
+  'run_command',
+  'skill_install',
+  'skill_install_confirm',
+  'skill_uninstall',
+  'custom_agent_create',
+  'custom_agent_update',
+  'custom_agent_delete',
+  'custom_agent_run_now',
+  'email_prepare_send'
+])
 
 /** Filter an assembled ToolSet by the context mode — the LAST step of buildGatewayTools, after
  *  every create* block AND applySkillGating (codex P2-2: no early return may let a class slip

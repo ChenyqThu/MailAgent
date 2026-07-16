@@ -109,6 +109,11 @@ import { resolveDataRoot } from '../db'
 // read / legacy row (additive ALTER default). Plain additive ALTER, same hasColumn idempotency
 // guard as v5..v12. ai_chat.db has its own version ladder; this bump does NOT touch
 // backend_lifecycle.EXPECTED_DB_VERSION. 🔴 bump 同步刷 src/chat/db.py 头注释 + append/update 写列。
+// 07-16 approval-mode switcher (codex r1 P2-4, NO version bump — same free-form-TEXT precedent):
+// card-skipped executions write three more approval_status values, 'auto_accept_edits' /
+// 'auto_bypass' (owner-global mode skips, send included) / 'auto_reversible' (the pre-existing
+// reversible-preview skip, previously indistinguishably audited 'approved') — 'approved'/'edited'
+// now always mean a real human card decision.
 // v19 (S4 W3, task 07-02-s4-custom-agent-core) — ai_chat_sessions.origin + agent_id + agent_job_id:
 // a headless custom-agent run (cron/email-triggered, ADR-003 D3) persists into a first-class session
 // so it's visible/auditable in the SAME history UI. origin='agent' marks it (NULL for every
