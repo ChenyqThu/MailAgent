@@ -5,7 +5,7 @@
 // electron 环境 (happy-dom = web 语义) 走 window.open(https)。drawer Join 在
 // EventDetailDrawerSourceEmail.test.tsx 一并盖。
 
-import { afterEach, describe, expect, test, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { cleanup, fireEvent, render } from '@testing-library/react'
 
 import type { CalendarEventOccurrence } from '../../src/shared/api/types'
@@ -87,9 +87,21 @@ function makeOccurrence(over: Partial<CalendarEventOccurrence> = {}): CalendarEv
   }
 }
 
+// 固定“现在”为当天本地 10:00（非跨天时段）：makeOccurrence 默认用 new Date()/Date.now()
+// 构造 start/end (now → now+1h)，若在本地 23:00-24:00 真实运行会跨本地午夜，触发
+// AgendaView 的跨天展开渲染两行 .ag-join。用 setHours(10,...) 只改小时不改日期，
+// 对任意时区/任意真实运行时刻都稳定落在同一天内。
+beforeEach(() => {
+  const fixedNow = new Date()
+  fixedNow.setHours(10, 0, 0, 0)
+  vi.useFakeTimers()
+  vi.setSystemTime(fixedNow)
+})
+
 afterEach(() => {
   cleanup()
   hookState.data = undefined
+  vi.useRealTimers()
   vi.restoreAllMocks()
 })
 
