@@ -188,12 +188,16 @@ export async function runHeadlessSearchAgent(
     const resolvedModel = await resolveModelFactory(cfg)(
       opts.model && opts.model.length > 0 ? opts.model : cfg.model
     )
+    // harness-chat lane C (07-15, feedback_llm_call_settings) — same explicit 64k discipline as the
+    // main chat loop (chatRun.ts prepareChatRun); see that call site's comment for why an explicit
+    // value (not the providers.ts middleware alone) is required.
     const result = await generateText({
       model: resolvedModel.model,
       messages: [{ role: 'user', content: opts.userContent }],
       tools,
       stopWhen: [stepCountIs(SEARCH_AGENT_MAX_ITER), hasToolCall('present_results')],
       abortSignal,
+      maxOutputTokens: resolvedModel.maxOutputTokens ?? 64_000,
       onStepFinish: (step) => {
         for (const tr of step.toolResults) {
           if (tr.toolName === 'email_search_fulltext') mergeSearchHits(pool, tr.output)

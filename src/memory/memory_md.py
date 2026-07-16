@@ -19,21 +19,34 @@ memory.md 恒注入每轮 system prompt（MEMORY fence，untrusted 背景）—�
 - **硬截断兜底**：模型不听预算 → 截到 budget（优先行边界），防恒注入 doc 膨胀。
 - **安全**：本轮对话（含引用邮件/附件/assistant 输出）当**不可信数据**；绝不并入弱化安全的
   「偏好」（与 PRODUCT_SAFETY_FLOOR 结构上不可弱化 + M1 capture「不存安全偏好」约束叠加）。
+- **07-15 harness-chat lane C — capture ↔ 显式编辑互斥**：`capture_turn` 落库前检查 memory.md
+  当前版本的 `updated_by`；若是 `user`（Settings 手编）或 `agent_proposed`（已批准的
+  agent_memory_update / agent_profile_restore 工具写）且距上次写入 < `cfg.mem0_explicit_edit_cooldown_s`
+  秒 → 跳过本轮合并（不烧 LLM、不落库）。防止本管线在用户/agent 刚显式改写后的 ~20-25s 内
+  又悄悄浓缩/改写它——两次写入源头本无协调，否则用户批准的全文会被无声改写。`updated_by='mem0'`
+  （capture 自己写的）不受影响，恒照常合并。
 """
 from __future__ import annotations
 
 import asyncio
 import re
+import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-from src.agent_config.store import MEMORY_DOC_NAME, get_agent_config_store
+from loguru import logger
+
+from src.agent_config.store import MEMORY_DOC_NAME, ProfileDoc, get_agent_config_store
 from src.config import config as cfg
 from src.llm_agent.client import LLMClient, LLMResult
 
 # 本轮对话文本的单段字符上限：durable facts 集中在前几段，抽取不需要全文。超大 turn
 # （如把多线程邮件 dump 粘进 chat）截断到此，省 token（与 mem0_engine.CAPTURE_TEXT_MAX_CHARS 同值）。
 TURN_TEXT_MAX_CHARS = 8000
+
+# 07-15 lane C — capture ↔显式编辑互斥只保护这两种「人/已批准 agent 手写」的作者标记；
+# 'mem0'（capture 自己）/'seed'（首次种子）不触发冷却。
+_EXPLICIT_EDIT_AUTHORS = frozenset({"user", "agent_proposed"})
 
 
 MEMORY_TOOL_SCHEMA: Dict[str, Any] = {
@@ -215,6 +228,15 @@ def load_memory_md() -> str:
     return get_agent_config_store().get_profile_doc(MEMORY_DOC_NAME).content
 
 
+def _load_memory_doc() -> ProfileDoc:
+    """读 memory.md 的完整 profile doc（content + updated_by/updated_at）——``capture_turn`` 专用
+    的读入口：既喂 ``merge_turn`` 的 ``current_md``，也喂 07-15 lane C 的显式编辑冷却判定
+    （``_explicit_edit_cooldown_active`` 需要 ``updated_by``/``updated_at``，光有 content 不够）。
+    与 ``load_memory_md``（只回 content，被 user_md_compiler 等别处消费）分开是保它们各自的调用方
+    契约不变。"""
+    return get_agent_config_store().get_profile_doc(MEMORY_DOC_NAME)
+
+
 def save_memory_md(
     content: str,
     *,
@@ -230,6 +252,18 @@ def save_memory_md(
         session_id=session_id,
         message_id=message_id,
     )
+
+
+def _explicit_edit_cooldown_active(doc: ProfileDoc, cooldown_s: int) -> bool:
+    """07-15 lane C — true when ``doc`` (memory.md's current version) was an explicit edit
+    (``updated_by`` ∈ {user, agent_proposed}) less than ``cooldown_s`` seconds ago. Pure/testable:
+    takes the doc + cooldown explicitly rather than reading ``cfg``/wall-clock internally.
+    ``cooldown_s <= 0`` always returns False (cooldown disabled)."""
+    if cooldown_s <= 0:
+        return False
+    if doc.updated_by not in _EXPLICIT_EDIT_AUTHORS:
+        return False
+    return (time.time() - doc.updated_at) < cooldown_s
 
 
 async def merge_turn(
@@ -335,10 +369,24 @@ async def capture_turn(
     第一轮已落库的结果、不各基于同一 base 覆写（防丢更新——``set_profile_doc`` 是无条件 upsert
     无 CAS）。capture 是后台 fire-and-forget，串行化正确且用户无感。失败向上抛（端点 best-effort
     兜）；仅 ``changed`` 时落库（带 provenance 进 history）。
+
+    07-15 lane C — 临界区**最先**做 capture ↔显式编辑互斥检查（``_explicit_edit_cooldown_active``）：
+    当前版本是用户手编或已批准的 agent 写、且在冷却窗口内 → 直接返回 unchanged（不读 base 之外的
+    任何东西、不烧 LLM），并 loguru info 记录（serve-api 下 stdlib logger 静默，必用 loguru）。
     """
     async with _get_capture_lock(MEMORY_DOC_NAME):
+        current_doc = _load_memory_doc()
+        cooldown_s = cfg.mem0_explicit_edit_cooldown_s
+        if _explicit_edit_cooldown_active(current_doc, cooldown_s):
+            age_s = int(time.time() - current_doc.updated_at)
+            logger.info(
+                "memory.md auto-capture skipped: {}s-old explicit edit (updated_by={}) is still "
+                "within the {}s cooldown window",
+                age_s, current_doc.updated_by, cooldown_s,
+            )
+            return MergeResult(content=current_doc.content, changed=False)
         result = await merge_turn(
-            current_md=load_memory_md(),
+            current_md=current_doc.content,
             user_text=user_text,
             assistant_text=assistant_text,
             budget=budget,

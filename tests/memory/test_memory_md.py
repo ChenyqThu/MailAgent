@@ -6,6 +6,8 @@
   不被 close / budget 注入系统提示 / model_chain=capture model。
 - load/save：隔离 store round-trip + history（updated_by='mem0'）+ memory 不进 profile_hash/
   list_profile_docs（不污染 standing_context 身份层）。
+- 07-15 harness-chat lane C — capture ↔显式编辑互斥冷却窗口：`_explicit_edit_cooldown_active`
+  纯函数 + `capture_turn` 端到端（冷却内跳过不烧 LLM / 冷却外照常合并 / updated_by='mem0' 不受影响）。
 
 合并质量本身（保留旧事实、丢安全偏好、真去重）是 prompt 行为 → 留 dogfood，单测不验。
 """
@@ -13,11 +15,12 @@
 from __future__ import annotations
 
 import asyncio
+import time
 
 import pytest
 
 from src.agent_config import store as acstore
-from src.agent_config.store import MEMORY_DOC_NAME, PROFILE_DOC_NAMES
+from src.agent_config.store import MEMORY_DOC_NAME, PROFILE_DOC_NAMES, ProfileDoc
 from src.llm_agent.client import LLMResult
 from src.memory import memory_md as mm
 from src.memory.memory_md import (
@@ -386,3 +389,159 @@ async def test_capture_turn_skips_save_when_unchanged(isolated_store, monkeypatc
     # 无 mem0 写入 history（seed-on-read 的 'seed' 条目不算落库）。
     hist = isolated_store.list_profile_history(MEMORY_DOC_NAME)
     assert all(h.changed_by != "mem0" for h in hist)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 07-15 harness-chat lane C — capture ↔显式编辑互斥冷却窗口
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _doc(updated_by: str, age_s: float, content: str = "# MEMORY\n- x\n") -> ProfileDoc:
+    return ProfileDoc(
+        doc_name=MEMORY_DOC_NAME, content=content, content_hash="h",
+        updated_by=updated_by, updated_at=int(time.time() - age_s),
+    )
+
+
+class TestExplicitEditCooldownActivePure:
+    """`_explicit_edit_cooldown_active` — 纯函数，不碰 store/LLM。"""
+
+    def test_recent_user_edit_within_cooldown_is_active(self):
+        assert mm._explicit_edit_cooldown_active(_doc("user", 10), 1800) is True
+
+    def test_recent_agent_proposed_within_cooldown_is_active(self):
+        assert mm._explicit_edit_cooldown_active(_doc("agent_proposed", 10), 1800) is True
+
+    def test_old_explicit_edit_past_cooldown_is_inactive(self):
+        assert mm._explicit_edit_cooldown_active(_doc("user", 2000), 1800) is False
+
+    def test_mem0_authored_never_active_regardless_of_age(self):
+        assert mm._explicit_edit_cooldown_active(_doc("mem0", 1), 1800) is False
+
+    def test_seed_authored_never_active(self):
+        assert mm._explicit_edit_cooldown_active(_doc("seed", 1), 1800) is False
+
+    def test_cooldown_disabled_when_non_positive(self):
+        assert mm._explicit_edit_cooldown_active(_doc("user", 1), 0) is False
+        assert mm._explicit_edit_cooldown_active(_doc("user", 1), -1) is False
+
+
+@pytest.mark.asyncio
+async def test_capture_turn_skips_when_recent_explicit_user_edit(
+    isolated_store, monkeypatch, caplog
+):
+    """冷却内：用户刚手编 memory.md → capture_turn 直接跳过，不烧 LLM、不落库、不改内容。
+    跳过必须留 loguru 痕迹（serve-api 下 stdlib logger 静默，caplog 经 loguru sink 接线断言，
+    同 test_chat_capture.py 的 truncated warning 先例）——静默跳过会让「capture 为何没跑」不可排查。
+    """
+    import logging
+
+    from loguru import logger as _lg
+
+    mm._capture_locks.clear()
+    isolated_store.set_profile_doc(MEMORY_DOC_NAME, "# MEMORY\n- user wrote this\n", updated_by="user")
+
+    calls = 0
+
+    async def fake_merge(*, current_md, user_text, assistant_text, budget, client=None):
+        nonlocal calls
+        calls += 1
+        return mm.MergeResult(content=current_md, changed=True, model="claude-haiku-4-5")
+
+    monkeypatch.setattr(mm, "merge_turn", fake_merge)
+    sink_id = _lg.add(caplog.handler, format="{message}", level="DEBUG")
+    caplog.set_level(logging.DEBUG)
+    try:
+        r = await mm.capture_turn(user_text="hi", assistant_text="hello", budget=5000)
+    finally:
+        _lg.remove(sink_id)
+    assert calls == 0  # merge_turn (→ LLM) never invoked
+    assert r.changed is False
+    assert r.content == "# MEMORY\n- user wrote this\n"
+    assert mm.load_memory_md() == "# MEMORY\n- user wrote this\n"  # untouched
+    assert "auto-capture skipped" in caplog.text
+    assert "updated_by=user" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_capture_turn_skips_when_recent_approved_agent_write(isolated_store, monkeypatch):
+    """冷却内：agent_memory_update 刚被批准写入（updated_by='agent_proposed'）→ 同样跳过。"""
+    mm._capture_locks.clear()
+    isolated_store.set_profile_doc(
+        MEMORY_DOC_NAME, "# MEMORY\n- agent proposed this\n", updated_by="agent_proposed"
+    )
+
+    calls = 0
+
+    async def fake_merge(**kwargs):
+        nonlocal calls
+        calls += 1
+        return mm.MergeResult(content="", changed=True)
+
+    monkeypatch.setattr(mm, "merge_turn", fake_merge)
+    r = await mm.capture_turn(user_text="u", assistant_text="a", budget=5000)
+    assert calls == 0
+    assert r.changed is False
+
+
+@pytest.mark.asyncio
+async def test_capture_turn_proceeds_once_cooldown_expires(isolated_store, monkeypatch):
+    """冷却外：显式编辑的年龄已超过冷却窗口 → capture_turn 照常合并 + 落库。"""
+    mm._capture_locks.clear()
+    isolated_store.set_profile_doc(MEMORY_DOC_NAME, "# MEMORY\n- old edit\n", updated_by="user")
+    # backdate updated_at past a short test cooldown (avoid depending on the real 1800s default).
+    with isolated_store._connection() as conn:
+        conn.execute(
+            "UPDATE agent_profile_docs SET updated_at = ? WHERE doc_name = ?",
+            (int(time.time()) - 120, MEMORY_DOC_NAME),
+        )
+        conn.commit()
+    monkeypatch.setattr(mm.cfg, "mem0_explicit_edit_cooldown_s", 60)
+
+    async def fake_merge(*, current_md, user_text, assistant_text, budget, client=None):
+        return mm.MergeResult(content=f"{current_md.strip()}\n- new fact", changed=True)
+
+    monkeypatch.setattr(mm, "merge_turn", fake_merge)
+    r = await mm.capture_turn(user_text="u", assistant_text="a", budget=5000)
+    assert r.changed is True
+    assert "new fact" in mm.load_memory_md()
+
+
+@pytest.mark.asyncio
+async def test_capture_turn_not_gated_by_mem0_authorship(isolated_store, monkeypatch):
+    """updated_by='mem0'（capture 自己上一轮写的）无论多"新"都不受冷却影响 —— 每轮照常合并。"""
+    mm._capture_locks.clear()
+    mm.save_memory_md("# MEMORY\n- from a previous capture\n")  # updated_by='mem0', just now
+
+    calls = 0
+
+    async def fake_merge(*, current_md, user_text, assistant_text, budget, client=None):
+        nonlocal calls
+        calls += 1
+        return mm.MergeResult(content=f"{current_md.strip()}\n- another fact", changed=True)
+
+    monkeypatch.setattr(mm, "merge_turn", fake_merge)
+    r = await mm.capture_turn(user_text="u", assistant_text="a", budget=5000)
+    assert calls == 1  # not gated
+    assert r.changed is True
+    assert "another fact" in mm.load_memory_md()
+
+
+@pytest.mark.asyncio
+async def test_capture_turn_cooldown_disabled_when_zero(isolated_store, monkeypatch):
+    """MEM0_EXPLICIT_EDIT_COOLDOWN_S<=0 → 冷却整体关闭，即便刚显式编辑也照常合并。"""
+    mm._capture_locks.clear()
+    isolated_store.set_profile_doc(MEMORY_DOC_NAME, "# MEMORY\n- just edited\n", updated_by="user")
+    monkeypatch.setattr(mm.cfg, "mem0_explicit_edit_cooldown_s", 0)
+
+    calls = 0
+
+    async def fake_merge(*, current_md, user_text, assistant_text, budget, client=None):
+        nonlocal calls
+        calls += 1
+        return mm.MergeResult(content=f"{current_md.strip()}\n- merged", changed=True)
+
+    monkeypatch.setattr(mm, "merge_turn", fake_merge)
+    r = await mm.capture_turn(user_text="u", assistant_text="a", budget=5000)
+    assert calls == 1
+    assert r.changed is True

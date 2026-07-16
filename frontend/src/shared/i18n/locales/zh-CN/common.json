@@ -1194,7 +1194,6 @@
       "degraded": "AI 引擎不可用 — 会话以只读方式展示",
       "retryProbe": "重试连接",
       "readOnlyLegacy": "这是旧版引擎的历史会话，已转为只读。新建会话可继续与 AI 对话。",
-      "pendingApproval": "有待批操作（{toolName}）正在等待处理 —— 可在灵动岛批准/拒绝",
       "approvalBodyManual": "AI 请求执行 {tool}，需要你批准。",
       "backgroundRunning": "AI 仍在后台输出，完成后将自动刷新…"
     },

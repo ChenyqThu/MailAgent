@@ -10,6 +10,7 @@ import { describe, expect, test } from 'vitest'
 import { makePersistOnFinish, type PreparedChatRun } from '../../src/ai-gateway/chatRun'
 import type { AiGatewayConfig, PersistTurnInput } from '../../src/ai-gateway/config'
 import { MailAgentDomainClient } from '../../src/ai-gateway/python/domainClient'
+import type { GatewayToolAuditEntry } from '../../src/ai-gateway/tools/types'
 import type { MailAgentUIMessage } from '../../src/shared/assistant/uiMessage'
 
 const asst: MailAgentUIMessage = {
@@ -98,6 +99,122 @@ describe('makePersistOnFinish — M1c auto-capture trigger', () => {
     await expect(
       fire(makePersistOnFinish(cfg, makeRun()), { responseMessage: asst, isAborted: false })
     ).resolves.toBeUndefined()
+  })
+})
+
+// ── harness-chat lane C (07-15) — capture ↔ explicit-edit mutual exclusion (Node half) ────────────
+//
+// research lane-c-write-truncation.md §2b/§6①-2: a ~20-25s-later fire-and-forget capture would
+// otherwise silently re-digest/reword memory.md right after the user (or an approved agent
+// proposal) just explicitly wrote it. When THIS turn's audit shows a SUCCESSFUL
+// agent_memory_update, or agent_profile_restore targeting doc_name:'memory', captureTurnMemory
+// must be skipped entirely (persistTurn still fires — only capture is gated).
+
+function memoryUpdateEntry(status: 'ok' | 'error' = 'ok'): GatewayToolAuditEntry {
+  return {
+    toolUseId: 'tu1',
+    toolName: 'agent_memory_update',
+    inputJson: '{"content":"# MEMORY\\n- x\\n"}',
+    outputJson: JSON.stringify({ doc_name: 'memory', content_hash: 'h1' }),
+    status,
+    durationMs: 5,
+    confirmationTier: 'edit',
+    approvalStatus: 'approved'
+  }
+}
+
+function profileRestoreEntry(
+  docName: string,
+  status: 'ok' | 'error' = 'ok'
+): GatewayToolAuditEntry {
+  return {
+    toolUseId: 'tu1',
+    toolName: 'agent_profile_restore',
+    inputJson: `{"doc_name":"${docName}","target_hash":"h0"}`,
+    outputJson: JSON.stringify({ doc_name: docName, content_hash: 'h1' }),
+    status,
+    durationMs: 5,
+    confirmationTier: 'edit',
+    approvalStatus: 'approved'
+  }
+}
+
+describe('makePersistOnFinish — 07-15 lane C capture ↔ explicit-edit mutual exclusion', () => {
+  test('a successful agent_memory_update THIS turn skips captureTurnMemory (persistTurn still fires)', async () => {
+    const persisted: PersistTurnInput[] = []
+    const captured: PersistTurnInput[] = []
+    const cfg = {
+      persistTurn: (t: PersistTurnInput) => {
+        persisted.push(t)
+      },
+      captureTurnMemory: (t: PersistTurnInput) => captured.push(t)
+    } as AiGatewayConfig
+    const run = makeRun({ auditEntries: [memoryUpdateEntry('ok')] })
+    await fire(makePersistOnFinish(cfg, run), { responseMessage: asst, isAborted: false })
+    expect(persisted).toHaveLength(1)
+    expect(captured).toHaveLength(0)
+  })
+
+  test('a successful agent_profile_restore(doc_name=memory) THIS turn also skips capture', async () => {
+    const captured: PersistTurnInput[] = []
+    const cfg = {
+      persistTurn: () => {},
+      captureTurnMemory: (t: PersistTurnInput) => captured.push(t)
+    } as AiGatewayConfig
+    const run = makeRun({ auditEntries: [profileRestoreEntry('memory', 'ok')] })
+    await fire(makePersistOnFinish(cfg, run), { responseMessage: asst, isAborted: false })
+    expect(captured).toHaveLength(0)
+  })
+
+  test('agent_profile_restore targeting a NON-memory doc (rules/soul/agent/user) does NOT gate capture', async () => {
+    const captured: PersistTurnInput[] = []
+    const cfg = {
+      persistTurn: () => {},
+      captureTurnMemory: (t: PersistTurnInput) => captured.push(t)
+    } as AiGatewayConfig
+    const run = makeRun({ auditEntries: [profileRestoreEntry('rules', 'ok')] })
+    await fire(makePersistOnFinish(cfg, run), { responseMessage: asst, isAborted: false })
+    expect(captured).toHaveLength(1)
+  })
+
+  test('a REJECTED/errored agent_memory_update does NOT gate capture (only status:"ok" counts)', async () => {
+    const captured: PersistTurnInput[] = []
+    const cfg = {
+      persistTurn: () => {},
+      captureTurnMemory: (t: PersistTurnInput) => captured.push(t)
+    } as AiGatewayConfig
+    const run = makeRun({ auditEntries: [memoryUpdateEntry('error')] })
+    await fire(makePersistOnFinish(cfg, run), { responseMessage: asst, isAborted: false })
+    expect(captured).toHaveLength(1)
+  })
+
+  test('a silent agent_profile_read this turn does NOT gate capture (only the two write tools do)', async () => {
+    const captured: PersistTurnInput[] = []
+    const cfg = {
+      persistTurn: () => {},
+      captureTurnMemory: (t: PersistTurnInput) => captured.push(t)
+    } as AiGatewayConfig
+    const readEntry: GatewayToolAuditEntry = {
+      toolUseId: 'tu1',
+      toolName: 'agent_profile_read',
+      inputJson: '{"doc_name":"memory"}',
+      outputJson: '{"doc_name":"memory","content":""}',
+      status: 'ok',
+      durationMs: 5
+    }
+    const run = makeRun({ auditEntries: [readEntry] })
+    await fire(makePersistOnFinish(cfg, run), { responseMessage: asst, isAborted: false })
+    expect(captured).toHaveLength(1)
+  })
+
+  test('no tool activity this turn (plain chat) does NOT gate capture', async () => {
+    const captured: PersistTurnInput[] = []
+    const cfg = {
+      persistTurn: () => {},
+      captureTurnMemory: (t: PersistTurnInput) => captured.push(t)
+    } as AiGatewayConfig
+    await fire(makePersistOnFinish(cfg, makeRun()), { responseMessage: asst, isAborted: false })
+    expect(captured).toHaveLength(1)
   })
 })
 

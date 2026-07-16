@@ -428,6 +428,17 @@ class Config(BaseSettings):
             "= 每轮 token 成本越高。MEMORY_MD_BUDGET_CHARS env 可覆盖。"
         ),
     )
+    mem0_explicit_edit_cooldown_s: int = Field(
+        default=1800, validation_alias="MEM0_EXPLICIT_EDIT_COOLDOWN_S",
+        description=(
+            "07-15 harness-chat lane C — capture ↔显式编辑互斥冷却窗口（秒）。capture_turn 落库前 "
+            "检查 memory.md 当前版本：updated_by ∈ {user, agent_proposed}（Settings 手编 / 已批准 "
+            "的 agent_memory_update・agent_profile_restore 工具写）且距上次写入 < 本值 → 跳过本轮 "
+            "auto-capture 合并（不烧 LLM、不落库，仅 loguru log）——防 haiku 后台改写管线在用户/"
+            "agent 刚显式写入后的 ~20-25s 内又悄悄浓缩/改写它。updated_by='mem0'（capture 自己写的）"
+            "不受影响，恒照常合并。MEM0_EXPLICIT_EDIT_COOLDOWN_S env 可覆盖；≤0 关闭冷却（每轮照常）。"
+        ),
+    )
     user_md_compile_enabled: bool = Field(
         default=True, validation_alias="MAILAGENT_USER_MD_COMPILE",
         description=(

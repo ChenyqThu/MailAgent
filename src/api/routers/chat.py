@@ -990,6 +990,20 @@ async def capture_memory(request: Request, body: Optional[Dict[str, Any]] = None
             {"changed": False, "captured": [], "count": 0}, request=request, source="memory"
         )
 
+    # 07-15 harness-chat lane C — `result.truncated` 此前只回填进响应 meta 后被丢弃（Node 端
+    # fire-and-forget 只读 data，meta 无人消费；serve-api 自己也从不记这件事）。这里补一条
+    # server 侧可观测的 warning（带文档长度上下文），使「haiku 合并产出超预算被硬截断」不再
+    # 是纯粹的静默事件。stdlib logger 在 serve-api 常驻进程下静默不出，故用 loguru（同目录其余
+    # router 的既有纪律）。
+    if result.truncated:
+        from loguru import logger as loguru_logger
+
+        loguru_logger.warning(
+            "memory.md auto-capture output exceeded the {}-char budget and was hard-truncated "
+            "(final length={}, model={}, sessionId={})",
+            cfg.memory_md_budget_chars, len(result.content), result.model, session_id,
+        )
+
     return success_envelope(
         {"changed": result.changed, "captured": [], "count": 0},
         request=request,

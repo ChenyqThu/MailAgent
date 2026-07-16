@@ -59,6 +59,14 @@ export interface ParsedProviderRef {
 export interface ResolvedProviderModel extends ParsedProviderRef {
   model: LanguageModel
   protocol: ProviderProtocol
+  /** harness-chat lane C (07-15) — the explicit output-token ceiling to pass to streamText/
+   *  generateText for THIS model: `min(64000, row.maxOutput)` when the resolved provider row pins
+   *  a lower cap, else the 64k owner-discipline default. Only the main-process wrapping resolver
+   *  (`getLlmProviderModelResolver`, llm_provider_resolver.ts — used by both the gateway lifecycle
+   *  AND translate/nl_search) populates this; the legacy/test-mock resolveModelFactory branches in
+   *  chatRun.ts leave it undefined, and callers fall back to 64_000 themselves. Optional so every
+   *  existing ResolvedProviderModel producer stays source-compatible. */
+  maxOutputTokens?: number
 }
 
 export interface ProviderModelResolver {

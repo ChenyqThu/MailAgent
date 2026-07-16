@@ -387,6 +387,40 @@ describe('/api/ai/search-agent — typed HTTP errors', () => {
   })
 })
 
+describe('maxOutputTokens wiring (harness-chat lane C, owner 64k discipline)', () => {
+  test('generateText receives an EXPLICIT maxOutputTokens (64k fallback on the test-mock branch)', async () => {
+    // Mirrors length_finish_warning.test.ts's chat-loop pin: the test-mock resolveModelFactory
+    // branch never sets resolvedModel.maxOutputTokens, so `?? 64_000` is what must reach the model.
+    const seenMaxOutputTokens: Array<number | undefined> = []
+    const model = new MockLanguageModelV3({
+      doGenerate: async (opts) => {
+        seenMaxOutputTokens.push(opts.maxOutputTokens)
+        return {
+          content: [
+            toolCall('t1', 'present_results', { matched_internal_ids: [], summary: 's' })
+          ] as never,
+          finishReason: 'tool-calls' as const,
+          usage: USAGE,
+          warnings: []
+        }
+      }
+    })
+    await runHeadlessSearchAgent(
+      {
+        port: 0,
+        baseUrl: 'http://127.0.0.1:0',
+        apiKey: 'test',
+        model: 'test-model',
+        createModel: () => model,
+        buildTools: mockBuildTools()
+      },
+      { userContent: 'q' },
+      new AbortController().signal
+    )
+    expect(seenMaxOutputTokens).toEqual([64_000])
+  })
+})
+
 describe('pickSearchAgentTools', () => {
   test('narrows to the whitelist whatever the factory returns', () => {
     const all = mockBuildTools()()

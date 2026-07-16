@@ -214,6 +214,19 @@ export async function prepareChatRun(
     body.thinking === true,
     resolvedModel.protocol
   )
+  // harness-chat lane C (07-15, feedback_llm_call_settings) — every LLM call gets an EXPLICIT 64k
+  // output ceiling. resolvedModel.maxOutputTokens (set by the main-process wrapping resolver,
+  // llm_provider_resolver.ts) already carries `min(64000, row.maxOutput)` when the provider row
+  // pins a lower per-model cap; 64_000 is the fallback for the legacy/test-mock resolveModelFactory
+  // branches, which never set it. 🔴 Passing this EXPLICITLY (not relying on providers.ts's
+  // defaultSettingsMiddleware alone) matters: ai@7's middleware only applies its setting as a
+  // DEFAULT — an explicit call-time maxOutputTokens always wins (mergeObjects(settings, params)) —
+  // so for protocols whose SDK injects no per-model default (openai/deepseek/openai-compatible), an
+  // unset value silently falls back to the UPSTREAM SERVER's own default (DeepSeek: 4k), starving a
+  // long tool-call JSON input long before the model is actually done (research
+  // lane-c-write-truncation.md §4/§6②). Threading the resolver's own clamp through here keeps the
+  // two layers in agreement instead of the explicit param blindly overriding a lower row cap.
+  const maxOutputTokens = resolvedModel.maxOutputTokens ?? 64_000
 
   // System prompt. With the injection provider set (always injected since S3) assemble
   // from standing-context + the typed snapshot, reusing the legacy stable prefix
@@ -299,6 +312,7 @@ export async function prepareChatRun(
     system,
     messages: modelMessages,
     abortSignal,
+    maxOutputTokens,
     // dogfood — 平滑流式输出（用户要「更流畅」）：smoothStream 把模型的突发 chunk 重整成稳定节奏。
     // CJK-aware chunking（AI SDK 文档推荐）：中文逐字、英文逐词输出，配合 Streamdown 逐 token fadeIn，
     // 整体像匀速打字而非一段段蹦。两个端点（/api/ai/chat + AG-UI 镜像）共用此 streamText，一致生效。
@@ -563,6 +577,56 @@ function runHasApprovalUsedError(run: PreparedChatRun): boolean {
   })
 }
 
+/** harness-chat lane C (07-15, research §2b/§6①-2) — true when THIS turn's audit shows a
+ *  SUCCESSFUL `agent_memory_update`, or a successful `agent_profile_restore` targeting the memory
+ *  doc: the user (or an approved agent proposal) just explicitly rewrote memory.md. Auto-capture is
+ *  a fire-and-forget haiku merge that runs ~20-25s after every finished turn and re-digests
+ *  memory.md from scratch — with no mutual exclusion it would silently re-consume/reword the
+ *  content the user JUST approved, defeating the whole point of an explicit edit. `agent_profile_read`
+ *  and `agent_profile_history` (silent reads) never match; a REJECTED or errored write never matches
+ *  either (only `status:'ok'`). */
+export function runHasSuccessfulMemoryWrite(run: PreparedChatRun): boolean {
+  return run.auditEntries.some((e) => {
+    if (e.status !== 'ok') return false
+    if (e.toolName === 'agent_memory_update') return true
+    if (e.toolName !== 'agent_profile_restore') return false
+    try {
+      const o = JSON.parse(e.outputJson) as { doc_name?: unknown }
+      return o.doc_name === 'memory'
+    } catch {
+      return false
+    }
+  })
+}
+
+/** harness-chat lane C (07-15, PRD §3) — the static warning text appended to a turn whose
+ *  streamText generation ended with `finishReason === 'length'`: the model hit the maxOutputTokens
+ *  ceiling mid-reply and the AI SDK closes the turn WITHOUT raising, so a truncated reply would
+ *  otherwise persist silently ("fail-loud, not a silent half-written turn"). Exported for the vitest
+ *  pin. */
+export const LENGTH_TRUNCATION_WARNING_TEXT =
+  '\n\n> ⚠️ 回复因达到模型输出长度上限被截断，内容可能不完整。'
+
+/** Append LENGTH_TRUNCATION_WARNING_TEXT as an extra `text` part when `finishReason === 'length'`;
+ *  a no-op (returns `message` unchanged) otherwise. 🔴 This only affects what gets PERSISTED
+ *  (cfg.persistTurn's responseMessage) — ai@7's onEnd/onFinish fires from the terminal transform's
+ *  `flush()`, i.e. AFTER every content chunk was already enqueued onto the wire (see
+ *  handleUIMessageStreamFinish in ai/dist), so there is no mechanism to inject a new chunk back onto
+ *  an already-drained SSE response. The warning becomes visible the next time the session is
+ *  (re)loaded from chat_db, which is still strictly better than a truncated reply that looks
+ *  complete forever. */
+export function appendLengthTruncationWarning(
+  message: MailAgentUIMessage,
+  finishReason: string | undefined
+): MailAgentUIMessage {
+  if (finishReason !== 'length') return message
+  const parts = Array.isArray(message.parts) ? message.parts : []
+  return {
+    ...(message as object),
+    parts: [...parts, { type: 'text', text: LENGTH_TRUNCATION_WARNING_TEXT }]
+  } as MailAgentUIMessage
+}
+
 /**
  * Build the onFinish callback that persists a finished turn (ai_chat.db dual-write) — the SAME
  * persistence both endpoints use (the AG-UI mirror is a true mirror, including audit). Best-effort:
@@ -572,7 +636,7 @@ export function makePersistOnFinish(
   cfg: AiGatewayConfig,
   run: PreparedChatRun
 ): UIMessageStreamOnFinishCallback<MailAgentUIMessage> {
-  return async ({ responseMessage, isAborted }) => {
+  return async ({ responseMessage, isAborted, finishReason }) => {
     if (isAborted || !cfg.persistTurn) return
     // Part B (harness 上岛, finding 1) — a renderer REJECT tombstones the guard so a later island
     // approve for the SAME toolCallId fails closed. This is derived from the INCOMING history
@@ -628,11 +692,18 @@ export function makePersistOnFinish(
     // kept as the legacy fallback gate.
     if ((cfg.serverResumeEnabled || cfg.islandAgentEnabled) && runHasApprovalUsedError(run)) return
     const usage = await Promise.resolve(run.result.usage).catch(() => undefined)
+    // harness-chat lane C (07-15, PRD §3) — finishReason==='length' fail-loud: append a visible
+    // warning to what gets PERSISTED (see appendLengthTruncationWarning's doc comment for why this
+    // can't reach the already-streamed wire). No-op for every other finish reason.
+    const persistedResponseMessage = appendLengthTruncationWarning(
+      responseMessage as MailAgentUIMessage,
+      finishReason
+    )
     const turn: PersistTurnInput = {
       sessionId: run.sessionId,
       model: run.modelId,
       userMessage: lastUserMessage(run.rawMessages),
-      responseMessage: responseMessage as MailAgentUIMessage,
+      responseMessage: persistedResponseMessage,
       usage: usage
         ? { inputTokens: usage.inputTokens ?? null, outputTokens: usage.outputTokens ?? null }
         : undefined,
@@ -649,10 +720,19 @@ export function makePersistOnFinish(
     // 回调内部自吞。仅当 MAILAGENT_MEM0_CAPTURE 开时由 lifecycle 注入；否则 undefined → ?. 短路 =
     // 字节级 flag-off（这一行在 flag-off 下是纯 no-op，无行为变化）。try/catch 兜底：即便回调
     // 实现同步抛（本不该），也绝不破坏已流式完成的 reply。
-    try {
-      cfg.captureTurnMemory?.(turn)
-    } catch (err) {
-      console.error('[ai-gateway] captureTurnMemory threw (turn streamed OK)', err)
+    //
+    // harness-chat lane C (07-15, research §2b/§6①-2) — capture ↔ explicit-edit mutual exclusion
+    // (Node half): skip the trigger entirely when THIS turn's audit shows a successful
+    // agent_memory_update / agent_profile_restore(memory) — the user just explicitly (re)wrote
+    // memory.md via an approved tool call, and a ~20-25s-later capture re-digest would otherwise
+    // silently reword/shrink what they just approved. The Python half (capture_turn's cooldown
+    // window) is the second, cross-session layer — this one only covers THIS turn.
+    if (!runHasSuccessfulMemoryWrite(run)) {
+      try {
+        cfg.captureTurnMemory?.(turn)
+      } catch (err) {
+        console.error('[ai-gateway] captureTurnMemory threw (turn streamed OK)', err)
+      }
     }
   }
 }

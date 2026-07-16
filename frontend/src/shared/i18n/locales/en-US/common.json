@@ -1194,7 +1194,6 @@
       "degraded": "AI engine unavailable — the conversation is shown read-only",
       "retryProbe": "Retry connection",
       "readOnlyLegacy": "This conversation ran on the retired legacy engine and is read-only. Start a new chat to continue with the AI.",
-      "pendingApproval": "A pending action ({toolName}) is awaiting approval — approve or reject it on the island",
       "approvalBodyManual": "The assistant wants to run {tool} — your approval is required.",
       "backgroundRunning": "The assistant is still responding in the background — this view refreshes when it finishes…"
     },
