@@ -139,9 +139,20 @@ loading 不该成为视觉焦点。**loading 只用三个词汇**（2026-06-13 �
    bg-clip-text 渐变扫过，1.5s linear loop（loop 类同 pulse 豁免三档时长）。AI 语境（chat 面板内）
    用默认 `--c-ai` 高光；其余加 `.shimmer-neutral` 切 ink-fg 中性高光。reduced-motion 由 index.css
    末尾 @media 块统一降级为纯色文字（纯 CSS 动画不经 GSAP，CSS @media 足够，无需 JS 判断）。
-   已接：chat thinking 头 / ToolGroup running / pre-answer「AI 思考中…」/「翻译中…」/
-   报告「生成中」/ 邮件正文「加载中…」。spinner 与 shimmer **不并存**于同一条 loading 行
+   已接：chat 状态条 `TurnStatusLine`（真值驱动，见 §9.1）/ `ToolGroupCard` 运行态组头 / chat thinking 头 /
+   pre-answer「AI 思考中…」/「翻译中…」/ 报告「生成中」/ 邮件正文「加载中…」。spinner 与 shimmer **不并存**于同一条 loading 行
    （双动效闹；ReportsTab GeneratingState 的页级 spin 是既有信息锚点，例外保留）。
+
+### 9.1 chat 流式状态条 + 工具组（harness-chat lane B，2026-07）
+
+owner dogfood 反馈「轮播 shimmer 在流卡住/结束时不停 + 文案与阶段无关」的落地。两个收编组件（均 ShimmerText，无 spring）：
+
+| 组件 | 位置 | 动效 | 停止条件（红线） |
+|---|---|---|---|
+| `assistant/components/TurnStatusLine.tsx` | assistant-ui `Empty` slot（agent 面 + 邮件面双挂） | `DotMatrix` + 单句 `ShimmerText`（真值文案，**不再随机轮播**） | 由 `runtime/useTurnStage.ts` 的纯函数 `deriveTurnStage` 决定渲染：idle/writing/awaiting-approval **返回 null**（流结束/正文自述/审批卡自身即状态 → shimmer 停）；**仅 connecting/thinking/calling-tool 出 shimmer**（真在推进）；stalled（≥15s 无增量）+ error 转**静态非-shimmer** 行（「仍在等待响应…」/ 错误文案，PRD「卡住/结束时 shimmer 必须停」）|
+| `assistant/tools/generic/ToolGroupCard.tsx` | assistant-ui `ToolGroup` slot（连续 tool-call 折叠） | 运行态组头 `ShimmerText`（同一行**禁** spinner）；折叠展开照抄 `ReasoningText` 的 GSAP `height auto↔0` + `DUR.base` + standard 曲线 | 运行中展开、全完成自动折叠；两条灾难红线：① 单工具（`endIndex===startIndex`）渲染裸 children 零回归；② 组内含审批/出错工具 **强制展开不可折叠**（审批卡绝不能被折进组里） |
+
+stall watchdog 纯前端（`useStallLevel`，15s/30s 两档），**不动 gateway**（不加 heartbeat）。轮播式 `ThinkingPhrases.tsx` 已随本轮删除（`PaletteThinkingPhrases` 仍在，服务 ⌘K 搜索，不受影响）。
 
 ## 10. motion 与 GSAP 职责分工（2026-06 引入 `motion`）
 
