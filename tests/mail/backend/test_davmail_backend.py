@@ -1029,3 +1029,88 @@ def test_fetch_update_uid_true_writes_sync_store(monkeypatch):
     args = backend._update_sync_store_uid.call_args.args
     assert args[0] == 1_000_000_001  # internal_id
     assert args[1] == 555  # 反查命中的 uid
+
+
+# --------- _warn_if_large_mailbox (issue #46: 大邮箱 folderSizeLimit 探测告警) ---------
+
+
+def test_warn_if_large_mailbox_warns_when_above_threshold(monkeypatch):
+    """INBOX 邮件数超过 10000 → 打一条提示设置 folderSizeLimit 的 WARNING。"""
+    backend = _make_backend()
+    fake_imap = MagicMock()
+    fake_imap.status.return_value = ("OK", [b'"INBOX" (MESSAGES 92743)'])
+    _patch_imap_session(monkeypatch, fake_imap)
+    mock_logger = MagicMock()
+    monkeypatch.setattr("src.mail.backend.davmail_backend.logger", mock_logger)
+
+    backend._warn_if_large_mailbox()
+
+    assert mock_logger.warning.called
+    msg = mock_logger.warning.call_args[0][0]
+    assert "folderSizeLimit" in msg
+    assert "92743" in msg
+
+
+def test_warn_if_large_mailbox_no_warning_when_small(monkeypatch):
+    """INBOX 邮件数远小于阈值 → 不打 WARNING。"""
+    backend = _make_backend()
+    fake_imap = MagicMock()
+    fake_imap.status.return_value = ("OK", [b'"INBOX" (MESSAGES 500)'])
+    _patch_imap_session(monkeypatch, fake_imap)
+    mock_logger = MagicMock()
+    monkeypatch.setattr("src.mail.backend.davmail_backend.logger", mock_logger)
+
+    backend._warn_if_large_mailbox()
+
+    assert not mock_logger.warning.called
+
+
+def test_warn_if_large_mailbox_no_warning_at_exact_threshold(monkeypatch):
+    """边界: 恰好等于阈值 (10000) 不告警 — 判据是严格大于。"""
+    backend = _make_backend()
+    fake_imap = MagicMock()
+    fake_imap.status.return_value = ("OK", [b'"INBOX" (MESSAGES 10000)'])
+    _patch_imap_session(monkeypatch, fake_imap)
+    mock_logger = MagicMock()
+    monkeypatch.setattr("src.mail.backend.davmail_backend.logger", mock_logger)
+
+    backend._warn_if_large_mailbox()
+
+    assert not mock_logger.warning.called
+
+
+def test_warn_if_large_mailbox_silent_on_probe_failure(monkeypatch):
+    """STATUS 探测失败 (超时/连接失败) → 静默 debug, 不抛异常, 不打 WARNING。"""
+    from contextlib import contextmanager
+
+    backend = _make_backend()
+
+    @contextmanager
+    def broken_session(*args, **kwargs):
+        raise TimeoutError("imap connect timeout")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(
+        "src.mail.backend.davmail_backend.imap_session", broken_session,
+    )
+    mock_logger = MagicMock()
+    monkeypatch.setattr("src.mail.backend.davmail_backend.logger", mock_logger)
+
+    backend._warn_if_large_mailbox()  # 不应抛出
+
+    assert not mock_logger.warning.called
+    assert mock_logger.debug.called
+
+
+def test_warn_if_large_mailbox_silent_when_status_returns_no_messages(monkeypatch):
+    """STATUS 返回 OK 但无 MESSAGES 值 (非常见, 但需容错) → 静默 debug, 不告警。"""
+    backend = _make_backend()
+    fake_imap = MagicMock()
+    fake_imap.status.return_value = ("OK", [b'"INBOX" (UIDNEXT 251)'])
+    _patch_imap_session(monkeypatch, fake_imap)
+    mock_logger = MagicMock()
+    monkeypatch.setattr("src.mail.backend.davmail_backend.logger", mock_logger)
+
+    backend._warn_if_large_mailbox()
+
+    assert not mock_logger.warning.called

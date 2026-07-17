@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from email.header import decode_header, make_header
@@ -30,6 +31,7 @@ from loguru import logger
 from src.mail.backend.base import IMailBackend, MarkerUnavailableError
 from src.mail.backend.imap_client import (
     DavMailConnectionError,
+    _status_message_count,
     discover_drafts_folder,
     discover_sent_folder,
     imap_connect,
@@ -375,10 +377,65 @@ class DavMailBackend(IMailBackend):
             except Exception:
                 pass
 
+        # 大邮箱运维告警 (issue #46): 后台线程做一次性 STATUS(MESSAGES) 探测, 不占用
+        # 本次 probe 的返回路径 —— 详见 _warn_if_large_mailbox docstring 为何不能放
+        # probe 主流程 (会重新引入本函数上面刚修过的 crash-loop 密集 EWS 调用风险)。
+        if not getattr(self, "_mailbox_size_probe_started", False):
+            self._mailbox_size_probe_started = True
+            threading.Thread(
+                target=self._warn_if_large_mailbox,
+                daemon=True,
+                name="davmail-mailbox-size-probe",
+            ).start()
+
         return True, (
             f"DavMail OK (drafts={self.drafts_folder!r}, "
             f"sent={self.sent_folder!r} sync_sent={self._sync_sent}, probe=NOOP)"
         )
+
+    def _warn_if_large_mailbox(self) -> None:
+        """一次性探测 INBOX 邮件数, 超阈值提示设置 davmail.folderSizeLimit (issue #46).
+
+        大邮箱下 davmail.properties 的 davmail.folderSizeLimit 留空时, 每次
+        SELECT/EXAMINE/SEARCH 都会触发 DavMail 对整个 folder 的 EWS 全量枚举 —— 92k
+        INBOX 实测单次 2.5min, 端到端邮件同步延迟可被放大到 30-60min; 设置 folderSizeLimit
+        =2000 后降至约 32s。详见 docs/reference/architecture/architecture-internals.md
+        「DavMail 大邮箱运维」节。
+
+        本探测跑在独立后台线程 (由 probe_readiness 触发, daemon=True), **不阻塞启动
+        关键路径**: STATUS(MESSAGES) 在同等规模 INBOX 上同样可能耗时到分钟级 (issue #45
+        实测同一台 92k INBOX 单次 STATUS(MESSAGES) 分钟级), 若放进 probe_readiness 的
+        主流程会重新引入 Sprint 16 曾修复过的问题 —— crash-loop 时短时间内密集打 EWS
+        调用触发 Microsoft 端 throttling (该函数上方 NOOP 替代 SELECT 的注释即为此修复)。
+        放后台线程后即使耗时也只影响这条告警本身的时效, 不影响 backend 就绪判定。
+
+        MailAgent 读不到 davmail.properties (路径不固定, PoC 期 gitignored), 无法判断
+        用户是否已经设置该项 —— 告警文案用"若尚未设置请设置"的提示语气, 不断言未设置。
+        探测失败 (超时 / 连接失败 / 无 MESSAGES 值) 一律静默 debug 日志, 不影响任何功能;
+        只在进程内探测一次 (由 probe_readiness 的 _mailbox_size_probe_started 门控)。
+        """
+        threshold = 10000
+        # 独立于 davmail_status_timeout_sec (那个配置管的是主循环每 ~30s 一次的关键路径
+        # STATUS UIDNEXT, 默认刻意压小); 这里是一次性诊断探测, 给足余量而不新增配置项。
+        probe_timeout_sec = 240
+        try:
+            with imap_session(self.cfg, timeout=probe_timeout_sec) as imap:
+                count = _status_message_count(imap, "INBOX")
+        except Exception as e:
+            logger.debug(f"[davmail-backend] mailbox-size probe skipped (non-fatal): {e}")
+            return
+        if count is None:
+            logger.debug("[davmail-backend] mailbox-size probe: no MESSAGES value returned")
+            return
+        if count > threshold:
+            logger.warning(
+                f"[davmail-backend] INBOX 邮件数约 {count} (超过 {threshold}) — 若尚未设置 "
+                "davmail.properties 的 davmail.folderSizeLimit, 建议设为 2000: 留空时每次 "
+                "SELECT/EXAMINE/SEARCH 都会触发 EWS 全量枚举, 大邮箱下单封新邮件端到端同步"
+                "延迟可能被放大到数十分钟; 设置后实测可降至数十秒。同时建议设 "
+                "log4j.logger.davmail=INFO (DEBUG 下每次 SELECT 会刷大量日志)。详见 "
+                "docs/reference/architecture/architecture-internals.md「DavMail 大邮箱运维」节。"
+            )
 
     # =========================================================================
     # 正向 sync — 单封抓取 (内部 typed helper; Protocol 面 = fetch_email_content_by_id)

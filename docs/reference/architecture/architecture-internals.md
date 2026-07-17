@@ -399,6 +399,30 @@ pm2 restart mail-sync
 - [`docs/next-session-handoff.md`](../../archive/2026-05/next-session-handoff.md) — cold-pickup
 - [`docs/roadmap-post-cutover.md`](roadmap-post-cutover.md) — 短中长期 roadmap
 
+## DavMail 大邮箱运维（`davmail.folderSizeLimit`，2026-07-17，issue #46）
+
+**现象**：`davmail.properties` 的 `davmail.folderSizeLimit` 留空（默认）时，DavMail 对每次 IMAP `SELECT`/`EXAMINE`/`SEARCH` 都会触发对整个 Exchange folder 的 **EWS 全量枚举**——不是一次性建索引，是**每次**都重新枚举。大邮箱下这个代价随邮件数线性增长，且单封新邮件的处理会触发两次（`EXAMINE` 一次，紧跟的 `UID SEARCH` 又一次）。
+
+**实测**（2026-07-17，v1.5.0，DavMail 6.8.0，INBOX = 92,743 封）：
+- 单次 `EXAMINE`：EWS `FindItem` 分页 500 条/页 × 185 页（~0.75s/页）= 2 分 31 秒；紧跟的 `UID SEARCH` 又触发一次全量枚举（再 ~2.5min）
+- MailAgent 侧架构叠加放大：`imap_session` 每 op 新建连接 + SELECT，所有 backend op 走 `run_backend_io` 单线程串行队列，一个 5min 的 op 会阻塞所有后续 op → 单封新邮件端到端延迟被放大到 **30-60 分钟**
+- 设置 `davmail.folderSizeLimit=2000` 后：枚举 185 页 → 4 页，`EXAMINE` 2.5min → 7-13s，单封邮件端到端 **32s 实测**（约 50-100 倍改善）
+
+**必须配置**（>10k 邮箱）：在 davmail 部署所用的 `davmail.properties`（路径不固定，取决于部署方式，MailAgent 不管理/不读取该文件）加：
+
+```properties
+davmail.folderSizeLimit=2000
+log4j.logger.davmail=INFO
+```
+
+第二行是顺带修复：`log4j.logger.davmail` 默认/DEBUG 级别下每次 `SELECT` 会刷 2-3MB 的逐条 `Message IMAP uid:` 日志，1MB 滚动日志秒转，掩盖真正有用的日志。生产环境建议至少 `INFO`。
+
+**代价与适用性**：`folderSizeLimit` 生效后 IMAP 视图只保留 folder 内最近 N 封——窗口外老邮件的 UID FETCH/SEARCH 会失效。对 MailAgent 场景**无实际影响**：正向 sync（新邮件）、flag 双向同步、reverse sync 都只碰近期邮件；老邮件的 fetch 走 AppleScript fallback 路径，不依赖 davmail 的 IMAP 视图。真机验证：设限后积压队列正常清空，其中一封 2026-05（早已超出窗口）的老邮件 retry 也成功。
+
+**MailAgent 侧探测告警（enhancement）**：`DavMailBackend.probe_readiness()`（启动一次性 probe）成功后，会 fire-and-forget 一个 daemon 后台线程 `_warn_if_large_mailbox`，一次性 `STATUS INBOX (MESSAGES)` 取邮件总数，若 > 10000 打一条 loguru WARNING 提示设置 `folderSizeLimit`（见 `src/mail/backend/davmail_backend.py`）。🔴 **刻意放后台线程、不放 probe 主流程**：`STATUS(MESSAGES)` 在同等规模 INBOX 上同样可能耗时到分钟级（同一份 issue 批次的 issue #45 实测 92k INBOX 单次 `STATUS(MESSAGES)` 分钟级），若放进 `probe_readiness` 的关键路径会重新引入 Sprint 16 曾修复过的问题——crash-loop 时短时间内密集打 EWS 调用触发 Microsoft 端 throttling（`probe_readiness` 用 `NOOP` 替代 `SELECT INBOX` 正是这个修复的产物，见其 docstring）。放后台线程后即使探测本身耗时，也只影响这条告警的时效，不影响 backend 就绪判定。MailAgent 读不到 `davmail.properties`（路径不固定、PoC 期 gitignored），无法判断用户是否已设置该项，故文案是「若尚未设置请设置」的建议语气，不断言未设置；探测失败（超时/连接失败）静默 debug 日志，不阻断启动；进程内只探测一次。
+
+**Out of scope（2026-07-17 批未做）**：serial executor 的「每 op ~1s」假设对大邮箱 davmail 不成立的长期改造（per-op 连接复用 / fanout 批量化），见 issue #46 建议 3。
+
 ## 多文件夹同步（2026-06，davmail-only）
 
 让用户勾选的自定义 Exchange 文件夹（Jira / Notion / 中文名 DMS固件发布 等）并入 `email_metadata` **主链路**，享受与收件箱**等同**的全部能力（AI 分类 / Notion 同步 / FTS 全文 / 线程 / 标旗·归档·移动·回复·转发）。davmail-only（依赖 IMAP）。
