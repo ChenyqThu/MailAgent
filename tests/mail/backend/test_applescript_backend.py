@@ -138,3 +138,71 @@ def test_set_flag_str_fallback_forwards_to_arm(backend):
 
 def test_reconcile_drafts_noop(backend):
     assert backend.reconcile_drafts() == ([], [])
+
+
+# --------- create_reply_draft.sh 定位 — dev vs 打包 .app 布局 (Issue #41) ---------
+
+from pathlib import Path
+
+from src.mail.backend import applescript_backend as ab
+from src.mail.backend.types import DraftRequest
+
+
+def test_resolve_draft_script_dev_layout():
+    """dev 布局: 解析到真实仓库根的 <repo>/scripts/create_reply_draft.sh 且在场。"""
+    resolved = ab._resolve_draft_script()
+    assert resolved.name == "create_reply_draft.sh"
+    assert resolved.parent.name == "scripts"
+    assert resolved.exists()
+
+
+def test_resolve_draft_script_packaged_layout(tmp_path, monkeypatch):
+    """模拟 .app 布局: __file__ 落 site-packages 深处 (parents[3] 算错), 脚本在与内嵌
+    CPython (sys.prefix) 同级的 Resources/scripts —— 应经 sys.prefix 父目录候选命中。"""
+    resources = tmp_path / "Contents" / "Resources"
+    site_pkg_backend = (
+        resources / "python" / "lib" / "python3.11" / "site-packages"
+        / "src" / "mail" / "backend"
+    )
+    site_pkg_backend.mkdir(parents=True)
+    fake_file = site_pkg_backend / "applescript_backend.py"
+    fake_file.write_text("# fake module for layout test\n")
+    scripts_dir = resources / "scripts"
+    scripts_dir.mkdir(parents=True)
+    packaged_script = scripts_dir / "create_reply_draft.sh"
+    packaged_script.write_text("#!/bin/bash\n")
+
+    monkeypatch.delenv("MAILAGENT_RESOURCES_ROOT", raising=False)
+    monkeypatch.setattr(ab, "__file__", str(fake_file))
+    monkeypatch.setattr(ab.sys, "prefix", str(resources / "python"))
+
+    # 老 parents[3] 候选落在不存在的 site-packages/scripts —— 坐实打包态确实算错。
+    parents3 = fake_file.resolve().parents[3] / "scripts" / "create_reply_draft.sh"
+    assert not parents3.exists()
+
+    resolved = ab._resolve_draft_script()
+    assert resolved == packaged_script
+    assert resolved.exists()
+
+
+def test_resolve_draft_script_env_override_wins(tmp_path, monkeypatch):
+    """MAILAGENT_RESOURCES_ROOT 显式覆盖优先于自动探测。"""
+    root = tmp_path / "custom_resources"
+    (root / "scripts").mkdir(parents=True)
+    script = root / "scripts" / "create_reply_draft.sh"
+    script.write_text("#!/bin/bash\n")
+    monkeypatch.setenv("MAILAGENT_RESOURCES_ROOT", str(root))
+    assert ab._resolve_draft_script() == script
+
+
+def test_append_draft_missing_script_lists_attempts(backend, monkeypatch):
+    """脚本缺失时错误列出尝试过的路径 —— 不误导用户去重装。"""
+    monkeypatch.setattr(ab, "_DRAFT_SH", Path("/nonexistent/scripts/create_reply_draft.sh"))
+    req = DraftRequest(
+        mode="reply", internal_id_for_threading=42, to=["a@x.test"], reply_text="hi"
+    )
+    res = backend.append_draft(req)
+    assert res.success is False
+    assert "未找到" in res.error
+    assert "已尝试" in res.error
+    assert "重装" not in res.error and "reinstall" not in res.error.lower()

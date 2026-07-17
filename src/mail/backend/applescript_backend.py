@@ -10,7 +10,9 @@ internal_id = Mail.app SQLite ROWID (< 1_000_000_000).
 from __future__ import annotations
 
 import json
+import os
 import subprocess
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
@@ -30,8 +32,44 @@ if TYPE_CHECKING:
     from src.config import Config
 
 
-# scripts/create_reply_draft.sh 路径 (相对仓库根)
-_DRAFT_SH = Path(__file__).resolve().parents[3] / "scripts" / "create_reply_draft.sh"
+# create_reply_draft.sh 的定位 —— dev 与打包 .app 布局不同, 单点 parents[N] 会算错 (Issue #41):
+#   - dev:   <repo>/src/mail/backend/applescript_backend.py → parents[3] = <repo>,
+#            脚本在 <repo>/scripts/create_reply_draft.sh。
+#   - 打包:  __file__ 落在 <.app>/Contents/Resources/python/lib/python3.11/site-packages/
+#            src/mail/backend/…, parents[3] 只到 site-packages/ (无 scripts/); 脚本经
+#            electron-builder extraResources 落在 <.app>/Contents/Resources/scripts/
+#            (见 frontend/electron-builder.yml), 与内嵌 CPython (sys.prefix =
+#            …/Contents/Resources/python) 同级 —— 故 sys.prefix 的父目录即 Resources。
+# 按优先级探测多候选, 取首个存在者。
+def _draft_script_candidates() -> list[Path]:
+    """create_reply_draft.sh 候选路径, 按优先级降序。"""
+    candidates: list[Path] = []
+    # 1) 显式 env 覆盖 (ops 逃生口, 镜像 MAILAGENT_DATA_ROOT 路径纪律; 默认不设)。
+    env_root = os.environ.get("MAILAGENT_RESOURCES_ROOT")
+    if env_root:
+        candidates.append(Path(env_root) / "scripts" / "create_reply_draft.sh")
+    # 2) 打包 .app: 内嵌 CPython 的 Resources 同级 scripts/ (sys.prefix 父目录);
+    #    dev venv (repo/venv) 恰好也命中 repo/scripts。
+    candidates.append(Path(sys.prefix).parent / "scripts" / "create_reply_draft.sh")
+    # 3) dev 仓库根兜底 (venv 不在 repo/venv 时): <repo>/scripts/ (原行为)。
+    candidates.append(Path(__file__).resolve().parents[3] / "scripts" / "create_reply_draft.sh")
+    return candidates
+
+
+def _resolve_draft_script() -> Path:
+    """取首个存在的候选; 都不存在时返回最后一个 (dev 布局) 供上层报清晰错误。"""
+    candidates = _draft_script_candidates()
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    logger.warning(
+        "[applescript-backend] create_reply_draft.sh 未在任何候选路径找到: "
+        + " | ".join(str(c) for c in candidates)
+    )
+    return candidates[-1]
+
+
+_DRAFT_SH = _resolve_draft_script()
 
 
 class AppleScriptBackend(IMailBackend):
@@ -167,10 +205,11 @@ class AppleScriptBackend(IMailBackend):
             )
 
         if not _DRAFT_SH.exists():
+            attempted = " | ".join(str(c) for c in _draft_script_candidates())
             return DraftAppendResult(
                 success=False,
                 drafts_folder="Drafts",
-                error=f"draft script not found: {_DRAFT_SH}",
+                error=f"create_reply_draft.sh 未找到 (已尝试: {attempted})",
             )
 
         args = ["bash", str(_DRAFT_SH), "--mode", draft.mode]
