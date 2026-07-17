@@ -150,7 +150,19 @@ class LLMRunner:
         """
         meta = _lookup_by_internal_id(internal_id, db_path=self._db_path_override)
         if not meta:
-            return {"ok": False, "internal_id": internal_id, "error": "not found in sync_store"}
+            err = "not found in sync_store"
+            # Issue #44: 若 llm_processing 已有行 (email_metadata 被删 / 幽灵行清理,
+            # 但 LLM 行仍在 retry 队列) → 走同一退避记账最终 gave_up, 止住无限重试。
+            # 无行则不建孤儿行 (不在任何 retry 队列, 无循环风险, 不引入新状态语义)。
+            if self._store.get(internal_id):
+                info = self._store.mark_failed(
+                    internal_id, err, max_retries=cfg.llm_max_retries
+                )
+                logger.warning(
+                    f"[llm-runner] {err} (internal_id={internal_id}): {info}"
+                )
+                return {"ok": False, "internal_id": internal_id, "error": err, **info}
+            return {"ok": False, "internal_id": internal_id, "error": err}
 
         notion_page_id = meta.get("notion_page_id") or ""
         mailbox = meta.get("mailbox") or "收件箱"
@@ -182,8 +194,14 @@ class LLMRunner:
         full = arm.fetch_email_content_by_id(internal_id, mailbox)
         if not full:
             err = f"AppleScript fetch failed for internal_id={internal_id}"
-            logger.warning(f"[llm-runner] {err}")
-            return {"ok": False, "internal_id": internal_id, "error": err}
+            # Issue #44: fetch 失败也要走 mark_failed 记账 (同 LLM 调用失败路径),
+            # 否则已在 retry 队列的坏邮件 retry_count 永不增长 + next_retry_at 不后移
+            # → get_ready_for_retry 每轮选中 → 无限重试 (生产实测 8911 次)。
+            info = self._store.mark_failed(
+                internal_id, err, max_retries=cfg.llm_max_retries
+            )
+            logger.warning(f"[llm-runner] {err}: {info}")
+            return {"ok": False, "internal_id": internal_id, "error": err, **info}
 
         # --- 2. parse Email ---
         reader = self._lazy_reader()
@@ -195,8 +213,12 @@ class LLMRunner:
         )
         if email_obj is None:
             err = f"parse_email_source returned None for internal_id={internal_id}"
-            logger.warning(f"[llm-runner] {err}")
-            return {"ok": False, "internal_id": internal_id, "error": err}
+            # Issue #44: parse 失败同 fetch 失败, 走 mark_failed 记账避免无限重试。
+            info = self._store.mark_failed(
+                internal_id, err, max_retries=cfg.llm_max_retries
+            )
+            logger.warning(f"[llm-runner] {err}: {info}")
+            return {"ok": False, "internal_id": internal_id, "error": err, **info}
 
         # Populate mailbox + internal_id on the parsed obj (parser may not set)
         if not getattr(email_obj, "mailbox", None):
