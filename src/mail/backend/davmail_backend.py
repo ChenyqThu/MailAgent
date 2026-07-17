@@ -59,6 +59,24 @@ _APPENDUID_PATTERN = re.compile(rb"APPENDUID\s+(\d+)\s+(\d+)", re.IGNORECASE)
 # RFC 2369 Message-ID 完整匹配 (用 regex 而非 ``in`` 避免 partial match 误判)
 _MSGID_PATTERN = re.compile(r"<[^<>\s]+>")
 
+# issue #46 大邮箱 folderSizeLimit 探测的进程级一次性门控 (codex HIGH-2)。
+# 🔴 必须是模块级进程全局而非实例属性: 常驻 serve-api 每请求新建 ServiceContext →
+# create_backend() → probe_readiness() (src/api/deps.py per-request; llm_service 每次
+# run 同理), 实例级门控会让每个相关请求都起一个最长 240s 的 STATUS INBOX daemon
+# 线程, 大邮箱下并发重复打 EWS 全量枚举 —— 恰好重新引入探测本身要预警的 throttling 风险。
+_mailbox_size_probe_lock = threading.Lock()
+_mailbox_size_probe_started = False
+
+
+def _claim_mailbox_size_probe() -> bool:
+    """原子 claim 进程级探测权: check-and-set 在同一临界区, 首次返回 True, 之后恒 False."""
+    global _mailbox_size_probe_started
+    with _mailbox_size_probe_lock:
+        if _mailbox_size_probe_started:
+            return False
+        _mailbox_size_probe_started = True
+        return True
+
 
 def _decode_mime_header(value: Optional[str]) -> str:
     """RFC 2047 decode 邮件 header (subject / from / to 等).
@@ -380,8 +398,9 @@ class DavMailBackend(IMailBackend):
         # 大邮箱运维告警 (issue #46): 后台线程做一次性 STATUS(MESSAGES) 探测, 不占用
         # 本次 probe 的返回路径 —— 详见 _warn_if_large_mailbox docstring 为何不能放
         # probe 主流程 (会重新引入本函数上面刚修过的 crash-loop 密集 EWS 调用风险)。
-        if not getattr(self, "_mailbox_size_probe_started", False):
-            self._mailbox_size_probe_started = True
+        # 门控是模块级进程全局 (_claim_mailbox_size_probe, codex HIGH-2): serve-api
+        # 每请求 create_backend() → probe_readiness(), 实例级门控会每请求重复起线程。
+        if _claim_mailbox_size_probe():
             threading.Thread(
                 target=self._warn_if_large_mailbox,
                 daemon=True,
@@ -412,7 +431,10 @@ class DavMailBackend(IMailBackend):
         MailAgent 读不到 davmail.properties (路径不固定, PoC 期 gitignored), 无法判断
         用户是否已经设置该项 —— 告警文案用"若尚未设置请设置"的提示语气, 不断言未设置。
         探测失败 (超时 / 连接失败 / 无 MESSAGES 值) 一律静默 debug 日志, 不影响任何功能;
-        只在进程内探测一次 (由 probe_readiness 的 _mailbox_size_probe_started 门控)。
+        只在进程内探测一次 —— 门控是**模块级进程全局** ``_claim_mailbox_size_probe``
+        (lock 内 check-and-set 原子 claim), 不是实例属性: serve-api 每请求新建
+        ServiceContext → create_backend() → probe_readiness(), 实例级门控会导致每个
+        相关请求都重复起最长 240s 的探测线程并发打 EWS (codex HIGH-2)。
         """
         threshold = 10000
         # 独立于 davmail_status_timeout_sec (那个配置管的是主循环每 ~30s 一次的关键路径

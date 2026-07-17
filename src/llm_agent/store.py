@@ -54,7 +54,10 @@ def _truncate_long_fields(d: Dict[str, Any], *, max_field_chars: int = 3500) -> 
 
 
 def _backoff_for(retry_count: int) -> float:
-    idx = min(retry_count, len(_BACKOFF) - 1)
+    # Issue #44 (codex MED-1): retry_count 是 1-based (mark_failed 传 new_retries),
+    # 直接当下标会跳过 _BACKOFF[0]=60s → 实际序列 300/900/… 与文档不符。
+    # 1-based → 0-based (同 src/sync/outbox.py _next_retry_at 先例)。
+    idx = min(max(retry_count - 1, 0), len(_BACKOFF) - 1)
     return time.time() + _BACKOFF[idx]
 
 

@@ -6,7 +6,9 @@ gave_up), 但 fetch 失败 (:183) / parse 失败 (:196) / not-found (:152) 三�
 ``return {"ok": False, ...}`` 不记账。后果: 已在 LLM retry 队列 (status='failed',
 next_retry_at 已过期) 的坏邮件, 每轮 ``get_ready_for_retry`` 选中 → 重跑 → fetch/parse
 再失败 → next_retry_at 永不后移 → 无限重试 (生产实测 8911 次), AppleScript 超时场景每轮
-烧 ~3min serial executor。本测试对三条路径断言与 LLM-fail 路径一致的记账 + 返回值 merge。
+烧 ~3min serial executor。本测试对上述路径 + notion 未同步早退 (codex HIGH-1) 断言
+与 LLM-fail 路径一致的记账 + 返回值 merge; 另 pin _backoff_for 的 1-based 下标修正
+(codex MED-1: 修前首败落 300s 档, 60s 档永远用不到)。
 """
 from __future__ import annotations
 
@@ -173,7 +175,8 @@ async def test_parse_failure_escalates_to_gave_up(monkeypatch, tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def _build_not_found_runner(tmp_path, store):
+def _build_early_exit_runner(tmp_path, store):
+    """fetch 之前就该早退的分支 (not-found / notion 未同步) 共用的 stub runner。"""
     return LLMRunner(
         processor=SimpleNamespace(process_email=AsyncMock(), close=AsyncMock()),
         writer=SimpleNamespace(write=AsyncMock()),
@@ -194,7 +197,7 @@ async def test_not_found_with_existing_row_accounts(monkeypatch, tmp_path):
     assert store.get(7)["retry_count"] == 1
 
     _patch_lookup(monkeypatch, None)  # sync_store lookup 返回 None
-    runner = _build_not_found_runner(tmp_path, store)
+    runner = _build_early_exit_runner(tmp_path, store)
 
     result = await runner.run_for_internal_id(7, force=True)
 
@@ -213,10 +216,84 @@ async def test_not_found_without_row_no_orphan(monkeypatch, tmp_path):
     (不在任何 retry 队列 → 无无限循环风险, 无需引入新状态语义)。"""
     store = LLMProcessingStore(db_path=str(tmp_path / "s.db"))
     _patch_lookup(monkeypatch, None)
-    runner = _build_not_found_runner(tmp_path, store)
+    runner = _build_early_exit_runner(tmp_path, store)
 
     result = await runner.run_for_internal_id(999, force=True)
 
     assert result["ok"] is False
     assert "not found in sync_store" in result["error"]
     assert store.get(999) is None  # 无孤儿行
+
+
+# ---------------------------------------------------------------------------
+# notion 未同步早退路径 (codex HIGH-1) —— notion enabled + notion_page_id 空
+# ---------------------------------------------------------------------------
+
+
+_META_NO_PAGE = {**_META, "notion_page_id": None}
+
+
+@pytest.mark.asyncio
+async def test_notion_pending_with_existing_row_accounts(monkeypatch, tmp_path):
+    """retry 队列里已有 failed 行 + email_metadata.notion_page_id 仍空 + notion 启用
+    (Notion 从关到开 / 页同步不完整) → 走同一退避记账最终 gave_up, 止住永动。"""
+    monkeypatch.setattr(cfg, "llm_max_retries", 3)
+    monkeypatch.setattr("src.llm_agent.runner.notion_enabled", lambda: True)
+    _patch_lookup(monkeypatch, _META_NO_PAGE)
+    store = LLMProcessingStore(db_path=str(tmp_path / "s.db"))
+    store.mark_failed(7, "prior llm failure", max_retries=3)  # 预置 retry_count=1
+    runner = _build_early_exit_runner(tmp_path, store)
+
+    r2 = await runner.run_for_internal_id(7, force=True)
+    r3 = await runner.run_for_internal_id(7, force=True)
+
+    assert r2["ok"] is False
+    assert "not synced to Notion yet" in r2["error"]
+    assert (r2["retry_count"], r2["status"]) == (2, "failed")
+    assert (r3["retry_count"], r3["status"]) == (3, "gave_up")
+    runner._backend.fetch_email_content_by_id.assert_not_called()
+    assert store.get(7)["status"] == "gave_up"
+    assert store.get_ready_for_retry() == []
+
+
+@pytest.mark.asyncio
+async def test_notion_pending_without_row_no_orphan(monkeypatch, tmp_path):
+    """首次运行页未建属正常时序 (llm-hook 在页创建前被调等) → 保持原裸 return,
+    不建 retry 行 (否则每封正常时序邮件都会制造一条 failed 记账)。"""
+    monkeypatch.setattr("src.llm_agent.runner.notion_enabled", lambda: True)
+    _patch_lookup(monkeypatch, _META_NO_PAGE)
+    store = LLMProcessingStore(db_path=str(tmp_path / "s.db"))
+    runner = _build_early_exit_runner(tmp_path, store)
+
+    result = await runner.run_for_internal_id(7, force=True)
+
+    assert result["ok"] is False
+    assert "not synced to Notion yet" in result["error"]
+    assert store.get(7) is None  # 无孤儿行
+
+
+# ---------------------------------------------------------------------------
+# 退避表下标 (codex MED-1) —— _backoff_for 拿 1-based new_retries 当 0-based 下标,
+# 首败落 _BACKOFF[1]=300s, 60s 档永远用不到。冻结时间 pin 修正后的完整序列。
+# ---------------------------------------------------------------------------
+
+
+def test_backoff_schedule_60_300_900_and_clamp(monkeypatch, tmp_path):
+    store = LLMProcessingStore(db_path=str(tmp_path / "s.db"))
+    fixed = 1_700_000_000.0
+    monkeypatch.setattr("src.llm_agent.store.time.time", lambda: fixed)
+
+    i1 = store.mark_failed(7, "e", max_retries=100)
+    i2 = store.mark_failed(7, "e", max_retries=100)
+    i3 = store.mark_failed(7, "e", max_retries=100)
+
+    assert i1["next_retry_at"] == pytest.approx(fixed + 60)   # 首败 = _BACKOFF[0]
+    assert i2["next_retry_at"] == pytest.approx(fixed + 300)  # 二败 = _BACKOFF[1]
+    assert i3["next_retry_at"] == pytest.approx(fixed + 900)  # 三败 = _BACKOFF[2]
+
+    # 超出表长 clamp 到最后一档 7200 (retry_count 4→3600, 5+→7200)
+    info = None
+    for _ in range(5):
+        info = store.mark_failed(7, "e", max_retries=100)
+    assert info["retry_count"] == 8
+    assert info["next_retry_at"] == pytest.approx(fixed + 7200)

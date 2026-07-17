@@ -34,7 +34,7 @@
 
 | 能力 | 后端实现 | 测试 | 验收 | 状态 |
 |---|---|---|---|---|
-| 文件夹发现 `list_folders()` | `imap.list("","*")` + `decode_imap_utf7` + special-use 标志 + STATUS 邮件数 + **层级树解析**（delimiter→`build_folder_tree`） | `test_imap_utf7`(13) + `test_list_folders`(11，mock LIST 含嵌套行) | CLI `folder discover -o json` 列 18 文件夹含中文+层级 ✓ | ✅ |
+| 文件夹发现 `list_folders()` | `imap.list("","*")` + `decode_imap_utf7` + special-use 标志 + STATUS 邮件数（issue #45 起默认**不取**，CLI `--counts` / API `?counts=true` opt-in——大邮箱逐文件夹 STATUS 分钟级）+ **层级树解析**（delimiter→`build_folder_tree`） | `test_imap_utf7`(13) + `test_list_folders`(11，mock LIST 含嵌套行) | CLI `folder discover -o json` 列 18 文件夹含中文+层级 ✓ | ✅ |
 | 配置 `SYNC_FOLDERS` + 窗口 | `config.py` 加 `sync_folders`/`folder_sync_past_days`/`folder_sync_max_messages` + `.env.example` | `test_folder_config`(7) | 配置可读、空=默认 ✓ | ✅ |
 | per-folder marker | 从 `email_metadata` 派生 `MAX(imap_uid)`（`_max_folder_imap_uid`）+ uidvalidity 存 `sync_state` KV（`folder_uidvalidity:<imap_name>`）；UIDVALIDITY 变→全量重拉 | `test_get_new_emails_multifolder`（marker 推进 / uidvalidity 重拉） | 二次 poll 不重复拉 ✓（真机 e2e 5→5） | ✅ |
 | `get_new_emails` 多文件夹遍历 | INBOX 段后追加白名单循环（`_fetch_custom_folder`→`_fetch_new_in_folder` 双模式）+ 每文件夹独立 try + max_messages 截断（取最新 N） | 同上（单文件夹失败隔离 / 截断 / 中文 label / criteria 决策） | `sqlite … GROUP BY mailbox` 出现 `mailbox='Notion'` ✓（真机 e2e） | ✅ |

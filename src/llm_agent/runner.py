@@ -175,10 +175,22 @@ class LLMRunner:
             # 天然无 page_id —— 分类照跑（SQLite 腿：labels/翻译/岛/飞书都消费 SQLite），
             # 仅跳过下方 Notion AI 字段回写腿。Notion 已配置时保持原语义（页未建先拒）。
             if notion_enabled():
-                return {
-                    "ok": False, "internal_id": internal_id,
-                    "error": "email not synced to Notion yet (notion_page_id empty)",
-                }
+                err = "email not synced to Notion yet (notion_page_id empty)"
+                # Issue #44 (codex HIGH-1): retry 队列里已有 failed 行而 page_id 仍空
+                # (Notion 从关到开 / 页同步不完整) → 不记账会永动。同 not-found 策略:
+                # 有行走退避记账最终 gave_up; 无行保持裸 return (首次运行页未建属
+                # 正常时序, 不该制造 retry 行)。
+                if self._store.get(internal_id):
+                    info = self._store.mark_failed(
+                        internal_id, err, max_retries=cfg.llm_max_retries
+                    )
+                    logger.warning(
+                        f"[llm-runner] {err} (internal_id={internal_id}): {info}"
+                    )
+                    return {
+                        "ok": False, "internal_id": internal_id, "error": err, **info
+                    }
+                return {"ok": False, "internal_id": internal_id, "error": err}
 
         if not force:
             existing = self._store.get(internal_id)

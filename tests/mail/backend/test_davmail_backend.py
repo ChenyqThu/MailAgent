@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+import pytest
 
 from src.mail.backend.davmail_backend import (
     DavMailBackend,
@@ -1114,3 +1115,84 @@ def test_warn_if_large_mailbox_silent_when_status_returns_no_messages(monkeypatc
     backend._warn_if_large_mailbox()
 
     assert not mock_logger.warning.called
+
+
+# --------- 探测门控是模块级进程全局 (codex HIGH-2) ---------
+
+
+
+
+@pytest.fixture
+def _reset_mailbox_probe_gate(monkeypatch):
+    """重置模块级探测门控 — 避免测试顺序耦合 (进程全局「只探测一次」语义)。
+
+    monkeypatch.setattr 在 teardown 自动恢复原值, 不污染其他测试。
+    """
+    import src.mail.backend.davmail_backend as mod
+
+    monkeypatch.setattr(mod, "_mailbox_size_probe_started", False)
+
+
+def _probe_ready_backend(monkeypatch):
+    """构造能走通 probe_readiness 的 backend: TCP probe / IMAP LOGIN+NOOP 全 mock。"""
+    backend = _make_backend()
+    monkeypatch.setattr(
+        "src.mail.backend.davmail_backend.probe_tcp", lambda *a, **kw: (True, "ok")
+    )
+    fake_imap = MagicMock()
+    fake_imap.noop.return_value = ("OK", [b"NOOP"])
+    monkeypatch.setattr(
+        "src.mail.backend.davmail_backend.imap_connect", lambda *a, **kw: fake_imap
+    )
+    return backend
+
+
+def test_mailbox_size_probe_starts_once_across_instances(
+    monkeypatch, _reset_mailbox_probe_gate
+):
+    """HIGH-2 回归: 门控是模块级进程全局, 不是实例属性。
+
+    serve-api 每请求 create_backend() → probe_readiness() (src/api/deps.py
+    per-request), 两个不同 backend 实例先后 probe 也只准起一个探测线程 ——
+    实例级门控在这里会每请求起一个最长 240s 的 STATUS 线程并发打 EWS。
+    """
+    import src.mail.backend.davmail_backend as mod
+
+    fake_threading = MagicMock()
+    monkeypatch.setattr(mod, "threading", fake_threading)
+
+    b1 = _probe_ready_backend(monkeypatch)
+    b2 = _probe_ready_backend(monkeypatch)
+    ok1, _ = b1.probe_readiness()
+    ok2, _ = b2.probe_readiness()
+
+    assert ok1 and ok2  # probe 本身不受门控影响
+    assert fake_threading.Thread.call_count == 1  # 第二个实例不再起线程
+    fake_threading.Thread.return_value.start.assert_called_once()
+
+
+def test_mailbox_size_probe_claim_atomic_under_concurrency(_reset_mailbox_probe_gate):
+    """并发 claim 只成功一次 — check-and-set 必须在同一 lock 临界区内。"""
+    import threading as _threading
+
+    import src.mail.backend.davmail_backend as mod
+
+    n = 16
+    barrier = _threading.Barrier(n)
+    results: list[bool] = []
+    res_lock = _threading.Lock()
+
+    def worker():
+        barrier.wait()  # 齐步放行, 最大化竞争窗口
+        got = mod._claim_mailbox_size_probe()
+        with res_lock:
+            results.append(got)
+
+    threads = [_threading.Thread(target=worker) for _ in range(n)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert len(results) == n
+    assert results.count(True) == 1  # 恰好一个线程 claim 成功

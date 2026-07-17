@@ -119,6 +119,8 @@ def list_folders(self) -> list[FolderInfo]:
     return out
 ```
 
+> **落地形态（2026-07-17, issue #45）**：实际签名为模块级 `list_folders(cfg, *, with_counts=False, timeout=30)`（`imap_client.py`）——计数**默认不取**：大邮箱（92k INBOX）上 DavMail 单次 STATUS 分钟级，逐文件夹累加会把 discovery 拖到 ~5min。需要 `message_count` 时显式 opt-in：CLI `--counts` / API `?counts=true`（App 内 FolderPicker/Sidebar/onboarding 均不请求计数，count 缺失渲染已 null-safe）。
+
 **`decode_imap_utf7`**：已在实测脚本验证（`&` 引入 base64，`,`→`/`，`&-`=字面 `&`）。RFC 3501 modified-UTF7。
 
 **FolderInfo**（新 dataclass / Pydantic）：`imap_name`（ASCII 原始名，白名单存储用）、`display_name`（解码后展示）、`special_use`（区分系统文件夹）、`message_count`、`is_syncable`（排除 Trash/Junk 等可选）。
@@ -353,9 +355,9 @@ davmail IMAP (folder=Jira)
 
 ### 8.1 后端（P1+P2）
 ```bash
-# 1. 文件夹发现
-mailagent folder discover -o json | jq '.data[] | {name: .display_name, count: .message_count}'
-# 期望: 列出 18 个文件夹含中文名 + 邮件数
+# 1. 文件夹发现 (--counts opt-in 取邮件数; issue #45 起默认不取, 大邮箱逐文件夹 STATUS 分钟级)
+mailagent folder discover --counts -o json | jq '.data[] | {name: .display_name, count: .message_count}'
+# 期望: 列出 18 个文件夹含中文名 + 邮件数 (不带 --counts 时 message_count 为 null)
 
 # 2. 配置白名单 + 同步
 echo 'SYNC_FOLDERS=Notion,Jira' >> .env   # 用 imap 原始名
