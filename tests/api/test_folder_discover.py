@@ -80,6 +80,32 @@ class TestDiscover:
         assert r.status_code == 400
         assert r.json()["error"]["code"] == "E_INVALID_ARG"
 
+    def test_discover_default_skips_counts(self, folder_client, monkeypatch):
+        """issue #45: 默认不取 message_count (大邮箱逐文件夹 STATUS 分钟级)。"""
+        captured = {}
+
+        def _spy(c, with_counts=True):
+            captured["with_counts"] = with_counts
+            return _fake_folders()
+
+        monkeypatch.setattr("src.mail.backend.imap_client.list_folders", _spy)
+        r = folder_client.get("/api/folder/discover")
+        assert r.status_code == 200, r.text
+        assert captured["with_counts"] is False
+
+    def test_discover_counts_true_opts_in(self, folder_client, monkeypatch):
+        """``?counts=true`` 仍可显式取 message_count (opt-in)。"""
+        captured = {}
+
+        def _spy(c, with_counts=True):
+            captured["with_counts"] = with_counts
+            return _fake_folders()
+
+        monkeypatch.setattr("src.mail.backend.imap_client.list_folders", _spy)
+        r = folder_client.get("/api/folder/discover", params={"counts": "true"})
+        assert r.status_code == 200, r.text
+        assert captured["with_counts"] is True
+
 
 class TestWhitelist:
     def test_get_whitelist(self, folder_client):

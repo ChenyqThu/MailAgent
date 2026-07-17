@@ -406,8 +406,9 @@ export class HttpApi implements MailApi {
   folder = {
     discover: (opts?: { counts?: boolean }): Promise<FolderDiscoverResult> =>
       this.req<FolderDiscoverResult>('GET', '/folder/discover', {
-        // 后端默认 counts=true; 显式传以保持 wire 清晰。
-        query: { counts: opts?.counts ?? true }
+        // 后端默认 counts=false (issue #45: 大邮箱逐文件夹 STATUS 分钟级);
+        // 显式传以保持 wire 清晰, counts:true 仍可 opt-in。
+        query: { counts: opts?.counts ?? false }
       }),
 
     getWhitelist: (): Promise<FolderWhitelistResult> =>

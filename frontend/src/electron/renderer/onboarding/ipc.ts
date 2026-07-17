@@ -339,8 +339,10 @@ function unwrapFolderEnvelope<T>(raw: unknown): T {
   throw err
 }
 
-/** 拉文件夹树 (davmail-only)。失败抛带 .code 的 Error (非 davmail = E_INVALID_ARG)。 */
-export function discoverFolders(counts = true): Promise<FolderDiscoverResult> {
+/** 拉文件夹树 (davmail-only)。失败抛带 .code 的 Error (非 davmail = E_INVALID_ARG)。
+ *  counts 默认 false, 对齐全链路新默认 (issue #45: 大邮箱逐文件夹 STATUS 分钟级,
+ *  必超 StepFolders 8s hang 兜底); counts:true 仍可显式 opt-in。 */
+export function discoverFolders(counts = false): Promise<FolderDiscoverResult> {
   return getInvoke()('folder:discover', { counts }).then((raw) =>
     unwrapFolderEnvelope<FolderDiscoverResult>(raw)
   )

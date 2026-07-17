@@ -69,6 +69,37 @@ class TestDiscover:
         assert payload["status"] == "error"
         assert "davmail" in (payload.get("error", {}).get("message", "") + result.output).lower()
 
+    def test_discover_default_skips_counts(self, cli_runner, davmail_env, seeded_db, monkeypatch):
+        """issue #45: 默认不逐文件夹 STATUS 邮件数 (大邮箱分钟级)。"""
+        captured = {}
+
+        def _spy(cfg, with_counts=True):
+            captured["with_counts"] = with_counts
+            return _fake_folders()
+
+        monkeypatch.setattr("src.mail.backend.imap_client.list_folders", _spy)
+        result = _invoke(cli_runner, ["discover", "-o", "json"], seeded_db)
+        assert result.exit_code == 0, result.output
+        assert captured["with_counts"] is False
+
+    def test_discover_counts_flag_opts_in(self, cli_runner, davmail_env, seeded_db, monkeypatch):
+        """``--counts`` 显式 opt-in 取邮件数。"""
+        captured = {}
+
+        def _spy(cfg, with_counts=True):
+            captured["with_counts"] = with_counts
+            return _fake_folders()
+
+        monkeypatch.setattr("src.mail.backend.imap_client.list_folders", _spy)
+        result = _invoke(cli_runner, ["discover", "--counts", "-o", "json"], seeded_db)
+        assert result.exit_code == 0, result.output
+        assert captured["with_counts"] is True
+
+    def test_discover_no_counts_flag_still_accepted(self, cli_runner, davmail_env, seeded_db):
+        """``--no-counts`` 向后兼容旧用法仍可显式传, 不报错 (与新默认等效)。"""
+        result = _invoke(cli_runner, ["discover", "--no-counts", "-o", "json"], seeded_db)
+        assert result.exit_code == 0, result.output
+
 
 class TestEnableDisable:
     def test_enable_dry_run_no_write(self, cli_runner, davmail_env, seeded_db):

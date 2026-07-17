@@ -456,11 +456,13 @@ def _status_message_count(imap: imaplib.IMAP4, imap_name: str) -> Optional[int]:
     return None
 
 
-def list_folders(cfg: "Config", *, with_counts: bool = True, timeout: int = 30) -> list[FolderInfo]:
+def list_folders(cfg: "Config", *, with_counts: bool = False, timeout: int = 30) -> list[FolderInfo]:
     """IMAP LIST 全部文件夹 → list[FolderInfo] (含层级 + 可选邮件数)。
 
     供 CLI ``folder discover`` / serve-api ``GET /api/folder/discover`` 调用。
-    ``with_counts=False`` 时跳过逐文件夹 STATUS (快, 不含 message_count)。
+    默认 ``with_counts=False`` (跳过逐文件夹 STATUS): 大邮箱 (如 92k INBOX) 上
+    DavMail 单次 STATUS 可达分钟级, 逐文件夹累加会把 discovery 拖到 ~5min
+    (issue #45); 需要 message_count 时显式传 ``with_counts=True`` (opt-in)。
     """
     with imap_session(cfg, timeout=timeout) as imap:
         typ, data = imap.list("", "*")

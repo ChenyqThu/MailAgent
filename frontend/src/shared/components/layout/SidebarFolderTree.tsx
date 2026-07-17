@@ -217,11 +217,13 @@ export function SidebarFolderTree(): React.ReactElement | null {
   const whitelist = React.useMemo(() => new Set(whitelistData?.folders ?? []), [whitelistData])
   const hasWhitelist = whitelist.size > 0
 
-  // discover — 重 (IMAP LIST + STATUS), 仅在有白名单时拉, 长缓存。失败/门控静默
-  // (folder 名仍可从 whitelist 兜底, 但无 display_name/count → 退化用 imap_name)。
+  // discover — 仅在有白名单时拉, 长缓存。失败/门控静默 (folder 名仍可从 whitelist
+  // 兜底, 但无 display_name/count → 退化用 imap_name)。counts:false (issue #45) —
+  // 大邮箱逐文件夹 STATUS 分钟级; 树只需 display_name/层级, count 缺失 null-safe
+  // (count ?? 0 → badge 仅 >0 渲染)。与 FolderPicker 共用缓存, counts 语义保持一致。
   const { data: discoverData } = useQuery({
     queryKey: qk.folder.discover(),
-    queryFn: () => mailApi.folder.discover({ counts: true }),
+    queryFn: () => mailApi.folder.discover({ counts: false }),
     enabled: hasWhitelist,
     staleTime: 5 * 60_000,
     gcTime: 15 * 60_000,

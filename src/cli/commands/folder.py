@@ -67,13 +67,18 @@ def _write_whitelist(cli: "CliContext", names: list[str]) -> None:
 @app.command("discover")
 def folder_discover(
     ctx: typer.Context,
-    no_counts: bool = typer.Option(False, "--no-counts", help="跳过逐文件夹 STATUS 邮件数 (更快)"),
+    counts: bool = typer.Option(
+        False,
+        "--counts/--no-counts",
+        help="是否逐文件夹 STATUS 邮件数 (大邮箱慢, 默认关闭; --no-counts 仍可显式传, 兼容旧用法)",
+    ),
     output: Optional[str] = typer.Option(None, "-o", "--output"),
 ) -> None:
     """发现 Exchange 全部文件夹 (LIST → 层级 + special-use + 邮件数)。davmail-only, 只读无 auth.
 
     每项标 ``is_synced`` (是否在 SYNC_FOLDERS 白名单)。JSON 返回 ``folders`` 扁平列表
-    (含 parent/has_children 层级信息) + ``tree`` 嵌套树 + ``whitelist``。
+    (含 parent/has_children 层级信息) + ``tree`` 嵌套树 + ``whitelist``。默认不取
+    message_count (issue #45: 大邮箱逐文件夹 STATUS 分钟级); 加 ``--counts`` 显式 opt-in。
     """
     cli: "CliContext" = ctx.obj
     _apply_local_output(ctx, output)
@@ -81,7 +86,7 @@ def folder_discover(
     from src.mail.backend.imap_client import build_folder_tree, list_folders
 
     try:
-        folders = list_folders(cli.cli_config, with_counts=not no_counts)
+        folders = list_folders(cli.cli_config, with_counts=counts)
     except Exception as e:
         raise emit_cli_error(cli, CliError(f"folder discover failed: {e}"))
     whitelist = set(_current_whitelist(cli))

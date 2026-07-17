@@ -27,7 +27,9 @@ import type {
 // → daemonRequest 抛 ApiError{code} → envelopeFromCli 收成 {ok:false,code} 过 IPC →
 // ElectronApi.unwrap 重抛带 code → FolderPicker 据此切门控态。
 
-export function runFolderDiscover(counts = true): Promise<FolderDiscoverResult> {
+// counts 默认 false, 对齐 serve-api / imap_client 新默认 (issue #45: 大邮箱逐文件夹
+// STATUS 分钟级); 显式 counts:true 仍可 opt-in。
+export function runFolderDiscover(counts = false): Promise<FolderDiscoverResult> {
   return daemonRequest<FolderDiscoverResult>('GET', '/folder/discover', {
     query: { counts }
   })
@@ -86,7 +88,7 @@ export function registerFolderHandlers(): void {
   ipcMain.handle(
     'folder:discover',
     async (_evt, opts?: { counts?: boolean }): Promise<WriteEnvelope<FolderDiscoverResult>> =>
-      envelopeFromCli<FolderDiscoverResult>(runFolderDiscover(opts?.counts ?? true))
+      envelopeFromCli<FolderDiscoverResult>(runFolderDiscover(opts?.counts ?? false))
   )
   ipcMain.handle(
     'folder:getWhitelist',

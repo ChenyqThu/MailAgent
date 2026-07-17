@@ -517,12 +517,14 @@ export function FolderPicker(): React.ReactElement {
 
   // discover 走 React Query, 与 SidebarFolderTree 共用 ['folder','discover'] 缓存 (counts
   // 一致) → 重进设置页命中缓存零请求, 只在 staleTime(10min) 过期 / 手动刷新 / CRUD
-  // invalidate 时才重打 IMAP STATUS。env 门控时 enabled=false 不发请求 (gated 由渲染期
+  // invalidate 时才重打 IMAP LIST。env 门控时 enabled=false 不发请求 (gated 由渲染期
   // envGated 短路)。retry:false 让 E_INVALID_ARG 立即落到 error → 兜底门控。无
   // refetchInterval → 不会有意外的后台刷新 clobber 用户选中态。
+  // counts:false (issue #45) — 大邮箱逐文件夹 STATUS 分钟级会把 discovery 拖挂;
+  // 选择/展示不依赖精确计数, count 缺失时 UI 已 null-safe (badge/typeof 守卫)。
   const discoverQuery = useQuery({
     queryKey: qk.folder.discover(),
-    queryFn: () => mailApi.folder.discover({ counts: true }),
+    queryFn: () => mailApi.folder.discover({ counts: false }),
     enabled: !envGated,
     staleTime: 10 * 60_000,
     gcTime: 15 * 60_000,

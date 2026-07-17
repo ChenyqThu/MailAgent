@@ -1307,8 +1307,10 @@ export function StepFolders({ onNext, onBack, onSkip }: StepFoldersProps): React
         timer.current = null
       }
     }
+    // counts:false (issue #45) — 大邮箱逐文件夹 STATUS 分钟级, 带计数必超上面 8s
+    // 兜底把本步钉死在 error 态; 树选择不依赖计数, count 缺失渲染已 null-safe。
     void ipc
-      .discoverFolders(true)
+      .discoverFolders(false)
       .then((res) => {
         if (!alive.current) return
         setFolders(res.folders)

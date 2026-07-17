@@ -101,11 +101,15 @@ def _current_whitelist(cfg: "Config") -> list[str]:
 async def folder_discover(
     request: Request,
     cfg: "Config" = Depends(get_settings),
-    counts: bool = Query(True, description="是否逐文件夹 STATUS 邮件数 (慢, 可关)"),
+    counts: bool = Query(
+        False, description="是否逐文件夹 STATUS 邮件数 (大邮箱慢, 默认关闭, opt-in)"
+    ),
 ):
     """发现 Exchange 全部文件夹 (LIST → 层级树 + special-use + 邮件数)。davmail-only。
 
     data = {folders: [扁平含 is_synced/parent/has_children], tree: [嵌套], whitelist: [已同步 imap_name]}。
+    ``counts`` 默认 False (issue #45: 大邮箱逐文件夹 STATUS 分钟级); 传
+    ``?counts=true`` 显式 opt-in 取 message_count。
     """
     _require_davmail(cfg)
     from src.mail.backend.imap_client import build_folder_tree, list_folders
