@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Optional
 from loguru import logger
 
 from src.mail.backend.imap_client import imap_connect
+from src.mail.throttle_pause import PAUSE_KEY, is_uid_backfill_paused
 
 if TYPE_CHECKING:
     from src.config import Config
@@ -32,7 +33,8 @@ _LAST_INTERNAL_ID_KEY = "davmail_backfill_last_internal_id"
 
 # EWS 限流暂停 flag (davmail_watchdog 检测 throttle burst 时置 'true'/解除置 'false',
 # 见 davmail_watchdog.py) — backfill 是高频 searchMessages 源, 限流时必须真的停下来。
-_PAUSE_KEY = "davmail_uid_backfill_paused"
+# key 与判定逻辑单源自 src.mail.throttle_pause; _PAUSE_KEY 保留供既有测试导入。
+_PAUSE_KEY = PAUSE_KEY
 _PAUSE_RECHECK_SEC = 60.0
 
 # IMAP UID SEARCH HEADER 反查特别耗时, 单条 ~100-300ms, 限制并发避免压垮 DavMail.
@@ -96,17 +98,26 @@ class DavMailUidMapper:
         logger.info(f"[davmail-uid-mapper] start backfill, pending={pending}, resume_from={last_iid}")
         self.sync_store.set_state(_PROGRESS_KEY, f"running:pending={pending}")
 
+        paused_announced = False  # 状态跃迁记 warning, 挂起持续期间降 debug (不刷屏)
         while True:
-            # EWS 限流退避: watchdog 检测到 throttle burst 时置 _PAUSE_KEY='true' —
+            # EWS 限流退避: watchdog 检测到 throttle burst 时置 pause flag —
             # backfill 本就是高频 searchMessages 源, 限流期间挂起, 等配额恢复
-            # (watchdog 复位 flag) 再继续, 不白付请求加剧限流。
-            if await asyncio.to_thread(self.sync_store.get_state, _PAUSE_KEY) == "true":
-                logger.warning(
-                    "[davmail-uid-mapper] EWS throttling active — backfill 挂起 "
-                    f"{_PAUSE_RECHECK_SEC:.0f}s 后重查"
-                )
+            # (watchdog 复位 flag) 再继续, 不白付请求加剧限流。单一 helper 判定,
+            # 含 staleness 兜底 (watchdog 死掉留下的陈旧 flag 自动放行)。
+            if await asyncio.to_thread(is_uid_backfill_paused, self.sync_store):
+                if not paused_announced:
+                    logger.warning(
+                        "[davmail-uid-mapper] EWS throttling active — backfill 挂起, "
+                        f"每 {_PAUSE_RECHECK_SEC:.0f}s 重查"
+                    )
+                    paused_announced = True
+                else:
+                    logger.debug("[davmail-uid-mapper] 仍在限流暂停中, 继续等待配额恢复")
                 await asyncio.sleep(_PAUSE_RECHECK_SEC)
                 continue
+            if paused_announced:
+                logger.info("[davmail-uid-mapper] EWS 限流解除 — backfill 恢复")
+                paused_announced = False
 
             # 裸 sqlite SELECT LIMIT — 同上, 包 asyncio.to_thread 移出事件循环线程。
             batch = await asyncio.to_thread(self._fetch_batch_to_backfill, last_iid)

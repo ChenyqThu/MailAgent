@@ -580,15 +580,73 @@ async def test_ews_throttle_burst_pauses_uid_backfill(
     )
     await _patch_probe(wd, imap_ok=True, smtp_ok=True)
     await wd._tick()
-    # 应触发 throttle alert + 写 paused=true
+    # 应触发 throttle alert + 写 paused=true + fresh 时间戳 (消费侧 staleness 兜底用)
     throttle_calls = [c for c in alerter.calls if c[0] == "alert_davmail_ews_throttling"]
     assert len(throttle_calls) == 1
     assert sync_store.get_state("davmail_uid_backfill_paused") == "true"
+    paused_at = sync_store.get_state("davmail_uid_backfill_paused_at")
+    assert paused_at is not None and float(paused_at) > 0
 
-    # 清空 log 再 tick → 解除暂停
+    # 清空 log 再 tick → 解除暂停 + 清时间戳
     write_log("")
     await wd._tick()
     assert sync_store.get_state("davmail_uid_backfill_paused") == "false"
+    assert sync_store.get_state("davmail_uid_backfill_paused_at") == ""
+
+
+def test_init_reseeds_throttle_burst_from_persistent_flag(
+    sync_store: SyncStore, davmail_root: Path
+):
+    """🔴 blocker 修复: 持久 flag='true' → __init__ 回种内存态 True。
+
+    否则进程重启后若 throttle 已消退, set 分支 (要 in_burst) 与复位分支 (要内存 True)
+    都进不去 → 持久 flag 永久卡 'true' → 两个消费者 (uid-mapper / watcher) 永久停摆。
+    """
+    sync_store.set_state("davmail_uid_backfill_paused", "true")
+    wd = DavMailWatchdog(
+        sync_store=sync_store, alerter=None, davmail_root=davmail_root
+    )
+    assert wd._announced_throttle_burst is True
+
+
+def test_init_throttle_burst_defaults_false_without_flag(
+    sync_store: SyncStore, davmail_root: Path
+):
+    """flag 缺省 / 'false' → 回种 False (不误判为限流中)。"""
+    wd = DavMailWatchdog(
+        sync_store=sync_store, alerter=None, davmail_root=davmail_root
+    )
+    assert wd._announced_throttle_burst is False
+
+    sync_store.set_state("davmail_uid_backfill_paused", "false")
+    wd2 = DavMailWatchdog(
+        sync_store=sync_store, alerter=None, davmail_root=davmail_root
+    )
+    assert wd2._announced_throttle_burst is False
+
+
+async def test_reseeded_pause_self_heals_after_throttle_clears(
+    sync_store: SyncStore, davmail_root: Path, write_log
+):
+    """blocker 修复端到端: 上一进程置 flag='true' 后崩溃 → 本进程 __init__ 回种
+    memory True → throttle 已消退 (log 干净) 的第一轮 tick 走复位分支把持久 flag
+    写回 'false' → 消费者恢复。这是「自愈链」的完整证明。"""
+    sync_store.set_state("davmail_uid_backfill_paused", "true")
+    # 陈旧 log: throttle 早已消退, 本轮 throttle_count==0
+    write_log("2020-01-01 00:00:00,000 INFO nothing throttling here\n")
+
+    alerter = _FakeAlerter()
+    wd = DavMailWatchdog(
+        sync_store=sync_store, alerter=alerter, davmail_root=davmail_root  # type: ignore[arg-type]
+    )
+    assert wd._announced_throttle_burst is True  # 回种
+
+    await _patch_probe(wd, imap_ok=True, smtp_ok=True)
+    await wd._tick()
+
+    # 干净一轮 (throttle_count==0 且内存 True) → 复位分支触发 → 自愈
+    assert sync_store.get_state("davmail_uid_backfill_paused") == "false"
+    assert wd._announced_throttle_burst is False
 
 
 async def test_oauth_alert_dedupes_repeat_same_error(

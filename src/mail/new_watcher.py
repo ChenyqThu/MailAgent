@@ -49,6 +49,7 @@ from src.repository import (
 from src.mail.backend.base import MarkerUnavailableError
 from src.mail.backend.imap_client import parse_folder_csv_or_json
 from src.mail.backend.serial_executor import run_backend_io
+from src.mail.throttle_pause import is_uid_backfill_paused
 
 # 标准邮箱 (非自定义文件夹) —— L2/L3 gate 不影响这些; 自定义文件夹 = mailbox 不在此集合。
 # 注: "存档" **有意**不在此列 —— PRD §7 D7「存档/草稿箱并入白名单走主链路」, 存档作为可同步
@@ -486,7 +487,7 @@ class NewWatcher:
         # check_for_changes 的 STATUS、pending fetch、retry 都不发 IMAP, 最大化减压
         # 让 EWS 配额恢复; watchdog 检测到限流解除后复位 flag, 下一轮 poll 自然继续。
         # applescript 模式无 watchdog → flag 恒非 'true' → 行为不变。
-        if self.sync_store.get_state("davmail_uid_backfill_paused") == "true":
+        if is_uid_backfill_paused(self.sync_store):
             logger.warning("[watcher] EWS throttling active — 跳过本轮 poll (等配额恢复)")
             return
 

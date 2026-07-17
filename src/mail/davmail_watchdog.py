@@ -50,6 +50,7 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, Optional
 
 from loguru import logger
 
+from src.mail.throttle_pause import PAUSE_AT_KEY, PAUSE_KEY
 from src.notify import episode
 from src.notify.episode import AlertEpisodeTracker
 
@@ -149,7 +150,14 @@ class DavMailWatchdog:
         # 已告警的"门槛"标记，避免每轮重发（alerter 自己也有 cooldown 兜底）
         self._announced_process_down_imap = False
         self._announced_process_down_smtp = False
-        self._announced_throttle_burst = False
+        # blocker 修复 (pr-43 review): 从持久 flag 回种内存态。否则进程重启后若
+        # throttle 已消退, set 分支 (要 in_burst) 与复位分支 (要内存 True) 都进不去,
+        # 持久 flag 永久卡 'true' → 两个消费者 (uid-mapper backfill / watcher poll)
+        # 永久停摆, 需人工 set_state 解锁。回种后 throttle 消退的干净一轮走复位分支
+        # 把 flag 写回 'false' 自愈。
+        self._announced_throttle_burst = (
+            self.sync_store.get_state(PAUSE_KEY) == "true"
+        )
         self._announced_login_degraded = False
         # L2b: 自动重启风暴防护状态 (F4: 从 sync_state 回种, 跨 MailAgent 进程重启
         # 存活 —— 否则风暴停止后重启进程即清零内存计数, 声明的 24h max_per_day 上限被
@@ -687,7 +695,10 @@ class DavMailWatchdog:
         in_burst = throttle_count >= 3
         if in_burst and not self._announced_throttle_burst:
             await self.alerter.alert_davmail_ews_throttling(throttle_count)
-            self.sync_store.set_state("davmail_uid_backfill_paused", "true")
+            # PAUSE_AT_KEY = float epoch 字符串 (消费侧 staleness 兜底用; 统一 str
+            # 存 float, 避 ISO 秒截断误标)。写 flag 时一并写时间戳。
+            self.sync_store.set_state(PAUSE_KEY, "true")
+            self.sync_store.set_state(PAUSE_AT_KEY, str(time.time()))
             self._announced_throttle_burst = True
             logger.warning(
                 f"[davmail-watchdog] EWS throttle burst detected ({throttle_count} "
@@ -695,7 +706,8 @@ class DavMailWatchdog:
             )
         elif not in_burst and self._announced_throttle_burst and throttle_count == 0:
             # 完全干净一轮才解除，避免抖动
-            self.sync_store.set_state("davmail_uid_backfill_paused", "false")
+            self.sync_store.set_state(PAUSE_KEY, "false")
+            self.sync_store.set_state(PAUSE_AT_KEY, "")
             self._announced_throttle_burst = False
             logger.info(
                 "[davmail-watchdog] EWS throttle cleared — uid-mapper backfill resumed"
