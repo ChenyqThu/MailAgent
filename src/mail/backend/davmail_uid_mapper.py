@@ -30,6 +30,11 @@ if TYPE_CHECKING:
 _PROGRESS_KEY = "davmail_backfill_progress"
 _LAST_INTERNAL_ID_KEY = "davmail_backfill_last_internal_id"
 
+# EWS 限流暂停 flag (davmail_watchdog 检测 throttle burst 时置 'true'/解除置 'false',
+# 见 davmail_watchdog.py) — backfill 是高频 searchMessages 源, 限流时必须真的停下来。
+_PAUSE_KEY = "davmail_uid_backfill_paused"
+_PAUSE_RECHECK_SEC = 60.0
+
 # IMAP UID SEARCH HEADER 反查特别耗时, 单条 ~100-300ms, 限制并发避免压垮 DavMail.
 # Sprint 16 收尾: batch 50→20 + sleep_between=3s, 防 EWS searchMessages throttling.
 _DEFAULT_BATCH_SIZE = 20
@@ -92,6 +97,17 @@ class DavMailUidMapper:
         self.sync_store.set_state(_PROGRESS_KEY, f"running:pending={pending}")
 
         while True:
+            # EWS 限流退避: watchdog 检测到 throttle burst 时置 _PAUSE_KEY='true' —
+            # backfill 本就是高频 searchMessages 源, 限流期间挂起, 等配额恢复
+            # (watchdog 复位 flag) 再继续, 不白付请求加剧限流。
+            if await asyncio.to_thread(self.sync_store.get_state, _PAUSE_KEY) == "true":
+                logger.warning(
+                    "[davmail-uid-mapper] EWS throttling active — backfill 挂起 "
+                    f"{_PAUSE_RECHECK_SEC:.0f}s 后重查"
+                )
+                await asyncio.sleep(_PAUSE_RECHECK_SEC)
+                continue
+
             # 裸 sqlite SELECT LIMIT — 同上, 包 asyncio.to_thread 移出事件循环线程。
             batch = await asyncio.to_thread(self._fetch_batch_to_backfill, last_iid)
             if not batch:
