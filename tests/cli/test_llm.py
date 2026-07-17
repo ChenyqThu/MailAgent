@@ -234,7 +234,26 @@ class TestLLMRetryFailed:
 
 class TestLLMStats:
     def test_stats_empty(self, cli_runner, cli_env, seeded_db):
-        # seeded_db 默认没有 llm_processing 表
+        # v37 起 SyncStore._init_database 版本化建 llm_processing (首启缺表修复),
+        # seeded_db 恒有表 → 空表走 live_query 返回 total=0 (不再是 table_missing)
+        result = _invoke(cli_runner, "llm", "stats", "-o", "json",
+                         db_path=seeded_db)
+        assert result.exit_code == 0, result.output
+        payload = _last_json(result.output)
+        assert payload["data"]["total"] == 0
+        assert payload["data"]["by_status"] == {}
+        assert payload["data"]["_source"] == "live_query"
+
+    def test_stats_table_missing_fallback(self, cli_runner, cli_env, seeded_db):
+        # 防御分支覆盖: 未经 SyncStore 迁移的外部/旧库 (无 llm_processing 表) →
+        # stats 不崩, 走 table_missing 零值 fallback。v37 后正常路径建库恒有表,
+        # 这里显式 DROP 模拟缺表现场。
+        conn = sqlite3.connect(str(seeded_db))
+        try:
+            conn.execute("DROP TABLE llm_processing")
+            conn.commit()
+        finally:
+            conn.close()
         result = _invoke(cli_runner, "llm", "stats", "-o", "json",
                          db_path=seeded_db)
         assert result.exit_code == 0, result.output

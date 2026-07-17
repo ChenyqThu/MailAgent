@@ -59,6 +59,40 @@ SENT_MAILBOX_LABELS = frozenset({'发件箱', '已发送', '已发送邮件'})
 SENT_CANONICAL_LABEL = '发件箱'
 
 
+# ==================== llm_processing DDL 单源 (v37) ====================
+# 🔴 唯一权威 DDL —— 两个消费方共用, 改列/索引只动这里:
+#   ① SyncStore._init_database_impl (v37 起版本化建表, 首启即建 —— 主路径);
+#   ② src/llm_agent/store.py LLMProcessingStore._ensure_schema (幂等双保险,
+#      LLM Agent 启用时独立实例化仍自建表)。
+# import 方向必须是 llm_agent → mail (runner.py 已依赖 src.mail.*), 反向 import
+# 会触发 src/llm_agent/__init__.py 重依赖链 → 循环 import。
+LLM_PROCESSING_TABLE_DDL = """
+    CREATE TABLE IF NOT EXISTS llm_processing (
+        internal_id INTEGER PRIMARY KEY,
+        notion_page_id TEXT,
+        mailbox TEXT,
+        status TEXT,
+        retry_count INTEGER DEFAULT 0,
+        next_retry_at REAL,
+        last_error TEXT,
+        model TEXT,
+        input_tokens INTEGER,
+        output_tokens INTEGER,
+        cache_read_input_tokens INTEGER,
+        cache_creation_input_tokens INTEGER,
+        latency_ms INTEGER,
+        labels_json TEXT,
+        created_at REAL,
+        updated_at REAL
+    )
+"""
+LLM_PROCESSING_INDEX_DDLS = (
+    "CREATE INDEX IF NOT EXISTS idx_llm_status ON llm_processing(status)",
+    "CREATE INDEX IF NOT EXISTS idx_llm_retry "
+    "ON llm_processing(next_retry_at) WHERE status='failed'",
+)
+
+
 class UpdateAfterFetchResult(Enum):
     """``update_after_fetch`` 的结果三态（2026-07-14 幽灵行事故后引入）。
 
@@ -435,7 +469,19 @@ class SyncStore:
     #                In-Reply-To/References/thread_id, 修 Bug A 丢线程)。无历史回填: 存量
     #                草稿行 NULL = 修复前语义 (发送不带 threading), reconcile 只对新增行生效。
     #                回滚 (回退 v36): 列可留 (旧代码无害) 或手动 DROP; 必要时降 db_version。
-    DB_VERSION = 36  # v36: email_metadata draft linkage 3 列 (compose Bug A)
+    # v37 (首启缺表修复, 2026-07): llm_processing 纳入 SyncStore 版本化建表。此前该表
+    #                只由 LLMProcessingStore._ensure_schema() 惰性创建 (LLM_AGENT_ENABLED
+    #                默认 false → 普通用户永不实例化), 而前端 email:listEnriched 无条件
+    #                LEFT JOIN llm_processing → 全新库首启即 `no such table` 崩邮件列表。
+    #                v37 起表 + 两索引 (idx_llm_status / idx_llm_retry partial) 由
+    #                _init_database_impl 无条件 CREATE IF NOT EXISTS (新/旧库均生效,
+    #                幂等, 无数据回填); DDL 单源 = 模块级 LLM_PROCESSING_TABLE_DDL /
+    #                LLM_PROCESSING_INDEX_DDLS, LLMProcessingStore._ensure_schema 引用
+    #                同常量作幂等双保险。bump 版本号用于前端 backend_lifecycle.ts
+    #                (EXPECTED_DB_VERSION=37 + REQUIRED_TABLES 含 llm_processing) 就绪
+    #                门控可依赖「>=37 ⇒ 表已建」。
+    #                回滚 (回退 v37): 表可留 (旧代码无害); 必要时降 db_version。
+    DB_VERSION = 37  # v37: llm_processing 纳入版本化建表 (首启缺表修复)
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -1219,6 +1265,16 @@ class SyncStore:
             ON email_meeting(ical_uid)
         """)
 
+        # ==================== v37: llm_processing (LLM 分类处理记账) ====================
+        # 历史缺陷 (首启缺表事故): 该表原本只由 LLMProcessingStore._ensure_schema()
+        # 惰性创建 (LLM_AGENT_ENABLED=false 时永不实例化), 而前端 email:listEnriched
+        # 无条件 LEFT JOIN llm_processing → 全新 userData 首启邮件列表整页崩。
+        # v37 起纳入版本化建表 (新/旧库均 IF NOT EXISTS 幂等); DDL 单源 = 模块级
+        # LLM_PROCESSING_TABLE_DDL / LLM_PROCESSING_INDEX_DDLS (store.py 引用同常量)。
+        cursor.execute(LLM_PROCESSING_TABLE_DDL)
+        for _llm_ddl in LLM_PROCESSING_INDEX_DDLS:
+            cursor.execute(_llm_ddl)
+
         # ==================== v16: 附件文本索引 (PR-2b, Sprint 19 M2) ====================
         # 把 PDF / docx / pptx / xlsx 附件文本抽出 → FTS5 索引, 让 chat agent /
         # LLM tool 跨附件检索 ('合同条款里 redis timeout 提到过吗').
@@ -1978,6 +2034,12 @@ class SyncStore:
                 _migration_guard_columns(
                     cursor, "email_metadata", set(_draft_cols), "v36 migration", e,
                 )
+
+        # === v37: llm_processing 纳入版本化建表 (首启缺表修复) ===
+        # 表 + 两索引由上面的 v37 段无条件 CREATE ... IF NOT EXISTS 建 (新/旧库均
+        # 生效, 幂等), 无数据回填 → 无需 current_version gate (镜像 v22 marker-only
+        # + v34 建表模式)。bump 版本号 = 对外承诺「db_version>=37 ⇒ llm_processing
+        # 已建」, 供前端 backend_lifecycle.ts 就绪门控 + admin health REQUIRED_TABLES。
 
         # 更新数据库版本 —— E0-WP3: 只有**全部迁移成功**才会执行到这里。任何迁移块
         # 真失败都会 raise (见 _migration_guard_columns/_migration_guard_index),

@@ -47,6 +47,7 @@ REQUIRED_TABLES = (
     "v4_rollout_stats",
     "island_dispatch",  # v7: ping-island Sprint 2 派发审计
     "email_outbox",     # v10: SQLite SSoT inversion (Sprint 15)
+    "llm_processing",   # v37: 纳入版本化建表 (前端 listEnriched 无条件 LEFT JOIN)
 )
 
 # E1 (2026-07): davmail 上游 watch 静态提醒项 (docs/plans/architecture-review-2026-07/

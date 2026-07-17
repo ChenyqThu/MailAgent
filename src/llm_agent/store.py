@@ -119,36 +119,19 @@ class LLMProcessingStore:
             return cursor.rowcount
 
     def _ensure_schema(self) -> None:
+        # DDL 单源 = src/mail/sync_store.py 模块级常量 (v37 起 SyncStore
+        # _init_database_impl 版本化建表是主路径, 首启即建; 这里保留为幂等双保险 ——
+        # 独立实例化 / 旧库直连场景仍自建表)。函数级 import: 避免模块加载期拉起
+        # src.mail 依赖链 (llm_agent → mail 方向合法, 但延迟到用时更稳)。
+        from src.mail.sync_store import (
+            LLM_PROCESSING_INDEX_DDLS,
+            LLM_PROCESSING_TABLE_DDL,
+        )
+
         with self._conn() as c:
-            c.execute(
-                """
-                CREATE TABLE IF NOT EXISTS llm_processing (
-                    internal_id INTEGER PRIMARY KEY,
-                    notion_page_id TEXT,
-                    mailbox TEXT,
-                    status TEXT,
-                    retry_count INTEGER DEFAULT 0,
-                    next_retry_at REAL,
-                    last_error TEXT,
-                    model TEXT,
-                    input_tokens INTEGER,
-                    output_tokens INTEGER,
-                    cache_read_input_tokens INTEGER,
-                    cache_creation_input_tokens INTEGER,
-                    latency_ms INTEGER,
-                    labels_json TEXT,
-                    created_at REAL,
-                    updated_at REAL
-                )
-                """
-            )
-            c.execute(
-                "CREATE INDEX IF NOT EXISTS idx_llm_status ON llm_processing(status)"
-            )
-            c.execute(
-                "CREATE INDEX IF NOT EXISTS idx_llm_retry "
-                "ON llm_processing(next_retry_at) WHERE status='failed'"
-            )
+            c.execute(LLM_PROCESSING_TABLE_DDL)
+            for ddl in LLM_PROCESSING_INDEX_DDLS:
+                c.execute(ddl)
             c.commit()
 
     # ---- writers -----------------------------------------------------------

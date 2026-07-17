@@ -68,6 +68,7 @@ REQUIRED_TABLES = (
     "v4_rollout_stats",
     "island_dispatch",
     "email_outbox",
+    "llm_processing",  # v37: 纳入版本化建表 (前端 listEnriched 无条件 LEFT JOIN)
 )
 
 
