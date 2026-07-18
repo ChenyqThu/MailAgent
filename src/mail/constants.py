@@ -16,6 +16,8 @@ Usage:
 
 from typing import Dict, List, TypedDict
 
+from src.mail.mailbox_semantics import INBOX_LABEL, SENT_LABEL
+
 
 class MailboxConfig(TypedDict):
     """Type definition for mailbox configuration."""
@@ -25,15 +27,16 @@ class MailboxConfig(TypedDict):
 
 # Centralized mailbox configuration
 # Maps user-friendly Chinese names to AppleScript and SQLite identifiers
+# (keys = canonical labels, 单源 src/mail/mailbox_semantics.py — issue #42)
 MAILBOX_CONFIG: Dict[str, MailboxConfig] = {
-    "收件箱": {
+    INBOX_LABEL: {
         "applescript_name": "收件箱",
         "sqlite_patterns": [
             "INBOX",
             "E6%94%B6%E4%BB%B6%E7%AE%B1",  # URL-encoded "收件箱"
         ],
     },
-    "发件箱": {
+    SENT_LABEL: {
         "applescript_name": "已发送邮件",
         "sqlite_patterns": [
             "Sent",

@@ -13,6 +13,8 @@ from typing import Dict, Optional
 import aiohttp
 from loguru import logger
 
+from src.mail.mailbox_semantics import is_sent_mailbox
+
 
 class FeishuNotifier:
     """飞书应用机器人通知器"""
@@ -90,7 +92,7 @@ class FeishuNotifier:
 
         # 跳过发件箱邮件
         mailbox = page_info.get("mailbox", "")
-        if mailbox in ("发件箱", "已发送邮件", "已发送"):
+        if is_sent_mailbox(mailbox):
             return False
 
         date_str = page_info.get("date", "")

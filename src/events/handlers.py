@@ -18,6 +18,7 @@ from loguru import logger
 
 from src.llm_agent.preprocess_config import get_preprocess_config
 from src.mail.charset_utils import decode_mime_bytes
+from src.mail.mailbox_semantics import is_sent_mailbox
 from src.mail.sync_store import SyncStore
 from src.notify.feishu import FeishuNotifier
 from src.notion.sync import NotionSync
@@ -285,7 +286,7 @@ class EventHandlers:
         should_notify = (
             ai_priority in notify_priorities
             and ai_action in self.FLAG_ACTIONS
-            and mailbox != "发件箱"
+            and not is_sent_mailbox(mailbox)
         )
         if should_notify and self.feishu:
             # Notion webhook 只含变更字段，补全缺失的展示字段

@@ -42,6 +42,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, Optional, Tuple
 
+from src.mail.mailbox_semantics import INBOX_LABEL
 from src.notify import island_snooze
 from src.notify.island_action_whitelist import (
     SKIP_ACTION_ID,
@@ -238,7 +239,7 @@ async def _open_mail(internal_id: int, meta: Dict[str, str]) -> Tuple[bool, str]
     # fallback: 系统 Mail.app (osascript). H-12: 必须用
     # `first message of mailbox of account whose id is <int>` 语法
     account_name = meta.get("mailagent.accountName", "")
-    mailbox_name = meta.get("mailagent.mailboxName") or meta.get("mailagent.mailbox") or "收件箱"
+    mailbox_name = meta.get("mailagent.mailboxName") or meta.get("mailagent.mailbox") or INBOX_LABEL
     if not account_name:
         log.warning("[island-response] open_mail missing accountName; aborting")
         return False, "missing accountName"

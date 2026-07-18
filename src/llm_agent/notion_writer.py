@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional, Set
 
 from loguru import logger
 
+from src.mail.mailbox_semantics import is_sent_mailbox
 from src.notion.client import NotionClient
 
 from .digest_resolver import DailyDigestResolver
@@ -55,7 +56,7 @@ class AIFieldsWriter:
     def _processing_status(self, mailbox: str) -> str:
         return (
             PROCESSING_STATUS_COMPLETED
-            if mailbox == "发件箱"
+            if is_sent_mailbox(mailbox)
             else PROCESSING_STATUS_AI_REVIEWED
         )
 

@@ -20,6 +20,7 @@ BEIJING_TZ = timezone(timedelta(hours=8))
 
 from loguru import logger
 from src.config import config as settings
+from src.mail.mailbox_semantics import INBOX_LABEL, SENT_LABEL
 from src.models import Email
 from src.mail.backend.factory import create_backend
 from src.mail.sync_store import SyncStore
@@ -623,7 +624,7 @@ class InitialSync:
         # 2. 尝试从两个邮箱获取
         full_email = None
         found_mailbox = None
-        for mailbox in ['收件箱', '发件箱']:
+        for mailbox in [INBOX_LABEL, SENT_LABEL]:
             full_email = self.arm.fetch_email_by_message_id(thread_id, mailbox)
             if full_email:
                 found_mailbox = mailbox

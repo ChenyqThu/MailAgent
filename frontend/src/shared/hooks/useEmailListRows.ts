@@ -30,6 +30,7 @@ import { useTranslation } from 'react-i18next'
 import { useQuery, keepPreviousData } from '@tanstack/react-query'
 import type { ListImperativeAPI } from 'react-window'
 
+import { INBOX_LABEL, SENT_LABEL, mailboxForView } from '@shared/lib/mailboxSemantics'
 import { useActiveEmail } from '@shared/state/active-email'
 import { useMailbox } from '@shared/state/mailbox'
 import { useEmailFilter, type EmailCategory, type EmailView } from '@shared/state/email-filter'
@@ -63,9 +64,8 @@ import {
 // mailbox (= display_name), 跳过内建 view 语义。
 function listOptsForView(view: EmailView, limit: number, customMailbox: string | null): ListOpts {
   if (customMailbox) return { mailbox: customMailbox, limit }
-  if (view === 'inbox') return { mailbox: '收件箱', limit }
-  if (view === 'outbox') return { mailbox: '发件箱', limit }
-  if (view === 'drafts') return { mailbox: '草稿箱', limit }
+  const mailbox = mailboxForView(view)
+  if (mailbox) return { mailbox, limit }
   if (view === 'flagged') return { isFlagged: true, limit }
   return { limit }
 }
@@ -201,9 +201,9 @@ export function useEmailListRows(): UseEmailListRowsReturn {
   const crossMailbox = customMailbox
     ? null
     : view === 'inbox'
-      ? '发件箱'
+      ? SENT_LABEL
       : view === 'outbox'
-        ? '收件箱'
+        ? INBOX_LABEL
         : null
   const crossQ = useQuery({
     queryKey: qk.emails.cross(crossMailbox, fetchLimit),

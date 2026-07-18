@@ -51,14 +51,13 @@ from src.mail.backend.imap_client import parse_folder_csv_or_json
 from src.mail.backend.serial_executor import run_backend_io
 
 # 标准邮箱 (非自定义文件夹) —— L2/L3 gate 不影响这些; 自定义文件夹 = mailbox 不在此集合。
-# 注: "存档" **有意**不在此列 —— PRD §7 D7「存档/草稿箱并入白名单走主链路」, 存档作为可同步
-# 自定义文件夹, 享受 L3 默认静默 (归档邮件不该刷飞书, 这正是想要的)。
-_STANDARD_MAILBOXES = frozenset({"收件箱", "发件箱", "已发送", "已发送邮件", "草稿", "草稿箱"})
-
-
-def is_custom_folder_mailbox(mailbox: str) -> bool:
-    """mailbox 是自定义文件夹 (多文件夹同步接入的, 非收件箱/发件箱/草稿)。"""
-    return bool(mailbox) and mailbox not in _STANDARD_MAILBOXES
+# issue #42 C 案起单源迁至 src/mail/mailbox_semantics.py (STANDARD_MAILBOXES,
+# 「存档」有意不进的语义注释随迁); is_custom_folder_mailbox 在原处 re-export 保兼容。
+from src.mail.mailbox_semantics import (  # noqa: F401  (re-export)
+    is_custom_folder_mailbox,
+    is_drafts_mailbox,
+    is_sent_mailbox,
+)
 
 
 def should_skip_feishu_for_folder(mailbox: str, notify_enabled: frozenset) -> bool:
@@ -810,7 +809,7 @@ class NewWatcher:
             # LLM / 飞书 / KOS, 也不做日期过滤 (草稿无论多老都保留 — reconcile 全量
             # 对账要求本地数量与 Exchange Drafts 一致)。正文依赖 dual-write
             # (BODY_DUAL_WRITE_ENABLED, 默认开); 关闭时草稿详情无正文但列表/数量正常。
-            if mailbox in ("草稿箱", "草稿", "Drafts"):
+            if is_drafts_mailbox(mailbox):
                 draft_obj = await self._build_email_object(full_email, mailbox)
                 if not draft_obj:
                     logger.error(f"Failed to build Email object for draft: {internal_id}")
@@ -1353,7 +1352,7 @@ class NewWatcher:
                 return
             if action not in flag_actions:
                 return
-            if mailbox in ("发件箱", "已发送邮件", "已发送"):
+            if is_sent_mailbox(mailbox):
                 return
             # L3 降噪: 自定义文件夹默认不通知 (PRD §2.3); FOLDER_NOTIFY_ENABLED 内的才通知。
             # getattr 兜底: 最小 NewWatcher.__new__ 构造 (部分测试) 不走 __init__ 无此属性。
@@ -1603,7 +1602,7 @@ class NewWatcher:
 
                 # 草稿箱分支 (与 _sync_single_email_v3 的 2.5 一致): 仅落本地,
                 # 不进 Notion — retry 路径不能绕过草稿 gate。
-                if mailbox in ("草稿箱", "草稿", "Drafts"):
+                if is_drafts_mailbox(mailbox):
                     self._maybe_dual_write_body(
                         email_obj, internal_id, full_email.get("source")
                     )
