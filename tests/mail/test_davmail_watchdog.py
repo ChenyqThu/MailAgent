@@ -649,6 +649,89 @@ async def test_reseeded_pause_self_heals_after_throttle_clears(
     assert wd._announced_throttle_burst is False
 
 
+async def test_throttle_pause_heartbeat_keeps_pause_fresh_past_staleness(
+    sync_store: SyncStore, davmail_root: Path, monkeypatch
+):
+    """心跳: burst 持续超过 30min staleness 阈值, 消费侧仍判 paused。
+
+    PAUSE_AT_KEY = watchdog 存活心跳 (每轮 tick 刷新), 而非置位时刻 → 持续限流
+    >30min 不再被 staleness 误放行 (原盲区: backfill+poll 恢复发请求反而加剧 throttle)。
+    alerter=None (生产默认 ALERT_ENABLED=false) 下 pause 仍被管理 (独立于
+    _evaluate_alerts 的 alerter-None 早退)。
+    """
+    from src.mail.throttle_pause import (
+        PAUSE_AT_KEY,
+        PAUSE_KEY,
+        is_uid_backfill_paused,
+    )
+
+    clock = {"t": 1_000_000.0}
+    monkeypatch.setattr(time, "time", lambda: clock["t"])
+
+    wd = DavMailWatchdog(
+        sync_store=sync_store, alerter=None, davmail_root=davmail_root
+    )
+
+    # tick 1: 进入 burst → 置 flag + 心跳时间戳 (alerter=None 也照置)
+    await wd._update_throttle_pause(throttle_count=4)
+    assert sync_store.get_state(PAUSE_KEY) == "true"
+    assert float(sync_store.get_state(PAUSE_AT_KEY)) == 1_000_000.0
+    assert is_uid_backfill_paused(sync_store) is True
+
+    # 时间推进 45min (> 30min 默认上限), burst 仍持续 → 心跳刷新时间戳
+    clock["t"] += 2700.0
+    await wd._update_throttle_pause(throttle_count=4)
+    # 心跳把时间戳刷到当前 → age≈0 → 消费侧仍判 paused (无 30min 反噬)
+    assert float(sync_store.get_state(PAUSE_AT_KEY)) == 1_002_700.0
+    assert is_uid_backfill_paused(sync_store) is True
+
+    # 反证: 若时间戳停在 tick1 的旧值 (无心跳), 此刻 age=2700>1800 会被判超龄放行
+    sync_store.set_state(PAUSE_AT_KEY, "1000000.0")
+    assert is_uid_backfill_paused(sync_store) is False
+
+
+async def test_reseeded_pause_backfills_timestamp_while_in_burst(
+    sync_store: SyncStore, davmail_root: Path, write_log
+):
+    """旧版无时间戳 paused=true 重启且仍在 burst → __init__ 回种 announced=True,
+    下一轮 tick 心跳补写时间戳 → 消费侧从 (无时间戳被误放行) 恢复 paused。
+
+    走完整 _tick 且 alerter=None → 证明 pause 管理不被 _evaluate_alerts 的
+    alerter-None 早退挡住。"""
+    from src.mail.throttle_pause import (
+        PAUSE_AT_KEY,
+        PAUSE_KEY,
+        is_uid_backfill_paused,
+    )
+
+    # 上一进程留下无时间戳的 pause (老数据 / 崩溃前只写了 flag)
+    sync_store.set_state(PAUSE_KEY, "true")
+    assert is_uid_backfill_paused(sync_store) is False  # 无时间戳 → 此刻被放行
+
+    # 仍在真实 burst: fresh throttle log (>=3 事件)
+    now = time.time()
+    lines = [
+        f"{time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(now - off))},000 "
+        f"ERROR EWSThrottlingException"
+        for off in (200, 150, 100, 50)
+    ]
+    write_log("\n".join(lines))
+
+    wd = DavMailWatchdog(
+        sync_store=sync_store, alerter=None, davmail_root=davmail_root
+    )
+    assert wd._announced_throttle_burst is True  # 从持久 flag 回种
+
+    await _patch_probe(wd, imap_ok=True, smtp_ok=True)
+    await wd._tick()
+
+    # 心跳补写时间戳 → 消费侧恢复 paused (不再被 missing-ts 误放行)
+    paused_at = sync_store.get_state(PAUSE_AT_KEY)
+    assert paused_at is not None and float(paused_at) > 0
+    assert is_uid_backfill_paused(sync_store) is True
+    assert sync_store.get_state(PAUSE_KEY) == "true"
+
+
 async def test_oauth_alert_dedupes_repeat_same_error(
     sync_store: SyncStore, davmail_root: Path, write_log
 ):

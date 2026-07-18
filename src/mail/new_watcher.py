@@ -289,6 +289,9 @@ class NewWatcher:
         # 运行状态
         self._running = False
         self._healthy = True  # 服务健康状态
+        # EWS 限流暂停日志的跃迁标记: 进入暂停首轮 warning、持续期间 debug、恢复
+        # 首轮 info —— 否则暂停期间每轮 poll (默认 5s) 一条 warning, 30min ≈ 360 条。
+        self._throttle_pause_announced = False
         # task 06-10 (prd Fix 2d): fire-and-forget hook task (pp/llm/kos) 的强
         # 引用集合 — Python 3.11 asyncio loop 只弱引用 task, 无强引用的 pending
         # task 会被 GC 中途回收 (生产实证见 start() 里 _rollout_flush_task 注释)。
@@ -486,9 +489,19 @@ class NewWatcher:
         # check_for_changes 的 STATUS、pending fetch、retry 都不发 IMAP, 最大化减压
         # 让 EWS 配额恢复; watchdog 检测到限流解除后复位 flag, 下一轮 poll 自然继续。
         # applescript 模式无 watchdog → flag 恒非 'true' → 行为不变。
+        #
+        # 日志跃迁式 (跟 davmail_uid_mapper.run_backfill 的 paused_announced 同套路):
+        # 进入暂停首轮 warning、持续期间降 debug (不每 5s 刷屏)、恢复首轮 info。
         if is_uid_backfill_paused(self.sync_store):
-            logger.warning("[watcher] EWS throttling active — 跳过本轮 poll (等配额恢复)")
+            if not self._throttle_pause_announced:
+                logger.warning("[watcher] EWS throttling active — 跳过本轮 poll (等配额恢复)")
+                self._throttle_pause_announced = True
+            else:
+                logger.debug("[watcher] EWS throttling 仍在暂停中 — 跳过本轮 poll")
             return
+        if self._throttle_pause_announced:
+            logger.info("[watcher] EWS throttling 解除 — 恢复正常 poll")
+            self._throttle_pause_announced = False
 
         # 1. 雷达检测新邮件并直接获取元数据
         if self.backend.is_available():

@@ -47,6 +47,7 @@ def _watcher(tmp_path: Path, backend_result):
     w.sync_store = SyncStore(str(tmp_path / "t.db"))
     w.sync_store.set_last_max_row_id(100)
     w._stats = {"polls": 0, "new_emails_detected": 0}
+    w._throttle_pause_announced = False
     w.backend = _Backend(backend_result)
     # _poll_cycle 后续步骤全 stub (记录调用, 证明失败轮也正常走完);
     # _reconcile_drafts 用真方法 (backend 无 reconcile_drafts → noop)。

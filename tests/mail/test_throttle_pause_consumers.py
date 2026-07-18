@@ -171,6 +171,7 @@ def _make_watcher(pause_value, paused_at=None):
     w.backend = MagicMock()
     w.backend.is_available.side_effect = _Sentinel()
     w._stats = {"polls": 0}
+    w._throttle_pause_announced = False
     return w
 
 
@@ -206,3 +207,66 @@ async def test_poll_cycle_ignores_stale_pause():
         await w._poll_cycle()
 
     w.backend.is_available.assert_called_once()
+
+
+def _capture_logs():
+    """返回 (records, remove): loguru sink 捕获 (无 stdlib caplog 桥接)。"""
+    from loguru import logger
+
+    records: list = []
+    sink_id = logger.add(lambda m: records.append(m.record), level="DEBUG")
+    return records, lambda: logger.remove(sink_id)
+
+
+@pytest.mark.asyncio
+async def test_poll_cycle_pause_logs_warning_once_across_rounds():
+    """跃迁式日志: 连续两轮 paused → 仅首轮 warning, 后续降 debug (不每 5s 刷屏)。"""
+    w = _make_watcher("true", paused_at=time.time())
+    records, remove = _capture_logs()
+    try:
+        await w._poll_cycle()
+        await w._poll_cycle()
+    finally:
+        remove()
+
+    warns = [
+        r for r in records
+        if r["level"].name == "WARNING" and "EWS throttling active" in r["message"]
+    ]
+    debugs = [
+        r for r in records
+        if r["level"].name == "DEBUG" and "仍在暂停中" in r["message"]
+    ]
+    assert len(warns) == 1, f"应只首轮 warning, got {len(warns)}"
+    assert len(debugs) == 1, f"第二轮应降 debug, got {len(debugs)}"
+    # backend 两轮都零触碰 (整轮跳过)
+    w.backend.is_available.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_poll_cycle_pause_recovery_logs_info_once():
+    """恢复跃迁: paused 一轮后 flag 复位 → 恢复首轮发一次 info + 复位 announce 标记。"""
+    flags = {PAUSE_KEY: "true", PAUSE_AT_KEY: str(time.time())}
+    w = NewWatcher.__new__(NewWatcher)
+    w.sync_store = MagicMock()
+    w.sync_store.get_state.side_effect = lambda k: flags.get(k)
+    w.backend = MagicMock()
+    w.backend.is_available.side_effect = _Sentinel()
+    w._stats = {"polls": 0}
+    w._throttle_pause_announced = False
+
+    records, remove = _capture_logs()
+    try:
+        await w._poll_cycle()  # 首轮 paused → warning + return
+        flags[PAUSE_KEY] = "false"  # 模拟 watchdog 复位
+        with pytest.raises(_Sentinel):
+            await w._poll_cycle()  # 恢复轮 → info + 继续跑到 backend
+    finally:
+        remove()
+
+    infos = [
+        r for r in records
+        if r["level"].name == "INFO" and "EWS throttling 解除" in r["message"]
+    ]
+    assert len(infos) == 1
+    assert w._throttle_pause_announced is False

@@ -2,16 +2,26 @@
 
 davmail_watchdog 检测到 EWS throttle burst 时置 sync_state:
   - ``davmail_uid_backfill_paused``    = 'true' / 'false'
-  - ``davmail_uid_backfill_paused_at`` = 置 pause 的 float epoch (str), 清除时 ''
+  - ``davmail_uid_backfill_paused_at`` = watchdog **存活心跳** 时间戳 (float epoch
+    str, 清除时 ''); 见下方心跳语义。
 
 两个消费点 —— uid-mapper backfill 循环 + watcher poll 整轮 —— 统一调
 ``is_uid_backfill_paused()`` 判断是否挂起, 不许各写一份。
 
-🔴 staleness 兜底 (pr-43 review 强烈建议): pause 的业务语义是**分钟级临时态**。
-若 watchdog 彻底死掉 (进程崩 / 复位路径永不再跑), 持久 flag 会永久卡 'true' →
-两个消费者永久停摆 = 整个邮件同步静默停止。故消费侧对超龄 (默认 30min) 或无时间戳
-的 pause 一律忽略 (自愈优先, 因为真实限流早已过去; 下一次真限流 producer 会重写
-flag + fresh 时间戳, 不受影响)。
+🔴 staleness 兜底 + 心跳语义 (pr-43 review + follow-up): pause 的业务语义是
+**分钟级临时态**。``_paused_at`` 记的不是「进入 pause 的时刻」而是 **watchdog 每轮
+tick 刷新的存活心跳** —— burst 持续期间时间戳恒新鲜 (哪怕限流已超 30min), 只有
+watchdog 彻底死掉 (进程崩 / 复位路径永不再跑) 心跳才停更。故消费侧对超龄 (默认
+30min = 心跳停更足够久) 或无时间戳的 pause 一律忽略 (自愈优先: 只有 watchdog 死了
+才会超龄, 此时无从判活, 放行防整同步静默停摆; 下一次真限流 producer 会重写 flag +
+fresh 心跳, 不受影响)。
+
+⚠️ 唯一放行窗口: 旧版无时间戳的 paused=true 进程重启且仍在 burst → 到下一轮 watchdog
+tick 补写心跳前 (≤一个 tick 间隔), 消费侧会按无时间戳短暂放行一轮。可接受。
+
+⚠️ 心跳写入独立于 alerter: watchdog 的置位/心跳/复位在 ALERT_ENABLED=false (生产
+默认) 下仍会跑 (见 davmail_watchdog._update_throttle_pause 从 _tick 直调, 不经
+_evaluate_alerts 的 alerter-None 早退)。
 """
 
 from __future__ import annotations
@@ -42,9 +52,11 @@ def is_uid_backfill_paused(
     """限流 pause flag 是否生效 (带 staleness 兜底)。
 
     - flag != 'true' → False (未暂停)。
-    - flag == 'true' 但时间戳超龄 / 无时间戳 / 坏时间戳 → False + warning (节流)
-      (按陈旧 pause 处理, 自愈优先, 防 watchdog 死掉后整同步永久停摆)。
-    - flag == 'true' 且时间戳在有效期内 → True (真暂停)。
+    - flag == 'true' 但时间戳 (watchdog 存活心跳) 超龄 / 无时间戳 / 坏时间戳 → False
+      + warning (节流) —— 按陈旧 pause 处理, 自愈优先: 心跳停更 = watchdog 已死,
+      放行防整同步永久静默停摆。
+    - flag == 'true' 且心跳在有效期内 → True (真暂停; burst 持续期间 watchdog 每轮
+      tick 刷新心跳, 故长限流也恒新鲜, 不会被 30min 上限误放行)。
     """
     if sync_store.get_state(PAUSE_KEY) != "true":
         return False
