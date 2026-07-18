@@ -29,6 +29,7 @@ AI_CHAT_DB_PATH
 MAILAGENT_ENV_FILE
 MAILAGENT_CONFIG
 MAILAGENT_SKILLS_DIR
+MAILAGENT_RESOURCES_ROOT  # 打包态 Resources 根锚点覆盖（applescript_backend 定位 create_reply_draft.sh），ops 逃生口默认不设
 
 # --- C. dev / security gate（模块级读 + 安全旁路；收编会耦合 import 期 config 校验或
 #        改动鉴权/CLI 安全路径，最小 diff 原则下保持直读）-------------------------------
