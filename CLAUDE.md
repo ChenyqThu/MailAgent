@@ -220,6 +220,7 @@ mailagent email resync 53675 --dry-run -o json
 ## 开发指南
 
 - 改邮件解析：编辑 `src/mail/reader.py`，测 `python3 scripts/dev/test_mail_reader.py`
+- **mailbox 判定/查询单源**：一律走 `src/mail/mailbox_semantics.py`（前端镜像 `frontend/src/shared/lib/mailboxSemantics.ts`）的常量/判定集/SQL 辅助，**禁止**新增 mailbox 字面量枚举比较（`== "发件箱"` 类，漏一种写法即静默 bug —— issue #42 C 案收敛，2026-07-17）
 - 改会议检测：`src/mail/icalendar_parser.py` 或 `src/calendar_notion/description_parser.py`
 - 加新配置：① `src/config.py` 加 Field → ② `.env.example` 加示例 → ③ 必要时更新本文件「关键开关现状」表
 - **加新文档**（防再次乱套，完整规范见 [`docs/DOC-GUIDE.md`](./docs/DOC-GUIDE.md)）：先判类型 —— **常青参考**（描述系统"现在如何"、会反复读）放 `docs/reference/<子系统>/`，**且必须在上方「文档地图」加一行**（否则无人发现）；**过程产物**（handoff / complete / phaseN / prN / sprint / 验收 matrix / 交接 / dogfood）放 `.trellis/tasks/<task>/`，已成历史的归 `docs/archive/{年-月}/` —— **禁止堆回 `docs/` 顶层或 `docs/reference/`**。判据：*半年后还有人为"现在怎么回事"来读吗？* 是→reference，否→archive。
