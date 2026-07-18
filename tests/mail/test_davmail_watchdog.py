@@ -812,6 +812,52 @@ async def test_throttle_pause_written_before_alert_await(
     assert seen["ts"] and float(seen["ts"]) > 0, "pause 时间戳应在告警 await 前已落盘"
 
 
+async def test_tick_writes_pause_before_evaluate_alerts(
+    sync_store: SyncStore, davmail_root: Path, write_log
+):
+    """跨方法顺序锁 (test_throttle_pause_written_before_alert_await 只锁了
+    _update_throttle_pause 内部顺序, 锁不住 _tick 里两个方法调用本身的先后)。
+
+    走完整 _tick(), 把 wd._evaluate_alerts 换成 async spy: 断言它被调用时
+    sync_state 里 PAUSE_KEY/PAUSE_AT_KEY 已经落盘 (即 _update_throttle_pause
+    排在 _evaluate_alerts 之前), 且 spy 确实被调用过 (防 monkeypatch 失效
+    平凡绿)。
+    """
+    from src.mail.throttle_pause import PAUSE_AT_KEY, PAUSE_KEY
+
+    # 造一个真实 burst: fresh throttle log (>=3 事件, 抄
+    # test_reseeded_pause_backfills_timestamp_while_in_burst 的喂法)
+    now = time.time()
+    lines = [
+        f"{time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(now - off))},000 "
+        f"ERROR EWSThrottlingException"
+        for off in (200, 150, 100, 50)
+    ]
+    write_log("\n".join(lines))
+
+    wd = DavMailWatchdog(
+        sync_store=sync_store, alerter=None, davmail_root=davmail_root
+    )
+    await _patch_probe(wd, imap_ok=True, smtp_ok=True)
+
+    seen: dict = {}
+
+    async def fake_evaluate_alerts(**kwargs):
+        seen["flag"] = sync_store.get_state(PAUSE_KEY)
+        seen["ts"] = sync_store.get_state(PAUSE_AT_KEY)
+        seen["called"] = True
+
+    wd._evaluate_alerts = fake_evaluate_alerts  # type: ignore[method-assign]
+
+    await wd._tick()
+
+    assert seen.get("called") is True, "spy 未被调用, 断言无效 (monkeypatch 失效)"
+    assert seen["flag"] == "true", "pause flag 应在 _evaluate_alerts 调用前已落盘"
+    assert seen["ts"] and float(seen["ts"]) > 0, (
+        "pause 时间戳应在 _evaluate_alerts 调用前已落盘"
+    )
+
+
 async def test_oauth_alert_dedupes_repeat_same_error(
     sync_store: SyncStore, davmail_root: Path, write_log
 ):
