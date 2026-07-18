@@ -732,6 +732,86 @@ async def test_reseeded_pause_backfills_timestamp_while_in_burst(
     assert sync_store.get_state(PAUSE_KEY) == "true"
 
 
+async def test_throttle_pause_heartbeat_survives_hysteresis_band(
+    sync_store: SyncStore, davmail_root: Path, monkeypatch
+):
+    """滞回区间 (throttle_count 徘徊 1-2) 心跳不停更 (codex R2 finding-1)。
+
+    进入门槛 (>=3) 高于解除门槛 (==0): 4 → 2 徘徊时 in_burst=False 但 announced
+    pause 仍在。若只有 in_burst 刷心跳, 这段心跳停更 → 30min 后消费侧误判 stale
+    放行 (watchdog 明明活着且认为 paused)。断言滞回区间仍刷心跳、消费侧仍 paused;
+    再 2 → 0 走复位分支正常解除。
+    """
+    from src.mail.throttle_pause import (
+        PAUSE_AT_KEY,
+        PAUSE_KEY,
+        is_uid_backfill_paused,
+    )
+
+    clock = {"t": 1_000_000.0}
+    monkeypatch.setattr(time, "time", lambda: clock["t"])
+
+    wd = DavMailWatchdog(
+        sync_store=sync_store, alerter=None, davmail_root=davmail_root
+    )
+
+    # tick 1: 进入 burst (4) → 置 flag + 心跳时间戳
+    await wd._update_throttle_pause(throttle_count=4)
+    assert wd._announced_throttle_burst is True
+    assert sync_store.get_state(PAUSE_KEY) == "true"
+    assert float(sync_store.get_state(PAUSE_AT_KEY)) == 1_000_000.0
+
+    # tick 2: 时间推进 45min (>30min 上限), throttle 落回 2 (滞回区间, in_burst=False)
+    clock["t"] += 2700.0
+    await wd._update_throttle_pause(throttle_count=2)
+    # 心跳仍刷新 → age≈0 → 消费侧仍 paused (未被 staleness 误放行)
+    assert sync_store.get_state(PAUSE_KEY) == "true"
+    assert float(sync_store.get_state(PAUSE_AT_KEY)) == 1_002_700.0
+    assert is_uid_backfill_paused(sync_store) is True
+    assert wd._announced_throttle_burst is True  # 未复位 (仅完全干净一轮才解除)
+
+    # 反证: 若滞回区间不刷心跳, 时间戳会停在 tick1 → age=2700>1800 → 被误放行
+    sync_store.set_state(PAUSE_AT_KEY, "1000000.0")
+    assert is_uid_backfill_paused(sync_store) is False
+
+    # tick 3: 完全干净一轮 (0) → 复位分支解除 pause
+    await wd._update_throttle_pause(throttle_count=0)
+    assert sync_store.get_state(PAUSE_KEY) == "false"
+    assert sync_store.get_state(PAUSE_AT_KEY) == ""
+    assert wd._announced_throttle_burst is False
+
+
+async def test_throttle_pause_written_before_alert_await(
+    sync_store: SyncStore, davmail_root: Path
+):
+    """保护面先落盘再告警 (codex R2 finding-2): alerter 被 await 时 flag 已 'true'。
+
+    告警走网络 I/O (webhook 单次超时 10s), 若排在 pause 写入前, 网络阻塞会推迟
+    backend 保护落盘。断言 alert_davmail_ews_throttling 被 await 的瞬间 sync_state
+    里 PAUSE_KEY / PAUSE_AT_KEY 均已置位。
+    """
+    from src.mail.throttle_pause import PAUSE_AT_KEY, PAUSE_KEY
+
+    seen: dict = {}
+
+    class _OrderCapturingAlerter:
+        async def alert_davmail_ews_throttling(self, count):
+            seen["flag"] = sync_store.get_state(PAUSE_KEY)
+            seen["ts"] = sync_store.get_state(PAUSE_AT_KEY)
+            return True
+
+    wd = DavMailWatchdog(
+        sync_store=sync_store,
+        alerter=_OrderCapturingAlerter(),  # type: ignore[arg-type]
+        davmail_root=davmail_root,
+    )
+
+    await wd._update_throttle_pause(throttle_count=4)
+
+    assert seen["flag"] == "true", "pause flag 应在告警 await 前已落盘"
+    assert seen["ts"] and float(seen["ts"]) > 0, "pause 时间戳应在告警 await 前已落盘"
+
+
 async def test_oauth_alert_dedupes_repeat_same_error(
     sync_store: SyncStore, davmail_root: Path, write_log
 ):

@@ -299,6 +299,16 @@ class DavMailWatchdog:
             **self._counters,
         }
 
+        # ── EWS throttle → uid-backfill pause flag (置位/心跳/复位) ──
+        # 🔴 独立于 _evaluate_alerts 调用: 后者在 alerter is None (ALERT_ENABLED=false,
+        # 生产默认!) 时**早退**, 若把 pause 管理留在里面, 默认配置下整个退避机制形同
+        # 虚设 (PR #43 白装)。pause 是 backend 保护, 不该依赖告警是否开启。
+        # 🔴 且排在 _evaluate_alerts **之前** (finding-2): 后者的告警走网络 I/O
+        # (webhook 单次超时 10s), 保护面 pause 落盘不能被其它告警的网络阻塞推迟。两者
+        # 操作互不相交的状态 (pause 只碰 _announced_throttle_burst + PAUSE_* sync_state;
+        # _prev 在 _tick 末尾统一写, 两个调用都读上一轮的 _prev), 换序安全。
+        await self._update_throttle_pause(throttle_count)
+
         # ── 告警跃迁 ──────────────────────────────────────────────────
         await self._evaluate_alerts(
             imap_ok=imap_ok,
@@ -307,12 +317,6 @@ class DavMailWatchdog:
             token_age_days=token_age_days,
             oauth_error=oauth_error,
         )
-
-        # ── EWS throttle → uid-backfill pause flag (置位/心跳/复位) ──
-        # 🔴 独立于 _evaluate_alerts 调用: 后者在 alerter is None (ALERT_ENABLED=false,
-        # 生产默认!) 时**早退**, 若把 pause 管理留在里面, 默认配置下整个退避机制形同
-        # 虚设 (PR #43 白装)。pause 是 backend 保护, 不该依赖告警是否开启。
-        await self._update_throttle_pause(throttle_count)
 
         # ── L2b: token 劣化自动恢复 (degraded 告警之后跑, 保证告警先出) ──
         await self._maybe_auto_restart(now)
@@ -699,36 +703,48 @@ class DavMailWatchdog:
         """EWS throttle burst → uid-backfill pause flag 的置位/心跳/复位。
 
         🔴 时间戳心跳语义 (pr-43 follow-up review): PAUSE_AT_KEY 记的是 **watchdog
-        存活心跳** 而非「进入 pause 的时刻」。in_burst 持续期间**每轮 tick 都刷新**
-        时间戳:
-          - watchdog 活着 + burst 持续 → 心跳恒新鲜 → 消费侧 pause 恒生效 (不再有
+        存活心跳** 而非「进入 pause 的时刻」。announced pause 持续期间**每轮 tick 都
+        刷新**时间戳 (含滞回区间, 见下):
+          - watchdog 活着 + pause 持续 → 心跳恒新鲜 → 消费侧 pause 恒生效 (不再有
             30min 上限反噬正常场景: 持续限流 >30min 时消费侧仍老实挂起, 不会误放行
             backfill + poll 反而加剧 throttle)。
           - watchdog 死掉 → 心跳停更 → 消费侧超龄 (默认 30min) 后自愈放行 (原 staleness
             设计目标保留, 防整同步永久静默停摆)。
           - 旧版无时间戳 paused=true 重启且仍在 burst → __init__ 已回种
-            _announced_throttle_burst=True, 这一轮 in_burst 分支补写时间戳 (间隙 =
-            一个 watchdog tick 间隔, 期间消费侧按无时间戳短暂放行一轮, 可接受)。
+            _announced_throttle_burst=True, 这一轮补写时间戳 (间隙 = 一个 watchdog
+            tick 间隔, 期间消费侧按无时间戳短暂放行一轮, 可接受)。
 
-        alert 只在**首次进入** burst 发一次 (announce-once, 且 alerter 可能未配置);
-        复位需完全干净一轮 (throttle_count==0) 避免抖动。
+        🔴 滞回区间也刷心跳 (finding-1): 进入门槛 (>=3) 高于解除门槛 (==0), throttle
+        长期徘徊 1-2 时 in_burst=False 但 announced pause 仍在——若只有 in_burst 刷心跳,
+        这段心跳停更, 30min 后消费侧误判 stale 放行 (watchdog 明明活着且认为 paused)。
+        故心跳条件放宽为「announced pause 且本轮仍有 throttle 事件 (>0)」, 只有完全
+        干净一轮 (==0) 才复位——保留「完全干净一轮才解除」的滞回语义。
+
+        🔴 保护面先落盘, 告警后发 (finding-2): 首次进入 burst 时先写 PAUSE_KEY/
+        PAUSE_AT_KEY 再 await alert——告警走网络 I/O 可能超时/阻塞, 不能推迟 pause
+        保护落盘。alert 只在**首次进入** burst 发一次 (announce-once, 且 alerter
+        可能未配置); 复位需完全干净一轮 (throttle_count==0) 避免抖动。
         """
         in_burst = throttle_count >= 3
-        if in_burst:
-            if not self._announced_throttle_burst:
-                # 首次进入 burst: 告警一次 (alerter 可能未配置, guard 之) + announce
-                if self.alerter is not None:
-                    await self.alerter.alert_davmail_ews_throttling(throttle_count)
+        # 滞回: 只要仍处 announced pause 且本轮还有 throttle 事件 (含刚进入 burst 这轮)
+        # 就 hold —— 覆盖 1-2 徘徊的滞回区间, 否则心跳停更被消费侧误判 stale (finding-1)。
+        hold_pause = in_burst or (self._announced_throttle_burst and throttle_count > 0)
+        if hold_pause:
+            # 心跳: 每轮刷新时间戳 — 消费侧 staleness 兜底靠它判 watchdog 是否还活着。
+            # 统一 str 存 float (避 ISO 秒截断误标)。🔴 保护面先落盘再告警 (finding-2):
+            # 下方 await alert 走网络 I/O 可能阻塞, 不能推迟 pause 写入。
+            self.sync_store.set_state(PAUSE_KEY, "true")
+            self.sync_store.set_state(PAUSE_AT_KEY, str(time.time()))
+            if in_burst and not self._announced_throttle_burst:
+                # 首次进入 burst: announce (announce-once) + 告警一次 (alerter 可能未配置)
                 self._announced_throttle_burst = True
                 logger.warning(
                     f"[davmail-watchdog] EWS throttle burst detected "
                     f"({throttle_count} events / 5min) — uid-mapper backfill "
                     f"auto-paused"
                 )
-            # 心跳: 每轮 (含刚进入这轮) 刷新时间戳 — 消费侧 staleness 兜底靠它判 watchdog
-            # 是否还活着。统一 str 存 float (避 ISO 秒截断误标)。
-            self.sync_store.set_state(PAUSE_KEY, "true")
-            self.sync_store.set_state(PAUSE_AT_KEY, str(time.time()))
+                if self.alerter is not None:
+                    await self.alerter.alert_davmail_ews_throttling(throttle_count)
         elif self._announced_throttle_burst and throttle_count == 0:
             # 完全干净一轮才解除，避免抖动
             self.sync_store.set_state(PAUSE_KEY, "false")

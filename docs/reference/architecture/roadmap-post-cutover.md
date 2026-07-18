@@ -245,6 +245,15 @@ cutover 时发现的死锁场景: davmail logs 出 `EWSThrottlingException: The 
 - 匹配 `EWSThrottlingException` → 累计 5min 内 ≥3 次 → 飞书 warning + 自动暂停 uid-mapper backfill (写 `sync_state['davmail_uid_backfill_paused']=true`)
 - throttling 自然解除 (10-30min) 后恢复
 
+> **✅ 已完整落地（2026-07-17，PR #43 + follow-up）**：flag 接上两个消费者——uid-mapper
+> backfill 批循环挂起（60s 重查）+ watcher `_poll_cycle` 整轮跳过。语义单源
+> `src/mail/throttle_pause.py::is_uid_backfill_paused()`：`PAUSE_AT_KEY` 是 **watchdog
+> 存活心跳**（in_burst 每轮 tick 刷新），watchdog 活着 pause 无时限；心跳停更 30min
+> 后消费侧自愈放行（防 watchdog 死掉 → 整同步永久停摆）。watchdog `__init__` 从持久
+> flag 回种内存态（跨进程重启自愈复位）。pause 置位/复位在 `_update_throttle_pause()`
+> 由 `_tick` 直调，**不依赖 ALERT_ENABLED**（原挂 `_evaluate_alerts` 内、告警关闭时
+> 整个退避形同虚设，已修）。applescript 模式 flag 恒非 'true'，行为不变。
+
 #### 4.5.4 uid-mapper 跑完后效果验证 + 落地报告 (低优, 可观测)
 
 cutover 后 uid-mapper 限流模式 (batch 20 + sleep 3s) 预计 ~22min 跑完剩余 ~2664 封. 跑完后应该:
