@@ -27,6 +27,7 @@ from typing import Any, Dict, Optional, Tuple
 from loguru import logger
 
 from src.llm_agent.preprocess_config import get_preprocess_config
+from src.mail.mailbox_semantics import is_sent_mailbox
 from src.mail.sync_store import SyncStore
 from src.mail.sqlite_radar import SQLiteRadar
 from src.notion.sync import NotionSync
@@ -334,9 +335,9 @@ class NotionToMailSync:
         ai_action = page.get("ai_action", "")
         ai_priority = page.get("ai_priority", "")
 
-        # 发件箱不通知
+        # 发件箱不通知 (issue #42: 宽集判定, 与 feishu/new_watcher 口径对齐)
         mailbox = page.get("mailbox", "")
-        if mailbox == "发件箱":
+        if is_sent_mailbox(mailbox):
             return False
 
         # 重要/紧急 且 需要行动

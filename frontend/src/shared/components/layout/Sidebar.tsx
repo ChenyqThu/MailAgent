@@ -41,6 +41,12 @@ import {
 import { HoverTip } from '@shared/components/ui/HoverTip'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { usePollingFallback } from '@shared/hooks/usePollingFallback'
+import {
+  DRAFTS_LABEL,
+  INBOX_LABEL,
+  isDraftsMailbox,
+  mailboxForView
+} from '@shared/lib/mailboxSemantics'
 import { useEmailFilter, type EmailView } from '@shared/state/email-filter'
 import { useMailbox } from '@shared/state/mailbox'
 import { useNavCollapsed } from '@shared/state/nav-shell'
@@ -275,14 +281,14 @@ export function Sidebar(): React.ReactElement {
   const account = deriveAccount(accountEmail)
 
   // Aggregate counts for virtual rows (flagged / all-mail).
-  const inboxRow = mailboxes.find((m) => m.mailbox === '收件箱')
+  const inboxRow = mailboxes.find((m) => m.mailbox === INBOX_LABEL)
   const inboxUnread = inboxRow?.unread ?? 0
   // 草稿箱 = davmail Drafts 对账同步进 email_metadata 的行 (mailbox='草稿箱')。
   // 数量语义是"草稿总数"而非未读 (草稿是自己写的)。
-  const draftsTotal = mailboxes.find((m) => m.mailbox === '草稿箱')?.total ?? 0
+  const draftsTotal = mailboxes.find((m) => m.mailbox === DRAFTS_LABEL)?.total ?? 0
   // 「所有邮件」/「已标旗」badge 排除草稿 — 列表查询 (buildListWhere 未指定
   // mailbox 时排草稿) 与 badge 计数必须同径, 否则数字与列表行数对不上。
-  const nonDraft = mailboxes.filter((m) => !['草稿箱', '草稿', 'Drafts'].includes(m.mailbox))
+  const nonDraft = mailboxes.filter((m) => !isDraftsMailbox(m.mailbox))
   const allTotal = nonDraft.reduce((sum, mb) => sum + mb.total, 0)
   const flaggedTotal = nonDraft.reduce((sum, mb) => sum + (mb.flagged ?? 0), 0)
 
@@ -310,9 +316,8 @@ export function Sidebar(): React.ReactElement {
     // Keep useMailbox.active in lockstep for the StatusBar mailbox segment.
     // inbox/outbox map cleanly to concrete Mail.app mailboxes; the virtual
     // flagged/all views use a descriptive label so StatusBar reads sensibly.
-    if (next === 'inbox') setActiveMailbox('收件箱')
-    else if (next === 'outbox') setActiveMailbox('发件箱')
-    else if (next === 'drafts') setActiveMailbox('草稿箱')
+    const nextMailbox = mailboxForView(next)
+    if (nextMailbox) setActiveMailbox(nextMailbox)
     // flagged + all leave activeMailbox alone — they are cross-mailbox views.
     void navigate({ to: '/', search: { view: next } })
   }

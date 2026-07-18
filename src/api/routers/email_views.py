@@ -41,11 +41,16 @@ from fastapi import APIRouter, Body, Depends, Query, Request
 from src.api.app import APIError, success_envelope
 from src.api.auth import verify_cf_access
 from src.api.deps import get_repository
+from src.mail.mailbox_semantics import DRAFT_LABEL_VARIANTS, sql_not_in_or_null
 
 if TYPE_CHECKING:
     from src.repository import EmailRepository
 
 router = APIRouter(prefix="/api/email", tags=["email-enriched"])
+
+# 草稿排除谓词 (单源 mailbox_semantics; 前端 main handlers/email.ts 同款镜像)。
+_DRAFTS_EXCLUDE_SQL = sql_not_in_or_null("mailbox", DRAFT_LABEL_VARIANTS)
+_DRAFTS_EXCLUDE_SQL_M = sql_not_in_or_null("m.mailbox", DRAFT_LABEL_VARIANTS)
 
 # C10: batch 端点 (threads / ai-fields / list-enriched internalIds) 从请求体/
 # query 构 ``IN (...)`` SQL。无界列表会撑爆 SQLite 变量上限 (SQLITE_MAX_VARIABLE_NUMBER,
@@ -255,7 +260,7 @@ def _build_enriched_where(opts: dict[str, Any]) -> tuple[list[str], list[Any]]:
     else:
         # 未指定 mailbox (= 「所有邮件」/ 跨邮箱视图) 排除草稿: 未发出的内容不混入
         # 邮件流 (用户验收)。要草稿就显式 mailbox='草稿箱' (草稿箱视图)。
-        clauses.append("(m.mailbox IS NULL OR m.mailbox NOT IN ('草稿箱', '草稿', 'Drafts'))")
+        clauses.append(_DRAFTS_EXCLUDE_SQL_M)
     if opts.get("status"):
         clauses.append("m.sync_status = ?")
         params.append(opts["status"])
@@ -575,7 +580,7 @@ async def list_by_thread(
         SELECT {_list_item_meta_cols(schema["meta_cols"])}
           FROM email_metadata
          WHERE thread_id = ?
-           AND (mailbox IS NULL OR mailbox NOT IN ('草稿箱', '草稿', 'Drafts'))
+           AND {_DRAFTS_EXCLUDE_SQL}
          ORDER BY date_received ASC NULLS LAST, internal_id ASC
     """
     conn = repo._connect()
@@ -635,7 +640,7 @@ async def list_by_threads(
         SELECT {_list_item_meta_cols(schema["meta_cols"])}
           FROM email_metadata
          WHERE thread_id IN ({placeholders})
-           AND (mailbox IS NULL OR mailbox NOT IN ('草稿箱', '草稿', 'Drafts'))
+           AND {_DRAFTS_EXCLUDE_SQL}
          ORDER BY thread_id ASC, date_received ASC NULLS LAST, internal_id ASC
     """
     conn = repo._connect()

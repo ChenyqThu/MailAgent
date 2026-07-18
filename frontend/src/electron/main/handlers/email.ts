@@ -20,6 +20,7 @@ import {
   parseLabels
 } from '@shared/lib/ai_mapping'
 import type { AIFields, EmailMeta, EnrichedEmailMeta, MailboxSummary } from '@shared/api/types'
+import { DRAFTS_EXCLUDE_SQL } from '@shared/lib/mailboxSemantics'
 import type {
   EmailGet_EmailRecord,
   AttachmentList_AttachmentItem,
@@ -212,11 +213,8 @@ function shapeFullRecord(
 
 // ---- DAO --------------------------------------------------------------------
 
-// 草稿 mailbox 值（落库统一 '草稿箱'；'草稿'/'Drafts' 是 _STANDARD_MAILBOXES
-// 的历史别名，保险一并排除）。线程兄弟查询 + 未指定 mailbox 的列表都用它。
-// ⚠️ IS NULL 豁免必须带上：SQL 三值逻辑里 `NULL NOT IN (...)` 不成立，少了它
-// 历史 mailbox=NULL 行会从所有跨邮箱读面静默消失（codex review MEDIUM）。
-const DRAFTS_EXCLUDE_SQL = "(mailbox IS NULL OR mailbox NOT IN ('草稿箱', '草稿', 'Drafts'))"
+// 草稿排除谓词 —— issue #42 起单源 @shared/lib/mailboxSemantics（IS NULL 豁免
+// 语义注释随迁）。线程兄弟查询 + 未指定 mailbox 的列表都用它。
 
 interface WhereBuild {
   sql: string

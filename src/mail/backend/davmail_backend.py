@@ -41,6 +41,15 @@ from src.mail.backend.imap_client import (
     quote_mailbox,
 )
 from src.mail.backend.imap_utf7 import decode_imap_utf7, encode_imap_utf7
+from src.mail.mailbox_semantics import (
+    DRAFTS_LABEL,
+    INBOX_LABEL,
+    SENT_LABEL,
+    SENT_LABEL_VARIANTS,
+    is_drafts_mailbox,
+    is_sent_mailbox,
+    sql_in_predicate,
+)
 from src.mail.backend.types import (
     BackendOrigin,
     DraftAppendResult,
@@ -319,7 +328,7 @@ class DavMailBackend(IMailBackend):
             encode_imap_utf7(_sent_cfg) if _sent_cfg else None
         )
         _mbs = [m.strip() for m in (getattr(cfg, "sync_mailboxes", "") or "").split(",")]
-        self._sync_sent: bool = any(m in ("发件箱", "已发送", "已发送邮件") for m in _mbs)
+        self._sync_sent: bool = any(is_sent_mailbox(m) for m in _mbs)
         self.inbox_uidvalidity: Optional[int] = None
         # 多文件夹同步白名单 (SYNC_FOLDERS, IMAP 原始名 modified-UTF7)。空=零激活=与现状逐字节一致。
         # 排除空项 + INBOX (主路径单独管) + 去重保序; Sent 由 _sync_sent 单独管，避免双拉。
@@ -1183,9 +1192,9 @@ class DavMailBackend(IMailBackend):
         故 probe/映射两分支提前 return, 不经过下面的 encode。纯 ASCII 自定义名 encode 是
         恒等 (仅转义 ``&``), 故对 ``Notion``/``Jira`` 等也安全。
         """
-        if mailbox in ("发件箱", "已发送", "已发送邮件") and self.sent_folder:
+        if is_sent_mailbox(mailbox) and self.sent_folder:
             return self.sent_folder
-        if mailbox in ("草稿箱", "草稿", "Drafts") and self.drafts_folder:
+        if is_drafts_mailbox(mailbox) and self.drafts_folder:
             return self.drafts_folder
         mapped = _mailbox_to_imap(mailbox)
         # fallthrough (未命中映射 → 原样返回显示名) 才 encode; 命中映射的标准 IMAP 名
@@ -1292,7 +1301,7 @@ class DavMailBackend(IMailBackend):
                 # --- INBOX (主路径, since_row_id = INBOX uidnext marker) ---
                 out.extend(
                     self._fetch_new_in_folder(
-                        imap, "INBOX", "收件箱",
+                        imap, "INBOX", INBOX_LABEL,
                         ("UID", f"{int(since_row_id) + 1}:*"),
                         track_inbox_uidvalidity=True,
                     )
@@ -1303,7 +1312,7 @@ class DavMailBackend(IMailBackend):
                     try:
                         out.extend(
                             self._fetch_new_in_folder(
-                                imap, self.sent_folder, "发件箱",
+                                imap, self.sent_folder, SENT_LABEL,
                                 self._sent_search_criteria(),
                                 track_inbox_uidvalidity=False,
                             )
@@ -1463,7 +1472,7 @@ class DavMailBackend(IMailBackend):
 
     # ---- 草稿箱同步 (DRAFTS_SYNC_ENABLED): 全量对账, 非增量 ----
 
-    DRAFTS_MAILBOX_LABEL = "草稿箱"
+    DRAFTS_MAILBOX_LABEL = DRAFTS_LABEL
     _DRAFTS_UIDNEXT_KEY = "drafts_uidnext"
 
     def reconcile_drafts(self) -> tuple[list[dict], list[int]]:
@@ -1771,18 +1780,23 @@ class DavMailBackend(IMailBackend):
         合法当前邮件 uid 必 < uidnext, 钳制永不误排)。
         """
         try:
+            # issue #42 §3.1: 游标按 SENT_MAILBOX_LABELS 全集算 (含变体), 单 label
+            # 硬编码在变体行存在时会把 MAX 算漏 → 增量游标恒低 → 反复全量重拉
+            # (fork 生产实证)。owner 库零变体行时与 mailbox='发件箱' 逐字节等价。
+            sent_pred, sent_params = sql_in_predicate("mailbox", SENT_LABEL_VARIANTS)
             conn = sqlite3.connect(str(self.sync_store.db_path), timeout=10.0)
             try:
                 if below is not None and below > 0:
                     row = conn.execute(
-                        "SELECT MAX(imap_uid) FROM email_metadata "
-                        "WHERE mailbox = '发件箱' AND imap_uid IS NOT NULL AND imap_uid < ?",
-                        (int(below),),
+                        f"SELECT MAX(imap_uid) FROM email_metadata "
+                        f"WHERE {sent_pred} AND imap_uid IS NOT NULL AND imap_uid < ?",
+                        (*sent_params, int(below)),
                     ).fetchone()
                 else:
                     row = conn.execute(
-                        "SELECT MAX(imap_uid) FROM email_metadata "
-                        "WHERE mailbox = '发件箱' AND imap_uid IS NOT NULL"
+                        f"SELECT MAX(imap_uid) FROM email_metadata "
+                        f"WHERE {sent_pred} AND imap_uid IS NOT NULL",
+                        sent_params,
                     ).fetchone()
                 return int(row[0]) if row and row[0] is not None else 0
             finally:

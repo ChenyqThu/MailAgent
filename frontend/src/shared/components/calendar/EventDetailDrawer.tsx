@@ -52,6 +52,7 @@ import type {
   RsvpResponse
 } from '@shared/api/types'
 import { cn } from '@shared/lib/cn'
+import { viewForMailbox } from '@shared/lib/mailboxSemantics'
 import { Drawer } from '@shared/components/ui/drawer'
 import { qk } from '@shared/lib/queryKeys'
 import { pad } from './lib/format'
@@ -235,14 +236,7 @@ export function EventDetailDrawer({ occurrence, onClose, onReopen }: Props): Rea
   // mailbox 让目标行真的会出现在列表, 再 setActive(navTarget) —— navTarget 豁免
   // EmailList active-reset 并触发滚动定位 (useEmailListRows 滚动 effect).
   const openSourceEmailInInbox = (src: EventSourceEmail): void => {
-    const view: EmailView =
-      src.mailbox === '收件箱'
-        ? 'inbox'
-        : src.mailbox === '发件箱'
-          ? 'outbox'
-          : src.mailbox === '草稿箱'
-            ? 'drafts'
-            : 'all'
+    const view: EmailView = viewForMailbox(src.mailbox)
     if (src.mailbox) setActiveMailbox(src.mailbox)
     setEmailView(view)
     setActiveEmail(src.internal_id, { navTarget: true })

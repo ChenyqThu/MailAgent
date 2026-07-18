@@ -3,6 +3,8 @@ from datetime import datetime
 from typing import List, Optional
 from enum import Enum
 
+from src.mail.mailbox_semantics import INBOX_LABEL
+
 @dataclass
 class Attachment:
     """附件数据模型"""
@@ -33,7 +35,7 @@ class Email:
     has_attachments: bool = False
     attachments: List[Attachment] = field(default_factory=list)
     thread_id: Optional[str] = None  # 线程标识（从 References/In-Reply-To 提取）
-    mailbox: str = "收件箱"  # 邮箱类型: 收件箱 / 发件箱
+    mailbox: str = INBOX_LABEL  # 邮箱类型: 收件箱 / 发件箱
     internal_id: Optional[int] = None  # v3: AppleScript id = SQLite ROWID
     # v9 (2026-05-19): 邮件原生重要性 — Importance: High / X-Priority: 1 / 2
     # 或 X-MSMail-Priority: High → True；其余 → False。供前端 ❗ 角标使用。

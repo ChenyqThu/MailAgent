@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional
 from loguru import logger
 
 from src.config import config as cfg
+from src.mail.mailbox_semantics import is_sent_mailbox
 from src.repository import EmailRepository
 
 from .client import LLMClient, LLMResult
@@ -226,7 +227,7 @@ class LLMProcessor:
         # Final hard constraints — stable per-mailbox. Only `Current mailbox`
         # differs across requests and that naturally yields two independent
         # cache keys (one per mailbox), which is what we want.
-        if mailbox == "发件箱":
+        if is_sent_mailbox(mailbox):
             legal = "、".join(ACTION_TYPE_SENT)
         else:
             legal = "、".join(ACTION_TYPE_INBOX)

@@ -8,6 +8,9 @@ from __future__ import annotations
 
 from typing import List
 
+# issue #42: sent 判定统一走宽集 (含 '已发送邮件' 等变体), 与通知面口径对齐。
+from src.mail.mailbox_semantics import is_sent_mailbox
+
 # ---- Enums (exact match to Notion email DB schema) -------------------------
 
 CATEGORY_ENUM: List[str] = [
@@ -293,7 +296,7 @@ EMAIL_TOOL_SCHEMA = {
 
 def is_valid_action_type(action_type: str, mailbox: str) -> bool:
     """Check action_type matches the given mailbox (post-validation)."""
-    if mailbox == "发件箱":
+    if is_sent_mailbox(mailbox):
         return action_type in ACTION_TYPE_SENT
     return action_type in ACTION_TYPE_INBOX
 
@@ -304,6 +307,6 @@ def is_valid_recommended_action_id(action_id: str, mailbox: str) -> bool:
     Schema enum covers union (INBOX ∪ SENT)；用 post-validation 收紧到 mailbox-specific
     子集。空 mailbox → 按收件箱处理（与 ``is_valid_action_type`` 一致）。
     """
-    if mailbox == "发件箱":
+    if is_sent_mailbox(mailbox):
         return action_id in RECOMMENDED_ACTION_ID_SENT
     return action_id in RECOMMENDED_ACTION_ID_INBOX

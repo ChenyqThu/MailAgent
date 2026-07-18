@@ -12,6 +12,13 @@ from datetime import date, datetime, time, timedelta, timezone
 import re
 from typing import Any, Literal, Optional
 
+from src.mail.mailbox_semantics import (
+    ARCHIVE_LABEL,
+    DRAFTS_LABEL,
+    INBOX_LABEL,
+    SENT_LABEL,
+)
+
 
 @dataclass(frozen=True)
 class TextTerm:
@@ -107,10 +114,10 @@ _FTS_RECIPIENT_COLUMN_ALIASES: dict[str, Literal["to_addr", "cc_addr", "sender_n
 }
 
 _MAILBOX_ALIASES: dict[str, str] = {
-    "inbox": "收件箱",
-    "sent": "发件箱",
-    "archive": "存档",
-    "drafts": "草稿箱",
+    "inbox": INBOX_LABEL,
+    "sent": SENT_LABEL,
+    "archive": ARCHIVE_LABEL,
+    "drafts": DRAFTS_LABEL,
 }
 
 _IS_FILTERS: dict[str, FilterPredicate] = {

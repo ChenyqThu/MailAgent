@@ -23,6 +23,7 @@ import { ShimmerText } from '@shared/components/ShimmerText'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { formatDate, formatRelativeTime } from '@shared/format'
 import { parseSender } from '@shared/lib/mail_parse'
+import { isDraftsMailbox } from '@shared/lib/mailboxSemantics'
 import { asWriteError } from '@shared/lib/ipcErrors'
 import { qk } from '@shared/lib/queryKeys'
 import { mapLanguage } from '@shared/lib/ai_mapping'
@@ -782,7 +783,7 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
   // 草稿点开即编辑 — 草稿不走只读详情 + 收件箱工具栏, 直接进可编辑 compose
   // (From 只读 / To·主题·正文可编辑, 顶部 发送/放弃[删除草稿])。所有 hook 已在上方
   // 执行, 此处条件 return 合法。key 让切换不同草稿时重挂 (fresh editor + 重新回填)。
-  if (['草稿箱', '草稿', 'Drafts'].includes(email.mailbox ?? '')) {
+  if (isDraftsMailbox(email.mailbox)) {
     return (
       <ComposePanelInner
         key={`draft-${email.internal_id}`}
@@ -1169,7 +1170,7 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
           {/* AI Fields — 草稿不渲染: 未发出的邮件不会被 AI 处理 (gate 在
               watcher 草稿分支), `ai` 对存在的行恒非 null (LEFT JOIN 投影),
               不 gate 会渲染一张全空卡 (用户验收)。 */}
-          {ai && !['草稿箱', '草稿', 'Drafts'].includes(email.mailbox ?? '') && (
+          {ai && !isDraftsMailbox(email.mailbox) && (
             <div className="mt-6">
               <AIFieldsBlock fields={ai} internalId={email.internal_id} />
             </div>

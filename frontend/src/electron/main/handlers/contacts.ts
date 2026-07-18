@@ -3,6 +3,7 @@ import { ipcMain } from 'electron'
 
 import { getDb } from '../db'
 import type { ContactSuggestion } from '@shared/api/types'
+import { isSentMailbox } from '@shared/lib/mailboxSemantics'
 
 interface ContactSuggestOpts {
   q?: string
@@ -146,7 +147,7 @@ export function aggregateContactSuggestions(db: Database): ContactSuggestion[] {
       row.date_received
     )
 
-    const recipientScore = row.mailbox === '发件箱' ? 3 : 1
+    const recipientScore = isSentMailbox(row.mailbox) ? 3 : 1
     for (const entry of parseAddressList(row.to_addr)) {
       upsertContact(contacts, entry, recipientScore, row.date_received)
     }

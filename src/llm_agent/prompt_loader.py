@@ -15,6 +15,7 @@ from typing import Dict
 from loguru import logger
 
 from src.config import config as cfg
+from src.mail.mailbox_semantics import is_sent_mailbox
 
 
 @dataclass
@@ -31,7 +32,7 @@ class PromptLoader:
     def get_for_mailbox(self, mailbox: str) -> str:
         path = (
             cfg.llm_sent_prompt_path
-            if mailbox == "发件箱"
+            if is_sent_mailbox(mailbox)
             else cfg.llm_inbox_prompt_path
         )
         return self._load(path)

@@ -21,6 +21,7 @@ from loguru import logger
 
 from src.mail.backend.base import MarkerUnavailableError
 from src.mail.constants import get_sqlite_patterns
+from src.mail.mailbox_semantics import INBOX_LABEL, SENT_LABEL
 
 
 class SQLiteRadar:
@@ -617,7 +618,7 @@ class SQLiteRadar:
             邮箱名称 (收件箱/发件箱/...)
         """
         if not url:
-            return "收件箱"  # 默认
+            return INBOX_LABEL  # 默认
 
         try:
             from urllib.parse import unquote
@@ -625,15 +626,15 @@ class SQLiteRadar:
             # URL 解码
             decoded = unquote(url)
 
-            # 常见邮箱名称映射
+            # 常见邮箱名称映射 (归一目标 = canonical 写入常量, issue #42)
             mailbox_patterns = {
-                "收件箱": "收件箱",
-                "INBOX": "收件箱",
-                "发件箱": "发件箱",
-                "已发送邮件": "发件箱",
-                "Sent": "发件箱",
-                "Sent Messages": "发件箱",
-                "已发送": "发件箱",
+                "收件箱": INBOX_LABEL,
+                "INBOX": INBOX_LABEL,
+                "发件箱": SENT_LABEL,
+                "已发送邮件": SENT_LABEL,
+                "Sent": SENT_LABEL,
+                "Sent Messages": SENT_LABEL,
+                "已发送": SENT_LABEL,
             }
 
             for pattern, mailbox_name in mailbox_patterns.items():
@@ -645,8 +646,8 @@ class SQLiteRadar:
             if parts:
                 return parts[-1]
 
-            return "收件箱"
+            return INBOX_LABEL
 
         except Exception as e:
             logger.warning(f"Failed to parse mailbox URL: {e}")
-            return "收件箱"
+            return INBOX_LABEL

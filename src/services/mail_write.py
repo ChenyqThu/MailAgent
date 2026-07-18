@@ -30,7 +30,13 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from loguru import logger
 
-from src.mail.sync_store import DRAFT_MAILBOX_LABELS
+from src.mail.mailbox_semantics import (
+    ARCHIVE_LABEL,
+    DRAFT_MAILBOX_LABELS,
+    is_drafts_mailbox,
+    is_inbox_mailbox,
+    is_sent_mailbox,
+)
 from src.services.errors import (
     ServiceError,
     ServiceInvalidArgError,
@@ -50,7 +56,7 @@ if TYPE_CHECKING:
 _OUTBOX_SOURCE = "cli"
 
 # 归档目标 mailbox (IMAP MOVE INBOX→Archive 后 SQLite/Notion 的 Mailbox 标签)。
-_ARCHIVE_MAILBOX = "存档"
+_ARCHIVE_MAILBOX = ARCHIVE_LABEL
 
 # move_to_folder 拒绝的目标 (移到回收站/垃圾邮件 = 变相删除, 不该走 move)。
 _TRASH_LIKE_IMAP = {"TRASH", "JUNK", "DELETED ITEMS", "DELETED MESSAGES"}
@@ -350,9 +356,10 @@ def _sanitize_draft_linkage(
 
 
 def _is_draft_mailbox_row(row: dict) -> bool:
-    """行是否草稿箱行 — mailbox 口径单源 ``DRAFT_MAILBOX_LABELS`` (='草稿箱')。
+    """行是否草稿箱行 — mailbox 口径单源 ``DRAFT_MAILBOX_LABELS``
+    (mailbox_semantics; issue #42 起含 '草稿'/'Drafts' 历史变体)。
 
-    与两处落库值一致: mirror (``_mirror_draft_locally`` 直写 '草稿箱') + reconcile
+    覆盖两处落库值: mirror (``_mirror_draft_locally`` 直写 '草稿箱') + reconcile
     (davmail_backend ``DRAFTS_MAILBOX_LABEL`` = '草稿箱')。source_draft_id 绑定校验
     (codex 批次2 finding 5) 与懒自愈 gate 共用本判定。
     """
@@ -986,11 +993,11 @@ class MailWriteService:
 
         # ⚠️ 不在这里提前取 self._ctx.backend —— 它 lazy 创建真 davmail backend (连 IMAP)。
         # 收件箱/自定义文件夹的解析不需要 backend; 仅 发件箱/草稿 需探测到的 folder 名。
-        if not mailbox or mailbox in ("收件箱", "INBOX"):
+        if not mailbox or is_inbox_mailbox(mailbox):
             return "INBOX"
-        if mailbox in ("发件箱", "已发送", "已发送邮件"):
+        if is_sent_mailbox(mailbox):
             return getattr(self._ctx.backend, "sent_folder", None) or "Sent"
-        if mailbox in ("草稿", "草稿箱", "Drafts"):
+        if is_drafts_mailbox(mailbox):
             return getattr(self._ctx.backend, "drafts_folder", None) or "Drafts"
         if mailbox == _ARCHIVE_MAILBOX:
             return self._folder_imap_reader().resolve_imap_folder("archive") or "Archive"
@@ -1427,7 +1434,7 @@ class MailWriteService:
             from src.llm_agent.schema import ACTION_TYPE_INBOX, ACTION_TYPE_SENT
 
             allowed = (
-                ACTION_TYPE_SENT if (meta.mailbox or "") == "发件箱" else ACTION_TYPE_INBOX
+                ACTION_TYPE_SENT if is_sent_mailbox(meta.mailbox) else ACTION_TYPE_INBOX
             )
             raise ServiceInvalidArgError(
                 f"invalid action {action!r} for mailbox {meta.mailbox!r}; "
@@ -2048,7 +2055,7 @@ class MailWriteService:
             return DeleteDraftResult(
                 internal_id=internal_id, imap_uid=0, local_deleted=False
             )
-        if (meta.get("mailbox") or "") not in ("草稿箱", "草稿", "Drafts"):
+        if not is_drafts_mailbox(meta.get("mailbox")):
             raise ServiceInvalidArgError(
                 f"邮件 {internal_id} 不是草稿 (mailbox={meta.get('mailbox')!r}); "
                 "删除草稿仅适用于草稿箱"

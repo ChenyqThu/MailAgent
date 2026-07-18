@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 
 from src.models import Email, Attachment
 from src.converter.office_converter import convert_office_attachment, is_convertible
+from src.mail.mailbox_semantics import is_sent_mailbox
 from src.notion._common import BEIJING_TZ, CreateEmailFromSqliteResult
 
 
@@ -953,7 +954,7 @@ class PageOps:
                 children.insert(0, warning_block)
 
             # 10. 设置邮件 icon（收件箱 📧，发件箱 📤）
-            email_icon = {"type": "emoji", "emoji": "📤"} if email.mailbox == "发件箱" else {"type": "emoji", "emoji": "📧"}
+            email_icon = {"type": "emoji", "emoji": "📤"} if is_sent_mailbox(email.mailbox) else {"type": "emoji", "emoji": "📧"}
 
             # 11. 创建 Page（使用提取的方法处理分批）
             page = await self._create_page_with_blocks(properties, children, email_icon)
@@ -1101,7 +1102,7 @@ class PageOps:
             # 5. 创建 Page
             email_icon = (
                 {"type": "emoji", "emoji": "📤"}
-                if email.mailbox == "发件箱"
+                if is_sent_mailbox(email.mailbox)
                 else {"type": "emoji", "emoji": "📧"}
             )
             page = await self._create_page_with_blocks(properties, children, email_icon)

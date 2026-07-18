@@ -51,12 +51,14 @@ from loguru import logger
 
 
 # Draft→Sent 提升判定用的 mailbox label 集合（见 _save_email_v3 cross-backend merge）。
-# 草稿箱 = reconcile_drafts 实际删除的唯一 label（davmail DRAFTS_MAILBOX_LABEL）。
-# 发件箱 = davmail Sent 的规范 label（_IMAP_TO_MAILBOX_LABEL["Sent Items"]）；
-# 已发送/已发送邮件 是 sync_mailboxes 配置变体，一并纳入防漏（避免 Sent 副本漏提升）。
-DRAFT_MAILBOX_LABELS = frozenset({'草稿箱'})
-SENT_MAILBOX_LABELS = frozenset({'发件箱', '已发送', '已发送邮件'})
-SENT_CANONICAL_LABEL = '发件箱'
+# issue #42 C 案起单源迁至 src/mail/mailbox_semantics.py，此处 re-export 保兼容
+# （历史 import 点：services/mail_write.py / new_watcher.py 等）。
+from src.mail.mailbox_semantics import (  # noqa: F401  (re-export)
+    DRAFT_MAILBOX_LABELS,
+    SENT_MAILBOX_LABELS,
+    SENT_CANONICAL_LABEL,
+    is_sent_mailbox,
+)
 
 
 # ==================== llm_processing DDL 单源 (v37) ====================
@@ -2863,7 +2865,7 @@ class SyncStore:
                 if current_retry >= max_retries:
                     # 发件箱 fetch_failed 用尽：邮件已被 Mail.app 移走/索引失效，
                     # 业务上发件箱漏一封不致命，降级为 skipped，避免污染死信告警
-                    if status == 'fetch_failed' and mailbox == '发件箱':
+                    if status == 'fetch_failed' and is_sent_mailbox(mailbox):
                         cursor.execute("""
                             UPDATE email_metadata
                             SET sync_status = 'skipped',

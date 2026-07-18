@@ -73,7 +73,8 @@ import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 import { useFocusTrap } from '@shared/hooks/useFocusTrap'
 import { useMailbox } from '@shared/state/mailbox'
 import { useActiveEmail } from '@shared/state/active-email'
-import { useEmailFilter, type EmailView } from '@shared/state/email-filter'
+import { viewForMailbox } from '@shared/lib/mailboxSemantics'
+import { useEmailFilter } from '@shared/state/email-filter'
 import { openChatModal } from '@shared/state/ai-chat-panel'
 import { runGatewaySearchAgent } from '@shared/assistant/searchAgentClient'
 import { closeCommandPalette, useCommandPalette } from '@shared/state/command-palette'
@@ -227,20 +228,11 @@ export function CommandPalette(): React.ReactElement | null {
   const addSaved = useSearchHistory((s) => s.addSaved)
   const removeSaved = useSearchHistory((s) => s.removeSaved)
 
-  // Pick the EmailList view that will surface a hit's mailbox so the
-  // row is actually visible after we navigate('/'). '收件箱' / '发件箱'
-  // have first-class views; anything else falls back to 'all' which
-  // spans every mailbox.
-  const viewForMailbox = useCallback((mailbox: string | null | undefined): EmailView => {
-    if (mailbox === '收件箱') return 'inbox'
-    if (mailbox === '发件箱') return 'outbox'
-    if (mailbox === '草稿箱') return 'drafts'
-    return 'all'
-  }, [])
-
   // Open a search hit (shared by EMAIL FTS hits + AI agentic hits): sync the
   // EmailList view + mailbox so the row is actually surfaced, mark it as a nav
   // target so EmailList's active-reset exempts it, then navigate('/').
+  // viewForMailbox: 单源 @shared/lib/mailboxSemantics (issue #42) — 收件箱/
+  // 发件箱/草稿箱有 first-class view, 其余 fallback 'all' 跨邮箱视图。
   const activateHit = useCallback(
     (hit: SearchHit): void => {
       const targetView = viewForMailbox(hit.mailbox)
@@ -250,7 +242,7 @@ export function CommandPalette(): React.ReactElement | null {
       setActiveEmail(hit.internal_id, { navTarget: true })
       void navigate({ to: '/', search: { view: targetView } })
     },
-    [viewForMailbox, setView, setActiveMailbox, setActiveEmail, navigate]
+    [setView, setActiveMailbox, setActiveEmail, navigate]
   )
 
   const [query, setQuery] = useState('')

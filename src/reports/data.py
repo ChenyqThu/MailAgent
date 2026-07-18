@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional
 from loguru import logger
 
 from src.llm_agent.schema import PRIORITY_ENUM
+from src.mail.mailbox_semantics import DRAFT_LABEL_VARIANTS, SENT_LABEL_VARIANTS
 from src.notify.island_dispatch import ACTION_NEEDS_FLAG, URGENT_PRIORITY_LABELS
 from src.repository.email_repository import EmailRepository
 
@@ -26,10 +27,11 @@ _FYI_ACTION_TYPES = {"仅供参考", "已完结"}
 _FYI_CATEGORIES = {"🔔 系统通知"}
 
 # 发件箱（用户自己发的）—— 从报告**条目**里排除（不是待办），但用来推「已回复」。
-_SENT_MAILBOXES = ("发件箱", "已发送邮件", "Sent", "Sent Messages", "Sent Items")
+# issue #42 C 案起单源 mailbox_semantics（宽集，多收录 '已发送' 变体）。
+_SENT_MAILBOXES = SENT_LABEL_VARIANTS
 
 # 草稿不进报告：未发出的内容既不是"收到"也不是"已发出"，铺进日/周/月报是噪音。
-_DRAFT_MAILBOXES = ("草稿箱", "草稿", "Drafts")
+_DRAFT_MAILBOXES = DRAFT_LABEL_VARIANTS
 
 # priority DESC 排序权重（越前越紧急）。
 _PRIORITY_RANK: Dict[str, int] = {

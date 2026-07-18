@@ -21,6 +21,7 @@ from typing import Optional
 
 from loguru import logger
 
+from src.mail.mailbox_semantics import is_sent_mailbox
 from src.repository.attachment_store import AttachmentStore
 from src.repository.search_query import (
     FilterPredicate,
@@ -1222,7 +1223,7 @@ class EmailRepository:
                         date_received=row["date_received"],
                     )
 
-                recipient_score = 3 if row["mailbox"] == "发件箱" else 1
+                recipient_score = 3 if is_sent_mailbox(row["mailbox"]) else 1
                 for parsed in _parse_address_list(row["to_addr"]):
                     upsert(
                         parsed,
