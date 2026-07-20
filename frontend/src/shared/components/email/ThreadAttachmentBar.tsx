@@ -388,9 +388,16 @@ export function ThreadAttachmentBar({
   return (
     <section
       aria-label="thread-attachments"
-      className="mt-3 rounded-lg border border-ink-border bg-ink-2/40 px-3 py-2"
+      // 主题 v3 圆角四档: 卡片档 = --r-card(12). 原 rounded-lg(8) 是 v1
+      // Tailwind 圆角表的遗留 (DESIGN.md §4.2 已标 superseded), 与同页
+      // AI Fields 卡 (--r-card) 对不齐 (owner 实机 review 点名)。
+      className="mt-3 rounded-[var(--r-card)] border border-ink-border bg-ink-2/40 px-3 py-2"
     >
-      <div className="flex items-center gap-2">
+      {/* min-h 锁死行高 = 展开态最高子元素 ("全部下载" 按钮 py-1 + text-meta
+          = 24px)。不锁的话折叠态行高只有 16px (toggle 无 padding), 展开时
+          按钮一出现行高跳到 24px, items-center 把标题重新居中 → 标题视觉
+          下沉 4px (owner 实机 review)。 */}
+      <div className="flex min-h-[24px] items-center gap-2">
         {/* Whole header row toggles (flex-1), not just the chevron. "Download
             all" sits outside it as a sibling so we never nest buttons; when
             collapsed it's hidden and the toggle spans the full row. */}
@@ -403,6 +410,18 @@ export function ThreadAttachmentBar({
             'transition-colors duration-fast'
           )}
         >
+          {/* 折叠标识跟随项目规范: 左置 ChevronDown, 折叠态 -rotate-90
+              (同 EmailRow 线程头 / AIFieldsBlock Reply Suggestion /
+              ThreadBundle)。原「右置 + rotate-180 上下翻」是全仓唯一的
+              区块折叠头写法。 */}
+          <ChevronDown
+            size={12}
+            strokeWidth={2}
+            className={cn(
+              'text-ink-fg-3 shrink-0 transition-transform duration-base ease-out',
+              !expanded && '-rotate-90'
+            )}
+          />
           <Paperclip size={13} strokeWidth={2} className="text-ink-fg-2 shrink-0" />
           <span
             className="text-meta font-mono uppercase text-ink-fg-1 truncate"
@@ -411,14 +430,6 @@ export function ThreadAttachmentBar({
             {t('emailDetail.attachmentBar.title')} · {cards.length}
             {!fullyLoaded && <span className="text-ink-fg-3"> …</span>}
           </span>
-          <ChevronDown
-            size={12}
-            strokeWidth={2}
-            className={cn(
-              'text-ink-fg-3 shrink-0 transition-transform duration-base ease-out',
-              expanded && 'rotate-180'
-            )}
-          />
         </button>
         {expanded && (
           <button

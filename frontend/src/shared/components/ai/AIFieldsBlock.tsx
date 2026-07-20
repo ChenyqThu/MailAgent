@@ -242,7 +242,11 @@ function ReplyDraftHero({
       className="aif-reply px-4 py-2.5 border-b border-ink-border"
       style={{ background: 'rgb(var(--c-accent) / 0.04)' }}
     >
-      <div className={cn('flex items-center gap-2', !collapsed && 'mb-1')}>
+      {/* min-h 锁死行高 = 展开态最高子元素 (actionBtn: py-1 + text-meta 行高
+          16 = 24px)。toggle 自己只有 py-1 + text-micro 行高 14 = 22px, 不锁
+          的话展开时 actionBtn 一出现行高 22→24, items-center 把标题重新
+          居中 → 标题视觉下沉 1px (owner 实机 review)。 */}
+      <div className={cn('flex min-h-[24px] items-center gap-2', !collapsed && 'mb-1')}>
         {/* Whole title strip is a single click target — chevron + icon +
             caption all flip the collapsed state. Chevron rotates rather
             than swapping ChevronRight/ChevronDown so the vertical
@@ -255,11 +259,10 @@ function ReplyDraftHero({
           aria-label={t(collapsed ? 'ai.replySuggestion.expand' : 'ai.replySuggestion.collapse')}
           aria-expanded={!collapsed}
           className={cn(
-            // Same vertical box as actionBtn (px-2 py-1) so the row height
-            // doesn't change between collapsed (button alone) and expanded
-            // (button + Edit/Craft/Copy siblings) states — otherwise the
-            // title gets re-centered 2px lower when the taller actionBtn
-            // siblings appear.
+            // Same padding box as actionBtn (px-2 py-1); the row's min-h above
+            // is what actually pins the height, because the two differ in font
+            // size (text-micro 14 vs text-meta 16) and would otherwise still
+            // re-center the title 1px lower when the actionBtn siblings appear.
             'flex items-center gap-2 -ml-2 px-2 py-1 rounded cursor-pointer',
             'hover:bg-coral/10 transition-colors duration-fast'
           )}
