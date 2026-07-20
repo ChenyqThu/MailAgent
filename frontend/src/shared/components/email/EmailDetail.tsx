@@ -10,7 +10,7 @@
 //       - Attachments 2-col grid
 //       - Footer (internal_id + Notion link)
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useMutation, useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import { ArrowLeft, ChevronDown, ExternalLink, Languages, Mail, RotateCcw } from 'lucide-react'
@@ -19,6 +19,7 @@ import { gsap, useGSAP, DUR } from '@shared/lib/gsap'
 import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 import { useReducedMotion } from '@shared/hooks/useReducedMotion'
 import { cn } from '@shared/lib/cn'
+import { CollapsibleRegion } from '@shared/components/ui/collapsible'
 import { ShimmerText } from '@shared/components/ShimmerText'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { formatDate, formatRelativeTime } from '@shared/format'
@@ -202,6 +203,7 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
   const [showTranslation, setShowTranslation] = useState(false)
   const [pending, setPending] = useState<PendingMap>(NO_PENDING)
   const [propsExpanded, setPropsExpanded] = useState(false)
+  const morePropsId = useId()
   // #3 置顶: 复用 usePinned 系统 (pin 状态不在 email 对象上, 由 zustand 镜像维护)。
   const togglePin = useTogglePin()
   const isPinned = usePinned((s) => (internalId !== null ? s.isPinned(internalId) : false))
@@ -1105,34 +1107,21 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
                   )}
                 </dl>
 
-                {/* Collapsible section — Mailbox / internal_id /
-                    message_id. CSS grid-rows trick: collapsed = 0fr,
-                    expanded = 1fr, with the inner row at min-height: 0
-                    so it can shrink past content. ease-out 220ms matches
-                    `duration-base` token. */}
+                {/* Collapsible section — Mailbox / internal_id / message_id.
+                    折叠机制走统一原语 (@shared/components/ui/collapsible);
+                    此处原是手抄的一份 grid-rows + opacity。触发按钮在正文
+                    **下方** (「更多属性 / 收起」), 所以 chevron 保持 rotate-180
+                    的上下翻语义 —— 它指向的是内容所在方向, 与区块折叠头
+                    (左置 + -rotate-90) 是两种不同的控件, 有意不归一。 */}
                 {morePropsRows.length > 0 && (
                   <>
-                    <div
-                      aria-hidden={!propsExpanded}
-                      className={cn(
-                        'grid transition-[grid-template-rows] duration-base ease-out',
-                        propsExpanded ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'
-                      )}
-                    >
-                      <div className="overflow-hidden min-h-0">
-                        <dl
-                          className={cn(
-                            'mt-1.5 grid grid-cols-[96px_1fr] gap-y-1.5 gap-x-3 text-aux',
-                            'transition-opacity duration-base ease-out',
-                            propsExpanded ? 'opacity-100' : 'opacity-0'
-                          )}
-                        >
-                          {morePropsRows.map((row) => (
-                            <MetaRow key={row.label} label={row.label} value={row.value} />
-                          ))}
-                        </dl>
-                      </div>
-                    </div>
+                    <CollapsibleRegion expanded={propsExpanded} id={morePropsId}>
+                      <dl className="mt-1.5 grid grid-cols-[96px_1fr] gap-y-1.5 gap-x-3 text-aux">
+                        {morePropsRows.map((row) => (
+                          <MetaRow key={row.label} label={row.label} value={row.value} />
+                        ))}
+                      </dl>
+                    </CollapsibleRegion>
 
                     <button
                       type="button"
@@ -1143,12 +1132,14 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
                         'focus:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 rounded'
                       )}
                       aria-expanded={propsExpanded}
+                      aria-controls={morePropsId}
                     >
                       <ChevronDown
                         size={12}
                         strokeWidth={2}
                         className={cn(
-                          'transition-transform duration-base ease-out',
+                          'transition-transform duration-base ease-standard',
+                          'motion-reduce:transition-none',
                           propsExpanded && 'rotate-180'
                         )}
                       />

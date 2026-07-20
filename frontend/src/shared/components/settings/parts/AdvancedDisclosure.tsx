@@ -11,9 +11,9 @@
 // from the next section.
 
 import * as React from 'react'
-import { ChevronDown } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
+import { CollapseChevron, CollapsibleRegion } from '@shared/components/ui/collapsible'
 
 interface AdvancedDisclosureProps {
   /** Summary label, e.g. "Advanced" / "高级选项". */
@@ -35,9 +35,9 @@ export function AdvancedDisclosure({
   defaultOpen = false,
   className
 }: AdvancedDisclosureProps): React.ReactElement {
-  // 受控 disclosure（替代原生 <details>），用 CSS grid-template-rows 0fr→1fr 做
-  // 纯 CSS 高度展开（§4.1 优先级：能 grid-rows 解决不上 GSAP）。reduced-motion 时
-  // motion-reduce:transition-none 去掉过渡 —— 纯 CSS 走 @media 即可, 无需 JS hook。
+  // 受控 disclosure（替代原生 <details>）。折叠机制走 @shared/components/ui/collapsible
+  // 的统一原语（2026-07-20 抽单源前这里是手抄的一份 grid-rows；迁过去顺带拿到
+  // `inert` —— 原实现只挂 aria-hidden，折叠态的表单控件仍在 tab 序里）。
   const [open, setOpen] = React.useState(defaultOpen)
   const bodyId = React.useId()
 
@@ -55,35 +55,17 @@ export function AdvancedDisclosure({
           'hover:bg-ink-3/40'
         )}
       >
-        <ChevronDown
-          className={cn(
-            'size-4 shrink-0 text-ink-fg-2',
-            'transition-transform duration-fast ease-standard motion-reduce:transition-none',
-            open ? 'rotate-0' : '-rotate-90'
-          )}
-          aria-hidden="true"
-        />
+        <CollapseChevron expanded={open} size={16} className="text-ink-fg-2" />
         <div className="flex-1 min-w-0">
           <div className="text-aux font-medium text-ink-fg">{label}</div>
           {helper ? <div className="text-meta text-ink-fg-2 mt-0.5">{helper}</div> : null}
         </div>
       </button>
-      <div
-        id={bodyId}
-        role="region"
-        aria-hidden={!open}
-        className={cn(
-          'grid transition-[grid-template-rows] duration-base ease-standard',
-          'motion-reduce:transition-none'
-        )}
-        style={{ gridTemplateRows: open ? '1fr' : '0fr' }}
-      >
-        <div className="overflow-hidden">
-          <div className="divide-y divide-ink-border-soft border-t border-ink-border-soft">
-            {children}
-          </div>
+      <CollapsibleRegion expanded={open} id={bodyId}>
+        <div className="divide-y divide-ink-border-soft border-t border-ink-border-soft">
+          {children}
         </div>
-      </div>
+      </CollapsibleRegion>
     </div>
   )
 }

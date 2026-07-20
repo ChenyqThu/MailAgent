@@ -176,6 +176,26 @@ async function expandBar(): Promise<void> {
   fireEvent.click(toggle)
 }
 
+// 2026-07-20：折叠区改走 @shared/components/ui/collapsible 的统一原语（grid-rows
+// 高度过渡），正文因此**恒挂载** —— 卸载的子树没法做退场动画。所以「已折叠」的
+// 断言口径从「卡片不在 DOM 里」（实现细节）改成「区域被 inert 关掉」：inert 同时
+// 管焦点、点击和辅助技术树，是真正的用户可见不变量。
+//
+// 🔴 折叠必须省下 IPC 而不只是像素 —— 这条不变量**没变**，仍由
+// `mockReadDataUrl` / `mockAttList` 的断言各自独立守着，别把它跟这里混为一谈。
+function collapsibleRegion(): HTMLElement {
+  const id = toggleButton(false).getAttribute('aria-controls')
+  const el = id ? document.getElementById(id) : null
+  if (!el) throw new Error('collapsible region not found (aria-controls broken?)')
+  return el
+}
+
+function expectCollapsed(): void {
+  const region = collapsibleRegion()
+  expect(region.hasAttribute('inert')).toBe(true)
+  expect(region.className).toContain('grid-rows-[0fr]')
+}
+
 // Card jump buttons carry title={filename}; the two action buttons carry the
 // localized Preview / Download labels. Filter those out to read card DOM order.
 function cardTitlesInOrder(): string[] {
@@ -220,10 +240,8 @@ describe('ThreadAttachmentBar — collapse', () => {
     expect(toggleButton(false).textContent).toContain('Thread attachments')
     expect(mockAttList).toHaveBeenCalledWith(2)
 
-    // No cards, and "Download all" is hidden while collapsed.
-    expect(cardTitlesInOrder()).toHaveLength(0)
-    expect(screen.queryByText('active.pdf')).toBeNull()
-    expect(screen.queryByText('reply.png')).toBeNull()
+    // 卡片区被 inert 关掉，"Download all" 仍是条件渲染（不在折叠区里）。
+    expectCollapsed()
     expect(downloadAllButton()).toBeUndefined()
 
     // Collapsed must save the IPC, not just the pixels: reply.png is a 500-byte
@@ -262,8 +280,7 @@ describe('ThreadAttachmentBar — collapse', () => {
     expect(await screen.findByText('active.pdf')).toBeTruthy()
 
     fireEvent.click(toggleButton(true))
-    expect(screen.queryByText('active.pdf')).toBeNull()
-    expect(cardTitlesInOrder()).toHaveLength(0)
+    expectCollapsed()
   })
 
   test('[collapse] switching to another message resets to collapsed', async () => {
@@ -293,8 +310,10 @@ describe('ThreadAttachmentBar — collapse', () => {
     )
 
     expect(toggleButton(false)).toBeTruthy()
-    expect(cardTitlesInOrder()).toHaveLength(0)
-    expect(screen.queryByText('second.pdf')).toBeNull()
+    expectCollapsed()
+    // 新消息的卡片已换过来（恒挂载），但整区是关的 —— 证明重置的是折叠态,
+    // 不是「上一封的 DOM 恰好还没换」。
+    expect(cardTitlesInOrder()).toEqual(['second.pdf'])
   })
 })
 

@@ -23,12 +23,13 @@
 //
 // Pure frontend: reuses the existing attachment IPC surface only.
 
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useId, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ChevronDown, Download, Eye, Paperclip } from 'lucide-react'
+import { Download, Eye, Paperclip } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
+import { CollapseChevron, CollapsibleRegion } from '@shared/components/ui/collapsible'
 import { errorMessage } from '@shared/lib/ipcErrors'
 import { formatFileSize, formatRelativeTime } from '@shared/format'
 import { parseSender } from '@shared/lib/mail_parse'
@@ -129,6 +130,7 @@ export function ThreadAttachmentBar({
   const mailApi = useMailApi()
   const queryClient = useQueryClient()
   const setActive = useActiveEmail((s) => s.setActive)
+  const bodyId = useId()
   const [previewSrc, setPreviewSrc] = useState<string | null>(null)
   const [thumbFailed, setThumbFailed] = useState<ReadonlySet<number>>(() => new Set())
   // Collapsed by default — the strip is a discoverability affordance, not the
@@ -405,23 +407,16 @@ export function ThreadAttachmentBar({
           type="button"
           onClick={() => setExpanded((v) => !v)}
           aria-expanded={expanded}
+          aria-controls={bodyId}
           className={cn(
             'flex flex-1 min-w-0 items-center gap-2 text-left rounded',
             'transition-colors duration-fast'
           )}
         >
-          {/* 折叠标识跟随项目规范: 左置 ChevronDown, 折叠态 -rotate-90
-              (同 EmailRow 线程头 / AIFieldsBlock Reply Suggestion /
-              ThreadBundle)。原「右置 + rotate-180 上下翻」是全仓唯一的
-              区块折叠头写法。 */}
-          <ChevronDown
-            size={12}
-            strokeWidth={2}
-            className={cn(
-              'text-ink-fg-3 shrink-0 transition-transform duration-base ease-out',
-              !expanded && '-rotate-90'
-            )}
-          />
+          {/* 折叠标识走统一原语: 左置 ChevronDown, 折叠态 -rotate-90 (同
+              EmailRow 线程头 / AIFieldsBlock Reply Suggestion / ThreadBundle)。
+              原「右置 + rotate-180 上下翻」是全仓唯一的区块折叠头写法。 */}
+          <CollapseChevron expanded={expanded} className="text-ink-fg-3" />
           <Paperclip size={13} strokeWidth={2} className="text-ink-fg-2 shrink-0" />
           <span
             className="text-meta font-mono uppercase text-ink-fg-1 truncate"
@@ -451,8 +446,10 @@ export function ThreadAttachmentBar({
         )}
       </div>
 
-      {expanded && (
-        <div className="mt-2 flex gap-2 overflow-x-auto scrollbar-thin pb-1">
+      {/* 恒挂载 + grid-rows 高度过渡 (统一原语)。缩略图 IPC 仍由 `expanded`
+          在 `thumbTargets` 那层门控 —— 省的是网络/磁盘读, 不是几个 DOM 节点。 */}
+      <CollapsibleRegion expanded={expanded} id={bodyId} bodyClassName="pt-2">
+        <div className="flex gap-2 overflow-x-auto scrollbar-thin pb-1">
           {cards.map((c) => {
             const a = c.att
             const src = sourceById.get(c.sourceId)
@@ -577,7 +574,7 @@ export function ThreadAttachmentBar({
             )
           })}
         </div>
-      )}
+      </CollapsibleRegion>
 
       {previewSrc !== null && (
         <ImageLightbox src={previewSrc} onClose={() => setPreviewSrc(null)} />

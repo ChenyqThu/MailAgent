@@ -28,14 +28,13 @@
 //   sqlite3 data/sync_store.db "SELECT DISTINCT json_each.key FROM
 //   llm_processing, json_each(labels_json)"
 
-import { Fragment, useState } from 'react'
+import { Fragment, useId, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useQueryClient } from '@tanstack/react-query'
 import {
   AlertTriangle,
   BadgeCheck,
   Briefcase,
-  ChevronDown,
   ClipboardCheck,
   Clock,
   Copy,
@@ -51,6 +50,7 @@ import {
 } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
+import { CollapseChevron, CollapsibleRegion } from '@shared/components/ui/collapsible'
 import { asWriteError } from '@shared/lib/ipcErrors'
 import { qk } from '@shared/lib/queryKeys'
 import { actionLabelChinese } from '@shared/lib/ai_labels'
@@ -124,6 +124,7 @@ function ReplyDraftHero({
   const { t } = useTranslation()
   const mailApi = useMailApi()
   const queryClient = useQueryClient()
+  const bodyId = useId()
   const [copied, setCopied] = useState(false)
   // Default collapsed — Reply Suggestion is one strip among many on the
   // email detail; user opens it explicitly when they want to act on it.
@@ -245,8 +246,10 @@ function ReplyDraftHero({
       {/* min-h 锁死行高 = 展开态最高子元素 (actionBtn: py-1 + text-meta 行高
           16 = 24px)。toggle 自己只有 py-1 + text-micro 行高 14 = 22px, 不锁
           的话展开时 actionBtn 一出现行高 22→24, items-center 把标题重新
-          居中 → 标题视觉下沉 1px (owner 实机 review)。 */}
-      <div className={cn('flex min-h-[24px] items-center gap-2', !collapsed && 'mb-1')}>
+          居中 → 标题视觉下沉 1px (owner 实机 review)。
+          间距不放这里 (原 `!collapsed && 'mb-1'`) —— margin 没法跟着高度过渡,
+          展开瞬间会硬跳; 改放进 CollapsibleRegion 的 bodyClassName。 */}
+      <div className="flex min-h-[24px] items-center gap-2">
         {/* Whole title strip is a single click target — chevron + icon +
             caption all flip the collapsed state. Chevron rotates rather
             than swapping ChevronRight/ChevronDown so the vertical
@@ -258,6 +261,7 @@ function ReplyDraftHero({
           onClick={() => setCollapsed((c) => !c)}
           aria-label={t(collapsed ? 'ai.replySuggestion.expand' : 'ai.replySuggestion.collapse')}
           aria-expanded={!collapsed}
+          aria-controls={bodyId}
           className={cn(
             // Same padding box as actionBtn (px-2 py-1); the row's min-h above
             // is what actually pins the height, because the two differ in font
@@ -267,14 +271,7 @@ function ReplyDraftHero({
             'hover:bg-coral/10 transition-colors duration-fast'
           )}
         >
-          <ChevronDown
-            size={12}
-            strokeWidth={2.25}
-            className={cn(
-              'text-coral transition-transform duration-fast',
-              collapsed && '-rotate-90'
-            )}
-          />
+          <CollapseChevron expanded={!collapsed} strokeWidth={2.25} className="text-coral" />
           <MessageSquare size={12} strokeWidth={2.25} className="text-coral" />
           <span
             className="text-micro font-mono uppercase tracking-wider text-coral"
@@ -344,14 +341,14 @@ function ReplyDraftHero({
           </div>
         )}
       </div>
-      {!collapsed &&
-        (editing ? (
+      <CollapsibleRegion expanded={!collapsed} id={bodyId} bodyClassName="pt-1">
+        {editing ? (
           <textarea
             value={editedBody}
             onChange={(e) => setEditedBody(e.target.value)}
             rows={Math.min(Math.max(editedBody.split('\n').length, 5), 16)}
             className={cn(
-              'w-full mt-1 px-2 py-1.5 rounded border border-ink-border-soft',
+              'w-full px-2 py-1.5 rounded border border-ink-border-soft',
               'bg-ink-2/55 text-aux text-ink-fg leading-snug font-sans',
               'focus:outline-none focus:border-coral resize-y'
             )}
@@ -367,7 +364,8 @@ function ReplyDraftHero({
           >
             {effectiveBody}
           </pre>
-        ))}
+        )}
+      </CollapsibleRegion>
     </div>
   )
 }
