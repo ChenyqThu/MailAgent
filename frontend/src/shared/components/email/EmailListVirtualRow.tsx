@@ -19,6 +19,8 @@ export interface RowProps {
   onToggleGroup(key: GroupKey): void
   onToggleThread(threadId: string): void
   onExpandThread(threadId: string, headInternalId: number): void
+  /** 刚被展开的线程 —— 其子行播一次入场动画。见下方 data-thread-reveal 注释。 */
+  revealThreadId: string | null
 }
 
 export function VirtualRow({
@@ -32,7 +34,8 @@ export function VirtualRow({
   onSelect,
   onToggleGroup,
   onToggleThread,
-  onExpandThread
+  onExpandThread,
+  revealThreadId
 }: RowComponentProps<RowProps>): React.ReactElement {
   // Aliased `tRow` — the `email` branch below shadows `t` with `item.thread` (pre-existing,
   // unrelated to i18n), so a plain `const { t } = useTranslation()` here would collide with it.
@@ -113,8 +116,30 @@ export function VirtualRow({
           onExpandThread(t.threadId, item.email.internal_id)
         }
       : () => onSelect(item.email.internal_id)
+  // 线程展开入场: 只给「刚展开的那条线程」的子行播一次 (母邮件行不动, 它本来就在)。
+  //
+  // 🔴 判据是 revealThreadId 而**不是** t.expanded —— 列表虚拟化, 子行随滚动卸载
+  // 重挂, 按 expanded 驱动的话每次滚回视口都重播一遍。revealThreadId 由 hook 在
+  // REVEAL_WINDOW_MS 后清掉, 之后重挂的行是静态的。
+  //
+  // 🔴 CSS 里只能动 opacity + **独立 translate 属性**: 行定位是 react-window 写在
+  // style 上的 (v2 用 top, 但独立 translate 与任何 transform 都能复合, 不留隐患)。
+  // 单独取窄类型: isChild 是布尔量, TS 不会据它把 t 收窄到 child 变体 (childIndex 只在 child 上)。
+  const childInfo = t !== undefined && !t.isHead ? t : null
+  const revealing = childInfo !== null && childInfo.threadId === revealThreadId
   return (
-    <div style={style}>
+    <div
+      style={
+        childInfo !== null && revealing
+          ? // stagger 序号封顶 —— 30 封的线程不该让最后一行等 700ms 才出来。
+            ({
+              ...style,
+              '--thread-reveal-i': Math.min(childInfo.childIndex, 6)
+            } as React.CSSProperties)
+          : style
+      }
+      data-thread-reveal={revealing ? 'true' : undefined}
+    >
       <EmailRow
         email={item.email}
         selected={item.bundleSelected}

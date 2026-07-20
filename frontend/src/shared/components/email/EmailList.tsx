@@ -59,7 +59,8 @@ export function EmailList(): React.ReactElement {
     listRef,
     handleRowsRendered,
     handleToggleThread,
-    handleExpandThread
+    handleExpandThread,
+    revealThreadId
   } = useEmailListRows()
 
   useEmailKeyboardNav(orderedIds)
@@ -113,7 +114,8 @@ export function EmailList(): React.ReactElement {
               onSelect: setActive,
               onToggleGroup: toggleGroup,
               onToggleThread: handleToggleThread,
-              onExpandThread: handleExpandThread
+              onExpandThread: handleExpandThread,
+              revealThreadId
             }}
             onRowsRendered={handleRowsRendered}
             // 主题 v3 tweak (2026-07-12): scrollbar-thin 的 8px 经典槽位即使

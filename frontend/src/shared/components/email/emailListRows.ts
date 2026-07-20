@@ -27,7 +27,8 @@ import type { AIPriority, EnrichedEmailMeta } from '@shared/api/types'
 // like before round 9.
 export type ThreadRowInfo =
   | { isHead: true; threadId: string; childCount: number; expanded: boolean }
-  | { isHead: false; threadId: string }
+  /** childIndex = 在本线程子邮件里的序号, 仅用于展开入场动画的 stagger 延迟。 */
+  | { isHead: false; threadId: string; childIndex: number }
 
 export type ListRow =
   | { type: 'header'; key: GroupKey; label: string; count: number; collapsed: boolean }
@@ -45,10 +46,7 @@ export type ListRow =
     }
   | { type: 'loader' }
 
-export function computeRowHeight(
-  r: ListRow | undefined,
-  newIds: ReadonlySet<number>
-): number {
+export function computeRowHeight(r: ListRow | undefined, newIds: ReadonlySet<number>): number {
   if (!r) return 28
   if (r.type === 'header') return 28
   if (r.type === 'loader') return 44
@@ -403,15 +401,16 @@ export function flattenGroups(
           : undefined
       })
       if (isThreadHead && expanded) {
-        for (const child of g.children) {
+        g.children.forEach((child, childIndex) => {
           out.push({
             type: 'email',
             email: child,
             bundleSelected: child.internal_id === activeId,
             groupKey: key,
-            thread: { isHead: false, threadId: g.threadId! }
+            // childIndex 只用于展开时的入场 stagger 延迟 (VirtualRow → CSS 变量)。
+            thread: { isHead: false, threadId: g.threadId!, childIndex }
           })
-        }
+        })
       }
     }
   }

@@ -77,6 +77,9 @@ const EMPTY_THREAD_SUPPLEMENT: ReadonlyMap<string, ReadonlyArray<EnrichedEmailMe
 
 const PAGE_SIZE = 100
 const MAX_PAGES = 30 // safety cap — 3000 rows is enough for visual scrolling
+// 线程展开子行入场动画的存活窗口: 覆盖 DUR.base(220ms) + 最大 stagger 延迟, 留余量。
+// 过后清标 → 之后因滚动重挂的子行是静态的, 不会重播入场 (虚拟列表的关键约束)。
+const REVEAL_WINDOW_MS = 500
 // 首屏 100 行渲染落一帧后, 静默拉到 8 页 (800 行). 旧 100 行借 keepPreviousData
 // 保留, 新 800 行到达后无缝替换, 用户感知不到这次升级. react-window 已虚拟化
 // DOM, 800 行数据驻留内存仅 ~0.6MB(单行 ~500-800B, 不含正文), 上限 3000≈2MB,
@@ -104,6 +107,8 @@ export interface UseEmailListRowsReturn {
   handleRowsRendered: (range: { stopIndex: number }) => void
   handleToggleThread: (threadId: string) => void
   handleExpandThread: (threadId: string, headInternalId: number) => void
+  /** 刚被展开的线程 threadId — 驱动子行一次性入场动画, REVEAL_WINDOW_MS 后回 null。 */
+  revealThreadId: string | null
 }
 
 export function useEmailListRows(): UseEmailListRowsReturn {
@@ -371,6 +376,32 @@ export function useEmailListRows(): UseEmailListRowsReturn {
     (threadId: string): boolean => expandedKey === keyFor(threadId),
     [expandedKey, keyFor]
   )
+  // 线程展开的子行入场动画标记 (2026-07-20 owner 反馈「线程折叠没动效」)。
+  //
+  // 🔴 必须是**一次性**的, 不能直接用 `expanded`: 列表是虚拟化的, 子行随滚动
+  // 卸载/重挂, 按「是否展开」驱动 CSS 动画的话, 每次滚回视口都会重播一遍入场。
+  // 所以展开时打标 → REVEAL_WINDOW_MS 后清掉, 之后重挂的行就是静态的。
+  //
+  // 存 threadId 原值而非 keyFor() 的 key: VirtualRow 手里只有 threadId, 让它做
+  // 前缀拼接等于把 view 语义漏进渲染层。展开只经 handleExpandThread 一条路
+  // (chevron 折叠态点击 / 母邮件行体点击), 所以在那里打标就够。
+  const [revealThreadId, setRevealThreadId] = useState<string | null>(null)
+  const revealTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const markRevealed = useCallback((threadId: string): void => {
+    if (revealTimerRef.current !== null) clearTimeout(revealTimerRef.current)
+    setRevealThreadId(threadId)
+    revealTimerRef.current = setTimeout(() => {
+      revealTimerRef.current = null
+      setRevealThreadId(null)
+    }, REVEAL_WINDOW_MS)
+  }, [])
+  useEffect(
+    () => () => {
+      if (revealTimerRef.current !== null) clearTimeout(revealTimerRef.current)
+    },
+    []
+  )
+
   // 滚动锚定用 (handler / effect 闭包 rows+rowHeights, 故定义在它们算好之后, 见下方)。
   const listRef = useRef<ListImperativeAPI | null>(null)
   const scrollAnchorRef = useRef<{ id: number; viewportOffset: number } | null>(null)
@@ -596,8 +627,9 @@ export function useEmailListRows(): UseEmailListRowsReturn {
       if (expandedKey === key) return
       captureScrollAnchor(headInternalId)
       expandThread(key)
+      markRevealed(threadId)
     },
-    [keyFor, expandedKey, captureScrollAnchor, expandThread]
+    [keyFor, expandedKey, captureScrollAnchor, expandThread, markRevealed]
   )
   useLayoutEffect(() => {
     const anchor = scrollAnchorRef.current
@@ -716,7 +748,8 @@ export function useEmailListRows(): UseEmailListRowsReturn {
     listRef,
     handleRowsRendered,
     handleToggleThread,
-    handleExpandThread
+    handleExpandThread,
+    revealThreadId
   }
 }
 

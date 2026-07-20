@@ -1561,6 +1561,42 @@ body::before {
   background-color: rgb(var(--ink-3) / 0.55);
 }
 
+/* 线程展开 — 子行入场 (2026-07-20 owner 反馈「emaillist 的线程折叠没动效」)。
+ *
+ * 邮件列表是 react-window 虚拟列表, 展开线程 = 往 rows 数组里**插行**, 不是容器
+ * 高度变化, 所以详情页那套 grid-rows 0fr↔1fr 在这里用不上。列表里的等价物是子行
+ * 从母邮件行下方错峰滑出。
+ *
+ * 🔴 只动 opacity + **独立 translate 属性**: 行的定位由 react-window 写在 inline
+ * style 上 (v2 用 top), 独立 translate 与任何 transform 都能复合, 不抢定位。
+ * 🔴 由一次性的 data-thread-reveal 驱动, **不是** [data-thread='child']: 虚拟行
+ * 随滚动卸载重挂, 按静态状态驱动的话子行每次滚回视口都重播一遍入场。标记由
+ * useEmailListRows 在 REVEAL_WINDOW_MS 后清掉。
+ *
+ * 收起不做退场: 行是被直接从数组里摘掉的, 要做退场就得让它们多留一会儿, 而行高
+ * 前缀和正是滚动锚定的几何依据 (rowTopOfId), 留幽灵行会把锚定算歪。收起时的连续
+ * 感由既有的 GSAP scrollTo 锚定 tween 提供。 */
+@keyframes thread-child-in {
+  from {
+    opacity: 0;
+    translate: 0 -6px;
+  }
+  to {
+    opacity: 1;
+    translate: 0 0;
+  }
+}
+[data-thread-reveal='true'] {
+  /* backwards: 带 delay 的行在等待期间保持 from 帧 (否则先闪一下再动)。 */
+  animation: thread-child-in var(--dur-base, 220ms) cubic-bezier(0.4, 0, 0.2, 1) backwards;
+  animation-delay: calc(var(--thread-reveal-i, 0) * 24ms);
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-thread-reveal='true'] {
+    animation: none;
+  }
+}
+
 /* Sprint 17 — thread chevron-cell 占第一格. 单封邮件 cell 内为空但保留宽度
  * (列对齐). thread head 显示可点 chevron, thread child 显示竖向 tether 线.
  *

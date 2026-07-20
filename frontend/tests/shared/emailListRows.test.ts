@@ -530,7 +530,28 @@ describe('flattenGroups', () => {
     expect(rows).toHaveLength(3)
     const child = rows[2] as Extract<ListRow, { type: 'email' }>
     expect(child.email.internal_id).toBe(2)
-    expect(child.thread).toEqual({ isHead: false, threadId: 't1' })
+    expect(child.thread).toEqual({ isHead: false, threadId: 't1', childIndex: 0 })
+  })
+
+  test('child rows carry a 0-based childIndex (线程展开入场动画的 stagger 依据)', () => {
+    const buckets = emptyBuckets()
+    buckets.today = [
+      {
+        threadId: 't1',
+        head: em({ internal_id: 1 }),
+        children: [em({ internal_id: 2 }), em({ internal_id: 3 }), em({ internal_id: 4 })],
+        anchorDate: null
+      }
+    ]
+    const rows = flattenGroups(buckets, LABELS, notCollapsed, (tid) => tid === 't1', null, false)
+    // header + head + 3 children
+    expect(rows).toHaveLength(5)
+    const indices = rows
+      .slice(2)
+      .map((r) => (r as Extract<ListRow, { type: 'email' }>).thread)
+      .map((t) => (t && !t.isHead ? t.childIndex : null))
+    // 连续且从 0 起 —— CSS animation-delay 直接乘这个值, 跳号会让入场节奏破相。
+    expect(indices).toEqual([0, 1, 2])
   })
 
   test('主题 v3 — expanded thread: only the row activeId hits is selected, not the whole bundle', () => {
@@ -605,26 +626,23 @@ describe('computeRowHeight', () => {
   })
 
   test('ai strip alone → 78 (via ai_priority / ai_action / failed sync / NEW chip)', () => {
+    expect(computeRowHeight(emailRow(em({ internal_id: 1, ai_priority: 'urgent' })), NO_NEW)).toBe(
+      78
+    )
+    expect(computeRowHeight(emailRow(em({ internal_id: 1, ai_action: '需要回复' })), NO_NEW)).toBe(
+      78
+    )
     expect(
-      computeRowHeight(emailRow(em({ internal_id: 1, ai_priority: 'urgent' })), NO_NEW)
-    ).toBe(78)
-    expect(
-      computeRowHeight(emailRow(em({ internal_id: 1, ai_action: '需要回复' })), NO_NEW)
-    ).toBe(78)
-    expect(
-      computeRowHeight(
-        emailRow(em({ internal_id: 1, sync_status: 'dead_letter' })),
-        NO_NEW
-      )
+      computeRowHeight(emailRow(em({ internal_id: 1, sync_status: 'dead_letter' })), NO_NEW)
     ).toBe(78)
     // `isNew` mirrors EmailRow's aiStripVisible — newIds membership alone flips the strip.
     expect(computeRowHeight(emailRow(em({ internal_id: 7 })), new Set([7]))).toBe(78)
   })
 
   test('snippet text alone → 84 (own e.snippet takes precedence)', () => {
-    expect(
-      computeRowHeight(emailRow(em({ internal_id: 1, snippet: 'hello body' })), NO_NEW)
-    ).toBe(84)
+    expect(computeRowHeight(emailRow(em({ internal_id: 1, snippet: 'hello body' })), NO_NEW)).toBe(
+      84
+    )
   })
 
   test('snippet + ai strip → 100', () => {
