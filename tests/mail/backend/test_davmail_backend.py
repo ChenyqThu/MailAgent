@@ -268,6 +268,32 @@ def test_normalize_message_id_clean_value_is_noop(raw):
     assert _normalize_message_id(raw) == "abc+def@x.com"
 
 
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "(relay) <abc+def@x.com>",
+        "(relay)\r\n <abc+def@x.com>",
+        "<abc+def@x.com> (received by mx1)",
+    ],
+)
+def test_normalize_message_id_strips_cfws_comment(raw):
+    """RFC 5322 允许 msg-id 外围带 CFWS/comment —— 必须**提取** <...> 而非 strip 字符集.
+
+    codex review MEDIUM-1: `.strip("<>")` 遇到 `(relay)\\r\\n <a@b>` 会得到
+    `(relay)<a@b` 这种垃圾, 落库后 SEARCH 搜错值、去重和线程根比较全部失效.
+    """
+    assert _normalize_message_id(raw) == "abc+def@x.com"
+
+
+def test_normalize_message_id_multiple_msgids_takes_first(caplog):
+    """一个 Message-ID 头里多个 msg-id 是畸形的 —— 取第一个但必须留痕.
+
+    静默取首个会把「去重/线程归并挑错了 id」变成查不出来的问题.
+    """
+    out = _normalize_message_id("<a@x.com> <b@x.com>")
+    assert out == "a@x.com"
+
+
 def test_normalize_message_id_empty():
     assert _normalize_message_id(None) == ""
     assert _normalize_message_id("") == ""

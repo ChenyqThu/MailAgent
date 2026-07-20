@@ -27,10 +27,12 @@ from loguru import logger
 
 from src.kos.client import KOSClient, KOSError
 from src.kos.producer import (
+    LABEL_MISSING,
+    LABEL_UNKNOWN,
     build_kos_page_payload,
-    is_labeled,
     make_bulk_kos_client,
     passes_priority_gate,
+    priority_label_state,
 )
 from src.repository import EmailRepository
 
@@ -223,6 +225,7 @@ class KOSBulkIngester:
             "skipped_no_meta": 0,
             "skipped_low_priority": 0,
             "skipped_unlabeled": 0,
+            "skipped_invalid_priority": 0,
         }
         logger.info(
             f"[bulk] start total={stats['total']} dry_run={dry_run} "
@@ -242,11 +245,14 @@ class KOSBulkIngester:
             if gate_active:
                 pri = self._get_labels(iid).get("priority")
                 if not passes_priority_gate(pri, self.priority_floor, self.require_labeled):
-                    key = (
-                        "skipped_unlabeled"
-                        if self.require_labeled and not is_labeled(pri)
-                        else "skipped_low_priority"
-                    )
+                    # 三种跳过原因分开计数 —— 合成一个数字正是 issue #49 的病根。
+                    state = priority_label_state(pri)
+                    if self.require_labeled and state == LABEL_MISSING:
+                        key = "skipped_unlabeled"
+                    elif self.require_labeled and state == LABEL_UNKNOWN:
+                        key = "skipped_invalid_priority"
+                    else:
+                        key = "skipped_low_priority"
                     stats[key] += 1
                     continue
             built = self._build_one(iid)
@@ -313,14 +319,16 @@ if __name__ == "__main__":
     )
     ap.add_argument(
         "--require-labeled",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         default=None,
-        help="只入 AI 已标注过优先级的邮件, 未标注直接跳过 (issue #49; "
-        "不传则跟随 KOS_REQUIRE_LABELED env, 默认 false=未标注按 normal 放行)",
+        help="只入 AI **有效**标注过优先级的邮件, 未标注/野值直接跳过 (issue #49)。"
+        "不传则跟随 KOS_REQUIRE_LABELED env; env 开着时可用 --no-require-labeled "
+        "临时关掉 (store_true 做不到这个方向的覆盖, codex review LOW-3)",
     )
     args = ap.parse_args()
 
-    # CLI 显式传 --require-labeled 优先; 不传则跟随 env (config 缺省 False)。
+    # CLI 显式传 --require-labeled / --no-require-labeled 优先; 都不传 (None)
+    # 才跟随 env (config 缺省 False)。
     require_labeled = args.require_labeled
     if require_labeled is None:
         try:

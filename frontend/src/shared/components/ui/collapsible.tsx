@@ -58,9 +58,14 @@ interface RegionProps {
   id?: string
   /** 外层 grid 容器（一般不用传）。 */
   className?: string
-  /** 内层被裁剪的容器 —— 内容的 margin/padding 放这里，
-   *  **不要**放在外层兄弟节点上，否则展开瞬间 margin 会硬跳。 */
+  /** 内容间距（padding）放这里 —— **不要**放在折叠区的兄弟节点上，
+   *  margin 没法跟着高度过渡，展开瞬间会硬跳。 */
   bodyClassName?: string
+  /** 独立内容块（如设置页 Advanced 面板）可传 'region' 补语义；
+   *  传了就要一并给 aria-label / aria-labelledby，否则无名 region 反而是噪音。 */
+  role?: string
+  'aria-labelledby'?: string
+  'aria-label'?: string
 }
 
 /** 折叠区正文 —— 高度 + 透明度过渡，reduced-motion 下自动归零。
@@ -74,11 +79,17 @@ export function CollapsibleRegion({
   children,
   id,
   className,
-  bodyClassName
+  bodyClassName,
+  role,
+  'aria-labelledby': ariaLabelledBy,
+  'aria-label': ariaLabel
 }: RegionProps): React.ReactElement {
   return (
     <div
       id={id}
+      role={role}
+      aria-labelledby={ariaLabelledBy}
+      aria-label={ariaLabel}
       // React 19 boolean prop；false 要传 undefined 才不会渲染出 inert="false"
       // （HTML 里任何值都算 true）。
       inert={!expanded || undefined}
@@ -90,16 +101,20 @@ export function CollapsibleRegion({
       )}
     >
       {/* min-h-0 让这一行能收缩到 0 以下（grid item 默认 min-height:auto，
-          不写就永远塌不下去）。 */}
+          不写就永远塌不下去）。
+          🔴 这一层**不能有 padding** —— 它是被 0fr 收缩的 grid item, padding
+          属于盒模型最小占用, 不随内容高度归零。实测: pt-1 折叠后残留 4px、
+          pt-2 残留 8px, 区块闭不拢 (codex review MEDIUM-4, 浏览器实测确认)。
+          所以 bodyClassName 落到再内一层, 那层的高度是内容撑出来的, 被外层
+          裁掉后不留痕。 */}
       <div
         className={cn(
           'overflow-hidden min-h-0 transition-opacity duration-base ease-standard',
           'motion-reduce:transition-none',
-          expanded ? 'opacity-100' : 'opacity-0',
-          bodyClassName
+          expanded ? 'opacity-100' : 'opacity-0'
         )}
       >
-        {children}
+        <div className={bodyClassName}>{children}</div>
       </div>
     </div>
   )

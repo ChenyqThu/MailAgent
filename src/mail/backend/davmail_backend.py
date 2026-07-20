@@ -160,15 +160,36 @@ def _normalize_message_id(value: Optional[str]) -> str:
        AppleScript 路径存干净值、davmail 路径存脏值 → 两行并存.
 
     所以归一化落在**写入侧**(三个 parse 点), 两类故障一并消掉; 读取侧
-    (``_lookup_uid_by_message_id``) 再做一次是为了兼容修复前已经存脏的库行,
-    不需要数据迁移. 干净 ASCII 值上是 no-op, 字节不变.
+    (``_lookup_uid_by_message_id``) 再做一次, 让**会重新 fetch 的**脏行自愈.
+
+    🔴 读取侧那道**不能替代数据迁移**: 已经 ``synced`` 的行不会再进 fetch 路径,
+    库里的脏 message_id / 脏 thread_id 就一直留着 —— 后续跨 backend 发现同一封信
+    时 ``get_by_message_id`` 等值查询命中不了, 会写出重复行, 旧线程也不会自愈
+    (codex review HIGH-1). 存量清洗走 ``scripts/backfill_message_id_normalize.py``.
 
     单独 decode 不够: 纯 ASCII 的折行 msgid (无 encoded-word) 过 ``decode_header``
     原样返回, ``\\r\\n`` 还在 —— decode 与 unfold 两步缺一不可.
+
+    取值用 ``<...>`` 正则**提取**而非 ``strip("<>")``: RFC 5322 允许 msg-id 外围带
+    CFWS/comment, ``Message-ID: (relay)\\r\\n <a@b>`` 是合法的, strip 字符集会得到
+    ``(relay)<a@b`` 这种垃圾 (codex review MEDIUM-1). 无 ``<>`` 时 (裸 msgid) 退回
+    strip —— 库里存的就是去括号形态, 这条路径必须留.
     """
     if not value:
         return ""
-    return _HEADER_FOLD_RE.sub("", _decode_mime_header(value)).strip().strip("<>")
+    cleaned = _HEADER_FOLD_RE.sub("", _decode_mime_header(value)).strip()
+    found = _MSGID_PATTERN.findall(cleaned)
+    if found:
+        if len(found) > 1:
+            # 单个 Message-ID 头里出现多个 msg-id 是畸形的 (像是误塞了 References)。
+            # 取第一个是唯一有依据的选择, 但值得留痕 —— 静默取首个会把「去重/线程
+            # 归并挑错了 id」变成查不出来的问题。
+            logger.warning(
+                f"[davmail-backend] Message-ID 含 {len(found)} 个 msg-id, 取第一个: "
+                f"{cleaned[:80]!r}"
+            )
+        return found[0].strip("<>")
+    return cleaned.strip("<>")
 
 
 def _quote_imap_string(value: str) -> str:
@@ -970,7 +991,8 @@ class DavMailBackend(IMailBackend):
 
         issue #47: 先过 ``_normalize_message_id`` —— 写入侧已归一化, 这里再来一次是
         为了兼容修复前存进 ``email_metadata.message_id`` 的脏值 (encoded-word + 折行),
-        免掉一次数据迁移. 干净值上是 no-op.
+        让会重新 fetch 的行自愈. 干净值上是 no-op. 已 ``synced`` 不再 fetch 的存量行
+        清洗见 ``scripts/backfill_message_id_normalize.py``.
         """
         if not message_id:
             return None

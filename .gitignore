@@ -128,3 +128,4 @@ tests/agent_eval/baselines/*.report.*
 /.design-sync/node_modules
 /.design-sync/learnings/
 scripts/backfill_thread_id_rfc2047.journal.json
+scripts/backfill_message_id_normalize.journal.json

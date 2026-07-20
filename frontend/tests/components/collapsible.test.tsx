@@ -75,6 +75,40 @@ describe('CollapsibleRegion', () => {
     cleanup()
   })
 
+  test('🔴 bodyClassName 落到 grid item 的**再内一层**，不能挂在被 0fr 收缩的那层上', () => {
+    // 被 0fr 收缩的 grid item 上的 padding 属于盒模型最小占用，不随内容高度
+    // 归零 —— 浏览器实测 pt-1 折叠后残留 4px、pt-2 残留 8px，区块闭不拢。
+    // happy-dom 不做布局计算，量不出高度，所以这里锁的是结构：padding 类
+    // 必须出现在第二层、且第一层不带它。
+    render(
+      <CollapsibleRegion expanded={false} bodyClassName="pt-2">
+        <span>x</span>
+      </CollapsibleRegion>
+    )
+    const clipped = document.querySelector('.overflow-hidden') as HTMLElement
+    expect(clipped.className).not.toContain('pt-2')
+    expect((clipped.firstElementChild as HTMLElement).className).toContain('pt-2')
+    cleanup()
+  })
+
+  test('role/aria 可选透传（无名 region 是 AT 噪音，传 role 就该一并给名字）', () => {
+    render(
+      <CollapsibleRegion expanded id="r" role="region" aria-label="高级选项">
+        <span>x</span>
+      </CollapsibleRegion>
+    )
+    const el = document.getElementById('r')!
+    expect(el.getAttribute('role')).toBe('region')
+    expect(el.getAttribute('aria-label')).toBe('高级选项')
+    cleanup()
+  })
+
+  test('不传 role 时不渲染空属性（默认就是个普通 div）', () => {
+    render(<Harness />)
+    expect(region().hasAttribute('role')).toBe(false)
+    cleanup()
+  })
+
   test('两态都带 motion-reduce:transition-none', () => {
     render(<Harness defaultOpen />)
     const el = region()

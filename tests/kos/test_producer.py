@@ -18,11 +18,15 @@ import pytest
 
 from src.kos.client import KOSClient, KOSError
 from src.kos.producer import (
+    LABEL_KNOWN,
+    LABEL_MISSING,
+    LABEL_UNKNOWN,
     build_kos_page_payload,
     is_labeled,
     normalize_message_id_for_slug,
     passes_priority_gate,
     priority_at_or_above,
+    priority_label_state,
     push_email_to_kos,
 )
 from src.models import Email
@@ -134,17 +138,43 @@ class TestRequireLabeledGate:
     def test_is_labeled_false_for_missing(self, raw):
         assert is_labeled(raw) is False
 
-    @pytest.mark.parametrize("raw", ["normal", "🟡 重要", "foo"])
-    def test_is_labeled_true_for_any_present_value(self, raw):
-        """unknown 值 ('foo') 也算标注过 —— AI 跑过、只是枚举没对上。"""
+    @pytest.mark.parametrize("raw", ["normal", "🟡 重要", "CRITICAL"])
+    def test_is_labeled_true_only_for_known_enum(self, raw):
         assert is_labeled(raw) is True
+
+    @pytest.mark.parametrize("raw", ["foo", "P0", "很急"])
+    def test_unknown_value_is_not_labeled(self, raw):
+        """野值不算「已标注」—— _normalize_priority 会把它降成 normal, floor=normal
+        下同样被放行, 跟 #49 抱怨的「未标注被当 normal」是同一类 bug。
+        （codex review MEDIUM-2；来源: Notion 人工字段 / 自定义 agent /
+        upsert_external_labels，store 层不校验枚举。）"""
+        assert is_labeled(raw) is False
+        assert priority_label_state(raw) == LABEL_UNKNOWN
+        assert passes_priority_gate(raw, "normal", require_labeled=True) is False
+        # 但默认 off 时行为不变 —— 仍按 normal 放行。
+        assert passes_priority_gate(raw, "normal") is True
+
+    @pytest.mark.parametrize("raw,expected", [
+        (None, LABEL_MISSING), ("", LABEL_MISSING), ("  ", LABEL_MISSING),
+        ("foo", LABEL_UNKNOWN),
+        ("low", LABEL_KNOWN), ("🔴 紧急", LABEL_KNOWN),
+    ])
+    def test_三态分类(self, raw, expected):
+        """missing / unknown 必须分开计数 —— 合成一个数字正是 #49 的病根。"""
+        assert priority_label_state(raw) == expected
 
     @pytest.mark.parametrize("actual,floor", [
         (None, "normal"), ("", "normal"), (None, "low"), (None, "critical"),
         ("low", "normal"), ("critical", "normal"), ("normal", "normal"),
+        ("foo", "normal"), ("foo", "important"),
     ])
-    def test_default_off_is_byte_identical_to_priority_at_or_above(self, actual, floor):
-        """默认 require_labeled=False 时逐个 case 等价于旧行为 (向后兼容闸)。"""
+    def test_default_off_matches_priority_at_or_above(self, actual, floor):
+        """默认 require_labeled=False 时**过滤语义**逐 case 等价于旧行为。
+
+        注意口径: 等价的是「放行/阻断」的判定, 不是 bulk 的 stats dict / 日志字节
+        —— 那两处新增了 skipped_unlabeled / skipped_invalid_priority 计数键和
+        require_labeled 字段 (codex review LOW-2 纠正了原先「逐字节不变」的说法)。
+        """
         assert passes_priority_gate(actual, floor) is priority_at_or_above(actual, floor)
 
     def test_on_blocks_unlabeled_even_at_lowest_floor(self):

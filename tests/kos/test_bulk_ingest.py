@@ -53,6 +53,8 @@ def ingester(tmp_path):
 
 # 3 封已标注 (critical / normal / low) + 2 封从未标注
 _ROWS = [(1, "critical"), (2, "normal"), (3, "low"), (4, None), (5, None)]
+# 加一封野值 (Notion 人工字段 / 外部写入, store 层不校验枚举)
+_ROWS_WITH_JUNK = _ROWS + [(6, "P0")]
 
 
 def test_default_off_lets_unlabeled_through_as_normal(ingester):
@@ -91,6 +93,29 @@ def test_no_gate_at_all_pushes_everything(ingester):
     assert stats["pushed"] == 5
     assert stats["skipped_low_priority"] == 0
     assert stats["skipped_unlabeled"] == 0
+
+
+def test_invalid_priority_counted_separately(ingester):
+    """野值既不是 missing 也不是 low —— 三个跳过原因分开计数（codex MEDIUM-2）。
+
+    合成一个数字正是 #49 的病根：运维看不到「有人在写野值」这件事。
+    """
+    stats = ingester(_ROWS_WITH_JUNK, priority_floor="normal", require_labeled=True).run(
+        dry_run=True, verify_canary=False
+    )
+    assert stats["pushed"] == 2  # critical + normal
+    assert stats["skipped_low_priority"] == 1  # low
+    assert stats["skipped_unlabeled"] == 2  # 两封从未标注
+    assert stats["skipped_invalid_priority"] == 1  # "P0"
+
+
+def test_invalid_priority_still_passes_when_gate_off(ingester):
+    """默认 off 时野值仍按 normal 放行（现状行为不变）。"""
+    stats = ingester(_ROWS_WITH_JUNK, priority_floor="normal").run(
+        dry_run=True, verify_canary=False
+    )
+    assert stats["pushed"] == 5  # 除了 low 那封全过, 含野值那封
+    assert stats["skipped_invalid_priority"] == 0
 
 
 def test_limit_counts_pushed_not_candidates_under_gate(ingester):

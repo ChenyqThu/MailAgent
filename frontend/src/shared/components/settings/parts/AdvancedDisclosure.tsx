@@ -40,6 +40,8 @@ export function AdvancedDisclosure({
   // `inert` —— 原实现只挂 aria-hidden，折叠态的表单控件仍在 tab 序里）。
   const [open, setOpen] = React.useState(defaultOpen)
   const bodyId = React.useId()
+  // role="region" 必须有名字，否则无名 region 只是 AT 里的噪音（codex NIT-2）。
+  const labelId = React.useId()
 
   return (
     <div className={cn('group rounded-lg border border-ink-border-soft', className)}>
@@ -57,11 +59,13 @@ export function AdvancedDisclosure({
       >
         <CollapseChevron expanded={open} size={16} className="text-ink-fg-2" />
         <div className="flex-1 min-w-0">
-          <div className="text-aux font-medium text-ink-fg">{label}</div>
+          <div id={labelId} className="text-aux font-medium text-ink-fg">
+            {label}
+          </div>
           {helper ? <div className="text-meta text-ink-fg-2 mt-0.5">{helper}</div> : null}
         </div>
       </button>
-      <CollapsibleRegion expanded={open} id={bodyId}>
+      <CollapsibleRegion expanded={open} id={bodyId} role="region" aria-labelledby={labelId}>
         <div className="divide-y divide-ink-border-soft border-t border-ink-border-soft">
           {children}
         </div>

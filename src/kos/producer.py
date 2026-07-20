@@ -16,8 +16,9 @@ tag (doc §4)。原 KOS_OAUTH_CLIENT_* 绑 default (chat-save + consumer query)�
 两条消费路径共享 ``build_kos_page_payload``:
 - 增量 (new_watcher hook): ``push_email_to_kos(email_obj, ...)`` — 带 priority
   floor 过滤, fire-and-forget。
-- bulk 历史回填 (mailagent kos ingest / src/kos/bulk_ingest.py): 直接调
-  ``build_kos_page_payload`` + bulk client put_page, 不过滤 (全量入)。
+- bulk 历史回填 (``python -m src.kos.bulk_ingest``): 直接调
+  ``build_kos_page_payload`` + bulk client put_page。过滤在 ``run()`` 层做
+  (priority floor + require-labeled gate), payload builder 本身不负责过滤。
 """
 
 from __future__ import annotations
@@ -87,9 +88,35 @@ def priority_at_or_above(actual: Optional[str], floor: str) -> bool:
     return _PRIORITY_ORDER.index(a) >= _PRIORITY_ORDER.index(f)
 
 
+#: ``priority_label_state`` 的三种取值。
+LABEL_MISSING = "missing"  # 空/None/纯空白 —— AI 从没标注过
+LABEL_UNKNOWN = "unknown"  # 有值但不在枚举里 —— 人工/外部写入的野值
+LABEL_KNOWN = "known"  # 认识的 5 档之一
+
+
+def priority_label_state(actual: Optional[str]) -> str:
+    """把 priority 的「标注状态」分成三态 (issue #49 + codex review MEDIUM-2)。
+
+    🔴 为什么 unknown 要跟 missing 分开、又都不算「已标注」:
+    ``_normalize_priority`` 把不认识的值也降成 ``normal``, 所以 ``"foo"`` 这种野值
+    (Notion 人工字段 / 自定义 agent / ``upsert_external_labels`` 写入, store 层不校验
+    枚举) 在 floor=normal 下同样会被放行 —— 跟 #49 抱怨的「未标注被当 normal」是**同
+    一类 bug**。所以 ``require_labeled`` 下两者都挡。
+
+    但计数上必须分开: 把两种状态合成一个数字, 正是 #49 的病根。运维看到
+    ``skipped_invalid_priority`` 才知道要去查是谁写了野值。
+    """
+    if not actual or not str(actual).strip():
+        return LABEL_MISSING
+    s = str(actual).strip()
+    if s in _CN_PRIORITY_MAP or s.lower() in _PRIORITY_ORDER:
+        return LABEL_KNOWN
+    return LABEL_UNKNOWN
+
+
 def is_labeled(actual: Optional[str]) -> bool:
-    """AI 是否真的标注过优先级 —— 空/None/纯空白 = 未标注 (issue #49)。"""
-    return bool(actual and str(actual).strip())
+    """AI 是否**有效**标注过优先级 —— 只有能落到已知枚举才算 (issue #49)。"""
+    return priority_label_state(actual) == LABEL_KNOWN
 
 
 def passes_priority_gate(
@@ -329,9 +356,10 @@ async def push_email_to_kos(
 
     effective_priority = merged.get("priority") or ai_priority
     if not passes_priority_gate(effective_priority, priority_floor, require_labeled):
+        state = priority_label_state(effective_priority)
         reason = (
-            "unlabeled"
-            if require_labeled and not is_labeled(effective_priority)
+            f"label={state}"
+            if require_labeled and state != LABEL_KNOWN
             else f"< floor={priority_floor!r}"
         )
         logger.debug(
