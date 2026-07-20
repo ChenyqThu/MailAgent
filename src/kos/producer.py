@@ -76,10 +76,39 @@ def normalize_message_id_for_slug(message_id: str) -> str:
 
 
 def priority_at_or_above(actual: Optional[str], floor: str) -> bool:
-    """检查 actual priority 是否 ≥ floor (增量 hook 过滤用)。"""
+    """检查 actual priority 是否 ≥ floor (增量 hook 过滤用)。
+
+    ⚠️ ``actual=None`` (AI 从未标注) 在这里等价于 ``normal`` —— 这是历史语义,
+    不改 (改返回值会波及所有调用点且不向后兼容)。要区分「未标注」第三态请用
+    ``passes_priority_gate(..., require_labeled=True)``。
+    """
     a = _normalize_priority(actual)
     f = _normalize_priority(floor) if floor else "normal"
     return _PRIORITY_ORDER.index(a) >= _PRIORITY_ORDER.index(f)
+
+
+def is_labeled(actual: Optional[str]) -> bool:
+    """AI 是否真的标注过优先级 —— 空/None/纯空白 = 未标注 (issue #49)。"""
+    return bool(actual and str(actual).strip())
+
+
+def passes_priority_gate(
+    actual: Optional[str], floor: str, require_labeled: bool = False
+) -> bool:
+    """priority floor 过滤 + 「未标注」第三态 gate (issue #49)。
+
+    ``priority_at_or_above`` 把「AI 从未标注」和「AI 判定 normal」当成同一件事,
+    于是 ``--priority-floor normal`` 会把从未跑过 LLM 的历史邮件全部当 normal
+    放行 (提 issue 者本地: 6042 未分类 vs 707 已分类达标, 未分类占 89%), 把大量
+    没被处理过的脏全文塞进本该只收「AI 已确认重要」内容的知识库。
+
+    ``require_labeled=True`` 时未标注直接挡掉, 不落 floor 的默认放行分支。默认
+    False = 现状行为逐字节不变 (向后兼容)。增量 producer 与 bulk_ingest 两处
+    过滤点共用本函数, 保证语义单源。
+    """
+    if require_labeled and not is_labeled(actual):
+        return False
+    return priority_at_or_above(actual, floor)
 
 
 def _yaml_quote(s: Optional[str]) -> str:
@@ -280,12 +309,14 @@ async def push_email_to_kos(
     attachments: Optional[list[dict[str, Any]]] = None,
     client: Optional[KOSClient] = None,
     priority_floor: str = "normal",
+    require_labeled: bool = False,
     dry_run: bool = False,
 ) -> Optional[dict]:
     """增量推单封邮件到 KOS mailagent-emails source。Skip 返 None; success 返 dict。
 
     Skip cases (返 None, 不视为错):
         - ai_priority < priority_floor (增量过滤; bulk 路径不走这里)
+        - require_labeled=True 且 AI 从未标注优先级 (issue #49)
         - bulk client 未 configured (MAILAGENT_BULK_CLIENT_* env 缺)
     Failure (返 None + warning): KOSError / 其他 exception (fire-and-forget)。
     """
@@ -297,10 +328,15 @@ async def push_email_to_kos(
         merged["action_type"] = ai_action
 
     effective_priority = merged.get("priority") or ai_priority
-    if not priority_at_or_above(effective_priority, priority_floor):
+    if not passes_priority_gate(effective_priority, priority_floor, require_labeled):
+        reason = (
+            "unlabeled"
+            if require_labeled and not is_labeled(effective_priority)
+            else f"< floor={priority_floor!r}"
+        )
         logger.debug(
             f"[kos-producer] skip internal_id={internal_id} "
-            f"priority={effective_priority!r} < floor={priority_floor!r}"
+            f"priority={effective_priority!r} {reason}"
         )
         return None
 

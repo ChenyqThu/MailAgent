@@ -1219,6 +1219,7 @@ class NewWatcher:
             # 完整 AI labels (llm_processing.labels_json) + body + 附件 — 增量入图
             # 跟 bulk historical ingest 形态一致 (category/ai_summary/key_points 都带)
             priority_floor = getattr(settings, "kos_ingest_priority_floor", "normal")
+            require_labeled = bool(getattr(settings, "kos_require_labeled", False))
             dry_run = getattr(settings, "kos_ingest_dry_run", False)
             labels: Optional[dict] = None
             body_markdown: Optional[str] = None
@@ -1246,6 +1247,7 @@ class NewWatcher:
             logger.debug(
                 f"[kos-hook] dispatching internal_id={internal_id} "
                 f"priority={(labels or {}).get('priority')!r} floor={priority_floor!r} "
+                f"require_labeled={require_labeled} "
                 f"subject={subject_preview!r}"
             )
 
@@ -1259,6 +1261,7 @@ class NewWatcher:
                         labels=labels,
                         attachments=attachments,
                         priority_floor=priority_floor,
+                        require_labeled=require_labeled,
                         dry_run=dry_run,
                     )
                     if result is None:

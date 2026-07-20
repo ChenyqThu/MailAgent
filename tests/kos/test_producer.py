@@ -19,7 +19,9 @@ import pytest
 from src.kos.client import KOSClient, KOSError
 from src.kos.producer import (
     build_kos_page_payload,
+    is_labeled,
     normalize_message_id_for_slug,
+    passes_priority_gate,
     priority_at_or_above,
     push_email_to_kos,
 )
@@ -123,6 +125,62 @@ class TestPriorityFloor:
         assert priority_at_or_above("🔴 紧急", "normal") is True
         assert priority_at_or_above("🟡 重要", "important") is True
         assert priority_at_or_above("🟢 一般", "normal") is True
+
+
+class TestRequireLabeledGate:
+    """issue #49 — 「AI 从未标注」第三态, 不该被隐式并入 normal 由 floor 放行。"""
+
+    @pytest.mark.parametrize("raw", [None, "", "   "])
+    def test_is_labeled_false_for_missing(self, raw):
+        assert is_labeled(raw) is False
+
+    @pytest.mark.parametrize("raw", ["normal", "🟡 重要", "foo"])
+    def test_is_labeled_true_for_any_present_value(self, raw):
+        """unknown 值 ('foo') 也算标注过 —— AI 跑过、只是枚举没对上。"""
+        assert is_labeled(raw) is True
+
+    @pytest.mark.parametrize("actual,floor", [
+        (None, "normal"), ("", "normal"), (None, "low"), (None, "critical"),
+        ("low", "normal"), ("critical", "normal"), ("normal", "normal"),
+    ])
+    def test_default_off_is_byte_identical_to_priority_at_or_above(self, actual, floor):
+        """默认 require_labeled=False 时逐个 case 等价于旧行为 (向后兼容闸)。"""
+        assert passes_priority_gate(actual, floor) is priority_at_or_above(actual, floor)
+
+    def test_on_blocks_unlabeled_even_at_lowest_floor(self):
+        """require_labeled 与 floor 独立: floor='low' 也不该把未标注放行。"""
+        assert passes_priority_gate(None, "low", require_labeled=True) is False
+        assert passes_priority_gate("", "normal", require_labeled=True) is False
+
+    def test_on_keeps_labeled_filtering_by_floor(self):
+        """已标注的仍按 floor 正常过滤, gate 不改这一半语义。"""
+        assert passes_priority_gate("critical", "normal", require_labeled=True) is True
+        assert passes_priority_gate("low", "normal", require_labeled=True) is False
+
+
+class TestPushRequireLabeled:
+    """issue #49 在增量 producer 侧的接线。"""
+
+    @pytest.mark.asyncio
+    async def test_unlabeled_skipped_when_required(self):
+        client = MagicMock(spec=KOSClient)
+        result = await push_email_to_kos(
+            _make_email(), internal_id=1, client=client,
+            priority_floor="low", require_labeled=True,
+        )
+        assert result is None
+        client.put_page.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_unlabeled_passes_when_not_required(self):
+        """默认 off: 未标注仍按 normal 放行 (现状行为不变)。"""
+        client = MagicMock(spec=KOSClient)
+        client.configured = True
+        result = await push_email_to_kos(
+            _make_email(), internal_id=1, client=client,
+            priority_floor="normal", dry_run=True,
+        )
+        assert result is not None
         assert priority_at_or_above("🟢 一般", "important") is False
         assert priority_at_or_above("⚪ 低", "normal") is False
         assert priority_at_or_above("🟡 重要", "🟢 一般") is True

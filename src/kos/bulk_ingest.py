@@ -26,7 +26,12 @@ from typing import Any, Optional
 from loguru import logger
 
 from src.kos.client import KOSClient, KOSError
-from src.kos.producer import build_kos_page_payload, make_bulk_kos_client, priority_at_or_above
+from src.kos.producer import (
+    build_kos_page_payload,
+    is_labeled,
+    make_bulk_kos_client,
+    passes_priority_gate,
+)
 from src.repository import EmailRepository
 
 
@@ -39,6 +44,7 @@ class KOSBulkIngester:
         client: Optional[KOSClient] = None,
         rate_qps: float = 2.0,
         priority_floor: str = "low",
+        require_labeled: bool = False,
     ):
         self.db_path = db_path
         self.repo = EmailRepository(db_path=db_path)
@@ -47,6 +53,9 @@ class KOSBulkIngester:
         # 与增量 producer 同款过滤：priority < floor 的邮件不入 KOS (排除噪音)。
         # 默认 "low" = 不过滤 (向后兼容原全量行为); "normal" = 排除低优先。
         self.priority_floor = priority_floor
+        # issue #49: 「AI 从未标注」是独立于优先级枚举的第三态, 不该隐式并入
+        # normal 被 floor 放行。默认 False = 现状行为不变。
+        self.require_labeled = require_labeled
         self._ensure_log_table()
 
     # ---- resume 追踪表 (独立, 不碰主 schema migration) ----
@@ -203,31 +212,42 @@ class KOSBulkIngester:
         # 永远卡在最近一批低优先邮件上（codex review HIGH）。故有 floor 时取全部候选、由循环
         # 累计 pushed 到 limit；无 floor 时 SQL LIMIT 截断（候选=处理，等价）。
         floor_active = bool(self.priority_floor and self.priority_floor != "low")
-        candidates = self._candidates(None if floor_active else limit, retry_failed, require_body)
+        # require_labeled 与 floor 独立: 要「只入已标注」时, floor='low' 不该把
+        # 未标注邮件放行 —— 否则 gate 形同虚设 (issue #49)。
+        gate_active = floor_active or self.require_labeled
+        candidates = self._candidates(None if gate_active else limit, retry_failed, require_body)
         stats = {
             "total": len(candidates),
             "pushed": 0,
             "failed": 0,
             "skipped_no_meta": 0,
             "skipped_low_priority": 0,
+            "skipped_unlabeled": 0,
         }
         logger.info(
             f"[bulk] start total={stats['total']} dry_run={dry_run} "
             f"verify_canary={verify_canary} priority_floor={self.priority_floor!r} "
+            f"require_labeled={self.require_labeled} "
             f"rate={1.0 / self._sleep if self._sleep else 'unlimited'}qps"
         )
 
         for i, iid in enumerate(candidates, 1):
             # floor 启用 + 带 limit：累计到 limit 个实际 ingest（pushed，含 dry-run）就停 ——
             # priority 跳过的不计入 limit，故分批不会被低优先批卡死（codex review HIGH）。
-            if floor_active and limit and stats["pushed"] >= limit:
+            if gate_active and limit and stats["pushed"] >= limit:
                 break
-            # 排除低优先噪音 (与增量 producer priority_at_or_above 同语义;
-            # 未分类/无 priority → 视为 normal → 保留)。floor='low' 时不过滤。
-            if self.priority_floor and self.priority_floor != "low":
+            # 排除低优先噪音 (与增量 producer 共用 passes_priority_gate, 语义单源)。
+            # floor='low' + require_labeled=False 时不过滤 —— 未分类/无 priority
+            # 视为 normal 保留 (历史语义); require_labeled=True 时未标注直接挡掉。
+            if gate_active:
                 pri = self._get_labels(iid).get("priority")
-                if not priority_at_or_above(pri, self.priority_floor):
-                    stats["skipped_low_priority"] += 1
+                if not passes_priority_gate(pri, self.priority_floor, self.require_labeled):
+                    key = (
+                        "skipped_unlabeled"
+                        if self.require_labeled and not is_labeled(pri)
+                        else "skipped_low_priority"
+                    )
+                    stats[key] += 1
                     continue
             built = self._build_one(iid)
             if built is None:
@@ -291,10 +311,30 @@ if __name__ == "__main__":
         help="排除低于此优先级的邮件 (low/normal/important/urgent/critical; "
         "默认 low=不过滤; normal=排除低优先噪音, 未分类视为 normal 保留)",
     )
+    ap.add_argument(
+        "--require-labeled",
+        action="store_true",
+        default=None,
+        help="只入 AI 已标注过优先级的邮件, 未标注直接跳过 (issue #49; "
+        "不传则跟随 KOS_REQUIRE_LABELED env, 默认 false=未标注按 normal 放行)",
+    )
     args = ap.parse_args()
 
+    # CLI 显式传 --require-labeled 优先; 不传则跟随 env (config 缺省 False)。
+    require_labeled = args.require_labeled
+    if require_labeled is None:
+        try:
+            from src.config import settings
+
+            require_labeled = bool(getattr(settings, "kos_require_labeled", False))
+        except Exception:
+            require_labeled = False
+
     ing = KOSBulkIngester(
-        db_path=args.db_path, rate_qps=args.rate, priority_floor=args.priority_floor
+        db_path=args.db_path,
+        rate_qps=args.rate,
+        priority_floor=args.priority_floor,
+        require_labeled=require_labeled,
     )
     result = ing.run(
         limit=args.limit,

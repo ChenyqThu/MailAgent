@@ -480,6 +480,16 @@ class Config(BaseSettings):
             "important / normal / low. 默认 'normal'。"
         ),
     )
+    kos_require_labeled: bool = Field(
+        default=False, env="KOS_REQUIRE_LABELED",
+        description=(
+            "issue #49 — 「AI 从未标注优先级」是独立于优先级枚举的第三态, 默认被"
+            "隐式并入 normal 后由 priority_floor 放行 (从未跑过 LLM 的历史邮件"
+            "会大批混进知识库)。true = 未标注直接跳过, 不落 floor 的默认放行分支; "
+            "增量 producer 与 bulk_ingest 两处过滤点同时生效。默认 false = 现状"
+            "行为不变。bulk 侧可用 --require-labeled 覆盖。"
+        ),
+    )
     kos_ingest_dry_run: bool = Field(
         default=False, env="KOS_INGEST_DRY_RUN",
         description=(
