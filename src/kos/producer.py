@@ -152,7 +152,9 @@ def passes_priority_gate(
     没被处理过的脏全文塞进本该只收「AI 已确认重要」内容的知识库。
 
     ``require_labeled=True`` 时未标注直接挡掉, 不落 floor 的默认放行分支。默认
-    False = 现状行为逐字节不变 (向后兼容)。增量 producer 与 bulk_ingest 两处
+    False = 放行/阻断语义与改动前完全一致 (向后兼容)。注意口径: 等价的是**过滤判定**,
+    不是输出字节 —— bulk 的 stats dict 多了 skipped_unlabeled / skipped_invalid_priority
+    两个计数键、日志多了 require_labeled 字段 (codex review LOW-2)。增量 producer 与 bulk_ingest 两处
     过滤点共用本函数, 保证语义单源。
     """
     if require_labeled and not is_labeled(actual):
