@@ -187,6 +187,25 @@ class TestBuildKosPagePayload:
         assert "recipient: 'bob@x.com'" in content
         assert "cc: ['c@x.com', 'd@y.com', 'e@z.com']" in content
 
+    def test_body_meta_block_does_not_repeat_recipients(self):
+        """issue #48: To/CC 只在 frontmatter 出现一次, body meta_block 不重复。
+
+        重复写的代价是企业群发的长收件人名单被切成独立 chunk 进 embedding,
+        语义检索时压过正文结论段落。
+        """
+        _, content = build_kos_page_payload(
+            internal_id=1, subject="X", sender="a@b", date_iso="2026-01-01",
+            mailbox="收件箱", to_addr="bob@x.com", cc_addr="c@x.com, d@y.com",
+        )
+        # frontmatter 与 body 的分界: body 从 "# {subject}" 起
+        body = content.split("# X", 1)[1]
+        assert "bob@x.com" not in body
+        assert "c@x.com" not in body and "d@y.com" not in body
+        # meta_block 仍保留 From / Date / Mailbox
+        assert "> From: a@b" in body
+        assert "> Date: 2026-01-01" in body
+        assert "> Mailbox: 收件箱" in body
+
     def test_body_and_ai_section(self):
         _, content = build_kos_page_payload(
             internal_id=100, subject="Q3 Review", sender="a@b",

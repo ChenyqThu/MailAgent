@@ -204,11 +204,14 @@ def build_kos_page_payload(
     frontmatter = "\n".join(fm)
 
     # ---- body ----
-    recipient_line = f" → To: {to_addr}" if to_addr else ""
-    cc_line = f"\n> CC: {', '.join(cc_list)}" if cc_list else ""
+    # issue #48: meta_block 不重复写 To/CC —— frontmatter 的 recipient/cc 已完整
+    # 覆盖 (可回溯查询), body 里再拼一遍的代价是: 企业群发的长收件人名单会被切成
+    # 独立 chunk 进 embedding, 语义检索时压过正文真正有价值的结论段落 (实测 top-1
+    # 命中「收件人名单」而非「【结论】不可发布」)。附带收益: skeleton 变小,
+    # 正文截断预算变大。
     meta_block = (
         f"> Ingested via mailagent kos push on {date_only}.\n"
-        f"> From: {sender}{recipient_line}{cc_line}\n"
+        f"> From: {sender}\n"
         f"> Date: {date_iso}\n"
         f"> Mailbox: {mailbox}"
     )
