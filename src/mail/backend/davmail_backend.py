@@ -138,13 +138,51 @@ def _normalize_date_iso(date_str: str) -> str:
         return date_str
 
 
+# RFC 5322 §2.2.3 folding: CRLF + 续行空白. Message-ID 内部不允许任何 WSP,
+# 所以折行处整段删除 (不像普通 header 那样 unfold 成一个空格) 才是无损还原.
+_HEADER_FOLD_RE = re.compile(r"[\r\n]+[ \t]*")
+
+
+def _normalize_message_id(value: Optional[str]) -> str:
+    """Message-ID 归一化: RFC 2047 decode + unfold + 去尖括号 → 裸 msgid.
+
+    发件方 (Bugzilla / 旧版 Outlook 中继) 会把长 Message-ID 编成 encoded-word 并折行::
+
+        =?UTF-8?Q?=3Cbug-1289017-...?=\\r\\n =?UTF-8?Q?/=3E?=
+
+    这个原始值一路存进 ``email_metadata.message_id`` 后有两类故障:
+
+    1. 拿去拼 IMAP ``UID SEARCH HEADER Message-ID "<...>"`` 时, quoted-string 里
+       带 CR/LF 违反 RFC 3501 §4.3 → DavMail 报 ``Invalid quoted token`` → fetch
+       确定性失败 → 退避 5 次进 dead_letter (issue #47);
+    2. 静默错配 —— 线程根兜底 (``_thread_id_from_headers``) 拿它当 thread_id 会断
+       线程; ``get_by_message_id`` 去重/跨 backend merge 是纯等值比较, 同一封信
+       AppleScript 路径存干净值、davmail 路径存脏值 → 两行并存.
+
+    所以归一化落在**写入侧**(三个 parse 点), 两类故障一并消掉; 读取侧
+    (``_lookup_uid_by_message_id``) 再做一次是为了兼容修复前已经存脏的库行,
+    不需要数据迁移. 干净 ASCII 值上是 no-op, 字节不变.
+
+    单独 decode 不够: 纯 ASCII 的折行 msgid (无 encoded-word) 过 ``decode_header``
+    原样返回, ``\\r\\n`` 还在 —— decode 与 unfold 两步缺一不可.
+    """
+    if not value:
+        return ""
+    return _HEADER_FOLD_RE.sub("", _decode_mime_header(value)).strip().strip("<>")
+
+
 def _quote_imap_string(value: str) -> str:
     """IMAP 字符串字面量 quote (RFC 3501 §4.3 quoted string).
 
     ``imaplib.IMAP4.uid("search", "HEADER", "Message-ID", value)`` 不会自动 quote
     含 ``<>+=`` 之类特殊字符的 Message-ID; 必须显式 quote 否则 server 当 atom 解析失败.
+
+    CR/LF 在 quoted-string 里非法 (§4.3 QUOTED-CHAR 排除), 一旦漏进来 server 会
+    直接 ``Invalid quoted token``. 调用方本应先归一化 (见 ``_normalize_message_id``),
+    这里剔除是第二层保险 —— 宁可 SEARCH 命中 0 条, 不要整条连接报错.
     """
-    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    stripped = _HEADER_FOLD_RE.sub("", value)
+    return '"' + stripped.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
 def _thread_id_from_headers(
@@ -929,10 +967,14 @@ class DavMailBackend(IMailBackend):
 
         HIGH #2: 用 ``_quote_imap_string`` quote Message-ID — 含 ``<>+=`` / ``"`` / 空格
         的 message_id 不 quote 会被 server 当 atom 解析失败 (RFC 3501 §4.3 + §6.4.4).
+
+        issue #47: 先过 ``_normalize_message_id`` —— 写入侧已归一化, 这里再来一次是
+        为了兼容修复前存进 ``email_metadata.message_id`` 的脏值 (encoded-word + 折行),
+        免掉一次数据迁移. 干净值上是 no-op.
         """
         if not message_id:
             return None
-        mid_clean = message_id.strip()
+        mid_clean = _normalize_message_id(message_id) or message_id.strip()
         # IMAP SEARCH 需要带 < > 的完整 Message-ID
         if not mid_clean.startswith("<"):
             mid_clean = f"<{mid_clean}>"
@@ -993,7 +1035,7 @@ class DavMailBackend(IMailBackend):
         mime_bytes = b"".join(mime_chunks)
 
         msg = BytesParser().parsebytes(mime_bytes)
-        message_id = (msg.get("Message-ID") or "").strip().strip("<>")
+        message_id = _normalize_message_id(msg.get("Message-ID"))
         # RFC 2047 decode — DavMail IMAP 返回 raw encoded-word, AppleScript 返回 decoded 字符串
         subject = _decode_mime_header(msg.get("Subject"))
         sender_full = _decode_mime_header(msg.get("From"))
@@ -1963,7 +2005,7 @@ class DavMailBackend(IMailBackend):
                 )
                 dropped += 1
                 continue
-            message_id = (msg.get("Message-ID") or "").strip().strip("<>")
+            message_id = _normalize_message_id(msg.get("Message-ID"))
             # RFC 2047 decode 线程头, 防 encoded-word 长 Message-ID 截断 (见 fetch 路径).
             thread_id = _thread_id_from_headers(
                 msg.get("References"), msg.get("In-Reply-To")

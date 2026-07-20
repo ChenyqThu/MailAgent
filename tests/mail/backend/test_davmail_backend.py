@@ -4,6 +4,8 @@
 - CRITICAL #1: _decode_mime_header 在 module load 时可用 (import 顺序)
 - CRITICAL #3: UIDVALIDITY 从 SELECT 响应读 (untagged), 不从 STATUS
 - HIGH #2: _lookup_uid_by_message_id 对含特殊字符的 message-id 加 quote
+- issue #47: RFC2047 encoded-word + 折行的 Message-ID 归一化 (脏值直接拼进
+  UID SEARCH → Invalid quoted token → fetch 确定性失败 → dead_letter)
 - HIGH #3: mark_as_read / set_flag 接受 int (internal_id) + str (message_id) dispatch
 - HIGH #5: date_received 归一为 ISO 8601
 - HIGH #8: _parse_batch_headers 失败时 WARNING log + count
@@ -25,6 +27,7 @@ from src.mail.backend.davmail_backend import (
     _imap_to_mailbox_label,
     _mailbox_to_imap,
     _normalize_date_iso,
+    _normalize_message_id,
     _quote_imap_string,
     _read_uidvalidity_from_select,
     _select_is_writable,
@@ -226,6 +229,74 @@ def test_lookup_uid_by_message_id_exception_fallback():
 def test_lookup_uid_by_message_id_empty_input():
     imap = MagicMock()
     assert DavMailBackend._lookup_uid_by_message_id(imap, "") is None
+
+
+# --------- _normalize_message_id (issue #47) ---------
+
+# Bugzilla via Outlook 中继实际发出的字节 (issue #47 复现样本):
+# 长 Message-ID 被编成 RFC 2047 encoded-word 并在中间折行.
+_FOLDED_ENCODED_MSGID = (
+    "=?UTF-8?Q?=3Cbug-1289017-7309-r4eOkdh4O5=40http=2Ebugzilla=2Etp-link=2Ecom?="
+    "\r\n =?UTF-8?Q?/=3E?=\n"
+)
+_FOLDED_ENCODED_EXPECTED = "bug-1289017-7309-r4eOkdh4O5@http.bugzilla.tp-link.com/"
+
+
+def test_normalize_message_id_decodes_folded_encoded_word():
+    """issue #47: encoded-word + 折行的 Message-ID 还原成裸 msgid."""
+    assert _normalize_message_id(_FOLDED_ENCODED_MSGID) == _FOLDED_ENCODED_EXPECTED
+
+
+def test_normalize_message_id_unfolds_plain_ascii():
+    """decode 单独不够: 纯 ASCII 折行不含 encoded-word, decode_header 原样返回.
+
+    Message-ID 内部不允许 WSP, 所以折行处整段删除才是无损还原.
+    """
+    assert _normalize_message_id("<aaaa\r\n bbbb@x.com>") == "aaaabbbb@x.com"
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "<abc+def@x.com>",
+        "abc+def@x.com",
+        "  <abc+def@x.com>  ",
+    ],
+)
+def test_normalize_message_id_clean_value_is_noop(raw):
+    """干净值上归一化不改字节 (回归保护: 别把正常 msgid 改坏)."""
+    assert _normalize_message_id(raw) == "abc+def@x.com"
+
+
+def test_normalize_message_id_empty():
+    assert _normalize_message_id(None) == ""
+    assert _normalize_message_id("") == ""
+
+
+def test_quote_imap_string_strips_crlf():
+    """issue #47 第二层保险: CR/LF 在 quoted-string 里非法 (RFC 3501 §4.3).
+
+    漏进来会让 DavMail 报 `Invalid quoted token` 整条命令失败 —— 宁可 SEARCH
+    命中 0 条也不要报错.
+    """
+    out = _quote_imap_string("<a\r\n b@x.com>")
+    assert "\r" not in out and "\n" not in out
+    assert out == '"<ab@x.com>"'
+
+
+def test_lookup_uid_by_message_id_normalizes_dirty_stored_value():
+    """issue #47: 修复前已存进库的脏值走读取侧归一化, 不需要数据迁移.
+
+    这是 dead_letter 的根因链: 脏值直接拼进 UID SEARCH → Invalid quoted token
+    → fetch 确定性失败 → 退避 5 次 → dead_letter.
+    """
+    imap = MagicMock()
+    imap.uid.return_value = ("OK", [b"147644"])
+    uid = DavMailBackend._lookup_uid_by_message_id(imap, _FOLDED_ENCODED_MSGID)
+    assert uid == 147644
+    quoted_arg = imap.uid.call_args.args[-1]
+    assert "\r" not in quoted_arg and "\n" not in quoted_arg
+    assert quoted_arg == f'"<{_FOLDED_ENCODED_EXPECTED}>"'
 
 
 # --------- _parse_appenduid (MEDIUM regex) ---------

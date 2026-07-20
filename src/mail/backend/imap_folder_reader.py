@@ -28,6 +28,7 @@ from src.mail.backend.davmail_backend import (
     _extract_display_name,
     _extract_first_email,
     _normalize_date_iso,
+    _normalize_message_id,
     _read_uidvalidity_from_select,
     _select_is_writable,
 )
@@ -128,7 +129,7 @@ def parse_message_to_folder_dict(
 
     msg = BytesParser().parsebytes(raw_bytes)
 
-    message_id = (msg.get("Message-ID") or "").strip().strip("<>") or None
+    message_id = _normalize_message_id(msg.get("Message-ID")) or None
     references = msg.get("References") or ""
     in_reply_to = msg.get("In-Reply-To") or ""
     thread_id = None
