@@ -37,6 +37,28 @@ from src.models import Email
 # 按字节而非字符 — 中文 UTF-8 每字 3 字节, 字符截断会让中文邮件远超 50KB。
 _PAGE_CAP_BYTES = 49000
 
+# ---- 分区上限 (codex review MEDIUM-3) --------------------------------------
+# 原实现只给 body 做预算, 其余区块**全部无界**: cc 名单 (企业群发可达数千个地址)、
+# ai_summary / key_points (LLM 想写多长写多长)、附件清单 (条数 × 文件名长度) 都能
+# 单独把 49KB 吃光。吃光之后 body_budget <= 0, 而截断判据 `> body_budget > 0` 的
+# 链式比较此时整体为 False → **完全不截, 完整正文照塞** —— 越是该截的场景越不截。
+#
+# 所以每个无界区块各自设上限, 让 skeleton 有确定的上界 (~33KB), body 恒有预算;
+# 末尾再加一道整页兜底截断防漏。
+_FM_CC_MAX = 200  # frontmatter cc 条目上限
+_FM_ADDR_CAP_BYTES = 4000  # frontmatter 单个地址字段 (recipient) 字节上限
+_AI_TEXT_CAP_BYTES = 6000  # ai_summary / key_points **各自**的字节上限
+_ATT_LIST_MAX = 50  # 附件清单条目上限
+_ATT_NAME_MAX = 180  # 单条文件名字符上限
+
+
+def _truncate_bytes(text: str, cap: int, marker: str = "…[truncated]") -> str:
+    """按 UTF-8 字节截断, 多字节边界处用 errors='ignore' 丢掉半个字符。"""
+    raw = text.encode("utf-8")
+    if len(raw) <= cap:
+        return text
+    return raw[:cap].decode("utf-8", errors="ignore") + marker
+
 # Priority hierarchy (low → high). Index 越大优先级越高。
 _PRIORITY_ORDER: list[str] = ["low", "normal", "important", "urgent", "critical"]
 
@@ -196,6 +218,21 @@ def build_kos_page_payload(
         attachments: [{filename, size, content_type}] — 进 "## Attachments"。
         notion_page_id: Notion mirror — 进 source_refs。
 
+    整页恒 ≤ ``_PAGE_CAP_BYTES``。**超限时截谁**, 按「每字节语义价值」从低到高砍
+    (codex review MEDIUM-3 之前只有 body 有预算, 其余区块无界)::
+
+        1. 附件清单   —— 条数 _ATT_LIST_MAX + 文件名 _ATT_NAME_MAX。文件名不承载
+                        结论, entity 抽取也拿不到东西, 每字节价值最低。
+        2. AI 分析区  —— ai_summary / key_points 各 _AI_TEXT_CAP_BYTES。LLM 输出
+                        无长度约束, 但前几百字节就把摘要说完了。
+        3. 正文       —— 拿走剩余全部预算, 超出部分截断 + marker 指回 SQLite 原文。
+        4. frontmatter —— **绝不截**。它是 YAML, 截断 = 整页解析失败, 连 metadata
+                        都丢。所以它内部的无界字段 (recipient / cc) 自己有界,
+                        cc 被砍时写 ``cc_truncated: N`` 留痕。
+
+    末尾还有一道整页兜底硬截 (从尾部砍, frontmatter 在头部恒完整), 防某个区块的
+    上限算漏了导致整页超限被 KOS content-sanity 拒收。
+
     Returns:
         (slug, content)。slug='sources/email/{internal_id}'。
     """
@@ -226,9 +263,15 @@ def build_kos_page_payload(
     if sender_name:
         fm.append(f"sender_name: {_yaml_quote(sender_name)}")
     if to_addr:
-        fm.append(f"recipient: {_yaml_quote(to_addr)}")
+        # frontmatter 是唯一**绝不截**的区块 (截了 YAML 就废, 整页解析失败), 所以
+        # 它内部的无界字段必须自己有界 —— 企业群发的 To/CC 能到几千个地址。
+        fm.append(f"recipient: {_yaml_quote(_truncate_bytes(to_addr, _FM_ADDR_CAP_BYTES))}")
     if cc_list:
-        fm.append("cc: [" + ", ".join(_yaml_quote(c) for c in cc_list) + "]")
+        cc_shown = cc_list[:_FM_CC_MAX]
+        fm.append("cc: [" + ", ".join(_yaml_quote(c) for c in cc_shown) + "]")
+        if len(cc_list) > len(cc_shown):
+            # 显式记录被砍掉多少 —— 静默截断会让「这封信到底抄送了谁」查不出来。
+            fm.append(f"cc_truncated: {len(cc_list) - len(cc_shown)}")
     fm.append(f"mailbox: {_yaml_quote(mailbox)}")
     if thread_id:
         fm.append(f"thread_id: {_yaml_quote(thread_id)}")
@@ -276,8 +319,9 @@ def build_kos_page_payload(
     parts.append("")  # body 占位, 最后按字节预算截入
 
     # AI 分析区块 — 给 KOS embedding / entity 抽取提供语义浓缩
-    ai_summary = (labels.get("ai_summary") or "").strip()
-    key_points = (labels.get("key_points") or "").strip()
+    # LLM 输出无长度约束, 各自设上限 (整页预算的第二优先级牺牲品, 见文件头分区上限)。
+    ai_summary = _truncate_bytes((labels.get("ai_summary") or "").strip(), _AI_TEXT_CAP_BYTES)
+    key_points = _truncate_bytes((labels.get("key_points") or "").strip(), _AI_TEXT_CAP_BYTES)
     if ai_summary or key_points or ai_priority or ai_category:
         parts.extend(["", "## AI 分析", ""])
         if ai_summary:
@@ -299,11 +343,15 @@ def build_kos_page_payload(
     # 附件清单 (仅文件名/大小/类型, 不含二进制; 附件正文另走 attachment FTS)
     if attachments:
         parts.extend(["", "## Attachments", ""])
-        for a in attachments:
-            name = a.get("filename", "?")
+        # 条数 × 文件名长度都无界 —— 整页预算的**第一**牺牲品 (文件名的每字节语义
+        # 价值最低: 它不承载结论, entity 抽取也拿不到什么)。
+        for a in attachments[:_ATT_LIST_MAX]:
+            name = str(a.get("filename", "?"))[:_ATT_NAME_MAX]
             size_mb = (a.get("size") or 0) / 1024 / 1024
             ct = a.get("content_type", "")
             parts.append(f"- {name} ({size_mb:.2f} MB, {ct})")
+        if len(attachments) > _ATT_LIST_MAX:
+            parts.append(f"- _(另有 {len(attachments) - _ATT_LIST_MAX} 个附件未列出)_")
 
     # body 按字节截断, 保证整页 content < _PAGE_CAP_BYTES。body_budget = 整页上限
     # 减去 frontmatter + header + AI + 附件 的开销 (body 占位为空时的骨架字节)。
@@ -316,11 +364,29 @@ def build_kos_page_payload(
     # -8 buffer: 结尾 "\n" (1) + decode(errors=ignore) 多字节边界余量
     body_budget = _PAGE_CAP_BYTES - skeleton_bytes - len(marker.encode("utf-8")) - 8
     body_bytes = body.encode("utf-8")
-    if len(body_bytes) > body_budget > 0:
+    if body_budget <= 0:
+        # skeleton 自己就吃满了预算, 正文一个字节都放不下。
+        # 🔴 原实现这里写的是 `if len(body_bytes) > body_budget > 0:` —— 链式比较在
+        # body_budget <= 0 时整体为 False, 于是**完全不截, 完整正文照塞**, 越是该截
+        # 的场景越不截 (codex review MEDIUM-3)。分区上限落地后这条路径理论上不可达,
+        # 保留作显式兜底。
+        body = marker.strip()
+    elif len(body_bytes) > body_budget:
         body = body_bytes[:body_budget].decode("utf-8", errors="ignore") + marker
     parts[body_idx] = body
 
     content = frontmatter + "\n\n" + "\n".join(parts) + "\n"
+    # 整页兜底: 上面每个区块都各自有界, 这里是「算漏了」时的最后一道闸 —— 宁可尾部
+    # 被砍掉一截 markdown, 也不要整页超限被 KOS content-sanity 拒收 (client.py 的
+    # tool-level error 会让这次 put 变成 KOSError, 整封邮件入不了库)。
+    # 从尾部砍: frontmatter 在头部, 永远完整, YAML 不会被破坏。
+    raw = content.encode("utf-8")
+    if len(raw) > _PAGE_CAP_BYTES:
+        logger.warning(
+            f"[kos-producer] internal_id={internal_id} 分区上限后整页仍超限 "
+            f"({len(raw)} > {_PAGE_CAP_BYTES}), 尾部硬截 —— 说明某个区块的上限算漏了"
+        )
+        content = raw[:_PAGE_CAP_BYTES].decode("utf-8", errors="ignore")
     return slug, content
 
 

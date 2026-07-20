@@ -342,6 +342,64 @@ class TestBuildKosPagePayload:
         assert "mailagent:7" in content
         assert len(content.encode("utf-8")) <= 49000
 
+    # ---- 分区上限 (codex review MEDIUM-3) ----
+    #
+    # 原实现只有 body 有预算, 其余区块全部无界。任何一个把 49KB 吃光后
+    # body_budget <= 0, 而截断判据 `> body_budget > 0` 的链式比较此时整体为
+    # False → 完全不截、完整正文照塞。越是该截的场景越不截。
+
+    def test_page_cap_holds_when_ai_section_is_huge(self):
+        """超长 ai_summary + key_points 不再能把整页顶爆。"""
+        _, content = build_kos_page_payload(
+            internal_id=70, subject="X", sender="a@b", date_iso="2026-01-01",
+            mailbox="收件箱", body_markdown="正文" * 5000,
+            labels={"ai_summary": "摘" * 40000, "key_points": "点" * 40000},
+        )
+        assert len(content.encode("utf-8")) <= 49000
+
+    def test_page_cap_holds_when_attachment_list_is_huge(self):
+        """500 个长文件名附件 —— 条数和单条长度都被截。"""
+        atts = [
+            {"filename": f"{'超长文件名' * 40}_{i}.pdf", "size": 1024, "content_type": "application/pdf"}
+            for i in range(500)
+        ]
+        _, content = build_kos_page_payload(
+            internal_id=71, subject="X", sender="a@b", date_iso="2026-01-01",
+            mailbox="收件箱", body_markdown="正文" * 5000, attachments=atts,
+        )
+        assert len(content.encode("utf-8")) <= 49000
+        assert "另有 450 个附件未列出" in content
+
+    def test_page_cap_holds_when_cc_list_is_huge(self):
+        """企业群发 3000 个抄送 —— frontmatter 绝不截, 所以 cc 自己有界。"""
+        cc = ", ".join(f"user{i}@verylongcorporatedomain.example.com" for i in range(3000))
+        _, content = build_kos_page_payload(
+            internal_id=72, subject="X", sender="a@b", date_iso="2026-01-01",
+            mailbox="收件箱", body_markdown="正文" * 5000, cc_addr=cc,
+        )
+        assert len(content.encode("utf-8")) <= 49000
+        # 静默截断会让「这封信到底抄送了谁」查不出来 —— 必须留痕。
+        assert "cc_truncated: 2800" in content
+        # frontmatter 仍是完整闭合的 YAML（--- ... ---），没被从中间砍断。
+        assert content.startswith("---\n")
+        assert "\n---\n" in content
+
+    def test_page_cap_holds_when_everything_is_huge(self):
+        """所有无界区块同时爆 —— 兜底闸必须守住。"""
+        atts = [
+            {"filename": f"{'名' * 200}_{i}.pdf", "size": 1, "content_type": "x"}
+            for i in range(300)
+        ]
+        cc = ", ".join(f"u{i}@d{'x' * 60}.com" for i in range(2000))
+        _, content = build_kos_page_payload(
+            internal_id=73, subject="主题" * 300, sender="a@b", date_iso="2026-01-01",
+            mailbox="收件箱", body_markdown="正" * 100000, cc_addr=cc,
+            to_addr=", ".join(f"t{i}@dddd.com" for i in range(2000)),
+            attachments=atts,
+            labels={"ai_summary": "摘" * 50000, "key_points": "点" * 50000},
+        )
+        assert len(content.encode("utf-8")) <= 49000
+
     def test_no_truncation_when_small(self):
         _, content = build_kos_page_payload(
             internal_id=8, subject="X", sender="a@b", date_iso="2026-01-01",
