@@ -13,6 +13,12 @@
 // 顺手修掉手抄版共有的一个真问题：折叠态的子元素仍在 tab 序里（height:0 不影响
 // 可聚焦性），键盘用户会 tab 进一个看不见的区域。React 19 的 `inert` 一次解决
 // —— 它同时管焦点、点击和 AT 树，比单独挂 aria-hidden 严谨。
+//
+// 测试覆盖的边界（2026-07-20 owner 拍板，别再重提）：单测断的是**结构**不变量
+// （padding 不许回挂到 0fr 那层、inert 两态、role 透传）。happy-dom 不做布局计算，
+// 证不了「折叠高度真是 0」也证不了「Tab 跳过内部按钮」——那两条是用浏览器实测
+// 确认的（位移 0px、padding 残高 0px），没有落成常驻 Playwright 回归。改这个文件
+// 时如果动了盒模型层级，请重新手工量一次。
 
 import { ChevronDown } from 'lucide-react'
 
