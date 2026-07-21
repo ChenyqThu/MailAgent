@@ -80,6 +80,83 @@ def test_list_enriched_filter_mailbox_and_flag(client):
     assert [row["internal_id"] for row in data] == [EMAIL_ID]
 
 
+def test_list_enriched_mailbox_matches_label_variants(client, temp_db):
+    """内建视图按判定集 IN(...) 认变体行 (issue #42 后续)。
+
+    fork 生产实证: 库里 mailbox='INBOX' 的历史行, 之前恒精确匹配 '收件箱' → 在收件箱
+    视图**不可见**, 只在「所有邮件」露出, 而判定面 (Sent 游标/报告) 已认全变体。
+    owner 库零变体行 → 本行为对其逐字节等价, 故这里显式造一行验证。
+    """
+    import sqlite3
+
+    variant_id = 990001
+    conn = sqlite3.connect(str(temp_db))
+    try:
+        conn.execute(
+            """INSERT INTO email_metadata
+               (internal_id, message_id, subject, sender, date_received, mailbox,
+                is_read, is_flagged, sync_status, retry_count)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+            (
+                variant_id, "<variant-inbox@example.com>", "Variant label row",
+                "eve@example.com", "2026-05-02 09:00:00", "INBOX",
+                0, 0, "synced", 0,
+            ),
+        )
+        conn.commit()
+
+        r = client.get("/api/email/list-enriched", params={"mailbox": "收件箱"})
+        assert r.status_code == 200
+        assert variant_id in {row["internal_id"] for row in r.json()["data"]}
+
+        # 传变体本身同解 (远程 web 端可能带 IMAP 原名)
+        r = client.get("/api/email/list-enriched", params={"mailbox": "INBOX"})
+        assert r.status_code == 200
+        assert {EMAIL_ID, variant_id}.issubset({row["internal_id"] for row in r.json()["data"]})
+    finally:
+        conn.execute("DELETE FROM email_metadata WHERE internal_id = ?", (variant_id,))
+        conn.commit()
+        conn.close()
+
+
+def test_list_enriched_custom_folder_stays_exact(client, temp_db):
+    """自定义文件夹视图维持精确匹配 —— 变体展开不得泄漏到自定义文件夹。
+
+    🔴 已知取舍的反向锁: 名为 'ProjectX' 的自定义文件夹只认自己, 不会因为某个内建
+    变体集而多带行。(反向的重复显示 —— 自定义文件夹恰好叫 'Sent' 时同时出现在
+    发件箱视图 —— 是有意接受的降级, 见 mailbox_semantics.filter_labels_for_mailbox。)
+    """
+    import sqlite3
+
+    folder_id = 990002
+    conn = sqlite3.connect(str(temp_db))
+    try:
+        conn.execute(
+            """INSERT INTO email_metadata
+               (internal_id, message_id, subject, sender, date_received, mailbox,
+                is_read, is_flagged, sync_status, retry_count)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+            (
+                folder_id, "<custom-folder@example.com>", "Custom folder row",
+                "frank@example.com", "2026-05-03 09:00:00", "ProjectX",
+                0, 0, "synced", 0,
+            ),
+        )
+        conn.commit()
+
+        r = client.get("/api/email/list-enriched", params={"mailbox": "ProjectX"})
+        assert r.status_code == 200
+        assert [row["internal_id"] for row in r.json()["data"]] == [folder_id]
+
+        # 该行不因内建视图展开而混进收件箱
+        r = client.get("/api/email/list-enriched", params={"mailbox": "收件箱"})
+        assert folder_id not in {row["internal_id"] for row in r.json()["data"]}
+    finally:
+        conn.execute("DELETE FROM email_metadata WHERE internal_id = ?", (folder_id,))
+        conn.commit()
+        conn.close()
+
+
 def test_list_enriched_internalids_whitelist(client):
     r = client.get(
         "/api/email/list-enriched",

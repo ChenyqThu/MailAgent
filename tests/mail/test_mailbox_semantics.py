@@ -8,12 +8,14 @@ from src.mail.mailbox_semantics import (
     DRAFT_MAILBOX_LABELS,
     DRAFTS_LABEL,
     INBOX_LABEL,
+    INBOX_LABEL_VARIANTS,
     INBOX_MAILBOX_LABELS,
     SENT_CANONICAL_LABEL,
     SENT_LABEL,
     SENT_LABEL_VARIANTS,
     SENT_MAILBOX_LABELS,
     STANDARD_MAILBOXES,
+    filter_labels_for_mailbox,
     is_archive_mailbox,
     is_custom_folder_mailbox,
     is_drafts_mailbox,
@@ -106,6 +108,40 @@ def test_is_archive_mailbox(mb, expected):
 ])
 def test_is_custom_folder_mailbox(mb, expected):
     assert is_custom_folder_mailbox(mb) is expected
+
+
+# ==================== 列表过滤展开 (issue #42 后续) ====================
+
+def test_filter_labels_expands_builtin_canonical():
+    # 内建三视图的 canonical → 变体全集 (序 = *_LABEL_VARIANTS 声明序)
+    assert filter_labels_for_mailbox(INBOX_LABEL) == INBOX_LABEL_VARIANTS
+    assert filter_labels_for_mailbox(SENT_LABEL) == SENT_LABEL_VARIANTS
+    assert filter_labels_for_mailbox(DRAFTS_LABEL) == DRAFT_LABEL_VARIANTS
+
+
+def test_filter_labels_expands_from_any_variant():
+    # 传变体本身也展开到同一全集 (远程 web 传 'Sent' 与桌面传 '发件箱' 同解)
+    assert filter_labels_for_mailbox("Sent Items") == SENT_LABEL_VARIANTS
+    assert filter_labels_for_mailbox("INBOX") == INBOX_LABEL_VARIANTS
+    assert filter_labels_for_mailbox("草稿") == DRAFT_LABEL_VARIANTS
+
+
+def test_filter_labels_keeps_custom_folder_exact():
+    # 自定义同步文件夹 / 存档 → 单元素 = 精确匹配语义不变
+    assert filter_labels_for_mailbox("DMS固件发布") == ("DMS固件发布",)
+    assert filter_labels_for_mailbox(ARCHIVE_LABEL) == (ARCHIVE_LABEL,)
+    assert filter_labels_for_mailbox("") == ("",)
+
+
+def test_filter_labels_feeds_sql_in_predicate():
+    # 与列表查询的实际用法闭环: 展开 → 参数化 IN
+    pred, params = sql_in_predicate("m.mailbox", filter_labels_for_mailbox(INBOX_LABEL))
+    assert pred == "m.mailbox IN (?, ?)"
+    assert params == ("收件箱", "INBOX")
+    # 自定义文件夹退化为单值 IN —— 与旧 `= ?` 等价
+    pred, params = sql_in_predicate("m.mailbox", filter_labels_for_mailbox("ProjectX"))
+    assert pred == "m.mailbox IN (?)"
+    assert params == ("ProjectX",)
 
 
 # ==================== SQL 辅助 ====================

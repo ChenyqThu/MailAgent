@@ -41,12 +41,7 @@ import {
 import { HoverTip } from '@shared/components/ui/HoverTip'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { usePollingFallback } from '@shared/hooks/usePollingFallback'
-import {
-  DRAFTS_LABEL,
-  INBOX_LABEL,
-  isDraftsMailbox,
-  mailboxForView
-} from '@shared/lib/mailboxSemantics'
+import { isDraftsMailbox, isInboxMailbox, mailboxForView } from '@shared/lib/mailboxSemantics'
 import { useEmailFilter, type EmailView } from '@shared/state/email-filter'
 import { useMailbox } from '@shared/state/mailbox'
 import { useNavCollapsed } from '@shared/state/nav-shell'
@@ -281,11 +276,18 @@ export function Sidebar(): React.ReactElement {
   const account = deriveAccount(accountEmail)
 
   // Aggregate counts for virtual rows (flagged / all-mail).
-  const inboxRow = mailboxes.find((m) => m.mailbox === INBOX_LABEL)
-  const inboxUnread = inboxRow?.unread ?? 0
+  // 🔴 徽标与列表必须同径 —— listMailboxes 按 mailbox **原值** GROUP BY, 变体行
+  // (INBOX/Drafts…) 自成一组; 而列表查询已按判定集 IN(...) 认全变体 (issue #42
+  // 后续)。这里若还 find(=== canonical), 就成了「列表显 6 值、徽标算 1 值」——
+  // 正是本轮要消的那种不一致, 只是方向反了。故按判定集求和。
+  const inboxUnread = mailboxes
+    .filter((m) => isInboxMailbox(m.mailbox))
+    .reduce((sum, mb) => sum + mb.unread, 0)
   // 草稿箱 = davmail Drafts 对账同步进 email_metadata 的行 (mailbox='草稿箱')。
   // 数量语义是"草稿总数"而非未读 (草稿是自己写的)。
-  const draftsTotal = mailboxes.find((m) => m.mailbox === DRAFTS_LABEL)?.total ?? 0
+  const draftsTotal = mailboxes
+    .filter((m) => isDraftsMailbox(m.mailbox))
+    .reduce((sum, mb) => sum + mb.total, 0)
   // 「所有邮件」/「已标旗」badge 排除草稿 — 列表查询 (buildListWhere 未指定
   // mailbox 时排草稿) 与 badge 计数必须同径, 否则数字与列表行数对不上。
   const nonDraft = mailboxes.filter((m) => !isDraftsMailbox(m.mailbox))

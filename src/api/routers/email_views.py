@@ -41,7 +41,12 @@ from fastapi import APIRouter, Body, Depends, Query, Request
 from src.api.app import APIError, success_envelope
 from src.api.auth import verify_cf_access
 from src.api.deps import get_repository
-from src.mail.mailbox_semantics import DRAFT_LABEL_VARIANTS, sql_not_in_or_null
+from src.mail.mailbox_semantics import (
+    DRAFT_LABEL_VARIANTS,
+    filter_labels_for_mailbox,
+    sql_in_predicate,
+    sql_not_in_or_null,
+)
 
 if TYPE_CHECKING:
     from src.repository import EmailRepository
@@ -255,8 +260,12 @@ def _build_enriched_where(opts: dict[str, Any]) -> tuple[list[str], list[Any]]:
     clauses: list[str] = []
     params: list[Any] = []
     if opts.get("mailbox"):
-        clauses.append("m.mailbox = ?")
-        params.append(opts["mailbox"])
+        # 内建视图 canonical → 变体全集 IN(...); 自定义文件夹名 → 单元素 = 精确匹配
+        # (展开语义单源 mailbox_semantics.filter_labels_for_mailbox, 含已知取舍说明)。
+        labels = filter_labels_for_mailbox(opts["mailbox"])
+        predicate, vals = sql_in_predicate("m.mailbox", labels)
+        clauses.append(predicate)
+        params.extend(vals)
     else:
         # 未指定 mailbox (= 「所有邮件」/ 跨邮箱视图) 排除草稿: 未发出的内容不混入
         # 邮件流 (用户验收)。要草稿就显式 mailbox='草稿箱' (草稿箱视图)。

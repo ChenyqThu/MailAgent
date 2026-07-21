@@ -20,7 +20,7 @@ import {
   parseLabels
 } from '@shared/lib/ai_mapping'
 import type { AIFields, EmailMeta, EnrichedEmailMeta, MailboxSummary } from '@shared/api/types'
-import { DRAFTS_EXCLUDE_SQL } from '@shared/lib/mailboxSemantics'
+import { DRAFTS_EXCLUDE_SQL, mailboxFilterLabels } from '@shared/lib/mailboxSemantics'
 import type {
   EmailGet_EmailRecord,
   AttachmentList_AttachmentItem,
@@ -225,8 +225,12 @@ function buildListWhere(opts: ListOpts): WhereBuild {
   const clauses: string[] = []
   const params: unknown[] = []
   if (opts.mailbox) {
-    clauses.push('mailbox = ?')
-    params.push(opts.mailbox)
+    // 内建视图 canonical → 变体全集 IN(...); 自定义文件夹名 → 单元素 = 精确匹配
+    // (展开语义单源 mailboxSemantics.mailboxFilterLabels, 含已知取舍说明)。
+    // serve-api email_views.py::_build_enriched_where 同款镜像。
+    const labels = mailboxFilterLabels(opts.mailbox)
+    clauses.push(`mailbox IN (${labels.map(() => '?').join(', ')})`)
+    params.push(...labels)
   } else {
     // 未指定 mailbox (= 「所有邮件」/ 跨邮箱视图) 排除草稿：未发出的内容
     // 不混入邮件流（用户验收）。要草稿就显式 mailbox='草稿箱'（草稿箱视图）。

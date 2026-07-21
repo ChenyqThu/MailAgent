@@ -123,6 +123,45 @@ describe('listEmails', () => {
     expect(rows[0]?.sender).toBe('me@example.com')
   })
 
+  // issue #42 后续 — 内建三视图按判定集 IN(...) 认变体行。fork 生产实证: 库里
+  // mailbox='INBOX' 的历史行之前恒精确匹配 '收件箱' → 收件箱视图不可见, 只在
+  // 「所有邮件」露出, 而判定面 (Sent 游标/报告/飞书) 已认全变体。
+  test('builtin view matches mailbox label variants', () => {
+    const db = fixtureDb
+    db.prepare(
+      `INSERT INTO email_metadata (internal_id, message_id, subject, sender, mailbox,
+                                   date_received, is_read, is_flagged, sync_status)
+       VALUES (9901, '<variant@example.com>', 'variant', 'eve@x', 'INBOX',
+               '2026-05-02 09:00:00', 0, 0, 'synced')`
+    ).run()
+    try {
+      expect(handlers.listEmails({ mailbox: '收件箱' }).map((r) => r.internal_id)).toContain(9901)
+      // 传变体本身同解
+      expect(handlers.listEmails({ mailbox: 'INBOX' }).map((r) => r.internal_id)).toContain(101)
+    } finally {
+      db.prepare('DELETE FROM email_metadata WHERE internal_id = 9901').run()
+    }
+  })
+
+  // 🔴 已知取舍的反向锁 — 自定义文件夹视图维持精确匹配, 变体展开不得泄漏进去。
+  test('custom folder filter stays exact', () => {
+    const db = fixtureDb
+    db.prepare(
+      `INSERT INTO email_metadata (internal_id, message_id, subject, sender, mailbox,
+                                   date_received, is_read, is_flagged, sync_status)
+       VALUES (9902, '<folder@example.com>', 'folder', 'frank@x', 'ProjectX',
+               '2026-05-03 09:00:00', 0, 0, 'synced')`
+    ).run()
+    try {
+      expect(handlers.listEmails({ mailbox: 'ProjectX' }).map((r) => r.internal_id)).toEqual([9902])
+      expect(handlers.listEmails({ mailbox: '收件箱' }).map((r) => r.internal_id)).not.toContain(
+        9902
+      )
+    } finally {
+      db.prepare('DELETE FROM email_metadata WHERE internal_id = 9902').run()
+    }
+  })
+
   test('honours status + isRead filters together', () => {
     const rows = handlers.listEmails({ status: 'synced', isRead: false })
     expect(rows.map((r) => r.internal_id)).toEqual([101])

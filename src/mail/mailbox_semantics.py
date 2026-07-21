@@ -77,6 +77,34 @@ def is_custom_folder_mailbox(mailbox: Optional[str]) -> bool:
     return bool(mailbox) and mailbox not in STANDARD_MAILBOXES
 
 
+# ==================== 列表过滤展开 (内建视图 vs 自定义文件夹) ====================
+
+def filter_labels_for_mailbox(mailbox: str) -> Tuple[str, ...]:
+    """把列表查询收到的单个 mailbox 值展开成该查询该认的全部 label。
+
+    传入 canonical (收件箱/发件箱/草稿箱) → 返回对应变体全集; 其他值 (自定义
+    同步文件夹的 display_name / 存档) → 原值单元素元组 (精确匹配语义不变)。
+
+    为什么需要: 列表查询面收到的只是一个字符串, 分不清「内建视图的 canonical」
+    和「自定义文件夹名」。按 canonical 命中展开正好切开这两者 —— 点「发件箱」
+    展开 6 值, 点自定义文件夹 'ProjectX' 仍精确匹配。issue #42 后续 (提交者 fork
+    生产实证): 之前内建三视图恒精确匹配, 变体行 (INBOX/Sent/草稿) 在专属视图
+    **不可见**, 只在「所有邮件」露出, 而判定面 (Sent 游标/报告/飞书) 已认全变体。
+
+    🔴 已知取舍: 变体集含 'Sent'/'Sent Items'/'INBOX' 等英文名, 英文 Exchange 环境
+    用户**可能有同名的自定义同步文件夹** → 那些行会同时出现在内建视图和该文件夹
+    视图 (**重复显示, 不丢数据**)。相比「变体行哪儿都看不到」这是可接受的降级。
+    owner 生产库零变体行 → 逐字节等价。
+    """
+    if mailbox in INBOX_MAILBOX_LABELS:
+        return INBOX_LABEL_VARIANTS
+    if mailbox in SENT_MAILBOX_LABELS:
+        return SENT_LABEL_VARIANTS
+    if mailbox in DRAFT_MAILBOX_LABELS:
+        return DRAFT_LABEL_VARIANTS
+    return (mailbox,)
+
+
 # ==================== SQL 辅助 ====================
 
 def sql_in_predicate(column: str, labels: Sequence[str]) -> Tuple[str, Tuple[str, ...]]:
