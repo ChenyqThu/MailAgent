@@ -18,8 +18,10 @@ from src.cli.exceptions import CliError, CliInvalidArgError, CliNotFoundError
 from src.cli.output import apply_local_output as _apply_local_output
 from src.cli.output import emit, emit_cli_error
 from src.security.api_keys import (
+    DRAFTER_SCOPES,
     HANDOFF_SCOPES,
     READ_ONLY_SCOPES,
+    WRITER_SCOPES,
     ApiKeyStore,
     resolve_api_auth_db_path,
     validate_scopes,
@@ -33,6 +35,14 @@ app = typer.Typer(
     help="scoped Bearer agent key: create / list / revoke / rotate",
     no_args_is_help=True,
 )
+
+# --preset 名 → scope 组（scope 组的单一真源在 api_keys.py，这里只做映射）。
+_PRESETS: dict[str, tuple[str, ...]] = {
+    "readonly": READ_ONLY_SCOPES,
+    "handoff": HANDOFF_SCOPES,
+    "drafter": DRAFTER_SCOPES,  # 读 + 起草，**不能发信**（issue #50）
+    "writer": WRITER_SCOPES,  # 发信 + 起草（write 预设显式带上 email:draft）
+}
 
 
 def _store(cli: "CliContext") -> ApiKeyStore:
@@ -63,7 +73,9 @@ def create_key(
         None, "--scopes", help="逗号分隔 scope（默认 read-only）。如 email:read,report:run",
     ),
     preset: Optional[str] = typer.Option(
-        None, "--preset", help="预设 scope 组: readonly | handoff（与 --scopes 互斥）",
+        None,
+        "--preset",
+        help="预设 scope 组: readonly | handoff | drafter | writer（与 --scopes 互斥）",
     ),
     expires_at: Optional[int] = typer.Option(
         None, "--expires-at", help="过期 epoch 秒（默认永不过期）",
@@ -83,14 +95,14 @@ def create_key(
 
     resolved: tuple[str, ...]
     if preset:
-        if preset == "readonly":
-            resolved = READ_ONLY_SCOPES
-        elif preset == "handoff":
-            resolved = HANDOFF_SCOPES
-        else:
+        if preset not in _PRESETS:
             raise emit_cli_error(
-                cli, CliInvalidArgError("--preset must be readonly | handoff")
+                cli,
+                CliInvalidArgError(
+                    f"--preset must be one of {' | '.join(_PRESETS)}"
+                ),
             )
+        resolved = _PRESETS[preset]
     elif scopes:
         try:
             resolved = validate_scopes(scopes.split(","))

@@ -173,6 +173,7 @@ ERROR_CODE_TO_HTTP: dict[str, int] = {
     "E_INVALID_ARG": 400,
     "E_NOT_IMPLEMENTED": 400,
     "E_AUTH_FAILED": 403,  # auth-layer 缺 token → 401 在 auth.py 处理；服务自报 → 403
+    "E_RATE_LIMITED": 429,  # skill 配额闸（src/skills/rate_limit.py）
     "E_UPSTREAM": 502,  # 上游 SMTP/davmail/CalDAV 失败
     "E_SCHEMA_MISMATCH": 502,
     "E_PARTIAL": 207,  # 批量部分失败 (Multi-Status)

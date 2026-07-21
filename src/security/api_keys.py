@@ -46,6 +46,7 @@ KNOWN_SCOPES: frozenset[str] = frozenset(
         "report:run",
         "calendar:read",
         "calendar:write",
+        "email:draft",
         "email:write",
         "notion_agent:invoke",
     }
@@ -66,6 +67,24 @@ HANDOFF_SCOPES: tuple[str, ...] = (
     "attachment:read",
     "report:read",
     "report:run",
+)
+
+# 起草专用 key（issue #50）：能读 + 能建草稿，**不能发信**（无 email:write → email_send 在
+# manifest / MCP 投影里都看不见，直调 403）。
+DRAFTER_SCOPES: tuple[str, ...] = (
+    "email:read",
+    "attachment:read",
+    "email:draft",
+)
+
+# 完整写 key：发信 + 起草。``email:write`` **不隐含** ``email:draft``（has_scopes 是精确
+# AND 判定，不做层级/OR），所以「能发信也该能起草」这件事在 preset 这一层显式兜住 —— 用
+# ``--scopes email:write`` 手工授权则按字面来，不做隐式扩权。
+WRITER_SCOPES: tuple[str, ...] = (
+    "email:read",
+    "attachment:read",
+    "email:draft",
+    "email:write",
 )
 
 _DDL = """

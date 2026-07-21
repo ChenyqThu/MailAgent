@@ -14,6 +14,7 @@ EXPECTED_TOOLS = {
         "email_get": ("read", "none", ["email:read"], True),
         "email_body": ("read", "none", ["email:read"], True),
         "email_thread": ("read", "none", ["email:read"], True),
+        "email_draft": ("write", "edit", ["email:draft"], True),
         "email_send": ("send", "edit", ["email:write"], False),
     },
     "search": {

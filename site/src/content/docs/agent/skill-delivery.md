@@ -31,7 +31,8 @@ Skill 路由（`/api/skills*`）是 serve-api 的**第四条鉴权腿**，顺序
 - Bearer key **只在 `/api/skills*` 认**。其余写端点对 agent key 天然 `401` —— 越权 by construction 不可达。
 - key 只存 sha256 hash，明文（前缀 `mak_`）**仅 create / rotate 返回一次**，存好。
 - 坏 / 撤销 / 过期 key → **`403` fail-closed**，不回落 CF Access。
-- scope 默认最小（只读）；`report:run` / `email:write` / `notion_agent:invoke` 须单独授权。
+- scope 默认最小（只读）；`report:run` / `email:draft` / `email:write` / `notion_agent:invoke` 须单独授权。
+- **起草 ≠ 发信**：`email:draft`（存草稿，可逆）与 `email:write`（SMTP 发出，不可逆）是两个独立能力，互不隐含。只起草不发信用 `--preset drafter`。
 
 ### 申请 key（本机，需 CLI auth）
 
@@ -41,6 +42,12 @@ mailagent api-key create --preset handoff
 
 # 纯只读
 mailagent api-key create --preset readonly
+
+# drafter preset = email:read + attachment:read + email:draft（能起草，永远发不出信）
+mailagent api-key create --preset drafter
+
+# writer preset = drafter + email:write（起草 + 发信）
+mailagent api-key create --preset writer
 
 # 细粒度：自己点 scope
 mailagent api-key create --scopes email:read,attachment:read
@@ -108,7 +115,7 @@ curl -H "Authorization: Bearer mak_…" -H 'Content-Type: application/json' \
 
 | skill | tools | scope |
 |---|---|---|
-| `email` | `email_get` / `email_body` / `email_thread`（读）· `email_send`（send，edit tier，默认不授）| `email:read` / `email:write` |
+| `email` | `email_get` / `email_body` / `email_thread`（读）· `email_draft`（write，edit tier，MCP 可见，成功建草稿 20 次/小时）· `email_send`（send，edit tier，不投 MCP，默认不授）| `email:read` / `email:draft` / `email:write` |
 | `search` | `email_search` / `attachment_search` | `email:read` / `attachment:read` |
 | `report` | `report_list` / `report_get` / `report_run` | `report:read` / `report:run` |
 | `calendar` | `calendar_events` / `calendar_event_get` | `calendar:read` |

@@ -82,9 +82,14 @@ MAILAGENT_API_BASE=https://mail.chenge.ink MAILAGENT_AGENT_KEY=mak_xxx bash self
 
 ## Safety
 
-- Keys are scoped; read-only by default. `report:run` / `email:write` / `notion_agent:invoke`
-  are separate grants.
-- Send/draft tools always require `confirm: true` and never ship in the default key.
+- Keys are scoped; read-only by default. `report:run` / `email:draft` / `email:write` /
+  `notion_agent:invoke` are separate grants.
+- Drafting (`email:draft`, reversible) and sending (`email:write`, irreversible) are
+  **separate capabilities** — neither implies the other. `--preset drafter` = read + draft
+  only: `email_send` is not even visible in that key's manifest / MCP tool list.
+- Send/draft tools always require `confirm: true` and never ship in the default key. On the
+  MCP path that flag is filled in by the model (an explicit-intent marker, **not** a human
+  approval gate — your MCP client's tool-approval UI is); the real boundary is the scope.
 """
 
 _MCP_CONFIG = {

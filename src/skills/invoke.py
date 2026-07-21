@@ -10,6 +10,7 @@ import asyncio
 import inspect
 from typing import Any, Optional
 
+from src.skills import rate_limit
 from src.skills.context import SkillContext
 from src.skills.errors import SkillError
 from src.skills.registry import find_tool
@@ -39,7 +40,8 @@ async def invoke_skill(
     """执行一个 skill tool。
 
     顺序：找 tool → scope gate（403）→ confirmation gate（edit 层必须 confirm，403）→
-    输入校验（400）→ dispatch（blocking 走 to_thread；coroutine 自动 await）。
+    输入校验（400）→ 配额判定（声明了 rate_limit 的 tool，429）→ dispatch（blocking 走
+    to_thread；coroutine 自动 await）→ **成功后**记一次配额。
     """
     params = params or {}
     found = find_tool(skill_name, tool_name)
@@ -77,6 +79,11 @@ async def invoke_skill(
 
     _validate_input(tdef.input_schema, params)
 
+    # 配额闸（只对显式声明 rate_limit 的 tool 生效，当前 = email_draft）：这里只**判定**
+    # 额度够不够，计数放到 handler 成功返回之后 —— _validate_input 只查 required，形状错
+    # （如 mode='bogus'）或 service 连不上等**没有副作用**的调用，都不该吃掉草稿额度。
+    rate_limit.check(principal, skill_name, tool_name, tdef.rate_limit)
+
     if ctx is None:
         ctx = SkillContext()
     # 把本次 confirm 透传给 handler（发信/草稿 handler 据此让 service 二次校验，防御纵深）。
@@ -90,6 +97,10 @@ async def invoke_skill(
         result = tool.handler(ctx, params)
         if inspect.isawaitable(result):
             result = await result
+
+    # 副作用已经发生（草稿已 APPEND）→ 此刻计数。返回值形状不对（下面的 E_INTERNAL）也照记，
+    # 因为写已经落地了。
+    rate_limit.record(principal, skill_name, tool_name, tdef.rate_limit)
 
     if not isinstance(result, dict):
         raise SkillError(

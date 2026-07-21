@@ -14,6 +14,7 @@ _CODE_HTTP: dict[str, int] = {
     "E_NOT_FOUND": 404,
     "E_INVALID_ARG": 400,
     "E_AUTH_FAILED": 403,
+    "E_RATE_LIMITED": 429,
     "E_PM2_RUNNING": 409,
     "E_CONFLICT": 409,
     "E_UPSTREAM": 502,

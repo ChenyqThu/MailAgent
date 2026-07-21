@@ -78,6 +78,89 @@ def test_confirm_must_be_json_boolean_not_truthy(skill_client, api_key_store, mo
         assert r.json()["error"]["code"] == "E_INVALID_ARG"
 
 
+def test_drafter_key_cannot_send_and_never_sees_send_tool(
+    skill_client, api_key_store, monkeypatch
+):
+    """issue #50 端到端：draft-only key 拿不到发信能力（manifest 不投影 + 直调 403）。"""
+    from src.security.api_keys import DRAFTER_SCOPES
+
+    monkeypatch.setattr(auth_mod, "AUTH_DISABLED", False)
+    headers, _ = _bearer(api_key_store, list(DRAFTER_SCOPES))
+
+    m = skill_client.get("/api/skills", headers=headers)
+    assert m.status_code == 200
+    names = {t["name"] for s in m.json()["data"]["skills"] for t in s["tools"]}
+    assert "email_draft" in names
+    assert "email_send" not in names
+
+    r = skill_client.post(
+        "/api/skills/invoke",
+        json={
+            "skill": "email", "tool": "email_send",
+            "input": {"internalId": 1, "mode": "reply-all"}, "confirm": True,
+        },
+        headers=headers,
+    )
+    assert r.status_code == 403
+    assert r.json()["error"]["code"] == "E_AUTH_FAILED"
+
+
+def test_drafter_key_draft_without_confirm_403(skill_client, api_key_store, monkeypatch):
+    """草稿同样 fail closed：无 JSON 布尔 confirm:true → 403，service 永不被调。"""
+    from src.security.api_keys import DRAFTER_SCOPES
+
+    monkeypatch.setattr(auth_mod, "AUTH_DISABLED", False)
+    headers, _ = _bearer(api_key_store, list(DRAFTER_SCOPES))
+    r = skill_client.post(
+        "/api/skills/invoke",
+        json={"skill": "email", "tool": "email_draft", "input": {"mode": "new"}},
+        headers=headers,
+    )
+    assert r.status_code == 403
+    assert "confirm" in (r.json()["error"].get("hint", "") + r.json()["error"]["message"]).lower()
+
+
+def test_drafter_key_can_create_draft(skill_client, api_key_store, monkeypatch):
+    """有 email:draft + confirm=true → 走到 service（compose_draft 被真调），返回 200。"""
+    import src.services.mail_write as mw
+    from src.security.api_keys import DRAFTER_SCOPES
+
+    monkeypatch.setattr(auth_mod, "AUTH_DISABLED", False)
+
+    def _fake_compose(self, request, *, actor):
+        assert actor.authenticated is True
+        return mw.ComposeDraftResult(
+            internal_id=request.internal_id, drafts_folder="Drafts", appended_uid=7,
+            method="imap", mode=request.mode, to_count=1, cc_count=0, attachments=0,
+            warnings=[],
+        )
+
+    monkeypatch.setattr(mw.MailWriteService, "__init__", lambda self, ctx: None)
+    monkeypatch.setattr(mw.MailWriteService, "compose_draft", _fake_compose)
+    monkeypatch.setattr(
+        "src.skills.context.SkillContext.service_ctx", lambda self: None
+    )
+
+    headers, rec = _bearer(api_key_store, list(DRAFTER_SCOPES))
+    r = skill_client.post(
+        "/api/skills/invoke",
+        json={
+            "skill": "email", "tool": "email_draft",
+            "input": {"mode": "new", "to": ["a@b.test"], "subject": "hi", "bodyText": "yo"},
+            "confirm": True,
+        },
+        headers=headers,
+    )
+    assert r.status_code == 200, r.text
+    data = r.json()["data"]
+    assert data["appended_uid"] == 7
+    assert data["internal_id"] is None  # mode=new 不外泄哨兵 -1
+
+    # API key 审计行为不变：agent 调用照常记一行 ok。
+    audit = api_key_store.list_audit(key_id=rec.id)
+    assert audit and audit[0]["tool"] == "email_draft" and audit[0]["status"] == "ok"
+
+
 def test_handoff_key_can_run_report(skill_client, api_key_store, monkeypatch):
     """有 report:run 的 handoff key → report_run 不被 scope 拦（→ 200）。"""
     monkeypatch.setattr(auth_mod, "AUTH_DISABLED", False)
