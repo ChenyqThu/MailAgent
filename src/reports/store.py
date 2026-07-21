@@ -7,10 +7,11 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import time
 from contextlib import contextmanager
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 # update_agent 允许 patch 的字段（白名单，防 SQL 注入 + 防误改主键）。
 _AGENT_PATCH_FIELDS = {
@@ -33,6 +34,46 @@ _AGENT_PATCH_FIELDS = {
     "tool_policy_json",  # v30: custom agent 工具收窄（allowed_tools 交集；NULL=不额外收窄）
     "budget_json",  # v30: custom agent 预算（max_steps/runs_per_day/run_seconds；NULL=全默认）
 }
+
+# schedule_json 解析不出 cadence（空 / NULL / 非法 / 缺键 —— CLI 新建 report agent 的默认
+# 形态）时视为哪种节律的**唯一定义**。worker 的 fire 判定与「是否走层级聚合」用的是
+# schedule_of / cadence_of，本模块的排序权重也用它 —— 两处各写一个字面量默认值正是
+# 「排序按 rank 3、执行按 daily」分裂的成因。
+DEFAULT_CADENCE = "daily"
+
+# list_agents 的排序权重：周 / 月报是**层级聚合** —— 跑的时候要读同一天已生成的日报
+# （src/reports/worker.py::_run_aggregate）。tick_loop 在同一个 tick 里按本列表顺序串行
+# await，所以 daily 必须排在 weekly / monthly 前面。改前这条依赖只靠
+# 'daily_email_digest' < 'weekly_email_digest' 的**字母序巧合**成立：换个 agent id
+# （或用户新建自定义报告 agent）就静默失效 —— 周报稳定少综合一份且不会重算。
+# 前端 AgentsTab 用的是同一份 {daily:0, weekly:1, monthly:2} 口径。
+_CADENCE_ORDER = {"daily": 0, "weekly": 1, "monthly": 2}
+# 非报告型 agent（custom / search / preprocess / project_progress）不参与报告调度
+# （worker 里 type != 'report' 直接 continue）→ 统一排在报告 agent 之后，彼此仍按 id 序。
+_NON_REPORT_RANK = len(_CADENCE_ORDER)
+
+
+def schedule_of(row: Dict[str, Any]) -> Dict[str, Any]:
+    """agent 行的 schedule_json → dict；空 / NULL / 非法 JSON → ``{}``。"""
+    try:
+        return json.loads(row.get("schedule_json") or "{}") or {}
+    except (json.JSONDecodeError, TypeError):
+        return {}
+
+
+def cadence_of(row: Dict[str, Any]) -> str:
+    """agent 行的调度节律；解析不出 → ``DEFAULT_CADENCE``（见其注释：单一定义）。"""
+    return str(schedule_of(row).get("cadence") or DEFAULT_CADENCE)
+
+
+def _agent_sort_key(row: Dict[str, Any]) -> Tuple[int, str]:
+    if str(row.get("type") or "report") != "report":
+        return _NON_REPORT_RANK, str(row.get("id") or "")
+    # 未知 cadence 在 worker 里也走 daily 分支（只有 weekly / monthly 才层级聚合）→
+    # 排序同样按 daily，保持「排序 rank ≡ 执行语义」。
+    cadence = cadence_of(row)
+    return _CADENCE_ORDER.get(cadence, _CADENCE_ORDER[DEFAULT_CADENCE]), str(row.get("id") or "")
+
 
 # 列表查询不返回 blocks_json（重），详情才取。
 _REPORT_LIST_COLS = (
@@ -65,9 +106,10 @@ class ReportStore:
             return dict(row) if row else None
 
     def list_agents(self) -> List[Dict[str, Any]]:
+        """全部 agent 行，按 (cadence 日→周→月, id) 排序 —— 见 ``_agent_sort_key``。"""
         with self._connection() as conn:
             rows = conn.execute("SELECT * FROM report_agent ORDER BY id").fetchall()
-            return [dict(r) for r in rows]
+            return sorted((dict(r) for r in rows), key=_agent_sort_key)
 
     def update_agent(self, agent_id: str, patch: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """部分更新 agent 配置（只认白名单字段）。返回更新后的行。"""
@@ -255,11 +297,13 @@ class ReportStore:
 
         周 / 月报层级聚合用：综合下层报告（需要子报告内容，故带 blocks_json）。report_date
         字典序与日期序一致，可直接 >= / <= 比较；按日期升序返回（便于按时间叙述）。
+        也带 window_start / window_end —— 调用方（worker._select_period_subreports）按
+        子报告的**内容窗口**而非 report_date 判归属（rolling_24h 日报两者差一天）。
         """
         with self._connection() as conn:
             rows = conn.execute(
-                "SELECT id, agent_id, cadence, report_date, status, headline, "
-                "blocks_json, counts_json FROM report "
+                "SELECT id, agent_id, cadence, report_date, window_start, window_end, "
+                "status, headline, blocks_json, counts_json FROM report "
                 "WHERE cadence = ? AND report_date >= ? AND report_date <= ? AND status = ? "
                 "ORDER BY report_date ASC LIMIT ?",
                 (cadence, start_date, end_date, status, limit),

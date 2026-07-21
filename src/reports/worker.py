@@ -19,15 +19,14 @@ from src.config import config
 from src.reports import data as rdata
 from src.reports.assembler import assemble_fallback_doc, assemble_report_doc
 from src.reports.agent_tools import kos_is_available
-from src.reports.store import ReportStore
+from src.reports.store import ReportStore, cadence_of, schedule_of
 from src.reports.summarizer import (
     ReportDraft,
     summarize_aggregate,
     summarize_report,
     summarize_report_agentic,
 )
-
-_BEIJING = timezone(timedelta(hours=8))
+from src.utils import fire_marker_tz
 
 FIRE_WINDOW_MIN = 30
 TICK_INTERVAL_SEC = 60
@@ -39,11 +38,10 @@ def _report_id(agent_id: str, cadence: str, report_date: str) -> str:
     return f"{agent_id}:{cadence}:{report_date}"
 
 
-def _schedule_of(agent: Dict[str, Any]) -> Dict[str, Any]:
-    try:
-        return json.loads(agent.get("schedule_json") or "{}") or {}
-    except (json.JSONDecodeError, TypeError):
-        return {}
+# schedule_json → dict / cadence 的解析（含「解析不出 → daily」的默认）住在 store.py，
+# 与 list_agents 的排序权重共用同一份定义 —— fire / 聚合语义与调度顺序不可能再分裂。
+_schedule_of = schedule_of
+_cadence_of = cadence_of
 
 
 def _fire_hours(sched: Dict[str, Any]) -> List[int]:
@@ -66,6 +64,35 @@ def _slot_marker(now: datetime, hour: int) -> str:
     return f"{now.strftime('%Y%m%d')}-{hour:02d}"
 
 
+# ── fire marker 时区迁移（一次性）─────────────────────────────────────────────
+# 迁移前 fire 判定恒按 UTC+8（now_fn 默认 datetime.now(UTC+8)）→ marker 里的日期是
+# 「北京日」；迁移后是「本地日」。同一次真实 fire 在两种口径下可能差一天（LA 下北京
+# 09:00 = 本地前一天 18:00），不换算则升级当天 _due_hour 的 catchup 分支会误判「今天
+# 还没 fire 过」而多跑一次（反向也可能漏跑）。
+# 换算 / 幂等 / set_state 返回值检查在 src/utils/fire_marker_tz.py（与灵动岛 digest 共用）。
+_MARKER_MIGRATION_STATE_KEY = "report_fire_marker_tz_migrated"
+
+
+def _migrate_fire_markers(sync_store: Any, store: ReportStore) -> None:
+    """把 report_last_fire:* 从北京日口径一次性换算到本地日口径。"""
+    if not fire_marker_tz.migration_pending(
+        sync_store, _MARKER_MIGRATION_STATE_KEY, log_prefix="[report]"
+    ):
+        return
+    try:
+        agents = store.list_agents()
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[report] marker migration skipped (list_agents failed: {e})")
+        return
+    fire_marker_tz.apply_migration(
+        sync_store,
+        flag_key=_MARKER_MIGRATION_STATE_KEY,
+        # 每个 agent 按自己的时区换算（agent.timezone 空 → 本机），与 fire 判定同口径。
+        entries=[(_fire_state_key(a.get("id") or ""), _zone(a)) for a in agents],
+        log_prefix="[report]",
+    )
+
+
 def _due_hour(agent: Dict[str, Any], now: datetime, last_marker: Optional[str]) -> Optional[int]:
     """now 是否该 fire；返回命中的钟点 hour，否则 None。
 
@@ -75,7 +102,7 @@ def _due_hour(agent: Dict[str, Any], now: datetime, last_marker: Optional[str]) 
     周期校验：weekly 看 weekday，monthly 看 day_of_month。
     """
     sched = _schedule_of(agent)
-    cadence = sched.get("cadence", "daily")
+    cadence = _cadence_of(agent)
     if cadence == "weekly" and now.weekday() != int(sched.get("weekday", 0) or 0):
         return None
     if cadence == "monthly" and now.day != int(sched.get("day_of_month", 1) or 1):
@@ -115,17 +142,16 @@ async def run_report_once(
     决策：total==0 → status=empty（不调 LLM）；LLM 失败 → fallback 纯规则报告
     （status=ready + error 记因）；fetch/assemble 异常 → status=failed。
     """
-    now = now or datetime.now(_BEIJING)
-    sched = _schedule_of(agent)
-    cadence = sched.get("cadence", "daily")
-    # 时区：agent.timezone（IANA）或本地系统时区。窗口边界 / 自然日 / 自然周月 都按它算。
-    zone = _zone(agent)
-    n = now.astimezone(zone) if zone is not None else now.astimezone()
+    now = now or datetime.now(timezone.utc)
+    cadence = _cadence_of(agent)
+    # 时区：agent.timezone（IANA）或本机系统时区。窗口边界 / 自然日 / 自然周月 / 叙述
+    # 时刻都按它算（tick_loop 的 fire 判定同口径，见 _agent_local）。
+    n = _agent_local(agent, now)
 
     # 周 / 月报走层级聚合（综合下层报告，不读原始邮件）。
     if cadence in ("weekly", "monthly"):
         return await _run_aggregate(
-            store=store, agent=agent, cadence=cadence, n=n, gen_now=now,
+            store=store, agent=agent, cadence=cadence, n=n, gen_now=n,
             aggregate_fn=aggregate_fn, client=client,
         )
 
@@ -163,7 +189,7 @@ async def run_report_once(
         try:
             draft = await agentic_fn(
                 briefs=briefs, counts=counts, db_path=db_path,
-                kos_enabled=kos_is_available(), cadence=cadence, now=now,
+                kos_enabled=kos_is_available(), cadence=cadence, now=n,
                 persona_prompt=agent.get("prompt"), model=agent.get("model"),
                 context_docs=_parse_context_docs(agent.get("context_docs_json")),
                 client=client,
@@ -171,7 +197,7 @@ async def run_report_once(
             doc = assemble_report_doc(
                 draft=draft, briefs=briefs, counts=counts, agent_id=agent["id"],
                 cadence=cadence, report_date=report_date, window_start=win_start,
-                window_end=win_end, generated_at=now.isoformat(), model=draft.model, now=now,
+                window_end=win_end, generated_at=n.isoformat(), model=draft.model, now=n,
             )
             store.finish_report(
                 rid, status="ready", blocks_json=doc.to_json(), counts_json=counts_json,
@@ -187,7 +213,7 @@ async def run_report_once(
             doc = assemble_fallback_doc(
                 briefs=briefs, counts=counts, agent_id=agent["id"], cadence=cadence,
                 report_date=report_date, window_start=win_start, window_end=win_end,
-                generated_at=now.isoformat(), model="", now=now,
+                generated_at=n.isoformat(), model="", now=n,
             )
             store.finish_report(
                 rid, status="ready", blocks_json=doc.to_json(), counts_json=counts_json,
@@ -212,6 +238,16 @@ def _zone(agent: Dict[str, Any]) -> Optional[ZoneInfo]:
     except Exception as e:  # noqa: BLE001 — 非法时区名退回本地
         logger.warning(f"[report] bad timezone {tz!r} ({e}); using local")
         return None
+
+
+def _agent_local(agent: Dict[str, Any], now: datetime) -> datetime:
+    """任意 tz-aware 时刻 → agent 的本地时刻（fire 判定 / 窗口 / 叙述唯一口径）。
+
+    agent.timezone（IANA）非空 → 该时区；空 / 非法 → 本机系统时区（owner 拍板：
+    「跟随电脑时区」，出差时报告时刻跟着漂是接受的代价）。
+    """
+    zone = _zone(agent)
+    return now.astimezone(zone) if zone is not None else now.astimezone()
 
 
 def _parse_context_docs(raw: Any) -> Optional[List[str]]:
@@ -280,6 +316,98 @@ def _period_bounds(cadence: str, n: datetime) -> Tuple[str, str, str, int]:
     return first_prev.isoformat(), prev_end.isoformat(), first_prev.isoformat(), max(expected, 1)
 
 
+def _shift_date(day: str, days: int) -> str:
+    """'YYYY-MM-DD' ± days → 'YYYY-MM-DD'。"""
+    return (date.fromisoformat(day) + timedelta(days=days)).isoformat()
+
+
+def _parse_window_bound(raw: Any, tzinfo: Any) -> Optional[datetime]:
+    """report.window_start / window_end → tz-aware datetime；解析不了 → None。
+
+    daily 存 tz-aware ISO（'2026-07-19T18:00:00-07:00'），weekly / monthly 存
+    'YYYY-MM-DD'（当天 00:00）；早期行可能是任意占位串 → None。
+    """
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    try:
+        dt = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=tzinfo)
+
+
+def _window_midpoint(s: Dict[str, Any], tzinfo: Any) -> Optional[datetime]:
+    """子报告内容窗口的中点；窗口列解析不了 / 非正区间 → None（= 老行，无窗口口径）。"""
+    start = _parse_window_bound(s.get("window_start"), tzinfo)
+    end = _parse_window_bound(s.get("window_end"), tzinfo)
+    if start is None or end is None or end <= start:
+        return None
+    return start + (end - start) / 2
+
+
+def _select_period_subreports(
+    subs: List[Dict[str, Any]], *, start_date: str, end_date: str, n: datetime
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """按子报告的**内容窗口**（而非 report_date 字符串）挑本周期的子报告。
+
+    返回 ``(selected, dropped_legacy)``；``dropped_legacy`` = 因窗口判据已生效而被排除的
+    「report_date 落在本周期但没有可解析窗口」的老行（调用方负责记日志）。
+
+    rolling_24h 日报的 report_date = 生成当天，内容窗口却是 [当天-24h, 当天) —— 主体
+    是前一天。旧实现按 report_date 落在 [start_date, end_date] 取，整批系统性前移一天
+    （owner 实报「拉上周 7 天，输出的是上上周」）。
+
+    新判据：子报告窗口的**中点**落在期间 [start_date 00:00, end_date+1 00:00)（agent
+    时区）内。取中点而非「有交集」是因为交集会把两端各多算半天的日报也捞进来 →
+    _sum_counts 重复计数；中点让每份日报恰好归属一个期间，不重不漏，且对 rolling_24h
+    / natural_day 两种日报窗口都成立。
+
+    🔴 窗口判据与 report_date 老判据**互斥，不是并集**：只要本周期里有窗口可解析的行命中，
+    就完全不启用 report_date fallback。并集会让「7 份正常行 + 1 份窗口不可解析但
+    report_date 落在期内的历史行」选出 8 份 → _sum_counts 多算一天，而 missing 又被
+    max(0, …) 压成 0 → 静默输出错误总数。宁可如实少算并把被排除的行打进日志。
+    """
+    period_start = datetime.fromisoformat(start_date).replace(tzinfo=n.tzinfo)
+    period_end = datetime.fromisoformat(_shift_date(end_date, 1)).replace(tzinfo=n.tzinfo)
+    windowed: List[Dict[str, Any]] = []
+    legacy: List[Dict[str, Any]] = []
+    for s in subs:
+        mid = _window_midpoint(s, n.tzinfo)
+        if mid is None:
+            if start_date <= str(s.get("report_date") or "") <= end_date:
+                legacy.append(s)
+        elif period_start <= mid < period_end:
+            windowed.append(s)
+    if windowed:
+        return windowed, legacy
+    # 本周期一份可解析窗口的行都没有（纯历史库）→ 退回 report_date 判据，不丢子报告。
+    return legacy, []
+
+
+def _warn_if_last_day_missing(
+    subs: List[Dict[str, Any]], *, rid: str, cadence: str, end_date: str,
+    sub_unit: str, n: datetime,
+) -> None:
+    """周期最后一天的子报告缺席 → 显式 warning（而不是静默计入 missing）。
+
+    新的中点归属口径下，周期最后一天那格由**跑周 / 月报当天早些时候生成的日报**填充
+    （rolling_24h 日报窗口 [d-1 HH, d HH) 的中点落在 d-1）。因此周 / 月报的触发钟点必须
+    晚于（或等于、且排在其后）日报的钟点。日报钟点若配得比周报晚，周报每次都会稳定少一份
+    且不会重算 —— 这是**配置问题**，不是数据缺失，运营者得能从日志分辨。
+    """
+    covered = {
+        (mid.date().isoformat() if mid is not None else str(s.get("report_date") or ""))
+        for s, mid in ((s, _window_midpoint(s, n.tzinfo)) for s in subs)
+    }
+    if end_date in covered:
+        return
+    logger.warning(
+        f"[report] {rid} 周期最后一天 {end_date} 的{sub_unit}缺席 —— {cadence} 是层级聚合，"
+        f"依赖当天先跑完的{sub_unit}；请确认 daily 的触发钟点不晚于 {cadence}"
+    )
+
+
 def _sum_counts(subs: List[Dict[str, Any]]) -> Dict[str, Any]:
     """汇总子报告 counts_json（total/unread/urgent/replied/sent/ai_handled/flagged 求和）。"""
     keys = ("total", "unread", "urgent", "replied", "sent", "ai_handled", "flagged")
@@ -316,19 +444,43 @@ async def _run_aggregate(
         report_date=report_date, window_start=start_date, window_end=end_date,
     )
     try:
-        subs = store.list_reports_in_range(
-            cadence=sub_cadence, start_date=start_date, end_date=end_date
+        # 先按 report_date 多取一天的余量（rolling_24h 日报的 report_date 比内容主体日
+        # 晚一天），真正的归属判定交给 _select_period_subreports（按窗口中点）。
+        subs, dropped = _select_period_subreports(
+            store.list_reports_in_range(
+                cadence=sub_cadence,
+                start_date=_shift_date(start_date, -1),
+                end_date=_shift_date(end_date, 1),
+            ),
+            start_date=start_date, end_date=end_date, n=n,
         )
+        if dropped:
+            logger.warning(
+                f"[report] {rid} 排除 {len(dropped)} 份窗口不可解析的历史{sub_unit}"
+                f"（窗口判据已生效 → 不再叠加 report_date 判据，避免重复计数）："
+                f"{[str(s.get('id')) for s in dropped][:5]}"
+            )
         if not subs:
             store.finish_report(
                 rid, status="empty", headline=f"这段时间没有可综合的{sub_unit}"
             )
             logger.info(f"[report] {rid} empty (no {sub_cadence} reports in period)")
             return rid
+        _warn_if_last_day_missing(
+            subs, rid=rid, cadence=cadence, end_date=end_date, sub_unit=sub_unit, n=n
+        )
 
         counts = _sum_counts(subs)
         counts_json = json.dumps(counts, ensure_ascii=False)
-        missing = max(0, expected - len(subs))
+        missing = expected - len(subs)
+        if missing < 0:
+            # 期间内的子报告比该周期的天数还多 = 归属判定出了问题（重复计数的信号）。
+            # 改前这里被 max(0, …) 压成 0，异常就此静默 —— 至少要能从日志看出来。
+            logger.warning(
+                f"[report] {rid} 综合了 {len(subs)} 份{sub_unit}，超出本周期期望的 {expected} 份"
+                f" —— 疑似子报告归属重复，统计可能偏高"
+            )
+            missing = 0
         period_cn = "周" if cadence == "weekly" else "月"
         missing_note = (
             f"本{period_cn}有 {missing} 份{sub_unit}缺失，下面只综合已有的 {len(subs)} 份。"
@@ -379,15 +531,20 @@ async def tick_loop(
     db_path: str,
     shutdown_event: Optional[asyncio.Event] = None,
     interval_sec: int = TICK_INTERVAL_SEC,
-    now_fn: Callable[[], datetime] = lambda: datetime.now(_BEIJING),
+    now_fn: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     run_once: Optional[Callable[..., Awaitable[Any]]] = None,
 ) -> None:
-    """每 interval_sec 扫 enabled 报告 agent，命中 fire window 则跑（state 去重）。"""
+    """每 interval_sec 扫 enabled 报告 agent，命中 fire window 则跑（state 去重）。
+
+    now_fn 给 UTC 时刻，fire 判定前按 agent 时区（空则本机）转本地 —— 与 _window /
+    _period_bounds 同口径，也与 src/agents/trigger_worker 的 cron 范式对齐。
+    """
 
     async def _default_run(agent: Dict[str, Any], now: datetime) -> Any:
         return await run_report_once(store=store, db_path=db_path, agent=agent, now=now)
 
     run_once = run_once or _default_run
+    _migrate_fire_markers(sync_store, store)
     logger.info(f"[report] tick_loop started (interval={interval_sec}s)")
 
     while shutdown_event is None or not shutdown_event.is_set():
@@ -406,12 +563,13 @@ async def tick_loop(
                 if not agent.get("enabled") or agent.get("type", "report") != "report":
                     continue
                 now = now_fn()
+                local = _agent_local(agent, now)   # fire 判定按本地钟点 / 本地日
                 key = _fire_state_key(agent["id"])
                 last_marker = sync_store.get_state(key)
-                hour = _due_hour(agent, now, last_marker)
+                hour = _due_hour(agent, local, last_marker)
                 if hour is None:
                     continue
-                marker = _slot_marker(now, hour)
+                marker = _slot_marker(local, hour)
                 logger.info(f"[report] firing agent={agent['id']} slot={marker}")
                 try:
                     await run_once(agent, now)

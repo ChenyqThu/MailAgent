@@ -180,6 +180,37 @@ ReportDoc = {
 - gate：`MAILAGENT_REPORT_AGENT_ENABLED`（总开关）+ per-agent `config.enabled`。
 - 挂 [`service.py`](../../../src/service.py) worker 列表（`daily_digest_task` 旁）。
 
+#### 🔴 时区语义（task 07-21 收敛，2026-07-21）
+
+**`hours:[9]` 是哪个时区的 9 点 = `agent.timezone`（IANA），留空 = 本机系统时区**（跟随电脑，owner 拍板）。
+fire 判定（`_due_hour` 的 `now.hour` / `weekday` / `day`）、slot marker 的日期、窗口计算
+（`_window` / `_period_bounds`）**全部同一口径** —— 与 [`trigger_worker`](../../../src/agents/trigger_worker.py)
+的 `UTC now → ZoneInfo → croniter` 范式对齐。
+
+修复前（v1.14.2 及以前）`now_fn` 默认 `datetime.now(UTC+8)` 硬编码，`hours:[9]` 恒为**北京 9 点**，
+与电脑时区、与 `agent.timezone` 都无关（owner 从深圳回洛杉矶后变成每天 LA 18:00 触发）。
+`agent.timezone` 当时**只**参与窗口计算、不参与 fire 判定 → 触发与数据两套时区。
+
+配套不变量（改这块前必读）：
+
+- **marker 迁移一次性**：`report_last_fire:*` / `last_daily_digest_fire` 的日期从北京日改本地日，
+  换算**不幂等**（重复跑每次前移一天），靠 `sync_state` 标记位只跑一次，且**先落标记位再改 marker**。
+  换算逻辑单源 [`src/utils/fire_marker_tz.py`](../../../src/utils/fire_marker_tz.py)，report 与 digest 共用。
+  🔴 `SyncStore.set_state` 吞 `sqlite3.Error` **返回 `False` 而不抛** —— 判成功必须看返回值，
+  只 `try/except` 等于没有保护（本批实际踩过）。
+- **周/月报聚合按子报告的窗口中点归属**，不是 `report_date` 字符串。rolling_24h 日报的
+  `report_date=生成当天`、内容却是前 24h，按 report_date 选会让周报内容整体前移一天。
+  窗口列解析不出的历史行退回 report_date 老判据，但与新判据**互斥**（本周期有可解析命中就不启用），
+  否则并集会多算一天且被 `max(0, expected-len)` 吞成 `missing=0`。
+- **daily 必先于 weekly/monthly 跑**：新口径下周报要读当天那份日报，靠
+  `ReportStore.list_agents()` 的 `(cadence rank, id)` 显式排序保证（改前只是
+  `daily_email_digest` < `weekly_email_digest` 的**字母序巧合**）。
+  🔴 rank 的 cadence 默认值必须与执行侧同源（`store.cadence_of` / `DEFAULT_CADENCE`）——
+  CLI 新建的 report agent `schedule_json` 为空，两处各写字面量默认会让排序与执行语义分裂。
+- 周期最后一天的日报缺席时，周报**仍发布**但正文 `missing_note` 点名缺失 + warning 日志
+  （owner 拍板；测试只锁「必须诚实标注」，不锁「继续发布」这个行为）。
+- 已知未收：多个 daily agent 时聚合跨 agent 求和 → [issue #51](https://github.com/ChenyqThu/MailAgent/issues/51)。
+
 ### 4.6 存储 schema（`sync_store.db`，bump DB_VERSION，走 `/db-migration`）
 
 ```sql

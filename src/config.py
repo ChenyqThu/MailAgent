@@ -681,7 +681,7 @@ class Config(BaseSettings):
     )
     mailagent_daily_digest_hours: str = Field(
         default="9,18", env="MAILAGENT_DAILY_DIGEST_HOURS",
-        description="每日巡检触发钟点（北京时区，逗号分隔小时），默认 9,18。",
+        description="每日巡检触发钟点（本机系统时区，逗号分隔小时），默认 9,18。",
     )
     mailagent_daily_digest_window_hours: int = Field(
         default=24, env="MAILAGENT_DAILY_DIGEST_WINDOW_HOURS",

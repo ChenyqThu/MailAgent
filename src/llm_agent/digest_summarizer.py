@@ -133,7 +133,7 @@ def _build_system(now: datetime) -> List[Dict[str, Any]]:
         build_task_identity_context()
         + "你帮用户写一条灵动岛『今日总结』通知，汇总用户最近 24h 的邮件态势。"
         "调用 summarize_digest 工具 EXACTLY ONCE，绝不输出纯文本。\n\n"
-        f"当前时间：{now_str}（周{weekday_cn}，时区 +08:00 北京）。\n\n"
+        f"当前时间：{now_str}（周{weekday_cn}，偏移量即本地时区）。\n\n"
         "规则：\n"
         "- counts（未读 / 紧急 / 总数 / 各分类数）是代码算好的**已知事实**，"
         "你只能在文案里引用它，绝不能改它、也不要在 tool output 里复述 counts 字段。\n"

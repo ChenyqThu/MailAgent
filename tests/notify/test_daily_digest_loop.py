@@ -362,8 +362,16 @@ def test_tick_loop_fires_run_once_on_window_hit():
 
 
 def test_tick_loop_skips_when_already_fired():
-    """slot 已 fire 过 → tick 不再调 run_once。"""
-    store = _FakeStore({"last_daily_digest_fire": "20260526-09"})
+    """slot 已 fire 过 → tick 不再调 run_once。
+
+    marker 迁移标记位预置成「已迁移」：本用例测的是去重闸，不是时区迁移（迁移语义见
+    tests/notify/test_daily_digest_marker_migration.py）—— 不预置的话 tick_loop 启动时会
+    把这个北京日 marker 换算成本地日，去重就不成立了。
+    """
+    store = _FakeStore({
+        "last_daily_digest_fire": "20260526-09",
+        daily_digest._MARKER_MIGRATION_STATE_KEY: "1",
+    })
     calls: List[str] = []
     shutdown = asyncio.Event()
 

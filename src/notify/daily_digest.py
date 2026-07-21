@@ -21,17 +21,16 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import asdict
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, List, Optional, Tuple
 
 from src.config import config
 from src.llm_agent.digest_summarizer import DigestSummary, summarize_digest
 from src.notify import digest_query
 from src.notify.island_dispatch import DigestBulkAction, dispatch_daily_digest
+from src.utils import fire_marker_tz
 
 log = logging.getLogger(__name__)
-
-_BEIJING = timezone(timedelta(hours=8))
 
 # 落在 fire 钟点后 ``FIRE_WINDOW_MIN`` 分钟内算"该 window";超出当前钟点 window 但
 # 进程刚开机 → _missed_catchup_slot 兜底补推。
@@ -40,6 +39,35 @@ TICK_INTERVAL_SEC = 60
 
 # sync_store state key: 记最近一次成功 fire 的 slot ("YYYYMMDD-HH")，防同 window 重复推。
 _LAST_FIRE_STATE_KEY = "last_daily_digest_fire"
+
+# 时区化之前 fire 判定恒按 UTC+8 → 落库的 slot 里是「北京日」。不换算的话，升级后在本地
+# 时区下会被当成「本地日已 fire」而跳过当天的 catch-up（LA 实测：旧值 20260721-09 在本地
+# 07-21 10:00 让 _missed_catchup_slot 返回 None）。与 report worker 同一套换算 / 幂等策略。
+_MARKER_MIGRATION_STATE_KEY = "daily_digest_fire_marker_tz_migrated"
+
+
+def _migrate_fire_marker(sync_store: Any) -> None:
+    """把 last_daily_digest_fire 从北京日口径一次性换算到本地日口径（幂等，见共用模块）。"""
+    if not fire_marker_tz.migration_pending(
+        sync_store, _MARKER_MIGRATION_STATE_KEY, log_prefix="[daily-digest]"
+    ):
+        return
+    # digest 没有 per-agent timezone 概念 → 恒本机系统时区（zone=None）。
+    fire_marker_tz.apply_migration(
+        sync_store,
+        flag_key=_MARKER_MIGRATION_STATE_KEY,
+        entries=[(_LAST_FIRE_STATE_KEY, None)],
+        log_prefix="[daily-digest]",
+    )
+
+
+def _local_now() -> datetime:
+    """当前时刻（tz-aware，本机系统时区）。
+
+    fire 钟点按本机时区解释 —— 与报告 worker 同口径（owner 拍板「跟随电脑时区」）；
+    改前这里硬编码 UTC+8，电脑换时区后「9 点巡检」实际落在别的钟点。
+    """
+    return datetime.now(timezone.utc).astimezone()
 
 
 def _parse_fire_hours(raw: str) -> List[int]:
@@ -70,7 +98,7 @@ def _slot_id(now: datetime, hour: int) -> str:
 
 
 def _current_fire_slot(now: datetime, fire_hours: List[int]) -> Optional[str]:
-    """``now`` (北京) 若落在某 fire window ``[HH:00, HH:00 + FIRE_WINDOW_MIN)`` 内,
+    """``now`` (本机时区) 若落在某 fire window ``[HH:00, HH:00 + FIRE_WINDOW_MIN)`` 内,
     返回该 slot "YYYYMMDD-HH"; 否则 None。
     """
     for h in fire_hours:
@@ -190,7 +218,7 @@ async def run_digest_once(
     - summarize 失败降级: headline = 模板, summary_md 空, confirmed 用代码候选直接转。
     - 无论推没推, 最后都 set_state(slot) 记 fire (避免同 window 反复重试)。
     """
-    now = now or datetime.now(_BEIJING)
+    now = now or _local_now()
     fired = False
     try:
         briefs = digest_query.fetch_recent_emails(
@@ -286,7 +314,7 @@ async def tick_loop(
     shutdown_event: Optional[asyncio.Event] = None,
     interval_sec: int = TICK_INTERVAL_SEC,
     fire_hours: Optional[List[int]] = None,
-    now_fn: Callable[[], datetime] = lambda: datetime.now(_BEIJING),
+    now_fn: Callable[[], datetime] = _local_now,
 ) -> None:
     """每 ``interval_sec`` 秒 tick 一次, 命中未触发的 fire window 则 ``await run_once(slot)``。
 
@@ -297,6 +325,7 @@ async def tick_loop(
     fh = fire_hours if fire_hours is not None else _parse_fire_hours(
         config.mailagent_daily_digest_hours
     )
+    _migrate_fire_marker(sync_store)
     log.debug(
         "[daily-digest] tick_loop started (interval=%ds, fire_hours=%s)", interval_sec, fh
     )

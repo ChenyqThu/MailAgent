@@ -168,7 +168,7 @@ def _build_system(
     body = (
         identity
         + persona.rstrip()
-        + f"\n\n当前时间：{now.isoformat()}（周{weekday_cn}，时区 +08:00 北京）。"
+        + f"\n\n当前时间：{now.isoformat()}（周{weekday_cn}，偏移量即本地时区）。"
         + _FIXED_RULES
     )
     block: Dict[str, Any] = {"type": "text", "text": body}
@@ -274,7 +274,7 @@ def _build_system_agentic(
     body = (
         identity
         + persona.rstrip()
-        + f"\n\n当前时间：{now.isoformat()}（周{weekday_cn}，时区 +08:00 北京）。"
+        + f"\n\n当前时间：{now.isoformat()}（周{weekday_cn}，偏移量即本地时区）。"
         + "\n\n## 工具（按需调用，别为每封都查）\n"
         + "邮件清单含 AI 摘要 + 回复建议（若有）+ 命中优先级邮件的正文；其余仅摘要。"
         + "某封需要更多细节才能正确策展时再下钻：\n"
