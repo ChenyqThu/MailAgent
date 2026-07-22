@@ -1152,6 +1152,123 @@ class TestSearchEmailBodiesSmart:
         assert hit.filename == "contract.pdf"
 
 
+class TestAttachmentTrigramLaneDegrade:
+    """PR4 graceful degrade: 旧库 (v38) 无 email_attachment_fts_trigram (v39 表) 时,
+    附件 trigram lane 静默缺席 (OperationalError 被接住), 搜索不崩、body/unicode
+    附件结果照常 —— 上线前必要保证 (真机 userData 库升级前仍是 v38 形态:
+    body trigram 在 [v24]、attachment trigram 缺 [v39])。"""
+
+    # 镜像 sync_store.py v39 迁移块注释的回滚脚本 (DROP 3 trigger + DROP 表)。
+    _DROP_V39 = """
+        DROP TRIGGER IF EXISTS email_attachment_fts_trigram_insert;
+        DROP TRIGGER IF EXISTS email_attachment_fts_trigram_update;
+        DROP TRIGGER IF EXISTS email_attachment_fts_trigram_delete;
+        DROP TABLE IF EXISTS email_attachment_fts_trigram;
+    """
+
+    def _seed(self, fresh_db: Path, store: AttachmentStore) -> None:
+        # 必须传隔离 store —— 默认 AttachmentStore() 会把附件写进仓库 data/attachments/。
+        repo = EmailRepository(db_path=str(fresh_db), attachment_store=store)
+        _insert_metadata_full(
+            fresh_db, 790,
+            subject="固件升级公告",
+            sender="victor@example.com",
+            mailbox="收件箱",
+        )
+        repo.commit_email_with_body(
+            790,
+            BodyPayload(
+                html="", markdown="Omada固件升级公告已发布。", body_format="html"
+            ),
+            [],
+        )
+        _insert_metadata_full(
+            fresh_db, 791,
+            subject="Attachment host",
+            sender="victor@example.com",
+            mailbox="收件箱",
+        )
+        id_map = repo.commit_email_with_body(
+            791,
+            BodyPayload(
+                html="", markdown="plain body without needles", body_format="html"
+            ),
+            [
+                AttachmentPayload(
+                    filename="manual.pdf",
+                    content=b"%PDF-1.4 fixture",
+                    content_type="application/pdf",
+                ),
+            ],
+        )
+        repo.commit_attachment_text(
+            id_map["manual.pdf"],
+            text="固件升级手册正文 attachneedle",
+            extractor="fixture",
+        )
+
+    def _drop_v39_table(self, fresh_db: Path) -> None:
+        conn = sqlite3.connect(str(fresh_db))
+        try:
+            conn.executescript(self._DROP_V39)
+        finally:
+            conn.close()
+
+    def test_attachment_lane_hits_when_table_present(
+        self, fresh_db: Path, store: AttachmentStore
+    ):
+        """对照组: v39 表在 → CJK trigram 路径命中 attachment-only 邮件
+        (source='attachment' + filename), body 命中照常。"""
+        self._seed(fresh_db, store)
+        repo = EmailRepository(
+            db_path=str(fresh_db), trigram_enabled=True, latin_trigram_enabled=True
+        )
+        hits = repo.search_email_bodies_smart("固件升级", limit=10)
+        by_id = {h.internal_id: h for h in hits}
+        assert set(by_id) == {790, 791}
+        assert by_id[790].source == "body"
+        assert by_id[791].source == "attachment"
+        assert by_id[791].filename == "manual.pdf"
+
+    def test_cjk_path_survives_missing_attachment_trigram_table(
+        self, fresh_db: Path, store: AttachmentStore
+    ):
+        """CJK trigram 路径 (>=3 MATCH + 2 字 LIKE 两分支): 表缺失 → 附件 lane
+        静默空 (attachment-only 邮件退化不可见), body 命中照常, 不崩。"""
+        self._seed(fresh_db, store)
+        self._drop_v39_table(fresh_db)
+        repo = EmailRepository(
+            db_path=str(fresh_db), trigram_enabled=True, latin_trigram_enabled=True
+        )
+        assert [
+            h.internal_id
+            for h in repo.search_email_bodies_smart("固件升级", limit=10)
+        ] == [790]
+        assert [
+            h.internal_id for h in repo.search_email_bodies_smart("固件", limit=10)
+        ] == [790]
+
+    def test_fused_path_survives_missing_attachment_trigram_table(
+        self, fresh_db: Path, store: AttachmentStore
+    ):
+        """纯英文裸查 (fused): body-trigram-whole 子串照常 (v24 表在),
+        attachment-trigram-whole 静默空; attachment-unicode 行级 lane (主表) 不受影响。"""
+        self._seed(fresh_db, store)
+        self._drop_v39_table(fresh_db)
+        repo = EmailRepository(
+            db_path=str(fresh_db), trigram_enabled=True, latin_trigram_enabled=True
+        )
+        # 整 query 短语 lane: 'Omad' 子串命中连写正文 (body trigram 表仍在)。
+        assert [
+            h.internal_id for h in repo.search_email_bodies_smart("Omad", limit=10)
+        ] == [790]
+        # 附件文本整词: 老 attachment-unicode 主表行级 lane 照常命中。
+        hits = repo.search_email_bodies_smart("attachneedle", limit=10)
+        assert [h.internal_id for h in hits] == [791]
+        assert hits[0].source == "attachment"
+        assert hits[0].filename == "manual.pdf"
+
+
 class TestGetMetadata:
     def test_returns_none_when_missing(self, repo: EmailRepository):
         assert repo.get_metadata(99999) is None

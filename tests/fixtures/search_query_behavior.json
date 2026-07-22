@@ -26,6 +26,11 @@
         {
           "filename": "logo.png",
           "is_inline": 1
+        },
+        {
+          "filename": "roadmapzeta.xlsx",
+          "is_inline": 0,
+          "text_content": "评审 attachdualzeta 附件正文样本"
         }
       ]
     },
@@ -139,6 +144,11 @@
           "filename": "evidence.txt",
           "is_inline": 0,
           "text_content": "contractneedle fusionrank confidential attachment evidence"
+        },
+        {
+          "filename": "固件手册.pdf",
+          "is_inline": 0,
+          "text_content": "固件升级回滚流程说明 attachluminous"
         }
       ]
     },
@@ -1201,6 +1211,228 @@
         15
       ],
       "expect_warnings": 0
+    },
+    {
+      "name": "attachment_fusion_cjk_match",
+      "query": "固件升级",
+      "trigram": true,
+      "expect_ids": [
+        7,
+        15,
+        16
+      ],
+      "expect_warnings": 0,
+      "expect_hits": [
+        {
+          "internal_id": 7,
+          "source": "attachment",
+          "filename": "固件手册.pdf"
+        }
+      ],
+      "expect_snippet_nonempty": [
+        7
+      ],
+      "expect_snippet_contains": {
+        "7": "<mark>固件升级</mark>"
+      }
+    },
+    {
+      "name": "attachment_fusion_cjk_two_char_like",
+      "query": "固件",
+      "trigram": true,
+      "expect_ids": [
+        7,
+        15,
+        16
+      ],
+      "order": "exact",
+      "expect_warnings": 0,
+      "expect_hits": [
+        {
+          "internal_id": 7,
+          "source": "attachment",
+          "filename": "固件手册.pdf"
+        }
+      ],
+      "expect_snippet_nonempty": [
+        7
+      ]
+    },
+    {
+      "name": "attachment_fusion_cjk_filename_match",
+      "query": "固件手册",
+      "trigram": true,
+      "expect_ids": [
+        7
+      ],
+      "expect_warnings": 0,
+      "expect_hits": [
+        {
+          "internal_id": 7,
+          "source": "attachment",
+          "filename": "固件手册.pdf"
+        }
+      ]
+    },
+    {
+      "name": "attachment_fusion_dual_hit_dedup_body_rrf",
+      "query": "评审",
+      "trigram": true,
+      "expect_ids": [
+        1,
+        3
+      ],
+      "order": "exact",
+      "expect_warnings": 0,
+      "expect_hits": [
+        {
+          "internal_id": 1,
+          "source": "body",
+          "filename": null
+        }
+      ]
+    },
+    {
+      "name": "fused_latin_substring_body_hit",
+      "query": "Omad",
+      "trigram": true,
+      "expect_ids": [
+        15,
+        16
+      ],
+      "expect_warnings": 0,
+      "expect_snippet_nonempty": [
+        15,
+        16
+      ],
+      "expect_snippet_contains": {
+        "15": "<mark>Omad</mark>"
+      }
+    },
+    {
+      "name": "fused_latin_whole_word_ranks_before_substring",
+      "query": "Omada",
+      "trigram": true,
+      "expect_ids": [
+        16,
+        15
+      ],
+      "order": "exact",
+      "expect_warnings": 0
+    },
+    {
+      "name": "fused_latin_filename_substring_hit",
+      "query": "admapzet",
+      "trigram": true,
+      "expect_ids": [
+        1
+      ],
+      "expect_warnings": 0,
+      "expect_hits": [
+        {
+          "internal_id": 1,
+          "source": "attachment",
+          "filename": "roadmapzeta.xlsx"
+        }
+      ]
+    },
+    {
+      "name": "fused_latin_attachment_text_substring_hit",
+      "query": "luminous",
+      "trigram": true,
+      "expect_ids": [
+        7
+      ],
+      "expect_warnings": 0,
+      "expect_hits": [
+        {
+          "internal_id": 7,
+          "source": "attachment",
+          "filename": "固件手册.pdf"
+        }
+      ],
+      "expect_snippet_contains": {
+        "7": "<mark>luminous</mark>"
+      }
+    },
+    {
+      "name": "attachment_fusion_metadata_filter_blocks",
+      "query": "固件手册",
+      "trigram": true,
+      "params": {
+        "mailbox": "存档"
+      },
+      "expect_ids": [],
+      "expect_warnings": 0
+    },
+    {
+      "name": "attachment_fusion_metadata_filter_passes",
+      "query": "固件手册",
+      "trigram": true,
+      "params": {
+        "mailbox": "收件箱"
+      },
+      "expect_ids": [
+        7
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "attachment_fusion_cjk_latin_flag_off_unaffected",
+      "query": "固件升级",
+      "trigram": true,
+      "latin_trigram": false,
+      "expect_ids": [
+        7,
+        15,
+        16
+      ],
+      "expect_warnings": 0,
+      "expect_hits": [
+        {
+          "internal_id": 7,
+          "source": "attachment",
+          "filename": "固件手册.pdf"
+        }
+      ]
+    },
+    {
+      "name": "fused_latin_lanes_latin_flag_off_reverts",
+      "query": "Omad",
+      "trigram": true,
+      "latin_trigram": false,
+      "expect_ids": [],
+      "expect_warnings": 0
+    },
+    {
+      "name": "fused_latin_lanes_master_flag_off_reverts",
+      "query": "Omad",
+      "trigram": false,
+      "expect_ids": [],
+      "expect_warnings": 0
+    },
+    {
+      "name": "attachment_fusion_master_flag_off_reverts",
+      "query": "固件手册",
+      "trigram": false,
+      "expect_ids": [],
+      "expect_warnings": 0
+    },
+    {
+      "name": "attachment_fusion_mixed_term_and_semantics",
+      "query": "固件升级 attachluminous",
+      "trigram": true,
+      "expect_ids": [
+        7
+      ],
+      "expect_warnings": 0,
+      "expect_hits": [
+        {
+          "internal_id": 7,
+          "source": "attachment",
+          "filename": "固件手册.pdf"
+        }
+      ]
     }
   ]
 }

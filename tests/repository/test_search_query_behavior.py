@@ -78,6 +78,12 @@ CREATE VIRTUAL TABLE email_attachment_fts USING fts5(
     text_content,
     tokenize='porter unicode61 remove_diacritics 2'
 );
+
+CREATE VIRTUAL TABLE email_attachment_fts_trigram USING fts5(
+    filename,
+    text_content,
+    tokenize='trigram'
+);
 """
 
 
@@ -179,6 +185,15 @@ def behavior_db(tmp_path: Path) -> Path:
                         """INSERT INTO email_attachment_fts (rowid, text_content)
                            VALUES (?, ?)""",
                         (attachment_id, text_content),
+                    )
+                    # 镜像 email_attachment_fts_trigram_insert trigger (v39, PR3):
+                    # 附件 trigram 并行表 (filename + text_content), 同 status gate
+                    # (仅 extracted + text 非空入索引), PR4 附件 lane 数据源。
+                    conn.execute(
+                        """INSERT INTO email_attachment_fts_trigram
+                           (rowid, filename, text_content)
+                           VALUES (?, ?, ?)""",
+                        (attachment_id, attachment["filename"], text_content),
                     )
         conn.commit()
     finally:

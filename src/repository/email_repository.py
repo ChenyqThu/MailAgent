@@ -1449,6 +1449,9 @@ class EmailRepository:
                 sort=None,
                 limit=probe,
                 query_for_log=transformed,
+                # PR4: 仅 plain fast-path 传原始 query → fused 内启用整 query trigram
+                # 双 lane (union-only); parsed 路径不传 → 逐字节不变。
+                plain_query=query,
             )
             return self._finalize_search(
                 hits,
@@ -1559,11 +1562,18 @@ class EmailRepository:
         - PR2: ``latin_trigram_enabled`` 时, unicode route 的 >=3 字符拉丁 token 组内
           追加 body-trigram 子串 lane (组内并集), 修复连写文档 (正文 'Omada固件升级')
           漏召回; flag off = 拉丁 token 回单 unicode lane (PR2 前行为, 逐字节)。
+        - PR4 (1b/1f): 每个 term 组再追加 attachment-trigram lane (组内并集) —— 组语义
+          =「该 term 出现在 正文 OR 附件文本 OR 文件名」; 组间 AND 语义不变 (每个 term
+          至少命中邮件某处)。CJK term 的附件 lane 只受 master 门 (trigram_enabled);
+          拉丁 term (>=3 字符) 的附件 lane 另受 latin flag 门 (镜像 body 双 lane)。
+          候选映射 attachment_id → internal_id (JOIN email_attachment), 同邮件多附件
+          命中按邮件去重 (保留 bm25 最优位次); metadata 后置过滤在合并点对附件命中
+          同样生效。attachment-only 命中物化为 source='attachment' + filename。
         - 返回 None 表示「不接管, 回退老 unicode fast-path」(例如全部 term 都 too_short
           但仍有 1 字拦截 warning 要透传 → 仍返回空结果 result 而非 None)。
 
-        纯英文裸查 / 列级 FTS / 附件融合不在此路径 (那些走 parsed / 老 fast-path), 故 T5/T6
-        不受影响 (本路径只在 query 含 CJK 时被走到)。
+        纯英文裸查 / 列级 FTS 不在此路径 (那些走 fused / parsed), 故 T6 不受影响
+        (本路径只在 query 含 CJK 时被走到)。
         """
         terms = query.split()
         routes, plan_warnings = build_search_plan(terms)
@@ -1594,6 +1604,11 @@ class EmailRepository:
             # 保持单 unicode lane (trigram MATCH <3 字符无召回, 硬约束)。
             lane_groups: list[list[_SearchLane]] = []
             latin_dual = self.latin_trigram_enabled
+            # PR4: body 命中 id 全集 (任一 body lane) + 附件命中信息 (internal_id →
+            # (attachment_id, filename))。物化时 body 命中优先 (正文+附件同 term 双命中
+            # 去重 source='body', 与 fused 路径 lane 注册顺序语义一致)。
+            body_hit_ids: set[int] = set()
+            attachment_info: dict[int, tuple[int, str]] = {}
             for route in routes:
                 lanes: list[_SearchLane] = []
                 ids = self._trigram_term_candidate_ids(
@@ -1603,6 +1618,7 @@ class EmailRepository:
                     lanes.append(_SearchLane(
                         f"body-{route.route}", [(iid, None) for iid in ids]
                     ))
+                    body_hit_ids.update(ids)
                 if (
                     latin_dual
                     and route.route == "unicode"
@@ -1619,6 +1635,18 @@ class EmailRepository:
                             "body-trigram-latin",
                             [(iid, None) for iid in trigram_ids],
                         ))
+                        body_hit_ids.update(trigram_ids)
+                # PR4 (1b/1f): attachment-trigram lane (组内并集; 全召回不截断 NS-3)。
+                attachment_entries = self._attachment_trigram_entries_for_route(
+                    conn, route, latin_dual=latin_dual, query_for_log=query
+                )
+                if attachment_entries:
+                    lanes.append(_SearchLane(
+                        "attachment-trigram",
+                        [(iid, None) for iid, _, _ in attachment_entries],
+                    ))
+                    for iid, att_id, filename in attachment_entries:
+                        attachment_info.setdefault(iid, (att_id, filename))
                 if not lanes:
                     # 该 term 组无任何候选 → AND 交集为空, 直接空结果 (warning 仍透传)。
                     return EmailSearchResult([], query, warnings)
@@ -1630,7 +1658,13 @@ class EmailRepository:
                 post_filter_predicates=structured_filters,
                 limit=limit,
             )
-            hits = self._build_trigram_hits(conn, merged, routes)
+            hits = self._build_trigram_hits(
+                conn,
+                merged,
+                routes,
+                body_hit_ids=body_hit_ids,
+                attachment_info=attachment_info,
+            )
             return EmailSearchResult(hits, query, warnings)
         finally:
             conn.close()
@@ -1740,6 +1774,133 @@ class EmailRepository:
             return []
         return [int(r["rowid"]) for r in rows]
 
+    # ============================================================
+    # PR4 (1b/1f): 附件 trigram lane 候选 (email_attachment_fts_trigram)
+    # ============================================================
+
+    def _attachment_trigram_entries_for_route(
+        self,
+        conn: sqlite3.Connection,
+        route: _TermRoute,
+        *,
+        latin_dual: bool,
+        query_for_log: str,
+    ) -> list[tuple[int, int, str]]:
+        """单个 term 的附件 trigram lane 候选 (internal_id, attachment_id, filename)。
+
+        路由镜像 body 侧:
+          - unicode term (拉丁): >=3 字符且 latin flag 开 → MATCH 整 term 短语;
+            <3 字符或 flag 关 → 无附件 lane (拉丁附件面属 1a, 受 latin 门)。
+          - trigram term mode='match' (含 CJK >=3 字) → MATCH 整串短语 —— **只受
+            master 门** (1b 中文附件融合, 不受 latin flag 影响)。
+          - trigram term mode='like' (2 字 CJK) → filename/text_content LIKE 兜底。
+        """
+        if route.route == "unicode":
+            if not latin_dual or len(route.original) < 3:
+                return []
+            return self._attachment_trigram_match_entries(
+                conn, _quote_fts_token(route.original), query_for_log=query_for_log
+            )
+        if route.trigram_mode == "match":
+            return self._attachment_trigram_match_entries(
+                conn,
+                _quote_fts_token(route.trigram_core),
+                query_for_log=query_for_log,
+            )
+        # trigram_mode == 'like' (2 字 CJK)
+        return self._attachment_trigram_like_entries(
+            conn, route.trigram_core, query_for_log=query_for_log
+        )
+
+    def _attachment_trigram_match_entries(
+        self,
+        conn: sqlite3.Connection,
+        fts_expr: str,
+        *,
+        query_for_log: str,
+    ) -> list[tuple[int, int, str]]:
+        """email_attachment_fts_trigram MATCH → 邮件级有序候选 (bm25 升序)。
+
+        - MATCH 默认跨 filename + text_content 两列 → 文件名命中免费获得 (1f)。
+        - 同邮件多附件命中同 term → 按 internal_id 去重, 保留 bm25 最优位次。
+        - 全召回不截断 (NS-3: 交集/合并前截断会丢真命中)。
+        - graceful degrade: 表缺失 (v38 旧库未迁 v39) → OperationalError 接住返回空,
+          搜索不崩 (仅少附件维度)。
+        """
+        if not fts_expr:
+            return []
+        sql = """
+            SELECT a.internal_id AS internal_id,
+                   email_attachment_fts_trigram.rowid AS attachment_id,
+                   COALESCE(a.filename, '') AS filename
+              FROM email_attachment_fts_trigram
+              JOIN email_attachment a ON a.id = email_attachment_fts_trigram.rowid
+             WHERE email_attachment_fts_trigram MATCH ?
+             ORDER BY bm25(email_attachment_fts_trigram) ASC
+        """
+        try:
+            rows = conn.execute(sql, (fts_expr,)).fetchall()
+        except sqlite3.OperationalError as e:
+            logger.warning(
+                f"search_email_bodies(trigram): attachment trigram FTS unavailable "
+                f"or invalid MATCH {fts_expr!r} (query={query_for_log!r}): {e}"
+            )
+            return []
+        return self._dedupe_attachment_rows(rows)
+
+    def _attachment_trigram_like_entries(
+        self,
+        conn: sqlite3.Connection,
+        value: str,
+        *,
+        query_for_log: str,
+    ) -> list[tuple[int, int, str]]:
+        """2 字 CJK: 附件 trigram 表 filename/text_content LIKE 兜底 (MATCH <3 无召回)。
+
+        镜像 body 侧 ``_trigram_like_ids`` 的启发式: filename 命中 > text_content 命中,
+        同档按 rowid DESC。全召回不截断; 表缺失 graceful degrade 同 MATCH 分支。
+        """
+        like = f"%{escape_like_value(value)}%"
+        sql = """
+            SELECT a.internal_id AS internal_id,
+                   email_attachment_fts_trigram.rowid AS attachment_id,
+                   COALESCE(a.filename, '') AS filename,
+                   CASE
+                       WHEN email_attachment_fts_trigram.filename
+                            LIKE ? ESCAPE '\\' THEN 0
+                       ELSE 1
+                   END AS boost
+              FROM email_attachment_fts_trigram
+              JOIN email_attachment a ON a.id = email_attachment_fts_trigram.rowid
+             WHERE email_attachment_fts_trigram.filename LIKE ? ESCAPE '\\'
+                OR email_attachment_fts_trigram.text_content LIKE ? ESCAPE '\\'
+             ORDER BY boost ASC, email_attachment_fts_trigram.rowid DESC
+        """
+        try:
+            rows = conn.execute(sql, (like, like, like)).fetchall()
+        except sqlite3.OperationalError as e:
+            logger.warning(
+                f"search_email_bodies(trigram): attachment trigram LIKE fallback "
+                f"failed for {value!r} (query={query_for_log!r}): {e}"
+            )
+            return []
+        return self._dedupe_attachment_rows(rows)
+
+    @staticmethod
+    def _dedupe_attachment_rows(
+        rows: list[sqlite3.Row],
+    ) -> list[tuple[int, int, str]]:
+        """附件行 → 邮件级候选: 同 internal_id 多附件命中保留最优位次 (首次出现)。"""
+        entries: list[tuple[int, int, str]] = []
+        seen: set[int] = set()
+        for r in rows:
+            iid = int(r["internal_id"])
+            if iid in seen:
+                continue
+            seen.add(iid)
+            entries.append((iid, int(r["attachment_id"]), r["filename"] or ""))
+        return entries
+
     @staticmethod
     def _chunk_ids(ids: list[int], size: int = _IN_CHUNK_SIZE) -> Iterator[list[int]]:
         """把 id 列表切成 ≤size 的批 (NS-3: 防 IN(...) 超 SQLite 参数上限)。"""
@@ -1847,23 +2008,60 @@ class EmailRepository:
         conn: sqlite3.Connection,
         merged: list[_MergedCandidate],
         routes: list[_TermRoute],
+        *,
+        body_hit_ids: set[int],
+        attachment_info: dict[int, tuple[int, str]],
     ) -> list[EmailSearchHit]:
         """id 级 lane 的 top-N 候选 → 查 metadata 拼 EmailSearchHit (trigram 路径物化)。
 
-        ``merged`` 已由 ``_merge_lane_groups`` 排好序 + 裁到 top-N。``rank`` =
-        ``-rrf_score`` (越小越相关), 与行级 (fused) 路径出口语义一致。缺 metadata 行的
-        id 已占 top-N 槽位, 此处丢弃不回填 (与旧行为一致)。
-        snippet: 对 top-N 用「snippet 表达式」(build_trigram_snippet_expr) 在
-        email_body_fts_trigram 上跑 snippet() 高亮命中词; 该表达式为空 (纯 2/1 字 CJK)
-        或某 row 不被表达式 MATCH (只 2 字 LIKE 命中) → fallback 取 body_markdown 前
-        ~80 字符无高亮摘要, 保证 snippet 不恒空。Python/TS 双端逐行镜像。
+        薄 wrapper: snippet 表达式由路由计划编译 (build_trigram_snippet_expr), 物化
+        主体在 ``_materialize_id_candidates`` (与 fused 路径的 None-row 物化共用)。
         """
-        if not merged:
-            return []
+        by_id = self._materialize_id_candidates(
+            conn,
+            merged,
+            snippet_expr=build_trigram_snippet_expr(routes),
+            body_hit_ids=body_hit_ids,
+            attachment_info=attachment_info,
+        )
+        return [
+            by_id[c.internal_id] for c in merged if c.internal_id in by_id
+        ]
+
+    def _materialize_id_candidates(
+        self,
+        conn: sqlite3.Connection,
+        candidates: list[_MergedCandidate],
+        *,
+        snippet_expr: str,
+        body_hit_ids: set[int],
+        attachment_info: dict[int, tuple[int, str]],
+    ) -> dict[int, EmailSearchHit]:
+        """id 级 lane 候选 (row=None) → 补查 metadata 物化 EmailSearchHit (按 id 索引)。
+
+        trigram 路径 (全部候选) 与 fused 路径 (仅混入的 id 级 lane 候选, PR1 验收
+        LOW#1 的 None-row 物化分支) 共用。``rank`` = ``-rrf_score`` (越小越相关),
+        与行级路径出口语义一致。缺 metadata 行的 id 不入 dict (占 top-N 槽位但被
+        丢弃, 与旧行为一致)。
+
+        source 判定: body lane 命中过 (``body_hit_ids``) → source='body' (正文+附件
+        同 term 双命中去重, body 优先, 与 fused 行级 lane 注册顺序语义一致); 否则
+        attachment-only → source='attachment' + filename (``attachment_info``)。
+
+        snippet:
+        - body 命中: ``snippet_expr`` 在 email_body_fts_trigram 上跑 snippet() 高亮;
+          表达式为空 (纯 2/1 字 CJK) 或 row 不被 MATCH (只 2 字 LIKE 命中) → fallback
+          body_markdown 前 ~80 字符 (保证不恒空)。
+        - attachment 命中: 同表达式在 email_attachment_fts_trigram (text_content 列)
+          上跑 snippet(); MATCH 不上 → fallback 附件文本前 ~80 字; filename-only
+          命中 snippet 可为无高亮前缀 (前端按 filename 徽标展示)。
+        """
+        if not candidates:
+            return {}
         # MED-2: 补 ai_priority + lang 投影 (命令面板 EmailHitRow 渲染优先级 chip + lang pip)。
         ai_select, ai_join = self._ai_fields_select_join(conn, meta_alias="m")
         meta_by_id: dict[int, sqlite3.Row] = {}
-        for chunk in self._chunk_ids([c.internal_id for c in merged]):
+        for chunk in self._chunk_ids([c.internal_id for c in candidates]):
             placeholders = ",".join("?" for _ in chunk)
             rows = conn.execute(
                 f"""SELECT m.internal_id AS internal_id,
@@ -1879,11 +2077,26 @@ class EmailRepository:
             for r in rows:
                 meta_by_id[int(r["internal_id"])] = r
 
-        top_ids = [c.internal_id for c in merged if c.internal_id in meta_by_id]
-        snippet_by_id = self._build_trigram_snippets(conn, top_ids, routes)
+        def is_attachment_only(iid: int) -> bool:
+            return iid not in body_hit_ids and iid in attachment_info
 
-        hits: list[EmailSearchHit] = []
-        for candidate in merged:
+        body_top_ids = [
+            c.internal_id
+            for c in candidates
+            if c.internal_id in meta_by_id and not is_attachment_only(c.internal_id)
+        ]
+        snippet_by_id = self._build_trigram_snippets(conn, body_top_ids, snippet_expr)
+        attachment_items = [
+            (c.internal_id, attachment_info[c.internal_id][0])
+            for c in candidates
+            if c.internal_id in meta_by_id and is_attachment_only(c.internal_id)
+        ]
+        attachment_snippet_by_id = self._build_attachment_trigram_snippets(
+            conn, attachment_items, snippet_expr
+        )
+
+        hits: dict[int, EmailSearchHit] = {}
+        for candidate in candidates:
             r = meta_by_id.get(candidate.internal_id)
             if r is None:
                 continue
@@ -1892,21 +2105,29 @@ class EmailRepository:
                 f"https://www.notion.so/{page_id.replace('-', '')}"
                 if page_id else None
             )
-            hits.append(EmailSearchHit(
+            if is_attachment_only(candidate.internal_id):
+                source = "attachment"
+                filename: Optional[str] = attachment_info[candidate.internal_id][1]
+                snippet = attachment_snippet_by_id.get(candidate.internal_id, "")
+            else:
+                source = "body"
+                filename = None
+                snippet = snippet_by_id.get(candidate.internal_id, "")
+            hits[candidate.internal_id] = EmailSearchHit(
                 internal_id=candidate.internal_id,
                 subject=r["subject"],
                 sender=r["sender"],
                 date_received=r["date_received"],
                 mailbox=r["mailbox"],
-                snippet=snippet_by_id.get(candidate.internal_id, ""),
+                snippet=snippet,
                 rank=-float(candidate.rrf_score),
                 notion_page_id=page_id,
                 notion_url=notion_url,
-                source="body",
-                filename=None,
+                source=source,
+                filename=filename,
                 ai_priority=self._row_value(r, "priority_raw"),
                 lang=self._row_value(r, "lang_raw"),
-            ))
+            )
         return hits
 
     @staticmethod
@@ -1921,12 +2142,13 @@ class EmailRepository:
         self,
         conn: sqlite3.Connection,
         top_ids: list[int],
-        routes: list[_TermRoute],
+        expr: str,
     ) -> dict[int, str]:
-        """给 top-N trigram 命中生成 snippet (高亮 + fallback)。
+        """给 top-N trigram body 命中生成 snippet (高亮 + fallback)。
 
-        ① 若 snippet 表达式非空: 在 email_body_fts_trigram MATCH 该表达式 + rowid IN top,
-           取 snippet() 高亮片段 (含 <mark>) 映射回 id。
+        ① 若 snippet 表达式 ``expr`` 非空 (trigram 路径由 build_trigram_snippet_expr
+           编译; fused 路径为整 query 短语): 在 email_body_fts_trigram MATCH 该表达式
+           + rowid IN top, 取 snippet() 高亮片段 (含 <mark>) 映射回 id。
         ② 表达式为空, 或某 id 未被 ① 命中 (只 2 字 LIKE 命中) → fallback: 取 body_markdown
            前 ~80 字符无高亮摘要。
         snippet() 只能在带 MATCH 的查询里用; fallback 摘要不经 snippet()。
@@ -1934,7 +2156,6 @@ class EmailRepository:
         if not top_ids:
             return {}
         result: dict[int, str] = {}
-        expr = build_trigram_snippet_expr(routes)
         if expr:
             placeholders = ",".join("?" for _ in top_ids)
             sql = (
@@ -1966,6 +2187,69 @@ class EmailRepository:
             for r in rows:
                 body = r["body_markdown"] or ""
                 result[int(r["rowid"])] = body[:80]
+        return result
+
+    def _build_attachment_trigram_snippets(
+        self,
+        conn: sqlite3.Connection,
+        items: list[tuple[int, int]],
+        expr: str,
+    ) -> dict[int, str]:
+        """给 attachment-only 命中生成 snippet (镜像 body 侧 trigram snippet 方案)。
+
+        ``items``: (internal_id, attachment_id)。① expr 非空 → 对
+        email_attachment_fts_trigram (text_content 列, 列号 1) 跑 snippet() 高亮;
+        ② MATCH 不上 (纯 2 字 LIKE 命中) 或表达式空 → fallback 附件文本前 ~80 字。
+        filename-only 命中 (text 无命中词) 由 ① 返回无高亮前缀或 ② 兜底 —— snippet
+        允许无 <mark> (前端按 filename 徽标展示)。表缺失 graceful degrade: 两步查询
+        均接住 OperationalError (attachment lane 有候选才会走到这里, 正常不触发)。
+        """
+        if not items:
+            return {}
+        iid_by_attachment = {att_id: iid for iid, att_id in items}
+        att_ids = [att_id for _, att_id in items]
+        result: dict[int, str] = {}
+        if expr:
+            placeholders = ",".join("?" for _ in att_ids)
+            sql = (
+                f"SELECT rowid, "
+                f"snippet(email_attachment_fts_trigram, 1, '<mark>', '</mark>', '…', 24) "
+                f"AS snippet "
+                f"FROM email_attachment_fts_trigram "
+                f"WHERE rowid IN ({placeholders}) "
+                f"AND email_attachment_fts_trigram MATCH ?"
+            )
+            try:
+                rows = conn.execute(sql, (*att_ids, expr)).fetchall()
+                for r in rows:
+                    text = r["snippet"]
+                    if text:
+                        result[iid_by_attachment[int(r["rowid"])]] = text
+            except sqlite3.OperationalError as e:
+                logger.warning(
+                    f"search_email_bodies(trigram): attachment snippet MATCH failed "
+                    f"({expr!r}): {e}"
+                )
+
+        missing_att_ids = [
+            att_id for att_id in att_ids if iid_by_attachment[att_id] not in result
+        ]
+        if missing_att_ids:
+            placeholders = ",".join("?" for _ in missing_att_ids)
+            try:
+                rows = conn.execute(
+                    f"SELECT rowid, text_content FROM email_attachment_fts_trigram "
+                    f"WHERE rowid IN ({placeholders})",
+                    missing_att_ids,
+                ).fetchall()
+                for r in rows:
+                    text = r["text_content"] or ""
+                    result[iid_by_attachment[int(r["rowid"])]] = text[:80]
+            except sqlite3.OperationalError as e:
+                logger.warning(
+                    f"search_email_bodies(trigram): attachment snippet fallback "
+                    f"failed: {e}"
+                )
         return result
 
     def _search_email_bodies_parsed(
@@ -2167,12 +2451,26 @@ class EmailRepository:
         sort: Optional[str],
         limit: int,
         query_for_log: str,
+        plain_query: Optional[str] = None,
     ) -> list[EmailSearchHit]:
         """Search body + attachment FTS and merge by email-level RRF.
 
         两个候选源注册成单组 (并集语义) 的行级 lane, 交由 ``_merge_lane_groups`` 单点
-        RRF 合并 (metadata 谓词已内联在 lane SQL, 合并点不再后置过滤)。lane 注册顺序
+        RRF 合并 (行级 lane 的 metadata 谓词已内联在 lane SQL)。lane 注册顺序
         = payload 优先级: 正文+附件同时命中时 source='body'、保留正文 snippet。
+
+        PR4 (1a 纯英文子串 + 1f 文件名): ``plain_query`` 非 None (仅 plain fast-path
+        传入; parsed 路径恒 None → 逐字节不变) 且 master trigram flag + latin flag
+        均开时, 组内**union-only 追加**两条 id 级 lane (只增召回不减, AND 语义零变化):
+          - body-trigram-whole: 整 query (>=3 字符) 经 _quote_fts_token 短语 MATCH
+            email_body_fts_trigram —— 单词 query 获得子串模糊 (Omad→Omada), 多词
+            query 获得相邻短语子串。**不做 per-term AND 重组** (会改英文多词旧语义)。
+          - attachment-trigram-whole: 同短语 MATCH email_attachment_fts_trigram
+            (英文附件文本/文件名子串可搜)。
+        id 级 lane 无内联谓词 → 混入时合并点补统一 metadata 后置过滤 (对行级 lane id
+        幂等)。None-row 候选 (仅新 lane 命中) 走 ``_materialize_id_candidates`` 物化
+        (PR1 验收 LOW#1 的 None-row 分支)。plain fast-path 的 neg/gate expr 恒空,
+        id 级 lane 无需负向过滤。
 
         ``rank`` on the returned ``EmailSearchHit`` is ``-rrf_score`` so existing
         callers that treat lower scores as more relevant keep the same ordering
@@ -2210,8 +2508,75 @@ class EmailRepository:
                     "attachment-unicode",
                     self._rows_to_lane_entries(attachment_rows),
                 ))
-            merged = self._merge_lane_groups(conn, [lanes], sort=sort, limit=limit)
-            return [self._merged_row_to_hit(candidate) for candidate in merged]
+
+            # PR4: plain fast-path 的整 query trigram 双 lane (union-only 追加)。
+            whole_expr = ""
+            body_trigram_id_set: set[int] = set()
+            attachment_info: dict[int, tuple[int, str]] = {}
+            id_lane_added = False
+            if (
+                plain_query is not None
+                and self.trigram_enabled
+                and self.latin_trigram_enabled
+            ):
+                stripped = plain_query.strip()
+                if len(stripped) >= 3:
+                    whole_expr = _quote_fts_token(stripped)
+                    body_trigram_ids = self._fts_match_ids(
+                        conn,
+                        "email_body_fts_trigram",
+                        whole_expr,
+                        query_for_log=stripped,
+                    )
+                    if body_trigram_ids:
+                        lanes.append(_SearchLane(
+                            "body-trigram-whole",
+                            [(iid, None) for iid in body_trigram_ids],
+                        ))
+                        body_trigram_id_set = set(body_trigram_ids)
+                        id_lane_added = True
+                    attachment_entries = self._attachment_trigram_match_entries(
+                        conn, whole_expr, query_for_log=stripped
+                    )
+                    if attachment_entries:
+                        lanes.append(_SearchLane(
+                            "attachment-trigram-whole",
+                            [(iid, None) for iid, _, _ in attachment_entries],
+                        ))
+                        for iid, att_id, filename in attachment_entries:
+                            attachment_info.setdefault(iid, (att_id, filename))
+                        id_lane_added = True
+
+            merged = self._merge_lane_groups(
+                conn,
+                [lanes],
+                # id 级 lane 无内联谓词 → 混入时补统一后置过滤 (行级 lane id 幂等);
+                # 纯行级 (旧形态) 不传 → 与 PR1 行为逐字节一致。
+                post_filter_predicates=(
+                    metadata_predicates if id_lane_added else None
+                ),
+                sort=sort,
+                limit=limit,
+            )
+            # LOW#1: 行级候选走 _merged_row_to_hit; None-row 候选 (仅 id 级 lane 命中)
+            # 批量补查 metadata 物化 (source/filename/snippet 见 materializer doc)。
+            none_candidates = [c for c in merged if c.row is None]
+            materialized = self._materialize_id_candidates(
+                conn,
+                none_candidates,
+                snippet_expr=whole_expr,
+                body_hit_ids=body_trigram_id_set,
+                attachment_info=attachment_info,
+            )
+            hits: list[EmailSearchHit] = []
+            for candidate in merged:
+                if candidate.row is not None:
+                    hits.append(self._merged_row_to_hit(candidate))
+                    continue
+                hit = materialized.get(candidate.internal_id)
+                if hit is not None:
+                    hits.append(hit)
+            return hits
         finally:
             conn.close()
 
