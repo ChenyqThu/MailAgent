@@ -253,3 +253,97 @@ def test_long_message_id_references_preserve_full_chain():
     assert str(m.get("In-Reply-To")).strip("<>") == _LONG_MID
     # 中文 Subject 不受本修复影响, 仍可正常 decode 回原文
     assert m.get("Subject") == "Re: hi"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 内联图重嵌: 本地 attachments/{id}/{file} src → cid: (multipart/related)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_PNG_BYTES = b"\x89PNG\r\n\x1a\nfakepng"
+
+
+def _cfg_with_store(tmp_path):
+    root = tmp_path / "attachments"
+
+    class _Cfg(_FakeCfg):
+        attachment_storage_dir = str(root)
+
+    return _Cfg(), root
+
+
+def test_local_inline_image_reembedded_as_cid(tmp_path):
+    """引用原文里的本地内联图路径必须重嵌为 cid: — 否则收件端裂图 (入库时
+    cid 已被 _rewrite_cid_to_local 改写成本地相对路径, 只有本地预览解析得了)."""
+    cfg, root = _cfg_with_store(tmp_path)
+    (root / "42").mkdir(parents=True)
+    (root / "42" / "image001.png").write_bytes(_PNG_BYTES)
+
+    d = DraftRequest(
+        mode="reply", to=["a@b.com"], subject="Re: hi", reply_text="hello",
+        reply_html='<p>hello</p><img src="attachments/42/image001.png" width="120">',
+        in_reply_to="<x@y>",
+    )
+    m = BytesParser(policy=policy.default).parsebytes(build_outgoing_mime(cfg, d))
+
+    html_part = next(p for p in m.walk() if p.get_content_type() == "text/html")
+    html = html_part.get_content()
+    assert "attachments/42/image001.png" not in html
+    assert 'src="cid:' in html
+
+    img = next(p for p in m.walk() if p.get_content_type() == "image/png")
+    assert img.get_payload(decode=True) == _PNG_BYTES
+    cid = (img.get("Content-ID") or "").strip("<>")
+    assert cid and f'src="cid:{cid}"' in html
+    # html part 已升级为 multipart/related (仍在 alternative 之下)
+    related = next(p for p in m.walk() if p.get_content_type() == "multipart/related")
+    assert related is not None
+
+
+def test_local_inline_image_dedup_same_path_single_part(tmp_path):
+    cfg, root = _cfg_with_store(tmp_path)
+    (root / "7").mkdir(parents=True)
+    (root / "7" / "logo.png").write_bytes(_PNG_BYTES)
+
+    d = DraftRequest(
+        mode="reply", to=["a@b.com"], subject="Re: hi", reply_text="x",
+        reply_html='<img src="attachments/7/logo.png"><img src=\'attachments/7/logo.png\'>',
+    )
+    m = BytesParser(policy=policy.default).parsebytes(build_outgoing_mime(cfg, d))
+    imgs = [p for p in m.walk() if p.get_content_type() == "image/png"]
+    assert len(imgs) == 1  # 同一路径两次引用共用一个 related part
+
+
+def test_local_inline_image_missing_file_left_as_is(tmp_path):
+    cfg, _ = _cfg_with_store(tmp_path)
+    d = DraftRequest(
+        mode="reply", to=["a@b.com"], subject="Re: hi", reply_text="x",
+        reply_html='<img src="attachments/9/gone.png">',
+    )
+    m = BytesParser(policy=policy.default).parsebytes(build_outgoing_mime(cfg, d))
+    html = next(p for p in m.walk() if p.get_content_type() == "text/html").get_content()
+    assert 'src="attachments/9/gone.png"' in html  # 缺文件保持原样, 不阻断发送
+    assert not any(p.get_content_type() == "image/png" for p in m.walk())
+
+
+def test_local_inline_image_traversal_rejected(tmp_path):
+    cfg, root = _cfg_with_store(tmp_path)
+    (root.parent / "secret.png").write_bytes(_PNG_BYTES)
+    d = DraftRequest(
+        mode="reply", to=["a@b.com"], subject="Re: hi", reply_text="x",
+        reply_html='<img src="attachments/1/../../secret.png">',
+    )
+    m = BytesParser(policy=policy.default).parsebytes(build_outgoing_mime(cfg, d))
+    html = next(p for p in m.walk() if p.get_content_type() == "text/html").get_content()
+    assert "secret.png" in html  # src 原样保留
+    assert not any(p.get_content_type() == "image/png" for p in m.walk())
+
+
+def test_no_attachment_storage_dir_cfg_noop():
+    """_FakeCfg 无 attachment_storage_dir → 整条重嵌逻辑零介入 (向后兼容)."""
+    d = DraftRequest(
+        mode="reply", to=["a@b.com"], subject="Re: hi", reply_text="x",
+        reply_html='<img src="attachments/1/a.png">',
+    )
+    m = _parse_default(d)
+    html = next(p for p in m.walk() if p.get_content_type() == "text/html").get_content()
+    assert 'src="attachments/1/a.png"' in html

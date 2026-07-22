@@ -9,12 +9,15 @@ fallback (cfg 端口都指向 DavMail JVM) 都委托本模块, 消除重复.
 """
 from __future__ import annotations
 
+import html as _htmllib
+import mimetypes
 import re
 from email import policy
 from email.headerregistry import HeaderRegistry
 from email.message import EmailMessage
 from email.parser import BytesParser
 from email.utils import formatdate, make_msgid
+from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 from loguru import logger
@@ -92,6 +95,75 @@ class _ThreadingHeader:
                 cur = f" {tok}"
         lines.append(cur)
         return sep.join(lines) + sep
+
+
+# 入库时内联图 cid: 被 storage_payload_builder._rewrite_cid_to_local 改写成的本地相对
+# 路径 (attachments/{internal_id}/{filename}) — 本地预览由 EmailBodyFrame 解析, 但出站
+# MIME 收件端解析不了 → 引用原文的内联图全部裂图。这里在出站时做逆向: 识别这些 src。
+_LOCAL_ATTACH_SRC_RE = re.compile(
+    r"""src\s*=\s*(?P<quote>["'])attachments/(?P<iid>\d+)/(?P<fname>[^"']+)(?P=quote)""",
+    re.IGNORECASE,
+)
+
+# 单个内联图重嵌上限 (与 config.max_attachment_size 默认一致); cfg 缺字段时兜底。
+_INLINE_EMBED_MAX_BYTES = 20 * 1024 * 1024
+
+
+def _embed_local_inline_images(
+    cfg: "Config", body_html: str
+) -> tuple[str, list[tuple[str, bytes, str, str, str]]]:
+    """把 HTML 里指向本地附件库的内联图 src 改回 ``cid:`` 并收集待嵌字节.
+
+    Returns ``(rewritten_html, parts)``; parts 每项 = (cid_with_angle_brackets,
+    content, maintype, subtype, filename)。文件缺失 / 超限 / 路径异常 → 保留原 src
+    跳过 (裂图不比现状差, 绝不阻断发送)。同一路径多次引用共用一个 cid/part。
+    """
+    root = getattr(cfg, "attachment_storage_dir", "") or ""
+    if not root or "attachments/" not in body_html:
+        return body_html, []
+
+    root_path = Path(root)
+    parts: list[tuple[str, bytes, str, str, str]] = []
+    cid_by_path: dict[str, str] = {}
+
+    def repl(m: re.Match) -> str:
+        rel = f"attachments/{m.group('iid')}/{m.group('fname')}"
+        cached = cid_by_path.get(rel)
+        if cached is not None:
+            if not cached:  # 此前已判定不可嵌 (缺失/超限), 保持原样
+                return m.group(0)
+            return f"src={m.group('quote')}cid:{cached}{m.group('quote')}"
+        # filename 来自不可信 HTML 属性: 反转 HTML 实体转义后拒绝路径分隔/穿越。
+        fname = _htmllib.unescape(m.group("fname"))
+        if "/" in fname or "\\" in fname or fname in ("", ".", ".."):
+            cid_by_path[rel] = ""
+            return m.group(0)
+        fpath = root_path / m.group("iid") / fname
+        try:
+            content = fpath.read_bytes() if fpath.is_file() else None
+        except OSError as e:
+            logger.warning(f"[sender] inline embed read failed {fpath}: {e}")
+            content = None
+        max_bytes = getattr(cfg, "max_attachment_size", None) or _INLINE_EMBED_MAX_BYTES
+        if content is None or len(content) > max_bytes:
+            if content is not None:
+                logger.warning(
+                    f"[sender] inline embed skip oversized {fpath} ({len(content)}B)"
+                )
+            cid_by_path[rel] = ""
+            return m.group(0)
+        mime_type = mimetypes.guess_type(fname)[0] or "application/octet-stream"
+        maintype, _, subtype = mime_type.partition("/")
+        cid = make_msgid(domain="mailagent.local")  # 形如 <...@mailagent.local>
+        bare = cid.strip("<>")
+        cid_by_path[rel] = bare
+        parts.append((cid, content, maintype, subtype or "octet-stream", fname))
+        return f"src={m.group('quote')}cid:{bare}{m.group('quote')}"
+
+    rewritten = _LOCAL_ATTACH_SRC_RE.sub(repl, body_html)
+    if parts:
+        logger.info(f"[sender] re-embedded {len(parts)} inline image(s) as cid parts")
+    return rewritten, parts
 
 
 def _build_outgoing_policy():
@@ -185,7 +257,20 @@ def build_outgoing_mime(cfg: "Config", draft: DraftRequest) -> bytes:
 
     msg.set_content(body_text)
     if body_html:
+        # 引用原文里的本地内联图路径 → 重新以 cid: 内嵌 (multipart/related), 否则
+        # 收件端裂图 (入库时 cid 已被改写成 attachments/{id}/{file} 本地相对路径)。
+        body_html, inline_parts = _embed_local_inline_images(cfg, body_html)
         msg.add_alternative(body_html, subtype="html")
+        if inline_parts:
+            html_part = msg.get_payload()[-1]  # 刚 add 的 text/html part
+            for cid, content, maintype, subtype, filename in inline_parts:
+                html_part.add_related(
+                    content,
+                    maintype=maintype,
+                    subtype=subtype,
+                    cid=cid,
+                    filename=_sanitize_header(filename),
+                )
 
     # 附件 (multipart/mixed 自动嵌套).
     for att in draft.attachments or []:
