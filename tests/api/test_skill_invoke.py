@@ -302,3 +302,108 @@ async def test_confirm_gate_requires_strict_true(monkeypatch):
         assert "confirm" in (ei.value.hint or ei.value.message).lower()
 
 
+# ── notion_agent kill-switch 真 helper 表驱动（codex R3 HIGH split-brain / MEDIUM 覆盖）─────
+# 上面的 *_kill_switch_rejects / *_all_gates_open_dispatches 两测 monkeypatch 掉
+# _notion_agent_tool_killed，只测门控接线；这一节测**真 helper**：两来源（os.environ / .env
+# 兜底）× 值形态 × 优先级，断言与 gateway 的 envBool 逐字节同判。真值表与
+# frontend/src/electron/main/lib/env-bool.ts + frontend/tests/main/env_bool.test.ts 交叉引用
+# （同一张表，改一处必改三处），防跨端漂移。
+
+import src.skills.invoke as _invoke_mod  # noqa: E402
+
+_NA_KEY = "MAILAGENT_NOTION_AGENT_TOOL"
+
+# (raw 值, envBool 判定 on?) —— 与 env_bool.test.ts 的 TABLE 逐条对齐。None = 键未定义/缺失。
+# on=True → 工具放行（not killed）；on=False → killed。
+_ENVBOOL_TABLE = [
+    (None, True),  # unset → default(on)
+    ("", True),  # 空串（未 trim）→ default(on)
+    ("   ", False),  # 纯空白 → trim 成 "" → 非 1/true → off（与 "" 不对称）
+    ("1", True),
+    (" 1 ", True),  # trim
+    ("true", True),
+    ("TRUE", True),  # 大小写不敏感
+    ("True", True),
+    (" true ", True),  # trim
+    ("0", False),
+    ("false", False),
+    ("FALSE", False),
+    ("no", False),
+    ("off", False),
+    ("garbage", False),  # 任意其它非空值 → off
+    ("yes", False),
+    ("2", False),
+]
+
+
+@pytest.mark.parametrize("raw,on", _ENVBOOL_TABLE)
+def test_gateway_envbool_on_mirrors_node_table(raw, on):
+    """纯解析函数逐条镜像 gateway envBool(key, true)（含空串/纯空白/大小写/未定义每分支）。"""
+    assert _invoke_mod._gateway_envbool_on(raw, True) is on
+
+
+@pytest.mark.parametrize("raw,on", [(r, o) for (r, o) in _ENVBOOL_TABLE if r is not None])
+def test_notion_agent_killed_from_os_environ(monkeypatch, raw, on):
+    """来源①：os.environ 有键即用它（serve-api 继承 Electron bootstrap 后的 process.env）。
+
+    键在 environ → 绝不读 .env → 判定 == gateway 对同一有效值的判定，killed == not on。
+    """
+    monkeypatch.setenv(_NA_KEY, raw)
+    assert _invoke_mod._notion_agent_tool_killed() is (not on)
+
+
+def test_notion_agent_killed_unset_both_sources(monkeypatch):
+    """两来源都无该键 → raw=None → 默认 on → 不 killed（不误杀应急路径）。"""
+    monkeypatch.delenv(_NA_KEY, raising=False)
+    monkeypatch.setattr("src.api.deps.get_env_file_path", lambda: "/nonexistent/.env")
+    assert _invoke_mod._notion_agent_tool_killed() is False
+
+
+# .env 源值形态（未定义单独由 *_unset_both_sources 覆盖）。纯空白必须引号写（bare 会被
+# dotenv strip 成空串），其余 bare 写 dotenv 逐字节保留（已实证）。
+_DOTENV_TABLE = [
+    ("", True, f"{_NA_KEY}=\n"),
+    ("   ", False, f'{_NA_KEY}="   "\n'),
+    ("1", True, f"{_NA_KEY}=1\n"),
+    ("true", True, f"{_NA_KEY}=true\n"),
+    ("TRUE", True, f"{_NA_KEY}=TRUE\n"),
+    ("0", False, f"{_NA_KEY}=0\n"),
+    ("false", False, f"{_NA_KEY}=false\n"),
+    ("FALSE", False, f"{_NA_KEY}=FALSE\n"),
+    ("no", False, f"{_NA_KEY}=no\n"),
+    ("off", False, f"{_NA_KEY}=off\n"),
+    ("garbage", False, f"{_NA_KEY}=garbage\n"),
+]
+
+
+@pytest.mark.parametrize("raw,on,content", _DOTENV_TABLE)
+def test_notion_agent_killed_from_dotenv_fallback(monkeypatch, tmp_path, raw, on, content):
+    """来源②：os.environ 无该键 → 热读 dotenv_values(.env) 兜底（standalone serve-api / pytest，
+    进程未 load_dotenv 时键不在 environ）。killed == not on，与 os.environ 源同判。"""
+    monkeypatch.delenv(_NA_KEY, raising=False)
+    env_path = tmp_path / ".env"
+    env_path.write_text(content, encoding="utf-8")
+    monkeypatch.setattr("src.api.deps.get_env_file_path", lambda: str(env_path))
+    assert _invoke_mod._notion_agent_tool_killed() is (not on)
+
+
+@pytest.mark.parametrize(
+    "env_val,dotenv_val,expected_killed",
+    [
+        ("true", "false", False),  # environ on 覆盖 .env off → 不 killed
+        ("false", "true", True),  # environ off 覆盖 .env on → killed
+        ("garbage", "true", True),  # 🔴 environ garbage(off) 覆盖 .env on → killed（本 issue split-brain 病根场景）
+        ("", "false", False),  # environ 空串(default on) 在 environ → 不再读 .env off
+    ],
+)
+def test_notion_agent_os_environ_overrides_dotenv(
+    monkeypatch, tmp_path, env_val, dotenv_val, expected_killed
+):
+    """优先级：os.environ 有键即用它、不读 .env（镜像 dotenv-bootstrap override:false = OS 优先）。"""
+    monkeypatch.setenv(_NA_KEY, env_val)
+    env_path = tmp_path / ".env"
+    env_path.write_text(f"{_NA_KEY}={dotenv_val}\n", encoding="utf-8")
+    monkeypatch.setattr("src.api.deps.get_env_file_path", lambda: str(env_path))
+    assert _invoke_mod._notion_agent_tool_killed() is expected_killed
+
+

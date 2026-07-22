@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import os
 from typing import Any, Optional
 
 from src.skills import rate_limit
@@ -34,30 +35,66 @@ def _skill_enabled_override(skill_name: str) -> Optional[bool]:
     return None
 
 
+_NOTION_AGENT_TOOL_ENV = "MAILAGENT_NOTION_AGENT_TOOL"
+
+
+def _gateway_envbool_on(raw: Optional[str], default: bool) -> bool:
+    """逐字节镜像 Node gateway 的 ``envBool(key, def)``
+    （``frontend/src/electron/main/lib/env-bool.ts`` —— 真值表单源，两端交叉引用）。
+
+    分支（务必与 env-bool.ts 逐条对齐；对 ``garbage`` 这类值两端必须同判）：
+    - ``raw is None`` 或 ``raw == ""``（空串，**未 trim**）→ ``default``；
+    - 否则 ``raw.strip().lower()``，仅 ``"1"`` / ``"true"`` → ``True``，其余（含
+      ``0/false/no/off/garbage`` 及任意其它非空值）→ ``False``。
+
+    🔴 空串与纯空白**不对称**（有意，两端一致）：``""`` 走 default（→ on），而
+    ``"   "`` 不等于 ``""`` → 落 trim 分支 → strip 成 ``""`` → 非 1/true → ``False``。
+    """
+    if raw is None or raw == "":
+        return default
+    v = raw.strip().lower()
+    return v == "1" or v == "true"
+
+
 def _notion_agent_tool_killed() -> bool:
     """``MAILAGENT_NOTION_AGENT_TOOL`` 应急杀开关是否显式关（``True`` → 拒 notion_agent 直调）。
 
-    默认/缺失/空/malformed = on（不误杀）；仅显式 false（``0/false/no/off``）= 杀。**热读 .env 为准**
-    （抄 ``src/api/routers/chat.py`` ``_hot_bool`` / ``web.py`` Tavily key 的既有先例：
-    ``get_env_file_path()`` + ``dotenv_values``），**不**直读 ``os.environ`` —— 本 flag 是 env-only、
-    进程未 ``load_dotenv`` 时不在 environ（见 CLAUDE.md/memory「env-only flags/load_dotenv 坑」）；
-    packaged app 的 .env 落 userData，路径亦由 ``get_env_file_path`` 单源解析。
+    gateway 侧 ``envBool('MAILAGENT_NOTION_AGENT_TOOL', true)``（原 ai_gateway_lifecycle.ts，
+    现抽到 ``lib/env-bool.ts``）用它决定是否**注册** notion_agent_chat 工具；本函数把同一
+    kill-switch 覆盖到 Python 直调链（``/api/skills/invoke``）—— 否则 flag=false 时持
+    ``notion_agent:invoke`` scope 的外部 key 仍能绕过 gateway 直调这个外呼、副作用落 Notion
+    侧不可撤回的工具（codex R2 HIGH）。
 
-    gateway 侧 ``envBool('MAILAGENT_NOTION_AGENT_TOOL', true)``（``ai_gateway_lifecycle.ts``）用它
-    决定是否**注册** notion_agent_chat 工具；本函数把同一 kill-switch 覆盖到 Python 直调链
-    （``/api/skills/invoke``）—— 否则 flag=false 时持 ``notion_agent:invoke`` scope 的外部 key 仍能
-    绕过 gateway 直调这个外呼、副作用落 Notion 侧不可撤回的工具（codex R2 HIGH）。
+    🔴 codex R3 HIGH —— **来源与解析都逐字节镜像 gateway 的有效语义**，消除跨端 split-brain：
+
+    来源优先级（镜像 dotenv-bootstrap 的 ``override:false``：OS/shell env 优先，``.env`` 只补空）：
+      1. ``os.environ`` 有该键 → 用它。serve-api 是 Electron main spawn 的子进程，其
+         ``buildBaseEnv`` 展开 ``...process.env``（已被 bootstrapDotenv 合过 .env）→ 子进程
+         ``os.environ`` 即携带 Node 侧 gateway 读到的**同一有效值**（含 shell export 直传的
+         ``garbage`` 这类值）；
+      2. 否则热读 ``dotenv_values(get_env_file_path())`` 兜底 —— 覆盖 standalone serve-api /
+         pytest（未经 Electron spawn、进程未 load_dotenv 时键不在 environ 的场景，见 memory
+         「env-only flags/load_dotenv 坑」）；packaged app 的 .env 落 userData，路径由
+         ``get_env_file_path`` 单源解析。
+
+    解析：交给 ``_gateway_envbool_on``（envBool 的字节级复刻）。默认/缺失/空串 = on（不误杀）；
+    纯空白 / ``0/false/no/off`` / ``garbage`` 等任意其它非空值 = 杀 —— 与 gateway 同判。
     """
-    try:
-        from dotenv import dotenv_values
+    raw: Optional[str]
+    if _NOTION_AGENT_TOOL_ENV in os.environ:
+        # serve-api 继承 Electron main 已 bootstrap 的 process.env → 与 gateway 同一有效值。
+        raw = os.environ[_NOTION_AGENT_TOOL_ENV]
+    else:
+        try:
+            from dotenv import dotenv_values
 
-        from src.api.deps import get_env_file_path
+            from src.api.deps import get_env_file_path
 
-        env_path = get_env_file_path()
-        raw = ((dotenv_values(env_path) or {}).get("MAILAGENT_NOTION_AGENT_TOOL") or "").strip().lower()
-    except Exception:  # noqa: BLE001 — env 不可读 → 视为 on（默认开，不误杀应急路径）
-        return False
-    return raw in ("0", "false", "no", "off")
+            raw = (dotenv_values(get_env_file_path()) or {}).get(_NOTION_AGENT_TOOL_ENV)
+        except Exception:  # noqa: BLE001 — env 不可读 → raw=None → 默认 on，不误杀应急路径
+            raw = None
+    # envBool(key, true) 语义：on = 工具注册/放行；killed = 取反。
+    return not _gateway_envbool_on(raw, True)
 
 
 def _validate_input(input_schema: dict[str, Any], params: dict[str, Any]) -> None:

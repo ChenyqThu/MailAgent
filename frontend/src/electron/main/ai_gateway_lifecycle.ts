@@ -51,6 +51,9 @@ import {
 import { getLlmApiKey, getLlmBaseUrl, getLlmModel } from './llm_settings'
 import { resolveApiPort } from './backend_lifecycle'
 import { getLocalApiToken } from './local_token'
+// task 07-21 — the env kill-switch parser lives in a pure lib module (pinned by a
+// lightweight vitest; the Python side src/skills/invoke.py mirrors its truth table).
+import { envBool } from './lib/env-bool'
 import { deriveExecRule, ExecRuleDeriveError } from './exec_policy_matcher'
 // Phase 06 (context injection) — the standing-context provider fetches the serve-api
 // /chat/config, projecting the system-prompt fields for the gateway.
@@ -92,15 +95,6 @@ const eagerWrittenUserMessages = new Set<string>()
 /** #12 — dedup key for one eagerly-written user message. */
 function eagerUserMessageKey(sessionId: number, userMessageId: string): string {
   return `${sessionId}:${userMessageId}`
-}
-
-/** Mirror electron readEnvBool: only '1'/'true' (case-insensitive) → true; unset →
- *  the supplied default; any other non-empty value → false. */
-function envBool(key: string, def: boolean): boolean {
-  const raw = process.env[key]
-  if (raw == null || raw === '') return def
-  const v = raw.trim().toLowerCase()
-  return v === '1' || v === 'true'
 }
 
 /** harness-chat lane A (B2) — broadcast a chat event to every renderer window (the same
