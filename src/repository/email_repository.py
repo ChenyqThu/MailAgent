@@ -1569,8 +1569,9 @@ class EmailRepository:
           候选映射 attachment_id → internal_id (JOIN email_attachment), 同邮件多附件
           命中按邮件去重 (保留 bm25 最优位次); metadata 后置过滤在合并点对附件命中
           同样生效。attachment-only 命中物化为 source='attachment' + filename。
-        - 返回 None 表示「不接管, 回退老 unicode fast-path」(例如全部 term 都 too_short
-          但仍有 1 字拦截 warning 要透传 → 仍返回空结果 result 而非 None)。
+        - 恒返回 ``EmailSearchResult``(从不返回 None); 全部 term 都被拦截 (例如纯单字
+          CJK query '我') 或某 term 组无任何候选 (AND 交集为空) 时同样返回空结果 + 已
+          收集的 warning (如 1 字拦截的 `cjk_too_short`), 而非 None。
 
         纯英文裸查 / 列级 FTS 不在此路径 (那些走 fused / parsed), 故 T6 不受影响
         (本路径只在 query 含 CJK 时被走到)。

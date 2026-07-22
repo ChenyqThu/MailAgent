@@ -267,7 +267,8 @@ date-only 的 `until <= '2026-06-01'` 还会漏掉当天全部邮件。因此：
 
 | term 形态 | 路由 | 说明 |
 |---|---|---|
-| 无 CJK（纯英文/数字/符号） | unicode | 主表 `email_body_fts MATCH` + `smart_query_transform`（不变）|
+| 无 CJK，整 term < 3 字符 | 仅 unicode | 主表 `email_body_fts MATCH` + `smart_query_transform`（不变）；trigram MATCH <3 字符无召回，不追加 lane |
+| 无 CJK，整 term ≥ 3 字符（批次1 PR2/PR4） | unicode ∪ trigram 子串（双 lane 并集） | `SEARCH_LATIN_TRIGRAM_ENABLED`（默认 true）门；开时组内追加 `email_body_fts_trigram` 整词 MATCH 子串 lane，修复连写文档漏召回（正文 `Omada固件升级` 无空格）+ 拉丁子串模糊（`Omad`→`Omada`）；flag off 回单 unicode lane（逐字节 PR2 前行为）。含 CJK 混合 query 内按 term 生效（本路径 `_search_email_bodies_trigram`）；纯英文整 query（不含 CJK）在 `_search_email_bodies_fused` 侧按整串短语生效（不做 per-term AND 重组，避免改多词旧语义），见 §9.7 |
 | 含 CJK 且整 term ≥ 3 字 | trigram MATCH（整串） | `email_body_fts_trigram MATCH '<整串短语>'`（整 term 用 `_quote_fts_token` 包成 FTS5 短语，含符号/中英混合也安全）|
 | 含 CJK 且整 term = 2 字 | trigram LIKE（整串） | trigram 表 `body/subject/sender LIKE '%整串%'` 兜底（MATCH <3 字符无召回）|
 | 含 CJK 且整 term = 1 字 | 拦截 | 不查该 term，push warning `cjk_too_short:<字>`（单字全表扫描噪声太高）|
@@ -320,6 +321,18 @@ trigram 路径早期把 hit 的 `snippet` 设成 `''`（前端只剩 subject 高
 - **body 列 term 的 CJK 值**（`body:产品` / `subject~:产品` / `sender~:产品`）：编译成 trigram 表**同名列** column-filter 子查询（列映射 `body_markdown/subject/sender` 与主表一致；≥3 → `MATCH 'col : "短语"'`、2 字 → `col LIKE '%值%'`、1 字 → 拦截 + `cjk_too_short` warning），从 body MATCH 排除该 unit。负向 `-body:产品` 对称 `NOT IN`。值无 CJK → 现状不变。该 trigram column 谓词落 `metadata_predicates`、**同时约束 body 与 attachment 两条 lane**，故列级 CJK 词也**排出附件的 unicode61 body-gate**（`_build_attachment_body_gate_expr`）——否则更严的整词/前缀 gate 会盖掉 trigram 子串，让 `<附件词> body:<CJK 内部子串>` 漏附件命中；flag off 时 gate 照旧 unicode61（零回归）。**收件人列级 `to~:` / `cc~:` / `from~:` 不做**（recipient 表无 trigram 变体，out of scope）。
 
 两者均只受 master `SEARCH_TRIGRAM_ENABLED` 门（CJK 语义，与 `SEARCH_LATIN_TRIGRAM_ENABLED` 无关）；关闭即逐字节回 unicode61。这些 unit 本就是 AND 过滤谓词/排除出 body MATCH（与既有裸 CJK term 同款），不参与 bm25 排名。行为夹具（§6）新增 `p5_or_group_*` / `p5_column_*` case 锁定（含 flag-off 与纯拉丁 OR 组的不变 pin）。
+
+### 9.7 附件融合进 trigram 路径（批次1 PR4）
+
+**背景**：PR4 之前，`_search_email_bodies_trigram`（含 CJK 裸查快路径）提前 return，完全不查附件——中文正文能搜、附件正文/文件名搜不到；`_search_email_bodies_fused`（纯英文路径）虽融合附件，但附件维度只有 unicode61 整词/列级门控，没有子串模糊。
+
+**方案**：PR3 先建并行 contentful FTS5 表 `email_attachment_fts_trigram(filename, text_content)`（`tokenize='trigram'`，rowid=attachment_id，DB v39），由 3 个 trigger 自动同步 `email_attachment_text`（仅 `status='extracted'` 有正文的行）+ `email_attachment.filename` 变更——设计镜像正文 trigram 表（§9）先例。PR4 把它接成两条 plain 路径各自候选组的**并集 lane**：
+
+- **`_search_email_bodies_trigram`（含 CJK 快路径）**：每个 term 的 AND 组内追加一条 attachment-trigram lane（组语义变为「该 term 命中 正文 OR 附件正文 OR 附件文件名」；组间跨 term 仍是 AND，每 term 至少命中邮件某处，不要求同一附件）。CJK term（≥3 字 MATCH / 2 字 LIKE / 1 字拦截）的附件 lane 只受 master `SEARCH_TRIGRAM_ENABLED` 门；拉丁 term（≥3 字符，见 §9.1）的附件 lane 另受 `SEARCH_LATIN_TRIGRAM_ENABLED` 子门（镜像正文双 lane）。
+- **`_search_email_bodies_fused`（纯英文路径）**：整 query（≥3 字符，master + latin 双门均开）除追加正文 trigram 子串 lane（§9.1）外，同时 union-only 追加一条附件 trigram MATCH 子串 lane（只增召回不减，AND 语义零变化）。
+- MATCH 默认跨 `filename` + `text_content` 两列，文件名子串（中/英）随之可搜（1f，如 `固件手册`、`roadmapzeta` 命中对应文件名的附件）。同邮件多附件命中同 term 按 `internal_id` 去重（保留 bm25 最优位次）；正文 + 附件同 term 双命中 → `source='body'` 优先（与既有 lane 注册顺序语义一致，正文先于附件）；仅附件命中 → `source='attachment'` + `filename`。
+- graceful degrade：`email_attachment_fts_trigram` 表缺失（v38 老库未迁移到 v39）→ MATCH/LIKE 抛 `OperationalError` 被搜索路径 try/except 接住，返回空（该维度不生效，搜索不崩）。
+- **回滚**：关 master `SEARCH_TRIGRAM_ENABLED` 整体回旧路径（含此附件 lane，回到 PR4 前「CJK 快路径不融合附件」现状）；只想撤拉丁子串的附件面可单独关 `SEARCH_LATIN_TRIGRAM_ENABLED`（CJK 附件 lane 不受影响）；彻底回退 `email_attachment_fts_trigram` 见 `sync_store.py` v39 迁移块注释（DROP 3 trigger + DROP 表；正文 trigram 表 `email_body_fts_trigram` / 主表 `email_body_fts` / 附件主 FTS 表 `email_attachment_fts` 均不动）。
 
 ## 10. 收件人全文化（T8 并行 recipient 表，无 flag）
 
