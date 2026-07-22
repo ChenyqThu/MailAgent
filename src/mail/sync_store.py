@@ -494,7 +494,17 @@ class SyncStore:
     #                前后注入形态零变化)。幂等: ALTER 前 PRAGMA 检查 + 仅回填 context_source IS
     #                NULL 的 preprocess 行。回滚 (回退 v38): 列可留（旧代码按 NULL→继承派生, 无害）
     #                或手动 DROP; 必要时降 db_version。
-    DB_VERSION = 38  # v38: report_agent +context_source (预处理参考上下文源迁行存储)
+    # v39 (task 07-22-1 附件 trigram 并行表, 2026-07): 新增 contentful FTS5 表
+    #                email_attachment_fts_trigram(filename, text_content, tokenize='trigram'),
+    #                rowid=attachment_id。镜像 v24 body trigram 方案②: 主表 email_attachment_fts
+    #                (unicode61, 仅 text_content) 不动 → 英文/已有附件搜索零回归; 新表解决①附件正文
+    #                中文非前缀子串 + ②文件名可搜 (中/英子串, 主表不索引 filename)。trigger 挂
+    #                email_attachment_text (与主表同源同 status gate: 仅 extracted+非空入索引),
+    #                filename 由子查询从 email_attachment 取。**本 PR 只建表/回填/触发器, 不接检索
+    #                路由 (PR4 才接)**。幂等: CREATE IF NOT EXISTS + 3 trigger + 回填 WHERE NOT
+    #                EXISTS (current_version < 39 gate)。回滚 (回退 v39): DROP 3 trigger + DROP 表,
+    #                主表不动 (纯 schema 未接路径, 删即回退); 必要时降 db_version。
+    DB_VERSION = 39  # v39: email_attachment_fts_trigram (附件正文/文件名 trigram 并行表)
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -1369,6 +1379,104 @@ class SyncStore:
                 DELETE FROM email_attachment_fts WHERE rowid = OLD.attachment_id;
             END
         """)
+
+        # === v39: email_attachment_fts_trigram (附件正文/文件名 CJK+子串搜索, 并行 trigram 表) ===
+        # 设计来源: .trellis/tasks/07-22-1-trigram-cjk-trigram PR3 (镜像上面 v24 email_body_fts_trigram
+        # 方案②)。主表 email_attachment_fts (porter unicode61, 仅 text_content) 不动 → 英文/已有附件
+        # 搜索逐字节零回归; 这里新增并行 contentful FTS5 表用 tokenize='trigram' 解决:
+        #   ① 附件正文中文非前缀子串 (unicode61 把连续 CJK 串当单一 token, '固件' 漏掉 '固件升级');
+        #   ② 附件文件名可搜 (中/英子串 —— 主表根本不索引 filename)。
+        # 实测硬约束: trigram MATCH <3 个 Unicode 字符无召回 (2 字中文靠 trigram 表 LIKE 兜底, 与
+        # email_body_fts_trigram 一致)。**本 PR 只建表/回填/触发器闭环, 不接任何检索路由 (PR4 才接)**。
+        #
+        # contentful (非 contentless): 与 email_body_fts_trigram 一致, 存原文副本支持 2 字 LIKE 兜底
+        # + snippet/排名。rowid = attachment_id, 与 email_attachment / email_attachment_text 互查。
+        #
+        # 数据源: filename 在 email_attachment 列、text_content 在 email_attachment_text 列。3 个
+        # trigger 挂 email_attachment_text (与主表 email_attachment_fts 完全同源同 status gate: 仅
+        # status='extracted' AND text_content IS NOT NULL 入索引), filename 由子查询从 email_attachment
+        # 取 (附件行先于其 text 落地 → 子查询恒解析到)。filename 在 email_attachment 创建后不可变
+        # (代码仅 UPDATE notion_file_id/notion_block_id, 从不改 filename) → 无需 filename meta_update
+        # trigger (对齐主表保守语义, 不新增维护面)。
+        #
+        # 级联删除: email_metadata DELETE → email_attachment CASCADE → email_attachment_text CASCADE
+        # → 本表 delete trigger 触发清理 FTS。实测 (SQLite 3.53.1, recursive_triggers 默认 off) FK
+        # CASCADE 删 email_attachment_text 会触发其 AFTER DELETE trigger, INSERT OR REPLACE 再抽取
+        # 也保持单行 —— 与主表 email_attachment_fts 用同一机制 (见其 v16 注记), PR3 迁移测试有 cascade
+        # + 再抽取 parity case 锁死。
+        #
+        # 幂等: CREATE VIRTUAL TABLE IF NOT EXISTS + 3 trigger IF NOT EXISTS + 回填 WHERE NOT EXISTS
+        # (current_version < 39 gate, 重跑不重复插)。
+        #
+        # 回滚 (彻底回退 v39): 本表纯 schema 不接任何检索路径, 直接删即可:
+        #   DROP TRIGGER IF EXISTS email_attachment_fts_trigram_insert;
+        #   DROP TRIGGER IF EXISTS email_attachment_fts_trigram_update;
+        #   DROP TRIGGER IF EXISTS email_attachment_fts_trigram_delete;
+        #   DROP TABLE IF EXISTS email_attachment_fts_trigram;
+        # 主表 email_attachment_fts 不动 → 回滚零风险 (附件搜索继续走 unicode 主表)。
+        cursor.execute("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS email_attachment_fts_trigram USING fts5(
+                filename,
+                text_content,
+                tokenize='trigram'
+            )
+        """)
+        # INSERT trigger: 只在 status='extracted' 且 text_content 非空时入 FTS (同主表 WHEN 门)。
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS email_attachment_fts_trigram_insert
+            AFTER INSERT ON email_attachment_text
+            WHEN NEW.status = 'extracted' AND NEW.text_content IS NOT NULL
+            BEGIN
+                INSERT INTO email_attachment_fts_trigram(rowid, filename, text_content)
+                SELECT NEW.attachment_id,
+                       COALESCE((SELECT filename FROM email_attachment WHERE id = NEW.attachment_id), ''),
+                       NEW.text_content;
+            END
+        """)
+        # UPDATE trigger: 先删 + 重插, 防 status 翻转 (failed → extracted) 漏入索引 (同主表)。
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS email_attachment_fts_trigram_update
+            AFTER UPDATE ON email_attachment_text
+            BEGIN
+                DELETE FROM email_attachment_fts_trigram WHERE rowid = OLD.attachment_id;
+                INSERT INTO email_attachment_fts_trigram(rowid, filename, text_content)
+                SELECT NEW.attachment_id,
+                       COALESCE((SELECT filename FROM email_attachment WHERE id = NEW.attachment_id), ''),
+                       NEW.text_content
+                WHERE NEW.status = 'extracted' AND NEW.text_content IS NOT NULL;
+            END
+        """)
+        # DELETE trigger: CASCADE 链路 (email_metadata DELETE → email_attachment CASCADE →
+        # email_attachment_text CASCADE → 这里触发清理 FTS)。
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS email_attachment_fts_trigram_delete
+            AFTER DELETE ON email_attachment_text
+            BEGIN
+                DELETE FROM email_attachment_fts_trigram WHERE rowid = OLD.attachment_id;
+            END
+        """)
+        # 首次回填: 把已 extracted 的附件文本 (含 filename join) 推入 trigram FTS (幂等, WHERE NOT
+        # EXISTS 防重; pending/failed/unsupported 行不索引, 与主表 email_attachment_fts 一致)。
+        if current_version < 39:
+            cursor.execute("""
+                INSERT INTO email_attachment_fts_trigram(rowid, filename, text_content)
+                SELECT t.attachment_id,
+                       COALESCE(a.filename, ''),
+                       t.text_content
+                  FROM email_attachment_text t
+                  JOIN email_attachment a ON a.id = t.attachment_id
+                 WHERE t.status = 'extracted'
+                   AND t.text_content IS NOT NULL
+                   AND NOT EXISTS (
+                       SELECT 1 FROM email_attachment_fts_trigram WHERE rowid = t.attachment_id
+                   )
+            """)
+            reindexed = cursor.rowcount or 0
+            if reindexed:
+                logger.info(
+                    f"v39 attachment trigram FTS5 reindex: {reindexed} extracted attachment "
+                    f"texts indexed (email_attachment_fts_trigram)"
+                )
 
         # v18: 报告 Agent 系统 —— agent 配置表 + 报告产物表。
         # Python 后端 report_worker 写, Electron main (better-sqlite3) 直读展示。
