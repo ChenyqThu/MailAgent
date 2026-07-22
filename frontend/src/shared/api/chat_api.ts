@@ -27,6 +27,7 @@ import type {
   CreatePolicyRuleInput,
   ExecPolicyRule,
   GlobalApprovalMode,
+  KosDoctorCheck,
   SkillConfirmResult,
   SkillEntrypoints,
   SkillPackPreview,
@@ -184,6 +185,12 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
       } catch {
         return false
       }
+    },
+
+    async kosDoctor(): Promise<KosDoctorCheck[]> {
+      // POST /chat/kos-doctor（issue #54）。有意不吞错（对比 kosAvailable）：doctor 是
+      // 显式动作，serve-api 不可达本身就是要暴露的结论，组件 catch 后 toast。
+      return request<KosDoctorCheck[]>(baseUrl, 'POST', '/chat/kos-doctor')
     },
 
     async listSkills(): Promise<SkillSummary[]> {

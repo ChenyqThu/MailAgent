@@ -361,6 +361,15 @@ export interface CompileUserMdResult {
  *  (send/exec 非白名单/skill 安装/日历三写 keep HITL); 'bypass' = everything auto-approves. */
 export type GlobalApprovalMode = 'manual' | 'acceptEdits' | 'bypass'
 
+/** issue #54 — POST /chat/kos-doctor 的单步结果（形状对齐 NotionAgentDoctorCheck，
+ *  设置页同款逐行 ok/fail 渲染）。check = 步骤标题（后端 emit），detail = 成功摘要或
+ *  E_KOS_* 错误码 + message。 */
+export interface KosDoctorCheck {
+  status: string
+  check: string
+  detail: string
+}
+
 /** S3 (07-02) — the serve-api fetch face of chat. The legacy engine methods
  *  (start/editMessage/abort/confirmTool/onStream/runSearchAgent/invalidateConfig)
  *  were deleted with the legacy runtime: chat turns run exclusively on the embedded
@@ -470,6 +479,13 @@ export interface ChatApi {
    * (HttpApi) returns false — chat-save is Electron-only. Never throws.
    */
   kosAvailable(): Promise<boolean>
+  /**
+   * issue #54 — KOS 连接检查（Settings 集成页「连接检查」按钮）。POST /chat/kos-doctor：
+   * 分步 凭据→health→token→list_pages，返回逐步 ok/fail + detail（形状对齐
+   * NotionAgentDoctorCheck，组件同款逐行渲染）。serve-api 不可达时 throw（组件 toast），
+   * 与 kosAvailable 的 never-throws 语义有意不同——doctor 是显式动作，失败要可见。
+   */
+  kosDoctor(): Promise<KosDoctorCheck[]>
   /**
    * Sprint 19 §D #3 — list chat_tool_call audit rows for one assistant
    * message. Renderer ToolCallRow mounts when a message bubble renders;

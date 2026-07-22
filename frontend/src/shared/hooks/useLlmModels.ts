@@ -56,6 +56,10 @@ export function useUpstreamModels(provider: 'main' | 'translate' = 'main'): {
 export interface ChatConfigModelsProbe {
   enabledModels: string[]
   providerRegistryEnabled: boolean
+  /** issue #54 — KOS 激活 gate 显因切片（开关 / 开关AND凭据齐全），设置-集成 KOS 区
+   *  被动提示消费。与模型切片同 fetch（同端点不另开独立 query，LOW-7）。 */
+  kosConsumerEnabled: boolean
+  kosConfigured: boolean
 }
 
 export function useEnabledModels(): { models: string[]; rawEnabled: string[] } {
@@ -83,19 +87,55 @@ export async function fetchChatConfigModelsProbe(): Promise<ChatConfigModelsProb
   try {
     const baseUrl = resolveApiBaseUrl()
     const resp = await fetch(`${baseUrl}/chat/config`, { credentials: 'include' })
-    if (!resp.ok) return { enabledModels: [], providerRegistryEnabled: false }
+    if (!resp.ok) return _PROBE_DEFAULTS
     const body = (await resp.json()) as {
-      data?: { enabledModels?: unknown; providerRegistryEnabled?: unknown }
+      data?: {
+        enabledModels?: unknown
+        providerRegistryEnabled?: unknown
+        kosConsumerEnabled?: unknown
+        kosConfigured?: unknown
+      }
     }
     const raw = body?.data?.enabledModels
     return {
       enabledModels: Array.isArray(raw)
         ? raw.filter((s): s is string => typeof s === 'string')
         : [],
-      providerRegistryEnabled: body?.data?.providerRegistryEnabled === true
+      providerRegistryEnabled: body?.data?.providerRegistryEnabled === true,
+      kosConsumerEnabled: body?.data?.kosConsumerEnabled === true,
+      kosConfigured: body?.data?.kosConfigured === true
     }
   } catch {
-    return { enabledModels: [], providerRegistryEnabled: false }
+    return _PROBE_DEFAULTS
+  }
+}
+
+const _PROBE_DEFAULTS: ChatConfigModelsProbe = {
+  enabledModels: [],
+  providerRegistryEnabled: false,
+  kosConsumerEnabled: false,
+  kosConfigured: false
+}
+
+/** issue #54 — KOS 激活 gate 探针（设置-集成 KOS 区「开关开着 ≠ 实际激活」被动显因）。
+ *  与 useEnabledModels / useProviderRegistryEnabled 共享同一 /chat/config query
+ *  （同 queryKey + queryFn，React Query 按 key 去重）。 */
+export function useKosGate(): {
+  consumerEnabled: boolean
+  configured: boolean
+  isLoading: boolean
+} {
+  const q = useQuery({
+    queryKey: qk.chat.config('enabledModels'),
+    queryFn: fetchChatConfigModelsProbe,
+    select: (d) => ({ consumerEnabled: d.kosConsumerEnabled, configured: d.kosConfigured }),
+    staleTime: 30_000,
+    retry: false
+  })
+  return {
+    consumerEnabled: q.data?.consumerEnabled ?? false,
+    configured: q.data?.configured ?? false,
+    isLoading: q.isLoading
   }
 }
 

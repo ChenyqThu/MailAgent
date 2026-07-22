@@ -185,6 +185,47 @@ async def kos_available(request: Request):
     return success_envelope(_kos_available(), request=request, source="sqlite")
 
 
+@router.post("/kos-doctor", dependencies=[Depends(verify_cf_access)])
+async def kos_doctor(request: Request):
+    """KOS 连接检查（issue #54）：分步 凭据→health→token→list_pages，逐步 ok/fail+detail。
+
+    data = ``[{status:'ok'|'fail', check, detail}]``（形状对齐 notion-agent doctor）。
+    凭据热读 .env（对齐 chat_config 的 _kos_cred：.env 显式存在即以 .env 为准——用户刚
+    在 Settings 保存/清空的凭据立即生效），并用热读值新建 KOSClient —— 不用 kos-call 的
+    _get_kos_client 单例（其凭据在首次构造时固化 + token cache 会掩盖凭据失效）。
+    分步逻辑在 src/kos/doctor.py（client 可注入，单测 stub）。
+    """
+    from src.kos.doctor import KOS_CRED_KEYS, run_kos_doctor
+
+    env_vals: Dict[str, Any] = {}
+    try:
+        env_path = get_env_file_path()
+        if env_path:
+            env_vals = dotenv_values(env_path) or {}
+    except Exception:  # noqa: BLE001 — best-effort; 回退 os.environ
+        env_vals = {}
+
+    def _cred(k: str) -> str:
+        return ((env_vals[k] if k in env_vals else os.environ.get(k)) or "").strip()
+
+    creds = {k: _cred(k) for k in KOS_CRED_KEYS}
+    missing = [k for k in KOS_CRED_KEYS if not creds[k]]
+    consumer_enabled = _hot_bool(
+        env_vals, "MAILAGENT_KOS_CONSUMER_ENABLED", get_settings().kos_consumer_enabled
+    )
+    client = KOSClient(
+        base_url=creds["KOS_MCP_BASE"] or None,
+        client_id=creds["KOS_OAUTH_CLIENT_ID"] or None,
+        client_secret=creds["KOS_OAUTH_CLIENT_SECRET"] or None,
+    )
+    checks = await run_in_threadpool(
+        run_kos_doctor, client, missing_keys=missing, consumer_enabled=consumer_enabled
+    )
+    return success_envelope(
+        checks, request=request, source="kos", meta_extra={"count": len(checks)}
+    )
+
+
 def _hot_bool(env_vals: Dict[str, Any], key: str, fallback: bool) -> bool:
     """从 dotenv_values dict 热读 bool（.env 为准），未设/空/malformed → fallback
     （cfg singleton 值，不漂移）。对齐 electron readEnvBool（'1'/'true' → true），

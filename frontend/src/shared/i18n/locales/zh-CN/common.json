@@ -2541,6 +2541,14 @@
         "timeDecay": {
           "label": "时间衰减重排",
           "helper": "kos_query 命中结果按 14 天半衰期做时间衰减重排（更偏好近期）。默认开。"
+        },
+        "gateWarning": "KOS 已启用但凭据未配齐 —— 对话不会注入 KOS 工具。补全上方凭据后可用「连接检查」验证。",
+        "doctor": {
+          "label": "连接检查",
+          "helper": "分步验证：凭据配置 → 服务可达 → OAuth token → 真实调用。",
+          "button": "检查",
+          "running": "检查中",
+          "fail": "KOS 连接检查失败"
         }
       }
     },

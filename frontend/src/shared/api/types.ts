@@ -149,6 +149,7 @@ export type {
   SkillSecretMeta,
   CompileUserMdResult,
   GlobalApprovalMode,
+  KosDoctorCheck,
   ChatApi
 } from './types/chat'
 export type { SearchAgentPhase, SearchAgentInput, SearchAgentResult } from './types/search-agent'

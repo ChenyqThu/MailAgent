@@ -2541,6 +2541,14 @@
         "timeDecay": {
           "label": "Time-decay rerank",
           "helper": "Rerank kos_query hits with a 14-day half-life time decay (favors recent). On by default."
+        },
+        "gateWarning": "KOS is enabled but credentials are incomplete — chat will not load KOS tools. Fill in the credentials above, then verify with Connection check.",
+        "doctor": {
+          "label": "Connection check",
+          "helper": "Step-by-step: credentials → service health → OAuth token → real call.",
+          "button": "Check",
+          "running": "Checking",
+          "fail": "KOS connection check failed"
         }
       }
     },
