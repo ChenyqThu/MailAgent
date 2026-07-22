@@ -472,12 +472,17 @@ def attachment_extract(
 ) -> None:
     """触发 attachment 文本抽取 (PR-2b).
 
-    无后台 worker, 由 user / cron 跑这条命令推进 extraction queue. 一轮处理
-    最多 ``--limit`` 个 attachment, 对每个 attachment:
+    长驻服务里有 supervised worker (``MAILAGENT_ATTACHMENT_TEXT_WORKER_ENABLED``,
+    默认开) 自动消费 pending 队列; 这条命令是**手动补量 / dry-run / include-missing**
+    的入口 (worker 关闭时也是唯一推进方式). 一轮处理最多 ``--limit`` 个 attachment,
+    对每个 attachment:
         1. 取 file path
         2. 调 ``extract_text(path, content_type, filename)``
         3. 成功 → ``commit_attachment_text(status='extracted')`` → FTS5 索引
         4. 失败 → ``mark_attachment_text_failure`` 指数退避 (1m/5m/15m/1h/2h)
+
+    消费循环体与 worker 共享单一真源 ``src/mail/attachment_text_worker.py``
+    ``process_pending_extractions()`` —— 行为逐字节一致.
 
     ``--include-missing`` 扫历史已 commit 但未 enqueue 的 attachment 补登记.
     """
@@ -495,7 +500,10 @@ def attachment_extract(
             f"--limit must be in (0, 1000], got {limit}"
         ))
 
-    from src.converter.attachment_text import extract_text
+    from src.mail.attachment_text_worker import (
+        ExtractionBatchStats,
+        process_pending_extractions,
+    )
     repo = cli.email_repo
 
     # Step 1: include-missing — 扫 email_attachment 没对应 _text 行的, 补 enqueue
@@ -519,92 +527,27 @@ def attachment_extract(
         finally:
             conn.close()
 
-    # Step 2: process pending / retry-ready
-    processed = 0
-    extracted_ok = 0
-    unsupported = 0
-    failed = 0
-    skipped = 0
-
+    # Step 2: process pending / retry-ready —— 消费循环体与长驻 worker 共享单一
+    # 真源 (src/mail/attachment_text_worker.py), 行为逐字节一致。
+    batch = ExtractionBatchStats()
     if pending:
-        pending_ids = repo.list_pending_attachment_extractions(limit=limit)
-        # 取每个 attachment record 走 extract
-        import sqlite3 as _sqlite3
-        conn = _sqlite3.connect(str(repo.db_path), timeout=30.0)
-        conn.row_factory = _sqlite3.Row
-        try:
-            for att_id in pending_ids:
-                row = conn.execute("""
-                    SELECT id, internal_id, filename, content_type,
-                           local_path, size_bytes
-                      FROM email_attachment WHERE id = ?
-                """, (att_id,)).fetchone()
-                if not row or not row["local_path"]:
-                    skipped += 1
-                    if not dry_run:
-                        repo.mark_attachment_text_failure(att_id, "attachment row or local_path missing")
-                    continue
-
-                # local_path 是相对项目根的路径 (如 'data/attachments/53675/file.pdf');
-                # 用 attachment_store.base_dir.parent.parent 反推 project_root.
-                project_root = repo.attachment_store.base_dir.parent.parent
-                abs_path = project_root / row["local_path"]
-                if not abs_path.exists():
-                    skipped += 1
-                    if not dry_run:
-                        repo.mark_attachment_text_failure(att_id, f"file missing: {abs_path}")
-                    continue
-
-                processed += 1
-                if dry_run:
-                    continue
-
-                try:
-                    result = extract_text(
-                        abs_path,
-                        content_type=row["content_type"],
-                        filename=row["filename"],
-                    )
-                except Exception as e:
-                    repo.mark_attachment_text_failure(att_id, f"extractor exception: {e}")
-                    failed += 1
-                    continue
-
-                if result.status == 'extracted':
-                    repo.commit_attachment_text(
-                        att_id, text=result.text, extractor=result.extractor,
-                        status='extracted', truncated=result.truncated,
-                    )
-                    extracted_ok += 1
-                elif result.status == 'unsupported':
-                    repo.commit_attachment_text(
-                        att_id, text='', extractor=result.extractor,
-                        status='unsupported', error_message=result.error_message,
-                    )
-                    unsupported += 1
-                else:  # failed
-                    repo.mark_attachment_text_failure(
-                        att_id, result.error_message or 'unknown extractor failure'
-                    )
-                    failed += 1
-        finally:
-            conn.close()
+        batch = process_pending_extractions(repo, limit=limit, dry_run=dry_run)
 
     data = {
         "enqueued_missing": enqueued_missing,
-        "processed": processed,
-        "extracted": extracted_ok,
-        "unsupported": unsupported,
-        "failed": failed,
-        "skipped": skipped,
+        "processed": batch.processed,
+        "extracted": batch.extracted,
+        "unsupported": batch.unsupported,
+        "failed": batch.failed,
+        "skipped": batch.skipped,
         "dry_run": dry_run,
     }
 
     if cli.output.lower() == "text":
         print(
-            f"enqueued_missing={enqueued_missing} processed={processed} "
-            f"extracted={extracted_ok} unsupported={unsupported} "
-            f"failed={failed} skipped={skipped} dry_run={dry_run}"
+            f"enqueued_missing={enqueued_missing} processed={batch.processed} "
+            f"extracted={batch.extracted} unsupported={batch.unsupported} "
+            f"failed={batch.failed} skipped={batch.skipped} dry_run={dry_run}"
         )
     else:
         emit(cli, data)

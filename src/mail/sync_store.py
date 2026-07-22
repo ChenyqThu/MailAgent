@@ -1293,8 +1293,9 @@ class SyncStore:
         # LLM tool 跨附件检索 ('合同条款里 redis timeout 提到过吗').
         # 跟 email_body_fts (Phase 3, v5 schema) 平行: contentful FTS5 +
         # 3 trigger 自动 sync, 但走单独表 email_attachment_text + email_attachment_fts.
-        # extraction 由 attachment_text worker queue 异步处理 (new_watcher
-        # _process_attachment_text_queue), 不阻塞主 sync.
+        # extraction 由长驻 attachment_text worker 异步消费 (src/mail/
+        # attachment_text_worker.py tick_loop, service.py 注册; CLI
+        # `mailagent attachment extract` 共享同一消费逻辑), 不阻塞主 sync.
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS email_attachment_text (
                 attachment_id INTEGER PRIMARY KEY,

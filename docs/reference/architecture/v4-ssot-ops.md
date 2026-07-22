@@ -89,7 +89,7 @@ for h in hits:
 
 **抽取流程**：
 1. 邮件 sync 写 `email_attachment` 时，`commit_email_with_body` 自动 enqueue 非 inline 附件成 `email_attachment_text(status='pending')`
-2. 没有后台 worker —— 用户 / cron 跑 `mailagent attachment extract --pending --limit 50` 一次推进 queue（PR-2b.2 加 worker）
+2. 长驻服务里的 **attachment_text worker**（`src/mail/attachment_text_worker.py` `tick_loop`，`src/service.py` 按 supervised 模式注册）每 `MAILAGENT_ATTACHMENT_TEXT_WORKER_POLL_INTERVAL_SEC`（默认 60s）跑一轮，每轮消费最多 `MAILAGENT_ATTACHMENT_TEXT_WORKER_LIMIT_PER_CYCLE`（默认 25）个 pending / retry-ready 行，自动吸收队列。总开关 `MAILAGENT_ATTACHMENT_TEXT_WORKER_ENABLED`（默认 true）；显式 false → 不 spawn worker，回纯手动现状。手动补量 / dry-run / `--include-missing` 仍用 CLI `mailagent attachment extract --pending --limit 50`（与 worker 共享单一消费逻辑 `process_pending_extractions()`，行为逐字节一致）。
 3. extractor 派发：`.pdf` → pypdf / `.docx` → python-docx / `.pptx` → python-pptx / `.xlsx` → python-calamine / `.txt/.md/.csv` → 直接 read_text
 4. 成功 → `status='extracted'` + text 入 FTS5（trigger 自动同步）
 5. 失败 → `status='failed'` + 指数退避（1m / 5m / 15m / 1h / 2h）；超 5 次 → `next_retry_at=NULL` dead

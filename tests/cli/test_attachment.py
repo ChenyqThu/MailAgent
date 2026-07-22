@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sqlite3
+
 import typer
 
 from tests.cli.conftest import extract_last_json_object as _last_json
@@ -96,7 +98,6 @@ class TestAttachmentDownload:
     ):
         # seeded_db 默认 local_path='data/attachments/12345/report.pdf' 物理不存在
         # 找 attachment id (fixture 没固定, 用 SELECT)
-        import sqlite3
         conn = sqlite3.connect(str(seeded_db))
         att_id = int(conn.execute(
             "SELECT id FROM email_attachment LIMIT 1"
@@ -320,3 +321,101 @@ class TestAttachmentCleanupOrphans:
         assert payload["data"]["deleted"] == 1
         assert payload["data"]["mode"] == "deleted"
         assert not orphan.exists()
+
+
+class TestAttachmentExtract:
+    """PR0: extract --pending 经共享真源 process_pending_extractions 处理.
+
+    CLI 与长驻 worker 共用同一消费逻辑 (src/mail/attachment_text_worker.py),
+    这里 pin 「CLI 委派 → stats 语义一致」的接线。
+    """
+
+    def _enqueue_txt_pending(self, db_path, attachment_dir, att_id) -> None:
+        """把 12345 的附件换成可抽取 .txt + enqueue pending 行."""
+        txt = attachment_dir / "12345" / "notes.txt"
+        txt.parent.mkdir(parents=True, exist_ok=True)
+        txt.write_text("cli parity redis timeout content", encoding="utf-8")
+        conn = sqlite3.connect(str(db_path))
+        try:
+            conn.execute(
+                "UPDATE email_attachment SET filename='notes.txt', "
+                "content_type='text/plain', local_path=? WHERE id=?",
+                (str(txt), att_id),
+            )
+            conn.execute(
+                """INSERT OR REPLACE INTO email_attachment_text
+                     (attachment_id, text_content, text_size_bytes, extractor,
+                      status, retry_count, created_at, updated_at)
+                   VALUES (?, NULL, 0, 'pending', 'pending', 0,
+                           strftime('%s','now'), strftime('%s','now'))""",
+                (att_id,),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _set_env(self, monkeypatch):
+        monkeypatch.setenv("NOTION_TOKEN", "x")
+        monkeypatch.setenv("EMAIL_DATABASE_ID", "y")
+        monkeypatch.setenv("USER_EMAIL", "t@example.com")
+        monkeypatch.setenv("MAIL_ACCOUNT_NAME", "t")
+
+    def test_extract_pending_extracts_via_shared_function(
+        self, cli_runner, seeded_db_with_real_attachment, monkeypatch,
+    ):
+        db_path, attachment_dir, att_id = seeded_db_with_real_attachment
+        self._set_env(monkeypatch)
+        self._enqueue_txt_pending(db_path, attachment_dir, att_id)
+
+        result = _invoke(cli_runner, "attachment", "extract", "--pending",
+                         "-o", "json", db_path=db_path)
+        assert result.exit_code == 0, result.output
+        payload = _last_json(result.output)
+        assert payload["status"] == "success"
+        assert payload["data"]["processed"] == 1
+        assert payload["data"]["extracted"] == 1
+        assert payload["data"]["failed"] == 0
+        assert payload["data"]["skipped"] == 0
+
+        # 落库确实转成 extracted
+        conn = sqlite3.connect(str(db_path))
+        status = conn.execute(
+            "SELECT status FROM email_attachment_text WHERE attachment_id=?",
+            (att_id,),
+        ).fetchone()[0]
+        conn.close()
+        assert status == "extracted"
+
+    def test_extract_dry_run_no_writes(
+        self, cli_runner, seeded_db_with_real_attachment, monkeypatch,
+    ):
+        db_path, attachment_dir, att_id = seeded_db_with_real_attachment
+        self._set_env(monkeypatch)
+        self._enqueue_txt_pending(db_path, attachment_dir, att_id)
+
+        result = _invoke(cli_runner, "attachment", "extract", "--pending",
+                         "--dry-run", "-o", "json", db_path=db_path)
+        assert result.exit_code == 0, result.output
+        payload = _last_json(result.output)
+        assert payload["data"]["processed"] == 1
+        assert payload["data"]["extracted"] == 0
+        assert payload["data"]["dry_run"] is True
+
+        # dry-run 不落写: 仍 pending
+        conn = sqlite3.connect(str(db_path))
+        status = conn.execute(
+            "SELECT status FROM email_attachment_text WHERE attachment_id=?",
+            (att_id,),
+        ).fetchone()[0]
+        conn.close()
+        assert status == "pending"
+
+    def test_extract_requires_a_mode_flag(
+        self, cli_runner, seeded_db, monkeypatch,
+    ):
+        self._set_env(monkeypatch)
+        result = _invoke(cli_runner, "attachment", "extract",
+                         "-o", "json", db_path=seeded_db)
+        assert result.exit_code == 2, result.output
+        payload = _last_json(result.output)
+        assert payload["error"]["code"] == "E_INVALID_ARG"

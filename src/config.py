@@ -100,6 +100,23 @@ class Config(BaseSettings):
         description="附件本地落盘目录（按 internal_id 分子目录），与 sync_store.db 同 DATA_ROOT/data/ 同级便于统一备份 + 前端 attachment.ts dirname(dirname(dbPath)) 倒推"
     )
 
+    # 附件文本抽取 worker（PR0：修复 email_attachment_text 队列停摆）。登记侧一直正常
+    # 但长驻服务从未实现消费者 —— 唯一消费者是手动 CLI `mailagent attachment extract`。
+    # 默认开；off = 不 spawn worker，回纯手动 CLI 现状。消费循环体与 CLI 共享单一真源
+    # src/mail/attachment_text_worker.py。next_retry_at 指数退避由 repo 层已实现。
+    mailagent_attachment_text_worker_enabled: bool = Field(
+        default=True, env="MAILAGENT_ATTACHMENT_TEXT_WORKER_ENABLED",
+        description="是否启用附件文本抽取后台 worker（PDF/docx/pptx/xlsx → FTS5 索引）。默认开；显式 false 回纯手动 CLI 现状。",
+    )
+    mailagent_attachment_text_worker_limit_per_cycle: int = Field(
+        default=25, env="MAILAGENT_ATTACHMENT_TEXT_WORKER_LIMIT_PER_CYCLE",
+        description="附件文本 worker 每轮最多处理多少 attachment，默认 25。",
+    )
+    mailagent_attachment_text_worker_poll_interval_sec: int = Field(
+        default=60, env="MAILAGENT_ATTACHMENT_TEXT_WORKER_POLL_INTERVAL_SEC",
+        description="附件文本 worker 主循环 poll 间隔（秒），默认 60。空闲无 pending 即 sleep 此值。",
+    )
+
     # 日历同步配置
     calendar_database_id: str = Field(default="", env="CALENDAR_DATABASE_ID")
     calendar_name: str = Field(default="日历", env="CALENDAR_NAME")

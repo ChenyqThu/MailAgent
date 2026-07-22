@@ -744,6 +744,36 @@ class EmailNotionSyncApp:
                     f"enabled_agent={has_enabled_report_agent})"
                 )
 
+            # 附件文本抽取 worker（PR0：修复 email_attachment_text 队列停摆）。登记侧
+            # (commit_email_with_body enqueue pending) 一直正常, 但长驻服务从未实现
+            # 消费者 —— 唯一消费者是手动 CLI `mailagent attachment extract`, 导致 pending
+            # 只进不出。这里按 supervised 模式注册 poll 循环自动吸收队列。off
+            # (MAILAGENT_ATTACHMENT_TEXT_WORKER_ENABLED=false) → 不 spawn, 回纯手动 CLI 现状。
+            # 消费循环体与 CLI 共享单一真源 src/mail/attachment_text_worker.py。
+            attachment_text_task = None
+            if config.mailagent_attachment_text_worker_enabled:
+                from src.mail import attachment_text_worker
+                attachment_text_task = self._spawn_supervised(
+                    lambda: attachment_text_worker.tick_loop(
+                        repo=self.watcher.email_repo,
+                        shutdown_event=self._shutdown_event,
+                        limit_per_cycle=config.mailagent_attachment_text_worker_limit_per_cycle,
+                        poll_interval_sec=config.mailagent_attachment_text_worker_poll_interval_sec,
+                    ),
+                    "attachment_text",
+                )
+                logger.info(
+                    f"[attachment-text] worker enabled "
+                    f"(limit={config.mailagent_attachment_text_worker_limit_per_cycle}, "
+                    f"poll={config.mailagent_attachment_text_worker_poll_interval_sec}s)"
+                )
+            else:
+                logger.info(
+                    "[attachment-text] worker disabled "
+                    "(MAILAGENT_ATTACHMENT_TEXT_WORKER_ENABLED=false) — "
+                    "extraction only via manual CLI `mailagent attachment extract`"
+                )
+
             # Custom Agent 触发 + 执行 worker（S4，默认关，flag-gated）。off → 零启动。
             #   - AgentTriggerWorker: cron 定时触发（email_filter 触发走 new_watcher 第 5 hook）→ 入队 agent_run；
             #   - AgentRunWorker: 认领 agent_run → poke gateway headless drain（W2/W3）。
@@ -822,6 +852,8 @@ class EmailNotionSyncApp:
                 tasks.append(daily_digest_task)
             if report_worker_task:
                 tasks.append(report_worker_task)
+            if attachment_text_task:
+                tasks.append(attachment_text_task)
             if agent_trigger_task:
                 tasks.append(agent_trigger_task)
             if agent_run_task:
