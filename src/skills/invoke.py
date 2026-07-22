@@ -34,6 +34,32 @@ def _skill_enabled_override(skill_name: str) -> Optional[bool]:
     return None
 
 
+def _notion_agent_tool_killed() -> bool:
+    """``MAILAGENT_NOTION_AGENT_TOOL`` 应急杀开关是否显式关（``True`` → 拒 notion_agent 直调）。
+
+    默认/缺失/空/malformed = on（不误杀）；仅显式 false（``0/false/no/off``）= 杀。**热读 .env 为准**
+    （抄 ``src/api/routers/chat.py`` ``_hot_bool`` / ``web.py`` Tavily key 的既有先例：
+    ``get_env_file_path()`` + ``dotenv_values``），**不**直读 ``os.environ`` —— 本 flag 是 env-only、
+    进程未 ``load_dotenv`` 时不在 environ（见 CLAUDE.md/memory「env-only flags/load_dotenv 坑」）；
+    packaged app 的 .env 落 userData，路径亦由 ``get_env_file_path`` 单源解析。
+
+    gateway 侧 ``envBool('MAILAGENT_NOTION_AGENT_TOOL', true)``（``ai_gateway_lifecycle.ts``）用它
+    决定是否**注册** notion_agent_chat 工具；本函数把同一 kill-switch 覆盖到 Python 直调链
+    （``/api/skills/invoke``）—— 否则 flag=false 时持 ``notion_agent:invoke`` scope 的外部 key 仍能
+    绕过 gateway 直调这个外呼、副作用落 Notion 侧不可撤回的工具（codex R2 HIGH）。
+    """
+    try:
+        from dotenv import dotenv_values
+
+        from src.api.deps import get_env_file_path
+
+        env_path = get_env_file_path()
+        raw = ((dotenv_values(env_path) or {}).get("MAILAGENT_NOTION_AGENT_TOOL") or "").strip().lower()
+    except Exception:  # noqa: BLE001 — env 不可读 → 视为 on（默认开，不误杀应急路径）
+        return False
+    return raw in ("0", "false", "no", "off")
+
+
 def _validate_input(input_schema: dict[str, Any], params: dict[str, Any]) -> None:
     """轻量校验：required 字段必须在场（不引 jsonschema 运行时依赖）。"""
     required = input_schema.get("required") or []
@@ -57,8 +83,9 @@ async def invoke_skill(
 ) -> dict[str, Any]:
     """执行一个 skill tool。
 
-    顺序：找 tool → scope gate（403）→ enabled gate（仅 notion_agent，disabled → 409）→
-    confirmation gate（edit 层必须 confirm，403）→ 输入校验（400）→ 配额判定（声明了
+    顺序：找 tool → scope gate（403）→ notion_agent kill-switch + enabled gate（仅 notion_agent：
+    MAILAGENT_NOTION_AGENT_TOOL 显式 false 或 skill disabled → 409）→ confirmation gate（edit 层
+    必须 confirm，403）→ 输入校验（400）→ 配额判定（声明了
     rate_limit 的 tool，429）→ dispatch（blocking 走 to_thread；coroutine 自动 await）→
     **成功后**记一次配额。
     """
@@ -92,6 +119,18 @@ async def invoke_skill(
     # 残余面：那些 skill 的直调仍不受启用开关约束（对外契约不变，需显式授予其 scope 方可达）。
     # store 不可达 → resolve_enabled(None, default_enabled=False) = False = fail-closed 拒。
     if skill_name == "notion_agent":
+        # 07-21 (codex R2 HIGH) — 应急杀开关同样约束直调链：MAILAGENT_NOTION_AGENT_TOOL 显式 false
+        # 时 gateway 已不注册该工具，但持 scope 的外部 key 仍能直调 /api/skills/invoke（confirm=true
+        # 时连 confirm 闸都过）。此处补齐同一 kill-switch（与 gateway envBool 同源同默认），否则 flag
+        # 形同虚设。判在 enabled 闸**之前**：全局杀开关优先于 per-skill 启用态。
+        if _notion_agent_tool_killed():
+            raise SkillError(
+                "E_SKILL_DISABLED",
+                "skill notion_agent is disabled by the MAILAGENT_NOTION_AGENT_TOOL kill-switch",
+                http_status=409,
+                hint="unset MAILAGENT_NOTION_AGENT_TOOL (or set it true) to re-enable the notion_agent tool",
+            )
+
         from src.agent_config.store import resolve_enabled
 
         if not resolve_enabled(_skill_enabled_override(skill_name), _skill.default_enabled):

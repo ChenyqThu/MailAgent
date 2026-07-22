@@ -309,8 +309,9 @@ export const ACCEPT_EDITS_AUTO_APPROVE_TOOLS: ReadonlySet<string> = new Set([
  *    auditedSendTool's needsApproval only ever relaxes under the explicit 'bypass' literal
  *    (types.ts bypassMode param).
  *  - notion_agent_chat (task 07-21): an EXTERNAL AI call whose side effects land on the Notion side
- *    and cannot be undone from here — 恒 HITL (D4-style), so it keeps asking under acceptEdits; only
- *    'bypass' releases it. */
+ *    and cannot be undone from here — 恒 HITL (D4-style), so it keeps asking under acceptEdits. Unlike
+ *    every other row here it is ALSO in BYPASS_STILL_ASK (codex HIGH-1 carve-out), so unlike the rest
+ *    'bypass' does NOT release it either — it stays 恒 HITL under every mode. */
 export const ACCEPT_EDITS_ASK_TOOLS: ReadonlySet<string> = new Set([
   'calendar_event_reschedule',
   'calendar_event_rsvp',

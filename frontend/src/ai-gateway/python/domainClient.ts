@@ -896,8 +896,10 @@ export class MailAgentDomainClient {
   //    subprocess itself — Python's builtin notion_agent skill handler owns the subprocess bridge
   //    (serial gate + idle watchdog, src/skills/builtin/notion_agent.py → src/chat/notion_agent.py).
   //    The loopback local-token authenticates as the OWNER principal (scopes=None) so the tool's
-  //    notion_agent:invoke scope passes; confirmation_tier is 'preview' server-side, so the HITL
-  //    lives entirely at the gateway (the notion_agent_chat tool is edit-tier, 恒 HITL). The tool
+  //    notion_agent:invoke scope passes. The server-side ToolDef confirmation_tier is 'edit' (codex
+  //    HIGH-2 raised it from 'preview'), so a raw /api/skills/invoke call needs confirm=true; the
+  //    gateway passes confirm=true only AFTER its own 恒-HITL card is approved (the tool is edit-tier
+  //    HITL at the gateway too — the human decision reaches both gates). The tool
   //    that calls this is only registered when MAILAGENT_NOTION_AGENT_TOOL is on AND the notion_agent
   //    skill is advertised (SkillsSection toggle → skill_gating). ──
 

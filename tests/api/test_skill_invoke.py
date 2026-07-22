@@ -193,6 +193,90 @@ def test_notion_agent_invoke_enabled_bad_confirm_type_rejected(fresh_agent_cfg, 
     assert r.json()["error"]["code"] == "E_INVALID_ARG"
 
 
+def _patch_notion_handler(monkeypatch, spy):
+    """把 registry 里 notion_agent_chat 的 handler 换成 spy（BoundTool 是 lru_cache 单例，
+    monkeypatch.setattr 用后自动还原）。返回 spy 便于断言 call 次数。"""
+    from src.skills.registry import find_tool
+
+    found = find_tool("notion_agent", "notion_agent_chat")
+    assert found is not None
+    _skill, tool = found
+    monkeypatch.setattr(tool, "handler", spy)
+    return spy
+
+
+# ── notion_agent kill-switch（codex R2 HIGH：MAILAGENT_NOTION_AGENT_TOOL 覆盖直调链）────────────
+# gateway 侧该 flag 显式 false = 不注册 notion_agent_chat 工具；但直调 /api/skills/invoke 此前不读
+# 它 → 持 scope 的外部 key 带 confirm=true 仍能跑。invoke 门里补齐同一 kill-switch，且判在 enabled
+# 闸之前（全局杀 > per-skill 启用）。
+
+
+def test_notion_agent_invoke_kill_switch_rejects(fresh_agent_cfg, skill_client, monkeypatch):
+    """flag 显式 false（应急杀）+ skill enabled + confirm=true → 仍拒（409）且 handler 未被调用。"""
+    fresh_agent_cfg.set_enabled("notion_agent", True)
+
+    import src.skills.invoke as invoke_mod
+
+    monkeypatch.setattr(invoke_mod, "_notion_agent_tool_killed", lambda: True)
+
+    calls = {"n": 0}
+
+    def _spy(ctx, params):
+        calls["n"] += 1
+        return {"final_content": "should not run", "thread_id": None}
+
+    _patch_notion_handler(monkeypatch, _spy)
+
+    r = skill_client.post(
+        "/api/skills/invoke",
+        json={
+            "skill": "notion_agent",
+            "tool": "notion_agent_chat",
+            "input": {"prompt": "更新本周日程"},
+            "confirm": True,
+        },
+    )
+    assert r.status_code == 409, r.text
+    assert r.json()["error"]["code"] == "E_SKILL_DISABLED"
+    assert "MAILAGENT_NOTION_AGENT_TOOL" in r.json()["error"]["message"]
+    assert calls["n"] == 0  # 拒在 dispatch 之前 → handler 从未跑
+
+
+def test_notion_agent_invoke_all_gates_open_dispatches(fresh_agent_cfg, skill_client, monkeypatch):
+    """门全开（kill-switch off + enabled + confirm=true）→ handler 真被调用、返回值透传进 envelope。"""
+    fresh_agent_cfg.set_enabled("notion_agent", True)
+
+    import src.skills.invoke as invoke_mod
+
+    monkeypatch.setattr(invoke_mod, "_notion_agent_tool_killed", lambda: False)
+
+    calls = {"n": 0, "prompt": None, "confirm": None}
+
+    def _spy(ctx, params):
+        calls["n"] += 1
+        calls["prompt"] = params.get("prompt")
+        calls["confirm"] = ctx.confirm  # invoke 把 confirm 归一成严格布尔透传给 handler
+        return {"final_content": "本周日程已更新", "thread_id": "thr-42"}
+
+    _patch_notion_handler(monkeypatch, _spy)
+
+    r = skill_client.post(
+        "/api/skills/invoke",
+        json={
+            "skill": "notion_agent",
+            "tool": "notion_agent_chat",
+            "input": {"prompt": "更新本周日程"},
+            "confirm": True,
+        },
+    )
+    assert r.status_code == 200, r.text
+    data = r.json()["data"]
+    assert data == {"final_content": "本周日程已更新", "thread_id": "thr-42"}  # 返回值原样透传
+    assert calls["n"] == 1
+    assert calls["prompt"] == "更新本周日程"
+    assert calls["confirm"] is True
+
+
 @pytest.mark.asyncio
 async def test_confirm_gate_requires_strict_true(monkeypatch):
     """codex blocker 回归（invoke chokepoint）：edit gate 用严格 `is True`，非布尔真值不算确认。
