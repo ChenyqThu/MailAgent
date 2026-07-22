@@ -4,7 +4,7 @@
 //
 // 覆盖 6 个去 notImplemented 的读方法 → 正确的 serve-api 路径 + 解包 envelope 返回形状：
 //   settings.secretsStatus / settings.get / notionAgent.getConfig /
-//   notionAgent.listModels / notionAgent.listAgents / prompts.list / prompts.read
+//   notionAgent.listModels / notionAgent.listAgents / prompts.read
 // + 确认写方法（setSecret/set/setAgent/setModel/prompts.write/...）仍 reject notImplemented。
 //
 // fetch 全 mock：envelope 端点用真 Response（http_client.request 调 .text() 解析）。
@@ -145,18 +145,6 @@ describe('HttpApi — 远程 config 只读端点', () => {
     await expect(api.notionAgent.listAgents()).rejects.toMatchObject({
       code: 'E_NOTION_AGENT_NOT_INSTALLED'
     })
-  })
-
-  test('prompts.list → GET /prompts，解包 {inbox, sent}', async () => {
-    const payload = {
-      inbox: { slot: 'inbox', path: '/root/prompts/email_inbox.md', exists: true },
-      sent: { slot: 'sent', path: '/root/prompts/email_sent.md', exists: false }
-    }
-    fetchMock.mockResolvedValue(envelopeResponse(payload))
-    const out = await api.prompts.list()
-    expect(calledUrl()).toContain('/api/prompts')
-    expect(out.inbox.exists).toBe(true)
-    expect(out.sent.exists).toBe(false)
   })
 
   test('prompts.read → GET /prompts/{slot}，解包 PromptContent', async () => {

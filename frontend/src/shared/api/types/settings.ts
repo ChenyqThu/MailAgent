@@ -164,9 +164,6 @@ export type PromptWriteResult =
   | { ok: false; code: string; message: string }
 
 export interface PromptsApi {
-  /** List both prompt slots with their resolved on-disk paths. The renderer
-   *  uses `exists` to decide whether to surface a "未配置 / 保存后创建" hint. */
-  list(): Promise<{ inbox: PromptInfo; sent: PromptInfo }>
   /** Read one prompt's content. Missing file returns `{exists:false, content:''}`. */
   read(slot: PromptSlot): Promise<PromptContent>
   /** Write content to the resolved path; auto-mkdir parent. */

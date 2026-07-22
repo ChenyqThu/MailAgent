@@ -111,7 +111,6 @@ import type {
   PersistentSettings,
   PingResult,
   PromptContent,
-  PromptInfo,
   PromptSlot,
   PromptsApi,
   PromptWriteResult,
@@ -817,9 +816,6 @@ class ElectronServicesApi implements ServicesApi {
 }
 
 class ElectronPromptsApi implements PromptsApi {
-  async list(): Promise<{ inbox: PromptInfo; sent: PromptInfo }> {
-    return (await invoker()('prompts:list')) as { inbox: PromptInfo; sent: PromptInfo }
-  }
   async read(slot: PromptSlot): Promise<PromptContent> {
     return (await invoker()('prompts:read', slot)) as PromptContent
   }

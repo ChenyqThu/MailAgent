@@ -19,7 +19,7 @@
 // reconnect. Implemented surfaces: email/attachment (full read + write),
 // ai.getCached/deleteCached, llm.run/stats/selftest, admin.*, calendar READS
 // + event WRITES (阶段 3.1 #11: create/update/delete/rsvp/replay),
-// folder READS, env.get (read-only .env snapshot), prompts.list/read/write,
+// folder READS, env.get (read-only .env snapshot), prompts.read/write,
 // notionAgent.getConfig/listModels/listAgents, settings.get/secretsStatus.
 
 import type {
@@ -120,9 +120,9 @@ function notImplemented(method: string): Promise<never> {
   // V2-Sprint 3 stub. MUST reject, never throw synchronously: every stubbed
   // surface is an async API method whose renderer call sites degrade via
   // `.catch()` / try-await. A sync throw escapes those handlers and trips the
-  // React ErrorBoundary ("Something went wrong") — e.g. AiTab's prompts.list()
-  // on mount when opened from remote. Rejecting keeps the failure inside the
-  // promise chain so each call site can fall back to a toast.
+  // React ErrorBoundary ("Something went wrong") — e.g. a stubbed method
+  // called on mount when opened from remote. Rejecting keeps the failure
+  // inside the promise chain so each call site can fall back to a toast.
   return Promise.reject(new Error(`HttpApi.${method}() not implemented yet (V2-Sprint 3)`))
 }
 
@@ -773,8 +773,6 @@ export class HttpApi implements MailApi {
   // 分类 prompt 可编辑）；错误不 throw 而是折回 {ok:false} union，镜像 ElectronApi
   // prompts:write 的 PromptWriteResult 形状（call site 统一 `if (!r.ok)` 处理）。
   prompts = {
-    list: (): Promise<{ inbox: PromptInfo; sent: PromptInfo }> =>
-      this.req<{ inbox: PromptInfo; sent: PromptInfo }>('GET', '/prompts'),
     read: (slot: PromptSlot): Promise<PromptContent> =>
       this.req<PromptContent>('GET', `/prompts/${encodeURIComponent(slot)}`),
     write: async (slot: PromptSlot, content: string): Promise<PromptWriteResult> => {

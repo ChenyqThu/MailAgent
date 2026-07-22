@@ -582,15 +582,6 @@ def _read_prompt(slot: str) -> dict[str, Any]:
     return {**info, "content": content}
 
 
-@router.get("/prompts", dependencies=[Depends(verify_cf_access)])
-async def list_prompts(request: Request):
-    """两个 prompt slot 的路径 + exists。镜像 prompts:list → {inbox, sent} PromptInfo。"""
-    payload = await run_in_threadpool(
-        lambda: {"inbox": _prompt_info("inbox"), "sent": _prompt_info("sent")}
-    )
-    return success_envelope(payload, request=request, source="config")
-
-
 @router.get("/prompts/{slot}", dependencies=[Depends(verify_cf_access)])
 async def read_prompt(request: Request, slot: str):
     """读单个 prompt 内容。镜像 prompts:read → PromptContent。缺文件 → content:''。

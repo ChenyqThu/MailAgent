@@ -1657,14 +1657,36 @@
       "toolCount": "{n} 个工具",
       "scopes": "权限范围",
       "empty": "暂无可用技能（技能清单加载失败）。",
-      "loading": "正在加载技能…"
+      "loading": "正在加载技能…",
+      "calendarChatNote": "此开关只管对外 Skill 接口与能力声明；聊天中的日历工具由「系统能力」区的日历项控制。",
+      "notionAgentMasterOff": "主开关 MAILAGENT_NOTION_AGENT_TOOL 已关闭：即使在此启用，聊天中也不会注册 notion_agent 工具。"
     },
     "systemCapabilities": {
       "title": "系统能力",
-      "desc": "内置系统能力：多数由环境变量启用（恒定生效、不能在此关闭），联网可在此开关。",
+      "desc": "聊天中助手可调用的全部能力族。能开关的用真开关（联网），其余由环境变量控制、此处只读展示：已启用显示锁定态，未启用也在此显示（禁用态）。",
       "lockedBadge": "系统能力 · 恒启用",
       "lockedTip": "该能力由环境变量控制启用，运行时不可在此切换。",
-      "moreNote": "其余系统能力由环境变量控制启用。",
+      "disabledBadge": "未启用",
+      "disabledTip": "该能力当前由环境变量关闭；如需启用请改 .env 并重启后端。",
+      "controlledBy": "由环境变量控制：",
+      "coreEmail": {
+        "title": "核心邮件操作",
+        "desc": "让助手起草回复、标记、归档、置顶、重新同步、发送邮件（写工具 + 发信）。",
+        "control": "核心能力 · 恒可用；所有写操作经审批卡确认后执行。"
+      },
+      "kos": {
+        "title": "KOS 查询",
+        "desc": "让助手检索 Gbrain 跨域知识图谱（kos_query）。",
+        "control": "核心只读 · 恒注册；检索效果取决于是否已配置 Gbrain。"
+      },
+      "selfMount": {
+        "title": "自我配置元工具",
+        "desc": "让助手查看/更新自身身份文档、发现并挂载技能（update_system_md / discover_skills / set_skill_enabled）。"
+      },
+      "calendar": {
+        "title": "日历工具（聊天）",
+        "desc": "让助手在聊天中读写日历（列出 / 查看 / 改期 / 回复邀请 / 删除）；与「技能」列表里的日历技能开关无关（那个只管对外 Skill 接口）。"
+      },
       "session": {
         "title": "会话检索",
         "desc": "让助手检索你过往的 AI 会话历史（列出 / 搜索 / 读取）。"
@@ -2301,34 +2323,6 @@
         "label": "全局默认模型",
         "helper": "Chat 对话与未单独设模型的后台 AI 任务默认使用（需重启）；邮件预处理模型在 AI 助理页的预处理卡单独配置"
       },
-      "prompts": {
-        "title": "Prompt 配置",
-        "helper": "LLM 邮件分类的 markdown 提示词文件路径与编辑入口",
-        "loading": "加载中…",
-        "save": "保存",
-        "saved": "已保存",
-        "saveFailed": "保存失败",
-        "loadFailed": "加载提示词失败",
-        "listFailed": "读取提示词列表失败",
-        "pathHint": "{path}",
-        "willCreate": "{path} (保存后自动创建)",
-        "placeholder": "用 markdown 编辑提示词;保存即生效(Python 端 mtime 热重载)",
-        "editButton": "编辑",
-        "editHelperExists": "{path}",
-        "editHelperMissing": "{path} · 当前文件不存在,点编辑后保存会自动创建",
-        "inbox": {
-          "pathLabel": "收件箱 prompt 路径",
-          "pathHelper": "相对仓库根目录;留空 = prompts/email_inbox.md",
-          "editLabel": "编辑收件箱 prompt",
-          "editTitle": "编辑收件箱 prompt"
-        },
-        "sent": {
-          "pathLabel": "发件箱 prompt 路径",
-          "pathHelper": "相对仓库根目录;留空 = prompts/email_sent.md",
-          "editLabel": "编辑发件箱 prompt",
-          "editTitle": "编辑发件箱 prompt"
-        }
-      },
       "translate": {
         "title": "邮件翻译",
         "helper": "Electron 主进程翻译流水线;独立 gateway/key/model + 双语对照"
@@ -2354,10 +2348,6 @@
         "label": "Fallback 链",
         "helper": "主模型失败时的全局兜底链；邮件预处理可在其 Agent 卡单独设置（默认跟随全局）",
         "none": "（不设备模型）"
-      },
-      "contextPageId": {
-        "label": "Context 页面 ID",
-        "helper": "Email Agent Context markdown 页;30min TTL 缓存"
       },
       "autoTitle": {
         "title": "会话自动标题",
@@ -3173,7 +3163,7 @@
       "contextDocsNote": "勾选的身份文档会注入 AI 邮件分类的系统提示（默认 灵魂 + 用户偏好）。",
       "contextDocsInactiveNote": "当前参考上下文源为「Notion 上下文页」，身份文档不会注入分类提示（此处勾选暂不生效）。",
       "contextSource": "参考上下文源",
-      "contextSourceHint": "邮件分类系统提示的参考背景二选一（env，需重启后端生效）：身份文档 或 Notion 上下文页，两者互斥不叠加。",
+      "contextSourceHint": "邮件分类系统提示的参考背景二选一（保存即生效，无需重启）：身份文档 或 Notion 上下文页，两者互斥不叠加。",
       "contextSourceOption": {
         "standing_docs": "身份文档",
         "notion_context": "Notion 上下文页"

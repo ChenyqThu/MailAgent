@@ -2,7 +2,7 @@
 (task 06-08-chat 第二波 — 远程 config P0+P1)。
 
 镜像本地 IPC notionAgent:getConfig/listModels/listAgents + settings:secrets:status/get +
-prompts:list/read 的形状 + 鉴权 + graceful（缺文件 → configured:false / [] / content:''）。
+prompts:read 的形状 + 鉴权 + graceful（缺文件 → configured:false / [] / content:''）。
 fixtures mock account.json / models.json / .env / prompt 文件；agents list mock subprocess。
 auth bypass 默认 ON（tests/api/conftest）。
 """
@@ -546,22 +546,6 @@ def prompt_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return tmp_path
 
 
-def test_prompts_list(
-    client: TestClient, prompt_root: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """两 slot 路径 + exists（inbox 存在，sent 不存在）。"""
-    monkeypatch.delenv("LLM_INBOX_PROMPT_PATH", raising=False)
-    monkeypatch.delenv("LLM_SENT_PROMPT_PATH", raising=False)
-    (prompt_root / "prompts" / "email_inbox.md").write_text("inbox body", encoding="utf-8")
-    r = client.get("/api/prompts")
-    assert r.status_code == 200
-    data = r.json()["data"]
-    assert data["inbox"]["slot"] == "inbox"
-    assert data["inbox"]["exists"] is True
-    assert data["inbox"]["path"].endswith("prompts/email_inbox.md")
-    assert data["sent"]["exists"] is False
-
-
 def test_prompts_read_existing(
     client: TestClient, prompt_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -685,7 +669,6 @@ def test_endpoints_require_auth(monkeypatch: pytest.MonkeyPatch) -> None:
             "/api/settings/secrets-status",
             "/api/settings",
             "/api/env",
-            "/api/prompts",
             "/api/prompts/inbox",
         ):
             assert c.get(path).status_code == 401, path

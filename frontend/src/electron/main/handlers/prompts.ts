@@ -117,12 +117,6 @@ export function writePrompt(slot: PromptSlot, content: string): PromptInfo {
 }
 
 export function registerPromptHandlers(): void {
-  ipcMain.handle('prompts:list', async (): Promise<{ inbox: PromptInfo; sent: PromptInfo }> => {
-    return {
-      inbox: getPromptInfo('inbox'),
-      sent: getPromptInfo('sent')
-    }
-  })
   ipcMain.handle('prompts:read', async (_evt, slot: PromptSlot): Promise<PromptContent> => {
     if (slot !== 'inbox' && slot !== 'sent') {
       throw new PromptIpcError('E_INVALID_SLOT', `unknown prompt slot "${String(slot)}"`)

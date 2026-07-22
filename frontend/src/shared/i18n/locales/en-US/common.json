@@ -1657,14 +1657,36 @@
       "toolCount": "{n, plural, one {# tool} other {# tools}}",
       "scopes": "Scopes",
       "empty": "No skills available (the skill manifest could not be loaded).",
-      "loading": "Loading skills…"
+      "loading": "Loading skills…",
+      "calendarChatNote": "This toggle only governs the outward Skill interface and capability declaration; the calendar tools in chat are controlled by the Calendar item under System capabilities.",
+      "notionAgentMasterOff": "Master switch MAILAGENT_NOTION_AGENT_TOOL is off: even when enabled here, the notion_agent tool won't be registered in chat."
     },
     "systemCapabilities": {
       "title": "System capabilities",
-      "desc": "Built-in system capabilities — most are enabled via environment variables (always active, not toggleable here); web access can be toggled here.",
+      "desc": "Every capability family the assistant can call in chat. Toggleable ones use a real switch (web access); the rest are env-controlled and read-only here: enabled shows a locked state, and disabled ones are still shown (disabled state).",
       "lockedBadge": "System · Always on",
       "lockedTip": "This capability is toggled by an environment variable and cannot be switched here at runtime.",
-      "moreNote": "Other system capabilities are enabled via environment variables.",
+      "disabledBadge": "Not enabled",
+      "disabledTip": "This capability is currently disabled via an environment variable; edit .env and restart the backend to enable it.",
+      "controlledBy": "Controlled by env var:",
+      "coreEmail": {
+        "title": "Core email actions",
+        "desc": "Lets the assistant draft replies, flag, archive, pin, resync, and send email (write tools + send).",
+        "control": "Core capability · always available; every write executes only after an approval card."
+      },
+      "kos": {
+        "title": "KOS query",
+        "desc": "Lets the assistant query the Gbrain cross-domain knowledge graph (kos_query).",
+        "control": "Core read · always registered; retrieval depends on whether Gbrain is configured."
+      },
+      "selfMount": {
+        "title": "Self-config meta tools",
+        "desc": "Lets the assistant view/update its own identity docs and discover/mount skills (update_system_md / discover_skills / set_skill_enabled)."
+      },
+      "calendar": {
+        "title": "Calendar tools (chat)",
+        "desc": "Lets the assistant read/write the calendar in chat (list / get / reschedule / RSVP / delete); unrelated to the calendar skill toggle in the Skills list (which only governs the outward Skill interface)."
+      },
       "session": {
         "title": "Session retrieval",
         "desc": "Lets the assistant search your past AI conversation history (list / search / read)."
@@ -2301,34 +2323,6 @@
         "label": "Global default model",
         "helper": "Default for chat and background AI tasks without a dedicated model (restart required); the email-preprocessing model is configured on its agent card"
       },
-      "prompts": {
-        "title": "Prompt configuration",
-        "helper": "Markdown prompt file paths + in-place editor for the Python LLM agent",
-        "loading": "Loading…",
-        "save": "Save",
-        "saved": "Saved",
-        "saveFailed": "Save failed",
-        "loadFailed": "Failed to load prompt",
-        "listFailed": "Failed to list prompts",
-        "pathHint": "{path}",
-        "willCreate": "{path} (will be created on save)",
-        "placeholder": "Edit the prompt in markdown. Saved files reload via mtime watch.",
-        "editButton": "Edit",
-        "editHelperExists": "{path}",
-        "editHelperMissing": "{path} · file does not exist; saving in the editor will create it",
-        "inbox": {
-          "pathLabel": "Inbox prompt path",
-          "pathHelper": "Relative to repo root; empty = prompts/email_inbox.md",
-          "editLabel": "Edit inbox prompt",
-          "editTitle": "Edit inbox prompt"
-        },
-        "sent": {
-          "pathLabel": "Sent prompt path",
-          "pathHelper": "Relative to repo root; empty = prompts/email_sent.md",
-          "editLabel": "Edit sent prompt",
-          "editTitle": "Edit sent prompt"
-        }
-      },
       "translate": {
         "title": "Email translation",
         "helper": "Electron-main translation pipeline; independent gateway/key/model + bilingual"
@@ -2354,10 +2348,6 @@
         "label": "Fallback chain",
         "helper": "Global fallback chain when the primary model fails; email preprocessing can override it on its agent card (defaults to follow global)",
         "none": "(no fallback)"
-      },
-      "contextPageId": {
-        "label": "Context page ID",
-        "helper": "Email Agent Context markdown page; 30-min TTL cache"
       },
       "autoTitle": {
         "title": "Auto chat title",
@@ -3173,7 +3163,7 @@
       "contextDocsNote": "Checked identity docs are injected into the AI email-classification system prompt (default: SOUL + USER).",
       "contextDocsInactiveNote": "Reference context source is set to \"Notion context page\"; identity docs are not injected into the classification prompt (selection has no effect here).",
       "contextSource": "Reference context source",
-      "contextSourceHint": "Pick one reference background for the email-classification system prompt (env, restart required): identity docs or a Notion context page — mutually exclusive, never both.",
+      "contextSourceHint": "Pick one reference background for the email-classification system prompt (saved instantly, no restart): identity docs or a Notion context page — mutually exclusive, never both.",
       "contextSourceOption": {
         "standing_docs": "Identity docs",
         "notion_context": "Notion context page"
