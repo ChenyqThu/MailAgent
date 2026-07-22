@@ -48,15 +48,17 @@ class ConfigField(NamedTuple):
     field_name: str
     annotation: Optional[str]           # 'bool' / 'str' / 'int' / 'float' / None
     declared_env: Optional[str]         # Field(env="...") 的字面值（pydantic v2 忽略但仍是文档意图）
-    validation_alias: Optional[str]     # Field(validation_alias="...")
+    validation_alias: Optional[str]     # Field(validation_alias="...")，AliasChoices 时取首选键
     default: object                     # 常量默认值，或 _NO_LITERAL
     has_factory: bool                   # 有 default_factory
     required: bool                      # Field(...) 首位 Ellipsis
+    alias_extras: tuple = ()            # AliasChoices 的非首选键（legacy 兼容名，如 issue #52）
 
     @property
     def effective_env_key(self) -> str:
         """pydantic 实际读取的 env 键 = validation_alias（若有）否则 字段名.upper()。
-        （Field(env=) 被 pydantic v2 忽略 —— 见 config.py 顶 model_config 注释。）"""
+        （Field(env=) 被 pydantic v2 忽略 —— 见 config.py 顶 model_config 注释。）
+        AliasChoices 场景 = 首选（canonical）键；legacy 键在 alias_extras。"""
         return self.validation_alias or self.field_name.upper()
 
 
@@ -88,6 +90,7 @@ def parse_config_fields(src: Optional[str] = None) -> List[ConfigField]:
 
         declared_env: Optional[str] = None
         alias: Optional[str] = None
+        alias_extras: tuple = ()
         default: object = _NO_LITERAL
         has_factory = False
         required = False
@@ -102,6 +105,27 @@ def parse_config_fields(src: Optional[str] = None) -> List[ConfigField]:
                     declared_env = kw.value.value
                 elif kw.arg == "validation_alias" and isinstance(kw.value, ast.Constant):
                     alias = kw.value.value
+                elif (
+                    kw.arg == "validation_alias"
+                    and isinstance(kw.value, ast.Call)
+                    and getattr(kw.value.func, "id", None) == "AliasChoices"
+                ):
+                    # AliasChoices("CANONICAL", "LEGACY", ...) —— 首选 = canonical env 键，
+                    # 其余为 legacy 兼容名（issue #52）。非常量参数直接炸（解析器不静默）。
+                    choices = []
+                    for a in kw.value.args:
+                        if not isinstance(a, ast.Constant) or not isinstance(a.value, str):
+                            raise AssertionError(
+                                f"config.py 字段 {field_name} 的 AliasChoices 含非字符串常量参数"
+                                " —— 解析器需更新"
+                            )
+                        choices.append(a.value)
+                    if not choices:
+                        raise AssertionError(
+                            f"config.py 字段 {field_name} 的 AliasChoices 无参数 —— 解析器需更新"
+                        )
+                    alias = choices[0]
+                    alias_extras = tuple(choices[1:])
                 elif kw.arg == "default":
                     default = _const_literal(kw.value)
                 elif kw.arg == "default_factory":
@@ -119,6 +143,7 @@ def parse_config_fields(src: Optional[str] = None) -> List[ConfigField]:
                 default=default,
                 has_factory=has_factory,
                 required=required,
+                alias_extras=alias_extras,
             )
         )
     return fields

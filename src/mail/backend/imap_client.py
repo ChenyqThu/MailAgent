@@ -68,7 +68,7 @@ def get_cipher_key(cfg: "Config") -> str:
     if poc_mode:
         global _poc_warned
         msg = (
-            "[imap-client] DAVMAIL_CIPHER_KEY empty + POC mode on → "
+            "[imap-client] DAVMAIL_POC_CIPHER_KEY empty + POC mode on → "
             "using PoC default cipher key (NOT for production)"
         )
         if _poc_warned:
@@ -78,9 +78,10 @@ def get_cipher_key(cfg: "Config") -> str:
             logger.warning(msg)
         return _POC_DEFAULT_CIPHER_KEY
     raise DavMailConnectionError(
-        "DAVMAIL_CIPHER_KEY required when MAILAGENT_BACKEND=davmail. "
-        "Set DAVMAIL_CIPHER_KEY in .env to match your local DavMail StringEncryptor "
-        "password (see davmail-poc/POC-RESULTS.md §StringEncryptor). "
+        "DAVMAIL_POC_CIPHER_KEY (or legacy DAVMAIL_CIPHER_KEY) required when "
+        "MAILAGENT_BACKEND=davmail. Set DAVMAIL_POC_CIPHER_KEY in .env to match your "
+        "local DavMail StringEncryptor password (see davmail-poc/POC-RESULTS.md "
+        "§StringEncryptor). "
         "For PoC/dev only: set DAVMAIL_POC_MODE=1 to fall back to the shared PoC key."
     )
 

@@ -288,7 +288,7 @@ def test_send_itip_smtp_missing_cipher_key_raises():
     from src.mail.backend.imap_client import DavMailConnectionError
 
     cfg = _mock_cfg(davmail_cipher_key="", davmail_poc_mode=False)
-    with pytest.raises(DavMailConnectionError, match="DAVMAIL_CIPHER_KEY required"):
+    with pytest.raises(DavMailConnectionError, match="DAVMAIL_POC_CIPHER_KEY"):
         send_itip_reply_smtp(
             cfg, ical_body="x", to_email="a@b.com", subject="s",
         )

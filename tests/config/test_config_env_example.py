@@ -59,7 +59,11 @@ def test_config_fields_documented():
 def test_env_example_orphans_explained():
     """方向 B：.env.example 键 - config 字段 ⊆ orphans-baseline。"""
     fields = p.parse_config_fields()
-    effective_keys = {f.effective_env_key for f in fields}
+    # AliasChoices 的 legacy 兼容键（alias_extras）也算「有字段承接」——它们确实被
+    # pydantic 读取（issue #52 DAVMAIL_CIPHER_KEY），文档化不构成 orphan。
+    effective_keys = {f.effective_env_key for f in fields} | {
+        extra for f in fields for extra in f.alias_extras
+    }
     env_example = p.parse_env_example_keys()
     # canary：.env.example 解析器坏了会让 env_example 空 → 平凡绿。
     assert len(env_example) > 50, (

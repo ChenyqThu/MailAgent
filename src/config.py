@@ -1,7 +1,7 @@
 import os
 
 from pydantic_settings import BaseSettings
-from pydantic import Field, ConfigDict
+from pydantic import AliasChoices, Field, ConfigDict
 
 # =============================================================================
 # DATA_ROOT 路径解析（P0 packaging：Python 侧路径解耦 / 绝对化）
@@ -783,7 +783,10 @@ class Config(BaseSettings):
         default=1025, env="DAVMAIL_SMTP_PORT", description="DavMail SMTP submission 端口",
     )
     davmail_cipher_key: str = Field(
-        default="", validation_alias="DAVMAIL_POC_CIPHER_KEY",
+        default="",
+        # issue #52: 老用户 .env 是 DAVMAIL_CIPHER_KEY（旧文档/报错曾用此名），只认
+        # POC 键会让升级后 serve 静默罢工 —— 双名兼容，POC 键优先（现行为不变）。
+        validation_alias=AliasChoices("DAVMAIL_POC_CIPHER_KEY", "DAVMAIL_CIPHER_KEY"),
         description=(
             "DavMail StringEncryptor password (= IMAP/SMTP AUTH password). "
             "留空时若 davmail_poc_mode=True 走 fallback 默认 'mailagent-poc-shared-key' "
