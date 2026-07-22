@@ -94,7 +94,9 @@ export function AgentsPage(): React.ReactElement {
   const search = useSearch({ strict: false }) as { tab?: string }
   const tab: AgentsTabKey =
     search.tab && (TABS as string[]).includes(search.tab) ? (search.tab as AgentsTabKey) : 'agents'
-  const { items } = useReportList()
+  // codex MEDIUM-2 — the tab badge is the FULL report count, not the loaded first page (items only
+  // holds the first 50 until the list is scrolled; a 52-report库 would badge "50").
+  const { total } = useReportList()
 
   const go = (k: AgentsTabKey): void => {
     void navigate({ to: '/agents', search: { tab: k } })
@@ -130,7 +132,7 @@ export function AgentsPage(): React.ReactElement {
             tabKey={k}
             label={labels[k]}
             active={tab === k}
-            count={k === 'reports' ? items.length : undefined}
+            count={k === 'reports' ? total : undefined}
             onClick={() => go(k)}
           />
         ))}

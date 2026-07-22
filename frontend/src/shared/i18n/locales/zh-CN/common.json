@@ -1054,6 +1054,7 @@
       "fallbackTitle": "操作确认",
       "fallbackLabel": "将执行以下操作，需你批准：",
       "noArgs": "(无参数)",
+      "continuation": "续接会话 {id}",
       "error": "操作失败，请重试或让助手重新发起。"
     },
     "calendarApprovalCard": {

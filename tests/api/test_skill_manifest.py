@@ -31,7 +31,10 @@ EXPECTED_TOOLS = {
         "calendar_event_get": ("read", "none", ["calendar:read"], True),
     },
     "notion_agent": {
-        "notion_agent_chat": ("external_call", "preview", ["notion_agent:invoke"], False),
+        # 07-21 (codex HIGH-2) — edit tier (was preview): the invoke chokepoint now requires an
+        # explicit boolean confirm=true, so a direct /api/skills/invoke of this external-AI /
+        # irreversible-write tool can't skip confirmation. side_effect stays external_call.
+        "notion_agent_chat": ("external_call", "edit", ["notion_agent:invoke"], False),
     },
 }
 

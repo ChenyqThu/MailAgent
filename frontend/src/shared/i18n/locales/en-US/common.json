@@ -1054,6 +1054,7 @@
       "fallbackTitle": "Confirm operation",
       "fallbackLabel": "The following operation will run — needs your approval:",
       "noArgs": "(no arguments)",
+      "continuation": "Continuing conversation {id}",
       "error": "The operation failed — retry or ask the assistant to start over."
     },
     "calendarApprovalCard": {

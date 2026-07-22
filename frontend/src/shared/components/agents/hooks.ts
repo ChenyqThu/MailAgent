@@ -24,6 +24,9 @@ const EMPTY_PENDING_COUNT: AgentRunPendingCount = { total: 0, byAgent: {} }
 
 const LIST_KEY = qk.report.list()
 const CONFIG_KEY = qk.report.config()
+// codex MEDIUM-2 — prefix of every per-agent latest-report query (['report','latest',agentId]);
+// the paginated LIST_KEY (['report','list']) does NOT cover it, so run-now / delete bust it too.
+const LATEST_KEY = ['report', 'latest'] as const
 
 // task 07-21 — 报告中心列表分页大小（滚动预取，见 ReportsTab）。
 const REPORT_PAGE_SIZE = 50
@@ -62,6 +65,23 @@ export function useReportList(cadence?: ReportCadence): {
     isFetchingMore: q.isFetchingNextPage,
     fetchMore: () => void q.fetchNextPage()
   }
+}
+
+/** codex MEDIUM-2 — the single most-recent report for ONE agent, via the list endpoint's agentId
+ *  filter + limit:1 (report_date DESC). Reliable regardless of the paginated全部-list first page:
+ *  a low-frequency report agent whose latest report fell past the first 50 rows used to render
+ *  "no report" on its card. Cheap (report agents number in the single digits) + React Query cached;
+ *  invalidated on run-now / delete via the LATEST_KEY prefix (see useRunNow / useDeleteReport). */
+export function useLatestReport(agentId: string): ReportListItem | null {
+  const api = useMailApi()
+  const q = useQuery({
+    queryKey: qk.report.latest(agentId),
+    queryFn: async () => {
+      const { items } = await api.report.list({ agentId, limit: 1 })
+      return items[0] ?? null
+    }
+  })
+  return q.data ?? null
 }
 
 export function useReport(reportId: string | null): {
@@ -104,6 +124,7 @@ export function useRunNow(): {
     }) => api.report.runNow(agentId, { cadence, type }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: LIST_KEY })
+      void qc.invalidateQueries({ queryKey: LATEST_KEY })
       // S5：custom agent run-now enqueue 后刷新 run 历史（前缀匹配 ['agent-runs', ...]）。
       void qc.invalidateQueries({ queryKey: qk.agentRuns.all() })
     }
@@ -124,6 +145,7 @@ export function useDeleteReport(): {
     mutationFn: (reportId: string) => api.report.delete(reportId),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: LIST_KEY })
+      void qc.invalidateQueries({ queryKey: LATEST_KEY })
     }
   })
   return { remove: (id) => mut.mutateAsync(id), isDeleting: mut.isPending }

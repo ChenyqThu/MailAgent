@@ -110,7 +110,12 @@ def build_skill() -> BoundSkill:
                     "required": ["prompt"],
                 },
                 output_schema={"type": "object", "description": "{final_content, thread_id}"},
-                confirmation_tier="preview",
+                # 07-21 (codex HIGH-2) — edit tier (was preview): the invoke chokepoint then
+                # REQUIRES an explicit boolean confirm=true (like send/draft), so a direct
+                # /api/skills/invoke call cannot silently run this external-AI, irreversible-写
+                # tool. The gateway passes confirm=true only AFTER its own 恒-HITL card is
+                # approved; an external scoped key must opt in the same way (403 without it).
+                confirmation_tier="edit",
                 side_effect="external_call",
                 auth_scopes=["notion_agent:invoke"],
                 mcp_exposed=False,

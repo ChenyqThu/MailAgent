@@ -146,6 +146,22 @@ describe('notion_agent_chat — 恒 HITL + wire + fencing', () => {
     expect(await needsApproval({ prompt: 'hi' }, { toolCallId: 'tc-ae', messages: [] })).toBe(true)
   })
 
+  test('bypass does NOT auto-approve it either (codex HIGH-1 — BYPASS_STILL_ASK carve-out)', async () => {
+    // bypass is otherwise 无例外 (send/exec/skill-install included), but notion_agent_chat is an
+    // external-AI call whose Notion-side writes can't be undone from this machine → it stays 恒 HITL
+    // even under bypass (the same 安全地板 the repo floors for exec/skill-install).
+    const guard = new ApprovalGuard()
+    const { notion_agent_chat } = createNotionAgentTools(notionDomain(), [], guard, {
+      contextMode: 'manual_chat',
+      approvalMode: 'bypass'
+    })
+    const needsApproval = notion_agent_chat.needsApproval as (
+      i: unknown,
+      o: { toolCallId: string; messages: unknown[] }
+    ) => boolean | Promise<boolean>
+    expect(await needsApproval({ prompt: 'hi' }, { toolCallId: 'tc-by', messages: [] })).toBe(true)
+  })
+
   test('execute posts the /api/skills/invoke body and fences the answer', async () => {
     const guard = new ApprovalGuard()
     let capturedUrl = ''
@@ -172,9 +188,14 @@ describe('notion_agent_chat — 恒 HITL + wire + fencing', () => {
       skill: string
       tool: string
       input: Record<string, unknown>
+      confirm?: unknown
     }
     expect(body.skill).toBe('notion_agent')
     expect(body.tool).toBe('notion_agent_chat')
+    // codex HIGH-2 — the tool is confirmation_tier=edit server-side, so the invoke body carries an
+    // explicit boolean confirm=true (this execute only runs AFTER the gateway's 恒-HITL card was
+    // approved). Without it the Python invoke chokepoint 403s a direct call.
+    expect(body.confirm).toBe(true)
     expect(body.input).toEqual({
       prompt: 'update the schedule',
       thread_id: 'thr-abc',

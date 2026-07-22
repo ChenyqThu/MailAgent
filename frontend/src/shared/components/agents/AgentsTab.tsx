@@ -14,8 +14,8 @@ import {
   useAgentPendingCount,
   useAgentRuns,
   useCustomAgentsEnabled,
+  useLatestReport,
   useReportConfig,
-  useReportList,
   useRunNow,
   useSetConfig
 } from './hooks'
@@ -57,9 +57,9 @@ function AgentCard({
   const { t } = useTranslation()
   const { save } = useSetConfig()
   const { run, isRunning } = useRunNow()
-  const { items } = useReportList()
-  // 该 agent 的最近一份报告（items 按 report_date 倒序 → find 命中即最新）。
-  const last = useMemo(() => items.find((it) => it.agent_id === cfg.id) ?? null, [items, cfg.id])
+  // codex MEDIUM-2 — 该 agent 的最近一份报告：走 agentId 过滤 + limit:1 的按 agent 查询（不再从
+  // 全部-list 首屏 50 条里 find —— 低频 agent 的最新报告一旦被挤出首页会误显示「无历史」）。
+  const last = useLatestReport(cfg.id)
 
   const toggle = (v: boolean): void => {
     void save(cfg.id, { enabled: v })

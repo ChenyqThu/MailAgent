@@ -140,6 +140,59 @@ async def test_email_send_threads_confirm_to_service(monkeypatch):
     assert res["sent"] is True
 
 
+# ── notion_agent 直调闸（codex HIGH-2）────────────────────────────────────────
+# ① ToolDef confirmation_tier=edit → 无 confirm 的直调被 confirm 闸拒（403）。
+# ④ enabled 闸（仅 notion_agent）→ skill 未启用（default off，无覆盖行）→ 409，直调面尊重
+#    Settings→Custom AI→Skills 开关，外部 scoped key 不能绕过它触达这个外呼第三方 AI 工具。
+# 都在 dispatch 之前拒 → 绝不真跑 notion-agent subprocess。
+
+
+def test_notion_agent_invoke_disabled_returns_409(fresh_agent_cfg, skill_client):
+    """skill 未启用（默认）→ 409 E_SKILL_DISABLED（即便带 confirm=true，enabled 闸在 confirm 闸之前）。"""
+    r = skill_client.post(
+        "/api/skills/invoke",
+        json={
+            "skill": "notion_agent",
+            "tool": "notion_agent_chat",
+            "input": {"prompt": "更新本周日程"},
+            "confirm": True,
+        },
+    )
+    assert r.status_code == 409, r.text
+    assert r.json()["error"]["code"] == "E_SKILL_DISABLED"
+
+
+def test_notion_agent_invoke_enabled_requires_confirm(fresh_agent_cfg, skill_client):
+    """skill 启用后，edit-tier confirm 闸仍拦无 confirm 的直调 → 403（不进 dispatch，不跑 CLI）。"""
+    fresh_agent_cfg.set_enabled("notion_agent", True)
+    r = skill_client.post(
+        "/api/skills/invoke",
+        json={
+            "skill": "notion_agent",
+            "tool": "notion_agent_chat",
+            "input": {"prompt": "更新本周日程"},  # 无 confirm
+        },
+    )
+    assert r.status_code == 403, r.text
+    assert r.json()["error"]["code"] == "E_AUTH_FAILED"
+
+
+def test_notion_agent_invoke_enabled_bad_confirm_type_rejected(fresh_agent_cfg, skill_client):
+    """启用后，confirm 非布尔（字符串 "true"）→ router 400（confirm 必须是 JSON boolean）。"""
+    fresh_agent_cfg.set_enabled("notion_agent", True)
+    r = skill_client.post(
+        "/api/skills/invoke",
+        json={
+            "skill": "notion_agent",
+            "tool": "notion_agent_chat",
+            "input": {"prompt": "x"},
+            "confirm": "true",
+        },
+    )
+    assert r.status_code == 400, r.text
+    assert r.json()["error"]["code"] == "E_INVALID_ARG"
+
+
 @pytest.mark.asyncio
 async def test_confirm_gate_requires_strict_true(monkeypatch):
     """codex blocker 回归（invoke chokepoint）：edit gate 用严格 `is True`，非布尔真值不算确认。

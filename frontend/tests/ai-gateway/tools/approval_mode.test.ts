@@ -33,6 +33,7 @@ import { createCalendarWriteTools } from '../../../src/ai-gateway/tools/calendar
 import {
   ACCEPT_EDITS_ASK_TOOLS,
   ACCEPT_EDITS_AUTO_APPROVE_TOOLS,
+  BYPASS_STILL_ASK,
   GATEWAY_TOOL_CLASSES
 } from '../../../src/ai-gateway/tools/policy'
 import type { AgentContextMode } from '../../../src/ai-gateway/tools/policy'
@@ -735,6 +736,21 @@ describe("07-16 'bypass' — everything auto-approves (owner 拍板: 无例外),
     await expect(
       executeOf(tools.email_prepare_send)(input, { toolCallId: 'tc-by-send', messages: [] })
     ).rejects.toThrow(/E_APPROVAL_USED/)
+  })
+
+  test('BYPASS_STILL_ASK carve-out (codex HIGH-1): the pinned set + every member is a real classified tool', () => {
+    // 'bypass' is 无例外 for THIS machine's own actions, but BYPASS_STILL_ASK keeps external-AI /
+    // irreversible-outside tools 恒 HITL even here. Pinned verbatim (a set change is a deliberate
+    // policy change); currently only notion_agent_chat.
+    expect([...BYPASS_STILL_ASK].sort()).toEqual(['notion_agent_chat'])
+    for (const name of BYPASS_STILL_ASK) {
+      expect(
+        GATEWAY_TOOL_CLASSES[name],
+        `${name} must exist in GATEWAY_TOOL_CLASSES — a rename would orphan its bypass carve-out`
+      ).toBeDefined()
+      // it must also be in the ASK set for acceptEdits (both modes keep it HITL).
+      expect(ACCEPT_EDITS_ASK_TOOLS.has(name)).toBe(true)
+    }
   })
 
   test.each(['untrusted_trigger', 'cron_headless'] as const)(

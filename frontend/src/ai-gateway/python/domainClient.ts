@@ -912,8 +912,13 @@ export class MailAgentDomainClient {
     const input: Record<string, unknown> = { prompt }
     if (opts.threadId !== undefined) input.thread_id = opts.threadId
     if (opts.model !== undefined) input.model = opts.model
+    // 07-21 (codex HIGH-2) — notion_agent_chat is confirmation_tier=edit server-side, so the invoke
+    // chokepoint requires an explicit boolean confirm=true (mirrors send/draft). This method only
+    // runs from the gateway tool's execute, i.e. AFTER the 恒-HITL card was approved — so passing
+    // confirm:true here is the human decision reaching Python's second gate (defense in depth). A
+    // direct external /api/skills/invoke without confirm still 403s.
     return this._req<DomainNotionAgentChatResult>('POST', '/skills/invoke', {
-      body: { skill: 'notion_agent', tool: 'notion_agent_chat', input },
+      body: { skill: 'notion_agent', tool: 'notion_agent_chat', input, confirm: true },
       signal
     })
   }

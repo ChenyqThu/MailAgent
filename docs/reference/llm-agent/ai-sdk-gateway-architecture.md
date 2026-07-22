@@ -826,8 +826,8 @@ mock-model 难驱动 streamText 的工具/approval 两调 loop（§13.10.6 一�
 
 goal 死硬要求 AI SDK 路径与 legacy custom-api 用**同一** standing-context 源。两层复用：
 
-1. **同一数据源**：gateway 的 `systemPromptProvider` fetch 的是与 legacy runtime **完全相同**的 serve-api `/chat/config`（backend `agent_config.db` 组装的 SOUL/AGENT/RULES/USER + userContext + memorySummary + kosConfigured，`MAILAGENT_STANDING_CONTEXT_ENABLED` 默认 ON）。不新起端点、不重装配。
-2. **同一装配函数**：`buildGatewaySystemPrompt` **直接调** legacy 的 `buildStableSystemPrompt(null, cfg, () => null)`——`PRODUCT_SAFETY_FLOOR + standingContext`（或未配置时 `SOUL_MARKDOWN` fallback）+ userContext + memory + KOS 指南**逐字节同一份**。一条 `system_prompt.test.ts` parity 用例断言 `gateway === legacy`，结构性杜绝漂移（不是再实现一份再对比）。
+1. **同一数据源**：gateway 的 `systemPromptProvider` fetch 的是与 legacy runtime **完全相同**的 serve-api `/chat/config`（backend `agent_config.db` 组装的 SOUL/AGENT/RULES/USER + memorySummary + kosConfigured，`MAILAGENT_STANDING_CONTEXT_ENABLED` 默认 ON）。不新起端点、不重装配。🔴 **task 07-21 起 chat 不再注入 Notion context page 派生的 `userContext`**（旧 ContextLoader 段与 Standing Context 双注入，已从 `/chat/config` 全链移除）——该 page（`LLM_CONTEXT_PAGE_ID`）现只在**预处理**上下文源 = `notion_context` 时被 `llm_agent` 消费，chat 只留 Standing Context 单源。
+2. **同一装配函数**：`buildGatewaySystemPrompt` **直接调** legacy 的 `buildStableSystemPrompt(null, cfg, () => null)`——`PRODUCT_SAFETY_FLOOR + standingContext`（或未配置时 `SOUL_MARKDOWN` fallback）+ memory + KOS 指南**逐字节同一份**（userContext 段 07-21 起已不在装配里）。一条 `system_prompt.test.ts` parity 用例断言 `gateway === legacy`，结构性杜绝漂移（不是再实现一份再对比）。
 
 唯一文档化差异：**邮件上下文位置**——legacy 走 `buildEmailContextSection`（明文 block），gateway 走 `buildContextSystemBlock`（typed snapshot + `UNTRUSTED_*` 围栏 + §7 防注入）。这是 typed-snapshot 升级的有意取舍（正文当 untrusted data，不当指令）。`PRODUCT_SAFETY_FLOOR` 永远最前且 code-owned（safety_floor.ts），standingContext 物理上无法弱化它——parity 测试断言 floor 始终在场且 `indexOf===0`。
 

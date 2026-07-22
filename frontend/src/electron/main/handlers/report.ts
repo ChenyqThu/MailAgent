@@ -18,6 +18,7 @@ import { getDb } from '../db'
 import { callCli } from '../cli_runner'
 import { daemonRequest, daemonRequestWithMeta } from '../daemon_api'
 import { envelopeFromCli, type WriteEnvelope } from '../lib/envelope'
+import { clampReportPage } from './reportPage'
 import type {
   AgentRunHistoryItem,
   AgentRunPendingCount,
@@ -175,8 +176,11 @@ export function registerReportHandlers(): void {
           params.push(opts.agentId)
         }
         const whereSql = where.length ? ` WHERE ${where.join(' AND ')}` : ''
-        const limit = Number.isInteger(opts?.limit) ? (opts!.limit as number) : 50
-        const offset = Number.isInteger(opts?.offset) ? (opts!.offset as number) : 0
+        // codex LOW-1 — clamp to the SAME bounds serve-api enforces (GET /api/reports:
+        // limit Query(50, ge=1, le=200), offset Query(0, ge=0)) via the pure clampReportPage
+        // helper, so the two transports agree on page shape and a bogus IPC arg can't run an
+        // unbounded / negative-offset query.
+        const { limit, offset } = clampReportPage({ limit: opts?.limit, offset: opts?.offset })
         const rows = db
           .prepare(
             `SELECT ${_LIST_COLS} FROM report${whereSql} ` +

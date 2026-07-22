@@ -327,6 +327,18 @@ export const ACCEPT_EDITS_ASK_TOOLS: ReadonlySet<string> = new Set([
   'notion_agent_chat'
 ])
 
+/** 07-21 (codex HIGH-1) — the bypass carve-out: the ONE set of write tools that KEEP asking even
+ *  under the owner-global 'bypass' mode. 'bypass' is otherwise 无例外 (owner 拍板 2026-07-16:
+ *  everything auto-approves, send/exec/skill-install included) — but that verdict was made for
+ *  actions on THIS machine's own domain (reversible email writes, local exec, the send whose
+ *  double-guard still runs). notion_agent_chat is categorically different: it hands the prompt
+ *  (possibly carrying workspace data) to an EXTERNAL AI (the notion-agent CLI) whose side effects
+ *  land on the Notion side and cannot be undone from here. That外呼-不可撤回 shape is the same
+ *  「安全地板」the repo floors elsewhere (exec 无白名单命中恒 HITL、skill 安装恒 HITL), so bypass
+ *  does NOT remove its card either — it stays 恒 HITL under every mode. Minimal by design (只含
+ *  notion_agent_chat); a broader loosening waits for the future per-agent grant 体系. */
+export const BYPASS_STILL_ASK: ReadonlySet<string> = new Set(['notion_agent_chat'])
+
 /** Filter an assembled ToolSet by the context mode — the LAST step of buildGatewayTools, after
  *  every create* block AND applySkillGating (codex P2-2: no early return may let a class slip
  *  past). manual_chat is an identity pass-through (the same object, zero diff — S2 keeps every

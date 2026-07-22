@@ -88,6 +88,34 @@ describe('SimpleApprovalCard — pending (approval-requested)', () => {
     expect(screen.getByText('{"note":"oops"}')).toBeTruthy()
     expect(screen.getByText('允许')).toBeTruthy()
   })
+
+  test('notion_agent_chat: shows the prompt + approve buttons (fresh — no thread_id line)', () => {
+    render(
+      <SimpleApprovalCard
+        {...mockProps({ toolName: 'notion_agent_chat', args: { prompt: '更新本周日程' } })}
+      />
+    )
+    expect(screen.getByText('咨询 Notion Agent')).toBeTruthy()
+    expect(screen.getByText('更新本周日程')).toBeTruthy()
+    expect(screen.getByText('允许')).toBeTruthy()
+    // no thread_id in args → no continuation line rendered (codex MEDIUM-1).
+    expect(screen.queryByText(/续接会话/)).toBeNull()
+  })
+
+  test('notion_agent_chat (follow-up): renders the 续接会话 <thread_id> line (codex MEDIUM-1)', () => {
+    render(
+      <SimpleApprovalCard
+        {...mockProps({
+          toolName: 'notion_agent_chat',
+          args: { prompt: '继续', thread_id: 'thr-abc' }
+        })}
+      />
+    )
+    expect(screen.getByText('继续')).toBeTruthy()
+    // the continuation id is surfaced so the user reviews that this call resumes a prior conversation.
+    expect(screen.getByText('续接会话 thr-abc')).toBeTruthy()
+    expect(screen.getByText('允许')).toBeTruthy()
+  })
 })
 
 describe('SimpleApprovalCard — approve / reject wire respondToApproval (通道 A)', () => {

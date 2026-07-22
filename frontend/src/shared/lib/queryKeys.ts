@@ -177,6 +177,9 @@ export const qk = {
   report: {
     list: () => ['report', 'list'] as const,
     listCadence: (cadence: string) => ['report', 'list', cadence] as const,
+    // codex MEDIUM-2 — per-agent latest report (agentId filter + limit:1), independent of the
+    // paginated list first page so a low-frequency agent's card never falsely shows "no report".
+    latest: (agentId: string) => ['report', 'latest', agentId] as const,
     config: () => ['report', 'config'] as const,
     get: (reportId: string | null) => ['report', 'get', reportId] as const
   },

@@ -29,6 +29,10 @@ import { ApprovalActions, CardFrame, TerminalBanner, deriveCardPhase } from '../
 interface ToolSpec {
   key: string
   field: string
+  /** 07-21 (codex MEDIUM-1) — an optional continuation-id field (e.g. notion_agent_chat's
+   *  thread_id): when the model input carries it, the card shows a「续接会话 <id>」line so the user
+   *  reviews that this call continues a prior conversation, not a fresh one. Absent → not rendered. */
+  continuationField?: string
 }
 
 const SPECS: Record<string, ToolSpec> = {
@@ -36,8 +40,8 @@ const SPECS: Record<string, ToolSpec> = {
   web_search: { key: 'webSearch', field: 'query' },
   custom_agent_delete: { key: 'customAgentDelete', field: 'agent_id' },
   custom_agent_run_now: { key: 'customAgentRunNow', field: 'agent_id' },
-  // task 07-21 — notion_agent_chat previews the pinned `prompt` that will be sent to the notion-agent.
-  notion_agent_chat: { key: 'notionAgentChat', field: 'prompt' }
+  // task 07-21 — notion_agent_chat previews the pinned `prompt` + (if a follow-up) the thread_id.
+  notion_agent_chat: { key: 'notionAgentChat', field: 'prompt', continuationField: 'thread_id' }
 }
 
 function iconFor(toolName: string): React.ReactNode {
@@ -79,6 +83,19 @@ function identityValue(
   return ''
 }
 
+/** The continuation id to surface (notion_agent_chat's thread_id), or '' when the tool has no
+ *  continuation field or the input doesn't carry one (a fresh conversation). */
+function continuationValue(
+  spec: ToolSpec | undefined,
+  args: unknown,
+  argsText: string | undefined
+): string {
+  if (!spec?.continuationField) return ''
+  const obj = asRecord(args) ?? (argsText ? safeParse(argsText) : null)
+  const v = obj?.[spec.continuationField]
+  return typeof v === 'string' && v.trim().length > 0 ? v : ''
+}
+
 export function SimpleApprovalCard(props: ToolCallMessagePartProps): React.JSX.Element {
   const { toolName, args, argsText, respondToApproval } = props
   const { t } = useTranslation()
@@ -88,6 +105,7 @@ export function SimpleApprovalCard(props: ToolCallMessagePartProps): React.JSX.E
     ? t(`chat.simpleApprovalCard.${spec.key}.title`)
     : t('chat.simpleApprovalCard.fallbackTitle')
   const value = identityValue(spec, args, argsText) || t('chat.simpleApprovalCard.noArgs')
+  const continuation = continuationValue(spec, args, argsText)
 
   const onApprove = (): void => respondToApproval({ approved: true })
   const onReject = (): void => respondToApproval({ approved: false })
@@ -102,6 +120,11 @@ export function SimpleApprovalCard(props: ToolCallMessagePartProps): React.JSX.E
               : t('chat.simpleApprovalCard.fallbackLabel')}
           </div>
           <div className="mt-1 break-all font-mono text-meta text-ink-fg">{value}</div>
+          {continuation ? (
+            <div className="mt-1.5 text-aux text-ink-fg-3">
+              {t('chat.simpleApprovalCard.continuation', { id: continuation })}
+            </div>
+          ) : null}
           <ApprovalActions onApprove={onApprove} onReject={onReject} />
         </>
       ) : phase === 'rejected' || phase === 'expired' ? (

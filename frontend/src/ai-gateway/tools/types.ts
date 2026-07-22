@@ -29,6 +29,7 @@ import { type ApprovalGuard, type ApprovalRecord, type ApprovalRisk } from '../s
 // session (runtime double-insurance behind the registration-time filter in tools/index.ts).
 import {
   ACCEPT_EDITS_AUTO_APPROVE_TOOLS,
+  BYPASS_STILL_ASK,
   classOfTool,
   isToolClassAllowedInMode,
   mayAutoApprove,
@@ -371,7 +372,12 @@ export function auditedWriteTool<I>(
       // record above is registered regardless — execute's guard.verify + the audit need it, so
       // the authoritative write-gate chain (verify/consume/audit) is intact on every skip.
       if (contextMode === 'manual_chat') {
-        if (opts.approvalMode === 'bypass') {
+        // 07-21 (codex HIGH-1) — bypass is otherwise 无例外, but BYPASS_STILL_ASK (currently only
+        // notion_agent_chat) stays 恒 HITL even here: an external-AI call whose Notion-side writes
+        // can't be undone from this machine is the same「安全地板」floored elsewhere (exec/skill
+        // install). Skipping the bypass branch falls through to the unchanged ask paths → return
+        // true (edit tier, no policyEvaluate) → the card is shown.
+        if (opts.approvalMode === 'bypass' && !BYPASS_STILL_ASK.has(opts.name)) {
           autoSkipByCall.set(toolCallId, 'auto_bypass')
           return false
         }
