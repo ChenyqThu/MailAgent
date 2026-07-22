@@ -6,10 +6,14 @@
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
-const { mockRequest } = vi.hoisted(() => ({ mockRequest: vi.fn() }))
+const { mockRequest, mockRequestWithMeta } = vi.hoisted(() => ({
+  mockRequest: vi.fn(),
+  mockRequestWithMeta: vi.fn()
+}))
 
 vi.mock('@shared/api/http_client', () => ({
-  request: mockRequest
+  request: mockRequest,
+  requestWithMeta: mockRequestWithMeta
 }))
 
 vi.mock('../../src/electron/main/local_token', () => ({
@@ -17,11 +21,13 @@ vi.mock('../../src/electron/main/local_token', () => ({
   LOCAL_TOKEN_HEADER: 'X-MailAgent-Local-Token'
 }))
 
-import { daemonRequest } from '../../src/electron/main/daemon_api'
+import { daemonRequest, daemonRequestWithMeta } from '../../src/electron/main/daemon_api'
 
 beforeEach(() => {
   mockRequest.mockReset()
   mockRequest.mockResolvedValue({ ok: 'stub' })
+  mockRequestWithMeta.mockReset()
+  mockRequestWithMeta.mockResolvedValue({ data: { ok: 'stub' }, meta: {} })
   delete process.env.MAILAGENT_API_PORT
 })
 
@@ -90,5 +96,33 @@ describe('daemonRequest — baseUrl + 本地 token header', () => {
     await expect(daemonRequest('POST', '/email/9/pin', { body: { pinned: true } })).rejects.toBe(
       apiErr
     )
+  })
+})
+
+// task 07-21 — daemonRequestWithMeta：与 daemonRequest 同款 baseUrl/token 注入，
+// 但透传 requestWithMeta 的 {data, meta}（不丢 total），供 report:listRuns IPC 用。
+describe('daemonRequestWithMeta — baseUrl + 本地 token header + meta 透传', () => {
+  test('注入本地 token header，返回 {data, meta} 原样', async () => {
+    mockRequestWithMeta.mockResolvedValueOnce({
+      data: [{ jobId: 1 }],
+      meta: { total: 3, limit: 20, offset: 0 }
+    })
+    const out = await daemonRequestWithMeta('GET', '/agent-runs', { query: { limit: 20 } })
+    expect(mockRequestWithMeta).toHaveBeenCalledWith(
+      'http://127.0.0.1:8200/api',
+      'GET',
+      '/agent-runs',
+      expect.objectContaining({
+        query: { limit: 20 },
+        headers: { 'X-MailAgent-Local-Token': 'test-token-abc' }
+      })
+    )
+    expect(out).toEqual({ data: [{ jobId: 1 }], meta: { total: 3, limit: 20, offset: 0 } })
+  })
+
+  test('request reject (ApiError) 透传给 caller', async () => {
+    const apiErr = Object.assign(new Error('flag off'), { code: 'E_NOT_FOUND' })
+    mockRequestWithMeta.mockRejectedValueOnce(apiErr)
+    await expect(daemonRequestWithMeta('GET', '/agent-runs')).rejects.toBe(apiErr)
   })
 })

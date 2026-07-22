@@ -193,6 +193,7 @@ export type {
   ReportCounts,
   ReportListItem,
   ReportDetail,
+  ReportPagedResult,
   ReportSchedule,
   CustomAgentTrigger,
   CustomAgentToolPolicy,

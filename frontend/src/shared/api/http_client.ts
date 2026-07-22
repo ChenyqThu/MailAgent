@@ -125,6 +125,21 @@ export async function request<T>(
   path: string,
   opts: RequestOptions = {}
 ): Promise<T> {
+  const { data } = await requestWithMeta<T>(baseUrl, method, path, opts)
+  return data
+}
+
+/**
+ * Same wire contract as `request()`, but also surfaces `meta` (e.g. pagination's
+ * `total`/`limit`/`offset` — task 07-21) instead of discarding it. `request()` is a thin
+ * wrapper over this so both stay byte-identical on the fetch/parse/unwrap path.
+ */
+export async function requestWithMeta<T>(
+  baseUrl: string,
+  method: string,
+  path: string,
+  opts: RequestOptions = {}
+): Promise<{ data: T; meta: Record<string, unknown> }> {
   const url = `${baseUrl}${path}${buildQuery(opts.query)}`
 
   const headers: Record<string, string> = { Accept: 'application/json', ...(opts.headers ?? {}) }
@@ -140,7 +155,7 @@ export async function request<T>(
     init.body = JSON.stringify(opts.body)
   }
 
-  return sendAndUnwrap<T>(url, init)
+  return sendAndUnwrapWithMeta<T>(url, init)
 }
 
 /**
@@ -172,11 +187,15 @@ export async function requestRaw<T>(
     signal: opts.signal,
     body: body as BodyInit
   }
-  return sendAndUnwrap<T>(url, init)
+  const { data } = await sendAndUnwrapWithMeta<T>(url, init)
+  return data
 }
 
-/** Shared fetch + envelope unwrap for request()/requestRaw(). */
-async function sendAndUnwrap<T>(url: string, init: RequestInit): Promise<T> {
+/** Shared fetch + envelope unwrap for request()/requestWithMeta()/requestRaw(). */
+async function sendAndUnwrapWithMeta<T>(
+  url: string,
+  init: RequestInit
+): Promise<{ data: T; meta: Record<string, unknown> }> {
   let res: Response
   try {
     res = await fetch(url, init)
@@ -207,12 +226,12 @@ async function sendAndUnwrap<T>(url: string, init: RequestInit): Promise<T> {
 
   if (env) {
     if (env.status === 'success') {
-      return env.data as T
+      return { data: env.data as T, meta: env.meta ?? {} }
     }
     if (env.status === 'partial_failure') {
       // HTTP 207 — batch write with some failures. The renderer inspects
       // data.summary / data.failed; this is NOT an error.
-      return env.data as T
+      return { data: env.data as T, meta: env.meta ?? {} }
     }
     // status === 'error' (or any unknown status) → throw with the envelope's
     // own code, preferred over the HTTP status mapping.

@@ -16,7 +16,7 @@ import { ipcMain } from 'electron'
 
 import { getDb } from '../db'
 import { callCli } from '../cli_runner'
-import { daemonRequest } from '../daemon_api'
+import { daemonRequest, daemonRequestWithMeta } from '../daemon_api'
 import { envelopeFromCli, type WriteEnvelope } from '../lib/envelope'
 import type {
   AgentRunHistoryItem,
@@ -32,6 +32,7 @@ import type {
   ReportDetail,
   ReportDoc,
   ReportListItem,
+  ReportPagedResult,
   ReportRunResult,
   ProjectProgressRunItem
 } from '../../../shared/api/types'
@@ -152,13 +153,15 @@ function _toAgentConfig(row: AgentRow): ReportAgentConfig {
 }
 
 export function registerReportHandlers(): void {
-  // ── report:list — 报告列表（不含 blocks_json）。失败返 []。
+  // ── report:list — 报告列表（不含 blocks_json）。失败返 { items: [], total: 0 }。
+  //    task 07-21：加 offset 分页 + total（同 cadence/agentId filter 的 COUNT(*)），
+  //    与 serve-api GET /api/reports（meta.total）parity。
   ipcMain.handle(
     'report:list',
     async (
       _evt,
-      opts?: { cadence?: string; agentId?: string; limit?: number }
-    ): Promise<ReportListItem[]> => {
+      opts?: { cadence?: string; agentId?: string; limit?: number; offset?: number }
+    ): Promise<ReportPagedResult<ReportListItem>> => {
       try {
         const db = getDb()
         const where: string[] = []
@@ -173,16 +176,20 @@ export function registerReportHandlers(): void {
         }
         const whereSql = where.length ? ` WHERE ${where.join(' AND ')}` : ''
         const limit = Number.isInteger(opts?.limit) ? (opts!.limit as number) : 50
+        const offset = Number.isInteger(opts?.offset) ? (opts!.offset as number) : 0
         const rows = db
           .prepare(
             `SELECT ${_LIST_COLS} FROM report${whereSql} ` +
-              `ORDER BY report_date DESC, created_at DESC LIMIT ?`
+              `ORDER BY report_date DESC, created_at DESC LIMIT ? OFFSET ?`
           )
-          .all(...params, limit) as ReportRow[]
-        return rows.map(_toListItem)
+          .all(...params, limit, offset) as ReportRow[]
+        const totalRow = db
+          .prepare(`SELECT COUNT(*) AS n FROM report${whereSql}`)
+          .get(...params) as { n: number }
+        return { items: rows.map(_toListItem), total: totalRow.n }
       } catch (err) {
         console.error('[report:list] read failed:', err)
-        return []
+        return { items: [], total: 0 }
       }
     }
   )
@@ -339,21 +346,33 @@ export function registerReportHandlers(): void {
 
   // ── report:listRuns — S5 custom agent run 历史（读，走 serve-api GET /agent-runs）。
   //    state 由后端 derive_agent_run_state 单源投影（前端不推导）。flag off → serve-api 404 →
-  //    catch 返 []（守 ReportApi「读失败返 []」契约；不 fallback 直读 SQLite——读态推导只有
-  //    Python 一处权威，绝不在 TS 重造第二套 status 映射）。
+  //    catch 返 { items: [], total: 0 }（守 ReportApi「读失败返空」契约；不 fallback 直读
+  //    SQLite——读态推导只有 Python 一处权威，绝不在 TS 重造第二套 status 映射）。
+  //    task 07-21：加 offset 分页透传 + total（来自 serve-api meta.total，经 daemonRequestWithMeta
+  //    不丢弃 meta），与 serve-api parity。
   ipcMain.handle(
     'report:listRuns',
     async (
       _evt,
-      opts?: { agentId?: string; limit?: number; state?: string }
-    ): Promise<AgentRunHistoryItem[]> => {
+      opts?: { agentId?: string; limit?: number; offset?: number; state?: string }
+    ): Promise<ReportPagedResult<AgentRunHistoryItem>> => {
       try {
-        return await daemonRequest<AgentRunHistoryItem[]>('GET', '/agent-runs', {
-          query: { agentId: opts?.agentId, limit: opts?.limit, state: opts?.state }
-        })
+        const { data, meta } = await daemonRequestWithMeta<AgentRunHistoryItem[]>(
+          'GET',
+          '/agent-runs',
+          {
+            query: {
+              agentId: opts?.agentId,
+              limit: opts?.limit,
+              offset: opts?.offset,
+              state: opts?.state
+            }
+          }
+        )
+        return { items: data, total: typeof meta.total === 'number' ? meta.total : data.length }
       } catch (err) {
         console.warn('[report:listRuns] serve-api unreachable / flag off:', err)
-        return []
+        return { items: [], total: 0 }
       }
     }
   )

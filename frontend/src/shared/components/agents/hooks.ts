@@ -1,6 +1,6 @@
 // Sprint 20 — /agents 数据层：TanStack Query 包装 report:* IPC + 响应式 useNarrow。
-import { useEffect, useState } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useEffect, useMemo, useState } from 'react'
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { resolveApiBaseUrl } from '@shared/hooks/useLlmModels'
@@ -25,17 +25,43 @@ const EMPTY_PENDING_COUNT: AgentRunPendingCount = { total: 0, byAgent: {} }
 const LIST_KEY = qk.report.list()
 const CONFIG_KEY = qk.report.config()
 
+// task 07-21 — 报告中心列表分页大小（滚动预取，见 ReportsTab）。
+const REPORT_PAGE_SIZE = 50
+
 export function useReportList(cadence?: ReportCadence): {
   items: ReportListItem[]
+  /** 同 cadence filter 下的总数（后端 meta.total），列表头展示 + hasMore 判断用。 */
+  total: number
   isLoading: boolean
+  /** 还有更多页可拉（items.length < total）。 */
+  hasMore: boolean
+  /** 正在拉下一页（滚动预取节流用，避免同一 tick 重复触发）。 */
+  isFetchingMore: boolean
+  /** 拉下一页（offset = 已加载条数）。hasMore=false / 拉取中时调用是 no-op。 */
+  fetchMore: () => void
 } {
   const api = useMailApi()
-  const q = useQuery({
+  const q = useInfiniteQuery({
     queryKey: qk.report.listCadence(cadence ?? 'all'),
-    queryFn: () => api.report.list(cadence ? { cadence } : undefined),
+    queryFn: ({ pageParam }) =>
+      api.report.list({ cadence, limit: REPORT_PAGE_SIZE, offset: pageParam }),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, allPages) => {
+      const loaded = allPages.reduce((n, p) => n + p.items.length, 0)
+      return loaded < lastPage.total ? loaded : undefined
+    },
     refetchOnWindowFocus: true
   })
-  return { items: q.data ?? [], isLoading: q.isLoading }
+  const items = useMemo(() => q.data?.pages.flatMap((p) => p.items) ?? [], [q.data])
+  const total = q.data?.pages[q.data.pages.length - 1]?.total ?? 0
+  return {
+    items,
+    total,
+    isLoading: q.isLoading,
+    hasMore: q.hasNextPage ?? false,
+    isFetchingMore: q.isFetchingNextPage,
+    fetchMore: () => void q.fetchNextPage()
+  }
 }
 
 export function useReport(reportId: string | null): {
@@ -239,7 +265,8 @@ export function useAgentPendingCount(enabled: boolean): AgentRunPendingCount {
 }
 
 /** S6 W2（P5 红点链 ④）— 全局待审批（paused_pending）run 列表，供 TitleBar 徽标 popover 直达记录。
- *  仅 enabled（popover 打开 + flag on）时发请求；读失败 / flag off → []（守读优雅降级）。 */
+ *  仅 enabled（popover 打开 + flag on）时发请求；读失败 / flag off → []（守读优雅降级）。
+ *  红点弹层只看最近 50 条待审批，不需要分页 —— 只取 items，不消费 total。 */
 export function usePendingRuns(enabled: boolean): {
   runs: AgentRunHistoryItem[]
   isLoading: boolean
@@ -251,22 +278,48 @@ export function usePendingRuns(enabled: boolean): {
     enabled,
     staleTime: 4_000
   })
-  return { runs: q.data ?? [], isLoading: q.isLoading }
+  return { runs: q.data?.items ?? [], isLoading: q.isLoading }
 }
 
 /** S5 — 某 custom agent 的 run 历史（listRuns，读失败返 []）。state 由后端 derive_agent_run_state
- *  单源投影，前端只穷举渲染不推导。agentId=null → 不发请求。 */
+ *  单源投影，前端只穷举渲染不推导。agentId=null → 不发请求。
+ *  task 07-21 — `limit` 现作分页大小（每页条数），支持 loadMore（RunHistorySection 的
+ *  「加载更多」按钮）；AgentRecordView / AgentsTab 只用 runs（首页/首屏够用），不受影响。 */
 export function useAgentRuns(
   agentId: string | null,
   limit = 20
-): { runs: AgentRunHistoryItem[]; isLoading: boolean; refetch: () => void } {
+): {
+  runs: AgentRunHistoryItem[]
+  isLoading: boolean
+  refetch: () => void
+  total: number
+  hasMore: boolean
+  isLoadingMore: boolean
+  loadMore: () => void
+} {
   const api = useMailApi()
-  const q = useQuery({
+  const q = useInfiniteQuery({
     queryKey: qk.agentRuns.list(agentId, limit),
-    queryFn: () => api.report.listRuns({ agentId: agentId ?? undefined, limit }),
+    queryFn: ({ pageParam }) =>
+      api.report.listRuns({ agentId: agentId ?? undefined, limit, offset: pageParam }),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, allPages) => {
+      const loaded = allPages.reduce((n, p) => n + p.items.length, 0)
+      return loaded < lastPage.total ? loaded : undefined
+    },
     enabled: agentId != null
   })
-  return { runs: q.data ?? [], isLoading: q.isLoading, refetch: () => void q.refetch() }
+  const runs = useMemo(() => q.data?.pages.flatMap((p) => p.items) ?? [], [q.data])
+  const total = q.data?.pages[q.data.pages.length - 1]?.total ?? 0
+  return {
+    runs,
+    isLoading: q.isLoading,
+    refetch: () => void q.refetch(),
+    total,
+    hasMore: q.hasNextPage ?? false,
+    isLoadingMore: q.isFetchingNextPage,
+    loadMore: () => void q.fetchNextPage()
+  }
 }
 
 /** R5 (task 07-05) — 项目周报同步执行历史（projectProgressRuns，读失败返 []）。

@@ -274,6 +274,60 @@ def test_count_agent_runs_since(repo):
 
 
 # ============================================================
+# list_agent_runs(offset) + count_agent_runs — task 07-21 分页
+# ============================================================
+
+def test_count_agent_runs_empty_table(repo):
+    assert repo.count_agent_runs() == 0
+    assert repo.list_agent_runs() == []
+
+
+def test_count_agent_runs_matches_agent_id_filter(repo):
+    for i in range(3):
+        repo.enqueue(
+            job_type="agent_run", target_kind="agent", target_key="a1",
+            idempotency_key=f"a1-{i}",
+        )
+    for i in range(2):
+        repo.enqueue(
+            job_type="agent_run", target_kind="agent", target_key="a2",
+            idempotency_key=f"a2-{i}",
+        )
+    assert repo.count_agent_runs() == 5
+    assert repo.count_agent_runs(agent_id="a1") == 3
+    assert repo.count_agent_runs(agent_id="a2") == 2
+    assert repo.count_agent_runs(agent_id="ghost") == 0
+
+
+def test_list_agent_runs_offset_pagination(repo):
+    job_ids = []
+    for i in range(5):
+        jid, _ = repo.enqueue(
+            job_type="agent_run", target_kind="agent", target_key="a1",
+            idempotency_key=f"page-{i}",
+        )
+        job_ids.append(jid)
+
+    total = repo.count_agent_runs(agent_id="a1")
+    assert total == 5
+
+    page1 = repo.list_agent_runs(agent_id="a1", limit=2, offset=0)
+    page2 = repo.list_agent_runs(agent_id="a1", limit=2, offset=2)
+    page3 = repo.list_agent_runs(agent_id="a1", limit=2, offset=4)
+    assert len(page1) == 2 and len(page2) == 2 and len(page3) == 1
+    ids1 = {j.job_id for j in page1}
+    ids2 = {j.job_id for j in page2}
+    ids3 = {j.job_id for j in page3}
+    assert not (ids1 & ids2) and not (ids2 & ids3) and not (ids1 & ids3)  # 无重叠
+    assert ids1 | ids2 | ids3 == set(job_ids)  # 拼起来覆盖全部, 无遗漏
+
+
+def test_list_agent_runs_offset_out_of_range_returns_empty(repo):
+    repo.enqueue(job_type="agent_run", target_kind="agent", target_key="a1", idempotency_key="k1")
+    assert repo.list_agent_runs(agent_id="a1", limit=10, offset=100) == []
+
+
+# ============================================================
 # claim_spec_cas — CAS one-shot 真线程并发 (W2 复核补测)
 # ============================================================
 

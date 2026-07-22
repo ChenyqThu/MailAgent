@@ -34,6 +34,7 @@ import type {
   ReportConfigPatch,
   ReportDetail,
   ReportListItem,
+  ReportPagedResult,
   ReportRunResult,
   ProjectProgressRunItem,
   AdminHealthData,
@@ -109,6 +110,7 @@ import {
   fetchAsDataUrl,
   request,
   requestRaw,
+  requestWithMeta,
   type QueryValue,
   type RequestOptions
 } from './http_client'
@@ -143,6 +145,15 @@ export class HttpApi implements MailApi {
   /** Thin instance wrapper around http_client.request bound to this baseUrl. */
   private req<T>(method: string, path: string, opts?: RequestOptions): Promise<T> {
     return request<T>(this.baseUrl, method, path, opts)
+  }
+
+  /** task 07-21 — same as `req()` but also surfaces `meta` (pagination's `total`). */
+  private reqWithMeta<T>(
+    method: string,
+    path: string,
+    opts?: RequestOptions
+  ): Promise<{ data: T; meta: Record<string, unknown> }> {
+    return requestWithMeta<T>(this.baseUrl, method, path, opts)
   }
 
   /** camelCase ListOpts → query record. Drops undefined; `internalIds`
@@ -821,21 +832,30 @@ export class HttpApi implements MailApi {
   }
 
   // V2.1 — 报告 Agent: serve-api /api/reports + /api/report-agents 端点（in-process
-  // ReportStore + wire.py，镜像 IPC report:*）。读优雅降级（失败返 []/null → /agents 页
-  // 空态，守 ReportApi「失败返 []/null」契约，与 ElectronApi 依赖 handler graceful 对齐）；
+  // ReportStore + wire.py，镜像 IPC report:*）。读优雅降级（失败返 []/null/{items:[],total:0}
+  // → /agents 页空态，守 ReportApi「失败返空」契约，与 ElectronApi 依赖 handler graceful 对齐）；
   // 写经 req() 解包 envelope（成功返 data，失败 throw，镜像 ElectronApi unwrap）。
+  // task 07-21：list/listRuns 改走 reqWithMeta（meta.total 供分页/总数展示），data 形状仍是
+  // bare 数组不变（后端向后兼容），前端把 {data, meta.total} 折成 { items, total }。
   report: ReportApi = {
     list: async (opts?: {
       cadence?: ReportCadence
       agentId?: string
       limit?: number
-    }): Promise<ReportListItem[]> => {
+      offset?: number
+    }): Promise<ReportPagedResult<ReportListItem>> => {
       try {
-        return await this.req<ReportListItem[]>('GET', '/reports', {
-          query: { cadence: opts?.cadence, agentId: opts?.agentId, limit: opts?.limit }
+        const { data, meta } = await this.reqWithMeta<ReportListItem[]>('GET', '/reports', {
+          query: {
+            cadence: opts?.cadence,
+            agentId: opts?.agentId,
+            limit: opts?.limit,
+            offset: opts?.offset
+          }
         })
+        return { items: data, total: typeof meta.total === 'number' ? meta.total : data.length }
       } catch {
-        return []
+        return { items: [], total: 0 }
       }
     },
     get: async (reportId: string): Promise<ReportDetail | null> => {
@@ -898,15 +918,22 @@ export class HttpApi implements MailApi {
     listRuns: async (opts?: {
       agentId?: string
       limit?: number
+      offset?: number
       state?: AgentRunState
-    }): Promise<AgentRunHistoryItem[]> => {
+    }): Promise<ReportPagedResult<AgentRunHistoryItem>> => {
       try {
-        return await this.req<AgentRunHistoryItem[]>('GET', '/agent-runs', {
-          query: { agentId: opts?.agentId, limit: opts?.limit, state: opts?.state }
+        const { data, meta } = await this.reqWithMeta<AgentRunHistoryItem[]>('GET', '/agent-runs', {
+          query: {
+            agentId: opts?.agentId,
+            limit: opts?.limit,
+            offset: opts?.offset,
+            state: opts?.state
+          }
         })
+        return { items: data, total: typeof meta.total === 'number' ? meta.total : data.length }
       } catch {
         // flag off → 404 / serve-api 不可达 → 空态（守 ReportApi「读失败返 []」契约）。
-        return []
+        return { items: [], total: 0 }
       }
     },
     pendingCount: async (): Promise<AgentRunPendingCount> => {

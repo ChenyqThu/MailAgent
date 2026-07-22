@@ -31,7 +31,7 @@ const mockGetConfig = vi.fn()
 vi.mock('@shared/hooks/useMailApi', () => ({
   useMailApi: () => ({
     report: {
-      list: vi.fn().mockResolvedValue([]),
+      list: vi.fn().mockResolvedValue({ items: [], total: 0 }),
       get: vi.fn().mockResolvedValue(null),
       getConfig: mockGetConfig,
       setConfig: vi.fn(),
@@ -39,7 +39,7 @@ vi.mock('@shared/hooks/useMailApi', () => ({
       delete: vi.fn(),
       createAgent: vi.fn(),
       deleteAgent: vi.fn(),
-      listRuns: vi.fn().mockResolvedValue([]),
+      listRuns: vi.fn().mockResolvedValue({ items: [], total: 0 }),
       toolOptions: vi.fn().mockResolvedValue({ tools: [], defaults: [] })
     },
     chat: { kosAvailable: vi.fn().mockResolvedValue(false) }

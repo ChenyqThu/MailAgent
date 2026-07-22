@@ -510,6 +510,7 @@ async def list_agent_runs(
     request: Request,
     agent_id: Optional[str] = Query(None, alias="agentId"),
     limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
     state: Optional[str] = Query(None),
 ):
     """agent_run 历史列表（Settings run 历史 UI 数据源，ADR D4/P6）。
@@ -521,6 +522,10 @@ async def list_agent_runs(
     ``state`` 可选过滤（S6 W1）：值域 = ``AGENT_RUN_STATES``（8 值域），服务端按
     ``_run_history_item`` 派生后**内存过滤**（对拉取的 limit 窗口过滤，量小）；非法值 → 400
     E_INVALID_ARG（防静默 typo）。过滤在 ``_annotate_auto_whitelist`` 前，只标注过滤后集。
+
+    task 07-21：``offset`` 补齐分页（透传给 ``list_agent_runs`` 的 SQL OFFSET）；meta 加
+    ``total``（同 agent_id filter 的 COUNT(*)，**不叠加** ``state`` —— 那是内存派生后过滤，
+    非 SQL-filterable，与 ``count_agent_runs`` 的口径保持一致，详见其 docstring）。
     """
     _require_flag()
     if state is not None and state not in AGENT_RUN_STATES:
@@ -530,11 +535,16 @@ async def list_agent_runs(
             http_status=400,
             source="agent-runs",
         )
-    jobs = get_job_repo().list_agent_runs(agent_id=agent_id, limit=limit)
+    repo = get_job_repo()
+    jobs = repo.list_agent_runs(agent_id=agent_id, limit=limit, offset=offset)
     items = [_run_history_item(j) for j in jobs]
     if state is not None:
         items = [it for it in items if it["state"] == state]
     _annotate_auto_whitelist(items)
+    total = repo.count_agent_runs(agent_id=agent_id)
     return success_envelope(
-        items, request=request, source="agent-runs", meta_extra={"count": len(items)}
+        items,
+        request=request,
+        source="agent-runs",
+        meta_extra={"count": len(items), "total": total, "limit": limit, "offset": offset},
     )

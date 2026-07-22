@@ -56,7 +56,7 @@ const mockDeleteAgent = vi.fn()
 vi.mock('@shared/hooks/useMailApi', () => ({
   useMailApi: () => ({
     report: {
-      list: vi.fn().mockResolvedValue([]),
+      list: vi.fn().mockResolvedValue({ items: [], total: 0 }),
       get: vi.fn().mockResolvedValue(null),
       getConfig: mockGetConfig,
       setConfig: mockSetConfig,

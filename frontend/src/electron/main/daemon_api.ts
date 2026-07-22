@@ -25,7 +25,7 @@
 // dev/pm2 态需手动起 `mailagent serve-api`, 否则写抛 E_NETWORK (诚实降级: 读仍 IPC 直读
 // SQLite → "能看不能改", plan §D1 不做本地 outbox 暂存)。
 
-import { request, requestRaw, type RequestOptions } from '@shared/api/http_client'
+import { request, requestRaw, requestWithMeta, type RequestOptions } from '@shared/api/http_client'
 
 import { getLocalApiToken, LOCAL_TOKEN_HEADER } from './local_token'
 
@@ -56,6 +56,19 @@ export function daemonRequest<T>(
   opts: RequestOptions = {}
 ): Promise<T> {
   return request<T>(resolveDaemonBaseUrl(), method, path, {
+    ...opts,
+    headers: { [LOCAL_TOKEN_HEADER]: getLocalApiToken(), ...(opts.headers ?? {}) }
+  })
+}
+
+/** task 07-21 — `daemonRequest` 的分页变体：不丢弃 envelope.meta（如 `total`/`limit`/
+ *  `offset`），供 `report:listRuns` IPC 透传给 renderer 做滚动加载/总数展示。 */
+export function daemonRequestWithMeta<T>(
+  method: string,
+  path: string,
+  opts: RequestOptions = {}
+): Promise<{ data: T; meta: Record<string, unknown> }> {
+  return requestWithMeta<T>(resolveDaemonBaseUrl(), method, path, {
     ...opts,
     headers: { [LOCAL_TOKEN_HEADER]: getLocalApiToken(), ...(opts.headers ?? {}) }
   })

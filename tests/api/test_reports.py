@@ -95,6 +95,56 @@ def test_list_reports_filter_cadence(report_client: TestClient) -> None:
     assert len(report_client.get("/api/reports?cadence=weekly").json()["data"]) == 0
 
 
+def test_list_reports_total_and_offset_pagination(
+    report_client: TestClient, report_db: Path
+) -> None:
+    """task 07-21：meta.total = 同 filter 条件 COUNT(*)，data 随 limit/offset 分页。"""
+    store = ReportStore(str(report_db))
+    for i in range(2, 6):  # report_db fixture 已种 1 份 2026-06-01，这里再加 4 份 daily。
+        rid = f"{_AGENT_ID}:daily:2026-06-{i:02d}"
+        store.create_report(
+            report_id=rid, agent_id=_AGENT_ID, cadence="daily",
+            report_date=f"2026-06-{i:02d}", window_start="s", window_end="e",
+        )
+        store.finish_report(rid, status="ready", headline=f"h{i}")
+
+    r1 = report_client.get("/api/reports", params={"limit": 2, "offset": 0})
+    env1 = r1.json()
+    assert env1["meta"]["total"] == 5
+    assert env1["meta"]["limit"] == 2
+    assert env1["meta"]["offset"] == 0
+    assert len(env1["data"]) == 2
+
+    r2 = report_client.get("/api/reports", params={"limit": 2, "offset": 4})
+    env2 = r2.json()
+    assert len(env2["data"]) == 1  # 最后一页只剩 1 条
+    assert env2["meta"]["total"] == 5
+
+    ids_seen = {it["id"] for it in env1["data"]} | {it["id"] for it in env2["data"]}
+    assert len(ids_seen) == 3  # 两页无重叠
+
+
+def test_list_reports_offset_out_of_range_returns_empty(report_client: TestClient) -> None:
+    r = report_client.get("/api/reports", params={"offset": 999})
+    env = r.json()
+    assert env["data"] == []
+    assert env["meta"]["total"] == 1  # 总数仍准确，只是这页越界拿不到数据
+
+
+def test_list_reports_total_empty_table(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db = tmp_path / "empty_report.db"
+    SyncStore(str(db))
+    store = ReportStore(str(db))
+    monkeypatch.setattr("src.api.routers.reports.get_report_store", lambda: store)
+    with TestClient(app, raise_server_exceptions=False) as c:
+        env = c.get("/api/reports").json()
+        assert env["data"] == []
+        assert env["meta"]["total"] == 0
+        assert env["meta"]["count"] == 0
+
+
 def test_get_report_detail(report_client: TestClient) -> None:
     """report:get parity：blocks_json→doc + counts_json→counts。"""
     r = report_client.get(f"/api/reports/{_REPORT_ID}")

@@ -104,6 +104,43 @@ def test_list_invalid_state_400(client, runs_env):
     assert r.json()["error"]["code"] == "E_INVALID_ARG"
 
 
+# ── 分页（task 07-21：offset + meta.total）──────────────────────────────────────
+
+
+def test_list_total_and_offset_pagination(client, runs_env):
+    for i in range(5):
+        _enqueue_run(runs_env.repo, "a")  # queued, 各带唯一 job_id
+
+    r1 = client.get("/api/agent-runs", params={"agentId": "a", "limit": 2, "offset": 0})
+    env1 = r1.json()
+    assert env1["meta"]["total"] == 5
+    assert env1["meta"]["limit"] == 2
+    assert env1["meta"]["offset"] == 0
+    assert len(env1["data"]) == 2
+
+    r2 = client.get("/api/agent-runs", params={"agentId": "a", "limit": 2, "offset": 4})
+    env2 = r2.json()
+    assert len(env2["data"]) == 1
+    assert env2["meta"]["total"] == 5
+
+    ids_seen = {it["jobId"] for it in env1["data"]} | {it["jobId"] for it in env2["data"]}
+    assert len(ids_seen) == 3  # 两页无重叠
+
+
+def test_list_offset_out_of_range_returns_empty(client, runs_env):
+    _enqueue_run(runs_env.repo, "a")
+    r = client.get("/api/agent-runs", params={"agentId": "a", "offset": 999})
+    env = r.json()
+    assert env["data"] == []
+    assert env["meta"]["total"] == 1  # 总数仍准确
+
+
+def test_list_total_empty_table(client, runs_env):
+    env = client.get("/api/agent-runs").json()
+    assert env["data"] == []
+    assert env["meta"]["total"] == 0
+
+
 # ── pending-count ───────────────────────────────────────────────────────────────
 
 

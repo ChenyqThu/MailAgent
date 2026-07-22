@@ -63,7 +63,7 @@ const mockListSkills = vi.fn()
 vi.mock('@shared/hooks/useMailApi', () => ({
   useMailApi: () => ({
     report: {
-      list: vi.fn().mockResolvedValue([]),
+      list: vi.fn().mockResolvedValue({ items: [], total: 0 }),
       get: vi.fn().mockResolvedValue(null),
       getConfig: mockGetConfig,
       setConfig: mockSetConfig,
@@ -141,7 +141,7 @@ function makeCustomCfg(over: Partial<ReportAgentConfig> = {}): ReportAgentConfig
 afterEach(() => {
   cleanup()
   vi.clearAllMocks()
-  mockListRuns.mockResolvedValue([])
+  mockListRuns.mockResolvedValue({ items: [], total: 0 })
   mockToolOptions.mockResolvedValue({
     tools: [
       { name: 'email_search', class: 'read' },
@@ -402,9 +402,12 @@ describe('CustomAgentDrawer — P2 tool_policy 按需发送（NULL 行不被静�
 
 describe('CustomAgentDrawer — run 历史', () => {
   test('run-now 按钮走 type:custom；paused_pending 显「等待审批」不显「已完成」', async () => {
-    mockListRuns.mockResolvedValue([
-      { jobId: 5, agentId: 'dms_helper', state: 'paused_pending', createdAt: 1_700_000_000 }
-    ])
+    mockListRuns.mockResolvedValue({
+      items: [
+        { jobId: 5, agentId: 'dms_helper', state: 'paused_pending', createdAt: 1_700_000_000 }
+      ],
+      total: 1
+    })
     mockRunNow.mockResolvedValue({ report_id: '9', status: 'generating', headline: '' })
     renderUi(<CustomAgentDrawer cfg={makeCustomCfg()} open onClose={() => {}} />)
     // 徽标：等待审批（永不渲染为成功）
@@ -557,22 +560,25 @@ describe('CustomAgentDrawer — 自动化策略（S5 W5b）', () => {
   })
 
   test('run 行免卡 badge：autoWhitelistedWrites>0 渲染 ×N；null（账本不可达）不渲染', async () => {
-    mockListRuns.mockResolvedValue([
-      {
-        jobId: 1,
-        agentId: 'dms_helper',
-        state: 'completed',
-        createdAt: 1_700_000_000,
-        autoWhitelistedWrites: 2
-      },
-      {
-        jobId: 2,
-        agentId: 'dms_helper',
-        state: 'completed',
-        createdAt: 1_700_000_100,
-        autoWhitelistedWrites: null
-      }
-    ])
+    mockListRuns.mockResolvedValue({
+      items: [
+        {
+          jobId: 1,
+          agentId: 'dms_helper',
+          state: 'completed',
+          createdAt: 1_700_000_000,
+          autoWhitelistedWrites: 2
+        },
+        {
+          jobId: 2,
+          agentId: 'dms_helper',
+          state: 'completed',
+          createdAt: 1_700_000_100,
+          autoWhitelistedWrites: null
+        }
+      ],
+      total: 2
+    })
     renderUi(<CustomAgentDrawer cfg={makeCustomCfg()} open onClose={() => {}} />)
     expect(await screen.findByText('自动放行 ×2')).toBeTruthy()
     // null 行不渲染 badge（不渲染 ≠ 0 次）—— 全列表恰一个 badge

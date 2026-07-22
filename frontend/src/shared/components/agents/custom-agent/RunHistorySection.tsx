@@ -6,10 +6,7 @@ import { useTranslation } from 'react-i18next'
 import { useNavigate } from '@tanstack/react-router'
 
 import { requestOpenAgentSession } from '@shared/state/ai-chat-panel'
-import {
-  AnimatedBadge,
-  type AnimatedBadgeStatus
-} from '@shared/components/ui/animated-badge'
+import { AnimatedBadge, type AnimatedBadgeStatus } from '@shared/components/ui/animated-badge'
 import { PendingDot } from '../AgentPendingBadge'
 import type { AgentRunHistoryItem, AgentRunState } from '@shared/api/types'
 import { ReportIcon } from '../primitives'
@@ -125,7 +122,7 @@ export function RunStateBadge({ state }: { state: AgentRunState }): React.ReactE
 export function RunHistorySection({ agentId }: { agentId: string }): React.ReactElement {
   const { t } = useTranslation()
   const navigate = useNavigate()
-  const { runs, isLoading } = useAgentRuns(agentId)
+  const { runs, isLoading, hasMore, isLoadingMore, loadMore } = useAgentRuns(agentId)
   const { run, isRunning } = useRunNow()
   // run-now 失败（预算耗尽 E_BUDGET / flag off / gateway 不可达）→ 展示后端 detail，
   // 不静默吞（否则用户点「立即运行」无任何反馈）。
@@ -304,6 +301,29 @@ export function RunHistorySection({ agentId }: { agentId: string }): React.React
               )}
             </div>
           ))}
+          {/* task 07-21 — 「加载更多」触底分页（从简：抽屉里用按钮，非滚动预取）。 */}
+          {hasMore && (
+            <button
+              type="button"
+              onClick={() => loadMore()}
+              disabled={isLoadingMore}
+              className="flex items-center justify-center"
+              style={{
+                fontFamily: 'inherit',
+                fontSize: 12,
+                padding: '7px 12px',
+                borderRadius: 8,
+                cursor: isLoadingMore ? 'wait' : 'pointer',
+                color: 'rgb(var(--ink-fg-2))',
+                background: 'rgb(var(--ink-1) / 0.5)',
+                border: '1px solid rgb(var(--ink-border-soft))'
+              }}
+            >
+              {isLoadingMore
+                ? t('agents.custom.runs.loadMoreLoading')
+                : t('agents.custom.runs.loadMore')}
+            </button>
+          )}
         </div>
       )}
     </div>

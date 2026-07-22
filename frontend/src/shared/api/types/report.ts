@@ -392,13 +392,22 @@ export interface ChatOpennessFlags {
   execToolsEnabled?: boolean
 }
 
+/** task 07-21 — 分页读结果（items + 同 filter 条件下的 total）。列表页滚动预取/「加载
+ *  更多」与总数展示都靠 total 判断 hasMore（items.length < total）。 */
+export interface ReportPagedResult<T> {
+  items: T[]
+  total: number
+}
+
 export interface ReportApi {
-  /** 报告列表（不含 blocks，按 report_date 倒序）。失败返 []。 */
+  /** 报告列表（不含 blocks，按 report_date 倒序）。失败返 { items: [], total: 0 }。
+   *  offset 分页（task 07-21）：不传 = 首页。 */
   list(opts?: {
     cadence?: ReportCadence
     agentId?: string
     limit?: number
-  }): Promise<ReportListItem[]>
+    offset?: number
+  }): Promise<ReportPagedResult<ReportListItem>>
   /** 单份报告详情（含解析后的 doc）。不存在返 null。 */
   get(reportId: string): Promise<ReportDetail | null>
   /** agent 配置列表（v1 一个 daily agent）。失败返 []。 */
@@ -418,14 +427,16 @@ export interface ReportApi {
   createAgent(input: ReportAgentCreateInput): Promise<ReportAgentConfig>
   /** 删除一行 agent 配置（写, needs auth）。 */
   deleteAgent(agentId: string): Promise<{ deleted: string }>
-  /** S5 — custom agent run 历史（读）。GET /api/agent-runs；flag off / 失败返 []（守读优雅降级）。
-   *  state 由后端 derive_agent_run_state 单源投影，前端不自行推导。S6 W1：可选 state 过滤
-   *  （8 值域，后端服务端派生后过滤）。 */
+  /** S5 — custom agent run 历史（读）。GET /api/agent-runs；flag off / 失败返
+   *  { items: [], total: 0 }（守读优雅降级）。state 由后端 derive_agent_run_state 单源投影，
+   *  前端不自行推导。S6 W1：可选 state 过滤（8 值域，后端服务端派生后过滤）。offset 分页
+   *  （task 07-21）：不传 = 首页；total 不叠加 state 过滤（详见后端 count_agent_runs 口径）。 */
   listRuns(opts?: {
     agentId?: string
     limit?: number
+    offset?: number
     state?: AgentRunState
-  }): Promise<AgentRunHistoryItem[]>
+  }): Promise<ReportPagedResult<AgentRunHistoryItem>>
   /** S6 W1 — 待审批（paused_pending）计数（读）。GET /api/agent-runs/pending-count；
    *  flag off / 失败返 { total: 0, byAgent: {} }（守读优雅降级）。 */
   pendingCount(): Promise<AgentRunPendingCount>

@@ -55,12 +55,20 @@ async def list_reports(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ):
-    """报告列表（不含 blocks_json）。镜像 report:list → ReportListItem[]。"""
+    """报告列表（不含 blocks_json）。镜像 report:list → ReportListItem[]。
+
+    task 07-21：meta 加 ``total``（同 cadence/agent_id filter 的 COUNT(*)，一次额外查询）+
+    ``limit``/``offset`` 回显 —— 前端据此判断 hasMore / 展示总数，``data`` 形状不变（向后兼容）。
+    """
     store = get_report_store()
     rows = store.list_reports(cadence=cadence, agent_id=agent_id, limit=limit, offset=offset)
     items = [wire.report_to_list_item(r) for r in rows]
+    total = store.count_reports(cadence=cadence, agent_id=agent_id)
     return success_envelope(
-        items, request=request, source="sqlite", meta_extra={"count": len(items)}
+        items,
+        request=request,
+        source="sqlite",
+        meta_extra={"count": len(items), "total": total, "limit": limit, "offset": offset},
     )
 
 

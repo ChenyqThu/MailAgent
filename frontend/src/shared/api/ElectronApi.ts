@@ -48,6 +48,7 @@ import type {
   ReportConfigPatch,
   ReportDetail,
   ReportListItem,
+  ReportPagedResult,
   ReportRunResult,
   ProjectProgressRunItem,
   CleanupDeadLetterOpts,
@@ -867,8 +868,9 @@ class ElectronReportApi implements ReportApi {
     cadence?: ReportCadence
     agentId?: string
     limit?: number
-  }): Promise<ReportListItem[]> {
-    return (await invoker()('report:list', opts ?? {})) as ReportListItem[]
+    offset?: number
+  }): Promise<ReportPagedResult<ReportListItem>> {
+    return (await invoker()('report:list', opts ?? {})) as ReportPagedResult<ReportListItem>
   }
   async get(reportId: string): Promise<ReportDetail | null> {
     return (await invoker()('report:get', reportId)) as ReportDetail | null
@@ -912,9 +914,13 @@ class ElectronReportApi implements ReportApi {
   async listRuns(opts?: {
     agentId?: string
     limit?: number
+    offset?: number
     state?: AgentRunState
-  }): Promise<AgentRunHistoryItem[]> {
-    return (await invoker()('report:listRuns', opts ?? {})) as AgentRunHistoryItem[]
+  }): Promise<ReportPagedResult<AgentRunHistoryItem>> {
+    return (await invoker()(
+      'report:listRuns',
+      opts ?? {}
+    )) as ReportPagedResult<AgentRunHistoryItem>
   }
   async pendingCount(): Promise<AgentRunPendingCount> {
     return (await invoker()('report:pendingCount')) as AgentRunPendingCount

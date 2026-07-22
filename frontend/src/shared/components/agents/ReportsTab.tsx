@@ -223,17 +223,26 @@ function ReportListRow({
   )
 }
 
+// 距底多少 px 触发预取下一页（EmailList 70%/8 行阈值同款思路，这里数据量小，固定距离足够）。
+const PREFETCH_THRESHOLD_PX = 200
+
 function ReportList({
   items,
+  total,
   selectedId,
   onSelect,
   onDelete,
   filter,
   onFilter,
   fluid,
-  loading
+  loading,
+  hasMore,
+  isFetchingMore,
+  onFetchMore
 }: {
   items: ReportListItem[]
+  /** 同 cadence filter 下的总数（task 07-21，后端 meta.total）；未知先显 items.length。 */
+  total: number
   selectedId: string | null
   onSelect: (id: string) => void
   onDelete: (id: string) => void
@@ -241,8 +250,18 @@ function ReportList({
   onFilter: (f: string) => void
   fluid?: boolean
   loading: boolean
+  hasMore: boolean
+  isFetchingMore: boolean
+  onFetchMore: () => void
 }): React.ReactElement {
   const { t } = useTranslation()
+  const onScroll = (e: React.UIEvent<HTMLDivElement>): void => {
+    if (!hasMore || isFetchingMore) return
+    const el = e.currentTarget
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - PREFETCH_THRESHOLD_PX) {
+      onFetchMore()
+    }
+  }
   return (
     <div
       style={{
@@ -274,7 +293,7 @@ function ReportList({
               color: 'rgb(var(--ink-fg-3))'
             }}
           >
-            {items.length}
+            {total || items.length}
           </span>
         </div>
         {/* v0.7.2 — 统一 SegmentedControl（视觉与原 .seg + .on 一致 + 滑动指示器）。 */}
@@ -287,7 +306,11 @@ function ReportList({
           options={CADENCE_FILTERS.map(([k]) => ({ value: k, label: t(`agents.cadence.${k}`) }))}
         />
       </div>
-      <div className="scrollbar-thin" style={{ flex: 1, overflowY: 'auto', padding: '8px 8px' }}>
+      <div
+        className="scrollbar-thin"
+        style={{ flex: 1, overflowY: 'auto', padding: '8px 8px' }}
+        onScroll={onScroll}
+      >
         {loading && items.length === 0 ? (
           <div style={{ padding: '24px 14px', fontSize: 13, color: 'rgb(var(--ink-fg-3))' }}>
             {t('agents.reports.loading')}
@@ -307,6 +330,18 @@ function ReportList({
                 onDelete={() => onDelete(it.id)}
               />
             ))}
+            {isFetchingMore && (
+              <div
+                style={{
+                  padding: '10px 14px',
+                  fontSize: 12,
+                  color: 'rgb(var(--ink-fg-3))',
+                  textAlign: 'center'
+                }}
+              >
+                {t('agents.reports.loadingMore')}
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -630,7 +665,7 @@ export function ReportsTab(): React.ReactElement {
   const { t } = useTranslation()
   const [filter, setFilter] = useState<string>('all')
   const cadence = filter === 'all' ? undefined : (filter as ReportCadence)
-  const { items, isLoading } = useReportList(cadence)
+  const { items, total, isLoading, hasMore, isFetchingMore, fetchMore } = useReportList(cadence)
   // 用户显式点选；派生有效选中（pick 仍在列表→用它，否则回落第一份），免 set-state-in-effect。
   const [picked, setPicked] = useState<string | null>(null)
   const [mobileDetail, setMobileDetail] = useState(false)
@@ -713,12 +748,16 @@ export function ReportsTab(): React.ReactElement {
         ) : (
           <ReportList
             items={items}
+            total={total}
             selectedId={selectedId}
             onSelect={onSelect}
             onDelete={onDelete}
             filter={filter}
             onFilter={setFilter}
             loading={isLoading}
+            hasMore={hasMore}
+            isFetchingMore={isFetchingMore}
+            onFetchMore={fetchMore}
             fluid
           />
         )}
@@ -731,12 +770,16 @@ export function ReportsTab(): React.ReactElement {
     <div style={{ position: 'relative', display: 'flex', height: '100%', minHeight: 0 }}>
       <ReportList
         items={items}
+        total={total}
         selectedId={selectedId}
         onSelect={onSelect}
         onDelete={onDelete}
         filter={filter}
         onFilter={setFilter}
         loading={isLoading}
+        hasMore={hasMore}
+        isFetchingMore={isFetchingMore}
+        onFetchMore={fetchMore}
       />
       {detail}
       {panel}

@@ -284,6 +284,30 @@ class ReportStore:
             ).fetchall()
             return [dict(r) for r in rows]
 
+    def count_reports(
+        self,
+        *,
+        cadence: Optional[str] = None,
+        agent_id: Optional[str] = None,
+    ) -> int:
+        """``list_reports`` 同 filter 条件（cadence/agent_id）的 COUNT(*)。
+
+        分页 total（task 07-21）：与 ``list_reports`` 共用同一套 WHERE 子句，供路由把
+        「同 filter 条件下一共有多少条」回传给前端做总数展示 / hasMore 判断。
+        """
+        where: List[str] = []
+        params: List[Any] = []
+        if cadence:
+            where.append("cadence = ?")
+            params.append(cadence)
+        if agent_id:
+            where.append("agent_id = ?")
+            params.append(agent_id)
+        where_sql = (" WHERE " + " AND ".join(where)) if where else ""
+        with self._connection() as conn:
+            row = conn.execute(f"SELECT COUNT(*) AS n FROM report{where_sql}", params).fetchone()
+            return int(row["n"]) if row else 0
+
     def list_reports_in_range(
         self,
         *,

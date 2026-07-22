@@ -373,30 +373,54 @@ class AsyncJobRepository:
             conn.close()
 
     def list_agent_runs(
-        self, *, agent_id: Optional[str] = None, limit: int = 20
+        self, *, agent_id: Optional[str] = None, limit: int = 20, offset: int = 0
     ) -> list[AsyncJob]:
         """列出 agent_run 历史行 (按 created_at desc)——S5 run 历史读侧唯一数据源。
 
         agent_id 非空 → 只返回该 agent (target_key 过滤); None → 全部 agent_run。limit clamp
-        进 [1, 100]。返回 ``AsyncJob`` 投影 —— 读态 (8 值域) 由调用方经
-        ``src.agents.run_state.derive_agent_run_state`` 派生, **不在此推导** (纯查询)。
+        进 [1, 100]；offset clamp >= 0（task 07-21 分页）。返回 ``AsyncJob`` 投影 —— 读态
+        (8 值域) 由调用方经 ``src.agents.run_state.derive_agent_run_state`` 派生, **不在此推导**
+        (纯查询)。
         """
         lim = max(1, min(100, limit))
+        off = max(0, offset)
         conn = self._connect()
         try:
             if agent_id:
                 rows = conn.execute(
                     "SELECT * FROM async_jobs WHERE job_type='agent_run' AND target_key=? "
-                    "ORDER BY created_at DESC, job_id DESC LIMIT ?",
-                    (agent_id, lim),
+                    "ORDER BY created_at DESC, job_id DESC LIMIT ? OFFSET ?",
+                    (agent_id, lim, off),
                 ).fetchall()
             else:
                 rows = conn.execute(
                     "SELECT * FROM async_jobs WHERE job_type='agent_run' "
-                    "ORDER BY created_at DESC, job_id DESC LIMIT ?",
-                    (lim,),
+                    "ORDER BY created_at DESC, job_id DESC LIMIT ? OFFSET ?",
+                    (lim, off),
                 ).fetchall()
             return [self._row_to_job(r) for r in rows]
+        finally:
+            conn.close()
+
+    def count_agent_runs(self, *, agent_id: Optional[str] = None) -> int:
+        """``list_agent_runs`` 同 agent_id filter 的 COUNT(*)（task 07-21 分页 total）。
+
+        只按 agent_id 过滤（与 ``list_agent_runs`` 的 SQL-filterable 条件一致）——router 侧
+        额外的 ``state`` 过滤是在 ``derive_agent_run_state`` 派生之后的内存过滤，不参与此计数。
+        """
+        conn = self._connect()
+        try:
+            if agent_id:
+                row = conn.execute(
+                    "SELECT COUNT(*) AS n FROM async_jobs "
+                    "WHERE job_type='agent_run' AND target_key=?",
+                    (agent_id,),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT COUNT(*) AS n FROM async_jobs WHERE job_type='agent_run'"
+                ).fetchone()
+            return int(row["n"]) if row else 0
         finally:
             conn.close()
 
