@@ -227,7 +227,11 @@ def test_build_reply_quote_wrapped_in_marker():
     assert q_html.startswith(f'<div {MARKER}>')
     assert q_html.endswith("</div>")
     assert "写道" in q_html
-    assert "<blockquote" in q_html
+    # 引用形态 = 分割线 + 引用头 + 原文原样 (不包 blockquote — 其样式会污染原文, 见
+    # _build_reply_quote docstring); 原文 HTML 必须逐字保留。
+    assert "<blockquote" not in q_html
+    assert "<hr" in q_html
+    assert "<p>orig body</p>" in q_html
     assert "写道" in q_text  # plain text 不带 marker (HTML 专属)
 
 

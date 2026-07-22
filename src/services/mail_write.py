@@ -589,9 +589,11 @@ def _build_reply_quote(
 ) -> tuple[str, str]:
     """构造回复引用块 (plain + html): 像 Mail.app / Outlook 一样在回复正文下方附原邮件.
 
-    与 forward 的 "Forwarded message" 头不同, reply 用 "在 <date>, <sender> 写道:" 头 +
-    blockquote 包原文 (Outlook / Apple Mail 通用回复引用形态). 原邮件正文本身已含整条线程
-    (Exchange 每次回复嵌套前文), 故引这一层即带上全部历史.
+    与 forward 的 "Forwarded message" 头不同, reply 用 "在 <date>, <sender> 写道:" 头.
+    原文 HTML **原样拼接不包 blockquote** — blockquote 的 border-left + color:#555 会
+    覆盖原文自身样式 (未显式设色的文字全被染灰), owner 反馈"引用丢文字格式"即此;
+    改为 分割线 (hr) + 引用头 + 原文, 原文字节不动 (Outlook 桌面端同款形态)。
+    原邮件正文本身已含整条线程 (Exchange 每次回复嵌套前文), 故引这一层即带上全部历史.
     """
     import html as _html
 
@@ -599,17 +601,13 @@ def _build_reply_quote(
     date = (record.get("date_received") or "").strip()
 
     intro_text = f"在 {date}，{sender} 写道：\n\n{body_text or ''}"
-    header_html = (
-        '<div style="color:#555;font-size:13px;margin-top:16px">'
-        f"在 {_html.escape(date)}，{_html.escape(sender)} 写道：</div>"
-    )
     quoted = body_html or f"<pre>{_html.escape(body_text or '')}</pre>"
     intro_html = (
         f'<div {QUOTE_MARKER_ATTR}="1">'
-        f"{header_html}"
-        '<blockquote style="margin:8px 0 0;padding-left:12px;'
-        'border-left:2px solid #ccc;color:#555">'
-        f"{quoted}</blockquote></div>"
+        '<hr style="border:none;border-top:1px solid #ccc;margin:16px 0 8px">'
+        '<div style="color:#555;font-size:13px;margin:0 0 12px">'
+        f"在 {_html.escape(date)}，{_html.escape(sender)} 写道：</div>"
+        f"{quoted}</div>"
     )
     return intro_text, intro_html
 
