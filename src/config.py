@@ -611,6 +611,21 @@ class Config(BaseSettings):
             "v24 迁移建表 (CREATE ... IF NOT EXISTS + 幂等回填)。"
         ),
     )
+    # 搜索批次 1 PR2 (2026-07-22): 含 CJK 混合 query 的拉丁 token 双 lane。
+    # pydantic v2 按字段名映射 env → SEARCH_LATIN_TRIGRAM_ENABLED。
+    search_latin_trigram_enabled: bool = Field(
+        default=True,
+        description=(
+            "含 CJK 的裸全文 query 中, >=3 字符拉丁/数字 token 是否在 unicode61 整词 MATCH "
+            "之外并行查 email_body_fts_trigram 子串 (组内并集, RRF 融合, 整词命中双 lane 叠加"
+            "天然排前)。修复连写文档漏召回: 正文 'Omada固件升级' (无空格) 被 unicode61 切成"
+            "单 token → query 'Omada 固件升级' 的 MATCH Omada 零命中 → AND 交集清空整查询。"
+            "默认 True; 显式 false 应急回退 = 拉丁 token 回单 unicode lane (PR2 前行为, 逐字节)。"
+            "仅影响 SEARCH_TRIGRAM_ENABLED=true 且 query 含 CJK 的裸查路径; 纯英文裸查 / "
+            "parsed / raw / recipient 路径不受影响。SEARCH_TRIGRAM_ENABLED=false 时整个 "
+            "trigram 路由不存在, 本开关无意义。"
+        ),
+    )
 
     # =========================================================================
     # Sprint 15: SQLite SSoT inversion (email_outbox + FanoutWorker)

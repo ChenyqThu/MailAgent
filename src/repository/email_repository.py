@@ -439,6 +439,9 @@ _IN_CHUNK_SIZE = 900
 # 对每个「裸全文 term」(无列限定 / 非短语; term 已按空格切分, 无内部空格) 按
 # 「是否含 CJK + 整 term 字符长度」分路由:
 #   - 无 CJK (纯英文/数字/符号)  → unicode (主表 email_body_fts MATCH + smart_query_transform)
+#       PR2 (搜索批次1): 含 CJK 的混合 query 里, >=3 字符的 unicode term 在执行层追加
+#       trigram 子串 lane (组内并集, flag SEARCH_LATIN_TRIGRAM_ENABLED 默认开) —— 路由
+#       分类本身不变, 见 _search_email_bodies_trigram。
 #   - 含 CJK 且整 term >= 3 字    → trigram, mode='match' (email_body_fts_trigram MATCH 整串短语)
 #   - 含 CJK 且整 term = 2 字     → trigram, mode='like' (trigram 表 body/subject/sender LIKE '%整串%')
 #   - 含 CJK 且整 term = 1 字     → too_short (不查 + warning cjk_too_short:<词>)
@@ -678,6 +681,7 @@ class EmailRepository:
         attachment_store: Optional[AttachmentStore] = None,
         *,
         trigram_enabled: Optional[bool] = None,
+        latin_trigram_enabled: Optional[bool] = None,
     ):
         self.db_path = Path(db_path)
         self.attachment_store = attachment_store or AttachmentStore()
@@ -685,6 +689,8 @@ class EmailRepository:
         # (默认 False; 读 config 失败/缺 env → False, 保证测试 / CLI 无 .env 也能起)。
         # 显式传 True/False → 测试 / caller 直控 (per-case trigram fixture 用)。
         self._trigram_enabled_override = trigram_enabled
+        # PR2: 含 CJK 混合 query 中 >=3 字符拉丁 token 的双 lane 开关 (镜像上面的模式)。
+        self._latin_trigram_enabled_override = latin_trigram_enabled
         # MED-2: AI 投影 schema 探测的实例级 memo (旧/裸/测试库可能无 llm_processing 表 /
         # email_metadata.ai_priority v14 列)。schema 进程内静态 (迁移在 init 时已跑完) →
         # 首次探测后缓存, 免每次搜索重查 sqlite_master / pragma。
@@ -710,6 +716,24 @@ class EmailRepository:
         try:
             from src.config import config as _config
             return bool(getattr(_config, "search_trigram_enabled", False))
+        except Exception:
+            return False
+
+    @property
+    def latin_trigram_enabled(self) -> bool:
+        """PR2: 含 CJK 混合 query 中 >=3 字符拉丁 token 的双 lane 开关。
+
+        构造时显式传了 ``latin_trigram_enabled=`` → 直用；否则懒读
+        ``config.search_latin_trigram_enabled``（默认 True；读 config 失败 → False，
+        镜像 ``trigram_enabled`` 的降级语义）。仅在 trigram 路由内生效
+        （``trigram_enabled=True`` 且裸查含 CJK）；trigram 总开关关闭时整个
+        trigram 路由不存在，本开关无意义。
+        """
+        if self._latin_trigram_enabled_override is not None:
+            return self._latin_trigram_enabled_override
+        try:
+            from src.config import config as _config
+            return bool(getattr(_config, "search_latin_trigram_enabled", False))
         except Exception:
             return False
 
@@ -1532,10 +1556,14 @@ class EmailRepository:
           too_short); 含 CJK 的整 term 整体走 trigram 子串 (不拆段)。
         - 每个 term 产出一个 AND 组 (id 级 lane, 全召回); 组间交集 / metadata 后置过滤 /
           RRF 融合统一由 ``_merge_lane_groups`` 单点完成, ORDER BY score DESC, date DESC。
+        - PR2: ``latin_trigram_enabled`` 时, unicode route 的 >=3 字符拉丁 token 组内
+          追加 body-trigram 子串 lane (组内并集), 修复连写文档 (正文 'Omada固件升级')
+          漏召回; flag off = 拉丁 token 回单 unicode lane (PR2 前行为, 逐字节)。
         - 返回 None 表示「不接管, 回退老 unicode fast-path」(例如全部 term 都 too_short
           但仍有 1 字拦截 warning 要透传 → 仍返回空结果 result 而非 None)。
 
-        英文 / 列级 FTS / 附件融合不在此路径 (那些走 parsed / 老 fast-path), 故 T5/T6 不受影响。
+        纯英文裸查 / 列级 FTS / 附件融合不在此路径 (那些走 parsed / 老 fast-path), 故 T5/T6
+        不受影响 (本路径只在 query 含 CJK 时被走到)。
         """
         terms = query.split()
         routes, plan_warnings = build_search_plan(terms)
@@ -1555,19 +1583,46 @@ class EmailRepository:
 
         conn = self._connect()
         try:
-            # 每个 term 一个 AND 组 (组内目前单 lane; 后续批次往组里追加 trigram/附件
-            # lane 即成小 diff)。候选全召回不截断 (NS-3: 交集前截断会丢真命中)。
+            # 每个 term 一个 AND 组 (后续批次往组里追加附件 lane 即成小 diff)。
+            # 候选全召回不截断 (NS-3: 交集前截断会丢真命中)。
+            # PR2: route='unicode' 且 token >=3 字符且 latin flag 开 → 组内追加
+            # body-trigram 子串 lane (组内并集: unicode61 整词/前缀命中 ∪ trigram
+            # 子串命中)。修复连写文档漏召回: 正文 'Omada固件升级' (无空格) 被
+            # unicode61 切成单 token → MATCH Omada 零命中 → 旧单 lane 组空 →
+            # AND 交集清空整查询; 双 lane 后 trigram 子串兜住。整词命中同时出现
+            # 在两条 lane → RRF 叠加 → 天然排前于仅子串命中。<3 字符拉丁 token
+            # 保持单 unicode lane (trigram MATCH <3 字符无召回, 硬约束)。
             lane_groups: list[list[_SearchLane]] = []
+            latin_dual = self.latin_trigram_enabled
             for route in routes:
+                lanes: list[_SearchLane] = []
                 ids = self._trigram_term_candidate_ids(
                     conn, route, query_for_log=query
                 )
-                if not ids:
-                    # 任一 term 无候选 → AND 交集为空, 直接空结果 (warning 仍透传)。
+                if ids:
+                    lanes.append(_SearchLane(
+                        f"body-{route.route}", [(iid, None) for iid in ids]
+                    ))
+                if (
+                    latin_dual
+                    and route.route == "unicode"
+                    and len(route.original) >= 3
+                ):
+                    trigram_ids = self._fts_match_ids(
+                        conn,
+                        "email_body_fts_trigram",
+                        _quote_fts_token(route.original),
+                        query_for_log=query,
+                    )
+                    if trigram_ids:
+                        lanes.append(_SearchLane(
+                            "body-trigram-latin",
+                            [(iid, None) for iid in trigram_ids],
+                        ))
+                if not lanes:
+                    # 该 term 组无任何候选 → AND 交集为空, 直接空结果 (warning 仍透传)。
                     return EmailSearchResult([], query, warnings)
-                lane_groups.append([
-                    _SearchLane(f"body-{route.route}", [(iid, None) for iid in ids])
-                ])
+                lane_groups.append(lanes)
 
             merged = self._merge_lane_groups(
                 conn,

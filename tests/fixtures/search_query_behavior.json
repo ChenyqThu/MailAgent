@@ -260,6 +260,40 @@
       "ai_priority": "🟢 一般",
       "body_markdown": "字面下划线 项_ 后缀通配守卫样本。",
       "attachments": []
+    },
+    {
+      "internal_id": 15,
+      "subject": "固件升级公告",
+      "sender": "victor@example.com",
+      "sender_name": "Victor",
+      "to_addr": "netops@example.com",
+      "cc_addr": "",
+      "date_received": "2026-06-02T10:00:00+08:00",
+      "mailbox": "存档",
+      "is_read": 1,
+      "is_flagged": 0,
+      "is_pinned": 0,
+      "is_important": 0,
+      "ai_priority": "🟢 一般",
+      "body_markdown": "Omada固件升级公告已发布，请查收。",
+      "attachments": []
+    },
+    {
+      "internal_id": 16,
+      "subject": "Omada release",
+      "sender": "victor@example.com",
+      "sender_name": "Victor",
+      "to_addr": "netops@example.com",
+      "cc_addr": "",
+      "date_received": "2026-06-02T11:00:00+08:00",
+      "mailbox": "存档",
+      "is_read": 1,
+      "is_flagged": 0,
+      "is_pinned": 0,
+      "is_important": 0,
+      "ai_priority": "🟢 一般",
+      "body_markdown": "Omada 固件升级说明文档已上传。",
+      "attachments": []
     }
   ],
   "cases": [
@@ -459,6 +493,8 @@
         12,
         14,
         11,
+        16,
+        15,
         3,
         2,
         5,
@@ -1092,6 +1128,77 @@
       "trigram": true,
       "expect_ids": [
         14
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "latin_dual_lane_connected_doc_and_ranking",
+      "query": "Omada 固件升级",
+      "trigram": true,
+      "expect_ids": [
+        16,
+        15
+      ],
+      "order": "exact",
+      "expect_warnings": 0,
+      "expect_snippet_nonempty": [
+        16,
+        15
+      ],
+      "expect_snippet_contains": {
+        "16": "<mark>Omada</mark>",
+        "15": "<mark>Omada固件升级</mark>"
+      }
+    },
+    {
+      "name": "latin_dual_lane_substring_hit",
+      "query": "公告 mada",
+      "trigram": true,
+      "expect_ids": [
+        15
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "latin_dual_lane_and_semantics_kept",
+      "query": "Omada 不存在词组",
+      "trigram": true,
+      "expect_ids": [],
+      "expect_warnings": 0
+    },
+    {
+      "name": "latin_dual_lane_short_token_stays_unicode",
+      "query": "固件 ab",
+      "trigram": true,
+      "expect_ids": [],
+      "expect_warnings": 0
+    },
+    {
+      "name": "latin_dual_lane_flag_off_reverts",
+      "query": "Omada 固件升级",
+      "trigram": true,
+      "latin_trigram": false,
+      "expect_ids": [
+        16
+      ],
+      "order": "exact",
+      "expect_warnings": 0
+    },
+    {
+      "name": "latin_dual_lane_master_flag_off_reverts",
+      "query": "Omada 固件升级",
+      "trigram": false,
+      "expect_ids": [
+        16
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "latin_query_connected_term_whole_trigram_pin",
+      "query": "omada固件",
+      "trigram": true,
+      "expect_ids": [
+        15
       ],
       "expect_warnings": 0
     }

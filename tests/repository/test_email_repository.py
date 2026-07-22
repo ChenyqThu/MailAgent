@@ -1029,6 +1029,75 @@ class TestSearchEmailBodiesSmart:
         assert 776 in ids
         assert 777 not in ids
 
+    def _seed_latin_dual_lane(self, fresh_db: Path):
+        """PR2 种子: 连写文档 (拉丁 token 嵌在 'Omada固件升级' 连续串里, unicode61
+        零召回) + 整词文档 (含独立 'Omada' token)。subject/sender 均不含独立 Omada,
+        保证 780 只能靠 trigram 子串 lane 命中。"""
+        repo = EmailRepository(db_path=str(fresh_db))
+        _insert_metadata_full(
+            fresh_db, 780,
+            subject="固件升级公告",
+            sender="victor@example.com",
+            mailbox="收件箱",
+        )
+        repo.commit_email_with_body(
+            780,
+            BodyPayload(html="", markdown="Omada固件升级公告已发布，请查收。", body_format="html"),
+            [],
+        )
+        _insert_metadata_full(
+            fresh_db, 781,
+            subject="Omada release",
+            sender="victor@example.com",
+            mailbox="收件箱",
+        )
+        repo.commit_email_with_body(
+            781,
+            BodyPayload(html="", markdown="Omada 固件升级说明文档已上传。", body_format="html"),
+            [],
+        )
+
+    def test_latin_dual_lane_recalls_connected_doc(self, fresh_db: Path):
+        """PR2: 含 CJK 混合 query 里 >=3 字符拉丁 token 双 lane (unicode61 ∪ trigram
+        子串) —— 连写文档 780 不再被 unicode61 零召回拖垮 AND 交集; 整词文档 781
+        双 lane RRF 叠加排前。"""
+        self._seed_latin_dual_lane(fresh_db)
+        repo_on = EmailRepository(
+            db_path=str(fresh_db), trigram_enabled=True, latin_trigram_enabled=True
+        )
+        ids = [
+            h.internal_id
+            for h in repo_on.search_email_bodies_smart("Omada 固件升级", limit=10)
+        ]
+        assert ids == [781, 780]
+
+    def test_latin_dual_lane_flag_off_reverts_to_pre_pr2(self, fresh_db: Path):
+        """SEARCH_LATIN_TRIGRAM_ENABLED=false → 拉丁 token 回单 unicode lane, 与 PR2
+        前行为逐字节一致: 整词文档 781 仍命中, 连写文档 780 不可达; 拉丁 token
+        unicode61 零召回的 query 整体空 (旧 AND 交集清空语义)。同库同 query 对比
+        两种 flag 实例, 锁回退门。"""
+        self._seed_latin_dual_lane(fresh_db)
+        repo_off = EmailRepository(
+            db_path=str(fresh_db), trigram_enabled=True, latin_trigram_enabled=False
+        )
+        repo_on = EmailRepository(
+            db_path=str(fresh_db), trigram_enabled=True, latin_trigram_enabled=True
+        )
+        # PR2 前: unicode61 MATCH 'Omada' 只命中 781 → 交集 {781}
+        assert [
+            h.internal_id
+            for h in repo_off.search_email_bodies_smart("Omada 固件升级", limit=10)
+        ] == [781]
+        # PR2 前: 'mada' unicode61 零召回 → 整查询空; flag off 保持, flag on 兜住 780
+        assert repo_off.search_email_bodies_smart("公告 mada", limit=10) == []
+        assert [
+            h.internal_id
+            for h in repo_on.search_email_bodies_smart("公告 mada", limit=10)
+        ] == [780]
+        # <3 字符拉丁 token 不加 trigram lane: 两种 flag 下行为一致 (均空)
+        assert repo_off.search_email_bodies_smart("固件 ab", limit=10) == []
+        assert repo_on.search_email_bodies_smart("固件 ab", limit=10) == []
+
     def test_smart_empty_query_returns_empty(self, repo: EmailRepository, fresh_db: Path):
         self._seed_cjk(repo, fresh_db)
         assert repo.search_email_bodies_smart("", limit=10) == []

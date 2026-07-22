@@ -190,9 +190,12 @@ def behavior_db(tmp_path: Path) -> Path:
 def test_search_query_behavior_fixture(case: dict[str, Any], behavior_db: Path):
     # per-case `trigram: true` 显式打开 CJK trigram 路由 (DB v24 + SEARCH_TRIGRAM_ENABLED)；
     # 其余 case 默认 False = 零回归守卫 (走 unicode61 + smart_query_transform 原路径)。
+    # PR2: per-case `latin_trigram: false` 显式关掉拉丁 token 双 lane (回 PR2 前行为);
+    # 默认不写 = True (跟随代码默认 SEARCH_LATIN_TRIGRAM_ENABLED=true)。
     repo = EmailRepository(
         db_path=str(behavior_db),
         trigram_enabled=bool(case.get("trigram", False)),
+        latin_trigram_enabled=bool(case.get("latin_trigram", True)),
     )
     params = case.get("params", {})
 
