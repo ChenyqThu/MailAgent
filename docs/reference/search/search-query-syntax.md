@@ -86,7 +86,7 @@ serve-api `GET /api/email/search?q=`、CLI `mailagent email search`、chat tools
 - 相邻 token 之间 = **隐式 AND**。
 - 大写 `OR`（必须全大写，孤立 token）结合**左右相邻各一个 unit**：
   - 两侧均为字段条件 → SQL `(p1 OR p2)`；链式 `a OR b OR c` 合并为一组 `(a OR b OR c)`。
-  - 两侧均为文本词/短语 → FTS 表达式 `(e1) OR (e2)`。
+  - 两侧均为文本词/短语 → FTS 表达式 `(e1) OR (e2)`。**1g（`SEARCH_TRIGRAM_ENABLED`）**：正向文本 OR 组含**裸 CJK 成员**时，整组改编译成 `(IN trigram子查询 OR IN unicode子查询 …)` 的 AND 谓词（CJK≥3 合进一条 trigram MATCH、2 字 CJK 各自 trigram LIKE、拉丁成员保持 unicode61 MATCH），并整组排出 body MATCH——`评审 OR 周三` 等 CJK 组员的中文子串不再漏召回；纯拉丁 OR 组逐字节不变。见 §9.6。
   - **跨类 OR**（一侧字段一侧文本）→ 降级为 AND + 记 warning（v1 不支持）。
 - 括号分组 v1 不支持（出现的 `(` `)` 在文本 token 内按 §2.2 转义处理）。
 - 否定 unit 不参与 OR 组合（`-a OR b` → `-a AND b` + warning）。
@@ -224,7 +224,7 @@ date-only 的 `until <= '2026-06-01'` 还会漏掉当天全部邮件。因此：
 
 - Python：pytest runner 建 in-memory SQLite（最小 schema：email_metadata + email_body_fts(contentful, rowid=internal_id) + email_attachment + email_attachment_text + email_attachment_fts），灌 emails；`attachments[].text_content` 存在时写入 `email_attachment_text` 并索引到 `email_attachment_fts`，逐 case 跑 search、断言。
 - TS：~~vitest runner~~ **Phase B（G-B1a）已删除**——桌面 ⌘K 经 loopback serve-api 复用 Python 引擎，无独立 TS 检索代码，故无需 TS 夹具 runner。夹具现仅由 Python runner 消费。
-- 夹具必须覆盖：每个字段至少 1 例、别名、引号值、否定（字段/文本/纯否定）、OR（字段同类/文本同类/跨类降级）、未知字段降级文本、空值丢弃、date-only 边界（当天含）、时区混存数据的日期过滤、newer_than 相对日期、纯过滤排序、列级 FTS（`body:` / `subject~:` / `sender~:`）、收件人 FTS（`to~:` / `cc~:` / `from~:` 命中 + 收件人词 + 正文词 AND + **裸词不命中收件人专属 token** 守卫 + 负向收件人），附件正文融合（only attachment / body+attachment / metadata filter 传播）、零语法 fast-path 行为不变（与现状对照例）、CJK smart 不回归、与结构化参数 merge。
+- 夹具必须覆盖：每个字段至少 1 例、别名、引号值、否定（字段/文本/纯否定）、OR（字段同类/文本同类/跨类降级）、未知字段降级文本、空值丢弃、date-only 边界（当天含）、时区混存数据的日期过滤、newer_than 相对日期、纯过滤排序、列级 FTS（`body:` / `subject~:` / `sender~:`）、收件人 FTS（`to~:` / `cc~:` / `from~:` 命中 + 收件人词 + 正文词 AND + **裸词不命中收件人专属 token** 守卫 + 负向收件人），附件正文融合（only attachment / body+attachment / metadata filter 传播）、parsed 路径 OR 组 CJK 子串（`p5_or_group_*`：2 字 LIKE / ≥3 MATCH 合并 / CJK+拉丁并集 / 纯拉丁不变 pin）与列级 CJK 子串（`p5_column_*`：`body:`/`subject~:` 2 字/≥3 / 负向 / 与 filter 组合 / flag-off prefix-only pin，见 §9.6）、零语法 fast-path 行为不变（与现状对照例）、CJK smart 不回归、与结构化参数 merge。
 
 ## 7. 示例
 
@@ -247,7 +247,7 @@ date-only 的 `until <= '2026-06-01'` 还会漏掉当天全部邮件。因此：
 - `to:` / `cc:` / `from:` 的 **LIKE 硬过滤**不叠加 FTS boost（仍是 substring LIKE）；需要收件人
   全文/相关度时用 T8 新增的 `to~:` / `cc~:` / `from~:`（并行 `email_recipient_fts` 表，见 §10）。
 - 附件融合只在 smart 正向全文路径启用；`mode='raw'` 保持正文 FTS5 逃生门。列级 FTS term 在附件分支作为 `email_body_fts` 门控，只有列级 term、没有裸全文词时不查询附件正文。
-- jieba 词典级中文分词（更重，双运行时一致性风险；trigram 已覆盖子串搜索，见 §9）。**裸全文中文子串**已由 §9 trigram 路由解决（flag-gated）；但**列级 FTS** `body:` / `subject~:` / `sender~:` 仍走 `unicode61`，对中文非前缀子串仍有限制（例如 `body:产品` 不保证命中正文 token `本周产品评审...`）。
+- jieba 词典级中文分词（更重，双运行时一致性风险；trigram 已覆盖子串搜索，见 §9）。**裸全文中文子串**已由 §9 trigram 路由解决（flag-gated）；**列级 FTS** `body:` / `subject~:` / `sender~:` 的**中文值**（parsed 路径）1g 起也走 trigram 同名列子串（`SEARCH_TRIGRAM_ENABLED` 门；`body:产品` 现能命中 `本周产品评审...`，见 §9.6）；**收件人列级** `to~:` / `cc~:` / `from~:` 仍走 `unicode61`（recipient 表无 trigram 变体，本批 out of scope）。
 - ~~保存搜索/搜索历史~~ **已在 Phase B（G-B3）落地**：⌘K 命令面板 localStorage 搜索历史（去重/上限 8）+ 收藏搜索 CRUD + facet chips（`is:unread` / `has:attachment`，引号感知 token toggle），见 `frontend/src/shared/state/search-history.ts` + `frontend/src/shared/lib/dsl_token.ts`。
 - 纯过滤查询是 metadata 全表扫描（7 万行 ~30-60ms 可接受；变慢再加索引/物化）。
 
@@ -288,8 +288,8 @@ date-only 的 `until <= '2026-06-01'` 还会漏掉当天全部邮件。因此：
 - **1 字中文不查**（warning `cjk_too_short`）；前端可据此提示"请输入至少 2 个字"。
 - **2 字 LIKE 无相关度**（bm25 在 trigram 表 LIKE 查询下返回 0），靠列位置启发式排序。
 - **英文不回归**：英文 term 始终走 unicode61（保留 porter stemming + remove_diacritics）；trigram 路由只接管含 CJK 的裸全文 query。
-- **列级 FTS / 附件融合不变**：`body:` / `subject~:` / `sender~:`（T6）与附件正文融合（T5）继续走 parsed 路径（unicode61），不受 trigram 影响。trigram 路由只增强 plain fast-path 的裸全文 term。
-- **回滚**：关 `SEARCH_TRIGRAM_ENABLED` 即回 unicode 路径；彻底回退见 `sync_store.py` v24 迁移块注释（DROP 4 trigger + DROP `email_body_fts_trigram`，主表不动）。
+- **列级 CJK（parsed 路径）1g 起走 trigram**：`body:` / `subject~:` / `sender~:` 的**中文值**编译成 trigram 表**同名列** column-filter 子查询谓词（≥3 MATCH `col : "短语"` / 2 字该列 LIKE / 1 字拦截 warning），见 §9.6；值无 CJK 仍走 unicode61。**收件人列级** `to~:` / `cc~:` / `from~:` 不变（recipient 表无 trigram 变体）。附件正文融合（T5）语义不变。
+- **回滚**：关 `SEARCH_TRIGRAM_ENABLED` 即回 unicode 路径（含 1g 的 OR 组/列级 CJK 谓词一并回退）；彻底回退见 `sync_store.py` v24 迁移块注释（DROP 4 trigger + DROP `email_body_fts_trigram`，主表不动）。
 
 ### 9.3 跨语言一致性
 
@@ -311,6 +311,15 @@ trigram 路径早期把 hit 的 `snippet` 设成 `''`（前端只剩 subject 高
 ### 9.5 冷启动预热（P4a perf，仅 Electron 主进程）
 
 2 字 CJK（如 `立项`）走 `email_body_fts_trigram` 的 `body_markdown/subject/sender LIKE '%词%'` = 全表扫（~7700 行）；冷缓存首查实测 ~1.4s、热 ~0.3s（≥3 字 MATCH / 英文都 <0.01s）。**缓解**：主进程在 `waitReady()` 确认 serve 迁到 `EXPECTED_DB_VERSION`（FTS 表齐全）后，`index.ts` 用 `setImmediate` fire-and-forget 调 `warmSearchFtsCache()`（`handlers/email.ts`），对 `email_body_fts_trigram` + `email_recipient_fts` 各跑一次匹配不到的 sentinel（`LIKE '% zzwarm%'`）全扫触页进缓存。module 级 `_ftsWarmed` flag 守只跑一次；`try/catch` 失败静默；`setImmediate` 让 `createWindow` 先跑完，**不阻塞开窗/首帧**。
+
+### 9.6 parsed 路径的 OR 组 + 列级 CJK 走 trigram（1g，flag-gated）
+
+§9.1 的 trigram 路由原先只接管 **plain fast-path**（无字段语法）的裸 CJK term；一旦 query 带字段（`from:` / `is:` / 列词等）就走 **parsed 路径**，裸 CJK term 由 `_build_cjk_trigram_predicates` 编成 trigram IN/NOT-IN 谓词（P5 已落）。1g 把 parsed 路径**另外两个死角**也接进 trigram（同一族谓词构造器，`email_repository.py`）：
+
+- **含裸 CJK 成员的正向文本 OR 组**（`评审 OR 周三` / `评审 OR redis`）：整组编译成单条 `(IN … OR IN …)` AND 谓词——CJK≥3 成员合进一条 `email_body_fts_trigram MATCH '("a") OR ("b")'`、2 字 CJK 成员各自 `(body/subject/sender LIKE '%词%')`、拉丁/列成员合进一条 `email_body_fts MATCH` unicode61 子查询，三类 SQL 级 `OR` 连接；整组从 body MATCH 排除（镜像裸 CJK term 的 `_exclude_from_body_match`）。**语义红线**：子串放宽只对 CJK 成员生效，纯拉丁 OR 组逐字节不变（不进新分支）。
+- **body 列 term 的 CJK 值**（`body:产品` / `subject~:产品` / `sender~:产品`）：编译成 trigram 表**同名列** column-filter 子查询（列映射 `body_markdown/subject/sender` 与主表一致；≥3 → `MATCH 'col : "短语"'`、2 字 → `col LIKE '%值%'`、1 字 → 拦截 + `cjk_too_short` warning），从 body MATCH 排除该 unit。负向 `-body:产品` 对称 `NOT IN`。值无 CJK → 现状不变。该 trigram column 谓词落 `metadata_predicates`、**同时约束 body 与 attachment 两条 lane**，故列级 CJK 词也**排出附件的 unicode61 body-gate**（`_build_attachment_body_gate_expr`）——否则更严的整词/前缀 gate 会盖掉 trigram 子串，让 `<附件词> body:<CJK 内部子串>` 漏附件命中；flag off 时 gate 照旧 unicode61（零回归）。**收件人列级 `to~:` / `cc~:` / `from~:` 不做**（recipient 表无 trigram 变体，out of scope）。
+
+两者均只受 master `SEARCH_TRIGRAM_ENABLED` 门（CJK 语义，与 `SEARCH_LATIN_TRIGRAM_ENABLED` 无关）；关闭即逐字节回 unicode61。这些 unit 本就是 AND 过滤谓词/排除出 body MATCH（与既有裸 CJK term 同款），不参与 bm25 排名。行为夹具（§6）新增 `p5_or_group_*` / `p5_column_*` case 锁定（含 flag-off 与纯拉丁 OR 组的不变 pin）。
 
 ## 10. 收件人全文化（T8 并行 recipient 表，无 flag）
 

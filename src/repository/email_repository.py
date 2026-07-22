@@ -2884,6 +2884,19 @@ class EmailRepository:
     def _term_has_cjk(cls, term: TextTerm) -> bool:
         return cls._is_bare_fulltext_term(term) and _count_cjk_chars(term.value) > 0
 
+    @classmethod
+    def _term_is_body_column_cjk(cls, term: TextTerm) -> bool:
+        """body 列 term (T6 body:/subject~:/sender~:, column_table='body') 且值含 CJK (1g)。
+
+        收件人列 (column_table='recipient', to~:/cc~:/from~:) 不算 —— recipient 表无
+        trigram 变体 (PRD out of scope), 它们照旧走 email_recipient_fts unicode61。
+        """
+        return (
+            term.column_table == "body"
+            and term.column is not None
+            and _count_cjk_chars(term.value) > 0
+        )
+
     # ============================================================
     # P5: parsed 路径里「正向/负向裸全文 CJK 词」也走 trigram (flag-gated)
     # ============================================================
@@ -2929,43 +2942,164 @@ class EmailRepository:
             (like, like, like),
         )
 
+    def _column_cjk_term_predicate(
+        self, term: TextTerm, *, negate: bool
+    ) -> Optional[FilterPredicate]:
+        """1g: body 列 term (body:/subject~:/sender~:) 且值含 CJK → trigram 表**同名列**
+        column-filter 子查询谓词。
+
+        列映射 body_markdown/subject/sender 与主表一致 (``term.column`` 直接就是 trigram
+        表列名)。整 term 走子串检索, 与裸 CJK 词同规则:
+          - trigram_mode='match' (整 term >=3 字) → ``email_body_fts_trigram MATCH '<col> : "<短语>"'``
+          - trigram_mode='like'  (整 term =2 字)  → trigram 表 ``<col> LIKE '%值%'``
+          - too_short (1 字) → None (caller 跳过, warning 由 _collect_cjk_term_warnings 收集)
+        负向 (``-body:产品``) → 对称 NOT IN。值无 CJK 的列 term 不进此路 (caller 已过滤)。
+        收件人列 (to~:/cc~:/from~:) 不进此路 —— recipient 表无 trigram 变体 (PRD out of scope)。
+        """
+        route = _route_text_term(term.value)
+        if route.route == "too_short":
+            return None
+        col = term.column  # body_markdown / subject / sender (与 trigram 表列同名)
+        in_kw = "NOT IN" if negate else "IN"
+        if route.trigram_mode == "match":
+            match_expr = f"{col} : {_quote_fts_token(route.trigram_core)}"
+            return FilterPredicate(
+                f"m.internal_id {in_kw} (SELECT rowid FROM email_body_fts_trigram "
+                f"WHERE email_body_fts_trigram MATCH ?)",
+                (match_expr,),
+            )
+        # trigram_mode == 'like' (2 字 CJK): 该列 LIKE 兜底。
+        like = f"%{escape_like_value(route.trigram_core)}%"
+        return FilterPredicate(
+            f"m.internal_id {in_kw} (SELECT rowid FROM email_body_fts_trigram "
+            f"WHERE {col} LIKE ? ESCAPE '\\')",
+            (like,),
+        )
+
+    def _cjk_predicate_for_term(
+        self, term: TextTerm, *, negate: bool
+    ) -> Optional[FilterPredicate]:
+        """单个正向/负向 term 的 CJK trigram 谓词。
+
+        裸全文 CJK 词 → ``_cjk_term_in_predicate``；body 列 CJK 词 (1g) →
+        ``_column_cjk_term_predicate``；其余 (非 CJK / 收件人列) → None。
+        """
+        if self._term_has_cjk(term):
+            return self._cjk_term_in_predicate(term, negate=negate)
+        if self._term_is_body_column_cjk(term):
+            return self._column_cjk_term_predicate(term, negate=negate)
+        return None
+
+    def _or_group_routes_cjk_trigram(self, group: list[TextTerm]) -> bool:
+        """正向全文 OR 组是否走 CJK trigram 路由 (1g)。
+
+        条件: 组内无收件人列 term (收件人 OR 组归 _build_recipient_predicates) 且至少
+        一个**裸** CJK 成员 (bare, column/column_table 均 None)。列级 CJK 成员
+        (``body:产品``) 不触发 OR 组路由 —— OR 组内的列词维持 unicode61 (标量列 term 的
+        1g 独立处理不下探到 OR 组内, 避免 OR 组混合列路由的复杂度)。
+        trigram_enabled 由 caller 保证。
+        """
+        if any(self._is_recipient_term(term) for term in group):
+            return False
+        return any(self._term_has_cjk(term) for term in group)
+
+    def _build_or_group_trigram_predicate(
+        self, group: list[TextTerm]
+    ) -> Optional[FilterPredicate]:
+        """含裸 CJK 成员的正向全文 OR 组 → 单条 ``(IN ... OR IN ...)`` AND 谓词 (1g)。
+
+        组员命中判定变宽 (子串) **只对裸 CJK 成员生效** (语义红线):
+          - 裸 CJK >=3 字成员 → 合进一条 ``email_body_fts_trigram MATCH '("a") OR ("b")'`` 子查询
+          - 裸 CJK =2 字成员 → 各自一条 trigram 表 ``(body/subject/sender LIKE '%词%')`` 子查询
+          - 其余成员 (拉丁裸词 / 列词) → 合进一条 ``email_body_fts MATCH`` unicode61 子查询 (语义不变)
+        三类子查询 SQL 级 ``OR`` 连接。整组由 caller 从 body MATCH 排除
+        (_build_positive_fts_expr), 镜像裸 CJK 词的 _exclude_from_body_match 机制。
+        1 字 CJK 成员被跳过 (整组仍按其余成员生效); 全部成员无召回 → None。
+        """
+        sql_parts: list[str] = []
+        params: list = []
+        trigram_match_phrases: list[str] = []
+        unicode_exprs: list[str] = []
+        for term in group:
+            if self._term_has_cjk(term):
+                route = _route_text_term(term.value)
+                if route.route == "too_short":
+                    continue
+                if route.trigram_mode == "match":
+                    trigram_match_phrases.append(_quote_fts_token(route.trigram_core))
+                else:  # 'like' (2 字 CJK)
+                    like = f"%{escape_like_value(route.trigram_core)}%"
+                    sql_parts.append(
+                        "m.internal_id IN (SELECT rowid FROM email_body_fts_trigram "
+                        "WHERE body_markdown LIKE ? ESCAPE '\\' "
+                        "OR subject LIKE ? ESCAPE '\\' "
+                        "OR sender LIKE ? ESCAPE '\\')"
+                    )
+                    params.extend([like, like, like])
+            else:
+                expr = self._text_term_to_fts(term)
+                if expr:
+                    unicode_exprs.append(expr)
+        if trigram_match_phrases:
+            match_expr = " OR ".join(f"({p})" for p in trigram_match_phrases)
+            sql_parts.append(
+                "m.internal_id IN (SELECT rowid FROM email_body_fts_trigram "
+                "WHERE email_body_fts_trigram MATCH ?)"
+            )
+            params.append(match_expr)
+        if unicode_exprs:
+            unicode_match = " OR ".join(f"({e})" for e in unicode_exprs)
+            sql_parts.append(
+                "m.internal_id IN (SELECT rowid FROM email_body_fts "
+                "WHERE email_body_fts MATCH ?)"
+            )
+            params.append(unicode_match)
+        if not sql_parts:
+            return None
+        return FilterPredicate("(" + " OR ".join(sql_parts) + ")", tuple(params))
+
     def _build_cjk_trigram_predicates(
         self, parsed: ParsedSearchQuery
     ) -> list[FilterPredicate]:
-        """trigram_enabled 时, 把 parsed 路径的裸 CJK 词编译成 trigram IN/NOT-IN 谓词。
+        """trigram_enabled 时, 把 parsed 路径的 CJK 词编译成 trigram IN/NOT-IN 谓词。
 
-        仅处理「独立裸全文 CJK 词」(parsed.fts_terms / parsed.neg_fts_terms 中
-        column is None and column_table is None 且含 CJK)。OR 组含 CJK 暂不在此路由
-        (见 _build_positive_fts_expr 的排除逻辑: OR 组照旧走 unicode61, 规格已注明限制)。
+        覆盖三类 (均 flag-gated, flag=False → 空列表 → parsed 路径逐字节不变):
+          - 独立裸全文 CJK 词 (fts_terms / neg_fts_terms, column/column_table 均 None)
+          - body 列 CJK 词 (1g: body:/subject~:/sender~: 值含 CJK) → 同名列 column-filter
+          - 含裸 CJK 成员的正向全文 OR 组 (1g: ``产品 OR 评审``) → 整组 (IN ... OR ...) 谓词
+        收件人列 (to~:/cc~:/from~:) 不在此 —— recipient 表无 trigram 变体 (PRD out of scope)。
         graceful degrade: trigram 表缺失 (旧库未迁移) 时由 caller 的 try/except 吞掉
         该谓词 → 该词不约束结果 (不崩, 与 recipient 谓词同手法)。
         """
         predicates: list[FilterPredicate] = []
         for term in parsed.fts_terms:
-            if not self._term_has_cjk(term):
-                continue
-            pred = self._cjk_term_in_predicate(term, negate=False)
+            pred = self._cjk_predicate_for_term(term, negate=False)
             if pred is not None:
                 predicates.append(pred)
         for term in parsed.neg_fts_terms:
-            if not self._term_has_cjk(term):
+            pred = self._cjk_predicate_for_term(term, negate=True)
+            if pred is not None:
+                predicates.append(pred)
+        # 1g: 含裸 CJK 成员的正向全文 OR 组也走 trigram (整组 AND 谓词)。
+        for group in parsed.fts_or_groups:
+            if not self._or_group_routes_cjk_trigram(group):
                 continue
-            pred = self._cjk_term_in_predicate(term, negate=True)
+            pred = self._build_or_group_trigram_predicate(group)
             if pred is not None:
                 predicates.append(pred)
         return predicates
 
     def _collect_cjk_term_warnings(self, parsed: ParsedSearchQuery) -> list[str]:
-        """收集 parsed 路径裸 CJK 词的 1 字拦截 warning (cjk_too_short:<字>)。
+        """收集 parsed 路径 CJK 词的 1 字拦截 warning (cjk_too_short:<字>)。
 
-        与 plain trigram 路径 (build_search_plan) 一致: 1 字 CJK 段被跳过 + 透传 warning。
-        正向 + 负向裸 CJK 词都收。OR 组不在 P5 trigram 范围, 不收其 warning。
+        与 plain trigram 路径 (build_search_plan) 一致: 1 字 CJK 被跳过 + 透传 warning。
+        覆盖正向/负向的裸 CJK 词 + body 列 CJK 词 (1g)。OR 组成员 warning 不收
+        (整组按可召回成员生效, 与既有 OR 组不产 warning 的语义一致)。
         """
         warnings: list[str] = []
         for term in (*parsed.fts_terms, *parsed.neg_fts_terms):
-            if not self._term_has_cjk(term):
-                continue
-            warnings.extend(_route_text_term(term.value).warnings)
+            if self._term_has_cjk(term) or self._term_is_body_column_cjk(term):
+                warnings.extend(_route_text_term(term.value).warnings)
         return warnings
 
     def _exclude_from_body_match(self, term: TextTerm) -> bool:
@@ -2974,11 +3108,15 @@ class EmailRepository:
         - 收件人列 term: 永远排除 (走 email_recipient_fts)。
         - P5: trigram_enabled 时, 裸全文 CJK 词也排除 (改走 trigram IN-子查询谓词,
           见 _build_cjk_trigram_predicates), 避免再走 unicode61 前缀 MATCH 双重/冲突。
-          flag=False → 不排除, 裸 CJK 词照旧走 unicode61 (零回归)。
+        - 1g: trigram_enabled 时, body 列 CJK 词 (body:/subject~:/sender~:) 也排除
+          (改走 trigram 同名列 column-filter 谓词)。
+          flag=False → 不排除, 相关词照旧走 unicode61 (零回归)。
         """
         if self._is_recipient_term(term):
             return True
         if self.trigram_enabled and self._term_has_cjk(term):
+            return True
+        if self.trigram_enabled and self._term_is_body_column_cjk(term):
             return True
         return False
 
@@ -2996,8 +3134,11 @@ class EmailRepository:
             if any(self._is_recipient_term(term) for term in group):
                 # OR 组里混入收件人列 term → 整组归 recipient 编译, 不进 body MATCH。
                 continue
-            # P5: OR 组暂不路由 trigram (规格已注明限制) → 含 CJK 的 OR 组照旧走
-            # unicode61, 不在此排除。
+            # 1g: trigram_enabled 且组含裸 CJK 成员 → 整组走 trigram AND 谓词
+            # (_build_or_group_trigram_predicate), 排出 body MATCH; 纯拉丁 OR 组
+            # (无裸 CJK 成员) 不进此分支, 逐字节走 unicode61 (语义不变)。
+            if self.trigram_enabled and self._or_group_routes_cjk_trigram(group):
+                continue
             parts.append(self._build_fts_or_group(group))
         parts = [p for p in parts if p]
         return " AND ".join(parts)
@@ -3158,12 +3299,18 @@ class EmailRepository:
 
         T8: 收件人列 term (email_recipient_fts) 不是 body 列 → 排除出 body gate
         (它们在 metadata_predicates 里以独立 IN-子查询约束附件命中)。
+        1g: trigram_enabled 时 body 列 CJK 词 (body:/subject~:/sender~: 值含 CJK) 也排出
+        body gate —— 它们已由 trigram 同名列 column-filter 谓词 (_build_cjk_trigram_predicates)
+        约束**两条 lane** (body + attachment 均吃 metadata_predicates), 若再叠 unicode61
+        gate 会用更严的整词/前缀语义盖掉 trigram 子串, 让 `<附件词> body:<CJK 内部子串>`
+        漏掉附件命中 (镜像 _exclude_from_body_match 对 body MATCH 的排除)。flag=False →
+        不排除, 列级 CJK 词照旧 unicode61 gate (零回归)。
         """
         parts: list[str] = []
         parts.extend(
             self._text_term_to_fts(term)
             for term in parsed.fts_terms
-            if term.column is not None and not self._is_recipient_term(term)
+            if term.column is not None and not self._exclude_from_body_match(term)
         )
         for group in parsed.fts_or_groups:
             if group and all(
