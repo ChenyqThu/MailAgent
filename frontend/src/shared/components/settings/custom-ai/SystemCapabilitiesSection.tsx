@@ -1,24 +1,24 @@
-// SystemCapabilitiesSection — R4 (task 07-05) 内置系统能力只读区
+// SystemCapabilitiesSection — R4 (task 07-05) 内置系统能力只读区 · task 07-22 能力可见性全景
 //
-// 技能面板此前只列 skill 对象（email/search/report + 已装 pack），看不到 S1/S2/S5 的
-// 开放性能力族。这些能力由 main-env-only flag 驱动，此区把它们呈现为三类：
-//   A. 只读锁定族（无独立管理面 + flag 运行时不可切）→ 只读能力卡：锁定态 pill +
-//      「视觉 on / disabled」Switch，绝无 onCheckedChange。flag === true 才渲染：
-//        · 会话检索 chat_session_*                 (sessionToolsEnabled)
-//        · Agent 自配置 agent_profile_*/agent_memory_update (configToolsEnabled)
-//   A'. 联网（web_fetch + web_search）→ **可写例外**（task 07-07 R4）：真开关写
-//      MAILAGENT_OPENNESS_WEB_TOOLS（restart-required，gateway 启动读一次）+ 恒渲染
-//      （OFF 也在，好再开）；开关 ON 时卡下联动显示 Tavily key（EnvField，写 .env 受管密钥）。
-//      开关 checked 反映 .env 意图值（读 useEnvStore，非 gateway 运行态 —— restart 前 gateway
-//      未变但 .env 已变）。见 WebCapabilityRow。
-//   B. 已有管理面三族 → 交叉引用行（跳到对应管理面，不造新卡）：
-//        · 命令执行/文件读写 → 同页 ExecPolicySection  (execToolsEnabled)
-//        · 技能包管理        → 同页 SkillPacksSection  (skillInstallEnabled)
-//        · 自定义 Agent      → /agents 路由            (customAgentsEnabled)
+// 原则（07-22 owner 拍板）：每个 chat 里可被 agent 调用的能力族都要在此可见 ——「可调用即可见」。
+// 能开关的用真开关（联网），不能在此开关的用锁定/禁用态行；**flag off 也显示（禁用态）而非隐身**。
+// 🔴 纯展示：除「联网」卡（A'，写 MAILAGENT_OPENNESS_WEB_TOOLS + Tavily key）外零后端写调用；
+// 不动 skill_gating 的 GATEWAY_SKILL_TOOLS/CORE_UNGATED；不往 skill registry 塞假 skill。
 //
-// 红线：除「联网」卡（A'，写 MAILAGENT_OPENNESS_WEB_TOOLS + Tavily key）外纯只读展示、零后端
-// 写调用；不动 skill_gating 的 GATEWAY_SKILL_TOOLS/CORE_UNGATED；不往 resolved_skills()/
-// build_manifest()/skill registry 塞假 skill 行。
+// 本区呈现的能力族（权威盘点见 .trellis/tasks/07-22-capability-visibility-panorama/progress.md §1）：
+//   恒可用核心（锁定 · 无 flag）：
+//     · 核心邮件操作 email_flag/archive/pin/draft_reply/resync + prepare_send（写操作经审批卡保护）
+//     · KOS 查询 kos_query（core read，恒注册；效果取决于是否配好 Gbrain）
+//   env-flag 锁定族（on=锁定态 / off=禁用态，运行时不可在此切换）：
+//     · 会话检索 chat_session_*                 (MAILAGENT_OPENNESS_SESSION_TOOLS, /chat/config)
+//     · Agent 自配置 agent_profile_*/agent_memory_update (MAILAGENT_OPENNESS_CONFIG_TOOLS, /chat/config)
+//     · 自我配置元工具 update_system_md/discover_skills/set_skill_enabled (MAILAGENT_SKILL_SELF_MOUNT, .env 意图)
+//     · 日历工具（聊天）calendar_*             (MAILAGENT_CALENDAR_AGENT_TOOLS, .env 意图)
+//   A'. 联网 web_fetch/web_search → 真开关（可写例外），恒渲染，见 WebCapabilityRow。
+//   B. 已有管理面三族 → 交叉引用行（恒渲染，off 置灰）：
+//     · 命令执行/文件读写 → ExecPolicySection  (MAILAGENT_OPENNESS_EXEC_TOOLS)
+//     · 技能包管理        → SkillPacksSection  (MAILAGENT_OPENNESS_SKILL_INSTALL)
+//     · 自定义 Agent      → /agents 路由        (MAILAGENT_CUSTOM_AGENTS_ENABLED)
 
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
@@ -28,12 +28,16 @@ import { useNavigate } from '@tanstack/react-router'
 import {
   ArrowUpRight,
   Bot,
+  Calendar,
+  Database,
   Globe,
   Lock,
+  Mail,
   MessageSquare,
   Package,
   Terminal,
-  UserCog
+  UserCog,
+  Wrench
 } from 'lucide-react'
 
 import { useOpennessFlags, useCustomAgentsEnabled } from '@shared/components/agents/hooks'
@@ -46,7 +50,7 @@ import { Button } from '@shared/components/ui/button'
 import { Section } from '../parts/Section'
 import { Row } from '../parts/Row'
 import { EnvField } from '../parts/EnvField'
-import { fetchSkillInstallEnabled } from './shared'
+import { fetchSkillInstallEnabled, useEnvFlagIntent } from './shared'
 
 // 同页交叉引用滚动锚点（CustomAiSection 里 SkillPacksSection / ExecPolicySection 各裹一个 id div）。
 export const SYSTEM_CAP_SCROLL_TARGETS = {
@@ -73,6 +77,68 @@ function LockedCapabilityControl(): React.ReactElement {
       </span>
       <Switch checked disabled aria-label={t('settings.systemCapabilities.lockedBadge')} />
     </div>
+  )
+}
+
+/** 禁用态卡右侧控件（task 07-22）：灰 pill「未启用」+ 视觉 off / disabled 的 Switch。用于 env-flag
+ *  关闭的能力族 —— 显示禁用态而非隐身。同样无 onCheckedChange（此处不可切换，需改 .env + 重启）。 */
+function DisabledCapabilityControl(): React.ReactElement {
+  const { t } = useTranslation()
+  return (
+    <div className="flex items-center gap-2">
+      <span
+        className="inline-flex items-center gap-1 rounded-full bg-ink-4 border border-ink-border px-1.5 py-0.5 text-micro text-ink-fg-3"
+        title={t('settings.systemCapabilities.disabledTip')}
+      >
+        {t('settings.systemCapabilities.disabledBadge')}
+      </span>
+      <Switch
+        checked={false}
+        disabled
+        aria-label={t('settings.systemCapabilities.disabledBadge')}
+      />
+    </div>
+  )
+}
+
+/** 锁定/禁用态二选一（enabled → 锁定 on；否则 → 禁用 off）。 */
+function CapabilityStateControl({ enabled }: { enabled: boolean }): React.ReactElement {
+  return enabled ? <LockedCapabilityControl /> : <DisabledCapabilityControl />
+}
+
+/** 单行 helper：一句说明 + 控制来源行（env flag code 样式 / 恒可用说明）+ 工具数 pill。 */
+function CapabilityHelper({
+  desc,
+  source,
+  toolCount
+}: {
+  desc: React.ReactNode
+  /** 控制来源：flag → 「由环境变量控制 <code>FLAG</code>」；always → 恒可用说明文案。 */
+  source: { kind: 'flag'; flagName: string } | { kind: 'always'; note: React.ReactNode }
+  toolCount: number
+}): React.ReactElement {
+  const { t } = useTranslation()
+  return (
+    <span className="flex flex-col gap-0.5">
+      <span>{desc}</span>
+      <span className="text-ink-fg-3">
+        {source.kind === 'flag' ? (
+          <>
+            {t('settings.systemCapabilities.controlledBy')}{' '}
+            <code className="rounded bg-ink-4 border border-ink-border px-1 py-px text-micro font-mono text-ink-fg-2">
+              {source.flagName}
+            </code>
+          </>
+        ) : (
+          source.note
+        )}
+      </span>
+      <span className="mt-0.5">
+        <span className="inline-flex items-center rounded-full bg-ink-4 border border-ink-border px-1.5 py-0.5 text-micro font-mono text-ink-fg-2">
+          {t('settings.skills.toolCount', { n: toolCount })}
+        </span>
+      </span>
+    </span>
   )
 }
 
@@ -163,11 +229,26 @@ export function WebCapabilityRow(): React.ReactElement {
   )
 }
 
+interface CapabilityRow {
+  key: string
+  icon: React.ReactNode
+  title: string
+  desc: string
+  source: { kind: 'flag'; flagName: string } | { kind: 'always'; note: React.ReactNode }
+  toolCount: number
+  /** 锁定/禁用态；always 源恒 true。 */
+  enabled: boolean
+}
+
 export function SystemCapabilitiesSection(): React.ReactElement {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const flags = useOpennessFlags(true)
   const customAgentsEnabled = useCustomAgentsEnabled()
+
+  // /chat/config 未暴露的 main-env-only flag → 读 .env 意图值（三者默认 on）。
+  const selfMountEnabled = useEnvFlagIntent('MAILAGENT_SKILL_SELF_MOUNT', true)
+  const calendarEnabled = useEnvFlagIntent('MAILAGENT_CALENDAR_AGENT_TOOLS', true)
 
   // 技能包管理面可见性（与 SkillPacksSection 共享同一 query cache，去重）。
   const { data: skillInstallEnabled } = useQuery<boolean>({
@@ -177,86 +258,111 @@ export function SystemCapabilitiesSection(): React.ReactElement {
     retry: false
   })
 
-  // A. 只读锁定族（session/config）：flag === true 才渲染锁定卡。联网（web）不在此列 —— 它是
-  // A' 可写例外，由 WebCapabilityRow 恒渲染（见下）。
-  const capabilityCards: Array<{
-    key: string
-    icon: React.ReactNode
-    title: string
-    desc: string
-    toolCount: number
-  }> = []
-  if (flags.sessionToolsEnabled === true) {
-    capabilityCards.push({
+  // 恒渲染的能力族行（锁定/禁用态）。恒可用核心（写/发信、KOS）→ always 源锁定；env-flag 族 →
+  // enabled 来自 flag 值。/chat/config 的 flag 用 `!== false`：true / undefined（旧后端或不可达）
+  // → 视为 on（env 默认 on，WebCapabilityRow 乐观先例），仅显式 false → 禁用态。
+  const capabilityRows: CapabilityRow[] = [
+    {
+      key: 'coreEmail',
+      icon: <Mail className="size-3.5 shrink-0 text-ink-fg-2" />,
+      title: t('settings.systemCapabilities.coreEmail.title'),
+      desc: t('settings.systemCapabilities.coreEmail.desc'),
+      source: { kind: 'always', note: t('settings.systemCapabilities.coreEmail.control') },
+      toolCount: 6,
+      enabled: true
+    },
+    {
+      key: 'kos',
+      icon: <Database className="size-3.5 shrink-0 text-ink-fg-2" />,
+      title: t('settings.systemCapabilities.kos.title'),
+      desc: t('settings.systemCapabilities.kos.desc'),
+      source: { kind: 'always', note: t('settings.systemCapabilities.kos.control') },
+      toolCount: 1,
+      enabled: true
+    },
+    {
       key: 'session',
       icon: <MessageSquare className="size-3.5 shrink-0 text-ink-fg-2" />,
       title: t('settings.systemCapabilities.session.title'),
       desc: t('settings.systemCapabilities.session.desc'),
-      toolCount: 3
-    })
-  }
-  if (flags.configToolsEnabled === true) {
-    capabilityCards.push({
+      source: { kind: 'flag', flagName: 'MAILAGENT_OPENNESS_SESSION_TOOLS' },
+      toolCount: 3,
+      enabled: flags.sessionToolsEnabled !== false
+    },
+    {
       key: 'config',
       icon: <UserCog className="size-3.5 shrink-0 text-ink-fg-2" />,
       title: t('settings.systemCapabilities.config.title'),
       desc: t('settings.systemCapabilities.config.desc'),
-      toolCount: 4
-    })
-  }
+      source: { kind: 'flag', flagName: 'MAILAGENT_OPENNESS_CONFIG_TOOLS' },
+      toolCount: 4,
+      enabled: flags.configToolsEnabled !== false
+    },
+    {
+      key: 'selfMount',
+      icon: <Wrench className="size-3.5 shrink-0 text-ink-fg-2" />,
+      title: t('settings.systemCapabilities.selfMount.title'),
+      desc: t('settings.systemCapabilities.selfMount.desc'),
+      source: { kind: 'flag', flagName: 'MAILAGENT_SKILL_SELF_MOUNT' },
+      toolCount: 3,
+      enabled: selfMountEnabled
+    },
+    {
+      key: 'calendar',
+      icon: <Calendar className="size-3.5 shrink-0 text-ink-fg-2" />,
+      title: t('settings.systemCapabilities.calendar.title'),
+      desc: t('settings.systemCapabilities.calendar.desc'),
+      source: { kind: 'flag', flagName: 'MAILAGENT_CALENDAR_AGENT_TOOLS' },
+      toolCount: 5,
+      enabled: calendarEnabled
+    }
+  ]
 
-  // B. 已有管理面三族：交叉引用行（点击跳对应管理面）。
+  // B. 已有管理面三族：交叉引用行（恒渲染，off 置灰跳转 + 未启用 pill）。
   const crossRefs: Array<{
     key: string
     icon: React.ReactNode
     title: string
     desc: string
     action: string
+    enabled: boolean
     onGo: () => void
-  }> = []
-  if (flags.execToolsEnabled === true) {
-    crossRefs.push({
+  }> = [
+    {
       key: 'exec',
       icon: <Terminal className="size-3.5 shrink-0 text-ink-fg-2" />,
       title: t('settings.systemCapabilities.crossRef.exec.title'),
       desc: t('settings.systemCapabilities.crossRef.exec.desc'),
       action: t('settings.systemCapabilities.crossRef.exec.action'),
+      enabled: flags.execToolsEnabled !== false,
       onGo: () => scrollToSection(SYSTEM_CAP_SCROLL_TARGETS.exec)
-    })
-  }
-  if (skillInstallEnabled === true) {
-    crossRefs.push({
+    },
+    {
       key: 'skillPacks',
       icon: <Package className="size-3.5 shrink-0 text-ink-fg-2" />,
       title: t('settings.systemCapabilities.crossRef.skillPacks.title'),
       desc: t('settings.systemCapabilities.crossRef.skillPacks.desc'),
       action: t('settings.systemCapabilities.crossRef.skillPacks.action'),
+      enabled: skillInstallEnabled !== false,
       onGo: () => scrollToSection(SYSTEM_CAP_SCROLL_TARGETS.skillPacks)
-    })
-  }
-  if (customAgentsEnabled) {
-    crossRefs.push({
+    },
+    {
       key: 'customAgents',
       icon: <Bot className="size-3.5 shrink-0 text-ink-fg-2" />,
       title: t('settings.systemCapabilities.crossRef.customAgents.title'),
       desc: t('settings.systemCapabilities.crossRef.customAgents.desc'),
       action: t('settings.systemCapabilities.crossRef.customAgents.action'),
+      enabled: customAgentsEnabled,
       onGo: () => void navigate({ to: '/agents', search: { tab: 'agents' } })
-    })
-  }
-
-  // 联网卡（A'）恒渲染 → 本区永远至少有一行，故不再 return null（web 卡 OFF 也要在，好再开）。
-
-  // 只读锁定族（session/config）未全开 → 尾部一行提示「其余系统能力由环境变量控制」。联网已是
-  // 真开关，不计入「由环境变量控制」的隐藏族。
-  const showMoreNote = flags.sessionToolsEnabled !== true || flags.configToolsEnabled !== true
+    }
+  ]
 
   return (
     <Section
       title={t('settings.systemCapabilities.title')}
       helper={t('settings.systemCapabilities.desc')}
     >
-      {capabilityCards.map((cap) => (
+      {capabilityRows.map((cap) => (
         <Row
           key={cap.key}
           label={
@@ -266,17 +372,10 @@ export function SystemCapabilitiesSection(): React.ReactElement {
             </span>
           }
           helper={
-            <span className="flex flex-col gap-0.5">
-              <span>{cap.desc}</span>
-              <span className="mt-0.5">
-                <span className="inline-flex items-center rounded-full bg-ink-4 border border-ink-border px-1.5 py-0.5 text-micro font-mono text-ink-fg-2">
-                  {t('settings.skills.toolCount', { n: cap.toolCount })}
-                </span>
-              </span>
-            </span>
+            <CapabilityHelper desc={cap.desc} source={cap.source} toolCount={cap.toolCount} />
           }
         >
-          <LockedCapabilityControl />
+          <CapabilityStateControl enabled={cap.enabled} />
         </Row>
       ))}
 
@@ -293,19 +392,23 @@ export function SystemCapabilitiesSection(): React.ReactElement {
             </span>
           }
           helper={<span>{ref.desc}</span>}
+          trailing={
+            ref.enabled ? undefined : (
+              <span
+                className="inline-flex items-center rounded-full bg-ink-4 border border-ink-border px-1.5 py-0.5 text-micro text-ink-fg-3"
+                title={t('settings.systemCapabilities.disabledTip')}
+              >
+                {t('settings.systemCapabilities.disabledBadge')}
+              </span>
+            )
+          }
         >
-          <Button size="sm" variant="ghost" onClick={ref.onGo}>
+          <Button size="sm" variant="ghost" onClick={ref.onGo} disabled={!ref.enabled}>
             {ref.action}
             <ArrowUpRight className="ml-1 size-3.5" />
           </Button>
         </Row>
       ))}
-
-      {showMoreNote && (
-        <div className="px-4 py-2.5 text-aux text-ink-fg-3">
-          {t('settings.systemCapabilities.moreNote')}
-        </div>
-      )}
     </Section>
   )
 }

@@ -3,6 +3,23 @@
 // resolveApiBaseUrl() + the /chat/config flag fetchers are used across multiple
 // custom-ai/* subfiles; they live here so each section file imports one source.
 
+import { useEnvStore } from '@shared/state/env'
+
+/** task 07-22 — read a main-env-only bool flag's **.env intent value** (WebCapabilityRow precedent).
+ *  These flags are NOT surfaced on /chat/config (the gateway reads them once via envBool at Electron
+ *  main startup), so the only source is the .env snapshot. envBool semantics mirror
+ *  (ai_gateway_lifecycle.ts): unset → default; else lowercased ∈ {1,true}. Store not ready →
+ *  optimistically returns default (so a loading state isn't misread as off). Lives here (not in a
+ *  component file) so both SystemCapabilitiesSection and SkillsSection import one source without
+ *  tripping react-refresh/only-export-components. */
+export function useEnvFlagIntent(key: string, defaultValue: boolean): boolean {
+  const envState = useEnvStore((s) => s.state)
+  if (envState.status !== 'ready') return defaultValue
+  const raw = envState.snapshot.values[key] ?? ''
+  if (raw === '') return defaultValue
+  return ['1', 'true'].includes(raw.trim().toLowerCase())
+}
+
 // Resolve serve-api base URL for direct fetch calls (mirrors useLlmModels.ts resolveApiBaseUrl;
 // intentionally duplicated to avoid circular imports with the chat runtime).
 export function resolveApiBaseUrl(): string {

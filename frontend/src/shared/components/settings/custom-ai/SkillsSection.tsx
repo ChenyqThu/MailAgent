@@ -22,6 +22,7 @@ import { CollapseChevron, CollapsibleRegion } from '@shared/components/ui/collap
 import { Section } from '../parts/Section'
 import { Row } from '../parts/Row'
 import { NotionAgentSkillConfig } from './NotionAgentSkillConfig'
+import { useEnvFlagIntent } from './shared'
 
 // task 07-21 — skills that carry an inline per-skill config panel in their row's expand area. Today
 // only notion_agent (bind agent / default model / doctor, moved out of 设置-AI). A row NOT listed
@@ -54,8 +55,15 @@ async function migrateLocalSkillOverrides(
 }
 
 /** The label + helper cell content of a skill row — shared by the plain Row and the expandable
- *  config header so the two render identically. */
-function SkillMeta({ skill }: { skill: SkillSummary }): React.ReactElement {
+ *  config header so the two render identically. `extraNote` (task 07-22) carries a per-skill
+ *  clarification line (calendar chat-tools scope / notion_agent master-flag off). */
+function SkillMeta({
+  skill,
+  extraNote
+}: {
+  skill: SkillSummary
+  extraNote?: React.ReactNode
+}): React.ReactElement {
   const { t } = useTranslation()
   return (
     <>
@@ -70,6 +78,7 @@ function SkillMeta({ skill }: { skill: SkillSummary }): React.ReactElement {
               {t('settings.skills.unavailable', { reason: skill.unavailableReason })}
             </span>
           ) : null}
+          {extraNote ? <span className="text-meta text-ink-fg-3 italic">{extraNote}</span> : null}
           <span className="flex items-center gap-2 mt-0.5">
             <span className="inline-flex items-center rounded-full bg-ink-4 border border-ink-border px-1.5 py-0.5 text-micro font-mono text-ink-fg-2">
               {t('settings.skills.toolCount', { n: skill.toolCount })}
@@ -86,10 +95,27 @@ function SkillMeta({ skill }: { skill: SkillSummary }): React.ReactElement {
   )
 }
 
+/** task 07-22 — per-skill clarification note (null for skills without one):
+ *  · calendar: the toggle governs the outward Skill Delivery API + advertisedSkills only; the 5
+ *    chat calendar tools are controlled by the calendar env flag (系统能力 区), NOT this toggle.
+ *  · notion_agent: when the master flag MAILAGENT_NOTION_AGENT_TOOL is off, the gateway won't
+ *    register notion_agent_chat even if the skill toggle is on (灭活标注). */
+function useSkillExtraNote(): (skill: SkillSummary) => React.ReactNode {
+  const { t } = useTranslation()
+  const notionMasterEnabled = useEnvFlagIntent('MAILAGENT_NOTION_AGENT_TOOL', true)
+  return (skill: SkillSummary): React.ReactNode => {
+    if (skill.name === 'calendar') return t('settings.skills.calendarChatNote')
+    if (skill.name === 'notion_agent' && !notionMasterEnabled)
+      return t('settings.skills.notionAgentMasterOff')
+    return null
+  }
+}
+
 export function SkillsSection(): React.ReactElement {
   const { t } = useTranslation()
   const api = useMailApi()
   const qc = useQueryClient()
+  const extraNoteFor = useSkillExtraNote()
 
   const { data: skills, isLoading } = useQuery<SkillSummary[]>({
     queryKey: qk.skills(),
@@ -139,10 +165,11 @@ export function SkillsSection(): React.ReactElement {
     }
     return skills.map((skill) => {
       const ConfigPanel = CONFIG_PANELS[skill.name]
+      const extraNote = extraNoteFor(skill)
       if (!ConfigPanel) {
         // Plain toggle row (unchanged) — no config panel for this skill.
         return (
-          <Row key={skill.name} label={<SkillMeta skill={skill} />}>
+          <Row key={skill.name} label={<SkillMeta skill={skill} extraNote={extraNote} />}>
             <Switch
               checked={skill.enabled}
               onCheckedChange={(next) => void handleToggle(skill, next)}
@@ -168,7 +195,7 @@ export function SkillsSection(): React.ReactElement {
             >
               <CollapseChevron expanded={isOpen} size={16} className="mt-0.5 text-ink-fg-2" />
               <span className="flex-1 min-w-0">
-                <SkillMeta skill={skill} />
+                <SkillMeta skill={skill} extraNote={extraNote} />
               </span>
             </button>
             <div className="shrink-0">
