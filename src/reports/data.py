@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
 
@@ -167,6 +167,7 @@ def fetch_report_briefs(
     conn = sqlite3.connect(db_path, timeout=30.0)
     conn.row_factory = sqlite3.Row
     briefs: List[ReportEmailBrief] = []
+    history: _ThreadHistory = {}
     try:
         # ① 窗口查询：**含**发件箱（按 mailbox 现场判 is_outbound）。发件箱邮件不铺成
         #    报告条目，但带入用于「已发出」统计 + 让 LLM 了解你回复/处理了什么。
@@ -207,7 +208,9 @@ def fetch_report_briefs(
             briefs.append(_row_to_brief(r, is_outbound=False))
             seen.add(int(r["internal_id"]))
 
-        _mark_replied(conn, briefs)
+        # 线程全历史状态一次算好：per-email replied 判定 + 每线程正文预载决策共用。
+        history = _thread_history(conn, sorted({b.thread_id for b in briefs if b.thread_id}))
+        _mark_replied(briefs, history)
     except sqlite3.OperationalError as e:
         logger.warning(f"[report] fetch_report_briefs query failed: {e}")
         return []
@@ -224,43 +227,64 @@ def fetch_report_briefs(
     )
     # max_emails ≤0 = 不限制（取窗口内全部 inbound）；否则按排序取前 N。
     capped = inbound if max_emails <= 0 else inbound[:max_emails]
-    # agentic 日报：给 priority ∈ body_priorities（用户勾选）的邮件预载正文（其余只摘要，AI 按需查）。
+    # agentic 日报：每线程只给最新一封收件预载正文（priority 门 / 球已踢出线程跳过，
+    # 见 _preload_bodies）；其余只摘要，AI 用 get_email_body 按需查。
     priorities = set(body_priorities or [])
     if priorities:
-        _preload_bodies(db_path, capped, priorities)
+        _preload_bodies(db_path, capped, priorities, history)
     return capped + outbound
 
 
-def _mark_replied(conn: sqlite3.Connection, briefs: List[ReportEmailBrief]) -> None:
-    """对每封 brief：同 thread_id 若存在**更晚**的发件箱邮件 → 标 replied=True（已回复）。
+# 线程全历史状态：thread_id → (最后发件时刻, 最后收件时刻)。
+_ThreadHistory = Dict[str, Tuple[Optional[datetime], Optional[datetime]]]
 
-    按真实时刻比（_parse_dt 解析混合时区）。一次查询取相关 thread 的发件箱邮件。
+# 组内按真实时刻排序时 date_received 解析失败的兜底（排最前，不抛）。
+_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+
+def _thread_history(conn: sqlite3.Connection, thread_ids: List[str]) -> _ThreadHistory:
+    """按**全历史**（不限报告窗口）算每线程的 (最后发件时刻, 最后收件时刻)。
+
+    🔴 必须全历史：owner 案例 —— 7-13 的回复在 24h 窗口外，只看窗口会把已表态的
+    线程判成未回复。草稿排除；date_received 混合时区 → _parse_dt 后按真实时刻比。
+    查询失败返回空（调用方降级为无线程状态，不阻断报告）。
     """
-    thread_ids = sorted({b.thread_id for b in briefs if b.thread_id})
     if not thread_ids:
-        return
-    sent_ph = ", ".join("?" * len(_SENT_MAILBOXES))
+        return {}
     tid_ph = ", ".join("?" * len(thread_ids))
+    draft_ph = ", ".join("?" * len(_DRAFT_MAILBOXES))
     try:
         rows = conn.execute(
             f"""
-            SELECT thread_id, date_received FROM email_metadata
-             WHERE mailbox IN ({sent_ph}) AND thread_id IN ({tid_ph})
+            SELECT thread_id, date_received, mailbox FROM email_metadata
+             WHERE thread_id IN ({tid_ph})
+               AND date_received IS NOT NULL
+               AND (mailbox IS NULL OR mailbox NOT IN ({draft_ph}))
             """,
-            (*_SENT_MAILBOXES, *thread_ids),
+            (*thread_ids, *_DRAFT_MAILBOXES),
         ).fetchall()
     except sqlite3.OperationalError:
-        return
-    latest_sent: Dict[str, datetime] = {}
+        return {}
+    out: Dict[str, List[Optional[datetime]]] = {}
     for r in rows:
         d = _parse_dt(r["date_received"])
         if d is None:
             continue
-        tid = r["thread_id"]
-        if tid not in latest_sent or d > latest_sent[tid]:
-            latest_sent[tid] = d
+        slot = out.setdefault(r["thread_id"], [None, None])
+        idx = 0 if (r["mailbox"] or "") in _SENT_MAILBOXES else 1
+        if slot[idx] is None or d > slot[idx]:
+            slot[idx] = d
+    return {tid: (s[0], s[1]) for tid, s in out.items()}
+
+
+def _mark_replied(briefs: List[ReportEmailBrief], history: _ThreadHistory) -> None:
+    """对每封 brief：同 thread_id 若存在**更晚**的发件箱邮件 → 标 replied=True。
+
+    严格 per-email 语义（发件须晚于**这一封**收件，误杀不可能）—— assembler 的
+    「replied 不进 attention」硬闸依赖它。发件时刻来自全历史（_thread_history）。
+    """
     for b in briefs:
-        sent_dt = latest_sent.get(b.thread_id)
+        sent_dt = history.get(b.thread_id, (None, None))[0]
         recv_dt = _parse_dt(b.date_received)
         if sent_dt and recv_dt and sent_dt >= recv_dt:
             b.replied = True
@@ -282,33 +306,58 @@ def is_attention(b: ReportEmailBrief) -> bool:
     return b.priority in URGENT_PRIORITY_LABELS and b.action_type in ACTION_NEEDS_FLAG
 
 
-def _is_body_worthy(b: ReportEmailBrief, priorities: set) -> bool:
-    """agentic 日报预载正文的判定：priority 命中用户勾选的优先级集合才带正文。
-    其余邮件只给 AI Summary，AI 可用 get_email_body 工具按需下钻。"""
-    return b.priority in priorities
-
-
-# 预载正文 safety cap（防极端"全勾"导致整窗口邮件都塞正文撑爆 token）；不暴露给用户。
+# 预载正文 safety cap（防极端"全勾"导致整窗口线程都塞正文撑爆 token）；不暴露给用户。
 _BODY_PRELOAD_SAFETY_CAP = 60
 
 
-def _preload_bodies(db_path: str, briefs: List[ReportEmailBrief], priorities: set) -> None:
-    """就地给 briefs 里 priority ∈ priorities 的邮件预载正文（截断）。
+def _solo_key(b: ReportEmailBrief) -> str:
+    """无 thread_id 的邮件各自成单封线程的分组 key。"""
+    return b.thread_id or f"__solo:{b.internal_id}"
 
-    safety cap 60 防极端全带；正文缺失 / 读失败跳过（保持 None，AI 仍可用
-    get_email_body 工具按需取全文）。
+
+def _preload_bodies(
+    db_path: str,
+    briefs: List[ReportEmailBrief],
+    priorities: set,
+    history: _ThreadHistory,
+) -> None:
+    """就地预载正文（截断）—— **每线程只载最新一封收件**（owner 拍板：最新邮件通常
+    带引用历史，够用），且线程须满足：
+
+    - 组内任一邮件 priority ∈ priorities（body_full_priorities 门维持，按线程放宽到
+      任一成员命中 —— 紧急线程的最新跟进即使标普通也载它，引用链才完整）；
+    - 线程最新一封（**全历史**）不是我方发件 —— 球已踢出，正文价值低，省 token。
+
+    无 thread_id 的邮件各自成单封线程（= 旧 per-email 判定）。safety cap 60 维持；
+    正文缺失 / 读失败跳过（保持 None，AI 仍可用 get_email_body 工具按需取全文）。
     """
-    worthy = [b for b in briefs if _is_body_worthy(b, priorities)]
-    if not worthy:
+    groups: Dict[str, List[ReportEmailBrief]] = {}
+    order: List[str] = []
+    for b in briefs:
+        key = _solo_key(b)
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(b)
+    targets: List[ReportEmailBrief] = []
+    for key in order:
+        members = groups[key]
+        if not any(m.priority in priorities for m in members):
+            continue
+        sent_dt, inbound_dt = history.get(key, (None, None))
+        if sent_dt is not None and (inbound_dt is None or sent_dt >= inbound_dt):
+            continue  # 线程最新一封是我方发件 → 不预载
+        targets.append(max(members, key=lambda m: _parse_dt(m.date_received) or _EPOCH))
+    if not targets:
         return
-    if len(worthy) > _BODY_PRELOAD_SAFETY_CAP:
+    if len(targets) > _BODY_PRELOAD_SAFETY_CAP:
         logger.warning(
-            f"[report] preload bodies: {len(worthy)} worthy emails exceed safety cap "
+            f"[report] preload bodies: {len(targets)} worthy threads exceed safety cap "
             f"{_BODY_PRELOAD_SAFETY_CAP}, truncating (其余仅摘要，AI 可按需取正文)"
         )
-        worthy = worthy[:_BODY_PRELOAD_SAFETY_CAP]
+        targets = targets[:_BODY_PRELOAD_SAFETY_CAP]
     repo = EmailRepository(db_path)
-    for b in worthy:
+    for b in targets:
         try:
             md = repo.get_body_markdown(b.internal_id, max_chars=_BODY_PRELOAD_CHARS)
             if md:
@@ -342,6 +391,84 @@ def group_for_report(
         else:
             handled.append(b)
     return {"attention": attention, "handled": handled, "fyi": fyi}
+
+
+@dataclass
+class ThreadGroup:
+    """线程聚合投影（日报 payload 按事件串联用；不进块 schema，纯 LLM 输入侧）。
+
+    emails = 本次报告带入的该线程邮件（**收发双向混合**，按真实时刻升序）；
+    last_sent_at / last_inbound_at 按**全历史**算（不只报告窗口 —— 窗口外的历史
+    回复也算「你已表态」），草稿排除。
+    """
+
+    thread_id: str
+    emails: List[ReportEmailBrief] = field(default_factory=list)
+    last_sent_at: Optional[datetime] = None
+    last_inbound_at: Optional[datetime] = None
+
+    @property
+    def inbound_count(self) -> int:
+        return sum(1 for b in self.emails if not b.is_outbound)
+
+    @property
+    def outbound_count(self) -> int:
+        return sum(1 for b in self.emails if b.is_outbound)
+
+    @property
+    def replied_by_me(self) -> bool:
+        """线程级软信号：你在该线程回复过（全历史）——对方可能有新进展，只作
+        叙事输入（「待跟进」），不做硬过滤。"""
+        return self.last_sent_at is not None
+
+    @property
+    def latest_is_outbound(self) -> bool:
+        """线程最新一封（全历史）是我方发件 → 球已踢出（对方未再来信）。"""
+        return self.last_sent_at is not None and (
+            self.last_inbound_at is None or self.last_sent_at >= self.last_inbound_at
+        )
+
+
+def build_thread_groups(db_path: str, briefs: List[ReportEmailBrief]) -> List[ThreadGroup]:
+    """briefs（含 outbound）→ 按 thread_id 聚合的 ThreadGroup 列表（agentic 日报
+    payload 用）。
+
+    组序 = briefs 里首次出现的顺序（inbound 已按 attention / priority 排前，
+    outbound-only 组自然殿后）；组内按真实时刻升序。无 thread_id 的邮件各自成组。
+    线程状态（last_sent_at / last_inbound_at）按全历史查库；查失败降级为无状态
+    （payload 少线程状态标记，不阻断报告）。
+    """
+    groups: Dict[str, ThreadGroup] = {}
+    order: List[str] = []
+    for b in briefs:
+        key = _solo_key(b)
+        g = groups.get(key)
+        if g is None:
+            g = ThreadGroup(thread_id=b.thread_id)
+            groups[key] = g
+            order.append(key)
+        g.emails.append(b)
+
+    history: _ThreadHistory = {}
+    tids = sorted({b.thread_id for b in briefs if b.thread_id})
+    if tids:
+        try:
+            conn = sqlite3.connect(db_path, timeout=30.0)
+            conn.row_factory = sqlite3.Row
+            try:
+                history = _thread_history(conn, tids)
+            finally:
+                conn.close()
+        except sqlite3.Error as e:
+            logger.warning(f"[report] build_thread_groups history query failed: {e}")
+
+    out: List[ThreadGroup] = []
+    for key in order:
+        g = groups[key]
+        g.emails.sort(key=lambda m: (_parse_dt(m.date_received) or _EPOCH, m.internal_id))
+        g.last_sent_at, g.last_inbound_at = history.get(g.thread_id, (None, None))
+        out.append(g)
+    return out
 
 
 def compute_report_counts(briefs: List[ReportEmailBrief]) -> Dict[str, Any]:

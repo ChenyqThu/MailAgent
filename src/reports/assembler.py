@@ -173,17 +173,24 @@ def assemble_report_doc(
 
     # ② sections + email_items：按重要度分三档收集（各档内保 LLM 相对顺序）——
     #   attention(行动/关注) · other(已处理等中间态) · fyi(殿后)。
+    # 🔴 replied 硬闸：per-email replied=True（严格语义，发件晚于这一封，误杀不可能）
+    #   的邮件即使被 LLM 放进 attention 类 section，也强制迁到 handled 档（prompt 的
+    #   「已回复不进紧急」是软约束，这里是代码防线；counts 口径不动）。
     valid_ids = set(brief_map.keys())
     used: set = set()
     attention_blocks: List[Dict[str, Any]] = []
     other_blocks: List[Dict[str, Any]] = []
     fyi_blocks: List[Dict[str, Any]] = []
+    migrated_replied: List[int] = []
     for sec in draft.sections:
         ids: List[int] = []
         for iid in sec.get("email_refs") or []:
             if isinstance(iid, int) and iid in brief_map and iid not in used:
                 ids.append(iid)
                 used.add(iid)
+        if _is_attention_section(sec):
+            migrated_replied.extend(i for i in ids if brief_map[i].replied)
+            ids = [i for i in ids if not brief_map[i].replied]
         intro = (sec.get("intro") or "").strip() or None
         summary = (sec.get("summary") or "").strip()
         # summary 里的跳转链接对齐到真实候选集；幻觉 id 降级为纯文本。
@@ -211,6 +218,16 @@ def assemble_report_doc(
             attention_blocks.extend(sec_blocks)
         else:
             other_blocks.extend(sec_blocks)
+
+    # replied 硬闸的落点：被迁出 attention 的邮件收进 handled 档一个独立 section
+    # （不并入 LLM 的其它组，避免语义错配；badges 已带「已回复」）。
+    if migrated_replied:
+        rep_blocks: List[Dict[str, Any]] = [
+            m.section("replied", "已回复", "check", "你已答复过，无需再处理")
+        ]
+        for iid in migrated_replied:
+            rep_blocks.append(_email_item(brief_map[iid]))
+        other_blocks.extend(rep_blocks)
 
     # ③ 组装：key_points 紧跟 callout（顶部"必看信息区"）→ attention → other → fyi。
     kps = [k.strip() for k in (draft.key_points or []) if k and k.strip()]

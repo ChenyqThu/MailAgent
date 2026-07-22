@@ -17,7 +17,13 @@ from loguru import logger
 from src.llm_agent.client import LLMClient, LLMResult
 from src.llm_agent.processor import _build_cache_control
 from src.reports.agent_tools import build_report_tools
-from src.reports.data import ReportEmailBrief, group_for_report
+from src.reports.data import (
+    ReportEmailBrief,
+    ThreadGroup,
+    _parse_dt,
+    build_thread_groups,
+    group_for_report,
+)
 from src.reports.prompts import get_default_prompt
 
 _BEIJING = timezone(timedelta(hours=8))
@@ -132,6 +138,11 @@ _FIXED_RULES = (
     "给定清单的 internal_id 里选，**绝不能编造 id**；不要复述 / 修改 counts 数字"
     "（统计卡由代码填）。\n"
     "- 每封邮件最多归入一个 section。\n"
+    "- 清单里标【发】的是用户自己发出的邮件，仅作「你已表态」的上下文 —— email_refs"
+    "只能引收件（【收】或无方向标记）的 id，绝不引【发】的。\n"
+    "- 标了「已回复」的邮件用户已答复过 —— **不得列入需要亲自关注 / 紧急答复类"
+    " section**，也不要在 overview / summary 里点名要求用户处理；对方在你回复后又有"
+    "新来信、确需再表态时，引用对方**新来的那封**（它未标已回复）。\n"
     "- 全程简体中文（mainland 用法）；人名 / 产品名 / 公司名 / 邮箱保留原文。"
 )
 
@@ -218,22 +229,105 @@ def _groups_hint_block(groups: Dict[str, List[ReportEmailBrief]]) -> str:
     )
 
 
-def _email_line(b: ReportEmailBrief, ai_summary_max_chars: int) -> str:
+def _email_line(
+    b: ReportEmailBrief,
+    ai_summary_max_chars: int,
+    *,
+    direction: str = "",
+    time_str: str = "",
+) -> str:
+    """单封收件行。direction / time_str 为空时输出与旧版逐字节一致（单封线程沿用）；
+    线程组内成员传 direction='【收】' + 短时间戳，供 LLM 按时序串事件。"""
     ai = b.ai_summary.strip()
     if len(ai) > ai_summary_max_chars:
         ai = ai[:ai_summary_max_chars] + "…"
     reply = b.reply_suggestion.strip()
     if len(reply) > 200:
         reply = reply[:200] + "…"
+    head = f"- {direction}id={b.internal_id}"
+    if time_str:
+        head += f" {time_str}"
     return (
-        f"- id={b.internal_id} [{_status_marks(b)}] {b.subject or '(无主题)'}"
-        f" | 发件人：{b.sender_name or b.sender_addr or '(未知)'}"
-        f" | 分类：{b.category or '-'}"
-        f" | 优先级：{b.priority or '-'}"
-        f" | 类型：{b.action_type or '-'}"
+        head
+        + f" [{_status_marks(b)}] {b.subject or '(无主题)'}"
+        + f" | 发件人：{b.sender_name or b.sender_addr or '(未知)'}"
+        + f" | 分类：{b.category or '-'}"
+        + f" | 优先级：{b.priority or '-'}"
+        + f" | 类型：{b.action_type or '-'}"
         + (f" | 摘要：{ai}" if ai else "")
         + (f" | 建议回复：{reply}" if reply else "")
     )
+
+
+def _outbound_line(b: ReportEmailBrief, time_str: str = "") -> str:
+    """我方发件的元数据行（不预载正文、不可进 email_refs，仅让 LLM 看到「你已表态」）。"""
+    head = f"- 【发】id={b.internal_id}"
+    if time_str:
+        head += f" {time_str}"
+    line = head + f" 你发出：{b.subject or '(无主题)'}"
+    ai = b.ai_summary.strip()
+    if ai:
+        line += f" | 摘要：{ai[:80]}"
+    return line
+
+
+def _fmt_short_time(date_received: str) -> str:
+    """date_received（混合时区 ISO）→ 'MM-DD HH:MM'；解析失败给空串。"""
+    dt = _parse_dt(date_received)
+    return dt.strftime("%m-%d %H:%M") if dt else ""
+
+
+def _thread_status_marks(g: ThreadGroup) -> str:
+    """线程状态标记（**全历史**算，不只报告窗口）：
+
+    - 你回过 → ``[你最后回复于 MM-DD]``；
+    - 最新一封是对方发来（未回 / 回后又来信）→ ``[最新一封是对方 MM-DD 发来]``；
+    - 「回过 + 对方又来信」两个标记并列 = 「待跟进」信号（软信号，LLM 叙事用）。
+    """
+    marks: List[str] = []
+    if g.last_sent_at is not None:
+        marks.append(f"[你最后回复于 {g.last_sent_at.strftime('%m-%d')}]")
+    if g.last_inbound_at is not None and not g.latest_is_outbound:
+        marks.append(f"[最新一封是对方 {g.last_inbound_at.strftime('%m-%d')} 发来]")
+    return " ".join(marks)
+
+
+def _thread_lines(groups: List[ThreadGroup], ai_summary_max_chars: int) -> List[str]:
+    """线程分组渲染成邮件清单行（agentic 日报 payload）。
+
+    - 单封收件线程退化为现状单行（格式不变，含正文附带 / 下钻提示）；
+    - 多封线程：线程头（根主题 + 收发计数 + 全历史状态标记）+ 组内按时刻升序逐封
+      （【收】/【发】方向标记）；正文只附在预载那封（每线程 ≤1 封）下面；
+    - 我方发件（outbound）以【发】元数据行进清单。
+    """
+    lines: List[str] = []
+    for g in groups:
+        if len(g.emails) == 1:
+            b = g.emails[0]
+            if b.is_outbound:
+                lines.append(_outbound_line(b, _fmt_short_time(b.date_received)))
+                continue
+            lines.append(_email_line(b, ai_summary_max_chars))
+            if b.body_text:
+                lines.append(f"  【正文已附】{b.body_text}")
+            else:
+                lines.append(f"  （仅摘要；需细节用 get_email_body({b.internal_id}) 取正文）")
+            continue
+        subject = next((e.subject for e in g.emails if e.subject), "") or "(无主题)"
+        status = _thread_status_marks(g)
+        lines.append(
+            f"### 线程：{subject}（收 {g.inbound_count} 发 {g.outbound_count}）"
+            + (f" {status}" if status else "")
+        )
+        for b in g.emails:
+            t = _fmt_short_time(b.date_received)
+            if b.is_outbound:
+                lines.append(_outbound_line(b, t))
+            else:
+                lines.append(_email_line(b, ai_summary_max_chars, direction="【收】", time_str=t))
+                if b.body_text:
+                    lines.append(f"  【正文已附】{b.body_text}")
+    return lines
 
 
 def _build_user(
@@ -297,23 +391,22 @@ def _build_user_agentic(
     briefs: List[ReportEmailBrief],
     counts: Dict[str, Any],
     groups: Dict[str, List[ReportEmailBrief]],
+    thread_groups: List[ThreadGroup],
     ai_summary_max_chars: int = 120,
 ) -> str:
-    """agentic 日报 user prompt：重要邮件附正文，其余摘要 + 提示可下钻。"""
+    """agentic 日报 user prompt：邮件清单**按线程分组**（同线程收发串成一个事件，
+    含线程状态标记 + 我方发件【发】行）；每线程 ≤1 封预载正文，其余摘要 + 可下钻。"""
     parts: List[str] = [
         f"把下面的邮件策展成报告。先看摘要，必要时用工具下钻，最后调 {_TOOL_NAME}。"
     ]
     parts.append(_counts_block(counts))
     parts.append(_groups_hint_block(groups))
-    inbound = [b for b in briefs if not b.is_outbound]
-    if inbound:
-        lines = ["\n## 邮件清单（按优先级排序；用 internal_id 引用）"]
-        for b in inbound:
-            lines.append(_email_line(b, ai_summary_max_chars))
-            if b.body_text:
-                lines.append(f"  【正文已附】{b.body_text}")
-            else:
-                lines.append(f"  （仅摘要；需细节用 get_email_body({b.internal_id}) 取正文）")
+    if any(not b.is_outbound for b in briefs):
+        lines = [
+            "\n## 邮件清单（按线程分组 = 同一件事；组内按时刻升序；"
+            "标【发】的是你已发出的邮件，仅作上下文；用 internal_id 引用）"
+        ]
+        lines.extend(_thread_lines(thread_groups, ai_summary_max_chars))
         parts.append("\n".join(lines))
     else:
         parts.append("\n## 邮件清单\n(窗口内无收件邮件)")
@@ -393,6 +486,8 @@ async def summarize_report_agentic(
     now = now or datetime.now(_BEIJING)
     persona = persona_prompt if (persona_prompt and persona_prompt.strip()) else get_default_prompt(cadence)
     groups = group_for_report(briefs)
+    # 线程聚合投影（含全历史状态）——payload 按事件串联，LLM 才能看到「你已表态」。
+    thread_groups = build_thread_groups(db_path, briefs)
     aux_tools, handlers = build_report_tools(db_path, kos_enabled=kos_enabled)
     tools = [*aux_tools, REPORT_TOOL_SCHEMA]  # build_report = final_tool（命中即收尾）
 
@@ -401,7 +496,9 @@ async def summarize_report_agentic(
     try:
         result = await client.run_tool_loop(
             system_blocks=_build_system_agentic(persona, now, kos_enabled, context_docs=context_docs),
-            user_content=_build_user_agentic(briefs=briefs, counts=counts, groups=groups),
+            user_content=_build_user_agentic(
+                briefs=briefs, counts=counts, groups=groups, thread_groups=thread_groups
+            ),
             tools=tools,
             tool_handlers=handlers,
             final_tool=_TOOL_NAME,

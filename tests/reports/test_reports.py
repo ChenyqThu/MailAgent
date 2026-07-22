@@ -23,10 +23,12 @@ from src.reports import models as m
 from src.reports.assembler import assemble_fallback_doc, assemble_report_doc
 from src.reports.store import ReportStore
 from src.reports.summarizer import (
+    _FIXED_RULES,
     REPORT_TOOL_SCHEMA,
     ReportDraft,
     _build_system,
     _build_system_agentic,
+    _build_user_agentic,
     _parse,
 )
 from src.reports.agent_tools import build_report_tools
@@ -222,6 +224,50 @@ class TestData:
         _insert(db, 1, is_flagged=1, labels=_labels())
         b = rdata.fetch_report_briefs(str(db), now=_NOW)[0]
         assert b.is_flagged is True and b.replied is False
+
+
+# ============================================================
+# 线程分组（07-21：日报按事件串联）
+# ============================================================
+
+
+class TestThreadGrouping:
+    def test_full_history_status_outside_window(self, db: Path):
+        # owner 案例：7-13 已回，7-20/21 对方再来信 —— 历史回复在 24h 窗口外，
+        # 线程状态必须按**全历史**算出「你最后回复于」；per-email replied 仍严格 False。
+        _insert(db, 1, thread_id="t1", hours_ago=200, subject="网安一体机", labels=_labels())
+        _insert(db, 2, mailbox="发件箱", thread_id="t1", hours_ago=190, subject="Re: 网安一体机")
+        _insert(db, 3, thread_id="t1", hours_ago=2, subject="Re: 网安一体机",
+                labels=_labels(priority="🔴 紧急"))
+        briefs = rdata.fetch_report_briefs(str(db), now=_NOW)
+        assert [b.internal_id for b in briefs] == [3]     # 窗口内只有对方新来信
+        assert briefs[0].replied is False                 # 严格语义：发件早于这一封
+        g = rdata.build_thread_groups(str(db), briefs)[0]
+        assert g.replied_by_me is True                    # 全历史软信号：你回过
+        assert g.latest_is_outbound is False              # 对方又来信 → 球在你这
+        assert g.last_sent_at is not None
+        assert g.last_inbound_at > g.last_sent_at
+
+    def test_group_mixed_direction_sorted_and_counts(self, db: Path):
+        _insert(db, 1, thread_id="t1", hours_ago=5, labels=_labels())
+        _insert(db, 2, mailbox="发件箱", thread_id="t1", hours_ago=4)
+        _insert(db, 3, thread_id="t1", hours_ago=1, labels=_labels())
+        _insert(db, 4, hours_ago=3, labels=_labels())      # 无 thread_id 单封
+        briefs = rdata.fetch_report_briefs(str(db), now=_NOW)
+        groups = rdata.build_thread_groups(str(db), briefs)
+        tg = next(g for g in groups if g.thread_id == "t1")
+        assert [b.internal_id for b in tg.emails] == [1, 2, 3]  # 收发混合按真实时刻升序
+        assert tg.inbound_count == 2 and tg.outbound_count == 1
+        solos = [g for g in groups if g.thread_id == ""]
+        assert len(solos) == 1 and solos[0].emails[0].internal_id == 4
+
+    def test_latest_is_outbound_ball_kicked(self, db: Path):
+        # 我方最后发言（全历史最新一封是发件）→ latest_is_outbound=True。
+        _insert(db, 1, thread_id="t1", hours_ago=5, labels=_labels())
+        _insert(db, 2, mailbox="发件箱", thread_id="t1", hours_ago=1)
+        briefs = rdata.fetch_report_briefs(str(db), now=_NOW)
+        g = next(g for g in rdata.build_thread_groups(str(db), briefs) if g.thread_id == "t1")
+        assert g.latest_is_outbound is True and g.replied_by_me is True
 
 
 # ============================================================
@@ -555,6 +601,65 @@ class TestAssembler:
         assert types.index("callout") < types.index("key_points") < types.index("section")
         assert doc.blocks[0]["title"] == "邮件周报"
 
+    def test_replied_forced_out_of_attention(self):
+        # 07-21 硬闸：per-email replied=True 的邮件被 LLM 放进 attention 类 section
+        # → 强制迁 handled 档（独立「已回复」section），attention 里不再出现。
+        not_replied = rdata.ReportEmailBrief(
+            1, "S1", "A", "a@x.com", _iso(1), "📊 项目管理", "🔴 紧急", "需要回复",
+            "", False, "pg1")
+        replied = rdata.ReportEmailBrief(
+            2, "S2", "B", "b@x.com", _iso(2), "📊 项目管理", "🔴 紧急", "需要回复",
+            "", False, "pg2", replied=True)
+        draft = ReportDraft(
+            headline="h", overview="ov",
+            sections=[
+                {"id": "attention", "title": "需要关注", "icon": "alert", "email_refs": [1, 2]},
+                {"id": "fyi", "title": "FYI", "icon": "inbox", "intro": "x", "email_refs": []},
+            ],
+            model="mk",
+        )
+        doc = assemble_report_doc(draft=draft, briefs=[not_replied, replied],
+                                  counts={"total": 2, "urgent": 1},
+                                  agent_id="a", cadence="daily", report_date="2026-06-02",
+                                  window_start="s", window_end="e", generated_at="g",
+                                  model="mk", now=_NOW)
+        secs = [(i, b) for i, b in enumerate(doc.blocks) if b["type"] == "section"]
+        att_i = next(i for i, b in secs if b["id"] == "attention")
+        rep_i = next(i for i, b in secs if b["id"] == "replied")
+        fyi_i = next(i for i, b in secs if b["id"] == "fyi")
+        assert att_i < rep_i < fyi_i                      # attention → handled 档 → fyi
+        items = [(i, b["internal_id"]) for i, b in enumerate(doc.blocks)
+                 if b["type"] == "email_item"]
+        assert [(iid) for _, iid in items] == [1, 2]
+        assert att_i < items[0][0] < rep_i                # id=1 留在 attention
+        assert rep_i < items[1][0] < fyi_i                # id=2 迁到「已回复」section
+        # counts 口径不动（统计卡仍是传入的代码 counts）。
+        sr = next(b for b in doc.blocks if b["type"] == "stat_row")
+        assert {s["key"]: s["value"] for s in sr["stats"]}["urgent"] == 1
+
+    def test_replied_migration_drops_emptied_attention_section(self):
+        # attention section 里全是 replied 且无 intro/summary → 该 section 整个不渲染，
+        # 但迁出的邮件仍落在「已回复」section。
+        replied = rdata.ReportEmailBrief(
+            2, "S2", "B", "b@x.com", _iso(2), "📊 项目管理", "🔴 紧急", "需要回复",
+            "", False, "pg2", replied=True)
+        draft = ReportDraft(
+            headline="h", overview="",
+            sections=[{"id": "attention", "title": "需要关注", "icon": "alert",
+                       "email_refs": [2]}],
+            model="mk",
+        )
+        doc = assemble_report_doc(draft=draft, briefs=[replied], counts={},
+                                  agent_id="a", cadence="daily", report_date="2026-06-02",
+                                  window_start="s", window_end="e", generated_at="g",
+                                  model="mk", now=_NOW)
+        sec_ids = [b["id"] for b in doc.blocks if b["type"] == "section"]
+        assert sec_ids == ["replied"]
+        items = [b["internal_id"] for b in doc.blocks if b["type"] == "email_item"]
+        assert items == [2]
+        item = next(b for b in doc.blocks if b["type"] == "email_item")
+        assert "已回复" in item["badges"]
+
 
 # ============================================================
 # summarizer
@@ -624,6 +729,79 @@ class TestSummarizer:
         assert calls[-1] == ["soul", "user"] and "IDENTITY_BLOCK" in blocks[0]["text"]
         blocks = _build_system_agentic("P", now, kos_enabled=False, context_docs=[])
         assert calls[-1] == [] and "IDENTITY_BLOCK" not in blocks[0]["text"]
+
+    def test_fixed_rules_replied_and_outbound_guard(self):
+        # 「已回复不进紧急 / 不在 summary 点名」从 persona（用户可覆盖）上移进硬规则；
+        # 【发】行只作上下文、不可进 email_refs 也是硬规则。
+        assert "已回复" in _FIXED_RULES
+        assert "【发】" in _FIXED_RULES
+
+
+# ============================================================
+# 线程化 payload（07-21：agentic 日报按事件串联）
+# ============================================================
+
+
+class TestThreadPayload:
+    def test_agentic_payload_thread_grouped(self, db: Path):
+        _insert(db, 1, thread_id="t1", hours_ago=5, subject="方案A", labels=_labels())
+        _insert(db, 2, mailbox="发件箱", thread_id="t1", hours_ago=4, subject="Re: 方案A")
+        _insert(db, 3, thread_id="t1", hours_ago=1, subject="Re: 方案A",
+                labels=_labels(priority="🔴 紧急"))
+        _insert(db, 4, hours_ago=3, subject="独立邮件", labels=_labels())
+        briefs = rdata.fetch_report_briefs(str(db), now=_NOW)
+        counts = rdata.compute_report_counts(briefs)
+        groups = rdata.group_for_report(briefs)
+        tgs = rdata.build_thread_groups(str(db), briefs)
+        user = _build_user_agentic(
+            briefs=briefs, counts=counts, groups=groups, thread_groups=tgs
+        )
+        # 线程头：根主题 + 收发计数 + 全历史状态标记（已回 + 对方又来信 → 双标记）。
+        assert "### 线程：方案A（收 2 发 1）" in user
+        assert "[你最后回复于" in user and "[最新一封是对方" in user
+        # outbound 进清单（元数据行）；组内成员带方向标记。
+        assert "【发】id=2" in user
+        assert "【收】id=1" in user and "【收】id=3" in user
+        # 单封线程退化为现状单行（无方向标记）+ 下钻提示。
+        assert "\n- id=4 [" in user
+        assert "get_email_body(4)" in user
+
+    def test_single_outbound_thread_renders_as_sent_line(self, db: Path):
+        # 窗口内你主动发出、无对方回信的邮件：以单条【发】行进清单。
+        _insert(db, 1, hours_ago=3, labels=_labels())
+        _insert(db, 9, mailbox="发件箱", thread_id="t9", hours_ago=1, subject="我发起的")
+        briefs = rdata.fetch_report_briefs(str(db), now=_NOW)
+        tgs = rdata.build_thread_groups(str(db), briefs)
+        user = _build_user_agentic(
+            briefs=briefs, counts=rdata.compute_report_counts(briefs),
+            groups=rdata.group_for_report(briefs), thread_groups=tgs,
+        )
+        assert "【发】id=9" in user and "我发起的" in user
+        assert "### 线程" not in user   # 单封组不出线程头
+
+    def test_thread_body_attached_only_on_preloaded(self, db: Path):
+        # 线程组内正文只附在预载那封（最新收件）下面；其余成员无正文行。
+        _insert(db, 1, thread_id="t1", hours_ago=5, subject="方案A",
+                labels=_labels(priority="🔴 紧急"))
+        _insert(db, 2, thread_id="t1", hours_ago=1, subject="Re: 方案A",
+                labels=_labels(priority="🔴 紧急"))
+        conn = sqlite3.connect(str(db))
+        for iid, text in ((1, "老正文"), (2, "新正文")):
+            conn.execute(
+                "INSERT INTO email_body (internal_id, body_markdown, body_format, "
+                "body_size_bytes, fetched_at, fetched_source) VALUES (?, ?, 'text', ?, ?, 'test')",
+                (iid, text, len(text), time.time()),
+            )
+        conn.commit()
+        conn.close()
+        briefs = rdata.fetch_report_briefs(str(db), now=_NOW, body_priorities=["🔴 紧急"])
+        tgs = rdata.build_thread_groups(str(db), briefs)
+        user = _build_user_agentic(
+            briefs=briefs, counts=rdata.compute_report_counts(briefs),
+            groups=rdata.group_for_report(briefs), thread_groups=tgs,
+        )
+        assert "【正文已附】新正文" in user
+        assert "老正文" not in user
 
 
 # ============================================================
@@ -745,9 +923,17 @@ class TestToolLoop:
         from types import SimpleNamespace as NS
         return NS(type="tool_use", id=tid, name=name, input=inp)
 
-    def test_loop_runs_tool_then_final(self):
+    def test_loop_runs_tool_then_final(self, monkeypatch):
         from types import SimpleNamespace as NS
+        from src.llm_agent import provider_routing
         from src.llm_agent.client import LLMClient
+
+        # pin registry off：本机 agent_config.db 有真实 default provider 行时，
+        # resolve_route 会返回真 route → _anthropic_for 绕过下面注入的 fake client
+        # 直连真网络（环境依赖 flake）。镜像 test_loop_requires_anthropic_model 的 pin。
+        monkeypatch.setattr(
+            provider_routing, "cfg", NS(llm_provider_registry_enabled=False)
+        )
         seq = [
             self._msg([self._tu("t1", "get_x", {"q": "a"})]),
             self._msg([self._tu("t2", "build_report", {"headline": "H"})]),
@@ -886,6 +1072,38 @@ class TestBodyPreload:
         assert all(b.body_text is None for b in briefs_none)  # None → 都不预载
         briefs_empty = rdata.fetch_report_briefs(str(db), now=_NOW, body_priorities=[])
         assert all(b.body_text is None for b in briefs_empty)  # [] → 都不预载
+
+    def _insert_body(self, db: Path, iid: int, text: str) -> None:
+        conn = sqlite3.connect(str(db))
+        conn.execute(
+            "INSERT INTO email_body (internal_id, body_markdown, body_format, "
+            "body_size_bytes, fetched_at, fetched_source) VALUES (?, ?, 'text', ?, ?, 'test')",
+            (iid, text, len(text), time.time()),
+        )
+        conn.commit()
+        conn.close()
+
+    def test_thread_preloads_only_latest_inbound(self, db: Path):
+        # 每线程只预载最新一封收件（最新邮件带引用历史，够用）；priority 门按
+        # 「组内任一命中」放宽 —— 紧急线程的最新跟进即使标一般也载它（引用链完整）。
+        _insert(db, 1, thread_id="t1", hours_ago=5, labels=_labels(priority="🔴 紧急"))
+        _insert(db, 2, thread_id="t1", hours_ago=1, labels=_labels(priority="🟢 一般"))
+        self._insert_body(db, 1, "正文1")
+        self._insert_body(db, 2, "正文2")
+        briefs = rdata.fetch_report_briefs(str(db), now=_NOW, body_priorities=["🔴 紧急"])
+        bm = {b.internal_id: b for b in briefs}
+        assert bm[1].body_text is None       # 老一封不载
+        assert bm[2].body_text == "正文2"    # 组内有紧急 → 载最新一封收件
+
+    def test_no_preload_when_latest_is_outbound(self, db: Path):
+        # 线程最新一封（全历史）是我方发件 → 球已踢出，整线程不预载正文。
+        _insert(db, 1, thread_id="t1", hours_ago=5, labels=_labels(priority="🔴 紧急"))
+        _insert(db, 2, mailbox="发件箱", thread_id="t1", hours_ago=1)
+        self._insert_body(db, 1, "正文1")
+        briefs = rdata.fetch_report_briefs(str(db), now=_NOW, body_priorities=["🔴 紧急"])
+        inbound = [b for b in briefs if not b.is_outbound]
+        assert [b.internal_id for b in inbound] == [1]
+        assert inbound[0].body_text is None
 
 
 class TestAggregateRun:
