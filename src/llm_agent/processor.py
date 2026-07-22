@@ -44,6 +44,24 @@ _WS_RE = re.compile(r"[ \t]+")
 _NL_RE = re.compile(r"\n{3,}")
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _VALID_TTL = {"5m", "1h"}
+_VALID_CONTEXT_SOURCES = {"notion_context", "standing_docs"}
+
+
+def _resolve_context_source() -> str:
+    """预处理分类 system prompt 的参考上下文源（task 07-21，二选一）。
+
+    LLM_PREPROCESS_CONTEXT_SOURCE 显式值权威（notion_context | standing_docs）；空 / 非法
+    → 升级继承规则：配了 LLM_CONTEXT_PAGE_ID → notion_context，否则 standing_docs
+    （老库/老用户零迁移，无需 DB 迁移即可保持升级前的注入形态）。
+    """
+    raw = (getattr(cfg, "llm_preprocess_context_source", "") or "").strip().lower()
+    if raw in _VALID_CONTEXT_SOURCES:
+        return raw
+    return (
+        "notion_context"
+        if (getattr(cfg, "llm_context_page_id", "") or "").strip()
+        else "standing_docs"
+    )
 
 
 def _build_cache_control() -> Dict[str, Any] | None:
@@ -197,25 +215,33 @@ class LLMProcessor:
 
         _pp = pp if pp is not None else get_preprocess_config(cfg.sync_store_db_path)
 
-        # 身份 grounding：文档集用预处理 agent 的勾选（context_docs=None → 用默认 soul/user；
-        # []=用户取消全部 → 不注入）；flag task_identity_docs_enabled 仍是总闸（关则恒空）。
-        if _pp.context_docs is not None:
-            _identity = build_task_identity_context(doc_names=_pp.context_docs)
-        else:
-            _identity = build_task_identity_context()
-        if _identity:
-            blocks.append({"type": "text", "text": _identity})
+        # task 07-21 —— 参考上下文源二选一：预处理 system prompt 只注入一种参考背景，不再把
+        # 身份文档（Standing Docs）与 notion context page 叠加（owner 反馈：两者用途重叠、双注入
+        # 冗余）。standing_docs → 注入身份文档块（沿用 context_docs 勾选）、跳过 notion；
+        # notion_context → 注入 notion context 块、跳过身份文档。源由 _resolve_context_source
+        # 决定（LLM_PREPROCESS_CONTEXT_SOURCE 权威，空则按 LLM_CONTEXT_PAGE_ID 有无继承）。
+        source = _resolve_context_source()
 
-        ctx_md = await self._context.get_markdown()
-        if ctx_md:
-            blocks.append({
-                "type": "text",
-                "text": (
-                    "# Reference context (user profile / Sender Priority / focus projects)\n"
-                    "# Read silently; never echo back.\n\n"
-                    + ctx_md
-                ),
-            })
+        if source == "standing_docs":
+            # 身份 grounding：文档集用预处理 agent 的勾选（context_docs=None → 用默认 soul/user；
+            # []=用户取消全部 → 不注入）；flag task_identity_docs_enabled 仍是总闸（关则恒空）。
+            if _pp.context_docs is not None:
+                _identity = build_task_identity_context(doc_names=_pp.context_docs)
+            else:
+                _identity = build_task_identity_context()
+            if _identity:
+                blocks.append({"type": "text", "text": _identity})
+        else:  # notion_context —— 只拼 Notion context page，不注入身份文档
+            ctx_md = await self._context.get_markdown()
+            if ctx_md:
+                blocks.append({
+                    "type": "text",
+                    "text": (
+                        "# Reference context (user profile / Sender Priority / focus projects)\n"
+                        "# Read silently; never echo back.\n\n"
+                        + ctx_md
+                    ),
+                })
 
         mailbox_prompt = self._prompts.get_for_mailbox(mailbox)
         if mailbox_prompt:

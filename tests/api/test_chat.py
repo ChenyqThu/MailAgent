@@ -261,7 +261,7 @@ class _ChatConfigStub:
 
 
 def _config_client(
-    monkeypatch: pytest.MonkeyPatch, cfg: object, user_context: str = "",
+    monkeypatch: pytest.MonkeyPatch, cfg: object,
     env_file: object = None,
 ) -> TestClient:
     monkeypatch.setattr("src.api.routers.chat.get_settings", lambda: cfg)
@@ -269,22 +269,14 @@ def _config_client(
     # 隔离：env_file=None → get_env_file_path 返回 None → 热读 fallback 到 stub cfg，避免
     # 读开发机真实 .env（否则 MAILAGENT_KOS_* 等真实值会污染 stub）。需测热读时传临时 .env。
     monkeypatch.setattr("src.api.routers.chat.get_env_file_path", lambda: env_file)
-    # task 06-08-chat 第二波 Bug B — stub the lazy ContextLoader so /config tests
-    # don't hit Notion. Patch the _get_context_loader accessor (the singleton is
-    # lazy / None until first use). Default "" (not configured); override per-test.
-    async def _ctx() -> str:
-        return user_context
-
-    class _StubLoader:
-        get_markdown = staticmethod(_ctx)
-
-    monkeypatch.setattr("src.api.routers.chat._get_context_loader", lambda: _StubLoader())
+    # task 07-21 —— Notion context page 不再注入 chat（Standing Context 单源），
+    # /config 不再有 userContext 字段，也不再 lazy 拉 ContextLoader。
     return TestClient(app, raise_server_exceptions=False)
 
 
 def test_chat_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
-    """默认快照：10 字段 camelCase 齐全 + 值对齐 electron 默认 + DEFAULT_HTTP_CONFIG。
-    userContext 默认 ""（未配置 LLM_CONTEXT_PAGE_ID / ContextLoader 返回空）；
+    """默认快照：字段 camelCase 齐全 + 值对齐 electron 默认 + DEFAULT_HTTP_CONFIG。
+    task 07-21 起不再有 userContext（Notion context page 不注入 chat，Standing Context 单源）；
     memorySummary 默认 ""（MEM0_RETRIEVAL 默认开 —— 2026-07-02 cutover —— 但隔离
     agent_config.db 的 MEMORY doc 为空 → 不注入）。"""
     with _config_client(monkeypatch, _ChatConfigStub()) as c:
@@ -322,7 +314,6 @@ def test_chat_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
         "kosConsumerEnabled": False,
         "kosConfigured": False,
         "kosTimeDecayEnabled": True,
-        "userContext": "",
         "memorySummary": "",
         "enabledModels": [],
         # R4 — flag default ON + seeded docs → layered prompt in effect.
@@ -564,58 +555,6 @@ def test_chat_config_kos_cleared_via_env_overrides_stale_os_environ(
     assert data["kosConsumerEnabled"] is True
     # endpoint 被 .env 显式清空 → 凭据不齐 → 未对接（不被 os.environ 旧值救回）
     assert data["kosConfigured"] is False
-
-
-def test_chat_config_user_context_injected(monkeypatch: pytest.MonkeyPatch) -> None:
-    """task 06-08-chat 第二波 Bug B — ContextLoader 返回非空 markdown 时 userContext
-    原样透传（custom-api system prompt 注入用户身份/Sender Priority）。"""
-    ctx_md = "# Lucien\nRole: ENBU R&D\nSender Priority: boss@acme.com → Critical"
-    with _config_client(monkeypatch, _ChatConfigStub(), user_context=ctx_md) as c:
-        data = c.get("/api/chat/config").json()["data"]
-    assert data["userContext"] == ctx_md
-
-
-def test_chat_config_user_context_graceful_on_loader_error(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """ContextLoader 抛异常时 /config 不崩 —— userContext 降级 ""（best-effort，chat 仍可跑）。"""
-
-    async def _boom() -> str:
-        raise RuntimeError("notion down")
-
-    class _BoomLoader:
-        get_markdown = staticmethod(_boom)
-
-    monkeypatch.setattr("src.api.routers.chat.get_settings", lambda: _ChatConfigStub())
-    monkeypatch.setattr("src.api.routers.chat._get_context_loader", lambda: _BoomLoader())
-    with TestClient(app, raise_server_exceptions=False) as c:
-        r = c.get("/api/chat/config")
-    assert r.status_code == 200
-    assert r.json()["data"]["userContext"] == ""
-
-
-def test_chat_config_user_context_timeout_degrades(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """dogfood round 3 — ContextLoader 慢 (冷缓存串行打 Notion 可达分钟级) 时
-    /config 必须限时返回: renderer chat 引擎构造 await 本端点, 无界等待 = chat
-    panel 整体卡死。超时降级 userContext=""，端点本身 200。"""
-    import asyncio as _asyncio
-
-    async def _slow() -> str:
-        await _asyncio.sleep(5)
-        return "too late"
-
-    class _SlowLoader:
-        get_markdown = staticmethod(_slow)
-
-    monkeypatch.setattr("src.api.routers.chat.get_settings", lambda: _ChatConfigStub())
-    monkeypatch.setattr("src.api.routers.chat._get_context_loader", lambda: _SlowLoader())
-    monkeypatch.setattr("src.api.routers.chat._USER_CONTEXT_TIMEOUT_SEC", 0.05)
-    with TestClient(app, raise_server_exceptions=False) as c:
-        r = c.get("/api/chat/config")
-    assert r.status_code == 200
-    assert r.json()["data"]["userContext"] == ""
 
 
 def test_chat_config_kos_configured_requires_consumer_and_creds(

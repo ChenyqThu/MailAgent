@@ -352,7 +352,21 @@ class Config(BaseSettings):
     )
     llm_context_page_id: str = Field(
         default="", env="LLM_CONTEXT_PAGE_ID",
-        description="Email Agent Context Notion 页面 ID（留空则不拼 context）",
+        description=(
+            "Email Agent Context Notion 页面 ID。task 07-21 起语义收窄："
+            "仅当预处理「参考上下文源」= notion_context 时被拼进分类 system prompt；"
+            "不再注入 chat（chat 由 Standing Context 单源承担）。留空 = 不拼 notion context。"
+        ),
+    )
+    llm_preprocess_context_source: str = Field(
+        default="", env="LLM_PREPROCESS_CONTEXT_SOURCE",
+        description=(
+            "预处理分类 system prompt 的参考上下文源二选一（task 07-21）："
+            "'standing_docs' = 注入身份文档（沿用预处理行 context_docs 勾选）、不注入 notion；"
+            "'notion_context' = 注入 LLM_CONTEXT_PAGE_ID 页面、不注入身份文档。"
+            "留空/非法 = 升级继承：配了 LLM_CONTEXT_PAGE_ID → notion_context，否则 standing_docs。"
+            "pydantic 冻结单例读，改值需重启后端（LLM agent 进程）生效。"
+        ),
     )
     llm_context_cache_ttl_sec: int = Field(
         default=1800, env="LLM_CONTEXT_CACHE_TTL_SEC",

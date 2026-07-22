@@ -3014,6 +3014,7 @@
       "emptyHint": "所选时间窗口内没有新邮件，无需生成报告。",
       "generatedAt": "生成于",
       "backToList": "返回列表",
+      "loadingMore": "加载更多…",
       "weekday": {
         "sun": "周日",
         "mon": "周一",
@@ -3167,13 +3168,23 @@
       "contextDocs": "注入的身份文档",
       "contextDocsHint": "勾选后注入邮件分类的系统提示",
       "contextDocsNote": "勾选的身份文档会注入 AI 邮件分类的系统提示（默认 灵魂 + 用户偏好）。",
+      "contextDocsInactiveNote": "当前参考上下文源为「Notion 上下文页」，身份文档不会注入分类提示（此处勾选暂不生效）。",
+      "contextSource": "参考上下文源",
+      "contextSourceHint": "邮件分类系统提示的参考背景二选一（env，需重启后端生效）：身份文档 或 Notion 上下文页，两者互斥不叠加。",
+      "contextSourceOption": {
+        "standing_docs": "身份文档",
+        "notion_context": "Notion 上下文页"
+      },
+      "contextPageId": "Notion 上下文页 ID",
+      "contextPageIdPlaceholder": "Notion 页面 ID（LLM_CONTEXT_PAGE_ID）",
+      "contextPageIdHint": "该 Notion 页面正文会作为参考上下文注入邮件分类提示（留空则不注入）。env LLM_CONTEXT_PAGE_ID，需重启后端生效。",
       "doc": {
         "soul": "灵魂 / soul",
         "agent": "行为 / agent",
         "rules": "规则 / rules",
         "user": "用户偏好 / user"
       },
-      "webReadOnly": "远程 Web 为只读：启用状态不可修改（仅本地桌面端可改）；模型、fallback 与文档勾选仍可编辑。",
+      "webReadOnly": "远程 Web 为只读：启用状态、参考上下文源与 context page ID 不可修改（仅本地桌面端可改）；模型、fallback 与文档勾选仍可编辑。",
       "fallback": "Fallback 备用模型",
       "fallbackHint": "预处理专用 fallback，保存即生效；默认跟随全局设置（设置 → AI 的 Fallback 链）",
       "fallbackFollowGlobal": "跟随全局（{model}）",
@@ -3313,6 +3324,8 @@
         "runNow": "立即运行",
         "loading": "加载中…",
         "empty": "暂无运行记录。",
+        "loadMore": "加载更多",
+        "loadMoreLoading": "加载中…",
         "pausedPendingHint": "运行已暂停、等待审批。打开执行记录即可批准，或在灵动岛批准；超时未处理将过期作废。",
         "pausedExpiredHint": "审批已过期，此次运行未执行。",
         "autoWhitelisted": "自动放行 ×{n}",

@@ -50,6 +50,20 @@ const FALLBACK_FOLLOW_GLOBAL = '__follow_global_fb__'
 /** fallback 下拉「不设」哨兵（行级列 '[]'；同上，空串 value 会让 radix 直接 throw）。 */
 const FALLBACK_NONE = '__none__'
 
+// task 07-21 —— 参考上下文源二选一（env LLM_PREPROCESS_CONTEXT_SOURCE，pydantic singleton
+// 需重启后端生效）。standing_docs = 注入下方勾选的身份文档、不注入 notion；notion_context =
+// 注入 Notion context page（LLM_CONTEXT_PAGE_ID）、不注入身份文档。二者互斥不叠加。
+const CONTEXT_SOURCES = ['standing_docs', 'notion_context'] as const
+type ContextSource = (typeof CONTEXT_SOURCES)[number]
+
+/** env 值 → 生效源：显式合法值权威；空/非法按 LLM_CONTEXT_PAGE_ID 有无继承（同后端
+ *  _resolve_context_source，保证 UI 显示态与运行注入态一致）。 */
+function deriveContextSource(rawSource: string | null, rawPageId: string | null): ContextSource {
+  const s = (rawSource ?? '').trim().toLowerCase()
+  if (s === 'notion_context' || s === 'standing_docs') return s
+  return (rawPageId ?? '').trim().length > 0 ? 'notion_context' : 'standing_docs'
+}
+
 /** 分类 prompt 每 slot 的编辑草稿（content 可编辑；path 用于次要信息展示）。 */
 interface PromptDraft {
   content: string
@@ -88,6 +102,12 @@ export function PreprocessConfigDrawer({
   const [fallbackModelDirty, setFallbackModelDirty] = useState(false)
   const [markReadAfterProcessing, setMarkReadAfterProcessing] = useState(true)
   const [contextDocs, setContextDocs] = useState<string[]>([])
+  // task 07-21 —— 参考上下文源（env）+ notion context page ID（env）。均 env-backed（写 .env +
+  // 重启横幅），与「启用」同源；web 只读（IS_WEB 时禁编辑）。dirty 追踪避免 stale 覆写真实 .env。
+  const [contextSource, setContextSource] = useState<ContextSource>('standing_docs')
+  const [contextSourceDirty, setContextSourceDirty] = useState(false)
+  const [contextPageId, setContextPageId] = useState('')
+  const [contextPageIdDirty, setContextPageIdDirty] = useState(false)
   const [envSaving, setEnvSaving] = useState(false)
   // 分类 prompt 编辑草稿（收件箱/发件箱 tab，textarea 可编辑，保存写回 .md 文件）——
   // 打开抽屉时经 mailApi.prompts.read 拉两份。
@@ -107,6 +127,14 @@ export function PreprocessConfigDrawer({
   )
   const envFallbackRaw = useEnvStore((s) =>
     s.state.status === 'ready' ? (s.state.snapshot.values['LLM_FALLBACK_MODELS'] ?? '') : null
+  )
+  const envContextSourceRaw = useEnvStore((s) =>
+    s.state.status === 'ready'
+      ? (s.state.snapshot.values['LLM_PREPROCESS_CONTEXT_SOURCE'] ?? '')
+      : null
+  )
+  const envContextPageIdRaw = useEnvStore((s) =>
+    s.state.status === 'ready' ? (s.state.snapshot.values['LLM_CONTEXT_PAGE_ID'] ?? '') : null
   )
 
   // 打开时预填 row 字段 + 复位所有 dirty。同 ConfigDrawer / SearchConfigDrawer 既有豁免理由：
@@ -131,6 +159,8 @@ export function PreprocessConfigDrawer({
     setEnabledDirty(false)
     setModelDirty(false)
     setFallbackModelDirty(false)
+    setContextSourceDirty(false)
+    setContextPageIdDirty(false)
     setPromptTab('inbox')
   }, [open, cfg])
   // 启用从 env 就绪快照回填：仅在打开且用户未 dirty 该字段时同步 —— env idle→ready 的
@@ -139,6 +169,18 @@ export function PreprocessConfigDrawer({
     if (!open) return
     if (envEnabledRaw !== null && !enabledDirty) setEnabled(envFlagOn(envEnabledRaw))
   }, [open, envEnabledRaw, enabledDirty])
+  // task 07-21 —— 参考上下文源 + context page ID 从 env 就绪快照回填（同「启用」的迟到纠正
+  // 语义，dirty 后停止同步）。source 空/非法按 page id 有无继承（deriveContextSource）。
+  useEffect(() => {
+    if (!open) return
+    if (envContextSourceRaw !== null && !contextSourceDirty) {
+      setContextSource(deriveContextSource(envContextSourceRaw, envContextPageIdRaw))
+    }
+  }, [open, envContextSourceRaw, envContextPageIdRaw, contextSourceDirty])
+  useEffect(() => {
+    if (!open) return
+    if (envContextPageIdRaw !== null && !contextPageIdDirty) setContextPageId(envContextPageIdRaw)
+  }, [open, envContextPageIdRaw, contextPageIdDirty])
   // 分类 prompt：打开时经 mailApi.prompts.read 拉两份（best-effort，失败显示占位；
   // 关闭时丢弃避免 setState-after-close）。与运行时 PromptLoader 同两份文件（mtime 热加载）。
   useEffect(() => {
@@ -189,6 +231,14 @@ export function PreprocessConfigDrawer({
       const nextEnabled = enabled ? 'true' : 'false'
       if (enabledDirty && nextEnabled !== (vals['LLM_AGENT_ENABLED'] ?? '')) {
         envPatch['LLM_AGENT_ENABLED'] = nextEnabled
+      }
+      // task 07-21 —— 参考上下文源 + context page ID（env，pydantic singleton 需重启）。仅
+      // dirty 且与 .env 现值不同才写，避免无谓触发重启横幅。
+      if (contextSourceDirty && contextSource !== (vals['LLM_PREPROCESS_CONTEXT_SOURCE'] ?? '')) {
+        envPatch['LLM_PREPROCESS_CONTEXT_SOURCE'] = contextSource
+      }
+      if (contextPageIdDirty && contextPageId !== (vals['LLM_CONTEXT_PAGE_ID'] ?? '')) {
+        envPatch['LLM_CONTEXT_PAGE_ID'] = contextPageId
       }
       if (Object.keys(envPatch).length > 0) {
         setEnvSaving(true)
@@ -525,12 +575,107 @@ export function PreprocessConfigDrawer({
             )}
           </Field>
 
-          {/* 文档勾选（cfg.context_docs）—— 注入分类 system prompt 的身份文档 */}
+          {/* 参考上下文源二选一（task 07-21，env LLM_PREPROCESS_CONTEXT_SOURCE，重启生效）——
+                standing_docs = 注入下方勾选的身份文档；notion_context = 注入 Notion context
+                page（下方 ID）。二者互斥不叠加。web 只读、env 未就绪时禁编辑。 */}
+          <Field
+            label={t('agents.preprocess.contextSource')}
+            hint={t('agents.preprocess.contextSourceHint')}
+          >
+            <div
+              className="flex items-center"
+              style={{
+                gap: 8,
+                flexWrap: 'wrap',
+                ...(!envReady || IS_WEB ? { opacity: 0.5, pointerEvents: 'none' as const } : null)
+              }}
+            >
+              {CONTEXT_SOURCES.map((src) => {
+                const on = contextSource === src
+                return (
+                  <button
+                    key={src}
+                    type="button"
+                    aria-pressed={on}
+                    onClick={() => {
+                      setContextSource(src)
+                      setContextSourceDirty(true)
+                    }}
+                    style={{
+                      padding: '6px 12px',
+                      borderRadius: 8,
+                      fontFamily: 'inherit',
+                      fontSize: 13,
+                      cursor: 'pointer',
+                      color: on ? 'rgb(var(--c-accent))' : 'rgb(var(--ink-fg-2))',
+                      background: on ? 'rgb(var(--c-accent) / 0.14)' : 'rgb(var(--ink-1) / 0.5)',
+                      border: `1px solid ${on ? 'rgb(var(--c-accent))' : 'rgb(var(--ink-border))'}`,
+                      transition:
+                        'color 120ms cubic-bezier(0.4,0,0.2,1), background-color 120ms cubic-bezier(0.4,0,0.2,1), border-color 120ms cubic-bezier(0.4,0,0.2,1)'
+                    }}
+                  >
+                    {t(`agents.preprocess.contextSourceOption.${src}`)}
+                  </button>
+                )
+              })}
+            </div>
+            {contextSource === 'notion_context' && (
+              <div style={{ marginTop: 12 }}>
+                <div
+                  style={{
+                    fontSize: 12.5,
+                    fontWeight: 500,
+                    color: 'rgb(var(--ink-fg-2))',
+                    marginBottom: 6
+                  }}
+                >
+                  {t('agents.preprocess.contextPageId')}
+                </div>
+                <input
+                  type="text"
+                  value={contextPageId}
+                  onChange={(e) => {
+                    setContextPageId(e.target.value)
+                    setContextPageIdDirty(true)
+                  }}
+                  disabled={!envReady || IS_WEB}
+                  placeholder={t('agents.preprocess.contextPageIdPlaceholder')}
+                  spellCheck={false}
+                  style={{
+                    ...inputStyle,
+                    ...(!envReady || IS_WEB ? { opacity: 0.5 } : null)
+                  }}
+                />
+                <div
+                  style={{
+                    fontSize: 11.5,
+                    color: 'rgb(var(--ink-fg-3))',
+                    marginTop: 6,
+                    lineHeight: 1.5
+                  }}
+                >
+                  {t('agents.preprocess.contextPageIdHint')}
+                </div>
+              </div>
+            )}
+          </Field>
+
+          {/* 文档勾选（cfg.context_docs）—— 注入分类 system prompt 的身份文档。仅
+                standing_docs 源生效；notion_context 源下置灰（不注入身份文档）。 */}
           <Field
             label={t('agents.preprocess.contextDocs')}
             hint={t('agents.preprocess.contextDocsHint')}
           >
-            <div className="flex items-center" style={{ gap: 8, flexWrap: 'wrap' }}>
+            <div
+              className="flex items-center"
+              style={{
+                gap: 8,
+                flexWrap: 'wrap',
+                ...(contextSource === 'notion_context'
+                  ? { opacity: 0.45, pointerEvents: 'none' as const }
+                  : null)
+              }}
+            >
               {PREPROCESS_DOCS.map((doc) => {
                 const on = contextDocs.includes(doc)
                 return (
@@ -569,7 +714,9 @@ export function PreprocessConfigDrawer({
                 lineHeight: 1.5
               }}
             >
-              {t('agents.preprocess.contextDocsNote')}
+              {contextSource === 'notion_context'
+                ? t('agents.preprocess.contextDocsInactiveNote')
+                : t('agents.preprocess.contextDocsNote')}
             </div>
           </Field>
 

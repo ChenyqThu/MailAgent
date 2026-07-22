@@ -199,14 +199,7 @@ def test_chat_config_enabled_models_configured(monkeypatch: pytest.MonkeyPatch) 
 
     monkeypatch.setattr("src.api.routers.chat.get_settings", lambda: _ChatCfg())
 
-    # Stub ContextLoader so /config doesn't call Notion.
-    async def _ctx() -> str:
-        return ""
-
-    class _StubLoader:
-        get_markdown = staticmethod(_ctx)
-
-    monkeypatch.setattr("src.api.routers.chat._get_context_loader", lambda: _StubLoader())
+    # task 07-21 —— /chat/config 不再注入 Notion context page，无需 stub ContextLoader。
 
     # Stub dotenv_values to return a controlled LLM_ENABLED_MODELS value.
     _ENABLED = "claude-sonnet-4-6, claude-opus-4-8 , gpt-5.5"
@@ -247,13 +240,7 @@ def test_chat_config_enabled_models_not_configured(monkeypatch: pytest.MonkeyPat
 
     monkeypatch.setattr("src.api.routers.chat.get_settings", lambda: _ChatCfg())
 
-    async def _ctx() -> str:
-        return ""
-
-    class _StubLoader:
-        get_markdown = staticmethod(_ctx)
-
-    monkeypatch.setattr("src.api.routers.chat._get_context_loader", lambda: _StubLoader())
+    # task 07-21 —— /chat/config 不再注入 Notion context page，无需 stub ContextLoader。
 
     # dotenv_values returns dict without LLM_ENABLED_MODELS key.
     def _fake_dotenv(path: str) -> dict:

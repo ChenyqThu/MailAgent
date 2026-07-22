@@ -3014,6 +3014,7 @@
       "emptyHint": "No new email in the selected time window — nothing to report.",
       "generatedAt": "Generated",
       "backToList": "Back to list",
+      "loadingMore": "Loading more…",
       "weekday": {
         "sun": "Sun",
         "mon": "Mon",
@@ -3167,13 +3168,23 @@
       "contextDocs": "Injected identity docs",
       "contextDocsHint": "Checked docs are injected into the classification prompt",
       "contextDocsNote": "Checked identity docs are injected into the AI email-classification system prompt (default: SOUL + USER).",
+      "contextDocsInactiveNote": "Reference context source is set to \"Notion context page\"; identity docs are not injected into the classification prompt (selection has no effect here).",
+      "contextSource": "Reference context source",
+      "contextSourceHint": "Pick one reference background for the email-classification system prompt (env, restart required): identity docs or a Notion context page — mutually exclusive, never both.",
+      "contextSourceOption": {
+        "standing_docs": "Identity docs",
+        "notion_context": "Notion context page"
+      },
+      "contextPageId": "Notion context page ID",
+      "contextPageIdPlaceholder": "Notion page ID (LLM_CONTEXT_PAGE_ID)",
+      "contextPageIdHint": "This Notion page's body is injected as reference context into the classification prompt (empty = not injected). env LLM_CONTEXT_PAGE_ID, restart required.",
       "doc": {
         "soul": "Soul",
         "agent": "Agent",
         "rules": "Rules",
         "user": "User prefs"
       },
-      "webReadOnly": "Remote web is read-only: enable state can't be changed (desktop only); model, fallback and doc selection remain editable.",
+      "webReadOnly": "Remote web is read-only: enable state, reference context source and context page ID can't be changed (desktop only); model, fallback and doc selection remain editable.",
       "fallback": "Fallback model",
       "fallbackHint": "Dedicated preprocessing fallback, effective on save; defaults to following the global setting (Settings → AI → Fallback chain)",
       "fallbackFollowGlobal": "Follow global ({model})",
@@ -3313,6 +3324,8 @@
         "runNow": "Run now",
         "loading": "Loading…",
         "empty": "No runs yet.",
+        "loadMore": "Load more",
+        "loadMoreLoading": "Loading…",
         "pausedPendingHint": "Run paused, waiting for approval. Open the execution record to approve, or approve it in the Dynamic Island; it will expire if left unhandled.",
         "pausedExpiredHint": "Approval expired; this run was not executed.",
         "autoWhitelisted": "Auto-allowed ×{n}",

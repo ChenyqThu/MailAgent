@@ -14,7 +14,6 @@ ChatSessionSummary / ChatSessionListItem / ChatMessage / ChatToolCall（``types.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 import sqlite3
@@ -35,29 +34,11 @@ router = APIRouter(prefix="/api/chat", tags=["chat"])
 
 logger = logging.getLogger(__name__)
 
-# task 06-08-chat 第二波 Bug B — reuse the email-classification context page
-# (user profile / Sender Priority / focus projects / 研发课组 / 邮件风格 / 时区)
-# for the custom-api chat system prompt. Lazy singleton (NOT a module-level
-# instance): ContextLoader imports `src.config.config` at module load, which
-# would bypass deps.py's lazy-config discipline and crash import-time when the
-# required .env is absent (bare worktree / CI import self-check). The singleton
-# still preserves the 1800s TTL cache across /config requests once built.
-_context_loader = None  # type: ignore[var-annotated]
-
-# /chat/config 等待 user context (Notion) 的上限 — renderer chat 引擎构造
-# await 本端点, 无界等待 = chat panel 整体卡死 (dogfood round 3)。超时降级
-# 空 context, shield 让加载后台跑完填 TTL 缓存。
-_USER_CONTEXT_TIMEOUT_SEC = 8.0
-
-
-def _get_context_loader():
-    """Lazily build the ContextLoader singleton (defers the config import)."""
-    global _context_loader
-    if _context_loader is None:
-        from src.llm_agent.context_loader import ContextLoader
-
-        _context_loader = ContextLoader()
-    return _context_loader
+# task 07-21 —— chat system prompt 不再注入 Notion context page（``LLM_CONTEXT_PAGE_ID``）。
+# 用户身份/画像已由 Standing Context（backend agent_config.db 的 SOUL/AGENT/RULES/USER，恒
+# 注入）单源承担，旧的 ContextLoader user_context 段是与之重叠的双注入，已移除。
+# ContextLoader 本体保留给 llm_agent 预处理分类用（``LLM_PREPROCESS_CONTEXT_SOURCE`` =
+# notion_context 时生效）。
 
 
 def _kos_available() -> bool:
@@ -243,28 +224,8 @@ async def chat_config(request: Request):
     max_iter = max(1, int(cfg.agent_max_iter))
     max_cost = cfg.agent_max_cost_usd if cfg.agent_max_cost_usd > 0 else 0.5
     default_model = cfg.llm_model or "claude-sonnet-4-6"
-    # task 06-08-chat 第二波 Bug B — user context (Notion context page markdown,
-    # TTL-cached) injected into the custom-api chat system prompt so the assistant
-    # knows the user's role / responsibilities / Sender Priority. Not configured
-    # (LLM_CONTEXT_PAGE_ID empty) → "". Fetch failure → "" (graceful, never blocks
-    # /config — chat still runs, just without the user profile).
-    # dogfood round 3 — get_markdown 冷缓存时父页+子页串行打 Notion (单请求 30s
-    # 上限 × N) 可达分钟级, 而 renderer chat 引擎 lazy 构造必须 await 本端点 →
-    # chat panel 整体卡"加载不出"。限时 8s: 超时降级空 context (chat 照跑, 仅无
-    # 用户画像); shield 让底层加载继续跑完填 TTL 缓存 → 下一次 /config 秒回。
-    user_context = ""
-    _ctx_task = asyncio.ensure_future(_get_context_loader().get_markdown())
-    # 超时弃等后无人 await task — 吞掉 exception 防 "never retrieved" 警告
-    # (get_markdown 内部已全 catch, 此处纯保险)。
-    _ctx_task.add_done_callback(
-        lambda t: t.exception() if not t.cancelled() else None
-    )
-    try:
-        user_context = await asyncio.wait_for(
-            asyncio.shield(_ctx_task), timeout=_USER_CONTEXT_TIMEOUT_SEC
-        )
-    except Exception:  # noqa: BLE001 — context is best-effort; never fail /config
-        user_context = ""
+    # task 07-21 —— Notion context page 不再注入 chat system prompt（见文件头注释：
+    # 与 Standing Context 双注入冗余，已移除）。ContextLoader 保留给 llm_agent 预处理用。
     # enabledModels + KOS 开关: hot-read from .env (dotenv_values, not pydantic Config
     # singleton) so changes take effect without a serve-api restart — same pattern as
     # 155eb006 (SYNC_FOLDERS hot-read). 🔴 KOS 开关曾用 cfg.* singleton: serve-api 启动
@@ -459,7 +420,6 @@ async def chat_config(request: Request):
             "kosConsumerEnabled": kos_consumer,
             "kosConfigured": kos_configured,
             "kosTimeDecayEnabled": kos_time_decay,
-            "userContext": user_context,
             "memorySummary": memory_summary,
             "memorySummaryMeta": memory_summary_meta,
             "enabledModels": enabled_models,

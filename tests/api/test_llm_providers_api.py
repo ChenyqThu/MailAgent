@@ -922,14 +922,8 @@ class _ChatCfg:
 
 def _stub_chat_config(monkeypatch, cfg) -> None:
     monkeypatch.setattr("src.api.routers.chat.get_settings", lambda: cfg)
-
-    async def _ctx() -> str:
-        return ""
-
-    class _StubLoader:
-        get_markdown = staticmethod(_ctx)
-
-    monkeypatch.setattr("src.api.routers.chat._get_context_loader", lambda: _StubLoader())
+    # task 07-21 —— /chat/config 不再注入 Notion context page（Standing Context 单源），
+    # 无需再 stub ContextLoader。
 
     def _fake_dotenv(path: str) -> Dict[str, Any]:
         return {"LLM_ENABLED_MODELS": "env-model-a, env-model-b"}

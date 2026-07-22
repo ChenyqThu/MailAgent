@@ -13,7 +13,7 @@
 
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
-import { Loader2, FileText, RefreshCw, ChevronDown } from 'lucide-react'
+import { Loader2, RefreshCw, ChevronDown } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 
 import { useMailApi } from '@shared/hooks/useMailApi'
@@ -35,7 +35,6 @@ import {
   SelectValue
 } from '@shared/components/ui/select'
 import { toastError, toastSuccess } from '@shared/state/toast'
-import type { PromptInfo, PromptSlot } from '@shared/api/types'
 import {
   readAutoTitleSettings,
   writeAutoTitleMode,
@@ -50,7 +49,6 @@ import { Section } from '../parts/Section'
 import { Row } from '../parts/Row'
 import { EnvField } from '../parts/EnvField'
 import { EnvSecretField } from '../parts/EnvSecretField'
-import { PromptEditorDialog } from '../parts/PromptEditorDialog'
 import { ModelServicesSection } from '../providers/ModelServicesSection'
 import { buildModelOptionGroups } from '../providers/modelOptionGroups'
 import { NotionAgentSection } from './NotionAgentSection'
@@ -191,34 +189,9 @@ export function AiTab(): React.ReactElement {
       )
     }
   }
-  const [promptInfo, setPromptInfo] = React.useState<{
-    inbox: PromptInfo | null
-    sent: PromptInfo | null
-  }>({ inbox: null, sent: null })
-  const [editorSlot, setEditorSlot] = React.useState<PromptSlot | null>(null)
-
-  React.useEffect(() => {
-    let active = true
-    api.prompts
-      .list()
-      .then((r) => {
-        if (!active) return
-        setPromptInfo({ inbox: r.inbox, sent: r.sent })
-      })
-      .catch((err: Error) => {
-        if (!active) return
-        toastError(t('settings.ai.prompts.listFailed'), err.message)
-      })
-    return () => {
-      active = false
-    }
-  }, [api.prompts, t])
-
-  async function refreshPrompts(): Promise<void> {
-    const r = await api.prompts.list()
-    setPromptInfo({ inbox: r.inbox, sent: r.sent })
-  }
-
+  // task 07-21 —— 收/发分类 prompt 的路径展示 + 编辑入口已从设置-AI 移除；唯一编辑入口
+  // 收敛到 Custom AI「AI 邮件预处理」抽屉（PreprocessConfigDrawer 内联 textarea，走
+  // 同一 mailApi.prompts 读写）。context page ID 亦随之搬进该抽屉。
   async function handleTestGateway(): Promise<void> {
     setTesting(true)
     try {
@@ -459,75 +432,6 @@ export function AiTab(): React.ReactElement {
 
       <NotionAgentSection />
 
-      <Section title={t('settings.ai.prompts.title')} helper={t('settings.ai.prompts.helper')}>
-        <EnvField
-          envKey="LLM_INBOX_PROMPT_PATH"
-          control="text"
-          label={t('settings.ai.prompts.inbox.pathLabel')}
-          helper={t('settings.ai.prompts.inbox.pathHelper')}
-          placeholder="prompts/email_inbox.md"
-        />
-        <Row
-          label={t('settings.ai.prompts.inbox.editLabel')}
-          helper={
-            promptInfo.inbox?.exists
-              ? t('settings.ai.prompts.editHelperExists', {
-                  path: promptInfo.inbox.path
-                })
-              : t('settings.ai.prompts.editHelperMissing', {
-                  path: promptInfo.inbox?.path ?? ''
-                })
-          }
-        >
-          <Button
-            onClick={() => setEditorSlot('inbox')}
-            variant="secondary"
-            size="sm"
-            disabled={promptInfo.inbox === null}
-          >
-            <FileText className="size-3.5" />
-            {t('settings.ai.prompts.editButton')}
-          </Button>
-        </Row>
-        <EnvField
-          envKey="LLM_SENT_PROMPT_PATH"
-          control="text"
-          label={t('settings.ai.prompts.sent.pathLabel')}
-          helper={t('settings.ai.prompts.sent.pathHelper')}
-          placeholder="prompts/email_sent.md"
-        />
-        <Row
-          label={t('settings.ai.prompts.sent.editLabel')}
-          helper={
-            promptInfo.sent?.exists
-              ? t('settings.ai.prompts.editHelperExists', {
-                  path: promptInfo.sent.path
-                })
-              : t('settings.ai.prompts.editHelperMissing', {
-                  path: promptInfo.sent?.path ?? ''
-                })
-          }
-        >
-          <Button
-            onClick={() => setEditorSlot('sent')}
-            variant="secondary"
-            size="sm"
-            disabled={promptInfo.sent === null}
-          >
-            <FileText className="size-3.5" />
-            {t('settings.ai.prompts.editButton')}
-          </Button>
-        </Row>
-        {/* context page = 给 AI 分类/报告提供额外上下文的 Notion 页面，属 prompt
-            输入材料的一部分，故与 prompt 路径同段（原在「本地 LLM Agent」段）。 */}
-        <EnvField
-          envKey="LLM_CONTEXT_PAGE_ID"
-          control="text"
-          label={t('settings.ai.contextPageId.label')}
-          helper={t('settings.ai.contextPageId.helper')}
-        />
-      </Section>
-
       <Section title={t('settings.ai.translate.title')} helper={t('settings.ai.translate.helper')}>
         <EnvField
           envKey="LLM_TRANSLATE_BASE_URL"
@@ -722,17 +626,6 @@ export function AiTab(): React.ReactElement {
       </Section>
 
       <CustomAiSection />
-
-      <PromptEditorDialog
-        slot={editorSlot}
-        open={editorSlot !== null}
-        onClose={() => {
-          setEditorSlot(null)
-          // Refresh list so the helper text reflects exists=true after the
-          // first write turned a missing file into a real one.
-          void refreshPrompts()
-        }}
-      />
     </>
   )
 }
