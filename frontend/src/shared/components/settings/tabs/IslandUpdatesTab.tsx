@@ -325,7 +325,7 @@ function UpdaterSubsection(): React.ReactElement {
                 <Download className="size-3" />
               )}
               {busy === 'download'
-                ? t('settings.update.downloading')
+                ? t('settings.update.downloading', { percent: status.downloadPercent ?? 0 })
                 : t('settings.update.downloadCta')}
             </Button>
           ) : null}
@@ -343,7 +343,7 @@ function UpdaterSubsection(): React.ReactElement {
         </div>
       </Row>
       {status.state === 'downloading' && status.downloadPercent !== null ? (
-        <Row label={t('settings.update.downloading')}>
+        <Row label={t('settings.update.downloading', { percent: status.downloadPercent })}>
           <div className="w-[260px] h-2 rounded-full bg-ink-3 overflow-hidden">
             <div
               className="h-full bg-coral/100 transition-[width] duration-base ease-standard"
