@@ -595,7 +595,7 @@ serve-api read 端点的 query 参数名**不一致**，DomainClient 逐一硬�
 | 文件 | 职责 |
 |---|---|
 | `frontend/src/ai-gateway/security/approval.ts` | `ApprovalGuard`（domain 侧 id/hash/expiry guard）：`register(toolCallId,…)`（needsApproval 内 keep-first 注册，跨两调存活）+ `verify(toolCallId,input)`（not-found/expired/preview-hash-mismatch → typed `ApprovalError`，edit-tier 放宽报 userEdited）。纯 node:crypto |
-| `frontend/src/ai-gateway/tools/write.ts` | 5 写工具 `email_flag/email_archive/email_pin/email_draft_reply/email_resync`，`tool({inputSchema:zod, needsApproval, execute})`，描述/校验/massage 逐字镜像 legacy write.ts（parity）|
+| `frontend/src/ai-gateway/tools/write.ts` | 5 写工具 `email_flag/email_archive/email_pin/email_draft_reply/email_resync`，`tool({inputSchema:zod, needsApproval, execute})`，描述/校验/massage 镜像 legacy write.ts（parity）。2026-07-22 起 `email_draft_reply` 增可选 `mode('reply'\|'reply-all')` + `to/cc/bcc` 全列表覆盖（缺省仍服务端派生 reply-all；serve-api `/email/draft` + service `to_override` 早已支持，此前 gateway schema 未暴露 → agent「做不到加减收件人」）|
 | `frontend/src/ai-gateway/tools/types.ts` | `auditedWriteTool(opts,collector,guard)`：needsApproval 注册 + execute 前 guard.verify + domain 写 + 审计（tier/approval_status/approval_hash/user_edited）|
 | `frontend/src/ai-gateway/python/domainClient.ts` | +5 写方法（flagEmail/archiveEmail/setPin/draftReply/resyncEmail），wire body/path/envelope 逐字镜像 HttpChatPlatform |
 | `server.ts` / `config.ts` / `ai_gateway_lifecycle.ts` | streamText 配 `experimental_toolApprovalSecret`（per-process 随机）；`buildGatewayTools` write gate（writeToolsEnabled + approvalGuard）；wrapper 建 1 个 ApprovalGuard + secret；persistTurn 写 approval 审计列 |
@@ -648,13 +648,13 @@ R5 期望序 = `tool_use → pending_confirmation(同 tool_name+tier) → tool_r
 |---|---|
 | `frontend/src/shared/assistant/tools/a2ui.ts` | A2UIPayload 类型（protocol §3）+ zod `parseA2UIPayload`（invalid→null 永不抛）+ `buildToolA2UIPayload(toolName,{args,result})`：工具 io → 卡片 typed props 的**单一真源**（卡片渲染 + gateway 审计共用，永不漂移）。纯 TS（无 react），gateway 相对 import + 卡片 `@shared` import |
 | `tools/ComponentRegistry.tsx` | `createComponentRegistry`（generic）+ `componentRegistry`（5 写工具→3 卡片）：`byName`（喂 assistant-ui `tools.by_name`）+ `components`（A2UI allowlist）+ `resolve(toolName)`（miss→undefined→generic fallback，**永不阻断**） |
-| `tools/mail/DraftReplyCard.tsx` | email_draft_reply（edit）：pending 渲**可编辑 markdown textarea** + approve/edit/reject；done 展 draft id/mailbox/含修改标记 |
+| `tools/mail/DraftReplyCard.tsx` | email_draft_reply（edit）：pending 渲**可编辑 markdown textarea + 可编辑 To/CC/BCC 覆盖字段**（留空=服务端派生 reply-all）+ approve/edit/reject；done 展 draft id/mailbox/收件人覆盖/含修改标记 |
 | `tools/notion/NotionSyncCard.tsx` | email_resync（preview）：重推预览 + old→new page id + action |
 | `tools/generic/ApprovalActionCard.tsx` | email_flag/archive/pin（preview）：一行 summary + approve/reject |
 | `tools/_cardShell.tsx` | 共享 `CardFrame`（icon+title+phase pill）+ `ApprovalActions`（approve/reject + busy/error）+ `deriveCardPhase`（pending/authorized/done/rejected/expired/error，phase-04 §7 状态表）+ `postApprovalEdit`（resolve 侧信道 POST） |
 | `tools/registerToolUIs.tsx` | `getAssistantPartComponents()`：flag-off 返回 Phase 01 对象（generic fallback only，字节级一致）；flag-on 加 `tools.by_name` |
 | `security/approval.ts` | `applyEdit(toolCallId,editedFields)` 侧信道 override（edit-tier only，identity pin）+ `verify` 返回 `effectiveInput` + `ApprovalRecord.{input,editableFields,editedInput}` + `E_APPROVAL_NOT_EDITABLE` |
-| `tools/types.ts` / `tools/write.ts` | auditedWriteTool 用 `v.effectiveInput` 跑 run + a2ui 审计（`uiPayloadJson`，gated）；email_draft_reply register `editableFields=['body_markdown']` |
+| `tools/types.ts` / `tools/write.ts` | auditedWriteTool 用 `v.effectiveInput` 跑 run + a2ui 审计（`uiPayloadJson`，gated）；email_draft_reply register `editableFields=['body_markdown','to','cc','bcc']`（internal_id/mode 恒 pin，卡上可改正文与收件人） |
 | `server.ts` / `config.ts` / `ai_gateway_lifecycle.ts` | `POST /api/ai/approval/resolve`（404/410/400/501 typed）→ `cfg.resolveEditedApproval`→`guard.applyEdit`；persistTurn 写 `ui_payload_json`；envBool `MAILAGENT_A2UI_TOOL_CARDS`→a2uiEnabled |
 | chat_db.ts/model.ts/db.py/test_chat.py | `chat_tool_call.ui_payload_json` → bump `CHAT_DB_VERSION 10→11`（additive ALTER + hasColumn 幂等 + 终态断言 + db.py 头注释 + seed DDL） |
 | `tests/agent_eval/recorder/ai_sdk_adapter.ts` | `userEdited` → `pending_confirmation.user_edited`（rules.py 忽略额外字段）+ EDITED_DRAFT_SCENARIO（AGT-ACTION-001）→ `runs/ai-sdk-approval-edit.jsonl` |

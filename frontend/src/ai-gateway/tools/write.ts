@@ -52,6 +52,19 @@ function nonEmpty(s: string | undefined): string | undefined {
   return s != null && s.length > 0 ? s : undefined
 }
 
+/** Recipient-list normalizer for email_draft_reply overrides. The approval applyEdit
+ *  side-channel bypasses zod (the card POSTs raw arrays), so defensively keep only
+ *  non-empty trimmed strings; an empty/absent list → undefined = "no override, let the
+ *  server derive reply-all". */
+function normalizeAddrs(v: unknown): string[] | undefined {
+  if (!Array.isArray(v)) return undefined
+  const out = v
+    .filter((x): x is string => typeof x === 'string')
+    .map((x) => x.trim())
+    .filter((x) => x.length > 0)
+  return out.length > 0 ? out : undefined
+}
+
 /**
  * Build the five email write tools bound to the injected domain client + audit collector
  * + approval guard. Each pushes a write-audit entry (tier + approval_status + approval_hash
@@ -210,28 +223,41 @@ export function createWriteTools(
   const email_draft_reply = make({
     name: 'email_draft_reply',
     description:
-      'Compose a reply-all draft for the given email. The user will see your proposed ' +
+      'Compose a reply or reply-all draft for the given email. The user will see your proposed ' +
       'body in a confirmation dialog and CAN edit it before the draft is created. After confirmation, ' +
       'a real draft message is saved to the Drafts folder (not auto-sent — the user still has to click ' +
-      'Send); the original message is quoted below your body and recipients are derived for reply-all. ' +
-      'Body should be markdown (bold, italics, lists, links supported). Edit tier — the user ' +
-      'may modify your draft.',
+      'Send); the original message is quoted below your body. Recipients: by default they are derived ' +
+      'server-side (mode "reply-all" = original sender + To minus yourself; mode "reply" = sender only). ' +
+      'To ADD or REMOVE recipients on top of that, pass to/cc/bcc explicitly — each provided list fully ' +
+      'OVERRIDES the derived one (read the source email first via email_get to know the current ' +
+      'sender/to/cc, then pass the final lists). Body should be markdown (bold, italics, lists, links ' +
+      'supported). Edit tier — the user may modify your draft.',
     inputSchema: emailDraftReplySchema,
     risk: 'edit',
-    // Phase 04a — the user may edit ONLY the body on the DraftReplyCard; internal_id is pinned
-    // to the model's original (the approval side-channel cannot retarget the draft).
-    editableFields: ['body_markdown'],
+    // Phase 04a — the user may edit body + recipients on the DraftReplyCard; internal_id/mode
+    // are pinned to the model's original (the approval side-channel cannot retarget the draft).
+    editableFields: ['body_markdown', 'to', 'cc', 'bcc'],
     run: async (input, { userEdited, signal }) => {
       if (input.internal_id < 0) invalidArg('internal_id required (non-negative integer)')
-      const data = await domain.draftReply(input.internal_id, input.body_markdown, signal)
+      const data = await domain.draftReply(input.internal_id, input.body_markdown, {
+        mode: input.mode,
+        to: normalizeAddrs(input.to),
+        cc: normalizeAddrs(input.cc),
+        bcc: normalizeAddrs(input.bcc),
+        signal
+      })
       return {
         internal_id: data.internalId,
         mailbox: data.mailbox,
         account_name: data.accountName,
         draft_id: data.draftId,
         user_edited: userEdited,
-        // Surface the final body so the LLM next-turn knows EXACTLY what landed in the draft.
-        final_body_markdown: input.body_markdown
+        // Surface the final body + recipient overrides so the LLM next-turn knows EXACTLY
+        // what landed in the draft (empty override = server-derived reply-all).
+        final_body_markdown: input.body_markdown,
+        final_to: normalizeAddrs(input.to) ?? null,
+        final_cc: normalizeAddrs(input.cc) ?? null,
+        final_bcc: normalizeAddrs(input.bcc) ?? null
       }
     }
   })

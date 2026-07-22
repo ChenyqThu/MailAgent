@@ -114,10 +114,17 @@ export const emailPinSchema = z.object({
 })
 export type EmailPinInput = z.infer<typeof emailPinSchema>
 
-/** email_draft_reply — compose a reply-all draft. */
+/** email_draft_reply — compose a reply / reply-all draft. Recipients default to
+ *  server-derived reply-all; optional to/cc/bcc OVERRIDE the full lists (the way to
+ *  add/remove people on top of reply-all — compute the final lists from the source
+ *  email's sender/to/cc and pass them explicitly). */
 export const emailDraftReplySchema = z.object({
   internal_id: z.number().int(),
-  body_markdown: z.string().min(1)
+  body_markdown: z.string().min(1),
+  mode: z.enum(['reply', 'reply-all']).optional(),
+  to: z.array(z.string().min(3)).optional(),
+  cc: z.array(z.string().min(3)).optional(),
+  bcc: z.array(z.string().min(3)).optional()
 })
 export type EmailDraftReplyInput = z.infer<typeof emailDraftReplySchema>
 

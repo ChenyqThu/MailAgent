@@ -175,12 +175,17 @@ export function componentForTool(toolName: string): string | null {
 
 // ── typed per-card props ──────────────────────────────────────────────────────
 
-/** email_draft_reply (edit tier). At approval-request time only `internalId`+`bodyMarkdown`
- *  are known (from the model input); the draftId/mailbox land after execution. `userEdited`
- *  is true once the user changed the proposed body before approving. */
+/** email_draft_reply (edit tier). At approval-request time `internalId`+`bodyMarkdown`
+ *  (+ optional recipient overrides) come from the model input; the draftId/mailbox land after
+ *  execution. to/cc/bcc are FULL-list overrides — empty = server-derived reply-all. `userEdited`
+ *  is true once the user changed the proposed body/recipients before approving. */
 export interface DraftReplyCardProps {
   internalId: number
   bodyMarkdown: string
+  mode?: string
+  to: string[]
+  cc: string[]
+  bcc: string[]
   draftId?: string | null
   mailbox?: string | null
   accountName?: string | null
@@ -407,6 +412,11 @@ export function buildToolA2UIPayload(
       // result.final_body_markdown is the EXECUTED body (post-edit); fall back to the
       // proposed input body at approval-request time.
       bodyMarkdown: asStr(result?.final_body_markdown) ?? asStr(args.body_markdown) ?? '',
+      mode: asStr(args.mode),
+      // Recipient overrides (empty = server-derived reply-all); final_* echo the executed lists.
+      to: asStrArray(result?.final_to ?? args.to),
+      cc: asStrArray(result?.final_cc ?? args.cc),
+      bcc: asStrArray(result?.final_bcc ?? args.bcc),
       draftId: asStr(result?.draft_id) ?? null,
       mailbox: asStr(result?.mailbox) ?? null,
       accountName: asStr(result?.account_name) ?? null,

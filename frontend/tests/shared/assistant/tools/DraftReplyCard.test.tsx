@@ -116,6 +116,46 @@ describe('DraftReplyCard — pending (approval-requested)', () => {
   })
 })
 
+describe('DraftReplyCard — recipient overrides (add/remove people on reply-all)', () => {
+  test('model-proposed to/cc prefill the fields; empty = server-derived placeholder', () => {
+    render(
+      <DraftReplyCard
+        {...mockProps({
+          args: {
+            internal_id: 7,
+            body_markdown: 'proposed body',
+            to: ['a@x.com', 'b@x.com'],
+            cc: ['c@x.com']
+          }
+        })}
+      />
+    )
+    expect((screen.getByLabelText('收件人') as HTMLInputElement).value).toBe('a@x.com, b@x.com')
+    expect((screen.getByLabelText('抄送') as HTMLInputElement).value).toBe('c@x.com')
+    // 无 bcc 提议时不渲染密送字段 (低频, 少一行噪音)
+    expect(screen.queryByLabelText('密送')).toBeNull()
+  })
+
+  test('edit recipients then approve → resolve POST carries to/cc/bcc lists', async () => {
+    const respondToApproval = vi.fn()
+    render(<DraftReplyCard {...mockProps({ respondToApproval })} />)
+    fireEvent.change(screen.getByLabelText('收件人'), {
+      target: { value: 'x@y.com; z@y.com' }
+    })
+    fireEvent.click(screen.getByText('创建草稿'))
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const body = JSON.parse(init.body as string) as {
+      editedInput: { body_markdown: string; to: string[]; cc: string[]; bcc: string[] }
+    }
+    expect(body.editedInput.to).toEqual(['x@y.com', 'z@y.com'])
+    expect(body.editedInput.cc).toEqual([])
+    expect(body.editedInput.body_markdown).toBe('proposed body')
+    await waitFor(() => expect(respondToApproval).toHaveBeenCalledWith({ approved: true }))
+  })
+})
+
 describe('DraftReplyCard — done (output-available)', () => {
   test('shows the draft id + mailbox + the edited-marker', () => {
     render(

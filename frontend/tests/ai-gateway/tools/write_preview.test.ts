@@ -140,10 +140,12 @@ describe('write tools — output snapshots (pinned migration-contract values)', 
   })
 
   test('email_draft_reply output', async () => {
+    let wireBody: string | undefined
     const gateway = createWriteTools(
-      mockDomain(() =>
-        okEnvelope({ internal_id: 9, drafts_folder: 'Drafts', method: 'reply_all_9' })
-      ),
+      mockDomain((_url, body) => {
+        wireBody = body
+        return okEnvelope({ internal_id: 9, drafts_folder: 'Drafts', method: 'reply_all_9' })
+      }),
       [],
       new ApprovalGuard()
     )
@@ -157,8 +159,52 @@ describe('write tools — output snapshots (pinned migration-contract values)', 
       account_name: null,
       draft_id: 'reply_all_9',
       user_edited: false,
-      final_body_markdown: 'thanks!'
+      final_body_markdown: 'thanks!',
+      final_to: null,
+      final_cc: null,
+      final_bcc: null
     })
+    // 无收件人覆盖 → wire 不带 to/cc/bcc, mode 缺省 reply-all (服务端派生收件人不变)。
+    const parsed = JSON.parse(wireBody ?? '{}')
+    expect(parsed).toEqual({
+      internalId: 9,
+      mode: 'reply-all',
+      bodyText: 'thanks!',
+      quoteOriginal: true
+    })
+  })
+
+  test('email_draft_reply recipient overrides ride the wire (add/remove people on reply-all)', async () => {
+    let wireBody: string | undefined
+    const gateway = createWriteTools(
+      mockDomain((_url, body) => {
+        wireBody = body
+        return okEnvelope({ internal_id: 9, drafts_folder: 'Drafts', method: 'reply_all_9' })
+      }),
+      [],
+      new ApprovalGuard()
+    )
+    const gatewayOut = (await approveAndRun(gateway.email_draft_reply, {
+      internal_id: 9,
+      body_markdown: 'thanks!',
+      mode: 'reply',
+      to: ['a@x.com', ' b@x.com ', ''],
+      cc: ['c@x.com'],
+      bcc: []
+    })) as Record<string, unknown>
+    const parsed = JSON.parse(wireBody ?? '{}')
+    expect(parsed).toEqual({
+      internalId: 9,
+      mode: 'reply',
+      bodyText: 'thanks!',
+      quoteOriginal: true,
+      to: ['a@x.com', 'b@x.com'], // trim + 去空串
+      cc: ['c@x.com']
+      // bcc: [] → 不覆盖 → 不上 wire
+    })
+    expect(gatewayOut.final_to).toEqual(['a@x.com', 'b@x.com'])
+    expect(gatewayOut.final_cc).toEqual(['c@x.com'])
+    expect(gatewayOut.final_bcc).toBeNull()
   })
 
   test('email_resync output', async () => {

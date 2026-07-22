@@ -653,22 +653,38 @@ export class MailAgentDomainClient {
     })
   }
 
-  /** email_draft_reply — create a reply-all draft (davmail IMAP APPEND). POST /email/draft
-   *  with {internalId, mode:'reply-all', bodyText, quoteOriginal:true} (server derives
-   *  recipients + quotes the source). Projects the data block exactly like
+  /** email_draft_reply — create a reply / reply-all draft (davmail IMAP APPEND). POST
+   *  /email/draft with {internalId, mode, bodyText, quoteOriginal:true} — mode defaults to
+   *  'reply-all'; when opts.to/cc/bcc are present they ride along as FULL recipient-list
+   *  overrides (serve-api _compose_request_from_body → service to_override; absent = the
+   *  server derives them). Projects the data block exactly like the legacy
    *  HttpChatPlatform.draftReply so the tool's massage matches the legacy tool. */
   async draftReply(
     internalId: number,
     bodyMarkdown: string,
-    signal?: AbortSignal
+    opts: {
+      mode?: 'reply' | 'reply-all'
+      to?: string[]
+      cc?: string[]
+      bcc?: string[]
+      signal?: AbortSignal
+    } = {}
   ): Promise<DomainDraftResult> {
     const data = await this._req<{
       internal_id: number
       drafts_folder?: string | null
       method?: string | null
     }>('POST', '/email/draft', {
-      body: { internalId, mode: 'reply-all', bodyText: bodyMarkdown, quoteOriginal: true },
-      signal
+      body: {
+        internalId,
+        mode: opts.mode ?? 'reply-all',
+        bodyText: bodyMarkdown,
+        quoteOriginal: true,
+        ...(opts.to?.length ? { to: opts.to } : {}),
+        ...(opts.cc?.length ? { cc: opts.cc } : {}),
+        ...(opts.bcc?.length ? { bcc: opts.bcc } : {})
+      },
+      signal: opts.signal
     })
     return {
       internalId: data.internal_id,
