@@ -411,6 +411,7 @@ describe('07-16 — acceptEdits allow/ask partition (codex r1 P1-3: fail-closed 
         'custom_agent_run_now',
         'custom_agent_update',
         'email_prepare_send',
+        'notion_agent_chat',
         'run_command',
         'skill_install',
         'skill_install_confirm',

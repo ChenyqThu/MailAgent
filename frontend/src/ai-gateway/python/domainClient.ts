@@ -275,6 +275,15 @@ export interface DomainWebSearchResult {
   results: Array<{ title: string; url: string; snippet: string }>
 }
 
+// ── notion-agent shape (task 07-21) — the /api/skills/invoke result of notion_agent_chat. The
+//    notion-agent's answer text is externally-authored (an external AI + Notion content) → the
+//    tool WRAPS it in an untrusted fence before the model sees it. thread_id is the continuation
+//    token (server metadata; may be absent when the notion-agent returns none). ──
+export interface DomainNotionAgentChatResult {
+  final_content: string
+  thread_id?: string | null
+}
+
 // ── exec shapes (S2 W1) — the /api/exec/* rows the run_command/file_read/file_write tools consume.
 //    Python (routers/exec.py) is the execution authority (fixed env allowlist, inode-level deny
 //    floor, no shell); the client just carries the envelope. `policy` is an AUDIT verdict only
@@ -878,6 +887,33 @@ export class MailAgentDomainClient {
   webSearch(query: string, limit: number, signal?: AbortSignal): Promise<DomainWebSearchResult> {
     return this._req<DomainWebSearchResult>('POST', '/web/search', {
       body: { query, limit },
+      signal
+    })
+  }
+
+  // ── notion-agent primitive (task 07-21) — delegate a Notion request to the notion-agent CLI via
+  //    the unified Skill Delivery invoke面 (POST /api/skills/invoke). The gateway never spawns the
+  //    subprocess itself — Python's builtin notion_agent skill handler owns the subprocess bridge
+  //    (serial gate + idle watchdog, src/skills/builtin/notion_agent.py → src/chat/notion_agent.py).
+  //    The loopback local-token authenticates as the OWNER principal (scopes=None) so the tool's
+  //    notion_agent:invoke scope passes; confirmation_tier is 'preview' server-side, so the HITL
+  //    lives entirely at the gateway (the notion_agent_chat tool is edit-tier, 恒 HITL). The tool
+  //    that calls this is only registered when MAILAGENT_NOTION_AGENT_TOOL is on AND the notion_agent
+  //    skill is advertised (SkillsSection toggle → skill_gating). ──
+
+  /** notion_agent_chat (task 07-21) — run one notion-agent request. POST /api/skills/invoke
+   *  {skill:'notion_agent', tool:'notion_agent_chat', input:{prompt, thread_id?, model?}}. Returns
+   *  the tool result {final_content, thread_id}. */
+  notionAgentChat(
+    prompt: string,
+    opts: { threadId?: string; model?: string },
+    signal?: AbortSignal
+  ): Promise<DomainNotionAgentChatResult> {
+    const input: Record<string, unknown> = { prompt }
+    if (opts.threadId !== undefined) input.thread_id = opts.threadId
+    if (opts.model !== undefined) input.model = opts.model
+    return this._req<DomainNotionAgentChatResult>('POST', '/skills/invoke', {
+      body: { skill: 'notion_agent', tool: 'notion_agent_chat', input },
       signal
     })
   }

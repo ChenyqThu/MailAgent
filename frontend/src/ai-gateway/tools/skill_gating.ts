@@ -21,13 +21,19 @@ import type { ToolSet } from 'ai'
  *  advertisedSkills 里会出现的名）。当前一个工具只归一个 skill（无共享），但 applySkillGating 仍
  *  实现 legacy 的「任一 advertised owner 即保留」通用语义，以防将来别名工具。
  *
- *  门控范围 = 只 email/search/report 三 skill 的读工具（parity）。collision-exempt 的 email_search +
- *  无 skill 归属的 core（kos/memory/write/send）永不门控（见下两个集合）；calendar/notion_agent
- *  skill 在 gateway 无工具，无需列。 */
+ *  门控范围 = email/search/report 三 skill 的读工具 + notion_agent skill 的 notion_agent_chat（parity）。
+ *  collision-exempt 的 email_search + 无 skill 归属的 core（kos/memory/write/send）永不门控（见下两个
+ *  集合）；calendar skill 在 gateway 无工具，无需列。
+ *
+ *  🔴 notion_agent（task 07-21）不同于 CORE_UNGATED 的 web/calendar：它是**skill-gated** —— Settings →
+ *  Custom AI → Skills 的 notion_agent 开关（advertisedSkills）就是用户的开/关。skill default_enabled=False，
+ *  故默认不 advertised → 关掉即不注册（其余工具家族的 master flag 只是应急 kill-switch，此处同理由
+ *  MAILAGENT_NOTION_AGENT_TOOL 兜底）。 */
 export const GATEWAY_SKILL_TOOLS: Record<string, readonly string[]> = {
   email: ['email_get', 'email_body', 'email_list_thread'],
   search: ['email_search_fulltext', 'email_search_attachments'],
-  report: ['report_list', 'report_get']
+  report: ['report_list', 'report_get'],
+  notion_agent: ['notion_agent_chat']
 }
 
 /** 跨 skill 同名异义、不可被 skill toggle 误删的工具（复刻 legacy COLLISION_EXEMPT_TOOL_NAMES）：

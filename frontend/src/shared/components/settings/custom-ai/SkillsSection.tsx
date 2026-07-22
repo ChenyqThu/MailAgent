@@ -17,9 +17,18 @@ import { qk } from '@shared/lib/queryKeys'
 import { toastError } from '@shared/state/toast'
 import type { MailApi, SkillSummary } from '@shared/api/types'
 import { Switch } from '@shared/components/ui/switch'
+import { CollapseChevron, CollapsibleRegion } from '@shared/components/ui/collapsible'
 
 import { Section } from '../parts/Section'
 import { Row } from '../parts/Row'
+import { NotionAgentSkillConfig } from './NotionAgentSkillConfig'
+
+// task 07-21 — skills that carry an inline per-skill config panel in their row's expand area. Today
+// only notion_agent (bind agent / default model / doctor, moved out of 设置-AI). A row NOT listed
+// here renders as a plain toggle Row (unchanged).
+const CONFIG_PANELS: Record<string, () => React.ReactElement> = {
+  notion_agent: NotionAgentSkillConfig
+}
 
 // PR5 — one-time migration of leftover localStorage skill overrides to the backend
 // agent_config.db. The runtime now reads backend overrides (localStorage is only a
@@ -44,6 +53,39 @@ async function migrateLocalSkillOverrides(
   await invalidateSkills()
 }
 
+/** The label + helper cell content of a skill row — shared by the plain Row and the expandable
+ *  config header so the two render identically. */
+function SkillMeta({ skill }: { skill: SkillSummary }): React.ReactElement {
+  const { t } = useTranslation()
+  return (
+    <>
+      <div className="text-aux font-medium text-ink-fg">
+        <span className={skill.available ? '' : 'opacity-60'}>{skill.title}</span>
+      </div>
+      <div className="text-meta text-ink-fg-2 mt-0.5">
+        <span className="flex flex-col gap-0.5">
+          <span>{skill.description}</span>
+          {!skill.available && skill.unavailableReason ? (
+            <span className="text-meta text-ink-fg-3 italic">
+              {t('settings.skills.unavailable', { reason: skill.unavailableReason })}
+            </span>
+          ) : null}
+          <span className="flex items-center gap-2 mt-0.5">
+            <span className="inline-flex items-center rounded-full bg-ink-4 border border-ink-border px-1.5 py-0.5 text-micro font-mono text-ink-fg-2">
+              {t('settings.skills.toolCount', { n: skill.toolCount })}
+            </span>
+            {skill.scopes.length > 0 ? (
+              <span className="text-micro text-ink-fg-3">
+                {t('settings.skills.scopes')}: {skill.scopes.join(', ')}
+              </span>
+            ) : null}
+          </span>
+        </span>
+      </div>
+    </>
+  )
+}
+
 export function SkillsSection(): React.ReactElement {
   const { t } = useTranslation()
   const api = useMailApi()
@@ -54,6 +96,9 @@ export function SkillsSection(): React.ReactElement {
     queryFn: () => api.chat.listSkills()
     // graceful: listSkills() degrades to [] when the backend is unreachable
   })
+
+  // task 07-21 — which config-panel rows are expanded (only rows in CONFIG_PANELS get a chevron).
+  const [expanded, setExpanded] = React.useState<Set<string>>(() => new Set())
 
   // Run the one-time localStorage→backend override migration once on mount.
   React.useEffect(() => {
@@ -71,6 +116,15 @@ export function SkillsSection(): React.ReactElement {
     }
   }
 
+  function toggleExpanded(name: string): void {
+    setExpanded((prev) => {
+      const next = new Set(prev)
+      if (next.has(name)) next.delete(name)
+      else next.add(name)
+      return next
+    })
+  }
+
   const rows: React.ReactNode = (() => {
     if (isLoading) {
       return (
@@ -83,38 +137,54 @@ export function SkillsSection(): React.ReactElement {
     if (!skills || skills.length === 0) {
       return <div className="px-4 py-3.5 text-aux text-ink-fg-3">{t('settings.skills.empty')}</div>
     }
-    return skills.map((skill) => (
-      <Row
-        key={skill.name}
-        label={<span className={skill.available ? '' : 'opacity-60'}>{skill.title}</span>}
-        helper={
-          <span className="flex flex-col gap-0.5">
-            <span>{skill.description}</span>
-            {!skill.available && skill.unavailableReason ? (
-              <span className="text-meta text-ink-fg-3 italic">
-                {t('settings.skills.unavailable', { reason: skill.unavailableReason })}
+    return skills.map((skill) => {
+      const ConfigPanel = CONFIG_PANELS[skill.name]
+      if (!ConfigPanel) {
+        // Plain toggle row (unchanged) — no config panel for this skill.
+        return (
+          <Row key={skill.name} label={<SkillMeta skill={skill} />}>
+            <Switch
+              checked={skill.enabled}
+              onCheckedChange={(next) => void handleToggle(skill, next)}
+              aria-label={t('settings.skills.enabled')}
+            />
+          </Row>
+        )
+      }
+      // Expandable row: a chevron-toggle header (label/helper) + the Switch, with the per-skill
+      // config panel in the collapsible body. The header's label area is the toggle button; the
+      // Switch stays a sibling (never nested inside the button).
+      const isOpen = expanded.has(skill.name)
+      const bodyId = `skill-config-${skill.name}`
+      return (
+        <div key={skill.name}>
+          <div className="flex items-center gap-3 px-[var(--settings-tile-px,1rem)] py-[var(--settings-tile-py,0.875rem)]">
+            <button
+              type="button"
+              onClick={() => toggleExpanded(skill.name)}
+              aria-expanded={isOpen}
+              aria-controls={bodyId}
+              className="flex flex-1 min-w-0 items-start gap-2 text-left -my-1 py-1 rounded transition-colors duration-fast hover:bg-ink-fg/[0.025]"
+            >
+              <CollapseChevron expanded={isOpen} size={16} className="mt-0.5 text-ink-fg-2" />
+              <span className="flex-1 min-w-0">
+                <SkillMeta skill={skill} />
               </span>
-            ) : null}
-            <span className="flex items-center gap-2 mt-0.5">
-              <span className="inline-flex items-center rounded-full bg-ink-4 border border-ink-border px-1.5 py-0.5 text-micro font-mono text-ink-fg-2">
-                {t('settings.skills.toolCount', { n: skill.toolCount })}
-              </span>
-              {skill.scopes.length > 0 ? (
-                <span className="text-micro text-ink-fg-3">
-                  {t('settings.skills.scopes')}: {skill.scopes.join(', ')}
-                </span>
-              ) : null}
-            </span>
-          </span>
-        }
-      >
-        <Switch
-          checked={skill.enabled}
-          onCheckedChange={(next) => void handleToggle(skill, next)}
-          aria-label={t('settings.skills.enabled')}
-        />
-      </Row>
-    ))
+            </button>
+            <div className="shrink-0">
+              <Switch
+                checked={skill.enabled}
+                onCheckedChange={(next) => void handleToggle(skill, next)}
+                aria-label={t('settings.skills.enabled')}
+              />
+            </div>
+          </div>
+          <CollapsibleRegion expanded={isOpen} id={bodyId}>
+            <ConfigPanel />
+          </CollapsibleRegion>
+        </div>
+      )
+    })
   })()
 
   return (

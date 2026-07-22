@@ -1047,6 +1047,10 @@
         "title": "立即运行 Custom Agent",
         "label": "将立即运行以下 Custom Agent（需你批准）："
       },
+      "notionAgentChat": {
+        "title": "咨询 Notion Agent",
+        "label": "将向 notion-agent 发送以下请求 —— 它可能修改你的 Notion 工作区，批准后所做改动不可撤销（需你批准）："
+      },
       "fallbackTitle": "操作确认",
       "fallbackLabel": "将执行以下操作，需你批准：",
       "noArgs": "(无参数)",
@@ -2393,8 +2397,6 @@
         "fail": "LLM 网关不可达"
       },
       "notionAgent": {
-        "title": "Notion Agent (notion-agent-cli)",
-        "helper": "读取本机 notion-agent-cli 的账号配置。Notion Agent 后端以下方绑定的 Custom Agent 人格回复;认证(token_v2)由 CLI 管理。",
         "cliMissing": "未找到 notion-agent 命令行工具",
         "needsAuth": "notion-agent 尚未认证(缺少 token_v2)",
         "account": "账号",

@@ -1,7 +1,8 @@
 // 1.5.0 dogfood (task 07-07) — SimpleApprovalCard: the identity-only edit-tier approval card shared
-// by the four tools whose approval needs NO field editor, just approve / reject over a pinned
-// identity value:
-//   web_fetch (URL) · web_search (query) · custom_agent_delete (agent id) · custom_agent_run_now.
+// by the tools whose approval needs NO field editor, just approve / reject over a pinned identity
+// value:
+//   web_fetch (URL) · web_search (query) · custom_agent_delete (agent id) · custom_agent_run_now
+//   · notion_agent_chat (prompt — task 07-21).
 //
 // 🔴 The bug it fixes: before this card these four edit-tier tools fell through to the buttonless
 //    generic ToolTraceCard, which rendered the requires-action (approval-paused) state as a
@@ -15,7 +16,7 @@
 // resolve side-channel and no editable field (identity is pinned, matching these tools' schema — the
 // value the user sees is exactly what will run).
 
-import { Globe, Play, Search, Trash2 } from 'lucide-react'
+import { Globe, NotebookPen, Play, Search, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type { ToolCallMessagePartProps } from '@assistant-ui/react'
 
@@ -34,13 +35,16 @@ const SPECS: Record<string, ToolSpec> = {
   web_fetch: { key: 'webFetch', field: 'url' },
   web_search: { key: 'webSearch', field: 'query' },
   custom_agent_delete: { key: 'customAgentDelete', field: 'agent_id' },
-  custom_agent_run_now: { key: 'customAgentRunNow', field: 'agent_id' }
+  custom_agent_run_now: { key: 'customAgentRunNow', field: 'agent_id' },
+  // task 07-21 — notion_agent_chat previews the pinned `prompt` that will be sent to the notion-agent.
+  notion_agent_chat: { key: 'notionAgentChat', field: 'prompt' }
 }
 
 function iconFor(toolName: string): React.ReactNode {
   if (toolName === 'web_search') return <Search size={13} strokeWidth={2} />
   if (toolName === 'custom_agent_delete') return <Trash2 size={13} strokeWidth={2} />
   if (toolName === 'custom_agent_run_now') return <Play size={13} strokeWidth={2} />
+  if (toolName === 'notion_agent_chat') return <NotebookPen size={13} strokeWidth={2} />
   return <Globe size={13} strokeWidth={2} />
 }
 

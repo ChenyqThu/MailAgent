@@ -1,18 +1,18 @@
-// Settings → AI: Notion Agent (notion-agent-cli) config panel.
+// Settings → Custom AI → Skills: the notion_agent skill's per-skill config panel (task 07-21).
 //
-// Reads the CLI's account.json via mailApi.notionAgent.* and lets the user:
-//   - see the bound account / workspace / Custom Agent / default model
-//   - run `doctor` for a live connectivity + auth readout
-//   - switch the bound Custom Agent (agents list → setAgent writes account.json)
-//   - change the default model
+// Moved from tabs/NotionAgentSection.tsx (which was its own Section under 设置-AI). The binding /
+// default-model / doctor controls now live INSIDE the notion_agent skill row's expand area in
+// SkillsSection — one place for "is the skill on" + "how is the notion-agent bound". Same
+// mailApi.notionAgent.* plumbing + primary-agent localStorage memory + `notion-agent init` guidance.
 //
-// token_v2 auth is NOT editable here — that lives with the CLI
-// (`notion-agent init`). We only report whether a token is present; when it
-// isn't, the panel points the user at the terminal command.
+// Renders the config ROWS only (no outer <Section>) so it embeds in the collapsible skill body;
+// SkillsSection owns the surrounding border/expand chrome.
 //
-// setAgent / setModel invalidate ['notionAgent','config'], which the chat
-// panel also subscribes to, so a binding change reflects in the AI panel's
-// header without a remount.
+// token_v2 auth is NOT editable here — that lives with the CLI (`notion-agent init`). We only report
+// whether a token is present; when it isn't, the panel points the user at the terminal command.
+//
+// setAgent / setModel invalidate ['notionAgent','config'], which the chat panel also subscribes to,
+// so a binding change reflects in the AI panel's header without a remount.
 
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
@@ -32,7 +32,6 @@ import {
 import { toastError, toastSuccess } from '@shared/state/toast'
 import type { NotionAgentDoctorCheck } from '@shared/api/types'
 
-import { Section } from '../parts/Section'
 import { Row } from '../parts/Row'
 
 function errLabel(err: unknown): string {
@@ -76,7 +75,7 @@ interface AgentOption {
   primary: boolean
 }
 
-export function NotionAgentSection(): React.ReactElement {
+export function NotionAgentSkillConfig(): React.ReactElement {
   const { t } = useTranslation()
   const api = useMailApi()
   const qc = useQueryClient()
@@ -222,15 +221,7 @@ export function NotionAgentSection(): React.ReactElement {
   const needsAuth = config !== null && config.cliFound && !config.tokenPresent
 
   return (
-    <Section
-      title={t('settings.ai.notionAgent.title', {
-        defaultValue: 'Notion Agent (notion-agent-cli)'
-      })}
-      helper={t('settings.ai.notionAgent.helper', {
-        defaultValue:
-          '读取本机 notion-agent-cli 的账号配置。Notion Agent 后端以下方绑定的 Custom Agent 人格回复；认证（token_v2）由 CLI 管理。'
-      })}
-    >
+    <div className="divide-y divide-ink-border-soft border-t border-ink-border-soft bg-ink-fg/[0.015]">
       {cliMissing && (
         <div className="px-4 py-3 flex items-start gap-2 text-aux text-fail">
           <AlertTriangle className="size-4 shrink-0 mt-0.5" />
@@ -389,6 +380,6 @@ export function NotionAgentSection(): React.ReactElement {
           })}
         </div>
       )}
-    </Section>
+    </div>
   )
 }

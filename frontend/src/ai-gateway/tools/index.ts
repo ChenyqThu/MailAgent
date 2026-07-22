@@ -27,6 +27,7 @@ import { createExecTools } from './exec'
 import { createSkillSupplyTools } from './skill_supply'
 import { createCustomAgentTools } from './agents'
 import { createCalendarReadTools, createCalendarWriteTools } from './calendar'
+import { createNotionAgentTools } from './notion_agent'
 import {
   applyContextModePolicy,
   normalizeContextMode,
@@ -123,6 +124,13 @@ export interface BuildGatewayToolsOpts {
    *  calendar_event_rsvp / calendar_event_delete (edit-tier writes, D4 恒 HITL — always ask, no
    *  whitelist/免卡 channel). Off → not added → ToolSet byte-identical to the pre-epic set. */
   calendarToolsEnabled?: boolean
+  /** task 07-21 (MAILAGENT_NOTION_AGENT_TOOL) — when true AND approvalGuard is supplied, the
+   *  notion_agent_chat tool is added: an edit-tier write (恒 HITL — external AI call to the
+   *  notion-agent CLI, side effects on the Notion side, no whitelist/免卡 channel). Unlike the
+   *  other tool families this one is SKILL-gated (skill_gating.GATEWAY_SKILL_TOOLS maps it to the
+   *  notion_agent skill), so the Settings skill toggle (advertisedSkills) is the real on/off; the
+   *  flag is the emergency kill-switch (explicit false → not added → byte-identical). */
+  notionAgentToolsEnabled?: boolean
   /** S2 W0 (ADR-001 D1/D3) — the run's server-asserted context mode, threaded from
    *  prepareChatRun's trustedContextMode. Governs (a) the auto-approve predicate (a reversible
    *  domain write may only skip the card in manual_chat) and (b) the LAST assembly step
@@ -328,6 +336,23 @@ export function buildGatewayTools(
     Object.assign(
       tools,
       createCalendarWriteTools(opts.domain, collector, opts.approvalGuard, {
+        a2uiEnabled: opts.a2uiEnabled,
+        approvalMode: opts.approvalMode,
+        oneShot: opts.oneShotWrites,
+        contextMode
+      })
+    )
+  }
+  // task 07-21 — notion-agent tool behind MAILAGENT_NOTION_AGENT_TOOL. One edit-tier write (恒 HITL,
+  // class 'outbound') → needs the approval guard (all-or-nothing on flag + guard). Registered here
+  // BEFORE the skill-gating passes because — unlike the CORE_UNGATED web/calendar families — it is
+  // SKILL-gated (mapped to the notion_agent skill in GATEWAY_SKILL_TOOLS), so applySkillGating below
+  // drops it unless the notion_agent skill is advertised (Settings toggle). flag-off → not added →
+  // byte-identical.
+  if (opts.notionAgentToolsEnabled && opts.approvalGuard) {
+    Object.assign(
+      tools,
+      createNotionAgentTools(opts.domain, collector, opts.approvalGuard, {
         a2uiEnabled: opts.a2uiEnabled,
         approvalMode: opts.approvalMode,
         oneShot: opts.oneShotWrites,

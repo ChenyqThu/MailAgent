@@ -148,6 +148,13 @@ export const GATEWAY_TOOL_CLASSES: Record<string, GatewayToolClass> = {
   // -only; send is blocking always-ask (its needsApproval hard-returns true regardless of anything
   // here) and has NO grants key — structurally un-grantable, same level as capability_change.
   email_prepare_send: 'outbound',
+  // notion_agent_chat (task 07-21) — delegates the request (prompt, possibly carrying workspace
+  // data) to an EXTERNAL AI (the notion-agent CLI) whose side effects land on the Notion side. It
+  // is edit-tier always-ask in manual_chat (恒 HITL — the factory wires no policyEvaluate, so no
+  // whitelist/免卡 channel exists). Class 'outbound' — data egresses the machine and there is NO
+  // grants key, so a headless custom-agent run never gets it (放宽留给后续 grant 体系); that is the
+  // MVP-safe default (mirrors the send row's un-grantable stance, not a recipient send).
+  notion_agent_chat: 'outbound',
   // exec — local command / filesystem (S2 W1). manual_chat-only; all three are edit-tier always-ask
   // (never auto-approved by approvalMode) UNLESS a structured PolicyRule whitelist the owner set
   // matches (needsApproval consults /api/agent/policy/evaluate — auto_allow skips the card,
@@ -300,7 +307,10 @@ export const ACCEPT_EDITS_AUTO_APPROVE_TOOLS: ReadonlySet<string> = new Set([
  *    so all four stay HITL under acceptEdits; only 'bypass' releases them.
  *  - email_prepare_send: listed for accounting only — the send tool never consults either set;
  *    auditedSendTool's needsApproval only ever relaxes under the explicit 'bypass' literal
- *    (types.ts bypassMode param). */
+ *    (types.ts bypassMode param).
+ *  - notion_agent_chat (task 07-21): an EXTERNAL AI call whose side effects land on the Notion side
+ *    and cannot be undone from here — 恒 HITL (D4-style), so it keeps asking under acceptEdits; only
+ *    'bypass' releases it. */
 export const ACCEPT_EDITS_ASK_TOOLS: ReadonlySet<string> = new Set([
   'calendar_event_reschedule',
   'calendar_event_rsvp',
@@ -313,7 +323,8 @@ export const ACCEPT_EDITS_ASK_TOOLS: ReadonlySet<string> = new Set([
   'custom_agent_update',
   'custom_agent_delete',
   'custom_agent_run_now',
-  'email_prepare_send'
+  'email_prepare_send',
+  'notion_agent_chat'
 ])
 
 /** Filter an assembled ToolSet by the context mode — the LAST step of buildGatewayTools, after

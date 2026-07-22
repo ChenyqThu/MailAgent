@@ -452,6 +452,13 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
   // vite define (mirrors the openness flags). Explicit false → buildGatewayTools output
   // byte-identical to the pre-epic set.
   const calendarToolsEnabled = envBool('MAILAGENT_CALENDAR_AGENT_TOOLS', true)
+  // task 07-21 — MAILAGENT_NOTION_AGENT_TOOL gates the notion_agent_chat tool (edit-tier 恒 HITL —
+  // delegates a Notion request to the notion-agent CLI via serve-api /api/skills/invoke). Unlike the
+  // other tool families this one is SKILL-gated (skill_gating maps it to the notion_agent skill), so
+  // the real user control is the Settings → Custom AI → Skills toggle; this flag is only the
+  // emergency kill-switch. Default ON; an explicit env false → the tool is never registered,
+  // byte-identical. main-env-only, NO vite define (mirrors the openness/calendar flags).
+  const notionAgentToolsEnabled = envBool('MAILAGENT_NOTION_AGENT_TOOL', true)
   // S4 W3 — MAILAGENT_CUSTOM_AGENTS_ENABLED gates the headless custom-agent fresh-spawn endpoint
   // (POST /api/ai/agent-run): its two cfg hooks (fetchAgentRunSpec + createAgentSession) are wired
   // only when on → an explicit env false → the endpoint 404s, byte-identical to S3. This wave adds
@@ -789,6 +796,8 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
           skillInstallToolsEnabled,
           // calendar epic 4.1/4.2 — calendar tools (MAILAGENT_CALENDAR_AGENT_TOOLS, default on).
           calendarToolsEnabled,
+          // task 07-21 — notion-agent tool (MAILAGENT_NOTION_AGENT_TOOL, default on; skill-gated).
+          notionAgentToolsEnabled,
           // S5 W3 — conversational custom-agent CRUD tools (MAILAGENT_CUSTOM_AGENTS_ENABLED, the same
           // flag that gates the S4 headless kernel; default off → byte-identical to the S4 set).
           customAgentToolsEnabled: customAgentsEnabled,

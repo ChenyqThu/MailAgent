@@ -250,6 +250,17 @@ export const webSearchSchema = z.object({
 })
 export type WebSearchInput = z.infer<typeof webSearchSchema>
 
+/** notion_agent_chat (task 07-21) — delegate a Notion-workspace request to the notion-agent CLI.
+ *  `prompt` is the natural-language ask (question OR task); `thread_id` continues a prior Notion
+ *  conversation; `model` overrides the bound default. Field names mirror the Python builtin skill
+ *  tool schema (src/skills/builtin/notion_agent.py) so the gateway → /api/skills/invoke body matches. */
+export const notionAgentChatSchema = z.object({
+  prompt: z.string().min(1).max(8000),
+  thread_id: z.string().min(1).max(200).optional(),
+  model: z.string().min(1).max(200).optional()
+})
+export type NotionAgentChatInput = z.infer<typeof notionAgentChatSchema>
+
 // ── exec schemas (S2 W1) — the agent runs a local command / reads / writes a file. Behind
 //    MAILAGENT_OPENNESS_EXEC_TOOLS. ALL THREE are edit-tier writes (local execution = always ask
 //    unless a structured whitelist rule the user set matches; never auto-approved). Field names

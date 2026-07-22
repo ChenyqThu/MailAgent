@@ -136,7 +136,14 @@ export const componentRegistry: ComponentRegistry = createComponentRegistry([
   // live tool part).
   {
     component: A2UI_COMPONENTS.SimpleApprovalCard,
-    toolNames: ['web_fetch', 'web_search', 'custom_agent_delete', 'custom_agent_run_now'],
+    toolNames: [
+      'web_fetch',
+      'web_search',
+      'custom_agent_delete',
+      'custom_agent_run_now',
+      // task 07-21 — notion_agent_chat: identity-only edit-tier approval previewing the prompt.
+      'notion_agent_chat'
+    ],
     render: SimpleApprovalCard
   },
   // calendar epic 4.2 — the calendar write approval card (behind MAILAGENT_CALENDAR_AGENT_TOOLS).

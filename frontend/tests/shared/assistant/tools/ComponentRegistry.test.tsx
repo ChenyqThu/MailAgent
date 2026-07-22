@@ -69,6 +69,7 @@ describe('componentRegistry — resolution', () => {
       'email_resync',
       'file_read',
       'file_write',
+      'notion_agent_chat',
       'run_command',
       'set_skill_enabled',
       'skill_install',

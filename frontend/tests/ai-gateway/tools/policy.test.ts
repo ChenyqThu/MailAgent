@@ -56,6 +56,9 @@ function buildAllTools(contextMode?: AgentContextMode) {
     // calendar epic 4.1/4.2 — calendar tools (MAILAGENT_CALENDAR_AGENT_TOOLS), classified read
     // (2 silent reads) + domain_write (3 edit writes, 恒 HITL).
     calendarToolsEnabled: true,
+    // task 07-21 — notion-agent tool (MAILAGENT_NOTION_AGENT_TOOL), classified 'outbound' (edit-tier
+    // 恒 HITL, un-grantable → stripped headless). Built here so the FULL-set drift guards see it.
+    notionAgentToolsEnabled: true,
     ...(contextMode !== undefined ? { contextMode } : {})
   })
 }

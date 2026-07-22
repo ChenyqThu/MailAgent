@@ -53,18 +53,59 @@ async def _notion_agent_chat(ctx: Any, params: dict[str, Any]) -> dict[str, Any]
     return {"final_content": final_content, "thread_id": new_thread_id}
 
 
+_TOOL_DESCRIPTION = (
+    "Delegate a Notion-workspace request to the notion-agent (a separate AI that runs with the "
+    "owner's bound Custom Agent persona and can both ANSWER questions from the Notion workspace "
+    "AND EXECUTE Notion tasks — e.g. look up a page, update a schedule/calendar entry, or edit a "
+    "context/notes page). Pass `prompt` in natural language describing what to find or do; pass "
+    "`thread_id` (returned by a prior call) to continue that same Notion conversation. Returns "
+    "{final_content, thread_id}. 🔴 This makes an EXTERNAL AI call and any side effects land on the "
+    "Notion side; the user must approve each call and, once approved, a Notion write it performs "
+    "cannot be undone from here. This is a SYNCHRONOUS request that waits for the notion-agent to "
+    "finish — good for quick lookups and small edits (seconds); a task you expect to take longer "
+    "than ~60s is not a good fit for this synchronous call."
+)
+
+_PROMPT_FRAGMENT = (
+    "notion_agent_chat delegates a request to the Notion knowledge agent (the owner's bound Custom "
+    "Agent persona). Use it to (a) answer questions grounded in the Notion workspace and (b) EXECUTE "
+    "Notion tasks — update a schedule, edit a context/notes page, etc. — when the user asks. Pass a "
+    "natural-language `prompt`; pass `thread_id` from a previous result to continue the same "
+    "conversation. It runs synchronously (best for second-scale lookups / small edits; not for tasks "
+    "you expect to exceed ~60s). Every call is external and asks for the user's approval first; a "
+    "Notion write it makes takes effect on the Notion side and is not reversible from here. Not "
+    "enabled by default."
+)
+
+
 def build_skill() -> BoundSkill:
     tools = [
         BoundTool(
             ToolDef(
                 name="notion_agent_chat",
-                description="Ask the notion-agent (Notion knowledge agent); supports thread_id.",
+                description=_TOOL_DESCRIPTION,
                 input_schema={
                     "type": "object",
                     "properties": {
-                        "prompt": {"type": "string"},
-                        "thread_id": {"type": "string", "description": "continue a prior thread"},
-                        "model": {"type": "string"},
+                        "prompt": {
+                            "type": "string",
+                            "description": (
+                                "Natural-language request for the Notion agent: a question to "
+                                "answer from the workspace, or a task to perform (update schedule, "
+                                "edit a context page, …)."
+                            ),
+                        },
+                        "thread_id": {
+                            "type": "string",
+                            "description": (
+                                "Continue a prior Notion conversation — pass the thread_id returned "
+                                "by a previous call."
+                            ),
+                        },
+                        "model": {
+                            "type": "string",
+                            "description": "Override the bound default model (optional).",
+                        },
                     },
                     "required": ["prompt"],
                 },
@@ -83,12 +124,12 @@ def build_skill() -> BoundSkill:
         name="notion_agent",
         version="1.0.0",
         title="Notion Agent",
-        description="Bridge to the notion-agent CLI for Notion-backed knowledge Q&A.",
-        default_enabled=False,
-        prompt_fragment=(
-            "Use notion_agent_chat to ask the Notion knowledge agent a question; pass thread_id "
-            "to continue a prior conversation. Not enabled by default."
+        description=(
+            "Delegate Notion-workspace questions and tasks (update schedule, edit context pages, …) "
+            "to the notion-agent CLI, run with the owner's bound Custom Agent persona."
         ),
+        default_enabled=False,
+        prompt_fragment=_PROMPT_FRAGMENT,
         docs_path="skills/notion_agent/SKILL.md",
         tools=tools,
     )

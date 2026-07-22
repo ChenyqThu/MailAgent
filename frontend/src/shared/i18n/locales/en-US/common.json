@@ -1047,6 +1047,10 @@
         "title": "Run custom agent now",
         "label": "The following custom agent will be run now (needs your approval):"
       },
+      "notionAgentChat": {
+        "title": "Ask the Notion agent",
+        "label": "The following request will be sent to the notion-agent — it may edit your Notion workspace, and once approved the change can't be undone (needs your approval):"
+      },
       "fallbackTitle": "Confirm operation",
       "fallbackLabel": "The following operation will run — needs your approval:",
       "noArgs": "(no arguments)",
@@ -2393,8 +2397,6 @@
         "fail": "LLM gateway unreachable"
       },
       "notionAgent": {
-        "title": "Notion Agent (notion-agent-cli)",
-        "helper": "Reads the local notion-agent-cli account config. The Notion Agent backend replies as the Custom Agent bound below; auth (token_v2) is managed by the CLI.",
         "cliMissing": "notion-agent CLI not found",
         "needsAuth": "notion-agent is not authenticated (missing token_v2)",
         "account": "Account",

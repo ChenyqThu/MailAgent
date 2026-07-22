@@ -47,6 +47,10 @@ function buildAllTools() {
     // calendar epic 4.1/4.2 — calendar tools (MAILAGENT_CALENDAR_AGENT_TOOLS), same rationale
     // (classified CORE_UNGATED).
     calendarToolsEnabled: true,
+    // task 07-21 — notion-agent tool (MAILAGENT_NOTION_AGENT_TOOL). Unlike the others this one IS
+    // skill-gated (GATEWAY_SKILL_TOOLS notion_agent), so the FORWARD/REVERSE drift guards need it
+    // built here to see it classified.
+    notionAgentToolsEnabled: true,
     // S2 W0 — the drift guard reasons over the MANUAL-session universe (fail-closed default is
     // 'untrusted_trigger', which strips capability_change/outbound and would blind the guard).
     contextMode: 'manual_chat'
@@ -82,9 +86,10 @@ describe('applySkillGating (pure semantics)', () => {
     for (const n of CORE_UNGATED_GATEWAY_TOOLS) expect(gated[n]).toBeDefined()
   })
 
-  test('all three skills advertised → no drops (identity, same keys + order)', () => {
+  test('all mapped skills advertised → no drops (identity, same keys + order)', () => {
     const tools = buildAllTools()
-    const gated = applySkillGating(tools, ['email', 'search', 'report'])
+    // task 07-21 — notion_agent is now a mapped skill too; advertise every GATEWAY_SKILL_TOOLS key.
+    const gated = applySkillGating(tools, Object.keys(GATEWAY_SKILL_TOOLS))
     expect(Object.keys(gated)).toEqual(Object.keys(tools))
   })
 })

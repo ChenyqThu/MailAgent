@@ -51,7 +51,6 @@ import { EnvField } from '../parts/EnvField'
 import { EnvSecretField } from '../parts/EnvSecretField'
 import { ModelServicesSection } from '../providers/ModelServicesSection'
 import { buildModelOptionGroups } from '../providers/modelOptionGroups'
-import { NotionAgentSection } from './NotionAgentSection'
 import { CustomAiSection } from '../CustomAiSection'
 
 export function AiTab(): React.ReactElement {
@@ -430,7 +429,8 @@ export function AiTab(): React.ReactElement {
         </Row>
       </Section>
 
-      <NotionAgentSection />
+      {/* task 07-21 — Notion Agent 配置已从此处摘除，归位到 设置 → Custom AI → Skills 的
+          notion_agent skill 条目展开区（NotionAgentSkillConfig）。 */}
 
       <Section title={t('settings.ai.translate.title')} helper={t('settings.ai.translate.helper')}>
         <EnvField

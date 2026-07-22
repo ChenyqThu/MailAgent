@@ -8,16 +8,14 @@
 //   2. flag on → 「模型服务」区渲染；LLM_API_BASE / LLM_API_KEY / 启用模型勾选区消失；
 //      全局默认模型 / Fallback 链下拉保留（选项源升级在 EnvField optionGroups 内部）。
 //
-// NotionAgentSection / CustomAiSection 各自带独立取数与门控（非本 task 面）→ mock 成 null。
+// CustomAiSection 各自带独立取数与门控（非本 task 面）→ mock 成 null。（task 07-21：
+// NotionAgentSection 已从 AiTab 摘除并删除，配置归位到 设置 → Custom AI → Skills，故不再 mock。）
 
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createElement } from 'react'
 
-vi.mock('../../src/shared/components/settings/tabs/NotionAgentSection', () => ({
-  NotionAgentSection: () => null
-}))
 vi.mock('../../src/shared/components/settings/CustomAiSection', () => ({
   CustomAiSection: () => null,
   StandingDocsSection: () => null
