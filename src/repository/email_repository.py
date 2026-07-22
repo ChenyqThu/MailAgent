@@ -557,6 +557,50 @@ def build_search_plan(terms: list[str]) -> tuple[list[_TermRoute], list[str]]:
     return routes, warnings
 
 
+# ============================================================
+# 候选源 (lane) 管线 — plain fast-path 的统一候选收集形态
+# ============================================================
+#
+# plain fast-path 原先两条各自手拼的执行链 (非 CJK fused / CJK trigram) 收敛为统一
+# 候选源形态: 每个 lane 产出一个「有序候选列表」(最相关在前), 下游是单一的 RRF 合并点
+# ``_merge_lane_groups`` + 统一的 metadata 过滤。后续批次 (英文 trigram 子串 lane /
+# 附件 lane) 以「往组里追加 lane」的方式接入, 不再各自手拼 SQL。
+#
+# 组合语义 (两条旧路径的语义在此统一, 行为不变):
+#   - 组内多 lane **并集** (任一 lane 命中即该组命中) —— fused 路径 body ∪ attachment;
+#   - 组间 **AND 交集** (每组都命中才是最终候选) —— trigram 路径 term 间 AND;
+#   - RRF: 每个 lane 内按「最终候选中的出现位置」计 1/(_RRF_K + pos), 跨 lane 求和。
+
+
+@dataclass
+class _SearchLane:
+    """plain 检索管线的一个候选源。
+
+    ``entries``: 有序候选 ``(internal_id, row)`` (最相关在前; lane 内重复 id 按首次
+    出现计位)。row 两种形态:
+      - sqlite3.Row (行级 lane, fused 路径): 携带 metadata + snippet + source/filename
+        投影, metadata 谓词已内联在 lane SQL (合并点不再后置过滤), 命中可直接物化;
+      - None (id 级 lane, trigram 路径): 全召回不截断 (NS-3: 交集前截断会丢真命中),
+        metadata 过滤由合并点统一走 ``_filter_ids_by_metadata`` 分块后置, 排序所需
+        date 由合并点补查, snippet 由 ``_build_trigram_hits`` 对 top-N 统一生成。
+    """
+    name: str
+    entries: list[tuple[int, Optional[sqlite3.Row]]]
+
+
+@dataclass
+class _MergedCandidate:
+    """``_merge_lane_groups`` 出口: 单点 RRF 合并后的一条候选 (已排序 + 裁 top-limit)。
+
+    ``row`` = 提供该 id 的首个行级 lane 的行 (lane 注册顺序即 payload 优先级, fused
+    路径 body 先于 attachment → 正文+附件同时命中时 source='body'); 全部 lane 都是
+    id 级时为 None (由 trigram 物化路径补 metadata)。
+    """
+    internal_id: int
+    rrf_score: float
+    row: Optional[sqlite3.Row]
+
+
 def _normalize_contact_name(value: Optional[str]) -> Optional[str]:
     trimmed = (value or "").strip().strip("\"'")
     return trimmed or None
@@ -1486,9 +1530,8 @@ class EmailRepository:
 
         - 每个 term 按 ``build_search_plan`` 路由 (unicode / trigram[mode=match|like] /
           too_short); 含 CJK 的整 term 整体走 trigram 子串 (不拆段)。
-        - 每个 term 产出有序候选 internal_id 列表; term 之间 AND (rowid 交集)。
-        - 用 P1 的 RRF (``1/(_RRF_K + row_number)``) 把各 term 列表的 rank 融合,
-          ORDER BY score DESC, date DESC。
+        - 每个 term 产出一个 AND 组 (id 级 lane, 全召回); 组间交集 / metadata 后置过滤 /
+          RRF 融合统一由 ``_merge_lane_groups`` 单点完成, ORDER BY score DESC, date DESC。
         - 返回 None 表示「不接管, 回退老 unicode fast-path」(例如全部 term 都 too_short
           但仍有 1 字拦截 warning 要透传 → 仍返回空结果 result 而非 None)。
 
@@ -1512,8 +1555,9 @@ class EmailRepository:
 
         conn = self._connect()
         try:
-            # 每个 term 一个有序候选 internal_id 列表 (rank 用 list 内位置算 RRF)。
-            per_term_ids: list[list[int]] = []
+            # 每个 term 一个 AND 组 (组内目前单 lane; 后续批次往组里追加 trigram/附件
+            # lane 即成小 diff)。候选全召回不截断 (NS-3: 交集前截断会丢真命中)。
+            lane_groups: list[list[_SearchLane]] = []
             for route in routes:
                 ids = self._trigram_term_candidate_ids(
                     conn, route, query_for_log=query
@@ -1521,31 +1565,17 @@ class EmailRepository:
                 if not ids:
                     # 任一 term 无候选 → AND 交集为空, 直接空结果 (warning 仍透传)。
                     return EmailSearchResult([], query, warnings)
-                per_term_ids.append(ids)
+                lane_groups.append([
+                    _SearchLane(f"body-{route.route}", [(iid, None) for iid in ids])
+                ])
 
-            # AND 交集 (rowid 必须出现在每个 term 的候选集里)。
-            common: set[int] = set(per_term_ids[0])
-            for ids in per_term_ids[1:]:
-                common &= set(ids)
-            if not common:
-                return EmailSearchResult([], query, warnings)
-
-            # 应用 metadata 过滤 (mailbox / date) — 复用结构化谓词, 在 email_metadata 上过滤。
-            allowed = self._filter_ids_by_metadata(conn, common, structured_filters)
-            if not allowed:
-                return EmailSearchResult([], query, warnings)
-
-            # RRF 融合: 每个 term 列表里命中的 id 贡献 1/(k + rank)。
-            rrf_scores: dict[int, float] = {}
-            for ids in per_term_ids:
-                rank = 0
-                for iid in ids:
-                    if iid not in allowed:
-                        continue
-                    rank += 1
-                    rrf_scores[iid] = rrf_scores.get(iid, 0.0) + 1.0 / (_RRF_K + rank)
-
-            hits = self._build_trigram_hits(conn, rrf_scores, limit, routes)
+            merged = self._merge_lane_groups(
+                conn,
+                lane_groups,
+                post_filter_predicates=structured_filters,
+                limit=limit,
+            )
+            hits = self._build_trigram_hits(conn, merged, routes)
             return EmailSearchResult(hits, query, warnings)
         finally:
             conn.close()
@@ -1760,26 +1790,25 @@ class EmailRepository:
     def _build_trigram_hits(
         self,
         conn: sqlite3.Connection,
-        rrf_scores: dict[int, float],
-        limit: int,
+        merged: list[_MergedCandidate],
         routes: list[_TermRoute],
     ) -> list[EmailSearchHit]:
-        """按 RRF 分数 + date 排序取 top-N, 查 metadata 拼 EmailSearchHit。
+        """id 级 lane 的 top-N 候选 → 查 metadata 拼 EmailSearchHit (trigram 路径物化)。
 
-        ``rank`` = ``-rrf_score`` (越小越相关), 与 P1 _merge_search_rows_by_rrf 出口语义一致。
-        snippet: 对最终 top-N 用「snippet 表达式」(build_trigram_snippet_expr) 在
+        ``merged`` 已由 ``_merge_lane_groups`` 排好序 + 裁到 top-N。``rank`` =
+        ``-rrf_score`` (越小越相关), 与行级 (fused) 路径出口语义一致。缺 metadata 行的
+        id 已占 top-N 槽位, 此处丢弃不回填 (与旧行为一致)。
+        snippet: 对 top-N 用「snippet 表达式」(build_trigram_snippet_expr) 在
         email_body_fts_trigram 上跑 snippet() 高亮命中词; 该表达式为空 (纯 2/1 字 CJK)
         或某 row 不被表达式 MATCH (只 2 字 LIKE 命中) → fallback 取 body_markdown 前
         ~80 字符无高亮摘要, 保证 snippet 不恒空。Python/TS 双端逐行镜像。
         """
-        if not rrf_scores:
+        if not merged:
             return []
-        id_list = list(rrf_scores.keys())
         # MED-2: 补 ai_priority + lang 投影 (命令面板 EmailHitRow 渲染优先级 chip + lang pip)。
         ai_select, ai_join = self._ai_fields_select_join(conn, meta_alias="m")
         meta_by_id: dict[int, sqlite3.Row] = {}
-        # NS-3: 候选可能数万 (trigram 全召回) → IN(...) 分块, 不丢 id。
-        for chunk in self._chunk_ids(id_list):
+        for chunk in self._chunk_ids([c.internal_id for c in merged]):
             placeholders = ",".join("?" for _ in chunk)
             rows = conn.execute(
                 f"""SELECT m.internal_id AS internal_id,
@@ -1795,37 +1824,27 @@ class EmailRepository:
             for r in rows:
                 meta_by_id[int(r["internal_id"])] = r
 
-        ordered = sorted(
-            rrf_scores.items(),
-            key=lambda kv: (
-                kv[1],
-                self._date_sort_value(
-                    meta_by_id[kv[0]]["date_received"] if kv[0] in meta_by_id else None,
-                    oldest=False,
-                ),
-            ),
-            reverse=True,
-        )
-        top = [(iid, score) for iid, score in ordered[:limit] if iid in meta_by_id]
-        top_ids = [iid for iid, _ in top]
+        top_ids = [c.internal_id for c in merged if c.internal_id in meta_by_id]
         snippet_by_id = self._build_trigram_snippets(conn, top_ids, routes)
 
         hits: list[EmailSearchHit] = []
-        for iid, score in top:
-            r = meta_by_id[iid]
+        for candidate in merged:
+            r = meta_by_id.get(candidate.internal_id)
+            if r is None:
+                continue
             page_id = r["notion_page_id"]
             notion_url = (
                 f"https://www.notion.so/{page_id.replace('-', '')}"
                 if page_id else None
             )
             hits.append(EmailSearchHit(
-                internal_id=iid,
+                internal_id=candidate.internal_id,
                 subject=r["subject"],
                 sender=r["sender"],
                 date_received=r["date_received"],
                 mailbox=r["mailbox"],
-                snippet=snippet_by_id.get(iid, ""),
-                rank=-float(score),
+                snippet=snippet_by_id.get(candidate.internal_id, ""),
+                rank=-float(candidate.rrf_score),
                 notion_page_id=page_id,
                 notion_url=notion_url,
                 source="body",
@@ -2096,6 +2115,10 @@ class EmailRepository:
     ) -> list[EmailSearchHit]:
         """Search body + attachment FTS and merge by email-level RRF.
 
+        两个候选源注册成单组 (并集语义) 的行级 lane, 交由 ``_merge_lane_groups`` 单点
+        RRF 合并 (metadata 谓词已内联在 lane SQL, 合并点不再后置过滤)。lane 注册顺序
+        = payload 优先级: 正文+附件同时命中时 source='body'、保留正文 snippet。
+
         ``rank`` on the returned ``EmailSearchHit`` is ``-rrf_score`` so existing
         callers that treat lower scores as more relevant keep the same ordering
         intuition even though the underlying score is no longer raw bm25.
@@ -2115,7 +2138,7 @@ class EmailRepository:
                 limit=candidate_limit,
                 query_for_log=query_for_log,
             )
-            attachment_rows: list[sqlite3.Row] = []
+            lanes = [_SearchLane("body-unicode", self._rows_to_lane_entries(body_rows))]
             if attachment_fts_expr:
                 attachment_rows = self._fetch_attachment_fts_rows(
                     conn,
@@ -2128,9 +2151,21 @@ class EmailRepository:
                     limit=candidate_limit,
                     query_for_log=attachment_fts_expr,
                 )
-            return self._merge_search_rows_by_rrf(body_rows, attachment_rows, sort, limit)
+                lanes.append(_SearchLane(
+                    "attachment-unicode",
+                    self._rows_to_lane_entries(attachment_rows),
+                ))
+            merged = self._merge_lane_groups(conn, [lanes], sort=sort, limit=limit)
+            return [self._merged_row_to_hit(candidate) for candidate in merged]
         finally:
             conn.close()
+
+    @staticmethod
+    def _rows_to_lane_entries(
+        rows: list[sqlite3.Row],
+    ) -> list[tuple[int, Optional[sqlite3.Row]]]:
+        """行级 lane 的候选构造: SQL 已按相关度排好序, 原序进 lane。"""
+        return [(int(r["internal_id"]), r) for r in rows]
 
     @staticmethod
     def _rrf_candidate_limit(limit: int) -> int:
@@ -2264,116 +2299,143 @@ class EmailRepository:
             )
             return []
 
-    def _merge_search_rows_by_rrf(
+    def _merge_lane_groups(
         self,
-        body_rows: list[sqlite3.Row],
-        attachment_rows: list[sqlite3.Row],
-        sort: Optional[str],
+        conn: sqlite3.Connection,
+        lane_groups: list[list[_SearchLane]],
+        *,
+        post_filter_predicates: Optional[list[FilterPredicate]] = None,
+        sort: Optional[str] = None,
         limit: int,
-    ) -> list[EmailSearchHit]:
-        combined: dict[int, dict] = {}
-        seen_body: set[int] = set()
-        seen_attachment: set[int] = set()
+    ) -> list[_MergedCandidate]:
+        """plain 管线的单点 RRF 合并 + 统一 metadata 过滤 (组合语义见模块级 lane 注释)。
 
-        for row in body_rows:
-            internal_id = int(row["internal_id"])
-            if internal_id in seen_body:
-                continue
-            seen_body.add(internal_id)
-            combined[internal_id] = self._row_to_search_candidate(
-                row,
-                source="body",
-                rrf_score=1.0 / (_RRF_K + len(seen_body)),
+        ① 组内并集 / 组间 AND 交集 → 最终候选集 (fused = 单组 body ∪ attachment;
+           trigram = term 间交集);
+        ② 后置 metadata 过滤: ``_filter_ids_by_metadata`` 分块 (NS-3), 仅 id 级 lane
+           路径需要 —— 行级 lane 谓词已内联 SQL, caller 传 None 跳过;
+        ③ RRF: 每个 lane 内按「候选集中的出现位置」计 1/(_RRF_K + pos) 跨 lane 求和
+           (非候选 id 不占位, 与旧 trigram 路径一致; 行级路径候选集 = 全部行, 与旧
+           fused 路径一致)。scores dict 插入顺序 = 首个 lane 的候选顺序 → (score,
+           date) 全等时排序稳定, tie-break 与两条旧路径一致;
+        ④ 排序 (sort=None → score DESC + date DESC; 'date'/'oldest' 覆盖) + 裁 top-limit。
+        """
+        group_id_sets: list[set[int]] = []
+        for lanes in lane_groups:
+            group_ids: set[int] = set()
+            for lane in lanes:
+                group_ids.update(iid for iid, _ in lane.entries)
+            if not group_ids:
+                # 任一 AND 组无候选 → 交集必空。
+                return []
+            group_id_sets.append(group_ids)
+        if not group_id_sets:
+            return []
+        eligible = set.intersection(*group_id_sets)
+        if not eligible:
+            return []
+
+        if post_filter_predicates:
+            eligible = self._filter_ids_by_metadata(
+                conn, eligible, post_filter_predicates
             )
+            if not eligible:
+                return []
 
-        for row in attachment_rows:
-            internal_id = int(row["internal_id"])
-            if internal_id in seen_attachment:
-                continue
-            seen_attachment.add(internal_id)
-            rrf_score = 1.0 / (_RRF_K + len(seen_attachment))
-            if internal_id in combined:
-                combined[internal_id]["rrf_score"] += rrf_score
-                continue
-            combined[internal_id] = self._row_to_search_candidate(
-                row,
-                source="attachment",
-                rrf_score=rrf_score,
-            )
+        scores: dict[int, float] = {}
+        row_by_id: dict[int, sqlite3.Row] = {}
+        for lanes in lane_groups:
+            for lane in lanes:
+                pos = 0
+                seen: set[int] = set()
+                for iid, row in lane.entries:
+                    if iid not in eligible or iid in seen:
+                        continue
+                    seen.add(iid)
+                    pos += 1
+                    scores[iid] = scores.get(iid, 0.0) + 1.0 / (_RRF_K + pos)
+                    if row is not None and iid not in row_by_id:
+                        row_by_id[iid] = row
 
-        candidates = list(combined.values())
+        # 排序所需 date: 行级 lane 直接读 row; id 级 lane 统一补查 (分块, NS-3)。
+        # 缺 email_metadata 行的 id 得 None date (排序垫底), 仍占 top-limit 槽位,
+        # 由物化路径丢弃 —— 与旧 trigram 行为一致。
+        date_by_id: dict[int, Optional[str]] = {}
+        missing = [iid for iid in scores if iid not in row_by_id]
+        for chunk in self._chunk_ids(missing):
+            placeholders = ",".join("?" for _ in chunk)
+            rows = conn.execute(
+                f"SELECT internal_id, date_received FROM email_metadata "
+                f"WHERE internal_id IN ({placeholders})",
+                chunk,
+            ).fetchall()
+            for r in rows:
+                date_by_id[int(r["internal_id"])] = r["date_received"]
+
+        def date_of(iid: int) -> Optional[str]:
+            row = row_by_id.get(iid)
+            if row is not None:
+                return row["date_received"]
+            return date_by_id.get(iid)
+
+        candidates = list(scores.items())
         if sort == "date":
             candidates.sort(
-                key=lambda item: (
-                    self._date_sort_value(item["date_received"], oldest=False),
-                    item["rrf_score"],
+                key=lambda kv: (
+                    self._date_sort_value(date_of(kv[0]), oldest=False),
+                    kv[1],
                 ),
                 reverse=True,
             )
         elif sort == "oldest":
             candidates.sort(
-                key=lambda item: (
-                    self._date_sort_value(item["date_received"], oldest=True),
-                    -item["rrf_score"],
+                key=lambda kv: (
+                    self._date_sort_value(date_of(kv[0]), oldest=True),
+                    -kv[1],
                 )
             )
         else:
             candidates.sort(
-                key=lambda item: (
-                    item["rrf_score"],
-                    self._date_sort_value(item["date_received"], oldest=False),
+                key=lambda kv: (
+                    kv[1],
+                    self._date_sort_value(date_of(kv[0]), oldest=False),
                 ),
                 reverse=True,
             )
 
         return [
-            EmailSearchHit(
-                internal_id=item["internal_id"],
-                subject=item["subject"],
-                sender=item["sender"],
-                date_received=item["date_received"],
-                mailbox=item["mailbox"],
-                snippet=item["snippet"],
-                rank=-float(item["rrf_score"]),
-                notion_page_id=item["notion_page_id"],
-                notion_url=item["notion_url"],
-                source=item["source"],
-                filename=item["filename"],
-                ai_priority=item.get("ai_priority"),
-                lang=item.get("lang"),
+            _MergedCandidate(
+                internal_id=iid, rrf_score=score, row=row_by_id.get(iid)
             )
-            for item in candidates[:limit]
+            for iid, score in candidates[:limit]
         ]
 
-    @staticmethod
-    def _row_to_search_candidate(
-        row: sqlite3.Row,
-        *,
-        source: str,
-        rrf_score: float,
-    ) -> dict:
+    def _merged_row_to_hit(self, candidate: _MergedCandidate) -> EmailSearchHit:
+        """行级 lane 候选 → EmailSearchHit (fused 路径物化, row 携带全部投影)。"""
+        row = candidate.row
         page_id = row["notion_page_id"]
         notion_url = (
             f"https://www.notion.so/{page_id.replace('-', '')}"
             if page_id else None
         )
-        return {
-            "internal_id": int(row["internal_id"]),
-            "subject": row["subject"],
-            "sender": row["sender"],
-            "date_received": row["date_received"],
-            "mailbox": row["mailbox"],
-            "snippet": row["snippet"] or "",
-            "notion_page_id": page_id,
-            "notion_url": notion_url,
-            "source": source,
-            "filename": row["filename"] if source == "attachment" else None,
-            "rrf_score": rrf_score,
+        source = row["source"]
+        return EmailSearchHit(
+            internal_id=candidate.internal_id,
+            subject=row["subject"],
+            sender=row["sender"],
+            date_received=row["date_received"],
+            mailbox=row["mailbox"],
+            snippet=row["snippet"] or "",
+            rank=-float(candidate.rrf_score),
+            notion_page_id=page_id,
+            notion_url=notion_url,
+            source=source,
+            filename=row["filename"] if source == "attachment" else None,
             # MED-2: priority_raw/lang_raw 来自 email_metadata join (body/attachment 同邮件
             # 一致), serve-api 出口映射成 wire enum。
-            "ai_priority": EmailRepository._row_value(row, "priority_raw"),
-            "lang": EmailRepository._row_value(row, "lang_raw"),
-        }
+            ai_priority=self._row_value(row, "priority_raw"),
+            lang=self._row_value(row, "lang_raw"),
+        )
 
     @staticmethod
     def _date_sort_value(value: Optional[str], *, oldest: bool) -> float:
