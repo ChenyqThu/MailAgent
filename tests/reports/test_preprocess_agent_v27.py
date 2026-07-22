@@ -315,3 +315,133 @@ def test_mark_read_null_graceful_defaults_true(db_path):
         "mark_read_after_processing"
     ] is True
     assert get_preprocess_config(db_path).mark_read_after_processing is True
+
+
+# ─── v38: 参考上下文源迁 report_agent 行存储（task 07-22）─────────────────────
+# 运行时权威从 env LLM_PREPROCESS_CONTEXT_SOURCE 迁到 report_agent.context_source 行
+# （保存即生效）；env 仅作 v38 migration 首次 seed 默认（显式合法值 > page_id 派生）。
+
+import src.config as _config_mod  # noqa: E402 — 测内 monkeypatch config 单例做确定性 seed
+
+
+def _build_db_with_config(tmp_path, monkeypatch, *, source, page_id, name="seed.db") -> str:
+    """monkeypatch config 单例（同 processor 测的既有可变性）→ 建全新库 → v38 seed 生效。"""
+    monkeypatch.setattr(_config_mod.config, "llm_preprocess_context_source", source)
+    monkeypatch.setattr(_config_mod.config, "llm_context_page_id", page_id)
+    p = str(tmp_path / name)
+    SyncStore(p)
+    return p
+
+
+def test_v38_seed_env_explicit_value_wins(tmp_path, monkeypatch):
+    """env 显式合法值 → 直接写入行（优先于 page_id 派生）。"""
+    p = _build_db_with_config(tmp_path, monkeypatch, source="notion_context", page_id="")
+    assert ReportStore(p).get_agent(PREPROCESS_AGENT_ID)["context_source"] == "notion_context"
+
+
+def test_v38_seed_derives_notion_from_page_id(tmp_path, monkeypatch):
+    """env 源空 + 配了 LLM_CONTEXT_PAGE_ID → 派生 notion_context。"""
+    p = _build_db_with_config(tmp_path, monkeypatch, source="", page_id="page-xyz")
+    assert ReportStore(p).get_agent(PREPROCESS_AGENT_ID)["context_source"] == "notion_context"
+
+
+def test_v38_seed_derives_standing_docs_when_no_page_id(tmp_path, monkeypatch):
+    """env 源空 + 无 page id → 派生 standing_docs（默认）。"""
+    p = _build_db_with_config(tmp_path, monkeypatch, source="", page_id="")
+    assert ReportStore(p).get_agent(PREPROCESS_AGENT_ID)["context_source"] == "standing_docs"
+
+
+def test_v38_seed_invalid_env_falls_back_to_page_id_derivation(tmp_path, monkeypatch):
+    """env 源野值当空处理 → 走 page_id 派生。"""
+    p = _build_db_with_config(tmp_path, monkeypatch, source="garbage", page_id="page-1")
+    assert ReportStore(p).get_agent(PREPROCESS_AGENT_ID)["context_source"] == "notion_context"
+
+
+def test_upgrade_from_v37_adds_context_source_column_and_seeds(tmp_path, monkeypatch):
+    """模拟 v37 旧库（无 context_source 列）→ 重 init 应 ALTER 补列 + seed 派生值。"""
+    monkeypatch.setattr(_config_mod.config, "llm_preprocess_context_source", "")
+    monkeypatch.setattr(_config_mod.config, "llm_context_page_id", "page-1")
+    p = str(tmp_path / "v37.db")
+    SyncStore(p)  # 先建当前 schema（此刻已 seed，下面刻意丢列模拟旧库）
+    conn = sqlite3.connect(p)
+    old_columns = [
+        row[1]
+        for row in conn.execute("PRAGMA table_info(report_agent)").fetchall()
+        if row[1] != "context_source"
+    ]
+    column_list = ", ".join(old_columns)
+    conn.execute(f"CREATE TABLE report_agent_v37 AS SELECT {column_list} FROM report_agent")
+    conn.execute("DROP TABLE report_agent")
+    conn.execute("ALTER TABLE report_agent_v37 RENAME TO report_agent")
+    conn.execute("UPDATE sync_state SET value='37' WHERE key='db_version'")
+    conn.commit()
+    conn.close()
+
+    SyncStore(p)  # v38 迁移：current_version=37 < 38 → ALTER + seed
+    conn = sqlite3.connect(p)
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(report_agent)").fetchall()}
+        row = conn.execute(
+            "SELECT context_source FROM report_agent WHERE id = ?", (PREPROCESS_AGENT_ID,)
+        ).fetchone()
+        version = conn.execute(
+            "SELECT value FROM sync_state WHERE key='db_version'"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    assert "context_source" in cols
+    assert row == ("notion_context",)  # page_id set → notion_context
+    assert version == str(SyncStore.DB_VERSION)
+
+
+def test_v38_migration_idempotent_and_no_overwrite(tmp_path, monkeypatch):
+    """重跑不炸；seed 仅回填 NULL 行 → 已落地值（行权威）不被覆盖。"""
+    p = _build_db_with_config(
+        tmp_path, monkeypatch, source="standing_docs", page_id="", name="v38.db"
+    )
+    # 用户改成 notion_context（行权威）。
+    ReportStore(p).update_agent(
+        PREPROCESS_AGENT_ID, wire.config_patch_to_db({"context_source": "notion_context"})
+    )
+    SyncStore(p)  # 重跑迁移：version 已 38 → v38 块不再执行；且 seed 只填 IS NULL
+    assert ReportStore(p).get_agent(PREPROCESS_AGENT_ID)["context_source"] == "notion_context"
+
+
+def test_context_source_config_roundtrip_and_hot_read(db_path):
+    """行 PATCH 往返 + get_preprocess_config 热读（保存即生效链路）。"""
+    store = ReportStore(db_path)
+    store.update_agent(
+        PREPROCESS_AGENT_ID, wire.config_patch_to_db({"context_source": "notion_context"})
+    )
+    assert wire.resolve_agent(store.get_agent(PREPROCESS_AGENT_ID))["context_source"] == (
+        "notion_context"
+    )
+    assert get_preprocess_config(db_path).context_source == "notion_context"
+    # None → 落 SQL NULL（重置回继承派生）
+    store.update_agent(PREPROCESS_AGENT_ID, wire.config_patch_to_db({"context_source": None}))
+    row = store.get_agent(PREPROCESS_AGENT_ID)
+    assert row["context_source"] is None
+    assert wire.resolve_agent(row)["context_source"] is None
+    assert get_preprocess_config(db_path).context_source is None
+
+
+def test_config_patch_context_source_rejects_bad_value():
+    """保存闸：非枚举值 → ValueError（转 400 / CLI 错误），防野值污染热读。"""
+    with pytest.raises(ValueError):
+        wire.config_patch_to_db({"context_source": "bogus"})
+
+
+def test_resolve_agent_non_preprocess_forces_null_context_source(db_path):
+    """镜像 fallback/docs 的非 preprocess 强制语义：残留列值一律投影 None。"""
+    store = ReportStore(db_path)
+    store.update_agent("email_search_agent", {"context_source": "notion_context"})
+    cfg = wire.resolve_agent(store.get_agent("email_search_agent"))
+    assert cfg["type"] == "search"
+    assert cfg["context_source"] is None
+
+
+def test_get_preprocess_config_normalizes_bad_context_source(db_path):
+    """裸写野值（绕过 patch 闸）→ get_preprocess_config 归一成 None（交继承派生兜底）。"""
+    store = ReportStore(db_path)
+    store.update_agent(PREPROCESS_AGENT_ID, {"context_source": "garbage"})
+    assert get_preprocess_config(db_path).context_source is None

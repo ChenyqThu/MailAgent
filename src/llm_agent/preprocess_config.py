@@ -42,6 +42,9 @@ class PreprocessConfig:
     fallback_models: Optional[List[str]] = None
     # mark_read_after_processing 列（v32）—— NULL / 缺列 = 默认 true。
     mark_read_after_processing: bool = True
+    # context_source 列（v38）—— 参考上下文源 'standing_docs' | 'notion_context'。
+    # None = 列 NULL/缺失/野值 → _resolve_context_source 按 LLM_CONTEXT_PAGE_ID 继承派生。
+    context_source: Optional[str] = None
 
 
 def get_preprocess_config(db_path: str | os.PathLike[str]) -> PreprocessConfig:
@@ -54,7 +57,7 @@ def get_preprocess_config(db_path: str | os.PathLike[str]) -> PreprocessConfig:
             conn.row_factory = sqlite3.Row
             row = conn.execute(
                 "SELECT model, context_docs_json, fallback_models_json, "
-                "mark_read_after_processing "
+                "mark_read_after_processing, context_source "
                 "FROM report_agent WHERE id = ?",
                 (PREPROCESS_AGENT_ID,),
             ).fetchone()
@@ -87,6 +90,8 @@ def get_preprocess_config(db_path: str | os.PathLike[str]) -> PreprocessConfig:
                 fallback_models = [str(x) for x in parsed_fb]
         except (json.JSONDecodeError, TypeError):
             fallback_models = None
+    raw_src = (row["context_source"] or "").strip().lower()
+    context_source = raw_src if raw_src in ("standing_docs", "notion_context") else None
     return PreprocessConfig(
         model=model,
         context_docs=context_docs,
@@ -96,4 +101,5 @@ def get_preprocess_config(db_path: str | os.PathLike[str]) -> PreprocessConfig:
             if row["mark_read_after_processing"] is None
             else bool(row["mark_read_after_processing"])
         ),
+        context_source=context_source,
     )

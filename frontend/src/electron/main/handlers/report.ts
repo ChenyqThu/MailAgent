@@ -89,6 +89,7 @@ interface AgentRow {
   context_docs_json?: string | null
   fallback_models_json?: string | null
   mark_read_after_processing?: number | null
+  context_source?: string | null
   // v30 custom agent 三列（仅 type='custom' 解析，对齐 wire.resolve_agent）。
   trigger_json?: string | null
   tool_policy_json?: string | null
@@ -143,6 +144,14 @@ function _toAgentConfig(row: AgentRow): ReportAgentConfig {
     // v32 preprocess：NULL/缺列默认 true，保持升级前行为；非 preprocess 也投影 true 保持类型稳定。
     mark_read_after_processing:
       row.type === 'preprocess' ? row.mark_read_after_processing !== 0 : true,
+    // v38 preprocess：参考上下文源。合法枚举原样投影；NULL/野值 → null（前端 deriveContextSource
+    // 按 LLM_CONTEXT_PAGE_ID 继承派生显示态，与 wire.resolve_agent / 后端 _resolve_context_source
+    // 一致）；非 preprocess 恒 null。
+    context_source:
+      row.type === 'preprocess' &&
+      (row.context_source === 'standing_docs' || row.context_source === 'notion_context')
+        ? row.context_source
+        : null,
     // v30/v31：trigger 对 custom + project_progress 解析（其余恒 null）；tool_policy/budget 仅 custom。
     trigger: projectsTrigger ? _parseJson<CustomAgentTrigger | null>(row.trigger_json, null) : null,
     tool_policy: isCustom

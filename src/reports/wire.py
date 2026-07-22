@@ -93,6 +93,11 @@ def resolve_agent(agent: Dict[str, Any]) -> Dict[str, Any]:
         if agent_type == "preprocess" and agent.get("mark_read_after_processing") is not None
         else True
     )
+    # v38: preprocess 行级参考上下文源。合法值（'standing_docs'|'notion_context'）原样投影；
+    # NULL/野值 → None（前端 deriveContextSource 按 LLM_CONTEXT_PAGE_ID 继承派生显示态，与后端
+    # _resolve_context_source 一致）。非 preprocess 恒 None（不用此字段）。
+    _raw_src = (agent.get("context_source") or "").strip().lower() if agent_type == "preprocess" else ""
+    context_source = _raw_src if _raw_src in ("standing_docs", "notion_context") else None
     # tools_json → list（DB 存 JSON 串）。NULL/非法：type='search' 回退默认搜索工具,
     # 其余（report）回退空 list（report agent 历史上 tools_json 全 NULL, 不破坏其投影）。
     _tools_default = ["email_search_fulltext"] if agent_type == "search" else []
@@ -143,6 +148,7 @@ def resolve_agent(agent: Dict[str, Any]) -> Dict[str, Any]:
         "context_docs": context_docs,  # v27: 文档勾选（preprocess + report 增量 2）
         "fallback_models": fallback_models,  # v29: preprocess 行级 fallback（null=跟随全局）
         "mark_read_after_processing": mark_read_after_processing,
+        "context_source": context_source,  # v38: preprocess 参考上下文源（null=继承派生）
         "trigger": trigger,  # v30: custom agent 触发判别式（null=非事件型）
         "tool_policy": tool_policy,  # v30: custom agent 工具收窄（null=不额外收窄）
         "budget": budget,  # v30: custom agent 预算（null=全默认）
@@ -234,6 +240,16 @@ def config_patch_to_db(raw: Dict[str, Any]) -> Dict[str, Any]:
         if not isinstance(value, bool):
             raise ValueError("mark_read_after_processing must be bool")
         db_patch["mark_read_after_processing"] = 1 if value else 0
+    if "context_source" in raw:
+        # v38: preprocess 参考上下文源。None → SQL NULL（重置回继承派生）；合法枚举串 → 原样落列；
+        # 其它值 → ValueError（保存闸，防野值污染热读）。仅 'standing_docs'|'notion_context' 二选一。
+        cs = raw["context_source"]
+        if cs is None:
+            db_patch["context_source"] = None
+        elif isinstance(cs, str) and cs in ("standing_docs", "notion_context"):
+            db_patch["context_source"] = cs
+        else:
+            raise ValueError("context_source must be 'standing_docs'|'notion_context'|null")
     # v30: custom agent 三列（trigger/tool_policy/budget）。dict → JSON 串；None → SQL NULL
     # （清空该配置）；非 dict → ValueError（结构闸）。深校验（trigger 判别式 / cron 合法性 /
     # ReDoS 长度）由 set_config(REST)/CLI config-set 的 validate_agent_config_patch → parse_trigger

@@ -73,6 +73,7 @@ function makeCfg(): ReportAgentConfig {
     context_docs: ['soul', 'user'],
     fallback_models: null,
     mark_read_after_processing: true,
+    context_source: 'standing_docs',
     updated_at: null
   }
 }
@@ -113,5 +114,36 @@ describe('PreprocessConfigDrawer mark-read toggle', () => {
     expect(enCommon.agents.preprocess.markReadAfterProcessing).toBe(
       'Mark as read after preprocessing'
     )
+  })
+})
+
+describe('PreprocessConfigDrawer 参考上下文源（task 07-22 行存储）', () => {
+  test('切换到 Notion 上下文页 → 保存走行 PATCH context_source，不写 env（无重启）', async () => {
+    const { applyEnvPatch } = await import('@shared/state/env')
+    renderDrawer()
+    // 切到 notion_context radio（行级，非 env）。
+    fireEvent.click(screen.getByRole('button', { name: 'Notion 上下文页' }))
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+    await waitFor(() => {
+      expect(mockSave).toHaveBeenCalledWith(
+        'email_preprocess_agent',
+        expect.objectContaining({ context_source: 'notion_context' })
+      )
+    })
+    // 参考上下文源不再写 env → 无 env patch（用户未改 enable / page id）→ 不触发重启横幅。
+    expect(applyEnvPatch).not.toHaveBeenCalled()
+  })
+
+  test('未触碰源 → 保存 patch 不含 context_source（dirty-gate，行权威不被 stale 覆写）', async () => {
+    renderDrawer()
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+    await waitFor(() => expect(mockSave).toHaveBeenCalled())
+    const patch = mockSave.mock.calls[0][1] as Record<string, unknown>
+    expect(patch).not.toHaveProperty('context_source')
+  })
+
+  test('中英文文案 key 齐全（源提示注明保存即生效）', () => {
+    expect(zhCommon.agents.preprocess.contextSourceHint).toContain('保存即生效')
+    expect(enCommon.agents.preprocess.contextSourceHint).toContain('no restart')
   })
 })

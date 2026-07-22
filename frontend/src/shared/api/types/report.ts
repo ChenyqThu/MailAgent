@@ -236,6 +236,10 @@ export interface ReportAgentConfig {
   fallback_models?: string[] | null
   /** v32 preprocess：AI 预处理完成后自动标已读。缺失/NULL 默认 true。 */
   mark_read_after_processing: boolean
+  /** v38 preprocess：参考上下文源 'standing_docs' | 'notion_context'。
+   *  null = 行 NULL/野值 → 前端 deriveContextSource 按 LLM_CONTEXT_PAGE_ID 继承派生显示态。
+   *  仅 type='preprocess' 有意义（其余恒 null）。行权威、保存即生效（改抽屉无需重启）。 */
+  context_source?: string | null
   /** v30 触发/工具/预算。trigger 对 type='custom'（CRUD）与 'project_progress'（S5 W5a 单例行，
    *  复用 email_filter 词汇存 sender/subject）均有意义并投影；tool_policy/budget 仍 custom-only
    *  （其余恒 null，project_progress 执行不进 gateway）。 */
@@ -267,6 +271,9 @@ export interface ReportConfigPatch {
   fallback_models?: string[] | null
   /** v32 preprocess：处理完成后自动标已读，保存即生效。 */
   mark_read_after_processing?: boolean
+  /** v38 preprocess：参考上下文源（wire.config_patch_to_db 写 context_source 列）。
+   *  'standing_docs' | 'notion_context' 二选一；null = 重置回继承派生。保存即生效无需重启。 */
+  context_source?: 'standing_docs' | 'notion_context' | null
   /** v30 Custom Agent：触发/工具/预算（wire.config_patch_to_db 写对应 *_json 列）。
    *  null = 清空该配置；object = 覆写。仅 type='custom' 有意义。 */
   trigger?: CustomAgentTrigger | null

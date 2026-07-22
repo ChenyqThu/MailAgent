@@ -361,11 +361,12 @@ class Config(BaseSettings):
     llm_preprocess_context_source: str = Field(
         default="", env="LLM_PREPROCESS_CONTEXT_SOURCE",
         description=(
-            "预处理分类 system prompt 的参考上下文源二选一（task 07-21）："
+            "预处理分类 system prompt 的参考上下文源二选一（task 07-21 引入，07-22 迁行存储）："
             "'standing_docs' = 注入身份文档（沿用预处理行 context_docs 勾选）、不注入 notion；"
             "'notion_context' = 注入 LLM_CONTEXT_PAGE_ID 页面、不注入身份文档。"
-            "留空/非法 = 升级继承：配了 LLM_CONTEXT_PAGE_ID → notion_context，否则 standing_docs。"
-            "pydantic 冻结单例读，改值需重启后端（LLM agent 进程）生效。"
+            "🔴 task 07-22 起**运行时权威已迁 report_agent.context_source 行**（保存即生效，抽屉改值"
+            "无需重启）—— 本 env 键仅作 v38 migration **首次 seed 默认**（显式合法值 → 写入行；"
+            "留空/非法 → 按 LLM_CONTEXT_PAGE_ID 有无派生）；行落地后行权威，改此 env 不再影响运行时。"
         ),
     )
     llm_context_cache_ttl_sec: int = Field(

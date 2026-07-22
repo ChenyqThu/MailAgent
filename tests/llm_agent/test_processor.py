@@ -639,16 +639,19 @@ class _FakePromptsEmpty:
         return ""
 
 
-def _system_text(monkeypatch, *, source, page_id, context_docs=None) -> str:
+def _system_text(monkeypatch, *, context_source, page_id, context_docs=None) -> str:
     """驱动 _build_system 一次并把所有 system block 文本拼起来。
 
     build_task_identity_context 短路成 _IDENTITY_SENTINEL（避免读真实 agent_config 库），
-    notion context 走 _FakeContextMarkdown → _NOTION_SENTINEL。source/page_id 决定注入哪块。
+    notion context 走 _FakeContextMarkdown → _NOTION_SENTINEL。
+
+    task 07-22：源改由 **行值** context_source 决定（PreprocessConfig.context_source，
+    模拟 report_agent.context_source 列），env LLM_PREPROCESS_CONTEXT_SOURCE 不再是运行时权威；
+    行 NULL/野值按 env LLM_CONTEXT_PAGE_ID 有无继承派生。
     """
     import src.llm_agent.processor as proc_mod
     from src.llm_agent.preprocess_config import PreprocessConfig
 
-    monkeypatch.setattr(proc_mod.cfg, "llm_preprocess_context_source", source)
     monkeypatch.setattr(proc_mod.cfg, "llm_context_page_id", page_id)
     monkeypatch.setattr(
         "src.agent_config.task_context.build_task_identity_context",
@@ -658,15 +661,18 @@ def _system_text(monkeypatch, *, source, page_id, context_docs=None) -> str:
     p._prompts = _FakePromptsEmpty()
     p._context = _FakeContextMarkdown()
     blocks = asyncio.run(
-        p._build_system("收件箱", PreprocessConfig(context_docs=context_docs))
+        p._build_system(
+            "收件箱",
+            PreprocessConfig(context_docs=context_docs, context_source=context_source),
+        )
     )
     return "\n".join(b["text"] for b in blocks)
 
 
 def test_build_system_standing_docs_injects_identity_not_notion(monkeypatch):
-    """source='standing_docs' → 注入身份文档块、跳过 notion context 块。"""
+    """行 context_source='standing_docs' → 注入身份文档块、跳过 notion context 块。"""
     text = _system_text(
-        monkeypatch, source="standing_docs", page_id="page-abc", context_docs=["soul"]
+        monkeypatch, context_source="standing_docs", page_id="page-abc", context_docs=["soul"]
     )
     assert _IDENTITY_SENTINEL in text
     assert _NOTION_SENTINEL not in text
@@ -674,31 +680,44 @@ def test_build_system_standing_docs_injects_identity_not_notion(monkeypatch):
 
 
 def test_build_system_notion_context_injects_notion_not_identity(monkeypatch):
-    """source='notion_context' → 注入 notion context 块、跳过身份文档块。"""
+    """行 context_source='notion_context' → 注入 notion context 块、跳过身份文档块。"""
     text = _system_text(
-        monkeypatch, source="notion_context", page_id="page-abc", context_docs=["soul"]
+        monkeypatch, context_source="notion_context", page_id="page-abc", context_docs=["soul"]
     )
     assert _NOTION_SENTINEL in text
     assert _NOTION_BLOCK_HEADER in text
     assert _IDENTITY_SENTINEL not in text
 
 
-def test_build_system_source_empty_inherits_notion_when_page_id_set(monkeypatch):
-    """source 缺省 + 配了 LLM_CONTEXT_PAGE_ID → 继承为 notion_context。"""
-    text = _system_text(monkeypatch, source="", page_id="page-abc")
+def test_build_system_source_null_inherits_notion_when_page_id_set(monkeypatch):
+    """行 context_source=None + 配了 LLM_CONTEXT_PAGE_ID → 继承为 notion_context。"""
+    text = _system_text(monkeypatch, context_source=None, page_id="page-abc")
     assert _NOTION_SENTINEL in text
     assert _IDENTITY_SENTINEL not in text
 
 
-def test_build_system_source_empty_inherits_standing_docs_when_no_page_id(monkeypatch):
-    """source 缺省 + 无 LLM_CONTEXT_PAGE_ID → 继承为 standing_docs。"""
-    text = _system_text(monkeypatch, source="", page_id="", context_docs=["soul"])
+def test_build_system_source_null_inherits_standing_docs_when_no_page_id(monkeypatch):
+    """行 context_source=None + 无 LLM_CONTEXT_PAGE_ID → 继承为 standing_docs。"""
+    text = _system_text(monkeypatch, context_source=None, page_id="", context_docs=["soul"])
     assert _IDENTITY_SENTINEL in text
     assert _NOTION_SENTINEL not in text
 
 
 def test_build_system_source_invalid_falls_back_to_inheritance(monkeypatch):
-    """非法 source 值当缺省处理（走继承规则）：无 page_id → standing_docs。"""
-    text = _system_text(monkeypatch, source="bogus", page_id="", context_docs=["soul"])
+    """行值野值当缺省处理（走继承规则）：无 page_id → standing_docs。"""
+    text = _system_text(monkeypatch, context_source="bogus", page_id="", context_docs=["soul"])
     assert _IDENTITY_SENTINEL in text
     assert _NOTION_SENTINEL not in text
+
+
+def test_build_system_row_wins_over_env_context_source(monkeypatch):
+    """行权威：即使 env LLM_PREPROCESS_CONTEXT_SOURCE=standing_docs，行值 notion_context 生效。"""
+    import src.llm_agent.processor as proc_mod
+
+    # env 显式设成 standing_docs——迁行后应被忽略（行值 notion_context 权威）。
+    monkeypatch.setattr(proc_mod.cfg, "llm_preprocess_context_source", "standing_docs")
+    text = _system_text(
+        monkeypatch, context_source="notion_context", page_id="", context_docs=["soul"]
+    )
+    assert _NOTION_SENTINEL in text
+    assert _IDENTITY_SENTINEL not in text

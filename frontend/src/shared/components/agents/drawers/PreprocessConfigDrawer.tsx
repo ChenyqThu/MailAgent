@@ -50,14 +50,16 @@ const FALLBACK_FOLLOW_GLOBAL = '__follow_global_fb__'
 /** fallback 下拉「不设」哨兵（行级列 '[]'；同上，空串 value 会让 radix 直接 throw）。 */
 const FALLBACK_NONE = '__none__'
 
-// task 07-21 —— 参考上下文源二选一（env LLM_PREPROCESS_CONTEXT_SOURCE，pydantic singleton
-// 需重启后端生效）。standing_docs = 注入下方勾选的身份文档、不注入 notion；notion_context =
-// 注入 Notion context page（LLM_CONTEXT_PAGE_ID）、不注入身份文档。二者互斥不叠加。
+// task 07-21 引入、07-22 迁行存储 —— 参考上下文源二选一。standing_docs = 注入下方勾选的身份
+// 文档、不注入 notion；notion_context = 注入 Notion context page（LLM_CONTEXT_PAGE_ID）、不注入
+// 身份文档。二者互斥不叠加。**运行时权威 = report_agent.context_source 行值**（保存即生效，改
+// 抽屉无需重启，对齐 model/fallback/context_docs 的行级路径）；env LLM_PREPROCESS_CONTEXT_SOURCE
+// 仅作后端 v38 migration 首次 seed 默认，不再是前端写目标。
 const CONTEXT_SOURCES = ['standing_docs', 'notion_context'] as const
 type ContextSource = (typeof CONTEXT_SOURCES)[number]
 
-/** env 值 → 生效源：显式合法值权威；空/非法按 LLM_CONTEXT_PAGE_ID 有无继承（同后端
- *  _resolve_context_source，保证 UI 显示态与运行注入态一致）。 */
+/** 行值 → 生效源：显式合法值行权威；行 NULL/野值按 LLM_CONTEXT_PAGE_ID 有无继承（同后端
+ *  _resolve_context_source / wire.resolve_agent，保证 UI 显示态与运行注入态一致）。 */
 function deriveContextSource(rawSource: string | null, rawPageId: string | null): ContextSource {
   const s = (rawSource ?? '').trim().toLowerCase()
   if (s === 'notion_context' || s === 'standing_docs') return s
@@ -102,8 +104,8 @@ export function PreprocessConfigDrawer({
   const [fallbackModelDirty, setFallbackModelDirty] = useState(false)
   const [markReadAfterProcessing, setMarkReadAfterProcessing] = useState(true)
   const [contextDocs, setContextDocs] = useState<string[]>([])
-  // task 07-21 —— 参考上下文源（env）+ notion context page ID（env）。均 env-backed（写 .env +
-  // 重启横幅），与「启用」同源；web 只读（IS_WEB 时禁编辑）。dirty 追踪避免 stale 覆写真实 .env。
+  // task 07-22 —— 参考上下文源（row.context_source，保存即生效无需重启，dirty-gate 写 row PATCH）。
+  // notion context page ID 仍 env-backed（写 .env + 重启横幅，低频），与「启用」同源、web 只读。
   const [contextSource, setContextSource] = useState<ContextSource>('standing_docs')
   const [contextSourceDirty, setContextSourceDirty] = useState(false)
   const [contextPageId, setContextPageId] = useState('')
@@ -127,11 +129,6 @@ export function PreprocessConfigDrawer({
   )
   const envFallbackRaw = useEnvStore((s) =>
     s.state.status === 'ready' ? (s.state.snapshot.values['LLM_FALLBACK_MODELS'] ?? '') : null
-  )
-  const envContextSourceRaw = useEnvStore((s) =>
-    s.state.status === 'ready'
-      ? (s.state.snapshot.values['LLM_PREPROCESS_CONTEXT_SOURCE'] ?? '')
-      : null
   )
   const envContextPageIdRaw = useEnvStore((s) =>
     s.state.status === 'ready' ? (s.state.snapshot.values['LLM_CONTEXT_PAGE_ID'] ?? '') : null
@@ -169,14 +166,17 @@ export function PreprocessConfigDrawer({
     if (!open) return
     if (envEnabledRaw !== null && !enabledDirty) setEnabled(envFlagOn(envEnabledRaw))
   }, [open, envEnabledRaw, enabledDirty])
-  // task 07-21 —— 参考上下文源 + context page ID 从 env 就绪快照回填（同「启用」的迟到纠正
-  // 语义，dirty 后停止同步）。source 空/非法按 page id 有无继承（deriveContextSource）。
+  // task 07-22 —— 参考上下文源从 row 回填（行权威）：行合法值行权威、忽略 page id；行
+  // NULL/野值（cfg.context_source == null）按 env page id 有无继承（deriveContextSource，同
+  // 后端 _resolve_context_source）。envContextPageIdRaw 迟到只在 null 态下改变结果 → 迟到纠正
+  // 语义天然成立；dirty 后停止同步（不覆盖用户在抽屉里的编辑）。
   useEffect(() => {
-    if (!open) return
-    if (envContextSourceRaw !== null && !contextSourceDirty) {
-      setContextSource(deriveContextSource(envContextSourceRaw, envContextPageIdRaw))
+    if (!open || !cfg) return
+    if (!contextSourceDirty) {
+      setContextSource(deriveContextSource(cfg.context_source ?? null, envContextPageIdRaw))
     }
-  }, [open, envContextSourceRaw, envContextPageIdRaw, contextSourceDirty])
+  }, [open, cfg, envContextPageIdRaw, contextSourceDirty])
+  // context page ID 仍从 env 就绪快照回填（低频 env 值，写 .env + 重启）。
   useEffect(() => {
     if (!open) return
     if (envContextPageIdRaw !== null && !contextPageIdDirty) setContextPageId(envContextPageIdRaw)
@@ -232,11 +232,9 @@ export function PreprocessConfigDrawer({
       if (enabledDirty && nextEnabled !== (vals['LLM_AGENT_ENABLED'] ?? '')) {
         envPatch['LLM_AGENT_ENABLED'] = nextEnabled
       }
-      // task 07-21 —— 参考上下文源 + context page ID（env，pydantic singleton 需重启）。仅
-      // dirty 且与 .env 现值不同才写，避免无谓触发重启横幅。
-      if (contextSourceDirty && contextSource !== (vals['LLM_PREPROCESS_CONTEXT_SOURCE'] ?? '')) {
-        envPatch['LLM_PREPROCESS_CONTEXT_SOURCE'] = contextSource
-      }
+      // task 07-22 —— 参考上下文源已迁 row PATCH（保存即生效，见下方 save()）；这里只剩 context
+      // page ID 是 env（pydantic singleton 需重启）。仅 dirty 且与 .env 现值不同才写，避免无谓触发
+      // 重启横幅。
       if (contextPageIdDirty && contextPageId !== (vals['LLM_CONTEXT_PAGE_ID'] ?? '')) {
         envPatch['LLM_CONTEXT_PAGE_ID'] = contextPageId
       }
@@ -275,7 +273,8 @@ export function PreprocessConfigDrawer({
     }
     // 3) row 保存：模型（#8-ext 行级 model 列；空串 = 跟随全局 LLM_MODEL，config_patch_to_db
     //    原样落列、resolve_agent 非 report 不回填默认）+ fallback（R2 #2 行级列；null =
-    //    重置回跟随全局、[] = 显式不设、[m] = 单模型链）+ 自动标已读 + 文档勾选。改行级值立即生效
+    //    重置回跟随全局、[] = 显式不设、[m] = 单模型链）+ 自动标已读 + 文档勾选 + 参考上下文源
+    //    （task 07-22 行级 context_source，dirty 才写，保存即生效不出重启横幅）。改行级值立即生效
     //    （分类每封邮件重读 preprocess 行），无需重启。
     try {
       await save(PREPROCESS_AGENT_ID, {
@@ -290,6 +289,7 @@ export function PreprocessConfigDrawer({
                     : [fallbackModel]
             }
           : {}),
+        ...(contextSourceDirty ? { context_source: contextSource } : {}),
         context_docs: contextDocs,
         mark_read_after_processing: markReadAfterProcessing
       })
@@ -575,9 +575,9 @@ export function PreprocessConfigDrawer({
             )}
           </Field>
 
-          {/* 参考上下文源二选一（task 07-21，env LLM_PREPROCESS_CONTEXT_SOURCE，重启生效）——
+          {/* 参考上下文源二选一（task 07-22，row.context_source，保存即生效无需重启）——
                 standing_docs = 注入下方勾选的身份文档；notion_context = 注入 Notion context
-                page（下方 ID）。二者互斥不叠加。web 只读、env 未就绪时禁编辑。 */}
+                page（下方 ID）。二者互斥不叠加。行级 PATCH（同 model/fallback），web 亦可改。 */}
           <Field
             label={t('agents.preprocess.contextSource')}
             hint={t('agents.preprocess.contextSourceHint')}
@@ -587,7 +587,7 @@ export function PreprocessConfigDrawer({
               style={{
                 gap: 8,
                 flexWrap: 'wrap',
-                ...(!envReady || IS_WEB ? { opacity: 0.5, pointerEvents: 'none' as const } : null)
+                ...(busy ? { opacity: 0.5, pointerEvents: 'none' as const } : null)
               }}
             >
               {CONTEXT_SOURCES.map((src) => {

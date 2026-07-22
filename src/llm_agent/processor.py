@@ -47,14 +47,16 @@ _VALID_TTL = {"5m", "1h"}
 _VALID_CONTEXT_SOURCES = {"notion_context", "standing_docs"}
 
 
-def _resolve_context_source() -> str:
-    """预处理分类 system prompt 的参考上下文源（task 07-21，二选一）。
+def _resolve_context_source(pp: PreprocessConfig) -> str:
+    """预处理分类 system prompt 的参考上下文源（task 07-22，二选一，行权威）。
 
-    LLM_PREPROCESS_CONTEXT_SOURCE 显式值权威（notion_context | standing_docs）；空 / 非法
-    → 升级继承规则：配了 LLM_CONTEXT_PAGE_ID → notion_context，否则 standing_docs
-    （老库/老用户零迁移，无需 DB 迁移即可保持升级前的注入形态）。
+    行值 pp.context_source（report_agent.context_source 列，v38）显式合法值权威
+    （notion_context | standing_docs），**保存即生效**（分类每封邮件热读该行）；行 NULL /
+    野值（get_preprocess_config 已归一成 None）→ 升级继承规则：配了 LLM_CONTEXT_PAGE_ID →
+    notion_context，否则 standing_docs（裸库/行被删/迁移前旧库都保持升级前的注入形态）。
+    env LLM_PREPROCESS_CONTEXT_SOURCE 不再是运行时权威（仅 v38 migration 首次 seed 用）。
     """
-    raw = (getattr(cfg, "llm_preprocess_context_source", "") or "").strip().lower()
+    raw = (getattr(pp, "context_source", None) or "").strip().lower()
     if raw in _VALID_CONTEXT_SOURCES:
         return raw
     return (
@@ -219,8 +221,9 @@ class LLMProcessor:
         # 身份文档（Standing Docs）与 notion context page 叠加（owner 反馈：两者用途重叠、双注入
         # 冗余）。standing_docs → 注入身份文档块（沿用 context_docs 勾选）、跳过 notion；
         # notion_context → 注入 notion context 块、跳过身份文档。源由 _resolve_context_source
-        # 决定（LLM_PREPROCESS_CONTEXT_SOURCE 权威，空则按 LLM_CONTEXT_PAGE_ID 有无继承）。
-        source = _resolve_context_source()
+        # 决定（task 07-22 迁行存储：行 context_source 权威、保存即生效，行 NULL/野值按
+        # LLM_CONTEXT_PAGE_ID 有无继承）。
+        source = _resolve_context_source(_pp)
 
         if source == "standing_docs":
             # 身份 grounding：文档集用预处理 agent 的勾选（context_docs=None → 用默认 soul/user；

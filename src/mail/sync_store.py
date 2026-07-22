@@ -483,7 +483,18 @@ class SyncStore:
     #                (EXPECTED_DB_VERSION=37 + REQUIRED_TABLES 含 llm_processing) 就绪
     #                门控可依赖「>=37 ⇒ 表已建」。
     #                回滚 (回退 v37): 表可留 (旧代码无害); 必要时降 db_version。
-    DB_VERSION = 37  # v37: llm_processing 纳入版本化建表 (首启缺表修复)
+    # v38 (task 07-22 预处理参考上下文源迁行存储, 2026-07): report_agent 加 context_source
+    #                TEXT。仅 type='preprocess' 使用：'standing_docs' | 'notion_context' 二选一
+    #                （分类 system prompt 只注入一种参考背景）。此前该二选一落在 env
+    #                LLM_PREPROCESS_CONTEXT_SOURCE (重启生效); 迁行后**保存即生效**, 对齐
+    #                model/fallback/context_docs 的行级热读 house style。升级 seed (一次性,
+    #                行落地后行权威, env 键降级为首次 seed 默认): env LLM_PREPROCESS_CONTEXT_SOURCE
+    #                显式合法值 → 写入行; 否则按 LLM_CONTEXT_PAGE_ID 非空 → 'notion_context',
+    #                空 → 'standing_docs' (与旧 _resolve_context_source 继承规则逐字一致 → 升级
+    #                前后注入形态零变化)。幂等: ALTER 前 PRAGMA 检查 + 仅回填 context_source IS
+    #                NULL 的 preprocess 行。回滚 (回退 v38): 列可留（旧代码按 NULL→继承派生, 无害）
+    #                或手动 DROP; 必要时降 db_version。
+    DB_VERSION = 38  # v38: report_agent +context_source (预处理参考上下文源迁行存储)
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -1383,7 +1394,8 @@ class SyncStore:
                 trigger_json TEXT,             -- v30: custom agent 触发判别式（{"v":1,"kind":"cron"|"email_filter",...}；NULL=非事件型，既有三 type 不用）
                 tool_policy_json TEXT,         -- v30: custom agent 工具收窄（{"v":1,"allowed_tools":[...]}；NULL=不额外收窄）
                 budget_json TEXT,              -- v30: custom agent 预算（{"v":1,"max_steps","max_runs_per_day","max_run_seconds"}；NULL=全默认）
-                mark_read_after_processing INTEGER -- v32: preprocess 处理后自动标已读（NULL=默认 true）；末列对齐 ALTER 追加位置
+                mark_read_after_processing INTEGER, -- v32: preprocess 处理后自动标已读（NULL=默认 true）
+                context_source TEXT            -- v38: preprocess 参考上下文源 'standing_docs'|'notion_context'（NULL=按 LLM_CONTEXT_PAGE_ID 继承派生）；末列对齐 ALTER 追加位置
             )
         """)
         # report: ReportDoc 块模型 SSoT（blocks_json）+ 列表展示冗余字段。
@@ -2042,6 +2054,43 @@ class SyncStore:
         # 生效, 幂等), 无数据回填 → 无需 current_version gate (镜像 v22 marker-only
         # + v34 建表模式)。bump 版本号 = 对外承诺「db_version>=37 ⇒ llm_processing
         # 已建」, 供前端 backend_lifecycle.ts 就绪门控 + admin health REQUIRED_TABLES。
+
+        # === v38: preprocess 参考上下文源迁 report_agent 行存储 (task 07-22) ===
+        # 新库 CREATE 已含 context_source → PRAGMA 跳过 ALTER；旧库补 TEXT 列。seed 一次性
+        # 回填 preprocess 行 (行落地后行权威, env 键降级为首次 seed 默认——镜像 v31
+        # project_progress trigger 行内热读先例): env LLM_PREPROCESS_CONTEXT_SOURCE 显式合法值
+        # → 写入行; 否则按 LLM_CONTEXT_PAGE_ID 非空 → 'notion_context', 空 → 'standing_docs'
+        # (与旧 _resolve_context_source 继承规则逐字一致 → 升级前后注入形态零变化)。
+        # env 值经 pydantic settings 读 (serve-api 不 load_dotenv, 但 settings 在两进程都从
+        # env_file / os.environ 正确填充, 同 v31 先例)。幂等: ALTER 前 PRAGMA 检查 + 仅回填
+        # context_source IS NULL 的固定 preprocess 行 (不覆盖用户改过的值)。
+        if current_version < 38:
+            try:
+                _pa_cols = {r[1] for r in cursor.execute("PRAGMA table_info(report_agent)").fetchall()}
+                if "context_source" not in _pa_cols:
+                    cursor.execute("ALTER TABLE report_agent ADD COLUMN context_source TEXT")
+                    logger.info("v38 migration: report_agent +context_source")
+            except sqlite3.OperationalError as e:
+                _migration_guard_columns(
+                    cursor, "report_agent", {"context_source"}, "v38 migration", e,
+                )
+            try:
+                from src.config import config as _settings
+                _raw_src = (getattr(_settings, "llm_preprocess_context_source", "") or "").strip().lower()
+                _page_id = (getattr(_settings, "llm_context_page_id", "") or "").strip()
+            except Exception as e:  # noqa: BLE001 — config 不可得 (裸测试环境) → 安全继承 (无 env → standing_docs)
+                logger.debug(f"v38 migration: settings unavailable, seed via inheritance defaults: {e}")
+                _raw_src, _page_id = "", ""
+            if _raw_src in ("standing_docs", "notion_context"):
+                _seed_src = _raw_src
+            else:
+                _seed_src = "notion_context" if _page_id else "standing_docs"
+            cursor.execute(
+                "UPDATE report_agent SET context_source = ? "
+                "WHERE id = 'email_preprocess_agent' AND context_source IS NULL",
+                (_seed_src,),
+            )
+            logger.info(f"v38 migration: preprocess context_source seeded to {_seed_src!r}")
 
         # 更新数据库版本 —— E0-WP3: 只有**全部迁移成功**才会执行到这里。任何迁移块
         # 真失败都会 raise (见 _migration_guard_columns/_migration_guard_index),
