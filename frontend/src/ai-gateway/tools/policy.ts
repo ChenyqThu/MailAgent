@@ -75,6 +75,10 @@ export const GATEWAY_TOOL_CLASSES: Record<string, GatewayToolClass> = {
   email_body: 'read',
   email_list_thread: 'read',
   email_search_attachments: 'read',
+  // attachment-awareness reads (thread attachment metadata + one attachment's extracted text —
+  // the text is UNTRUSTED_ATTACHMENT_TEXT-fenced at the tool).
+  email_thread_attachments: 'read',
+  email_attachment_text: 'read',
   kos_query: 'read',
   report_list: 'read',
   report_get: 'read',

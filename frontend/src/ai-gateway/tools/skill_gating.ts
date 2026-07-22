@@ -30,7 +30,16 @@ import type { ToolSet } from 'ai'
  *  故默认不 advertised → 关掉即不注册（其余工具家族的 master flag 只是应急 kill-switch，此处同理由
  *  MAILAGENT_NOTION_AGENT_TOOL 兜底）。 */
 export const GATEWAY_SKILL_TOOLS: Record<string, readonly string[]> = {
-  email: ['email_get', 'email_body', 'email_list_thread'],
+  email: [
+    'email_get',
+    'email_body',
+    'email_list_thread',
+    // attachment awareness reads: thread-scoped attachment listing (sibling of email_list_thread)
+    // + attachment text read (sibling of email_body) — both are email-content reads, so they gate
+    // with the email skill.
+    'email_thread_attachments',
+    'email_attachment_text'
+  ],
   search: ['email_search_fulltext', 'email_search_attachments'],
   report: ['report_list', 'report_get'],
   notion_agent: ['notion_agent_chat']

@@ -41,4 +41,52 @@ class AttachmentItem(BaseModel):
     notion_block_id: Optional[str] = None
 
 
-__all__ = ["AttachmentItem"]
+class ThreadAttachmentItem(BaseModel):
+    """One row of `GET /api/attachment/thread/{thread_id}`.
+
+    The minimal metadata face for the chat agent's *thread-level* attachment
+    listing: attachment identity + size/type + `is_inline` (so the caller can
+    filter inline cid: images out) + the owning email's attribution
+    (`internal_id` / `sender` / `sender_name` / `date_received` / `email_subject`).
+
+    Deliberately excludes `local_path` (module-level security invariant), plus
+    `sha256` / `notion_*` / `derived_*` — those are storage/mirror internals the
+    agent has no use for. `local_path` is NEVER on the wire (see module docstring).
+    """
+
+    id: int = Field(..., ge=0)
+    internal_id: int = Field(..., ge=0)
+    filename: str
+    size_bytes: Optional[int] = None
+    content_type: Optional[str] = None
+    is_inline: bool
+    sender: str
+    sender_name: Optional[str] = None
+    date_received: Optional[str] = None
+    email_subject: str
+
+
+class AttachmentTextResponse(BaseModel):
+    """Body of `GET /api/attachment/{attachment_id}/text`.
+
+    On-demand extracted plaintext of one attachment (PDF/docx/pptx/xlsx/txt…).
+    `status` ∈ {extracted, pending, failed, unsupported}; `text_content` is only
+    populated when `status == 'extracted'`, otherwise null with a one-line
+    actionable `hint`. `truncated` merges the extractor's own 256 KB cap with any
+    caller-supplied `max_chars` clip (either → true). `local_path` is NEVER on the
+    wire (see module docstring); this response carries no host path.
+    """
+
+    attachment_id: int = Field(..., ge=0)
+    internal_id: int = Field(..., ge=0)
+    filename: str
+    status: str
+    text_content: Optional[str] = None
+    truncated: bool = False
+    extractor: Optional[str] = None
+    email_subject: str
+    sender: str
+    hint: Optional[str] = None
+
+
+__all__ = ["AttachmentItem", "ThreadAttachmentItem", "AttachmentTextResponse"]

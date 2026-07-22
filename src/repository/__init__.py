@@ -20,6 +20,7 @@ from src.repository.email_repository import (
     EmailRepository,
     EmailSearchHit,
     EmailSearchResult,
+    ThreadAttachmentRecord,
     ThreadMember,
     smart_query_transform,
 )
@@ -40,6 +41,7 @@ __all__ = [
     "EmailRepository",
     "EmailSearchHit",
     "EmailSearchResult",
+    "ThreadAttachmentRecord",
     "ThreadMember",
     "TranslationRepository",
     "build_storage_payloads",

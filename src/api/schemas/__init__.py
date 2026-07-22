@@ -48,7 +48,11 @@ from src.api.schemas.email import (
     SendResult,
     SyncStatus,
 )
-from src.api.schemas.attachment import AttachmentItem
+from src.api.schemas.attachment import (
+    AttachmentItem,
+    AttachmentTextResponse,
+    ThreadAttachmentItem,
+)
 from src.api.schemas.admin import (
     AdminHealthData,
     AdminStatsData,
@@ -98,7 +102,7 @@ __all__ = [
     "DraftPlanResult", "DraftResult", "SendResult",
     "PinnedIds",
     # attachment
-    "AttachmentItem",
+    "AttachmentItem", "ThreadAttachmentItem", "AttachmentTextResponse",
     # admin
     "AdminHealthData", "SyncStoreSection", "AdminStatsData",
     "DeadLetterItem", "DeadLetterRetryResult", "CleanupDeadLetterResult",

@@ -26,10 +26,18 @@ from fastapi.responses import StreamingResponse
 from src.api.app import APIError, success_envelope
 from src.api.auth import verify_cf_access
 from src.api.deps import get_repository
-from src.api.schemas import AttachmentItem
+from src.api.schemas import (
+    AttachmentItem,
+    AttachmentTextResponse,
+    ThreadAttachmentItem,
+)
 
 if TYPE_CHECKING:
-    from src.repository import AttachmentRecord, EmailRepository
+    from src.repository import (
+        AttachmentRecord,
+        EmailRepository,
+        ThreadAttachmentRecord,
+    )
 
 router = APIRouter(prefix="/api/attachment", tags=["attachment"])
 
@@ -45,6 +53,29 @@ _DEFAULT_MIME = "application/octet-stream"
 # Range 头解析: 仅支持单 range 的 `bytes=start-end` / `bytes=start-` / `bytes=-suffix`。
 # 多 range (逗号分隔) 不支持 → 当作整文件返回 200 (合法降级，RFC 7233 §3.1 允许)。
 _RANGE_RE = re.compile(r"^bytes=(\d*)-(\d*)$")
+
+# `/{attachment_id}/text` 同步抽取兜底的文件大小上限 (5 MB)。
+# 生产事实 (task 0)：附件文本抽取【无自动 worker】—— commit_email_with_body 只把
+# 非 inline 附件登记为 email_attachment_text.status='pending'，真正 pending→extracted
+# 仅 CLI `mailagent attachment extract` 处理 (main.py 无 worker、new_watcher 无 hook；
+# sync_store.py 里提到的 `_process_attachment_text_queue` 并不存在，是过时注释)。
+# 故 pending 附件若不现场抽，text 端点永远拿不到文本。这里对 ≤5MB 的 pending 文件做
+# 同步兜底抽取 (extract_text + commit_attachment_text)，>5MB 才回落 pending + hint —
+# 上限防单请求在 event loop 外的线程池里跑太久 / 吃内存 (端点用 sync def 让 FastAPI
+# 自动 offload 到 threadpool，抽取不阻塞主 event loop)。
+_ATTACHMENT_TEXT_SYNC_MAX_BYTES = 5 * 1024 * 1024
+
+# text 端点 status → 人类可执行 hint。**不回显 rec.error_message** —— 它可能含 host
+# 路径 (CLI 写入的 "file missing: {abs_path}")，与本模块「绝不回显 local_path」安全
+# 不变式冲突，故按 status 给通用 hint。
+_ATTACHMENT_TEXT_HINTS = {
+    "pending": (
+        "附件文本尚未抽取（无自动抽取 worker，或文件过大 >5MB 无法现场抽取）；"
+        "可运行 CLI `mailagent attachment extract --pending` 后重试"
+    ),
+    "failed": "附件文本抽取失败（可能是扫描版 / 加密 / 损坏的 PDF 等）",
+    "unsupported": "该附件类型不支持文本抽取（支持 PDF / docx / pptx / xlsx / txt / md / csv）",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -102,6 +133,100 @@ def _fetch_attachment_meta(
         local_path=row["local_path"],
         size_bytes=row["size_bytes"],
     )
+
+
+def _fetch_attachment_text_context(
+    repo: "EmailRepository", attachment_id: int
+) -> Optional[dict]:
+    """text 端点用: attachment 行 JOIN 邮件归属 (subject / sender)。
+
+    比 _fetch_attachment_meta 多取 email_metadata 的 subject / sender，让 /text
+    响应能直接带上「这个附件来自哪封邮件」上下文。LEFT JOIN → 附件行即便 internal_id
+    悬空 (理论上不该发生) 也能返回 (subject/sender 空串)，404 只留给「附件行本身不存在」。
+    返回 dict (含 local_path/size_bytes 供同步抽取兜底用)；行不存在 → None。
+    """
+    conn = repo._connect()
+    try:
+        row = conn.execute(
+            """SELECT a.id, a.internal_id, a.filename, a.content_type,
+                      a.local_path, a.size_bytes,
+                      COALESCE(m.subject, '') AS email_subject,
+                      COALESCE(m.sender, '')  AS sender
+                 FROM email_attachment a
+                 LEFT JOIN email_metadata m ON m.internal_id = a.internal_id
+                WHERE a.id = ?""",
+            (attachment_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        return None
+    return {
+        "id": row["id"],
+        "internal_id": row["internal_id"],
+        "filename": row["filename"],
+        "content_type": row["content_type"],
+        "local_path": row["local_path"],
+        "size_bytes": row["size_bytes"],
+        "email_subject": row["email_subject"],
+        "sender": row["sender"],
+    }
+
+
+def _sync_extract_attachment_text(repo: "EmailRepository", ctx: dict):
+    """pending 附件的同步抽取兜底 (task 0: 无自动 worker，见 _ATTACHMENT_TEXT_SYNC_MAX_BYTES)。
+
+    文件存在且 ≤5MB → extract_text 现场抽 + commit_attachment_text 落库 (复用 CLI
+    `attachment extract` 的 status 分派: extracted / unsupported / failed→退避重试)。
+    无 local_path / 文件丢失 / 超 5MB → 返回 None (调用方回落 pending + hint，不落库)。
+    path-traversal 越界 → APIError 403 (与 download/inline 同一安全不变式)。
+    返回抽取后重读的 AttachmentTextRecord (或 None)。
+    """
+    local_path = ctx["local_path"]
+    if not local_path:
+        return None
+    guarded = _resolve_guarded_path(repo, local_path)  # 越界 → 403
+    try:
+        size = guarded.stat().st_size
+    except OSError:
+        return None
+    if size > _ATTACHMENT_TEXT_SYNC_MAX_BYTES:
+        return None  # 太大, 不现场抽 (交给 CLI 离线批处理)
+
+    from src.converter.attachment_text import extract_text
+
+    att_id = ctx["id"]
+    try:
+        result = extract_text(
+            guarded,
+            content_type=ctx["content_type"],
+            filename=ctx["filename"],
+        )
+    except Exception as e:  # noqa: BLE001 — extractor 任意异常都不该 500 端点
+        repo.mark_attachment_text_failure(att_id, f"extractor exception: {e}")
+        return repo.get_attachment_text(att_id)
+
+    if result.status == "extracted":
+        repo.commit_attachment_text(
+            att_id,
+            text=result.text,
+            extractor=result.extractor,
+            status="extracted",
+            truncated=result.truncated,
+        )
+    elif result.status == "unsupported":
+        repo.commit_attachment_text(
+            att_id,
+            text="",
+            extractor=result.extractor,
+            status="unsupported",
+            error_message=result.error_message,
+        )
+    else:  # failed → 走退避重试队列 (与 CLI 一致)
+        repo.mark_attachment_text_failure(
+            att_id, result.error_message or "unknown extractor failure"
+        )
+    return repo.get_attachment_text(att_id)
 
 
 def _resolve_guarded_path(repo: "EmailRepository", local_path: str) -> Path:
@@ -452,6 +577,47 @@ async def attachment_list(
     )
 
 
+@router.get("/thread/{thread_id}", dependencies=[Depends(verify_cf_access)])
+async def attachment_thread(
+    thread_id: str,
+    request: Request,
+    repo: "EmailRepository" = Depends(get_repository),
+):
+    """GET /api/attachment/thread/{thread_id} — 线程内全部附件元数据（跨邮件聚合）。
+
+    分层附件访问的「线程」层：给 chat agent 一次拿到整条线程里每封邮件的附件清单
+    + 归属（来自哪封邮件的 sender / date / subject），不用逐封回查。data =
+    {thread_id, items}；每 item 为 ThreadAttachmentItem（含 is_inline 供上层滤内联
+    cid: 图；**不含** local_path / sha256 / notion_* / derived_*）。空 / 未知
+    thread_id → items=[]（不 404，thread_id 非强主键）。排序 date_received ASC,
+    attachment.id ASC 由 repo 保证。
+    """
+    records: list["ThreadAttachmentRecord"] = repo.get_attachments_by_thread(
+        thread_id
+    )
+    items = [
+        ThreadAttachmentItem(
+            id=r.id,
+            internal_id=r.internal_id,
+            filename=r.filename,
+            size_bytes=r.size_bytes,
+            content_type=r.content_type,
+            is_inline=r.is_inline,
+            sender=r.sender,
+            sender_name=r.sender_name,
+            date_received=r.date_received,
+            email_subject=r.email_subject,
+        ).model_dump()
+        for r in records
+    ]
+    return success_envelope(
+        {"thread_id": thread_id, "items": items},
+        request=request,
+        source="sqlite",
+        meta_extra={"count": len(items), "thread_id": thread_id},
+    )
+
+
 @router.get("/{att_id}/download", dependencies=[Depends(verify_cf_access)])
 async def attachment_download(
     att_id: int,
@@ -494,4 +660,83 @@ async def attachment_inline(
         total,
         disposition="inline",
         range_header=request.headers.get("range"),
+    )
+
+
+# sync `def` (非 async): 同步兜底抽取 (pypdf / calamine 等) 是阻塞 CPU/IO；FastAPI 对
+# sync 端点自动 offload 到 threadpool，抽取不阻塞主 event loop。
+@router.get("/{attachment_id}/text", dependencies=[Depends(verify_cf_access)])
+def attachment_text(
+    attachment_id: int,
+    request: Request,
+    repo: "EmailRepository" = Depends(get_repository),
+    max_chars: Optional[int] = Query(
+        None,
+        ge=1,
+        description="截断文本上限字符数; 缺省=全文 (抽取层 256KB 上限内)",
+    ),
+):
+    """GET /api/attachment/{attachment_id}/text — 按需读附件抽取文本。
+
+    分层附件访问的「内容」层：agent 先看元数据 (list / thread)，需要正文时才拉这个。
+    data = AttachmentTextResponse。status ∈ {extracted, pending, failed, unsupported}；
+    非 extracted 时 text_content=null + hint 给可执行提示。max_chars 截断时 truncated=true
+    (与抽取层 256KB 截断合并，任一为真即真)。**响应绝不含 local_path** (本模块安全不变式)。
+
+    pending 同步兜底 (task 0)：附件抽取无自动 worker，commit 时只登记 pending。故 pending
+    (或无 text 行) 且文件 ≤5MB 时现场 extract_text + 落库；>5MB / 无文件 → pending + hint。
+    404 当 attachment id 不存在 (跟随 router error envelope)。
+    """
+    ctx = _fetch_attachment_text_context(repo, attachment_id)
+    if ctx is None:
+        raise APIError(
+            "E_NOT_FOUND",
+            f"attachment id={attachment_id} not found",
+            hint="GET /api/attachment/list/{internal_id} 查可用 attachment id",
+            source="sqlite",
+        )
+
+    rec = repo.get_attachment_text(attachment_id)
+    # pending / 无行 → 同步抽取兜底 (无自动 worker，见 _sync_extract_attachment_text)。
+    if rec is None or rec.status == "pending":
+        rec = _sync_extract_attachment_text(repo, ctx) or rec
+
+    status = rec.status if rec is not None else "pending"
+    extractor = rec.extractor if rec is not None else None
+    text_content: Optional[str] = None
+    truncated = False
+    hint: Optional[str] = None
+
+    if status == "extracted" and rec is not None:
+        text_content = rec.text_content
+        truncated = rec.truncated
+        if (
+            max_chars is not None
+            and text_content is not None
+            and len(text_content) > max_chars
+        ):
+            text_content = text_content[:max_chars]
+            truncated = True  # 与抽取层 256KB 截断合并 (任一为真即真)
+    else:
+        # pending / failed / unsupported → text=null + 通用 hint (不回显 error_message,
+        # 它可能含 host 路径, 违反本模块安全不变式)。
+        hint = _ATTACHMENT_TEXT_HINTS.get(status, _ATTACHMENT_TEXT_HINTS["pending"])
+
+    data = AttachmentTextResponse(
+        attachment_id=ctx["id"],
+        internal_id=ctx["internal_id"],
+        filename=ctx["filename"],
+        status=status,
+        text_content=text_content,
+        truncated=truncated,
+        extractor=extractor,
+        email_subject=ctx["email_subject"],
+        sender=ctx["sender"],
+        hint=hint,
+    ).model_dump()
+    return success_envelope(
+        data,
+        request=request,
+        source="sqlite",
+        meta_extra={"attachment_id": ctx["id"], "status": status},
     )

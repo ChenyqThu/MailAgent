@@ -253,6 +253,35 @@ class AttachmentSearchHit:
     notion_url: Optional[str] = None
 
 
+@dataclass
+class ThreadAttachmentRecord:
+    """get_attachments_by_thread 单条 — email_attachment 行 + 邮件归属上下文.
+
+    附件字段与 AttachmentRecord 同（供线程附件面板复用同一渲染），另外 JOIN
+    email_metadata 拼「这个附件来自线程里哪封邮件」的归属信息（sender / date /
+    subject），让 chat agent 一次拿到跨邮件的线程附件清单而不用逐封回查。
+    """
+    # --- email_attachment 字段（同 AttachmentRecord） ---
+    id: int
+    internal_id: int
+    filename: str
+    content_type: Optional[str]
+    size_bytes: Optional[int]
+    is_inline: bool
+    content_id: Optional[str]
+    sha256: Optional[str]
+    derived_from: Optional[int]
+    derived_format: Optional[str]
+    notion_file_id: Optional[str]
+    notion_block_id: Optional[str]
+    created_at: float
+    # --- 归属字段（来自 email_metadata JOIN） ---
+    sender: str
+    sender_name: Optional[str]
+    date_received: Optional[str]
+    email_subject: str
+
+
 # ============================================================
 # FTS5 query smart transform — CJK-aware 自然语言 → FTS5 syntax (PR-2a)
 # ============================================================
@@ -890,6 +919,61 @@ class EmailRepository:
                     notion_file_id=r["notion_file_id"],
                     notion_block_id=r["notion_block_id"],
                     created_at=r["created_at"],
+                )
+                for r in rows
+            ]
+        finally:
+            conn.close()
+
+    def get_attachments_by_thread(
+        self, thread_id: str
+    ) -> list[ThreadAttachmentRecord]:
+        """线程内全部附件（含各封邮件的归属上下文），供 chat agent 分层访问.
+
+        单 SQL: email_attachment JOIN email_metadata ON internal_id WHERE
+        thread_id=?，按 date_received ASC, attachment.id ASC 排序（时间正序 →
+        agent 顺着线程读；同封邮件内按 attachment.id 稳定）。空 / 未知 thread_id →
+        空 list。sender / subject COALESCE 成 ''（对齐 dataclass str 字段，与
+        search_attachment_texts 一致）。
+        """
+        if not thread_id:
+            return []
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                """SELECT a.id, a.internal_id, a.filename, a.content_type,
+                          a.size_bytes, a.is_inline, a.content_id, a.sha256,
+                          a.derived_from, a.derived_format, a.notion_file_id,
+                          a.notion_block_id, a.created_at,
+                          COALESCE(m.sender, '')  AS sender,
+                          m.sender_name           AS sender_name,
+                          m.date_received         AS date_received,
+                          COALESCE(m.subject, '') AS email_subject
+                     FROM email_attachment a
+                     JOIN email_metadata m ON m.internal_id = a.internal_id
+                    WHERE m.thread_id = ?
+                    ORDER BY m.date_received ASC, a.id ASC""",
+                (thread_id,),
+            ).fetchall()
+            return [
+                ThreadAttachmentRecord(
+                    id=r["id"],
+                    internal_id=r["internal_id"],
+                    filename=r["filename"],
+                    content_type=r["content_type"],
+                    size_bytes=r["size_bytes"],
+                    is_inline=bool(r["is_inline"]),
+                    content_id=r["content_id"],
+                    sha256=r["sha256"],
+                    derived_from=r["derived_from"],
+                    derived_format=r["derived_format"],
+                    notion_file_id=r["notion_file_id"],
+                    notion_block_id=r["notion_block_id"],
+                    created_at=r["created_at"],
+                    sender=r["sender"],
+                    sender_name=r["sender_name"],
+                    date_received=r["date_received"],
+                    email_subject=r["email_subject"],
                 )
                 for r in rows
             ]

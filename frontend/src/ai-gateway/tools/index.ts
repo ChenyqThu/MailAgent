@@ -156,6 +156,8 @@ export const GATEWAY_READ_TOOL_NAMES = [
   'email_body',
   'email_list_thread',
   'email_search_attachments',
+  'email_thread_attachments',
+  'email_attachment_text',
   'kos_query',
   'report_list',
   'report_get'

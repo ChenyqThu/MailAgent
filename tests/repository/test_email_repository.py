@@ -29,6 +29,7 @@ from src.repository import (
     EmailMetadataRecord,
     EmailRepository,
     EmailSearchHit,
+    ThreadAttachmentRecord,
     ThreadMember,
     build_storage_payloads,
     smart_query_transform,
@@ -1458,6 +1459,126 @@ class TestGetThreadMembers:
                                   date_received="2026-05-02T08:00:00+08:00")
         members = repo.get_thread_members("<T-ORD>")
         assert [m.internal_id for m in members] == [731, 732, 730]
+
+
+class TestGetAttachmentsByThread:
+    """get_attachments_by_thread — 线程内跨邮件附件聚合 + 归属上下文."""
+
+    def _insert_email(
+        self, db: Path, internal_id: int, *, thread_id: str, subject: str,
+        sender: str, sender_name: Optional[str], date_received: str,
+    ):
+        conn = sqlite3.connect(str(db))
+        conn.execute("PRAGMA foreign_keys=ON")
+        now = time.time()
+        conn.execute(
+            """INSERT INTO email_metadata
+               (internal_id, thread_id, subject, sender, sender_name,
+                date_received, mailbox, sync_status, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, '收件箱', 'synced', ?, ?)""",
+            (internal_id, thread_id, subject, sender, sender_name,
+             date_received, now, now),
+        )
+        conn.commit()
+        conn.close()
+
+    def test_empty_thread_id_returns_empty(self, repo: EmailRepository):
+        assert repo.get_attachments_by_thread("") == []
+        assert repo.get_attachments_by_thread(None) == []  # type: ignore[arg-type]
+
+    def test_unknown_thread_returns_empty(self, repo: EmailRepository):
+        assert repo.get_attachments_by_thread("<no-such-thread>") == []
+
+    def test_aggregates_across_emails_ordered_and_attributed(
+        self, repo: EmailRepository, fresh_db: Path
+    ):
+        # 故意先插「较晚」的 900（attachment.id 会更小），再插「较早」的 901，
+        # 证明排序按 date_received ASC 主导、而非 attachment.id。另插别的 thread 902。
+        self._insert_email(
+            fresh_db, 900, thread_id="<TA>", subject="Second in thread",
+            sender="alice@x.com", sender_name="Alice",
+            date_received="2026-05-02T10:00:00+08:00",
+        )
+        id_map_900 = repo.commit_email_with_body(
+            900, BodyPayload(html="", markdown="b", body_format="html"),
+            [AttachmentPayload(filename="late.pdf", content=b"%PDF late",
+                               content_type="application/pdf", is_inline=False)],
+        )
+        self._insert_email(
+            fresh_db, 901, thread_id="<TA>", subject="First in thread",
+            sender="bob@x.com", sender_name="Bob",
+            date_received="2026-05-01T09:00:00+08:00",
+        )
+        id_map_901 = repo.commit_email_with_body(
+            901, BodyPayload(html="", markdown="b", body_format="html"),
+            [
+                AttachmentPayload(filename="a1.pdf", content=b"A1",
+                                  content_type="application/pdf", is_inline=False),
+                AttachmentPayload(filename="a2.docx", content=b"A2",
+                                  content_type="application/vnd.docx", is_inline=False),
+            ],
+        )
+        # 另一 thread — 不应出现在 <TA> 结果里。
+        self._insert_email(
+            fresh_db, 902, thread_id="<TB>", subject="Other thread",
+            sender="carol@x.com", sender_name="Carol",
+            date_received="2026-05-01T09:00:00+08:00",
+        )
+        repo.commit_email_with_body(
+            902, BodyPayload(html="", markdown="b", body_format="html"),
+            [AttachmentPayload(filename="other.pdf", content=b"O",
+                               content_type="application/pdf", is_inline=False)],
+        )
+
+        rows = repo.get_attachments_by_thread("<TA>")
+
+        # 3 个附件（901 的 2 个 + 900 的 1 个）；902 的被排除。
+        assert len(rows) == 3
+        assert isinstance(rows[0], ThreadAttachmentRecord)
+        # 排序 = date_received ASC, attachment.id ASC → 901(早) 的 a1,a2 在前, 900(晚) 在后。
+        assert [r.filename for r in rows] == ["a1.pdf", "a2.docx", "late.pdf"]
+        assert [r.internal_id for r in rows] == [901, 901, 900]
+
+        # 归属字段跟随各自邮件。
+        a1 = rows[0]
+        assert a1.sender == "bob@x.com"
+        assert a1.sender_name == "Bob"
+        assert a1.email_subject == "First in thread"
+        assert a1.date_received == "2026-05-01T09:00:00+08:00"
+        assert a1.id == id_map_901["a1.pdf"]
+        assert a1.is_inline is False
+        assert a1.content_type == "application/pdf"
+        assert a1.size_bytes == 2  # b"A1"
+
+        late = rows[2]
+        assert late.sender == "alice@x.com"
+        assert late.sender_name == "Alice"
+        assert late.email_subject == "Second in thread"
+        assert late.id == id_map_900["late.pdf"]
+
+    def test_includes_inline_attachments(
+        self, repo: EmailRepository, fresh_db: Path
+    ):
+        """内联 cid: 图也返回（是否过滤由上层决定），is_inline 标志正确。"""
+        self._insert_email(
+            fresh_db, 910, thread_id="<TI>", subject="With inline",
+            sender="dave@x.com", sender_name=None,
+            date_received="2026-05-01T09:00:00+08:00",
+        )
+        repo.commit_email_with_body(
+            910, BodyPayload(html="", markdown="b", body_format="html"),
+            [
+                AttachmentPayload(filename="logo.png", content=b"PNG",
+                                  content_type="image/png", is_inline=True),
+                AttachmentPayload(filename="doc.pdf", content=b"PDF",
+                                  content_type="application/pdf", is_inline=False),
+            ],
+        )
+        rows = repo.get_attachments_by_thread("<TI>")
+        inline_map = {r.filename: r.is_inline for r in rows}
+        assert inline_map == {"logo.png": True, "doc.pdf": False}
+        # sender_name NULL 透传为 None。
+        assert all(r.sender_name is None for r in rows)
 
 
 # ============================================================

@@ -19,6 +19,7 @@ import type { EmailMeta } from '@shared/api/types'
 import {
   buildAgentContextSnapshot,
   type AgentContextSnapshot,
+  type AttachmentContext,
   type CapabilityContext,
   type ContextScope
 } from './contextSnapshot'
@@ -96,6 +97,35 @@ export function useAgentContextSnapshot(
     staleTime: 30_000
   })
 
+  // Active email attachment metadata (same lazy list ThreadAttachmentBar fans out) — injected as
+  // metadata-only descriptors (no textExcerpt); the agent reads a specific attachment's text on
+  // demand with the email_attachment_text tool. Never blocks the snapshot: a failed/loading query
+  // resolves to [] (data undefined) so the snapshot still builds.
+  const attachmentsQ = useQuery({
+    queryKey: qk.attachment.list(activeInternalId as number),
+    queryFn: () => mailApi.attachment.list(activeInternalId as number),
+    enabled: active,
+    staleTime: 30_000
+  })
+
+  // Map the attachment rows → AttachmentContext[]: inline attachments (is_inline=true — signature
+  // images / embedded graphics) are dropped to reduce noise (the tool面 still surfaces them). No
+  // textExcerpt is set, so the serializer emits only the descriptor (no UNTRUSTED_ATTACHMENT fence).
+  const attachments = useMemo<AttachmentContext[]>(() => {
+    const rows = attachmentsQ.data
+    if (!Array.isArray(rows)) return []
+    return rows
+      .filter((a) => !a.is_inline)
+      .map((a) => ({
+        id: String(a.id),
+        name: a.filename,
+        contentType: a.content_type ?? null,
+        sizeBytes: a.size_bytes ?? null,
+        parseStatus: 'metadata-only' as const,
+        trust: 'untrusted-user-content' as const
+      }))
+  }, [attachmentsQ.data])
+
   const snapshot = useMemo<AgentContextSnapshot | null>(() => {
     if (!enabled) return null
     const uiState = readUiState(panelMode)
@@ -134,6 +164,7 @@ export function useAgentContextSnapshot(
         bodyMarkdown: hasBody ? bodyContent : null,
         bodySource: hasBody ? 'sqlite-body' : 'missing'
       },
+      attachments,
       uiState,
       capabilities,
       createdAt: new Date().toISOString()
@@ -148,6 +179,7 @@ export function useAgentContextSnapshot(
     aiQ.data,
     threadQ.data,
     bodyQ.data,
+    attachments,
     threadId
   ])
 

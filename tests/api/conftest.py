@@ -128,6 +128,23 @@ CREATE TABLE email_attachment (
     FOREIGN KEY (internal_id) REFERENCES email_metadata(internal_id) ON DELETE CASCADE
 );
 
+CREATE TABLE email_attachment_text (
+    attachment_id INTEGER PRIMARY KEY,
+    text_content TEXT,
+    text_size_bytes INTEGER NOT NULL DEFAULT 0,
+    extractor TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN
+        ('pending', 'extracted', 'failed', 'unsupported')),
+    error_message TEXT,
+    retry_count INTEGER NOT NULL DEFAULT 0,
+    next_retry_at REAL,
+    extracted_at REAL,
+    truncated INTEGER NOT NULL DEFAULT 0,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL,
+    FOREIGN KEY (attachment_id) REFERENCES email_attachment(id) ON DELETE CASCADE
+);
+
 CREATE VIRTUAL TABLE email_body_fts USING fts5(
     body_markdown,
     subject,

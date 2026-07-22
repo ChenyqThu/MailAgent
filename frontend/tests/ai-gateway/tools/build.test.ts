@@ -13,7 +13,7 @@ import { emailSearchSchema } from '../../../src/ai-gateway/tools/schemas'
 import { mockDomain, okEnvelope, runTool } from './_helpers'
 
 describe('buildGatewayTools', () => {
-  test('exposes exactly the 9 read tools — read-only (no write tools, none need approval)', () => {
+  test('exposes exactly the 11 read tools — read-only (no write tools, none need approval)', () => {
     const tools = buildGatewayTools({
       domain: mockDomain(() => okEnvelope([])),
       contextMode: 'manual_chat'

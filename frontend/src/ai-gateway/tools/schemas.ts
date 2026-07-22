@@ -64,6 +64,20 @@ export const emailSearchAttachmentsSchema = z.object({
 })
 export type EmailSearchAttachmentsInput = z.infer<typeof emailSearchAttachmentsSchema>
 
+/** email_thread_attachments — every attachment across a thread (metadata + provenance). Mirrors
+ *  email_list_thread's single thread_id input. */
+export const emailThreadAttachmentsSchema = z.object({
+  thread_id: z.string().min(1)
+})
+export type EmailThreadAttachmentsInput = z.infer<typeof emailThreadAttachmentsSchema>
+
+/** email_attachment_text — extracted text of one attachment (capped, clip mode mirrors email_body). */
+export const emailAttachmentTextSchema = z.object({
+  attachment_id: z.number().int(),
+  max_chars: z.number().int().min(200).max(12000).default(12000)
+})
+export type EmailAttachmentTextInput = z.infer<typeof emailAttachmentTextSchema>
+
 /** kos_query — cross-domain KOS retrieval. */
 export const kosQuerySchema = z.object({
   query: z.string().min(1),

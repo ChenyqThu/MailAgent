@@ -90,6 +90,44 @@ export interface DomainReportListOpts {
   limit?: number
 }
 
+/** email_thread_attachments — one attachment row (metadata + owning-email provenance) of GET
+ *  /attachment/thread/{thread_id}. is_inline=true is usually a signature image / inline graphic
+ *  rather than a real document. */
+export interface DomainThreadAttachmentItem {
+  id: number
+  internal_id: number
+  filename: string
+  size_bytes: number | null
+  content_type: string | null
+  is_inline: boolean
+  sender: string | null
+  sender_name: string | null
+  date_received: string | null
+  email_subject: string | null
+}
+
+/** GET /attachment/thread/{thread_id} data block. */
+export interface DomainThreadAttachmentsResult {
+  thread_id: string
+  items: DomainThreadAttachmentItem[]
+}
+
+/** email_attachment_text — GET /attachment/{id}/text data block. `status` gates content:
+ *  'extracted' → text_content present (already server-clipped, `truncated` flags a cut);
+ *  'pending' | 'failed' | 'unsupported' → text_content null + a human-readable `hint`. */
+export interface DomainAttachmentTextResult {
+  attachment_id: number
+  internal_id: number
+  filename: string
+  status: 'extracted' | 'pending' | 'failed' | 'unsupported'
+  text_content: string | null
+  truncated: boolean
+  extractor: string | null
+  email_subject: string | null
+  sender: string | null
+  hint: string | null
+}
+
 // ── write-endpoint shapes (Phase 03b) — mirror the legacy ChatToolPlatform data
 //    blocks (shared/chat/tools/builtin/write.ts) byte-for-byte so a gateway write
 //    tool's massaged output matches the legacy tool's (parity). ──────────────────
@@ -577,6 +615,33 @@ export class MailAgentDomainClient {
         until: opts.until,
         limit: opts.limit
       },
+      signal
+    })
+  }
+
+  /** email_thread_attachments — every attachment across a thread (metadata + owning-email
+   *  provenance). GET /attachment/thread/{thread_id}. The endpoint returns {thread_id, items}. */
+  threadAttachments(
+    threadId: string,
+    signal?: AbortSignal
+  ): Promise<DomainThreadAttachmentsResult> {
+    return this._req<DomainThreadAttachmentsResult>(
+      'GET',
+      `/attachment/thread/${encodeURIComponent(threadId)}`,
+      { signal }
+    )
+  }
+
+  /** email_attachment_text — extracted text of one attachment (server clips to max_chars and
+   *  reports `truncated`). GET /attachment/{id}/text?max_chars=N. Non-extracted statuses
+   *  (pending/failed/unsupported) return text_content=null + a `hint`. */
+  attachmentText(
+    attachmentId: number,
+    maxChars: number,
+    signal?: AbortSignal
+  ): Promise<DomainAttachmentTextResult> {
+    return this._req<DomainAttachmentTextResult>('GET', `/attachment/${attachmentId}/text`, {
+      query: { max_chars: maxChars },
       signal
     })
   }
