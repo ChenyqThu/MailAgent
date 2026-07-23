@@ -428,7 +428,9 @@ describe('/api/ai/approval/decide — contextMode freeze (untrusted_trigger resu
       'web_fetch',
       'email_prepare_send'
     ]) {
-      expect(resumeBuild.keys, `${name} must be stripped under untrusted_trigger`).not.toContain(name)
+      expect(resumeBuild.keys, `${name} must be stripped under untrusted_trigger`).not.toContain(
+        name
+      )
     }
     // domain_write survives (allowed in every mode) but cannot auto-approve outside manual_chat.
     expect(resumeBuild.keys).toContain('email_flag')
@@ -904,7 +906,7 @@ describe('/api/ai/approval/decide — per-agent context freeze (headless agent r
     expect(names).not.toContain('web_fetch') // grant_web 缺省 'off' → web 类恒缺席（rev3.1 后缺席原因是 web 键 off，非「类型无键」）
     expect(names).not.toContain('email_archive') // not in allowedTools → still narrowed
     expect(names).not.toContain('email_pin')
-    expect(names).not.toContain('email_search') // reads outside the allow-list are narrowed too
+    expect(names).not.toContain('email_list_filter') // reads outside the allow-list are narrowed too
   })
 
   test('re-pause chain: a second approval inside the resume re-freezes the SAME context', async () => {
@@ -1000,7 +1002,12 @@ describe('/api/ai/approval/decide — per-agent context freeze (headless agent r
   test('resume keeps the mount face: mounted-family reads survive, unmounted-family reads stay absent', async () => {
     const MOUNT_CTX = {
       agentId: 'dms',
-      allowedTools: ['email_body', 'email_search_fulltext', 'email_search', 'email_draft_reply'],
+      allowedTools: [
+        'email_body',
+        'email_search_fulltext',
+        'email_list_filter',
+        'email_draft_reply'
+      ],
       skills: ['email'], // search family NOT mounted — even though allowedTools lists its tool
       modeGrants: { exec: false }
     }
@@ -1027,7 +1034,7 @@ describe('/api/ai/approval/decide — per-agent context freeze (headless agent r
     expect(seenCtx[seenCtx.length - 1]).toEqual({ mode: 'cron_headless', ctx: MOUNT_CTX })
     const names = seenTools[0]
     expect(names).toContain('email_body') // email family mounted + allowed
-    expect(names).toContain('email_search') // collision-exempt floor: never mount-gated
+    expect(names).toContain('email_list_filter') // email family mounted + allowed (PR-D: no collision-exempt floor)
     expect(names).toContain('email_draft_reply') // CORE_UNGATED domain_write
     // search family unmounted → absent DESPITE being in allowedTools (mount gate is a pure
     // reduction stacked on the intersection; absence, not an error)

@@ -69,7 +69,7 @@ export type GatewayToolClass = (typeof GATEWAY_TOOL_CLASS_VALUES)[number]
  *  asserts the two stay in sync). */
 export const GATEWAY_TOOL_CLASSES: Record<string, GatewayToolClass> = {
   // read — no side effects (silent tier; untrusted content in results is fenced at the tool).
-  email_search: 'read',
+  email_list_filter: 'read',
   email_search_fulltext: 'read',
   email_get: 'read',
   email_body: 'read',

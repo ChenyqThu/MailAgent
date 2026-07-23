@@ -6,7 +6,7 @@
   "user_prompt": "那封很长的 Q2 季度复盘邮件，关键结论是什么？",
   "email_context": null,
   "fixtures": { "emails": ["fx-email-014"], "memory": [], "skill_overrides": {} },
-  "allowed_tools": ["email_search", "email_search_fulltext", "email_body"],
+  "allowed_tools": ["email_list_filter", "email_search_fulltext", "email_body"],
   "must_use_tools": ["email_body"],
   "forbidden_tools": ["email_send", "email_draft_reply"],
   "expected_evidence": [{ "type": "email", "id": 51330 }],

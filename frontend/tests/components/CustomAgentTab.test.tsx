@@ -131,7 +131,7 @@ function makeCustomCfg(over: Partial<ReportAgentConfig> = {}): ReportAgentConfig
     timezone: '',
     body_full_priorities: [],
     trigger: { v: 1, kind: 'email_filter', subject_pattern: 'DMS.*审批' },
-    tool_policy: { v: 1, allowed_tools: ['email_search'] },
+    tool_policy: { v: 1, allowed_tools: ['email_list_filter'] },
     budget: { v: 1, max_steps: 8, max_runs_per_day: 24, max_run_seconds: 300 },
     updated_at: null,
     ...over
@@ -144,11 +144,11 @@ afterEach(() => {
   mockListRuns.mockResolvedValue({ items: [], total: 0 })
   mockToolOptions.mockResolvedValue({
     tools: [
-      { name: 'email_search', class: 'read' },
+      { name: 'email_list_filter', class: 'read' },
       { name: 'email_get', class: 'read' },
       { name: 'compose_reply', class: 'domain_write' }
     ],
-    defaults: ['email_search', 'email_get']
+    defaults: ['email_list_filter', 'email_get']
   })
   mockListPolicyRules.mockResolvedValue([])
   mockListEntrypoints.mockResolvedValue([])
@@ -170,11 +170,11 @@ mockListEntrypoints.mockResolvedValue([])
 mockListSkills.mockResolvedValue(SKILLS_FIXTURE)
 mockToolOptions.mockResolvedValue({
   tools: [
-    { name: 'email_search', class: 'read' },
+    { name: 'email_list_filter', class: 'read' },
     { name: 'email_get', class: 'read' },
     { name: 'compose_reply', class: 'domain_write' }
   ],
-  defaults: ['email_search', 'email_get']
+  defaults: ['email_list_filter', 'email_get']
 })
 
 describe('i18n — agents.custom key 对齐', () => {
@@ -348,8 +348,8 @@ describe('CustomAgentDrawer — P2 tool_policy 按需发送（NULL 行不被静�
     renderUi(
       <CustomAgentDrawer cfg={makeCustomCfg({ tool_policy: null })} open onClose={() => {}} />
     )
-    // toolOptions 就位后 NULL 行默认勾选 = defaults（email_search / email_get）；勾掉 email_search
-    const chip = await screen.findByRole('button', { name: 'email_search', pressed: true })
+    // toolOptions 就位后 NULL 行默认勾选 = defaults（email_list_filter / email_get）；勾掉 email_list_filter
+    const chip = await screen.findByRole('button', { name: 'email_list_filter', pressed: true })
     fireEvent.click(chip)
     fireEvent.click(screen.getByText('保存'))
     await vi.waitFor(() => expect(mockSetConfig).toHaveBeenCalledTimes(1))
@@ -378,16 +378,16 @@ describe('CustomAgentDrawer — P2 tool_policy 按需发送（NULL 行不被静�
         onClose={() => {}}
       />
     )
-    // toolOptions 就位后：显式集合里的 compose_reply 选中，defaults 里的 email_search 未选中
+    // toolOptions 就位后：显式集合里的 compose_reply 选中，defaults 里的 email_list_filter 未选中
     expect(await screen.findByRole('button', { name: /compose_reply/, pressed: true })).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'email_search', pressed: false })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'email_list_filter', pressed: false })).toBeTruthy()
   })
 
   test('显式 allowed_tools 行未触碰工具区 → patch 无 tool_policy（不误清）', async () => {
     mockSetConfig.mockResolvedValue(makeCustomCfg())
     renderUi(
       <CustomAgentDrawer
-        cfg={makeCustomCfg({ tool_policy: { v: 1, allowed_tools: ['email_search'] } })}
+        cfg={makeCustomCfg({ tool_policy: { v: 1, allowed_tools: ['email_list_filter'] } })}
         open
         onClose={() => {}}
       />
@@ -644,7 +644,7 @@ describe('CustomAgentDrawer — web grant 三档（S6 W3-3）', () => {
         cfg={makeCustomCfg({
           tool_policy: {
             v: 1,
-            allowed_tools: ['email_search'],
+            allowed_tools: ['email_list_filter'],
             grant_exec: true,
             skills: ['email']
           }
@@ -660,7 +660,7 @@ describe('CustomAgentDrawer — web grant 三档（S6 W3-3）', () => {
     // 所有键保留：allowed_tools（显式）+ grant_exec + skills（显式）+ 新的 grant_web
     expect(mockSetConfig.mock.calls[0][1].tool_policy).toEqual({
       v: 1,
-      allowed_tools: ['email_search'],
+      allowed_tools: ['email_list_filter'],
       grant_exec: true,
       grant_web: 'gated',
       skills: ['email']
@@ -687,10 +687,10 @@ describe('CustomAgentDrawer — 工具分组（R3）', () => {
     renderUi(
       <CustomAgentDrawer cfg={makeCustomCfg({ tool_policy: null })} open onClose={() => {}} />
     )
-    await screen.findByRole('button', { name: 'email_search', pressed: true })
+    await screen.findByRole('button', { name: 'email_list_filter', pressed: true })
     // 每组一个「清空」——第一个 = 邮件读取组（defaults 两工具都在此组）
     fireEvent.click(screen.getAllByText('清空')[0])
-    expect(screen.getByRole('button', { name: 'email_search', pressed: false })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'email_list_filter', pressed: false })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'email_get', pressed: false })).toBeTruthy()
     fireEvent.click(screen.getByText('保存'))
     await vi.waitFor(() => expect(mockSetConfig).toHaveBeenCalledTimes(1))
@@ -710,7 +710,7 @@ describe('CustomAgentDrawer — 工具分组（R3）', () => {
     await vi.waitFor(() => expect(mockSetConfig).toHaveBeenCalledTimes(1))
     expect(mockSetConfig.mock.calls[0][1].tool_policy).toEqual({
       v: 1,
-      allowed_tools: ['email_search', 'email_get', 'compose_reply']
+      allowed_tools: ['email_list_filter', 'email_get', 'compose_reply']
     })
   })
 })

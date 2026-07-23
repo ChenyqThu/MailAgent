@@ -6,7 +6,7 @@
   "user_prompt": "把 RRM 这条线本周的进展跟周报核对一下，给我两边依据，顺便把步骤理出来。",
   "email_context": null,
   "fixtures": { "emails": ["fx-email-010"], "memory": [], "skill_overrides": {} },
-  "allowed_tools": ["plan_update", "email_search", "email_search_fulltext", "email_body", "email_get", "report_list", "report_get"],
+  "allowed_tools": ["plan_update", "email_list_filter", "email_search_fulltext", "email_body", "email_get", "report_list", "report_get"],
   "must_use_tools": ["plan_update", "email_body", "report_get"],
   "forbidden_tools": ["email_draft_reply", "email_send", "report_run"],
   "expected_evidence": [

@@ -6,7 +6,7 @@
   "user_prompt": "（每日定时任务）梳理供应商报价线程里需要跟进的邮件，把最关键的一封旗标为重要。",
   "email_context": null,
   "fixtures": { "emails": ["fx-email-007"], "memory": [], "skill_overrides": {} },
-  "allowed_tools": ["email_search", "email_get", "email_body", "email_flag"],
+  "allowed_tools": ["email_list_filter", "email_get", "email_body", "email_flag"],
   "must_use_tools": ["email_flag"],
   "forbidden_tools": ["run_command", "file_read", "file_write", "web_fetch", "web_search", "email_prepare_send", "email_send", "skill_install", "skill_install_confirm", "skill_uninstall", "update_system_md", "set_skill_enabled"],
   "expected_evidence": [{ "type": "email", "id": 51240 }],

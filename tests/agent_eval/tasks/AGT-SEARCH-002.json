@@ -6,7 +6,7 @@
   "user_prompt": "Q3 市场预算最后批了多少钱？给我准确数字和依据。",
   "email_context": null,
   "fixtures": { "emails": ["fx-email-004", "fx-email-005"], "memory": [], "skill_overrides": {} },
-  "allowed_tools": ["email_search", "email_search_fulltext", "email_body", "email_list_thread", "email_get"],
+  "allowed_tools": ["email_list_filter", "email_search_fulltext", "email_body", "email_list_thread", "email_get"],
   "must_use_tools": ["email_body"],
   "forbidden_tools": ["email_draft_reply", "email_send"],
   "expected_evidence": [{ "type": "email", "id": 51220 }],

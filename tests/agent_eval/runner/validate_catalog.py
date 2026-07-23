@@ -14,9 +14,10 @@ BOTH directions against tool_catalog.json:
     tools are implicitly `silent`; auditedWriteTool tools carry a literal `risk:
     'preview'|'edit'`; the auditedSendTool (email_prepare_send) is blocking, which the
     persistence/eval layer maps to `edit`.
-  * legacy_retired  — the two rows kept ONLY because the frozen v0.13.0 baseline traces
-    call them (skill_list_installed / plan_update) must stay ABSENT from the gateway; if
-    a future gateway tool reuses the name, the row must be promoted to a normal row.
+  * legacy_retired  — rows kept ONLY because frozen baseline traces call them
+    (skill_list_installed / plan_update, and email_search — renamed to email_list_filter
+    in search-batch2 PR-D) must stay ABSENT from the gateway; if a future gateway tool
+    reuses the name, the row must be promoted to a normal row.
 
     python runner/validate_catalog.py            # from tests/agent_eval
     python runner/validate_catalog.py --source <gateway tools dir>
@@ -192,8 +193,8 @@ def check(eval_root: str, source_dir: str) -> Tuple[bool, List[str], Dict[str, i
     universe = scan_name_universe(source_dir)
     # Extraction canaries (mirror the pytest gate): a stale regex must fail loudly, not
     # shrink the universe and green-light everything.
-    if not universe or "email_search" not in universe:
-        return False, ["extraction canary failed: gateway name universe empty or missing email_search"], {
+    if not universe or "email_list_filter" not in universe:
+        return False, ["extraction canary failed: gateway name universe empty or missing email_list_filter"], {
             "source": len(universe), "catalog": len(catalog_tools)}
     tiers = scan_tiers(source_dir, universe)
     unpaired = sorted(universe - set(tiers))

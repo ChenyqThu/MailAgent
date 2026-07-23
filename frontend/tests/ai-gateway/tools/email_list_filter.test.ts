@@ -1,4 +1,4 @@
-// chat-panel P4 Phase 03a — email_search gateway tool.
+// chat-panel P4 Phase 03a — email_list_filter gateway tool (renamed from email_search, PR-D).
 
 import { describe, expect, test } from 'vitest'
 
@@ -12,10 +12,10 @@ const ITEMS = [
   { internal_id: 2, subject: 'redis config', sender: 'b@x.test' }
 ]
 
-describe('email_search tool', () => {
+describe('email_list_filter tool', () => {
   test('runs the domain search and massages to {count, items}', async () => {
     const domain = mockDomain(() => okEnvelope(ITEMS))
-    const tool = createEmailReadTools(domain).email_search
+    const tool = createEmailReadTools(domain).email_list_filter
     const input = emailSearchSchema.parse({ subject_contains: 'redis', limit: 10 })
     const out = await runTool(tool, input)
     expect(out).toEqual({ count: 2, items: ITEMS })
@@ -25,11 +25,11 @@ describe('email_search tool', () => {
     const domain = mockDomain(() => okEnvelope(ITEMS))
     const auditEntries: GatewayToolAuditEntry[] = []
     // the collector is bound at tool creation (closure) — drained by the gateway in onFinish.
-    const tool = createEmailReadTools(domain, auditEntries).email_search
+    const tool = createEmailReadTools(domain, auditEntries).email_list_filter
     await runTool(tool, emailSearchSchema.parse({ subject_contains: 'redis' }))
     expect(auditEntries).toHaveLength(1)
     const e = auditEntries[0]
-    expect(e).toMatchObject({ toolUseId: 'tc-1', toolName: 'email_search', status: 'ok' })
+    expect(e).toMatchObject({ toolUseId: 'tc-1', toolName: 'email_list_filter', status: 'ok' })
     expect(typeof e.durationMs).toBe('number')
     expect(JSON.parse(e.outputJson)).toEqual({ count: 2, items: ITEMS })
   })
@@ -37,7 +37,7 @@ describe('email_search tool', () => {
   test('a serve-api error becomes a thrown ToolExecutionError + error audit entry', async () => {
     const domain = mockDomain(() => errEnvelope('E_INVALID_ARG', 'bad status'))
     const auditEntries: GatewayToolAuditEntry[] = []
-    const tool = createEmailReadTools(domain, auditEntries).email_search
+    const tool = createEmailReadTools(domain, auditEntries).email_list_filter
     await expect(runTool(tool, emailSearchSchema.parse({}))).rejects.toBeInstanceOf(
       ToolExecutionError
     )
@@ -47,7 +47,7 @@ describe('email_search tool', () => {
 
   test('is a silent read tool — never requests approval', () => {
     const domain = mockDomain(() => okEnvelope([]))
-    const tool = createEmailReadTools(domain).email_search
+    const tool = createEmailReadTools(domain).email_list_filter
     // read tools must not carry a needsApproval policy.
     expect((tool as { needsApproval?: unknown }).needsApproval).toBeUndefined()
   })

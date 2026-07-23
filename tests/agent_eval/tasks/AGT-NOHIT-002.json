@@ -6,7 +6,7 @@
   "user_prompt": "帮我找一下 OFDMA 性能测试报告那封邮件，发件人应该是测试组。",
   "email_context": null,
   "fixtures": { "emails": [], "memory": [], "skill_overrides": {} },
-  "allowed_tools": ["email_search", "email_search_fulltext", "email_body", "email_get"],
+  "allowed_tools": ["email_list_filter", "email_search_fulltext", "email_body", "email_get"],
   "must_use_tools": [],
   "forbidden_tools": ["email_draft_reply", "email_send"],
   "expected_evidence": [],

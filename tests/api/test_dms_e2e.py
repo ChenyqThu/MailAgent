@@ -89,7 +89,7 @@ def _install_dms_pack(client, tmp_path) -> str:
 
 _DMS_TRIGGER = {"v": 1, "kind": "email_filter", "subject_pattern": "DMS.*审批",
                 "sender_pattern": "dms@corp\\.test", "folders": ["收件箱"]}
-_DMS_ALLOWED = ["email_search", "email_get", "email_body", "email_draft_reply"]
+_DMS_ALLOWED = ["email_list_filter", "email_get", "email_body", "email_draft_reply"]
 
 
 @pytest.fixture()

@@ -57,7 +57,7 @@ router = APIRouter(prefix="/api/agent-runs", tags=["agent-runs"])
 # 的回执信，默认工具面不该自带不可逆提案权，读可默认写不默认）。
 DEFAULT_CUSTOM_AGENT_ALLOWED_TOOLS: tuple[str, ...] = (
     # email 读族（headless agent 的最小工作集）
-    "email_search", "email_search_fulltext", "email_get", "email_body",
+    "email_list_filter", "email_search_fulltext", "email_get", "email_body",
     "email_list_thread", "email_search_attachments",
     # calendar 读族（日历 epic 4.1：silent 读 + CALENDAR_EVENT 围栏，日报/简报类 agent 直接可用）
     "calendar_events_list", "calendar_event_get",
@@ -68,7 +68,7 @@ DEFAULT_CUSTOM_AGENT_ALLOWED_TOOLS: tuple[str, ...] = (
 # 🔴 默认挂载集（S6 W3, ADR-004 rev3.1 §5.1/D3）：tool_policy_json 缺 skills（NULL）时投影此集
 # —— 恰是默认安全集内 skill 门控工具的归属两族（email_get/body/list_thread ∈ email；
 # email_search_fulltext/attachments ∈ search），默认配置 agent 的工具面与挂载语义引入前逐字节
-# 不变。显式 [] = 零挂载（门控工具全缺席；collision-exempt email_search + CORE_UNGATED 仍在）。
+# 不变。显式 [] = 零挂载（门控工具全缺席，含 email_list_filter —— PR-D 起归 email skill；CORE_UNGATED 仍在）。
 # 单源：spec 投影恒输出解析完的 skills 数组（默认已代入），gateway 不手抄第二份常量。
 DEFAULT_CUSTOM_AGENT_MOUNTED_SKILLS: tuple[str, ...] = ("email", "search")
 
@@ -103,8 +103,8 @@ HEADLESS_TOOL_OPTIONS: tuple[tuple[str, str], ...] = (
     ("email_attachment_text", "read"),
     ("email_body", "read"),
     ("email_get", "read"),
+    ("email_list_filter", "read"),
     ("email_list_thread", "read"),
-    ("email_search", "read"),
     ("email_search_attachments", "read"),
     ("email_search_fulltext", "read"),
     ("email_thread_attachments", "read"),

@@ -78,7 +78,9 @@ def test_every_gateway_tool_is_in_catalog(eval_root, catalog):
 
     # Canaries: a regex gone stale must fail loudly, not shrink the universe to {}.
     assert names, "extraction found no gateway tool names — extraction regexes are broken"
-    assert "email_search" in names, "canary miss: email_search not extracted (GATEWAY_READ_TOOL_NAMES)"
+    assert (
+        "email_list_filter" in names
+    ), "canary miss: email_list_filter not extracted (GATEWAY_READ_TOOL_NAMES)"
     assert "update_system_md" in names, "canary miss: update_system_md not extracted (self-mount/skill_gating)"
 
     missing = sorted(names - set(catalog.tools.keys()))

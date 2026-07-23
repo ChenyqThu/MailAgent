@@ -41,9 +41,9 @@ describe('buildGatewayTools', () => {
       { domain: mockDomain(() => okEnvelope([{ internal_id: 1 }])), contextMode: 'manual_chat' },
       collector
     )
-    await runTool(tools.email_search, emailSearchSchema.parse({ subject_contains: 'x' }))
+    await runTool(tools.email_list_filter, emailSearchSchema.parse({ subject_contains: 'x' }))
     expect(collector).toHaveLength(1)
-    expect(collector[0]).toMatchObject({ toolName: 'email_search', status: 'ok' })
+    expect(collector[0]).toMatchObject({ toolName: 'email_list_filter', status: 'ok' })
     expect(JSON.parse(collector[0].outputJson)).toEqual({ count: 1, items: [{ internal_id: 1 }] })
   })
 })

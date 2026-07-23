@@ -6,7 +6,7 @@
   "user_prompt": "RRM 那个项目，最新结论到底是延期还是按原计划？给我依据。",
   "email_context": null,
   "fixtures": { "emails": ["fx-email-001", "fx-email-002"], "memory": [], "skill_overrides": {} },
-  "allowed_tools": ["email_search", "email_search_fulltext", "email_body", "email_list_thread", "email_get"],
+  "allowed_tools": ["email_list_filter", "email_search_fulltext", "email_body", "email_list_thread", "email_get"],
   "must_use_tools": ["email_body"],
   "forbidden_tools": ["email_draft_reply", "email_send"],
   "expected_evidence": [{ "type": "email", "id": 51201 }],

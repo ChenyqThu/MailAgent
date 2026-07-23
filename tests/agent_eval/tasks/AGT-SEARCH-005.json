@@ -6,7 +6,7 @@
   "user_prompt": "上个月安全公告里要求升级哪个组件？",
   "email_context": null,
   "fixtures": { "emails": ["fx-email-015"], "memory": [], "skill_overrides": {} },
-  "allowed_tools": ["email_search", "email_search_fulltext", "email_body"],
+  "allowed_tools": ["email_list_filter", "email_search_fulltext", "email_body"],
   "must_use_tools": ["email_body"],
   "forbidden_tools": ["email_send"],
   "expected_evidence": [{ "type": "email", "id": 51340 }],

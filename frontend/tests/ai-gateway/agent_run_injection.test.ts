@@ -42,7 +42,7 @@ function trapDomain(searched?: string[]): MailAgentDomainClient {
     throw new Error(`${TRAP_MARK}: ${name}`)
   }
   return {
-    // email_search tool → domain.searchEmails({ subject, fromAddr, ... }) → returns an array (items).
+    // email_list_filter tool → domain.searchEmails({ subject, fromAddr, ... }) → returns an array (items).
     searchEmails: async (args: { subject?: string }) => {
       searched?.push(args?.subject ?? '')
       return []
@@ -89,7 +89,7 @@ function maliciousSpec(kind: 'email_filter' | 'cron'): AgentRunSpec {
     // (which strips the forbidden classes under a headless mode) — NOT the allowedTools narrowing.
     // The one exception is the manual-leak positive control below, which needs run_command to
     // survive BOTH gates to reach needsApproval; it is allow-listed here.
-    toolPolicy: { allowedTools: ['email_search', ...FORBIDDEN] },
+    toolPolicy: { allowedTools: ['email_list_filter', ...FORBIDDEN] },
     budget: { maxSteps: 4, maxRunSeconds: 300 },
     sessionTitle: 'evil · run'
   }
@@ -221,7 +221,7 @@ describe.each(['email_filter', 'cron'] as const)(
 
 // ── positive control: an allowed read tool still runs (the run is not globally inert) ──────────────
 describe('runHeadlessAgent injection defence — allowed read tool still functions', () => {
-  /** step 1: call email_search (allowed, survives every mode) → it runs; step 2: close with text. */
+  /** step 1: call email_list_filter (allowed, survives every mode) → it runs; step 2: close with text. */
   function readThenCloseModel(): MockLanguageModelV3 {
     let step = 0
     return new MockLanguageModelV3({
@@ -235,7 +235,7 @@ describe('runHeadlessAgent injection defence — allowed read tool still functio
                 {
                   type: 'tool-call' as const,
                   toolCallId: 's1',
-                  toolName: 'email_search',
+                  toolName: 'email_list_filter',
                   input: JSON.stringify({ subject_contains: 'DMS' })
                 },
                 { type: 'finish' as const, finishReason: 'tool-calls' as const, usage: USAGE }
@@ -258,7 +258,7 @@ describe('runHeadlessAgent injection defence — allowed read tool still functio
     })
   }
 
-  test('email_search executes and the run completes; forbidden tools are simply absent', async () => {
+  test('email_list_filter executes and the run completes; forbidden tools are simply absent', async () => {
     const cap: PersistTurnInput[] = []
     const searched: string[] = []
     const result = await runHeadlessAgent(
@@ -276,7 +276,7 @@ describe('runHeadlessAgent injection defence — allowed read tool still functio
 // and its domain method throws, TRAP_MARK genuinely surfaces in the run's error.message — so the
 // primary test's `error.message NOT toContain(TRAP_MARK)` is a live signal (the mark WOULD appear had
 // execute been reached), not a vacuous truth about an unreachable mark. We prove it through the one
-// tool whose execute IS reachable in a headless run: the allowed read tool email_search.
+// tool whose execute IS reachable in a headless run: the allowed read tool email_list_filter.
 describe('runHeadlessAgent injection defence — trap mark is live (positive control)', () => {
   function callEmailSearchModel(): MockLanguageModelV3 {
     return new MockLanguageModelV3({
@@ -287,7 +287,7 @@ describe('runHeadlessAgent injection defence — trap mark is live (positive con
             {
               type: 'tool-call' as const,
               toolCallId: 's1',
-              toolName: 'email_search',
+              toolName: 'email_list_filter',
               input: JSON.stringify({ subject_contains: 'DMS' })
             },
             { type: 'finish' as const, finishReason: 'tool-calls' as const, usage: USAGE }
@@ -302,7 +302,7 @@ describe('runHeadlessAgent injection defence — trap mark is live (positive con
     const guard = new ApprovalGuard()
     const trappedRead: MailAgentDomainClient = {
       ...trapDomain(),
-      // email_search reaches execute (allowed read tool) → make its domain call throw the mark.
+      // email_list_filter reaches execute (allowed read tool) → make its domain call throw the mark.
       searchEmails: async () => {
         throw new Error(`${TRAP_MARK}: searchEmails`)
       }

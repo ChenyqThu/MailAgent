@@ -70,7 +70,8 @@ export interface BuildGatewayToolsOpts {
    *  drop the read tools of any email/search/report skill NOT in advertisedSkills (skill→tool
    *  gating, see skill_gating.ts). Off / advertisedSkills null → applySkillGating is NOT called →
    *  byte-identical to the cutover tool set. The gated set is read tools only; write/send
-   *  (core) + the collision-exempt email_search are never gated. */
+   *  (core) are never gated. (email_list_filter — the renamed former collision-exempt
+   *  email_search — now gates with the email skill family like its siblings, PR-D.) */
   skillGatingEnabled?: boolean
   /** M4a — the advertised (enabled(override ?? default) && available) skill names from Python
    *  /chat/config.advertisedSkills. null/undefined = unknown (store/manifest hiccup) → fail OPEN
@@ -150,7 +151,7 @@ export interface BuildGatewayToolsOpts {
 
 /** Names of the read tools exposed by the gateway (for tests / observability). */
 export const GATEWAY_READ_TOOL_NAMES = [
-  'email_search',
+  'email_list_filter',
   'email_search_fulltext',
   'email_get',
   'email_body',
@@ -365,7 +366,8 @@ export function buildGatewayTools(
   // M4a — skill→tool gating after the full set is assembled, behind MAILAGENT_SKILL_SELF_MOUNT.
   // flag-off OR advertisedSkills null (Python hiccup → fail-open) → not called → byte-identical to the
   // cutover set. advertisedSkills=[] (all disabled) → gates every mapped skill read tool. The gated set
-  // is read-only; write/send (core) + collision-exempt email_search are never dropped.
+  // is read-only; write/send (core) are never dropped. (email_list_filter now gates with the
+  // email skill family — the collision-exempt特例 retired with the PR-D rename.)
   const gated =
     opts.skillGatingEnabled && opts.advertisedSkills != null
       ? applySkillGating(tools, opts.advertisedSkills)

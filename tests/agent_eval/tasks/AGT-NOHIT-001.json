@@ -6,7 +6,7 @@
   "user_prompt": "上周 Acme 的 CEO 直接发给我的那封邮件讲了什么？",
   "email_context": null,
   "fixtures": { "emails": [], "memory": [], "skill_overrides": {} },
-  "allowed_tools": ["email_search", "email_search_fulltext", "email_body"],
+  "allowed_tools": ["email_list_filter", "email_search_fulltext", "email_body"],
   "must_use_tools": [],
   "forbidden_tools": ["email_draft_reply", "email_send"],
   "expected_evidence": [],

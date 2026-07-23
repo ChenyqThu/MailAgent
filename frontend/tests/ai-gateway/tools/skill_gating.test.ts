@@ -58,14 +58,14 @@ function buildAllTools() {
 }
 
 describe('applySkillGating (pure semantics)', () => {
-  test('disabling email drops its read tools; collision-exempt email_search + core stay', () => {
+  test('disabling email drops ALL its read tools (incl email_list_filter); core stay', () => {
     const tools = buildAllTools()
     const advertised = ['search', 'report', 'kos', 'calendar', 'notion_agent'] // email NOT advertised
     const gated = applySkillGating(tools, advertised)
-    for (const n of ['email_get', 'email_body', 'email_list_thread']) {
+    // PR-D: email_list_filter (former collision-exempt email_search) now gates with the email family.
+    for (const n of ['email_list_filter', 'email_get', 'email_body', 'email_list_thread']) {
       expect(gated[n]).toBeUndefined()
     }
-    expect(gated.email_search).toBeDefined() // collision-exempt
     for (const n of [
       'email_search_fulltext',
       'email_search_attachments',
@@ -77,12 +77,11 @@ describe('applySkillGating (pure semantics)', () => {
     for (const n of CORE_UNGATED_GATEWAY_TOOLS) expect(gated[n]).toBeDefined() // core never gated
   })
 
-  test('advertisedSkills=[] gates every mapped skill tool; collision-exempt + core survive', () => {
+  test('advertisedSkills=[] gates every mapped skill tool; core survive', () => {
     const gated = applySkillGating(buildAllTools(), [])
     for (const names of Object.values(GATEWAY_SKILL_TOOLS)) {
       for (const n of names) expect(gated[n]).toBeUndefined()
     }
-    expect(gated.email_search).toBeDefined()
     for (const n of CORE_UNGATED_GATEWAY_TOOLS) expect(gated[n]).toBeDefined()
   })
 
@@ -91,6 +90,32 @@ describe('applySkillGating (pure semantics)', () => {
     // task 07-21 — notion_agent is now a mapped skill too; advertise every GATEWAY_SKILL_TOOLS key.
     const gated = applySkillGating(tools, Object.keys(GATEWAY_SKILL_TOOLS))
     expect(Object.keys(gated)).toEqual(Object.keys(tools))
+  })
+})
+
+// PR-D (search-batch2 D6) — email_search → email_list_filter rename retired the last collision-exempt
+// tool. email_list_filter now gates with the email skill family like its sibling reads (deliberate
+// behaviour change: pre-rename email_search was the collision-exempt floor, NEVER gated). Dedicated pins
+// so the flip is self-documenting.
+describe('email_list_filter skill gating (PR-D — collision-exempt特例退役)', () => {
+  test('email skill OFF → email_list_filter dropped (no longer collision-exempt)', () => {
+    const gated = applySkillGating(buildAllTools(), [
+      'search',
+      'report',
+      'kos',
+      'calendar',
+      'notion_agent'
+    ]) // email NOT advertised
+    expect(gated.email_list_filter).toBeUndefined()
+  })
+
+  test('email skill ON → email_list_filter present (gates with the email family)', () => {
+    const gated = applySkillGating(buildAllTools(), ['email'])
+    expect(gated.email_list_filter).toBeDefined()
+  })
+
+  test('collision-exempt set is now empty (mechanism retained for future name collisions)', () => {
+    expect(COLLISION_EXEMPT_GATEWAY_TOOLS.size).toBe(0)
   })
 })
 
@@ -154,7 +179,7 @@ describe('buildGatewayTools skill-gating wiring', () => {
     })
     expect(tools.email_search_fulltext).toBeUndefined()
     expect(tools.email_search_attachments).toBeUndefined()
-    expect(tools.email_search).toBeDefined() // collision-exempt
+    expect(tools.email_list_filter).toBeDefined() // email advertised → email family present
     expect(tools.email_get).toBeDefined() // email advertised
     expect(tools.report_list).toBeDefined() // report advertised
     expect(tools.kos_query).toBeDefined() // core
@@ -188,10 +213,10 @@ describe('buildGatewayTools per-agent mount gating (S6 W3-1b)', () => {
     ]) {
       expect(tools[n]).toBeUndefined()
     }
-    expect(tools.email_search).toBeDefined() // collision-exempt floor: never mount-gated
+    expect(tools.email_list_filter).toBeDefined() // email family mounted → present (PR-D: no longer a collision-exempt floor)
   })
 
-  test('skills=[] (zero mounts): every mapped skill tool absent; collision-exempt + FULL CORE_UNGATED floor stay', () => {
+  test('skills=[] (zero mounts): every mapped skill tool absent; FULL CORE_UNGATED floor stays', () => {
     const tools = buildGatewayTools({
       domain: domain(),
       writeToolsEnabled: true,
@@ -212,7 +237,6 @@ describe('buildGatewayTools per-agent mount gating (S6 W3-1b)', () => {
     for (const names of Object.values(GATEWAY_SKILL_TOOLS)) {
       for (const n of names) expect(tools[n]).toBeUndefined()
     }
-    expect(tools.email_search).toBeDefined()
     // the mount list is NOT a second switch for the core floor (ADR §5.1)
     for (const n of CORE_UNGATED_GATEWAY_TOOLS) expect(tools[n]).toBeDefined()
   })
@@ -232,8 +256,9 @@ describe('buildGatewayTools per-agent mount gating (S6 W3-1b)', () => {
     // report: mounted, and M4a only gates against the advertised list → survives the business
     // pass only if advertised… report NOT advertised → absent too
     expect(tools.report_list).toBeUndefined()
-    // the intersection of the two lists is empty → only the floors remain
-    expect(tools.email_search).toBeDefined()
+    // the intersection of the two lists is empty → only the CORE_UNGATED floor remains
+    // (PR-D: email_list_filter ∈ email skill, advertised but unmounted → absent; no collision-exempt floor)
+    expect(tools.email_list_filter).toBeUndefined()
     expect(tools.kos_query).toBeDefined()
   })
 
@@ -246,7 +271,7 @@ describe('buildGatewayTools per-agent mount gating (S6 W3-1b)', () => {
     for (const names of Object.values(GATEWAY_SKILL_TOOLS)) {
       for (const n of names) expect(tools[n]).toBeUndefined()
     }
-    expect(tools.email_search).toBeDefined()
+    expect(tools.email_list_filter).toBeUndefined() // email skill unmounted → absent (no collision-exempt floor since PR-D)
   })
 
   test('no agentRunContext → mount gating never applies (manual assembly byte-identical)', () => {

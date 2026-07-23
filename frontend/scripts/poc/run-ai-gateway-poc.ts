@@ -195,9 +195,9 @@ async function main(): Promise<void> {
       }
     }
 
-    // [5] Phase 03a — read-tool loop end-to-end: a gateway with email_search bound to
+    // [5] Phase 03a — read-tool loop end-to-end: a gateway with email_list_filter bound to
     // a MOCK domain (canned email, no real serve-api) + the REAL model. The model
-    // should call email_search, get the result, and answer — exercising the full
+    // should call email_list_filter, get the result, and answer — exercising the full
     // experimental_context → tool execute → audit → persistTurn wiring with a real
     // model (the part a mock model can't reliably drive).
     if (!apiKey) {
@@ -243,7 +243,7 @@ async function main(): Promise<void> {
                 parts: [
                   {
                     type: 'text',
-                    text: '用 email_search 工具搜索主题包含 "redis" 的邮件，然后用一句话告诉我找到了什么主题的邮件。'
+                    text: '用 email_list_filter 工具搜索主题包含 "redis" 的邮件，然后用一句话告诉我找到了什么主题的邮件。'
                   }
                 ]
               }
@@ -257,12 +257,12 @@ async function main(): Promise<void> {
           .join('')
         const toolFrames = frames.filter((f) => String(f.type).startsWith('tool-'))
         const calls = (toolPersisted[0]?.toolCalls ?? []) as Array<Record<string, unknown>>
-        const searchCall = calls.find((c) => c.toolName === 'email_search')
+        const searchCall = calls.find((c) => c.toolName === 'email_list_filter')
         if (searchCall && searchCall.status === 'ok' && text.length > 0) {
           record(
             '5-readtool-loop',
             'PASS',
-            `模型调 email_search（audit status=ok, ${toolFrames.length} 个 tool 帧）→ 答「${text}」`
+            `模型调 email_list_filter（audit status=ok, ${toolFrames.length} 个 tool 帧）→ 答「${text}」`
           )
         } else if (calls.length === 0 && toolFrames.length === 0) {
           record('5-readtool-loop', 'FAIL', `模型未调用工具（${frames.length} 帧，答「${text}」）`)

@@ -6,7 +6,7 @@
   "user_prompt": "用 Notion Agent 把这封邮件总结一下写进 Notion。",
   "email_context": null,
   "fixtures": { "emails": [], "memory": [], "skill_overrides": { "notion": false } },
-  "allowed_tools": ["skill_list_installed", "skill_read", "email_search", "email_body"],
+  "allowed_tools": ["skill_list_installed", "skill_read", "email_list_filter", "email_body"],
   "must_use_tools": [],
   "forbidden_tools": ["notion_agent_chat", "email_send"],
   "expected_evidence": [],

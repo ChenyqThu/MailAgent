@@ -115,7 +115,9 @@ function makeSpec(over?: Partial<AgentRunSpec>): AgentRunSpec {
     // S5 W4 — the projection ALWAYS emits a non-empty allowedTools for a custom agent (§5.1
     // default-safe-set); a spec with the field MISSING is malformed and fail-closes to [] (its
     // own test below). The default here mirrors the real wire shape.
-    toolPolicy: { allowedTools: ['email_search', 'email_body', 'email_flag', 'email_draft_reply'] },
+    toolPolicy: {
+      allowedTools: ['email_list_filter', 'email_body', 'email_flag', 'email_draft_reply']
+    },
     budget: { maxSteps: 8, maxRunSeconds: 300 },
     sessionTitle: 'DMS · 2026-07-03 09:00',
     ...over
@@ -149,25 +151,31 @@ describe('deriveContextMode', () => {
 
 describe('intersectAllowedTools', () => {
   const set = (): ToolSet => ({
-    email_search: tool({ description: 'a', inputSchema: z.object({}), execute: async () => ({}) }),
+    email_list_filter: tool({
+      description: 'a',
+      inputSchema: z.object({}),
+      execute: async () => ({})
+    }),
     email_flag: tool({ description: 'b', inputSchema: z.object({}), execute: async () => ({}) })
   })
   test('undefined allow-list → full set unchanged', () => {
     expect(Object.keys(intersectAllowedTools(set(), undefined)).sort()).toEqual([
       'email_flag',
-      'email_search'
+      'email_list_filter'
     ])
   })
   test('subset allow-list → intersection', () => {
-    expect(Object.keys(intersectAllowedTools(set(), ['email_search']))).toEqual(['email_search'])
+    expect(Object.keys(intersectAllowedTools(set(), ['email_list_filter']))).toEqual([
+      'email_list_filter'
+    ])
   })
   test('empty allow-list → empty (owner selected zero tools)', () => {
     expect(Object.keys(intersectAllowedTools(set(), []))).toEqual([])
   })
   test('only reduce — a name not in the set stays absent (never added)', () => {
-    expect(Object.keys(intersectAllowedTools(set(), ['email_search', 'run_command']))).toEqual([
-      'email_search'
-    ])
+    expect(Object.keys(intersectAllowedTools(set(), ['email_list_filter', 'run_command']))).toEqual(
+      ['email_list_filter']
+    )
   })
 })
 
@@ -256,25 +264,29 @@ describe('agentRunContextFromSpec — discriminated grants, never a raw passthro
     ).toEqual([])
     expect(
       agentRunContextFromSpec(
-        makeSpec({ toolPolicy: { skills: ['email', 42, null] } as unknown as AgentRunSpec['toolPolicy'] })
+        makeSpec({
+          toolPolicy: { skills: ['email', 42, null] } as unknown as AgentRunSpec['toolPolicy']
+        })
       ).skills
     ).toEqual(['email'])
   })
 
   test('allowedTools missing / non-array / non-string entries → [] resp. filtered (fail-closed §5.1)', () => {
     expect(agentRunContextFromSpec(makeSpec({ toolPolicy: {} })).allowedTools).toEqual([])
-    expect(
-      agentRunContextFromSpec(makeSpec({ toolPolicy: undefined })).allowedTools
-    ).toEqual([])
+    expect(agentRunContextFromSpec(makeSpec({ toolPolicy: undefined })).allowedTools).toEqual([])
     expect(
       agentRunContextFromSpec(
-        makeSpec({ toolPolicy: { allowedTools: 'email_flag' } as unknown as AgentRunSpec['toolPolicy'] })
+        makeSpec({
+          toolPolicy: { allowedTools: 'email_flag' } as unknown as AgentRunSpec['toolPolicy']
+        })
       ).allowedTools
     ).toEqual([])
     expect(
       agentRunContextFromSpec(
         makeSpec({
-          toolPolicy: { allowedTools: ['email_flag', 42, null] } as unknown as AgentRunSpec['toolPolicy']
+          toolPolicy: {
+            allowedTools: ['email_flag', 42, null]
+          } as unknown as AgentRunSpec['toolPolicy']
         })
       ).allowedTools
     ).toEqual(['email_flag'])
@@ -286,7 +298,9 @@ describe('agentRunContextFromSpec — discriminated grants, never a raw passthro
 describe('runHeadlessAgent — matrix under the derived context mode', () => {
   /** Build the FULL flag-on set so the dangerous classes WOULD exist in manual_chat — proving they
    *  vanish comes from the derived mode, not from flags-off. */
-  function fullFlagOnCfg(seen: { mode: AgentContextMode | undefined; keys: string[] }[]): AiGatewayConfig {
+  function fullFlagOnCfg(
+    seen: { mode: AgentContextMode | undefined; keys: string[] }[]
+  ): AiGatewayConfig {
     const guard = new ApprovalGuard()
     return {
       port: 0,
@@ -381,17 +395,24 @@ describe('runHeadlessAgent — allowedTools intersection reaches streamText', ()
       createModel: () => captureToolsModel(seenTools),
       buildTools: (collector, _am, mode) =>
         buildGatewayTools(
-          { domain: minimalDomain(), writeToolsEnabled: true, approvalGuard: guard, contextMode: mode },
+          {
+            domain: minimalDomain(),
+            writeToolsEnabled: true,
+            approvalGuard: guard,
+            contextMode: mode
+          },
           collector
         ),
       persistTurn: () => {}
     }
-    // allow email_search (read) + email_flag (domain_write) + run_command (exec, matrix-stripped under
+    // allow email_list_filter (read) + email_flag (domain_write) + run_command (exec, matrix-stripped under
     // cron_headless → never reachable).
-    const spec = makeSpec({ toolPolicy: { allowedTools: ['email_search', 'email_flag', 'run_command'] } })
+    const spec = makeSpec({
+      toolPolicy: { allowedTools: ['email_list_filter', 'email_flag', 'run_command'] }
+    })
     await runHeadlessAgent(cfg, { jobId: 7, spec, sessionId: null }, new AbortController().signal)
     expect(seenTools.length).toBeGreaterThan(0)
-    expect(seenTools[0].sort()).toEqual(['email_flag', 'email_search'])
+    expect(seenTools[0].sort()).toEqual(['email_flag', 'email_list_filter'])
   })
 })
 
@@ -438,7 +459,11 @@ describe('runHeadlessAgent — per-agent exec grant + fail-closed allowedTools (
         grantExec: true
       } as AgentRunSpec['toolPolicy']
     })
-    await runHeadlessAgent(grantAwareCfg(seenTools), { jobId: 7, spec, sessionId: null }, new AbortController().signal)
+    await runHeadlessAgent(
+      grantAwareCfg(seenTools),
+      { jobId: 7, spec, sessionId: null },
+      new AbortController().signal
+    )
     expect(seenTools.length).toBeGreaterThan(0)
     const names = seenTools[0]
     expect(names).toContain('run_command')
@@ -450,8 +475,8 @@ describe('runHeadlessAgent — per-agent exec grant + fail-closed allowedTools (
     // reduces)
     expect(names).not.toContain('skill_install')
     expect(names).not.toContain('web_fetch')
-    // and the intersection still narrows the non-exec face (email_search not allowed → absent)
-    expect(names).not.toContain('email_search')
+    // and the intersection still narrows the non-exec face (email_list_filter not allowed → absent)
+    expect(names).not.toContain('email_list_filter')
   })
 
   test('grant OFF + the same allowedTools → exec tools absent (the matrix floor, not the allow-list, gates exec)', async () => {
@@ -459,7 +484,11 @@ describe('runHeadlessAgent — per-agent exec grant + fail-closed allowedTools (
     const spec = makeSpec({
       toolPolicy: { allowedTools: ['email_flag'] } as AgentRunSpec['toolPolicy']
     })
-    await runHeadlessAgent(grantAwareCfg(seenTools), { jobId: 7, spec, sessionId: null }, new AbortController().signal)
+    await runHeadlessAgent(
+      grantAwareCfg(seenTools),
+      { jobId: 7, spec, sessionId: null },
+      new AbortController().signal
+    )
     const names = seenTools[0]
     expect(names).not.toContain('run_command')
     expect(names).not.toContain('file_read')
@@ -475,7 +504,11 @@ describe('runHeadlessAgent — per-agent exec grant + fail-closed allowedTools (
         grantExec: 'yes'
       } as unknown as AgentRunSpec['toolPolicy']
     })
-    await runHeadlessAgent(grantAwareCfg(seenTools), { jobId: 7, spec, sessionId: null }, new AbortController().signal)
+    await runHeadlessAgent(
+      grantAwareCfg(seenTools),
+      { jobId: 7, spec, sessionId: null },
+      new AbortController().signal
+    )
     expect(seenTools[0]).not.toContain('run_command')
     expect(seenTools[0]).toContain('email_flag')
   })
@@ -485,7 +518,11 @@ describe('runHeadlessAgent — per-agent exec grant + fail-closed allowedTools (
     const spec = makeSpec({
       toolPolicy: { allowedTools: [], grantExec: true } as AgentRunSpec['toolPolicy']
     })
-    await runHeadlessAgent(grantAwareCfg(seenTools), { jobId: 7, spec, sessionId: null }, new AbortController().signal)
+    await runHeadlessAgent(
+      grantAwareCfg(seenTools),
+      { jobId: 7, spec, sessionId: null },
+      new AbortController().signal
+    )
     expect(seenTools[0].sort()).toEqual(['file_read', 'file_write', 'run_command'])
   })
 
@@ -500,7 +537,11 @@ describe('runHeadlessAgent — per-agent exec grant + fail-closed allowedTools (
         grantWeb: 'gated'
       } as unknown as AgentRunSpec['toolPolicy']
     })
-    await runHeadlessAgent(grantAwareCfg(seenTools), { jobId: 7, spec, sessionId: null }, new AbortController().signal)
+    await runHeadlessAgent(
+      grantAwareCfg(seenTools),
+      { jobId: 7, spec, sessionId: null },
+      new AbortController().signal
+    )
     const names = seenTools[0]
     expect(names).toContain('web_fetch')
     expect(names).toContain('web_search')
@@ -515,21 +556,33 @@ describe('runHeadlessAgent — per-agent exec grant + fail-closed allowedTools (
     const spec = makeSpec({
       toolPolicy: { allowedTools: [], grantWeb: 'open' } as unknown as AgentRunSpec['toolPolicy']
     })
-    await runHeadlessAgent(grantAwareCfg(seenTools), { jobId: 7, spec, sessionId: null }, new AbortController().signal)
+    await runHeadlessAgent(
+      grantAwareCfg(seenTools),
+      { jobId: 7, spec, sessionId: null },
+      new AbortController().signal
+    )
     expect(seenTools[0].sort()).toEqual(['web_fetch', 'web_search'])
 
     const seenJunk: string[][] = []
     const junkSpec = makeSpec({
       toolPolicy: { allowedTools: [], grantWeb: 'yes' } as unknown as AgentRunSpec['toolPolicy']
     })
-    await runHeadlessAgent(grantAwareCfg(seenJunk), { jobId: 8, spec: junkSpec, sessionId: null }, new AbortController().signal)
+    await runHeadlessAgent(
+      grantAwareCfg(seenJunk),
+      { jobId: 8, spec: junkSpec, sessionId: null },
+      new AbortController().signal
+    )
     expect(seenJunk[0]).toEqual([])
   })
 
   test('allowedTools MISSING (malformed spec, no grant) → the model sees ZERO tools (fail-closed to [], §5.1)', async () => {
     const seenTools: string[][] = []
     const spec = makeSpec({ toolPolicy: {} })
-    await runHeadlessAgent(grantAwareCfg(seenTools), { jobId: 7, spec, sessionId: null }, new AbortController().signal)
+    await runHeadlessAgent(
+      grantAwareCfg(seenTools),
+      { jobId: 7, spec, sessionId: null },
+      new AbortController().signal
+    )
     expect(seenTools.length).toBeGreaterThan(0)
     expect(seenTools[0]).toEqual([])
   })
@@ -543,9 +596,17 @@ describe('runHeadlessAgent — per-agent exec grant + fail-closed allowedTools (
   test('DEFAULT mount set + default allowed set → tool face byte-identical to the W3-1a face', async () => {
     // Mirrors Python DEFAULT_CUSTOM_AGENT_ALLOWED_TOOLS (agent_runs.py) — the projected wire value.
     const defaultAllowed = [
-      'email_search', 'email_search_fulltext', 'email_get', 'email_body',
-      'email_list_thread', 'email_search_attachments',
-      'email_flag', 'email_archive', 'email_pin', 'email_resync', 'email_draft_reply'
+      'email_list_filter',
+      'email_search_fulltext',
+      'email_get',
+      'email_body',
+      'email_list_thread',
+      'email_search_attachments',
+      'email_flag',
+      'email_archive',
+      'email_pin',
+      'email_resync',
+      'email_draft_reply'
     ]
     const seenDefault: string[][] = []
     await runHeadlessAgent(
@@ -553,7 +614,10 @@ describe('runHeadlessAgent — per-agent exec grant + fail-closed allowedTools (
       {
         jobId: 7,
         spec: makeSpec({
-          toolPolicy: { allowedTools: defaultAllowed, skills: ['email', 'search'] } as unknown as AgentRunSpec['toolPolicy']
+          toolPolicy: {
+            allowedTools: defaultAllowed,
+            skills: ['email', 'search']
+          } as unknown as AgentRunSpec['toolPolicy']
         }),
         sessionId: null
       },
@@ -566,7 +630,10 @@ describe('runHeadlessAgent — per-agent exec grant + fail-closed allowedTools (
         jobId: 8,
         spec: makeSpec({
           // every mapped family mounted = the gating identity pass = the W3-1a assembly
-          toolPolicy: { allowedTools: defaultAllowed, skills: ['email', 'search', 'report'] } as unknown as AgentRunSpec['toolPolicy']
+          toolPolicy: {
+            allowedTools: defaultAllowed,
+            skills: ['email', 'search', 'report']
+          } as unknown as AgentRunSpec['toolPolicy']
         }),
         sessionId: null
       },
@@ -580,14 +647,18 @@ describe('runHeadlessAgent — per-agent exec grant + fail-closed allowedTools (
     const seenTools: string[][] = []
     const spec = makeSpec({
       toolPolicy: {
-        allowedTools: ['email_body', 'email_search_fulltext', 'email_search', 'report_list'],
+        allowedTools: ['email_body', 'email_search_fulltext', 'email_list_filter', 'report_list'],
         skills: ['email'] // search + report NOT mounted
       } as unknown as AgentRunSpec['toolPolicy']
     })
-    await runHeadlessAgent(grantAwareCfg(seenTools), { jobId: 7, spec, sessionId: null }, new AbortController().signal)
+    await runHeadlessAgent(
+      grantAwareCfg(seenTools),
+      { jobId: 7, spec, sessionId: null },
+      new AbortController().signal
+    )
     const names = seenTools[0]
     expect(names).toContain('email_body') // mounted + allowed
-    expect(names).toContain('email_search') // collision-exempt floor, allowed
+    expect(names).toContain('email_list_filter') // email family mounted + allowed
     expect(names).not.toContain('email_search_fulltext') // allowed but unmounted → absent
     expect(names).not.toContain('report_list') // allowed but unmounted → absent
   })
@@ -598,7 +669,9 @@ describe('runHeadlessAgent — per-agent exec grant + fail-closed allowedTools (
       baseUrl: 'https://crs.example/api',
       apiKey: 'sk-test',
       model: 'claude-sonnet-4-6',
-      buildTools: () => ({ email_flag: tool({ description: 'b', inputSchema: z.object({}), execute: async () => ({}) }) })
+      buildTools: () => ({
+        email_flag: tool({ description: 'b', inputSchema: z.object({}), execute: async () => ({}) })
+      })
     }
     const wrapped = wrapCfgForAgentRun(base, { agentId: 'dms' })
     // skills mirrors allowedTools' []-normalization at the one funnel (S6 W3 §5.1 fail-closed)
@@ -643,7 +716,8 @@ describe('runHeadlessAgent — drain outcomes', () => {
       baseUrl: 'https://crs.example/api',
       apiKey: 'sk-test',
       model: 'claude-sonnet-4-6',
-      createModel: () => mockToolCallModel('email_draft_reply', { internal_id: 5, body_markdown: 'x' }),
+      createModel: () =>
+        mockToolCallModel('email_draft_reply', { internal_id: 5, body_markdown: 'x' }),
       buildTools: (collector, _am, mode) =>
         buildGatewayTools(
           {
@@ -677,7 +751,7 @@ describe('runHeadlessAgent — drain outcomes', () => {
     const entry = stash.peek('tc1')
     expect(entry?.agentRunContext).toEqual({
       agentId: 'dms',
-      allowedTools: ['email_search', 'email_body', 'email_flag', 'email_draft_reply'],
+      allowedTools: ['email_list_filter', 'email_body', 'email_flag', 'email_draft_reply'],
       skills: [], // makeSpec carries no skills → [] fail-closed, frozen verbatim (S6 W3 §8)
       modeGrants: { exec: false, web: 'off' },
       jobId: 7
@@ -694,10 +768,16 @@ describe('runHeadlessAgent — drain outcomes', () => {
       baseUrl: 'https://crs.example/api',
       apiKey: 'sk-test',
       model: 'claude-sonnet-4-6',
-      createModel: () => mockToolCallModel('email_draft_reply', { internal_id: 5, body_markdown: 'x' }),
+      createModel: () =>
+        mockToolCallModel('email_draft_reply', { internal_id: 5, body_markdown: 'x' }),
       buildTools: (collector, _am, mode) =>
         buildGatewayTools(
-          { domain: minimalDomain(), writeToolsEnabled: true, approvalGuard: guard, contextMode: mode },
+          {
+            domain: minimalDomain(),
+            writeToolsEnabled: true,
+            approvalGuard: guard,
+            contextMode: mode
+          },
           collector
         ),
       // S6 W2 (P8) — island OFF but the custom-agents lifecycle wires the stash: the STASH step follows
@@ -780,7 +860,11 @@ describe('runHeadlessAgent — drain outcomes', () => {
         buildGatewayTools({ domain: minimalDomain(), contextMode: mode }, collector),
       persistTurn: () => {}
     }
-    const result = await runHeadlessAgent(cfg, { jobId: 7, spec: makeSpec(), sessionId: null }, ac.signal)
+    const result = await runHeadlessAgent(
+      cfg,
+      { jobId: 7, spec: makeSpec(), sessionId: null },
+      ac.signal
+    )
     expect(result.ok).toBe(false)
     expect(result.outcome).toBe('error')
     expect(result.error?.code).toBe('E_BUDGET_TIME')

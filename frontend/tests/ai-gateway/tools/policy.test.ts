@@ -88,7 +88,7 @@ describe('classOfTool — single source + fail-closed', () => {
     expect(classOfTool('web_fetch')).toBe('web')
     expect(classOfTool('web_search')).toBe('web')
     expect(classOfTool('email_prepare_send')).toBe('outbound')
-    expect(classOfTool('email_search')).toBe('read')
+    expect(classOfTool('email_list_filter')).toBe('read')
   })
 
   test('an unclassified name fail-closes to exec (strictest class)', () => {
@@ -349,7 +349,7 @@ describe('applyContextModePolicy', () => {
 
   test('an unclassified tool is dropped outside manual_chat (fail-closed via exec)', () => {
     const tools = buildAllTools('manual_chat')
-    const withUnknown = { ...tools, some_future_tool: tools.email_search }
+    const withUnknown = { ...tools, some_future_tool: tools.email_list_filter }
     const filtered = applyContextModePolicy(withUnknown, 'untrusted_trigger')
     expect(filtered.some_future_tool).toBeUndefined()
   })

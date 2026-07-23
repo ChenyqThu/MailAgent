@@ -26,8 +26,8 @@ const HEADLESS_TOOL_OPTIONS: AgentRunToolOption[] = [
   { name: 'discover_skills', class: 'read' },
   { name: 'email_body', class: 'read' },
   { name: 'email_get', class: 'read' },
+  { name: 'email_list_filter', class: 'read' },
   { name: 'email_list_thread', class: 'read' },
-  { name: 'email_search', class: 'read' },
   { name: 'email_search_attachments', class: 'read' },
   { name: 'email_search_fulltext', class: 'read' },
   { name: 'kos_query', class: 'read' },
@@ -69,11 +69,11 @@ describe('toolGroups — R3 工具分组常量', () => {
   test('空组不输出；组内顺序 = 常量声明的语义顺序（非输入顺序）', () => {
     const groups = groupToolOptions([
       { name: 'email_body', class: 'read' },
-      { name: 'email_search', class: 'read' }
+      { name: 'email_list_filter', class: 'read' }
     ])
     expect(groups).toHaveLength(1)
     expect(groups[0].id).toBe('emailRead')
-    expect(groups[0].tools.map((t) => t.name)).toEqual(['email_search', 'email_body'])
+    expect(groups[0].tools.map((t) => t.name)).toEqual(['email_list_filter', 'email_body'])
   })
 
   test('i18n：zh/en 组标签 key 齐全（含 fallback other）', () => {

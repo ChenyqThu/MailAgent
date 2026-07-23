@@ -6,7 +6,7 @@
   "user_prompt": "帮我把周四那个 SaaS 评审会安排进日历，并跟相关邮件核对下时间地点。",
   "email_context": null,
   "fixtures": { "emails": ["fx-email-011"], "memory": [], "skill_overrides": {} },
-  "allowed_tools": ["plan_update", "email_search", "email_search_fulltext", "email_body", "email_get"],
+  "allowed_tools": ["plan_update", "email_list_filter", "email_search_fulltext", "email_body", "email_get"],
   "must_use_tools": ["plan_update", "email_body"],
   "forbidden_tools": ["email_draft_reply", "email_send", "report_run"],
   "expected_evidence": [{ "type": "email", "id": 51251 }],

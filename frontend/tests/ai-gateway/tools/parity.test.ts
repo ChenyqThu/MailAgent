@@ -22,12 +22,12 @@ const EMAIL_ITEMS = [
   { internal_id: 2, subject: 'redis config', sender: 'b@x.test', date_received: '2026-06-02' }
 ]
 
-describe('snapshot — email_search', () => {
+describe('snapshot — email_list_filter', () => {
   test('output pins {count, items}', async () => {
     const gateway = createEmailReadTools(mockDomain(() => okEnvelope(EMAIL_ITEMS)))
 
     const input = { subject_contains: 'redis', limit: 10 }
-    const gatewayOut = await runTool(gateway.email_search, emailSearchSchema.parse(input))
+    const gatewayOut = await runTool(gateway.email_list_filter, emailSearchSchema.parse(input))
 
     expect(gatewayOut).toEqual({ count: 2, items: EMAIL_ITEMS })
   })

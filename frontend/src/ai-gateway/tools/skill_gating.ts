@@ -22,8 +22,10 @@ import type { ToolSet } from 'ai'
  *  实现 legacy 的「任一 advertised owner 即保留」通用语义，以防将来别名工具。
  *
  *  门控范围 = email/search/report 三 skill 的读工具 + notion_agent skill 的 notion_agent_chat（parity）。
- *  collision-exempt 的 email_search + 无 skill 归属的 core（kos/memory/write/send）永不门控（见下两个
- *  集合）；calendar skill 在 gateway 无工具，无需列。
+ *  collision-exempt 集合现为空（PR-D 起：gateway 元数据过滤工具 email_search 改名 email_list_filter
+ *  后不再与 Python builtin search skill 的 email_search 撞名，特例退役 —— email_list_filter 归入 email
+ *  skill 读族正常门控）；无 skill 归属的 core（kos/memory/write/send）仍永不门控（见下两个集合）；
+ *  calendar skill 在 gateway 无工具，无需列。
  *
  *  🔴 notion_agent（task 07-21）不同于 CORE_UNGATED 的 web/calendar：它是**skill-gated** —— Settings →
  *  Custom AI → Skills 的 notion_agent 开关（advertisedSkills）就是用户的开/关。skill default_enabled=False，
@@ -31,6 +33,9 @@ import type { ToolSet } from 'ai'
  *  MAILAGENT_NOTION_AGENT_TOOL 兜底）。 */
 export const GATEWAY_SKILL_TOOLS: Record<string, readonly string[]> = {
   email: [
+    // metadata list-filter read (renamed from the former collision-exempt email_search, PR-D) —
+    // now gates with the email family like its sibling reads.
+    'email_list_filter',
     'email_get',
     'email_body',
     'email_list_thread',
@@ -45,10 +50,11 @@ export const GATEWAY_SKILL_TOOLS: Record<string, readonly string[]> = {
   notion_agent: ['notion_agent_chat']
 }
 
-/** 跨 skill 同名异义、不可被 skill toggle 误删的工具（复刻 legacy COLLISION_EXEMPT_TOOL_NAMES）：
- *  builtin email_search 是元数据过滤（agent 主「找邮件」工具），manifest search skill 的 email_search
- *  是 FTS body —— 关 search skill 不该殃及 builtin 元数据搜索。 */
-export const COLLISION_EXEMPT_GATEWAY_TOOLS: ReadonlySet<string> = new Set(['email_search'])
+/** 跨 skill 同名异义、不可被 skill toggle 误删的工具（复刻 legacy COLLISION_EXEMPT_TOOL_NAMES）。
+ *  PR-D 起为空：gateway 元数据过滤工具 email_search 改名 email_list_filter 后不再与 Python builtin
+ *  search skill 的 email_search（FTS body）撞名，唯一的 collision-exempt 成员随之退役。**机制保留**
+ *  —— 将来若再出现跨 skill 同名异义工具，往这里加即可（applySkillGating 仍读它）。 */
+export const COLLISION_EXEMPT_GATEWAY_TOOLS: ReadonlySet<string> = new Set([])
 
 /** 不属于任何 skill 的 core 工具，永不被 skill→tool 门控。write/send 另有 writeToolsEnabled/sendToolEnabled
  *  + 审批独立保护，本就不在门控论域。本集合是 skill_gating.test 完整性守护的「显式 core 白名单」一腿：

@@ -14,7 +14,7 @@ export const TOOL_GROUPS: ReadonlyArray<{ id: string; tools: readonly string[] }
   {
     id: 'emailRead',
     tools: [
-      'email_search',
+      'email_list_filter',
       'email_get',
       'email_body',
       'email_list_thread',

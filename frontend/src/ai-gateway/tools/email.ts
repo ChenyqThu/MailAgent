@@ -58,13 +58,15 @@ export function createEmailReadTools(
     run: (input: I, signal: AbortSignal | undefined) => Promise<unknown>
   }): Tool => auditedReadTool(opts, collector)
 
-  const email_search = make({
-    name: 'email_search',
+  const email_list_filter = make({
+    name: 'email_list_filter',
     description:
-      'Search emails by subject substring, sender substring, mailbox, date range, or flag state. ' +
-      'Returns matching internal_id + subject + sender + date + flags. ' +
-      'Use when the user asks "find emails from X" / "show last week\'s mail about Y" / ' +
-      '"list flagged emails since DATE". Does NOT search email body — use email_search_fulltext for that.',
+      'Filter the email LIST by structured metadata ONLY — subject substring, sender ' +
+      'substring, mailbox, date range, read/flag state. Returns matching internal_id + ' +
+      'subject + sender + date + flags. This is a metadata list filter, NOT a content ' +
+      'search: it does NOT look inside email bodies. To search body text / keywords / ' +
+      'topics use email_search_fulltext instead. Use email_list_filter when the user asks ' +
+      '"find emails from X" / "show last week\'s mail from Y" / "list flagged emails since DATE".',
     inputSchema: emailSearchSchema,
     run: async (input, signal) => {
       const items = await domain.searchEmails(
@@ -97,7 +99,8 @@ export function createEmailReadTools(
       'natural CJK expansion. Examples: from:alice redis; 产品评审 has:attachment ' +
       'newer_than:7d; attachment:合同 is:unread; filename:roadmap; ' +
       'subject:"weekly report" -from:noreply. Returns ranked hits with snippet + ' +
-      'sender + date (bm25 rank, smaller = more relevant).',
+      'sender + date (bm25 rank, smaller = more relevant). For metadata-only list ' +
+      'filtering (sender/subject/mailbox/date/flag, no body text) use email_list_filter instead.',
     inputSchema: emailSearchFulltextSchema,
     run: async (input, signal) => {
       const result = await domain.searchEmailsFulltext(
@@ -146,7 +149,7 @@ export function createEmailReadTools(
     description:
       'Read the markdown body of a single email. Capped at 12000 characters; ' +
       'longer bodies are truncated and a `…[truncated]` marker is appended. ' +
-      'Use after email_search / email_get when you need the actual content.',
+      'Use after email_list_filter / email_get when you need the actual content.',
     inputSchema: emailBodySchema,
     run: async (input, signal) => {
       const data = await domain.getEmailBody(input.internal_id, signal)
@@ -171,8 +174,8 @@ export function createEmailReadTools(
     name: 'email_list_thread',
     description:
       'List every email in the same conversation thread by thread_id, ordered oldest-first. ' +
-      'Returns the same metadata shape as email_search items. ' +
-      'thread_id is usually pulled from a prior email_get / email_search result.',
+      'Returns the same metadata shape as email_list_filter items. ' +
+      'thread_id is usually pulled from a prior email_get / email_list_filter result.',
     inputSchema: emailListThreadSchema,
     run: async (input, signal) => {
       const items = await domain.listEmailsByThread(input.thread_id, signal)
@@ -226,7 +229,7 @@ export function createEmailReadTools(
       'the owning email (sender, date, subject). Use to discover which attachments a thread ' +
       'carries; read an attachment’s extracted text with email_attachment_text. Does NOT ' +
       'return attachment content. thread_id is usually pulled from a prior email_get / ' +
-      'email_search result.',
+      'email_list_filter result.',
     inputSchema: emailThreadAttachmentsSchema,
     run: async (input, signal) => {
       const data = await domain.threadAttachments(input.thread_id, signal)
@@ -276,7 +279,7 @@ export function createEmailReadTools(
   })
 
   return {
-    email_search,
+    email_list_filter,
     email_search_fulltext,
     email_get,
     email_body,

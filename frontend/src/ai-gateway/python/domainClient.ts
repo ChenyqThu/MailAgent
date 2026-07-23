@@ -62,7 +62,7 @@ export interface DomainClientConfig {
   fetchImpl?: typeof fetch
 }
 
-/** Search filters for the metadata-filter email list (email_search tool). */
+/** Search filters for the metadata-filter email list (email_list_filter tool). */
 export interface DomainEmailListOpts {
   subject?: string
   fromAddr?: string
@@ -556,7 +556,7 @@ export class MailAgentDomainClient {
 
   // ── read primitives (one per gateway read tool) ──────────────────────────
 
-  /** email_search — metadata-filter list. GET /email/list (camelCase alias query). */
+  /** email_list_filter — metadata-filter list. GET /email/list (camelCase alias query). */
   searchEmails(
     opts: DomainEmailListOpts,
     signal?: AbortSignal

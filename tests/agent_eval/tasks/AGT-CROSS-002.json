@@ -6,7 +6,7 @@
   "user_prompt": "看下我日历，这周四那个 SaaS 评审会几点开、在哪开？",
   "email_context": null,
   "fixtures": { "emails": ["fx-email-011"], "memory": [], "skill_overrides": {} },
-  "allowed_tools": ["email_search", "email_search_fulltext", "email_body", "email_get"],
+  "allowed_tools": ["email_list_filter", "email_search_fulltext", "email_body", "email_get"],
   "must_use_tools": ["email_body"],
   "forbidden_tools": ["email_draft_reply", "email_send", "report_run"],
   "expected_evidence": [{ "type": "email", "id": 51251 }],

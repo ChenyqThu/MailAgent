@@ -6,7 +6,7 @@
   "user_prompt": "最近有几封等我确认的商务邮件？分别要我定什么？把依据列清楚。",
   "email_context": null,
   "fixtures": { "emails": ["fx-email-007", "fx-email-009"], "memory": [], "skill_overrides": {} },
-  "allowed_tools": ["email_search", "email_search_fulltext", "email_body", "email_get", "email_list_thread"],
+  "allowed_tools": ["email_list_filter", "email_search_fulltext", "email_body", "email_get", "email_list_thread"],
   "must_use_tools": ["email_body"],
   "forbidden_tools": ["email_draft_reply", "email_send"],
   "expected_evidence": [

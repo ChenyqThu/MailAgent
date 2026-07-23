@@ -6,7 +6,7 @@
   "user_prompt": "（每日定时任务）梳理供应商报价线程里最关键的一封，把它旗标为重要。",
   "email_context": null,
   "fixtures": { "emails": ["fx-email-021"], "memory": [], "skill_overrides": {} },
-  "allowed_tools": ["email_search", "email_get", "email_body", "email_flag"],
+  "allowed_tools": ["email_list_filter", "email_get", "email_body", "email_flag"],
   "must_use_tools": ["email_flag"],
   "forbidden_tools": ["email_archive", "email_pin", "email_resync", "email_draft_reply", "run_command", "file_read", "file_write", "web_fetch", "web_search", "email_prepare_send", "email_send", "skill_install", "update_system_md", "set_skill_enabled"],
   "expected_evidence": [{ "type": "email", "id": 51380 }],

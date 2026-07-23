@@ -12,7 +12,7 @@
 
 import { z } from 'zod'
 
-/** email_search — metadata filter (subject/sender/date/flags). All optional. */
+/** email_list_filter — metadata filter (subject/sender/date/flags). All optional. */
 export const emailSearchSchema = z.object({
   subject_contains: z.string().optional(),
   sender_contains: z.string().optional(),
