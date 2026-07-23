@@ -35,20 +35,23 @@ export function buildSearchHint(returned: number, hasMore: boolean): string {
 
 /**
  * 搜索批次2 PR-B（D4）—— email_search_attachments 的自我收敛 hint。与 buildSearchHint 同款
- * 教学式截断/空结果引导，但措辞对齐这个工具的实际能力面：/api/attachment/search **不跑 DSL
- * 解析**（没有 from:/after: 等字段语法，只有 mailbox/since/until 三个结构化参数），命中后
- * 读全文用 email_attachment_text（不是 email_body）。不要在 hint 里承诺该端点没有的能力。
+ * 教学式截断/空结果引导，但措辞对齐这个工具的实际能力面：批次3 PR-E 起 /api/attachment/search
+ * 内核已接 trigram —— **搜附件抽取正文 + 文件名（含中文子串）**，但仍**不跑 DSL 解析**（没有
+ * from:/after: 等字段语法，只有 mailbox/since/until 三个结构化参数），命中后读全文用
+ * email_attachment_text（不是 email_body）。不要在 hint 里承诺该端点没有的能力。
  */
 export function buildAttachmentSearchHint(returned: number, hasMore: boolean): string {
   if (returned === 0) {
     return (
       '0 命中：放宽关键词、换同义词，或去掉 mailbox/since/until 缩小范围后重试一次；' +
-      '本工具只搜附件抽取正文、不搜文件名也不认 DSL——要按文件名或中文子串找附件时改用 ' +
-      'email_search_fulltext 的 attachment:/filename: 字段。仍空则如实回报「没找到」，不要编造。 ' +
+      '本工具搜附件抽取正文与文件名（含中文子串），但不认 DSL 语法——要按 from/主题等 ' +
+      '结构化条件组合过滤时改用 email_search_fulltext 的 attachment:/filename: 字段。' +
+      '仍空则如实回报「没找到」，不要编造。 ' +
       '/ No matches: broaden keywords, try a synonym, or drop the mailbox/since/until ' +
-      'narrowing and retry once. This tool searches extracted attachment text only (no ' +
-      'filename, no DSL) — to match by filename or a CJK substring, use email_search_fulltext ' +
-      'with its attachment:/filename: fields. If still empty, report honestly that nothing was found.'
+      'narrowing and retry once. This tool searches extracted attachment text AND filenames ' +
+      '(including CJK substrings) but does not parse DSL — to combine structural filters ' +
+      '(from/subject/…), use email_search_fulltext with its attachment:/filename: fields. ' +
+      'If still empty, report honestly that nothing was found.'
     )
   }
   if (hasMore) {

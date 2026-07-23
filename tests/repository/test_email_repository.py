@@ -1844,10 +1844,12 @@ class TestSearchAttachmentTexts:
     def test_smart_cjk_search_finds_chunked_token(
         self, repo: EmailRepository, fresh_db: Path
     ):
-        """raw '产品' chunk-token 命不中, smart prefix 改写后能命中."""
+        """smart wrapper 2 字 CJK '产品' 命中 (批次3 PR-E 后走内核 trigram LIKE 兜底).
+
+        wrapper 不再自己 pre-transform —— 传原始 '产品' 给内核, trigram_enabled 时走
+        2 字 CJK 的 (filename OR text_content) LIKE 分支命中 plan.docx。
+        """
         a_redis, a_plan, a_other = self._seed(repo, fresh_db)
-        # raw 命不中 (假设 plan.docx text 整 chunk 不以 '产品' 开头 token; 实际
-        # 我们 fixture 用空格分隔 → token = '产品' 完全 exact, raw 也能命中)
         smart_hits = repo.search_attachment_texts_smart("产品", limit=10)
         smart_ids = [h.attachment_id for h in smart_hits]
         assert a_plan in smart_ids
@@ -1877,7 +1879,9 @@ class TestSearchAttachmentTexts:
 
     def test_invalid_fts_query_returns_empty(self, repo: EmailRepository, fresh_db: Path):
         self._seed(repo, fresh_db)
-        assert repo.search_attachment_texts('"unbalanced') == []
+        # raw=True 直通老 unicode61 MATCH —— 未闭合引号 = FTS5 语法错误 → OperationalError
+        # 吞掉返回 [] (D2 保留的既有语法错误吞行为)。
+        assert repo.search_attachment_texts('"unbalanced', raw=True) == []
 
     def test_notion_url_populated(self, repo: EmailRepository, fresh_db: Path):
         a_redis, _, _ = self._seed(repo, fresh_db)
@@ -1904,3 +1908,263 @@ class TestSearchAttachmentTexts:
         # 即使 text='secret token redis hidden', 因 status=failed 不入 FTS
         hits = repo.search_attachment_texts("secret", limit=10)
         assert id_map["encrypted.pdf"] not in [h.attachment_id for h in hits]
+
+
+class TestSearchAttachmentTextsTrigram:
+    """批次3 PR-E: search_attachment_texts 路由内化 (raw + trigram) 行为 pin。
+
+    repo fixture 默认 trigram_enabled=True (config); 这些用例显式构造 EmailRepository
+    精确控 flag (trigram_enabled=True/False), 绕开 config 懒读。
+    """
+
+    # 镜像 sync_store.py v39 迁移块注释的回滚脚本 (DROP 3 trigger + DROP 表)。
+    _DROP_V39 = """
+        DROP TRIGGER IF EXISTS email_attachment_fts_trigram_insert;
+        DROP TRIGGER IF EXISTS email_attachment_fts_trigram_update;
+        DROP TRIGGER IF EXISTS email_attachment_fts_trigram_delete;
+        DROP TABLE IF EXISTS email_attachment_fts_trigram;
+    """
+
+    _XLSX_CT = (
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+
+    def _seed(self, fresh_db: Path, store: AttachmentStore):
+        repo = EmailRepository(db_path=str(fresh_db), attachment_store=store)
+        # 870: 非空格 CJK 正文 (unicode61 整段一个 token; "合同"/"劳动合同" 仅子串) +
+        #      CJK 文件名 + 一个拉丁 token firmware (供 MATCH+LIKE 混合 / raw 用)。
+        _insert_metadata_full(
+            fresh_db, 870, subject="合同邮件", sender="alice@x",
+            mailbox="收件箱", date_received="2026-05-10T10:00:00+08:00",
+            notion_page_id="page-870",
+        )
+        m0 = repo.commit_email_with_body(
+            870, BodyPayload(html="", markdown="body", body_format="html"),
+            [AttachmentPayload(filename="劳动合同书.pdf", content=b"%PDF",
+                               content_type="application/pdf")],
+        )
+        repo.commit_attachment_text(
+            m0["劳动合同书.pdf"],
+            text="本劳动合同条款 firmware 升级说明事项", extractor="pypdf",
+        )
+        # 871: 拉丁正文 (含 firmware) + 拉丁文件名 (roadmap 只在文件名 → 证文件名列命中)。
+        _insert_metadata_full(
+            fresh_db, 871, subject="plan", sender="bob@x",
+            mailbox="收件箱", date_received="2026-05-12T10:00:00+08:00",
+        )
+        m1 = repo.commit_email_with_body(
+            871, BodyPayload(html="", markdown="body", body_format="html"),
+            [AttachmentPayload(filename="roadmap_v2.xlsx", content=b"PK",
+                               content_type=self._XLSX_CT)],
+        )
+        repo.commit_attachment_text(
+            m1["roadmap_v2.xlsx"],
+            text="Q3 planning and Omada firmware upgrade notes", extractor="xlsx",
+        )
+        # 872: 同一封两个附件都含「合同」→ 证附件级粒度 (各自出现, 不 email 去重)。
+        _insert_metadata_full(
+            fresh_db, 872, subject="双附件", sender="carol@x",
+            mailbox="发件箱", date_received="2026-05-14T10:00:00+08:00",
+        )
+        m2 = repo.commit_email_with_body(
+            872, BodyPayload(html="", markdown="body", body_format="html"),
+            [AttachmentPayload(filename="采购合同A.pdf", content=b"%PDF",
+                               content_type="application/pdf"),
+             AttachmentPayload(filename="服务合同B.pdf", content=b"%PDF",
+                               content_type="application/pdf")],
+        )
+        repo.commit_attachment_text(
+            m2["采购合同A.pdf"], text="采购合同正文第一部分内容", extractor="pypdf",
+        )
+        repo.commit_attachment_text(
+            m2["服务合同B.pdf"], text="服务合同正文第二部分内容", extractor="pypdf",
+        )
+        # 873: 空格分隔 CJK 正文 (unicode61 smart '报告*' prefix 可命中) → flag-off /
+        #      缺表 fallback 的等价 pin 用。
+        _insert_metadata_full(
+            fresh_db, 873, subject="季度", sender="dave@x",
+            mailbox="收件箱", date_received="2026-05-16T10:00:00+08:00",
+        )
+        m3 = repo.commit_email_with_body(
+            873, BodyPayload(html="", markdown="body", body_format="html"),
+            [AttachmentPayload(filename="季度总结.pdf", content=b"%PDF",
+                               content_type="application/pdf")],
+        )
+        repo.commit_attachment_text(
+            m3["季度总结.pdf"], text="季度 报告 摘要 内容说明", extractor="pypdf",
+        )
+        return m0, m1, m2, m3
+
+    def test_cjk_2char_like_hits_filename_and_body_attachment_level(
+        self, fresh_db: Path, store: AttachmentStore
+    ):
+        """2 字 CJK '合同' 走 trigram LIKE: 命中文件名子串 + 正文子串; 附件级 (872 的两个
+        附件各自出现); 纯 LIKE → rank None + snippet fallback 非空。"""
+        m0, m1, m2, m3 = self._seed(fresh_db, store)
+        repo = EmailRepository(db_path=str(fresh_db), trigram_enabled=True)
+        hits = repo.search_attachment_texts("合同", limit=20)
+        att_ids = {h.attachment_id for h in hits}
+        assert m0["劳动合同书.pdf"] in att_ids          # 文件名 + 正文子串
+        assert m2["采购合同A.pdf"] in att_ids           # 附件级: 同邮件两个附件都在
+        assert m2["服务合同B.pdf"] in att_ids
+        assert m1["roadmap_v2.xlsx"] not in att_ids     # 无 合同
+        for h in hits:
+            assert h.rank is None                       # 纯 LIKE 无 bm25
+            assert h.snippet                            # fallback text[:80] 非空
+
+    def test_cjk_2char_like_orders_by_date_desc(
+        self, fresh_db: Path, store: AttachmentStore
+    ):
+        """纯 LIKE 查询按 date_received DESC 排序 (872=5/14 先于 870=5/10)。"""
+        m0, m1, m2, m3 = self._seed(fresh_db, store)
+        repo = EmailRepository(db_path=str(fresh_db), trigram_enabled=True)
+        iids = [h.internal_id for h in repo.search_attachment_texts("合同", limit=20)]
+        assert iids.index(872) < iids.index(870)
+
+    def test_cjk_ge3_match_bm25_and_snippet_highlight(
+        self, fresh_db: Path, store: AttachmentStore
+    ):
+        """≥3 字 CJK '劳动合同' 走 trigram MATCH: rank 为 float (bm25) + snippet <mark> 高亮。"""
+        m0, m1, m2, m3 = self._seed(fresh_db, store)
+        repo = EmailRepository(db_path=str(fresh_db), trigram_enabled=True)
+        hits = repo.search_attachment_texts("劳动合同", limit=20)
+        hit = next(h for h in hits if h.attachment_id == m0["劳动合同书.pdf"])
+        assert isinstance(hit.rank, float)
+        assert "<mark>" in hit.snippet
+
+    def test_match_path_attachment_level_granularity(
+        self, fresh_db: Path, store: AttachmentStore
+    ):
+        """MATCH 路径同样是附件级粒度 (验收补 pin): '合同正文' (≥3 MATCH) 命中 872 的
+        两个附件各自出现 (不做 email 级去重) —— 与 LIKE 路径的附件级 pin 对齐。"""
+        m0, m1, m2, m3 = self._seed(fresh_db, store)
+        repo = EmailRepository(db_path=str(fresh_db), trigram_enabled=True)
+        hits = repo.search_attachment_texts("合同正文", limit=20)
+        att_ids = {h.attachment_id for h in hits}
+        assert m2["采购合同A.pdf"] in att_ids
+        assert m2["服务合同B.pdf"] in att_ids
+        for h in hits:
+            assert isinstance(h.rank, float)            # MATCH → bm25
+
+    def test_structured_filters_apply_on_trigram_paths(
+        self, fresh_db: Path, store: AttachmentStore
+    ):
+        """mailbox/since/until 谓词在 trigram 两分支 (MATCH / 纯 LIKE) 上照常生效
+        (验收补 pin —— build_structured_filter_predicates 复用, D1 '零改动' 的行为面)。"""
+        m0, m1, m2, m3 = self._seed(fresh_db, store)
+        repo = EmailRepository(db_path=str(fresh_db), trigram_enabled=True)
+        # 纯 LIKE '合同' + mailbox=发件箱 → 只剩 872 的两个附件 (870 收件箱被滤掉)。
+        like_hits = repo.search_attachment_texts("合同", mailbox="发件箱", limit=20)
+        assert {h.attachment_id for h in like_hits} == {
+            m2["采购合同A.pdf"], m2["服务合同B.pdf"]
+        }
+        # MATCH '劳动合同' + mailbox=发件箱 → 空 (唯一命中 870 在收件箱)。
+        assert repo.search_attachment_texts(
+            "劳动合同", mailbox="发件箱", limit=20
+        ) == []
+        # 纯 LIKE '合同' + since 5/13 → 只剩 872 (5/14); 870 (5/10) 被滤掉。
+        since_hits = repo.search_attachment_texts(
+            "合同", since_date="2026-05-13", limit=20
+        )
+        assert {h.internal_id for h in since_hits} == {872}
+
+    def test_latin_ge3_match_hits_filename_only_column(
+        self, fresh_db: Path, store: AttachmentStore
+    ):
+        """拉丁 ≥3 'roadmap' MATCH 跨两列: 命中仅文件名含 roadmap 的附件 (正文无 roadmap)。"""
+        m0, m1, m2, m3 = self._seed(fresh_db, store)
+        repo = EmailRepository(db_path=str(fresh_db), trigram_enabled=True)
+        hits = repo.search_attachment_texts("roadmap", limit=20)
+        hit = next(
+            (h for h in hits if h.attachment_id == m1["roadmap_v2.xlsx"]), None
+        )
+        assert hit is not None
+        assert isinstance(hit.rank, float)              # MATCH → bm25
+
+    def test_mixed_match_and_like_and_intersection(
+        self, fresh_db: Path, store: AttachmentStore
+    ):
+        """混合 term (MATCH 'firmware' + LIKE '合同') AND 交集: 只命中同时含两者的 870。"""
+        m0, m1, m2, m3 = self._seed(fresh_db, store)
+        repo = EmailRepository(db_path=str(fresh_db), trigram_enabled=True)
+        hits = repo.search_attachment_texts("firmware 合同", limit=20)
+        assert {h.attachment_id for h in hits} == {m0["劳动合同书.pdf"]}
+        # AND 排他: 采购 (仅 872) + firmware (仅 870/871) → 无交集 → 空。
+        assert repo.search_attachment_texts("firmware 采购", limit=20) == []
+
+    def test_single_cjk_dropped_and_all_dropped_returns_empty(
+        self, fresh_db: Path, store: AttachmentStore
+    ):
+        """1 字 CJK term 丢弃 (不拦其他 term); 全 1 字 CJK → 全丢弃 → 空。"""
+        m0, m1, m2, m3 = self._seed(fresh_db, store)
+        repo = EmailRepository(db_path=str(fresh_db), trigram_enabled=True)
+        # '合' 丢弃、firmware 仍 MATCH → 870/871 命中 (证 1 字被丢而非致整条空)。
+        att_ids = {
+            h.attachment_id
+            for h in repo.search_attachment_texts("合 firmware", limit=20)
+        }
+        assert m0["劳动合同书.pdf"] in att_ids
+        assert m1["roadmap_v2.xlsx"] in att_ids
+        # 全 1 字 CJK → 全丢弃 → 空。
+        assert repo.search_attachment_texts("合 同", limit=20) == []
+
+    def test_raw_true_passthrough_bypasses_trigram(
+        self, fresh_db: Path, store: AttachmentStore
+    ):
+        """raw=True 直通老 unicode61 (不做 trigram 路由) —— 逐字节旧行为。
+
+        - 拉丁 token 'firmware' (空格分隔) → 命中。
+        - CJK 子串 '合同' (unicode61 整段一个 token) → 老路径命不中 (raw 不走 trigram),
+          与 raw=False 的 trigram LIKE 命中形成对照 (证 raw 绕过 trigram)。
+        """
+        m0, m1, m2, m3 = self._seed(fresh_db, store)
+        repo = EmailRepository(db_path=str(fresh_db), trigram_enabled=True)
+        raw_firmware = {
+            h.attachment_id
+            for h in repo.search_attachment_texts("firmware", raw=True)
+        }
+        assert m0["劳动合同书.pdf"] in raw_firmware
+        assert m1["roadmap_v2.xlsx"] in raw_firmware
+        # raw '合同' 老 unicode61 命不中 (CJK 整 token); smart 走 trigram LIKE 命中。
+        assert repo.search_attachment_texts("合同", raw=True) == []
+        assert repo.search_attachment_texts("合同") != []
+
+    def test_flag_off_smart_equals_old_caller_pretransform(
+        self, fresh_db: Path, store: AttachmentStore
+    ):
+        """flag off: 内核内 smart_query_transform + unicode61 == 老调用方 pre-transform+raw
+        (同一用户级 query 结果逐条等价)。用空格分隔 CJK '报告' 让 unicode61 smart 能命中。"""
+        m0, m1, m2, m3 = self._seed(fresh_db, store)
+        repo_off = EmailRepository(db_path=str(fresh_db), trigram_enabled=False)
+        internalized = [
+            h.attachment_id for h in repo_off.search_attachment_texts("报告")
+        ]
+        # 老调用约定: 调用方先 smart_query_transform 再 raw 直传。
+        legacy = [
+            h.attachment_id
+            for h in repo_off.search_attachment_texts(
+                smart_query_transform("报告"), raw=True
+            )
+        ]
+        assert internalized == legacy
+        assert m3["季度总结.pdf"] in internalized       # 非空等价 (真命中而非双空)
+
+    def test_missing_v39_table_falls_back_to_unicode61_with_hits(
+        self, fresh_db: Path, store: AttachmentStore
+    ):
+        """v38 缺 email_attachment_fts_trigram 表 (trigram_enabled=True): 端点内核降级回
+        老 unicode61 smart 路径**有命中** (D2 案 B) —— 与批次2 D3 ``attachment:`` 谓词的
+        fail-closed 空**显式区分** (端点是独立检索端点、老表恒可查, 不该让老库用户搜不到)。"""
+        m0, m1, m2, m3 = self._seed(fresh_db, store)
+        conn = sqlite3.connect(str(fresh_db))
+        try:
+            conn.executescript(self._DROP_V39)
+        finally:
+            conn.close()
+        repo = EmailRepository(db_path=str(fresh_db), trigram_enabled=True)
+        # 空格分隔 CJK '报告' 经 unicode61 smart '报告*' prefix 命中 873 → 降级有命中 (非空)。
+        assert m3["季度总结.pdf"] in {
+            h.attachment_id for h in repo.search_attachment_texts("报告", limit=20)
+        }
+        # 拉丁 token 'firmware' 亦经老 unicode61 命中 → 降级不崩、照常检索。
+        assert repo.search_attachment_texts("firmware", limit=20) != []

@@ -101,7 +101,9 @@ export interface DomainAttachmentSearchHit {
   email_date: string | null
   email_mailbox: string | null
   snippet: string
-  rank: number
+  // batch3 PR-E: null for pure-LIKE trigram hits (2-char CJK / short-latin, no bm25);
+  // a float for MATCH / unicode61 (smaller = more relevant).
+  rank: number | null
   notion_page_id: string | null
   notion_url: string | null
 }

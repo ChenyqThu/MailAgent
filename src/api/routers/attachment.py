@@ -443,6 +443,8 @@ def _count_attachment_fts_indexed(repo: "EmailRepository") -> int:
 
     repo 无现成 helper（同 email.py ``_count_fts_indexed``）；用 repo._connect() 起短命连接。
     FTS5 表缺失 / 异常 → 0，不让搜索因 count 失败而 500。
+    批次3 PR-E（D3）：口径**继续数老表** —— v39 ``email_attachment_fts_trigram`` 与老表由
+    同源 trigger 维持同集合行数，改口径零收益、有测试波及。
     """
     import sqlite3
 
@@ -465,7 +467,7 @@ async def search_attachments(
     since: Optional[str] = Query(None, description="YYYY-MM-DD"),
     until: Optional[str] = Query(None, description="YYYY-MM-DD"),
     limit: int = Query(20, ge=1, le=_ATTACHMENT_SEARCH_LIMIT_MAX),
-    raw: bool = Query(False, description="true=直传 FTS5; false(默认)=CJK smart 改写"),
+    raw: bool = Query(False, description="true=直传 FTS5; false(默认)=smart（trigram 子串/文件名路由，flag off 回 CJK 改写）"),
 ):
     """FTS5 搜附件抽取文本（PDF/docx/pptx/xlsx）+ JOIN 邮件上下文（V2.1 3b-4）。
 
@@ -476,16 +478,19 @@ async def search_attachments(
     语法错误 → 空命中（repo 内部吞掉）。HttpChatPlatform.searchAttachments（3b-5）fetch
     本端点。
 
-    搜索批次2 PR-B（D4）：``has_more`` 用 limit+1 探针在路由层判定——``repo.search_attachment_texts``
-    签名零改动（``limit`` 参数在 repo 侧无上限校验，多传 1 不受影响），本端点自己按 probe 结果
+    搜索批次2 PR-B（D4）：``has_more`` 用 limit+1 探针在路由层判定——本端点自己按 probe 结果
     裁回 ``limit`` 并置 ``has_more``。本端点不跑 DSL 解析（无 parse_warnings 概念），故不新增该字段。
-    """
-    from src.repository.email_repository import smart_query_transform
 
-    effective_query = q if raw else smart_query_transform(q)
+    搜索批次3 PR-E（D1 路由内化）：内核 ``search_attachment_texts`` 收**原始 q + raw 标志**，
+    CJK 子串/文件名 trigram 路由与 smart 变换全在 repo 侧（不再由本端点 pre-transform）。本端点
+    的 ``smart_query_transform`` 仅用于 ``transformed_query`` meta 的回报，**不喂给检索**。
+    """
+
+    # 路由内化: 传原始 q + raw 标志; 内核按 trigram_enabled 决定 trigram 路由 or smart 变换。
     probe = limit + 1
     hits = repo.search_attachment_texts(
-        effective_query,
+        q,
+        raw=raw,
         limit=probe,
         mailbox=mailbox,
         since_date=since,
@@ -524,9 +529,19 @@ async def search_attachments(
         "mode": mode,
         "has_more": has_more,
     }
-    transformed_changed = (not raw) and effective_query != q
-    if transformed_changed:
-        data["transformed_query"] = effective_query
+    # transformed_query 语义收窄（批次3 PR-E D1 修订）：仅当实际走了 unicode61 smart 变换路径
+    # （raw=False 且 trigram 关）且变换结果 != q 时回报。trigram 开（生产默认）走 term 路由、
+    # 无单一「变换串」→ 不发；v38 缺表 fallback 的罕见态也不发（router 用 repo.trigram_enabled
+    # 复刻判定，不去嗅探缺表）。reporting-only —— 检索用的是原始 q（上面已直传）。
+    transformed_query: Optional[str] = None
+    if not raw and not repo.trigram_enabled:
+        from src.repository.email_repository import smart_query_transform
+
+        _rewritten = smart_query_transform(q)
+        if _rewritten != q:
+            transformed_query = _rewritten
+    if transformed_query is not None:
+        data["transformed_query"] = transformed_query
 
     meta_extra: dict[str, Any] = {
         "query": q,
@@ -536,8 +551,8 @@ async def search_attachments(
         "total_indexed": total_indexed,
         "has_more": has_more,
     }
-    if transformed_changed:
-        meta_extra["transformed_query"] = effective_query
+    if transformed_query is not None:
+        meta_extra["transformed_query"] = transformed_query
 
     return success_envelope(
         data, request=request, source="sqlite", meta_extra=meta_extra

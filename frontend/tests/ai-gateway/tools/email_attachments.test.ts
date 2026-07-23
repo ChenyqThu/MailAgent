@@ -85,9 +85,10 @@ describe('email_search_attachments tool', () => {
     )) as { items: unknown[]; hint: string }
     expect(out.items).toEqual([])
     expect(out.hint).toContain('0 命中')
-    // Recovery pointer for this endpoint's structural blind spots (no filename search, weak
-    // CJK substring): cross-reference email_search_fulltext's attachment:/filename: DSL fields
-    // (PR-A). Not a promise that THIS tool does DSL.
+    // batch3 PR-E: this tool now DOES search filenames + CJK substrings. The pointer to
+    // email_search_fulltext's attachment:/filename: DSL fields is for COMBINING structural
+    // filters (from/subject/…) this endpoint can't parse — not a filename blind spot, and
+    // not a promise that THIS tool does DSL.
     expect(out.hint).toContain('email_search_fulltext')
     expect(out.hint).toContain('filename:')
   })

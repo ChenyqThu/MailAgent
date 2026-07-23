@@ -422,3 +422,112 @@ def test_attachment_text_pending_sync_extracts(client, temp_db, attach_dir):
     ).fetchone()
     conn.close()
     assert row[0] == "extracted"
+
+
+# ---------------------------------------------------------------------------
+# 批次3 PR-E: 端点内核 trigram 路由（raw=false smart）+ transformed_query 收窄
+# conftest 的 trimmed _DDL 无 v39 email_attachment_fts_trigram 表，故这些用例用真
+# SyncStore 建全表 + 显式 trigram_enabled 的 repo，独立 client override（不碰 session repo）。
+# ---------------------------------------------------------------------------
+
+
+def _seed_trigram_db(tmp_path):
+    """真 SyncStore 建全表（含 v39 trigram）+ 播一个 CJK 文件名/正文附件。
+
+    返回 (db_path, store, attachment_id_of_劳动合同书)。
+    """
+    import time
+
+    from src.mail.sync_store import SyncStore
+    from src.repository import (
+        AttachmentPayload,
+        AttachmentStore,
+        BodyPayload,
+        EmailRepository,
+    )
+
+    db = tmp_path / "trigram_store.db"
+    SyncStore(str(db))
+    store = AttachmentStore(base_dir=str(tmp_path / "attach"))
+    seed_repo = EmailRepository(db_path=str(db), attachment_store=store)
+
+    conn = sqlite3.connect(str(db))
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute(
+        "INSERT INTO email_metadata (internal_id, message_id, subject, sender, "
+        "mailbox, date_received, sync_status, created_at, updated_at) "
+        "VALUES (?,?,?,?,?,?, 'synced', ?, ?)",
+        (7100, "<m7100@x>", "合同邮件", "alice@x", "收件箱",
+         "2026-05-10T10:00:00+08:00", time.time(), time.time()),
+    )
+    conn.commit()
+    conn.close()
+
+    idm = seed_repo.commit_email_with_body(
+        7100,
+        BodyPayload(html="", markdown="body", body_format="html"),
+        [AttachmentPayload(filename="劳动合同书.pdf", content=b"%PDF",
+                           content_type="application/pdf")],
+    )
+    seed_repo.commit_attachment_text(
+        idm["劳动合同书.pdf"], text="本劳动合同条款如下所述甲乙双方", extractor="pypdf",
+    )
+    return db, store, idm["劳动合同书.pdf"]
+
+
+def test_attachment_search_trigram_cjk_and_filename(tmp_path):
+    """端点级（raw=false smart）：内核 trigram 路由 —— 2 字 CJK '合同' 子串命中文件名 +
+    正文（批次3 PR-E）。纯 LIKE → rank null + snippet fallback；trigram 开 → 不发
+    transformed_query（D1 修订收窄）。"""
+    from fastapi.testclient import TestClient
+
+    from src.api.app import app
+    from src.api.deps import get_repository
+    from src.repository import EmailRepository
+
+    db, store, att_id = _seed_trigram_db(tmp_path)
+    repo = EmailRepository(
+        db_path=str(db), attachment_store=store, trigram_enabled=True
+    )
+    app.dependency_overrides[get_repository] = lambda: repo
+    try:
+        with TestClient(app, raise_server_exceptions=False) as c:
+            r = c.get("/api/attachment/search?q=合同")
+            assert r.status_code == 200
+            data = r.json()["data"]
+            assert data["mode"] == "smart"
+            att_ids = {it["attachment_id"] for it in data["items"]}
+            assert att_id in att_ids                 # 文件名 + 正文子串命中
+            hit = next(it for it in data["items"] if it["attachment_id"] == att_id)
+            assert hit["rank"] is None               # 纯 LIKE → rank null
+            assert hit["snippet"]                    # fallback 非空
+            assert "transformed_query" not in data   # trigram 开 → 收窄不发
+    finally:
+        app.dependency_overrides.pop(get_repository, None)
+
+
+def test_attachment_search_transformed_query_only_when_trigram_off(tmp_path):
+    """transformed_query meta 收窄（D1 修订）：仅 trigram 关（flag off）且 smart 变换 != q
+    时才发。router 用 repo.trigram_enabled 复刻判定。"""
+    from fastapi.testclient import TestClient
+
+    from src.api.app import app
+    from src.api.deps import get_repository
+    from src.repository import EmailRepository
+    from src.repository.email_repository import smart_query_transform
+
+    db, store, _ = _seed_trigram_db(tmp_path)
+    repo_off = EmailRepository(
+        db_path=str(db), attachment_store=store, trigram_enabled=False
+    )
+    app.dependency_overrides[get_repository] = lambda: repo_off
+    try:
+        with TestClient(app, raise_server_exceptions=False) as c:
+            r = c.get("/api/attachment/search?q=合同")
+            assert r.status_code == 200
+            data = r.json()["data"]
+            assert data["mode"] == "smart"
+            # flag off → 内核 unicode61 smart 路径；transformed = smart_query_transform('合同') != '合同' → 发。
+            assert data["transformed_query"] == smart_query_transform("合同")
+    finally:
+        app.dependency_overrides.pop(get_repository, None)

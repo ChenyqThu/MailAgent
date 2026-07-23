@@ -71,12 +71,11 @@ def _attachment_search(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
     if limit < 1 or limit > _ATTACHMENT_SEARCH_LIMIT_MAX:
         raise SkillError("E_INVALID_ARG", f"limit must be 1..{_ATTACHMENT_SEARCH_LIMIT_MAX}")
     raw = bool(params.get("raw", False))
-    from src.repository.email_repository import smart_query_transform
-
-    effective_query = q if raw else smart_query_transform(q)
     repo = ctx.repo()
+    # 路由内化（批次3 PR-E）：传原始 q + raw 标志，内核做 trigram 路由 / smart 变换。
     hits = repo.search_attachment_texts(
-        effective_query,
+        q,
+        raw=raw,
         limit=limit,
         mailbox=params.get("mailbox"),
         since_date=params.get("since"),
@@ -104,8 +103,8 @@ def _attachment_search(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
         "total_matches": len(items),
         "mode": mode,
     }
-    if not raw and effective_query != q:
-        data["transformed_query"] = effective_query
+    # 路由内化后 transform 全在内核 —— skill 不再回报 transformed_query（trigram 开时无单一
+    # 变换串；只有端点按 D1 修订保留 flag-off 回报）。检索用原始 q（上面已直传）。
     return data
 
 

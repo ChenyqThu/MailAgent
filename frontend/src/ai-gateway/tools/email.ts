@@ -186,12 +186,14 @@ export function createEmailReadTools(
   const email_search_attachments = make({
     name: 'email_search_attachments',
     description:
-      'Full-text search across extracted text from email attachments (PDF, docx, ' +
-      'pptx, xlsx). Pass natural-language keywords like "合同条款" or "redis ' +
-      'configuration" — CJK queries are auto-expanded (smart mode). ' +
-      'Returns ranked hits with attachment_id + filename + email context ' +
-      '(subject/sender/date) + snippet (bm25, smaller = more relevant). Only ' +
-      'covers attachments whose text has been extracted.',
+      'Full-text search across extracted text AND filenames of email attachments ' +
+      '(PDF, docx, pptx, xlsx). Pass natural-language keywords like "合同条款" or ' +
+      '"redis configuration" — CJK queries match substrings (smart mode, trigram). ' +
+      'Also matches attachment filenames (incl. CJK substrings). Returns ranked hits ' +
+      'with attachment_id + filename + email context (subject/sender/date) + snippet ' +
+      '(bm25 rank, smaller = more relevant; rank is null for filename-only / short-token ' +
+      'matches). Only covers attachments whose text has been extracted (filenames are ' +
+      'always searchable).',
     inputSchema: emailSearchAttachmentsSchema,
     run: async (input, signal) => {
       const result = await domain.searchAttachments(

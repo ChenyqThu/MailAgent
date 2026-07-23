@@ -366,15 +366,16 @@ def attachment_search(
     raw: bool = typer.Option(
         False,
         "--raw",
-        help="不做 CJK smart wrapper, 直接交给 FTS5. 默认 smart (PR-2a)",
+        help="跳过内核 smart 路由 (trigram 子串/文件名), 直接交给 FTS5. 默认 smart",
     ),
     output: Optional[str] = typer.Option(None, "-o", "--output"),
 ) -> None:
-    """FTS5 全文搜附件文本 (PDF / docx / pptx / xlsx, PR-2b).
+    """FTS5 全文搜附件文本 + 文件名 (PDF / docx / pptx / xlsx).
 
-    跟 ``email search`` 平行: 自然语言关键词自动 CJK-aware 改写; 返
-    attachment_id + internal_id + filename + 邮件上下文 (subject/sender/date)
-    + bm25 rank + snippet. ``--raw`` 关 wrapper 走 FTS5 explicit syntax.
+    跟 ``email search`` 平行: 自然语言关键词由内核 smart 路由 (批次3 PR-E: trigram
+    子串/文件名, flag off 回 CJK 改写); 返 attachment_id + internal_id + filename +
+    邮件上下文 (subject/sender/date) + rank (纯 LIKE 命中为 null) + snippet.
+    ``--raw`` 直传 FTS5 explicit syntax.
     """
     cli: "CliContext" = ctx.obj
     _apply_local_output(ctx, output)
@@ -385,19 +386,13 @@ def attachment_search(
         ))
 
     repo = cli.email_repo
-    if raw:
-        hits = repo.search_attachment_texts(
-            query, limit=limit, mailbox=mailbox,
-            since_date=since, until_date=until,
-        )
-        transformed_query = query
-    else:
-        from src.repository.email_repository import smart_query_transform
-        transformed_query = smart_query_transform(query)
-        hits = repo.search_attachment_texts(
-            transformed_query, limit=limit, mailbox=mailbox,
-            since_date=since, until_date=until,
-        )
+    # 路由内化（批次3 PR-E）：传原始 query + raw 标志，内核做 trigram 路由 / smart 变换
+    # （不再 CLI 侧 pre-transform）。CJK 子串 / 文件名的 transform 全在内核，CLI 不再回报
+    # transformed_query（trigram 开时无单一变换串；只有端点按 D1 修订保留 flag-off 回报）。
+    hits = repo.search_attachment_texts(
+        query, raw=raw, limit=limit, mailbox=mailbox,
+        since_date=since, until_date=until,
+    )
 
     data = []
     for hit in hits:
@@ -425,19 +420,21 @@ def attachment_search(
         "limit": limit,
         "count": len(data),
     }
-    if not raw and transformed_query != query:
-        meta_extra["transformed_query"] = transformed_query
 
     if cli.output.lower() == "text":
         if not data:
             print(f"(no attachment text matches for {query!r})")
         else:
             for row in data:
+                # rank 可能为 None（批次3 纯 LIKE trigram 查询无 bm25）。
+                rank_str = (
+                    f"{row['rank']:.2f}" if row['rank'] is not None else "—"
+                )
                 print(
                     f"att={row['attachment_id']} email={row['internal_id']} "
                     f"file={(row['filename'] or '')[:40]} "
                     f"subj={(row['email_subject'] or '')[:40]} "
-                    f"rank={row['rank']:.2f}"
+                    f"rank={rank_str}"
                 )
                 if not no_snippet and row.get("snippet"):
                     print(f"  → {row['snippet'][:100]}")

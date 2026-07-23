@@ -1288,7 +1288,7 @@ class EventHandlers:
             since_date / until_date: str (可选) — YYYY-MM-DD
 
         响应:
-            {status:'success', query, mode, [transformed_query],
+            {status:'success', query, mode,
              hits:[{attachment_id, internal_id, filename, content_type,
                     email_subject, email_sender, email_date, email_mailbox,
                     snippet, rank, notion_page_id, notion_url}],
@@ -1336,22 +1336,20 @@ class EventHandlers:
         mode = (props.get("mode") or "smart").strip().lower()
         if mode not in ("smart", "raw"):
             mode = "smart"
+        raw = mode == "raw"
 
-        if mode == "smart":
-            from src.repository.email_repository import smart_query_transform
-            transformed_query = smart_query_transform(query)
-        else:
-            transformed_query = query
-
+        # 路由内化（批次3 PR-E）：传原始 query + raw 标志，内核做 trigram 路由 / smart 变换
+        # （不再 handler 侧 pre-transform）。不再回报 transformed_query（trigram 开时无单一
+        # 变换串；只有端点按 D1 修订保留 flag-off 回报）。
         logger.info(
             f"search_email_attachments: query={query!r} mode={mode} "
-            f"transformed={transformed_query!r} limit={limit} "
-            f"mailbox={mailbox} since={since_date} until={until_date}"
+            f"limit={limit} mailbox={mailbox} since={since_date} until={until_date}"
         )
 
         try:
             hits = self.email_repo.search_attachment_texts(
-                transformed_query,
+                query,
+                raw=raw,
                 limit=limit,
                 mailbox=mailbox,
                 since_date=since_date,
@@ -1394,8 +1392,6 @@ class EventHandlers:
             ],
             "latency_ms": latency_ms,
         }
-        if mode == "smart" and transformed_query != query:
-            payload["transformed_query"] = transformed_query
         await self._publish(event_id, payload)
         logger.info(
             f"search_email_attachments: query={query!r} returned {len(hits)} hits "
