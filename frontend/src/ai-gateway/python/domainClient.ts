@@ -90,6 +90,33 @@ export interface DomainReportListOpts {
   limit?: number
 }
 
+/** email_search_attachments — one hit of GET /attachment/search (search batch2 PR-B, D4). */
+export interface DomainAttachmentSearchHit {
+  attachment_id: number
+  internal_id: number
+  filename: string
+  content_type: string | null
+  email_subject: string
+  email_sender: string
+  email_date: string | null
+  email_mailbox: string | null
+  snippet: string
+  rank: number
+  notion_page_id: string | null
+  notion_url: string | null
+}
+
+/** GET /attachment/search data block (search batch2 PR-B, D4: has_more via a limit+1 probe
+ *  on the route layer — repo signature unchanged). No parse_warnings: the endpoint runs no
+ *  DSL parsing (plain FTS5 query / smart CJK rewrite only). */
+export interface DomainAttachmentSearchResult {
+  items: DomainAttachmentSearchHit[]
+  total_indexed: number
+  mode: 'smart' | 'raw'
+  has_more: boolean
+  transformed_query?: string
+}
+
 /** email_thread_attachments — one attachment row (metadata + owning-email provenance) of GET
  *  /attachment/thread/{thread_id}. is_inline=true is usually a signature image / inline graphic
  *  rather than a real document. */
@@ -605,9 +632,12 @@ export class MailAgentDomainClient {
   }
 
   /** email_search_attachments — FTS over extracted attachment text. GET /attachment/search
-   *  (param is `q`). The result is passed through to the model untyped (unknown). */
-  searchAttachments(opts: DomainSearchOpts, signal?: AbortSignal): Promise<unknown> {
-    return this._req<unknown>('GET', '/attachment/search', {
+   *  (param is `q`). */
+  searchAttachments(
+    opts: DomainSearchOpts,
+    signal?: AbortSignal
+  ): Promise<DomainAttachmentSearchResult> {
+    return this._req<DomainAttachmentSearchResult>('GET', '/attachment/search', {
       query: {
         q: opts.query,
         mailbox: opts.mailbox,

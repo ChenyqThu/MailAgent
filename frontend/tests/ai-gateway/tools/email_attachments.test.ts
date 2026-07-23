@@ -1,5 +1,7 @@
-// Email attachment-awareness read tools — email_thread_attachments (thread-scoped attachment
-// metadata + provenance) + email_attachment_text (one attachment's extracted text, always
+// Email attachment-awareness read tools — email_search_attachments (FTS over extracted
+// attachment text, search batch2 PR-B has_more/hint self-convergence projection) +
+// email_thread_attachments (thread-scoped attachment metadata + provenance) +
+// email_attachment_text (one attachment's extracted text, always
 // UNTRUSTED_ATTACHMENT_TEXT-fenced). Proves: wire fidelity (endpoints + max_chars query), the
 // silent-tier audit entry, the untrusted fence (incl. break-out neutralization + only-when-extracted),
 // non-extracted status branches (null content + hint), and truncation surfacing.
@@ -9,10 +11,121 @@ import { describe, expect, test } from 'vitest'
 import { createEmailReadTools } from '../../../src/ai-gateway/tools/email'
 import {
   emailAttachmentTextSchema,
+  emailSearchAttachmentsSchema,
   emailThreadAttachmentsSchema
 } from '../../../src/ai-gateway/tools/schemas'
 import type { GatewayToolAuditEntry } from '../../../src/ai-gateway/tools/types'
 import { errEnvelope, mockDomain, okEnvelope, runTool } from './_helpers'
+
+const SEARCH_HIT = {
+  attachment_id: 11,
+  internal_id: 456,
+  filename: 'Q3-plan.pdf',
+  content_type: 'application/pdf',
+  email_subject: 'Q3 plan',
+  email_sender: 'alice@acme.test',
+  email_date: '2026-07-20 10:00:00',
+  email_mailbox: '收件箱',
+  snippet: '<mark>redis</mark> config',
+  rank: -1.2,
+  notion_page_id: null,
+  notion_url: null
+}
+
+describe('email_search_attachments tool', () => {
+  test('projects items/total_indexed/mode/transformed_query + has_more + a self-convergence hint', async () => {
+    const domain = mockDomain(() =>
+      okEnvelope({
+        items: [SEARCH_HIT],
+        total_indexed: 42,
+        mode: 'smart',
+        has_more: false,
+        transformed_query: 'redis*'
+      })
+    )
+    const out = (await runTool(
+      createEmailReadTools(domain).email_search_attachments,
+      emailSearchAttachmentsSchema.parse({ query: 'redis' })
+    )) as {
+      items: unknown[]
+      total_indexed: number
+      has_more: boolean
+      hint: string
+      transformed_query?: string
+      mode: string
+    }
+    expect(out.items).toEqual([SEARCH_HIT])
+    expect(out.total_indexed).toBe(42)
+    expect(out.has_more).toBe(false)
+    expect(out.transformed_query).toBe('redis*')
+    expect(out.mode).toBe('smart')
+    // all-returned wording, not the 0-hit or has-more wording.
+    expect(out.hint).toContain('已全部返回')
+  })
+
+  test('has_more=true surfaces the narrow-or-read-attachment-text hint', async () => {
+    const domain = mockDomain(() =>
+      okEnvelope({ items: [SEARCH_HIT], total_indexed: 42, mode: 'smart', has_more: true })
+    )
+    const out = (await runTool(
+      createEmailReadTools(domain).email_search_attachments,
+      emailSearchAttachmentsSchema.parse({ query: 'redis' })
+    )) as { has_more: boolean; hint: string }
+    expect(out.has_more).toBe(true)
+    expect(out.hint).toContain('email_attachment_text')
+  })
+
+  test('0 hits surfaces the broaden-and-retry hint, not a promise of DSL filters', async () => {
+    const domain = mockDomain(() =>
+      okEnvelope({ items: [], total_indexed: 42, mode: 'smart', has_more: false })
+    )
+    const out = (await runTool(
+      createEmailReadTools(domain).email_search_attachments,
+      emailSearchAttachmentsSchema.parse({ query: 'nope' })
+    )) as { items: unknown[]; hint: string }
+    expect(out.items).toEqual([])
+    expect(out.hint).toContain('0 命中')
+    // Recovery pointer for this endpoint's structural blind spots (no filename search, weak
+    // CJK substring): cross-reference email_search_fulltext's attachment:/filename: DSL fields
+    // (PR-A). Not a promise that THIS tool does DSL.
+    expect(out.hint).toContain('email_search_fulltext')
+    expect(out.hint).toContain('filename:')
+  })
+
+  test('sends q/mailbox/since/until/limit on the wire, hits GET /attachment/search', async () => {
+    let seenUrl = ''
+    const domain = mockDomain((url) => {
+      seenUrl = url
+      return okEnvelope({ items: [], total_indexed: 0, mode: 'raw', has_more: false })
+    })
+    await runTool(
+      createEmailReadTools(domain).email_search_attachments,
+      emailSearchAttachmentsSchema.parse({
+        query: 'redis',
+        mailbox: '收件箱',
+        since: '2026-07-01',
+        until: '2026-07-22',
+        limit: 5
+      })
+    )
+    expect(seenUrl).toContain('/attachment/search')
+    expect(seenUrl).toContain('q=redis')
+    expect(seenUrl).toContain('limit=5')
+  })
+
+  test('records a silent audit entry (no approval fields)', async () => {
+    const domain = mockDomain(() =>
+      okEnvelope({ items: [], total_indexed: 0, mode: 'smart', has_more: false })
+    )
+    const audit: GatewayToolAuditEntry[] = []
+    await runTool(
+      createEmailReadTools(domain, audit).email_search_attachments,
+      emailSearchAttachmentsSchema.parse({ query: 'redis' })
+    )
+    expect(audit[0]).toMatchObject({ toolName: 'email_search_attachments', status: 'ok' })
+    expect(audit[0].confirmationTier).toBeUndefined()
+  })
+})
 
 const THREAD_ITEMS = [
   {

@@ -12,7 +12,10 @@ import type { Tool } from 'ai'
 
 // buildSearchHint is the fulltext teaching-hint (Phase A G-A2) — moved into the
 // gateway in S3 when the legacy engine was deleted (pure helper, no Electron dep).
-import { buildSearchHint } from './search_hint'
+// buildAttachmentSearchHint is its search-batch2 PR-B (D4) sibling for email_search_attachments
+// (different wording — that endpoint has no DSL and the follow-up read tool is
+// email_attachment_text, not email_body).
+import { buildAttachmentSearchHint, buildSearchHint } from './search_hint'
 
 import type { z } from 'zod'
 
@@ -188,7 +191,7 @@ export function createEmailReadTools(
       'covers attachments whose text has been extracted.',
     inputSchema: emailSearchAttachmentsSchema,
     run: async (input, signal) => {
-      return domain.searchAttachments(
+      const result = await domain.searchAttachments(
         {
           query: input.query,
           mailbox: input.mailbox,
@@ -198,6 +201,19 @@ export function createEmailReadTools(
         },
         signal
       )
+      // Search batch2 PR-B (D4) agent-facing projection — mirrors email_search_fulltext's
+      // has_more/hint self-convergence shape (buildAttachmentSearchHint's wording matches
+      // this tool's actual capability surface, not email_search_fulltext's DSL).
+      const items = result.items ?? []
+      const hasMore = result.has_more ?? false
+      return {
+        items,
+        total_indexed: result.total_indexed,
+        has_more: hasMore,
+        hint: buildAttachmentSearchHint(items.length, hasMore),
+        transformed_query: result.transformed_query,
+        mode: result.mode
+      }
     }
   })
 

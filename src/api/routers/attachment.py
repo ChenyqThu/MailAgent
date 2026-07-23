@@ -471,20 +471,29 @@ async def search_attachments(
 
     镜像前端 chat 工具 ``email_search_attachments`` 的后端原语（handlers/attachment.ts
     searchAttachments → repo.search_attachment_texts）。data = AttachmentSearchResult
-    （前端 types：{items, total_indexed, mode, transformed_query?}）。默认 smart（CJK-aware
-    改写，与前端 smartQueryTransform 同算法）；raw=true 走原 FTS5 syntax。FTS 语法错误 → 空
-    命中（repo 内部吞掉）。HttpChatPlatform.searchAttachments（3b-5）fetch 本端点。
+    （前端 types：{items, total_indexed, mode, has_more, transformed_query?}）。默认 smart
+    （CJK-aware 改写，与前端 smartQueryTransform 同算法）；raw=true 走原 FTS5 syntax。FTS
+    语法错误 → 空命中（repo 内部吞掉）。HttpChatPlatform.searchAttachments（3b-5）fetch
+    本端点。
+
+    搜索批次2 PR-B（D4）：``has_more`` 用 limit+1 探针在路由层判定——``repo.search_attachment_texts``
+    签名零改动（``limit`` 参数在 repo 侧无上限校验，多传 1 不受影响），本端点自己按 probe 结果
+    裁回 ``limit`` 并置 ``has_more``。本端点不跑 DSL 解析（无 parse_warnings 概念），故不新增该字段。
     """
     from src.repository.email_repository import smart_query_transform
 
     effective_query = q if raw else smart_query_transform(q)
+    probe = limit + 1
     hits = repo.search_attachment_texts(
         effective_query,
-        limit=limit,
+        limit=probe,
         mailbox=mailbox,
         since_date=since,
         until_date=until,
     )
+    has_more = len(hits) > limit
+    if has_more:
+        hits = hits[:limit]
 
     items = [
         {
@@ -506,10 +515,14 @@ async def search_attachments(
 
     mode = "raw" if raw else "smart"
     total_indexed = _count_attachment_fts_indexed(repo)
+    # has_more 恒发布尔（不作 additive-only 省略）——镜像主端点 email.py 的 has_more 语义
+    # （:472/:479，恒发而 transformed_query/parse_warnings 才是条件发），让 gateway 工具的
+    # 自我收敛投影可以无条件读取，不必先判字段是否存在。
     data: dict[str, Any] = {
         "items": items,
         "total_indexed": total_indexed,
         "mode": mode,
+        "has_more": has_more,
     }
     transformed_changed = (not raw) and effective_query != q
     if transformed_changed:
@@ -521,6 +534,7 @@ async def search_attachments(
         "count": len(items),
         "limit": limit,
         "total_indexed": total_indexed,
+        "has_more": has_more,
     }
     if transformed_changed:
         meta_extra["transformed_query"] = effective_query

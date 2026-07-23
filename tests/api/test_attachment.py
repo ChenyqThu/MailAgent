@@ -181,6 +181,47 @@ def test_attachment_search_hits(client, temp_db):
     assert "notion_url" in hit
 
 
+def test_attachment_search_has_more_probe(client, temp_db):
+    """limit+1 探针 has_more（PR-B D4）：2 条附件命中，limit=1 → has_more=true 且裁到
+    1 条；limit=2 → has_more=false 且 2 条全返回。``CREATE ... IF NOT EXISTS`` +
+    ``INSERT OR REPLACE`` 使本测试不依赖 test_attachment_search_hits 的执行顺序。
+    复用 conftest 已建的两个附件行（ATT_NORMAL_ID/ATT_ESCAPE_ID，同挂 EMAIL_ID 下）
+    做两个 FTS 命中，不新建附件行。
+    """
+    conn = sqlite3.connect(str(temp_db))
+    try:
+        conn.execute(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS email_attachment_fts USING fts5(text)"
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO email_attachment_fts (rowid, text) VALUES (?, ?)",
+            (ATT_NORMAL_ID, "redis configuration and timeout guide"),
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO email_attachment_fts (rowid, text) VALUES (?, ?)",
+            (ATT_ESCAPE_ID, "redis cluster failover notes"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    r1 = client.get("/api/attachment/search?q=redis&raw=true&limit=1")
+    assert r1.status_code == 200
+    body1 = r1.json()
+    data1 = body1["data"]
+    assert len(data1["items"]) == 1
+    assert data1["has_more"] is True
+    assert body1["meta"]["has_more"] is True
+
+    r2 = client.get("/api/attachment/search?q=redis&raw=true&limit=2")
+    assert r2.status_code == 200
+    body2 = r2.json()
+    data2 = body2["data"]
+    assert len(data2["items"]) == 2
+    assert data2["has_more"] is False
+    assert body2["meta"]["has_more"] is False
+
+
 # ---------------------------------------------------------------------------
 # GET /api/attachment/thread/{thread_id}
 # ---------------------------------------------------------------------------
