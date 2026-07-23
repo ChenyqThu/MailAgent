@@ -43,11 +43,18 @@ export const SEARCH_BESTEFFORT_MAX = 20
 
 // legacy G-A1 — the progressive-reading read-tool whitelist. The loop picks EXACTLY
 // these from cfg.buildTools' output (defensive narrowing, not prompt trust).
+// Batch2 PR-C — added email_search_attachments + email_attachment_text so the same
+// progressive-reading budget also covers attachment-content hits (retrieve → confirm
+// via full extracted text, symmetric to email_search_fulltext → email_body).
+// Deliberately NOT email_thread_attachments — listing a thread's attachments is not a
+// retrieval primitive for this loop.
 export const SEARCH_AGENT_TOOL_NAMES = [
   'email_search_fulltext',
   'email_body',
   'email_get',
-  'email_list_thread'
+  'email_list_thread',
+  'email_search_attachments',
+  'email_attachment_text'
 ] as const
 
 /** Request body of POST /api/ai/search-agent. The renderer client assembles the full

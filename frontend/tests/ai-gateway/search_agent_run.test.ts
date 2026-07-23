@@ -15,7 +15,8 @@ import { startAiGatewayServer, type AiGatewayHandle } from '../../src/ai-gateway
 import {
   pickSearchAgentTools,
   runHeadlessSearchAgent,
-  SEARCH_AGENT_MAX_ITER
+  SEARCH_AGENT_MAX_ITER,
+  SEARCH_AGENT_TOOL_NAMES
 } from '../../src/ai-gateway/searchAgentRun'
 import type { AiGatewayConfig } from '../../src/ai-gateway/config'
 
@@ -426,6 +427,28 @@ describe('pickSearchAgentTools', () => {
     const all = mockBuildTools()()
     const picked = pickSearchAgentTools(all)
     expect(Object.keys(picked)).toEqual(['email_search_fulltext'])
+  })
+
+  // batch2 PR-C — when the full ToolSet actually carries every whitelist tool, the loop
+  // selects ALL of them (incl. the two attachment additions) and still drops write tools.
+  // Locks the whitelist∩ToolSet intersection so a future drop of email_search_attachments /
+  // email_attachment_text (or the write-tool leak) fails loudly.
+  test('selects every whitelist tool (incl. attachment tools) from a full ToolSet', () => {
+    const all: ToolSet = {
+      email_flag: tool({
+        description: 'mock write tool — must be filtered out',
+        inputSchema: z.object({ internal_id: z.number() }),
+        execute: async () => ({ ok: true })
+      })
+    }
+    for (const name of SEARCH_AGENT_TOOL_NAMES) {
+      all[name] = tool({ description: name, inputSchema: z.object({}), execute: async () => ({}) })
+    }
+    const picked = pickSearchAgentTools(all)
+    expect(new Set(Object.keys(picked))).toEqual(new Set(SEARCH_AGENT_TOOL_NAMES))
+    expect(picked.email_search_attachments).toBeDefined()
+    expect(picked.email_attachment_text).toBeDefined()
+    expect(picked.email_flag).toBeUndefined()
   })
 
   test('max-iter constant matches the legacy budget', () => {

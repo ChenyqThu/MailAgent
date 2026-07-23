@@ -31,6 +31,9 @@ export const DEFAULT_SEARCH_AGENT_PROMPT =
   '- 渐进式精读：snippet 不足以判断时，用 email_body 读「最相关的前 2-3 封」正文确认' +
   '（不要逐封全读，省预算）；需要元数据/附件名用 email_get，需要看整条会话用 ' +
   'email_list_thread。\n' +
+  '- 用户意图涉及附件内容（如"合同里写了什么""PPT 里的数据"）时用 email_search_attachments ' +
+  '检索附件提取正文（按 extracted text，不搜文件名）；命中后同样按需用 ' +
+  'email_attachment_text(attachment_id) 读完整提取文本确认（对应 email_body 之于正文的确认步）。\n' +
   '- 自我收敛：看工具结果的 has_more / hint —— 命中太多就加 from:/after:/subject: 等 ' +
   'filter 缩小；0 命中就放宽关键词或去掉一个 filter 重试一次；仍空则如实说没找到，不要编造。\n' +
   '- 最后必须且仅一次调用 present_results：matched_internal_ids 只填真实命中的 ' +
