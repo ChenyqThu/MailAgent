@@ -87,9 +87,12 @@ export function createEmailReadTools(
       'Full-text search across all synced email bodies (subject + sender + body) ' +
       'using SQLite FTS5 plus Search Query DSL. Mix plain keywords with filters ' +
       'like from:, to:, subject:, in:, after:, before:, date:, newer_than:, ' +
-      'is:unread|flagged, has:attachment, priority:urgent. Supports quoted ' +
-      'phrases, token-level -negation, uppercase OR, and natural CJK expansion. ' +
-      'Examples: from:alice redis; 产品评审 has:attachment newer_than:7d; ' +
+      'is:unread|flagged, has:attachment, priority:urgent. Attachment content ' +
+      'filters: attachment:<term> (matches attachment body text OR filename) and ' +
+      'filename:<term> (matches non-inline attachment filenames, incl. short <3-char ' +
+      'values). Supports quoted phrases, token-level -negation, uppercase OR, and ' +
+      'natural CJK expansion. Examples: from:alice redis; 产品评审 has:attachment ' +
+      'newer_than:7d; attachment:合同 is:unread; filename:roadmap; ' +
       'subject:"weekly report" -from:noreply. Returns ranked hits with snippet + ' +
       'sender + date (bm25 rank, smaller = more relevant).',
     inputSchema: emailSearchFulltextSchema,

@@ -1269,6 +1269,35 @@ class TestAttachmentTrigramLaneDegrade:
         assert hits[0].source == "attachment"
         assert hits[0].filename == "manual.pdf"
 
+    def test_attachment_field_fails_closed_on_missing_trigram_table(
+        self, fresh_db: Path, store: AttachmentStore
+    ):
+        """批次2 DSL ``attachment:`` 谓词在 v38 缺表库上的降级语义 pin —— **fail-closed 整查询空**。
+
+        与上面 lane 降级 (lane 级静默缺席, body 结果照常) 不同: attachment: 谓词
+        AND 在它所在的每条候选语句里 (纯过滤单条 SELECT / fused 各 lane /
+        recipient-ranked), 语句抛 OperationalError 被语句级 try/except 接住返回 []
+        → 含 attachment: 的查询**整体返回空** (不崩, log warning)。**不是**「谓词
+        静默失效 = 过滤被放宽」—— 用户不会拿到假装被过滤过的结果 (安全方向的
+        fail-closed, 符合 PRD D3「单语句级捕获返回空」)。
+        """
+        self._seed(fresh_db, store)
+        self._drop_v39_table(fresh_db)
+        repo = EmailRepository(
+            db_path=str(fresh_db), trigram_enabled=True, latin_trigram_enabled=True
+        )
+        # 纯 attachment: 查询 (纯过滤分支单条 SELECT) → fail-closed 空, 不是全表放行。
+        assert repo.search_email_bodies_smart("attachment:手册", limit=10) == []
+        # 组合查询: 裸词本可命中 790, 谓词若「静默放宽」会返回它 → 必须为空。
+        assert repo.search_email_bodies_smart("固件升级 attachment:手册", limit=10) == []
+        # 负向同理 fail-closed (若「放宽」会返回 790)。
+        assert (
+            repo.search_email_bodies_smart("固件升级 -attachment:手册", limit=10) == []
+        )
+        # filename: 只碰恒在的 email_attachment, 缺表不影响。
+        hits = repo.search_email_bodies_smart("filename:manual", limit=10)
+        assert [h.internal_id for h in hits] == [791]
+
 
 class TestGetMetadata:
     def test_returns_none_when_missing(self, repo: EmailRepository):

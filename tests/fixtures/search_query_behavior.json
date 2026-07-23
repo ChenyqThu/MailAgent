@@ -1562,6 +1562,168 @@
       "trigram": false,
       "expect_ids": [],
       "expect_warnings": 0
+    },
+    {
+      "name": "attachment_field_cjk_match",
+      "query": "attachment:件正文",
+      "trigram": true,
+      "expect_ids": [
+        1
+      ],
+      "expect_warnings": 0,
+      "expect_hits": [
+        {
+          "internal_id": 1,
+          "source": "body",
+          "filename": null
+        }
+      ]
+    },
+    {
+      "name": "attachment_field_cjk_two_char_like",
+      "query": "attachment:正文",
+      "trigram": true,
+      "expect_ids": [
+        1
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "attachment_field_only_searches_attachments",
+      "query": "attachment:样本",
+      "trigram": true,
+      "expect_ids": [
+        1
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "attachment_field_latin_match",
+      "query": "attachment:attachdualzeta",
+      "trigram": true,
+      "expect_ids": [
+        1
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "attachment_field_matches_filename_column",
+      "query": "attachment:roadmapzeta",
+      "trigram": true,
+      "expect_ids": [
+        1
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "attachment_field_combination_and",
+      "query": "fusionrank attachment:attachdualzeta",
+      "trigram": true,
+      "expect_ids": [
+        1
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "attachment_field_negation",
+      "query": "评审 -attachment:attachdualzeta",
+      "trigram": true,
+      "expect_ids": [
+        3
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "attachment_field_trigram_off_substring_miss",
+      "query": "attachment:正文",
+      "trigram": false,
+      "expect_ids": [],
+      "expect_warnings": 0
+    },
+    {
+      "name": "attachment_field_trigram_off_wholeword_hit",
+      "query": "attachment:附件正文样本",
+      "trigram": false,
+      "expect_ids": [
+        1
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "attachment_field_empty_value_warns",
+      "query": "attachment:",
+      "expect_ids": [],
+      "expect_warnings": 1
+    },
+    {
+      "name": "attachment_field_short_latin_like",
+      "query": "attachment:ze",
+      "trigram": true,
+      "expect_ids": [
+        1
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "attachment_field_short_latin_trigram_off",
+      "query": "attachment:ze",
+      "trigram": false,
+      "expect_ids": [],
+      "expect_warnings": 0
+    },
+    {
+      "name": "attachment_field_or_dangling_warns",
+      "query": "redis OR attachment:样本",
+      "trigram": true,
+      "expect_ids": [
+        1
+      ],
+      "expect_warnings": 1
+    },
+    {
+      "name": "attachment_field_cjk_single_char_intercept",
+      "query": "attachment:合",
+      "trigram": true,
+      "expect_ids": [],
+      "expect_warnings": 1
+    },
+    {
+      "name": "filename_field_latin_substring",
+      "query": "filename:roadmap",
+      "expect_ids": [
+        1
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "filename_field_short_value",
+      "query": "filename:xl",
+      "expect_ids": [
+        1
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "filename_field_excludes_inline",
+      "query": "filename:logo",
+      "expect_ids": [],
+      "expect_warnings": 0
+    },
+    {
+      "name": "filename_field_not_body",
+      "query": "filename:report",
+      "expect_ids": [
+        1
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "filename_field_negation",
+      "query": "filename:pdf -filename:report",
+      "expect_ids": [
+        7
+      ],
+      "expect_warnings": 0
     }
   ]
 }

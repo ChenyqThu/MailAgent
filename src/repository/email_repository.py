@@ -2358,6 +2358,11 @@ class EmailRepository:
         if self.trigram_enabled:
             cjk_trigram_predicates = self._build_cjk_trigram_predicates(parsed)
             parsed.warnings.extend(self._collect_cjk_term_warnings(parsed))
+        # D1-D3: attachment: 内容检索谓词 (恒建, flag-aware 路由在 predicate 内部;
+        # 1 字 CJK 拦截 warning 仅 trigram-on 收集, 与裸 CJK 词一致)。
+        attachment_content_predicates = self._build_attachment_content_predicates(parsed)
+        if self.trigram_enabled:
+            parsed.warnings.extend(self._collect_attachment_term_warnings(parsed))
         # 排名用的正向收件人 MATCH 表达式 (recipient-only 路径用)。
         positive_recipient_expr = self._build_positive_recipient_fts_expr(parsed)
         filters, structured_warnings = build_structured_filter_predicates(
@@ -2375,6 +2380,7 @@ class EmailRepository:
             *filters,
             *recipient_predicates,
             *cjk_trigram_predicates,
+            *attachment_content_predicates,
         ]
         predicates.extend(
             FilterPredicate(f"NOT ({predicate.sql})", predicate.params)
@@ -2410,6 +2416,8 @@ class EmailRepository:
                 *filters,
                 # P5: 收件人排名路径里裸 CJK 词的 trigram 约束仍要 AND (如 to~:alice 评审)。
                 *cjk_trigram_predicates,
+                # D1-D3: attachment: 谓词在收件人排名路径也要 AND (如 to~:alice attachment:x)。
+                *attachment_content_predicates,
             ]
             other_predicates.extend(
                 FilterPredicate(f"NOT ({predicate.sql})", predicate.params)
@@ -3185,6 +3193,109 @@ class EmailRepository:
         for term in (*parsed.fts_terms, *parsed.neg_fts_terms):
             if self._term_has_cjk(term) or self._term_is_body_column_cjk(term):
                 warnings.extend(_route_text_term(term.value).warnings)
+        return warnings
+
+    # ============================================================
+    # D1-D3: attachment: 内容检索字段 (filename OR text_content 过滤谓词)
+    # ============================================================
+    #
+    # attachment: 是过滤谓词 (心智模型同 from:/has:/in:), 不做 lane/不做归因 —— 命中
+    # source='body'/filename=None 是 D1 接受语义 (带归因排名走附件融合 lane / 工具)。
+    # 谓词进 _search_email_bodies_parsed 的 predicates 列表: 纯 attachment: 查询天然走
+    # 纯过滤 else 分支 (不依赖 fts_expr 非空), 绕开「无裸文本词落空」死角。
+    # 值路由镜像 PR5 谓词族 (_column_cjk_term_predicate) 的附件表姊妹, 零 lane/fused 改动。
+
+    def _attachment_content_predicate(
+        self, value: str, *, negate: bool
+    ) -> Optional[FilterPredicate]:
+        """把一个 ``attachment:`` 值编译成附件内容 IN/NOT-IN 子查询谓词 (D3)。
+
+        EXISTS-join 回 email (``email_attachment.id = fts.rowid`` → ``a.internal_id``):
+          - trigram_enabled:
+            - >=3 字符 (任意文种) → ``email_attachment_fts_trigram MATCH`` (默认跨
+              filename + text_content 两列 → 文件名/正文子串同路)
+            - 2 字 CJK / 短拉丁 (<3) → trigram 表 filename/text_content LIKE 兜底
+              (MATCH <3 字符无召回)
+            - 1 字 CJK → None (拦截; warning 由 _collect_attachment_term_warnings 收集)
+          - trigram off → 降级 ``email_attachment_fts`` (unicode61, 仅 text_content) MATCH
+            整词语义 (CJK 大概率 0 命中 = master-off 既有降级语义, 不含 filename 列)。
+        不过滤 inline —— 镜像附件融合 lane (_attachment_trigram_match_entries), 且 inline
+        附件结构性进不了 FTS (登记面只 enqueue 非 inline, trigram/unicode 表都只索引
+        status='extracted')。与 has:attachment (存在性) 正交。graceful degrade: 表缺失
+        (v38 旧库) → 谓词 AND 在它所在的每条候选语句里, 语句抛 OperationalError 被
+        语句级 try/except 接住返回 [] → 含 attachment: 的查询**整体返回空** (fail-closed,
+        不崩; **不是**「谓词静默失效=过滤放宽」)。pin: TestAttachmentTrigramLaneDegrade。
+        """
+        in_kw = "NOT IN" if negate else "IN"
+        if not self.trigram_enabled:
+            # master off: 降级 email_attachment_fts (unicode61, text_content only) 整词 MATCH。
+            return FilterPredicate(
+                f"m.internal_id {in_kw} (SELECT a.internal_id FROM email_attachment_fts "
+                f"JOIN email_attachment a ON a.id = email_attachment_fts.rowid "
+                f"WHERE email_attachment_fts MATCH ?)",
+                (_quote_fts_token(value),),
+            )
+        route = _route_text_term(value)
+        if route.route == "too_short":
+            return None
+        use_match = (route.route == "trigram" and route.trigram_mode == "match") or (
+            route.route == "unicode" and len(route.original) >= 3
+        )
+        if use_match:
+            phrase = _quote_fts_token(
+                route.trigram_core if route.route == "trigram" else route.original
+            )
+            return FilterPredicate(
+                f"m.internal_id {in_kw} (SELECT a.internal_id "
+                f"FROM email_attachment_fts_trigram "
+                f"JOIN email_attachment a ON a.id = email_attachment_fts_trigram.rowid "
+                f"WHERE email_attachment_fts_trigram MATCH ?)",
+                (phrase,),
+            )
+        # 2 字 CJK / 短拉丁: trigram 表 filename/text_content LIKE 兜底。
+        core = route.trigram_core if route.route == "trigram" else route.original
+        like = f"%{escape_like_value(core)}%"
+        return FilterPredicate(
+            f"m.internal_id {in_kw} (SELECT a.internal_id "
+            f"FROM email_attachment_fts_trigram "
+            f"JOIN email_attachment a ON a.id = email_attachment_fts_trigram.rowid "
+            f"WHERE email_attachment_fts_trigram.filename LIKE ? ESCAPE '\\' "
+            f"OR email_attachment_fts_trigram.text_content LIKE ? ESCAPE '\\')",
+            (like, like),
+        )
+
+    def _build_attachment_content_predicates(
+        self, parsed: ParsedSearchQuery
+    ) -> list[FilterPredicate]:
+        """把 parsed 路径的 attachment: 值编译成附件内容 AND/NOT 谓词 (D1-D3)。
+
+        正向 → IN 子查询 (AND 进 predicates)；负向 (-attachment:) → NOT IN 子查询。
+        1 字 CJK 值 (trigram-on) 返回 None → 跳过 (warning 另行收集)。恒建 (不受 flag
+        门控): flag=on 走 trigram 路由, flag=off 走 email_attachment_fts unicode61 降级。
+        """
+        predicates: list[FilterPredicate] = []
+        for value in parsed.attachment_terms:
+            pred = self._attachment_content_predicate(value, negate=False)
+            if pred is not None:
+                predicates.append(pred)
+        for value in parsed.neg_attachment_terms:
+            pred = self._attachment_content_predicate(value, negate=True)
+            if pred is not None:
+                predicates.append(pred)
+        return predicates
+
+    def _collect_attachment_term_warnings(
+        self, parsed: ParsedSearchQuery
+    ) -> list[str]:
+        """收集 attachment: 值的 1 字 CJK 拦截 warning (cjk_too_short:<字>)。
+
+        仅 trigram-on 生效 (与裸 CJK 词一致; trigram-off 走整词 MATCH 降级, 不拦截)。
+        """
+        warnings: list[str] = []
+        for value in (*parsed.attachment_terms, *parsed.neg_attachment_terms):
+            route = _route_text_term(value)
+            if route.route == "too_short":
+                warnings.extend(route.warnings)
         return warnings
 
     def _exclude_from_body_match(self, term: TextTerm) -> bool:

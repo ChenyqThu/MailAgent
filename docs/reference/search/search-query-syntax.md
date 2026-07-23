@@ -35,7 +35,9 @@ serve-api `GET /api/email/search?q=`、CLI `mailagent email search`、chat tools
 | `newer_than:` | — | `date_received` | 相对 now：`Nd/Nw/Nm/Ny`（天/周/月/年，m=30d, y=365d），`>= now - N` |
 | `older_than:` | — | `date_received` | `< now - N` |
 | `is:` | — | 布尔列 | `read`→is_read=1、`unread`→is_read=0、`flagged`→is_flagged=1、`unflagged`→is_flagged=0、`pinned`→is_pinned=1、`important`→is_important=1 |
-| `has:` | — | 附件 | `attachment`→`EXISTS (SELECT 1 FROM email_attachment a WHERE a.internal_id = m.internal_id AND COALESCE(a.is_inline,0)=0)` |
+| `has:` | — | 附件（存在性） | `attachment`→`EXISTS (SELECT 1 FROM email_attachment a WHERE a.internal_id = m.internal_id AND COALESCE(a.is_inline,0)=0)` |
+| `filename:` | — | 附件文件名（内容） | 非 inline 附件文件名子串：`EXISTS (SELECT 1 FROM email_attachment a WHERE a.internal_id = m.internal_id AND COALESCE(a.is_inline,0)=0 AND COALESCE(a.filename,'') LIKE '%v%')`。plain LIKE，不进 trigram 家族，**不受 `SEARCH_TRIGRAM_ENABLED` 影响**，CJK/拉丁同路且覆盖 <3 字符短值（`filename:v2`）。与 `has:attachment`（存在性）/ `attachment:`（内容）正交 |
+| `attachment:` | — | 附件正文 + 文件名（内容） | 附件**内容检索**过滤谓词（filename OR text_content，EXISTS join 回邮件）。值路由镜像 §9.6 CJK 谓词族：`SEARCH_TRIGRAM_ENABLED=true` 时 ≥3 字符（任意文种）→ `email_attachment_fts_trigram MATCH`（两列）、2 字 CJK/短拉丁 → trigram 表列 LIKE、1 字 CJK → 拦截 + `cjk_too_short` warning；flag=false → 降级 `email_attachment_fts`（unicode61，仅 text_content）整词 MATCH（CJK 大概率 0 命中）。命中归因 `source='body'`/`filename=null`（过滤谓词不做归因，带归因排名走附件融合 lane，见 §9.7）。inline 附件**结构性**不可命中（登记面只 enqueue 非 inline 附件抽文本，两张附件 FTS 表都只索引 `status='extracted'` 行——与 `filename:` 的显式 `is_inline=0` 过滤等效但机制不同）。与 `has:attachment`（存在性）正交 |
 | `priority:` | — | `ai_priority` | 别名映射后 `LIKE '%映射词%'`：urgent/紧急→紧急、important/重要→重要、normal/一般→一般、low/低→低（DB 实际值带 emoji 前缀如 `🔴 紧急`，故用 LIKE）。未知值→原值 LIKE |
 | `sort:` | — | （排序指令，非过滤谓词） | `relevance` / `date`（别名 `newest`）/ `oldest`，详见 §4.4。不产生 WHERE 谓词，只覆盖 ORDER BY；首个有效值生效，非法值 → `unknown_value:sort:<v>` warning |
 | `body:` | — | `email_body_fts.body_markdown` | FTS5 column filter；值复用 smart transform，参与 bm25/RRF；不替代裸词全文 |
@@ -224,7 +226,7 @@ date-only 的 `until <= '2026-06-01'` 还会漏掉当天全部邮件。因此：
 
 - Python：pytest runner 建 in-memory SQLite（最小 schema：email_metadata + email_body_fts(contentful, rowid=internal_id) + email_attachment + email_attachment_text + email_attachment_fts），灌 emails；`attachments[].text_content` 存在时写入 `email_attachment_text` 并索引到 `email_attachment_fts`，逐 case 跑 search、断言。
 - TS：~~vitest runner~~ **Phase B（G-B1a）已删除**——桌面 ⌘K 经 loopback serve-api 复用 Python 引擎，无独立 TS 检索代码，故无需 TS 夹具 runner。夹具现仅由 Python runner 消费。
-- 夹具必须覆盖：每个字段至少 1 例、别名、引号值、否定（字段/文本/纯否定）、OR（字段同类/文本同类/跨类降级）、未知字段降级文本、空值丢弃、date-only 边界（当天含）、时区混存数据的日期过滤、newer_than 相对日期、纯过滤排序、列级 FTS（`body:` / `subject~:` / `sender~:`）、收件人 FTS（`to~:` / `cc~:` / `from~:` 命中 + 收件人词 + 正文词 AND + **裸词不命中收件人专属 token** 守卫 + 负向收件人），附件正文融合（only attachment / body+attachment / metadata filter 传播）、parsed 路径 OR 组 CJK 子串（`p5_or_group_*`：2 字 LIKE / ≥3 MATCH 合并 / CJK+拉丁并集 / 纯拉丁不变 pin）与列级 CJK 子串（`p5_column_*`：`body:`/`subject~:` 2 字/≥3 / 负向 / 与 filter 组合 / flag-off prefix-only pin，见 §9.6）、零语法 fast-path 行为不变（与现状对照例）、CJK smart 不回归、与结构化参数 merge。
+- 夹具必须覆盖：每个字段至少 1 例、别名、引号值、否定（字段/文本/纯否定）、OR（字段同类/文本同类/跨类降级）、未知字段降级文本、空值丢弃、date-only 边界（当天含）、时区混存数据的日期过滤、newer_than 相对日期、纯过滤排序、列级 FTS（`body:` / `subject~:` / `sender~:`）、收件人 FTS（`to~:` / `cc~:` / `from~:` 命中 + 收件人词 + 正文词 AND + **裸词不命中收件人专属 token** 守卫 + 负向收件人），附件正文融合（only attachment / body+attachment / metadata filter 传播）、parsed 路径 OR 组 CJK 子串（`p5_or_group_*`：2 字 LIKE / ≥3 MATCH 合并 / CJK+拉丁并集 / 纯拉丁不变 pin）与列级 CJK 子串（`p5_column_*`：`body:`/`subject~:` 2 字/≥3 / 负向 / 与 filter 组合 / flag-off prefix-only pin，见 §9.6）、DSL 附件字段（`attachment_field_*`：CJK ≥3 MATCH / 2 字 LIKE / 拉丁 / 短拉丁 <3 LIKE + flag-off 对照 / 命中文件名列 / 组合 AND / 否定 / 1 字 CJK 拦截 / OR 相邻悬空 `dangling_or`（`attachment:` 不进 OR 组，镜像 `sort:` 先例）/ trigram-off 子串漏召回 + 整词命中 / 空值 warning；`filename_field_*`：拉丁子串 / <3 字符短值 / inline 排除 / 不命中正文 / 否定，见 §9.8；v38 缺表 fail-closed pin 在 `TestAttachmentTrigramLaneDegrade`）、零语法 fast-path 行为不变（与现状对照例）、CJK smart 不回归、与结构化参数 merge。
 
 ## 7. 示例
 
@@ -239,6 +241,8 @@ date-only 的 `until <= '2026-06-01'` 还会漏掉当天全部邮件。因此：
 | `date:2026-06-01 from:tp-link.com` | 本地时区 6 月 1 日当天、发件域含 tp-link.com |
 | `subject~:Redis timeout` | subject FTS 命中 Redis，且正文/标题/发件人或附件正文命中 timeout |
 | `contract from:alice` | 正文或附件正文含 contract，且邮件发件人满足 alice |
+| `attachment:合同` | 存在附件的**正文或文件名**含"合同"（纯过滤，按日期倒序；命中记 `source='body'`） |
+| `filename:roadmap is:unread` | 未读且存在非 inline 附件文件名含"roadmap"（含 `roadmap_v2.xlsx`；短值 `filename:v2` 同理） |
 
 ## 8. 局限与未来扩展（v1 明确不做）
 
@@ -246,7 +250,7 @@ date-only 的 `until <= '2026-06-01'` 还会漏掉当天全部邮件。因此：
 - 不给既有 `subject:` / `from:` 叠加 FTS boost；它们继续是 LIKE 硬过滤。需要列级相关度时使用新增 `subject~:` / `sender~:`。
 - `to:` / `cc:` / `from:` 的 **LIKE 硬过滤**不叠加 FTS boost（仍是 substring LIKE）；需要收件人
   全文/相关度时用 T8 新增的 `to~:` / `cc~:` / `from~:`（并行 `email_recipient_fts` 表，见 §10）。
-- 附件融合只在 smart 正向全文路径启用；`mode='raw'` 保持正文 FTS5 逃生门。列级 FTS term 在附件分支作为 `email_body_fts` 门控，只有列级 term、没有裸全文词时不查询附件正文。
+- **带归因的**附件融合（`source='attachment'` + `filename` 归因、参与 RRF 排名）只在 smart 正向全文路径启用；`mode='raw'` 保持正文 FTS5 逃生门。列级 FTS term（`body:`/`subject~:`/`sender~:`）在这条融合分支里作为 `email_body_fts` 门控，只有列级 term、没有裸全文词时不做带归因的附件融合。**但附件不再只能被动 gate**：`attachment:` / `filename:` 两个字段（parsed 路径过滤谓词，见 §2.1）可直接主动检索附件正文/文件名——它们是 AND 过滤谓词、不做归因（命中 `source='body'`/`filename=null`），与融合 lane 的带归因排名是两套语义（要归因升级另立独立 lane）。
 - jieba 词典级中文分词（更重，双运行时一致性风险；trigram 已覆盖子串搜索，见 §9）。**裸全文中文子串**已由 §9 trigram 路由解决（flag-gated）；**列级 FTS** `body:` / `subject~:` / `sender~:` 的**中文值**（parsed 路径）1g 起也走 trigram 同名列子串（`SEARCH_TRIGRAM_ENABLED` 门；`body:产品` 现能命中 `本周产品评审...`，见 §9.6）；**收件人列级** `to~:` / `cc~:` / `from~:` 仍走 `unicode61`（recipient 表无 trigram 变体，本批 out of scope）。
 - ~~保存搜索/搜索历史~~ **已在 Phase B（G-B3）落地**：⌘K 命令面板 localStorage 搜索历史（去重/上限 8）+ 收藏搜索 CRUD + facet chips（`is:unread` / `has:attachment`，引号感知 token toggle），见 `frontend/src/shared/state/search-history.ts` + `frontend/src/shared/lib/dsl_token.ts`。
 - 纯过滤查询是 metadata 全表扫描（7 万行 ~30-60ms 可接受；变慢再加索引/物化）。
@@ -333,6 +337,15 @@ trigram 路径早期把 hit 的 `snippet` 设成 `''`（前端只剩 subject 高
 - MATCH 默认跨 `filename` + `text_content` 两列，文件名子串（中/英）随之可搜（1f，如 `固件手册`、`roadmapzeta` 命中对应文件名的附件）。同邮件多附件命中同 term 按 `internal_id` 去重（保留 bm25 最优位次）；正文 + 附件同 term 双命中 → `source='body'` 优先（与既有 lane 注册顺序语义一致，正文先于附件）；仅附件命中 → `source='attachment'` + `filename`。
 - graceful degrade：`email_attachment_fts_trigram` 表缺失（v38 老库未迁移到 v39）→ MATCH/LIKE 抛 `OperationalError` 被搜索路径 try/except 接住，返回空（该维度不生效，搜索不崩）。
 - **回滚**：关 master `SEARCH_TRIGRAM_ENABLED` 整体回旧路径（含此附件 lane，回到 PR4 前「CJK 快路径不融合附件」现状）；只想撤拉丁子串的附件面可单独关 `SEARCH_LATIN_TRIGRAM_ENABLED`（CJK 附件 lane 不受影响）；彻底回退 `email_attachment_fts_trigram` 见 `sync_store.py` v39 迁移块注释（DROP 3 trigger + DROP 表；正文 trigram 表 `email_body_fts_trigram` / 主表 `email_body_fts` / 附件主 FTS 表 `email_attachment_fts` 均不动）。
+
+### 9.8 DSL `attachment:` / `filename:` 字段如何复用/不复用附件 trigram 基建（批次2）
+
+§9.7 的附件 trigram 表 `email_attachment_fts_trigram` 除了喂 plain 路径的**带归因融合 lane**，批次2 起还被 DSL 的 `attachment:` 字段（§2.1）当作**过滤谓词**的检索源——两者语义分层，实现不共用一行 lane 代码：
+
+- **`attachment:`（内容检索谓词）** = `_attachment_content_predicate` / `_build_attachment_content_predicates`（`email_repository.py`），是 §9.6 CJK 谓词族（`_column_cjk_term_predicate`）指向附件表的**姊妹函数**：`m.internal_id IN (SELECT a.internal_id FROM email_attachment_fts_trigram JOIN email_attachment a ON a.id=rowid WHERE …)`。值路由镜像裸 CJK 词（≥3 字符任意文种 → MATCH 两列 / 2 字 CJK+短拉丁 → 列 LIKE / 1 字 CJK → 拦截 + `cjk_too_short`），`SEARCH_TRIGRAM_ENABLED=false` 降级 `email_attachment_fts`（unicode61，仅 text_content）整词 MATCH。它进 `_search_email_bodies_parsed` 的 `predicates` 列表 → 纯 `attachment:` 查询天然走**纯过滤 else 分支**（不依赖 fts_expr 非空，绕开「无裸文本词落空」死角），**零 lane/fused 路径改动**。命中不做归因（`source='body'`/`filename=null`），这是 D1 接受语义——要 `source='attachment'` 归因走 §9.7 融合 lane（`email_search_attachments` 工具同源）。
+- **`filename:`（文件名子串谓词）** = 普通 `FilterPredicate`（`search_query.py` `_build_filter_predicate`），**不碰任何 trigram/FTS 表**：直接对 `email_attachment.filename` 列做 `LIKE '%v%' ESCAPE`（排除 inline），附件行仅数千、LIKE 扫描零成本，**不受 `SEARCH_TRIGRAM_ENABLED` 影响**且覆盖 <3 字符短值（trigram MATCH 硬约束接不住）。CJK/拉丁同路。
+- graceful degrade：`attachment:` 谓词 SQL 命中缺失的 trigram 表（v38 老库）时，谓词 AND 在它所在的每条候选语句里（纯过滤单条 SELECT / fused 各 lane / recipient-ranked），语句抛 `OperationalError` 被语句级 try/except 接住返回空 → 含 `attachment:` 的查询**整体返回空**（fail-closed，不崩、log warning；**不是**「谓词静默失效=过滤被放宽」——用户不会拿到假装被过滤过的结果）。这与 §9.7 融合 lane 的降级（lane 级静默缺席、body 结果照常）是两种粒度，pin 在 `TestAttachmentTrigramLaneDegrade`；`filename:` 只碰 `email_attachment` 恒在，无降级问题。
+- 行为夹具（§6）新增 `attachment_field_*` / `filename_field_*` case 锁定（含 trigram-off 子串漏召回/整词命中 pin、inline 排除、短值、组合 AND、否定）。
 
 ## 10. 收件人全文化（T8 并行 recipient 表，无 flag）
 

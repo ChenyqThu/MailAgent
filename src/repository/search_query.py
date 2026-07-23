@@ -61,6 +61,10 @@ class ParsedSearchQuery:
     filters: list[FilterPredicate] = field(default_factory=list)
     or_filter_groups: list[list[FilterPredicate]] = field(default_factory=list)
     neg_filters: list[FilterPredicate] = field(default_factory=list)
+    # attachment: 内容检索 (D1-D3): 原始值列表, 由 repo 侧按 SEARCH_TRIGRAM_ENABLED
+    # flag-aware 编译成附件表 IN/NOT-IN 谓词 (parser 无 flag 上下文, 故只存值)。
+    attachment_terms: list[str] = field(default_factory=list)
+    neg_attachment_terms: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     is_plain_passthrough: bool = False
     sort: Optional[str] = None  # T2: 'relevance' | 'date' | 'oldest'（None=默认排序）
@@ -95,6 +99,10 @@ _FIELD_ALIASES: dict[str, str] = {
     "is": "is",
     "has": "has",
     "priority": "priority",
+    # 附件文件名子串过滤 (D2): plain LIKE 谓词, 不进 trigram 家族, 不受 flag 影响,
+    # 覆盖 <3 字符短值; 排除 inline 附件 (镜像 has:attachment)。attachment: (内容检索)
+    # 不在此表 —— 它需 repo 侧 flag-aware 路由, 走主循环 _parse_attachment_token 拦截。
+    "filename": "filename",
 }
 
 # T6: email_body_fts 列级 FTS 语法（body/subject/sender 同一张主表）。
@@ -184,6 +192,11 @@ def parse_search_query(
                 saw_syntax = True
                 if sort_value is not None and parsed.sort is None:
                     parsed.sort = sort_value
+                continue
+            # attachment: 内容检索 (D3) 在主循环拦截 (镜像 sort: 手法): 它需 repo 侧
+            # flag-aware 路由, 不进 FilterPredicate/OR 机制, 只把值存进 parsed。
+            if _parse_attachment_token(token, parsed):
+                saw_syntax = True
                 continue
             unit, token_saw_syntax = _classify_token(
                 token,
@@ -280,6 +293,7 @@ def _is_registered_field_token(token: str) -> bool:
         or _FTS_COLUMN_ALIASES.get(name) is not None
         or _FTS_RECIPIENT_COLUMN_ALIASES.get(name) is not None
         or name == "sort"
+        or name == "attachment"
     )
 
 
@@ -298,6 +312,29 @@ def _parse_sort_token(token: str, warnings: list[str]) -> tuple[bool, Optional[s
         warnings.append(f"unknown_value:sort:{raw}" if raw else "empty_value:sort")
         return True, None
     return True, canonical
+
+
+def _parse_attachment_token(token: str, parsed: ParsedSearchQuery) -> bool:
+    """识别 ``attachment:`` 内容检索字段 (D3), 把值存进 parsed 供 repo 侧编译。
+
+    返回是否为 attachment token (含否定 ``-attachment:``)。空值 → warning + consume。
+    值路由 (>=3 字符 trigram MATCH / 2 字 CJK LIKE / 1 字拦截 / flag-off 降级) 由
+    ``EmailRepository`` 依 ``SEARCH_TRIGRAM_ENABLED`` 决定 —— parser 无 flag 上下文。
+    """
+    negated = token.startswith("-") and len(token) > 1
+    body = token[1:] if negated else token
+    match = _FIELD_RE.match(body)
+    if match is None or match.group(1).lower() != "attachment":
+        return False
+    value = _strip_outer_quotes(match.group(2))
+    if value == "":
+        parsed.warnings.append("empty_value:attachment")
+        return True
+    if negated:
+        parsed.neg_attachment_terms.append(value)
+    else:
+        parsed.attachment_terms.append(value)
+    return True
 
 
 def _merge_dangling_fields(tokens: list[str]) -> list[str]:
@@ -326,6 +363,7 @@ def _merge_dangling_fields(tokens: list[str]) -> list[str]:
                 or _FTS_COLUMN_ALIASES.get(name) is not None
                 or _FTS_RECIPIENT_COLUMN_ALIASES.get(name) is not None
                 or name == "sort"
+                or name == "attachment"
             )
             and i + 1 < n  # 有下一个 token
             and tokens[i + 1] != "OR"
@@ -552,6 +590,16 @@ def _build_filter_predicate(
         )
     if field == "priority":
         return _like_predicate("m.ai_priority", _PRIORITY_ALIASES.get(value.lower(), value))
+    if field == "filename":
+        # D2: 附件文件名子串 (plain LIKE, 排除 inline, CJK/拉丁同路, 覆盖 <3 字符短值)。
+        # 不进 trigram 家族 → 无 flag/降级问题。与 attachment: (内容) 正交, 与
+        # has:attachment (存在性) 正交。否定 -filename: 走既有 neg_filters NOT-wrap 机制。
+        return FilterPredicate(
+            "EXISTS (SELECT 1 FROM email_attachment a "
+            "WHERE a.internal_id = m.internal_id AND COALESCE(a.is_inline, 0) = 0 "
+            "AND COALESCE(a.filename, '') LIKE ? ESCAPE '\\')",
+            (_like_pattern(value),),
+        )
     return None
 
 
