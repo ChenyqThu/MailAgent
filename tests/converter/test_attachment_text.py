@@ -419,3 +419,137 @@ class TestPdfOcrCascade:
         r = extract_text(self._blank_pdf(tmp_path))
         assert r.status == 'failed'
         assert r.error_message == 'no extractable text (image-only PDF / 扫描件?)'
+
+
+class TestLegacyOffice:
+    """老 Office (.doc/.ppt/.xls) soffice 桥 (批次4 PR-H) —— mock _run_soffice_convert。
+
+    mock 造一个真实的转换产物 (docx/pptx/xlsx), 让下游原生 extractor 真跑, 验证
+    「soffice 桥 → 现成 extractor」端到端接线 + extractor='soffice_bridge' 归一。
+    """
+
+    def _make_input(self, tmp_path: Path, name: str) -> Path:
+        f = tmp_path / name
+        f.write_bytes(b'\xd0\xcf\x11\xe0legacy-office-binary')  # OLE2-ish magic
+        return f
+
+    def _fake_convert(self, produce):
+        """返回 fake _run_soffice_convert: produce(out_path, format) 造真实产物 → True。"""
+        def _fake(input_path, output_dir, format='pdf', timeout=120):
+            out = Path(output_dir) / f'{Path(input_path).stem}.{format}'
+            produce(out, format)
+            return True
+        return _fake
+
+    def test_doc_bridge_extracts(self, tmp_path: Path, monkeypatch):
+        from src.converter import office_converter
+
+        def produce(out, fmt):
+            import docx as python_docx
+            assert fmt == 'docx'
+            doc = python_docx.Document()
+            doc.add_paragraph('合同条款 from legacy doc')
+            doc.save(str(out))
+
+        monkeypatch.setattr(
+            office_converter, '_run_soffice_convert', self._fake_convert(produce)
+        )
+        r = extract_text(self._make_input(tmp_path, 'contract.doc'))
+        assert r.status == 'extracted'
+        assert r.extractor == 'soffice_bridge'
+        assert '合同条款' in r.text
+
+    def test_ppt_bridge_extracts(self, tmp_path: Path, monkeypatch):
+        from src.converter import office_converter
+
+        def produce(out, fmt):
+            import pptx as python_pptx
+            assert fmt == 'pptx'
+            pres = python_pptx.Presentation()
+            slide = pres.slides.add_slide(pres.slide_layouts[5])
+            slide.shapes.title.text = '季度汇报'
+            pres.save(str(out))
+
+        monkeypatch.setattr(
+            office_converter, '_run_soffice_convert', self._fake_convert(produce)
+        )
+        r = extract_text(self._make_input(tmp_path, 'deck.ppt'))
+        assert r.status == 'extracted'
+        assert r.extractor == 'soffice_bridge'
+        assert 'Slide 1' in r.text
+        assert '季度汇报' in r.text
+
+    def test_xls_bridge_extracts(self, tmp_path: Path, monkeypatch):
+        from src.converter import office_converter
+
+        def produce(out, fmt):
+            from openpyxl import Workbook
+            assert fmt == 'xlsx'
+            wb = Workbook()
+            ws = wb.active
+            ws.append(['产品', '数量'])
+            ws.append(['redis migration', 3])
+            wb.save(str(out))
+
+        monkeypatch.setattr(
+            office_converter, '_run_soffice_convert', self._fake_convert(produce)
+        )
+        r = extract_text(self._make_input(tmp_path, 'plan.xls'))
+        assert r.status == 'extracted'
+        assert r.extractor == 'soffice_bridge'
+        assert 'redis migration' in r.text
+        assert '产品' in r.text
+
+    def test_soffice_missing_or_failed_unsupported(self, tmp_path: Path, monkeypatch):
+        """soffice 缺失 / 转换失败 (_run_soffice_convert → False) → unsupported, 不崩。"""
+        from src.converter import office_converter
+        monkeypatch.setattr(
+            office_converter, '_run_soffice_convert', lambda *a, **k: False
+        )
+        r = extract_text(self._make_input(tmp_path, 'old.doc'))
+        assert r.status == 'unsupported'
+        assert r.extractor == 'soffice_bridge'
+        assert 'LibreOffice' in (r.error_message or '')
+
+    def test_soffice_true_but_no_output_unsupported(self, tmp_path: Path, monkeypatch):
+        """_run_soffice_convert 返 True 却没产物 → unsupported (不误报 extracted)。"""
+        from src.converter import office_converter
+        monkeypatch.setattr(
+            office_converter, '_run_soffice_convert', lambda *a, **k: True
+        )
+        r = extract_text(self._make_input(tmp_path, 'old.xls'))
+        assert r.status == 'unsupported'
+        assert r.extractor == 'soffice_bridge'
+        assert 'produced no' in (r.error_message or '')
+
+    def test_all_legacy_extensions_dispatch(self, tmp_path: Path, monkeypatch):
+        """三个老格式扩展名都进 soffice 桥 (不落回 'unsupported extension' 现状)。"""
+        from src.converter import attachment_text, office_converter
+        monkeypatch.setattr(
+            office_converter, '_run_soffice_convert', lambda *a, **k: False
+        )
+        for ext in attachment_text.LEGACY_OFFICE_EXTENSIONS:
+            f = self._make_input(tmp_path, f'legacy{ext}')
+            r = extract_text(f)
+            assert r.extractor == 'soffice_bridge', ext
+            assert r.status == 'unsupported', ext
+
+    def test_real_soffice_doc_smoke(self, tmp_path: Path):
+        """本机装了 LibreOffice → 真转一个最小 .doc 端到端; 没装 → skip。"""
+        from src.converter.office_converter import _find_soffice, _run_soffice_convert
+        if _find_soffice() is None:
+            pytest.skip('LibreOffice/soffice not installed')
+        import docx as python_docx
+        doc = python_docx.Document()
+        doc.add_paragraph('real soffice bridge smoke 合同 redis')
+        docx_path = tmp_path / 'seed.docx'
+        doc.save(str(docx_path))
+        # docx → .doc via soffice, 再对那个 .doc 跑 extract_text 走桥回来。
+        ok = _run_soffice_convert(str(docx_path), str(tmp_path), format='doc')
+        doc_path = tmp_path / 'seed.doc'
+        if not ok or not doc_path.exists():
+            pytest.skip('soffice could not produce a .doc for smoke')
+        r = extract_text(doc_path)
+        assert r.status == 'extracted'
+        assert r.extractor == 'soffice_bridge'
+        assert '合同' in r.text or 'smoke' in r.text

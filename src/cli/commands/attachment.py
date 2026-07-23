@@ -463,6 +463,11 @@ def attachment_extract(
         False, "--include-missing",
         help="扫 email_attachment 没对应 email_attachment_text 行的, 补 enqueue 后处理",
     ),
+    requeue_unsupported: bool = typer.Option(
+        False, "--requeue-unsupported",
+        help="把历史 unsupported (OCR 图片 ∪ 老格式) + failed pdf 行拨回 pending 重跑 "
+             "(新 extractor 覆盖面扩展后回填存量; 可与 --pending 组合先 requeue 再处理)",
+    ),
     limit: int = typer.Option(50, "--limit", help="最多处理多少 attachment"),
     dry_run: bool = typer.Option(False, "--dry-run"),
     output: Optional[str] = typer.Option(None, "-o", "--output"),
@@ -486,10 +491,11 @@ def attachment_extract(
     cli: "CliContext" = ctx.obj
     _apply_local_output(ctx, output)
 
-    if not pending and not include_missing:
+    if not pending and not include_missing and not requeue_unsupported:
         raise emit_cli_error(cli, CliInvalidArgError(
-            "must pass at least one of --pending / --include-missing",
-            hint="--pending 处理已 enqueue 的; --include-missing 扫历史补 enqueue",
+            "must pass at least one of --pending / --include-missing / --requeue-unsupported",
+            hint="--pending 处理已 enqueue 的; --include-missing 扫历史补 enqueue; "
+                 "--requeue-unsupported 把 unsupported/failed 存量拨回 pending 重跑",
         ))
 
     if limit <= 0 or limit > 1000:
@@ -502,6 +508,13 @@ def attachment_extract(
         process_pending_extractions,
     )
     repo = cli.email_repo
+
+    # Step 0: requeue-unsupported — 把历史 unsupported (OCR 图片 ∪ 老格式) + failed pdf
+    # 行拨回 pending (批次4 PR-H)。放在 include-missing / pending 之前 —— 先 requeue
+    # 再照常处理, 让同一命令 --requeue-unsupported --pending 一步到位重跑存量。
+    requeued = None
+    if requeue_unsupported:
+        requeued = repo.requeue_unsupported_attachment_texts(dry_run=dry_run)
 
     # Step 1: include-missing — 扫 email_attachment 没对应 _text 行的, 补 enqueue
     enqueued_missing = 0
@@ -531,6 +544,7 @@ def attachment_extract(
         batch = process_pending_extractions(repo, limit=limit, dry_run=dry_run)
 
     data = {
+        "requeued": requeued,
         "enqueued_missing": enqueued_missing,
         "processed": batch.processed,
         "extracted": batch.extracted,
@@ -541,6 +555,13 @@ def attachment_extract(
     }
 
     if cli.output.lower() == "text":
+        if requeued is not None:
+            print(
+                f"requeued total={requeued['total']} "
+                f"(images={requeued['unsupported_images']} "
+                f"legacy={requeued['unsupported_legacy']} "
+                f"failed_pdf={requeued['failed_pdf']})"
+            )
         print(
             f"enqueued_missing={enqueued_missing} processed={batch.processed} "
             f"extracted={batch.extracted} unsupported={batch.unsupported} "

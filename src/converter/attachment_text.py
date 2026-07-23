@@ -10,12 +10,14 @@
     XLSX (.xlsx): python-calamine 拼 markdown table (复用 office_converter
                   现成 Rust 引擎; fallback 到 pandas + openpyxl)
     图片 (png/jpg/…): macOS Vision OCR 识别中英文本 (批次4 PR-G, 同 flag 门控)
+    老 Office (.doc/.ppt/.xls): soffice 桥转成 docx/pptx/xlsx 后复用现成 extractor
+                  (批次4 PR-H, extractor='soffice_bridge'; soffice 缺失 → unsupported)
     TXT / MD / CSV: 直接 read_text() (utf-8 with errors=replace)
-    其他: unsupported (zip/.doc/.ppt/.xls/二进制等老格式不支持)
+    其他: unsupported (zip/二进制等不支持)
 
 不做的事:
     - 表格保 formatting: xlsx 折叠 csv-like 文本, 不还原 cell merge / color
-    - 二进制压缩包 (.doc .xls .ppt zip): 历史邮件可能跳过
+    - 二进制压缩包 (zip): 历史邮件可能跳过
 
 设计:
     extract_text(file_path, content_type=None, filename=None) → ExtractResult
@@ -45,6 +47,17 @@ _PLAINTEXT_EXTENSIONS = {'.txt', '.md', '.csv', '.log'}
 # 同一常量圈选待重跑行，禁止第二份硬编码。
 OCR_IMAGE_EXTENSIONS = {
     '.png', '.jpg', '.jpeg', '.gif', '.heic', '.webp', '.tiff', '.bmp',
+}
+
+# 老 Office 二进制格式派发集（批次4 PR-H）。soffice 桥转成对应新格式后复用现成
+# extractor。**单源**：存量 requeue CLI import 同一常量圈选待重跑行，禁止第二份硬编码。
+LEGACY_OFFICE_EXTENSIONS = {'.doc', '.ppt', '.xls'}
+
+# 老格式 → soffice --convert-to 目标新格式（转出后喂对应新格式 extractor）。
+_LEGACY_OFFICE_TARGET_FORMAT = {
+    '.doc': 'docx',
+    '.ppt': 'pptx',
+    '.xls': 'xlsx',
 }
 
 # 256 KB utf-8 bytes — FTS5 单 doc 上限的一个友好 cap.
@@ -106,6 +119,8 @@ def extract_text(
             if ocr is not None:
                 return ocr
             # OCR 关闭 / 不可用 → 落回下方 unsupported（与现状逐字节一致）
+        if ext in LEGACY_OFFICE_EXTENSIONS:
+            return _extract_legacy_office(p, ext)
         return ExtractResult(
             text='', extractor='none', status='unsupported',
             error_message=f'unsupported extension: {ext!r}',
@@ -245,6 +260,55 @@ def _extract_pdf_ocr(path: Path) -> Optional[ExtractResult]:
     return ExtractResult(
         text=text, extractor='pdf_ocr', status='extracted',
         truncated=byte_truncated or page_truncated,
+    )
+
+
+def _extract_legacy_office(path: Path, ext: str) -> ExtractResult:
+    """老 Office 二进制 (.doc/.ppt/.xls) → soffice 桥转新格式 → 复用现成 extractor（批次4 PR-H）。
+
+    ``office_converter._run_soffice_convert(format=...)`` 转成 docx/pptx/xlsx（产物落
+    ``tempfile.TemporaryDirectory``，抽完出作用域即删），再喂对应 ``_extract_docx`` /
+    ``_extract_pptx`` / ``_extract_xlsx``。抽取标识统一 ``soffice_bridge``（区别原生 extractor）。
+
+    soffice 缺失 / 转换失败 / 无产物 → ``unsupported``（graceful，现状 skip 语义；
+    ``office_converter._run_soffice_convert`` 自带 try/except，找不到 soffice 返回 False
+    不抛异常）。转换成功但转出文档为空 → 沿用底层 extractor 的 ``failed`` 语义。
+    """
+    import tempfile
+
+    from src.converter import office_converter
+
+    target_format = _LEGACY_OFFICE_TARGET_FORMAT[ext]
+    with tempfile.TemporaryDirectory(prefix='legacy_office_') as tmpdir:
+        ok = office_converter._run_soffice_convert(
+            str(path), tmpdir, format=target_format,
+        )
+        if not ok:
+            return ExtractResult(
+                text='', extractor='soffice_bridge', status='unsupported',
+                error_message=(
+                    f'legacy office conversion unavailable/failed for {ext} '
+                    f'(requires LibreOffice/soffice)'
+                ),
+            )
+        converted = Path(tmpdir) / f'{path.stem}.{target_format}'
+        if not converted.exists() or converted.stat().st_size == 0:
+            return ExtractResult(
+                text='', extractor='soffice_bridge', status='unsupported',
+                error_message=f'soffice produced no {target_format} output for {path.name}',
+            )
+        # TemporaryDirectory 作用域内读产物（extractor 一次性把 text 读进内存）。
+        if target_format == 'docx':
+            result = _extract_docx(converted)
+        elif target_format == 'pptx':
+            result = _extract_pptx(converted)
+        else:
+            result = _extract_xlsx(converted)
+
+    # extractor 统一标 soffice_bridge；status / text / truncated / error 沿用底层结果。
+    return ExtractResult(
+        text=result.text, extractor='soffice_bridge', status=result.status,
+        error_message=result.error_message, truncated=result.truncated,
     )
 
 

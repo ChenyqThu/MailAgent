@@ -181,6 +181,15 @@ async def tick_loop(
         f"(limit_per_cycle={limit_per_cycle}, poll={poll_interval_sec}s)"
     )
 
+    # 启动诊断: soffice 有无一目了然（批次4 PR-H 老格式桥 .doc/.ppt/.xls 依赖 LibreOffice）。
+    # 只打日志、不做门控（soffice 缺失时老格式附件 graceful 落 unsupported）。
+    try:
+        from src.converter.office_converter import check_soffice_available
+
+        check_soffice_available()
+    except Exception as e:  # noqa: BLE001 — 诊断探测失败不影响 worker 主循环
+        logger.debug(f"[attachment-text-worker] soffice probe error: {e}")
+
     while shutdown_event is None or not shutdown_event.is_set():
         try:
             stats = await asyncio.to_thread(

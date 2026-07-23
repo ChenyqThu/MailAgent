@@ -83,17 +83,18 @@ for h in hits:
 
 **前端入口**：
 - CLI `mailagent attachment search '<query>' [--mailbox X --since Y --until Z --limit N] [--raw]` （默认 smart）
-- CLI `mailagent attachment extract --pending --include-missing [--limit N --dry-run]` —— 触发抽取 pending 附件 + 一次性补 enqueue 历史
+- CLI `mailagent attachment extract --pending --include-missing [--requeue-unsupported] [--limit N --dry-run]` —— 触发抽取 pending 附件 + 一次性补 enqueue 历史 + 存量回填（见下）
 - Webhook event `search_email_attachments`（自动从 Redis 消费）
 - Chat agent tool `email_search_attachments`（silent tier, category=read）
 
 **抽取流程**：
 1. 邮件 sync 写 `email_attachment` 时，`commit_email_with_body` 自动 enqueue 非 inline 附件成 `email_attachment_text(status='pending')`
 2. 长驻服务里的 **attachment_text worker**（`src/mail/attachment_text_worker.py` `tick_loop`，`src/service.py` 按 supervised 模式注册）每 `MAILAGENT_ATTACHMENT_TEXT_WORKER_POLL_INTERVAL_SEC`（默认 60s）跑一轮，每轮消费最多 `MAILAGENT_ATTACHMENT_TEXT_WORKER_LIMIT_PER_CYCLE`（默认 25）个 pending / retry-ready 行，自动吸收队列。总开关 `MAILAGENT_ATTACHMENT_TEXT_WORKER_ENABLED`（默认 true）；显式 false → 不 spawn worker，回纯手动现状。手动补量 / dry-run / `--include-missing` 仍用 CLI `mailagent attachment extract --pending --limit 50`（与 worker 共享单一消费逻辑 `process_pending_extractions()`，行为逐字节一致）。
-3. extractor 派发：`.pdf` → pypdf（无文本层扫描件级联 Vision OCR，extractor `pdf_ocr`）/ `.docx` → python-docx / `.pptx` → python-pptx / `.xlsx` → python-calamine / `.txt/.md/.csv` → 直接 read_text / 图片（png/jpg/jpeg/gif/heic/webp/tiff/bmp）→ macOS Vision OCR（extractor `vision_ocr`，批次4 PR-G，flag `MAILAGENT_ATTACHMENT_OCR_ENABLED` 默认开；懒 import 缺 pyobjc 软着陆维持 unsupported；护栏 PDF 20 页 / 单图 15MB / 渲染长边 4096px）
+3. extractor 派发：`.pdf` → pypdf（无文本层扫描件级联 Vision OCR，extractor `pdf_ocr`）/ `.docx` → python-docx / `.pptx` → python-pptx / `.xlsx` → python-calamine / `.txt/.md/.csv` → 直接 read_text / 图片（png/jpg/jpeg/gif/heic/webp/tiff/bmp）→ macOS Vision OCR（extractor `vision_ocr`，批次4 PR-G，flag `MAILAGENT_ATTACHMENT_OCR_ENABLED` 默认开；懒 import 缺 pyobjc 软着陆维持 unsupported；护栏 PDF 20 页 / 单图 15MB / 渲染长边 4096px）/ 老 Office `.doc/.ppt/.xls` → soffice 桥（`office_converter._run_soffice_convert(format=docx/pptx/xlsx)` tempdir 转出 → 复用 python-docx/pptx/calamine 抽取，extractor `soffice_bridge`，批次4 PR-H，无独立 flag；soffice 缺失 graceful 落 unsupported）
 4. 成功 → `status='extracted'` + text 入 FTS5（trigger 自动同步）
 5. 失败 → `status='failed'` + 指数退避（1m / 5m / 15m / 1h / 2h）；超 5 次 → `next_retry_at=NULL` dead
-6. unsupported (zip / .doc / .ppt) → `status='unsupported'` 不索引也不重试
+6. unsupported (zip / 无 soffice 时的 .doc/.ppt/.xls / 未知二进制) → `status='unsupported'` 不索引也不重试
+7. **存量回填**（extractor 覆盖面扩展后把历史终态行拨回重跑）：`mailagent attachment extract --requeue-unsupported [--dry-run]` —— 圈选 `status='unsupported' AND 扩展名 ∈ (OCR 图片集 ∪ 老格式集)` + `status='failed' AND 扩展名 = .pdf` → `UPDATE ... SET status='pending'`（清 retry/error），worker 用新 extractor 重跑。扩展名集单源 `attachment_text.py` 的 `OCR_IMAGE_EXTENSIONS`/`LEGACY_OFFICE_EXTENSIONS`；`enqueue_attachment_text_extraction` 的 `INSERT OR IGNORE` 幂等语义不动（已存在的 `unsupported` 行不会被 `--include-missing` 捕获，`--requeue-unsupported` 是唯一显式重置路径）
 
 **Cap**: 单 attachment 文本 ≤ 256 KB（utf-8 字节）。超出 `truncated=True` 标记，FTS5 索引大小可控。
 

@@ -3757,6 +3757,98 @@ class EmailRepository:
         finally:
             conn.close()
 
+    def requeue_unsupported_attachment_texts(
+        self, *, dry_run: bool = False
+    ) -> dict:
+        """把历史 unsupported / failed 附件文本行拨回 pending, 让 worker 用新 extractor 重跑（批次4 PR-H）。
+
+        新增 OCR（图片）/ 老格式（.doc/.ppt/.xls）extractor 后, 存量已判 ``unsupported``
+        的历史行不会被 ``--include-missing``（``LEFT JOIN ... IS NULL``）或
+        ``enqueue_attachment_text_extraction``（``INSERT OR IGNORE`` 幂等）重新捕获 ——
+        本方法是唯一把它们从终态拨回 ``pending`` 的显式路径。
+
+        圈选（绕开 error_message 字符串锚点, 按 status × 扩展名直接圈）:
+            - ``status='unsupported' AND 扩展名 ∈ (OCR 图片集 ∪ 老格式集)``
+            - ``status='failed'      AND 扩展名 = '.pdf'``（19 行全重跑; 1 个加密 PDF
+              再 failed 一次无害）
+        → ``UPDATE ... SET status='pending', retry_count=0, next_retry_at=NULL,
+        error_message=NULL, updated_at=?``。扩展名集 **import 自 attachment_text.py 单源**
+        （禁止第二份硬编码）。``enqueue_attachment_text_extraction`` 的 INSERT OR IGNORE
+        **一行不动**。
+
+        Args:
+            dry_run: True → 只数不写（CLI ``--dry-run``）。
+
+        Returns:
+            dict: ``{unsupported_images, unsupported_legacy, failed_pdf, total, dry_run}``。
+        """
+        from src.converter.attachment_text import (
+            LEGACY_OFFICE_EXTENSIONS,
+            OCR_IMAGE_EXTENSIONS,
+        )
+
+        image_exts = sorted(OCR_IMAGE_EXTENSIONS)
+        legacy_exts = sorted(LEGACY_OFFICE_EXTENSIONS)
+
+        conn = self._connect()
+        now = time.time()
+        try:
+            def _count_unsupported(exts: list[str]) -> int:
+                if not exts:
+                    return 0
+                like_clause = " OR ".join("lower(a.filename) LIKE ?" for _ in exts)
+                params = [f"%{e}" for e in exts]
+                row = conn.execute(
+                    f"""SELECT COUNT(*) FROM email_attachment_text t
+                          JOIN email_attachment a ON a.id = t.attachment_id
+                         WHERE t.status = 'unsupported' AND ({like_clause})""",
+                    params,
+                ).fetchone()
+                return int(row[0])
+
+            unsupported_images = _count_unsupported(image_exts)
+            unsupported_legacy = _count_unsupported(legacy_exts)
+            failed_pdf = int(
+                conn.execute(
+                    """SELECT COUNT(*) FROM email_attachment_text t
+                         JOIN email_attachment a ON a.id = t.attachment_id
+                        WHERE t.status = 'failed'
+                          AND lower(a.filename) LIKE '%.pdf'"""
+                ).fetchone()[0]
+            )
+
+            result = {
+                "unsupported_images": unsupported_images,
+                "unsupported_legacy": unsupported_legacy,
+                "failed_pdf": failed_pdf,
+                "total": unsupported_images + unsupported_legacy + failed_pdf,
+                "dry_run": dry_run,
+            }
+            if dry_run:
+                return result
+
+            all_exts = image_exts + legacy_exts
+            like_clause = " OR ".join("lower(a.filename) LIKE ?" for _ in all_exts)
+            like_params = [f"%{e}" for e in all_exts]
+            conn.execute(
+                f"""UPDATE email_attachment_text
+                       SET status = 'pending', retry_count = 0,
+                           next_retry_at = NULL, error_message = NULL,
+                           updated_at = ?
+                     WHERE attachment_id IN (
+                       SELECT t.attachment_id FROM email_attachment_text t
+                         JOIN email_attachment a ON a.id = t.attachment_id
+                        WHERE (t.status = 'unsupported' AND ({like_clause}))
+                           OR (t.status = 'failed'
+                               AND lower(a.filename) LIKE '%.pdf')
+                     )""",
+                [now, *like_params],
+            )
+            conn.commit()
+            return result
+        finally:
+            conn.close()
+
     # 老 email_attachment_fts (unicode61) SELECT 骨架 —— raw / flag-off / v38 缺表降级共用
     # (与批次3 迁移前 search_attachment_texts 逐字节等价, 只是 MATCH 串来源参数化)。
     _ATTACHMENT_UNICODE61_SELECT = """

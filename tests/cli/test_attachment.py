@@ -419,3 +419,100 @@ class TestAttachmentExtract:
         assert result.exit_code == 2, result.output
         payload = _last_json(result.output)
         assert payload["error"]["code"] == "E_INVALID_ARG"
+
+
+class TestAttachmentRequeueUnsupported:
+    """批次4 PR-H: attachment extract --requeue-unsupported 存量回填。"""
+
+    def _set_env(self, monkeypatch):
+        monkeypatch.setenv("NOTION_TOKEN", "x")
+        monkeypatch.setenv("EMAIL_DATABASE_ID", "y")
+        monkeypatch.setenv("USER_EMAIL", "t@example.com")
+        monkeypatch.setenv("MAIL_ACCOUNT_NAME", "t")
+
+    def _seed_unsupported(
+        self, db_path, filename, status="unsupported",
+        content_type="application/octet-stream",
+    ) -> int:
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("PRAGMA foreign_keys=ON")
+        try:
+            cur = conn.execute(
+                """INSERT INTO email_attachment
+                     (internal_id, content_id, filename, content_type, size_bytes,
+                      is_inline, local_path, sha256, derived_from, derived_format,
+                      created_at, schema_version)
+                   VALUES (12345, NULL, ?, ?, 10, 0, ?, ?, NULL, NULL,
+                           strftime('%s','now'), 1)""",
+                (filename, content_type,
+                 f"data/attachments/12345/{filename}", "aa" * 16),
+            )
+            att_id = int(cur.lastrowid)
+            conn.execute(
+                """INSERT INTO email_attachment_text
+                     (attachment_id, text_content, text_size_bytes, extractor,
+                      status, retry_count, created_at, updated_at)
+                   VALUES (?, NULL, 0, 'none', ?, 0,
+                           strftime('%s','now'), strftime('%s','now'))""",
+                (att_id, status),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return att_id
+
+    def test_requeue_dry_run_reports_counts(
+        self, cli_runner, seeded_db, monkeypatch,
+    ):
+        self._set_env(monkeypatch)
+        self._seed_unsupported(seeded_db, "scan.png")
+        self._seed_unsupported(seeded_db, "old.doc")
+        self._seed_unsupported(seeded_db, "scanned.pdf", status="failed")
+        result = _invoke(cli_runner, "attachment", "extract",
+                         "--requeue-unsupported", "--dry-run",
+                         "-o", "json", db_path=seeded_db)
+        assert result.exit_code == 0, result.output
+        payload = _last_json(result.output)
+        rq = payload["data"]["requeued"]
+        assert rq["unsupported_images"] == 1
+        assert rq["unsupported_legacy"] == 1
+        assert rq["failed_pdf"] == 1
+        assert rq["total"] == 3
+        assert rq["dry_run"] is True
+        # dry-run 不写: 没有任何行变 pending。
+        conn = sqlite3.connect(str(seeded_db))
+        n = conn.execute(
+            "SELECT COUNT(*) FROM email_attachment_text WHERE status='pending'"
+        ).fetchone()[0]
+        conn.close()
+        assert n == 0
+
+    def test_requeue_writes_pending(
+        self, cli_runner, seeded_db, monkeypatch,
+    ):
+        self._set_env(monkeypatch)
+        aid = self._seed_unsupported(seeded_db, "scan.png")
+        result = _invoke(cli_runner, "attachment", "extract",
+                         "--requeue-unsupported", "-o", "json", db_path=seeded_db)
+        assert result.exit_code == 0, result.output
+        payload = _last_json(result.output)
+        assert payload["data"]["requeued"]["total"] == 1
+        conn = sqlite3.connect(str(seeded_db))
+        status = conn.execute(
+            "SELECT status FROM email_attachment_text WHERE attachment_id=?",
+            (aid,),
+        ).fetchone()[0]
+        conn.close()
+        assert status == "pending"
+
+    def test_requeue_alone_is_valid_mode(
+        self, cli_runner, seeded_db, monkeypatch,
+    ):
+        """单独 --requeue-unsupported (无 --pending/--include-missing) 是合法 mode。"""
+        self._set_env(monkeypatch)
+        result = _invoke(cli_runner, "attachment", "extract",
+                         "--requeue-unsupported", "--dry-run",
+                         "-o", "json", db_path=seeded_db)
+        assert result.exit_code == 0, result.output
+        payload = _last_json(result.output)
+        assert payload["data"]["requeued"]["total"] == 0

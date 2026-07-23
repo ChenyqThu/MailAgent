@@ -1767,6 +1767,107 @@ class TestAttachmentText:
         assert repo.get_attachment_text(att_id) is None
 
 
+class TestRequeueUnsupportedAttachmentTexts:
+    """批次4 PR-H: requeue_unsupported_attachment_texts 圈选 / dry_run / 幂等。"""
+
+    def _seed_att(
+        self,
+        repo: EmailRepository,
+        fresh_db: Path,
+        internal_id: int,
+        filename: str,
+        status: str,
+        *,
+        content_type: str = "application/octet-stream",
+    ) -> int:
+        """种 email + 单个非 inline 附件, 把 attachment_text 设成目标终态, 返 attachment_id。"""
+        _insert_metadata_full(fresh_db, internal_id, mailbox="收件箱")
+        id_map = repo.commit_email_with_body(
+            internal_id,
+            BodyPayload(html="", markdown="body", body_format="html"),
+            [AttachmentPayload(
+                filename=filename, content=b"x",
+                content_type=content_type, is_inline=False,
+            )],
+        )
+        att_id = id_map[filename]
+        # commit_email_with_body 默认 enqueue 成 pending; 按需拨到终态。
+        if status == "unsupported":
+            repo.commit_attachment_text(
+                att_id, text="", extractor="none", status="unsupported",
+                error_message="unsupported extension",
+            )
+        elif status == "failed":
+            repo.mark_attachment_text_failure(
+                att_id, "no extractable text (image-only PDF / 扫描件?)"
+            )
+        elif status == "extracted":
+            repo.commit_attachment_text(
+                att_id, text="hi", extractor="pypdf", status="extracted"
+            )
+        # status == "pending": commit_email_with_body 已 enqueue, 原样保留。
+        return att_id
+
+    def test_requeue_circles_correct_rows(self, repo: EmailRepository, fresh_db: Path):
+        img = self._seed_att(repo, fresh_db, 900, "scan.png", "unsupported")
+        legacy = self._seed_att(repo, fresh_db, 901, "old.doc", "unsupported")
+        fpdf = self._seed_att(repo, fresh_db, 902, "scanned.pdf", "failed")
+        # 不该被圈: unsupported 非目标扩展 (.zip) / extracted / pending。
+        zip_row = self._seed_att(repo, fresh_db, 903, "archive.zip", "unsupported")
+        done = self._seed_att(repo, fresh_db, 904, "ok.pdf", "extracted")
+        pend = self._seed_att(repo, fresh_db, 905, "later.png", "pending")
+
+        res = repo.requeue_unsupported_attachment_texts(dry_run=True)
+        assert res["unsupported_images"] == 1
+        assert res["unsupported_legacy"] == 1
+        assert res["failed_pdf"] == 1
+        assert res["total"] == 3
+        assert res["dry_run"] is True
+        # dry-run 不写: 状态未变。
+        assert repo.get_attachment_text(img).status == "unsupported"
+        assert repo.get_attachment_text(fpdf).status == "failed"
+
+        res2 = repo.requeue_unsupported_attachment_texts(dry_run=False)
+        assert res2["total"] == 3
+        assert res2["dry_run"] is False
+        # 圈中的 3 行拨回 pending + 清 retry/error/next_retry。
+        for aid in (img, legacy, fpdf):
+            rec = repo.get_attachment_text(aid)
+            assert rec is not None
+            assert rec.status == "pending"
+            assert rec.retry_count == 0
+            assert rec.next_retry_at is None
+            assert rec.error_message is None
+        # 未圈中的不动。
+        assert repo.get_attachment_text(zip_row).status == "unsupported"
+        assert repo.get_attachment_text(done).status == "extracted"
+        assert repo.get_attachment_text(pend).status == "pending"
+
+    def test_requeue_idempotent_second_run_zero(
+        self, repo: EmailRepository, fresh_db: Path
+    ):
+        self._seed_att(repo, fresh_db, 910, "a.png", "unsupported")
+        self._seed_att(repo, fresh_db, 911, "b.doc", "unsupported")
+        first = repo.requeue_unsupported_attachment_texts(dry_run=False)
+        assert first["total"] == 2
+        # 二次: 已 pending (非 unsupported/failed) → 圈到 0 (不重复重置已重跑的行)。
+        second = repo.requeue_unsupported_attachment_texts(dry_run=False)
+        assert second["total"] == 0
+
+    def test_requeue_jpg_not_conflated_with_jpeg(
+        self, repo: EmailRepository, fresh_db: Path
+    ):
+        """LIKE '%.jpg' 边界: .jpg / .jpeg 各自独立圈中 (不漏不重)。"""
+        self._seed_att(repo, fresh_db, 920, "a.jpg", "unsupported")
+        self._seed_att(repo, fresh_db, 921, "b.jpeg", "unsupported")
+        res = repo.requeue_unsupported_attachment_texts(dry_run=True)
+        assert res["unsupported_images"] == 2
+
+    def test_requeue_empty_db_zero(self, repo: EmailRepository, fresh_db: Path):
+        res = repo.requeue_unsupported_attachment_texts(dry_run=False)
+        assert res["total"] == 0
+
+
 class TestSearchAttachmentTexts:
     """测 FTS5 + smart wrapper attachment search."""
 

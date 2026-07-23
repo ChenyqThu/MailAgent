@@ -140,7 +140,7 @@ def build_skill() -> BoundSkill:
         BoundTool(
             ToolDef(
                 name="attachment_search",
-                description="Full-text search extracted attachment text (PDF/docx/pptx/xlsx).",
+                description="Full-text search extracted attachment text and filenames (PDF/docx/pptx/xlsx; CJK-aware substrings).",
                 input_schema={"type": "object", "properties": common_q, "required": ["q"]},
                 output_schema={"type": "object", "description": "{items, total_indexed, mode}"},
                 confirmation_tier="none",
