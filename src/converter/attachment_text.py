@@ -3,16 +3,17 @@
 为 FTS5 索引和 LLM context 提取附件可搜索文本.
 
 支持:
-    PDF (.pdf):  pypdf.PdfReader, 按页抽 text + join '\\n\\n'
+    PDF (.pdf):  pypdf.PdfReader, 按页抽 text + join '\\n\\n'; 无文本层(扫描件)
+                 级联 Vision OCR (见 vision_ocr.py, flag MAILAGENT_ATTACHMENT_OCR_ENABLED)
     DOCX (.docx): python-docx Document, paragraphs + tables → markdown
     PPTX (.pptx): python-pptx Presentation, 按 slide 抽 title + body shapes
     XLSX (.xlsx): python-calamine 拼 markdown table (复用 office_converter
                   现成 Rust 引擎; fallback 到 pandas + openpyxl)
+    图片 (png/jpg/…): macOS Vision OCR 识别中英文本 (批次4 PR-G, 同 flag 门控)
     TXT / MD / CSV: 直接 read_text() (utf-8 with errors=replace)
     其他: unsupported (zip/.doc/.ppt/.xls/二进制等老格式不支持)
 
 不做的事:
-    - OCR (图片 PDF / 扫描件): 留 PR-2b.2 加 tesseract / cloud OCR
     - 表格保 formatting: xlsx 折叠 csv-like 文本, 不还原 cell merge / color
     - 二进制压缩包 (.doc .xls .ppt zip): 历史邮件可能跳过
 
@@ -39,6 +40,12 @@ _DOCX_EXTENSIONS = {'.docx'}
 _PPTX_EXTENSIONS = {'.pptx'}
 _XLSX_EXTENSIONS = {'.xlsx'}
 _PLAINTEXT_EXTENSIONS = {'.txt', '.md', '.csv', '.log'}
+
+# 图片附件 OCR 派发集（批次4 PR-G）。**单源**：存量 requeue CLI（PR-H）import
+# 同一常量圈选待重跑行，禁止第二份硬编码。
+OCR_IMAGE_EXTENSIONS = {
+    '.png', '.jpg', '.jpeg', '.gif', '.heic', '.webp', '.tiff', '.bmp',
+}
 
 # 256 KB utf-8 bytes — FTS5 单 doc 上限的一个友好 cap.
 # 大 PDF 抽完整 text 可能 >1 MB, 直接索引会让 FTS5 体积爆炸 + bm25 评分
@@ -94,6 +101,11 @@ def extract_text(
             return _extract_xlsx(p)
         if ext in _PLAINTEXT_EXTENSIONS:
             return _extract_plaintext(p)
+        if ext in OCR_IMAGE_EXTENSIONS:
+            ocr = _extract_image_ocr(p)
+            if ocr is not None:
+                return ocr
+            # OCR 关闭 / 不可用 → 落回下方 unsupported（与现状逐字节一致）
         return ExtractResult(
             text='', extractor='none', status='unsupported',
             error_message=f'unsupported extension: {ext!r}',
@@ -104,6 +116,55 @@ def extract_text(
             text='', extractor='none', status='failed',
             error_message=str(e),
         )
+
+
+def _ocr_enabled() -> bool:
+    """OCR 总开关（MAILAGENT_ATTACHMENT_OCR_ENABLED，默认 true）。
+
+    读 config 单例（与其余 config 消费一致，不直读 os.environ）。
+    """
+    from src.config import config
+    return bool(config.mailagent_attachment_ocr_enabled)
+
+
+def _extract_image_ocr(path: Path) -> Optional[ExtractResult]:
+    """图片附件 → Vision OCR（批次4 PR-G）。
+
+    Returns:
+        - 有文本 → ExtractResult(extractor='vision_ocr', status='extracted')
+        - OCR 跑通但无文字 / 超大图片 → ExtractResult(status='unsupported')
+        - flag off / OCR 不可用 → None（调用方落回 'unsupported extension' 现状语义）
+    """
+    if not _ocr_enabled():
+        return None
+    from src.converter import vision_ocr
+    if not vision_ocr.ocr_available():
+        return None
+
+    size = path.stat().st_size
+    if size > vision_ocr.OCR_IMAGE_MAX_BYTES:
+        return ExtractResult(
+            text='', extractor='vision_ocr', status='unsupported',
+            error_message=(
+                f'image too large for OCR: {size} bytes '
+                f'> {vision_ocr.OCR_IMAGE_MAX_BYTES}'
+            ),
+        )
+
+    ocr_text = vision_ocr.ocr_image_file(path)
+    if ocr_text is None:
+        # OCR 运行期异常 → 落回现状 unsupported（返回 None 让上层出统一文案）
+        return None
+    text, truncated = _truncate(ocr_text)
+    if not text.strip():
+        return ExtractResult(
+            text='', extractor='vision_ocr', status='unsupported',
+            error_message='OCR produced no text (image has no readable content?)',
+        )
+    return ExtractResult(
+        text=text, extractor='vision_ocr', status='extracted',
+        truncated=truncated,
+    )
 
 
 def _truncate(text: str) -> tuple[str, bool]:
@@ -144,6 +205,11 @@ def _extract_pdf(path: Path) -> ExtractResult:
     raw = '\n\n'.join(parts)
     text, truncated = _truncate(raw)
     if not text:
+        # 无文本层（扫描件 / image-only PDF）→ 级联 Vision OCR（批次4 PR-G）。
+        # OCR 关闭 / 不可用 / 渲染失败 / 无文字 → None，落回下方 failed 现状文案（逐字节不变）。
+        ocr = _extract_pdf_ocr(path)
+        if ocr is not None:
+            return ocr
         return ExtractResult(
             text='', extractor='pypdf', status='failed',
             error_message='no extractable text (image-only PDF / 扫描件?)',
@@ -151,6 +217,34 @@ def _extract_pdf(path: Path) -> ExtractResult:
     return ExtractResult(
         text=text, extractor='pypdf', status='extracted',
         truncated=truncated,
+    )
+
+
+def _extract_pdf_ocr(path: Path) -> Optional[ExtractResult]:
+    """无文本层 PDF → Quartz 逐页渲染 + Vision OCR（批次4 PR-G）。
+
+    Returns:
+        - 有文本 → ExtractResult(extractor='pdf_ocr', status='extracted')；
+          页数超上限则 truncated=True
+        - flag off / OCR 不可用 / 渲染失败 / OCR 无文字 → None
+          （调用方维持 'no extractable text' failed 现状文案，逐字节不变）
+    """
+    if not _ocr_enabled():
+        return None
+    from src.converter import vision_ocr
+    if not vision_ocr.ocr_available():
+        return None
+
+    out = vision_ocr.ocr_pdf_file(path)
+    if out is None:
+        return None
+    ocr_text, page_truncated = out
+    text, byte_truncated = _truncate(ocr_text)
+    if not text.strip():
+        return None
+    return ExtractResult(
+        text=text, extractor='pdf_ocr', status='extracted',
+        truncated=byte_truncated or page_truncated,
     )
 
 

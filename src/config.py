@@ -117,6 +117,15 @@ class Config(BaseSettings):
         description="附件文本 worker 主循环 poll 间隔（秒），默认 60。空闲无 pending 即 sleep 此值。",
     )
 
+    # 附件 OCR（批次4 PR-G）：图片附件 + 无文本层扫描件 PDF 经 macOS Vision（pyobjc）
+    # 识别中英文本 → FTS5。功能性 extractor 扩展、无网络出口、本地 Vision。默认开；
+    # 显式 false = 图片 / 扫描件 PDF 行为与现状逐字节一致（unsupported / failed 老文案）。
+    # 懒 import：缺 pyobjc 时软着陆维持 unsupported。详见 v4-ssot-ops.md「附件 FTS5 全文搜索」。
+    mailagent_attachment_ocr_enabled: bool = Field(
+        default=True, env="MAILAGENT_ATTACHMENT_OCR_ENABLED",
+        description="是否启用附件 OCR（macOS Vision，图片 + 扫描件 PDF）。默认开；显式 false 回现状（图片/扫描件维持 unsupported/failed）。",
+    )
+
     # 日历同步配置
     calendar_database_id: str = Field(default="", env="CALENDAR_DATABASE_ID")
     calendar_name: str = Field(default="日历", env="CALENDAR_NAME")

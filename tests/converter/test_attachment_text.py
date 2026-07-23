@@ -265,3 +265,157 @@ class TestExtractResultDataclass:
         r = ExtractResult(text='x', extractor='pypdf', status='extracted')
         assert r.error_message is None
         assert r.truncated is False
+
+
+class TestImageOcr:
+    """图片附件 OCR 派发 (批次4 PR-G) —— mock vision_ocr, 不真跑 Vision。"""
+
+    def _png(self, tmp_path: Path, name: str = 'scan.png', data: bytes = b'\x89PNGfake') -> Path:
+        f = tmp_path / name
+        f.write_bytes(data)
+        return f
+
+    def test_image_extracted(self, tmp_path: Path, monkeypatch):
+        from src.converter import attachment_text, vision_ocr
+        monkeypatch.setattr(attachment_text, '_ocr_enabled', lambda: True)
+        monkeypatch.setattr(vision_ocr, 'ocr_available', lambda: True)
+        monkeypatch.setattr(vision_ocr, 'ocr_image_file', lambda p: '合同条款 redis timeout')
+        f = self._png(tmp_path)
+        r = extract_text(f)
+        assert r.status == 'extracted'
+        assert r.extractor == 'vision_ocr'
+        assert '合同条款' in r.text
+
+    def test_flag_off_falls_through_unsupported(self, tmp_path: Path, monkeypatch):
+        """flag off → 与现状逐字节一致 (unsupported extension, extractor none)。"""
+        from src.converter import attachment_text
+        monkeypatch.setattr(attachment_text, '_ocr_enabled', lambda: False)
+        f = self._png(tmp_path)
+        r = extract_text(f)
+        assert r.status == 'unsupported'
+        assert r.extractor == 'none'
+        assert 'unsupported extension' in (r.error_message or '')
+
+    def test_ocr_unavailable_falls_through_unsupported(self, tmp_path: Path, monkeypatch):
+        from src.converter import attachment_text, vision_ocr
+        monkeypatch.setattr(attachment_text, '_ocr_enabled', lambda: True)
+        monkeypatch.setattr(vision_ocr, 'ocr_available', lambda: False)
+        f = self._png(tmp_path, 'scan.jpg')
+        r = extract_text(f)
+        assert r.status == 'unsupported'
+        assert r.extractor == 'none'
+        assert 'unsupported extension' in (r.error_message or '')
+
+    def test_ocr_runtime_none_falls_through_unsupported(self, tmp_path: Path, monkeypatch):
+        from src.converter import attachment_text, vision_ocr
+        monkeypatch.setattr(attachment_text, '_ocr_enabled', lambda: True)
+        monkeypatch.setattr(vision_ocr, 'ocr_available', lambda: True)
+        monkeypatch.setattr(vision_ocr, 'ocr_image_file', lambda p: None)
+        f = self._png(tmp_path)
+        r = extract_text(f)
+        assert r.status == 'unsupported'
+        assert r.extractor == 'none'
+
+    def test_empty_ocr_result_unsupported(self, tmp_path: Path, monkeypatch):
+        from src.converter import attachment_text, vision_ocr
+        monkeypatch.setattr(attachment_text, '_ocr_enabled', lambda: True)
+        monkeypatch.setattr(vision_ocr, 'ocr_available', lambda: True)
+        monkeypatch.setattr(vision_ocr, 'ocr_image_file', lambda p: '   ')
+        f = self._png(tmp_path)
+        r = extract_text(f)
+        assert r.status == 'unsupported'
+        assert r.extractor == 'vision_ocr'
+        assert 'no text' in (r.error_message or '').lower()
+
+    def test_oversized_image_unsupported(self, tmp_path: Path, monkeypatch):
+        """>OCR_IMAGE_MAX_BYTES → unsupported + 'too large' 说明 (护栏)。"""
+        from src.converter import attachment_text, vision_ocr
+        monkeypatch.setattr(attachment_text, '_ocr_enabled', lambda: True)
+        monkeypatch.setattr(vision_ocr, 'ocr_available', lambda: True)
+        monkeypatch.setattr(vision_ocr, 'OCR_IMAGE_MAX_BYTES', 4)
+        f = self._png(tmp_path, data=b'12345678')  # 8 bytes > 4
+        r = extract_text(f)
+        assert r.status == 'unsupported'
+        assert r.extractor == 'vision_ocr'
+        assert 'too large' in (r.error_message or '')
+
+    def test_all_image_extensions_dispatch(self, tmp_path: Path, monkeypatch):
+        from src.converter import attachment_text, vision_ocr
+        monkeypatch.setattr(attachment_text, '_ocr_enabled', lambda: True)
+        monkeypatch.setattr(vision_ocr, 'ocr_available', lambda: True)
+        monkeypatch.setattr(vision_ocr, 'ocr_image_file', lambda p: 'text here')
+        for ext in attachment_text.OCR_IMAGE_EXTENSIONS:
+            f = tmp_path / f'img{ext}'
+            f.write_bytes(b'data')
+            r = extract_text(f)
+            assert r.status == 'extracted', ext
+            assert r.extractor == 'vision_ocr', ext
+
+
+class TestPdfOcrCascade:
+    """无文本层 PDF 级联 OCR (批次4 PR-G) —— mock ocr_pdf_file。"""
+
+    def _blank_pdf(self, tmp_path: Path) -> Path:
+        from pypdf import PdfWriter
+        writer = PdfWriter()
+        writer.add_blank_page(width=612, height=792)
+        f = tmp_path / 'scan.pdf'
+        with open(f, 'wb') as fh:
+            writer.write(fh)
+        return f
+
+    def test_cascade_extracted(self, tmp_path: Path, monkeypatch):
+        from src.converter import attachment_text, vision_ocr
+        monkeypatch.setattr(attachment_text, '_ocr_enabled', lambda: True)
+        monkeypatch.setattr(vision_ocr, 'ocr_available', lambda: True)
+        monkeypatch.setattr(vision_ocr, 'ocr_pdf_file', lambda p: ('扫描件正文 scanned', False))
+        r = extract_text(self._blank_pdf(tmp_path))
+        assert r.status == 'extracted'
+        assert r.extractor == 'pdf_ocr'
+        assert '扫描件正文' in r.text
+        assert r.truncated is False
+
+    def test_cascade_truncated(self, tmp_path: Path, monkeypatch):
+        from src.converter import attachment_text, vision_ocr
+        monkeypatch.setattr(attachment_text, '_ocr_enabled', lambda: True)
+        monkeypatch.setattr(vision_ocr, 'ocr_available', lambda: True)
+        monkeypatch.setattr(vision_ocr, 'ocr_pdf_file', lambda p: ('page text', True))
+        r = extract_text(self._blank_pdf(tmp_path))
+        assert r.status == 'extracted'
+        assert r.extractor == 'pdf_ocr'
+        assert r.truncated is True
+
+    def test_flag_off_keeps_failed_message(self, tmp_path: Path, monkeypatch):
+        """flag off → failed 文案逐字节不变 (无 OCR 级联)。"""
+        from src.converter import attachment_text
+        monkeypatch.setattr(attachment_text, '_ocr_enabled', lambda: False)
+        r = extract_text(self._blank_pdf(tmp_path))
+        assert r.status == 'failed'
+        assert r.extractor == 'pypdf'
+        assert r.error_message == 'no extractable text (image-only PDF / 扫描件?)'
+
+    def test_ocr_unavailable_keeps_failed_message(self, tmp_path: Path, monkeypatch):
+        from src.converter import attachment_text, vision_ocr
+        monkeypatch.setattr(attachment_text, '_ocr_enabled', lambda: True)
+        monkeypatch.setattr(vision_ocr, 'ocr_available', lambda: False)
+        r = extract_text(self._blank_pdf(tmp_path))
+        assert r.status == 'failed'
+        assert r.error_message == 'no extractable text (image-only PDF / 扫描件?)'
+
+    def test_ocr_returns_none_keeps_failed_message(self, tmp_path: Path, monkeypatch):
+        from src.converter import attachment_text, vision_ocr
+        monkeypatch.setattr(attachment_text, '_ocr_enabled', lambda: True)
+        monkeypatch.setattr(vision_ocr, 'ocr_available', lambda: True)
+        monkeypatch.setattr(vision_ocr, 'ocr_pdf_file', lambda p: None)
+        r = extract_text(self._blank_pdf(tmp_path))
+        assert r.status == 'failed'
+        assert r.error_message == 'no extractable text (image-only PDF / 扫描件?)'
+
+    def test_ocr_empty_text_keeps_failed_message(self, tmp_path: Path, monkeypatch):
+        from src.converter import attachment_text, vision_ocr
+        monkeypatch.setattr(attachment_text, '_ocr_enabled', lambda: True)
+        monkeypatch.setattr(vision_ocr, 'ocr_available', lambda: True)
+        monkeypatch.setattr(vision_ocr, 'ocr_pdf_file', lambda p: ('   ', False))
+        r = extract_text(self._blank_pdf(tmp_path))
+        assert r.status == 'failed'
+        assert r.error_message == 'no extractable text (image-only PDF / 扫描件?)'

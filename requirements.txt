@@ -51,6 +51,13 @@ pypdf>=4.0.0            # PR-2b: PDF 文本提取
 python-docx>=1.1.0      # PR-2b: docx 文本提取
 python-pptx>=1.0.0      # PR-2b: pptx 文本提取
 
+# 附件 OCR（批次4 PR-G，flag MAILAGENT_ATTACHMENT_OCR_ENABLED 默认开）：图片附件 +
+# 无文本层扫描件 PDF 经 macOS Vision.framework 识别中英文本。pyobjc-framework-Vision
+# 连带 pyobjc-core / Cocoa / Quartz（PDF 渲染）/ CoreML ≈7.1MB 压缩，钉版本防 ABI 漂移。
+# 运行期在 src/converter/vision_ocr.py 懒 import（缺失软着陆不崩）；打包须重新生成
+# requirements.lock.txt 才进嵌入式 venv。macOS-only（Vision 是系统框架）。
+pyobjc-framework-Vision==12.2.1
+
 # LLM Agent (本地 LLM 接管 Notion Email Agent 的 AI 字段填充，默认关闭)
 anthropic>=0.40.0
 

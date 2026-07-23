@@ -246,6 +246,11 @@ class TestConfigGate:
         # 模块默认与 config 默认一致 (service.py 传 config 值, 默认应对齐)
         assert DEFAULT_LIMIT_PER_CYCLE == 25
 
+    def test_ocr_flag_default(self):
+        # 批次4 PR-G: 附件 OCR 总开关默认 true (对齐 worker flag 先例)。
+        f = Config.model_fields
+        assert f["mailagent_attachment_ocr_enabled"].default is True
+
     def test_batch_stats_shape(self):
         s = ExtractionBatchStats()
         assert (s.processed, s.extracted, s.unsupported, s.failed, s.skipped) == (0, 0, 0, 0, 0)
