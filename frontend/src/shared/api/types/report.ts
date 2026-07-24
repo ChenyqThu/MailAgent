@@ -164,11 +164,39 @@ export interface ReportDetail extends ReportListItem {
   doc: ReportDoc | null
 }
 
+/** 07-24 排程统一（契约 `research/schedule-contract.md` §1）：结构化 recurrence 规则。
+ *  两处共用 —— custom agent 的 `trigger_json`（`kind:'schedule'` 与老 `kind:'cron'` 并存）
+ *  与报告 agent 的 `schedule_json`（叠加在 cadence/hours 等 legacy 镜像键之上）。
+ *  🔴 weekdays / weekday 是**契约口径 0=周日**，不是 Python `weekday()` 的 0=周一。 */
+export interface ScheduleRuleWire {
+  freq: 'daily' | 'weekly' | 'monthly'
+  interval: number
+  weekdays: number[]
+  monthMode: 'date' | 'nth'
+  monthDay: number
+  ordinal: number | 'last'
+  weekday: number
+  hour: number
+  minute: number
+  clamp: boolean
+}
+
 export interface ReportSchedule {
+  /** 🔴 报告侧 cadence 不只是节奏，还是**报告内容种类**（worker 的聚合窗 / 去重主键 /
+   *  层级聚合分支都读它）；新形状下恒同步为 `rule.freq`，不可省。 */
   cadence: ReportCadence
   hours: number[]
+  /** legacy 镜像，**Python weekday 口径 0=周一**。`kind:'schedule'` 在场时 `rule` 权威。 */
   weekday?: number
+  /** legacy 镜像。`kind:'schedule'` 在场时 `rule` 权威。 */
   day_of_month?: number
+  v?: 1
+  kind?: 'schedule'
+  rule?: ScheduleRuleWire
+  /** 相位原点，本地日历日期 `YYYY-MM-DD`（在 `timezone` 里解释）。 */
+  anchor?: string
+  /** IANA 时区；新形状下不允许为空（老行空时区读时写实成宿主机时区）。 */
+  timezone?: string
 }
 
 /** report:getConfig — 解析后的 agent 配置（prompt 缺省已回填默认）。 */
@@ -176,6 +204,14 @@ export interface ReportSchedule {
  *  后端 src/agents/trigger.py 是校验权威；前端类型仅供未来 CRUD UI（W1 无 UI 消费）。 */
 export type CustomAgentTrigger =
   | { v: 1; kind: 'cron'; cron: string; timezone?: string }
+  /** 07-24 排程统一：结构化 recurrence（与 `kind:'cron'` 并存，老行照旧走 croniter）。 */
+  | {
+      v: 1
+      kind: 'schedule'
+      rule: ScheduleRuleWire
+      anchor: string
+      timezone: string
+    }
   | {
       v: 1
       kind: 'email_filter'

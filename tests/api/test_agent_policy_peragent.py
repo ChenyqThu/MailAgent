@@ -32,6 +32,13 @@ def custom_agent_env(tmp_path, monkeypatch):
     store.create_agent("nightly", type="custom", enabled=True, title="Nightly")
     store.update_agent("nightly", {"trigger_json": json.dumps(
         {"v": 1, "kind": "cron", "cron": "0 9 * * 1-5"})})
+    store.create_agent("sched", type="custom", enabled=True, title="Sched")
+    store.update_agent("sched", {"trigger_json": json.dumps({
+        "v": 1, "kind": "schedule",
+        "rule": {"freq": "weekly", "interval": 2, "weekdays": [1], "monthMode": "date",
+                 "monthDay": 1, "ordinal": 1, "weekday": 0, "hour": 9, "minute": 0,
+                 "clamp": False},
+        "anchor": "2026-07-06", "timezone": "Asia/Shanghai"})})
     store.create_agent("daily", type="report", enabled=True, title="Daily")
     store.create_agent("broken", type="custom", enabled=True, title="Broken")  # 无 trigger_json
 
@@ -83,6 +90,20 @@ def test_peragent_create_domain_write_derives_context_mode(client, fresh_agent_c
         "agentId": "nightly",
     })
     assert r2.json()["data"]["contextMode"] == "cron_headless"
+
+
+def test_peragent_create_schedule_agent_derives_cron_headless(client, fresh_agent_cfg, custom_agent_env):
+    """kind='schedule'（schedule-builder）与 cron 同为定时 headless → 盖章 cron_headless。
+
+    🔴 与 gateway TS ``deriveContextMode`` 是同一张表、必须同批改：Python 盖
+    untrusted_trigger 而 gateway 按 cron_headless 求值时，owner 配的免卡规则**永不命中**
+    （每个动作恒 HITL）。本用例锁 Python 半边；TS 半边在 frontend 测试里锁。"""
+    r = _create(client, {
+        "capability": "domain_write", "matcher": {"v": 1, "tool": "email_flag"},
+        "agentId": "sched",
+    })
+    assert r.status_code == 201, r.json()
+    assert r.json()["data"]["contextMode"] == "cron_headless"
 
 
 @pytest.mark.parametrize(

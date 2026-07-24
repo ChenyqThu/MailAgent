@@ -85,14 +85,12 @@ def report_run(
             ),
         )
 
-    # --cadence 覆盖：在副本里改 schedule_json 的 cadence（不落库）。
+    # --cadence 覆盖：在副本里改 schedule_json 的 cadence（不落库）。kind:'schedule'
+    # 新形状下 cadence_of 以 rule.freq 为权威 → 必须走共享 helper 连 rule.freq 一起覆写。
     if cadence is not None:
-        try:
-            sched = json.loads(agent.get("schedule_json") or "{}") or {}
-        except (json.JSONDecodeError, TypeError):
-            sched = {}
-        sched["cadence"] = cadence
-        agent = {**agent, "schedule_json": json.dumps(sched, ensure_ascii=False)}
+        from src.reports.store import agent_with_cadence_override
+
+        agent = agent_with_cadence_override(agent, cadence)
 
     from src.reports.worker import run_report_once
 

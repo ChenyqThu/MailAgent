@@ -356,6 +356,35 @@ function summarizeAgentTrigger(trigger: Record<string, unknown> | null): string 
     const tz = asStr(trigger.timezone)
     return `cron ${asStr(trigger.cron) ?? '?'}${tz ? ` (${tz})` : ''}`
   }
+  // 07-24 结构化排程（kind:'schedule'，与 cron 并存，backend parse_trigger 接受）——
+  // 审批卡必须能呈现，否则 owner 批的是一个看不见的触发。形状镜像 gateway triggerSummary。
+  if (trigger.kind === 'schedule') {
+    const rule = asObj(trigger.rule)
+    if (!rule) return 'schedule (invalid rule)'
+    const freq = asStr(rule.freq) ?? '?'
+    const pad2 = (n: number): string => String(Math.max(0, n)).padStart(2, '0')
+    const parts = [`schedule ${freq}`]
+    const interval = asNum(rule.interval, 1)
+    if (interval > 1) parts.push(`every ${interval}`)
+    if (freq === 'weekly') {
+      const days = Array.isArray(rule.weekdays)
+        ? rule.weekdays.filter((x): x is number => typeof x === 'number')
+        : []
+      parts.push(`byday=[${days.join(',')}]`)
+    }
+    if (freq === 'monthly') {
+      parts.push(
+        rule.monthMode === 'nth'
+          ? `nth=${String(rule.ordinal ?? '?')} weekday=${String(rule.weekday ?? '?')}`
+          : `day=${String(rule.monthDay ?? '?')}${rule.clamp === true ? ' (clamped)' : ''}`
+      )
+    }
+    const tz = asStr(trigger.timezone)
+    parts.push(
+      `at ${pad2(asNum(rule.hour, 0))}:${pad2(asNum(rule.minute, 0))}${tz ? ` (${tz})` : ''}`
+    )
+    return parts.join(' ')
+  }
   if (trigger.kind === 'email_filter') {
     const preds: string[] = []
     const subject = asStr(trigger.subject_pattern)

@@ -10,17 +10,22 @@
     距 now ≤ 30min（单窗宽）→ fire。**单 tick 至多补最近一次**（不补历史序列 / 不补 >30min 的错过窗口）；
   - fire = ``enqueue_agent_run``（runs/day 门 + 幂等）→ 记 marker（即使超限/失败也记，防同 occurrence 每 tick 重试）。
 
-只调度 ``type='custom'`` 且 ``enabled`` 且 ``trigger_json.kind='cron'`` 的行；email_filter 由
-new_watcher 第 5 hook 负责。report/preprocess/search 的调度**一字不动**（本 worker 不碰它们）。
+只调度 ``type='custom'`` 且 ``enabled`` 且 ``trigger_json.kind`` ∈ ``cron|schedule`` 的行
+（schedule = schedule-builder 结构化规则，occurrence 走共享求值器
+``src/agents/schedule_rule``，marker/追赶窗机制与 cron 完全同构；下游 ``trigger_kind``
+仍报 ``"cron"`` —— 定时族语义，run_worker 标签 / gateway contextMode / firedAt 解析零改动）；
+email_filter 由 new_watcher 第 5 hook 负责。report/preprocess/search 的调度**一字不动**
+（本 worker 不碰它们）。
 """
 
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import hashlib
 import json
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, Union
 from zoneinfo import ZoneInfo
 
 from loguru import logger
@@ -28,6 +33,8 @@ from loguru import logger
 from src.agents.run_queue import enqueue_agent_run
 from src.agents.trigger import (
     CronTrigger,
+    EmailFilterTrigger,
+    ScheduleTrigger,
     TriggerValidationError,
     parse_budget,
     parse_trigger,
@@ -44,6 +51,23 @@ def _marker_key(agent_id: str) -> str:
 def _cron_hash(trigger: CronTrigger) -> str:
     """cron 表达式 + 时区的短哈希；变更即失配 → marker 失效重算。"""
     return hashlib.sha1(f"{trigger.cron}|{trigger.timezone}".encode()).hexdigest()[:12]
+
+
+def _trigger_hash(trigger: Union[CronTrigger, ScheduleTrigger]) -> str:
+    """定时触发配置的短哈希（marker 失效判据）。CronTrigger 保持与历史 ``_cron_hash``
+    字节一致（升级不重置存量 marker）；ScheduleTrigger 用 rule+anchor+timezone 的
+    canonical JSON（任一字段变更 → marker 失效 → 追赶起点重算，语义同 cron_hash）。"""
+    if isinstance(trigger, CronTrigger):
+        return _cron_hash(trigger)
+    canon = json.dumps(
+        {
+            "rule": dataclasses.asdict(trigger.rule),
+            "anchor": trigger.anchor,
+            "timezone": trigger.timezone,
+        },
+        sort_keys=True,
+    )
+    return hashlib.sha1(canon.encode()).hexdigest()[:12]
 
 
 def _make_marker(fired_at_utc: datetime, cron_hash: str) -> str:
@@ -73,20 +97,34 @@ def _parse_iso_utc(raw: Any) -> Optional[datetime]:
 
 
 def _due_fire(
-    trigger: CronTrigger, now_utc: datetime, last_marker: Optional[str]
+    trigger: Union[CronTrigger, ScheduleTrigger],
+    now_utc: datetime,
+    last_marker: Optional[str],
 ) -> Optional[datetime]:
     """判定是否 fire；返回要 fire 的 occurrence（UTC，用作幂等 fire_key）或 None。
 
     纯函数（注入 now_utc + marker 即可完整测试 UTC marker / cron_hash 失效 / catch-up / DST）。
+    kind='schedule' 走共享求值器 ``src/agents/schedule_rule``（与报告 worker 同一份实现，
+    契约 §6）；kind='cron' 保持 croniter 路径逐字不变。marker / 30min 追赶窗语义两者共享。
     """
-    from croniter import croniter
+    if isinstance(trigger, ScheduleTrigger):
+        from src.agents import schedule_rule
 
-    tz = ZoneInfo(trigger.timezone)
-    now_local = now_utc.astimezone(tz)
-    # 最近一次 occurrence（croniter get_prev 严格 < now → 恰在 fire 点会等下一 tick，60s 内自然赶上）。
-    prev_utc = croniter(trigger.cron, now_local).get_prev(datetime).astimezone(timezone.utc)
+        occ = schedule_rule.prev_occurrence(
+            trigger.rule, trigger.timezone, trigger.anchor, now_utc
+        )
+        if occ is None:
+            return None  # anchor 之前无 occurrence（首个 fire 点还没到）
+        prev_utc = occ.astimezone(timezone.utc)
+    else:
+        from croniter import croniter
 
-    cur_hash = _cron_hash(trigger)
+        tz = ZoneInfo(trigger.timezone)
+        now_local = now_utc.astimezone(tz)
+        # 最近一次 occurrence（croniter get_prev 严格 < now → 恰在 fire 点会等下一 tick，60s 内自然赶上）。
+        prev_utc = croniter(trigger.cron, now_local).get_prev(datetime).astimezone(timezone.utc)
+
+    cur_hash = _trigger_hash(trigger)
     last_fire_utc: Optional[datetime] = None
     marker = _parse_marker(last_marker)
     if marker and marker.get("cron_hash") == cur_hash:
@@ -125,8 +163,9 @@ async def tick_loop(
                         f"[agent-trigger] skip agent={agent.get('id')} bad trigger_json: {e}"
                     )
                     continue
-                if not isinstance(trig, CronTrigger):
+                if isinstance(trig, EmailFilterTrigger):
                     continue  # email_filter → new_watcher 第 5 hook 负责，本 worker 不碰
+                # cron / schedule 都是定时 headless，同走本 worker（fire_key/marker 同机制）。
                 now = now_fn()
                 key = _marker_key(agent["id"])
                 last_marker = sync_store.get_state(key)
@@ -140,6 +179,8 @@ async def tick_loop(
                     enqueue_agent_run(
                         repo,
                         agent_id=agent["id"],
+                        # schedule 也报 "cron"：下游（run_worker 标签 / gateway contextMode
+                        # cron_headless / _fired_at_iso 的 fire_key 解析）按定时族处理，零改动。
                         trigger_kind="cron",
                         fire_key=fire_key,
                         budget=budget,
@@ -149,7 +190,7 @@ async def tick_loop(
                 finally:
                     # 记 marker（即使超限/失败也记，避免同 occurrence 每 tick 重试）。
                     try:
-                        sync_store.set_state(key, _make_marker(fire_at, _cron_hash(trig)))
+                        sync_store.set_state(key, _make_marker(fire_at, _trigger_hash(trig)))
                     except Exception as e:  # noqa: BLE001
                         logger.debug(f"[agent-trigger] set_state failed agent={agent['id']}: {e}")
         except asyncio.CancelledError:

@@ -34,7 +34,7 @@ from src.reports.summarizer import (
 from src.reports.agent_tools import build_report_tools
 from src.reports.worker import (
     _daily_window,
-    _due_hour,
+    _due_occurrence,
     _period_bounds,
     _sum_counts,
     run_report_once,
@@ -812,7 +812,11 @@ class TestDueHour:
     AGENT = {"id": "x", "type": "report", "schedule_json": '{"cadence":"daily","hours":[9]}'}
 
     def _at(self, h, mi, marker=None, agent=None, day=2):
-        return _due_hour(agent or self.AGENT, datetime(2026, 6, day, h, mi, tzinfo=_BJ), marker)
+        # _due_occurrence 返回 occurrence（aware）；本组用例只断言钟点/None，取 .hour。
+        occ = _due_occurrence(
+            agent or self.AGENT, datetime(2026, 6, day, h, mi, tzinfo=_BJ), marker
+        )
+        return None if occ is None else occ.hour
 
     def test_fire_window(self):
         assert self._at(9, 5) == 9              # 落在即时 fire 窗口

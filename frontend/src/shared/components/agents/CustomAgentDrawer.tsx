@@ -25,6 +25,16 @@ import type {
 } from '@shared/api/types'
 import { ReportIcon, Switch } from './primitives'
 import {
+  DEFAULT_RULE,
+  ScheduleBuilder,
+  type ScheduleValue,
+  cronToRuleSeed,
+  hostTimezone,
+  newScheduleValue,
+  readTriggerSchedule,
+  writeTriggerSchedule
+} from './schedule'
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -128,8 +138,17 @@ export function CustomAgentDrawer({
   const [promptDirty, setPromptDirty] = useState(false)
   const [model, setModel] = useState<string>('')
   const [triggerKind, setTriggerKind] = useState<TriggerKind>('none')
+  // 定时触发两态（07-24 排程统一）：
+  //  • 'schedule' —— 共享 ScheduleBuilder（新建默认，与报告 Agent 同一个组件）
+  //  • 'legacy'   —— 老 `kind:'cron'` 行的裸 cron 文本框。**绝不自动转换**（契约 §4：老 cron 行
+  //    原样走 croniter、不改行为）—— `*/5 * * * *` 这类表达式落在构建器值模型之外，静默映射
+  //    会改掉用户的触发时刻。用户显式点「改用排程构建器」才切过去。
+  const [cronMode, setCronMode] = useState<'schedule' | 'legacy'>('schedule')
   const [cron, setCron] = useState('0 9 * * 1-5')
   const [triggerTz, setTriggerTz] = useState('UTC')
+  const [schedule, setSchedule] = useState<ScheduleValue>(() =>
+    newScheduleValue({ ...DEFAULT_RULE, freq: 'weekly', weekdays: [1, 2, 3, 4, 5] })
+  )
   const [senderPattern, setSenderPattern] = useState('')
   const [subjectPattern, setSubjectPattern] = useState('')
   const [folders, setFolders] = useState('') // 逗号分隔
@@ -177,8 +196,12 @@ export function CustomAgentDrawer({
       setPromptDirty(false)
       setModel('')
       setTriggerKind('none')
+      setCronMode('schedule')
       setCron('0 9 * * 1-5')
       setTriggerTz('UTC')
+      // 新建默认「每周 周一~周五 09:00」——与旧 cron 占位 `0 9 * * 1-5` 同义，
+      // 老用户看到的默认排程不变。
+      setSchedule(newScheduleValue({ ...DEFAULT_RULE, freq: 'weekly', weekdays: [1, 2, 3, 4, 5] }))
       setSenderPattern('')
       setSubjectPattern('')
       setFolders('')
@@ -204,10 +227,27 @@ export function CustomAgentDrawer({
     setPromptDirty(false)
     setModel(cfg.model || '')
     const trig = cfg.trigger
-    if (trig?.kind === 'cron') {
+    const defaultSchedule = newScheduleValue({
+      ...DEFAULT_RULE,
+      freq: 'weekly',
+      weekdays: [1, 2, 3, 4, 5]
+    })
+    if (trig?.kind === 'schedule') {
       setTriggerKind('cron')
+      setCronMode('schedule')
+      setSchedule(readTriggerSchedule(trig) ?? defaultSchedule)
+      setCron('0 9 * * 1-5')
+      setTriggerTz('UTC')
+      setSenderPattern('')
+      setSubjectPattern('')
+      setFolders('')
+    } else if (trig?.kind === 'cron') {
+      // 老 cron 行：停在 legacy 态原样展示/编辑，**不自动映射**（契约 §4）。
+      setTriggerKind('cron')
+      setCronMode('legacy')
       setCron(trig.cron)
       setTriggerTz(trig.timezone || 'UTC')
+      setSchedule(defaultSchedule)
       setSenderPattern('')
       setSubjectPattern('')
       setFolders('')
@@ -216,10 +256,14 @@ export function CustomAgentDrawer({
       setSenderPattern(trig.sender_pattern ?? '')
       setSubjectPattern(trig.subject_pattern ?? '')
       setFolders((trig.folders ?? []).join(', '))
+      setCronMode('schedule')
       setCron('0 9 * * 1-5')
       setTriggerTz('UTC')
+      setSchedule(defaultSchedule)
     } else {
       setTriggerKind('none')
+      setCronMode('schedule')
+      setSchedule(defaultSchedule)
     }
     // tool_policy=NULL 行（W5 的 DMS/周报模板等 Settings 外建行常见）→ 'defaults' 模式：工具区
     // 展示后端默认安全集（下方 effect 填），保存时未触碰则不写 tool_policy，NULL 保持 NULL。
@@ -299,7 +343,9 @@ export function CustomAgentDrawer({
   // trigger tagged-union 构造（none → null = 草稿/禁用触发）。
   const buildTrigger = (): CustomAgentTrigger | null => {
     if (triggerKind === 'cron') {
-      return { v: 1, kind: 'cron', cron: cron.trim(), timezone: triggerTz }
+      return cronMode === 'legacy'
+        ? { v: 1, kind: 'cron', cron: cron.trim(), timezone: triggerTz }
+        : writeTriggerSchedule(schedule)
     }
     if (triggerKind === 'email_filter') {
       const trig: CustomAgentTrigger = { v: 1, kind: 'email_filter' }
@@ -318,7 +364,8 @@ export function CustomAgentDrawer({
   // 浅校验（必填 / 数值范围 / cron 5 段 / email 谓词至少一个）。深校验交后端。
   const shallowValidate = (): string | null => {
     if (!title.trim()) return t('agents.custom.errTitleRequired')
-    if (triggerKind === 'cron' && cron.trim().split(/\s+/).length !== 5) {
+    // 构建器出来的规则形状恒合法（值模型受控），只有 legacy 裸 cron 需要段数浅校验。
+    if (triggerKind === 'cron' && cronMode === 'legacy' && cron.trim().split(/\s+/).length !== 5) {
       return t('agents.custom.errCron5')
     }
     if (
@@ -574,7 +621,15 @@ export function CustomAgentDrawer({
               </div>
             )}
 
-            {triggerKind === 'cron' && (
+            {/* 07-24 排程统一：默认走共享 ScheduleBuilder（与报告 Agent 同一组件）。
+                老 `kind:'cron'` 行落在 legacy 分支原样编辑，用户显式点按钮才升级。 */}
+            {triggerKind === 'cron' && cronMode === 'schedule' && (
+              <div style={{ marginTop: 12 }}>
+                <ScheduleBuilder value={schedule} onChange={setSchedule} />
+              </div>
+            )}
+
+            {triggerKind === 'cron' && cronMode === 'legacy' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 10 }}>
                 <div>
                   <input
@@ -607,6 +662,28 @@ export function CustomAgentDrawer({
                     ))}
                   </SelectContent>
                 </Select>
+                {/* 升级入口：认得出的常见 cron 用它当种子，认不出就退默认规则。
+                 **单向** —— 构建器的值模型不覆盖任意 cron，回不去才是诚实的。 */}
+                <button
+                  type="button"
+                  className="btn-ghost"
+                  style={{ fontFamily: 'inherit', alignSelf: 'flex-start' }}
+                  onClick={() => {
+                    const seed = cronToRuleSeed(cron)
+                    setSchedule(
+                      newScheduleValue(
+                        seed ?? { ...DEFAULT_RULE, freq: 'weekly', weekdays: [1, 2, 3, 4, 5] },
+                        triggerTz || hostTimezone()
+                      )
+                    )
+                    setCronMode('schedule')
+                  }}
+                >
+                  {t('agents.custom.trigger.upgradeToBuilder')}
+                </button>
+                <div style={{ fontSize: 11.5, color: 'rgb(var(--ink-fg-3))', lineHeight: 1.5 }}>
+                  {t('agents.custom.trigger.legacyCronHint')}
+                </div>
               </div>
             )}
 

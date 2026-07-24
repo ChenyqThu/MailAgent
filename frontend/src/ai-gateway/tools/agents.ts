@@ -89,6 +89,23 @@ function triggerSummary(trigger: CustomAgentTrigger | null | undefined): string 
   if (trigger.kind === 'cron') {
     return `cron ${trigger.cron}${trigger.timezone ? ` (${trigger.timezone})` : ''}`
   }
+  // 07-24 结构化排程规则（与 kind:'cron' 并存）。摘要保持一行、可预测。
+  if (trigger.kind === 'schedule') {
+    const r = trigger.rule
+    const at = `${String(r.hour).padStart(2, '0')}:${String(r.minute).padStart(2, '0')}`
+    const parts = [`schedule ${r.freq}`]
+    if (r.interval > 1) parts.push(`every ${r.interval}`)
+    if (r.freq === 'weekly') parts.push(`byday=[${r.weekdays.join(',')}]`)
+    if (r.freq === 'monthly') {
+      parts.push(
+        r.monthMode === 'date'
+          ? `day=${r.monthDay}${r.clamp ? ' (clamped)' : ''}`
+          : `nth=${r.ordinal} weekday=${r.weekday}`
+      )
+    }
+    parts.push(`at ${at} (${trigger.timezone})`)
+    return parts.join(' ')
+  }
   const preds: string[] = []
   if (trigger.subject_pattern) preds.push(`subject~/${trigger.subject_pattern}/`)
   if (trigger.sender_pattern) preds.push(`sender~/${trigger.sender_pattern}/`)

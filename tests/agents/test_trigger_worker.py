@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 import pytest
 
 from src.agents import trigger_worker as tw
-from src.agents.trigger import CronTrigger
+from src.agents.trigger import CronTrigger, parse_trigger
 from src.mail.sync_store import SyncStore
 from src.sync.async_jobs import AsyncJobRepository
 
@@ -118,6 +118,81 @@ def test_dst_fall_back_no_double_fire_via_utc_marker():
 
 
 # ============================================================
+# _due_fire — kind='schedule'（共享求值器路径；marker/30min 窗语义同 cron）
+# ============================================================
+
+def _sched_trigger(**over):
+    """weekly interval=2 周一 09:00 Asia/Shanghai，anchor=2026-07-06（周一，on-week 原点）。"""
+    payload = {
+        "v": 1, "kind": "schedule",
+        "rule": {
+            "freq": "weekly", "interval": 2, "weekdays": [1], "monthMode": "date",
+            "monthDay": 1, "ordinal": 1, "weekday": 0, "hour": 9, "minute": 0, "clamp": False,
+        },
+        "anchor": "2026-07-06", "timezone": "Asia/Shanghai",
+    }
+    payload.update(over)
+    return parse_trigger(payload)
+
+
+class TestScheduleDueFire:
+    def test_fire_within_window(self):
+        trig = _sched_trigger()
+        now = datetime(2026, 7, 20, 1, 0, 30, tzinfo=_UTC)   # on-week 周一 09:00:30 CST
+        occ = tw._due_fire(trig, now, None)
+        assert occ == datetime(2026, 7, 20, 1, 0, 0, tzinfo=_UTC)
+        # 同 occurrence 不重复 fire。
+        assert tw._due_fire(trig, now, tw._make_marker(occ, tw._trigger_hash(trig))) is None
+
+    def test_off_week_monday_does_not_fire(self):
+        # interval=2 相位以 anchor 为准：2026-07-13 是 off-week 周一 → prev occurrence 是
+        # 07-06（7 天前，远超 30min 窗）→ 不 fire。相位若从 now 起算这里会误 fire —— 测红。
+        trig = _sched_trigger()
+        assert tw._due_fire(trig, datetime(2026, 7, 13, 1, 0, 30, tzinfo=_UTC), None) is None
+
+    def test_missed_window_not_caught_up(self):
+        trig = _sched_trigger()
+        assert tw._due_fire(trig, datetime(2026, 7, 20, 1, 45, 0, tzinfo=_UTC), None) is None
+
+    def test_no_fire_before_first_occurrence(self):
+        # anchor 之前无 occurrence（prev=None）→ 不 fire、不崩。
+        trig = _sched_trigger()
+        assert tw._due_fire(trig, datetime(2026, 7, 5, 1, 0, 30, tzinfo=_UTC), None) is None
+
+    def test_config_change_invalidates_marker(self):
+        # anchor（或 rule/timezone 任一）变更 → hash 失配 → 视作从未 fire → 重新判定。
+        cur = _sched_trigger()
+        old = _sched_trigger(anchor="2026-07-13")
+        assert tw._trigger_hash(cur) != tw._trigger_hash(old)
+        now = datetime(2026, 7, 20, 1, 0, 30, tzinfo=_UTC)
+        occ = tw._due_fire(cur, now, None)
+        stale = tw._make_marker(occ, tw._trigger_hash(old))
+        assert tw._due_fire(cur, now, stale) == occ
+
+    def test_cron_hash_byte_compat(self):
+        # CronTrigger 的 _trigger_hash 必须与历史 _cron_hash 字节一致 —— 升级不重置存量
+        # cron marker（否则 30min 窗内的 occurrence 会在升级瞬间重放一次）。
+        cron = CronTrigger(cron="0 9 * * *", timezone="Asia/Shanghai")
+        assert tw._trigger_hash(cron) == tw._cron_hash(cron)
+
+    def test_dst_wall_clock_semantics(self):
+        # LA 每天 9:00 跨 2026-03-08 春季前跳：切换日 occurrence = 16:00 UTC（9:00-07:00），
+        # 前一日 = 17:00 UTC（9:00-08:00）—— 墙钟恒 9 点，UTC 漂移由求值器吸收。
+        trig = _sched_trigger(
+            rule={
+                "freq": "daily", "interval": 1, "weekdays": [], "monthMode": "date",
+                "monthDay": 1, "ordinal": 1, "weekday": 0, "hour": 9, "minute": 0,
+                "clamp": False,
+            },
+            anchor="2026-03-05", timezone="America/Los_Angeles",
+        )
+        assert tw._due_fire(trig, datetime(2026, 3, 7, 17, 0, 30, tzinfo=_UTC), None) \
+            == datetime(2026, 3, 7, 17, 0, 0, tzinfo=_UTC)
+        assert tw._due_fire(trig, datetime(2026, 3, 8, 16, 0, 30, tzinfo=_UTC), None) \
+            == datetime(2026, 3, 8, 16, 0, 0, tzinfo=_UTC)
+
+
+# ============================================================
 # tick_loop 集成
 # ============================================================
 
@@ -187,3 +262,38 @@ async def test_tick_loop_skips_malformed_trigger(tmp_path):
     await asyncio.wait_for(task, timeout=2)
     # 坏 trigger 被 skip，不入队、不崩。
     assert repo.count_agent_runs_since("bad", 0) == 0
+
+
+@pytest.mark.asyncio
+async def test_tick_loop_fires_schedule_agent(tmp_path):
+    """kind='schedule' 的 custom agent 与 cron 同走本 worker：入队 + marker 去重。"""
+    db = tmp_path / "s.db"
+    ss = SyncStore(str(db))
+    repo = AsyncJobRepository(str(db))
+    agent = {
+        "id": "sch1", "type": "custom", "enabled": 1,
+        "trigger_json": json.dumps({
+            "v": 1, "kind": "schedule",
+            "rule": {
+                "freq": "daily", "interval": 1, "weekdays": [], "monthMode": "date",
+                "monthDay": 1, "ordinal": 1, "weekday": 0, "hour": 9, "minute": 0,
+                "clamp": False,
+            },
+            "anchor": "2026-07-01", "timezone": "UTC",
+        }),
+        "budget_json": None,
+    }
+    now = datetime(2026, 7, 3, 9, 0, 30, tzinfo=_UTC)
+    ev = asyncio.Event()
+    task = asyncio.create_task(tw.tick_loop(
+        sync_store=ss, store=_FakeStore([agent]), repo=repo, shutdown_event=ev,
+        interval_sec=0.01, now_fn=lambda: now,
+    ))
+    await asyncio.sleep(0.06)  # 跑几个 tick（marker 去重 → 只 fire 一次）
+    ev.set()
+    await asyncio.wait_for(task, timeout=2)
+
+    assert repo.count_agent_runs_since("sch1", 0) == 1
+    marker = json.loads(ss.get_state("agent_trigger_last_fire:sch1"))
+    assert marker["fired_at_utc"].startswith("2026-07-03T09:00:00")
+    assert marker["cron_hash"] == tw._trigger_hash(parse_trigger(agent["trigger_json"]))

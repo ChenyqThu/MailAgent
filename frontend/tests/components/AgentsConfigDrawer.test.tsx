@@ -32,13 +32,11 @@ beforeAll(() => {
   }
 })
 
-/** The model dropdown is a Radix Select, rendered as `<button role="combobox">`.
- *  The schedule controls use native `<select>` (also role=combobox), so scope to
- *  the BUTTON to find the model trigger unambiguously. */
+/** The model dropdown is a Radix Select (`<button role="combobox">`). 07-24 起抽屉里还有
+ *  第二个 Radix Select（ScheduleBuilder 的时区），故必须按 aria-label 精确定位，
+ *  不能再靠 "唯一的 BUTTON combobox" 这个假设。 */
 function getModelTrigger(): HTMLElement {
-  const trigger = screen.getAllByRole('combobox').find((el) => el.tagName === 'BUTTON')
-  if (!trigger) throw new Error('model select trigger (button[role=combobox]) not found')
-  return trigger
+  return screen.getByRole('combobox', { name: '模型' })
 }
 
 /** Open the model Radix Select (closed state only renders the selected value;
@@ -125,26 +123,37 @@ function makeCfg(over: Partial<ReportAgentConfig>): ReportAgentConfig {
 
 afterEach(cleanup)
 
-describe('ConfigDrawer schedule controls (Bug2)', () => {
-  test('weekly：出现 weekday 单选（周一~周日），无「每月几日」', () => {
+// 07-24 排程统一：CadencePill + 原生 weekday/dayOfMonth/hour select 换成共享
+// ScheduleBuilder。Bug2 的原意（「weekly 才出周几、monthly 才出每月几日、daily 都不出」）
+// 由构建器的条件渲染继承，断言改成驱动构建器控件；另加继承老配置数值的回归。
+describe('ConfigDrawer schedule controls (Bug2 · ScheduleBuilder)', () => {
+  afterEach(() => {
+    mockSave.mockClear()
+  })
+
+  test('weekly：出现周几圆钮组（按老 weekday 预填），无「每月几号」下拉', () => {
     renderDrawer(
       <ConfigDrawer
         cfg={makeCfg({
           id: 'weekly',
           type: 'weekly',
+          // 🔴 老值是 Python weekday 口径：2 = 周三
           schedule: { cadence: 'weekly', hours: [9], weekday: 2 }
         })}
         open
         onClose={() => {}}
       />
     )
-    expect(screen.getByRole('option', { name: '周一' })).toBeTruthy()
-    expect(screen.getByRole('option', { name: '周三' })).toBeTruthy()
-    expect(screen.getByRole('option', { name: '周日' })).toBeTruthy()
-    expect(screen.queryByRole('option', { name: '1 日' })).toBeNull()
+    expect(screen.getByRole('button', { name: '周一' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '周三' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '周日' })).toBeTruthy()
+    // 只有周三被选中 —— 锁死 Python 2(周三) → 契约 3(周三) 的编号转换
+    expect(screen.getByRole('button', { name: '周三' }).getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByRole('button', { name: '周一' }).getAttribute('aria-pressed')).toBe('false')
+    expect(screen.queryByLabelText('每月几号')).toBeNull()
   })
 
-  test('monthly：出现每月几日下拉（1~28 日）+ hint，无 weekday', () => {
+  test('monthly：出现每月几号下拉（1~31 日，含月末策略）+ 无周几圆钮', () => {
     renderDrawer(
       <ConfigDrawer
         cfg={makeCfg({
@@ -156,17 +165,69 @@ describe('ConfigDrawer schedule controls (Bug2)', () => {
         onClose={() => {}}
       />
     )
-    expect(screen.getByRole('option', { name: '1 日' })).toBeTruthy()
-    expect(screen.getByRole('option', { name: '15 日' })).toBeTruthy()
-    expect(screen.getByRole('option', { name: '28 日' })).toBeTruthy()
-    expect(screen.getByText(/每月都能触发/)).toBeTruthy()
-    expect(screen.queryByRole('option', { name: '周一' })).toBeNull()
+    const daySelect = screen.getByLabelText('每月几号') as HTMLSelectElement
+    expect(daySelect.value).toBe('15')
+    // 新求值器有 clamp/skip 月末策略 → 不再限 1–28（老 UI 因 worker 无月末回退才砍到 28）
+    expect(within(daySelect).getByRole('option', { name: '31 号' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '周一' })).toBeNull()
   })
 
-  test('daily：weekday / 每月几日 均不出现', () => {
+  test('daily：周几圆钮 / 每月几号 均不出现', () => {
     renderDrawer(<ConfigDrawer cfg={makeCfg({})} open onClose={() => {}} />)
-    expect(screen.queryByRole('option', { name: '周一' })).toBeNull()
-    expect(screen.queryByRole('option', { name: '1 日' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '周一' })).toBeNull()
+    expect(screen.queryByLabelText('每月几号')).toBeNull()
+  })
+
+  test('🔴 频率段锁死：报告种类（cadence）不能被排程编辑改掉', () => {
+    renderDrawer(<ConfigDrawer cfg={makeCfg({})} open onClose={() => {}} />)
+    // lockFreq → 「按天 / 按周 / 按月」分段控件不渲染（cadence 仍由 CadencePill 只读展示）
+    expect(screen.queryByRole('button', { name: '按周' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '按月' })).toBeNull()
+  })
+
+  test('继承老配置数值：daily 9 点保存后 rule 是 9:00 + cadence 不变 + 时区写实非空', () => {
+    renderDrawer(<ConfigDrawer cfg={makeCfg({})} open onClose={() => {}} />)
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+    const patch = mockSave.mock.calls.at(-1)?.[1]
+    expect(patch.schedule.cadence).toBe('daily')
+    expect(patch.schedule.kind).toBe('schedule')
+    expect(patch.schedule.rule).toMatchObject({
+      freq: 'daily',
+      interval: 1,
+      hour: 9,
+      minute: 0
+    })
+    // 🔴 契约 §4：空时区必须写实成实际 IANA，留空会让统一逻辑退化成 UTC → 9:00 报告漂
+    expect(patch.schedule.timezone).toBeTruthy()
+    // legacy 镜像仍在（降级安全）
+    expect(patch.schedule.hours).toEqual([9])
+  })
+
+  test('继承老配置数值：weekly 周一（Python 0）→ rule.weekdays=[1]（契约周一）', () => {
+    renderDrawer(
+      <ConfigDrawer
+        cfg={makeCfg({
+          id: 'weekly',
+          type: 'weekly',
+          schedule: { cadence: 'weekly', hours: [9], weekday: 0 }
+        })}
+        open
+        onClose={() => {}}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+    const patch = mockSave.mock.calls.at(-1)?.[1]
+    expect(patch.schedule.cadence).toBe('weekly')
+    expect(patch.schedule.rule.weekdays).toEqual([1])
+    expect(patch.schedule.rule.hour).toBe(9)
+    // legacy 镜像写回 Python 口径
+    expect(patch.schedule.weekday).toBe(0)
+  })
+
+  test('预览列出接下来 5 次运行（所见即将跑）', () => {
+    renderDrawer(<ConfigDrawer cfg={makeCfg({})} open onClose={() => {}} />)
+    const preview = screen.getByTestId('schedule-preview')
+    expect(preview.querySelectorAll('li')).toHaveLength(5)
   })
 
   test('退场期 cfg=null 不崩（regression：header title 改用 state，不读 cfg.title）', () => {
@@ -185,11 +246,7 @@ describe('ConfigDrawer identity docs (增量 2 — report 行级 context_docs)',
 
   test('渲染 4 个文档 chips，按 cfg.context_docs 预填选中态', () => {
     renderDrawer(
-      <ConfigDrawer
-        cfg={makeCfg({ context_docs: ['soul', 'user'] })}
-        open
-        onClose={() => {}}
-      />
+      <ConfigDrawer cfg={makeCfg({ context_docs: ['soul', 'user'] })} open onClose={() => {}} />
     )
     const pressed = (name: string) =>
       screen.getByRole('button', { name }).getAttribute('aria-pressed')
@@ -201,11 +258,7 @@ describe('ConfigDrawer identity docs (增量 2 — report 行级 context_docs)',
 
   test('未动 chips 直接保存，patch 为显式默认 ["soul","user"] 而非 []（codex MED 坑）', () => {
     renderDrawer(
-      <ConfigDrawer
-        cfg={makeCfg({ context_docs: ['soul', 'user'] })}
-        open
-        onClose={() => {}}
-      />
+      <ConfigDrawer cfg={makeCfg({ context_docs: ['soul', 'user'] })} open onClose={() => {}} />
     )
     fireEvent.click(screen.getByRole('button', { name: '保存' }))
     expect(mockSave).toHaveBeenCalledWith(
@@ -216,11 +269,7 @@ describe('ConfigDrawer identity docs (增量 2 — report 行级 context_docs)',
 
   test('toggle 后保存，patch 携带 context_docs（取消 soul → ["user"]）', () => {
     renderDrawer(
-      <ConfigDrawer
-        cfg={makeCfg({ context_docs: ['soul', 'user'] })}
-        open
-        onClose={() => {}}
-      />
+      <ConfigDrawer cfg={makeCfg({ context_docs: ['soul', 'user'] })} open onClose={() => {}} />
     )
     fireEvent.click(screen.getByRole('button', { name: '灵魂 / soul' }))
     fireEvent.click(screen.getByRole('button', { name: '保存' }))

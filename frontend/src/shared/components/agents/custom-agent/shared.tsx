@@ -13,11 +13,14 @@ export function errText(err: unknown): string {
   return code ? `${code}: ${msg}` : msg
 }
 
-/** trigger.kind → headless context_mode（与后端 _derive_rule_context_mode 同表，只读展示用）。 */
+/** trigger.kind → headless context_mode（与后端 _derive_rule_context_mode / gateway
+ *  deriveContextMode 同表，只读展示用）。
+ *  `schedule`（07-24 结构化排程）与 `cron` 同族 —— 到点就跑、无攻击者可控输入。漏了这一行，
+ *  排程型 agent 的自动化策略区会显示「无 headless 模式」并把所有免卡规则标成 dormant。 */
 export function deriveHeadlessMode(
   kind: string | null
 ): 'cron_headless' | 'untrusted_trigger' | null {
-  if (kind === 'cron') return 'cron_headless'
+  if (kind === 'cron' || kind === 'schedule') return 'cron_headless'
   if (kind === 'email_filter') return 'untrusted_trigger'
   return null
 }

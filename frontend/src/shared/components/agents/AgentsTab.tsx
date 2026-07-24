@@ -28,11 +28,20 @@ import { ConfigDrawer } from './drawers/ConfigDrawer'
 import { SearchConfigDrawer } from './drawers/SearchConfigDrawer'
 import { PreprocessConfigDrawer } from './drawers/PreprocessConfigDrawer'
 import { ProjectProgressConfigDrawer } from './drawers/ProjectProgressConfigDrawer'
+import { coerceRule, isScheduleValue } from './schedule'
+import { sentenceText } from './schedule/sentence'
 
 function scheduleText(
   cfg: ReportAgentConfig,
-  t: (k: string, o?: Record<string, unknown>) => string
+  t: (k: string, o?: Record<string, unknown>) => string,
+  locale: string
 ): string {
+  // 07-24 结构化排程：老三句模板表达不了 interval / 第 N 个星期几 / 非整点分钟
+  // （monthly+nth 时 day_of_month 镜像根本不存在，会退成「每月 1 日」——错的），
+  // 故新形状直接复用构建器同一套句子生成器，卡片与抽屉口径天然一致。
+  if (isScheduleValue(cfg.schedule)) {
+    return sentenceText(t, locale, coerceRule(cfg.schedule.rule))
+  }
   const h = String(cfg.schedule.hours?.[0] ?? 9).padStart(2, '0')
   if (cfg.schedule.cadence === 'weekly') {
     const wd = cfg.schedule.weekday ?? 0
@@ -54,7 +63,7 @@ function AgentCard({
   onConfig: () => void
   onOpenReports: () => void
 }): React.ReactElement {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const { save } = useSetConfig()
   const { run, isRunning } = useRunNow()
   // codex MEDIUM-2 — 该 agent 的最近一份报告：走 agentId 过滤 + limit:1 的按 agent 查询（不再从
@@ -138,7 +147,7 @@ function AgentCard({
           >
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
               <ReportIcon name="clock" size={11} />
-              {scheduleText(cfg, t)}
+              {scheduleText(cfg, t, i18n.language || 'zh-CN')}
             </span>
             {/* 回看窗口仅对日报有意义；周/月报走层级聚合（综合上周日报/上月周报），不显示 */}
             {cfg.schedule.cadence === 'daily' ? (
@@ -441,7 +450,7 @@ function CustomAgentCard({
   cfg: ReportAgentConfig
   onConfig: () => void
 }): React.ReactElement {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const { save } = useSetConfig()
   // 最近一次 run 的状态徽标（listRuns 读失败/无 run → 不显徽标）。
   const { runs } = useAgentRuns(cfg.id)
@@ -458,6 +467,13 @@ function CustomAgentCard({
     const trig = cfg.trigger
     if (trig?.kind === 'cron') {
       return t('agents.custom.card.triggerCron', { cron: trig.cron, tz: trig.timezone || 'UTC' })
+    }
+    // 07-24 结构化排程：摘要用构建器同一套句子生成器（卡片与抽屉口径一致）。
+    if (trig?.kind === 'schedule') {
+      return t('agents.custom.card.triggerSchedule', {
+        text: sentenceText(t, i18n.language || 'zh-CN', coerceRule(trig.rule)),
+        tz: trig.timezone
+      })
     }
     if (trig?.kind === 'email_filter') return t('agents.custom.card.triggerEmail')
     return t('agents.custom.card.triggerNone')
@@ -1019,18 +1035,20 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
             gap: 16
           }}
         >
+          {/* 报告 Agents 区 —— tab 改名为「Agents」后，本区不再是页级标题（tab 按钮本身即
+              页标题），降格为与下方 search / preprocess / custom 各区一致的 h2 小节标题。 */}
           <div>
-            <h1
+            <h2
               style={{
-                fontSize: 20,
+                fontSize: 16,
                 fontWeight: 600,
                 color: 'rgb(var(--ink-fg))',
                 letterSpacing: '-0.01em'
               }}
             >
               {t('agents.title')}
-            </h1>
-            <p style={{ fontSize: 13.5, color: 'rgb(var(--ink-fg-2))', marginTop: 5 }}>
+            </h2>
+            <p style={{ fontSize: 13, color: 'rgb(var(--ink-fg-2))', marginTop: 4 }}>
               {t('agents.subtitle')}
             </p>
           </div>

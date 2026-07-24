@@ -1,8 +1,11 @@
 """Custom Agent 触发判别式（trigger_json）解析/校验 + budget 解析（S4 W1，ADR D5/D7）。
 
-trigger_json 两态判别式（``kind`` 分流）：
+trigger_json 三态判别式（``kind`` 分流；``schedule`` 为 schedule-builder 任务新增，
+契约见 ``src/agents/schedule_rule.py`` 模块 docstring 指向的 schedule-contract.md）：
 
     {"v":1, "kind":"cron",         "cron":"0 9 * * 1-5", "timezone":"Asia/Shanghai"}
+    {"v":1, "kind":"schedule",     "rule":{...ScheduleRule 10 键全量...},
+                                    "anchor":"2026-07-24", "timezone":"America/Los_Angeles"}
     {"v":1, "kind":"email_filter", "subject_pattern":"DMS.*审批",
                                     "sender_pattern":"dms@corp\\.com", "folders":["收件箱"]}
 
@@ -60,6 +63,21 @@ class CronTrigger:
 
 
 @dataclass(frozen=True)
+class ScheduleTrigger:
+    """schedule-builder 结构化定时触发（契约 kind:'schedule'）。与 cron 同族 = 定时
+    headless（trigger_worker 调度、fire_key/marker 机制同 cron）；timezone **必填**
+    （契约 §1，不同于 cron 的空→UTC 默认），anchor = 本地日历日期（interval 相位原点）。
+
+    ``rule`` 类型是 ``schedule_rule.ScheduleRule``（惰性 import，标注用 Any 免得
+    flag-off 场景加载 dateutil —— 镜像 croniter 的函数内 import 纪律）。"""
+
+    rule: Any
+    anchor: str
+    timezone: str
+    kind: str = "schedule"
+
+
+@dataclass(frozen=True)
 class EmailFilterTrigger:
     """邮件事件触发 → contextMode='untrusted_trigger'。谓词至少一个非空。"""
 
@@ -69,7 +87,7 @@ class EmailFilterTrigger:
     kind: str = "email_filter"
 
 
-Trigger = Union[CronTrigger, EmailFilterTrigger]
+Trigger = Union[CronTrigger, ScheduleTrigger, EmailFilterTrigger]
 
 
 @dataclass(frozen=True)
@@ -192,7 +210,7 @@ def _validate_timezone(tz: Any) -> str:
 
 
 def parse_trigger(raw: Union[str, dict, None]) -> Trigger:
-    """trigger_json（JSON 串 / dict）→ ``CronTrigger`` | ``EmailFilterTrigger``。
+    """trigger_json（JSON 串 / dict）→ ``CronTrigger`` | ``ScheduleTrigger`` | ``EmailFilterTrigger``。
 
     Raises:
         TriggerValidationError: NULL/非 dict/未知 kind/校验失败（保存时拒，运行时 skip）。
@@ -207,6 +225,21 @@ def parse_trigger(raw: Union[str, dict, None]) -> Trigger:
             cron=_validate_cron_expr(data.get("cron")),
             timezone=_validate_timezone(data.get("timezone")),
         )
+    if kind == "schedule":
+        # schedule-builder 结构化规则（契约 §1）：rule 10 键全量深校验 + anchor 可解析 +
+        # timezone 必填（**无** cron 的空→UTC 兜底 —— 空时区正是两套排程历史分叉的病根）。
+        from src.agents import schedule_rule  # 镜像 croniter：flag-off 不加载 dateutil
+
+        tz = data.get("timezone")
+        if not isinstance(tz, str) or not tz.strip():
+            raise TriggerValidationError("schedule timezone is required (non-empty IANA name)")
+        anchor = data.get("anchor")
+        try:
+            rule = schedule_rule.parse_rule(data.get("rule"))
+            schedule_rule.parse_anchor(anchor)
+        except schedule_rule.ScheduleRuleError as e:
+            raise TriggerValidationError(f"invalid schedule trigger: {e}") from e
+        return ScheduleTrigger(rule=rule, anchor=anchor, timezone=_validate_timezone(tz))
     if kind == "email_filter":
         subject = _validate_pattern("subject_pattern", data.get("subject_pattern"))
         sender = _validate_pattern("sender_pattern", data.get("sender_pattern"))
@@ -220,7 +253,9 @@ def parse_trigger(raw: Union[str, dict, None]) -> Trigger:
         return EmailFilterTrigger(
             subject_pattern=subject, sender_pattern=sender, folders=folders
         )
-    raise TriggerValidationError(f"unknown trigger kind={kind!r} (expect cron|email_filter)")
+    raise TriggerValidationError(
+        f"unknown trigger kind={kind!r} (expect cron|schedule|email_filter)"
+    )
 
 
 def _clamp_int(value: Any, default: int, lo: int, hi: int) -> int:

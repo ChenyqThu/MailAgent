@@ -9,6 +9,7 @@ from src.agents.trigger import (
     Budget,
     CronTrigger,
     EmailFilterTrigger,
+    ScheduleTrigger,
     ToolPolicy,
     ToolPolicyValidationError,
     TriggerValidationError,
@@ -114,6 +115,88 @@ def test_parse_accepts_max_len_pattern():
 def test_parse_rejects_uncompilable_regex():
     with pytest.raises(TriggerValidationError, match="valid regex"):
         parse_trigger({"v": 1, "kind": "email_filter", "subject_pattern": "([unclosed"})
+
+
+# ============================================================
+# schedule 触发（schedule-builder，契约 §1）
+# ============================================================
+
+def _schedule_rule_dict(**over):
+    base = {
+        "freq": "weekly", "interval": 2, "weekdays": [1], "monthMode": "date",
+        "monthDay": 1, "ordinal": 1, "weekday": 0, "hour": 9, "minute": 0, "clamp": False,
+    }
+    base.update(over)
+    return base
+
+
+def _schedule_payload(**over):
+    payload = {
+        "v": 1, "kind": "schedule", "rule": _schedule_rule_dict(),
+        "anchor": "2026-07-06", "timezone": "America/Los_Angeles",
+    }
+    payload.update(over)
+    return payload
+
+
+def test_parse_schedule_valid():
+    t = parse_trigger(_schedule_payload())
+    assert isinstance(t, ScheduleTrigger)
+    assert t.kind == "schedule"
+    assert t.anchor == "2026-07-06"
+    assert t.timezone == "America/Los_Angeles"
+    assert t.rule.freq == "weekly" and t.rule.interval == 2 and t.rule.weekdays == (1,)
+
+
+def test_parse_schedule_json_string_input():
+    import json as _json
+
+    t = parse_trigger(_json.dumps(_schedule_payload()))
+    assert isinstance(t, ScheduleTrigger)
+
+
+def test_parse_schedule_requires_timezone():
+    # 契约 §1：timezone 必填 —— **没有** cron 的空→UTC 兜底（空时区语义分叉正是历史病根）。
+    for tz in (None, ""):
+        with pytest.raises(TriggerValidationError, match="timezone"):
+            parse_trigger(_schedule_payload(timezone=tz))
+    payload = _schedule_payload()
+    del payload["timezone"]
+    with pytest.raises(TriggerValidationError, match="timezone"):
+        parse_trigger(payload)
+
+
+def test_parse_schedule_rejects_bad_timezone():
+    with pytest.raises(TriggerValidationError):
+        parse_trigger(_schedule_payload(timezone="Mars/Olympus"))
+
+
+def test_parse_schedule_rejects_bad_anchor():
+    for anchor in (None, "", "not-a-date", "2026-13-01", "20260706"):
+        with pytest.raises(TriggerValidationError, match="schedule"):
+            parse_trigger(_schedule_payload(anchor=anchor))
+
+
+def test_parse_schedule_rejects_bad_rule():
+    # 深校验交给 schedule_rule.parse_rule（缺键 / 未知键 / 值域）——抽查三类，全表在
+    # tests/agents/test_schedule_rule.py。
+    with pytest.raises(TriggerValidationError, match="invalid schedule"):
+        parse_trigger(_schedule_payload(rule=None))
+    incomplete = _schedule_rule_dict()
+    del incomplete["clamp"]
+    with pytest.raises(TriggerValidationError, match="missing"):
+        parse_trigger(_schedule_payload(rule=incomplete))
+    with pytest.raises(TriggerValidationError):
+        parse_trigger(_schedule_payload(rule=_schedule_rule_dict(ordinal=9)))
+
+
+def test_validate_patch_accepts_schedule_trigger():
+    validate_agent_config_patch({"trigger": _schedule_payload()})
+
+
+def test_validate_patch_rejects_bad_schedule_trigger():
+    with pytest.raises(TriggerValidationError):
+        validate_agent_config_patch({"trigger": _schedule_payload(timezone="")})
 
 
 # ============================================================

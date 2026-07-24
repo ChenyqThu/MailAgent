@@ -63,8 +63,34 @@ def schedule_of(row: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def cadence_of(row: Dict[str, Any]) -> str:
-    """agent 行的调度节律；解析不出 → ``DEFAULT_CADENCE``（见其注释：单一定义）。"""
-    return str(schedule_of(row).get("cadence") or DEFAULT_CADENCE)
+    """agent 行的调度节律；解析不出 → ``DEFAULT_CADENCE``（见其注释：单一定义）。
+
+    schedule-builder 新形状（``{"kind":"schedule","rule":{"freq":...},...}``）从
+    ``rule.freq`` 派生（daily/weekly/monthly 与 cadence 1:1）—— 少了这条，weekly 的
+    schedule 形状行会被当 daily 排序 / 聚合，层级聚合口径直接错。老形状照读 ``cadence``。
+    """
+    sched = schedule_of(row)
+    if sched.get("kind") == "schedule":
+        rule = sched.get("rule")
+        freq = rule.get("freq") if isinstance(rule, dict) else None
+        return freq if freq in ("daily", "weekly", "monthly") else DEFAULT_CADENCE
+    return str(sched.get("cadence") or DEFAULT_CADENCE)
+
+
+def agent_with_cadence_override(agent: Dict[str, Any], cadence: str) -> Dict[str, Any]:
+    """manual-run 的 ``--cadence`` 覆盖（内存副本，**不落库**）：CLI ``report run`` /
+    serve-api manual-run / skill ``report_run`` 三处共用的唯一入口。
+
+    老形状只需改顶层 ``cadence``；但 schedule-builder 新形状（``kind:'schedule'``）下
+    ``cadence_of`` 以 ``rule.freq`` 为权威（顶层 cadence 是降级镜像、运行时死数据），
+    只写顶层键会被静默忽略——覆盖不生效、还查不出错——故必须连 ``rule.freq`` 一起覆写。
+    """
+    sched = schedule_of(agent)
+    sched["cadence"] = cadence
+    rule = sched.get("rule")
+    if sched.get("kind") == "schedule" and isinstance(rule, dict):
+        sched["rule"] = {**rule, "freq": cadence}
+    return {**agent, "schedule_json": json.dumps(sched, ensure_ascii=False)}
 
 
 def _agent_sort_key(row: Dict[str, Any]) -> Tuple[int, str]:

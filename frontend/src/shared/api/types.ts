@@ -196,6 +196,7 @@ export type {
   ReportDetail,
   ReportPagedResult,
   ReportSchedule,
+  ScheduleRuleWire,
   CustomAgentTrigger,
   CustomAgentToolPolicy,
   CustomAgentBudget,

@@ -137,6 +137,14 @@ describe('deriveContextMode', () => {
       'cron_headless'
     )
   })
+  // 🔴 07-24 结构化排程与 cron 同族（到点就跑、输入无攻击者可控内容）。这条同时锁跨语言
+  // 一致性：Python `_derive_rule_context_mode` 在**创建规则时**盖 context_mode 章，两边不
+  // 同表 = owner 配的免卡规则永不命中（fail-closed 但功能坏）。
+  test('schedule → cron_headless（与 cron 同族，须与 Python _derive_rule_context_mode 同表）', () => {
+    expect(deriveContextMode(makeSpec({ trigger: { kind: 'schedule', firedAt: 'x' } }))).toBe(
+      'cron_headless'
+    )
+  })
   test('unknown/missing kind → untrusted_trigger (fail-closed)', () => {
     expect(deriveContextMode(makeSpec({ trigger: { kind: 'weird', firedAt: 'x' } }))).toBe(
       'untrusted_trigger'

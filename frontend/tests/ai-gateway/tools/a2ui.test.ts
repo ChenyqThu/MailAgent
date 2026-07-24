@@ -229,6 +229,73 @@ describe('buildToolA2UIPayload — custom-agent CRUD approval card (S6 W3-2, rev
     expect(props.before).toBeUndefined()
   })
 
+  test('kind:schedule trigger → 审批卡呈现完整摘要（不能是空串——owner 不能批一个看不见的触发）', () => {
+    // 07-24 结构化排程与 cron 并存且 backend parse_trigger 接受 —— 审批卡必须能渲染。
+    const p = buildToolA2UIPayload('custom_agent_create', {
+      args: {
+        id: 'sched-agent',
+        title: 'Sched',
+        prompt: 'x',
+        trigger: {
+          v: 1,
+          kind: 'schedule',
+          rule: {
+            freq: 'weekly',
+            interval: 2,
+            weekdays: [1, 3],
+            monthMode: 'date',
+            monthDay: 1,
+            ordinal: 1,
+            weekday: 0,
+            hour: 9,
+            minute: 30,
+            clamp: false
+          },
+          anchor: '2026-07-06',
+          timezone: 'Asia/Shanghai'
+        }
+      }
+    })
+    const props = p!.props as unknown as CustomAgentApprovalCardProps
+    expect(props.triggerSummary).toBe(
+      'schedule weekly every 2 byday=[1,3] at 09:30 (Asia/Shanghai)'
+    )
+  })
+
+  test('kind:schedule monthly nth / clamped date 摘要分支', () => {
+    const mk = (rule: Record<string, unknown>): string => {
+      const p = buildToolA2UIPayload('custom_agent_update', {
+        args: {
+          agent_id: 'a',
+          trigger: { v: 1, kind: 'schedule', rule, anchor: '2026-07-06', timezone: 'UTC' }
+        }
+      })
+      return (p!.props as unknown as CustomAgentApprovalCardProps).triggerSummary as string
+    }
+    expect(
+      mk({
+        freq: 'monthly',
+        interval: 1,
+        monthMode: 'nth',
+        ordinal: 'last',
+        weekday: 5,
+        hour: 9,
+        minute: 0
+      })
+    ).toBe('schedule monthly nth=last weekday=5 at 09:00 (UTC)')
+    expect(
+      mk({
+        freq: 'monthly',
+        interval: 1,
+        monthMode: 'date',
+        monthDay: 31,
+        clamp: true,
+        hour: 9,
+        minute: 0
+      })
+    ).toBe('schedule monthly day=31 (clamped) at 09:00 (UTC)')
+  })
+
   test('junk grant_web / trigger:null project fail-closed (enum-checked / cleared)', () => {
     const p = buildToolA2UIPayload('custom_agent_update', {
       args: { agent_id: 'a', grant_web: 'yes', trigger: null }

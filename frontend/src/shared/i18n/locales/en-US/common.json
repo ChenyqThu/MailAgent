@@ -2983,9 +2983,96 @@
   "agents": {
     "title": "Report Agents",
     "subtitle": "Auto-generated, traceable email reports. Daily by default; weekly / monthly share the engine.",
-    "tabAgents": "Report Agents",
+    "tabAgents": "Agents",
     "tabReports": "Reports",
     "tabChats": "Chats",
+    "schedule": {
+      "label": "Schedule",
+      "hint": "Preview and actual firing both use the selected timezone",
+      "repeats": "Repeats",
+      "every": "Every",
+      "on": "On",
+      "at": "At",
+      "timezone": "Timezone",
+      "monthEnd": "Month end",
+      "lessOften": "Less often",
+      "moreOften": "More often",
+      "hourLabel": "Hour",
+      "minuteLabel": "Minutes",
+      "ordinalLabel": "Which one",
+      "weekdayLabel": "Weekday",
+      "monthDayLabel": "Day of month",
+      "monthModeLabel": "Monthly mode",
+      "freq": {
+        "daily": "Daily",
+        "weekly": "Weekly",
+        "monthly": "Monthly"
+      },
+      "unit": {
+        "daily1": "day",
+        "dailyN": "days",
+        "weekly1": "week",
+        "weeklyN": "weeks",
+        "monthly1": "month",
+        "monthlyN": "months"
+      },
+      "weekday": {
+        "0": "Sunday",
+        "1": "Monday",
+        "2": "Tuesday",
+        "3": "Wednesday",
+        "4": "Thursday",
+        "5": "Friday",
+        "6": "Saturday"
+      },
+      "weekdayInitial": {
+        "0": "S",
+        "1": "M",
+        "2": "T",
+        "3": "W",
+        "4": "T",
+        "5": "F",
+        "6": "S"
+      },
+      "monthMode": {
+        "date": "A date",
+        "nth": "A weekday"
+      },
+      "ordinal": {
+        "1": "1st",
+        "2": "2nd",
+        "3": "3rd",
+        "4": "4th",
+        "last": "last"
+      },
+      "dayN": "Day {day}",
+      "clamp": {
+        "off": "Skip the month",
+        "on": "Use last day"
+      },
+      "clampHint": {
+        "off": "Months without that day simply don't run",
+        "on": "Falls back to the month's last day"
+      },
+      "clamped": "clamped",
+      "skipped": "skipped",
+      "skipReason": "{month} has only {days} days",
+      "nextRuns": "Next {count} runs",
+      "sentence": {
+        "freq": {
+          "daily1": "Every day",
+          "dailyN": "Every {count} days",
+          "weekly1": "Every week",
+          "weeklyN": "Every {count} weeks",
+          "monthly1": "Every month",
+          "monthlyN": "Every {count} months"
+        },
+        "onWeekdays": "on {days}",
+        "onDay": "on day {day}",
+        "onNth": "on the {ordinal} {weekday}",
+        "atTime": "at {time}"
+      }
+    },
     "cadence": {
       "all": "All",
       "daily": "Daily",
@@ -3095,6 +3182,7 @@
       },
       "timezone": "Timezone",
       "timezoneHint": "Empty = local; used for natural-day / week / month bounds",
+      "timezoneFromSchedule": "Natural-day bounds use the schedule timezone above ({tz}).",
       "timezonePlaceholder": "e.g. Asia/Shanghai (empty = local)",
       "timezoneLocal": "(Local)",
       "bodyPriorities": "Bodies for priorities",
@@ -3278,6 +3366,8 @@
         },
         "noneHint": "No trigger configured: the agent is saved as a draft and won't run automatically (you can still run it once manually below).",
         "cronHint": "Standard 5-field cron (min hour dom mon dow), e.g. 0 9 * * 1-5 = weekdays at 9am.",
+        "upgradeToBuilder": "Switch to the schedule builder",
+        "legacyCronHint": "Legacy cron config — firing behaviour is unchanged. Switching to the builder is one-way (the builder can't express every cron expression).",
         "tz": "Timezone",
         "senderPlaceholder": "Sender regex (optional), e.g. dms@corp\\.com",
         "subjectPlaceholder": "Subject regex (optional), e.g. DMS.*approval",
@@ -3317,6 +3407,7 @@
       },
       "card": {
         "triggerCron": "Schedule: {cron} ({tz})",
+        "triggerSchedule": "Schedule: {text} ({tz})",
         "triggerEmail": "Email event trigger",
         "triggerNone": "No trigger configured (draft)"
       },

@@ -19,8 +19,19 @@ export interface AgentRunSpec {
   jobId: number
   agentId: string
   trigger: {
-    /** 'cron' → cron_headless, 'email_filter' → untrusted_trigger; anything else fail-closes to
-     *  untrusted_trigger (strictest) in the gateway. */
+    /** 'cron' | 'schedule' → cron_headless, 'email_filter' → untrusted_trigger; anything else
+     *  fail-closes to untrusted_trigger (strictest) in the gateway.
+     *  ('schedule' = 07-24 schedule-builder 结构化定时；与 cron 同族 —— 到点就跑、输入里没有
+     *  攻击者可控内容。)
+     *
+     *  🔴 这张表有**三处实现，必须同批改**（漏一边 = 建规盖的 context_mode 与运行时求值的
+     *  失配 → 双键 (context_mode, agent_id) 对不上 → owner 配的免卡规则永不命中、恒 HITL）：
+     *    1. `frontend/src/ai-gateway/agentRun.ts::deriveContextMode`          —— 运行时求值
+     *    2. `frontend/src/shared/components/agents/custom-agent/shared.tsx::deriveHeadlessMode`
+     *                                                                         —— UI 展示 / dormant 判定
+     *    3. `src/api/routers/agent.py::_derive_rule_context_mode`             —— Python，建规盖章
+     *  前两处的一致性由 `frontend/tests/components/contextModeTable.test.ts` 锁死；
+     *  第 3 处由 `tests/api/test_agent_policy_peragent.py` 锁死。 */
     kind: string
     firedAt: string
     emailInternalId?: number

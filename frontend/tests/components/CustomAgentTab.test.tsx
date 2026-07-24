@@ -241,7 +241,9 @@ describe('CustomAgentDrawer — 新建（两段式）', () => {
     expect(screen.getByText(/最大步数/)).toBeTruthy()
   })
 
-  test('cron 触发 → createAgent(type=custom) 后 setConfig 带 trigger.kind=cron', async () => {
+  // 07-24 排程统一：新建的定时触发从裸 cron 文本框换成共享 ScheduleBuilder，
+  // wire 形状随之从 kind:'cron' 变成 kind:'schedule'（契约 §1）。
+  test('定时触发 → createAgent(type=custom) 后 setConfig 带 trigger.kind=schedule', async () => {
     mockCreateAgent.mockResolvedValue(makeCustomCfg())
     mockSetConfig.mockResolvedValue(makeCustomCfg())
     const onClose = vi.fn()
@@ -249,18 +251,73 @@ describe('CustomAgentDrawer — 新建（两段式）', () => {
     fireEvent.change(screen.getByPlaceholderText('如 DMS 审批助手'), {
       target: { value: '每日巡检' }
     })
-    fireEvent.click(screen.getByText('定时')) // 选 cron（默认 cron = 0 9 * * 1-5，合法 5 段）
+    // 选「定时」→ 构建器默认「每周 周一~周五 09:00」（与旧 cron 占位 0 9 * * 1-5 同义）
+    fireEvent.click(screen.getByText('定时'))
     fireEvent.click(screen.getByText('创建'))
     await vi.waitFor(() => expect(mockCreateAgent).toHaveBeenCalledTimes(1))
     expect(mockCreateAgent.mock.calls[0][0].type).toBe('custom')
     await vi.waitFor(() => expect(mockSetConfig).toHaveBeenCalledTimes(1))
     const patch = mockSetConfig.mock.calls[0][1]
-    expect(patch.trigger.kind).toBe('cron')
-    expect(patch.trigger.cron).toBe('0 9 * * 1-5')
+    expect(patch.trigger.kind).toBe('schedule')
+    expect(patch.trigger.rule).toMatchObject({
+      freq: 'weekly',
+      interval: 1,
+      hour: 9,
+      minute: 0
+    })
+    expect(patch.trigger.rule.weekdays).toEqual([1, 2, 3, 4, 5])
+    // 契约 §1：anchor（相位原点，本地日期）+ timezone（IANA，不允许为空）必须落库
+    expect(patch.trigger.anchor).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+    expect(patch.trigger.timezone).toBeTruthy()
     // tool_policy 恒发数组 + budget 三门
     expect(Array.isArray(patch.tool_policy.allowed_tools)).toBe(true)
     expect(patch.budget.max_steps).toBe(8)
     await vi.waitFor(() => expect(onClose).toHaveBeenCalled())
+  })
+
+  test('构建器全能力：改成「每月 最后一个周五 18:30」原样落 wire', async () => {
+    mockCreateAgent.mockResolvedValue(makeCustomCfg())
+    mockSetConfig.mockResolvedValue(makeCustomCfg())
+    renderUi(<CustomAgentDrawer cfg={null} open create onClose={() => {}} />)
+    fireEvent.change(screen.getByPlaceholderText('如 DMS 审批助手'), { target: { value: '月结' } })
+    fireEvent.click(screen.getByText('定时'))
+    fireEvent.click(screen.getByRole('button', { name: '按月' }))
+    fireEvent.click(screen.getByRole('button', { name: '按星期' }))
+    fireEvent.change(screen.getByLabelText('第几个'), { target: { value: 'last' } })
+    fireEvent.change(screen.getByLabelText('星期'), { target: { value: '5' } })
+    fireEvent.change(screen.getByLabelText('小时'), { target: { value: '18' } })
+    fireEvent.change(screen.getByLabelText('分钟'), { target: { value: '30' } })
+    fireEvent.click(screen.getByText('创建'))
+    await vi.waitFor(() => expect(mockSetConfig).toHaveBeenCalledTimes(1))
+    expect(mockSetConfig.mock.calls[0][1].trigger.rule).toMatchObject({
+      freq: 'monthly',
+      monthMode: 'nth',
+      ordinal: 'last',
+      weekday: 5,
+      hour: 18,
+      minute: 30
+    })
+  })
+
+  test('构建器全能力：interval 步进（每 3 周）', async () => {
+    mockCreateAgent.mockResolvedValue(makeCustomCfg())
+    mockSetConfig.mockResolvedValue(makeCustomCfg())
+    renderUi(<CustomAgentDrawer cfg={null} open create onClose={() => {}} />)
+    fireEvent.change(screen.getByPlaceholderText('如 DMS 审批助手'), { target: { value: '巡检' } })
+    fireEvent.click(screen.getByText('定时'))
+    fireEvent.click(screen.getByRole('button', { name: '提高频率' }))
+    fireEvent.click(screen.getByRole('button', { name: '提高频率' }))
+    expect(screen.getByTestId('schedule-interval').textContent).toBe('3')
+    fireEvent.click(screen.getByText('创建'))
+    await vi.waitFor(() => expect(mockSetConfig).toHaveBeenCalledTimes(1))
+    expect(mockSetConfig.mock.calls[0][1].trigger.rule.interval).toBe(3)
+  })
+
+  test('句子 + 「接下来 5 次运行」预览都在场（构建器核心价值）', () => {
+    renderUi(<CustomAgentDrawer cfg={null} open create onClose={() => {}} />)
+    fireEvent.click(screen.getByText('定时'))
+    expect(screen.getByTestId('schedule-sentence').textContent).toContain('每周')
+    expect(screen.getByTestId('schedule-preview').querySelectorAll('li')).toHaveLength(5)
   })
 
   test('浅校验：email_filter 谓词全空 → 拒 + 不发请求', async () => {
@@ -272,15 +329,105 @@ describe('CustomAgentDrawer — 新建（两段式）', () => {
     expect(mockCreateAgent).not.toHaveBeenCalled()
   })
 
-  test('浅校验：cron 非 5 段 → 拒 + 不发请求', async () => {
-    renderUi(<CustomAgentDrawer cfg={null} open create onClose={() => {}} />)
-    fireEvent.change(screen.getByPlaceholderText('如 DMS 审批助手'), { target: { value: 'x' } })
-    fireEvent.click(screen.getByText('定时'))
+  // 裸 cron 文本框只剩老 `kind:'cron'` 行（legacy 态）才有 —— 新建走构建器，值模型受控、
+  // 形状恒合法。故 5 段浅校验的入口改成「编辑一个老 cron 行」。
+  test('浅校验：老 cron 行改成非 5 段 → 拒 + 不发请求', async () => {
+    renderUi(
+      <CustomAgentDrawer
+        cfg={makeCustomCfg({
+          trigger: { v: 1, kind: 'cron', cron: '0 9 * * 1-5', timezone: 'UTC' }
+        })}
+        open
+        onClose={() => {}}
+      />
+    )
     fireEvent.change(screen.getByPlaceholderText('0 9 * * 1-5'), { target: { value: '0 9 * *' } })
-    fireEvent.click(screen.getByText('创建'))
+    fireEvent.click(screen.getByText('保存'))
     // 精确匹配错误消息（「cron 必须是标准 5 段…」），避开 cron 提示文案（「标准 5 段 cron…」）。
     expect(await screen.findByText(/必须是标准 5 段/)).toBeTruthy()
-    expect(mockCreateAgent).not.toHaveBeenCalled()
+    expect(mockSetConfig).not.toHaveBeenCalled()
+  })
+
+  // 契约 §4：老 cron 行**不自动映射**（`*/5 * * * *` 落在构建器值模型之外，静默转换会
+  // 改掉用户的触发时刻）。停在 legacy 态原样保存，直到用户显式点升级。
+  test('🔴 老 cron 行原样保留 kind:cron（不静默转成 schedule）', async () => {
+    mockSetConfig.mockResolvedValue(makeCustomCfg())
+    renderUi(
+      <CustomAgentDrawer
+        cfg={makeCustomCfg({
+          trigger: { v: 1, kind: 'cron', cron: '*/5 * * * *', timezone: 'UTC' }
+        })}
+        open
+        onClose={() => {}}
+      />
+    )
+    expect((screen.getByPlaceholderText('0 9 * * 1-5') as HTMLInputElement).value).toBe(
+      '*/5 * * * *'
+    )
+    // 构建器不渲染（没被自动升级）
+    expect(screen.queryByTestId('schedule-preview')).toBeNull()
+    fireEvent.click(screen.getByText('保存'))
+    await vi.waitFor(() => expect(mockSetConfig).toHaveBeenCalledTimes(1))
+    expect(mockSetConfig.mock.calls[0][1].trigger).toMatchObject({
+      kind: 'cron',
+      cron: '*/5 * * * *'
+    })
+  })
+
+  test('老 cron 行显式升级 → 用 cron 当种子切到构建器，保存成 kind:schedule', async () => {
+    mockSetConfig.mockResolvedValue(makeCustomCfg())
+    renderUi(
+      <CustomAgentDrawer
+        cfg={makeCustomCfg({
+          trigger: { v: 1, kind: 'cron', cron: '30 7 * * 1-5', timezone: 'Asia/Shanghai' }
+        })}
+        open
+        onClose={() => {}}
+      />
+    )
+    fireEvent.click(screen.getByText('改用排程构建器'))
+    expect(screen.getByTestId('schedule-preview')).toBeTruthy()
+    fireEvent.click(screen.getByText('保存'))
+    await vi.waitFor(() => expect(mockSetConfig).toHaveBeenCalledTimes(1))
+    const trigger = mockSetConfig.mock.calls[0][1].trigger
+    expect(trigger.kind).toBe('schedule')
+    // 种子来自原 cron：工作日 07:30，时区沿用原行
+    expect(trigger.rule).toMatchObject({ freq: 'weekly', hour: 7, minute: 30 })
+    expect(trigger.rule.weekdays).toEqual([1, 2, 3, 4, 5])
+    expect(trigger.timezone).toBe('Asia/Shanghai')
+  })
+
+  test('编辑 kind:schedule 行 → 预填规则，不回落 cron 文本框', () => {
+    renderUi(
+      <CustomAgentDrawer
+        cfg={makeCustomCfg({
+          trigger: {
+            v: 1,
+            kind: 'schedule',
+            rule: {
+              freq: 'monthly',
+              interval: 1,
+              weekdays: [1],
+              monthMode: 'date',
+              monthDay: 20,
+              ordinal: 1,
+              weekday: 1,
+              hour: 8,
+              minute: 15,
+              clamp: false
+            },
+            anchor: '2026-07-01',
+            timezone: 'Asia/Shanghai'
+          }
+        })}
+        open
+        onClose={() => {}}
+      />
+    )
+    expect(screen.queryByPlaceholderText('0 9 * * 1-5')).toBeNull()
+    expect((screen.getByLabelText('每月几号') as HTMLSelectElement).value).toBe('20')
+    expect((screen.getByLabelText('小时') as HTMLSelectElement).value).toBe('8')
+    expect((screen.getByLabelText('分钟') as HTMLSelectElement).value).toBe('15')
   })
 
   test('保存失败展示后端 detail（不做第二套深校验）', async () => {
@@ -320,7 +467,7 @@ describe('CustomAgentDrawer — 新建（两段式）', () => {
     expect(mockSetConfig.mock.calls[1][0]).toBe(mockSetConfig.mock.calls[0][0])
     const retryPatch = mockSetConfig.mock.calls[1][1]
     expect(retryPatch.title).toBe('巡检v2')
-    expect(retryPatch.trigger.kind).toBe('cron')
+    expect(retryPatch.trigger.kind).toBe('schedule')
     await vi.waitFor(() => expect(onClose).toHaveBeenCalled())
   })
 })
@@ -471,6 +618,42 @@ describe('CustomAgentDrawer — 自动化策略（S5 W5b）', () => {
     expect(screen.getByText('/usr/bin/python3 /skills/dms-cli/approve.py <pattern>')).toBeTruthy()
     // dormant 恰出现一次（只有 cron_headless 那条失配）
     expect(screen.getAllByText(/休眠：触发类型已变更/)).toHaveLength(1)
+  })
+
+  // 🔴 07-24：schedule 与 cron 同族 → cron_headless。漏这条映射时该区会显示
+  // 「未配置触发（规则将处于休眠）」并把所有免卡规则标成 dormant —— 排程型 agent 的
+  // 自动化策略整片失真。
+  test('schedule 触发 → 策略区按 cron_headless 呈现，cron_headless 规则不 dormant', async () => {
+    mockListPolicyRules.mockResolvedValue([makeRule({ contextMode: 'cron_headless' })])
+    renderUi(
+      <CustomAgentDrawer
+        cfg={makeCustomCfg({
+          trigger: {
+            v: 1,
+            kind: 'schedule',
+            rule: {
+              freq: 'daily',
+              interval: 1,
+              weekdays: [1],
+              monthMode: 'date',
+              monthDay: 1,
+              ordinal: 1,
+              weekday: 1,
+              hour: 9,
+              minute: 0,
+              clamp: false
+            },
+            anchor: '2026-07-24',
+            timezone: 'America/Los_Angeles'
+          }
+        })}
+        open
+        onClose={() => {}}
+      />
+    )
+    expect(await screen.findByText('email_flag')).toBeTruthy()
+    expect(screen.queryByText(/休眠：触发类型已变更/)).toBeNull()
+    expect(screen.queryByText(/未配置触发（规则将处于休眠）/)).toBeNull()
   })
 
   test('domain_write 建规：两步确认（红样式影响面声明）→ createPolicyRule payload', async () => {

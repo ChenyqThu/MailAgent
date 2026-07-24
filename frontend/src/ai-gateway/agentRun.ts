@@ -60,13 +60,19 @@ export interface RunHeadlessAgentOpts {
 }
 
 /** ADR-003 D2 — derive the run's trusted context mode from the pulled spec's trigger.kind:
- *  email_filter → untrusted_trigger, cron → cron_headless, anything else fail-closes to
+ *  email_filter → untrusted_trigger, cron | schedule → cron_headless, anything else fail-closes to
  *  untrusted_trigger (normalizeContextMode(undefined), the strictest). The input is the SERVER-pulled
- *  spec, never a poke body. Exported for the derivation test. */
+ *  spec, never a poke body. Exported for the derivation test.
+ *
+ *  🔴 `schedule`（07-24 结构化排程）与 `cron` 同族 —— 都是「到点就跑、输入里没有攻击者可控内容」，
+ *  故同映射到 cron_headless。少了这一行会 fail-close 成 untrusted_trigger：安全方向没错，但
+ *  白白套上「邮件正文不可信」那套收窄，且与 owner 在 cron_headless 下配的免卡规则对不上。
+ *  **必须与 Python `src/api/routers/agent.py::_derive_rule_context_mode` 同表** —— 规则的
+ *  context_mode 是它在创建时盖章的，两边不一致 = 规则永不命中。 */
 export function deriveContextMode(spec: AgentRunSpec): AgentContextMode {
   const kind = spec.trigger?.kind
   if (kind === 'email_filter') return 'untrusted_trigger'
-  if (kind === 'cron') return 'cron_headless'
+  if (kind === 'cron' || kind === 'schedule') return 'cron_headless'
   return normalizeContextMode(undefined)
 }
 

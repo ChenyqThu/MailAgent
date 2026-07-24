@@ -2983,9 +2983,96 @@
   "agents": {
     "title": "报告 Agents",
     "subtitle": "自动生成、可溯源的邮件报告。日报为主，周报 / 月报同引擎。",
-    "tabAgents": "报告 Agents",
+    "tabAgents": "Agents",
     "tabReports": "报告",
     "tabChats": "Chats",
+    "schedule": {
+      "label": "排程",
+      "hint": "预览与实际触发都按所选时区",
+      "repeats": "重复",
+      "every": "间隔",
+      "on": "在",
+      "at": "时刻",
+      "timezone": "时区",
+      "monthEnd": "月末",
+      "lessOften": "降低频率",
+      "moreOften": "提高频率",
+      "hourLabel": "小时",
+      "minuteLabel": "分钟",
+      "ordinalLabel": "第几个",
+      "weekdayLabel": "星期",
+      "monthDayLabel": "每月几号",
+      "monthModeLabel": "每月方式",
+      "freq": {
+        "daily": "按天",
+        "weekly": "按周",
+        "monthly": "按月"
+      },
+      "unit": {
+        "daily1": "天",
+        "dailyN": "天",
+        "weekly1": "周",
+        "weeklyN": "周",
+        "monthly1": "个月",
+        "monthlyN": "个月"
+      },
+      "weekday": {
+        "0": "周日",
+        "1": "周一",
+        "2": "周二",
+        "3": "周三",
+        "4": "周四",
+        "5": "周五",
+        "6": "周六"
+      },
+      "weekdayInitial": {
+        "0": "日",
+        "1": "一",
+        "2": "二",
+        "3": "三",
+        "4": "四",
+        "5": "五",
+        "6": "六"
+      },
+      "monthMode": {
+        "date": "按日期",
+        "nth": "按星期"
+      },
+      "ordinal": {
+        "1": "第 1 个",
+        "2": "第 2 个",
+        "3": "第 3 个",
+        "4": "第 4 个",
+        "last": "最后一个"
+      },
+      "dayN": "{day} 号",
+      "clamp": {
+        "off": "跳过该月",
+        "on": "顺延到月末"
+      },
+      "clampHint": {
+        "off": "该月没有这天就不跑",
+        "on": "该月没有这天就用当月最后一天"
+      },
+      "clamped": "已顺延",
+      "skipped": "已跳过",
+      "skipReason": "{month}只有 {days} 天",
+      "nextRuns": "接下来 {count} 次运行",
+      "sentence": {
+        "freq": {
+          "daily1": "每天",
+          "dailyN": "每 {count} 天",
+          "weekly1": "每周",
+          "weeklyN": "每 {count} 周",
+          "monthly1": "每月",
+          "monthlyN": "每 {count} 个月"
+        },
+        "onWeekdays": "{days}",
+        "onDay": "{day} 号",
+        "onNth": "{ordinal}{weekday}",
+        "atTime": "{time}"
+      }
+    },
     "cadence": {
       "all": "全部",
       "daily": "日报",
@@ -3095,6 +3182,7 @@
       },
       "timezone": "时区",
       "timezoneHint": "留空 = 本地；自然日 / 周月边界按此时区",
+      "timezoneFromSchedule": "自然日边界按上方排程时区（{tz}）计算。",
       "timezonePlaceholder": "如 Asia/Shanghai（留空 = 本地）",
       "timezoneLocal": "（本地时区）",
       "bodyPriorities": "带正文的优先级",
@@ -3278,6 +3366,8 @@
         },
         "noneHint": "未配置触发条件：Agent 保存为草稿、不会自动运行（仍可在下方手动运行一次）。",
         "cronHint": "标准 5 段 cron（分 时 日 月 周），如 0 9 * * 1-5 = 工作日 9 点。",
+        "upgradeToBuilder": "改用排程构建器",
+        "legacyCronHint": "这是旧版 cron 配置，触发行为保持不变。切到排程构建器后无法切回（构建器不覆盖任意 cron 表达式）。",
         "tz": "时区",
         "senderPlaceholder": "发件人正则（可留空），如 dms@corp\\.com",
         "subjectPlaceholder": "主题正则（可留空），如 DMS.*审批",
@@ -3317,6 +3407,7 @@
       },
       "card": {
         "triggerCron": "定时：{cron}（{tz}）",
+        "triggerSchedule": "定时：{text}（{tz}）",
         "triggerEmail": "邮件事件触发",
         "triggerNone": "未配置触发（草稿）"
       },

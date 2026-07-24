@@ -12,12 +12,14 @@ import { Select, SelectContent, SelectTrigger, SelectValue } from '@shared/compo
 import { PREPROCESS_DOCS } from '../shared'
 import { Field } from './Field'
 import { ModelSelectItems } from './ModelSelectItems'
+import {
+  ScheduleBuilder,
+  type ScheduleValue,
+  hostTimezone,
+  readReportSchedule,
+  writeReportSchedule
+} from '../schedule'
 
-const HOUR_OPTIONS = [6, 7, 8, 9, 10, 12, 18, 21]
-// weekday：与后端 worker.py 一致，Python datetime.weekday() 口径 0=周一 … 6=周日。
-const WEEKDAY_OPTIONS = [0, 1, 2, 3, 4, 5, 6]
-// day_of_month：后端 worker 用 now.day 精确匹配、无月末回退 → 限 1–28，保证每月都触发。
-const DAY_OF_MONTH_OPTIONS = Array.from({ length: 28 }, (_, i) => i + 1)
 // 顺序固定，与 src/llm_agent/schema.py PRIORITY_ENUM 对齐 —— 勾选的优先级邮件带完整正文。
 // value 是与后端 body_full_priorities 配置比较的权威值（一字不改）；显示文案走 i18n key。
 const PRIORITY_ENUM = ['🔴 紧急', '🟡 重要', '🟢 一般', '⚪ 低'] as const
@@ -49,6 +51,8 @@ export function ConfigDrawer({
   const [saveFailed, setSaveFailed] = useState(false)
 
   // cadence + title 进 state（渲染期不读 cfg，退场时 cfg→null 也不崩）；useEffect 按 cfg 预填。
+  // cadence 仍是**只读**的报告种类（CadencePill 展示 + 驱动 daily/周月分支）；07-24 起排程
+  // 本身交给 ScheduleBuilder，但构建器的 freq 段被锁死（lockFreq），不让用户在这里改报告种类。
   const [cadence, setCadence] = useState<ReportCadence>('daily')
   const [title, setTitle] = useState('')
 
@@ -57,12 +61,12 @@ export function ConfigDrawer({
   const [enabled, setEnabled] = useState(false)
   const [prompt, setPrompt] = useState('')
   const [promptDirty, setPromptDirty] = useState(false)
-  const [hour, setHour] = useState<number>(9)
-  // weekly 选周几（0=周一…6=周日，与 worker.py 一致）；monthly 选每月几日（1–28）。
-  const [weekday, setWeekday] = useState<number>(0)
-  const [dayOfMonth, setDayOfMonth] = useState<number>(1)
+  // 排程（07-24 起结构化规则，与 custom agent 共用 ScheduleBuilder）。老 `schedule_json`
+  // 读时惰性迁移（readReportSchedule），**不回写 DB**。
+  const [schedule, setSchedule] = useState<ScheduleValue>(() =>
+    readReportSchedule({ cadence: 'daily', hours: [9] }, hostTimezone())
+  )
   const [triggerMode, setTriggerMode] = useState<'rolling_24h' | 'natural_day'>('rolling_24h')
-  const [timezone, setTimezone] = useState<string>('')
   // 带完整正文的优先级集合；空配置回落到默认（紧急 + 重要）。
   const [bodyPriorities, setBodyPriorities] = useState<string[]>(['🔴 紧急', '🟡 重要'])
   // 注入报告 system prompt 的身份文档勾选（增量 2，与 PreprocessConfigDrawer 同语义：
@@ -85,11 +89,10 @@ export function ConfigDrawer({
     setEnabled(cfg.enabled)
     setPrompt(cfg.prompt)
     setPromptDirty(false)
-    setHour(cfg.schedule.hours?.[0] ?? 9)
-    setWeekday(cfg.schedule.weekday ?? 0)
-    setDayOfMonth(cfg.schedule.day_of_month ?? 1)
+    // 🔴 空时区写实成宿主机 IANA（契约 §4）：报告 agent 空时区的历史语义就是宿主机本地，
+    // 留空会让统一后的逻辑退化成 UTC，现有 9:00 报告直接漂到别的时刻。
+    setSchedule(readReportSchedule(cfg.schedule, cfg.timezone || hostTimezone()))
     setTriggerMode(cfg.trigger_mode || 'rolling_24h')
-    setTimezone(cfg.timezone || '')
     setBodyPriorities(
       cfg.body_full_priorities?.length ? cfg.body_full_priorities : ['🔴 紧急', '🟡 重要']
     )
@@ -121,21 +124,18 @@ export function ConfigDrawer({
       model,
       kos_enrich: kosEnrich,
       context_docs: contextDocs,
-      schedule: {
-        ...cfg.schedule,
-        cadence,
-        hours: [hour],
-        // weekday 仅 weekly 有意义、day_of_month 仅 monthly 有意义；按 cadence 写入。
-        ...(cadence === 'weekly' ? { weekday } : {}),
-        ...(cadence === 'monthly' ? { day_of_month: dayOfMonth } : {})
-      }
+      // 老键先铺（保留后端可能存的未知键），再由 writeReportSchedule 覆盖权威字段。
+      // cadence 恒 = rule.freq，而 freq 段被 lockFreq 锁死 → 报告种类不会被排程编辑改掉。
+      schedule: { ...cfg.schedule, ...writeReportSchedule(schedule) }
     }
     // 触发模式 / 时区 / 带正文优先级仅 daily 有意义；周月报走层级聚合，不带这些。
     if (isDaily) {
       patch.trigger_mode = triggerMode
       patch.body_full_priorities = bodyPriorities
       // 时区只在 natural_day 有意义；rolling_24h 固定回溯 24h、不读时区，显式清空。
-      patch.timezone = triggerMode === 'natural_day' ? timezone.trim() : ''
+      // 值取自构建器 —— 抽屉里只有一个时区选择器，避免「排程时区」与「自然日边界时区」
+      // 两个来源静默分歧。既有空值同样按契约 §4 写实成宿主机 IANA（行为等价、不再漂）。
+      patch.timezone = triggerMode === 'natural_day' ? schedule.timezone : ''
     }
     void save(cfg.id, patch)
       .then(onClose)
@@ -305,67 +305,14 @@ export function ConfigDrawer({
             </div>
           </Field>
 
-          {/* schedule：daily 只选时点；weekly 选周几 + 时点；monthly 选每月几日 + 时点 */}
-          <Field label={t('agents.config.schedule')}>
-            <div className="flex items-center" style={{ gap: 10, flexWrap: 'wrap' }}>
+          {/* schedule —— 07-24 起与 custom agent 共用 ScheduleBuilder。
+              CadencePill 保留在上方展示报告种类（只读，构建器的 freq 段被 lockFreq 锁死）。
+              时区选择器由构建器提供（natural_day 的边界时区同源，见 onSave）。 */}
+          <Field label={t('agents.config.schedule')} hint={t('agents.schedule.hint')}>
+            <div className="flex items-center" style={{ gap: 10, marginBottom: 12 }}>
               <CadencePill cadence={cadence} />
-              {cadence === 'daily' && (
-                <span style={{ fontSize: 13, color: 'rgb(var(--ink-fg-2))' }}>
-                  {t('agents.config.at')}
-                </span>
-              )}
-              {cadence === 'weekly' && (
-                <select
-                  value={weekday}
-                  onChange={(e) => setWeekday(Number(e.target.value))}
-                  style={{ ...inputStyle, width: 'auto' }}
-                  aria-label={t('agents.config.weekdayLabel')}
-                >
-                  {WEEKDAY_OPTIONS.map((d) => (
-                    <option key={d} value={d}>
-                      {t(`agents.config.weekday.${d}`)}
-                    </option>
-                  ))}
-                </select>
-              )}
-              {cadence === 'monthly' && (
-                <select
-                  value={dayOfMonth}
-                  onChange={(e) => setDayOfMonth(Number(e.target.value))}
-                  style={{ ...inputStyle, width: 'auto' }}
-                  aria-label={t('agents.config.dayOfMonthLabel')}
-                >
-                  {DAY_OF_MONTH_OPTIONS.map((d) => (
-                    <option key={d} value={d}>
-                      {t('agents.config.dayOfMonthN', { day: d })}
-                    </option>
-                  ))}
-                </select>
-              )}
-              <select
-                value={hour}
-                onChange={(e) => setHour(Number(e.target.value))}
-                style={{ ...inputStyle, width: 'auto', flex: 1 }}
-              >
-                {HOUR_OPTIONS.map((h) => (
-                  <option key={h} value={h}>
-                    {String(h).padStart(2, '0')}:00
-                  </option>
-                ))}
-              </select>
             </div>
-            {cadence === 'monthly' && (
-              <div
-                style={{
-                  fontSize: 11.5,
-                  color: 'rgb(var(--ink-fg-3))',
-                  marginTop: 6,
-                  lineHeight: 1.5
-                }}
-              >
-                {t('agents.config.dayOfMonthHint')}
-              </div>
-            )}
+            <ScheduleBuilder value={schedule} onChange={setSchedule} lockFreq />
           </Field>
 
           {isDaily ? (
@@ -387,22 +334,22 @@ export function ConfigDrawer({
                 </div>
               </Field>
 
-              {/* 时区（仅 natural_day：rolling_24h 固定回溯 24h、不需要时区） */}
+              {/* 时区选择器已上移进 ScheduleBuilder（natural_day 的边界时区与排程时区同源，
+                  见 onSave）。这里只提示它对自然日边界也生效，避免用户以为只管触发时刻。 */}
               {triggerMode === 'natural_day' && (
-                <Field label={t('agents.config.timezone')} hint={t('agents.config.timezoneHint')}>
-                  <select
-                    value={timezone}
-                    onChange={(e) => setTimezone(e.target.value)}
-                    style={inputStyle}
-                  >
-                    <option value="">{t('agents.config.timezoneLocal')}</option>
-                    {Intl.supportedValuesOf('timeZone').map((tz) => (
-                      <option key={tz} value={tz}>
-                        {tz}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
+                <div
+                  style={{
+                    fontSize: 11.5,
+                    color: 'rgb(var(--ink-fg-3))',
+                    lineHeight: 1.5,
+                    padding: '9px 12px',
+                    borderRadius: 9,
+                    background: 'rgb(var(--ink-1) / 0.5)',
+                    border: '1px solid rgb(var(--ink-border-soft))'
+                  }}
+                >
+                  {t('agents.config.timezoneFromSchedule', { tz: schedule.timezone })}
+                </div>
               )}
 
               {/* 带正文的优先级（多选 chip）—— 命中的邮件带完整正文，其余只摘要、不带附件 */}
@@ -471,8 +418,10 @@ export function ConfigDrawer({
                 actual saved value instead of going blank. Mirrors AiTab's
                 LLM_MODEL select shape. */}
           <Field label={t('agents.config.model')}>
+            {/* aria-label：抽屉里现在有两个 Radix Select（排程时区 + 模型），无标签时
+                role=combobox 查询会撞车。给两边都挂 label，读屏与测试都能精确定位。 */}
             <Select value={model || undefined} onValueChange={setModel}>
-              <SelectTrigger>
+              <SelectTrigger aria-label={t('agents.config.model')}>
                 <SelectValue placeholder={t('agents.config.model')} />
               </SelectTrigger>
               {/* z-[70]: 本抽屉 (ConfigDrawer) backdrop/panel 是 z-60/61，高于 Radix

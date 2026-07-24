@@ -8,7 +8,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from typing import Any
 
 from src.reports import wire
@@ -58,13 +57,11 @@ def _report_run(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
             f"agent {agent_id!r} is type {agent.get('type')!r}, not a report agent; "
             "manual run is report-only",
         )
+    # kind:'schedule' 新形状下 cadence_of 以 rule.freq 为权威 → 走共享 helper 一起覆写。
     if cadence is not None:
-        try:
-            sched = json.loads(agent.get("schedule_json") or "{}") or {}
-        except (json.JSONDecodeError, TypeError):
-            sched = {}
-        sched["cadence"] = cadence
-        agent = {**agent, "schedule_json": json.dumps(sched, ensure_ascii=False)}
+        from src.reports.store import agent_with_cadence_override
+
+        agent = agent_with_cadence_override(agent, cadence)
 
     try:
         rid = asyncio.run(run_report_once(store=store, db_path=store.db_path, agent=agent))

@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 
 from loguru import logger
 
+from src.agents import schedule_rule
 from src.config import config
 from src.reports import data as rdata
 from src.reports.assembler import assemble_fallback_doc, assemble_report_doc
@@ -42,18 +43,6 @@ def _report_id(agent_id: str, cadence: str, report_date: str) -> str:
 # 与 list_agents 的排序权重共用同一份定义 —— fire / 聚合语义与调度顺序不可能再分裂。
 _schedule_of = schedule_of
 _cadence_of = cadence_of
-
-
-def _fire_hours(sched: Dict[str, Any]) -> List[int]:
-    out: List[int] = []
-    for h in sched.get("hours") or []:
-        try:
-            hi = int(h)
-        except (TypeError, ValueError):
-            continue
-        if 0 <= hi <= 23 and hi not in out:
-            out.append(hi)
-    return out or [9]
 
 
 def _fire_state_key(agent_id: str) -> str:
@@ -93,37 +82,84 @@ def _migrate_fire_markers(sync_store: Any, store: ReportStore) -> None:
     )
 
 
-def _due_hour(agent: Dict[str, Any], now: datetime, last_marker: Optional[str]) -> Optional[int]:
-    """now 是否该 fire；返回命中的钟点 hour，否则 None。
+# 老形状惰性映射的 anchor 回看窗（天）：老规则 interval 恒 1 → anchor 无相位影响，只为
+# 界定 RRULE DTSTART；45 天 > 任何月长，保证「当天应触发的 occurrence」恒在枚举范围内，
+# 同时 bound 每 tick 的 rrule 枚举成本（不用固定远古日期逐年变慢）。
+_LEGACY_ANCHOR_LOOKBACK_DAYS = 45
 
-    1) 当前落在某 fire window [HH:00, HH:00+30min) 且该 slot 未 fire → 返回 HH。
-    2) catchup：当天还没 fire 过任何 slot（last_marker 非今天）→ 补当天最近一个
-       已过钟点（不补多次、不补历史天）。
-    周期校验：weekly 看 weekday，monthly 看 day_of_month。
+
+def _rule_entries(
+    agent: Dict[str, Any], now: datetime
+) -> List[Tuple[schedule_rule.ScheduleRule, Any, date]]:
+    """schedule_json → ``[(rule, tzinfo/tz名, anchor)]`` 求值输入（fire 判定唯一入口）。
+
+    - 新 ``kind:'schedule'`` 形状：payload 的 rule/timezone/anchor 权威（契约 §1，timezone
+      必填）；坏 payload → 空列表 + warning（skip 不猜，镜像 trigger_worker 坏配置纪律）。
+    - 老形状（``{cadence, hours[], ...}``）→ 契约 §4 就地映射（**不回写 DB**）：每个 fire
+      hour 一条 rule；时区写实 = 调用方已按「列 timezone 或宿主机本地」把 ``now`` 转成
+      agent 本地（``_agent_local``），直接取 ``now.tzinfo`` —— 与老 ``_due_hour`` 读
+      ``now.hour``/``now.weekday()`` 的墙钟语义逐字等价；anchor 回看 45 天（interval=1
+      无相位影响）。
     """
     sched = _schedule_of(agent)
-    cadence = _cadence_of(agent)
-    if cadence == "weekly" and now.weekday() != int(sched.get("weekday", 0) or 0):
-        return None
-    if cadence == "monthly" and now.day != int(sched.get("day_of_month", 1) or 1):
-        return None
+    if sched.get("kind") == "schedule":
+        try:
+            rule = schedule_rule.parse_rule(sched.get("rule"))
+            anchor = schedule_rule.parse_anchor(sched.get("anchor"))
+            tz = str(sched.get("timezone") or "")
+            if not tz:
+                # timezone 必填（契约 §1）；合法性由求值器 _tzinfo_of 把关（野名 → 求值抛）。
+                raise schedule_rule.ScheduleRuleError("schedule timezone is required")
+            return [(rule, tz, anchor)]
+        except schedule_rule.ScheduleRuleError as e:
+            logger.warning(
+                f"[report] agent={agent.get('id')} bad schedule payload ({e}) — skip fire"
+            )
+            return []
+    anchor = (now - timedelta(days=_LEGACY_ANCHOR_LOOKBACK_DAYS)).date()
+    return [
+        (r, now.tzinfo, anchor) for r in schedule_rule.rules_from_legacy_schedule(sched)
+    ]
 
-    hours = sorted(_fire_hours(sched))
-    today = now.strftime("%Y%m%d")
 
-    # 1) 当前 fire window
-    for h in hours:
-        if now.hour == h and now.minute < FIRE_WINDOW_MIN:
-            if _slot_marker(now, h) != last_marker:
-                return h
-            return None  # 当前 window 已 fire
+def _due_occurrence(
+    agent: Dict[str, Any], now: datetime, last_marker: Optional[str]
+) -> Optional[datetime]:
+    """now 是否该 fire；返回命中的 occurrence（aware，agent/规则本地时区），否则 None。
 
-    # 2) catchup：今天还没 fire 过 → 补最近一个已过钟点
-    if not (last_marker or "").startswith(today):
-        passed = [h for h in hours if h <= now.hour]
-        if passed:
-            return max(passed)
-    return None
+    occurrence 计算走共享求值器 ``src/agents/schedule_rule``（与 custom trigger_worker
+    同一份实现，契约 §6）；判定语义保持原 ``_due_hour`` 两分支逐字等价：
+
+    1) 当前落在 fire window [occ, occ+30min) 且该 slot 未 fire → fire。
+    2) catchup：当天（规则本地日）还没 fire 过任何 slot（last_marker 非今天）→ 补当天
+       最近一个已过 occurrence（不补多次、不补历史天）。
+    weekly/monthly 的周期校验由求值器天然覆盖（不匹配的日子 prev occurrence 落在过去
+    的别的天 → 两分支都不命中）。
+    """
+    best: Optional[datetime] = None
+    for rule, tz, anchor in _rule_entries(agent, now):
+        try:
+            occ = schedule_rule.prev_occurrence(rule, tz, anchor, now)
+        except schedule_rule.ScheduleRuleError as e:  # 求值期坏输入（如野时区名）
+            logger.warning(f"[report] agent={agent.get('id')} schedule eval failed: {e}")
+            continue
+        if occ is None:
+            continue
+        if occ <= now < occ + timedelta(minutes=FIRE_WINDOW_MIN):
+            # 1) 当前 fire window；marker 按 occurrence 自己的本地日+钟点（老行为等价：
+            # 老形状 minute 恒 0，窗口不跨日 → 与旧「now 的日期」逐字节相同）。
+            if _slot_marker(occ, occ.hour) == last_marker:
+                continue  # 当前 window 已 fire
+        else:
+            # 2) catchup：occurrence 在「今天」（规则时区口径）更早时刻，且今天还没 fire。
+            now_local = now.astimezone(occ.tzinfo)
+            if occ.date() != now_local.date():
+                continue
+            if (last_marker or "").startswith(now_local.strftime("%Y%m%d")):
+                continue
+        if best is None or occ > best:
+            best = occ
+    return best
 
 
 async def run_report_once(
@@ -566,10 +602,12 @@ async def tick_loop(
                 local = _agent_local(agent, now)   # fire 判定按本地钟点 / 本地日
                 key = _fire_state_key(agent["id"])
                 last_marker = sync_store.get_state(key)
-                hour = _due_hour(agent, local, last_marker)
-                if hour is None:
+                occ = _due_occurrence(agent, local, last_marker)
+                if occ is None:
                     continue
-                marker = _slot_marker(local, hour)
+                # marker 按 occurrence 的本地日+钟点（跨午夜窗口时与去重判据一致；
+                # 老形状 minute 恒 0 → 与旧「local 的日期」字节相同）。
+                marker = _slot_marker(occ, occ.hour)
                 logger.info(f"[report] firing agent={agent['id']} slot={marker}")
                 try:
                     await run_once(agent, now)

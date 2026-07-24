@@ -224,9 +224,10 @@ class TestMarkerMigration:
         sync = _FakeSyncStore({key: "20260721-09"})   # 实际 fire 于 LA 07-20 18:00
         agents = [_agent()]
         # 不迁移的话：本地今天=07-20，marker 以 "20260721" 开头 → catchup 误判 → 多跑
-        assert W._due_hour(agents[0],
-                           datetime(2026, 7, 21, 2, 5, tzinfo=_UTC).astimezone(),
-                           sync.state[key]) == 9
+        occ = W._due_occurrence(agents[0],
+                                datetime(2026, 7, 21, 2, 5, tzinfo=_UTC).astimezone(),
+                                sync.state[key])
+        assert occ is not None and occ.hour == 9
         W._migrate_fire_markers(sync, _FakeReportStore(agents))
         assert _run_tick(sync, agents, datetime(2026, 7, 21, 2, 5, tzinfo=_UTC)) == []
 
