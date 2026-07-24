@@ -90,11 +90,19 @@ class OutboxRepository:
         "pending", "processing", "done", "failed", "dead_letter"
     })
 
+    # 默认 busy timeout —— 常规写路径 (enqueue / mark_*) 宁可等也别丢 intent。
+    # 例外: 入向已读回收的收敛事务传更短的值 (见 converge_local_read_atomic), 因为
+    # 它是"便利型收敛、下轮必重判"的可跳过写, 不该把 30s 锁等待传导给调用方。
+    DEFAULT_BUSY_TIMEOUT_SEC = 30.0
+
     def __init__(self, db_path: str = "data/sync_store.db"):
         self.db_path = Path(db_path)
 
-    def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(str(self.db_path), timeout=30.0)
+    def _connect(self, timeout: Optional[float] = None) -> sqlite3.Connection:
+        conn = sqlite3.connect(
+            str(self.db_path),
+            timeout=self.DEFAULT_BUSY_TIMEOUT_SEC if timeout is None else timeout,
+        )
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys=ON")
         return conn
@@ -138,6 +146,47 @@ class OutboxRepository:
             )
             return -1
 
+        conn = self._connect()
+        try:
+            outbox_id, was_inserted = self.upsert_on_conn(
+                conn,
+                internal_id=internal_id,
+                op_type=op_type,
+                target=target,
+                payload=payload,
+                source=source,
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        self.announce_enqueued(
+            outbox_id, was_inserted,
+            internal_id=internal_id, op_type=op_type, target=target, source=source,
+        )
+        return outbox_id
+
+    def upsert_on_conn(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        internal_id: int,
+        op_type: str,
+        target: str,
+        payload: Dict[str, Any],
+        source: Optional[str] = None,
+    ) -> tuple[int, bool]:
+        """UPSERT 本体 —— **不 commit、不发 SSE**, 事务边界与通知由调用方掌握.
+
+        拆出来是为了让「本地镜像 + 入队」能落在**同一个 SQLite 事务**里 (issue #58
+        入向已读回收: 两步分开 commit 时, 前一步成功后一步失败会留下"本地已读但
+        Notion intent 永久缺失"的半提交 —— 下轮只查未读行, 该封再也进不了 reconcile)。
+        校验与 echo prevention 由 ``enqueue`` 侧完成; 借用连接的调用方须自证 source
+        不是 ``notion_webhook``。
+
+        Returns: ``(outbox_id, was_inserted)`` —— was_inserted=False 表示 merge 进了
+        已存在的 pending 行 (调用方据此决定是否发 SSE, 保持「仅新 intent 通知」语义)。
+        """
         # 紧凑 sorted —— 与 SQL json_patch 输出 (紧凑) + TS 侧 JSON.stringify (紧凑)
         # 逐字节一致 (B1 契约)。merge 不再应用层 dict 合并, 全交给下面的 json_patch。
         # ⚠️ 不变式: payload 值非 None —— json_patch 按 RFC7396 会删 value=null 的 key
@@ -146,37 +195,41 @@ class OutboxRepository:
             payload or {}, ensure_ascii=False, sort_keys=True, separators=(",", ":")
         )
         now = time.time()
+        # B1: 单条原子 UPSERT。命中 partial unique index ux_outbox_pending_intent
+        # (同 internal_id+op_type+target 且 status='pending') → DO UPDATE json_patch
+        # (后写覆盖同 key, 保留旧独有 key, RFC7396); 否则 INSERT 新行。一次性消
+        # 「读-改-写竞态」+「JS/Python 两份手抄 merge」。was_inserted 区分两路:
+        # INSERT 的 created_at==updated_at (同一 now); DO UPDATE 的 created_at 是
+        # 历史值 != 新 updated_at → 用于保持「仅新 intent 发 SSE」parity。
+        row = conn.execute(
+            """
+            INSERT INTO email_outbox
+                (internal_id, op_type, target, payload_json, source,
+                 status, attempts, last_error, next_retry_at,
+                 created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, 'pending', 0, NULL, NULL, ?, ?)
+            ON CONFLICT(internal_id, op_type, target) WHERE status = 'pending'
+            DO UPDATE SET
+                payload_json = json_patch(payload_json, excluded.payload_json),
+                source = COALESCE(excluded.source, source),
+                updated_at = excluded.updated_at
+            RETURNING outbox_id, (created_at = updated_at) AS was_inserted
+            """,
+            (internal_id, op_type, target, payload_json, source, now, now),
+        ).fetchone()
+        return int(row["outbox_id"]), bool(row["was_inserted"])
 
-        conn = self._connect()
-        try:
-            # B1: 单条原子 UPSERT。命中 partial unique index ux_outbox_pending_intent
-            # (同 internal_id+op_type+target 且 status='pending') → DO UPDATE json_patch
-            # (后写覆盖同 key, 保留旧独有 key, RFC7396); 否则 INSERT 新行。一次性消
-            # 「读-改-写竞态」+「JS/Python 两份手抄 merge」。was_inserted 区分两路:
-            # INSERT 的 created_at==updated_at (同一 now); DO UPDATE 的 created_at 是
-            # 历史值 != 新 updated_at → 用于保持「仅新 intent 发 SSE」parity。
-            row = conn.execute(
-                """
-                INSERT INTO email_outbox
-                    (internal_id, op_type, target, payload_json, source,
-                     status, attempts, last_error, next_retry_at,
-                     created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, 'pending', 0, NULL, NULL, ?, ?)
-                ON CONFLICT(internal_id, op_type, target) WHERE status = 'pending'
-                DO UPDATE SET
-                    payload_json = json_patch(payload_json, excluded.payload_json),
-                    source = COALESCE(excluded.source, source),
-                    updated_at = excluded.updated_at
-                RETURNING outbox_id, (created_at = updated_at) AS was_inserted
-                """,
-                (internal_id, op_type, target, payload_json, source, now, now),
-            ).fetchone()
-            conn.commit()
-            outbox_id = int(row["outbox_id"])
-            was_inserted = bool(row["was_inserted"])
-        finally:
-            conn.close()
-
+    def announce_enqueued(
+        self,
+        outbox_id: int,
+        was_inserted: bool,
+        *,
+        internal_id: int,
+        op_type: str,
+        target: str,
+        source: Optional[str],
+    ) -> None:
+        """入队后的 log + SSE —— 必须在**事务提交之后**调用 (SSE 承诺行已落库)."""
         if was_inserted:
             logger.debug(
                 f"[outbox] enqueued outbox_id={outbox_id} "
@@ -201,7 +254,6 @@ class OutboxRepository:
                 f"[outbox] merged into pending outbox_id={outbox_id} "
                 f"(internal_id={internal_id}, target={target})"
             )
-        return outbox_id
 
     def enqueue_many(self, entries: List[Dict[str, Any]]) -> List[int]:
         """批量 enqueue（前端 BatchActionBar 一次 50 封 / `email flag --ids` 多封用）.
@@ -261,6 +313,50 @@ class OutboxRepository:
             return self._row_to_entry(row) if row else None
         finally:
             conn.close()
+
+    # 「尚未终态」的 outbox 状态 —— 派发还没有定论, 出向 intent 仍可能改变
+    # Mail.app / Notion 端的状态。终态是 done (已派发) 与 dead_letter (放弃)。
+    NON_TERMINAL_STATUSES = ("pending", "processing", "failed")
+
+    def has_pending(self, internal_id: int, op_type: str) -> bool:
+        """某邮件是否有**尚未终态**的指定 op_type intent (入向 read-reconcile 用).
+
+        走 idx_outbox_internal_id 的等值前缀, 轻量。任一 target 有未终态 intent 即
+        True —— read-reconcile 只需知道「这封是否正被 fanout 派发中」以跳过误判
+        (Sprint15 fanout ~5s 窗口), 不区分 target。
+
+        🔴 状态集是 pending + **processing + failed**, 不只 pending: processing =
+        fanout 正在写 (这正是 Sprint15 窗口本身), failed = 还在退避重试队列里、随时
+        会再写一次。只认 'pending' 会漏掉这两类在途 intent —— 例如用户刚标"未读"、
+        intent 正在派发时, 服务器还是已读态, reconcile 就会把它又收敛回已读。
+        done / dead_letter 是终态, 不阻断收敛。
+
+        🔴 这个"读一眼再决定写"的形态**天生有 TOCTOU 窗口**: 查完到写之间另一进程仍
+        可能插进 intent。真正要防竞态的调用方必须用 ``has_pending_on_conn`` 把这一查
+        和随后的写放进同一个 ``BEGIN IMMEDIATE`` 事务里 (见 outbox_intents
+        ``converge_local_read_atomic``); 本方法只适合"能容忍慢一拍"的粗筛。
+        """
+        conn = self._connect()
+        try:
+            return self.has_pending_on_conn(conn, internal_id, op_type)
+        finally:
+            conn.close()
+
+    def has_pending_on_conn(
+        self, conn: sqlite3.Connection, internal_id: int, op_type: str
+    ) -> bool:
+        """``has_pending`` 的借用连接版 —— 供"查 + 写"同事务的调用方消 TOCTOU."""
+        placeholders = ", ".join("?" for _ in self.NON_TERMINAL_STATUSES)
+        row = conn.execute(
+            f"""
+            SELECT 1 FROM email_outbox
+             WHERE internal_id = ? AND op_type = ?
+               AND status IN ({placeholders})
+             LIMIT 1
+            """,
+            (internal_id, op_type, *self.NON_TERMINAL_STATUSES),
+        ).fetchone()
+        return row is not None
 
     def list_by_internal_id(
         self, internal_id: int, *, limit: int = 50

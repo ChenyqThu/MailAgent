@@ -288,6 +288,57 @@ def _read_uidvalidity_from_select(imap) -> Optional[int]:
     return None
 
 
+def _lowest_visible_uid(imap) -> Optional[int]:
+    """SELECT 后取视图内**最小 (最老) 的 UID** —— 单条按序号 FETCH, 不发 SEARCH.
+
+    🔴 入向已读回收 (issue #58) 的正确性下界: `davmail.folderSizeLimit` (>10k 邮箱
+    必配, 见 architecture-internals「DavMail 大邮箱运维」) 会把 IMAP 视图截断成
+    folder 内**最近 N 封**, 窗口外的老邮件在 UID SEARCH 里根本不出现。read-reconcile
+    拿「不在 UNSEEN 集」当「服务器已读」用, 少了这个下界就会把窗口外**真未读**的
+    老邮件批量误判成已读。故只判 ``imap_uid >= min_visible_uid`` 的行。
+
+    读不到 / 空 mailbox → ``None`` (调用方本轮整轮跳过, 宁可不收敛也不误判)。
+    """
+    try:
+        typ, data = imap.fetch("1", "(UID)")
+        if typ != "OK" or not data or not data[0]:
+            return None
+        raw = data[0]
+        if isinstance(raw, tuple):
+            raw = raw[0]
+        if isinstance(raw, (bytes, bytearray)):
+            raw = raw.decode("utf-8", errors="replace")
+        m = re.search(r"UID\s+(\d+)", str(raw))
+        return int(m.group(1)) if m else None
+    except Exception:
+        return None
+
+
+def _parse_uid_seen_flag(item) -> Optional[tuple[int, bool]]:
+    """从一条 ``UID FETCH ... (UID FLAGS)`` 响应项解析 ``(uid, 含 \\Seen)``.
+
+    item 形如 ``b'1 (UID 101 FLAGS (\\\\Seen \\\\Answered))'`` (imaplib 在 batch 响应里
+    也会插入纯 bytes 的收尾项 / tuple 形态, 两者都容忍)。缺 UID / 缺 FLAGS 段 →
+    ``None`` (调用方视作"未返回" → 跳过该封, 走保守侧)。
+
+    🔴 ``FLAGS ( ... )`` 必须整段取出再判成员, 不能对整行做 ``'\\Seen' in meta``
+    子串匹配 —— 那样在别的字段 (自定义 keyword / 头部片段) 里出现同名子串就会误判成
+    已读, 而误判方向正是"把未读写成已读"这个不可逆的方向。
+    """
+    if isinstance(item, tuple):
+        item = item[0] if item else None
+    if isinstance(item, (bytes, bytearray)):
+        item = item.decode("utf-8", errors="replace")
+    if not isinstance(item, str):
+        return None
+    m_uid = re.search(r"\bUID\s+(\d+)", item)
+    m_flags = re.search(r"\bFLAGS\s*\(([^)]*)\)", item, re.IGNORECASE)
+    if not m_uid or not m_flags:
+        return None
+    flags = {f.lower() for f in m_flags.group(1).split()}
+    return int(m_uid.group(1)), "\\seen" in flags
+
+
 def _select_is_writable(imap) -> bool:
     """SELECT(readonly=False) 后判断 mailbox 是否真的可写.
 
@@ -1543,6 +1594,122 @@ class DavMailBackend(IMailBackend):
 
     DRAFTS_MAILBOX_LABEL = DRAFTS_LABEL
     _DRAFTS_UIDNEXT_KEY = "drafts_uidnext"
+
+    def search_inbox_unseen(self) -> Optional[tuple[int, set[int], int]]:
+        """入向已读回收 (issue #58) 用 — SELECT INBOX(readonly) 读当前 UIDVALIDITY +
+        视图最老 UID + UID SEARCH UNSEEN,
+        返回 ``(uidvalidity, unseen_uid_set, min_visible_uid)``。
+
+        SELECT/SEARCH 失败、读不到 UIDVALIDITY、读不到视图下界 (空 INBOX) → ``None``
+        (调用方本轮跳过, 不误判)。空 UNSEEN (全部已读) 是合法结果 → ``(uv, set(), min)``。
+
+        ``min_visible_uid`` 是 folderSizeLimit 截断窗口的下界 (见 _lowest_visible_uid):
+        调用方**必须**只判 uid >= 它的行, 否则窗口外的真未读老邮件会被当成已读。
+
+        🔴 本方法只产生**候选集**, 不是判据: 「不在 UNSEEN 里」既可能是"被外部标已读",
+        也可能是"已归档/删除/被规则搬走"或窗口内 UID 空洞 —— 二者在 SEARCH 结果里
+        无法区分。调用方**必须**再对候选 uid 走 ``fetch_inbox_seen_flags`` 定向复核,
+        以那一步为最终判定 (见该方法 docstring)。
+
+        ⚠️ 成本: 一次 SELECT + 一条按序号 FETCH + 一次 UID SEARCH UNSEEN。SEARCH 在未配
+        folderSizeLimit 的大邮箱会触发 EWS 全量枚举 (issue #46, 单次数分钟) —— **调用方
+        必须放独立低频周期, 绝不挂 5s radar poll** (radar 每轮只用轻量 STATUS,
+        见 get_current_max_row_id)。
+        """
+        timeout = max(60, int(getattr(self.cfg, "davmail_status_timeout_sec", 30)))
+        try:
+            with imap_session(self.cfg, timeout=timeout) as imap:
+                typ, _ = imap.select(quote_mailbox("INBOX"), readonly=True)
+                if typ != "OK":
+                    logger.warning(f"[davmail-backend] read-reconcile SELECT INBOX failed: {typ}")
+                    return None
+                uv = _read_uidvalidity_from_select(imap)
+                if not uv:
+                    logger.warning("[davmail-backend] read-reconcile: INBOX UIDVALIDITY unavailable")
+                    return None
+                min_uid = _lowest_visible_uid(imap)
+                if not min_uid:
+                    logger.warning(
+                        "[davmail-backend] read-reconcile: INBOX 视图下界不可读 (空邮箱/"
+                        "FETCH 失败) — 本轮跳过 (无下界会误判窗口外老邮件为已读)"
+                    )
+                    return None
+                typ, data = imap.uid("search", None, "UNSEEN")
+                if typ != "OK":
+                    logger.warning(f"[davmail-backend] read-reconcile UID SEARCH UNSEEN failed: {typ}")
+                    return None
+                unseen = {
+                    int(u) for u in (data[0].split() if data and data[0] else [])
+                }
+                return uv, unseen, min_uid
+        except Exception as e:
+            logger.warning(f"[davmail-backend] search_inbox_unseen failed: {e}")
+            return None
+
+    # 单条 UID FETCH 的 uid 上限 —— 候选集通常 <10 封, 分批只为极端存量场景兜底
+    # (IMAP 命令行长度有实现上限, 一条塞几万个 uid 会被 server 截断/拒绝)。
+    _FLAGS_FETCH_CHUNK = 500
+
+    def fetch_inbox_seen_flags(
+        self, uids: list[int]
+    ) -> Optional[tuple[int, dict[int, bool]]]:
+        """入向已读回收 (issue #58) 的**最终判据** — 对候选 uid 定向
+        ``UID FETCH <set> (FLAGS)``, 返回 ``(uidvalidity, {uid: 含 \\Seen})``。
+
+        🔴 为什么不能只用 ``search_inbox_unseen``: 「UID 不在 UNSEEN 集里」有三种成因,
+        SEARCH 结果里长得一模一样 ——
+          ① 被外部客户端标已读 (这才是我们要收敛的);
+          ② 已归档/删除/被服务器规则搬出 INBOX (**仍未读**, 只是不在这个 folder 了);
+          ③ 截断窗口内的 UID 空洞。
+        只凭 ① 的假设就写库, 会把「归档掉的未读邮件」永久误标已读 (本功能声称只收敛
+        read flag, 不该把 mailbox membership 变化解释成 read flag)。定向 FETCH 能区分:
+          - uid **未返回** → 已不在 INBOX (② / ③) → 调用方跳过;
+          - 返回但 flags 不含 ``\\Seen`` → 仍未读 → 跳过 (顺带解决 SEARCH 快照陈旧:
+            SEARCH 可能耗时数分钟, 之间用户在 Outlook 又标了未读);
+          - 返回且含 ``\\Seen`` → 真·外部已读 → 才收敛。
+
+        返回的 ``uidvalidity`` 是**本次会话**读到的值, 调用方须再与候选集来源快照的
+        uv 比对 —— 两次会话之间 uidvalidity 变了则所有 uid 失效, 整轮作废。
+
+        空 ``uids`` → ``(uv, {})``; SELECT/FETCH 失败或读不到 uv → ``None``
+        (调用方本轮跳过, 宁可不收敛也不误判)。成本: 一次 SELECT + N/500 条定向 FETCH,
+        不发 SEARCH —— 候选集通常个位数, 相对 SEARCH 可忽略。
+        """
+        uid_list = sorted({int(u) for u in uids})
+        timeout = max(60, int(getattr(self.cfg, "davmail_status_timeout_sec", 30)))
+        try:
+            with imap_session(self.cfg, timeout=timeout) as imap:
+                typ, _ = imap.select(quote_mailbox("INBOX"), readonly=True)
+                if typ != "OK":
+                    logger.warning(
+                        f"[davmail-backend] read-reconcile verify SELECT INBOX failed: {typ}"
+                    )
+                    return None
+                uv = _read_uidvalidity_from_select(imap)
+                if not uv:
+                    logger.warning(
+                        "[davmail-backend] read-reconcile verify: INBOX UIDVALIDITY unavailable"
+                    )
+                    return None
+                seen_map: dict[int, bool] = {}
+                for i in range(0, len(uid_list), self._FLAGS_FETCH_CHUNK):
+                    chunk = uid_list[i:i + self._FLAGS_FETCH_CHUNK]
+                    typ, data = imap.uid(
+                        "fetch", ",".join(str(u) for u in chunk), "(UID FLAGS)"
+                    )
+                    if typ != "OK":
+                        logger.warning(
+                            f"[davmail-backend] read-reconcile UID FETCH FLAGS failed: {typ}"
+                        )
+                        return None
+                    for item in data or []:
+                        parsed = _parse_uid_seen_flag(item)
+                        if parsed is not None:
+                            seen_map[parsed[0]] = parsed[1]
+                return uv, seen_map
+        except Exception as e:
+            logger.warning(f"[davmail-backend] fetch_inbox_seen_flags failed: {e}")
+            return None
 
     def reconcile_drafts(self) -> tuple[list[dict], list[int]]:
         """草稿箱对账 — 返回 (新草稿 email dicts, 已消失草稿的 internal_ids)。

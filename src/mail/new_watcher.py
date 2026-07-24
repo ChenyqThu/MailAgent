@@ -26,6 +26,7 @@ Usage:
 """
 
 import asyncio
+import time
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Optional, Any
 from loguru import logger
@@ -55,10 +56,46 @@ from src.mail.throttle_pause import is_uid_backfill_paused
 # issue #42 C 案起单源迁至 src/mail/mailbox_semantics.py (STANDARD_MAILBOXES,
 # 「存档」有意不进的语义注释随迁); is_custom_folder_mailbox 在原处 re-export 保兼容。
 from src.mail.mailbox_semantics import (  # noqa: F401  (re-export)
+    INBOX_LABEL,
     is_custom_folder_mailbox,
     is_drafts_mailbox,
     is_sent_mailbox,
 )
+
+
+# 入向已读回收 (issue #58) 聚合刷新事件里携带的 internal_id 上限 —— 单条事件要能
+# 让前端失效对应的 ['email', id] detail cache, 但首次开启/大批量收敛时可能上千封,
+# 全塞进 SSE payload 既撑爆消息也无意义。超限时置 ids_truncated=True, 由前端退化成
+# "失效所有活跃 detail"。
+READ_RECONCILE_EVENT_ID_CAP = 200
+
+# 入向已读回收: 「定向 FETCH 复核 → 收敛提交」的分块大小。
+# 复核与提交之间存在无法用本地状态拦截的外部竞态 (FETCH 说已读 → 用户在 Outlook 又标
+# 未读 → 此刻还没有任何本地写/intent, CAS 和在途闸都看不见 → 提交后本功能单向不自愈)。
+# 分块让这个窗口从「整批候选的处理时长」收窄到「单 chunk 的本地事务时长」。
+# 选 100 而非 backend 的 _FLAGS_FETCH_CHUNK(500): 候选通常个位数, ≤100 时两者都只发
+# 一次 FETCH (零额外 IMAP 会话); 只有首次开启的存量积压才会分块, 那时窄窗口比省下
+# 几次定向 FETCH 更值。
+READ_RECONCILE_CONVERGE_CHUNK = 100
+
+# 收敛事务的 SQLite busy timeout。事务本身全是本地语句 (BEGIN IMMEDIATE + 1 SELECT +
+# 1 UPDATE + 1 UPSERT), 正常持锁毫秒级; 2s 已远高于常规竞争, 又远低于 outbox 默认的
+# 30s —— 收敛是可跳过的便利型写 (下轮重判), 不该为它挂住 watcher 的 poll cycle。
+#
+# 🔴 **第一次锁超时就终止本轮** (不是"连续 N 次"): 一旦开始等锁, 手里这份 seen_map 就
+# 在变旧, 继续消费它只会把 FETCH↔提交的竞态窗口按 2s/封 地撑大 (交替出现的成功会让
+# "连续"计数永远清零, 窗口能拉到近百秒)。被跳过的封下个 interval 必然重新成为候选并
+# 重新 FETCH 取新鲜真值 —— 幂等的保守让路, 不丢状态。
+READ_RECONCILE_LOCK_TIMEOUT_SEC = 2.0
+
+# 单 chunk 收敛的**累计耗时预算**。上面那条"首次锁超时即停"只堵住「等满 timeout 仍拿不到
+# 锁」这一种形态; 另一种形态是别的 writer 在每封之间反复抢放锁, 每封都在 timeout 之前
+# (比如 1.5s) 才拿到 —— 每封都**成功返回**, ConvergeLockBusy 一次都不抛, 但 100 封 chunk
+# 能累计到分钟级, 手里的 seen_map 一样在变旧 (FETCH↔提交窗口按 chunk 长度线性膨胀)。
+# 取 3s: 无竞争时整个 chunk 全是本地语句 (100 封 × 个位数毫秒 ≈ 0.2-0.5s), 3s 留了一个
+# 数量级余量, 不会误伤正常路径; 又把陈旧窗口的上界钉在「预算 + 最后那封的锁等待
+# (≤ READ_RECONCILE_LOCK_TIMEOUT_SEC)」≈ 5s, 而不是随 chunk 长度线性增长。
+READ_RECONCILE_CHUNK_BUDGET_SEC = 3.0
 
 
 def should_skip_feishu_for_folder(mailbox: str, notify_enabled: frozenset) -> bool:
@@ -292,6 +329,9 @@ class NewWatcher:
         # EWS 限流暂停日志的跃迁标记: 进入暂停首轮 warning、持续期间 debug、恢复
         # 首轮 info —— 否则暂停期间每轮 poll (默认 5s) 一条 warning, 30min ≈ 360 条。
         self._throttle_pause_announced = False
+        # 入向已读回收 (issue #58) 的独立低频节拍游标 (monotonic 秒)。None = 从未跑过,
+        # 首次进入即执行; 与 5s radar poll 解耦, 间隔见 inbound_read_reconcile_interval_sec。
+        self._last_inbound_read_reconcile_at: Optional[float] = None
         # task 06-10 (prd Fix 2d): fire-and-forget hook task (pp/llm/kos) 的强
         # 引用集合 — Python 3.11 asyncio loop 只弱引用 task, 无强引用的 pending
         # task 会被 GC 中途回收 (生产实证见 start() 里 _rollout_flush_task 注释)。
@@ -615,6 +655,306 @@ class NewWatcher:
         # 形成死循环). 已在 _detect_and_sync_flag_changes 函数体内 short-circuit;
         # 调用保留以便后续切换到"真 drift -> outbox(notion)"语义时复用。
         await self._detect_and_sync_flag_changes()
+
+        # 8. 入向已读回收 (issue #58, davmail-only, 默认关) — 独立低频节拍, 不挂每轮。
+        # 位置在 throttle-pause guard 之后, EWS 限流时本轮已 return 不会走到这里。
+        await self._reconcile_inbound_read()
+
+    async def _reconcile_inbound_read(self):
+        """入向「未读→已读」单向回收 (davmail-only, MAILAGENT_INBOUND_READ_RECONCILE_ENABLED)。
+
+        Outlook/OWA 等外部客户端标已读后, MailAgent 未读不回流 (Sprint15 为避 flag/unflag
+        死循环禁了入向回收, 见 _detect_and_sync_flag_changes docstring)。这里加**安全版**
+        单向收敛: 服务器上确认带 \\Seen 的本地未读邮件 → 收敛为已读。
+
+        判定分两步, **SEARCH 只出候选、FETCH 才是判据**:
+          1. ``UID SEARCH UNSEEN`` 拿服务器未读集 → 本地未读且不在其中的 = 候选;
+          2. 提交前对候选 uid 定向 ``UID FETCH (FLAGS)`` 复核 —— 未返回 (已归档/删除/
+             被规则搬走/UID 空洞) 或返回但无 \\Seen (SEARCH 快照期间又被标未读) 一律
+             跳过, 只有确证带 \\Seen 才收敛。缺了这步就会把 "不在 INBOX" 误解释成
+             "已读", 把归档掉的未读邮件永久标已读 (codex review BLOCK 1/2)。
+
+        安全闸 (缺一不可):
+          (a) outbox 有未终态 (pending/processing/failed) flag_sync intent → 跳过 (避
+              Sprint15 fanout 窗口把 "出向 intent 尚未派发" 误判为入向 drift)。这道闸与
+              本地 CAS + 入队在**同一个事务**内 (converge_local_read_atomic), 消 TOCTOU。
+          (b) 恒走 outbox 单向派发 (target='notion', 不入 mailapp 队) —— **绝不直调
+              Notion** (Sprint15 死循环根因之一); 服务器本就是已读真源, 不回写 Mail.app。
+          (c) 本地 imap_uidvalidity 与服务器当前 UIDVALIDITY 一致才用 imap_uid 匹配;
+              不一致的行整批跳过 (uidvalidity 变化让 imap_uid 全失效 → 批量误判污染)。
+              两次 IMAP 会话之间 uv 变了同样整轮作废。
+          (c2) uid 必须落在服务器 IMAP 视图的截断窗口内 (davmail.folderSizeLimit 只保留
+              最近 N 封) —— 窗口外老邮件在 UNSEEN 里必然缺席, 缺席 ≠ 已读。
+
+        ⚠️ 已知残留竞态 (有意不彻底消除, 见 test_marked_unread_between_verify_and_commit):
+          定向 FETCH 说「已读」之后、本轮事务提交之前, 用户在 Outlook 把这封标回未读 ——
+          此刻**还没有**任何本地写或 outbox intent, 所以 CAS 与在途闸都看不见它, 这封会
+          被收敛成已读; 下轮它已不在本地未读集, 而本功能单向 (不做已读→未读) → 不自愈。
+          处置: 复核与提交按 chunk 紧邻 (READ_RECONCILE_CONVERGE_CHUNK), 把窗口从「整批
+          候选的处理时长」(候选多时可达数秒) 收窄到「单 chunk 内、该封之前那些收敛事务的
+          累计时长」—— 无锁竞争时全是本地语句, 毫秒级; 一旦有一封等锁超时就**立即终止本轮**
+          (见 READ_RECONCILE_LOCK_TIMEOUT_SEC), 不让 2s 级的锁等待逐封累加把窗口撑大, 也不
+          再消费已经变旧的 seen_map。另有**累计耗时预算**
+          (READ_RECONCILE_CHUNK_BUDGET_SEC) 兜住「每封都等很久、但都在 timeout 之前拿到锁」
+          这一形态 —— 那种情况一次 ConvergeLockBusy 都不抛, 却同样把窗口按 chunk 长度撑大。
+          两道闸合起来把窗口钉在常数量级 (预算 + 一次锁等待), 与候选量、chunk 长度都解耦。
+          再窄一档要 CONDSTORE/MODSEQ (DavMail 经 EWS 桥支持存疑) —— 但那也只是"提交前
+          再便宜地复核一次", **写在本地**, TOCTOU 依旧, 只是窗口更小; 真正闭合只有提交后
+          补偿事务 (撤销本地已读 + 取消/覆盖可能已派发的 Notion intent, 而"覆盖"就是
+          Sprint15 死循环那条出向路径, 补偿本身又有自身竞态) —— 对一个默认关的便利功能
+          不成比例。用户侧兜底: 在 Outlook 重新标未读一次即可。
+
+        只做未读→已读单向 (已读→未读 / \\Flagged 不碰), 只收件箱; 任何异常仅 warning 不阻塞。
+        绝不挂 5s radar poll: 独立低频周期 (interval env), 避免 UID SEARCH 重现 EWS 全量枚举
+        限流 (issue #46)。AppleScript fallback 无这两个方法 → 整段 noop。
+        SQLite 侧的查询与收敛事务全部 ``asyncio.to_thread`` 出去 —— 锁等待发生在工作线程,
+        不冻住 event loop (与 SEARCH/FETCH 走 backend-io 队列同理)。
+        """
+        # flag 门 (默认 false → 字节级 inert, 不发 SEARCH、不改任何行)
+        if not getattr(settings, "inbound_read_reconcile_enabled", False):
+            return
+        backend = self.backend
+        # davmail-only: AppleScript backend 无这两个方法 → noop (应急回切也安全)。
+        # 定向复核缺席时**整段不激活** —— 没有 FETCH 判据就只能靠 SEARCH 缺席猜,
+        # 那正是会误标归档邮件的不安全形态。
+        if not (hasattr(backend, "search_inbox_unseen")
+                and hasattr(backend, "fetch_inbox_seen_flags")):
+            return
+
+        # 独立低频节拍: 距上次收敛不足 interval → 本轮跳过 (与 5s radar poll 解耦)。
+        # 失败也推进游标 (下 interval 再试), 不在失败时高频重试打限流。
+        interval = max(1, int(getattr(settings, "inbound_read_reconcile_interval_sec", 300)))
+        now = time.monotonic()
+        last = self._last_inbound_read_reconcile_at
+        if last is not None and (now - last) < interval:
+            return
+        self._last_inbound_read_reconcile_at = now
+
+        try:
+            # 走 backend-io 单线程队列: SELECT+SEARCH 在大邮箱可能数分钟 (issue #46),
+            # 直接在事件循环里跑会连带冻住 fanout / reverse / island 所有 worker 的 tick。
+            result = await run_backend_io(backend.search_inbox_unseen)
+        except Exception as e:
+            logger.warning(f"[read-reconcile] search_inbox_unseen failed (skip cycle): {e}")
+            return
+        if result is None:
+            logger.debug("[read-reconcile] server UNSEEN unavailable, skip this cycle")
+            return
+        server_uv, server_unseen, min_visible_uid = result
+
+        try:
+            # to_thread: 全表 is_read=0 扫描在大邮箱不是 O(1), 别占着事件循环线程跑
+            rows = await asyncio.to_thread(
+                self.sync_store.get_inbox_unread_for_read_reconcile, INBOX_LABEL
+            )
+        except Exception as e:
+            logger.warning(f"[read-reconcile] local unread query failed (skip cycle): {e}")
+            return
+        if not rows:
+            return
+
+        # 候选筛选: 只是"值得复核"的集合, **不是**判定结果 —— 判定在下面的定向 FETCH。
+        # 用 list 而非 uid→id 字典: 幽灵重复行可能共享同一 imap_uid, 字典会静默丢掉一封。
+        # updated_at 一并带着: 提交时的 CAS 要用它认出"本轮期间这行被别处写过"。
+        candidates: List[tuple] = []             # [(imap_uid, internal_id, updated_at)]
+        for row in rows:
+            imap_uid = row.get("imap_uid")
+            row_uv = row.get("imap_uidvalidity")
+            # (c) uidvalidity 一致性闸: imap_uid/uv 缺失 (AppleScript 行) 或与服务器
+            # 当前 uv 不一致 → 该 imap_uid 已失效, 跳过 (不拿失效 uid 去匹配)。
+            if imap_uid is None or row_uv is None or int(row_uv) != int(server_uv):
+                continue
+            # (c2) 截断窗口下界闸: davmail.folderSizeLimit 让 IMAP 视图只剩最近 N 封,
+            # 窗口外的老邮件在 UNSEEN 里**必然缺席** —— 缺席 ≠ 已读, 少了这道闸会把
+            # 真未读老邮件批量误标已读 (见 backend._lowest_visible_uid)。
+            if int(imap_uid) < int(min_visible_uid):
+                continue
+            # 服务器仍未读 → 真未读, 连候选都不是
+            if int(imap_uid) in server_unseen:
+                continue
+            candidates.append((int(imap_uid), row["internal_id"], row.get("updated_at")))
+        if not candidates:
+            return
+        # uid 升序: 分块边界确定 (便于排查/测试), 定向 FETCH 的 uid set 也更紧凑
+        candidates.sort(key=lambda c: c[0])
+
+        from src.sync.outbox import OutboxRepository
+
+        outbox = OutboxRepository(str(self.sync_store.db_path))
+        converged_ids: List[int] = []
+        stats = {
+            "gone": 0,        # 已不在 INBOX (归档/删除/规则搬走/UID 空洞)
+            "unread": 0,      # 服务器仍未读 (SEARCH 快照期间又被标未读)
+            "busy": 0,        # 事务内被闸住: 在途 intent, 或本轮期间该行被别处写过
+            "locked": 0,      # 短 busy timeout 内没拿到 SQLite 写锁 → 让路
+            "lock_abort": False,
+            "abort_reason": "",   # 'lock_timeout' | 'time_budget' (日志要能分辨)
+        }
+        # 🔴 定向复核 (codex BLOCK 1/2 的统一解): 对候选 uid 拉 (UID FLAGS), 把"耗时可能
+        # 数分钟的全局 SEARCH 快照"降级为候选筛选, 最终判据以这一步为准。
+        # 🔴 按 chunk「复核 → 立即收敛 → 下一 chunk」: 复核与提交之间的外部竞态 (用户在
+        # Outlook 标回未读, 此刻无本地写可拦) 无法彻底消除, 只能把窗口收窄到单 chunk 的
+        # 本地事务时长 —— 一次性复核全部候选再逐封收敛会把它拉成整批处理时长 (见 docstring)。
+        for start in range(0, len(candidates), READ_RECONCILE_CONVERGE_CHUNK):
+            chunk = candidates[start:start + READ_RECONCILE_CONVERGE_CHUNK]
+            try:
+                verified = await run_backend_io(backend.fetch_inbox_seen_flags,
+                                                sorted({u for u, _, _ in chunk}))
+            except Exception as e:
+                logger.warning(f"[read-reconcile] flags verify failed (stop cycle): {e}")
+                break
+            if verified is None:
+                logger.debug("[read-reconcile] flags verify unavailable, stop cycle")
+                break
+            verify_uv, seen_map = verified
+            if int(verify_uv) != int(server_uv):
+                # 两次会话之间 UIDVALIDITY 变了 → 剩余候选的 uid 全部失效, 停止本轮
+                logger.warning(
+                    f"[read-reconcile] UIDVALIDITY changed mid-cycle "
+                    f"({server_uv}→{verify_uv}), stop cycle"
+                )
+                break
+            # to_thread: 收敛是同步 SQLite 事务, 锁等待必须发生在工作线程 —— 直接在
+            # 事件循环里跑, 别的进程持写锁时会把整个 watcher loop 拖住 (每封都可能等)。
+            converged_ids.extend(
+                await asyncio.to_thread(
+                    self._converge_read_chunk_blocking, outbox, chunk, seen_map, stats
+                )
+            )
+            if stats["lock_abort"]:
+                if stats["abort_reason"] == "time_budget":
+                    cause = (
+                        f"单 chunk 收敛累计耗时超过 {READ_RECONCILE_CHUNK_BUDGET_SEC}s "
+                        f"(写锁竞争: 每封都拿到了锁, 但每封都等了很久)"
+                    )
+                else:
+                    cause = (
+                        f"有候选在 {READ_RECONCILE_LOCK_TIMEOUT_SEC}s 内没拿到 SQLite 写锁 "
+                        f"(写锁竞争)"
+                    )
+                logger.warning(
+                    f"[read-reconcile] {cause}, 本轮提前终止以免消费陈旧的 FETCH 快照; "
+                    f"已提交的不回滚, 被跳过的下个周期重新复核重判"
+                )
+                break
+        if stats["gone"] or stats["unread"] or stats["busy"] or stats["locked"]:
+            logger.debug(
+                f"[read-reconcile] skipped {stats['gone']} 已移出 INBOX / "
+                f"{stats['unread']} 服务器仍未读 / {stats['busy']} 在途或并发写 / "
+                f"{stats['locked']} 写锁竞争 (候选 {len(candidates)})"
+            )
+        if converged_ids:
+            logger.info(
+                f"[read-reconcile] converged {len(converged_ids)} inbox 邮件 未读→已读 "
+                f"(outbox→notion, server_uv={server_uv})"
+            )
+            # 让前端刷新列表 + 未读徽标 + **已打开的详情**。整轮只发一条 (不按封刷屏),
+            # 但携带有界的 internal_ids 让前端能失效对应的 ['email', id] detail cache ——
+            # 少了它, 列表显示已读而详情 toolbar 仍显示未读 (codex BLOCK 4)。超过上限时
+            # ids_truncated=True, 前端据此失效所有活跃 detail。
+            # 本地-only 模式 (无 Notion 页) 下这是**唯一**的刷新信号 (notion_fanout
+            # 的 email.flag_changed 在 page_id 为空时 noop 不发)。
+            try:
+                from src.events.publisher import safe_publish
+                safe_publish(
+                    "email.flag_changed",
+                    internal_id=None,
+                    data={
+                        "target": "local",
+                        "converged": len(converged_ids),
+                        "reason": "inbound_read_reconcile",
+                        "internal_ids": converged_ids[:READ_RECONCILE_EVENT_ID_CAP],
+                        "ids_truncated": len(converged_ids) > READ_RECONCILE_EVENT_ID_CAP,
+                    },
+                    source="read_reconcile",
+                )
+            except Exception:
+                pass
+
+    def _converge_read_chunk_blocking(
+        self,
+        outbox,
+        chunk: List[tuple],
+        seen_map: Dict[int, bool],
+        stats: Dict[str, Any],
+    ) -> List[int]:
+        """一个 chunk 的收敛 —— **同步阻塞**, 由 ``_reconcile_inbound_read`` 经
+        ``asyncio.to_thread`` 在工作线程里跑, 返回本 chunk 真正收敛的 internal_ids。
+
+        为什么必须离开事件循环: 事务本身无网络 I/O、无内在死锁顺序, 但 SQLite 写锁的
+        **等待**是同步阻塞 —— 另一进程 (serve-api / CLI / fanout) 持写锁时, 每封候选
+        都可能在这里干等, 多封可重复发生, 把 watcher 的 event loop 整个卡住。
+
+        ``stats`` 就地累加各跳过原因; 两种情况会置 ``stats['lock_abort']=True`` 并提前
+        返回 (由调用方停掉后续 chunk, ``stats['abort_reason']`` 区分两者):
+        ``lock_timeout`` = **第一封**等满 busy timeout 仍没拿到锁;
+        ``time_budget``  = 本 chunk 收敛累计耗时超过 READ_RECONCILE_CHUNK_BUDGET_SEC
+        (每封都拿到了锁、但每封都等很久 —— 一次 ConvergeLockBusy 都不抛的那种竞争)。
+        两者语义相同: 等锁 = 手里的 seen_map 在变旧, 让路比硬等更保守。
+        已提交的前序封不回滚 —— 与 chunk 级失败 break 的既有语义一致, 收敛本身幂等。
+        """
+        from src.sync.outbox_intents import ConvergeLockBusy, converge_local_read_atomic
+
+        converged: List[int] = []
+        started = time.monotonic()
+        for imap_uid, internal_id, snapshot_updated_at in chunk:
+            seen = seen_map.get(imap_uid)
+            if seen is None:
+                stats["gone"] += 1
+                continue
+            if not seen:
+                stats["unread"] += 1
+                continue
+            # 累计耗时预算 (在开一笔新事务**之前**判, 不做已知会迟到的提交): 每封都在
+            # busy timeout 之前拿到锁时 ConvergeLockBusy 永远不抛, 但 seen_map 照样在
+            # 变旧 —— 这道闸把陈旧窗口钉在常数量级, 不随 chunk 长度膨胀。跳过与被闸住的
+            # 封不花时间, 故正常路径 (毫秒级) 永远碰不到它。
+            if time.monotonic() - started > READ_RECONCILE_CHUNK_BUDGET_SEC:
+                stats["lock_abort"] = True
+                stats["abort_reason"] = "time_budget"
+                logger.debug(
+                    f"[read-reconcile] 本 chunk 收敛累计超 {READ_RECONCILE_CHUNK_BUDGET_SEC}s "
+                    f"(锁竞争但每封都拿到了锁), 从 {internal_id} 起终止本轮, 下轮重判"
+                )
+                break
+            # (a)+(b) 在途 intent 复核 + 本地 CAS 置已读 + notion 入队, 同一事务内完成:
+            # 任一步不成立就整体回滚, 不会留下"本地已读但 Notion intent 缺失"的半提交
+            # (那种半提交下轮不再进候选 → 永久漏 Notion 收敛)。
+            try:
+                ok = converge_local_read_atomic(
+                    self.sync_store,
+                    outbox,
+                    internal_id,
+                    expected_updated_at=snapshot_updated_at,
+                    notion_payload={"is_read": True},
+                    source="read_reconcile",
+                    busy_timeout_sec=READ_RECONCILE_LOCK_TIMEOUT_SEC,
+                )
+            except ConvergeLockBusy:
+                # 保守让路 + 立即终止本轮: 等过锁就说明这份 seen_map 已经旧了, 剩下的封
+                # 下个 interval 会重新 FETCH 取新鲜真值再判 (收敛幂等, 不丢状态)。
+                stats["locked"] += 1
+                stats["lock_abort"] = True
+                stats["abort_reason"] = "lock_timeout"
+                logger.debug(
+                    f"[read-reconcile] {internal_id} 写锁竞争 "
+                    f"({READ_RECONCILE_LOCK_TIMEOUT_SEC}s 未获锁), 终止本轮, 下轮重判"
+                )
+                break
+            except Exception as e:
+                logger.warning(f"[read-reconcile] converge failed for {internal_id}: {e}")
+                continue
+            if ok:
+                converged.append(internal_id)
+            else:
+                # 静默跳过会让"为什么这封没收敛"无从排查 —— 事务内的两道闸
+                # (在途 intent / CAS 快照失配) 各自留一条可追溯的 debug 行。
+                stats["busy"] += 1
+                logger.debug(
+                    f"[read-reconcile] {internal_id} 本轮被闸住 (在途 flag_sync "
+                    f"intent 或期间被别处写过), 下轮重判"
+                )
+        return converged
 
     async def _reconcile_drafts(self):
         """草稿箱对账 (davmail-only, DRAFTS_SYNC_ENABLED)。

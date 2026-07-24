@@ -205,6 +205,25 @@ class Config(BaseSettings):
                     "全量 UID 对账（非增量）：编辑/发送/删除导致的草稿消失会同步删除本地行。",
     )
 
+    # 入向已读回收（davmail-only，issue #58）：Outlook/OWA 等外部客户端标已读后把本地
+    # is_read 单向收敛为 True（走 outbox→notion，绝不直调）。独立低频周期，绝不挂 5s
+    # radar poll（未配 folderSizeLimit 的大邮箱 UID SEARCH 会触发 EWS 全量枚举，issue #46）。
+    # 🔴 字段名 inbound_read_reconcile_* ≠ env MAILAGENT_INBOUND_READ_RECONCILE_* → 必须
+    #    validation_alias（pydantic v2 忽略 Field(env=)，见本类顶 model_config 注释）。
+    inbound_read_reconcile_enabled: bool = Field(
+        default=False,
+        validation_alias="MAILAGENT_INBOUND_READ_RECONCILE_ENABLED",
+        description="是否启用入向「未读→已读」单向回收（davmail-only，AppleScript 模式不激活）。"
+                    "默认关（灰度：同步核心 + EWS 限流雷区，dogfood 验证后再考虑翻默认）。"
+                    "只做未读→已读单向（已读→未读 / flagged 不碰），只收件箱，恒走 outbox 派发。",
+    )
+    inbound_read_reconcile_interval_sec: int = Field(
+        default=300,
+        validation_alias="MAILAGENT_INBOUND_READ_RECONCILE_INTERVAL_SEC",
+        description="入向已读回收的独立低频周期（秒），默认 300。与 5s radar poll 解耦，"
+                    "避免每轮 UID SEARCH UNSEEN 重现 EWS 全量枚举限流事故。",
+    )
+
     # 飞书通知配置
     feishu_app_id: str = Field(default="", env="FEISHU_APP_ID", description="飞书应用 App ID")
     feishu_app_secret: str = Field(default="", env="FEISHU_APP_SECRET", description="飞书应用 App Secret")
@@ -559,10 +578,12 @@ class Config(BaseSettings):
     kos_consumer_enabled: bool = Field(
         default=False, validation_alias="MAILAGENT_KOS_CONSUMER_ENABLED",
         description=(
-            "KOS consumer chat 工具 (kos_query / kos_digest 等 9 个) 是否注册 + KOS "
-            "使用指南块是否注入 system prompt。/chat/config 的 kosConfigured 即此值 "
-            "(对齐 electron kosConfig().configured = isKosConsumerEnabled(), 决定 "
-            "createBuiltinTools 是否 push 9 个 KOS 工具 —— **非** OAuth 凭据齐)。"
+            "KOS consumer 面开关。/chat/config 的 kosConfigured = 本开关 AND OAuth 凭据"
+            "齐全 (判据在 src/api/routers/chat.py), 它 gate 的是 KOS 使用指南块是否注入 "
+            "system prompt。gateway 的 6 个 KOS 只读工具 (kos_query + issue #57 新增的 "
+            "kos_search / kos_get_page / kos_find_experts / kos_list_pages / "
+            "kos_get_backlinks) **恒注册**、不受此 gate; 未对接时调用返回 "
+            "E_KOS_NOT_CONFIGURED 工具错误。"
         ),
     )
     kos_l1_hot_block_enabled: bool = Field(

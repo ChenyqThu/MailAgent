@@ -59,6 +59,12 @@ from src.mail.mailbox_semantics import (  # noqa: F401  (re-export)
     SENT_CANONICAL_LABEL,
     is_sent_mailbox,
 )
+# 本模块自用（非 re-export）: 内建 mailbox 的列表/计数面一律走变体展开 + IN 谓词。
+from src.mail.mailbox_semantics import (
+    INBOX_LABEL,
+    filter_labels_for_mailbox,
+    sql_in_predicate,
+)
 
 
 # ==================== llm_processing DDL 单源 (v37) ====================
@@ -4118,6 +4124,77 @@ class SyncStore:
                     internal_id,
                 ))
             conn.commit()
+
+    def mark_read_if_unread_on_conn(
+        self,
+        conn: sqlite3.Connection,
+        internal_id: int,
+        expected_updated_at: Optional[float],
+    ) -> bool:
+        """CAS 置已读: **仅当该行仍是未读、且 updated_at 与快照一致时**把 is_read 翻
+        True, 返回是否真的改到。
+
+        借用调用方的连接与事务 (issue #58 入向已读回收把「校验 + 本地镜像 + outbox
+        入队」放进同一个 BEGIN IMMEDIATE), 故这里**不 commit**。
+
+        🔴 为什么不是无条件 UPDATE: 服务器 FLAGS 复核到写库之间用户可能刚把这封标成
+        未读 —— 无条件写会把用户显式的「标为未读」吞掉, 且本功能单向 (只做未读→已读),
+        后续周期**不会**自愈。
+        🔴 为什么 ``is_read = 0`` 还不够、要连 ``updated_at`` 一起比: 用户标未读会把
+        本地写回 is_read=0 (值与快照相同), 只比 is_read 看不出"这中间发生过一次写"。
+        大批量收敛时队尾邮件距快照可达数秒, 足够「用户标未读 + outbox intent 派发完成
+        (于是 has_pending 也归 false)」跑完 —— 那一封就会被静默改回已读。updated_at
+        是那次写留下的唯一痕迹。rowcount==0 = 期间被动过 → 调用方放弃该封, 下轮重判
+        (保守失败: 顶多晚一个周期收敛, 绝不覆盖用户操作)。旗标 / processing_status
+        一概不碰。
+        """
+        cursor = conn.execute(
+            """
+            UPDATE email_metadata
+               SET is_read = 1, updated_at = ?
+             WHERE internal_id = ? AND is_read = 0 AND updated_at IS ?
+            """,
+            (time.time(), internal_id, expected_updated_at),
+        )
+        return cursor.rowcount > 0
+
+    def get_inbox_unread_for_read_reconcile(
+        self, mailbox: str = INBOX_LABEL
+    ) -> List[Dict[str, Any]]:
+        """入向已读回收 (issue #58) 专用: 取某 mailbox 下本地未读行的
+        internal_id + imap_uid + imap_uidvalidity + updated_at。
+
+        只读、无副作用。davmail 入向 read-reconcile 用它做**候选集**来源 (本地未读 ∧
+        不在服务器 UNSEEN 集 → 候选, 再经定向 FETCH FLAGS 复核才收敛)。imap_uid /
+        imap_uidvalidity 为 NULL 的行 (AppleScript 路径) 由上层 uidvalidity 一致性
+        闸自然过滤。updated_at 供提交时的 CAS 比对 (见 mark_read_if_unread_on_conn:
+        本轮期间被写过的行一律放弃)。不返 is_flagged: 收敛只动 is_read, 不做全量置态。
+
+        mailbox 按 `filter_labels_for_mailbox` 展开成变体集 IN 查 (内建 canonical
+        禁止 `= ?` 精确匹配, 见 CLAUDE.md mailbox 语义单源纪律)。
+        """
+        predicate, params = sql_in_predicate(
+            "mailbox", filter_labels_for_mailbox(mailbox)
+        )
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                f"""
+                SELECT internal_id, imap_uid, imap_uidvalidity, updated_at
+                FROM email_metadata
+                WHERE is_read = 0 AND {predicate}
+                """,
+                params,
+            )
+            return [
+                {
+                    "internal_id": row["internal_id"],
+                    "imap_uid": row["imap_uid"],
+                    "imap_uidvalidity": row["imap_uidvalidity"],
+                    "updated_at": row["updated_at"],
+                }
+                for row in cursor.fetchall()
+            ]
 
     def update_ai_main_columns(
         self,
