@@ -1068,6 +1068,10 @@ class DavMailBackend(IMailBackend):
         thread_id = _thread_id_from_headers(
             msg.get("References"), msg.get("In-Reply-To"), message_id
         )
+        # 直接父邮件 message_id (In-Reply-To 头) — 归一化同 Message-ID: RFC 2047
+        # decode + unfold + 去尖括号 + 多值取首个 (KOS Thread 链接反查用)。与 thread_id
+        # (优先 References[0]=线程根) 分开: 线程首封无 In-Reply-To → None。
+        in_reply_to = _normalize_message_id(msg.get("In-Reply-To")) or None
 
         # 抽 text/plain 部分作为 content (HTML 部分留在 source 里给 v4 SQLite SSoT 解析)
         content = ""
@@ -1103,6 +1107,7 @@ class DavMailBackend(IMailBackend):
             is_read="\\Seen" in flags_returned,
             is_flagged="\\Flagged" in flags_returned,
             thread_id=thread_id,
+            in_reply_to=in_reply_to,
             mailbox=imap_box,
             imap_uid=uid_returned,
             imap_uidvalidity=self.inbox_uidvalidity,

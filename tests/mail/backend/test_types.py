@@ -22,15 +22,17 @@ def test_email_content_to_legacy_dict_keys():
         is_read=True,
         is_flagged=False,
         thread_id="<thread@ex>",
+        in_reply_to="parent@ex",
         mailbox="收件箱",
     )
     legacy = ec.to_legacy_dict()
     assert set(legacy.keys()) == {
         "message_id", "subject", "sender", "date", "content",
-        "source", "is_read", "is_flagged", "thread_id",
+        "source", "is_read", "is_flagged", "thread_id", "in_reply_to",
     }
     assert legacy["date"] == "2026-01-01T00:00:00"
     assert legacy["thread_id"] == "<thread@ex>"
+    assert legacy["in_reply_to"] == "parent@ex"
 
 
 def test_email_content_imap_fields_optional():

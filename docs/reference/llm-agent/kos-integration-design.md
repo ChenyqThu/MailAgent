@@ -124,6 +124,15 @@ action_required=true
 deadline=2026-06-01
 ```
 
+> ⚠️ 上面是设计期草图；**实际 payload 形状的 SSoT = `src/kos/producer.py` 的
+> `build_kos_page_payload` docstring**（slug=`sources/email/{internal_id}`、49KB 分区预算等
+> 均以代码为准）。2026-07-23 起（KOS handoff）body 在 metadata blockquote 后新增
+> `## Thread` 节：direct parent（In-Reply-To）与 thread root 的
+> `[subject](sources/email/{internal_id}.md)` markdown 链接（只 parent+root，无 sibling
+> 列表；线程首封整节不出；节计入 skeleton 预算永不被截），KOS 每日 07:40 link sweep
+> 自动抽成图谱边。数据面：`email_metadata.in_reply_to` 列（DB v40，无尖括号，forward-only
+> 老行 NULL），增量 hook 与 bulk_ingest 共用 `resolve_thread_refs()` 反查保证两路径一致。
+
 KOS 拿到后：
 - 自动从 sender/recipients/body 抽 `people/...` `companies/...` 节点 + typed link（`emailed_with` / `attended` 等）
 - `## Facts` 围栏的 `priority=important` 进 typed metric column → 可走 trajectory eval（这周哪些 critical 邮件、本月跟 Bob 的互动是否 trending）

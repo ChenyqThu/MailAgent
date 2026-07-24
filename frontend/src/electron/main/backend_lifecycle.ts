@@ -60,7 +60,7 @@ import { getLocalApiToken, LOCAL_TOKEN_ENV } from './local_token'
 // ---------------------------------------------------------------------------
 
 /** 与 src/mail/sync_store.py `SyncStore.DB_VERSION` 及 admin.py `EXPECTED_DB_VERSION`
- *  对齐 (当前 v39)。后端完成 `_init_database()` schema migration 后会把
+ *  对齐 (当前 v40)。后端完成 `_init_database()` schema migration 后会把
  *  sync_state.db_version 写成 >= 此值 —— 就绪门控等它到位再开主窗口。
  *
  *  🔴 判据用 `>=` 而非 `===` (见 probeDbReady)。TS 无法 import Python 常量, 此处只能手抄;
@@ -69,7 +69,7 @@ import { getLocalApiToken, LOCAL_TOKEN_ENV } from './local_token'
  *  >= 此值即放行, 后端再 bump schema 也不会卡旧前端 (一体化 app 迁移单向前进 + 向后兼容
  *  加列加表, 不删不改语义)。bump 后端 schema 时**仍建议**同步抬高此下限保持语义清晰,
  *  但漏改不再致命 (admin.py 用 `= _SyncStore.DB_VERSION` 动态引用, 无此问题)。 */
-export const EXPECTED_DB_VERSION = 39
+export const EXPECTED_DB_VERSION = 40
 
 /** 就绪判据的关键表子集 (02-landing-plan.md P1-6)。admin.py REQUIRED_TABLES 更全,
  *  但开窗门控只需保证「邮件读写主路径」已建: 元数据 / 正文 SSoT / outbox +

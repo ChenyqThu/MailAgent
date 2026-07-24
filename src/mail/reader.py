@@ -167,11 +167,12 @@ class EmailReader:
         content = details["content"]
         content_type = "text/plain"
         thread_id = None
+        in_reply_to = None
         cid_map = {}
         inline_images = []
         mime_date = None
         try:
-            html_content, thread_id, cid_map, inline_images, mime_date = self._extract_from_source(message_id)
+            html_content, thread_id, cid_map, inline_images, mime_date, in_reply_to = self._extract_from_source(message_id)
             if html_content:
                 content = html_content
                 content_type = "text/html"
@@ -216,7 +217,8 @@ class EmailReader:
             is_read=details["is_read"],
             is_flagged=details["is_flagged"],
             attachments=attachments,
-            thread_id=thread_id
+            thread_id=thread_id,
+            in_reply_to=in_reply_to,
         )
 
         logger.debug(f"Email read successfully: {email.subject}")
@@ -401,7 +403,7 @@ class EmailReader:
         """获取邮件原始源码"""
         return self.scripts.get_email_source(message_id, self.account, self.inbox)
 
-    def _extract_from_source(self, message_id: str) -> "tuple[Optional[str], Optional[str], dict, list, Optional[datetime]]":
+    def _extract_from_source(self, message_id: str) -> "tuple[Optional[str], Optional[str], dict, list, Optional[datetime], Optional[str]]":
         """
         从邮件源码中提取HTML内容、Thread ID、Content-ID 映射、内联图片数据和日期
 
@@ -465,6 +467,16 @@ class EmailReader:
                 if in_reply_to:
                     thread_id = in_reply_to.strip().strip('<>')
                     logger.debug(f"Found In-Reply-To: {in_reply_to}")
+
+            # 2.5 直接父邮件 message_id（In-Reply-To 头，无尖括号；KOS Thread 链接用）。
+            # 与 thread_id 分开：thread_id 优先 References[0]=线程根，in_reply_to=直接父。
+            # In-Reply-To 罕见含多个 message-id，取第一个 token。
+            in_reply_to_parent = None
+            _irt = msg.get("In-Reply-To")
+            if _irt:
+                _irt_tokens = _irt.strip().split()
+                if _irt_tokens:
+                    in_reply_to_parent = _irt_tokens[0].strip('<>') or None
 
             # 3. 提取所有附件的 Content-ID 映射和内联图片数据
             cid_map = {}
@@ -546,11 +558,11 @@ class EmailReader:
                 for part in self._iter_parts_skip_rfc822_children(msg):
                     self._extract_non_cid_attachment(part, inline_images, seen_filenames)
 
-            return html_content, thread_id, cid_map, inline_images, email_date
+            return html_content, thread_id, cid_map, inline_images, email_date, in_reply_to_parent
 
         except Exception as e:
             logger.error(f"Failed to extract from email source: {e}")
-            return None, None, {}, [], None
+            return None, None, {}, [], None, None
 
     def parse_email_source(
         self,
@@ -650,6 +662,16 @@ class EmailReader:
                 in_reply_to = msg.get("In-Reply-To")
                 if in_reply_to:
                     thread_id = in_reply_to.strip().strip('<>')
+
+            # 4.5 直接父邮件 message_id（In-Reply-To 头，无尖括号；KOS Thread 链接用）。
+            # 与 thread_id 分开：thread_id 优先 References[0]=线程根，in_reply_to=直接父。
+            # In-Reply-To 罕见含多个 message-id，取第一个 token。
+            in_reply_to_parent = None
+            _irt = msg.get("In-Reply-To")
+            if _irt:
+                _irt_tokens = _irt.strip().split()
+                if _irt_tokens:
+                    in_reply_to_parent = _irt_tokens[0].strip('<>') or None
 
             # 5. 提取附件和内联图片
             cid_map = {}
@@ -784,6 +806,7 @@ class EmailReader:
                 is_flagged=is_flagged,
                 attachments=attachments,
                 thread_id=thread_id,
+                in_reply_to=in_reply_to_parent,
                 is_important=is_important,
             )
 

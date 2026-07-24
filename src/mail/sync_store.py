@@ -293,6 +293,7 @@ class EmailMetadata(TypedDict, total=False):
     internal_id: int  # v3 新增：主键
     message_id: Optional[str]  # v3：UNIQUE，AppleScript 成功后填充
     thread_id: Optional[str]
+    in_reply_to: Optional[str]  # v40：直接父邮件 message_id（无尖括号），KOS Thread 链接用
     subject: str
     sender: str
     sender_name: str
@@ -504,7 +505,11 @@ class SyncStore:
     #                路由 (PR4 才接)**。幂等: CREATE IF NOT EXISTS + 3 trigger + 回填 WHERE NOT
     #                EXISTS (current_version < 39 gate)。回滚 (回退 v39): DROP 3 trigger + DROP 表,
     #                主表不动 (纯 schema 未接路径, 删即回退); 必要时降 db_version。
-    DB_VERSION = 39  # v39: email_attachment_fts_trigram (附件正文/文件名 trigram 并行表)
+    # v40 (2026-07-23): email_metadata +in_reply_to (nullable TEXT, 存储无尖括号, 同 message_id
+    #                惯例) —— 直接父邮件 message_id (In-Reply-To 头), KOS payload Thread 链接反查用。
+    #                davmail/applescript 两条解析路径落库; 老行 NULL (forward-only, 无 backfill)。
+    #                回滚 (回退 v40): 列可留 (旧代码无害, 全 NULL) 或手动 DROP; 必要时降 db_version。
+    DB_VERSION = 40  # v40: email_metadata.in_reply_to (KOS Thread 链接反查)
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -648,7 +653,8 @@ class SyncStore:
                 snippet TEXT,
                 draft_source_internal_id INTEGER,
                 draft_in_reply_to TEXT,
-                draft_references TEXT
+                draft_references TEXT,
+                in_reply_to TEXT
             )
         """)
 
@@ -2201,6 +2207,23 @@ class SyncStore:
             )
             logger.info(f"v38 migration: preprocess context_source seeded to {_seed_src!r}")
 
+        # === v40: email_metadata.in_reply_to (KOS Thread 链接反查) ===
+        # 新库 CREATE 已含 in_reply_to → PRAGMA 跳过 ALTER；旧库补 nullable TEXT 列。
+        # 无数据回填: 存量行 NULL = 修复前语义 (In-Reply-To 解析后即丢弃), 新邮件由
+        # reader/davmail 两条解析路径 + _persist_email_metadata_after_parse 落库
+        # (forward-only, 无 backfill re-push)。
+        if current_version < 40:
+            try:
+                cursor.execute("PRAGMA table_info(email_metadata)")
+                _em_cols = {row[1] for row in cursor.fetchall()}
+                if "in_reply_to" not in _em_cols:
+                    cursor.execute("ALTER TABLE email_metadata ADD COLUMN in_reply_to TEXT")
+                    logger.info("v40 migration: email_metadata +in_reply_to")
+            except sqlite3.OperationalError as e:
+                _migration_guard_columns(
+                    cursor, "email_metadata", {"in_reply_to"}, "v40 migration", e,
+                )
+
         # 更新数据库版本 —— E0-WP3: 只有**全部迁移成功**才会执行到这里。任何迁移块
         # 真失败都会 raise (见 _migration_guard_columns/_migration_guard_index),
         # 沿栈中断本函数 → 本 INSERT 与末尾 commit 都不执行, version 停在旧值 →
@@ -2519,6 +2542,7 @@ class SyncStore:
             'to_addr', 'cc_addr', 'date_received', 'is_read', 'is_flagged',
             'sync_status', 'sync_error',
             'is_important',  # v9 — 邮件原生重要性（reader._parse_importance 提取）
+            'in_reply_to',   # v40 — 直接父邮件 message_id（KOS Thread 链接反查）
         }
         set_parts = []
         values = []
@@ -3244,10 +3268,12 @@ class SyncStore:
                      notion_thread_id, sync_error, retry_count, next_retry_at,
                      imap_uidvalidity, imap_uid, backend_origin,
                      draft_source_internal_id, draft_in_reply_to, draft_references,
+                     in_reply_to,
                      created_at, updated_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                             ?, ?, ?,
                             ?, ?, ?,
+                            ?,
                             COALESCE((SELECT created_at FROM email_metadata WHERE internal_id = ?), ?),
                             ?)
                 """, (
@@ -3275,6 +3301,7 @@ class SyncStore:
                     email.get('draft_source_internal_id'),
                     email.get('draft_in_reply_to'),
                     email.get('draft_references'),
+                    email.get('in_reply_to'),
                     internal_id,
                     now,
                     now

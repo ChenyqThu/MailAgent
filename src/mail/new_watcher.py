@@ -739,6 +739,10 @@ class NewWatcher:
             patch['cc_addr'] = email_obj.cc
         if email_obj.sender_name:
             patch['sender_name'] = email_obj.sender_name
+        # in_reply_to (直接父邮件 message_id, KOS Thread 链接反查用)。只在非空时写 →
+        # 线程首封 (无 In-Reply-To) 保持 NULL (forward-only 语义)。
+        if getattr(email_obj, 'in_reply_to', None):
+            patch['in_reply_to'] = email_obj.in_reply_to
         if patch:
             try:
                 self.sync_store.update_after_fetch(internal_id, patch)
@@ -1214,7 +1218,7 @@ class NewWatcher:
         if not getattr(settings, "mailagent_kos_ingest_enabled", False):
             return
         try:
-            from src.kos.producer import push_email_to_kos
+            from src.kos.producer import push_email_to_kos, resolve_thread_refs
 
             # 完整 AI labels (llm_processing.labels_json) + body + 附件 — 增量入图
             # 跟 bulk historical ingest 形态一致 (category/ai_summary/key_points 都带)
@@ -1224,6 +1228,8 @@ class NewWatcher:
             labels: Optional[dict] = None
             body_markdown: Optional[str] = None
             attachments: Optional[list] = None
+            thread_parent = None
+            thread_root = None
             try:
                 from src.llm_agent.store import LLMProcessingStore
 
@@ -1237,9 +1243,15 @@ class NewWatcher:
                     for a in self.email_repo.get_attachments(internal_id)
                     if not a.is_inline
                 ]
+                # Thread 链接反查 (parent=In-Reply-To, root=thread_id) — 行已落库
+                # (save_email + _persist_email_metadata_after_parse 在 hook 前跑)。
+                # 与 bulk_ingest 共用同一 SQLite 反查 → 两路径 payload 一致。
+                refs = resolve_thread_refs(str(self.sync_store.db_path), internal_id)
+                thread_parent = refs.get("parent")
+                thread_root = refs.get("root")
             except Exception as e:
                 logger.debug(
-                    f"[kos-hook] labels/body/attachments fetch failed "
+                    f"[kos-hook] labels/body/attachments/thread fetch failed "
                     f"internal_id={internal_id}: {e}"
                 )
 
@@ -1260,6 +1272,8 @@ class NewWatcher:
                         notion_page_id=notion_page_id,
                         labels=labels,
                         attachments=attachments,
+                        thread_parent=thread_parent,
+                        thread_root=thread_root,
                         priority_floor=priority_floor,
                         require_labeled=require_labeled,
                         dry_run=dry_run,
@@ -1503,6 +1517,10 @@ class NewWatcher:
                 # 设置额外属性
                 email_obj.mailbox = mailbox
                 email_obj.thread_id = full_email.get('thread_id')
+                # in_reply_to: 优先 backend 归一化值 (davmail _normalize_message_id),
+                # backend 未提供 (applescript full_email 无此键) 时保留 parse_email_source
+                # 从 MIME 解析的值。
+                email_obj.in_reply_to = full_email.get('in_reply_to') or email_obj.in_reply_to
 
                 # 优先使用 AppleScript 返回的 subject（比 MIME 解析更准确）
                 if full_email.get('subject'):

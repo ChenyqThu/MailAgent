@@ -42,6 +42,9 @@ class EmailContent:
     imap_uidvalidity: Optional[int] = None
     imap_uid: Optional[int] = None
 
+    # 直接父邮件 message_id (In-Reply-To 头, 无尖括号)。thread_id=线程根, 二者分开。
+    in_reply_to: Optional[str] = None
+
     def to_legacy_dict(self) -> dict:
         """转成现有 fetch_email_content_by_id() 返回的 dict 形状, 兼容旧代码."""
         return {
@@ -54,6 +57,7 @@ class EmailContent:
             "is_read": self.is_read,
             "is_flagged": self.is_flagged,
             "thread_id": self.thread_id,
+            "in_reply_to": self.in_reply_to,
         }
 
 

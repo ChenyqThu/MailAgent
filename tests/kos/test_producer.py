@@ -543,3 +543,202 @@ class TestPushEmailToKos:
             email, internal_id=1, ai_priority="critical", priority_floor="normal",
         )
         assert result is None
+
+
+# ============================================================
+# build_kos_page_payload — ## Thread 节 (KOS Thread 链接, task 07-23)
+# ============================================================
+
+class TestThreadSection:
+    def test_reply_has_parent_and_root_links(self):
+        """回复邮件 (parent≠root) → 两行 + 链接精确 sources/email/{id}.md +
+        frontmatter in_reply_to_email_id。"""
+        _, content = build_kos_page_payload(
+            internal_id=9, subject="Re: Re: Plan", sender="a@b",
+            date_iso="2026-07-23T10:00:00", mailbox="收件箱",
+            body_markdown="正文", thread_parent=(5, "Re: Plan"), thread_root=(2, "Plan"),
+        )
+        assert "## Thread" in content
+        assert "- In reply to: [Re: Plan](sources/email/5.md)" in content
+        assert "- Thread root: [Plan](sources/email/2.md)" in content
+        # frontmatter provenance 从 thread_parent[0] 派生
+        assert "in_reply_to_email_id: 5" in content
+
+    def test_thread_section_after_meta_before_body(self):
+        """## Thread 位于 metadata blockquote 之后、正文之前。"""
+        _, content = build_kos_page_payload(
+            internal_id=9, subject="Re: Plan", sender="a@b",
+            date_iso="2026-07-23", mailbox="收件箱",
+            body_markdown="BODYMARKER", thread_parent=(5, "Plan"), thread_root=(2, "Root"),
+        )
+        assert content.index("> Mailbox:") < content.index("## Thread")
+        assert content.index("## Thread") < content.index("BODYMARKER")
+
+    def test_one_level_reply_only_in_reply_to(self):
+        """parent==root (一层回复, resolve_thread_refs 已把 root 置 None) →
+        只出 In reply to 行, 无 Thread root 行。"""
+        _, content = build_kos_page_payload(
+            internal_id=9, subject="Re: Plan", sender="a@b",
+            date_iso="2026-07-23", mailbox="收件箱",
+            body_markdown="正文", thread_parent=(2, "Plan"), thread_root=None,
+        )
+        assert "- In reply to: [Plan](sources/email/2.md)" in content
+        assert "Thread root" not in content
+
+    def test_thread_first_email_no_section(self):
+        """线程首封 (thread_parent/root 皆 None) → 无 ## Thread 节。"""
+        _, content = build_kos_page_payload(
+            internal_id=1, subject="Plan", sender="a@b",
+            date_iso="2026-07-23", mailbox="收件箱", body_markdown="正文",
+        )
+        assert "## Thread" not in content
+        assert "in_reply_to_email_id" not in content
+
+    def test_byte_identical_when_no_thread_params(self):
+        """不传 thread 参数 vs 显式传 None → 逐字节一致 (与改动前现状对齐)。"""
+        kwargs = dict(
+            internal_id=1, subject="Plan", sender="a@b",
+            date_iso="2026-07-23", mailbox="收件箱", body_markdown="正文",
+        )
+        _, without = build_kos_page_payload(**kwargs)
+        _, explicit_none = build_kos_page_payload(
+            **kwargs, thread_parent=None, thread_root=None, in_reply_to_email_id=None,
+        )
+        assert without == explicit_none
+
+    def test_miss_single_side_omits_that_line(self):
+        """反查 miss 单侧 (只有 root, parent=None) → 只出 Thread root 行。"""
+        _, content = build_kos_page_payload(
+            internal_id=9, subject="Re: Plan", sender="a@b",
+            date_iso="2026-07-23", mailbox="收件箱",
+            body_markdown="正文", thread_parent=None, thread_root=(2, "Plan"),
+        )
+        assert "In reply to" not in content
+        assert "- Thread root: [Plan](sources/email/2.md)" in content
+
+    def test_subject_sanitized_in_link_text(self):
+        """subject 里的 [ ] / 换行做防破链 sanitize; 空 subject → (no subject)。"""
+        _, content = build_kos_page_payload(
+            internal_id=9, subject="Re", sender="a@b", date_iso="2026-07-23",
+            mailbox="收件箱", body_markdown="正文",
+            thread_parent=(5, "a [tag] b\nc"), thread_root=(2, ""),
+        )
+        assert "- In reply to: [a (tag) b c](sources/email/5.md)" in content
+        assert "- Thread root: [(no subject)](sources/email/2.md)" in content
+
+    def test_thread_section_not_truncated_under_huge_body(self):
+        """超长正文 → body 被截, 但 ## Thread 节 (在 skeleton 内) 完整保留。"""
+        _, content = build_kos_page_payload(
+            internal_id=9, subject="Re: Plan", sender="a@b",
+            date_iso="2026-07-23", mailbox="收件箱",
+            body_markdown="正" * 60000,
+            thread_parent=(5, "Parent Subj"), thread_root=(2, "Root Subj"),
+        )
+        assert len(content.encode("utf-8")) <= 49000
+        assert "truncated to 50KB by mailagent client" in content  # body 确实被截
+        assert "- In reply to: [Parent Subj](sources/email/5.md)" in content
+        assert "- Thread root: [Root Subj](sources/email/2.md)" in content
+
+
+# ============================================================
+# resolve_thread_refs — SQLite 反查 (task 07-23)
+# ============================================================
+
+class TestResolveThreadRefs:
+    @pytest.fixture
+    def db(self, tmp_path):
+        from src.mail.sync_store import SyncStore
+
+        dbp = str(tmp_path / "sync_store.db")
+        store = SyncStore(db_path=dbp)
+        # 线程: root(1) ← reply(2) ← reply2(3)
+        store.save_email({
+            "internal_id": 1, "message_id": "root@x", "subject": "Plan",
+            "sender": "a@b", "mailbox": "收件箱", "sync_status": "synced",
+        })
+        store.save_email({
+            "internal_id": 2, "message_id": "reply@x", "subject": "Re: Plan",
+            "sender": "c@d", "mailbox": "收件箱", "sync_status": "synced",
+            "in_reply_to": "root@x", "thread_id": "root@x",
+        })
+        store.save_email({
+            "internal_id": 3, "message_id": "reply2@x", "subject": "Re: Re: Plan",
+            "sender": "e@f", "mailbox": "收件箱", "sync_status": "synced",
+            "in_reply_to": "reply@x", "thread_id": "root@x",
+        })
+        return dbp
+
+    def test_first_email_returns_empty(self, db):
+        """线程首封 (无 in_reply_to; thread_id 未设) → parent/root 皆 None。"""
+        from src.kos.producer import resolve_thread_refs
+
+        assert resolve_thread_refs(db, 1) == {"parent": None, "root": None}
+
+    def test_one_level_reply_dedups_root(self, db):
+        """一层回复: parent==root → root 置 None (只保留 parent)。"""
+        from src.kos.producer import resolve_thread_refs
+
+        assert resolve_thread_refs(db, 2) == {"parent": (1, "Plan"), "root": None}
+
+    def test_deep_reply_resolves_parent_and_root(self, db):
+        """深层回复: parent=直接父, root=线程根, 二者不同。"""
+        from src.kos.producer import resolve_thread_refs
+
+        refs = resolve_thread_refs(db, 3)
+        assert refs["parent"] == (2, "Re: Plan")
+        assert refs["root"] == (1, "Plan")
+
+    def test_no_row_returns_empty(self, db):
+        """本封 internal_id 查不到 → 空 (不报错)。"""
+        from src.kos.producer import resolve_thread_refs
+
+        assert resolve_thread_refs(db, 999) == {"parent": None, "root": None}
+
+    def test_davmail_first_email_self_thread_id_guarded(self, db):
+        """davmail 线程首封: thread_id == 自身 message_id (自指) → root None。
+        （applescript 首封 thread_id=None 已由 test_first_email_returns_empty 覆盖；
+        此处锁 davmail `_extract_thread_id` 兜底 = 自身 的分支不出 Thread root 行。）"""
+        from src.kos.producer import resolve_thread_refs
+        from src.mail.sync_store import SyncStore
+
+        store = SyncStore(db_path=db)
+        store.save_email({
+            "internal_id": 10, "message_id": "self@x", "subject": "Plan",
+            "sender": "a@b", "mailbox": "收件箱", "sync_status": "synced",
+            "thread_id": "self@x",  # davmail 首封兜底 == 自身 message_id
+        })
+        assert resolve_thread_refs(db, 10) == {"parent": None, "root": None}
+
+    def test_pathological_self_in_reply_to_guarded(self, db):
+        """病态自指: in_reply_to == 自身 message_id → parent None (不自链)。"""
+        from src.kos.producer import resolve_thread_refs
+        from src.mail.sync_store import SyncStore
+
+        store = SyncStore(db_path=db)
+        store.save_email({
+            "internal_id": 11, "message_id": "loop@x", "subject": "Loop",
+            "sender": "a@b", "mailbox": "收件箱", "sync_status": "synced",
+            "in_reply_to": "loop@x", "thread_id": "loop@x",
+        })
+        assert resolve_thread_refs(db, 11) == {"parent": None, "root": None}
+
+    def test_dangling_ref_omitted(self, db, tmp_path):
+        """in_reply_to 指向未入库的 message_id → parent None (构造不出链接目标)。"""
+        from src.kos.producer import resolve_thread_refs
+        from src.mail.sync_store import SyncStore
+
+        store = SyncStore(db_path=db)
+        store.save_email({
+            "internal_id": 4, "message_id": "orphan@x", "subject": "Re: Gone",
+            "sender": "g@h", "mailbox": "收件箱", "sync_status": "synced",
+            "in_reply_to": "never-synced@x", "thread_id": "never-synced@x",
+        })
+        assert resolve_thread_refs(db, 4) == {"parent": None, "root": None}
+
+    def test_bad_db_path_returns_empty_no_raise(self):
+        """DB 不可达 → 吞异常返回空 (KOS 丰富层不炸主流程)。"""
+        from src.kos.producer import resolve_thread_refs
+
+        assert resolve_thread_refs("/nonexistent/dir/nope.db", 1) == {
+            "parent": None, "root": None,
+        }

@@ -33,6 +33,7 @@ from src.kos.producer import (
     make_bulk_kos_client,
     passes_priority_gate,
     priority_label_state,
+    resolve_thread_refs,
 )
 from src.repository import EmailRepository
 
@@ -130,6 +131,9 @@ class KOSBulkIngester:
             for a in self.repo.get_attachments(internal_id)
             if not a.is_inline
         ]
+        # Thread 链接反查 (parent=In-Reply-To, root=thread_id) — 与增量 hook 共用
+        # 同一 SQLite 反查 → 同一封邮件两路径 payload 一致。
+        refs = resolve_thread_refs(self.db_path, internal_id)
         return build_kos_page_payload(
             internal_id=internal_id,
             subject=meta.subject,
@@ -145,6 +149,8 @@ class KOSBulkIngester:
             labels=labels,
             attachments=atts,
             notion_page_id=meta.notion_page_id,
+            thread_parent=refs.get("parent"),
+            thread_root=refs.get("root"),
         )
 
     # 瞬时错误 → 退避重试: 429 限流 + 网络/DNS 抖动 (公司内网 DNS 偶发解析失败,

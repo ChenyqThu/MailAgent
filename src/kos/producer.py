@@ -26,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import sqlite3
 from typing import Any, Optional
 
 from loguru import logger
@@ -176,6 +177,86 @@ def _split_addrs(raw: Optional[str]) -> list[str]:
     return [a.strip() for a in raw.replace(";", ",").split(",") if a.strip()]
 
 
+# ---- Thread 链接 (KOS 每日 sweep 抽 markdown 链接成图谱边) ---------------------
+# root-relative + `.md` 后缀 + markdown 链接形式, 精确 `sources/email/{internal_id}.md`。
+_THREAD_LINK_TEXT_MAX = 120
+
+
+def _sanitize_link_text(subject: Optional[str]) -> str:
+    """subject → markdown 链接文本, 防破链: `[`→`(`、`]`→`)`、换行/多空格压单空格、
+    截 120 字符, 空 → '(no subject)'。"""
+    s = (subject or "").replace("[", "(").replace("]", ")")
+    s = " ".join(s.split())  # 换行 + 连续空白压成单空格 (markdown 链接文本不能换行)
+    s = s[:_THREAD_LINK_TEXT_MAX]
+    return s or "(no subject)"
+
+
+def resolve_thread_refs(db_path: str, internal_id: int) -> dict[str, Optional[tuple[int, str]]]:
+    """反查 direct parent (In-Reply-To) 与 thread root (References[0]) 的 (internal_id,
+    subject), 供 ``build_kos_page_payload`` 的 ``## Thread`` 节生成链接。
+
+    读本封行的 in_reply_to / thread_id, 各自经 message_id 等值反查 email_metadata
+    (存储均无尖括号)。guard:
+      - parent/root 反查命中自身 internal_id → None (线程首封: davmail thread_id==自身)
+      - root == parent → root 置 None (一层回复只出 In reply to 行, 避免重复)
+      - 反查 miss (pre-history / 未同步) → None (slug 需要 internal_id, 构造不出目标)
+
+    增量 (new_watcher hook) 与 bulk_ingest 两条路径共用本反查 → 同一封邮件两路径
+    payload 一致。KOS 是图谱丰富层不是功能数据: 任何异常吞掉返回空, 绝不炸主流程。
+    裸 sqlite3 只读连接 (timeout=30, 同 bulk_ingest._get_labels 风格)。
+    """
+    empty: dict[str, Optional[tuple[int, str]]] = {"parent": None, "root": None}
+    try:
+        conn = sqlite3.connect(db_path, timeout=30)
+        try:
+            row = conn.execute(
+                "SELECT in_reply_to, thread_id FROM email_metadata WHERE internal_id = ?",
+                (internal_id,),
+            ).fetchone()
+            if row is None:
+                return empty
+            in_reply_to, thread_id = row[0], row[1]
+
+            def _lookup(msg_id: Optional[str]) -> Optional[tuple[int, str]]:
+                if not msg_id:
+                    return None
+                r = conn.execute(
+                    "SELECT internal_id, subject FROM email_metadata WHERE message_id = ?",
+                    (msg_id,),
+                ).fetchone()
+                if r is None or int(r[0]) == internal_id:
+                    return None
+                return (int(r[0]), r[1] or "")
+
+            parent = _lookup(in_reply_to)
+            root = _lookup(thread_id)
+            # 一层回复: root == parent → 只保留 In reply to 行 (避免重复行)。
+            if parent is not None and root is not None and root[0] == parent[0]:
+                root = None
+            return {"parent": parent, "root": root}
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001 — KOS 丰富层, 反查失败绝不阻断主流程
+        return empty
+
+
+def _build_thread_section(
+    thread_parent: Optional[tuple[int, str]],
+    thread_root: Optional[tuple[int, str]],
+) -> list[str]:
+    """构造 ``## Thread`` 节 markdown 行 (含前后空行), 两者皆无 → []。"""
+    lines: list[str] = []
+    if thread_parent is not None:
+        pid, psubj = thread_parent[0], thread_parent[1]
+        lines.append(f"- In reply to: [{_sanitize_link_text(psubj)}](sources/email/{pid}.md)")
+    if thread_root is not None:
+        rid, rsubj = thread_root[0], thread_root[1]
+        lines.append(f"- Thread root: [{_sanitize_link_text(rsubj)}](sources/email/{rid}.md)")
+    if not lines:
+        return []
+    return ["## Thread", "", *lines, ""]
+
+
 def make_bulk_kos_client() -> KOSClient:
     """Scenario B bulk client — 绑 mailagent-emails isolated source。
 
@@ -205,6 +286,9 @@ def build_kos_page_payload(
     labels: Optional[dict[str, Any]] = None,
     attachments: Optional[list[dict[str, Any]]] = None,
     notion_page_id: Optional[str] = None,
+    thread_parent: Optional[tuple[int, str]] = None,
+    thread_root: Optional[tuple[int, str]] = None,
+    in_reply_to_email_id: Optional[int] = None,
 ) -> tuple[str, str]:
     """构造 (slug, content) 给 KOS bulk put_page (doc §4 Scenario B 形状)。
 
@@ -219,6 +303,16 @@ def build_kos_page_payload(
             等)。进 frontmatter mailagent: 嵌套 + body "## AI 分析" 区块。
         attachments: [{filename, size, content_type}] — 进 "## Attachments"。
         notion_page_id: Notion mirror — 进 source_refs。
+        thread_parent: (internal_id, subject) of direct parent (In-Reply-To)。非 None
+            时 body 加 ``## Thread`` 节的 "In reply to" 行 (链接 sources/email/{id}.md)。
+        thread_root: (internal_id, subject) of thread root (References[0])。非 None
+            时加 "Thread root" 行。二者皆 None → 整节不出 (线程首封)。由 resolve_thread_refs
+            反查, 两条消费路径 (增量 hook / bulk_ingest) 共用。
+        in_reply_to_email_id: provenance — frontmatter mailagent: 嵌套加 in_reply_to_email_id。
+            None 且 thread_parent 非 None 时从 thread_parent[0] 派生。
+
+    ``## Thread`` 节插在 meta_block 之后、body 占位之前 → 天然进 skeleton_bytes →
+    body 预算相应缩小 → **永不被截** (handoff 硬约束「treat it like metadata」)。
 
     整页恒 ≤ ``_PAGE_CAP_BYTES``。**超限时截谁**, 按「每字节语义价值」从低到高砍
     (codex review MEDIUM-3 之前只有 body 有预算, 其余区块无界)::
@@ -243,6 +337,9 @@ def build_kos_page_payload(
     subject = (subject or "(no subject)").strip() or "(no subject)"
     date_only = (date_iso or "")[:10]
     cc_list = _split_addrs(cc_addr)
+    # provenance: 未显式传则从 direct parent 派生 (二选一, 实现取简)。
+    if in_reply_to_email_id is None and thread_parent is not None:
+        in_reply_to_email_id = thread_parent[0]
 
     ai_priority = labels.get("priority")
     ai_action = labels.get("action_type")
@@ -291,6 +388,8 @@ def build_kos_page_payload(
         fm.append(f"  message_id: {_yaml_quote(message_id)}")
     if thread_id:
         fm.append(f"  thread_id: {_yaml_quote(thread_id)}")
+    if in_reply_to_email_id is not None:
+        fm.append(f"  in_reply_to_email_id: {in_reply_to_email_id}")
     if ai_priority:
         fm.append(f"  ai_priority: {_yaml_quote(ai_priority)}")
     if ai_action:
@@ -317,6 +416,10 @@ def build_kos_page_payload(
         f"> Mailbox: {mailbox}"
     )
     parts: list[str] = [f"# {subject}", "", meta_block, ""]
+    # ## Thread 节 (metadata blockquote 之后) — 插在 body 占位之前 → 进 skeleton,
+    # body 预算相应缩小, 永不被截 (handoff「treat it like metadata」)。KOS 每日 sweep
+    # 抽这两个 markdown 链接成图谱边; parent/root 只两行, 不出 sibling 列表。
+    parts.extend(_build_thread_section(thread_parent, thread_root))
     body_idx = len(parts)
     parts.append("")  # body 占位, 最后按字节预算截入
 
@@ -402,6 +505,8 @@ async def push_email_to_kos(
     ai_action: Optional[str] = None,
     labels: Optional[dict[str, Any]] = None,
     attachments: Optional[list[dict[str, Any]]] = None,
+    thread_parent: Optional[tuple[int, str]] = None,
+    thread_root: Optional[tuple[int, str]] = None,
     client: Optional[KOSClient] = None,
     priority_floor: str = "normal",
     require_labeled: bool = False,
@@ -460,6 +565,8 @@ async def push_email_to_kos(
         labels=merged,
         attachments=attachments,
         notion_page_id=notion_page_id,
+        thread_parent=thread_parent,
+        thread_root=thread_root,
     )
 
     if dry_run:
