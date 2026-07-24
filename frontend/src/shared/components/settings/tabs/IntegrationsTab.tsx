@@ -35,7 +35,8 @@ export function IntegrationsTab(): React.ReactElement {
   const qc = useQueryClient()
 
   // issue #54 — KOS 连接检查（doctor）+ 激活 gate 被动显因。此前凭据错/服务挂/隧道断
-  // 全部静默（gate 不满足时对话不注入 KOS 工具，UI 无任何反馈），只能翻后端日志。
+  // 全部静默（gate 不满足时对话不注入 KOS 使用指南、工具一调即 E_KOS_NOT_CONFIGURED，
+  // UI 无任何反馈），只能翻后端日志。
   const kosGate = useKosGate()
   const [kosChecks, setKosChecks] = React.useState<KosDoctorCheck[] | null>(null)
   const [kosDoctorRunning, setKosDoctorRunning] = React.useState(false)
@@ -85,7 +86,7 @@ export function IntegrationsTab(): React.ReactElement {
             </a>
             {t('settings.integrations.kos.helperSuffix', {
               defaultValue:
-                ' 部署服务并申请 OAuth 凭据，填入下方。未对接（凭据缺失）时对话不会注入 KOS 工具。'
+                ' 部署服务并申请 OAuth 凭据，填入下方。未对接（凭据缺失）时对话 AI 查不到知识大脑，调用会返回未配置错误。'
             })}
           </>
         }
@@ -96,7 +97,7 @@ export function IntegrationsTab(): React.ReactElement {
           label={t('settings.integrations.kos.enabled.label', { defaultValue: '启用 KOS 工具' })}
           helper={t('settings.integrations.kos.enabled.helper', {
             defaultValue:
-              '开启后，对话 AI 可调用 kos_query / kos_recall / kos_get_page 等知识大脑工具（需下方凭据齐全）。'
+              '开启后，对话 AI 可调用 kos_query / kos_search / kos_get_page / kos_find_experts 等知识大脑读工具（需下方凭据齐全）。'
           })}
         />
         <EnvField
@@ -129,14 +130,15 @@ export function IntegrationsTab(): React.ReactElement {
           })}
         />
         {/* issue #54 — gate 显因：开关"开" ≠ 实际激活（gate = 开关 AND 凭据齐全），
-            不满足时对话静默不注入 KOS 工具。这里把脱节显式化，不再静默。 */}
+            不满足时对话不注入 KOS 使用指南、且工具一调即失败。这里把脱节显式化，不再静默。
+            （issue #57 更正：工具本身恒注册，gate 的是指南块 —— 见 chat.py chat_config。） */}
         {kosGate.consumerEnabled && !kosGate.configured ? (
           <div className="flex items-start gap-2 px-4 py-3 text-meta">
             <AlertTriangle className="size-3.5 shrink-0 mt-0.5 text-warn" aria-hidden="true" />
             <span className="text-warn">
               {t('settings.integrations.kos.gateWarning', {
                 defaultValue:
-                  'KOS 已启用但凭据未配齐 —— 对话不会注入 KOS 工具。补全上方凭据后可用「连接检查」验证。'
+                  'KOS 已启用但凭据未配齐 —— 对话 AI 不会被告知有知识大脑可查，调用也会直接失败。补全上方凭据后可用「连接检查」验证。'
               })}
             </span>
           </div>

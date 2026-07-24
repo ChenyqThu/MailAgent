@@ -139,19 +139,67 @@ export type InvalidationDirective =
   | { kind: 'thread-members' }
   | { kind: 'key'; key: (string | number)[] }
 
+// ---- batch (multi-id) events ----
+//
+// issue #58's inbound read reconcile converges MANY emails in one pass and emits
+// ONE event for the whole round rather than one per email (no burst):
+//   internal_id: null
+//   data: { target:'local', converged, reason:'inbound_read_reconcile',
+//           internal_ids: number[]  (capped server-side at 200),
+//           ids_truncated: boolean }
+// Without consuming data.internal_ids the list + badges refresh (they ride the
+// unconditional main-list / mailboxes directives) but an OPEN email detail keeps
+// showing the stale unread toolbar — its ['email', id] cache is never touched.
+//
+// Batch shape is keyed on the WIRE (internal_id null + data.internal_ids), not on
+// data.reason: a second batch producer must get the same routing for free.
+
+/** Mirror of the server-side cap. A backend regression must not be able to make
+ *  the planner emit an unbounded directive list (one debounced invalidate each) —
+ *  past this we take the same prefix degradation as ids_truncated. */
+const MAX_BATCH_IDS = 200
+
+/** The internal_ids an event concerns: the single `internal_id` when present, else
+ *  the batch `data.internal_ids` (non-numbers dropped — the field is wire data).
+ *  Single source for BOTH the planner and the bridge's supplement/thread id sets. */
+export function eventInternalIds(
+  internalId: number | null,
+  data?: Record<string, unknown> | null
+): number[] {
+  if (internalId != null) return [internalId]
+  const raw = data?.internal_ids
+  if (!Array.isArray(raw)) return []
+  return raw.filter((id): id is number => typeof id === 'number' && Number.isFinite(id))
+}
+
+/** True when the batch is known-incomplete (server truncated the id list, or it
+ *  came back longer than the wire contract allows) → the per-id fan-out cannot be
+ *  correct and we degrade to a prefix invalidate. */
+function isBatchTruncated(
+  data: Record<string, unknown> | null | undefined,
+  idCount: number
+): boolean {
+  return data?.ids_truncated === true || idCount > MAX_BATCH_IDS
+}
+
 /**
- * Map an SSE event_type (+ internal_id) to the invalidation directives the
- * event bridge should run. Unhandled events (outbox.enqueued / outbox.failed /
- * llm.failed / …) return [] — same as the previous no-op branch.
+ * Map an SSE event_type (+ internal_id, + optional event `data`) to the
+ * invalidation directives the event bridge should run. Unhandled events
+ * (outbox.enqueued / outbox.failed / llm.failed / …) return [] — same as the
+ * previous no-op branch.
  *
- * A 'supplements' directive is only emitted when an internal_id is present to
- * gate on; without one there is nothing to scope the containment check to, so
- * the (rare) supplement-only staleness is left to the reactive query-key chain
- * and the polling fallback.
+ * A 'supplements' directive is only emitted when there are internal_ids to gate
+ * on; without any there is nothing to scope the containment check to, so the
+ * (rare) supplement-only staleness is left to the reactive query-key chain and
+ * the polling fallback.
+ *
+ * `data` is only read for the batch shape above; every other event type ignores
+ * it and keeps byte-identical behaviour whether or not it is passed.
  */
 export function planInvalidation(
   eventType: string,
-  internalId: number | null
+  internalId: number | null,
+  data?: Record<string, unknown> | null
 ): InvalidationDirective[] {
   switch (eventType) {
     // Any mailbox-level write: list ordering / row state / mailbox counts can
@@ -165,13 +213,23 @@ export function planInvalidation(
         { kind: 'main-list' },
         { kind: 'key', key: ['mailboxes'] }
       ]
-      if (internalId != null) {
+      const ids = eventInternalIds(internalId, data)
+      if (internalId == null && isBatchTruncated(data, ids.length)) {
+        // Known-incomplete batch: the ids we got cannot address every changed
+        // email, so invalidate the whole ['email', …] family (detail + ai + body
+        // + translation + thread-members) instead of a partial per-id fan-out.
+        // The four ['emails', …] supplements stay id-gated — with no trustworthy
+        // id set there is nothing to gate on, same as the no-id case above.
+        out.push({ kind: 'key', key: ['email'] })
+        return out
+      }
+      if (ids.length > 0) {
         out.push({ kind: 'supplements' })
         out.push({ kind: 'thread-members' })
         // Prefix invalidate — covers ['email', id] AND ['email', id, 'ai'] (and
         // translation / body / thread-count for that id), matching the previous
-        // ['email', id] prefix call exactly.
-        out.push({ kind: 'key', key: ['email', internalId] })
+        // ['email', id] prefix call exactly. One per changed email.
+        for (const id of ids) out.push({ kind: 'key', key: ['email', id] })
       }
       return out
     }
@@ -286,10 +344,13 @@ export function collectMainListIds(caches: readonly EmailQueryCacheEntry[]): Set
 export function resolveInvalidatedKeys(
   eventType: string,
   internalId: number | null,
-  caches: readonly EmailQueryCacheEntry[]
+  caches: readonly EmailQueryCacheEntry[],
+  data?: Record<string, unknown> | null
 ): QueryKeyLike[] {
-  const directives = planInvalidation(eventType, internalId)
-  const ids = internalId != null ? new Set([internalId]) : new Set<number>()
+  const directives = planInvalidation(eventType, internalId, data)
+  // Same id source the bridge feeds its supplement / thread-member sets from, so a
+  // batch event gates containment on ALL its ids, not just a (missing) single one.
+  const ids = new Set(eventInternalIds(internalId, data))
   const out: QueryKeyLike[] = []
   const seen = new Set<string>()
   const push = (key: QueryKeyLike): void => {

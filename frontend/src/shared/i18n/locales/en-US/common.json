@@ -2510,10 +2510,10 @@
       "kos": {
         "title": "Knowledge Brain (KOS)",
         "helper": "KOS lets the AI search across your emails / product knowledge, recall past facts, and find experts in chat. It needs a self-hosted gbrain knowledge service — deploy from ",
-        "helperSuffix": " and request OAuth credentials, then fill them in below. Without credentials, KOS tools aren't injected into chat.",
+        "helperSuffix": " and request OAuth credentials, then fill them in below. Without credentials the chat AI cannot reach the brain \u2014 calls come back as a not-configured error.",
         "enabled": {
           "label": "Enable KOS tools",
-          "helper": "When on, the chat AI can call kos_query / kos_recall / kos_get_page and other knowledge-brain tools (requires credentials below)."
+          "helper": "When on, the chat AI can call kos_query / kos_search / kos_get_page / kos_find_experts and other read-only knowledge-brain tools (requires credentials below)."
         },
         "endpoint": {
           "label": "KOS service URL",
@@ -2542,7 +2542,7 @@
           "label": "Time-decay rerank",
           "helper": "Rerank kos_query hits with a 14-day half-life time decay (favors recent). On by default."
         },
-        "gateWarning": "KOS is enabled but credentials are incomplete — chat will not load KOS tools. Fill in the credentials above, then verify with Connection check.",
+        "gateWarning": "KOS is enabled but credentials are incomplete — the chat AI is not told a knowledge brain is available, and any call fails outright. Fill in the credentials above, then verify with Connection check.",
         "doctor": {
           "label": "Connection check",
           "helper": "Step-by-step: credentials → service health → OAuth token → real call.",

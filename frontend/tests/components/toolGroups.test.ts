@@ -13,7 +13,7 @@ import {
 import enCommon from '../../src/shared/i18n/locales/en-US/common.json'
 import zhCommon from '../../src/shared/i18n/locales/zh-CN/common.json'
 
-// 镜像 src/api/routers/agent_runs.py::HEADLESS_TOOL_OPTIONS（28 个，/tool-options 契约冻结）。
+// 镜像 src/api/routers/agent_runs.py::HEADLESS_TOOL_OPTIONS（33 个，/tool-options 契约冻结）。
 // 后端加工具 → 此 fixture 必须跟着补（连同 TOOL_GROUPS 归属），否则首个用例红。
 const HEADLESS_TOOL_OPTIONS: AgentRunToolOption[] = [
   { name: 'agent_profile_history', class: 'read' },
@@ -32,7 +32,12 @@ const HEADLESS_TOOL_OPTIONS: AgentRunToolOption[] = [
   { name: 'email_search_attachments', class: 'read' },
   { name: 'email_search_fulltext', class: 'read' },
   { name: 'email_thread_attachments', class: 'read' },
+  { name: 'kos_find_experts', class: 'read' },
+  { name: 'kos_get_backlinks', class: 'read' },
+  { name: 'kos_get_page', class: 'read' },
+  { name: 'kos_list_pages', class: 'read' },
   { name: 'kos_query', class: 'read' },
+  { name: 'kos_search', class: 'read' },
   { name: 'report_get', class: 'read' },
   { name: 'report_list', class: 'read' },
   { name: 'skill_read', class: 'read' },
@@ -47,7 +52,7 @@ const HEADLESS_TOOL_OPTIONS: AgentRunToolOption[] = [
 ]
 
 describe('toolGroups — R3 工具分组常量', () => {
-  test('当前 28 个 headless 工具全部有家族归属（无一落 fallback）且无一丢失', () => {
+  test('当前 33 个 headless 工具全部有家族归属（无一落 fallback）且无一丢失', () => {
     const groups = groupToolOptions(HEADLESS_TOOL_OPTIONS)
     expect(groups.find((g) => g.id === FALLBACK_TOOL_GROUP_ID)).toBeUndefined()
     const grouped = groups.flatMap((g) => g.tools.map((t) => t.name)).sort()

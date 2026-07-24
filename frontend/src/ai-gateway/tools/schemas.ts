@@ -87,6 +87,58 @@ export const kosQuerySchema = z.object({
 })
 export type KosQueryInput = z.infer<typeof kosQuerySchema>
 
+// ── extra KOS read tools (issue #57) — keyword full-text / page read / expert lookup /
+//    page listing / backlinks. All proxy through domain.kosCall(<mcp name>, args) to the
+//    generic serve-api /chat/kos-call passthrough (KOSClient.call_tool) — zero new Python.
+//    All silent reads (no write tool is registered). ──────────────────────────────────────
+
+/** kos_search — keyword full-text search (a lighter, faster sibling of kos_query).
+ *  NO `mode`: KOS's own tools/list documents it as "Local callers only" and a live probe
+ *  (v0.42.64.0) returned byte-identical hits + scores for every value incl. garbage — an
+ *  optional param the model believes tunes the search but cannot is exactly the #57 bug. */
+export const kosSearchSchema = z.object({
+  query: z.string().min(1),
+  limit: z.number().int().min(1).max(50).default(10)
+})
+export type KosSearchInput = z.infer<typeof kosSearchSchema>
+
+/** kos_get_page — read one page's full content by slug (fuzzy = tolerate near-miss slugs). */
+export const kosGetPageSchema = z.object({
+  slug: z.string().min(1),
+  fuzzy: z.boolean().optional()
+})
+export type KosGetPageInput = z.infer<typeof kosGetPageSchema>
+
+/** kos_find_experts — "who knows X" — people/concepts related to a topic (with scores). */
+export const kosFindExpertsSchema = z.object({
+  topic: z.string().min(1),
+  limit: z.number().int().min(1).max(50).default(10)
+})
+export type KosFindExpertsInput = z.infer<typeof kosFindExpertsSchema>
+
+/** kos_list_pages — list people/concept/etc. pages (all filters optional). `sort` is the
+ *  KOS enum (tools/list): a free-form string silently falls back to updated_desc, so the
+ *  model must not be able to invent one. `type` stays open (the brain grows types —
+ *  person/company/concept/project/note/email/source/atom/… all observed live). */
+export const kosListPagesSchema = z.object({
+  type: z.string().optional(),
+  tag: z.string().optional(),
+  limit: z.number().int().min(1).max(100).default(20),
+  updated_after: z.string().optional(),
+  sort: z.enum(['updated_desc', 'updated_asc', 'created_desc', 'slug']).optional()
+})
+export type KosListPagesInput = z.infer<typeof kosListPagesSchema>
+
+/** kos_get_backlinks — pages/people that reference a given page (empty = no edges yet).
+ *  `limit` is applied CLIENT-side: KOS's get_backlinks takes only {slug} and returns the
+ *  full edge set (a live probe returned 337 rows / 65KB for one person page), which would
+ *  dump ~16k tokens of third-party text into the context on a single call. */
+export const kosGetBacklinksSchema = z.object({
+  slug: z.string().min(1),
+  limit: z.number().int().min(1).max(200).default(50)
+})
+export type KosGetBacklinksInput = z.infer<typeof kosGetBacklinksSchema>
+
 /** report_list — generated reports (all filters optional). */
 export const reportListSchema = z.object({
   cadence: z.enum(['daily', 'weekly', 'monthly']).optional(),

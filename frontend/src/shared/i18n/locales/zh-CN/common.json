@@ -2510,10 +2510,10 @@
       "kos": {
         "title": "知识大脑 (KOS)",
         "helper": "KOS 让 AI 在对话中跨邮件 / 产品知识检索、召回历史事实、找专家。需对接一套自部署的 gbrain 知识库服务：去 ",
-        "helperSuffix": " 部署服务并申请 OAuth 凭据，填入下方。未对接（凭据缺失）时对话不会注入 KOS 工具。",
+        "helperSuffix": " 部署服务并申请 OAuth 凭据，填入下方。未对接（凭据缺失）时对话 AI 查不到知识大脑，调用会返回未配置错误。",
         "enabled": {
           "label": "启用 KOS 工具",
-          "helper": "开启后，对话 AI 可调用 kos_query / kos_recall / kos_get_page 等知识大脑工具（需下方凭据齐全）。"
+          "helper": "开启后，对话 AI 可调用 kos_query / kos_search / kos_get_page / kos_find_experts 等知识大脑读工具（需下方凭据齐全）。"
         },
         "endpoint": {
           "label": "KOS 服务地址",
@@ -2542,7 +2542,7 @@
           "label": "时间衰减重排",
           "helper": "kos_query 命中结果按 14 天半衰期做时间衰减重排（更偏好近期）。默认开。"
         },
-        "gateWarning": "KOS 已启用但凭据未配齐 —— 对话不会注入 KOS 工具。补全上方凭据后可用「连接检查」验证。",
+        "gateWarning": "KOS 已启用但凭据未配齐 —— 对话 AI 不会被告知有知识大脑可查，调用也会直接失败。补全上方凭据后可用「连接检查」验证。",
         "doctor": {
           "label": "连接检查",
           "helper": "分步验证：凭据配置 → 服务可达 → OAuth token → 真实调用。",

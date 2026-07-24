@@ -208,9 +208,19 @@ export function buildContextSystemBlock(snapshot: AgentContextSnapshot): string 
  *  instruction line. (codex review HIGH.) Exported (S1 R1) for gateway tool outputs that surface
  *  user-authored metadata (session titles / email subjects) as single-line prose fields. */
 export function sanitizeProse(value: string): string {
-  // Collapse whitespace (incl. CR/LF) to one space so attacker text cannot start a forged section
-  // header or new instruction line, then break fence + UNTRUSTED_ tokens (codex review HIGH).
-  return sanitizeUntrusted(value).replace(/\s+/g, ' ').trim()
+  // 🔴 Non-whitespace C0/C1 control characters are neutralized FIRST (codex re-review): `\s+` does
+  // not match NUL / SOH / DEL, they render as nothing, and each one costs SIX characters once the
+  // field is JSON-serialized — a free 6x amplification inside any character budget. Doing it
+  // BEFORE sanitizeUntrusted also matters for correctness: `UNTRUSTED<SOH>_` slips past the token
+  // break, and neutralizing the SOH afterwards would reassemble the very token we just broke.
+  // Then collapse whitespace so attacker text cannot start a forged `## ` section or a new
+  // instruction line. (codex review HIGH.)
+  return sanitizeUntrusted(
+    // eslint-disable-next-line no-control-regex -- matching control characters IS the point
+    value.replace(/[\u0000-\u001F\u007F-\u009F]/g, ' ')
+  )
+    .replace(/\s+/g, ' ')
+    .trim()
 }
 
 /** Quote a value for a START-line attribute (keeps a name with spaces / newlines on one safe token). */

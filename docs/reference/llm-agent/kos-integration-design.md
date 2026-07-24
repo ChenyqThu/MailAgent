@@ -69,12 +69,12 @@ M1 之前 plan 锁的是 "M2 在 `chat_db.ts` 加 `wiki_pages` + `wiki_fts` + `a
      │ 两条路径
      │
      ├─── producer (mail-sync 后端):
-     │      每封 sync 完的邮件 → POST /ingest
-     │      page 路径 `mail/{internal_id}` + scope=mail-agent
+     │      每封 sync 完的邮件 → bulk client put_page   ← 早期 POST /ingest 已废
+     │      slug `sources/email/{internal_id}`（source 由 OAuth client 身份路由, 不是 put_page 参数）
      │      全文 markdown + frontmatter, KOS 自动抽实体并入主图
      │
-     └─── consumer (chat agent harness):
-            chat 工具 kos_query / kos_digest → POST /query, /digest
+     └─── consumer (embedded AI SDK Gateway):
+            六个只读工具 → /chat/kos-call → MCP tools/call   ← 早期 POST /query,/digest 已废，见 §2.1 注
             返回跨域 page list + score + entity refs
             LLM 拿这些 cross-context 决定如何回话
 ```
@@ -83,8 +83,15 @@ M1 之前 plan 锁的是 "M2 在 `chat_db.ts` 加 `wiki_pages` + `wiki_fts` + `a
 
 | 路径 | 触发 | 频率 | 责任 |
 |---|---|---|---|
-| **Producer**（mail-sync 后端 Python） | 每封邮件 sync 到 Notion 后 fire-and-forget | ~10-50 封/天 | 邮件 markdown → KOS `/ingest`；失败仅 warning 不阻塞主同步 |
-| **Consumer**（chat agent harness，Electron 前端 main process） | 用户 chat 时 LLM 调 tool | ~per chat turn | KOS `/query` / `/digest` → tool_result → LLM |
+| **Producer**（mail-sync 后端 Python） | 每封邮件 sync 到 Notion 后 fire-and-forget | ~10-50 封/天 | 邮件 markdown → KOS `put_page`；失败仅 warning 不阻塞主同步 |
+| **Consumer**（embedded AI SDK Gateway，Electron 前端 main process） | 用户 chat 时 LLM 调 tool | ~per chat turn | 六个只读工具 → `/chat/kos-call` → `KOSClient.call_tool` → tool_result → LLM |
+
+> 🔴 **本节的历史写法已过期**（issue #57，2026-07-24）：上面 ASCII 图与早期正文写的 `kos_query`
+> / `kos_digest` → `POST /query, /digest` 是 Sprint 19 的 HTTP 形状，**现已不存在**。当前消费面
+> 是 **MCP `tools/call` 透传**，工具面 = `query` / `search` / `get_page` / `find_experts` /
+> `list_pages` / `get_backlinks` **六个只读工具**（服务端 `_KOS_READ_TOOL_ALLOWLIST` 白名单放行，
+> 其余 403 `E_KOS_TOOL_NOT_ALLOWED`）。`kos_digest` 已不注册。权威工具表见
+> [report-agent-prd.md §3.2](../remote-chat-report/report-agent-prd.md)。
 
 **关键**：写入是后端统一驱动（避免 chat 路径里 LLM 自己决定写什么、写多少 — 图谱污染风险）；读出走 chat agent tool。
 
@@ -140,12 +147,21 @@ KOS 拿到后：
 
 ### 2.3 Chat agent 读 KOS
 
+> 🔴 **本节是 2026-05 M2 的原始设计，工具面已过期**（2026-07-24 标注，issue #57）：`kos_digest` 随
+> legacy TS runtime 于 2026-07-02 删除，**当前不存在这个工具**（`grep kos_digest frontend/src` 零命中）。
+> 现役工具面 = gateway 的 **6 个只读工具**（`kos_query` / `kos_search` / `kos_get_page` /
+> `kos_find_experts` / `kos_list_pages` / `kos_get_backlinks`，均经 serve-api `/chat/kos-call` →
+> `KOSClient.call_tool`），权威表在
+> [`../remote-chat-report/report-agent-prd.md`](../remote-chat-report/report-agent-prd.md) §3.2。
+> **勿据下表把 `kos_digest` 写回 prompt / 工具注册** —— 那正是 issue #57 幽灵工具的成因。
+> 下表与本节后文的 PR-2e/2f 记录保留原貌，仅作历史追溯。
+
 chat harness 暴露 2 个 tool（替换原 plan 的 6 个本地 wiki_* tool）：
 
 | Tool | 调谁 | LLM 看到的描述 |
 |---|---|---|
 | `kos_query` | `POST /query` | 跨域知识检索：人物 / 公司 / 邮件 / 会议 / 手记。query 自然语言，返排序后的 page list + snippet + entity refs。用于"Bob 上次提的 X / Acme 项目最近怎么样 / 我跟这个供应商的历史 / 类似邮件之前怎么处理"。 |
-| `kos_digest` | `POST /digest` | 拉指定 entity 的 digest 卡（people/{slug} / companies/{slug} / projects/{slug}）。用于 chat 开场注入"当前邮件发件人 = Bob @ Acme，KOS 档案显示 ..." |
+| `kos_digest`（**已删**） | `POST /digest` | 拉指定 entity 的 digest 卡（people/{slug} / companies/{slug} / projects/{slug}）。用于 chat 开场注入"当前邮件发件人 = Bob @ Acme，KOS 档案显示 ..." |
 
 **LLM 不调 ingest** — 写入路径由 mail-sync 后端独占，chat 路径只读。这避免 LLM 把 chat 上下文里幻觉的 "事实" 主动塞进图谱。
 

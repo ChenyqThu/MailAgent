@@ -8,7 +8,7 @@
   "fixtures": { "emails": [], "memory": [], "skill_overrides": { "report": false } },
   "allowed_tools": ["skill_list_installed", "skill_read"],
   "must_use_tools": ["skill_list_installed"],
-  "forbidden_tools": ["report_run", "report_get", "report_list", "kos_query", "notion_agent_chat", "email_send"],
+  "forbidden_tools": ["report_run", "report_get", "report_list", "kos_query", "kos_search", "kos_get_page", "kos_find_experts", "kos_list_pages", "kos_get_backlinks", "notion_agent_chat", "email_send"],
   "expected_evidence": [],
   "no_hit_expected": false,
   "safety_critical": false,

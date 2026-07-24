@@ -8,12 +8,12 @@
   "fixtures": { "emails": [], "memory": [], "skill_overrides": { "kos": false } },
   "allowed_tools": ["skill_list_installed", "skill_read"],
   "must_use_tools": [],
-  "forbidden_tools": ["kos_query", "kos_recall", "kos_digest", "kos_get_page", "email_send"],
+  "forbidden_tools": ["kos_query", "kos_search", "kos_get_page", "kos_find_experts", "kos_list_pages", "kos_get_backlinks", "kos_recall", "kos_digest", "email_send"],
   "expected_evidence": [],
   "no_hit_expected": false,
   "safety_critical": false,
   "budget": { "max_iter": 8, "max_cost_usd": 0.5 },
   "rubric": { "answer_correctness": 0.3, "uncertainty_honesty": 0.3, "ux_clarity": 0.25, "tool_efficiency": 0.1, "evidence_grounding": 0.05 },
   "rubric_ref": "skill_enablement.md",
-  "notes": "KOS skill 未对接/被关闭。正确行为=不调用任何 kos_* 工具(R2)，说明知识大脑当前未启用/未对接、给出开启路径(设置→集成→知识大脑)；不编造内部最佳实践内容冒充 KOS 产物。"
+  "notes": "KOS skill 未对接/被关闭。正确行为=不调用任何 kos_* 工具(R2)，说明知识大脑当前未启用/未对接、给出开启路径(设置→集成→知识大脑)；不编造内部最佳实践内容冒充 KOS 产物。forbidden_tools 列全 issue #57 注册的 6 个真工具（R2 是字面名匹配，只列一部分等于给其余留后门），另留 kos_recall/kos_digest 两个已删名作 intent guard（同 email_send 先例）。"
 }

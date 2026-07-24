@@ -26,6 +26,7 @@ import { useMailApi } from './useMailApi'
 import { useEventsStatusStore } from '@shared/state/eventsStatus'
 import {
   planInvalidation,
+  eventInternalIds,
   isMainListKey,
   isEmailSupplementKey,
   isThreadMembersKey,
@@ -118,9 +119,12 @@ export function useEventBridge(): void {
     }
 
     // ---- directive executor ----
+    // ids = 本事件涉及的全部 internal_id (单封事件 1 个; issue #58 的入向已读回收批量
+    // 事件 internal_id=null、id 在 data.internal_ids, 一轮一条不刷屏)。containment 门控
+    // 按整批累积, 否则批量事件只刷列表/徽标, 打开中的详情 toolbar 仍显示未读。
     function runDirective(
       directive: ReturnType<typeof planInvalidation>[number],
-      internalId: number | null
+      ids: readonly number[]
     ): void {
       switch (directive.kind) {
         case 'main-list':
@@ -129,11 +133,11 @@ export function useEventBridge(): void {
           )
           break
         case 'supplements':
-          if (internalId != null) supplementIds.add(internalId)
+          for (const id of ids) supplementIds.add(id)
           debounceInvalidate(SUPPLEMENTS_DEBOUNCE_KEY, flushSupplements)
           break
         case 'thread-members':
-          if (internalId != null) threadMemberIds.add(internalId)
+          for (const id of ids) threadMemberIds.add(id)
           debounceInvalidate(THREAD_MEMBERS_DEBOUNCE_KEY, flushThreadMembers)
           break
         case 'key': {
@@ -148,8 +152,9 @@ export function useEventBridge(): void {
 
     // ---- event → invalidate router ----
     function handleEvent(ev: SseEvent): void {
-      const directives = planInvalidation(ev.event_type, ev.internal_id)
-      for (const directive of directives) runDirective(directive, ev.internal_id)
+      const directives = planInvalidation(ev.event_type, ev.internal_id, ev.data)
+      const ids = eventInternalIds(ev.internal_id, ev.data)
+      for (const directive of directives) runDirective(directive, ids)
     }
 
     const unsubEvent = mailApi.events.onEvent(handleEvent)

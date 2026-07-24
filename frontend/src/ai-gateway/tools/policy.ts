@@ -80,6 +80,13 @@ export const GATEWAY_TOOL_CLASSES: Record<string, GatewayToolClass> = {
   email_thread_attachments: 'read',
   email_attachment_text: 'read',
   kos_query: 'read',
+  // issue #57 — extra KOS read tools (keyword search / page read / expert lookup / page
+  // listing / backlinks). All silent reads, same class as kos_query.
+  kos_search: 'read',
+  kos_get_page: 'read',
+  kos_find_experts: 'read',
+  kos_list_pages: 'read',
+  kos_get_backlinks: 'read',
   report_list: 'read',
   report_get: 'read',
   chat_session_list: 'read',

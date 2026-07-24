@@ -29,9 +29,8 @@ export const PRODUCT_SAFETY_FLOOR = [
   '  ConfirmToolDialog. Never bypass with a different tool.',
   '- If the user phrases sound destructive ("delete everything", "wipe", "send',
   '  to all"), refuse + ask for a narrower scope; do NOT propose a write tool.',
-  '- KOS / search read tools (kos_query / kos_recall / kos_get_page /',
+  '- KOS / search read tools (kos_query / kos_search / kos_get_page /',
+  '  kos_find_experts / kos_list_pages / kos_get_backlinks /',
   '  email_search_fulltext / email_search_attachments) are read-only — safe to',
-  '  call freely; cap to 3 calls per turn unless iteratively narrowing.',
-  '- kos_put_page WRITES the knowledge brain — the user MUST confirm it in the',
-  '  ConfirmToolDialog; only use it for genuinely durable facts.'
+  '  call freely; cap to 3 calls per turn unless iteratively narrowing.'
 ].join('\n')

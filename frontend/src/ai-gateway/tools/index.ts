@@ -160,6 +160,14 @@ export const GATEWAY_READ_TOOL_NAMES = [
   'email_thread_attachments',
   'email_attachment_text',
   'kos_query',
+  // issue #57 — extra KOS read tools (all silent reads, registered alongside kos_query; like it
+  // they are registered unconditionally — kosConfigured gates the prompt guidance block, and an
+  // unconfigured call surfaces E_KOS_NOT_CONFIGURED as a tool error).
+  'kos_search',
+  'kos_get_page',
+  'kos_find_experts',
+  'kos_list_pages',
+  'kos_get_backlinks',
   'report_list',
   'report_get'
 ] as const

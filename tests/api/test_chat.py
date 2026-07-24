@@ -1331,9 +1331,9 @@ def test_kos_call_missing_args_defaults_empty(
             return {"ok": 1}
 
     monkeypatch.setattr("src.api.routers.chat._get_kos_client", lambda: _MockKos())
-    r = chat_client.post("/api/chat/kos-call", json={"name": "list_skills"})
+    r = chat_client.post("/api/chat/kos-call", json={"name": "list_pages"})
     assert r.status_code == 200
-    assert calls == [("list_skills", {})]
+    assert calls == [("list_pages", {})]
 
 
 def test_kos_call_kos_error_502(
@@ -1353,6 +1353,74 @@ def test_kos_call_missing_name_400(chat_client: TestClient) -> None:
     r = chat_client.post("/api/chat/kos-call", json={"args": {}})
     assert r.status_code == 400
     assert r.json()["error"]["code"] == "E_INVALID_ARG"
+
+
+# ── kos-call 服务端只读边界（codex review HIGH，2026-07-24）───────────────────
+#
+# OAuth client 是 read+write scope，所以"只读"必须由端点 allowlist 结构性保证，
+# 而不是靠 gateway 没注册写工具。
+
+
+@pytest.mark.parametrize(
+    "name", ["query", "search", "get_page", "find_experts", "list_pages", "get_backlinks"]
+)
+def test_kos_call_allows_the_six_read_tools(
+    chat_client: TestClient, monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    """allowlist 内的 6 个只读 MCP 名放行，且原样透传给 call_tool。"""
+    calls: list = []
+
+    class _MockKos:
+        def call_tool(self, name, args):
+            calls.append((name, args))
+            return []
+
+    monkeypatch.setattr("src.api.routers.chat._get_kos_client", lambda: _MockKos())
+    r = chat_client.post("/api/chat/kos-call", json={"name": name, "args": {}})
+    assert r.status_code == 200
+    assert calls == [(name, {})]
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "put_page",
+        "delete_page",
+        "add_link",
+        "add_tag",
+        "extract_facts",
+        "forget_fact",
+        "list_skills",
+        "get_skill",
+        "recall",
+        "run_doctor",
+    ],
+)
+def test_kos_call_rejects_non_read_tools(
+    chat_client: TestClient, monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    """写工具 / skill 发现 / admin 面一律 403，且**根本不触达 KOS**（call_tool 零调用）。"""
+    calls: list = []
+
+    class _MockKos:
+        def call_tool(self, name, args):  # pragma: no cover — 断言它不被调到
+            calls.append((name, args))
+            return []
+
+    monkeypatch.setattr("src.api.routers.chat._get_kos_client", lambda: _MockKos())
+    r = chat_client.post("/api/chat/kos-call", json={"name": name, "args": {}})
+    assert r.status_code == 403
+    assert r.json()["error"]["code"] == "E_KOS_TOOL_NOT_ALLOWED"
+    assert calls == []
+
+
+def test_kos_call_allowlist_matches_gateway_read_tools() -> None:
+    """allowlist 就是 gateway 6 个只读工具的 MCP 名 —— 多一个都是新开放面，必须显式改这里。"""
+    from src.api.routers.chat import _KOS_READ_TOOL_ALLOWLIST
+
+    assert _KOS_READ_TOOL_ALLOWLIST == frozenset(
+        {"query", "search", "get_page", "find_experts", "list_pages", "get_backlinks"}
+    )
 
 
 @pytest.fixture

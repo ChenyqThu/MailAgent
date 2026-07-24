@@ -250,8 +250,11 @@ async def chat_config(request: Request):
 
     ``kosConsumerEnabled`` = 原始开关；``kosConfigured`` = 开关 AND OAuth 凭据齐全
     （KOS_MCP_BASE + KOS_OAUTH_CLIENT_ID + KOS_OAUTH_CLIENT_SECRET 三者非空，对齐
-    ``_kos_available``）。gateway `tools/index.ts` 据 ``kosConfigured`` gate KOS 工具
-    注册 —— 开关开着但未对接时不注入，避免叫 AI 用未注册的工具（``[✨ 保存到 KOS]``
+    ``_kos_available``）。🔴 ``kosConfigured`` gate 的是 **KOS 使用指南块是否注入 system
+    prompt**（`stable_prompt.ts` ``buildKosGuidanceBlock``），**不是工具注册** —— gateway 的
+    6 个 KOS 只读工具（issue #57：kos_query / kos_search / kos_get_page / kos_find_experts /
+    kos_list_pages / kos_get_backlinks）在 `tools/index.ts` 由 ``createKosReadTools`` **无条件**
+    展开进 ToolSet，未对接时调用返 ``E_KOS_NOT_CONFIGURED`` 工具错误（``[✨ 保存到 KOS]``
     按钮仍单独由 ``_kos_available`` gate）。
     """
     cfg = get_settings()
@@ -271,8 +274,8 @@ async def chat_config(request: Request):
     # singleton) so changes take effect without a serve-api restart — same pattern as
     # 155eb006 (SYNC_FOLDERS hot-read). 🔴 KOS 开关曾用 cfg.* singleton: serve-api 启动
     # 后才往 app .env 加 MAILAGENT_KOS_CONSUMER_ENABLED → import-time config 缓存 stale
-    # false → /config 永远 kosConfigured:false → renderer createBuiltinTools 不注册 9 个
-    # KOS 工具（chat AI "没有 kos 工具"）。热读 .env 为准、cfg.* 兜底，根治该 stale。
+    # false → /config 永远 kosConfigured:false → gateway 不注入 KOS 使用指南块（chat AI
+    # 不知道有知识大脑可查）。热读 .env 为准、cfg.* 兜底，根治该 stale。
     enabled_models: list = []
     env_vals: Dict[str, Any] = {}
     try:
@@ -315,11 +318,13 @@ async def chat_config(request: Request):
     kos_consumer = _hot_bool(env_vals, "MAILAGENT_KOS_CONSUMER_ENABLED", cfg.kos_consumer_enabled)
     kos_l1_hot = _hot_bool(env_vals, "MAILAGENT_KOS_L1_HOT_BLOCK_ENABLED", cfg.kos_l1_hot_block_enabled)
     kos_time_decay = _hot_bool(env_vals, "MAILAGENT_KOS_TIME_DECAY_ENABLED", cfg.kos_time_decay_enabled)
-    # 🔴「只在启用 AND 对接 KOS 时才注入工具」。kosConsumerEnabled = 纯开关；kosConfigured
+    # 🔴「只在启用 AND 对接 KOS 时才注入使用指南」。kosConsumerEnabled = 纯开关；kosConfigured
     # = 开关 AND OAuth 凭据齐全（endpoint + client_id + secret 三者非空，对齐 _kos_available）。
-    # renderer createBuiltinTools 据 kosConfigured 决定是否注册 9 个 KOS 工具 —— 开关开着却
-    # 没配凭据（新用户 / 未对接）时不注入，避免注册了必然调用失败的工具。凭据热读 .env 为准、
-    # os.environ（启动注入）兜底，与 enabledModels / kos 开关同样支持改 .env 即时生效。
+    # gateway 据 kosConfigured 决定是否把 KOS 使用指南块注入 system prompt —— 开关开着却没配
+    # 凭据（新用户 / 未对接）时不注入，避免叫 AI 去查一个必然失败的知识大脑。**工具本身不受此
+    # gate**：6 个 KOS 只读工具恒注册（`tools/index.ts` 无条件展开 createKosReadTools），未对接
+    # 时调用返 E_KOS_NOT_CONFIGURED。凭据热读 .env 为准、os.environ（启动注入）兜底，
+    # 与 enabledModels / kos 开关同样支持改 .env 即时生效。
     def _kos_cred(k: str) -> str:
         # .env 显式存在该 key（含空字符串）即以 .env 为准 → 用户在 Settings 清空某凭据即时
         # 禁用（kosConfigured 翻 False）；仅 key 完全不在 .env 时才回退 os.environ（serve-api
@@ -824,10 +829,13 @@ async def get_message(request: Request, message_id: int):
 
 # ── KOS 代理端点（V2.1 阶段 3 3b-4：工具板 kosCallTool / saveToKos 的 http 面）─────────────
 #
-# 镜像前端 chat 工具板（ChatToolPlatform）KOS 成员：9 KOS 工具全收敛 kosCallTool(name,args)
-# → 本端点 → src/kos/client.py KOSClient.call_tool；chat:saveToKos → save-to-kos（复刻
-# kos_save.ts：读 chat_db + summarize LLM + put_page）。KOSClient 同步（httpx.Client），用
-# run_in_threadpool 避免阻塞 event loop。HttpChatPlatform（3b-5）fetch 这俩端点。
+# 前端 KOS 工具全收敛成一个通用透传 kosCall(name, args) → 本端点 → src/kos/client.py
+# KOSClient.call_tool；chat:saveToKos → save-to-kos（复刻 kos_save.ts：读 chat_db +
+# summarize LLM + put_page）。KOSClient 同步（httpx.Client），用 run_in_threadpool 避免阻塞
+# event loop。
+# 🔴 调用方现状（2026-07-24，issue #57）：V2.1 写的 ChatToolPlatform / HttpChatPlatform 那套
+# legacy TS runtime 已于 2026-07-02（S3）删除；现在的调用方是 embedded AI SDK Gateway 的
+# 6 个只读 KOS 工具（frontend/src/ai-gateway/tools/kos.ts，domain.kosCall），**不是** 9 个。
 #
 # KOSClient 单例（复用 OAuth token cache 跨请求；env KOS_MCP_BASE/CLIENT_ID/SECRET 由 serve-api
 # 注入）。与 chat:kosAvailable 的 _kos_available() env 检查同源。
@@ -842,13 +850,39 @@ def _get_kos_client() -> KOSClient:
     return _kos_client_singleton
 
 
+# 🔴 服务端只读边界（codex review HIGH，2026-07-24）：mailagent 的 KOS OAuth client 是
+# **read+write** scope，所以本端点若通用透传，任何能触达 serve-api 的调用方都能提交
+# put_page / delete_page / add_link / add_tag / extract_facts / forget_fact 等写工具名 ——
+# "gateway 只注册只读工具"只约束**模型工具面**，不构成系统层边界。故按**精确 allowlist**
+# 收口：只有 gateway 6 个只读 KOS 工具对应的 MCP 名放行，其余一律 E_KOS_TOOL_NOT_ALLOWED(403)。
+#
+# 🔴 新增 gateway KOS 只读工具时必须同步此表（名字 = frontend/src/ai-gateway/tools/kos.ts
+#    里 domain.kosCall(<mcp name>) 的第一参，不带 kos_ 前缀），否则新工具静默 403。
+#    写工具的开放须重新走安全评审 + ADR（见 report-agent-prd.md §3.5），不是在此加一行。
+_KOS_READ_TOOL_ALLOWLIST = frozenset(
+    {
+        "query",
+        "search",
+        "get_page",
+        "find_experts",
+        "list_pages",
+        "get_backlinks",
+    }
+)
+
+
 @router.post("/kos-call", dependencies=[Depends(verify_cf_access)])
 async def kos_call(request: Request):
-    """KOS 通用工具代理（3b-4）：``{name, args}`` → KOSClient.call_tool → caller-friendly value。
+    """KOS 只读工具代理（3b-4）：``{name, args}`` → KOSClient.call_tool → caller-friendly value。
 
-    镜像前端工具板 kosCallTool（query/put_page/recall/find_experts/get_page/list_skills/
-    get_skill/extract_facts 全收敛 tools/call）。data = call_tool 返回（list/dict/str）。KOS 不可达
-    → KOSError 转 502 envelope（code=E_KOS_*，前端工具 duck-type 读 code → LLM fallback 本地 FTS5）。
+    **只读白名单端点**：``name`` 必须命中 ``_KOS_READ_TOOL_ALLOWLIST``（gateway 的 6 个只读
+    KOS 工具，issue #57：query / search / get_page / find_experts / list_pages /
+    get_backlinks），否则 E_KOS_TOOL_NOT_ALLOWED(403)。**写工具（put_page / delete_page /
+    extract_facts / …）与 skill 发现（list_skills / get_skill / recall）都不放行** —— OAuth
+    client 本身是 read+write scope，只读边界必须由服务端结构性保证，不能只靠"gateway 没注册"。
+    （chat 一键存档走 /save-to-kos 的专用 put_page 路径，不经本端点。）data = call_tool 返回
+    （list/dict/str）。KOS 不可达 → KOSError 转 502 envelope（code=E_KOS_*，前端工具 duck-type
+    读 code → LLM fallback 本地 FTS5）。
     """
     try:
         payload = await request.json()
@@ -860,6 +894,14 @@ async def kos_call(request: Request):
     args = payload.get("args")
     if not isinstance(name, str) or not name:
         raise APIError("E_INVALID_ARG", "kos-call requires name:str")
+    if name not in _KOS_READ_TOOL_ALLOWLIST:
+        raise APIError(
+            "E_KOS_TOOL_NOT_ALLOWED",
+            f"kos-call refuses '{name}': only KOS read tools may be proxied",
+            hint="allowed: " + ", ".join(sorted(_KOS_READ_TOOL_ALLOWLIST)),
+            http_status=403,
+            source="kos",
+        )
     if args is None:
         args = {}
     if not isinstance(args, dict):

@@ -9,9 +9,12 @@ import { errEnvelope, mockDomain, okEnvelope, runTool } from './_helpers'
 
 describe('kos_query tool', () => {
   test('massages KOS hits to {count, hits}; passes through when time-decay off', async () => {
+    // Opaque numeric slugs so the shape survives the projection verbatim — that is what makes
+    // "no reshaping when decay is off" observable. A READABLE slug would be fenced (by design,
+    // see kos_read_tools.test.ts), which would hide the pass-through this test is about.
     const hits = [
-      { slug: 'a', score: 2 },
-      { slug: 'b', score: 1 }
+      { slug: '42856', score: 2 },
+      { slug: '42857', score: 1 }
     ]
     const domain = mockDomain(() => okEnvelope(hits))
     const tool = createKosReadTools(domain, [], { timeDecayEnabled: false }).kos_query
@@ -26,8 +29,8 @@ describe('kos_query tool', () => {
   test('reranks by recency when time-decay enabled (newer hit floats up)', async () => {
     const now = Date.now()
     const hits = [
-      { slug: 'old', score: 1, updated_at: now - 200 * 86_400_000 },
-      { slug: 'new', score: 1, updated_at: now }
+      { slug: '1000', score: 1, updated_at: now - 200 * 86_400_000 },
+      { slug: '2000', score: 1, updated_at: now }
     ]
     const domain = mockDomain(() => okEnvelope(hits))
     const tool = createKosReadTools(domain, [], { timeDecayEnabled: true }).kos_query
@@ -35,7 +38,7 @@ describe('kos_query tool', () => {
       hits: Array<{ slug: string }>
     }
     // same base score → the recent hit outranks the 200-day-old one after decay.
-    expect(out.hits[0].slug).toBe('new')
+    expect(out.hits[0].slug).toBe('2000')
   })
 
   test('constructs args {query, limit, expand} + source_id only when present', async () => {

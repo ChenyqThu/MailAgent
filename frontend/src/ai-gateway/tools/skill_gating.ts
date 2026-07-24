@@ -62,6 +62,13 @@ export const COLLISION_EXEMPT_GATEWAY_TOOLS: ReadonlySet<string> = new Set([])
  *  强制新增 gateway 工具时有意识归类（防「新读工具漏门控」复发本 bug —— review M2）。 */
 export const CORE_UNGATED_GATEWAY_TOOLS: ReadonlySet<string> = new Set([
   'kos_query',
+  // issue #57 — extra KOS 读工具（keyword search / page read / expert lookup / page listing /
+  // backlinks）—— 与 kos_query 同为 core（开关权在 kosConfigured 凭据，非 skill 门控），永不 skill-gated。
+  'kos_search',
+  'kos_get_page',
+  'kos_find_experts',
+  'kos_list_pages',
+  'kos_get_backlinks',
   'email_flag',
   'email_archive',
   'email_pin',

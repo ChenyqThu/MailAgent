@@ -16,6 +16,7 @@ import {
   queryDataHoldsAnyId,
   collectMainListIds,
   planInvalidation,
+  eventInternalIds,
   resolveInvalidatedKeys,
   EMAIL_SUPPLEMENT_TAG,
   type EmailQueryCacheEntry
@@ -205,6 +206,190 @@ describe('planInvalidation', () => {
     for (const t of ['outbox.enqueued', 'outbox.failed', 'llm.failed', 'llm.gave_up', 'nonsense']) {
       expect(planInvalidation(t, 7)).toEqual([])
     }
+  })
+})
+
+// ---- issue #58 — batch flag_changed (inbound read reconcile) ----
+//
+// The reconcile converges many emails per round and emits ONE event for the round
+// (internal_id: null, ids in data.internal_ids) instead of one per email. Without
+// consuming those ids the list + badges refreshed but an OPEN email detail kept
+// its stale unread toolbar — its ['email', id] cache was never invalidated.
+
+describe('planInvalidation — batch internal_ids (issue #58 inbound read reconcile)', () => {
+  const batch = (internal_ids: unknown[], ids_truncated = false): Record<string, unknown> => ({
+    target: 'local',
+    converged: internal_ids.length,
+    reason: 'inbound_read_reconcile',
+    internal_ids,
+    ids_truncated
+  })
+
+  test('one detail key per converged id, plus id-gated supplements + thread-members', () => {
+    expect(planInvalidation('email.flag_changed', null, batch([11, 22, 33]))).toEqual([
+      { kind: 'main-list' },
+      { kind: 'key', key: ['mailboxes'] },
+      { kind: 'supplements' },
+      { kind: 'thread-members' },
+      { kind: 'key', key: ['email', 11] },
+      { kind: 'key', key: ['email', 22] },
+      { kind: 'key', key: ['email', 33] }
+    ])
+  })
+
+  test('ids_truncated → degrade to the whole ["email"] prefix (no partial fan-out)', () => {
+    expect(planInvalidation('email.flag_changed', null, batch([11, 22], true))).toEqual([
+      { kind: 'main-list' },
+      { kind: 'key', key: ['mailboxes'] },
+      { kind: 'key', key: ['email'] }
+    ])
+  })
+
+  test('an over-cap id list degrades the same way (backend regression cannot unbound us)', () => {
+    const tooMany = Array.from({ length: 201 }, (_, i) => i + 1)
+    expect(planInvalidation('email.flag_changed', null, batch(tooMany))).toEqual([
+      { kind: 'main-list' },
+      { kind: 'key', key: ['mailboxes'] },
+      { kind: 'key', key: ['email'] }
+    ])
+    // …and exactly at the cap it is still a per-id fan-out.
+    const atCap = Array.from({ length: 200 }, (_, i) => i + 1)
+    expect(planInvalidation('email.flag_changed', null, batch(atCap))).toHaveLength(4 + 200)
+  })
+
+  test('an empty / malformed internal_ids keeps the old no-id behaviour', () => {
+    for (const data of [
+      batch([]),
+      { reason: 'inbound_read_reconcile' },
+      { internal_ids: 'nope' },
+      { internal_ids: null }
+    ]) {
+      expect(planInvalidation('email.flag_changed', null, data)).toEqual([
+        { kind: 'main-list' },
+        { kind: 'key', key: ['mailboxes'] }
+      ])
+    }
+  })
+
+  test('non-numeric entries are dropped, not passed into a query key', () => {
+    expect(planInvalidation('email.flag_changed', null, batch([1, '2', null, NaN, 3]))).toEqual([
+      { kind: 'main-list' },
+      { kind: 'key', key: ['mailboxes'] },
+      { kind: 'supplements' },
+      { kind: 'thread-members' },
+      { kind: 'key', key: ['email', 1] },
+      { kind: 'key', key: ['email', 3] }
+    ])
+  })
+
+  test('a single-id event ignores data entirely (internal_id wins)', () => {
+    expect(planInvalidation('email.flag_changed', 42, batch([11, 22]))).toEqual(
+      planInvalidation('email.flag_changed', 42)
+    )
+  })
+
+  test('every OTHER event type is byte-identical with or without data', () => {
+    // The new 3rd parameter must be inert everywhere except the batch shape above:
+    // passing a batch-looking payload to any other event changes nothing.
+    const cases: Array<[string, number | null]> = [
+      ['email.synced', 7],
+      ['email.failed', 7],
+      ['email.dead_letter', 7],
+      ['email.flag_changed', 7],
+      ['email.pin_changed', 7],
+      ['email.pin_changed', null],
+      ['outbox.done', 7],
+      ['outbox.done', null],
+      ['llm.success', 7],
+      ['folder.synced', null],
+      ['calendar.synced', null],
+      ['outbox.enqueued', 7],
+      ['nonsense', null]
+    ]
+    for (const [type, id] of cases) {
+      expect(planInvalidation(type, id, batch([11, 22]))).toEqual(planInvalidation(type, id))
+      expect(planInvalidation(type, id, batch([11, 22], true))).toEqual(planInvalidation(type, id))
+    }
+    // The pre-batch signature (2 args) also still behaves exactly as before.
+    expect(planInvalidation('email.flag_changed', null)).toEqual([
+      { kind: 'main-list' },
+      { kind: 'key', key: ['mailboxes'] }
+    ])
+  })
+})
+
+describe('eventInternalIds — the id source shared by the planner and the bridge', () => {
+  test('a single-id event yields just that id', () => {
+    expect(eventInternalIds(42, undefined)).toEqual([42])
+    // present data is ignored when internal_id is set
+    expect(eventInternalIds(42, { internal_ids: [1, 2] })).toEqual([42])
+  })
+
+  test('a batch event yields data.internal_ids, non-numbers dropped', () => {
+    expect(eventInternalIds(null, { internal_ids: [1, '2', null, NaN, 3] })).toEqual([1, 3])
+  })
+
+  test('no id and no batch → empty (nothing to gate containment on)', () => {
+    expect(eventInternalIds(null, undefined)).toEqual([])
+    expect(eventInternalIds(null, null)).toEqual([])
+    expect(eventInternalIds(null, { reason: 'x' })).toEqual([])
+  })
+})
+
+describe('resolveInvalidatedKeys — batch event fan-out', () => {
+  const threadKey = ['email', 'thread', 't1'] as const
+
+  test('every converged id gets its detail key invalidated', () => {
+    const keys = resolveInvalidatedKeys('email.flag_changed', null, snapshot(), {
+      internal_ids: [1, 2, 9],
+      ids_truncated: false
+    })
+    const sigs = exactKeySigs(keys)
+    expect(sigs).toContain(JSON.stringify(['email', 1]))
+    expect(sigs).toContain(JSON.stringify(['email', 2]))
+    expect(sigs).toContain(JSON.stringify(['email', 9]))
+    expect(sigs).toContain(JSON.stringify(['mailboxes']))
+  })
+
+  test('supplement containment gates on the WHOLE batch (main-list-covered ids excluded)', () => {
+    // 1 and 2 live in the main list (covered → their supplements are suppressed);
+    // 9 is pinned-only, so the pinned supplement must refetch off the same batch.
+    const keys = resolveInvalidatedKeys('email.flag_changed', null, snapshot(), {
+      internal_ids: [1, 2, 9]
+    })
+    expect(emailFamilyKeys(keys)).toContainEqual(KEY.pinned)
+    expect(emailFamilyKeys(keys)).toContainEqual(KEY.mainList)
+    // cross holds only id 3, which is not in the batch → untouched.
+    expect(emailFamilyKeys(keys)).not.toContainEqual(KEY.cross)
+  })
+
+  test('thread-members refetch for a batch id (the open thread sidebar reconciles)', () => {
+    const caches: EmailQueryCacheEntry[] = [
+      { queryKey: KEY.mainList, data: [row(2)], active: true },
+      { queryKey: threadKey, data: [row(1), row(5)], active: true }
+    ]
+    const keys = resolveInvalidatedKeys('email.flag_changed', null, caches, {
+      internal_ids: [5, 77]
+    })
+    expect(keys).toContainEqual(threadKey)
+  })
+
+  test('ids_truncated invalidates the ["email"] prefix — which covers detail AND thread caches', () => {
+    const keys = resolveInvalidatedKeys('email.flag_changed', null, snapshot(), {
+      internal_ids: [1, 2],
+      ids_truncated: true
+    })
+    const sigs = exactKeySigs(keys)
+    expect(sigs).toContain(JSON.stringify(['email']))
+    // No partial per-id keys — the prefix already covers them and a partial list
+    // would imply the untruncated ids are the whole story.
+    expect(sigs).not.toContain(JSON.stringify(['email', 1]))
+  })
+
+  test('with no data the fan-out is exactly what it was before batch support', () => {
+    expect(resolveInvalidatedKeys('email.flag_changed', 2, snapshot(), undefined)).toEqual(
+      resolveInvalidatedKeys('email.flag_changed', 2, snapshot())
+    )
   })
 })
 

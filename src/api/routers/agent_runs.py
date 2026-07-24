@@ -50,7 +50,9 @@ router = APIRouter(prefix="/api/agent-runs", tags=["agent-runs"])
 # 🔴 默认安全集：type='custom' 且 tool_policy_json 为 NULL / 缺 allowed_tools 时投影此集 ——
 # 语义从「NULL=不收窄」改为「NULL=默认安全集」（对 ADR-003 D6 的**显式修订**，codex P1-1：
 # 「Settings 模板不勾 kos_query」挡不住 API 直建/空策略行，收窄必须是投影层结构性保证）。
-# 排除在默认集外（owner 显式勾选才有）：kos_query（trusted-sink 残余面）、chat_session_*
+# 排除在默认集外（owner 显式勾选才有）：kos_*（trusted-sink 残余面 —— issue #57 起是 6 个只读
+# 工具 kos_query/search/get_page/find_experts/list_pages/get_backlinks，整族同待遇：headless run
+# 的输入本就是 untrusted 邮件，KOS 返回的是他人可写的知识库全文且现状不套 UNTRUSTED 围栏）、chat_session_*
 # （历史会话=二阶注入面）、agent_profile_read/history（身份文档不进 untrusted 上下文）、
 # discover_skills / skill_read / report_*（headless 默认无需求）、calendar 三写
 # （calendar_event_reschedule/rsvp/delete —— 恒卡不免审，但删除不可恢复 / rsvp 真发不可撤回
@@ -108,7 +110,15 @@ HEADLESS_TOOL_OPTIONS: tuple[tuple[str, str], ...] = (
     ("email_search_attachments", "read"),
     ("email_search_fulltext", "read"),
     ("email_thread_attachments", "read"),
+    # KOS 只读族（issue #57：kos_query 之外新增 5 个只读工具，class 与 kos_query 同为 read；
+    # 注册进 headless 地板 ≠ 默认可用 —— 与 kos_query 一样不在 DEFAULT_CUSTOM_AGENT_ALLOWED_TOOLS，
+    # owner 显式勾选才进某个 agent 的工具面）。
+    ("kos_find_experts", "read"),
+    ("kos_get_backlinks", "read"),
+    ("kos_get_page", "read"),
+    ("kos_list_pages", "read"),
     ("kos_query", "read"),
+    ("kos_search", "read"),
     ("report_get", "read"),
     ("report_list", "read"),
     ("skill_read", "read"),
