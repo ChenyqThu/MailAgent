@@ -8,7 +8,8 @@
 // 本区呈现的能力族（权威盘点见 .trellis/tasks/07-22-capability-visibility-panorama/progress.md §1）：
 //   恒可用核心（锁定 · 无 flag）：
 //     · 核心邮件操作 email_flag/archive/pin/draft_reply/resync + prepare_send（写操作经审批卡保护）
-//     · KOS 查询 kos_query（core read，恒注册；效果取决于是否配好 Gbrain）
+//     · KOS 知识大脑 六件只读 kos_query/search/get_page/find_experts/list_pages/get_backlinks
+//       （core read，恒注册；效果取决于是否配好 Gbrain。issue #57 前只有 kos_query 一件）
 //   env-flag 锁定族（on=锁定态 / off=禁用态，运行时不可在此切换）：
 //     · 会话检索 chat_session_*                 (MAILAGENT_OPENNESS_SESSION_TOOLS, /chat/config)
 //     · Agent 自配置 agent_profile_*/agent_memory_update (MAILAGENT_OPENNESS_CONFIG_TOOLS, /chat/config)
@@ -277,7 +278,9 @@ export function SystemCapabilitiesSection(): React.ReactElement {
       title: t('settings.systemCapabilities.kos.title'),
       desc: t('settings.systemCapabilities.kos.desc'),
       source: { kind: 'always', note: t('settings.systemCapabilities.kos.control') },
-      toolCount: 1,
+      // issue #57 起 6 件（query/search/get_page/find_experts/list_pages/get_backlinks）。
+      // 与 gateway 注册面同步的权威清单见 tools/kos.ts + agents/toolGroups.ts 的 knowledge 组。
+      toolCount: 6,
       enabled: true
     },
     {

@@ -1675,8 +1675,8 @@
         "control": "Core capability · always available; every write executes only after an approval card."
       },
       "kos": {
-        "title": "KOS query",
-        "desc": "Lets the assistant query the Gbrain cross-domain knowledge graph (kos_query).",
+        "title": "KOS knowledge brain",
+        "desc": "Lets the assistant search and read the Gbrain cross-domain knowledge graph: semantic retrieval, keyword full-text, read a whole page, find domain experts, list pages by type/tag, and see what links to a page.",
         "control": "Core read · always registered; retrieval depends on whether Gbrain is configured."
       },
       "selfMount": {
