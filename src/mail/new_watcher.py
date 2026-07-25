@@ -97,6 +97,12 @@ READ_RECONCILE_LOCK_TIMEOUT_SEC = 2.0
 # (≤ READ_RECONCILE_LOCK_TIMEOUT_SEC)」≈ 5s, 而不是随 chunk 长度线性增长。
 READ_RECONCILE_CHUNK_BUDGET_SEC = 3.0
 
+# ---- KOS 失败重试 (issue #59, 主 tick 第 6c 步) ------------------------------
+# 每 tick 处理上限, 镜像 6b _process_llm_retry_queue 的 get_ready_for_retry(limit=3):
+# 3 封/5s tick ≈ 0.6/s, 与 KOS 限流 (50 req/15min, client.py 头注) 天然匹配;
+# 101 封积压 (2026-07-24 实测) 约 3 分钟排干, 无需"恢复轮放宽 chunk"特例。
+KOS_RETRY_BATCH_PER_TICK = 3
+
 
 def should_skip_feishu_for_folder(mailbox: str, notify_enabled: frozenset) -> bool:
     """L3 通知降噪: 自定义文件夹**默认不通知**, 仅 notify_enabled 内的才通知。
@@ -332,6 +338,9 @@ class NewWatcher:
         # 入向已读回收 (issue #58) 的独立低频节拍游标 (monotonic 秒)。None = 从未跑过,
         # 首次进入即执行; 与 5s radar poll 解耦, 间隔见 inbound_read_reconcile_interval_sec。
         self._last_inbound_read_reconcile_at: Optional[float] = None
+        # KOS 失败重试 (issue #59, 第 6c 步) 的不健康冷却截止 (monotonic 秒):
+        # 探活失败后到此刻之前整段跳过, 不必每个 5s tick 都对着倒掉的 KOS 探活。
+        self._kos_unhealthy_until: Optional[float] = None
         # task 06-10 (prd Fix 2d): fire-and-forget hook task (pp/llm/kos) 的强
         # 引用集合 — Python 3.11 asyncio loop 只弱引用 task, 无强引用的 pending
         # task 会被 GC 中途回收 (生产实证见 start() 里 _rollout_flush_task 注释)。
@@ -645,6 +654,10 @@ class NewWatcher:
         # 6b. 处理 LLM 失败重试队列（若启用本地 LLM）
         await self._process_llm_retry_queue()
 
+        # 6c. 处理 KOS 入库失败重试队列 (issue #59, 若启用 KOS ingest) — 镜像 6b 的
+        # 队列驱动形状 (limit=3/tick, next_retry_at 指数退避排程), 前置健康探活。
+        await self._process_kos_retry_queue()
+
         # 7. 检测 read/flagged 变化并同步到 Notion
         #
         # Sprint 15 SSoT inversion 下 sync_store 是状态真源, Mail.app 是 fanout 派发
@@ -955,6 +968,103 @@ class NewWatcher:
                     f"intent 或期间被别处写过), 下轮重判"
                 )
         return converged
+
+    async def _process_kos_retry_queue(self) -> None:
+        """6c: KOS 入库失败重试 (issue #59, MAILAGENT_KOS_RETRY_ENABLED 默认开)。
+
+        生产实测 (2026-07-24): KOS 卡死 35 分钟 → producer 推送全部失败且 fire-and-
+        forget 直接丢弃 → 101 封邮件 KOS 侧永久空洞 (+69 条图谱边挂不上), 只能手动
+        bulk_ingest 找回。台账 (kos_ingest_log, v41) 落地后, 这里对 status='failed'
+        且到期 (next_retry_at <= now) 的行做队列驱动补偿。
+
+        形状**镜像 6b _process_llm_retry_queue** (llm_processing 是逐字对应的现成
+        模板): 每 tick 一次轻量 SQLite 队列探测, 空即返; 有到期行才处理, 上限
+        KOS_RETRY_BATCH_PER_TICK=3 (≈0.6/s, 与 KOS 50 req/15min 限流天然匹配;
+        101 封积压约 3 分钟排干)。不新起 worker、不进 supervise 心跳。
+        与 6b 的两点差异 (KOS 是外部服务, LLM 是本地):
+          - R4 前置健康探活: 不可用 → 本 tick 整体跳过、不逐封试 (故障期逐封重试
+            会把每行 retry_count 白烧到上限转 dead, 等于重试机制自废), 并进入
+            kos_retry_interval_sec (默认 300s) 冷却 —— 不必每个 5s tick 都对着
+            倒掉的 KOS 探活。探活结果落 sync_state kos.health.*。
+          - 超限终态是台账自己的 'dead' (kos_ingest_log 内, 由 record_failure 判),
+            与 email_outbox 的 dead_letter 告警体系完全解耦 (镜像 llm 的 gave_up
+            不触发死信告警的纪律)。
+
+        MAILAGENT_KOS_INGEST_ENABLED=false 时整段不激活 (链路字节级 inert)。
+        SQLite 读与探活/重推的网络调用全部 to_thread / 已在 producer 内 to_thread。
+        """
+        if not getattr(settings, "mailagent_kos_ingest_enabled", False):
+            return
+        # 默认开 (D1 有意偏离"新功能默认关"惯例): 重试是纯补偿, 只重推本该推、且已
+        # 因 put_page 覆盖写幂等的内容; ingest 总闸关着时整段不激活, 灰度价值≈0。
+        if not getattr(settings, "kos_retry_enabled", True):
+            return
+        # 不健康冷却: 上次探活失败后 interval 内直接跳过 (连队列探测都省)
+        now = time.monotonic()
+        if self._kos_unhealthy_until is not None and now < self._kos_unhealthy_until:
+            return
+
+        from src.kos import ingest_log
+        from src.kos.producer import make_bulk_kos_client, repush_stored_email_to_kos
+
+        db_path = str(self.sync_store.db_path)
+        try:
+            ready = await asyncio.to_thread(
+                ingest_log.claim_due_retries, db_path, KOS_RETRY_BATCH_PER_TICK
+            )
+        except Exception as e:  # noqa: BLE001 — 补偿层, 绝不炸 watcher (镜像 6b)
+            logger.warning(f"[kos-retry] queue probe failed: {e}")
+            return
+        if not ready:
+            return
+        client = make_bulk_kos_client()
+        if not client.configured:
+            logger.debug("[kos-retry] bulk client not configured, skip")
+            return
+
+        # R4 健康探活 (只在有到期行时发, 不给 KOS 发无谓请求)
+        health_err = ""
+        try:
+            h = await asyncio.to_thread(client.health)
+            healthy = isinstance(h, dict) and h.get("status") == "ok"
+            if not healthy:
+                health_err = f"health status={h.get('status') if isinstance(h, dict) else h!r}"
+        except Exception as e:  # noqa: BLE001 — 探活失败 = 不健康, 不上抛
+            healthy = False
+            health_err = str(e)
+        try:
+            recovered = await asyncio.to_thread(
+                ingest_log.record_health, db_path, healthy, health_err
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[kos-retry] record_health failed: {e}")
+            recovered = False
+        if not healthy:
+            cooldown = max(1, int(getattr(settings, "kos_retry_interval_sec", 300)))
+            self._kos_unhealthy_until = now + cooldown
+            logger.warning(
+                f"[kos-retry] KOS 不可用 ({health_err}), 跳过并冷却 {cooldown}s "
+                f"(到期 {len(ready)} 封原地等待, retry_count 不增长)"
+            )
+            return
+        if recovered:
+            logger.info("[kos-retry] KOS 已恢复, 积压将按 tick 逐批补偿")
+
+        priority_floor = getattr(settings, "kos_ingest_priority_floor", "normal")
+        require_labeled = bool(getattr(settings, "kos_require_labeled", False))
+        logger.info(f"[kos-retry] retrying {len(ready)} failed KOS push(es)")
+        for iid in ready:
+            outcome = await repush_stored_email_to_kos(
+                db_path, iid, client=client,
+                priority_floor=priority_floor, require_labeled=require_labeled,
+            )
+            if outcome.failed:
+                # 台账已按退避重排 / 转 dead; 本 tick 剩余的照常试 (batch 只有 3,
+                # 真是 KOS 又倒了的话, 下个 tick 的探活会拦住并进入冷却)。
+                logger.debug(
+                    f"[kos-retry] internal_id={iid} still failing "
+                    f"code={outcome.error_code}"
+                )
 
     async def _reconcile_drafts(self):
         """草稿箱对账 (davmail-only, DRAFTS_SYNC_ENABLED)。
@@ -1605,7 +1715,7 @@ class NewWatcher:
 
             async def _bg():
                 try:
-                    result = await push_email_to_kos(
+                    outcome = await push_email_to_kos(
                         email_obj,
                         internal_id,
                         body_markdown=body_markdown,
@@ -1617,11 +1727,20 @@ class NewWatcher:
                         priority_floor=priority_floor,
                         require_labeled=require_labeled,
                         dry_run=dry_run,
+                        db_path=str(self.sync_store.db_path),
                     )
-                    if result is None:
+                    # issue #59: 失败与跳过必须分级 —— 老实现两者都返 None 一律记
+                    # debug "skipped", 101 页空洞在日志层面伪装成正常跳过。
+                    if outcome.failed:
+                        logger.warning(
+                            f"[kos-hook] push FAILED internal_id={internal_id} "
+                            f"code={outcome.error_code} (已记台账, 瞬时错误由重试"
+                            f"扫描补偿): {outcome.error}"
+                        )
+                    elif outcome.skipped:
                         logger.debug(
                             f"[kos-hook] skipped internal_id={internal_id} "
-                            "(priority floor / not configured)"
+                            f"({outcome.reason})"
                         )
                 except Exception as e:
                     logger.warning(

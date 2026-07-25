@@ -1319,6 +1319,30 @@
     "selftestOk": "Gateway healthy",
     "selftestFail": "Gateway unreachable"
   },
+  "kos": {
+    "ingest": {
+      "title": "Knowledge base ingest",
+      "pushed": "Pushed",
+      "failed": "Failed",
+      "pendingRetry": "{n} awaiting retry (all-time)",
+      "skipped": "Skipped",
+      "skippedHint": "Filtered by priority floor",
+      "dead": "Needs attention (all-time)",
+      "deadHint": "Needs manual attention — see the error codes below",
+      "deadNone": "No manual attention needed",
+      "errorDist": "Error codes",
+      "errorNone": "No failures in this window",
+      "errorUnavailable": "Error codes available after the backend restarts and migrates",
+      "trend": "Daily pushes",
+      "lastSuccess": "Last success",
+      "lastSuccessNone": "no record yet",
+      "ago": "{t} ago",
+      "healthLastCheck": "Last check",
+      "healthOk": "reachable",
+      "healthDown": "unreachable",
+      "healthUnknown": "not probed"
+    }
+  },
   "calendar": {
     "title": "Recurring meetings",
     "subtitle": "Invitations received since {since}; replay each one to the Notion calendar.",

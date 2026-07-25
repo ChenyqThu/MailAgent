@@ -25,6 +25,7 @@ from typing import Any, Optional
 
 from loguru import logger
 
+from src.kos import ingest_log
 from src.kos.client import KOSClient, KOSError
 from src.kos.producer import (
     LABEL_MISSING,
@@ -61,33 +62,32 @@ class KOSBulkIngester:
         self.require_labeled = require_labeled
         self._ensure_log_table()
 
-    # ---- resume 追踪表 (独立, 不碰主 schema migration) ----
+    # ---- resume 追踪表 (v41 起升格正式表, DDL 单源在 sync_store; 这里是幂等双保险:
+    # bulk 可对任意 --db-path 独立跑, 那个库未必被 SyncStore 迁移过) ----
     def _ensure_log_table(self) -> None:
+        from src.mail.sync_store import ensure_kos_ingest_log_schema
+
         conn = sqlite3.connect(self.db_path, timeout=30)
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS kos_ingest_log (
-                internal_id INTEGER PRIMARY KEY,
-                slug TEXT,
-                status TEXT,            -- pushed / failed
-                chunks INTEGER,
-                error TEXT,
-                pushed_at REAL
-            )
-            """
-        )
+        ensure_kos_ingest_log_schema(conn.cursor())
         conn.commit()
         conn.close()
 
     def _candidates(
         self, limit: Optional[int], retry_failed: bool, require_body: bool
     ) -> list[int]:
-        """synced 且未 pushed 的 internal_id (retry_failed 时也含 failed)。"""
+        """synced 且未 pushed 的 internal_id。
+
+        issue #59 起「done = 仅 status='pushed'」: 增量 producer 现在也写台账,
+        若沿用老判据 (在表里即 done), producer 写的 failed/skipped 行会被默认的
+        bulk 跑永久排除 —— 用户想用 bulk 补漏时, 恰恰漏掉的就是需要补的那批
+        (failed/dead), 以及被增量 floor 过滤、想用更低 floor 回填的那批 (skipped)。
+        'pushed' 行两路径共认 → bulk 不再重推增量已成功的, 不白付整页 re-embed。
+        retry_failed 参数保留 (CLI 兼容): v41 起默认判据已含 failed/dead/skipped,
+        两分支等价。
+        """
         conn = sqlite3.connect(self.db_path, timeout=30)
         done_clause = (
             "internal_id NOT IN (SELECT internal_id FROM kos_ingest_log WHERE status='pushed')"
-            if retry_failed
-            else "internal_id NOT IN (SELECT internal_id FROM kos_ingest_log)"
         )
         body_join = (
             "JOIN email_body eb ON eb.internal_id = em.internal_id "
@@ -181,21 +181,6 @@ class KOSBulkIngester:
             return page.get("source_id") or "?"
         return "?"
 
-    def _log(self, internal_id: int, slug: str, status: str, chunks: int, error: str) -> None:
-        conn = sqlite3.connect(self.db_path, timeout=30)
-        conn.execute(
-            """
-            INSERT INTO kos_ingest_log (internal_id, slug, status, chunks, error, pushed_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT(internal_id) DO UPDATE SET
-                slug=excluded.slug, status=excluded.status,
-                chunks=excluded.chunks, error=excluded.error,
-                pushed_at=excluded.pushed_at
-            """,
-            (internal_id, slug, status, chunks, error or None, time.time()),
-        )
-        conn.commit()
-        conn.close()
 
     def run(
         self,
@@ -275,10 +260,21 @@ class KOSBulkIngester:
             try:
                 result = self._put_with_retry(slug, content)
                 chunks = result.get("chunks", 0) if isinstance(result, dict) else 0
-                self._log(iid, slug, "pushed", chunks, "")
+                ingest_log.record_pushed(self.db_path, iid, slug, int(chunks or 0), "bulk")
                 stats["pushed"] += 1
             except (KOSError, Exception) as e:
-                self._log(iid, slug, "failed", 0, str(e)[:300])
+                # issue #59: bulk 失败也进统一台账 (瞬时 → 排进重试队列, 由增量重试
+                # worker 低频补; 永久/超限 → dead)。_put_with_retry 已就地退避过
+                # 瞬时错误, 到这里的瞬时错误是退避耗尽后的残留。
+                code = e.code if isinstance(e, KOSError) else "E_KOS_UNEXPECTED"
+                transient = (
+                    ingest_log.is_transient_error(code, getattr(e, "status", None))
+                    if isinstance(e, KOSError)
+                    else True
+                )
+                ingest_log.record_failure(
+                    self.db_path, iid, slug, code, str(e), "bulk", transient
+                )
                 stats["failed"] += 1
                 logger.warning(f"[bulk] push failed iid={iid} {slug}: {e}")
                 time.sleep(self._sleep)

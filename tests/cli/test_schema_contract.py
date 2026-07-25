@@ -305,6 +305,18 @@ class TestSchemaContract:
         schema, registry = schema_loader("llm-stats.schema.json")
         validate(instance=payload, schema=schema, registry=registry)
 
+    def test_kos_stats_matches_schema(
+        self, cli_runner, cli_env, seeded_db, schema_loader,
+    ):
+        from jsonschema import validate
+
+        result = _invoke(cli_runner, "kos", "stats", "-o", "json",
+                         db_path=seeded_db)
+        assert result.exit_code == 0, result.output
+        payload = _last_json(result.output)
+        schema, registry = schema_loader("kos-stats.schema.json")
+        validate(instance=payload, schema=schema, registry=registry)
+
     def test_llm_compare_paths_dry_run_matches_schema(
         self, cli_runner, cli_env, seeded_db, schema_loader,
     ):

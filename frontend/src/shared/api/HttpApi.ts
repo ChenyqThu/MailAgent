@@ -79,6 +79,7 @@ import type {
   FolderWhitelistResult,
   JobEnqueueResult,
   JobRecord,
+  KosStatsData,
   ListOpts,
   LlmRunOpts,
   LlmSelfTestData,
@@ -545,6 +546,13 @@ export class HttpApi implements MailApi {
           provider: opts?.provider ?? undefined
         }
       })
+  }
+
+  // issue #59 — KOS 入库台账统计。桌面走 IPC kos:stats → CLI, 远程 web 走这里;
+  // 两端最终都落到同一个 src/kos/stats.py 聚合函数, SQL 不手抄第二份。
+  kos = {
+    stats: (days = 7): Promise<KosStatsData> =>
+      this.req<KosStatsData>('GET', '/kos/stats', { query: { days } })
   }
 
   // Sprint-15 write path is email.flag. The legacy notion.updateFlag endpoint

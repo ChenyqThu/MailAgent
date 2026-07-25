@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mailagent.local/cli-schema/kos-stats.schema.json",
+  "title": "mailagent kos stats",
+  "description": "issue #59 — kos_ingest_log 状态分布 + 失败错误码分布 + 重试积压 + sync_state kos.* 健康。聚合单源 src/kos/stats.py::collect_kos_stats (CLI 与 serve-api GET /api/kos/stats 共用)。",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "schema_version", "data", "meta"],
+      "properties": {
+        "status": {"const": "success"},
+        "schema_version": {"type": "integer", "minimum": 1},
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled", "days", "total", "by_status", "by_error_code",
+            "pending_retry", "dead_count", "health", "daily", "_source"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "producer 面是否已启用 = MAILAGENT_KOS_INGEST_ENABLED 且 KOS_MCP_BASE / MAILAGENT_BULK_CLIENT_ID / MAILAGENT_BULK_CLIENT_SECRET 三者非空。env 派生, 与 DB 无关; 前端据此整区显隐。注意不是 chat 侧 consumer 判据 (那套读 KOS_OAUTH_CLIENT_*)。"
+            },
+            "days": {"type": "integer", "description": "镜像请求的窗口宽度; -1 = 全量。"},
+            "since_ts": {"type": ["number", "null"], "description": "days>0 时的下界 epoch; 全量为 null。"},
+            "total": {"type": "integer", "minimum": 0, "description": "窗口内台账行数 (= by_status 之和)。"},
+            "by_status": {
+              "type": "object",
+              "description": "pushed / failed / dead / skipped 四键恒在 (无数据时为 0); 值域外的 status 原样附加。",
+              "additionalProperties": {"type": "integer", "minimum": 0}
+            },
+            "by_error_code": {
+              "type": "object",
+              "description": "失败态 (failed + dead) 行的 error_code 分布; 空 error_code 归入 '(null)' 桶。_source=schema_stale 时恒空 (老形状表没有该列)。",
+              "additionalProperties": {"type": "integer", "minimum": 0}
+            },
+            "pending_retry": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "status='failed' 的行数。🔴 恒全量, 不受 days 窗口影响 —— 10 天前失败的行今天照样要重试。"
+            },
+            "dead_count": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "status='dead' (超重试上限 / 永久类错误码) 的行数, 需人工介入。同样恒全量。"
+            },
+            "last_success_ts": {
+              "type": ["number", "null"],
+              "description": "最近一次成功推送的 epoch, 来自 sync_state 的 kos.last_success_at。🔴 是台账记录的时间, 不是实时探测 —— producer 修复上线前会长期停在一个很旧的值。"
+            },
+            "health": {
+              "type": ["object", "null"],
+              "description": "sync_state kos.health.* 的投影。🔴 从未探活 → null (不是字段全 null 的对象) —— 前端判据是 health==null ? 未探测 : health.ok ? 正常 : 异常, 返回 ok 缺席的对象会让刚升级的机器全部误报「KOS 异常」。",
+              "additionalProperties": false,
+              "required": ["ok", "checked_at"],
+              "properties": {
+                "ok": {
+                  "type": "boolean",
+                  "description": "最近一次探活是否成功 (由 sync_state 的 'ok'|'error' 折成 bool; 「从未探活」由外层 null 表达)。"
+                },
+                "checked_at": {"type": ["number", "null"], "description": "最近一次探活时间 (epoch)。"},
+                "detail": {
+                  "type": ["string", "null"],
+                  "description": "契约外附加字段: 探活失败原因 (来自 sync_state 键 kos.health.error)。"
+                },
+                "consecutive_failed_rounds": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "契约外附加字段: 连续探活失败轮次 (来自 sync_state 键 kos.health.consecutive_failures)。"
+                }
+              }
+            },
+            "daily": {
+              "type": "array",
+              "description": "按本地日期分桶。days>0 时补齐空日 (Sparkline 要等距); days=-1 只返有数据的日子。台账 internal_id 是 PK、重推覆盖上一次记录, 故这是当前状态的近似分布而非历史事件流。",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["date", "pushed", "failed"],
+                "properties": {
+                  "date": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$"},
+                  "pushed": {"type": "integer", "minimum": 0},
+                  "failed": {"type": "integer", "minimum": 0}
+                }
+              }
+            },
+            "_source": {
+              "type": "string",
+              "enum": ["live_query", "table_missing", "schema_stale"],
+              "description": "table_missing = kos_ingest_log 不存在 (全零); schema_stale = 表在但是 v41 前的 6 列老形状 (除 by_error_code 恒空外照常统计)。"
+            }
+          }
+        },
+        "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "schema_version", "error", "meta"],
+      "properties": {
+        "status": {"const": "error"},
+        "schema_version": {"type": "integer", "minimum": 1},
+        "error": {"$ref": "_common.schema.json#/$defs/error"},
+        "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+      }
+    }
+  ]
+}

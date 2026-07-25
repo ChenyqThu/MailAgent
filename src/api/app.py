@@ -384,6 +384,7 @@ from src.api.routers import (  # noqa: E402
     folder,
     island,
     jobs,
+    kos,
     llm,
     llm_providers,
     reports,
@@ -399,6 +400,9 @@ app.include_router(llm.router)
 # + /snapshot（verify_local_token, 解密 key 仅供同机 embedded gateway）+ per-provider 模型
 # 发现 / 连通性测试。seed 迁移惰性触发（表空时把 env 老配置落成 default provider 行）。
 app.include_router(llm_providers.router)
+# issue #59 (KOS 入库可靠性) — /api/kos/stats 读端点，远程 web 的知识库监控区数据出口
+# （桌面走 `mailagent kos stats` IPC）。聚合逻辑与 CLI 单源 src/kos/stats.py。
+app.include_router(kos.router)
 app.include_router(admin.router)
 app.include_router(calendar.router)
 app.include_router(folder.router)

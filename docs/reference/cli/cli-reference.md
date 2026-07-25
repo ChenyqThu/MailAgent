@@ -9,7 +9,7 @@
 pip install -e ".[cli,dev]"     # cli: typer/rich/pyyaml; dev: pytest + jsonschema>=4.18 + referencing
 which mailagent                  # 应是 venv/bin/mailagent
 mailagent --version              # 3.0.0
-mailagent --help                 # 列 10 个 group (email/admin/attachment/llm/notion/calendar/debug + backfill/project-progress/init) + global flags
+mailagent --help                 # 列 14 个 group (email/admin/attachment/llm/kos/notion/calendar/debug + backfill/project-progress/init + folder/report/api-key) + global flags
 ```
 
 ## 读命令（只读, 无 auth）
@@ -27,6 +27,7 @@ mailagent --help                 # 列 10 个 group (email/admin/attachment/llm/
 | `attachment download <attachment_id> [--dest PATH]` | 默认 stdout 二进制 / --dest 写文件返回 JSON 元信息 |
 | `llm selftest` | LLM gateway 健康检查（不烧 token） |
 | `llm stats [--days N]` | llm_processing 表统计 (status / cost / cache hit / latency) |
+| `kos stats [--days N]` | KOS 入库台账统计（契约 `kos-stats.schema.json`）：`enabled`（producer 面判据 = `MAILAGENT_KOS_INGEST_ENABLED` + `KOS_MCP_BASE`/`MAILAGENT_BULK_CLIENT_ID`/`MAILAGENT_BULK_CLIENT_SECRET` 三凭据非空，**不是** chat 的 consumer 判据）+ `kos_ingest_log` 的 status 分布（pushed/failed/dead/skipped）+ 失败错误码分布 + 重试积压 / dead 计数（**恒全量，不受 `--days` 窗口影响**）+ `sync_state` 的 `kos.*` 健康与最近成功时间 + 按天分桶序列。聚合逻辑单源 `src/kos/stats.py`（serve-api `GET /api/kos/stats` 调同一函数）；表不存在 → `_source='table_missing'` 零值，v41 前的 6 列老形状 → `_source='schema_stale'`（除错误码分布外照常统计），两者都不报错 |
 | `llm compare-paths [--count N \| --internal-ids LIST] [--dry-run/--no-dry-run] [--yes]` | R-15 灰度质量闸（PR-5 真实现：默认 dry-run + cost preview，实跑 `--no-dry-run --yes` 双路径 diff AILabels） |
 | `notion page-orphans --dry-run` | 扫 Notion 有 page 但本地无 metadata 的孤儿（PR-5 加 `--archive-orphan-pages` / `--insert-stub-metadata` 真修复） |
 | `notion file-link-audit [--internal-id N] --dry-run` | 审计 email_attachment.notion_file_id 状态（PR-5 加 `--no-dry-run --yes` 真修复：NULL → upload） |

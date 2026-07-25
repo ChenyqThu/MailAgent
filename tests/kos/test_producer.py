@@ -198,7 +198,7 @@ class TestPushRequireLabeled:
             _make_email(), internal_id=1, client=client,
             priority_floor="low", require_labeled=True,
         )
-        assert result is None
+        assert result.skipped and result.reason == "unlabeled"
         client.put_page.assert_not_called()
 
     @pytest.mark.asyncio
@@ -210,7 +210,8 @@ class TestPushRequireLabeled:
             _make_email(), internal_id=1, client=client,
             priority_floor="normal", dry_run=True,
         )
-        assert result is not None
+        # dry-run 归 skipped 三态, 但 result 带 payload 信息 = 过了 gate
+        assert result.reason == "dry_run" and result.result is not None
         assert priority_at_or_above("🟢 一般", "important") is False
         assert priority_at_or_above("⚪ 低", "normal") is False
         assert priority_at_or_above("🟡 重要", "🟢 一般") is True
@@ -440,7 +441,7 @@ class TestPushEmailToKos:
             email, internal_id=1, ai_priority="low",
             priority_floor="normal", client=client,
         )
-        assert result is None
+        assert result.skipped and result.reason == "priority_floor"
         client.put_page.assert_not_called()
 
     @pytest.mark.asyncio
@@ -452,7 +453,7 @@ class TestPushEmailToKos:
             email, internal_id=1, ai_priority="critical",
             priority_floor="normal", client=client,
         )
-        assert result is None
+        assert result.skipped and result.reason == "not_configured"
         client.put_page.assert_not_called()
 
     @pytest.mark.asyncio
@@ -465,10 +466,10 @@ class TestPushEmailToKos:
             priority_floor="normal", client=client, dry_run=True,
             body_markdown="hello",
         )
-        assert result is not None
-        assert result["dry_run"] is True
-        assert result["slug"] == "sources/email/42"
-        assert result["content_bytes"] > 0
+        assert result.skipped and result.reason == "dry_run"
+        assert result.result["dry_run"] is True
+        assert result.result["slug"] == "sources/email/42"
+        assert result.result["content_bytes"] > 0
         client.put_page.assert_not_called()
 
     @pytest.mark.asyncio
@@ -482,7 +483,8 @@ class TestPushEmailToKos:
             email, internal_id=42, body_markdown="body content",
             ai_priority="important", priority_floor="normal", client=client,
         )
-        assert result == {
+        assert result.pushed
+        assert result.result == {
             "slug": "sources/email/42", "status": "created_or_updated", "chunks": 3,
         }
         client.put_page.assert_called_once()
@@ -510,7 +512,8 @@ class TestPushEmailToKos:
         assert "**摘要**: 紧急摘要" in content
 
     @pytest.mark.asyncio
-    async def test_kos_error_returns_none_no_raise(self, email):
+    async def test_kos_error_returns_failed_no_raise(self, email):
+        """issue #59: KOSError 不再返 None 伪装成跳过 —— failed 三态 + error_code。"""
         client = MagicMock(spec=KOSClient)
         client.configured = True
         client.put_page = MagicMock(
@@ -520,10 +523,10 @@ class TestPushEmailToKos:
             email, internal_id=1, ai_priority="critical",
             priority_floor="normal", client=client,
         )
-        assert result is None
+        assert result.failed and result.error_code == "E_KOS_RATE_LIMIT"
 
     @pytest.mark.asyncio
-    async def test_unexpected_exception_returns_none_no_raise(self, email):
+    async def test_unexpected_exception_returns_failed_no_raise(self, email):
         client = MagicMock(spec=KOSClient)
         client.configured = True
         client.put_page = MagicMock(side_effect=RuntimeError("boom"))
@@ -531,7 +534,7 @@ class TestPushEmailToKos:
             email, internal_id=1, ai_priority="critical",
             priority_floor="normal", client=client,
         )
-        assert result is None
+        assert result.failed and result.error_code == "E_KOS_UNEXPECTED"
 
     @pytest.mark.asyncio
     async def test_uses_bulk_client_when_none_passed(self, email, monkeypatch):
@@ -542,7 +545,7 @@ class TestPushEmailToKos:
         result = await push_email_to_kos(
             email, internal_id=1, ai_priority="critical", priority_floor="normal",
         )
-        assert result is None
+        assert result.skipped and result.reason == "not_configured"
 
 
 # ============================================================

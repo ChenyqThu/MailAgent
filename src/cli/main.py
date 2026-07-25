@@ -38,6 +38,7 @@ from src.cli.commands import attachment as _attachment_module  # noqa: E402
 from src.cli.commands import backfill as _backfill_module  # noqa: E402
 from src.cli.commands import email as _email_module  # noqa: E402
 from src.cli.commands import init as _init_module  # noqa: E402
+from src.cli.commands import kos as _kos_module  # noqa: E402
 from src.cli.commands import llm as _llm_module  # noqa: E402
 from src.cli.commands import calendar as _calendar_module  # noqa: E402
 from src.cli.commands import debug as _debug_module  # noqa: E402
@@ -55,6 +56,10 @@ app.add_typer(
 app.add_typer(
     _llm_module.app, name="llm",
     help="LLM run / selftest / retry-failed / stats / compare-paths",
+)
+app.add_typer(
+    _kos_module.app, name="kos",
+    help="KOS 入库台账 stats (status 分布 / 错误码 / 重试积压 / 健康)",
 )
 app.add_typer(
     _notion_module.app, name="notion",

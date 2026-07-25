@@ -36,6 +36,8 @@ import { registerDraftHandlers } from './handlers/draft'
 // Sprint 6 §2.2 — admin / llm dashboard / calendar / settings IPC handlers.
 import { registerAdminHandlers } from './handlers/admin'
 import { registerLlmStatsHandlers } from './handlers/llm_stats'
+// issue #59 — KOS 入库台账统计 (同一 /llm 页的「知识库入库」区)。
+import { registerKosStatsHandlers } from './handlers/kos_stats'
 import { registerCalendarHandlers } from './handlers/calendar'
 import { registerSettingsHandlers } from './handlers/settings'
 import { registerNotionAgentHandlers } from './handlers/notion_agent'
@@ -424,6 +426,7 @@ app.whenReady().then(async () => {
   // write+auth channels for retry / replay / cleanup.
   registerAdminHandlers()
   registerLlmStatsHandlers()
+  registerKosStatsHandlers()
   registerCalendarHandlers()
   registerSettingsHandlers()
   // Notion Agent CLI config bridge — Settings page reads/edits the bound

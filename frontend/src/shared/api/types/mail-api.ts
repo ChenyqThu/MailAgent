@@ -6,6 +6,7 @@ import type { EventsApi } from './events'
 import type { FolderApi } from './folder'
 import type { IslandApi } from './island'
 import type { JobsApi } from './jobs'
+import type { KosApi } from './kos'
 import type { LlmApi } from './llm'
 import type { ReportApi } from './report'
 import type {
@@ -30,6 +31,8 @@ export interface MailApi {
   ai: AiApi
   chat: ChatApi
   llm: LlmApi
+  /** issue #59 — KOS 入库台账统计 (LLM Dashboard「知识库入库」区)。 */
+  kos: KosApi
   notion: NotionWriteApi
   /** Sprint 6 — admin dashboard data. */
   admin: AdminApi

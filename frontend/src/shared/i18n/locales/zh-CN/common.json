@@ -1319,6 +1319,30 @@
     "selftestOk": "网关健康",
     "selftestFail": "网关不可达"
   },
+  "kos": {
+    "ingest": {
+      "title": "知识库入库",
+      "pushed": "已入库",
+      "failed": "失败",
+      "pendingRetry": "待重试积压 {n} 封（全量）",
+      "skipped": "已跳过",
+      "skippedHint": "被优先级门槛过滤",
+      "dead": "需人工介入（全量）",
+      "deadHint": "需人工介入，见下方错误码分布",
+      "deadNone": "无需人工介入",
+      "errorDist": "错误码分布",
+      "errorNone": "窗口内无失败",
+      "errorUnavailable": "错误码待后端重启迁移后可见",
+      "trend": "每日入库量",
+      "lastSuccess": "最近成功",
+      "lastSuccessNone": "暂无记录",
+      "ago": "{t} 前",
+      "healthLastCheck": "上次检查",
+      "healthOk": "可达",
+      "healthDown": "不可达",
+      "healthUnknown": "未探测"
+    }
+  },
   "calendar": {
     "title": "周期会议",
     "subtitle": "扫描 {since} 起的邀请,可单独重放到 Notion 日历",

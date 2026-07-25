@@ -62,6 +62,7 @@ export type {
   FolderApi
 } from './types/folder'
 export type { LlmStatsData, LlmSelfTestData, LlmUpstreamModelsData, LlmApi } from './types/llm'
+export type { KosStatsData, KosHealthSnapshot, KosDailyBucket, KosApi } from './types/kos'
 export type {
   AdminHealthData,
   AdminStatsData,

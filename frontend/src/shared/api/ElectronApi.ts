@@ -98,6 +98,8 @@ import type {
   JobEnqueueResult,
   JobRecord,
   JobsApi,
+  KosApi,
+  KosStatsData,
   ListOpts,
   LlmApi,
   LlmRunOpts,
@@ -441,6 +443,12 @@ class ElectronLlmApi implements LlmApi {
       '/llm/models',
       Object.keys(query).length > 0 ? { query } : undefined
     )
+  }
+}
+
+class ElectronKosApi implements KosApi {
+  async stats(days = 7): Promise<KosStatsData> {
+    return (await invoker()('kos:stats', days)) as KosStatsData
   }
 }
 
@@ -937,6 +945,7 @@ export class ElectronApi implements MailApi {
   ai: AiApi = new ElectronAiApi()
   chat: ChatApi = createElectronChatRuntime()
   llm: LlmApi = new ElectronLlmApi()
+  kos: KosApi = new ElectronKosApi()
   notion: NotionWriteApi = new ElectronNotionWriteApi()
   admin: AdminApi = new ElectronAdminApi()
   calendar: CalendarApi = new ElectronCalendarApi()

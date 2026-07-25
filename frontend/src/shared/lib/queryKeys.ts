@@ -128,6 +128,12 @@ export const qk = {
     providerModels: (providerId: string) => ['llm', 'providers', providerId, 'models'] as const
   },
 
+  // issue #59 — KOS 入库台账（LLM Dashboard 底部「知识库入库」区）。
+  kos: {
+    stats: () => ['kos', 'stats'] as const,
+    statsDays: (days: number) => ['kos', 'stats', days] as const
+  },
+
   admin: {
     stats: () => ['admin', 'stats'] as const,
     deadLetter: () => ['admin', 'deadLetter'] as const,

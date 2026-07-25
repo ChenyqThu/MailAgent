@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
+import time
 from pathlib import Path
 
 import pytest
@@ -48,6 +49,9 @@ def _watcher(tmp_path: Path, backend_result):
     w.sync_store.set_last_max_row_id(100)
     w._stats = {"polls": 0, "new_emails_detected": 0}
     w._throttle_pause_announced = False
+    # KOS 重试 (issue #59, 第 6c 步) 的不健康冷却: 置远未来抑制本轮处理 —— 本文件
+    # 只锚游标语义, 且 .env 里 MAILAGENT_KOS_INGEST_ENABLED 可能开着 (flag 门挡不住)。
+    w._kos_unhealthy_until = time.monotonic() + 3600
     w.backend = _Backend(backend_result)
     # _poll_cycle 后续步骤全 stub (记录调用, 证明失败轮也正常走完);
     # _reconcile_drafts 用真方法 (backend 无 reconcile_drafts → noop)。

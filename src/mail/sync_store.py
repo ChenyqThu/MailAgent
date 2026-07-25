@@ -101,6 +101,64 @@ LLM_PROCESSING_INDEX_DDLS = (
 )
 
 
+# ==================== kos_ingest_log DDL 单源 (v41, issue #59) ====================
+# 🔴 唯一权威 DDL —— 三个消费方共用, 改列/索引只动这里:
+#   ① SyncStore._init_database_impl (v41 起版本化建表, 无条件幂等 —— 主路径;
+#      D2: schema 与 MAILAGENT_KOS_INGEST_ENABLED 解耦, 开关翻转时 DB 版本一致);
+#   ② src/kos/bulk_ingest.py KOSBulkIngester._ensure_log_table (幂等双保险,
+#      bulk 可对任意 --db-path 独立跑, 那个库未必被 SyncStore 迁移过);
+#   ③ src/kos/ingest_log.py 台账读写 (假设 schema 已就位, 不自建)。
+# import 方向必须是 kos → mail (bulk_ingest 已依赖 src.repository → src.mail.*),
+# sync_store 反向 import src.kos 会拖进 producer/client (httpx) 依赖链。
+#
+# status 值域 (跨 lane 契约, 见 .trellis/tasks/07-25-kos-issue-59-llm-dashboard/prd.md R1):
+#   pushed  — put_page 成功
+#   failed  — 瞬时失败, 等待重试扫描 (next_retry_at 排程)
+#   dead    — 超重试上限 / 永久类错误码 (需人工介入, 手动 bulk --retry-failed 可捞)
+#   skipped — priority floor / 未标注 / 未配置 / dry-run 过滤 (与失败区分)
+KOS_INGEST_LOG_TABLE_DDL = """
+    CREATE TABLE IF NOT EXISTS kos_ingest_log (
+        internal_id INTEGER PRIMARY KEY,
+        slug TEXT,
+        status TEXT,
+        chunks INTEGER,
+        error TEXT,
+        pushed_at REAL,
+        retry_count INTEGER NOT NULL DEFAULT 0,
+        next_retry_at REAL,
+        error_code TEXT,
+        source TEXT
+    )
+"""
+# 老库该表可能已被 bulk_ingest 惰性建成 6 列旧形状 → ALTER 补列 (PRAGMA 判断后幂等)。
+KOS_INGEST_LOG_RETRY_COLUMNS = {
+    "retry_count": "INTEGER NOT NULL DEFAULT 0",
+    "next_retry_at": "REAL",
+    "error_code": "TEXT",
+    "source": "TEXT",
+}
+# 重试扫描的调度索引 (status='failed' AND next_retry_at <= now)。
+KOS_INGEST_LOG_INDEX_DDL = (
+    "CREATE INDEX IF NOT EXISTS idx_kos_ingest_retry "
+    "ON kos_ingest_log(status, next_retry_at) WHERE status='failed'"
+)
+
+
+def ensure_kos_ingest_log_schema(cursor) -> None:
+    """kos_ingest_log 建表 + 补列 + 建索引, 全幂等 (v41 migration 与 bulk 双入口共用)。
+
+    顺序敏感: 索引引用 next_retry_at, 必须先补列再建索引 (老库旧形状缺该列时
+    先建索引会 no such column)。
+    """
+    cursor.execute(KOS_INGEST_LOG_TABLE_DDL)
+    cols = {row[1] for row in cursor.execute("PRAGMA table_info(kos_ingest_log)").fetchall()}
+    for _col, _typ in KOS_INGEST_LOG_RETRY_COLUMNS.items():
+        if _col not in cols:
+            cursor.execute(f"ALTER TABLE kos_ingest_log ADD COLUMN {_col} {_typ}")
+            logger.info(f"kos_ingest_log schema: +{_col}")
+    cursor.execute(KOS_INGEST_LOG_INDEX_DDL)
+
+
 class UpdateAfterFetchResult(Enum):
     """``update_after_fetch`` 的结果三态（2026-07-14 幽灵行事故后引入）。
 
@@ -515,7 +573,19 @@ class SyncStore:
     #                惯例) —— 直接父邮件 message_id (In-Reply-To 头), KOS payload Thread 链接反查用。
     #                davmail/applescript 两条解析路径落库; 老行 NULL (forward-only, 无 backfill)。
     #                回滚 (回退 v40): 列可留 (旧代码无害, 全 NULL) 或手动 DROP; 必要时降 db_version。
-    DB_VERSION = 40  # v40: email_metadata.in_reply_to (KOS Thread 链接反查)
+    # v41 (issue #59 KOS 入库可靠性, 2026-07): kos_ingest_log 从 bulk_ingest 惰性建表升格为
+    #                版本化正式表 (镜像 v37 llm_processing 模式)。+4 列 retry_count NOT NULL
+    #                DEFAULT 0 / next_retry_at REAL / error_code TEXT / source TEXT
+    #                ('producer'|'bulk'), status 值域扩为 pushed/failed/dead/skipped, 调度索引
+    #                idx_kos_ingest_retry(status, next_retry_at) WHERE status='failed'。
+    #                D2: 无条件建表 (schema 与 MAILAGENT_KOS_INGEST_ENABLED 解耦, "字节级
+    #                inert" 只约束运行时行为不发请求/不写行, 不约束 schema 存在性)。
+    #                幂等: DDL 单源 = 模块级 KOS_INGEST_LOG_TABLE_DDL / _RETRY_COLUMNS /
+    #                _INDEX_DDL + ensure_kos_ingest_log_schema() (bulk _ensure_log_table 引用
+    #                同函数); 老库该表可能已被 bulk 惰性建成 6 列旧形状 → PRAGMA 判断后
+    #                ALTER 补列。无数据回填 (forward-only, 历史空洞仍由手动 bulk_ingest 补)。
+    #                回滚 (回退 v41): 表/列可留 (旧代码只写老 6 列, 无害); 必要时降 db_version。
+    DB_VERSION = 41  # v41: kos_ingest_log 升格正式表 + 重试列 (issue #59)
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -2228,6 +2298,49 @@ class SyncStore:
             except sqlite3.OperationalError as e:
                 _migration_guard_columns(
                     cursor, "email_metadata", {"in_reply_to"}, "v40 migration", e,
+                )
+
+        # === v41: kos_ingest_log 升格正式表 (issue #59) ===
+        # 无条件幂等 (镜像 v37 llm_processing / v22 marker 模式, 无 current_version gate):
+        # CREATE IF NOT EXISTS 对新库直接建全形状; 老库若已被 bulk_ingest 惰性建成 6 列
+        # 旧形状, PRAGMA 判断后 ALTER 补 4 列; 最后建调度索引 (依赖 next_retry_at,
+        # 顺序在补列之后)。D2: 不受 MAILAGENT_KOS_INGEST_ENABLED 影响。
+        try:
+            ensure_kos_ingest_log_schema(cursor)
+        except sqlite3.OperationalError as e:
+            # 双重复查: ensure 内建表→补列→建索引三步任一真失败都必须让迁移中断
+            # (只查列会吞掉「列全在位但索引没建成」的失败形态)。
+            _migration_guard_columns(
+                cursor, "kos_ingest_log", set(KOS_INGEST_LOG_RETRY_COLUMNS),
+                "v41 migration", e,
+            )
+            _migration_guard_index(cursor, "idx_kos_ingest_retry", "v41 migration", e)
+        # 一次性: 老 bulk 时代遗留的 failed 行 next_retry_at=NULL → 永远不满足重试
+        # 扫描的 due 判据 (next_retry_at <= now), 会以"永久积压"形态挂在 Dashboard 上。
+        # 给它们排一次立即到期, 让重试 worker 自动收编 (成功→pushed / 仍失败→按退避
+        # 重排或转 dead)。gate 在 <41: 41 之后所有 failed 行都由 record_failure 写,
+        # 恒带 next_retry_at。
+        if current_version < 41:
+            _stale = cursor.execute(
+                "UPDATE kos_ingest_log SET next_retry_at = ? "
+                "WHERE status = 'failed' AND next_retry_at IS NULL",
+                (time.time(),),
+            ).rowcount
+            if _stale:
+                logger.info(
+                    f"v41 migration: scheduled {_stale} legacy failed "
+                    f"kos_ingest_log row(s) for retry"
+                )
+            # 🔴 ALTER ADD COLUMN 后必须显式回填 (本仓 ALTER+seed 教训): 存量行
+            # (生产实测 7471 行) 全是 bulk 写的 —— producer 在 v41 之前从不记账,
+            # 所以 source IS NULL ⇒ 'bulk' 是精确回填, 不是猜测。
+            _src = cursor.execute(
+                "UPDATE kos_ingest_log SET source = 'bulk' WHERE source IS NULL"
+            ).rowcount
+            if _src:
+                logger.info(
+                    f"v41 migration: backfilled source='bulk' for {_src} "
+                    f"pre-existing kos_ingest_log row(s)"
                 )
 
         # 更新数据库版本 —— E0-WP3: 只有**全部迁移成功**才会执行到这里。任何迁移块

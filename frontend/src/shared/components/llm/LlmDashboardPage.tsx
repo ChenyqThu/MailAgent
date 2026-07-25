@@ -6,6 +6,7 @@
 //      mini-histogram pattern as AdminPage so the visual language is
 //      consistent
 //   3. Selftest button (no-token health probe via `mailagent llm selftest`)
+//   4. issue #59 —「知识库入库」区 (KosIngestSection; producer 面未启用整区不渲染)
 //
 // We deliberately do NOT pull recharts / d3 — a hand-rolled SVG donut +
 // horizontal bar are <30 LoC each and stay aligned with DESIGN.md's mono
@@ -24,6 +25,9 @@ import { EmptyState } from '@shared/components/feedback/EmptyState'
 import { SkeletonCard } from '@shared/components/feedback/LoadingSkeleton'
 import { NumberTicker } from '@shared/components/ui/number-ticker'
 import { toastError, toastSuccess } from '@shared/state/toast'
+
+import { KosIngestSection } from './KosIngestSection'
+import { StatCard } from './StatCard'
 
 const RANGES: Array<{ label: string; days: number }> = [
   { label: '7d', days: 7 },
@@ -44,39 +48,6 @@ function fmtTokens(n: number): string {
 function fmtMs(ms: number): string {
   if (ms < 1000) return `${ms.toFixed(0)}ms`
   return `${(ms / 1000).toFixed(2)}s`
-}
-
-function StatCard({
-  label,
-  value,
-  hint,
-  accent
-}: {
-  label: string
-  value: React.ReactNode
-  hint?: React.ReactNode
-  accent?: boolean
-}): React.ReactElement {
-  return (
-    <div
-      className={cn(
-        // round 8c — 容器统一 accent 染色卡 (用户定稿「都要已处理那样的」),
-        // accent prop 只剩数字字色/字重差异。
-        'rounded-md border p-3 border-coral/30 bg-coral/5'
-      )}
-    >
-      <div className="text-micro font-mono uppercase text-ink-fg-2 mb-1">{label}</div>
-      <div
-        className={cn(
-          'text-lead tabular-nums',
-          accent ? 'text-coral font-semibold' : 'text-ink-fg'
-        )}
-      >
-        {value}
-      </div>
-      {hint && <div className="text-meta text-ink-fg-3 mt-1">{hint}</div>}
-    </div>
-  )
 }
 
 // SVG donut for status distribution. Sized to fit a 240px card; passing
@@ -375,6 +346,11 @@ export function LlmDashboardPage(): React.ReactElement {
           }
         />
       )}
+
+      {/* issue #59 R7 —「知识库入库」区。挂载无条件：gate 封在组件内部
+          （后端下发的 data.enabled，照 DavMailHealthCard 先例）。
+          days 与上方 LLM 区共用同一个 range chips state。 */}
+      <KosIngestSection days={days} />
     </div>
   )
 }

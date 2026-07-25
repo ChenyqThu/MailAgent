@@ -557,6 +557,36 @@ class Config(BaseSettings):
             "给上线灰度用。"
         ),
     )
+    # issue #59 KOS 入库可靠性: 推送失败落台账 (kos_ingest_log, DB v41) 后由
+    # new_watcher 低频重试补偿。字段名 kos_retry_* ≠ env MAILAGENT_KOS_RETRY_* →
+    # 必须 validation_alias (pydantic v2 忽略 Field(env=), 见本类顶 model_config 注释)。
+    kos_retry_enabled: bool = Field(
+        default=True,
+        validation_alias="MAILAGENT_KOS_RETRY_ENABLED",
+        description=(
+            "KOS 推送失败重试扫描 (issue #59)。默认**开** (D1, 有意偏离新功能默认关"
+            "惯例): 重试是纯补偿逻辑, 只重推本该推、且因 put_page 覆盖写而幂等的内容; "
+            "MAILAGENT_KOS_INGEST_ENABLED=false 时整条链路本就不激活, 默认关的重试"
+            "等于没修。显式 false 应急回退 (只推不补, 回 #59 修复前行为)。"
+        ),
+    )
+    kos_retry_interval_sec: int = Field(
+        default=300,
+        validation_alias="MAILAGENT_KOS_RETRY_INTERVAL_SEC",
+        description=(
+            "KOS 健康探活失败后的冷却窗口 (秒), 默认 300。重试本体是主 tick 第 6c 步"
+            "队列驱动 (3 封/tick, next_retry_at 排程, 镜像 LLM 重试队列); 本值只管"
+            "探活失败后多久内不再探活/扫描, 防对着倒掉的 KOS 每 5s tick 空转。"
+        ),
+    )
+    kos_retry_max_attempts: int = Field(
+        default=5,
+        validation_alias="MAILAGENT_KOS_RETRY_MAX_ATTEMPTS",
+        description=(
+            "单封邮件的 KOS 重试上限, 默认 5 (退避 1min/5min/15min/1h/6h)。"
+            "超限转 dead (Dashboard 警示 + 手动 bulk --retry-failed 可捞)。"
+        ),
+    )
 
     # =========================================================================
     # Chat Agent Harness 配置 (V2.1 阶段 3c — serve-api GET /api/chat/config 暴露给

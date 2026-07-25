@@ -24,13 +24,16 @@ tag (doc §4)。原 KOS_OAUTH_CLIENT_* 绑 default (chat-save + consumer query)�
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
 import sqlite3
+from dataclasses import dataclass
 from typing import Any, Optional
 
 from loguru import logger
 
+from src.kos import ingest_log
 from src.kos.client import KOSClient, KOSError
 from src.models import Email
 
@@ -495,6 +498,101 @@ def build_kos_page_payload(
     return slug, content
 
 
+@dataclass
+class KosPushOutcome:
+    """``push_email_to_kos`` / ``repush_stored_email_to_kos`` 的三态返回值 (issue #59)。
+
+    老签名 skip 与 failure 都返 ``None``, 调用侧 (new_watcher kos hook) 结构性
+    无法区分「被 priority floor 过滤」与「推送失败」—— 101 页空洞在日志层面伪装成
+    正常跳过, 只能事后人工核对才发现。三态化后调用侧失败记 warning、跳过维持 debug。
+
+    status: 'pushed' | 'skipped' | 'failed' (与 kos_ingest_log.status 对齐;
+        dry-run 归 'skipped', reason='dry_run')
+    reason: skip 原因 ('priority_floor' | 'unlabeled' | 'not_configured' | 'dry_run')
+    error_code / error: 失败时的 KOSError.code (非 KOSError → 'E_KOS_UNEXPECTED') 与消息
+    result: 成功时 put_page 服务端返回; dry-run 时 {'dry_run': True, 'slug', 'content_bytes'}
+    """
+
+    status: str
+    reason: Optional[str] = None
+    error_code: Optional[str] = None
+    error: Optional[str] = None
+    result: Optional[dict[str, Any]] = None
+
+    @property
+    def pushed(self) -> bool:
+        return self.status == "pushed"
+
+    @property
+    def skipped(self) -> bool:
+        return self.status == "skipped"
+
+    @property
+    def failed(self) -> bool:
+        return self.status == "failed"
+
+
+async def _record_ledger(db_path: Optional[str], internal_id: int, fn, *args) -> None:
+    """台账写的 fire-and-forget 包装: db_path 缺省不写; 写失败只 warning 绝不上抛
+    (台账是补偿层, 不许反过来阻塞/炸掉邮件主流程)。sqlite 写 to_thread 出去,
+    别的进程持写锁时等待发生在工作线程, 不冻 event loop。"""
+    if db_path is None:
+        return
+    try:
+        await asyncio.to_thread(fn, db_path, internal_id, *args)
+    except Exception as e:  # noqa: BLE001 — fire-and-forget
+        logger.warning(
+            f"[kos-producer] ledger write failed internal_id={internal_id} "
+            f"({getattr(fn, '__name__', fn)}): {e}"
+        )
+
+
+async def _put_and_record(
+    client: KOSClient,
+    db_path: Optional[str],
+    internal_id: int,
+    slug: str,
+    content: str,
+    source: str,
+) -> KosPushOutcome:
+    """put_page + 成功/失败双写台账 —— 增量 hook 与重试扫描共用的唯一推送路径。"""
+    try:
+        result = await asyncio.to_thread(client.put_page, slug, content)
+        status = result.get("status") if isinstance(result, dict) else "?"
+        chunks = result.get("chunks", 0) if isinstance(result, dict) else 0
+        logger.info(
+            f"[kos-producer] pushed internal_id={internal_id} slug={slug} status={status}"
+        )
+        await _record_ledger(
+            db_path, internal_id, ingest_log.record_pushed, slug, int(chunks or 0), source
+        )
+        return KosPushOutcome(
+            status="pushed", result=result if isinstance(result, dict) else {"raw": result}
+        )
+    except KOSError as e:
+        transient = ingest_log.is_transient_error(e.code, getattr(e, "status", None))
+        logger.warning(
+            f"[kos-producer] push failed internal_id={internal_id} "
+            f"slug={slug} code={e.code} transient={transient} msg={e}"
+        )
+        await _record_ledger(
+            db_path, internal_id, ingest_log.record_failure,
+            slug, e.code, str(e), source, transient,
+        )
+        return KosPushOutcome(status="failed", error_code=e.code, error=str(e))
+    except Exception as e:  # noqa: BLE001 — fire-and-forget, 主流程不许被炸
+        # 非 KOSError 的意外异常无稳定 code → E_KOS_UNEXPECTED, 按瞬时处理
+        # (重试有界; 误判成永久 = 永久空洞, 正是 #59 的病根方向)。
+        logger.warning(
+            f"[kos-producer] unexpected error internal_id={internal_id} slug={slug}: {e}"
+        )
+        await _record_ledger(
+            db_path, internal_id, ingest_log.record_failure,
+            slug, "E_KOS_UNEXPECTED", str(e), source, True,
+        )
+        return KosPushOutcome(status="failed", error_code="E_KOS_UNEXPECTED", error=str(e))
+
+
 async def push_email_to_kos(
     email_obj: Email,
     internal_id: int,
@@ -511,15 +609,29 @@ async def push_email_to_kos(
     priority_floor: str = "normal",
     require_labeled: bool = False,
     dry_run: bool = False,
-) -> Optional[dict]:
-    """增量推单封邮件到 KOS mailagent-emails source。Skip 返 None; success 返 dict。
+    db_path: Optional[str] = None,
+) -> KosPushOutcome:
+    """增量推单封邮件到 KOS mailagent-emails source, 返回三态 ``KosPushOutcome``。
 
-    Skip cases (返 None, 不视为错):
-        - ai_priority < priority_floor (增量过滤; bulk 路径不走这里)
-        - require_labeled=True 且 AI 从未标注优先级 (issue #49)
-        - bulk client 未 configured (MAILAGENT_BULK_CLIENT_* env 缺)
-    Failure (返 None + warning): KOSError / 其他 exception (fire-and-forget)。
+    Skip cases (status='skipped', 不视为错):
+        - ai_priority < priority_floor (增量过滤; bulk 路径不走这里) → reason='priority_floor'
+        - require_labeled=True 且 AI 从未标注优先级 (issue #49) → reason='unlabeled'
+        - bulk client 未 configured (MAILAGENT_BULK_CLIENT_* env 缺) → reason='not_configured'
+        - dry_run → reason='dry_run', result 带 slug/content_bytes
+    Failure (status='failed' + warning, 绝不上抛): KOSError / 其他 exception。
+
+    ``db_path`` 非 None 时每个结局都写 kos_ingest_log 台账 (issue #59: pushed /
+    skipped / failed + error_code + 退避排程), 写台账失败也只 warning ——
+    fire-and-forget 纪律不变, KOS 链路任何问题都不阻塞邮件主流程。
     """
+    slug_hint = f"sources/email/{internal_id}"
+
+    async def _skip(reason: str, result: Optional[dict[str, Any]] = None) -> KosPushOutcome:
+        await _record_ledger(
+            db_path, internal_id, ingest_log.record_skipped, slug_hint, reason, "producer"
+        )
+        return KosPushOutcome(status="skipped", reason=reason, result=result)
+
     # labels 合并: caller 传完整 labels 优先; 否则用散的 ai_priority/ai_action
     merged: dict[str, Any] = dict(labels or {})
     if ai_priority and not merged.get("priority"):
@@ -530,16 +642,13 @@ async def push_email_to_kos(
     effective_priority = merged.get("priority") or ai_priority
     if not passes_priority_gate(effective_priority, priority_floor, require_labeled):
         state = priority_label_state(effective_priority)
-        reason = (
-            f"label={state}"
-            if require_labeled and state != LABEL_KNOWN
-            else f"< floor={priority_floor!r}"
-        )
+        unlabeled = require_labeled and state != LABEL_KNOWN
         logger.debug(
             f"[kos-producer] skip internal_id={internal_id} "
-            f"priority={effective_priority!r} {reason}"
+            f"priority={effective_priority!r} "
+            + (f"label={state}" if unlabeled else f"< floor={priority_floor!r}")
         )
-        return None
+        return await _skip("unlabeled" if unlabeled else "priority_floor")
 
     if client is None:
         client = make_bulk_kos_client()
@@ -548,7 +657,7 @@ async def push_email_to_kos(
             f"[kos-producer] skip internal_id={internal_id} "
             "bulk KOSClient not configured (MAILAGENT_BULK_CLIENT_* missing)"
         )
-        return None
+        return await _skip("not_configured")
 
     slug, content = build_kos_page_payload(
         internal_id=internal_id,
@@ -574,27 +683,129 @@ async def push_email_to_kos(
             f"[kos-producer] dry-run internal_id={internal_id} "
             f"slug={slug} content_bytes={len(content.encode('utf-8'))}"
         )
-        return {
+        return await _skip("dry_run", result={
             "dry_run": True,
             "slug": slug,
             "content_bytes": len(content.encode("utf-8")),
-        }
+        })
+
+    return await _put_and_record(client, db_path, internal_id, slug, content, "producer")
+
+
+def _load_labels(db_path: str, internal_id: int) -> dict[str, Any]:
+    """llm_processing.labels_json 裸读 (镜像 bulk_ingest._get_labels, 重试路径用)。"""
+    try:
+        conn = sqlite3.connect(db_path, timeout=30)
+        try:
+            row = conn.execute(
+                "SELECT labels_json FROM llm_processing WHERE internal_id = ?",
+                (internal_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+        if row and row[0]:
+            return json.loads(row[0])
+    except Exception:  # noqa: BLE001 — labels 缺失不阻断重推 (payload 少 AI 区块而已)
+        pass
+    return {}
+
+
+async def repush_stored_email_to_kos(
+    db_path: str,
+    internal_id: int,
+    *,
+    client: Optional[KOSClient] = None,
+    priority_floor: str = "normal",
+    require_labeled: bool = False,
+) -> KosPushOutcome:
+    """重试扫描路径: 从 SQLite SSoT 重建 payload 并走与增量完全相同的推送+台账路径。
+
+    与增量 hook 的差异只在输入来源 (metadata 行 vs 在内存的 Email 对象) —— payload
+    builder / 过滤 gate / put+record 全部共用, 保证同一封邮件重推的 payload 与首推
+    一致 (put_page 覆盖写幂等, 不触发无谓 re-embedding)。
+
+    过滤 gate 在重推时**重新求值** (labels 可能已变): 不再够格 → record_skipped
+    覆盖 failed 行退出重试队列 (当前过滤条件下这封本就不该入库)。
+    本地 metadata 已删 (邮件被物理删除) → 无法重建, 记永久失败转 dead。
+    """
+    slug_hint = f"sources/email/{internal_id}"
+    if client is None:
+        client = make_bulk_kos_client()
+    if not client.configured:
+        # 防御: 重试 worker 入口已检查 configured, 这里不写台账 (凭据被移除时
+        # 把 failed 行翻成 skipped 会让积压凭空"消失")。
+        return KosPushOutcome(status="skipped", reason="not_configured")
+
+    def _build() -> Optional[tuple]:
+        from src.repository import EmailRepository
+
+        repo = EmailRepository(db_path=db_path)
+        meta = repo.get_metadata(internal_id)
+        if meta is None:
+            return None
+        labels = _load_labels(db_path, internal_id)
+        body = repo.get_body_markdown(internal_id, max_chars=200_000)
+        atts = [
+            {"filename": a.filename, "size": a.size_bytes, "content_type": a.content_type}
+            for a in repo.get_attachments(internal_id)
+            if not a.is_inline
+        ]
+        refs = resolve_thread_refs(db_path, internal_id)
+        return meta, labels, body, atts, refs
 
     try:
-        result = await asyncio.to_thread(client.put_page, slug, content)
-        status = result.get("status") if isinstance(result, dict) else "?"
-        logger.info(
-            f"[kos-producer] pushed internal_id={internal_id} slug={slug} status={status}"
+        built = await asyncio.to_thread(_build)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[kos-retry] rebuild failed internal_id={internal_id}: {e}")
+        await _record_ledger(
+            db_path, internal_id, ingest_log.record_failure,
+            slug_hint, "E_KOS_UNEXPECTED", f"rebuild failed: {e}", "producer", True,
         )
-        return result
-    except KOSError as e:
+        return KosPushOutcome(status="failed", error_code="E_KOS_UNEXPECTED", error=str(e))
+    if built is None:
+        # 邮件行已不存在 (本地删除) → 永久失败: 没有可推的内容, 人工介入面可见
         logger.warning(
-            f"[kos-producer] push failed internal_id={internal_id} "
-            f"slug={slug} code={e.code} msg={e}"
+            f"[kos-retry] internal_id={internal_id} metadata gone, mark dead"
         )
-        return None
-    except Exception as e:
-        logger.warning(
-            f"[kos-producer] unexpected error internal_id={internal_id} slug={slug}: {e}"
+        await _record_ledger(
+            db_path, internal_id, ingest_log.record_failure,
+            slug_hint, "E_KOS_SOURCE_GONE", "local email metadata missing", "producer", False,
         )
-        return None
+        return KosPushOutcome(
+            status="failed", error_code="E_KOS_SOURCE_GONE", error="metadata gone"
+        )
+
+    meta, labels, body, atts, refs = built
+    effective_priority = labels.get("priority")
+    if not passes_priority_gate(effective_priority, priority_floor, require_labeled):
+        state = priority_label_state(effective_priority)
+        unlabeled = require_labeled and state != LABEL_KNOWN
+        reason = "unlabeled" if unlabeled else "priority_floor"
+        logger.debug(
+            f"[kos-retry] internal_id={internal_id} no longer passes gate "
+            f"({reason}), converge to skipped"
+        )
+        await _record_ledger(
+            db_path, internal_id, ingest_log.record_skipped, slug_hint, reason, "producer"
+        )
+        return KosPushOutcome(status="skipped", reason=reason)
+
+    slug, content = build_kos_page_payload(
+        internal_id=internal_id,
+        subject=meta.subject,
+        sender=meta.sender,
+        sender_name=meta.sender_name,
+        to_addr=meta.to_addr,
+        cc_addr=meta.cc_addr,
+        date_iso=meta.date_received or "",
+        mailbox=meta.mailbox,
+        message_id=meta.message_id,
+        thread_id=meta.thread_id,
+        body_markdown=body,
+        labels=labels,
+        attachments=atts,
+        notion_page_id=meta.notion_page_id,
+        thread_parent=refs.get("parent"),
+        thread_root=refs.get("root"),
+    )
+    return await _put_and_record(client, db_path, internal_id, slug, content, "producer")
