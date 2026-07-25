@@ -8,13 +8,17 @@
 //
 // 这样「每天 9:00」跨 DST 恒为本地 9:00 —— 与上游组件、与两个现有 Python worker 语义一致。
 //
-// rrule 是 CJS 包，ESM 下没 named export —— 必须 default import 再解构（镜像
-// src/electron/main/handlers/calendar-read.ts 的既有写法）。
-import rrulePkg from 'rrule'
+// 🔴 renderer 走 rrule 的 **ESM 构建**（package.json `module: dist/esm/index.js`），它**只有
+// named export、没有 default**（`export { RRule } / { RRuleSet } / { rrulestr } / …`）。
+// 所以这里必须 named import。
+//
+// 别照搬 `src/electron/main/handlers/calendar-read.ts` 的 `import rrulePkg from 'rrule'` ——
+// 那个文件在 **Electron main 进程的 CJS 上下文**，default-import 互操作在那儿才成立；跨运行时
+// 抄过来，vitest（模块解析宽松）和 `tsc --noEmit`（读的是 CJS 入口的类型声明）都会放过，
+// 只有 rollup 生产构建会炸 `"default" is not exported by …/dist/esm/index.js`。
+import { RRule } from 'rrule'
 
 import { type ScheduleRule, coerceRule } from './types'
-
-const { RRule } = rrulePkg
 
 /** 契约 §2 顺序：0=周日 … 6=周六。rrule.js 的 RRule.SU..RRule.SA 按同一顺序索引。 */
 const RRULE_WEEKDAYS = [RRule.SU, RRule.MO, RRule.TU, RRule.WE, RRule.TH, RRule.FR, RRule.SA]
