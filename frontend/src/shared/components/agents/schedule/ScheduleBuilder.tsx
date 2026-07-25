@@ -147,46 +147,74 @@ export function ScheduleBuilder({
     }
   }, [])
 
+  // 设备时区快捷项：`America/Los_Angeles（设备时区 · PT）`。缩写取不到就退化成不带缩写的
+  // 文案（不硬编任何时区名）。
+  const deviceTz = useMemo(() => hostTimezone(), [])
+  const deviceTzLabel = useMemo(() => {
+    const abbr = timeZoneAbbr(deviceTz)
+    return abbr
+      ? t('agents.schedule.tzDevice', { tz: deviceTz, abbr })
+      : t('agents.schedule.tzDeviceNoAbbr', { tz: deviceTz })
+    // t 每次 render 新引用；只在 locale / 设备时区变化时重算。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deviceTz, locale])
+
   const intervalUnit = t(`agents.schedule.unit.${rule.freq}${rule.interval === 1 ? '1' : 'N'}`)
 
   return (
     <MotionConfig reducedMotion="user">
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {/* 外层 gap 兼作「句子块 → 第一个配置行」的间距（dogfood：原 12 + minHeight 富余
+          ≈29px 太散），与配置行之间的 gap 取齐到 8。 */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         {/* ── 活的句子 ───────────────────────────────────────────────────────
             span 之间保留真实空格：选中/复制/读屏拿到的是「Every week…」而不是
-            「Everyweek…」。存活的 key 靠 layout 滑动，新 key 淡入。 */}
-        <p
-          aria-live="polite"
-          data-testid="schedule-sentence"
+            「Everyweek…」。存活的 key 靠 layout 滑动，新 key 淡入。
+            外面套浅底块（dogfood：句子原本「裸在那里」）—— 复用本抽屉既有的说明块配方
+            （同 agents.config.aggregation：--ink-1 半透 + --ink-border-soft + --r-ctl），
+            不新造装饰语言、不硬编码颜色。aria-live 留在 <p> 上，容器不夺走它。 */}
+        <div
           style={{
-            margin: 0,
-            minHeight: '2.6em',
-            fontSize: 16,
-            lineHeight: 1.5,
-            fontWeight: 500,
-            letterSpacing: '-0.01em',
-            color: 'rgb(var(--ink-fg))'
+            padding: '8px 10px',
+            borderRadius: 'var(--r-ctl)',
+            background: 'rgb(var(--ink-1) / 0.55)',
+            border: '1px solid rgb(var(--ink-border-soft))'
           }}
         >
-          {tokens.map(({ word, key }, index) => (
-            <span key={key}>
-              {index > 0 && ' '}
-              <motion.span
-                layout={reduce ? false : 'position'}
-                initial={reduce ? false : { opacity: 0, filter: 'blur(2px)', y: '0.3em' }}
-                animate={{ opacity: 1, filter: 'blur(0px)', y: 0 }}
-                transition={{
-                  layout: { duration: 0.22, ease: [0.23, 1, 0.32, 1] },
-                  duration: 0.12,
-                  ease: [0.23, 1, 0.32, 1]
-                }}
-                style={{ display: 'inline-block' }}
-              >
-                {word}
-              </motion.span>
-            </span>
-          ))}
-        </p>
+          <p
+            aria-live="polite"
+            data-testid="schedule-sentence"
+            style={{
+              margin: 0,
+              // 留一行高度（14×1.5=21px）而不是删掉：句子换行时仍有跳动，但把单行时的
+              // 富余空白清零 —— dogfood 明确要更紧凑，接受这个取舍。
+              minHeight: '1.5em',
+              fontSize: 14,
+              lineHeight: 1.5,
+              fontWeight: 500,
+              letterSpacing: '-0.01em',
+              color: 'rgb(var(--ink-fg))'
+            }}
+          >
+            {tokens.map(({ word, key }, index) => (
+              <span key={key}>
+                {index > 0 && ' '}
+                <motion.span
+                  layout={reduce ? false : 'position'}
+                  initial={reduce ? false : { opacity: 0, filter: 'blur(2px)', y: '0.3em' }}
+                  animate={{ opacity: 1, filter: 'blur(0px)', y: 0 }}
+                  transition={{
+                    layout: { duration: 0.22, ease: [0.23, 1, 0.32, 1] },
+                    duration: 0.12,
+                    ease: [0.23, 1, 0.32, 1]
+                  }}
+                  style={{ display: 'inline-block' }}
+                >
+                  {word}
+                </motion.span>
+              </span>
+            ))}
+          </p>
+        </div>
 
         {/* ── 控件 ──────────────────────────────────────────────────────── */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -404,7 +432,7 @@ export function ScheduleBuilder({
             >
               {HOURS.map((h) => (
                 <option key={h} value={h}>
-                  {hourOptionLabel(locale, h)}
+                  {hourOptionLabel(h)}
                 </option>
               ))}
             </select>
@@ -414,9 +442,11 @@ export function ScheduleBuilder({
               onChange={(e) => setRule({ minute: Number(e.target.value) })}
               style={controlStyle}
             >
+              {/* 纯两位数字，不带前导冒号（dogfood：分钟下拉里的「:30」多余，
+                  小时/分钟已经是两个相邻控件，冒号反而像输入的一部分）。 */}
               {MINUTES.map((m) => (
                 <option key={m} value={m}>
-                  :{String(m).padStart(2, '0')}
+                  {String(m).padStart(2, '0')}
                 </option>
               ))}
             </select>
@@ -436,6 +466,14 @@ export function ScheduleBuilder({
                 onChange={(e) => setTimezone(e.target.value)}
                 style={{ ...controlStyle, flex: 1, minWidth: 180 }}
               >
+                {/* 顶部快捷项：设备时区带标注（dogfood：默认值本来就是设备时区，但夹在
+                    418 项字母序 IANA 里看不出来）。🔴 它与下方列表里的原项**同 value** ——
+                    存的永远是解析后的 IANA 名，绝不引入 'local' 之类哨兵值：空/哨兵时区正是
+                    本批契约花力气消灭的东西（报告 agent 空时区会退化成 UTC、让 9 点报告漂走）。
+                    同 value 时浏览器按首个匹配项回显，于是选中设备时区就显示带标注那条。 */}
+                <option key={`device-${deviceTz}`} value={deviceTz}>
+                  {deviceTzLabel}
+                </option>
                 {tzOptions.map((z) => (
                   <option key={z} value={z}>
                     {z}
@@ -535,7 +573,7 @@ export function ScheduleBuilder({
                       fontVariantNumeric: 'tabular-nums'
                     }}
                   >
-                    {timeLabel(locale, entry.wall.hour, entry.wall.minute)}
+                    {timeLabel(entry.wall.hour, entry.wall.minute)}
                     <span
                       style={{
                         fontSize: 11,
@@ -573,6 +611,32 @@ function runDateLabel(locale: string, wall: ReturnType<typeof wallPartsOf>): str
   } catch {
     return d.toISOString().slice(0, 10)
   }
+}
+
+/**
+ * 时区缩写（`PT` / `ET` / `GMT+8`），供设备时区快捷项标注用。
+ *
+ * 固定用 `en-US` 取值而非 UI locale：缩写按惯例是拉丁记号（owner 要的就是 "PT"），
+ * zh-CN 下 `shortGeneric` 会给「洛杉矶时间」、`short` 会给 `GMT-7`，都不是想要的。
+ * 优先 `shortGeneric`（LA→PT、NY→ET，不含夏令时变体），但它对多数时区会给
+ * 「China Time」这类长名 —— 只在结果是紧凑全大写缩写时才采用，否则退回 `short`
+ * （`GMT+8` / `GMT+5:30` / `UTC`，仍然有信息量）。取不到 → null，调用方省略缩写。
+ */
+function timeZoneAbbr(tz: string): string | null {
+  const pick = (style: 'short' | 'shortGeneric'): string | null => {
+    try {
+      return (
+        new Intl.DateTimeFormat('en-US', { timeZone: tz, timeZoneName: style })
+          .formatToParts(new Date())
+          .find((p) => p.type === 'timeZoneName')?.value ?? null
+      )
+    } catch {
+      return null
+    }
+  }
+  const generic = pick('shortGeneric')
+  if (generic && /^[A-Z]{2,5}$/.test(generic)) return generic
+  return pick('short')
 }
 
 function monthLabel(locale: string, year: number, month: number): string {

@@ -30,43 +30,58 @@ beforeAll(async () => {
   await i18n.changeLanguage('zh-CN')
 })
 
-describe('句子 · zh-CN（中文语序，非英文直译）', () => {
+// 🔴 dogfood 反馈：时刻**中英一律 12 小时制 + AM/PM**（原先按 locale 分叉成 zh→24h `09:00`，
+// owner 用中文 UI 但明确要 AM/PM）。中文语序仍是中文语序，只有时刻记号统一。
+describe('句子 · zh-CN（中文语序 + AM/PM 时刻）', () => {
   const zh = (r: Partial<ScheduleRule>): string => sentenceText(t, 'zh-CN', rule(r))
 
-  test('每天 09:00', () => {
-    expect(zh({ freq: 'daily', hour: 9 })).toBe('每天 09:00')
+  test('每天 9:00 AM', () => {
+    expect(zh({ freq: 'daily', hour: 9 })).toBe('每天 9:00 AM')
   })
 
-  test('每 3 天 09:30', () => {
-    expect(zh({ freq: 'daily', interval: 3, hour: 9, minute: 30 })).toBe('每 3 天 09:30')
+  test('每 3 天 9:30 AM', () => {
+    expect(zh({ freq: 'daily', interval: 3, hour: 9, minute: 30 })).toBe('每 3 天 9:30 AM')
   })
 
-  test('每周 周二和周四 09:00', () => {
-    expect(zh({ freq: 'weekly', weekdays: [2, 4], hour: 9 })).toBe('每周 周二和周四 09:00')
+  test('每周 周二和周四 9:00 AM', () => {
+    expect(zh({ freq: 'weekly', weekdays: [2, 4], hour: 9 })).toBe('每周 周二和周四 9:00 AM')
   })
 
-  test('每 2 周 周一 07:15', () => {
+  test('每 2 周 周一 7:15 AM', () => {
     expect(zh({ freq: 'weekly', interval: 2, weekdays: [1], hour: 7, minute: 15 })).toBe(
-      '每 2 周 周一 07:15'
+      '每 2 周 周一 7:15 AM'
     )
   })
 
-  test('每月 15 号 09:00', () => {
+  test('每月 15 号 9:00 AM', () => {
     expect(zh({ freq: 'monthly', monthMode: 'date', monthDay: 15, hour: 9 })).toBe(
-      '每月 15 号 09:00'
+      '每月 15 号 9:00 AM'
     )
   })
 
-  test('每月 第 2 个周二 09:00', () => {
+  test('每月 第 2 个周二 9:00 AM', () => {
     expect(zh({ freq: 'monthly', monthMode: 'nth', ordinal: 2, weekday: 2, hour: 9 })).toBe(
-      '每月 第 2 个周二 09:00'
+      '每月 第 2 个周二 9:00 AM'
     )
   })
 
   test('最后一个星期几不说成「第 最后一个」', () => {
     const s = zh({ freq: 'monthly', monthMode: 'nth', ordinal: 'last', weekday: 5, hour: 9 })
-    expect(s).toBe('每月 最后一个周五 09:00')
+    expect(s).toBe('每月 最后一个周五 9:00 AM')
     expect(s).not.toContain('第 最后一个')
+  })
+
+  test('🔴 zh 不渲染成「上午/下午」（Intl hour12 会那样，故手工拼）', () => {
+    const s = zh({ freq: 'daily', hour: 13, minute: 5 })
+    expect(s).toBe('每天 1:05 PM')
+    expect(s).not.toContain('下午')
+    expect(s).not.toContain('上午')
+  })
+
+  test('中英时刻记号完全一致（只有句子结构随 locale 变）', () => {
+    const r: Partial<ScheduleRule> = { freq: 'daily', hour: 0, minute: 0 }
+    expect(sentenceText(t, 'zh-CN', rule(r))).toContain('12:00 AM')
+    expect(sentenceText(t, 'en-US', rule(r))).toContain('12:00 AM')
   })
 })
 

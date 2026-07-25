@@ -33,41 +33,29 @@ export function ordinalName(t: Translate, o: number | 'last'): string {
 }
 
 /**
- * 本地化时刻：12 小时制 locale → `9:30 AM`；24 小时制 locale → `09:30`。
- * 制式由 Intl 按 locale 决定（不硬编码语言判断）；**只在 24 小时制下补零** ——
- * 中文 UI 惯例是 09:30（项目既有 HOUR_OPTIONS 也 padStart），而英文 "09:30 AM" 反而拗口。
+ * 时刻文案：**中英一律 12 小时制 + AM/PM**（`9:30 AM`），与上游组件一致。
+ *
+ * 🔴 有意不跟 locale 走（dogfood 反馈，owner 用中文 UI 但明确要 AM/PM）：
+ *  • 曾按 locale 分叉成 en→12h / zh→24h `09:30`，owner 要求改回 AM/PM。
+ *  • 也**不能**用 `Intl` 的 hour12 —— zh-CN 的 dayPeriod 会渲染成「上午/下午」，
+ *    而 owner 要的就是 AM/PM 这两个字。故这里手工拼，不经 Intl。
+ * AM/PM 不走 i18n key：它是时间**格式记号**（同冒号分隔符），在 V1 两个 locale 下取值相同。
  */
-export function timeLabel(locale: string, hour: number, minute: number): string {
-  const d = new Date(Date.UTC(2000, 0, 1, hour, minute))
-  try {
-    const parts = new Intl.DateTimeFormat(locale, {
-      hour: 'numeric',
-      minute: '2-digit',
-      timeZone: 'UTC'
-    }).formatToParts(d)
-    const is12h = parts.some((p) => p.type === 'dayPeriod')
-    return parts
-      .map((p) => (p.type === 'hour' && !is12h ? p.value.padStart(2, '0') : p.value))
-      .join('')
-  } catch {
-    return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`
-  }
+export function timeLabel(hour: number, minute: number): string {
+  return `${hour12(hour)}:${String(minute).padStart(2, '0')} ${meridiem(hour)}`
 }
 
-/** 小时下拉的选项文案：12 小时制 → `9 AM`；24 小时制 → `09`（不带 zh 的「时」后缀）。 */
-export function hourOptionLabel(locale: string, hour: number): string {
-  const d = new Date(Date.UTC(2000, 0, 1, hour))
-  try {
-    const parts = new Intl.DateTimeFormat(locale, {
-      hour: 'numeric',
-      timeZone: 'UTC'
-    }).formatToParts(d)
-    const h = parts.find((p) => p.type === 'hour')?.value ?? String(hour)
-    const dayPeriod = parts.find((p) => p.type === 'dayPeriod')?.value
-    return dayPeriod ? `${h} ${dayPeriod}` : h.padStart(2, '0')
-  } catch {
-    return String(hour).padStart(2, '0')
-  }
+/** 小时下拉的选项文案：`9 AM` / `12 PM`（同 timeLabel，中英一致）。 */
+export function hourOptionLabel(hour: number): string {
+  return `${hour12(hour)} ${meridiem(hour)}`
+}
+
+function hour12(hour: number): number {
+  return hour % 12 === 0 ? 12 : hour % 12
+}
+
+function meridiem(hour: number): 'AM' | 'PM' {
+  return hour < 12 ? 'AM' : 'PM'
 }
 
 /** 星期名列表 → 本地化连接（en "Tuesday and Thursday" · zh「周二和周四」）。 */
@@ -108,7 +96,7 @@ export function sentenceText(t: Translate, locale: string, rule: ScheduleRule): 
   return [
     freqPhrase(t, rule),
     targetPhrase(t, locale, rule),
-    t(`${NS}.atTime`, { time: timeLabel(locale, rule.hour, rule.minute) })
+    t(`${NS}.atTime`, { time: timeLabel(rule.hour, rule.minute) })
   ]
     .filter((s): s is string => Boolean(s))
     .join(' ')

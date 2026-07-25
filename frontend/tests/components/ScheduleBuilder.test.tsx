@@ -134,7 +134,30 @@ describe('组件全能力（PRD 验收）', () => {
     fireEvent.change(hour, { target: { value: '23' } })
     fireEvent.change(minute, { target: { value: '47' } })
     expect(last!.rule).toMatchObject({ hour: 23, minute: 47 })
-    expect(screen.getByTestId('schedule-sentence').textContent).toContain('23:47')
+    // 12 小时制 + AM/PM（dogfood）：23:47 → 11:47 PM
+    expect(screen.getByTestId('schedule-sentence').textContent).toContain('11:47 PM')
+  })
+
+  test('分钟下拉是纯两位数字，不带前导冒号（dogfood）', () => {
+    render(<Harness initial={makeValue({ freq: 'daily' })} />)
+    const minute = screen.getByLabelText('分钟') as HTMLSelectElement
+    const labels = within(minute)
+      .getAllByRole('option')
+      .map((o) => o.textContent)
+    expect(labels.slice(0, 4)).toEqual(['00', '01', '02', '03'])
+    expect(labels.some((l) => l?.startsWith(':'))).toBe(false)
+  })
+
+  test('小时下拉是 AM/PM 制（中文 UI 下也是 AM/PM，不是「上午」）', () => {
+    render(<Harness initial={makeValue({ freq: 'daily' })} />)
+    const hour = screen.getByLabelText('小时') as HTMLSelectElement
+    const labels = within(hour)
+      .getAllByRole('option')
+      .map((o) => o.textContent)
+    expect(labels[0]).toBe('12 AM')
+    expect(labels[9]).toBe('9 AM')
+    expect(labels[13]).toBe('1 PM')
+    expect(labels.some((l) => l?.includes('上午') || l?.includes('时'))).toBe(false)
   })
 
   test('lockFreq：频率段不渲染（报告 Agent 用）', () => {
@@ -148,12 +171,12 @@ describe('组件全能力（PRD 验收）', () => {
 
 describe('🔴 预览按规则时区，不是浏览器本地时区', () => {
   // vitest 全局 TZ 钉死 America/Los_Angeles（vitest.config.ts）。
-  test('选 Asia/Shanghai：预览时刻是上海墙钟 09:00 + GMT+8', () => {
+  test('选 Asia/Shanghai：预览时刻是上海墙钟 9:00 AM + GMT+8', () => {
     render(<Harness initial={makeValue({ freq: 'daily', hour: 9 }, 'Asia/Shanghai')} />)
     const rows = previewRows()
     expect(rows).toHaveLength(5)
     for (const row of rows) {
-      expect(row.textContent).toContain('09:00')
+      expect(row.textContent).toContain('9:00 AM')
       expect(row.textContent).toContain('GMT+8')
     }
   })
@@ -161,7 +184,7 @@ describe('🔴 预览按规则时区，不是浏览器本地时区', () => {
   test('选 America/Los_Angeles：同一规则显示 LA 偏移（GMT-7/-8）', () => {
     render(<Harness initial={makeValue({ freq: 'daily', hour: 9 }, 'America/Los_Angeles')} />)
     for (const row of previewRows()) {
-      expect(row.textContent).toContain('09:00')
+      expect(row.textContent).toContain('9:00 AM')
       expect(row.textContent).toMatch(/GMT-[78]/)
     }
   })
@@ -183,7 +206,36 @@ describe('🔴 预览按规则时区，不是浏览器本地时区', () => {
       />
     )
     expect(previewRows()[0].textContent).toMatch(/GMT\+[12]/)
-    expect(previewRows()[0].textContent).toContain('09:00')
+    expect(previewRows()[0].textContent).toContain('9:00 AM')
+  })
+
+  // dogfood：默认值本来就是设备时区，但夹在 418 项字母序 IANA 里看不出来 → 顶部加带标注的
+  // 快捷项。vitest 全局 TZ 钉死 America/Los_Angeles，故设备时区就是 LA、缩写取到 PT。
+  test('时区下拉顶部有「设备时区」标注项，且缩写取到 PT', () => {
+    render(<Harness initial={makeValue({ freq: 'daily' })} />)
+    const tzSelect = screen.getByLabelText('时区') as HTMLSelectElement
+    const first = within(tzSelect).getAllByRole('option')[0]
+    expect(first.textContent).toContain('America/Los_Angeles')
+    expect(first.textContent).toContain('设备时区')
+    expect(first.textContent).toContain('PT')
+  })
+
+  test('🔴 顶部快捷项与列表项同 value（存的仍是 IANA 名，无 local 哨兵）', () => {
+    render(<Harness initial={makeValue({ freq: 'daily' })} />)
+    const tzSelect = screen.getByLabelText('时区') as HTMLSelectElement
+    const opts = within(tzSelect).getAllByRole('option') as HTMLOptionElement[]
+    expect(opts[0].value).toBe('America/Los_Angeles')
+    // 绝不能出现 'local' / '' 这类哨兵：空/哨兵时区正是本批契约消灭的东西
+    expect(opts.some((o) => o.value === 'local' || o.value === '')).toBe(false)
+    // 同 value 在列表里仍有本体（用户按字母序也找得到）
+    expect(opts.filter((o) => o.value === 'America/Los_Angeles')).toHaveLength(2)
+  })
+
+  test('选中设备时区时，select 回显带标注那条（同 value 取首个匹配）', () => {
+    render(<Harness initial={makeValue({ freq: 'daily' }, 'America/Los_Angeles')} />)
+    const tzSelect = screen.getByLabelText('时区') as HTMLSelectElement
+    expect(tzSelect.value).toBe('America/Los_Angeles')
+    expect(tzSelect.selectedIndex).toBe(0)
   })
 })
 
@@ -200,8 +252,8 @@ describe('句子随 locale 切换', () => {
     }
   })
 
-  test('zh-CN 是中文语序（不是英文直译）+ 24 小时制', () => {
+  test('zh-CN 是中文语序（不是英文直译）+ AM/PM 时刻', () => {
     render(<Harness initial={makeValue({ freq: 'weekly', weekdays: [2, 4], hour: 9 })} />)
-    expect(screen.getByTestId('schedule-sentence').textContent).toBe('每周 周二和周四 09:00')
+    expect(screen.getByTestId('schedule-sentence').textContent).toBe('每周 周二和周四 9:00 AM')
   })
 })
