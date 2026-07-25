@@ -191,16 +191,46 @@ ReportDoc = {
 ### 4.5 调度
 
 - `report_worker.tick_loop`（抄 [`daily_digest.tick_loop`](../../../src/notify/daily_digest.py)）：60s tick + fire window + `sync_store` state 去重 + 开机补推。
-- cadence：daily（hours=[9] 可配）/ weekly（weekday=Mon + hour）/ monthly（day=1 + hour）。
+- cadence：daily / weekly / monthly —— 决定**报告种类**（聚合窗、去重主键、层级聚合路径、执行排序），不只是节奏。
 - gate：`MAILAGENT_REPORT_AGENT_ENABLED`（总开关）+ per-agent `config.enabled`。
 - 挂 [`service.py`](../../../src/service.py) worker 列表（`daily_digest_task` 旁）。
+
+#### 🔴 排程形状统一（2026-07-24，commit `1923a9df`）
+
+排程配置改用与 custom agent **同一个** schedule-builder 组件 + **同一个** occurrence 求值器
+（`src/agents/schedule_rule.py`）。语义（RRULE / WKST=SU / clamp / DST / anchor 相位 / 星期编号
+双口径 / 老形状惰性映射）的唯一真相源 = [`架构/排程规则跨端契约`](../architecture/schedule-rule-contract.md)，
+**改这块前必读**。报告侧要点：
+
+- `schedule_json` 是**叠加**形状：新 `{v,kind:'schedule',rule,anchor,timezone}` 与 legacy
+  `{cadence,hours,weekday,day_of_month}` 镜像同时在盘。`kind:'schedule'` 在场时 **`rule` 是唯一权威**，
+  运行时不回头读镜像；镜像纯为**降级安全**（回滚旧版 app 时老 worker 仍读得懂）。
+- 🔴 **`cadence` 恒同步 `rule.freq`** —— `store.cadence_of()` 在新形状下**从 `rule.freq` 派生**。
+  由此：**任何覆写 cadence 的写者必须连 `rule.freq` 一起覆写**，否则在新形状行上静默失效
+  （`report run --cadence weekly` 生成 daily 报告、零报错）。manual-run 覆盖收敛为唯一入口
+  `store.agent_with_cadence_override()`（内存副本不落库），CLI `report run` / serve-api manual-run /
+  skill `report_run` 三处共用。
+- fire 判定从 `_due_hour()`（`now.hour`/`weekday`/`day` 直接比）改为 `_due_occurrence()` 走求值器；
+  两分支（当前 fire window / 当天单次 catch-up）+ `FIRE_WINDOW_MIN=30` + marker 机制语义逐字等价。
+  老行（无 `kind`）读时惰性映射、**不回写 DB**；生产存量两行（daily 9 点 / weekly 周一 9 点，空 tz）
+  升级后触发时刻逐分钟不变。
+- 空时区**写实**：迁移时解析成宿主机实际 IANA 值写入，不留空（留空会退化成 UTC 让 9:00 报告漂）。
+- ⚠️ 两个时区消费点：fire 判定读 `schedule_json.timezone`；窗口 / `report_date` / 叙述读
+  `report_agent.timezone` 列（`_agent_local`，空 = 宿主机本地）。抽屉只有一个时区选择器，但
+  `trigger_mode='rolling_24h'` 时列仍写空（历史语义保持）→ 若选了非宿主机时区，两者边界上可差一天。
+- UI：报告抽屉用 `lockFreq` 锁死构建器的频率段（报告种类不可被排程编辑改掉）；
+  `trigger_mode` / `window_hours` / `body_full_priorities` 仍由报告抽屉自渲染，不进共享组件。
 
 #### 🔴 时区语义（task 07-21 收敛，2026-07-21）
 
 **`hours:[9]` 是哪个时区的 9 点 = `agent.timezone`（IANA），留空 = 本机系统时区**（跟随电脑，owner 拍板）。
-fire 判定（`_due_hour` 的 `now.hour` / `weekday` / `day`）、slot marker 的日期、窗口计算
+fire 判定（当时的 `_due_hour`：`now.hour` / `weekday` / `day` 直接比）、slot marker 的日期、窗口计算
 （`_window` / `_period_bounds`）**全部同一口径** —— 与 [`trigger_worker`](../../../src/agents/trigger_worker.py)
 的 `UTC now → ZoneInfo → croniter` 范式对齐。
+
+> 🔧 **07-24 增量**：fire 判定已由 `_due_occurrence()` + 共享求值器取代 `_due_hour()`（上一节）。
+> 老行的时区口径不变（惰性映射直接沿用 `_agent_local` 转好的墙钟）；新 `kind:'schedule'` 行的
+> fire 判定改读 payload 里的 `timezone`（迁移时写实成同一个值 → 行为等价）。
 
 修复前（v1.14.2 及以前）`now_fn` 默认 `datetime.now(UTC+8)` 硬编码，`hours:[9]` 恒为**北京 9 点**，
 与电脑时区、与 `agent.timezone` 都无关（owner 从深圳回洛杉矶后变成每天 LA 18:00 触发）。
@@ -235,7 +265,9 @@ CREATE TABLE report_agent (
   type TEXT NOT NULL DEFAULT 'report',
   enabled INTEGER NOT NULL DEFAULT 0,
   title TEXT,
-  schedule_json TEXT,              -- {cadence, hours, weekday?, day_of_month?}
+  schedule_json TEXT,              -- 07-24 起叠加形状: {v,kind:'schedule',rule,anchor,timezone}
+                                   --   + legacy 镜像 {cadence, hours, weekday?, day_of_month?}
+                                   --   （kind 在场时 rule 权威；cadence 恒 = rule.freq。见 §4.5）
   window_hours INTEGER,
   prompt TEXT,
   model TEXT,                      -- preprocess 行: 空 = 跟随全局 LLM_MODEL（v1.1.0 行级模型拆分）

@@ -15,3 +15,4 @@
 | [`backend-service-migration-matrix.md`](./backend-service-migration-matrix.md) | 查写操作×传输端迁移状态 | 后端服务化迁移能力矩阵（活看板） |
 | [`roadmap-post-cutover.md`](./roadmap-post-cutover.md) | 看短中长期规划 / EWS 关停应对前 | DavMail 切换后 Roadmap（含 EWS 2026-10 退役、Graph 路线） |
 | [`davmail-write-path-trace.md`](./davmail-write-path-trace.md) | 退役 Notion 反向链路(B1) / 清 outbox 灰度死分支前 | davmail 写op×路径 trace + B1 反向链路现状判定 + AppleScript fallback 链 + B1 退役决策选项（人工介入点 + STOP 清单） |
+| [`schedule-rule-contract.md`](./schedule-rule-contract.md) | 动 custom agent 定时触发 / 报告 Agent 排程 / schedule-builder 预览前 | 排程规则跨端契约：`kind:'schedule'` 持久化形状 + RRULE 语义（WKST=SU / clamp / DST / anchor 相位）+ 星期编号双口径 + 老形状惰性映射 + 两个 worker 接入点 + 黄金 fixture 闸 |
