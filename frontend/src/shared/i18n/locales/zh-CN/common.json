@@ -2198,6 +2198,18 @@
         "draftsSync": {
           "label": "草稿箱同步",
           "helper": "把 Exchange 草稿箱同步进本地列表（仅本地，不进 Notion / AI / 飞书）。"
+        },
+        "folderSizeLimit": {
+          "label": "IMAP 文件夹视图上限（封）",
+          "helper": "只让 DavMail 在 IMAP 里暴露每个文件夹最近 N 封邮件。大邮箱（超过 1 万封）不限制时，每次同步都要让 DavMail 经 EWS 把整个文件夹枚举一遍——慢到超时，整条同步链停摆。代价：窗口外更早的邮件在 IMAP 层不可见（已同步到本地的历史邮件不受影响，只影响增量同步和标记/归档等写操作能触达的范围）。默认 500；填 0 表示不由 MailAgent 管理这一项。",
+          "status": {
+            "updated": "已写入 DavMail 配置文件（{path} → davmail.folderSizeLimit={desired}）。DavMail 只在启动时读配置，重启 DavMail 桥（pm2 restart davmail-poc）后才生效。",
+            "unchanged": "DavMail 配置文件里已是 {value} 封（{path}），无需改动。",
+            "fileMissing": "未找到 DavMail 配置文件，此设置当前不生效：{path}。请在 .env 配 DAVMAIL_ROOT 指向 DavMail 部署目录，或手动在 davmail.properties 里加一行 davmail.folderSizeLimit={desired}。",
+            "error": "写入 DavMail 配置文件失败，此设置当前可能不生效：{path}（失败原因见后端日志）。",
+            "disabled": "已设为 0：MailAgent 不管理这一项，DavMail 用配置文件里自己的值（当前 {value}）。",
+            "disabledUnset": "已设为 0：MailAgent 不管理这一项，DavMail 配置文件里也没有设置它（大邮箱有停摆风险）。"
+          }
         }
       },
       "calendar": {
@@ -2994,6 +3006,8 @@
       "on": "在",
       "at": "时刻",
       "timezone": "时区",
+      "tzDevice": "{tz}（设备时区 · {abbr}）",
+      "tzDeviceNoAbbr": "{tz}（设备时区）",
       "monthEnd": "月末",
       "lessOften": "降低频率",
       "moreOften": "提高频率",

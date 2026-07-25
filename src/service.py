@@ -289,6 +289,13 @@ class EmailNotionSyncApp:
                 if config.davmail_root
                 else _REPO_ROOT / "davmail-poc"
             )
+            # davmail.folderSizeLimit 同步 (2026-07-24 大邮箱停摆事故): 把
+            # DAVMAIL_FOLDER_SIZE_LIMIT 写进 davmail.properties, 状态落 sync_state
+            # 供 Settings 面如实显示。写文件 ≠ 生效 —— DavMail 只在启动时读配置。
+            from src.mail.davmail_properties import apply_and_record
+            apply_and_record(
+                self.watcher.sync_store, _davmail_root, config.davmail_folder_size_limit
+            )
             self.davmail_watchdog = DavMailWatchdog(
                 sync_store=self.watcher.sync_store,
                 alerter=self.alerter,

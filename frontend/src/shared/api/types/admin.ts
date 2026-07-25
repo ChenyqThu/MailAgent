@@ -103,6 +103,15 @@ export interface DavMailHealthData {
   last_oauth_error_at: string | null
   /** Watchdog auto-pauses uid-mapper when throttling >= 3 in 5min. */
   uid_backfill_paused: boolean
+  /** davmail.folderSizeLimit 同步状态 (mail-sync 启动时把 DAVMAIL_FOLDER_SIZE_LIMIT
+   *  写进 davmail.properties, 见 src/mail/davmail_properties.py)。与 watchdog 独立,
+   *  故 enabled=false 时也可能有值; 键全缺 (老后端 / 从未跑过) → null。
+   *  file_missing = 找不到 davmail.properties → 该设置**不生效**, UI 必须如实说。 */
+  folder_size_limit_status?: 'updated' | 'unchanged' | 'file_missing' | 'error' | 'disabled' | null
+  folder_size_limit_path?: string | null
+  folder_size_limit_desired?: number | null
+  /** davmail.properties 里实际的值 (读不到 → null)。 */
+  folder_size_limit_file_value?: number | null
 }
 
 export interface SystemAlertItem {

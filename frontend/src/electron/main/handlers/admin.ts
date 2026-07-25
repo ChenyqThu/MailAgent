@@ -168,6 +168,13 @@ export interface DavMailHealthData {
   last_oauth_error: string | null
   last_oauth_error_at: string | null
   uid_backfill_paused: boolean
+  /** davmail.folderSizeLimit 同步状态 (src/mail/davmail_properties.py 启动时落盘)。
+   *  与 watchdog 无关 → watchdog 没 tick 时也带值。null = 后端还没跑过同步。 */
+  folder_size_limit_status?: 'updated' | 'unchanged' | 'file_missing' | 'error' | 'disabled' | null
+  folder_size_limit_path?: string | null
+  folder_size_limit_desired?: number | null
+  /** davmail.properties 里实际的值 (读不到 → null)。 */
+  folder_size_limit_file_value?: number | null
 }
 
 export interface SystemAlertItem {
@@ -183,6 +190,31 @@ export interface SystemAlertsData {
   critical_count: number
   warning_count: number
   generated_at: string
+}
+
+/** sync_state davmail.folder_size_limit.* → DavMailHealthData 的四个字段。
+ *  键缺失 (老后端 / 非 davmail 模式) → 全 null, UI 据此不渲染状态行。 */
+function readFolderSizeLimitState(
+  state: Record<string, string>
+): Pick<
+  DavMailHealthData,
+  | 'folder_size_limit_status'
+  | 'folder_size_limit_path'
+  | 'folder_size_limit_desired'
+  | 'folder_size_limit_file_value'
+> {
+  const asOptInt = (raw: string | undefined): number | null => {
+    if (!raw) return null
+    const n = parseInt(raw, 10)
+    return Number.isFinite(n) ? n : null
+  }
+  const status = state['davmail.folder_size_limit.status'] || null
+  return {
+    folder_size_limit_status: (status ?? null) as DavMailHealthData['folder_size_limit_status'],
+    folder_size_limit_path: state['davmail.folder_size_limit.path'] || null,
+    folder_size_limit_desired: asOptInt(state['davmail.folder_size_limit.desired']),
+    folder_size_limit_file_value: asOptInt(state['davmail.folder_size_limit.file_value'])
+  }
 }
 
 function readDavmailStateRows(): Record<string, string> {
@@ -220,10 +252,14 @@ export function runDavmailHealth(): DavMailHealthData {
       uid_backfill_paused: false
     }
   }
+  // davmail.folderSizeLimit 同步状态 (Python 启动时落盘, 与 watchdog 无关) —— 两条
+  // return 路径都带上: watchdog 还没 tick 时 Settings 面同样要能说清写没写进去。
+  const folderSizeLimit = readFolderSizeLimitState(state)
   const lastProbe = state['davmail.last_probe_at'] || null
   // 没 last_probe_at 说明 mail-sync 没在 davmail mode 跑 watchdog
   if (!lastProbe) {
     return {
+      ...folderSizeLimit,
       enabled: false,
       level: 'unknown',
       last_probe_at: null,
@@ -270,6 +306,7 @@ export function runDavmailHealth(): DavMailHealthData {
   else if (!imapOk || !smtpOk) level = 'warning'
 
   return {
+    ...folderSizeLimit,
     enabled: true,
     level,
     last_probe_at: lastProbe,

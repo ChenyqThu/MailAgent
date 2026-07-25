@@ -2198,6 +2198,18 @@
         "draftsSync": {
           "label": "Drafts sync",
           "helper": "Sync the Exchange Drafts folder into your local list (local only — no Notion / AI / Feishu)."
+        },
+        "folderSizeLimit": {
+          "label": "IMAP folder view limit (messages)",
+          "helper": "Exposes only the most recent N messages of each folder over IMAP. On a large mailbox (over 10,000 messages) an unlimited view makes DavMail enumerate the whole folder over EWS on every sync — slow enough to time out and stall the entire sync chain. The cost: older messages outside the window are invisible at the IMAP layer (history already synced locally is unaffected; this only limits what incremental sync and write operations such as flag / archive can reach). Default 500; set 0 to leave this key entirely to DavMail.",
+          "status": {
+            "updated": "Written to the DavMail config file ({path} → davmail.folderSizeLimit={desired}). DavMail only reads its config at startup, so restart the DavMail bridge (pm2 restart davmail-poc) for it to take effect.",
+            "unchanged": "The DavMail config file already has {value} ({path}); nothing to change.",
+            "fileMissing": "DavMail config file not found, so this setting has no effect right now: {path}. Point DAVMAIL_ROOT in .env at your DavMail directory, or add davmail.folderSizeLimit={desired} to davmail.properties by hand.",
+            "error": "Failed to write the DavMail config file, so this setting may have no effect: {path} (see the backend log for the reason).",
+            "disabled": "Set to 0: MailAgent leaves this key alone and DavMail uses its own config value (currently {value}).",
+            "disabledUnset": "Set to 0: MailAgent leaves this key alone, and the DavMail config file doesn't set it either (risky on large mailboxes)."
+          }
         }
       },
       "calendar": {
@@ -2994,6 +3006,8 @@
       "on": "On",
       "at": "At",
       "timezone": "Timezone",
+      "tzDevice": "{tz} (device · {abbr})",
+      "tzDeviceNoAbbr": "{tz} (device)",
       "monthEnd": "Month end",
       "lessOften": "Less often",
       "moreOften": "More often",

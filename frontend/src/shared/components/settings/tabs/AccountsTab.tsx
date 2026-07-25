@@ -21,12 +21,15 @@
 import * as React from 'react'
 import { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { AlertTriangle } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
+import { AlertTriangle, Info } from 'lucide-react'
 
 import { useMailApi } from '@shared/hooks/useMailApi'
+import { cn } from '@shared/lib/cn'
 import { SegmentedControl } from '@shared/components/ui/segmented'
 import { applyEnvPatch, useEnvStore } from '@shared/state/env'
 import { errorMessage } from '@shared/lib/ipcErrors'
+import { qk } from '@shared/lib/queryKeys'
 import { useRestartStore } from '@shared/state/restart'
 import { toastError, toastSuccess } from '@shared/state/toast'
 
@@ -67,6 +70,97 @@ function NotionDisabledNotice(): React.ReactElement | null {
             'Notion 未配置：镜像同步 / 项目周报 / 日历同步已停用，邮件仅在本地同步（列表、搜索、AI 分类等本地功能不受影响）。填齐 Token 与邮件数据库 ID 并重启后启用。'
         })}
       </p>
+    </div>
+  )
+}
+
+/** davmail.folderSizeLimit 落地状态 — 这个设置**是否真的生效**的唯一诚实信号。
+ *
+ *  链路: .env DAVMAIL_FOLDER_SIZE_LIMIT → mail-sync 启动时写进
+ *  `<DAVMAIL_ROOT>/config/davmail.properties` → **重启 DavMail 桥后**才被读取。
+ *  DAVMAIL_ROOT 没配 (打包 .app 的默认解析会落进 site-packages) 时文件根本不存在,
+ *  这个输入框就是不生效 —— 必须显式说出来, 不能让它看起来像保存成功了。
+ *
+ *  状态源 = sync_state davmail.folder_size_limit.*, 经 admin.davmailHealth 读
+ *  (与 DavMailHealthCard 同 queryKey, 同页不重复请求)。后端没跑过同步 (老版本 /
+ *  非 davmail 模式) → 字段为空 → 不渲染。 */
+function FolderSizeLimitStatus(): React.ReactElement | null {
+  const { t } = useTranslation()
+  const api = useMailApi()
+  const { data } = useQuery({
+    queryKey: qk.admin.davmailHealth(),
+    queryFn: () => api.admin.davmailHealth(),
+    staleTime: 30_000,
+    retry: false
+  })
+
+  const status = data?.folder_size_limit_status
+  if (!status) return null
+
+  const path = data?.folder_size_limit_path ?? ''
+  const desired = data?.folder_size_limit_desired ?? 0
+  const fileValue = data?.folder_size_limit_file_value
+
+  const problem = status === 'file_missing' || status === 'error'
+  let text: string
+  if (status === 'file_missing') {
+    text = t('settings.accounts.davmail.folderSizeLimit.status.fileMissing', {
+      path,
+      desired,
+      defaultValue:
+        '未找到 DavMail 配置文件，此设置当前不生效：{path}。请在 .env 配 DAVMAIL_ROOT 指向 DavMail 部署目录，或手动在 davmail.properties 里加一行 davmail.folderSizeLimit={desired}。'
+    })
+  } else if (status === 'error') {
+    text = t('settings.accounts.davmail.folderSizeLimit.status.error', {
+      path,
+      defaultValue:
+        '写入 DavMail 配置文件失败，此设置当前可能不生效：{path}（失败原因见后端日志）。'
+    })
+  } else if (status === 'updated') {
+    text = t('settings.accounts.davmail.folderSizeLimit.status.updated', {
+      path,
+      desired,
+      defaultValue:
+        '已写入 DavMail 配置文件（{path} → davmail.folderSizeLimit={desired}）。DavMail 只在启动时读配置，重启 DavMail 桥（pm2 restart davmail-poc）后才生效。'
+    })
+  } else if (status === 'disabled') {
+    text =
+      fileValue === null || fileValue === undefined
+        ? t('settings.accounts.davmail.folderSizeLimit.status.disabledUnset', {
+            defaultValue:
+              '已设为 0：MailAgent 不管理这一项，DavMail 配置文件里也没有设置它（大邮箱有停摆风险）。'
+          })
+        : t('settings.accounts.davmail.folderSizeLimit.status.disabled', {
+            value: fileValue,
+            defaultValue:
+              '已设为 0：MailAgent 不管理这一项，DavMail 用配置文件里自己的值（当前 {value}）。'
+          })
+  } else {
+    text = t('settings.accounts.davmail.folderSizeLimit.status.unchanged', {
+      path,
+      value: fileValue ?? desired,
+      defaultValue: 'DavMail 配置文件里已是 {value} 封（{path}），无需改动。'
+    })
+  }
+
+  return (
+    <div className="px-[var(--settings-tile-px,1rem)] pb-[var(--settings-tile-py,0.875rem)] -mt-1">
+      <div
+        role="status"
+        className={cn(
+          'flex items-start gap-2 rounded-lg border px-2.5 py-2',
+          problem ? 'border-warn/30 bg-warn/10' : 'border-ink-border bg-ink-2/50'
+        )}
+      >
+        {problem ? (
+          <AlertTriangle size={13} className="shrink-0 mt-0.5 text-warn" aria-hidden="true" />
+        ) : (
+          <Info size={13} className="shrink-0 mt-0.5 text-ink-fg-2" aria-hidden="true" />
+        )}
+        <p className={cn('text-aux leading-relaxed', problem ? 'text-ink-fg-1' : 'text-ink-fg-2')}>
+          {text}
+        </p>
+      </div>
     </div>
   )
 }
@@ -221,6 +315,23 @@ function MailSourceSection(): React.ReactElement {
             helper={t('settings.sync.mailboxes.helper')}
             placeholder={t('settings.sync.mailboxes.placeholder') ?? undefined}
           />
+          {/* davmail.folderSizeLimit —— 2026-07-24 大邮箱停摆事故的可配置化。
+              值写进 davmail.properties (Python 启动时同步), 下方状态行说明到底
+              写没写进去 / 要不要重启 DavMail, 别让它看起来"保存了就生效了"。 */}
+          <EnvField
+            envKey="DAVMAIL_FOLDER_SIZE_LIMIT"
+            control="number"
+            label={t('settings.accounts.davmail.folderSizeLimit.label', {
+              defaultValue: 'IMAP 文件夹视图上限（封）'
+            })}
+            helper={t('settings.accounts.davmail.folderSizeLimit.helper', {
+              defaultValue:
+                '只让 DavMail 在 IMAP 里暴露每个文件夹最近 N 封邮件。大邮箱（超过 1 万封）不限制时，每次同步都要让 DavMail 经 EWS 把整个文件夹枚举一遍——慢到超时，整条同步链停摆。代价：窗口外更早的邮件在 IMAP 层不可见（已同步到本地的历史邮件不受影响，只影响增量同步和标记/归档等写操作能触达的范围）。默认 500；填 0 表示不由 MailAgent 管理这一项。'
+            })}
+            min={0}
+            max={100000}
+          />
+          <FolderSizeLimitStatus />
           <AdvancedDisclosure
             label={t('settings.accounts.davmail.advanced.title', {
               defaultValue: '高级连接'

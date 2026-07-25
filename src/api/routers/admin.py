@@ -678,9 +678,25 @@ def _build_davmail_health(state: dict[str, str]) -> dict:
             login_degraded=login_degraded,
         )
 
+    # davmail.folderSizeLimit 同步状态 (src/mail/davmail_properties.py, 启动时落盘)。
+    # 与 watchdog 无关 → 不受 enabled 影响: 即使 watchdog 还没 tick, Settings 面也要
+    # 能说清这个设置到底写进 davmail.properties 没有。
+    fsl_desired = state.get("davmail.folder_size_limit.desired")
+    fsl_file = state.get("davmail.folder_size_limit.file_value")
+
+    def _as_opt_int(raw: Optional[str]) -> Optional[int]:
+        try:
+            return int(raw) if raw else None
+        except (TypeError, ValueError):
+            return None
+
     return {
         "enabled": enabled,
         "level": level,
+        "folder_size_limit_status": state.get("davmail.folder_size_limit.status") or None,
+        "folder_size_limit_path": state.get("davmail.folder_size_limit.path") or None,
+        "folder_size_limit_desired": _as_opt_int(fsl_desired),
+        "folder_size_limit_file_value": _as_opt_int(fsl_file),
         "last_probe_at": last_probe_at,
         "imap_reachable": imap_ok,
         "smtp_reachable": smtp_ok,

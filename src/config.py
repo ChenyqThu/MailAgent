@@ -929,6 +929,18 @@ class Config(BaseSettings):
             "\\Sent 探测 + fallback 常见名. 仅 davmail_archive_sent=True 时用."
         ),
     )
+    davmail_folder_size_limit: int = Field(
+        default=500, env="DAVMAIL_FOLDER_SIZE_LIMIT",
+        description=(
+            "DavMail IMAP 文件夹视图只保留最近 N 封 (写进 davmail.properties 的 "
+            "davmail.folderSizeLimit)。>10k 的大邮箱不配这项时, 每次 SELECT/STATUS 都让 "
+            "DavMail 经 EWS 全量枚举 → 超时、同步停摆 (2026-07-24 事故: 10617 封收件箱, "
+            "裸 IMAP greeting 16.7s)。mail-sync 启动时 (仅 davmail 模式) 同步进 "
+            "<DAVMAIL_ROOT>/config/davmail.properties, **需重启 davmail 桥才生效**; "
+            "找不到该文件 = 不生效 (状态落 sync_state davmail.folder_size_limit.*, "
+            "Settings 面如实显示)。0 = MailAgent 不管理该键, DavMail 用自身配置。"
+        ),
+    )
     davmail_poll_interval_sec: int = Field(
         default=30, env="DAVMAIL_POLL_INTERVAL_SEC",
         description=(
