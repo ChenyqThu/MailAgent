@@ -14,8 +14,26 @@ model: sonnet
    - 🔴 缺失 → 先 `bash frontend/scripts/build-python-venv.sh arm64` 再 build。
 
 2. **better-sqlite3 = Electron ABI**（坑②：停在 rebuild:node 态 → 装机后 SQLite IPC 全崩、renderer 报 NODE_MODULE_VERSION、启动卡 120s）
-   - `cd frontend && ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron -e "require('better-sqlite3')"`
-   - 🔴 报错 → 先 `cd frontend && pnpm rebuild:electron`（注意：`pnpm test` 会把它切回 node ABI，测完再 build 必须重切）。
+   - 🔴 **`require('better-sqlite3')` 是无效探针，别用**：`.node` 是懒加载的，`require()` 成功时
+     `require.cache` 里根本没有 `.node`（实测），故它**无论 ABI 对错都通过** —— 这正是本坑
+     反复出现的原因（2026-07-24 v1.19.0 又中一次，preflight「验过」的是个恒真条件）。
+   - 有效探针（**双向都要跑**：electron 成功 **且** node 失败才算数，只验一边分不清
+     「ABI 对」与「探针没生效」）：
+     ```bash
+     cd frontend
+     ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron -e "new (require('better-sqlite3'))(':memory:')"
+     node -e "try{new (require('better-sqlite3'))(':memory:');console.log('BAD: Node ABI')}catch(e){console.log('OK: 非 Node ABI')}"
+     ```
+   - 🔴 若 `dist/mac-arm64/MailAgent.app` 已存在（复验既有产物时），**必须验包内那份**，
+     源树对不代表打包带对：
+     ```bash
+     N="dist/mac-arm64/MailAgent.app/Contents/Resources/app.asar.unpacked/node_modules/better-sqlite3/build/Release/better_sqlite3.node"
+     ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron -e "process.dlopen({exports:{}}, '$PWD/$N')"  # 成功 = 对
+     node -e "process.dlopen({exports:{}}, '$PWD/$N')"                                                  # 必须失败
+     ```
+   - 🔴 报错 → 先 `cd frontend && pnpm rebuild:electron`。注意 `pnpm test` **本身就是**
+     `pnpm rebuild:node && vitest run` —— 任何一次跑完整前端测试都会把 ABI 翻回 Node，
+     故「build 前重切」不是一次性动作，是**每次 build 前都要确认**。
 
 3. **版本号已 bump**（SSoT = frontend/package.json 的 version；**读实际值，不硬编码** —— CLAUDE.md 正文版本号可能已过时）
    - 读 `frontend/package.json` 的 version，与 `git tag --sort=-v:refname | head -3` 比对。

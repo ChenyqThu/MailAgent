@@ -144,7 +144,21 @@ tail -f logs/sync.log
 - **前置**（`frontend/` 下，均 gitignored 本地产物）：`node_modules`（`pnpm install`）+ `resources/python`（`bash scripts/build-python-venv.sh`，~425M 可重定位嵌入式 CPython——mem0 epic 引入 onnxruntime/faiss 等本地 embedding 栈后的基线；本机已 provision，换机/新 clone 必先跑）。
 - **构建**：本地装用 `pnpm run build && npx electron-builder --dir --arm64`（只出 `.app`，避开 flaky 的 dmg）；完整 feed 产物（dmg+zip+blockmap+latest-mac.yml）用 `pnpm build:mac`。**🔴 要含远程 web（`mail.chenge.ink/app`）必先 `pnpm build:web`**（出 `out/web` → electron-builder `from: out/web` 打进 `.app/Resources/web` → serve-api 经 `MAILAGENT_SPA_DIR` mount `/app`）；`pnpm run build` **不含** web SPA，漏跑则远程根 `/` 返 `{"detail":"Not Found"}`（`build:mac` 已含 `build:web`，仅 `--dir` 装机路径需手动补 `pnpm build:web &&`）。
 - **🔴 头号坑①（python）**：`resources/python` 缺失 → afterPack（`scripts/afterPack.cjs`）**跳过整个签名** → `.app` 无后端 + `codesign` FAIL。build 前必确认它在。
-- **🔴 头号坑②（ABI，0.2.3 踩过）**：build 前**绝不跑 `pnpm rebuild:node`**（把 better-sqlite3 编成 Node ABI）；electron-builder `npmRebuild:false` **不自动切回 Electron ABI** → 装进 app 的 `better_sqlite3.node` ABI 不匹配 → 所有 SQLite IPC（`email:listEnriched`）崩（renderer 报 `NODE_MODULE_VERSION`、界面全空）+ `probeDbReady` 失败致启动卡 120s。**跑过单测（`pnpm test` 含 rebuild:node）后 build 前必 `pnpm rebuild:electron`**。验证：`ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron -e "require('better-sqlite3')"`（不报错=对）。
+- **🔴 头号坑②（ABI，0.2.3 踩过）**：build 前**绝不跑 `pnpm rebuild:node`**（把 better-sqlite3 编成 Node ABI）；electron-builder `npmRebuild:false` **不自动切回 Electron ABI** → 装进 app 的 `better_sqlite3.node` ABI 不匹配 → 所有 SQLite IPC（`email:listEnriched`）崩（renderer 报 `NODE_MODULE_VERSION`、界面全空）+ `probeDbReady` 失败致启动卡 120s。**跑过单测（`pnpm test` 含 rebuild:node）后 build 前必 `pnpm rebuild:electron`** —— 🔴 注意 `pnpm test` 本身就是 `pnpm rebuild:node && vitest run`，所以**任何一次跑完整前端测试都会把 ABI 翻回 Node**；「build 前重跑 rebuild:electron」不是一次性动作，是**每次 build 前都要确认**（2026-07-24 v1.19.0 dogfood 再次踩中：第一次 build 前做了，中途为验证另一条 lane 又跑了 `pnpm test`，第二次 build 前漏做）。
+
+🔴 **验证方法必须真的触发原生加载** —— 旧记的 `electron -e "require('better-sqlite3')"` **是无效探针**：better-sqlite3 的 `.node` 是**懒加载**的，`require()` 成功时 `require.cache` 里根本没有 `.node`（实测），故该命令**无论 ABI 对错都通过**，给的是虚假安全感（这正是本坑反复出现的原因）。有效探针二选一：
+
+```bash
+# ① 源树：真的实例化一个 Database（会触发 dlopen）
+ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron -e "new (require('better-sqlite3'))(':memory:')"
+
+# ② 🔴 包内 / 装机副本（真正该验的那份 —— 源树对不代表打包带对）
+N="/Applications/MailAgent.app/Contents/Resources/app.asar.unpacked/node_modules/better-sqlite3/build/Release/better_sqlite3.node"
+ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron -e "process.dlopen({exports:{}}, '$N')"   # 成功 = Electron ABI
+node -e "process.dlopen({exports:{}}, '$N')"                                                   # 必须失败 = 不是 Node ABI
+```
+
+双向都验（electron 成功 **且** node 失败）才算数：只验一边分不清「ABI 对」与「探针没生效」。
 - **验证**（每次 build 后）：`codesign --verify --deep --strict <app>` 必 OK + `Info.plist` 版本号对 + `Resources/python/bin/python3.11` 在。
 - **装机/升级**：退出旧 app → `ditto dist/mac-arm64/MailAgent.app /Applications/` → open。userData 跨重装保留 → 升级**跳过 onboarding**（detect `'configured'`）+ 后端启动自动 DB 迁移。用 `.app` 时 pm2 `mail-sync` 必须停（防双写）；davmail 用户 `davmail-poc` 留 pm2（EWS 桥，不打进 app）。
 - **改 Python 后端**后：必先 `bash frontend/scripts/build-python-venv.sh` 重 provision 才进包；只改前端 TS/CSS 不用。**改 Python 依赖（requirements.txt / pyproject extras）必须重新生成 `requirements.lock.txt`**——E0 WP5 起 provision 只认 lock（108 包全 `==` pin，保打包再现性），漏生成 = 依赖改动不进包；生成方法见 lock 文件头注释。
