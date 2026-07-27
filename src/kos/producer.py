@@ -167,10 +167,23 @@ def passes_priority_gate(
 
 
 def _yaml_quote(s: Optional[str]) -> str:
-    """YAML 单引号 quote (单引号自身 → 重复两次 escape)。"""
+    """YAML 单引号 quote (单引号自身 → 重复两次 escape; 换行/制表符先归一成空格)。
+
+    🔴 归一先于转义: 本函数拼出的是**单行** frontmatter 字段 (``f"title: {...}"``
+    这类, 靠 ``"\\n".join(fm)`` 拼行), 值里若带裸换行会把这一行从中间断成多行 ——
+    若断出来的某一行恰好长得像 ``---`` (YAML 文档分隔符), ``yaml.safe_load`` 直接
+    ``ScannerError``、整页 frontmatter 解析报废 (交叉 review 发现: subject 完全由
+    发件人控制、从未做换行归一; 全保留路线落地后 ai_category/sender_priority 等
+    自由文本字段同样无长度/内容约束, 风险面更大)。
+
+    只收窄到换行类空白 (``\\t`` ``\\n`` ``\\r`` 及竖式制表/换页), 不动普通空格/
+    全角空格 —— 不含这些字符的普通值转义前后逐字节不变。放在这一个函数里做,
+    是因为它是所有 frontmatter 字段唯一共享的出口, 单点修复全调用点受益。
+    """
     if s is None:
         return "''"
-    return "'" + str(s).replace("'", "''") + "'"
+    text = re.sub(r"[\t\n\r\x0b\x0c]+", " ", str(s))
+    return "'" + text.replace("'", "''") + "'"
 
 
 def _split_addrs(raw: Optional[str]) -> list[str]:

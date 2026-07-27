@@ -219,6 +219,76 @@ class TestPushRequireLabeled:
 
 
 # ============================================================
+# _yaml_quote (issue #60-63 批交叉 review: 值里裸换行会截断 frontmatter)
+# ============================================================
+
+class TestYamlQuote:
+    """空白归一 —— 值里带裸换行会把单行 frontmatter 字段从中间断成多行, 若断出来
+    的某行恰好是 `---` 就撞上 YAML 文档分隔符, 整页 yaml.safe_load 直接报废
+    (端到端复现见 TestBuildKosPagePayload.test_newline_injection_does_not_break_frontmatter_yaml)。"""
+
+    def test_none_unchanged(self):
+        from src.kos.producer import _yaml_quote
+
+        assert _yaml_quote(None) == "''"
+
+    def test_single_quote_still_escaped(self):
+        """单引号转义逻辑一字不动。"""
+        from src.kos.producer import _yaml_quote
+
+        assert _yaml_quote("It's a test") == "'It''s a test'"
+
+    def test_plain_values_byte_identical(self):
+        """不含换行类空白的普通值: 归一前后逐字节不变 —— 用原始 quote 公式当
+        oracle 直接比对, 而非只断言"看起来没变"。覆盖 emoji/中文/URL/连续常规
+        空格/首尾常规空格/全角空格 (U+3000 不在归一范围内, 不应被当作换行处理)。
+        """
+        from src.kos.producer import _yaml_quote
+
+        samples = [
+            "Q3 Review",
+            "外部联系人",
+            "🟡 重要",
+            "https://example.com/a/b?x=1",
+            "2026-05-23T10:30:00+08:00",
+            "a   b",  # 连续常规空格不应被压缩
+            "  leading and trailing  ",  # 首尾常规空格不应被剥离
+            "全角　空格",  # U+3000 全角空格, 不在归一范围内
+        ]
+        for raw in samples:
+            expected = "'" + raw.replace("'", "''") + "'"
+            assert _yaml_quote(raw) == expected, raw
+
+    def test_newline_becomes_space(self):
+        from src.kos.producer import _yaml_quote
+
+        assert _yaml_quote("工作\n---\nHACKED") == "'工作 --- HACKED'"
+
+    def test_crlf_collapses_to_single_space(self):
+        """\\r\\n 是一个整体换行, 应归一成一个空格, 不是两个。"""
+        from src.kos.producer import _yaml_quote
+
+        assert _yaml_quote("a\r\nb") == "'a b'"
+
+    def test_consecutive_newlines_collapse_to_one_space(self):
+        from src.kos.producer import _yaml_quote
+
+        assert _yaml_quote("a\n\n\nb") == "'a b'"
+
+    def test_tab_and_vertical_whitespace_become_space(self):
+        from src.kos.producer import _yaml_quote
+
+        assert _yaml_quote("a\tb") == "'a b'"
+        assert _yaml_quote("a\x0bb\x0cc") == "'a b c'"
+
+    def test_newline_and_single_quote_together(self):
+        """归一与转义两道处理互不干扰。"""
+        from src.kos.producer import _yaml_quote
+
+        assert _yaml_quote("It's\nbroken") == "'It''s broken'"
+
+
+# ============================================================
 # build_kos_page_payload (Scenario B — doc §4)
 # ============================================================
 
@@ -332,6 +402,32 @@ class TestBuildKosPagePayload:
             date_iso="2026-01-01", mailbox="收件箱",
         )
         assert "title: 'It''s a test'" in content
+
+    def test_newline_injection_does_not_break_frontmatter_yaml(self):
+        """issue #60-63 批交叉 review 复现: subject / 全保留后的 ai_category /
+        ai_sender_priority 完全由发件人或 LLM 输出决定, 未归一时一个
+        `\\n---\\nHACKED` 就能把 frontmatter 从中间断成多行、撞上 YAML 文档
+        分隔符, 整页 yaml.safe_load 直接 ScannerError (repro 见交叉 review)。
+        归一后整页仍是合法 YAML, 且值本身可正确取回 (换行变空格, 不丢内容)。
+        """
+        import yaml
+
+        _, content = build_kos_page_payload(
+            internal_id=999, subject="工作\n---\nHACKED", sender="a@b.com",
+            date_iso="2026-07-27T00:00:00", mailbox="收件箱",
+            labels={
+                "category": "自定义\n---\n分类注入",
+                "sender_priority": "外部\r\nRESET",
+            },
+        )
+        lines = content.split("\n")
+        assert lines[0] == "---"
+        end = next(i for i in range(1, len(lines)) if lines[i] == "---")
+        fm_body = "\n".join(lines[1:end])
+        doc = yaml.safe_load(fm_body)
+        assert doc["title"] == "工作 --- HACKED"
+        assert doc["mailagent"]["ai_category"] == "自定义 --- 分类注入"
+        assert doc["mailagent"]["ai_sender_priority"] == "外部 RESET"
 
     def test_body_truncation_caps_page_under_50kb(self):
         # 中文 body 6 万字 ≈ 18 万字节, 远超 50KB → 按字节截, 整页 ≤ 49KB
