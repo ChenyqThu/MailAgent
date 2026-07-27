@@ -26,6 +26,10 @@ import { AssistantChatTransport, useChatRuntime } from '@assistant-ui/react-ai-s
 import type { AgentContextSnapshot } from '@shared/assistant/context/contextSnapshot'
 import type { MailAgentUIMessage } from '@shared/assistant/uiMessage'
 
+import {
+  createMailAgentAttachmentAdapter,
+  type AttachmentPanelBridge
+} from './chatAttachmentAdapter'
 import { recordOwnRun, registerOwnRunOwner, type OwnRunOwner } from './ownRuns'
 
 type AiSdkMessageLike = { role?: unknown; parts?: unknown[] }
@@ -108,6 +112,12 @@ export interface UseMailAgentAiSdkRuntimeOptions {
    *  send still ask). Omitted / 'always' → not sent (gateway defaults to 'always'), byte-identical
    *  to the pre-toggle path. */
   approvalMode?: 'always' | 'auto-reversible'
+  /** issue #61 Lane 3 (A2) — panel-state bridge for the MailAgent AttachmentAdapter: non-image
+   *  attachments picked/pasted/dropped into the composer sync into the panel's ChatAttachment[]
+   *  (the buildInjectedContext source) under the SAME id, so chip removal maps 1:1. Held in a ref
+   *  (like buildInjectedContext) so chip churn never rebuilds the runtime. Omitted (read-only
+   *  mounts) → chips still work, no panel sync. */
+  attachmentBridge?: AttachmentPanelBridge
 }
 
 /** Per-thread session-id latch (held in a ref by the hook). `id` is the resolved session for this
@@ -157,7 +167,8 @@ export function useMailAgentAiSdkRuntime(opts: UseMailAgentAiSdkRuntimeOptions):
     thinking,
     buildInjectedContext,
     onConsumeInjected,
-    approvalMode
+    approvalMode,
+    attachmentBridge
   } = opts
 
   // codex r3 P1 — own-run ownership is scoped to THIS runtime instance (the mount that actually
@@ -185,6 +196,16 @@ export function useMailAgentAiSdkRuntime(opts: UseMailAgentAiSdkRuntimeOptions):
   buildInjectedContextRef.current = buildInjectedContext
   const onConsumeInjectedRef = useRef(onConsumeInjected)
   onConsumeInjectedRef.current = onConsumeInjected
+
+  // issue #61 Lane 3 (A2) — one adapter per runtime instance, reading the live bridge through a ref
+  // (same discipline as buildInjectedContext above: panel re-renders must not rebuild the runtime).
+  // Registering it under adapters.attachments REPLACES react-ai-sdk's default vercelAttachmentAdapter,
+  // which base64'd every file — including .txt, whose established path is the injectedContext block.
+  const attachmentBridgeRef = useRef(attachmentBridge)
+  attachmentBridgeRef.current = attachmentBridge
+  const [attachmentAdapter] = useState(() =>
+    createMailAgentAttachmentAdapter(() => attachmentBridgeRef.current ?? null)
+  )
 
   // Extra body fields ride along with `messages` on every send (AI SDK HttpChatTransportInitOptions
   // .body). Phase 06a: `body` is a FUNCTION (ai@6 Resolvable<object>) resolved per send, so the latch
@@ -281,6 +302,9 @@ export function useMailAgentAiSdkRuntime(opts: UseMailAgentAiSdkRuntimeOptions):
 
   return useChatRuntime({
     transport,
+    // issue #61 Lane 3 (A2) — MailAgent attachment adapter (images → bounded file parts; text/binary
+    // → the panel injectedContext path). Key name pinned by UseChatRuntimeOptions.adapters.
+    adapters: { attachments: attachmentAdapter },
     // dogfood — resume after a write-tool approval. AI SDK's addToolApprovalResponse only updates the
     // local message state (approval-responded); without a sendAutomaticallyWhen predicate it never
     // re-POSTs /api/ai/chat, so the approved tool stays stuck "executing". This local predicate fires

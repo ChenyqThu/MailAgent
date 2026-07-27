@@ -13,13 +13,18 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ArrowUp, AtSign, Brain, Cpu, Paperclip, X } from 'lucide-react'
-import { ComposerPrimitive, ThreadPrimitive } from '@assistant-ui/react'
+import {
+  AttachmentPrimitive,
+  ComposerPrimitive,
+  ThreadPrimitive,
+  useAui,
+  useAuiState
+} from '@assistant-ui/react'
 
 import { cn } from '@shared/lib/cn'
 import { HoverTip } from '@shared/components/ui/HoverTip'
 import { MentionPopover } from '@shared/components/chat/MentionPopover'
-import { formatAttachmentSize, readAttachment } from '@shared/lib/chat-attachments'
-import { toastError } from '@shared/state/toast'
+import { formatAttachmentSize } from '@shared/lib/chat-attachments'
 
 import { useChatComposerControls, type ChatComposerControls } from './composerControls'
 import { ApprovalModePicker } from './ApprovalModePicker'
@@ -214,23 +219,23 @@ function ComposerMentionButton({
   )
 }
 
-/** C2-② attachment — Paperclip button + hidden file input. Each picked file → readAttachment
- *  (FileReader text for text-class files, metadata-only otherwise) → chip (controls.onAddAttachment). */
-function ComposerAttachmentButton({
-  controls
-}: {
-  controls: ChatComposerControls
-}): React.JSX.Element {
+/** C2-② attachment — Paperclip button + hidden file input. issue #61 Lane 3 (A2): each picked file
+ *  now routes through composer.addAttachment → the MailAgent AttachmentAdapter (images → bounded
+ *  file parts; text/binary → panel injectedContext path), the same pipeline paste + drop use. The
+ *  adapter owns failure toasts — swallow the rethrow so one bad file doesn't stop the rest. */
+function ComposerAttachmentButton(): React.JSX.Element {
   const { t } = useTranslation()
+  const aui = useAui()
   const inputRef = useRef<HTMLInputElement>(null)
   const onPick = async (files: FileList | null): Promise<void> => {
     if (!files || files.length === 0) return
     for (const file of Array.from(files)) {
-      try {
-        controls.onAddAttachment(await readAttachment(file))
-      } catch {
-        toastError(t('chat.attachment.readFailed', { defaultValue: 'Could not read attachment' }))
-      }
+      await aui
+        .composer()
+        .addAttachment(file)
+        .catch(() => {
+          /* adapter add() already toasted */
+        })
     }
   }
   return (
@@ -262,49 +267,67 @@ function ComposerAttachmentButton({
   )
 }
 
-/** C2 chip stack — referenced-email + attachment chips above the input, each with an X to remove.
- *  Nothing renders when both lists are empty (byte-identical to no chips). */
-function ComposerChips({ controls }: { controls: ChatComposerControls }): React.JSX.Element | null {
-  if (controls.mentions.length === 0 && controls.attachments.length === 0) return null
+/** issue #61 Lane 3 (A2) — attachment chips now render from the assistant-ui COMPOSER state (the
+ *  adapter's pending attachments), so paperclip / paste / drop all get the same visible feedback.
+ *  Styling is the former controls-driven chip, verbatim; the hand-rolled X becomes
+ *  AttachmentPrimitive.Remove → composer.removeAttachment → adapter.remove → panel-state sync. */
+function ComposerAttachmentChips(): React.JSX.Element {
+  return (
+    <ComposerPrimitive.Attachments>
+      {({ attachment }) => (
+        <span className="inline-flex max-w-[200px] items-center gap-1 rounded-md border border-ink-border bg-ink-3 px-2 py-1 text-meta text-ink-fg-1">
+          <Paperclip size={11} strokeWidth={2} className="shrink-0 text-ink-fg-3" />
+          <span className="truncate">{attachment.name}</span>
+          {attachment.file && (
+            <span className="shrink-0 font-mono text-micro text-ink-fg-3">
+              {formatAttachmentSize(attachment.file.size)}
+            </span>
+          )}
+          <AttachmentPrimitive.Remove
+            aria-label="remove"
+            className="shrink-0 text-ink-fg-3 hover:text-ink-fg"
+          >
+            <X size={11} strokeWidth={2.5} />
+          </AttachmentPrimitive.Remove>
+        </span>
+      )}
+    </ComposerPrimitive.Attachments>
+  )
+}
+
+/** C2 chip stack — referenced-email chips (panel state) + attachment chips (composer state) above
+ *  the input. Nothing renders when both are empty (byte-identical to no chips). Mention chips stay
+ *  controls-driven (their send-time excerpt resolution lives in the panel); attachment chips render
+ *  even without controls so a pasted image is never an invisible send (issue #61's观感 root). */
+function ComposerChips({
+  controls
+}: {
+  controls: ChatComposerControls | null
+}): React.JSX.Element | null {
+  const attachmentCount = useAuiState((s) => s.composer.attachments.length)
+  const mentions = controls?.mentions ?? []
+  if (mentions.length === 0 && attachmentCount === 0) return null
   return (
     <div className="flex flex-wrap gap-1.5">
-      {controls.mentions.map((m) => (
-        <span
-          key={`m-${m.internal_id}`}
-          className="inline-flex max-w-[200px] items-center gap-1 rounded-md border border-ink-border bg-ink-3 px-2 py-1 text-meta text-ink-fg-1"
-        >
-          <AtSign size={11} strokeWidth={2} className="shrink-0 text-coral" />
-          <span className="truncate">{m.subject || `#${m.internal_id}`}</span>
-          <button
-            type="button"
-            onClick={() => controls.onRemoveMention(m.internal_id)}
-            aria-label="remove"
-            className="shrink-0 text-ink-fg-3 hover:text-ink-fg"
+      {controls &&
+        controls.mentions.map((m) => (
+          <span
+            key={`m-${m.internal_id}`}
+            className="inline-flex max-w-[200px] items-center gap-1 rounded-md border border-ink-border bg-ink-3 px-2 py-1 text-meta text-ink-fg-1"
           >
-            <X size={11} strokeWidth={2.5} />
-          </button>
-        </span>
-      ))}
-      {controls.attachments.map((a) => (
-        <span
-          key={`a-${a.id}`}
-          className="inline-flex max-w-[200px] items-center gap-1 rounded-md border border-ink-border bg-ink-3 px-2 py-1 text-meta text-ink-fg-1"
-        >
-          <Paperclip size={11} strokeWidth={2} className="shrink-0 text-ink-fg-3" />
-          <span className="truncate">{a.filename}</span>
-          <span className="shrink-0 font-mono text-micro text-ink-fg-3">
-            {formatAttachmentSize(a.sizeBytes)}
+            <AtSign size={11} strokeWidth={2} className="shrink-0 text-coral" />
+            <span className="truncate">{m.subject || `#${m.internal_id}`}</span>
+            <button
+              type="button"
+              onClick={() => controls.onRemoveMention(m.internal_id)}
+              aria-label="remove"
+              className="shrink-0 text-ink-fg-3 hover:text-ink-fg"
+            >
+              <X size={11} strokeWidth={2.5} />
+            </button>
           </span>
-          <button
-            type="button"
-            onClick={() => controls.onRemoveAttachment(a.id)}
-            aria-label="remove"
-            className="shrink-0 text-ink-fg-3 hover:text-ink-fg"
-          >
-            <X size={11} strokeWidth={2.5} />
-          </button>
-        </span>
-      ))}
+        ))}
+      <ComposerAttachmentChips />
     </div>
   )
 }
@@ -322,65 +345,74 @@ export function ThreadComposer(): React.JSX.Element {
       onSubmit={(e) => {
         if (sendDisabled) e.preventDefault()
       }}
-      className="flex flex-col gap-2 border-t border-[var(--hairline)] bg-ink-2 px-3 py-2.5"
+      className="border-t border-[var(--hairline)] bg-ink-2"
     >
-      {controls && <ComposerChips controls={controls} />}
-      <ComposerPrimitive.Input
-        placeholder={t('chat.composer.placeholder')}
-        aria-label={t('chat.composer.placeholder')}
+      {/* issue #61 Lane 3 (A2) — drag&drop lands files on the same adapter pipeline as paste /
+          paperclip. The primitive owns the drag handlers + a data-dragging attribute for the
+          highlight wash; the document-level fileDropGuard only blocks the file:// navigation
+          default and doesn't consume the drop. Layout classes moved off Root so the wash paints. */}
+      <ComposerPrimitive.AttachmentDropzone
         disabled={sendDisabled}
-        className={cn(
-          'scrollbar-thin max-h-32 w-full resize-none rounded-lg border bg-ink-3 px-3 py-2',
-          'text-body leading-snug text-ink-fg outline-none placeholder:text-ink-fg-3',
-          'border-[rgb(var(--ink-border))] focus-visible:border-[rgb(var(--c-accent))]',
-          sendDisabled && 'opacity-60'
-        )}
-        rows={1}
-        autoFocus
-      />
-      <div className="flex items-center gap-1">
-        {controls && (
-          <>
-            <ComposerMentionButton controls={controls} />
-            <ComposerAttachmentButton controls={controls} />
-            <ComposerModelPicker controls={controls} />
-            <ComposerThinkingToggle controls={controls} />
-            {/* 07-16 — owner-global 授权模式切换（Manual/Accept Edits/Bypass；backend 持久化，
+        className="flex flex-col gap-2 px-3 py-2.5 transition-colors duration-fast data-[dragging=true]:bg-coral/5"
+      >
+        <ComposerChips controls={controls} />
+        <ComposerPrimitive.Input
+          placeholder={t('chat.composer.placeholder')}
+          aria-label={t('chat.composer.placeholder')}
+          disabled={sendDisabled}
+          className={cn(
+            'scrollbar-thin max-h-32 w-full resize-none rounded-lg border bg-ink-3 px-3 py-2',
+            'text-body leading-snug text-ink-fg outline-none placeholder:text-ink-fg-3',
+            'border-[rgb(var(--ink-border))] focus-visible:border-[rgb(var(--c-accent))]',
+            sendDisabled && 'opacity-60'
+          )}
+          rows={1}
+          autoFocus
+        />
+        <div className="flex items-center gap-1">
+          {controls && (
+            <>
+              <ComposerMentionButton controls={controls} />
+              <ComposerAttachmentButton />
+              <ComposerModelPicker controls={controls} />
+              <ComposerThinkingToggle controls={controls} />
+              {/* 07-16 — owner-global 授权模式切换（Manual/Accept Edits/Bypass；backend 持久化，
                 双 composer + 远程 web 同组件）。 */}
-            <ApprovalModePicker variant="icon" />
-          </>
-        )}
-        <div className="ml-auto flex items-center">
-          <ThreadPrimitive.If running={false}>
-            <ComposerPrimitive.Send
-              aria-label={t('chat.composer.send', { defaultValue: 'Send' })}
-              title={`${t('chat.composer.send', { defaultValue: 'Send' })} (⌘↩)`}
-              // P1-2 — an approval decide holds the session's run lease; sending would 409.
-              disabled={sendDisabled}
-              className={cn(
-                'grid h-9 w-9 shrink-0 place-items-center rounded-lg',
-                'bg-[rgb(var(--c-accent))] text-[rgb(var(--c-accent-fg))]',
-                'transition-opacity duration-fast hover:opacity-90 disabled:opacity-40'
-              )}
-            >
-              <ArrowUp size={16} strokeWidth={2.5} />
-            </ComposerPrimitive.Send>
-          </ThreadPrimitive.If>
-          <ThreadPrimitive.If running>
-            <ComposerPrimitive.Cancel
-              aria-label={t('chat.composer.cancel', { defaultValue: 'Stop' })}
-              title={t('chat.composer.cancel', { defaultValue: 'Stop' })}
-              className={cn(
-                'grid h-9 w-9 shrink-0 place-items-center rounded-lg',
-                'bg-ink-4 text-ink-fg-1',
-                'transition-colors duration-fast hover:bg-[rgb(var(--c-accent))] hover:text-[rgb(var(--c-accent-fg))]'
-              )}
-            >
-              <X size={15} strokeWidth={2.5} />
-            </ComposerPrimitive.Cancel>
-          </ThreadPrimitive.If>
+              <ApprovalModePicker variant="icon" />
+            </>
+          )}
+          <div className="ml-auto flex items-center">
+            <ThreadPrimitive.If running={false}>
+              <ComposerPrimitive.Send
+                aria-label={t('chat.composer.send', { defaultValue: 'Send' })}
+                title={`${t('chat.composer.send', { defaultValue: 'Send' })} (⌘↩)`}
+                // P1-2 — an approval decide holds the session's run lease; sending would 409.
+                disabled={sendDisabled}
+                className={cn(
+                  'grid h-9 w-9 shrink-0 place-items-center rounded-lg',
+                  'bg-[rgb(var(--c-accent))] text-[rgb(var(--c-accent-fg))]',
+                  'transition-opacity duration-fast hover:opacity-90 disabled:opacity-40'
+                )}
+              >
+                <ArrowUp size={16} strokeWidth={2.5} />
+              </ComposerPrimitive.Send>
+            </ThreadPrimitive.If>
+            <ThreadPrimitive.If running>
+              <ComposerPrimitive.Cancel
+                aria-label={t('chat.composer.cancel', { defaultValue: 'Stop' })}
+                title={t('chat.composer.cancel', { defaultValue: 'Stop' })}
+                className={cn(
+                  'grid h-9 w-9 shrink-0 place-items-center rounded-lg',
+                  'bg-ink-4 text-ink-fg-1',
+                  'transition-colors duration-fast hover:bg-[rgb(var(--c-accent))] hover:text-[rgb(var(--c-accent-fg))]'
+                )}
+              >
+                <X size={15} strokeWidth={2.5} />
+              </ComposerPrimitive.Cancel>
+            </ThreadPrimitive.If>
+          </div>
         </div>
-      </div>
+      </ComposerPrimitive.AttachmentDropzone>
     </ComposerPrimitive.Root>
   )
 }

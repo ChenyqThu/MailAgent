@@ -1099,7 +1099,9 @@
     "attachment": {
       "add": "添加附件",
       "remove": "移除附件",
-      "readFailed": "无法读取附件"
+      "readFailed": "无法读取附件",
+      "tooManyImages": "一次最多附 {max} 张图片",
+      "imageTooLarge": "图片过大，无法发送"
     },
     "kos": {
       "save": "保存到 KOS",
@@ -1227,7 +1229,9 @@
       "retryProbe": "重试连接",
       "readOnlyLegacy": "这是旧版引擎的历史会话，已转为只读。新建会话可继续与 AI 对话。",
       "approvalBodyManual": "AI 请求执行 {tool}，需要你批准。",
-      "backgroundRunning": "AI 仍在后台输出，完成后将自动刷新…"
+      "backgroundRunning": "AI 仍在后台输出，完成后将自动刷新…",
+      "turnError": "本轮回答中断",
+      "visionHint": "本次对话包含图片附件——如果当前模型不支持图片输入，请换用支持视觉的模型后重试。"
     },
     "toolCall": {
       "running": "执行中",
@@ -2222,6 +2226,10 @@
         "draftsSync": {
           "label": "草稿箱同步",
           "helper": "把 Exchange 草稿箱同步进本地列表（仅本地，不进 Notion / AI / 飞书）。"
+        },
+        "readReconcile": {
+          "label": "别处已读同步",
+          "helper": "在 Outlook 或网页版 Outlook 里把邮件标为已读后，本地收件箱的未读数会跟着更新（仅收件箱，仅「未读→已读」单向，不影响已读→未读或旗标）。每 5 分钟检查一次，默认关闭。"
         },
         "folderSizeLimit": {
           "label": "IMAP 文件夹视图上限（封）",

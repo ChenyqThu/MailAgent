@@ -1099,7 +1099,9 @@
     "attachment": {
       "add": "Attach a file",
       "remove": "Remove attachment",
-      "readFailed": "Could not read attachment"
+      "readFailed": "Could not read attachment",
+      "tooManyImages": "At most {max} images per message",
+      "imageTooLarge": "Image too large to send"
     },
     "kos": {
       "save": "Save to KOS",
@@ -1227,7 +1229,9 @@
       "retryProbe": "Retry connection",
       "readOnlyLegacy": "This conversation ran on the retired legacy engine and is read-only. Start a new chat to continue with the AI.",
       "approvalBodyManual": "The assistant wants to run {tool} — your approval is required.",
-      "backgroundRunning": "The assistant is still responding in the background — this view refreshes when it finishes…"
+      "backgroundRunning": "The assistant is still responding in the background — this view refreshes when it finishes…",
+      "turnError": "This response was interrupted",
+      "visionHint": "This conversation carries image attachments — if the current model does not support image input, switch to a vision-capable model and retry."
     },
     "toolCall": {
       "running": "running",
@@ -2222,6 +2226,10 @@
         "draftsSync": {
           "label": "Drafts sync",
           "helper": "Sync the Exchange Drafts folder into your local list (local only — no Notion / AI / Feishu)."
+        },
+        "readReconcile": {
+          "label": "External read sync",
+          "helper": "When you mark an email as read in Outlook or Outlook on the web, your local inbox unread count updates to match (inbox only, one-way \"unread → read\"; doesn't affect read → unread or flags). Checked every 5 minutes; off by default."
         },
         "folderSizeLimit": {
           "label": "IMAP folder view limit (messages)",

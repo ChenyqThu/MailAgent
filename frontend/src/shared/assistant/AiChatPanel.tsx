@@ -198,6 +198,12 @@ export function AIChatPanel({
     setMentions([])
     setAttachments([])
   }, [])
+  // issue #61 Lane 3 (A2) — chips now render from the assistant-ui composer state (fed by the
+  // attachment adapter); this panel list is only the injectedContext source, synced via the bridge.
+  const attachmentBridge = useMemo(
+    () => ({ onAdd: onAddAttachment, onRemove: onRemoveAttachment }),
+    [onAddAttachment, onRemoveAttachment]
+  )
   const buildInjectedContext = useCallback(async (): Promise<string> => {
     const mentionContext = await buildMentionContext(mentions, mailApi)
     const attachmentContext = buildAttachmentBlock(attachments)
@@ -315,6 +321,24 @@ export function AIChatPanel({
     )
     return dispose
   }, [contextInjectionOn, mailApi, chatActiveSessionId, chatReloadActiveSession])
+
+  // issue #61 Lane 3 (A2) — the runtime provider's remount key, extracted so the panel-attachment
+  // mirror can reset EXACTLY when the runtime remounts (composer chips reset with it). Keying the
+  // reset on anything looser (e.g. activeSessionId alone) breaks the first send of a fresh chat:
+  // onEnsureSession adopts the session id BETWEEN the transport's session resolve and its
+  // buildInjectedContext call, and an early clear would drop the attachment block mid-send (the
+  // provider key deliberately stays ':new' through that adoption — see the key comment below).
+  const runtimeKey = contextInjectionOn
+    ? `${activeInternalId ?? 'none'}:${
+        initialMessages && initialMessages.length > 0 ? chat.activeSessionId : 'new'
+      }${islandRefreshNonce > 0 ? `:r${islandRefreshNonce}` : ''}`
+    : `${activeInternalId ?? 'none'}`
+  const attachmentScopeRef = useRef(runtimeKey)
+  useEffect(() => {
+    if (attachmentScopeRef.current === runtimeKey) return
+    attachmentScopeRef.current = runtimeKey
+    setAttachments([])
+  }, [runtimeKey])
 
   // harness-chat lane A (B1/B2/B4) — detached-run awareness: probes /api/ai/run/active for THIS
   // session, shows the placeholder while a background run streams, reloads + re-seeds when it
@@ -754,22 +778,15 @@ export function AIChatPanel({
                     // persist into chat.activeSessionId (Gateway dual-write). Keyed by (email, session)
                     // so picking a history session remounts seeded with that session's prior messages.
                     <AiSdkRuntimeProvider
-                      key={
-                        // Key on the session id ONLY when RELOADING an existing session (initialMessages
-                        // non-empty); a fresh / just-adopted conversation (empty messages) keeps `:new`
-                        // so onEnsureSession setting activeSessionId mid-first-send does NOT remount the
-                        // provider and interrupt the in-flight turn.
-                        // Part B — `:rN` suffix only after an island live-refresh (nonce starts at 0 →
-                        // byte-identical key until the first settle) so the provider remounts re-seeded
-                        // with the reloaded messages.
-                        contextInjectionOn
-                          ? `${activeInternalId ?? 'none'}:${
-                              initialMessages && initialMessages.length > 0
-                                ? chat.activeSessionId
-                                : 'new'
-                            }${islandRefreshNonce > 0 ? `:r${islandRefreshNonce}` : ''}`
-                          : (activeInternalId ?? 'none')
-                      }
+                      // Key on the session id ONLY when RELOADING an existing session (initialMessages
+                      // non-empty); a fresh / just-adopted conversation (empty messages) keeps `:new`
+                      // so onEnsureSession setting activeSessionId mid-first-send does NOT remount the
+                      // provider and interrupt the in-flight turn.
+                      // Part B — `:rN` suffix only after an island live-refresh (nonce starts at 0 →
+                      // byte-identical key until the first settle) so the provider remounts re-seeded
+                      // with the reloaded messages. (Expression extracted to runtimeKey above — the
+                      // #61 panel-attachment reset must track the SAME identity.)
+                      key={runtimeKey}
                       gatewayBaseUrl={gatewayBaseUrl as string}
                       sessionId={chat.activeSessionId}
                       model={backend.model}
@@ -777,6 +794,7 @@ export function AIChatPanel({
                       approvalMode={approvalMode}
                       buildInjectedContext={buildInjectedContext}
                       onConsumeInjected={onConsumeInjected}
+                      attachmentBridge={attachmentBridge}
                       contextSnapshot={contextSnapshot}
                       initialMessages={initialMessages}
                       onEnsureSession={onEnsureSession}

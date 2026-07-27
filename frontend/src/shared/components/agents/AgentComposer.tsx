@@ -27,6 +27,7 @@ import {
   X
 } from 'lucide-react'
 import {
+  AttachmentPrimitive,
   ComposerPrimitive,
   ThreadPrimitive,
   unstable_defaultDirectiveFormatter,
@@ -44,8 +45,7 @@ import { HoverTip } from '@shared/components/ui/HoverTip'
 import { BorderGlow } from '@shared/components/effects/BorderGlow'
 import type { SearchHit, SearchResult } from '@shared/api/types'
 import { useMailApi } from '@shared/hooks/useMailApi'
-import { formatAttachmentSize, readAttachment } from '@shared/lib/chat-attachments'
-import { toastError } from '@shared/state/toast'
+import { formatAttachmentSize } from '@shared/lib/chat-attachments'
 import {
   useChatComposerControls,
   type ChatComposerControls
@@ -261,21 +261,22 @@ const SLASH_ICONS: Record<string, Unstable_IconComponent> = {
 }
 
 // ── attachment ("+") ─────────────────────────────────────────────────────────────
-function AgentAttachmentButton({
-  controls
-}: {
-  controls: ChatComposerControls
-}): React.JSX.Element {
+// issue #61 Lane 3 (A2): picked files route through composer.addAttachment → the MailAgent
+// AttachmentAdapter (images → bounded file parts; text/binary → panel injectedContext path), the
+// same pipeline the paste/drop wiring below uses. The adapter owns failure toasts.
+function AgentAttachmentButton(): React.JSX.Element {
   const { t } = useTranslation()
+  const aui = useAui()
   const inputRef = useRef<HTMLInputElement>(null)
   const onPick = async (files: FileList | null): Promise<void> => {
     if (!files || files.length === 0) return
     for (const file of Array.from(files)) {
-      try {
-        controls.onAddAttachment(await readAttachment(file))
-      } catch {
-        toastError(t('chat.attachment.readFailed', { defaultValue: 'Could not read attachment' }))
-      }
+      await aui
+        .composer()
+        .addAttachment(file)
+        .catch(() => {
+          /* adapter add() already toasted */
+        })
     }
   }
   return (
@@ -392,34 +393,34 @@ function AgentModelPicker({
 }
 
 // ── attachment chip stack (mentions now live in-field as directive chips) ────────────────────────
-function AgentAttachmentChips({
-  controls
-}: {
-  controls: ChatComposerControls
-}): React.JSX.Element | null {
-  if (controls.attachments.length === 0) return null
+// issue #61 Lane 3 (A2): chips render from the assistant-ui COMPOSER state (the adapter's pending
+// attachments), so "+", paste and drop all get the same visible feedback. Styling verbatim from the
+// former controls-driven chip (agent-surface variant — max-w-[220px]); the hand-rolled X becomes
+// AttachmentPrimitive.Remove → composer.removeAttachment → adapter.remove → panel-state sync.
+function AgentAttachmentChips(): React.JSX.Element | null {
+  const attachmentCount = useAuiState((s) => s.composer.attachments.length)
+  if (attachmentCount === 0) return null
   return (
     <div className="flex flex-wrap gap-1.5 px-1 pt-1">
-      {controls.attachments.map((a) => (
-        <span
-          key={`a-${a.id}`}
-          className="inline-flex max-w-[220px] items-center gap-1 rounded-md border border-ink-border bg-ink-3 px-2 py-1 text-meta text-ink-fg-1"
-        >
-          <Paperclip size={11} strokeWidth={2} className="shrink-0 text-ink-fg-3" />
-          <span className="truncate">{a.filename}</span>
-          <span className="shrink-0 font-mono text-micro text-ink-fg-3">
-            {formatAttachmentSize(a.sizeBytes)}
+      <ComposerPrimitive.Attachments>
+        {({ attachment }) => (
+          <span className="inline-flex max-w-[220px] items-center gap-1 rounded-md border border-ink-border bg-ink-3 px-2 py-1 text-meta text-ink-fg-1">
+            <Paperclip size={11} strokeWidth={2} className="shrink-0 text-ink-fg-3" />
+            <span className="truncate">{attachment.name}</span>
+            {attachment.file && (
+              <span className="shrink-0 font-mono text-micro text-ink-fg-3">
+                {formatAttachmentSize(attachment.file.size)}
+              </span>
+            )}
+            <AttachmentPrimitive.Remove
+              aria-label="remove"
+              className="shrink-0 text-ink-fg-3 hover:text-ink-fg"
+            >
+              <X size={11} strokeWidth={2.5} />
+            </AttachmentPrimitive.Remove>
           </span>
-          <button
-            type="button"
-            onClick={() => controls.onRemoveAttachment(a.id)}
-            aria-label="remove"
-            className="shrink-0 text-ink-fg-3 hover:text-ink-fg"
-          >
-            <X size={11} strokeWidth={2.5} />
-          </button>
-        </span>
-      ))}
+        )}
+      </ComposerPrimitive.Attachments>
     </div>
   )
 }
@@ -487,6 +488,32 @@ export function AgentComposer(): React.JSX.Element {
     removeOnExecute: true
   })
 
+  // issue #61 Lane 3 (A2) — paste→attachment wiring for the Lexical input. Unlike the email
+  // composer's ComposerPrimitive.Input, @assistant-ui/react-lexical has NO built-in paste handler
+  // (the whole package never calls addAttachment), so a pasted screenshot silently vanished
+  // (owner's真机复现). Mirror the built-in handler's semantics on the wrapper: clipboard files +
+  // attachments capability → route every file into composer.addAttachment (→ the MailAgent
+  // adapter). Lexical's own native paste listener runs first (it lives on the contenteditable,
+  // React delegates at the root), so any co-pasted TEXT is still inserted — files-only pastes
+  // have no text to lose. The adapter owns failure toasts.
+  const onComposerPaste = useCallback(
+    (e: React.ClipboardEvent): void => {
+      const files = Array.from(e.clipboardData?.files ?? [])
+      if (files.length === 0) return
+      if (!aui.thread().getState().capabilities.attachments) return
+      e.preventDefault()
+      for (const file of files) {
+        void aui
+          .composer()
+          .addAttachment(file)
+          .catch(() => {
+            /* adapter add() already toasted */
+          })
+      }
+    },
+    [aui]
+  )
+
   return (
     <ComposerPrimitive.Unstable_TriggerPopoverRoot>
       {/* codex r2 [D] — the Root gate blocks any residual form submit while busy (radix
@@ -501,8 +528,15 @@ export function AgentComposer(): React.JSX.Element {
             edge-light 辉光环；inner 容器只提供 flex + 内边距，去掉旧 shell 的 bg/rounded/accent 描边以免
             双层）。glowRadius 20（< 官方 40）控外扩，避免窄浮窗里 edge-light 撑出横向滚动条。 */}
         <BorderGlow borderRadius={16} glowRadius={20} className="w-full">
-          <div className="flex w-full flex-col gap-1.5 p-2">
-            {controls && <AgentAttachmentChips controls={controls} />}
+          {/* issue #61 Lane 3 (A2) — one wrapper carries BOTH file entry points: the Dropzone
+              primitive owns drag&drop (handlers + data-dragging highlight), onPaste rides its
+              ...rest spread for the Lexical paste wiring above. */}
+          <ComposerPrimitive.AttachmentDropzone
+            disabled={sendDisabled}
+            onPaste={onComposerPaste}
+            className="flex w-full flex-col gap-1.5 rounded-2xl p-2 transition-colors duration-fast data-[dragging=true]:bg-coral/5"
+          >
+            <AgentAttachmentChips />
             <LexicalComposerInput
               directiveChip={AgentDirectiveChip}
               placeholder={isEmptyThread ? t('agentView.composer.placeholder') : ''}
@@ -514,7 +548,7 @@ export function AgentComposer(): React.JSX.Element {
             />
             <div className="flex items-center justify-between gap-1 px-0.5">
               <div className="flex items-center gap-0.5">
-                {controls && <AgentAttachmentButton controls={controls} />}
+                {controls && <AgentAttachmentButton />}
                 {controls && <AgentModelPicker controls={controls} />}
                 {/* 07-16 — owner-global 授权模式切换 chip（Manual/Accept Edits/Bypass）。 */}
                 {controls && <ApprovalModePicker variant="chip" />}
@@ -542,7 +576,7 @@ export function AgentComposer(): React.JSX.Element {
                 </ThreadPrimitive.If>
               </div>
             </div>
-          </div>
+          </ComposerPrimitive.AttachmentDropzone>
         </BorderGlow>
 
         {/* @ email mention — async FTS search → inline directive chip + controls.mentions for send context. */}

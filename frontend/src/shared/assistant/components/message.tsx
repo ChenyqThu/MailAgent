@@ -10,7 +10,8 @@
 
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ComposerPrimitive, MessagePrimitive } from '@assistant-ui/react'
+import { Paperclip } from 'lucide-react'
+import { ComposerPrimitive, MessagePrimitive, useAuiState } from '@assistant-ui/react'
 
 import { cn } from '@shared/lib/cn'
 
@@ -18,14 +19,72 @@ import { getAssistantPartComponents } from '../tools/registerToolUIs'
 import { TurnStatusLine } from './TurnStatusLine'
 import { AssistantActionBar, UserActionBar } from './action-bar'
 
+/** issue #61 Lane 3 (A2) — sent-attachment pills under the user bubble. File parts on a user
+ *  UIMessage surface as thread-message `attachments` (AISDKMessageConverter), both live and on
+ *  session reload — without this row a sent image "disappears" again the moment the chip clears. */
+function UserMessageAttachments(): React.JSX.Element {
+  return (
+    <div className="mt-1 flex max-w-[80%] flex-wrap justify-end gap-1">
+      <MessagePrimitive.Attachments>
+        {({ attachment }) => (
+          <span className="inline-flex max-w-[200px] items-center gap-1 rounded-md border border-ink-border bg-ink-3 px-2 py-0.5 text-micro text-ink-fg-2">
+            <Paperclip size={10} strokeWidth={2} className="shrink-0 text-ink-fg-3" />
+            <span className="truncate">{attachment.name}</span>
+          </span>
+        )}
+      </MessagePrimitive.Attachments>
+    </div>
+  )
+}
+
 export function UserMessage(): React.JSX.Element {
+  const hasAttachments = useAuiState((s) => (s.message.attachments?.length ?? 0) > 0)
+  // An image-only send has no text part — skip the accent bubble instead of painting an empty pill.
+  const hasBubbleContent = useAuiState((s) => s.message.content.length > 0)
   return (
     <MessagePrimitive.Root className="group mb-4 flex w-full flex-col items-end">
-      <div className="max-w-[80%] rounded-2xl rounded-br-md bg-[rgb(var(--c-accent))] px-3.5 py-2 text-body leading-relaxed text-[rgb(var(--c-accent-fg))] shadow-sm">
-        <MessagePrimitive.Parts />
-      </div>
+      {hasBubbleContent && (
+        <div className="max-w-[80%] rounded-2xl rounded-br-md bg-[rgb(var(--c-accent))] px-3.5 py-2 text-body leading-relaxed text-[rgb(var(--c-accent-fg))] shadow-sm">
+          <MessagePrimitive.Parts />
+        </div>
+      )}
+      {hasAttachments && <UserMessageAttachments />}
       <UserActionBar />
     </MessagePrimitive.Root>
+  )
+}
+
+/** issue #61 Lane 3 (A2/C) — stream-error footer. A failed turn (message status incomplete/error)
+ *  previously rendered NOTHING here (no ErrorPrimitive anywhere), so an upstream reject — e.g. a
+ *  non-vision model 400ing on an image file part — looked like the answer silently vanished. The
+ *  gateway already forwards the real error text (server.ts onError); surface it, plus a plain-words
+ *  hint when the conversation carries image attachments (no provider capability table yet — batch 2). */
+function AssistantMessageError(): React.JSX.Element | null {
+  const { t } = useTranslation()
+  const error = useAuiState((s) =>
+    s.message.status?.type === 'incomplete' && s.message.status.reason === 'error'
+      ? s.message.status.error
+      : undefined
+  )
+  const threadHasImage = useAuiState((s) =>
+    s.thread.messages.some(
+      (m) => m.role === 'user' && (m.attachments ?? []).some((a) => a.type === 'image')
+    )
+  )
+  if (error === undefined) return null
+  const detail = typeof error === 'string' ? error : JSON.stringify(error)
+  return (
+    <div className="rounded-md border border-fail/30 bg-fail/10 px-2.5 py-1.5 text-aux text-fail">
+      <div className="font-medium">{t('chat.aiSdk.turnError')}</div>
+      {detail.length > 0 && (
+        <div className="mt-0.5 break-words font-mono text-micro opacity-80">
+          {detail.slice(0, 400)}
+        </div>
+      )}
+      {threadHasImage && (
+        <div className="mt-1 text-micro text-ink-fg-2">{t('chat.aiSdk.visionHint')}</div>
+      )}
+    </div>
   )
 }
 
@@ -43,6 +102,9 @@ export function AssistantMessage(): React.JSX.Element {
     <MessagePrimitive.Root className="group mb-4 flex w-full justify-start">
       <div className="min-w-0 max-w-[85%] space-y-1.5 rounded-2xl rounded-bl-md border border-[var(--hairline)] bg-ink-3 px-3.5 py-2 text-body leading-relaxed text-ink-fg">
         <MessagePrimitive.Parts components={partComponents} />
+        <MessagePrimitive.Error>
+          <AssistantMessageError />
+        </MessagePrimitive.Error>
         <AssistantActionBar />
       </div>
     </MessagePrimitive.Root>

@@ -209,6 +209,12 @@ export function AgentConversation({
     setMentions([])
     setAttachments([])
   }, [])
+  // issue #61 Lane 3 (A2) — chips now render from the assistant-ui composer state (fed by the
+  // attachment adapter); this list is only the injectedContext source, synced via the bridge.
+  const attachmentBridge = useMemo(
+    () => ({ onAdd: onAddAttachment, onRemove: onRemoveAttachment }),
+    [onAddAttachment, onRemoveAttachment]
+  )
   // assistant-modal P5 — the email-context block (current email body capped 600 + fenced + untrusted
   // header), mirroring the shared mention fence for a single email. Empty when no chip (removed / not the
   // modal). The fence primitives are the single source (mention-context.ts) so injection framing can't drift.
@@ -406,6 +412,22 @@ export function AgentConversation({
         : undefined,
     [isLegacySession, reloadMessagesReady, chat.messages]
   )
+
+  // issue #61 Lane 3 (A2) — the live runtime's remount key, extracted so the panel-attachment
+  // mirror resets EXACTLY when the runtime remounts (composer chips reset with it). Keying the
+  // reset on anything looser (e.g. activeSessionId alone) breaks the first send of a fresh chat:
+  // onEnsureSession adopts the session id BETWEEN the transport's session resolve and its
+  // buildInjectedContext call, and an early clear would drop the attachment block mid-send (the
+  // key deliberately stays ':new' through that adoption — see the key comment at the mount).
+  const runtimeKey = contextInjectionOn
+    ? `general:${chat.navEpoch}:${initialMessages && initialMessages.length > 0 ? chat.activeSessionId : 'new'}${refreshNonce > 0 ? `:r${refreshNonce}` : ''}`
+    : `general:${chat.navEpoch}`
+  const attachmentScopeRef = useRef(runtimeKey)
+  useEffect(() => {
+    if (attachmentScopeRef.current === runtimeKey) return
+    attachmentScopeRef.current = runtimeKey
+    setAttachments([])
+  }, [runtimeKey])
 
   // B3 (07-15, 无灵动岛方案优先) — the actionable in-panel approval card for a reloaded MANUAL
   // session whose paused approval is still live in the gateway stash; B1 — the background-run
@@ -626,17 +648,15 @@ export function AgentConversation({
             <AgentSwitchPlaceholder />
           ) : (
             <AiSdkRuntimeProvider
-              key={
-                // navEpoch makes "new chat" / "switch session" remount the runtime so the ai-sdk thread
-                // (owned by useChatRuntime, NOT by chat.messages) is cleared / reloaded. navEpoch does
-                // NOT bump on the first-send adoptSession, so a fresh chat getting its id mid-stream
-                // never remounts. 07-15 — `:rN` suffix only after an out-of-band settle reload
-                // (refreshNonce starts at 0 → byte-identical key until the first settle) so the
-                // provider remounts re-seeded with the reloaded messages (AiChatPanel 同款).
-                contextInjectionOn
-                  ? `general:${chat.navEpoch}:${initialMessages && initialMessages.length > 0 ? chat.activeSessionId : 'new'}${refreshNonce > 0 ? `:r${refreshNonce}` : ''}`
-                  : `general:${chat.navEpoch}`
-              }
+              // navEpoch makes "new chat" / "switch session" remount the runtime so the ai-sdk thread
+              // (owned by useChatRuntime, NOT by chat.messages) is cleared / reloaded. navEpoch does
+              // NOT bump on the first-send adoptSession, so a fresh chat getting its id mid-stream
+              // never remounts. 07-15 — `:rN` suffix only after an out-of-band settle reload
+              // (refreshNonce starts at 0 → byte-identical key until the first settle) so the
+              // provider remounts re-seeded with the reloaded messages (AiChatPanel 同款).
+              // (Expression extracted to runtimeKey above — the #61 panel-attachment reset must
+              // track the SAME identity.)
+              key={runtimeKey}
               gatewayBaseUrl={gatewayBaseUrl}
               sessionId={chat.activeSessionId}
               model={model}
@@ -644,6 +664,7 @@ export function AgentConversation({
               approvalMode={approvalMode}
               buildInjectedContext={buildInjectedContext}
               onConsumeInjected={onConsumeInjected}
+              attachmentBridge={attachmentBridge}
               contextSnapshot={contextSnapshot}
               initialMessages={initialMessages}
               onEnsureSession={onEnsureSession}

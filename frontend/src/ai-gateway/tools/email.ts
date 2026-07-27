@@ -244,7 +244,8 @@ export function createEmailReadTools(
     description:
       'Read the extracted text of ONE email attachment by attachment_id (from ' +
       'email_thread_attachments or email_get). Supported types: PDF, docx, pptx, xlsx, txt, md, ' +
-      'csv (their text is extracted server-side); images / scanned pages are NOT OCR’d. ' +
+      'csv (text extracted server-side), plus IMAGES (png/jpg/…) and scanned/text-less PDFs — ' +
+      'those are OCR’d on-device (Chinese + English), so reading a screenshot or scan works. ' +
       'Capped at max_chars (default 12000); longer text is truncated (truncated=true). `status` ' +
       'is extracted | pending | failed | unsupported — when it is not "extracted" the ' +
       'text_content is null and `hint` explains why (still extracting / extraction failed / type ' +
