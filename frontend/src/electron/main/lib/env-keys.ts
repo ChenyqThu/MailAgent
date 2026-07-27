@@ -56,6 +56,11 @@ export const MANAGED_ENV_KEYS = [
   // Drafts sync toggle (davmail-only) — AccountsTab davmail 面板的草稿箱同步开关。
   // config.py drafts_sync_enabled Field (默认 true), 普通 boolean key 非 secret。
   'DRAFTS_SYNC_ENABLED',
+  // 入向已读回收开关 (davmail-only, issue #60) — AccountsTab davmail 面板的
+  // 「别处已读同步」开关。config.py inbound_read_reconcile_enabled Field
+  // (默认 false, validation_alias=此键), 普通 boolean key 非 secret。
+  // INTERVAL_SEC 不进白名单 (不给用户暴露, 见 AccountsTab 内注释)。
+  'MAILAGENT_INBOUND_READ_RECONCILE_ENABLED',
 
   // — Sync (PR D SyncTab)
   'SYNC_DATE_MODE',

@@ -422,6 +422,21 @@ function MailSourceSection(): React.ReactElement {
               defaultValue: '把 Exchange 草稿箱同步进本地列表（仅本地，不进 Notion / AI / 飞书）。'
             })}
           />
+          {/* 别处标已读同步 (issue #60) — 后端 inbound_read_reconcile_enabled 早已
+              实现 (src/config.py), 此前只能手改 .env。默认关闭; 不暴露
+              INTERVAL_SEC (300s 背后是"绝不挂 5s radar poll"的工程判断, 不是给
+              用户按邮箱大小调的旋钮)。 */}
+          <EnvField
+            envKey="MAILAGENT_INBOUND_READ_RECONCILE_ENABLED"
+            control="toggle"
+            label={t('settings.accounts.davmail.readReconcile.label', {
+              defaultValue: '别处已读同步'
+            })}
+            helper={t('settings.accounts.davmail.readReconcile.helper', {
+              defaultValue:
+                '在 Outlook 或网页版 Outlook 里把邮件标为已读后，本地收件箱的未读数会跟着更新（仅收件箱，仅「未读→已读」单向，不影响已读→未读或旗标）。每 5 分钟检查一次，默认关闭。'
+            })}
+          />
           {/* 自定义文件夹同步 — 从 SyncTab 整段移来。davmail-only, 走完整 pipeline
               (AI/Notion/搜索)。FolderPicker 自带 backend 门控 (非 davmail 显 veil)。 */}
           <div className="px-[var(--settings-tile-px,1rem)] py-[var(--settings-tile-py,0.875rem)]">
