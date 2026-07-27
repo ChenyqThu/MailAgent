@@ -134,3 +134,72 @@ def test_mail_actions_multi_select_shape():
     )
     names = [o["name"] for o in props["Mail Actions"]["multi_select"]]
     assert names == ["⭐ Starred", "⚠️ Flagged"]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# issue #63 — 自定义分类护栏 (category / sender_priority 现在是自由文本)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_custom_category_passes_through_verbatim():
+    """普通自定义分类原样写进 Notion — 护栏只在越界时才动手."""
+    w = _bare_writer()
+    props = w._build_props(_labels(category="📮 客户投诉"), digest_page_id=None)
+    assert props["Category"]["select"]["name"] == "📮 客户投诉"
+
+
+def test_select_name_strips_comma():
+    """Notion select option 名含逗号 → API 400 → 整封邮件 AI 字段写不进去."""
+    w = _bare_writer()
+    props = w._build_props(
+        _labels(category="投诉, 退款", sender_priority="VIP, 大客户"),
+        digest_page_id=None,
+    )
+    assert "," not in props["Category"]["select"]["name"]
+    assert props["Category"]["select"]["name"] == "投诉 退款"
+    assert "," not in props["Sender Priority"]["select"]["name"]
+
+
+def test_select_name_strips_fullwidth_comma():
+    """全角 '，' 一并替换 — Notion 文档只说 "Commas are not valid", 未区分码点,
+    保守处理 (中文自定义分类里出现全角逗号很现实)."""
+    w = _bare_writer()
+    props = w._build_props(_labels(category="投诉，退款"), digest_page_id=None)
+    assert props["Category"]["select"]["name"] == "投诉 退款"
+
+
+def test_select_name_collapses_whitespace_from_comma_replacement():
+    """替换逗号会产生连续空格; 归一掉, 避免 Notion 里堆出只差空格数的近似重复 option."""
+    w = _bare_writer()
+    props = w._build_props(_labels(category="A，, B\tC\nD"), digest_page_id=None)
+    assert props["Category"]["select"]["name"] == "A B C D"
+
+
+def test_select_name_clamped_to_90_chars():
+    w = _bare_writer()
+    props = w._build_props(_labels(category="分" * 200), digest_page_id=None)
+    assert len(props["Category"]["select"]["name"]) == 90
+
+
+def test_select_name_trimmed():
+    w = _bare_writer()
+    props = w._build_props(
+        _labels(category="  📮 客户投诉  "), digest_page_id=None
+    )
+    assert props["Category"]["select"]["name"] == "📮 客户投诉"
+
+
+def test_select_name_all_commas_skips_prop():
+    """规范化后为空 → 不写该 prop (空 option 名 Notion 也不收)."""
+    w = _bare_writer()
+    props = w._build_props(_labels(category=" , "), digest_page_id=None)
+    assert "Category" not in props
+
+
+def test_select_guard_does_not_touch_code_owned_enums():
+    """Language / Priority / Action Type 仍是代码校验过的闭集, 不过护栏."""
+    w = _bare_writer()
+    props = w._build_props(_labels(), digest_page_id=None)
+    assert props["Language"]["select"]["name"] == "中文"
+    assert props["Priority"]["select"]["name"] == "🟡 重要"
+    assert props["Action Type"]["select"]["name"] == "需要回复"

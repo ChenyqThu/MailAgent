@@ -98,12 +98,21 @@ def test_sender_priority_has_system():
 
 def test_tool_schema_enum_fields_match_enums():
     props = EMAIL_TOOL_SCHEMA["input_schema"]["properties"]
-    assert props["category"]["enum"] == CATEGORY_ENUM
     assert props["priority"]["enum"] == PRIORITY_ENUM
     assert props["language"]["enum"] == LANGUAGE_ENUM
     assert props["sender_priority"]["enum"] == SENDER_PRIORITY_ENUM
     assert props["action_type"]["enum"] == ACTION_TYPE_ALL
     assert props["mail_actions"]["items"]["enum"] == MAIL_ACTIONS_ENUM
+
+
+def test_category_is_free_string_with_builtin_suggestions():
+    """issue #63: category 不再是硬 enum — 硬 enum 会和用户自定义分类 prompt
+    在同一次调用里互相打架。7 个内置值降级为 description 里的建议。"""
+    cat = EMAIL_TOOL_SCHEMA["input_schema"]["properties"]["category"]
+    assert cat["type"] == "string"
+    assert "enum" not in cat
+    for c in CATEGORY_ENUM:
+        assert c in cat["description"]
 
 
 # ─────────────────────────────────────────────────────────────────────────────

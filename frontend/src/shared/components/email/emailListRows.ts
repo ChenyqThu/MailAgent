@@ -120,7 +120,14 @@ export function applyTab(
 }
 
 /** Strict literal match against LLM CATEGORY_ENUM — `email.ai_category`
- *  is the verbatim emoji-prefixed Chinese label so `Set.has()` works. */
+ *  is the verbatim emoji-prefixed Chinese label so `Set.has()` works.
+ *
+ *  issue #63: the backend no longer clears out-of-enum categories (users can
+ *  define their own via the AI preprocessing prompt), so `ai_category` may be
+ *  an arbitrary string. The cast stays unchecked — nothing here validates it,
+ *  and the default (all-selected) filter path below short-circuits before any
+ *  `Set.has()`. Custom values are only hidden when the user *partially*
+ *  selects categories; an "other" bucket in the filter popover is batch 2. */
 export function categoryOf(e: EnrichedEmailMeta): EmailCategory | null {
   if (!e.ai_category) return null
   return e.ai_category as EmailCategory

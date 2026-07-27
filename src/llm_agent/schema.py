@@ -67,7 +67,13 @@ PROCESSING_STATUS_COMPLETED = "已完成"
 # Phase 2 — Ping-island AI 动态建议按钮（PRD §5.2）。
 # LLM 可推荐的 action id 白名单（子集，不含 Phase 1 静态 5 fallback）。
 # 配套 island_action_whitelist.KNOWN_ACTION_IDS（含静态 5）— 一处的真子集，handler 仍按 KNOWN_ACTION_IDS 校验。
-# 改这里 → schema enum 同步收紧 → LLM 输出超集 id 直接被 client.py JSON schema 校验拒。
+# 改这里 → schema enum 同步收紧 → LLM 更倾向只输出集内 id。
+# 🔴 更正 (issue #63 顺手修): 老注释写「超集 id 直接被 client.py JSON schema 校验拒」,
+# 不实 —— client.py 只把 input_schema 原样转给 provider (`_to_openai_tool` 无
+# strict:true), 全仓无任何本地 jsonschema 校验, Anthropic 也不硬拒不合规 tool_input。
+# schema enum 是给模型的**软约束**; 真正的 enforcement 在 processor._parse 的
+# `is_valid_recommended_action_id(rid, mailbox)` 逐条 drop, 以及 island_dispatch
+# 按 KNOWN_ACTION_IDS 的二次过滤。别指望一道并不存在的闸。
 RECOMMENDED_ACTION_ID_INBOX: List[str] = [
     # Newsletter / 营销 / FYI
     "archive_and_unsubscribe",
@@ -134,10 +140,19 @@ EMAIL_TOOL_SCHEMA = {
                     "URL / 邮件地址 / 代码标识符 / 产品名保留 verbatim。"
                 ),
             },
+            # issue #63: category 不再是 tool schema 的硬 enum。用户可在
+            # 「Custom AI → AI 邮件预处理」自定义分类 prompt, 硬 enum 会和自定义
+            # prompt 在同一次调用里互相打架 (模型听谁的看运气)。7 个内置值降级为
+            # description 里的建议 → 未自定义 prompt 的用户行为不变。
+            # CATEGORY_ENUM 常量保留: 它是 Notion DB select options 的快照。
             "category": {
                 "type": "string",
-                "enum": CATEGORY_ENUM,
-                "description": "综合主题与正文判断邮件分类。",
+                "description": (
+                    "综合主题与正文判断邮件分类。"
+                    "若 system prompt 没有另行指定分类体系, 从以下内置值中选一个："
+                    + " / ".join(CATEGORY_ENUM)
+                    + "。"
+                ),
             },
             "language": {
                 "type": "string",

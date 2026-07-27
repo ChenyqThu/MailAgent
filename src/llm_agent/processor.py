@@ -385,20 +385,29 @@ class LLMProcessor:
             )
             action_type = "仅供参考"
 
+        # issue #63: category 全保留 —— 用户可在「Custom AI → AI 邮件预处理」自定义
+        # 分类 prompt, 旧的 out-of-enum 清空会把自定义分类静默抹掉 (本地 + Notion 都空)。
+        # 本地 labels_json 无 CHECK 约束, 存 LLM 原值; 写 Notion select 前由
+        # notion_writer._safe_select_name 做逗号/长度护栏 (含逗号的 option 名会让
+        # Notion API 400, 整封邮件的 AI 字段写入失败, 比清空更糟)。
+        # 注: 上面 priority / action_type 与下面 language 是"回退到合法默认值"而不是
+        # 清空, 那是有意设计, 不在本次改动范围。
         category = ti.get("category", "")
         if category and category not in CATEGORY_ENUM:
-            logger.warning(f"[llm] category {category!r} not in enum; clearing")
-            category = ""
+            logger.debug(f"[llm] custom category (outside built-in enum): {category!r}")
 
         language = ti.get("language", "")
         if language and language not in LANGUAGE_ENUM:
             logger.warning(f"[llm] language {language!r} not in enum; → Other")
             language = "Other"
 
+        # issue #63: sender_priority 同为 clearing, 与 category 一并改成全保留
+        # (护栏同样在 notion_writer 侧)。
         sender_priority = ti.get("sender_priority", "")
         if sender_priority and sender_priority not in SENDER_PRIORITY_ENUM:
-            logger.warning(f"[llm] sender_priority {sender_priority!r} not in enum; clearing")
-            sender_priority = ""
+            logger.debug(
+                f"[llm] custom sender_priority (outside built-in enum): {sender_priority!r}"
+            )
 
         raw_actions = ti.get("mail_actions") or []
         if not isinstance(raw_actions, list):

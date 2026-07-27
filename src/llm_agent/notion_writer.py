@@ -35,6 +35,37 @@ def _select(name: str) -> Dict[str, Any]:
     return {"select": {"name": name}}
 
 
+# issue #63 全保留路线的护栏: category / sender_priority 现在可以是用户自定义
+# prompt 产出的任意字符串, 而 Notion select option 名不能含逗号 —— 含了就 API 400,
+# 整封邮件的 AI 字段一个都写不进去 (比旧的清空更糟)。
+#
+# 全角 '，' 一并替换是**有依据的保守决定**, 不是抄来的迷信: Notion property-object
+# 文档原话只有 "Commas are not valid. Names must be unique (case-insensitive)."
+# —— 既没区分码点, 也没写长度上限。查证消不掉这个不确定性, 所以按代价不对称定:
+# 多替一个字符最坏是中文分类名里的逗号变空格 (纯观感); 少替一个字符若 Notion 真拒,
+# 是整封邮件同步失败。长度上限同理 —— 官方文档也没写, 常被引用的 100 未经证实,
+# 故取更保守的 90。
+#
+# 只作用于 Notion 写入侧; 本地 SQLite labels_json 存 LLM 原值不动。
+_SELECT_NAME_MAX = 90
+
+
+def _safe_select_name(name: str) -> str:
+    """自由文本 → 可安全写进 Notion select 的 option 名 (去逗号 + 空白归一 + clamp)。
+
+    空白归一 (``" ".join(split())``) 一并收掉替换逗号产生的连续空格 ('A，, B' →
+    'A B') 与名字里的换行/制表符 —— 否则 Notion 里会出现只差空格数的近似重复 option。
+
+    ``str()`` 强转不是多余的防御: ``AILabels`` 是 dataclass (**不校验类型**), 而 LLM 的
+    tool_input 全程无本地 jsonschema 校验 (见 schema.py 顶部更正) —— 模型返回
+    ``"category": 123`` 时, 全保留路线不再把它清空, 于是非 str 会直接撞
+    ``.replace`` 的 AttributeError, 整封邮件的 AI 字段一个都写不进去 (正是本护栏要挡的
+    那种失败)。对 str 入参 ``str()`` 是恒等, 字符串路径逐字节不变。
+    """
+    cleaned = str(name or "").replace(",", " ").replace("，", " ")
+    return " ".join(cleaned.split())[:_SELECT_NAME_MAX].strip()
+
+
 def _multi_select(names: List[str]) -> Dict[str, Any]:
     return {"multi_select": [{"name": n} for n in names]}
 
@@ -71,12 +102,14 @@ class AIFieldsWriter:
             props["AI Summary"] = _rich(labels.ai_summary)
         if labels.key_points:
             props["Key Points"] = _rich(labels.key_points)
-        if labels.category:
-            props["Category"] = _select(labels.category)
+        category = _safe_select_name(labels.category)
+        if category:
+            props["Category"] = _select(category)
         if labels.language:
             props["Language"] = _select(labels.language)
-        if labels.sender_priority:
-            props["Sender Priority"] = _select(labels.sender_priority)
+        sender_priority = _safe_select_name(labels.sender_priority)
+        if sender_priority:
+            props["Sender Priority"] = _select(sender_priority)
         props["Action Required"] = {"checkbox": bool(labels.action_required)}
         if labels.action_type:
             props["Action Type"] = _select(labels.action_type)

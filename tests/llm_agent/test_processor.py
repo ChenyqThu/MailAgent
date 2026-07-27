@@ -316,7 +316,8 @@ def test_parse_filters_bad_mail_actions():
     assert labels.mail_actions == ["⭐ Starred", "⚠️ Flagged"]
 
 
-def test_parse_clears_out_of_enum_sender_priority():
+def test_parse_keeps_out_of_enum_sender_priority():
+    """issue #63: out-of-enum sender_priority 保留 (以前静默清空)."""
     p = _bare_processor()
     result = LLMResult(
         tool_input={
@@ -331,7 +332,76 @@ def test_parse_clears_out_of_enum_sender_priority():
         model="m", latency_ms=0,
     )
     labels = p._parse(result, "收件箱")
-    assert labels.sender_priority == ""
+    assert labels.sender_priority == "VIP 客户"
+
+
+def test_parse_keeps_out_of_enum_category():
+    """issue #63: 用户自定义分类 prompt 产出的 category 必须原样保留 —
+    以前 out-of-enum 就静默清空, 自定义分类功能等于不可用."""
+    p = _bare_processor()
+    result = LLMResult(
+        tool_input={
+            "ai_summary": "s",
+            "category": "📮 客户投诉",  # 用户自定义, 不在 CATEGORY_ENUM
+            "language": "中文", "sender_priority": "核心团队",
+            "action_required": False, "action_type": "仅供参考",
+            "priority": "🟢 一般",
+        },
+        input_tokens=0, output_tokens=0,
+        cache_creation_input_tokens=0, cache_read_input_tokens=0,
+        model="m", latency_ms=0,
+    )
+    labels = p._parse(result, "收件箱")
+    assert labels.category == "📮 客户投诉"
+
+
+def test_custom_category_survives_into_labels_json(tmp_path):
+    """issue #63 端到端: _parse → mark_success → labels_json 能查到自定义分类原值
+    (SQLite 侧无 CHECK 约束, 存 LLM 原值; 逗号/长度护栏只在 Notion 写入侧)."""
+    from src.llm_agent.store import LLMProcessingStore
+    from src.mail.sync_store import SyncStore
+
+    p = _bare_processor()
+    result = LLMResult(
+        tool_input={
+            "ai_summary": "s", "category": "📮 客户投诉",
+            "language": "中文", "sender_priority": "VIP 客户",
+            "action_required": False, "action_type": "仅供参考",
+            "priority": "🟢 一般",
+        },
+        input_tokens=0, output_tokens=0,
+        cache_creation_input_tokens=0, cache_read_input_tokens=0,
+        model="m", latency_ms=0,
+    )
+    labels = p._parse(result, "收件箱")
+
+    db = str(tmp_path / "sync_store.db")
+    SyncStore(db)  # 建 email_metadata 等主表 (mark_success 会双写主表列)
+    store = LLMProcessingStore(db_path=db)
+    store.mark_success(4242, labels, page_id="")
+
+    stored = store.get_labels(4242)
+    assert stored["category"] == "📮 客户投诉"
+    assert stored["sender_priority"] == "VIP 客户"
+
+
+def test_parse_keeps_builtin_category_unchanged():
+    """内置 enum 值行为不变 (自定义放开不该动到默认路径)."""
+    p = _bare_processor()
+    result = LLMResult(
+        tool_input={
+            "ai_summary": "s", "category": "🛠️ 技术讨论",
+            "language": "中文", "sender_priority": "研发团队",
+            "action_required": False, "action_type": "仅供参考",
+            "priority": "🟢 一般",
+        },
+        input_tokens=0, output_tokens=0,
+        cache_creation_input_tokens=0, cache_read_input_tokens=0,
+        model="m", latency_ms=0,
+    )
+    labels = p._parse(result, "收件箱")
+    assert labels.category == "🛠️ 技术讨论"
+    assert labels.sender_priority == "研发团队"
 
 
 def test_summary_for_log_does_not_leak_full_reply():
@@ -511,7 +581,7 @@ def test_recommended_actions_field_absent_defaults_to_empty():
         cache_creation_input_tokens=0, cache_read_input_tokens=0,
         model="m", latency_ms=10,
     )
-    labels = _bare_processor()._parse(result, "收件箱")
+    labels = p._parse(result, "收件箱")
     assert labels.recommended_actions == []
 
 
