@@ -282,4 +282,54 @@ describe('discover_skills (M4c) — silent read', () => {
       unavailable_reason: 'KOS not configured'
     })
   })
+
+  // issue #62 — the model was never told a skill's absolute directory, so the only shape it could
+  // infer from SKILL.md ("run from the install directory") was `sh -lc "cd <dir> && python3 f.py"`,
+  // which the exec probe cannot resolve → no integrity check, no first-run record, and NO secret
+  // injection (the skill author's declared secrets silently missing). Surface the path instead.
+  test('projects install_dir (absolute path for installed skills, null for builtins)', async () => {
+    const domain = mockDomain(() =>
+      okEnvelope({
+        skills: [
+          {
+            name: 'report',
+            title: 'Report',
+            description: 'reports',
+            defaultEnabled: false,
+            enabled: false,
+            overridden: false,
+            available: true,
+            unavailableReason: null,
+            toolCount: 2,
+            scopes: [],
+            sourceType: 'builtin'
+          },
+          {
+            name: 'dms-approve',
+            title: 'DMS',
+            description: 'dms',
+            defaultEnabled: true,
+            enabled: true,
+            overridden: false,
+            available: true,
+            unavailableReason: null,
+            toolCount: 0,
+            scopes: [],
+            sourceType: 'skill_pack',
+            installDir: '/Users/o/Library/Application Support/x/data/skills/dms-approve'
+          }
+        ]
+      })
+    )
+    const tools = createSelfMountTools(domain, [], new ApprovalGuard(), {
+      contextMode: 'manual_chat'
+    })
+    const out = (await runTool(tools.discover_skills, {})) as {
+      skills: Array<{ name: string; install_dir: string | null }>
+    }
+    expect(out.skills[0].install_dir).toBeNull() // builtin — nothing on disk to run
+    expect(out.skills[1].install_dir).toBe(
+      '/Users/o/Library/Application Support/x/data/skills/dms-approve'
+    )
+  })
 })

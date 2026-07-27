@@ -178,8 +178,11 @@ export function createSelfMountTools(
       description:
         'List your skills and their current state: name, description, whether each is enabled, ' +
         'whether it is available (preconditions / credentials met), why it is unavailable if not, ' +
-        'and how many tools it owns. Use this to discover a capability the current task needs that ' +
-        'is turned off, then propose enabling it with set_skill_enabled. Read-only — no approval.',
+        'how many tools it owns, and install_dir (absolute on-disk directory for installed script ' +
+        'skills, null for built-ins). Use this to discover a capability the current task needs that ' +
+        'is turned off, then propose enabling it with set_skill_enabled. When running a script ' +
+        'skill, build run_command from install_dir as an ABSOLUTE path argv — never `cd` into it ' +
+        'via a shell, which the exec endpoint rejects. Read-only — no approval.',
       inputSchema: discoverSkillsSchema,
       run: async (_input, signal) => {
         const skills = await domain.listResolvedSkills(signal)
@@ -192,7 +195,10 @@ export function createSelfMountTools(
             enabled: s.enabled,
             available: s.available,
             unavailable_reason: s.unavailableReason,
-            tool_count: s.toolCount
+            tool_count: s.toolCount,
+            // issue #62 — absolute install path so the model never has to infer a `cd <dir> && …`
+            // shell wrapper (that shape silently loses integrity checking + secret injection).
+            install_dir: s.installDir ?? null
           }))
         }
       }

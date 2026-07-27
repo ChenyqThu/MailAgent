@@ -685,7 +685,12 @@ def _installed_skill_dir(name: str) -> str:
 async def get_skill_doc(name: str, request: Request):
     """读一个已落盘 skill 的 SKILL.md **原文**（W4 ``skill_read`` 工具的数据源）。第三方文本的
     围栏（``UNTRUSTED_SKILL_DOC`` + 32KB 截断 + 警示头）是 TS 壳进模型上下文时的职责 —— 本端点
-    不围栏（Settings 等 owner 面也读原文）。服务器侧 cap 64KB 防怪物文件。无文件 → 404。"""
+    不围栏（Settings 等 owner 面也读原文）。服务器侧 cap 64KB 防怪物文件。无文件 → 404。
+
+    ``installDir``（issue #62）= 该 skill 的**绝对**安装目录。SKILL.md 普遍写「在安装目录下执行」，
+    而工具此前不给绝对路径 → 模型只能推断出 ``sh -lc "cd <dir> && python3 f.py"`` 的壳包装写法，
+    正是 exec 端点会 409 硬拒（且此前会静默丢掉 secret 注入）的形状。路径由 Python 权威给出，
+    TS 不手抄 skills root（同 ``/skills/entrypoints`` 的 ``dir``）。"""
     d = _installed_skill_dir(name)
     path = os.path.join(d, "SKILL.md")
     if not os.path.isfile(path):
@@ -698,7 +703,7 @@ async def get_skill_doc(name: str, request: Request):
     truncated = len(raw) > _SKILL_DOC_CAP_BYTES
     content = raw[:_SKILL_DOC_CAP_BYTES].decode("utf-8", errors="replace")
     return success_envelope(
-        {"name": name, "content": content, "truncated": truncated},
+        {"name": name, "content": content, "truncated": truncated, "installDir": d},
         request=request,
         source="sqlite",
     )

@@ -289,6 +289,8 @@ export interface DomainResolvedSkill {
   toolCount: number
   scopes: string[]
   sourceType: string
+  /** issue #62 — absolute on-disk directory of a supply-chain installed skill (null for builtins). */
+  installDir?: string | null
 }
 
 // ── session-read shapes (S1 R1) — the /chat/sessions/* rows the session tools consume.
@@ -454,11 +456,13 @@ export interface DomainSkillUninstallResult {
 }
 
 /** GET /agent/skills/{name}/doc data block — the RAW SKILL.md (server caps at 64KB; the tool
- *  fences + truncates to 32KB before the model sees it). */
+ *  fences + truncates to 32KB before the model sees it). `installDir` (issue #62) is the skill's
+ *  ABSOLUTE on-disk directory, supplied by Python so TS never hand-copies the skills root. */
 export interface DomainSkillDocResult {
   name: string
   content: string
   truncated: boolean
+  installDir?: string | null
 }
 
 /** chat_session_search — one aggregated hit of GET /chat/sessions/search. */

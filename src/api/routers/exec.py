@@ -382,6 +382,44 @@ def _skill_unresolved_problem(store: Any, argv: list[str], run_cwd: str) -> Opti
     return None
 
 
+def _shell_wrapped_skill_problem(argv: list[str], run_cwd: str) -> Optional[str]:
+    """壳包装盲区的独立 deny 地板（issue #62）——「危险解释器 + token 文本引用 skills 目录 + 该
+    token realpath 不落 skills」→ 完整 409 文案（含修复路径），None = 过。判定本体是
+    ``exec_gate.shell_wrapped_skill_ref``（**单源**，与 evaluate 侧 ``policy._skill_gate_forces_ask``
+    的 belt 逐字同一份）。
+
+    补的是 :func:`_skill_unresolved_problem` 的漏判：``["/bin/sh","-lc","cd <skills>/x && python3
+    f.py"]`` 里整条 shell 命令是**单个** token，``os.sep in tok`` 为真但 realpath 不落 skills →
+    那边 ``continue`` 放行；而 ``cd`` 发生在 shell 内部、``run_cwd`` 仍是默认 data root ⇒ probe
+    的 ``names``/``touched_files`` 双空 ⇒ 完整性校验 / 首跑记录 / **secret 注入**三个消费者一起
+    fail-open。安全面之外更痛的是功能面：skill 作者声明了 secret、owner 也填了值，助手用这个最自然
+    的写法一跑，脚本 ``os.environ`` 就是空的（零攻击者即触发）。
+
+    修复路径 = 绝对路径 argv（``["python3", "<skills>/x/f.py"]``）—— 该形状 probe 正常落地，
+    三者自动恢复。文案直白给出这个写法：模型读得到 409 message，能自我纠正。
+    """
+    import os
+
+    try:
+        from src.skills.exec_gate import shell_wrapped_skill_ref
+        from src.skills.pack_fetch import skills_data_root
+
+        skills_root = os.path.realpath(skills_data_root())
+    except Exception:  # noqa: BLE001 — skills 根不可得（裸 worktree）→ 无 skill 概念，地板不适用
+        return None
+    tok = shell_wrapped_skill_ref(argv, run_cwd, skills_root)
+    if tok is None:
+        return None
+    return (
+        f"argv wraps a reference to the managed skills directory inside an interpreter argument "
+        f"({tok!r}) — the integrity check, the first-run record and the skill's secret injection "
+        "all resolve the SCRIPT PATH out of argv, so a shell-wrapped command silently runs with "
+        "NO integrity check and NO secrets in its environment. Run the script by absolute path "
+        "instead, e.g. argv=[\"python3\", \"<skill dir>/main.py\"] (add a cwd if the script needs "
+        "one) — no `cd`, no `sh -c`, no `&&`."
+    )
+
+
 @router.post("/run", dependencies=[Depends(verify_local_token)])
 async def run_command(request: Request, body: RunRequest):
     """执行一条命令（argv 数组，**无 shell**）。固定 env 白名单基底（不继承全局密钥）；run_command
@@ -436,6 +474,12 @@ async def run_command(request: Request, body: RunRequest):
             source="exec",
         )
 
+    # issue #62：同族的壳包装盲区（``sh -lc "cd <skills>/x && …"``）—— 上面那条按 realpath 判定，
+    # 对单 token 的整条 shell 命令必然漏判。文本 belt 与 evaluate 侧同一单源，同样独立于审批链。
+    shell_wrapped = _shell_wrapped_skill_problem(body.argv, run_cwd)
+    if shell_wrapped is not None:
+        raise APIError("E_SKILL_UNRESOLVED", shell_wrapped, http_status=409, source="exec")
+
     # W3: 命中 skill 目录 → 该 skill 声明 ∩ 已存储密钥叠加进子进程 env（固定基底之上）；stdout/stderr
     # 精确脱敏。非 skill 命令 → 零注入（基底 W1a 行为不变）。密钥值任何形态**不进响应/日志/异常**。
     overlay, injected_names = _skill_secret_overlay(probe.names)
@@ -450,6 +494,15 @@ async def run_command(request: Request, body: RunRequest):
         if check.pending_first_run:
             store.merge_first_run_approved(check.skill_name, check.pending_first_run)
             first_run_recorded.extend(sorted(check.pending_first_run))
+        # issue #62 ③：清掉「本次真的验过的那个文件」记下的 tampered。``last_error`` 的唯一落点是
+        # 上面的 409 分支，而清除此前只发生在 install/confirm 的 upsert —— 修好文件后再跑成功，
+        # Settings 仍会长期标红一个已不存在的错误。
+        # 🔴 只认 ``check.verified``（本次逐字节校验通过的标签），**不**因为闸整体通过就无条件清：
+        # 一个 skill 有多个文件时，跑 main.py 不代表 helper.py 的篡改也没了 —— 那样会在设置界面上
+        # 造出 false-green。有错才写（避免每次 run 都 bump updated_at）。
+        row = store.get_skill(check.skill_name)
+        if row is not None and row.last_error in check.verified:
+            store.set_skill_last_error(check.skill_name, None)
     result["cwd"] = run_cwd
     result["floor_hit"] = bool(floor_hits)
     result["floor_hits"] = floor_hits

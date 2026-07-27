@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 import hashlib
-from typing import Any, Iterable
+from typing import Any, Iterable, Optional
 
 from src.agent_config.store import AgentConfigStore, resolve_enabled
 
@@ -85,11 +85,27 @@ def skill_overrides_map(store: AgentConfigStore) -> dict[str, bool]:
     return {r.skill_name: bool(r.enabled) for r in store.list_skills() if r.enabled is not None}
 
 
+def _skill_install_dir(name: str) -> Optional[str]:
+    """供应链 installed skill 的绝对安装目录（issue #62）；skills 根不可得（裸 worktree）→ None。
+    lazy import 防 agent_config 层在无 skills 面的进程里拉起 pack_fetch（同 policy.py 纪律）。"""
+    try:
+        from src.skills.pack_fetch import skill_dir
+
+        return skill_dir(name)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def resolved_skills(manifest_skills: Iterable[Any], store: AgentConfigStore) -> list[dict[str, Any]]:
     """Settings 面用的解析后 skill 列表 —— manifest skill ⋈ store 启用覆盖 + source_type。
 
     enabled = ``resolve_enabled(store_override, manifest.default_enabled)``。builtin skill 无
     store 行 → source_type='builtin'、override=None；installed skill 携其 source_type。
+
+    ``installDir``（issue #62）只对**供应链 installed** skill（``files_json`` 非空 = confirm 落库
+    事实，判据同 ``/skills/entrypoints``）非 None —— builtin skill 没有可执行的落盘目录。给模型
+    绝对路径是为了让它用 ``["python3", "<installDir>/main.py"]`` 而非 ``sh -lc "cd … && …"``：后者
+    的完整性校验 / 首跑记录 / secret 注入全部 fail-open，且 exec 端点自 issue #62 起 409 硬拒。
     """
     rows = {r.skill_name: r for r in store.list_skills()}
     out: list[dict[str, Any]] = []
@@ -109,6 +125,7 @@ def resolved_skills(manifest_skills: Iterable[Any], store: AgentConfigStore) -> 
                 "toolCount": len(s.tools),
                 "scopes": sorted({sc for t in s.tools for sc in t.auth_scopes}),
                 "sourceType": row.source_type if row else "builtin",
+                "installDir": _skill_install_dir(s.name) if row and row.files_json else None,
             }
         )
     return out
