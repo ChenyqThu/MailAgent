@@ -18,7 +18,10 @@ import {
   createCustomAgentTools,
   GATEWAY_CUSTOM_AGENT_TOOL_NAMES
 } from '../../../src/ai-gateway/tools/agents'
-import { customAgentCreateSchema, customAgentUpdateSchema } from '../../../src/ai-gateway/tools/schemas'
+import {
+  customAgentCreateSchema,
+  customAgentUpdateSchema
+} from '../../../src/ai-gateway/tools/schemas'
 import { MailAgentDomainClient } from '../../../src/ai-gateway/python/domainClient'
 import { ApprovalGuard } from '../../../src/ai-gateway/security/approval'
 import type { GatewayToolAuditCollector } from '../../../src/ai-gateway/tools/types'
@@ -47,11 +50,41 @@ const CUSTOM_AGENT = {
 }
 
 /** A report agent (NOT custom) so custom_agent_list filtering can be asserted. */
-const REPORT_AGENT = { ...CUSTOM_AGENT, id: 'daily-digest', type: 'report', title: '每日摘要', trigger: null, tool_policy: null, budget: null }
+const REPORT_AGENT = {
+  ...CUSTOM_AGENT,
+  id: 'daily-digest',
+  type: 'report',
+  title: '每日摘要',
+  trigger: null,
+  tool_policy: null,
+  budget: null
+}
 
 const RUN_ROWS = [
-  { jobId: 42, agentId: 'dms-approver', state: 'completed', outcome: 'completed', approvalState: null, sessionId: 7, createdAt: 1750000500000, finishedAt: 1750000560000, error: null, tokens: { input: 1200 } },
-  { jobId: 41, agentId: 'dms-approver', state: 'paused_pending', outcome: 'paused_handoff', approvalState: 'pending', sessionId: 6, createdAt: 1750000400000, finishedAt: null, error: null, tokens: null }
+  {
+    jobId: 42,
+    agentId: 'dms-approver',
+    state: 'completed',
+    outcome: 'completed',
+    approvalState: null,
+    sessionId: 7,
+    createdAt: 1750000500000,
+    finishedAt: 1750000560000,
+    error: null,
+    tokens: { input: 1200 }
+  },
+  {
+    jobId: 41,
+    agentId: 'dms-approver',
+    state: 'paused_pending',
+    outcome: 'paused_handoff',
+    approvalState: 'pending',
+    sessionId: 6,
+    createdAt: 1750000400000,
+    finishedAt: null,
+    error: null,
+    tokens: null
+  }
 ]
 
 interface Call {
@@ -87,7 +120,8 @@ function recordingDomain(overrides?: {
     // /agent-runs (run history)
     if (url.includes('/agent-runs')) return ok(overrides?.runs ?? RUN_ROWS)
     // /report-agents/{id}/run (run_now)
-    if (/\/report-agents\/[^/]+\/run/.test(url)) return ok({ jobId: 99, agentId: 'dms-approver', wasCreated: true })
+    if (/\/report-agents\/[^/]+\/run/.test(url))
+      return ok({ jobId: 99, agentId: 'dms-approver', wasCreated: true })
     // /report-agents/{id} (update PUT / delete DELETE)
     if (/\/report-agents\/[^/?]+$/.test(url)) {
       if (method === 'DELETE') return ok({ deleted: 'dms-approver' })
@@ -110,7 +144,11 @@ function recordingDomain(overrides?: {
     }
     return ok({})
   }) as unknown as typeof fetch
-  const domain = new MailAgentDomainClient({ baseUrl: 'http://127.0.0.1:8200/api', localToken: 't', fetchImpl })
+  const domain = new MailAgentDomainClient({
+    baseUrl: 'http://127.0.0.1:8200/api',
+    localToken: 't',
+    fetchImpl
+  })
   return { domain, calls }
 }
 
@@ -201,7 +239,9 @@ describe('buildGatewayTools — MAILAGENT_CUSTOM_AGENTS_ENABLED gate', () => {
 describe('custom_agent_list / custom_agent_get (silent reads)', () => {
   test('list is a silent read (no needsApproval), filters to type=custom', async () => {
     const { domain } = recordingDomain()
-    const tools = createCustomAgentTools(domain, [], new ApprovalGuard(), { contextMode: 'manual_chat' })
+    const tools = createCustomAgentTools(domain, [], new ApprovalGuard(), {
+      contextMode: 'manual_chat'
+    })
     expect(tools.custom_agent_list.needsApproval).toBeUndefined()
     const out = (await runRead(tools.custom_agent_list, {})) as {
       count: number
@@ -214,9 +254,14 @@ describe('custom_agent_list / custom_agent_get (silent reads)', () => {
 
   test('get returns the full spec + recent runs (state passed through verbatim, not re-derived)', async () => {
     const { domain } = recordingDomain()
-    const tools = createCustomAgentTools(domain, [], new ApprovalGuard(), { contextMode: 'manual_chat' })
+    const tools = createCustomAgentTools(domain, [], new ApprovalGuard(), {
+      contextMode: 'manual_chat'
+    })
     expect(tools.custom_agent_get.needsApproval).toBeUndefined()
-    const out = (await runRead(tools.custom_agent_get, { agent_id: 'dms-approver', runs_limit: 5 })) as {
+    const out = (await runRead(tools.custom_agent_get, {
+      agent_id: 'dms-approver',
+      runs_limit: 5
+    })) as {
       found: boolean
       allowed_tools: string[]
       recent_runs: Array<{ state: string; outcome: string | null }>
@@ -231,8 +276,13 @@ describe('custom_agent_list / custom_agent_get (silent reads)', () => {
 
   test('get returns found:false for a non-custom / missing id', async () => {
     const { domain } = recordingDomain({ getAgent: { ...REPORT_AGENT } })
-    const tools = createCustomAgentTools(domain, [], new ApprovalGuard(), { contextMode: 'manual_chat' })
-    const out = (await runRead(tools.custom_agent_get, { agent_id: 'daily-digest', runs_limit: 5 })) as {
+    const tools = createCustomAgentTools(domain, [], new ApprovalGuard(), {
+      contextMode: 'manual_chat'
+    })
+    const out = (await runRead(tools.custom_agent_get, {
+      agent_id: 'daily-digest',
+      runs_limit: 5
+    })) as {
       found: boolean
     }
     expect(out.found).toBe(false)
@@ -255,7 +305,9 @@ describe('custom_agent_create / update (edit-tier capability_change writes)', ()
 
   test('approved create POSTs /report-agents with type=custom + mapped friendly patch', async () => {
     const { domain, calls } = recordingDomain()
-    const tools = createCustomAgentTools(domain, [], new ApprovalGuard(), { contextMode: 'manual_chat' })
+    const tools = createCustomAgentTools(domain, [], new ApprovalGuard(), {
+      contextMode: 'manual_chat'
+    })
     const out = (await approveAndRun(tools.custom_agent_create, {
       id: 'dms-approver',
       title: 'DMS Approver',
@@ -284,7 +336,9 @@ describe('custom_agent_create / update (edit-tier capability_change writes)', ()
 
   test('a cron trigger maps to a 5-field cron wire trigger', async () => {
     const { domain, calls } = recordingDomain()
-    const tools = createCustomAgentTools(domain, [], new ApprovalGuard(), { contextMode: 'manual_chat' })
+    const tools = createCustomAgentTools(domain, [], new ApprovalGuard(), {
+      contextMode: 'manual_chat'
+    })
     await approveAndRun(tools.custom_agent_create, {
       id: 'daily-sweep',
       title: 'Daily Sweep',
@@ -301,7 +355,9 @@ describe('custom_agent_create / update (edit-tier capability_change writes)', ()
 
   test('update PUTs the partial patch to /report-agents/{id}; empty patch is rejected before any wire call', async () => {
     const { domain, calls } = recordingDomain()
-    const tools = createCustomAgentTools(domain, [], new ApprovalGuard(), { contextMode: 'manual_chat' })
+    const tools = createCustomAgentTools(domain, [], new ApprovalGuard(), {
+      contextMode: 'manual_chat'
+    })
     await approveAndRun(tools.custom_agent_update, { agent_id: 'dms-approver', enabled: false })
     const put = calls.find((c) => c.method === 'PUT')!
     expect(put.url).toContain('/report-agents/dms-approver')
@@ -310,14 +366,20 @@ describe('custom_agent_create / update (edit-tier capability_change writes)', ()
     const { domain: d2, calls: c2 } = recordingDomain()
     const t2 = createCustomAgentTools(d2, [], new ApprovalGuard(), { contextMode: 'manual_chat' })
     await expect(
-      approveAndRun(t2.custom_agent_update, { agent_id: 'dms-approver' }, { toolCallId: 'tc-empty' })
+      approveAndRun(
+        t2.custom_agent_update,
+        { agent_id: 'dms-approver' },
+        { toolCallId: 'tc-empty' }
+      )
     ).rejects.toThrow(/E_INVALID_ARG|at least one field/)
     expect(c2.filter((c) => c.method === 'PUT')).toHaveLength(0)
   })
 
   test('update trigger:null disables the agent (clears the trigger on the wire)', async () => {
     const { domain, calls } = recordingDomain()
-    const tools = createCustomAgentTools(domain, [], new ApprovalGuard(), { contextMode: 'manual_chat' })
+    const tools = createCustomAgentTools(domain, [], new ApprovalGuard(), {
+      contextMode: 'manual_chat'
+    })
     await approveAndRun(tools.custom_agent_update, { agent_id: 'dms-approver', trigger: null })
     const put = calls.find((c) => c.method === 'PUT')!
     expect(put.body).toEqual({ trigger: null })
@@ -326,7 +388,9 @@ describe('custom_agent_create / update (edit-tier capability_change writes)', ()
   test('identity pin: a raw-changed create input (no applyEdit) → E_APPROVAL_HASH_MISMATCH, no POST', async () => {
     const collector: GatewayToolAuditCollector = []
     const { domain, calls } = recordingDomain()
-    const tools = createCustomAgentTools(domain, collector, new ApprovalGuard(), { contextMode: 'manual_chat' })
+    const tools = createCustomAgentTools(domain, collector, new ApprovalGuard(), {
+      contextMode: 'manual_chat'
+    })
     await expect(
       approveAndRun(
         tools.custom_agent_create,
@@ -342,7 +406,9 @@ describe('custom_agent_create / update (edit-tier capability_change writes)', ()
 describe('custom_agent_delete / run_now (edit-tier writes)', () => {
   test('delete DELETEs /report-agents/{id}', async () => {
     const { domain, calls } = recordingDomain()
-    const tools = createCustomAgentTools(domain, [], new ApprovalGuard(), { contextMode: 'manual_chat' })
+    const tools = createCustomAgentTools(domain, [], new ApprovalGuard(), {
+      contextMode: 'manual_chat'
+    })
     const out = (await approveAndRun(tools.custom_agent_delete, { agent_id: 'dms-approver' })) as {
       deleted: string
     }
@@ -353,7 +419,9 @@ describe('custom_agent_delete / run_now (edit-tier writes)', () => {
 
   test('run_now POSTs /report-agents/{id}/run and returns the job id', async () => {
     const { domain, calls } = recordingDomain()
-    const tools = createCustomAgentTools(domain, [], new ApprovalGuard(), { contextMode: 'manual_chat' })
+    const tools = createCustomAgentTools(domain, [], new ApprovalGuard(), {
+      contextMode: 'manual_chat'
+    })
     const out = (await approveAndRun(tools.custom_agent_run_now, { agent_id: 'dms-approver' })) as {
       enqueued: boolean
       job_id: number
@@ -370,15 +438,20 @@ describe('field ALLOWLIST — grants opened (rev3.1 §7), raw policy fields stil
     // rev3.1 §7 (owner Q4): the three grant keys ARE the vocabulary now
     expect(
       customAgentCreateSchema.safeParse({
-        id: 'x', title: 't', grant_exec: true, grant_web: 'open', skills: ['email', 'dms-approval']
+        id: 'x',
+        title: 't',
+        grant_exec: true,
+        grant_web: 'open',
+        skills: ['email', 'dms-approval']
       }).success
     ).toBe(true)
-    expect(
-      customAgentUpdateSchema.safeParse({ agent_id: 'x', grant_web: 'gated' }).success
-    ).toBe(true)
+    expect(customAgentUpdateSchema.safeParse({ agent_id: 'x', grant_web: 'gated' }).success).toBe(
+      true
+    )
     // `.strict()` still rejects every OTHER unknown key — raw policy shapes have no path in
     expect(
-      customAgentUpdateSchema.safeParse({ agent_id: 'x', tool_policy: { v: 1, grant_exec: true } }).success
+      customAgentUpdateSchema.safeParse({ agent_id: 'x', tool_policy: { v: 1, grant_exec: true } })
+        .success
     ).toBe(false)
     expect(
       customAgentCreateSchema.safeParse({ id: 'x', policy_rules: [{ capability: 'exec' }] }).success
@@ -392,13 +465,16 @@ describe('field ALLOWLIST — grants opened (rev3.1 §7), raw policy fields stil
     expect(customAgentCreateSchema.safeParse({ id: 'x', skills: 'email' }).success).toBe(false)
     // the sanctioned fields still parse
     expect(
-      customAgentCreateSchema.safeParse({ id: 'x', title: 't', allowed_tools: ['email_get'] }).success
+      customAgentCreateSchema.safeParse({ id: 'x', title: 't', allowed_tools: ['email_get'] })
+        .success
     ).toBe(true)
   })
 
   test('create maps the grant keys into tool_policy on the wire (field-by-field assembly)', async () => {
     const { domain, calls } = recordingDomain()
-    const tools = createCustomAgentTools(domain, [], new ApprovalGuard(), { contextMode: 'manual_chat' })
+    const tools = createCustomAgentTools(domain, [], new ApprovalGuard(), {
+      contextMode: 'manual_chat'
+    })
     await approveAndRun(tools.custom_agent_create, {
       id: 'webby',
       title: 'Webby',
@@ -419,7 +495,9 @@ describe('field ALLOWLIST — grants opened (rev3.1 §7), raw policy fields stil
 
   test('a schema-bypassed input still cannot carry raw tool_policy / policy_rules onto the wire', async () => {
     const { domain, calls } = recordingDomain()
-    const tools = createCustomAgentTools(domain, [], new ApprovalGuard(), { contextMode: 'manual_chat' })
+    const tools = createCustomAgentTools(domain, [], new ApprovalGuard(), {
+      contextMode: 'manual_chat'
+    })
     // execute receives already-parsed input, so inject a hostile object directly — the wire body is
     // assembled field-by-field from the ALLOWLIST: the grant keys flow (they are sanctioned now),
     // but a raw tool_policy blob / policy_rules array has no assembly path.
@@ -460,14 +538,16 @@ describe('field ALLOWLIST — grants opened (rev3.1 §7), raw policy fields stil
 })
 
 describe('update merge — a partial grants patch must not wipe the untouched tool_policy sub-fields', () => {
-  test('patch {grant_web} merges the SERVER row\'s allowed_tools/grant_exec/skills into the PUT body', async () => {
+  test("patch {grant_web} merges the SERVER row's allowed_tools/grant_exec/skills into the PUT body", async () => {
     const { domain, calls } = recordingDomain({
       getAgent: {
         ...CUSTOM_AGENT,
         tool_policy: { v: 1, allowed_tools: ['email_get'], grant_exec: true, skills: ['email'] }
       }
     })
-    const tools = createCustomAgentTools(domain, [], new ApprovalGuard(), { contextMode: 'manual_chat' })
+    const tools = createCustomAgentTools(domain, [], new ApprovalGuard(), {
+      contextMode: 'manual_chat'
+    })
     await approveAndRun(tools.custom_agent_update, { agent_id: 'dms-approver', grant_web: 'gated' })
     // the merge base is read live from the server (GET ?agentId=) at execute time
     expect(calls.some((c) => c.method === 'GET' && c.url.includes('agentId='))).toBe(true)
@@ -485,7 +565,9 @@ describe('update merge — a partial grants patch must not wipe the untouched to
 
   test('a patch not touching tool_policy does NOT read the row and carries no tool_policy', async () => {
     const { domain, calls } = recordingDomain()
-    const tools = createCustomAgentTools(domain, [], new ApprovalGuard(), { contextMode: 'manual_chat' })
+    const tools = createCustomAgentTools(domain, [], new ApprovalGuard(), {
+      contextMode: 'manual_chat'
+    })
     await approveAndRun(tools.custom_agent_update, { agent_id: 'dms-approver', title: 'Renamed' })
     expect(calls.some((c) => c.method === 'GET' && c.url.includes('agentId='))).toBe(false)
     const put = calls.find((c) => c.method === 'PUT')!
@@ -499,7 +581,9 @@ describe('update merge — a partial grants patch must not wipe the untouched to
 
     // missing row (getReportAgent maps E_NOT_FOUND to null → no merge base)
     const { domain, calls } = recordingDomain({ getAgent: 'not_found' })
-    const tools = createCustomAgentTools(domain, [], new ApprovalGuard(), { contextMode: 'manual_chat' })
+    const tools = createCustomAgentTools(domain, [], new ApprovalGuard(), {
+      contextMode: 'manual_chat'
+    })
     await expect(
       approveAndRun(tools.custom_agent_update, { agent_id: 'ghost', grant_web: 'gated' })
     ).rejects.toThrow(/E_INVALID_ARG|no custom agent/)
@@ -522,9 +606,15 @@ describe('update merge — a partial grants patch must not wipe the untouched to
       localToken: 't',
       fetchImpl: flakyFetch
     })
-    const t2 = createCustomAgentTools(flakyDomain, [], new ApprovalGuard(), { contextMode: 'manual_chat' })
+    const t2 = createCustomAgentTools(flakyDomain, [], new ApprovalGuard(), {
+      contextMode: 'manual_chat'
+    })
     await expect(
-      approveAndRun(t2.custom_agent_update, { agent_id: 'dms-approver', grant_web: 'gated' }, { toolCallId: 'tc-flaky' })
+      approveAndRun(
+        t2.custom_agent_update,
+        { agent_id: 'dms-approver', grant_web: 'gated' },
+        { toolCallId: 'tc-flaky' }
+      )
     ).rejects.toThrow(/E_INVALID_ARG|could not read/)
     expect(putCalls).toHaveLength(0)
   })
