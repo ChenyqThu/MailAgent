@@ -43,8 +43,43 @@ from loguru import logger
 
 
 _DEFAULT_SCOPE = "read write"
-_DEFAULT_TIMEOUT = 10.0
 _TOKEN_SAFETY_BUFFER_SEC = 60.0
+
+#: 拿不到 config 时的兜底请求超时 (秒)。正常路径读 ``KOS_TIMEOUT_SECONDS``
+#: (src/config.py ``kos_timeout_seconds``, 默认同为 30) —— issue #69 之前这里是
+#: 硬编码 10.0 而那个 env 键无人读取。
+_FALLBACK_TIMEOUT = 30.0
+
+#: GET /health 探活的独立上限 (秒)。**有意不跟随** ``KOS_TIMEOUT_SECONDS``:
+#: health 是免 auth 的存活探针 (正常 <100ms), 而 new_watcher 第 6c 步的
+#: 「探活失败 → 整段跳过 + 冷却」语义要靠它**快速判死** —— 让 5s tick 挂在一个
+#: 30s 的 health 上, 等于把查询超时的放宽代价转嫁给同步主循环。
+#: 与请求超时取 min: 把总超时调到 <5s 的人不该在 health 上等更久。
+_DEFAULT_HEALTH_TIMEOUT = 5.0
+
+
+def _configured_timeout() -> float:
+    """``KOS_TIMEOUT_SECONDS`` (pydantic) → 请求超时; 不可用/非正 → 兜底 30s.
+
+    函数内 import: client 被 CLI / worker / serve-api 三种进程复用, 顶层 import
+    config 会把 pydantic 的 .env 解析拖进每个 import 者的启动路径。
+    """
+    try:
+        from src.config import config as settings
+
+        value = float(settings.kos_timeout_seconds)
+    except Exception:  # noqa: BLE001 — 配置不可用绝不能让 client 构造失败
+        return _FALLBACK_TIMEOUT
+    return value if value > 0 else _FALLBACK_TIMEOUT
+
+
+def _timeout_note(elapsed: float, limit_desc: str) -> str:
+    """超时分支的可诊断文案 (issue #69): 实际耗时 + 生效上限是多少、来自哪。
+
+    没有它, ``E_KOS_NETWORK: ... ReadTimeout`` 里「服务挂了」和「查询太慢」长得
+    一模一样 —— 模型选不出该 fallback 还是该重试, 用户也不知道该不该调大上限。
+    """
+    return f"timed out after {elapsed:.1f}s ({limit_desc})"
 
 
 @dataclass
@@ -96,6 +131,10 @@ class KOSClient:
     Config 来源优先级: 构造参数 > env var.
     Env var: KOS_MCP_BASE / KOS_OAUTH_CLIENT_ID / KOS_OAUTH_CLIENT_SECRET.
 
+    超时两档 (issue #69): ``timeout`` 罩 /token + /mcp, 默认读
+    ``KOS_TIMEOUT_SECONDS`` (30s); ``health_timeout`` 罩 GET /health, 默认 5s 且
+    不跟随前者 —— 理由见 ``_DEFAULT_HEALTH_TIMEOUT``。
+
     Usage:
         >>> client = KOSClient()  # env var 注入
         >>> client.health()
@@ -110,14 +149,23 @@ class KOSClient:
         client_id: Optional[str] = None,
         client_secret: Optional[str] = None,
         *,
-        timeout_seconds: float = _DEFAULT_TIMEOUT,
+        timeout_seconds: Optional[float] = None,
+        health_timeout_seconds: Optional[float] = None,
         scope: str = _DEFAULT_SCOPE,
         http_client: Optional[httpx.Client] = None,
     ):
         self.base_url = (base_url or os.getenv("KOS_MCP_BASE") or "").rstrip("/")
         self.client_id = client_id or os.getenv("KOS_OAUTH_CLIENT_ID") or ""
         self.client_secret = client_secret or os.getenv("KOS_OAUTH_CLIENT_SECRET") or ""
-        self.timeout = timeout_seconds
+        # None = 读 KOS_TIMEOUT_SECONDS; 显式值仍然优先 (单测 / 特殊调用方)。
+        self.timeout = (
+            timeout_seconds if timeout_seconds is not None else _configured_timeout()
+        )
+        self.health_timeout = (
+            health_timeout_seconds
+            if health_timeout_seconds is not None
+            else min(_DEFAULT_HEALTH_TIMEOUT, self.timeout)
+        )
         self.scope = scope
         self._token = KOSTokenCache()
         # http_client 注入是为单测 mock (httpx MockTransport); 生产用默认 None
@@ -133,13 +181,19 @@ class KOSClient:
     # ============================================================
 
     def health(self) -> dict[str, Any]:
-        """GET /health (免 auth). 返 {'status':'ok','version':...,'engine':...}."""
+        """GET /health (免 auth). 返 {'status':'ok','version':...,'engine':...}.
+
+        用 ``health_timeout`` (默认 5s) 而非请求超时 —— 见 _DEFAULT_HEALTH_TIMEOUT。
+        """
         if not self.base_url:
             raise KOSError(
                 "KOS_MCP_BASE not configured", code="E_KOS_NOT_CONFIGURED"
             )
+        started = time.monotonic()
         try:
-            r = self._client().get(f"{self.base_url}/health", timeout=self.timeout)
+            r = self._client().get(
+                f"{self.base_url}/health", timeout=self.health_timeout
+            )
             r.raise_for_status()
             return r.json()
         except httpx.HTTPStatusError as e:
@@ -148,6 +202,13 @@ class KOSClient:
                 code="E_KOS_HEALTH",
                 status=e.response.status_code,
             ) from e
+        except httpx.TimeoutException as e:
+            note = _timeout_note(
+                time.monotonic() - started,
+                f"health probe limit {self.health_timeout:g}s, "
+                f"independent of KOS_TIMEOUT_SECONDS",
+            )
+            raise KOSError(f"health probe {note}", code="E_KOS_HEALTH") from e
         except httpx.HTTPError as e:
             raise KOSError(f"health request failed: {e}", code="E_KOS_HEALTH") from e
 
@@ -262,6 +323,7 @@ class KOSClient:
 
     def _refresh_token(self) -> str:
         """POST /token client_credentials grant → 1h access_token."""
+        started = time.monotonic()
         try:
             r = self._client().post(
                 f"{self.base_url}/token",
@@ -273,6 +335,14 @@ class KOSClient:
                 },
                 timeout=self.timeout,
             )
+        except httpx.TimeoutException as e:
+            note = _timeout_note(
+                time.monotonic() - started,
+                f"KOS_TIMEOUT_SECONDS={self.timeout:g}",
+            )
+            raise KOSError(
+                f"token request {note}", code="E_KOS_TOKEN_NETWORK"
+            ) from e
         except httpx.HTTPError as e:
             raise KOSError(
                 f"token request network error: {e}", code="E_KOS_TOKEN_NETWORK"
@@ -307,6 +377,7 @@ class KOSClient:
     def _post_mcp(self, body: dict[str, Any]) -> Any:
         """POST /mcp + parse SSE / JSON response + JSON-RPC envelope check."""
         token = self._get_token()
+        started = time.monotonic()
         try:
             r = self._client().post(
                 f"{self.base_url}/mcp",
@@ -318,6 +389,18 @@ class KOSClient:
                 json=body,
                 timeout=self.timeout,
             )
+        except httpx.TimeoutException as e:
+            # 超时 ≠ 不可达: KOS 在, 只是这次检索没跑完 (大库 + 向量检索)。文案要
+            # 让 caller 分得清 —— 否则模型对着 "request failed" 只能猜要不要 fallback。
+            note = _timeout_note(
+                time.monotonic() - started,
+                f"KOS_TIMEOUT_SECONDS={self.timeout:g}",
+            )
+            raise KOSError(
+                f"MCP request {note}; KOS reachable but the query did not finish "
+                "— narrow the query or raise KOS_TIMEOUT_SECONDS",
+                code="E_KOS_NETWORK",
+            ) from e
         except httpx.HTTPError as e:
             raise KOSError(f"MCP request failed: {e}", code="E_KOS_NETWORK") from e
 

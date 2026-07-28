@@ -528,8 +528,21 @@ class Config(BaseSettings):
     # 详见 docs/reference/llm-agent/kos-integration-design.md §3 + frontend/archive/2026-05/SPRINT19-M2-PLAN.md §3
     # KOSClient 默认从 env 直接读 3 个 OAuth 凭据 (KOS_MCP_BASE /
     # KOS_OAUTH_CLIENT_ID / KOS_OAUTH_CLIENT_SECRET), 这里仅暴露 producer 行为
-    # 开关; client 配置不重复.
+    # 开关 + client 超时; 凭据不重复.
     # =========================================================================
+    kos_timeout_seconds: float = Field(
+        default=30.0, env="KOS_TIMEOUT_SECONDS",
+        description=(
+            "KOSClient 单次 HTTP 请求超时 (秒), 罩 POST /token 与 POST /mcp "
+            "(tools/call: query / search / get_page / put_page ...)。issue #69: "
+            "此前是 client.py 里 10.0 的硬编码, 本键是**无人读取**的孤儿 —— 2 万页"
+            "自部署 gbrain (PGLite 单实例) 上单次 query 实测平均 9.1s, 10s 余量只剩"
+            "10%, 已开始规律性超时。默认 30 (远程 MCP + 向量检索, 不是本地 SQLite)。"
+            "🔴 GET /health 探活**不**受此值管辖 —— 它走独立短超时 "
+            "(client.py _DEFAULT_HEALTH_TIMEOUT=5s), 因为 new_watcher 第 6c 步的"
+            "「探活失败整段跳过」语义依赖它快速判死, 不能让 tick 挂 30s。"
+        ),
+    )
     mailagent_kos_ingest_enabled: bool = Field(
         default=False, env="MAILAGENT_KOS_INGEST_ENABLED",
         description=(

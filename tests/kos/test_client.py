@@ -529,3 +529,149 @@ class TestTokenCacheDataclass:
     def test_invalid_in_past(self):
         c = KOSTokenCache(token="x", expires_at=time.time() - 10)
         assert c.is_valid() is False
+
+
+# ============================================================
+# issue #69 — timeout 分档 (KOS_TIMEOUT_SECONDS 转实配) + 超时文案
+# ============================================================
+
+class TestTimeoutConfig:
+    """``KOS_TIMEOUT_SECONDS`` 此前是无人读取的孤儿, 硬编码 10s 在 2 万页库上
+    余量只剩 10% (单发实测平均 9.1s)。"""
+
+    def test_default_reads_kos_timeout_seconds(self, monkeypatch):
+        monkeypatch.setattr(
+            "src.kos.client._configured_timeout", lambda: 42.0
+        )
+        assert KOSClient(base_url="https://kos.test").timeout == 42.0
+
+    def test_explicit_argument_still_wins(self, monkeypatch):
+        monkeypatch.setattr("src.kos.client._configured_timeout", lambda: 42.0)
+        assert KOSClient(timeout_seconds=7.0).timeout == 7.0
+
+    def test_configured_timeout_reads_settings(self):
+        from src.config import config as settings
+        from src.kos.client import _configured_timeout
+
+        # 字段真的在 pydantic 上 (孤儿转实配的判据), 且默认 30 而非旧的 10。
+        assert settings.kos_timeout_seconds == 30.0
+        assert _configured_timeout() == 30.0
+
+    def test_non_positive_config_falls_back(self, monkeypatch):
+        from src.config import config as settings
+        from src.kos.client import _FALLBACK_TIMEOUT, _configured_timeout
+
+        monkeypatch.setattr(settings, "kos_timeout_seconds", 0)
+        assert _configured_timeout() == _FALLBACK_TIMEOUT
+
+    def test_unavailable_config_falls_back(self, monkeypatch):
+        import src.config
+
+        from src.kos.client import _FALLBACK_TIMEOUT, _configured_timeout
+
+        # 配置对象读不到 (打包环境的 import 边缘 / 属性缺失) 绝不能让 client 构造失败。
+        monkeypatch.delattr(src.config, "config")
+        assert _configured_timeout() == _FALLBACK_TIMEOUT
+
+
+class TestHealthTimeoutIsSeparate:
+    """探活不跟随请求超时: new_watcher 第 6c 步「探活失败整段跳过」要靠它快速判死,
+    5s tick 不能挂在一个 30s 的 health 上。"""
+
+    def test_health_uses_its_own_short_limit(self):
+        seen = {}
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            seen["timeout"] = req.extensions.get("timeout")
+            return httpx.Response(200, json={"status": "ok"})
+
+        c = _make_client(handler)
+        c.timeout = 30.0
+        c.health_timeout = 5.0
+        c.health()
+        assert seen["timeout"]["read"] == 5.0
+
+    def test_mcp_uses_the_configured_limit(self):
+        seen = []
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            seen.append((req.url.path, req.extensions.get("timeout")))
+            if req.url.path == "/token":
+                return httpx.Response(200, json={"access_token": "t", "expires_in": 3600})
+            return httpx.Response(200, json=_tool_result([]))
+
+        c = _make_client(handler)
+        c.timeout = 30.0
+        c.health_timeout = 5.0
+        c.call_tool("query", {"query": "x"})
+        assert all(t["read"] == 30.0 for _, t in seen)
+
+    def test_health_timeout_never_exceeds_request_timeout(self):
+        # 把总超时调到 2s 的人不该在 health 上等 5s。
+        assert KOSClient(timeout_seconds=2.0).health_timeout == 2.0
+        assert KOSClient(timeout_seconds=30.0).health_timeout == 5.0
+
+    def test_health_timeout_explicit_override(self):
+        c = KOSClient(timeout_seconds=30.0, health_timeout_seconds=1.5)
+        assert c.health_timeout == 1.5
+
+
+class TestTimeoutMessages:
+    """超时文案要能区分「服务挂了」和「查询太慢」—— 改动前两者都只是
+    ``MCP request failed: <httpx repr>``。"""
+
+    def test_mcp_timeout_reports_elapsed_and_limit(self):
+        def handler(req: httpx.Request) -> httpx.Response:
+            if req.url.path == "/token":
+                return httpx.Response(200, json={"access_token": "t", "expires_in": 3600})
+            raise httpx.ReadTimeout("timed out", request=req)
+
+        c = _make_client(handler)
+        c.timeout = 30.0
+        with pytest.raises(KOSError) as exc:
+            c.call_tool("query", {"query": "x"})
+        assert exc.value.code == "E_KOS_NETWORK"
+        msg = str(exc.value)
+        assert "timed out after" in msg
+        assert "KOS_TIMEOUT_SECONDS=30" in msg
+        # 「KOS 在, 只是没跑完」—— 模型据此决定重试 vs fallback。
+        assert "reachable" in msg
+
+    def test_mcp_non_timeout_network_error_keeps_old_wording(self):
+        def handler(req: httpx.Request) -> httpx.Response:
+            if req.url.path == "/token":
+                return httpx.Response(200, json={"access_token": "t", "expires_in": 3600})
+            raise httpx.ConnectError("connection refused", request=req)
+
+        c = _make_client(handler)
+        with pytest.raises(KOSError) as exc:
+            c.call_tool("query", {"query": "x"})
+        assert exc.value.code == "E_KOS_NETWORK"
+        assert "MCP request failed" in str(exc.value)
+        assert "timed out" not in str(exc.value)
+
+    def test_health_timeout_says_it_is_independent(self):
+        def handler(req: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectTimeout("timed out", request=req)
+
+        c = _make_client(handler)
+        c.health_timeout = 5.0
+        with pytest.raises(KOSError) as exc:
+            c.health()
+        assert exc.value.code == "E_KOS_HEALTH"
+        msg = str(exc.value)
+        assert "timed out after" in msg
+        assert "health probe limit 5s" in msg
+        assert "independent of KOS_TIMEOUT_SECONDS" in msg
+
+    def test_token_timeout_reports_the_limit(self):
+        def handler(req: httpx.Request) -> httpx.Response:
+            raise httpx.ReadTimeout("timed out", request=req)
+
+        c = _make_client(handler)
+        c.timeout = 30.0
+        with pytest.raises(KOSError) as exc:
+            c.call_tool("query", {"query": "x"})
+        assert exc.value.code == "E_KOS_TOKEN_NETWORK"
+        assert "token request timed out after" in str(exc.value)
+        assert "KOS_TIMEOUT_SECONDS=30" in str(exc.value)

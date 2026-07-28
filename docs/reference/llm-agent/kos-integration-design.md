@@ -192,8 +192,11 @@ KOS_INGEST_PRIORITY_FLOOR=normal          # 推: critical/urgent/important/norma
 # Producer dry-run - 跑完整 payload builder + 不真发 (灰度用)
 KOS_INGEST_DRY_RUN=false
 
-# Per-call timeout (秒)
-KOS_TIMEOUT_SECONDS=10
+# Per-call timeout (秒) — 罩 POST /token + POST /mcp。GET /health 探活走独立 5s，见 §3.7
+KOS_TIMEOUT_SECONDS=30
+
+# gateway 出向 KOS 并发上限 (main-env-only，不进 Settings)。默认 1 = 串行，见 §3.7
+KOS_TOOL_MAX_CONCURRENCY=1
 ```
 
 ### 3.2 Auth flow + protocol
@@ -259,7 +262,7 @@ class KOSClient:
 |---|---|---|
 | `E_KOS_NOT_CONFIGURED` | 3 env 至少一个缺 | producer 跳过 (sync 不阻塞); chat tool 返 fallback |
 | `E_KOS_HEALTH` | `/health` 失败 | boot 期 → enabled=false; 中途 → log warning |
-| `E_KOS_NETWORK` | fetch / connect / timeout | producer 跳过; chat tool 退到本地 FTS5 |
+| `E_KOS_NETWORK` | fetch / connect / timeout | producer 跳过; chat tool 退到本地 FTS5。超时分支的 message 带实际耗时 + 生效上限（`timed out after 12.3s (KOS_TIMEOUT_SECONDS=30)`）—— 「服务挂了」和「查询太慢」此前长得一样，caller 选不出重试还是 fallback。见 §3.7 |
 | `E_KOS_TOKEN_HTTP` | `/token` 非 200 (cred 错 / Lucien revoke) | 致命 — 飞书告警, enabled=false 等用户修 |
 | `E_KOS_TOKEN_INVALID` | `/token` 200 但 access_token 缺 | 同上, 上游协议变了 |
 | `E_KOS_UNAUTHORIZED` | `/mcp` 401 | client 自动 refresh + retry 一次. 第二次还 401 → 上抛 |
@@ -284,6 +287,41 @@ class KOSClient:
 - 实测 (smoke against 真 KOS): `python -c "from src.kos import KOSClient; c = KOSClient(); print(c.health()); print(c.query('redis', limit=3))"` 已验证 protocol 跑通
 
 ---
+
+### 3.7 超时与并发（issue #69）
+
+自部署 gbrain 是**单实例 PGLite，串行处理查询**。这两条设置都是围绕这个事实来的。
+
+**超时分两档**（`src/kos/client.py`）：
+
+| 档 | 罩什么 | 默认 | 可配 |
+|---|---|---|---|
+| `timeout` | `POST /token` + `POST /mcp`（`query` / `search` / `get_page` / `put_page` …） | 30s | `KOS_TIMEOUT_SECONDS`（pydantic `config.kos_timeout_seconds`） |
+| `health_timeout` | `GET /health` | `min(5s, timeout)` | 构造参数 `health_timeout_seconds`（不设 env） |
+
+`KOS_TIMEOUT_SECONDS` 在 issue #69 之前是**无人读取的孤儿** —— `.env.example` 和本文档
+都承诺它可配，实际生效的是 client.py 里硬编码的 `10.0`。2 万页库上单次 `query` 实测
+平均 9.1s（22 次里已失败 1 次），10s 余量只剩 10%，故默认提到 30s。
+
+🔴 **health 有意不跟随** `KOS_TIMEOUT_SECONDS`：new_watcher 第 6c 步「探活失败 → 整段跳过
+并冷却」的语义要靠探活**快速判死**，让 5s tick 挂在一个 30s 的 health 上，等于把查询超时
+的放宽代价转嫁给同步主循环。与请求超时取 `min`，所以把总超时调到 <5s 的人不会在 health
+上等更久。
+
+**并发在工具层串行化**（`frontend/src/ai-gateway/tools/kos_concurrency.ts`）：gateway 的
+6 个 KOS 只读工具共用一个进程级 FIFO 队列，默认并发 1。病灶是 agent 天然要并行追多个事项 ——
+实测同一步发 3 个 `kos_query` 耗时 10607 / 10609 / 10785 ms，**三个全部超时**、整轮 run 报废
+且 `max_runs_per_day` 照扣（chat 单发正常、agent 100% 失败，差别只在并发数）。并行在单实例
+下不会更快，只会互相拖垮。
+
+🔴 **排队等待不消耗下游超时**：超时在 `src/kos/client.py` 的 httpx 层，从 serve-api 真正发出
+HTTP 请求才起算；排队中的调用还没交给 `domain.kosCall`，既没有 fetch 也没有 serve-api 请求。
+gateway 自己的 fetch（`domainClient._req`）**不设**超时，只透传 abort signal，所以也没有第二个
+时钟在跑。等待只花延迟，不花失败预算。
+
+提示词层治不了这件事（issue 报告者试过「严禁并行调用」，模型是否遵守取决于运气）——
+约束必须在工具层。逃生口 `KOS_TOOL_MAX_CONCURRENCY`（默认 1，非法值一律回落 1，不进
+Settings UI）：真换成 Postgres 后端、上游确实能并发时才调大。
 
 ## 4. M2 PR 拆分（替换 plan 原 M2.x）
 
