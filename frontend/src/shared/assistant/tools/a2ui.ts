@@ -128,7 +128,14 @@ export const A2UI_COMPONENTS = {
   // 恒 HITL). Reschedule renders a before→after time diff whose "before" is fetched live from
   // serve-api (never the model's args — CustomAgentApprovalCard precedent); rsvp carries the
   // "irrevocable iTIP REPLY to the organizer" warning; delete the irreversible warning.
-  CalendarApprovalCard: 'CalendarApprovalCard'
+  CalendarApprovalCard: 'CalendarApprovalCard',
+  // prd 07-27 — the new-draft / edit-draft approval card (email_draft_compose +
+  // email_draft_update, edit tier). Subject / recipients / body are all editable before approval;
+  // for an UPDATE the card additionally fetches the target draft's CURRENT subject/recipients from
+  // serve-api and renders a before→after diff (CalendarApprovalCard precedent — "before" is never
+  // projected from model args). email_draft_reply keeps its own card (reply-shaped: no subject,
+  // empty recipients = server-derived reply-all).
+  DraftComposeCard: 'DraftComposeCard'
 } as const
 
 /** Which A2UI component renders a given gateway write tool. Unknown / read tools → null
@@ -137,6 +144,9 @@ export function componentForTool(toolName: string): string | null {
   switch (toolName) {
     case 'email_draft_reply':
       return A2UI_COMPONENTS.DraftReplyCard
+    case 'email_draft_compose':
+    case 'email_draft_update':
+      return A2UI_COMPONENTS.DraftComposeCard
     case 'email_resync':
       return A2UI_COMPONENTS.NotionSyncCard
     case 'email_flag':
@@ -189,6 +199,35 @@ export interface DraftReplyCardProps {
   draftId?: string | null
   mailbox?: string | null
   accountName?: string | null
+  userEdited?: boolean
+}
+
+/** email_draft_compose / email_draft_update (prd 07-27, edit tier). The props carry ONLY the
+ *  model's proposal — for `kind:'update'` the target draft's CURRENT subject/recipients are fetched
+ *  live by the card and diffed against these (CalendarApprovalCard precedent), so a model claiming
+ *  a wrong "before" changes nothing the user reviews. `subject`/`bodyMarkdown` are undefined when
+ *  the model did not propose one: on compose that means "server default" (Fwd: <original> /
+ *  (no subject)), on update it means "keep the current value". Recipient lists are [] when absent
+ *  (compose: none; update: unchanged). */
+export interface DraftComposeCardProps {
+  kind: 'compose' | 'update'
+  /** compose: 'new' | 'forward'. Absent on update (always a merged re-save). */
+  mode?: 'new' | 'forward'
+  /** compose+forward: the source email being forwarded. update: the draft being edited. */
+  internalId?: number
+  subject?: string
+  bodyMarkdown?: string
+  to: string[]
+  cc: string[]
+  bcc: string[]
+  /** forward only — quote the original below the body (default true). */
+  quoteOriginal?: boolean
+  /** Result echoes (land after execute). */
+  draftsFolder?: string | null
+  appendedUid?: number | null
+  /** update only — false means BOTH drafts remain (the delete of the old one failed). */
+  oldDraftDeleted?: boolean
+  warnings?: string[]
   userEdited?: boolean
 }
 
@@ -451,6 +490,44 @@ export function buildToolA2UIPayload(
       accountName: asStr(result?.account_name) ?? null,
       userEdited: io.userEdited ?? result?.user_edited === true
     }
+    return {
+      protocol: A2UI_PROTOCOL,
+      version: A2UI_VERSION,
+      component,
+      props: props as unknown as Record<string, unknown>,
+      audit: { risk: io.risk ?? 'edit', requiresApproval }
+    }
+  }
+
+  if (component === A2UI_COMPONENTS.DraftComposeCard) {
+    // 🔴 props = the model's PROPOSAL only. The update card's "before" (current subject /
+    // recipients of the target draft) is fetched server-side by the component; projecting any
+    // "current state" from args here would let the model spoof the diff it is reviewed against.
+    const update = toolName === 'email_draft_update'
+    const mode = asStr(args.mode)
+    const props: DraftComposeCardProps = {
+      kind: update ? 'update' : 'compose',
+      to: asStrArray(result?.final_to ?? args.to),
+      cc: asStrArray(result?.final_cc ?? args.cc),
+      bcc: asStrArray(result?.final_bcc ?? args.bcc),
+      draftsFolder: asStr(result?.drafts_folder) ?? null,
+      appendedUid: typeof result?.appended_uid === 'number' ? result.appended_uid : null,
+      warnings: asStrArray(result?.warnings),
+      userEdited: io.userEdited ?? result?.user_edited === true
+    }
+    if (update) {
+      props.internalId = asNum(args.draft_internal_id)
+      props.oldDraftDeleted = result ? result.old_draft_deleted === true : undefined
+    } else {
+      props.mode = mode === 'forward' ? 'forward' : 'new'
+      if (typeof args.internal_id === 'number') props.internalId = args.internal_id
+      if (props.mode === 'forward') props.quoteOriginal = args.quote_original !== false
+    }
+    // final_* echo the EXECUTED content (post-edit); args are the proposal at approval time.
+    const subject = asStr(result?.final_subject) ?? asStr(args.subject)
+    if (subject !== undefined) props.subject = subject
+    const body = asStr(result?.final_body_markdown) ?? asStr(args.body_markdown)
+    if (body !== undefined) props.bodyMarkdown = body
     return {
       protocol: A2UI_PROTOCOL,
       version: A2UI_VERSION,

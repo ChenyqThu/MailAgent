@@ -3,7 +3,9 @@
 // Five state-mutating tools migrated from the legacy harness (shared/chat/tools/builtin/
 // write.ts): email_flag / email_archive / email_pin (preview tier) + email_draft_reply
 // (edit tier) + email_resync (preview tier — the "sync to Notion" re-push; the rich
-// dry-run-diff sync_to_notion card is phase-04a). Each is an AI SDK `tool()` with
+// dry-run-diff sync_to_notion card is phase-04a), plus (prd 07-27) the rest of the draft
+// family: email_draft_compose (new / forward) + email_draft_update (edit an existing
+// draft). Each is an AI SDK `tool()` with
 // `needsApproval` so it NEVER executes without explicit user approval (two-call HITL
 // flow), runs against the injected MailAgentDomainClient → serve-api write endpoint
 // (Python MailWriteService is the authoritative validator — 二次鉴权), and applies the
@@ -25,9 +27,16 @@ import { DomainError, type MailAgentDomainClient } from '../python/domainClient'
 import type { ApprovalGuard, ApprovalRisk } from '../security/approval'
 import { auditedWriteTool, type GatewayApprovalMode, type GatewayToolAuditCollector } from './types'
 import { normalizeContextMode, type AgentContextMode, type AgentRunContext } from './policy'
+// RELATIVE import (not @shared) so the pure-Node poc harness can load the write tools — same
+// rationale as email.ts/sessions.ts. mailboxSemantics is the mirror of the Python single source
+// (src/mail/mailbox_semantics.py): the repo forbids new mailbox string comparisons, and the
+// drafts label has three historical spellings ('草稿箱'/'草稿'/'Drafts').
+import { isDraftsMailbox } from '../../shared/lib/mailboxSemantics'
 import {
   emailArchiveSchema,
+  emailDraftComposeSchema,
   emailDraftReplySchema,
+  emailDraftUpdateSchema,
   emailFlagSchema,
   emailPinSchema,
   emailResyncSchema
@@ -39,8 +48,15 @@ export const GATEWAY_WRITE_TOOL_NAMES = [
   'email_archive',
   'email_pin',
   'email_draft_reply',
+  'email_draft_compose',
+  'email_draft_update',
   'email_resync'
 ] as const
+
+/** mode-'new' sentinel internal_id (prd 07-27 C-3): a brand-new draft has no source email, and
+ *  serve-api `_require_compose_internal_id` relaxes its non-negative check exactly for that mode.
+ *  Same value the renderer's composer posts (handlers/draft.ts createDraft default). */
+const NEW_DRAFT_SENTINEL_ID = -1
 
 /** Reject an invalid argument the same way the legacy handler did (E_INVALID_ARG). */
 function invalidArg(message: string): never {
@@ -65,8 +81,30 @@ function normalizeAddrs(v: unknown): string[] | undefined {
   return out.length > 0 ? out : undefined
 }
 
+/** `"name" <a@x>, b@y; c@z` → ['a@x','b@y','c@z'] — read a stored to_addr/cc_addr column back
+ *  into a recipient list for email_draft_update's backfill. Same shape as the renderer composer's
+ *  draft-edit prefill (ComposePanel.parseAddrList — the gateway is pure Node and cannot import
+ *  that react module), with ONE addition: a fragment carrying no '@' is dropped. Splitting on
+ *  commas cuts a quoted display name in half (`"Doe, Jane" <j@x>` → `"Doe` + `Jane" <j@x>`), and
+ *  a leftover like `"Doe` must never become a recipient of a draft the assistant re-saves. */
+function splitAddrList(raw: string | null | undefined): string[] {
+  if (!raw) return []
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const part of raw.split(/[,;]/)) {
+    const m = part.match(/<([^>]+)>/)
+    const addr = (m ? m[1] : part).trim()
+    if (!addr || !addr.includes('@')) continue
+    const lower = addr.toLowerCase()
+    if (seen.has(lower)) continue
+    seen.add(lower)
+    out.push(addr)
+  }
+  return out
+}
+
 /**
- * Build the five email write tools bound to the injected domain client + audit collector
+ * Build the seven email write tools bound to the injected domain client + audit collector
  * + approval guard. Each pushes a write-audit entry (tier + approval_status + approval_hash
  * + user_edited) into `collector` after a successful approved execution.
  */
@@ -262,6 +300,224 @@ export function createWriteTools(
     }
   })
 
+  const email_draft_compose = make({
+    name: 'email_draft_compose',
+    description:
+      'Create a NEW draft (mode "new") or FORWARD an existing email (mode "forward"). The draft ' +
+      'is saved to the Drafts folder — nothing is sent (to actually send, the user asks and you ' +
+      'use email_prepare_send). The user sees your subject / recipients / body in a confirmation ' +
+      'dialog and CAN edit them before the draft is created. Recipients are explicit: pass the ' +
+      'final to (required) / cc / bcc lists — nothing is derived. mode "new": no internal_id (a ' +
+      'new draft has no source email); pass subject. mode "forward": internal_id = the email to ' +
+      'forward; the original is quoted below your body (quote_original, default true) and its ' +
+      'attachments ride along automatically, and the subject defaults to "Fwd: <original>" unless ' +
+      'you pass one. Body should be markdown (bold, italics, lists, links supported). To REPLY to ' +
+      'an email use email_draft_reply instead (it derives the recipients and threads correctly); ' +
+      'to change a draft that already exists use email_draft_update. Edit tier — the user may ' +
+      'modify your draft.',
+    inputSchema: emailDraftComposeSchema,
+    risk: 'edit',
+    // The user may rewrite the content on the approval card; mode / internal_id stay pinned to the
+    // model's original (the approval side-channel must not be able to retarget which email is
+    // forwarded, mirroring email_draft_reply).
+    editableFields: ['subject', 'body_markdown', 'to', 'cc', 'bcc'],
+    run: async (input, { userEdited, signal }) => {
+      const forward = input.mode === 'forward'
+      // The applyEdit side-channel bypasses zod, so re-assert the shape the schema promised.
+      const sourceId = typeof input.internal_id === 'number' ? input.internal_id : -1
+      if (forward && sourceId < 0) {
+        invalidArg("mode 'forward' requires internal_id (the source email to forward)")
+      }
+      const to = normalizeAddrs(input.to)
+      const cc = normalizeAddrs(input.cc)
+      const bcc = normalizeAddrs(input.bcc)
+      // The service rejects a recipient-less forward server-side; fail here with the actionable
+      // message instead of a generic upstream error.
+      if (forward && !to) invalidArg("mode 'forward' requires at least one recipient in `to`")
+      // typeof-guarded for the same reason as normalizeAddrs: the applyEdit side-channel is not
+      // zod-validated, and .trim() on a non-string would crash the tool instead of erroring.
+      const subject = typeof input.subject === 'string' ? nonEmpty(input.subject.trim()) : undefined
+      const data = await domain.composeDraft(
+        {
+          internalId: forward ? sourceId : NEW_DRAFT_SENTINEL_ID,
+          mode: input.mode,
+          ...(subject !== undefined ? { subject } : {}),
+          bodyText: input.body_markdown,
+          to,
+          cc,
+          bcc,
+          // forward-only: append the quoted original under the body. 'new' has nothing to quote,
+          // so the key is omitted entirely there (server default false).
+          ...(forward ? { quoteOriginal: input.quote_original !== false } : {})
+        },
+        signal
+      )
+      return {
+        mode: data.mode ?? input.mode,
+        // 🔴 NOT the new draft's row id (the endpoint echoes the request id and never returns the
+        // created row) — for forward this is the SOURCE email, for new there is none.
+        source_internal_id: forward ? sourceId : null,
+        drafts_folder: data.drafts_folder ?? null,
+        appended_uid: data.appended_uid ?? null,
+        method: data.method ?? null,
+        to_count: data.to_count ?? 0,
+        cc_count: data.cc_count ?? 0,
+        attachments: data.attachments ?? 0,
+        warnings: data.warnings ?? [],
+        user_edited: userEdited,
+        // Echo the executed content so the next turn knows EXACTLY what landed in the draft.
+        final_subject: subject ?? null,
+        final_body_markdown: input.body_markdown,
+        final_to: to ?? [],
+        final_cc: cc ?? [],
+        final_bcc: bcc ?? []
+      }
+    }
+  })
+
+  const email_draft_update = make({
+    name: 'email_draft_update',
+    description:
+      'Edit an EXISTING draft (draft_internal_id = its internal_id, found via email_list_filter ' +
+      'with mailbox "草稿箱" or email_search_fulltext with in:drafts). Pass only what changes — ' +
+      'subject / body_markdown / to / cc / bcc are each optional and anything you omit keeps its ' +
+      'current value (an omitted body is carried over verbatim, so a subject-only edit does not ' +
+      'touch the text). The user sees the change in a confirmation dialog and CAN edit it. ' +
+      'Mechanically this saves a NEW draft with the merged content and deletes the old one (the ' +
+      'reply threading and the attachments carry over, and the draft gets a new id) — if the ' +
+      'delete fails the result says so and BOTH drafts remain, which you must tell the user. ' +
+      'Two limits worth knowing: a BCC list cannot be read back from an existing draft, so an ' +
+      'omitted bcc means the new draft has none; and inline images embedded in the old body are ' +
+      'not carried over (regular attachments are). Only works on rows in the Drafts folder — for ' +
+      'a new draft use email_draft_compose, for a reply use email_draft_reply. Edit tier.',
+    inputSchema: emailDraftUpdateSchema,
+    risk: 'edit',
+    editableFields: ['subject', 'body_markdown', 'to', 'cc', 'bcc'],
+    run: async (input, { userEdited, signal }) => {
+      const draftId = input.draft_internal_id
+      if (draftId < 0) invalidArg('draft_internal_id required (non-negative integer)')
+      const newSubject = typeof input.subject === 'string' ? input.subject : undefined
+      const newBody = nonEmpty(
+        typeof input.body_markdown === 'string' ? input.body_markdown : undefined
+      )
+      // An empty/absent list is "no override" (email_draft_reply's documented semantic), NOT
+      // "clear the recipients" — so a card that cleared a field falls back to the current value.
+      const toOverride = normalizeAddrs(input.to)
+      const ccOverride = normalizeAddrs(input.cc)
+      const bccOverride = normalizeAddrs(input.bcc)
+      if (
+        newSubject === undefined &&
+        newBody === undefined &&
+        !toOverride &&
+        !ccOverride &&
+        !bccOverride
+      ) {
+        invalidArg('at least one of subject / body_markdown / to / cc / bcc must be set')
+      }
+
+      // 1. Read the current draft: the drafts-folder gate + the backfill source for every field
+      //    the caller did not provide.
+      const row = await domain.getEmail(draftId, signal)
+      if (!row) throw new DomainError('E_NOT_FOUND', `email ${draftId} not found`)
+      if (!isDraftsMailbox(row.mailbox)) {
+        invalidArg(
+          `email ${draftId} is in "${row.mailbox}", not the Drafts folder — email_draft_update ` +
+            'only edits drafts (use email_draft_reply / email_draft_compose to create one)'
+        )
+      }
+      const subject = newSubject ?? row.subject
+      const to = toOverride ?? splitAddrList(row.to_addr)
+      const cc = ccOverride ?? splitAddrList(row.cc_addr)
+
+      // 2. Body: the caller's markdown, else the current body carried over VERBATIM. html first —
+      //    re-rendering the existing text through markdown would silently flatten tables /
+      //    styling / the signature on an edit that never asked to touch the body.
+      let bodyText: string | undefined
+      let bodyHtml: string | undefined
+      let bodySource: 'model' | 'existing_html' | 'existing_markdown' = 'model'
+      if (newBody !== undefined) {
+        bodyText = newBody
+      } else {
+        const html = await domain.getEmailBody(draftId, signal, 'html')
+        if (html?.content) {
+          bodyHtml = html.content
+          bodySource = 'existing_html'
+        } else {
+          const md = await domain.getEmailBody(draftId, signal)
+          if (!md?.content) {
+            throw new DomainError(
+              'E_NOT_FOUND',
+              `draft ${draftId} has no synced body yet — pass body_markdown explicitly ` +
+                '(a freshly created draft takes a few seconds to sync)'
+            )
+          }
+          bodyText = md.content
+          bodySource = 'existing_markdown'
+        }
+      }
+
+      // Carry the draft's own (non-inline) attachments into the replacement; without an explicit
+      // list a mode-'new' compose collects nothing and the edit would silently drop them.
+      const attachments = (row.attachments ?? [])
+        .filter((a) => !a.is_inline)
+        .map((a) => ({ attachment_id: a.id }))
+
+      // 3. Write the replacement. sourceDraftId === internalId === the draft's own id is what
+      //    restores its In-Reply-To/References (the service rejects any other pairing).
+      const data = await domain.composeDraft(
+        {
+          internalId: draftId,
+          mode: 'new',
+          sourceDraftId: draftId,
+          subject,
+          bodyText,
+          bodyHtml,
+          to,
+          cc,
+          bcc: bccOverride,
+          attachments
+        },
+        signal
+      )
+
+      // 4. Delete the superseded draft — NON-FATAL by design: the new draft already exists, so a
+      //    failed delete leaves a duplicate (recoverable) while a rollback would risk the content.
+      const warnings = [...(data.warnings ?? [])]
+      let oldDeleted = false
+      let deleteError: string | null = null
+      try {
+        await domain.deleteDraft(draftId, signal)
+        oldDeleted = true
+      } catch (e) {
+        deleteError = e instanceof DomainError ? `${e.code}: ${e.message}` : String(e)
+        warnings.push(
+          `the updated draft was saved, but deleting the old draft (internal_id=${draftId}) ` +
+            `failed (${deleteError}) — BOTH now sit in the Drafts folder; tell the user to delete ` +
+            'the stale one'
+        )
+      }
+
+      return {
+        draft_internal_id: draftId,
+        updated: true,
+        drafts_folder: data.drafts_folder ?? null,
+        appended_uid: data.appended_uid ?? null,
+        method: data.method ?? null,
+        old_draft_deleted: oldDeleted,
+        old_draft_delete_error: deleteError,
+        body_source: bodySource,
+        attachments_carried: attachments.length,
+        warnings,
+        user_edited: userEdited,
+        final_subject: subject,
+        final_body_markdown: newBody ?? null,
+        final_to: to,
+        final_cc: cc,
+        final_bcc: bccOverride ?? []
+      }
+    }
+  })
+
   const email_resync = make({
     name: 'email_resync',
     description:
@@ -283,5 +539,13 @@ export function createWriteTools(
     }
   })
 
-  return { email_flag, email_archive, email_pin, email_draft_reply, email_resync }
+  return {
+    email_flag,
+    email_archive,
+    email_pin,
+    email_draft_reply,
+    email_draft_compose,
+    email_draft_update,
+    email_resync
+  }
 }

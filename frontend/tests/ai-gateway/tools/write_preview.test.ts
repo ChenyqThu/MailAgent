@@ -58,7 +58,7 @@ describe('write tools — flag gating (buildGatewayTools)', () => {
     for (const w of GATEWAY_WRITE_TOOL_NAMES) expect(Object.keys(tools)).not.toContain(w)
   })
 
-  test('writeToolsEnabled on + guard → the five write tools are added alongside reads', () => {
+  test('writeToolsEnabled on + guard → every write tool is added alongside reads', () => {
     const tools = buildGatewayTools({
       domain: mockDomain(() => okEnvelope({})),
       writeToolsEnabled: true,

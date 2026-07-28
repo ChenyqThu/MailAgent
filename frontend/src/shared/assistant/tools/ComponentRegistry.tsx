@@ -12,6 +12,7 @@ import type { ToolCallMessagePartComponent } from '@assistant-ui/react'
 
 import { A2UI_COMPONENTS } from './a2ui'
 import { DraftReplyCard } from './mail/DraftReplyCard'
+import { DraftComposeCard } from './mail/DraftComposeCard'
 import { SendApprovalCard } from './mail/SendApprovalCard'
 import { NotionSyncCard } from './notion/NotionSyncCard'
 import { ApprovalActionCard } from './generic/ApprovalActionCard'
@@ -62,12 +63,20 @@ export function createComponentRegistry(
   }
 }
 
-/** The concrete Phase 04a registry: the three rich cards over the five write tools. */
+/** The concrete Phase 04a registry: the rich cards over the write tools. */
 export const componentRegistry: ComponentRegistry = createComponentRegistry([
   {
     component: A2UI_COMPONENTS.DraftReplyCard,
     toolNames: ['email_draft_reply'],
     render: DraftReplyCard
+  },
+  // prd 07-27 — new/forward + edit-existing draft approval card. Shows the SUBJECT (which the
+  // reply card has no field for) and, for an update, a before→after diff whose "before" the card
+  // fetches from serve-api. email_draft_reply deliberately keeps DraftReplyCard.
+  {
+    component: A2UI_COMPONENTS.DraftComposeCard,
+    toolNames: ['email_draft_compose', 'email_draft_update'],
+    render: DraftComposeCard
   },
   {
     component: A2UI_COMPONENTS.NotionSyncCard,

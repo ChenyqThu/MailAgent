@@ -1099,6 +1099,45 @@
       "factsError": "无法读取该日程的当前信息——以下为助手提交的原始参数，批准后服务端仍会校验。",
       "error": "操作失败，请重试或让助手重新发起。"
     },
+    "draftComposeCard": {
+      "new": {
+        "title": "新建草稿",
+        "hint": "以下内容将存入草稿箱，不会发送（可编辑后再确认）",
+        "approve": "创建草稿",
+        "done": "草稿已创建。"
+      },
+      "forward": {
+        "title": "转发草稿",
+        "hint": "以下内容将作为转发草稿存入草稿箱，不会发送（可编辑后再确认）"
+      },
+      "update": {
+        "title": "修改草稿",
+        "hint": "将按下面的内容重存这封草稿并删除原稿，不会发送（可编辑后再确认）",
+        "approve": "保存修改",
+        "done": "草稿已更新。"
+      },
+      "draft": "草稿",
+      "subject": "主题",
+      "to": "收件人",
+      "cc": "抄送",
+      "bcc": "密送",
+      "bodyLabel": "草稿正文",
+      "subjectPlaceholder": "留空＝无主题",
+      "subjectKeepPlaceholder": "留空＝保持原主题",
+      "bodyKeepPlaceholder": "留空＝保持原正文不变",
+      "forwardOf": "转发自",
+      "forwardSource": "邮件 #{id}（正文下方附原文引用）",
+      "forwardSourceNoQuote": "邮件 #{id}（不附原文引用）",
+      "changes": "本次变更",
+      "empty": "（空）",
+      "withYourEdits": "（含你的修改）",
+      "folder": "文件夹：{folder}",
+      "savedToDrafts": "已存入草稿箱",
+      "oldDraftKept": "新草稿已保存，但原草稿删除失败——草稿箱里现在有两份，请手动删掉旧的那份。",
+      "factsMissing": "找不到这封草稿（可能已被删除或发送）——以下为助手提交的原始内容。",
+      "factsError": "无法读取这封草稿的当前内容——以下为助手提交的原始内容，批准后服务端仍会校验。",
+      "error": "草稿操作失败，请重试或让助手重新发起。"
+    },
     "approvalActionCard": {
       "title": {
         "emailFlag": "更新邮件标记",

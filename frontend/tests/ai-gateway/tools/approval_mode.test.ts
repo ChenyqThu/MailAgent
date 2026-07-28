@@ -384,7 +384,11 @@ describe('07-16 — acceptEdits allow/ask partition (codex r1 P1-3: fail-closed 
         'agent_memory_update',
         'agent_profile_restore',
         'email_archive',
+        // prd 07-27 — the draft family rides with email_draft_reply: all three only write the
+        // Drafts folder, nothing leaves the machine (the send is what asks).
+        'email_draft_compose',
         'email_draft_reply',
+        'email_draft_update',
         'email_flag',
         'email_pin',
         'email_resync',
@@ -458,17 +462,28 @@ describe('07-16 — acceptEdits allow/ask partition (codex r1 P1-3: fail-closed 
 })
 
 describe("07-16 'acceptEdits' — edits/web/config auto-approve; the by-name retain set still asks", () => {
-  test('released: preview + edit domain writes (flag/pin/archive/resync/draft_reply) → false', async () => {
+  test('released: preview + edit domain writes (flag/pin/archive/resync/the three draft writes) → false', async () => {
     const { tools } = writeTools('acceptEdits')
     for (const name of [
       'email_flag',
       'email_pin',
       'email_archive',
       'email_resync',
-      'email_draft_reply'
+      'email_draft_reply',
+      // prd 07-27 — the new draft writes ride with the family.
+      'email_draft_compose',
+      'email_draft_update'
     ]) {
       const needs = await needsApprovalOf(tools[name])(
-        { internal_id: 9, is_flagged: true, pinned: true, body_markdown: 'hi' },
+        {
+          internal_id: 9,
+          draft_internal_id: 9,
+          is_flagged: true,
+          pinned: true,
+          body_markdown: 'hi',
+          mode: 'new',
+          to: ['a@x.test']
+        },
         { toolCallId: `tc-ae-${name}`, messages: [] }
       )
       expect(needs, `${name} should auto-approve under acceptEdits`).toBe(false)

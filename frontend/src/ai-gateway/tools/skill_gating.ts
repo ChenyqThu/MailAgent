@@ -73,6 +73,10 @@ export const CORE_UNGATED_GATEWAY_TOOLS: ReadonlySet<string> = new Set([
   'email_archive',
   'email_pin',
   'email_draft_reply',
+  // prd 07-27 —— 草稿写族其余两件（新建/转发、改已有草稿）。与 email_draft_reply 同为写族 core：
+  // 开关权在 writeToolsEnabled + 审批，非 skill 门控。
+  'email_draft_compose',
+  'email_draft_update',
   'email_resync',
   'email_prepare_send',
   // M4b/M4c self-mount meta 工具（behind MAILAGENT_SKILL_SELF_MOUNT）—— 无 skill 归属，永不 skill-gated。

@@ -176,6 +176,7 @@ async def list_emails(
     is_read: Optional[bool] = Query(None, alias="isRead"),
     is_flagged: Optional[bool] = Query(None, alias="isFlagged"),
     has_notion: Optional[bool] = Query(None, alias="hasNotion"),
+    exclude_drafts: bool = Query(False),
     limit: int = Query(50, ge=1, le=LIST_LIMIT_MAX),
     offset: int = Query(0, ge=0),
 ):
@@ -188,6 +189,16 @@ async def list_emails(
     无需 alias。
     data = EmailMeta[] (email-list.schema.json email_list_item),
     meta += {total, limit, offset, count} (email-list.schema.json meta)。
+
+    ``exclude_drafts`` (opt-in, 默认 false → 响应与该参数引入前逐字节相同): true 时
+    排除草稿行, 给「跨邮箱列表不该混入未发出内容」的调用方 (gateway
+    ``email_list_filter`` 未指定 mailbox 时恒传 true, 对齐 UI ``/list-enriched``
+    的默认排除)。🔴 键名是 snake_case 而非本端点其余的 camelCase —— 这是 harness
+    工具面的跨 lane 契约名 (prd 07-27 C-1), 改成 ``excludeDrafts`` 会让 gateway
+    传的键被 FastAPI 静默丢弃 = 草稿又混回 AI 的列表结果 (F2 那个坑的复刻)。
+
+    ``mailbox`` 走变体展开 (C-2, 见 repo.list_metadata): 内建 canonical 与其变体
+    ('草稿箱'/'草稿'/'Drafts') 互通, 自定义文件夹维持精确匹配。
     """
     if status is not None and status not in VALID_STATUSES:
         raise APIError(
@@ -206,6 +217,7 @@ async def list_emails(
         is_read=is_read,
         is_flagged=is_flagged,
         has_notion=has_notion,
+        exclude_drafts=exclude_drafts,
         limit=limit,
         offset=offset,
     )

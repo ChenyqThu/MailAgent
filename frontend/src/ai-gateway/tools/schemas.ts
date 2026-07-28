@@ -194,6 +194,68 @@ export const emailDraftReplySchema = z.object({
 })
 export type EmailDraftReplyInput = z.infer<typeof emailDraftReplySchema>
 
+/** email_draft_compose (prd 07-27 C-3) — a BRAND-NEW draft (`mode:'new'`) or a forward of an
+ *  existing email (`mode:'forward'`). Unlike the "at least one of …" checks that live in `run`,
+ *  the cross-field rules sit in `.superRefine` so an impossible combination fails BEFORE the
+ *  approval card is shown (showing the user a card for a call that can only error is worse than a
+ *  validation retry the model fixes itself):
+ *    - forward REQUIRES internal_id (the source email) + at least one recipient (the service
+ *      rejects a recipient-less forward too);
+ *    - 'new' REJECTS internal_id — a new draft has no source email, so passing one means the
+ *      model meant forward (or email_draft_reply).
+ *  quote_original is forward-only (a new draft has nothing to quote); default true. */
+export const emailDraftComposeSchema = z
+  .object({
+    mode: z.enum(['new', 'forward']),
+    internal_id: z.number().int().optional(),
+    subject: z.string().optional(),
+    body_markdown: z.string().min(1),
+    to: z.array(z.string().min(3)),
+    cc: z.array(z.string().min(3)).optional(),
+    bcc: z.array(z.string().min(3)).optional(),
+    quote_original: z.boolean().optional()
+  })
+  .superRefine((v, ctx) => {
+    if (v.mode === 'forward') {
+      if (v.internal_id === undefined) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['internal_id'],
+          message: "mode 'forward' requires internal_id (the source email to forward)"
+        })
+      }
+      if (v.to.length === 0) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['to'],
+          message: "mode 'forward' requires at least one recipient in `to`"
+        })
+      }
+    } else if (v.internal_id !== undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['internal_id'],
+        message:
+          "mode 'new' takes no internal_id (a new draft has no source email — use mode 'forward' to forward one, or email_draft_reply to reply to one)"
+      })
+    }
+  })
+export type EmailDraftComposeInput = z.infer<typeof emailDraftComposeSchema>
+
+/** email_draft_update (prd 07-27 C-4) — edit an EXISTING draft by its internal_id. Every content
+ *  field is optional: an omitted field is backfilled from the current draft, so a subject-only
+ *  edit keeps the body/recipients as they are. "at least one field must change" is enforced in
+ *  `run` (email_flag precedent — the semantic check keeps the legacy E_INVALID_ARG error shape). */
+export const emailDraftUpdateSchema = z.object({
+  draft_internal_id: z.number().int(),
+  subject: z.string().optional(),
+  body_markdown: z.string().min(1).optional(),
+  to: z.array(z.string().min(3)).optional(),
+  cc: z.array(z.string().min(3)).optional(),
+  bcc: z.array(z.string().min(3)).optional()
+})
+export type EmailDraftUpdateInput = z.infer<typeof emailDraftUpdateSchema>
+
 /** email_resync — re-push to Notion from the SQLite SSoT. */
 export const emailResyncSchema = z.object({
   internal_id: z.number().int()

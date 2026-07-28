@@ -72,6 +72,11 @@ export interface DomainEmailListOpts {
   isRead?: boolean
   isFlagged?: boolean
   limit?: number
+  /** prd 07-27 C-1 — opt-in `exclude_drafts` (server default false). The tool passes true ONLY
+   *  when no mailbox was requested, so a cross-mailbox list does not mix the user's own unsent
+   *  drafts into "my mail" (the UI's /list-enriched already defaults to excluding them); an
+   *  explicit mailbox (incl. 草稿箱) never sets it. undefined → param omitted → server default. */
+  excludeDrafts?: boolean
 }
 
 /** Search filters for FTS (email_search_fulltext / email_search_attachments). */
@@ -201,6 +206,54 @@ export interface DomainDraftResult {
   mailbox: string | null
   accountName: string | null
   draftId: string
+}
+
+/** POST /email/draft request body (prd 07-27) — the camelCase wire shape the renderer's composer
+ *  posts (ComposeDraftOpts / serve-api `_compose_request_from_body`). One typed input for both
+ *  new-draft tools; every optional key is omitted from the JSON when unset, so a call carries
+ *  exactly the fields it means (an empty list is NOT "clear the list" — it is "no override").
+ *  Recipients are string lists (the route joins them). */
+export interface DomainComposeDraftInput {
+  /** Source email ROWID; -1 = the mode-'new' sentinel (no source email). */
+  internalId: number
+  mode: 'new' | 'forward'
+  /** Draft-edit linkage restore — MUST equal internalId (see composeDraft's note). */
+  sourceDraftId?: number
+  subject?: string
+  /** Markdown/plain body (server converts to html). Mutually exclusive with bodyHtml in
+   *  practice: the service prefers bodyHtml when both are present. */
+  bodyText?: string
+  /** Verbatim html body (an unchanged draft body carried over without a markdown round-trip). */
+  bodyHtml?: string
+  to?: string[]
+  cc?: string[]
+  bcc?: string[]
+  /** forward: append the quoted original below the body (service `build_quote`). */
+  quoteOriginal?: boolean
+  /** Library attachment references to carry into the new draft ({attachment_id}). Absent →
+   *  forward auto-collects the source email's attachments; present → authoritative list. */
+  attachments?: Array<{ attachment_id: number }>
+}
+
+/** POST /email/draft data block (ComposeDraftResult). 🔴 `internal_id` echoes the REQUEST id —
+ *  it is not the created draft's row id (see composeDraft). */
+export interface DomainComposeDraftResult {
+  internal_id: number
+  drafts_folder?: string | null
+  appended_uid?: number | null
+  method?: string | null
+  mode?: string | null
+  to_count?: number
+  cc_count?: number
+  attachments?: number
+  warnings?: string[]
+}
+
+/** DELETE /email/draft/{id} data block (DeleteDraftResult). */
+export interface DomainDeleteDraftResult {
+  internal_id?: number
+  imap_uid?: number | null
+  local_deleted?: boolean
 }
 
 /** POST /email/send-approved request body (Phase 04b). The outbound fields + the double-guard
@@ -562,7 +615,10 @@ export class MailAgentDomainClient {
 
   // ── read primitives (one per gateway read tool) ──────────────────────────
 
-  /** email_list_filter — metadata-filter list. GET /email/list (camelCase alias query). */
+  /** email_list_filter — metadata-filter list. GET /email/list (camelCase alias query).
+   *  🔴 `exclude_drafts` is snake_case on purpose — it is the ONE key of this endpoint that is
+   *  not a camelCase alias (prd 07-27 C-1 cross-lane contract); FastAPI would silently drop an
+   *  `excludeDrafts` and the drafts would quietly return to the model's results. */
   searchEmails(
     opts: DomainEmailListOpts,
     signal?: AbortSignal
@@ -576,6 +632,7 @@ export class MailAgentDomainClient {
         untilDate: opts.untilDate,
         isRead: opts.isRead,
         isFlagged: opts.isFlagged,
+        exclude_drafts: opts.excludeDrafts,
         limit: opts.limit
       },
       signal
@@ -610,17 +667,21 @@ export class MailAgentDomainClient {
     }
   }
 
-  /** email_body — markdown body. GET /email/{id}/body?format=markdown.
-   *  E_NOT_FOUND → null (mirrors httpApi.email.body). */
+  /** email_body — body in one format. GET /email/{id}/body?format=markdown (default) | html.
+   *  E_NOT_FOUND → null (mirrors httpApi.email.body; the endpoint 404s both for "no body row"
+   *  and "that format column is null", so an html miss degrades to null, not a throw).
+   *  `format` is only ever passed by email_draft_update, which re-posts an unchanged draft body
+   *  VERBATIM as html — a markdown round-trip would silently flatten tables / styling. */
   async getEmailBody(
     internalId: number,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    format: 'markdown' | 'html' = 'markdown'
   ): Promise<NonNullable<MailagentEmailBody['data']> | null> {
     try {
       return await this._req<NonNullable<MailagentEmailBody['data']>>(
         'GET',
         `/email/${internalId}/body`,
-        { query: { format: 'markdown' }, signal }
+        { query: { format }, signal }
       )
     } catch (e) {
       if (e instanceof DomainError && e.code === 'E_NOT_FOUND') return null
@@ -793,6 +854,51 @@ export class MailAgentDomainClient {
       accountName: null,
       draftId: data.method ?? 'reply_all'
     }
+  }
+
+  /** email_draft_compose / email_draft_update (prd 07-27 C-3/C-4) — create a draft through the
+   *  SAME endpoint the renderer's composer uses (POST /email/draft). ONE wire method for both
+   *  tools so the (camelCase) body key names are pinned in exactly one place:
+   *    - compose new  → {internalId:-1 (sentinel — the route relaxes its non-negative check for
+   *      mode 'new'), mode:'new', subject, to/cc/bcc, bodyText}
+   *    - compose fwd  → {internalId:<source>, mode:'forward', quoteOriginal, …} (the service
+   *      auto-collects the source email's attachments when no `attachments` key is sent)
+   *    - update       → {internalId:<draft>, mode:'new', sourceDraftId:<the SAME draft id>, …}
+   *      🔴 sourceDraftId MUST equal internalId — mail_write._prepare_draft rejects any other
+   *      pairing (binding check) and silently falls back to zero thread derivation, i.e. the
+   *      edited draft would lose its In-Reply-To/References. The renderer sends both keys with
+   *      the same id for exactly this reason (ComposePanel.buildComposePayload).
+   *  Returns the endpoint's data block verbatim (snake_case, like the other write primitives).
+   *  🔴 The response `internal_id` is an ECHO of the request's id, NOT the new draft's row id
+   *  (the row is allocated by _mirror_draft_locally and never returned) — callers must not
+   *  present it as "the new draft". */
+  composeDraft(
+    input: DomainComposeDraftInput,
+    signal?: AbortSignal
+  ): Promise<DomainComposeDraftResult> {
+    return this._req<DomainComposeDraftResult>('POST', '/email/draft', {
+      body: {
+        internalId: input.internalId,
+        mode: input.mode,
+        ...(input.sourceDraftId !== undefined ? { sourceDraftId: input.sourceDraftId } : {}),
+        ...(input.subject !== undefined ? { subject: input.subject } : {}),
+        ...(input.bodyHtml ? { bodyHtml: input.bodyHtml } : {}),
+        ...(input.bodyText ? { bodyText: input.bodyText } : {}),
+        ...(input.quoteOriginal !== undefined ? { quoteOriginal: input.quoteOriginal } : {}),
+        ...(input.to?.length ? { to: input.to } : {}),
+        ...(input.cc?.length ? { cc: input.cc } : {}),
+        ...(input.bcc?.length ? { bcc: input.bcc } : {}),
+        ...(input.attachments?.length ? { attachments: input.attachments } : {})
+      },
+      signal
+    })
+  }
+
+  /** email_draft_update step 3 — delete the superseded draft. DELETE /email/draft/{id}
+   *  (IMAP \Deleted+EXPUNGE + local row cleanup). davmail-only; the endpoint itself refuses a
+   *  row whose mailbox is not the Drafts folder (E_INVALID_ARG). */
+  deleteDraft(internalId: number, signal?: AbortSignal): Promise<DomainDeleteDraftResult> {
+    return this._req<DomainDeleteDraftResult>('DELETE', `/email/draft/${internalId}`, { signal })
   }
 
   /** email_prepare_send (Phase 04b) — real SMTP send AFTER the double guard. POST

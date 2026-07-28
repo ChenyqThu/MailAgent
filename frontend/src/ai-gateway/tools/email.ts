@@ -66,18 +66,32 @@ export function createEmailReadTools(
       'subject + sender + date + flags. This is a metadata list filter, NOT a content ' +
       'search: it does NOT look inside email bodies. To search body text / keywords / ' +
       'topics use email_search_fulltext instead. Use email_list_filter when the user asks ' +
-      '"find emails from X" / "show last week\'s mail from Y" / "list flagged emails since DATE".',
+      '"find emails from X" / "show last week\'s mail from Y" / "list flagged emails since DATE". ' +
+      'mailbox takes ONE folder name — the common ones are "收件箱" (inbox), "发件箱" (sent), ' +
+      '"草稿箱" (drafts — the user\'s OWN unsent drafts, incl. ones you created with the draft ' +
+      'tools), "存档" (archive); anything else is a custom synced Exchange folder, matched ' +
+      'exactly. Omit mailbox to search across folders — that cross-folder view EXCLUDES drafts ' +
+      '(unsent text is not "the user\'s mail"), so to see drafts ask for mailbox="草稿箱" ' +
+      'explicitly (or use email_search_fulltext with in:drafts).',
     inputSchema: emailSearchSchema,
     run: async (input, signal) => {
+      // A blank mailbox is "no folder asked", not a folder named "" — normalize it so the
+      // drafts exclusion below cannot be sidestepped by an empty string.
+      const mailbox =
+        input.mailbox != null && input.mailbox.trim() !== '' ? input.mailbox : undefined
       const items = await domain.searchEmails(
         {
           subject: input.subject_contains,
           fromAddr: input.sender_contains,
-          mailbox: input.mailbox,
+          mailbox,
           sinceDate: input.since,
           untilDate: input.until,
           isRead: input.is_read,
           isFlagged: input.is_flagged,
+          // prd 07-27 C-1 — no mailbox asked = cross-folder view → exclude the user's own unsent
+          // drafts (aligns with the UI's /list-enriched default). An explicit mailbox is the
+          // user's choice, drafts included: never send the flag then (server default false).
+          excludeDrafts: mailbox === undefined ? true : undefined,
           limit: input.limit
         },
         signal
@@ -99,7 +113,9 @@ export function createEmailReadTools(
       'natural CJK expansion. Examples: from:alice redis; 产品评审 has:attachment ' +
       'newer_than:7d; attachment:合同 is:unread; filename:roadmap; ' +
       'subject:"weekly report" -from:noreply. Returns ranked hits with snippet + ' +
-      'sender + date (bm25 rank, smaller = more relevant). For metadata-only list ' +
+      'sender + date (bm25 rank, smaller = more relevant). `in:` selects a folder — ' +
+      "in:inbox / in:sent / in:drafts / in:archive (in:drafts searches the user's own " +
+      'unsent drafts, which no other filter reaches). For metadata-only list ' +
       'filtering (sender/subject/mailbox/date/flag, no body text) use email_list_filter instead.',
     inputSchema: emailSearchFulltextSchema,
     run: async (input, signal) => {

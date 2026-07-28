@@ -128,7 +128,12 @@ HEADLESS_TOOL_OPTIONS: tuple[tuple[str, str], ...] = (
     ("calendar_event_reschedule", "domain_write"),
     ("calendar_event_rsvp", "domain_write"),
     ("email_archive", "domain_write"),
+    # 草稿写族（prd 07-27 包 1+2）：compose = 新建/转发草稿，update = 改已有草稿
+    # （另存 + 删旧）。与 email_draft_reply 同风险面（只写草稿箱、不出站），故同为
+    # domain_write；同样**不进** DEFAULT_CUSTOM_AGENT_ALLOWED_TOOLS（owner 勾选才有）。
+    ("email_draft_compose", "domain_write"),
     ("email_draft_reply", "domain_write"),
+    ("email_draft_update", "domain_write"),
     ("email_flag", "domain_write"),
     ("email_pin", "domain_write"),
     ("email_resync", "domain_write"),

@@ -14,6 +14,7 @@ import {
   parseA2UIPayload,
   type ApprovalActionCardProps,
   type CustomAgentApprovalCardProps,
+  type DraftComposeCardProps,
   type DraftReplyCardProps,
   type NotionSyncCardProps,
   type SkillToggleCardProps,
@@ -23,6 +24,9 @@ import {
 describe('componentForTool — the registry allowlist', () => {
   test('write tools map to their cards; unknown / read tools → null', () => {
     expect(componentForTool('email_draft_reply')).toBe(A2UI_COMPONENTS.DraftReplyCard)
+    // prd 07-27 — the two new draft writes share one card; the reply keeps its own.
+    expect(componentForTool('email_draft_compose')).toBe(A2UI_COMPONENTS.DraftComposeCard)
+    expect(componentForTool('email_draft_update')).toBe(A2UI_COMPONENTS.DraftComposeCard)
     expect(componentForTool('email_resync')).toBe(A2UI_COMPONENTS.NotionSyncCard)
     expect(componentForTool('email_flag')).toBe(A2UI_COMPONENTS.ApprovalActionCard)
     expect(componentForTool('email_archive')).toBe(A2UI_COMPONENTS.ApprovalActionCard)
@@ -74,6 +78,81 @@ describe('buildToolA2UIPayload — draft reply (edit tier)', () => {
     expect(props.bodyMarkdown).toBe('edited body')
     expect(props.draftId).toBe('reply_all_7')
     expect(props.mailbox).toBe('Drafts')
+    expect(props.userEdited).toBe(true)
+  })
+})
+
+describe('buildToolA2UIPayload — draft compose / update (prd 07-27, edit tier)', () => {
+  test('compose forward: mode + source id + quote flag + proposed content', () => {
+    const p = buildToolA2UIPayload('email_draft_compose', {
+      args: {
+        mode: 'forward',
+        internal_id: 7,
+        subject: 'Fwd: plan',
+        body_markdown: 'fyi',
+        to: ['a@x.test'],
+        cc: ['c@x.test']
+      }
+    })
+    expect(p!.component).toBe('DraftComposeCard')
+    const props = p!.props as unknown as DraftComposeCardProps
+    expect(props).toMatchObject({
+      kind: 'compose',
+      mode: 'forward',
+      internalId: 7,
+      subject: 'Fwd: plan',
+      bodyMarkdown: 'fyi',
+      to: ['a@x.test'],
+      cc: ['c@x.test'],
+      bcc: [],
+      quoteOriginal: true
+    })
+    expect(p!.audit).toMatchObject({ risk: 'edit', requiresApproval: true })
+  })
+
+  test('compose new: no source id, no quote flag; an absent subject stays undefined (server default)', () => {
+    const props = buildToolA2UIPayload('email_draft_compose', {
+      args: { mode: 'new', body_markdown: 'hi', to: [] }
+    })!.props as unknown as DraftComposeCardProps
+    expect(props.kind).toBe('compose')
+    expect(props.mode).toBe('new')
+    expect(props.internalId).toBeUndefined()
+    expect(props.quoteOriginal).toBeUndefined()
+    expect(props.subject).toBeUndefined()
+  })
+
+  test('update: props carry ONLY the model patch — no "current" value is projected from args', () => {
+    const props = buildToolA2UIPayload('email_draft_update', {
+      args: { draft_internal_id: 9, subject: 'new subject' }
+    })!.props as unknown as DraftComposeCardProps
+    expect(props).toMatchObject({ kind: 'update', internalId: 9, subject: 'new subject' })
+    // an untouched field must NOT appear as a proposal (the card fetches the real "before")
+    expect(props.bodyMarkdown).toBeUndefined()
+    expect(props.to).toEqual([])
+    expect(props.mode).toBeUndefined()
+  })
+
+  test('update result: executed values win, and a failed delete surfaces as oldDraftDeleted=false', () => {
+    const props = buildToolA2UIPayload('email_draft_update', {
+      args: { draft_internal_id: 9, subject: 'proposed' },
+      result: {
+        draft_internal_id: 9,
+        drafts_folder: 'Drafts',
+        appended_uid: 4242,
+        old_draft_deleted: false,
+        final_subject: 'edited by user',
+        final_to: ['x@y.test'],
+        warnings: ['… BOTH now sit in the Drafts folder …'],
+        user_edited: true
+      },
+      userEdited: true
+    })!.props as unknown as DraftComposeCardProps
+    expect(props.subject).toBe('edited by user')
+    expect(props.to).toEqual(['x@y.test'])
+    expect(props.draftsFolder).toBe('Drafts')
+    expect(props.appendedUid).toBe(4242)
+    expect(props.oldDraftDeleted).toBe(false)
+    expect(props.warnings).toHaveLength(1)
     expect(props.userEdited).toBe(true)
   })
 })

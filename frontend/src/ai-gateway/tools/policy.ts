@@ -102,6 +102,10 @@ export const GATEWAY_TOOL_CLASSES: Record<string, GatewayToolClass> = {
   email_pin: 'domain_write',
   email_resync: 'domain_write',
   email_draft_reply: 'domain_write',
+  // prd 07-27 — the other two draft writes (create new/forward, edit an existing draft). Same risk
+  // face as email_draft_reply: they only write the Drafts folder, nothing leaves the machine.
+  email_draft_compose: 'domain_write',
+  email_draft_update: 'domain_write',
   // capability_change — changes the agent's own capability/identity surface. NEVER auto-approved,
   // manual_chat-only, in every future mode permanently denied (ADR-001 §9 red line).
   // 07-16 approval-mode 注记: the §9 red line describes the MANUAL default state. The owner-global
@@ -286,6 +290,10 @@ export const ACCEPT_EDITS_AUTO_APPROVE_TOOLS: ReadonlySet<string> = new Set([
   'email_pin',
   'email_resync',
   'email_draft_reply',
+  // prd 07-27 — same membership rationale as email_draft_reply (「编辑放行」: a draft write is
+  // reversible and never leaves the machine; the send is what asks).
+  'email_draft_compose',
+  'email_draft_update',
   'update_system_md',
   'set_skill_enabled',
   'agent_profile_restore',

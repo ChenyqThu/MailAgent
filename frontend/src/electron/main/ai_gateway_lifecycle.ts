@@ -745,7 +745,7 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
         }
       : undefined,
     // Factory: the gateway builds the tools per request bound to a fresh audit collector
-    // (closure). Read tools always; the five approval-gated write tools under
+    // (closure). Read tools always; the approval-gated write tools under
     // MAILAGENT_AI_SDK_WRITE_TOOLS — S3: an env-only KILL-SWITCH, default literal true (the
     // cutover master it used to follow was GA'd away). `approvalMode` (PART 2) comes from the
     // request body (default 'always'); 'auto-reversible' lets reversible preview writes skip the

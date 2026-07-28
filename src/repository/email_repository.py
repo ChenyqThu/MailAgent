@@ -21,7 +21,13 @@ from typing import Optional
 
 from loguru import logger
 
-from src.mail.mailbox_semantics import is_sent_mailbox
+from src.mail.mailbox_semantics import (
+    DRAFT_LABEL_VARIANTS,
+    filter_labels_for_mailbox,
+    is_sent_mailbox,
+    sql_in_predicate,
+    sql_not_in_or_null,
+)
 from src.repository.attachment_store import AttachmentStore
 from src.repository.search_query import (
     FilterPredicate,
@@ -1157,6 +1163,7 @@ class EmailRepository:
         is_pinned: Optional[bool] = None,
         is_important: Optional[bool] = None,
         has_notion: Optional[bool] = None,
+        exclude_drafts: bool = False,
         limit: int = 50,
         offset: int = 0,
     ) -> dict:
@@ -1168,6 +1175,11 @@ class EmailRepository:
         - 不把 limit 硬 cap 到 50; 上限走 ``LIST_LIMIT_MAX = 500``
           (与 CLI 公开契约一致, RFC §4.2)
         - SELECT 含 ``sync_status`` + ``thread_id``, CLI 能直接消费
+
+        ``mailbox`` 按 `filter_labels_for_mailbox` 展开成变体集 IN 查 (内建 canonical
+        禁止 `= ?` 精确匹配, 见 CLAUDE.md mailbox 语义单源纪律); 自定义文件夹名展开
+        成单元素 = 精确匹配语义不变。``exclude_drafts=True`` 额外排除草稿行 (跨邮箱
+        读面的 opt-in, 与 list-enriched 未指定 mailbox 时的默认排除同源同变体集)。
         """
         if limit <= 0:
             return {"total": 0, "limit": limit, "offset": offset, "emails": []}
@@ -1176,8 +1188,13 @@ class EmailRepository:
         clauses: list[str] = []
         params: list = []
         if mailbox:
-            clauses.append("mailbox = ?")
-            params.append(mailbox)
+            predicate, vals = sql_in_predicate(
+                "mailbox", filter_labels_for_mailbox(mailbox)
+            )
+            clauses.append(predicate)
+            params.extend(vals)
+        if exclude_drafts:
+            clauses.append(sql_not_in_or_null("mailbox", DRAFT_LABEL_VARIANTS))
         if status:
             clauses.append("sync_status = ?")
             params.append(status)

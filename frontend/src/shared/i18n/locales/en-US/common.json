@@ -1099,6 +1099,45 @@
       "factsError": "Could not load the event's current details — showing the assistant's raw proposal; the server still validates on approval.",
       "error": "The operation failed — retry or ask the assistant to start over."
     },
+    "draftComposeCard": {
+      "new": {
+        "title": "New draft",
+        "hint": "This will be saved to Drafts — nothing is sent (edit before confirming)",
+        "approve": "Create draft",
+        "done": "Draft created."
+      },
+      "forward": {
+        "title": "Forward draft",
+        "hint": "This forward will be saved to Drafts — nothing is sent (edit before confirming)"
+      },
+      "update": {
+        "title": "Edit draft",
+        "hint": "The draft will be re-saved with the content below and the old copy deleted — nothing is sent (edit before confirming)",
+        "approve": "Save changes",
+        "done": "Draft updated."
+      },
+      "draft": "Draft",
+      "subject": "Subject",
+      "to": "To",
+      "cc": "Cc",
+      "bcc": "Bcc",
+      "bodyLabel": "Draft body",
+      "subjectPlaceholder": "Empty = no subject",
+      "subjectKeepPlaceholder": "Empty = keep the current subject",
+      "bodyKeepPlaceholder": "Empty = keep the current body unchanged",
+      "forwardOf": "Forward of",
+      "forwardSource": "email #{id} (original quoted below your text)",
+      "forwardSourceNoQuote": "email #{id} (original not quoted)",
+      "changes": "Changes",
+      "empty": "(empty)",
+      "withYourEdits": " (with your edits)",
+      "folder": "Folder: {folder}",
+      "savedToDrafts": "Saved to Drafts",
+      "oldDraftKept": "The updated draft was saved, but deleting the old one failed — BOTH are now in Drafts; delete the stale one manually.",
+      "factsMissing": "That draft was not found (already deleted or sent) — showing the assistant's raw proposal below.",
+      "factsError": "Could not load the draft's current content — showing the assistant's raw proposal; the server still validates on approval.",
+      "error": "The draft operation failed — retry or ask the assistant to start over."
+    },
     "approvalActionCard": {
       "title": {
         "emailFlag": "Update email flag",

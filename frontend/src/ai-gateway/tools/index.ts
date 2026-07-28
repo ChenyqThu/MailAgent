@@ -41,7 +41,7 @@ export interface BuildGatewayToolsOpts {
   /** kosConfig().timeDecayEnabled — gates kos_query recency rerank. */
   kosTimeDecayEnabled?: boolean
   /** MAILAGENT_AI_SDK_WRITE_TOOLS (phase-03b). When false (default) the registry is
-   *  read-only. When true, the five approval-gated write tools are added — but only
+   *  read-only. When true, the seven approval-gated write tools are added — but only
    *  if `approvalGuard` is also supplied (a write tool cannot exist without its guard). */
   writeToolsEnabled?: boolean
   /** The per-gateway ApprovalGuard the write tools bind to (id/hash/expiry domain guard).

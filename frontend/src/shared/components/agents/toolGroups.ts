@@ -1,8 +1,8 @@
 // R3 (task 07-05 dogfood) — custom agent 工具区 UI 分组常量（纯前端呈现层）。
 // 落库格式不变（flat tool_policy.allowed_tools）；/tool-options 响应契约冻结不动 ——
 // 分组只把后端返回的工具按家族排布。工具名权威 = src/api/routers/agent_runs.py
-// HEADLESS_TOOL_OPTIONS（当前 33 个，日历 epic 4.1/4.2 起含 calendar 五件，issue #57 起含
-// KOS 六件只读）；未映射的
+// HEADLESS_TOOL_OPTIONS（当前 35 个，日历 epic 4.1/4.2 起含 calendar 五件，issue #57 起含
+// KOS 六件只读，prd 07-27 起含 email_draft_compose / email_draft_update）；未映射的
 // 新工具落 FALLBACK「其他」组渲染，不许静默丢（tests/components/toolGroups.test.ts
 // 断言全集归属 + fallback 行为）。
 import type { AgentRunToolOption } from '@shared/api/types'
@@ -26,8 +26,17 @@ export const TOOL_GROUPS: ReadonlyArray<{ id: string; tools: readonly string[] }
     ]
   },
   {
+    // prd 07-27：草稿三件（reply/compose/update）连排在写族末尾。
     id: 'emailWrite',
-    tools: ['email_flag', 'email_archive', 'email_pin', 'email_resync', 'email_draft_reply']
+    tools: [
+      'email_flag',
+      'email_archive',
+      'email_pin',
+      'email_resync',
+      'email_draft_reply',
+      'email_draft_compose',
+      'email_draft_update'
+    ]
   },
   {
     // 日历 epic 4.1/4.2：读在前（silent），三写在后（edit-tier 恒卡，writeBadge 由 class 驱动）。

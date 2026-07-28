@@ -7,6 +7,7 @@ from BACKEND-INTERFACES §2.4 against the temp-DB fixture.
 
 from __future__ import annotations
 
+import pytest
 from bs4 import BeautifulSoup
 
 from tests.api.conftest import (
@@ -129,6 +130,116 @@ def test_email_list_limit_out_of_range_422(client):
     # limit le=500 is enforced by FastAPI Query validation → 422 (not our envelope).
     r = client.get("/api/email/list", params={"limit": 9999})
     assert r.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# GET /api/email/list — 草稿排除 (C-1) + mailbox 变体展开 (C-2)  [prd 07-27]
+# ---------------------------------------------------------------------------
+
+DRAFT_ID = 990101          # mailbox='草稿箱' (canonical)
+DRAFT_VARIANT_ID = 990102  # mailbox='Drafts' (IMAP 原名变体)
+CUSTOM_FOLDER_ID = 990103  # mailbox='ProjectX' (自定义同步文件夹)
+
+
+@pytest.fixture()
+def draft_rows(temp_db):
+    """往共享 temp_db 临时插入 草稿箱/Drafts/自定义文件夹 三行, 测试后删除。
+
+    session 级 fixture 的种子语料只有收件箱行 —— 草稿排除/变体展开都需要这三种
+    mailbox 值才能证伪。沿用 test_email_views.py 同款「插入 → try/finally 删除」
+    做法, 不污染其余测试看到的语料。
+    """
+    import sqlite3
+
+    rows = (
+        (DRAFT_ID, "<draft-canonical@example.com>", "Draft canonical", "草稿箱"),
+        (DRAFT_VARIANT_ID, "<draft-variant@example.com>", "Draft variant", "Drafts"),
+        (CUSTOM_FOLDER_ID, "<custom@example.com>", "Custom folder row", "ProjectX"),
+    )
+    conn = sqlite3.connect(str(temp_db))
+    try:
+        for iid, mid, subject, mailbox in rows:
+            conn.execute(
+                """INSERT INTO email_metadata
+                   (internal_id, message_id, subject, sender, date_received,
+                    mailbox, is_read, is_flagged, sync_status, retry_count)
+                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                (iid, mid, subject, "eve@example.com", "2026-05-04 09:00:00",
+                 mailbox, 0, 0, "synced", 0),
+            )
+        conn.commit()
+        yield
+    finally:
+        conn.execute(
+            "DELETE FROM email_metadata WHERE internal_id IN (?,?,?)",
+            (DRAFT_ID, DRAFT_VARIANT_ID, CUSTOM_FOLDER_ID),
+        )
+        conn.commit()
+        conn.close()
+
+
+def _list_ids(client, **params) -> set[int]:
+    r = client.get("/api/email/list", params={"limit": 500, **params})
+    assert r.status_code == 200
+    return {row["internal_id"] for row in r.json()["data"]}
+
+
+def test_email_list_includes_drafts_by_default(client, draft_rows):
+    """C-1 缺省契约: 不传 exclude_drafts → 草稿行照常在结果里 (行为与该参数引入前一致)。
+
+    CLI ``mailagent email list`` 与既有 HTTP 调用方都走这条路径, opt-in 之前的
+    跨邮箱列表本来就含草稿 —— 默认值变了就是静默的破坏性变更。
+    """
+    ids = _list_ids(client)
+    assert {DRAFT_ID, DRAFT_VARIANT_ID}.issubset(ids)
+    # 非草稿行不受影响。
+    assert {EMAIL_ID, EMAIL_NO_BODY_ID, CUSTOM_FOLDER_ID}.issubset(ids)
+
+    # 显式 false 与缺省同解。
+    assert _list_ids(client, exclude_drafts="false") == ids
+
+
+def test_email_list_exclude_drafts_drops_all_variants(client, draft_rows):
+    """C-1: exclude_drafts=true → 草稿行 (canonical + 变体) 全出局, 其余行一个不少。"""
+    baseline = _list_ids(client)
+    ids = _list_ids(client, exclude_drafts="true")
+
+    assert DRAFT_ID not in ids
+    assert DRAFT_VARIANT_ID not in ids  # 'Drafts' 变体同样被排除 (单源变体集)
+    # 差集恰好只有那两行 —— 排除谓词不得误伤别的邮箱。
+    assert baseline - ids == {DRAFT_ID, DRAFT_VARIANT_ID}
+
+
+def test_email_list_exclude_drafts_meta_total_consistent(client, draft_rows):
+    """meta.total 与 data 同口径 (COUNT 与 SELECT 共用 WHERE) —— 分页数字不能骗人。"""
+    r = client.get("/api/email/list", params={"limit": 500, "exclude_drafts": "true"})
+    body = r.json()
+    assert body["meta"]["total"] == len(body["data"]) == body["meta"]["count"]
+
+
+def test_email_list_mailbox_variants_hit_drafts(client, draft_rows):
+    """C-2: 内建 canonical 与其变体互通 —— '草稿箱'/'草稿'/'Drafts' 都命中两行草稿。
+
+    展开前 mailbox 是 ``= ?`` 精确匹配, AI 必须逐字传 '草稿箱' 才有结果,
+    'Drafts'/'草稿' 静默返回空集 (与 UI 的 filter_labels_for_mailbox 口径分裂)。
+    """
+    for value in ("草稿箱", "草稿", "Drafts"):
+        assert _list_ids(client, mailbox=value) == {DRAFT_ID, DRAFT_VARIANT_ID}, (
+            f"mailbox={value!r} 未展开成草稿变体集"
+        )
+
+
+def test_email_list_mailbox_custom_folder_stays_exact(client, draft_rows):
+    """C-2 反向锁: 自定义文件夹维持精确匹配, 既不被展开也不被内建视图带出来。"""
+    assert _list_ids(client, mailbox="ProjectX") == {CUSTOM_FOLDER_ID}
+    # 不因任何内建视图的变体展开而混进去。
+    assert CUSTOM_FOLDER_ID not in _list_ids(client, mailbox="草稿箱")
+    assert CUSTOM_FOLDER_ID not in _list_ids(client, mailbox="收件箱")
+
+
+def test_email_list_inbox_variant_expansion(client, draft_rows):
+    """C-2: 收件箱同样展开 (变体集单源, 不是只给草稿开的特例)。"""
+    assert {EMAIL_ID, EMAIL_NO_BODY_ID}.issubset(_list_ids(client, mailbox="INBOX"))
 
 
 # ---------------------------------------------------------------------------

@@ -13,7 +13,7 @@ import {
 import enCommon from '../../src/shared/i18n/locales/en-US/common.json'
 import zhCommon from '../../src/shared/i18n/locales/zh-CN/common.json'
 
-// 镜像 src/api/routers/agent_runs.py::HEADLESS_TOOL_OPTIONS（33 个，/tool-options 契约冻结）。
+// 镜像 src/api/routers/agent_runs.py::HEADLESS_TOOL_OPTIONS（35 个，/tool-options 契约冻结）。
 // 后端加工具 → 此 fixture 必须跟着补（连同 TOOL_GROUPS 归属），否则首个用例红。
 const HEADLESS_TOOL_OPTIONS: AgentRunToolOption[] = [
   { name: 'agent_profile_history', class: 'read' },
@@ -45,14 +45,17 @@ const HEADLESS_TOOL_OPTIONS: AgentRunToolOption[] = [
   { name: 'calendar_event_reschedule', class: 'domain_write' },
   { name: 'calendar_event_rsvp', class: 'domain_write' },
   { name: 'email_archive', class: 'domain_write' },
+  // prd 07-27 — 草稿写族补全（新建/转发 + 改已有草稿）。
+  { name: 'email_draft_compose', class: 'domain_write' },
   { name: 'email_draft_reply', class: 'domain_write' },
+  { name: 'email_draft_update', class: 'domain_write' },
   { name: 'email_flag', class: 'domain_write' },
   { name: 'email_pin', class: 'domain_write' },
   { name: 'email_resync', class: 'domain_write' }
 ]
 
 describe('toolGroups — R3 工具分组常量', () => {
-  test('当前 33 个 headless 工具全部有家族归属（无一落 fallback）且无一丢失', () => {
+  test('当前 35 个 headless 工具全部有家族归属（无一落 fallback）且无一丢失', () => {
     const groups = groupToolOptions(HEADLESS_TOOL_OPTIONS)
     expect(groups.find((g) => g.id === FALLBACK_TOOL_GROUP_ID)).toBeUndefined()
     const grouped = groups.flatMap((g) => g.tools.map((t) => t.name)).sort()
