@@ -30,7 +30,8 @@ import {
   CardFrame,
   TerminalBanner,
   deriveCardPhase,
-  postApprovalEdit
+  postApprovalEdit,
+  toolErrorDetail
 } from '../_cardShell'
 
 // Resolve serve-api base URL for the "before" fetch (mirrors CalendarApprovalCard — intentionally
@@ -132,6 +133,7 @@ export function DraftComposeCard(props: ToolCallMessagePartProps): React.JSX.Ele
   const phase = deriveCardPhase(props)
   const data = propsOf(toolName, args, result)
   const isUpdate = data.kind === 'update'
+  const errorDetail = phase === 'error' ? toolErrorDetail(result) : null
 
   const [facts, setFacts] = useState<DraftFacts | null>(null)
   const [factsState, setFactsState] = useState<'idle' | 'loading' | 'ok' | 'missing' | 'error'>(
@@ -389,7 +391,14 @@ export function DraftComposeCard(props: ToolCallMessagePartProps): React.JSX.Ele
           )}
         </div>
       ) : phase === 'error' ? (
-        <div className="text-aux text-fail">{t('chat.draftComposeCard.error')}</div>
+        // issue #70 — the generic sentence alone left the user (and anyone reading the thread
+        // later) with no idea WHY; the part already carries the reason, so show it.
+        <div className="space-y-1">
+          <div className="text-aux text-fail">{t('chat.draftComposeCard.error')}</div>
+          {errorDetail != null && (
+            <div className="break-words font-mono text-meta text-ink-fg-2">{errorDetail}</div>
+          )}
+        </div>
       ) : (
         <>
           {summary}

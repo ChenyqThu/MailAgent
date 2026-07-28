@@ -327,18 +327,19 @@ export function createWriteTools(
   const email_draft_compose = make({
     name: 'email_draft_compose',
     description:
-      'Create a NEW draft (mode "new") or FORWARD an existing email (mode "forward"). The draft ' +
-      'is saved to the Drafts folder — nothing is sent (to actually send, the user asks and you ' +
-      'use email_prepare_send). The user sees your subject / recipients / body in a confirmation ' +
-      'dialog and CAN edit them before the draft is created. Recipients are explicit: pass the ' +
-      'final to (required) / cc / bcc lists — nothing is derived. mode "new": no internal_id (a ' +
-      'new draft has no source email); pass subject. mode "forward": internal_id = the email to ' +
-      'forward; the original is quoted below your body (quote_original, default true) and its ' +
-      'attachments ride along automatically, and the subject defaults to "Fwd: <original>" unless ' +
-      'you pass one. Body should be markdown (bold, italics, lists, links supported). To REPLY to ' +
-      'an email use email_draft_reply instead (it derives the recipients and threads correctly); ' +
-      'to change a draft that already exists use email_draft_update. Edit tier — the user may ' +
-      'modify your draft.',
+      'Create a NEW draft (mode "new") or FORWARD an existing email (mode "forward"). THE TWO ' +
+      'MODES TAKE DIFFERENT PARAMETERS — mode "new": OMIT internal_id entirely (a new draft has ' +
+      'no source email; 0 / -1 / any placeholder is rejected) and pass subject. mode "forward": ' +
+      'internal_id = the email to forward; the original is quoted below your body (quote_original, ' +
+      'default true) and its attachments ride along automatically, and the subject defaults to ' +
+      '"Fwd: <original>" unless you pass one. The draft is saved to the Drafts folder — nothing ' +
+      'is sent (to actually send, the user asks and you use email_prepare_send). The user sees ' +
+      'your subject / recipients / body in a confirmation dialog and CAN edit them before the ' +
+      'draft is created. Recipients are explicit: pass the final to (required) / cc / bcc lists — ' +
+      'nothing is derived. Body should be markdown (bold, italics, lists, links supported). To ' +
+      'REPLY to an email use email_draft_reply instead (it derives the recipients and threads ' +
+      'correctly); to change a draft that already exists use email_draft_update. Edit tier — the ' +
+      'user may modify your draft.',
     inputSchema: emailDraftComposeSchema,
     risk: 'edit',
     // The user may rewrite the content on the approval card; mode / internal_id stay pinned to the

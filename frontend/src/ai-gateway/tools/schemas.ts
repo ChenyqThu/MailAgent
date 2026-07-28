@@ -183,14 +183,25 @@ export type EmailPinInput = z.infer<typeof emailPinSchema>
 /** email_draft_reply — compose a reply / reply-all draft. Recipients default to
  *  server-derived reply-all; optional to/cc/bcc OVERRIDE the full lists (the way to
  *  add/remove people on top of reply-all — compute the final lists from the source
- *  email's sender/to/cc and pass them explicitly). */
+ *  email's sender/to/cc and pass them explicitly).
+ *  Per-field `.describe()` (issue #70) — the JSON Schema is the ONLY part of a schema the model
+ *  actually sees, so every rule a caller can get wrong has to be stated on the field itself. */
 export const emailDraftReplySchema = z.object({
-  internal_id: z.number().int(),
+  internal_id: z.number().int().describe('The email being replied to (its internal_id). Required.'),
   body_markdown: z.string().min(1),
   mode: z.enum(['reply', 'reply-all']).optional(),
-  to: z.array(z.string().min(3)).optional(),
-  cc: z.array(z.string().min(3)).optional(),
-  bcc: z.array(z.string().min(3)).optional()
+  to: z
+    .array(z.string().min(3))
+    .optional()
+    .describe(
+      'OVERRIDE of the whole To list (omit to let the server derive reply-all). Not additive: ' +
+        'to add or remove one person, compute the FULL final list yourself and pass it.'
+    ),
+  cc: z
+    .array(z.string().min(3))
+    .optional()
+    .describe('OVERRIDE of the whole Cc list (same all-or-nothing rule as `to`).'),
+  bcc: z.array(z.string().min(3)).optional().describe('OVERRIDE of the whole Bcc list.')
 })
 export type EmailDraftReplyInput = z.infer<typeof emailDraftReplySchema>
 
@@ -203,17 +214,50 @@ export type EmailDraftReplyInput = z.infer<typeof emailDraftReplySchema>
  *      rejects a recipient-less forward too);
  *    - 'new' REJECTS internal_id — a new draft has no source email, so passing one means the
  *      model meant forward (or email_draft_reply).
- *  quote_original is forward-only (a new draft has nothing to quote); default true. */
+ *  quote_original is forward-only (a new draft has nothing to quote); default true.
+ *
+ *  🔴 issue #70 — a `.superRefine` is invisible to the model: `toJSONSchema` drops it, so the
+ *  mode↔internal_id coupling reached the model through NOTHING but prose buried mid-description,
+ *  and a model that guessed `internal_id` on a 'new' draft burned all 8 steps of the run guessing
+ *  values (0 → -1 → 1.9e15 → 0) for a field that must simply be absent. The rules now live on the
+ *  fields themselves via `.describe()` (that IS the model-visible surface) — the superRefine stays
+ *  as the pre-approval-card backstop, not as the way the model learns the rule. Every retry message
+ *  below therefore also states the corrective ACTION, not just the violated constraint. */
 export const emailDraftComposeSchema = z
   .object({
-    mode: z.enum(['new', 'forward']),
-    internal_id: z.number().int().optional(),
-    subject: z.string().optional(),
-    body_markdown: z.string().min(1),
-    to: z.array(z.string().min(3)),
+    mode: z
+      .enum(['new', 'forward'])
+      .describe(
+        "'new' = a brand-new draft written from scratch; 'forward' = forward an existing email. " +
+          'The two modes take DIFFERENT parameters — see internal_id.'
+      ),
+    internal_id: z
+      .number()
+      .int()
+      .optional()
+      .describe(
+        "mode 'forward' ONLY, where it is required: the internal_id of the email being forwarded. " +
+          "OMIT THIS FIELD ENTIRELY for mode 'new' — a new draft has no source email, so there is " +
+          'no id to pass and no placeholder (0 / -1 / any number) is accepted. To reply to an ' +
+          'email, use email_draft_reply instead of guessing an id here.'
+      ),
+    subject: z
+      .string()
+      .optional()
+      .describe(
+        "Subject line. Pass it for mode 'new'; for mode 'forward' it defaults to \"Fwd: <original>\"."
+      ),
+    body_markdown: z.string().min(1).describe('Draft body, markdown.'),
+    to: z.array(z.string().min(3)).describe('Final To list — explicit, never derived. Required.'),
     cc: z.array(z.string().min(3)).optional(),
     bcc: z.array(z.string().min(3)).optional(),
-    quote_original: z.boolean().optional()
+    quote_original: z
+      .boolean()
+      .optional()
+      .describe(
+        "mode 'forward' only (default true): quote the forwarded email under your body. A new " +
+          'draft has nothing to quote.'
+      )
   })
   .superRefine((v, ctx) => {
     if (v.mode === 'forward') {
@@ -221,14 +265,17 @@ export const emailDraftComposeSchema = z
         ctx.addIssue({
           code: 'custom',
           path: ['internal_id'],
-          message: "mode 'forward' requires internal_id (the source email to forward)"
+          message:
+            "mode 'forward' requires internal_id (the source email to forward). Retry with the " +
+            'internal_id of the email you are forwarding.'
         })
       }
       if (v.to.length === 0) {
         ctx.addIssue({
           code: 'custom',
           path: ['to'],
-          message: "mode 'forward' requires at least one recipient in `to`"
+          message:
+            "mode 'forward' requires at least one recipient in `to`. Retry with the recipients filled in."
         })
       }
     } else if (v.internal_id !== undefined) {
@@ -236,7 +283,9 @@ export const emailDraftComposeSchema = z
         code: 'custom',
         path: ['internal_id'],
         message:
-          "mode 'new' takes no internal_id (a new draft has no source email — use mode 'forward' to forward one, or email_draft_reply to reply to one)"
+          "mode 'new' takes no internal_id (a new draft has no source email — use mode 'forward' to forward one, or email_draft_reply to reply to one). " +
+          'Retry with the SAME arguments and the internal_id field REMOVED — do not substitute 0, ' +
+          '-1 or any other placeholder value.'
       })
     }
   })
@@ -247,12 +296,21 @@ export type EmailDraftComposeInput = z.infer<typeof emailDraftComposeSchema>
  *  edit keeps the body/recipients as they are. "at least one field must change" is enforced in
  *  `run` (email_flag precedent — the semantic check keeps the legacy E_INVALID_ARG error shape). */
 export const emailDraftUpdateSchema = z.object({
-  draft_internal_id: z.number().int(),
-  subject: z.string().optional(),
-  body_markdown: z.string().min(1).optional(),
-  to: z.array(z.string().min(3)).optional(),
-  cc: z.array(z.string().min(3)).optional(),
-  bcc: z.array(z.string().min(3)).optional()
+  draft_internal_id: z
+    .number()
+    .int()
+    .describe(
+      'internal_id of the DRAFT row to edit — not the id of the email it replies to or forwards. ' +
+        'To create a draft instead, use email_draft_compose / email_draft_reply.'
+    ),
+  subject: z.string().optional().describe('Omit to keep the current subject.'),
+  body_markdown: z.string().min(1).optional().describe('Omit to keep the current body.'),
+  to: z
+    .array(z.string().min(3))
+    .optional()
+    .describe('OVERRIDE of the whole To list; omit to keep the current recipients.'),
+  cc: z.array(z.string().min(3)).optional().describe('OVERRIDE of the whole Cc list.'),
+  bcc: z.array(z.string().min(3)).optional().describe('OVERRIDE of the whole Bcc list.')
 })
 export type EmailDraftUpdateInput = z.infer<typeof emailDraftUpdateSchema>
 

@@ -45,6 +45,58 @@ export function deriveCardPhase(
   return approval?.approved === true ? 'authorized' : 'done'
 }
 
+/** Longest error detail a card will render — a schema-validation errorText embeds the whole
+ *  rejected input, which for a draft is the entire body. */
+const ERROR_DETAIL_MAX = 240
+
+/** Pull a SHORT, actionable line out of a failed tool part, or null when there is nothing better
+ *  than the card's generic sentence (issue #70 — 8 identical "草稿操作失败，请重试" cards told the
+ *  user nothing, while the part carried the exact reason all along).
+ *
+ *  assistant-ui delivers a tool-error part as `result = { error: <errorText> }` (react-ai-sdk
+ *  convertMessage). Two errorText shapes reach us:
+ *    - a domain failure, already short and coded: `[E_KOS_NETWORK] MCP request failed: …`;
+ *    - an ai@7 input-validation failure, where the useful part is the zod issue list buried
+ *      after `Error message:` and behind a full JSON dump of the rejected input.
+ *  The second is unwrapped to `field: message`; anything else is passed through and clamped. */
+export function toolErrorDetail(result: unknown): string | null {
+  const raw =
+    typeof result === 'string'
+      ? result
+      : typeof (result as { error?: unknown } | null)?.error === 'string'
+        ? (result as { error: string }).error
+        : null
+  if (raw == null) return null
+  const text = raw.trim()
+  if (text.length === 0) return null
+
+  const marker = text.indexOf('Error message:')
+  if (marker >= 0) {
+    const tail = text.slice(marker + 'Error message:'.length).trim()
+    try {
+      const issues: unknown = JSON.parse(tail)
+      if (Array.isArray(issues) && issues.length > 0) {
+        const first = issues[0] as { path?: unknown; message?: unknown }
+        const message = typeof first.message === 'string' ? first.message : null
+        if (message != null) {
+          const path = Array.isArray(first.path) ? first.path.join('.') : ''
+          const one = path.length > 0 ? `${path}: ${message}` : message
+          const more = issues.length > 1 ? ` (+${issues.length - 1})` : ''
+          return clampDetail(one + more)
+        }
+      }
+    } catch {
+      /* not the zod shape — fall through to the raw text */
+    }
+  }
+  return clampDetail(text)
+}
+
+function clampDetail(s: string): string {
+  const one = s.replace(/\s+/g, ' ').trim()
+  return one.length > ERROR_DETAIL_MAX ? `${one.slice(0, ERROR_DETAIL_MAX)}…` : one
+}
+
 /** POST the user's edited fields to the gateway resolve side-channel (edit-tier only). The
  *  gateway overlays them onto the pending approval's original input (identity pinned) so the
  *  next streamText call's execute runs the edit — WITHOUT changing the ai@6 history input, so

@@ -197,3 +197,46 @@ describe('DraftComposeCard — update (before → after)', () => {
     expect(screen.getByText(/Drafts/)).toBeTruthy()
   })
 })
+
+// ── issue #70 — the error phase must say WHY ────────────────────────────────────────────────
+//
+// Production shipped 8 identical "草稿操作失败，请重试" cards for a run that failed the same way
+// every time; the reason (a schema-validation issue naming internal_id) was sitting in the part
+// the card was already reading.
+
+describe('DraftComposeCard — error detail', () => {
+  /** The errorText ai@7 produces when the model sends internal_id on a mode-'new' compose. */
+  const VALIDATION_ERROR_TEXT =
+    'AI_InvalidToolInputError: Invalid input for tool email_draft_compose: ' +
+    'AI_TypeValidationError: Type validation failed: Value: ' +
+    '{"mode":"new","internal_id":0,"body_markdown":"…","to":["a@x.test"]}.\n' +
+    'Error message: [\n  {\n    "code": "custom",\n    "path": [\n      "internal_id"\n    ],\n' +
+    '    "message": "mode \'new\' takes no internal_id (a new draft has no source email)"\n  }\n]'
+
+  const errorProps = (result: unknown): ToolCallMessagePartProps =>
+    mockProps({
+      isError: true,
+      status: { type: 'incomplete', reason: 'error' },
+      approval: { id: 'apr-1', approved: true },
+      result
+    } as Partial<ToolCallMessagePartProps>)
+
+  test('a schema-validation failure shows the offending field + its message', () => {
+    render(<DraftComposeCard {...errorProps({ error: VALIDATION_ERROR_TEXT })} />)
+    expect(screen.getByText(/草稿操作失败/)).toBeTruthy()
+    // Unwrapped from the JSON dump — the field and the rule, not the raw blob.
+    expect(screen.getByText(/internal_id: mode 'new' takes no internal_id/)).toBeTruthy()
+    // …and the rejected input is NOT pasted into the card.
+    expect(screen.queryByText(/Type validation failed/)).toBeNull()
+  })
+
+  test('a coded domain failure is shown as-is', () => {
+    render(<DraftComposeCard {...errorProps({ error: '[E_UPSTREAM] imap append refused' })} />)
+    expect(screen.getByText('[E_UPSTREAM] imap append refused')).toBeTruthy()
+  })
+
+  test('no usable detail → the generic sentence stands alone (no empty line)', () => {
+    render(<DraftComposeCard {...errorProps({ error: '   ' })} />)
+    expect(screen.getByText(/草稿操作失败/)).toBeTruthy()
+  })
+})

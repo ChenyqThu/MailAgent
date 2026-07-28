@@ -184,6 +184,17 @@ export async function resumeApprovalRun(
       originalMessages: run.rawMessages,
       generateMessageId: makeIdGenerator(),
       sendReasoning: false,
+      // issue #70 — WITHOUT onError ai@7 masks every errorText (tool errors included) to a bare
+      // "An error occurred.", and that masked string is what gets persisted into ui_message_json →
+      // rendered on the card AND replayed to the model as the tool result on the next turn. The
+      // server-side resume is the PRIMARY approval path (serverResumeEnabled is always on), so a
+      // write that fails after the user approves it lost its reason on both ends. Same handler as
+      // the canonical /api/ai/chat route (server.ts).
+      onError: (error: unknown) => {
+        const msg = error instanceof Error ? error.message : String(error)
+        console.error('[ai-gateway] approval resume stream error', error)
+        return msg
+      },
       onFinish: async (args) => {
         if (!args.isAborted) {
           rePaused = responseMessageAwaitsApproval(args.responseMessage as MailAgentUIMessage)

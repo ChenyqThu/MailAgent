@@ -20,7 +20,8 @@ import {
   CardFrame,
   TerminalBanner,
   deriveCardPhase,
-  postApprovalEdit
+  postApprovalEdit,
+  toolErrorDetail
 } from '../_cardShell'
 
 function propsOf(args: unknown, result: unknown): DraftReplyCardProps {
@@ -50,6 +51,7 @@ export function DraftReplyCard(props: ToolCallMessagePartProps): React.JSX.Eleme
   const { args, result, toolCallId, respondToApproval } = props
   const phase = deriveCardPhase(props)
   const data = propsOf(args, result)
+  const errorDetail = phase === 'error' ? toolErrorDetail(result) : null
   // composer-parity dogfood-2 #3 — the proposed fields stream in (input-streaming → input-available),
   // so the card first mounts while args are still empty; a plain useState latched '' and never caught
   // up → the textarea stayed empty until execution. Track the user's own edit separately and, until
@@ -152,7 +154,13 @@ export function DraftReplyCard(props: ToolCallMessagePartProps): React.JSX.Eleme
           <DraftBodyPreview body={data.bodyMarkdown} />
         </div>
       ) : phase === 'error' ? (
-        <div className="text-aux text-fail">创建草稿失败，请重试或让助手重新发起。</div>
+        // issue #70 — surface the reason the part already carries instead of only the generic line.
+        <div className="space-y-1">
+          <div className="text-aux text-fail">创建草稿失败，请重试或让助手重新发起。</div>
+          {errorDetail != null && (
+            <div className="break-words font-mono text-meta text-ink-fg-2">{errorDetail}</div>
+          )}
+        </div>
       ) : (
         <>
           <RecipientSummary data={data} />

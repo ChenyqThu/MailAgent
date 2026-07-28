@@ -188,6 +188,15 @@ export async function handleAguiChat(
       originalMessages: run.rawMessages,
       generateMessageId: makeIdGenerator(),
       sendReasoning: true,
+      // issue #70 — the mirror must not be the one endpoint that still masks errorText to
+      // "An error occurred." (ai@7's default): eventMapper forwards chunk.errorText verbatim into
+      // ToolCallResult / RunError, and the same masked string lands in ui_message_json. Mirrors
+      // the canonical route (server.ts) — the two endpoints are meant to be the same run.
+      onError: (error: unknown) => {
+        const msg = error instanceof Error ? error.message : String(error)
+        console.error('[ai-gateway] AG-UI mirror stream error', error)
+        return msg
+      },
       onFinish: makePersistOnFinish(cfg, run)
     })
     for await (const chunk of stream) {
