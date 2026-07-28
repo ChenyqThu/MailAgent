@@ -20,7 +20,9 @@ export interface PersistentSettings {
   notionAgentName: string | null
   customApiEndpoint: string | null
   /** feat/auto-update — auto-download an available update when the master
-   *  AUTO_UPDATE_ENABLED flag is on. Default true; IslandUpdatesTab toggles it. */
+   *  AUTO_UPDATE_ENABLED flag is on. Default FALSE (detect → surface the
+   *  TitleBar download icon → download only on click); IslandUpdatesTab
+   *  toggles it. */
   autoDownloadUpdates: boolean
   /** Owner's email — sourced from repo-root `.env` USER_EMAIL on every
    *  settings:get read. Read-only; the renderer doesn't write this. */

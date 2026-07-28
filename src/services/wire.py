@@ -16,6 +16,12 @@
   - ``body_summary`` / ``meta_record_to_list_item``: CLI 与 API 逐字段相同, 无参数分叉。
 
 逐字段 parity 由 tests/cli/test_wire_parity.py (golden) 锁定。
+
+🔴 **本模块不是 email.get 唯一的投影** —— 桌面 IPC 走
+``frontend/src/electron/main/handlers/email.ts`` 的 ``shapeFullRecord`` /
+``shapeNestedAttachment``, 是另一份**手写**镜像。改这里的字段集必须同步改那边,
+否则该字段的 UI 会在某一端静默失效 (实测: ``is_important`` 漏投影 → 桌面 ❗ 徽标
+永不渲染, 无任何报错)。跨语言对账闸 = ``tests/config/test_wire_projection_parity.py``。
 """
 
 from __future__ import annotations

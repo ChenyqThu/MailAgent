@@ -336,7 +336,13 @@ export function registerReportHandlers(): void {
       // 刻意按传输端区分，勿对齐）。
       args.push('--type', raw.type ?? 'search')
       if (typeof raw.title === 'string') args.push('--title', raw.title)
-      args.push(raw.enabled === false ? '--no-enabled' : '--enabled')
+      // 缺省 = 关。桌面此前是 `!== false ⇒ --enabled`（缺省开），与 web
+      // （HttpApi 丢键 → serve-api `bool(raw.get("enabled", False))` ⇒ 关）相反 ——
+      // 同一个「新建 agent」动作在两个传输端默认值相反是潜伏雷（审计 P2#4）。
+      // 取「关」是因为另外两层都这么定：store.create_agent 的 `enabled=False`
+      // 默认 + 本仓惯例（种子 daily 默认关）。现有两个调用方
+      // （CustomAgentDrawer / SearchConfigDrawer）都显式传值，行为不变。
+      args.push(raw.enabled === true ? '--enabled' : '--no-enabled')
       if (raw.model != null) args.push('--model', raw.model)
       if (raw.prompt != null) args.push('--prompt', raw.prompt)
       if (Array.isArray(raw.tools)) args.push('--tools-json', JSON.stringify(raw.tools))

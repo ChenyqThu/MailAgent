@@ -41,6 +41,9 @@ vi.mock('electron', () => ({
 
 // Now import the module under test (after vi.mock declarations).
 const handlers = await import('../../../src/electron/main/handlers/email')
+// attachment:list 面 —— 与 email:get 的内嵌附件是两个形状 (12 vs 11 字段),
+// 「attachment shape」describe 块把两者一起钉住, 防再次混用 (2026-07-27 审计 #3)。
+const attachmentHandlers = await import('../../../src/electron/main/handlers/attachment')
 
 // ---- schema validator setup -------------------------------------------------
 
@@ -207,6 +210,22 @@ describe('getEmail', () => {
     expect(handlers.getEmail(99_999)).toBeNull()
   })
 
+  // 2026-07-27 镜像审计 P1: is_important 一直在 LIST_COLS 的 SELECT 里, 但
+  // shapeFullRecord 漏投影 → EmailDetail 的 ❗ 徽标永不渲染 + ComposePanel
+  // draft-edit 静默丢高重要性。web (serve-api wire.meta_to_dict include_important)
+  // 一直是对的, 只有桌面漏。语义两侧一致: 非空 bool, NULL/0 → false。
+  test('surfaces is_important (P1: 曾漏投影, ❗ 徽标永不渲染)', () => {
+    const db = fixtureDb
+    db.prepare('UPDATE email_metadata SET is_important = 1 WHERE internal_id = 101').run()
+    try {
+      expect(handlers.getEmail(101)?.is_important).toBe(true)
+      // 其余行仍是 false (不是 undefined —— 投影恒发, 与 Python bool(row) 同口径)。
+      expect(handlers.getEmail(102)?.is_important).toBe(false)
+    } finally {
+      db.prepare('UPDATE email_metadata SET is_important = 0 WHERE internal_id = 101').run()
+    }
+  })
+
   test('body is null when email_body row missing (fetch_failed case)', () => {
     const rec = handlers.getEmail(103)
     expect(rec?.body).toBeNull()
@@ -272,9 +291,30 @@ describe('getEmailBody', () => {
 })
 
 describe('attachment shape', () => {
-  test('the attachments[] inside email:get matches attachment-list schema', () => {
+  // 这条以前断言的是「内嵌附件满足 **attachment-list** schema」—— 那是另一个 payload
+  // 的契约 (它 required internal_id)。内嵌附件真正受 email-get.schema.json 的
+  // attachments.items 管 (11 字段, 无 internal_id), 与 Python
+  // wire.attachment_to_dict 的默认形一致 —— 后者在 wire.py gotcha #1 是有意决定,
+  // 且被 tests/cli/test_wire_parity.py 钉死。旧断言把 TS 侧多带 internal_id 的
+  // accident 固化成了「契约」(2026-07-27 镜像审计 #3)。
+  test('内嵌附件是 11 字段形, 不含 internal_id (对齐 Python wire 默认形)', () => {
     const rec = handlers.getEmail(101)!
-    expect(validateAttachmentList(wrap(rec.attachments))).toBe(true)
+    const [first] = rec.attachments!
+    expect(first).toBeDefined()
+    // 镜像 test_wire_parity.py: 绝不回显 internal_id / host 路径。
+    expect(first).not.toHaveProperty('internal_id')
+    expect(first).not.toHaveProperty('local_path')
+    // 整条记录 (含内嵌附件) 仍走 email-get schema 校验 —— 见 getEmail 用例的 validateGet。
+    expect(validateGet(wrap(rec))).toBe(true)
+  })
+
+  // 独立的 attachment:list 面才带 internal_id —— 它有自己的 shaper
+  // (handlers/attachment.ts) 与自己的 schema。两个形状不可混用。
+  test('attachment:list 面仍是 12 字段形 (含 internal_id)', () => {
+    const rows = attachmentHandlers.listAttachments(101)
+    expect(rows.length).toBeGreaterThan(0)
+    expect(rows[0]).toHaveProperty('internal_id', 101)
+    expect(validateAttachmentList(wrap(rows))).toBe(true)
   })
 })
 

@@ -78,10 +78,26 @@ async def test_tools_call_report_run(mcp_ctx, monkeypatch):
         return "rep-9"
 
     monkeypatch.setattr("src.reports.worker.run_report_once", _fake)
+    # P0 审计（invoke.py confirmation gate 收窄）：report_run 是 preview tier，MCP 面与 REST 共用
+    # 同一 chokepoint —— 无 confirm 必须被拒。本测试原先无 confirm 且断言成功，正是把漏洞固化成
+    # 期望行为的第三条（tests/api 两条已同批改正）。
+    r_no_confirm = await handle_request(
+        {
+            "jsonrpc": "2.0", "id": 4, "method": "tools/call",
+            "params": {"name": "mailagent_report_report_run", "arguments": {"agent_id": "daily"}},
+        },
+        LocalSkillClient(ctx=mcp_ctx),
+    )
+    assert r_no_confirm["result"].get("isError"), r_no_confirm["result"]
+    assert "confirmation_tier=preview" in r_no_confirm["result"]["content"][0]["text"]
+
     r = await handle_request(
         {
             "jsonrpc": "2.0", "id": 5, "method": "tools/call",
-            "params": {"name": "mailagent_report_report_run", "arguments": {"agent_id": "daily"}},
+            "params": {
+                "name": "mailagent_report_report_run",
+                "arguments": {"agent_id": "daily", "confirm": True},
+            },
         },
         LocalSkillClient(ctx=mcp_ctx),
     )

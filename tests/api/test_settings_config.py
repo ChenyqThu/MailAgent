@@ -300,7 +300,15 @@ def test_get_settings_payload(
     assert data["pollIntervalSec"] == 5
     assert data["notionAgentPageId"] is None
     assert data["customApiEndpoint"] is None
-    assert data["autoDownloadUpdates"] is True
+    # 2026-07-27 审计 #11：曾硬编码 True，与桌面 DEFAULTS 的 False 相反。远程无 updater、
+    # 该值无消费者，改成 False 只为不让两端默认相反（潜伏雷：web 哪天长出 updater 就当场分叉）。
+    assert data["autoDownloadUpdates"] is False
+    # 审计 P1：signature 曾整个键缺席 → 远程 compose「签名」按钮永久禁用。值恒 None
+    # 是有意的（签名存在 Electron 的 <userData>/settings.json，Python 侧无存储面），
+    # 但**键必须在** —— 缺键会让前端组件静默退化，空值至少是诚实的「未配置」。
+    # 键集对账见 tests/config/test_settings_mirror_parity.py。
+    assert "signature" in data
+    assert data["signature"] is None
 
 
 def test_get_settings_custom_endpoint(

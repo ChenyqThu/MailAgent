@@ -49,6 +49,10 @@
         "mailbox": {"type": "string"},
         "is_read": {"type": "boolean"},
         "is_flagged": {"type": "boolean"},
+        "is_important": {
+          "type": "boolean",
+          "description": "v9 RFC 头 importance 位。可选: CLI `email get` 不发 (wire.meta_to_dict 默认形), serve-api GET /email/{id} 与桌面 IPC email:get 都发 (include_important 扩展形)。缺失 == false。"
+        },
         "sync_status": {"$ref": "_common.schema.json#/$defs/sync_status"},
         "notion_page_id": {"type": ["string", "null"]},
         "notion_thread_id": {"type": ["string", "null"]},

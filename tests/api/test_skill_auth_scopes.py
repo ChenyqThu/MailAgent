@@ -162,7 +162,10 @@ def test_drafter_key_can_create_draft(skill_client, api_key_store, monkeypatch):
 
 
 def test_handoff_key_can_run_report(skill_client, api_key_store, monkeypatch):
-    """有 report:run 的 handoff key → report_run 不被 scope 拦（→ 200）。"""
+    """有 report:run 的 handoff key → report_run 不被 scope 拦（带 confirm 后 → 200）。
+
+    两道闸是叠加的：scope 决定「够不够格调」，confirm 决定「这一次算不算点了头」。
+    """
     monkeypatch.setattr(auth_mod, "AUTH_DISABLED", False)
 
     async def _fake_run(*, store, db_path, agent, **kwargs):
@@ -176,9 +179,27 @@ def test_handoff_key_can_run_report(skill_client, api_key_store, monkeypatch):
 
     monkeypatch.setattr("src.reports.worker.run_report_once", _fake_run)
     headers, _ = _bearer(api_key_store, ["report:read", "report:run"])
-    r = skill_client.post(
+
+    # 🔴 2026-07-27 审计（P0）：scope 通过**不等于**可以跑。report_run 是 preview tier，
+    # 直调面同样要求 confirm:true —— 这条断言以前不存在，于是「持 report:run 的外部 key
+    # 无 confirm 连续烧 LLM」正是该漏洞的形状（invoke.py 的 confirm 闸原先只判 edit）。
+    r_no_confirm = skill_client.post(
         "/api/skills/invoke",
         json={"skill": "report", "tool": "report_run", "input": {"agent_id": "daily"}},
+        headers=headers,
+    )
+    assert r_no_confirm.status_code == 403, r_no_confirm.text
+    assert r_no_confirm.json()["error"]["code"] == "E_AUTH_FAILED"
+
+    # 带 confirm → scope 闸确认不拦（本用例的本意）。
+    r = skill_client.post(
+        "/api/skills/invoke",
+        json={
+            "skill": "report",
+            "tool": "report_run",
+            "input": {"agent_id": "daily"},
+            "confirm": True,
+        },
         headers=headers,
     )
     assert r.status_code == 200, r.text

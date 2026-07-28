@@ -72,7 +72,14 @@ def test_invoke_report_run_then_get(skill_client, monkeypatch):
 
     r = skill_client.post(
         "/api/skills/invoke",
-        json={"skill": "report", "tool": "report_run", "input": {"agent_id": "daily"}},
+        json={
+            "skill": "report",
+            "tool": "report_run",
+            "input": {"agent_id": "daily"},
+            # 2026-07-27 审计（P0）后 report_run 是 preview tier → 直调面同样要求 confirm:true。
+            # 这条断言以前**没有** confirm 也是 200 —— 那正是漏洞本身（见下面的 preview 闸用例）。
+            "confirm": True,
+        },
     )
     assert r.status_code == 200, r.text
     run_data = r.json()["data"]
@@ -138,6 +145,108 @@ async def test_email_send_threads_confirm_to_service(monkeypatch):
     )
     assert captured["confirmed"] is True
     assert res["sent"] is True
+
+
+# ── preview tier 直调闸（2026-07-27 审计 P0）─────────────────────────────────
+# invoke.py 的 confirmation gate 以前只判 `== "edit"` → preview 层在直调面等于无门
+# （confirmation_tier 全仓再无第二个 gating 读点）。唯一的 preview 工具 report_run
+# 是 external_call + 无 rate_limit + timeout_ms=120000：持 report:run scope 的外部 key
+# 能无 confirm 连续直调，每次烧一次真实 LLM 调用并占线程两分钟。
+#
+# 🔴 下面第一条就是漏洞的复现：改动前它返回 200（且真跑 handler），改动后 403。
+
+
+def test_invoke_preview_tier_without_confirm_403(skill_client, monkeypatch):
+    """preview tier 无 confirm → 403 E_AUTH_FAILED，且 handler **根本没被调用**。
+
+    「不进 dispatch」是本闸的要点：report_run 的代价发生在 handler 里（LLM 调用 + 120s
+    线程占用），闸若只在返回值上把关就等于没把关。
+    """
+    called = {"n": 0}
+
+    async def _fake_run(*, store, db_path, agent, **kwargs):
+        called["n"] += 1
+        return "rep-should-not-happen"
+
+    monkeypatch.setattr("src.reports.worker.run_report_once", _fake_run)
+
+    r = skill_client.post(
+        "/api/skills/invoke",
+        json={"skill": "report", "tool": "report_run", "input": {"agent_id": "daily"}},
+    )
+    assert r.status_code == 403, r.text
+    assert r.json()["error"]["code"] == "E_AUTH_FAILED"
+    # 错误文案要报出真实 tier（不能仍写死 "edit"，否则调用方照着改也修不好）。
+    assert "preview" in r.json()["error"]["message"]
+    assert called["n"] == 0, "confirm 闸必须在 dispatch 之前拒，绝不能先跑 LLM 再报错"
+
+
+def test_invoke_preview_tier_with_confirm_passes(skill_client, monkeypatch):
+    """带 confirm=true → 闸放行，handler 真跑（证明这道闸只挡无 confirm，不是把工具封死）。"""
+    called = {"n": 0}
+
+    async def _fake_run(*, store, db_path, agent, **kwargs):
+        called["n"] += 1
+        rid = "rep-confirmed"
+        store.create_report(
+            report_id=rid,
+            agent_id=agent["id"],
+            cadence="daily",
+            report_date="2026-06-02",
+            window_start="2026-06-02T00:00:00Z",
+            window_end="2026-06-03T00:00:00Z",
+        )
+        store.finish_report(
+            rid, status="ready", headline="confirmed digest", blocks_json='{"blocks": []}',
+            counts_json='{"total": 1}',
+        )
+        return rid
+
+    monkeypatch.setattr("src.reports.worker.run_report_once", _fake_run)
+
+    r = skill_client.post(
+        "/api/skills/invoke",
+        json={
+            "skill": "report",
+            "tool": "report_run",
+            "input": {"agent_id": "daily"},
+            "confirm": True,
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["data"]["report_id"] == "rep-confirmed"
+    assert called["n"] == 1
+
+
+def test_invoke_none_tier_still_needs_no_confirm(skill_client):
+    """🔴 收窄不许越界：tier=none 的读工具**不**被这次改动波及（否则等于把整个直调面封了）。
+
+    report_get 是 tier=none —— 无 confirm 必须照常 200。
+    """
+    r = skill_client.post(
+        "/api/skills/invoke",
+        json={"skill": "report", "tool": "report_get", "input": {"report_id": "rep-1"}},
+    )
+    assert r.status_code == 200, r.text
+
+
+@pytest.mark.asyncio
+async def test_preview_tier_confirm_gate_rejects_truthy_non_true(monkeypatch):
+    """preview 层与 edit 层共用同一条严格身份判定：confirm="true" / 1 等真值不算确认。
+
+    与既有的 test_confirm_gate_requires_strict_true（edit 层）成对 —— 收窄 tier 时若有人
+    顺手把 `is not True` 改成 truthiness，两条一起红。
+    """
+    from src.skills.errors import SkillError
+    from src.skills.invoke import invoke_skill
+
+    for truthy in ("true", "True", "yes", 1, [1], {"ok": 1}):
+        with pytest.raises(SkillError) as ei:
+            await invoke_skill(
+                None, "report", "report_run", {"agent_id": "daily"}, confirm=truthy,
+            )
+        assert ei.value.http_status == 403, f"confirm={truthy!r} must NOT confirm"
+        assert ei.value.code == "E_AUTH_FAILED"
 
 
 # ── notion_agent 直调闸（codex HIGH-2）────────────────────────────────────────

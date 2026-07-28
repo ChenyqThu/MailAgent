@@ -178,17 +178,26 @@ async def invoke_skill(
                 hint="the notion_agent skill must be enabled before it can be invoked",
             )
 
-    # confirmation gate：edit 层（发信/草稿等）必须显式布尔 True（永远 edit confirmation）。
+    # confirmation gate：edit 层（发信/草稿等）与 preview 层都必须显式布尔 True。
     # 🔴 用 `is not True`（严格身份），**绝不** truthiness：否则 confirm="false" / "no" / 1
     # 等真值字符串/数字会击穿确认闸（codex review blocker）。本层是 REST + MCP 共用的唯一
     # chokepoint，严格判定在此一处把死。
-    if tdef.confirmation_tier == "edit" and confirm is not True:
+    #
+    # 🔴 2026-07-27 审计（P0）：这里以前只判 `== "edit"`，于是 preview 层在直调面**等于无门**
+    # ——`confirmation_tier` 全仓再无第二个 gating 读点（其余出现处都是持久化/模型定义），
+    # gateway 侧的人审只管 gateway 自己那条路。唯一的 preview 工具是 `report_run`
+    # （builtin/report.py），side_effect=external_call：一个持 `report:run` scope 的外部 Bearer
+    # key 可以无 confirm 连续直调它，每次烧一次真实 LLM 调用并占线程至 120s（timeout_ms），
+    # 且该 tool 没有 rate_limit。tier 的语义是「要人点头」，preview 与 edit 的差别是**卡片长
+    # 什么样**，不是「可以不点头」——所以直调面对两者一视同仁要求 confirm:true。
+    if tdef.confirmation_tier in ("edit", "preview") and confirm is not True:
         raise SkillError(
             "E_AUTH_FAILED",
-            f"tool {skill_name}.{tool_name} is confirmation_tier=edit; "
+            f"tool {skill_name}.{tool_name} is confirmation_tier={tdef.confirmation_tier}; "
             "caller must pass confirm=true (JSON boolean)",
             http_status=403,
-            hint="send/draft tools always require an explicit boolean true confirmation",
+            hint="tools that require confirmation (edit / preview tier) always need an "
+            "explicit boolean true confirmation",
         )
 
     _validate_input(tdef.input_schema, params)

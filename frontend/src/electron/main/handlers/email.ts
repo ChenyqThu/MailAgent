@@ -21,17 +21,17 @@ import {
 } from '@shared/lib/ai_mapping'
 import type { AIFields, EmailMeta, EnrichedEmailMeta, MailboxSummary } from '@shared/api/types'
 import { DRAFTS_EXCLUDE_SQL, mailboxFilterLabels } from '@shared/lib/mailboxSemantics'
-import type {
-  EmailGet_EmailRecord,
-  AttachmentList_AttachmentItem,
-  MailagentEmailBody
-} from '@shared/types/cli.gen'
+import type { EmailGet_EmailRecord, MailagentEmailBody } from '@shared/types/cli.gen'
 import {
   EMAIL_BODY_HTML_SOURCE_CHARS,
   EMAIL_BODY_PREVIEW_CHARS,
   EMAIL_BODY_PREVIEW_THRESHOLD_BYTES,
   previewHtml
 } from '../lib/email-body-preview'
+
+/** email get 内嵌附件项 —— 直接从 schema 生成型取, 随 email-get.schema.json 自动跟随
+ *  (手抄一份字段列表就是漂移源)。**不是** attachment:list 的 12 字段形。 */
+type NestedAttachment = NonNullable<EmailGet_EmailRecord['attachments']>[number]
 
 // ---- request shapes (renderer-side mirrors shared/api/types.ts) -------------
 
@@ -166,10 +166,14 @@ function shapeListItem(row: EmailMetadataRow): EmailMeta {
   }
 }
 
-function shapeAttachment(row: AttachmentRow): AttachmentList_AttachmentItem {
+// email get 内嵌附件 = 11 字段, **不含** internal_id —— 对齐 email-get.schema.json 的
+// attachments.items 与 Python wire.attachment_to_dict 的默认形 (后者在 wire.py 注释
+// gotcha #1 里是有意决定, 且被 tests/cli/test_wire_parity.py 钉死)。内嵌位置上
+// internal_id 是纯冗余 (恒 == 记录自身的 internal_id); 真正需要它的是独立的
+// attachment:list 面, 那条路径有自己的 shaper (handlers/attachment.ts:34)。
+function shapeNestedAttachment(row: AttachmentRow): NestedAttachment {
   return {
     id: row.id,
-    internal_id: row.internal_id,
     filename: row.filename,
     size_bytes: row.size_bytes,
     content_type: row.content_type,
@@ -200,6 +204,10 @@ function shapeFullRecord(
     mailbox: meta.mailbox ?? '',
     is_read: asBool(meta.is_read),
     is_flagged: asBool(meta.is_flagged),
+    // Python wire.meta_to_dict(include_important=True) 同款 —— 两侧都是「非空 bool，
+    // NULL/0 → false」(Python bool(row[...]) / 这里 asBool)。漏投影时 EmailDetail 的
+    // ❗ 徽标永不渲染、draft-edit 静默丢高重要性 (2026-07-27 审计)。
+    is_important: asBool(meta.is_important),
     sync_status: asSyncStatus(meta.sync_status),
     notion_page_id: meta.notion_page_id,
     notion_thread_id: meta.notion_thread_id,
@@ -207,7 +215,7 @@ function shapeFullRecord(
     sync_error: meta.sync_error,
     retry_count: meta.retry_count ?? 0,
     body: null,
-    attachments: attachments.map(shapeAttachment)
+    attachments: attachments.map(shapeNestedAttachment)
   }
 }
 

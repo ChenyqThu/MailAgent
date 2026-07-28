@@ -46,8 +46,20 @@ export interface AgentRunSpec {
   }
   /** Agent model override; null/absent → the gateway default model. */
   model?: string | null
-  /** Per-agent tool narrowing (D6). allowedTools absent → no narrowing (full matrix set); [] →
-   *  owner explicitly selected zero tools (the gateway intersection empties). */
+  /** Per-agent tool narrowing. 🔴 **Fail-closed, never widening** — absent does NOT mean
+   *  "no narrowing".
+   *
+   *  S5 ADR-004 §5.1 (an explicit revision of ADR-003 D6, which this comment used to describe):
+   *    - owner never configured it (NULL / key missing in the DB row) → the Python projection
+   *      substitutes the **default safe set** (`DEFAULT_CUSTOM_AGENT_ALLOWED_TOOLS`), server-side;
+   *    - owner-supplied list → verbatim (still ∩ the gateway matrix floor);
+   *    - explicit [] → the empty set (zero tools).
+   *  So on the wire `allowedTools` is ALWAYS a resolved array — a spec that omits or malforms it
+   *  is a broken spec, and the gateway collapses it to [] rather than re-deriving a default
+   *  (`agentRun.ts:agentRunContextFromSpec`, "missing / non-array → []").
+   *
+   *  Authoritative projection: `src/api/routers/agent_runs.py::_assemble_spec` (~:284-292).
+   *  Never re-derive the default here — a second derivation is how the two halves drift apart. */
   toolPolicy?: { allowedTools?: string[] }
   budget: { maxSteps: number; maxRunSeconds: number }
   fallbackModels?: string[]
@@ -209,6 +221,14 @@ export interface ChatToolCall {
   /** Phase 04b (v12) — outbound-send content hash + idempotency key (email_prepare_send only). */
   content_hash?: string | null
   idempotency_key?: string | null
+  /** S2 W1 (v18) — exec tools only: the PolicyRule id that auto-allowed the run without a card
+   *  (approval_status='auto_whitelist'). NULL for card-approved / read / legacy rows. Optional
+   *  (absent on rows from a pre-v18 DB / older serve-api JSON).
+   *  🔴 同 `ui_message_json` 的手抄漏改：v18 加列时只更新了 `src/shared/chat_model.ts`，这份
+   *  API 边界投影漏了。两条读路径都是 `SELECT * FROM chat_tool_call`（桌面
+   *  chat_db/tool_calls.ts、远程 src/chat/db.py），所以这列一直在 wire 上传 —— 缺的是类型，
+   *  于是它在对 wire 形状撒谎。现由 tests/config/test_chat_type_mirror_parity.py 钉住。 */
+  whitelist_rule_id?: number | null
   created_at: number
   updated_at: number
 }

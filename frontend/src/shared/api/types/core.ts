@@ -24,13 +24,15 @@ export type EmailMeta = EmailList_EmailListItem & {
   snippet: string | null
 }
 /**
- * EmailDetail = schema-typed EmailGet_EmailRecord + the fields the Electron
- * main handler returns that the cli-schema codegen doesn't yet expose.
- * Sprint 14 should fold these into email-get.schema.json + `pnpm gen:types`.
+ * EmailDetail = schema-typed EmailGet_EmailRecord (+ historically, fields the
+ * codegen didn't expose).
  *
  *   - `is_important` — v9 RFC-header importance bit, written by
- *     `reader._parse_importance` and surfaced verbatim by
- *     `handlers/email.ts:520` (asBool of the SQLite column).
+ *     `reader._parse_importance`. Folded into email-get.schema.json (optional:
+ *     CLI `email get` omits it, serve-api + desktop IPC emit it), so the codegen
+ *     now carries it. The intersection is kept because `cli.gen.ts` is a
+ *     gitignored postinstall artifact — a stale local copy would otherwise drop
+ *     the field and break `EmailDetail.tsx`'s ❗ badge at compile time.
  */
 export type EmailDetail = EmailGet_EmailRecord & {
   is_important?: boolean

@@ -10,6 +10,12 @@
 //
 // 这些类型 1:1 对齐 ai_chat.db 的 ai_chat_sessions / ai_chat_messages /
 // chat_tool_call 三表（CREATE 语句见 chat_db.ts），是 chat 持久化的契约面。
+//
+// 🔴 ChatSession / ChatMessage / ChatToolCall 在 `shared/api/types/chat.ts` 还有**第二份
+// 手抄**（API/IPC 边界投影，renderer 按那份取字段）。加列时两处必须同批改 —— 只改这里
+// 不会有任何报错（两条读路径都 SELECT *，列照传），但边界类型会开始对 wire 形状撒谎。
+// 实测踩过两次：ui_message_json(v9)、whitelist_rule_id(v18)。
+// 对账闸 = tests/config/test_chat_type_mirror_parity.py。
 
 // 'ai-sdk' (P4 Phase 06a cutover) is a persistable session kind: a chat authored through the embedded
 // AI SDK Gateway. The legacy engine never DISPATCHES it (mapStart/mapEdit guard via

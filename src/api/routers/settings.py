@@ -508,8 +508,16 @@ async def get_settings_payload(request: Request):
 
     远程无 ``<userData>/settings.json``（那是 host-local Electron 文件）——
     userEmail 从 .env USER_EMAIL（前端 nav-shell account header 唯一真用字段），
-    其余字段给合理只读默认（dbPath/attachmentDir/notionAgent* null，pollIntervalSec=5，
-    autoDownloadUpdates=true，customApiEndpoint=CUSTOM_API_ENDPOINT env / null）。
+    其余字段给合理只读默认（dbPath/attachmentDir/notionAgent*/signature null，
+    pollIntervalSec=5，autoDownloadUpdates=false，customApiEndpoint=CUSTOM_API_ENDPOINT
+    env / null）。
+
+    🔴 **键集必须与桌面 ``PersistentSettings`` 逐键相同**（闸：
+    tests/config/test_settings_mirror_parity.py）。少一个键不是「web 用不到」——
+    前端是同一批组件读同一个类型，缺键会让该控件在 web 上静默退化成禁用/空态。
+    实测：``signature`` 曾缺席 → 远程 web 的 compose「签名」按钮永久禁用
+    （ComposePanel 读 ``settings.signature``），无任何报错（2026-07-27 审计 P1）。
+    值可以按传输端不同（下面几个 host-local 字段远程恒 None），**键不可以**。
     """
     from src.api.deps import get_settings as _get_config
 
@@ -523,8 +531,18 @@ async def get_settings_payload(request: Request):
         "notionAgentPageId": None,
         "notionAgentName": None,
         "customApiEndpoint": custom_endpoint,
-        "autoDownloadUpdates": True,
+        # 桌面 DEFAULTS 是 False（handlers/settings.ts：detect → 手动点下载）。远程无
+        # updater、该值无消费者，取 False 只为不让两侧默认相反（审计 #11：反向默认是
+        # 「等哪天 web 长出 updater 就当场行为分叉」的潜伏雷）。
+        "autoDownloadUpdates": False,
         "userEmail": user_email,
+        # 🔴 host-local：签名存在 Electron 的 <userData>/settings.json，Python 侧**没有**
+        # 任何存储面，serve-api 也没有被注入该文件的路径（backend_lifecycle 只注入
+        # MAILAGENT_PROJECT_ROOT / MAILAGENT_ENV_FILE / SYNC_STORE_DB_PATH）。故这里恒
+        # None = 类型诚实（键在、值空），远程 compose 的「签名」按钮保持禁用。要让远程
+        # 真能取到签名，需要 owner 拍板给 serve-api 一条读 Electron settings.json 的路
+        # （新增跨进程文件依赖），不在本次镜像对账范围内。
+        "signature": None,
     }
     return success_envelope(payload, request=request, source="config")
 

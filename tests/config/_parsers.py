@@ -32,6 +32,10 @@ SETTINGS_PY = REPO_ROOT / "src" / "api" / "routers" / "settings.py"
 ELECTRON_VITE = REPO_ROOT / "frontend" / "electron.vite.config.ts"
 WEB_VITE = REPO_ROOT / "frontend" / "vite.web.config.ts"
 GATEWAY_LIFECYCLE = REPO_ROOT / "frontend" / "src" / "electron" / "main" / "ai_gateway_lifecycle.ts"
+EMAIL_HANDLER_TS = REPO_ROOT / "frontend" / "src" / "electron" / "main" / "handlers" / "email.ts"
+SETTINGS_HANDLER_TS = REPO_ROOT / "frontend" / "src" / "electron" / "main" / "handlers" / "settings.ts"
+SETTINGS_TYPES_TS = REPO_ROOT / "frontend" / "src" / "shared" / "api" / "types" / "settings.ts"
+EMAIL_ROUTER_PY = REPO_ROOT / "src" / "api" / "routers" / "email.py"
 
 
 def _read(path: Path) -> str:
@@ -357,6 +361,192 @@ def parse_py_key_collection(
             continue
         return _string_literals_of(stmt.value, f"{path.name}:{name}")
     raise AssertionError(f"{path.name}: 没找到模块级 `{name} = [...]` 赋值 —— 解析器需更新")
+
+
+# =============================================================================
+# TS 投影 / 类型的字段集（wire 形状对账用）
+# =============================================================================
+
+# 行注释先剥掉，避免注释里的 `foo: bar` 被当成字段。字符串里的 `//` 不在这些
+# 目标块里出现（都是 `key: expr` 形式），故按行剥是安全的。
+_TS_LINE_COMMENT_RE = re.compile(r"(?m)//.*$")
+# 块内某一层的 `key:` / `'key':` / `"key":`（行首缩进后）。
+_TS_OBJ_KEY_RE = re.compile(r"""(?m)^\s*(?:'([A-Za-z_$][\w$]*)'|"([A-Za-z_$][\w$]*)"|([A-Za-z_$][\w$]*))\s*[?]?\s*:""")
+
+
+def _balanced_block(src: str, open_idx: int, label: str) -> str:
+    """从 ``src[open_idx]``（必须是 `{`）取到配对 `}` 的整块（含两端）。"""
+    if src[open_idx] != "{":
+        raise AssertionError(f"{label}: 期望 `{{` 起始 —— 解析器需更新")
+    depth = 0
+    for i in range(open_idx, len(src)):
+        if src[i] == "{":
+            depth += 1
+        elif src[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return src[open_idx : i + 1]
+    raise AssertionError(f"{label}: 大括号未闭合 —— 解析器需更新")
+
+
+def _top_level_keys(block: str, label: str) -> Set[str]:
+    """对象字面量块 → **顶层** key 集（嵌套子对象的 key 不算）。
+
+    做法：先剥行注释，再逐字符扫描按大括号深度过滤 —— 只保留 depth==1 的 `key:`。
+    """
+    block = _TS_LINE_COMMENT_RE.sub("", block)
+    # 逐行记录该行起始处的深度，只收深度为 1 的行上的 key。
+    keys: Set[str] = set()
+    depth = 0
+    for line in block.splitlines():
+        line_start_depth = depth
+        for ch in line:
+            if ch in "{[(":
+                depth += 1
+            elif ch in "}])":
+                depth -= 1
+        if line_start_depth != 1:
+            continue
+        m = _TS_OBJ_KEY_RE.match(line)
+        if m:
+            keys.add(m.group(1) or m.group(2) or m.group(3))
+    if not keys:
+        raise AssertionError(f"{label}: 对象字面量里一个 key 都没解析到 —— 解析器需更新")
+    return keys
+
+
+def parse_ts_return_object_keys(
+    func_name: str, path: Path = EMAIL_HANDLER_TS, src: Optional[str] = None
+) -> Set[str]:
+    """TS 里 ``function <name>(...) : T { return { ... } }`` 的返回对象顶层 key 集。
+
+    用于把「TS 手写投影」与「Python wire 投影」对账。找不到函数 / 找不到
+    `return {` → 抛错（🔴 抽取失败必须红，绝不返回空集让对账平凡通过）。
+    """
+    src = src if src is not None else _read(path)
+    label = f"{path.name}:{func_name}"
+    m = re.search(rf"function\s+{re.escape(func_name)}\s*\(", src)
+    if m is None:
+        raise AssertionError(f"{label}: 没找到 `function {func_name}(` —— 解析器需更新")
+    ret = src.find("return {", m.end())
+    if ret == -1:
+        raise AssertionError(f"{label}: 函数体里没找到 `return {{` —— 解析器需更新")
+    return _top_level_keys(_balanced_block(src, src.index("{", ret), label), label)
+
+
+def parse_ts_interface_keys(
+    iface_name: str, path: Path, src: Optional[str] = None
+) -> Set[str]:
+    """TS ``export interface <Name> { ... }`` 的顶层字段名集（`?` 可选标记不影响）。"""
+    src = src if src is not None else _read(path)
+    label = f"{path.name}:{iface_name}"
+    m = re.search(rf"(?:export\s+)?interface\s+{re.escape(iface_name)}\b[^{{]*", src)
+    if m is None:
+        raise AssertionError(f"{label}: 没找到 `interface {iface_name}` —— 解析器需更新")
+    return _top_level_keys(_balanced_block(src, src.index("{", m.end() - 1), label), label)
+
+
+def parse_ts_const_object_keys(
+    const_name: str, path: Path, src: Optional[str] = None
+) -> Set[str]:
+    """TS ``const <NAME>[: T] = { ... }`` 的顶层 key 集（如 handlers/settings.ts 的 DEFAULTS）。"""
+    src = src if src is not None else _read(path)
+    label = f"{path.name}:{const_name}"
+    m = re.search(rf"const\s+{re.escape(const_name)}\b[^=]*=\s*", src)
+    if m is None:
+        raise AssertionError(f"{label}: 没找到 `const {const_name} =` —— 解析器需更新")
+    if m.end() >= len(src) or src[m.end()] != "{":
+        raise AssertionError(f"{label}: `const {const_name} =` 右值不是对象字面量 —— 解析器需更新")
+    return _top_level_keys(_balanced_block(src, m.end(), label), label)
+
+
+# =============================================================================
+# Python dict 字面量的 key 集（AST，用于 router 里手组的 payload）
+# =============================================================================
+
+
+def parse_py_dict_literal_keys(
+    var_name: str, path: Path, src: Optional[str] = None, *, func_name: Optional[str] = None
+) -> Set[str]:
+    """某 .py 里 ``<var> = { "k": v, ... }`` 的字符串 key 集（AST，可限定在某函数内）。
+
+    ``func_name`` 给定时只在该函数体内找（模块级同名变量不干扰）。找不到赋值 /
+    右值不是 dict 字面量 / 含非字符串常量 key → 抛错（不静默返回空集）。
+    """
+    tree = ast.parse(src if src is not None else _read(path))
+    label = f"{path.name}:{var_name}" + (f" (in {func_name})" if func_name else "")
+
+    scope: List[ast.AST] = []
+    if func_name:
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == func_name:
+                scope = list(node.body)
+                break
+        if not scope:
+            raise AssertionError(f"{label}: 没找到函数 `{func_name}` —— 解析器需更新")
+    else:
+        scope = list(tree.body)
+
+    for node in scope:
+        for stmt in ast.walk(node):
+            target: Optional[str] = None
+            if isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
+                target = stmt.target.id
+            elif (
+                isinstance(stmt, ast.Assign)
+                and len(stmt.targets) == 1
+                and isinstance(stmt.targets[0], ast.Name)
+            ):
+                target = stmt.targets[0].id
+            if target != var_name or stmt.value is None:
+                continue
+            if not isinstance(stmt.value, ast.Dict):
+                raise AssertionError(f"{label}: 右值不是 dict 字面量 —— 解析器需更新")
+            keys: Set[str] = set()
+            for k in stmt.value.keys:
+                if not (isinstance(k, ast.Constant) and isinstance(k.value, str)):
+                    raise AssertionError(f"{label}: 含非字符串常量 key（如 `**spread`）—— 解析器需更新")
+                keys.add(k.value)
+            if not keys:
+                raise AssertionError(f"{label}: dict 字面量为空 —— 解析器需更新")
+            return keys
+    raise AssertionError(f"{label}: 没找到 `{var_name} = {{...}}` 赋值 —— 解析器需更新")
+
+
+def parse_py_subscript_assign_keys(
+    var_name: str, path: Path, src: Optional[str] = None, *, func_name: Optional[str] = None
+) -> Set[str]:
+    """某 .py 里 ``<var>["k"] = ...`` 形式赋的字符串 key 集（router 在 dict 之外追加的字段）。
+
+    用于把「路由额外组装了哪些键」变成可机检事实, 而不是测试里手抄一个常量。
+    ``func_name`` 必须给定到具体端点函数 —— 同一个 router 文件里别的端点也用
+    ``data[...]``（如 search 的 parse_warnings）, 全模块扫会把它们混进来。
+    """
+    tree = ast.parse(src if src is not None else _read(path))
+    root: ast.AST = tree
+    if func_name:
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == func_name:
+                root = node
+                break
+        else:
+            raise AssertionError(
+                f"{path.name}: 没找到函数 `{func_name}` —— 解析器需更新"
+            )
+    keys: Set[str] = set()
+    for node in ast.walk(root):
+        if not isinstance(node, ast.Assign):
+            continue
+        for tgt in node.targets:
+            if (
+                isinstance(tgt, ast.Subscript)
+                and isinstance(tgt.value, ast.Name)
+                and tgt.value.id == var_name
+                and isinstance(tgt.slice, ast.Constant)
+                and isinstance(tgt.slice.value, str)
+            ):
+                keys.add(tgt.slice.value)
+    return keys
 
 
 # =============================================================================
