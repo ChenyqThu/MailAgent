@@ -50,7 +50,10 @@ router = APIRouter(prefix="/api", tags=["settings"])
 # (``MANAGED_ENV_KEYS`` + ``SECRET_ENV_KEYS``). 远程 ``GET /api/env`` 只返回
 # 受管 key 的值 —— 安全边界: 绝不把非受管的 os.environ 值出网 (那会泄漏 shell
 # 里的任意密钥)。secret key 值脱敏成 '***' (set) / '' (unset), 复刻 env.ts
-# ``redactSnapshot``。**新增受管 key 须同步两处** (这里 + env-keys.ts)。
+# ``redactSnapshot``。**新增受管 key 须同步两处** (这里 + env-keys.ts) —— 该约束现由
+# ``tests/config/test_managed_env_keys_parity.py`` 机器对账 (两份手抄白名单 + 两份脱敏集
+# 各须集合相等)，漏一侧当场红。此前无闸时已漂了 9 个键: 三个 CALDAV 日历键只在这里 (桌面
+# 存不进去)、六个只在 env-keys.ts (远程 web 读回空)。
 _MANAGED_ENV_KEYS: List[str] = [
     # — Accounts
     "NOTION_TOKEN",
@@ -78,6 +81,10 @@ _MANAGED_ENV_KEYS: List[str] = [
     "DAVMAIL_POLL_INTERVAL_SEC",
     "DAVMAIL_CALDAV_PORT",
     "DAVMAIL_FOLDER_SIZE_LIMIT",
+    # 草稿箱同步 / 入向已读回收 (AccountsTab davmail 面板的两个开关)。
+    # (DAVMAIL_ROOT 有意不受管 —— 裸路径输入框是错解, 见 env-keys.ts 同位注释。)
+    "DRAFTS_SYNC_ENABLED",
+    "MAILAGENT_INBOUND_READ_RECONCILE_ENABLED",
     # — Sync
     "SYNC_DATE_MODE",
     "SYNC_START_DATE",
@@ -85,7 +92,6 @@ _MANAGED_ENV_KEYS: List[str] = [
     "SYNC_MAILBOXES",
     "RADAR_POLL_INTERVAL",
     "REVERSE_SYNC_INTERVAL",
-    "SYNC_MODE",
     "CALENDAR_SYNC_MODE",
     "CALENDAR_PAST_DAYS",
     "CALENDAR_FUTURE_DAYS",
@@ -93,13 +99,22 @@ _MANAGED_ENV_KEYS: List[str] = [
     "CALENDAR_CALDAV_SYNC_POLL_INTERVAL_SEC",
     "CALENDAR_CALDAV_SYNC_WINDOW_PAST_DAYS",
     "CALENDAR_CALDAV_SYNC_WINDOW_FUTURE_DAYS",
-    # — Folder sync (多文件夹同步窗口; SYNC_FOLDERS 白名单走 folder API 不在此列)
+    # 会前提醒提前量 (Lane 2 #4, 分钟, 默认 10; AccountsTab 日历面 davmail 分支)。
+    "CALENDAR_REMINDER_LEAD_MINUTES",
+    # — Folder sync (多文件夹同步窗口; SYNC_FOLDERS 白名单走 folder API 不在此列。
+    # FOLDER_NOTIFY_ENABLED / FOLDER_LLM_DISABLED 有意不受管 —— JSON 裸文本框是
+    # 错解, 正解 = 文件夹 UI per-folder 双勾, 排后续版本, 见 env-keys.ts 同位注释)
     "FOLDER_SYNC_PAST_DAYS",
     "FOLDER_SYNC_MAX_MESSAGES",
     # — Backend selection
     "MAILAGENT_BACKEND",
     # — Daily digest
     "MAILAGENT_DAILY_DIGEST_ENABLED",
+    # 巡检钟点 (Lane 2 #3, 逗号分隔小时, 本机时区, 默认 9,18; IslandUpdatesTab 巡检区)。
+    "MAILAGENT_DAILY_DIGEST_HOURS",
+    # — Report agents (Lane 2 #10, AgentsTab 报告区总闸; 与 report 行 enabled 是 OR 语义,
+    # flag 开 = worker 常驻, 启用报告行不用再重启)。
+    "MAILAGENT_REPORT_AGENT_ENABLED",
     # — AI Agent
     "LLM_AGENT_ENABLED",
     "LLM_API_BASE",
@@ -109,11 +124,19 @@ _MANAGED_ENV_KEYS: List[str] = [
     "LLM_TRANSLATE_API_KEY",
     "LLM_TRANSLATE_MODEL",
     "LLM_FALLBACK_MODELS",
+    # serve-api 经 dotenv_values 热读（AiTab 启用模型多选写它，翻它不需重启后端）。
+    "LLM_ENABLED_MODELS",
     "LLM_CONTEXT_PAGE_ID",
     "LLM_INBOX_PROMPT_PATH",
     "LLM_SENT_PROMPT_PATH",
     "LLM_CACHE_ENABLED",
     "LLM_CACHE_TTL",
+    # memory.md auto-capture 抽取模型（CustomAiSection 的下拉写它）。
+    "MEMORY_CAPTURE_MODEL",
+    # AI 记忆双开关 (Lane 2 #8, 均默认 ON)。CAPTURE = gateway 启动读一次 (restart);
+    # RETRIEVAL = chat.py 每请求 dotenv_values 热读 (保存即生效)。
+    "MAILAGENT_MEM0_CAPTURE",
+    "MAILAGENT_MEM0_RETRIEVAL",
     # — Web search (agent web_search provider). Tavily key（逗号分隔多 key 额度轮换）；
     # 留空 → 回落 DuckDuckGo。web.py 经 get_settings() 读，TAVILY_API_KEY 入 _SECRET 脱敏。
     "TAVILY_API_KEY",
@@ -138,6 +161,8 @@ _MANAGED_ENV_KEYS: List[str] = [
     "PROJECT_PROGRESS_SUBJECT_PATTERN",
     "PROJECT_PROGRESS_SENDER",
     "OFFICE_CONVERT_ENABLED",
+    # 附件 OCR (Lane 2 #9, macOS Vision 本地识别, 无网络出口, 默认 ON)。
+    "MAILAGENT_ATTACHMENT_OCR_ENABLED",
     "STATS_REPORT_URL",
     "STATS_REPORT_INTERVAL",
     "STATS_REPORT_TOKEN",
@@ -152,6 +177,10 @@ _MANAGED_ENV_KEYS: List[str] = [
     "MAILAGENT_OUTBOX_POLL_INTERVAL_SEC",
     "MAILAGENT_OUTBOX_MAX_ATTEMPTS",
     "MAILAGENT_OUTBOX_CONCURRENCY",
+    # 防休眠保活 (Lane 2 #5)。ENABLED 默认 false; DIM 默认 true。davmail 模式下
+    # service.py 自动禁用 keep-alive —— UI helper 已如实说明。
+    "KEEP_ALIVE_ENABLED",
+    "KEEP_ALIVE_DIM",
     # — KOS
     "MAILAGENT_KOS_CONSUMER_ENABLED",
     "MAILAGENT_KOS_L1_HOT_BLOCK_ENABLED",
@@ -162,9 +191,22 @@ _MANAGED_ENV_KEYS: List[str] = [
     "KOS_MCP_BASE",
     "KOS_OAUTH_CLIENT_ID",
     "KOS_OAUTH_CLIENT_SECRET",
+    # producer (推送邮件入库) 的**另一套**凭据 (issue #64)，不是上面两个 KOS_OAUTH_CLIENT_*。
+    # CLIENT_SECRET 入 _SECRET_ENV_KEYS 脱敏回传 (同 KOS_OAUTH_CLIENT_SECRET)。
+    "MAILAGENT_BULK_CLIENT_ID",
+    "MAILAGENT_BULK_CLIENT_SECRET",
+    # 入库范围两半 (Lane 2 #2, issue #49): floor = 重要度门槛 (五值, 默认 normal);
+    # require_labeled = 未标注邮件算不算数 (默认 false, 🔴 默认值不动)。
+    "KOS_INGEST_PRIORITY_FLOOR",
+    "KOS_REQUIRE_LABELED",
     # — Island
     "PING_ISLAND_ENABLED",
     "ISLAND_SOCKET_PATH",
+    # 邮件弹卡范围 (Lane 2 #1): important (默认) = 仅重要弹卡; all = 每封都弹。
+    "ISLAND_MAIL_NOTIFY_SCOPE",
+    # 岛外观 (Lane 2 #10 追加): 主题色六选一 + 明暗二选一, 默认 coral / dark。
+    "ISLAND_ACCENT",
+    "ISLAND_THEME",
     # — Remote Access
     "MAILAGENT_REMOTE_ACCESS_ENABLED",
     "CF_AUDIENCE",
@@ -195,6 +237,9 @@ _SECRET_ENV_KEYS = {
     # KOS (gbrain) OAuth client_secret — IntegrationsTab KOS Section 写 app .env;
     # Python KOSClient os.getenv 读。脱敏不回 renderer (同其它 secret)。
     "KOS_OAUTH_CLIENT_SECRET",
+    # KOS producer (bulk) client_secret — 与上面那个是两套凭据 (issue #64)。
+    # make_bulk_kos_client() 从 .env 读 (os.getenv); 同样脱敏不回 renderer。
+    "MAILAGENT_BULK_CLIENT_SECRET",
     # codex r4 [HIGH] — these are MANAGED (returned) URLs whose value embeds a
     # credential, so they must be redacted, not sent in plaintext:
     #   ALERT_FEISHU_WEBHOOK_URL — the trailing path segment IS the bot token;

@@ -3,7 +3,7 @@
 // `<details>` + custom chevron, styled to match the Section tile rhythm.
 // Lives at the bottom of RealtimeStorageTab and holds Tier 2 fields —
 // internal tuning knobs that 95% of users never touch (LOG_LEVEL / Outbox
-// 4 项 / SYNC_MODE / STATS_REPORT_INTERVAL / readonly SSE host+port /
+// 4 项 / STATS_REPORT_INTERVAL / readonly SSE host+port /
 // dbPath + attachmentDir folder pickers).
 //
 // 默认 collapsed. 不走 :root --settings-block-gap 变量 (跟 Section 同款),

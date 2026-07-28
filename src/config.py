@@ -129,7 +129,6 @@ class Config(BaseSettings):
     # 日历同步配置
     calendar_database_id: str = Field(default="", env="CALENDAR_DATABASE_ID")
     calendar_name: str = Field(default="日历", env="CALENDAR_NAME")
-    calendar_check_interval: int = Field(default=300, env="CALENDAR_CHECK_INTERVAL")  # 5分钟
     calendar_past_days: int = Field(default=7, env="CALENDAR_PAST_DAYS")
     calendar_future_days: int = Field(default=90, env="CALENDAR_FUTURE_DAYS")
     calendar_sync_mode: str = Field(
@@ -139,7 +138,13 @@ class Config(BaseSettings):
     )
 
     # 混合同步模式配置
-    sync_mode: str = Field(default="hybrid", env="SYNC_MODE", description="同步模式: hybrid / applescript_only")
+    # 🔴 sync_mode 目前**零消费者** —— 全仓（不限后缀）除本行外无任何读点，且 git log -S 显示
+    # 它诞生于 v2 架构重构 15193f10 时就没有实现（同 commit 加入的 calendar_sync_mode 当场
+    # 就有读点，它没有）。2026-07-27 已删掉它的 Settings 控件与两份受管键白名单 —— 那是纯
+    # 止损：留着 UI 等于让用户以为自己能控制一件其实控制不了的事（改了、提示重启、重启后
+    # 什么都不发生）。**字段有意保留**：删它等于替 owner 回答「这个同步模式到底还要不要」，
+    # 那是语义决策不是清理。留着不显示，零成本零风险。要接实现或要彻底删，都需 owner 拍板。
+    sync_mode: str = Field(default="hybrid", env="SYNC_MODE", description="同步模式: hybrid / applescript_only（当前无消费者，见上方注释）")
     radar_poll_interval: int = Field(default=5, env="RADAR_POLL_INTERVAL", description="雷达轮询间隔(秒)")
     reverse_sync_interval: int = Field(default=30, env="REVERSE_SYNC_INTERVAL", description="反向同步间隔(秒)")
     sync_date_mode: str = Field(default="relative", env="SYNC_DATE_MODE", description="日期模式: fixed / relative")

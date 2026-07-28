@@ -898,6 +898,63 @@ function ProjectProgressAgentCard({
   )
 }
 
+// ─── 报告生成服务总闸行（Lane 2 #10，env MAILAGENT_REPORT_AGENT_ENABLED）──────
+// 同型的 PROJECT_PROGRESS_SYNC_ENABLED 总闸早有 UI（周报抽屉），报告总闸此前只能改 .env。
+// 🔴 与项目周报「总闸未开=卡片禁用」不同，这里是 **OR 语义**（service.py:737）：worker
+// 在「flag 开 OR 任一报告行 enabled」时启动。所以 flag 关不等于报告不可用——差别只在
+// 「首次启用某个报告后要不要重启一次」：flag 开 = worker 常驻，启用报告即刻生效；
+// flag 关 = 启动时无 enabled 行则 worker 不在跑，首次启用后需重启一次。按真实语义写
+// hint，不给报告卡加会说谎的「总闸未开」徽标。
+function ReportMasterRow(): React.ReactElement {
+  const { t } = useTranslation()
+  const markRestartRequired = useRestartStore((s) => s.markRestartRequired)
+  const envReady = useEnvStore((s) => s.state.status === 'ready')
+  const masterOn = useEnvStore((s) =>
+    s.state.status === 'ready'
+      ? envFlagOn(s.state.snapshot.values['MAILAGENT_REPORT_AGENT_ENABLED'] ?? '')
+      : false
+  )
+  const handleToggle = async (v: boolean): Promise<void> => {
+    const r = await applyEnvPatch({ MAILAGENT_REPORT_AGENT_ENABLED: v ? 'true' : 'false' })
+    if (!r.ok) {
+      toastError(t('agents.reportsMaster.saveError'), `${r.error.code}: ${r.error.message}`)
+      return
+    }
+    if (r.changedKeys.length > 0) markRestartRequired(r.changedKeys)
+  }
+  return (
+    <div
+      className="flex items-center"
+      style={{
+        gap: 12,
+        padding: '13px 14px',
+        borderRadius: 10,
+        background: 'rgb(var(--ink-2) / 0.55)',
+        border: '1px solid rgb(var(--ink-border))'
+      }}
+    >
+      <div style={{ flex: 1 }}>
+        <div style={{ fontSize: 13.5, fontWeight: 500, color: 'rgb(var(--ink-fg))' }}>
+          {t('agents.reportsMaster.label')}
+        </div>
+        <div style={{ fontSize: 12, color: 'rgb(var(--ink-fg-3))', marginTop: 2 }}>
+          {t('agents.reportsMaster.hint')}
+        </div>
+      </div>
+      <span
+        onClick={(e) => e.stopPropagation()}
+        style={
+          !envReady || IS_WEB
+            ? { opacity: 0.5, pointerEvents: 'none', display: 'flex', flexShrink: 0 }
+            : { display: 'flex', flexShrink: 0 }
+        }
+      >
+        <Switch on={masterOn} onChange={(v) => void handleToggle(v)} />
+      </span>
+    </div>
+  )
+}
+
 // ─── tab ─────────────────────────────────────────────────────────────────────
 export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): React.ReactElement {
   const { t } = useTranslation()
@@ -1052,6 +1109,8 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
               {t('agents.subtitle')}
             </p>
           </div>
+          {/* Lane 2 #10 — env 总闸行（OR 语义，见 ReportMasterRow 注释）。 */}
+          <ReportMasterRow />
           {reportAgents.length > 0 ? (
             reportAgents.map((cfg) => (
               <AgentCard

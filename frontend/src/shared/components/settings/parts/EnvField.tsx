@@ -95,6 +95,21 @@ interface EnvFieldProps {
    *  .env (e.g. TAVILY_API_KEY, read live via dotenv_values), so the "需重启"
    *  banner would be misleading. Defaults false (most keys need a restart). */
   hotReload?: boolean
+  /** toggle-only — how an UNSET key ('' in the snapshot) renders. Default false
+   *  (unset → off), correct for default-false backend flags. Pass true for
+   *  default-ON flags (MAILAGENT_MEM0_CAPTURE 等 cutover 后默认开、显式 false 才
+   *  回退的键): unset must render as ON or the toggle is lying about the actual
+   *  behavior (WebCapabilityRow 先例 — 未设 → 按默认 ON 展示)。Explicit values
+   *  ('true'/'false'/garbage) render the same regardless of this prop. */
+  defaultOn?: boolean
+  /** select-only — render the `placeholder` when the key is UNSET. Radix only
+   *  shows a placeholder for value===''|undefined; EnvField maps '' to a
+   *  sentinel (needed by callers with a real ''-valued option, e.g. AiTab
+   *  LLM_FALLBACK_MODELS), so an unset key otherwise renders a BLANK trigger.
+   *  Opt in for enum keys with a backend default (ISLAND_MAIL_NOTIFY_SCOPE 等):
+   *  unset → value=undefined → placeholder announces the effective default
+   *  (「仅重要（默认）」) instead of blank. Explicit stored values unaffected. */
+  placeholderOnEmpty?: boolean
   className?: string
 }
 
@@ -119,6 +134,8 @@ export function EnvField({
   disabled = false,
   hidden = false,
   hotReload = false,
+  defaultOn = false,
+  placeholderOnEmpty = false,
   className
 }: EnvFieldProps): React.ReactElement | null {
   const { t } = useTranslation()
@@ -261,7 +278,9 @@ export function EnvField({
 
   switch (control) {
     case 'toggle': {
-      const isOn = storeValue === 'true' || storeValue === '1'
+      // Unset ('') renders the backend default (defaultOn); explicit values are
+      // literal. Mirrors WebCapabilityRow's envBool rendering for default-ON keys.
+      const isOn = storeValue === '' ? defaultOn : storeValue === 'true' || storeValue === '1'
       return (
         <Row label={label} helper={helperWithNotice} className={className}>
           <Switch
@@ -282,11 +301,19 @@ export function EnvField({
       const toDisplay = (v: string): string => (v === '' ? SELECT_EMPTY_SENTINEL : v)
       const fromDisplay = (v: string): string => (v === SELECT_EMPTY_SENTINEL ? '' : v)
 
+      // placeholderOnEmpty：未设键传 undefined 让 Radix 走 placeholder 分支
+      // （sentinel 无匹配项时 trigger 是空白，见 prop 注释）。
+      const selectValue =
+        placeholderOnEmpty && storeValue === ''
+          ? undefined
+          : storeValue !== undefined
+            ? toDisplay(storeValue)
+            : undefined
       return (
         <Row label={label} helper={helperWithNotice} className={className}>
           <div className="w-[200px]">
             <Select
-              value={storeValue !== undefined ? toDisplay(storeValue) : undefined}
+              value={selectValue}
               onValueChange={(v) => handleSelect(fromDisplay(v))}
               disabled={effectiveDisabled || submitting}
             >

@@ -11,6 +11,7 @@
 import * as React from 'react'
 
 import { SkillsSection } from './custom-ai/SkillsSection'
+import { MemorySection } from './custom-ai/MemorySection'
 import { UserMdCompileSection } from './custom-ai/UserMdCompileSection'
 import { MemoryCaptureModelSection } from './custom-ai/MemoryCaptureModelSection'
 import { StandingDocsSection } from './custom-ai/StandingDocsSection'
@@ -36,6 +37,8 @@ export function CustomAiSection(): React.ReactElement {
       <div id={SYSTEM_CAP_SCROLL_TARGETS.skillPacks}>
         <SkillPacksSection />
       </div>
+      {/* Lane 2 #8 — 记忆双开关放记忆家族之首 (编译偏好 / 抽取模型都以记忆开着为前提)。 */}
+      <MemorySection />
       <UserMdCompileSection />
       <MemoryCaptureModelSection />
       <StandingDocsSection />

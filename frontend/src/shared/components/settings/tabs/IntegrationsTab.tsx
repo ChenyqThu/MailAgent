@@ -10,6 +10,7 @@
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
 import { useQueryClient } from '@tanstack/react-query'
+import { useNavigate } from '@tanstack/react-router'
 import { AlertTriangle, Check, Loader2, X } from 'lucide-react'
 
 import { useMailApi } from '@shared/hooks/useMailApi'
@@ -17,6 +18,8 @@ import { useKosGate } from '@shared/hooks/useLlmModels'
 import { qk } from '@shared/lib/queryKeys'
 import { Button } from '@shared/components/ui/button'
 import { toastError } from '@shared/state/toast'
+import { useEnvStore } from '@shared/state/env'
+import { envFlagOn } from '@shared/components/agents/shared'
 import type { KosDoctorCheck } from '@shared/api/types'
 import { PageHeader } from '../parts/PageHeader'
 import { Section } from '../parts/Section'
@@ -27,6 +30,49 @@ import { AdvancedDisclosure } from '../parts/AdvancedDisclosure'
 
 function errLabel(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
+}
+
+/** Lane 2 #2 — 「仅推已标注」×「AI 分类关」的静默死锁联动警告 (issue #49 / 审计 §4)。
+ *
+ *  KOS_REQUIRE_LABELED=true 时只放行 AI 明确判定过优先级的邮件, 而「判定过」的唯一
+ *  来源是 AI 邮件预处理 (LLM_AGENT_ENABLED)。两者一开一关 = 入库开着、凭据齐、看板
+ *  显示 active, 但一封都推不进去、零报错。静态 helper 用户不会读 —— 这里按两个 env
+ *  值条件渲染 (读 useEnvStore snapshot, 同 AgentsTab 预处理卡的 envFlagOn pattern),
+ *  并给跳转 Agents 页的链接 (AI 分类的开关在那边)。 */
+function KosRequireLabeledDeadlockWarning(): React.ReactElement | null {
+  const { t } = useTranslation()
+  const navigate = useNavigate()
+  const requireLabeledOn = useEnvStore((s) =>
+    s.state.status === 'ready'
+      ? envFlagOn(s.state.snapshot.values['KOS_REQUIRE_LABELED'] ?? '')
+      : false
+  )
+  const llmAgentEnabled = useEnvStore((s) =>
+    s.state.status === 'ready'
+      ? envFlagOn(s.state.snapshot.values['LLM_AGENT_ENABLED'] ?? '')
+      : false
+  )
+  if (!requireLabeledOn || llmAgentEnabled) return null
+  return (
+    <div className="flex items-start gap-2 px-4 py-3 text-meta">
+      <AlertTriangle className="size-3.5 shrink-0 mt-0.5 text-warn" aria-hidden="true" />
+      <span className="text-warn">
+        {t('settings.integrations.kos.requireLabeled.deadlockWarning', {
+          defaultValue:
+            '「AI 邮件预处理」当前是关闭的——没有任何邮件会被标注优先级，这个开关会让入库完全停止（不会报错，只是静默推不进去）。请先到 Agents 页开启 AI 邮件预处理，或关闭本开关。'
+        })}{' '}
+        <button
+          type="button"
+          onClick={() => void navigate({ to: '/agents', search: { tab: 'agents' } })}
+          className="underline underline-offset-2 hover:text-ink-fg cursor-pointer"
+        >
+          {t('settings.integrations.kos.requireLabeled.goToAgents', {
+            defaultValue: '前往 Agents 页开启 →'
+          })}
+        </button>
+      </span>
+    </div>
+  )
 }
 
 export function IntegrationsTab(): React.ReactElement {
@@ -198,6 +244,69 @@ export function IntegrationsTab(): React.ReactElement {
               defaultValue: '邮件同步完成后异步推送进 KOS（producer），供日后检索。默认关。'
             })}
           />
+          {/* Lane 2 #2 (issue #49) — 「推什么进知识库」的两半, 紧跟入库开关、在凭据之前:
+              开入库 → 推什么 → 用什么凭据推。floor 管重要度门槛; require_labeled 管
+              「AI 从未判定过的邮件算不算数」。只放一个, 用户看到 floor=normal 会以为已在
+              过滤 —— 实际约 89% 是未标注邮件走了默认放行分支。🔴 两个默认值都不动。 */}
+          <EnvField
+            envKey="KOS_INGEST_PRIORITY_FLOOR"
+            control="select"
+            label={t('settings.integrations.kos.priorityFloor.label', {
+              defaultValue: '入库重要度门槛'
+            })}
+            helper={t('settings.integrations.kos.priorityFloor.helper', {
+              defaultValue:
+                '只把 AI 判定重要度不低于这一档的邮件推进知识库，挡住广告、系统通知等低价值邮件。注意：AI 从未分类过的邮件会被当作「普通」看待——要把它们也挡掉，请开启下方「仅推送已标注的邮件」。'
+            })}
+            options={[
+              {
+                value: 'critical',
+                label: t('settings.integrations.kos.priorityFloor.critical', {
+                  defaultValue: 'Critical（仅最高优先级）'
+                })
+              },
+              {
+                value: 'urgent',
+                label: t('settings.integrations.kos.priorityFloor.urgent', {
+                  defaultValue: 'Urgent 及以上'
+                })
+              },
+              {
+                value: 'important',
+                label: t('settings.integrations.kos.priorityFloor.important', {
+                  defaultValue: 'Important 及以上'
+                })
+              },
+              {
+                value: 'normal',
+                label: t('settings.integrations.kos.priorityFloor.normal', {
+                  defaultValue: 'Normal 及以上（默认）'
+                })
+              },
+              {
+                value: 'low',
+                label: t('settings.integrations.kos.priorityFloor.low', {
+                  defaultValue: 'Low 及以上（全部推送）'
+                })
+              }
+            ]}
+            placeholder={t('settings.integrations.kos.priorityFloor.placeholder', {
+              defaultValue: 'Normal 及以上（默认）'
+            })}
+            placeholderOnEmpty
+          />
+          <EnvField
+            envKey="KOS_REQUIRE_LABELED"
+            control="toggle"
+            label={t('settings.integrations.kos.requireLabeled.label', {
+              defaultValue: '仅推送已标注的邮件'
+            })}
+            helper={t('settings.integrations.kos.requireLabeled.helper', {
+              defaultValue:
+                '关闭（默认）时，AI 从未分类过的邮件——包括你启用 AI 分类之前的全部历史邮件——都会被当作「普通」放行入库。开启后只推 AI 明确判定过优先级的邮件；未标注的会被跳过（不是丢弃，日后补跑分类会重新入库）。前置条件：依赖「AI 邮件预处理」在跑，否则不会有任何邮件被标注。'
+            })}
+          />
+          <KosRequireLabeledDeadlockWarning />
           {/* issue #64 — producer 凭据的 UI 入口。与上方 OAuth 那两个是**两套**凭据:
               consumer (chat 读 KOS) 走 KOS_OAUTH_CLIENT_*, producer (推送邮件入库) 走
               这两个 MAILAGENT_BULK_*。它们是 v1.19.1 新引入的必配项, 而 .env.example
@@ -264,6 +373,20 @@ export function IntegrationsTab(): React.ReactElement {
           control="toggle"
           label={t('settings.integrations.office.enabled.label')}
           helper={t('settings.integrations.office.enabled.helper')}
+        />
+        {/* Lane 2 #9 — 附件 OCR。默认 ON (config.py 默认 true) → defaultOn 让未设时
+            如实显示为开。「本地识别、不联网」对有隐私顾虑的用户是加分项, 写进 helper。 */}
+        <EnvField
+          envKey="MAILAGENT_ATTACHMENT_OCR_ENABLED"
+          control="toggle"
+          defaultOn
+          label={t('settings.integrations.ocr.label', {
+            defaultValue: '图片与扫描件文字识别（OCR）'
+          })}
+          helper={t('settings.integrations.ocr.helper', {
+            defaultValue:
+              '识别图片附件和扫描版 PDF 里的中英文字，让它们能被全文搜索到。使用 macOS 内置的本地识别（Vision），内容不会离开这台电脑、不联网。关闭后图片和扫描件将无法被搜索。默认开启。'
+          })}
         />
       </Section>
 

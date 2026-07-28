@@ -579,6 +579,22 @@ function CalendarSyncSection(): React.ReactElement {
             min={0}
             max={3650}
           />
+          {/* Lane 2 #4 — 会前提醒提前量。纯偏好、零风险; 提醒挂 CalendarSyncWorker
+              (davmail CalDAV 路径), 故只在 davmail 分支渲染; 无岛时静默不提醒。 */}
+          <EnvField
+            envKey="CALENDAR_REMINDER_LEAD_MINUTES"
+            control="number"
+            label={t('settings.accounts.calendar.reminderLead.label', {
+              defaultValue: '会前提醒提前量（分钟）'
+            })}
+            helper={t('settings.accounts.calendar.reminderLead.helper', {
+              defaultValue:
+                '日程开始前多少分钟在灵动岛弹提醒卡，默认 10。需启用上方 CalDAV 日历同步和灵动岛；同一场会议只提醒一次。'
+            })}
+            min={0}
+            max={720}
+            placeholder="10"
+          />
         </>
       )}
     </Section>

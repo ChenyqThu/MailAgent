@@ -15,6 +15,7 @@ import { errorMessage } from '@shared/lib/ipcErrors'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { toastError, toastSuccess } from '@shared/state/toast'
 import { cn } from '@shared/lib/cn'
+import { useEnvStore } from '@shared/state/env'
 import type { PersistentSettings } from '@shared/api/types'
 
 import { PageHeader } from '../parts/PageHeader'
@@ -181,8 +182,54 @@ export function RealtimeStorageTab(): React.ReactElement {
         />
       </Section>
 
+      <KeepAliveSection />
+
       <AdvancedSubsection />
     </>
+  )
+}
+
+/** 防休眠保活 (Lane 2 #5) — 「要不要让 Mac 不睡」。
+ *  ⚠️ 只对 Mail.app (AppleScript) 邮件源有意义: davmail 模式下后端启动时自动禁用
+ *  keep-alive (service.py:94-98, IMAP/SMTP 不需要前台会话) —— helper 必须说清,
+ *  否则对 davmail 用户它就是一个「开了什么都不发生」的假开关 (SYNC_MODE 同型)。
+ *  KEEP_ALIVE_ENABLED 默认 false; DIM 默认 true (defaultOn), 仅保活开着才可调。 */
+function KeepAliveSection(): React.ReactElement {
+  const { t } = useTranslation()
+  // ENABLED 的 .env 意图值 (默认 false → 未设即关), DIM 行随之禁用。
+  const keepAliveOn = useEnvStore((s) => {
+    if (s.state.status !== 'ready') return false
+    const raw = s.state.snapshot.values['KEEP_ALIVE_ENABLED'] ?? ''
+    return raw === 'true' || raw === '1'
+  })
+  return (
+    <Section
+      title={t('settings.keepAlive.title', { defaultValue: '防休眠保活' })}
+      helper={t('settings.keepAlive.helper', {
+        defaultValue:
+          '同步依赖这台 Mac 保持运行；合盖或休眠期间不会同步新邮件。仅在邮件源为 Mail.app 时有意义——DavMail 模式下后端会自动忽略此设置（无需保持前台会话）。'
+      })}
+    >
+      <EnvField
+        envKey="KEEP_ALIVE_ENABLED"
+        control="toggle"
+        label={t('settings.keepAlive.enabled.label', { defaultValue: '阻止 Mac 自动休眠' })}
+        helper={t('settings.keepAlive.enabled.helper', {
+          defaultValue:
+            '开启后同步服务运行期间阻止系统休眠，保证邮件持续同步。默认关闭（遵循系统节能设置）。'
+        })}
+      />
+      <EnvField
+        envKey="KEEP_ALIVE_DIM"
+        control="toggle"
+        defaultOn
+        disabled={!keepAliveOn}
+        label={t('settings.keepAlive.dim.label', { defaultValue: '保活时调暗屏幕' })}
+        helper={t('settings.keepAlive.dim.helper', {
+          defaultValue: '阻止休眠的同时把屏幕亮度调低省电。默认开启；仅在上方保活开启时生效。'
+        })}
+      />
+    </Section>
   )
 }
 
@@ -224,18 +271,6 @@ function AdvancedSubsection(): React.ReactElement {
             { value: 'INFO', label: 'INFO' },
             { value: 'WARNING', label: 'WARNING' },
             { value: 'ERROR', label: 'ERROR' }
-          ]}
-        />
-        <EnvField
-          envKey="SYNC_MODE"
-          control="select"
-          label={t('settings.advanced.syncMode.label', { defaultValue: '同步模式' })}
-          helper={t('settings.advanced.syncMode.helper', {
-            defaultValue: 'hybrid 走 SQLite radar + AppleScript, applescript_only 退回旧路径'
-          })}
-          options={[
-            { value: 'hybrid', label: 'hybrid' },
-            { value: 'applescript_only', label: 'applescript_only' }
           ]}
         />
         <EnvField

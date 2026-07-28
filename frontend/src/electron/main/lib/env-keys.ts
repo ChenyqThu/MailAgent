@@ -13,9 +13,14 @@
 //      break the gray-rollout state. Sprint 18 Tier 1 + Advanced = 42 keys;
 //      remaining ~50 ENV keys stay invisible.
 //
-// Maintaining: add a key here AND surface it in a Tab (PR D / PR F). The
-// reverse check (env:set rejects keys with no Tab UI) isn't enforced — a
-// future Tab can land while the whitelist already covers the field.
+// Maintaining: add a key here AND surface it in a Tab (PR D / PR F). Two gates
+// now hold the two halves of that sentence:
+//   • frontend/tests/main/env_keys_ui_coverage.test.ts — 正向: 任何在 UI 里被读/写的
+//     env 键必须在此白名单 (渲染一个 env:set 会 E_INVALID_KEY 的输入框 = 用户填了、
+//     点保存、失败或静默丢失)。
+//   • tests/config/test_managed_env_keys_parity.py — 两份手抄白名单 (这里 ↔ 后端
+//     src/api/routers/settings.py `_MANAGED_ENV_KEYS`) 对账, 防「远程能改桌面不能」。
+// 反向 (白名单有键但无 Tab UI) 仍**不**强制 —— 白名单可以先行, UI 后落。
 
 /** All keys the renderer is allowed to read AND write through env:* IPC. */
 export const MANAGED_ENV_KEYS = [
@@ -60,6 +65,9 @@ export const MANAGED_ENV_KEYS = [
   // 「别处已读同步」开关。config.py inbound_read_reconcile_enabled Field
   // (默认 false, validation_alias=此键), 普通 boolean key 非 secret。
   // INTERVAL_SEC 不进白名单 (不给用户暴露, 见 AccountsTab 内注释)。
+  // DAVMAIL_ROOT 有意不进白名单 (audit §3.2 改判): 普通用户不知道 davmail 装在哪,
+  // 裸路径输入框只是把「找不到设置」换成「不知道填啥」; 正解 = DavMail 状态行加
+  // 自动探测 + 一键写入 (需后端探测逻辑, 排后续版本)。
   'MAILAGENT_INBOUND_READ_RECONCILE_ENABLED',
 
   // — Sync (PR D SyncTab)
@@ -69,17 +77,31 @@ export const MANAGED_ENV_KEYS = [
   'SYNC_MAILBOXES',
   'RADAR_POLL_INTERVAL',
   'REVERSE_SYNC_INTERVAL',
-  'SYNC_MODE',
   'CALENDAR_SYNC_MODE',
   'CALENDAR_PAST_DAYS',
   'CALENDAR_FUTURE_DAYS',
   'CALENDAR_CALDAV_SYNC_ENABLED',
+  // CalDAV 同步节奏与窗口 (AccountsTab 日历面, CALENDAR_CALDAV_SYNC_ENABLED 下方三个
+  // EnvField)。这三个键长期只在后端 settings.py `_MANAGED_ENV_KEYS` 里有 → 远程 web 能
+  // 改、桌面 App 上 env:get 读回空且 env:set 抛 E_INVALID_KEY (控件渲染着但存不进去)。
+  // 两份白名单现由 tests/config/test_managed_env_keys_parity.py 对账, UI↔白名单缺口由
+  // frontend/tests/main/env_keys_ui_coverage.test.ts 兜住。
+  'CALENDAR_CALDAV_SYNC_POLL_INTERVAL_SEC',
+  'CALENDAR_CALDAV_SYNC_WINDOW_PAST_DAYS',
+  'CALENDAR_CALDAV_SYNC_WINDOW_FUTURE_DAYS',
+  // 会前提醒提前量 (Lane 2 #4, 分钟, 默认 10)。纯偏好、零风险、一眼懂 —— 最典型
+  // 不该藏的一类。挂 CalendarSyncWorker 60s poll (davmail CalDAV 路径), AccountsTab
+  // 日历面 davmail 分支; 无岛 / PING_ISLAND_ENABLED 关时静默 fail-open。
+  'CALENDAR_REMINDER_LEAD_MINUTES',
 
   // — 多文件夹同步窗口 (SyncTab「自定义文件夹同步」区)。config.py folder_sync_past_days
   // / folder_sync_max_messages Field。SYNC_FOLDERS 白名单本身走 folder whitelist API
   // (后端 dotenv 写, 不经 env:set), 故不在此列。
   'FOLDER_SYNC_PAST_DAYS',
   'FOLDER_SYNC_MAX_MESSAGES',
+  // FOLDER_NOTIFY_ENABLED / FOLDER_LLM_DISABLED 有意不进白名单 (audit §3.2 改判):
+  // 值是 mailbox 显示名 JSON 数组, 裸文本框手写必错; 正解 = 文件夹选择 UI 里
+  // per-folder 两个勾 (通知 / 跑 AI), 排后续版本。
 
   // — Backend selection (Onboarding 向导 backend 选择)。config.py 的 Field,
   // 值域 'applescript' | 'davmail' (Sprint 16 dual-backend cutover)。向导写入,
@@ -89,6 +111,15 @@ export const MANAGED_ENV_KEYS = [
   // — Daily digest (Ping Island Phase 3 每日巡检)。config.py Field, boolean toggle,
   // 默认 false。向导插件勾选项之一 (plugins.digest → 这里)。
   'MAILAGENT_DAILY_DIGEST_ENABLED',
+  // 巡检钟点 (Lane 2 #3)。开关此前只在向导有 UI、钟点全无 UI = 半个功能 ——
+  // IslandUpdatesTab「每日巡检」区补齐两者。逗号分隔小时 (本机时区), 默认 9,18。
+  'MAILAGENT_DAILY_DIGEST_HOURS',
+
+  // — Report agents (Lane 2 #10, AgentsTab 报告区总闸)。config.py Field 默认 false。
+  // 启动条件 = 本 flag OR 任一 report 行 enabled (service.py:737, OR 语义) —— flag 开 =
+  // worker 常驻, 之后启用报告行**不用再重启**; flag 关 = 首次启用某报告后需重启一次。
+  // 同型的 PROJECT_PROGRESS_SYNC_ENABLED 早有 UI (Agents 页抽屉), 它此前没有。
+  'MAILAGENT_REPORT_AGENT_ENABLED',
 
   // — AI Agent (PR D AiTab)
   'LLM_AGENT_ENABLED',
@@ -113,6 +144,13 @@ export const MANAGED_ENV_KEYS = [
   // (memory_capture_model, default claude-haiku-4-5) → 改动需重启 serve-api 生效
   // (EnvField markRestartRequired), 同 LLM_MODEL. CustomAiSection 的记忆抽取模型下拉写它.
   'MEMORY_CAPTURE_MODEL',
+  // AI 记忆双开关 (Lane 2 #8, 隐私级意图「AI 要不要记住我说的话」——此前能选抽取模型、
+  // 却关不掉记忆, 是倒置的)。两个都默认 ON (2026-07-02 cutover), 显式 false 应急回退;
+  // EnvField defaultOn 让未设时如实显示为开。CAPTURE = Node gateway 启动 envBool 读一次
+  // → restart-required (同 MAILAGENT_OPENNESS_WEB_TOOLS); RETRIEVAL = serve-api chat.py
+  // 每请求 dotenv_values 热读 → hotReload (保存即生效, 不拉重启横幅)。
+  'MAILAGENT_MEM0_CAPTURE',
+  'MAILAGENT_MEM0_RETRIEVAL',
 
   // — Web search (agent web_search provider). Tavily key (逗号分隔多 key 额度轮换);
   // 留空 → 回落 DuckDuckGo. IntegrationsTab「Web 搜索」Section 经 env:set 写 app .env;
@@ -146,6 +184,10 @@ export const MANAGED_ENV_KEYS = [
   'PROJECT_PROGRESS_SUBJECT_PATTERN',
   'PROJECT_PROGRESS_SENDER',
   'OFFICE_CONVERT_ENABLED',
+  // 附件 OCR (Lane 2 #9)。macOS Vision 本地识别图片/扫描件 PDF → 可搜索; 无网络出口。
+  // config.py Field 默认 true → EnvField defaultOn; IntegrationsTab 附件处理区
+  // OFFICE_CONVERT_ENABLED 旁。显式 false = 图片/扫描件回「不支持」现状。
+  'MAILAGENT_ATTACHMENT_OCR_ENABLED',
   'STATS_REPORT_URL',
   'STATS_REPORT_INTERVAL',
   'STATS_REPORT_TOKEN',
@@ -161,6 +203,12 @@ export const MANAGED_ENV_KEYS = [
   'MAILAGENT_OUTBOX_POLL_INTERVAL_SEC',
   'MAILAGENT_OUTBOX_MAX_ATTEMPTS',
   'MAILAGENT_OUTBOX_CONCURRENCY',
+  // 防休眠保活 (Lane 2 #5, RealtimeStorageTab「防休眠」区)。ENABLED 默认 false;
+  // DIM (保活时调暗屏幕) 默认 true → defaultOn。⚠️ davmail 模式下 service.py:94-98
+  // 自动禁用 keep-alive (IMAP/SMTP 不需要 UI session) —— helper 文案如实说明,
+  // 不然对生产主路径 (davmail) 用户就是又一个「改了什么都不发生」的假开关。
+  'KEEP_ALIVE_ENABLED',
+  'KEEP_ALIVE_DIM',
 
   // — KOS (Jarvis KOS v2 producer/consumer integration)。boolean toggle 默认
   // false + KOS 对接三件套: endpoint (KOS_MCP_BASE) + OAuth client_id/secret。
@@ -183,10 +231,28 @@ export const MANAGED_ENV_KEYS = [
   // KOS_OAUTH_CLIENT_SECRET); CLIENT_ID 是明文 ID, 同 KOS_OAUTH_CLIENT_ID 不脱敏。
   'MAILAGENT_BULK_CLIENT_ID',
   'MAILAGENT_BULK_CLIENT_SECRET',
+  // 入库范围两半 (Lane 2 #2, issue #49 病根的产品面)。floor = 只推重要度 ≥ 某档
+  // (五值 select, 默认 normal); require_labeled = AI 从未标注过的邮件算不算数
+  // (默认 false = 未标注按 normal 放行, 历史邮件 ~89% 走这条默认分支)。只放一个,
+  // 用户看到 floor=normal 会以为已在过滤。REQUIRE_LABELED=true + LLM 分类关 =
+  // 静默死锁 (一封都推不进、零报错) → IntegrationsTab 有联动警告, 非静态文案。
+  // 🔴 默认值都不动 —— 翻默认会让存量用户入库量骤降 ~89% (无声破坏性变更)。
+  'KOS_INGEST_PRIORITY_FLOOR',
+  'KOS_REQUIRE_LABELED',
 
   // — Island (PR D IslandUpdatesTab)
   'PING_ISLAND_ENABLED',
   'ISLAND_SOCKET_PATH',
+  // 邮件弹卡范围 (Lane 2 #1 —— 全批最该暴露的一个: 直接决定被打扰频率)。
+  // important (默认) = 仅 AI 判定紧急/重要弹卡; all = 每封新邮件都弹 (旧行为)。
+  // 二选一 select, 默认经 placeholder 如实展示; service.py 启动传入 → restart-required。
+  'ISLAND_MAIL_NOTIFY_SCOPE',
+  // 岛外观 (Lane 2 #10 追加项): 主题色六选一 (coral/cobalt/teal/rose/slate/olive,
+  // .env.example:627 权威枚举) + 明暗二选一。App 本体有完整主题设置、唯独岛只能改
+  // 文件——纯外观偏好零风险。envelope metadata 透传 Swift; service.py 启动传入 →
+  // restart-required。默认 coral / dark 经 placeholder 如实展示。
+  'ISLAND_ACCENT',
+  'ISLAND_THEME',
 
   // — Remote Access (serve-api / RemoteAccessTab). V2 远程访问从 dogfood (手动
   // nohup serve-api) 收尾成生产态: serve-api 进程纳入打包 app 的

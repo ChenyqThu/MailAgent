@@ -28,6 +28,7 @@ CHAT_PY = REPO_ROOT / "src" / "api" / "routers" / "chat.py"
 ENV_EXAMPLE = REPO_ROOT / ".env.example"
 CLAUDE_MD = REPO_ROOT / "CLAUDE.md"
 ENV_KEYS_TS = REPO_ROOT / "frontend" / "src" / "electron" / "main" / "lib" / "env-keys.ts"
+SETTINGS_PY = REPO_ROOT / "src" / "api" / "routers" / "settings.py"
 ELECTRON_VITE = REPO_ROOT / "frontend" / "electron.vite.config.ts"
 WEB_VITE = REPO_ROOT / "frontend" / "vite.web.config.ts"
 GATEWAY_LIFECYCLE = REPO_ROOT / "frontend" / "src" / "electron" / "main" / "ai_gateway_lifecycle.ts"
@@ -302,6 +303,60 @@ def parse_managed_env_keys(src: Optional[str] = None) -> Set[str]:
     if end == -1:
         raise AssertionError(f"{ENV_KEYS_TS.name}: MANAGED_ENV_KEYS 数组没有 `] as const` 结尾 —— 解析器需更新")
     return set(_TS_KEY_RE.findall(src[start:end]))
+
+
+def parse_ts_key_set(const_name: str, src: Optional[str] = None) -> Set[str]:
+    """env-keys.ts 里 `export const <NAME>: Set<string> = new Set<string>([...])` 的键集。
+
+    用于 SECRET_ENV_KEYS / READONLY_DISPLAY_KEYS —— 与 MANAGED_ENV_KEYS 的 `] as const`
+    数组形状不同（`])` 结尾），故单独一个解析器而不是复用上面那个。
+    """
+    src = src if src is not None else _read(ENV_KEYS_TS)
+    start = src.find(f"export const {const_name}")
+    if start == -1:
+        raise AssertionError(f"{ENV_KEYS_TS.name}: 没找到 `export const {const_name}` —— 解析器需更新")
+    end = src.find("\n])", start)
+    if end == -1:
+        raise AssertionError(f"{ENV_KEYS_TS.name}: {const_name} 的 Set 没有 `])` 结尾 —— 解析器需更新")
+    return set(_TS_KEY_RE.findall(src[start:end]))
+
+
+# =============================================================================
+# 后端受管键白名单（src/api/routers/settings.py，env-keys.ts 的手抄镜像）
+# =============================================================================
+
+
+def _string_literals_of(node: ast.AST, label: str) -> Set[str]:
+    """List/Set/Tuple 字面量 → 其中的字符串常量集合。含非字符串常量元素时抛错（不静默）。"""
+    if not isinstance(node, (ast.List, ast.Set, ast.Tuple)):
+        raise AssertionError(f"{label}: 右值不是 list/set/tuple 字面量 —— 解析器需更新")
+    out: Set[str] = set()
+    for elt in node.elts:
+        if not (isinstance(elt, ast.Constant) and isinstance(elt.value, str)):
+            raise AssertionError(f"{label}: 含非字符串常量元素 —— 解析器需更新")
+        out.add(elt.value)
+    return out
+
+
+def parse_py_key_collection(
+    name: str, path: Path = SETTINGS_PY, src: Optional[str] = None
+) -> Set[str]:
+    """静态解析某个 .py 里模块级 `NAME = [...]` / `NAME: T = [...]` 的字符串字面量集合。
+
+    AST 而非正则：注释风格 / 换行 / 尾逗号变化都不影响，且找不到该赋值时抛错（不返回空集）。
+    **不 import** 目标模块 —— settings.py 的 import 链会拉起 FastAPI + config 单例。
+    """
+    tree = ast.parse(src if src is not None else _read(path))
+    for stmt in tree.body:
+        target: Optional[str] = None
+        if isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
+            target = stmt.target.id
+        elif isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name):
+            target = stmt.targets[0].id
+        if target != name or stmt.value is None:
+            continue
+        return _string_literals_of(stmt.value, f"{path.name}:{name}")
+    raise AssertionError(f"{path.name}: 没找到模块级 `{name} = [...]` 赋值 —— 解析器需更新")
 
 
 # =============================================================================

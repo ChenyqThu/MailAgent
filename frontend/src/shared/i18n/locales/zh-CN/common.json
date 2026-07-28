@@ -2250,6 +2250,10 @@
       "calendar": {
         "helperDavmail": "DavMail 经 CalDAV 把 Exchange 日历同步进本地（端口见上方「高级连接 · CalDAV 端口」）。",
         "helperApplescript": "Mail.app 经 AppleScript / EventKit 读取本机 Calendar.app。",
+        "reminderLead": {
+          "label": "会前提醒提前量（分钟）",
+          "helper": "日程开始前多少分钟在灵动岛弹提醒卡，默认 10。需启用上方 CalDAV 日历同步和灵动岛；同一场会议只提醒一次。"
+        },
         "caldav": {
           "enabled": {
             "label": "启用 CalDAV 日历同步",
@@ -2523,6 +2527,10 @@
           "helper": "依赖 LibreOffice + python-calamine"
         }
       },
+      "ocr": {
+        "label": "图片与扫描件文字识别（OCR）",
+        "helper": "识别图片附件和扫描版 PDF 里的中英文字，让它们能被全文搜索到。使用 macOS 内置的本地识别（Vision），内容不会离开这台电脑、不联网。关闭后图片和扫描件将无法被搜索。默认开启。"
+      },
       "stats": {
         "title": "运行统计上报",
         "helper": "定期把 sync / reverse / handlers 计数上报到看板",
@@ -2580,6 +2588,22 @@
         "ingest": {
           "label": "推送邮件入库",
           "helper": "邮件同步完成后异步推送进 KOS（producer），供日后检索。默认关。"
+        },
+        "priorityFloor": {
+          "label": "入库重要度门槛",
+          "helper": "只把 AI 判定重要度不低于这一档的邮件推进知识库，挡住广告、系统通知等低价值邮件。注意：AI 从未分类过的邮件会被当作「普通」看待——要把它们也挡掉，请开启下方「仅推送已标注的邮件」。",
+          "critical": "Critical（仅最高优先级）",
+          "urgent": "Urgent 及以上",
+          "important": "Important 及以上",
+          "normal": "Normal 及以上（默认）",
+          "low": "Low 及以上（全部推送）",
+          "placeholder": "Normal 及以上（默认）"
+        },
+        "requireLabeled": {
+          "label": "仅推送已标注的邮件",
+          "helper": "关闭（默认）时，AI 从未分类过的邮件——包括你启用 AI 分类之前的全部历史邮件——都会被当作「普通」放行入库。开启后只推 AI 明确判定过优先级的邮件；未标注的会被跳过（不是丢弃，日后补跑分类会重新入库）。前置条件：依赖「AI 邮件预处理」在跑，否则不会有任何邮件被标注。",
+          "deadlockWarning": "「AI 邮件预处理」当前是关闭的——没有任何邮件会被标注优先级，这个开关会让入库完全停止（不会报错，只是静默推不进去）。请先到 Agents 页开启 AI 邮件预处理，或关闭本开关。",
+          "goToAgents": "前往 Agents 页开启 →"
         },
         "bulkClientId": {
           "label": "入库 Client ID",
@@ -2651,6 +2675,30 @@
         "eyebrow": "REALTIME & STORAGE",
         "title": "实时与存储",
         "intro": "SSE 事件总线、Redis 队列与附件 / SQLite 本地存储路径。"
+      }
+    },
+    "keepAlive": {
+      "title": "防休眠保活",
+      "helper": "同步依赖这台 Mac 保持运行；合盖或休眠期间不会同步新邮件。仅在邮件源为 Mail.app 时有意义——DavMail 模式下后端会自动忽略此设置（无需保持前台会话）。",
+      "enabled": {
+        "label": "阻止 Mac 自动休眠",
+        "helper": "开启后同步服务运行期间阻止系统休眠，保证邮件持续同步。默认关闭（遵循系统节能设置）。"
+      },
+      "dim": {
+        "label": "保活时调暗屏幕",
+        "helper": "阻止休眠的同时把屏幕亮度调低省电。默认开启；仅在上方保活开启时生效。"
+      }
+    },
+    "aiMemory": {
+      "title": "AI 记忆",
+      "desc": "AI 会把对话中你的持久偏好与事实（如「回复邮件永远用中文」）整理进一份本机记忆文件，让之后的对话不用重复交代。记忆只存在这台电脑上。",
+      "capture": {
+        "label": "自动记住对话中的偏好",
+        "helper": "每轮对话结束后在后台提取值得长期记住的信息并合并进记忆。关闭后 AI 不再从对话中学到任何新东西（已有记忆保留，可在下方身份文档中查看或编辑）。默认开启。"
+      },
+      "retrieval": {
+        "label": "对话中使用已有记忆",
+        "helper": "每轮对话把记忆内容提供给 AI 作背景。关闭后 AI 立即「失忆」——不再参考任何已记住的偏好（记忆文件本身不删除）。保存即生效。默认开启。"
       }
     },
     "remote": {
@@ -2745,10 +2793,6 @@
       "logLevel": {
         "label": "日志级别",
         "helper": "DEBUG / INFO / WARNING / ERROR"
-      },
-      "syncMode": {
-        "label": "同步模式",
-        "helper": "hybrid 走 SQLite radar + AppleScript; applescript_only 退回旧路径"
       },
       "outbox": {
         "enabled": {
@@ -2868,6 +2912,41 @@
         "eyebrow": "ISLAND & UPDATES",
         "title": "灵动岛与更新",
         "intro": "ping-island 桥接状态与应用自动更新通道。"
+      },
+      "mailNotifyScope": {
+        "label": "邮件弹卡范围",
+        "helper": "决定哪些邮件会在灵动岛弹卡打扰你。「仅重要」（默认）只在 AI 判定为紧急或重要时弹；「全部」则每封新邮件都弹（比较吵）。不影响日历提醒、AI 审批等非邮件卡片。",
+        "important": "仅重要（AI 判定紧急 / 重要才弹）",
+        "all": "全部（每封新邮件都弹）",
+        "placeholder": "仅重要（默认）"
+      },
+      "accent": {
+        "label": "灵动岛主题色",
+        "helper": "灵动岛卡片的强调色，与 App 主界面的强调色相互独立。默认珊瑚色。",
+        "coral": "珊瑚 Coral（默认）",
+        "cobalt": "钴蓝 Cobalt",
+        "teal": "青 Teal",
+        "rose": "玫瑰 Rose",
+        "slate": "岩灰 Slate",
+        "olive": "橄榄 Olive",
+        "placeholder": "珊瑚 Coral（默认）"
+      },
+      "islandTheme": {
+        "label": "灵动岛明暗",
+        "helper": "灵动岛卡片用深色还是浅色底，与 App 主界面的明暗设置相互独立。默认深色。",
+        "dark": "深色（默认）",
+        "light": "浅色",
+        "placeholder": "深色（默认）"
+      },
+      "digest": {
+        "heading": "每日巡检",
+        "sectionHelper": "定时汇总最近邮件并在灵动岛推送一张巡检卡片；需先启用灵动岛。",
+        "enable": "启用每日巡检",
+        "enableHint": "在设定的钟点自动汇总这段时间的邮件（AI 生成摘要与待办建议），以卡片形式推送到灵动岛。默认关闭。",
+        "hours": {
+          "label": "巡检钟点",
+          "helper": "每天几点巡检，24 小时制、逗号分隔（本机时区）。例如 9,18 表示早 9 点和晚 6 点各一次。"
+        }
       }
     },
     "folder": {
@@ -3038,6 +3117,11 @@
   "agents": {
     "title": "报告 Agents",
     "subtitle": "自动生成、可溯源的邮件报告。日报为主，周报 / 月报同引擎。",
+    "reportsMaster": {
+      "label": "报告生成服务常驻",
+      "hint": "开启后报告生成服务常驻运行，启用任一报告立即生效；关闭时首次启用某个报告后需重启一次后端才开始定时生成。",
+      "saveError": "保存报告服务开关失败"
+    },
     "tabAgents": "Agents",
     "tabReports": "报告",
     "tabChats": "Chats",

@@ -512,11 +512,14 @@ def test_env_snapshot_missing_file_graceful(
 def test_env_snapshot_managed_secret_keys_match_ts() -> None:
     """受管 / secret key 数量与 TS SSoT 对齐（防漂移：env-keys.ts 改了这里也要改）。"""
     snap = settings_router._build_env_snapshot()
-    # SECRET_ENV_KEYS in env-keys.ts has exactly 14 entries (codex r4 [HIGH]
+    # SECRET_ENV_KEYS in env-keys.ts has exactly 15 entries (codex r4 [HIGH]
     # added ALERT_FEISHU_WEBHOOK_URL + REDIS_URL; KOS Settings added
     # KOS_OAUTH_CLIENT_SECRET — gbrain OAuth secret written by IntegrationsTab;
-    # Web search added TAVILY_API_KEY — Tavily search key written by IntegrationsTab).
-    assert len(snap["secretKeys"]) == 14
+    # Web search added TAVILY_API_KEY — Tavily search key written by IntegrationsTab;
+    # issue #64's MAILAGENT_BULK_CLIENT_SECRET was TS-only until the parity gate
+    # caught it). 这个手写数字只是粗筛 —— 真正的两侧对账在
+    # tests/config/test_managed_env_keys_parity.py（集合相等，不是计数）。
+    assert len(snap["secretKeys"]) == 15
     # KOS OAuth secret: MANAGED (writable from Settings) but SECRET (redacted on read).
     assert "KOS_OAUTH_CLIENT_SECRET" in snap["secretKeys"]
     assert "KOS_OAUTH_CLIENT_SECRET" in snap["managedKeys"]

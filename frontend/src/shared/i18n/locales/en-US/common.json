@@ -2250,6 +2250,10 @@
       "calendar": {
         "helperDavmail": "DavMail syncs your Exchange calendar into the local list over CalDAV (port under \"Advanced connection · CalDAV port\" above).",
         "helperApplescript": "Mail.app reads the local Calendar.app via AppleScript / EventKit.",
+        "reminderLead": {
+          "label": "Meeting reminder lead time (minutes)",
+          "helper": "How many minutes before an event a reminder card pops on the Dynamic Island; default 10. Requires CalDAV calendar sync above and the Dynamic Island; each meeting is reminded once."
+        },
         "caldav": {
           "enabled": {
             "label": "Enable CalDAV calendar sync",
@@ -2523,6 +2527,10 @@
           "helper": "Depends on LibreOffice + python-calamine"
         }
       },
+      "ocr": {
+        "label": "Text recognition for images & scans (OCR)",
+        "helper": "Recognizes Chinese and English text in image attachments and scanned PDFs so full-text search can find them. Uses macOS's built-in on-device recognition (Vision) — content never leaves this Mac, no network involved. When off, images and scans cannot be searched. On by default."
+      },
       "stats": {
         "title": "Runtime stats upload",
         "helper": "Periodically push sync / reverse / handler counters to the dashboard",
@@ -2580,6 +2588,22 @@
         "ingest": {
           "label": "Push emails to KOS",
           "helper": "After sync, asynchronously push emails into KOS (producer) for later retrieval. Off by default."
+        },
+        "priorityFloor": {
+          "label": "Ingest priority floor",
+          "helper": "Only push emails the AI rated at or above this priority, keeping ads and system notifications out of the knowledge base. Note: emails the AI has never classified count as \"Normal\" — to keep those out too, turn on \"Only push labeled emails\" below.",
+          "critical": "Critical (highest only)",
+          "urgent": "Urgent and above",
+          "important": "Important and above",
+          "normal": "Normal and above (default)",
+          "low": "Low and above (push everything)",
+          "placeholder": "Normal and above (default)"
+        },
+        "requireLabeled": {
+          "label": "Only push labeled emails",
+          "helper": "Off (default): emails the AI has never classified — including all history from before you enabled AI classification — pass through as \"Normal\" and get ingested. On: only emails with an explicit AI priority are pushed; unlabeled ones are skipped (not lost — they re-enter once classification catches up). Prerequisite: this depends on AI email preprocessing running, otherwise nothing ever gets labeled.",
+          "deadlockWarning": "AI email preprocessing is currently OFF — no email will ever get a priority label, so this switch stops ingestion entirely (no error, pushes just silently stop). Enable AI email preprocessing on the Agents page first, or turn this switch off.",
+          "goToAgents": "Open the Agents page →"
         },
         "bulkClientId": {
           "label": "Ingest Client ID",
@@ -2651,6 +2675,30 @@
         "eyebrow": "REALTIME & STORAGE",
         "title": "Realtime & Storage",
         "intro": "SSE event bus, Redis queue, and attachment / SQLite local storage paths."
+      }
+    },
+    "keepAlive": {
+      "title": "Sleep prevention",
+      "helper": "Sync depends on this Mac staying awake; nothing syncs while the lid is closed or the Mac sleeps. Only meaningful when the mail source is Mail.app — in DavMail mode the backend automatically ignores this setting (no foreground session needed).",
+      "enabled": {
+        "label": "Keep the Mac awake",
+        "helper": "While the sync service runs, prevent the system from sleeping so email keeps syncing. Off by default (follows the system's energy settings)."
+      },
+      "dim": {
+        "label": "Dim the screen while awake",
+        "helper": "Lower the screen brightness to save power while sleep is blocked. On by default; only applies when keep-awake above is on."
+      }
+    },
+    "aiMemory": {
+      "title": "AI memory",
+      "desc": "The AI distills durable preferences and facts from your conversations (e.g. \"always reply in Chinese\") into a local memory file, so later chats don't need re-explaining. Memory never leaves this Mac.",
+      "capture": {
+        "label": "Auto-remember preferences from chats",
+        "helper": "After each conversation turn, extracts anything worth remembering long-term and merges it into memory in the background. When off, the AI stops learning anything new from chats (existing memory is kept and stays editable in the identity documents below). On by default."
+      },
+      "retrieval": {
+        "label": "Use existing memory in chats",
+        "helper": "Provides the memory content to the AI as background every turn. When off, the AI immediately \"forgets\" — it stops consulting any remembered preferences (the memory file itself is not deleted). Takes effect on save. On by default."
       }
     },
     "remote": {
@@ -2745,10 +2793,6 @@
       "logLevel": {
         "label": "Log level",
         "helper": "DEBUG / INFO / WARNING / ERROR"
-      },
-      "syncMode": {
-        "label": "Sync mode",
-        "helper": "hybrid = SQLite radar + AppleScript; applescript_only = legacy path"
       },
       "outbox": {
         "enabled": {
@@ -2868,6 +2912,41 @@
         "eyebrow": "ISLAND & UPDATES",
         "title": "Island & Updates",
         "intro": "ping-island bridge status and app auto-update channel."
+      },
+      "mailNotifyScope": {
+        "label": "Email card scope",
+        "helper": "Controls which emails pop a card on the Dynamic Island. \"Important only\" (default) pops only when the AI rates an email urgent or important; \"All\" pops for every new email (noisy). Calendar reminders, AI approvals and other non-email cards are unaffected.",
+        "important": "Important only (AI-rated urgent / important)",
+        "all": "All (every new email pops)",
+        "placeholder": "Important only (default)"
+      },
+      "accent": {
+        "label": "Island accent color",
+        "helper": "Accent color of Dynamic Island cards, independent of the app's own accent. Defaults to coral.",
+        "coral": "Coral (default)",
+        "cobalt": "Cobalt",
+        "teal": "Teal",
+        "rose": "Rose",
+        "slate": "Slate",
+        "olive": "Olive",
+        "placeholder": "Coral (default)"
+      },
+      "islandTheme": {
+        "label": "Island appearance",
+        "helper": "Dark or light background for Dynamic Island cards, independent of the app's own appearance setting. Defaults to dark.",
+        "dark": "Dark (default)",
+        "light": "Light",
+        "placeholder": "Dark (default)"
+      },
+      "digest": {
+        "heading": "Daily digest",
+        "sectionHelper": "Periodically summarizes recent email and pushes a digest card to the Dynamic Island; requires the Island to be enabled.",
+        "enable": "Enable daily digest",
+        "enableHint": "At the configured hours, automatically summarizes the period's email (AI summary + suggested to-dos) and pushes it as an Island card. Off by default.",
+        "hours": {
+          "label": "Digest hours",
+          "helper": "Which hours of the day to run, 24-hour clock, comma-separated (local timezone). E.g. 9,18 runs at 9 AM and 6 PM."
+        }
       }
     },
     "folder": {
@@ -3038,6 +3117,11 @@
   "agents": {
     "title": "Report Agents",
     "subtitle": "Auto-generated, traceable email reports. Daily by default; weekly / monthly share the engine.",
+    "reportsMaster": {
+      "label": "Keep report service running",
+      "hint": "When on, the report service runs continuously and enabling any report takes effect immediately; when off, the first report you enable needs one backend restart before scheduled generation starts.",
+      "saveError": "Failed to save the report service switch"
+    },
     "tabAgents": "Agents",
     "tabReports": "Reports",
     "tabChats": "Chats",
