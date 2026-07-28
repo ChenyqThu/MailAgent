@@ -1153,6 +1153,7 @@
     "attachment": {
       "add": "添加附件",
       "remove": "移除附件",
+      "preview": "预览图片",
       "readFailed": "无法读取附件",
       "tooManyImages": "一次最多附 {max} 张图片",
       "imageTooLarge": "图片过大，无法发送"

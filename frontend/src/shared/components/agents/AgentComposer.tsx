@@ -19,15 +19,12 @@ import {
   FileText,
   ListTodo,
   Mail,
-  Paperclip,
   PenLine,
   Plus,
   Search,
-  Square,
-  X
+  Square
 } from 'lucide-react'
 import {
-  AttachmentPrimitive,
   ComposerPrimitive,
   ThreadPrimitive,
   unstable_defaultDirectiveFormatter,
@@ -45,7 +42,7 @@ import { HoverTip } from '@shared/components/ui/HoverTip'
 import { BorderGlow } from '@shared/components/effects/BorderGlow'
 import type { SearchHit, SearchResult } from '@shared/api/types'
 import { useMailApi } from '@shared/hooks/useMailApi'
-import { formatAttachmentSize } from '@shared/lib/chat-attachments'
+import { ComposerAttachmentChips } from '@shared/assistant/components/composer'
 import {
   useChatComposerControls,
   type ChatComposerControls
@@ -394,33 +391,15 @@ function AgentModelPicker({
 
 // ── attachment chip stack (mentions now live in-field as directive chips) ────────────────────────
 // issue #61 Lane 3 (A2): chips render from the assistant-ui COMPOSER state (the adapter's pending
-// attachments), so "+", paste and drop all get the same visible feedback. Styling verbatim from the
-// former controls-driven chip (agent-surface variant — max-w-[220px]); the hand-rolled X becomes
-// AttachmentPrimitive.Remove → composer.removeAttachment → adapter.remove → panel-state sync.
+// attachments), so "+", paste and drop all get the same visible feedback. The chip itself is the
+// SHARED ComposerAttachmentChips (email panel + this one) — this surface only keeps its own wrapper
+// (px-1 pt-1) and the wider chip cap; the previous byte-for-byte copy is exactly how the two drifted.
 function AgentAttachmentChips(): React.JSX.Element | null {
   const attachmentCount = useAuiState((s) => s.composer.attachments.length)
   if (attachmentCount === 0) return null
   return (
     <div className="flex flex-wrap gap-1.5 px-1 pt-1">
-      <ComposerPrimitive.Attachments>
-        {({ attachment }) => (
-          <span className="inline-flex max-w-[220px] items-center gap-1 rounded-md border border-ink-border bg-ink-3 px-2 py-1 text-meta text-ink-fg-1">
-            <Paperclip size={11} strokeWidth={2} className="shrink-0 text-ink-fg-3" />
-            <span className="truncate">{attachment.name}</span>
-            {attachment.file && (
-              <span className="shrink-0 font-mono text-micro text-ink-fg-3">
-                {formatAttachmentSize(attachment.file.size)}
-              </span>
-            )}
-            <AttachmentPrimitive.Remove
-              aria-label="remove"
-              className="shrink-0 text-ink-fg-3 hover:text-ink-fg"
-            >
-              <X size={11} strokeWidth={2.5} />
-            </AttachmentPrimitive.Remove>
-          </span>
-        )}
-      </ComposerPrimitive.Attachments>
+      <ComposerAttachmentChips chipMaxWidthClass="max-w-[220px]" />
     </div>
   )
 }

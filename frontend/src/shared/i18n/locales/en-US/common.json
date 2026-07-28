@@ -1153,6 +1153,7 @@
     "attachment": {
       "add": "Attach a file",
       "remove": "Remove attachment",
+      "preview": "Preview image",
       "readFailed": "Could not read attachment",
       "tooManyImages": "At most {max} images per message",
       "imageTooLarge": "Image too large to send"

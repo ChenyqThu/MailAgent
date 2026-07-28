@@ -8,7 +8,7 @@
 // hover Copy/Reload action bar. Theme three-state + 6 accents reskin for free —
 // only CSS variables drive color.
 
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Paperclip } from 'lucide-react'
 import {
@@ -19,6 +19,7 @@ import {
 } from '@assistant-ui/react'
 
 import { cn } from '@shared/lib/cn'
+import { ImageLightbox } from '@shared/components/email/EmailBodyFrame'
 
 import { getAssistantPartComponents } from '../tools/registerToolUIs'
 import { TurnStatusLine } from './TurnStatusLine'
@@ -53,6 +54,8 @@ function attachmentImageSrc(attachment: CompleteAttachment): string | null {
  *  Parts-only renderer drops them on the floor. One row, both surfaces: a third copy would just
  *  diverge again. Mount it as a sibling of the bubble under a `flex-col items-end` root. */
 export function UserMessageAttachments(): React.JSX.Element {
+  const { t } = useTranslation()
+  const [previewSrc, setPreviewSrc] = useState<string | null>(null)
   return (
     <div className="mt-1 flex max-w-[80%] flex-wrap justify-end gap-1">
       <MessagePrimitive.Attachments>
@@ -60,11 +63,23 @@ export function UserMessageAttachments(): React.JSX.Element {
           const imageSrc = attachmentImageSrc(attachment)
           if (imageSrc !== null) {
             return (
+              // 点击放大（role/tabIndex 加在图本身，而不是外面套一层 <button>：图是这条 flex-wrap
+              // 行的直接子元素，包一层会改掉换行布局）。缩略图受限于气泡宽度，原图要看细节只能放大。
               <img
                 src={imageSrc}
                 alt={attachment.name}
                 title={attachment.name}
-                className="max-h-40 max-w-[min(240px,100%)] rounded-lg border border-ink-border bg-ink-3"
+                role="button"
+                tabIndex={0}
+                aria-label={t('chat.attachment.preview', { defaultValue: 'Preview image' })}
+                onClick={() => setPreviewSrc(imageSrc)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    setPreviewSrc(imageSrc)
+                  }
+                }}
+                className="max-h-40 max-w-[min(240px,100%)] cursor-zoom-in rounded-lg border border-ink-border bg-ink-3"
               />
             )
           }
@@ -76,6 +91,9 @@ export function UserMessageAttachments(): React.JSX.Element {
           )
         }}
       </MessagePrimitive.Attachments>
+      {previewSrc !== null && (
+        <ImageLightbox src={previewSrc} onClose={() => setPreviewSrc(null)} />
+      )}
     </div>
   )
 }

@@ -10,7 +10,7 @@
 // the read-only notion-agent thread, or a bare test render) the toolbar shows only send/cancel,
 // byte-identical in behaviour to the Phase 01 text-only composer.
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ArrowUp, AtSign, Brain, Cpu, Paperclip, X } from 'lucide-react'
 import {
@@ -18,12 +18,14 @@ import {
   ComposerPrimitive,
   ThreadPrimitive,
   useAui,
-  useAuiState
+  useAuiState,
+  type Attachment
 } from '@assistant-ui/react'
 
 import { cn } from '@shared/lib/cn'
 import { HoverTip } from '@shared/components/ui/HoverTip'
 import { MentionPopover } from '@shared/components/chat/MentionPopover'
+import { ImageLightbox } from '@shared/components/email/EmailBodyFrame'
 import { formatAttachmentSize } from '@shared/lib/chat-attachments'
 
 import { useChatComposerControls, type ChatComposerControls } from './composerControls'
@@ -267,31 +269,102 @@ function ComposerAttachmentButton(): React.JSX.Element {
   )
 }
 
+/** One pending-attachment chip. An image chip swaps the paperclip for a thumbnail of the file
+ *  itself (objectURL over attachment.file — the adapter's prepared data URL isn't exposed here),
+ *  clickable to open the shared lightbox; every other chip is the paperclip pill unchanged.
+ *  The objectURL is owned per chip: created when the File lands, revoked on unmount / removal. */
+function ComposerAttachmentChip({
+  attachment,
+  maxWidthClass,
+  onPreview
+}: {
+  attachment: Attachment
+  maxWidthClass: string
+  onPreview: (src: string) => void
+}): React.JSX.Element {
+  const { t } = useTranslation()
+  const file = attachment.type === 'image' ? attachment.file : undefined
+  const thumbUrl = useMemo(() => (file ? URL.createObjectURL(file) : null), [file])
+  // 拿到 URL 的那次 memo 之外没有别的持有者 —— chip 卸载/附件被移除/换了 File 时必须 revoke，
+  // 否则每粘一张图都在 renderer 里留一份不会被 GC 的 blob。
+  useEffect(() => {
+    if (thumbUrl === null) return undefined
+    return (): void => URL.revokeObjectURL(thumbUrl)
+  }, [thumbUrl])
+  return (
+    <span
+      className={cn(
+        'inline-flex items-center gap-1 rounded-md border border-ink-border bg-ink-3 px-2 py-1 text-meta text-ink-fg-1',
+        maxWidthClass
+      )}
+    >
+      {thumbUrl !== null ? (
+        // 点击图本身放大（role/tabIndex，而不是外面套一层 <button>：chip 里已有 Remove 按钮，
+        // 图再包一层会多一个嵌套的可聚焦盒子）。
+        <img
+          src={thumbUrl}
+          alt=""
+          role="button"
+          tabIndex={0}
+          aria-label={t('chat.attachment.preview', { defaultValue: 'Preview image' })}
+          onClick={() => onPreview(thumbUrl)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault()
+              onPreview(thumbUrl)
+            }
+          }}
+          className="h-9 w-9 shrink-0 cursor-zoom-in rounded-md border border-ink-border bg-ink-1 object-cover"
+        />
+      ) : (
+        <Paperclip size={11} strokeWidth={2} className="shrink-0 text-ink-fg-3" />
+      )}
+      <span className="truncate">{attachment.name}</span>
+      {attachment.file && (
+        <span className="shrink-0 font-mono text-micro text-ink-fg-3">
+          {formatAttachmentSize(attachment.file.size)}
+        </span>
+      )}
+      <AttachmentPrimitive.Remove
+        aria-label="remove"
+        className="shrink-0 text-ink-fg-3 hover:text-ink-fg"
+      >
+        <X size={11} strokeWidth={2.5} />
+      </AttachmentPrimitive.Remove>
+    </span>
+  )
+}
+
 /** issue #61 Lane 3 (A2) — attachment chips now render from the assistant-ui COMPOSER state (the
  *  adapter's pending attachments), so paperclip / paste / drop all get the same visible feedback.
  *  Styling is the former controls-driven chip, verbatim; the hand-rolled X becomes
- *  AttachmentPrimitive.Remove → composer.removeAttachment → adapter.remove → panel-state sync. */
-function ComposerAttachmentChips(): React.JSX.Element {
+ *  AttachmentPrimitive.Remove → composer.removeAttachment → adapter.remove → panel-state sync.
+ *
+ *  🔴 Exported because there are TWO composers: this one (email panel) and AgentComposer (general
+ *  chat / Cmd+O), which shipped a byte-for-byte copy of this chip apart from its max-width. One
+ *  component, both surfaces — mirroring UserMessageAttachments — so a chip change can't land on
+ *  only one of them. The lightbox lives here so a chip thumbnail zooms on either surface. */
+export function ComposerAttachmentChips({
+  chipMaxWidthClass = 'max-w-[200px]'
+}: {
+  chipMaxWidthClass?: string
+} = {}): React.JSX.Element {
+  const [previewSrc, setPreviewSrc] = useState<string | null>(null)
   return (
-    <ComposerPrimitive.Attachments>
-      {({ attachment }) => (
-        <span className="inline-flex max-w-[200px] items-center gap-1 rounded-md border border-ink-border bg-ink-3 px-2 py-1 text-meta text-ink-fg-1">
-          <Paperclip size={11} strokeWidth={2} className="shrink-0 text-ink-fg-3" />
-          <span className="truncate">{attachment.name}</span>
-          {attachment.file && (
-            <span className="shrink-0 font-mono text-micro text-ink-fg-3">
-              {formatAttachmentSize(attachment.file.size)}
-            </span>
-          )}
-          <AttachmentPrimitive.Remove
-            aria-label="remove"
-            className="shrink-0 text-ink-fg-3 hover:text-ink-fg"
-          >
-            <X size={11} strokeWidth={2.5} />
-          </AttachmentPrimitive.Remove>
-        </span>
+    <>
+      <ComposerPrimitive.Attachments>
+        {({ attachment }) => (
+          <ComposerAttachmentChip
+            attachment={attachment}
+            maxWidthClass={chipMaxWidthClass}
+            onPreview={setPreviewSrc}
+          />
+        )}
+      </ComposerPrimitive.Attachments>
+      {previewSrc !== null && (
+        <ImageLightbox src={previewSrc} onClose={() => setPreviewSrc(null)} />
       )}
-    </ComposerPrimitive.Attachments>
+    </>
   )
 }
 
