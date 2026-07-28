@@ -29,13 +29,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, TYPE_CHECKING, Iterator, Optional
 
+from src.calendar_sync._common import SOURCES_TRY_ORDER
 from src.calendar_sync.expander import expand_in_window
 
 if TYPE_CHECKING:
     from src.calendar_sync.caldav_reader import CalendarEvent
 
 
-_VALID_SOURCES = frozenset({"caldav", "email_ics", "legacy_calendar_app"})
+# 🔴 值域单源自 src/calendar_sync/_common.SOURCES_TRY_ORDER（issue #68 —— 此前全仓
+# 六处各写一份同样的三元组，加/改一个 source 漏改任一处都不报错）。tuple 的**顺序**
+# 另有语义（未指定 source 时的 fallback 查找顺序），这里只用它当值域。
+_VALID_SOURCES = frozenset(SOURCES_TRY_ORDER)
 
 
 @dataclass

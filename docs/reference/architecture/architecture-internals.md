@@ -449,11 +449,29 @@ log4j.logger.davmail=INFO
 
 **详见**：[`docs/multi-folder-sync-prd.md`](../folder-sync/multi-folder-sync-prd.md) · [`docs/multi-folder-sync-design.md`](../folder-sync/multi-folder-sync-design.md) · [`docs/multi-folder-sync-handoff.md`](../../archive/2026-06/multi-folder-sync-handoff.md) · 看板 [`docs/multi-folder-sync-matrix.md`](../folder-sync/multi-folder-sync-matrix.md)。
 
-## 跨语言手抄常量的一致性闸（可复用模式，现存四闸）
+## 跨语言手抄常量的一致性闸（可复用模式，现存十二闸）
 
 **问题形态**：一个常量 / 派生表 / 集合，在 Python 与 TypeScript（或多个 TS 文件）里各有一份**手抄**镜像。
 类型系统跨不过语言边界，import 也跨不过 —— 于是改一处、漏另一处，**测试全绿、编译干净、运行时静默错**。
-本仓已被这个形态咬过四次，形成同一套解法：**建一个跨语言一致性闸**（测试形态，非运行时机制）。
+本仓被这个形态反复咬，形成同一套解法：**建一个一致性闸**（测试形态，非运行时机制）。
+
+**"跨"的不止语言**（issue #68 补的几闸把边界类型摊开了）——只要两侧共享不了同一个定义，就是同一个问题：
+
+| 边界 | 例子 |
+|---|---|
+| 跨语言 | Python ↔ TS（多数） |
+| 跨部署 | 本地 `src/` ↔ 远程 VPS 上的 `webhook-server/`（同是 Python，但 import 不到） |
+| 跨构件种类 | Python `Literal` ↔ `docs/cli-schema/*.json`（JSON Schema 不是 Python 值） |
+| 跨语言载体 | Python 常量 ↔ **SQL 字符串**里的 `CHECK` 约束（建表语句 import 不进去） |
+| 跨进程/跨层 | Electron main handler ↔ renderer / `shared/` 的类型声明（同语言，但 tsconfig 分项目） |
+
+🔴 **但先问能不能不建闸**：issue #68 的一半工作量其实是**消灭镜像**而非补闸 ——
+同语言同进程的（CLI ↔ serve-api 的 admin health 组装块、四份 `DEFAULT_API_PORT`、三份
+`MAX_OUTPUT_TOKENS`、两份 keychain 寻址键）一律直接单源。
+遇到「不能 import，因为对方模块顶层拉了 electron / SyncStore / keytar」这类理由时，
+**正解通常是把常量下沉成零依赖的叶子模块**（`@shared/lib/ports.ts` / `llm_limits.ts` /
+`src/services/admin_health.py`），而不是照抄一份加句注释说"同源"。
+那种注释挡不住任何漂移 —— token 阈值那三份的注释就写着"同源"，而它**已经漂了**。
 
 **解法三要素**：
 
@@ -465,7 +483,7 @@ log4j.logger.davmail=INFO
    闸失效等于没有闸，而且没人会发现。所以抽取器只认当前的单行习语，重构者被迫回来同步更新抽取器，
    顺手核对镜像仍一致。
 
-**现存四闸**：
+**现存十二闸**（前四条是原有的，后八条随 issue #68 补齐）：
 
 | 镜像的东西 | 镜像在哪几处 | 闸 | 漏改的后果 |
 |---|---|---|---|
@@ -473,7 +491,28 @@ log4j.logger.davmail=INFO
 | mailbox 判定集 / 变体集 | `src/mail/mailbox_semantics.py` · `frontend/src/shared/lib/mailboxSemantics.ts` | `frontend/tests/shared/lib/mailboxSemantics.test.ts`（两侧集合逐成员锁死） | 变体行在专属视图不可见 / 徽标与列表口径分裂（issue #42） |
 | `trigger.kind → context_mode` 派生表 | `src/api/routers/agent.py::_derive_rule_context_mode`（建规盖章·写侧权威）· `frontend/src/ai-gateway/agentRun.ts::deriveContextMode`（headless 求值）· `frontend/src/shared/components/agents/custom-agent/shared.tsx::deriveHeadlessMode`（抽屉展示） | `tests/api/test_context_mode_consistency.py`（canonical 表 = 该测试文件；Python 穷举断言行为，两处 TS 从源码正则抽分支比对） | 规则双键 `(context_mode, agent_id)` 失配 → owner 配的免卡规则**永不命中**、恒 HITL；抽屉显示「未配置触发」+ 全部规则标 dormant |
 | trigger `kind` 值域 + schedule `rule` 10 键 | `src/agents/trigger.py::parse_trigger`（保存校验权威）+ `src/agents/schedule_rule.py::_RULE_KEYS` · `frontend/src/ai-gateway/tools/schemas.ts::customAgentTriggerSchema`（chat CRUD 输入 allowlist，`.strict()`） | `tests/api/test_trigger_kind_parity.py`（两侧都从源码抽真值，本闸不持任何期望值副本；另有合成探针反向用例） | 少一种 kind = 对话式 CRUD 建不出该类 agent（issue #65 —— 07-24 排程批改 4 处独漏此处）；rule 键漂移 = 模型提的排程被 `.strict()`/`parse_rule` 恒拒 |
+| SSE channel 名 + 心跳秒数（**跨部署**） | `src/events/publisher.py::DEFAULT_CHANNEL`（发布端真源，本地订阅端 `src/sse_server.py` 已改 import） · `webhook-server/app.py`（远程 VPS 独立部署，import 不到 `src/`） | `tests/events/test_sse_constants_parity.py` | 🔴 Redis pub/sub 对 channel 不匹配**既不抛也不警告，只是零投递** —— 远程看板的实时事件全丢，两端日志都正常 |
+| `sync_status` 值域（**跨构件种类**） | `docs/cli-schema/_common.schema.json`（wire 契约，前端 `cli.gen.ts` 由它 codegen） · `src/api/schemas/email.SyncStatus`（Literal；`--status`/`?status=` 过滤白名单已改由它 `get_args` 派生） | `tests/api/test_sync_status_parity.py` | 曾漏 `deleted`：该状态**真实存在于生产库**，却在 CLI 与 web 两端都「过滤不出来」，报错还说它非法（issue #68 病根之一） |
+| 中文 AI priority 枚举 | `src/llm_agent/schema.py::PRIORITY_ENUM`（真源 = LLM 输出值域） · `src/kos/producer.py::_CN_PRIORITY_MAP` · `frontend/src/shared/lib/ai_mapping.ts::mapPriority`（**有意**是超集，闸只钉方向） | `tests/kos/test_priority_enum_parity.py`（按源码顺序复刻 TS 的 if 链求值） | 加第 5 档漏改 → `_normalize_priority` **静默降成 normal**（高优邮件按普通件走 KOS floor）；前端认不出则那枚优先级点直接不渲染 |
+| `calendar_event.source` 三元组 | canonical `src/calendar_sync/_common.SOURCES_TRY_ORDER`（三处 Python 已改 import） · `sync_store.py` 的 **SQL `CHECK`** · `api/schemas/calendar.py` 的 `Literal` · `src/skills/builtin/calendar.py` · TS 联合 + `shared/lib/calendarSource.ts` + gateway `z.enum` | `tests/calendar_sync/test_event_source_parity.py` | 收窄侧漏加 → 写入/调用被拒但报「非法参数」（排查往调用方去）；放宽侧漏加 → 存得进读得出，却过不了 ajv、前端 fallback 掉（只 `console.warn`） |
+| `FIXED_EXEC_PATH`（exec 子进程固定 PATH） | `src/skills/secret_names.py`（冒号串） · `frontend/src/electron/main/exec_policy_matcher.ts`（数组） | `frontend/tests/main/py_ts_constants_parity.test.ts` | owner 派生的 exec 免卡规则钉在子进程**不会去查的目录** → 规则永不命中、次次弹审批（或 UI 承诺免卡而真实执行仍拦） |
+| `INTEGRITY_MARKER_FILENAME` | `src/mail/db_safety.py` · `frontend/src/electron/main/backend_lifecycle.ts::DB_INTEGRITY_MARKER_FILENAME` | 同上文件（此前只有 `backend_lifecycle.test.ts` 的**自指**断言：TS 常量 vs 测试里再抄一遍的字面量，Python 改名照样绿） | Python fail-fast 写的 marker 前端永远读不到 → 用户只看到「后端起不来」，quick_check 的损坏详情丢失 |
+| `REQUIRED_TABLES`（**子集**关系） | `src/services/admin_health.py`（全量 9 张，CLI/serve-api 共用） · `frontend/src/electron/main/backend_lifecycle.ts`（开窗门控的 4 张关键子集） | 同上文件（钉子集关系，不是相等 —— 子集是有意的） | TS 侧拼错表名 = `probeDbReady` 永远等不到就绪，开窗卡满 120s 超时降级（v0.2.2 同款事故） |
+| 日历 IPC(17) + onboarding(16) 类型族（**跨进程，结构性**） | `electron/main/handlers/calendar-{read,sync,write}.ts` ↔ `shared/api/types/calendar.ts`；`handlers/onboarding.ts` ↔ `renderer/onboarding/ipc.ts`（含 4 对**改名**镜像） | `frontend/tests/main/type_family_parity.test.ts`（带花括号深度的小解析器抽**顶层字段键集**；只比键集不逐字段钉值 —— 否则一份手抄变两份） | 生产者多的键 = 前端读不到（TS 说它不存在）；声明多的键 = 恒 `undefined` 且**编译期完全不报**（#67 一整批就是这个形态） |
 
 **什么时候必须建新闸**：你要在**第二处**手抄一个已有的常量 / 枚举 / 派生表，且两处无法共享同一个源
-（跨语言 / 跨进程 / 打包边界）。四闸的成本都在 100 行量级，而每次事故都是「静默错到用户面」。
-先问能不能**消灭镜像**（单源 + 生成/导出）；确实消灭不了，才建闸——闸是妥协，不是首选。
+（跨语言 / 跨部署 / 跨构件种类 / 跨进程 / 打包边界）。每闸的成本都在 100-200 行量级，
+而每次事故都是「静默错到用户面」。
+先问能不能**消灭镜像**（单源 + 生成/导出 + 零依赖叶子模块）；确实消灭不了，才建闸——闸是妥协，不是首选。
+
+**写抽取器时的两个实战坑**（issue #68 建闸过程中当场踩到的，都在对应测试里留了回归用例）：
+
+- **部分抽取比抽不到更毒**。`REQUIRED_TABLES` 的多行元组用 `\(([^)]*)\)` 抓，会在**条目行尾注释**
+  里的右括号（`"email_outbox",  # ... (Sprint 15)`）处截断，**静默少抽后面的条目** —— 闸会红在一个
+  根本不存在的漂移上，反过来也可能放过真漂移。多行结构一律锚定**行首的**结束符。
+- **同名结构可能不止一个**。`sync_store.py` 里有**两个** `CHECK (source IN (...))`（`calendar_event`
+  与 `email_translation`），不先锚到目标表的 `CREATE TABLE` 块就会抓到隔壁那张。抽取前先缩范围。
+
+**TS 侧还有比闸更早的一招**：值域的运行期数组用 `as const satisfies readonly Union[]` 挡住多写/写错，
+再加一行 `Exclude<Union, (typeof ARR)[number]> extends never ? true : never` 挡住漏写 ——
+加成员时不同步就**编译不过**。见 `frontend/src/shared/lib/calendarSource.ts`。跨语言那一步仍需闸。

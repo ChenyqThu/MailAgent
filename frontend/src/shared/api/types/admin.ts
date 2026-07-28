@@ -91,12 +91,13 @@ export interface DavMailHealthData {
   consecutive_login_failures?: number
   /** The threshold the watchdog actually applied (F5 — propagated via sync_state
    *  `davmail.login_fail_threshold` so the UI can't drift from the alerting rule).
-   *  🔴 DESKTOP ONLY on the wire: `handlers/admin.ts` reads the sync_state key directly and
-   *  emits it, but the web producer (`src/api/routers/admin.py::_build_davmail_health`)
-   *  computes `_login_fail_threshold(state)` for its own level decision and does NOT put it in
-   *  the response. So absent ≠ "3" — the owner may have configured
-   *  DAVMAIL_LOGIN_FAIL_THRESHOLD to something else. Render the ratio only when it is present;
-   *  substituting a default here would just be a different wrong number on screen. */
+   *  Both producers emit it: `handlers/admin.ts` (desktop IPC) and
+   *  `src/api/routers/admin.py::_build_davmail_health` (web — added by issue #68; it had
+   *  been computing the threshold for its own level decision without ever sending it).
+   *  Stays optional because an older backend still won't send it, and absent ≠ "3" —
+   *  the owner may have configured DAVMAIL_LOGIN_FAIL_THRESHOLD to something else.
+   *  Render the ratio only when present; substituting a default here would just be a
+   *  different wrong number on screen. */
   login_fail_threshold?: number
   /** Days since token.dat mtime. Null when token.dat missing. */
   token_age_days: number | null

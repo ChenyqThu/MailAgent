@@ -79,11 +79,20 @@ _LOG_TS_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})")
 _LOG_TAIL_BYTES = 50 * 1024
 _THROTTLE_WINDOW_SECS = 5 * 60
 _PROCESS_DOWN_THRESHOLD = 3  # 连续失败次数
-_TOKEN_WARN_DAYS = 80.0
-_TOKEN_CRITICAL_DAYS = 87.0
+# 🔴 token 老化门槛的**唯一真源** (issue #68)。level 在本 watchdog 内 live 计算不落盘,
+# 故 admin router (web 面重算) 与 CLI (`mailagent admin health` 提示行) 都要这两个值 ——
+# 二者一律 `from src.mail.davmail_watchdog import TOKEN_WARN_DAYS, TOKEN_CRITICAL_DAYS`,
+# **不许再就地复刻**。历史上三处各写一份, CLI 那份漏了 critical 档, 于是同一个 87 天
+# token 在 web 面报 critical、`mailagent admin health` 只报 warning (issue #68 病根)。
+# 旧注释称「不共享 import 因为 watchdog import 期会拉 SyncStore/alert 重依赖」——
+# 已证伪: 本模块的 SyncStore/Config/FeishuAlertNotifier 全在 TYPE_CHECKING 下,
+# 运行期只拉 loguru + 两个轻量 src 模块。
+TOKEN_WARN_DAYS = 80.0
+TOKEN_CRITICAL_DAYS = 87.0
 # IMAP LOGIN 健康探测 (L2a) 默认值 — 可经 config 覆盖 (DAVMAIL_LOGIN_*)。
-# admin router / electron 的 level 重算就地复刻阈值 3 (同 token 阈值套路)。
-_LOGIN_FAIL_THRESHOLD = 3
+# F5 起生效值经 sync_state davmail.login_fail_threshold 传播给各读面; 这里是
+# **键缺失时的 fallback 默认**, 同样单源 (admin router import 本名, 勿再复刻)。
+LOGIN_FAIL_THRESHOLD = 3
 _LOGIN_PROBE_TIMEOUT_SECS = 15
 # 自动恢复 (L2b) 默认值 — 可经 config 覆盖 (DAVMAIL_AUTO_RESTART_*)。
 # 冷却防 flap (成败都进冷却) + 24h 滚动窗口上限防重启风暴 (根因未解须人工)。
@@ -109,7 +118,7 @@ class DavMailWatchdog:
         cfg: Optional["Config"] = None,
         login_probe_enabled: bool = True,
         login_probe_timeout: int = _LOGIN_PROBE_TIMEOUT_SECS,
-        login_fail_threshold: int = _LOGIN_FAIL_THRESHOLD,
+        login_fail_threshold: int = LOGIN_FAIL_THRESHOLD,
         restart_callback: Optional[Callable[[], Awaitable[tuple[bool, str]]]] = None,
         auto_restart_cooldown: int = _AUTO_RESTART_COOLDOWN_SECS,
         auto_restart_max_per_day: int = _AUTO_RESTART_MAX_PER_DAY,
@@ -547,9 +556,9 @@ class DavMailWatchdog:
         if login_degraded:
             # TCP 可达但 IMAP LOGIN 连续失败 = token 劣化 (能发不能收)
             return "critical"
-        if token_age_days is not None and token_age_days >= _TOKEN_CRITICAL_DAYS:
+        if token_age_days is not None and token_age_days >= TOKEN_CRITICAL_DAYS:
             return "critical"
-        if token_age_days is not None and token_age_days >= _TOKEN_WARN_DAYS:
+        if token_age_days is not None and token_age_days >= TOKEN_WARN_DAYS:
             return "warning"
         if throttle_burst:
             return "warning"
@@ -667,10 +676,10 @@ class DavMailWatchdog:
         #    投递成功才 commit (两阶段提交, 理由见 episode.py 模块 docstring)。
         if token_age_days is not None:
             crit = self.episodes.evaluate(
-                "davmail_token_critical", token_age_days, _TOKEN_CRITICAL_DAYS
+                "davmail_token_critical", token_age_days, TOKEN_CRITICAL_DAYS
             )
             warn = self.episodes.evaluate(
-                "davmail_token", token_age_days, _TOKEN_WARN_DAYS
+                "davmail_token", token_age_days, TOKEN_WARN_DAYS
             )
             if crit in (episode.ENTER, episode.ESCALATE):
                 if await self.alerter.alert_davmail_token_critical(token_age_days):

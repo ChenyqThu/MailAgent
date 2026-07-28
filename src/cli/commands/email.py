@@ -13,6 +13,7 @@ from typing import Any, Optional, TYPE_CHECKING
 
 import typer
 
+from src.api.schemas.email import VALID_SYNC_STATUSES as _VALID_SYNC_STATUSES
 from src.cli.exceptions import CliError, CliInvalidArgError, CliNotFoundError
 from src.cli.output import emit, emit_cli_error
 from src.services import wire
@@ -238,7 +239,11 @@ def email_body(
 # list (US-004)
 # ============================================================
 
-VALID_STATUSES = {"pending", "fetch_failed", "synced", "failed", "skipped", "dead_letter"}
+# 🔴 issue #68: 单源自 src/api/schemas/email.SyncStatus（pydantic-only 模块, 不拉
+# FastAPI）。此前 CLI 与 serve-api 各硬编码一份 6 值集合, 双双漏 `deleted` —— 而
+# `deleted` 是真实存在的 sync_status 值（生产库现有一行）, 导致该行在两端都
+# 「过滤不出来」且报错文案说它非法。
+VALID_STATUSES = _VALID_SYNC_STATUSES
 VALID_TRIBOOL = {"true", "false", None}
 LIST_LIMIT_DEFAULT = 50
 LIST_LIMIT_MAX = 500

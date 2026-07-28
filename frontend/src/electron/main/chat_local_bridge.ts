@@ -29,10 +29,11 @@
 import { is } from '@electron-toolkit/utils'
 import { session } from 'electron'
 
+import { DEFAULT_API_PORT } from '@shared/lib/ports'
 import { getLocalApiToken, LOCAL_TOKEN_HEADER } from './local_token'
 
-/** serve-api loopback 端口（与 daemon_api.DEFAULT_API_PORT / backend_lifecycle 同源 8200）。 */
-const DEFAULT_API_PORT = 8200
+// serve-api loopback 端口单源自 `@shared/lib/ports`（issue #68 —— 此前这里手抄 8200，
+// 注释声称「与 daemon_api / backend_lifecycle 同源」但无任何机制保证）。
 
 /** 发往本机 serve-api 的 URL 过滤器（127.0.0.1 + localhost 两别名，端口可 env 覆盖）。 */
 function loopbackFilter(): { urls: string[] } {

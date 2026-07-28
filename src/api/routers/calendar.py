@@ -71,6 +71,7 @@ from fastapi import APIRouter, Depends, Query, Request
 from src.api.app import APIError, success_envelope
 from src.api.auth import verify_cf_access
 from src.api.deps import get_settings
+from src.calendar_sync._common import SOURCES_TRY_ORDER as _SOURCES_TRY_ORDER
 
 if TYPE_CHECKING:
     from src.calendar_sync.service import CalendarService
@@ -83,7 +84,10 @@ router = APIRouter(prefix="/api/calendar", tags=["calendar"])
 
 # 与 CLI calendar events 对齐: occurrence 上限 (前端 EventsListOpts.limit 默认 1000)。
 EVENTS_LIMIT_MAX = 5000
-VALID_EVENT_SOURCES = ("caldav", "email_ics", "legacy_calendar_app")
+# 🔴 值域单源自 src/calendar_sync/_common.SOURCES_TRY_ORDER（issue #68 —— 此前全仓
+# 六处各写一份同样的三元组，加/改一个 source 漏改任一处都不报错）。tuple 的**顺序**
+# 另有语义（未指定 source 时的 fallback 查找顺序），这里只用它当值域。
+VALID_EVENT_SOURCES = _SOURCES_TRY_ORDER
 
 
 def _build_service(cfg: "Config") -> "CalendarService":

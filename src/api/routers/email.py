@@ -50,6 +50,7 @@ from fastapi import APIRouter, Depends, Query, Request
 from src.api.app import APIError, success_envelope
 from src.api.auth import verify_cf_access
 from src.api.deps import get_repository, get_service_ctx
+from src.api.schemas.email import VALID_SYNC_STATUSES as _VALID_SYNC_STATUSES
 from src.services import wire
 from src.services.errors import ServiceError
 from src.services.email_body_preview import (
@@ -80,9 +81,7 @@ router = APIRouter(prefix="/api/email", tags=["email"])
 
 VALID_INCLUDE = {"body", "attachments", "all"}
 VALID_BODY_FORMATS = {"markdown", "html", "raw"}
-VALID_STATUSES = {
-    "pending", "fetch_failed", "synced", "failed", "skipped", "dead_letter",
-}
+VALID_STATUSES = _VALID_SYNC_STATUSES
 LIST_LIMIT_MAX = 500
 SEARCH_LIMIT_MAX = 200
 

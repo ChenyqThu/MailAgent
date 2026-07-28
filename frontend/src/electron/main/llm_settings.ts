@@ -11,9 +11,11 @@
 
 import keytar from 'keytar'
 
-const SERVICE = 'ink.chenge.mailagent'
-const ACCOUNT_LLM = 'llm-api-key'
-const ACCOUNT_LLM_TRANSLATE = 'llm-translate-api-key'
+// 寻址键单源自 keychain.ts（issue #68 —— 此前这里手抄一份，漂了就是「写在 A 槽、
+// 读 B 槽」，用户看到的却是「未配置 API key」）。keychain.ts 不 import 本模块，无环。
+// 注意：**只共享寻址键，不共享读取函数** —— 本模块的 getLlmTranslateApiKey 有意在
+// translate 槽落空时 fallback 主 LLM key，keychain.ts 的同名函数不 fallback。
+import { ACCOUNT_LLM, ACCOUNT_LLM_TRANSLATE, SERVICE } from './keychain'
 
 /**
  * Resolve the LLM gateway API key. macOS Keychain entry first, then

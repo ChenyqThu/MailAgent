@@ -18,6 +18,7 @@ import { app, dialog, ipcMain } from 'electron'
 import { copyFileSync, rmSync } from 'fs'
 import { basename, dirname } from 'path'
 
+import { TOKEN_CRITICAL_DAYS, TOKEN_WARN_DAYS } from '@shared/lib/davmailThresholds'
 import { callCli } from '../cli_runner'
 import type { AdminHealthData } from '@shared/api/types'
 import { getDb } from '../db'
@@ -295,8 +296,8 @@ export function runDavmailHealth(): DavMailHealthData {
   else if (!smtpOk && smtpFails >= 3) level = 'critical'
   // L2a: TCP 可达但 LOGIN 连续失败 = token 劣化 (F5: 阈值随 watchdog 生效值)
   else if (loginFails >= loginThreshold) level = 'critical'
-  else if (tokenAge >= 87) level = 'critical'
-  else if (tokenAge >= 80) level = 'warning'
+  else if (tokenAge >= TOKEN_CRITICAL_DAYS) level = 'critical'
+  else if (tokenAge >= TOKEN_WARN_DAYS) level = 'warning'
   else if (throttleCount >= 3) level = 'warning'
   else if (!imapOk || !smtpOk) level = 'warning'
 
@@ -337,7 +338,7 @@ export function runSystemAlerts(): SystemAlertsData {
     }
   }
   if (h.enabled && h.token_age_days !== null) {
-    if (h.token_age_days >= 87) {
+    if (h.token_age_days >= TOKEN_CRITICAL_DAYS) {
       alerts.push({
         level: 'critical',
         source: 'davmail',
@@ -345,7 +346,7 @@ export function runSystemAlerts(): SystemAlertsData {
         message: `token.dat ${h.token_age_days.toFixed(1)} 天未刷新, 估剩余 ${Math.max(0, 90 - h.token_age_days).toFixed(0)} 天`,
         ts: h.last_probe_at
       })
-    } else if (h.token_age_days >= 80) {
+    } else if (h.token_age_days >= TOKEN_WARN_DAYS) {
       alerts.push({
         level: 'warning',
         source: 'davmail',

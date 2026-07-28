@@ -51,7 +51,10 @@ if TYPE_CHECKING:
 # Public constants (CLI / IPC 共享枚举)
 # ---------------------------------------------------------------------------
 
-VALID_EVENT_SOURCES = ("caldav", "email_ics", "legacy_calendar_app")
+# 🔴 值域单源自 src/calendar_sync/_common.SOURCES_TRY_ORDER（issue #68 —— 此前全仓
+# 六处各写一份同样的三元组，加/改一个 source 漏改任一处都不报错）。tuple 的**顺序**
+# 另有语义（未指定 source 时的 fallback 查找顺序），这里只用它当值域。
+VALID_EVENT_SOURCES = SOURCES_TRY_ORDER
 VALID_EVENT_STATUS = ("CONFIRMED", "TENTATIVE", "CANCELLED")
 
 # P2-8 — worker 移除 CalDAV calendar 时有意不软删其历史事件行 (worker.py

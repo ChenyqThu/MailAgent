@@ -32,6 +32,10 @@ from fastapi import APIRouter, Depends, Request
 from src.api.app import APIError, success_envelope
 from src.api.auth import verify_cf_access
 from src.api.deps import get_repository, get_service_ctx
+from src.mail.davmail_watchdog import (
+    LOGIN_FAIL_THRESHOLD as _watchdog_login_fail_threshold,
+)
+from src.services import admin_health as _health
 from src.services.admin_service import AdminService
 from src.services.errors import ServiceError
 from src.services.guards import Actor
@@ -51,134 +55,23 @@ def _raise_from_service_error(exc: ServiceError) -> None:
     raise APIError(exc.code, exc.message, hint=exc.hint, source="cli") from exc
 
 
-# admin health 的 schema 契约 — 与主仓 SyncStore 同步避免漂移。
-# 镜像 src/cli/commands/admin.py 的 EXPECTED_DB_VERSION / REQUIRED_TABLES。
+# admin health 的 schema 契约 — 与主仓 SyncStore 同步避免漂移 (CLI 侧同样 import
+# SyncStore.DB_VERSION, 非手抄)。
 def _expected_db_version() -> int:
     from src.mail.sync_store import SyncStore
 
     return SyncStore.DB_VERSION
 
 
-REQUIRED_TABLES = (
-    "email_metadata",
-    "email_body",
-    "email_attachment",
-    "email_body_fts",
-    "cli_checkpoints",
-    "v4_rollout_stats",
-    "island_dispatch",
-    "email_outbox",
-    "llm_processing",  # v37: 纳入版本化建表 (前端 listEnriched 无条件 LEFT JOIN)
-)
-
-
-def _parse_worker_rows(rows) -> dict:
-    """sync_state 'worker.<name>.<field>' 行 → {name: {field: value}} (E4 WP1 心跳).
-
-    supervise (src/utils/supervise.py) 在状态跃迁时写这些键; 镜像
-    src/cli/commands/admin.py 同名 helper (本文件惯例: 平行实现不共享 import)。
-    """
-    workers: dict[str, dict] = {}
-    for key, value in rows:
-        rest = key[len("worker."):]
-        if "." not in rest:
-            continue
-        name, field = rest.rsplit(".", 1)
-        if field == "restart_count":
-            try:
-                value = int(value)
-            except (TypeError, ValueError):
-                pass
-        workers.setdefault(name, {})[field] = value
-    return workers
-
-
-def _build_davmail_summary(state: dict) -> Optional[dict]:
-    """davmail.* 键 → {token_age_days, imap_reachable, last_probe_at} 摘要 (E4 WP2).
-
-    watchdog 从未 tick (非 davmail 模式) → None; token_age_days "-1" 哨兵 → None。
-    """
-    if not state.get("davmail.last_probe_at"):
-        return None
-    token_age_days: Optional[float] = None
-    raw = state.get("davmail.token_age_days")
-    if raw is not None:
-        try:
-            parsed = float(raw)
-            token_age_days = None if parsed < 0 else parsed
-        except (TypeError, ValueError):
-            token_age_days = None
-    return {
-        "token_age_days": token_age_days,
-        "imap_reachable": state.get("davmail.imap_reachable") == "1",
-        "last_probe_at": state.get("davmail.last_probe_at"),
-    }
-
-
-def _mark_stale_workers(workers: dict, start_history_raw: Optional[str]) -> None:
-    """E4 第二批 (D3): last_started_at 早于本次 boot 的 worker 条目加 stale=True.
-
-    last_boot_at = max(sync_state['service.start_history']) (JSON 数组, epoch 秒,
-    service._record_start_history 每次 start() 追加)。worker 心跳的 last_started_at
-    是 ISO 8601 字符串 (supervise._utcnow_iso), fromisoformat→timestamp 转 epoch 后
-    比较。**秒粒度对齐**: 心跳 ISO 是 timespec="seconds" 截断值而 boot 是带小数的
-    time.time() —— worker 在 start() 后几 ms 内就启动, 直接 float 比较会把「boot
-    同一秒启动」的 worker 几乎恒误标 stale (floor(T+ms) < T), 故 boot 也 floor 到
-    整秒再比 (同秒 = 不 stale)。缺失 / parse 失败静默跳过 (health 绝不因此 500);
-    不 stale **不写字段** (减少噪音)。镜像 src/cli/commands/admin.py 同名 helper
-    (平行实现不共享 import)。
-    """
-    import json as _json
-    from datetime import datetime as _datetime
-
-    if not start_history_raw:
-        return
-    try:
-        history = _json.loads(start_history_raw)
-    except (ValueError, TypeError):
-        return
-    if not isinstance(history, list):
-        return
-    epochs = [float(t) for t in history if isinstance(t, (int, float))]
-    if not epochs:
-        return
-    last_boot_sec = int(max(epochs))
-    for w in workers.values():
-        raw = w.get("last_started_at")
-        if not isinstance(raw, str):
-            continue
-        try:
-            started_at = _datetime.fromisoformat(raw).timestamp()
-        except (ValueError, TypeError, OverflowError, OSError):
-            continue
-        if started_at < last_boot_sec:
-            w["stale"] = True
-
-
-def _compose_dynamic_health_notes(workers: dict, davmail_summary: Optional[dict]) -> list:
-    """crashloop 停摆 / token 老化 → 提示行 (E4 WP1/WP2, 不影响 healthy 语义).
-
-    与 CLI 面差异: CLI notes 还包含 E1 的静态 davmail watch note (那是 CLI-only
-    设计, web 面历史上无 notes 字段, 这里只发动态行)。_TOKEN_WARN_DAYS 定义在
-    下方 davmail-health 段 (模块级名, 调用期解析)。
-    """
-    notes: list = []
-    for wname in sorted(workers):
-        w = workers[wname]
-        if w.get("status") == "crashloop_stopped":
-            last_error = str(w.get("last_error") or "")[:120]
-            notes.append(
-                f"worker '{wname}' 已 crash-loop 停摆 (supervise 停止重启), "
-                f"该功能不可用直到服务重启 — last_error: {last_error}"
-            )
-    if davmail_summary is not None:
-        tad = davmail_summary.get("token_age_days")
-        if tad is not None and tad >= _TOKEN_WARN_DAYS:
-            notes.append(
-                f"DavMail OAuth token 已 {tad:.1f} 天未刷新 (≥{_TOKEN_WARN_DAYS:.0f}d)；"
-                "refresh_token 90 天有效期，接近时需重走 OAuth flow。"
-            )
-    return notes
+# 🔴 issue #68: 必备表清单 + 四个 health 组装 helper 此前在本文件与
+# src/cli/commands/admin.py 各持一份逐字副本 ("平行实现不共享 import" 的旧惯例),
+# 现统一单源到 src/services/admin_health。两端**有意保留**的差异 (notes 静态段 /
+# error 文案 redaction) 说明见该模块 docstring。
+REQUIRED_TABLES = _health.REQUIRED_TABLES
+_parse_worker_rows = _health.parse_worker_rows
+_build_davmail_summary = _health.build_davmail_summary
+_mark_stale_workers = _health.mark_stale_workers
+_compose_dynamic_health_notes = _health.compose_dynamic_health_notes
 
 
 # ============================================================
@@ -556,17 +449,17 @@ async def admin_cleanup_dead_letter(
 # ============================================================
 # davmail-health / system-alerts 共享: sync_state davmail.* 直读 + level 重算
 # ============================================================
-# DavMailWatchdog 的阈值 (src/mail/davmail_watchdog.py _TOKEN_WARN_DAYS /
-# _TOKEN_CRITICAL_DAYS)。level 在 watchdog 内 live 计算不落盘, 故镜像这两个常数 +
-# _compute_overall_level 的规则, 用落盘的 davmail.* 值重算。若 watchdog 阈值变动,
-# 这里需随之漂移 (无共享 import: watchdog 模块 import 期会拉 SyncStore/alert 重依赖,
-# router 只需两个标量, 故就地复刻)。
-_TOKEN_WARN_DAYS = 80.0
-_TOKEN_CRITICAL_DAYS = 87.0
+# DavMailWatchdog 的阈值。level 在 watchdog 内 live 计算不落盘, 故这里复刻
+# _compute_overall_level 的**规则**, 用落盘的 davmail.* 值重算 —— 但**阈值本身
+# 直接 import 真源** (issue #68: 旧注释「watchdog import 期会拉 SyncStore/alert
+# 重依赖」已证伪, 那些 import 全在 TYPE_CHECKING 下)。
+_TOKEN_WARN_DAYS = _health.TOKEN_WARN_DAYS
+_TOKEN_CRITICAL_DAYS = _health.TOKEN_CRITICAL_DAYS
 # F5: login 失败阈值改由 watchdog 每轮经 sync_state davmail.login_fail_threshold
 # 传播 (生效值单源), 根治「四个健康读面各自硬编码 3, 设 DAVMAIL_LOGIN_FAIL_THRESHOLD
-# 非默认值时判定漂移」。键缺失 (老数据 / watchdog 未升级) fallback 默认 3。
-_DEFAULT_LOGIN_FAIL_THRESHOLD = 3
+# 非默认值时判定漂移」。键缺失 (老数据 / watchdog 未升级) fallback 默认 3 (同样 import
+# 真源, 不复刻字面量)。
+_DEFAULT_LOGIN_FAIL_THRESHOLD = _watchdog_login_fail_threshold
 
 
 def _login_fail_threshold(state: dict[str, str]) -> int:
@@ -664,7 +557,8 @@ def _build_davmail_health(state: dict[str, str]) -> dict:
     imap_login_raw = state.get("davmail.imap_login_ok")
     imap_login_ok = None if not imap_login_raw else imap_login_raw == "1"
     consecutive_login_failures = _as_int("davmail.consecutive_login_failures")
-    login_degraded = consecutive_login_failures >= _login_fail_threshold(state)
+    login_fail_threshold = _login_fail_threshold(state)
+    login_degraded = consecutive_login_failures >= login_fail_threshold
 
     if not enabled:
         level = "unknown"
@@ -704,6 +598,10 @@ def _build_davmail_health(state: dict[str, str]) -> dict:
         "consecutive_smtp_failures": _as_int("davmail.consecutive_smtp_failures"),
         "imap_login_ok": imap_login_ok,
         "consecutive_login_failures": consecutive_login_failures,
+        # issue #67 遗留②/#68: 阈值此前只用于本地 level 判定、从不外发 → web 面的
+        # 「LOGIN 失败 ×N」缺分母, 用户看不出离 degraded 还有多远 (桌面 IPC 侧一直有
+        # 该字段, 于是同一张卡在两个传输端信息量不同)。
+        "login_fail_threshold": login_fail_threshold,
         "token_age_days": token_age_days,
         "token_mtime_iso": token_mtime_iso,
         "throttle_events_5min": throttle_5min,

@@ -20,7 +20,7 @@ boundary (we forward, we don't gatekeep).
 
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Literal, Optional, get_args
 
 from pydantic import BaseModel, Field
 
@@ -29,6 +29,15 @@ SyncStatus = Literal[
     "pending", "fetch_failed", "synced", "failed",
     "skipped", "dead_letter", "deleted",
 ]
+
+# 🔴 `--status` / `?status=` 过滤白名单的**唯一真源**（issue #68）。CLI 与 serve-api
+# 此前各硬编码一份 6 值集合，双双漏了 `deleted` —— 而 `deleted` 是**真实存在的数据**
+# （生产库现有一行），于是那行邮件在两个传输端都过滤不出来：
+# `--status deleted` 被当成非法参数拒掉，报的还是「必须是这 6 个之一」。
+# 从 Literal 派生 = 声明域与过滤域**结构性不可能再分家**。
+# 与 wire 契约 `docs/cli-schema/_common.schema.json` 的对撞见
+# tests/api/test_sync_status_parity.py。
+VALID_SYNC_STATUSES: frozenset[str] = frozenset(get_args(SyncStatus))
 
 # AI priority (email-search.schema.json search_hit.ai_priority).
 AIPriority = Literal["critical", "urgent", "important", "normal", "low"]

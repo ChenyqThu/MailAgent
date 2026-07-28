@@ -42,21 +42,11 @@ import { cn } from '@shared/lib/cn'
 import { qk } from '@shared/lib/queryKeys'
 import { toastError, toastSuccess } from '@shared/state/toast'
 import { useCalendarFocus } from '@shared/state/calendar-focus'
-import type { CalendarEventSource, EmailCalendarLink, RsvpResponse } from '@shared/api/types'
+import type { EmailCalendarLink, RsvpResponse } from '@shared/api/types'
+import { narrowCalendarSource } from '@shared/lib/calendarSource'
 
 interface Props {
   internalId: number
-}
-
-/** 待收敛 — 与 EventDetailDrawer.narrowSource 同款 (drawer 未导出且属他 lane
- *  改动面, 阶段 2 收尾抽 shared helper)。未知 source → undefined 让 CLI
- *  SOURCES_TRY_ORDER 自动 fallback. */
-const _VALID_SOURCES: ReadonlySet<string> = new Set(['caldav', 'email_ics', 'legacy_calendar_app'])
-function narrowSource(s: string | null | undefined): CalendarEventSource | undefined {
-  if (!s) return undefined
-  if (_VALID_SOURCES.has(s)) return s as CalendarEventSource
-  console.warn(`[calendar] unknown event source=${JSON.stringify(s)}, falling back`)
-  return undefined
 }
 
 interface OccWindow {
@@ -217,7 +207,7 @@ export function MeetingInviteCard({ internalId }: Props): React.ReactElement | n
         icalUid: link.ical_uid,
         response,
         recurrenceId: link.recurrence_id,
-        source: narrowSource(event?.source)
+        source: narrowCalendarSource(event?.source)
       })
     },
     onSuccess: (_d, response) => {

@@ -10,8 +10,9 @@ import { useTranslation } from 'react-i18next'
 import { Globe } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
-
-type Locale = 'zh-CN' | 'en-US'
+// 语言值域单源自 i18n（issue #68 —— 此前这里手抄 `'zh-CN' | 'en-US'`，加第三种语言时
+// i18n 那边加了、这个切换钮却仍在两个值间轮转，且 TS 完全不报）。
+import type { Locale } from '@shared/i18n'
 
 interface RendererIPC {
   electron?: {

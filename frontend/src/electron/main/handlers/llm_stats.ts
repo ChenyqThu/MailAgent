@@ -12,32 +12,16 @@
 import { ipcMain } from 'electron'
 
 import { callCli } from '../cli_runner'
-import type { LlmSelfTestData } from '@shared/api/types/llm'
+import type { LlmSelfTestData, LlmStatsData } from '@shared/api/types/llm'
 
 const READ_TIMEOUT_MS = 15_000
 const SELFTEST_TIMEOUT_MS = 30_000
 
-export interface LlmStatsData {
-  /** Total `llm_processing` rows in the window. */
-  total: number
-  /** Status histogram: `success / failed / gave_up / pending / ...`. */
-  by_status: Record<string, number>
-  /** Window width in days; mirror of the request. */
-  days: number
-  /** Lower bound epoch seconds (CLI computed) — useful for re-running the
-   *  same query from another client. */
-  since_ts: number
-  cost: {
-    input_tokens: number
-    output_tokens: number
-    cache_creation_input_tokens: number
-    cache_read_input_tokens: number
-    cache_hit_rate_pct: number
-    avg_latency_ms: number
-    success_rows: number
-  }
-  _source?: string
-}
+/** `mailagent llm stats -o json` data block. Re-exported from the shared type rather than
+ *  redeclared here — same reason as `LlmSelfTestData` below, and issue #68 is the proof:
+ *  the two hand-written copies drifted on `_source`, so the dashboard (which reads the
+ *  shared one) could never see the `table_missing` degradation the CLI has always sent. */
+export type { LlmStatsData }
 
 /** `mailagent llm selftest -o json` data block. Re-exported from the shared type (itself
  *  derived from llm-selftest.schema.json) rather than redeclared here: the local copy used to

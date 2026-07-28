@@ -46,14 +46,11 @@ import { CommandPalette } from './components/command/CommandPalette'
 import { GlobalShortcuts } from './components/keyboard/GlobalShortcuts'
 import { KeyboardHelpModal } from './components/keyboard/KeyboardHelpModal'
 import { ComposeNewModal } from './components/email/compose/ComposeNewModal'
+import type { DeeplinkTarget } from './lib/deeplink_target'
 
-// F6 — mailagent:// deeplink target (main/deeplink.ts shape; renderer 不能 import
-// main 模块, 这里 inline 同 shape).
-interface DeeplinkTarget {
-  kind: 'email' | 'calendar' | 'kanban' | 'llm' | 'settings'
-  id?: number
-  view?: string
-}
+// F6 — mailagent:// deeplink target。形状单源自 @shared/lib/deeplink_target（issue #68：
+// 此前这里 inline 抄一份，理由是"renderer 不能 import main 模块" —— 属实，但正解是把类型
+// 放到两边都能引的 shared/，不是抄）。
 
 /**
  * 监听 main 转发的 'mailagent:deeplink' → router.navigate 切视图 + (email) setActive.

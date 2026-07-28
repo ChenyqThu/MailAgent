@@ -47,12 +47,12 @@ import { useEmailFilter, type EmailView } from '@shared/state/email-filter'
 import type {
   CalendarEventAttendee,
   CalendarEventOccurrence,
-  CalendarEventSource,
   EventSourceEmail,
   RsvpResponse
 } from '@shared/api/types'
 import { cn } from '@shared/lib/cn'
 import { viewForMailbox } from '@shared/lib/mailboxSemantics'
+import { narrowCalendarSource } from '@shared/lib/calendarSource'
 import { Drawer } from '@shared/components/ui/drawer'
 import { qk } from '@shared/lib/queryKeys'
 import { pad } from './lib/format'
@@ -88,19 +88,6 @@ function formatRange(t: TFunction, startIso: string, endIso: string, isAllDay: b
   const t1 = `${pad(s.getHours())}:${pad(s.getMinutes())}`
   const t2 = `${pad(e.getHours())}:${pad(e.getMinutes())}`
   return `${dateStr}  ${t1} → ${t2}`
-}
-
-/** F27 — runtime narrow ``occurrence.source`` (string) → CalendarEventSource.
- *  DB legacy v14 row 可能含未知 source 值, ``as CalendarEventSource`` 强转
- *  silent mismatch. 走 helper 白名单校验, 未知值 → undefined + 一次 warn.
- *  调用方传 undefined 给 CLI 让 ``SOURCES_TRY_ORDER`` 自动 fallback. */
-const _VALID_SOURCES: ReadonlySet<string> = new Set(['caldav', 'email_ics', 'legacy_calendar_app'])
-function narrowSource(s: string | null | undefined): CalendarEventSource | undefined {
-  if (!s) return undefined
-  if (_VALID_SOURCES.has(s)) return s as CalendarEventSource
-
-  console.warn(`[calendar] unknown event source=${JSON.stringify(s)}, falling back`)
-  return undefined
 }
 
 function RespBadge({ status }: { status: string }): React.ReactElement {
@@ -195,7 +182,7 @@ export function EventDetailDrawer({ occurrence, onClose, onReopen }: Props): Rea
     ? {
         icalUid: occurrence.ical_uid,
         recurrenceId: occurrence.recurrence_id,
-        source: narrowSource(occurrence.source)
+        source: narrowCalendarSource(occurrence.source)
       }
     : null
   const { data: detail, isLoading } = useCalendarEvent(opts)
@@ -253,7 +240,7 @@ export function EventDetailDrawer({ occurrence, onClose, onReopen }: Props): Rea
         icalUid: occurrence.ical_uid,
         response,
         recurrenceId: occurrence.recurrence_id,
-        source: narrowSource(occurrence.source)
+        source: narrowCalendarSource(occurrence.source)
       })
     },
     onSuccess: (_d, response) => {

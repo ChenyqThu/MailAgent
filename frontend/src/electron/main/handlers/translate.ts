@@ -30,6 +30,7 @@ import { join } from 'path'
 import { generateText } from 'ai'
 
 import { isProviderCredentialsError } from '../../../ai-gateway/providerRef'
+import { MAX_OUTPUT_TOKENS } from '@shared/lib/llm_limits'
 import { getDb, resolveDbPath } from '../db'
 import { extractBlocks, type ExtractedBlock } from '../lib/html-extractor'
 import {
@@ -276,7 +277,7 @@ const BATCH_SIZE = 10
 const BATCH_TEXT_CHAR_BUDGET = 3000
 const CONCURRENCY = 2
 const FETCH_TIMEOUT_MS = 240_000
-const MAX_OUTPUT_TOKENS = 64_000
+// MAX_OUTPUT_TOKENS 单源自 @shared/lib/llm_limits（issue #68）。
 const CRS_USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/146.0.0.0 Safari/537.36'
 // Abort controller registry — one per internalId; renderer fires

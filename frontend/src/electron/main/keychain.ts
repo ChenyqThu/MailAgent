@@ -12,11 +12,15 @@
 
 import keytar from 'keytar'
 
-const SERVICE = 'ink.chenge.mailagent'
-const ACCOUNT_CLI = 'cli-api-key'
-const ACCOUNT_LLM = 'llm-api-key'
-const ACCOUNT_LLM_TRANSLATE = 'llm-translate-api-key'
-const ACCOUNT_CUSTOM_API = 'custom-api-key'
+// 🔴 Keychain 寻址键的**唯一真源**（issue #68）。llm_settings.ts 也读/写 keytar，
+// 此前它手抄了 SERVICE + 两个 ACCOUNT_* —— 漂一个字符就是「一边写、另一边读不到」，
+// 报的却是「未配置 API key」，排查方向完全错（keychain 里明明有值）。同 main 进程、
+// 无循环依赖 → 直接 import，勿再复刻。
+export const SERVICE = 'ink.chenge.mailagent'
+export const ACCOUNT_CLI = 'cli-api-key'
+export const ACCOUNT_LLM = 'llm-api-key'
+export const ACCOUNT_LLM_TRANSLATE = 'llm-translate-api-key'
+export const ACCOUNT_CUSTOM_API = 'custom-api-key'
 
 // ad-hoc 签名的 .app 每次 build 签名都变 → keychain item 的 ACL 绑的是旧签名 → 每次读都
 // 弹授权（getSecretsStatus 一次读 4 个 = 一次弹 4 次，极烦）。secret 已经 dual-write 到

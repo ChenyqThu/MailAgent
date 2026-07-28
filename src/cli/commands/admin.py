@@ -30,6 +30,7 @@ from src.cli.output import apply_local_output, emit, emit_cli_error
 # 跟 SyncStore.DB_VERSION 同步避免漂移 (Sprint 16 v13: dual-backend 加 imap_uid/
 # imap_uidvalidity/backend_origin 三列). 导入而非硬编码, 后续 ALTER TABLE 升版本时不会漏改 CLI 端.
 from src.mail.sync_store import SyncStore as _SyncStore
+from src.services import admin_health as _health
 
 if TYPE_CHECKING:
     from src.cli.context import CliContext
@@ -38,17 +39,11 @@ app = typer.Typer(name="admin", help="统计 / 健康 / db-version", no_args_is_
 
 
 EXPECTED_DB_VERSION = _SyncStore.DB_VERSION
-REQUIRED_TABLES = (
-    "email_metadata",
-    "email_body",
-    "email_attachment",
-    "email_body_fts",
-    "cli_checkpoints",
-    "v4_rollout_stats",
-    "island_dispatch",  # v7: ping-island Sprint 2 派发审计
-    "email_outbox",     # v10: SQLite SSoT inversion (Sprint 15)
-    "llm_processing",   # v37: 纳入版本化建表 (前端 listEnriched 无条件 LEFT JOIN)
-)
+# 🔴 issue #68: REQUIRED_TABLES 与下方四个 health 组装 helper 此前与
+# src/api/routers/admin.py 各持一份逐字副本, 现单源到 src/services/admin_health
+# (同语言同进程无循环依赖 —— 旧的「平行实现不共享 import」惯例正是 token 阈值
+# 漂移的孵化器)。
+REQUIRED_TABLES = _health.REQUIRED_TABLES
 
 # E1 (2026-07): davmail 上游 watch 静态提醒项 (docs/plans/architecture-review-2026-07/
 # e1-backend-contract.md §3.1 Step 4). 无条件展示、不按 backend 分支 — 纯静态文案零状态耦合,
@@ -59,116 +54,25 @@ HEALTH_WATCH_NOTES: tuple[str, ...] = (
     "（docs/plans/architecture-review-2026-07/e1-davmail-upgrade-checklist.md）。",
 )
 
-# E4 WP2: token 老化提示阈值 (镜像 davmail_watchdog._TOKEN_WARN_DAYS;
-# 不共享 import — watchdog 模块 import 期会拉 SyncStore/alert 重依赖)。
-_TOKEN_WARN_DAYS = 80.0
-
-
-def _parse_worker_rows(rows) -> dict:
-    """sync_state 'worker.<name>.<field>' 行 → {name: {field: value}} (E4 WP1 心跳).
-
-    supervise (src/utils/supervise.py) 在状态跃迁时写这些键; 这里跨进程反解。
-    """
-    workers: dict[str, dict] = {}
-    for key, value in rows:
-        rest = key[len("worker."):]
-        if "." not in rest:
-            continue
-        name, field = rest.rsplit(".", 1)
-        if field == "restart_count":
-            try:
-                value = int(value)
-            except (TypeError, ValueError):
-                pass
-        workers.setdefault(name, {})[field] = value
-    return workers
-
-
-def _build_davmail_summary(state: dict) -> Optional[dict]:
-    """davmail.* 键 → {token_age_days, imap_reachable, last_probe_at} 摘要 (E4 WP2).
-
-    DavMailWatchdog 每 60s 落盘这些键; watchdog 从未 tick (非 davmail 模式) →
-    None。token_age_days 的 "-1" 哨兵 (token 文件不可读) → None。
-    """
-    if not state.get("davmail.last_probe_at"):
-        return None
-    token_age_days: Optional[float] = None
-    raw = state.get("davmail.token_age_days")
-    if raw is not None:
-        try:
-            parsed = float(raw)
-            token_age_days = None if parsed < 0 else parsed
-        except (TypeError, ValueError):
-            token_age_days = None
-    return {
-        "token_age_days": token_age_days,
-        "imap_reachable": state.get("davmail.imap_reachable") == "1",
-        "last_probe_at": state.get("davmail.last_probe_at"),
-    }
-
-
-def _mark_stale_workers(workers: dict, start_history_raw: Optional[str]) -> None:
-    """E4 第二批 (D3): last_started_at 早于本次 boot 的 worker 条目加 stale=True.
-
-    last_boot_at = max(sync_state['service.start_history']) (JSON 数组, epoch 秒,
-    service._record_start_history 每次 start() 追加)。worker 心跳的 last_started_at
-    是 ISO 8601 字符串 (supervise._utcnow_iso), fromisoformat→timestamp 转 epoch 后
-    比较。**秒粒度对齐**: 心跳 ISO 是 timespec="seconds" 截断值而 boot 是带小数的
-    time.time() —— worker 在 start() 后几 ms 内就启动, 直接 float 比较会把「boot
-    同一秒启动」的 worker 几乎恒误标 stale (floor(T+ms) < T), 故 boot 也 floor 到
-    整秒再比 (同秒 = 不 stale)。缺失 / parse 失败静默跳过 (health 绝不因此 500);
-    不 stale **不写字段** (减少噪音)。镜像 src/api/routers/admin.py 同名 helper
-    (平行实现不共享 import)。
-    """
-    import json as _json
-    from datetime import datetime as _datetime
-
-    if not start_history_raw:
-        return
-    try:
-        history = _json.loads(start_history_raw)
-    except (ValueError, TypeError):
-        return
-    if not isinstance(history, list):
-        return
-    epochs = [float(t) for t in history if isinstance(t, (int, float))]
-    if not epochs:
-        return
-    last_boot_sec = int(max(epochs))
-    for w in workers.values():
-        raw = w.get("last_started_at")
-        if not isinstance(raw, str):
-            continue
-        try:
-            started_at = _datetime.fromisoformat(raw).timestamp()
-        except (ValueError, TypeError, OverflowError, OSError):
-            continue
-        if started_at < last_boot_sec:
-            w["stale"] = True
+# 🔴 issue #68: 四个 health 组装 helper (worker 行解析 / stale 标记 / davmail 摘要 /
+# 动态 note) 全部单源到 src/services/admin_health —— 此前与 src/api/routers/admin.py
+# 逐字重复, 且**该批的 token 老化阈值就是照这个惯例复刻的, CLI 这份漏了 critical 档**
+# (同一个 87 天 token: web 面 level=critical, 这里只提示 warning 措辞)。
+# 现在 note 文案两档都由 admin_health.token_age_note 出, 两端同一句话。
+_parse_worker_rows = _health.parse_worker_rows
+_build_davmail_summary = _health.build_davmail_summary
+_mark_stale_workers = _health.mark_stale_workers
 
 
 def _compose_health_notes(workers: dict, davmail_summary: Optional[dict]) -> list:
     """静态 watch note + 动态 (crashloop 停摆 / token 老化) 提示行 (E4 WP1/WP2).
 
-    纯提示不影响 healthy 语义 (与 HEALTH_WATCH_NOTES 同口径)。
+    纯提示不影响 healthy 语义 (与 HEALTH_WATCH_NOTES 同口径)。**静态段是 CLI-only**
+    (web 面历史上只发动态行), 故这里 = 静态 + 共享的动态段。
     """
-    notes = list(HEALTH_WATCH_NOTES)
-    for wname in sorted(workers):
-        w = workers[wname]
-        if w.get("status") == "crashloop_stopped":
-            last_error = str(w.get("last_error") or "")[:120]
-            notes.append(
-                f"worker '{wname}' 已 crash-loop 停摆 (supervise 停止重启), "
-                f"该功能不可用直到服务重启 — last_error: {last_error}"
-            )
-    if davmail_summary is not None:
-        tad = davmail_summary.get("token_age_days")
-        if tad is not None and tad >= _TOKEN_WARN_DAYS:
-            notes.append(
-                f"DavMail OAuth token 已 {tad:.1f} 天未刷新 (≥{_TOKEN_WARN_DAYS:.0f}d)；"
-                "refresh_token 90 天有效期，接近时需重走 OAuth flow。"
-            )
-    return notes
+    return list(HEALTH_WATCH_NOTES) + _health.compose_dynamic_health_notes(
+        workers, davmail_summary
+    )
 
 
 # ============================================================

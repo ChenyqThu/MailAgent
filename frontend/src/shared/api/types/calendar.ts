@@ -91,6 +91,14 @@ export interface CalendarEventDetail {
   rrule: string
   exdates: string[]
   rdates: string[]
+  /** v35（#10 tzid 半步）: DTSTART 的 TZID 归一 Olson 名；null = 裸 Z / floating / 全天。
+   *
+   *  🔴 issue #68: 桌面 IPC 生产者（`handlers/calendar-read.ts::CalendarEventRow`）一直发它，
+   *  这个消费侧类型却漏声明 —— 于是前端结构性读不到（TS 说该字段不存在）。
+   *  **optional 是如实的**，不是保守：web 那条腿（serve-api `/api/calendar/*` →
+   *  `src/api/schemas/calendar.py`）至今不发这个字段，声明成必填就是对 web 端撒谎。
+   *  与 `DavMailHealthData.login_fail_threshold` 同一处置。 */
+  tzid?: string | null
   status: string
   response_status: string
   url: string

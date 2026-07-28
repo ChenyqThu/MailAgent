@@ -4,6 +4,8 @@ import type {
   ResolvedProviderModel
 } from '../../ai-gateway/providerRef'
 
+import { MAX_OUTPUT_TOKENS } from '@shared/lib/llm_limits'
+
 import { daemonRequest } from './daemon_api'
 import { getLlmApiKey, getLlmBaseUrl } from './llm_settings'
 
@@ -12,7 +14,7 @@ import { getLlmApiKey, getLlmBaseUrl } from './llm_settings'
 // 本模块取用）。
 export { sanitizedUpstreamErrorMessage } from '../../ai-gateway/upstreamError'
 
-const MAX_OUTPUT_TOKENS = 64_000
+// MAX_OUTPUT_TOKENS 单源自 `@shared/lib/llm_limits`（issue #68）。
 
 export interface MainProcessResolvedProviderModel extends ResolvedProviderModel {
   maxOutputTokens: number

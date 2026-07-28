@@ -17,6 +17,7 @@ import { ipcMain } from 'electron'
 import { generateText } from 'ai'
 
 import { isProviderCredentialsError } from '../../../ai-gateway/providerRef'
+import { MAX_OUTPUT_TOKENS } from '@shared/lib/llm_limits'
 import { getLlmApiKey, getLlmBaseUrl, getLlmModel } from '../llm_settings'
 import {
   getLlmProviderModelResolver,
@@ -28,15 +29,14 @@ export interface NlToDslResult {
   /** 翻译出的 DSL；error 非空时为 ''。 */
   dsl: string
   /** 结构化错误码（E_NO_LLM_KEY / E_EMPTY / E_UPSTREAM / E_QUOTA / E_TIMEOUT
-   *  / E_NO_OUTPUT）。成功时省略。 */
+   *  / E_NO_OUTPUT / E_TRUNCATED）。成功时省略。 */
   error?: string
   /** 给前端兜底展示的人类可读信息（i18n 仍以 error 码为准，message 仅 debug）。*/
   message?: string
 }
 
-// 项目 LLM 调用约定（memory feedback）：所有调用统一 1M 上下文 + 64k max output。
-// 输入是一句话、输出是一行 DSL，实际 token 远小于此，但按约定设上限不省。
-const MAX_OUTPUT_TOKENS = 64_000
+// MAX_OUTPUT_TOKENS 单源自 @shared/lib/llm_limits（issue #68 —— 此前这里、
+// translate.ts、llm_provider_resolver 各写一份 64_000）。
 const REQUEST_TIMEOUT_MS = 30_000
 // CRS / Cloudflare 对 user-agent 挑剔（见 translate.ts 同处）—— 用桌面浏览器 UA。
 const CRS_USER_AGENT =
@@ -120,6 +120,21 @@ function buildSystemPrompt(): string {
 interface MessagesResponse {
   content?: Array<{ type?: string; text?: string }>
   model?: string
+  /** 🔴 issue #68: 此前漏声明（translate.ts 的同名类型一直有）。截断的 DSL 是
+   *  **错数据而非空数据** —— `from:echo after:2026-0` 照样能跑出一批"结果"，用户
+   *  以为那就是全部。故这里必须能读到它，见 nlToDsl 的 E_TRUNCATED 分支。 */
+  stop_reason?: string
+}
+
+/** 输出被 max_tokens 截断 —— 半截 DSL 一律当失败，绝不返回。
+ *
+ *  1 行 DSL 撞 64k 上限在裸 fetch 路径上几乎不可能；但 provider registry 路径的
+ *  上限是 `min(64k, 该 model 行配置的上限)`，owner 把某个模型行配成几百 token 时
+ *  就真会截断。两条路径都判。 */
+const TRUNCATED: NlToDslResult = {
+  dsl: '',
+  error: 'E_TRUNCATED',
+  message: 'LLM output hit the max_tokens limit — the DSL would be truncated'
 }
 
 /** 清洗 LLM 输出成单行 DSL：剥 code fence / 前后引号 / 多行只取首非空行。 */
@@ -178,6 +193,7 @@ export async function nlToDsl(nl: string): Promise<NlToDslResult> {
         prompt: input,
         abortSignal: ac.signal
       })
+      if (result.finishReason === 'length') return TRUNCATED
       if (result.text.trim().length === 0) {
         return { dsl: '', error: 'E_NO_OUTPUT', message: 'LLM returned no text' }
       }
@@ -209,6 +225,7 @@ export async function nlToDsl(nl: string): Promise<NlToDslResult> {
       return { dsl: '', error: code, message: `LLM API ${response.status}` }
     }
     const payload = (await response.json()) as MessagesResponse
+    if (payload.stop_reason === 'max_tokens') return TRUNCATED
     const text = payload.content?.find((b) => b.type === 'text')?.text ?? payload.content?.[0]?.text
     if (typeof text !== 'string' || text.trim().length === 0) {
       return { dsl: '', error: 'E_NO_OUTPUT', message: 'LLM returned no text' }

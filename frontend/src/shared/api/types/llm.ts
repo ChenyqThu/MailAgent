@@ -17,6 +17,17 @@ export interface LlmStatsData {
     avg_latency_ms: number
     success_rows: number
   }
+  /** How the numbers were obtained — `'live_query'` normally, `'table_missing'` when the
+   *  `llm_processing` table doesn't exist yet (fresh install / pre-v37 DB), in which case
+   *  every count above is a zero placeholder, not a measurement.
+   *
+   *  🔴 issue #68: both producers have always emitted it (`src/cli/commands/llm.py:333,390`
+   *  and `src/api/routers/llm.py:257,307`) and the desktop main-process copy declared it —
+   *  but this shared type, the one the dashboard actually reads, did not. So the degradation
+   *  signal was unreachable on both transports and "0 calls, ¥0 cost" rendered identically
+   *  whether the LLM was idle or the table was simply absent. Compare `KosStatsData`, where
+   *  both sides have carried `_source` from the start. */
+  _source?: string
 }
 
 /** GET /llm/selftest data block — the no-token gateway health probe.

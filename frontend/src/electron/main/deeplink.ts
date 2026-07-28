@@ -10,13 +10,10 @@
  * (open-url 可能在 app ready / renderer mount 前触发, buffer 到 sink 注册后 flush).
  */
 
-export interface DeeplinkTarget {
-  kind: 'email' | 'calendar' | 'kanban' | 'llm' | 'settings'
-  /** email internal_id (kind==='email') */
-  id?: number
-  /** calendar view / settings tab (kind==='calendar'|'settings') */
-  view?: string
-}
+import type { DeeplinkTarget } from '@shared/lib/deeplink_target'
+
+// 形状单源自 `@shared/lib/deeplink_target`（issue #68）；这里 re-export 保既有 importer 不变。
+export type { DeeplinkTarget }
 
 const SCHEME = 'mailagent'
 

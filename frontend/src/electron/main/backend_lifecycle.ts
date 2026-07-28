@@ -51,6 +51,7 @@ import { dirname, join } from 'path'
 import Database from 'better-sqlite3'
 
 import { resolveAiGatewayPort } from '../../ai-gateway/config'
+import { DEFAULT_API_PORT, DEFAULT_SSE_PORT } from '@shared/lib/ports'
 import { getMailagentBin } from './cli_runner'
 import { resolveDataRoot, resolveDbPath } from './db'
 import { getLocalApiToken, LOCAL_TOKEN_ENV } from './local_token'
@@ -222,8 +223,9 @@ export function readDbIntegrityFailure(
 // ---------------------------------------------------------------------------
 
 /** serve-api 默认端口 (与 src/cli/main.py serve_api / cloudflared ingress 一致)。
- *  可经 env MAILAGENT_API_PORT 覆盖; host 恒 127.0.0.1 (loopback, 公网不可达)。 */
-export const DEFAULT_API_PORT = 8200
+ *  可经 env MAILAGENT_API_PORT 覆盖; host 恒 127.0.0.1 (loopback, 公网不可达)。
+ *  值单源自 `@shared/lib/ports`（issue #68）；这里 re-export 保既有 importer 不变。 */
+export { DEFAULT_API_PORT }
 
 /** serve-api 单次 probe 的 HTTP 超时 (ms)。uvicorn 起来后 /api/health 是常数时间, 短超时即可。 */
 const API_PROBE_TIMEOUT_MS = 2500
@@ -370,8 +372,9 @@ export function resolveApiPort(): number {
   return Number.isFinite(n) && n > 0 ? n : DEFAULT_API_PORT
 }
 
-/** serve 进程内 SSE server 的默认端口 (与 src/config.py:207 `sse_local_port` env=SSE_LOCAL_PORT 一致)。 */
-export const DEFAULT_SSE_PORT = 9200
+/** serve 进程内 SSE server 的默认端口 (与 src/config.py `sse_local_port` env=SSE_LOCAL_PORT 一致)。
+ *  值单源自 `@shared/lib/ports`（issue #68）；这里 re-export 保既有 importer 不变。 */
+export { DEFAULT_SSE_PORT }
 
 /** serve 的 SSE 端口 (env SSE_LOCAL_PORT, 默认 9200) — 启动自愈扫描用。 */
 export function resolveSsePort(): number {

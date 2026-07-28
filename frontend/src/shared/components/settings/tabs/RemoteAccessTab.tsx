@@ -47,8 +47,11 @@ import { PageHeader } from '../parts/PageHeader'
 import { Section } from '../parts/Section'
 import { Row } from '../parts/Row'
 import { EnvField } from '../parts/EnvField'
+import { DEFAULT_API_PORT } from '@shared/lib/ports'
 
-const DEFAULT_API_PORT = '8200'
+// 占位符 / 空值回落的端口单源自 `@shared/lib/ports`（issue #68 —— 此前这里手抄
+// 字符串 '8200'，后端默认端口一变，这个输入框就会教用户填错端口）。
+const DEFAULT_API_PORT_TEXT = String(DEFAULT_API_PORT)
 const STATUS_PROBE_DELAY_MS = 1500
 const STATUS_PROBE_TIMEOUT_MS = 5000
 
@@ -212,7 +215,7 @@ export function RemoteAccessTab(): React.ReactElement {
   // 持有的 env, 无法硬拼出去。能从已知 env 给出的是 Cloudflare Zero Trust 团队
   // 域名 (dashboard) + 本地 loopback 地址。public app URL 走 runbook 文案提示
   // (用户在 cloudflared 配置里把 tunnel hostname 指向 127.0.0.1:<port>/app)。
-  const port = (apiPort.trim() || DEFAULT_API_PORT).trim()
+  const port = (apiPort.trim() || DEFAULT_API_PORT_TEXT).trim()
   const localUrl = `http://127.0.0.1:${port}/app`
   const teamDomainUrl = cfTeamDomain.trim()
     ? `https://${cfTeamDomain.trim().replace(/^https?:\/\//, '')}`
@@ -307,7 +310,7 @@ export function RemoteAccessTab(): React.ReactElement {
           helper={t('settings.remote.port.helper', {
             defaultValue: '默认 8200，bind 127.0.0.1。改成被占用端口会导致 serve-api 启动失败。'
           })}
-          placeholder={DEFAULT_API_PORT}
+          placeholder={DEFAULT_API_PORT_TEXT}
         />
         <EnvField
           envKey="MAILAGENT_API_ALLOWED_EMAIL"

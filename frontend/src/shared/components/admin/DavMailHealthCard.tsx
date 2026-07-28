@@ -137,8 +137,9 @@ export function DavMailHealthCard(): React.ReactElement | null {
               LOGIN 失败
               {(h.consecutive_login_failures ?? 0) > 0 &&
                 // "×2/3" tells the user how close this is to tripping critical; a bare "×2"
-                // left them guessing. The threshold is desktop-only on the wire, so fall back
-                // to the bare count rather than printing an assumed 3 (see DavMailHealthData).
+                // left them guessing. Both producers send the threshold now (issue #68), but an
+                // older backend still won't — fall back to the bare count rather than printing
+                // an assumed 3 (see DavMailHealthData).
                 (h.login_fail_threshold != null
                   ? ` ×${h.consecutive_login_failures}/${h.login_fail_threshold}`
                   : ` ×${h.consecutive_login_failures}`)}

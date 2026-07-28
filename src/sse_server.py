@@ -29,6 +29,7 @@ from aiohttp import web
 from loguru import logger
 
 from src.config import config
+from src.events.publisher import DEFAULT_CHANNEL as _DEFAULT_CHANNEL
 
 
 # aiohttp 3.9.1 tcp_keepalive 兼容 patch (macOS):
@@ -53,7 +54,12 @@ if not getattr(_aiohttp_web_protocol.tcp_keepalive, "_mailagent_safe", False):
     _aiohttp_web_protocol.tcp_keepalive = _safe_tcp_keepalive
 
 
-SSE_CHANNEL = "mailagent:events:v1"
+# 🔴 channel 名单源自 publish 端 (issue #68)。Redis pub/sub 对「订阅的 channel 与
+# publish 的 channel 不匹配」**不报错, 只是零投递** —— 漂一个字符 = 整条事件桥静默哑掉,
+# 且两端日志都正常。故订阅端一律 import 发布端的常量, 不许再手抄字面量。
+# webhook-server/app.py 另有一份 (远程 VPS 独立部署, import 不到 src/) —— 那份由
+# tests/events/test_sse_constants_parity.py 建闸对撞。
+SSE_CHANNEL = _DEFAULT_CHANNEL
 SSE_HEARTBEAT_SEC = 15
 
 # C2 — SSE 9200 本地 token 门 (补鉴权)。9200 仅 loopback, 但同机任意进程都能读这条流 →

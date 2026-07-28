@@ -27,13 +27,12 @@
 
 import { request, requestRaw, requestWithMeta, type RequestOptions } from '@shared/api/http_client'
 
+import { DEFAULT_API_PORT } from '@shared/lib/ports'
 import { getLocalApiToken, LOCAL_TOKEN_HEADER } from './local_token'
 
-/** serve-api 默认端口 (与 backend_lifecycle.DEFAULT_API_PORT / cloudflared ingress /
- *  auth 同源 8200)。独立读 env 而非 import backend_lifecycle —— 后者顶层 `import { app }
- *  from 'electron'`, 拉进来会逼 daemon_api 单测 mock electron。8200 是稳定常量, 此注释
- *  钉死同源。 */
-const DEFAULT_API_PORT = 8200
+// 端口常量单源自零依赖的 `@shared/lib/ports`（issue #68）。此前这里手抄 8200 并注明
+// 「不 import backend_lifecycle 因为它顶层 import electron，会逼本模块单测 mock
+// electron」—— 那个理由成立，所以把常量下沉成叶子模块而不是照抄一份。
 
 function resolveDaemonBaseUrl(): string {
   const raw = process.env.MAILAGENT_API_PORT
