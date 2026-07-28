@@ -8,7 +8,7 @@ the user's behalf — the user does not talk to the notion-agent directly.
 
 | tool | scope | effect | confirm |
 |---|---|---|---|
-| `notion_agent_chat` | `notion_agent:invoke` | external_call | preview (edit-tier / 恒 HITL at the gateway) |
+| `notion_agent_chat` | `notion_agent:invoke` | external_call | **edit (confirm required / 恒 HITL at the gateway)** |
 
 ## Capabilities
 

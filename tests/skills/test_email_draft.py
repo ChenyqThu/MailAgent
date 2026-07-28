@@ -88,6 +88,32 @@ def fake_compose(monkeypatch):
     return captured
 
 
+@pytest.fixture()
+def fake_send(monkeypatch):
+    """同上，但换掉 ``MailWriteService.send``（真 SMTP 不可逆，测试永不真发）。"""
+    captured: dict = {}
+
+    def _fake(self, request, *, actor, confirmed):
+        captured["request"] = request
+        captured["actor"] = actor
+        captured["confirmed"] = confirmed
+        return mw.ComposeSendResult(
+            internal_id=request.internal_id,
+            mode=request.mode,
+            message_id="<m@test>",
+            archived_to_sent=True,
+            method="smtp",
+            to_count=1,
+            cc_count=0,
+            attachments=0,
+            warnings=[],
+        )
+
+    monkeypatch.setattr(mw.MailWriteService, "__init__", lambda self, ctx: None)
+    monkeypatch.setattr(mw.MailWriteService, "send", _fake)
+    return captured
+
+
 def _ctx(monkeypatch) -> SkillContext:
     ctx = SkillContext()
     monkeypatch.setattr(ctx, "service_ctx", lambda: None)  # 不构造真 ServiceContext
@@ -277,14 +303,39 @@ async def test_reply_mode_still_requires_internal_id(monkeypatch, fake_compose):
 
 
 @pytest.mark.asyncio
-async def test_email_send_internal_id_still_required(monkeypatch, fake_compose):
-    """_compose_request 放宽 internalId 不得影响 email_send（schema 仍 required）。"""
+async def test_email_send_reply_mode_still_requires_internal_id(monkeypatch, fake_send):
+    """回复/转发没有源邮件 id 走不通 —— 放宽 required 后这条仍由 handler 把住。"""
     owner = None  # owner principal → scope 全通过
     with pytest.raises(SkillError) as ei:
         await invoke_skill(
-            owner, "email", "email_send", {"mode": "new"}, confirm=True, ctx=_ctx(monkeypatch)
+            owner, "email", "email_send", {"mode": "reply-all"}, confirm=True, ctx=_ctx(monkeypatch)
         )
     assert ei.value.code == "E_INVALID_ARG"
+    assert "request" not in fake_send  # service 从未被调到
+
+
+@pytest.mark.asyncio
+async def test_email_send_mode_new_needs_no_internal_id(monkeypatch, fake_send):
+    """🔴 issue #66 第 2 条的复现位。
+
+    改动前 ``email_send`` 的 schema 是 ``required:["internalId"]`` 而 ``mode`` 枚举含
+    ``"new"`` —— 按文档发一封全新邮件必吃 400（``_validate_input`` 在 handler 之前就拦下），
+    唯一通路是猜一个注释里写明「对外 schema 不暴露」的哨兵 ``-1``。改动前本测**红**。
+
+    另一半断言：哨兵**不得**出现在返回里（``ComposeSendResult.internal_id`` 是 request 的
+    回声，mode='new' 时就是 -1 本身）—— 与 ``email_draft`` 的同一处映射对齐。
+    """
+    res = await invoke_skill(
+        None,
+        "email",
+        "email_send",
+        {"mode": "new", "to": ["a@b.test"], "subject": "hi", "bodyText": "yo"},
+        confirm=True,
+        ctx=_ctx(monkeypatch),
+    )
+    assert fake_send["request"].internal_id == -1  # 服务层拿到哨兵（内部约定）
+    assert res["internal_id"] is None  # ……对外契约里不出现它
+    assert res["sent"] is True and res["mode"] == "new"
 
 
 # --- 配额闸 -----------------------------------------------------------------

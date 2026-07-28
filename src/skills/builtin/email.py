@@ -19,8 +19,24 @@ from src.skills.models import ToolDef, ToolHandler
 from src.skills.registry import BoundSkill, BoundTool
 
 _VALID_INCLUDE = {"body", "attachments", "all"}
-_VALID_BODY_FORMATS = {"markdown", "html", "raw"}
+# 🔴 **没有 raw**（2026-07-28 审计 wrong-data）：v4 SSoT 存的是 raw MIME 的 **sha256**，不是
+# MIME 本身 —— ``storage_payload_builder`` 算完哈希就丢掉源串（那里注释「不入库本身」），
+# ``email_body`` 表只有 ``raw_mime_sha256`` 一列。改动前这里第三个分支把 64 字符哈希当
+# ``content`` 返回、还配 ``size_bytes=64 / truncated=false``，外部客户端拿到的是一个看起来
+# 像正文的哈希（REST/CLI 两面至少在 docstring 里写了「仅哈希」，本面没有）。
+# 真返回 MIME 需要回服务器现取（网络 I/O），与本工具「读 SSoT」的 handler 契约不是一回事 →
+# 诚实缩面：删掉这个枚举值。**哈希没有丢** —— ``email_get(include=body).body.raw_mime_sha256``
+# 一直在投影它（``src/services/wire.py::body_summary``），那里它是一个如实命名的字段。
+#
+# 顺序有意义（第一个 = 默认）；schema 的 enum 直接用这个元组 —— **不再手抄第二份**，
+# 「宣称的格式」与「handler 认的格式」由构造保证同集（CLAUDE.md：能消灭的镜像先消灭）。
+_BODY_FORMATS = ("markdown", "html")
+_VALID_BODY_FORMATS = frozenset(_BODY_FORMATS)
 _THREAD_MEMBER_CAP = 100
+
+# compose 家族（``email_draft`` / ``email_send`` 共用 ``_compose_request``）的模式值域。
+# 同样单源：handler 的校验与两份 schema 的 enum 都取这一个元组，杜绝三份手抄。
+_COMPOSE_MODES = ("reply", "reply-all", "forward", "new")
 
 # 服务层「写全新邮件」哨兵（无源邮件行）—— 见 src/services/mail_write.py:_prepare_draft。
 # 对外 schema 不暴露这个值：mode='new' 省略 internalId 时由 handler 补。
@@ -72,14 +88,14 @@ def _email_body(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
     rec = ctx.repo().get_body(internal_id)
     if rec is None:
         raise SkillError("E_NOT_FOUND", f"no body for email {internal_id}", http_status=404)
-    content = rec.markdown if fmt == "markdown" else (rec.html if fmt == "html" else rec.raw_mime_sha256)
+    content = rec.markdown if fmt == "markdown" else rec.html
     if content is None:
         raise SkillError("E_NOT_FOUND", f"body format {fmt!r} unavailable for {internal_id}", http_status=404)
     return {
         "internal_id": internal_id,
         "format": fmt,
         "content": content,
-        "size_bytes": rec.body_size_bytes if fmt != "raw" else len(content),
+        "size_bytes": rec.body_size_bytes,
         "truncated": False,
         "fetched_at": rec.fetched_at,
         "fetched_source": rec.fetched_source,
@@ -109,8 +125,8 @@ def _compose_request(params: dict[str, Any]):
         return ",".join(str(x) for x in v) if isinstance(v, list) and v else (v if isinstance(v, str) else None)
 
     mode = params.get("mode") or "reply-all"
-    if mode not in {"reply", "reply-all", "forward", "new"}:
-        raise SkillError("E_INVALID_ARG", f"mode must be reply|reply-all|forward|new, got {mode!r}")
+    if mode not in _COMPOSE_MODES:
+        raise SkillError("E_INVALID_ARG", f"mode must be {'|'.join(_COMPOSE_MODES)}, got {mode!r}")
     internal_id = params.get("internalId")
     if internal_id is None and mode == "new":
         # mode='new'（写全新邮件）无源邮件 → 服务层用哨兵 -1 表示「无对应行」
@@ -154,7 +170,10 @@ def _email_send(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
     except ServiceError as exc:
         raise SkillError.from_service(exc)
     return {
-        "internal_id": result.internal_id,
+        # 源邮件 id（reply/reply-all/forward）；mode='new' 无源邮件 → null。
+        # 🔴 **不外泄哨兵 -1**（``ComposeSendResult.internal_id`` 是 request 的回声，
+        # mode='new' 时就是哨兵本身）—— 与 ``_email_draft`` 的同一处映射对齐。
+        "internal_id": None if result.internal_id == _NEW_MAIL_SENTINEL else result.internal_id,
         "sent": True,
         "mode": result.mode,
         "message_id": result.message_id,
@@ -236,12 +255,16 @@ def build_skill() -> BoundSkill:
         BoundTool(
             ToolDef(
                 name="email_body",
-                description="Fetch one email's body in markdown|html|raw.",
+                description=(
+                    "Fetch one email's body as markdown (default) or html. Raw MIME is not "
+                    "stored, so it cannot be served here; email_get(include=body) carries "
+                    "the body.raw_mime_sha256 digest if you need to compare/deduplicate."
+                ),
                 input_schema={
                     "type": "object",
                     "properties": {
                         "internal_id": {"type": "integer"},
-                        "format": {"type": "string", "enum": ["markdown", "html", "raw"]},
+                        "format": {"type": "string", "enum": list(_BODY_FORMATS)},
                     },
                     "required": ["internal_id"],
                 },
@@ -284,7 +307,7 @@ def build_skill() -> BoundSkill:
                     "properties": {
                         "mode": {
                             "type": "string",
-                            "enum": ["reply", "reply-all", "forward", "new"],
+                            "enum": list(_COMPOSE_MODES),
                             "description": (
                                 "reply/reply-all/forward need internalId (the source "
                                 "email); new writes a brand-new message."
@@ -334,12 +357,35 @@ def build_skill() -> BoundSkill:
         BoundTool(
             ToolDef(
                 name="email_send",
-                description="Send an email via SMTP (irreversible). Requires email:write + confirm.",
+                description=(
+                    "Send an email via SMTP (irreversible). Supports new / reply / reply-all "
+                    "/ forward. Requires email:write + confirm=true."
+                ),
+                # 🔴 **internalId 不在 required**（2026-07-28 审计）：``mode`` 枚举含 ``new``，
+                # 但改动前 ``required:["internalId"]`` 让「按文档发一封全新邮件」必吃 400 ——
+                # 唯一通路是猜一个注释里写明「对外 schema 不暴露」的哨兵 ``-1``。handler
+                # （``_compose_request``，与 email_draft 共用）本来就为 mode='new' 补哨兵，
+                # 是 schema 比实现更严。放开后 mode 仍**非** required：省略 = 'reply-all'
+                # （既有 ``{internalId: N}`` 调用向后兼容），条件必填写在 description 里
+                # ——与 ``email_draft`` 同一写法。
                 input_schema={
                     "type": "object",
                     "properties": {
-                        "internalId": {"type": "integer"},
-                        "mode": {"type": "string", "enum": ["reply", "reply-all", "forward", "new"]},
+                        "internalId": {
+                            "type": "integer",
+                            "description": (
+                                "source email ROWID; required for reply/reply-all/forward, "
+                                "omit when mode=new"
+                            ),
+                        },
+                        "mode": {
+                            "type": "string",
+                            "enum": list(_COMPOSE_MODES),
+                            "description": (
+                                "defaults to reply-all; new sends a brand-new message and "
+                                "needs explicit to/subject instead of internalId"
+                            ),
+                        },
                         "to": {"type": "array", "items": {"type": "string"}},
                         "cc": {"type": "array", "items": {"type": "string"}},
                         "bcc": {"type": "array", "items": {"type": "string"}},
@@ -347,7 +393,6 @@ def build_skill() -> BoundSkill:
                         "bodyHtml": {"type": "string"},
                         "bodyText": {"type": "string"},
                     },
-                    "required": ["internalId"],
                 },
                 output_schema={"type": "object"},
                 confirmation_tier="edit",

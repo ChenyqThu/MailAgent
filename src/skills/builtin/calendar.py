@@ -1,7 +1,10 @@
 """calendar skill —— 读日历事件（CalDAV → SQLite SSoT，纯 reader，无 davmail gate）。
 
 镜像 ``src/api/routers/calendar.py``：``CalendarService.list_events_in_window`` /
-``get_event``。写（create/update/delete/rsvp）留 P1 enhancement，默认不授外部 key。
+``get_event``。写（create/update/delete/rsvp）留 P1 enhancement —— 对外 **零** 写工具，
+故 ``calendar:write`` scope 也**不**在 ``KNOWN_SCOPES`` 里（2026-07-28 审计删；悬空的可发放
+scope 会让未来第一个消费者静默武装所有历史 key，理由见 ``src/security/api_keys.py``）。
+真做 P1 时把 ToolDef 与那个 scope 放**同一个 commit**。
 """
 
 from __future__ import annotations

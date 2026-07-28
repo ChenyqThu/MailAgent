@@ -37,6 +37,18 @@ KEY_PREFIX = "mak_"  # MailAgent (agent) Key
 # ---------------------------------------------------------------------------
 # Scope catalog —— 与 Skill manifest 的 tool.auth_scopes 对齐（src/skills）。
 # write / execute / external-call scope **不**进 READ_ONLY 默认，必须显式授予。
+#
+# 🔴 **可发放 ⟺ 有消费者**（2026-07-28 审计；闸 = tests/skills/test_tooldef_contract.py）：
+# 本集合与 builtin ToolDef 的 ``auth_scopes`` 并集必须**逐字相等**。悬空 scope（在册、零
+# 消费者）不是无害的占位 —— ``mailagent api-key create --scopes <它>`` 立刻可发放并存进
+# ``agent_api_keys``，而 ``verify()`` 读回时**不**校验 scope 值域，于是未来第一个消费它的
+# ToolDef 一上线就**静默武装所有历史 key**，没有任何一次显式授权动作。
+# ``calendar:write`` 就是这样一个（为 calendar skill 的 P1 写能力预留，见
+# ``src/skills/builtin/calendar.py`` 头注释），已删 —— 实测生产 ``api_auth.db`` 零 key 持有它，
+# 删除无爆炸半径；存量 key 也不受影响（``_row_to_record`` 不做值域校验，删掉的名字只是
+# 从此再也匹配不上任何 tool）。
+# 将来真要加日历写能力：**同一个 commit 里**加 ToolDef 与本行，让「发一把带写 scope 的 key」
+# 重新变成一次有意识的操作。不要为了「先占个名字」而单独加回来。
 # ---------------------------------------------------------------------------
 KNOWN_SCOPES: frozenset[str] = frozenset(
     {
@@ -45,7 +57,6 @@ KNOWN_SCOPES: frozenset[str] = frozenset(
         "report:read",
         "report:run",
         "calendar:read",
-        "calendar:write",
         "email:draft",
         "email:write",
         "notion_agent:invoke",

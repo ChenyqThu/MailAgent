@@ -23,7 +23,8 @@ can never deliver it — `email_send` is not even visible in its manifest / MCP 
 - `email_get {internal_id, include?}` — metadata; `include="body,attachments"` adds a body
   summary + attachment list.
 - `email_body {internal_id, format?}` — full body content; `format` ∈ `markdown` (default) /
-  `html` / `raw`.
+  `html`. Raw MIME is **not** available: the store keeps only its sha256 digest, which you can
+  read as `body.raw_mime_sha256` from `email_get {internal_id, include:"body"}`.
 - `email_thread {internal_id}` — sibling emails in the same conversation.
 - `email_draft {mode, internalId?, to?, cc?, bcc?, subject?, bodyHtml?, bodyText?,
   quoteOriginal?, confirm}` — **saves a draft to the mailbox; nothing is sent**. `mode` ∈
@@ -31,9 +32,12 @@ can never deliver it — `email_send` is not even visible in its manifest / MCP 
   everything except `new`. Requires the `email:draft` scope AND a JSON boolean `confirm: true`.
   Rate limited to 20 **successfully created** drafts/hour per key (rejected or failed calls
   do not consume quota).
-- `email_send {internalId, mode, to?, cc?, bcc?, subject?, bodyHtml?, bodyText?}` — **sends real
-  email via SMTP (irreversible)**. Requires the `email:write` scope AND `confirm: true` in the
-  invoke body. Not granted to the default handoff key, and not exposed over MCP.
+- `email_send {mode?, internalId?, to?, cc?, bcc?, subject?, bodyHtml?, bodyText?}` — **sends real
+  email via SMTP (irreversible)**. Same four modes and the same `internalId` rule as
+  `email_draft` (omit it for `new`; `mode` defaults to `reply-all`). Requires the `email:write`
+  scope AND `confirm: true` in the invoke body. Not granted to the default handoff key, and not
+  exposed over MCP. The response's `internal_id` echoes the *source* email — it is `null` for
+  `mode: "new"`.
 
 ## Notes
 

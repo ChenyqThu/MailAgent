@@ -17,14 +17,27 @@ from src.skills.registry import BoundSkill, BoundTool
 
 _VALID_CADENCE = ("daily", "weekly", "monthly")
 
+# 上限（2026-07-28 审计：本工具是对外读面唯一未封顶的 limit）。取 200 = 对齐兄弟里同为
+# 「一屏记录列表」的 ``email_search``（``_SEARCH_LIMIT_MAX``）；日/周/月报的产出量远低于
+# 邮件，200 条已覆盖数月历史。**判定形式也照兄弟：越界拒（E_INVALID_ARG），不是静默 clamp**
+# —— 悄悄改小调用方要的数字会让分页调用方拿到与请求不符的窗口而不自知。
+# 🔴 顺带堵住 ``limit=-1``：SQLite 的 ``LIMIT -1`` 意为**不限**，改动前它能一次拉全表。
+_REPORT_LIST_LIMIT_MAX = 200
+
 
 def _report_list(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
+    limit = int(params.get("limit") or 50)
+    if limit < 1 or limit > _REPORT_LIST_LIMIT_MAX:
+        raise SkillError("E_INVALID_ARG", f"limit must be 1..{_REPORT_LIST_LIMIT_MAX}")
+    offset = int(params.get("offset") or 0)
+    if offset < 0:
+        raise SkillError("E_INVALID_ARG", "offset must be >= 0")
     store = ctx.report_store()
     rows = store.list_reports(
         cadence=params.get("cadence"),
         agent_id=params.get("agent_id"),
-        limit=int(params.get("limit") or 50),
-        offset=int(params.get("offset") or 0),
+        limit=limit,
+        offset=offset,
     )
     items = [wire.report_to_list_item(r) for r in rows]
     return {"items": items, "count": len(items)}
@@ -90,8 +103,9 @@ def build_skill() -> BoundSkill:
                     "properties": {
                         "cadence": {"type": "string", "enum": list(_VALID_CADENCE)},
                         "agent_id": {"type": "string"},
-                        "limit": {"type": "integer"},
-                        "offset": {"type": "integer"},
+                        # 上下界取自 handler 的同一个常量（不手抄）；越界 → E_INVALID_ARG。
+                        "limit": {"type": "integer", "minimum": 1, "maximum": _REPORT_LIST_LIMIT_MAX},
+                        "offset": {"type": "integer", "minimum": 0},
                     },
                 },
                 output_schema={"type": "object", "description": "{items, count}"},
