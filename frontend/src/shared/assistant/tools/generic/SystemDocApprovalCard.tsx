@@ -22,6 +22,16 @@ import {
 } from '../_cardShell'
 
 // doc name → i18n key suffix (labels live under chat.systemDocApprovalCard.doc.<key>).
+//
+// 🔴 The key set is pinned to `updateSystemMdSchema.doc_name` (ai-gateway/tools/schemas.ts) —
+// this card renders for update_system_md ONLY (a2ui.ts componentForTool), so those four
+// values are exactly what docName can be. `memory` is deliberately absent: memory.md is NOT
+// an update_system_md target (identity boundary, tools/profile.ts:18 — it is written by
+// agent_memory_update / auto-capture instead), so a memory label here would be dead code that
+// misrepresents the tool surface. Settings' StandingDocsSection lists 5 docs because it is the
+// *editor* for all of them; the two key sets differ on purpose. Adding a doc to the zod enum
+// must add it here too (plus the zh/en strings) — SystemDocApprovalCard.test.tsx renders every
+// enum value and fails if any of them falls back to the raw doc name.
 const DOC_LABEL_KEYS: Record<string, string> = {
   soul: 'soul',
   agent: 'agent',

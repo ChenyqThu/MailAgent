@@ -113,7 +113,7 @@ function makeWrapper(opts: {
   return JSON.stringify({
     status: 'error',
     schema_version: 1,
-    error: { code: opts.errorCode ?? 'E_GENERIC', message: 'fake', hint: opts.hint },
+    error: { code: opts.errorCode ?? 'E_INTERNAL', message: 'fake', hint: opts.hint },
     meta: { duration_ms: 1 }
   })
 }
@@ -200,15 +200,22 @@ describe('CliQueue concurrency', () => {
 
 // ---- (b) + (c) + (d) exit code dispatch -------------------------------------
 
+// 🔴 The expected codes are HAND-COPIED from the canonical source
+// `src/cli/exceptions.py` (CODE_TO_EXIT, mirrored in docs/cli-schema/error-codes.md).
+// When they disagree, exceptions.py wins — do NOT "fix" a failure by editing this table
+// to match cli_runner.ts. Five of these were previously welded to invented names
+// (E_GENERIC / E_AUTH / E_UPSTREAM / E_PARTIAL / E_PM2_CONFLICT), which kept the suite
+// green while the renderer's `err.code === 'E_AUTH_FAILED'` branches stayed dead.
+// exit 130 (SIGINT twice) has no Python code — E_SIGINT2 is cli_runner's local name.
 const EXPECTED_BY_EXIT: Array<{ exit: number; code: string }> = [
-  { exit: 1, code: 'E_GENERIC' },
+  { exit: 1, code: 'E_INTERNAL' },
   { exit: 2, code: 'E_INVALID_ARG' },
-  { exit: 4, code: 'E_AUTH' },
-  { exit: 5, code: 'E_UPSTREAM' },
-  { exit: 6, code: 'E_PARTIAL' },
+  { exit: 4, code: 'E_AUTH_FAILED' },
+  { exit: 5, code: 'E_SCHEMA_MISMATCH' },
+  { exit: 6, code: 'E_PARTIAL_FAILURE' },
   { exit: 7, code: 'E_ABORTED' },
   { exit: 8, code: 'E_MAX_FAILURES' },
-  { exit: 9, code: 'E_PM2_CONFLICT' },
+  { exit: 9, code: 'E_PM2_RUNNING' },
   { exit: 130, code: 'E_SIGINT2' }
 ]
 

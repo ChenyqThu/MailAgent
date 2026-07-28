@@ -619,7 +619,10 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
       } catch (err) {
         const e = asWriteError(err)
         const key =
-          e.code === 'E_AUTH'
+          // E_AUTH_FAILED is what both legs actually send (Python envelope over HTTP,
+          // and cli_runner's exit-4 fallback over IPC). The old 'E_AUTH' spelling only
+          // ever existed in cli_runner's exit map, so this branch never fired.
+          e.code === 'E_AUTH_FAILED'
             ? 'toolbarToast.resyncFailAuth'
             : e.code === 'E_PM2_RUNNING' || e.code === 'E_PM2_CONFLICT'
               ? 'toolbarToast.resyncFailPm2'

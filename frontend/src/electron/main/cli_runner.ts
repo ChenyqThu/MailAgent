@@ -127,17 +127,23 @@ export function getMailagentBin(): string {
   return _binCache
 }
 
-// Mirror of docs/cli-schema/error-codes.md. -1 is our local timeout sentinel.
+// exit code → code NAME; consumed below as `E_${name}`. Canonical source is
+// `src/cli/exceptions.py` (CODE_TO_EXIT), mirrored in docs/cli-schema/error-codes.md —
+// the names MUST match it verbatim or the renderer's `err.code === 'E_...'` branches
+// (auth / pm2 toasts) never fire. Exit 1 carries three Python codes (E_INTERNAL /
+// E_NOT_FOUND / E_LLM_FAILED); this map is only the no-wrapper crash fallback, so the
+// unclassified bucket E_INTERNAL is the right one. 130 (SIGINT twice) and -1 (our local
+// timeout sentinel) have no Python code — those two names are local-only by design.
 export const EXIT_CODE_MAP: Record<number, string> = {
   0: 'OK',
-  1: 'GENERIC',
+  1: 'INTERNAL',
   2: 'INVALID_ARG',
-  4: 'AUTH',
-  5: 'UPSTREAM',
-  6: 'PARTIAL',
+  4: 'AUTH_FAILED',
+  5: 'SCHEMA_MISMATCH',
+  6: 'PARTIAL_FAILURE',
   7: 'ABORTED',
   8: 'MAX_FAILURES',
-  9: 'PM2_CONFLICT',
+  9: 'PM2_RUNNING',
   130: 'SIGINT2',
   [-1]: 'TIMEOUT'
 }
@@ -220,7 +226,7 @@ class CliQueue {
       // up `.env` (NOTION_TOKEN / EMAIL_DATABASE_ID / USER_EMAIL — required
       // fields). Electron's app cwd is the .app bundle in production, not
       // the repo; without this the CLI dies in `Config()` before reaching
-      // typer and surfaces as exit=1 / E_GENERIC with a python traceback.
+      // typer and surfaces as exit=1 / E_INTERNAL with a python traceback.
       // cwd 用可写数据根 (打包态=userData, 必存在) 而非 getProjectRoot() —— 后者打包态恒落
       // ~/Documents/MailAgent, 干净机器 (无 dev clone) 上不存在 → execa chdir ENOENT → 所有
       // fork CLI 起不来。DB/.env 已由下面 env override 显式锚定, cwd 只需是存在且可写的目录。

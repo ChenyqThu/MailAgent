@@ -13,8 +13,8 @@ from src.skills.errors import SkillError
 from src.skills.models import ToolDef, ToolHandler
 from src.skills.registry import BoundSkill, BoundTool
 
-_SEARCH_LIMIT_MAX = 200
-_ATTACHMENT_SEARCH_LIMIT_MAX = 100
+_SEARCH_LIMIT_MAX = 200  # == src/api/routers/email.py SEARCH_LIMIT_MAX
+_ATTACHMENT_SEARCH_LIMIT_MAX = 50  # == src/api/routers/attachment.py _ATTACHMENT_SEARCH_LIMIT_MAX
 
 
 def _email_search(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:

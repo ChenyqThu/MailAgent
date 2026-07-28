@@ -165,6 +165,11 @@ def error_envelope(
 #   - E_UPSTREAM: 上游 (SMTP / davmail / CalDAV) 失败 → 502 Bad Gateway。
 #   - E_GENERIC : 未分类失败 → 500 (与默认同值，显式登记表达意图)。
 #   - E_PARTIAL : 批量部分失败 → 207 Multi-Status (E_PARTIAL_FAILURE 别名保留)。
+# 同源沿革还有两个当时漏登记的别名 (cli_runner.ts 的 exit map 曾把 exit 4 拼成
+# E_AUTH、exit 9 拼成 E_PM2_CONFLICT；映射已改回 exceptions.py 真值，但历史客户端 /
+# 缓存 web bundle 仍可能发老拼法，miss → 兜底 500 会把 403/409 伪装成服务端错误):
+#   - E_AUTH        : E_AUTH_FAILED 别名 → 403。
+#   - E_PM2_CONFLICT: E_PM2_RUNNING  别名 → 409。
 ERROR_CODE_TO_HTTP: dict[str, int] = {
     "E_NOT_FOUND": 404,
     "E_INTERNAL": 500,
@@ -173,6 +178,7 @@ ERROR_CODE_TO_HTTP: dict[str, int] = {
     "E_INVALID_ARG": 400,
     "E_NOT_IMPLEMENTED": 400,
     "E_AUTH_FAILED": 403,  # auth-layer 缺 token → 401 在 auth.py 处理；服务自报 → 403
+    "E_AUTH": 403,  # 别名: 老 cli_runner exit-4 拼法
     "E_RATE_LIMITED": 429,  # skill 配额闸（src/skills/rate_limit.py）
     "E_UPSTREAM": 502,  # 上游 SMTP/davmail/CalDAV 失败
     "E_SCHEMA_MISMATCH": 502,
@@ -181,6 +187,7 @@ ERROR_CODE_TO_HTTP: dict[str, int] = {
     "E_ABORTED": 499,
     "E_MAX_FAILURES": 503,
     "E_PM2_RUNNING": 409,
+    "E_PM2_CONFLICT": 409,  # 别名: 老 cli_runner exit-9 拼法
     "E_DISABLED": 403,  # 功能 flag 关（如 MAILAGENT_USER_MD_COMPILE）→ 端点拒绝
 }
 
