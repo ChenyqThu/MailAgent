@@ -44,8 +44,15 @@ function attachmentImageSrc(attachment: CompleteAttachment): string | null {
  *  「发出后，消息历史里没有显示图片」). assistant-ui has no image primitive for this —
  *  AttachmentPrimitive.unstable_Thumb renders the file EXTENSION as text — so the <img> is ours.
  *  Sizes are capped (the src is a data URL up to CHAT_IMAGE_MAX_PAYLOAD_CHARS, and a 1568px-edge
- *  image at natural size would dwarf the bubble); multiple images wrap in the flex row. */
-function UserMessageAttachments(): React.JSX.Element {
+ *  image at natural size would dwarf the bubble); multiple images wrap in the flex row.
+ *
+ *  🔴 Exported because there are TWO user-bubble renderers: this one (email panel) and
+ *  AgentMessage.tsx's AgentUserMessage (general chat / Cmd+O, demo-fidelity layout). The general
+ *  surface shipped with NO attachments row at all, so a sent image vanished there completely — the
+ *  converter routes user `file` parts to `attachments` and DELETES them from `content`, so a
+ *  Parts-only renderer drops them on the floor. One row, both surfaces: a third copy would just
+ *  diverge again. Mount it as a sibling of the bubble under a `flex-col items-end` root. */
+export function UserMessageAttachments(): React.JSX.Element {
   return (
     <div className="mt-1 flex max-w-[80%] flex-wrap justify-end gap-1">
       <MessagePrimitive.Attachments>

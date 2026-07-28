@@ -14,10 +14,11 @@
 
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ComposerPrimitive, MessagePrimitive } from '@assistant-ui/react'
+import { ComposerPrimitive, MessagePrimitive, useAuiState } from '@assistant-ui/react'
 
 import { MessageTiming } from '@shared/assistant/components/MessageTiming'
 import { TurnStatusLine } from '@shared/assistant/components/TurnStatusLine'
+import { UserMessageAttachments } from '@shared/assistant/components/message'
 import { getAssistantPartComponents } from '@shared/assistant/tools/registerToolUIs'
 import { AssistantActionBar, UserActionBar } from '@shared/assistant/components/action-bar'
 
@@ -25,17 +26,29 @@ import { AssistantActionBar, UserActionBar } from '@shared/assistant/components/
 export { SystemMessage } from '@shared/assistant/components/message'
 
 export function AgentUserMessage(): React.JSX.Element {
+  // dogfood 07-27 (Lane D) — 本渲染器**整个缺了附件那一行**：只画 MessagePrimitive.Parts，而
+  // AISDKMessageConverter 把 user 的 file part 从 content 里剔除、只留在 message.attachments 里
+  // （convertMessage.ts:200）→ 发出去的图在通用对话（Cmd+O / 本渲染器）里连个文件名都不剩，直接
+  // 人间蒸发。owner 复现的正是这条（真机 session 113 = general，「图片内容识别请求」）。邮件面板
+  // 那份至少还有一枚回形针药丸，所以两处症状不同、但根子都在这一行的有无。附件行与 UserActionBar
+  // 的 absolute 定位互不干扰：它是 .relative 气泡盒的**兄弟**，挂在 items-end 的 flex-col 根下。
+  const hasAttachments = useAuiState((s) => (s.message.attachments?.length ?? 0) > 0)
+  // 纯图发送没有 text part → content 为空，再画气泡就是一枚空药丸（与邮件面板同规）。
+  const hasBubbleContent = useAuiState((s) => s.message.content.length > 0)
   return (
     <MessagePrimitive.Root className="group mx-auto flex w-full max-w-[var(--thread-max-width)] flex-col items-end">
       <div className="relative max-w-[80%]">
-        <div className="rounded-2xl rounded-br-md border border-[var(--hairline)] bg-ink-3 px-3.5 py-2 text-body leading-relaxed text-ink-fg">
-          <MessagePrimitive.Parts />
-        </div>
+        {hasBubbleContent && (
+          <div className="rounded-2xl rounded-br-md border border-[var(--hairline)] bg-ink-3 px-3.5 py-2 text-body leading-relaxed text-ink-fg">
+            <MessagePrimitive.Parts />
+          </div>
+        )}
         {/* edit 按钮悬浮在气泡左侧外(demo idiom：absolute -translate-x-full)，hover 才出现(dogfood-2)。 */}
         <div className="absolute left-0 top-1/2 -translate-x-full -translate-y-1/2 pr-2">
           <UserActionBar />
         </div>
       </div>
+      {hasAttachments && <UserMessageAttachments />}
     </MessagePrimitive.Root>
   )
 }

@@ -106,6 +106,15 @@ export interface ChatMessage {
    *  collapsible block above the answer; null for non-thinking turns + pre-v6
    *  rows. Mirror of ai_chat.db schema_version 6 (model.ts ChatMessage). */
   thinking: string | null
+  /** v9 (P4 Phase 02) — the AI SDK UIMessage canonical JSON for this turn; null for
+   *  legacy-runtime + pre-v9 rows (reload then synthesizes from `content`).
+   *  🔴 手抄镜像：`src/shared/chat_model.ts` 的 ChatMessage 是 Electron 侧的同名行形状，v9 加列时
+   *  只更新了那一份，这份 API 边界投影漏了 —— 而 `chat.messages.map(chatMessageToUIMessage)` 正是
+   *  吃这个类型。运行时没出事纯属侥幸（serve-api `SELECT *` 无 response_model，字段一直在传；
+   *  `ReloadableChatMessageRow.ui_message_json` 又是 optional，少这行也照样编译），但类型在对
+   *  wire 形状撒谎：谁要是据此认定「这列读不到」而去删读侧的兜底，图片历史当场全灭。
+   *  NEVER store secrets here — the field crosses the IPC/HTTP boundary. */
+  ui_message_json: string | null
   created_at: number
   updated_at: number
 }
