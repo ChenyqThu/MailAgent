@@ -449,11 +449,11 @@ log4j.logger.davmail=INFO
 
 **详见**：[`docs/multi-folder-sync-prd.md`](../folder-sync/multi-folder-sync-prd.md) · [`docs/multi-folder-sync-design.md`](../folder-sync/multi-folder-sync-design.md) · [`docs/multi-folder-sync-handoff.md`](../../archive/2026-06/multi-folder-sync-handoff.md) · 看板 [`docs/multi-folder-sync-matrix.md`](../folder-sync/multi-folder-sync-matrix.md)。
 
-## 跨语言手抄常量的一致性闸（可复用模式，现存三闸）
+## 跨语言手抄常量的一致性闸（可复用模式，现存四闸）
 
 **问题形态**：一个常量 / 派生表 / 集合，在 Python 与 TypeScript（或多个 TS 文件）里各有一份**手抄**镜像。
 类型系统跨不过语言边界，import 也跨不过 —— 于是改一处、漏另一处，**测试全绿、编译干净、运行时静默错**。
-本仓已被这个形态咬过三次，形成同一套解法：**建一个跨语言一致性闸**（测试形态，非运行时机制）。
+本仓已被这个形态咬过四次，形成同一套解法：**建一个跨语言一致性闸**（测试形态，非运行时机制）。
 
 **解法三要素**：
 
@@ -465,14 +465,15 @@ log4j.logger.davmail=INFO
    闸失效等于没有闸，而且没人会发现。所以抽取器只认当前的单行习语，重构者被迫回来同步更新抽取器，
    顺手核对镜像仍一致。
 
-**现存三闸**：
+**现存四闸**：
 
 | 镜像的东西 | 镜像在哪几处 | 闸 | 漏改的后果 |
 |---|---|---|---|
 | `DB_VERSION`（Python 常量 → TS `EXPECTED_DB_VERSION`） | `src/mail/sync_store.py` · `frontend/src/electron/main/backend_lifecycle.ts` | `frontend/tests/main/db_version_consistency.test.ts`（TS 读 Python 源码） | 打包 app 启动门控 `waitReady` 卡 120s 降级 |
 | mailbox 判定集 / 变体集 | `src/mail/mailbox_semantics.py` · `frontend/src/shared/lib/mailboxSemantics.ts` | `frontend/tests/shared/lib/mailboxSemantics.test.ts`（两侧集合逐成员锁死） | 变体行在专属视图不可见 / 徽标与列表口径分裂（issue #42） |
 | `trigger.kind → context_mode` 派生表 | `src/api/routers/agent.py::_derive_rule_context_mode`（建规盖章·写侧权威）· `frontend/src/ai-gateway/agentRun.ts::deriveContextMode`（headless 求值）· `frontend/src/shared/components/agents/custom-agent/shared.tsx::deriveHeadlessMode`（抽屉展示） | `tests/api/test_context_mode_consistency.py`（canonical 表 = 该测试文件；Python 穷举断言行为，两处 TS 从源码正则抽分支比对） | 规则双键 `(context_mode, agent_id)` 失配 → owner 配的免卡规则**永不命中**、恒 HITL；抽屉显示「未配置触发」+ 全部规则标 dormant |
+| trigger `kind` 值域 + schedule `rule` 10 键 | `src/agents/trigger.py::parse_trigger`（保存校验权威）+ `src/agents/schedule_rule.py::_RULE_KEYS` · `frontend/src/ai-gateway/tools/schemas.ts::customAgentTriggerSchema`（chat CRUD 输入 allowlist，`.strict()`） | `tests/api/test_trigger_kind_parity.py`（两侧都从源码抽真值，本闸不持任何期望值副本；另有合成探针反向用例） | 少一种 kind = 对话式 CRUD 建不出该类 agent（issue #65 —— 07-24 排程批改 4 处独漏此处）；rule 键漂移 = 模型提的排程被 `.strict()`/`parse_rule` 恒拒 |
 
 **什么时候必须建新闸**：你要在**第二处**手抄一个已有的常量 / 枚举 / 派生表，且两处无法共享同一个源
-（跨语言 / 跨进程 / 打包边界）。三闸的成本都在 100 行量级，而三次事故各自都是「静默错到用户面」。
+（跨语言 / 跨进程 / 打包边界）。四闸的成本都在 100 行量级，而每次事故都是「静默错到用户面」。
 先问能不能**消灭镜像**（单源 + 生成/导出）；确实消灭不了，才建闸——闸是妥协，不是首选。

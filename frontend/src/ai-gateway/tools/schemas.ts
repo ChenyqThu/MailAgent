@@ -484,14 +484,48 @@ export type SkillReadInput = z.infer<typeof skillReadSchema>
 //    structurally cannot enter (rule creation stays owner-only). ──
 
 /** A custom-agent trigger the model may propose. Mirrors CustomAgentTrigger (backend
- *  src/agents/trigger.py is the validation authority: cron 5-field + croniter, regex ReDoS caps).
- *  The `v` version bit is added by the wire construction, not the model. */
+ *  src/agents/trigger.py is the validation authority: cron 5-field + croniter, regex ReDoS caps,
+ *  schedule rule/anchor deep validation in src/agents/schedule_rule.py). This schema is only the
+ *  first (allowlist) gate — semantic checks (real calendar dates, IANA timezone existence) stay
+ *  server-side, same discipline as cron. The `v` version bit is added by the wire construction,
+ *  not the model. 🔴 The kind set + the 10 rule keys are locked against Python by
+ *  tests/api/test_trigger_kind_parity.py — a 4th kind or an 11th rule key must land here too. */
 export const customAgentTriggerSchema = z.discriminatedUnion('kind', [
   z
     .object({
       kind: z.literal('cron'),
       cron: z.string().min(1).max(256),
       timezone: z.string().max(64).optional()
+    })
+    .strict(),
+  // 07-24 structured recurrence (contract §1: all 10 rule keys required, missing OR extra rejected;
+  // weekdays/weekday are 0=Sunday, NOT Python's 0=Monday). timezone is mandatory here — unlike
+  // cron there is no empty→UTC fallback (an empty timezone is what forked the two schedulers).
+  z
+    .object({
+      kind: z.literal('schedule'),
+      rule: z
+        .object({
+          freq: z.enum(['daily', 'weekly', 'monthly']),
+          interval: z.number().int().min(1),
+          weekdays: z.array(z.number().int().min(0).max(6)).max(7),
+          monthMode: z.enum(['date', 'nth']),
+          monthDay: z.number().int().min(1).max(31),
+          ordinal: z.union([
+            z.literal(1),
+            z.literal(2),
+            z.literal(3),
+            z.literal(4),
+            z.literal('last')
+          ]),
+          weekday: z.number().int().min(0).max(6),
+          hour: z.number().int().min(0).max(23),
+          minute: z.number().int().min(0).max(59),
+          clamp: z.boolean()
+        })
+        .strict(),
+      anchor: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      timezone: z.string().min(1).max(64)
     })
     .strict(),
   z

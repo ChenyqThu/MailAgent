@@ -327,8 +327,13 @@ export function createCustomAgentTools(
     name: 'custom_agent_create',
     description:
       'Propose creating a NEW custom agent. Provide an id (unique, no spaces), a title, the prompt ' +
-      'that steers it, optionally a model, whether it is enabled, a trigger (either {kind:"cron", ' +
-      'cron:"<5-field cron>", timezone?} for a schedule OR {kind:"email_filter", subject_pattern?, ' +
+      'that steers it, optionally a model, whether it is enabled, a trigger (one of: {kind:"cron", ' +
+      'cron:"<5-field cron>", timezone?} for arbitrary or sub-daily expressions; {kind:"schedule", ' +
+      'rule:{freq:"daily"|"weekly"|"monthly", interval, weekdays, monthMode:"date"|"nth", monthDay, ' +
+      'ordinal, weekday, hour, minute, clamp}, anchor:"YYYY-MM-DD", timezone} for a plain ' +
+      'daily/weekly/monthly time — this is the structured form the Settings schedule builder ' +
+      'produces; ALL 10 rule keys are required (send defaults for the ones the freq ignores) and ' +
+      'weekdays/weekday count 0=Sunday; OR {kind:"email_filter", subject_pattern?, ' +
       'sender_pattern?, folders?} to fire on matching mail — omit for a disabled draft), the list of ' +
       'tools it may use (allowed_tools), a budget ({max_steps?, max_runs_per_day?, ' +
       'max_run_seconds?}), and optionally the permissions it needs: grant_exec (local command ' +
@@ -336,8 +341,8 @@ export function createCustomAgentTools(
       'skills (the skill sets mounted for it). The user reviews the full spec on a confirmation ' +
       'card whose permission summary highlights exec / open-web in red; nothing is created without ' +
       'approval. Grants only register tools — card-free whitelist RULES remain an owner-only ' +
-      'Settings action you cannot perform. A bad cron / regex is rejected by a server-side ' +
-      'validator. Edit tier — always asks under the Manual/auto-reversible and acceptEdits ' +
+      'Settings action you cannot perform. A bad cron / regex / schedule rule is rejected by a ' +
+      'server-side validator. Edit tier — always asks under the Manual/auto-reversible and acceptEdits ' +
       'modes; only the owner-set global bypass permission mode can auto-execute it.',
     inputSchema: customAgentCreateSchema,
     risk: 'edit',
@@ -365,7 +370,8 @@ export function createCustomAgentTools(
       'skills) — same shapes as custom_agent_create. Pass trigger:null to disable the agent ' +
       '(clear its trigger). A permission change is shown to the user as a before/after diff read ' +
       'from the server (escalations highlighted red); card-free whitelist RULES remain owner-only. ' +
-      'The user reviews and approves the change; a bad cron / regex is rejected server-side. ' +
+      'The user reviews and approves the change; a bad cron / regex / schedule rule is rejected ' +
+      'server-side. ' +
       'Edit tier — always asks under the Manual/auto-reversible and acceptEdits modes; only the ' +
       'owner-set global bypass permission mode can auto-execute it.',
     inputSchema: customAgentUpdateSchema,

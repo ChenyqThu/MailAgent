@@ -223,6 +223,12 @@ weekly/周一 9 点/空 tz，后者 disabled），升级后触发时刻**逐分�
 - 两侧各有一条测试专抓「两侧都忽略 anchor 时逐条比对照样全绿」这个假通过。
 - 落地时另跑过 406 case 跨语言差分（随机 rule × 8 时区，含 Lord Howe 半小时 DST / 南半球 /
   Santiago + 定向边角）全过。
+- **形状闸** `tests/api/test_trigger_kind_parity.py`（issue #65 补）：trigger 的 `kind` 值域与
+  rule 的 10 键在 Python 与 gateway zod allowlist（`frontend/src/ai-gateway/tools/schemas.ts`）
+  之间对齐。**两侧都从源码抽真值**（Python 抽 `parse_trigger` 的 `if kind == "..."` 分支 +
+  直接 import `schedule_rule._RULE_KEYS`；TS 抽判别式里的 `z.literal` 与 rule 对象键），
+  本闸不持任何一侧的期望值副本；抽取失败一律红（重构 zod 写法必须回来更新抽取器）。
+  加第四种 kind / 第 11 个 rule 键时它与 `tests/api/test_context_mode_consistency.py` 同时红。
 
 ---
 
@@ -269,6 +275,11 @@ weekly/周一 9 点/空 tz，后者 disabled），升级后触发时刻**逐分�
   + 月末 skip / clamp 如实标注 + DST 偏移变化标注；尊重 `prefers-reduced-motion`。
 - 人审面必须能呈现 schedule 触发（`summarizeAgentTrigger` / `triggerSummary`），
   否则 owner 批的是一个看不见的触发。
+- **chat 对话式 CRUD（`custom_agent_create` / `custom_agent_update`）三种 kind 全收**
+  （issue #65 补齐 —— 07-24 落地时漏了 `schedule`，chat 只能把排程 agent 降级成 cron）。
+  gateway 的 `customAgentTriggerSchema` 只是**第一道 allowlist**：`.strict()` + rule 10 键全量，
+  语义深校验（真实日历日、IANA 时区、croniter）一律留在 `trigger.py`，与 cron 同纪律；
+  两侧形状对齐由 §5 的形状闸锁死。仍恒过人审卡。
 - `trigger.kind → contextMode` 派生表有**三处镜像**，改一处必须同步三处，见
   [`architecture-internals.md`](./architecture-internals.md)「跨语言手抄常量的一致性闸」+
   `tests/api/test_context_mode_consistency.py`（canonical 表 = 该测试文件）。
@@ -277,9 +288,6 @@ weekly/周一 9 点/空 tz，后者 disabled），升级后触发时刻**逐分�
 
 ## 8. 已知限制 / 不做
 
-- **chat 对话式 CRUD 的 trigger schema 仍是 `cron | email_filter` 严格 union**：经 chat 修改
-  schedule 型 agent 的触发只能降级成 cron（经人审卡 + 后端深校验，fail-safe，不会写坏形状）。
-  扩 union 属能力新增，不在本批范围 —— Settings 抽屉是 schedule 的完整编辑面。
 - 一天多时点收敛（§4.1）。
 - 不合并 `schedule_json` / `trigger_json` 两列（两列各服务各自 agent type）。
 - 不加 DB 列、不 bump `DB_VERSION`。
