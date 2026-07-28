@@ -43,9 +43,13 @@ async def kos_stats(
     (pushed_at >= now-N*86400); days=-1 → 全量; days=0 → E_INVALID_ARG
     (与 CLI 一致, 用 -1 表全量)。
 
-    返回 data = {days, since_ts, total, by_status, by_error_code, pending_retry,
-    dead_count, last_success_ts, health{...}, daily[...]}。台账表不存在 (全新
-    install / KOS 从未启用) → 同形状零值 + ``_source='table_missing'``。
+    返回 data = {enabled, gate, missing_keys, days, since_ts, total, total_all,
+    by_status, by_status_all, by_error_code, pending_retry, dead_count,
+    last_success_ts, health{...}, daily[...]}。台账表不存在 (全新 install / KOS
+    从未启用) → 同形状零值 + ``_source='table_missing'``。
+
+    ``gate`` 三态 + ``missing_keys`` 是 issue #64 的显因契约: gate 不满足时渲染侧要
+    说清缺什么, 不再整区静默消失。``missing_keys`` **只含键名**, 绝不含键值。
     """
     if days == 0:
         raise APIError(

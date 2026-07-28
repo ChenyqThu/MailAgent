@@ -1344,7 +1344,10 @@
       "healthLastCheck": "上次检查",
       "healthOk": "可达",
       "healthDown": "不可达",
-      "healthUnknown": "未探测"
+      "healthUnknown": "未探测",
+      "cumulative": "累计 {n}",
+      "gateMissing": "入库开关已开，但以下配置缺失 —— 邮件不会被推进知识库，这里也就没有数据可显示：",
+      "gateMissingHow": "去「设置 → 集成 → 知识大脑 (KOS) → 高级」填入 Producer 凭据，改完重启后端生效。"
     }
   },
   "calendar": {
@@ -2577,6 +2580,14 @@
         "ingest": {
           "label": "推送邮件入库",
           "helper": "邮件同步完成后异步推送进 KOS（producer），供日后检索。默认关。"
+        },
+        "bulkClientId": {
+          "label": "入库 Client ID",
+          "helper": "推送入库用的客户端 ID（gbrain_cl_ 前缀）。与上方对话读取用的 OAuth Client ID 是两套凭据，缺它则邮件推不进知识库。"
+        },
+        "bulkClientSecret": {
+          "label": "入库 Client Secret",
+          "helper": "推送入库用的客户端密钥（gbrain_cs_ 前缀），仅本机 .env 存储，不回传界面。"
         },
         "l1": {
           "label": "发件人热记忆预取",

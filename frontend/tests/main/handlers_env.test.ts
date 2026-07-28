@@ -150,4 +150,35 @@ describe('env:set', () => {
   test('LLM_ENABLED_MODELS is in MANAGED_ENV_KEY_SET (AiTab multi-select regression)', () => {
     expect(MANAGED_ENV_KEY_SET.has('LLM_ENABLED_MODELS')).toBe(true)
   })
+
+  // issue #64 — same shape as the LLM_ENABLED_MODELS regression above: the
+  // IntegrationsTab KOS section now renders EnvFields for the producer (bulk)
+  // credentials. Missing from the whitelist, those fields would render fine and
+  // blow up with E_INVALID_KEY the moment the user blurs the input — the "looks
+  // implemented, isn't" failure mode.
+  test('MAILAGENT_BULK_CLIENT_ID/_SECRET are managed (IntegrationsTab EnvField)', () => {
+    expect(MANAGED_ENV_KEY_SET.has('MAILAGENT_BULK_CLIENT_ID')).toBe(true)
+    expect(MANAGED_ENV_KEY_SET.has('MAILAGENT_BULK_CLIENT_SECRET')).toBe(true)
+  })
+
+  // The secret half must also be redacted — it's a gbrain client_secret; the
+  // renderer never gets to read one back out (write-only contract).
+  test('MAILAGENT_BULK_CLIENT_SECRET is redacted, CLIENT_ID is not', () => {
+    writeFileSync(
+      envPath,
+      'MAILAGENT_BULK_CLIENT_ID=gbrain_cl_public\nMAILAGENT_BULK_CLIENT_SECRET=gbrain_cs_topsecret\n',
+      { encoding: 'utf8' }
+    )
+    const snapshot = envHandler.readSnapshot()
+    expect(snapshot.values.MAILAGENT_BULK_CLIENT_SECRET).toBe('***')
+    expect(snapshot.secretKeys).toContain('MAILAGENT_BULK_CLIENT_SECRET')
+    expect(JSON.stringify(snapshot)).not.toContain('gbrain_cs_topsecret')
+    // client_id 是明文标识, 不脱敏 (同 KOS_OAUTH_CLIENT_ID)。
+    expect(snapshot.values.MAILAGENT_BULK_CLIENT_ID).toBe('gbrain_cl_public')
+  })
+
+  test('env:set accepts the bulk credentials (would be E_INVALID_KEY if unlisted)', () => {
+    const result = envHandler.writePatch({ MAILAGENT_BULK_CLIENT_ID: 'gbrain_cl_new' })
+    expect(result).toMatchObject({ ok: true, changedKeys: ['MAILAGENT_BULK_CLIENT_ID'] })
+  })
 })

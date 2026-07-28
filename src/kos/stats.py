@@ -18,6 +18,13 @@ envelope 包装，SQL 只有这一份。
 **积压类计数 (``pending_retry`` / ``dead_count``) 恒全量、不受窗口影响** ——
 10 天前失败的行今天照样要重试、照样需要人工介入，按窗口裁掉会谎报「没有积压」。
 
+🔴 ``total_all`` / ``by_status_all`` 同样恒全量 (issue #64 B1)。窗口计数单独摆出来会被
+读成「知识库总量」：一次 bulk 灌进来的几千行是窗口里的**不动块**，增量每天几十行在四位
+数基数上看不出变化；更坑的是相邻两档窗口常常算出**同一个数**（台账中间有空档期时
+7d == 30d），于是「换个窗口验证一下」这个最自然的自检反而坐实误判。而等那次 bulk 滚出
+窗口，同一个数字会毫无征兆地掉一个量级，看起来像知识库被清空。故窗口数与累计数必须
+同时下发、由渲染侧并排呈现。
+
 台账只有 ``internal_id`` 一个 PK、重推覆盖上一次记录 (PRD D4 的取舍)，所以按天分桶
 是**当前状态**的近似分布，不是历史事件流：某封邮件昨天失败今天推成功，只会出现在
 今天的 pushed 桶里。图表文案不承诺历史精确性。
@@ -52,8 +59,9 @@ from src.kos.ingest_log import (
 )
 
 # ``kos_ingest_log.status`` 值域 (PRD R1，跨 lane 契约)。
-# pushed = 已入库 / failed = 待重试 / dead = 超重试上限需人工 / skipped = priority floor 过滤。
-INGEST_STATUSES = ("pushed", "failed", "dead", "skipped")
+# pushed = 已入库 / failed = 待重试 / dead = 超重试上限需人工 / skipped = priority floor 过滤
+# / pending = 等 LLM 标签就位后首推 (issue #64 Lane A deferred first-push, 分钟级瞬态)。
+INGEST_STATUSES = ("pushed", "failed", "dead", "skipped", "pending")
 
 # 计入「失败」的 status —— by_error_code 分布与 daily failed 桶都用它。
 FAILURE_STATUSES = ("failed", "dead")
@@ -78,6 +86,15 @@ _ENV_MCP_BASE = "KOS_MCP_BASE"
 _ENV_BULK_CLIENT_ID = "MAILAGENT_BULK_CLIENT_ID"
 _ENV_BULK_CLIENT_SECRET = "MAILAGENT_BULK_CLIENT_SECRET"
 
+# 顺序 = 下发给 UI 的缺失键展示顺序 (稳定，不随 set/dict 迭代漂)。
+_CREDENTIAL_KEYS = (_ENV_MCP_BASE, _ENV_BULK_CLIENT_ID, _ENV_BULK_CLIENT_SECRET)
+
+# gate 三态 (issue #64) —— 渲染侧「整区不渲染 / 显因 / 正常」的**唯一**判据。
+# 判据在后端算好下发，前端不拼 (照 DavMailHealthCard 的 enabled 先例)。
+INGEST_GATE_ACTIVE = "active"
+INGEST_GATE_FLAG_OFF = "flag_off"
+INGEST_GATE_MISSING_CREDENTIALS = "missing_credentials"
+
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
 
 
@@ -95,18 +112,21 @@ def collect_kos_stats(
         now: 注入「当前时刻」(epoch)，仅测试用；默认 ``time.time()``。
 
     Returns:
-        ``{enabled, days, since_ts, total, by_status, by_error_code, pending_retry,
-        dead_count, last_success_ts, health, daily, _source}``
+        ``{enabled, gate, missing_keys, days, since_ts, total, total_all, by_status,
+        by_status_all, by_error_code, pending_retry, dead_count, last_success_ts,
+        health, daily, _source}``
 
-        ``_source`` = ``'live_query'`` | ``'table_missing'`` | ``'schema_stale'``
-        (见模块 docstring 的降级语义)。
+        ``gate`` = ``'active'`` | ``'flag_off'`` | ``'missing_credentials'``
+        (见 :func:`resolve_ingest_gate`)；``_source`` = ``'live_query'`` |
+        ``'table_missing'`` | ``'schema_stale'`` (见模块 docstring 的降级语义)。
     """
     if days == 0:
         raise ValueError("days 0 invalid; use -1 (all) or >=1")
 
     now_ts = time.time() if now is None else now
     since_ts: Optional[float] = now_ts - days * 86400 if days > 0 else None
-    enabled = resolve_ingest_enabled()
+    gate, missing_keys = resolve_ingest_gate()
+    enabled = gate == INGEST_GATE_ACTIVE
 
     conn = sqlite3.connect(str(db_path), timeout=30)
     conn.row_factory = sqlite3.Row
@@ -116,7 +136,8 @@ def collect_kos_stats(
         cols = _table_columns(conn, "kos_ingest_log")
         if not cols:
             return _empty_stats(
-                days, since_ts, state, now_ts, enabled, source="table_missing"
+                days, since_ts, state, now_ts, gate, missing_keys,
+                source="table_missing",
             )
         # v41 前的老形状缺 error_code —— 少了这个判断, 下面那条 SELECT 会抛
         # OperationalError, CLI 吐 traceback 而非 JSON, 前端直接进「加载失败」。
@@ -125,13 +146,9 @@ def collect_kos_stats(
         where = "WHERE pushed_at >= ?" if since_ts is not None else ""
         params: list = [since_ts] if since_ts is not None else []
 
-        by_status = {s: 0 for s in INGEST_STATUSES}
-        for row in conn.execute(
-            f"SELECT status, COUNT(*) AS n FROM kos_ingest_log {where} GROUP BY status",
-            params,
-        ).fetchall():
-            key = row["status"] or _NULL_KEY
-            by_status[key] = by_status.get(key, 0) + int(row["n"])
+        by_status = _status_histogram(conn, where, params)
+        # 恒全量, 不受 days 影响 —— 见模块 docstring 的 total_all 注释。
+        by_status_all = _status_histogram(conn)
 
         by_error_code: dict[str, int] = {}
         if has_error_code:
@@ -154,10 +171,14 @@ def collect_kos_stats(
 
     return {
         "enabled": enabled,
+        "gate": gate,
+        "missing_keys": missing_keys,
         "days": days,
         "since_ts": since_ts,
         "total": sum(by_status.values()),
+        "total_all": sum(by_status_all.values()),
         "by_status": by_status,
+        "by_status_all": by_status_all,
         "by_error_code": by_error_code,
         "pending_retry": pending_retry,
         "dead_count": dead_count,
@@ -168,27 +189,47 @@ def collect_kos_stats(
     }
 
 
-def resolve_ingest_enabled() -> bool:
-    """producer 面的「KOS 入库已启用」判据 —— env 派生, 与 DB 无关。
+def resolve_ingest_gate() -> tuple[str, list[str]]:
+    """producer 面门控三态 + 缺失键名 (issue #64) —— env 派生, 与 DB 无关。
 
-    ``MAILAGENT_KOS_INGEST_ENABLED`` 为真 **且** 三个 producer 凭据
-    (``KOS_MCP_BASE`` / ``MAILAGENT_BULK_CLIENT_ID`` / ``MAILAGENT_BULK_CLIENT_SECRET``)
-    都非空。前端据此整区显隐 (照 ``DavMailHealthCard`` 的 ``enabled`` 先例: 判据在
-    后端算好下发, 前端不拼)。
+    Returns:
+        ``(gate, missing_keys)``
+
+        - ``'flag_off'`` —— ``MAILAGENT_KOS_INGEST_ENABLED`` 未开; ``missing_keys`` 恒空。
+          用户压根没打开入库 (默认 false), 渲染侧整区不渲染 —— 给所有不用 KOS 的机器
+          挂一块「未启用」只是噪音。
+        - ``'missing_credentials'`` —— 开关开着但 producer 凭据缺; ``missing_keys`` 是
+          缺哪几个。🔴 issue #64 主诉正是这一支原本也 ``return null``: 从 ≤v1.19.0 升上来
+          的用户 ``.env`` 里必然没有 v1.19.1 才引入的两个 bulk 键 (``.env.example``
+          只对新装用户有效), 于是看板整区凭空消失、零线索。此支必须**显因**
+          (对齐 v1.16.1 为 issue #54 给 consumer 面做的 gate 显因)。
+        - ``'active'`` —— 四条件齐。
+
+    🔴 ``missing_keys`` 只含**键名**、永不含键值 —— 它要穿过 IPC / HTTP 到 renderer,
+    而这三个里两个是凭据 (与 ``SECRET_ENV_KEYS`` 的脱敏纪律同源)。
 
     🔴 读法 = ``os.environ`` 优先、否则热读 ``.env`` (抄 ``src/skills/invoke.py``
-    的既有 pattern): 后三个键**只有裸 ``os.getenv``、不在 ``config.py`` 也不在
-    ``.env.example``**, 而 ``mailagent kos stats`` 是 Electron spawn 的独立进程、
-    未必 ``load_dotenv`` 过 —— 只读 environ 会让桌面端恒判 disabled
-    (见 memory「env-only flags/load_dotenv 坑」)。
+    的既有 pattern): 后三个键**只有裸 ``os.getenv``、不在 ``config.py``**,
+    而 ``mailagent kos stats`` 是 Electron spawn 的独立进程、未必 ``load_dotenv`` 过
+    —— 只读 environ 会让桌面端恒判 disabled (见 memory「env-only flags/load_dotenv 坑」)。
     """
     env = _EnvResolver()
     if (env.get(_ENV_INGEST_ENABLED) or "").strip().lower() not in _TRUTHY:
-        return False
-    return all(
-        (env.get(key) or "").strip()
-        for key in (_ENV_MCP_BASE, _ENV_BULK_CLIENT_ID, _ENV_BULK_CLIENT_SECRET)
-    )
+        return INGEST_GATE_FLAG_OFF, []
+    missing = [key for key in _CREDENTIAL_KEYS if not (env.get(key) or "").strip()]
+    if missing:
+        return INGEST_GATE_MISSING_CREDENTIALS, missing
+    return INGEST_GATE_ACTIVE, []
+
+
+def resolve_ingest_enabled() -> bool:
+    """producer 面的「KOS 入库已启用」判据 = gate 三态折成 bool。
+
+    ``MAILAGENT_KOS_INGEST_ENABLED`` 为真 **且** 三个 producer 凭据
+    (``KOS_MCP_BASE`` / ``MAILAGENT_BULK_CLIENT_ID`` / ``MAILAGENT_BULK_CLIENT_SECRET``)
+    都非空。判据细节见 :func:`resolve_ingest_gate`。
+    """
+    return resolve_ingest_gate()[0] == INGEST_GATE_ACTIVE
 
 
 class _EnvResolver:
@@ -251,6 +292,26 @@ def _read_state(conn: sqlite3.Connection) -> dict[str, str]:
     except sqlite3.Error:
         return {}
     return {r["key"]: r["value"] for r in rows if r["value"] is not None}
+
+
+def _status_histogram(
+    conn: sqlite3.Connection,
+    where: str = "",
+    params: Optional[list] = None,
+) -> dict[str, int]:
+    """``status -> COUNT(*)``；``where`` 空 = 全量。缺席的 status 补 0。
+
+    窗口版与全量版 (``total_all``/``by_status_all``) 共用这一份 —— 两处各写一遍 SQL
+    正是「同一口径两份手抄」的起点。
+    """
+    counts = {s: 0 for s in INGEST_STATUSES}
+    for row in conn.execute(
+        f"SELECT status, COUNT(*) AS n FROM kos_ingest_log {where} GROUP BY status",
+        params or [],
+    ).fetchall():
+        key = row["status"] or _NULL_KEY
+        counts[key] = counts.get(key, 0) + int(row["n"])
+    return counts
 
 
 def _count_status(conn: sqlite3.Connection, status: str) -> int:
@@ -367,17 +428,22 @@ def _empty_stats(
     since_ts: Optional[float],
     state: dict[str, str],
     now_ts: float,
-    enabled: bool,
+    gate: str,
+    missing_keys: list[str],
     *,
     source: str,
 ) -> dict[str, Any]:
     """台账表不存在时的零值形状 —— 字段与 live_query 完全一致，前端不必分支。"""
     return {
-        "enabled": enabled,
+        "enabled": gate == INGEST_GATE_ACTIVE,
+        "gate": gate,
+        "missing_keys": missing_keys,
         "days": days,
         "since_ts": since_ts,
         "total": 0,
+        "total_all": 0,
         "by_status": {s: 0 for s in INGEST_STATUSES},
+        "by_status_all": {s: 0 for s in INGEST_STATUSES},
         "by_error_code": {},
         "pending_retry": 0,
         "dead_count": 0,

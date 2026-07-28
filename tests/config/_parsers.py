@@ -27,6 +27,7 @@ CONFIG_PY = REPO_ROOT / "src" / "config.py"
 CHAT_PY = REPO_ROOT / "src" / "api" / "routers" / "chat.py"
 ENV_EXAMPLE = REPO_ROOT / ".env.example"
 CLAUDE_MD = REPO_ROOT / "CLAUDE.md"
+ENV_KEYS_TS = REPO_ROOT / "frontend" / "src" / "electron" / "main" / "lib" / "env-keys.ts"
 ELECTRON_VITE = REPO_ROOT / "frontend" / "electron.vite.config.ts"
 WEB_VITE = REPO_ROOT / "frontend" / "vite.web.config.ts"
 GATEWAY_LIFECYCLE = REPO_ROOT / "frontend" / "src" / "electron" / "main" / "ai_gateway_lifecycle.ts"
@@ -265,6 +266,67 @@ _ENV_EXAMPLE_KEY_RE = re.compile(r"(?m)^\s*#?\s*([A-Z][A-Z0-9_]+)\s*=")
 def parse_env_example_keys(src: Optional[str] = None) -> Set[str]:
     src = src if src is not None else _read(ENV_EXAMPLE)
     return set(_ENV_EXAMPLE_KEY_RE.findall(src))
+
+
+# 行首**没有** `#` 的 `KEY=`。「文档化」与「用户会看见并填」不是一回事：注释掉的示例行
+# 对已有安装等于不存在（.env 是历史累积的真文件，不会因示例更新而同步）。
+_ENV_EXAMPLE_ACTIVE_KEY_RE = re.compile(r"(?m)^\s*([A-Z][A-Z0-9_]+)\s*=")
+
+
+def parse_env_example_active_keys(src: Optional[str] = None) -> Set[str]:
+    """.env.example 里**未注释**的键（issue #64 方向 4 的可见性判据之一）。"""
+    src = src if src is not None else _read(ENV_EXAMPLE)
+    return set(_ENV_EXAMPLE_ACTIVE_KEY_RE.findall(src))
+
+
+# =============================================================================
+# frontend MANAGED_ENV_KEYS（Settings UI 能读写的键白名单）
+# =============================================================================
+
+# 数组元素形如 `  'KEY',`（注释行不匹配 —— 它们以 `//` 开头）。
+_TS_KEY_RE = re.compile(r"(?m)^\s*'([A-Z][A-Z0-9_]*)'\s*,?\s*$")
+_MANAGED_ARRAY_END = "\n] as const"
+
+
+def parse_managed_env_keys(src: Optional[str] = None) -> Set[str]:
+    """`MANAGED_ENV_KEYS = [...]` 数组里的键。
+
+    🔴 只取这一个数组 —— 同文件后面的 `SECRET_ENV_KEYS` / `READONLY_DISPLAY_KEYS`
+    是同样的字面量形状，整文件正则会把「只在脱敏集里」的键误判成「UI 可见」。
+    """
+    src = src if src is not None else _read(ENV_KEYS_TS)
+    start = src.find("export const MANAGED_ENV_KEYS")
+    if start == -1:
+        raise AssertionError(f"{ENV_KEYS_TS.name}: 没找到 `export const MANAGED_ENV_KEYS` —— 解析器需更新")
+    end = src.find(_MANAGED_ARRAY_END, start)
+    if end == -1:
+        raise AssertionError(f"{ENV_KEYS_TS.name}: MANAGED_ENV_KEYS 数组没有 `] as const` 结尾 —— 解析器需更新")
+    return set(_TS_KEY_RE.findall(src[start:end]))
+
+
+# =============================================================================
+# env-only 直读豁免清单的分类小节（tests/config/env_only_reads_allowlist.txt）
+# =============================================================================
+
+# 小节标题形如 `# --- D. credential / 凭据存在性检测（…）------`。
+_ALLOWLIST_SECTION_RE = re.compile(r"^#\s*-{2,}\s*([A-Z])\.\s*(.*)$")
+
+
+def parse_allowlist_sections(src: Optional[str] = None) -> Dict[str, List[str]]:
+    """豁免清单 → ``{小节字母: [键, ...]}``（小节标题之前的键归 ``''``）。"""
+    path = Path(__file__).resolve().parent / "env_only_reads_allowlist.txt"
+    src = src if src is not None else path.read_text(encoding="utf-8")
+    out: Dict[str, List[str]] = {}
+    section = ""
+    for line in src.splitlines():
+        m = _ALLOWLIST_SECTION_RE.match(line.strip())
+        if m:
+            section = m.group(1)
+            continue
+        key = line.split("#", 1)[0].strip()
+        if key:
+            out.setdefault(section, []).append(key)
+    return out
 
 
 # =============================================================================

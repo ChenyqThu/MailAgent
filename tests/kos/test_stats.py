@@ -122,7 +122,9 @@ def test_table_missing_returns_zero_shape(bare_db: Path):
 
     assert data["_source"] == "table_missing"
     assert data["total"] == 0
-    assert data["by_status"] == {"pushed": 0, "failed": 0, "dead": 0, "skipped": 0}
+    assert data["by_status"] == {
+        "pushed": 0, "failed": 0, "dead": 0, "skipped": 0, "pending": 0,
+    }
     assert data["by_error_code"] == {}
     assert data["pending_retry"] == 0
     assert data["dead_count"] == 0
@@ -172,7 +174,9 @@ def test_empty_table(db: Path):
     data = collect_kos_stats(db, days=7)
     assert data["_source"] == "live_query"
     assert data["total"] == 0
-    assert data["by_status"] == {"pushed": 0, "failed": 0, "dead": 0, "skipped": 0}
+    assert data["by_status"] == {
+        "pushed": 0, "failed": 0, "dead": 0, "skipped": 0, "pending": 0,
+    }
 
 
 def test_sync_state_missing_table_tolerated(tmp_path: Path):
@@ -193,7 +197,8 @@ def test_sync_state_missing_table_tolerated(tmp_path: Path):
 # status / error_code 分布
 # ============================================================
 
-def test_by_status_all_four(db: Path):
+def test_by_status_all_statuses(db: Path):
+    """值域全枚举 (v41 四值 + issue #64 Lane A 的 pending 瞬态)。"""
     now = time.time()
     _insert(db, [
         (1, "pushed", now, 0, None, None, "producer"),
@@ -201,11 +206,14 @@ def test_by_status_all_four(db: Path):
         (3, "failed", now, 2, now + 300, "E_KOS_NETWORK", "producer"),
         (4, "dead", now, 5, None, "E_KOS_TOKEN_NETWORK", "producer"),
         (5, "skipped", now, 0, None, None, "producer"),
+        (6, "pending", now, 0, now + 60, None, "producer"),
     ])
 
     data = collect_kos_stats(db, days=7)
-    assert data["by_status"] == {"pushed": 2, "failed": 1, "dead": 1, "skipped": 1}
-    assert data["total"] == 5
+    assert data["by_status"] == {
+        "pushed": 2, "failed": 1, "dead": 1, "skipped": 1, "pending": 1,
+    }
+    assert data["total"] == 6
 
 
 def test_by_error_code_covers_failed_and_dead(db: Path):
@@ -272,6 +280,55 @@ def test_backlog_counts_ignore_window(db: Path):
 def test_since_ts_set_only_for_positive_days(db: Path):
     assert collect_kos_stats(db, days=7)["since_ts"] is not None
     assert collect_kos_stats(db, days=-1)["since_ts"] is None
+
+
+# ============================================================
+# 全量口径 total_all / by_status_all (issue #64 B1)
+# ============================================================
+
+def test_total_all_ignores_window(db: Path):
+    """🔴 窗口数会随时间「凭空掉一个量级」(一次 bulk 滚出窗口), 全量数不会。
+
+    实测正是这个断言背后的病根: 7d 与 30d 因台账中间有空档期而算出**同一个数**,
+    于是「换个窗口验证一下」反而坐实了「这是累计总量」的误判。
+    """
+    now = time.time()
+    _insert(db, [
+        (1, "pushed", now, 0, None, None, "producer"),           # 窗口内
+        (2, "pushed", now - 40 * 86400, 0, None, None, "bulk"),  # 30d 外
+        (3, "skipped", now - 40 * 86400, 0, None, None, "bulk"),
+    ])
+
+    # 逐键断言而不是整 dict 相等 —— 本测试管的是「窗口裁不裁」, 不该被 status 值域
+    # 的增删（如 issue #64 Lane A 加的 pending）连坐。
+    for days in (1, 7, 30, 90, -1):
+        data = collect_kos_stats(db, days=days)
+        assert data["total_all"] == 3, f"days={days} 的 total_all 被窗口裁了"
+        assert data["by_status_all"]["pushed"] == 2, f"days={days} 的 by_status_all 被窗口裁了"
+        assert data["by_status_all"]["skipped"] == 1, f"days={days} 的 by_status_all 被窗口裁了"
+
+    # 对照: 窗口口径**必须**仍然随 days 变 —— 否则是把 total 也一起改成全量了。
+    assert collect_kos_stats(db, days=7)["total"] == 1
+    assert collect_kos_stats(db, days=90)["total"] == 3
+
+
+def test_total_all_matches_window_when_all_time(db: Path):
+    """days=-1 时两个口径本就同一批行 —— 不该出现两套数。"""
+    now = time.time()
+    _insert(db, [(1, "pushed", now, 0, None, None, "producer")])
+    data = collect_kos_stats(db, days=-1)
+    assert data["total_all"] == data["total"]
+    assert data["by_status_all"] == data["by_status"]
+
+
+def test_total_all_present_in_every_branch(bare_db: Path, legacy_db: Path, db: Path):
+    """裸库 / 老形状库同样有这两个字段 —— 前端不该为降级分支写特例。"""
+    for path in (bare_db, legacy_db, db):
+        data = collect_kos_stats(path, days=7)
+        assert data["total_all"] == 0
+        # 键集与窗口版一致（前端两个直方图同型渲染）, 值全零。
+        assert set(data["by_status_all"]) == set(data["by_status"])
+        assert set(data["by_status_all"].values()) == {0}
 
 
 # ============================================================
@@ -495,3 +552,90 @@ def test_enabled_present_in_every_branch(bare_db: Path, legacy_db: Path, db: Pat
     _set_producer_env(monkeypatch)
     for path in (bare_db, legacy_db, db):
         assert collect_kos_stats(path, days=7)["enabled"] is True
+
+
+# ============================================================
+# gate 三态 + 缺失键名 (issue #64 B2)
+# ============================================================
+
+def test_gate_active_when_all_conditions_met(db: Path, monkeypatch):
+    _set_producer_env(monkeypatch)
+    data = collect_kos_stats(db, days=7)
+    assert data["gate"] == "active"
+    assert data["missing_keys"] == []
+
+
+def test_gate_flag_off_reports_no_missing_keys(db: Path, monkeypatch):
+    """🔴 开关没开 ≠ 配置缺失。
+
+    默认关的机器占绝大多数, 把 flag 也算进 missing_keys 会让渲染侧分不清
+    「用户没开」和「开了但缺凭据」, 于是给所有不用 KOS 的人挂一块「缺少配置」。
+    """
+    _set_producer_env(monkeypatch, MAILAGENT_KOS_INGEST_ENABLED="false")
+    data = collect_kos_stats(db, days=7)
+    assert data["gate"] == "flag_off"
+    assert data["missing_keys"] == []
+    assert data["enabled"] is False
+
+
+def test_gate_missing_credentials_lists_exactly_the_missing_ones(db: Path, monkeypatch):
+    """issue #64 的正主: 从 ≤v1.19.0 升上来的机器缺的就是这两个 bulk 键。"""
+    _set_producer_env(
+        monkeypatch, MAILAGENT_BULK_CLIENT_ID="", MAILAGENT_BULK_CLIENT_SECRET="   "
+    )
+    data = collect_kos_stats(db, days=7)
+    assert data["gate"] == "missing_credentials"
+    # 顺序稳定 (声明序), 且**只列真缺的** —— KOS_MCP_BASE 配了就不该出现在里面。
+    assert data["missing_keys"] == [
+        "MAILAGENT_BULK_CLIENT_ID", "MAILAGENT_BULK_CLIENT_SECRET"
+    ]
+    assert data["enabled"] is False
+
+
+@pytest.mark.parametrize(
+    "missing", ["KOS_MCP_BASE", "MAILAGENT_BULK_CLIENT_ID", "MAILAGENT_BULK_CLIENT_SECRET"],
+)
+def test_gate_missing_credentials_per_key(db: Path, monkeypatch, missing: str):
+    _set_producer_env(monkeypatch, **{missing: ""})
+    data = collect_kos_stats(db, days=7)
+    assert data["gate"] == "missing_credentials"
+    assert data["missing_keys"] == [missing]
+
+
+def test_missing_keys_never_carries_values(db: Path, monkeypatch):
+    """🔴 这个 list 要穿 IPC / HTTP 到 renderer —— 只许键名, 绝不许键值。
+
+    两个 bulk 键是凭据; 一旦谁「顺手」把 `KEY=value` 拼进去, 密钥就跟着看板出机了。
+    """
+    secret = "gbrain_cs_super_secret_value"
+    _set_producer_env(monkeypatch, MAILAGENT_BULK_CLIENT_ID="", MAILAGENT_BULK_CLIENT_SECRET=secret)
+    monkeypatch.setenv("KOS_MCP_BASE", "https://kos.example.test")
+
+    data = collect_kos_stats(db, days=7)
+    assert data["missing_keys"] == ["MAILAGENT_BULK_CLIENT_ID"]
+    blob = repr(data)
+    assert secret not in blob
+    assert "https://kos.example.test" not in blob
+
+
+def test_gate_present_in_every_branch(bare_db: Path, legacy_db: Path, db: Path, monkeypatch):
+    """降级分支 (裸库 / 老形状库) 同样下发 gate + missing_keys。"""
+    _set_producer_env(monkeypatch, MAILAGENT_BULK_CLIENT_SECRET="")
+    for path in (bare_db, legacy_db, db):
+        data = collect_kos_stats(path, days=7)
+        assert data["gate"] == "missing_credentials"
+        assert data["missing_keys"] == ["MAILAGENT_BULK_CLIENT_SECRET"]
+
+
+def test_resolve_ingest_enabled_agrees_with_gate(monkeypatch):
+    """两个入口是同一判据的两种形状 —— 不许各判各的。"""
+    from src.kos.stats import resolve_ingest_enabled, resolve_ingest_gate
+
+    for overrides in (
+        {},
+        {"MAILAGENT_KOS_INGEST_ENABLED": "false"},
+        {"MAILAGENT_BULK_CLIENT_SECRET": ""},
+        {"KOS_MCP_BASE": "  "},
+    ):
+        _set_producer_env(monkeypatch, **overrides)
+        assert resolve_ingest_enabled() is (resolve_ingest_gate()[0] == "active")

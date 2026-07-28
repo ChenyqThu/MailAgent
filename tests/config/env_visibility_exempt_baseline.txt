@@ -1,0 +1,17 @@
+# ratchet baseline — 登记在 env_only_reads_allowlist.txt「D. credential」小节、
+# 但**有意**不在 .env.example（未注释）也不在 Settings UI (MANAGED_ENV_KEYS) 出现的键。
+#
+# 配套 test_env_only_credential_visibility.py。规则本体见那份测试的 docstring：
+# 凭据豁免「不进 config.py」是对的，但不该顺带豁免掉「用户如何知道要配它」——
+# issue #64 就是这两件事耦合的产物（v1.19.1 新引入的 MAILAGENT_BULK_* 只写进了
+# .env.example，而 .env.example 只对新装用户有效 ⇒ 升级用户必然缺、看板必然消失）。
+#
+# 只减不增：新增凭据键的正确出路是给它 UI 入口，而不是往这里加一行。
+# 一行一个 env 键；`#` 起注释；空行忽略。
+
+# --- 由**外部** MCP 客户端注入，不是 MailAgent 自己的 .env ------------------------
+# `mailagent-mcp` 是给别的 agent（Claude Desktop 等）用的 stdio server，这两个键写在
+# 那个客户端的 mcpServers.env 里、由它 spawn 时注入。摆进 MailAgent 的 .env / 设置面
+# 反而是误导：在这里填了也不会生效。见 src/mcp/mailagent_mcp.py:222-226。
+MAILAGENT_API_BASE
+MAILAGENT_AGENT_KEY

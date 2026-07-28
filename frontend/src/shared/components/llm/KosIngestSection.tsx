@@ -6,7 +6,16 @@
 // 🔴 门控照 DavMailHealthCard 先例（admin/DavMailHealthCard.tsx:78-90）：
 //   ① 返回类型 `React.ReactElement | null`，gate 封在组件内，父组件无条件挂一行；
 //   ② 先 `isLoading || !data` 再判 gate —— loading 期也 null，不闪空壳；
-//   ③ **判据在后端算**，前端只读 `data.enabled` 这一个 bool，不自己拼。
+//   ③ **判据在后端算**，前端只读 `data.gate` 这一个三态值，不自己拼（不去数缺了哪个键）。
+//
+// 🔴 issue #64：gate 不满足**不再一律隐藏**。原本 `if (!data.enabled) return null` 让
+// 每个从 ≤v1.19.0 升上来的 KOS 用户整区凭空消失（v1.19.1 新引入的两个 bulk 凭据键不会
+// 随 .env.example 进已有 .env），且零线索。现在分两支：
+//   - `flag_off`（用户没开入库，默认关 = 绝大多数机器）→ 仍整区不渲染。给不用 KOS 的人
+//     挂一块「未启用」只是噪音。
+//   - `missing_credentials`（开关开着但凭据缺）→ **显因**：区块保留，列出缺的键名 + 怎么配。
+//     与 v1.16.1 为 issue #54 给 consumer 面做的 gate 显因同款
+//     （IntegrationsTab.tsx 的 kosGate.consumerEnabled && !kosGate.configured）。
 //
 // ⚠️ 有意不用 `useKosGate()` / `kosConfigured`：那判的是 **consumer 面**凭据
 // （chat 读 KOS 的 `KOS_OAUTH_CLIENT_*`）。本区是 **producer 面**（入库），真实
@@ -23,6 +32,7 @@ import { useTranslation } from 'react-i18next'
 import { useQuery } from '@tanstack/react-query'
 import { AlertTriangle, Database } from 'lucide-react'
 
+import type { KosIngestGate } from '@shared/api/types'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { qk } from '@shared/lib/queryKeys'
 import { cn } from '@shared/lib/cn'
@@ -84,6 +94,58 @@ function Sparkline({
   )
 }
 
+/** 区标题。两个分支（正常 / 缺凭据）共用，保证「区块还在」这件事一眼可见。
+ *  `trailing` 是标题右侧的补充信息（正常态放「最近成功」）。 */
+function SectionHeading({ trailing }: { trailing?: React.ReactNode }): React.ReactElement {
+  const { t } = useTranslation()
+  return (
+    <div className="flex items-center justify-between gap-3 flex-wrap">
+      <h2 className="text-body text-ink-fg font-semibold flex items-center gap-2">
+        <Database size={16} strokeWidth={1.75} className="text-coral" />
+        {t('kos.ingest.title')}
+      </h2>
+      {trailing}
+    </div>
+  )
+}
+
+/** gate = `missing_credentials` 时替代整个看板的显因块（issue #64）。
+ *
+ *  缺哪些键**来自后端**（`missing_keys`），前端不去数「哪个 env 没配」—— 判据只有
+ *  一份，在 `src/kos/stats.py`。🔴 只渲染键名；键值从来没到过 renderer。 */
+function GateMissingNotice({ missingKeys }: { missingKeys: string[] }): React.ReactElement {
+  const { t } = useTranslation()
+  return (
+    <section className="space-y-3" data-testid="kos-ingest-section">
+      <SectionHeading />
+      <div
+        className="rounded-md border border-warn/30 bg-warn/5 p-3 space-y-2"
+        data-testid="kos-gate-missing"
+      >
+        <div className="flex items-start gap-2">
+          <AlertTriangle size={13} strokeWidth={2} className="shrink-0 mt-0.5 text-warn" />
+          <div className="min-w-0 space-y-2">
+            <div className="text-aux text-warn">{t('kos.ingest.gateMissing')}</div>
+            {missingKeys.length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {missingKeys.map((key) => (
+                  <code
+                    key={key}
+                    className="font-mono text-micro text-ink-fg-1 bg-ink-3 rounded px-1.5 py-0.5"
+                  >
+                    {key}
+                  </code>
+                ))}
+              </div>
+            )}
+            <div className="text-meta text-ink-fg-2">{t('kos.ingest.gateMissingHow')}</div>
+          </div>
+        </div>
+      </div>
+    </section>
+  )
+}
+
 export function KosIngestSection({ days }: { days: number }): React.ReactElement | null {
   const { t } = useTranslation()
   const mailApi = useMailApi()
@@ -95,14 +157,25 @@ export function KosIngestSection({ days }: { days: number }): React.ReactElement
     refetchInterval: 60_000
   })
 
-  // ① loading / 无数据（含取数失败）→ null。放在 gate 之前：`enabled` 还没到手
+  // ① loading / 无数据（含取数失败）→ null。放在 gate 之前：门控还没到手
   //    时任何渲染都可能是在给未启用的机器画空壳。
   if (statsQ.isLoading || !statsQ.data) return null
   const data = statsQ.data
-  // ② producer 面未启用 → 整区一行 DOM 都不渲染。
-  if (!data.enabled) return null
+  // ② 门控三态。后端不守约（字段缺席）时退回修复前的行为，而不是把整区当成缺凭据 ——
+  //    宁可少说也不误报（同下方 healthOk 的 typeof guard 纪律）。
+  const gate: KosIngestGate = data.gate ?? (data.enabled ? 'active' : 'flag_off')
+  // ③ 用户没开入库 → 整区一行 DOM 都不渲染（默认关的机器不该多出一块东西）。
+  if (gate === 'flag_off') return null
+  // ④ 开着但凭据缺 → 显因，不再静默消失（issue #64）。
+  if (gate === 'missing_credentials') {
+    return <GateMissingNotice missingKeys={data.missing_keys ?? []} />
+  }
 
   const pushed = data.by_status?.['pushed'] ?? 0
+  // 🔴 与上面那个窗口计数是**两个量纲**：窗口数会因一次 bulk 滚出窗口而凭空掉一个
+  // 量级（看起来像知识库被清空），累计数不会。两个必须并排出现，只给窗口数就是
+  // issue #64 里 owner 把 7d 的 1670 读成「知识库总量」的那条路。
+  const pushedAll = data.by_status_all?.['pushed'] ?? null
   const failed = data.by_status?.['failed'] ?? 0
   const skipped = data.by_status?.['skipped'] ?? 0
   // dead_count / pending_retry 恒全量（后端 collect_kos_stats 明确不按窗口裁），
@@ -137,16 +210,38 @@ export function KosIngestSection({ days }: { days: number }): React.ReactElement
 
   return (
     <section className="space-y-3" data-testid="kos-ingest-section">
-      <h2 className="text-body text-ink-fg font-semibold flex items-center gap-2">
-        <Database size={16} strokeWidth={1.75} className="text-coral" />
-        {t('kos.ingest.title')}
-      </h2>
+      {/* 🔴「最近成功」提到标题行：它是唯一能证明「入库还在跑」的信号，压在右下角
+          小字里等于没有。没有记录时给「暂无记录」而不是渲染一个假装新鲜的时间戳；
+          有记录时给「多久以前」（绝对时间进 tooltip）—— 只给绝对时间容易被扫读成
+          刚推过，而这个值可能是很久以前的一次成功。 */}
+      <SectionHeading
+        trailing={
+          <div className="text-aux flex items-center gap-1.5" data-testid="kos-last-success">
+            <span className="text-ink-fg-2">{t('kos.ingest.lastSuccess')}</span>
+            {lastSuccess == null ? (
+              <span className="text-ink-fg-3">{t('kos.ingest.lastSuccessNone')}</span>
+            ) : (
+              <span className="font-mono tabular-nums text-ink-fg" title={lastSuccess}>
+                {t('kos.ingest.ago', { t: lastSuccessAgo })}
+              </span>
+            )}
+          </div>
+        }
+      />
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        {/* 窗口数 + 累计数并排：单给窗口数会被读成「知识库总量」，而它会在一次 bulk
+            滚出窗口时凭空掉一个量级（issue #64 B1）。 */}
         <StatCard
           label={t('kos.ingest.pushed')}
           value={<NumberTicker value={pushed} format={fmtNumber} />}
-          hint={t('llm.days', { n: data.days })}
+          hint={
+            pushedAll == null
+              ? t('llm.days', { n: data.days })
+              : `${t('llm.days', { n: data.days })} · ${t('kos.ingest.cumulative', {
+                  n: fmtNumber(pushedAll)
+                })}`
+          }
           accent
         />
         <StatCard
@@ -206,19 +301,7 @@ export function KosIngestSection({ days }: { days: number }): React.ReactElement
             <Sparkline points={daily.map((d) => d.pushed)} className="text-coral" />
           </div>
           <div className="border-t border-ink-border-soft pt-2 space-y-1 text-aux">
-            {/* 🔴 没有记录时给「暂无记录」而不是渲染一个假装新鲜的时间戳；
-                    有记录时把「多久以前」摆在绝对时间旁边 —— 修复上线前这个值
-                    可能是很久以前的一次成功, 只给绝对时间容易被扫读成刚推过。 */}
-            <div className="flex items-center justify-between gap-3">
-              <span className="text-ink-fg-2">{t('kos.ingest.lastSuccess')}</span>
-              {lastSuccess == null ? (
-                <span className="text-ink-fg-3">{t('kos.ingest.lastSuccessNone')}</span>
-              ) : (
-                <span className="font-mono tabular-nums text-ink-fg" title={lastSuccess}>
-                  {t('kos.ingest.ago', { t: lastSuccessAgo })}
-                </span>
-              )}
-            </div>
+            {/* 「最近成功」已提到区标题行（唯一能证明在跑的信号）——这里不再重复。 */}
             {/* 🔴 两点都不是实时状态：① health === null = 从未探测（中性色，不是异常）；
                 ② 后端无积压时不探活，所以非 null 的 health 也可能是很旧的快照。故标题用
                 「上次检查」而非「健康状态」，值里带相对时间 —— 「可达 · 3d 前」一眼能看出

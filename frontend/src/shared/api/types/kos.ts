@@ -28,17 +28,34 @@ export interface KosDailyBucket {
   failed: number
 }
 
+/** producer 面门控三态（issue #64）—— 渲染侧「整区不渲染 / 显因 / 正常」的唯一判据。
+ *
+ *  - `flag_off` = 用户没开入库（默认关，绝大多数机器）→ 整区不渲染。给所有不用 KOS
+ *    的人挂一块「未启用」只是噪音。
+ *  - `missing_credentials` = 开关开着但 producer 凭据缺 → **显因**（列 `missing_keys`）。
+ *    这一支原本也 `return null`，正是 issue #64 的主诉：从 ≤v1.19.0 升上来的用户
+ *    `.env` 里必然没有 v1.19.1 才引入的两个 bulk 键（`.env.example` 只对新装用户
+ *    有效），于是看板整区凭空消失、零线索。
+ *  - `active` = 正常渲染。 */
+export type KosIngestGate = 'active' | 'flag_off' | 'missing_credentials'
+
 export interface KosStatsData {
   /** 🔴 producer 面是否激活 —— 判据**在后端算**，前端只读这个 bool。
    *
    *  = `MAILAGENT_KOS_INGEST_ENABLED` AND (`KOS_MCP_BASE` + `MAILAGENT_BULK_CLIENT_ID`
    *  + `MAILAGENT_BULK_CLIENT_SECRET` 三者非空)，即 `make_bulk_kos_client()`
-   *  真正读的那套凭据。
+   *  真正读的那套凭据。等价于 `gate === 'active'`；`gate` 多的是「为什么不 active」。
    *
    *  ⚠️ 与 `/chat/config.kosConfigured`（`useKosGate`）**不是一回事** —— 后者判的是
    *  consumer 面（chat 读 KOS 用的 `KOS_OAUTH_CLIENT_*`）。两套凭据独立，用 consumer
    *  判据 gate producer 面会同时产生「能读不能写 → 显示恒空区」和反向漏显示。 */
   enabled: boolean
+  /** 门控三态。同 `_source`：声明为可选是为了让渲染侧对「字段缺席」有兜底路径
+   *  （退回 `enabled ? 'active' : 'flag_off'` = 修复前的行为），不赌上游守约。 */
+  gate?: KosIngestGate
+  /** `gate='missing_credentials'` 时缺哪几个 env 键。🔴 **只有键名，永不含键值**
+   *  —— 其中两个是凭据，这个数组要穿 IPC / HTTP 到 renderer。 */
+  missing_keys?: string[]
   /** 镜像请求的窗口宽度（-1 = 全量，同 llm stats）。 */
   days: number
   /** days<0（全量）时为 null。 */
@@ -50,6 +67,18 @@ export interface KosStatsData {
     dead?: number
     skipped?: number
   }
+  /** 🔴 **不受窗口影响**的全量状态直方图（issue #64 B1）。窗口计数单独摆出来会被读成
+   *  「知识库总量」：一次 bulk 灌进来的几千行是窗口内的不动块，增量每天几十行看不出
+   *  变化；等那次 bulk 滚出窗口，同一个数字会毫无征兆掉一个量级，像知识库被清空。
+   *  故窗口数与累计数必须并排呈现。 */
+  by_status_all?: {
+    pushed?: number
+    failed?: number
+    dead?: number
+    skipped?: number
+  }
+  /** 全量台账行数（= `by_status_all` 之和），同样不受 `days` 影响。 */
+  total_all?: number
   /** 仅失败行的错误码分布（E_KOS_NETWORK 等），可能是空对象。 */
   by_error_code: Record<string, number>
   /** 待重试积压（status='failed'）。 */

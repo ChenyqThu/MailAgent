@@ -27,8 +27,17 @@ export interface KosHealthSnapshot {
 export interface KosStatsData {
   /** Producer-side activation, computed by the backend (ingest flag AND the
    *  three bulk-client credentials). Deliberately NOT the consumer-side
-   *  `/chat/config.kosConfigured` — different credentials, different feature. */
+   *  `/chat/config.kosConfigured` — different credentials, different feature.
+   *  Equivalent to `gate === 'active'`. */
   enabled: boolean
+  /** issue #64 — gate tri-state; the renderer's only criterion for "hide the
+   *  whole section / show why / render normally". `flag_off` = the user never
+   *  turned ingest on (default) → hide; `missing_credentials` = it IS on but
+   *  credentials are missing → must show why, never hide silently. */
+  gate?: 'active' | 'flag_off' | 'missing_credentials'
+  /** Which env keys are missing when `gate === 'missing_credentials'`.
+   *  🔴 Key NAMES only — never values (two of them are credentials). */
+  missing_keys?: string[]
   /** Window width in days; mirror of the request (-1 = all time). */
   days: number
   since_ts: number | null
@@ -39,6 +48,17 @@ export interface KosStatsData {
     dead?: number
     skipped?: number
   }
+  /** issue #64 — the same histogram over ALL time, unaffected by `days`. The
+   *  window count alone reads as "knowledge base total", and it drops by an
+   *  order of magnitude the day a one-off bulk run rolls out of the window. */
+  by_status_all?: {
+    pushed?: number
+    failed?: number
+    dead?: number
+    skipped?: number
+  }
+  /** All-time ledger row count (= sum of `by_status_all`); ignores `days`. */
+  total_all?: number
   /** Error-code histogram over the failed rows; may be empty. */
   by_error_code: Record<string, number>
   /** Rows waiting on a retry sweep. */

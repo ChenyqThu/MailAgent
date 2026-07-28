@@ -1344,7 +1344,10 @@
       "healthLastCheck": "Last check",
       "healthOk": "reachable",
       "healthDown": "unreachable",
-      "healthUnknown": "not probed"
+      "healthUnknown": "not probed",
+      "cumulative": "{n} all-time",
+      "gateMissing": "Ingest is on, but the settings below are missing — emails aren't being pushed to the knowledge base, so there's nothing to show here:",
+      "gateMissingHow": "Fill in the producer credentials under Settings → Integrations → Knowledge Brain (KOS) → Advanced, then restart the backend."
     }
   },
   "calendar": {
@@ -2577,6 +2580,14 @@
         "ingest": {
           "label": "Push emails to KOS",
           "helper": "After sync, asynchronously push emails into KOS (producer) for later retrieval. Off by default."
+        },
+        "bulkClientId": {
+          "label": "Ingest Client ID",
+          "helper": "Client ID used for pushing emails in (gbrain_cl_ prefix). This is a separate credential from the OAuth Client ID above, which is only used for reading — without it, no email reaches the knowledge base."
+        },
+        "bulkClientSecret": {
+          "label": "Ingest Client Secret",
+          "helper": "Client secret used for pushing emails in (gbrain_cs_ prefix). Stored only in this machine's .env and never sent back to the UI."
         },
         "l1": {
           "label": "Sender hot-memory prefetch",

@@ -71,7 +71,9 @@ def test_kos_stats_json_contract(cli_runner, empty_db: Path):
     assert data["enabled"] is False  # 由 _pin_enabled_env 钉住
     assert data["days"] == 7
     assert data["total"] == 4
-    assert data["by_status"] == {"pushed": 1, "failed": 1, "dead": 1, "skipped": 1}
+    assert data["by_status"] == {
+        "pushed": 1, "failed": 1, "dead": 1, "skipped": 1, "pending": 0,
+    }
     assert data["by_error_code"] == {"E_KOS_NETWORK": 1, "E_KOS_TOKEN_NETWORK": 1}
     assert data["pending_retry"] == 1
     assert data["dead_count"] == 1
@@ -100,7 +102,9 @@ def test_kos_stats_table_missing(cli_runner, empty_db: Path):
     data = _last_json(result.output)["data"]
     assert data["_source"] == "table_missing"
     assert data["total"] == 0
-    assert data["by_status"] == {"pushed": 0, "failed": 0, "dead": 0, "skipped": 0}
+    assert data["by_status"] == {
+        "pushed": 0, "failed": 0, "dead": 0, "skipped": 0, "pending": 0,
+    }
 
 
 def test_kos_stats_days_zero_rejected(cli_runner, empty_db: Path):

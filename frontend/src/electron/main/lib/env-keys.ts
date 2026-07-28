@@ -174,6 +174,15 @@ export const MANAGED_ENV_KEYS = [
   'KOS_MCP_BASE',
   'KOS_OAUTH_CLIENT_ID',
   'KOS_OAUTH_CLIENT_SECRET',
+  // issue #64 — producer (推送邮件入库) 用的是**另一套**凭据, 不是上面两个
+  // KOS_OAUTH_CLIENT_*。v1.19.1 引入它们时只写进了 .env.example, 而 .env.example
+  // 只对新装用户有效 ⇒ 每个从 ≤v1.19.0 升上来且开了入库的用户都必然缺这两个键、
+  // 必然看不到「知识库入库」看板, 且没有任何 UI 入口可补。这里纳入白名单 +
+  // IntegrationsTab KOS Section「高级」里给 EnvField, 让它可见可填。
+  // MAILAGENT_BULK_CLIENT_SECRET 入 SECRET_ENV_KEYS → env:get 脱敏 (同
+  // KOS_OAUTH_CLIENT_SECRET); CLIENT_ID 是明文 ID, 同 KOS_OAUTH_CLIENT_ID 不脱敏。
+  'MAILAGENT_BULK_CLIENT_ID',
+  'MAILAGENT_BULK_CLIENT_SECRET',
 
   // — Island (PR D IslandUpdatesTab)
   'PING_ISLAND_ENABLED',
@@ -241,6 +250,9 @@ export const SECRET_ENV_KEYS: Set<string> = new Set<string>([
   // KOS (gbrain) OAuth client_secret — IntegrationsTab KOS Section 写, Python
   // KOSClient 从 .env 读 (os.getenv). 同其它 secret: env:get 脱敏不回 renderer。
   'KOS_OAUTH_CLIENT_SECRET',
+  // KOS producer (bulk) client_secret — 与上面那个是两套凭据 (issue #64)。
+  // make_bulk_kos_client() 从 .env 读 (os.getenv); 同样脱敏不回 renderer。
+  'MAILAGENT_BULK_CLIENT_SECRET',
   // codex r4 [HIGH] — MANAGED (returned) URLs whose value embeds a credential,
   // so they're redacted, not sent in plaintext. Parity mirror of
   // settings.py `_SECRET_ENV_KEYS`. ALERT_FEISHU_WEBHOOK_URL's trailing path

@@ -56,9 +56,16 @@ def kos_stats(
 
 def _print_text(data: dict) -> None:
     by_status = data["by_status"]
-    print(f"enabled={data['enabled']}  days={data['days']}  total={data['total']}")
+    print(
+        f"enabled={data['enabled']}  gate={data['gate']}  days={data['days']}  "
+        f"total={data['total']}  total_all={data['total_all']}"
+    )
+    # gate 不满足时说清缺什么 (issue #64: JSON 面下发了缺失键名, text 面别再静默)。
+    # 只印键名, 不印键值 —— 其中两个是凭据。
+    if data["missing_keys"]:
+        print(f"missing          {' '.join(data['missing_keys'])}")
     for k, v in sorted(by_status.items()):
-        print(f"  {k:12} {v}")
+        print(f"  {k:12} {v}  (all-time {data['by_status_all'].get(k, 0)})")
     print(f"pending_retry    {data['pending_retry']}")
     print(f"dead_count       {data['dead_count']}")
     if data["by_error_code"]:

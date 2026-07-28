@@ -15,20 +15,41 @@
           "type": "object",
           "additionalProperties": false,
           "required": [
-            "enabled", "days", "total", "by_status", "by_error_code",
+            "enabled", "gate", "missing_keys", "days", "total", "total_all",
+            "by_status", "by_status_all", "by_error_code",
             "pending_retry", "dead_count", "health", "daily", "_source"
           ],
           "properties": {
             "enabled": {
               "type": "boolean",
-              "description": "producer 面是否已启用 = MAILAGENT_KOS_INGEST_ENABLED 且 KOS_MCP_BASE / MAILAGENT_BULK_CLIENT_ID / MAILAGENT_BULK_CLIENT_SECRET 三者非空。env 派生, 与 DB 无关; 前端据此整区显隐。注意不是 chat 侧 consumer 判据 (那套读 KOS_OAUTH_CLIENT_*)。"
+              "description": "producer 面是否已启用 = MAILAGENT_KOS_INGEST_ENABLED 且 KOS_MCP_BASE / MAILAGENT_BULK_CLIENT_ID / MAILAGENT_BULK_CLIENT_SECRET 三者非空。env 派生, 与 DB 无关; 等价于 gate=='active'。注意不是 chat 侧 consumer 判据 (那套读 KOS_OAUTH_CLIENT_*)。"
+            },
+            "gate": {
+              "type": "string",
+              "enum": ["active", "flag_off", "missing_credentials"],
+              "description": "issue #64 — 门控三态, 渲染侧「整区不渲染 / 显因 / 正常」的唯一判据 (判据在后端算, 前端不拼)。flag_off = 用户没开入库 (默认关) → 整区不渲染; missing_credentials = 开关开着但 producer 凭据缺 → 必须显因, 不能静默隐藏 (从 ≤v1.19.0 升上来的用户必然落在这一支)。"
+            },
+            "missing_keys": {
+              "type": "array",
+              "description": "gate=missing_credentials 时缺哪几个 env 键, 其余情况为空数组。🔴 **只有键名, 永不含键值** —— 其中两个是凭据, 这个数组要穿 IPC / HTTP 到 renderer。顺序稳定 (声明序)。",
+              "items": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]*$"}
             },
             "days": {"type": "integer", "description": "镜像请求的窗口宽度; -1 = 全量。"},
             "since_ts": {"type": ["number", "null"], "description": "days>0 时的下界 epoch; 全量为 null。"},
             "total": {"type": "integer", "minimum": 0, "description": "窗口内台账行数 (= by_status 之和)。"},
+            "total_all": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "issue #64 — 全量台账行数 (= by_status_all 之和)。🔴 恒全量, 不受 days 影响。窗口数单独摆出来会被读成「知识库总量」, 而一次 bulk 灌进来的几千行滚出窗口时那个数会凭空掉一个量级, 看起来像知识库被清空 —— 故窗口数与累计数必须一起下发。"
+            },
             "by_status": {
               "type": "object",
-              "description": "pushed / failed / dead / skipped 四键恒在 (无数据时为 0); 值域外的 status 原样附加。",
+              "description": "pushed / failed / dead / skipped / pending (等 LLM 标签的延迟首推, issue #64 Lane A) 五键恒在 (无数据时为 0); 值域外的 status 原样附加。",
+              "additionalProperties": {"type": "integer", "minimum": 0}
+            },
+            "by_status_all": {
+              "type": "object",
+              "description": "by_status 的全量版, 键集同上。🔴 恒全量, 不受 days 影响 (见 total_all)。",
               "additionalProperties": {"type": "integer", "minimum": 0}
             },
             "by_error_code": {

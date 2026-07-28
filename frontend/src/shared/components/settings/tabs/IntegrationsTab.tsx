@@ -198,6 +198,36 @@ export function IntegrationsTab(): React.ReactElement {
               defaultValue: '邮件同步完成后异步推送进 KOS（producer），供日后检索。默认关。'
             })}
           />
+          {/* issue #64 — producer 凭据的 UI 入口。与上方 OAuth 那两个是**两套**凭据:
+              consumer (chat 读 KOS) 走 KOS_OAUTH_CLIENT_*, producer (推送邮件入库) 走
+              这两个 MAILAGENT_BULK_*。它们是 v1.19.1 新引入的必配项, 而 .env.example
+              只对新装用户有效 —— 老用户升上来必然缺、入库看板必然整区消失, 且此前
+              没有任何 UI 入口可补。摆在入库开关正下方: 它们只在开关打开时才有意义。
+              凭据仍不进 config.py (裸 os.getenv, 见 env_only_reads_allowlist.txt D 类),
+              这里只是可见可填。 */}
+          <EnvField
+            envKey="MAILAGENT_BULK_CLIENT_ID"
+            control="text"
+            label={t('settings.integrations.kos.bulkClientId.label', {
+              defaultValue: '入库 Client ID'
+            })}
+            helper={t('settings.integrations.kos.bulkClientId.helper', {
+              defaultValue:
+                '推送入库用的客户端 ID（gbrain_cl_ 前缀）。与上方对话读取用的 OAuth Client ID 是两套凭据，缺它则邮件推不进知识库。'
+            })}
+            placeholder="gbrain_cl_..."
+          />
+          <EnvField
+            envKey="MAILAGENT_BULK_CLIENT_SECRET"
+            control="password"
+            label={t('settings.integrations.kos.bulkClientSecret.label', {
+              defaultValue: '入库 Client Secret'
+            })}
+            helper={t('settings.integrations.kos.bulkClientSecret.helper', {
+              defaultValue:
+                '推送入库用的客户端密钥（gbrain_cs_ 前缀），仅本机 .env 存储，不回传界面。'
+            })}
+          />
           <EnvField
             envKey="MAILAGENT_KOS_L1_HOT_BLOCK_ENABLED"
             control="toggle"
