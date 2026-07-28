@@ -705,6 +705,28 @@ async def push_email_to_kos(
     return await _put_and_record(client, db_path, internal_id, slug, content, "producer")
 
 
+def llm_labels_settled(db_path: str, internal_id: int) -> bool:
+    """llm_processing.status 是否已终态 (success/gave_up) —— deferred 首推的就绪判据。
+
+    issue #64 Lane A: 会跑 LLM 的邮件在台账排队 (status='pending'), 6c 扫描用本判据
+    决定「标签已定 (成功拿到 / LLM 放弃不会再有) → 可推」。无行 (LLM dispatch 与首查
+    之间的窗口 / dispatch 自身失败的孤例) 或 pending/failed (在跑 / 6b 还会重试) →
+    False, 继续等; 读挂了保守 False (由 DEFER_MAX_CHECKS 兜底, 不误推半成品标签)。
+    """
+    try:
+        conn = sqlite3.connect(db_path, timeout=5)
+        try:
+            row = conn.execute(
+                "SELECT status FROM llm_processing WHERE internal_id = ?",
+                (internal_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+        return row is not None and row[0] in ("success", "gave_up")
+    except Exception:  # noqa: BLE001 — 判据读失败按「未定」处理, 绝不炸扫描
+        return False
+
+
 def _load_labels(db_path: str, internal_id: int) -> dict[str, Any]:
     """llm_processing.labels_json 裸读 (镜像 bulk_ingest._get_labels, 重试路径用)。"""
     try:

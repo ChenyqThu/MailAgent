@@ -58,6 +58,19 @@ TRANSIENT_ERROR_CODES = frozenset({
 # 指数退避表 (秒): 1min / 5min / 15min / 1h / 6h。retry_count 超表长复用末档。
 BACKOFF_SCHEDULE_SEC = (60, 300, 900, 3600, 21600)
 
+# ---- 等标签延迟首推 (deferred first-push, issue #64 Lane A) -----------------
+# 增量 hook 曾在 LLM hook (fire-and-forget) 之后立刻同步读 labels → 100% 读空
+# (实测 83/83 封平均早读 911s): floor 恒按 normal 放行、页面无 AI 标签、
+# KOS_REQUIRE_LABELED 一开即全 skipped。修法 = 会跑 LLM 的邮件先落 status='pending'
+# 行排队, 由 6c 重试扫描在 llm_processing 终态 (success/gave_up) 后首推。
+# retry_count 在 pending 行上复用为「已检查轮数」(行转 failed 后按失败重试计数重算)。
+DEFER_CHECK_INTERVAL_SEC = 60  # 每轮就绪检查间隔 (LLM 含队列积压平均 ~15min)
+# 等待轮数上限 (≈1h 兜底): llm_processing 状态机正常必达终态 (6b 重试有界 →
+# gave_up), 这道闸兜「LLM hook dispatch 自身失败 → 永远无行」的孤例
+# (实测 internal_id=1000010856), 超限后无标签也推 —— 等标签绝不能把
+# 「数据质量问题」变成「数据丢失问题」。
+DEFER_MAX_CHECKS = 60
+
 # ---- sync_state 键名 (跨 lane 契约) -----------------------------------------
 STATE_LAST_SUCCESS_AT = "kos.last_success_at"
 STATE_HEALTH_STATUS = "kos.health.status"
@@ -264,6 +277,78 @@ def claim_due_retries(
             (now, int(limit)),
         ).fetchall()
         return [int(r[0]) for r in rows]
+    finally:
+        conn.close()
+
+
+def record_deferred(db_path: str, internal_id: int, slug: str, source: str) -> None:
+    """会跑 LLM 的邮件入队等标签 → status='pending', 首查 DEFER_CHECK_INTERVAL_SEC 后。
+
+    guard: 不覆盖 'pushed' (已入库的事实更强; 邮件 fetch 重试成功后 hook 会重触发)。
+    覆盖其余状态 (pending 重置等待 / failed·dead·skipped 邮件重新同步了就重新判) ——
+    镜像 record_skipped 的 guard 口径。
+    """
+    now = time.time()
+    conn = _connect(db_path)
+    try:
+        conn.execute(
+            """
+            INSERT INTO kos_ingest_log
+                (internal_id, slug, status, chunks, error, pushed_at,
+                 retry_count, next_retry_at, error_code, source)
+            VALUES (?, ?, 'pending', NULL, 'defer: await_llm_labels', ?, 0, ?, NULL, ?)
+            ON CONFLICT(internal_id) DO UPDATE SET
+                slug=excluded.slug, status='pending', chunks=NULL,
+                error=excluded.error, pushed_at=excluded.pushed_at,
+                retry_count=0, next_retry_at=excluded.next_retry_at,
+                error_code=NULL, source=excluded.source
+            WHERE kos_ingest_log.status != 'pushed'
+            """,
+            (internal_id, slug, now, now + DEFER_CHECK_INTERVAL_SEC, source),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def claim_due_deferred(
+    db_path: str, limit: int, now: Optional[float] = None
+) -> list[tuple[int, int]]:
+    """到期待检查的 deferred 行 → [(internal_id, 已检查轮数)], next_retry_at 升序有界。
+
+    与 claim_due_retries 互不相扰 (status 值域不同)。无并发 claim 标记的理由同
+    claim_due_retries: 重试 worker 单实例 + put_page 覆盖写幂等。partial index
+    idx_kos_ingest_retry 只盖 failed —— pending 是分钟级瞬态、行数个位到两位数,
+    全表扫 (万行级主键表) 亚毫秒, 不值得为它动表结构。
+    """
+    if now is None:
+        now = time.time()
+    conn = _connect(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT internal_id, retry_count FROM kos_ingest_log "
+            "WHERE status = 'pending' AND next_retry_at IS NOT NULL AND next_retry_at <= ? "
+            "ORDER BY next_retry_at ASC LIMIT ?",
+            (now, int(limit)),
+        ).fetchall()
+        return [(int(r[0]), int(r[1] or 0)) for r in rows]
+    finally:
+        conn.close()
+
+
+def bump_deferred(db_path: str, internal_id: int, now: Optional[float] = None) -> None:
+    """标签未就位 → 检查轮数 +1, 下轮 DEFER_CHECK_INTERVAL_SEC 后再看 (只动 pending 行)。"""
+    if now is None:
+        now = time.time()
+    conn = _connect(db_path)
+    try:
+        conn.execute(
+            "UPDATE kos_ingest_log "
+            "SET retry_count = retry_count + 1, next_retry_at = ?, pushed_at = ? "
+            "WHERE internal_id = ? AND status = 'pending'",
+            (now + DEFER_CHECK_INTERVAL_SEC, now, internal_id),
+        )
+        conn.commit()
     finally:
         conn.close()
 

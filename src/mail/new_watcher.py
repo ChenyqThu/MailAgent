@@ -1005,18 +1005,48 @@ class NewWatcher:
             return
 
         from src.kos import ingest_log
-        from src.kos.producer import make_bulk_kos_client, repush_stored_email_to_kos
+        from src.kos.producer import (
+            llm_labels_settled,
+            make_bulk_kos_client,
+            repush_stored_email_to_kos,
+        )
 
         db_path = str(self.sync_store.db_path)
         try:
             ready = await asyncio.to_thread(
                 ingest_log.claim_due_retries, db_path, KOS_RETRY_BATCH_PER_TICK
             )
+            due_deferred = await asyncio.to_thread(
+                ingest_log.claim_due_deferred, db_path, KOS_RETRY_BATCH_PER_TICK
+            )
         except Exception as e:  # noqa: BLE001 — 补偿层, 绝不炸 watcher (镜像 6b)
             logger.warning(f"[kos-retry] queue probe failed: {e}")
             return
-        if not ready:
+        if not ready and not due_deferred:
             return
+
+        # deferred (等 LLM 标签) 行的就绪判定 —— 纯本地 SQLite, 不需要 client/探活。
+        # 就绪 = llm_processing 终态 (success/gave_up) 或等待轮数达 DEFER_MAX_CHECKS
+        # 兜底 (LLM dispatch 失败的孤例不能永久卡队); 未就绪 → bump 下轮再看
+        # (retry_count 在 pending 行上 = 已检查轮数)。issue #64 Lane A。
+        ready_deferred: List[int] = []
+        if due_deferred:
+            def _classify_deferred() -> List[int]:
+                out: List[int] = []
+                for iid, checks in due_deferred:
+                    if (llm_labels_settled(db_path, iid)
+                            or checks >= ingest_log.DEFER_MAX_CHECKS):
+                        out.append(iid)
+                    else:
+                        ingest_log.bump_deferred(db_path, iid)
+                return out
+
+            try:
+                ready_deferred = await asyncio.to_thread(_classify_deferred)
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"[kos-retry] deferred classify failed: {e}")
+        if not ready and not ready_deferred:
+            return  # 本 tick 全是等标签 bump, 无网络工作 (不探活)
         client = make_bulk_kos_client()
         if not client.configured:
             logger.debug("[kos-retry] bulk client not configured, skip")
@@ -1044,7 +1074,8 @@ class NewWatcher:
             self._kos_unhealthy_until = now + cooldown
             logger.warning(
                 f"[kos-retry] KOS 不可用 ({health_err}), 跳过并冷却 {cooldown}s "
-                f"(到期 {len(ready)} 封原地等待, retry_count 不增长)"
+                f"(到期 {len(ready) + len(ready_deferred)} 封原地等待, "
+                f"retry_count 不增长)"
             )
             return
         if recovered:
@@ -1052,8 +1083,11 @@ class NewWatcher:
 
         priority_floor = getattr(settings, "kos_ingest_priority_floor", "normal")
         require_labeled = bool(getattr(settings, "kos_require_labeled", False))
-        logger.info(f"[kos-retry] retrying {len(ready)} failed KOS push(es)")
-        for iid in ready:
+        logger.info(
+            f"[kos-retry] processing {len(ready)} failed retry + "
+            f"{len(ready_deferred)} label-ready deferred push(es)"
+        )
+        for iid in [*ready, *ready_deferred]:
             outcome = await repush_stored_email_to_kos(
                 db_path, iid, client=client,
                 priority_floor=priority_floor, require_labeled=require_labeled,
@@ -1675,6 +1709,56 @@ class NewWatcher:
             priority_floor = getattr(settings, "kos_ingest_priority_floor", "normal")
             require_labeled = bool(getattr(settings, "kos_require_labeled", False))
             dry_run = getattr(settings, "kos_ingest_dry_run", False)
+
+            # issue #64 Lane A: 本 hook 与步骤 9 的 LLM hook 同为 fire-and-forget,
+            # 曾在 LLM 后台任务写完 labels **之前**就同步读 LLMProcessingStore →
+            # 100% 读空 (实测 83/83 封 pushed_at 平均早于 llm_processing.updated_at
+            # 911s): priority floor 恒按 normal 放行 (23 封 ⚪低 误入库)、增量页面
+            # 无 AI 标签、KOS_REQUIRE_LABELED 一开即全 skipped。修法 = 会跑 LLM 的
+            # 邮件不在此刻推, 落台账 status='pending' 排队 (record_deferred), 由
+            # 6c _process_kos_retry_queue 在 llm_processing 终态 (success/gave_up)
+            # 或 DEFER_MAX_CHECKS 兜底后用 repush_stored_email_to_kos 从 SQLite
+            # SSoT 重建 payload 首推 —— floor/require_labeled 在标签就位后才第一次
+            # 真正生效, 主同步路径反而少了几次 SQLite 读 (fetch 块整个跳过)。
+            # 不会跑 LLM 的路径 (LLM 未启用 / FOLDER_LLM_DISABLED) 走下方直推,
+            # labels 空是事实而非 race; kos_retry_enabled=false (6c 应急关, defer
+            # 无消费者会永久卡队) 或 dry_run (defer 后 repush 是真推) 同样保持
+            # 直推老行为 —— 即整套 defer 的应急回退 = MAILAGENT_KOS_RETRY_ENABLED=false。
+            mailbox = getattr(email_obj, "mailbox", "") or ""
+            will_run_llm = (
+                self._llm_runner is not None
+                and not should_skip_llm_for_folder(
+                    mailbox, getattr(self, "_folder_llm_disabled", frozenset())
+                )
+            )
+            if (will_run_llm and not dry_run
+                    and getattr(settings, "kos_retry_enabled", True)):
+                from src.kos import ingest_log
+
+                db_path = str(self.sync_store.db_path)
+                logger.debug(
+                    f"[kos-hook] deferring internal_id={internal_id} until LLM "
+                    f"labels settle (status='pending' in kos_ingest_log)"
+                )
+
+                async def _bg_defer():
+                    # 入队失败 (台账写锁 5s 超时等) 只 warning: 后果 = 这封不进
+                    # KOS 队列 (与修复前 fire-and-forget 丢失同级), 日志可见 +
+                    # bulk_ingest 补漏可捞, 不为极低概率路径加直推回退分支。
+                    try:
+                        await asyncio.to_thread(
+                            ingest_log.record_deferred, db_path, internal_id,
+                            f"sources/email/{internal_id}", "producer",
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            f"[kos-hook] defer enqueue failed "
+                            f"internal_id={internal_id}: {e}"
+                        )
+
+                self._track_bg_task(asyncio.create_task(_bg_defer()))
+                return
+
             labels: Optional[dict] = None
             body_markdown: Optional[str] = None
             attachments: Optional[list] = None
@@ -1700,7 +1784,11 @@ class NewWatcher:
                 thread_parent = refs.get("parent")
                 thread_root = refs.get("root")
             except Exception as e:
-                logger.debug(
+                # warning 而非 debug (issue #64 Lane A): 这里吞掉的异常曾让孤例
+                # internal_id=1000010856 (4 附件) 既无 llm_processing 行也无台账行
+                # 且日志零线索 —— fetch 失败虽不阻断推送 (labels/body 缺省 None),
+                # 但必须在默认日志级别可见。
+                logger.warning(
                     f"[kos-hook] labels/body/attachments/thread fetch failed "
                     f"internal_id={internal_id}: {e}"
                 )

@@ -116,6 +116,8 @@ LLM_PROCESSING_INDEX_DDLS = (
 #   failed  — 瞬时失败, 等待重试扫描 (next_retry_at 排程)
 #   dead    — 超重试上限 / 永久类错误码 (需人工介入, 手动 bulk --retry-failed 可捞)
 #   skipped — priority floor / 未标注 / 未配置 / dry-run 过滤 (与失败区分)
+#   pending — 等 LLM 标签就位后由重试扫描首推 (issue #64 Lane A deferred first-push,
+#             分钟级瞬态; retry_count 在此状态下 = 已检查轮数)
 KOS_INGEST_LOG_TABLE_DDL = """
     CREATE TABLE IF NOT EXISTS kos_ingest_log (
         internal_id INTEGER PRIMARY KEY,
