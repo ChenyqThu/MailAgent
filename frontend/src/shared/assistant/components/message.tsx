@@ -11,7 +11,12 @@
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Paperclip } from 'lucide-react'
-import { ComposerPrimitive, MessagePrimitive, useAuiState } from '@assistant-ui/react'
+import {
+  ComposerPrimitive,
+  MessagePrimitive,
+  useAuiState,
+  type CompleteAttachment
+} from '@assistant-ui/react'
 
 import { cn } from '@shared/lib/cn'
 
@@ -19,19 +24,50 @@ import { getAssistantPartComponents } from '../tools/registerToolUIs'
 import { TurnStatusLine } from './TurnStatusLine'
 import { AssistantActionBar, UserActionBar } from './action-bar'
 
-/** issue #61 Lane 3 (A2) — sent-attachment pills under the user bubble. File parts on a user
- *  UIMessage surface as thread-message `attachments` (AISDKMessageConverter), both live and on
- *  session reload — without this row a sent image "disappears" again the moment the chip clears. */
+/** Displayable image bytes of a sent attachment, or null for a non-image one. The AI SDK converter
+ *  turns a user `file` part with an image/* mediaType into `{type:'image', image:<data URL>}` inside
+ *  attachment.content (react-ai-sdk convertMessage.ts) — the only producer of these, so "no image
+ *  part" means a genuinely non-image attachment and the caller falls back to the name pill. */
+function attachmentImageSrc(attachment: CompleteAttachment): string | null {
+  for (const part of attachment.content ?? []) {
+    if (part.type === 'image' && typeof part.image === 'string') return part.image
+  }
+  return null
+}
+
+/** issue #61 Lane 3 (A2) — sent attachments under the user bubble. File parts on a user UIMessage
+ *  surface as thread-message `attachments` (AISDKMessageConverter), both live and on session reload
+ *  — without this row a sent image "disappears" again the moment the chip clears.
+ *
+ *  dogfood 07-27 (Lane D) — images render as a bounded thumbnail, not a paperclip pill: the pill
+ *  showed only the filename, so a pasted screenshot still looked absent from the history (owner:
+ *  「发出后，消息历史里没有显示图片」). assistant-ui has no image primitive for this —
+ *  AttachmentPrimitive.unstable_Thumb renders the file EXTENSION as text — so the <img> is ours.
+ *  Sizes are capped (the src is a data URL up to CHAT_IMAGE_MAX_PAYLOAD_CHARS, and a 1568px-edge
+ *  image at natural size would dwarf the bubble); multiple images wrap in the flex row. */
 function UserMessageAttachments(): React.JSX.Element {
   return (
     <div className="mt-1 flex max-w-[80%] flex-wrap justify-end gap-1">
       <MessagePrimitive.Attachments>
-        {({ attachment }) => (
-          <span className="inline-flex max-w-[200px] items-center gap-1 rounded-md border border-ink-border bg-ink-3 px-2 py-0.5 text-micro text-ink-fg-2">
-            <Paperclip size={10} strokeWidth={2} className="shrink-0 text-ink-fg-3" />
-            <span className="truncate">{attachment.name}</span>
-          </span>
-        )}
+        {({ attachment }) => {
+          const imageSrc = attachmentImageSrc(attachment)
+          if (imageSrc !== null) {
+            return (
+              <img
+                src={imageSrc}
+                alt={attachment.name}
+                title={attachment.name}
+                className="max-h-40 max-w-[min(240px,100%)] rounded-lg border border-ink-border bg-ink-3"
+              />
+            )
+          }
+          return (
+            <span className="inline-flex max-w-[200px] items-center gap-1 rounded-md border border-ink-border bg-ink-3 px-2 py-0.5 text-micro text-ink-fg-2">
+              <Paperclip size={10} strokeWidth={2} className="shrink-0 text-ink-fg-3" />
+              <span className="truncate">{attachment.name}</span>
+            </span>
+          )
+        }}
       </MessagePrimitive.Attachments>
     </div>
   )

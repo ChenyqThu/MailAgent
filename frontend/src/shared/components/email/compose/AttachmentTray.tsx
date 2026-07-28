@@ -14,9 +14,10 @@
 // uploading/uploadFailed/dropzoneHint) + 复用既有 `compose.attachmentRemove`,
 // zh-CN / en-US 两份 locales 均有 key (ICU 单花括号插值)。
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
+  ChevronRight,
   File as FileIcon,
   FileArchive,
   FileCode,
@@ -63,9 +64,19 @@ export interface AttachmentTrayProps {
   className?: string
 }
 
+/** grid 卡片最小列宽 (auto-fill 轨道下限)。 */
 const ATTACHMENT_CARD_MIN_WIDTH = 148
+/** grid 行列间距 (Tailwind gap-2.5)。 */
 const ATTACHMENT_GRID_GAP = 10
-const COLLAPSED_ROWS = 2
+/** 单卡高度: 78px 缩略区 + 文件名行 + 大小行 + 1px 上下描边 ≈ 131px。
+ *  只用于算展开态的高度上限, 与真实渲染差几 px 不影响"限高+内部滚动"的语义。 */
+const ATTACHMENT_CARD_HEIGHT = 131
+/** 展开态 grid 高度上限 = 两行卡片 + 一个行间距; 超出由 grid 自己内部滚动,
+ *  附件再多也不会把正文/引用挤出可视区。 */
+const ATTACHMENT_GRID_MAX_HEIGHT = ATTACHMENT_CARD_HEIGHT * 2 + ATTACHMENT_GRID_GAP
+/** 附件数 ≤ 此值默认展开 (1-2 个只占一行, 直接看到缩略图比数字摘要有用);
+ *  更多则默认折叠成一行摘要, 优先把可视区留给正文。 */
+const AUTO_EXPAND_MAX_ITEMS = 2
 
 /** 图标 + 角标色元数据。色值暂沿用 design KIND_META 的 hex —— TODO: token 化
  *  (design/compose-handoff.md §7: 「附件角标色 KIND_META 是例外, 可后续 token 化」)。 */
@@ -199,45 +210,43 @@ export function AttachmentTray({
   className
 }: AttachmentTrayProps): React.ReactElement | null {
   const { t } = useTranslation()
-  const gridRef = useRef<HTMLDivElement>(null)
-  const [isExpanded, setIsExpanded] = useState(false)
-  // One column is the safe pre-measurement fallback, so the collapsed shelf
-  // never flashes more than two rows in a narrow detail pane.
-  const [collapsedLimit, setCollapsedLimit] = useState(COLLAPSED_ROWS)
   const totalSize = useMemo(() => items.reduce((sum, it) => sum + (it.size ?? 0), 0), [items])
-  useEffect(() => {
-    const grid = gridRef.current
-    if (!grid) return
-    const updateLimit = (): void => {
-      if (grid.clientWidth <= 0) return
-      const columns = Math.max(
-        1,
-        Math.floor(
-          (grid.clientWidth + ATTACHMENT_GRID_GAP) /
-            (ATTACHMENT_CARD_MIN_WIDTH + ATTACHMENT_GRID_GAP)
-        )
-      )
-      setCollapsedLimit(columns * COLLAPSED_ROWS)
-    }
-    updateLimit()
-    if (typeof ResizeObserver === 'undefined') return
-    const observer = new ResizeObserver(updateLimit)
-    observer.observe(grid)
-    return () => observer.disconnect()
-  }, [])
+  // 有上传中/失败的条目 = 用户刚挑了文件 → 展开: 进度条和失败态藏在折叠摘要后面
+  // 等于没有。draft-edit / forward 异步 hydrate 出来的原附件一进来就是 done,
+  // 不触发这条, 仍按条数走默认 (多附件默认折叠, 把可视区留给正文)。
+  const hasPendingItem = items.some((it) => it.status !== 'done')
+  const [isExpanded, setExpanded] = useState(
+    hasPendingItem || items.length <= AUTO_EXPAND_MAX_ITEMS
+  )
+  // 上传态**粘住**展开: 传完就自动收起会让刚加的附件在眼前消失。渲染期调整自己的
+  // state 是 React 官方的「上游变化时同步 state」写法 (立即重跑本组件且不落屏),
+  // 比 useEffect 少一帧, 也不踩 set-state-in-effect。
+  const [sawPendingItem, setSawPendingItem] = useState(hasPendingItem)
+  if (hasPendingItem !== sawPendingItem) {
+    setSawPendingItem(hasPendingItem)
+    if (hasPendingItem) setExpanded(true)
+  }
   if (items.length === 0) return null
-
-  const visibleItems = isExpanded ? items : items.slice(0, collapsedLimit)
-  const hiddenCount = Math.max(0, items.length - collapsedLimit)
-  const canCollapse = items.length > collapsedLimit
 
   return (
     <div className={cn('px-[22px] py-2', className)}>
-      <div className="flex items-center justify-between mb-2.5">
-        <span className="inline-flex items-center gap-[7px] text-meta font-mono text-ink-fg-2">
+      <div className="flex items-center justify-between">
+        {/* 摘要行即折叠开关 (chevron + N 个附件 · 总大小), 与同面板引用块的
+            disclosure 同构 —— 折叠态只剩这一行, 正文永远有空间。 */}
+        <button
+          type="button"
+          aria-expanded={isExpanded}
+          onClick={() => setExpanded(!isExpanded)}
+          className="inline-flex items-center gap-[7px] text-meta font-mono text-ink-fg-2 py-[5px] pr-2 rounded-[var(--r-ctl)] hover:text-ink-fg transition-colors duration-fast"
+        >
+          <ChevronRight
+            size={12}
+            strokeWidth={2}
+            className={`transition-transform duration-fast ${isExpanded ? 'rotate-90' : ''}`}
+          />
           <Paperclip size={13} strokeWidth={2} />
           {t('compose.attachTray.summary', { n: items.length, size: formatFileSize(totalSize) })}
-        </span>
+        </button>
         <button
           type="button"
           onClick={onAdd}
@@ -247,26 +256,19 @@ export function AttachmentTray({
           {t('compose.attachTray.add')}
         </button>
       </div>
-      <div
-        ref={gridRef}
-        className="grid gap-2.5"
-        style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(148px, 1fr))' }}
-      >
-        {visibleItems.map((it) => (
-          <AttachCard key={it.localId} item={it} onRemove={onRemove} />
-        ))}
-      </div>
-      {canCollapse && (
-        <button
-          type="button"
-          aria-expanded={isExpanded}
-          onClick={() => setIsExpanded((value) => !value)}
-          className="mt-2 w-full rounded-[var(--r-ctl)] py-1.5 text-meta font-mono text-ink-fg-2 hover:bg-ink-3/60 hover:text-ink-fg transition-colors duration-fast"
+      {isExpanded && (
+        <div
+          data-testid="attachment-tray-grid"
+          className="grid gap-2.5 mt-2.5 overflow-y-auto scrollbar-thin"
+          style={{
+            gridTemplateColumns: `repeat(auto-fill, minmax(${ATTACHMENT_CARD_MIN_WIDTH}px, 1fr))`,
+            maxHeight: ATTACHMENT_GRID_MAX_HEIGHT
+          }}
         >
-          {isExpanded
-            ? t('compose.attachTray.showLess')
-            : t('compose.attachTray.showMore', { count: hiddenCount })}
-        </button>
+          {items.map((it) => (
+            <AttachCard key={it.localId} item={it} onRemove={onRemove} />
+          ))}
+        </div>
       )}
     </div>
   )

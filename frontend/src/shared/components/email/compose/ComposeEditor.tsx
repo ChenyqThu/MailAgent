@@ -914,7 +914,12 @@ export function ComposeEditor({ editor }: { editor: Editor | null }): React.Reac
   const isEmpty =
     useEditorState({ editor, selector: ({ editor: e }) => e?.isEmpty ?? true }) ?? true
   return (
-    <div className="flex-1 min-h-[240px]">
+    // grow shrink-0 (flex-basis 保持默认 auto) — 本块在 ComposePanel 的单一滚动区里,
+    // 高度必须等于正文内容高度。曾用 flex-1 (= flex:1 1 0%): basis:0 让盒高只由剩余
+    // 空间决定、且显式 min-height 又顶掉了 flex 的 min-height:auto 内容下限, 于是长正文
+    // 溢出盒外 (overflow 默认 visible) 直接画到下方引用块上 — 实测 40 行正文交叠 1239px。
+    // grow 保留"正文短时撑满可视区"的手感, shrink-0 保证盒高永不低于内容。
+    <div data-testid="compose-editor-block" className="grow shrink-0 min-h-[240px]">
       {/* 正文用满宽 + 24px 内边距 (旧 px-10=40px + max-w-760 居中导致大段留白, 观感
           像"缩进很多"); 去掉宽度上限让正文铺满 compose 列, 与 Outlook 撰写区一致。 */}
       <div className="relative px-6 pt-6 pb-10">

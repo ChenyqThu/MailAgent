@@ -252,10 +252,7 @@ describe('ComposePanel — forward 附件权威列表 (codex F1)', () => {
     await renderForwardAndWait()
     await waitForHydrated()
     pickFiles(makeFile('extra.pdf', [7]))
-    await waitFor(() =>
-      expect(screen.getByRole('button', { name: '展开其余 1 个附件' })).toBeTruthy()
-    )
-    fireEvent.click(screen.getByRole('button', { name: '展开其余 1 个附件' }))
+    // 新挑的文件先是 uploading → 附件架自动展开且粘住, 无需手动展开就能看到。
     await waitFor(() => expect(screen.getByText('extra.pdf')).toBeTruthy())
     await confirmSend()
     await waitFor(() => expect(mockSend).toHaveBeenCalledTimes(1))

@@ -92,7 +92,7 @@ describe('AttachmentTray — 汇总行', () => {
     expect(onAdd).toHaveBeenCalledTimes(1)
   })
 
-  test('大量附件默认最多两行, 可展开与收起', () => {
+  test('3 个以上附件默认折叠成一行摘要, 点摘要行展开/收起', () => {
     render(
       <AttachmentTray
         items={Array.from({ length: 5 }, (_, index) =>
@@ -103,13 +103,62 @@ describe('AttachmentTray — 汇总行', () => {
       />
     )
 
+    // 折叠态: 一张卡片都不渲染, 只剩摘要行 —— 正文区不会被附件挤掉。
+    const toggle = screen.getByRole('button', { name: /5 个附件/ })
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(screen.queryByText('file-1.pdf')).toBeNull()
+    expect(screen.queryByTestId('attachment-tray-grid')).toBeNull()
+
+    fireEvent.click(toggle)
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
     expect(screen.getByText('file-1.pdf')).toBeTruthy()
-    expect(screen.getByText('file-2.pdf')).toBeTruthy()
-    expect(screen.queryByText('file-3.pdf')).toBeNull()
-    fireEvent.click(screen.getByRole('button', { name: '展开其余 3 个附件' }))
     expect(screen.getByText('file-5.pdf')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: '收起附件' }))
-    expect(screen.queryByText('file-3.pdf')).toBeNull()
+
+    fireEvent.click(toggle)
+    expect(screen.queryByText('file-1.pdf')).toBeNull()
+  })
+
+  test('≤2 个附件默认展开 (刚加完直接看到缩略图)', () => {
+    render(
+      <AttachmentTray
+        items={[item({ localId: 1, filename: 'only.pdf' })]}
+        onAdd={vi.fn()}
+        onRemove={vi.fn()}
+      />
+    )
+    expect(screen.getByRole('button', { name: /1 个附件/ }).getAttribute('aria-expanded')).toBe(
+      'true'
+    )
+    expect(screen.getByText('only.pdf')).toBeTruthy()
+  })
+
+  test('上传中的附件强制展开, 且传完不自动收起 (刚加的不能在眼前消失)', () => {
+    const many = (status: AttachmentTrayItem['status']): AttachmentTrayItem[] =>
+      Array.from({ length: 5 }, (_, i) =>
+        item({ localId: i + 1, filename: `f-${i + 1}.pdf`, status: i === 4 ? status : 'done' })
+      )
+    const { rerender } = render(
+      <AttachmentTray items={many('uploading')} onAdd={vi.fn()} onRemove={vi.fn()} />
+    )
+    expect(screen.getByText('f-5.pdf')).toBeTruthy()
+    // 上传完成 → 5 个全 done, 若按条数重算会收起; 展开态必须粘住。
+    rerender(<AttachmentTray items={many('done')} onAdd={vi.fn()} onRemove={vi.fn()} />)
+    expect(screen.getByText('f-5.pdf')).toBeTruthy()
+  })
+
+  test('展开态 grid 限高 + 内部滚动 (附件再多也挤不掉正文)', () => {
+    render(
+      <AttachmentTray
+        items={Array.from({ length: 24 }, (_, i) => item({ localId: i + 1 }))}
+        onAdd={vi.fn()}
+        onRemove={vi.fn()}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: /24 个附件/ }))
+    const grid = screen.getByTestId('attachment-tray-grid')
+    // 两行卡片 + 一个行间距 = 131*2+10; 高度上限与内部滚动缺一不可。
+    expect(grid.style.maxHeight).toBe('272px')
+    expect(grid.className).toContain('overflow-y-auto')
   })
 })
 
