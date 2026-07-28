@@ -7,7 +7,9 @@
 //
 // 本区呈现的能力族（权威盘点见 .trellis/tasks/07-22-capability-visibility-panorama/progress.md §1）：
 //   恒可用核心（锁定 · 无 flag）：
-//     · 核心邮件操作 email_flag/archive/pin/draft_reply/resync + prepare_send（写操作经审批卡保护）
+//     · 核心邮件操作 email_flag/archive/pin/draft_reply/draft_compose/draft_update/resync
+//       + prepare_send（写操作经审批卡保护；prd 07-27 加 draft_compose/draft_update 后共 8 件，
+//       见 CORE_EMAIL_TOOL_COUNT 及其漂移守护 tests/shared/systemCapabilitiesCoreEmailToolCount.test.ts）
 //     · KOS 知识大脑 六件只读 kos_query/search/get_page/find_experts/list_pages/get_backlinks
 //       （core read，恒注册；效果取决于是否配好 Gbrain。issue #57 前只有 kos_query 一件）
 //   env-flag 锁定族（on=锁定态 / off=禁用态，运行时不可在此切换）：
@@ -230,6 +232,13 @@ export function WebCapabilityRow(): React.ReactElement {
   )
 }
 
+/** 「核心邮件操作」toolCount 的真源手抄值 —— 真源 = `src/ai-gateway/tools/skill_gating.ts` 的
+ *  `CORE_UNGATED_GATEWAY_TOOLS` 里所有 `email_` 前缀条目（该 Set 内该前缀恰好等于此写族 8 件，
+ *  读工具走 `GATEWAY_SKILL_TOOLS.email` 家族、不进 CORE_UNGATED，故前缀过滤不会误收）。不直接
+ *  import skill_gating.ts（main-process AI Gateway 代码，renderer 无该 alias，不引入跨进程耦合）；
+ *  漂移由 `tests/shared/systemCapabilitiesCoreEmailToolCount.test.ts` 守护——两边其一漏改即变红。 */
+export const CORE_EMAIL_TOOL_COUNT = 8
+
 interface CapabilityRow {
   key: string
   icon: React.ReactNode
@@ -269,7 +278,7 @@ export function SystemCapabilitiesSection(): React.ReactElement {
       title: t('settings.systemCapabilities.coreEmail.title'),
       desc: t('settings.systemCapabilities.coreEmail.desc'),
       source: { kind: 'always', note: t('settings.systemCapabilities.coreEmail.control') },
-      toolCount: 6,
+      toolCount: CORE_EMAIL_TOOL_COUNT,
       enabled: true
     },
     {

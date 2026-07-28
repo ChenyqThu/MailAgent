@@ -1757,7 +1757,7 @@
       "controlledBy": "Controlled by env var:",
       "coreEmail": {
         "title": "Core email actions",
-        "desc": "Lets the assistant draft replies, flag, archive, pin, resync, and send email (write tools + send).",
+        "desc": "Lets the assistant draft replies, compose/forward drafts, edit drafts, flag, archive, pin, resync, and send email (write tools + send).",
         "control": "Core capability · always available; every write executes only after an approval card."
       },
       "kos": {
