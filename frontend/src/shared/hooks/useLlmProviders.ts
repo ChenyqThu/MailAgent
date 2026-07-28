@@ -70,6 +70,15 @@ export interface LlmProviderModelsData {
   error: string | null
 }
 
+/** `POST /llm/providers/{id}/test` 的 serve-api 响应（settings 侧 HTTP 直连）。
+ *
+ *  两个字段都必填是**对的**：`src/api/routers/llm_providers.py:736-771` 的两条分支
+ *  （配置问题早返回 / 正常探测）都恒发 `latencyMs`（前者 0）与 `error`（成功时 null）。
+ *
+ *  🔴 与 `@shared/onboarding/llmProviderTemplates` 里那个同名类型**不是**一回事：那条是
+ *  onboarding 的 IPC 通道，main 会插入自己的护栏返回（缺 id / 非本次引导保存的 id / catch
+ *  兜底），那几条压根没到上游、没有 latency，故那边两个字段都 optional。同名不同契约，
+ *  合并会把其中一侧变成谎（issue #67 item 6）。 */
 export interface LlmProviderTestResult {
   ok: boolean
   latencyMs: number

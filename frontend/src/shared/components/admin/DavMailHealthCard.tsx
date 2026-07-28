@@ -135,7 +135,13 @@ export function DavMailHealthCard(): React.ReactElement | null {
           {h.imap_login_ok === false && (
             <div className="text-aux text-fail mt-1">
               LOGIN 失败
-              {(h.consecutive_login_failures ?? 0) > 0 && ` ×${h.consecutive_login_failures}`}
+              {(h.consecutive_login_failures ?? 0) > 0 &&
+                // "×2/3" tells the user how close this is to tripping critical; a bare "×2"
+                // left them guessing. The threshold is desktop-only on the wire, so fall back
+                // to the bare count rather than printing an assumed 3 (see DavMailHealthData).
+                (h.login_fail_threshold != null
+                  ? ` ×${h.consecutive_login_failures}/${h.login_fail_threshold}`
+                  : ` ×${h.consecutive_login_failures}`)}
             </div>
           )}
         </div>

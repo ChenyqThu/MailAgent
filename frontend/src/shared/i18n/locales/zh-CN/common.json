@@ -970,6 +970,8 @@
       "writeMode": "写入模式：{mode}",
       "exitCode": "退出码 {code}",
       "bytesWritten": "已写入 {bytes} 字节",
+      "secretsInjected": "本次运行向命令的环境注入了 {count} 个已存密钥（仅显示名称，密钥值不出本机）：",
+      "firstRunRecorded": "已记录首次运行放行：{names}",
       "error": "操作失败，请重试或让助手重新发起。"
     },
     "systemDocApprovalCard": {
@@ -1337,6 +1339,7 @@
     "missingTables": "缺少 {n} 张表",
     "dbAccessible": "可访问",
     "schemaOk": "Schema OK",
+    "healthNotes": "运行诊断",
     "syncStore": "同步存储",
     "totalEmails": "邮件总数",
     "failureQueue": "失败队列",
@@ -1376,7 +1379,10 @@
     "selftest": "Self-test",
     "selftestPending": "测试中…",
     "selftestOk": "网关健康",
-    "selftestFail": "网关不可达"
+    "selftestFail": "网关不可达",
+    "selftestModel": "主模型",
+    "selftestApiBase": "API Base",
+    "selftestFallback": "备用模型"
   },
   "kos": {
     "ingest": {
@@ -1943,6 +1949,7 @@
         "button": "测试连接",
         "running": "测试中…",
         "ok": "连接正常（{ms}ms）",
+        "okNoLatency": "连接正常",
         "fail": "连接失败"
       },
       "models": {

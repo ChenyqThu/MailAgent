@@ -18,7 +18,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { qk } from '@shared/lib/queryKeys'
 import { Activity, Sparkles, Zap } from 'lucide-react'
 
-import type { LlmStatsData } from '@shared/api/types'
+import type { LlmSelfTestData, LlmStatsData } from '@shared/api/types'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { cn } from '@shared/lib/cn'
 import { EmptyState } from '@shared/components/feedback/EmptyState'
@@ -177,6 +177,10 @@ export function LlmDashboardPage(): React.ReactElement {
   const qc = useQueryClient()
   const [days, setDays] = useState<number>(7)
   const [selftestPending, setSelftestPending] = useState(false)
+  // issue #67 item 2 — the probe's diagnosis used to live only in a toast body that read an
+  // undefined field, so a failing gateway showed a bare "unreachable". Keep the last result
+  // on screen: `reasons` is the only thing that tells the user WHICH config is missing.
+  const [selftest, setSelftest] = useState<LlmSelfTestData | null>(null)
 
   const statsQ = useQuery({
     queryKey: qk.llm.statsDays(days),
@@ -189,15 +193,20 @@ export function LlmDashboardPage(): React.ReactElement {
     mutationFn: () => mailApi.llm.selftest(),
     onMutate: () => setSelftestPending(true),
     onSuccess: (data) => {
+      setSelftest(data)
+      // `reasons` is the probe's only diagnostic channel. Guard the array shape rather than
+      // trusting it: on web the serve-api can be an older build that predates the field.
+      const reasons = Array.isArray(data.reasons) ? data.reasons : []
       if (data.healthy) {
-        toastSuccess(t('llm.selftestOk'), data.detail)
+        toastSuccess(t('llm.selftestOk'), data.primary_model || data.api_base || undefined)
       } else {
-        toastError(t('llm.selftestFail'), data.detail)
+        toastError(t('llm.selftestFail'), reasons.join(' · ') || undefined)
       }
       void qc.invalidateQueries({ queryKey: qk.llm.stats() })
     },
     onError: (err: unknown) => {
       const e = err as Error & { code?: string }
+      setSelftest(null)
       toastError(t('llm.selftestFail'), e.message)
     },
     onSettled: () => setSelftestPending(false)
@@ -252,6 +261,46 @@ export function LlmDashboardPage(): React.ReactElement {
           </button>
         </div>
       </header>
+
+      {/* Self-test result — the probe answers "is the gateway configured", and `reasons`
+          names the exact missing key. A toast alone loses it a few seconds later. */}
+      {selftest && (
+        <section
+          className={cn(
+            'rounded-md border p-3 space-y-2',
+            selftest.healthy ? 'border-ok/30 bg-ok/5' : 'border-fail/30 bg-fail/10'
+          )}
+        >
+          <div className={cn('text-aux font-medium', selftest.healthy ? 'text-ok' : 'text-fail')}>
+            {selftest.healthy ? t('llm.selftestOk') : t('llm.selftestFail')}
+          </div>
+          {!selftest.healthy && (selftest.reasons?.length ?? 0) > 0 && (
+            <ul className="text-meta text-ink-fg-1 space-y-0.5">
+              {selftest.reasons.map((r) => (
+                <li key={r} className="font-mono">
+                  {r}
+                </li>
+              ))}
+            </ul>
+          )}
+          <dl className="text-meta text-ink-fg-3 space-y-0.5">
+            <div className="flex gap-2">
+              <dt className="text-ink-fg-2">{t('llm.selftestModel')}</dt>
+              <dd className="font-mono">{selftest.primary_model || '—'}</dd>
+            </div>
+            <div className="flex gap-2">
+              <dt className="text-ink-fg-2">{t('llm.selftestApiBase')}</dt>
+              <dd className="font-mono truncate">{selftest.api_base || '—'}</dd>
+            </div>
+            {(selftest.fallback_chain?.length ?? 0) > 0 && (
+              <div className="flex gap-2">
+                <dt className="text-ink-fg-2">{t('llm.selftestFallback')}</dt>
+                <dd className="font-mono truncate">{selftest.fallback_chain.join(', ')}</dd>
+              </div>
+            )}
+          </dl>
+        </section>
+      )}
 
       {/* Cost summary */}
       {data && cost && (

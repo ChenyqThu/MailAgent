@@ -19,22 +19,17 @@ import { copyFileSync, rmSync } from 'fs'
 import { basename, dirname } from 'path'
 
 import { callCli } from '../cli_runner'
+import type { AdminHealthData } from '@shared/api/types'
 import { getDb } from '../db'
 import { ensureInternalId, envelopeFromCli, type WriteEnvelope } from '../lib/envelope'
 
 const READ_TIMEOUT_MS = 15_000
 const WRITE_TIMEOUT_MS = 60_000
 
-export interface AdminHealthData {
-  db_path: string
-  db_accessible: boolean
-  db_version: number
-  db_version_expected: number
-  schema_ok: boolean
-  tables_present: string[]
-  tables_missing: string[]
-  healthy: boolean
-}
+/** Re-exported from the shared type (itself derived from admin-health.schema.json) instead of
+ *  redeclared: this local copy dropped `notes`, `workers` and `davmail`, so the CLI's E4
+ *  diagnostics could not reach the renderer through this channel either (issue #67 item 5). */
+export type { AdminHealthData }
 
 export interface AdminStatsData {
   watcher?: Record<string, unknown>

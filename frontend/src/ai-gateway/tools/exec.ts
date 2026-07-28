@@ -179,6 +179,13 @@ export function createExecTools(
         // floor_hit is an informational "this touched a sensitive path" flag (the run was NOT
         // blocked — run_command has no filesystem sandbox); surface it so the model knows.
         floor_hit: r.floor_hit,
+        // W4 disclosure — which per-skill secrets were overlaid onto this command's env (names
+        // only; values never leave Python). The endpoint has emitted these since 877dc17c but
+        // nothing read them, so an approved command could read the owner's stored secrets with
+        // no surface anywhere saying which. Post-run is the earliest they exist: the overlay is
+        // resolved inside /exec/run after the skill probe.
+        injected_secret_names: r.injected_secret_names ?? [],
+        first_run_recorded: r.first_run_recorded ?? [],
         user_edited: userEdited
       }
     }

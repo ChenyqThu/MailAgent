@@ -408,7 +408,12 @@ export function ProviderCard({
               {testResult &&
                 (testResult.ok ? (
                   <span className="rounded bg-ok/15 px-1.5 py-0.5 text-aux text-ok">
-                    {t('settings.providers.test.ok', { ms: testResult.latencyMs })}
+                    {/* Defensive, not a live bug: serve-api emits latencyMs on both of its
+                        branches today, so this only covers a degraded / older backend —
+                        without the guard a missing field renders "undefined ms" into the UI. */}
+                    {typeof testResult.latencyMs === 'number'
+                      ? t('settings.providers.test.ok', { ms: testResult.latencyMs })
+                      : t('settings.providers.test.okNoLatency')}
                   </span>
                 ) : (
                   <span

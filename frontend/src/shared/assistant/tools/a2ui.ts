@@ -298,6 +298,13 @@ export interface ExecApprovalCardProps {
   mode?: string | null
   exitCode?: number | null
   bytesWritten?: number | null
+  /** run_command only, result-phase — per-skill secret NAMES injected into the child env.
+   *  A security disclosure the owner cannot get anywhere else: it says which stored secrets
+   *  the command they approved was able to read. Values never cross the wire. Only ever
+   *  populated after execute — the overlay is resolved server-side inside /exec/run. */
+  injectedSecretNames?: string[] | null
+  /** run_command only, result-phase — skill entrypoints this run recorded as first-run approved. */
+  firstRunRecorded?: string[] | null
 }
 
 /** skill_install (S2 W4, edit tier) — stage 1: fetch into quarantine. Only the SOURCE (url/path)
@@ -638,7 +645,10 @@ export function buildToolA2UIPayload(
       mode: asStr(args.mode) ?? null,
       exitCode: typeof result?.exit_code === 'number' ? (result.exit_code as number) : null,
       bytesWritten:
-        typeof result?.bytes_written === 'number' ? (result.bytes_written as number) : null
+        typeof result?.bytes_written === 'number' ? (result.bytes_written as number) : null,
+      injectedSecretNames:
+        kind === 'run_command' ? asStrArray(result?.injected_secret_names) : null,
+      firstRunRecorded: kind === 'run_command' ? asStrArray(result?.first_run_recorded) : null
     }
     return {
       protocol: A2UI_PROTOCOL,

@@ -177,6 +177,12 @@ export interface DomainFlagPatch {
 export interface DomainFlagResult {
   updated_ids?: number[]
   outbox_entries?: unknown[]
+  /** 🔴 set_flags is the ONE write op with a SOFT not-found (every other one raises 404):
+   *  an internal_id that doesn't exist comes back HTTP 200 with the id listed here and
+   *  NOTHING written. Python omits the key entirely when empty
+   *  (`src/api/routers/email.py::_run_flag_service`, mirroring `MailWriteService` FlagResult),
+   *  so absent ≠ "all applied" only because updated_ids is authoritative — read both. */
+  not_found?: number[]
 }
 
 /** POST /email/{id}/archive | /move data block (Archive/MoveResult). */
@@ -422,6 +428,14 @@ export interface DomainExecRunResult {
   cwd: string
   floor_hit: boolean
   floor_hits: string[]
+  /** W4 security disclosure — the per-skill secret NAMES this run overlaid onto the child
+   *  process env (values never cross the wire). Built for the approval card
+   *  (`routers/exec.py:509`) but dropped by this type, so the owner never learned which of
+   *  their stored secrets a command could read. Post-run by construction: the overlay is
+   *  resolved inside /exec/run, after the skill probe — there is no preview endpoint. */
+  injected_secret_names: string[]
+  /** W4 first-run gate — skill entrypoints this run recorded as approved-for-first-run. */
+  first_run_recorded: string[]
   policy: { decision: 'auto_allow' | 'ask'; rule_id: number | null }
 }
 

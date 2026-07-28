@@ -58,9 +58,28 @@ export interface AgentRunSpec {
    *  is a broken spec, and the gateway collapses it to [] rather than re-deriving a default
    *  (`agentRun.ts:agentRunContextFromSpec`, "missing / non-array → []").
    *
-   *  Authoritative projection: `src/api/routers/agent_runs.py::_assemble_spec` (~:284-292).
+   *  `skills` follows the SAME shape (S6 W3 / rev3.1 §5.1): always a resolved array on the wire
+   *  (NULL → `DEFAULT_CUSTOM_AGENT_MOUNTED_SKILLS` substituted server-side), and a spec that omits
+   *  it collapses to [] here rather than to applySkillGating's fail-open manual semantic.
+   *
+   *  `grantExec` / `grantWeb` are the opposite shape — projected ONLY at their non-default values
+   *  (`grantExec` only when literally true; `grantWeb` only for 'gated'/'open'), so an ABSENT key
+   *  means "no grant", never "unknown". They were on the wire since S5/S6 but missing from this
+   *  type, which is why `agentRunContextFromSpec` reached them through an inline structural cast.
+   *
+   *  🔴 Typed here, still parsed defensively there: this arrives as JSON from Python, so the
+   *  gateway re-derives every grant from discriminated literals instead of passing the object
+   *  through (ADR-004 P1-4). The type states what the server promises; the parser assumes it may
+   *  lie. Widen this type only alongside that parser.
+   *
+   *  Authoritative projection: `src/api/routers/agent_runs.py::_assemble_spec` (~:306-322).
    *  Never re-derive the default here — a second derivation is how the two halves drift apart. */
-  toolPolicy?: { allowedTools?: string[] }
+  toolPolicy?: {
+    allowedTools?: string[]
+    skills?: string[]
+    grantExec?: true
+    grantWeb?: 'gated' | 'open'
+  }
   budget: { maxSteps: number; maxRunSeconds: number }
   fallbackModels?: string[]
   sessionTitle: string

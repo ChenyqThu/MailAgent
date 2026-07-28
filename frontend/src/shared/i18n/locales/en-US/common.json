@@ -970,6 +970,8 @@
       "writeMode": "Write mode: {mode}",
       "exitCode": "Exit code {code}",
       "bytesWritten": "Wrote {bytes, plural, one {# byte} other {# bytes}}",
+      "secretsInjected": "This run injected {count, plural, one {# stored secret} other {# stored secrets}} into the command's environment (names only — values never leave this machine):",
+      "firstRunRecorded": "Recorded first-run approval for: {names}",
       "error": "The operation failed — retry or ask the assistant to start over."
     },
     "systemDocApprovalCard": {
@@ -1337,6 +1339,7 @@
     "missingTables": "{n} missing",
     "dbAccessible": "Accessible",
     "schemaOk": "Schema OK",
+    "healthNotes": "Diagnostics",
     "syncStore": "Sync store",
     "totalEmails": "Total emails",
     "failureQueue": "Failure queue",
@@ -1376,7 +1379,10 @@
     "selftest": "Self-test",
     "selftestPending": "Testing…",
     "selftestOk": "Gateway healthy",
-    "selftestFail": "Gateway unreachable"
+    "selftestFail": "Gateway unreachable",
+    "selftestModel": "Primary model",
+    "selftestApiBase": "API Base",
+    "selftestFallback": "Fallback"
   },
   "kos": {
     "ingest": {
@@ -1943,6 +1949,7 @@
         "button": "Test connection",
         "running": "Testing…",
         "ok": "Connected ({ms}ms)",
+        "okNoLatency": "Connected",
         "fail": "Connection failed"
       },
       "models": {

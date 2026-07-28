@@ -153,6 +153,30 @@ export function ExecApprovalCard(props: ToolCallMessagePartProps): React.JSX.Ele
                 : ''}
             </div>
           ) : null}
+          {/* Security disclosure — which stored secrets this command could read. The backend has
+              reported these since 877dc17c ("W4 审批卡展示") but nothing rendered them, so an
+              approved command read the owner's per-skill secrets with no surface saying which.
+              They only exist post-run (the overlay is resolved inside /exec/run), so this is a
+              disclosure, not a pre-approval warning — styled to be noticed regardless. */}
+          {(data.injectedSecretNames?.length ?? 0) > 0 ? (
+            <div className="mt-2 rounded-md border border-warn/30 bg-warn/10 px-2.5 py-2">
+              <div className="text-aux text-warn">
+                {t('chat.execApprovalCard.secretsInjected', {
+                  count: data.injectedSecretNames?.length ?? 0
+                })}
+              </div>
+              <div className="mt-0.5 break-all font-mono text-meta text-ink-fg-2">
+                {data.injectedSecretNames?.join(', ')}
+              </div>
+            </div>
+          ) : null}
+          {(data.firstRunRecorded?.length ?? 0) > 0 ? (
+            <div className="mt-1 text-aux text-ink-fg-3">
+              {t('chat.execApprovalCard.firstRunRecorded', {
+                names: data.firstRunRecorded?.join(', ')
+              })}
+            </div>
+          ) : null}
         </>
       ) : phase === 'error' ? (
         <div className="text-aux text-fail">{t('chat.execApprovalCard.error')}</div>

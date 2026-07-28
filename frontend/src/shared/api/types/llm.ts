@@ -1,4 +1,5 @@
 import type { LlmRunOpts } from './email'
+import type { MailagentLlmSelftest } from '@shared/types/cli.gen'
 
 // ---- Sprint 6 §2.2 — LLM dashboard surface --------------------------------
 
@@ -18,11 +19,28 @@ export interface LlmStatsData {
   }
 }
 
-export interface LlmSelfTestData {
-  healthy: boolean
-  detail?: string
-  latency_ms?: number
-}
+/** GET /llm/selftest data block — the no-token gateway health probe.
+ *
+ *  Canonical wire = `docs/cli-schema/llm-selftest.schema.json` (codegen'd as
+ *  `MailagentLlmSelftest` in shared/types/cli.gen.ts). BOTH producers emit exactly these
+ *  six fields: serve-api `src/api/routers/llm.py::llm_selftest` → `LlmService.selftest`
+ *  (`src/services/llm_service.py:160-184`) for web, and `mailagent llm selftest`
+ *  (`src/cli/commands/llm.py:135-160`) for desktop.
+ *
+ *  🔴 This interface previously declared `detail?: string` + `latency_ms?: number`, neither
+ *  of which exists on either producer — so `LlmDashboardPage`'s toast body read a field that
+ *  was undefined by construction and the user saw a bare "gateway unreachable" with the real
+ *  diagnosis ("LLM_API_KEY is empty") dropped on the floor. Keep this aligned with the
+ *  schema, not with what a consumer wishes existed.
+ *
+ *  So it is no longer hand-written at all: DERIVED from the codegen'd type, the way
+ *  `types/core.ts` already sources its email records. A hand-copied mirror is what let the
+ *  two fictional fields survive; a derivation cannot drift — regenerate the schema and every
+ *  consumer of the dropped/renamed field fails `pnpm run typecheck` instead of silently
+ *  reading `undefined`. The fields it carries: healthy, reasons, api_base, primary_model,
+ *  fallback_chain, llm_agent_enabled. `reasons` is the probe's ONLY diagnostic channel —
+ *  always surface it. */
+export type LlmSelfTestData = Extract<MailagentLlmSelftest, { status: 'success' }>['data']
 
 /** dynamic-models — serve-api GET /api/llm/models response. */
 export interface LlmUpstreamModelsData {

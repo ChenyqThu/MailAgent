@@ -412,7 +412,9 @@ export function AdminPage(): React.ReactElement {
         <section className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <StatCard
             label={t('admin.dbVersion')}
-            value={`v${healthQ.data.db_version}`}
+            // db_version is `integer | null` in admin-health.schema.json — an unreadable DB
+            // reports null, which used to render the literal "vnull".
+            value={healthQ.data.db_version == null ? '—' : `v${healthQ.data.db_version}`}
             hint={`expected v${healthQ.data.db_version_expected}`}
           />
           <StatCard
@@ -430,6 +432,23 @@ export function AdminPage(): React.ReactElement {
             hint={healthQ.data.db_path}
           />
           <StatCard label={t('admin.schemaOk')} value={healthQ.data.schema_ok ? '✓' : '✗'} />
+        </section>
+      )}
+
+      {/* E4 diagnostic notes — crash-looped workers, an aging DavMail OAuth token. Both
+          producers have computed these on every call since E4 WP1/WP2; nothing rendered them,
+          so the one place that says "this worker is stopped until you restart" was dead weight
+          on the wire. They are operator hints, not failures: `healthy` can still be true. */}
+      {(healthQ.data?.notes?.length ?? 0) > 0 && (
+        <section className="rounded-md border border-warn/30 bg-warn/10 p-3">
+          <h2 className="text-aux font-medium text-warn">{t('admin.healthNotes')}</h2>
+          <ul className="mt-1.5 space-y-1">
+            {healthQ.data?.notes?.map((note) => (
+              <li key={note} className="text-meta text-ink-fg-1">
+                {note}
+              </li>
+            ))}
+          </ul>
         </section>
       )}
 

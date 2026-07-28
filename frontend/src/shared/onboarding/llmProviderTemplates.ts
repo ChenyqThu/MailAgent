@@ -107,3 +107,22 @@ export function invalidCustomBaseUrlReason(raw: string): string | null {
   }
   return null
 }
+
+/** `onboarding:llmProviderTest` 的 IPC 结果 —— main（handlers/onboarding.ts）与 renderer
+ *  （onboarding/ipc.ts）的**单源**，两侧各自 `export type` 复出，不再手抄第二份
+ *  （issue #67 item 6：同一契约跨 IPC 边界抄了两份）。renderer 不 import main，故这类
+ *  跨边界形状一律落在本模块——与上面模板表同一个「防两份漂移」理由。
+ *
+ *  🔴 两个字段都是 optional，且这**不是**下游 serve-api 的形状：
+ *  `POST /llm/providers/{id}/test`（src/api/routers/llm_providers.py:736-771）两条分支恒发
+ *  `latencyMs` + `error`，settings 侧走 HTTP 直连、用 `useLlmProviders.ts` 里那个**同名但更严**
+ *  的类型是对的。这里松，是因为 main 在代理时会插入自己的护栏返回（缺 id / 非本次引导保存的
+ *  id / catch 兜底），那几条根本没跑到上游、没有 latency 可言。两个类型描述的是两条不同的
+ *  通道，合并它们才是错的。 */
+export interface LlmProviderTestResult {
+  ok: boolean
+  /** 上游探测往返毫秒。main 的护栏分支不含此字段 —— 消费侧必须判 `typeof === 'number'`。 */
+  latencyMs?: number
+  /** 可读错误（不含 key）。成功时缺席（main 把上游的 null 映射成 undefined）。 */
+  error?: string
+}

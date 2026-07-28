@@ -211,7 +211,13 @@ async function pingLlmEndpoint(): Promise<PingResult> {
   // the secret out of the renderer entirely.
   try {
     const data = await runLlmSelfTest()
-    return { ok: data.healthy, detail: data.detail }
+    // issue #67 item 2 — this read `data.detail`, a field the selftest has never emitted, so
+    // the Settings ping row showed a bare pass/fail with the actual cause discarded. The probe
+    // reports its diagnosis in `reasons` ("LLM_API_KEY is empty", …); when healthy there are
+    // none, so echo the model it resolved instead of an empty detail.
+    const reasons = Array.isArray(data.reasons) ? data.reasons : []
+    const detail = data.healthy ? data.primary_model || data.api_base : reasons.join(' · ')
+    return { ok: data.healthy, detail: detail || undefined }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     const code =

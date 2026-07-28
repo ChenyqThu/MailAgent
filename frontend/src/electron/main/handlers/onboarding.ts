@@ -66,6 +66,7 @@ import {
   findOnboardingLlmTemplate,
   invalidCustomBaseUrlReason
 } from '@shared/onboarding/llmProviderTemplates'
+import type { LlmProviderTestResult } from '@shared/onboarding/llmProviderTemplates'
 import { writePatch } from './env'
 
 // ---------------------------------------------------------------------------
@@ -1522,11 +1523,10 @@ async function llmProviderSave(raw: unknown): Promise<LlmProviderSaveResult> {
   }
 }
 
-export interface LlmProviderTestResult {
-  ok: boolean
-  latencyMs?: number
-  error?: string
-}
+/** Single-sourced in @shared/onboarding/llmProviderTemplates (issue #67 item 6) — this and the
+ *  renderer's ipc.ts each carried a hand-copy of the same IPC contract. Re-exported so existing
+ *  importers of this module are unaffected. */
+export type { LlmProviderTestResult }
 
 /** 连通性测试 (POST /llm/providers/{id}/test — serve-api 恒 200, data={ok,latencyMs,error})。
  *  仅放行本次 onboarding session 内 Save 过的 id —— 防 renderer 拿 main 的本地 token

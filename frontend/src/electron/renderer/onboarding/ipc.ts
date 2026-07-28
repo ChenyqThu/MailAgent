@@ -8,6 +8,7 @@
 // white-screen when a single channel errors or the preload is absent).
 
 import type { FolderDiscoverResult, FolderSetWhitelistResult } from '@shared/api/types'
+import type { LlmProviderTestResult } from '@shared/onboarding/llmProviderTemplates'
 
 export type Status = 'pass' | 'fail' | 'warn'
 
@@ -294,11 +295,11 @@ export interface LlmProviderSaveResult {
   error?: IpcError
 }
 
-export interface LlmProviderTestResult {
-  ok: boolean
-  latencyMs?: number
-  error?: string
-}
+/** Single-sourced in @shared/onboarding/llmProviderTemplates (issue #67 item 6) — main and
+ *  renderer used to hand-copy this same IPC contract. Re-exported so `ipc.LlmProviderTestResult`
+ *  keeps resolving for steps.tsx. NOTE: the same-named type in `@shared/hooks/useLlmProviders`
+ *  is a DIFFERENT (stricter) contract — that one is the direct serve-api HTTP response. */
+export type { LlmProviderTestResult }
 
 /** provider registry flag 可观测 (后端未起 / flag off → {enabled:false} 隐藏该步)。 */
 export function llmProviderStatus(): Promise<LlmProviderStatusResult> {

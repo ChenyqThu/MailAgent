@@ -1,28 +1,23 @@
 // ---- Sprint 6 §2.2 — admin dashboard surface ------------------------------
 
-export interface AdminHealthData {
-  db_path: string
-  db_accessible: boolean
-  db_version: number
-  db_version_expected: number
-  schema_ok: boolean
-  tables_present: string[]
-  tables_missing: string[]
-  healthy: boolean
-  /** E4 §4 — supervise worker 心跳 (sync_state 'worker.%' 键反解), keyed by worker
-   *  name。镜像 docs/cli-schema/admin-health.schema.json 的 workers 子对象。当前无
-   *  前端展示消费, 仅建模后端返回面。`stale`=该 worker 的 last_started_at 早于本次
-   *  进程 boot (flag 关掉的 worker 留的旧快照, E4 §4 第二批新增, 非 stale 时不写)。 */
-  workers?: Record<
-    string,
-    {
-      status?: string
-      last_started_at?: string
-      restart_count?: number | string
-      last_error?: string
-      stale?: boolean
-    }
-  >
+import type { MailagentAdminHealth } from '@shared/types/cli.gen'
+
+/** `admin health` data block — ONE type serving two producers:
+ *    - desktop: `mailagent admin health` (CLI), the canonical
+ *      `docs/cli-schema/admin-health.schema.json` contract;
+ *    - web: serve-api `GET /api/admin/health` (`src/api/routers/admin.py::admin_health`),
+ *      which emits the same block with exactly one deliberate deviation, encoded below.
+ *
+ *  DERIVED from the codegen'd schema type rather than hand-copied — the hand-copy had dropped
+ *  `notes` and `davmail` entirely (both have been on BOTH producers' wire all along, so E4's
+ *  crashloop / token-aging diagnostics were computed every call and thrown away for want of a
+ *  type) and had pinned `db_version` as non-null where the schema says `integer | null`. */
+export type AdminHealthData = Omit<MailagentAdminHealth['data'], 'db_path'> & {
+  /** 🔴 Optional because the WEB half never sends it: `admin_health` redacts the absolute path
+   *  on purpose (C9 "不回显绝对 db_path" — host layout is a deployment detail). The CLI half
+   *  does send it, and the canonical schema marks it required, which is why this type used to
+   *  declare it required and AdminPage's db_path hint silently vanished on web. */
+  db_path?: string
 }
 
 export interface AdminStatsData {
@@ -92,8 +87,17 @@ export interface DavMailHealthData {
   /** L2a — real IMAP LOGIN probe result. Null/undefined when the probe was
    *  skipped (TCP down / probe disabled / cfg not injected / older backend). */
   imap_login_ok?: boolean | null
-  /** Consecutive LOGIN failures; >= 3 drives level critical (token degraded). */
+  /** Consecutive LOGIN failures; >= login_fail_threshold drives level critical (token degraded). */
   consecutive_login_failures?: number
+  /** The threshold the watchdog actually applied (F5 — propagated via sync_state
+   *  `davmail.login_fail_threshold` so the UI can't drift from the alerting rule).
+   *  🔴 DESKTOP ONLY on the wire: `handlers/admin.ts` reads the sync_state key directly and
+   *  emits it, but the web producer (`src/api/routers/admin.py::_build_davmail_health`)
+   *  computes `_login_fail_threshold(state)` for its own level decision and does NOT put it in
+   *  the response. So absent ≠ "3" — the owner may have configured
+   *  DAVMAIL_LOGIN_FAIL_THRESHOLD to something else. Render the ratio only when it is present;
+   *  substituting a default here would just be a different wrong number on screen. */
+  login_fail_threshold?: number
   /** Days since token.dat mtime. Null when token.dat missing. */
   token_age_days: number | null
   token_mtime_iso: string | null

@@ -204,10 +204,34 @@ export function createWriteTools(
         { isRead, isFlagged, processingStatus },
         signal
       )
+      // 🔴 set_flags is the ONE write op with a SOFT not-found: a nonexistent internal_id
+      // returns HTTP 200 + not_found:[id] having written nothing. Projecting only
+      // updated_ids/applied made the tool report "flagged" for an email that doesn't exist.
+      // The happy path stays byte-identical (pinned snapshot + Python's own "omit not_found
+      // when empty" convention); only the real not-found branch changes shape, dropping the
+      // `applied` key — which states the REQUESTED patch, not a landed one — so nothing in
+      // the result can be read as success.
+      const notFound = data.not_found ?? []
+      const updatedIds = data.updated_ids ?? []
+      if (notFound.length > 0) {
+        return {
+          internal_id: input.internal_id,
+          ok: false,
+          not_found: notFound,
+          requested: {
+            is_read: isRead,
+            is_flagged: isFlagged,
+            processing_status: processingStatus
+          },
+          updated_ids: updatedIds,
+          outbox_entries: data.outbox_entries ?? [],
+          user_edited: userEdited
+        }
+      }
       return {
         internal_id: input.internal_id,
         applied: { is_read: isRead, is_flagged: isFlagged, processing_status: processingStatus },
-        updated_ids: data.updated_ids ?? [],
+        updated_ids: updatedIds,
         outbox_entries: data.outbox_entries ?? [],
         user_edited: userEdited
       }

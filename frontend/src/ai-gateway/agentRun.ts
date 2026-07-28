@@ -100,19 +100,19 @@ export function intersectAllowedTools(all: ToolSet, allowed?: string[]): ToolSet
  *  spec's raw toolPolicy object — any other value/type ("yes", 1, {}, a junk key) yields the
  *  narrowest grant, so a future spec field can never silently flow into the matrix (codex P1-4).
  *  allowedTools missing / non-array → [] (fail-closed, §5.1). The shared AgentRunSpec TYPE
- *  (@shared/api/types) still spells toolPolicy as {allowedTools?} — grantExec/grantWeb are on the
- *  wire but the shared-type extension belongs to the UI half; the structural cast below reads
- *  them without widening the shared surface. Exported for the discriminated-construction tests. */
+ *  (@shared/api/types) now spells all four toolPolicy keys, so this reads them directly — the
+ *  structural cast that used to stand in for the stale type is gone. The runtime narrowing below
+ *  is NOT redundant with those types: the spec is JSON off the wire, so it is re-derived from
+ *  discriminated literals regardless of what the type claims. Exported for the
+ *  discriminated-construction tests. */
 export function agentRunContextFromSpec(spec: AgentRunSpec, jobId?: number): AgentRunContext {
-  const toolPolicy = spec.toolPolicy as
-    | { allowedTools?: unknown; grantExec?: unknown; grantWeb?: unknown; skills?: unknown }
-    | undefined
-  const allowedRaw = toolPolicy?.allowedTools
+  const toolPolicy = spec.toolPolicy
+  const allowedRaw: unknown = toolPolicy?.allowedTools
   // S6 W3 (rev3.1 §5.1) — the mount list mirrors allowedTools' fail-closed shape: the Python
   // projection always emits the RESOLVED array (NULL → default mount set substituted server-side,
   // never re-derived here), so a spec missing/malforming it is a broken spec → [] (zero mounts),
   // NEVER null-passthrough into applySkillGating's fail-open manual semantic.
-  const skillsRaw = toolPolicy?.skills
+  const skillsRaw: unknown = toolPolicy?.skills
   return {
     agentId: spec.agentId,
     allowedTools: Array.isArray(allowedRaw)

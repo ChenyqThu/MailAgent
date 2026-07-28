@@ -12,6 +12,7 @@
 import { ipcMain } from 'electron'
 
 import { callCli } from '../cli_runner'
+import type { LlmSelfTestData } from '@shared/api/types/llm'
 
 const READ_TIMEOUT_MS = 15_000
 const SELFTEST_TIMEOUT_MS = 30_000
@@ -38,13 +39,11 @@ export interface LlmStatsData {
   _source?: string
 }
 
-export interface LlmSelfTestData {
-  healthy: boolean
-  /** Optional diagnostic detail — typically the model id we pinged. */
-  detail?: string
-  /** Round-trip ms of the no-token health probe. */
-  latency_ms?: number
-}
+/** `mailagent llm selftest -o json` data block. Re-exported from the shared type (itself
+ *  derived from llm-selftest.schema.json) rather than redeclared here: the local copy used to
+ *  declare `detail` / `latency_ms`, which NEITHER the CLI nor serve-api has ever emitted, and
+ *  a second hand-written copy is exactly how that survived. */
+export type { LlmSelfTestData }
 
 export async function runLlmStats(days = 7): Promise<LlmStatsData> {
   // Clamp days to the CLI-supported range (1..365); the backend would error
