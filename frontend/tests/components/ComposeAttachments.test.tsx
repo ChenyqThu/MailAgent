@@ -116,6 +116,15 @@ beforeEach(() => {
 afterEach(() => cleanup())
 
 describe('ComposePanel — D6 附件面 (mode=new)', () => {
+  test('composer 根节点裁剪溢出, 附件/正文共用 min-h-0 滚动区', () => {
+    renderWithClient(<ComposePanelInner internalId={-1} mode="new" onClose={() => {}} />)
+    const panel = screen.getByLabelText('compose-panel')
+    const scrollOwner = screen.getByTestId('compose-scroll-owner')
+    expect(panel.className).toContain('overflow-hidden')
+    expect(scrollOwner.className).toContain('min-h-0')
+    expect(scrollOwner.className).toContain('overflow-y-auto')
+  })
+
   test('选择文件 → 上传 → chip 展示文件名+大小', async () => {
     renderWithClient(<ComposePanelInner internalId={-1} mode="new" onClose={() => {}} />)
     pickFiles(makeFile('report.pdf', [1, 2, 3]))
@@ -243,6 +252,10 @@ describe('ComposePanel — forward 附件权威列表 (codex F1)', () => {
     await renderForwardAndWait()
     await waitForHydrated()
     pickFiles(makeFile('extra.pdf', [7]))
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: '展开其余 1 个附件' })).toBeTruthy()
+    )
+    fireEvent.click(screen.getByRole('button', { name: '展开其余 1 个附件' }))
     await waitFor(() => expect(screen.getByText('extra.pdf')).toBeTruthy())
     await confirmSend()
     await waitFor(() => expect(mockSend).toHaveBeenCalledTimes(1))

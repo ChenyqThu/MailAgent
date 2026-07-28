@@ -29,11 +29,18 @@ import {
   Link2,
   List,
   ListOrdered,
+  Merge,
   Minus,
+  PanelTop,
   Redo2,
+  Rows3,
+  Columns3,
+  Split,
   SquareCode,
   Strikethrough,
+  Table2,
   TextQuote,
+  Trash2,
   Underline as UnderlineIcon,
   Undo2,
   Unlink
@@ -142,6 +149,7 @@ const HL_COLORS: readonly string[] = [
   '#5ED3D3'
 ]
 const HL_NEUTRALS: readonly string[] = ['#FFFFFF', '#EBEBEB', '#D6D6D6', '#BFBFBF', '#A8A8A8']
+const DEFAULT_CUSTOM_COLOR = '#000000'
 /* eslint-enable mailagent/no-raw-hex */
 
 /** swatch 色板按钮：6 列网格（hue 列 × 浅→深行）+ 末行「清除」格 + 中性色；
@@ -244,7 +252,7 @@ function SwatchPopoverButton({
         type="color"
         tabIndex={-1}
         aria-hidden="true"
-        defaultValue="#000000"
+        defaultValue={DEFAULT_CUSTOM_COLOR}
         className="sr-only"
         onChange={(e) => onPick(e.target.value)}
       />
@@ -370,6 +378,73 @@ function InlineInputBox({
   )
 }
 
+const TABLE_GRID_SIZE = 8
+
+function TableInsertPopover({ editor }: { editor: Editor }): React.ReactElement {
+  const { t } = useTranslation()
+  const [open, setOpen] = useState(false)
+  const [hoveredSize, setHoveredSize] = useState({ rows: 2, cols: 2 })
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          title={t('compose.editor.table')}
+          aria-label={t('compose.editor.table')}
+          onMouseDown={(event) => event.preventDefault()}
+          className="folder-editor-btn"
+        >
+          <Table2 size={13} strokeWidth={2} />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        align="start"
+        sideOffset={6}
+        className="glass-pop z-[70] w-[300px] rounded-[var(--r-pop)] border border-ink-border p-3"
+      >
+        <div className="text-meta font-mono uppercase tracking-wider text-ink-fg-2 mb-2">
+          {t('compose.editor.tableInsert')}
+        </div>
+        <div
+          className="grid grid-cols-8 gap-1"
+          onMouseLeave={() => setHoveredSize({ rows: 2, cols: 2 })}
+        >
+          {Array.from({ length: TABLE_GRID_SIZE * TABLE_GRID_SIZE }, (_, index) => {
+            const rows = Math.floor(index / TABLE_GRID_SIZE) + 1
+            const cols = (index % TABLE_GRID_SIZE) + 1
+            const selected = rows <= hoveredSize.rows && cols <= hoveredSize.cols
+            const label = t('compose.editor.tableSize', { rows, cols })
+            return (
+              <button
+                key={`${rows}-${cols}`}
+                type="button"
+                title={label}
+                aria-label={label}
+                onMouseEnter={() => setHoveredSize({ rows, cols })}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => {
+                  editor.chain().focus().insertTable({ rows, cols, withHeaderRow: false }).run()
+                  setOpen(false)
+                }}
+                className={cn(
+                  'h-6 rounded-[3px] border transition-colors duration-fast',
+                  selected
+                    ? 'border-coral/70 bg-coral/20'
+                    : 'border-ink-border bg-ink-2 hover:border-coral/50'
+                )}
+              />
+            )
+          })}
+        </div>
+        <div className="mt-2 text-center text-meta font-mono text-ink-fg-2">
+          {t('compose.editor.tableSize', hoveredSize)}
+        </div>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
 const HEADING_LEVELS = [1, 2, 3] as const
 
 export function ComposeFormatToolbar({ editor }: { editor: Editor }): React.ReactElement {
@@ -391,6 +466,7 @@ export function ComposeFormatToolbar({ editor }: { editor: Editor }): React.Reac
   // 兼容闸：旧装配（ComposePanel 未切 buildComposeExtensions 前）无 Highlight 扩展，
   // 高亮按钮回退 textStyle backgroundColor（#9 dogfood 旧行为），T5 切换后走真高亮 mark。
   const hasHighlight = editor.extensionManager.extensions.some((ext) => ext.name === 'highlight')
+  const hasTable = editor.extensionManager.extensions.some((ext) => ext.name === 'table')
 
   // TipTap v3: useEditor 默认不每 transaction 重渲染 → editor.isActive/getAttributes 非
   // 响应式, 工具栏高亮/当前值不跟随光标。useEditorState 订阅快照。
@@ -407,6 +483,9 @@ export function ComposeFormatToolbar({ editor }: { editor: Editor }): React.Reac
       codeBlock: e?.isActive('codeBlock') ?? false,
       link: e?.isActive('link') ?? false,
       code: e?.isActive('code') ?? false,
+      table: hasTable && (e?.isActive('table') ?? false),
+      canMergeCells: hasTable && (e?.can().mergeCells() ?? false),
+      canSplitCell: hasTable && (e?.can().splitCell() ?? false),
       heading: (HEADING_LEVELS.find((l) => e?.isActive('heading', { level: l })) ?? 0) as
         | 0
         | 1
@@ -433,6 +512,9 @@ export function ComposeFormatToolbar({ editor }: { editor: Editor }): React.Reac
     codeBlock: false,
     link: false,
     code: false,
+    table: false,
+    canMergeCells: false,
+    canSplitCell: false,
     heading: 0 as const,
     fontFamily: '',
     fontSize: '',
@@ -685,6 +767,64 @@ export function ComposeFormatToolbar({ editor }: { editor: Editor }): React.Reac
         label={t('compose.editor.mention')}
         onClick={insertMentionTrigger}
       />
+      {hasTable && !fmt.table && <TableInsertPopover editor={editor} />}
+      {hasTable && fmt.table && (
+        <>
+          <FmtSep />
+          <FmtBtn
+            icon={<Rows3 size={13} strokeWidth={2} />}
+            label={t('compose.editor.tableRowBefore')}
+            onClick={() => editor.chain().focus().addRowBefore().run()}
+          />
+          <FmtBtn
+            icon={<Rows3 size={13} strokeWidth={2} />}
+            label={t('compose.editor.tableRowAfter')}
+            onClick={() => editor.chain().focus().addRowAfter().run()}
+          />
+          <FmtBtn
+            icon={<Columns3 size={13} strokeWidth={2} />}
+            label={t('compose.editor.tableColumnBefore')}
+            onClick={() => editor.chain().focus().addColumnBefore().run()}
+          />
+          <FmtBtn
+            icon={<Columns3 size={13} strokeWidth={2} />}
+            label={t('compose.editor.tableColumnAfter')}
+            onClick={() => editor.chain().focus().addColumnAfter().run()}
+          />
+          <FmtBtn
+            icon={<Rows3 size={13} strokeWidth={2} />}
+            label={t('compose.editor.tableDeleteRow')}
+            onClick={() => editor.chain().focus().deleteRow().run()}
+          />
+          <FmtBtn
+            icon={<Columns3 size={13} strokeWidth={2} />}
+            label={t('compose.editor.tableDeleteColumn')}
+            onClick={() => editor.chain().focus().deleteColumn().run()}
+          />
+          <FmtBtn
+            icon={<PanelTop size={13} strokeWidth={2} />}
+            label={t('compose.editor.tableHeaderRow')}
+            onClick={() => editor.chain().focus().toggleHeaderRow().run()}
+          />
+          <FmtBtn
+            icon={<Merge size={13} strokeWidth={2} />}
+            label={t('compose.editor.tableMergeCells')}
+            disabled={!fmt.canMergeCells}
+            onClick={() => editor.chain().focus().mergeCells().run()}
+          />
+          <FmtBtn
+            icon={<Split size={13} strokeWidth={2} />}
+            label={t('compose.editor.tableSplitCell')}
+            disabled={!fmt.canSplitCell}
+            onClick={() => editor.chain().focus().splitCell().run()}
+          />
+          <FmtBtn
+            icon={<Trash2 size={13} strokeWidth={2} />}
+            label={t('compose.editor.tableDelete')}
+            onClick={() => editor.chain().focus().deleteTable().run()}
+          />
+        </>
+      )}
       <div className="flex-1" aria-hidden />
       {/* ── 组 5: 撤销/重做 ──────────────────────────────────────── */}
       <FmtBtn
@@ -774,7 +914,7 @@ export function ComposeEditor({ editor }: { editor: Editor | null }): React.Reac
   const isEmpty =
     useEditorState({ editor, selector: ({ editor: e }) => e?.isEmpty ?? true }) ?? true
   return (
-    <div className="flex-1 overflow-y-auto scrollbar-thin">
+    <div className="flex-1 min-h-[240px]">
       {/* 正文用满宽 + 24px 内边距 (旧 px-10=40px + max-w-760 居中导致大段留白, 观感
           像"缩进很多"); 去掉宽度上限让正文铺满 compose 列, 与 Outlook 撰写区一致。 */}
       <div className="relative px-6 pt-6 pb-10">

@@ -91,6 +91,26 @@ describe('AttachmentTray — 汇总行', () => {
     fireEvent.click(screen.getByRole('button', { name: '添加' }))
     expect(onAdd).toHaveBeenCalledTimes(1)
   })
+
+  test('大量附件默认最多两行, 可展开与收起', () => {
+    render(
+      <AttachmentTray
+        items={Array.from({ length: 5 }, (_, index) =>
+          item({ localId: index + 1, filename: `file-${index + 1}.pdf` })
+        )}
+        onAdd={vi.fn()}
+        onRemove={vi.fn()}
+      />
+    )
+
+    expect(screen.getByText('file-1.pdf')).toBeTruthy()
+    expect(screen.getByText('file-2.pdf')).toBeTruthy()
+    expect(screen.queryByText('file-3.pdf')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '展开其余 3 个附件' }))
+    expect(screen.getByText('file-5.pdf')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '收起附件' }))
+    expect(screen.queryByText('file-3.pdf')).toBeNull()
+  })
 })
 
 describe('AttachmentTray — 卡片', () => {

@@ -20,7 +20,6 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEditor } from '@tiptap/react'
-import DOMPurify from 'dompurify'
 import {
   ChevronDown,
   ChevronRight,
@@ -41,7 +40,8 @@ import { useComposeStore } from '@shared/state/compose'
 import { asWriteError } from '@shared/lib/ipcErrors'
 import { qk } from '@shared/lib/queryKeys'
 import { sanitizeEmailHtml } from '@shared/lib/emailSanitize'
-import { classifyDraftHtml } from '@shared/lib/draftHtmlGate'
+import { assessDraftHtml } from '@shared/lib/draftHtmlGate'
+import { serializeEmailComposerHtml } from '@shared/lib/emailComposerHtml'
 import { plaintextToHtml } from '@shared/lib/plaintext_html'
 import { splitQuoteHtml } from '@shared/lib/quoteSplit'
 import type {
@@ -227,7 +227,7 @@ export function ComposePanelInner({
   // 被 ProseMirror 重排), 单独用阅读区同款安全 iframe 渲染, 发送/存草稿时拼回正文。默认收起。
   const [quoteHtml, setQuoteHtml] = useState('')
   const [quoteOpen, setQuoteOpen] = useState(false)
-  // D5 — draft-edit 复杂富文本 (table/cid/Outlook 汤) 保真模式: 原文整块进上面的
+  // D5 — draft-edit 不可编辑富文本 (布局表/CID/VML/Outlook 汤) 保真模式: 原文整块进上面的
   // quoteHtml iframe (不灌 TipTap 防剥离), 编辑器只写顶部新增, 发送时拼回。
   const [preserveOriginal, setPreserveOriginal] = useState(false)
   // D2 Bug B — draft-edit 按 data-ma-quote marker 拆分成功: 回复段在编辑器里,
@@ -361,8 +361,8 @@ export function ComposePanelInner({
       if (ccArr.length > 0) setCcVisible(true)
       setSubject(d.detail?.subject ?? '')
       setImportance(d.detail?.is_important ? 'high' : 'normal')
-      // D5 富文本混合门: simple → 直灌编辑器 (可行内编辑); complex (table/cid/
-      // Outlook 汤, TipTap 会剥离) → 原文整块进折叠 iframe 保真 + 编辑器留空写新增,
+      // D5 富文本混合门: 标准 HTML/table → 直灌编辑器; 布局表/CID/VML 等
+      // preserve-only 内容 → 原文整块进折叠 iframe 保真 + 编辑器留空写新增,
       // 发送时 getSanitizedHtml 拼回 (原文只进 quoteHtml 一处, 防双份);
       // empty → markdown 回落 (plaintext 降级灌入, 不在前端造 md 渲染器)。
       // D2 Bug B — 先按 data-ma-quote marker 拆分: 回复段进编辑器 (仍过富文本混合门),
@@ -371,21 +371,26 @@ export function ComposePanelInner({
       const { reply, quote } = splitQuoteHtml(d.html)
       if (quote !== null) {
         setSplitQuote(true)
-        const replyCls = classifyDraftHtml(reply)
-        if (replyCls === 'complex') {
-          // 回复段编辑器表达不了 (table/cid/Outlook 汤) → 与引用段一起整块保真,
+        const replyAssessment = assessDraftHtml(reply)
+        if (replyAssessment.compatibility === 'preserve-only') {
+          // 回复段编辑器表达不了 (布局表/CID/VML 等) → 与引用段一起整块保真,
           // 编辑器留空写新增 — 零丢字节优先于可行内编辑。
           setQuoteHtml(reply + quote)
           setPreserveOriginal(true)
         } else {
           setQuoteHtml(quote)
-          if (replyCls === 'simple') editor.commands.setContent(reply)
+          if (replyAssessment.compatibility !== 'empty') {
+            editor.commands.setContent(replyAssessment.html)
+          }
         }
       } else {
-        const cls = classifyDraftHtml(d.html)
-        if (cls === 'simple') {
-          editor.commands.setContent(d.html)
-        } else if (cls === 'complex') {
+        const assessment = assessDraftHtml(d.html)
+        if (
+          assessment.compatibility === 'editable' ||
+          assessment.compatibility === 'normalize-editable'
+        ) {
+          editor.commands.setContent(assessment.html)
+        } else if (assessment.compatibility === 'preserve-only') {
           setQuoteHtml(d.html)
           setPreserveOriginal(true)
         } else if (d.markdown) {
@@ -452,7 +457,7 @@ export function ComposePanelInner({
 
   // 发送/存草稿正文 = 编辑器内容 + 原文引用块 (拼回)。
   const getSanitizedHtml = useCallback((): string => {
-    const body = DOMPurify.sanitize(editor?.getHTML() ?? '')
+    const body = serializeEmailComposerHtml(editor?.getHTML() ?? '')
     const quote = quoteHtml ? sanitizeEmailHtml(quoteHtml) : ''
     return body + quote
   }, [editor, quoteHtml])
@@ -821,7 +826,7 @@ export function ComposePanelInner({
       onDrop={handleDrop}
       className={cn(
         // L0 — relative: 拖拽 drop 提示层 (absolute inset-0) 的定位上下文。
-        'relative flex flex-col min-h-0',
+        'relative flex flex-col min-h-0 overflow-hidden',
         // column: 占满 detail 列 (glass-3 半透明作列背景)。
         // modal: 撑满 ComposeNewModal 卡片 (背景/圆角/阴影由外壳给, 这里只布局)。
         variant === 'modal' ? 'h-full' : 'flex-1 min-w-0 glass-3'
@@ -1086,100 +1091,103 @@ export function ComposePanelInner({
       {/* 格式工具栏 (主题与正文之间, Outlook 同位) */}
       {editor && <ComposeFormatToolbar editor={editor} />}
 
-      {/* 正文 */}
-      <ComposeEditor editor={editor} />
-
-      {/* 原文引用块 — reply/forward 的引用原文, 或 draft-edit 保真模式 (D5 complex)
-          的原草稿富文本。同一 iframe + 发送时拼回机制。 */}
-      {quoteHtml && (!isDraftEdit || preserveOriginal || splitQuote) && (
-        <div className="border-t border-ink-border/60 bg-ink-2/40 shrink-0 min-h-0 flex flex-col">
-          <div className="shrink-0 flex items-center gap-1.5 pr-3">
+      {/* 单一纵向滚动所有者：附件、正文与引用共同受 composer 视口约束。 */}
+      <div
+        data-testid="compose-scroll-owner"
+        className="flex-1 min-h-0 overflow-y-auto scrollbar-thin flex flex-col"
+        style={{ scrollbarGutter: 'stable' }}
+      >
+        {/* 原附件权威列表加载失败时优先露出重试入口，避免被长正文推到滚动区底部。 */}
+        {mode === 'forward' && fwdAttachState === 'error' && (
+          <div className="border-b border-ink-border/60 shrink-0 px-4 py-2.5 flex items-center gap-3 bg-fail/10">
+            <div className="flex-1 text-aux text-fail">{t('compose.forwardAttachError')}</div>
             <button
               type="button"
-              onClick={() => setQuoteOpen((v) => !v)}
-              aria-expanded={quoteOpen}
-              className="flex items-center gap-1.5 px-3 py-2 text-meta font-mono uppercase tracking-wider text-ink-fg-2 hover:text-ink-fg transition-colors duration-fast"
+              onClick={() => setFwdAttachState('pending')}
+              className="shrink-0 px-2.5 py-1.5 rounded text-aux text-fail hover:bg-fail/15 transition-colors duration-fast inline-flex items-center gap-1.5"
             >
-              <ChevronRight
-                size={12}
-                strokeWidth={2}
-                className={`transition-transform duration-fast ${quoteOpen ? 'rotate-90' : ''}`}
-              />
-              {t(
-                isDraftEdit
-                  ? preserveOriginal
-                    ? 'compose.quote.original'
-                    : 'compose.quote.reply'
-                  : mode === 'forward'
-                    ? 'compose.quote.forward'
-                    : 'compose.quote.reply'
-              )}
+              <RotateCcw size={11} strokeWidth={2} />
+              {t('compose.planRetry')}
             </button>
-            {isDraftEdit && preserveOriginal && (
-              <span className="text-meta text-ink-fg-3 truncate">
-                {t('compose.richPreserveHint')}
-              </span>
-            )}
           </div>
-          {quoteOpen && (
-            <div className="min-h-0 max-h-[36vh] overflow-y-auto px-3 pb-3">
-              <div className="border border-ink-border-soft rounded-md bg-ink-2/40 px-4 py-3.5">
-                {/* draft-edit: 引用区只展示 quoteHtml 段 (htmlOverride), 不按 id 重拉全文 —
+        )}
+
+        {/* D6/T3 — 附件架置于主题/格式栏下方、正文上方。默认只展示两行，展开后
+            仍由本滚动区承接，不再以 shrink-0 行数把 composer 撑穿外层。 */}
+        {attachList.length > 0 && (
+          <div className="border-b border-ink-border/60 bg-ink-2/40 shrink-0">
+            <AttachmentTray
+              items={attachList.map((a) => ({
+                localId: a.localId,
+                filename: a.filename,
+                size: a.size,
+                status: a.status,
+                previewUrl: a.previewUrl
+              }))}
+              onAdd={() => fileInputRef.current?.click()}
+              onRemove={removeAttachment}
+            />
+          </div>
+        )}
+
+        {/* 正文 */}
+        <ComposeEditor editor={editor} />
+
+        {/* 原文引用块 — reply/forward 的引用原文, 或 draft-edit 保真模式的原草稿富文本。 */}
+        {quoteHtml && (!isDraftEdit || preserveOriginal || splitQuote) && (
+          <div className="border-t border-ink-border/60 bg-ink-2/40 shrink-0 min-h-0 flex flex-col">
+            <div className="shrink-0 flex items-center gap-1.5 pr-3">
+              <button
+                type="button"
+                onClick={() => setQuoteOpen((v) => !v)}
+                aria-expanded={quoteOpen}
+                className="flex items-center gap-1.5 px-3 py-2 text-meta font-mono uppercase tracking-wider text-ink-fg-2 hover:text-ink-fg transition-colors duration-fast"
+              >
+                <ChevronRight
+                  size={12}
+                  strokeWidth={2}
+                  className={`transition-transform duration-fast ${quoteOpen ? 'rotate-90' : ''}`}
+                />
+                {t(
+                  isDraftEdit
+                    ? preserveOriginal
+                      ? 'compose.quote.original'
+                      : 'compose.quote.reply'
+                    : mode === 'forward'
+                      ? 'compose.quote.forward'
+                      : 'compose.quote.reply'
+                )}
+              </button>
+              {isDraftEdit && preserveOriginal && (
+                <span className="text-meta text-ink-fg-3 truncate">
+                  {t('compose.richPreserveHint')}
+                </span>
+              )}
+            </div>
+            {quoteOpen && (
+              <div className="px-3 pb-3">
+                <div className="border border-ink-border-soft rounded-md bg-ink-2/40 px-4 py-3.5">
+                  {/* draft-edit: 引用区只展示 quoteHtml 段 (htmlOverride), 不按 id 重拉全文 —
                     marker 拆分后编辑器已有回复段, 全文渲染会视觉重复。reply/forward 维持
                     现状按原邮件 id 取正文。 */}
-                <EmailBodyFrame
-                  internalId={internalId}
-                  attachments={quoteAttachments}
-                  htmlOverride={isDraftEdit ? quoteHtml : undefined}
-                />
+                  <EmailBodyFrame
+                    internalId={internalId}
+                    attachments={quoteAttachments}
+                    htmlOverride={isDraftEdit ? quoteHtml : undefined}
+                  />
+                </div>
               </div>
-            </div>
-          )}
-        </div>
-      )}
+            )}
+          </div>
+        )}
 
-      {/* codex F1 — forward 原附件 hydrate 失败: 错误条 + 重试; 未成功前发送硬阻断
-          (权威列表不完整就发会静默丢原附件)。样式对齐上方 planQ 失败 banner。 */}
-      {mode === 'forward' && fwdAttachState === 'error' && (
-        <div className="border-t border-ink-border/60 shrink-0 px-4 py-2.5 flex items-center gap-3 bg-fail/10">
-          <div className="flex-1 text-aux text-fail">{t('compose.forwardAttachError')}</div>
-          <button
-            type="button"
-            onClick={() => setFwdAttachState('pending')}
-            className="shrink-0 px-2.5 py-1.5 rounded text-aux text-fail hover:bg-fail/15 transition-colors duration-fast inline-flex items-center gap-1.5"
-          >
-            <RotateCcw size={11} strokeWidth={2} />
-            {t('compose.planRetry')}
-          </button>
-        </div>
-      )}
-
-      {/* D6/T3 — 附件区: 缩略图卡片 tray (staged 上传 / draft-edit 已有附件 /
-          forward hydrate 的原附件)。空态不渲染任何占位 (dogfood: 顶部已有附件入口
-          且整窗可拖拽落文件, 底部空态 dropzone 冗余已移除)。 */}
-      {attachList.length > 0 && (
-        <div className="border-t border-ink-border/60 bg-ink-2/40 shrink-0">
-          <AttachmentTray
-            items={attachList.map((a) => ({
-              localId: a.localId,
-              filename: a.filename,
-              size: a.size,
-              status: a.status,
-              previewUrl: a.previewUrl
-            }))}
-            onAdd={() => fileInputRef.current?.click()}
-            onRemove={removeAttachment}
-          />
-        </div>
-      )}
-
-      {/* 附件提示 (reply 原邮件附件不重传)。forward 不再提示 — 原附件已 hydrate
-          成上方 tray 的可移除 chips (codex F1), 计数条会跟 chips 双重呈现。 */}
-      {!isDraftEdit && mode !== 'forward' && planAttachments > 0 && (
-        <div className="border-t border-ink-border/60 bg-ink-2/40 px-3 py-2 shrink-0 text-meta font-mono text-ink-fg-2">
-          {t('compose.attachmentsNote', { n: planAttachments })}
-        </div>
-      )}
+        {/* 附件提示 (reply 原邮件附件不重传)。 */}
+        {!isDraftEdit && mode !== 'forward' && planAttachments > 0 && (
+          <div className="border-t border-ink-border/60 bg-ink-2/40 px-3 py-2 shrink-0 text-meta font-mono text-ink-fg-2">
+            {t('compose.attachmentsNote', { n: planAttachments })}
+          </div>
+        )}
+      </div>
 
       <SendConfirmDialog
         open={sendOpen}

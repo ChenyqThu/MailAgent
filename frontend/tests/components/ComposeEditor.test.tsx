@@ -29,6 +29,7 @@ import {
   buildComposeExtensions,
   createMentionSuggestion,
   filterSlashItems,
+  parseTsvTable,
   type ComposeExtensionsOptions
 } from '../../src/shared/components/email/compose/editor-extensions'
 import {
@@ -265,6 +266,33 @@ describe('ComposeFormatToolbar — 命令接线（新装配）', () => {
     expect(editor.getHTML()).toContain('<hr')
   })
 
+  test('表格网格插入 + 上下文行/标题/删除命令', async () => {
+    const editor = renderEditor({ content: '<p></p>' })
+    fireEvent.click(screen.getByLabelText('表格'))
+    fireEvent.click(await screen.findByRole('button', { name: '2 行 × 2 列' }))
+    expect(editor.getHTML().match(/<tr/g)).toHaveLength(2)
+    expect(editor.getHTML().match(/<td/g)).toHaveLength(4)
+
+    fireEvent.click(await screen.findByLabelText('下方插入行'))
+    expect(editor.getHTML().match(/<tr/g)).toHaveLength(3)
+
+    fireEvent.click(screen.getByLabelText('切换标题行'))
+    expect(editor.getHTML()).toContain('<th')
+
+    fireEvent.click(screen.getByLabelText('删除表格'))
+    expect(editor.getHTML()).not.toContain('<table')
+  })
+
+  test('TableKit 保留标准 table 的 colspan/rowspan', () => {
+    const editor = renderEditor({
+      content:
+        '<table><tbody><tr><td colspan="2">A</td></tr><tr><td rowspan="2">B</td><td>C</td></tr><tr><td>D</td></tr></tbody></table>'
+    })
+    expect(editor.getHTML()).toContain('<table')
+    expect(editor.getHTML()).toContain('colspan="2"')
+    expect(editor.getHTML()).toContain('rowspan="2"')
+  })
+
   test('@ 按钮：词尾插入补空格触发（" @"）', () => {
     const editor = renderEditor()
     act(() => {
@@ -285,6 +313,57 @@ describe('ComposeFormatToolbar — 命令接线（新装配）', () => {
     expect(screen.getByLabelText('撤销')).toHaveProperty('disabled', false)
     fireEvent.click(screen.getByLabelText('撤销'))
     expect(editor.isActive('bold')).toBe(false)
+  })
+})
+
+describe('table paste normalization', () => {
+  test('rectangular TSV becomes rows/cells; prose and ragged TSV stay plain', () => {
+    expect(parseTsvTable('A\tB\n1\t2')).toEqual([
+      ['A', 'B'],
+      ['1', '2']
+    ])
+    expect(parseTsvTable('ordinary prose')).toBeNull()
+    expect(parseTsvTable('A\tB\n1')).toBeNull()
+  })
+
+  test('paste TSV inserts an editable table through the ProseMirror plugin', () => {
+    const editor = renderEditor({ content: '<p></p>' })
+    const editable = document.querySelector('.ProseMirror')
+    if (!(editable instanceof HTMLElement)) throw new Error('ProseMirror root not found')
+    act(() => editor.commands.focus('end'))
+    fireEvent.paste(editable, {
+      clipboardData: {
+        types: ['text/plain'],
+        files: [],
+        getData: (type: string) => (type === 'text/plain' ? 'Name\tAmount\nAlpha\t42' : '')
+      }
+    })
+    expect(editor.getHTML()).toContain('<table')
+    expect(editor.getHTML()).toContain('Alpha')
+    expect(editor.getHTML().match(/<td/g)).toHaveLength(4)
+  })
+
+  test('paste Office HTML keeps the table and removes mso-only markup', () => {
+    const editor = renderEditor({ content: '<p></p>' })
+    const editable = document.querySelector('.ProseMirror')
+    if (!(editable instanceof HTMLElement)) throw new Error('ProseMirror root not found')
+    act(() => editor.commands.focus('end'))
+    const officeHtml =
+      '<style>.x{mso-padding-alt:0}</style><table class="MsoTableGrid"><tr><td>A</td><td>B</td></tr></table>'
+    fireEvent.paste(editable, {
+      clipboardData: {
+        types: ['text/html', 'text/plain'],
+        files: [],
+        getData: (type: string) => {
+          if (type === 'text/html') return officeHtml
+          if (type === 'text/plain') return 'A\tB'
+          return ''
+        }
+      }
+    })
+    expect(editor.getHTML()).toContain('<table')
+    expect(editor.getHTML()).toContain('<td')
+    expect(editor.getHTML()).not.toMatch(/mso-|MsoTableGrid/i)
   })
 })
 

@@ -137,9 +137,9 @@ describe('ComposePanel — D2 marker 拆分回填 (draft-edit)', () => {
     expect(body.indexOf('引用段QUOTE')).toBe(body.lastIndexOf('引用段QUOTE'))
   })
 
-  test('marker + 回复段是 complex (table) → 整块保真, 编辑器留空, 零丢字节', async () => {
+  test('marker + 回复段是 preserve-only 布局表 → 整块保真, 编辑器留空, 零丢字节', async () => {
     mockEmailBody.mockResolvedValue({
-      content: `<table><tr><td>表格回复段TBL</td></tr></table>${'<div data-ma-quote="1"><blockquote>引用段QX</blockquote></div>'}`,
+      content: `<table role="presentation"><tr><td>表格回复段TBL</td></tr></table>${'<div data-ma-quote="1"><blockquote>引用段QX</blockquote></div>'}`,
       format: 'html'
     })
     renderWithClient(<ComposePanelInner internalId={99} mode="draft-edit" onClose={() => {}} />)
@@ -158,22 +158,24 @@ describe('ComposePanel — D2 marker 拆分回填 (draft-edit)', () => {
 })
 
 describe('ComposePanel — D5 富文本混合门 (draft-edit)', () => {
-  test('complex html (table) → 原文进折叠保真块, 发送时拼回 bodyHtml (不灌编辑器)', async () => {
+  test('标准 table → 进入编辑器, 发送时序列化为 Outlook 兼容 HTML', async () => {
     mockEmailBody.mockResolvedValue({
       content: '<table><tr><td>季度数据QX</td></tr></table>',
       format: 'html'
     })
     renderWithClient(<ComposePanelInner internalId={99} mode="draft-edit" onClose={() => {}} />)
     await waitFor(() => expect(screen.getByText('chenyq.thu@gmail.com')).toBeTruthy())
-    // 保真块 toggle 出现 (「原文」+ 保真提示)
-    expect(screen.getByText('原文')).toBeTruthy()
-    expect(screen.getByText(/保真保留/)).toBeTruthy()
-    // 发送: 原文经 quoteHtml 拼回 bodyHtml (只此一份, 无双份)
+    expect(screen.getByText('季度数据QX')).toBeTruthy()
+    expect(screen.queryByText('原文')).toBeNull()
+    expect(screen.queryByText(/保真保留/)).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: /^发送$/ }))
     fireEvent.click(screen.getByRole('button', { name: /确认发送/ }))
     await waitFor(() => expect(mockSend).toHaveBeenCalledTimes(1))
     const body = mockSend.mock.calls[0][0].bodyHtml as string
     expect(body).toContain('季度数据QX')
+    expect(body).toContain('<table')
+    expect(body).toContain('border="1"')
+    expect(body).toContain('cellpadding="0"')
     expect(body.indexOf('季度数据QX')).toBe(body.lastIndexOf('季度数据QX'))
   })
 

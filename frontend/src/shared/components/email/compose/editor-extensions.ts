@@ -24,12 +24,13 @@ import {
 import Image from '@tiptap/extension-image'
 import Highlight from '@tiptap/extension-highlight'
 import Mention, { type MentionNodeAttrs } from '@tiptap/extension-mention'
+import { TableKit } from '@tiptap/extension-table'
 import { Placeholder } from '@tiptap/extensions'
 import { Extension, ReactRenderer } from '@tiptap/react'
 import type { Editor, Extensions, Range } from '@tiptap/react'
 import { Suggestion } from '@tiptap/suggestion'
 import type { SuggestionKeyDownProps, SuggestionOptions, SuggestionProps } from '@tiptap/suggestion'
-import { PluginKey } from '@tiptap/pm/state'
+import { Plugin, PluginKey } from '@tiptap/pm/state'
 import {
   Heading1,
   Heading2,
@@ -45,6 +46,7 @@ import {
 import i18n from '@shared/i18n'
 import { makeMailApi } from '@shared/api/factory'
 import type { ContactSuggestion } from '@shared/api/types'
+import { normalizeEditableEmailHtml } from '@shared/lib/emailComposerHtml'
 
 import { MentionMenu, SlashMenu, type SuggestMenuHandle } from './editor-suggest'
 
@@ -263,6 +265,64 @@ function createSlashExtension(): Extension {
   })
 }
 
+// ── table paste ──────────────────────────────────────────────────────
+
+/** Parse the rectangular TSV shape emitted by Excel/Sheets clipboard copy. */
+export function parseTsvTable(text: string): string[][] | null {
+  const normalized = text.replace(/\r\n?/g, '\n').replace(/\n$/, '')
+  if (!normalized.includes('\t')) return null
+  const rows = normalized.split('\n').map((line) => line.split('\t'))
+  const columnCount = rows[0]?.length ?? 0
+  if (columnCount < 2 || rows.some((row) => row.length !== columnCount)) return null
+  return rows
+}
+
+function createTableContent(rows: readonly (readonly string[])[]): Record<string, unknown> {
+  return {
+    type: 'table',
+    content: rows.map((row) => ({
+      type: 'tableRow',
+      content: row.map((cell) => ({
+        type: 'tableCell',
+        content: [
+          {
+            type: 'paragraph',
+            ...(cell.length > 0 ? { content: [{ type: 'text', text: cell }] } : {})
+          }
+        ]
+      }))
+    }))
+  }
+}
+
+/** Office HTML cleanup + TSV fallback before ProseMirror builds the slice. */
+function createTablePasteExtension(): Extension {
+  return Extension.create({
+    name: 'composeTablePaste',
+    addProseMirrorPlugins() {
+      const editor = this.editor
+      return [
+        new Plugin({
+          props: {
+            transformPastedHTML: normalizeEditableEmailHtml,
+            handlePaste: (_view, event) => {
+              const clipboard = event.clipboardData
+              if (!clipboard) return false
+              // Let ProseMirror's HTML parser handle real HTML tables after
+              // transformPastedHTML has removed Office-only markup.
+              if (/<table[\s>]/i.test(clipboard.getData('text/html'))) return false
+              const rows = parseTsvTable(clipboard.getData('text/plain'))
+              if (!rows) return false
+              event.preventDefault()
+              return editor.chain().focus().insertContent(createTableContent(rows)).run()
+            }
+          }
+        })
+      ]
+    }
+  })
+}
+
 // ── @mention ─────────────────────────────────────────────────────────
 
 /** mention 下拉最多显示的联系人数（对齐 demo MENTION_POOL slice 6）。 */
@@ -343,6 +403,14 @@ export function buildComposeExtensions(options: ComposeExtensionsOptions = {}): 
     FontSize,
     BackgroundColor,
     Image.configure({ inline: true, allowBase64: true }),
+    TableKit.configure({
+      table: {
+        resizable: false,
+        allowTableNodeSelection: true,
+        HTMLAttributes: { class: 'compose-email-table' }
+      }
+    }),
+    createTablePasteExtension(),
     Highlight.configure({ multicolor: true }),
     Mention.configure({
       // Tailwind utility 类直接进节点（编辑态内联着色）；发送后收件方按纯文本

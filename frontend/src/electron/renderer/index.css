@@ -4689,6 +4689,7 @@ html[data-theme-vt='circle-blur']::view-transition-new(root) {
 .folder-draft-editor .ProseMirror {
   outline: none;
   min-height: 240px;
+  overflow-x: auto;
   color: rgb(var(--ink-fg-1));
   font-size: 14px;
   line-height: 1.7;
@@ -4732,6 +4733,37 @@ html[data-theme-vt='circle-blur']::view-transition-new(root) {
   padding-left: 14px;
   color: rgb(var(--ink-fg-2));
   margin: 14px 0;
+}
+.folder-draft-editor .ProseMirror table {
+  border-collapse: collapse;
+  border-spacing: 0;
+  table-layout: auto;
+  width: auto;
+  max-width: 100%;
+  margin: 14px 0;
+}
+.folder-draft-editor .ProseMirror td,
+.folder-draft-editor .ProseMirror th {
+  position: relative;
+  min-width: 72px;
+  border: 1px solid rgb(var(--ink-border));
+  padding: 7px 9px;
+  vertical-align: top;
+}
+.folder-draft-editor .ProseMirror th {
+  background: rgb(var(--ink-fg) / 0.06);
+  color: rgb(var(--ink-fg));
+  font-weight: 600;
+}
+.folder-draft-editor .ProseMirror td > :last-child,
+.folder-draft-editor .ProseMirror th > :last-child { margin-bottom: 0; }
+.folder-draft-editor .ProseMirror .selectedCell::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: rgb(var(--c-accent) / 0.12);
+  box-shadow: inset 0 0 0 1px rgb(var(--c-accent) / 0.55);
 }
 .folder-draft-editor .ProseMirror h1,
 .folder-draft-editor .ProseMirror h2,

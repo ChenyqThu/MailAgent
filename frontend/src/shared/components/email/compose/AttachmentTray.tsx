@@ -14,7 +14,7 @@
 // uploading/uploadFailed/dropzoneHint) + 复用既有 `compose.attachmentRemove`,
 // zh-CN / en-US 两份 locales 均有 key (ICU 单花括号插值)。
 
-import { useMemo } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   File as FileIcon,
@@ -62,6 +62,10 @@ export interface AttachmentTrayProps {
   onRemove: (localId: number) => void
   className?: string
 }
+
+const ATTACHMENT_CARD_MIN_WIDTH = 148
+const ATTACHMENT_GRID_GAP = 10
+const COLLAPSED_ROWS = 2
 
 /** 图标 + 角标色元数据。色值暂沿用 design KIND_META 的 hex —— TODO: token 化
  *  (design/compose-handoff.md §7: 「附件角标色 KIND_META 是例外, 可后续 token 化」)。 */
@@ -195,8 +199,37 @@ export function AttachmentTray({
   className
 }: AttachmentTrayProps): React.ReactElement | null {
   const { t } = useTranslation()
+  const gridRef = useRef<HTMLDivElement>(null)
+  const [isExpanded, setIsExpanded] = useState(false)
+  // One column is the safe pre-measurement fallback, so the collapsed shelf
+  // never flashes more than two rows in a narrow detail pane.
+  const [collapsedLimit, setCollapsedLimit] = useState(COLLAPSED_ROWS)
   const totalSize = useMemo(() => items.reduce((sum, it) => sum + (it.size ?? 0), 0), [items])
+  useEffect(() => {
+    const grid = gridRef.current
+    if (!grid) return
+    const updateLimit = (): void => {
+      if (grid.clientWidth <= 0) return
+      const columns = Math.max(
+        1,
+        Math.floor(
+          (grid.clientWidth + ATTACHMENT_GRID_GAP) /
+            (ATTACHMENT_CARD_MIN_WIDTH + ATTACHMENT_GRID_GAP)
+        )
+      )
+      setCollapsedLimit(columns * COLLAPSED_ROWS)
+    }
+    updateLimit()
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(updateLimit)
+    observer.observe(grid)
+    return () => observer.disconnect()
+  }, [])
   if (items.length === 0) return null
+
+  const visibleItems = isExpanded ? items : items.slice(0, collapsedLimit)
+  const hiddenCount = Math.max(0, items.length - collapsedLimit)
+  const canCollapse = items.length > collapsedLimit
 
   return (
     <div className={cn('px-[22px] py-2', className)}>
@@ -215,13 +248,26 @@ export function AttachmentTray({
         </button>
       </div>
       <div
+        ref={gridRef}
         className="grid gap-2.5"
         style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(148px, 1fr))' }}
       >
-        {items.map((it) => (
+        {visibleItems.map((it) => (
           <AttachCard key={it.localId} item={it} onRemove={onRemove} />
         ))}
       </div>
+      {canCollapse && (
+        <button
+          type="button"
+          aria-expanded={isExpanded}
+          onClick={() => setIsExpanded((value) => !value)}
+          className="mt-2 w-full rounded-[var(--r-ctl)] py-1.5 text-meta font-mono text-ink-fg-2 hover:bg-ink-3/60 hover:text-ink-fg transition-colors duration-fast"
+        >
+          {isExpanded
+            ? t('compose.attachTray.showLess')
+            : t('compose.attachTray.showMore', { count: hiddenCount })}
+        </button>
+      )}
     </div>
   )
 }

@@ -1,14 +1,12 @@
 // @vitest-environment happy-dom
 //
-// D5 富文本混合门 — classifyDraftHtml 纯函数分类:
-//   empty   → null/空白 (调用方回落 markdown)
-//   simple  → TipTap 可无损表达, 直灌 setContent
-//   complex → table/cid/Outlook 汤/超深嵌套 → 保真 iframe 通路
+// Composer v2 富文本兼容门：标准 table 已由 TableKit 表达；Office 样式可清洗后编辑；
+// nested/layout table、cid/VML/条件注释仍走保真 iframe。
 // 保守原则: 拿不准一律 complex (宁可不可行内编辑, 不可发出去变纯文本)。
 
 import { describe, expect, test } from 'vitest'
 
-import { classifyDraftHtml } from '../../src/shared/lib/draftHtmlGate'
+import { assessDraftHtml, classifyDraftHtml } from '../../src/shared/lib/draftHtmlGate'
 
 describe('classifyDraftHtml — empty', () => {
   test('null / undefined / 空串 / 纯空白 → empty', () => {
@@ -37,11 +35,31 @@ describe('classifyDraftHtml — simple (TipTap 可表达)', () => {
     expect(classifyDraftHtml('<p><img src="https://x.test/a.png" alt=""></p>')).toBe('simple')
     expect(classifyDraftHtml('<p><img src="data:image/png;base64,iVBOR"></p>')).toBe('simple')
   })
+
+  test('标准 table 由 TableKit 表达, 不再整块折叠', () => {
+    const html = '<table><tbody><tr><td>A</td><td>B</td></tr></tbody></table>'
+    expect(assessDraftHtml(html)).toEqual({ compatibility: 'editable', html })
+    expect(classifyDraftHtml(html)).toBe('simple')
+  })
+
+  test('Office table 清除 mso/class 后进入 normalize-editable', () => {
+    const html =
+      '<style>.x{mso-padding-alt:0}</style><table class="MsoTableGrid" style="mso-cellspacing:0"><tr><td colspan="2">A</td></tr></table>'
+    const result = assessDraftHtml(html)
+    expect(result.compatibility).toBe('normalize-editable')
+    expect(result.html).toContain('<table')
+    expect(result.html).toContain('colspan="2"')
+    expect(result.html).not.toMatch(/mso-|MsoTableGrid|<style/i)
+  })
 })
 
 describe('classifyDraftHtml — complex (保真通路)', () => {
-  test('table 布局', () => {
-    expect(classifyDraftHtml('<table><tr><td>cell</td></tr></table>')).toBe('complex')
+  test('nested table / role=presentation 布局表', () => {
+    const nested = '<table><tr><td><table><tr><td>x</td></tr></table></td></tr></table>'
+    expect(assessDraftHtml(nested).compatibility).toBe('preserve-only')
+    expect(classifyDraftHtml('<table role="presentation"><tr><td>x</td></tr></table>')).toBe(
+      'complex'
+    )
   })
 
   test('cid: 内联图引用', () => {
@@ -52,8 +70,10 @@ describe('classifyDraftHtml — complex (保真通路)', () => {
     expect(classifyDraftHtml('<p><img src="attachments/42/logo.png"></p>')).toBe('complex')
   })
 
-  test('Outlook/Word 痕迹 (mso- 样式 / VML / 条件注释)', () => {
-    expect(classifyDraftHtml('<p style="mso-line-height:100%">x</p>')).toBe('complex')
+  test('普通 mso 样式可规范化, VML / 条件注释仍保真', () => {
+    expect(assessDraftHtml('<p style="mso-line-height:100%">x</p>').compatibility).toBe(
+      'normalize-editable'
+    )
     expect(classifyDraftHtml('<v:shape id="s1"></v:shape>')).toBe('complex')
     expect(classifyDraftHtml('<!--[if mso]><p>x</p><![endif]-->')).toBe('complex')
     expect(classifyDraftHtml('<div xmlns:v="urn:schemas-microsoft-com:vml">x</div>')).toBe(
