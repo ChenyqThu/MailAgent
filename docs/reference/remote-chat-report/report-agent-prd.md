@@ -1,7 +1,7 @@
 # 邮件报告 Agent + Custom AI KOS 工具 — PRD
 
-> **状态**：📐 设计中（2026-06-02）。本 PRD 待用户 review → handoff claude design 设计前端 → 据前端实现前后端。
-> **分支**：`feat/report-agent`
+> **状态**：✅ 已落地并持续演进；本文是报告系统当前真相（最近同步：2026-07-31 Custom Agent 体验 epic）。
+> **历史分支**：`feat/report-agent`（初版）；当前实现已在 `main`。
 > **受众**：Lucien（单用户）。
 > **关联**：复用 [`daily_digest.py`](../../../src/notify/daily_digest.py) / [`digest_query.py`](../../../src/notify/digest_query.py) / [`client.py`](../../../src/llm_agent/client.py) / KOS [`client.py`](../../../src/kos/client.py)。
 
@@ -15,6 +15,18 @@
 | Custom Agent 首版范围 | **报告型模板优先**（日/周/月报），配置 schema 预留全自定义 |
 | KOS 在对话中的用法 | **精选 KOS 只读工具集：读跨 3 源 union（query / search / get_page / find_experts / list_pages / get_backlinks）给 LLM 自驱；无写工具、无 skill 注入**（不主动注入、不硬塞）。⚠️ 2026-06 原议为「9 工具含写 + skill 注入（含 recall / put_page 确认位）」，**2026-07-24 issue #57 收敛为上述 6 个只读**——历史原议见 §3 |
 | 报告触达面 | **v1 仅应用内 Agents 页查看**（不推送 / 不远程 web / 不回写 Notion） |
+
+### 0.1 2026-07-31 当前形态（覆盖初版范围描述）
+
+- 报告有两条写入路径，共用 `report` 表与 `ReportDoc`：定时 report worker 生成
+  daily/weekly/monthly；custom agent 在 run 内调用 `report_write` 生成 cadence=`custom` 的本地持久产物。
+- `report_write` 是 gateway `artifact` class：所有 mode 静默可用，但只写本机报告表；不发送邮件、
+  不写 Notion、不发网络请求。`new` 每次追加一份，`replace` 更新该 agent 的稳定归宿报告。
+- ReportDoc 公开 vocabulary 已扩为 18 个 block；Python/TS 有跨语言一致性闸，renderer 对每个 block
+  单独做 zod 校验，坏块降级 UnknownBlock，不让整份报告崩溃。
+- Reports tab 支持 cadence filter，并把 custom 报告按 agent 分组，展示 agent 头像与名称；scheduled
+  report 保持按日期/cadence 的既有信息架构。
+- 本文 §2 中“全自定义 agent runtime”已不再是 non-goal：S4-S6 与 07-31 体验 epic 已落地。
 
 ---
 
@@ -124,6 +136,15 @@ gateway `tools/kos.ts` 注册一组**精选只读**工具（proxy 到 serve-api 
         ▼
 [Renderer]  /agents 路由页
   报告列表 + 详情(BlockRenderer 逐块渲染) + agent 配置面板
+
+[AI SDK Gateway headless/manual run]
+  report_write({title, blocks, mode})
+        │  artifact class（本地产物，免审批）
+        ▼
+[serve-api] POST /api/reports/custom
+        │  Python 再验 block vocabulary / image egress floor
+        ▼
+[report table] cadence='custom' → 同一 Reports tab 按 agent 分组
 ```
 
 - **后端在 Python**（常驻、取数 / LLM / 链接全在 Python 侧；直接复用 DailyDigest 基础设施）。
@@ -136,7 +157,7 @@ gateway `tools/kos.ts` 注册一组**精选只读**工具（proxy 到 serve-api 
 ReportDoc = {
   version: 1,
   agent_id: "daily_email_digest",
-  cadence: "daily" | "weekly" | "monthly",
+  cadence: "daily" | "weekly" | "monthly" | "custom",
   report_date: "2026-06-01",            // slot 日期
   window: { start: ISO, end: ISO },
   generated_at: ISO,
@@ -160,8 +181,26 @@ ReportDoc = {
 | `action_suggestion` | id, title, detail, internal_ids, action_type, enabled:false | 代码 | **v1 仅展示不执行** |
 | `trend` | metric, points:[{label,value}], compare? | **代码** | 周/月报趋势（前端用纯 CSS bar / inline SVG 画，无需图表库） |
 | `divider` | — | — | 分隔 |
+| `markdown` | title?, text | LLM / 代码 | Streamdown 渲染，含 GFM 表格；长文通用兜底 |
+| `timeline` | title?, events:[{time,title,detail?,tone?,icon?}] | LLM / 代码 | 时间顺序事件 |
+| `checklist` | title?, items:[{text,done,tone?}] | LLM / 代码 | 完成/未完成清单 |
+| `progress` | label, value, max?, title?, tone?, caption? | LLM / 代码 | 单指标进度 |
+| `quote` | text, cite?, url? | LLM / 代码 | 引文/证据摘录 |
+| `metric_delta` | label, value, delta, deltaLabel?, tone? | LLM / 代码 | 指标变化摘要 |
+| `image` | src, title?, alt?, caption?, width? | LLM / 代码 | 仅内部资源引用；禁止任意外链 |
 
-**渲染原则**：每种 block 一个 React 组件；未知 type 优雅降级（跳过 / 纯文本）。前端**无图表库** → trend 用纯 CSS / inline SVG（claude design 定）。
+**渲染与契约原则**：
+
+- 每种 block 一个 React 分支；未知 type 或单块 zod 校验失败降级 UnknownBlock（优先显示
+  `title`/`text`），不得让整份报告崩溃。
+- Python `src/reports/models.py::REPORT_BLOCK_TYPES` 是公开 vocabulary，TS schema 镜像在
+  `frontend/src/shared/api/reportBlocks.ts`；`tests/reports/test_block_contract_consistency.py`
+  要求抽取失败或任一侧漂移必红。
+- `section` 可嵌子块的集合必须同步 `BlockRenderer.tsx::_SECTION_CHILDREN`。
+- 前端无图表库；`trend.variant` 支持 `bar|line|area`，仍用现有 CSS/SVG。只有出现多序列、真坐标轴、
+  时间 x 轴、堆叠或 tooltip 需求时才重新评估图表库。
+- `image.src` 只允许 `/...`（非 `//`）、`mailagent://`、`app://`、`data:image/...`；模型不能用外链
+  图片制造外发信标。
 
 ### 4.3 LLM 生成（结构化 + 防幻觉）
 
@@ -275,13 +314,14 @@ CREATE TABLE report_agent (
   kos_enrich INTEGER DEFAULT 0,
   updated_at REAL,
   context_docs_json TEXT,          -- v27: preprocess 身份文档勾选（JSON 数组 of profile-doc 名；NULL=默认 soul+user，[]=不注入）
-  fallback_models_json TEXT        -- v29: preprocess 行级 fallback 链（JSON 数组；NULL=跟随全局 LLM_FALLBACK_MODELS，[]=显式不设，数组=专用链；非 preprocess 行恒 NULL）
+  fallback_models_json TEXT,       -- v29: preprocess 行级 fallback 链（JSON 数组；NULL=跟随全局 LLM_FALLBACK_MODELS，[]=显式不设，数组=专用链；非 preprocess 行恒 NULL）
+  avatar_json TEXT                 -- v42: Oreo shape/palette/variant；NULL=按 agent id 确定性派生
 );
 -- 报告产物表
 CREATE TABLE report (
   id TEXT PRIMARY KEY,
   agent_id TEXT NOT NULL,
-  cadence TEXT,
+  cadence TEXT,                    -- daily|weekly|monthly|custom
   report_date TEXT,                -- slot 日期
   window_start TEXT, window_end TEXT,
   status TEXT,                     -- generating|ready|failed|skipped|empty
@@ -314,8 +354,9 @@ CREATE INDEX idx_report_agent_date ON report(agent_id, report_date DESC);
 
 **`/agents` 页 = tabs**：
 1. **Agents**：报告 agent 卡片（状态 / 下次运行 / enabled toggle / Run now / 进配置）。
-2. **报告**：report 列表（按日期、cadence 筛选、状态 badge）+ 详情（BlockRenderer 逐块渲染 ReportDoc）。
-3. **Chats**：复用现有 `SessionsPage` 作为一个 tab（"chats 历史只是其中一个模块"）。
+2. **报告**：report 列表（cadence filter + scheduled 日期列表 + custom 按 agent 分组）+ 详情
+   （BlockRenderer 逐块渲染 ReportDoc）。
+3. **Chats**：interactive 会话与 agent run 会话分离；后者按 agent 分组/筛选。
 
 **需设计的屏 / 组件 / 状态**：
 - Agents 概览卡（enabled toggle、排程展示、最近一次报告、Run now）。
@@ -340,8 +381,15 @@ CREATE INDEX idx_report_agent_date ON report(agent_id, report_date DESC);
 | `report:getConfig` | {agent_id} | report_agent 行 |
 | `report:setConfig` | {agent_id, patch} | 更新后的配置 |
 
-- **Run now 实现**（实现期定）：推荐加 `mailagent report run --agent <id> --date <YYYY-MM-DD>` CLI，main 通过托管子进程即时跑（无 60s 等待）；scheduled 路径走 worker tick。备选：写 report 行 `status=generating` + state 触发，worker 下个 tick 拾取。
-- v1 **不做** serve-api report router（远程访问是 future）。
+当前 serve-api 同时提供远程/网关写面：`GET /api/reports`、`GET /api/reports/{id}`、
+`POST /api/reports/custom`。最后一个只接受 `title`、非空 `blocks`、`mode=new|replace`、agent/model
+元数据；Python 边界再次验证块类型、100 块上限与 image 内部资源限制。
+
+- **Run now 当前实现**：`type='report'` 在 serve-api 内通过线程包装同步调用
+  `run_report_once`，立即返回报告 id；`type='custom'` 则 enqueue `agent_run`，由
+  `AgentRunWorker` → gateway headless 路径异步执行，并在 runs/day 命中时写可见的 `skipped`
+  记录。scheduled report 继续走 worker tick，两条路径不会混用。
+- 初版“v1 不做 serve-api report router”已过时；当前上述 REST 面是远程 web 与 gateway 的共同契约。
 
 ---
 
@@ -365,6 +413,8 @@ CREATE INDEX idx_report_agent_date ON report(agent_id, report_date DESC);
 - **日报**：开关开 → 次日 9am 生成一份 `ReportDoc`，应用内 /agents 可查看，每封邮件可点溯源；无邮件时 empty 态。
 - **KOS**：Custom AI 对邮件提问 → LLM 调 `kos_query`（gateway → serve-api `/chat/kos-call` → `_get_kos_client()` 默认读 client；**bulk client 是 producer 写入路径专用**，chat 读面不碰它）返回相关邮件 / entity → 回答带来源；KOS 不可达降级 FTS5。
 - **防幻觉**：报告里的 counts / 链接 / internal_ids 与 DB 一致（代码回填，非 LLM 生成）。
+- **Custom artifact**：custom agent 可用 `report_write` 写 `new` 多份或 `replace` 稳定归宿；Reports tab
+  按 agent 可见，任一坏 block 只降级该块，外链 image 被 gateway/Python 双层拒绝。
 
 ---
 
@@ -374,5 +424,6 @@ CREATE INDEX idx_report_agent_date ON report(agent_id, report_date DESC);
 2. ~~**chat 写 KOS 能力**（待用户拍板）：是否开放 `put_page`（confirm-tier）让 chat 写回 `default` 个人脑~~ → **已收敛（2026-07-24，issue #57）：不开放**。gateway 只注册 6 个只读 KOS 工具，无任何写工具；要开放须重新走安全评审 + ADR（见 §3.5）。**勿据本条"建议开"恢复 `put_page`** —— 那正是 #57 幽灵工具的来源。
 3. **默认日报 prompt**（需用户）：把 Notion 页 `2e015375830d80cb...` 共享给 MailAgent integration，或贴文本，导入为默认 prompt。
 4. **app deeplink 打开邮件**：确认前端打开某封邮件的路由 / 机制（复用 inbox 选中状态？）。
-5. **Run now 触发机制**：CLI 直跑 vs worker 拾取 —— 实现期定（推荐 CLI）。
+5. ✅ **Run now 触发机制（已解决）**：report 走 serve-api 内同步 `run_report_once`；custom
+   agent 走 `agent_run` 队列，命中 runs/day 时写 `skipped` 审计行。
 6. **报告与灵动岛 DailyDigest 的关系**：二者共用数据层，输出不同（富报告 vs 通知）。是否将来统一 / 灵动岛通知带"日报已生成"deeplink —— v1 先并存。
